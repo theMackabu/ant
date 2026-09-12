@@ -232,6 +232,16 @@ ant_value_t jit_helper_closure(
   sv_upvalue_t **open_upvalues
 );
 
+ant_value_t jit_helper_promote_resume(
+  sv_vm_t *vm, sv_closure_t *closure,
+  ant_value_t this_val, ant_value_t new_target, ant_value_t super_val,
+  ant_value_t *args, int argc,
+  ant_value_t *vstack, int64_t vstack_sp,
+  ant_value_t *params, int64_t n_params,
+  ant_value_t *locals, int64_t n_locals,
+  int64_t bc_offset
+);
+
 ant_value_t jit_helper_bailout_resume(
   sv_vm_t *vm, sv_closure_t *closure,
   ant_value_t this_val, ant_value_t new_target, ant_value_t super_val,

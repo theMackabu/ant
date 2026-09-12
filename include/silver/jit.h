@@ -38,6 +38,10 @@ ant_value_t sv_jit_try_osr(
   int bc_offset
 );
 
+static inline bool sv_jit_promote_pending(const sv_func_t *func) {
+  return func->jit_code_cold && func->jit_code == NULL;
+}
+
 static inline uint32_t sv_jit_osr_threshold_for(int code_len) {
   if (code_len <= 0) return SV_JIT_OSR_THRESHOLD;
   

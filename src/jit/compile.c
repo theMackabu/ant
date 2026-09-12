@@ -1,5 +1,49 @@
 #include "compile.h"
 
+static void jit_emit_resume_tramp(jit_compile_t *c, MIR_label_t tramp, MIR_item_t imp,
+                                const char *res_name) {
+  MIR_append_insn(c->ctx, c->jit_func, tramp);
+
+  if (c->r_jit_open_upvalues) {
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_call_insn(c->ctx, 4,
+                                      MIR_new_ref_op(c->ctx, c->adopt_open_upvalues_proto),
+                                      MIR_new_ref_op(c->ctx, c->imp_adopt_open_upvalues),
+                                      MIR_new_reg_op(c->ctx, c->r_vm),
+                                      MIR_new_reg_op(c->ctx, c->r_jit_open_upvalues)));
+  }
+
+  MIR_reg_t r_resume_res = MIR_new_func_reg(c->ctx, c->jit_func->u.func,
+                                            MIR_JSVAL, res_name);
+  if (c->has_captured_params && !c->writes_params) {
+    mir_emit_fill_uncaptured_param_slots_from_args(
+        c->ctx, c->jit_func, c->r_slotbuf, c->r_args, c->r_argc, c->captured_params, c->param_count);
+  }
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_call_insn(c->ctx, 17,
+                                    MIR_new_ref_op(c->ctx, c->resume_proto),
+                                    MIR_new_ref_op(c->ctx, imp),
+                                    MIR_new_reg_op(c->ctx, r_resume_res),
+                                    MIR_new_reg_op(c->ctx, c->r_vm),
+                                    MIR_new_reg_op(c->ctx, c->r_closure),
+                                    MIR_new_reg_op(c->ctx, c->r_this_curr),
+                                    c->feat.needs_new_target ? MIR_new_reg_op(c->ctx, c->r_new_target)
+                                      : MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0)),
+                                    c->feat.needs_super ? MIR_new_reg_op(c->ctx, c->r_super_val)
+                                      : MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0)),
+                                    MIR_new_reg_op(c->ctx, c->r_args),
+                                    MIR_new_reg_op(c->ctx, c->r_argc),
+                                    MIR_new_reg_op(c->ctx, c->r_args_buf),
+                                    MIR_new_reg_op(c->ctx, c->r_bailout_sp),
+                                    c->params_in_slotbuf ? MIR_new_reg_op(c->ctx, c->r_slotbuf) : MIR_new_uint_op(c->ctx, 0),
+                                    MIR_new_int_op(c->ctx, c->params_in_slotbuf ? c->param_count : 0),
+                                    MIR_new_reg_op(c->ctx, c->r_lbuf),
+                                    MIR_new_int_op(c->ctx, c->n_locals),
+                                    MIR_new_reg_op(c->ctx, c->r_bailout_off)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, r_resume_res)));
+}
+
 sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure) {
   return sv_jit_compile_tier(js, func, hint_closure, SV_JIT_TIER_AUTO);
 }
@@ -15,7 +59,8 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
   jit_compile_t *c = &compile;
   if (c->func->jit_compile_failed || c->func->jit_compiling) return NULL;
   
-  if (c->func->jit_code == NULL && c->func->jit_compiled_tfb_ver != 0 &&
+  if (tier != SV_JIT_TIER_HOT &&
+      c->func->jit_code == NULL && c->func->jit_compiled_tfb_ver != 0 &&
       c->func->tfb_version == c->func->jit_compiled_tfb_ver) {
     c->func->jit_compile_failed = true;
     return NULL;
@@ -339,48 +384,8 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
     jit_emit_exit_ret(c, MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0)));
   }
 
-  if (c->needs_bailout) {
-    MIR_append_insn(c->ctx, c->jit_func, c->bailout_tramp);
-
-    if (c->r_jit_open_upvalues) {
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_call_insn(c->ctx, 4,
-                                        MIR_new_ref_op(c->ctx, c->adopt_open_upvalues_proto),
-                                        MIR_new_ref_op(c->ctx, c->imp_adopt_open_upvalues),
-                                        MIR_new_reg_op(c->ctx, c->r_vm),
-                                        MIR_new_reg_op(c->ctx, c->r_jit_open_upvalues)));
-    }
-
-    MIR_reg_t r_resume_res = MIR_new_func_reg(c->ctx, c->jit_func->u.func,
-                                              MIR_JSVAL, "resume_res");
-    if (c->has_captured_params && !c->writes_params) {
-      mir_emit_fill_uncaptured_param_slots_from_args(
-          c->ctx, c->jit_func, c->r_slotbuf, c->r_args, c->r_argc, c->captured_params, c->param_count);
-    }
-    MIR_append_insn(c->ctx, c->jit_func,
-                    MIR_new_call_insn(c->ctx, 17,
-                                      MIR_new_ref_op(c->ctx, c->resume_proto),
-                                      MIR_new_ref_op(c->ctx, c->imp_resume),
-                                      MIR_new_reg_op(c->ctx, r_resume_res),
-                                      MIR_new_reg_op(c->ctx, c->r_vm),
-                                      MIR_new_reg_op(c->ctx, c->r_closure),
-                                      MIR_new_reg_op(c->ctx, c->r_this_curr),
-                                      c->feat.needs_new_target ? MIR_new_reg_op(c->ctx, c->r_new_target)
-                                        : MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0)),
-                                      c->feat.needs_super ? MIR_new_reg_op(c->ctx, c->r_super_val)
-                                        : MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0)),
-                                      MIR_new_reg_op(c->ctx, c->r_args),
-                                      MIR_new_reg_op(c->ctx, c->r_argc),
-                                      MIR_new_reg_op(c->ctx, c->r_args_buf),
-                                      MIR_new_reg_op(c->ctx, c->r_bailout_sp),
-                                      c->params_in_slotbuf ? MIR_new_reg_op(c->ctx, c->r_slotbuf) : MIR_new_uint_op(c->ctx, 0),
-                                      MIR_new_int_op(c->ctx, c->params_in_slotbuf ? c->param_count : 0),
-                                      MIR_new_reg_op(c->ctx, c->r_lbuf),
-                                      MIR_new_int_op(c->ctx, c->n_locals),
-                                      MIR_new_reg_op(c->ctx, c->r_bailout_off)));
-    MIR_append_insn(c->ctx, c->jit_func,
-                    MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, r_resume_res)));
-  }
+  if (c->needs_bailout) jit_emit_resume_tramp(c, c->bailout_tramp, c->imp_resume, "resume_res");
+  if (c->needs_promote) jit_emit_resume_tramp(c, c->promote_tramp, c->imp_promote_resume, "promote_res");
 
   MIR_finish_func(c->ctx);
   MIR_finish_module(c->ctx);
@@ -439,7 +444,8 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
   if (sv_jit_warn_unlikely) fprintf(
     stderr, "jit: compiled func=%s code_len=%d max_stack=%d tier=%s\n",
     c->func->debug->name ? c->func->debug->name : "<anonymous>",
-    c->func->code_len, c->func->max_stack, jit_compile_hot ? "hot" : "cheap"
+    c->func->code_len, c->func->max_stack, 
+    tier == SV_JIT_TIER_COLD ? "cold" : jit_compile_hot ? "hot" : "cheap"
   );
   
   return generated;

@@ -67,6 +67,7 @@ static inline void sv_jit_on_bailout_at(sv_func_t *fn, const char *reason, int b
     fn->jit_bailout_count++;
 
   fn->jit_code = NULL;
+  fn->jit_code_cold = false;
   fn->back_edge_count = 0;
 
   if (sv_jit_warn_unlikely) {

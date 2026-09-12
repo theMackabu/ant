@@ -67,11 +67,19 @@ threshold (`jit_osr_threshold`) is scaled by its size in
 [runtime.c](../../src/jit/runtime.c); the only size ceiling is
 `SV_JIT_MAX_CODE_BYTES` in `jit_is_eligible`, shared by the OSR and call
 paths. Large OSR compiles use the cheap MIR context and set `jit_code_cold`. Such
-code promotes itself: its prologue (`jit_setup_frame`) counts entries and
-calls `jit_helper_tier_up` past `SV_JIT_THRESHOLD`, so promotion happens on
-every entry path, including direct calls from other compiled code that never
-touch the interpreter. Only code compiled with `SV_JIT_TIER_COLD` may carry
-the flag; the helper returns NULL once it is clear. See the
+code promotes itself: its prologue (`jit_setup_frame`) counts entries that
+run the body and calls `jit_helper_tier_up` past `SV_JIT_THRESHOLD`, so
+promotion happens on every entry path, including direct calls from other
+compiled code that never touch the interpreter. The counter sits behind the
+OSR entry guards so a rejected OSR entry does not count; the interpreter
+retries those every OSR threshold, and counting them turned a function that
+never enters compiled code into a wasted hot compile. Only code compiled with
+`SV_JIT_TIER_COLD` sets
+the flag, and `sv_jit_on_bailout_at` clears it. With `jit_code == NULL` it
+means cold code handed a loop back for promotion
+(`sv_jit_promote_pending()`, set by `jit_helper_promote_resume`): the next
+OSR compile must be `SV_JIT_TIER_HOT`, and that compile is exempt from the
+"no new feedback" refusal in `sv_jit_compile_tier`. See the
 [OSR size-scaled tiering plan](../exec-plans/active/osr-size-scaled-tiering.md)
 and [its regression](../../tests/test_jit_osr_large_function.cjs).
 

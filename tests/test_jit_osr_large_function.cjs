@@ -90,4 +90,26 @@ if (Math.round(compiledDriver() * 1000) / 1000 !== 791187.692) throw new Error('
 console.log('done');
 `;
 expectTierUp(run(compiledCaller), 'compiled caller');
+
+// A single long call: cold code must hand the loop back once this run has
+// spent JIT_COLD_PROMOTE_COMPILE_MULTIPLE estimated hot-compile times on
+// cold code (~240 ms for this kernel), and the OSR recompile that follows
+// must go straight to the hot tier. 800 steps is ~1.05 s cold on an M-series
+// laptop, over four times the budget, so a much faster machine still
+// promotes. (At 1000 steps ant and node diverge in the last digits: the
+// system is chaotic and amplifies a one-ulp libm difference. Every ant tier
+// agrees with itself; the checksum below is agreed by node too.)
+const longLoop = kernel + String.raw`
+if (benchNbody(300, 800) !== 216448.41) throw new Error('long loop checksum mismatch');
+console.log('done');
+`;
+{
+  const lines = run(longLoop);
+  if (!lines.some(line => line.startsWith('jit: promote func=benchNbody')))
+    throw new Error(`long loop: expected an in-loop promotion, got:\n${lines.join('\n')}`);
+  if (!lines.some(line => line.startsWith('jit: osr compiled func=benchNbody') && line.includes('tier=hot')))
+    throw new Error(`long loop: expected a hot OSR recompile, got:\n${lines.join('\n')}`);
+  if (lines.some(line => line.includes('jit: bailout')))
+    throw new Error(`long loop: promotion must not count as a bailout:\n${lines.join('\n')}`);
+}
 console.log('jit-osr-large-function: ok');
