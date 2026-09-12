@@ -389,10 +389,10 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
 
   MIR_type_t i64_ret = MIR_T_I64;
   c->promote_start_proto = MIR_new_proto(c->ctx, "promote_start_proto", 0, NULL, 1,
-                                         MIR_T_I64, "slot");
+                                         MIR_T_P, "slot");
   c->promote_due_proto = MIR_new_proto(c->ctx, "promote_due_proto",
                                        1, &i64_ret, 1,
-                                       MIR_T_I64, "slot");
+                                       MIR_T_P, "slot");
 
   if (c->cold_tier) c->cold_ns_item = MIR_new_bss(c->ctx, "cold_ns", 3 * sizeof(int64_t));
 
