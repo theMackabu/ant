@@ -1,4 +1,5 @@
 #include "compile.h"
+#include <time.h>
 
 static void jit_emit_resume_tramp(jit_compile_t *c, MIR_label_t tramp, MIR_item_t imp,
                                 const char *res_name) {
@@ -49,6 +50,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 }
 
 sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure, sv_jit_tier_t tier) {
+  struct timespec compile_t0;
+  clock_gettime(CLOCK_MONOTONIC, &compile_t0);
   jit_compile_t compile = {
       .js = js,
       .func = func,
@@ -413,6 +416,7 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
   free(c->captured_params);
   free(c->captured_locals);
   free(c->feat.builder_target_slots);
+  free(c->promote_sites);
 
   if (!c->ok) {
     if (sv_jit_warn_unlikely) fprintf(
@@ -440,13 +444,24 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
 
   c->func->jit_compiled_tfb_ver = c->func->tfb_version;
   c->func->jit_code_cold = tier == SV_JIT_TIER_COLD;
-  if (tier == SV_JIT_TIER_COLD) c->func->jit_cold_ns = 0;
+  
+  struct timespec compile_t1;
+  clock_gettime(CLOCK_MONOTONIC, &compile_t1);
+  
+  int64_t compile_ns = 
+    (int64_t)(compile_t1.tv_sec - compile_t0.tv_sec) * 1000000000LL +
+    (compile_t1.tv_nsec - compile_t0.tv_nsec);
+  
+  if (tier == SV_JIT_TIER_COLD && c->cold_ns_item && c->cold_ns_item->addr) {
+    ((int64_t *)c->cold_ns_item->addr)[1] = JIT_COLD_PROMOTE_COMPILE_MULTIPLE * JIT_HOT_COMPILE_COLD_RATIO * compile_ns;
+  }
   
   if (sv_jit_warn_unlikely) fprintf(
-    stderr, "jit: compiled func=%s code_len=%d max_stack=%d tier=%s\n",
+    stderr, "jit: compiled func=%s code_len=%d max_stack=%d locals=%d tier=%s ms=%.1f\n",
     c->func->debug->name ? c->func->debug->name : "<anonymous>",
-    c->func->code_len, c->func->max_stack, 
-    tier == SV_JIT_TIER_COLD ? "cold" : jit_compile_hot ? "hot" : "cheap"
+    c->func->code_len, c->func->max_stack, c->func->max_locals,
+    tier == SV_JIT_TIER_COLD ? "cold" : jit_compile_hot ? "hot" : "cheap",
+    (double)compile_ns / 1e6
   );
   
   return generated;

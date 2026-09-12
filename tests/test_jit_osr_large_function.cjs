@@ -59,7 +59,9 @@ function run(source) {
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`child failed:\n${result.stderr}\n${result.stdout}`);
-  return result.stderr.split('\n');
+  const lines = result.stderr.split('\n');
+  lines.stdout = result.stdout;
+  return lines;
 }
 
 function expectTierUp(lines, label) {
@@ -91,41 +93,53 @@ console.log('done');
 `;
 expectTierUp(run(compiledCaller), 'compiled caller');
 
-// A single long call: cold code must hand the loop back once this run has
-// spent JIT_COLD_PROMOTE_COMPILE_MULTIPLE estimated hot-compile times on
-// cold code (~240 ms for this kernel), and the OSR recompile that follows
-// must go straight to the hot tier. 800 steps is ~1.05 s cold on an M-series
-// laptop, over four times the budget, so a much faster machine still
-// promotes. (At 1000 steps ant and node diverge in the last digits: the
-// system is chaotic and amplifies a one-ulp libm difference. Every ant tier
-// agrees with itself; the checksum below is agreed by node too.)
-const longLoop = kernel + String.raw`
-if (benchNbody(300, 800) !== 216448.41) throw new Error('long loop checksum mismatch');
-console.log('done');
+// In-loop promotion. Cold code hands a loop back for a hot recompile once
+// it has run JIT_COLD_PROMOTE_COMPILE_MULTIPLE (20) estimated hot compiles'
+// worth, the hot compile being taken as JIT_HOT_COMPILE_COLD_RATIO (3) times
+// the cold compile's own measured duration: the budget is 60x the `ms=` the
+// engine logs for the cold compile. The trigger is wall-clock, so each child
+// reports its elapsed time and the promotion assertions apply only when the
+// run demonstrably exceeded twice the budget; otherwise the case still checks
+// its result and reports the skip. This fixture keeps locals to a minimum so
+// its cold compile, and with it the budget, stays small (~11 ms, ~660 ms).
+const leanKernel = String.raw`
+function lean(n) { var s = 1; for (var i = 0; i < n; i++) s = (s * 3 + i) | 0; ` +
+  Array.from({ length: 70 }, () => 's = (s ^ (s << 1)) | 0;').join(' ') + String.raw` return s; }
 `;
-{
-  const lines = run(longLoop);
-  if (!lines.some(line => line.startsWith('jit: promote func=benchNbody')))
-    throw new Error(`long loop: expected an in-loop promotion, got:\n${lines.join('\n')}`);
-  if (!lines.some(line => line.startsWith('jit: osr compiled func=benchNbody') && line.includes('tier=hot')))
-    throw new Error(`long loop: expected a hot OSR recompile, got:\n${lines.join('\n')}`);
+
+function expectPromotion(lines, label) {
+  const cold = lines.find(line => line.startsWith('jit: compiled func=lean') && line.includes('tier=cold'));
+  if (!cold) throw new Error(`${label}: expected a cold compile of lean, got:\n${lines.join('\n')}`);
+  const budgetMs = 60 * Number(/ms=([\d.]+)/.exec(cold)[1]);
+  const elapsedMs = Number(/elapsed (\d+)/.exec(lines.stdout)[1]);
+  if (elapsedMs < 2 * budgetMs) {
+    console.log(`${label}: ran ${elapsedMs} ms against a ${budgetMs.toFixed(0)} ms budget, promotion not asserted`);
+    return;
+  }
+  if (!lines.some(line => line.startsWith('jit: promote func=lean')))
+    throw new Error(`${label}: expected an in-loop promotion after ${elapsedMs} ms, got:\n${lines.join('\n')}`);
+  if (!lines.some(line => line.startsWith('jit: osr compiled func=lean') && line.includes('tier=hot')))
+    throw new Error(`${label}: expected a hot OSR recompile, got:\n${lines.join('\n')}`);
   if (lines.some(line => line.includes('jit: bailout')))
-    throw new Error(`long loop: promotion must not count as a bailout:\n${lines.join('\n')}`);
+    throw new Error(`${label}: promotion must not count as a bailout:\n${lines.join('\n')}`);
 }
 
-// Repeated calls that are each shorter than the budget must still promote:
-// cold time is banked on the function across activations, so the kernel
-// called four times for ~175 ms each promotes during the second call.
-const repeated = kernel + String.raw`
-for (var k = 0; k < 4; k++)
-  if (benchNbody(300, 120) !== 209399.109) throw new Error('repeated call checksum mismatch');
-console.log('done');
+// A single long call: 80M iterations is ~1.3 s cold on an M-series laptop.
+const longLoop = leanKernel + String.raw`
+var t0 = Date.now();
+if (lean(80000000) !== 176640597) throw new Error('long loop checksum mismatch');
+console.log('elapsed ' + (Date.now() - t0));
 `;
-{
-  const lines = run(repeated);
-  if (!lines.some(line => line.startsWith('jit: promote func=benchNbody')))
-    throw new Error(`repeated calls: expected a promotion, got:\n${lines.join('\n')}`);
-  if (!lines.some(line => line.startsWith('jit: osr compiled func=benchNbody') && line.includes('tier=hot')))
-    throw new Error(`repeated calls: expected a hot OSR recompile, got:\n${lines.join('\n')}`);
-}
+expectPromotion(run(longLoop), 'long loop');
+
+// Repeated calls that are each shorter than the budget must still promote:
+// cold time is banked on the function across activations, so three calls
+// of ~400 ms each promote during the second.
+const repeated = leanKernel + String.raw`
+var t0 = Date.now();
+for (var k = 0; k < 3; k++)
+  if (lean(25000000) !== -763526411) throw new Error('repeated call checksum mismatch');
+console.log('elapsed ' + (Date.now() - t0));
+`;
+expectPromotion(run(repeated), 'repeated calls');
 console.log('jit-osr-large-function: ok');

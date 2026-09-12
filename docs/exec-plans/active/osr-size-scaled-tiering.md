@@ -214,81 +214,51 @@ JIT-eligible case actually compiled.
 ### In-loop promotion (the last follow-up)
 
 A once-called function that never leaves its OSR'd cold loop used to stay
-on level-1 code for the whole call. Cold-tier code now reads the monotonic
-clock at entry, counts back-edges in a register (`r_promote`,
-`emit_control.c`), and every 4096 of them calls `jit_helper_promote_due`,
-which banks the cold time since the last check on `sv_func_t.jit_cold_ns`
-(reset at each cold compile) and hands back a fresh `t0`, or 0 once the
-function has spent `JIT_COLD_PROMOTE_COMPILE_MULTIPLE` (8) estimated
-hot-compile times (`JIT_HOT_COMPILE_NS_PER_BYTE` x `code_len`) on cold
-code across any number of activations. Banking per check rather than per
-frame is what lets a kernel called repeatedly for sub-budget runs promote,
-the common driver-loop shape: eight 120-step calls went from 1329 ms cold
-to 1195 ms, promoting during the second call, against 1092 ms hot from
-the start. Idle time between calls is never charged. When the budget is
-spent it takes a second resume trampoline into `jit_helper_promote_resume`.
-`sizeof(sv_func_t)` is 216 for the field; a saturating 32-bit variant in
-64 ns units fit the tail padding but was rejected for its truncation. That unpublishes the cold code,
-leaves `jit_code_cold` set as the "next compile is hot" mark, primes
-`back_edge_count` to one below the OSR threshold and resumes the interpreter
-at the jump. The interpreter re-executes the back-edge, `sv_jit_try_osr`
-sees the mark and compiles `SV_JIT_TIER_HOT`, and the hot code OSR-enters at
-the loop head. It is not a deopt: no bailout count, no recompile delay, and
-`sv_jit_compile_tier` skips its "no new feedback" refusal for hot-tier
-recompiles.
+on level-1 code for the whole call. Cold-tier code now promotes itself:
+`jit_emit_promote_check` (`emit_control.c`) puts a countdown on the
+back-edges of *outermost* loops only, so inner loops pay nothing per
+iteration; a lone loop checks every `JIT_COLD_PROMOTE_CHECK_EVERY` (4096)
+turns, an outer loop that contains loops on every turn, since each turn is
+long. At a check, `jit_helper_promote_due` banks the cold time since the
+last check into an 8-byte slot in the cold code's own MIR module (three
+words: banked time, budget, last check) and compares it with the budget.
+Banking on the code rather than the frame lets a kernel called repeatedly
+for sub-budget runs promote too, without charging idle time between calls,
+and keeps `sizeof(sv_func_t)` at 208. When the budget is spent the code
+takes a second resume trampoline into `jit_helper_promote_resume`, which
+unpublishes the cold code, leaves `jit_code_cold` set as the "next compile
+is hot" mark (`sv_jit_promote_pending`), primes `back_edge_count` and
+resumes the interpreter at the jump; the re-taken back-edge OSR-compiles
+`SV_JIT_TIER_HOT` and enters it. Not a deopt: no bailout count, no
+recompile delay, and the hot recompile is exempt from the "no new
+feedback" refusal.
 
-The budget is the cost model, not a guess. The hot compile costs ~50 us per
-bytecode byte (30 ms for the 592-byte kernel, 262 ms for a 5 KB body) and
-cold code is ~1.2x slower, so promotion only pays if the loop keeps running
-for about five more compile-times; elapsed cold time is the best available
-predictor of that. A first cut budgeted back-edges instead of time and lost
-30 ms on every loop between one and 2.5 budgets long, because a count
-cannot know the per-iteration cost. Measured on the kernel:
+The budget is the cost model, measured rather than estimated. Two earlier
+versions were wrong in instructive ways:
 
-| run | cold only | count budget | time budget (8x) |
-|---|---|---|---|
-| 30 steps, 53 ms cold | 53 ms | 53 ms | 54 ms |
-| 120 steps, ~175 ms cold | 172 to 182 ms | 202 to 207 ms | 178 ms (no promotion) |
-| 400 steps, ~540 ms cold | 541 ms | | 552 ms (promotes at ~45%) |
-| 600 steps, ~815 ms cold | 801 to 831 ms | 743 to 750 ms | 794 ms (promotes at ~30%) |
+- A per-byte estimate of the hot compile (50 us x `code_len`) was off by
+  up to 4x: compile time scales with locals (level-3 register allocation),
+  not bytes. Measured, cold vs hot: N-body 592 B / 17 locals 22 vs 66 ms;
+  a 667 B / 62 locals for-of shape 42 vs 115 ms. Every promoted run paid a
+  fixed ~100 ms it never recouped.
+- The assumed 1.2x hot gain is the best case. Long-run hot-by-call versus
+  cold-only: for-of 1 to 4%, integer `%` 3 to 5%, `Math.abs` 8%, sqrt 12%,
+  closure calls 20%, N-body 20%.
 
-The time budget trades some of the long-loop win for never losing on
-medium loops; 8x is deliberately conservative. bench-v8 is unchanged.
-Regression: the long-loop case in `tests/test_jit_osr_large_function.cjs`.
+So the cold compile's own measured duration is written into the slot as
+the budget times `JIT_COLD_PROMOTE_COMPILE_MULTIPLE` (20) times
+`JIT_HOT_COMPILE_COLD_RATIO` (3, measured 2.7 to 3.2): 60 cold-compile
+times, about 1.3 s of cold code for the kernel and 2.5 s for the 60-local
+shapes. Promotion is a safety net for loops that have already run seconds:
+its worst case is one hot compile, a few percent of elapsed, and its upside
+is 5 to 20% of everything after. Measured on the kernel at 2000 steps:
+2.6 s cold-only, 2.4 s promoted at 1.6 s. A per-back-edge check on inner
+loops cost 8% on the tightest for-of body, hence outermost-only.
 
-Review of this change (three-axis, before commit) found and fixed: the
-OSR-site entry counter had moved below the point where the prologue clears
-`vm->jit_osr.active`, so a call-count tier-up firing at an OSR entry
-restarted the function from bytecode 0 (reproduced: 101 entries instead of
-61); the promote trampoline spilled through `lbuf`/`args_buf` that are only
-allocated when a deopt-capable op exists, so a cold loop of plain method
-calls segfaulted at the budget (cold tier now forces both); a cold-code
-deopt left `jit_code_cold` set and so bought a hot recompile of the same
-bailout (cleared on deopt, predicate named `sv_jit_promote_pending`).
-Known limits left open: promotion is a pure ~40 ms loss on loops the hot tier cannot
-speed up (helper-bound bodies such as integer `%`); each backward jump
-emits a full spill block, +12% cold compile time at 12 loops.
-
-Two pre-existing cliffs surfaced while probing this, neither caused here
-and both left as follow-ups:
-
-- A hot loop followed by `var` declarations that are only assigned later
-  (`function f(n) { for (...) {...} var p0 = ..., p1 = ...; return ... }`)
-  never OSR-enters: the entry guard requires every `SV_TI_NUM` local to hold
-  a number, those still hold `undefined` at the loop head, and the
-  interpreter retries every threshold for the whole loop. A 12M-iteration
-  double loop runs 240 ms this way against 17 ms once the trailing locals
-  are removed and 15 ms in node. Either accept `undefined` for locals that
-  are provably dead at the entry point, or back off retries exponentially
-  after a rejection (JSC's `ftlOSREntryRetryThreshold`).
-- `s = (s + i * 7) % 1000003` runs at 15 ns per iteration in hot code (185
-  ms for 12M against 35 ms in node): integer `%` goes through a helper call
-  rather than an inline remainder.
-- The N-body kernel's checksum diverges from node's at 1000 steps
-  (221407.95 vs 221407.165) on every tier including the interpreter, so it
-  is a libm or contraction difference amplified by a chaotic system, not a
-  JIT bug; tests pin step counts where both engines agree. Regression: the long-loop case in
-`tests/test_jit_osr_large_function.cjs`.
+A gate that skipped promotion for "helper-bound" loops was tried and
+reverted: its premise (hot == cold on such loops) did not survive
+controlled measurement, and it declined the for-of shape where hot was
+faster.
 
 ## Validation status
 
