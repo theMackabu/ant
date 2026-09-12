@@ -359,6 +359,7 @@ struct sv_func {
   
   sv_call_target_fb_t *call_target_fb;
   uint64_t gc_epoch;
+  int64_t jit_cold_ns;
 
   int code_len;
   int const_count;

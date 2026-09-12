@@ -13,10 +13,14 @@ int64_t jit_helper_promote_now(void) {
 }
 
 int64_t jit_helper_promote_due(sv_func_t *func, int64_t t0) {
-  int64_t budget = 
-    JIT_COLD_PROMOTE_COMPILE_MULTIPLE * 
+  int64_t budget =
+    JIT_COLD_PROMOTE_COMPILE_MULTIPLE *
     JIT_HOT_COMPILE_NS_PER_BYTE * (int64_t)func->code_len;
-  return jit_helper_promote_now() - t0 >= budget;
+  
+  int64_t now = jit_helper_promote_now();
+  func->jit_cold_ns += now - t0;
+  
+  return func->jit_cold_ns >= budget ? 0 : now;
 }
 
 void jit_load_externals_once(sv_jit_ctx_t *jc) {

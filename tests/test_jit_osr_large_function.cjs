@@ -112,4 +112,20 @@ console.log('done');
   if (lines.some(line => line.includes('jit: bailout')))
     throw new Error(`long loop: promotion must not count as a bailout:\n${lines.join('\n')}`);
 }
+
+// Repeated calls that are each shorter than the budget must still promote:
+// cold time is banked on the function across activations, so the kernel
+// called four times for ~175 ms each promotes during the second call.
+const repeated = kernel + String.raw`
+for (var k = 0; k < 4; k++)
+  if (benchNbody(300, 120) !== 209399.109) throw new Error('repeated call checksum mismatch');
+console.log('done');
+`;
+{
+  const lines = run(repeated);
+  if (!lines.some(line => line.startsWith('jit: promote func=benchNbody')))
+    throw new Error(`repeated calls: expected a promotion, got:\n${lines.join('\n')}`);
+  if (!lines.some(line => line.startsWith('jit: osr compiled func=benchNbody') && line.includes('tier=hot')))
+    throw new Error(`repeated calls: expected a hot OSR recompile, got:\n${lines.join('\n')}`);
+}
 console.log('jit-osr-large-function: ok');
