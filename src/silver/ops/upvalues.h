@@ -162,6 +162,7 @@ static inline ant_value_t sv_op_close_upval(sv_vm_t *vm, sv_frame_t *frame, uint
       uv->closed = *loc;
       uv->location = &uv->closed;
       *pp = uv->next;
+      uv->next = NULL;
       gc_upvalue_write_barrier(vm->js, uv, uv->closed);
     }
     else pp = &uv->next;

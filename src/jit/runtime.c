@@ -311,6 +311,11 @@ ant_value_t sv_jit_try_osr(
   sv_jit_leave(js);
   if (synthetic_closure) gc_pop_roots(js, root_mark);
 
+  if (result == SV_JIT_RETRY_INTERP && sv_jit_warn_unlikely) fprintf(
+    stderr, "jit: osr entry-rejected func=%s offset=%d\n",
+    func->debug->name ? func->debug->name : "<anonymous>", bc_offset
+  );
+
   if (sv_is_jit_bailout(result)) {
     sv_jit_on_bailout(func);
     return SV_JIT_RETRY_INTERP;

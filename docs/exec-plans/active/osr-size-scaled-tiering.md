@@ -276,6 +276,74 @@ faster.
 - `examples/jit/run.js --all`: pass.
 - `examples/spec/run.js --all`: see checkpoint below.
 
+## Two cliffs the probes exposed (fixed)
+
+Both reproduced on the installed release, so neither came from this plan;
+the tiering probes only made them visible.
+
+**OSR entry rejected by locals declared after the loop.** The OSR entry
+guards every local the inference marks numeric before resuming the loop. A
+`var s = 0` (or `let`) written after a hot loop is hoisted, so at the loop
+head it still holds `undefined` (var) or the TDZ mark (let). The guard failed,
+the generated code returned the retry sentinel, and the interpreter ran the
+whole loop while retrying the entry every `jit_osr_threshold` back-edges.
+The guard now accepts both values for a numeric local that has no
+entry-integer register, which is exactly the state a normal entry starts
+from: the local's immediate init runs before any read, and a read that would
+need a TDZ check makes the function ineligible. `sv_jit_try_osr` logs
+`jit: osr entry-rejected func=... offset=...` under op-warn when an entry is
+refused, so the shape is now diagnosable.
+
+| 12M-iteration double loop, entered by OSR | before | after | node |
+|---|---|---|---|
+| `var s = 0` after the loop | 236 ms | 20 ms | 16 ms |
+| `let s = 0` after the loop | 208 ms | 25 ms | 16 ms |
+
+Regression test: `tests/test_jit_osr_late_locals.cjs`.
+
+**Integer `%` was an unconditional helper call.** `OP_MOD` flushed the
+vstack and called `jit_helper_mod` for every operand pair. `fmod` itself
+costs ~12 ns per call on this machine, so a direct `fmod` fast path would
+have bought little. `%` now follows the divide emission: type feedback picks
+the shape, and two doubles take an inline integer remainder when the
+dividend is an exact non-negative integer and the divisor a non-zero exact
+integer (the only case where the integer result matches JS, including the
+sign of zero; `-0 % n` is sent to fmod). Everything else numeric goes to the
+helper's `fmod`; non-numbers bail as before. Two known-range integer slots
+take a bare `MIR_MOD` in `jit_emit_integer_arithmetic`.
+
+| 12M iterations of `(s + i * 7) % 1000003` | before | after | node |
+|---|---|---|---|
+| | 185 ms | 70 ms | 35 ms |
+
+Regression test: `tests/test_jit_mod.cjs` (bit-exact against the interpreter
+with `Object.is`, and no bailouts on the numeric shapes).
+
+**JIT open-upvalue list swept under a live frame (hang).** Found through
+the PGO training run: `tests/bench_includes_breakdown.cjs` printed all its
+results and then never exited on every build since #102, while the stable
+build exits. The module's top level (536 B) is now OSR-compiled on the cold
+tier, so its closures are created by JIT code and their upvalues live in the
+frame's private open list, whose head is a native stack slot. The collector
+reaches that list only through the conservative stack scan in
+`src/gc/objects.c`, and that chain walk stopped at the first node already
+marked, which happens whenever the head's closure is still alive. Every node
+behind it was swept while still linked; the next capture got a swept node
+back from the arena and linked it into a list that still pointed at it, a
+two-node cycle, and closing the frame's upvalues spun on it forever. The walk
+now marks every node and is bounded by the arena element count, and every
+close path clears `next` on the node it unlinks. The old 512-byte gate had
+kept large bodies with captures out of the JIT's OSR path, which is why the
+sweep never lined up before.
+
+Regression test: `tests/test_jit_open_upvalue_gc.cjs` (hangs the unfixed
+binary, passes with the fix).
+
+Seen on the way, not fixed: a numeric local read inside the loop before its
+post-loop declaration (`t = s` before `var s = 0`) returns register garbage
+from JIT code on a normal entry as well; the interpreter returns `undefined`.
+It predates this plan and is independent of the OSR entry change.
+
 ## Follow-ups
 
 - `Math.sqrt` and the other `Math.*` intrinsics as JIT fast paths.

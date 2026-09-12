@@ -733,15 +733,31 @@ bool jit_setup_frame(jit_compile_t *c) {
       for (int i = 0; i < c->n_locals; i++)
         if (c->known_type_locals[i] == SV_TI_NUM) {
           osr_any_num = true;
+          bool entry_integer = c->entry_integer_regs && c->entry_integer_regs[i];
+          MIR_label_t osr_local_done = NULL;
+          if (!entry_integer) {
+            osr_local_done = MIR_new_label(c->ctx);
+            MIR_append_insn(c->ctx, c->jit_func,
+                            MIR_new_insn(c->ctx, MIR_BEQ,
+                                         MIR_new_label_op(c->ctx, osr_local_done),
+                                         MIR_new_reg_op(c->ctx, c->local_regs[i]),
+                                         MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0))));
+            MIR_append_insn(c->ctx, c->jit_func,
+                            MIR_new_insn(c->ctx, MIR_BEQ,
+                                         MIR_new_label_op(c->ctx, osr_local_done),
+                                         MIR_new_reg_op(c->ctx, c->local_regs[i]),
+                                         MIR_new_uint_op(c->ctx, (uint64_t)SV_TDZ)));
+          }
           mir_emit_is_num_guard(c->ctx, c->jit_func, c->r_bool, c->local_regs[i], osr_type_bail);
           mir_i64_to_d(c->ctx, c->jit_func, c->local_d_regs[i], c->local_regs[i], c->r_d_slot);
-          if (c->entry_integer_regs && c->entry_integer_regs[i]) {
+          if (entry_integer) {
             jit_integer_range_t range = c->entry_integer_ranges[i];
             MIR_reg_t integer = mir_emit_exact_integer_guard(
                 c->ctx, c->jit_func, c->local_regs[i], c->local_d_regs[i], true, c->r_d_slot,
                 (double)range.min, (double)range.max, osr_type_bail, -i - 1);
             MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->entry_integer_regs[i]), MIR_new_reg_op(c->ctx, integer)));
           }
+          if (osr_local_done) MIR_append_insn(c->ctx, c->jit_func, osr_local_done);
         }
       if (osr_any_num) {
         MIR_append_insn(c->ctx, c->jit_func,

@@ -685,10 +685,13 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
       gc_mark_closure(js, raw_closure);
 
     sv_upvalue_t *raw_uv = (sv_upvalue_t *)(uintptr_t)w;
-    while (raw_uv && fixed_arena_contains(&js->upvalue_arena, raw_uv)) {
-      if (raw_uv->gc_epoch == gc_epoch) break;
-      raw_uv->gc_epoch = gc_epoch;
-      if (raw_uv->location == &raw_uv->closed) gc_mark_value(js, raw_uv->closed);
+    size_t uv_budget = js->upvalue_arena.watermark / js->upvalue_arena.elem_size + 1;
+    
+    while (raw_uv && uv_budget-- && fixed_arena_contains(&js->upvalue_arena, raw_uv)) {
+      if (raw_uv->gc_epoch != gc_epoch) {
+        raw_uv->gc_epoch = gc_epoch;
+        if (raw_uv->location == &raw_uv->closed) gc_mark_value(js, raw_uv->closed);
+      }
       raw_uv = raw_uv->next;
     }
 

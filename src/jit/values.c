@@ -215,6 +215,12 @@ bool jit_emit_integer_arithmetic(
     code = MIR_SUB;
     lo = (__int128)l.min - r.max;
     hi = (__int128)l.max - r.min;
+  } else if (op == OP_MOD) {
+    if (l.min < 0 || (r.min <= 0 && r.max >= 0)) return false;
+    code = MIR_MOD;
+    int64_t divisor = r.max > -r.min ? r.max : -r.min;
+    lo = 0;
+    hi = divisor - 1 < l.max ? divisor - 1 : l.max;
   } else {
     if ((l.min < 0 && r.min <= 0 && r.max >= 0) ||
         (r.min < 0 && l.min <= 0 && l.max >= 0)) return false;

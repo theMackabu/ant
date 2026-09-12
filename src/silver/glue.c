@@ -1187,6 +1187,7 @@ void jit_helper_close_upval(
       uv->closed = *uv->location;
       uv->location = &uv->closed;
       *pp = uv->next;
+      uv->next = NULL;
       gc_upvalue_write_barrier(vm->js, uv, uv->closed);
     }
     else pp = &uv->next;

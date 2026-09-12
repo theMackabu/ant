@@ -81,7 +81,10 @@ export function targets() {
     'test_ant_cron_windows.cjs',
     'test_compile_basic.cjs',
     'test_compile_native_addon.cjs',
-    'test_hono_adapter.cjs'
+    'test_hono_adapter.cjs',
+    'test_jit_osr_late_locals.cjs',
+    'test_jit_mod.cjs',
+    'test_jit_open_upvalue_gc.cjs'
   ];
   for (const f of REGRESSION_TESTS) list.push({ group: 'tests', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
 
