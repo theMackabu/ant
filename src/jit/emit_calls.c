@@ -1,4 +1,5 @@
 #include "compile.h"
+#include "silver/feedback.h"
 
 void jit_emit_calls(jit_compile_t *c) {
   switch (c->op) {

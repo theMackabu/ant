@@ -1,4 +1,5 @@
 #include "compile.h"
+#include "silver/feedback.h"
 
 static void jit_emit_forward_arguments_call(jit_compile_t *c, bool is_tail) {
   (void)vstack_pop(&c->vs); // Deferred arguments object.

@@ -1,4 +1,6 @@
 #include "jit_internal.h"
+#include "../silver/ops/globals.h"
+#include "silver/feedback.h"
 
 static const uint8_t forward_arguments_prefix[] = {
   OP_SPECIAL_OBJ,  // arguments object (operand 0)

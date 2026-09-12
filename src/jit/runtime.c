@@ -1,4 +1,9 @@
+#include "gc/roots.h"
 #include "jit_internal.h"
+#include "silver/feedback.h"
+#include "silver/call.h"
+#include "silver/glue.h"
+
 #include <time.h>
 #if defined(__APPLE__)
 #include <malloc/malloc.h>

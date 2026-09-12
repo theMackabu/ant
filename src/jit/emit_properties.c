@@ -1,4 +1,5 @@
 #include "compile.h"
+#include "silver/feedback.h"
 
 static MIR_reg_t jit_emit_element_index_guard(
     jit_compile_t *c, MIR_reg_t key, MIR_reg_t integer_index,

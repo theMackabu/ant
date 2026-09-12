@@ -1,4 +1,5 @@
 #include "compile.h"
+#include "silver/feedback.h"
 
 static void jit_discard_setup_module(jit_compile_t *c) {
   for (int i = 0; i < c->lm.count; i++)

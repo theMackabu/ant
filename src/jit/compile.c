@@ -1,4 +1,5 @@
 #include "compile.h"
+#include "debug.h"
 #include <time.h>
 
 static void jit_emit_resume_tramp(jit_compile_t *c, const jit_bailout_emit_t *bail, MIR_item_t imp, const char *res_name) {

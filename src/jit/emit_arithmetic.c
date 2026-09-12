@@ -1,4 +1,5 @@
 #include "compile.h"
+#include "silver/feedback.h"
 
 static void jit_emit_mod_numbers(
     jit_compile_t *c, MIR_reg_t l, MIR_reg_t r, MIR_reg_t dst,

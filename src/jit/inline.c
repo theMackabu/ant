@@ -1,4 +1,7 @@
 #include "jit_internal.h"
+#include "silver/feedback.h"
+
+// TODO: opcode.h
 static bool jit_op_inline_side_effect(sv_op_t op) {
   switch (op) {
     case OP_PUT_FIELD:
@@ -14,6 +17,7 @@ static bool jit_op_inline_side_effect(sv_op_t op) {
   }
 }
 
+// TODO: opcode.h
 static bool jit_op_inline_restarts_callee_on_guard_failure(sv_op_t op) {
   switch (op) {
     case OP_GET_GLOBAL:
@@ -30,6 +34,7 @@ static bool jit_op_inline_restarts_callee_on_guard_failure(sv_op_t op) {
   }
 }
 
+// TODO: opcode.h
 static bool jit_op_inline_pure_tail(sv_op_t op) {
   switch (op) {
     case OP_RETURN:

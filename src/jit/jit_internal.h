@@ -2,16 +2,7 @@
 #define ANT_JIT_INTERNAL_H
 
 #include "silver/jit.h"
-#include "silver/glue.h"
-#include "silver/call.h"
-#include "silver/feedback.h"
 #include "silver/opcode.h"
-#include "../silver/ops/globals.h"
-#include "../silver/ops/literals.h"
-#include "debug.h"
-#include "shapes.h"
-#include "gc/roots.h"
-#include <internal.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmacro-redefined"
