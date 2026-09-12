@@ -680,7 +680,10 @@ static sv_ast_t *parse_primary(P) {
     CONSUME();
     sv_ast_t *n = mk(N_TEMPLATE);
     n->src_end = (uint32_t)(TOFF + TLEN);
+    
     const uint8_t *in = (const uint8_t *)&CODE[TOFF];
+    const uint32_t tpl_off = (uint32_t)TOFF;
+    
     size_t tpl_len = TLEN;
     size_t i = 1;
 
@@ -710,8 +713,13 @@ static sv_ast_t *parse_primary(P) {
         tpl_len > 0 && expr_start < tpl_len - 1)
         ? (tpl_len - 1 - expr_start) : 0;
 
+      const uint32_t expr_off = tpl_off + (uint32_t)expr_start;
       sv_lexer_checkpoint_t cp;
-      sv_lexer_push_source(&p->lx, &cp, (const char *)&in[expr_start], (ant_offset_t)expr_max_len);
+      
+      sv_lexer_push_source(
+        &p->lx, &cp, CODE,
+        (ant_offset_t)expr_off, (ant_offset_t)(expr_off + expr_max_len)
+      );
 
       sv_ast_t *expr = parse_expr(p);
       sv_ast_list_push(&n->args, expr);
@@ -723,7 +731,7 @@ static sv_ast_t *parse_primary(P) {
       }
       CONSUME();
 
-      size_t consumed_expr = (size_t)POS;
+      size_t consumed_expr = (size_t)POS - expr_off;
       sv_lexer_pop_source(&p->lx, &cp);
 
       if (consumed_expr == 0) {

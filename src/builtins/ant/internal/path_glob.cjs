@@ -1,3 +1,4 @@
+// @ant: compact_on_build
 const { minimatch } = require('minimatch');
 const { validateString, isWindows } = require('ant:internal/path_helpers');
 

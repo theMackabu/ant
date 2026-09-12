@@ -1,7 +1,8 @@
 import * as esbuild from 'esbuild';
 import path from 'node:path';
 
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { deflateRawSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 function toSpecifier(rootDir, filePath) {
@@ -62,7 +63,7 @@ async function bundleBootstrap(entryPath, replacements) {
     entryPoints: [entryPath],
     bundle: true,
     write: false,
-    minify: true,
+    minify: false,
     format: 'esm',
     define: replacements
   });
@@ -84,12 +85,20 @@ const builtinExternals = {
   }
 };
 
+function wantsCompaction(entryPath) {
+  const first = readFileSync(entryPath, 'utf8').split('\n', 1)[0];
+  return first.includes('@ant: compact_on_build');
+}
+
 async function bundleBuiltin(entryPath, format) {
+  const compact = wantsCompaction(entryPath);
   const output = await esbuild.build({
     entryPoints: [entryPath],
     bundle: true,
     write: false,
-    minify: true,
+    minifyWhitespace: compact,
+    minifySyntax: compact,
+    minifyIdentifiers: false,
     legalComments: 'eof',
     nodePaths: [fileURLToPath(new URL('./node_modules/', import.meta.url))],
     platform: 'neutral',
@@ -117,13 +126,26 @@ function generateBuiltinHeader(rootDir, bundles) {
   lines.push('#include <stdint.h>');
   lines.push('');
 
+  const stored = bundles.map(bundle => {
+    const deflated = deflateRawSync(bundle.bytes, { level: 9 });
+    return deflated.length < bundle.bytes.length
+      ? { bytes: deflated, rawLen: bundle.bytes.length }
+      : { bytes: bundle.bytes, rawLen: bundle.bytes.length };
+  });
+
   bundles.forEach((bundle, index) => {
+    const bytes = stored[index].bytes;
     const byteLines = [];
-    for (let i = 0; i < bundle.bytes.length; i += 16) {
-      byteLines.push('  ' + Array.from(bundle.bytes.slice(i, i + 16)).join(', '));
+    
+    for (let i = 0; i < bytes.length; i += 16) {
+      byteLines.push('  ' + Array.from(bytes.slice(i, i + 16)).join(', '));
     }
 
-    lines.push(`/* ${bundle.specifier} <- ${path.relative(rootDir, bundle.entryPath).replaceAll('\\', '/')} */`);
+    const how = bytes.length < stored[index].rawLen
+      ? `deflate-raw ${stored[index].rawLen} -> ${bytes.length}`
+      : `stored ${bytes.length}`;
+    
+    lines.push(`/* ${bundle.specifier} <- ${path.relative(rootDir, bundle.entryPath).replaceAll('\\', '/')} (${how}) */`);
     lines.push(`static const uint8_t ant_builtin_bundle_${index}[] = {`);
     lines.push(byteLines.join(',\n'));
     lines.push('};');
@@ -132,7 +154,7 @@ function generateBuiltinHeader(rootDir, bundles) {
 
   lines.push('static const ant_builtin_bundle_module_t ant_builtin_bundle_modules[] = {');
   bundles.forEach((bundle, index) => {
-    lines.push(`  { ant_builtin_bundle_${index}, sizeof(ant_builtin_bundle_${index}), ${bundle.format} },`);
+    lines.push(`  { ant_builtin_bundle_${index}, sizeof(ant_builtin_bundle_${index}), ${stored[index].rawLen}, ${bundle.format} },`);
   });
   lines.push('};');
   lines.push('');
@@ -152,7 +174,11 @@ function generateBuiltinHeader(rootDir, bundles) {
   lines.push('');
   lines.push('#endif');
 
-  return lines.join('\n') + '\n';
+  return {
+    text: lines.join('\n') + '\n',
+    storedBytes: stored.reduce((n, e) => n + e.bytes.length, 0),
+    compressedCount: stored.filter(e => e.bytes.length < e.rawLen).length,
+  };
 }
 
 function generateSnapshotHeader(inputFile, bytes) {
@@ -208,7 +234,8 @@ async function main() {
   }
 
   const snapshotBytes = await bundleBootstrap(bootstrapEntry, replacements);
-  const builtinHeader = generateBuiltinHeader(builtinsRoot, bundles);
+  const builtinResult = generateBuiltinHeader(builtinsRoot, bundles);
+  const builtinHeader = builtinResult.text;
   const snapshotHeader = generateSnapshotHeader(bootstrapEntry, snapshotBytes);
   const totalBundledBytes = bundles.reduce((sum, bundle) => sum + bundle.bytes.length, 0);
 
@@ -219,6 +246,11 @@ async function main() {
   console.log(`  builtin bundle: ${builtinOutputFile}`);
   console.log(`  builtin modules: ${bundles.length}`);
   console.log(`  builtin size: ${totalBundledBytes} bytes`);
+  console.log(
+    `  builtin stored: ${builtinResult.storedBytes} bytes deflated` +
+    ` (${(100 * (1 - builtinResult.storedBytes / totalBundledBytes)).toFixed(1)}% smaller,` +
+    ` ${builtinResult.compressedCount}/${bundles.length} modules compressed)`
+  );
   console.log(`  bootstrap snapshot: ${snapshotOutputFile}`);
   console.log(`  bootstrap size: ${snapshotBytes.length} bytes`);
   console.log(`  bootstrap replacements: ${Object.keys(replacements).length}`);

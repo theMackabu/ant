@@ -37,13 +37,19 @@ typedef struct {
 
 sv_lex_string_t sv_lexer_str_literal(sv_lexer_t *lx);
 
-void sv_lexer_init(sv_lexer_t *lx, ant_t *js, const char *code, ant_offset_t clen, bool strict);
-void sv_lexer_set_error_site(sv_lexer_t *lx);
+void sv_lexer_init(
+  sv_lexer_t *lx, ant_t *js, 
+  const char *code, ant_offset_t clen, bool strict
+);
 
+void sv_lexer_push_source(
+  sv_lexer_t *lx, sv_lexer_checkpoint_t *cp, 
+  const char *code, ant_offset_t start, ant_offset_t end
+);
+
+void sv_lexer_set_error_site(sv_lexer_t *lx);
 void sv_lexer_save_state(const sv_lexer_t *lx, sv_lexer_state_t *st);
 void sv_lexer_restore_state(sv_lexer_t *lx, const sv_lexer_state_t *st);
-
-void sv_lexer_push_source(sv_lexer_t *lx, sv_lexer_checkpoint_t *cp, const char *code, ant_offset_t clen);
 void sv_lexer_pop_source(sv_lexer_t *lx, const sv_lexer_checkpoint_t *cp);
 
 uint8_t sv_lexer_next(sv_lexer_t *lx);

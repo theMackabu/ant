@@ -2,7 +2,6 @@
 #define ESM_BUILTIN_BUNDLE_H
 
 #include "esm/loader.h"
-
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -10,6 +9,7 @@
 typedef struct {
   const uint8_t *code;
   size_t code_len;
+  size_t raw_len;
   ant_module_format_t format;
 } ant_builtin_bundle_module_t;
 

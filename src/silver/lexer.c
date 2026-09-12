@@ -39,16 +39,19 @@ void sv_lexer_restore_state(sv_lexer_t *lx, const sv_lexer_state_t *st) {
   lx->st = *st;
 }
 
-void sv_lexer_push_source(sv_lexer_t *lx, sv_lexer_checkpoint_t *cp, const char *code, ant_offset_t clen) {
+void sv_lexer_push_source(
+  sv_lexer_t *lx, sv_lexer_checkpoint_t *cp,
+  const char *code, ant_offset_t start, ant_offset_t end
+) {
   cp->code = lx->code;
   cp->clen = lx->clen;
   cp->strict = lx->strict;
   cp->st = lx->st;
 
   lx->code = code;
-  lx->clen = clen;
-  lx->st.pos = 0;
-  lx->st.toff = 0;
+  lx->clen = end;
+  lx->st.pos = start;
+  lx->st.toff = start;
   lx->st.tlen = 0;
   lx->st.tval = js_mkundef();
   lx->st.tok = TOK_ERR;
