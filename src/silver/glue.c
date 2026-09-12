@@ -9,6 +9,7 @@
 #include "gc/roots.h"
 #include "tokens.h"
 #include "silver/glue.h"
+#include "silver/jit.h"
 #include "modules/regex.h"
 #include "modules/collections.h"
 
@@ -1214,7 +1215,7 @@ void jit_helper_adopt_open_upvalues(sv_vm_t *vm, sv_upvalue_t **open_upvalues) {
   }
 }
 
-ant_value_t jit_helper_bailout_resume(
+static ant_value_t jit_resume_in_interpreter(
   sv_vm_t *vm, sv_closure_t *closure,
   ant_value_t this_val, ant_value_t new_target, ant_value_t super_val,
   ant_value_t *args, int argc,
@@ -1223,10 +1224,6 @@ ant_value_t jit_helper_bailout_resume(
   ant_value_t *locals, int64_t n_locals,
   int64_t bc_offset
 ) {
-  if (!closure || !closure->func) return mkval(kTypeError, 0);
-  sv_func_t *fn = closure->func;
-  sv_jit_on_bailout_at(fn, "resume", (int)bc_offset);
-
   vm->jit_resume.active     = true;
   vm->jit_resume.ip_offset  = (int)bc_offset;
   vm->jit_resume.params     = params;
@@ -1239,6 +1236,55 @@ ant_value_t jit_helper_bailout_resume(
   return sv_execute_closure_entry(
     vm, closure, mkref(kTypeFunction, closure),
     super_val, new_target, this_val, args, argc, NULL
+  );
+}
+
+ant_value_t jit_helper_bailout_resume(
+  sv_vm_t *vm, sv_closure_t *closure,
+  ant_value_t this_val, ant_value_t new_target, ant_value_t super_val,
+  ant_value_t *args, int argc,
+  ant_value_t *vstack, int64_t vstack_sp,
+  ant_value_t *params, int64_t n_params,
+  ant_value_t *locals, int64_t n_locals,
+  int64_t bc_offset
+) {
+  if (!closure || !closure->func) return mkval(kTypeError, 0);
+  sv_jit_on_bailout_at(closure->func, "resume", (int)bc_offset);
+  
+  return jit_resume_in_interpreter(
+    vm, closure, this_val, new_target, super_val,
+    args, argc, vstack, vstack_sp, params, n_params,
+    locals, n_locals, bc_offset
+  );
+}
+
+ant_value_t jit_helper_promote_resume(
+  sv_vm_t *vm, sv_closure_t *closure,
+  ant_value_t this_val, ant_value_t new_target, ant_value_t super_val,
+  ant_value_t *args, int argc,
+  ant_value_t *vstack, int64_t vstack_sp,
+  ant_value_t *params, int64_t n_params,
+  ant_value_t *locals, int64_t n_locals,
+  int64_t bc_offset
+) {
+  if (!closure || !closure->func) return mkval(kTypeError, 0);
+  sv_func_t *fn = closure->func;
+
+  if (fn->jit_code_cold) {
+    fn->jit_code = NULL;
+    if (sv_jit_warn_unlikely) fprintf(
+      stderr, "jit: promote func=%s at bc=%d\n", 
+      fn->debug->name ? fn->debug->name : "<anonymous>", (int)bc_offset
+    );
+  }
+  
+  if (sv_jit_promote_pending(fn) || fn->jit_code)
+    fn->back_edge_count = fn->jit_osr_threshold > 0 ? fn->jit_osr_threshold - 1 : 0;
+  
+  return jit_resume_in_interpreter(
+    vm, closure, this_val, new_target, super_val,
+    args, argc, vstack, vstack_sp, params, n_params,
+    locals, n_locals, bc_offset
   );
 }
 

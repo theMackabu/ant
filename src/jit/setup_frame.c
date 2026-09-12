@@ -8,6 +8,61 @@ static void jit_discard_setup_module(jit_compile_t *c) {
   MIR_remove_module(c->ctx, c->mod);
 }
 
+static void jit_emit_cold_entry_counter(jit_compile_t *c, const char *site) {
+  if (!c->cold_tier) return;
+  char fn_name[32], calls_name[32], hot_name[32], res_name[32];
+  snprintf(fn_name, sizeof fn_name, "tier_fn_%s", site);
+  snprintf(calls_name, sizeof calls_name, "tier_calls_%s", site);
+  snprintf(hot_name, sizeof hot_name, "tier_hot_%s", site);
+  snprintf(res_name, sizeof res_name, "tier_res_%s", site);
+
+  MIR_label_t body = MIR_new_label(c->ctx);
+  MIR_reg_t r_fn = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, fn_name);
+  MIR_reg_t r_calls = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, calls_name);
+  MIR_reg_t r_hot = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, hot_name);
+  MIR_reg_t r_res = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, res_name);
+  MIR_op_t call_count = MIR_new_mem_op(c->ctx, MIR_T_U32,
+                                       (MIR_disp_t)offsetof(sv_func_t, call_count), r_fn, 0, 1);
+  mir_load_imm(c->ctx, c->jit_func, r_fn, (uint64_t)(uintptr_t)c->func);
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, r_calls), call_count));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_ADD, MIR_new_reg_op(c->ctx, r_calls),
+                               MIR_new_reg_op(c->ctx, r_calls), MIR_new_int_op(c->ctx, 1)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV, call_count, MIR_new_reg_op(c->ctx, r_calls)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_UBLE, MIR_new_label_op(c->ctx, body),
+                               MIR_new_reg_op(c->ctx, r_calls),
+                               MIR_new_int_op(c->ctx, SV_JIT_THRESHOLD)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_call_insn(c->ctx, 6,
+                                    MIR_new_ref_op(c->ctx, c->tier_up_proto),
+                                    MIR_new_ref_op(c->ctx, c->imp_tier_up),
+                                    MIR_new_reg_op(c->ctx, r_hot),
+                                    MIR_new_reg_op(c->ctx, c->r_js),
+                                    MIR_new_reg_op(c->ctx, r_fn),
+                                    MIR_new_reg_op(c->ctx, c->r_closure)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, body),
+                               MIR_new_reg_op(c->ctx, r_hot), MIR_new_int_op(c->ctx, 0)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_call_insn(c->ctx, 10,
+                                    MIR_new_ref_op(c->ctx, c->self_proto),
+                                    MIR_new_reg_op(c->ctx, r_hot),
+                                    MIR_new_reg_op(c->ctx, r_res),
+                                    MIR_new_reg_op(c->ctx, c->r_vm),
+                                    MIR_new_reg_op(c->ctx, c->r_this),
+                                    MIR_new_reg_op(c->ctx, c->r_new_target),
+                                    MIR_new_reg_op(c->ctx, c->r_super_val),
+                                    MIR_new_reg_op(c->ctx, c->r_args),
+                                    MIR_new_reg_op(c->ctx, c->r_argc),
+                                    MIR_new_reg_op(c->ctx, c->r_closure)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, r_res)));
+  MIR_append_insn(c->ctx, c->jit_func, body);
+}
+
 bool jit_setup_frame(jit_compile_t *c) {
   char fname[128];
   snprintf(fname, sizeof(fname), "jit_%s_%p",
@@ -90,54 +145,6 @@ bool jit_setup_frame(jit_compile_t *c) {
     MIR_append_insn(c->ctx, c->jit_func,
                     MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, r_ovf_err)));
     MIR_append_insn(c->ctx, c->jit_func, no_overflow);
-  }
-
-  if (c->cold_tier) {
-    MIR_label_t body = MIR_new_label(c->ctx);
-    MIR_reg_t r_fn = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "tier_fn");
-    MIR_reg_t r_calls = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "tier_calls");
-    MIR_reg_t r_hot = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "tier_hot");
-    MIR_reg_t r_res = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, "tier_res");
-    MIR_op_t call_count = MIR_new_mem_op(c->ctx, MIR_T_U32,
-                                         (MIR_disp_t)offsetof(sv_func_t, call_count), r_fn, 0, 1);
-    mir_load_imm(c->ctx, c->jit_func, r_fn, (uint64_t)(uintptr_t)c->func);
-    MIR_append_insn(c->ctx, c->jit_func,
-                    MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, r_calls), call_count));
-    MIR_append_insn(c->ctx, c->jit_func,
-                    MIR_new_insn(c->ctx, MIR_ADD, MIR_new_reg_op(c->ctx, r_calls),
-                                 MIR_new_reg_op(c->ctx, r_calls), MIR_new_int_op(c->ctx, 1)));
-    MIR_append_insn(c->ctx, c->jit_func,
-                    MIR_new_insn(c->ctx, MIR_MOV, call_count, MIR_new_reg_op(c->ctx, r_calls)));
-    MIR_append_insn(c->ctx, c->jit_func,
-                    MIR_new_insn(c->ctx, MIR_UBLE, MIR_new_label_op(c->ctx, body),
-                                 MIR_new_reg_op(c->ctx, r_calls),
-                                 MIR_new_int_op(c->ctx, SV_JIT_THRESHOLD)));
-    MIR_append_insn(c->ctx, c->jit_func,
-                    MIR_new_call_insn(c->ctx, 6,
-                                      MIR_new_ref_op(c->ctx, c->tier_up_proto),
-                                      MIR_new_ref_op(c->ctx, c->imp_tier_up),
-                                      MIR_new_reg_op(c->ctx, r_hot),
-                                      MIR_new_reg_op(c->ctx, c->r_js),
-                                      MIR_new_reg_op(c->ctx, r_fn),
-                                      MIR_new_reg_op(c->ctx, c->r_closure)));
-    MIR_append_insn(c->ctx, c->jit_func,
-                    MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, body),
-                                 MIR_new_reg_op(c->ctx, r_hot), MIR_new_int_op(c->ctx, 0)));
-    MIR_append_insn(c->ctx, c->jit_func,
-                    MIR_new_call_insn(c->ctx, 10,
-                                      MIR_new_ref_op(c->ctx, c->self_proto),
-                                      MIR_new_reg_op(c->ctx, r_hot),
-                                      MIR_new_reg_op(c->ctx, r_res),
-                                      MIR_new_reg_op(c->ctx, c->r_vm),
-                                      MIR_new_reg_op(c->ctx, c->r_this),
-                                      MIR_new_reg_op(c->ctx, c->r_new_target),
-                                      MIR_new_reg_op(c->ctx, c->r_super_val),
-                                      MIR_new_reg_op(c->ctx, c->r_args),
-                                      MIR_new_reg_op(c->ctx, c->r_argc),
-                                      MIR_new_reg_op(c->ctx, c->r_closure)));
-    MIR_append_insn(c->ctx, c->jit_func,
-                    MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, r_res)));
-    MIR_append_insn(c->ctx, c->jit_func, body);
   }
 
   c->vs = (jit_vstack_t){0};
@@ -265,6 +272,7 @@ bool jit_setup_frame(jit_compile_t *c) {
     mir_i64_to_d(c->ctx, c->jit_func, c->r_d_one, c->r_bool, c->r_d_slot);
   }
 
+  if (c->cold_tier) c->feat.needs_args_buf = true;
   c->r_args_buf = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "args_buf");
   if (c->feat.needs_args_buf) {
     int scratch_slots = SV_JIT_ARGS_BUF_CAP;
@@ -485,7 +493,7 @@ bool jit_setup_frame(jit_compile_t *c) {
         c->captured_params, c->param_count, c->writes_params);
   }
 
-  c->needs_lbuf = c->needs_bailout || c->feat.needs_close_upval || c->has_captures;
+  c->needs_lbuf = c->needs_bailout || c->feat.needs_close_upval || c->has_captures || c->cold_tier;
   c->r_lbuf = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "lbuf");
   if (c->use_unified_slotbuf && c->n_locals > 0) {
     MIR_append_insn(c->ctx, c->jit_func,
@@ -517,19 +525,35 @@ bool jit_setup_frame(jit_compile_t *c) {
   }
 
   c->bailout_ctx = (jit_bailout_emit_t){
-      .val = c->r_bailout_val,
-      .off = c->r_bailout_off,
-      .sp = c->r_bailout_sp,
-      .tramp = c->bailout_tramp,
-      .args_buf = c->r_args_buf,
-      .vstack = &c->vs,
-      .local_regs = c->local_regs,
-      .local_d_regs = c->local_d_regs,
-      .dnum_locals = c->dnum_locals,
-      .n_locals = c->n_locals,
-      .lbuf = c->r_lbuf,
-      .d_slot = c->r_d_slot,
+    .val = c->r_bailout_val,
+    .off = c->r_bailout_off,
+    .sp = c->r_bailout_sp,
+    .tramp = c->bailout_tramp,
+    .args_buf = c->r_args_buf,
+    .vstack = &c->vs,
+    .local_regs = c->local_regs,
+    .local_d_regs = c->local_d_regs,
+    .dnum_locals = c->dnum_locals,
+    .n_locals = c->n_locals,
+    .lbuf = c->r_lbuf,
+    .d_slot = c->r_d_slot,
   };
+  
+  if (c->cold_tier) {
+    c->promote_tramp = MIR_new_label(c->ctx);
+    c->promote_ctx = c->bailout_ctx;
+    c->promote_ctx.tramp = c->promote_tramp;
+    c->r_promote = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "promote_edges");
+    c->r_promote_t0 = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "promote_t0");
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_promote),
+                                 MIR_new_int_op(c->ctx, 0)));
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_call_insn(c->ctx, 3,
+                                      MIR_new_ref_op(c->ctx, c->promote_now_proto),
+                                      MIR_new_ref_op(c->ctx, c->imp_promote_now),
+                                      MIR_new_reg_op(c->ctx, c->r_promote_t0)));
+  }
 
   if (c->feat.needs_tco_args) {
     MIR_append_insn(c->ctx, c->jit_func,
@@ -694,6 +718,7 @@ bool jit_setup_frame(jit_compile_t *c) {
       }
     }
 
+    jit_emit_cold_entry_counter(c, "osr");
     if (c->has_captured_params && c->r_jit_open_upvalues) {
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_call_insn(c->ctx, 7,
@@ -782,6 +807,7 @@ bool jit_setup_frame(jit_compile_t *c) {
 
     MIR_append_insn(c->ctx, c->jit_func, normal_entry);
   }
+  jit_emit_cold_entry_counter(c, "call");
 
   memset(c->jit_try_stack, 0, sizeof(c->jit_try_stack));
   c->jit_try_depth = 0;

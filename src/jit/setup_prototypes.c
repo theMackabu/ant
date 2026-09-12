@@ -387,6 +387,13 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                          MIR_T_I64, "vm",
                                          MIR_T_I64, "js");
 
+  MIR_type_t i64_ret = MIR_T_I64;
+  c->promote_now_proto = MIR_new_proto(c->ctx, "promote_now_proto", 1, &i64_ret, 0);
+  c->promote_due_proto = MIR_new_proto(c->ctx, "promote_due_proto",
+                                       1, &i64_ret, 2,
+                                       MIR_T_I64, "func",
+                                       MIR_T_I64, "t0");
+
   MIR_type_t tier_ret = MIR_T_I64;
   c->tier_up_proto = MIR_new_proto(c->ctx, "tier_up_proto",
                                    1, &tier_ret, 3,
@@ -632,6 +639,9 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_to_propkey = MIR_new_import(c->ctx, "jit_helper_to_propkey");
   c->imp_to_string = MIR_new_import(c->ctx, "js_template_to_string");
   c->imp_resume = MIR_new_import(c->ctx, "jit_helper_bailout_resume");
+  c->imp_promote_resume = MIR_new_import(c->ctx, "jit_helper_promote_resume");
+  c->imp_promote_now = MIR_new_import(c->ctx, "jit_helper_promote_now");
+  c->imp_promote_due = MIR_new_import(c->ctx, "jit_helper_promote_due");
   c->imp_close_upval = MIR_new_import(c->ctx, "jit_helper_close_upval");
   c->imp_upval_barrier = MIR_new_import(c->ctx, "jit_helper_upval_barrier");
   c->imp_adopt_open_upvalues = MIR_new_import(c->ctx, "jit_helper_adopt_open_upvalues");

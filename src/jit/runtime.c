@@ -1,6 +1,27 @@
 #include "jit_internal.h"
+#include <time.h>
 
-void *jit_helper_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure);
+void *jit_helper_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) {
+  if (!func->jit_code_cold) return NULL;
+  return (void *)sv_jit_tier_up(js, func, closure);
+}
+
+int64_t jit_helper_promote_now(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+int64_t jit_helper_promote_due(sv_func_t *func, int64_t t0) {
+  int64_t budget =
+    JIT_COLD_PROMOTE_COMPILE_MULTIPLE *
+    JIT_HOT_COMPILE_NS_PER_BYTE * (int64_t)func->code_len;
+  
+  int64_t now = jit_helper_promote_now();
+  func->jit_cold_ns += now - t0;
+  
+  return func->jit_cold_ns >= budget ? 0 : now;
+}
 
 void jit_load_externals_once(sv_jit_ctx_t *jc) {
   if (jc == NULL || jc->externals_loaded) return;
@@ -56,6 +77,9 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_to_propkey);
   LOAD_EXT(js_template_to_string);
   LOAD_EXT(jit_helper_bailout_resume);
+  LOAD_EXT(jit_helper_promote_resume);
+  LOAD_EXT(jit_helper_promote_now);
+  LOAD_EXT(jit_helper_promote_due);
   LOAD_EXT(jit_helper_close_upval);
   LOAD_EXT(jit_helper_upval_barrier);
   LOAD_EXT(jit_helper_adopt_open_upvalues);
@@ -205,11 +229,6 @@ sv_jit_func_t sv_jit_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) 
   return hot;
 }
 
-void *jit_helper_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) {
-  if (!func->jit_code_cold) return NULL;
-  return (void *)sv_jit_tier_up(js, func, closure);
-}
-
 ant_value_t sv_jit_try_osr(
     sv_vm_t *vm, ant_t *js,
     sv_frame_t *frame, sv_func_t *func,
@@ -246,20 +265,25 @@ ant_value_t sv_jit_try_osr(
   if (func->jit_code) {
     jit = (sv_jit_func_t)func->jit_code;
   } else {
-    bool prefer_cold = func->code_len > JIT_OSR_COLD_COMPILE_MIN_BYTES;
-    jit = sv_jit_compile_tier(js, func, closure,
-                              prefer_cold ? SV_JIT_TIER_COLD : SV_JIT_TIER_AUTO);
+    sv_jit_tier_t tier = sv_jit_promote_pending(func) ? SV_JIT_TIER_HOT
+     : func->code_len > JIT_OSR_COLD_COMPILE_MIN_BYTES 
+     ? SV_JIT_TIER_COLD : SV_JIT_TIER_AUTO;
+    
+    jit = sv_jit_compile_tier(js, func, closure, tier);
+    
     if (sv_jit_warn_unlikely) fprintf(
       stderr, "jit: osr %s func=%s code_len=%d threshold=%u tier=%s\n",
       jit ? "compiled" : "compile-failed",
       func->debug->name ? func->debug->name : "<anonymous>",
       func->code_len, func->jit_osr_threshold,
-      prefer_cold ? "cold" : "auto"
+      tier == SV_JIT_TIER_HOT ? "hot" : tier == SV_JIT_TIER_COLD ? "cold" : "auto"
     );
+    
     if (!jit) {
       if (synthetic_closure) gc_pop_roots(js, root_mark);
       return SV_JIT_RETRY_INTERP;
     }
+    
     func->jit_code = (void *)jit;
     sv_jit_compile_callees(js, func);
   }
