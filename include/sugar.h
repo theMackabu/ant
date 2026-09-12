@@ -9,7 +9,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 
-typedef enum {
+typedef enum: uint8_t {
   CORO_ASYNC_AWAIT,
   CORO_GENERATOR,
   CORO_ASYNC_GENERATOR
@@ -36,22 +36,20 @@ typedef struct coroutine {
   ant_value_t async_promise;
   ant_module_t *module_eval_ctx;
 
-  union {
-    struct coroutine *active_parent;
-    struct coroutine *retired_next;
-  };
-  
+  struct coroutine *active_parent;
   struct coroutine *active_prev;
   struct sv_activation *act;
-  coroutine_type_t type;
 
   int nargs;
-  uint64_t gc_epoch;
-  uint32_t refcount;
   uint8_t hold_bits;
+  coroutine_type_t type;
 
   bool is_error;
   bool await_registered;
+
+  uint64_t gc_epoch;
+  uint32_t refcount;
+  uint32_t remember_index;
 } coroutine_t;
 
 typedef enum {
@@ -70,7 +68,6 @@ void coroutine_release(coroutine_t *coro);
 void coroutine_hold(coroutine_t *coro, uint8_t hold);
 void coroutine_unhold(coroutine_t *coro, uint8_t hold);
 
-void reap_retired_coroutines(ant_t *js);
 void free_coroutine(coroutine_t *coro);
 void coroutine_clear_await_registration(coroutine_t *coro);
 

@@ -232,6 +232,7 @@ static void gc_clear_remembered_builders(ant_t *js) {
 
 void gc_run(ant_t *js) {
   if (__builtin_expect(gc_disabled, 0)) return;
+  js->gc_running = true;
   
   gc_ropes_begin_result_t rope_begin = gc_ropes_begin(js, false);
   ANT_ASSERT(
@@ -275,10 +276,12 @@ void gc_run(ant_t *js) {
   gc_adapt_major_interval(live_before, js->obj_arena.live_count);
   gc_last_run_ms = gc_now_ms();
   gc_last_major_ms = gc_last_run_ms;
+  js->gc_running = false;
 }
 
 void gc_run_minor(ant_t *js) {
   if (__builtin_expect(gc_disabled, 0)) return;
+  js->gc_running = true;
 
   if (__builtin_expect(js->gc_remember_overflow, 0)) {
     gc_run(js);
@@ -311,6 +314,7 @@ void gc_run_minor(ant_t *js) {
   js->gc_closure_at_minor = js->gc_closure_alloc;
   gc_adapt_nursery(young_before, survivors);
   gc_last_run_ms = gc_now_ms();
+  js->gc_running = false;
 }
 
 void gc_pressure(ant_t *js) {

@@ -903,7 +903,6 @@ static void process_microtasks_internal(ant_t *js, bool check_unhandled_rejectio
   if (check_unhandled_rejections) js_check_unhandled_rejections(js);
   js->microtasks_draining = false;
   if (at_job_boundary) gc_weak_clear_kept_alive(js);
-  reap_retired_coroutines(js);
 }
 
 void process_microtasks(ant_t *js) {

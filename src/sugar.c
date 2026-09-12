@@ -7,14 +7,9 @@
 
 struct js_async_entry { coroutine_t *coro; };
 
-static void retire_coroutine_storage(coroutine_t *coro) {
-  if (!coro || !coro->js) return;
-  coro->retired_next = coro->js->retired_coroutines;
-  coro->js->retired_coroutines = coro;
-}
-
 static void destroy_coroutine_resources(coroutine_t *coro) {
   if (!coro) return;
+  if (coro->js) gc_forget_coroutine(coro->js, coro);
 
   if (coro->args) {
     free(coro->args);
@@ -43,13 +38,8 @@ void coroutine_retain(coroutine_t *coro) {
 
 static void coroutine_release_storage(coroutine_t *coro) {
   if (!coro) return;
-
-  ant_t *js = coro->js;
-  if (js && js->vm_exec_depth > 0) retire_coroutine_storage(coro);
-  else {
-    destroy_coroutine_resources(coro);
-    free(coro);
-  }
+  destroy_coroutine_resources(coro);
+  free(coro);
 }
 
 void coroutine_release(coroutine_t *coro) {
@@ -102,20 +92,6 @@ void js_eval_async_entry_release(js_async_entry_t *entry) {
   if (!entry) return;
   if (entry->coro) coroutine_release(entry->coro);
   free(entry);
-}
-
-void reap_retired_coroutines(ant_t *js) {
-  if (!js) return;
-
-  coroutine_t *coro = js->retired_coroutines;
-  js->retired_coroutines = NULL;
-
-  while (coro) {
-    coroutine_t *next = coro->retired_next;
-    destroy_coroutine_resources(coro);
-    free(coro);
-    coro = next;
-  }
 }
 
 void coroutine_clear_await_registration(coroutine_t *coro) {
@@ -176,6 +152,7 @@ static ant_value_t coroutine_resume_and_recapture(ant_t *js, sv_vm_t *vm, corout
   sv_activation_t *act = sv_activation_capture(vm, vm->suspended_entry_fp, coro->act);
   if (act) {
     coro->act = act;
+    gc_remember_coroutine(js, coro);
     return result;
   }
 

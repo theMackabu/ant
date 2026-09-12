@@ -19243,7 +19243,6 @@ void js_destroy(ant_t *js) {
   
   json_layout_cache_clear(js);
   cleanup_cron_module(js);
-  reap_retired_coroutines(js);
   gc_weak_cleanup(js);
 
   if (js->vm) {

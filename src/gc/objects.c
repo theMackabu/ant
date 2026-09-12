@@ -601,6 +601,11 @@ static bool gc_weak_key_alive(ant_t *js, ant_value_t key) {
     obj->mark_epoch == gc_obj_epoch || obj->flags.gc_permanent;
 }
 
+bool gc_upvalue_is_live(ant_t *js, const sv_upvalue_t *uv) {
+  if (!js->gc_running) return true;
+  return g_minor_gc ? uv->gc_epoch != 0 : uv->gc_epoch == gc_epoch;
+}
+
 static bool gc_weak_collection_live(const ant_object_t *obj) {
   return obj && ((g_minor_gc && obj->flags.generation == 1) ||
     obj->mark_epoch == gc_obj_epoch || obj->flags.gc_permanent);
@@ -771,6 +776,50 @@ void gc_mark_coroutine(ant_t *js, coroutine_t *c) {
   }
   
   if (c->args) for (int i = 0; i < c->nargs; i++) gc_mark_value(js, c->args[i]);
+}
+
+void gc_remember_coroutine(ant_t *js, coroutine_t *coro) {
+  if (!coro || coro->remember_index != 0) return;
+  
+  if (js->remembered_coroutine_len >= js->remembered_coroutine_cap) {
+    size_t new_cap = js->remembered_coroutine_cap ? js->remembered_coroutine_cap * 2 : 64;
+    coroutine_t **entries = realloc(js->remembered_coroutines, new_cap * sizeof(*entries));
+    if (!entries) return;
+    js->remembered_coroutines = entries;
+    js->remembered_coroutine_cap = new_cap;
+  }
+  
+  coro->remember_index = (uint32_t)js->remembered_coroutine_len + 1;
+  js->remembered_coroutines[js->remembered_coroutine_len++] = coro;
+}
+
+void gc_forget_coroutine(ant_t *js, coroutine_t *coro) {
+  if (!coro || coro->remember_index == 0) return;
+  
+  size_t i = coro->remember_index - 1, last = js->remembered_coroutine_len - 1;
+  if (i != last) {
+    js->remembered_coroutines[i] = js->remembered_coroutines[last];
+    js->remembered_coroutines[i]->remember_index = (uint32_t)i + 1;
+  }
+  
+  js->remembered_coroutine_len = last;
+  coro->remember_index = 0;
+}
+
+static void gc_mark_remembered_coroutines(ant_t *js) {
+  for (size_t i = 0; i < js->remembered_coroutine_len; i++)
+    gc_mark_coroutine(js, js->remembered_coroutines[i]);
+}
+
+static void gc_clear_remembered_coroutines(ant_t *js) {
+  for (size_t i = 0; i < js->remembered_coroutine_len; i++)
+    js->remembered_coroutines[i]->remember_index = 0;
+  js->remembered_coroutine_len = 0;
+
+  js->remembered_coroutines = shrink_ptr_roster(
+    js->remembered_coroutines, &js->remembered_coroutine_cap,
+    GC_REMEMBERED_ROSTER_RETAIN_CAP
+  );
 }
 
 static inline void gc_mark_promise_handler(ant_t *js, const promise_handler_t *h) {
@@ -1123,6 +1172,7 @@ void gc_objects_run(
   gc_clear_remembered_func_consts(js);
   gc_clear_remembered_upvalues(js);
   gc_clear_remembered_closures(js);
+  gc_clear_remembered_coroutines(js);
 
   if (js->remember_set_cap > 512) {
     ant_object_t **ns = realloc(js->remember_set, 256 * sizeof(*ns));
@@ -1241,6 +1291,7 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   gc_mark_remembered_func_consts(js);
   gc_mark_remembered_upvalues(js);
   gc_mark_remembered_closures(js);
+  gc_mark_remembered_coroutines(js);
 
   for (size_t i = 0; i < js->remember_set_len; i++)
     js->remember_set[i]->flags.in_remember_set = 0;
@@ -1262,6 +1313,7 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   gc_sweep_young_upvalues(js);
   gc_clear_remembered_func_consts(js);
   gc_clear_remembered_closures(js);
+  gc_clear_remembered_coroutines(js);
   gc_clear_remembered_upvalues(js);
 
   js->gc_objects_running = false;

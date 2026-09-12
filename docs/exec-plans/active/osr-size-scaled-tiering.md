@@ -418,9 +418,28 @@ It predates this plan and is independent of the OSR entry change.
 - Typed-array element fast path in `src/jit/emit_properties.c`.
 - MIR level-3 compile time is superlinear in body size (262 ms for 5 KB);
   worth profiling before raising `JIT_OSR_COLD_COMPILE_MIN_BYTES`.
-- Ant closes abandoned generators only through GC pressure (~850 MB RSS for
-  2M short generator loops vs 58 MB in node); unrelated to this plan but
-  visible in its probes.
+- Abandoned generators (fixed 2026-09-12): a finished generator's coroutine
+  and captured activation were only *retired* while any JS was running,
+  since a resume may still hold the pointer after releasing it, and reaped
+  at the next event loop turn; a synchronous loop therefore kept all of them
+  (~375 B each, 757 MiB for 2M against 57 MiB in node). The retired list is
+  gone: a release at refcount zero destroys the coroutine on the spot. Two
+  things made that possible. The generator resume now holds its own
+  reference across the call, as the async resume already did, so no caller
+  keeps a raw pointer past a release. And `sv_activation_seal` is
+  collection-aware: during a collection, after marking, it leaves upvalues
+  the sweep is about to free alone (`gc_upvalue_is_live`) and skips the
+  write barrier, so a finalizer can destroy a coroutine inside the sweep.
+  2M abandoned generators: 15 MiB. Test: `tests/test_generator_abandon_memory.cjs`.
+- Captured activations invisible to minor collections (fixed 2026-09-12):
+  a suspended coroutine's activation holds locals and open upvalues; it is
+  scanned when its owner is marked, which a minor collection does not do
+  for an old owner, so anything young in an old generator's activation was
+  freed under it and the next resume or seal read a freed upvalue. Stable
+  segfaults at address 0 on 20k such generators. Every capture now puts the
+  coroutine in a remembered set (`gc_remember_coroutine`) that minor
+  collections scan, cleared each cycle, left on destruction.
+  Test: `tests/test_generator_open_upvalue_gc.cjs`.
 - The committed PGO profile no longer matches seven changed functions
   (`sv_execute_frame`, `sv_stage_frame_args` callers, `vstack_push`,
   `compile_for_each`, ...); the release flow should re-profile. An

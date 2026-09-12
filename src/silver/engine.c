@@ -380,12 +380,20 @@ void sv_activation_seal(ant_t *js, sv_activation_t *act) {
 
   for (sv_upvalue_t *uv = act->open_upvalues; uv;) {
     sv_upvalue_t *next = uv->next;
+    uv->next = NULL;
+    
+    if (!gc_upvalue_is_live(js, uv)) { 
+      uv = next;
+      continue;
+    }
+    
     uv->closed = *uv->location;
     uv->location = &uv->closed;
-    gc_upvalue_write_barrier(js, uv, uv->closed);
-    uv->next = NULL;
+    
+    if (!js->gc_running) gc_upvalue_write_barrier(js, uv, uv->closed);
     uv = next;
   }
+  
   act->open_upvalues = NULL;
 
   for (int i = 0; i < act->frame_count; i++) {

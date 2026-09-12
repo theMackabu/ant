@@ -1,9 +1,8 @@
 #include "gc.h"
 #include "gc/roots.h"
-#include "sugar.h"
 #include "reactor.h"
 #include "readline.h"
-#include "internal.h" // IWYU pragma: keep
+#include "isolate.h"
 
 #include "modules/fs.h"
 #include "modules/timer.h"
@@ -41,7 +40,6 @@ void js_run_event_loop(ant_t *js) {
 drain:
   while (event_loop_alive(js)) {
     js_poll_events(js);
-    reap_retired_coroutines(js);
     work_flags_t work = get_pending_work(js);
     
     if (work & WORK_BLOCKING) 
@@ -52,20 +50,16 @@ drain:
   }
   
   js_poll_events(js);
-  reap_retired_coroutines(js);
-  
   ant_value_t code = js_mknum(0);
-  emit_process_event(js, "beforeExit", &code, 1);
   
+  emit_process_event(js, "beforeExit", &code, 1);
   if (event_loop_alive(js)) goto drain;
 }
 
 void js_reactor_pump_repl_nowait(ant_t *js) {
   js_poll_events(js);
-  reap_retired_coroutines(js);
   uv_run(uv_default_loop(), UV_RUN_NOWAIT);
   js_poll_events(js);
-  reap_retired_coroutines(js);
 }
 
 static void reactor_blocking_await_fallback_wake_cb(uv_timer_t *timer) {
@@ -128,7 +122,6 @@ js_reactor_await_status_t js_reactor_blocking_await_promise(
   js_reactor_await_status_t status = JS_REACTOR_AWAIT_INVALID;
   for (;;) {
     js_poll_events(js);
-    reap_retired_coroutines(js);
 
     promise_state = js_promise_get_settlement(js, promise, &settled);
     if (promise_state == JS_PROMISE_FULFILLED) {

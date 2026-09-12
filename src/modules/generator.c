@@ -280,7 +280,7 @@ static void generator_finalize(ant_t *js, ant_object_t *obj) {
   free(data);
 }
 
-static ant_value_t generator_resume_kind(
+static ant_value_t generator_resume_kind_inner(
   ant_t *js, ant_value_t gen, ant_value_t resume_value, sv_resume_kind_t resume_kind
 ) {
   GC_ROOT_SAVE(root_mark, js);
@@ -378,7 +378,10 @@ static ant_value_t generator_resume_kind(
       coro->act
     );
     
-    if (act) coro->act = act; else {
+    if (act) {
+      coro->act = act;
+      gc_remember_coroutine(js, coro);
+    } else {
       sv_activation_discard(exec_vm, exec_vm->suspended_entry_fp);
       suspended_now = false;
       result = js_mkerr(js, "out of memory capturing generator activation");
@@ -430,6 +433,18 @@ static ant_value_t generator_resume_kind(
   GC_ROOT_RESTORE(js, root_mark);
   
   return out;
+}
+
+static ant_value_t generator_resume_kind(
+  ant_t *js, ant_value_t gen, ant_value_t resume_value, sv_resume_kind_t resume_kind
+) {
+  coroutine_t *coro = generator_coro(gen);
+  if (coro) coroutine_retain(coro);
+  
+  ant_value_t result = generator_resume_kind_inner(js, gen, resume_value, resume_kind);
+  if (coro) coroutine_release(coro);
+  
+  return result;
 }
 
 static ant_value_t generator_resume(ant_t *js, ant_value_t gen, ant_value_t resume_value) {
