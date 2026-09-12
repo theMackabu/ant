@@ -28,8 +28,8 @@ static constexpr int JIT_VSTACK_SLACK = 4;
 static constexpr int JIT_PARAM_HOIST_CAP = 8;
 static constexpr int JIT_OSR_COLD_COMPILE_MIN_BYTES = 512;
 
-static constexpr int64_t JIT_HOT_COMPILE_NS_PER_BYTE = 50000;
-static constexpr int64_t JIT_COLD_PROMOTE_COMPILE_MULTIPLE = 8;
+static constexpr int64_t JIT_HOT_COMPILE_COLD_RATIO = 3;
+static constexpr int64_t JIT_COLD_PROMOTE_COMPILE_MULTIPLE = 20;
 static constexpr int64_t JIT_COLD_PROMOTE_CHECK_EVERY = 4096;
 
 static constexpr uint32_t JIT_HOT_COMPILE_BACKEDGE_THRESHOLD = SV_JIT_OSR_THRESHOLD / 8;

@@ -6,21 +6,21 @@ void *jit_helper_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) {
   return (void *)sv_jit_tier_up(js, func, closure);
 }
 
-int64_t jit_helper_promote_now(void) {
+static int64_t jit_promote_now(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-int64_t jit_helper_promote_due(sv_func_t *func, int64_t t0) {
-  int64_t budget =
-    JIT_COLD_PROMOTE_COMPILE_MULTIPLE *
-    JIT_HOT_COMPILE_NS_PER_BYTE * (int64_t)func->code_len;
-  
-  int64_t now = jit_helper_promote_now();
-  func->jit_cold_ns += now - t0;
-  
-  return func->jit_cold_ns >= budget ? 0 : now;
+void jit_helper_promote_start(int64_t *slot) {
+  slot[2] = jit_promote_now();
+}
+
+int64_t jit_helper_promote_due(int64_t *slot) {
+  int64_t now = jit_promote_now();
+  slot[0] += now - slot[2];
+  slot[2] = now;
+  return slot[0] >= slot[1] ? 0 : 1;
 }
 
 void jit_load_externals_once(sv_jit_ctx_t *jc) {
@@ -78,7 +78,7 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(js_template_to_string);
   LOAD_EXT(jit_helper_bailout_resume);
   LOAD_EXT(jit_helper_promote_resume);
-  LOAD_EXT(jit_helper_promote_now);
+  LOAD_EXT(jit_helper_promote_start);
   LOAD_EXT(jit_helper_promote_due);
   LOAD_EXT(jit_helper_close_upval);
   LOAD_EXT(jit_helper_upval_barrier);

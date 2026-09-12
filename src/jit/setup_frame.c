@@ -543,16 +543,46 @@ bool jit_setup_frame(jit_compile_t *c) {
     c->promote_tramp = MIR_new_label(c->ctx);
     c->promote_ctx = c->bailout_ctx;
     c->promote_ctx.tramp = c->promote_tramp;
-    c->r_promote = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "promote_edges");
-    c->r_promote_t0 = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "promote_t0");
+
+    c->promote_sites = calloc((size_t)c->func->code_len, 1);
+    if (c->promote_sites) {
+      uint8_t *code = c->func->code;
+      int n = 0, cap = 16;
+      int (*edges)[2] = malloc((size_t)cap * sizeof(*edges));
+      for (int off = 0; edges && off < c->func->code_len; ) {
+        uint8_t op = code[off];
+        int sz = sv_op_size[op];
+        if (sz == 0) break;
+        uint16_t flags = sv_op_flags[op];
+        int target = -1;
+        if (flags & SV_OPF_JIT_BRANCH32) target = off + sz + sv_get_i32(code + off + 1);
+        else if (flags & SV_OPF_JIT_BRANCH8) target = off + sz + (int8_t)sv_get_i8(code + off + 1);
+        if (target >= 0 && target <= off) {
+          if (n == cap) { cap *= 2; edges = realloc(edges, (size_t)cap * sizeof(*edges)); if (!edges) break; }
+          edges[n][0] = target; edges[n][1] = off; n++;
+        }
+        off += sz;
+      }
+      for (int i = 0; edges && i < n; i++) {
+        bool nested = false, has_inner = false;
+        for (int j = 0; j < n; j++) {
+          if (j == i) continue;
+          if (edges[j][0] <= edges[i][0] && edges[j][1] >= edges[i][1]) nested = true;
+          if (edges[i][0] <= edges[j][0] && edges[j][1] <= edges[i][1]) has_inner = true;
+        }
+        c->promote_sites[edges[i][1]] = nested ? 0 : has_inner ? 2 : 1;
+      }
+      free(edges);
+    }
+    c->r_promote = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "promote_countdown");
     MIR_append_insn(c->ctx, c->jit_func,
                     MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_promote),
-                                 MIR_new_int_op(c->ctx, 0)));
+                                 MIR_new_int_op(c->ctx, 1)));
     MIR_append_insn(c->ctx, c->jit_func,
                     MIR_new_call_insn(c->ctx, 3,
-                                      MIR_new_ref_op(c->ctx, c->promote_now_proto),
-                                      MIR_new_ref_op(c->ctx, c->imp_promote_now),
-                                      MIR_new_reg_op(c->ctx, c->r_promote_t0)));
+                                      MIR_new_ref_op(c->ctx, c->promote_start_proto),
+                                      MIR_new_ref_op(c->ctx, c->imp_promote_start),
+                                      MIR_new_ref_op(c->ctx, c->cold_ns_item)));
   }
 
   if (c->feat.needs_tco_args) {

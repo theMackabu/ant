@@ -1,37 +1,29 @@
 #include "compile.h"
 
-static void jit_emit_promote_check(jit_compile_t *c, MIR_label_t loop) {
+static void jit_emit_promote_check(jit_compile_t *c, MIR_label_t loop, int64_t every) {
   MIR_reg_t r_due = c->r_tmp2;
   MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_ADD, MIR_new_reg_op(c->ctx, c->r_promote),
+                  MIR_new_insn(c->ctx, MIR_SUB, MIR_new_reg_op(c->ctx, c->r_promote),
                                MIR_new_reg_op(c->ctx, c->r_promote), MIR_new_int_op(c->ctx, 1)));
   MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_AND, MIR_new_reg_op(c->ctx, r_due),
-                               MIR_new_reg_op(c->ctx, c->r_promote),
-                               MIR_new_int_op(c->ctx, JIT_COLD_PROMOTE_CHECK_EVERY - 1)));
-  MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, loop),
-                               MIR_new_reg_op(c->ctx, r_due), MIR_new_int_op(c->ctx, 0)));
+                               MIR_new_reg_op(c->ctx, c->r_promote), MIR_new_int_op(c->ctx, 0)));
   MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_call_insn(c->ctx, 5,
+                  MIR_new_call_insn(c->ctx, 4,
                                     MIR_new_ref_op(c->ctx, c->promote_due_proto),
                                     MIR_new_ref_op(c->ctx, c->imp_promote_due),
                                     MIR_new_reg_op(c->ctx, r_due),
-                                    MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->func),
-                                    MIR_new_reg_op(c->ctx, c->r_promote_t0)));
-  MIR_label_t due = MIR_new_label(c->ctx);
+                                    MIR_new_ref_op(c->ctx, c->cold_ns_item)));
   MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, due),
+                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_promote),
+                               MIR_new_int_op(c->ctx, every)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, loop),
                                MIR_new_reg_op(c->ctx, r_due), MIR_new_int_op(c->ctx, 0)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_promote_t0),
-                               MIR_new_reg_op(c->ctx, r_due)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, loop)));
-  MIR_append_insn(c->ctx, c->jit_func, due);
   mir_emit_bailout_jump_typed(c->ctx, c->jit_func, c->bc_off, c->vs.sp, &c->promote_ctx,
                               -1, SLOT_BOXED, -1, SLOT_BOXED);
   c->needs_promote = true;
+
 }
 
 void jit_emit_control(jit_compile_t *c) {
@@ -42,7 +34,8 @@ void jit_emit_control(jit_compile_t *c) {
       bool short_op = (c->op == OP_JMP8);
       int target = c->bc_off + c->sz + (short_op ? (int8_t)sv_get_i8(c->ip + 1) : sv_get_i32(c->ip + 1));
       MIR_label_t lbl = label_for_branch(c->ctx, &c->lm, target, c->vs.sp);
-      if (c->cold_tier && target <= c->bc_off) jit_emit_promote_check(c, lbl);
+      if (c->cold_tier && target <= c->bc_off && c->promote_sites && c->promote_sites[c->bc_off])
+        jit_emit_promote_check(c, lbl, c->promote_sites[c->bc_off] == 2 ? 1 : JIT_COLD_PROMOTE_CHECK_EVERY);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, lbl)));
       break;

@@ -47,7 +47,8 @@ typedef struct jit_compile {
   MIR_item_t str_flush_local_proto;
   MIR_item_t truthy_proto;
   MIR_item_t resume_proto;
-  MIR_item_t promote_now_proto;
+  MIR_item_t promote_start_proto;
+  MIR_item_t cold_ns_item;
   MIR_item_t promote_due_proto;
   MIR_item_t closure_proto;
   MIR_item_t close_upval_proto;
@@ -127,7 +128,7 @@ typedef struct jit_compile {
   MIR_item_t imp_to_string;
   MIR_item_t imp_resume;
   MIR_item_t imp_promote_resume;
-  MIR_item_t imp_promote_now;
+  MIR_item_t imp_promote_start;
   MIR_item_t imp_promote_due;
   MIR_item_t imp_close_upval;
   MIR_item_t imp_upval_barrier;
@@ -218,7 +219,6 @@ typedef struct jit_compile {
   MIR_label_t bailout_tramp;
   MIR_label_t promote_tramp;
   MIR_reg_t r_promote;
-  MIR_reg_t r_promote_t0;
   MIR_reg_t cached_index_key;
   MIR_reg_t cached_index_value;
   MIR_reg_t cached_element_object;
@@ -269,6 +269,7 @@ typedef struct jit_compile {
   bool use_jit_upvalue_list;
   jit_bailout_emit_t bailout_ctx;
   jit_bailout_emit_t promote_ctx;
+  uint8_t *promote_sites;
   jit_label_map_t lm;
   osr_entry_map_t osr_map;
   jit_try_entry_t jit_try_stack[JIT_TRY_MAX];
