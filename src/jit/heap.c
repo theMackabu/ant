@@ -24,6 +24,7 @@ struct MIR_heap {
   struct MIR_alloc alloc;
   jit_heap_chunk_t *avail[JIT_HEAP_CLASSES];
   jit_heap_chunk_t *full[JIT_HEAP_CLASSES];
+  jit_heap_chunk_t *empty;
   jit_heap_map_t *maps;
   size_t map_count, map_cap;
 };
@@ -126,8 +127,14 @@ static void *jit_heap_alloc(size_t size, void *ud) {
   
   jit_heap_chunk_t *c = h->avail[cls];
   if (c == NULL) {
-    c = jit_heap_chunk_map();
-    if (!c) return NULL;
+    if (h->empty != NULL) {
+      c = h->empty;
+      jit_heap_unlink(&h->empty, c);
+    } else {
+      c = jit_heap_chunk_map();
+      if (!c) return NULL;
+    }
+    
     c->magic = JIT_HEAP_MAGIC;
     c->cls = (uint32_t)cls;
     c->block = block;
@@ -135,6 +142,7 @@ static void *jit_heap_alloc(size_t size, void *ud) {
     c->bump = JIT_HEAP_CHUNK_HEADER;
     c->free_list = NULL;
     c->full = false;
+    
     jit_heap_push(&h->avail[cls], c);
   }
   
@@ -179,6 +187,17 @@ static void jit_heap_free(void *p, void *ud) {
     jit_heap_push(&h->avail[c->cls], c);
     c->full = false;
   }
+  
+  if (c->live == 0) {
+    ANT_ASSERT(
+      c->cls < JIT_HEAP_CLASSES && !c->full
+      && c->bump <= JIT_HEAP_CHUNK_SIZE && c->free_list != NULL,
+      "MIR heap: chunk emptied in an inconsistent state"
+    );
+    
+    jit_heap_unlink(&h->avail[c->cls], c);
+    jit_heap_push(&h->empty, c);
+  }
 }
 
 static void *jit_heap_calloc(size_t n, size_t size, void *ud) {
@@ -221,25 +240,16 @@ static void jit_heap_chunk_unmap(jit_heap_chunk_t *c) {
 
 void jit_heap_release(MIR_heap_t h) {
   if (!h) return;
-  for (size_t cls = 0; cls < JIT_HEAP_CLASSES; cls++) {
-    jit_heap_chunk_t *c, *next;
-    for (c = h->full[cls]; c != NULL; c = c->next) ANT_ASSERT(
-      c->magic == JIT_HEAP_MAGIC && c->cls == cls && c->full && c->live > 0,
-      "MIR heap: full chunk list is inconsistent"
+  jit_heap_chunk_t *c, *next;
+  for (c = h->empty; c != NULL; c = next) {
+    next = c->next;
+    ANT_ASSERT(
+      c->magic == JIT_HEAP_MAGIC && c->live == 0,
+      "MIR heap: empty chunk list is inconsistent"
     );
-    
-    for (c = h->avail[cls]; c != NULL; c = next) {
-      next = c->next;
-      ANT_ASSERT(
-        c->magic == JIT_HEAP_MAGIC && c->cls == cls && !c->full
-        && c->live <= (JIT_HEAP_CHUNK_SIZE - JIT_HEAP_CHUNK_HEADER) / c->block,
-        "MIR heap: available chunk list is inconsistent"
-      );
-      if (c->live != 0) continue;
-      jit_heap_unlink(&h->avail[cls], c);
-      jit_heap_chunk_unmap(c);
-    }
+    jit_heap_chunk_unmap(c);
   }
+  h->empty = NULL;
 }
 
 MIR_alloc_t jit_heap_mir_alloc(MIR_heap_t h) { 
@@ -263,6 +273,11 @@ void jit_heap_destroy(MIR_heap_t h) {
     jit_heap_chunk_t *c, *next;
     for (c = h->avail[cls]; c != NULL; c = next) { next = c->next; jit_heap_chunk_unmap(c); }
     for (c = h->full[cls]; c != NULL; c = next) { next = c->next; jit_heap_chunk_unmap(c); }
+  }
+  
+  for (jit_heap_chunk_t *c = h->empty, *next; c != NULL; c = next) { 
+    next = c->next;
+    jit_heap_chunk_unmap(c);
   }
   
   while (h->map_count > 0) 
