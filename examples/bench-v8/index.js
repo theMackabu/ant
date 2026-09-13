@@ -1,7 +1,7 @@
-import fs from 'ant:fs';
-import os from 'ant:os';
-import path from 'ant:path';
-import { spawn } from 'child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
 
 const allBenchmarkFiles = [
   'tests/richards.js',

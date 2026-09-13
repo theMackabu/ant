@@ -217,22 +217,22 @@ regression checks CLOSING at return, zero opens, and exactly one close.
 These rows compare different checkpoints, not one cumulative final A/B. Full
 sample sets, configuration notes, and artifact hashes remain in Git history.
 
-| Checkpoint / fixed work | Recorded result |
-| --- | --- |
-| Aug 3 stack versus master `66499b0b` | Newt Prelude 2.23x, Main 1.77x; bench-v8 geometric mean about 1.44x |
-| Canonical RegExp results and global batching | Materialized exec results -21.8%; global match/replace -77.3% against prior fresh PGO |
-| Ordered property deletion | Adaptive delete 5.52x; 1k-to-2k front deletes stayed about 95 ns/delete |
-| OSR entry retry | `array_for` 6.36x |
-| Persistent builder snapshots | Initial `string_build1/2` fix about 13x, followed by additional guarded-append gains |
-| Iterative/young ropes and JIT paths | Large-AST workload 5.04/5.04s to 3.14/3.13s; identical checksum |
-| Lazy RegExp statics | Unread batch match -63.1%, replacement -68.4%; bounded latest-subject retention |
-| Object-site lookup | 256-site mechanism micro about -20% in JIT and interpreter; whole-newt change within noise |
-| Dedicated prototype-write epoch | 50M callable prototype stores about -20.2%; hot comparisons flat |
-| Final W1 fresh-PGO artifact, Aug 11 | Newt Main 37.94s; max RSS 893,632,512 bytes; spec 3721/0, JIT 125 cases, harness 181/0 |
+| Checkpoint / fixed work                      | Recorded result                                                                            |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Aug 3 stack versus master `66499b0b`         | Newt Prelude 2.23x, Main 1.77x; bench-v8 geometric mean about 1.44x                        |
+| Canonical RegExp results and global batching | Materialized exec results -21.8%; global match/replace -77.3% against prior fresh PGO      |
+| Ordered property deletion                    | Adaptive delete 5.52x; 1k-to-2k front deletes stayed about 95 ns/delete                    |
+| OSR entry retry                              | `array_for` 6.36x                                                                          |
+| Persistent builder snapshots                 | Initial `string_build1/2` fix about 13x, followed by additional guarded-append gains       |
+| Iterative/young ropes and JIT paths          | Large-AST workload 5.04/5.04s to 3.14/3.13s; identical checksum                            |
+| Lazy RegExp statics                          | Unread batch match -63.1%, replacement -68.4%; bounded latest-subject retention            |
+| Object-site lookup                           | 256-site mechanism micro about -20% in JIT and interpreter; whole-newt change within noise |
+| Dedicated prototype-write epoch              | 50M callable prototype stores about -20.2%; hot comparisons flat                           |
+| Final W1 fresh-PGO artifact, Aug 11          | Newt Main 37.94s; max RSS 893,632,512 bytes; spec 3721/0, JIT 125 cases, harness 181/0     |
 
 The final W1 artifact was recorded as MD5
 `3e953764ed1d0136f81802f165730004`, produced with
-`./meson/pgo/build.sh --force-no-nix`. Its interleaved valid-inline-call control
+`./meson/pgo/build.sh`. Its interleaved valid-inline-call control
 was +0.1%, and newt wall time +0.9%, both treated as non-regressions. A later
 metadata-fold confirmation was flat. Those host timings and hashes are
 historical identifiers, not current acceptance thresholds or available files.
@@ -253,18 +253,18 @@ floors have been removed from this summary; consult current build/test docs.
 
 ## Regression Entry Points
 
-| Area | Checked-in coverage |
-| --- | --- |
-| Inline effects and argument limits | [inline call errors](../../../tests/test_jit_inline_call_errors.cjs) |
-| Curried argument order | [call fusion](../../../tests/test_curried_call_fusion.cjs) |
-| OSR entry and builder snapshots | [entry rejection](../../../tests/test_jit_osr_entry_reject.cjs), [snapshots](../../../tests/test_jit_string_builder_snapshot.cjs) |
-| Property lifetime and mutation | [minor ABA](../../../tests/test_ic_minor_aba.cjs), [primitive invalidation](../../../tests/test_primitive_ic_invalidation.cjs), [prototype writes](../../../tests/test_prototype_write_epoch.cjs), [deletion](../../../tests/test_property_delete_compaction.cjs) |
-| Literal sites and numeric keys | [site lookup](../../../tests/test_object_site_lookup.cjs), [numeric keys](../../../tests/test_numeric_literal_keys.cjs) |
-| Binding and construction | [bind/construct matrix](../../../tests/test_function_bind_construct.cjs) |
-| Closure/upvalue lifetime | [closure churn](../../../tests/test_gc_closure_churn.cjs), [escaped coroutine](../../../tests/test_arguments_escaped_coro.js), [upvalue GC](../../../tests/test_upvalue_gc.cjs) |
-| RegExp state, captures, and fallback | [internal state](../../../tests/test_regexp_internal_state.cjs), [results/batching](../../../tests/test_regexp_result_batch.cjs) |
-| WebSocket cancellation | [native connector](../../../tests/test_websocket_connect_cancel.c), [close during connect](../../../tests/test_websocket_close_during_connect.cjs) |
-| UTF-16 search positions | [string spec](../../../examples/spec/strings.js) |
+| Area                                 | Checked-in coverage                                                                                                                                                                                                                                               |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Inline effects and argument limits   | [inline call errors](../../../tests/test_jit_inline_call_errors.cjs)                                                                                                                                                                                              |
+| Curried argument order               | [call fusion](../../../tests/test_curried_call_fusion.cjs)                                                                                                                                                                                                        |
+| OSR entry and builder snapshots      | [entry rejection](../../../tests/test_jit_osr_entry_reject.cjs), [snapshots](../../../tests/test_jit_string_builder_snapshot.cjs)                                                                                                                                 |
+| Property lifetime and mutation       | [minor ABA](../../../tests/test_ic_minor_aba.cjs), [primitive invalidation](../../../tests/test_primitive_ic_invalidation.cjs), [prototype writes](../../../tests/test_prototype_write_epoch.cjs), [deletion](../../../tests/test_property_delete_compaction.cjs) |
+| Literal sites and numeric keys       | [site lookup](../../../tests/test_object_site_lookup.cjs), [numeric keys](../../../tests/test_numeric_literal_keys.cjs)                                                                                                                                           |
+| Binding and construction             | [bind/construct matrix](../../../tests/test_function_bind_construct.cjs)                                                                                                                                                                                          |
+| Closure/upvalue lifetime             | [closure churn](../../../tests/test_gc_closure_churn.cjs), [escaped coroutine](../../../tests/test_arguments_escaped_coro.js), [upvalue GC](../../../tests/test_upvalue_gc.cjs)                                                                                   |
+| RegExp state, captures, and fallback | [internal state](../../../tests/test_regexp_internal_state.cjs), [results/batching](../../../tests/test_regexp_result_batch.cjs)                                                                                                                                  |
+| WebSocket cancellation               | [native connector](../../../tests/test_websocket_connect_cancel.c), [close during connect](../../../tests/test_websocket_close_during_connect.cjs)                                                                                                                |
+| UTF-16 search positions              | [string spec](../../../examples/spec/strings.js)                                                                                                                                                                                                                  |
 
 ## Follow-Ups And Limits
 

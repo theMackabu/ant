@@ -40,12 +40,12 @@ closure. It retains a function context, closure, and `MkM` object, but lowers
 their combined 144 bytes to direct young-generation allocation and field
 stores. A serial Node Newt comparison found:
 
-| Configuration | Main time | Interpretation |
-| --- | ---: | --- |
-| default | about 3.15s | baseline |
-| `--no-turbo-escape` | about 3.20s | escape analysis was not decisive |
-| `--no-turbo-allocation-folding` | about 3.19s | combining reservations was not decisive |
-| `--no-inline-new` | about 22.91s | inline allocation was load-bearing |
+| Configuration                   |    Main time | Interpretation                          |
+| ------------------------------- | -----------: | --------------------------------------- |
+| default                         |  about 3.15s | baseline                                |
+| `--no-turbo-escape`             |  about 3.20s | escape analysis was not decisive        |
+| `--no-turbo-allocation-folding` |  about 3.19s | combining reservations was not decisive |
+| `--no-inline-new`               | about 22.91s | inline allocation was load-bearing      |
 
 This changes the optimization target. More inline-body semantics do not help
 if generated code still calls `jit_helper_closure` for every materialized
@@ -126,7 +126,7 @@ of `js_closure_alloc_hot`, `sv_closure_init`, the capture loop, and
 ### 1. Pin the baseline and measure the target distribution
 
 - Build the current PGO tree with
-  `./meson/pgo/build.sh --force-no-nix` and copy the resulting binary to an
+  `./meson/pgo/build.sh` and copy the resulting binary to an
   immutable `/tmp` baseline before editing.
 - Record the exact source hash, binary hash, profile hash, host state, Newt
   command, Main time, wall time, and max RSS.
@@ -144,7 +144,7 @@ of `js_closure_alloc_hot`, `sv_closure_init`, the capture loop, and
 - Add or identify two timing fixtures:
   - a fixed no-capture closure allocation/call loop for the mechanism proof;
   - a small captured-closure loop matching Newt's create-store-call lifetime.
-  Timing assertions do not belong in correctness tests.
+    Timing assertions do not belong in correctness tests.
 
 **Gate:** do not design the Newt path from static intuition. Record which
 closure forms account for the dynamic volume first.
@@ -285,7 +285,7 @@ Use exact pinned binaries. Do not compare against a moving `./build/ant` or
 attribute results from different PGO profiles.
 
 1. Pin the current PGO baseline from `./build/ant` before edits.
-2. Build candidate PGO with `./meson/pgo/build.sh --force-no-nix` and pin it.
+2. Build candidate PGO with `./meson/pgo/build.sh` and pin it.
 3. Record `shasum -a 256` for source commit, binaries, and profile data.
 4. Run the focused allocation fixtures serially in interleaved AB/BA order.
 5. Run Newt serially in ABBA/BAAB order with identical environment and capture
@@ -310,7 +310,7 @@ After each implementation phase:
 Before landing a retained candidate:
 
 - build the final PGO binary with
-  `./meson/pgo/build.sh --force-no-nix`;
+  `./meson/pgo/build.sh`;
 - run `./build/ant examples/spec/run.js --all`;
 - run the full JIT suite and repository harness recommended by
   `maid validate_changes`;

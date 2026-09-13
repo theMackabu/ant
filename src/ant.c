@@ -2524,15 +2524,14 @@ ant_value_t js_create_arguments_object(
 ) {
   GC_ROOT_SAVE(root_mark, js);
 
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = frame && frame->bp && argc > 0
+    ? js_mkarr_dense_literal(js, frame->bp, (uint32_t)argc)
+    : js_mkarr(js);
+  
   if (is_err(arr)) {
     GC_ROOT_RESTORE(js, root_mark);
     return arr;
   } GC_ROOT_PIN(js, arr);
-
-  if (frame && frame->bp && argc > 0) {
-    for (int i = 0; i < argc; i++) js_arr_push(js, arr, frame->bp[i]);
-  }
 
   if (is_strict) js_set_slot(arr, SLOT_STRICT_ARGS, js_true);
   else if (vtype(callee) == kTypeFunction) setprop_cstr(js, arr, "callee", 6, callee);

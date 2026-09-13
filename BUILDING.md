@@ -406,20 +406,8 @@ To regenerate the profile and produce a final PGO build:
 ./meson/pgo/build.sh
 ```
 
-The script enters the project Nix devShell by default so profile generation and
-the final optimized build use the same pinned toolchain. To deliberately use
-the current shell toolchain instead:
-
-```bash
-./meson/pgo/build.sh --force-no-nix
-```
-
-On macOS, the devShell intentionally uses unwrapped Clang with the selected
-Apple SDK and supplies Nix's full `compiler-rt` only through linker flags. Do
-not replace it with wrapped Clang: that injects Nix libc++ headers and can mix
-SDK versions when `SDKROOT` points at Xcode Command Line Tools.
-
-Use the same toolchain to consume any profile generated this way.
+The script uses the current shell toolchain for profile generation and the
+final optimized build. Use the same toolchain to consume the generated profile.
 
 PGO can also be controlled explicitly with Meson:
 

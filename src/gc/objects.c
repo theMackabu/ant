@@ -1,7 +1,6 @@
 #include "ptr.h"
 #include "sugar.h"
 #include "shapes.h"
-#include "internal.h"
 
 #include "silver/engine.h"
 #include "silver/eval_env.h"
@@ -528,13 +527,14 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
 
   uint8_t extra_count = 0;
   ant_extra_slot_t *extra_slots = ant_object_extra_slots(obj, &extra_count);
-  if (extra_slots) {
-    for (uint8_t i = 0; i < extra_count; i++) gc_mark_value(js, extra_slots[i].value);
-  }
+  if (extra_slots) for (uint8_t i = 0; i < extra_count; i++) gc_mark_value(js, extra_slots[i].value);
 
   if (obj->type_tag == kTypeArray && obj->u.array.data) {
     uint32_t n = obj->u.array.len < obj->u.array.cap ? obj->u.array.len : obj->u.array.cap;
-    for (uint32_t i = 0; i < n; i++) gc_mark_value(js, obj->u.array.data[i]);
+    for (uint32_t i = 0; i < n; i++) {
+      ant_value_t value = obj->u.array.data[i];
+      if (is_tagged(value)) gc_mark_value(js, value);
+    }
   }
 
   ant_promise_state_t *pd = obj->promise_state;
@@ -690,14 +690,15 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
       gc_mark_closure(js, raw_closure);
 
     sv_upvalue_t *raw_uv = (sv_upvalue_t *)(uintptr_t)w;
-    size_t uv_budget = js->upvalue_arena.watermark / js->upvalue_arena.elem_size + 1;
-    
-    while (raw_uv && uv_budget-- && fixed_arena_contains(&js->upvalue_arena, raw_uv)) {
-      if (raw_uv->gc_epoch != gc_epoch) {
-        raw_uv->gc_epoch = gc_epoch;
-        if (raw_uv->location == &raw_uv->closed) gc_mark_value(js, raw_uv->closed);
-      }
-      raw_uv = raw_uv->next;
+    if (fixed_arena_contains(&js->upvalue_arena, raw_uv)) {
+      size_t uv_budget = js->upvalue_arena.watermark / js->upvalue_arena.elem_size + 1;
+      do {
+        if (raw_uv->gc_epoch != gc_epoch) {
+          raw_uv->gc_epoch = gc_epoch;
+          if (raw_uv->location == &raw_uv->closed) gc_mark_value(js, raw_uv->closed);
+        }
+        raw_uv = raw_uv->next;
+      } while (--uv_budget && fixed_arena_contains(&js->upvalue_arena, raw_uv));
     }
 
     if (!is_tagged(w)) continue;

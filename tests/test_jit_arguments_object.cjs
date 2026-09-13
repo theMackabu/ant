@@ -69,4 +69,22 @@ assertEq(hotStrict.tail.length, 2, "hot strict tail length");
 assertEq(hotStrict.tail[0], "mw1", "hot strict tail first");
 assertEq(hotStrict.tail[1], "mw2", "hot strict tail second");
 
+function captureStrict() {
+  "use strict";
+  return arguments;
+}
+
+// Exercise dense initialization across the initial capacity and growth bounds.
+for (const count of [0, 1, 7, 8, 9, 16, 17, 65]) {
+  const values = Array.from({length: count}, (_, i) => i % 2 ? undefined : {i});
+  for (let round = 0; round < 100; round++) {
+    const captured = captureStrict.apply(null, values);
+    assertEq(captured.length, count, "captured length");
+    for (let i = 0; i < count; i++) {
+      assertEq(captured[i], values[i], "captured value identity");
+      assertEq(Object.prototype.hasOwnProperty.call(captured, i), true, "undefined is not a hole");
+    }
+  }
+}
+
 console.log("OK: test_jit_arguments_object");

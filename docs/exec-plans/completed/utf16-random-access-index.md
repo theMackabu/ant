@@ -41,19 +41,19 @@ Final interleaved PGO A/B medians used `/tmp/ant_utf16_base`
 (`14.0.fe85adda.0`) as the pinned base and `./build/ant`
 (`14.0.7fa53028.0`, profile rebuilt from the final source) as the candidate:
 
-| Workload | Base | Candidate | Delta |
-|---|---:|---:|---:|
-| Sequential non-ASCII `Buffer.from(..., "ucs2")` | 545 ms | 491.5 ms | -9.8% |
-| Two-string non-ASCII `endsWith` alternation | 855.5 ms | 8 ms | -99.1% (107x faster) |
-| 500 one-off non-ASCII `endsWith` strings | 93 ms | 90 ms | -3.2% |
-| Random non-ASCII `charCodeAt` | 330.5 ms | 333.5 ms | +0.9% |
-| `tests/bench.js` total | 2953.5 ns | 2909.8 ns | -1.5% |
+| Workload                                        |      Base | Candidate |                Delta |
+| ----------------------------------------------- | --------: | --------: | -------------------: |
+| Sequential non-ASCII `Buffer.from(..., "ucs2")` |    545 ms |  491.5 ms |                -9.8% |
+| Two-string non-ASCII `endsWith` alternation     |  855.5 ms |      8 ms | -99.1% (107x faster) |
+| 500 one-off non-ASCII `endsWith` strings        |     93 ms |     90 ms |                -3.2% |
+| Random non-ASCII `charCodeAt`                   |  330.5 ms |  333.5 ms |                +0.9% |
+| `tests/bench.js` total                          | 2953.5 ns | 2909.8 ns |                -1.5% |
 
 All workloads produced identical checksums. The broad benchmark's string and
 RegExp rows were flat or modestly better. Validation passed the focused random
 access, Buffer search, and string-accumulation tests; `maid preflight`; and the
 full spec suite (3886/3886 tests across 100 files). The final binary and profile
-were produced with `./meson/pgo/build.sh --force-no-nix`.
+were produced with `./meson/pgo/build.sh`.
 
 ## Rejected Alternatives And Earlier Investigation
 

@@ -2,26 +2,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-FORCE_NO_NIX=0
-for arg in "$@"; do
-  case "$arg" in
-    --force-no-nix) FORCE_NO_NIX=1 ;;
-  esac
-done
-
-if [ "$FORCE_NO_NIX" -eq 0 ] && [ "${ANT_PGO_IN_NIX_SHELL:-0}" != "1" ]; then
-  if ! command -v nix >/dev/null 2>&1; then
-    echo "error: nix is required to enter the project devShell" >&2
-    echo "hint: pass --force-no-nix to use the current shell toolchain" >&2
-    exit 1
-  fi
-  echo "==> Entering 'nix develop' for the project toolchain"
-  exec env ANT_PGO_IN_NIX_SHELL=1 nix develop "$ROOT" -c "$0" "$@"
-elif [ "$FORCE_NO_NIX" -eq 1 ] && [ "${ANT_PGO_IN_NIX_SHELL:-0}" != "1" ]; then
-  echo "==> Skipping 'nix develop'; using current shell toolchain"
-fi
-
-unset NIX_ENFORCE_NO_NATIVE
 PGO_DIR="$ROOT/meson/pgo"
 PROFILE_DIR="$PGO_DIR/profiles"
 BUILD_DIR="$ROOT/build"
@@ -70,11 +50,9 @@ SKIP_TRAIN=0
 for arg in "$@"; do
   case "$arg" in
     --skip-train) SKIP_TRAIN=1 ;;
-    --force-no-nix) ;;
     --help|-h)
-      echo "usage: $0 [--skip-train] [--force-no-nix]"
+      echo "usage: $0 [--skip-train]"
       echo "  --skip-train     reuse the existing merged .profdata"
-      echo "  --force-no-nix   use the current shell toolchain instead of nix develop"
       exit 0
       ;;
     *) echo "unknown arg: $arg" >&2; exit 2 ;;
