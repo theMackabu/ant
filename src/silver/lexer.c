@@ -28,7 +28,7 @@ void sv_lexer_init(sv_lexer_t *lx, ant_t *js, const char *code, ant_offset_t cle
 void sv_lexer_set_error_site(sv_lexer_t *lx) {
   ant_t *js = lx->js;
   ant_offset_t off = lx->st.toff > 0 ? lx->st.toff : lx->st.pos;
-  js_set_error_site(js, lx->code, lx->clen, js->filename, off, lx->st.tlen);
+  js_set_error_site_lc(js, lx->code, lx->clen, js->filename, off, lx->st.tlen, 0, 0);
 }
 
 void sv_lexer_save_state(const sv_lexer_t *lx, sv_lexer_state_t *st) {

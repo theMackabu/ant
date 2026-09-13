@@ -875,7 +875,7 @@ static size_t add_indent(char *buf, size_t len, int level) {
 const char *get_str_prop(ant_t *js, ant_value_t obj, const char *key, ant_offset_t klen, ant_offset_t *out_len) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, obj);
-  ant_value_t v = lkp_val(js, obj, key, klen);
+  ant_value_t v = js_getprop_fallback_len(js, obj, key, (size_t)klen);
   
   GC_ROOT_PIN(js, v);
   if (vtype(v) != kTypeString) {
@@ -6531,7 +6531,7 @@ static ant_value_t builtin_Error(ant_params_t) {
   
   ant_value_t target = is_new ? call_new_target : js->current_func;
   ant_value_t name = ANT_STRING("Error");
-  
+
   if (vtype(target) == kTypeFunction) {
     ant_value_t n = lkp_val(js, js_func_obj(target), "name", 4);
     if (vtype(n) != kTypeUndefined) name = n;
@@ -6550,15 +6550,15 @@ static ant_value_t builtin_Error(ant_params_t) {
       const char *str = js_str(js, msg);
       msg = js_mkstr(js, str, strlen(str));
     }
-    js_mkprop_fast(js, this_val, "message", 7, msg);
+    mkprop_bytes(js, this_val, "message", 7, msg, JS_DESC_W | JS_DESC_C);
   }
   
   if (nargs > 1 && vtype(args[1]) == kTypeObject) {
     ant_prop_loc_t cause_off = lkp(js, args[1], "cause", 5);
-    if (cause_off.obj) js_mkprop_fast(js, this_val, "cause", 5, js_prop_load(cause_off));
+    if (cause_off.obj) mkprop_bytes(js, this_val, "cause", 5, js_prop_load(cause_off), JS_DESC_W | JS_DESC_C);
   }
   
-  js_mkprop_fast(js, this_val, "name", 4, name);
+  mkprop_bytes(js, this_val, "name", 4, name, JS_DESC_W | JS_DESC_C);
   set_slot(this_val, SLOT_ERROR_BRAND, js_true);
   js_capture_stack(js, this_val);
 
@@ -6568,14 +6568,14 @@ static ant_value_t builtin_Error(ant_params_t) {
 static ant_value_t builtin_Error_toString(ant_params_t) {
   ant_value_t this_val = js_getthis(js);
   
-  ant_value_t name = js_get(js, this_val, "name");
+  ant_value_t name = js_getprop_fallback_len(js, this_val, "name", 4);
   if (vtype(name) == kTypeUndefined) name = js_mkstr(js, "Error", 5);
   else if (vtype(name) != kTypeString) {
     const char *s = js_str(js, name);
     name = js_mkstr(js, s, strlen(s));
   }
   
-  ant_value_t msg = js_get(js, this_val, "message");
+  ant_value_t msg = js_getprop_fallback_len(js, this_val, "message", 7);
   if (vtype(msg) == kTypeUndefined) msg = js_mkstr(js, "", 0);
   else if (vtype(msg) != kTypeString) {
     const char *s = js_str(js, msg);
@@ -6620,7 +6620,7 @@ static ant_value_t builtin_AggregateError(ant_params_t) {
   
   ant_value_t errors = nargs > 0 ? args[0] : mkarr(js);
   if (vtype(errors) != kTypeArray) errors = mkarr(js);
-  js_mkprop_fast(js, this_val, "errors", 6, errors);
+  mkprop_bytes(js, this_val, "errors", 6, errors, JS_DESC_W | JS_DESC_C);
   
   if (nargs > 1 && vtype(args[1]) != kTypeUndefined) {
     ant_value_t msg = args[1];
@@ -6628,7 +6628,7 @@ static ant_value_t builtin_AggregateError(ant_params_t) {
       const char *str = js_str(js, msg);
       msg = js_mkstr(js, str, strlen(str));
     }
-    js_mkprop_fast(js, this_val, "message", 7, msg);
+    mkprop_bytes(js, this_val, "message", 7, msg, JS_DESC_W | JS_DESC_C);
   }
   
   if (nargs > 2 && vtype(args[2]) == kTypeObject) {
@@ -6636,7 +6636,7 @@ static ant_value_t builtin_AggregateError(ant_params_t) {
     if (cause_off.obj) js_mkprop_fast(js, this_val, "cause", 5, js_prop_load(cause_off));
   }
   
-  js_mkprop_fast(js, this_val, "name", 4, ANT_STRING("AggregateError"));
+  mkprop_bytes(js, this_val, "name", 4, ANT_STRING("AggregateError"), JS_DESC_W | JS_DESC_C);
   set_slot(this_val, SLOT_ERROR_BRAND, js_true);
 
   return this_val;
@@ -6656,8 +6656,8 @@ static ant_value_t builtin_SuppressedError(ant_params_t) {
   ant_value_t error = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t suppressed = nargs > 1 ? args[1] : js_mkundef();
   
-  js_mkprop_fast(js, this_val, "error", 5, error);
-  js_mkprop_fast(js, this_val, "suppressed", 10, suppressed);
+  mkprop_bytes(js, this_val, "error", 5, error, JS_DESC_W | JS_DESC_C);
+  mkprop_bytes(js, this_val, "suppressed", 10, suppressed, JS_DESC_W | JS_DESC_C);
 
   if (nargs > 2 && vtype(args[2]) != kTypeUndefined) {
     ant_value_t msg = args[2];
@@ -6665,10 +6665,10 @@ static ant_value_t builtin_SuppressedError(ant_params_t) {
       const char *str = js_str(js, msg);
       msg = js_mkstr(js, str, strlen(str));
     }
-    js_mkprop_fast(js, this_val, "message", 7, msg);
+    mkprop_bytes(js, this_val, "message", 7, msg, JS_DESC_W | JS_DESC_C);
   }
 
-  js_mkprop_fast(js, this_val, "name", 4, ANT_STRING("SuppressedError"));
+  mkprop_bytes(js, this_val, "name", 4, ANT_STRING("SuppressedError"), JS_DESC_W | JS_DESC_C);
   set_slot(this_val, SLOT_ERROR_BRAND, js_true);
   js_capture_stack(js, this_val);
 
@@ -18861,8 +18861,8 @@ static ant_t *isolate_init(void *buf, size_t len) {
   ant_value_t error_proto = js_mkobj(js);
   set_proto(js, error_proto, object_proto);
   
-  js_setprop(js, error_proto, ANT_STRING("name"), ANT_STRING("Error"));
-  js_setprop(js, error_proto, ANT_STRING("message"), js_mkstr(js, "", 0));
+  mkprop_bytes(js, error_proto, "name", 4, ANT_STRING("Error"), JS_DESC_W | JS_DESC_C);
+  mkprop_bytes(js, error_proto, "message", 7, js_mkstr(js, "", 0), JS_DESC_W | JS_DESC_C);
   defmethod(js, error_proto, "toString", 8, js_mkfun(builtin_Error_toString));
   
   ant_value_t err_ctor_obj = mkobj(js, 0);
@@ -18882,7 +18882,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   #define REGISTER_ERROR_SUBTYPE(name_str) do { \
     ant_value_t proto = js_mkobj(js); \
     set_proto(js, proto, error_proto); \
-    js_setprop(js, proto, ANT_STRING("name"), ANT_STRING(name_str)); \
+    mkprop_bytes(js, proto, "name", 4, ANT_STRING(name_str), JS_DESC_W | JS_DESC_C); \
     ant_value_t ctor = mkobj(js, 0); \
     set_proto(js, ctor, function_proto); \
     set_slot(ctor, SLOT_CFUNC, js_mkfun(builtin_Error)); \
@@ -18906,7 +18906,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   
   ant_value_t proto = js_mkobj(js);
   set_proto(js, proto, error_proto);
-  js_setprop(js, proto, ANT_STRING("name"), ANT_STRING("AggregateError"));
+  mkprop_bytes(js, proto, "name", 4, ANT_STRING("AggregateError"), JS_DESC_W | JS_DESC_C);
   ant_value_t ctor = mkobj(js, 0);
   set_proto(js, ctor, function_proto);
   set_slot(ctor, SLOT_CFUNC, js_mkfun(builtin_AggregateError));
@@ -18918,7 +18918,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
 
   ant_value_t suppressed_proto = js_mkobj(js);
   set_proto(js, suppressed_proto, error_proto);
-  js_setprop(js, suppressed_proto, ANT_STRING("name"), ANT_STRING("SuppressedError"));
+  mkprop_bytes(js, suppressed_proto, "name", 4, ANT_STRING("SuppressedError"), JS_DESC_W | JS_DESC_C);
   
   ant_value_t suppressed_ctor = mkobj(js, 0);
   set_proto(js, suppressed_ctor, function_proto);
@@ -20034,7 +20034,7 @@ static bool js_try_get_len(ant_t *js, ant_value_t obj, const char *key, size_t k
     if (vtype(result) != kTypeUndefined) { *out = result; return true; }
   }
   
-  if (!off.obj && is_promise) {
+  if (!off.obj) {
     off = lkp_proto(js, obj, key, key_len);
     if (off.obj) {
       const ant_shape_prop_t *meta = prop_shape_meta(off);

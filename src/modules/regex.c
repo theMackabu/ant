@@ -1492,10 +1492,6 @@ static bool regexp_has_internal_slots(ant_t *js, ant_value_t value) {
   return vtype(js_get_slot(value, SLOT_REGEXP_FLAGS_STRING)) == kTypeString;
 }
 
-static bool regexp_can_use_internal_fast_path(ant_t *js, ant_value_t value) {
-  return is_object_type(value) && !is_proxy(value) && regexp_has_internal_slots(js, value);
-}
-
 static ant_value_t builtin_RegExp(ant_params_t) {
   bool pattern_is_regexp = false;
   if (nargs > 0) {
@@ -1813,6 +1809,24 @@ static const ant_shape_prop_t *regexp_lastindex_lookup_own_property(
   uint32_t slot = (uint32_t)found;
   if (out_slot) *out_slot = slot;
   return ant_shape_prop_at(obj->shape, slot);
+}
+
+static bool regexp_lastindex_is_writable(ant_value_t value) {
+  ant_object_t *obj = js_obj_ptr(value);
+  if (!obj) return false;
+
+  const ant_shape_prop_t *prop = regexp_lastindex_lookup_own_property(obj, NULL);
+  if (!prop) return true;
+
+  if (prop->has_getter || prop->has_setter) return false;
+  return (prop->attrs & ANT_PROP_ATTR_WRITABLE) != 0;
+}
+
+static bool regexp_can_use_internal_fast_path(ant_t *js, ant_value_t value) {
+  return 
+    is_object_type(value) && !is_proxy(value) &&
+    regexp_has_internal_slots(js, value) &&
+    regexp_lastindex_is_writable(value);
 }
 
 static bool regexp_lastindex_fast_location(

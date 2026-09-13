@@ -2,6 +2,8 @@
 #define IO_H
 
 #include "types.h"
+#include "output.h"
+
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -35,7 +37,11 @@ ant_value_t console_library(ant_t *js);
 void print_value_colored(const char *str, FILE *stream);
 void print_repl_value(ant_t *js, ant_value_t val, FILE *stream);
 void io_set_sandbox_terminal(uint32_t capabilities);
+
 bool print_uncaught_throw(ant_t *js);
+bool io_print_error_header(ant_t *js, ant_output_stream_t *out, ant_value_t err);
+bool io_print_error_props(ant_t *js, ant_output_stream_t *out, ant_value_t err);
+bool io_print_error_stack(ant_t *js, ant_output_stream_t *out, ant_value_t err, ant_value_t stack);
 
 void inspect_object(
   ant_t *js, ant_value_t obj,

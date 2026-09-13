@@ -10,6 +10,18 @@ typedef struct sv_func sv_func_t;
 #define ERR_FMT "\x1b[31m%.*s\x1b[0m: \x1b[1m%.*s\x1b[0m"
 #define ERR_NAME_ONLY "\x1b[31m%.*s\x1b[0m"
 
+enum {
+  JS_ERROR_STACK_TEXT,
+  JS_ERROR_STACK_HEADER_START,
+  JS_ERROR_STACK_HEADER_END,
+  JS_ERROR_STACK_FIELD_COUNT
+};
+
+typedef enum {
+  JS_STACK_TEXT_FROM_ERROR_OBJECT = 0,
+  JS_STACK_TEXT_FROM_THROW_VALUE = 1,
+} js_stack_text_kind_t;
+
 typedef enum {
   JS_ERR_GENERIC = 0,
   JS_ERR_TYPE,
@@ -44,10 +56,11 @@ void js_set_error_site_from_bc(
   int bc_offset, const char *filename
 );
 
-void js_set_error_site(
+void js_set_error_site_lc(
   ant_t *js, const char *src,
   ant_offset_t src_len, const char *filename,
-  ant_offset_t off, ant_offset_t span_len
+  ant_offset_t off, ant_offset_t span_len,
+  uint32_t line, uint32_t col
 );
 
 __attribute__((format(printf, 4, 5)))

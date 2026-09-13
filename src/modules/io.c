@@ -20,6 +20,8 @@
 #endif
 
 #include "common.h"
+#include "builder.h"
+#include "gc/roots.h"
 #include "errors.h"
 #include "output.h"
 #include "internal.h"
@@ -147,17 +149,16 @@ static size_t io_binary_type_len(const char *p) {
   return 0;
 }
 
-static bool io_print_to_output(const char *str, ant_output_stream_t *out, bool no_color) {
-  if (!no_color) {
-    return ant_output_stream_append_cstr(out, str);
-  }
+static bool io_print_to_output_n(const char *str, size_t len, ant_output_stream_t *out, bool no_color) {
+  if (!no_color) return ant_output_stream_append(out, str, len);
 
   static void *states[] = {&&normal, &&esc, &&csi, &&done};
-  const char *p = str; char c;
+  const char *p = str, *end = str + len; char c;
 
   goto *states[0];
 
   normal: {
+    if (p == end) goto *states[3];
     c = *p++;
     if (!c) goto *states[3];
     if (c == '\x1b') goto *states[1];
@@ -166,6 +167,7 @@ static bool io_print_to_output(const char *str, ant_output_stream_t *out, bool n
   }
 
   esc: {
+    if (p == end) goto *states[3];
     c = *p++;
     if (!c) goto *states[3];
     if (c == '[') goto *states[2];
@@ -175,6 +177,7 @@ static bool io_print_to_output(const char *str, ant_output_stream_t *out, bool n
   }
 
   csi: {
+    if (p == end) goto *states[3];
     c = *p++;
     if (!c) goto *states[3];
     if ((c >= '0' && c <= '9') || c == ';') goto *states[2];
@@ -183,6 +186,10 @@ static bool io_print_to_output(const char *str, ant_output_stream_t *out, bool n
   }
 
   done: return true;
+}
+
+static bool io_print_to_output(const char *str, ant_output_stream_t *out, bool no_color) {
+  return io_print_to_output_n(str, strlen(str), out, no_color);
 }
 
 enum char_class {
@@ -694,6 +701,107 @@ static const ant_format_sink_t console_format_sink = {
   console_format_value
 };
 
+bool io_print_error_header(ant_t *js, ant_output_stream_t *out, ant_value_t err) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, err);
+  
+  ant_value_t name = js_getprop_fallback_len(js, err, "name", 4);
+  GC_ROOT_PIN(js, name);
+  
+  ant_value_t message = js_getprop_fallback_len(js, err, "message", 7);
+  GC_ROOT_PIN(js, message);
+
+  size_t name_len = 5, message_len = 0;
+  const char *name_text = vtype(name) == kTypeString ? js_getstr(js, name, &name_len) : "Error";
+  const char *message_text = vtype(message) == kTypeString ? js_getstr(js, message, &message_len) : NULL;
+  
+  if (!name_text) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return false;
+  }
+  
+  ant_offset_t class_len = 0;
+  const char *class_name = get_class_name(js, err, &class_len, "Object");
+
+  bool ok;
+  if (class_name && class_len > 0 && ((size_t)class_len != name_len || memcmp(class_name, name_text, name_len) != 0)) {
+    ok = ant_output_stream_appendf(out, "%s%.*s [%.*s]%s", C_RED, (int)class_len, class_name, (int)name_len, name_text, C_RESET);
+  } else ok = ant_output_stream_appendf(out, "%s%.*s%s", C_RED, (int)name_len, name_text, C_RESET);
+  if (ok && message_text) ok = ant_output_stream_appendf(out, ": %s%.*s%s", C_BOLD, (int)message_len, message_text, C_RESET);
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return ok;
+}
+
+static void io_error_stack_header_range(
+  ant_t *js, ant_value_t err, ant_value_t stack, size_t len,
+  size_t *header_start, size_t *header_end
+) {
+  ant_value_t cache = js_get_slot(err, SLOT_ERROR_STACK);
+  if (vtype(cache) != kTypeArray || js_arr_get(js, cache, JS_ERROR_STACK_TEXT) != stack) return;
+
+  ant_value_t start = js_arr_get(js, cache, JS_ERROR_STACK_HEADER_START);
+  ant_value_t end = js_arr_get(js, cache, JS_ERROR_STACK_HEADER_END);
+  if (vtype(start) != kTypeNumber || vtype(end) != kTypeNumber) return;
+
+  double s = js_getnum(start), e = js_getnum(end);
+  if (!(s >= 0 && s < e && e <= (double)len)) return;
+  *header_start = (size_t)s;
+  *header_end = (size_t)e;
+}
+
+bool io_print_error_stack(
+  ant_t *js, ant_output_stream_t *out,
+  ant_value_t err, ant_value_t stack
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, err);
+  GC_ROOT_PIN(js, stack);
+
+  size_t len = 0;
+  const char *text = js_getstr(js, stack, &len);
+
+  size_t header_start = len, header_end = len;
+  io_error_stack_header_range(js, err, stack, len, &header_start, &header_end);
+
+  bool ok = text && io_print_to_output_n(text, header_start, out, io_no_color);
+  if (ok && header_start < header_end) ok = io_print_error_header(js, out, err);
+
+  if (ok && header_end < len) {
+    text = js_getstr(js, stack, &len);
+    ok = io_print_to_output_n(text + header_end, len - header_end, out, io_no_color);
+  }
+  
+  if (ok) ok = io_print_error_props(js, out, err);
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  return ok;
+}
+
+bool io_print_error_props(ant_t *js, ant_output_stream_t *out, ant_value_t err) {
+  if (vtype(err) != kTypeObject) return true;
+
+  js_inspect_builder_t builder;
+  if (!js_inspect_builder_init_dynamic(&builder, js, 128)) return false;
+  builder.bare_mode = true;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, err);
+
+  typeof(js->stringify) saved_stringify = js->stringify;
+  js->stringify = (typeof(js->stringify)){0};
+  js->stringify.stack[js->stringify.depth++] = err;
+
+  bool ok = js_inspect_object_body(&builder, err);
+  js->stringify = saved_stringify;
+  if (ok) print_value_colored_to_output(builder.buf, out, io_no_color);
+
+  js_inspect_builder_dispose(&builder);
+  GC_ROOT_RESTORE(js, root_mark);
+
+  return ok && !out->buffer.failed;
+}
+
 static bool console_write_args_to_stream(
   ant_t *js, ant_output_stream_t *out,
   ant_value_t *args, int nargs, bool color_values
@@ -705,12 +813,14 @@ static bool console_write_args_to_stream(
   for (int i = start; i < nargs; i++) {
     if ((i || start) && !ant_output_stream_putc(out, ' ')) return false;
 
-    if (vtype(args[i]) == kTypeObject) {
-    const char *stack = get_str_prop(js, args[i], "stack", 5, NULL);
-    if (stack) {
-      if (!io_print_to_output(stack, out, io_no_color)) return false;
+    ant_value_t stack = vtype(args[i]) == kTypeObject
+      ? js_getprop_fallback_len(js, args[i], "stack", 5)
+      : js_mkundef();
+
+    if (vtype(stack) == kTypeString) {
+      if (!io_print_error_stack(js, out, args[i], stack)) return false;
       continue;
-    }}
+    }
 
     if (!console_emit_value(&ctx, args[i], vtype(args[i]) == kTypeString)) return false;
   }

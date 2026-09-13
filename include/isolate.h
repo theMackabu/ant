@@ -15,6 +15,8 @@ typedef struct {
   ant_offset_t src_len;
   ant_offset_t off;
   ant_offset_t span_len;
+  uint32_t line;
+  uint32_t col;
   bool valid;
 } js_error_site_t;
 

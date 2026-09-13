@@ -77,6 +77,7 @@ void js_inspect_builder_init_fixed(js_inspect_builder_t *builder, ant_t *js, cha
   builder->n = initial_n;
   builder->growable = false;
   builder->inline_mode = false;
+  builder->bare_mode = false;
   builder->first = true;
   builder->closed = false;
   builder->did_indent = false;
@@ -94,6 +95,7 @@ bool js_inspect_builder_init_dynamic(js_inspect_builder_t *builder, ant_t *js, s
   builder->n = 0;
   builder->growable = true;
   builder->inline_mode = false;
+  builder->bare_mode = false;
   builder->first = true;
   builder->closed = false;
   builder->did_indent = false;
@@ -367,15 +369,21 @@ bool js_inspect_plain_header(js_inspect_builder_t *builder, ant_value_t obj) {
   return true;
 }
 
+static bool js_inspect_property_prefix(js_inspect_builder_t *builder) {
+  if (builder->bare_mode) return js_inspect_append(builder, "\n ", 2);
+  if (!builder->first && !js_inspect_append(builder, builder->inline_mode ? ", " : ",\n", 2)) return false;
+  builder->first = false;
+  return builder->inline_mode || js_inspect_append_indent(builder, builder->js->stringify.indent);
+}
+
 bool js_inspect_object_body(js_inspect_builder_t *builder, ant_value_t obj) {
   if (builder->closed) return true;
 
-  if (!builder->inline_mode && !builder->did_indent) {
+  if (!builder->bare_mode && !builder->inline_mode && !builder->did_indent) {
     builder->js->stringify.indent++;
     builder->did_indent = true;
   }
 
-  bool first = builder->first;
   ant_t *js = builder->js;
   ant_value_t tag_sym = get_toStringTag_sym();
   ant_value_t as_obj = js_as_obj(obj);
@@ -400,9 +408,7 @@ bool js_inspect_object_body(js_inspect_builder_t *builder, ant_value_t obj) {
       
       ant_value_t sym = mkval(kTypeSymbol, sym_off);
       
-      if (!first && !js_inspect_append(builder, builder->inline_mode ? ", " : ",\n", 2)) return false;
-      first = false;
-      if (!builder->inline_mode && !js_inspect_append_indent(builder, builder->js->stringify.indent)) return false;
+      if (!js_inspect_property_prefix(builder)) return false;
       if (!js_inspect_append(builder, "[", 1)) return false;
       if (!js_inspect_append_tostr(builder, sym)) return false;
       if (!js_inspect_append(builder, "]: ", 3)) return false;
@@ -418,9 +424,7 @@ bool js_inspect_object_body(js_inspect_builder_t *builder, ant_value_t obj) {
     }
 
     if (prop->has_getter || prop->has_setter) {
-      if (!first && !js_inspect_append(builder, builder->inline_mode ? ", " : ",\n", 2)) return false;
-      first = false;
-      if (!builder->inline_mode && !js_inspect_append_indent(builder, builder->js->stringify.indent)) return false;
+      if (!js_inspect_property_prefix(builder)) return false;
       if (!js_inspect_append_key_interned(builder, key, (size_t)klen)) return false;
       if (!js_inspect_append(builder, ": ", 2)) return false;
       if (prop->has_getter && prop->has_setter) {
@@ -431,9 +435,7 @@ bool js_inspect_object_body(js_inspect_builder_t *builder, ant_value_t obj) {
       continue;
     }
 
-    if (!first && !js_inspect_append(builder, builder->inline_mode ? ", " : ",\n", 2)) return false;
-    first = false;
-    if (!builder->inline_mode && !js_inspect_append_indent(builder, builder->js->stringify.indent)) return false;
+    if (!js_inspect_property_prefix(builder)) return false;
 
     bool is_special_global = false;
     if (vtype(val) == kTypeUndefined && streq(key, klen, "undefined", 9)) {
@@ -463,9 +465,7 @@ bool js_inspect_object_body(js_inspect_builder_t *builder, ant_value_t obj) {
       if (!desc->enumerable) continue;
       if (!desc->has_getter && !desc->has_setter) continue;
 
-      if (!first && !js_inspect_append(builder, builder->inline_mode ? ", " : ",\n", 2)) return false;
-      first = false;
-      if (!builder->inline_mode && !js_inspect_append_indent(builder, builder->js->stringify.indent)) return false;
+      if (!js_inspect_property_prefix(builder)) return false;
       if (!js_inspect_append(builder, desc->prop_name, desc->prop_len)) return false;
       if (!js_inspect_append(builder, ": ", 2)) return false;
 
@@ -477,7 +477,6 @@ bool js_inspect_object_body(js_inspect_builder_t *builder, ant_value_t obj) {
     }
   }
 
-  builder->first = first;
   return true;
 }
 

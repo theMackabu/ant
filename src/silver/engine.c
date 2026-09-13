@@ -464,27 +464,26 @@ static ant_offset_t sv_srcpos_to_offset_local(const char *code, ant_offset_t cle
 void js_set_error_site_from_bc(ant_t *js, sv_func_t *func, int bc_offset, const char *filename) {
   if (!js || !func || !func->debug->source || func->debug->source_len <= 0) return;
 
-  uint32_t src_off = 0, src_end = 0;
-  if (sv_lookup_srcspan(func, bc_offset, &src_off, &src_end)) {
-    ant_offset_t off = (ant_offset_t)src_off;
-    ant_offset_t span_len = (ant_offset_t)(src_end > src_off ? (src_end - src_off) : 0);
-    if (span_len <= 0 && off < (ant_offset_t)func->debug->source_len) span_len = 1;
-    
-    js_set_error_site(
-      js, func->debug->source, (ant_offset_t)func->debug->source_len,
-      filename ? filename : func->debug->filename, off, span_len
-    );
-    return;
-  }
+  const char *src = func->debug->source;
+  ant_offset_t src_len = (ant_offset_t)func->debug->source_len;
+  const char *file = filename ? filename : func->debug->filename;
 
   uint32_t line = 0, col = 0;
-  if (sv_lookup_srcpos(func, bc_offset, &line, &col)) {
-    ant_offset_t off = sv_srcpos_to_offset_local(func->debug->source, (ant_offset_t)func->debug->source_len, line, col);
-    js_set_error_site(
-      js, func->debug->source, (ant_offset_t)func->debug->source_len,
-      filename ? filename : func->debug->filename, off, 0
-    );
-  }
+  bool have_pos = sv_lookup_srcpos(func, bc_offset, &line, &col);
+
+  ant_offset_t off, span_len;
+  uint32_t src_off = 0, src_end = 0;
+
+  if (sv_lookup_srcspan(func, bc_offset, &src_off, &src_end)) {
+    off = (ant_offset_t)src_off;
+    span_len = (ant_offset_t)(src_end > src_off ? (src_end - src_off) : 0);
+    if (span_len <= 0 && off < src_len) span_len = 1;
+  } else if (have_pos) {
+    off = sv_srcpos_to_offset_local(src, src_len, line, col);
+    span_len = 0;
+  } else return;
+
+  js_set_error_site_lc(js, src, src_len, file, off, span_len, line, col);
 }
 
 void js_set_error_site_from_vm_top(ant_t *js) {

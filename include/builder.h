@@ -13,6 +13,7 @@ typedef struct {
   size_t n;
   bool growable;
   bool inline_mode;
+  bool bare_mode;
   bool first;
   bool closed;
   bool did_indent;
