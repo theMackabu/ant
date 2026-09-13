@@ -113,6 +113,7 @@ typedef enum {
 #define JIT_INLINE_MAX_BYTECODE 192
 typedef struct {
   MIR_item_t helper1_proto, imp_get_length_inline;
+  MIR_item_t imp_get_field, imp_get_length;
   MIR_item_t imp_get_elem_inline;
   MIR_item_t put_field_proto, imp_put_field;
   MIR_item_t shape_transition_proto, imp_shape_transition;

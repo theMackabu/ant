@@ -505,8 +505,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
 
   MIR_type_t regexp_ret = MIR_JSVAL;
   c->regexp_proto = MIR_new_proto(c->ctx, "regexp_proto",
-                                  1, &regexp_ret, 4,
-                                  MIR_T_I64, "vm",
+                                  1, &regexp_ret, 3,
                                   MIR_T_I64, "js",
                                   MIR_JSVAL, "pattern",
                                   MIR_JSVAL, "flags");
@@ -669,7 +668,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_put_global = MIR_new_import(c->ctx, "jit_helper_put_global");
   c->imp_object = MIR_new_import(c->ctx, "jit_helper_object");
   c->imp_object_template = MIR_new_import(c->ctx, "jit_helper_object_template");
-  c->imp_regexp = MIR_new_import(c->ctx, "jit_helper_regexp");
+  c->imp_regexp = MIR_new_import(c->ctx, "regexp_create_literal");
   c->imp_define_slot = MIR_new_import(c->ctx, "jit_helper_define_slot");
   c->imp_array = MIR_new_import(c->ctx, "jit_helper_array");
   c->imp_catch_value = MIR_new_import(c->ctx, "jit_helper_catch_value");

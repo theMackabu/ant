@@ -290,6 +290,8 @@ bool jit_setup_frame(jit_compile_t *c) {
   c->inline_ext = (jit_inline_ext_t){
       .helper1_proto = c->helper1_proto,
       .imp_get_length_inline = c->imp_get_length_inline,
+      .imp_get_field = c->imp_get_field,
+      .imp_get_length = c->imp_get_length,
       .imp_get_elem_inline = c->imp_get_elem_inline,
       .put_field_proto = c->put_field_proto,
       .imp_put_field = c->imp_put_field,

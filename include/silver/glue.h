@@ -181,11 +181,6 @@ ant_value_t jit_helper_object_template(
   sv_func_t *func, sv_obj_site_cache_t *site
 );
 
-ant_value_t jit_helper_regexp(
-  sv_vm_t *vm, ant_t *js, 
-  ant_value_t pattern, ant_value_t flags
-);
-
 ant_value_t jit_helper_call_call(
   sv_vm_t *vm, ant_t *js,
   ant_value_t *base, int32_t n1, int32_t n2

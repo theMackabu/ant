@@ -550,8 +550,13 @@ void vstack_ensure_boxed(jit_vstack_t *vs, int idx,
                          MIR_context_t ctx, MIR_item_t fn,
                          MIR_reg_t d_slot) {
   if (!vs->slot_type || vs->slot_type[idx] == SLOT_BOXED) return;
-  mir_emit_slot_boxed(
-      ctx, fn, vs->regs[idx], vs->d_regs[idx], vs->slot_type[idx], d_slot);
+  jit_integer_range_t range = vs->integer_range ? vs->integer_range[idx] : (jit_integer_range_t){0};
+  if (vs->slot_type[idx] == SLOT_I32 && range.known && range.min == range.max) {
+    mir_load_imm(ctx, fn, vs->regs[idx], tov((double)range.min));
+  } else {
+    mir_emit_slot_boxed(
+        ctx, fn, vs->regs[idx], vs->d_regs[idx], vs->slot_type[idx], d_slot);
+  }
   vs->slot_type[idx] = SLOT_BOXED;
 }
 

@@ -1450,14 +1450,6 @@ ant_value_t jit_helper_object_template(sv_vm_t *vm, ant_t *js, sv_func_t *func, 
   return js_mkobj_from_template(js, site->literal_template);
 }
 
-ant_value_t jit_helper_regexp(
-  sv_vm_t *vm, ant_t *js, ant_value_t pattern, ant_value_t flags
-) {
-  // TODO: remove vm
-  (void)vm;
-  return sv_regexp_create(js, pattern, flags);
-}
-
 void jit_helper_define_slot(
   sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t val,
   const char *str, uint32_t len, uint32_t slot

@@ -2,6 +2,7 @@
 
 #include "gc/roots.h"
 #include "jit_internal.h"
+#include "modules/regex.h"
 
 #include "silver/call.h"
 #include "silver/glue.h"
@@ -116,7 +117,7 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_put_global);
   LOAD_EXT(jit_helper_object);
   LOAD_EXT(jit_helper_object_template);
-  LOAD_EXT(jit_helper_regexp);
+  LOAD_EXT(regexp_create_literal);
   LOAD_EXT(jit_helper_define_slot);
   LOAD_EXT(jit_helper_array);
   LOAD_EXT(jit_helper_catch_value);

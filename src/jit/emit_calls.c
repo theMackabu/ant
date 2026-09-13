@@ -13,12 +13,12 @@ void jit_emit_calls(jit_compile_t *c) {
         break;
       }
 
-      if (!is_tail) {
+      if (!is_tail || c->jit_try_depth == 0) {
         sv_func_t *inline_callee = c->vs.known_func[c->vs.sp - call_argc - 1];
         if (!inline_callee)
           inline_callee = sv_tfb_get_call_target(c->func, c->bc_off);
         bool speculative = (inline_callee && !c->vs.known_func[c->vs.sp - call_argc - 1]);
-        if (inline_callee && jit_inlineable(inline_callee)) {
+        if (inline_callee && (!is_tail || inline_callee != c->func) && jit_inlineable(inline_callee)) {
           int cn = c->call_n++;
           int inl_arg_base = c->vs.sp - (int)call_argc;
           if (c->jit_try_depth > 0) {
@@ -151,10 +151,12 @@ void jit_emit_calls(jit_compile_t *c) {
               tscan += tsz;
             }
           }
-          if (inl_uses_this)
+          if (inl_uses_this) {
+            mir_load_imm(c->ctx, c->jit_func, r_inl_this,
+                inline_callee->is_strict || inline_callee->is_arrow ? js_mkundef() : c->js->global);
             mir_emit_resolve_call_this(c->ctx, c->jit_func, r_inl_this, r_inl_cl,
-                                       c->r_this_curr, r_inl_flags, r_inl_bound);
-          else
+                                       r_inl_this, r_inl_flags, r_inl_bound);
+          } else
             mir_load_imm(c->ctx, c->jit_func, r_inl_this, mkval(kTypeUndefined, 0));
 
           jit_emit_inline_body(
@@ -202,7 +204,8 @@ void jit_emit_calls(jit_compile_t *c) {
                                             MIR_new_int_op(c->ctx, (int64_t)call_argc)));
 
           MIR_append_insn(c->ctx, c->jit_func, inl_join);
-          jit_emit_throw_if_error(c, r_call_res);
+          if (is_tail) jit_emit_exit_ret(c, MIR_new_reg_op(c->ctx, r_call_res));
+          else jit_emit_throw_if_error(c, r_call_res);
           break;
         }
       }

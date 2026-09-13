@@ -35,7 +35,7 @@ static bool jit_op_inline_restarts_callee_on_guard_failure(sv_op_t op) {
 }
 
 // TODO: opcode.h
-static bool jit_op_inline_pure_tail(sv_op_t op) {
+static bool jit_op_inline_after_effect(sv_op_t op) {
   switch (op) {
     case OP_RETURN:
     case OP_RETURN_UNDEF:
@@ -49,6 +49,10 @@ static bool jit_op_inline_pure_tail(sv_op_t op) {
     case OP_SET_LOCAL:
     case OP_SET_LOCAL8:
     case OP_GET_ARG:
+    case OP_GET_FIELD:
+    case OP_GET_FIELD2:
+    case OP_GET_FIELD_OPT:
+    case OP_GET_LENGTH:
     case OP_CONST:
     case OP_CONST8:
     case OP_CONST_I8:
@@ -108,10 +112,8 @@ bool jit_inlineable(sv_func_t *f) {
       return false;
 
     if (seen_effect) {
-      if (op == OP_JMP) {
-        if (sv_get_i32(ip + 1) < 0) return false;
-      } else if (!jit_op_inline_pure_tail(op) && !jit_op_inline_side_effect(op))
-        return false;
+      if (op == OP_JMP) { if (sv_get_i32(ip + 1) < 0) return false; } 
+      else if (!jit_op_inline_after_effect(op) && !jit_op_inline_side_effect(op)) return false;
     }
 
     if (jit_op_inline_side_effect(op)) seen_effect = true;
@@ -235,7 +237,29 @@ void jit_emit_inline_body(
     MIR_item_t imp_sne, MIR_item_t imp_eq, MIR_item_t imp_ne,
     MIR_item_t gf_proto, MIR_item_t imp_get_field_inline,
     MIR_item_t special_obj_proto, MIR_item_t imp_special_obj,
-    const jit_inline_ext_t *ext) {
+    const jit_inline_ext_t *ext
+  ) {
+  if (!callee->is_strict && !callee->is_arrow) {
+    bool uses_this = false;
+    for (uint8_t *ip = callee->code; ip < callee->code + callee->code_len; ip += sv_op_size[*ip])
+      if (*ip == OP_THIS) { uses_this = true; break; }
+    if (uses_this) {
+      MIR_label_t receiver_ready = MIR_new_label(ctx);
+      const uint8_t object_types[] = {
+        kTypeObject, kTypeArray, kTypeFunction, kTypeBuiltin, kTypePromise, kTypeGenerator,
+      };
+      MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_URSH,
+          MIR_new_reg_op(ctx, r_bool), MIR_new_reg_op(ctx, r_inl_this),
+          MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
+      for (size_t i = 0; i < sizeof(object_types); i++)
+        MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_BEQ,
+            MIR_new_label_op(ctx, receiver_ready), MIR_new_reg_op(ctx, r_bool),
+            MIR_new_uint_op(ctx, (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | object_types[i])));
+      MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, slow)));
+      MIR_append_insn(ctx, jit_func, receiver_ready);
+    }
+  }
+  
   int inl_max_stack = callee->max_stack + JIT_VSTACK_SLACK;
   MIR_reg_t inl_vs[inl_max_stack];
   for (int i = 0; i < inl_max_stack; i++) {
@@ -317,6 +341,7 @@ void jit_emit_inline_body(
   uint8_t *code_base = callee->code;
   uint8_t *ip = callee->code;
   uint8_t *end = callee->code + callee->code_len;
+  bool seen_effect = false;
 
   while (ip < end) {
     sv_op_t op = (sv_op_t)*ip;
@@ -1156,7 +1181,7 @@ void jit_emit_inline_body(
         MIR_append_insn(ctx, jit_func,
                         MIR_new_call_insn(ctx, 10,
                                           MIR_new_ref_op(ctx, gf_proto),
-                                          MIR_new_ref_op(ctx, imp_get_field_inline),
+                                          MIR_new_ref_op(ctx, seen_effect ? ext->imp_get_field : imp_get_field_inline),
                                           MIR_new_reg_op(ctx, dst),
                                           MIR_new_reg_op(ctx, r_vm),
                                           MIR_new_reg_op(ctx, r_js),
@@ -1205,7 +1230,7 @@ void jit_emit_inline_body(
         MIR_append_insn(ctx, jit_func,
                         MIR_new_call_insn(ctx, 10,
                                           MIR_new_ref_op(ctx, gf_proto),
-                                          MIR_new_ref_op(ctx, imp_get_field_inline),
+                                          MIR_new_ref_op(ctx, seen_effect ? ext->imp_get_field : imp_get_field_inline),
                                           MIR_new_reg_op(ctx, dst),
                                           MIR_new_reg_op(ctx, r_vm),
                                           MIR_new_reg_op(ctx, r_js),
@@ -1248,7 +1273,7 @@ void jit_emit_inline_body(
         MIR_append_insn(ctx, jit_func,
                         MIR_new_call_insn(ctx, 10,
                                           MIR_new_ref_op(ctx, gf_proto),
-                                          MIR_new_ref_op(ctx, imp_get_field_inline),
+                                          MIR_new_ref_op(ctx, seen_effect ? ext->imp_get_field : imp_get_field_inline),
                                           MIR_new_reg_op(ctx, dst),
                                           MIR_new_reg_op(ctx, r_vm),
                                           MIR_new_reg_op(ctx, r_js),
@@ -1420,7 +1445,7 @@ void jit_emit_inline_body(
         mir_emit_get_length(
             ctx, jit_func, gl_obj, gl_dst,
             r_vm, r_js, *p_d_slot,
-            ext->helper1_proto, ext->imp_get_length_inline,
+            ext->helper1_proto, seen_effect ? ext->imp_get_length : ext->imp_get_length_inline,
             false,
             id, inl_bc_off);
         mir_emit_inline_read_guard(
@@ -1779,6 +1804,7 @@ void jit_emit_inline_body(
       default:
         ANT_ASSERT(false, "inlineable opcode has no emitter");
     }
+    if (jit_op_inline_side_effect(op)) seen_effect = true;
     ip += sz;
   }
 }

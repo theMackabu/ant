@@ -2,6 +2,7 @@
 #define SV_LITERALS_H
 
 #include "ant.h"
+#include "modules/regex.h"
 #include "silver/engine.h"
 
 static inline void sv_op_const(sv_vm_t *vm, sv_func_t *func, uint8_t *ip) {
@@ -150,75 +151,11 @@ static inline void sv_op_set_brand(sv_vm_t *vm, uint8_t *ip) {
     js_set_slot(obj, SLOT_BRAND, js_mknum((double)brand));
 }
 
-static inline ant_value_t sv_regexp_create(ant_t *js, ant_value_t pattern, ant_value_t flags) {
-  ant_value_t regexp_obj = mkobj(js, 0);
-  ant_value_t regexp_proto = js_get_ctor_proto(js, "RegExp", 6);
-  if (vtype(regexp_proto) == kTypeObject) js_set_proto_init(regexp_obj, regexp_proto);
-
-  js_mkprop_fast(js, regexp_obj, "source", 6, pattern);
-  js_set_slot(regexp_obj, SLOT_DATA, pattern);
-
-  ant_offset_t flen = 0;
-  const char *fstr = "";
-  if (vtype(flags) == kTypeString) {
-    ant_offset_t foff;
-    foff = vstr(js, flags, &flen);
-    fstr = (const char *)(uintptr_t)(foff);
-  }
-
-  bool d = false, g = false, i = false, m = false;
-  bool s = false, u = false, v = false, y = false;
-  
-  for (ant_offset_t k = 0; k < flen; k++) {
-    if (fstr[k] == 'd') d = true;
-    if (fstr[k] == 'g') g = true;
-    if (fstr[k] == 'i') i = true;
-    if (fstr[k] == 'm') m = true;
-    if (fstr[k] == 's') s = true;
-    if (fstr[k] == 'u') u = true;
-    if (fstr[k] == 'v') v = true;
-    if (fstr[k] == 'y') y = true;
-  }
-
-  char sorted[10]; int si = 0;
-  if (d) sorted[si++] = 'd';
-  if (g) sorted[si++] = 'g';
-  if (i) sorted[si++] = 'i';
-  if (m) sorted[si++] = 'm';
-  if (s) sorted[si++] = 's';
-  if (u) sorted[si++] = 'u';
-  if (v) sorted[si++] = 'v';
-  if (y) sorted[si++] = 'y';
-
-  ant_value_t flags_value = js_mkstr(js, sorted, si);
-  js_mkprop_fast(js, regexp_obj, "flags", 5, flags_value);
-  js_mkprop_fast(js, regexp_obj, "hasIndices", 10, mkval(kTypeBool, d ? 1 : 0));
-  js_mkprop_fast(js, regexp_obj, "global", 6, mkval(kTypeBool, g ? 1 : 0));
-  js_mkprop_fast(js, regexp_obj, "ignoreCase", 10, mkval(kTypeBool, i ? 1 : 0));
-  js_mkprop_fast(js, regexp_obj, "multiline", 9, mkval(kTypeBool, m ? 1 : 0));
-  js_mkprop_fast(js, regexp_obj, "dotAll", 6, mkval(kTypeBool, s ? 1 : 0));
-  js_mkprop_fast(js, regexp_obj, "unicode", 7, mkval(kTypeBool, u ? 1 : 0));
-  js_mkprop_fast(js, regexp_obj, "unicodeSets", 11, mkval(kTypeBool, v ? 1 : 0));
-  js_mkprop_fast(js, regexp_obj, "sticky", 6, mkval(kTypeBool, y ? 1 : 0));
-  js_mkprop_fast(js, regexp_obj, "lastIndex", 9, tov(0));
-  
-  js_set_slot(regexp_obj, SLOT_REGEXP_FLAGS_MASK, tov((double)(
-    (d ? 1 : 0)  | (g ? 2 : 0)  | (i ? 4 : 0)  |
-    (m ? 8 : 0)  | (s ? 16 : 0) | (u ? 32 : 0) |
-    (v ? 64 : 0) |(y ? 128 : 0)
-  )));
-  
-  js_set_slot(regexp_obj, SLOT_REGEXP_FLAGS_STRING, flags_value);
-  js_set_slot(regexp_obj, SLOT_REGEXP_NAMED_GROUPS, js_mkundef());
-
-  return regexp_obj;
-}
-
 static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
   ant_value_t pattern = vm->stack[vm->sp - 2];
   ant_value_t flags = vm->stack[vm->sp - 1];
   vm->sp -= 2;
-  vm->stack[vm->sp++] = sv_regexp_create(js, pattern, flags);
+  vm->stack[vm->sp++] = regexp_create_literal(js, pattern, flags);
 }
 
 #endif

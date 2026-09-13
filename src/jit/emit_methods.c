@@ -147,9 +147,9 @@ void jit_emit_methods(jit_compile_t *c) {
       MIR_label_t cm_devirt_slow = NULL;
       MIR_label_t cm_devirt_join = NULL;
 
-      if (!is_tail) {
+      if (!is_tail || c->jit_try_depth == 0) {
         sv_func_t *inline_callee = sv_tfb_get_call_target(c->func, c->bc_off);
-        if (inline_callee && jit_inlineable(inline_callee)) {
+        if (inline_callee && (!is_tail || inline_callee != c->func) && jit_inlineable(inline_callee)) {
           int mcn = c->call_n++;
           cm_devirt_slow = MIR_new_label(c->ctx);
           cm_devirt_join = MIR_new_label(c->ctx);
@@ -482,7 +482,8 @@ void jit_emit_methods(jit_compile_t *c) {
       if (cm_devirt_join) {
         MIR_append_insn(c->ctx, c->jit_func, cm_devirt_join);
         MIR_reg_t r_join_res = c->vs.regs[c->vs.sp - 1];
-        jit_emit_throw_if_error(c, r_join_res);
+        if (is_tail) jit_emit_exit_ret(c, MIR_new_reg_op(c->ctx, r_join_res));
+        else jit_emit_throw_if_error(c, r_join_res);
       }
       break;
     }

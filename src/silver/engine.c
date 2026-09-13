@@ -2299,6 +2299,9 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   tail_call_inline: {
     ant_value_t call_func = vm->stack[vm->sp - tc_argc - 1];
     sv_closure_t *closure = js_func_closure(call_func);
+
+    if (sv_func_type_feedback(func))
+      sv_tfb_record_call_target(func, (int)(ip - func->code), closure->func);
     
     int arg_slots = (
       (int)tc_argc > closure->func->param_count)
