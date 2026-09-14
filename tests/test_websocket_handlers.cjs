@@ -62,12 +62,23 @@ function next(ws) {
   return new Promise(resolve => { ws.onmessage = e => resolve(JSON.parse(e.data)); });
 }
 
+const sockets = [];
+
 async function roundTrip(path, payload = 'x') {
   const ws = await open(path);
+  sockets.push(ws);
   const reply = next(ws);
   ws.send(payload);
   const result = await reply;
   return { ws, result };
+}
+
+function closed(ws) {
+  return new Promise(resolve => {
+    if (ws.readyState === WebSocket.CLOSED) return resolve();
+    ws.addEventListener('close', () => resolve(), { once: true });
+    ws.close();
+  });
 }
 
 async function main() {
@@ -95,8 +106,10 @@ async function main() {
   client.send('z');
   await new Promise(resolve => client.addEventListener('message', resolve, { once: true }));
   assert.deepEqual(order, ['handler', 'on']);
-  client.close();
+  sockets.push(client);
 
+  // Graceful stop waits for connections to drain, so close every client first.
+  await Promise.all(sockets.map(closed));
   await server.stop();
   console.log('websocket:handlers:ok');
 }

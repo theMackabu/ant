@@ -3172,7 +3172,7 @@ static ant_value_t get_slot(ant_value_t obj, internal_slot_t slot) {
 }
 
 static void set_func_code(ant_t *js, ant_value_t func_obj, const char *code, size_t len) {
-  const char *arena_code = code_arena_alloc(code, len);
+  const char *arena_code = code_arena_alloc(js, code, len);
   if (!arena_code || !ant_cage_contains(arena_code)) return;
   set_slot(func_obj, SLOT_CODE, mkref(kTypeSourceCode, arena_code));
   set_slot(func_obj, SLOT_CODE_LEN, tov((double)len));
@@ -19240,6 +19240,7 @@ ant_t *ant_create() {
 void js_destroy(ant_t *js) {
   if (js == NULL) return;
   
+  cleanup_timer_module(js);
   json_layout_cache_clear(js);
   cleanup_cron_module(js);
   gc_weak_cleanup(js);
@@ -19252,7 +19253,7 @@ void js_destroy(ant_t *js) {
   js_esm_cleanup_module_cache(js);
   sv_jit_destroy(js);
   sv_ic_shape_refs_cleanup(js);
-  code_arena_reset();
+  code_arena_reset(js);
   cleanup_rpc_module();
   cleanup_lmdb_module();
   js_descriptor_registry_cleanup(js);

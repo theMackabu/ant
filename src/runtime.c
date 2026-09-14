@@ -21,7 +21,7 @@
 #define ant_getpid getpid
 #endif
 
-typedef struct {
+typedef struct code_intern_entry {
   const char *ptr;
   size_t len;
   UT_hash_handle hh;
@@ -44,14 +44,11 @@ static_assert(
   "code arena block payload must satisfy the arena alignment"
 );
 
-static intern_entry_t *code_interns = NULL;
-
-static code_block_t *code_arena_head     = NULL;
-static code_block_t *code_arena_current  = NULL;
-static code_block_t *parse_arena_head    = NULL;
+static code_block_t *parse_arena_head = NULL;
 static code_block_t *parse_arena_current = NULL;
 
 static void code_interns_prune_for_block_range(
+  ant_t *js,
   const code_block_t *block,
   size_t start_offset
 ) {
@@ -62,18 +59,18 @@ static void code_interns_prune_for_block_range(
   intern_entry_t *entry = NULL;
   intern_entry_t *tmp = NULL;
 
-  HASH_ITER(hh, code_interns, entry, tmp)
+  HASH_ITER(hh, js->code_arena.interns, entry, tmp)
   if (entry->ptr >= start && entry->ptr < end) {
-    HASH_DEL(code_interns, entry);
+    HASH_DEL(js->code_arena.interns, entry);
     free(entry);
   }
 }
 
-static void code_interns_prune_for_blocks(code_block_t *first) {
+static void code_interns_prune_for_blocks(ant_t *js, code_block_t *first) {
   for (
     code_block_t *block = first; 
     block; block = block->next
-  ) code_interns_prune_for_block_range(block, 0);
+  ) code_interns_prune_for_block_range(js, block, 0);
 }
 
 static code_block_t *code_arena_new_block(size_t min_size) {
@@ -167,55 +164,58 @@ static void arena_rewind_plain(
   *current = target;
 }
 
-const char *code_arena_alloc(const char *code, size_t len) {
+const char *code_arena_alloc(ant_t *js, const char *code, size_t len) {
   if (!code || len == 0) return NULL;
 
   intern_entry_t *found = NULL;
-  HASH_FIND(hh, code_interns, code, len, found);
+  HASH_FIND(hh, js->code_arena.interns, code, len, found);
   if (found) return found->ptr;
 
   size_t alloc_size = len + 1;
-  if (!code_arena_current || code_arena_current->used + alloc_size > code_arena_current->capacity) {
+  if (!js->code_arena.current || js->code_arena.current->used + alloc_size > js->code_arena.current->capacity) {
     code_block_t *new_block = code_arena_new_block(alloc_size);
     if (!new_block) return NULL;
-    if (!code_arena_head) code_arena_head = new_block;
-    else if (code_arena_current) code_arena_current->next = new_block;
-    code_arena_current = new_block;
+    if (!js->code_arena.head) js->code_arena.head = new_block;
+    else if (js->code_arena.current) js->code_arena.current->next = new_block;
+    js->code_arena.current = new_block;
   }
 
-  char *dest = &code_arena_current->data[code_arena_current->used];
+  char *dest = &js->code_arena.current->data[js->code_arena.current->used];
   memcpy(dest, code, len);
   dest[len] = '\0';
-  code_arena_current->used += alloc_size;
+  js->code_arena.current->used += alloc_size;
 
   intern_entry_t *entry = malloc(sizeof(*entry));
   if (entry) {
     entry->ptr = dest;
     entry->len = len;
-    HASH_ADD_KEYPTR(hh, code_interns, entry->ptr, entry->len, entry);
+    HASH_ADD_KEYPTR(hh, js->code_arena.interns, entry->ptr, entry->len, entry);
   }
 
   return dest;
 }
 
-void *code_arena_bump(size_t size) {
-  return arena_bump(&code_arena_head, &code_arena_current, size);
+void *code_arena_bump(ant_t *js, size_t size) {
+  return arena_bump(&js->code_arena.head, &js->code_arena.current, size);
 }
 
-size_t code_arena_get_memory(void) {
-  return arena_get_memory(code_arena_head);
+size_t code_arena_get_memory(ant_t *js) {
+  return arena_get_memory(js->code_arena.head);
 }
 
-code_arena_mark_t code_arena_mark(void) {
-  return arena_mark(code_arena_current);
+code_arena_mark_t code_arena_mark(ant_t *js) {
+  code_arena_mark_t mark = arena_mark(js->code_arena.current);
+  mark.owner = js;
+  return mark;
 }
 
-void code_arena_rewind(code_arena_mark_t mark) {
+void code_arena_rewind(ant_t *js, code_arena_mark_t mark) {
+  ANT_ASSERT(mark.owner == js, "code arena mark belongs to another isolate");
   code_block_t *target = (code_block_t *)mark.block;
 
   if (!target) {
-    code_interns_prune_for_blocks(code_arena_head);
-    code_block_t *block = code_arena_head;
+    code_interns_prune_for_blocks(js, js->code_arena.head);
+    code_block_t *block = js->code_arena.head;
     
     while (block) {
       code_block_t *next = block->next;
@@ -223,15 +223,15 @@ void code_arena_rewind(code_arena_mark_t mark) {
       block = next;
     }
     
-    code_arena_head = NULL;
-    code_arena_current = NULL;
+    js->code_arena.head = NULL;
+    js->code_arena.current = NULL;
     
     return;
   }
 
   size_t clamped_used = mark.used <= target->capacity ? mark.used : target->capacity;
-  code_interns_prune_for_block_range(target, clamped_used);
-  code_interns_prune_for_blocks(target->next);
+  code_interns_prune_for_block_range(js, target, clamped_used);
+  code_interns_prune_for_blocks(js, target->next);
 
   if (mark.used <= target->capacity) target->used = mark.used;
   code_block_t *b = target->next;
@@ -243,7 +243,7 @@ void code_arena_rewind(code_arena_mark_t mark) {
   }
   
   target->next = NULL;
-  code_arena_current = target;
+  js->code_arena.current = target;
 }
 
 void *parse_arena_bump(size_t size) {
@@ -266,24 +266,24 @@ void parse_arena_reset(void) {
   parse_arena_rewind((code_arena_mark_t){0});
 }
 
-void code_arena_reset(void) {
+void code_arena_reset(ant_t *js) {
   intern_entry_t *entry, *tmp;
-  HASH_ITER(hh, code_interns, entry, tmp) {
-    HASH_DEL(code_interns, entry);
+  HASH_ITER(hh, js->code_arena.interns, entry, tmp) {
+    HASH_DEL(js->code_arena.interns, entry);
     free(entry);
   }
-  code_interns = NULL;
-
-  code_block_t *block = code_arena_head;
+  
+  js->code_arena.interns = NULL;
+  code_block_t *block = js->code_arena.head;
+  
   while (block) {
     code_block_t *next = block->next;
     ant_cage_free(block, block->alloc_size);
     block = next;
   }
   
-  code_arena_head = NULL;
-  code_arena_current = NULL;
-  parse_arena_reset();
+  js->code_arena.head = NULL;
+  js->code_arena.current = NULL;
 }
 
 void ant_runtime_init(ant_t *js, int argc, char **argv, struct arg_file *ls_p) {

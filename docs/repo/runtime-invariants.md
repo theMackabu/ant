@@ -83,6 +83,41 @@ OSR compile must be `SV_JIT_TIER_HOT`, and that compile is exempt from the
 [OSR size-scaled tiering plan](../exec-plans/active/osr-size-scaled-tiering.md)
 and [its regression](../../tests/test_jit_osr_large_function.cjs).
 
+## Code Storage Ownership
+
+Persistent source text, source-intern entries, bytecode, and compiled metadata
+belong to the allocating `ant_t`. Pass that owner to the code-arena APIs in
+[runtime.h](../../include/runtime.h). The cage is shared backing storage; freeing
+one isolate's arena must preserve all other isolates' allocations. JIT contexts
+already have isolate ownership and are released by `sv_jit_destroy`.
+
+Keep JIT and property-IC teardown before freeing their owning code arena.
+Parser scratch is shared transient storage with nested mark/rewind scopes;
+`js_destroy` must not reset an enclosing parse's scratch. Neither code-arena
+ownership nor parser marks make the host runtime safe for concurrent or
+per-request isolates: collector state, static GC roots, symbols, native namespace
+caches, and some module cleanup still have process-wide ownership. See the
+[native lifetime regression](../../tests/test_isolate_code_arena.c).
+
+## Timer And Job Ownership
+
+Timers, microtasks, next ticks, immediates, their processing batches, IDs, and
+pending-work counters belong to `js->timer_state`. Timer callbacks use the
+owner stored on their native entry; awaited primitive-value jobs use
+`coro->js`. Draining or marking one isolate must not traverse another's queues.
+Timer prototypes are already covered by the central isolate-value root visitor
+and must not be registered as process-static roots.
+
+`cleanup_timer_module` runs before VM/heap destruction. It stops and detaches
+timers, rejects new scheduling, discards queued jobs, and releases references
+held by queued await-resume jobs. Detached libuv close callbacks touch only
+native storage and can complete after the isolate is gone; destroying an
+isolate does not pump another isolate's callbacks to drain those closes.
+
+Timer handles still use `uv_default_loop()`. Queue ownership does not establish
+independent event-loop liveness or concurrent reactor support. See the
+[two-isolate timer regression](../../tests/test_isolate_timers.c).
+
 ## Inline-Cache Ownership And Invalidation
 
 Property ICs survive minor collections. Their cached shapes require retained

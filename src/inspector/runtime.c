@@ -533,7 +533,7 @@ static size_t inspector_heap_used(ant_t *js) {
     js->closure_arena.live_count * js->closure_arena.elem_size +
     js->upvalue_arena.live_count * js->upvalue_arena.elem_size +
     strings.total.used + ropes.used + symbols.used + permanent.used + bigints.used +
-    code_arena_get_memory() + parse_arena_get_memory();
+    code_arena_get_memory(js) + parse_arena_get_memory();
 }
 
 static size_t inspector_heap_total(ant_t *js) {
@@ -548,7 +548,7 @@ static size_t inspector_heap_total(ant_t *js) {
     js->closure_arena.committed +
     js->upvalue_arena.committed +
     strings.total.capacity + ropes.capacity + symbols.capacity + permanent.capacity + bigints.capacity +
-    code_arena_get_memory() + parse_arena_get_memory();
+    code_arena_get_memory(js) + parse_arena_get_memory();
 }
 
 void inspector_send_execution_context(inspector_client_t *client) {

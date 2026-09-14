@@ -33,9 +33,9 @@ enum {
   SV_ITER_HINT_STRING = 4,
 };
 
-static const char *pin_source_text(const char *source, ant_offset_t source_len) {
+static const char *pin_source_text(ant_t *js, const char *source, ant_offset_t source_len) {
   if (!source || source_len <= 0) return source;
-  const char *pinned = code_arena_alloc(source, (size_t)source_len);
+  const char *pinned = code_arena_alloc(js, source, (size_t)source_len);
   return pinned ? pinned : source;
 }
 
@@ -162,7 +162,7 @@ static int add_constant(sv_compiler_t *c, ant_value_t val) {
   return c->const_count++;
 }
 
-static void build_gc_const_tables(sv_func_t *func) {
+static void build_gc_const_tables(ant_t *js, sv_func_t *func) {
   if (!func || func->const_count <= 0 || !func->constants) return;
 
   int child_count = 0;
@@ -171,7 +171,7 @@ static void build_gc_const_tables(sv_func_t *func) {
   }
 
   if (child_count > 0) {
-    func->child_funcs = code_arena_bump((size_t)child_count * sizeof(sv_func_t *));
+    func->child_funcs = code_arena_bump(js, (size_t)child_count * sizeof(sv_func_t *));
     if (func->child_funcs) {
       int out = 0;
       
@@ -212,7 +212,7 @@ static void build_gc_const_tables(sv_func_t *func) {
   }
 
   if (slot_count > 0) {
-    func->gc_const_slots = code_arena_bump((size_t)slot_count * sizeof(uint32_t));
+    func->gc_const_slots = code_arena_bump(js, (size_t)slot_count * sizeof(uint32_t));
     if (func->gc_const_slots) {
       int out = 0;
       for (int i = 0; i < func->const_count; i++) {
@@ -438,7 +438,7 @@ static int add_atom(sv_compiler_t *c, const char *str, uint32_t len) {
   const char *interned = intern_string(str, (size_t)len);
   const char *stored = interned;
   if (!stored) {
-    char *copy = code_arena_bump(len);
+    char *copy = code_arena_bump(c->js, len);
     memcpy(copy, str, len);
     stored = copy;
   }
@@ -502,7 +502,7 @@ static void sv_func_init_code_and_map_templates(
     "function bytecode sidecar size overflow"
   );
 
-  uint8_t *storage = code_arena_bump(prefix_size + (size_t)c->code_len);
+  uint8_t *storage = code_arena_bump(c->js, prefix_size + (size_t)c->code_len);
   ANT_ASSERT(storage != NULL, "failed to allocate function bytecode");
   
   if (c->map_template_count > 0) {
@@ -547,7 +547,7 @@ static void sv_func_init_obj_sites(const sv_compiler_t *c, sv_func_t *func) {
   }
   if (count == 0) return;
 
-  func->obj_sites = code_arena_bump((size_t)count * sizeof(sv_obj_site_cache_t));
+  func->obj_sites = code_arena_bump(c->js, (size_t)count * sizeof(sv_obj_site_cache_t));
   memset(func->obj_sites, 0, (size_t)count * sizeof(sv_obj_site_cache_t));
   func->obj_site_count = count;
 
@@ -570,7 +570,7 @@ static void sv_func_init_obj_sites(const sv_compiler_t *c, sv_func_t *func) {
       if (i >= count) break;
       if (func->obj_sites[i].bc_off != c->shaped_sites[s].bc_off) continue;
       
-      uint32_t *ka = code_arena_bump((size_t)kc * sizeof(uint32_t));
+      uint32_t *ka = code_arena_bump(c->js, (size_t)kc * sizeof(uint32_t));
       if (!ka) continue;
       
       memcpy(ka, c->shaped_keys + c->shaped_sites[s].first_key, (size_t)kc * sizeof(uint32_t));
@@ -633,7 +633,7 @@ static void emit_const_assign_error(sv_compiler_t *c, const char *name, uint32_t
   static const char suffix[] = "'";
   
   uint32_t mlen = (uint32_t)(sizeof(prefix) - 1 + len + sizeof(suffix) - 1);
-  char *buf = code_arena_bump(mlen);
+  char *buf = code_arena_bump(c->js, mlen);
   
   memcpy(buf, prefix, sizeof(prefix) - 1);
   memcpy(buf + sizeof(prefix) - 1, name, len);
@@ -1262,14 +1262,14 @@ static void sv_func_finalize_type_data(
   if (comp->eval_scope_count > 0 || comp->eval_var_count > 0) {
     size_t metadata_size = offsetof(sv_func_metadata_t, local_types) +
       (size_t)local_type_count * sizeof(sv_type_info_t);
-    sv_func_metadata_t *metadata = code_arena_bump(metadata_size);
+    sv_func_metadata_t *metadata = code_arena_bump(comp->js, metadata_size);
     ANT_ASSERT(metadata != NULL, "failed to allocate function metadata");
     ANT_ASSERT(
       ((uintptr_t)metadata % _Alignof(sv_func_metadata_t)) == 0,
       "code arena returned misaligned function metadata"
     );
     memset(metadata, 0, metadata_size);
-    sv_eval_scope_t *eval_scopes = code_arena_bump(
+    sv_eval_scope_t *eval_scopes = code_arena_bump(comp->js,
       (size_t)comp->eval_scope_count * sizeof(sv_eval_scope_t));
     ANT_ASSERT(eval_scopes != NULL, "failed to allocate eval scopes");
     metadata->eval_scopes = eval_scopes;
@@ -1277,7 +1277,7 @@ static void sv_func_finalize_type_data(
     metadata->eval_var_count = comp->eval_var_count;
     if (comp->eval_var_count) {
       size_t size = (size_t)comp->eval_var_count * sizeof(sv_eval_decl_t);
-      metadata->eval_vars = code_arena_bump(size);
+      metadata->eval_vars = code_arena_bump(comp->js, size);
       memcpy(metadata->eval_vars, comp->eval_vars, size);
     }
 
@@ -1286,7 +1286,7 @@ static void sv_func_finalize_type_data(
       binding_count += comp->eval_scopes[i].count;
 
     sv_runtime_binding_t *bindings = binding_count > 0
-      ? code_arena_bump(binding_count * sizeof(sv_runtime_binding_t))
+      ? code_arena_bump(comp->js, binding_count * sizeof(sv_runtime_binding_t))
       : NULL;
     ANT_ASSERT(
       binding_count == 0 || bindings != NULL,
@@ -1319,7 +1319,7 @@ static void sv_func_finalize_type_data(
   }
 
   if (local_type_count == 0) return;
-  sv_type_info_t *local_types = code_arena_bump(
+  sv_type_info_t *local_types = code_arena_bump(comp->js,
     (size_t)local_type_count * sizeof(sv_type_info_t));
   ANT_ASSERT(local_types != NULL, "failed to allocate function local types");
   memset(local_types, 0, (size_t)local_type_count * sizeof(sv_type_info_t));
@@ -2148,7 +2148,7 @@ static void mark_export_binding_as(
     slot = &(*slot)->next;
   }
 
-  sv_export_name_t *node = code_arena_bump(sizeof(sv_export_name_t));
+  sv_export_name_t *node = code_arena_bump(c->js, sizeof(sv_export_name_t));
   if (!node) return;
   node->name = export_name;
   node->len = export_name_len;
@@ -4171,7 +4171,7 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
   ant_value_t saved_thrown_stack = c->js->thrown_stack;
 
   code_arena_mark_t mark = parse_arena_mark();
-  const char *source = pin_source_text(arg->str ? arg->str : "", arg->len);
+  const char *source = pin_source_text(c->js, arg->str ? arg->str : "", arg->len);
   sv_ast_t *program = sv_parse(c->js, source ? source : "", arg->len, c->is_strict);
 
   if (!program) {
@@ -6549,36 +6549,36 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
     emit_op(&comp, OP_RETURN_UNDEF);
   }
 
-  sv_func_t *fn = code_arena_bump(sizeof(sv_func_t));
+  sv_func_t *fn = code_arena_bump(comp.js, sizeof(sv_func_t));
   memset(fn, 0, sizeof(sv_func_t));
-  fn->debug = code_arena_bump(sizeof(sv_func_debug_t));
+  fn->debug = code_arena_bump(comp.js, sizeof(sv_func_debug_t));
   memset(fn->debug, 0, sizeof(sv_func_debug_t));
   sv_func_init_code_and_map_templates(&comp, fn);
   sv_func_init_obj_sites(&comp, fn);
 
   if (comp.const_count > 0) {
-    fn->constants = code_arena_bump((size_t)comp.const_count * sizeof(ant_value_t));
+    fn->constants = code_arena_bump(comp.js, (size_t)comp.const_count * sizeof(ant_value_t));
     memcpy(fn->constants, comp.constants, (size_t)comp.const_count * sizeof(ant_value_t));
     fn->const_count = comp.const_count;
-    build_gc_const_tables(fn);
+    build_gc_const_tables(comp.js, fn);
   }
   if (comp.atom_count > 0) {
-    fn->atoms = code_arena_bump((size_t)comp.atom_count * sizeof(sv_atom_t));
+    fn->atoms = code_arena_bump(comp.js, (size_t)comp.atom_count * sizeof(sv_atom_t));
     memcpy(fn->atoms, comp.atoms, (size_t)comp.atom_count * sizeof(sv_atom_t));
     fn->atom_count = comp.atom_count;
   }
   fn->ic_count = (uint16_t)comp.ic_count;
   if (fn->ic_count > 0) {
-    fn->ic_slots = code_arena_bump((size_t)fn->ic_count * sizeof(sv_ic_entry_t));
+    fn->ic_slots = code_arena_bump(comp.js, (size_t)fn->ic_count * sizeof(sv_ic_entry_t));
     memset(fn->ic_slots, 0, (size_t)fn->ic_count * sizeof(sv_ic_entry_t));
   }
   if (comp.upvalue_count > 0) {
-    fn->upval_descs = code_arena_bump((size_t)comp.upvalue_count * sizeof(sv_upval_desc_t));
+    fn->upval_descs = code_arena_bump(comp.js, (size_t)comp.upvalue_count * sizeof(sv_upval_desc_t));
     memcpy(fn->upval_descs, comp.upval_descs, (size_t)comp.upvalue_count * sizeof(sv_upval_desc_t));
     fn->upvalue_count = comp.upvalue_count;
   }
   if (comp.srcpos_count > 0) {
-    fn->debug->srcpos = code_arena_bump((size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
+    fn->debug->srcpos = code_arena_bump(comp.js, (size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
     memcpy(fn->debug->srcpos, comp.srcpos, (size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
     fn->debug->srcpos_count = comp.srcpos_count;
   }
@@ -6780,31 +6780,31 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     emit_field_inits(&comp, c, field_inits, field_count);
     emit_op(&comp, OP_RETURN_UNDEF);
 
-    sv_func_t *fn = code_arena_bump(sizeof(sv_func_t));
+    sv_func_t *fn = code_arena_bump(comp.js, sizeof(sv_func_t));
     memset(fn, 0, sizeof(sv_func_t));
-  fn->debug = code_arena_bump(sizeof(sv_func_debug_t));
+  fn->debug = code_arena_bump(comp.js, sizeof(sv_func_debug_t));
   memset(fn->debug, 0, sizeof(sv_func_debug_t));
     fn->is_derived_ctor = node->left != NULL;
     sv_func_init_code_and_map_templates(&comp, fn);
     sv_func_init_obj_sites(&comp, fn);
     if (comp.const_count > 0) {
-      fn->constants = code_arena_bump((size_t)comp.const_count * sizeof(ant_value_t));
+      fn->constants = code_arena_bump(comp.js, (size_t)comp.const_count * sizeof(ant_value_t));
       memcpy(fn->constants, comp.constants, (size_t)comp.const_count * sizeof(ant_value_t));
       fn->const_count = comp.const_count;
-      build_gc_const_tables(fn);
+      build_gc_const_tables(comp.js, fn);
     }
     if (comp.atom_count > 0) {
-      fn->atoms = code_arena_bump((size_t)comp.atom_count * sizeof(sv_atom_t));
+      fn->atoms = code_arena_bump(comp.js, (size_t)comp.atom_count * sizeof(sv_atom_t));
       memcpy(fn->atoms, comp.atoms, (size_t)comp.atom_count * sizeof(sv_atom_t));
       fn->atom_count = comp.atom_count;
     }
     fn->ic_count = (uint16_t)comp.ic_count;
     if (fn->ic_count > 0) {
-      fn->ic_slots = code_arena_bump((size_t)fn->ic_count * sizeof(sv_ic_entry_t));
+      fn->ic_slots = code_arena_bump(comp.js, (size_t)fn->ic_count * sizeof(sv_ic_entry_t));
       memset(fn->ic_slots, 0, (size_t)fn->ic_count * sizeof(sv_ic_entry_t));
     }
     if (comp.upvalue_count > 0) {
-      fn->upval_descs = code_arena_bump(
+      fn->upval_descs = code_arena_bump(comp.js,
         (size_t)comp.upvalue_count * sizeof(sv_upval_desc_t));
       memcpy(fn->upval_descs, comp.upval_descs,
              (size_t)comp.upvalue_count * sizeof(sv_upval_desc_t));
@@ -6821,7 +6821,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     fn->debug->source_line = (int)node->line;
     
     if (node->str && node->len > 0) {
-      char *name = code_arena_bump(node->len + 1);
+      char *name = code_arena_bump(comp.js, node->len + 1);
       memcpy(name, node->str, node->len);
       name[node->len] = '\0';
       fn->debug->name = name;
@@ -7437,34 +7437,34 @@ sv_func_t *compile_function_body(
   emit_op(&comp, OP_RETURN_UNDEF);
 
   int max_locals = comp.max_local_count - comp.param_locals;
-  sv_func_t *func = code_arena_bump(sizeof(sv_func_t));
+  sv_func_t *func = code_arena_bump(comp.js, sizeof(sv_func_t));
   memset(func, 0, sizeof(sv_func_t));
-  func->debug = code_arena_bump(sizeof(sv_func_debug_t));
+  func->debug = code_arena_bump(comp.js, sizeof(sv_func_debug_t));
   memset(func->debug, 0, sizeof(sv_func_debug_t));
 
   sv_func_init_code_and_map_templates(&comp, func);
   sv_func_init_obj_sites(&comp, func);
 
   if (comp.const_count > 0) {
-    func->constants = code_arena_bump((size_t)comp.const_count * sizeof(ant_value_t));
+    func->constants = code_arena_bump(comp.js, (size_t)comp.const_count * sizeof(ant_value_t));
     memcpy(func->constants, comp.constants, (size_t)comp.const_count * sizeof(ant_value_t));
     func->const_count = comp.const_count;
-    build_gc_const_tables(func);
+    build_gc_const_tables(comp.js, func);
   }
 
   if (comp.atom_count > 0) {
-    func->atoms = code_arena_bump((size_t)comp.atom_count * sizeof(sv_atom_t));
+    func->atoms = code_arena_bump(comp.js, (size_t)comp.atom_count * sizeof(sv_atom_t));
     memcpy(func->atoms, comp.atoms, (size_t)comp.atom_count * sizeof(sv_atom_t));
     func->atom_count = comp.atom_count;
   }
   func->ic_count = (uint16_t)comp.ic_count;
   if (func->ic_count > 0) {
-    func->ic_slots = code_arena_bump((size_t)func->ic_count * sizeof(sv_ic_entry_t));
+    func->ic_slots = code_arena_bump(comp.js, (size_t)func->ic_count * sizeof(sv_ic_entry_t));
     memset(func->ic_slots, 0, (size_t)func->ic_count * sizeof(sv_ic_entry_t));
   }
 
   if (comp.upvalue_count > 0) {
-    func->upval_descs = code_arena_bump(
+    func->upval_descs = code_arena_bump(comp.js,
       (size_t)comp.upvalue_count * sizeof(sv_upval_desc_t));
     memcpy(func->upval_descs, comp.upval_descs,
       (size_t)comp.upvalue_count * sizeof(sv_upval_desc_t));
@@ -7472,7 +7472,7 @@ sv_func_t *compile_function_body(
   }
 
   if (comp.srcpos_count > 0) {
-    func->debug->srcpos = code_arena_bump((size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
+    func->debug->srcpos = code_arena_bump(comp.js, (size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
     memcpy(func->debug->srcpos, comp.srcpos, (size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
     func->debug->srcpos_count = comp.srcpos_count;
   }
@@ -7505,12 +7505,12 @@ sv_func_t *compile_function_body(
   func->debug->source_line = (int)node->line;
   
   if (node->str && node->len > 0) {
-    char *name = code_arena_bump(node->len + 1);
+    char *name = code_arena_bump(comp.js, node->len + 1);
     memcpy(name, node->str, node->len);
     name[node->len] = '\0';
     func->debug->name = name;
   } else if (enclosing->inferred_name && enclosing->inferred_name_len > 0) {
-    char *name = code_arena_bump(enclosing->inferred_name_len + 1);
+    char *name = code_arena_bump(comp.js, enclosing->inferred_name_len + 1);
     memcpy(name, enclosing->inferred_name, enclosing->inferred_name_len);
     name[enclosing->inferred_name_len] = '\0';
     func->debug->name = name;
@@ -7927,7 +7927,7 @@ sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, cons
   sv_compiler_t root;
   sv_compile_ctx_init_root(
     &root, js, js->filename,
-    pin_source_text(source, source_len),
+    pin_source_text(js, source, source_len),
     source_len, mode,
     (program->flags & FN_PARSE_STRICT) != 0,  NULL
   );
@@ -7991,7 +7991,7 @@ sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool i
   sv_compiler_t root;
   sv_compile_ctx_init_root(
     &root, js, js->filename,
-    pin_source_text(wrapped, (ant_offset_t)wrapped_len),
+    pin_source_text(js, wrapped, (ant_offset_t)wrapped_len),
     (ant_offset_t)wrapped_len, SV_COMPILE_SCRIPT,
     (program->flags & FN_PARSE_STRICT) != 0, NULL
   );
@@ -8092,7 +8092,7 @@ sv_func_t *sv_compile_function_with_params(
   
   sv_compile_ctx_init_root(
     &root, js, js->filename,
-    pin_source_text(body, (ant_offset_t)body_len),
+    pin_source_text(js, body, (ant_offset_t)body_len),
     (ant_offset_t)body_len, SV_COMPILE_SCRIPT,
     (program->flags & FN_PARSE_STRICT) != 0, NULL
   );

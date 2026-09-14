@@ -359,6 +359,24 @@ array_dense_length_test = executable(
 )
 test('array-dense-length', array_dense_length_test)
 
+isolate_code_arena_test = executable(
+  'test-isolate-code-arena',
+  files('tests/test_isolate_code_arena.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('isolate-code-arena', isolate_code_arena_test)
+
+isolate_timers_test = executable(
+  'test-isolate-timers',
+  files('tests/test_isolate_timers.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('isolate-timers', isolate_timers_test)
+
 if host_machine.system() != 'windows'
   ascii_scan_test = executable(
     'test-string-ascii-scan',

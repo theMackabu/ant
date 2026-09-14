@@ -2,7 +2,6 @@
 #include "gc/roots.h"
 #include "reactor.h"
 #include "readline.h"
-#include "isolate.h"
 
 #include "modules/fs.h"
 #include "modules/timer.h"
@@ -13,9 +12,9 @@
 
 static inline work_flags_t get_pending_work(ant_t *js) {
   work_flags_t flags = 0;
-  if (has_pending_microtasks())         flags |= WORK_MICROTASKS;
-  if (has_pending_timers())             flags |= WORK_TIMERS;
-  if (has_pending_immediates())         flags |= WORK_IMMEDIATES;
+  if (has_pending_microtasks(js))       flags |= WORK_MICROTASKS;
+  if (has_pending_timers(js))           flags |= WORK_TIMERS;
+  if (has_pending_immediates(js))       flags |= WORK_IMMEDIATES;
   if (has_pending_fetches())            flags |= WORK_FETCHES;
   if (has_pending_fs_ops())             flags |= WORK_FS_OPS;
   if (has_pending_child_processes())    flags |= WORK_CHILD_PROCS;
