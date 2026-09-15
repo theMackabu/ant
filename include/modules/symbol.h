@@ -7,6 +7,9 @@
 void init_symbol_module(ant_t *js);
 void js_define_species_getter(ant_t *js, ant_value_t ctor);
 
+bool js_is_symbol_description_getter(ant_value_t getter);
+ant_value_t js_symbol_description_value(ant_t *js, ant_value_t symbol);
+
 #define ITER_STATE_PACK(kind, n)  ((uint32_t)(kind) << 28 | ((uint32_t)(n) & 0x0FFFFFFFU))
 #define ITER_STATE_KIND(v)        ((uint32_t)(v) >> 28)
 #define ITER_STATE_INDEX(v)       ((uint32_t)(v) & 0x0FFFFFFFU)

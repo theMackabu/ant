@@ -169,6 +169,8 @@ typedef enum: uint8_t {
   SV_GF_IC_MISSING,
   SV_GF_IC_PRIMITIVE_DATA,
   SV_GF_IC_PRIMITIVE_MISSING,
+  SV_GF_IC_SYMBOL_DESCRIPTION,
+  SV_GF_IC_PRIMITIVE_SYMBOL_DESCRIPTION,
 } sv_get_field_ic_kind_t;
 
 typedef struct {

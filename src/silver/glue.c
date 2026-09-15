@@ -1039,11 +1039,10 @@ static inline void jit_set_error_site_from_func(ant_t *js, sv_func_t *func, int3
   js_set_error_site_from_bc(js, func, (int)bc_off, func->debug->filename);
 }
 
-ant_value_t jit_helper_get_field(
-  sv_vm_t *vm, ant_t *js, ant_value_t obj,
+static __attribute__((noinline)) ant_value_t jit_get_field_fallback(
+  ant_t *js, ant_value_t obj,
   const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
 ) {
-  (void)vm;
   uint8_t *ip = NULL;
   if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
   sv_atom_t atom = { .str = str, .len = len };
@@ -1053,11 +1052,28 @@ ant_value_t jit_helper_get_field(
   return out;
 }
 
-ant_value_t jit_helper_get_field_inline(
-  sv_vm_t *vm, ant_t *js, ant_value_t obj,
+ant_value_t jit_helper_get_field(
+  ant_t *js, ant_value_t obj,
   const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
 ) {
-  (void)vm;
+  if (func && bc_off >= 0 && bc_off < func->code_len) {
+  sv_ic_entry_t *ic = sv_ic_slot_for_ip(func, func->code + bc_off);
+  if (
+    ic && (ic->get_kind == SV_GF_IC_SYMBOL_DESCRIPTION || 
+    ic->get_kind == SV_GF_IC_PRIMITIVE_SYMBOL_DESCRIPTION)
+  ) {
+    sv_atom_t atom = { .str = str, .len = len };
+    ant_value_t out;
+    if (sv_try_symbol_description_ic(js, obj, &atom, ic, &out)) return out;
+  }}
+  
+  return jit_get_field_fallback(js, obj, str, len, func, bc_off);
+}
+
+ant_value_t jit_helper_get_field_inline(
+  ant_t *js, ant_value_t obj,
+  const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
+) {
   uint8_t *ip = NULL;
   
   if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
@@ -1393,21 +1409,41 @@ void jit_helper_shape_transition(ant_object_t *obj, ant_shape_t *to_shape) {
 
 ant_value_t jit_helper_get_elem(
   sv_vm_t *vm, ant_t *js, ant_value_t obj,
-  ant_value_t key, sv_func_t *func, int32_t bc_off
+  ant_value_t key, sv_func_t *func, int32_t bc_off, sv_ic_entry_t *ic
 ) {
+  if (
+    ic && vtype(key) == kTypeString &&
+    (vtype(obj) == kTypeSymbol || vtype(obj) == kTypeObject)
+  ) {
+    ant_offset_t length;
+    const char *text = (const char *)(uintptr_t)vstr(js, key, &length);
+    
+    if (length == 11 && memcmp(text, "description", 11) == 0) {
+      sv_atom_t atom = { .str = NULL, .len = 11 };
+      ant_value_t result;
+      if (ic->get_kind == SV_GF_IC_MISSING && vtype(obj) == kTypeObject &&
+        sv_ic_try_get_hit(ic, obj, js_obj_ptr(obj), &atom, &result)) return result;
+      if (sv_try_symbol_description_ic(js, obj, &atom, ic, &result)) return result;
+      atom.str = intern_string("description", 11);
+      if (atom.str && sv_try_prop_get_ic_no_effect(js, obj, &atom, ic, &result)) return result;
+    }
+  }
+  
   uint8_t ot = vtype(obj);
   if (ot == kTypeNull || ot == kTypeUndefined) {
     jit_set_error_site_from_func(js, func, bc_off);
     return sv_mk_nullish_read_error_by_key(js, obj, key);
   }
+  
   if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
     double d = tod(key);
     if (d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d)
       return js_arr_get(js, obj, (uint32_t)d);
   }
+  
   ant_value_t str_elem = js_mkundef();
-  if (sv_try_string_index_get(js, obj, key, &str_elem))
-    return str_elem;
+  if (sv_try_string_index_get(js, obj, key, &str_elem)) return str_elem;
+  
   return sv_getprop_by_key(js, obj, key);
 }
 

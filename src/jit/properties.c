@@ -746,6 +746,8 @@ bool mir_emit_get_field_ic_fastpath(
   if (is_length_key(atom->str, atom->len)) return false;
 
   sv_ic_entry_t *ic = &func->ic_slots[ic_idx];
+  if (ic->get_kind == SV_GF_IC_SYMBOL_DESCRIPTION ||
+      ic->get_kind == SV_GF_IC_PRIMITIVE_SYMBOL_DESCRIPTION) return false;
   if (!sv_gf_ic_active(ic->cached_aux) && func->code_len > 1024) return false;
   if (sv_gf_ic_active(ic->cached_aux) && ic->get_kind == SV_GF_IC_OWN && ic->cached_shape) {
     MIR_label_t miss = MIR_new_label(ctx);

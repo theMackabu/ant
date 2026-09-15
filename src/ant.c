@@ -3812,6 +3812,12 @@ static ant_value_t call_proto_accessor(
   if (!has_accessor || (vtype(accessor) != kTypeFunction && vtype(accessor) != kTypeBuiltin))
     return js_mkundef();
   
+  if (!is_setter && js_is_symbol_description_getter(accessor)) {
+    ant_value_t symbol = prim;
+    if (is_object_type(symbol)) symbol = js_get_slot(symbol, SLOT_PRIMITIVE);
+    if (vtype(symbol) == kTypeSymbol) return js_symbol_description_value(js, symbol);
+  }
+
   js_error_site_t saved_errsite = js->errsite;
   ant_value_t result = sv_vm_call(js->vm, js, accessor, prim, arg, arg_count, NULL, js_mkundef());
   
@@ -4245,6 +4251,7 @@ enum {
   SYM_FLAG_GLOBAL     = 1u,
   SYM_FLAG_WELL_KNOWN = 2u,
   SYM_FLAG_HAS_DESC   = 4u,
+  SYM_FLAG_DESC_ASCII = 8u,
 };
 
 typedef struct sym_registry_entry {
@@ -4268,6 +4275,9 @@ ant_value_t js_mksym(ant_t *js, const char *desc) {
   sym_ptr->gc_epoch = 0;
   sym_ptr->key = NULL;
   sym_ptr->flags = has_desc ? SYM_FLAG_HAS_DESC : 0;
+
+  if (has_desc && str_detect_ascii_bytes(desc, desc_len) == STR_ASCII_YES)
+    sym_ptr->flags |= SYM_FLAG_DESC_ASCII;
   sym_ptr->desc_len = (uint32_t)desc_len;
   
   if (has_desc) {
@@ -4304,6 +4314,17 @@ const inline char *js_sym_desc(ant_value_t sym) {
   ant_symbol_heap_t *ptr = sym_ptr(sym);
   if (!ptr || !(ptr->flags & SYM_FLAG_HAS_DESC)) return NULL;
   return ptr->desc;
+}
+
+ant_value_t js_symbol_description_value(ant_t *js, ant_value_t symbol) {
+  ant_symbol_heap_t *ptr = sym_ptr(symbol);
+  if (!ptr || !(ptr->flags & SYM_FLAG_HAS_DESC)) return js_mkundef();
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, symbol);
+  ant_value_t result = mkstr_with_ascii(
+    js, ptr->desc, ptr->desc_len, (ptr->flags & SYM_FLAG_DESC_ASCII) != 0);
+  GC_ROOT_RESTORE(js, mark);
+  return result;
 }
 
 ant_value_t js_mksym_for(ant_t *js, const char *key) {

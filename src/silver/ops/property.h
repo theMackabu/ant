@@ -6,6 +6,7 @@
 #include "utf8.h"
 
 #include "modules/regex.h"
+#include "modules/symbol.h"
 #include "silver/engine.h"
 
 #include <math.h>
@@ -707,7 +708,7 @@ static inline bool sv_prim_ic_lookup(
 ) {
   uint8_t pt = vtype(obj);
   
-  if (pt != kTypeString && pt != kTypeNumber && pt != kTypeBool) return false;
+  if (pt != kTypeString && pt != kTypeNumber && pt != kTypeBool && pt != kTypeSymbol) return false;
   if (pt == kTypeString && a->len > 0 && a->str[0] >= '0' && a->str[0] <= '9') return false;
 
   if (sv_ic_try_get_hit_prim(ic, pt, a, out)) {
@@ -756,16 +757,10 @@ static inline bool sv_prim_ic_lookup(
   return false;
 }
 
-static inline __attribute__((always_inline)) bool sv_try_prop_get_field_ic_no_effect(
-  ant_t *js,
-  ant_value_t obj,
-  sv_atom_t *a,
-  sv_func_t *func,
-  uint8_t *ip,
-  ant_value_t *out
+static inline __attribute__((always_inline)) bool sv_try_prop_get_ic_no_effect(
+  ant_t *js, ant_value_t obj, sv_atom_t *a, sv_ic_entry_t *ic, ant_value_t *out
 ) {
   ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
-  sv_ic_entry_t *ic = sv_ic_slot_for_ip(func, ip);
 
   bool track_ic = ic && !is_length_key(a->str, a->len);
   bool track_obj = track_ic && ptr && !ptr->flags.is_exotic;
@@ -821,6 +816,74 @@ static inline __attribute__((always_inline)) bool sv_try_prop_get_field_ic_no_ef
   return false;
 }
 
+static inline bool sv_try_prop_get_field_ic_no_effect(
+  ant_t *js, ant_value_t obj, sv_atom_t *a, sv_func_t *func, uint8_t *ip, ant_value_t *out
+) {
+  return sv_try_prop_get_ic_no_effect(js, obj, a, sv_ic_slot_for_ip(func, ip), out);
+}
+
+static inline bool sv_try_symbol_description_ic(
+  ant_t *js, ant_value_t obj, sv_atom_t *a, sv_ic_entry_t *ic, ant_value_t *out
+) {
+  if (!ic) return false;
+  ant_value_t symbol = obj;
+  ant_object_t *receiver = NULL;
+  
+  if (vtype(obj) == kTypeObject) {
+    receiver = js_obj_ptr(obj);
+    if (!receiver || receiver->flags.is_exotic || !receiver->shape) return false;
+    symbol = js_get_slot(obj, SLOT_PRIMITIVE);
+  }
+  
+  if (vtype(symbol) != kTypeSymbol) return false;
+  ant_value_t proto_value = js->sym.symbol_proto;
+  
+  if (!is_object_type(proto_value)) return false;
+  ant_object_t *proto = js_obj_ptr(js_as_obj(proto_value));
+  
+  if (!proto || proto->flags.is_exotic || !proto->shape) return false;
+  if (receiver && receiver->proto != proto_value) return false;
+
+  sv_get_field_ic_kind_t kind = receiver
+    ? SV_GF_IC_SYMBOL_DESCRIPTION 
+    : SV_GF_IC_PRIMITIVE_SYMBOL_DESCRIPTION;
+    
+  ant_shape_t *shape = receiver ? receiver->shape : proto->shape;
+  ant_value_t guard = receiver ? proto_value : mkval(kTypeSymbol, 0);
+  
+  if (
+    ic->get_kind == kind && ic->epoch == ant_ic_epoch_counter &&
+    ic->cached_holder == proto && ic->cached_shape == shape &&
+    ic->guard.receiver_proto == guard
+  ) {
+    *out = js_symbol_description_value(js, symbol);
+    return true;
+  }
+
+  const char *interned = a->str ? a->str : intern_string("description", 11);
+  if (!interned) return false;
+  
+  if (receiver && ant_shape_lookup_interned(receiver->shape, interned) >= 0) return false;
+  int32_t index = ant_shape_lookup_interned(proto->shape, interned);
+  
+  if (index < 0) return false;
+  const ant_shape_prop_t *prop = ant_shape_prop_at(proto->shape, (uint32_t)index);
+  if (!prop || !prop->has_getter || !js_is_symbol_description_getter(prop->getter)) return false;
+
+  sv_ic_set_cached_shape(js, ic, shape);
+  if (ic->cached_shape == shape) {
+    if (receiver) ant_object_guard_absence(receiver);
+    ic->cached_holder = proto;
+    ic->cached_index = (uint32_t)index;
+    ic->guard.receiver_proto = guard;
+    ic->get_kind = kind;
+    ic->epoch = ant_ic_epoch_counter;
+  }
+  
+  *out = js_symbol_description_value(js, symbol);
+  return true;
+}
+
 static inline ant_value_t sv_prop_get_field_ic(
   ant_t *js,
   ant_value_t obj,
@@ -829,8 +892,15 @@ static inline ant_value_t sv_prop_get_field_ic(
   uint8_t *ip
 ) {
   ant_value_t out = js_mkundef();
-  if (sv_try_prop_get_field_ic_no_effect(js, obj, a, func, ip, &out))
-    return out;
+  sv_ic_entry_t *ic = sv_ic_slot_for_ip(func, ip);
+  if (ic && (
+    ic->get_kind == SV_GF_IC_SYMBOL_DESCRIPTION ||
+    ic->get_kind == SV_GF_IC_PRIMITIVE_SYMBOL_DESCRIPTION) &&
+    sv_try_symbol_description_ic(js, obj, a, ic, &out)) return out;
+  
+  if (sv_try_prop_get_field_ic_no_effect(js, obj, a, func, ip, &out)) return out;
+  if (sv_try_symbol_description_ic(js, obj, a, ic, &out)) return out;
+  
   return sv_prop_get_at(js, obj, a->str, a->len, func, ip);
 }
 

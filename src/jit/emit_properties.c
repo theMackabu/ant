@@ -90,11 +90,10 @@ void jit_emit_properties(jit_compile_t *c) {
         MIR_append_insn(c->ctx, c->jit_func, slow);
       }
       MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_call_insn(c->ctx, 10,
+                      MIR_new_call_insn(c->ctx, 9,
                                         MIR_new_ref_op(c->ctx, c->gf_proto),
                                         MIR_new_ref_op(c->ctx, c->imp_get_field),
                                         MIR_new_reg_op(c->ctx, dst),
-                                        MIR_new_reg_op(c->ctx, c->r_vm),
                                         MIR_new_reg_op(c->ctx, c->r_js),
                                         MIR_new_reg_op(c->ctx, obj),
                                         MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)atom->str),
@@ -150,11 +149,10 @@ void jit_emit_properties(jit_compile_t *c) {
         MIR_append_insn(c->ctx, c->jit_func, slow);
       }
       MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_call_insn(c->ctx, 10,
+                      MIR_new_call_insn(c->ctx, 9,
                                         MIR_new_ref_op(c->ctx, c->gf_proto),
                                         MIR_new_ref_op(c->ctx, c->imp_get_field),
                                         MIR_new_reg_op(c->ctx, dst),
-                                        MIR_new_reg_op(c->ctx, c->r_vm),
                                         MIR_new_reg_op(c->ctx, c->r_js),
                                         MIR_new_reg_op(c->ctx, obj),
                                         MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)atom->str),
@@ -221,11 +219,10 @@ void jit_emit_properties(jit_compile_t *c) {
         MIR_append_insn(c->ctx, c->jit_func, slow);
       }
       MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_call_insn(c->ctx, 10,
+                      MIR_new_call_insn(c->ctx, 9,
                                         MIR_new_ref_op(c->ctx, c->gf_proto),
                                         MIR_new_ref_op(c->ctx, c->imp_get_field),
                                         MIR_new_reg_op(c->ctx, dst),
-                                        MIR_new_reg_op(c->ctx, c->r_vm),
                                         MIR_new_reg_op(c->ctx, c->r_js),
                                         MIR_new_reg_op(c->ctx, obj),
                                         MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)atom->str),
@@ -535,8 +532,10 @@ void jit_emit_properties(jit_compile_t *c) {
         mir_load_imm(c->ctx, c->jit_func, c->cached_element_valid, 0);
       }
       c->element_available = !obj_is_num;
+      sv_ic_entry_t *element_ic = code_arena_bump(sizeof(*element_ic));
+      if (element_ic) memset(element_ic, 0, sizeof(*element_ic));
       MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_call_insn(c->ctx, 9,
+                      MIR_new_call_insn(c->ctx, 10,
                                         MIR_new_ref_op(c->ctx, c->ge_proto),
                                         MIR_new_ref_op(c->ctx, c->imp_get_elem),
                                         MIR_new_reg_op(c->ctx, dst),
@@ -545,7 +544,8 @@ void jit_emit_properties(jit_compile_t *c) {
                                         MIR_new_reg_op(c->ctx, obj),
                                         MIR_new_reg_op(c->ctx, key),
                                         MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->func),
-                                        MIR_new_int_op(c->ctx, (int64_t)c->bc_off)));
+                                        MIR_new_int_op(c->ctx, (int64_t)c->bc_off),
+                                        MIR_new_uint_op(c->ctx, (uintptr_t)element_ic)));
       jit_emit_throw_if_error(c, dst);
       if (element_done) MIR_append_insn(c->ctx, c->jit_func, element_done);
       break;
@@ -569,8 +569,10 @@ void jit_emit_properties(jit_compile_t *c) {
                                    MIR_new_label_op(c->ctx, nullish),
                                    MIR_new_reg_op(c->ctx, obj),
                                    MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0))));
+      sv_ic_entry_t *element_ic = code_arena_bump(sizeof(*element_ic));
+      if (element_ic) memset(element_ic, 0, sizeof(*element_ic));
       MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_call_insn(c->ctx, 9,
+                      MIR_new_call_insn(c->ctx, 10,
                                         MIR_new_ref_op(c->ctx, c->ge_proto),
                                         MIR_new_ref_op(c->ctx, c->imp_get_elem),
                                         MIR_new_reg_op(c->ctx, dst),
@@ -579,7 +581,8 @@ void jit_emit_properties(jit_compile_t *c) {
                                         MIR_new_reg_op(c->ctx, obj),
                                         MIR_new_reg_op(c->ctx, key),
                                         MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->func),
-                                        MIR_new_int_op(c->ctx, (int64_t)c->bc_off)));
+                                        MIR_new_int_op(c->ctx, (int64_t)c->bc_off),
+                                        MIR_new_uint_op(c->ctx, (uintptr_t)element_ic)));
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_URSH,
                                    MIR_new_reg_op(c->ctx, c->r_bool),

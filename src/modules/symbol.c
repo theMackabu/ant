@@ -118,10 +118,13 @@ static ant_value_t builtin_Symbol_description(ant_params_t) {
   if (vtype(sym) != kTypeSymbol)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Symbol.prototype.description requires a symbol");
 
-  const char *desc = js_sym_desc(sym);
-  if (!desc) return js_mkundef();
-  
-  return js_mkstr(js, desc, strlen(desc));
+  return js_symbol_description_value(js, sym);
+}
+
+bool js_is_symbol_description_getter(ant_value_t getter) {
+  return 
+    vtype(getter) == kTypeBuiltin && 
+    js_cfunc_same_entrypoint(getter, builtin_Symbol_description);
 }
 
 static ant_value_t get_iterator_prototype(ant_t *js) {

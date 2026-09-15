@@ -1511,11 +1511,10 @@ void jit_emit_inline_body(
           MIR_append_insn(ctx, jit_func, gf_slowl);
         }
         MIR_append_insn(ctx, jit_func,
-                        MIR_new_call_insn(ctx, 10,
+                        MIR_new_call_insn(ctx, 9,
                                           MIR_new_ref_op(ctx, gf_proto),
                                           MIR_new_ref_op(ctx, seen_effect ? ext->imp_get_field : imp_get_field_inline),
                                           MIR_new_reg_op(ctx, dst),
-                                          MIR_new_reg_op(ctx, r_vm),
                                           MIR_new_reg_op(ctx, r_js),
                                           MIR_new_reg_op(ctx, obj),
                                           MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str),
@@ -1560,11 +1559,10 @@ void jit_emit_inline_body(
           MIR_append_insn(ctx, jit_func, gf_slow);
         }
         MIR_append_insn(ctx, jit_func,
-                        MIR_new_call_insn(ctx, 10,
+                        MIR_new_call_insn(ctx, 9,
                                           MIR_new_ref_op(ctx, gf_proto),
                                           MIR_new_ref_op(ctx, seen_effect ? ext->imp_get_field : imp_get_field_inline),
                                           MIR_new_reg_op(ctx, dst),
-                                          MIR_new_reg_op(ctx, r_vm),
                                           MIR_new_reg_op(ctx, r_js),
                                           MIR_new_reg_op(ctx, obj),
                                           MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str),
@@ -1603,11 +1601,10 @@ void jit_emit_inline_body(
           MIR_append_insn(ctx, jit_func, gf_slow);
         }
         MIR_append_insn(ctx, jit_func,
-                        MIR_new_call_insn(ctx, 10,
+                        MIR_new_call_insn(ctx, 9,
                                           MIR_new_ref_op(ctx, gf_proto),
                                           MIR_new_ref_op(ctx, seen_effect ? ext->imp_get_field : imp_get_field_inline),
                                           MIR_new_reg_op(ctx, dst),
-                                          MIR_new_reg_op(ctx, r_vm),
                                           MIR_new_reg_op(ctx, r_js),
                                           MIR_new_reg_op(ctx, obj),
                                           MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str),
