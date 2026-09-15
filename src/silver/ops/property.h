@@ -14,9 +14,6 @@
 #define SV_PRIM_NEG_ALIGN_BITS 3u
 #define SV_PRIM_NEG_AUX_SHIFT  17u
 
-static constexpr uintptr_t SV_PRIM_IC_HIT_DATA = 0;
-static constexpr uintptr_t SV_PRIM_IC_MISS_DATA = 1;
-
 static_assert(
   (SV_GF_IC_AUX_ALL_MASK >> SV_PRIM_NEG_AUX_SHIFT) == 0,
   "gf aux bits overlap the packed shape; raise SV_PRIM_NEG_AUX_SHIFT"
@@ -158,6 +155,7 @@ static inline void sv_ic_set_shape_ref(
   ant_shape_t *shape
 ) {
   if (!ic || !slot || *slot == shape) return;
+  
   if ((ic->shape_ref_mask & mask) == 0) {
     if (!shape || !sv_ic_shape_ref_register(js, slot)) return;
     ic->shape_ref_mask |= mask;
@@ -166,14 +164,11 @@ static inline void sv_ic_set_shape_ref(
   if (shape) ant_shape_retain(shape);
   if (*slot) ant_shape_release(*slot);
   *slot = shape;
+  
 }
 
-static inline void sv_ic_set_cached_shape(
-  ant_t *js, sv_ic_entry_t *ic, ant_shape_t *shape
-) {
-  sv_ic_set_shape_ref(
-    js, ic, &ic->cached_shape, SV_IC_SHAPE_REF_CACHED, shape
-  );
+static inline void sv_ic_set_cached_shape(ant_t *js, sv_ic_entry_t *ic, ant_shape_t *shape) {
+  sv_ic_set_shape_ref(js, ic, &ic->cached_shape, SV_IC_SHAPE_REF_CACHED, shape);
 }
 
 #ifdef ANT_WASM_EMBED
@@ -218,6 +213,7 @@ static inline uint32_t sv_ic_object_identity(ant_t *js, ant_object_t *obj) {
 
 static inline bool sv_ic_try_get_hit(
   sv_ic_entry_t *ic,
+  ant_value_t obj,
   ant_object_t *receiver,
   sv_atom_t *a,
   ant_value_t *out
@@ -226,26 +222,42 @@ static inline bool sv_ic_try_get_hit(
   if (ic->epoch != ant_ic_epoch_counter) return false;
   if (ic->cached_shape != receiver->shape) return false;
 
+  if (ic->get_kind == SV_GF_IC_MISSING) {
+    if (vtype(obj) != kTypeObject || receiver->type_tag != kTypeObject || receiver->flags.is_exotic ||
+      !receiver->shape || receiver->proto != ic->guard.receiver_proto) return false;
+    
+    if (is_object_type(receiver->proto)) {
+      ant_object_t *proto = js_obj_ptr(js_as_obj(receiver->proto));
+      if (!proto || proto->ic_identity != sv_gf_ic_proto_id(ic)) return false;
+    } else if (vtype(receiver->proto) != kTypeNull) return false;
+    
+    *out = js_mkundef();
+    return true;
+  }
+
   ant_object_t *source;
   ant_shape_t *prop_shape;
   
-  if (ic->cached_is_own) {
+  if (ic->get_kind == SV_GF_IC_OWN) {
     source = receiver;
     prop_shape = receiver->shape;
-  } else {
+  } else if (ic->get_kind == SV_GF_IC_PROTOTYPE) {
     if (receiver->proto != ic->guard.receiver_proto) return false;
     if (!is_object_type(receiver->proto)) return false;
+    
     ant_object_t *proto = js_obj_ptr(js_as_obj(receiver->proto));
-    if (!proto || proto->ic_identity != sv_gf_ic_proto_id(ic))
-      return false;
+    if (!proto || proto->ic_identity != sv_gf_ic_proto_id(ic)) return false;
+    
     ant_object_t *holder = ic->cached_holder;
     if (!holder || holder->flags.is_exotic || !holder->shape) return false;
+    
     source = holder;
     prop_shape = holder->shape;
-  }
+  } else return false;
+  
   if (ic->cached_index >= source->prop_count) return false;
-
   const ant_shape_prop_t *prop = ant_shape_prop_at(prop_shape, ic->cached_index);
+  
   if (!prop) return false;
   if (prop->type != ANT_SHAPE_KEY_STRING || prop->key.interned != a->str) return false;
   if (prop->has_getter || prop->has_setter) return false;
@@ -254,9 +266,15 @@ static inline bool sv_ic_try_get_hit(
   return true;
 }
 
+static inline bool sv_field_can_cache_absence(ant_t *js, const char *interned) {
+  const char c = interned[0];
+  return !(c >= '0' && c <= '9') && interned != js->intern.description;
+}
+
 static inline __attribute__((always_inline)) bool sv_ic_probe_get_chain(
   ant_value_t obj,
   const char *interned,
+  bool cache_miss,
   ant_object_t **out_holder,
   uint32_t *out_index,
   ant_value_t *out_value
@@ -267,9 +285,12 @@ static inline __attribute__((always_inline)) bool sv_ic_probe_get_chain(
   while (is_object_type(cur)) {
     ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
     if (!ptr || ptr->flags.is_exotic) return false;
+    cache_miss = cache_miss && vtype(cur) == kTypeObject && ptr->type_tag == kTypeObject;
+    
     if (!ptr->shape) {
+      if (cur != obj) ant_object_guard_absence(ptr);
       ant_value_t next = ptr->proto;
-      if (!is_object_type(next)) break;
+      if (!is_object_type(next)) { cur = next; break; }
       cur = next;
       if (sv_proto_guard_hit_cycle(&guard, cur)) break;
       continue;
@@ -279,7 +300,7 @@ static inline __attribute__((always_inline)) bool sv_ic_probe_get_chain(
     if (slot < 0) {
       if (cur != obj) ant_object_guard_absence(ptr);
       ant_value_t next = ptr->proto;
-      if (!is_object_type(next)) break;
+      if (!is_object_type(next)) { cur = next; break; }
       cur = next;
       if (sv_proto_guard_hit_cycle(&guard, cur)) break;
       continue;
@@ -292,10 +313,20 @@ static inline __attribute__((always_inline)) bool sv_ic_probe_get_chain(
 
     *out_holder = ptr;
     *out_index = idx;
-    *out_value = (idx < ptr->prop_count) ? ant_object_prop_get_unchecked(ptr, idx) : js_mkundef();
+    
+    *out_value = (idx < ptr->prop_count) 
+      ? ant_object_prop_get_unchecked(ptr, idx) : js_mkundef();
+    
     return true;
   }
 
+  if (cache_miss && vtype(cur) == kTypeNull) {
+    *out_holder = NULL;
+    *out_index = 0;
+    *out_value = js_mkundef();
+    return true;
+  }
+  
   return false;
 }
 
@@ -306,19 +337,28 @@ static inline bool sv_try_get_data_prop_chain_no_effect(
   ant_value_t *out
 ) {
   if (!interned || !out || !is_object_type(obj)) return false;
-
+  bool can_miss = sv_field_can_cache_absence(js, interned);
+  
   ant_value_t cur = obj;
   sv_proto_guard_t guard;
   sv_proto_guard_init(&guard);
+  
   while (is_object_type(cur)) {
     ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
     bool should_fallback = false;
-    if (sv_try_get_shape_data_prop(
-          js, ptr, interned, out, &should_fallback)) return true;
+    
+    if (sv_try_get_shape_data_prop(js, ptr, interned, out, &should_fallback)) return true;
     if (should_fallback) return false;
-
+    
+    can_miss = can_miss && vtype(cur) == kTypeObject && ptr->type_tag == kTypeObject;
     cur = ptr->proto;
-    if (!is_object_type(cur)) return false;
+    
+    if (!is_object_type(cur)) {
+      if (!can_miss || vtype(cur) != kTypeNull) return false;
+      *out = js_mkundef();
+      return true;
+    }
+    
     if (sv_proto_guard_hit_cycle(&guard, cur)) return false;
   }
 
@@ -425,13 +465,9 @@ static inline bool sv_ic_try_get_miss_prim(
   uint8_t prim_type,
   ant_value_t *out
 ) {
+  if (ic->get_kind != SV_GF_IC_PRIMITIVE_MISSING) return false;
   if (ic->epoch != ant_ic_epoch_counter) return false;
-
-  ant_value_t marker = ic->guard.receiver_proto;
-  if (
-    vdata(marker) != SV_PRIM_IC_MISS_DATA ||
-    vtype(marker) != prim_type
-  ) return false;
+  if (vtype(ic->guard.receiver_proto) != prim_type) return false;
 
   ant_object_t *holder1 = ic->cached_holder;
   if (!holder1 || !holder1->shape || holder1->shape != ic->cached_shape) return false;
@@ -485,14 +521,9 @@ static inline bool sv_ic_try_get_hit_prim(
   sv_atom_t *a,
   ant_value_t *out
 ) {
-  if (!ic) return false;
+  if (!ic || ic->get_kind != SV_GF_IC_PRIMITIVE_DATA) return false;
   if (ic->epoch != ant_ic_epoch_counter) return false;
-
-  ant_value_t marker = ic->guard.receiver_proto;
-  if (
-    vdata(marker) != SV_PRIM_IC_HIT_DATA ||
-    vtype(marker) != prim_type
-  ) return false;
+  if (vtype(ic->guard.receiver_proto) != prim_type) return false;
 
   ant_object_t *holder = ic->cached_holder;
   if (!holder || holder->flags.is_exotic || !holder->shape) return false;
@@ -548,11 +579,21 @@ static inline ant_value_t sv_getprop_by_key(ant_t *js, ant_value_t obj, ant_valu
   ant_offset_t koff = vstr(js, key_str, &klen);
 
   const char *kptr = (const char *)(uintptr_t)(koff);
+  // Match named-field reads of Ant's virtual Symbol-wrapper description.
+  // Computed keys are not interned and may contain embedded NUL bytes.
+  if (vtype(obj) == kTypeObject && klen == 11 &&
+      memcmp(kptr, "description", 11) == 0) {
+    ant_value_t primitive = js_get_slot(obj, SLOT_PRIMITIVE);
+    if (vtype(primitive) == kTypeSymbol) {
+      const char *desc = js_sym_desc(primitive);
+      return desc ? js_mkstr(js, desc, strlen(desc)) : js_mkundef();
+    }
+  }
   return js_getprop_fallback_len(js, obj, kptr, (size_t)klen);
 }
 
 static inline ant_value_t sv_prop_get_at(
-  ant_t *js, ant_value_t obj, const char *str, uint32_t len,
+  ant_t *js, ant_value_t obj, const char *interned, uint32_t len,
   sv_func_t *func, uint8_t *ip
 ) {
   uint8_t t = vtype(obj);
@@ -561,7 +602,7 @@ static inline ant_value_t sv_prop_get_at(
     if (func && ip) js_set_error_site_from_bc(js, func, (int)(ip - func->code), func->debug->filename);
     return js_mkerr_typed(js, JS_ERR_TYPE,
       "Cannot read properties of %s (reading '%.*s')",
-      t == kTypeNull ? "null" : "undefined", (int)len, str);
+      t == kTypeNull ? "null" : "undefined", (int)len, interned);
   }
 
   ant_value_t str_prim = js_mkundef();
@@ -575,17 +616,16 @@ static inline ant_value_t sv_prop_get_at(
     else if (vtype(prim) == kTypeSymbol) sym_prim = prim;
   }
 
-  if (vtype(str_prim) == kTypeString && is_length_key(str, len)) {
+  if (vtype(str_prim) == kTypeString && is_length_key(interned, len)) {
     return tov((double)str_utf16_len(js, str_prim));
   }
 
-  if (is_length_key(str, len)) {
+  if (is_length_key(interned, len)) {
     ant_object_t *arr_ptr = sv_array_obj_ptr(obj);
     if (arr_ptr) return tov((double)js_arr_len(js, js_as_obj(obj)));
   }
 
-  if (vtype(sym_prim) == kTypeSymbol && len == 11 &&
-      memcmp(str, "description", 11) == 0) {
+  if (vtype(sym_prim) == kTypeSymbol && interned == js->intern.description) {
     const char *desc = js_sym_desc(sym_prim);
     if (desc) return js_mkstr(js, desc, strlen(desc));
     return js_mkundef();
@@ -599,7 +639,7 @@ static inline ant_value_t sv_prop_get_at(
       ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
       bool should_fallback = false;
       ant_value_t fast_out = js_mkundef();
-      if (sv_try_get_shape_data_prop(js, ptr, str, &fast_out, &should_fallback))
+      if (sv_try_get_shape_data_prop(js, ptr, interned, &fast_out, &should_fallback))
         return fast_out;
       if (should_fallback) break;
       cur = ptr->proto;
@@ -607,11 +647,11 @@ static inline ant_value_t sv_prop_get_at(
     }
   }
 
-  return js_getprop_fallback_len(js, obj, str, len);
+  return js_getprop_fallback_len(js, obj, interned, len);
 }
 
-static inline ant_value_t sv_prop_get(ant_t *js, ant_value_t obj, const char *str, uint32_t len) {
-  return sv_prop_get_at(js, obj, str, len, NULL, NULL);
+static inline ant_value_t sv_prop_get(ant_t *js, ant_value_t obj, const char *interned, uint32_t len) {
+  return sv_prop_get_at(js, obj, interned, len, NULL, NULL);
 }
 
 static inline bool sv_parse_string_index_key(ant_t *js, ant_value_t key, size_t *out_idx) {
@@ -702,16 +742,17 @@ static inline bool sv_prim_ic_lookup(
   ant_object_t *holder = NULL;
   uint32_t prop_idx = 0;
   
-  if (sv_ic_probe_get_chain(proto, a->str, &holder, &prop_idx, out)) {
+  if (sv_ic_probe_get_chain(proto, a->str, false, &holder, &prop_idx, out)) {
     sv_ic_guard_absent_prefix(proto, holder);
     ic->cached_holder = holder;
     sv_ic_set_cached_shape(js, ic, holder->shape);
     ic->cached_index = prop_idx;
-    ic->cached_is_own = false;
-    ic->guard.receiver_proto = mkval(pt, SV_PRIM_IC_HIT_DATA);
+    ic->get_kind = SV_GF_IC_PRIMITIVE_DATA;
+    ic->guard.receiver_proto = mkval(pt, 0);
     ic->epoch = ant_ic_epoch_counter;
     sv_gf_ic_set_proto_id(ic, 0);
     sv_gf_ic_note_success(ic);
+    
     return true;
   }
 
@@ -723,11 +764,12 @@ static inline bool sv_prim_ic_lookup(
     ic->cached_holder = holder1;
     sv_ic_set_cached_shape(js, ic, holder1->shape);
     ic->cached_index = 0;
-    ic->cached_is_own = false;
-    ic->guard.receiver_proto = mkval(pt, SV_PRIM_IC_MISS_DATA);
+    ic->get_kind = SV_GF_IC_PRIMITIVE_MISSING;
+    ic->guard.receiver_proto = mkval(pt, 0);
     ic->cached_aux = sv_prim_neg_pack_shape(ic->cached_aux, shape2);
     ic->epoch = ant_ic_epoch_counter;
     *out = js_mkundef();
+    
     return true;
   }
 
@@ -749,7 +791,7 @@ static inline __attribute__((always_inline)) bool sv_try_prop_get_field_ic_no_ef
   bool track_obj = track_ic && ptr && !ptr->flags.is_exotic;
 
   ant_value_t hit = js_mkundef();
-  if (track_obj && sv_ic_try_get_hit(ic, ptr, a, &hit)) {
+  if (track_obj && sv_ic_try_get_hit(ic, obj, ptr, a, &hit)) {
     sv_gf_ic_note_success(ic);
     *out = hit;
     return true;
@@ -759,19 +801,32 @@ static inline __attribute__((always_inline)) bool sv_try_prop_get_field_ic_no_ef
     ant_object_t *holder = NULL;
     uint32_t prop_idx = 0;
     ant_value_t found = js_mkundef();
-    if (sv_ic_probe_get_chain(obj, a->str, &holder, &prop_idx, &found)) {
+    
+    bool cache_miss = 
+      ptr->shape && vtype(obj) == kTypeObject && 
+      ptr->type_tag == kTypeObject && sv_field_can_cache_absence(js, a->str);
+    
+    if (sv_ic_probe_get_chain(obj, a->str, cache_miss, &holder, &prop_idx, &found)) {
       sv_ic_set_cached_shape(js, ic, ptr->shape);
+      
       ic->cached_holder = holder;
       ic->guard.receiver_proto = ptr->proto;
       ic->cached_index = prop_idx;
-      ic->cached_is_own = (holder == ptr);
+      
+      ic->get_kind = !holder
+        ? SV_GF_IC_MISSING : holder == ptr 
+        ? SV_GF_IC_OWN : SV_GF_IC_PROTOTYPE;
+      
       ic->epoch = ant_ic_epoch_counter;
+      
       sv_gf_ic_set_proto_id(
-        ic, ic->cached_is_own || !is_object_type(ptr->proto)
-          ? 0 : sv_ic_object_identity(js, js_obj_ptr(js_as_obj(ptr->proto)))
+        ic, ic->get_kind == SV_GF_IC_OWN || !is_object_type(ptr->proto) 
+        ? 0 : sv_ic_object_identity(js, js_obj_ptr(js_as_obj(ptr->proto)))
       );
+      
       sv_gf_ic_note_success(ic);
       *out = found;
+      
       return true;
     }
   }
@@ -780,6 +835,7 @@ static inline __attribute__((always_inline)) bool sv_try_prop_get_field_ic_no_ef
     *out = hit;
     return true;
   }
+  
   if (track_ic) sv_gf_ic_note_miss(ic);
 
   return false;
@@ -871,12 +927,8 @@ static inline void sv_ic_set_add_transition(
 ) {
   if (!ic) return;
 
-  sv_ic_set_shape_ref(
-    js, ic, &ic->guard.add.from_shape, SV_IC_SHAPE_REF_ADD_FROM, from
-  );
-  sv_ic_set_shape_ref(
-    js, ic, &ic->guard.add.to_shape, SV_IC_SHAPE_REF_ADD_TO, to
-  );
+  sv_ic_set_shape_ref(js, ic, &ic->guard.add.from_shape, SV_IC_SHAPE_REF_ADD_FROM, from);
+  sv_ic_set_shape_ref(js, ic, &ic->guard.add.to_shape, SV_IC_SHAPE_REF_ADD_TO, to);
 
   ic->guard.add.slot = slot;
   ic->guard.add.epoch = epoch;
