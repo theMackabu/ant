@@ -644,7 +644,10 @@ static bool mir_emit_get_field_missing_fastpath(
     mir_load_imm(ctx, fn, dst, mkval(kTypeUndefined, 0));
     return true;
   }
-  mir_emit_decode_ref(ctx, fn, ptr, proto);
+  if (vtype(ic->guard.receiver_proto) == kTypeFunction)
+    mir_emit_value_to_objptr_or_jmp(ctx, fn, proto, ptr, tmp, slow);
+  else
+    mir_emit_decode_ref(ctx, fn, ptr, proto);
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, tmp),
       MIR_new_mem_op(ctx, MIR_T_U32, offsetof(ant_object_t, ic_identity), ptr, 0, 1)));

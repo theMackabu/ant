@@ -163,3 +163,20 @@ for (let round = 0; round < 12; round++) {
   assert.strictEqual(missingField(Object.create({ absentJitField: round })), round);
 }
 console.log('PASS missing field IC');
+
+// Callable prototypes use their object identity, not their closure address.
+function callableMissing(object) { return object.callableAbsent; }
+function callablePrototype() {}
+const callableChild = Object.create(callablePrototype);
+for (let i = 0; i < 2000; i++) assert.strictEqual(callableMissing(callableChild), undefined);
+callablePrototype.callableAbsent = 73;
+assert.strictEqual(callableMissing(callableChild), 73);
+delete callablePrototype.callableAbsent;
+for (let i = 0; i < 2000; i++) assert.strictEqual(callableMissing(callableChild), undefined);
+let callableReads = 0;
+Object.defineProperty(callablePrototype, 'callableAbsent', {
+  get() { callableReads++; return this === callableChild ? 74 : -1; },
+});
+assert.strictEqual(callableMissing(callableChild), 74);
+assert.strictEqual(callableReads, 1);
+console.log('PASS callable prototype missing field IC');

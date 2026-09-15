@@ -43,15 +43,34 @@ static void check_field_codegen(
   MIR_finish_module(ctx);
 
   int guards = 0, prototype_loads = 0;
+  MIR_reg_t callable_ptr = 0;
+  bool callable_null_guard = false, callable_identity = false;
   for (MIR_insn_t insn = DLIST_HEAD(MIR_insn_t, fn->u.func->insns); insn;
        insn = DLIST_NEXT(MIR_insn_t, insn)) {
     if (insn->code == MIR_MOV && insn->ops[0].mode == MIR_OP_REG &&
         insn->ops[1].mode == MIR_OP_MEM) {
       const char *name = MIR_reg_name(ctx, insn->ops[0].u.reg, fn->u.func);
+      if (specialized && vtype(proto) == kTypeFunction &&
+          strncmp(name, "gf_miss_obj_", sizeof("gf_miss_obj_") - 1) == 0 &&
+          insn->ops[1].u.mem.disp == offsetof(sv_closure_t, func_obj)) {
+        callable_ptr = insn->ops[0].u.reg;
+      }
+      if (specialized && vtype(proto) == kTypeFunction &&
+          insn->ops[1].u.mem.disp == offsetof(ant_object_t, ic_identity)) {
+        assert(callable_ptr && callable_null_guard);
+        assert(insn->ops[1].u.mem.base == callable_ptr);
+        callable_identity = true;
+      }
       if (strncmp(name, "gf_icp_", sizeof("gf_icp_") - 1) == 0) {
         assert(insn->ops[1].u.mem.disp == offsetof(sv_ic_entry_t, guard.receiver_proto));
         prototype_loads++;
       }
+    }
+    if (callable_ptr && insn->code == MIR_BEQ &&
+        insn->ops[1].mode == MIR_OP_REG && insn->ops[1].u.reg == callable_ptr &&
+        insn->ops[2].mode == MIR_OP_INT && insn->ops[2].u.i == 0) {
+      assert(insn->ops[0].u.label == slow);
+      callable_null_guard = true;
     }
     if (insn->code != MIR_BNE || insn->ops[1].mode != MIR_OP_REG) continue;
     const char *name = MIR_reg_name(ctx, insn->ops[1].u.reg, fn->u.func);
@@ -63,6 +82,7 @@ static void check_field_codegen(
     guards++;
   }
   assert(guards == (specialized ? 1 : 0));
+  if (specialized && vtype(proto) == kTypeFunction) assert(callable_identity);
   if (kind == SV_GF_IC_PROTOTYPE) assert(prototype_loads == 1);
   MIR_finish(ctx);
 }
@@ -167,6 +187,7 @@ int main(void) {
 
   check_field_codegen(shape, old, SV_GF_IC_MISSING, true);
   check_field_codegen(shape, js_mknull(), SV_GF_IC_MISSING, true);
+  check_field_codegen(shape, mkval(kTypeFunction, 1), SV_GF_IC_MISSING, true);
   check_field_codegen(shape, js_mknum(1), SV_GF_IC_MISSING, false);
   check_field_codegen(shape, js_mkundef(), SV_GF_IC_MISSING, false);
   check_field_codegen(NULL, js_mknull(), SV_GF_IC_MISSING, false);
