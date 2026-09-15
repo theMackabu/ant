@@ -351,8 +351,7 @@ static void gc_mark_stack_push(ant_object_t *obj) {
   gc_mark_stack[gc_mark_sp++] = obj;
 }
 
-static inline void gc_grey_obj(ant_t *js, ant_object_t *obj) {
-  if (!obj || !fixed_arena_contains(&js->obj_arena, obj)) return;
+static inline void gc_grey_obj(ant_object_t *obj) {
   if (obj->mark_epoch == gc_obj_epoch || obj->mark_epoch == ANT_GC_DEAD) return;
   if (g_minor_gc && obj->flags.generation == 1) return;
   obj->mark_epoch = gc_obj_epoch;
@@ -477,8 +476,10 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
   if (!((1u << t) & GC_OBJ_TYPE_MASK)) return;
   ant_object_t *obj = (ant_object_t *)vptr(v);
   
-  if (!obj) return;
-  gc_grey_obj(js, obj);
+  uintptr_t offset = (uintptr_t)obj - (uintptr_t)js->obj_arena.base;
+  if (offset >= js->obj_arena.watermark) return;
+  
+  gc_grey_obj(obj);
 }
 
 static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
@@ -517,7 +518,7 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   for (uint32_t i = 0; i < count && i < obj->prop_count; i++)
     gc_mark_value(js, ant_object_prop_get_unchecked(obj, i));
     
-  for (uint32_t i = 0; i < count; i++) {
+  if (ant_shape_may_have_gc_refs(obj->shape)) for (uint32_t i = 0; i < count; i++) {
     const ant_shape_prop_t *prop = ant_shape_prop_at(obj->shape, i);
     if (prop && prop->type == ANT_SHAPE_KEY_SYMBOL)
       gc_mark_value(js, mkval(kTypeSymbol, prop->key.sym_off));
@@ -682,12 +683,10 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
     memcpy(&w, (void *)addr, sizeof(w));
     
     ant_object_t *raw_obj = (ant_object_t *)(uintptr_t)w;
-    if (fixed_arena_contains(&js->obj_arena, raw_obj))
-      gc_grey_obj(js, raw_obj);
+    if (fixed_arena_contains(&js->obj_arena, raw_obj)) gc_grey_obj(raw_obj);
       
     sv_closure_t *raw_closure = (sv_closure_t *)(uintptr_t)w;
-    if (fixed_arena_contains(&js->closure_arena, raw_closure))
-      gc_mark_closure(js, raw_closure);
+    if (fixed_arena_contains(&js->closure_arena, raw_closure)) gc_mark_closure(js, raw_closure);
 
     sv_upvalue_t *raw_uv = (sv_upvalue_t *)(uintptr_t)w;
     if (fixed_arena_contains(&js->upvalue_arena, raw_uv)) {
@@ -706,7 +705,7 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
     
     if ((1u << type) & GC_OBJ_TYPE_MASK) {
       ant_object_t *obj = (ant_object_t *)vptr(w);
-      if (obj) gc_grey_obj(js, obj);
+      if (fixed_arena_contains(&js->obj_arena, obj)) gc_grey_obj(obj);
     }
     
     if (type == kTypeFunction) {
@@ -929,7 +928,7 @@ static void gc_mark_roots(ant_t *js) {
   for (ant_object_t *obj = js->pending_promises; obj;) {
     ant_promise_state_t *pd = obj->promise_state;
     ant_object_t *next = pd ? pd->gc_pending_next : NULL;
-    gc_grey_obj(js, obj);
+    gc_grey_obj(obj);
     obj = next;
   }
 
@@ -944,30 +943,44 @@ static void gc_mark_roots(ant_t *js) {
   gc_drain_mark_stack(js);
 }
 
-#define GC_FREE_PAYLOAD_MASK                       \
-  ((1u << kTypeArray) | (1u << kTypeMap) | (1u << kTypeSet) | \
-   (1u << kTypeWeakMap) | (1u << kTypeWeakSet))
+#define GC_FREE_HASH_TABLE_MASK             \
+  ((1u << kTypeMap)    | (1u << kTypeSet) | \
+  (1u << kTypeWeakMap) | (1u << kTypeWeakSet))
+
+static inline void gc_free_array_storage(ant_t *js, ant_object_t *obj) {
+  if (!obj->u.array.data) return;
+  size_t bytes = (size_t)obj->u.array.cap * sizeof(*obj->u.array.data);
+  js->alloc_bytes.arrays = js->alloc_bytes.arrays > bytes ? js->alloc_bytes.arrays - bytes : 0;
+  free(obj->u.array.data);
+  obj->u.array.data = NULL;
+}
 
 void gc_object_free(ant_t *js, ant_object_t *obj) {
   if (!obj) return;
 
-  if ((((uintptr_t)obj->finalizer | (uintptr_t)obj->promise_state |
-        (uintptr_t)obj->extra_slots | (uintptr_t)obj->overflow_prop |
-        (uintptr_t)obj->exotic_ops) | obj->native.tag) == 0 &&
-      (((1u << obj->type_tag) & GC_FREE_PAYLOAD_MASK) == 0)) {
+  if (
+    (((uintptr_t)obj->finalizer | (uintptr_t)obj->promise_state |
+    (uintptr_t)obj->extra_slots | (uintptr_t)obj->overflow_prop |
+    (uintptr_t)obj->exotic_ops) | obj->native.tag) == 0 &&
+    (((1u << obj->type_tag) & GC_FREE_HASH_TABLE_MASK) == 0)
+  ) {
     obj->mark_epoch = ANT_GC_DEAD;
+    
     if (obj->shape) {
       ant_shape_release(obj->shape);
       obj->shape = NULL;
     }
+    
+    if (obj->type_tag == kTypeArray) gc_free_array_storage(js, obj);
     fixed_arena_free_elem(&js->obj_arena, obj);
+    
     return;
   }
 
   if (obj->finalizer) obj->finalizer(js, obj);
-  
-  if (obj->native.tag != 0 || ant_object_has_sidecar(obj))
+  if (obj->native.tag != 0 || ant_object_has_sidecar(obj)) 
     gc_finalize_events_object(js, js_obj_from_ptr(obj));
+  
   obj->mark_epoch = ANT_GC_DEAD;
 
   if (obj->shape) {
@@ -985,12 +998,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     obj->promise_state = NULL;
   }
 
-  if (obj->type_tag == kTypeArray && obj->u.array.data) {
-    size_t bytes = (size_t)obj->u.array.cap * sizeof(*obj->u.array.data);
-    js->alloc_bytes.arrays = js->alloc_bytes.arrays > bytes ? js->alloc_bytes.arrays - bytes : 0;
-    free(obj->u.array.data);
-    obj->u.array.data = NULL;
-  }
+  if (obj->type_tag == kTypeArray) gc_free_array_storage(js, obj);
 
   switch (obj->type_tag) {
     case kTypeMap: {

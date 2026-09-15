@@ -94,6 +94,7 @@ static void rope_nodes_clear_epochs(ant_pool_t *pool) {
 }
 
 gc_ropes_begin_result_t gc_ropes_begin(ant_t *js, bool minor) {
+  js->rope_gc.last_mark = NULL;
   size_t needed = 0;
   if (!rope_marks_count_pool(&js->pool.rope, &needed) ||
       !rope_marks_count_pool(&js->rope_gc.old, &needed) ||
@@ -141,49 +142,52 @@ void gc_ropes_mark_conservative_roots(ant_t *js) {
 static gc_rope_mark_t *rope_mark_find(ant_t *js, const void *ptr) {
   if (!js || !ptr) return NULL;
   uintptr_t p = (uintptr_t)ptr;
+  
   gc_rope_mark_t *marks = js->rope_gc.marks;
+  gc_rope_mark_t *last = js->rope_gc.last_mark;
+  
+  if (last && p >= last->base && p < last->end) return last;
   size_t lo = 0, hi = js->rope_gc.mark_count;
+  
   while (lo < hi) {
     size_t mid = lo + (hi - lo) / 2u;
     gc_rope_mark_t *m = &marks[mid];
     if (p < m->base) hi = mid;
     else if (p >= m->end) lo = mid + 1u;
-    else return m;
+    else { js->rope_gc.last_mark = m; return m; }
   }
+  
   return NULL;
 }
 
-bool gc_ropes_mark(ant_t *js, const void *ptr) {
+gc_rope_mark_result_t gc_ropes_mark(
+  ant_t *js, const void *ptr, size_t size, size_t align
+) {
+  if (!js || !ptr || size == 0) return GC_ROPE_MARK_INVALID;
+  if (align > 1 && (align & (align - 1u)) != 0) return GC_ROPE_MARK_INVALID;
+  
+  uintptr_t p = (uintptr_t)ptr;
+  if (align > 1 && (p & (align - 1u)) != 0) return GC_ROPE_MARK_INVALID;
+  
   gc_rope_mark_t *m = rope_mark_find(js, ptr);
-  if (!m) return false;
+  if (!m || size > m->end - p) return GC_ROPE_MARK_INVALID;
 
   if (m->kind == GC_ROPE_POOL_MISC) {
     m->has_live = true;
-    return true;
+    return GC_ROPE_MARK_TRACE;
   }
 
-  uintptr_t p = (uintptr_t)ptr;
-  if ((p - m->base) % sizeof(ant_rope_heap_t) != 0 ||
-      sizeof(ant_rope_heap_t) > m->end - p)
-    return false;
+  if ((p - m->base) % sizeof(ant_rope_heap_t) != 0 || sizeof(ant_rope_heap_t) > m->end - p) 
+    return GC_ROPE_MARK_INVALID;
 
-  if (js->rope_gc.minor_marking && m->kind == GC_ROPE_POOL_OLD) return false;
+  if (js->rope_gc.minor_marking && m->kind == GC_ROPE_POOL_OLD) return GC_ROPE_MARK_SKIP;
   ant_rope_heap_t *rope = (ant_rope_heap_t *)ptr;
-  if (rope->mark_epoch == js->rope_gc.mark_epoch) return false;
+  
+  if (rope->mark_epoch == js->rope_gc.mark_epoch) return GC_ROPE_MARK_SKIP;
   rope->mark_epoch = js->rope_gc.mark_epoch;
   m->has_live = true;
-  return true;
-}
-
-bool gc_ropes_contains(
-  ant_t *js, const void *ptr, size_t size, size_t align
-) {
-  if (!js || !ptr || size == 0) return false;
-  if (align > 1 && (align & (align - 1u)) != 0) return false;
-  uintptr_t p = (uintptr_t)ptr;
-  if (align > 1 && (p & (align - 1u)) != 0) return false;
-  gc_rope_mark_t *m = rope_mark_find(js, ptr);
-  return m && size <= m->end - p;
+  
+  return GC_ROPE_MARK_TRACE;
 }
 
 static void unlink_rope_block(ant_pool_t *pool, ant_pool_block_t *block) {
@@ -267,8 +271,10 @@ void gc_ropes_sweep(ant_t *js, bool minor) {
 
   trim_rope_free_blocks(&js->pool.rope, 2);
   trim_rope_free_blocks(&js->rope_gc.young, 2);
+  
   js->rope_gc.young_alloc = 0;
   js->rope_gc.mark_count = 0;
+  js->rope_gc.last_mark = NULL;
   js->rope_gc.minor_marking = false;
   js->rope_gc.conservative_marking = false;
 }

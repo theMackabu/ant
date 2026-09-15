@@ -449,8 +449,16 @@ static ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit)
   obj->overflow_cap = 0;
   obj->prop_count = 0;
   
-  for (uint32_t i = 0; i < ANT_INOBJ_MAX_SLOTS; i++) 
+#if ANT_INOBJ_MAX_SLOTS == 4
+  const ant_value_t undef = js_mkundef();
+  obj->inobj[0] = undef;
+  obj->inobj[1] = undef;
+  obj->inobj[2] = undef;
+  obj->inobj[3] = undef;
+#else
+  for (uint32_t i = 0; i < ANT_INOBJ_MAX_SLOTS; i++)
     obj->inobj[i] = js_mkundef();
+#endif
   
   obj->exotic_ops = NULL;
   obj->exotic_keys = NULL;
@@ -2513,39 +2521,97 @@ static void js_arguments_finalizer(ant_t *js, ant_object_t *obj) {
   js_clear_native(value, ANT_ARGUMENTS_NATIVE_TAG);
 }
 
+static ant_value_t strict_arguments_template(ant_t *js, bool has_iterator) {
+  ant_value_t *cached = has_iterator
+    ? &js->builtins.arguments_iter_template 
+    : &js->builtins.arguments_template;
+    
+  if (vtype(*cached) == kTypeObject) return *cached;
+
+  GC_ROOT_SAVE(roots, js);
+  ant_value_t seed = js_mkobj(js);
+  
+  if (is_err(seed)) return seed;
+  GC_ROOT_PIN(js, seed);
+  
+  ant_value_t tag = js_mkstr(js, "Arguments", 9);
+  if (is_err(tag)) {
+    GC_ROOT_RESTORE(js, roots);
+    return tag;
+  }
+  
+  js_set_sym(js, seed, get_toStringTag_sym(), tag);
+  if (has_iterator) js_set_sym(js, seed, get_iterator_sym(), js_mkundef());
+  
+  ant_object_t *ptr = js_obj_ptr(seed);
+  if (ptr->prop_count != (has_iterator ? 2u : 1u)) {
+    GC_ROOT_RESTORE(js, roots);
+    return js_mkerr(js, "oom");
+  }
+  
+  *cached = seed;
+  GC_ROOT_RESTORE(js, roots);
+  
+  return seed;
+}
+
 ant_value_t js_create_arguments_object(
-  ant_t *js,
-  sv_vm_t *vm,
-  ant_value_t callee,
-  sv_frame_t *frame,
-  int argc,
-  int mapped_count,
-  bool is_strict
+  ant_t *js, sv_vm_t *vm,
+  ant_value_t callee, sv_frame_t *frame,
+  int argc, int mapped_count, bool is_strict
 ) {
   GC_ROOT_SAVE(root_mark, js);
 
-  ant_value_t arr = frame && frame->bp && argc > 0
-    ? js_mkarr_dense_literal(js, frame->bp, (uint32_t)argc)
-    : js_mkarr(js);
+  uint32_t count = frame && frame->bp && argc > 0 ? (uint32_t)argc : 0;
+  ant_value_t arr = mkarr_dense_literal_capacity(js, count ? frame->bp : NULL, count, true);
   
   if (is_err(arr)) {
     GC_ROOT_RESTORE(js, root_mark);
     return arr;
-  } GC_ROOT_PIN(js, arr);
-
-  if (is_strict) js_set_slot(arr, SLOT_STRICT_ARGS, js_true);
-  else if (vtype(callee) == kTypeFunction) setprop_cstr(js, arr, "callee", 6, callee);
-  js_set_sym(js, arr, get_toStringTag_sym(), js_mkstr(js, "Arguments", 9));
+  } 
   
-  if (is_object_type(js->sym.array_proto)) {
-    ant_value_t iter_fn = js_get_sym(js, js->sym.array_proto, get_iterator_sym());
-    if (vtype(iter_fn) == kTypeFunction || vtype(iter_fn) == kTypeBuiltin)
-      js_set_sym(js, arr, get_iterator_sym(), iter_fn);
-  }
+  GC_ROOT_PIN(js, arr);
+
+  if (is_strict) js_obj_ptr(arr)->flags.strict_arguments = 1;
+  else if (vtype(callee) == kTypeFunction) setprop_cstr(js, arr, "callee", 6, callee);
+  
+  bool template_ready = is_strict && vtype(get_toStringTag_sym()) == kTypeSymbol;
+  if (!template_ready) js_set_sym(js, arr, get_toStringTag_sym(), js_mkstr(js, "Arguments", 9));
+
+  ant_value_t iter_fn = js_mkundef();
+  if (is_object_type(js->sym.array_proto)) iter_fn = js_get_sym(js, js->sym.array_proto, get_iterator_sym());
+  bool has_iterator = vtype(iter_fn) == kTypeFunction || vtype(iter_fn) == kTypeBuiltin;
+  
+  if (template_ready) {
+    GC_ROOT_PIN(js, iter_fn);
+    ant_value_t seed = strict_arguments_template(js, has_iterator);
+    if (is_err(seed)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return seed;
+    }
+    
+    ant_object_t *source = js_obj_ptr(seed), *target = js_obj_ptr(arr);
+    ant_shape_retain(source->shape);
+    ant_shape_release(target->shape);
+    
+    target->shape = source->shape;
+    target->inobj_limit = source->inobj_limit;
+    target->prop_count = source->prop_count;
+    target->inobj[0] = source->inobj[0];
+    
+    gc_write_barrier(js, target, target->inobj[0]);
+    if (has_iterator) {
+      target->inobj[1] = iter_fn;
+      gc_write_barrier(js, target, iter_fn);
+    }
+  } else if (has_iterator) js_set_sym(js, arr, get_iterator_sym(), iter_fn);
 
   if (!is_strict && mapped_count > 0 && frame && vm) {
     ant_arguments_state_t *state = calloc(
-      1, sizeof(*state) + (size_t)mapped_count * sizeof(state->deleted[0]));
+      1, sizeof(*state) + 
+      (size_t)mapped_count * sizeof(state->deleted[0])
+    );
+    
     if (!state) {
       GC_ROOT_RESTORE(js, root_mark);
       return js_mkerr(js, "oom");
@@ -2762,7 +2828,7 @@ ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t template) {
 
 static ant_value_t alloc_array_with_proto_capacity(
   ant_t *js, ant_value_t proto, uint32_t minimum_capacity,
-  uint32_t overwritten_prefix
+  uint32_t overwritten_prefix, bool exact_capacity
 ) {
   ant_object_t *obj = obj_alloc(js, kTypeArray, (uint8_t)ANT_INOBJ_MAX_SLOTS);
   if (!obj) return js_mkerr(js, "oom");
@@ -2770,9 +2836,11 @@ static ant_value_t alloc_array_with_proto_capacity(
   ant_value_t arr = mkref(kTypeArray, obj);
   if (is_object_type(proto)) js_set_proto_init(arr, proto);
 
-  uint32_t capacity = MAX_DENSE_INITIAL_CAP;
-  while (capacity < minimum_capacity && capacity <= UINT32_MAX / 2) capacity *= 2;
+  uint32_t capacity = exact_capacity
+    ? (minimum_capacity ? minimum_capacity : 1u) 
+    : MAX_DENSE_INITIAL_CAP;
   
+  while (capacity < minimum_capacity && capacity <= UINT32_MAX / 2) capacity *= 2;
   if (capacity < minimum_capacity) capacity = minimum_capacity;
   if ((size_t)capacity > SIZE_MAX / sizeof(*obj->u.array.data)) return js_mkerr(js, "oom");
 
@@ -2802,9 +2870,10 @@ static ant_value_t alloc_array_with_proto_capacity(
 }
 
 static ant_value_t alloc_array_with_proto(ant_t *js, ant_value_t proto) {
-  return alloc_array_with_proto_capacity(js, proto, MAX_DENSE_INITIAL_CAP, 0);
+  return alloc_array_with_proto_capacity(js, proto, MAX_DENSE_INITIAL_CAP, 0, false);
 }
 
+// TODO: flatten
 static inline ant_value_t mkarr(ant_t *js) {
   return alloc_array_with_proto(js, js->sym.array_proto);
 }
@@ -2813,10 +2882,10 @@ ant_value_t js_mkarr(ant_t *js) {
   return mkarr(js); 
 }
 
-ant_value_t js_mkarr_dense_literal(
-  ant_t *js, const ant_value_t *elements, uint32_t count
+static ant_value_t mkarr_dense_literal_capacity(
+  ant_t *js, const ant_value_t *elements, uint32_t count, bool exact_capacity
 ) {
-  ant_value_t arr = alloc_array_with_proto_capacity(js, js->sym.array_proto, count, count);
+  ant_value_t arr = alloc_array_with_proto_capacity(js, js->sym.array_proto, count, count, exact_capacity);
   if (is_err(arr)) return arr;
 
   ant_object_t *obj = array_obj_ptr(arr);
@@ -2825,6 +2894,7 @@ ant_value_t js_mkarr_dense_literal(
       uint32_t reset_count = count < obj->u.array.cap ? count : obj->u.array.cap;
       for (uint32_t i = 0; i < reset_count; i++) obj->u.array.data[i] = T_EMPTY;
     }
+    
     for (uint32_t i = 0; i < count; i++) js_arr_push(js, arr, elements[i]);
     return arr;
   }
@@ -2844,6 +2914,10 @@ ant_value_t js_mkarr_dense_literal(
   obj->flags.may_have_dense_elements = has_elements;
   
   return arr;
+}
+
+ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint32_t count) {
+  return mkarr_dense_literal_capacity(js, elements, count, false);
 }
 
 ant_value_t js_newobj(ant_t *js) {
@@ -2918,6 +2992,7 @@ static void js_init_intern_cache(ant_t *js) {
   js->intern.idx[7] = intern_string("7", 1);
   js->intern.idx[8] = intern_string("8", 1);
   js->intern.idx[9] = intern_string("9", 1);
+  js->intern.description = intern_string("description", 11);
 }
 
 typedef enum {
@@ -3119,33 +3194,47 @@ ant_value_t mkprop_append_fast(ant_t *js, ant_value_t obj, const char *key, size
 static void set_slot(ant_value_t obj, internal_slot_t slot, ant_value_t val) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || slot < 0 || slot > SLOT_MAX) return;
+  
   if (slot == SLOT_PROTO) {
     ptr->proto = val;
     ant_ic_epoch_bump();
     return;
   }
+  
   if (slot == SLOT_DATA) {
     ptr->u.data.value = val;
     return;
   }
-  (void)obj_extra_set(ptr, slot, val);
+  
+  if (obj_extra_set(ptr, slot, val)) {
+    if (slot == SLOT_STRICT_ARGS) ptr->flags.strict_arguments = 0;
+    if (slot == SLOT_REGEXP_FLAGS_STRING) ptr->flags.regexp_brand = vtype(val) == kTypeString;
+  }
 }
 
+// TODO: dry
 static void set_slot_wb(ant_t *js, ant_value_t obj, internal_slot_t slot, ant_value_t val) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || slot < 0 || slot > SLOT_MAX) return;
+  
   if (slot == SLOT_PROTO) {
     ptr->proto = val;
     gc_write_barrier(js, ptr, val);
     ant_ic_epoch_bump();
     return;
   }
+  
   if (slot == SLOT_DATA) {
     ptr->u.data.value = val;
     gc_write_barrier(js, ptr, val);
     return;
   }
-  (void)obj_extra_set(ptr, slot, val);
+  
+  if (obj_extra_set(ptr, slot, val)) {
+    if (slot == SLOT_STRICT_ARGS) ptr->flags.strict_arguments = 0;
+    if (slot == SLOT_REGEXP_FLAGS_STRING) ptr->flags.regexp_brand = vtype(val) == kTypeString;
+  }
+  
   gc_write_barrier(js, ptr, val);
 }
 
@@ -3163,11 +3252,12 @@ bool js_reserve_slots(ant_value_t obj, uint8_t capacity) {
 
 static ant_value_t get_slot(ant_value_t obj, internal_slot_t slot) {
   ant_object_t *ptr = js_obj_ptr(obj);
+  
   if (!ptr || slot < 0 || slot > SLOT_MAX) return js_mkundef();
   if (slot == SLOT_PROTO) return ptr->proto;
-  if (slot == SLOT_DATA) {
-    return ptr->u.data.value;
-  }
+  if (slot == SLOT_DATA) return ptr->u.data.value;
+  if (slot == SLOT_STRICT_ARGS && ptr->flags.strict_arguments) return js_true;
+  
   return obj_extra_get(ptr, slot);
 }
 
@@ -11576,8 +11666,17 @@ static int js_compare_values(ant_t *js, ant_value_t a, ant_value_t b, ant_value_
   uint8_t t = vtype(compareFn);
   if (t == kTypeFunction || t == kTypeBuiltin) {
     ant_value_t call_args[2] = { a, b };
-    ant_value_t result = sv_vm_call(js->vm, js, compareFn, js_mkundef(), call_args, 2, NULL, js_mkundef());
-    if (vtype(result) == kTypeNumber) return (int)tod(result);
+    
+    ant_value_t result = sv_vm_call(
+      js->vm, js, compareFn, js_mkundef(), 
+      call_args, 2, NULL, js_mkundef()
+    );
+    
+    if (vtype(result) == kTypeNumber) {
+      double number = tod(result);
+      return (number > 0) - (number < 0);
+    }
+    
     return 0;
   }
   
@@ -18691,6 +18790,9 @@ static ant_t *isolate_init(void *buf, size_t len) {
   
   js = (ant_t *)buf;
   js_init_intern_cache(js);
+  
+  if (!js->intern.description) return NULL;
+  
   js->pool.rope.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
   js->rope_gc.young.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
   js->rope_gc.old.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
@@ -19296,6 +19398,7 @@ void js_destroy(ant_t *js) {
 
   free(js->rope_gc.marks);
   js->rope_gc.marks = NULL;
+  js->rope_gc.last_mark = NULL;
   js->rope_gc.mark_count = js->rope_gc.mark_cap = 0;
 
   free(js->young_closures);
