@@ -38,3 +38,29 @@ for (let i = 0; i < 1000; i++) {
   assert.strictEqual(lastCaller(head), 3);
 }
 console.log('PASS inline backward branches');
+
+// Small pure numeric callees: unconditional and conditional backedges must
+// remain safe when their already-warm callers become inline candidates.
+function sumWhile(n) {
+  let sum = 0;
+  while (n > 0) { sum += n; n--; }
+  return sum;
+}
+function sumDoWhile(n) {
+  let sum = 0;
+  do { sum += n; n--; } while (n > 0);
+  return sum;
+}
+for (let i = 0; i < 500; i++) {
+  assert.strictEqual(sumWhile(7), 28);
+  assert.strictEqual(sumDoWhile(7), 28);
+}
+function whileCaller(n) { return sumWhile(n) * 3 + 1; }
+function doWhileCaller(n) { return sumDoWhile(n) * 3 + 1; }
+for (let i = 0; i < 5000; i++) {
+  const n = i & 7;
+  const expected = n * (n + 1) / 2 * 3 + 1;
+  assert.strictEqual(whileCaller(n), expected);
+  assert.strictEqual(doWhileCaller(n), expected);
+}
+console.log('PASS small numeric inline backward branches');
