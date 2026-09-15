@@ -2,6 +2,7 @@
 url = https://github.com/themackabu/mir.git
 revision = f7837cb110ae56faf3fc585358f6ced4afce6c99
 depth = 1
+diff_files = patches/mir-aarch64-address-scale.patch
 
 [provide]
 mir = mir_dep

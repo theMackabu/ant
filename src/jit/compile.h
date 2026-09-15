@@ -2,6 +2,7 @@
 #define ANT_JIT_COMPILE_H
 
 #include "jit_internal.h"
+#include "silver/feedback.h"
 
 #define JIT_TRY_MAX 16
 typedef struct {
@@ -208,10 +209,6 @@ typedef struct jit_compile {
   MIR_reg_t r_iter_roots;
   MIR_reg_t r_iter_buf;
   MIR_reg_t r_tco_args;
-  MIR_reg_t r_cond_d;
-  MIR_reg_t r_cond_nan;
-  MIR_reg_t r_cond_zd;
-  MIR_reg_t r_cond_zero;
   MIR_reg_t r_ic_epoch_val;
   MIR_reg_t r_bailout_val;
   MIR_reg_t r_bailout_off;
@@ -233,9 +230,13 @@ typedef struct jit_compile {
   MIR_label_t self_tail_entry;
   MIR_reg_t r_result;
   uint8_t *ip;
+  const uint8_t *previous_ip;
   uint8_t *end;
   MIR_reg_t local_reg_limit;
   MIR_reg_t param_cache[JIT_PARAM_HOIST_CAP];
+  MIR_reg_t param_d_cache[JIT_PARAM_HOIST_CAP];
+  MIR_reg_t hoisted_upvalue_cell;
+  int hoisted_upvalue;
   ant_t *js;
   sv_func_t *func;
   sv_closure_t *hint_closure;
@@ -296,6 +297,10 @@ typedef struct jit_compile {
   MIR_reg_t integer_value;
   jit_integer_range_t integer_range;
 } jit_compile_t;
+
+static inline bool jit_speculate_unseen_numeric(const jit_compile_t *c, uint8_t feedback) {
+  return feedback == 0 && sv_func_type_feedback(c->func) && c->osr_map.count && c->ctx == c->jc->ctx_hot;
+}
 
 void jit_emit_exit_ret(jit_compile_t *c, MIR_op_t ret_op);
 void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg);

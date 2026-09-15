@@ -8,6 +8,8 @@ Store in-progress execution plans here.
 
 ## Active
 
+- [Symbol Description Accessor IC](symbol-description-accessor-ic.md)
+
 - [bench-v8 Regression Recovery](bench-v8-regression-recovery.md)
 
 - [Shared Shape Descriptors and JSON Construction](shared-shape-descriptors-json.md)

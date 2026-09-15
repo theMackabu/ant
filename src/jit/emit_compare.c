@@ -5,7 +5,7 @@ void jit_emit_compare(jit_compile_t *c) {
   switch (c->op) {
     case OP_LT: {
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
-      bool fb_num_only = fb && !(fb & ~SV_TFB_NUM);
+      bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~SV_TFB_NUM));
       bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
       bool l_is_num = vstack_prepare_num(
@@ -161,7 +161,7 @@ void jit_emit_compare(jit_compile_t *c) {
 
     case OP_LE: {
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
-      bool fb_num_only = fb && !(fb & ~SV_TFB_NUM);
+      bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~SV_TFB_NUM));
       bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
       bool l_is_num = vstack_prepare_num(
@@ -172,6 +172,7 @@ void jit_emit_compare(jit_compile_t *c) {
       MIR_reg_t rr = vstack_pop(&c->vs);
       MIR_reg_t rl = vstack_pop(&c->vs);
       MIR_reg_t rd = vstack_push(&c->vs);
+      if (c->vs.known_bool) c->vs.known_bool[c->vs.sp - 1] = 1;
 
       if (fb_never_num) {
         vstack_rebox_binop_operands(
@@ -460,7 +461,7 @@ void jit_emit_compare(jit_compile_t *c) {
 
     case OP_GT: {
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
-      bool fb_num_only = fb && !(fb & ~SV_TFB_NUM);
+      bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~SV_TFB_NUM));
       bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
       bool l_is_num = vstack_prepare_num(
@@ -582,7 +583,7 @@ void jit_emit_compare(jit_compile_t *c) {
 
     case OP_GE: {
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
-      bool fb_num_only = fb && !(fb & ~SV_TFB_NUM);
+      bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~SV_TFB_NUM));
       bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
       bool l_is_num = vstack_prepare_num(
@@ -593,6 +594,7 @@ void jit_emit_compare(jit_compile_t *c) {
       MIR_reg_t rr = vstack_pop(&c->vs);
       MIR_reg_t rl = vstack_pop(&c->vs);
       MIR_reg_t rd = vstack_push(&c->vs);
+      if (c->vs.known_bool) c->vs.known_bool[c->vs.sp - 1] = 1;
 
       if (fb_never_num) {
         vstack_rebox_binop_operands(

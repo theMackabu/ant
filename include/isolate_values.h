@@ -1,5 +1,7 @@
 #ifdef ANT_BUILTIN
 ANT_BUILTIN(process_env)
+ANT_BUILTIN(arguments_template)
+ANT_BUILTIN(arguments_iter_template)
 ANT_BUILTIN(signal_proto)
 ANT_BUILTIN(typedarray_iter_proto)
 ANT_BUILTIN(child_readable_proto)

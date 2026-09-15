@@ -66,9 +66,7 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          if [[ "${{ inputs.platform }}" == *"aarch64"* ]]; then
-            sed -i 's|http://ports.ubuntu.com/ubuntu-ports|http://mirrors.ocf.berkeley.edu/ubuntu-ports|g' /etc/apt/sources.list
-          else
+          if [[ "${{ inputs.platform }}" != *"aarch64"* ]]; then
             sed -i 's|http://archive.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
             sed -i 's|http://security.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
           fi

@@ -43,7 +43,8 @@ void jit_emit_arithmetic(jit_compile_t *c) {
       if (jit_emit_integer_arithmetic(c->ctx, c->jit_func, &c->vs, c->op)) break;
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
       bool force_num_only = (c->op == OP_ADD_NUM);
-      bool fb_num_only = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
+      bool fb_num_only = force_num_only || jit_speculate_unseen_numeric(c, fb) ||
+                         (fb && !(fb & ~SV_TFB_NUM));
       bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
       bool fb_str_only = !force_num_only && fb && !(fb & ~SV_TFB_STR);
 
@@ -140,7 +141,11 @@ void jit_emit_arithmetic(jit_compile_t *c) {
                                      MIR_new_reg_op(c->ctx, fd3),
                                      MIR_new_reg_op(c->ctx, fd1),
                                      MIR_new_reg_op(c->ctx, fd2)));
-        mir_d_to_i64(c->ctx, c->jit_func, rd, fd3, c->r_d_slot);
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_DMOV,
+                                     MIR_new_reg_op(c->ctx, c->vs.d_regs[c->vs.sp - 1]),
+                                     MIR_new_reg_op(c->ctx, fd3)));
+        c->vs.slot_type[c->vs.sp - 1] = SLOT_NUM;
         MIR_label_t skip_bail = MIR_new_label(c->ctx);
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, skip_bail)));
@@ -195,7 +200,8 @@ void jit_emit_arithmetic(jit_compile_t *c) {
       if (jit_emit_integer_arithmetic(c->ctx, c->jit_func, &c->vs, c->op)) break;
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
       bool force_num_only = (c->op == OP_SUB_NUM);
-      bool fb_num_only = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
+      bool fb_num_only = force_num_only || jit_speculate_unseen_numeric(c, fb) ||
+                         (fb && !(fb & ~SV_TFB_NUM));
       bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
       bool l_is_num = vstack_prepare_num(
@@ -271,7 +277,11 @@ void jit_emit_arithmetic(jit_compile_t *c) {
                                      MIR_new_reg_op(c->ctx, fd3),
                                      MIR_new_reg_op(c->ctx, fd1),
                                      MIR_new_reg_op(c->ctx, fd2)));
-        mir_d_to_i64(c->ctx, c->jit_func, rd, fd3, c->r_d_slot);
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_DMOV,
+                                     MIR_new_reg_op(c->ctx, c->vs.d_regs[c->vs.sp - 1]),
+                                     MIR_new_reg_op(c->ctx, fd3)));
+        c->vs.slot_type[c->vs.sp - 1] = SLOT_NUM;
         MIR_label_t skip_bail = MIR_new_label(c->ctx);
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, skip_bail)));
@@ -325,7 +335,8 @@ void jit_emit_arithmetic(jit_compile_t *c) {
       if (jit_emit_integer_arithmetic(c->ctx, c->jit_func, &c->vs, c->op)) break;
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
       bool force_num_only = (c->op == OP_MUL_NUM);
-      bool fb_num_only = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
+      bool fb_num_only = force_num_only || jit_speculate_unseen_numeric(c, fb) ||
+                         (fb && !(fb & ~SV_TFB_NUM));
       bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
       bool l_is_num = vstack_prepare_num(
@@ -401,7 +412,11 @@ void jit_emit_arithmetic(jit_compile_t *c) {
                                      MIR_new_reg_op(c->ctx, fd3),
                                      MIR_new_reg_op(c->ctx, fd1),
                                      MIR_new_reg_op(c->ctx, fd2)));
-        mir_d_to_i64(c->ctx, c->jit_func, rd, fd3, c->r_d_slot);
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_DMOV,
+                                     MIR_new_reg_op(c->ctx, c->vs.d_regs[c->vs.sp - 1]),
+                                     MIR_new_reg_op(c->ctx, fd3)));
+        c->vs.slot_type[c->vs.sp - 1] = SLOT_NUM;
         MIR_label_t skip_bail = MIR_new_label(c->ctx);
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, skip_bail)));
@@ -454,7 +469,8 @@ void jit_emit_arithmetic(jit_compile_t *c) {
     case OP_DIV_NUM: {
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
       bool force_num_only = (c->op == OP_DIV_NUM);
-      bool fb_num_only = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
+      bool fb_num_only = force_num_only || jit_speculate_unseen_numeric(c, fb) ||
+                         (fb && !(fb & ~SV_TFB_NUM));
       bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
       bool l_is_num = vstack_prepare_num(
@@ -530,7 +546,11 @@ void jit_emit_arithmetic(jit_compile_t *c) {
                                      MIR_new_reg_op(c->ctx, fd3),
                                      MIR_new_reg_op(c->ctx, fd1),
                                      MIR_new_reg_op(c->ctx, fd2)));
-        mir_d_to_i64(c->ctx, c->jit_func, rd, fd3, c->r_d_slot);
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_DMOV,
+                                     MIR_new_reg_op(c->ctx, c->vs.d_regs[c->vs.sp - 1]),
+                                     MIR_new_reg_op(c->ctx, fd3)));
+        c->vs.slot_type[c->vs.sp - 1] = SLOT_NUM;
         MIR_label_t skip_bail = MIR_new_label(c->ctx);
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, skip_bail)));
@@ -708,6 +728,18 @@ void jit_emit_arithmetic(jit_compile_t *c) {
     case OP_INC:
     case OP_DEC: {
       int top_idx = c->vs.sp - 1;
+      if (c->op == OP_INC && c->vs.slot_type[top_idx] == SLOT_I32) {
+        jit_integer_range_t range = c->vs.integer_range[top_idx];
+        if (range.known && range.min >= 0 && range.max < UINT32_MAX) {
+          MIR_reg_t value = vstack_top(&c->vs);
+          MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_ADD,
+              MIR_new_reg_op(c->ctx, value), MIR_new_reg_op(c->ctx, value), MIR_new_int_op(c->ctx, 1)));
+          vstack_clear_value_info(&c->vs, top_idx);
+          c->vs.integer_range[top_idx] = (jit_integer_range_t){
+              .min = range.min + 1, .max = range.max + 1, .known = true};
+          break;
+        }
+      }
       bool input_is_num = vstack_prepare_num(
           &c->vs, top_idx, c->ctx, c->jit_func, c->r_d_slot);
       MIR_reg_t rs = vstack_top(&c->vs);
@@ -738,30 +770,7 @@ void jit_emit_arithmetic(jit_compile_t *c) {
       break;
     }
 
-    case OP_POST_INC: {
-      int top_idx = c->vs.sp - 1;
-      vstack_ensure_boxed(&c->vs, top_idx, c->ctx, c->jit_func, c->r_d_slot);
-
-      MIR_reg_t rold = vstack_top(&c->vs);
-      MIR_reg_t rnew = vstack_push(&c->vs);
-
-      int pin = c->arith_n++;
-      char pi_d1[32], pi_d2[32];
-      snprintf(pi_d1, sizeof(pi_d1), "pi_d1_%d", pin);
-      snprintf(pi_d2, sizeof(pi_d2), "pi_d2_%d", pin);
-      MIR_reg_t fd1 = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_D, pi_d1);
-      MIR_reg_t fd2 = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_D, pi_d2);
-
-      mir_i64_to_d(c->ctx, c->jit_func, fd1, rold, c->r_d_slot);
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_DADD,
-                                   MIR_new_reg_op(c->ctx, fd2),
-                                   MIR_new_reg_op(c->ctx, fd1),
-                                   MIR_new_reg_op(c->ctx, c->r_d_one)));
-      mir_d_to_i64(c->ctx, c->jit_func, rnew, fd2, c->r_d_slot);
-      break;
-    }
-
+    case OP_POST_INC:
     case OP_POST_DEC: {
       int old_idx = c->vs.sp - 1;
       bool input_is_num = vstack_prepare_num(
@@ -770,23 +779,18 @@ void jit_emit_arithmetic(jit_compile_t *c) {
       vstack_push(&c->vs);
       int new_idx = c->vs.sp - 1;
 
-      if (c->vs.known_func) {
-        c->vs.known_func[old_idx] = NULL;
-        c->vs.known_func[new_idx] = NULL;
-      }
-      if (c->vs.has_const) {
-        c->vs.has_const[old_idx] = false;
-        c->vs.has_const[new_idx] = false;
-      }
+      vstack_clear_value_info(&c->vs, old_idx);
+      vstack_clear_value_info(&c->vs, new_idx);
 
       MIR_label_t bailout = input_is_num ? NULL : MIR_new_label(c->ctx);
       MIR_label_t done = input_is_num ? NULL : MIR_new_label(c->ctx);
       if (!input_is_num)
         mir_emit_is_num_guard(c->ctx, c->jit_func, c->r_bool, rold, bailout);
 
-      vstack_ensure_num(&c->vs, old_idx, c->ctx, c->jit_func, c->r_d_slot);
+      if (!input_is_num)
+        mir_i64_to_d(c->ctx, c->jit_func, c->vs.d_regs[old_idx], rold, c->r_d_slot);
       MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_DSUB,
+                      MIR_new_insn(c->ctx, c->op == OP_POST_INC ? MIR_DADD : MIR_DSUB,
                                    MIR_new_reg_op(c->ctx, c->vs.d_regs[new_idx]),
                                    MIR_new_reg_op(c->ctx, c->vs.d_regs[old_idx]),
                                    MIR_new_reg_op(c->ctx, c->r_d_one)));

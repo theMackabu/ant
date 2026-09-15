@@ -5,6 +5,7 @@
 #include "tokens.h"
 #include "errors.h"
 
+#include "gc/roots.h"
 #include "silver/feedback.h"
 #include "modules/bigint.h"
 
@@ -202,14 +203,46 @@ static inline void sv_op_dec(sv_vm_t *vm) {
   vm->stack[vm->sp - 1] = tov(tod(vm->stack[vm->sp - 1]) - 1.0);
 }
 
-static inline void sv_op_post_inc(sv_vm_t *vm) {
+static __attribute__((noinline)) ant_value_t sv_op_post_update_slow(sv_vm_t *vm, ant_t *js, bool increment) {
   ant_value_t old = vm->stack[vm->sp - 1];
-  vm->stack[vm->sp++] = tov(tod(old) + 1.0);
+  if (is_object_type(old) || vtype(old) == kTypeBuiltin) {
+    old = js_to_primitive(js, old, 2);
+    if (is_err(old)) return old;
+  }
+  
+  if (vtype(old) == kTypeSymbol)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a number");
+  
+  ant_value_t next;
+  if (vtype(old) == kTypeBigInt) {
+    vm->stack[vm->sp - 1] = old;
+    ant_value_t step = bigint_from_int64(js, increment ? 1 : -1);
+    if (is_err(step)) return step;
+    
+    GC_ROOT_SAVE(mark, js);
+    GC_ROOT_PIN(js, step);
+    next = bigint_add(js, old, step);
+    
+    GC_ROOT_RESTORE(js, mark);
+    if (is_err(next)) return next;
+  } else {
+    double number = js_to_number(js, old);
+    old = tov(number);
+    next = tov(increment ? number + 1.0 : number - 1.0);
+  }
+  
+  vm->stack[vm->sp - 1] = old;
+  vm->stack[vm->sp++] = next;
+  
+  return js_mkundef();
 }
 
-static inline void sv_op_post_dec(sv_vm_t *vm) {
+static inline __attribute__((always_inline)) ant_value_t sv_op_post_update(sv_vm_t *vm, ant_t *js, bool increment) {
   ant_value_t old = vm->stack[vm->sp - 1];
-  vm->stack[vm->sp++] = tov(tod(old) - 1.0);
+  if (vtype(old) != kTypeNumber) return sv_op_post_update_slow(vm, js, increment);
+  double number = tod(old);
+  vm->stack[vm->sp++] = tov(increment ? number + 1.0 : number - 1.0);
+  return js_mkundef();
 }
 
 static inline ant_value_t sv_op_inc_local(ant_value_t *lp, ant_t *js, sv_func_t *func, uint8_t *ip) {

@@ -27,6 +27,25 @@ object.value = 5;
 same(read(object), 5, 'restored own data');
 const wide = { a: 0, b: 0, c: 0, d: 0, e: 0, f: 0, g: 0, h: 0, value: 6 };
 for (let i = 0; i < 1000; i++) same(read(wide), 6, 'overflow storage');
+function readOverflow(object) { return object.value; }
+for (let i = 0; i < 1000; i++) same(readOverflow(wide), 6, 'warm overflow storage');
+wide.value = -0;
+same(readOverflow(wide), -0, 'updated overflow value');
+same(readOverflow({ value: 17 }), 17, 'overflow to inline slot');
+same(readOverflow(wide), -0, 'inline to overflow slot');
+delete wide.value;
+same(readOverflow(wide), undefined, 'deleted overflow property');
+Object.setPrototypeOf(wide, { value: 18 });
+same(readOverflow(wide), 18, 'inherited after overflow deletion');
+Object.defineProperty(wide, 'value', {
+  configurable: true,
+  get() { gets++; return 19; },
+});
+same(readOverflow(wide), 19, 'overflow accessor');
+same(gets, 1001, 'one overflow getter call');
+delete wide.value;
+wide.value = 20;
+same(readOverflow(wide), 20, 'restored overflow data');
 function callable() {}
 callable.value = 7;
 same(read(callable), 7, 'function property');

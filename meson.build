@@ -359,6 +359,87 @@ array_dense_length_test = executable(
 )
 test('array-dense-length', array_dense_length_test)
 
+gc_plain_arrays_test = executable(
+  'test-gc-plain-arrays',
+  files('tests/test_gc_plain_arrays.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('gc-plain-arrays', gc_plain_arrays_test)
+
+gc_shape_refs_test = executable(
+  'test-gc-shape-refs',
+  files('tests/test_gc_shape_refs.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('gc-shape-refs', gc_shape_refs_test)
+
+gc_exact_edges_test = executable(
+  'test-gc-exact-edges',
+  files('tests/test_gc_exact_edges.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('gc-exact-edges', gc_exact_edges_test)
+
+arguments_storage_test = executable(
+  'test-arguments-storage',
+  files('tests/test_arguments_storage.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('arguments-storage', arguments_storage_test)
+
+regexp_brand_storage_test = executable(
+  'test-regexp-brand-storage',
+  files('tests/test_regexp_brand_storage.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('regexp-brand-storage', regexp_brand_storage_test)
+
+rope_mark_test = executable(
+  'test-rope-mark',
+  files('tests/test_rope_mark.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('rope-mark', rope_mark_test)
+
+jit_inline_eligibility_test = executable(
+  'test-jit-inline-eligibility',
+  files('tests/test_jit_inline_eligibility.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('jit-inline-eligibility', jit_inline_eligibility_test)
+
+jit_property_ic_test = executable(
+  'test-jit-property-ic',
+  files('tests/test_jit_property_ic.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('jit-property-ic', jit_property_ic_test)
+
+jit_address_modes_test = executable(
+  'test-jit-address-modes',
+  files('tests/test_jit_address_modes.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('jit-address-modes', jit_address_modes_test)
+
 if host_machine.system() != 'windows'
   ascii_scan_test = executable(
     'test-string-ascii-scan',

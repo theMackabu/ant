@@ -42,29 +42,30 @@
 #include "wasm_embed.h"
 #endif
 
-// TODO: constexpr
-enum {
-  SV_VM_GUARD_SIZE  = (size_t)65536,
-  SV_STACK_RESERVE  = ((size_t)SV_STACK_HARD_MAX * sizeof(ant_value_t)),
-  SV_FRAMES_RESERVE = ((size_t)SV_FRAMES_HARD_MAX * sizeof(sv_frame_t)),
-  SV_VM_RESERVE     = (SV_STACK_RESERVE + SV_VM_GUARD_SIZE + SV_FRAMES_RESERVE)
-};
+static constexpr size_t SV_VM_GUARD_SIZE = 65536;
+static constexpr size_t SV_STACK_RESERVE = (size_t)SV_STACK_HARD_MAX * sizeof(ant_value_t);
+static constexpr size_t SV_FRAMES_RESERVE = (size_t)SV_FRAMES_HARD_MAX * sizeof(sv_frame_t);
+static constexpr size_t SV_VM_RESERVE = SV_STACK_RESERVE + SV_VM_GUARD_SIZE + SV_FRAMES_RESERVE;
 
 bool sv_ic_shape_ref_register(ant_t *js, ant_shape_t **slot) {
-  if (!js || !slot) return false;
+  if (!js || !slot) goto fail;
 
   if (js->ic_shape_ref_len >= js->ic_shape_ref_cap) {
     size_t cap = js->ic_shape_ref_cap ? js->ic_shape_ref_cap * 2u : 64u;
-    ant_shape_t ***slots = realloc(
-      js->ic_shape_ref_slots, cap * sizeof(*slots)
-    );
-    if (!slots) return false;
+    ant_shape_t ***slots = realloc(js->ic_shape_ref_slots, cap * sizeof(*slots));
+    if (!slots) goto fail;
     js->ic_shape_ref_slots = slots;
     js->ic_shape_ref_cap = cap;
   }
 
   js->ic_shape_ref_slots[js->ic_shape_ref_len++] = slot;
   return true;
+
+fail:
+  // unregistered slots own no reference. null shapes keeps the cache
+  // unusable even if its caller writes a new index and epoch after failure.
+  if (slot) *slot = NULL;
+  return false;
 }
 
 void sv_ic_shape_refs_cleanup(ant_t *js) {
@@ -1620,9 +1621,9 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_UPLUS:      { VM_CHECK(sv_op_uplus(vm, js));  NEXT(1); }
   L_INC:        { sv_op_inc(vm);                  NEXT(1); }
   L_DEC:        { sv_op_dec(vm);                  NEXT(1); }
-  L_POST_INC:   { sv_op_post_inc(vm);             NEXT(1); }
-  L_POST_DEC:   { sv_op_post_dec(vm);             NEXT(1); }
   
+  L_POST_INC:   { VM_CHECK(sv_op_post_update(vm, js, true));    NEXT(1); }
+  L_POST_DEC:   { VM_CHECK(sv_op_post_update(vm, js, false));   NEXT(1); }
   L_INC_LOCAL:  { VM_CHECK(sv_op_inc_local(lp, js, func, ip));  NEXT(2); }
   L_DEC_LOCAL:  { VM_CHECK(sv_op_dec_local(lp, js, func, ip));  NEXT(2); }
 

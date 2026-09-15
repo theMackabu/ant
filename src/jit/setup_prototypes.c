@@ -181,8 +181,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
 
   MIR_type_t gf_ret = MIR_JSVAL;
   c->gf_proto = MIR_new_proto(c->ctx, "gf_proto",
-                              1, &gf_ret, 7,
-                              MIR_T_I64, "vm",
+                              1, &gf_ret, 6,
                               MIR_T_I64, "js",
                               MIR_JSVAL, "obj",
                               MIR_T_P, "str",
@@ -217,13 +216,14 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
 
   MIR_type_t ge_ret = MIR_JSVAL;
   c->ge_proto = MIR_new_proto(c->ctx, "ge_proto",
-                              1, &ge_ret, 6,
+                              1, &ge_ret, 7,
                               MIR_T_I64, "vm",
                               MIR_T_I64, "js",
                               MIR_JSVAL, "obj",
                               MIR_JSVAL, "key",
                               MIR_T_P, "func",
-                              MIR_T_I32, "bc_off");
+                              MIR_T_I32, "bc_off",
+                              MIR_T_P, "ic");
 
   MIR_type_t inst_ret = MIR_JSVAL;
   c->inst_proto = MIR_new_proto(c->ctx, "inst_proto",

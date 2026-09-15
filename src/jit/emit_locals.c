@@ -163,6 +163,13 @@ void jit_emit_locals(jit_compile_t *c) {
     case OP_GET_ARG: {
       uint16_t idx = sv_get_u16(c->ip + 1);
       MIR_reg_t dst = vstack_push(&c->vs);
+      if (idx < JIT_PARAM_HOIST_CAP && c->param_d_cache[idx]) {
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_DMOV,
+            MIR_new_reg_op(c->ctx, c->vs.d_regs[c->vs.sp - 1]),
+            MIR_new_reg_op(c->ctx, c->param_d_cache[idx])));
+        c->vs.slot_type[c->vs.sp - 1] = SLOT_NUM;
+        break;
+      }
       if (idx < JIT_PARAM_HOIST_CAP && c->param_cache[idx]) {
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_MOV,
@@ -208,6 +215,43 @@ void jit_emit_locals(jit_compile_t *c) {
     case OP_PUT_ARG:
     case OP_SET_ARG: {
       uint16_t idx = sv_get_u16(c->ip + 1);
+      if (idx < JIT_PARAM_HOIST_CAP && c->param_d_cache[idx]) {
+        int slot = c->vs.sp - 1;
+        uint8_t type = c->vs.slot_type[slot];
+        MIR_reg_t dst = c->param_d_cache[idx];
+        if (type == SLOT_NUM || type == SLOT_I32) {
+          MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx,
+              type == SLOT_NUM ? MIR_DMOV : MIR_I2D,
+              MIR_new_reg_op(c->ctx, dst),
+              MIR_new_reg_op(c->ctx, type == SLOT_NUM ? c->vs.d_regs[slot] : vstack_top(&c->vs))));
+        } else {
+          MIR_label_t bad_type = MIR_new_label(c->ctx);
+          MIR_label_t done = MIR_new_label(c->ctx);
+          mir_emit_is_num_guard(c->ctx, c->jit_func, c->r_bool, vstack_top(&c->vs), bad_type);
+          mir_i64_to_d(c->ctx, c->jit_func, dst, vstack_top(&c->vs), c->r_d_slot);
+          MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, done)));
+          MIR_append_insn(c->ctx, c->jit_func, bad_type);
+          mir_emit_bailout_jump_typed(c->ctx, c->jit_func, c->bc_off, c->vs.sp,
+              &c->bailout_ctx, -1, SLOT_BOXED, -1, SLOT_BOXED);
+          MIR_append_insn(c->ctx, c->jit_func, done);
+        }
+        if (c->op == OP_PUT_ARG) (void)vstack_pop(&c->vs);
+        break;
+      }
+      if (idx < JIT_PARAM_HOIST_CAP && c->param_cache[idx]) {
+        int slot = c->vs.sp - 1;
+        uint8_t type = c->vs.slot_type[slot];
+        MIR_reg_t dst = c->param_cache[idx];
+        if (type != SLOT_NUM)
+          MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+              MIR_new_reg_op(c->ctx, dst), MIR_new_reg_op(c->ctx, vstack_top(&c->vs))));
+        // Boxing the parameter copy must not erase the expression's numeric
+        // representation (e.g. the value consumed by --n >= 0).
+        mir_emit_slot_boxed(c->ctx, c->jit_func, dst,
+            c->vs.d_regs[slot], type, c->r_d_slot);
+        if (c->op == OP_PUT_ARG) (void)vstack_pop(&c->vs);
+        break;
+      }
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
       MIR_reg_t val = vstack_top(&c->vs);
       if (idx < (uint16_t)c->param_count && (c->writes_params || (c->has_captured_params && c->captured_params && c->captured_params[idx]))) {
@@ -294,7 +338,8 @@ void jit_emit_locals(jit_compile_t *c) {
                                      MIR_new_mem_op(c->ctx, MIR_T_I64,
                                                     (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), c->r_lbuf, 0, 1)));
       MIR_reg_t dst = vstack_push(&c->vs);
-      if (c->known_func_locals) c->vs.known_func[c->vs.sp - 1] = c->known_func_locals[idx];
+      if (c->known_func_locals && (!c->captured_locals || !c->captured_locals[idx]))
+        c->vs.known_func[c->vs.sp - 1] = c->known_func_locals[idx];
       if (!(c->dnum_locals && c->dnum_locals[idx]))
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_MOV,
@@ -336,7 +381,8 @@ void jit_emit_locals(jit_compile_t *c) {
                                      MIR_new_mem_op(c->ctx, MIR_T_I64,
                                                     (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), c->r_lbuf, 0, 1)));
       MIR_reg_t dst = vstack_push(&c->vs);
-      if (c->known_func_locals) c->vs.known_func[c->vs.sp - 1] = c->known_func_locals[idx];
+      if (c->known_func_locals && (!c->captured_locals || !c->captured_locals[idx]))
+        c->vs.known_func[c->vs.sp - 1] = c->known_func_locals[idx];
       if (!(c->dnum_locals && c->dnum_locals[idx]))
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_MOV,
@@ -364,7 +410,12 @@ void jit_emit_locals(jit_compile_t *c) {
       if ((int)slot_idx < c->param_count) {
         uint16_t idx = slot_idx;
         MIR_reg_t dst = vstack_push(&c->vs);
-        if (idx < (uint16_t)c->param_count && (c->writes_params || (c->has_captured_params && c->captured_params && c->captured_params[idx]))) {
+        if (idx < JIT_PARAM_HOIST_CAP && c->param_d_cache[idx]) {
+          mir_d_to_i64(c->ctx, c->jit_func, dst, c->param_d_cache[idx], c->r_d_slot);
+        } else if (idx < JIT_PARAM_HOIST_CAP && c->param_cache[idx]) {
+          MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+              MIR_new_reg_op(c->ctx, dst), MIR_new_reg_op(c->ctx, c->param_cache[idx])));
+        } else if (idx < (uint16_t)c->param_count && (c->writes_params || (c->has_captured_params && c->captured_params && c->captured_params[idx]))) {
           MIR_append_insn(c->ctx, c->jit_func,
                           MIR_new_insn(c->ctx, MIR_MOV,
                                        MIR_new_reg_op(c->ctx, dst),
@@ -404,7 +455,8 @@ void jit_emit_locals(jit_compile_t *c) {
                                        MIR_new_mem_op(c->ctx, MIR_T_I64,
                                                       (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), c->r_lbuf, 0, 1)));
         MIR_reg_t dst = vstack_push(&c->vs);
-        if (c->known_func_locals) c->vs.known_func[c->vs.sp - 1] = c->known_func_locals[idx];
+        if (c->known_func_locals && (!c->captured_locals || !c->captured_locals[idx]))
+          c->vs.known_func[c->vs.sp - 1] = c->known_func_locals[idx];
         if (!(c->dnum_locals && c->dnum_locals[idx]))
           MIR_append_insn(c->ctx, c->jit_func,
                           MIR_new_insn(c->ctx, MIR_MOV,
@@ -601,6 +653,21 @@ void jit_emit_locals(jit_compile_t *c) {
       if (idx >= c->n_locals) {
         c->ok = false;
         break;
+      }
+      if (c->integer_locals && c->integer_local_ranges && c->integer_locals[idx]) {
+        jit_integer_range_t range = c->integer_local_ranges[idx];
+        if (range.known && range.min >= 0 && range.max < UINT32_MAX &&
+            c->dnum_locals && c->dnum_locals[idx] &&
+            !(c->captured_locals && c->captured_locals[idx]) && !c->func->has_dynamic_eval) {
+          char name[48];
+          snprintf(name, sizeof(name), "incremented_index_local_%d", c->integer_local_site++);
+          c->integer_value = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+          MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_ADD,
+              MIR_new_reg_op(c->ctx, c->integer_value),
+              MIR_new_reg_op(c->ctx, c->integer_locals[idx]), MIR_new_int_op(c->ctx, 1)));
+          c->integer_store = idx;
+          c->integer_range = (jit_integer_range_t){.min = range.min + 1, .max = range.max + 1, .known = true};
+        }
       }
       if (c->known_func_locals) c->known_func_locals[idx] = NULL;
       bool loc_is_num = c->known_type_locals && c->known_type_locals[idx] == SV_TI_NUM;

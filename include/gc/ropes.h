@@ -16,7 +16,15 @@ gc_ropes_begin_result_t gc_ropes_begin(ant_t *js, bool minor);
 void gc_ropes_sweep(ant_t *js, bool minor);
 void gc_ropes_mark_conservative_roots(ant_t *js);
 
-bool gc_ropes_mark(ant_t *js, const void *ptr);
-bool gc_ropes_contains(ant_t *js, const void *ptr, size_t size, size_t align);
+typedef enum {
+  GC_ROPE_MARK_INVALID,
+  GC_ROPE_MARK_SKIP,
+  GC_ROPE_MARK_TRACE,
+} gc_rope_mark_result_t;
+
+gc_rope_mark_result_t gc_ropes_mark(
+  ant_t *js, const void *ptr, 
+  size_t size, size_t align
+);
 
 #endif

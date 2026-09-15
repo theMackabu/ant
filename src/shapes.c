@@ -68,6 +68,7 @@ typedef struct shape_descriptors {
   uint32_t ref_count;
   uint32_t count;
   bool tail_dirty;
+  bool may_have_gc_refs;
   uint32_t cap;
   uint32_t index_mask;
   uint32_t index_used;
@@ -75,6 +76,13 @@ typedef struct shape_descriptors {
   shape_index_entry_t *index;
   ant_shape_t *owners;
 } shape_descriptors_t;
+
+#if UINTPTR_MAX == UINT64_MAX
+static_assert(
+  sizeof(shape_descriptors_t) == 48 && offsetof(shape_descriptors_t, cap) == 12,
+  "the descriptor GC flag must occupy existing padding"
+);
+#endif
 
 struct ant_shape {
   uint32_t ref_count;
@@ -87,6 +95,7 @@ struct ant_shape {
   ant_shape_prop_t *props;
   shape_index_entry_t *index;
   uint32_t index_mask;
+  uint32_t jit_invalid;
   uint64_t first_child_key;
   ant_shape_t *first_child;
   shape_child_entry_t *children;
@@ -95,6 +104,13 @@ struct ant_shape {
   ant_shape_t *descriptor_prev;
   ant_shape_t *descriptor_next;
 };
+
+#if UINTPTR_MAX == UINT64_MAX
+static_assert(
+  sizeof(ant_shape_t) == 104 && offsetof(ant_shape_t, first_child_key) == 48,
+  "the JIT invalidation word must occupy existing shape padding"
+);
+#endif
 
 static shape_descriptors_t *shape_descriptors_new(void) {
   shape_descriptors_t *descriptors = calloc(1, sizeof(*descriptors));
@@ -320,6 +336,7 @@ static shape_descriptors_t *shape_descriptors_copy_prefix(const ant_shape_t *sha
   for (uint32_t i = 0; i < count; i++) {
     const ant_shape_prop_t *prop = &copy->props[i];
     if (prop->type == ANT_SHAPE_KEY_DELETED) continue;
+    if (prop->type == ANT_SHAPE_KEY_SYMBOL || prop->has_getter || prop->has_setter) copy->may_have_gc_refs = true;
 
     uint64_t key = prop->type == ANT_SHAPE_KEY_SYMBOL
       ? shape_key_symbol(prop->key.sym_off)
@@ -349,7 +366,9 @@ static bool shape_prepare_append(ant_shape_t *shape) {
 }
 
 static bool shape_prepare_metadata_write(ant_shape_t *shape) {
+  shape->jit_invalid = 1;
   shape_reclaim_descriptor_tail(shape->descriptors);
+  
   return (
     shape->descriptors->count == shape->count && 
     shape->descriptors->ref_count == 1
@@ -393,16 +412,19 @@ static bool shape_add_key(
   prop->getter = 0;
   prop->setter = 0;
   
-  if (type == ANT_SHAPE_KEY_SYMBOL) prop->key.sym_off = sym_off;
-  else prop->key.interned = interned;
+  if (type == ANT_SHAPE_KEY_SYMBOL) {
+    prop->key.sym_off = sym_off;
+    shape->descriptors->may_have_gc_refs = true;
+  } else prop->key.interned = interned;
 
   if (!shape_index_add(shape, key, slot)) {
     shape->count--;
     return false;
   }
+  
   shape->descriptors->count = shape->count;
-
   if (out_slot) *out_slot = slot;
+  
   return true;
 }
 
@@ -707,6 +729,10 @@ uint8_t ant_shape_get_inobj_limit(const ant_shape_t *shape) {
   return shape_clamp_inobj_limit(shape->inobj_limit);
 }
 
+const uint32_t *ant_shape_jit_guard(const ant_shape_t *shape) {
+  return shape ? &shape->jit_invalid : NULL;
+}
+
 int32_t ant_shape_lookup_interned(const ant_shape_t *shape, const char *interned) {
   shape_index_entry_t *entry = shape_lookup(shape, shape_key_interned(interned));
   return entry ? (int32_t)entry->slot : -1;
@@ -760,6 +786,10 @@ uint32_t ant_shape_count(const ant_shape_t *shape) {
   return shape ? shape->count : 0;
 }
 
+bool ant_shape_may_have_gc_refs(const ant_shape_t *shape) {
+  return shape && shape->descriptors->may_have_gc_refs;
+}
+
 bool ant_shape_should_compact(const ant_shape_t *shape) {
   if (!shape || shape->deleted_count < SHAPE_COMPACT_MIN_TOMBSTONES) return false;
   return shape->deleted_count >= shape->count - shape->deleted_count;
@@ -805,6 +835,7 @@ ant_shape_prop_t *ant_shape_prop_mut_at(ant_shape_t *shape, uint32_t slot) {
   if (!shape || slot >= shape->count) return NULL;
   if (shape->props[slot].type == ANT_SHAPE_KEY_DELETED) return NULL;
   if (!shape_prepare_metadata_write(shape)) return NULL;
+  shape->descriptors->may_have_gc_refs = true;
   return &shape->props[slot];
 }
 

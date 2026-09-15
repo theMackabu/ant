@@ -225,6 +225,7 @@ static inline ant_value_t sv_iter_advance(
       *out_done = true;
     } else {
       *out_value = js_arr_get(js, arr, (ant_offset_t)idx);
+      if (is_err(*out_value)) return *out_value;
       *out_done = false;
       vm->stack[vm->sp - 2] = tov(idx + 1);
     }

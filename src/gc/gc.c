@@ -154,17 +154,16 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
 
   l_rope: {
     ant_rope_heap_t *rope = (ant_rope_heap_t *)data;
-    if (!gc_ropes_contains(js, rope, sizeof(*rope), _Alignof(ant_rope_heap_t))) goto l_pop;
-    if (!gc_ropes_mark(js, rope)) goto l_pop;
+    constexpr size_t align_rope = _Alignof(ant_rope_heap_t);
+    if (gc_ropes_mark(js, rope, sizeof(*rope), align_rope) != GC_ROPE_MARK_TRACE) goto l_pop;
 
     if (vtype(rope->cached) == kTypeString) {
       v = rope->cached;
       goto l_next;
     }
 
-    if (!ant_value_stack_push_with_spill(
-      &stack, &sp, &cap, local, rope->left
-    )) gc_mark_str(js, rope->left);
+    if (!ant_value_stack_push_with_spill(&stack, &sp, &cap, local, rope->left)) 
+      gc_mark_str(js, rope->left);
     
     v = rope->right;
     goto l_next;
@@ -172,15 +171,17 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
 
   l_builder: {
     ant_string_builder_t *builder = (ant_string_builder_t *)data;
-    if (!gc_ropes_contains(js, builder, sizeof(*builder), _Alignof(ant_string_builder_t))) goto l_pop;
-    if (!gc_ropes_mark(js, builder)) goto l_pop;
+    constexpr size_t align_string = _Alignof(ant_string_builder_t);
+    if (gc_ropes_mark(js, builder, sizeof(*builder), align_string) != GC_ROPE_MARK_TRACE) goto l_pop;
     
     gc_mark_str(js, builder->snapshot);
     gc_mark_value(js, builder->cached);
     
     for (ant_builder_chunk_t *chunk = builder->head; chunk; chunk = chunk->next) {
-      if (!gc_ropes_contains(js, chunk, sizeof(*chunk), _Alignof(ant_builder_chunk_t))) break;
-      if (gc_ropes_mark(js, chunk)) gc_mark_value(js, chunk->value);
+      constexpr size_t align_builder = _Alignof(ant_builder_chunk_t);
+      gc_rope_mark_result_t marked = gc_ropes_mark(js, chunk, sizeof(*chunk), align_builder);
+      if (marked == GC_ROPE_MARK_INVALID) break;
+      if (marked == GC_ROPE_MARK_TRACE) gc_mark_value(js, chunk->value);
     }
     
     goto l_pop;

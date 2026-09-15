@@ -62,11 +62,12 @@ function next(ws) {
   return new Promise(resolve => { ws.onmessage = e => resolve(JSON.parse(e.data)); });
 }
 
-async function roundTrip(path, payload = 'x') {
+async function roundTrip(path, payload = 'x', keepOpen = false) {
   const ws = await open(path);
   const reply = next(ws);
   ws.send(payload);
   const result = await reply;
+  if (!keepOpen) ws.close();
   return { ws, result };
 }
 
@@ -77,11 +78,12 @@ async function main() {
   assert.deepEqual((await roundTrip('/null-then-set')).result, ['listener', 'second']);
   assert.deepEqual((await roundTrip('/getter')).result, { before: null, same: true, after: null });
 
-  const { ws: onApi, result: first } = await roundTrip('/on-api');
+  const { ws: onApi, result: first } = await roundTrip('/on-api', 'x', true);
   assert.deepEqual(first, ['on', 'once', 'chained']);
   const second = next(onApi);
   onApi.send('y');
   assert.deepEqual(await second, ['on', 'chained']);
+  onApi.close();
 
   // Client side: the same accessor semantics, plus events.once() still works.
   const client = new WebSocket(`ws://127.0.0.1:${server.port}/handler-first`);

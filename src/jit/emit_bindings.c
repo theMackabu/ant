@@ -1,5 +1,22 @@
 #include "compile.h"
 
+static MIR_reg_t jit_upvalue_cell(jit_compile_t *c, uint16_t index, int site) {
+  if (c->hoisted_upvalue_cell && index == c->hoisted_upvalue)
+    return c->hoisted_upvalue_cell;
+  char table_name[32], cell_name[32];
+  snprintf(table_name, sizeof(table_name), "upvs%d", site);
+  snprintf(cell_name, sizeof(cell_name), "upv%d", site);
+  MIR_reg_t table = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, table_name);
+  MIR_reg_t cell = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, cell_name);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+      MIR_new_reg_op(c->ctx, table), MIR_new_mem_op(c->ctx, MIR_T_P,
+          offsetof(sv_closure_t, upvalues), c->r_closure, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+      MIR_new_reg_op(c->ctx, cell), MIR_new_mem_op(c->ctx, MIR_T_P,
+          index * sizeof(sv_upvalue_t *), table, 0, 1)));
+  return cell;
+}
+
 void jit_emit_bindings(jit_compile_t *c) {
   switch (c->op) {
     case OP_GET_UPVAL: {
@@ -8,30 +25,12 @@ void jit_emit_bindings(jit_compile_t *c) {
                                 c->self_binding_guards[c->bc_off] != 0;
 
       int un = c->upval_n++;
-      char rn_uvs[32], rn_uv[32], rn_loc[32];
-      snprintf(rn_uvs, sizeof(rn_uvs), "upvs%d", un);
-      snprintf(rn_uv, sizeof(rn_uv), "upv%d", un);
+      char rn_loc[32];
       snprintf(rn_loc, sizeof(rn_loc), "uvloc%d", un);
-
-      MIR_reg_t r_uvs = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_uvs);
-      MIR_reg_t r_uv = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_uv);
+      MIR_reg_t r_uv = jit_upvalue_cell(c, idx, un);
       MIR_reg_t r_loc = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_loc);
       int pre_op_sp = c->vs.sp;
       MIR_reg_t dst = vstack_push(&c->vs);
-
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_MOV,
-                                   MIR_new_reg_op(c->ctx, r_uvs),
-                                   MIR_new_mem_op(c->ctx, MIR_T_P,
-                                                  (MIR_disp_t)offsetof(sv_closure_t, upvalues),
-                                                  c->r_closure, 0, 1)));
-
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_MOV,
-                                   MIR_new_reg_op(c->ctx, r_uv),
-                                   MIR_new_mem_op(c->ctx, MIR_T_P,
-                                                  (MIR_disp_t)((int)idx * (int)sizeof(sv_upvalue_t *)),
-                                                  r_uvs, 0, 1)));
 
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_MOV,
@@ -62,29 +61,13 @@ void jit_emit_bindings(jit_compile_t *c) {
     case OP_PUT_UPVAL: {
       uint16_t idx = sv_get_u16(c->ip + 1);
       int un = c->upval_n++;
-      char rn_uvs[32], rn_uv[32], rn_loc[32];
-      snprintf(rn_uvs, sizeof(rn_uvs), "upvs%d", un);
-      snprintf(rn_uv, sizeof(rn_uv), "upv%d", un);
+      char rn_loc[32];
       snprintf(rn_loc, sizeof(rn_loc), "uvloc%d", un);
-
-      MIR_reg_t r_uvs = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_uvs);
-      MIR_reg_t r_uv = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_uv);
+      MIR_reg_t r_uv = jit_upvalue_cell(c, idx, un);
       MIR_reg_t r_loc = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_loc);
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
       MIR_reg_t src = vstack_pop(&c->vs);
 
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_MOV,
-                                   MIR_new_reg_op(c->ctx, r_uvs),
-                                   MIR_new_mem_op(c->ctx, MIR_T_P,
-                                                  (MIR_disp_t)offsetof(sv_closure_t, upvalues),
-                                                  c->r_closure, 0, 1)));
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_MOV,
-                                   MIR_new_reg_op(c->ctx, r_uv),
-                                   MIR_new_mem_op(c->ctx, MIR_T_P,
-                                                  (MIR_disp_t)((int)idx * (int)sizeof(sv_upvalue_t *)),
-                                                  r_uvs, 0, 1)));
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_MOV,
                                    MIR_new_reg_op(c->ctx, r_loc),
@@ -104,29 +87,13 @@ void jit_emit_bindings(jit_compile_t *c) {
     case OP_SET_UPVAL: {
       uint16_t idx = sv_get_u16(c->ip + 1);
       int un = c->upval_n++;
-      char rn_uvs[32], rn_uv[32], rn_loc[32];
-      snprintf(rn_uvs, sizeof(rn_uvs), "upvs%d", un);
-      snprintf(rn_uv, sizeof(rn_uv), "upv%d", un);
+      char rn_loc[32];
       snprintf(rn_loc, sizeof(rn_loc), "uvloc%d", un);
-
-      MIR_reg_t r_uvs = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_uvs);
-      MIR_reg_t r_uv = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_uv);
+      MIR_reg_t r_uv = jit_upvalue_cell(c, idx, un);
       MIR_reg_t r_loc = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_loc);
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
       MIR_reg_t src = vstack_top(&c->vs);
 
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_MOV,
-                                   MIR_new_reg_op(c->ctx, r_uvs),
-                                   MIR_new_mem_op(c->ctx, MIR_T_P,
-                                                  (MIR_disp_t)offsetof(sv_closure_t, upvalues),
-                                                  c->r_closure, 0, 1)));
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_MOV,
-                                   MIR_new_reg_op(c->ctx, r_uv),
-                                   MIR_new_mem_op(c->ctx, MIR_T_P,
-                                                  (MIR_disp_t)((int)idx * (int)sizeof(sv_upvalue_t *)),
-                                                  r_uvs, 0, 1)));
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_MOV,
                                    MIR_new_reg_op(c->ctx, r_loc),

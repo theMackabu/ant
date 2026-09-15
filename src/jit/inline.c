@@ -49,6 +49,8 @@ static bool jit_op_inline_after_effect(sv_op_t op) {
     case OP_SET_LOCAL:
     case OP_SET_LOCAL8:
     case OP_GET_ARG:
+    case OP_PUT_ARG:
+    case OP_SET_ARG:
     case OP_GET_FIELD:
     case OP_GET_FIELD2:
     case OP_GET_FIELD_OPT:
@@ -76,29 +78,58 @@ static bool jit_op_inline_after_effect(sv_op_t op) {
   }
 }
 
+static bool jit_inline_note_instruction(const sv_func_t *f, int off, int size, uint8_t *boundaries) {
+  boundaries[off] |= 1;
+  const uint8_t *ip = f->code + off;
+  
+  uint16_t flags = sv_op_flags[*ip];
+  if (!(flags & (SV_OPF_JIT_BRANCH32 | SV_OPF_JIT_BRANCH8))) return true;
+
+  int delta = (flags & SV_OPF_JIT_BRANCH32) ? sv_get_i32(ip + 1) : sv_get_i8(ip + 1);
+  int next = off + size;
+  
+  if (delta < 0 || delta >= f->code_len - next) return false;
+  boundaries[next + delta] |= 2;
+  
+  return true;
+}
+
+static bool jit_inline_targets_aligned(const uint8_t *boundaries, int len) {
+  for (int off = 0; off < len; off++) if (boundaries[off] == 2) return false;
+  return true;
+}
+
 bool jit_inlineable(sv_func_t *f) {
   if (!f) return false;
   if (f->is_async || f->is_generator) return false;
   // derived ctors need the super-rebound `this` returned from RETURN/
   // RETURN_UNDEF (see the main emission); the inline path doesn't model it
   if (f->is_derived_ctor) return false;
-  if (f->code_len > JIT_INLINE_MAX_BYTECODE) return false;
+  if (!f->code || f->code_len <= 0 || f->code_len > JIT_INLINE_MAX_BYTECODE) return false;
 
+  uint8_t boundaries[JIT_INLINE_MAX_BYTECODE] = {0};
   uint8_t *ip = f->code;
   uint8_t *end = f->code + f->code_len;
   bool seen_effect = false;
 
   while (ip < end) {
     sv_op_t op = (sv_op_t)*ip;
+    if (op >= OP__COUNT) return false;
+    
     int sz = sv_op_size[op];
-    if (sz == 0) return false;
+    if (sz == 0 || sz > end - ip) return false;
 
     uint16_t flags = sv_op_flags[op];
     if ((flags & SV_OPF_JIT_INLINEABLE) == 0) return false;
+    if (!jit_inline_note_instruction(f, (int)(ip - f->code), sz, boundaries)) return false;
+
+    if (op == OP_PUT_ARG || op == OP_SET_ARG) {
+      uint16_t idx = sv_get_u16(ip + 1);
+      if (idx >= f->param_count || idx >= SV_JIT_ARGS_BUF_CAP) return false;
+    }
+    
     if ((flags & SV_OPF_JIT_INLINE_ARGC) != 0 && sv_get_u16(ip + 1) > SV_JIT_ARGS_BUF_CAP) return false;
-    if (
-        op == OP_CALL_STABLE_BUILTIN &&
-        sv_get_u16(ip + 2) > SV_JIT_ARGS_BUF_CAP) return false;
+    if (op == OP_CALL_STABLE_BUILTIN && sv_get_u16(ip + 2) > SV_JIT_ARGS_BUF_CAP) return false;
 
     // OP_SPECIAL_OBJ(0) materializes `arguments`. keep these functions on
     // the interpreter until JIT routes a real per-call activation/object
@@ -108,19 +139,197 @@ bool jit_inlineable(sv_func_t *f) {
     // These guards branch to the shared slow path, which invokes the whole
     // callee. Never emit them after an operation that may already have had an
     // observable effect.
-    if (seen_effect && jit_op_inline_restarts_callee_on_guard_failure(op))
-      return false;
+    if (seen_effect && jit_op_inline_restarts_callee_on_guard_failure(op)) return false;
 
-    if (seen_effect) {
-      if (op == OP_JMP) { if (sv_get_i32(ip + 1) < 0) return false; } 
-      else if (!jit_op_inline_after_effect(op) && !jit_op_inline_side_effect(op)) return false;
-    }
+    if (seen_effect)
+      if (op != OP_JMP && !jit_op_inline_after_effect(op) && !jit_op_inline_side_effect(op)) return false;
 
     if (jit_op_inline_side_effect(op)) seen_effect = true;
     ip += sz;
   }
 
-  return true;
+  return jit_inline_targets_aligned(boundaries, f->code_len);
+}
+
+// Track params, locals and stack slots: uint8_t 0 = no alias, 1 = may alias a reused object.
+// Join predecessor states with |=; depths < 0 marks unreachable instructions.
+// Backedges are rejected, so bytecode order is topological and one pass reaches a fixpoint.
+// Reject escaping aliases and unmodelled opcodes (default: return false) conservatively.
+// Reuse requires effect-free bodies: inline read helpers bail before getters/proxies run.
+// Restarting the callee with fresh objects then preserves any observable object identity.
+static bool jit_analyze_empty_object_reuse(sv_func_t *f) {
+  if (f->obj_site_count == 0) return false;
+  
+  int local_base = f->param_count;
+  int stack_base = local_base + f->max_locals;
+  int slots = stack_base + f->max_stack;
+  
+  if (slots <= 0 || slots > JIT_INLINE_MAX_BYTECODE || !f->code || f->code_len <= 0 ||
+    f->code_len > JIT_INLINE_MAX_BYTECODE) return false;
+
+  uint8_t boundaries[JIT_INLINE_MAX_BYTECODE] = {0};
+  for (int off = 0; off < f->code_len;) {
+    sv_op_t op = (sv_op_t)f->code[off];
+    if (op >= OP__COUNT) return false;
+    int size = sv_op_size[op];
+    if (!size || off + size > f->code_len
+      || jit_op_inline_side_effect(op)) return false;
+    if (!jit_inline_note_instruction(f, off, size, boundaries)) return false;
+    off += size;
+  }
+  if (!jit_inline_targets_aligned(boundaries, f->code_len)) return false;
+  
+  uint8_t states[(f->code_len + 1) * slots];
+  int depths[f->code_len + 1];
+  
+  memset(states, 0, sizeof(states));
+  for (int i = 0; i <= f->code_len; i++) depths[i] = -1;
+  depths[0] = 0;
+  
+  bool has_object = false;
+  for (int off = 0; off < f->code_len;) {
+    const uint8_t *ip = f->code + off;
+    sv_op_t op = (sv_op_t)*ip;
+    int size = sv_op_size[op];
+    
+    int sp = depths[off];
+    if (sp < 0) { off += size; continue; }
+    int pops, pushes;
+    if (!sv_op_stack_effect(f, ip, &pops, &pushes) ||
+        sp < pops || sp - pops + pushes > f->max_stack) return false;
+    
+    uint8_t *state = states + off * slots;
+    uint8_t *stack = state + stack_base;
+    
+    int idx;
+    bool terminal = false;
+    switch (op) {
+      case OP_OBJECT: {
+        sv_obj_site_cache_t *site = sv_obj_site_for_offset(f, (uint32_t)off);
+        if (!site || site->key_count) return false;
+        stack[sp] = 1;
+        has_object = true;
+        break;
+      }
+      case OP_GET_ARG:
+        idx = sv_get_u16(ip + 1);
+        if (idx >= f->param_count) return false;
+        stack[sp] = state[idx];
+        break;
+      case OP_PUT_ARG:
+      case OP_SET_ARG:
+        idx = sv_get_u16(ip + 1);
+        if (idx >= f->param_count) return false;
+        state[idx] = stack[sp - 1];
+        break;
+      case OP_GET_LOCAL:
+      case OP_GET_LOCAL8:
+        idx = op == OP_GET_LOCAL ? sv_get_u16(ip + 1) : ip[1];
+        if (idx >= f->max_locals) return false;
+        stack[sp] = state[local_base + idx];
+        break;
+      case OP_SET_LOCAL_UNDEF:
+        idx = sv_get_u16(ip + 1);
+        if (idx >= f->max_locals) return false;
+        state[local_base + idx] = 0;
+        break;
+      case OP_PUT_LOCAL:
+      case OP_SET_LOCAL:
+      case OP_PUT_LOCAL8:
+      case OP_SET_LOCAL8:
+        idx = op == OP_PUT_LOCAL || op == OP_SET_LOCAL ? sv_get_u16(ip + 1) : ip[1];
+        if (idx >= f->max_locals) return false;
+        state[local_base + idx] = stack[sp - 1];
+        break;
+      case OP_DUP:
+        stack[sp] = stack[sp - 1];
+        break;
+      case OP_NIP:
+        stack[sp - 2] = stack[sp - 1];
+        break;
+      case OP_GET_FIELD:
+      case OP_GET_FIELD_OPT:
+      case OP_GET_LENGTH:
+      case OP_NOT:
+      case OP_IS_UNDEF:
+      case OP_IS_NULL:
+      case OP_IS_UNDEF_OR_NULL:
+      case OP_IS_PRIMITIVE_TYPE:
+        stack[sp - 1] = 0;
+        break;
+      case OP_GET_FIELD2:
+        stack[sp] = 0;
+        break;
+      case OP_RETURN:
+        if (stack[sp - 1]) return false;
+        terminal = true;
+        break;
+      case OP_RETURN_UNDEF:
+        terminal = true;
+        break;
+      case OP_JMP:
+      case OP_JMP_TRUE:
+      case OP_JMP_FALSE:
+      case OP_JMP_TRUE8:
+      case OP_JMP_FALSE8:
+      case OP_JMP_TRUE_PEEK:
+      case OP_JMP_FALSE_PEEK:
+      case OP_JMP_NOT_NULLISH:
+      case OP_POP:
+      case OP_NOP:
+      case OP_LINE_NUM:
+      case OP_COL_NUM:
+      case OP_LABEL:
+        break;
+      case OP_CONST:
+      case OP_CONST8:
+      case OP_CONST_I8:
+      case OP_UNDEF:
+      case OP_NULL:
+      case OP_TRUE:
+      case OP_FALSE:
+      case OP_THIS:
+      case OP_GET_UPVAL:
+      case OP_GET_GLOBAL:
+        stack[sp] = 0;
+        break;
+      default:
+        return false;
+    }
+    
+    sp += pushes - pops;
+    int next = off + size;
+    int successors[2] = {next, -1};
+    
+    uint16_t flags = sv_op_flags[op];
+    if (flags & (SV_OPF_JIT_BRANCH32 | SV_OPF_JIT_BRANCH8)) {
+      int target = next + ((flags & SV_OPF_JIT_BRANCH32) ? sv_get_i32(ip + 1) : sv_get_i8(ip + 1));
+      if (target <= off || target >= f->code_len || !(boundaries[target] & 1)) return false;
+      if (op == OP_JMP) successors[0] = target;
+      else successors[1] = target;
+    }
+    
+    for (int i = 0; !terminal && i < 2; i++) {
+      int target = successors[i];
+      if (target < 0) continue;
+      if (depths[target] >= 0 && depths[target] != sp) return false;
+      depths[target] = sp;
+      uint8_t *dest = states + target * slots;
+      for (int j = 0; j < slots; j++) dest[j] |= state[j];
+    }
+    
+    off = next;
+  }
+  
+  return has_object;
+}
+
+static bool jit_inline_can_reuse_empty_objects(sv_func_t *f) {
+  if (!f->jit_inline_reuse_checked) {
+    f->jit_inline_reuse_empty = jit_analyze_empty_object_reuse(f);
+    f->jit_inline_reuse_checked = true;
+  }
+  return f->jit_inline_reuse_empty;
 }
 
 static void mir_emit_inline_read_guard(
@@ -223,6 +432,41 @@ bool jit_has_immediate_numeric_local_init(sv_func_t *func, uint8_t *ip, uint8_t 
   return false;
 }
 
+static bool jit_inline_reader_leaf(sv_func_t *func) {
+  if (!jit_inlineable(func) || func->code_len > 64 ||
+      func->max_locals > 16 || func->max_stack > 16 ||
+      func->gc_const_slot_count || func->obj_site_count) return false;
+  for (const uint8_t *ip = func->code, *end = ip + func->code_len; ip < end; ip += sv_op_size[*ip]) {
+    switch (*ip) {
+      case OP_THIS: case OP_GET_ARG: case OP_GET_UPVAL:
+      case OP_GET_LOCAL: case OP_GET_LOCAL8:
+      case OP_PUT_LOCAL: case OP_PUT_LOCAL8: case OP_SET_LOCAL: case OP_SET_LOCAL8:
+      case OP_GET_FIELD: case OP_GET_FIELD2: case OP_GET_FIELD_OPT:
+      case OP_GET_LENGTH: case OP_GET_ELEM: case OP_GET_GLOBAL:
+      case OP_CONST: case OP_CONST8: case OP_CONST_I8:
+      case OP_UNDEF: case OP_NULL: case OP_TRUE: case OP_FALSE:
+      case OP_DUP: case OP_POP: case OP_NIP:
+      case OP_SEQ: case OP_SNE:
+      case OP_IS_UNDEF: case OP_IS_NULL: case OP_IS_UNDEF_OR_NULL:
+      case OP_JMP: case OP_JMP_TRUE: case OP_JMP_FALSE:
+      case OP_JMP_TRUE8: case OP_JMP_FALSE8:
+      case OP_JMP_TRUE_PEEK: case OP_JMP_FALSE_PEEK: case OP_JMP_NOT_NULLISH:
+      case OP_RETURN: case OP_RETURN_UNDEF:
+      case OP_NOP: case OP_LINE_NUM: case OP_COL_NUM: case OP_LABEL:
+        break;
+      case OP_EQ: case OP_NE: {
+        const uint8_t *feedback = sv_func_type_feedback(func);
+        uint8_t seen = feedback ? feedback[ip - func->code] : 0;
+        if (!sv_tfb_specialization_ready(seen) || (seen & SV_TFB_CLASS_MASK) != SV_TFB_NUM)
+          return false;
+        break;
+      }
+      default: return false;
+    }
+  }
+  return true;
+}
+
 void jit_emit_inline_body(
     MIR_context_t ctx, MIR_item_t jit_func, ant_t *js,
     sv_func_t *callee,
@@ -260,6 +504,7 @@ void jit_emit_inline_body(
     }
   }
   
+  int reader_budget = 128;
   int inl_max_stack = callee->max_stack + JIT_VSTACK_SLACK;
   MIR_reg_t inl_vs[inl_max_stack];
   for (int i = 0; i < inl_max_stack; i++) {
@@ -304,6 +549,28 @@ void jit_emit_inline_body(
       INL_FLUSH_SLOT(_fa);              \
   } while (0)
 
+  int inl_n_args = callee->param_count < SV_JIT_ARGS_BUF_CAP
+    ? callee->param_count : SV_JIT_ARGS_BUF_CAP;
+  MIR_reg_t inl_params[inl_n_args > 0 ? inl_n_args : 1];
+  memset(inl_params, 0, sizeof(inl_params));
+  for (uint8_t *scan = callee->code; scan < callee->code + callee->code_len;
+       scan += sv_op_size[*scan]) {
+    if (*scan != OP_PUT_ARG && *scan != OP_SET_ARG) continue;
+    uint16_t idx = sv_get_u16(scan + 1);
+    ANT_ASSERT(idx < inl_n_args, "invalid inline parameter index");
+    if (inl_params[idx]) continue;
+    char rn[32];
+    snprintf(rn, sizeof(rn), "inl%d_arg%u", id, (unsigned)idx);
+    inl_params[idx] = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, rn);
+    if (idx >= caller_argc) {
+      mir_load_imm(ctx, jit_func, inl_params[idx], mkval(kTypeUndefined, 0));
+    } else if (arg_num && arg_num[idx]) {
+      INL_ENSURE_D_SLOT();
+      mir_d_to_i64(ctx, jit_func, inl_params[idx], arg_d[idx], *p_d_slot);
+    } else MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, inl_params[idx]), MIR_new_reg_op(ctx, arg_regs[idx])));
+  }
+
   int inl_n_locals = callee->max_locals;
   MIR_reg_t inl_locals[inl_n_locals > 0 ? inl_n_locals : 1];
   for (int i = 0; i < inl_n_locals; i++) {
@@ -333,6 +600,7 @@ void jit_emit_inline_body(
     }
   }
 
+  bool reuse_empty_objects = jit_inline_can_reuse_empty_objects(callee);
   int inl_arith = 0;
   int inl_upval_n = 0;
 
@@ -360,6 +628,12 @@ void jit_emit_inline_body(
     switch (op) {
       case OP_GET_ARG: {
         uint16_t idx = sv_get_u16(ip + 1);
+        if (idx < inl_n_args && inl_params[idx]) {
+          inl_num[isp] = 0;
+          MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, inl_vs[isp++]), MIR_new_reg_op(ctx, inl_params[idx])));
+          break;
+        }
         if ((int)idx < caller_argc && arg_num && arg_num[idx]) {
           MIR_append_insn(ctx, jit_func,
                           MIR_new_insn(ctx, MIR_DMOV,
@@ -377,6 +651,52 @@ void jit_emit_inline_body(
                                        MIR_new_reg_op(ctx, arg_regs[idx])));
         else
           mir_load_imm(ctx, jit_func, dst, mkval(kTypeUndefined, 0));
+        break;
+      }
+
+      case OP_PUT_ARG:
+      case OP_SET_ARG: {
+        INL_FLUSH_SLOT(isp - 1);
+        uint16_t idx = sv_get_u16(ip + 1);
+        ANT_ASSERT(idx < inl_n_args && inl_params[idx], "invalid inline parameter store");
+        MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_reg_op(ctx, inl_params[idx]), MIR_new_reg_op(ctx, inl_vs[isp - 1])));
+        if (op == OP_PUT_ARG) inl_num[--isp] = 0;
+        break;
+      }
+
+      case OP_OBJECT: {
+        INL_FLUSH_ALL();
+        sv_obj_site_cache_t *site = sv_obj_site_for_offset(callee, (uint32_t)inl_bc_off);
+        bool reuse_site = reuse_empty_objects && site && site->key_count == 0;
+        MIR_reg_t dst = inl_vs[isp++];
+        inl_num[isp - 1] = 0;
+        MIR_label_t allocated = MIR_new_label(ctx);
+        if (reuse_site) {
+          mir_load_const_slot(ctx, jit_func, dst, &site->literal_template);
+          MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_URSH,
+              MIR_new_reg_op(ctx, r_bool), MIR_new_reg_op(ctx, dst),
+              MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
+          MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_BEQ,
+              MIR_new_label_op(ctx, allocated), MIR_new_reg_op(ctx, r_bool),
+              MIR_new_uint_op(ctx, NANBOX_TOBJ_TAG)));
+        }
+        MIR_append_insn(ctx, jit_func, MIR_new_call_insn(ctx, 7,
+            MIR_new_ref_op(ctx, ext->object_proto), MIR_new_ref_op(ctx, ext->imp_object),
+            MIR_new_reg_op(ctx, dst), MIR_new_reg_op(ctx, r_vm), MIR_new_reg_op(ctx, r_js),
+            MIR_new_uint_op(ctx, (uintptr_t)callee), MIR_new_uint_op(ctx, (uintptr_t)site)));
+        MIR_label_t ok = MIR_new_label(ctx);
+        mir_emit_inline_read_guard(ctx, jit_func, dst, result, r_bool, slow, join, ok);
+        MIR_append_insn(ctx, jit_func, ok);
+        if (reuse_site) {
+          char rn[40];
+          snprintf(rn, sizeof(rn), "inl%d_empty_site%d", id, inl_bc_off);
+          MIR_reg_t slot = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, rn);
+          mir_load_imm(ctx, jit_func, slot, (uintptr_t)&site->literal_template);
+          MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_mem_op(ctx, MIR_JSVAL, 0, slot, 0, 1), MIR_new_reg_op(ctx, dst)));
+        }
+        MIR_append_insn(ctx, jit_func, allocated);
         break;
       }
 
@@ -431,6 +751,13 @@ void jit_emit_inline_body(
                         MIR_new_insn(ctx, MIR_MOV,
                                      MIR_new_reg_op(ctx, inl_vs[isp++]),
                                      MIR_new_reg_op(ctx, r_inl_this)));
+        break;
+      }
+
+      case OP_SET_LOCAL_UNDEF: {
+        uint16_t idx = sv_get_u16(ip + 1);
+        ANT_ASSERT(idx < inl_n_locals, "invalid inline local initialization");
+        mir_load_imm(ctx, jit_func, inl_locals[idx], SV_TDZ);
         break;
       }
 
@@ -964,8 +1291,9 @@ void jit_emit_inline_body(
         uint8_t feedback = sv_func_type_feedback(callee)
                                ? sv_func_type_feedback(callee)[inl_bc_off]
                                : 0;
-        if (sv_tfb_specialization_ready(feedback) &&
-            (feedback & SV_TFB_CLASS_MASK) == SV_TFB_NUM) {
+        bool reader_coercion = ext->reader_only && (op == OP_EQ || op == OP_NE);
+        if (reader_coercion || (sv_tfb_specialization_ready(feedback) &&
+            (feedback & SV_TFB_CLASS_MASK) == SV_TFB_NUM)) {
           int right_idx = isp - 1;
           int left_idx = isp - 2;
           MIR_reg_t rr = inl_vs[right_idx];
@@ -993,6 +1321,9 @@ void jit_emit_inline_body(
           MIR_append_insn(ctx, jit_func,
                           MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, eq_done)));
           MIR_append_insn(ctx, jit_func, eq_slow);
+          if (reader_coercion) {
+            MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, slow)));
+          } else {
           MIR_item_t helper = op == OP_SEQ  ? imp_seq
                               : op == OP_EQ ? imp_eq
                               : op == OP_NE ? imp_ne
@@ -1006,6 +1337,7 @@ void jit_emit_inline_body(
           mir_call_helper2(ctx, jit_func, rd,
                            helper2_proto, helper,
                            r_vm, r_js, rl, rr);
+          }
           MIR_append_insn(ctx, jit_func, eq_done);
           inl_num[isp - 1] = 0;
           inl_num[isp] = 0;
@@ -1036,6 +1368,21 @@ void jit_emit_inline_body(
                              r_vm, r_js, rl, rr);
           }
         }
+        break;
+      }
+
+      case OP_NOT: {
+        INL_FLUSH_SLOT(isp - 1);
+        MIR_reg_t value = inl_vs[isp - 1];
+        MIR_label_t falsy = MIR_new_label(ctx);
+        MIR_label_t done = MIR_new_label(ctx);
+        mir_emit_truthy_branch(ctx, jit_func, value, r_bool, r_js,
+            ext->truthy_proto, ext->imp_is_truthy, true, falsy);
+        mir_load_imm(ctx, jit_func, value, js_false);
+        MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+        MIR_append_insn(ctx, jit_func, falsy);
+        mir_load_imm(ctx, jit_func, value, js_true);
+        MIR_append_insn(ctx, jit_func, done);
         break;
       }
 
@@ -1138,23 +1485,8 @@ void jit_emit_inline_body(
         MIR_label_t lbl = inl_label_for_offset(ctx, &inl_lm, target, isp);
         ANT_ASSERT(lbl != NULL, "inline label map exhausted");
 
-        uint64_t cmp_bool = is_false_branch ? js_false : js_true;
-
-        MIR_append_insn(ctx, jit_func,
-                        MIR_new_insn(ctx, MIR_URSH,
-                                     MIR_new_reg_op(ctx, r_bool),
-                                     MIR_new_reg_op(ctx, cond),
-                                     MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
-        MIR_append_insn(ctx, jit_func,
-                        MIR_new_insn(ctx, MIR_BNE,
-                                     MIR_new_label_op(ctx, slow),
-                                     MIR_new_reg_op(ctx, r_bool),
-                                     MIR_new_uint_op(ctx, js_false >> NANBOX_TYPE_SHIFT)));
-        MIR_append_insn(ctx, jit_func,
-                        MIR_new_insn(ctx, MIR_BEQ,
-                                     MIR_new_label_op(ctx, lbl),
-                                     MIR_new_reg_op(ctx, cond),
-                                     MIR_new_uint_op(ctx, cmp_bool)));
+        mir_emit_truthy_branch(ctx, jit_func, cond, r_bool, r_js,
+            ext->truthy_proto, ext->imp_is_truthy, is_false_branch, lbl);
         break;
       }
 
@@ -1171,7 +1503,7 @@ void jit_emit_inline_body(
         MIR_label_t gf_slowl = MIR_new_label(ctx);
         bool gf_fast = r_ic_epoch != 0 &&
                        mir_emit_get_field_ic_fastpath(
-                           ctx, jit_func, callee, -(id * 100000 + inl_bc_off + 1), gf_ic_idx,
+                           ctx, jit_func, js, callee, -(id * 100000 + inl_bc_off + 1), gf_ic_idx,
                            atom, obj, dst, gf_slowl, r_ic_epoch);
         if (gf_fast) {
           MIR_append_insn(ctx, jit_func,
@@ -1179,11 +1511,10 @@ void jit_emit_inline_body(
           MIR_append_insn(ctx, jit_func, gf_slowl);
         }
         MIR_append_insn(ctx, jit_func,
-                        MIR_new_call_insn(ctx, 10,
+                        MIR_new_call_insn(ctx, 9,
                                           MIR_new_ref_op(ctx, gf_proto),
                                           MIR_new_ref_op(ctx, seen_effect ? ext->imp_get_field : imp_get_field_inline),
                                           MIR_new_reg_op(ctx, dst),
-                                          MIR_new_reg_op(ctx, r_vm),
                                           MIR_new_reg_op(ctx, r_js),
                                           MIR_new_reg_op(ctx, obj),
                                           MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str),
@@ -1220,7 +1551,7 @@ void jit_emit_inline_body(
         uint16_t gf_ic_idx = sv_get_u16(ip + 5);
         bool gf_fast = r_ic_epoch != 0 &&
                        mir_emit_get_field_ic_fastpath(
-                           ctx, jit_func, callee, -(id * 100000 + inl_bc_off + 1), gf_ic_idx,
+                           ctx, jit_func, js, callee, -(id * 100000 + inl_bc_off + 1), gf_ic_idx,
                            atom, obj, dst, gf_slow, r_ic_epoch);
         if (gf_fast) {
           MIR_append_insn(ctx, jit_func,
@@ -1228,11 +1559,10 @@ void jit_emit_inline_body(
           MIR_append_insn(ctx, jit_func, gf_slow);
         }
         MIR_append_insn(ctx, jit_func,
-                        MIR_new_call_insn(ctx, 10,
+                        MIR_new_call_insn(ctx, 9,
                                           MIR_new_ref_op(ctx, gf_proto),
                                           MIR_new_ref_op(ctx, seen_effect ? ext->imp_get_field : imp_get_field_inline),
                                           MIR_new_reg_op(ctx, dst),
-                                          MIR_new_reg_op(ctx, r_vm),
                                           MIR_new_reg_op(ctx, r_js),
                                           MIR_new_reg_op(ctx, obj),
                                           MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str),
@@ -1263,7 +1593,7 @@ void jit_emit_inline_body(
         uint16_t gf_ic_idx = sv_get_u16(ip + 5);
         bool gf_fast = r_ic_epoch != 0 &&
                        mir_emit_get_field_ic_fastpath(
-                           ctx, jit_func, callee, -(id * 100000 + inl_bc_off + 1), gf_ic_idx,
+                           ctx, jit_func, js, callee, -(id * 100000 + inl_bc_off + 1), gf_ic_idx,
                            atom, obj, dst, gf_slow, r_ic_epoch);
         if (gf_fast) {
           MIR_append_insn(ctx, jit_func,
@@ -1271,11 +1601,10 @@ void jit_emit_inline_body(
           MIR_append_insn(ctx, jit_func, gf_slow);
         }
         MIR_append_insn(ctx, jit_func,
-                        MIR_new_call_insn(ctx, 10,
+                        MIR_new_call_insn(ctx, 9,
                                           MIR_new_ref_op(ctx, gf_proto),
                                           MIR_new_ref_op(ctx, seen_effect ? ext->imp_get_field : imp_get_field_inline),
                                           MIR_new_reg_op(ctx, dst),
-                                          MIR_new_reg_op(ctx, r_vm),
                                           MIR_new_reg_op(ctx, r_js),
                                           MIR_new_reg_op(ctx, obj),
                                           MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str),
@@ -1594,6 +1923,8 @@ void jit_emit_inline_body(
                    "invalid inline call stack depth");
         INL_FLUSH_ALL();
 
+        MIR_reg_t nc_args[nc_argc ? nc_argc : 1];
+        for (int i = 0; i < (int)nc_argc; i++) nc_args[i] = inl_vs[isp - (int)nc_argc + i];
         for (int i = (int)nc_argc - 1; i >= 0; i--)
           MIR_append_insn(ctx, jit_func,
                           MIR_new_insn(ctx, MIR_MOV,
@@ -1660,6 +1991,23 @@ void jit_emit_inline_body(
                                                       r_dv_cl, 0, 1)));
           mir_emit_resolve_call_this(ctx, jit_func, r_dv_this, r_dv_cl,
                                      nc_this, r_bool, r_dv_bound);
+          sv_func_t *reader = sv_tfb_get_call_target(callee, dv_off);
+          if (ext->next_inline_id && jit_inline_reader_leaf(reader) && reader->code_len <= reader_budget) {
+            reader_budget -= reader->code_len;
+            MIR_label_t dispatch = MIR_new_label(ctx);
+            MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_BNE,
+                MIR_new_label_op(ctx, dispatch), MIR_new_reg_op(ctx, r_dv_fn),
+                MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)reader)));
+            int reader_id = (*ext->next_inline_id)++;
+            jit_inline_ext_t reader_ext = *ext;
+            reader_ext.reader_only = true;
+            jit_emit_inline_body(ctx, jit_func, js, reader, nc_args, nc_argc, NULL, NULL,
+                nc_dst, dv_generic, dv_done, r_bool, p_d_slot, reader_id, p_reg_site,
+                r_dv_cl, r_dv_this, inl_undef, r_dv_sup, r_vm, r_js, r_ic_epoch,
+                helper2_proto, imp_seq, imp_sne, imp_eq, imp_ne,
+                gf_proto, imp_get_field_inline, special_obj_proto, imp_special_obj, &reader_ext);
+            MIR_append_insn(ctx, jit_func, dispatch);
+          }
           MIR_append_insn(ctx, jit_func,
                           MIR_new_insn(ctx, MIR_BEQ,
                                        MIR_new_label_op(ctx, dv_generic),
@@ -1807,4 +2155,6 @@ void jit_emit_inline_body(
     if (jit_op_inline_side_effect(op)) seen_effect = true;
     ip += sz;
   }
+  
+  ANT_ASSERT(!reuse_empty_objects || !seen_effect, "empty object reuse requires an effect-free inline body");
 }

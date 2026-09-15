@@ -74,9 +74,11 @@ bool ant_shape_should_compact(const ant_shape_t *shape);
 bool ant_shape_is_shared(const ant_shape_t *shape);
 
 uint32_t ant_shape_count(const ant_shape_t *shape);
+bool ant_shape_may_have_gc_refs(const ant_shape_t *shape);
 uint32_t ant_shape_compact(ant_shape_t *shape);
 uint8_t ant_shape_get_attrs(const ant_shape_t *shape, uint32_t slot);
 
+const uint32_t *ant_shape_jit_guard(const ant_shape_t *shape);
 const ant_shape_prop_t *ant_shape_prop_at(const ant_shape_t *shape, uint32_t slot);
 ant_shape_prop_t *ant_shape_prop_mut_at(ant_shape_t *shape, uint32_t slot);
 

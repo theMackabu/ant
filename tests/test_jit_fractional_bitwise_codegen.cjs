@@ -11,8 +11,11 @@ assert.strictEqual(child.status, 0, String(child.error || child.stderr));
 assert.match(child.stdout, /PASS fractional bitwise conversion/);
 const mirModule = child.stderr.match(/jit_bitwise_[^\n]*:\s*module[\s\S]*?endmodule/);
 assert.ok(mirModule, 'missing bitwise compilation');
-assert.match(mirModule[0], /\bd2i\s+spec_i_/);
+assert.match(mirModule[0], /\bd2i\s+word_integer_/);
+assert.match(mirModule[0], /\bubge\s+L\d+,\s*word_magnitude_/,
+  'native conversion must guard the finite integer range');
 assert.doesNotMatch(mirModule[0], /\bcall\s+helper[12]_proto, jit_helper_(?:band|bor|bxor|shl|shr|ushr|bnot),/,
   'fractional operands should use guarded native conversion');
-assert.doesNotMatch(mirModule[0], /\bi2d\s+spec_rt_/, 'bitwise conversion truncates without an exactness check');
+assert.doesNotMatch(mirModule[0], /\bi2d\s+(?:spec_rt_|\w+_roundtrip_)/,
+  'bitwise conversion truncates without an exactness check');
 console.log('PASS fractional bitwise code generation');

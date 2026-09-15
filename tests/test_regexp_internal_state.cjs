@@ -54,4 +54,26 @@ for (let i = 0; i < 20; i++) {
   assert(alternatingB.exec('x').index === 0, 'alternating shaped receiver B mismatch');
 }
 
+// Cached literal classification belongs to compiled source, including after
+// compile() switches between literal, nonliteral and differently flagged forms.
+const changingPattern = /needle/;
+for (let i = 0; i < 100; i++) assert(changingPattern.test('a needle'), 'literal warmup');
+Object.defineProperty(changingPattern, 'source', { value: 'wrong', configurable: true });
+assert(changingPattern.exec('a needle')[0] === 'needle', 'own source must not replace internal source');
+for (const [source, flags, subject, expected] of [
+  ['^n.+e$', '', 'needle', 'needle'],
+  ['xyz', '', 'a xyz b', 'xyz'],
+  ['abc', 'i', 'ABC', 'ABC'],
+  ['xyz', '', 'XYZ', null],
+  ['', '', 'anything', ''],
+  ['é', '', 'qé', 'é'],
+]) {
+  changingPattern.compile(source, flags);
+  for (let i = 0; i < 30; i++) {
+    const match = changingPattern.exec(subject);
+    assert((match === null ? null : match[0]) === expected, 'compiled classification must refresh');
+    assert(changingPattern.test(subject) === (expected !== null), 'compiled test classification must refresh');
+  }
+}
+
 console.log('regexp internal state semantics ok');

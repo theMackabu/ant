@@ -424,6 +424,10 @@ static ant_value_t jit_iter_advance_from_buf(
       *out_done = true;
     } else {
       *out_value = js_arr_get(js, arr, (ant_offset_t)idx);
+      if (is_err(*out_value)) {
+        GC_ROOT_RESTORE(js, root_mark);
+        return *out_value;
+      }
       *out_done = false;
       iter_buf[1] = tov(idx + 1);
     }
@@ -984,8 +988,50 @@ ant_value_t jit_helper_typeof(sv_vm_t *vm, ant_t *js, ant_value_t v) {
   return js_mkstr(js, ts, strlen(ts));
 }
 
-int64_t jit_helper_is_truthy(ant_t *js, ant_value_t v) {
-  return (int64_t)js_truthy(js, v);
+static_assert(
+  NANBOX_TYPE_MASK < 32,
+  "truthiness mask requires a 32-bit type set"
+);
+
+static_assert(
+  offsetof(ant_flat_string_t, len) == 0 &&
+  offsetof(ant_rope_heap_t, len) == 0 &&
+  offsetof(ant_string_builder_t, len) == 0,
+  "truthiness requires the shared string length prefix"
+);
+
+static_assert(
+  STR_HEAP_TAG_FLAT == 0 && STR_HEAP_TAG_ROPE == 1 &&
+  STR_HEAP_TAG_BUILDER == 2 && STR_HEAP_TAG_MASK == 3,
+  "truthiness requires the three string representation tags"
+);
+
+__attribute__((noinline)) int64_t jit_helper_is_truthy(ant_t *js, ant_value_t v) {
+  uint8_t type = vtype(v);
+  if (__builtin_expect(type == kTypeBigInt, 0)) return !bigint_is_zero(js, v);
+  
+  const uint32_t truthy_types =
+    (UINT32_C(1) << kTypeObject)   | (UINT32_C(1) << kTypeArray)     |
+    (UINT32_C(1) << kTypeFunction) | (UINT32_C(1) << kTypeBuiltin)   |
+    (UINT32_C(1) << kTypePromise)  | (UINT32_C(1) << kTypeGenerator) |
+    (UINT32_C(1) << kTypeSymbol);
+    
+  if ((UINT32_C(1) << type) & truthy_types) return 1;
+  
+  if (type == kTypeString) {
+    if ((vdata(v) & STR_HEAP_TAG_MASK) > STR_HEAP_TAG_BUILDER) return 0;
+    const ant_offset_t *length = vptr_masked(v, STR_HEAP_TAG_MASK);
+    return length && *length != 0;
+  }
+  
+  if (type == kTypeBool) return vdata(v) != 0;
+  
+  if (type == kTypeNumber) {
+    double number = tod(v);
+    return number != 0.0 && !isnan(number);
+  }
+  
+  return 0;
 }
 
 static inline void jit_set_error_site_from_func(ant_t *js, sv_func_t *func, int32_t bc_off) {
@@ -993,11 +1039,10 @@ static inline void jit_set_error_site_from_func(ant_t *js, sv_func_t *func, int3
   js_set_error_site_from_bc(js, func, (int)bc_off, func->debug->filename);
 }
 
-ant_value_t jit_helper_get_field(
-  sv_vm_t *vm, ant_t *js, ant_value_t obj,
+static __attribute__((noinline)) ant_value_t jit_get_field_fallback(
+  ant_t *js, ant_value_t obj,
   const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
 ) {
-  (void)vm;
   uint8_t *ip = NULL;
   if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
   sv_atom_t atom = { .str = str, .len = len };
@@ -1007,11 +1052,28 @@ ant_value_t jit_helper_get_field(
   return out;
 }
 
-ant_value_t jit_helper_get_field_inline(
-  sv_vm_t *vm, ant_t *js, ant_value_t obj,
+ant_value_t jit_helper_get_field(
+  ant_t *js, ant_value_t obj,
   const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
 ) {
-  (void)vm;
+  if (func && bc_off >= 0 && bc_off < func->code_len) {
+  sv_ic_entry_t *ic = sv_ic_slot_for_ip(func, func->code + bc_off);
+  if (
+    ic && (ic->get_kind == SV_GF_IC_SYMBOL_DESCRIPTION || 
+    ic->get_kind == SV_GF_IC_PRIMITIVE_SYMBOL_DESCRIPTION)
+  ) {
+    sv_atom_t atom = { .str = str, .len = len };
+    ant_value_t out;
+    if (sv_try_symbol_description_ic(js, obj, &atom, ic, &out)) return out;
+  }}
+  
+  return jit_get_field_fallback(js, obj, str, len, func, bc_off);
+}
+
+ant_value_t jit_helper_get_field_inline(
+  ant_t *js, ant_value_t obj,
+  const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
+) {
   uint8_t *ip = NULL;
   
   if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
@@ -1347,21 +1409,41 @@ void jit_helper_shape_transition(ant_object_t *obj, ant_shape_t *to_shape) {
 
 ant_value_t jit_helper_get_elem(
   sv_vm_t *vm, ant_t *js, ant_value_t obj,
-  ant_value_t key, sv_func_t *func, int32_t bc_off
+  ant_value_t key, sv_func_t *func, int32_t bc_off, sv_ic_entry_t *ic
 ) {
+  if (
+    ic && vtype(key) == kTypeString &&
+    (vtype(obj) == kTypeSymbol || vtype(obj) == kTypeObject)
+  ) {
+    ant_offset_t length;
+    const char *text = (const char *)(uintptr_t)vstr(js, key, &length);
+    
+    if (length == 11 && memcmp(text, "description", 11) == 0) {
+      sv_atom_t atom = { .str = NULL, .len = 11 };
+      ant_value_t result;
+      if (ic->get_kind == SV_GF_IC_MISSING && vtype(obj) == kTypeObject &&
+        sv_ic_try_get_hit(ic, obj, js_obj_ptr(obj), &atom, &result)) return result;
+      if (sv_try_symbol_description_ic(js, obj, &atom, ic, &result)) return result;
+      atom.str = intern_string("description", 11);
+      if (atom.str && sv_try_prop_get_ic_no_effect(js, obj, &atom, ic, &result)) return result;
+    }
+  }
+  
   uint8_t ot = vtype(obj);
   if (ot == kTypeNull || ot == kTypeUndefined) {
     jit_set_error_site_from_func(js, func, bc_off);
     return sv_mk_nullish_read_error_by_key(js, obj, key);
   }
+  
   if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
     double d = tod(key);
     if (d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d)
       return js_arr_get(js, obj, (uint32_t)d);
   }
+  
   ant_value_t str_elem = js_mkundef();
-  if (sv_try_string_index_get(js, obj, key, &str_elem))
-    return str_elem;
+  if (sv_try_string_index_get(js, obj, key, &str_elem)) return str_elem;
+  
   return sv_getprop_by_key(js, obj, key);
 }
 
@@ -1640,7 +1722,10 @@ ant_value_t jit_helper_new(
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
 
   ant_value_t proto = js_mkundef();
-  if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
+  if (func_obj && new_target == func && !(closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))) {
+    proto = sv_construct_prototype_from_object(js, func, func_obj);
+    if (is_err(proto)) return proto;
+  } else if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
     proto = sv_prepare_construct_meta(js, func, new_target, &effective_new_target, &record_func);
     if (is_err(proto)) return proto;
   }

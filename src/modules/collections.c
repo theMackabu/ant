@@ -482,37 +482,32 @@ __attribute__((aligned(64))) ant_value_t collections_map_get_numeric_pair(
   map_entry_t **map_ptr = get_map_from_obj(map);
   if (!map_ptr) return js_mkundef();
 
-  char left_buf[32];
+  unsigned char inline_key[128];
   char right_buf[32];
   
-  size_t left_len = collection_number_to_string(tod(left), left_buf, sizeof(left_buf));
-  size_t right_len = collection_number_to_string(tod(right), right_buf, sizeof(right_buf));
-  
-  if (left_len > sizeof(left_buf) || right_len > sizeof(right_buf) ||
+  size_t left_len = collection_number_to_string(tod(left), (char *)inline_key + 1, sizeof(right_buf));  
+  if (left_len > sizeof(right_buf)) return js_mkerr(js, "out of memory");
+
+  bool right_inline = separator_len <= sizeof(inline_key) - 1 - left_len - sizeof(right_buf);
+  char *right_out = right_inline ? (char *)inline_key + 1 + left_len + separator_len : right_buf;
+  size_t right_len = collection_number_to_string(tod(right), right_out, sizeof(right_buf));
+
+  if (right_len > sizeof(right_buf) ||
     separator_len > SIZE_MAX - 1 - left_len - right_len)
     return js_mkerr(js, "out of memory");
 
   size_t key_len = 1 + left_len + separator_len + right_len;
-  unsigned char inline_key[64];
   unsigned char *key = inline_key;
   
   if (key_len > sizeof(inline_key)) {
     key = malloc(key_len);
     if (!key) return js_mkerr(js, "out of memory");
+    memcpy(key + 1, inline_key + 1, left_len);
   }
 
-  unsigned char *out = key;
-  *out++ = (uint8_t)kTypeString;
-  
-  memcpy(out, left_buf, left_len);
-  out += left_len;
-  
-  if (separator_len > 0) {
-    memcpy(out, separator, separator_len);
-    out += separator_len;
-  }
-  
-  memcpy(out, right_buf, right_len);
+  key[0] = (uint8_t)kTypeString;
+  if (separator_len > 0) memcpy(key + 1 + left_len, separator, separator_len);
+  if (!right_inline) memcpy(key + 1 + left_len + separator_len, right_buf, right_len);
   map_entry_t *entry = NULL;
   
   unsigned key_hash = (unsigned)hash_key((const char *)key, key_len);
