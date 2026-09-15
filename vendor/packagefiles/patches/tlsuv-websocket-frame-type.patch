@@ -1,0 +1,22 @@
+diff --git a/include/tlsuv/websocket.h b/include/tlsuv/websocket.h
+--- a/include/tlsuv/websocket.h
++++ b/include/tlsuv/websocket.h
+@@ -53,6 +53,7 @@ struct tlsuv_websocket_s {
+     size_t read_cap;
+ 
+     bool closed;
++    bool last_frame_binary;
+     bool processing_read;
+ };
+ 
+diff --git a/src/websocket.c b/src/websocket.c
+--- a/src/websocket.c
++++ b/src/websocket.c
+@@ -581,6 +581,7 @@ static void websocket_process_frames(tlsuv_websocket_t *ws) {
+         case OpCode_BIN: {
+             UM_LOG(TRACE, "got data %zd masked=%d", payload_len, masked);
+             uv_buf_t data = uv_buf_init(payload, (unsigned int)payload_len);
++            ws->last_frame_binary = (op == OpCode_BIN);
+             ws->read_cb((uv_stream_t *) ws, (ssize_t)payload_len, &data);
+             break;
+         }

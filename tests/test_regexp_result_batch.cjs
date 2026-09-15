@@ -134,6 +134,28 @@ assert(
 );
 assert(regexp.lastIndex === 0, 'global replace final lastIndex');
 
+const noMatchInput = 'prefix🎈'.repeat(8192);
+const savedMatch = RegExp.lastMatch;
+const noMatchGlobal = /(never)(match)/g;
+noMatchGlobal.lastIndex = 123;
+assert(noMatchInput.replace(noMatchGlobal, '$1') === noMatchInput, 'global replace without matches');
+assert(noMatchGlobal.lastIndex === 0, 'no-match global replace resets lastIndex');
+assert(RegExp.lastMatch === savedMatch, 'no-match replacement preserves match statics');
+const noMatchSingle = /(never)(match)/;
+noMatchSingle.lastIndex = 7;
+assert(noMatchInput.replace(noMatchSingle, '$1') === noMatchInput, 'non-global replace without matches');
+assert(noMatchSingle.lastIndex === 7, 'no-match non-global replace preserves lastIndex');
+assert('nevermatch'.replace(noMatchGlobal, '$1') === 'never', 'successful replacement after a miss');
+assert('abc'.replace(/[a-z]+/g, '') === '', 'successful replacement with empty output');
+assert(''.replace(/(?:)/g, '') === '', 'empty match and empty replacement');
+assert('left-right left-right'.replace(/(left)-(right)/g, 'x') === 'x x', 'literal replacement with captures');
+assert(RegExp.$1 === 'left' && RegExp.$2 === 'right', 'literal replacement preserves capture statics');
+assert(
+  'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN'.replace(new RegExp(capturePattern), '') === '',
+  'empty replacement with more than 31 captures'
+);
+assert(RegExp.$1 === 'a' && RegExp.$9 === 'i', 'many captures retain legacy statics with empty replacement');
+
 regexp = /([a-z]+)(\d+)?/;
 regexp.lastIndex = 7;
 assert(

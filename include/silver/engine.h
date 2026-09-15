@@ -62,6 +62,11 @@ typedef enum {
 
 extern const char *const sv_op_names[OP__COUNT];
 
+bool sv_op_stack_effect(
+  const sv_func_t *func,
+  const uint8_t *ip, int *pops, int *pushes
+);
+
 static const uint8_t sv_op_size[OP__COUNT] = {
 #define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = (size),
 #include "silver/opcode.h"
@@ -158,16 +163,29 @@ typedef struct {
   uint8_t type;
 } sv_type_info_t;
 
+typedef enum: uint8_t {
+  SV_GF_IC_OWN = 0,
+  SV_GF_IC_PROTOTYPE,
+  SV_GF_IC_MISSING,
+  SV_GF_IC_PRIMITIVE_DATA,
+  SV_GF_IC_PRIMITIVE_MISSING,
+} sv_get_field_ic_kind_t;
+
 typedef struct {
   ant_shape_t *cached_shape;
-  ant_object_t *cached_holder;
-  
   uint32_t cached_index;
   uint32_t epoch;
+  
+  sv_get_field_ic_kind_t get_kind;
+  uint8_t shape_ref_mask;
+  uint32_t prototype_epoch;
+
+  ant_object_t *cached_holder;
   uintptr_t cached_aux;
   
-  // each IC slot belongs to one bytecode site/op. comparison ICs need both
-  // their direct-prototype value and object-lifetime epoch simultaneously.
+  // Each IC slot belongs to one bytecode site/op. Field reads use receiver_proto
+  // as documented by get_kind; property-add ICs use add, comparisons use comparison.
+  // Comparison ICs need both their direct prototype and object-lifetime epoch.
   union {
     ant_value_t receiver_proto;
     struct {
@@ -183,9 +201,6 @@ typedef struct {
     } comparison;
   } guard;
   
-  bool cached_is_own;
-  uint8_t shape_ref_mask;
-  uint32_t prototype_epoch;
 #ifdef ANT_WASM_EMBED
   uint32_t wasm32_proto_identity;
   uint8_t wasm32_cacheline_padding[12];
@@ -194,7 +209,14 @@ typedef struct {
 
 static_assert(
   sizeof(sv_ic_entry_t) == 64,
-  "IC entries must remain one cache line"
+  "IC entries must remain 64 bytes"
+);
+
+static_assert(
+  offsetof(sv_ic_entry_t, get_kind) < 24 &&
+  offsetof(sv_ic_entry_t, epoch) < 24 &&
+  offsetof(sv_ic_entry_t, cached_shape) < 24,
+  "IC read guards must remain in the first 24 bytes"
 );
 
 enum {
@@ -407,6 +429,9 @@ struct sv_func {
   bool needs_eval_env: 1;
   bool allows_new_target: 1;
   bool has_map_templates: 1;
+
+  bool jit_inline_reuse_checked: 1;
+  bool jit_inline_reuse_empty: 1;
 };
 
 static inline const sv_map_template_desc_t *sv_map_template_desc_at(

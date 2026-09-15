@@ -44,4 +44,37 @@ for (let i = 0; i < 12000; i++) {
 assert.strictEqual(peer.field255, 255);
 assert.strictEqual(prefix.branch, 'branch');
 assert.strictEqual('field8' in prefix, false);
+
+// Shape descriptors must keep symbols and accessor closures alive across collections.
+function descriptorPeers(seed) {
+  const key = Symbol('kept-' + seed);
+  const state = { value: seed };
+  const get = () => state.value;
+  const set = value => { state.value = value; };
+  const peers = [];
+  for (let i = 0; i < 4; i++) {
+    const object = { value: { index: i } };
+    object['unique' + seed] = seed;
+    Object.defineProperty(object, key, { get, set, configurable: true });
+    peers.push(object);
+  }
+  return peers;
+}
+const descriptorGroups = Array.from({ length: 320 }, (_, i) => descriptorPeers(i));
+for (let round = 0; round < 12; round++) {
+  for (let i = 0; i < 16000; i++) {
+    const garbage = { text: 'churn-' + i, nested: { round }, values: [i, round] };
+    if (i === 0) kept.push(garbage);
+  }
+  for (let group = 0; group < descriptorGroups.length; group++) {
+    const peers = descriptorGroups[group];
+    const key = Object.getOwnPropertySymbols(peers[0])[0];
+    assert.strictEqual(typeof key, 'symbol');
+    peers[0][key] = group + round;
+    for (let i = 0; i < peers.length; i++) {
+      assert.strictEqual(peers[i][key], group + round);
+      assert.strictEqual(peers[i].value.index, i);
+    }
+  }
+}
 console.log('PASS shared descriptors preserve object isolation and enumeration');

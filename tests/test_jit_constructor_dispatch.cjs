@@ -53,4 +53,31 @@ const changed = make(Changing, 'x');
 same(changed.value, 'x1', 'constructor type change');
 same(changed.sequence, previous + 1, 'constructor effect once');
 same(constructions, previous + 1, 'no constructor replay');
+
+let prototypeReads = 0;
+const alternatePrototype = {};
+const Alternate = new Proxy(function Alternate() {}, {
+  get(target, key, receiver) {
+    if (key === 'prototype') { prototypeReads++; return alternatePrototype; }
+    return Reflect.get(target, key, receiver);
+  }
+});
+const alternate = Reflect.construct(Plain, [91], Alternate);
+same(alternate.value, 91, 'alternate new.target arguments');
+same(alternate.target, Alternate, 'alternate new.target identity');
+same(Object.getPrototypeOf(alternate), alternatePrototype, 'alternate prototype getter');
+same(prototypeReads, 1, 'prototype getter runs once');
+
+const prototypeError = new Error('prototype getter');
+const BadTarget = new Proxy(function BadTarget() {}, {
+  get(target, key, receiver) {
+    if (key === 'prototype') throw prototypeError;
+    return Reflect.get(target, key, receiver);
+  }
+});
+const beforeBadTarget = constructions;
+let caughtPrototype;
+try { Reflect.construct(Changing, [1], BadTarget); } catch (error) { caughtPrototype = error; }
+same(caughtPrototype, prototypeError, 'prototype getter exception');
+same(constructions, beforeBadTarget, 'prototype getter throws before constructor body');
 console.log('PASS constructor dispatch');
