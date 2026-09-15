@@ -424,6 +424,10 @@ static ant_value_t jit_iter_advance_from_buf(
       *out_done = true;
     } else {
       *out_value = js_arr_get(js, arr, (ant_offset_t)idx);
+      if (is_err(*out_value)) {
+        GC_ROOT_RESTORE(js, root_mark);
+        return *out_value;
+      }
       *out_done = false;
       iter_buf[1] = tov(idx + 1);
     }
@@ -984,8 +988,50 @@ ant_value_t jit_helper_typeof(sv_vm_t *vm, ant_t *js, ant_value_t v) {
   return js_mkstr(js, ts, strlen(ts));
 }
 
-int64_t jit_helper_is_truthy(ant_t *js, ant_value_t v) {
-  return (int64_t)js_truthy(js, v);
+static_assert(
+  NANBOX_TYPE_MASK < 32,
+  "truthiness mask requires a 32-bit type set"
+);
+
+static_assert(
+  offsetof(ant_flat_string_t, len) == 0 &&
+  offsetof(ant_rope_heap_t, len) == 0 &&
+  offsetof(ant_string_builder_t, len) == 0,
+  "truthiness requires the shared string length prefix"
+);
+
+static_assert(
+  STR_HEAP_TAG_FLAT == 0 && STR_HEAP_TAG_ROPE == 1 &&
+  STR_HEAP_TAG_BUILDER == 2 && STR_HEAP_TAG_MASK == 3,
+  "truthiness requires the three string representation tags"
+);
+
+__attribute__((noinline)) int64_t jit_helper_is_truthy(ant_t *js, ant_value_t v) {
+  uint8_t type = vtype(v);
+  if (__builtin_expect(type == kTypeBigInt, 0)) return !bigint_is_zero(js, v);
+  
+  const uint32_t truthy_types =
+    (UINT32_C(1) << kTypeObject)   | (UINT32_C(1) << kTypeArray)     |
+    (UINT32_C(1) << kTypeFunction) | (UINT32_C(1) << kTypeBuiltin)   |
+    (UINT32_C(1) << kTypePromise)  | (UINT32_C(1) << kTypeGenerator) |
+    (UINT32_C(1) << kTypeSymbol);
+    
+  if ((UINT32_C(1) << type) & truthy_types) return 1;
+  
+  if (type == kTypeString) {
+    if ((vdata(v) & STR_HEAP_TAG_MASK) > STR_HEAP_TAG_BUILDER) return 0;
+    const ant_offset_t *length = vptr_masked(v, STR_HEAP_TAG_MASK);
+    return length && *length != 0;
+  }
+  
+  if (type == kTypeBool) return vdata(v) != 0;
+  
+  if (type == kTypeNumber) {
+    double number = tod(v);
+    return number != 0.0 && !isnan(number);
+  }
+  
+  return 0;
 }
 
 static inline void jit_set_error_site_from_func(ant_t *js, sv_func_t *func, int32_t bc_off) {
@@ -1640,7 +1686,10 @@ ant_value_t jit_helper_new(
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
 
   ant_value_t proto = js_mkundef();
-  if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
+  if (func_obj && new_target == func && !(closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))) {
+    proto = sv_construct_prototype_from_object(js, func, func_obj);
+    if (is_err(proto)) return proto;
+  } else if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
     proto = sv_prepare_construct_meta(js, func, new_target, &effective_new_target, &record_func);
     if (is_err(proto)) return proto;
   }
