@@ -13,6 +13,34 @@ test('symbol description', sym1.description, 'test');
 const sym3 = Symbol();
 test('symbol without description', sym3.description, undefined);
 
+const descriptionKey = ['descr', 'iption'].join('');
+const descriptionWrapper = Object(sym1);
+test('boxed symbol inherited description', descriptionWrapper.description, 'test');
+test('boxed symbol computed description', descriptionWrapper[descriptionKey], 'test');
+Object.defineProperty(descriptionWrapper, 'description', { value: 'own', configurable: true });
+test('boxed symbol own description overrides getter', descriptionWrapper.description, 'own');
+test('boxed symbol computed own description', descriptionWrapper[descriptionKey], 'own');
+delete descriptionWrapper.description;
+Object.setPrototypeOf(descriptionWrapper, null);
+test('boxed symbol without prototype has no description', descriptionWrapper.description, undefined);
+test('boxed symbol computed without prototype', descriptionWrapper[descriptionKey], undefined);
+
+const descriptionDescriptor = Object.getOwnPropertyDescriptor(Symbol.prototype, 'description');
+try {
+  delete Symbol.prototype.description;
+  test('deleted symbol description getter', sym1.description, undefined);
+  test('deleted computed symbol description getter', sym1[descriptionKey], undefined);
+  Object.defineProperty(Symbol.prototype, 'description', {
+    configurable: true,
+    get() { return 'replacement'; },
+  });
+  test('replaced symbol description getter', sym1.description, 'replacement');
+  test('replaced computed symbol description getter', sym1[descriptionKey], 'replacement');
+} finally {
+  Object.defineProperty(Symbol.prototype, 'description', descriptionDescriptor);
+}
+test('restored symbol description getter', sym1.description, 'test');
+
 const obj = {};
 const symKey = Symbol('key');
 obj[symKey] = 'value';

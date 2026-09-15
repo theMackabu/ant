@@ -668,10 +668,9 @@ static bool mir_emit_get_field_shape_snapshot(
   const uint32_t *guard = ant_shape_jit_guard(shape);
   uint32_t index = ic->cached_index;
   const ant_shape_prop_t *prop = ant_shape_prop_at(shape, index);
-  // Virtual string/symbol/index properties can override ordinary slot lookup.
+  // Virtual string/index properties can override ordinary slot lookup.
   if (!js || !guard || *guard || !atom->len ||
       (atom->str[0] >= '0' && atom->str[0] <= '9') ||
-      (atom->len == 11 && memcmp(atom->str, "description", 11) == 0) ||
       !prop || prop->type != ANT_SHAPE_KEY_STRING || prop->key.interned != atom->str ||
       prop->has_getter || prop->has_setter) return false;
 

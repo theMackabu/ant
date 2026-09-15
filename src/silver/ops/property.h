@@ -266,9 +266,9 @@ static inline bool sv_ic_try_get_hit(
   return true;
 }
 
-static inline bool sv_field_can_cache_absence(ant_t *js, const char *interned) {
+static inline bool sv_field_can_cache_absence(const char *interned) {
   const char c = interned[0];
-  return !(c >= '0' && c <= '9') && interned != js->intern.description;
+  return !(c >= '0' && c <= '9');
 }
 
 static inline __attribute__((always_inline)) bool sv_ic_probe_get_chain(
@@ -337,7 +337,7 @@ static inline bool sv_try_get_data_prop_chain_no_effect(
   ant_value_t *out
 ) {
   if (!interned || !out || !is_object_type(obj)) return false;
-  bool can_miss = sv_field_can_cache_absence(js, interned);
+  bool can_miss = sv_field_can_cache_absence(interned);
   
   ant_value_t cur = obj;
   sv_proto_guard_t guard;
@@ -579,16 +579,6 @@ static inline ant_value_t sv_getprop_by_key(ant_t *js, ant_value_t obj, ant_valu
   ant_offset_t koff = vstr(js, key_str, &klen);
 
   const char *kptr = (const char *)(uintptr_t)(koff);
-  // Match named-field reads of Ant's virtual Symbol-wrapper description.
-  // Computed keys are not interned and may contain embedded NUL bytes.
-  if (vtype(obj) == kTypeObject && klen == 11 &&
-      memcmp(kptr, "description", 11) == 0) {
-    ant_value_t primitive = js_get_slot(obj, SLOT_PRIMITIVE);
-    if (vtype(primitive) == kTypeSymbol) {
-      const char *desc = js_sym_desc(primitive);
-      return desc ? js_mkstr(js, desc, strlen(desc)) : js_mkundef();
-    }
-  }
   return js_getprop_fallback_len(js, obj, kptr, (size_t)klen);
 }
 
@@ -606,14 +596,10 @@ static inline ant_value_t sv_prop_get_at(
   }
 
   ant_value_t str_prim = js_mkundef();
-  ant_value_t sym_prim = js_mkundef();
-
   if (t == kTypeString) str_prim = obj;
-  else if (t == kTypeSymbol) sym_prim = obj;
   else if (t == kTypeObject) {
     ant_value_t prim = js_get_slot(obj, SLOT_PRIMITIVE);
     if (vtype(prim) == kTypeString) str_prim = prim;
-    else if (vtype(prim) == kTypeSymbol) sym_prim = prim;
   }
 
   if (vtype(str_prim) == kTypeString && is_length_key(interned, len)) {
@@ -623,12 +609,6 @@ static inline ant_value_t sv_prop_get_at(
   if (is_length_key(interned, len)) {
     ant_object_t *arr_ptr = sv_array_obj_ptr(obj);
     if (arr_ptr) return tov((double)js_arr_len(js, js_as_obj(obj)));
-  }
-
-  if (vtype(sym_prim) == kTypeSymbol && interned == js->intern.description) {
-    const char *desc = js_sym_desc(sym_prim);
-    if (desc) return js_mkstr(js, desc, strlen(desc));
-    return js_mkundef();
   }
 
   if (t == kTypeObject || t == kTypeArray || t == kTypeFunction || t == kTypePromise) {
@@ -804,7 +784,7 @@ static inline __attribute__((always_inline)) bool sv_try_prop_get_field_ic_no_ef
     
     bool cache_miss = 
       ptr->shape && vtype(obj) == kTypeObject && 
-      ptr->type_tag == kTypeObject && sv_field_can_cache_absence(js, a->str);
+      ptr->type_tag == kTypeObject && sv_field_can_cache_absence(a->str);
     
     if (sv_ic_probe_get_chain(obj, a->str, cache_miss, &holder, &prop_idx, &found)) {
       sv_ic_set_cached_shape(js, ic, ptr->shape);

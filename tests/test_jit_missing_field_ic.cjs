@@ -80,10 +80,7 @@ function description(object) { return object.description; }
 for (let i = 0; i < 500; i++) assert.strictEqual(description({}), undefined);
 const boxedSymbol = Object(Symbol('outside-shape'));
 Object.setPrototypeOf(boxedSymbol, null);
-// Ant supplies this virtual wrapper property even without Symbol.prototype.
-if (typeof Ant !== 'undefined') {
-  assert.strictEqual(description(boxedSymbol), 'outside-shape');
-}
+assert.strictEqual(description(boxedSymbol), undefined, 'description is inherited, not virtual');
 
 function optionalDescription(object) { return object?.description; }
 function descriptionByKey(object, key) { return object[key]; }
@@ -93,7 +90,6 @@ for (let i = 0; i < 1000; i++) {
 }
 for (const text of [undefined, '', 'interned-description', '\u03bb']) {
   const wrapper = Object(Symbol(text));
-  if (typeof Ant !== 'undefined') Object.setPrototypeOf(wrapper, null);
   for (let i = 0; i < 1000; i++) {
     const key = ['descr', 'iption'].join('');
     assert.strictEqual(description(wrapper), text);
@@ -103,6 +99,56 @@ for (const text of [undefined, '', 'interned-description', '\u03bb']) {
     assert.strictEqual(descriptionByKey(wrapper, key + '\0'), undefined);
   }
 }
+// Warm cached absence, own data, and inherited accessors on the same sites.
+function checkDescription(value, expected) {
+  const key = ['descr', 'iption'].join('');
+  assert.strictEqual(description(value), expected);
+  assert.strictEqual(optionalDescription(value), expected);
+  assert.strictEqual(descriptionByKey(value, key), expected);
+}
+for (let i = 0; i < 1000; i++) checkDescription(boxedSymbol, undefined);
+Object.setPrototypeOf(boxedSymbol, Symbol.prototype);
+checkDescription(boxedSymbol, 'outside-shape');
+Object.defineProperty(boxedSymbol, 'description', { value: 'own', configurable: true });
+for (let i = 0; i < 1000; i++) checkDescription(boxedSymbol, 'own');
+delete boxedSymbol.description;
+checkDescription(boxedSymbol, 'outside-shape');
+Object.setPrototypeOf(boxedSymbol, null);
+checkDescription(boxedSymbol, undefined);
+
+const symbolDescriptionDescriptor = Object.getOwnPropertyDescriptor(Symbol.prototype, 'description');
+const primitiveSymbol = Symbol('inherited');
+const inheritedWrapper = Object(primitiveSymbol);
+try {
+  for (let i = 0; i < 1000; i++) {
+    checkDescription(primitiveSymbol, 'inherited');
+    checkDescription(inheritedWrapper, 'inherited');
+  }
+  delete Symbol.prototype.description;
+  for (let i = 0; i < 1000; i++) {
+    checkDescription(primitiveSymbol, undefined);
+    checkDescription(inheritedWrapper, undefined);
+  }
+  Object.defineProperty(Symbol.prototype, 'description', { value: 'replacement', configurable: true });
+  for (let i = 0; i < 1000; i++) {
+    checkDescription(primitiveSymbol, 'replacement');
+    checkDescription(inheritedWrapper, 'replacement');
+  }
+  let getterCalls = 0;
+  let receiver;
+  Object.defineProperty(Symbol.prototype, 'description', {
+    configurable: true,
+    get() { getterCalls++; receiver = this; return 'getter'; },
+  });
+  checkDescription(inheritedWrapper, 'getter');
+  assert.strictEqual(receiver, inheritedWrapper);
+  assert.strictEqual(getterCalls, 3, 'each read invokes the replacement getter once');
+} finally {
+  Object.defineProperty(Symbol.prototype, 'description', symbolDescriptionDescriptor);
+}
+checkDescription(primitiveSymbol, 'inherited');
+checkDescription(inheritedWrapper, 'inherited');
+
 assert.strictEqual(optionalMissingField(null), undefined);
 assert.strictEqual(optionalMissingField(undefined), undefined);
 assert.throws(() => missingField(null), TypeError);

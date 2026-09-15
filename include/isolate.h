@@ -118,7 +118,6 @@ struct ant_isolate_t {
     const char *arguments;
     const char *callee;
     const char *idx[10];
-    const char *description;
   } intern;
 
   ant_value_t thrown_value;

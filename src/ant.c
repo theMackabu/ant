@@ -2521,6 +2521,101 @@ static void js_arguments_finalizer(ant_t *js, ant_object_t *obj) {
   js_clear_native(value, ANT_ARGUMENTS_NATIVE_TAG);
 }
 
+// TODO: arrays.c
+static ant_value_t alloc_array_with_proto_capacity(
+  ant_t *js, ant_value_t proto, uint32_t minimum_capacity,
+  uint32_t overwritten_prefix, bool exact_capacity
+) {
+  ant_object_t *obj = obj_alloc(js, kTypeArray, (uint8_t)ANT_INOBJ_MAX_SLOTS);
+  if (!obj) return js_mkerr(js, "oom");
+  
+  ant_value_t arr = mkref(kTypeArray, obj);
+  if (is_object_type(proto)) js_set_proto_init(arr, proto);
+
+  uint32_t capacity = exact_capacity
+    ? (minimum_capacity ? minimum_capacity : 1u) 
+    : MAX_DENSE_INITIAL_CAP;
+  
+  while (capacity < minimum_capacity && capacity <= UINT32_MAX / 2) capacity *= 2;
+  if (capacity < minimum_capacity) capacity = minimum_capacity;
+  if ((size_t)capacity > SIZE_MAX / sizeof(*obj->u.array.data)) return js_mkerr(js, "oom");
+
+  obj->u.array.cap = capacity;
+  obj->u.array.len = 0;
+  obj->u.array.data = malloc(sizeof(*obj->u.array.data) * (size_t)obj->u.array.cap);
+  
+  if (obj->u.array.data) {
+    js->alloc_bytes.arrays += (size_t)obj->u.array.cap * sizeof(*obj->u.array.data);
+    uint32_t fill_start = overwritten_prefix < obj->u.array.cap
+      ? overwritten_prefix
+      : obj->u.array.cap;
+    for (uint32_t i = fill_start; i < obj->u.array.cap; i++) obj->u.array.data[i] = T_EMPTY;
+    obj->flags.fast_array = 1;
+    obj->flags.dense_length_fits = 1;
+    obj->flags.may_have_holes = 0;
+    obj->flags.may_have_dense_elements = 0;
+  } else {
+    obj->u.array.cap = 0;
+    obj->u.array.len = 0;
+    obj->flags.fast_array = 0;
+    obj->flags.may_have_holes = 1;
+    obj->flags.may_have_dense_elements = 1;
+  }
+
+  return arr;
+}
+
+static ant_value_t alloc_array_with_proto(ant_t *js, ant_value_t proto) {
+  return alloc_array_with_proto_capacity(js, proto, MAX_DENSE_INITIAL_CAP, 0, false);
+}
+
+// TODO: flatten
+static inline ant_value_t mkarr(ant_t *js) {
+  return alloc_array_with_proto(js, js->sym.array_proto);
+}
+
+ant_value_t js_mkarr(ant_t *js) { 
+  return mkarr(js); 
+}
+
+static ant_value_t mkarr_dense_literal_capacity(
+  ant_t *js, const ant_value_t *elements, uint32_t count, bool exact_capacity
+) {
+  ant_value_t arr = alloc_array_with_proto_capacity(js, js->sym.array_proto, count, count, exact_capacity);
+  if (is_err(arr)) return arr;
+
+  ant_object_t *obj = array_obj_ptr(arr);
+  if (!obj || !obj->flags.fast_array || !obj->u.array.data || obj->u.array.cap < count) {
+    if (obj && obj->u.array.data) {
+      uint32_t reset_count = count < obj->u.array.cap ? count : obj->u.array.cap;
+      for (uint32_t i = 0; i < reset_count; i++) obj->u.array.data[i] = T_EMPTY;
+    }
+    
+    for (uint32_t i = 0; i < count; i++) js_arr_push(js, arr, elements[i]);
+    return arr;
+  }
+
+  bool has_holes = false;
+  bool has_elements = false;
+  
+  for (uint32_t i = 0; i < count; i++) {
+    ant_value_t value = elements[i];
+    obj->u.array.data[i] = value;
+    if (is_empty_slot(value)) has_holes = true;
+    else has_elements = true;
+  }
+  
+  obj->u.array.len = count;
+  obj->flags.may_have_holes = has_holes;
+  obj->flags.may_have_dense_elements = has_elements;
+  
+  return arr;
+}
+
+ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint32_t count) {
+  return mkarr_dense_literal_capacity(js, elements, count, false);
+}
+
 static ant_value_t strict_arguments_template(ant_t *js, bool has_iterator) {
   ant_value_t *cached = has_iterator
     ? &js->builtins.arguments_iter_template 
@@ -2826,100 +2921,6 @@ ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t template) {
   return mkref(kTypeObject, target);
 }
 
-static ant_value_t alloc_array_with_proto_capacity(
-  ant_t *js, ant_value_t proto, uint32_t minimum_capacity,
-  uint32_t overwritten_prefix, bool exact_capacity
-) {
-  ant_object_t *obj = obj_alloc(js, kTypeArray, (uint8_t)ANT_INOBJ_MAX_SLOTS);
-  if (!obj) return js_mkerr(js, "oom");
-  
-  ant_value_t arr = mkref(kTypeArray, obj);
-  if (is_object_type(proto)) js_set_proto_init(arr, proto);
-
-  uint32_t capacity = exact_capacity
-    ? (minimum_capacity ? minimum_capacity : 1u) 
-    : MAX_DENSE_INITIAL_CAP;
-  
-  while (capacity < minimum_capacity && capacity <= UINT32_MAX / 2) capacity *= 2;
-  if (capacity < minimum_capacity) capacity = minimum_capacity;
-  if ((size_t)capacity > SIZE_MAX / sizeof(*obj->u.array.data)) return js_mkerr(js, "oom");
-
-  obj->u.array.cap = capacity;
-  obj->u.array.len = 0;
-  obj->u.array.data = malloc(sizeof(*obj->u.array.data) * (size_t)obj->u.array.cap);
-  
-  if (obj->u.array.data) {
-    js->alloc_bytes.arrays += (size_t)obj->u.array.cap * sizeof(*obj->u.array.data);
-    uint32_t fill_start = overwritten_prefix < obj->u.array.cap
-      ? overwritten_prefix
-      : obj->u.array.cap;
-    for (uint32_t i = fill_start; i < obj->u.array.cap; i++) obj->u.array.data[i] = T_EMPTY;
-    obj->flags.fast_array = 1;
-    obj->flags.dense_length_fits = 1;
-    obj->flags.may_have_holes = 0;
-    obj->flags.may_have_dense_elements = 0;
-  } else {
-    obj->u.array.cap = 0;
-    obj->u.array.len = 0;
-    obj->flags.fast_array = 0;
-    obj->flags.may_have_holes = 1;
-    obj->flags.may_have_dense_elements = 1;
-  }
-
-  return arr;
-}
-
-static ant_value_t alloc_array_with_proto(ant_t *js, ant_value_t proto) {
-  return alloc_array_with_proto_capacity(js, proto, MAX_DENSE_INITIAL_CAP, 0, false);
-}
-
-// TODO: flatten
-static inline ant_value_t mkarr(ant_t *js) {
-  return alloc_array_with_proto(js, js->sym.array_proto);
-}
-
-ant_value_t js_mkarr(ant_t *js) { 
-  return mkarr(js); 
-}
-
-static ant_value_t mkarr_dense_literal_capacity(
-  ant_t *js, const ant_value_t *elements, uint32_t count, bool exact_capacity
-) {
-  ant_value_t arr = alloc_array_with_proto_capacity(js, js->sym.array_proto, count, count, exact_capacity);
-  if (is_err(arr)) return arr;
-
-  ant_object_t *obj = array_obj_ptr(arr);
-  if (!obj || !obj->flags.fast_array || !obj->u.array.data || obj->u.array.cap < count) {
-    if (obj && obj->u.array.data) {
-      uint32_t reset_count = count < obj->u.array.cap ? count : obj->u.array.cap;
-      for (uint32_t i = 0; i < reset_count; i++) obj->u.array.data[i] = T_EMPTY;
-    }
-    
-    for (uint32_t i = 0; i < count; i++) js_arr_push(js, arr, elements[i]);
-    return arr;
-  }
-
-  bool has_holes = false;
-  bool has_elements = false;
-  
-  for (uint32_t i = 0; i < count; i++) {
-    ant_value_t value = elements[i];
-    obj->u.array.data[i] = value;
-    if (is_empty_slot(value)) has_holes = true;
-    else has_elements = true;
-  }
-  
-  obj->u.array.len = count;
-  obj->flags.may_have_holes = has_holes;
-  obj->flags.may_have_dense_elements = has_elements;
-  
-  return arr;
-}
-
-ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint32_t count) {
-  return mkarr_dense_literal_capacity(js, elements, count, false);
-}
-
 ant_value_t js_newobj(ant_t *js) {
   ant_value_t obj = mkobj(js, 0);
   js_set_proto_init(obj, js->sym.object_proto);
@@ -2992,7 +2993,6 @@ static void js_init_intern_cache(ant_t *js) {
   js->intern.idx[7] = intern_string("7", 1);
   js->intern.idx[8] = intern_string("8", 1);
   js->intern.idx[9] = intern_string("9", 1);
-  js->intern.description = intern_string("description", 11);
 }
 
 typedef enum {
@@ -18790,8 +18790,6 @@ static ant_t *isolate_init(void *buf, size_t len) {
   
   js = (ant_t *)buf;
   js_init_intern_cache(js);
-  
-  if (!js->intern.description) return NULL;
   
   js->pool.rope.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
   js->rope_gc.young.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
