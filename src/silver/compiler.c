@@ -847,6 +847,7 @@ static inline uint8_t get_local_inferred_type(sv_compiler_t *c, int local_idx) {
   if (local_idx < 0 || local_idx >= c->local_count) return SV_TI_UNKNOWN;
   if (c->locals[local_idx].depth == -1) return SV_TI_UNKNOWN;
   if (c->locals[local_idx].is_tdz) return SV_TI_UNKNOWN;
+  if (c->locals[local_idx].captured) return SV_TI_UNKNOWN;
   return c->locals[local_idx].inferred_type;
 }
 
@@ -5836,7 +5837,8 @@ void compile_for(sv_compiler_t *c, sv_ast_t *node) {
     sv_ast_t *upd = node->update;
     int slot;
     if (upd->type == N_UPDATE && upd->right && upd->right->type == N_IDENT &&
-        (slot = resolve_local_slot(c, upd->right->str, upd->right->len)) >= 0) {
+        (slot = resolve_local_slot(c, upd->right->str, upd->right->len)) >= 0 &&
+        !c->locals[c->param_locals + slot].captured) {
       emit_op(c, upd->op == TOK_POSTINC ? OP_INC_LOCAL : OP_DEC_LOCAL);
       emit(c, (uint8_t)slot);
       set_local_inferred_type(c, c->param_locals + slot, SV_TI_UNKNOWN);
@@ -7563,7 +7565,7 @@ static const uint8_t sv_op_npush[OP__COUNT] = {
 #include "silver/opcode.h"
 };
 
-static bool sv_op_stack_effect(const sv_func_t *func, const uint8_t *ip, int *pops, int *pushes) {
+bool sv_op_stack_effect(const sv_func_t *func, const uint8_t *ip, int *pops, int *pushes) {
   uint8_t op = *ip;
   if (op >= OP__COUNT || sv_op_size[op] == 0) return false;
   
@@ -7575,7 +7577,7 @@ static bool sv_op_stack_effect(const sv_func_t *func, const uint8_t *ip, int *po
     
     case SVF_map_template: {
       const sv_map_template_desc_t *desc =
-          sv_map_template_desc_at(func, sv_get_u32(ip + 1));
+        sv_map_template_desc_at(func, sv_get_u32(ip + 1));
       if (!desc) return false;
       n += (int)desc->substitution_count;
       break;
