@@ -9,6 +9,29 @@ static void jit_discard_setup_module(jit_compile_t *c) {
   MIR_remove_module(c->ctx, c->mod);
 }
 
+static bool jit_numeric_param_use(sv_func_t *func, uint8_t *ip, uint8_t *end) {
+  if (ip >= end) return false;
+  sv_op_t op = (sv_op_t)*ip;
+  if (op == OP_CONST_I8 || op == OP_CONST || op == OP_CONST8 ||
+      op == OP_GET_ARG || op == OP_GET_LOCAL || op == OP_GET_LOCAL8) {
+    ip += sv_op_size[op];
+    if (ip >= end) return false;
+    op = (sv_op_t)*ip;
+  }
+  switch (op) {
+    case OP_INC: case OP_DEC: case OP_POST_INC: case OP_POST_DEC:
+      return true;
+    case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
+    case OP_LT: case OP_LE: case OP_GT: case OP_GE:
+    case OP_BAND: case OP_BOR: case OP_BXOR:
+    case OP_SHL: case OP_SHR: case OP_USHR: {
+      uint8_t *feedback = sv_func_type_feedback(func);
+      return feedback && (feedback[ip - func->code] & SV_TFB_CLASS_MASK) == SV_TFB_NUM;
+    }
+    default: return false;
+  }
+}
+
 static void jit_emit_cold_entry_counter(jit_compile_t *c, const char *site) {
   if (!c->cold_tier) return;
   char fn_name[32], calls_name[32], hot_name[32], res_name[32];
@@ -65,6 +88,8 @@ static void jit_emit_cold_entry_counter(jit_compile_t *c, const char *site) {
 }
 
 bool jit_setup_frame(jit_compile_t *c) {
+  c->hoisted_upvalue = -1;
+  c->hoisted_upvalue_cell = 0;
   char fname[128];
   snprintf(fname, sizeof(fname), "jit_%s_%p",
            c->func->debug->name ? c->func->debug->name : "anon", (void *)c->func);
@@ -288,7 +313,12 @@ bool jit_setup_frame(jit_compile_t *c) {
   }
 
   c->inline_ext = (jit_inline_ext_t){
+      .next_inline_id = &c->call_n,
       .helper1_proto = c->helper1_proto,
+      .object_proto = c->object_proto,
+      .imp_object = c->imp_object,
+      .truthy_proto = c->truthy_proto,
+      .imp_is_truthy = c->imp_is_truthy,
       .imp_get_length_inline = c->imp_get_length_inline,
       .imp_get_field = c->imp_get_field,
       .imp_get_length = c->imp_get_length,
@@ -358,7 +388,6 @@ bool jit_setup_frame(jit_compile_t *c) {
   }
 
   c->r_tco_args = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "tco_args");
-  c->r_cond_d = 0, c->r_cond_nan = 0, c->r_cond_zd = 0, c->r_cond_zero = 0;
   c->needs_bailout = c->feat.needs_bailout;
 
   c->r_ic_epoch_val = 0;
@@ -393,7 +422,7 @@ bool jit_setup_frame(jit_compile_t *c) {
     for (int i = 0; i < c->n_locals; i++)
       if (c->captured_locals[i]) {
         c->has_captures = true;
-        break;
+        if (c->known_type_locals) c->known_type_locals[i] = SV_TI_UNKNOWN;
       }
   }
   c->cached_index_key = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "cached_index_key");
@@ -611,26 +640,56 @@ bool jit_setup_frame(jit_compile_t *c) {
   c->self_tail_entry = MIR_new_label(c->ctx);
   MIR_append_insn(c->ctx, c->jit_func, c->self_tail_entry);
 
+  c->osr_map = (osr_entry_map_t){0};
+  scan_osr_entries(c->func, &c->osr_map);
   memset(c->param_cache, 0, sizeof(c->param_cache));
+  memset(c->param_d_cache, 0, sizeof(c->param_d_cache));
   {
-    uint8_t read_mask = 0;
+    uint8_t read_mask = 0, written_mask = 0, numeric_mask = 0;
     uint8_t *pscan = c->func->code, *pend = c->func->code + c->func->code_len;
     while (pscan < pend) {
       sv_op_t pop_ = (sv_op_t)*pscan;
       int psz = sv_op_size[pop_];
       if (psz == 0) break;
-      if (pop_ == OP_GET_ARG) {
+      if (pop_ == OP_GET_ARG || pop_ == OP_GET_SLOT_RAW) {
         uint16_t pidx = sv_get_u16(pscan + 1);
-        if (pidx < JIT_PARAM_HOIST_CAP) read_mask |= (uint8_t)(1u << pidx);
+        if (pidx < JIT_PARAM_HOIST_CAP) {
+          uint8_t bit = (uint8_t)(1u << pidx);
+          read_mask |= bit;
+          if (pop_ == OP_GET_ARG && !(written_mask & bit) &&
+              jit_numeric_param_use(c->func, pscan + psz, pend)) numeric_mask |= bit;
+        }
+      } else if (pop_ == OP_PUT_ARG || pop_ == OP_SET_ARG ||
+                 (sv_op_flags[pop_] & SV_OPF_BUILDER_TARGET)) {
+        uint16_t pidx = sv_get_u16(pscan + 1);
+        if (pidx < JIT_PARAM_HOIST_CAP) written_mask |= (uint8_t)(1u << pidx);
       }
       pscan += psz;
     }
+    uint8_t promote_mask = 0;
+    if (c->writes_params && c->captured_params && c->builder_target_slots &&
+        !c->func->has_dynamic_eval && c->osr_map.count && !c->cold_tier && !c->feat.needs_tco_args) {
+      for (int i = 0; i < c->param_count && i < JIT_PARAM_HOIST_CAP; i++)
+        if (!c->captured_params[i] && !c->builder_target_slots[i]) promote_mask |= (uint8_t)(1u << i);
+      promote_mask &= read_mask;
+      if (!(promote_mask & numeric_mask)) promote_mask = 0;
+    }
     for (int i = 0; i < c->param_count && i < JIT_PARAM_HOIST_CAP; i++) {
       if (!(read_mask & (1u << i))) continue;
-      if (c->writes_params || (c->captured_params && c->captured_params[i])) continue;
+      if (c->captured_params && c->captured_params[i]) continue;
+      if (c->writes_params && !(promote_mask & (1u << i))) continue;
       char prn[16];
       snprintf(prn, sizeof(prn), "parg%d", i);
       c->param_cache[i] = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, prn);
+      if (c->writes_params) {
+        MIR_op_t slot = MIR_new_mem_op(c->ctx, MIR_JSVAL,
+            (MIR_disp_t)(i * sizeof(ant_value_t)), c->r_slotbuf, 0, 1);
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+            MIR_new_reg_op(c->ctx, c->param_cache[i]), slot));
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+            slot, MIR_new_uint_op(c->ctx, js_mkundef())));
+        continue;
+      }
       MIR_label_t in_range = MIR_new_label(c->ctx);
       MIR_label_t done = MIR_new_label(c->ctx);
       MIR_append_insn(c->ctx, c->jit_func,
@@ -649,10 +708,81 @@ bool jit_setup_frame(jit_compile_t *c) {
                                                   (MIR_disp_t)(i * (int)sizeof(ant_value_t)), c->r_args, 0, 1)));
       MIR_append_insn(c->ctx, c->jit_func, done);
     }
+    if (c->writes_params && !c->cold_tier && !c->feat.needs_tco_args) {
+      MIR_label_t bad_type = MIR_new_label(c->ctx);
+      MIR_label_t ready = MIR_new_label(c->ctx);
+      bool any_numeric = false;
+      for (int i = 0; i < c->param_count && i < JIT_PARAM_HOIST_CAP; i++) {
+        if (!c->param_cache[i] || !(numeric_mask & (1u << i))) continue;
+        char name[24];
+        snprintf(name, sizeof(name), "parg_num%d", i);
+        c->param_d_cache[i] = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_D, name);
+        mir_emit_is_num_guard(c->ctx, c->jit_func, c->r_bool, c->param_cache[i], bad_type);
+        mir_i64_to_d(c->ctx, c->jit_func, c->param_d_cache[i], c->param_cache[i], c->r_d_slot);
+        any_numeric = true;
+      }
+      if (any_numeric) {
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, ready)));
+        MIR_append_insn(c->ctx, c->jit_func, bad_type);
+        MIR_label_t call_entry = MIR_new_label(c->ctx);
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+            MIR_new_reg_op(c->ctx, c->r_bool),
+            MIR_new_mem_op(c->ctx, MIR_T_U8,
+                offsetof(sv_vm_t, jit_osr) + offsetof(sv_jit_osr_t, active), c->r_vm, 0, 1)));
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ,
+            MIR_new_label_op(c->ctx, call_entry), MIR_new_reg_op(c->ctx, c->r_bool), MIR_new_int_op(c->ctx, 0)));
+        // The OSR caller still owns the interpreter frame at its loop offset.
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_ret_insn(c->ctx, 1,
+            MIR_new_uint_op(c->ctx, SV_JIT_BAILOUT)));
+        MIR_append_insn(c->ctx, c->jit_func, call_entry);
+        // A direct JIT caller expects a JS result, not an internal retry tag.
+        // No bytecode ran yet, so reconstruct from the original call inputs.
+        MIR_reg_t entry_result = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, "param_entry_result");
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_call_insn(c->ctx, 17,
+            MIR_new_ref_op(c->ctx, c->resume_proto), MIR_new_ref_op(c->ctx, c->imp_resume),
+            MIR_new_reg_op(c->ctx, entry_result), MIR_new_reg_op(c->ctx, c->r_vm),
+            MIR_new_reg_op(c->ctx, c->r_closure), MIR_new_reg_op(c->ctx, c->r_this_curr),
+            MIR_new_reg_op(c->ctx, c->r_new_target), MIR_new_reg_op(c->ctx, c->r_super_val),
+            MIR_new_reg_op(c->ctx, c->r_args), MIR_new_reg_op(c->ctx, c->r_argc),
+            MIR_new_uint_op(c->ctx, 0), MIR_new_int_op(c->ctx, 0),
+            MIR_new_uint_op(c->ctx, 0), MIR_new_int_op(c->ctx, 0),
+            MIR_new_uint_op(c->ctx, 0), MIR_new_int_op(c->ctx, 0), MIR_new_int_op(c->ctx, 0)));
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, entry_result)));
+        MIR_append_insn(c->ctx, c->jit_func, ready);
+      }
+    }
   }
 
-  c->osr_map = (osr_entry_map_t){0};
-  scan_osr_entries(c->func, &c->osr_map);
+  // The root allocation must not be repeated by a self-tail entry jump.
+  if (c->ctx == c->jc->ctx_hot && !c->feat.needs_tco_args)
+    c->hoisted_upvalue = jit_hot_loop_upvalue(c->func);
+  if (c->hoisted_upvalue >= 0) {
+    // Closure initialization fixes the upvalue table and its cell pointers.
+    // Closing/rebinding a frame can still change cell->location and *location.
+    MIR_reg_t table = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "hoisted_upvalue_table");
+    c->hoisted_upvalue_cell = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "hoisted_upvalue_cell");
+    // Keep the owner alive using the same native-stack root convention as
+    // normalized this. A raw closure pointer is recognized by gc_scan_range.
+    MIR_reg_t root = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "hoisted_closure_root");
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_ALLOCA,
+        MIR_new_reg_op(c->ctx, root), MIR_new_int_op(c->ctx, sizeof(uint64_t))));
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+        MIR_new_mem_op(c->ctx, MIR_T_I64, 0, root, 0, 1), MIR_new_reg_op(c->ctx, c->r_closure)));
+    MIR_label_t done = MIR_new_label(c->ctx);
+    mir_load_imm(c->ctx, c->jit_func, c->hoisted_upvalue_cell, 0);
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ,
+        MIR_new_label_op(c->ctx, done), MIR_new_reg_op(c->ctx, c->r_closure), MIR_new_int_op(c->ctx, 0)));
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+        MIR_new_reg_op(c->ctx, table), MIR_new_mem_op(c->ctx, MIR_T_P,
+            offsetof(sv_closure_t, upvalues), c->r_closure, 0, 1)));
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ,
+        MIR_new_label_op(c->ctx, done), MIR_new_reg_op(c->ctx, table), MIR_new_int_op(c->ctx, 0)));
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+        MIR_new_reg_op(c->ctx, c->hoisted_upvalue_cell), MIR_new_mem_op(c->ctx, MIR_T_P,
+            c->hoisted_upvalue * sizeof(sv_upvalue_t *), table, 0, 1)));
+    MIR_append_insn(c->ctx, c->jit_func, done);
+  }
+
   if (c->osr_map.count > 0) {
     MIR_label_t normal_entry = MIR_new_label(c->ctx);
 

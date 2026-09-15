@@ -113,6 +113,8 @@ typedef enum {
 #define JIT_INLINE_MAX_BYTECODE 192
 typedef struct {
   MIR_item_t helper1_proto, imp_get_length_inline;
+  MIR_item_t object_proto, imp_object;
+  MIR_item_t truthy_proto, imp_is_truthy;
   MIR_item_t imp_get_field, imp_get_length;
   MIR_item_t imp_get_elem_inline;
   MIR_item_t put_field_proto, imp_put_field;
@@ -125,6 +127,8 @@ typedef struct {
   MIR_item_t imp_band, imp_bor, imp_bxor, imp_shl, imp_shr, imp_ushr;
   MIR_item_t self_proto;
   MIR_reg_t r_args_buf;
+  int *next_inline_id;
+  bool reader_only;
 } jit_inline_ext_t;
 #define INL_MAX_LABELS 128
 typedef struct {
@@ -145,6 +149,7 @@ typedef struct {
 
 void jit_load_externals_once(sv_jit_ctx_t *jc);
 void jit_release_gen_scratch(sv_jit_ctx_t *jc, MIR_context_t ctx);
+int jit_hot_loop_upvalue(const sv_func_t *func);
 jit_value_info_t vstack_value_info(const jit_vstack_t *vs, int idx);
 void vstack_set_value_info(
     jit_vstack_t *vs, int idx, jit_value_info_t info);
@@ -168,6 +173,10 @@ MIR_label_t label_for_branch(MIR_context_t ctx, jit_label_map_t *lm,
                              int bc_off, int sp);
 void mir_emit_decode_ref(
     MIR_context_t ctx, MIR_item_t fn, MIR_reg_t dst, MIR_reg_t value);
+void mir_emit_truthy_branch(
+    MIR_context_t ctx, MIR_item_t fn, MIR_reg_t value, MIR_reg_t scratch,
+    MIR_reg_t r_js, MIR_item_t truthy_proto, MIR_item_t imp_is_truthy,
+    bool is_false_branch, MIR_label_t target);
 void mir_emit_cage_offset(
     MIR_context_t ctx, MIR_item_t fn, MIR_reg_t dst, MIR_reg_t ptr);
 void mir_i64_to_d(MIR_context_t ctx, MIR_item_t fn,
@@ -403,6 +412,7 @@ bool mir_emit_put_field_ic_fastpath(
 bool mir_emit_get_field_ic_fastpath(
     MIR_context_t ctx,
     MIR_item_t fn,
+    ant_t *js,
     sv_func_t *func,
     int bc_off,
     uint16_t ic_idx,

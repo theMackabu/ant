@@ -2,6 +2,55 @@
 #include "../silver/ops/globals.h"
 #include "silver/feedback.h"
 
+int jit_hot_loop_upvalue(const sv_func_t *func) {
+  // This only chooses which immutable cell pointer to hoist, not its value
+  // or location. Prefer deeper loops, then repeated reads at that depth.
+  // Fixed bounds keep the optional heuristic cheap for large functions.
+  if (!func || !func->code || func->upvalue_count <= 0) return -1;
+  struct { int start, end; } loops[64];
+  struct { unsigned depth, reads; } scores[32] = {{0}};
+  unsigned loop_count = 0;
+  for (int off = 0; off < func->code_len;) {
+    sv_op_t op = func->code[off];
+    if (op >= OP__COUNT) return -1;
+    int size = sv_op_size[op];
+    if (!size || size > func->code_len - off) return -1;
+    uint16_t flags = sv_op_flags[op];
+    int64_t target = func->code_len;
+    if (flags & SV_OPF_JIT_BRANCH32)
+      target = (int64_t)off + size + sv_get_i32(func->code + off + 1);
+    else if (flags & SV_OPF_JIT_BRANCH8)
+      target = (int64_t)off + size + sv_get_i8(func->code + off + 1);
+    if (target >= 0 && target <= off) {
+      if (loop_count == sizeof loops / sizeof *loops) return -1;
+      loops[loop_count].start = (int)target;
+      loops[loop_count++].end = off;
+    }
+    off += size;
+  }
+  if (!loop_count) return -1;
+  for (int off = 0; off < func->code_len; off += sv_op_size[func->code[off]]) {
+    if (func->code[off] != OP_GET_UPVAL) continue;
+    uint16_t index = sv_get_u16(func->code + off + 1);
+    if (index >= func->upvalue_count || index >= sizeof scores / sizeof *scores) continue;
+    unsigned depth = 0;
+    for (unsigned i = 0; i < loop_count; i++)
+      if (off >= loops[i].start && off <= loops[i].end) depth++;
+    if (depth > scores[index].depth) {
+      scores[index].depth = depth;
+      scores[index].reads = 1;
+    } else if (depth && depth == scores[index].depth) scores[index].reads++;
+  }
+  int best = -1;
+  for (unsigned i = 0; i < sizeof scores / sizeof *scores; i++) {
+    if (!scores[i].depth) continue;
+    if (best < 0 || scores[i].depth > scores[best].depth ||
+        (scores[i].depth == scores[best].depth && scores[i].reads > scores[best].reads))
+      best = (int)i;
+  }
+  return best;
+}
+
 static const uint8_t forward_arguments_prefix[] = {
   OP_SPECIAL_OBJ,  // arguments object (operand 0)
   OP_PUT_LOCAL8,   // -> local 0

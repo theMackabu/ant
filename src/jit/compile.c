@@ -21,6 +21,17 @@ static void jit_emit_resume_tramp(jit_compile_t *c, const jit_bailout_emit_t *ba
     mir_emit_fill_uncaptured_param_slots_from_args(
         c->ctx, c->jit_func, c->r_slotbuf, c->r_args, c->r_argc, c->captured_params, c->param_count);
   }
+  if (c->writes_params) {
+    for (int i = 0; i < c->param_count && i < JIT_PARAM_HOIST_CAP; i++) {
+      if (!c->param_cache[i]) continue;
+      if (c->param_d_cache[i])
+        mir_d_to_i64(c->ctx, c->jit_func, c->param_cache[i], c->param_d_cache[i], c->r_d_slot);
+      MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+          MIR_new_mem_op(c->ctx, MIR_JSVAL,
+              (MIR_disp_t)(i * sizeof(ant_value_t)), c->r_slotbuf, 0, 1),
+          MIR_new_reg_op(c->ctx, c->param_cache[i])));
+    }
+  }
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_call_insn(c->ctx, 17,
                                     MIR_new_ref_op(c->ctx, c->resume_proto),
@@ -112,6 +123,7 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
       if (c->lm.entries[i].bc_off == c->bc_off) {
         vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
         c->element_available = false;
+        c->previous_ip = NULL;
         if (c->integer_locals) {
           for (int li = 0; li < c->n_locals; li++)
             if (!c->entry_integer_regs || !c->entry_integer_regs[li]) c->integer_locals[li] = 0;
@@ -378,9 +390,18 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
     if (c->integer_locals && c->integer_store >= 0) {
       c->integer_locals[c->integer_store] = c->integer_value;
       c->integer_local_ranges[c->integer_store] = c->integer_range;
+      if ((c->op == OP_SET_LOCAL || c->op == OP_SET_LOCAL8) && c->vs.sp > 0) {
+        int top = c->vs.sp - 1;
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+            MIR_new_reg_op(c->ctx, c->vs.regs[top]), MIR_new_reg_op(c->ctx, c->integer_value)));
+        vstack_clear_value_info(&c->vs, top);
+        c->vs.slot_type[top] = SLOT_I32;
+        c->vs.integer_range[top] = c->integer_range;
+      }
     }
     if (c->vs.overflow) c->ok = false;
     if (!c->ok) break;
+    c->previous_ip = c->func->code + c->bc_off;
     c->ip += c->sz;
   }
 

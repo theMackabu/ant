@@ -2,6 +2,104 @@
 #include "../silver/ops/literals.h"
 #include "silver/feedback.h"
 
+static_assert(
+  kTypeObject == 0 &&
+  kTypeString == 1 &&
+  kTypeArray == 2 &&
+  kTypeFunction == 3 &&
+  kTypeBuiltin == 4 &&
+  kTypePromise == 5 &&
+  kTypeGenerator == 6,
+  "truthiness requires a contiguous object/string tag range"
+);
+
+static_assert(kTypeNull == kTypeUndefined + 1 && kTypeBool == kTypeNull + 1,
+              "truthiness requires consecutive Undefined, Null, and Boolean tags");
+
+static_assert(
+  offsetof(ant_flat_string_t, len) == 0 &&
+  offsetof(ant_rope_heap_t, len) == 0 &&
+  offsetof(ant_string_builder_t, len) == 0 && sizeof(ant_offset_t) == sizeof(uint64_t),
+  "string truthiness requires the shared length prefix"
+);
+
+void mir_emit_truthy_branch(
+    MIR_context_t ctx, MIR_item_t fn, MIR_reg_t value, MIR_reg_t scratch,
+    MIR_reg_t r_js, MIR_item_t truthy_proto, MIR_item_t imp_is_truthy,
+    bool is_false_branch, MIR_label_t target) {
+  MIR_label_t truthy = is_false_branch ? MIR_new_label(ctx) : target;
+  MIR_label_t falsy = is_false_branch ? target : MIR_new_label(ctx);
+  MIR_label_t done = is_false_branch ? truthy : falsy;
+  MIR_label_t numeric = MIR_new_label(ctx);
+  MIR_label_t string = MIR_new_label(ctx);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BEQ,
+      MIR_new_label_op(ctx, truthy), MIR_new_reg_op(ctx, value),
+      MIR_new_uint_op(ctx, js_true)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_SUB,
+      MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, value),
+      MIR_new_uint_op(ctx, mkval(kTypeUndefined, 0))));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBLE,
+      MIR_new_label_op(ctx, falsy), MIR_new_reg_op(ctx, scratch),
+      MIR_new_uint_op(ctx, (uint64_t)(kTypeBool - kTypeUndefined) << NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_URSH,
+      MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, value),
+      MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BEQ,
+      MIR_new_label_op(ctx, truthy), MIR_new_reg_op(ctx, scratch),
+      MIR_new_uint_op(ctx, NANBOX_PREFIX >> NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBLE,
+      MIR_new_label_op(ctx, numeric), MIR_new_reg_op(ctx, value),
+      MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_SUB,
+      MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, scratch),
+      MIR_new_uint_op(ctx, (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypeArray)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBLE,
+      MIR_new_label_op(ctx, truthy), MIR_new_reg_op(ctx, scratch),
+      MIR_new_uint_op(ctx, kTypeGenerator - kTypeArray)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BEQ,
+      MIR_new_label_op(ctx, string), MIR_new_reg_op(ctx, scratch),
+      MIR_new_int_op(ctx, kTypeString - kTypeArray)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BEQ,
+      MIR_new_label_op(ctx, truthy), MIR_new_reg_op(ctx, scratch),
+      MIR_new_uint_op(ctx, kTypeSymbol - kTypeArray)));
+  MIR_append_insn(ctx, fn, MIR_new_call_insn(ctx, 5,
+      MIR_new_ref_op(ctx, truthy_proto), MIR_new_ref_op(ctx, imp_is_truthy),
+      MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, r_js), MIR_new_reg_op(ctx, value)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, is_false_branch ? MIR_BEQ : MIR_BNE,
+      MIR_new_label_op(ctx, target), MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+  MIR_append_insn(ctx, fn, string);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, value),
+      MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBGT,
+      MIR_new_label_op(ctx, falsy), MIR_new_reg_op(ctx, scratch),
+      MIR_new_uint_op(ctx, STR_HEAP_TAG_BUILDER)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, value),
+      MIR_new_uint_op(ctx, NANBOX_DATA_MASK & ~STR_HEAP_TAG_MASK)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BEQ,
+      MIR_new_label_op(ctx, falsy), MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_ADD,
+      MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, scratch),
+      MIR_new_reg_op(ctx, MIR_reg(ctx, "cage_base", fn->u.func))));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, scratch), MIR_new_mem_op(ctx, MIR_T_U64, 0, scratch, 0, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, is_false_branch ? MIR_BEQ : MIR_BNE,
+      MIR_new_label_op(ctx, target), MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+  MIR_append_insn(ctx, fn, numeric);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_LSH,
+      MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, value), MIR_new_uint_op(ctx, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BEQ,
+      MIR_new_label_op(ctx, falsy), MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, 0)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBGT,
+      MIR_new_label_op(ctx, falsy), MIR_new_reg_op(ctx, scratch),
+      MIR_new_uint_op(ctx, UINT64_C(0xffe0000000000000))));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, truthy)));
+  MIR_append_insn(ctx, fn, done);
+}
+
 jit_value_info_t vstack_value_info(const jit_vstack_t *vs, int idx) {
   jit_value_info_t info = {0};
   if (vs->known_func) info.known_func = vs->known_func[idx];
@@ -540,9 +638,10 @@ static void mir_emit_i32_to_num(MIR_context_t ctx, MIR_item_t fn,
 void mir_emit_slot_boxed(MIR_context_t ctx, MIR_item_t fn,
                          MIR_reg_t boxed, MIR_reg_t number,
                          uint8_t slot_type, MIR_reg_t d_slot) {
-  if (slot_type == SLOT_I32)
+  if (slot_type == SLOT_I32) {
     mir_emit_i32_to_num(ctx, fn, number, boxed);
-  if (slot_type == SLOT_NUM || slot_type == SLOT_I32)
+    mir_d_to_i64_non_nan(ctx, fn, boxed, number, d_slot);
+  } else if (slot_type == SLOT_NUM)
     mir_d_to_i64(ctx, fn, boxed, number, d_slot);
 }
 
@@ -785,18 +884,64 @@ MIR_reg_t mir_emit_word32_guard(
     bool is_known_double, bool is_known_i32,
     MIR_reg_t d_slot, MIR_label_t slow, int site) {
   if (is_known_i32) return boxed;
-  return mir_emit_integer_conversion_guard(
-      ctx, fn, boxed, known_double, is_known_double, d_slot,
-      (double)INT32_MIN, (double)UINT32_MAX, slow, site, false);
+  char name[48];
+  MIR_reg_t bits = boxed;
+  MIR_reg_t number = known_double;
+  if (is_known_double) {
+    snprintf(name, sizeof(name), "word_bits_%d", site);
+    bits = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+    mir_d_to_i64_non_nan(ctx, fn, bits, number, d_slot);
+  }
+  snprintf(name, sizeof(name), "word_magnitude_%d", site);
+  MIR_reg_t magnitude = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_LSH,
+      MIR_new_reg_op(ctx, magnitude), MIR_new_reg_op(ctx, bits), MIR_new_int_op(ctx, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBGE,
+      MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, magnitude),
+      MIR_new_uint_op(ctx, tov(0x1p63) << 1)));
+  if (!is_known_double) {
+    snprintf(name, sizeof(name), "word_double_%d", site);
+    number = MIR_new_func_reg(ctx, fn->u.func, MIR_T_D, name);
+    mir_i64_to_d(ctx, fn, number, bits, d_slot);
+  }
+  snprintf(name, sizeof(name), "word_integer_%d", site);
+  MIR_reg_t integer = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_D2I,
+      MIR_new_reg_op(ctx, integer), MIR_new_reg_op(ctx, number)));
+  return integer;
 }
 
 MIR_reg_t mir_emit_array_index_guard(
     MIR_context_t ctx, MIR_item_t fn,
     MIR_reg_t boxed, MIR_reg_t known_double, bool is_known_double,
     MIR_reg_t d_slot, MIR_label_t slow, int site) {
-  return mir_emit_exact_integer_guard(
-      ctx, fn, boxed, known_double, is_known_double, d_slot,
-      0.0, (double)UINT32_MAX - 1.0, slow, site);
+  char name[48];
+  MIR_reg_t bits = boxed;
+  MIR_reg_t number = known_double;
+  if (is_known_double) {
+    snprintf(name, sizeof(name), "index_bits_%d", site);
+    bits = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+    mir_d_to_i64_non_nan(ctx, fn, bits, number, d_slot);
+  }
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBGT,
+      MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, bits),
+      MIR_new_uint_op(ctx, tov((double)UINT32_MAX - 1.0))));
+  if (!is_known_double) {
+    snprintf(name, sizeof(name), "index_double_%d", site);
+    number = MIR_new_func_reg(ctx, fn->u.func, MIR_T_D, name);
+    mir_i64_to_d(ctx, fn, number, bits, d_slot);
+  }
+  snprintf(name, sizeof(name), "index_integer_%d", site);
+  MIR_reg_t integer = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_D2I,
+      MIR_new_reg_op(ctx, integer), MIR_new_reg_op(ctx, number)));
+  snprintf(name, sizeof(name), "index_roundtrip_%d", site);
+  MIR_reg_t roundtrip = MIR_new_func_reg(ctx, fn->u.func, MIR_T_D, name);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_I2D,
+      MIR_new_reg_op(ctx, roundtrip), MIR_new_reg_op(ctx, integer)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_DBNE,
+      MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, number), MIR_new_reg_op(ctx, roundtrip)));
+  return integer;
 }
 
 MIR_reg_t mir_emit_known_array_index_guard(

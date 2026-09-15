@@ -81,7 +81,7 @@ void jit_emit_properties(jit_compile_t *c) {
       MIR_label_t no_err = MIR_new_label(c->ctx);
       MIR_label_t slow = MIR_new_label(c->ctx);
       bool fast = mir_emit_get_field_ic_fastpath(
-          c->ctx, c->jit_func, c->func, c->bc_off, ic_idx, atom, obj, dst, slow,
+          c->ctx, c->jit_func, c->js, c->func, c->bc_off, ic_idx, atom, obj, dst, slow,
           c->r_ic_epoch_val);
       if (fast) {
         MIR_append_insn(c->ctx, c->jit_func,
@@ -141,7 +141,7 @@ void jit_emit_properties(jit_compile_t *c) {
       MIR_label_t no_err = MIR_new_label(c->ctx);
       MIR_label_t slow = MIR_new_label(c->ctx);
       bool fast = mir_emit_get_field_ic_fastpath(
-          c->ctx, c->jit_func, c->func, c->bc_off, ic_idx, atom, obj, dst, slow,
+          c->ctx, c->jit_func, c->js, c->func, c->bc_off, ic_idx, atom, obj, dst, slow,
           c->r_ic_epoch_val);
       if (fast) {
         MIR_append_insn(c->ctx, c->jit_func,
@@ -212,7 +212,7 @@ void jit_emit_properties(jit_compile_t *c) {
                                    MIR_new_reg_op(c->ctx, obj),
                                    MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0))));
       bool fast = mir_emit_get_field_ic_fastpath(
-          c->ctx, c->jit_func, c->func, c->bc_off, ic_idx, atom, obj, dst, slow,
+          c->ctx, c->jit_func, c->js, c->func, c->bc_off, ic_idx, atom, obj, dst, slow,
           c->r_ic_epoch_val);
       if (fast) {
         MIR_append_insn(c->ctx, c->jit_func,
@@ -475,6 +475,24 @@ void jit_emit_properties(jit_compile_t *c) {
             c->vs.sp - 1, SLOT_BOXED, c->vs.sp,
             integer_index ? SLOT_I32 : (key_is_num ? SLOT_NUM : SLOT_BOXED));
         MIR_append_insn(c->ctx, c->jit_func, done);
+        if (c->previous_ip && c->integer_locals && c->integer_local_ranges &&
+            c->dnum_locals && !c->func->has_dynamic_eval && c->ctx == c->jc->ctx_hot) {
+          sv_op_t previous = *c->previous_ip;
+          int local = previous == OP_GET_LOCAL8 || previous == OP_SET_LOCAL8
+                    ? sv_get_u8(c->previous_ip + 1)
+                    : previous == OP_GET_LOCAL || previous == OP_SET_LOCAL
+                    ? sv_get_u16(c->previous_ip + 1) : -1;
+          if (local >= 0 && local < c->n_locals && c->dnum_locals[local] &&
+              !(c->captured_locals && c->captured_locals[local])) {
+            char name[48];
+            snprintf(name, sizeof(name), "validated_index_local_%d", c->integer_local_site++);
+            c->integer_value = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+            MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+                MIR_new_reg_op(c->ctx, c->integer_value), MIR_new_reg_op(c->ctx, index)));
+            c->integer_store = local;
+            c->integer_range = (jit_integer_range_t){.min = 0, .max = UINT32_MAX - 1, .known = true};
+          }
+        }
         break;
       }
 

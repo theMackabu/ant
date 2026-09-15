@@ -202,14 +202,16 @@ void jit_emit_bitwise(jit_compile_t *c) {
     case OP_NOT: {
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
       MIR_reg_t rs = vstack_top(&c->vs);
+      MIR_label_t falsy = MIR_new_label(c->ctx);
+      MIR_label_t done = MIR_new_label(c->ctx);
+      mir_emit_truthy_branch(c->ctx, c->jit_func, rs, c->r_bool, c->r_js,
+          c->truthy_proto, c->imp_is_truthy, true, falsy);
+      mir_load_imm(c->ctx, c->jit_func, rs, js_false);
       MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_call_insn(c->ctx, 6,
-                                        MIR_new_ref_op(c->ctx, c->helper1_proto),
-                                        MIR_new_ref_op(c->ctx, c->imp_not),
-                                        MIR_new_reg_op(c->ctx, rs),
-                                        MIR_new_reg_op(c->ctx, c->r_vm),
-                                        MIR_new_reg_op(c->ctx, c->r_js),
-                                        MIR_new_reg_op(c->ctx, rs)));
+          MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, done)));
+      MIR_append_insn(c->ctx, c->jit_func, falsy);
+      mir_load_imm(c->ctx, c->jit_func, rs, js_true);
+      MIR_append_insn(c->ctx, c->jit_func, done);
       if (c->vs.known_bool) c->vs.known_bool[c->vs.sp - 1] = 1;
       break;
     }
