@@ -2,7 +2,7 @@
 #include "silver/feedback.h"
 
 static void jit_emit_forward_arguments_call(jit_compile_t *c, bool is_tail) {
-  (void)vstack_pop(&c->vs); // Deferred arguments object.
+  (void)vstack_pop(&c->vs);
   MIR_reg_t receiver = vstack_pop(&c->vs);
   MIR_reg_t apply = vstack_pop(&c->vs);
   MIR_reg_t target = vstack_pop(&c->vs);
@@ -543,7 +543,16 @@ void jit_emit_methods(jit_compile_t *c) {
         uint16_t idx = cc_slot_idx;
         bool slot_backed = c->writes_params ||
                            (c->has_captured_params && c->captured_params && c->captured_params[idx]);
-        if (slot_backed) {
+        if (c->writes_params && idx < JIT_PARAM_HOIST_CAP && c->param_cache[idx]) {
+          if (c->param_d_cache[idx])
+            mir_d_to_i64(c->ctx, c->jit_func, c->param_cache[idx],
+                         c->param_d_cache[idx], c->r_d_slot);
+          MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+              MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, c->r_args_buf, 0, 1),
+              MIR_new_reg_op(c->ctx, c->param_cache[idx])));
+          MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+              MIR_new_reg_op(c->ctx, r_cc_slot), MIR_new_reg_op(c->ctx, c->r_args_buf)));
+        } else if (slot_backed) {
           MIR_append_insn(c->ctx, c->jit_func,
                           MIR_new_insn(c->ctx, MIR_ADD,
                                        MIR_new_reg_op(c->ctx, r_cc_slot),

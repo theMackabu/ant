@@ -39,21 +39,46 @@ function runLookup(count) {
   for (let i = 0; i < count; i++) total += find(i & 3, head);
   return total;
 }
-for (const [name, run, expected] of [
-  ['while', runWhile, iterations * 10.5],
-  ['do-while', runDoWhile, iterations * 10.5],
-  ['lookup', runLookup, iterations * 2.5],
-]) {
-  run(10000);
+function runLargeWhile(count, length) {
+  let total = 0;
+  for (let i = 0; i < count; i++) total += sumWhile(length + (i & 7));
+  return total;
+}
+function runLargeDoWhile(count, length) {
+  let total = 0;
+  for (let i = 0; i < count; i++) total += sumDoWhile(length + (i & 7));
+  return total;
+}
+const cases = [
+  ['while', runWhile, iterations * 10.5, iterations, '0..7'],
+  ['do-while', runDoWhile, iterations * 10.5, iterations, '0..7'],
+  ['lookup', runLookup, iterations * 2.5, iterations, '1..4'],
+];
+for (const length of [4096, 65536]) {
+  // Keep total work comparable rather than multiplying two million calls by
+  // each large trip count. Vary the argument so calls do not all repeat it.
+  const calls = Math.max(8, Math.floor(iterations / length) * 8);
+  let perEight = 0;
+  for (let offset = 0; offset < 8; offset++) {
+    const n = length + offset;
+    perEight += n * (n + 1) / 2;
+  }
+  const expected = calls / 8 * perEight;
+  assert.ok(Number.isSafeInteger(expected));
+  cases.push([`while-${length}`, count => runLargeWhile(count, length), expected, calls, `${length}..${length + 7}`]);
+  cases.push([`do-while-${length}`, count => runLargeDoWhile(count, length), expected, calls, `${length}..${length + 7}`]);
+}
+for (const [name, run, expected, calls, trip_count] of cases) {
+  run(Math.min(10000, calls));
   const samples = [];
   for (let round = 0; round < rounds; round++) {
     const start = performance.now();
-    const result = run(iterations);
+    const result = run(calls);
     samples.push(performance.now() - start);
     assert.strictEqual(result, expected, name);
   }
   samples.sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
   const middle = Math.floor(samples.length / 2);
   const median = samples.length % 2 ? samples[middle] : (samples[middle - 1] + samples[middle]) / 2;
-  console.log(JSON.stringify({ name, iterations, median_ms: median, ns_per_call: median * 1e6 / iterations, samples }));
+  console.log(JSON.stringify({ name, iterations: calls, trip_count, median_ms: median, ns_per_call: median * 1e6 / calls, samples }));
 }
