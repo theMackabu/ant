@@ -57,6 +57,41 @@ static void jit_emit_resume_tramp(jit_compile_t *c, const jit_bailout_emit_t *ba
                 MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, r_resume_res)));
 }
 
+static void jit_unroll_numeric_loops(jit_compile_t *c) {
+  for (MIR_insn_t jump = DLIST_HEAD(MIR_insn_t, c->jit_func->u.func->insns); jump;
+       jump = DLIST_NEXT(MIR_insn_t, jump)) {
+    if (jump->code != MIR_JMP || jump->ops[0].mode != MIR_OP_LABEL) continue;
+    MIR_insn_t header = jump->ops[0].u.label;
+    MIR_insn_t body[32];
+    size_t count = 0;
+    bool multiply = false, exit_check = false, valid = true;
+    MIR_insn_t insn = DLIST_NEXT(MIR_insn_t, header);
+    for (; insn && insn != jump; insn = DLIST_NEXT(MIR_insn_t, insn)) {
+      if (count == sizeof(body) / sizeof(*body)) { valid = false; break; }
+      switch (insn->code) {
+        case MIR_MOV: case MIR_DMOV: case MIR_I2D:
+        case MIR_DADD: case MIR_DSUB: case MIR_DMUL:
+        case MIR_DLT: case MIR_DLE: case MIR_DGT: case MIR_DGE:
+        case MIR_OR:
+          break;
+        case MIR_BEQ: case MIR_BNE:
+          if (insn->ops[0].u.label == header) valid = false;
+          exit_check = true;
+          break;
+        default: valid = false; break;
+      }
+      for (size_t i = 0; i < insn->nops; i++)
+        if (insn->ops[i].mode == MIR_OP_MEM) valid = false;
+      if (!valid) break;
+      multiply |= insn->code == MIR_DMUL;
+      body[count++] = insn;
+    }
+    if (!valid || insn != jump || !multiply || !exit_check) continue;
+    for (size_t i = 0; i < count; i++)
+      MIR_insert_insn_before(c->ctx, c->jit_func, jump, MIR_copy_insn(c->ctx, body[i]));
+  }
+}
+
 sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure) {
   return sv_jit_compile_tier(js, func, hint_closure, SV_JIT_TIER_AUTO);
 }
@@ -412,6 +447,7 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
   if (c->needs_bailout) jit_emit_resume_tramp(c, &c->bailout_ctx, c->imp_resume, "resume_res");
   if (c->needs_promote) jit_emit_resume_tramp(c, &c->promote_ctx, c->imp_promote_resume, "promote_res");
 
+  if (c->ctx == c->jc->ctx_hot) jit_unroll_numeric_loops(c);
   MIR_finish_func(c->ctx);
   MIR_finish_module(c->ctx);
   if (sv_dump_jit_unlikely) MIR_output_module(c->ctx, stderr, c->mod);
