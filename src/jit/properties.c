@@ -795,6 +795,11 @@ bool mir_emit_get_field_ic_fastpath(
   MIR_label_t load_overflow = MIR_new_label(ctx);
   MIR_label_t fast_done = MIR_new_label(ctx);
   MIR_label_t own_path = MIR_new_label(ctx);
+  sv_jit_ctx_t *jc = js ? js->jit_ctx : NULL;
+  bool learn_missing = jc && ctx == jc->ctx_hot &&
+      (!ic->cached_shape || !sv_gf_ic_active(ic->cached_aux));
+  MIR_label_t missing_path = learn_missing ? MIR_new_label(ctx) : slow;
+  MIR_label_t missing_done = learn_missing ? MIR_new_label(ctx) : NULL;
   MIR_label_t do_read = MIR_new_label(ctx);
 
   MIR_append_insn(ctx, fn,
@@ -861,10 +866,9 @@ bool mir_emit_get_field_ic_fastpath(
                                MIR_new_label_op(ctx, own_path),
                                MIR_new_reg_op(ctx, r_kind),
                                MIR_new_int_op(ctx, SV_GF_IC_OWN)));
-  // Missing reads use their specialized handler or the helper until the
-  // next compilation; keep the shared positive-read path compact.
+  // Preserve the positive-read branch count; dispatch other kinds out of line.
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
-      MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_kind),
+      MIR_new_label_op(ctx, missing_path), MIR_new_reg_op(ctx, r_kind),
       MIR_new_int_op(ctx, SV_GF_IC_PROTOTYPE)));
 
   MIR_append_insn(ctx, fn,
@@ -945,6 +949,47 @@ bool mir_emit_get_field_ic_fastpath(
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_JMP,
                                MIR_new_label_op(ctx, do_read)));
+
+  if (learn_missing) {
+    MIR_append_insn(ctx, fn, missing_path);
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
+        MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_kind), MIR_new_int_op(ctx, SV_GF_IC_MISSING)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
+        MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_obj_tag), MIR_new_uint_op(ctx, NANBOX_TOBJ_TAG)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BEQ,
+        MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_obj_shape), MIR_new_int_op(ctx, 0)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, r_proto_id), MIR_new_mem_op(ctx, MIR_T_U8, offsetof(ant_object_t, type_tag), r_obj_ptr, 0, 1)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
+        MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_proto_id), MIR_new_int_op(ctx, kTypeObject)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, r_proto_id), MIR_new_mem_op(ctx, MIR_T_U16, offsetof(ant_object_t, flags), r_obj_ptr, 0, 1)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND,
+        MIR_new_reg_op(ctx, r_proto_id), MIR_new_reg_op(ctx, r_proto_id), MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_EXOTIC)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
+        MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_proto_id), MIR_new_int_op(ctx, 0)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, r_obj_proto), MIR_new_mem_op(ctx, MIR_JSVAL, offsetof(ant_object_t, proto), r_obj_ptr, 0, 1)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, r_ic_proto), MIR_new_mem_op(ctx, MIR_JSVAL, offsetof(sv_ic_entry_t, guard.receiver_proto), r_ic, 0, 1)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
+        MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_obj_proto), MIR_new_reg_op(ctx, r_ic_proto)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BEQ,
+        MIR_new_label_op(ctx, missing_done), MIR_new_reg_op(ctx, r_obj_proto), MIR_new_uint_op(ctx, js_mknull())));
+    mir_emit_value_to_objptr_or_jmp(ctx, fn, r_obj_proto, r_proto_ptr, r_ic_proto_id, slow);
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, r_proto_id), MIR_new_mem_op(ctx, MIR_T_U32, offsetof(ant_object_t, ic_identity), r_proto_ptr, 0, 1)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, r_ic_proto_id), MIR_new_mem_op(ctx, MIR_T_U64, offsetof(sv_ic_entry_t, cached_aux), r_ic, 0, 1)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_URSH,
+        MIR_new_reg_op(ctx, r_ic_proto_id), MIR_new_reg_op(ctx, r_ic_proto_id), MIR_new_uint_op(ctx, SV_GF_IC_PROTO_ID_SHIFT)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
+        MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_proto_id), MIR_new_reg_op(ctx, r_ic_proto_id)));
+    MIR_append_insn(ctx, fn, missing_done);
+    mir_load_imm(ctx, fn, dst, js_mkundef());
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, fast_done)));
+
+  }
 
   MIR_append_insn(ctx, fn, own_path);
   MIR_append_insn(ctx, fn,

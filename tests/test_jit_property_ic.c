@@ -18,7 +18,7 @@ static bool test_shape_ref_register(ant_t *js, ant_shape_t **slot) {
 #undef sv_ic_shape_ref_register
 
 static void check_field_codegen(
-    ant_shape_t *shape, ant_value_t proto, sv_get_field_ic_kind_t kind, bool specialized) {
+    ant_shape_t *shape, ant_value_t proto, sv_get_field_ic_kind_t kind, bool specialized, bool hot) {
   sv_ic_entry_t ic = {
     .cached_shape = shape,
     .cached_aux = SV_GF_IC_AUX_ACTIVE_BIT,
@@ -36,7 +36,9 @@ static void check_field_codegen(
   MIR_reg_t dst = MIR_new_func_reg(ctx, fn->u.func, MIR_JSVAL, "dst");
   MIR_reg_t epoch = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, "epoch");
   MIR_label_t slow = MIR_new_label(ctx);
-  assert(mir_emit_get_field_ic_fastpath(ctx, fn, NULL, &callee, 0, 0, &atom, obj, dst, slow, epoch));
+  sv_jit_ctx_t jc = {.ctx_hot = hot ? ctx : NULL};
+  ant_t emitter_js = {.jit_ctx = &jc};
+  assert(mir_emit_get_field_ic_fastpath(ctx, fn, &emitter_js, &callee, 0, 0, &atom, obj, dst, slow, epoch));
   MIR_append_insn(ctx, fn, slow);
   MIR_append_insn(ctx, fn, MIR_new_ret_insn(ctx, 1, MIR_new_reg_op(ctx, dst)));
   MIR_finish_func(ctx);
@@ -83,7 +85,9 @@ static void check_field_codegen(
   }
   assert(guards == (specialized ? 1 : 0));
   if (specialized && vtype(proto) == kTypeFunction) assert(callable_identity);
+  // Trained positive sites keep the original single prototype-guard load.
   if (kind == SV_GF_IC_PROTOTYPE) assert(prototype_loads == 1);
+  if (!shape) assert(prototype_loads == (hot ? 2 : 1));
   MIR_finish(ctx);
 }
 
@@ -185,14 +189,16 @@ int main(void) {
   ant_shape_t *old_shape = js_obj_ptr(old)->shape;
   assert(shape && old_shape && shape != old_shape);
 
-  check_field_codegen(shape, old, SV_GF_IC_MISSING, true);
-  check_field_codegen(shape, js_mknull(), SV_GF_IC_MISSING, true);
-  check_field_codegen(shape, mkval(kTypeFunction, 1), SV_GF_IC_MISSING, true);
-  check_field_codegen(shape, js_mknum(1), SV_GF_IC_MISSING, false);
-  check_field_codegen(shape, js_mkundef(), SV_GF_IC_MISSING, false);
-  check_field_codegen(NULL, js_mknull(), SV_GF_IC_MISSING, false);
-  check_field_codegen(NULL, js_mknull(), SV_GF_IC_OWN, false);
-  check_field_codegen(shape, old, SV_GF_IC_PROTOTYPE, false);
+  for (int hot = 0; hot <= 1; hot++) {
+    check_field_codegen(shape, old, SV_GF_IC_MISSING, true, hot);
+    check_field_codegen(shape, js_mknull(), SV_GF_IC_MISSING, true, hot);
+    check_field_codegen(shape, mkval(kTypeFunction, 1), SV_GF_IC_MISSING, true, hot);
+    check_field_codegen(shape, js_mknum(1), SV_GF_IC_MISSING, false, hot);
+    check_field_codegen(shape, js_mkundef(), SV_GF_IC_MISSING, false, hot);
+    check_field_codegen(NULL, js_mknull(), SV_GF_IC_MISSING, false, hot);
+    check_field_codegen(NULL, js_mknull(), SV_GF_IC_OWN, false, hot);
+    check_field_codegen(shape, old, SV_GF_IC_PROTOTYPE, false, hot);
+  }
   puts("PASS missing handler requires an object/null prototype and guards the C enum value");
   check_failed_fills(js, object, old_shape);
   check_partial_transition(js, old_shape, shape);
