@@ -395,7 +395,9 @@ ant_value_t esm_load_commonjs_module(
     if (is_err(ns_res)) result = ns_res;
   }
 
-  if (!pending && (is_err(result) || Ant_Exception_Pending(js))) {
+  if (!is_err(result) && Ant_Exception_Pending(js)) result = Ant_Exception_Current(js);
+
+  if (!pending && is_err(result)) {
     if (!builtin) js_delete_prop(js, esm_require_cache(js), module_path, strlen(module_path));
     esm_cjs_update_children(js, js_get(js, module_obj, "parent"), module_obj, true);
   }

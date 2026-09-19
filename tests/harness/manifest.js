@@ -29,6 +29,7 @@ export function targets() {
     'test_caught_exception_stack.cjs',
     'test_zlib_callback_throws.cjs',
     'test_module_async_error_boundaries.cjs',
+    'test_commonjs_pending_exception.cjs',
     'test_io_error_boundary_audit.cjs',
     'test_util_error_boundaries.cjs',
     'test_json_error_boundaries.cjs',
