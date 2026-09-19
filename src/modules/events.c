@@ -1152,15 +1152,12 @@ static bool eventemitter_dispatch(
     ant_value_t result = eventemitter_call_listener(js, cb, target, args, nargs);
     invoked = true;
 
-    if (vtype(result) == kTypeError) {
-      if (vtype(evt->js_key) == kTypeString) fprintf(stderr, "Error in event listener for %s: ", js_str(js, evt->js_key));
-      else fprintf(stderr, "Error in event listener: ");
-      fprintf(stderr, "%s\n", js_str(js, result));
-    }
+    if (is_err(result) || Ant_Exception_Pending(js)) break;
   }
 
   evt->emitting--;
   evt_sweep(evt);
+  
   return invoked;
 }
 
@@ -1175,13 +1172,16 @@ static bool eventemitter_emit_args_impl(
 
 static ant_value_t js_eventemitter_emit(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "emit requires at least 1 argument (event)");
+  
   ant_value_t key = evt_key_from_arg(args[0]);
   if (!key) return js_mkerr(js, "event must be a string or Symbol");
   
-  return js_bool(eventemitter_emit_args_impl(
+  bool invoked = eventemitter_emit_args_impl(
     js, js_getthis(js), key,
     nargs > 1 ? &args[1] : NULL, nargs - 1
-  ));
+  );
+  
+  return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : js_bool(invoked);
 }
 
 bool eventemitter_emit_args_val(
@@ -1490,9 +1490,19 @@ static ant_value_t js_events_once_attach(
   }
 
   ant_value_t on_method = js_getprop_fallback(js, target, "on");
+  if (is_err(on_method)) {
+    js_reject_promise(js, promise, on_method);
+    return promise;
+  }
+
   ant_value_t once_method = is_callable(on_method)
     ? js_getprop_fallback(js, target, "once")
     : js_mkundef();
+
+  if (is_err(once_method)) {
+    js_reject_promise(js, promise, once_method);
+    return promise;
+  }
     
   if (is_callable(once_method)) {
     ant_value_t call_args[2] = { key, listener };
@@ -1755,7 +1765,7 @@ static ant_value_t js_events_on_error_cb(ant_params_t) {
 }
 
 static ant_value_t events_make_abort_error(ant_t *js, ant_value_t signal) {
-  ant_value_t error = js_make_error_silent(js, JS_ERR_GENERIC, "The operation was aborted");
+  ant_value_t error = Ant_Error_Create(js, JS_ERR_GENERIC, "The operation was aborted");
   if (!is_object_type(error)) return error;
 
   js_set(js, error, "name", js_mkstr(js, "AbortError", 10));

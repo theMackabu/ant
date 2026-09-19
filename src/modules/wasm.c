@@ -262,10 +262,16 @@ static wasm_extern_handle_t *wasm_extern_handle(ant_value_t value, wasm_extern_w
 }
 
 static ant_value_t wasm_make_error(ant_t *js, ant_value_t proto, const char *name, const char *message) {
-  ant_value_t err = js_make_error_silent(js, JS_ERR_TYPE, message ? message : "");
+  ant_value_t err = Ant_Error_Create(js, JS_ERR_TYPE, message ? message : "");
   if (vtype(err) != kTypeObject) return err;
+  
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, err);
   js_set(js, err, "name", js_mkstr(js, name, strlen(name)));
+  
   if (is_object_type(proto)) js_set_proto_init(err, proto);
+  GC_ROOT_RESTORE(js, root_mark);
+  
   return err;
 }
 
@@ -282,8 +288,7 @@ static ant_value_t wasm_make_runtime_error(ant_t *js, const char *message) {
 }
 
 static ant_value_t wasm_error_value(ant_t *js, ant_value_t value) {
-  if (is_err(value) && js->thrown_exists)
-    return js->thrown_value;
+  if (is_err(value)) return Ant_Exception_Value(js, value);
   return value;
 }
 
@@ -890,12 +895,12 @@ static wasm_trap_t *wasm_import_func_callback(void *env_ptr, const wasm_val_vec_
   free(js_args);
 
   if (is_err(result)) {
-    ant_value_t thrown = js->thrown_exists ? js->thrown_value : result;
+    ant_value_t thrown = Ant_Exception_Value(js, result);
     wasm_set_pending_import_throw(js, thrown);
     
     const char *msg = "WebAssembly import threw";
-    if (vtype(js->thrown_value) == kTypeObject) {
-      const char *message = get_str_prop(js, js->thrown_value, "message", 7, NULL);
+    if (vtype(Ant_Exception_Value(js, Ant_Exception_Peek(js))) == kTypeObject) {
+      const char *message = get_str_prop(js, Ant_Exception_Value(js, Ant_Exception_Peek(js)), "message", 7, NULL);
       if (message && *message) msg = message;
     }
     
@@ -955,13 +960,14 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
   if (wasi_module_has_wasi_imports(module_handle->module)
       && wasi_module_is_command_or_reactor(module_handle->module)) {
     ant_value_t wasi_opts = is_object_type(import_obj) ? js_get(js, import_obj, "wasi") : js_mkundef();
+    if (is_err(wasi_opts)) return wasi_opts;
+    
     if (!is_object_type(import_obj) || is_object_type(wasi_opts)) {
       ant_value_t bytes_src = js_get_slot(module_obj, SLOT_MAP);
       wasm_byte_vec_t binary = WASM_EMPTY_VEC;
       char wasi_err[128] = {0};
-      if (!wasm_buffer_source_to_vec(js, bytes_src, &binary, wasi_err, sizeof(wasi_err))) {
+      if (!wasm_buffer_source_to_vec(js, bytes_src, &binary, wasi_err, sizeof(wasi_err)))
         return js_mkerr(js, "WASI: cannot extract module bytes");
-      }
       *out_instance = wasi_instantiate(js, (const uint8_t *)binary.data, binary.size, module_obj, wasi_opts);
       wasm_byte_vec_delete(&binary);
       return is_err(*out_instance) ? *out_instance : js_mkundef();
@@ -986,9 +992,18 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
     const wasm_externtype_t *extern_type = wasm_importtype_type(import_type);
     
     ant_value_t namespace_obj = wasm_property_get_nested(js, import_obj, module_name);
+    if (is_err(namespace_obj)) {
+      import_error = namespace_obj;
+      goto import_setup_failed;
+    }
+    
     ant_value_t value = wasm_property_get_nested(js, namespace_obj, field_name);
+    if (is_err(value)) {
+      import_error = value;
+      goto import_setup_failed;
+    }
+    
     wasm_externkind_t kind = wasm_externtype_kind(extern_type);
-
     if (kind == WASM_EXTERN_FUNC) {
       const wasm_functype_t *func_type = wasm_externtype_as_functype_const(extern_type);
       const wasm_valtype_vec_t *result_types = wasm_functype_results(func_type);
@@ -1833,7 +1848,7 @@ static ant_value_t js_wasm_compile(ant_params_t) {
 
   err = wasm_module_from_bytes(js, args[0], &module);
   if (is_err(err) || vtype(module) != kTypeObject) {
-    wasm_reject_with_error(js, promise, wasm_error_value(js, err));
+    wasm_reject_with_error(js, promise, err);
     return promise;
   }
 
@@ -1856,7 +1871,7 @@ static ant_value_t js_wasm_instantiate(ant_params_t) {
   if (wasm_module_handle(args[0])) {
     err = wasm_instantiate_module(js, args[0], import_obj, &instance);
     if (is_err(err) || vtype(instance) != kTypeObject) {
-      wasm_reject_with_error(js, promise, wasm_error_value(js, err));
+      wasm_reject_with_error(js, promise, err);
       return promise;
     }
     js_resolve_promise(js, promise, instance);
@@ -1865,13 +1880,13 @@ static ant_value_t js_wasm_instantiate(ant_params_t) {
 
   err = wasm_module_from_bytes(js, args[0], &module);
   if (is_err(err) || vtype(module) != kTypeObject) {
-    wasm_reject_with_error(js, promise, wasm_error_value(js, err));
+    wasm_reject_with_error(js, promise, err);
     return promise;
   }
 
   err = wasm_instantiate_module(js, module, import_obj, &instance);
   if (is_err(err) || vtype(instance) != kTypeObject) {
-    wasm_reject_with_error(js, promise, wasm_error_value(js, err));
+    wasm_reject_with_error(js, promise, err);
     return promise;
   }
 

@@ -15,6 +15,15 @@ removed during condensation. See the [plan lifecycle](../index.md).
 
 ## Plans
 
+- [Silver Instruction Sizes](silver-instruction-sizes.md)
+- [Native Call Fast Path](native-call-fast-path.md)
+- [Exception Completion Model](exception-completion-model.md)
+- [Central Error Handoffs](central-error-handoffs.md)
+- [Iterator Cleanup on Return](iterator-return-cleanup.md)
+- [Whole-codebase Error Boundaries](whole-codebase-error-boundaries.md)
+- [Module Error Boundary Audit](module-error-boundaries.md)
+- [Async Error Boundary Performance](async-error-performance.md)
+- [Async Error Boundaries](async-error-boundaries.md)
 - [Zlib Readable State](zlib-readable-state.md)
 
 - [Ant Cron API](ant-cron.md)

@@ -8,7 +8,6 @@
 #include "gc/roots.h"
 #include "internal.h"
 #include "reactor.h"
-#include "silver/engine.h"
 #include "utils.h"
 
 #include <limits.h>
@@ -465,10 +464,18 @@ uint8_t *ant_sandbox_build_error_payload(
 ) {
   if (!js || !len_out) return NULL;
 
-  ant_value_t obj = is_err(value) ? js_as_obj(value) : value;
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, value);
+  GC_ROOT_PIN(js, fallback_stack);
+  
+  ant_value_t obj = Ant_Exception_Value(js, value);
+  ant_value_t captured_stack = Ant_Exception_Stack(js, value);
+  
+  if (vtype(captured_stack) == kTypeString) fallback_stack = captured_stack;
   const char *name = "Error";
   const char *message = "";
   const char *stack = "";
+  
   if (vtype(obj) == kTypeObject) {
     const char *n = get_str_prop(js, obj, "name", 4, NULL);
     const char *m = get_str_prop(js, obj, "message", 7, NULL);
@@ -476,16 +483,21 @@ uint8_t *ant_sandbox_build_error_payload(
     if (n && *n) name = n;
     if (m) message = m;
     if (s) stack = s;
-  } else {
-    message = js_str(js, value);
-  }
+  } else message = js_str(js, obj);
 
   if (!*stack && vtype(fallback_stack) == kTypeString) stack = js_getstr(js, fallback_stack, NULL);
 
-  char cbuf_stack[512]; js_cstr_t cstr = js_to_cstr(
-    js, value, cbuf_stack, sizeof(cbuf_stack)
-  );
-  const char *display = cstr.ptr ? cstr.ptr : "";
+  char cbuf_stack[512];
+  js_cstr_t cstr = {0};
+  const char *display;
+  
+  if (is_err(value))
+    display = *stack ? stack : *message ? message : name;
+  else {
+    cstr = js_to_cstr(js, value, cbuf_stack, sizeof(cbuf_stack));
+    display = cstr.ptr ? cstr.ptr : "";
+  }
+  
   size_t name_len = strlen(name);
   size_t message_len = strlen(message);
   size_t stack_len = strlen(stack);
@@ -504,11 +516,14 @@ uint8_t *ant_sandbox_build_error_payload(
   p = sandbox_write_bytes_string(p, stack, stack_len);
   p = sandbox_write_bytes_string(p, display, display_len);
   *len_out = payload_len;
+  
   if (cstr.needs_free) free((void *)cstr.ptr);
+  GC_ROOT_RESTORE(js, root_mark);
   return payload;
 
 fail:
   if (cstr.needs_free) free((void *)cstr.ptr);
+  GC_ROOT_RESTORE(js, root_mark);
   return NULL;
 }
 
@@ -566,7 +581,8 @@ bool ant_sandbox_decode_result_value(
 }
 
 ant_value_t ant_sandbox_decode_error_value(ant_t *js, const void *payload, size_t payload_len) {
-  if (!js || !payload) return js_mkerr_typed(js, JS_ERR_TYPE, "malformed sandbox error frame");
+  if (!js) return js_mkundef();
+  if (!payload) return Ant_Error_Create(js, JS_ERR_TYPE, "malformed sandbox error frame");
 
   sandbox_frame_reader_t r = { payload, (const uint8_t *)payload + payload_len };
   const char *name = NULL, *message = NULL, *stack = NULL, *display = NULL;
@@ -576,15 +592,20 @@ ant_value_t ant_sandbox_decode_error_value(ant_t *js, const void *payload, size_
       !sandbox_read_string_view(&r, &stack, &stack_len) ||
       !sandbox_read_string_view(&r, &display, &display_len) ||
       r.p != r.end) {
-    return js_mkerr_typed(js, JS_ERR_TYPE, "malformed sandbox error frame");
+    return Ant_Error_Create(js, JS_ERR_TYPE, "malformed sandbox error frame");
   }
 
-  ant_value_t err = js_mkerr_typed(js, JS_ERR_GENERIC, "%.*s", (int)message_len, message);
-  ant_value_t obj = is_err(err) ? js_as_obj(err) : err;
-  if (is_object_type(obj)) {
-    if (name_len > 0) js_set(js, obj, "name", js_mkstr(js, name, name_len));
-    if (stack_len > 0) js_set(js, obj, "stack", js_mkstr(js, stack, stack_len));
+  char error_message[256];
+  snprintf(error_message, sizeof(error_message), "%.*s", (int)message_len, message);
+  ant_value_t err = Ant_Error_Create(js, JS_ERR_GENERIC, error_message);
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, err);
+  
+  if (is_object_type(err)) {
+    if (name_len > 0) js_set(js, err, "name", js_mkstr(js, name, name_len));
+    if (stack_len > 0) js_set(js, err, "stack", js_mkstr(js, stack, stack_len));
   }
+  GC_ROOT_RESTORE(js, root_mark);
   return err;
 }
 
@@ -640,11 +661,12 @@ static bool sandbox_send_error_frame(ant_t *js, ant_value_t value, ant_value_t f
 }
 
 static bool sandbox_send_uncaught_throw(ant_t *js) {
-  if (!js->thrown_exists) return false;
-  sandbox_send_error_frame(js, js->thrown_value, js->thrown_stack);
-  js->thrown_exists = false;
-  js->thrown_value = js_mkundef();
-  js->thrown_stack = js_mkundef();
+  if (!Ant_Exception_Pending(js)) return false;
+  sandbox_send_error_frame(
+    js, Ant_Exception_Value(js, Ant_Exception_Peek(js)), 
+    Ant_Exception_Stack(js, Ant_Exception_Peek(js))
+  );
+  Ant_Exception_Clear(js);
   return true;
 }
 

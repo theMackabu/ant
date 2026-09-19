@@ -230,7 +230,7 @@ static inline ant_value_t sv_op_closure(
   sv_func_t *child = (sv_func_t *)vptr(func->constants[idx]);
 
   sv_closure_t *closure = sv_closure_init(js, child, frame->this);
-  if (!closure) return mkval(kTypeError, 0);
+  if (!closure) return Ant_Exception_Current(js);
 
   for (int i = 0; i < child->upvalue_count; i++) {
     sv_upval_desc_t *desc = &child->upval_descs[i];

@@ -10,6 +10,76 @@ were checked against current source when extracted from the
 Use [ARCHITECTURE.md](../../ARCHITECTURE.md) for subsystem placement and
 [testing.md](testing.md) for validation scope.
 
+## Exception Completions And Async Ownership
+
+Native and JIT calls return one 64-bit `ant_value_t`. A `kTypeError` result
+contains a GC-managed exception record with the exact thrown value and captured
+stack. `js_throw` and `js_mkerr*` allocate distinct records even when they throw
+the same value; forwarding an existing record preserves its identity. Local
+VM catches can still handle a value without creating a return record. Undefined
+is a valid payload. The preallocated emergency OOM record is
+the identity exception; payload zero is reserved for bootstrap/no-isolate
+allocation failures, and payload one remains the JIT interpreter-retry sentinel.
+Neither sentinel is a heap reference.
+
+The isolate's current exception is one propagation handle for legacy scalar,
+boolean, and parser helpers. It does not own separate value/stack/flag state.
+Use the returned record to inspect or consume a failure; `Ant_Exception_Current`
+forwards scalar failure state, with an emergency OOM fallback. Root saved
+handles across allocation and user-code execution, then restore the handle
+with `Ant_Exception_Set`. GC traces both record fields, including after the
+current handle has been cleared.
+
+`sv_invoke_native` scopes an existing completion around a native call. A handled
+inner failure leaves the caller's completion intact; an escaped failure takes
+precedence. A normal native return with an unconsumed new failure becomes an
+exception result. This boundary check does not unwind C cleanup or undo effects:
+native code must still stop after fallible operations and settle owned resources.
+
+`js_mkerr*` creates and publishes an exception record; it does not return an
+ordinary Error value. `js_reject_promise` consumes exception results through
+`Ant_Error_ConsumeMarker`, even when the Promise has already settled. Ordinary
+rejection values never clear pending state. Consuming a record only clears
+the identical current handle, so an older throw cannot erase a newer one.
+
+Use `Ant_Error_Create` for literal messages or `Ant_Error_CreateFormatted`
+for printf-style messages when constructing ordinary error values. Formatted
+construction and `js_mkerr*` share a formatter that grows beyond its short-message
+buffer instead of truncating. Use ordinary Error construction especially
+before cleanup or user-code execution. Use `Ant_Error_CallCallback` for native
+error-first callbacks that may receive a throw marker. It normalizes the first
+argument without changing the caller's argument array. When converting a throw
+before other cleanup, consume it explicitly with `js_take_thrown`. Do not clear
+exceptions afterward: the callback may throw a new one, even the same value.
+Once consumed, root the error across allocation, cleanup, or user property
+access until another object owns it. Keep successful operations outside this
+cleanup. See the [boundary fixes](../exec-plans/completed/async-error-boundaries.md).
+
+Use `Ant_Exception_Pending` to distinguish a throw from its value in scalar
+helper paths; interpreted and JIT catches unwrap their returned record without
+depending on current state. Iterator cleanup preserves an
+existing exception over a new cleanup failure; a cleanup failure during normal
+completion must still propagate. The [module audit](../exec-plans/completed/module-error-boundaries.md)
+records the per-file coverage and regression tests for these boundaries.
+
+Disposal must also track completion presence separately from its payload.
+Synchronous iterator-close opcodes explicitly distinguish normal cleanup from
+cleanup while preserving an existing throw. A failed Promise continuation
+setup must reach its owner's rejection and cleanup path before any result is
+marked handled. `Ant_Promise_Observe` provides this for internal continuations
+with an owner rejection callback, queued on setup failure. Public `.then()`
+semantics remain unchanged. See the [exception model](../exec-plans/completed/exception-completion-model.md),
+the [earlier handoff refactor](../exec-plans/completed/central-error-handoffs.md),
+and [whole-codebase follow-up](../exec-plans/completed/whole-codebase-error-boundaries.md).
+
+Stream size validation relies on `js_to_number` returning NaN when conversion
+throws. Preserve that contract: the existing invalid-size branch consumes the
+pending exception, keeping the additional check off successful conversions.
+
+Node writable `done(error)` uses null and undefined to signal success. Preserve
+synchronous `_write()` throws as thrown completions rather than passing their
+values through `done`; otherwise a nullish throw becomes a successful write.
+
 ## JIT Fallback Must Preserve Effects
 
 An inline fallback that calls the whole callee can run only before observable
@@ -56,11 +126,14 @@ analysis rejects any function in the test corpus. `vstack_push`
 must never write past `vs.max`; it sets `overflow` and the compile is
 abandoned. See [the vstack regression](../../tests/test_jit_vstack_depth.cjs).
 
-A jump that leaves a `for...of` or `for await...of` must close that loop's
+A jump or return that leaves a `for...of` or `for await...of` must close that loop's
 iterator and drop its three stack slots at the point the loop is crossed,
-innermost first and before any outer finally runs; `emit_loop_exit_jump`
-retires unwind entries one at a time for this reason. See
-[the labeled-jump regression](../../tests/test_labeled_jump_for_of_close.cjs).
+innermost first and before any outer finally runs; `emit_loop_exit_unwind`
+retires unwind entries one at a time for this reason. Return values must survive
+local-slot reuse in intervening finally blocks. Normal exhaustion only drops
+the iterator record. See the [labeled-jump regression](../../tests/test_labeled_jump_for_of_close.cjs),
+[return regression](../../tests/test_return_for_of_close.cjs), and
+[async return regression](../../tests/test_return_for_await_close.cjs).
 
 OSR is never refused on bytecode size alone. Each function's back-edge
 threshold (`jit_osr_threshold`) is scaled by its size in

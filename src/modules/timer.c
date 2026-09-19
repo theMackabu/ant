@@ -491,7 +491,7 @@ static ant_value_t timers_promises_get_state(ant_t *js) {
 static ant_value_t timers_promises_abort_reason(ant_t *js, ant_value_t signal) {
   ant_value_t reason = abort_signal_get_reason(signal);
   if (vtype(reason) != kTypeUndefined && vtype(reason) != kTypeNull) return reason;
-  return js_mkerr_typed(js, JS_ERR_TYPE, "The operation was aborted");
+  return Ant_Error_Create(js, JS_ERR_TYPE, "The operation was aborted");
 }
 
 static void timers_promises_remove_abort_listener(ant_t *js, ant_value_t state) {
@@ -557,9 +557,14 @@ static ant_value_t timers_promises_on_abort(ant_params_t) {
   }
 
   if (abort_signal_is_signal(signal)) reason = timers_promises_abort_reason(js, signal);
-  else reason = js_mkerr_typed(js, JS_ERR_TYPE, "The operation was aborted");
+  else reason = Ant_Error_Create(js, JS_ERR_TYPE, "The operation was aborted");
 
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, reason);
+  
   timers_promises_settle(js, state, true, reason);
+  GC_ROOT_RESTORE(js, root_mark);
+  
   return js_mkundef();
 }
 
@@ -581,6 +586,11 @@ static bool timers_promises_parse_options(
   }
 
   signal = js_get(js, value, "signal");
+  if (is_err(signal)) {
+    if (error_out) *error_out = signal;
+    return false;
+  }
+  
   if (vtype(signal) != kTypeUndefined && vtype(signal) != kTypeNull && !abort_signal_is_signal(signal)) {
     if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "options.signal must be an AbortSignal");
     return false;

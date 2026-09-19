@@ -141,9 +141,7 @@ static inline ant_value_t sv_start_tla(
     if (async_coro_out) coroutine_release(coro);
     
     if (is_err(result)) {
-      ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
-      js->thrown_exists = false;
-      js->thrown_value = js_mkundef();
+      ant_value_t reject_value = js_take_thrown(js, result);
       js_reject_promise(js, promise, reject_value);
     } else js_resolve_promise(js, promise, result);
 
@@ -179,9 +177,7 @@ static inline ant_value_t sv_start_async_closure(
     );
     
     if (is_err(result)) {
-      ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
-      js->thrown_exists = false;
-      js->thrown_value = js_mkundef();
+      ant_value_t reject_value = js_take_thrown(js, result);
       js_reject_promise(js, promise, reject_value);
     } else js_resolve_promise(js, promise, result);
     
@@ -226,9 +222,7 @@ static inline ant_value_t sv_start_async_closure(
     }
   
     if (is_err(result)) {
-      ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
-      js->thrown_exists = false;
-      js->thrown_value = js_mkundef();
+      ant_value_t reject_value = js_take_thrown(js, result);
       js_reject_promise(js, promise, reject_value);
     } else js_resolve_promise(js, promise, result);
 

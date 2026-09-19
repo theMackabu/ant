@@ -21,6 +21,7 @@ static constexpr size_t GC_POOL_PRESSURE_FLOOR    = 8u * 1024u * 1024u;
 static constexpr size_t GC_ROPE_NURSERY_THRESHOLD = 8u * 1024u * 1024u;
 
 #define GC_OBJ_TYPE_MASK (T_FLAG_FIND(kTypeObject) \
+  | T_FLAG_FIND(kTypeError)                        \
   | T_FLAG_FIND(kTypeArray)                        \
   | T_FLAG_FIND(kTypePromise)                      \
   | T_FLAG_FIND(kTypeGenerator))
@@ -62,6 +63,7 @@ gc_func_mark_profile_t gc_func_mark_profile_get(void);
 static inline bool gc_value_is_heap_ref(ant_value_t v) {
   if (!is_tagged(v)) return false;
   uint8_t type = vtype_tagged(v);
+  if (type == kTypeError && vdata(v) < 2) return false;
   return 
     type == kTypeFunction || 
     type == kTypeString   || 

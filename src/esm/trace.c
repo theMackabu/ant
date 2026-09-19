@@ -1,3 +1,4 @@
+#include "gc/roots.h"
 #include <compat.h> // IWYU pragma: keep
 
 #include "esm/trace.h"
@@ -894,16 +895,14 @@ static bool trace_scan_ast(trace_ctx_t *ctx, const char *file, const sv_ast_t *n
 }
 
 static sv_ast_t *trace_parse(ant_t *js, const char *code, size_t len) {
-  bool saved_thrown_exists = js->thrown_exists;
-  ant_value_t saved_thrown_value = js->thrown_value;
-  ant_value_t saved_thrown_stack = js->thrown_stack;
+  GC_ROOT_SAVE(exception_mark, js);
+  ant_value_t saved_exception = Ant_Exception_Peek(js);
+  GC_ROOT_PIN(js, saved_exception);
 
   sv_ast_t *program = sv_parse(js, code, (ant_offset_t)len, false);
-  if (!program) {
-    js->thrown_exists = saved_thrown_exists;
-    js->thrown_value = saved_thrown_value;
-    js->thrown_stack = saved_thrown_stack;
-  }
+  if (!program) Ant_Exception_Set(js, saved_exception);
+
+  GC_ROOT_RESTORE(js, exception_mark);
   return program;
 }
 

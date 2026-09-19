@@ -206,17 +206,6 @@ static void server_runtime_finalize(ant_t *js, ant_object_t *obj) {
   free(server);
 }
 
-static ant_value_t server_exception_reason(ant_t *js, ant_value_t value) {
-  if (!is_err(value)) return value;
-  if (!js->thrown_exists) return value;
-
-  value = js->thrown_value;
-  js->thrown_exists = false;
-  js->thrown_value = js_mkundef();
-  js->thrown_stack = js_mkundef();
-  return value;
-}
-
 static ant_value_t server_mk_listen_error(ant_t *js, int status, const server_runtime_t *server) {
   const char *code = uv_err_name(status);
   const char *message = uv_strerror(status);
@@ -1219,7 +1208,7 @@ static void server_handle_fetch_result(server_request_t *req, ant_value_t result
   ant_t *js = req->server->js;
 
   if (is_err(result)) {
-    ant_value_t reason = server_exception_reason(js, result);
+    ant_value_t reason = Ant_Error_ConsumeMarker(js, result);
     const char *msg = js_str(js, reason);
     server_send_request_internal_error(req, msg);
     return;
@@ -1228,12 +1217,11 @@ static void server_handle_fetch_result(server_request_t *req, ant_value_t result
   if (vtype(result) == kTypePromise) {
     ant_value_t fulfill = server_mkreqfun(js, server_on_response_fulfill, req);
     ant_value_t reject = server_mkreqfun(js, server_on_response_reject, req);
-    ant_value_t then_result = 0;
 
     req->response_promise = result;
     server_request_retain(req);
-    then_result = js_promise_then(js, result, fulfill, reject);
-    promise_mark_handled(then_result);
+    Ant_Promise_Observe(js, result, fulfill, reject);
+    
     return;
   }
 
@@ -1324,7 +1312,6 @@ static void server_start_stream_read(server_request_t *req) {
   ant_value_t next_p = 0;
   ant_value_t fulfill = 0;
   ant_value_t reject = 0;
-  ant_value_t then_result = 0;
 
   if (!req->conn || ant_conn_is_closing(req->conn)) return;
   if (!is_object_type(req->response_reader)) return;
@@ -1335,8 +1322,7 @@ static void server_start_stream_read(server_request_t *req) {
   reject = server_mkreqfun(js, server_stream_read_reject, req);
 
   server_request_retain(req);
-  then_result = js_promise_then(js, next_p, fulfill, reject);
-  promise_mark_handled(then_result);
+  Ant_Promise_Observe(js, next_p, fulfill, reject);
 }
 
 static bool server_request_ensure_reader(server_request_t *req) {
@@ -1350,7 +1336,13 @@ static bool server_request_ensure_reader(server_request_t *req) {
   reader_args[0] = js_get_slot(req->response_obj, SLOT_RESPONSE_BODY_STREAM);
   req->response_reader = js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
 
-  return !is_err(req->response_reader);
+  if (is_err(req->response_reader)) {
+    js_take_thrown(js, req->response_reader);
+    req->response_reader = js_mkundef();
+    return false;
+  }
+
+  return true;
 }
 
 static void server_write_cb(ant_conn_t *conn, int status, void *user_data) {
@@ -1526,6 +1518,7 @@ static void server_process_client_request(
   headers = server_headers_from_parsed(js, parsed);
   
   if (is_err(headers)) {
+    js_take_thrown(js, headers);
     ant_http_headers_free(raw_headers);
     ant_http1_free_parsed_request(parsed);
     server_send_internal_error(conn, NULL);
@@ -1549,6 +1542,7 @@ static void server_process_client_request(
   ant_http1_free_parsed_request(parsed);
 
   if (is_err(request_obj)) {
+    js_take_thrown(js, request_obj);
     ant_http_headers_free(raw_headers);
     server_send_internal_error(conn, NULL);
     return;

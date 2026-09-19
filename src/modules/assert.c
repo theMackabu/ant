@@ -216,58 +216,104 @@ static ant_value_t assert_throws(ant_params_t) {
 static ant_value_t assert_does_not_throw(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeFunction)
     return js_mkerr(js, "assert.doesNotThrow: first argument must be a function");
+
   ant_value_t result = sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, js_mkundef());
-  if (is_err(result))
-    return js_mkerr(js, "Got unwanted exception: %s", js_str(js, result));
+  if (is_err(result)) return js_mkerr(js, "Got unwanted exception: %s", js_str(js, result));
+
   return js_mkundef();
+}
+
+static ant_value_t assert_rejection_settle(
+  ant_t *js, ant_value_t promise, ant_value_t result, bool expect_rejection
+) {
+  bool rejected = promise_was_rejected(result);
+  if (rejected) promise_mark_handled(result);
+
+  if (rejected == expect_rejection) js_resolve_promise(js, promise, js_mkundef());
+  else {
+    const char *message = expect_rejection ? "Missing expected rejection" : "Got unwanted rejection";
+    js_reject_promise(js, promise, Ant_Error_Create(js, JS_ERR_TYPE, message));
+  }
+
+  return js_mkundef();
+}
+
+static ant_value_t assert_rejection_on_settled(ant_params_t) {
+  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  return assert_rejection_settle(
+    js, js_get(js, state, "promise"), js_get(js, state, "result"),
+    js_truthy(js, js_get(js, state, "expect_rejection"))
+  );
+}
+
+static ant_value_t assert_rejection(ant_native_params_t, bool expect_rejection) {
+  const char *method = expect_rejection ? "rejects" : "doesNotReject";
+  if (nargs < 1) return js_mkerr(js, "assert.%s: first argument required", method);
+
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t promise = js_mkpromise(js);
+  GC_ROOT_PIN(js, promise);
+  ant_value_t result = vtype(args[0]) == kTypeFunction
+    ? sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, js_mkundef())
+    : args[0];
+  GC_ROOT_PIN(js, result);
+
+  if (is_err(result)) {
+    js_reject_promise(js, promise, result);
+  } else if (vtype(result) == kTypePromise) {
+    ant_value_t state = js_mkobj(js);
+    GC_ROOT_PIN(js, state);
+    js_set(js, state, "promise", promise);
+    js_set(js, state, "result", result);
+    js_set(js, state, "expect_rejection", js_bool(expect_rejection));
+    ant_value_t on_settled = js_heavy_mkfun(js, assert_rejection_on_settled, state);
+    GC_ROOT_PIN(js, on_settled);
+    ant_value_t continuation = js_promise_then(js, result, on_settled, on_settled);
+    if (is_err(continuation))
+      js_reject_promise(js, promise, continuation);
+    else promise_mark_handled(continuation);
+  } else assert_rejection_settle(js, promise, result, expect_rejection);
+
+  GC_ROOT_RESTORE(js, mark);
+  return promise;
 }
 
 static ant_value_t assert_rejects(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "assert.rejects: first argument required");
-  ant_value_t promise = js_mkpromise(js);
-  ant_value_t result = vtype(args[0]) == kTypeFunction
-    ? sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, js_mkundef())
-    : args[0];
-  if (is_err(result) || promise_was_rejected(result)) {
-    promise_mark_handled(result);
-    js_resolve_promise(js, promise, js_mkundef());
-  } else js_reject_promise(js, promise, js_mkerr(js, "Missing expected rejection"));
-  return promise;
+  return assert_rejection(js, args, nargs, true);
 }
 
 static ant_value_t assert_does_not_reject(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "assert.doesNotReject: first argument required");
-  ant_value_t promise = js_mkpromise(js);
-  ant_value_t result = vtype(args[0]) == kTypeFunction
-    ? sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, js_mkundef())
-    : args[0];
-  if (is_err(result) || promise_was_rejected(result)) {
-    promise_mark_handled(result);
-    js_reject_promise(js, promise, js_mkerr(js, "Got unwanted rejection"));
-  } else js_resolve_promise(js, promise, js_mkundef());
-  return promise;
+  return assert_rejection(js, args, nargs, false);
+}
+
+static ant_value_t assert_regexp(ant_native_params_t, bool expect_match) {
+  if (nargs < 2) return js_mkundef();
+
+  ant_value_t test_fn = js_getprop_fallback(js, args[1], "test");
+  if (vtype(test_fn) != kTypeFunction && vtype(test_fn) != kTypeBuiltin) {
+    const char *method = expect_match ? "match" : "doesNotMatch";
+    return js_mkerr(js, "assert.%s: second argument must be a RegExp", method);
+  }
+
+  ant_value_t test_args[1] = {args[0]};
+  ant_value_t result = sv_vm_call(js->vm, js, test_fn, args[1], test_args, 1, NULL, js_mkundef());
+
+  if (js_truthy(js, result) != expect_match) {
+    const char *message = expect_match
+      ? "Value does not match the regular expression"
+      : "Value matches the regular expression";
+    return assertion_error(js, message, nargs >= 3 ? args[2] : js_mkundef());
+  }
+
+  return js_mkundef();
 }
 
 static ant_value_t assert_match(ant_params_t) {
-  if (nargs < 2) return js_mkundef();
-  ant_value_t test_fn = js_getprop_fallback(js, args[1], "test");
-  if (vtype(test_fn) != kTypeFunction && vtype(test_fn) != kTypeBuiltin) return js_mkerr(js, "assert.match: second argument must be a RegExp");
-  ant_value_t test_args[1] = {args[0]};
-  ant_value_t result = sv_vm_call(js->vm, js, test_fn, args[1], test_args, 1, NULL, js_mkundef());
-  if (!js_truthy(js, result))
-    return assertion_error(js, "Value does not match the regular expression", nargs >= 3 ? args[2] : js_mkundef());
-  return js_mkundef();
+  return assert_regexp(js, args, nargs, true);
 }
 
 static ant_value_t assert_does_not_match(ant_params_t) {
-  if (nargs < 2) return js_mkundef();
-  ant_value_t test_fn = js_getprop_fallback(js, args[1], "test");
-  if (vtype(test_fn) != kTypeFunction && vtype(test_fn) != kTypeBuiltin) return js_mkerr(js, "assert.doesNotMatch: second argument must be a RegExp");
-  ant_value_t test_args[1] = {args[0]};
-  ant_value_t result = sv_vm_call(js->vm, js, test_fn, args[1], test_args, 1, NULL, js_mkundef());
-  if (js_truthy(js, result))
-    return assertion_error(js, "Value matches the regular expression", nargs >= 3 ? args[2] : js_mkundef());
-  return js_mkundef();
+  return assert_regexp(js, args, nargs, false);
 }
 
 static ant_value_t assert_assertion_error_ctor(ant_params_t) {

@@ -73,9 +73,7 @@ static ant_value_t generator_async_wrap_result(ant_t *js, ant_value_t result) {
   if (is_err(promise)) return promise;
 
   if (is_err(result)) {
-    ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
-    js->thrown_exists = false;
-    js->thrown_value = js_mkundef();
+    ant_value_t reject_value = js_take_thrown(js, result);
     js_reject_promise(js, promise, reject_value);
   } else js_resolve_promise(js, promise, result);
 
@@ -133,9 +131,7 @@ static ant_value_t generator_enqueue_request(
 
 static void generator_settle_request_promise(ant_t *js, ant_value_t promise, ant_value_t result) {
   if (is_err(result)) {
-    ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
-    js->thrown_exists = false;
-    js->thrown_value = js_mkundef();
+    ant_value_t reject_value = js_take_thrown(js, result);
     js_reject_promise(js, promise, reject_value);
   } else js_resolve_promise(js, promise, result);
 }
@@ -216,9 +212,7 @@ bool generator_resume_pending_request(ant_t *js, coroutine_t *coro, ant_value_t 
   GC_ROOT_PIN(js, pending);
 
   if (is_err(result)) {
-    ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
-    js->thrown_exists = false;
-    js->thrown_value = js_mkundef();
+    ant_value_t reject_value = js_take_thrown(js, result);
     
     GC_ROOT_PIN(js, reject_value);
     coro->async_promise = js_mkundef();

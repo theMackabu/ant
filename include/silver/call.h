@@ -8,27 +8,29 @@
 
 static constexpr int SV_CALL_INLINE_ARGS_CAP = 4;
 
+ant_value_t Ant_Silver_InvokeNativeScoped(
+  ant_t *js, ant_cfunc_t fn, ant_value_t *args,
+  int nargs, ant_value_t new_target
+);
+
+static inline ant_value_t Ant_Silver_FinishNativeCall(ant_t *js, ant_value_t result) {
+  if (is_err(result)) Ant_Exception_Set(js, result);
+  else if (Ant_Exception_Pending(js)) result = Ant_Exception_Current(js);
+  return result;
+}
+
 static inline ant_value_t sv_invoke_native(
   ant_t *js, ant_cfunc_t fn, ant_value_t *args,
   int nargs, ant_value_t new_target
 ) {
-  if (!gc_value_is_heap_ref(new_target)) return fn(js, args, nargs, new_target);
-
-  sv_vm_t *vm = js->vm;
-  sv_native_frame_t frame = {
-    .caller = vm->native_frame,
-    .new_target = new_target
-  };
-
-  vm->native_frame = &frame;
+  if (__builtin_expect(Ant_Exception_Pending(js) || gc_value_is_heap_ref(new_target), 0))
+    return Ant_Silver_InvokeNativeScoped(js, fn, args, nargs, new_target);
   ant_value_t result = fn(js, args, nargs, new_target);
-  vm->native_frame = frame.caller;
-
-  return result;
+  return Ant_Silver_FinishNativeCall(js, result);
 }
 
 static inline void sv_vm_maybe_checkpoint_microtasks(ant_t *js) {
-  if (!js || js->microtasks_draining || js->vm_exec_depth != 0 || js->thrown_exists) return;
+  if (!js || js->microtasks_draining || js->vm_exec_depth != 0 || Ant_Exception_Pending(js)) return;
   js_maybe_drain_microtasks(js);
 }
 
@@ -377,7 +379,7 @@ static inline ant_value_t sv_vm_call(
     ant_value_t saved_this = js->this_val;
 
     js->this_val = native_this;
-    ant_value_t native_res = js_as_cfunc(func)(js, args, argc, js_mkundef());
+    ant_value_t native_res = sv_invoke_native(js, js_as_cfunc(func), args, argc, js_mkundef());
     js->this_val = saved_this;
 
     sv_vm_maybe_checkpoint_microtasks(js);

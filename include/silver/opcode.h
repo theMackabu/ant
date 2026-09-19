@@ -231,7 +231,7 @@ OP_DEF(  FOR_OF,            1,   1,   3, none)      /* iterable -> iter next cat
 OP_DEF(  FOR_AWAIT_OF,      1,   1,   3, none)      /* async iterable -> iter next catch_off */
 OP_DEF(  ITER_NEXT,         2,   3,   5, u8)        /* advance iterator (u8 hint) */
 OP_DEF(  ITER_GET_VALUE,    1,   2,   3, none)      /* catch_off obj -> catch_off value done */
-OP_DEF(  ITER_CLOSE,        1,   3,   0, none)      /* close iterator */
+OP_DEF(  ITER_CLOSE,        2,   3,   0, u8)        /* close iterator; u8 suppresses close errors */
 OP_DEF(  ITER_CLOSE_ASYNC,  1,   3,   1, none)      /* close async iterator -> awaitable */
 OP_DEF(  ITER_CLOSE_CHECK,  1,   1,   0, none)      /* validate awaited async close result */
 OP_DEF(  ITER_CALL,         2,   4,   5, u8)        /* call iterator method */
@@ -239,7 +239,7 @@ OP_DEF(  AWAIT_ITER_NEXT,   1,   3,   5, none)      /* async iterator next -> it
 OP_DEF(  DESTRUCTURE_INIT,  1,   1,   3, none)      /* iterable -> iter next tag */
 OP_DEF(  DESTRUCTURE_NEXT,  1,   3,   4, none)      /* iter next tag -> iter next tag value|undef */
 OP_DEF(  DESTRUCTURE_REST,  1,   3,   4, none)      /* iter next tag -> iter next tag array */
-OP_DEF(  DESTRUCTURE_CLOSE, 1,   3,   0, none)      /* close destructuring iterator */
+OP_DEF(  DESTRUCTURE_CLOSE, 2,   3,   0, u8)        /* close destructuring iterator; u8 suppresses errors */
 
 OP_DEF(  AWAIT,             1,   1,   1, none)      /* promise -> resolved value */
 OP_DEF(  YIELD,             1,   1,   1, none)      /* val -> received */

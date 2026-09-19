@@ -465,6 +465,7 @@ typedef struct {
   int stack_cap;
   int replacer_arr_len;
   int has_cycle;
+  bool has_error;
   char cycle_key[128];
 
   char indent[64];
@@ -477,15 +478,11 @@ typedef struct {
 } json_cycle_ctx;
 
 static inline bool json_has_abort(json_cycle_ctx *ctx) {
-  return ctx->has_cycle || vtype(ctx->error) != kTypeUndefined;
-}
-
-static inline ant_value_t json_normalize_error(ant_value_t value) {
-  if (is_err(value) && vdata(value) != 0) return js_as_obj(value);
-  return value;
+  return ctx->has_cycle || ctx->has_error;
 }
 
 static void json_set_error(json_cycle_ctx *ctx, ant_value_t value) {
+  ctx->has_error = true;
   ctx->error = value;
   gc_temp_root_set(ctx->error_handle, value);
 }
@@ -502,14 +499,11 @@ static inline void json_set_holder(json_cycle_ctx *ctx, ant_value_t value) {
 }
 
 static void json_capture_error(json_cycle_ctx *ctx, ant_value_t value) {
-  if (vtype(ctx->error) != kTypeUndefined) return;
-  if (ctx->js->thrown_exists) {
-    json_set_error(ctx, ctx->js->thrown_value);
-    ctx->js->thrown_exists = false;
-    ctx->js->thrown_value = js_mkundef();
-    return;
-  }
-  json_set_error(ctx, json_normalize_error(value));
+  if (ctx->has_error) return;
+  if (!is_err(value) && Ant_Exception_Pending(ctx->js)) 
+    value = Ant_Exception_Current(ctx->js);
+  json_set_error(ctx, value);
+  if (Ant_Exception_Peek(ctx->js) == value) Ant_Exception_Clear(ctx->js);
 }
 
 typedef struct {
@@ -670,8 +664,12 @@ static int is_key_in_replacer_arr(ant_t *js, json_cycle_ctx *ctx, const char *ke
   snprintf(idxstr, sizeof(idxstr), "%d", i);
   
   ant_value_t item = js_get(js, ctx->replacer_arr, idxstr);
-  int type = vtype(item);
+  if (is_err(item)) {
+    json_capture_error(ctx, item);
+    return 0;
+  }
   
+  int type = vtype(item);
   if (type == kTypeString) {
     size_t item_len;
     char *item_str = js_getstr(js, item, &item_len);
@@ -837,7 +835,7 @@ static json_write_t json_write_array(
     if (!json_write_indent(ctx, out, depth + 1)) goto abort;
     ant_value_t elem = js_arr_get(js, val, i);
 
-    if (is_err(elem) || js->thrown_exists) {
+    if (is_err(elem) || Ant_Exception_Pending(js)) {
       json_capture_error(ctx, elem);
       goto abort;
     }
@@ -917,7 +915,10 @@ static json_write_t json_write_object_fast(
   for (size_t i = 0; i < key_count; i++) {
     const char *key = keys[i];
     size_t key_len = intern_length(key);
-    if (!is_key_in_replacer_arr(js, ctx, key, key_len)) continue;
+    
+    bool included = is_key_in_replacer_arr(js, ctx, key, key_len);
+    if (json_has_abort(ctx)) goto abort;
+    if (!included) continue;
 
     ant_prop_loc_t loc = lkp_interned(val, key);
     if (!loc.obj) continue;
@@ -995,7 +996,9 @@ static json_write_t json_write_object(
     char *key = js_getstr(js, key_val, &key_len);
 
     if (!key) continue;
-    if (!is_key_in_replacer_arr(js, ctx, key, key_len)) continue;
+    bool included = is_key_in_replacer_arr(js, ctx, key, key_len);
+    if (json_has_abort(ctx)) goto abort;
+    if (!included) continue;
 
     ant_value_t prop = js_get(js, val, key);
     if (is_err(prop)) {
@@ -1248,7 +1251,7 @@ static bool json_set_indent(ant_t *js, json_cycle_ctx *ctx, ant_value_t *args, i
       ? js_to_primitive(js, space, 0)
       : js_tostring_val(js, space);
 
-    if (is_err(prim) || js->thrown_exists) {
+    if (is_err(prim) || Ant_Exception_Pending(js)) {
       json_capture_error(ctx, prim);
       return false;
     }
@@ -1334,29 +1337,38 @@ ant_value_t js_json_stringify(ant_params_t) {
     goto cleanup;
   }
   
+  // TODO: reduce nesting
   if (nargs >= 2) {
-  ant_value_t replacer = args[1];
-  if (is_callable(replacer)) {
-  ctx.replacer_func = replacer;
-  if (!json_ctx_pin_value(&ctx, replacer)) {
-    result = ctx.error;
-    goto cleanup;
-  }}
-  
-  else if (is_special_object(replacer)) {
-  ant_value_t len_val = js_get(js, replacer, "length");
-  
-  if (vtype(len_val) == kTypeNumber) {
-    ctx.replacer_arr = replacer;
-    ctx.replacer_arr_len = (int)js_getnum(len_val);
-    if (!json_ctx_pin_value(&ctx, replacer)) {
-      result = ctx.error;
-      goto cleanup;
+    ant_value_t replacer = args[1];
+    if (is_callable(replacer)) {
+      ctx.replacer_func = replacer;
+      if (!json_ctx_pin_value(&ctx, replacer)) {
+        result = ctx.error;
+        goto cleanup;
+      }
     }
-  }}} 
+    
+    else if (is_special_object(replacer)) {
+      ant_value_t len_val = js_get(js, replacer, "length");
+      if (is_err(len_val)) {
+        json_capture_error(&ctx, len_val);
+        result = js_throw(js, ctx.error);
+        goto cleanup;
+      }
+      
+      if (vtype(len_val) == kTypeNumber) {
+        ctx.replacer_arr = replacer;
+        ctx.replacer_arr_len = (int)js_getnum(len_val);
+        if (!json_ctx_pin_value(&ctx, replacer)) {
+          result = ctx.error;
+          goto cleanup;
+        }
+      }
+    }
+  } 
   
   if (!json_set_indent(js, &ctx, args, nargs)) {
-    ant_value_t error = json_normalize_error(ctx.error);
+    ant_value_t error = ctx.error;
     result = is_err(error) ? error : js_throw(js, error);
     goto cleanup;
   }
@@ -1367,7 +1379,7 @@ ant_value_t js_json_stringify(ant_params_t) {
     goto cleanup;
   }
   
-  if (vtype(root_holder) == kTypeUndefined && vtype(ctx.error) != kTypeUndefined) {
+  if (vtype(root_holder) == kTypeUndefined && ctx.has_error) {
     result = ctx.error;
     goto cleanup;
   }
@@ -1375,8 +1387,8 @@ ant_value_t js_json_stringify(ant_params_t) {
   json_set_holder(&ctx, root_holder);
   json_write_t root = json_write_with_key(&ctx, &out, "", args[0], 0, 0);
   
-  if (vtype(ctx.error) != kTypeUndefined) {
-    ant_value_t error = json_normalize_error(ctx.error);
+  if (ctx.has_error) {
+    ant_value_t error = ctx.error;
     result = is_err(error) ? error : js_throw(js, error);
     goto cleanup;
   }

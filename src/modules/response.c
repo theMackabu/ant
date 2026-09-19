@@ -9,13 +9,11 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
-#include "silver/engine.h"
 #include "common.h"
 #include "descriptors.h"
 #include "gc/roots.h"
 #include "utf8.h"
 
-#include "modules/assert.h"
 #include "modules/blob.h"
 #include "modules/buffer.h"
 #include "modules/formdata.h"
@@ -156,15 +154,6 @@ static response_data_t *data_dup(const response_data_t *src) {
   }
 
   return d;
-}
-
-static ant_value_t response_rejection_reason(ant_t *js, ant_value_t value) {
-  if (!is_err(value)) return value;
-  ant_value_t reason = js->thrown_exists ? js->thrown_value : value;
-  js->thrown_exists = false;
-  js->thrown_value = js_mkundef();
-  js->thrown_stack = js_mkundef();
-  return reason;
 }
 
 static bool copy_body_bytes(
@@ -406,7 +395,7 @@ static void resolve_body_promise(
       : js_mkstr(js, "", 0);
       
     ant_value_t parsed = json_parse_value(js, str);
-    if (is_err(parsed)) js_reject_promise(js, promise, response_rejection_reason(js, parsed));
+    if (is_err(parsed)) js_reject_promise(js, promise, parsed);
     else js_resolve_promise(js, promise, parsed);
     
     break;
@@ -423,7 +412,9 @@ static void resolve_body_promise(
   }
   case BODY_BLOB: {
     const char *type = body_type ? body_type : "";
-    js_resolve_promise(js, promise, blob_create(js, data, size, type));
+    ant_value_t blob = blob_create(js, data, size, type);
+    if (is_err(blob)) js_reject_promise(js, promise, blob);
+    else js_resolve_promise(js, promise, blob);
     break;
   }
   case BODY_BYTES: {
@@ -433,13 +424,14 @@ static void resolve_body_promise(
       break;
     }
     if (data && size > 0) memcpy(ab->data, data, size);
-    js_resolve_promise(js, promise,
-      create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, size, "Uint8Array"));
+    ant_value_t bytes = create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, size, "Uint8Array");
+    if (is_err(bytes)) js_reject_promise(js, promise, bytes);
+    else js_resolve_promise(js, promise, bytes);
     break;
   }
   case BODY_FORMDATA: {
     ant_value_t fd = formdata_parse_body(js, data, size, body_type, has_body);
-    if (is_err(fd)) js_reject_promise(js, promise, response_rejection_reason(js, fd));
+    if (is_err(fd)) js_reject_promise(js, promise, fd);
     else js_resolve_promise(js, promise, fd);
     break;
   }}
@@ -511,8 +503,7 @@ static void stream_schedule_next_read(ant_t *js, ant_value_t state, ant_value_t 
   ant_value_t next_p = rs_default_reader_read(js, reader);
   ant_value_t fulfill = js_heavy_mkfun(js, stream_body_read, state);
   ant_value_t reject = js_heavy_mkfun(js, stream_body_rejected, state);
-  ant_value_t then_result = js_promise_then(js, next_p, fulfill, reject);
-  promise_mark_handled(then_result);
+  Ant_Promise_Observe(js, next_p, fulfill, reject);
 }
 
 static ant_value_t stream_body_read(ant_params_t) {
@@ -531,7 +522,7 @@ static ant_value_t stream_body_read(ant_params_t) {
     ant_value_t chunk_err = js_mkundef();
     uint8_t *data = concat_uint8_chunks(js, chunks, &size, &chunk_err);
     if (is_err(chunk_err)) {
-      js_reject_promise(js, promise, response_rejection_reason(js, chunk_err));
+      js_reject_promise(js, promise, chunk_err);
       return js_mkundef();
     }
     ant_value_t type_v = js_get(js, state, "type");
@@ -579,21 +570,19 @@ static ant_value_t consume_body(ant_t *js, int mode) {
   const char *body_type = NULL;
 
   if (!d) {
-    js_reject_promise(js, promise, response_rejection_reason(js,
-      js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Response object")));
+    js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Response object"));
     return promise;
   }
 
   stream = js_get_slot(this, SLOT_RESPONSE_BODY_STREAM);
   if (d->body_used || (rs_is_stream(stream) && rs_stream_unusable(stream))) {
-    js_reject_promise(js, promise, response_rejection_reason(js,
-      js_mkerr_typed(js, JS_ERR_TYPE, "body stream is disturbed or locked")));
+    js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "body stream is disturbed or locked"));
     return promise;
   }
 
   type_value = response_effective_body_type(js, this, d);
   if (is_err(type_value)) {
-    js_reject_promise(js, promise, response_rejection_reason(js, type_value));
+    js_reject_promise(js, promise, type_value);
     return promise;
   }
 
@@ -1044,21 +1033,24 @@ static ant_value_t res_body_pull(ant_params_t) {
 
   if (d && d->body_data && d->body_size > 0) {
     ArrayBufferData *ab = create_array_buffer_data(d->body_size);
-    if (ab) {
-      memcpy(ab->data, d->body_data, d->body_size);
-      rs_controller_enqueue(js, ctrl,
-        create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, d->body_size, "Uint8Array"));
-    }
+    if (!ab) return js_mkerr(js, "out of memory");
+    memcpy(ab->data, d->body_data, d->body_size);
+    
+    ant_value_t chunk = create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, d->body_size, "Uint8Array");
+    if (is_err(chunk)) return chunk;
+    
+    ant_value_t enqueued = rs_controller_enqueue(js, ctrl, chunk);
+    if (is_err(enqueued)) return enqueued;
   }
 
   rs_controller_close(js, ctrl);
   return js_mkundef();
 }
 
-#define RES_GETTER_START(name)                                                    \
-  static ant_value_t js_res_get_##name(ant_params_t) { \
-    ant_value_t this = js_getthis(js);                                            \
-    response_data_t *d = response_get_data(this);                                  \
+#define RES_GETTER_START(name)                                                 \
+  static ant_value_t js_res_get_##name(ant_params_t) {                         \
+    ant_value_t this = js_getthis(js);                                         \
+    response_data_t *d = response_get_data(this);                              \
     if (!d) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Response object");
 
 #define RES_GETTER_END }

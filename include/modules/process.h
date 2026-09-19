@@ -23,7 +23,7 @@ bool process_report_uncaught_exception(ant_t *js);
 bool process_has_event_listeners(ant_t *js, const char *event_type);
 
 #define process_report_uncaught_exception_if_pending(js) \
-  (__builtin_expect((js)->thrown_exists, 0) &&           \
+  (__builtin_expect(Ant_Exception_Pending(js), 0) &&           \
   process_report_uncaught_exception(js))
 
 typedef void (*stdin_byte_consumer_fn)(ant_t *js, const char *buf, size_t len);

@@ -343,9 +343,9 @@ ant_value_t jit_helper_iter_next(
   ant_value_t *iter_buf, int hint
 );
 
-void jit_helper_destructure_close(
+ant_value_t jit_helper_destructure_close(
   sv_vm_t *vm, ant_t *js,
-  ant_value_t *iter_buf
+  ant_value_t *iter_buf, int suppress_error
 );
 
 ant_value_t jit_helper_destructure_next(

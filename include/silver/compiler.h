@@ -85,6 +85,7 @@ typedef struct {
   uint32_t label_len;
   bool is_switch;
   int iter_unwind_index;
+  int iter_completion_local;
   bool iter_async;
 } sv_loop_t;
 

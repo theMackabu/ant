@@ -1,3 +1,5 @@
+// TODO: split into smaller modules like jit
+
 #include "silver/ast.h"
 #include "silver/jit.h"
 #include "silver/compile_ctx.h"
@@ -1406,6 +1408,7 @@ static void push_loop(
     .label = label, .label_len = label_len,
     .is_switch = is_switch,
     .iter_unwind_index = -1,
+    .iter_completion_local = -1,
   };
 }
 
@@ -4167,9 +4170,9 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *arg = node->args.items[0];
   if (!arg || arg->type != N_STRING) return false;
 
-  bool saved_thrown_exists = c->js->thrown_exists;
-  ant_value_t saved_thrown_value = c->js->thrown_value;
-  ant_value_t saved_thrown_stack = c->js->thrown_stack;
+  GC_ROOT_SAVE(exception_mark, c->js);
+  ant_value_t saved_exception = Ant_Exception_Peek(c->js);
+  GC_ROOT_PIN(c->js, saved_exception);
 
   code_arena_mark_t mark = parse_arena_mark();
   const char *source = pin_source_text(arg->str ? arg->str : "", arg->len);
@@ -4177,9 +4180,8 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
 
   if (!program) {
     parse_arena_rewind(mark);
-    c->js->thrown_exists = saved_thrown_exists;
-    c->js->thrown_value = saved_thrown_value;
-    c->js->thrown_stack = saved_thrown_stack;
+    Ant_Exception_Set(c->js, saved_exception);
+    GC_ROOT_RESTORE(c->js, exception_mark);
     return false;
   }
 
@@ -4194,9 +4196,8 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
     !ast_contains_direct_suspend(program->args.items[0], NULL)
   ) expr = program->args.items[0]; else {
     parse_arena_rewind(mark);
-    c->js->thrown_exists = saved_thrown_exists;
-    c->js->thrown_value = saved_thrown_value;
-    c->js->thrown_stack = saved_thrown_stack;
+    Ant_Exception_Set(c->js, saved_exception);
+    GC_ROOT_RESTORE(c->js, exception_mark);
     return false;
   }
 
@@ -4209,6 +4210,8 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
   else emit_op(c, OP_UNDEF);
 
   parse_arena_rewind(mark);
+  GC_ROOT_RESTORE(c->js, exception_mark);
+  
   return true;
 }
 
@@ -4865,6 +4868,7 @@ static void compile_destructure_pattern(
 
     emit_op(c, OP_TRY_POP);
     emit_op(c, OP_DESTRUCTURE_CLOSE);
+    emit(c, 0);
     int end_jump = emit_jump(c, OP_JMP);
 
     patch_jump(c, try_jump);
@@ -4872,6 +4876,7 @@ static void compile_destructure_pattern(
     
     emit_put_local(c, err_local);
     emit_op(c, OP_DESTRUCTURE_CLOSE);
+    emit(c, 1);
     emit_get_local(c, err_local);
     emit_op(c, OP_THROW);
     patch_jump(c, catch_tag);
@@ -4976,15 +4981,68 @@ static void emit_using_dispose_call(
 }
 
 static void emit_using_cleanups_to_depth(sv_compiler_t *c, int target_depth) {
-for (int i = c->using_cleanup_count - 1; i >= 0; i--) {
-  sv_using_cleanup_t *cleanup = &c->using_cleanups[i];
-  if (cleanup->scope_depth <= target_depth) break;
-  emit_using_dispose_call(c, cleanup->stack_local, -1, cleanup->is_async, false);
-  emit_op(c, OP_POP);
-}}
+  for (int i = c->using_cleanup_count - 1; i >= 0; i--) {
+    sv_using_cleanup_t *cleanup = &c->using_cleanups[i];
+    if (cleanup->scope_depth <= target_depth) break;
+    emit_using_dispose_call(c, cleanup->stack_local, -1, cleanup->is_async, false);
+    emit_op(c, OP_POP);
+  }
+}
+
+static void emit_close_upvals_to_depth(sv_compiler_t *c, int target_depth) {
+  for (int i = c->local_count - 1; i >= 0; i--) {
+    if (c->locals[i].depth <= target_depth) break;
+    if (c->locals[i].captured) {
+      int frame_slot = local_to_frame_slot(c, i);
+      emit_op(c, OP_CLOSE_UPVAL);
+      emit_u16(c, (uint16_t)frame_slot);
+    }
+  }
+}
+
+static void emit_iter_close_seq(sv_compiler_t *c, bool is_async) {
+  if (is_async) {
+    emit_op(c, OP_ITER_CLOSE_ASYNC);
+    emit_op(c, OP_AWAIT);
+    emit_op(c, OP_ITER_CLOSE_CHECK);
+  } else { 
+    emit_op(c, OP_ITER_CLOSE);
+    emit(c, 0);
+  }
+}
+
+static void emit_loop_exit_unwind(sv_compiler_t *c, int unwind_depth, int target_loop) {
+  for (int i = c->unwind_count - 1; i >= unwind_depth; i--) {
+    if (c->unwind_kinds[i] == UNW_TRY_FINALLY) {
+      int offset = emit_jump(c, OP_UNWIND_JMP);
+      emit(c, 1);
+      emit(c, 1);
+      patch_jump(c, offset);
+      continue;
+    }
+    emit_op(c, c->unwind_kinds[i] == UNW_FINALLY_BODY ? OP_FINALLY_DISCARD : OP_TRY_POP);
+    for (int j = c->loop_count - 1; j > target_loop; j--)
+      if (c->loops[j].iter_unwind_index == i) emit_iter_close_seq(c, c->loops[j].iter_async);
+  }
+}
+
+static void emit_loop_exit_jump(sv_compiler_t *c, sv_loop_t *loop, sv_patch_list_t *pl) {
+  emit_loop_exit_unwind(c, loop->unwind_depth, (int)(loop - c->loops));
+  patch_list_add(pl, emit_jump(c, OP_JMP));
+}
 
 static void emit_return_from_stack(sv_compiler_t *c) {
   emit_using_cleanups_to_depth(c, -1);
+  for (int i = 0; i < c->loop_count; i++) {
+    sv_loop_t *loop = &c->loops[i];
+    if (loop->iter_unwind_index < 0) continue;
+
+    emit_put_local(c, loop->iter_completion_local);
+    emit_loop_exit_unwind(c, loop->iter_unwind_index, -1);
+    emit_get_local(c, loop->iter_completion_local);
+    break;
+  }
+  
   emit_close_upvals(c);
   emit_op(c, OP_RETURN);
 }
@@ -6039,6 +6097,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   
   if (is_for_of) {
     c->loops[c->loop_count - 1].iter_unwind_index = c->unwind_count - 1;
+    c->loops[c->loop_count - 1].iter_completion_local = iter_err_local;
     c->loops[c->loop_count - 1].iter_async = is_for_await;
   }
 
@@ -6129,11 +6188,9 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
     emit_op(c, OP_TRY_POP);
     unwind_pop(c);
 
-    if (is_for_await) {
-      emit_op(c, OP_ITER_CLOSE_ASYNC);
-      emit_op(c, OP_AWAIT);
-      emit_op(c, OP_ITER_CLOSE_CHECK);
-    } else emit_op(c, OP_ITER_CLOSE);
+    emit_op(c, OP_POP);
+    emit_op(c, OP_POP);
+    emit_op(c, OP_POP);
     int normal_end_jump = emit_jump(c, OP_JMP);
 
     pop_loop(c);
@@ -6146,7 +6203,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
       emit_op(c, OP_ITER_CLOSE_ASYNC);
       emit_op(c, OP_AWAIT);
       emit_op(c, OP_ITER_CLOSE_CHECK);
-    } else emit_op(c, OP_ITER_CLOSE);
+    } else { emit_op(c, OP_ITER_CLOSE); emit(c, 0); }
     int end_jump = emit_jump(c, OP_JMP);
 
     patch_jump(c, try_jump_for_of);
@@ -6171,7 +6228,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
       emit_op(c, OP_POP);
       patch_jump(c, close_catch_tag);
       patch_jump(c, close_end);
-    } else emit_op(c, OP_ITER_CLOSE);
+    } else { emit_op(c, OP_ITER_CLOSE); emit(c, 1); }
     emit_get_local(c, iter_err_local);  
     emit_op(c, OP_THROW);              
     patch_jump(c, catch_tag);
@@ -6196,44 +6253,6 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   end_scope(c);
 }
 
-
-static void emit_close_upvals_to_depth(sv_compiler_t *c, int target_depth) {
-for (int i = c->local_count - 1; i >= 0; i--) {
-  if (c->locals[i].depth <= target_depth) break;
-  if (c->locals[i].captured) {
-    int frame_slot = local_to_frame_slot(c, i);
-    emit_op(c, OP_CLOSE_UPVAL);
-    emit_u16(c, (uint16_t)frame_slot);
-  }
-}}
-
-static void emit_iter_close_seq(sv_compiler_t *c, bool is_async) {
-  if (is_async) {
-    emit_op(c, OP_ITER_CLOSE_ASYNC);
-    emit_op(c, OP_AWAIT);
-    emit_op(c, OP_ITER_CLOSE_CHECK);
-  } else emit_op(c, OP_ITER_CLOSE);
-}
-
-static void emit_loop_exit_jump(sv_compiler_t *c, sv_loop_t *loop, sv_patch_list_t *pl) {
-  int target = (int)(loop - c->loops);
-  
-  for (int i = c->unwind_count - 1; i >= loop->unwind_depth; i--) {
-    if (c->unwind_kinds[i] == UNW_TRY_FINALLY) {
-      int offset = emit_jump(c, OP_UNWIND_JMP);
-      emit(c, 1);
-      emit(c, 1);
-      patch_jump(c, offset);
-      continue;
-    }
-    emit_op(c, c->unwind_kinds[i] == UNW_FINALLY_BODY ? OP_FINALLY_DISCARD : OP_TRY_POP);
-    for (int j = c->loop_count - 1; j > target; j--)
-      if (c->loops[j].iter_unwind_index == i) emit_iter_close_seq(c, c->loops[j].iter_async);
-  }
-  
-  patch_list_add(pl, emit_jump(c, OP_JMP));
-}
-
 void compile_break(sv_compiler_t *c, sv_ast_t *node) {
   if (c->loop_count == 0) return;
 
@@ -6249,7 +6268,6 @@ void compile_break(sv_compiler_t *c, sv_ast_t *node) {
 
   emit_loop_exit_jump(c, &c->loops[target], &c->loops[target].breaks);
 }
-
 
 void compile_continue(sv_compiler_t *c, sv_ast_t *node) {
   for (int i = c->loop_count - 1; i >= 0; i--) if (node->str) {
@@ -7081,9 +7099,9 @@ static bool ast_has_own_eval(sv_compiler_t *c, const sv_ast_t *node) {
     sv_ast_t *arg = node->args.items[0];
     if (!eval_arg_is_definitely_non_string(arg)) {
       if (!arg || arg->type != N_STRING) return true;
-      bool saved_thrown_exists = c->js->thrown_exists;
-      ant_value_t saved_thrown_value = c->js->thrown_value;
-      ant_value_t saved_thrown_stack = c->js->thrown_stack;
+      GC_ROOT_SAVE(exception_mark, c->js);
+      ant_value_t saved_exception = Ant_Exception_Peek(c->js);
+      GC_ROOT_PIN(c->js, saved_exception);
       code_arena_mark_t mark = parse_arena_mark();
       sv_ast_t *program = sv_parse(c->js, arg->str ? arg->str : "", arg->len, c->is_strict);
       bool needs_env = !program || (program->args.count != 0 &&
@@ -7093,9 +7111,8 @@ static bool ast_has_own_eval(sv_compiler_t *c, const sv_ast_t *node) {
          ast_contains_direct_suspend(program->args.items[0], NULL) ||
          ast_has_own_eval(c, program->args.items[0])));
       parse_arena_rewind(mark);
-      c->js->thrown_exists = saved_thrown_exists;
-      c->js->thrown_value = saved_thrown_value;
-      c->js->thrown_stack = saved_thrown_stack;
+      Ant_Exception_Set(c->js, saved_exception);
+      GC_ROOT_RESTORE(c->js, exception_mark);
       if (needs_env) return true;
     }
   }
@@ -7940,10 +7957,10 @@ sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, cons
   
   if (sv_compile_trace_unlikely) fprintf(
     stderr, "[compile] end kind=program mode=%d thrown=%d func=%p\n",
-    (int)mode, js->thrown_exists ? 1 : 0, (void *)func
+    (int)mode, Ant_Exception_Pending(js) ? 1 : 0, (void *)func
   );
   
-  if (js->thrown_exists || !func) return NULL;
+  if (Ant_Exception_Pending(js) || !func) return NULL;
   return func;
 }
 
@@ -8008,10 +8025,10 @@ sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool i
 
   if (sv_compile_trace_unlikely) fprintf(
     stderr, "[compile] end kind=function thrown=%d func=%p\n",
-    js->thrown_exists ? 1 : 0, (void *)func
+    Ant_Exception_Pending(js) ? 1 : 0, (void *)func
   );
     
-  if (js->thrown_exists || !func) return NULL;
+  if (Ant_Exception_Pending(js) || !func) return NULL;
   return func;
 }
 
@@ -8108,9 +8125,9 @@ sv_func_t *sv_compile_function_with_params(
   
   if (sv_compile_trace_unlikely) fprintf(
     stderr, "[compile] end kind=function-with-params thrown=%d func=%p\n",
-    js->thrown_exists ? 1 : 0, (void *)func
+    Ant_Exception_Pending(js) ? 1 : 0, (void *)func
   );
   
-  if (js->thrown_exists || !func) return NULL;
+  if (Ant_Exception_Pending(js) || !func) return NULL;
   return func;
 }

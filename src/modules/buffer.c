@@ -1,3 +1,5 @@
+// TODO: split into smaller modules per type
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -1695,13 +1697,30 @@ static ant_value_t js_typedarray_from(ant_native_params_t, TypedArrayType type, 
       if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, item))) goto oom;
     }
     js_iter_close(js, &it);
+    if (Ant_Exception_Pending(js)) { 
+      result = Ant_Exception_Current(js);
+      goto done;
+    }
   } else {
+    if (Ant_Exception_Pending(js)) { 
+      result = Ant_Exception_Current(js);
+      goto done; 
+    }
+    
     ant_value_t len_val = js_get(js, source, "length");
-    size_t len = vtype(len_val) == kTypeNumber ? (size_t)js_getnum(len_val) : 0;
+    if (is_err(len_val)) { 
+      result = len_val;
+      goto done;
+    }
+    
+    size_t len = vtype(len_val) == kTypeNumber 
+      ? (size_t)js_getnum(len_val) : 0;
+    
     for (size_t i = 0; i < len; i++) {
       char idx[16];
       snprintf(idx, sizeof(idx), "%zu", i);
       ant_value_t item = js_get(js, source, idx);
+      if (is_err(item)) { result = item; goto done; }
       if (count >= cap) {
         cap *= 2;
         ant_value_t *tmp = realloc(collected, cap * sizeof(ant_value_t));
