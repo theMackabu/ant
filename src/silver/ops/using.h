@@ -342,7 +342,7 @@ static inline ant_value_t sv_using_dispose_async(
   GC_ROOT_PIN(js, completion);
 
   if (vtype(entries) != kTypeArray) {
-    ant_value_t error = js_make_error_silent(js, JS_ERR_TYPE, "invalid using disposal stack");
+    ant_value_t error = Ant_Error_Create(js, JS_ERR_TYPE, "invalid using disposal stack");
     GC_ROOT_PIN(js, error);
     js_reject_promise(js, result_promise, error);
     GC_ROOT_RESTORE(js, root_mark);

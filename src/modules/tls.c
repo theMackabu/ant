@@ -421,7 +421,7 @@ static ant_value_t tls_stream_error(ant_tls_socket_t *socket, int status, const 
     if (detail && *detail) message = detail;
     else if (status < 0) message = uv_strerror(status);
   }
-  return js_make_error_silent(socket->js, JS_ERR_TYPE, message ? message : "TLS error");
+  return Ant_Error_Create(socket->js, JS_ERR_TYPE, message ? message : "TLS error");
 }
 
 static bool tls_parse_write_args(
@@ -557,7 +557,7 @@ static void tls_socket_on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_
       tls_emit(js, socket->obj, "data", &chunk, 1);
     } else {
       if (!tls_socket_push_read(socket, buf->base, (size_t)nread, false)) {
-        ant_value_t err = js_make_error_silent(js, JS_ERR_TYPE, "Out of memory");
+        ant_value_t err = Ant_Error_Create(js, JS_ERR_TYPE, "Out of memory");
         socket->had_error = true;
         tls_emit(js, socket->obj, "error", &err, 1);
         tls_socket_close(socket);

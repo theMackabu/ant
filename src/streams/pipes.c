@@ -84,14 +84,14 @@ static void pipes_release_reader(ant_t *js, ant_value_t reader_obj) {
   if (!rs_is_stream(stream_obj)) return;
 
   if (rs_reader_has_reqs(js, reader_obj)) {
-    ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Reader was released");
+    ant_value_t release_err = Ant_Error_Create(js, JS_ERR_TYPE, "Reader was released");
     rs_default_reader_error_read_requests(js, reader_obj, release_err);
   }
 
   ant_value_t old_closed = rs_reader_closed(reader_obj);
   ant_value_t new_closed = js_mkpromise(js);
   
-  ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Reader was released");
+  ant_value_t release_err = Ant_Error_Create(js, JS_ERR_TYPE, "Reader was released");
   rs_stream_t *rs = rs_get_stream(stream_obj);
   
   if (rs && rs->state == RS_STATE_READABLE) {
@@ -110,7 +110,7 @@ static void pipes_release_writer(ant_t *js, ant_value_t writer_obj) {
   ant_value_t ws_obj = js_get_slot(writer_obj, SLOT_ENTRIES);
   if (!ws_is_stream(ws_obj)) return;
 
-  ant_value_t rel_err = js_make_error_silent(js, JS_ERR_TYPE, "Writer was released");
+  ant_value_t rel_err = Ant_Error_Create(js, JS_ERR_TYPE, "Writer was released");
   ant_value_t ready = js_mkpromise(js);
   
   js_reject_promise(js, ready, rel_err);
@@ -353,16 +353,16 @@ ant_value_t readable_stream_pipe_to(
   rs_stream_t *rs = rs_get_stream(source);
   ws_stream_t *ws = ws_get_stream(dest);
   if (!rs || !ws)
-    return pipe_create_rejected(js, js_make_error_silent(js, JS_ERR_TYPE, "pipeTo requires a ReadableStream and WritableStream"));
+    return pipe_create_rejected(js, Ant_Error_Create(js, JS_ERR_TYPE, "pipeTo requires a ReadableStream and WritableStream"));
 
   if (rs_is_reader(rs_stream_reader(source)))
-    return pipe_create_rejected(js, js_make_error_silent(js, JS_ERR_TYPE, "ReadableStream is already locked"));
+    return pipe_create_rejected(js, Ant_Error_Create(js, JS_ERR_TYPE, "ReadableStream is already locked"));
 
   if (ws_is_writer(ws_stream_writer(dest)))
-    return pipe_create_rejected(js, js_make_error_silent(js, JS_ERR_TYPE, "WritableStream is already locked"));
+    return pipe_create_rejected(js, Ant_Error_Create(js, JS_ERR_TYPE, "WritableStream is already locked"));
 
   if (!is_undefined(signal) && !abort_signal_is_signal(signal))
-    return pipe_create_rejected(js, js_make_error_silent(js, JS_ERR_TYPE, "pipeTo option 'signal' must be an AbortSignal"));
+    return pipe_create_rejected(js, Ant_Error_Create(js, JS_ERR_TYPE, "pipeTo option 'signal' must be an AbortSignal"));
 
   ant_value_t reader_args[1] = { source };
   ant_value_t reader = js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
@@ -428,7 +428,7 @@ ant_value_t readable_stream_pipe_to(
 
 static ant_value_t js_rs_pipe_to(ant_params_t) {
   if (!rs_is_stream(js->this_val))
-    return pipe_create_rejected(js, js_make_error_silent(js, JS_ERR_TYPE, "Invalid ReadableStream"));
+    return pipe_create_rejected(js, Ant_Error_Create(js, JS_ERR_TYPE, "Invalid ReadableStream"));
 
   ant_value_t dest = (nargs > 0) ? args[0] : js_mkundef();
   bool prevent_close, prevent_abort, prevent_cancel;

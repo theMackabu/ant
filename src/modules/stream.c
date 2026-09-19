@@ -1268,7 +1268,7 @@ static ant_value_t stream_writable_write_done(ant_params_t) {
     js_truthy(js, js_get(js, stream_obj, "destroyed")) &&
     is_object_type(state) && stream_writable_has_buffered(js, state)
   ) {
-    ant_value_t destroyed_err = js_make_error_silent(
+    ant_value_t destroyed_err = Ant_Error_Create(
       js, JS_ERR_GENERIC, "Cannot call write after a stream was destroyed"
     );
 
@@ -1424,7 +1424,7 @@ static ant_value_t stream_writable_write_impl(
     (!allow_after_end && js_truthy(js, js_get(js, stream_obj, "writableEnded"))) ||
     js_truthy(js, js_get(js, stream_obj, "destroyed"))
   ) {
-    ant_value_t err = js_make_error_silent(js, JS_ERR_GENERIC, "write after end");
+    ant_value_t err = Ant_Error_Create(js, JS_ERR_GENERIC, "write after end");
     stream_set_errored(js, stream_obj, err);
     if (is_callable(callback)) stream_call_callback(js, callback, &err, 1);
     else stream_emit_error(js, stream_obj, err);
@@ -1907,7 +1907,7 @@ static ant_value_t js_stream_promises_pipeline(ant_params_t) {
 
   call_args = malloc((size_t)(nargs + 1) * sizeof(*call_args));
   if (!call_args) {
-    js_reject_promise(js, promise, js_make_error_silent(js, JS_ERR_GENERIC, "out of memory"));
+    js_reject_promise(js, promise, Ant_Error_Create(js, JS_ERR_GENERIC, "out of memory"));
     return promise;
   }
 
@@ -1965,7 +1965,7 @@ static ant_value_t stream_readable_from_handle_result(ant_params_t) {
   }
 
   if (!is_object_type(result)) return stream_readable_from_fail(
-    js, state_obj, js_make_error_silent(js, JS_ERR_TYPE, "iterator step must be an object"));
+    js, state_obj, Ant_Error_Create(js, JS_ERR_TYPE, "iterator step must be an object"));
   done = js_get(js, result, "done");
   if (is_err(done)) return stream_readable_from_fail(js, state_obj, done);
   value = js_get(js, result, "value");
@@ -1983,7 +1983,7 @@ static ant_value_t stream_readable_from_handle_result(ant_params_t) {
 
 static ant_value_t stream_readable_from_reject(ant_params_t) {
   ant_value_t state_obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
-  ant_value_t error = nargs > 0 ? args[0] : js_make_error_silent(js, JS_ERR_GENERIC, "stream iteration failed");
+  ant_value_t error = nargs > 0 ? args[0] : Ant_Error_Create(js, JS_ERR_GENERIC, "stream iteration failed");
   return stream_readable_from_fail(js, state_obj, error);
 }
 
@@ -2135,7 +2135,7 @@ static ant_value_t stream_to_web_on_end(ant_params_t) {
 static ant_value_t stream_to_web_on_error(ant_params_t) {
   ant_value_t state_obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   ant_value_t web_stream = js_get(js, state_obj, "webStream");
-  ant_value_t error = nargs > 0 ? args[0] : js_make_error_silent(js, JS_ERR_GENERIC, "stream error");
+  ant_value_t error = nargs > 0 ? args[0] : Ant_Error_Create(js, JS_ERR_GENERIC, "stream error");
 
   if (stream_to_web_closed(js, state_obj)) return js_mkundef();
   js_set(js, state_obj, "closed", js_true);

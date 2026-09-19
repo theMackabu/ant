@@ -940,38 +940,75 @@ static ant_value_t make_error_value(ant_t *js, js_err_type_t err_type, ant_value
   return err_obj;
 }
 
+__attribute__((format(printf, 4, 0)))
+static ant_value_t CreateFormattedErrorValue(
+  ant_t *js, js_err_type_t err_type, ant_value_t props, const char *fmt, va_list args
+) {
+  char local[256];
+  char *message = local;
+  
+  va_list copy;
+  
+  va_copy(copy, args);
+  int length = vsnprintf(local, sizeof(local), fmt, copy);
+  va_end(copy);
+  
+  if (length < 0) goto format_failed;
+
+  if ((size_t)length >= sizeof(local)) {
+    size_t capacity = (size_t)length + 1;
+    message = malloc(capacity);
+    
+    if (!message) {
+      ant_value_t failure = is_err(js->exception_oom) ? js->exception_oom : mkval(kTypeError, 0);
+      Ant_Exception_Set(js, failure);
+      return failure;
+    }
+    
+    va_copy(copy, args);
+    int written = vsnprintf(message, capacity, fmt, copy);
+    va_end(copy);
+    
+    if (written < 0 || (size_t)written >= capacity) {
+      free(message);
+      goto format_failed;
+    }
+  }
+
+  ant_value_t value = make_error_value(js, err_type, props, message);
+  if (message != local) free(message);
+  return value;
+
+format_failed:
+  return js_throw(js, Ant_Error_Create(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "failed to format error message"));
+}
+
 __attribute__((format(printf, 4, 5)))
 ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props, const char *fmt, ...) {
   va_list ap;
-  char message[256];
   
   va_start(ap, fmt);
-  vsnprintf(message, sizeof(message), fmt, ap);
+  ant_value_t value = CreateFormattedErrorValue(js, err_type, props, fmt, ap);
   va_end(ap);
   
-  ant_value_t value = make_error_value(js, err_type, props, message);
   if (is_err(value)) return value;
-  
   ant_value_t stack = js_mkundef();
-  js_try_get_own_data_prop(js, value, "stack", 5, &stack);
   
+  js_try_get_own_data_prop(js, value, "stack", 5, &stack);
   return Ant_Exception_Raise(js, value, stack);
 }
 
-ant_value_t js_make_error_silent(ant_t *js, js_err_type_t err_type, const char *message) {
+ant_value_t Ant_Error_Create(ant_t *js, js_err_type_t err_type, const char *message) {
   return make_error_value(js, err_type, js_mkundef(), message);
 }
 
 __attribute__((format(printf, 3, 4)))
 ant_value_t Ant_Error_CreateFormatted(ant_t *js, js_err_type_t err_type, const char *fmt, ...) {
   va_list ap;
-  char message[256];
-  
   va_start(ap, fmt);
-  vsnprintf(message, sizeof(message), fmt, ap);
+  ant_value_t value = CreateFormattedErrorValue(js, err_type, js_mkundef(), fmt, ap);
   va_end(ap);
-  
-  return make_error_value(js, err_type, js_mkundef(), message);
+  return value;
 }
 
 ant_value_t js_throw(ant_t *js, ant_value_t value) {

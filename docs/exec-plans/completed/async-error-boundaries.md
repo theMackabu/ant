@@ -94,7 +94,7 @@ and Windows's trigger-limit failure were caught by JavaScript but still
 escaped as pending exceptions. Cron's three promise rejection paths still
 used `js_mkerr`, which creates a throw marker and leaves a pending exception.
 
-Use `js_make_error_silent` at the immediate settlement, worker completion,
+Use `Ant_Error_Create` at the immediate settlement, worker completion,
 and queue-submission failure boundaries. Preserve TypeError messages,
 synchronous argument validation, and the general promise/event-loop contracts.
 Add platform-independent coverage for several queued missing-script failures

@@ -641,12 +641,12 @@ ant_value_t writable_stream_close(ant_t *js, ant_value_t stream_obj) {
 
   if (stream->state == WS_STATE_CLOSED || stream->state == WS_STATE_ERRORED) {
     ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Cannot close a stream that is already closed or errored"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot close a stream that is already closed or errored"));
     return p;
   }
   if (writable_stream_close_queued_or_in_flight(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Cannot close an already-closing stream"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot close an already-closing stream"));
     return p;
   }
 
@@ -706,20 +706,20 @@ ant_value_t ws_writer_write(ant_t *js, ant_value_t writer_obj, ant_value_t chunk
   ant_value_t stream_obj = ws_writer_stream(writer_obj);
   if (!ws_is_stream(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Writer has no stream"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Writer has no stream"));
     return p;
   }
 
   ws_stream_t *stream = ws_get_stream(stream_obj);
   if (!stream) {
     ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Invalid WritableStream"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Invalid WritableStream"));
     return p;
   }
 
   if (stream->state == WS_STATE_CLOSED) {
     ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Cannot write to a closed WritableStream"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot write to a closed WritableStream"));
     return p;
   }
   
@@ -731,7 +731,7 @@ ant_value_t ws_writer_write(ant_t *js, ant_value_t writer_obj, ant_value_t chunk
   
   if (writable_stream_close_queued_or_in_flight(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Cannot write to a closing WritableStream"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot write to a closing WritableStream"));
     return p;
   }
   
@@ -757,7 +757,7 @@ ant_value_t ws_writer_write(ant_t *js, ant_value_t writer_obj, ant_value_t chunk
   }
 
   if (chunk_size < 0 || chunk_size != chunk_size || chunk_size == (double)INFINITY) {
-    ant_value_t err = Ant_Exception_Pending(js) ? js_take_thrown(js, js_mkundef()) : js_make_error_silent(js, JS_ERR_RANGE,
+    ant_value_t err = Ant_Exception_Pending(js) ? js_take_thrown(js, js_mkundef()) : Ant_Error_Create(js, JS_ERR_RANGE,
       "The return value of a queuing strategy's size function must be a finite, non-NaN, non-negative number");
     return ws_reject_size_error(js, ctrl_obj, err);
   }
@@ -831,7 +831,7 @@ static ant_value_t js_ws_writer_abort(ant_params_t) {
   ant_value_t stream_obj = ws_writer_stream(js->this_val);
   if (!ws_is_stream(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Writer has no stream"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Writer has no stream"));
     return p;
   }
   
@@ -843,13 +843,13 @@ static ant_value_t js_ws_writer_close(ant_params_t) {
   ant_value_t stream_obj = ws_writer_stream(js->this_val);
   if (!ws_is_stream(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Writer has no stream"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Writer has no stream"));
     return p;
   }
   
   if (writable_stream_close_queued_or_in_flight(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Cannot close an already-closing stream"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot close an already-closing stream"));
     return p;
   }
   
@@ -859,7 +859,7 @@ static ant_value_t js_ws_writer_close(ant_params_t) {
 static ant_value_t js_ws_writer_release_lock(ant_params_t) {
   ant_value_t stream_obj = ws_writer_stream(js->this_val);
   if (!ws_is_stream(stream_obj)) return js_mkundef();
-  ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Writer was released");
+  ant_value_t release_err = Ant_Error_Create(js, JS_ERR_TYPE, "Writer was released");
 
   ws_writer_reject_ready_promise(js, js->this_val, release_err);
   ws_writer_reject_closed_promise(js, js->this_val, release_err);
@@ -880,7 +880,7 @@ static ant_value_t js_ws_writer_write(ant_params_t) {
   ant_value_t stream_obj = ws_writer_stream(js->this_val);
   if (!ws_is_stream(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Writer has no stream"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Writer has no stream"));
     return p;
   }
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
@@ -950,7 +950,7 @@ static ant_value_t js_ws_abort(ant_params_t) {
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WritableStream");
   if (ws_is_writer(ws_stream_writer(js->this_val))) {
     ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Cannot abort a locked WritableStream"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot abort a locked WritableStream"));
     return p;
   }
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
@@ -962,12 +962,12 @@ static ant_value_t js_ws_close(ant_params_t) {
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WritableStream");
   if (ws_is_writer(ws_stream_writer(js->this_val))) {
     ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Cannot close a locked WritableStream"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot close a locked WritableStream"));
     return p;
   }
   if (writable_stream_close_queued_or_in_flight(js->this_val)) {
     ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Cannot close an already-closing stream"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot close an already-closing stream"));
     return p;
   }
   return writable_stream_close(js, js->this_val);

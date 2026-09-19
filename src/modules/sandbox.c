@@ -801,7 +801,7 @@ static ant_value_t sandbox_vm_result_error(ant_t *js, const ant_sandbox_vm_resul
       break;
   }
 
-  ant_value_t err = js_make_error_silent(js, JS_ERR_TYPE | JS_ERR_NO_STACK, message);
+  ant_value_t err = Ant_Error_Create(js, JS_ERR_TYPE | JS_ERR_NO_STACK, message);
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, err);
   
@@ -948,7 +948,7 @@ static void sandbox_finish_waiters(sandbox_state_t *state) {
     if (waiter->iterator)
       js_resolve_promise(js, waiter->promise, js_iter_result(js, false, js_mkundef()));
     else
-      js_reject_promise(js, waiter->promise, js_make_error_silent(js, JS_ERR_TYPE, "Sandbox message channel closed"));
+      js_reject_promise(js, waiter->promise, Ant_Error_Create(js, JS_ERR_TYPE, "Sandbox message channel closed"));
     
     free(waiter->type);
     free(waiter);
@@ -1303,7 +1303,7 @@ static ant_value_t sandbox_wait_for_message(
       js_resolve_promise(js, promise, js_iter_result(js, false, js_mkundef()));
     else js_reject_promise(
       js, promise,
-      js_make_error_silent(js, JS_ERR_TYPE, "Sandbox message channel is closed")
+      Ant_Error_Create(js, JS_ERR_TYPE, "Sandbox message channel is closed")
     );
     return promise;
   }

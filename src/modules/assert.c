@@ -232,7 +232,7 @@ static ant_value_t assert_rejection_settle(
   if (rejected == expect_rejection) js_resolve_promise(js, promise, js_mkundef());
   else {
     const char *message = expect_rejection ? "Missing expected rejection" : "Got unwanted rejection";
-    js_reject_promise(js, promise, js_make_error_silent(js, JS_ERR_TYPE, message));
+    js_reject_promise(js, promise, Ant_Error_Create(js, JS_ERR_TYPE, message));
   }
 
   return js_mkundef();

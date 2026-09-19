@@ -804,7 +804,7 @@ static ant_value_t rpc_server_listen(ant_params_t) {
   if (!host) {
     ant_value_t error = Ant_Exception_Pending(js)
       ? js_take_thrown(js, js_mkundef())
-      : js_make_error_silent(js, JS_ERR_TYPE, "out of memory");
+      : Ant_Error_Create(js, JS_ERR_TYPE, "out of memory");
     js_reject_promise(js, promise, error);
     return promise;
   }

@@ -7052,7 +7052,7 @@ static ant_value_t builtin_AsyncDisposableStack_disposeAsync(ant_params_t) {
   if (is_err(result_promise)) return result_promise;
 
   if (!disposable_stack_has_brand(stack, BRAND_ASYNC_DISPOSABLE_STACK)) {
-    ant_value_t error = js_make_error_silent(
+    ant_value_t error = Ant_Error_Create(
       js, JS_ERR_TYPE, "AsyncDisposableStack method called on incompatible receiver"
     );
     js_reject_promise(js, result_promise, error);
@@ -19376,7 +19376,7 @@ ant_t *ant_create() {
   }
 
   js->exception = js_mkundef();
-  ant_value_t oom = js_make_error_silent(
+  ant_value_t oom = Ant_Error_Create(
     js, JS_ERR_INTERNAL | JS_ERR_NO_STACK,
     "out of memory creating exception"
   );

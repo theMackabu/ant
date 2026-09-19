@@ -288,7 +288,7 @@ void ts_ctrl_terminate(ant_t *js, ant_value_t ctrl_obj) {
   ws_stream_t *ws = ws_get_stream(writable);
   
   if (ws && ws->state == WS_STATE_WRITABLE) {
-    ant_value_t err = js_make_error_silent(js, JS_ERR_TYPE, "TransformStream readable side terminated");
+    ant_value_t err = Ant_Error_Create(js, JS_ERR_TYPE, "TransformStream readable side terminated");
     ts_error_writable_and_unblock_write(js, ts_obj, err);
   }
 }
@@ -505,7 +505,7 @@ static ant_value_t ts_sink_write_bp_resolve(ant_params_t) {
   if (ws && ws->state == WS_STATE_ERRORING) {
     ant_value_t err = ts_writable_stored_error(ts_obj);
     if (!is_object_type(err))
-      err = js_make_error_silent(js, JS_ERR_TYPE, "WritableStream is in erroring state");
+      err = Ant_Error_Create(js, JS_ERR_TYPE, "WritableStream is in erroring state");
     ant_value_t fp = ts_ctrl_finish_promise(ctrl_obj);
     if (vtype(fp) == kTypePromise) js_reject_promise(js, fp, err);
     return js_mkundef();
@@ -601,7 +601,7 @@ static ant_value_t ts_sink_close_resolve(ant_params_t) {
   } else if (rs && rs->state == RS_STATE_ERRORED) {
     js_reject_promise(js, p, rs_stream_error(readable));
   } else {
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "TransformStream readable side is not in a readable state"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "TransformStream readable side is not in a readable state"));
   }
 
   return js_mkundef();

@@ -1258,7 +1258,7 @@ static ant_value_t util_callbackify_error(ant_params_t) {
   if (!is_callable(callback)) return js_mkundef();
 
   ant_value_t err = nargs > 0 ? args[0]
-    : js_make_error_silent(js, JS_ERR_TYPE, "Promise was rejected");
+    : Ant_Error_Create(js, JS_ERR_TYPE, "Promise was rejected");
   ant_value_t cb_args[1] = { err };
   return sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 1, NULL, js_mkundef());
 }
@@ -1368,7 +1368,7 @@ static ant_value_t util_aborted_listener(ant_params_t) {
 static ant_value_t util_aborted(ant_params_t) {
   ant_value_t promise = js_mkpromise(js);
   if (nargs < 1 || !abort_signal_is_signal(args[0])) {
-    js_reject_promise(js, promise, js_make_error_silent(js, JS_ERR_TYPE, "aborted(signal, resource) requires an AbortSignal"));
+    js_reject_promise(js, promise, Ant_Error_Create(js, JS_ERR_TYPE, "aborted(signal, resource) requires an AbortSignal"));
     return promise;
   }
 

@@ -777,7 +777,7 @@ static ant_value_t fetch_upload_on_read(ant_params_t) {
 
   if (!fetch_get_upload_chunk(value, &chunk, &chunk_len)) {
     GC_ROOT_SAVE(root_mark, js);
-    ant_value_t reason = js_make_error_silent(js, JS_ERR_TYPE, "fetch request body stream chunk must be a Uint8Array");
+    ant_value_t reason = Ant_Error_Create(js, JS_ERR_TYPE, "fetch request body stream chunk must be a Uint8Array");
     
     GC_ROOT_PIN(js, reason);
     ant_http_request_cancel(req->http_req);
@@ -792,7 +792,7 @@ static ant_value_t fetch_upload_on_read(ant_params_t) {
   rc = ant_http_request_write(req->http_req, chunk, chunk_len);
   if (rc != 0) {
     GC_ROOT_SAVE(root_mark, js);
-    ant_value_t reason = js_make_error_silent(js, JS_ERR_TYPE, uv_strerror(rc));
+    ant_value_t reason = Ant_Error_Create(js, JS_ERR_TYPE, uv_strerror(rc));
     
     GC_ROOT_PIN(js, reason);
     ant_http_request_cancel(req->http_req);

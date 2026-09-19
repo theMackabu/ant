@@ -1765,7 +1765,7 @@ static ant_value_t js_events_on_error_cb(ant_params_t) {
 }
 
 static ant_value_t events_make_abort_error(ant_t *js, ant_value_t signal) {
-  ant_value_t error = js_make_error_silent(js, JS_ERR_GENERIC, "The operation was aborted");
+  ant_value_t error = Ant_Error_Create(js, JS_ERR_GENERIC, "The operation was aborted");
   if (!is_object_type(error)) return error;
 
   js_set(js, error, "name", js_mkstr(js, "AbortError", 10));

@@ -470,7 +470,7 @@ static ant_value_t js_rs_controller_enqueue(ant_params_t) {
   ctrl->in_enqueue = false;
 
   if (chunk_size < 0 || chunk_size != chunk_size || chunk_size == (double)INFINITY) {
-    ant_value_t err = Ant_Exception_Pending(js) ? rs_take_size_error(js, stream_obj) : js_make_error_silent(js, JS_ERR_RANGE,
+    ant_value_t err = Ant_Exception_Pending(js) ? rs_take_size_error(js, stream_obj) : Ant_Error_Create(js, JS_ERR_RANGE,
       "The return value of a queuing strategy's size function must be a finite, non-NaN, non-negative number");
     readable_stream_error(js, stream_obj, err);
     return js_throw(js, err);
@@ -541,7 +541,7 @@ ant_value_t rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t c
   ctrl->in_enqueue = false;
 
   if (chunk_size < 0 || chunk_size != chunk_size || chunk_size == (double)INFINITY) {
-    ant_value_t err = Ant_Exception_Pending(js) ? rs_take_size_error(js, stream_obj) : js_make_error_silent(js, JS_ERR_RANGE,
+    ant_value_t err = Ant_Exception_Pending(js) ? rs_take_size_error(js, stream_obj) : Ant_Error_Create(js, JS_ERR_RANGE,
       "The return value of a queuing strategy's size function must be a finite, non-NaN, non-negative number");
     readable_stream_error(js, stream_obj, err);
     return js_throw(js, err);
@@ -593,12 +593,12 @@ static ant_value_t rs_release_reader_lock(ant_t *js, ant_value_t reader_obj) {
   rs_stream_t *stream = rs_get_stream(stream_obj);
 
   if (rs_reader_has_reqs(js, reader_obj)) {
-    ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Reader was released");
+    ant_value_t release_err = Ant_Error_Create(js, JS_ERR_TYPE, "Reader was released");
     rs_default_reader_error_read_requests(js, reader_obj, release_err);
   }
 
   ant_value_t new_closed = js_mkpromise(js);
-  ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Reader was released");
+  ant_value_t release_err = Ant_Error_Create(js, JS_ERR_TYPE, "Reader was released");
 
   if (stream->state == RS_STATE_READABLE) {
     ant_value_t old_closed = rs_reader_closed(reader_obj);
@@ -624,7 +624,7 @@ static ant_value_t js_rs_reader_cancel(ant_params_t) {
   ant_value_t stream_obj = rs_reader_stream(js->this_val);
   if (!rs_is_stream(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Cannot cancel a released reader"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot cancel a released reader"));
     return p;
   }
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
@@ -676,7 +676,7 @@ static ant_value_t js_rs_cancel(ant_params_t) {
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
   if (rs_is_reader(rs_stream_reader(js->this_val))) {
     ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Cannot cancel a locked ReadableStream"));
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot cancel a locked ReadableStream"));
     return p;
   }
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();

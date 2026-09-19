@@ -10,6 +10,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <wchar.h>
 
 static ant_value_t expected_reason;
 static ant_value_t callback_throw;
@@ -121,7 +122,7 @@ static void CheckSandboxDiagnostic(
 
 static void CheckSandboxExceptionRecords(ant_t *js) {
   GC_ROOT_SAVE(mark, js);
-  ant_value_t error = js_make_error_silent(js, JS_ERR_TYPE | JS_ERR_NO_STACK, "sandbox diagnostic");
+  ant_value_t error = Ant_Error_Create(js, JS_ERR_TYPE | JS_ERR_NO_STACK, "sandbox diagnostic");
   GC_ROOT_PIN(js, error);
   ant_value_t stack = js_mkstr(js, "captured sandbox stack", 22);
   GC_ROOT_PIN(js, stack);
@@ -160,6 +161,66 @@ static void CheckFormattedErrorValues(ant_t *js) {
     assert(vtype(js_get(js, error, "stack")) == (pending ? kTypeUndefined : kTypeString));
     Ant_Exception_Clear(js);
   }
+  GC_ROOT_RESTORE(js, mark);
+}
+
+static void CheckErrorMessage(ant_t *js, ant_value_t error, const char *expected, size_t length) {
+  assert(vtype(error) == kTypeObject);
+  size_t actual_length = 0;
+  const char *message = js_getstr(js, js_get(js, error, "message"), &actual_length);
+  assert(message && actual_length == length && memcmp(message, expected, length) == 0);
+}
+
+static void CheckLongErrorMessages(ant_t *js) {
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t previous = js_throw(js, js_mkundef());
+  GC_ROOT_PIN(js, previous);
+  ant_value_t props = js_mkobj(js);
+  GC_ROOT_PIN(js, props);
+  js_set(js, props, "code", js_mknum(73));
+  ant_value_t error = js_mkundef();
+  GC_ROOT_PIN(js, error);
+
+  const size_t lengths[] = {0, 251, 252, 253, 255, 256, 257, 4096, 16384};
+  for (size_t i = 0; i < sizeof(lengths) / sizeof(lengths[0]); i++) {
+    size_t length = lengths[i];
+    char *message = malloc(length + 1);
+    char *formatted = malloc(length + 4);
+    assert(message && formatted);
+    for (size_t j = 0; j < length; j++) message[j] = j % 11 == 0 ? '%' : 'x';
+    message[length] = '\0';
+    memcpy(formatted, message, length);
+    memcpy(formatted + length, "/7%", 4);
+
+    error = Ant_Error_Create(js, JS_ERR_GENERIC | JS_ERR_NO_STACK, message);
+    CheckErrorMessage(js, error, message, length);
+    assert(Ant_Exception_Peek(js) == previous);
+
+    error = Ant_Error_CreateFormatted(js, JS_ERR_TYPE, "%s/%d%%", message, 7);
+    CheckErrorMessage(js, error, formatted, length + 3);
+    assert(Ant_Exception_Peek(js) == previous);
+    const char *stack = js_getstr(js, js_get(js, error, "stack"), NULL);
+    assert(stack && strstr(stack, formatted));
+
+    error = js_create_error(js, JS_ERR_RANGE | JS_ERR_NO_STACK, props, "%s/%d%%", message, 7);
+    assert(is_err(error) && Ant_Exception_Peek(js) == error);
+    ant_value_t value = Ant_Exception_Value(js, error);
+    CheckErrorMessage(js, value, formatted, length + 3);
+    assert(js_get(js, value, "code") == js_mknum(73));
+    assert(strcmp(js_getstr(js, js_get(js, value, "name"), NULL), "RangeError") == 0);
+    js_take_thrown(js, error);
+    Ant_Exception_Set(js, previous);
+    free(formatted);
+    free(message);
+  }
+
+  // An unencodable wide character must produce a construction failure, not
+  // a truncated/uninitialized message or recursive printf-based error creation.
+  error = Ant_Error_CreateFormatted(js, JS_ERR_GENERIC, "%lc", (wint_t)0xd800);
+  assert(is_err(error) && Ant_Exception_Peek(js) == error);
+  const char *failure = "failed to format error message";
+  CheckErrorMessage(js, Ant_Exception_Value(js, error), failure, strlen(failure));
+  Ant_Exception_Clear(js);
   GC_ROOT_RESTORE(js, mark);
 }
 
@@ -263,7 +324,7 @@ int main(void) {
   second = js_throw(js, error);
   assert(first != second);
   assert(js_take_thrown(js, first) == error && Ant_Exception_Peek(js) == second);
-  ant_value_t ordinary = js_make_error_silent(js, JS_ERR_TYPE, "ordinary value");
+  ant_value_t ordinary = Ant_Error_Create(js, JS_ERR_TYPE, "ordinary value");
   assert(!is_err(ordinary) && Ant_Exception_Peek(js) == second);
 
   ant_value_t success = sv_invoke_native(js, handled_native_failure, NULL, 0, js_mkundef());
@@ -327,6 +388,7 @@ int main(void) {
 
   CheckSandboxExceptionRecords(js);
   CheckFormattedErrorValues(js);
+  CheckLongErrorMessages(js);
   GC_ROOT_RESTORE(js, root_mark);
   js_destroy(js);
   puts("PASS error handoffs preserve values and exception ownership");

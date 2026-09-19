@@ -262,7 +262,7 @@ static wasm_extern_handle_t *wasm_extern_handle(ant_value_t value, wasm_extern_w
 }
 
 static ant_value_t wasm_make_error(ant_t *js, ant_value_t proto, const char *name, const char *message) {
-  ant_value_t err = js_make_error_silent(js, JS_ERR_TYPE, message ? message : "");
+  ant_value_t err = Ant_Error_Create(js, JS_ERR_TYPE, message ? message : "");
   if (vtype(err) != kTypeObject) return err;
   
   GC_ROOT_SAVE(root_mark, js);

@@ -463,7 +463,7 @@ static ant_value_t net_socket_emit_connect_error(ant_params_t) {
   socket->connecting = false;
   socket->had_error = true;
   net_socket_sync_state(socket);
-  err = js_make_error_silent(js, JS_ERR_TYPE, uv_strerror(status));
+  err = Ant_Error_Create(js, JS_ERR_TYPE, uv_strerror(status));
   net_emit(js, socket->obj, "error", &err, 1);
   if (socket->conn) ant_conn_close(socket->conn);
 
@@ -644,7 +644,7 @@ static void net_socket_on_error(ant_conn_t *conn, int status, void *user_data) {
 
   if (!socket) return;
   socket->had_error = true; {
-    ant_value_t err = js_make_error_silent(socket->js, JS_ERR_TYPE, uv_strerror(status));
+    ant_value_t err = Ant_Error_Create(socket->js, JS_ERR_TYPE, uv_strerror(status));
     net_emit(socket->js, socket->obj, "error", &err, 1);
   }
 }
@@ -1066,7 +1066,7 @@ static ant_value_t js_net_server_close(ant_params_t) {
 
   if (!server->listening && !server->closing) {
     if (nargs > 0 && is_callable(args[0])) {
-      ant_value_t err = js_make_error_silent(js, JS_ERR_TYPE, "Server is not running");
+      ant_value_t err = Ant_Error_Create(js, JS_ERR_TYPE, "Server is not running");
       net_call_value(js, args[0], js_mkundef(), &err, 1);
     }
     return js_getthis(js);

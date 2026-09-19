@@ -387,7 +387,7 @@ static ant_value_t child_spawn_failure_cb(ant_params_t) {
   snprintf(syscall, sizeof(syscall), "spawn %s", file);
   snprintf(message, sizeof(message), "%s %s", syscall, name);
 
-  ant_value_t error = js_make_error_silent(js, JS_ERR_GENERIC, message);
+  ant_value_t error = Ant_Error_Create(js, JS_ERR_GENERIC, message);
 
   if (is_object_type(error)) {
     js_set(js, error, "code", js_mkstr(js, name, strlen(name)));
@@ -624,7 +624,7 @@ static void on_child_write_done(uv_write_t *req, int status) {
 
   if (is_callable(write->callback)) {
     if (status < 0) {
-      callback_args[0] = js_make_error_silent(
+      callback_args[0] = Ant_Error_Create(
         write->cp->js, JS_ERR_TYPE, uv_strerror(status)
       );
       child_stream_call_callback(
@@ -635,7 +635,7 @@ static void on_child_write_done(uv_write_t *req, int status) {
     );
   } else if (status < 0 && write->cp && !write->cp->suppress_stdin_errors &&
              vtype(write->cp->stdin_obj) == kTypeObject) {
-    callback_args[0] = js_make_error_silent(
+    callback_args[0] = Ant_Error_Create(
       write->cp->js, JS_ERR_TYPE, uv_strerror(status)
     );
     eventemitter_emit_args(
@@ -1595,10 +1595,10 @@ static ant_value_t exec_file_close_callback(ant_params_t) {
           at += stderr_len;
         }
         message[at] = '\0';
-        cb_args[0] = js_make_error_silent(js, JS_ERR_GENERIC, message);
+        cb_args[0] = Ant_Error_Create(js, JS_ERR_GENERIC, message);
         free(message);
       } else {
-        cb_args[0] = js_make_error_silent(js, JS_ERR_GENERIC, "Command failed");
+        cb_args[0] = Ant_Error_Create(js, JS_ERR_GENERIC, "Command failed");
       }
     } else {
       if (was_signaled) {
@@ -1617,7 +1617,7 @@ static ant_value_t exec_file_close_callback(ant_params_t) {
         );
       }
       cb_args[0] =
-        js_make_error_silent(js, JS_ERR_GENERIC, fallback_message);
+        Ant_Error_Create(js, JS_ERR_GENERIC, fallback_message);
     }
 
     if (is_object_type(cb_args[0])) {
@@ -2648,7 +2648,7 @@ static ant_value_t sync_build_result(
     snprintf(syscall, sizeof(syscall), "spawnSync %s", opts->label);
     snprintf(message, sizeof(message), "%s %s", syscall, code);
 
-    ant_value_t error = js_make_error_silent(js, JS_ERR_GENERIC, message);
+    ant_value_t error = Ant_Error_Create(js, JS_ERR_GENERIC, message);
     if (is_object_type(error)) {
       js_set(js, error, "code", js_mkstr(js, code, strlen(code)));
       js_set(js, error, "errno", js_mknum((double)failure));
@@ -2793,7 +2793,7 @@ static ant_value_t sync_result_error(
     );
   }
 
-  ant_value_t error = js_make_error_silent(js, JS_ERR_GENERIC, message);
+  ant_value_t error = Ant_Error_Create(js, JS_ERR_GENERIC, message);
   if (!is_object_type(error)) return error;
 
   js_set(js, error, "status", status);

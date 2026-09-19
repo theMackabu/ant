@@ -23,7 +23,7 @@ int main(void) {
   assert(js);
   js_setstackbase(js, &stack_base);
   GC_ROOT_SAVE(mark, js);
-  ant_value_t error = js_make_error_silent(js, JS_ERR_TYPE | JS_ERR_NO_STACK, "desktop diagnostic");
+  ant_value_t error = Ant_Error_Create(js, JS_ERR_TYPE | JS_ERR_NO_STACK, "desktop diagnostic");
   GC_ROOT_PIN(js, error);
   ant_value_t record = Ant_Exception_Raise(js, error, js_mkundef());
   GC_ROOT_PIN(js, record);

@@ -42,8 +42,10 @@ ordinary Error value. `js_reject_promise` consumes exception results through
 rejection values never clear pending state. Consuming a record only clears
 the identical current handle, so an older throw cannot erase a newer one.
 
-Use `js_make_error_silent` for literal messages or `Ant_Error_CreateFormatted`
-for printf-style messages when constructing ordinary error values, especially
+Use `Ant_Error_Create` for literal messages or `Ant_Error_CreateFormatted`
+for printf-style messages when constructing ordinary error values. Formatted
+construction and `js_mkerr*` share a formatter that grows beyond its short-message
+buffer instead of truncating. Use ordinary Error construction especially
 before cleanup or user-code execution. Use `Ant_Error_CallCallback` for native
 error-first callbacks that may receive a throw marker. It normalizes the first
 argument without changing the caller's argument array. When converting a throw

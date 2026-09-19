@@ -582,7 +582,7 @@ bool ant_sandbox_decode_result_value(
 
 ant_value_t ant_sandbox_decode_error_value(ant_t *js, const void *payload, size_t payload_len) {
   if (!js) return js_mkundef();
-  if (!payload) return js_make_error_silent(js, JS_ERR_TYPE, "malformed sandbox error frame");
+  if (!payload) return Ant_Error_Create(js, JS_ERR_TYPE, "malformed sandbox error frame");
 
   sandbox_frame_reader_t r = { payload, (const uint8_t *)payload + payload_len };
   const char *name = NULL, *message = NULL, *stack = NULL, *display = NULL;
@@ -592,12 +592,12 @@ ant_value_t ant_sandbox_decode_error_value(ant_t *js, const void *payload, size_
       !sandbox_read_string_view(&r, &stack, &stack_len) ||
       !sandbox_read_string_view(&r, &display, &display_len) ||
       r.p != r.end) {
-    return js_make_error_silent(js, JS_ERR_TYPE, "malformed sandbox error frame");
+    return Ant_Error_Create(js, JS_ERR_TYPE, "malformed sandbox error frame");
   }
 
   char error_message[256];
   snprintf(error_message, sizeof(error_message), "%.*s", (int)message_len, message);
-  ant_value_t err = js_make_error_silent(js, JS_ERR_GENERIC, error_message);
+  ant_value_t err = Ant_Error_Create(js, JS_ERR_GENERIC, error_message);
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, err);
   
