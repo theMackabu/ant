@@ -40,6 +40,78 @@ static ant_value_t detached_native_failure(ant_params_t) {
   return failure;
 }
 
+static ant_fixed_arena_t ExhaustArena(ant_fixed_arena_t *arena) {
+  ant_fixed_arena_t saved = *arena;
+  arena->committed = arena->watermark;
+  arena->reserved = arena->watermark;
+  arena->free_list = NULL;
+  return saved;
+}
+
+static void CheckFunctionAllocationFailure(ant_t *js) {
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t obj = js_mkobj(js);
+  GC_ROOT_PIN(js, obj);
+  ant_value_t oom = js->exception_oom;
+  GC_ROOT_PIN(js, oom);
+  ant_value_t native = js_mkfun(handled_native_failure);
+  ant_value_t bind = js_getprop_fallback(js, native, "bind");
+  assert(vtype(bind) == kTypeBuiltin);
+  const char *source = "globalThis.__allocationProxy = new Proxy(function () {}, {});";
+  assert(!is_err(js_eval_bytecode(js, source, strlen(source))));
+  ant_value_t proxy = js_get(js, js->global, "__allocationProxy");
+  assert(!is_err(proxy) && is_callable(proxy));
+  GC_ROOT_PIN(js, proxy);
+
+  // Force arena exhaustion without allocating large amounts of memory or
+  // adding an allocation-failure hook to the runtime. GC must not reuse slots
+  // or inspect the temporarily restricted arenas.
+  bool saved_gc_disabled = gc_disabled;
+  gc_disabled = true;
+  ant_fixed_arena_t closures = ExhaustArena(&js->closure_arena);
+  for (int has_oom = 0; has_oom < 2; has_oom++) {
+    js->exception_oom = has_oom ? oom : js_mkundef();
+    for (int pending = 0; pending < 2; pending++) {
+      ant_value_t previous = pending ? js_throw(js, js_mknum(73)) : js_mkundef();
+      ant_value_t result = js_obj_to_func_ex(js, obj, SV_CALL_HAS_BOUND_THIS);
+      assert(is_err(result) && Ant_Exception_Peek(js) == result);
+      if (pending) assert(result == previous);
+      else if (has_oom) assert(result == oom);
+      else {
+        ant_value_t value = Ant_Exception_Value(js, result);
+        ant_value_t name = js_get(js, value, "name");
+        assert(vtype(name) == kTypeString);
+        assert(strcmp(js_getstr(js, name, NULL), "TypeError") == 0);
+      }
+      Ant_Exception_Clear(js);
+    }
+  }
+
+  // If even the fallback Error cannot be allocated, return a tagged failure.
+  js->exception_oom = js_mkundef();
+  ant_fixed_arena_t objects = ExhaustArena(&js->obj_arena);
+  ant_value_t result = js_obj_to_func_ex(js, obj, 0);
+  js->obj_arena = objects;
+  assert(is_err(result) && Ant_Exception_Peek(js) == result);
+  Ant_Exception_Clear(js);
+  js->exception_oom = oom;
+
+  ant_value_t saved_this = js->this_val;
+  ant_value_t targets[] = { native, proxy };
+  for (size_t i = 0; i < sizeof(targets) / sizeof(targets[0]); i++) {
+    js->this_val = targets[i];
+    result = js_as_cfunc(bind)(js, NULL, 0, js_mkundef());
+    assert(result == oom && Ant_Exception_Peek(js) == result);
+    Ant_Exception_Clear(js);
+  }
+  js->this_val = saved_this;
+  js->closure_arena = closures;
+  gc_disabled = saved_gc_disabled;
+  assert(vtype(js_obj_to_func_ex(js, obj, 0)) == kTypeFunction);
+  assert(!Ant_Exception_Pending(js));
+  GC_ROOT_RESTORE(js, mark);
+}
+
 static ant_value_t collect_native_target(ant_params_t) {
   assert(!Ant_Exception_Pending(js));
   assert(js->vm->native_frame && js->vm->native_frame->new_target == call_new_target);
@@ -617,6 +689,7 @@ int main(void) {
   CheckAwaitValueRoots(js);
   CheckCancelledAwaitReplacement(js);
   CheckExplicitAwaitResume(js);
+  CheckFunctionAllocationFailure(js);
   GC_ROOT_RESTORE(js, root_mark);
   js_destroy(js);
   puts("PASS error handoffs preserve values and exception ownership");

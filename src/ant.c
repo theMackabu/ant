@@ -512,7 +512,16 @@ const char *typestr(ant_value_type_t t) {
 
 ant_value_t js_obj_to_func_ex(ant_t *js, ant_value_t obj, uint8_t flags) {
   sv_closure_t *closure = js_closure_alloc(js);
-  if (!closure) return Ant_Exception_Current(js);
+
+  if (!closure) {
+    ant_value_t error = Ant_Exception_Peek(js);
+    if (!is_err(error)) error = is_err(js->exception_oom)
+      ? js->exception_oom
+      : js_mkerr_typed(js, JS_ERR_TYPE, "out of memory allocating function");
+
+    Ant_Exception_Set(js, error);
+    return error;
+  }
   
   closure->func = NULL;
   closure->upvalues = NULL;
@@ -533,6 +542,7 @@ ant_value_t js_obj_to_func_ex(ant_t *js, ant_value_t obj, uint8_t flags) {
   ant_object_t *func_obj = js_obj_ptr(closure->func_obj);
   if (func_obj) {
     if (flags & SV_CALL_IS_DEFAULT_CTOR) func_obj->flags.is_constructor = 1;
+
     // mark native function objects as constructors when they are
     // created with an explicit .prototype own property.
     else if (
@@ -540,8 +550,10 @@ ant_value_t js_obj_to_func_ex(ant_t *js, ant_value_t obj, uint8_t flags) {
       func_obj->shape &&
       js->intern.prototype &&
       vtype(obj_extra_get(func_obj, SLOT_CFUNC)) == kTypeBuiltin
-    ) if (ant_shape_lookup_interned(func_obj->shape, js->intern.prototype) >= 0
-    ) func_obj->flags.is_constructor = 1;
+    )
+
+    if (ant_shape_lookup_interned(func_obj->shape, js->intern.prototype) >= 0)
+      func_obj->flags.is_constructor = 1;
   }
   
   return mkref(kTypeFunction, closure);
@@ -6433,11 +6445,14 @@ static ant_value_t builtin_function_bind(ant_params_t) {
 
     uint8_t bind_flags = SV_CALL_HAS_BOUND_THIS;
     if (bound_argc > 0) bind_flags |= SV_CALL_HAS_BOUND_ARGS;
+    
     ant_value_t bound = js_obj_to_func_ex(js, bound_func, bind_flags);
+    if (is_err(bound)) return bound;
+    
     sv_closure_t *bc = js_func_closure(bound);
     bc->bound_this = this_arg;
-    if (bound_argc > 0 &&
-        !bound_argv_copy(bc, bound_args, bound_argc, NULL, 0))
+    
+    if (bound_argc > 0 && !bound_argv_copy(bc, bound_args, bound_argc, NULL, 0))
       return js_mkerr(js, "oom");
 
     ant_value_t length_result = js_define_bound_function_length(js, bound_func, bound_length);
@@ -6469,6 +6484,8 @@ static ant_value_t builtin_function_bind(ant_params_t) {
     if (bound_argc > 0) bind_flags |= SV_CALL_HAS_BOUND_ARGS;
     
     ant_value_t bound = js_obj_to_func_ex(js, bound_func, bind_flags);
+    if (is_err(bound)) return bound;
+    
     sv_closure_t *bc = js_func_closure(bound);
     bc->bound_this = this_arg;
     
