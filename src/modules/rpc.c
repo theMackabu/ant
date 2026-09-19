@@ -190,13 +190,13 @@ static char *rpc_value_to_cstring(ant_t *js, ant_value_t value, const char *what
     js_mkerr_typed(js, JS_ERR_TYPE, "%s must be a string", what);
     return NULL;
   }
-  
+
   size_t len = 0;
   const char *str = js_getstr(js, value, &len);
-  
+
   char *copy = rpc_strdup_len(str ? str : "", len);
   if (!copy) js_mkerr(js, "out of memory");
-  
+
   return copy;
 }
 
@@ -272,16 +272,16 @@ static ant_value_t rpc_parse_integrity_options(
 
 static ant_value_t rpc_get_error_value(ant_t *js, const char *prefix, const char *name, ant_value_t reason) {
   const char *msg = NULL;
-  
+
   if (is_object_type(reason)) {
     ant_value_t message = js_get(js, reason, "message");
     if (is_err(message)) return message;
     if (vtype(message) == kTypeString) msg = js_getstr(js, message, NULL);
   }
-  
+
   if (!msg) msg = js_str(js, reason);
   if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
-  
+
   return js_mkerr(js, "%s '%s' failed: %s", prefix, name ? name : "<unknown>", msg ? msg : "error");
 }
 
@@ -519,14 +519,14 @@ static void rpc_complete_task(rpc_deferred_task_t *task, ant_value_t result, boo
   if (rejected || is_err(result)) {
     ant_t *js = task->server->js;
     GC_ROOT_SAVE(root_mark, js);
-    
+
     ant_value_t reason = js_take_thrown(js, result);
     GC_ROOT_PIN(js, reason);
-    
+
     ant_value_t err = rpc_get_error_value(js, "rpc procedure", task->route ? task->route->name : NULL, reason);
     ant_value_t error_value = js_take_thrown(js, err);
     GC_ROOT_PIN(js, error_value);
-    
+
     const char *msg = js_str(js, is_err(err) && vdata(err) != 0 ? err : error_value);
     (void)wirecall_deferred_fail(task->call, msg ? msg : "rpc procedure failed");
     GC_ROOT_RESTORE(js, root_mark);
@@ -1092,24 +1092,24 @@ static rpc_client_t *rpc_require_client(ant_t *js, ant_value_t this_val) {
 static ant_value_t rpc_client_connect(ant_params_t) {
   rpc_client_t *client = rpc_require_client(js, js_getthis(js));
   if (!client) return Ant_Exception_Current(js);
-  
+
   if (client->closed || client->closing) {
     ant_value_t promise = js_mkpromise(js);
     js_reject_promise(js, promise, js_mkerr(js, "RpcClient is closed"));
     return promise;
   }
-  
+
   rpc_client_op_t *op = calloc(1, sizeof(*op));
   if (!op) return js_mkerr(js, "out of memory");
   op->type = RPC_CLIENT_OP_CONNECT;
-  
+
   return rpc_client_enqueue(client, op);
 }
 
 static ant_value_t rpc_client_call(ant_params_t) {
   rpc_client_t *client = rpc_require_client(js, js_getthis(js));
   if (!client) return Ant_Exception_Current(js);
-  
+
   if (nargs < 2 || vtype(args[1]) != kTypeArray)
     return js_mkerr_typed(js, JS_ERR_TYPE, "RpcClient.call requires name and args array");
 
@@ -1121,19 +1121,19 @@ static ant_value_t rpc_client_call(ant_params_t) {
     free(name);
     return js_mkerr(js, "out of memory");
   }
-  
+
   op->type = RPC_CLIENT_OP_CALL;
   op->name = name;
   wirecall_writer_init(&op->writer);
   op->writer_initialized = true;
-  
+
   const char *error = NULL;
   if (rpc_write_js_array(js, &op->writer, args[1], &error) != 0) {
     ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "rpc call '%s' has unsupported args: %s", name, error ? error : "invalid value");
     rpc_client_op_free(op);
     return err;
   }
-  
+
   return rpc_client_enqueue(client, op);
 }
 

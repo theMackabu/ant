@@ -1318,10 +1318,10 @@ static ant_value_t esm_eval_ambiguous_js_source(
 ) {
   GC_ROOT_SAVE(exception_mark, js);
   ant_value_t saved_exception = Ant_Exception_Peek(js);
-  
+
   GC_ROOT_PIN(js, saved_exception);
   code_arena_mark_t parse_mark = parse_arena_mark();
-  
+
   sv_ast_t *program = sv_parse(js, js_code, (ant_offset_t)js_len, false);
   GC_ROOT_RESTORE(js, exception_mark);
 
@@ -1682,7 +1682,7 @@ static ant_value_t esm_parse_module_record(
 
   sv_ast_t *program = sv_parse(js, js_code, (ant_offset_t)js_len, false);
   GC_ROOT_RESTORE(js, exception_mark);
-  
+
   if (!program) {
     if (*format == MODULE_EVAL_FORMAT_UNKNOWN) {
       Ant_Exception_Set(js, saved_exception);
@@ -1698,7 +1698,7 @@ static ant_value_t esm_parse_module_record(
       "Unexpected parse error in module: %s",
       resolved_path
     );
-    
+
     esm_module_record_cleanup(out);
     return err;
   }

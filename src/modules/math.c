@@ -187,21 +187,26 @@ static ant_value_t builtin_Math_max(ant_params_t) {
 
 static ant_value_t builtin_Math_min(ant_params_t) {
   if (nargs == 0) return tov(JS_INF);
-  double min_val = js_to_number(js, args[0]);
+  double min_val = vtype(args[0]) == kTypeNumber ? tod(args[0]) : js_to_number(js, args[0]);
+  
   if (isnan(min_val)) return tov(JS_NAN);
+  
   for (int i = 1; i < nargs; i++) {
-    double v = js_to_number(js, args[i]);
+    double v = vtype(args[i]) == kTypeNumber ? tod(args[i]) : js_to_number(js, args[i]);
     if (isnan(v)) return tov(JS_NAN);
+    
     if (v < min_val) {
       min_val = v;
       continue;
     }
+    
     if (v == 0.0 
       && min_val == 0.0 
       && signbit(v) 
       && !signbit(min_val)
     ) min_val = v;
   }
+  
   return tov(min_val);
 }
 

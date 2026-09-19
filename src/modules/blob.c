@@ -135,8 +135,8 @@ static ant_value_t process_blob_parts(ant_t *js, byte_buf_t *buf, ant_value_t pa
 
   js_iter_t it;
   if (!js_iter_open(js, parts, &it))
-    return Ant_Exception_Pending(js) 
-      ? Ant_Exception_Current(js) 
+    return Ant_Exception_Pending(js)
+      ? Ant_Exception_Current(js)
       : js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Blob': The provided value is not of type 'BlobPart'");
 
   ant_value_t value;
@@ -225,15 +225,15 @@ static ant_value_t js_blob_bytes(ant_params_t) {
 
   size_t sz = (bd && bd->data) ? bd->size : 0;
   ArrayBufferData *abd = create_array_buffer_data(sz);
-  
+
   if (!abd) { js_reject_promise(js, promise, js_mkerr(js, "out of memory")); return promise; }
   if (sz > 0 && bd) memcpy(abd->data, bd->data, sz);
 
   ant_value_t bytes = create_typed_array(js, TYPED_ARRAY_UINT8, abd, 0, sz, "Uint8Array");
-  
+
   if (is_err(bytes)) js_reject_promise(js, promise, bytes);
   else js_resolve_promise(js, promise, bytes);
-  
+
   return promise;
 }
 

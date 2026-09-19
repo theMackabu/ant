@@ -537,7 +537,7 @@ bool inspector_eval_safe_expr(ant_t *js, const char *expr, size_t expr_len, ant_
 
   GC_ROOT_SAVE(exception_mark, js);
   ant_value_t saved_exception = Ant_Exception_Peek(js);
-  
+
   GC_ROOT_PIN(js, saved_exception);
   Ant_Exception_Clear(js);
 
@@ -553,12 +553,12 @@ bool inspector_eval_safe_expr(ant_t *js, const char *expr, size_t expr_len, ant_
     ok = inspector_safe_eval_ast(js, program->args.items[0], out);
     if (ok && is_err(*out)) ok = false;
   }
-  
+
   parse_arena_rewind(parse_mark);
   free(wrapped);
 
   Ant_Exception_Set(js, saved_exception);
   GC_ROOT_RESTORE(js, exception_mark);
-  
+
   return ok;
 }

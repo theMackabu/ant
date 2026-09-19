@@ -323,7 +323,7 @@ static void js_iter_call_return(ant_t *js, js_iter_t *it) {
 
 void js_iter_close(ant_t *js, js_iter_t *it) {
   if (it->advance) return;
-  
+
   if (!Ant_Exception_Pending(js)) {
     js_iter_call_return(js, it);
     return;
@@ -331,11 +331,11 @@ void js_iter_close(ant_t *js, js_iter_t *it) {
 
   GC_ROOT_SAVE(root_mark, js);
   ant_value_t completion = Ant_Exception_Peek(js);
-  
+
   GC_ROOT_PIN(js, completion);
   Ant_Exception_Clear(js);
   js_iter_call_return(js, it);
-  
+
   Ant_Exception_Set(js, completion);
   GC_ROOT_RESTORE(js, root_mark);
 }

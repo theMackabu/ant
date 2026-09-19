@@ -208,10 +208,10 @@ static ant_value_t util_parse_args(ant_params_t) {
 
   ant_value_t strict_value = js_get(js, config, "strict");
   if (is_err(strict_value)) return strict_value;
-  
+
   bool strict = is_undefined(strict_value) || js_truthy(js, strict_value);
   ant_value_t allow_positionals_value = js_get(js, config, "allowPositionals");
-  
+
   if (is_err(allow_positionals_value)) return allow_positionals_value;
   bool allow_positionals = js_truthy(js, allow_positionals_value);
 
@@ -236,16 +236,16 @@ static ant_value_t util_parse_args(ant_params_t) {
     while (idx < option_count && js_prop_iter_next(&iter, &key, &key_len, NULL)) {
       ant_value_t spec = js_get(js, options_obj, key);
       if (is_err(spec)) goto option_error;
-      
+
       ant_value_t type_val = is_object_type(spec) ? js_get(js, spec, "type") : js_mkundef();
       if (is_err(type_val)) goto option_error;
-      
+
       ant_value_t short_val = is_object_type(spec) ? js_get(js, spec, "short") : js_mkundef();
       if (is_err(short_val)) goto option_error;
-      
+
       ant_value_t multiple_val = is_object_type(spec) ? js_get(js, spec, "multiple") : js_mkundef();
       if (is_err(multiple_val)) goto option_error;
-      
+
       ant_value_t default_val = is_object_type(spec) ? js_get(js, spec, "default") : js_mkundef();
       if (is_err(default_val)) goto option_error;
       
@@ -1223,7 +1223,7 @@ static ant_value_t util_promisified_call(ant_params_t) {
 
   ant_value_t settled = js_get_slot(ctx, SLOT_SETTLED);
   bool is_settled = (vtype(settled) == kTypeBool && settled == js_true);
-  
+
   if (is_err(call_result) || Ant_Exception_Pending(js)) {
     ant_value_t ex = js_take_thrown(js, call_result);
     if (!is_settled) {
@@ -1287,11 +1287,11 @@ static ant_value_t util_callbackified_call(ant_params_t) {
   if (is_err(result) || Ant_Exception_Pending(js)) {
     GC_ROOT_SAVE(root_mark, js);
     ant_value_t ex = js_take_thrown(js, result);
-    
+
     GC_ROOT_PIN(js, ex);
     ant_value_t cb_args[1] = { ex };
     ant_value_t cb_result = sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 1, NULL, js_mkundef());
-    
+
     GC_ROOT_RESTORE(js, root_mark);
     return is_err(cb_result) ? cb_result : js_mkundef();
   }

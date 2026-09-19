@@ -77,7 +77,7 @@ static ant_value_t napi_callback_trampoline(ant_params_t) {
 
   if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
   if ((ant_value_t)ret == 0) return js_mkundef();
-  
+
   return (ant_value_t)ret;
 }
 

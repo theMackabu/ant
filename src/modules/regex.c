@@ -4191,28 +4191,28 @@ static bool regexp_literal_replace_builtin_guard(ant_t *js) {
 
   ant_value_t string_ctor;
   if (!js_try_get_own_data_prop(js, js_glob(js), "String", 6, &string_ctor)) return false;
-  
+
   ant_value_t string_proto;
   if (
     !js_try_get_own_data_prop(js, string_ctor, "prototype", 9, &string_proto) ||
     !is_object_type(string_proto)) return false;
-  
+
   ant_value_t replace_fn;
   if (
-    !js_try_get_own_data_prop(js, string_proto, "replace", 7, &replace_fn) || 
+    !js_try_get_own_data_prop(js, string_proto, "replace", 7, &replace_fn) ||
     !js_cfunc_same_entrypoint(replace_fn, builtin_string_replace)) return false;
 
   ant_value_t regexp_ctor;
   if (!js_try_get_own_data_prop(js, js_glob(js), "RegExp", 6, &regexp_ctor)) return false;
-  
+
   ant_value_t regexp_proto;
   if (
-    !js_try_get_own_data_prop(js, regexp_ctor, "prototype", 9, &regexp_proto) || 
+    !js_try_get_own_data_prop(js, regexp_ctor, "prototype", 9, &regexp_proto) ||
     !is_object_type(regexp_proto) || is_proxy(regexp_proto)) return false;
-  
+
   ant_offset_t sym_off = (ant_offset_t)vdata(get_replace_sym()); prop_meta_t meta;
   if (lookup_symbol_prop_meta(js, regexp_proto, sym_off, &meta) && (meta.has_getter || meta.has_setter)) return false;
-  
+
   ant_prop_loc_t loc = lkp_sym(regexp_proto, sym_off);
   if (!loc.obj || !js_cfunc_same_entrypoint(js_prop_load(loc), builtin_regexp_symbol_replace)) return false;
 

@@ -1697,25 +1697,25 @@ static ant_value_t js_typedarray_from(ant_native_params_t, TypedArrayType type, 
       if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, item))) goto oom;
     }
     js_iter_close(js, &it);
-    if (Ant_Exception_Pending(js)) { 
+    if (Ant_Exception_Pending(js)) {
       result = Ant_Exception_Current(js);
       goto done;
     }
   } else {
-    if (Ant_Exception_Pending(js)) { 
+    if (Ant_Exception_Pending(js)) {
       result = Ant_Exception_Current(js);
-      goto done; 
+      goto done;
     }
-    
+
     ant_value_t len_val = js_get(js, source, "length");
-    if (is_err(len_val)) { 
+    if (is_err(len_val)) {
       result = len_val;
       goto done;
     }
-    
-    size_t len = vtype(len_val) == kTypeNumber 
+
+    size_t len = vtype(len_val) == kTypeNumber
       ? (size_t)js_getnum(len_val) : 0;
-    
+
     for (size_t i = 0; i < len; i++) {
       char idx[16];
       snprintf(idx, sizeof(idx), "%zu", i);

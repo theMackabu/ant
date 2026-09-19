@@ -467,12 +467,12 @@ static ant_value_t websocket_new_message_event(ant_t *js, ant_value_t target, an
     js_mkprop_fast(js, seed, "data", 4, js_mknull());
     js_mkprop_fast(js, seed, "origin", 6, js_mkstr(js, "", 0));
     js_mkprop_fast(js, seed, "lastEventId", 11, js_mkstr(js, "", 0));
-    
-    if (Ant_Exception_Pending(js)) { 
+
+    if (Ant_Exception_Pending(js)) {
       GC_ROOT_RESTORE(js, mark);
       return Ant_Exception_Current(js);
     }
-    
+
     js->mutable_roots.websocket_message_event_template = seed;
   }
 
@@ -835,42 +835,42 @@ static ant_value_t js_message_event_ctor(ant_params_t) {
 static ant_value_t js_close_event_ctor(ant_params_t) {
   if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "CloseEvent constructor requires 'new'");
-  
+
   ant_value_t type_val = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "close", 5);
   if (is_err(type_val)) return type_val;
-  
+
   ant_value_t event = websocket_make_event(js, js->builtins.close_event_proto, js_str(js, type_val));
   ant_value_t init = nargs > 1 ? args[1] : js_mkundef();
-  
+
   js_set(js, event, "wasClean", js_false);
   js_set(js, event, "code", js_mknum(0));
   js_set(js, event, "reason", js_mkstr(js, "", 0));
-  
+
   if (is_object_type(init)) {
     ant_value_t was_clean = js_get(js, init, "wasClean");
     if (is_err(was_clean)) return was_clean;
-    if (vtype(was_clean) != kTypeUndefined) 
+    if (vtype(was_clean) != kTypeUndefined)
       js_set(js, event, "wasClean", js_bool(js_truthy(js, was_clean)));
-    
+
     ant_value_t code = js_get(js, init, "code");
     if (is_err(code)) return code;
-    
+
     if (vtype(code) != kTypeUndefined) {
       double number = js_to_number(js, code);
       if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
       js_set(js, event, "code", js_mknum(number));
     }
-    
+
     ant_value_t reason = js_get(js, init, "reason");
     if (is_err(reason)) return reason;
-    
+
     if (vtype(reason) != kTypeUndefined) {
       ant_value_t reason_str = js_tostring_val(js, reason);
       if (is_err(reason_str)) return reason_str;
       js_set(js, event, "reason", reason_str);
     }
   }
-  
+
   return event;
 }
 

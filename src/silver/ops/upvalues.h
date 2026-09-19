@@ -3,6 +3,7 @@
 
 #include "internal.h"
 #include "silver/engine.h"
+#include "silver/upvalues.h"
 #include "eval_env.h"
 
 static inline ant_value_t sv_mkprop_interned_exact_key(
@@ -152,21 +153,9 @@ static inline void sv_op_set_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) 
 static inline ant_value_t sv_op_close_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) {
   uint16_t idx = sv_get_u16(ip + 1);
   ant_value_t *slot = sv_frame_slot_ptr(frame, idx);
+  
   if (!slot) return js_mkundef();
-
-  sv_upvalue_t **pp = &vm->open_upvalues;
-  while (*pp) {
-    sv_upvalue_t *uv = *pp;
-    ant_value_t *loc = uv->location;
-    if (sv_slot_in_vm_stack(vm, loc) && loc >= slot) {
-      uv->closed = *loc;
-      uv->location = &uv->closed;
-      *pp = uv->next;
-      uv->next = NULL;
-      gc_upvalue_write_barrier(vm->js, uv, uv->closed);
-    }
-    else pp = &uv->next;
-  }
+  sv_close_upvalues_from_slot(vm, slot);
 
   return js_mkundef();
 }
@@ -174,7 +163,7 @@ static inline ant_value_t sv_op_close_upval(sv_vm_t *vm, sv_frame_t *frame, uint
 static inline sv_upvalue_t *sv_capture_upvalue(sv_vm_t *vm, ant_value_t *slot) {
   sv_upvalue_t **pp = &vm->open_upvalues;
   
-  while (*pp && (*pp)->location > slot) pp = &(*pp)->next;
+  while (*pp && (uintptr_t)(*pp)->location > (uintptr_t)slot) pp = &(*pp)->next;
   if (*pp && (*pp)->location == slot) return *pp;
 
   sv_upvalue_t *uv = js_upvalue_alloc(vm->js);

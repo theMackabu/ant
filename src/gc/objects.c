@@ -492,10 +492,10 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
     gc_mark_value(js, obj->u.exception.value);
     gc_mark_value(js, obj->u.exception.stack);
   }
-  
-  else if (obj->type_tag != kTypeArray) 
+
+  else if (obj->type_tag != kTypeArray)
     gc_mark_value(js, obj->u.data.value);
-  
+
   if (obj->type_tag == kTypeGenerator) {
     coroutine_t *coro = generator_get_coro_for_gc(js_obj_from_ptr(obj));
     if (coro) gc_mark_coroutine(js, coro);
@@ -639,10 +639,15 @@ while (gc_mark_sp > 0) {
 
 static void gc_scan_frame_span(
   ant_t *js, ant_value_t *slots, int slot_count,
-  sv_frame_t *frames, int frame_count, sv_upvalue_t *open_upvalues
+  sv_frame_t *frames, int frame_count, sv_upvalue_t *open_upvalues,
+  sv_handler_t *handlers, int handler_count
 ) {
   for (int i = 0; i < slot_count; i++)
     gc_mark_value(js, slots[i]);
+
+  for (int i = 0; i < handler_count; i++)
+    if (handlers[i].kind == SV_HANDLER_FINALLY)
+      gc_mark_value(js, handlers[i].completion.value);
 
   for (int f = 0; f < frame_count; f++) {
     sv_frame_t *frame = &frames[f];
@@ -675,14 +680,21 @@ static void gc_scan_frame_span(
 
 static void gc_scan_vm_stack(ant_t *js, sv_vm_t *vm) {
   if (!vm) return;
-  for (sv_native_frame_t *frame = vm->native_frame; frame; frame = frame->caller)
-    gc_mark_value(js, frame->new_target);
-  gc_scan_frame_span(js, vm->stack, vm->sp, vm->frames, vm->fp + 1, vm->open_upvalues);
+  
+  for (
+    sv_native_frame_t *frame = vm->native_frame; 
+    frame; frame = frame->caller) gc_mark_value(js, frame->new_target);
+  
+  gc_scan_frame_span(
+    js, vm->stack, vm->sp, vm->frames, vm->fp + 1, 
+    vm->open_upvalues, vm->handler_stack, vm->handler_depth);
 }
 
 static void gc_scan_activation(ant_t *js, sv_activation_t *act) {
   if (!act || act->frame_count <= 0) return;
-  gc_scan_frame_span(js, act->slots, act->stack_count, act->frames, act->frame_count, act->open_upvalues);
+  gc_scan_frame_span(
+    js, act->slots, act->stack_count, act->frames, act->frame_count,
+    act->open_upvalues, act->handlers, act->handler_count);
 }
 
 static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {

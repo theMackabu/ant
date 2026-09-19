@@ -296,14 +296,14 @@ static ant_value_t zlib_do_process(
   if (st->brotli) {
     brotli_emit_ctx_t ctx = { js, st->obj, js_mkundef() };
     int rc;
-    
+
     if (flush == Z_FINISH) rc = brotli_stream_finish(st->brotli, brotli_emit_cb, &ctx);
     else rc = brotli_stream_process(st->brotli, input, input_len, brotli_emit_cb, &ctx);
-    
+
     if (is_err(ctx.error)) return ctx.error;
     if (Ant_Exception_Pending(js)) return js_mkundef();
     if (rc < 0) return js_mkerr(js, "brotli operation failed");
-    
+
     return js_mkundef();
   }
 
@@ -463,7 +463,7 @@ static ant_value_t js_zlib_write(ant_params_t) {
     if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return js_false;
   }
-  
+
   if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
 
   ant_value_t cb = pick_callback(args, nargs);
@@ -496,7 +496,7 @@ static ant_value_t js_zlib_end(ant_params_t) {
     if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return self;
   }
-  
+
   if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
 
   st->ended = true;
@@ -539,7 +539,7 @@ static ant_value_t js_zlib_flush(ant_params_t) {
     if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return self;
   }
-  
+
   if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
 
   if (is_callable(cb)) {

@@ -44,17 +44,17 @@ static ant_value_t dns_promises_lookup(ant_params_t) {
   hints.ai_socktype = SOCK_STREAM;
 
   int err = getaddrinfo(hostname, NULL, &hints, &res);
-  
+
   if (err != 0 || !res) {
     ant_value_t error = js_mkerr(js, "getaddrinfo failed for '%s'", hostname);
     error = js_take_thrown(js, error);
     GC_ROOT_SAVE(root_mark, js);
     GC_ROOT_PIN(js, error);
-    
+
     ant_value_t promise = js_mkpromise(js);
     js_reject_promise(js, promise, error);
     GC_ROOT_RESTORE(js, root_mark);
-    
+
     return promise;
   }
 

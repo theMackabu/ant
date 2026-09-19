@@ -342,7 +342,7 @@ static ant_value_t stream_add_listener(
   const char *method = once ? "once" : "on";
   ant_value_t add = js_getprop_fallback(js, target, method);
   if (is_err(add)) return add;
-  
+
   if (is_callable(add)) {
     ant_value_t args[2];
     args[0] = js_mkstr(js, event_name, strlen(event_name));
@@ -1300,7 +1300,7 @@ static ant_value_t stream_writable_write_done(ant_params_t) {
     );
 
     if (status == STREAM_WRITE_COMPLETE) continue;
-    
+
     if (status == STREAM_WRITE_THROWN) {
       if (priv) priv->draining = false;
       return Ant_Exception_Current(js);
@@ -1914,10 +1914,10 @@ static ant_value_t js_stream_promises_pipeline(ant_params_t) {
   for (int i = 0; i < nargs; i++) call_args[i] = args[i];
   call_args[nargs] = js_heavy_mkfun(js, stream_promise_callback, promise);
   ant_value_t result = js_stream_pipeline(js, call_args, nargs + 1, js_mkundef());
-  
+
   free(call_args);
   if (is_err(result)) js_reject_promise(js, promise, result);
-  
+
   return promise;
 }
 
@@ -1936,10 +1936,10 @@ static void stream_readable_from_schedule(ant_t *js, ant_value_t state_obj) {
 static ant_value_t stream_readable_from_fail(ant_t *js, ant_value_t state_obj, ant_value_t error) {
   GC_ROOT_SAVE(root_mark, js);
   if (is_err(error)) error = js_take_thrown(js, error);
-  
+
   GC_ROOT_PIN(js, error);
   ant_value_t readable = js_get(js, state_obj, "readable");
-  
+
   stream_release_reader(js, state_obj);
   if (stream_is_instance(readable)) {
     ant_value_t destroy_args[1] = { error };

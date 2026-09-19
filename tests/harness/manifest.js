@@ -14,9 +14,12 @@ export function targets() {
   const REGRESSION_TESTS = [
     'test_async_handled_errors.cjs',
     'test_native_completion_errors.cjs',
+    'test_native_numeric_array_paths.cjs',
+    'test_fulfilled_await_jobs.mjs',
     'test_disposal_error_values.cjs',
     'test_vm_iterator_close_errors.cjs',
     'test_return_for_of_close.cjs',
+    'test_finally_completion.cjs',
     'test_return_for_await_close.cjs',
     'test_promise_continuation_errors.cjs',
     'test_import_iterator_getter_errors.cjs',
@@ -123,6 +126,7 @@ export function targets() {
     'test_jit_osr_late_locals.cjs',
     'test_jit_mod.cjs',
     'test_jit_open_upvalue_gc.cjs',
+    'test_upvalue_close_order.cjs',
     'test_generator_abandon_memory.cjs',
     'test_generator_open_upvalue_gc.cjs'
   ];

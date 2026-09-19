@@ -24,6 +24,10 @@ Neither sentinel is a heap reference.
 
 The isolate's current exception is one propagation handle for legacy scalar,
 boolean, and parser helpers. It does not own separate value/stack/flag state.
+Initialize the slot to `undefined` before bootstrap allocations. Set/clear
+operations keep it either `undefined` or an exception record, allowing the
+pending-state check to compare directly with `undefined`.
+`Ant_Exception_Set` must continue to normalize non-error inputs.
 Use the returned record to inspect or consume a failure; `Ant_Exception_Current`
 forwards scalar failure state, with an emergency OOM fallback. Root saved
 handles across allocation and user-code execution, then restore the handle
@@ -35,6 +39,12 @@ inner failure leaves the caller's completion intact; an escaped failure takes
 precedence. A normal native return with an unconsumed new failure becomes an
 exception result. This boundary check does not unwind C cleanup or undo effects:
 native code must still stop after fallible operations and settle owned resources.
+
+Each active `finally` handler owns its saved return, throw, or jump completion.
+Entering the handler moves the frame's pending completion into that handler and
+clears the frame slot. Nested catches and normal nested cleanup must not erase
+the saved completion. GC traces handler values in both live VMs and suspended
+activations; abrupt completion discards the handlers it exits.
 
 `js_mkerr*` creates and publishes an exception record; it does not return an
 ordinary Error value. `js_reject_promise` consumes exception results through

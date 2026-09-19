@@ -14,12 +14,12 @@
 static void observable_report_error(ant_t *js, ant_value_t result, const char *where) {
   GC_ROOT_SAVE(root_mark, js);
   ant_value_t reason = js_take_thrown(js, result);
-  
+
   GC_ROOT_PIN(js, reason);
   char prefix[80];
   snprintf(prefix, sizeof(prefix), "Error in %s: ", where);
   print_error_value(js, reason, js_mkundef(), prefix);
-  
+
   if (Ant_Exception_Pending(js)) js_take_thrown(js, js_mkundef());
   GC_ROOT_RESTORE(js, root_mark);
 }
@@ -116,7 +116,7 @@ static ant_value_t js_subobs_next(ant_params_t) {
     observable_report_error(js, nextMethod, "observer.next");
     return js_mkundef();
   }
-  
+
   if (is_callable(nextMethod)) {
     ant_value_t value = (nargs > 0) ? args[0] : js_mkundef();
     ant_value_t call_args[1] = {value};
@@ -231,14 +231,14 @@ static ant_value_t execute_subscriber(ant_t *js, ant_value_t subscriber, ant_val
   if (is_special_object(subscriberResult)) {
     ant_value_t result = js_get(js, subscriberResult, "unsubscribe");
     if (is_err(result)) return result;
-    
+
     if (vtype(result) == kTypeUndefined)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Subscriber return value must have an unsubscribe method");
     
     ant_value_t cleanupFunction = js_mkobj(js);
     js_set_slot(cleanupFunction, SLOT_DATA, subscriberResult);
     js_set_slot(cleanupFunction, SLOT_CFUNC, js_mkfun(js_cleanup_fn));
-    
+
     return js_obj_to_func(js, cleanupFunction);
   }
   
@@ -400,7 +400,7 @@ static ant_value_t js_from_iteration(ant_params_t) {
   
   ant_value_t iterator = sv_vm_call(js->vm, js, iteratorMethod, iterable, NULL, 0, NULL, js_mkundef());
   if (is_err(iterator)) return iterator;
-  
+
   if (!is_special_object(iterator))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Iterator must return an object");
   

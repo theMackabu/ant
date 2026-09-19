@@ -364,7 +364,7 @@ static void sv_parse_stmt_list(P, sv_ast_list_t *out, bool stop_at_rbrace, bool 
 
   for (;;) {
     NEXT();
-    
+
     if (TOK == TOK_EOF) break;
     if (stop_at_rbrace && TOK == TOK_RBRACE) break;
 
@@ -389,10 +389,10 @@ static void sv_parse_stmt_list(P, sv_ast_list_t *out, bool stop_at_rbrace, bool 
       p->lx.strict = true;
       continue;
     }
-    
+
     in_directive_prologue = false;
   }
-  
+
   p->lx.strict = saved_lexer_strict;
 }
 
@@ -1785,14 +1785,14 @@ static sv_ast_t *parse_var_decl(P, sv_var_kind_t kind, bool allow_uninit_const) 
       sv_strict_check_binding_ident(p, decl->left->str, decl->left->len);
       CONSUME();
     }
-    
+
     if (NEXT() == TOK_ASSIGN) {
       CONSUME();
       decl->right = parse_assign(p);
     } else if ((kind == SV_VAR_CONST || kind == SV_VAR_USING || kind == SV_VAR_AWAIT_USING) && !allow_uninit_const) {
       SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Missing initializer in const declaration");
     }
-    
+
     sv_ast_list_push(&var->args, decl);
   } while (NEXT() == TOK_COMMA && (CONSUME(), 1));
 

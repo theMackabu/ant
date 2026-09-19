@@ -416,6 +416,20 @@ meson setup build -Dpgo=enabled   # require a matching profile
 meson setup build -Dpgo=disabled  # ignore checked-in profiles
 ```
 
+Use `-Dpgo_profile=/path/to/profile.profdata` with `-Dpgo=enabled` to consume
+a separate profile without replacing the platform profile. Relative paths
+resolve from the source root.
+
+The standalone libant package accepts the same profile selector:
+
+```bash
+./packages/libant/build.sh -Dpgo=enabled -Dpgo_profile=/path/to/profile.profdata
+```
+
+libant defaults to `-Dpgo=disabled`. With PGO enabled, an empty selector uses
+the repository's platform profile; relative paths resolve from the repository
+root. The profile applies to both `libant.a` and `libant-lto.a` when built.
+
 #### Troubleshooting Unix and macOS builds
 
 Stale builds can sometimes result in errors. Clean the build directory and
@@ -490,6 +504,7 @@ Configure options are set via `meson setup` or `meson configure`:
 | `static_link`       | boolean | `false`    | Statically link the final binary                         |
 | `temporal`          | feature | `enabled`  | Build the Temporal API using the hermetic Rust toolchain |
 | `pgo`               | feature | `auto`     | Use matching `meson/pgo/profiles/*.profdata` profiles    |
+| `pgo_profile`       | string  | (empty)    | Override the merged LLVM profile path                  |
 | `runtime_binary`    | feature | `auto`     | Tooling-free `ant-runtime` used by `ant compile`         |
 | `build_timestamp`   | string  | (auto)     | Embedded build timestamp metadata                        |
 | `deps_prefix_cmake` | string  | (empty)    | Prefix path for cmake dependency lookup                  |

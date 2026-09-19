@@ -23,18 +23,18 @@ void ant_renderer_runtime_set_stack_base(void *stack_base) {
 
 static char *CopyJson(ant_value_t value) {
   ant_t *js = renderer_runtime;
-  if (is_err(value)) { 
+  if (is_err(value)) {
     js_take_thrown(js, value);
     return NULL;
   }
-  
+
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, value);
   ant_value_t json = json_stringify_value(js, value);
-  
+
   GC_ROOT_PIN(js, json);
   char *copy = NULL;
-  
+
   if (is_err(json)) js_take_thrown(js, json);
   else if (vtype(json) == kTypeString) {
     size_t length = 0;
@@ -45,7 +45,7 @@ static char *CopyJson(ant_value_t value) {
       copy[length] = '\0';
     }
   }
-  
+
   GC_ROOT_RESTORE(js, root_mark);
   return copy;
 }
@@ -53,24 +53,24 @@ static char *CopyJson(ant_value_t value) {
 static ant_value_t Response(bool ok, ant_value_t value) {
   ant_t *js = renderer_runtime;
   GC_ROOT_SAVE(root_mark, js);
-  
+
   if (!ok) value = js_take_thrown(js, value);
   GC_ROOT_PIN(js, value);
-  
+
   if (!ok) {
     ant_value_t message;
     if (js_try_get_own_data_prop(js, value, "message", 7, &message) && vtype(message) == kTypeString)
       value = message;
     else if (is_err(value)) value = js_mkstr(js, "unknown error", 13);
   }
-  
+
   ant_value_t response = js_mkobj(js);
   GC_ROOT_PIN(js, response);
   if (!is_err(response)) {
     js_set(js, response, "ok", js_bool(ok));
     js_set(js, response, ok ? "value" : "error", value);
   }
-  
+
   GC_ROOT_RESTORE(js, root_mark);
   return response;
 }
@@ -121,13 +121,13 @@ char *ant_renderer_runtime_describe(const char *specifier) {
     if (!stable_name) continue;
     memcpy(stable_name, name, length);
     stable_name[length] = '\0';
-    
+
     ant_value_t value = js_get(renderer_runtime, module, stable_name);
     if (is_err(value)) {
       free(stable_name);
       return CopyJson(Response(false, value));
     }
-    
+
     ant_value_t entry = js_mkobj(renderer_runtime);
     js_set(renderer_runtime, entry, "name", key);
     js_set(renderer_runtime, entry, "callable", js_bool(is_callable(value)));

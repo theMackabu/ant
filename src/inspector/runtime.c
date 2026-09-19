@@ -486,7 +486,7 @@ void inspector_replay_console_events(inspector_client_t *client) {
 static bool inspector_exception_description(ant_t *js, ant_value_t err, sbuf_t *out) {
   if (!js || !out) return false;
   ant_value_t stack = js_mkundef();
-  
+
   if (is_err(err)) {
     stack = Ant_Exception_Stack(js, err);
     err = Ant_Exception_Value(js, err);

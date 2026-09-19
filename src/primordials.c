@@ -63,20 +63,20 @@ ant_value_t primordial_library(ant_t *js) {
     captured = js->primordial_values[i];
     if (captures[i].uncurry) {
       ant_value_t target = captured;
-      
+
       captured = sv_vm_call_explicit_this(
         js->vm, js, js->primordial_values[ANT_PRIMORDIAL_FunctionPrototypeBind],
         js->primordial_values[ANT_PRIMORDIAL_CALL], &target, 1);
-      
-      if (is_err(captured)) { 
+
+      if (is_err(captured)) {
         result = captured;
         goto done;
       }
     }
-    
+
     js_set(js, result, captures[i].name, captured);
-    
-    if (Ant_Exception_Pending(js)) { 
+
+    if (Ant_Exception_Pending(js)) {
       result = Ant_Exception_Current(js);
       goto done;
     }

@@ -529,16 +529,16 @@ static ant_value_t crypto_read_key_length(
   if (is_err(value)) return value;
   if (vtype(value) == kTypeBigInt || vtype(value) == kTypeSymbol)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Algorithm.length must be a number");
-  
+
   double number = trunc(js_to_number(js, value));
   if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
-  
+
   if (!isfinite(number) || number < 0 || number > (double)maximum)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Algorithm.length is outside its accepted range");
 
   *present = true;
   *result = (uint32_t)number;
-  
+
   return js_mkundef();
 }
 
@@ -2208,17 +2208,17 @@ static ant_value_t crypto_scrypt_result(ant_native_params_t, int options_index) 
     if (is_err(v)) { err = v; goto cleanup_err; }
     if (vtype(v) == kTypeNumber) N = (uint64_t)js_getnum(v);
     v = js_get(js, args[options_index], "r");
-    
+
     if (vtype(v) == kTypeUndefined) v = js_get(js, args[options_index], "blockSize");
     if (is_err(v)) { err = v; goto cleanup_err; }
     if (vtype(v) == kTypeNumber) r = (uint64_t)js_getnum(v);
     v = js_get(js, args[options_index], "p");
-    
+
     if (vtype(v) == kTypeUndefined) v = js_get(js, args[options_index], "parallelization");
     if (is_err(v)) { err = v; goto cleanup_err; }
     if (vtype(v) == kTypeNumber) p = (uint64_t)js_getnum(v);
     v = js_get(js, args[options_index], "maxmem");
-    
+
     if (is_err(v)) { err = v; goto cleanup_err; }
     if (vtype(v) == kTypeNumber) maxmem = (uint64_t)js_getnum(v);
   }
@@ -2228,9 +2228,9 @@ static ant_value_t crypto_scrypt_result(ant_native_params_t, int options_index) 
     err = js_mkerr(js, "Out of memory");
     goto cleanup_err;
   }
-  
+
   if (EVP_PBE_scrypt(
-    (const char *)password, password_len, 
+    (const char *)password, password_len,
     salt, salt_len, N, r, p, maxmem, out, (size_t)keylen) != 1
   ) {
     free(out);
@@ -2260,11 +2260,11 @@ static ant_value_t js_crypto_scrypt(ant_params_t) {
   int callback_index = (vtype(args[3]) == kTypeFunction || vtype(args[3]) == kTypeBuiltin) ? 3 : 4;
   if (callback_index >= nargs || (vtype(args[callback_index]) != kTypeFunction && vtype(args[callback_index]) != kTypeBuiltin))
     return js_mkerr(js, "scrypt requires a callback");
-  
+
   ant_value_t result = crypto_scrypt_result(js, args, nargs, callback_index == 3 ? -1 : 3);
   ant_value_t cb_args[2] = { is_err(result) ? result : js_mknull(), is_err(result) ? js_mkundef() : result };
   ant_value_t cb_result = Ant_Error_CallCallback(js, args[callback_index], js_mkundef(), cb_args, 2);
-  
+
   return is_err(cb_result) ? cb_result : js_mkundef();
 }
 

@@ -1035,10 +1035,10 @@ static ant_value_t res_body_pull(ant_params_t) {
     ArrayBufferData *ab = create_array_buffer_data(d->body_size);
     if (!ab) return js_mkerr(js, "out of memory");
     memcpy(ab->data, d->body_data, d->body_size);
-    
+
     ant_value_t chunk = create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, d->body_size, "Uint8Array");
     if (is_err(chunk)) return chunk;
-    
+
     ant_value_t enqueued = rs_controller_enqueue(js, ctrl, chunk);
     if (is_err(enqueued)) return enqueued;
   }

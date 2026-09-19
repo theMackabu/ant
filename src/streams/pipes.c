@@ -374,13 +374,13 @@ ant_value_t readable_stream_pipe_to(
   if (is_err(writer)) {
     GC_ROOT_SAVE(root_mark, js);
     ant_value_t error = js_take_thrown(js, writer);
-    
+
     GC_ROOT_PIN(js, error);
     pipes_release_reader(js, reader);
-    
+
     ant_value_t promise = pipe_create_rejected(js, error);
     GC_ROOT_RESTORE(js, root_mark);
-    
+
     return promise;
   }
 
@@ -433,11 +433,11 @@ static ant_value_t js_rs_pipe_to(ant_params_t) {
   ant_value_t dest = (nargs > 0) ? args[0] : js_mkundef();
   bool prevent_close, prevent_abort, prevent_cancel;
   ant_value_t signal;
-  
+
   pipes_parse_options(js, nargs > 1 ? args[1] : js_mkundef(),
     &prevent_close, &prevent_abort, &prevent_cancel, &signal);
   if (Ant_Exception_Pending(js)) return pipe_create_rejected(js, js_take_thrown(js, js_mkundef()));
-  
+
   return readable_stream_pipe_to(js, js->this_val, dest,
     prevent_close, prevent_abort, prevent_cancel, signal);
 }

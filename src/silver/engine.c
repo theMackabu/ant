@@ -325,13 +325,9 @@ bool sv_activation_install(sv_vm_t *vm, sv_activation_t *act) {
   }
 
   if (act->open_upvalues) {
-    sv_upvalue_t *tail = act->open_upvalues;
-    for (sv_upvalue_t *uv = act->open_upvalues;; uv = uv->next) {
+    for (sv_upvalue_t *uv = act->open_upvalues; uv; uv = uv->next)
       uv->location = dst_base + (uv->location - act->slots);
-      if (!uv->next) { tail = uv; break; }
-    }
-    tail->next = vm->open_upvalues;
-    vm->open_upvalues = act->open_upvalues;
+    sv_merge_open_upvalues(&vm->open_upvalues, act->open_upvalues);
     act->open_upvalues = NULL;
   }
 
@@ -1072,10 +1068,10 @@ static inline ant_value_t sv_execute_entry_common(
 ) {
   if (!vm || !vm->js) return mkval(kTypeError, 0);
   ant_t *js = vm->js;
-  
-  if (!func) 
+
+  if (!func)
     return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "invalid function entry");
-  
+
   if (vm->fp + 1 >= vm->max_frames && !sv_vm_grow_frames(vm))
     return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
 
@@ -1295,19 +1291,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     for (int64_t i = 0; i < rl; i++)
       entry_lp[i] = vm->jit_resume.locals[i];
 
-    ant_value_t *old_bp = vm->jit_resume.params;
-    for (sv_upvalue_t *uv = vm->open_upvalues; old_bp && uv; uv = uv->next) {
-    if (uv->location >= old_bp && uv->location < old_bp + rp) {
-      ptrdiff_t slot = uv->location - old_bp;
-      uv->location = &entry_bp[slot];
-    }}
-
-    ant_value_t *old_lp = vm->jit_resume.locals;
-    for (sv_upvalue_t *uv = vm->open_upvalues; old_lp && uv; uv = uv->next) {
-    if (uv->location >= old_lp && uv->location < old_lp + rl) {
-      ptrdiff_t slot = uv->location - old_lp;
-      uv->location = &entry_lp[slot];
-    }}
+    sv_rebase_open_upvalues(&vm->open_upvalues, vm->jit_resume.params, entry_bp, (size_t)rp);
+    sv_rebase_open_upvalues(&vm->open_upvalues, vm->jit_resume.locals, entry_lp, (size_t)rl);
   }
   
   if (!resuming) {

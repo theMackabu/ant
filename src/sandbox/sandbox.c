@@ -467,15 +467,15 @@ uint8_t *ant_sandbox_build_error_payload(
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, value);
   GC_ROOT_PIN(js, fallback_stack);
-  
+
   ant_value_t obj = Ant_Exception_Value(js, value);
   ant_value_t captured_stack = Ant_Exception_Stack(js, value);
-  
+
   if (vtype(captured_stack) == kTypeString) fallback_stack = captured_stack;
   const char *name = "Error";
   const char *message = "";
   const char *stack = "";
-  
+
   if (vtype(obj) == kTypeObject) {
     const char *n = get_str_prop(js, obj, "name", 4, NULL);
     const char *m = get_str_prop(js, obj, "message", 7, NULL);
@@ -490,14 +490,14 @@ uint8_t *ant_sandbox_build_error_payload(
   char cbuf_stack[512];
   js_cstr_t cstr = {0};
   const char *display;
-  
+
   if (is_err(value))
     display = *stack ? stack : *message ? message : name;
   else {
     cstr = js_to_cstr(js, value, cbuf_stack, sizeof(cbuf_stack));
     display = cstr.ptr ? cstr.ptr : "";
   }
-  
+
   size_t name_len = strlen(name);
   size_t message_len = strlen(message);
   size_t stack_len = strlen(stack);
@@ -516,7 +516,7 @@ uint8_t *ant_sandbox_build_error_payload(
   p = sandbox_write_bytes_string(p, stack, stack_len);
   p = sandbox_write_bytes_string(p, display, display_len);
   *len_out = payload_len;
-  
+
   if (cstr.needs_free) free((void *)cstr.ptr);
   GC_ROOT_RESTORE(js, root_mark);
   return payload;
@@ -600,7 +600,7 @@ ant_value_t ant_sandbox_decode_error_value(ant_t *js, const void *payload, size_
   ant_value_t err = Ant_Error_Create(js, JS_ERR_GENERIC, error_message);
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, err);
-  
+
   if (is_object_type(err)) {
     if (name_len > 0) js_set(js, err, "name", js_mkstr(js, name, name_len));
     if (stack_len > 0) js_set(js, err, "stack", js_mkstr(js, stack, stack_len));
@@ -663,7 +663,7 @@ static bool sandbox_send_error_frame(ant_t *js, ant_value_t value, ant_value_t f
 static bool sandbox_send_uncaught_throw(ant_t *js) {
   if (!Ant_Exception_Pending(js)) return false;
   sandbox_send_error_frame(
-    js, Ant_Exception_Value(js, Ant_Exception_Peek(js)), 
+    js, Ant_Exception_Value(js, Ant_Exception_Peek(js)),
     Ant_Exception_Stack(js, Ant_Exception_Peek(js))
   );
   Ant_Exception_Clear(js);

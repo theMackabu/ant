@@ -71,13 +71,13 @@ static ant_value_t wrap_iter_next(ant_params_t) {
     if (vtype(inner) != kTypeUndefined) {
       ant_value_t inner_next = js_getprop_fallback(js, inner, "next");
       if (is_err(inner_next)) return inner_next;
-      
+
       ant_value_t inner_step = sv_vm_call(js->vm, js, inner_next, inner, NULL, 0, NULL, js_mkundef());
       if (is_err(inner_step)) return inner_step;
-      
+
       ant_value_t inner_done = js_getprop_fallback(js, inner_step, "done");
       if (is_err(inner_done)) return inner_done;
-      
+
       if (!js_truthy(js, inner_done)) {
         ant_value_t inner_value = js_getprop_fallback(js, inner_step, "value");
         if (is_err(inner_value)) return inner_value;

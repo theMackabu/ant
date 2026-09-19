@@ -219,7 +219,7 @@ static ant_value_t tty_readstream__read(ant_params_t) {
 
 static ant_value_t tty_readstream__destroy(ant_params_t) {
   ant_value_t stream_obj = js_getthis(js);
-  
+
   tty_read_stream_state_t *state = tty_read_stream_state_from_obj(stream_obj);
   ant_value_t cb = nargs > 1 ? args[1] : js_mkundef();
   if (!state) return invoke_callback_if_needed(js, cb, js_mknull());
@@ -417,9 +417,9 @@ static ant_value_t maybe_callback_or_throw(
     if (is_err(result)) return result;
     return this_obj;
   }
-  
+
   if (!ok) return js_throw(js, make_stream_error(js, op, fd, 0));
-  
+
   return this_obj;
 }
 

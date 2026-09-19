@@ -407,6 +407,15 @@ gc_exact_edges_test = executable(
 )
 test('gc-exact-edges', gc_exact_edges_test)
 
+upvalue_close_order_test = executable(
+  'test-upvalue-close-order',
+  files('tests/test_upvalue_close_order.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('upvalue-close-order', upvalue_close_order_test)
+
 arguments_storage_test = executable(
   'test-arguments-storage',
   files('tests/test_arguments_storage.c'),

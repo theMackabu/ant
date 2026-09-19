@@ -615,14 +615,14 @@ static void net_socket_on_read(ant_conn_t *conn, ssize_t nread, void *user_data)
   if (is_err(chunk)) {
     GC_ROOT_SAVE(root_mark, socket->js);
     chunk = js_take_thrown(socket->js, chunk);
-    
+
     GC_ROOT_PIN(socket->js, chunk);
     socket->had_error = true;
-    
+
     net_emit(socket->js, socket->obj, "error", &chunk, 1);
     GC_ROOT_RESTORE(socket->js, root_mark);
     ant_conn_close(conn);
-    
+
     return;
   }
 
@@ -754,11 +754,11 @@ static ant_value_t js_net_socket_address(ant_params_t) {
 
   if (!socket) return Ant_Exception_Current(js);
   if (!socket || !socket->conn || !ant_conn_has_local_addr(socket->conn)) return out;
-  
+
   js_set(js, out, "address", js_mkstr(js, ant_conn_local_addr(socket->conn), strlen(ant_conn_local_addr(socket->conn))));
   js_set(js, out, "port", js_mknum(ant_conn_local_port(socket->conn)));
   js_set(js, out, "family", js_mkstr(js, ant_conn_local_family(socket->conn), strlen(ant_conn_local_family(socket->conn))));
-  
+
   return out;
 }
 

@@ -415,7 +415,7 @@ static void wt_emit_message_from_json(ant_worker_thread_t *wt, const char *json,
 
   ant_value_t s = js_mkstr(js, json, len);
   ant_value_t msg = json_parse_value(js, s);
-  
+
   if (is_err(msg)) {
     js_take_thrown(js, msg);
     msg = s;

@@ -119,7 +119,7 @@ static void fetch_error_response_body(fetch_request_t *req, ant_value_t reason) 
 
 static void fetch_reject(fetch_request_t *req, ant_value_t reason) {
   if (!req) return;
-  
+
   GC_ROOT_SAVE(root_mark, req->js);
   reason = Ant_Error_ConsumeMarker(req->js, reason);
   GC_ROOT_PIN(req->js, reason);
@@ -778,14 +778,14 @@ static ant_value_t fetch_upload_on_read(ant_params_t) {
   if (!fetch_get_upload_chunk(value, &chunk, &chunk_len)) {
     GC_ROOT_SAVE(root_mark, js);
     ant_value_t reason = Ant_Error_Create(js, JS_ERR_TYPE, "fetch request body stream chunk must be a Uint8Array");
-    
+
     GC_ROOT_PIN(js, reason);
     ant_http_request_cancel(req->http_req);
-    
+
     fetch_reject(req, reason);
     fetch_request_release(req);
     GC_ROOT_RESTORE(js, root_mark);
-    
+
     return js_mkundef();
   }
 
@@ -793,20 +793,20 @@ static ant_value_t fetch_upload_on_read(ant_params_t) {
   if (rc != 0) {
     GC_ROOT_SAVE(root_mark, js);
     ant_value_t reason = Ant_Error_Create(js, JS_ERR_TYPE, uv_strerror(rc));
-    
+
     GC_ROOT_PIN(js, reason);
     ant_http_request_cancel(req->http_req);
-    
+
     fetch_reject(req, reason);
     fetch_request_release(req);
     GC_ROOT_RESTORE(js, root_mark);
-    
+
     return js_mkundef();
   }
 
   fetch_upload_schedule_next_read(req);
   fetch_request_release(req);
-  
+
   return js_mkundef();
 }
 
@@ -841,13 +841,13 @@ static void fetch_start_upload(fetch_request_t *req) {
     GC_ROOT_SAVE(root_mark, js);
     ant_value_t reason = js_take_thrown(js, reader);
     GC_ROOT_PIN(js, reason);
-    
+
     if (req->http_req) ant_http_request_cancel(req->http_req);
     fetch_reject(req, reason);
-    
+
     if (!req->http_req) fetch_request_release(req);
     GC_ROOT_RESTORE(js, root_mark);
-    
+
     return;
   }
 

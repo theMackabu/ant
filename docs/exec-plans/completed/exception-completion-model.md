@@ -127,3 +127,97 @@ The task-entry source snapshot, pinned binaries, checksums, focused results,
 and performance samples are retained under the local directory recorded in
 `/tmp/ant-exception-model-current`. The reusable performance fixture sources
 are in `.cache/module-perf-20260918-111408/fixtures/`.
+
+## Fresh-PGO comparison against installed Ant (2026-09-18)
+
+Compared the installed `59a2d6b3` binary with revision `5903d763` after the user
+regenerated PGO. Both executables, the candidate profile, and all workload inputs
+were pinned. This measures the combined source and PGO changes; the installed
+binary's original profile and complete build configuration are unavailable.
+
+Ran 120 successful processes serially on an Apple M4 Pro with 24 GiB RAM and
+macOS 27.0 (26A428). Every workload used ABBA then BAAB order (four samples per
+binary); Splay and EarleyBoyer received another ABBA/BAAB block (eight per binary)
+because of variation. Values below are medians of per-process results. Desktop
+applications remained active. Pre-run audits found no concurrent Ant/build
+processes, and no agent-started validation or builds overlapped the timings.
+
+| bench-v8 case | Installed score | Candidate score | Score change |
+| --- | ---: | ---: | ---: |
+| richards | 6414.37 | 6366.72 | -0.74% |
+| deltablue | 6387.00 | 6208.48 | -2.80% |
+| crypto | 13529.79 | 13520.35 | -0.07% |
+| raytrace | 12228.45 | 11946.04 | -2.31% |
+| earley-boyer | 12131.80 | 12329.69 | +1.63% |
+| regexp | 7542.34 | 7463.68 | -1.04% |
+| splay | 5966.89 | 7145.80 | +19.76% |
+| navier-stokes | 24376.39 | 24376.39 | +0.00% |
+| Geometric mean | 9872.06 | 10028.93 | +1.59% |
+
+For the following timings, negative change means faster. Iteration keeps the
+original best-of-five timing; async iteration keeps the median of nine rounds.
+Game of Life uses 500 warmup ticks plus 5000 measured ticks on the seeded 150x40
+grid. Microbench retains its full adaptive calibration and reports ns/op.
+
+| Workload / metric | Installed | Candidate | Time change |
+| --- | ---: | ---: | ---: |
+| iteration: for..of array ms | 54.000 | 53.000 | -1.85% |
+| iteration: for..of map.values() ms | 73.500 | 76.500 | +4.08% |
+| iteration: for..of, no prop read ms | 40.500 | 38.000 | -6.17% |
+| iteration: indexed for ms | 57.500 | 56.500 | -1.74% |
+| life-fixed: render_ms | 0.446 | 0.447 | +0.27% |
+| life-fixed: tick_ms | 0.332 | 0.328 | -1.13% |
+| async-iteration: async-next ms | 36.817 | 36.696 | -0.33% |
+| async-iteration: async-next-control ms | 39.761 | 41.106 | +3.38% |
+| async-iteration: fulfilled-promise ms | 17.750 | 17.916 | +0.93% |
+| async-iteration: fulfilled-promise-control ms | 19.344 | 20.229 | +4.57% |
+| async-iteration: readable-stream ms | 105.517 | 103.061 | -2.33% |
+| async-iteration: readable-stream-control ms | 105.094 | 105.842 | +0.71% |
+| async-iteration: sync-result ms | 5.687 | 5.796 | +1.92% |
+| async-iteration: sync-result-control ms | 1.827 | 1.802 | -1.37% |
+
+The original seeded Game of Life player was also run through tick 5000 with its
+per-tick logging: simulation averaged 1.35% less time and rendering 0.90% more.
+All fixed-work state hashes match Node; all original-player final states match.
+Iteration returned exact expected counts in separate Node/A/B validation runs,
+and async iteration and bench-v8 passed their built-in output checks.
+
+All 43 microbench rows completed. Their equal-weight geometric mean normalized
+time increased 1.58%. Larger repeated slowdowns were:
+
+| Microbench | Installed ns/op | Candidate ns/op | Time change |
+| --- | ---: | ---: | ---: |
+| regexp_ascii | 88.375 | 108.180 | +22.41% |
+| regexp_utf16 | 96.355 | 114.480 | +18.81% |
+| regexp_replace | 133.520 | 164.115 | +22.91% |
+| array_push | 10.395 | 11.265 | +8.37% |
+| array_pop | 18.670 | 20.625 | +10.47% |
+| math_min | 7.025 | 7.720 | +9.89% |
+| bigint256_arith | 67.225 | 73.445 | +9.25% |
+
+The positive bench-v8 aggregate does not establish performance equivalence.
+The regex, array push/pop, and Math.min microbench slowdowns remain unresolved;
+no cause is assigned to the exception machinery without separating PGO effects.
+Splay's block gains ranged from 17.74% to 66.20%, so its combined 19.76% median
+gain is not a stable floor. Median Splay peak RSS was 1.147 GiB installed versus
+1.954 GiB candidate. This time-based workload does unequal work at different
+speeds; the memory result does not establish a leak or equal-work overhead.
+`bigint_shift_floor` was also variable; its apparent median gain should not be
+interpreted as a stable improvement. Other small deltas remain subject to noise.
+
+The pinned candidate passed all 4240 specs across 102 files plus the focused
+caught-exception-stack and inspector regressions. Preflight passed. Native
+long-error-message tests passed before PGO training and were not rebuilt here.
+No runtime code or checked-in benchmark sources were changed during measurement.
+
+- Baseline SHA256: `3d1dc26f314c48964ea0f66b76f0f2fb0b7c025787d9799ba7d6e210dcc05821`.
+- Candidate SHA256: `ae5d051b5f51da11074cdedcc3533e772ea388443bac91ac8b7a6a32dbe84854`.
+- Candidate profile SHA256: `0f17b3a7a3b79e273cabf96342ca83630101f4d4881dc9ecdabfd3ffab300c1e`.
+- Local evidence: `.cache/pgo-comparison-pdjc_4wa/`, including `report.md`,
+  `results.csv`, `summary.json`, `runs.json`, frozen fixtures, runner scripts,
+  input hashes, per-run stdout/stderr, process audits, and time/RSS statistics.
+
+The subsequent [performance and nested-finally follow-up](exception-performance-and-finally.md)
+records the regression attribution, restored upvalue cleanup, completion-lifetime
+fix, and fresh-profile results. The measurements above describe the earlier
+pinned `5903d763` build.

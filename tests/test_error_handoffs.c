@@ -4,6 +4,7 @@
 #include "gc/objects.h"
 #include "gc/roots.h"
 #include "modules/assert.h"
+#include "modules/generator.h"
 #include "modules/timer.h"
 #include "sandbox/sandbox.h"
 #include "silver/call.h"
@@ -45,6 +46,91 @@ static ant_value_t collect_native_target(ant_params_t) {
   gc_run(js);
   assert(gc_obj_is_marked(js_obj_ptr(call_new_target)));
   return call_new_target;
+}
+
+static ant_value_t collect_finally_completion(ant_params_t) {
+  sv_vm_t *vm = js->vm;
+  assert(vm->handler_depth > 0);
+  sv_handler_t *handler = &vm->handler_stack[vm->handler_depth - 1];
+  assert(handler->kind == SV_HANDLER_FINALLY);
+  assert(handler->completion.kind == SV_COMPLETION_RETURN);
+  ant_value_t value = handler->completion.value;
+  gc_run_minor(js);
+  assert(gc_obj_is_marked(js_obj_ptr(value)));
+  gc_run(js);
+  assert(gc_obj_is_marked(js_obj_ptr(value)));
+  assert(js_get(js, value, "answer") == js_mknum(42));
+  return js_mkundef();
+}
+
+static void CheckFinallyCompletionRoots(ant_t *js) {
+  init_generator_module(js);
+  js_set(js, js->global, "__collectFinally", js_mkfun(collect_finally_completion));
+  uintptr_t stack_base = (uintptr_t)js->cstk.main_base;
+  js_setstackbase(js, NULL);
+  const char *active =
+    "globalThis.__finallyResult = (() => {"
+    "try { return {answer: 42}; } finally {"
+    "try { throw 0; } catch {} __collectFinally(); } })();";
+  assert(!is_err(js_eval_bytecode(js, active, strlen(active))));
+  assert(js_get(js, js_get(js, js->global, "__finallyResult"), "answer") == js_mknum(42));
+
+  const char *suspended =
+    "globalThis.__finallyGenerator = (function*() {"
+    "yield 0;"
+    "try { return {answer: 42}; } finally {"
+    "yield 1; try { throw 0; } catch {} } })();"
+    "__finallyGenerator.next();";
+  ant_value_t status = js_eval_bytecode(js, suspended, strlen(suspended));
+  if (is_err(status)) print_error_value(js, status, js_mkundef(), "suspended finally: ");
+  assert(!is_err(status));
+  gc_run_minor(js);
+  gc_run(js);
+  const char *enter_finally = "__finallyGenerator.next();";
+  assert(!is_err(js_eval_bytecode(js, enter_finally, strlen(enter_finally))));
+  gc_run_minor(js);
+  gc_run(js);
+  const char *resume = "globalThis.__finallyResult = __finallyGenerator.next().value;";
+  assert(!is_err(js_eval_bytecode(js, resume, strlen(resume))));
+  ant_value_t value = js_get(js, js->global, "__finallyResult");
+  assert(gc_obj_is_marked(js_obj_ptr(value)));
+  assert(js_get(js, value, "answer") == js_mknum(42));
+  js_setstackbase(js, (void *)stack_base);
+}
+
+static void CheckFulfilledAwaitRoots(ant_t *js) {
+  for (int cancel = 0; cancel < 2; cancel++) {
+    GC_ROOT_SAVE(mark, js);
+    ant_value_t awaited = js_mkpromise(js);
+    GC_ROOT_PIN(js, awaited);
+    ant_value_t value = js_mkobj(js);
+    GC_ROOT_PIN(js, value);
+    js_set(js, value, "answer", js_mknum(42));
+    js_resolve_promise(js, awaited, value);
+
+    coroutine_t *coro = calloc(1, sizeof(*coro));
+    assert(coro);
+    sv_async_init_activation(coro, js, js_mkundef(), js_mkundef(),
+      js_mkundef(), js_mkundef(), js_mkundef(), 0);
+    js_await_result_t result = js_promise_await_coroutine(js, awaited, coro);
+    assert(result.state == JS_AWAIT_PENDING && coro->await_registered);
+    assert(coro->result == js_mkundef());
+    GC_ROOT_RESTORE(js, mark);
+
+    uintptr_t stack_base = (uintptr_t)js->cstk.main_base;
+    js_setstackbase(js, NULL);
+    gc_run_minor(js);
+    gc_run(js);
+    assert(gc_obj_is_marked(js_obj_ptr(value)));
+    assert(js_get(js, value, "answer") == js_mknum(42));
+    if (cancel) assert(coroutine_cancel(coro));
+    process_microtasks(js);
+    assert(!coro->await_registered);
+    assert(coro->result == (cancel ? js_mkundef() : value));
+    assert(coro->refcount == 1);
+    coroutine_release(coro);
+    js_setstackbase(js, (void *)stack_base);
+  }
 }
 
 static ant_value_t check_callback(ant_params_t) {
@@ -228,6 +314,10 @@ int main(void) {
   char stack_base;
   ant_t *js = ant_create();
   assert(js);
+  Ant_Exception_Set(js, js_true);
+  assert(!Ant_Exception_Pending(js) && Ant_Exception_Peek(js) == js_mkundef());
+  Ant_Exception_Set(js, js_mknum(7));
+  assert(!Ant_Exception_Pending(js) && Ant_Exception_Peek(js) == js_mkundef());
   js_setstackbase(js, &stack_base);
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, expected_reason);
@@ -379,7 +469,7 @@ int main(void) {
     ant_value_t value = Ant_Exception_Value(js, retained);
     assert(gc_obj_is_marked(js_obj_ptr(value)));
     assert(js_get(js, value, "answer") == js_mknum(42));
-    ant_offset_t stack_len;
+    size_t stack_len;
     const char *stack = js_getstr(js, Ant_Exception_Stack(js, retained), &stack_len);
     assert(stack && stack_len == 14 && memcmp(stack, "retained stack", 14) == 0);
     assert(!Ant_Exception_Pending(js));
@@ -389,6 +479,8 @@ int main(void) {
   CheckSandboxExceptionRecords(js);
   CheckFormattedErrorValues(js);
   CheckLongErrorMessages(js);
+  CheckFinallyCompletionRoots(js);
+  CheckFulfilledAwaitRoots(js);
   GC_ROOT_RESTORE(js, root_mark);
   js_destroy(js);
   puts("PASS error handoffs preserve values and exception ownership");

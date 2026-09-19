@@ -561,10 +561,10 @@ static ant_value_t timers_promises_on_abort(ant_params_t) {
 
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, reason);
-  
+
   timers_promises_settle(js, state, true, reason);
   GC_ROOT_RESTORE(js, root_mark);
-  
+
   return js_mkundef();
 }
 
@@ -590,7 +590,7 @@ static bool timers_promises_parse_options(
     if (error_out) *error_out = signal;
     return false;
   }
-  
+
   if (vtype(signal) != kTypeUndefined && vtype(signal) != kTypeNull && !abort_signal_is_signal(signal)) {
     if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "options.signal must be an AbortSignal");
     return false;

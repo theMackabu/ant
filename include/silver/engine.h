@@ -571,8 +571,9 @@ typedef enum {
 
 typedef struct {
   uint8_t *ip;
-  int      saved_sp;
-  uint8_t  kind;
+  int saved_sp;
+  uint8_t kind;
+  sv_completion_t completion;
 } sv_handler_t;
 
 struct sv_upvalue {

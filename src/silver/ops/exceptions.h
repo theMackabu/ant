@@ -1,8 +1,9 @@
 #ifndef SV_EXCEPTIONS_H
 #define SV_EXCEPTIONS_H
 
-#include "silver/engine.h"
 #include "errors.h"
+#include "silver/engine.h"
+#include "silver/upvalues.h"
 
 typedef enum {
   SV_FINALLY_RET_JUMP = 0,
@@ -20,21 +21,6 @@ static inline void sv_clear_completion(sv_vm_t *vm) {
   frame->completion.jump_finallies = 0;
   frame->completion.jump_pops = 0;
 }
-
-static inline void sv_close_upvalues_from_slot(sv_vm_t *vm, ant_value_t *slot) {
-  sv_upvalue_t **pp = &vm->open_upvalues;
-  while (*pp) {
-  sv_upvalue_t *uv = *pp;
-  ant_value_t *loc = uv->location;
-  if (sv_slot_in_vm_stack(vm, loc) && loc >= slot) {
-    uv->closed = *loc;
-    uv->location = &uv->closed;
-    *pp = uv->next;
-    uv->next = NULL;
-    gc_upvalue_write_barrier(vm->js, uv, uv->closed);
-  }
-  else pp = &uv->next;
-}}
 
 static inline ant_value_t sv_op_throw(sv_vm_t *vm) {
   return vm->stack[--vm->sp];
@@ -91,9 +77,13 @@ static inline ant_value_t sv_op_finally(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
 
   int32_t off = sv_get_i32(ip + 1);
   sv_handler_t *h = &vm->handler_stack[vm->handler_depth++];
+  
   h->kind = SV_HANDLER_FINALLY;
   h->ip = ip + sv_op_size[OP_FINALLY] + off;
   h->saved_sp = 0;
+  h->completion = frame->completion;
+  
+  sv_clear_completion(vm);
   frame->handler_top = (uint16_t)vm->handler_depth;
   
   return js_mkundef();
@@ -171,33 +161,32 @@ static inline sv_finally_ret_t sv_op_finally_ret(
   sv_handler_t h = vm->handler_stack[--vm->handler_depth];
   frame->handler_top = (uint16_t)vm->handler_depth;
 
-  if (frame->completion.kind == SV_COMPLETION_THROW) {
-    *completion_val = frame->completion.value;
-    sv_clear_completion(vm);
+  if (h.completion.kind == SV_COMPLETION_THROW) {
+    *completion_val = h.completion.value;
     return SV_FINALLY_RET_THROW;
   }
 
-  if (frame->completion.kind == SV_COMPLETION_RETURN) {
-    ant_value_t ret = frame->completion.value;
-    sv_clear_completion(vm);
+  if (h.completion.kind == SV_COMPLETION_RETURN) {
+    ant_value_t ret = h.completion.value;
     if (vm->handler_depth > frame->handler_base) {
-      uint8_t *finally_ip = sv_vm_unwind_for_return(vm, ret);
-      if (finally_ip) {
-        *resume_ip = finally_ip;
-        return SV_FINALLY_RET_JUMP;
-      }
-    }
+    uint8_t *finally_ip = sv_vm_unwind_for_return(vm, ret);
+    if (finally_ip) {
+      *resume_ip = finally_ip;
+      return SV_FINALLY_RET_JUMP;
+    }}
+    
     *completion_val = ret;
     return SV_FINALLY_RET_RETURN;
   }
 
-  if (frame->completion.kind == SV_COMPLETION_JUMP) {
-    uint8_t *target = frame->completion.jump_ip;
-    int n_fin = frame->completion.jump_finallies;
-    int n_pop = frame->completion.jump_pops;
-    sv_clear_completion(vm);
+  if (h.completion.kind == SV_COMPLETION_JUMP) {
+    uint8_t *target = h.completion.jump_ip;
+    int n_fin = h.completion.jump_finallies;
+    int n_pop = h.completion.jump_pops;
+    
     uint8_t *finally_ip = sv_vm_unwind_for_jump(vm, target, n_fin, n_pop);
     *resume_ip = finally_ip ? finally_ip : target;
+    
     return SV_FINALLY_RET_JUMP;
   }
 

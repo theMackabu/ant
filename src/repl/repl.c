@@ -745,7 +745,7 @@ static cmd_result_t cmd_copy(ant_t *js, ant_history_t *history, const char *arg)
 
   js_take_thrown(js, js_mkundef());
   ant_value_t result = js_mkundef();
-  
+
   if (repl_evaluate(js, arg, strlen(arg), &result) == REPL_EVAL_INTERRUPTED) {
     fputs("^C\n", stdout);
     return CMD_OK;

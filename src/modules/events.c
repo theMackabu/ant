@@ -1157,7 +1157,7 @@ static bool eventemitter_dispatch(
 
   evt->emitting--;
   evt_sweep(evt);
-  
+
   return invoked;
 }
 
@@ -1172,7 +1172,7 @@ static bool eventemitter_emit_args_impl(
 
 static ant_value_t js_eventemitter_emit(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "emit requires at least 1 argument (event)");
-  
+
   ant_value_t key = evt_key_from_arg(args[0]);
   if (!key) return js_mkerr(js, "event must be a string or Symbol");
   
@@ -1180,7 +1180,7 @@ static ant_value_t js_eventemitter_emit(ant_params_t) {
     js, js_getthis(js), key,
     nargs > 1 ? &args[1] : NULL, nargs - 1
   );
-  
+
   return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : js_bool(invoked);
 }
 

@@ -4211,7 +4211,7 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
 
   parse_arena_rewind(mark);
   GC_ROOT_RESTORE(c->js, exception_mark);
-  
+
   return true;
 }
 
@@ -5005,7 +5005,7 @@ static void emit_iter_close_seq(sv_compiler_t *c, bool is_async) {
     emit_op(c, OP_ITER_CLOSE_ASYNC);
     emit_op(c, OP_AWAIT);
     emit_op(c, OP_ITER_CLOSE_CHECK);
-  } else { 
+  } else {
     emit_op(c, OP_ITER_CLOSE);
     emit(c, 0);
   }
@@ -5042,7 +5042,7 @@ static void emit_return_from_stack(sv_compiler_t *c) {
     emit_get_local(c, loop->iter_completion_local);
     break;
   }
-  
+
   emit_close_upvals(c);
   emit_op(c, OP_RETURN);
 }

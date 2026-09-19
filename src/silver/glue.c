@@ -30,13 +30,13 @@ __attribute__((noinline)) ant_value_t Ant_Silver_InvokeNativeScoped(
 ) {
   ant_value_t previous = Ant_Exception_Peek(js);
   size_t exception_mark = 0;
-  
+
   if (is_err(previous)) {
     exception_mark = gc_root_scope(js);
     GC_ROOT_PIN(js, previous);
     Ant_Exception_Clear(js);
   }
-  
+
   sv_vm_t *vm = js->vm;
   sv_native_frame_t frame = {
     .caller = vm ? vm->native_frame : NULL,
@@ -45,15 +45,15 @@ __attribute__((noinline)) ant_value_t Ant_Silver_InvokeNativeScoped(
 
   bool rooted_target = vm && gc_value_is_heap_ref(new_target);
   if (rooted_target) vm->native_frame = &frame;
-  
+
   ant_value_t result = fn(js, args, nargs, new_target);
   if (rooted_target) vm->native_frame = frame.caller;
-  
+
   result = Ant_Silver_FinishNativeCall(js, result);
-  
+
   if (!is_err(result) && is_err(previous)) Ant_Exception_Set(js, previous);
   if (is_err(previous)) GC_ROOT_RESTORE(js, exception_mark);
-  
+
   return result;
 }
 
@@ -594,7 +594,7 @@ ant_value_t jit_helper_destructure_close(
   ant_value_t *iter_buf, int suppress_error
 ) {
   if (
-    vtype(iter_buf[2]) == kTypeNumber && 
+    vtype(iter_buf[2]) == kTypeNumber &&
     (int)js_getnum(iter_buf[2]) == SV_ITER_GENERIC
   ) return sv_iter_close(vm, js, iter_buf[0], suppress_error != 0);
   return js_mkundef();
@@ -1152,7 +1152,7 @@ static sv_upvalue_t *jit_capture_upvalue(
 ) {
   sv_upvalue_t **pp = open_upvalues ? open_upvalues : &vm->open_upvalues;
 
-  while (*pp && (*pp)->location > slot) pp = &(*pp)->next;
+  while (*pp && (uintptr_t)(*pp)->location > (uintptr_t)slot) pp = &(*pp)->next;
   if (*pp && (*pp)->location == slot) return *pp;
 
   sv_upvalue_t *uv = js_upvalue_alloc(vm->js);
@@ -1176,12 +1176,14 @@ void jit_helper_take_open_upvalues(
   while (*pp) {
     sv_upvalue_t *uv = *pp;
     ant_value_t *loc = uv->location;
-    if (loc < lo) break;
-    if (loc >= hi) { pp = &uv->next; continue; }
+    
+    if ((uintptr_t)loc < (uintptr_t)lo) break;
+    if ((uintptr_t)loc >= (uintptr_t)hi) { pp = &uv->next; continue; }
     
     *pp = uv->next;
     sv_upvalue_t **dst = open_upvalues;
-    while (*dst && (*dst)->location > loc) dst = &(*dst)->next;
+    while (*dst && (uintptr_t)(*dst)->location > (uintptr_t)loc) dst = &(*dst)->next;
+    
     uv->next = *dst;
     *dst = uv;
   }
@@ -1200,15 +1202,17 @@ void jit_helper_take_open_upvalues_rebase(
   while (*pp) {
     sv_upvalue_t *uv = *pp;
     ant_value_t *loc = uv->location;
-    if (loc < lo) break;
-    if (loc >= hi) { pp = &uv->next; continue; }
+    
+    if ((uintptr_t)loc < (uintptr_t)lo) break;
+    if ((uintptr_t)loc >= (uintptr_t)hi) { pp = &uv->next; continue; }
 
     *pp = uv->next;
     ant_value_t *dst_loc = dst_slots + (loc - src_slots);
     uv->location = dst_loc;
 
     sv_upvalue_t **dst = open_upvalues;
-    while (*dst && (*dst)->location > dst_loc) dst = &(*dst)->next;
+    while (*dst && (uintptr_t)(*dst)->location > (uintptr_t)dst_loc) dst = &(*dst)->next;
+    
     uv->next = *dst;
     *dst = uv;
   }
@@ -1270,8 +1274,8 @@ void jit_helper_close_upval(
   
   while (*pp) {
     sv_upvalue_t *uv = *pp;
-    if (uv->location < lo) break;
-    if (uv->location >= lo && uv->location < hi) {
+    if ((uintptr_t)uv->location < (uintptr_t)lo) break;
+    if ((uintptr_t)uv->location < (uintptr_t)hi) {
       uv->closed = *uv->location;
       uv->location = &uv->closed;
       *pp = uv->next;
@@ -1297,7 +1301,7 @@ void jit_helper_adopt_open_upvalues(sv_vm_t *vm, sv_upvalue_t **open_upvalues) {
     }
     
     sv_upvalue_t **pp = &vm->open_upvalues;
-    while (*pp && (*pp)->location > uv->location) pp = &(*pp)->next;
+    while (*pp && (uintptr_t)(*pp)->location > (uintptr_t)uv->location) pp = &(*pp)->next;
     uv->next = *pp;
     *pp = uv;
     uv = next;
@@ -1340,7 +1344,7 @@ ant_value_t jit_helper_bailout_resume(
   if (!closure || !closure->func) return vm && vm->js
     ? js_mkerr_typed(vm->js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "invalid bailout closure")
     : mkval(kTypeError, 0);
-  
+
   sv_jit_on_bailout_at(closure->func, "resume", (int)bc_offset);
   
   return jit_resume_in_interpreter(
@@ -1362,7 +1366,7 @@ ant_value_t jit_helper_promote_resume(
   if (!closure || !closure->func) return vm && vm->js
     ? js_mkerr_typed(vm->js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "invalid promotion closure")
     : mkval(kTypeError, 0);
-  
+
   sv_func_t *fn = closure->func;
 
   if (fn->jit_code_cold) {
@@ -1554,7 +1558,7 @@ ant_value_t jit_helper_object_template(sv_vm_t *vm, ant_t *js, sv_func_t *func, 
         GC_ROOT_RESTORE(js, mark);
         return Ant_Exception_Current(js);
       }
-      
+
       ip += size + sv_op_size[OP_DEFINE_SLOT];
     }
     

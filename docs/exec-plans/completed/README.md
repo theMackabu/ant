@@ -15,6 +15,9 @@ removed during condensation. See the [plan lifecycle](../index.md).
 
 ## Plans
 
+- [Native Calls and Fulfilled Await Performance](native-async-performance.md)
+- [Exception Performance and Nested Finally](exception-performance-and-finally.md)
+- [Native Profile of the GC Experiment Branch](bench-v8-native-profile.md)
 - [Silver Instruction Sizes](silver-instruction-sizes.md)
 - [Native Call Fast Path](native-call-fast-path.md)
 - [Exception Completion Model](exception-completion-model.md)

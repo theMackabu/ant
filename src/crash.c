@@ -638,7 +638,7 @@ static ant_value_t crash_report_response_text(ant_params_t) {
 
   ant_value_t text_fn = js_getprop_fallback(js, args[0], "text");
   if (is_err(text_fn)) return text_fn;
-  
+
   if (!is_callable(text_fn)) {
     if (!crash_report_status_printed) {
       crash_report_status_printed = true;

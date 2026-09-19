@@ -297,7 +297,10 @@ static ant_value_t fs_stream_push_chunk(ant_t *js, ant_value_t stream_obj, ant_v
 }
 
 static ant_value_t fs_stream_callback(ant_t *js, ant_value_t callback, ant_value_t value) {
-  if (!is_callable(callback)) return js_mkundef();
+  if (!is_callable(callback)) {
+    Ant_Error_ConsumeMarker(js, value);
+    return js_mkundef();
+  }
   return Ant_Error_CallCallback(js, callback, js_mkundef(), &value, 1);
 }
 

@@ -150,7 +150,7 @@ napi_status ant_napi_check_pending_from_result(napi_env env, ant_value_t result)
   if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
 
   if (is_err(result) || Ant_Exception_Pending(nenv->js)) {
-    napi_mark_pending_exception(env, is_err(result) 
+    napi_mark_pending_exception(env, is_err(result)
       ? result : Ant_Exception_Current(nenv->js));
     napi_set_last_raw(env, napi_pending_exception, "pending exception");
     return napi_pending_exception;
@@ -216,10 +216,10 @@ static napi_status napi_throw_with_message(
     napi_mark_pending_exception(env, Ant_Exception_Current(nenv->js));
     return napi_pending_exception;
   }
-  
-  if (is_err(error)) 
+
+  if (is_err(error))
     return napi_set_last(env, napi_generic_failure, "failed to create error");
-  
+
   return napi_throw(env, (napi_value)error);
 }
 
@@ -270,7 +270,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_and_clear_last_exception(
   ant_value_t exception = is_err(nenv->exception)
     ? nenv->exception
     : Ant_Exception_Peek(nenv->js);
-  
+
   *result = NAPI_RETURN(nenv, Ant_Exception_Value(nenv->js, exception));
   nenv->exception = js_mkundef();
   js_take_thrown(nenv->js, exception);

@@ -834,7 +834,7 @@ static ant_value_t js_ws_writer_abort(ant_params_t) {
     js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Writer has no stream"));
     return p;
   }
-  
+
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
   return writable_stream_abort(js, stream_obj, reason);
 }
@@ -846,13 +846,13 @@ static ant_value_t js_ws_writer_close(ant_params_t) {
     js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Writer has no stream"));
     return p;
   }
-  
+
   if (writable_stream_close_queued_or_in_flight(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
     js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot close an already-closing stream"));
     return p;
   }
-  
+
   return writable_stream_close(js, stream_obj);
 }
 

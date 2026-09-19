@@ -521,7 +521,7 @@ ant_value_t js_obj_to_func_ex(ant_t *js, ant_value_t obj, uint8_t flags) {
   closure->bound_argc = 0;
   closure->super_val = js_mkundef();
   closure->call_flags = flags;
-  
+
   if (flags & SV_CALL_HAS_BOUND_ARGS) {
     closure->u.bound.argv = NULL;
     closure->u.bound.args_arr = js_mkundef();
@@ -696,17 +696,17 @@ static ant_value_t to_string_val(ant_t *js, ant_value_t val) {
 
 bool js_truthy(ant_t *js, ant_value_t v) {
   static const void *dispatch[] = {
-    [kTypeObject]       = &&l_true,
-    [kTypeFunction]      = &&l_true,
-    [kTypeBuiltin]     = &&l_true,
-    [kTypeArray]       = &&l_true,
+    [kTypeObject]    = &&l_true,
+    [kTypeFunction]  = &&l_true,
+    [kTypeBuiltin]   = &&l_true,
+    [kTypeArray]     = &&l_true,
     [kTypePromise]   = &&l_true,
     [kTypeGenerator] = &&l_true,
     [kTypeSymbol]    = &&l_true,
     [kTypeBool]      = &&l_bool,
-    [kTypeString]       = &&l_str,
+    [kTypeString]    = &&l_str,
     [kTypeBigInt]    = &&l_bigint,
-    [kTypeNumber]       = &&l_num,
+    [kTypeNumber]    = &&l_num,
   };
 
   uint8_t t = vtype(v);
@@ -2865,14 +2865,14 @@ static ant_value_t js_mkrope(ant_t *js, ant_value_t left, ant_value_t right, ant
 
 static ant_value_t mkobj_with_inobj_limit(ant_t *js, ant_offset_t parent, uint8_t inobj_limit) {
   ant_object_t *obj = obj_alloc(js, kTypeObject, inobj_limit);
-  
+
   if (!obj) {
-    ant_value_t failure = is_err(js->exception_oom) 
+    ant_value_t failure = is_err(js->exception_oom)
       ? js->exception_oom : mkval(kTypeError, 0);
     Ant_Exception_Set(js, failure);
     return failure;
   }
-  
+
   return mkref(kTypeObject, obj);
 }
 
@@ -2884,16 +2884,16 @@ ant_value_t Ant_Exception_CreateRecord(ant_t *js, ant_value_t value, ant_value_t
   GC_ROOT_SAVE(mark, js);
   GC_ROOT_PIN(js, value);
   GC_ROOT_PIN(js, stack);
-  
+
   ant_object_t *record = obj_alloc(js, kTypeError, 0);
   if (record) {
     record->u.exception.value = value;
     record->u.exception.stack = stack;
   }
-  
+
   GC_ROOT_RESTORE(js, mark);
-  return record ? mkref(kTypeError, record) 
-    : is_err(js->exception_oom) 
+  return record ? mkref(kTypeError, record)
+    : is_err(js->exception_oom)
     ? js->exception_oom : mkval(kTypeError, 0);
 }
 
@@ -3806,6 +3806,20 @@ bool js_try_get_own_data_prop(ant_t *js, ant_value_t obj, const char *key, size_
   ant_value_t as_obj = js_as_obj(obj);
   if (is_proxy(as_obj)) return false;
 
+  ant_object_t *ptr = js_obj_ptr(as_obj);
+  if (ptr && ptr->shape && !(ptr->type_tag == kTypeArray && is_length_key(key, key_len))) {
+    const char *interned = intern_find(key, key_len);
+    int32_t slot = interned ? ant_shape_lookup_interned(ptr->shape, interned) : -1;
+    
+    if (slot >= 0) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
+      if (!prop || prop->has_getter || prop->has_setter) return false;
+      
+      *out = ant_object_prop_get_unchecked(ptr, (uint32_t)slot);
+      return true;
+    }
+  }
+
   prop_meta_t meta;
   bool has_meta = lookup_string_prop_meta(js, as_obj, key, key_len, &meta);
   if (has_meta && (meta.has_getter || meta.has_setter)) return false;
@@ -3842,7 +3856,7 @@ static ant_value_t call_proto_accessor(
   
   js->errsite = saved_errsite;
   if (is_setter) return is_err(result) ? result : (arg ? *arg : js_mkundef());
-  
+
   return result;
 }
 
@@ -8727,13 +8741,13 @@ static bool define_desc_field(
   } else if (!lkp_proto(js, descriptor, name, name_len).obj) return true;
 
   ant_value_t v = js_getprop_fallback_len(js, descriptor, name, name_len);
-  
-  if (is_err(v)) { 
+
+  if (is_err(v)) {
     *err_out = v;
     return false;
   }
-  
-  if (Ant_Exception_Pending(js)) { 
+
+  if (Ant_Exception_Pending(js)) {
     *err_out = js_throw(js, js_take_thrown(js, js_mkundef()));
     return false;
   }
@@ -9182,7 +9196,7 @@ static ant_value_t strobj_call_custom_inspect(ant_t *js, ant_value_t obj) {
   GC_ROOT_SAVE(exception_mark, js);
   ant_value_t saved = Ant_Exception_Peek(js);
   GC_ROOT_PIN(js, saved);
-  
+
   ant_value_t depth_arg = js_mknum((double)(MAX_STRINGIFY_DEPTH - js->stringify.depth));
   ant_value_t result;
 
@@ -9201,22 +9215,22 @@ static ant_value_t strobj_call_custom_inspect(ant_t *js, ant_value_t obj) {
 
   Ant_Exception_Set(js, saved);
   GC_ROOT_RESTORE(js, exception_mark);
-  
+
   return result;
 }
 
 ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode) {
   GC_ROOT_SAVE(exception_mark, js);
   ant_value_t saved = Ant_Exception_Peek(js);
-  
+
   GC_ROOT_PIN(js, saved);
   ant_value_t result = object_define_property(js, obj, prop, descriptor);
 
-  if (!reflect_mode) { 
+  if (!reflect_mode) {
     GC_ROOT_RESTORE(js, exception_mark);
     return result;
   }
-  
+
   if (is_err(result)) {
     Ant_Exception_Set(js, saved);
     GC_ROOT_RESTORE(js, exception_mark);
@@ -10500,30 +10514,41 @@ static ant_value_t builtin_array_pop(ant_params_t) {
       js_setprop(js, arr, js->length_str, tov(0.0));
       return js_mkundef();
     }
+    
     len--;
     char idxstr[16];
+    
     size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)len);
     ant_value_t result = proxy_aware_get_elem(js, arr, idxstr, idxlen);
+    
     if (is_err(result)) return result;
     ant_value_t del = proxy_delete(js, arr, idxstr, idxlen);
+    
     if (is_err(del)) return del;
     js_setprop(js, arr, js->length_str, tov((double) len));
+    
     return result;
   }
 
   ant_offset_t doff = get_dense_buf(arr);
   if (doff) {
-    ant_offset_t len = get_array_length(js, arr);
-    ant_offset_t dense_len = dense_iterable_length(js, arr);
+    ant_object_t *ptr = (ant_object_t *)(uintptr_t)doff;
+    bool is_array = ptr->type_tag == kTypeArray;
+    
+    ant_offset_t len = is_array ? ptr->u.array.len : get_array_length(js, arr);
     if (len == 0) return js_mkundef();
-    if (len != dense_len) goto pop_slow;
+    if (len > ptr->u.array.cap) goto pop_slow;
     len--;
-    ant_value_t result = (len < dense_len) ? dense_get(doff, len) : js_mkundef();
+    
+    ant_value_t result = ptr->u.array.data[len];
     if (is_empty_slot(result)) result = js_mkundef();
-    if (len < dense_len) {
-      dense_set(js, doff, len, T_EMPTY);
-    }
-    array_len_set(js, arr, len);
+    ptr->u.array.data[len] = T_EMPTY;
+    
+    if (is_array) {
+      ptr->u.array.len = (uint32_t)len;
+      ptr->flags.dense_length_fits = true;
+    } else array_len_set(js, arr, len);
+    
     return result;
   }
 
@@ -15403,7 +15428,7 @@ void Ant_Promise_Observe(ant_t *js, ant_value_t promise, ant_value_t on_fulfille
   GC_ROOT_PIN(js, promise);
   GC_ROOT_PIN(js, on_fulfilled);
   GC_ROOT_PIN(js, on_rejected);
-  
+
   ant_value_t result = is_err(promise) ? promise : js_promise_then(js, promise, on_fulfilled, on_rejected);
   if (is_err(result)) {
     ant_value_t reason = Ant_Error_ConsumeMarker(js, result);
@@ -15412,7 +15437,7 @@ void Ant_Promise_Observe(ant_t *js, ant_value_t promise, ant_value_t on_fulfille
     ant_promise_state_t *pd = get_promise_data(js, result, false);
     if (pd) pd->has_rejection_handler = true;
   }
-  
+
   GC_ROOT_RESTORE(js, root_mark);
 }
 
@@ -15547,8 +15572,21 @@ js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, cor
     return result;
   }
 
-  promise_handler_t h = { js_mkundef(), js_mkundef(), js_mkundef(), coro };
-  if (!promise_handler_append(pd, &h)) {
+  bool direct_resume = 
+    pd->state == 1 && pd->handler_count == 0 &&
+    !pd->trigger_queued && !pd->processing && 
+    pd->trigger_parent == js_mkundef();
+    
+  promise_handler_t h = { 
+    js_mkundef(), js_mkundef(), 
+    js_mkundef(), coro
+  };
+  
+  bool queued = direct_resume
+    ? queue_await_resume_job(coro, pd->value)
+    : promise_handler_append(pd, &h);
+  
+  if (!queued) {
     result.state = JS_AWAIT_ERROR;
     result.value = js_mkerr(js, "out of memory");
     return result;
@@ -15559,8 +15597,9 @@ js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, cor
   coroutine_hold(coro, CORO_HOLD_AWAIT);
 
   js_mark_promise_rejection_handled_chain(js, promise);
+  
   if (pd->state == 0) gc_root_pending_promise(js, js_obj_ptr(js_as_obj(promise)));
-  else queue_promise_trigger(js, promise);
+  else if (!direct_resume) queue_promise_trigger(js, promise);
 
   return result;
 }
@@ -18830,6 +18869,8 @@ static ant_t *isolate_init(void *buf, size_t len) {
   memset(buf, 0, len);
   
   js = (ant_t *)buf;
+  js->exception = js_mkundef();
+  js->exception_oom = js_mkundef();
   js_init_intern_cache(js);
   
   js->pool.rope.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
@@ -19375,17 +19416,16 @@ ant_t *ant_create() {
     return NULL;
   }
 
-  js->exception = js_mkundef();
   ant_value_t oom = Ant_Error_Create(
     js, JS_ERR_INTERNAL | JS_ERR_NO_STACK,
     "out of memory creating exception"
   );
-  
+
   if (is_err(oom)) {
     js_destroy(js);
     return NULL;
   }
-  
+
   js->exception_oom = Ant_Exception_CreateRecord(js, oom, js_mkundef());
   if (!is_err(js->exception_oom) || vdata(js->exception_oom) < 2) {
     js_destroy(js);
@@ -19781,7 +19821,7 @@ ant_value_t js_cfunc_expose_named(ant_t *js, ant_value_t cfunc, const char *name
 
   const ant_cfunc_meta_t *stored = ant_cfunc_meta_create(&named_meta);
   if (!stored) return js_mkerr(js, "oom");
-  
+
   ant_value_t named = mkref(kTypeBuiltin, stored);
   uint16_t idx = js->cfunc_name_cache.len++;
   

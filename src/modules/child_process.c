@@ -174,6 +174,7 @@ static void fprint_js_str_raw(FILE *out, ant_t *js, ant_value_t s) {
   ant_offset_t len = 0;
   ant_offset_t off = vstr(js, s, &len);
   const char *ptr = (const char *)(uintptr_t)off;
+  
   if (ptr && len > 0) fwrite(ptr, 1, (size_t)len, out);
   if (len == 0 || ptr[len - 1] != '\n') fputc('\n', out);
 }
@@ -523,18 +524,18 @@ static void on_child_read(
       if (is_err(chunk)) {
         GC_ROOT_SAVE(root_mark, cp->js);
         chunk = js_take_thrown(cp->js, chunk);
-        
+
         GC_ROOT_PIN(cp->js, chunk);
         eventemitter_emit_args(cp->js, obj, "error", &chunk, 1);
-        
+
         GC_ROOT_RESTORE(cp->js, root_mark);
         close_child_pipe(cp, kind, true);
         check_completion(cp);
-        
+
         if (buf->base) free(buf->base);
         return;
       }
-      
+
       ant_value_t accepted = stream_readable_push(cp->js, obj, chunk, js_mkundef());
       *seen += (size_t)nread;
       js_set(cp->js, obj, "length", js_mknum((double)*seen));
@@ -961,7 +962,7 @@ static ant_value_t create_child_stream_object(ant_t *js, child_process_t *cp, ch
 static void abort_child_object_creation(child_process_t *cp) {
   cp->close_emitted = true;
   cp->promise = js_mkundef();
-  
+
   if (cp->process.started) ant_process_stage_kill(&cp->process, SIGKILL);
   else cp->exited = true;
 
@@ -972,15 +973,15 @@ static void abort_child_object_creation(child_process_t *cp) {
     if (i != CHILD_STREAM_STDIN) uv_read_stop((uv_stream_t *)pipe);
     close_child_handle(cp, (uv_handle_t *)pipe);
   }
-  
+
   try_free_child(cp);
 }
 
 static ant_value_t create_child_object(ant_t *js, child_process_t *cp) {
   ant_value_t obj = js_mkobj(js);
   cp->child_obj = obj;
-  
-  if (is_object_type(js->builtins.child_process_proto)) 
+
+  if (is_object_type(js->builtins.child_process_proto))
     js_set_proto_init(obj, js->builtins.child_process_proto);
   
   js_set_native(obj, cp, CHILD_PROCESS_NATIVE_TAG);
@@ -1946,10 +1947,9 @@ ant_value_t child_process_exec_file_result(
   if (!child_process_plan_apply_options(js, &plan, options) ||
       !child_process_plan_add_values(js, &plan, values)) {
     ant_process_plan_dispose(&plan);
-    return ant_process_plan_rejected_result(js,
-      Ant_Exception_Pending(js) 
-        ? Ant_Exception_Value(js, Ant_Exception_Peek(js)) 
-        : js_mkerr(js, "Invalid process plan"));
+    return ant_process_plan_rejected_result(js, Ant_Exception_Pending(js)
+      ? Ant_Exception_Value(js, Ant_Exception_Peek(js))
+      : js_mkerr(js, "Invalid process plan"));
   }
   
   return ant_process_plan_submit(js, &plan);
@@ -1983,10 +1983,9 @@ ant_value_t child_process_pipeline_result(
 
 invalid:
   ant_process_plan_dispose(&plan);
-  return ant_process_plan_rejected_result(js,
-    Ant_Exception_Pending(js) 
-      ? Ant_Exception_Value(js, Ant_Exception_Peek(js)) 
-      : js_mkerr(js, "Invalid process plan"));
+  return ant_process_plan_rejected_result(js, Ant_Exception_Pending(js)
+    ? Ant_Exception_Value(js, Ant_Exception_Peek(js))
+    : js_mkerr(js, "Invalid process plan"));
 }
 
 static bool sync_encoding_wants_string(ant_t *js, ant_value_t options_arg) {
@@ -2190,7 +2189,7 @@ static ant_value_t spawn_sync_impl(ant_native_params_t, bool force_shell) {
     free(stderr_buf);
     return stdout_val;
   }
-  
+
   ant_value_t stderr_val = sync_make_output(js, stderr_buf, stderr_len, as_string);
   if (is_err(stderr_val)) {
     free(stdout_buf);
@@ -2614,7 +2613,7 @@ static ant_value_t sync_build_result(
 ) {
   ant_value_t stdout_val = sync_make_output(js, out->buf, out->len, opts->encode_as_string);
   if (is_err(stdout_val)) return stdout_val;
-  
+
   ant_value_t stderr_val = sync_make_output(js, err->buf, err->len, opts->encode_as_string);
   if (is_err(stderr_val)) return stderr_val;
 

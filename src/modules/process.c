@@ -697,7 +697,7 @@ static inline ant_value_t make_stdin_data_value(ant_t *js, const uv_buf_t *buf, 
   ant_value_t raw_val = ab
     ? create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, (size_t)nread, "Buffer")
     : js_mkstr(js, buf->base, (size_t)nread);
-  
+
   if (is_err(raw_val)) return raw_val;
 
   ant_value_t data_val = is_object_type(ps->stdin_state.decoder)
@@ -708,7 +708,7 @@ static inline ant_value_t make_stdin_data_value(ant_t *js, const uv_buf_t *buf, 
     js_take_thrown(js, data_val);
     data_val = raw_val;
   }
-  
+
   return data_val;
 }
 
@@ -732,22 +732,22 @@ static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
     if (is_err(data_val)) {
       GC_ROOT_SAVE(root_mark, js);
       ant_value_t error = js_take_thrown(js, data_val);
-      
+
       GC_ROOT_PIN(js, error);
       ps->stdin_state.paused = true;
       stdin_stop_reading(js);
-      
+
       eventemitter_emit_args(js, ps->stdin_obj, "error", &error, 1);
       GC_ROOT_RESTORE(js, root_mark);
-      
+
       goto cleanup;
     }
-    
+
     if (want_readable) {
       ant_value_t pushed = stream_readable_push(js, ps->stdin_obj, data_val, js_mkundef());
       if (!is_err(pushed)) eventemitter_emit_args(js, ps->stdin_obj, "readable", NULL, 0);
     }
-    
+
     if (want_data) eventemitter_emit_args(js, ps->stdin_obj, "data", &data_val, 1);
   }
 

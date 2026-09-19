@@ -526,9 +526,9 @@ ant_value_t headers_append_literal(ant_t *js, ant_value_t hdrs, const char *name
 
 static ant_value_t init_from_sequence(ant_t *js, hdr_list_t *l, ant_value_t seq) {
   js_iter_t it;
-  
-  if (!js_iter_open(js, seq, &it)) return Ant_Exception_Pending(js) 
-    ? Ant_Exception_Current(js) 
+
+  if (!js_iter_open(js, seq, &it)) return Ant_Exception_Pending(js)
+    ? Ant_Exception_Current(js)
     : js_mkerr_typed(js, JS_ERR_TYPE, "Headers init is not iterable");
 
   ant_value_t pair;

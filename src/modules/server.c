@@ -1221,7 +1221,7 @@ static void server_handle_fetch_result(server_request_t *req, ant_value_t result
     req->response_promise = result;
     server_request_retain(req);
     Ant_Promise_Observe(js, result, fulfill, reject);
-    
+
     return;
   }
 

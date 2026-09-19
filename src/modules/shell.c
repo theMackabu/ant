@@ -601,11 +601,11 @@ static ant_value_t sh_process_builder_add_redirect(
       return js_mkerr(js, "Out of memory");
     return js_mkundef();
   }
-  
+
   char *path = sh_resolve_path_text(js, context, target, target_len);
   if (!path) return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : js_mkerr(js, "Out of memory");
   bool added = ant_process_plan_add_redirect(&builder->plan, process_kind, path);
-  
+
   free(path);
   return added ? js_mkundef() : js_mkerr(js, "Out of memory");
 }

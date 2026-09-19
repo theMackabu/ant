@@ -222,9 +222,9 @@ static ant_value_t js_syntax_parse_javascript(ant_params_t) {
   }
 
   const char *actual_source_type =
-    options.parse_mode == SYNTAX_PARSE_MODULE || 
+    options.parse_mode == SYNTAX_PARSE_MODULE ||
     has_module_syntax ? "module" : "script";
-    
+
   ant_value_t result = sv_ast_export_public(
     js, program,
     source, source_len,
@@ -234,7 +234,7 @@ static ant_value_t js_syntax_parse_javascript(ant_params_t) {
 
   parse_arena_rewind(mark);
   js->filename = saved_filename;
-  
+
   return result;
 }
 

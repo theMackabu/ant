@@ -356,7 +356,7 @@ static inline ant_value_t sv_iter_close(
 ) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, iterator);
-  
+
   ant_value_t result = js_getprop_fallback(js, iterator, "return");
   GC_ROOT_PIN(js, result);
 
@@ -382,11 +382,11 @@ done:
 static inline ant_value_t sv_op_iter_close(sv_vm_t *vm, ant_t *js, bool suppress_error) {
   ant_value_t tag_val = vm->stack[vm->sp - 1];
   ant_value_t result = js_mkundef();
-  
+
   if (vtype(tag_val) == kTypeNumber && (int)js_getnum(tag_val) == SV_ITER_GENERIC)
     result = sv_iter_close(vm, js, vm->stack[vm->sp - 3], suppress_error);
   vm->sp -= 3;
-  
+
   return result;
 }
 
