@@ -21,7 +21,6 @@ struct coroutine {
   ant_value_t this_val;
   ant_value_t super_val;
   ant_value_t new_target;
-  ant_value_t result;
   ant_value_t async_func;
   ant_value_t owner_gen;
   ant_value_t *args;
@@ -38,7 +37,6 @@ struct coroutine {
   uint8_t hold_bits;
 
   bool is_generator: 1;
-  bool is_error: 1;
   bool await_registered: 1;
 
   uint64_t gc_epoch;
@@ -78,7 +76,8 @@ ant_value_t reject_coroutine_wrapper(ant_params_t);
 // TODO: move to promise.c
 js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);
 
-void js_promise_clear_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);
-void settle_and_resume_coroutine(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error);
+void Ant_Promise_ClearAwaitCoroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);
+void Ant_Coroutine_ResumeAwaitJob(ant_t *js, coroutine_t *coro, ant_value_t value);
+void Ant_Coroutine_SettleAndResume(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error);
 
 #endif

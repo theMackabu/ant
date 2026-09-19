@@ -166,6 +166,44 @@ async function main() {
   }
   console.log("PASS");
 
+  console.log("\nTest 6: result access preserves getter order and descriptor changes");
+  for (const async of [false, true]) {
+    for (const kind of ['value-getter', 'mutating-done', 'proxy']) {
+      const reads = [];
+      let result = { done: false, value: 42 };
+      if (kind === 'value-getter') {
+        Object.defineProperty(result, 'value', { get() { reads.push('value'); return 42; } });
+      } else if (kind === 'mutating-done') {
+        Object.defineProperty(result, 'done', { get() {
+          reads.push('done');
+          Object.defineProperty(result, 'value', { get() { reads.push('value'); return 42; } });
+          return false;
+        } });
+      } else {
+        result = new Proxy(result, { get(target, key) {
+          if (key === 'done' || key === 'value') reads.push(key);
+          return Reflect.get(target, key);
+        } });
+      }
+      let first = true;
+      const iterable = {
+        [Symbol.iterator]() { return this; },
+        [Symbol.asyncIterator]() { return this; },
+        next() {
+          if (!first) return { done: true };
+          first = false;
+          return result;
+        },
+      };
+      let sum = 0;
+      if (async) sum = await collectAsync(iterable);
+      else for (const value of iterable) sum += value;
+      assertEq(sum, 42, kind + ' result');
+      assertEq(reads.join(','), kind === 'value-getter' ? 'value' : 'done,value', kind + ' reads');
+    }
+  }
+  console.log("PASS");
+
   console.log("\nAll iterator result fast-path tests passed");
 }
 

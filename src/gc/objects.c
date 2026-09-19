@@ -785,7 +785,6 @@ void gc_mark_coroutine(ant_t *js, coroutine_t *c) {
   gc_mark_value(js, c->async_func);
   gc_mark_value(js, c->async_promise);
   gc_mark_value(js, c->awaited_promise);
-  gc_mark_value(js, c->result);
   gc_mark_value(js, c->owner_gen);
   gc_mark_value(js, c->super_val);
   gc_mark_value(js, c->new_target);

@@ -207,7 +207,16 @@ static inline void sv_iter_result_unpack(
   ant_t *js, ant_value_t result,
   ant_value_t *out_done, ant_value_t *out_value
 ) {
-  *out_done = sv_iter_result_get_named(js, result, js->intern.done, "done", 4);
+  ant_object_t *ptr = is_object_type(result) ? js_obj_ptr(js_as_obj(result)) : NULL;
+  bool should_fallback = false;
+
+  if (js->intern.done && sv_try_get_shape_data_prop(js, ptr, js->intern.done, out_done, &should_fallback)) {
+    if (!js->intern.value || !sv_try_get_shape_data_prop(js, ptr, js->intern.value, out_value, &should_fallback))
+      *out_value = js_getprop_fallback_len(js, result, "value", 5);
+    return;
+  }
+
+  *out_done = js_getprop_fallback_len(js, result, "done", 4);
   *out_value = sv_iter_result_get_named(js, result, js->intern.value, "value", 5);
 }
 

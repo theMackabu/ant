@@ -3804,9 +3804,10 @@ bool js_try_get_own_data_prop(ant_t *js, ant_value_t obj, const char *key, size_
   else if (t != kTypeObject && t != kTypeArray) return false;
 
   ant_value_t as_obj = js_as_obj(obj);
-  if (is_proxy(as_obj)) return false;
-
   ant_object_t *ptr = js_obj_ptr(as_obj);
+  
+  if (ptr && ptr->flags.is_exotic && is_proxy(as_obj)) return false;
+
   if (ptr && ptr->shape && !(ptr->type_tag == kTypeArray && is_length_key(key, key_len))) {
     const char *interned = intern_find(key, key_len);
     int32_t slot = interned ? ant_shape_lookup_interned(ptr->shape, interned) : -1;
@@ -15539,7 +15540,7 @@ static ant_value_t make_promise_resolving_functions(
   return js_mkundef();
 }
 
-void js_promise_clear_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro) {
+void Ant_Promise_ClearAwaitCoroutine(ant_t *js, ant_value_t promise, coroutine_t *coro) {
   if (vtype(promise) != kTypePromise || !coro) return;
 
   ant_promise_state_t *pd = get_promise_data(js, promise, false);
@@ -15552,9 +15553,9 @@ void js_promise_clear_await_coroutine(ant_t *js, ant_value_t promise, coroutine_
 
   if (!pd->handlers) return;
   promise_handler_t *h = NULL;
-  while ((h = (promise_handler_t *)utarray_next(pd->handlers, h))) {
+  
+  while ((h = (promise_handler_t *)utarray_next(pd->handlers, h)))
     if (h->await_coro == coro) h->await_coro = NULL;
-  }
 }
 
 js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro) {
@@ -15594,7 +15595,7 @@ js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, cor
 
   coro->awaited_promise = promise;
   coro->await_registered = true;
-  coroutine_hold(coro, CORO_HOLD_AWAIT);
+  if (!direct_resume) coroutine_hold(coro, CORO_HOLD_AWAIT);
 
   js_mark_promise_rejection_handled_chain(js, promise);
   
@@ -15637,7 +15638,7 @@ void js_process_promise_handlers(ant_t *js, ant_value_t promise) {
     if (handler.await_coro) {
       coroutine_t *await_coro = handler.await_coro;
       h->await_coro = NULL;
-      settle_and_resume_coroutine(js, await_coro, val, state != 1);
+      Ant_Coroutine_SettleAndResume(js, await_coro, val, state != 1);
       continue;
     }
     

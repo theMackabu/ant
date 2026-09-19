@@ -15,6 +15,8 @@ removed during condensation. See the [plan lifecycle](../index.md).
 
 ## Plans
 
+- [Coroutine Resume Performance Recovery](coroutine-resume-performance.md)
+- [Coroutine Resume Arguments](coroutine-resume-arguments.md)
 - [Native Calls and Fulfilled Await Performance](native-async-performance.md)
 - [Exception Performance and Nested Finally](exception-performance-and-finally.md)
 - [Native Profile of the GC Experiment Branch](bench-v8-native-profile.md)

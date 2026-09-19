@@ -838,7 +838,7 @@ static inline void process_microtask_entry(ant_t *js, microtask_entry_t *entry) 
     GC_ROOT_PIN(js, value);
 
     if (coro->await_registered && coro->await_resume_job == entry)
-      settle_and_resume_coroutine(js, coro, value, false);
+      Ant_Coroutine_ResumeAwaitJob(js, coro, value);
 
     coroutine_release(coro);
     GC_ROOT_RESTORE(js, root_mark);

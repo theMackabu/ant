@@ -290,7 +290,7 @@ static void ant_wasm_process_microtask(
     coroutine_t *coro = task->target.coroutine;
     GC_ROOT_PIN(js, value);
     if (coro->await_registered)
-      settle_and_resume_coroutine(js, coro, value, false);
+      Ant_Coroutine_SettleAndResume(js, coro, value, false);
     coroutine_release(coro);
     GC_ROOT_RESTORE(js, root_mark);
     return;

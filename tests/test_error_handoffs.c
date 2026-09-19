@@ -98,24 +98,60 @@ static void CheckFinallyCompletionRoots(ant_t *js) {
   js_setstackbase(js, (void *)stack_base);
 }
 
-static void CheckFulfilledAwaitRoots(ant_t *js) {
+static coroutine_t *captured_await_coro;
+
+static ant_value_t capture_await_coroutine(ant_params_t) {
+  assert(js->active_async_coro && !captured_await_coro);
+  captured_await_coro = js->active_async_coro;
+  coroutine_retain(captured_await_coro);
+  return js_mkundef();
+}
+
+static ant_value_t StartTestAwait(ant_t *js, ant_value_t value, coroutine_t **coro) {
+  js_set(js, js->global, "__captureAwaitCoro", js_mkfun(capture_await_coroutine));
+  js_set(js, js->global, "__awaitInput", value);
+  const char *source =
+    "globalThis.__awaitOutput = (async function() {"
+    "__captureAwaitCoro(); const value = await __awaitInput;"
+    "globalThis.__awaitResumed = true; return value; })();";
+  js_set(js, js->global, "__awaitResumed", js_false);
+  bool was_draining = js->microtasks_draining;
+  js->microtasks_draining = true;
+  ant_value_t status = js_eval_bytecode(js, source, strlen(source));
+  js->microtasks_draining = was_draining;
+  assert(!is_err(status));
+  assert(captured_await_coro && captured_await_coro->await_registered);
+  assert(captured_await_coro->act && captured_await_coro->act->frame_count > 0);
+  *coro = captured_await_coro;
+  captured_await_coro = NULL;
+  ant_value_t output = js_get(js, js->global, "__awaitOutput");
+  assert(vtype(output) == kTypePromise);
+  promise_mark_handled(output);
+  js_set(js, js->global, "__awaitInput", js_mkundef());
+  js_set(js, js->global, "__awaitOutput", js_mkundef());
+  return output;
+}
+
+static void CheckAwaitValueRoots(ant_t *js) {
+  for (int input_kind = 0; input_kind < 3; input_kind++) {
   for (int cancel = 0; cancel < 2; cancel++) {
     GC_ROOT_SAVE(mark, js);
+    ant_value_t output = js_mkundef();
+    GC_ROOT_PIN(js, output);
+    GC_ROOT_SAVE(input_mark, js);
     ant_value_t awaited = js_mkpromise(js);
     GC_ROOT_PIN(js, awaited);
     ant_value_t value = js_mkobj(js);
     GC_ROOT_PIN(js, value);
     js_set(js, value, "answer", js_mknum(42));
-    js_resolve_promise(js, awaited, value);
+    if (input_kind == 0) js_resolve_promise(js, awaited, value);
+    else if (input_kind == 2) js_reject_promise(js, awaited, value);
 
-    coroutine_t *coro = calloc(1, sizeof(*coro));
-    assert(coro);
-    sv_async_init_activation(coro, js, js_mkundef(), js_mkundef(),
-      js_mkundef(), js_mkundef(), js_mkundef(), 0);
-    js_await_result_t result = js_promise_await_coroutine(js, awaited, coro);
-    assert(result.state == JS_AWAIT_PENDING && coro->await_registered);
-    assert(coro->result == js_mkundef());
-    GC_ROOT_RESTORE(js, mark);
+    coroutine_t *coro = NULL;
+    output = StartTestAwait(js, awaited, &coro);
+    assert(js_promise_get_settlement(js, output, NULL) == JS_PROMISE_PENDING);
+    if (input_kind == 1) js_resolve_promise(js, awaited, value);
+    GC_ROOT_RESTORE(js, input_mark);
 
     uintptr_t stack_base = (uintptr_t)js->cstk.main_base;
     js_setstackbase(js, NULL);
@@ -123,14 +159,28 @@ static void CheckFulfilledAwaitRoots(ant_t *js) {
     gc_run(js);
     assert(gc_obj_is_marked(js_obj_ptr(value)));
     assert(js_get(js, value, "answer") == js_mknum(42));
-    if (cancel) assert(coroutine_cancel(coro));
+    if (cancel) {
+      assert(coroutine_cancel(coro));
+      if (input_kind == 0) {
+        // The cancelled direct job still owns and traces its queued value.
+        gc_run_minor(js);
+        gc_run(js);
+        assert(gc_obj_is_marked(js_obj_ptr(value)));
+      }
+    }
     process_microtasks(js);
     assert(!coro->await_registered);
-    assert(coro->result == (cancel ? js_mkundef() : value));
+    ant_value_t resumed = js_mkundef();
+    js_promise_settlement_t state = js_promise_get_settlement(js, output, &resumed);
+    assert(state == (cancel ? JS_PROMISE_PENDING :
+      input_kind == 2 ? JS_PROMISE_REJECTED : JS_PROMISE_FULFILLED));
+    assert(js_get(js, js->global, "__awaitResumed") == js_bool(!cancel && input_kind != 2));
+    if (!cancel) assert(resumed == value && js_get(js, resumed, "answer") == js_mknum(42));
     assert(coro->refcount == 1);
     coroutine_release(coro);
     js_setstackbase(js, (void *)stack_base);
-  }
+    GC_ROOT_RESTORE(js, mark);
+  }}
 }
 
 static void RegisterTestAwait(ant_t *js, coroutine_t *coro, ant_value_t value) {
@@ -141,7 +191,6 @@ static void RegisterTestAwait(ant_t *js, coroutine_t *coro, ant_value_t value) {
     assert(queue_await_resume_job(coro, value));
     coro->awaited_promise = js_mkundef();
     coro->await_registered = true;
-    coroutine_hold(coro, CORO_HOLD_AWAIT);
   }
 }
 
@@ -161,11 +210,9 @@ static void CheckCancelledAwaitReplacement(ant_t *js) {
         assert(!is_err(first));
         js_resolve_promise(js, first, js_mknum(11));
       }
-      coroutine_t *coro = calloc(1, sizeof(*coro));
-      assert(coro);
-      sv_async_init_activation(coro, js, js_mkundef(), js_mkundef(),
-        js_mkundef(), js_mkundef(), js_mkundef(), 0);
-      RegisterTestAwait(js, coro, first);
+      coroutine_t *coro = NULL;
+      ant_value_t output = StartTestAwait(js, first, &coro);
+      GC_ROOT_PIN(js, output);
       assert(coroutine_cancel(coro));
 
       if (next_kind != 0) {
@@ -179,16 +226,44 @@ static void CheckCancelledAwaitReplacement(ant_t *js) {
 
       if (next_kind == 2) {
         // The stale job must neither settle nor detach the pending await.
-        assert(coro->await_registered && coro->result == js_mkundef());
+        assert(coro->await_registered);
+        assert(js_promise_get_settlement(js, output, NULL) == JS_PROMISE_PENDING);
         js_resolve_promise(js, next, js_mknum(22));
         process_microtasks(js);
       }
-      assert(!coro->await_registered && coro->result == js_mknum(22));
-      assert(coro->is_error == (next_kind == 3));
+      assert(!coro->await_registered);
+      ant_value_t resumed = js_mkundef();
+      js_promise_settlement_t state = js_promise_get_settlement(js, output, &resumed);
+      assert(state == (next_kind == 3 ? JS_PROMISE_REJECTED : JS_PROMISE_FULFILLED));
+      assert(resumed == js_mknum(22));
       assert(coro->refcount == 1);
       coroutine_release(coro);
       GC_ROOT_RESTORE(js, mark);
     }
+  }
+}
+
+static void CheckExplicitAwaitResume(ant_t *js) {
+  for (int rejected = 0; rejected < 2; rejected++) {
+    GC_ROOT_SAVE(mark, js);
+    coroutine_t *coro = NULL;
+    ant_value_t output = StartTestAwait(js, js_mknum(11), &coro);
+    GC_ROOT_PIN(js, output);
+    assert(coroutine_cancel(coro));
+
+    ant_value_t value = js_mkobj(js);
+    GC_ROOT_PIN(js, value);
+    js_set(js, value, "answer", js_mknum(42));
+    Ant_Coroutine_SettleAndResume(js, coro, value, rejected);
+    process_microtasks(js);
+
+    ant_value_t resumed = js_mkundef();
+    js_promise_settlement_t state = js_promise_get_settlement(js, output, &resumed);
+    assert(state == (rejected ? JS_PROMISE_REJECTED : JS_PROMISE_FULFILLED));
+    assert(resumed == value && !Ant_Exception_Pending(js));
+    assert(coro->refcount == 1);
+    coroutine_release(coro);
+    GC_ROOT_RESTORE(js, mark);
   }
 }
 
@@ -539,8 +614,9 @@ int main(void) {
   CheckFormattedErrorValues(js);
   CheckLongErrorMessages(js);
   CheckFinallyCompletionRoots(js);
-  CheckFulfilledAwaitRoots(js);
+  CheckAwaitValueRoots(js);
   CheckCancelledAwaitReplacement(js);
+  CheckExplicitAwaitResume(js);
   GC_ROOT_RESTORE(js, root_mark);
   js_destroy(js);
   puts("PASS error handoffs preserve values and exception ownership");

@@ -64,7 +64,6 @@ static inline void sv_async_init_activation(
     .this_val = this_val,
     .super_val = super_val,
     .new_target = new_target,
-    .result = js_mkundef(),
     .async_func = async_func,
     .owner_gen = js_mkundef(),
     .args = NULL,
@@ -75,7 +74,6 @@ static inline void sv_async_init_activation(
     .nargs = nargs,
     .refcount = 1,
     .hold_bits = 0,
-    .is_error = false,
     .await_registered = false,
   };
 }
@@ -262,7 +260,6 @@ static inline sv_await_result_t sv_await_value(sv_vm_t *vm, ant_t *js, ant_value
 
     coro->awaited_promise = js_mkundef();
     coro->await_registered = true;
-    coroutine_hold(coro, CORO_HOLD_AWAIT);
   } else {
     value = js_promise_assimilate_awaitable(js, value);
     if (is_err(value)) {

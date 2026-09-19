@@ -54,6 +54,25 @@ and remain allocated until dispatch, so their addresses provide distinct
 registration identities without a wrapping counter. See the cancellation and
 replacement cases in [test_error_handoffs.c](../../tests/test_error_handoffs.c).
 
+Each await registration has one reference owner: the queued direct job or the
+promise reaction's `CORO_HOLD_AWAIT`. Direct dispatch borrows its job's reference
+through `Ant_Coroutine_ResumeAwaitJob` and releases it after resume returns.
+It validates the job identity before directly clearing the registration.
+Generic settlement transfers the detached await hold into a local reference,
+or acquires one when no hold exists. Cancellation releases the detached hold
+immediately. Inner resume helpers borrow the caller's reference; legacy native
+wrappers acquire their own. A queued job pointer alone is not sufficient for
+generic settlement to borrow a reference: nested draining can dispatch that job.
+Direct jobs never install a promise reaction, so clearing their registration
+does not scan promise handlers.
+
+Resume values and their error flags are arguments to the synchronous coroutine
+resume helpers. The caller keeps the value rooted until resume returns: direct
+jobs pin it, promise reaction batches retain the source promise, and legacy
+native wrappers pin their argument. The VM's temporary resume-value field is
+not a separate GC root. Do not add redundant roots to the direct-job path or
+retain the last resume value in the coroutine after it suspends again.
+
 `js_mkerr*` creates and publishes an exception record; it does not return an
 ordinary Error value. `js_reject_promise` consumes exception results through
 `Ant_Error_ConsumeMarker`, even when the Promise has already settled. Ordinary
