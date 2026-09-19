@@ -308,10 +308,10 @@ bool process_has_event_listeners(ant_t *js, const char *event_type) {
 }
 
 bool process_report_uncaught_exception(ant_t *js) {
-  if (!js || !js->thrown_exists) return false;
+  if (!js || !Ant_Exception_Pending(js)) return false;
 
   GC_ROOT_SAVE(root_mark, js);
-  ant_value_t stack = js->thrown_stack;
+  ant_value_t stack = Ant_Exception_Stack(js, Ant_Exception_Peek(js));
   ant_value_t reason = js_take_thrown(js, js_mkundef());
   
   GC_ROOT_PIN(js, reason);
@@ -324,7 +324,7 @@ bool process_report_uncaught_exception(ant_t *js) {
     ant_value_t event_args[2] = { reason, origin };
     emit_process_event(js, "uncaughtException", event_args, 2);
 
-    if (js->thrown_exists) {
+    if (Ant_Exception_Pending(js)) {
       js_take_thrown(js, js_mkundef());
       if (!js->uncaught_nonfatal) exit(7);
     }
@@ -678,6 +678,15 @@ static void stdin_alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_bu
 #endif
 }
 
+static void stdin_stop_reading(ant_t *js) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return;
+  if (!ps->stdin_state.reading) return;
+  uv_read_stop((uv_stream_t *)&ps->stdin_state.tty);
+  ps->stdin_state.reading = false;
+  uv_unref((uv_handle_t *)&ps->stdin_state.tty);
+}
+
 static inline ant_value_t make_stdin_data_value(ant_t *js, const uv_buf_t *buf, ssize_t nread) {
   ant_process_state_t *ps = process_state(js);
   if (!ps) return js_mkundef();
@@ -688,12 +697,18 @@ static inline ant_value_t make_stdin_data_value(ant_t *js, const uv_buf_t *buf, 
   ant_value_t raw_val = ab
     ? create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, (size_t)nread, "Buffer")
     : js_mkstr(js, buf->base, (size_t)nread);
+  
+  if (is_err(raw_val)) return raw_val;
 
   ant_value_t data_val = is_object_type(ps->stdin_state.decoder)
     ? string_decoder_decode_value(js, ps->stdin_state.decoder, raw_val, false)
     : raw_val;
 
-  if (is_err(data_val)) data_val = raw_val;
+  if (is_err(data_val)) {
+    js_take_thrown(js, data_val);
+    data_val = raw_val;
+  }
+  
   return data_val;
 }
 
@@ -714,10 +729,25 @@ static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
 
   if (want_data || want_readable) {
     ant_value_t data_val = make_stdin_data_value(js, buf, nread);
+    if (is_err(data_val)) {
+      GC_ROOT_SAVE(root_mark, js);
+      ant_value_t error = js_take_thrown(js, data_val);
+      
+      GC_ROOT_PIN(js, error);
+      ps->stdin_state.paused = true;
+      stdin_stop_reading(js);
+      
+      eventemitter_emit_args(js, ps->stdin_obj, "error", &error, 1);
+      GC_ROOT_RESTORE(js, root_mark);
+      
+      goto cleanup;
+    }
+    
     if (want_readable) {
       ant_value_t pushed = stream_readable_push(js, ps->stdin_obj, data_val, js_mkundef());
       if (!is_err(pushed)) eventemitter_emit_args(js, ps->stdin_obj, "readable", NULL, 0);
     }
+    
     if (want_data) eventemitter_emit_args(js, ps->stdin_obj, "data", &data_val, 1);
   }
 
@@ -753,15 +783,6 @@ static void stdin_start_reading(ant_t *js) {
   else uv_unref((uv_handle_t *)&ps->stdin_state.tty);
   ps->stdin_state.reading = true;
   uv_read_start((uv_stream_t *)&ps->stdin_state.tty, stdin_alloc_buffer, on_stdin_read);
-}
-
-static void stdin_stop_reading(ant_t *js) {
-  ant_process_state_t *ps = process_state(js);
-  if (!ps) return;
-  if (!ps->stdin_state.reading) return;
-  uv_read_stop((uv_stream_t *)&ps->stdin_state.tty);
-  ps->stdin_state.reading = false;
-  uv_unref((uv_handle_t *)&ps->stdin_state.tty);
 }
 
 static void stdin_stop_reading_if_idle(ant_t *js) {

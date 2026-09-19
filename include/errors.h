@@ -67,10 +67,31 @@ __attribute__((format(printf, 4, 5)))
 ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props, const char *fmt, ...);
 ant_value_t js_make_error_silent(ant_t *js, js_err_type_t err_type, const char *message);
 
+__attribute__((format(printf, 3, 4)))
+ant_value_t Ant_Error_CreateFormatted(ant_t *js, js_err_type_t err_type, const char *fmt, ...);
+
 ant_value_t js_capture_raw_stack(ant_t *js);
 ant_value_t js_build_callsite_array(ant_t *js);
 ant_value_t js_throw(ant_t *js, ant_value_t value);
 ant_value_t js_take_thrown(ant_t *js, ant_value_t fallback);
+
+bool Ant_Exception_Pending(ant_t *js);
+ant_value_t Ant_Exception_Peek(ant_t *js);
+ant_value_t Ant_Exception_Current(ant_t *js);
+
+void Ant_Exception_Set(ant_t *js, ant_value_t completion);
+void Ant_Exception_Clear(ant_t *js);
+
+ant_value_t Ant_Exception_Value(ant_t *js, ant_value_t completion);
+ant_value_t Ant_Exception_Stack(ant_t *js, ant_value_t completion);
+ant_value_t Ant_Exception_Raise(ant_t *js, ant_value_t value, ant_value_t stack);
+ant_value_t Ant_Exception_CreateRecord(ant_t *js, ant_value_t value, ant_value_t stack);
+ant_value_t Ant_Error_ConsumeMarker(ant_t *js, ant_value_t value);
+
+ant_value_t Ant_Error_CallCallback(
+  ant_t *js, ant_value_t callback, ant_value_t this_value,
+  ant_value_t *args, int nargs
+);
 
 #define js_mkerr(js, ...) js_create_error(js, JS_ERR_TYPE, js_mkundef(), __VA_ARGS__)
 #define js_mkerr_typed(js, err_type, ...) js_create_error(js, err_type, js_mkundef(), __VA_ARGS__)

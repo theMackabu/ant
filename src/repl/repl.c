@@ -321,11 +321,6 @@ static ant_readline_result_t repl_readline_async(
   return status;
 }
 
-static inline void repl_clear_exception_state(ant_t *js) {
-  js->thrown_exists = false;
-  js->thrown_value = js_mkundef();
-}
-
 static void repl_decl_registry_free(repl_decl_registry_t *reg) {
   if (!reg) return;
   for (size_t i = 0; i < reg->count; i++)
@@ -500,10 +495,10 @@ static bool repl_precheck_and_commit_lexicals(
   repl_decl_pending_t pending = {0};
   bool ok = true;
 
-  repl_clear_exception_state(js);
+  js_take_thrown(js, js_mkundef());
   sv_ast_t *program = sv_parse(js, code, (ant_offset_t)len, false);
 
-  if (!program || js->thrown_exists) {
+  if (!program || Ant_Exception_Pending(js)) {
     ok = true;
     goto done;
   }
@@ -536,8 +531,8 @@ done:
   parse_arena_rewind(mark);
   repl_decl_pending_free(&pending);
 
-  if (ok && js->thrown_exists)
-    repl_clear_exception_state(js);
+  if (ok && Ant_Exception_Pending(js))
+    js_take_thrown(js, js_mkundef());
 
   return ok;
 }
@@ -564,7 +559,7 @@ static repl_eval_status_t repl_evaluate(
   js_eval_result_t evaluation = js_eval_bytecode_repl(js, code, len);
   ant_value_t result = evaluation.value;
 
-  if (evaluation.kind == JS_EVAL_ASYNC_ENTRY && !js->thrown_exists) {
+  if (evaluation.kind == JS_EVAL_ASYNC_ENTRY && !Ant_Exception_Pending(js)) {
     js_reactor_await_status_t await_status = js_reactor_blocking_await_promise(
       js, result, &result, 
       repl_eval_interrupt_pending, NULL
@@ -580,7 +575,7 @@ static repl_eval_status_t repl_evaluate(
     else if (await_status == JS_REACTOR_AWAIT_INVALID) result = js_mkerr(js, "invalid top-level await completion");
   } else {
     coroutine_release(evaluation.async_coro);
-    if (!js->thrown_exists) js_reactor_pump_repl_nowait(js);
+    if (!Ant_Exception_Pending(js)) js_reactor_pump_repl_nowait(js);
   }
 
   if (result_out) *result_out = result;
@@ -593,20 +588,20 @@ static void repl_eval_chunk(
   repl_print_mode_t print_mode
 ) {
   if (!repl_precheck_and_commit_lexicals(js, decl_registry, code, len)) {
-    if (js->thrown_exists) js_set(js, js_glob(js), "_error", js->thrown_value);
+    if (Ant_Exception_Pending(js)) js_set(js, js_glob(js), "_error", Ant_Exception_Value(js, Ant_Exception_Peek(js)));
     print_uncaught_throw(js);
     return;
   }
 
-  repl_clear_exception_state(js);
+  js_take_thrown(js, js_mkundef());
   ant_value_t result = js_mkundef();
   if (repl_evaluate(js, code, len, &result) == REPL_EVAL_INTERRUPTED) {
     fputs("^C\n", stdout);
     return;
   }
 
-  if (js->thrown_exists) {
-    js_set(js, js_glob(js), "_error", js->thrown_value);
+  if (Ant_Exception_Pending(js)) {
+    js_set(js, js_glob(js), "_error", Ant_Exception_Value(js, Ant_Exception_Peek(js)));
     if (print_uncaught_throw(js)) return;
   }
 
@@ -748,15 +743,16 @@ static cmd_result_t cmd_copy(ant_t *js, ant_history_t *history, const char *arg)
     return CMD_OK;
   }
 
-  repl_clear_exception_state(js);
+  js_take_thrown(js, js_mkundef());
   ant_value_t result = js_mkundef();
+  
   if (repl_evaluate(js, arg, strlen(arg), &result) == REPL_EVAL_INTERRUPTED) {
     fputs("^C\n", stdout);
     return CMD_OK;
   }
 
-  if (js->thrown_exists) {
-    js_set(js, js_glob(js), "_error", js->thrown_value);
+  if (Ant_Exception_Pending(js)) {
+    js_set(js, js_glob(js), "_error", Ant_Exception_Value(js, Ant_Exception_Peek(js)));
     if (print_uncaught_throw(js)) return CMD_OK;
   }
 

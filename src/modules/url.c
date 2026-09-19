@@ -44,10 +44,10 @@ static ant_value_t usp_array_len(ant_t *js, ant_value_t arr, ant_offset_t *out) 
 
   ant_value_t length = js_get(js, arr, "length");
   if (is_err(length)) return length;
-  if (js->thrown_exists) return mkval(kTypeError, 0);
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
   
   double len_num = js_to_number(js, length);
-  if (js->thrown_exists) return mkval(kTypeError, 0);
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
   
   if (isnan(len_num) || !isfinite(len_num))
     return js_mkerr_typed(js, JS_ERR_TYPE, "URLSearchParams sequence length must be finite");
@@ -59,7 +59,7 @@ static ant_value_t usp_array_len(ant_t *js, ant_value_t arr, ant_offset_t *out) 
 static ant_value_t usp_array_get(ant_t *js, ant_value_t arr, ant_offset_t idx) {
   ant_value_t value = js_arr_get(js, arr, idx);
   if (is_err(value)) return value;
-  if (js->thrown_exists) return mkval(kTypeError, 0);
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
   return value;
 }
 
@@ -851,7 +851,7 @@ static ant_value_t url_revoke_object_url(ant_params_t) {
 static ant_value_t usp_get(ant_params_t) {
   if (nargs < 1) return js_mknull();
   ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
-  if (is_err(key_sv)) return js_mknull();
+  if (is_err(key_sv)) return key_sv;
   const char *key = js_getstr(js, key_sv, NULL);
   if (!key) return js_mknull();
   ant_value_t entries = js_get_slot(js->this_val, SLOT_ENTRIES);
@@ -869,7 +869,7 @@ static ant_value_t usp_getAll(ant_params_t) {
   ant_value_t result = js_mkarr(js);
   if (nargs < 1) return result;
   ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
-  if (is_err(key_sv)) return result;
+  if (is_err(key_sv)) return key_sv;
   const char *key = js_getstr(js, key_sv, NULL);
   if (!key) return result;
   ant_value_t entries = js_get_slot(js->this_val, SLOT_ENTRIES);
@@ -887,13 +887,14 @@ static ant_value_t usp_getAll(ant_params_t) {
 static ant_value_t usp_has(ant_params_t) {
   if (nargs < 1) return js_false;
   ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
-  if (is_err(key_sv)) return js_false;
+  if (is_err(key_sv)) return key_sv;
   const char *key = js_getstr(js, key_sv, NULL);
   if (!key) return js_false;
   const char *match_val = NULL;
   if (nargs >= 2 && !is_undefined(args[1])) {
     ant_value_t mv_sv = (vtype(args[1]) == kTypeString) ? args[1] : js_tostring_val(js, args[1]);
-    if (!is_err(mv_sv)) match_val = js_getstr(js, mv_sv, NULL);
+    if (is_err(mv_sv)) return mv_sv;
+    match_val = js_getstr(js, mv_sv, NULL);
   }
   ant_value_t entries = js_get_slot(js->this_val, SLOT_ENTRIES);
   if (!is_special_object(entries)) return js_false;
@@ -913,10 +914,10 @@ static ant_value_t usp_set(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
   
-  if (is_err(key_sv)) return js_mkundef();
+  if (is_err(key_sv)) return key_sv;
   ant_value_t val_sv = (vtype(args[1]) == kTypeString) ? args[1] : js_tostring_val(js, args[1]);
   
-  if (is_err(val_sv)) return js_mkundef();
+  if (is_err(val_sv)) return val_sv;
   const char *key = js_getstr(js, key_sv, NULL);
   
   if (!key) return js_mkundef();
@@ -956,10 +957,10 @@ static ant_value_t usp_append(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
   
-  if (is_err(key_sv)) return js_mkundef();
+  if (is_err(key_sv)) return key_sv;
   ant_value_t val_sv = (vtype(args[1]) == kTypeString) ? args[1] : js_tostring_val(js, args[1]);
   
-  if (is_err(val_sv)) return js_mkundef();
+  if (is_err(val_sv)) return val_sv;
   ant_value_t entries = js_get_slot(js->this_val, SLOT_ENTRIES);
   
   if (!is_special_object(entries)) return js_mkundef();
@@ -977,7 +978,7 @@ static ant_value_t usp_delete(ant_params_t) {
   if (nargs < 1) return js_mkundef();
   ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
   
-  if (is_err(key_sv)) return js_mkundef();
+  if (is_err(key_sv)) return key_sv;
   const char *key = js_getstr(js, key_sv, NULL);
   
   if (!key) return js_mkundef();
@@ -985,7 +986,8 @@ static ant_value_t usp_delete(ant_params_t) {
   
   if (nargs >= 2 && !is_undefined(args[1])) {
     ant_value_t mv_sv = (vtype(args[1]) == kTypeString) ? args[1] : js_tostring_val(js, args[1]);
-    if (!is_err(mv_sv)) match_val = js_getstr(js, mv_sv, NULL);
+    if (is_err(mv_sv)) return mv_sv;
+    match_val = js_getstr(js, mv_sv, NULL);
   }
   
   ant_value_t entries = js_get_slot(js->this_val, SLOT_ENTRIES);
@@ -1163,7 +1165,7 @@ static ant_value_t js_URLSearchParams(ant_params_t) {
   if (!init_is_array && t == kTypeObject) {
     ant_value_t is_array_res = js_is_array_value_checked(js, init, &init_is_array);
     if (is_err(is_array_res)) return is_array_res;
-    if (js->thrown_exists) return mkval(kTypeError, 0);
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
   }
 
   if (init_is_array) {
@@ -1179,7 +1181,7 @@ static ant_value_t js_URLSearchParams(ant_params_t) {
       if (!pair_is_array && vtype(pair) == kTypeObject) {
         ant_value_t is_array_res = js_is_array_value_checked(js, pair, &pair_is_array);
         if (is_err(is_array_res)) return is_array_res;
-        if (js->thrown_exists) return mkval(kTypeError, 0);
+        if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
       }
       
       if (!pair_is_array)
@@ -1370,7 +1372,8 @@ static bool url_fmt_get_string_prop(
   size_t *len
 ) {
   *out = js_get(js, obj, name);
-  if (is_undefined(*out) || is_null(*out)) return false;
+  if (is_err(*out)) return false;
+  if (is_undefined(*out) || is_null(*out)) return true;
 
   ant_value_t str_val = vtype(*out) == kTypeString ? *out : js_tostring_val(js, *out);
   if (is_err(str_val)) return false;
@@ -1398,10 +1401,23 @@ static bool url_fmt_append_query_component(url_fmt_buf_t *b, const char *s, size
   return true;
 }
 
+static bool url_fmt_append_query_value(ant_t *js, url_fmt_buf_t *b, ant_value_t value) {
+  uint8_t type = vtype(value);
+  if (type == kTypeNumber && !isfinite(js_getnum(value))) return true;
+  if (type != kTypeString && type != kTypeNumber &&
+      type != kTypeBool && type != kTypeBigInt) return true;
+
+  ant_value_t str_val = type == kTypeString ? value : js_tostring_val(js, value);
+  if (is_err(str_val)) return false;
+
+  size_t len = 0;
+  const char *str = js_getstr(js, str_val, &len);
+  return str && url_fmt_append_query_component(b, str, len);
+}
+
 static bool url_fmt_append_query_object(ant_t *js, url_fmt_buf_t *b, ant_value_t query) {
   if (!is_special_object(query)) return true;
 
-  bool first = true;
   ant_iter_t it = js_prop_iter_begin(js, query);
   
   const char *key;
@@ -1409,38 +1425,30 @@ static bool url_fmt_append_query_object(ant_t *js, url_fmt_buf_t *b, ant_value_t
   ant_value_t val;
 
   while (js_prop_iter_next(&it, &key, &key_len, &val)) {
-    if (!first && !url_fmt_append_c(b, '&')) {
-      js_prop_iter_end(&it);
-      return false;
-    }
-    first = false;
-    
-    if (!url_fmt_append_query_component(b, key, key_len)) {
-      js_prop_iter_end(&it);
-      return false;
-    }
-    
-    if (!url_fmt_append_c(b, '=')) {
-      js_prop_iter_end(&it);
-      return false;
-    }
-    
-    ant_value_t str_val = vtype(val) == kTypeString ? val : js_tostring_val(js, val);
-    if (is_err(str_val)) {
-      js_prop_iter_end(&it);
-      return false;
-    }
-    
-    size_t val_len = 0;
-    const char *val_str = js_getstr(js, str_val, &val_len);
-    if (!val_str || !url_fmt_append_query_component(b, val_str, val_len)) {
-      js_prop_iter_end(&it);
-      return false;
+    val = js_getprop_fallback_len(js, query, key, key_len);
+    if (is_err(val)) goto fail;
+
+    bool is_array = false;
+    if (is_err(js_is_array_value_checked(js, val, &is_array))) goto fail;
+    ant_offset_t count = is_array ? js_arr_len(js, val) : 1;
+    if (Ant_Exception_Pending(js)) goto fail;
+
+    for (ant_offset_t i = 0; i < count; i++) {
+      ant_value_t item = is_array ? js_arr_get(js, val, i) : val;
+      if (is_err(item) || Ant_Exception_Pending(js)) goto fail;
+      if (b->len && !url_fmt_append_c(b, '&')) goto fail;
+      if (!url_fmt_append_query_component(b, key, key_len) ||
+          !url_fmt_append_c(b, '=') ||
+          !url_fmt_append_query_value(js, b, item)) goto fail;
     }
   }
 
   js_prop_iter_end(&it);
   return true;
+
+fail:
+  js_prop_iter_end(&it);
+  return false;
 }
 
 static bool url_fmt_protocol_needs_slashes(const char *protocol, size_t len) {
@@ -1493,14 +1501,15 @@ static ant_value_t builtin_url_format(ant_params_t) {
   size_t protocol_len = 0, auth_len = 0, host_len = 0, hostname_len = 0;
   size_t port_len = 0, pathname_len = 0, search_len = 0, hash_len = 0;
 
-  url_fmt_get_string_prop(js, obj, "protocol", &tmp, &protocol, &protocol_len);
-  url_fmt_get_string_prop(js, obj, "auth",     &tmp, &auth,     &auth_len);
-  url_fmt_get_string_prop(js, obj, "host",     &tmp, &host,     &host_len);
-  url_fmt_get_string_prop(js, obj, "hostname", &tmp, &hostname, &hostname_len);
-  url_fmt_get_string_prop(js, obj, "port",     &tmp, &port,     &port_len);
-  url_fmt_get_string_prop(js, obj, "pathname", &tmp, &pathname, &pathname_len);
-  url_fmt_get_string_prop(js, obj, "search",   &tmp, &search,   &search_len);
-  url_fmt_get_string_prop(js, obj, "hash",     &tmp, &hash,     &hash_len);
+  if (!url_fmt_get_string_prop(js, obj, "protocol", &tmp, &protocol, &protocol_len) ||
+      !url_fmt_get_string_prop(js, obj, "auth",     &tmp, &auth,     &auth_len) ||
+      !url_fmt_get_string_prop(js, obj, "host",     &tmp, &host,     &host_len) ||
+      !url_fmt_get_string_prop(js, obj, "hostname", &tmp, &hostname, &hostname_len) ||
+      !url_fmt_get_string_prop(js, obj, "port",     &tmp, &port,     &port_len) ||
+      !url_fmt_get_string_prop(js, obj, "pathname", &tmp, &pathname, &pathname_len) ||
+      !url_fmt_get_string_prop(js, obj, "search",   &tmp, &search,   &search_len) ||
+      !url_fmt_get_string_prop(js, obj, "hash",     &tmp, &hash,     &hash_len))
+    return Ant_Exception_Current(js);
 
   url_fmt_buf_t b = {0};
 
@@ -1511,6 +1520,7 @@ static ant_value_t builtin_url_format(ant_params_t) {
 
   bool has_host = (host && host_len > 0) || (hostname && hostname_len > 0);
   ant_value_t slashes_val = js_get(js, obj, "slashes");
+  if (is_err(slashes_val)) goto oom;
   
   bool needs_slashes =
     js_truthy(js, slashes_val) ||
@@ -1544,6 +1554,7 @@ static ant_value_t builtin_url_format(ant_params_t) {
     if (!url_fmt_append_n(&b, search, search_len)) goto oom;
   } else {
     ant_value_t query = js_get(js, obj, "query");
+    if (is_err(query)) goto oom;
     if (vtype(query) == kTypeString) {
       size_t qlen = 0;
       const char *q = js_getstr(js, query, &qlen);
@@ -1581,6 +1592,7 @@ static ant_value_t builtin_url_format(ant_params_t) {
 
 oom:
   free(b.buf);
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
   return js_mkerr(js, "allocation failure");
 }
 

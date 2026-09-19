@@ -796,8 +796,9 @@ static ant_value_t process_plan_make_result(
 oom:
   js_mkerr(js, "Out of memory");
 failed: {
-    ant_value_t error = js->thrown_exists
-      ? mkval(kTypeError, 0) : js_mkerr(js, "Out of memory");
+    ant_value_t error = Ant_Exception_Pending(js)
+      ? Ant_Exception_Current(js) 
+      : js_mkerr(js, "Out of memory");
     GC_ROOT_RESTORE(js, root_mark);
     return error;
   }
@@ -833,8 +834,9 @@ static void process_run_try_finish(ant_process_run_t *run) {
   return;
 
 result_error: {
-    ant_value_t error = run->js->thrown_exists
-      ? run->js->thrown_value : js_mkerr(run->js, "Out of memory");
+    ant_value_t error = Ant_Exception_Pending(run->js)
+      ? Ant_Exception_Value(run->js, Ant_Exception_Peek(run->js)) 
+      : js_mkerr(run->js, "Out of memory");
     error = js_take_thrown(run->js, error);
     GC_ROOT_PIN(run->js, error);
     js_reject_promise(run->js, run->promise, error);

@@ -177,7 +177,7 @@ static void inspector_eval_source(
   const char *source, size_t source_len, bool await_promise
 ) {
   const char *prev_filename = client->js->filename;
-  inspector_clear_exception_state(client->js);
+  Ant_Exception_Clear(client->js);
   js_set_filename(client->js, "[inspector]");
   js_eval_result_t evaluation = js_eval_bytecode_repl(client->js, source ? source : "", source_len);
   js_set_filename(client->js, prev_filename);

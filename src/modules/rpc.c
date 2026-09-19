@@ -187,13 +187,17 @@ static char *rpc_strdup_len(const char *str, size_t len) {
 
 static char *rpc_value_to_cstring(ant_t *js, ant_value_t value, const char *what) {
   if (vtype(value) != kTypeString) {
-    ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "%s must be a string", what);
-    (void)err;
+    js_mkerr_typed(js, JS_ERR_TYPE, "%s must be a string", what);
     return NULL;
   }
+  
   size_t len = 0;
   const char *str = js_getstr(js, value, &len);
-  return rpc_strdup_len(str ? str : "", len);
+  
+  char *copy = rpc_strdup_len(str ? str : "", len);
+  if (!copy) js_mkerr(js, "out of memory");
+  
+  return copy;
 }
 
 static bool rpc_parse_integrity_name(const char *name, uint32_t *out) {
@@ -268,12 +272,16 @@ static ant_value_t rpc_parse_integrity_options(
 
 static ant_value_t rpc_get_error_value(ant_t *js, const char *prefix, const char *name, ant_value_t reason) {
   const char *msg = NULL;
-  if (vtype(reason) == kTypeError && js->thrown_exists) reason = js->thrown_value;
+  
   if (is_object_type(reason)) {
     ant_value_t message = js_get(js, reason, "message");
+    if (is_err(message)) return message;
     if (vtype(message) == kTypeString) msg = js_getstr(js, message, NULL);
   }
+  
   if (!msg) msg = js_str(js, reason);
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+  
   return js_mkerr(js, "%s '%s' failed: %s", prefix, name ? name : "<unknown>", msg ? msg : "error");
 }
 
@@ -510,13 +518,18 @@ static void rpc_complete_task(rpc_deferred_task_t *task, ant_value_t result, boo
 
   if (rejected || is_err(result)) {
     ant_t *js = task->server->js;
-    ant_value_t reason = js->thrown_exists ? js->thrown_value : result;
+    GC_ROOT_SAVE(root_mark, js);
+    
+    ant_value_t reason = js_take_thrown(js, result);
+    GC_ROOT_PIN(js, reason);
+    
     ant_value_t err = rpc_get_error_value(js, "rpc procedure", task->route ? task->route->name : NULL, reason);
-    const char *msg = js_str(js, err);
+    ant_value_t error_value = js_take_thrown(js, err);
+    GC_ROOT_PIN(js, error_value);
+    
+    const char *msg = js_str(js, is_err(err) && vdata(err) != 0 ? err : error_value);
     (void)wirecall_deferred_fail(task->call, msg ? msg : "rpc procedure failed");
-    js->thrown_exists = false;
-    js->thrown_value = js_mkundef();
-    js->thrown_stack = js_mkundef();
+    GC_ROOT_RESTORE(js, root_mark);
   } else {
     const char *error = NULL;
     wirecall_writer *writer = wirecall_deferred_response(task->call);
@@ -525,9 +538,7 @@ static void rpc_complete_task(rpc_deferred_task_t *task, ant_value_t result, boo
       snprintf(msg, sizeof(msg), "rpc procedure '%s' failed: %s", task->route ? task->route->name : "<unknown>",
                error ? error : "invalid response");
       (void)wirecall_deferred_fail(task->call, msg);
-    } else {
-      (void)wirecall_deferred_complete(task->call);
-    }
+    } else wirecall_deferred_complete(task->call);
   }
 
   rpc_task_unlink(task);
@@ -568,11 +579,8 @@ static void rpc_run_task(ant_t *js, rpc_deferred_task_t *task) {
   GC_ROOT_PIN(js, result);
 
   bool result_is_awaitable = vtype(result) == kTypePromise || (is_object_type(result) && is_callable(js_get(js, result, "then")));
-  if (is_err(result) || (js->thrown_exists && !result_is_awaitable)) {
+  if (is_err(result) || (Ant_Exception_Pending(js) && !result_is_awaitable)) {
     rpc_complete_task(task, result, true);
-    js->thrown_exists = false;
-    js->thrown_value = js_mkundef();
-    js->thrown_stack = js_mkundef();
     GC_ROOT_RESTORE(js, root_mark);
     return;
   }
@@ -581,11 +589,13 @@ static void rpc_run_task(ant_t *js, rpc_deferred_task_t *task) {
     task->pending_promise = true;
     ant_value_t awaited = js_promise_assimilate_awaitable(js, result);
     GC_ROOT_PIN(js, awaited);
+    if (is_err(awaited)) {
+      rpc_complete_task(task, awaited, true);
+      GC_ROOT_RESTORE(js, root_mark);
+      return;
+    }
     if (vtype(result) == kTypePromise) promise_mark_handled(result);
     if (vtype(awaited) == kTypePromise) promise_mark_handled(awaited);
-    js->thrown_exists = false;
-    js->thrown_value = js_mkundef();
-    js->thrown_stack = js_mkundef();
     ant_value_t on_resolve = js_heavy_mkfun_native(js, rpc_task_promise_resolve, task, RPC_TASK_NATIVE_TAG);
     GC_ROOT_PIN(js, on_resolve);
     ant_value_t on_reject = js_heavy_mkfun_native(js, rpc_task_promise_reject, task, RPC_TASK_NATIVE_TAG);
@@ -697,8 +707,7 @@ static void rpc_server_finalizer(ant_t *js, ant_object_t *obj) {
 static rpc_server_t *rpc_require_server(ant_t *js, ant_value_t this_val) {
   rpc_server_t *server = rpc_server_data(this_val);
   if (!server) {
-    js->thrown_exists = true;
-    js->thrown_value = js_mkerr_typed(js, JS_ERR_TYPE, "Invalid RpcServer");
+    js_mkerr_typed(js, JS_ERR_TYPE, "Invalid RpcServer");
     return NULL;
   }
   return server;
@@ -706,7 +715,7 @@ static rpc_server_t *rpc_require_server(ant_t *js, ant_value_t this_val) {
 
 static ant_value_t rpc_server_register_impl(ant_t *js, rpc_server_t *server, ant_value_t name_val, ant_value_t handler) {
   char *name = rpc_value_to_cstring(js, name_val, "route name");
-  if (!name) return js->thrown_value;
+  if (!name) return Ant_Exception_Current(js);
   if (!is_callable(handler)) {
     free(name);
     return js_mkerr_typed(js, JS_ERR_TYPE, "rpc route handler must be a function");
@@ -736,18 +745,18 @@ static ant_value_t rpc_server_register_impl(ant_t *js, rpc_server_t *server, ant
 
 static ant_value_t rpc_server_register(ant_params_t) {
   rpc_server_t *server = rpc_require_server(js, js_getthis(js));
-  if (!server) return js->thrown_value;
+  if (!server) return Ant_Exception_Current(js);
   if (nargs < 2) return js_mkerr_typed(js, JS_ERR_TYPE, "RpcServer.register requires name and handler");
   return rpc_server_register_impl(js, server, args[0], args[1]);
 }
 
 static ant_value_t rpc_server_unregister(ant_params_t) {
   rpc_server_t *server = rpc_require_server(js, js_getthis(js));
-  if (!server) return js->thrown_value;
+  if (!server) return Ant_Exception_Current(js);
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "RpcServer.unregister requires a name");
 
   char *name = rpc_value_to_cstring(js, args[0], "route name");
-  if (!name) return js->thrown_value;
+  if (!name) return Ant_Exception_Current(js);
   rpc_route_t *route = rpc_route_find(server, name);
   if (route) {
     rpc_route_unlink(route);
@@ -760,14 +769,14 @@ static ant_value_t rpc_server_unregister(ant_params_t) {
 static ant_value_t rpc_server_port_getter(ant_params_t) {
   (void)args; (void)nargs;
   rpc_server_t *server = rpc_require_server(js, js_getthis(js));
-  if (!server) return js->thrown_value;
+  if (!server) return Ant_Exception_Current(js);
   if (server->server) server->port = wirecall_server_port(server->server);
   return js_mknum((double)server->port);
 }
 
 static ant_value_t rpc_server_listen(ant_params_t) {
   rpc_server_t *server = rpc_require_server(js, js_getthis(js));
-  if (!server) return js->thrown_value;
+  if (!server) return Ant_Exception_Current(js);
 
   ant_value_t promise = js_mkpromise(js);
   if (server->listening) {
@@ -793,7 +802,10 @@ static ant_value_t rpc_server_listen(ant_params_t) {
   if (vtype(host_val) == kTypeString) host = rpc_value_to_cstring(js, host_val, "host");
   else host = strdup("127.0.0.1");
   if (!host) {
-    js_reject_promise(js, promise, js_mkerr(js, "out of memory"));
+    ant_value_t error = Ant_Exception_Pending(js)
+      ? js_take_thrown(js, js_mkundef())
+      : js_make_error_silent(js, JS_ERR_TYPE, "out of memory");
+    js_reject_promise(js, promise, error);
     return promise;
   }
 
@@ -874,7 +886,7 @@ static void rpc_server_close_impl(rpc_server_t *server) {
 static ant_value_t rpc_server_close(ant_params_t) {
   (void)args; (void)nargs;
   rpc_server_t *server = rpc_require_server(js, js_getthis(js));
-  if (!server) return js->thrown_value;
+  if (!server) return Ant_Exception_Current(js);
   ant_value_t promise = js_mkpromise(js);
   rpc_server_close_impl(server);
   js_resolve_promise(js, promise, js_mkundef());
@@ -1071,59 +1083,63 @@ static ant_value_t rpc_client_enqueue(rpc_client_t *client, rpc_client_op_t *op)
 static rpc_client_t *rpc_require_client(ant_t *js, ant_value_t this_val) {
   rpc_client_t *client = rpc_client_data(this_val);
   if (!client) {
-    js->thrown_exists = true;
-    js->thrown_value = js_mkerr_typed(js, JS_ERR_TYPE, "Invalid RpcClient");
+    js_mkerr_typed(js, JS_ERR_TYPE, "Invalid RpcClient");
     return NULL;
   }
   return client;
 }
 
 static ant_value_t rpc_client_connect(ant_params_t) {
-  (void)args; (void)nargs;
   rpc_client_t *client = rpc_require_client(js, js_getthis(js));
-  if (!client) return js->thrown_value;
+  if (!client) return Ant_Exception_Current(js);
+  
   if (client->closed || client->closing) {
     ant_value_t promise = js_mkpromise(js);
     js_reject_promise(js, promise, js_mkerr(js, "RpcClient is closed"));
     return promise;
   }
+  
   rpc_client_op_t *op = calloc(1, sizeof(*op));
   if (!op) return js_mkerr(js, "out of memory");
   op->type = RPC_CLIENT_OP_CONNECT;
+  
   return rpc_client_enqueue(client, op);
 }
 
 static ant_value_t rpc_client_call(ant_params_t) {
   rpc_client_t *client = rpc_require_client(js, js_getthis(js));
-  if (!client) return js->thrown_value;
+  if (!client) return Ant_Exception_Current(js);
+  
   if (nargs < 2 || vtype(args[1]) != kTypeArray)
     return js_mkerr_typed(js, JS_ERR_TYPE, "RpcClient.call requires name and args array");
 
   char *name = rpc_value_to_cstring(js, args[0], "procedure name");
-  if (!name) return js->thrown_value;
+  if (!name) return Ant_Exception_Current(js);
 
   rpc_client_op_t *op = calloc(1, sizeof(*op));
   if (!op) {
     free(name);
     return js_mkerr(js, "out of memory");
   }
+  
   op->type = RPC_CLIENT_OP_CALL;
   op->name = name;
   wirecall_writer_init(&op->writer);
   op->writer_initialized = true;
+  
   const char *error = NULL;
   if (rpc_write_js_array(js, &op->writer, args[1], &error) != 0) {
     ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "rpc call '%s' has unsupported args: %s", name, error ? error : "invalid value");
     rpc_client_op_free(op);
     return err;
   }
+  
   return rpc_client_enqueue(client, op);
 }
 
 static ant_value_t rpc_client_ping(ant_params_t) {
-  (void)args; (void)nargs;
   rpc_client_t *client = rpc_require_client(js, js_getthis(js));
-  if (!client) return js->thrown_value;
+  if (!client) return Ant_Exception_Current(js);
   if (client->closed || client->closing) {
     ant_value_t promise = js_mkpromise(js);
     js_reject_promise(js, promise, js_mkerr(js, "RpcClient is closed"));
@@ -1138,7 +1154,7 @@ static ant_value_t rpc_client_ping(ant_params_t) {
 static ant_value_t rpc_client_close(ant_params_t) {
   (void)args; (void)nargs;
   rpc_client_t *client = rpc_require_client(js, js_getthis(js));
-  if (!client) return js->thrown_value;
+  if (!client) return Ant_Exception_Current(js);
   ant_value_t promise = js_mkpromise(js);
   if (client->closed || client->closing) {
     js_resolve_promise(js, promise, js_mkundef());
@@ -1217,7 +1233,7 @@ static ant_value_t rpc_client_ctor(ant_params_t) {
   ant_value_t host_val = js_get(js, opts, "host");
   ant_value_t port_val = js_get(js, opts, "port");
   char *host = vtype(host_val) == kTypeString ? rpc_value_to_cstring(js, host_val, "host") : strdup("127.0.0.1");
-  if (!host) return js->thrown_exists ? js->thrown_value : js_mkerr(js, "out of memory");
+  if (!host) return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : js_mkerr(js, "out of memory");
   char port_buf[32];
   if (vtype(port_val) != kTypeNumber) {
     free(host);

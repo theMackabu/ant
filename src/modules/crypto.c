@@ -18,6 +18,7 @@
 
 #include "ant.h"
 #include "ptr.h"
+#include "gc.h"
 #include "base64.h"
 #include "errors.h"
 #include "gc/roots.h"
@@ -25,7 +26,6 @@
 #include "modules/buffer.h"
 #include "modules/domexception.h"
 #include "modules/symbol.h"
-#include "silver/call.h"
 
 typedef enum {
   CRYPTO_TEXT_UTF8 = 0,
@@ -529,31 +529,29 @@ static ant_value_t crypto_read_key_length(
   if (is_err(value)) return value;
   if (vtype(value) == kTypeBigInt || vtype(value) == kTypeSymbol)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Algorithm.length must be a number");
+  
   double number = trunc(js_to_number(js, value));
-  if (js->thrown_exists) {
-    return mkval(kTypeError, 0);
-  }
-  if (!isfinite(number) || number < 0 || number > (double)maximum) {
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+  
+  if (!isfinite(number) || number < 0 || number > (double)maximum)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Algorithm.length is outside its accepted range");
-  }
 
   *present = true;
   *result = (uint32_t)number;
+  
   return js_mkundef();
 }
 
 static ant_value_t crypto_get_hmac_digest(
   ant_t *js, ant_value_t algorithm, const EVP_MD **result
 ) {
-  if (!is_object_type(algorithm)) {
+  if (!is_object_type(algorithm))
     return js_mkerr_typed(js, JS_ERR_TYPE, "HMAC algorithm must be an object");
-  }
 
   ant_value_t hash = crypto_algorithm_member(js, algorithm, intern_string("hash", 4));
   if (is_err(hash)) return hash;
-  if (vtype(hash) == kTypeUndefined) {
+  if (vtype(hash) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "HMAC algorithm.hash is required");
-  }
 
   ant_value_t name_value = crypto_subtle_get_algorithm_name(js, hash);
   if (is_err(name_value)) return name_value;
@@ -941,7 +939,7 @@ static ant_value_t crypto_subtle_call(
   if (is_err(promise)) return promise;
   GC_ROOT_PIN(js, promise);
   ant_value_t result = impl(js, args, nargs, js_mkundef());
-  if (is_err(result) || js->thrown_exists) {
+  if (is_err(result) || Ant_Exception_Pending(js)) {
     ant_value_t reason = js_take_thrown(js, result);
     js_reject_promise(js, promise, reason);
   } else js_resolve_promise(js, promise, result);
@@ -1032,7 +1030,7 @@ static ant_value_t crypto_read_key_usages(ant_t *js, ant_value_t input, uint8_t 
   // TODO: align js_iter with WebCrypto sequence semantics (getters, cached next,
   // TypeError validation, and preserving conversion exceptions during IteratorClose).
   bool iterated = js_iter(js, input, crypto_read_key_usage, mask);
-  if (js->thrown_exists) return mkval(kTypeError, 0);
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
   if (!iterated)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to iterate keyUsages");
   return js_mkundef();
@@ -1132,7 +1130,7 @@ static ant_value_t crypto_new_key_record(ant_t *js, unsigned index) {
         js_mkprop_fast(js, seed, "hash", 4, js_mkundef());
     }
     GC_ROOT_RESTORE(js, mark);
-    if (js->thrown_exists) return mkval(kTypeError, 0);
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     js->mutable_roots.crypto_key_templates[index] = seed;
   }
 
@@ -1214,7 +1212,7 @@ static ant_value_t crypto_make_key_object(
   crypto_key_record_set(js, obj, 2, algorithm);
   crypto_key_record_set(js, obj, 3, usages);
   
-  if (js->thrown_exists) { obj = mkval(kTypeError, 0); goto cleanup; }
+  if (Ant_Exception_Pending(js)) { obj = Ant_Exception_Current(js); goto cleanup; }
   js_set_native(obj, key, CRYPTO_KEY_NATIVE_TAG);
   js_set_finalizer(obj, crypto_key_finalize);
   key = NULL;
@@ -1482,7 +1480,7 @@ static ant_value_t crypto_hmac_once(
 static ant_value_t crypto_subtle_sign_impl(ant_params_t) {
   if (nargs < 3) return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.sign requires algorithm, key, and data");
   if (!crypto_algorithm_is(js, args[0], "HMAC")) {
-    if (js->thrown_exists) return mkval(kTypeError, 0);
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return crypto_dom_exception_error(js, "Unsupported signing algorithm", "NotSupportedError");
   }
   ant_crypto_key_t *key = NULL;
@@ -1498,7 +1496,7 @@ static ant_value_t js_crypto_subtle_sign(ant_params_t) {
 static ant_value_t crypto_subtle_verify_impl(ant_params_t) {
   if (nargs < 4) return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.verify requires algorithm, key, signature, and data");
   if (!crypto_algorithm_is(js, args[0], "HMAC")) {
-    if (js->thrown_exists) return mkval(kTypeError, 0);
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return crypto_dom_exception_error(js, "Unsupported verification algorithm", "NotSupportedError");
   }
   ant_crypto_key_t *key = NULL;
@@ -1628,7 +1626,7 @@ static ant_value_t crypto_aes_gcm_crypt(
 static ant_value_t crypto_subtle_encrypt_impl(ant_params_t) {
   if (nargs < 3) return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.encrypt requires algorithm, key, and data");
   if (!crypto_algorithm_is(js, args[0], "AES-GCM")) {
-    if (js->thrown_exists) return mkval(kTypeError, 0);
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return crypto_dom_exception_error(js, "Unsupported encryption algorithm", "NotSupportedError");
   }
   ant_crypto_key_t *key = NULL;
@@ -1640,7 +1638,7 @@ static ant_value_t crypto_subtle_encrypt_impl(ant_params_t) {
 static ant_value_t crypto_subtle_decrypt_impl(ant_params_t) {
   if (nargs < 3) return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.decrypt requires algorithm, key, and data");
   if (!crypto_algorithm_is(js, args[0], "AES-GCM")) {
-    if (js->thrown_exists) return mkval(kTypeError, 0);
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return crypto_dom_exception_error(js, "Unsupported decryption algorithm", "NotSupportedError");
   }
   ant_crypto_key_t *key = NULL;
@@ -2184,7 +2182,7 @@ static ant_value_t js_crypto_pbkdf2(ant_params_t) {
   }
   ant_value_t result = crypto_pbkdf2_result(js, args[0], args[1], args[2], args[3], args[4]);
   ant_value_t cb_args[2] = { is_err(result) ? result : js_mknull(), is_err(result) ? js_mkundef() : result };
-  ant_value_t cb_result = sv_vm_call(js->vm, js, args[5], js_mkundef(), cb_args, 2, NULL, js_mkundef());
+  ant_value_t cb_result = Ant_Error_CallCallback(js, args[5], js_mkundef(), cb_args, 2);
   return is_err(cb_result) ? cb_result : js_mkundef();
 }
 
@@ -2207,14 +2205,21 @@ static ant_value_t crypto_scrypt_result(ant_native_params_t, int options_index) 
   if (options_index >= 0 && options_index < nargs && is_object_type(args[options_index])) {
     ant_value_t v = js_get(js, args[options_index], "N");
     if (vtype(v) == kTypeUndefined) v = js_get(js, args[options_index], "cost");
+    if (is_err(v)) { err = v; goto cleanup_err; }
     if (vtype(v) == kTypeNumber) N = (uint64_t)js_getnum(v);
     v = js_get(js, args[options_index], "r");
+    
     if (vtype(v) == kTypeUndefined) v = js_get(js, args[options_index], "blockSize");
+    if (is_err(v)) { err = v; goto cleanup_err; }
     if (vtype(v) == kTypeNumber) r = (uint64_t)js_getnum(v);
     v = js_get(js, args[options_index], "p");
+    
     if (vtype(v) == kTypeUndefined) v = js_get(js, args[options_index], "parallelization");
+    if (is_err(v)) { err = v; goto cleanup_err; }
     if (vtype(v) == kTypeNumber) p = (uint64_t)js_getnum(v);
     v = js_get(js, args[options_index], "maxmem");
+    
+    if (is_err(v)) { err = v; goto cleanup_err; }
     if (vtype(v) == kTypeNumber) maxmem = (uint64_t)js_getnum(v);
   }
 
@@ -2223,7 +2228,11 @@ static ant_value_t crypto_scrypt_result(ant_native_params_t, int options_index) 
     err = js_mkerr(js, "Out of memory");
     goto cleanup_err;
   }
-  if (EVP_PBE_scrypt((const char *)password, password_len, salt, salt_len, N, r, p, maxmem, out, (size_t)keylen) != 1) {
+  
+  if (EVP_PBE_scrypt(
+    (const char *)password, password_len, 
+    salt, salt_len, N, r, p, maxmem, out, (size_t)keylen) != 1
+  ) {
     free(out);
     err = js_mkerr(js, "scrypt failed");
     goto cleanup_err;
@@ -2249,12 +2258,13 @@ static ant_value_t js_crypto_scrypt_sync(ant_params_t) {
 static ant_value_t js_crypto_scrypt(ant_params_t) {
   if (nargs < 4) return js_mkerr(js, "scrypt requires a callback");
   int callback_index = (vtype(args[3]) == kTypeFunction || vtype(args[3]) == kTypeBuiltin) ? 3 : 4;
-  if (callback_index >= nargs || (vtype(args[callback_index]) != kTypeFunction && vtype(args[callback_index]) != kTypeBuiltin)) {
+  if (callback_index >= nargs || (vtype(args[callback_index]) != kTypeFunction && vtype(args[callback_index]) != kTypeBuiltin))
     return js_mkerr(js, "scrypt requires a callback");
-  }
+  
   ant_value_t result = crypto_scrypt_result(js, args, nargs, callback_index == 3 ? -1 : 3);
   ant_value_t cb_args[2] = { is_err(result) ? result : js_mknull(), is_err(result) ? js_mkundef() : result };
-  ant_value_t cb_result = sv_vm_call(js->vm, js, args[callback_index], js_mkundef(), cb_args, 2, NULL, js_mkundef());
+  ant_value_t cb_result = Ant_Error_CallCallback(js, args[callback_index], js_mkundef(), cb_args, 2);
+  
   return is_err(cb_result) ? cb_result : js_mkundef();
 }
 

@@ -159,9 +159,7 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
     }
 
     if (is_err(result)) {
-      ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
-      js->thrown_exists = false;
-      js->thrown_value = js_mkundef();
+      ant_value_t reject_value = js_take_thrown(js, result);
       js_reject_promise(js, coro->async_promise, reject_value);
     } else js_resolve_promise(js, coro->async_promise, result);
 

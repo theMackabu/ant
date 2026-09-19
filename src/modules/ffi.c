@@ -883,6 +883,11 @@ static void ffi_callback_trampoline(ffi_cif *cif, void *ret, void **args, void *
   if (argc > 32) argc = 32;
   for (size_t i = 0; i < argc; i++) {
     js_args[i] = ffi_value_from_c(callback->js, args[i], callback->signature.args[i]);
+    if (is_err(js_args[i])) {
+      js_take_thrown(callback->js, js_args[i]);
+      fprintf(stderr, "ant:ffi callback argument conversion failed; returning a zero value\n");
+      return;
+    }
   }
 
   fn = js_get_slot(callback->owner_obj, SLOT_DATA);
@@ -894,11 +899,13 @@ static void ffi_callback_trampoline(ffi_cif *cif, void *ret, void **args, void *
   result = sv_vm_call(callback->js->vm, callback->js, fn, js_mkundef(), js_args, (int)argc, NULL, js_mkundef());
   if (is_err(result)) {
     fprintf(stderr, "ant:ffi callback threw an exception; returning a zero value\n");
-    callback->js->thrown_exists = 0;
+    js_take_thrown(callback->js, result);
     return;
   }
 
-  if (!ffi_callback_result_to_c(callback, result, ret, NULL)) {
+  ant_value_t error = js_mkundef();
+  if (!ffi_callback_result_to_c(callback, result, ret, &error)) {
+    if (is_err(error)) js_take_thrown(callback->js, error);
     fprintf(stderr, "ant:ffi callback returned an incompatible value; returning a zero value\n");
   }
 }

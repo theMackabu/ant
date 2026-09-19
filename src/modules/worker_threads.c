@@ -415,7 +415,11 @@ static void wt_emit_message_from_json(ant_worker_thread_t *wt, const char *json,
 
   ant_value_t s = js_mkstr(js, json, len);
   ant_value_t msg = json_parse_value(js, s);
-  if (is_err(msg)) msg = s;
+  
+  if (is_err(msg)) {
+    js_take_thrown(js, msg);
+    msg = s;
+  }
 
   wt_emit(wt, "message", msg);
 }
@@ -1023,7 +1027,11 @@ ant_value_t worker_threads_library(ant_t *js) {
     if (worker_data_json && worker_data_json[0]) {
       ant_value_t raw = js_mkstr(js, worker_data_json, strlen(worker_data_json));
       ant_value_t parsed = json_parse_value(js, raw);
-      js_set(js, lib, "workerData", is_err(parsed) ? js_mkundef() : parsed);
+      if (is_err(parsed)) {
+        js_take_thrown(js, parsed);
+        parsed = js_mkundef();
+      }
+      js_set(js, lib, "workerData", parsed);
     } else js_set(js, lib, "workerData", js_mkundef());
   } else {
     js_set(js, lib, "parentPort", js_mknull());

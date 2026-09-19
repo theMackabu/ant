@@ -412,7 +412,7 @@ static bool cron_resolve_zone(
       return false;
     }
     zone_value = js_get(js, options, "tz");
-    if (js->thrown_exists) {
+    if (Ant_Exception_Pending(js)) {
       *error = js_throw(js, js_take_thrown(js, zone_value));
       return false;
     }
@@ -532,7 +532,7 @@ static bool cron_resolve_zone(
       return false;
     }
     ant_value_t tz = js_get(js, options, "tz");
-    if (js->thrown_exists) {
+    if (Ant_Exception_Pending(js)) {
       *error = js_throw(js, js_take_thrown(js, tz));
       return false;
     }
@@ -910,8 +910,10 @@ static void cron_timer_callback(uv_timer_t *timer) {
   );
   GC_ROOT_PIN(js, result);
 
-  if (is_err(result) || js->thrown_exists) {
+  if (is_err(result) || Ant_Exception_Pending(js)) {
+handler_failed:
     ant_value_t reason = js_take_thrown(js, result);
+    GC_ROOT_PIN(js, reason);
     if (process_has_event_listeners(js, "uncaughtException")) {
       emit_process_event(js, "uncaughtException", &reason, 1);
     } else {
@@ -940,6 +942,7 @@ static void cron_timer_callback(uv_timer_t *timer) {
     ant_value_t fulfilled = js_heavy_mkfun(js, cron_handler_fulfilled, state);
     ant_value_t rejected = js_heavy_mkfun(js, cron_handler_rejected, state);
     ant_value_t continuation = js_promise_then(js, result, fulfilled, rejected);
+    if (is_err(continuation)) { result = continuation; goto handler_failed; }
     promise_mark_handled(continuation);
   } else {
     job->busy = false;
@@ -2608,8 +2611,8 @@ int cron_run_scheduled_export(
   ant_value_t result = sv_vm_call(
     js->vm, js, handler, default_export, &controller, 1, NULL, js_mkundef()
   );
-  if (is_err(result) || js->thrown_exists) {
-    if (js->thrown_exists) print_uncaught_throw(js);
+  if (is_err(result) || Ant_Exception_Pending(js)) {
+    if (Ant_Exception_Pending(js)) print_uncaught_throw(js);
     else print_error_value(js, result, js_mkundef(), NULL);
     return EXIT_FAILURE;
   }

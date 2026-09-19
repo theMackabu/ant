@@ -120,8 +120,8 @@ struct ant_isolate_t {
     const char *idx[10];
   } intern;
 
-  ant_value_t thrown_value;
-  ant_value_t thrown_stack;
+  ant_value_t exception;
+  ant_value_t exception_oom;
 
   struct {
     ant_value_t stack[MAX_STRINGIFY_DEPTH];
@@ -328,7 +328,6 @@ struct ant_isolate_t {
 
   bool owns_mem;
   bool fatal_error;
-  bool thrown_exists;
   bool uncaught_nonfatal;
 
   struct {

@@ -67,12 +67,11 @@ static ant_value_t napi_dlopen_common(ant_t *js, ant_value_t module_obj, const c
   } else return js_mkerr(js, "No N-API registration entrypoint found in '%s'", filename);
 
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (nenv->has_pending_exception || js->thrown_exists) {
-    ant_value_t ex = nenv->has_pending_exception
-      ? (ant_value_t)nenv->pending_exception
-      : js->thrown_value;
-    nenv->has_pending_exception = false;
-    nenv->pending_exception = (napi_value)js_mkundef();
+  if (is_err(nenv->exception) || Ant_Exception_Pending(js)) {
+    ant_value_t ex = is_err(nenv->exception)
+      ? nenv->exception
+      : Ant_Exception_Current(js);
+    nenv->exception = js_mkundef();
     return js_throw(js, ex);
   }
 
@@ -131,8 +130,8 @@ ant_value_t napi_load_native_module(ant_t *js, const char *module_path, ant_valu
   if (is_callable(dlopen_fn)) {
     ant_value_t argv[2] = {module_obj, js_mkstr(js, module_path, strlen(module_path))};
     ant_value_t dl_res = sv_vm_call(js->vm, js, dlopen_fn, process_obj, argv, 2, NULL, js_mkundef());
-    if (is_err(dl_res) || js->thrown_exists) {
-      result = js->thrown_exists ? js_throw(js, js->thrown_value) : dl_res;
+    if (is_err(dl_res) || Ant_Exception_Pending(js)) {
+      result = is_err(dl_res) ? dl_res : Ant_Exception_Current(js);
       goto cleanup;
     }
   } else {

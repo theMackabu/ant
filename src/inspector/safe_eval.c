@@ -1,3 +1,4 @@
+#include "gc/roots.h"
 #include "bind.h"
 #include "internal.h"
 #include "runtime.h"
@@ -534,10 +535,11 @@ bool inspector_eval_safe_expr(ant_t *js, const char *expr, size_t expr_len, ant_
   wrapped[expr_len + 1] = ')';
   wrapped[expr_len + 2] = '\0';
 
-  bool saved_thrown = js->thrown_exists;
-  ant_value_t saved_thrown_value = js->thrown_value;
-  ant_value_t saved_thrown_stack = js->thrown_stack;
-  inspector_clear_exception_state(js);
+  GC_ROOT_SAVE(exception_mark, js);
+  ant_value_t saved_exception = Ant_Exception_Peek(js);
+  
+  GC_ROOT_PIN(js, saved_exception);
+  Ant_Exception_Clear(js);
 
   bool ok = false;
   code_arena_mark_t parse_mark = parse_arena_mark();
@@ -546,16 +548,17 @@ bool inspector_eval_safe_expr(ant_t *js, const char *expr, size_t expr_len, ant_
     program && program->type == N_PROGRAM &&
     program->args.count == 1 &&
     program->args.items[0] &&
-    !js->thrown_exists
+    !Ant_Exception_Pending(js)
   ) {
     ok = inspector_safe_eval_ast(js, program->args.items[0], out);
     if (ok && is_err(*out)) ok = false;
   }
+  
   parse_arena_rewind(parse_mark);
   free(wrapped);
 
-  js->thrown_exists = saved_thrown;
-  js->thrown_value = saved_thrown_value;
-  js->thrown_stack = saved_thrown_stack;
+  Ant_Exception_Set(js, saved_exception);
+  GC_ROOT_RESTORE(js, exception_mark);
+  
   return ok;
 }

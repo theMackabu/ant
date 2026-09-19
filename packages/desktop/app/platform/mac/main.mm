@@ -1,6 +1,8 @@
 #import <AppKit/AppKit.h>
 
 #include <ant.h>
+#include <errors.h>
+#include <gc/roots.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,12 +48,21 @@ static void RemoveTemporaryApplication(NSString *temporary_root) {
 }
 
 static const char *RuntimeErrorDetail(ant_t *js, ant_value_t error) {
-  if (vtype(error) != kTypeError || vdata(error) == 0) return js_str(js, error);
-  ant_value_t object = mkval(kTypeObject, vdata(error));
-  ant_value_t stack = js_get(js, object, "stack");
-  if (vtype(stack) == kTypeString) return js_str(js, stack);
-  ant_value_t message = js_get(js, object, "message");
-  return vtype(message) == kTypeString ? js_str(js, message) : js_str(js, error);
+  if (!is_err(error)) return js_str(js, error);
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, error);
+  ant_value_t detail = Ant_Exception_Stack(js, error);
+  if (vtype(detail) != kTypeString) {
+    detail = Ant_Exception_Value(js, error);
+    if (vtype(detail) == kTypeObject) {
+      ant_value_t message = js_get(js, detail, "message");
+      if (vtype(message) == kTypeString) detail = message;
+    }
+  }
+  GC_ROOT_PIN(js, detail);
+  const char *text = js_str(js, detail);
+  GC_ROOT_RESTORE(js, root_mark);
+  return text;
 }
 
 static dispatch_source_t InstallDevelopmentReloadSignal(void) {

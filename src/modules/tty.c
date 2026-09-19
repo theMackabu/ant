@@ -59,10 +59,10 @@ typedef struct tty_read_stream_state {
   bool closing;
 } tty_read_stream_state_t;
 
-static void invoke_callback_if_needed(ant_t *js, ant_value_t cb, ant_value_t arg) {
-  if (!is_callable(cb)) return;
+static ant_value_t invoke_callback_if_needed(ant_t *js, ant_value_t cb, ant_value_t arg) {
+  if (!is_callable(cb)) return js_mkundef();
   ant_value_t cb_args[1] = { arg };
-  sv_vm_call(js->vm, js, cb, js_mkundef(), cb_args, 1, NULL, js_mkundef());
+  return sv_vm_call(js->vm, js, cb, js_mkundef(), cb_args, 1, NULL, js_mkundef());
 }
 
 static bool parse_fd(ant_value_t value, int *fd_out) {
@@ -97,20 +97,20 @@ static tty_read_stream_state_t *tty_read_stream_state_from_obj(ant_value_t strea
 }
 
 static ant_value_t make_stream_error(ant_t *js, const char *op, int fd, int uv_code) {
-  if (uv_code != 0) return js_mkerr_typed(
-    js, JS_ERR_GENERIC,
-    "tty stream %s failed for fd %d: %s",
-    op, fd, uv_strerror(uv_code)
+  return Ant_Error_CreateFormatted(
+    js, JS_ERR_GENERIC, "tty stream %s failed for fd %d%s%s",
+    op, fd, uv_code ? ": " : "", uv_code ? uv_strerror(uv_code) : ""
   );
-
-  return js_mkerr_typed(js, JS_ERR_GENERIC, "tty stream %s failed for fd %d", op, fd);
 }
 
 static void tty_read_stream_emit_error(tty_read_stream_state_t *state, const char *op, int uv_code) {
   ant_value_t err = 0;
   if (!state || !state->js || !is_object_type(state->stream_obj)) return;
   err = make_stream_error(state->js, op, state->fd, uv_code);
+  GC_ROOT_SAVE(root_mark, state->js);
+  GC_ROOT_PIN(state->js, err);
   eventemitter_emit_args(state->js, state->stream_obj, "error", &err, 1);
+  GC_ROOT_RESTORE(state->js, root_mark);
 }
 
 static void tty_read_stream_push_chunk(tty_read_stream_state_t *state, const char *data, size_t len) {
@@ -219,13 +219,10 @@ static ant_value_t tty_readstream__read(ant_params_t) {
 
 static ant_value_t tty_readstream__destroy(ant_params_t) {
   ant_value_t stream_obj = js_getthis(js);
+  
   tty_read_stream_state_t *state = tty_read_stream_state_from_obj(stream_obj);
   ant_value_t cb = nargs > 1 ? args[1] : js_mkundef();
-
-  if (!state) {
-    invoke_callback_if_needed(js, cb, js_mknull());
-    return js_mkundef();
-  }
+  if (!state) return invoke_callback_if_needed(js, cb, js_mknull());
 
   tty_read_stream_stop(state);
   stream_clear_attached_state(stream_obj);
@@ -235,8 +232,7 @@ static ant_value_t tty_readstream__destroy(ant_params_t) {
     uv_close((uv_handle_t *)&state->tty, tty_read_stream_close_cb);
   } else if (!state->initialized) free(state);
 
-  invoke_callback_if_needed(js, cb, js_mknull());
-  return js_mkundef();
+  return invoke_callback_if_needed(js, cb, js_mknull());
 }
 
 static void get_tty_size(int fd, int *rows, int *cols) {
@@ -416,14 +412,14 @@ static ant_value_t maybe_callback_or_throw(
   const char *op, int fd
 ) {
   if (is_callable(cb)) {
-    if (ok) invoke_callback_if_needed(js, cb, js_mknull());
-    else {
-      ant_value_t err = make_stream_error(js, op, fd, 0);
-      invoke_callback_if_needed(js, cb, err);
-    }
+    ant_value_t err = ok ? js_mknull() : make_stream_error(js, op, fd, 0);
+    ant_value_t result = invoke_callback_if_needed(js, cb, err);
+    if (is_err(result)) return result;
     return this_obj;
   }
-  if (!ok) return make_stream_error(js, op, fd, 0);
+  
+  if (!ok) return js_throw(js, make_stream_error(js, op, fd, 0));
+  
   return this_obj;
 }
 
@@ -560,8 +556,9 @@ static ant_value_t tty_stream_write(ant_params_t) {
   } else ok = tty_ctrl_write_fd(fd, data, len);
 
   if (is_callable(cb)) {
-    if (ok) invoke_callback_if_needed(js, cb, js_mknull());
-    else invoke_callback_if_needed(js, cb, make_stream_error(js, "write", fd, 0));
+    ant_value_t err = ok ? js_mknull() : make_stream_error(js, "write", fd, 0);
+    ant_value_t result = invoke_callback_if_needed(js, cb, err);
+    if (is_err(result)) return result;
   }
 
   if (!ok) return js_false;

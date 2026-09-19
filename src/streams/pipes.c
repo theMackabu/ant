@@ -45,9 +45,7 @@ static void pipes_chain_promise(
     js_resolve_promise(js, promise, value);
   }
 
-  ant_value_t then_result = js_promise_then(js, promise, on_resolve, on_reject);
-  GC_ROOT_PIN(js, then_result);
-  promise_mark_handled(then_result);
+  Ant_Promise_Observe(js, promise, on_resolve, on_reject);
   GC_ROOT_RESTORE(js, root_mark);
 }
 
@@ -321,8 +319,11 @@ static void pipes_pump(ant_t *js, ant_value_t state) {
 }
 
 static ant_value_t pipe_create_rejected(ant_t *js, ant_value_t error) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, error);
   ant_value_t promise = js_mkpromise(js);
   js_reject_promise(js, promise, error);
+  GC_ROOT_RESTORE(js, root_mark);
   return promise;
 }
 
@@ -351,35 +352,36 @@ ant_value_t readable_stream_pipe_to(
 ) {
   rs_stream_t *rs = rs_get_stream(source);
   ws_stream_t *ws = ws_get_stream(dest);
-  if (!rs || !ws) {
-    js_mkerr_typed(js, JS_ERR_TYPE, "pipeTo requires a ReadableStream and WritableStream");
-    return pipe_create_rejected(js, js->thrown_value);
-  }
+  if (!rs || !ws)
+    return pipe_create_rejected(js, js_make_error_silent(js, JS_ERR_TYPE, "pipeTo requires a ReadableStream and WritableStream"));
 
-  if (rs_is_reader(rs_stream_reader(source))) {
-    js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStream is already locked");
-    return pipe_create_rejected(js, js->thrown_value);
-  }
-  if (ws_is_writer(ws_stream_writer(dest))) {
-    js_mkerr_typed(js, JS_ERR_TYPE, "WritableStream is already locked");
-    return pipe_create_rejected(js, js->thrown_value);
-  }
+  if (rs_is_reader(rs_stream_reader(source)))
+    return pipe_create_rejected(js, js_make_error_silent(js, JS_ERR_TYPE, "ReadableStream is already locked"));
 
-  if (!is_undefined(signal) && !abort_signal_is_signal(signal)) {
-    js_mkerr_typed(js, JS_ERR_TYPE, "pipeTo option 'signal' must be an AbortSignal");
-    return pipe_create_rejected(js, js->thrown_value);
-  }
+  if (ws_is_writer(ws_stream_writer(dest)))
+    return pipe_create_rejected(js, js_make_error_silent(js, JS_ERR_TYPE, "WritableStream is already locked"));
+
+  if (!is_undefined(signal) && !abort_signal_is_signal(signal))
+    return pipe_create_rejected(js, js_make_error_silent(js, JS_ERR_TYPE, "pipeTo option 'signal' must be an AbortSignal"));
 
   ant_value_t reader_args[1] = { source };
   ant_value_t reader = js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
   
-  if (is_err(reader)) return pipe_create_rejected(js, js->thrown_value);
+  if (is_err(reader)) return pipe_create_rejected(js, js_take_thrown(js, reader));
   rs->disturbed = true;
 
   ant_value_t writer = ws_acquire_writer(js, dest);
   if (is_err(writer)) {
+    GC_ROOT_SAVE(root_mark, js);
+    ant_value_t error = js_take_thrown(js, writer);
+    
+    GC_ROOT_PIN(js, error);
     pipes_release_reader(js, reader);
-    return pipe_create_rejected(js, js->thrown_value);
+    
+    ant_value_t promise = pipe_create_rejected(js, error);
+    GC_ROOT_RESTORE(js, root_mark);
+    
+    return promise;
   }
 
   pipe_state_t *pst = calloc(1, sizeof(pipe_state_t));
@@ -425,16 +427,17 @@ ant_value_t readable_stream_pipe_to(
 }
 
 static ant_value_t js_rs_pipe_to(ant_params_t) {
-  if (!rs_is_stream(js->this_val)) {
-    js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
-    return pipe_create_rejected(js, js->thrown_value);
-  }
+  if (!rs_is_stream(js->this_val))
+    return pipe_create_rejected(js, js_make_error_silent(js, JS_ERR_TYPE, "Invalid ReadableStream"));
 
   ant_value_t dest = (nargs > 0) ? args[0] : js_mkundef();
   bool prevent_close, prevent_abort, prevent_cancel;
   ant_value_t signal;
+  
   pipes_parse_options(js, nargs > 1 ? args[1] : js_mkundef(),
     &prevent_close, &prevent_abort, &prevent_cancel, &signal);
+  if (Ant_Exception_Pending(js)) return pipe_create_rejected(js, js_take_thrown(js, js_mkundef()));
+  
   return readable_stream_pipe_to(js, js->this_val, dest,
     prevent_close, prevent_abort, prevent_cancel, signal);
 }

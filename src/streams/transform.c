@@ -185,15 +185,6 @@ static void ts_ctrl_clear_algorithms(ant_value_t ctrl_obj) {
   js_set_slot(ctrl_obj, SLOT_AUX, js_mkundef());
 }
 
-static ant_value_t ts_take_thrown_or(ant_t *js, ant_value_t fallback) {
-  ant_value_t thrown = js->thrown_exists ? js->thrown_value : js_mkundef();
-  ant_value_t err = is_object_type(thrown) ? thrown : fallback;
-  js->thrown_exists = false;
-  js->thrown_value = js_mkundef();
-  js->thrown_stack = js_mkundef();
-  return err;
-}
-
 static void ts_chain_promise(ant_t *js, ant_value_t val, ant_value_t res_fn, ant_value_t rej_fn) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, val);
@@ -208,9 +199,7 @@ static void ts_chain_promise(ant_t *js, ant_value_t val, ant_value_t res_fn, ant
     js_resolve_promise(js, promise, val);
   }
 
-  ant_value_t then_result = js_promise_then(js, promise, res_fn, rej_fn);
-  GC_ROOT_PIN(js, then_result);
-  promise_mark_handled(then_result);
+  Ant_Promise_Observe(js, promise, res_fn, rej_fn);
   GC_ROOT_RESTORE(js, root_mark);
 }
 
@@ -269,7 +258,7 @@ ant_value_t ts_ctrl_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk) 
 
   ant_value_t enqueue_result = rs_controller_enqueue(js, rs_ctrl, chunk);
   if (is_err(enqueue_result)) {
-    ant_value_t err = ts_take_thrown_or(js, enqueue_result);
+    ant_value_t err = js_take_thrown(js, enqueue_result);
     ts_error_writable_and_unblock_write(js, ts_obj, err);
     return js_throw(js, err);
   }
@@ -331,7 +320,7 @@ static ant_value_t ts_ctrl_perform_transform(ant_t *js, ant_value_t ctrl_obj, an
     ant_value_t result = sv_vm_call(js->vm, js, transform_fn, ts_ctrl_transformer(ctrl_obj), call_args, 2, NULL, js_mkundef());
 
     if (is_err(result)) {
-      ant_value_t err = ts_take_thrown_or(js, result);
+      ant_value_t err = js_take_thrown(js, result);
       ts_error(js, ts_obj, err);
       js_reject_promise(js, p, err);
       return p;
@@ -347,7 +336,7 @@ static ant_value_t ts_ctrl_perform_transform(ant_t *js, ant_value_t ctrl_obj, an
   } else {
     ant_value_t enqueue_result = ts_ctrl_enqueue(js, ctrl_obj, chunk);
     if (is_err(enqueue_result)) {
-      ant_value_t err = ts_take_thrown_or(js, enqueue_result);
+      ant_value_t err = js_take_thrown(js, enqueue_result);
       js_reject_promise(js, p, err);
       return p;
     }
@@ -392,7 +381,7 @@ static ant_value_t ts_run_cancel_algorithm(ant_t *js, ant_value_t ts_obj, ant_va
   }
 
   if (is_err(result)) {
-    ant_value_t err = ts_take_thrown_or(js, result);
+    ant_value_t err = js_take_thrown(js, result);
     ts_clear_cancel_state(ts_obj, p);
     js_reject_promise(js, p, err);
     return p;
@@ -657,7 +646,7 @@ static ant_value_t ts_sink_close(ant_params_t) {
     ant_value_t result = sv_vm_call(js->vm, js, flush_fn, ts_ctrl_transformer(ctrl_obj), flush_args, 1, NULL, js_mkundef());
 
     if (is_err(result)) {
-      ant_value_t err = ts_take_thrown_or(js, result);
+      ant_value_t err = js_take_thrown(js, result);
       ts_error(js, ts_obj, err);
       ts_set_flushing(ts_obj, false);
       js_reject_promise(js, p, err);
@@ -1013,7 +1002,7 @@ ant_value_t js_ts_ctor(ant_params_t) {
     if (vtype(start_result) == kTypePromise) {
       ant_value_t resolve_fn = js_heavy_mkfun(js, ts_start_resolve, ts_obj);
       ant_value_t reject_fn = js_heavy_mkfun(js, ts_start_reject, ts_obj);
-      js_promise_then(js, start_result, resolve_fn, reject_fn);
+      ts_chain_promise(js, start_result, resolve_fn, reject_fn);
     }
 
     if (vtype(start_result) != kTypePromise) {
@@ -1021,14 +1010,14 @@ ant_value_t js_ts_ctor(ant_params_t) {
       js_resolve_promise(js, resolved, js_mkundef());
       ant_value_t res_fn = js_heavy_mkfun(js, ts_start_resolve, ts_obj);
       ant_value_t rej_fn = js_heavy_mkfun(js, ts_start_reject, ts_obj);
-      js_promise_then(js, resolved, res_fn, rej_fn);
+      ts_chain_promise(js, resolved, res_fn, rej_fn);
     }
   } else {
     ant_value_t resolved = js_mkpromise(js);
     js_resolve_promise(js, resolved, js_mkundef());
     ant_value_t res_fn = js_heavy_mkfun(js, ts_start_resolve, ts_obj);
     ant_value_t rej_fn = js_heavy_mkfun(js, ts_start_reject, ts_obj);
-    js_promise_then(js, resolved, res_fn, rej_fn);
+    ts_chain_promise(js, resolved, res_fn, rej_fn);
   }
 
   return ts_obj;

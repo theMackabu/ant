@@ -219,6 +219,7 @@ static inline uint8_t *sv_vm_throw(sv_vm_t *vm, ant_value_t err, int min_fp) {
     sv_frame_t *frame = &vm->frames[f];
     int base = frame->handler_base;
     int top = (f == vm->fp) ? vm->handler_depth : frame->handler_top;
+
     for (int i = top - 1; i >= base; i--) {
       sv_handler_t *h = &vm->handler_stack[i];
       if (h->kind != SV_HANDLER_TRY && h->kind != SV_HANDLER_TRY_FINALLY) continue;
@@ -229,11 +230,8 @@ static inline uint8_t *sv_vm_throw(sv_vm_t *vm, ant_value_t err, int min_fp) {
       }
 
       ant_value_t caught = err;
-      if (vtype(err) == kTypeError && js->thrown_exists) {
-        caught = js->thrown_value;
-        js->thrown_value = js_mkundef();
-        js->thrown_exists = false;
-      }
+      if (is_err(err))
+        caught = js_take_thrown(js, err);
       
       vm->sp = h->saved_sp;
       vm->fp = f;
@@ -242,6 +240,7 @@ static inline uint8_t *sv_vm_throw(sv_vm_t *vm, ant_value_t err, int min_fp) {
       vm->stack[vm->sp++] = caught;
       vm->handler_depth = i;
       vm->frames[f].handler_top = (uint16_t)i;
+
       return h->ip;
     }
 

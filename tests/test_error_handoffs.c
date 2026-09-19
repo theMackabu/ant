@@ -1,0 +1,333 @@
+// meson test -C build error-handoffs
+#include "internal.h"
+#include "errors.h"
+#include "gc/objects.h"
+#include "gc/roots.h"
+#include "modules/assert.h"
+#include "modules/timer.h"
+#include "sandbox/sandbox.h"
+#include "silver/call.h"
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+static ant_value_t expected_reason;
+static ant_value_t callback_throw;
+static int callback_calls;
+
+_Static_assert(sizeof(ant_value_t) == 8, "native and JIT results must remain 64-bit");
+_Static_assert(sizeof(((ant_object_t *)0)->u) == 16,
+  "exception records must not enlarge the object union");
+
+static ant_value_t handled_native_failure(ant_params_t) {
+  assert(!Ant_Exception_Pending(js));
+  ant_value_t failure = js_throw(js, js_mkundef());
+  assert(is_err(failure));
+  assert(vtype(js_take_thrown(js, failure)) == kTypeUndefined);
+  return js_mknum(42);
+}
+
+static ant_value_t forgotten_native_failure(ant_params_t) {
+  js_throw(js, js_mknull());
+  return js_mknum(42);
+}
+
+static ant_value_t detached_native_failure(ant_params_t) {
+  ant_value_t failure = js_throw(js, js_mknull());
+  Ant_Exception_Clear(js);
+  return failure;
+}
+
+static ant_value_t collect_native_target(ant_params_t) {
+  assert(!Ant_Exception_Pending(js));
+  assert(js->vm->native_frame && js->vm->native_frame->new_target == call_new_target);
+  gc_run(js);
+  assert(gc_obj_is_marked(js_obj_ptr(call_new_target)));
+  return call_new_target;
+}
+
+static ant_value_t check_callback(ant_params_t) {
+  assert(!Ant_Exception_Pending(js));
+  assert(nargs > 0 && args[0] == expected_reason);
+  callback_calls++;
+  return js_mkundef();
+}
+
+static ant_value_t throwing_callback(ant_params_t) {
+  check_callback(js, args, nargs, call_new_target);
+  return js_throw(js, callback_throw);
+}
+
+static ant_value_t constructor_getter(ant_params_t) {
+  return js_throw(js, expected_reason);
+}
+
+static ant_value_t promise(ant_t *js) {
+  ant_value_t p = js_mkpromise(js);
+  promise_mark_handled(p);
+  return p;
+}
+
+static void check_rejected(ant_value_t p, ant_value_t reason) {
+  ant_promise_state_t *state = js_obj_ptr(js_as_obj(p))->promise_state;
+  assert(state && state->state == 2 && state->value == reason);
+}
+
+static ant_value_t retained_completion(ant_t *js) {
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t value = js_mkobj(js);
+  GC_ROOT_PIN(js, value);
+  js_set(js, value, "answer", js_mknum(42));
+  ant_value_t stack = js_mkstr(js, "retained stack", 14);
+  ant_value_t completion = Ant_Exception_Raise(js, value, stack);
+  Ant_Exception_Clear(js);
+  GC_ROOT_RESTORE(js, mark);
+  return completion;
+}
+
+static void CheckSandboxDiagnostic(
+  ant_t *js, ant_value_t value, ant_value_t fallback_stack,
+  const char *name, const char *message, const char *stack, const char *display_part
+) {
+  ant_value_t pending = Ant_Exception_Peek(js);
+  size_t length = 0;
+  uint8_t *payload = ant_sandbox_build_error_payload(js, value, fallback_stack, &length);
+  assert(payload && Ant_Exception_Peek(js) == pending);
+  const char *expected[] = {name, message, stack};
+  size_t offset = 0;
+  for (size_t i = 0; i < 3; i++) {
+    assert(offset + 4 <= length);
+    const uint8_t *p = payload + offset;
+    uint32_t size = (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+      ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    offset += 4;
+    assert(size == strlen(expected[i]) && size <= length - offset);
+    assert(memcmp(payload + offset, expected[i], size) == 0);
+    offset += size;
+  }
+  const char *display;
+  size_t display_len;
+  assert(ant_sandbox_error_payload_display(payload, length, &display, &display_len));
+  char *text = malloc(display_len + 1);
+  assert(text);
+  memcpy(text, display, display_len);
+  text[display_len] = '\0';
+  if (!strstr(text, display_part))
+    fprintf(stderr, "sandbox display '%s' does not contain '%s'\n", text, display_part);
+  assert(strstr(text, display_part));
+  free(text);
+  free(payload);
+}
+
+static void CheckSandboxExceptionRecords(ant_t *js) {
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t error = js_make_error_silent(js, JS_ERR_TYPE | JS_ERR_NO_STACK, "sandbox diagnostic");
+  GC_ROOT_PIN(js, error);
+  ant_value_t stack = js_mkstr(js, "captured sandbox stack", 22);
+  GC_ROOT_PIN(js, stack);
+  ant_value_t record = Ant_Exception_Raise(js, error, stack);
+  GC_ROOT_PIN(js, record);
+  // Serialize an older record while a different completion is current.
+  Ant_Exception_Raise(js, js_mknum(73), js_mkundef());
+  CheckSandboxDiagnostic(js, record, js_mkundef(), "TypeError", "sandbox diagnostic",
+    "captured sandbox stack", "captured sandbox stack");
+  record = Ant_Exception_Raise(js, error, js_mkundef());
+  Ant_Exception_Clear(js);
+  CheckSandboxDiagnostic(js, record, js_mkundef(), "TypeError", "sandbox diagnostic", "", "sandbox diagnostic");
+  CheckSandboxDiagnostic(js, record, stack, "TypeError", "sandbox diagnostic",
+    "captured sandbox stack", "captured sandbox stack");
+  CheckSandboxDiagnostic(js, error, js_mkundef(), "TypeError", "sandbox diagnostic", "", "");
+  record = Ant_Exception_Raise(js, js_mknum(73), stack);
+  Ant_Exception_Clear(js);
+  CheckSandboxDiagnostic(js, record, js_mkundef(), "Error", "73", "captured sandbox stack", "captured sandbox stack");
+  record = Ant_Exception_Raise(js, js_mkundef(), js_mkundef());
+  Ant_Exception_Clear(js);
+  CheckSandboxDiagnostic(js, record, js_mkundef(), "Error", "undefined", "", "undefined");
+  GC_ROOT_RESTORE(js, mark);
+}
+
+static void CheckFormattedErrorValues(ant_t *js) {
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t error = js_mkundef();
+  GC_ROOT_PIN(js, error);
+  for (int pending = 0; pending < 2; pending++) {
+    ant_value_t previous = pending ? js_throw(js, js_mkundef()) : js_mkundef();
+    js_err_type_t type = pending ? JS_ERR_TYPE | JS_ERR_NO_STACK : JS_ERR_GENERIC;
+    error = Ant_Error_CreateFormatted(js, type, "%s %d%%", "literal %s", 25);
+    assert(vtype(error) == kTypeObject && Ant_Exception_Peek(js) == previous);
+    assert(strcmp(js_getstr(js, js_get(js, error, "message"), NULL), "literal %s 25%") == 0);
+    assert(strcmp(js_getstr(js, js_get(js, error, "name"), NULL), pending ? "TypeError" : "Error") == 0);
+    assert(vtype(js_get(js, error, "stack")) == (pending ? kTypeUndefined : kTypeString));
+    Ant_Exception_Clear(js);
+  }
+  GC_ROOT_RESTORE(js, mark);
+}
+
+int main(void) {
+  char stack_base;
+  ant_t *js = ant_create();
+  assert(js);
+  js_setstackbase(js, &stack_base);
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, expected_reason);
+  GC_ROOT_PIN(js, callback_throw);
+
+  ant_value_t p = promise(js);
+  GC_ROOT_PIN(js, p);
+  ant_value_t marker = js_mkerr(js, "delivered error");
+  GC_ROOT_PIN(js, marker);
+  ant_value_t error = Ant_Exception_Value(js, Ant_Exception_Peek(js));
+  GC_ROOT_PIN(js, error);
+  js_reject_promise(js, p, marker);
+  assert(!Ant_Exception_Pending(js) && vtype(Ant_Exception_Stack(js, Ant_Exception_Peek(js))) == kTypeUndefined);
+  check_rejected(p, error);
+
+  // Ordinary rejection values are not permission to consume an active throw.
+  p = promise(js);
+  js_throw(js, error);
+  js_reject_promise(js, p, error);
+  assert(Ant_Exception_Pending(js) && Ant_Exception_Value(js, Ant_Exception_Peek(js)) == error);
+  check_rejected(p, error);
+  js_take_thrown(js, js_mkundef());
+
+  // Delivering an old payload marker must preserve a newer pending exception.
+  p = promise(js);
+  callback_throw = js_mkstr(js, "unrelated", 9);
+  js_throw(js, callback_throw);
+  ant_value_t saved_stack = Ant_Exception_Stack(js, Ant_Exception_Peek(js));
+  js_reject_promise(js, p, marker);
+  assert(Ant_Exception_Pending(js) && Ant_Exception_Value(js, Ant_Exception_Peek(js)) == callback_throw && Ant_Exception_Stack(js, Ant_Exception_Peek(js)) == saved_stack);
+  check_rejected(p, error);
+  js_take_thrown(js, js_mkundef());
+
+  ant_value_t reasons[] = { js_mkundef(), js_mknull(), js_false, js_mknum(17), error };
+  for (size_t i = 0; i < sizeof(reasons) / sizeof(reasons[0]); i++) {
+    expected_reason = reasons[i];
+    p = promise(js);
+    marker = js_throw(js, expected_reason);
+    js_reject_promise(js, p, marker);
+    assert(!Ant_Exception_Pending(js) && vtype(Ant_Exception_Stack(js, Ant_Exception_Peek(js))) == kTypeUndefined);
+    check_rejected(p, expected_reason);
+
+    // A settled Promise still consumes a delivered completion exactly once.
+    marker = js_throw(js, expected_reason);
+    js_reject_promise(js, p, marker);
+    assert(!Ant_Exception_Pending(js));
+    check_rejected(p, expected_reason);
+
+    ant_value_t args[9] = { js_throw(js, expected_reason), js_mknum(42) };
+    ant_value_t original = args[0];
+    ant_value_t result = Ant_Error_CallCallback(js, js_mkfun(check_callback), js_mkundef(), args, 9);
+    assert(!is_err(result) && !Ant_Exception_Pending(js) && args[0] == original && args[1] == js_mknum(42));
+    callback_throw = expected_reason;
+    args[0] = js_throw(js, expected_reason);
+    result = Ant_Error_CallCallback(js, js_mkfun(throwing_callback), js_mkundef(), args, 2);
+    assert(is_err(result) && Ant_Exception_Pending(js) && Ant_Exception_Value(js, Ant_Exception_Peek(js)) == callback_throw);
+    js_take_thrown(js, result);
+  }
+  assert(callback_calls == 10);
+
+  p = promise(js);
+  js_resolve_promise(js, p, js_mknum(99));
+  js_reject_promise(js, p, js_throw(js, js_mkundef()));
+  ant_promise_state_t *settled = js_obj_ptr(js_as_obj(p))->promise_state;
+  assert(!Ant_Exception_Pending(js) && settled->state == 1 && settled->value == js_mknum(99));
+
+  // Internal observation queues setup failures; it does not call the owner inline.
+  expected_reason = js_mkundef();
+  p = promise(js);
+  js_set_getter_desc(js, js_as_obj(p), "constructor", 11, js_mkfun(constructor_getter), JS_DESC_C);
+  Ant_Promise_Observe(js, p, js_mkundef(), js_mkfun(check_callback));
+  assert(!Ant_Exception_Pending(js) && callback_calls == 10);
+  process_microtasks(js);
+  assert(callback_calls == 11 && !Ant_Exception_Pending(js));
+
+  // A completion retains its own payload and stack after another throw and
+  // after the ambient propagation handle has been cleared.
+  ant_value_t first = js_throw(js, js_mkundef());
+  GC_ROOT_PIN(js, first);
+  ant_value_t first_stack = Ant_Exception_Stack(js, first);
+  GC_ROOT_PIN(js, first_stack);
+  ant_value_t second = js_throw(js, js_mknull());
+  GC_ROOT_PIN(js, second);
+  assert(first != second && gc_value_is_heap_ref(first));
+  assert(!gc_value_is_heap_ref(SV_JIT_RETRY_INTERP));
+  assert(vtype(Ant_Exception_Value(js, first)) == kTypeUndefined);
+  assert(vtype(js_take_thrown(js, first)) == kTypeUndefined);
+  assert(Ant_Exception_Peek(js) == second);
+  Ant_Exception_Clear(js);
+  assert(vtype(Ant_Exception_Value(js, second)) == kTypeNull);
+  assert(Ant_Exception_Stack(js, first) == first_stack);
+
+  first = js_throw(js, error);
+  second = js_throw(js, error);
+  assert(first != second);
+  assert(js_take_thrown(js, first) == error && Ant_Exception_Peek(js) == second);
+  ant_value_t ordinary = js_make_error_silent(js, JS_ERR_TYPE, "ordinary value");
+  assert(!is_err(ordinary) && Ant_Exception_Peek(js) == second);
+
+  ant_value_t success = sv_invoke_native(js, handled_native_failure, NULL, 0, js_mkundef());
+  assert(success == js_mknum(42) && Ant_Exception_Peek(js) == second);
+  Ant_Exception_Clear(js);
+  ant_value_t escaped = sv_invoke_native(js, forgotten_native_failure, NULL, 0, js_mkundef());
+  assert(is_err(escaped) && Ant_Exception_Peek(js) == escaped);
+  assert(vtype(js_take_thrown(js, escaped)) == kTypeNull);
+
+  // Both entry paths must publish a returned record even when native code has
+  // already cleared its current handle. An escaped record supersedes a parent.
+  for (int scoped = 0; scoped < 2; scoped++) {
+    if (scoped) js_throw(js, error);
+    escaped = sv_invoke_native(js, detached_native_failure, NULL, 0, js_mkundef());
+    assert(is_err(escaped) && Ant_Exception_Peek(js) == escaped);
+    assert(vtype(js_take_thrown(js, escaped)) == kTypeNull);
+  }
+
+  // Constructor targets need the separate native frame even without an outer
+  // exception. Exercise both reasons for scoped entry without C-stack roots.
+  for (int pending = 0; pending < 2; pending++) {
+    ant_value_t caller_exception = pending ? js_throw(js, error) : js_mkundef();
+    ant_value_t target = js_mkobj(js);
+    sv_native_frame_t *parent_frame = js->vm->native_frame;
+    js_setstackbase(js, NULL);
+    success = sv_invoke_native(js, collect_native_target, NULL, 0, target);
+    js_setstackbase(js, &stack_base);
+    assert(success == target && js->vm->native_frame == parent_frame);
+    assert(Ant_Exception_Peek(js) == caller_exception);
+    if (pending) assert(gc_obj_is_marked(js_obj_ptr(js_as_obj(caller_exception))));
+    Ant_Exception_Clear(js);
+  }
+
+  // The VM's builtin fast path must enforce the same scope as other native
+  // entries, including when it is called without an active JS frame.
+  second = js_throw(js, error);
+  success = sv_vm_call(js->vm, js, js_mkfun(handled_native_failure), js_mkundef(), NULL, 0, NULL, js_mkundef());
+  assert(success == js_mknum(42) && Ant_Exception_Peek(js) == second);
+  Ant_Exception_Clear(js);
+  escaped = sv_vm_call(js->vm, js, js_mkfun(forgotten_native_failure), js_mkundef(), NULL, 0, NULL, js_mkundef());
+  assert(is_err(escaped) && Ant_Exception_Peek(js) == escaped);
+  assert(vtype(js_take_thrown(js, escaped)) == kTypeNull);
+
+  // Only the completion owns these heap edges: neither pending state nor
+  // conservative C-stack scanning may keep its payload and stack alive.
+  ant_value_t retained = retained_completion(js);
+  GC_ROOT_PIN(js, retained);
+  js_setstackbase(js, NULL);
+  for (int i = 0; i < 2; i++) {
+    if (i == 0) gc_run_minor(js);
+    else gc_run(js);
+    ant_value_t value = Ant_Exception_Value(js, retained);
+    assert(gc_obj_is_marked(js_obj_ptr(value)));
+    assert(js_get(js, value, "answer") == js_mknum(42));
+    ant_offset_t stack_len;
+    const char *stack = js_getstr(js, Ant_Exception_Stack(js, retained), &stack_len);
+    assert(stack && stack_len == 14 && memcmp(stack, "retained stack", 14) == 0);
+    assert(!Ant_Exception_Pending(js));
+  }
+  js_setstackbase(js, &stack_base);
+
+  CheckSandboxExceptionRecords(js);
+  CheckFormattedErrorValues(js);
+  GC_ROOT_RESTORE(js, root_mark);
+  js_destroy(js);
+  puts("PASS error handoffs preserve values and exception ownership");
+}

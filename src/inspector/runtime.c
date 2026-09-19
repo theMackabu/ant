@@ -483,29 +483,22 @@ void inspector_replay_console_events(inspector_client_t *client) {
     inspector_send_ws(client, event->json);
 }
 
-void inspector_clear_exception_state(ant_t *js) {
-  if (!js) return;
-  js->thrown_exists = false;
-  js->thrown_value = js_mkundef();
-  js->thrown_stack = js_mkundef();
-}
-
-static ant_value_t inspector_exception_value(ant_t *js, ant_value_t result) {
-  if (js && js->thrown_exists) return js->thrown_value;
-  if (vtype(result) == kTypeError && vdata(result) != 0) return mkval(kTypeObject, vdata(result));
-  return result;
-}
-
 static bool inspector_exception_description(ant_t *js, ant_value_t err, sbuf_t *out) {
   if (!js || !out) return false;
-  if (vtype(err) == kTypeObject) {
-    ant_value_t stack = js_get(js, err, "stack");
-    if (vtype(stack) == kTypeString) {
-      size_t len = 0;
-      const char *s = js_getstr(js, stack, &len);
-      return sbuf_json_string_len(out, s, len);
-    }
+  ant_value_t stack = js_mkundef();
+  
+  if (is_err(err)) {
+    stack = Ant_Exception_Stack(js, err);
+    err = Ant_Exception_Value(js, err);
+  } else if (vtype(err) == kTypeObject) stack = js_get(js, err, "stack");
 
+  if (vtype(stack) == kTypeString) {
+    size_t len = 0;
+    const char *s = js_getstr(js, stack, &len);
+    return sbuf_json_string_len(out, s, len);
+  }
+
+  if (vtype(err) == kTypeObject) {
     ant_value_t message = js_get(js, err, "message");
     if (vtype(message) == kTypeString) {
       size_t len = 0;
@@ -562,17 +555,19 @@ static void inspector_send_eval_result_kind(
   inspector_client_t *client, int id, ant_value_t result, bool force_exception
 ) {
   ant_t *js = client->js;
-  bool exception = force_exception || is_err(result) || js->thrown_exists;
-  ant_value_t exception_value = force_exception
-    ? result
-    : (exception ? inspector_exception_value(js, result) : js_mkundef());
-
+  ant_value_t completion = !force_exception && !is_err(result) && Ant_Exception_Pending(js)
+    ? Ant_Exception_Peek(js) : result;
+  bool exception = force_exception || is_err(completion);
+  ant_value_t exception_value = exception ? Ant_Exception_Value(js, completion) : js_mkundef();
+  gc_temp_root_scope_t roots;
+  gc_temp_root_scope_begin(js, &roots);
   sbuf_t b = {0};
+  if (!gc_temp_root_handle_valid(gc_temp_root_add(&roots, completion))) goto oom;
   if (!sbuf_append(&b, "{\"result\":")) goto oom;
   if (!inspector_value_to_remote_object(js, exception ? exception_value : result, &b)) goto oom;
   if (exception) {
     if (!sbuf_append(&b, ",\"exceptionDetails\":{\"exceptionId\":1,\"text\":")) goto oom;
-    if (!inspector_exception_description(js, exception_value, &b)) goto oom;
+    if (!inspector_exception_description(js, completion, &b)) goto oom;
     if (!sbuf_append(&b, ",\"lineNumber\":0,\"columnNumber\":0,\"exception\":")) goto oom;
     if (!inspector_value_to_remote_object(js, exception_value, &b)) goto oom;
     if (!sbuf_append(&b, "}")) goto oom;
@@ -580,12 +575,14 @@ static void inspector_send_eval_result_kind(
   if (!sbuf_append(&b, "}")) goto oom;
   inspector_send_response_obj(client, id, b.data);
   free(b.data);
-  inspector_clear_exception_state(js);
+  Ant_Exception_Clear(js);
+  gc_temp_root_scope_end(&roots);
   return;
 
 oom:
   free(b.data);
-  inspector_clear_exception_state(js);
+  Ant_Exception_Clear(js);
+  gc_temp_root_scope_end(&roots);
   inspector_send_error(client, id, -32000, "Out of memory");
 }
 
@@ -650,7 +647,7 @@ static bool inspector_defer_eval_result(
   ant_t *js = client->js;
   ant_value_t promise = js_promise_assimilate_awaitable(js, *result);
   *result = promise;
-  if (is_err(promise) || js->thrown_exists || vtype(promise) != kTypePromise) return false;
+  if (is_err(promise) || Ant_Exception_Pending(js) || vtype(promise) != kTypePromise) return false;
 
   inspector_await_t *pending = calloc(1, sizeof(*pending));
   if (!pending) {
@@ -675,11 +672,11 @@ static bool inspector_defer_eval_result(
   ant_value_t chained = js_promise_then(js, promise, fulfilled, rejected);
   GC_ROOT_PIN(js, chained);
 
-  if (is_err(fulfilled) || is_err(rejected) || is_err(chained) || js->thrown_exists) {
+  if (is_err(fulfilled) || is_err(rejected) || is_err(chained) || Ant_Exception_Pending(js)) {
     inspector_await_t *failed = inspector_take_pending_await(pending->id);
     free(failed);
     GC_ROOT_RESTORE(js, root_mark);
-    inspector_clear_exception_state(js);
+    Ant_Exception_Clear(js);
     inspector_send_error(client, request_id, -32000, "Unable to await promise");
     return true;
   }
@@ -692,7 +689,7 @@ static bool inspector_defer_eval_result(
 void inspector_send_eval_completion(
   inspector_client_t *client, int id, ant_value_t result, bool await_promise
 ) {
-  bool deferred = await_promise && !is_err(result) && !client->js->thrown_exists &&
+  bool deferred = await_promise && !is_err(result) && !Ant_Exception_Pending(client->js) &&
     inspector_defer_eval_result(client, id, &result);
   if (!deferred) inspector_send_eval_result(client, id, result);
 }
@@ -740,7 +737,7 @@ void inspector_eval(inspector_client_t *client, int id, yyjson_val *params) {
   size_t expr_len = yyjson_get_len(expr_val);
 
   const char *prev_filename = client->js->filename;
-  inspector_clear_exception_state(client->js);
+  Ant_Exception_Clear(client->js);
   bool await_promise = inspector_param_bool(params, "awaitPromise");
 
   if (inspector_param_bool(params, "throwOnSideEffect")) {

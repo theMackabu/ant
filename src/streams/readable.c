@@ -287,12 +287,11 @@ ant_value_t readable_stream_cancel(ant_t *js, ant_value_t stream_obj, ant_value_
   ant_value_t p = js_mkpromise(js);
 
   if (is_err(result)) {
-    ant_value_t thrown = js->thrown_value;
-    js_reject_promise(js, p, is_object_type(thrown) ? thrown : result);
+    js_reject_promise(js, p, result);
   } else if (vtype(result) == kTypePromise) {
     ant_value_t res_fn = js_heavy_mkfun(js, rs_cancel_resolve, p);
     ant_value_t rej_fn = js_heavy_mkfun(js, rs_cancel_reject, p);
-    js_promise_then(js, result, res_fn, rej_fn);
+    Ant_Promise_Observe(js, result, res_fn, rej_fn);
   } else js_resolve_promise(js, p, js_mkundef());
 
   return p;
@@ -341,18 +340,17 @@ void rs_default_controller_call_pull_if_needed(ant_t *js, ant_value_t controller
     if (vtype(result) == kTypePromise) {
       ant_value_t resolve_fn = js_heavy_mkfun(js, rs_pull_resolve_handler, controller_obj);
       ant_value_t reject_fn = js_heavy_mkfun(js, rs_pull_reject_handler, controller_obj);
-      js_promise_then(js, result, resolve_fn, reject_fn);
+      Ant_Promise_Observe(js, result, resolve_fn, reject_fn);
     } else if (is_err(result)) {
-      if (stream->state == RS_STATE_READABLE) {
-        ant_value_t thrown = js->thrown_value;
-        readable_stream_error(js, stream_obj, is_object_type(thrown) ? thrown : result);
-      }
+      ant_value_t err = js_take_thrown(js, result);
+      if (stream->state == RS_STATE_READABLE)
+        readable_stream_error(js, stream_obj, err);
     } else {
       ant_value_t resolved = js_mkpromise(js);
       js_resolve_promise(js, resolved, js_mkundef());
       ant_value_t resolve_fn = js_heavy_mkfun(js, rs_pull_resolve_handler, controller_obj);
       ant_value_t reject_fn = js_heavy_mkfun(js, rs_pull_reject_handler, controller_obj);
-      js_promise_then(js, resolved, resolve_fn, reject_fn);
+      Ant_Promise_Observe(js, resolved, resolve_fn, reject_fn);
     }
   } else ctrl->pulling = false;
 }
@@ -428,6 +426,12 @@ static ant_value_t js_rs_controller_close(ant_params_t) {
   return js_mkundef();
 }
 
+static ant_value_t rs_take_size_error(ant_t *js, ant_value_t stream_obj) {
+  ant_value_t err = js_take_thrown(js, js_mkundef());
+  rs_stream_t *stream = rs_get_stream(stream_obj);
+  return stream && stream->state == RS_STATE_ERRORED ? rs_stream_error(stream_obj) : err;
+}
+
 static ant_value_t js_rs_controller_enqueue(ant_params_t) {
   rs_controller_t *ctrl = rs_get_controller(js->this_val);
   if (!ctrl) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStreamDefaultController");
@@ -453,8 +457,7 @@ static ant_value_t js_rs_controller_enqueue(ant_params_t) {
     ant_value_t size_args[1] = { chunk };
     ant_value_t size_result = sv_vm_call(js->vm, js, size_fn, js_mkundef(), size_args, 1, NULL, js_mkundef());
     if (is_err(size_result)) {
-      ant_value_t thrown = js->thrown_value;
-      ant_value_t err = is_object_type(thrown) ? thrown : size_result;
+      ant_value_t err = Ant_Exception_Pending(js) ? js_take_thrown(js, size_result) : size_result;
       if (stream && stream->state == RS_STATE_ERRORED) err = rs_stream_error(stream_obj);
       ctrl->in_enqueue = false;
       readable_stream_error(js, stream_obj, err);
@@ -467,9 +470,8 @@ static ant_value_t js_rs_controller_enqueue(ant_params_t) {
   ctrl->in_enqueue = false;
 
   if (chunk_size < 0 || chunk_size != chunk_size || chunk_size == (double)INFINITY) {
-    js_mkerr_typed(js, JS_ERR_RANGE,
+    ant_value_t err = Ant_Exception_Pending(js) ? rs_take_size_error(js, stream_obj) : js_make_error_silent(js, JS_ERR_RANGE,
       "The return value of a queuing strategy's size function must be a finite, non-NaN, non-negative number");
-    ant_value_t err = is_object_type(js->thrown_value) ? js->thrown_value : js_mkundef();
     readable_stream_error(js, stream_obj, err);
     return js_throw(js, err);
   }
@@ -526,14 +528,10 @@ ant_value_t rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t c
     ant_value_t size_args[1] = { chunk };
     ant_value_t size_result = sv_vm_call(js->vm, js, size_fn, js_mkundef(), size_args, 1, NULL, js_mkundef());
     if (is_err(size_result)) {
-      ant_value_t thrown = js->thrown_value;
-      ant_value_t err = is_object_type(thrown) ? thrown : size_result;
+      ant_value_t err = Ant_Exception_Pending(js) ? js_take_thrown(js, size_result) : size_result;
       if (stream && stream->state == RS_STATE_ERRORED)
         err = rs_stream_error(stream_obj);
       ctrl->in_enqueue = false;
-      js->thrown_exists = false;
-      js->thrown_value = js_mkundef();
-      js->thrown_stack = js_mkundef();
       readable_stream_error(js, stream_obj, err);
       return js_throw(js, err);
     }
@@ -543,7 +541,7 @@ ant_value_t rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t c
   ctrl->in_enqueue = false;
 
   if (chunk_size < 0 || chunk_size != chunk_size || chunk_size == (double)INFINITY) {
-    ant_value_t err = js_make_error_silent(js, JS_ERR_RANGE,
+    ant_value_t err = Ant_Exception_Pending(js) ? rs_take_size_error(js, stream_obj) : js_make_error_silent(js, JS_ERR_RANGE,
       "The return value of a queuing strategy's size function must be a finite, non-NaN, non-negative number");
     readable_stream_error(js, stream_obj, err);
     return js_throw(js, err);
@@ -626,8 +624,7 @@ static ant_value_t js_rs_reader_cancel(ant_params_t) {
   ant_value_t stream_obj = rs_reader_stream(js->this_val);
   if (!rs_is_stream(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot cancel a released reader");
-    js_reject_promise(js, p, js->thrown_value);
+    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Cannot cancel a released reader"));
     return p;
   }
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
@@ -679,8 +676,7 @@ static ant_value_t js_rs_cancel(ant_params_t) {
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
   if (rs_is_reader(rs_stream_reader(js->this_val))) {
     ant_value_t p = js_mkpromise(js);
-    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot cancel a locked ReadableStream");
-    js_reject_promise(js, p, js->thrown_value);
+    js_reject_promise(js, p, js_make_error_silent(js, JS_ERR_TYPE, "Cannot cancel a locked ReadableStream"));
     return p;
   }
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
@@ -908,7 +904,7 @@ static ant_value_t js_rs_ctor(ant_params_t) {
     if (vtype(start_result) == kTypePromise) {
       ant_value_t resolve_fn = js_heavy_mkfun(js, rs_start_resolve_handler, ctrl_obj);
       ant_value_t reject_fn = js_heavy_mkfun(js, rs_start_reject_handler, ctrl_obj);
-      js_promise_then(js, start_result, resolve_fn, reject_fn);
+      Ant_Promise_Observe(js, start_result, resolve_fn, reject_fn);
     }
 
     if (vtype(start_result) != kTypePromise) {
@@ -916,14 +912,14 @@ static ant_value_t js_rs_ctor(ant_params_t) {
       js_resolve_promise(js, resolved, js_mkundef());
       ant_value_t res_fn = js_heavy_mkfun(js, rs_start_resolve_handler, ctrl_obj);
       ant_value_t rej_fn = js_heavy_mkfun(js, rs_start_reject_handler, ctrl_obj);
-      js_promise_then(js, resolved, res_fn, rej_fn);
+      Ant_Promise_Observe(js, resolved, res_fn, rej_fn);
     }
   } else {
     ant_value_t resolved = js_mkpromise(js);
     js_resolve_promise(js, resolved, js_mkundef());
     ant_value_t res_fn = js_heavy_mkfun(js, rs_start_resolve_handler, ctrl_obj);
     ant_value_t rej_fn = js_heavy_mkfun(js, rs_start_reject_handler, ctrl_obj);
-    js_promise_then(js, resolved, res_fn, rej_fn);
+    Ant_Promise_Observe(js, resolved, res_fn, rej_fn);
   }
 
   return obj;
@@ -947,7 +943,7 @@ ant_value_t rs_create_stream(ant_t *js, ant_value_t pull_fn, ant_value_t cancel_
   js_resolve_promise(js, resolved, js_mkundef());
   ant_value_t res_fn = js_heavy_mkfun(js, rs_start_resolve_handler, ctrl_obj);
   ant_value_t rej_fn = js_heavy_mkfun(js, rs_start_reject_handler, ctrl_obj);
-  js_promise_then(js, resolved, res_fn, rej_fn);
+  Ant_Promise_Observe(js, resolved, res_fn, rej_fn);
 
   return obj;
 }

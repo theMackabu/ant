@@ -307,6 +307,7 @@ static void gc_sweep_young_upvalues(ant_t *js) {
 void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value_t value) {
   if (!js || !func || !is_tagged(value)) return;
   uint8_t type = vtype_tagged(value);
+  if (type == kTypeError && vdata(value) < 2) return;
   
   if (type != kTypeFunction) {
     if (type == kTypeString) goto remember;
@@ -450,6 +451,7 @@ void gc_mark_closure(ant_t *js, sv_closure_t *c) {
 void gc_mark_value(ant_t *js, ant_value_t v) {
   if (!is_tagged(v)) return;
   uint8_t t = vtype_tagged(v);
+  if (t == kTypeError && vdata(v) < 2) return;
 
   if (t == kTypeFunction) {
     gc_mark_closure(js, (sv_closure_t *)vptr(v));
@@ -486,7 +488,14 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   ant_gc_shapes_mark(obj->shape);
   gc_mark_value(js, obj->proto);
 
-  if (obj->type_tag != kTypeArray) gc_mark_value(js, obj->u.data.value);
+  if (obj->type_tag == kTypeError) {
+    gc_mark_value(js, obj->u.exception.value);
+    gc_mark_value(js, obj->u.exception.stack);
+  }
+  
+  else if (obj->type_tag != kTypeArray) 
+    gc_mark_value(js, obj->u.data.value);
+  
   if (obj->type_tag == kTypeGenerator) {
     coroutine_t *coro = generator_get_coro_for_gc(js_obj_from_ptr(obj));
     if (coro) gc_mark_coroutine(js, coro);
@@ -881,8 +890,8 @@ static void gc_mark_roots(ant_t *js) {
   
   gc_mark_value(js, js->this_val);
   gc_mark_value(js, js->current_func);
-  gc_mark_value(js, js->thrown_value);
-  gc_mark_value(js, js->thrown_stack);
+  gc_mark_value(js, js->exception);
+  gc_mark_value(js, js->exception_oom);
   gc_mark_value(js, js->length_str);
 
   for (ant_module_t *ctx = js->modules.module_stack; ctx; ctx = ctx->prev) {

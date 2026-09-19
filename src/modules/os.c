@@ -362,7 +362,7 @@ static ant_value_t os_new_cpu_record(ant_t *js) {
     js_mkprop_fast(js, seed, "speed", 5, js_mkundef());
     js_mkprop_fast(js, seed, "times", 5, js_mkundef());
     GC_ROOT_RESTORE(js, mark);
-    if (js->thrown_exists) return mkval(kTypeError, 0);
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     js->mutable_roots.os_cpu_template = seed;
   }
   return js_mkobj_from_template(js, seed);
@@ -381,7 +381,7 @@ static ant_value_t os_new_cpu_times(ant_t *js) {
     js_mkprop_fast(js, seed, "idle", 4, js_mkundef());
     js_mkprop_fast(js, seed, "irq", 3, js_mkundef());
     GC_ROOT_RESTORE(js, mark);
-    if (js->thrown_exists) return mkval(kTypeError, 0);
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     js->mutable_roots.os_cpu_times_template = seed;
   }
   return js_mkobj_from_template(js, seed);
@@ -419,7 +419,7 @@ static ant_value_t push_cpu_entry(ant_t *js, ant_value_t arr, const char *model,
   js_arr_push(js, arr, cpu);
   GC_ROOT_RESTORE(js, mark);
   
-  return js->thrown_exists ? mkval(kTypeError, 0) : js_mkundef();
+  return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : js_mkundef();
 }
 
 #ifdef __APPLE__

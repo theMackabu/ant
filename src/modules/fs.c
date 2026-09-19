@@ -232,7 +232,7 @@ static ant_value_t fs_call_callback(
   ant_t *js, ant_value_t fn,
   ant_value_t *args, int nargs
 ) {
-  ant_value_t result = fs_call_value(js, fn, js_mkundef(), args, nargs);
+  ant_value_t result = Ant_Error_CallCallback(js, fn, js_mkundef(), args, nargs);
   process_report_uncaught_exception_if_pending(js);
   return result;
 }
@@ -288,7 +288,8 @@ static ant_value_t fs_stream_error(ant_t *js, ant_value_t stream_obj, const char
   if (code) js_set(js, props, "code", js_mkstr(js, code, strlen(code)));
   js_set(js, props, "errno", js_mknum((double)uv_code));
   if (vtype(path_val) == kTypeString) js_set(js, props, "path", path_val);
-  return js_mkerr_props(js, JS_ERR_TYPE, props, "%s failed: %s", op, uv_strerror(uv_code));
+  ant_value_t err = js_mkerr_props(js, JS_ERR_TYPE, props, "%s failed: %s", op, uv_strerror(uv_code));
+  return js_take_thrown(js, err);
 }
 
 static ant_value_t fs_stream_push_chunk(ant_t *js, ant_value_t stream_obj, ant_value_t chunk) {
@@ -297,7 +298,7 @@ static ant_value_t fs_stream_push_chunk(ant_t *js, ant_value_t stream_obj, ant_v
 
 static ant_value_t fs_stream_callback(ant_t *js, ant_value_t callback, ant_value_t value) {
   if (!is_callable(callback)) return js_mkundef();
-  return fs_call_value(js, callback, js_mkundef(), &value, 1);
+  return Ant_Error_CallCallback(js, callback, js_mkundef(), &value, 1);
 }
 
 static int fs_stream_close_fd_sync(ant_t *js, ant_value_t stream_obj) {
@@ -409,9 +410,12 @@ static ant_value_t fs_readstream__read(ant_params_t) {
   bool reached_eof = false;
 
   if (fd < 0) {
+    GC_ROOT_SAVE(mark, js);
     ant_value_t err = fs_stream_error(js, stream_obj, "open", fd);
+    GC_ROOT_PIN(js, err);
     ant_value_t destroy_fn = js_getprop_fallback(js, stream_obj, "destroy");
     if (is_callable(destroy_fn)) fs_call_value(js, destroy_fn, stream_obj, &err, 1);
+    GC_ROOT_RESTORE(js, mark);
     return js_mkundef();
   }
 
@@ -428,9 +432,13 @@ static ant_value_t fs_readstream__read(ant_params_t) {
 
   ArrayBufferData *ab = create_array_buffer_data(want);
   if (!ab) {
+    GC_ROOT_SAVE(mark, js);
     ant_value_t err = js_mkerr(js, "Failed to allocate ReadStream buffer");
+    err = js_take_thrown(js, err);
+    GC_ROOT_PIN(js, err);
     ant_value_t destroy_fn = js_getprop_fallback(js, stream_obj, "destroy");
     if (is_callable(destroy_fn)) fs_call_value(js, destroy_fn, stream_obj, &err, 1);
+    GC_ROOT_RESTORE(js, mark);
     return js_mkundef();
   }
 
@@ -440,10 +448,13 @@ static ant_value_t fs_readstream__read(ant_params_t) {
   uv_fs_req_cleanup(&req);
 
   if (result < 0) {
+    GC_ROOT_SAVE(mark, js);
     ant_value_t err = fs_stream_error(js, stream_obj, "read", result);
+    GC_ROOT_PIN(js, err);
     ant_value_t destroy_fn = js_getprop_fallback(js, stream_obj, "destroy");
     free_array_buffer_data(ab);
     if (is_callable(destroy_fn)) fs_call_value(js, destroy_fn, stream_obj, &err, 1);
+    GC_ROOT_RESTORE(js, mark);
     return js_mkundef();
   }
 
@@ -455,10 +466,7 @@ static ant_value_t fs_readstream__read(ant_params_t) {
   }
 
   ant_value_t chunk = create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, (size_t)result, "Buffer");
-  if (vtype(chunk) == kTypeError) {
-    free_array_buffer_data(ab);
-    return chunk;
-  }
+  if (is_err(chunk)) return chunk;
 
   if (result < (int)want) reached_eof = true;
   if (end >= 0 && (pos + result - 1) >= end) reached_eof = true;
@@ -728,7 +736,7 @@ static ant_value_t fs_new_stats_record(ant_t *js) {
     js_mkprop_fast(js, seed, "birthtime", 9, js_mkundef());
     GC_ROOT_RESTORE(js, mark);
     
-    if (js->thrown_exists) return mkval(kTypeError, 0);
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     js->mutable_roots.fs_stats_template = seed;
   }
   
@@ -753,7 +761,7 @@ static ant_value_t fs_new_io_result(ant_t *js, bool written, double bytes, ant_v
     else js_mkprop_fast(js, seed, "bytesRead", 9, js_mknum(0));
     
     js_mkprop_fast(js, seed, "buffer", 6, js_mkundef());
-    if (js->thrown_exists) { GC_ROOT_RESTORE(js, mark); return mkval(kTypeError, 0); }
+    if (Ant_Exception_Pending(js)) { GC_ROOT_RESTORE(js, mark); return Ant_Exception_Current(js); }
     *cache = seed;
   }
   
@@ -831,7 +839,7 @@ static ant_value_t fs_stats_object_new(ant_t *js, const fs_stat_fields_t *f) {
     !fs_stats_set_date(js, stat_obj, FS_STATS_BIRTHTIME, f->birthtime_ms)
   ) {
     GC_ROOT_RESTORE(js, mark);
-    return mkval(kTypeError, 0);
+    return Ant_Exception_Current(js);
   }
   
   GC_ROOT_RESTORE(js, mark);
@@ -1002,6 +1010,7 @@ static void fs_watcher_emit_error(fs_watcher_t *watcher, int status) {
 
   if (!watcher || vtype(watcher->obj) != kTypeObject) return;
   args[0] = fs_watch_error(watcher->js, status, watcher->path);
+  args[0] = js_take_thrown(watcher->js, args[0]);
   eventemitter_emit_args(watcher->js, watcher->obj, "error", args, 1);
 }
 
@@ -1016,6 +1025,11 @@ static void fs_watcher_emit_change(fs_watcher_t *watcher, const char *filename, 
 
   args[0] = js_mkstr(watcher->js, event_name, strlen(event_name));
   args[1] = name ? fs_path_result(watcher->js, name, strlen(name), watcher->buffer_encoding) : js_mkundef();
+  if (is_err(args[1])) {
+    ant_value_t error = js_take_thrown(watcher->js, args[1]);
+    eventemitter_emit_args(watcher->js, watcher->obj, "error", &error, 1);
+    return;
+  }
   eventemitter_emit_args(watcher->js, watcher->obj, "change", args, 2);
 }
 
@@ -1567,8 +1581,13 @@ static void free_fs_request(fs_request_t *req) {
 }
 
 static ant_value_t fs_rejected_promise(ant_t *js, ant_value_t err) {
+  GC_ROOT_SAVE(mark, js);
+  if (is_err(err)) err = js_take_thrown(js, err);
+  GC_ROOT_PIN(js, err);
+
   ant_value_t promise = js_mkpromise(js);
-  js_reject_promise(js, promise, err);
+  if (!is_err(promise)) js_reject_promise(js, promise, err);
+  GC_ROOT_RESTORE(js, mark);
   return promise;
 }
 
@@ -1845,11 +1864,9 @@ static bool fs_buffer_encoding(ant_t *js, ant_value_t options) {
 
 static ant_value_t fs_read_to_uint8array(ant_t *js, const char *data, size_t len) {
   ArrayBufferData *ab = create_array_buffer_data(len);
-  if (!ab) return js_mkundef();
+  if (!ab) return js_mkerr(js, "Out of memory");
   memcpy(ab->data, data, len);
-  ant_value_t result = create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Buffer");
-  if (vtype(result) == kTypeError) free_array_buffer_data(ab);
-  return result;
+  return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Buffer");
 }
 
 static ant_value_t fs_path_result(ant_t *js, const char *data, size_t len, bool as_buffer) {
@@ -1875,11 +1892,8 @@ static void complete_request(fs_request_t *req) {
     } else reject_value = js_mkerr(req->js, "%s", err_msg);
 
     if (is_err(reject_value)) {
-      reject_value = req->js->thrown_exists ? req->js->thrown_value : js_mkundef();
-      if (!req->js->thrown_exists)
-        reject_value = js_mkstr(req->js, err_msg, strlen(err_msg));
-      req->js->thrown_exists = false;
-      req->js->thrown_value = js_mkundef();
+      reject_value = js_take_thrown(req->js, js_mkundef());
+      if (is_undefined(reject_value)) reject_value = js_mkstr(req->js, err_msg, strlen(err_msg));
     }
     js_reject_promise(req->js, req->promise, reject_value);
   } else {
@@ -1892,7 +1906,8 @@ static void complete_request(fs_request_t *req) {
       result = js_mkstr(req->js, req->data, req->data_len);
     else if ((req->op_type == FS_OP_REALPATH || req->op_type == FS_OP_MKDTEMP) && req->data)
       result = fs_path_result(req->js, req->data, req->data_len, req->buffer_encoding);
-    js_resolve_promise(req->js, req->promise, result);
+    if (is_err(result)) js_reject_promise(req->js, req->promise, result);
+    else js_resolve_promise(req->js, req->promise, result);
   }
   
   remove_pending_request(req);
@@ -2198,10 +2213,15 @@ static void on_realpath_complete(uv_fs_t *uv_req) {
 }
 
 static ant_value_t create_dirent_object(ant_t *js, const char *name, size_t name_len, uv_dirent_type_t type, bool as_buffer) {
+  ant_value_t name_value = fs_path_result(js, name, name_len, as_buffer);
+  if (is_err(name_value)) return name_value;
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, name_value);
   ant_value_t obj = js_newobj(js);
   js_set_proto(js, obj, js->builtins.dirent_proto);
-  js_set(js, obj, "name", fs_path_result(js, name, name_len, as_buffer));
+  js_set(js, obj, "name", name_value);
   js_set_slot(obj, SLOT_DATA, tov((double)type));
+  GC_ROOT_RESTORE(js, root_mark);
   return obj;
 }
 
@@ -2288,13 +2308,18 @@ static void on_readdir_complete(uv_fs_t *uv_req) {
   uv_dirent_t dirent;
   
   while (uv_fs_scandir_next(uv_req, &dirent) != UV_EOF) {
-  if (req->with_file_types) {
-    ant_value_t entry = create_dirent_object(req->js, dirent.name, strlen(dirent.name), dirent.type, req->buffer_encoding);
+    ant_value_t entry = req->with_file_types
+      ? create_dirent_object(req->js, dirent.name, strlen(dirent.name), dirent.type, req->buffer_encoding)
+      : fs_path_result(req->js, dirent.name, strlen(dirent.name), req->buffer_encoding);
+    if (is_err(entry)) {
+      js_reject_promise(req->js, req->promise, entry);
+      req->completed = 1;
+      remove_pending_request(req);
+      free_fs_request(req);
+      return;
+    }
     js_arr_push(req->js, arr, entry);
-  } else {
-    ant_value_t name = fs_path_result(req->js, dirent.name, strlen(dirent.name), req->buffer_encoding);
-    js_arr_push(req->js, arr, name);
-  }}
+  }
   
   req->completed = 1;
   js_resolve_promise(req->js, req->promise, arr);
@@ -3283,7 +3308,8 @@ static ant_value_t builtin_fs_mkdir(ant_params_t) {
     
     free(path_cstr);
     if (result != 0) {
-      js_reject_promise(js, promise, js_mkerr(js, "Failed to create directory: %s", strerror(errno)));
+      ant_value_t err = js_mkerr(js, "Failed to create directory: %s", strerror(errno));
+      js_reject_promise(js, promise, err);
     } else js_resolve_promise(js, promise, js_mkundef());
     
     return promise;
@@ -4306,13 +4332,15 @@ static ant_value_t builtin_fs_readdirSync(ant_params_t) {
   uv_dirent_t dirent;
   
   while (uv_fs_scandir_next(&req, &dirent) != UV_EOF) {
-  if (with_file_types) {
-    ant_value_t entry = create_dirent_object(js, dirent.name, strlen(dirent.name), dirent.type, as_buffer);
+    ant_value_t entry = with_file_types
+      ? create_dirent_object(js, dirent.name, strlen(dirent.name), dirent.type, as_buffer)
+      : fs_path_result(js, dirent.name, strlen(dirent.name), as_buffer);
+    if (is_err(entry)) {
+      uv_fs_req_cleanup(&req);
+      return entry;
+    }
     js_arr_push(js, arr, entry);
-  } else {
-    ant_value_t name = fs_path_result(js, dirent.name, strlen(dirent.name), as_buffer);
-    js_arr_push(js, arr, name);
-  }}
+  }
   
   uv_fs_req_cleanup(&req);
   return arr;
@@ -4396,6 +4424,7 @@ static ant_value_t builtin_fs_fsync(ant_params_t) {
 
   if (result < 0) {
     ant_value_t err = fs_mk_uv_error(js, result, "fsync", NULL, NULL);
+    err = js_take_thrown(js, err);
     ant_value_t cb_args[1] = { err };
     fs_call_value(js, req->callback_fn, js_mkundef(), cb_args, 1);
     remove_pending_request(req);
@@ -4426,7 +4455,7 @@ static void on_read_fd_complete(uv_fs_t *uv_req) {
 
   if (uv_req->result < 0) {
     if (is_callable(req->callback_fn)) {
-      ant_value_t err = js_mkerr(req->js, "read failed: %s", uv_strerror((int)uv_req->result));
+      ant_value_t err = fs_mk_uv_error(req->js, (int)uv_req->result, "read", NULL, NULL);
       ant_value_t cb_args[1] = { err };
       fs_call_callback(req->js, req->callback_fn, cb_args, 1);
       remove_pending_request(req);
@@ -5279,7 +5308,7 @@ static ant_value_t fs_callback_attach_promise(
   error_fn = js_heavy_mkfun(js, fs_callback_error_handler, error_ctx);
   GC_ROOT_PIN(js, error_fn);
 
-  js_promise_then(js, promise, success_fn, error_fn);
+  Ant_Promise_Observe(js, promise, success_fn, error_fn);
   GC_ROOT_RESTORE(js, root_mark);
   return js_mkundef();
 }
@@ -5316,12 +5345,9 @@ static ant_value_t fs_callback_wrapper_call(ant_params_t) {
     return result;
   }
 
-  if (is_err(result) || js->thrown_exists) {
-    ex = js->thrown_exists ? js->thrown_value : result;
+  if (is_err(result) || Ant_Exception_Pending(js)) {
+    ex = js_take_thrown(js, result);
     GC_ROOT_PIN(js, ex);
-    js->thrown_exists = false;
-    js->thrown_value = js_mkundef();
-    js->thrown_stack = js_mkundef();
     fs_callback_emit_error(js, callback, exists_style, ex);
     GC_ROOT_RESTORE(js, root_mark);
     return js_mkundef();
@@ -5361,16 +5387,11 @@ static ant_value_t fs_promise_wrapper_call(ant_params_t) {
   result = fs_call_value(js, original, this_arg, args, nargs);
   GC_ROOT_PIN(js, result);
 
-  if (is_err(result) || js->thrown_exists) {
-    error = js->thrown_exists ? js->thrown_value : result;
+  if (is_err(result) || Ant_Exception_Pending(js)) {
+    error = js_take_thrown(js, result);
     GC_ROOT_PIN(js, error);
-    js->thrown_exists = false;
-    js->thrown_value = js_mkundef();
-    js->thrown_stack = js_mkundef();
     result = fs_rejected_promise(js, error);
-  } else if (vtype(result) != kTypePromise) {
-    result = fs_resolved_promise(js, result);
-  }
+  } else if (vtype(result) != kTypePromise) result = fs_resolved_promise(js, result);
 
   GC_ROOT_RESTORE(js, root_mark);
   return result;

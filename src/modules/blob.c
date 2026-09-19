@@ -10,7 +10,6 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
-#include "silver/engine.h"
 #include "descriptors.h"
 
 #include "modules/blob.h"
@@ -136,7 +135,9 @@ static ant_value_t process_blob_parts(ant_t *js, byte_buf_t *buf, ant_value_t pa
 
   js_iter_t it;
   if (!js_iter_open(js, parts, &it))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Blob': The provided value is not of type 'BlobPart'");
+    return Ant_Exception_Pending(js) 
+      ? Ant_Exception_Current(js) 
+      : js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Blob': The provided value is not of type 'BlobPart'");
 
   ant_value_t value;
   while (js_iter_next(js, &it, &value)) {
@@ -144,7 +145,7 @@ static ant_value_t process_blob_parts(ant_t *js, byte_buf_t *buf, ant_value_t pa
     if (is_err(r)) { js_iter_close(js, &it); return r; }
   }
   
-  return js_mkundef();
+  return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : js_mkundef();
 }
 
 static void blob_finalize(ant_t *js, ant_object_t *obj) {
@@ -219,17 +220,20 @@ static ant_value_t js_blob_array_buffer(ant_params_t) {
 }
 
 static ant_value_t js_blob_bytes(ant_params_t) {
-  (void)args; (void)nargs;
   blob_data_t *bd = blob_get_data(js->this_val);
   ant_value_t promise = js_mkpromise(js);
 
   size_t sz = (bd && bd->data) ? bd->size : 0;
   ArrayBufferData *abd = create_array_buffer_data(sz);
+  
   if (!abd) { js_reject_promise(js, promise, js_mkerr(js, "out of memory")); return promise; }
   if (sz > 0 && bd) memcpy(abd->data, bd->data, sz);
 
-  js_resolve_promise(js, promise,
-    create_typed_array(js, TYPED_ARRAY_UINT8, abd, 0, sz, "Uint8Array"));
+  ant_value_t bytes = create_typed_array(js, TYPED_ARRAY_UINT8, abd, 0, sz, "Uint8Array");
+  
+  if (is_err(bytes)) js_reject_promise(js, promise, bytes);
+  else js_resolve_promise(js, promise, bytes);
+  
   return promise;
 }
 

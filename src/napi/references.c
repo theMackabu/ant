@@ -1,3 +1,5 @@
+#include "ant.h"
+#include "gc/roots.h"
 #include "napi_internal.h"
 
 void ant_napi_link_references(void) {}

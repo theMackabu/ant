@@ -359,6 +359,27 @@ array_dense_length_test = executable(
 )
 test('array-dense-length', array_dense_length_test)
 
+error_handoffs_test = executable(
+  'test-error-handoffs',
+  files('tests/test_error_handoffs.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('error-handoffs', error_handoffs_test)
+
+if host_machine.system() == 'darwin'
+  desktop_error_details_test = executable(
+    'test-desktop-error-details',
+    files('tests/test_desktop_error_details.c'),
+    dependencies: [libant_dep, dependency('appleframeworks', modules: 'AppKit')],
+    c_args: ['-UNDEBUG', '-x', 'objective-c', '-fobjc-arc'],
+    link_args: ['-Wl,-dead_strip'],
+    build_by_default: false
+  )
+  test('desktop-error-details', desktop_error_details_test)
+endif
+
 gc_plain_arrays_test = executable(
   'test-gc-plain-arrays',
   files('tests/test_gc_plain_arrays.c'),
