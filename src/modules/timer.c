@@ -755,6 +755,7 @@ bool queue_await_resume_job(coroutine_t *coro, ant_value_t value) {
   entry->kind = MT_AWAIT_RESUME;
 
   coroutine_retain(coro);
+  coro->await_resume_job = entry;
   queue_microtask_entry(
     &timer_state.microtasks, 
     &timer_state.microtasks_tail, entry
@@ -836,7 +837,7 @@ static inline void process_microtask_entry(ant_t *js, microtask_entry_t *entry) 
     coroutine_t *coro = entry->u.coro;
     GC_ROOT_PIN(js, value);
 
-    if (coro->await_registered)
+    if (coro->await_registered && coro->await_resume_job == entry)
       settle_and_resume_coroutine(js, coro, value, false);
 
     coroutine_release(coro);

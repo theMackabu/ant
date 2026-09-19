@@ -74,8 +74,10 @@ void coroutine_clear_await_registration(coroutine_t *coro) {
 
   ant_t *js = coro->js;
   ant_value_t promise = coro->awaited_promise;
+  
   coro->await_registered = false;
   coro->awaited_promise = js_mkundef();
+  coro->await_resume_job = NULL;
 
   if (js && vtype(promise) == kTypePromise)
     js_promise_clear_await_coroutine(js, promise, coro);

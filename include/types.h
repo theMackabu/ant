@@ -15,8 +15,9 @@ typedef struct ant_esm_state      ant_esm_state_t;
 typedef struct ant_regex_state    ant_regex_state_t;
 typedef struct ant_string_builder ant_string_builder_t;
 
-typedef struct coroutine    coroutine_t;
-typedef struct headers_data headers_data_t;
+typedef struct coroutine       coroutine_t;
+typedef struct headers_data    headers_data_t;
+typedef struct microtask_entry microtask_entry_t;
 
 typedef struct ant_object ant_object_t;
 typedef struct ant_shape  ant_shape_t;

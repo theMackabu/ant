@@ -198,7 +198,7 @@ void generator_mark_for_gc(ant_t *js, ant_value_t gen) {
 }
 
 bool generator_resume_pending_request(ant_t *js, coroutine_t *coro, ant_value_t result) {
-  if (!coro || coro->type != CORO_GENERATOR || vtype(coro->async_promise) != kTypePromise) return false;
+  if (!coro || !coro->is_generator || vtype(coro->async_promise) != kTypePromise) return false;
 
   ant_value_t gen = coro->owner_gen;
   generator_data_t *data = generator_data(gen);
@@ -566,7 +566,7 @@ ant_value_t sv_call_generator_closure_dispatch(
 
   *coro = (coroutine_t){
     .js = js,
-    .type = CORO_GENERATOR,
+    .is_generator = true,
     .this_val = this_val,
     .super_val = super_val,
     .new_target = new_target,

@@ -46,6 +46,14 @@ clears the frame slot. Nested catches and normal nested cleanup must not erase
 the saved completion. GC traces handler values in both live VMs and suspended
 activations; abrupt completion discards the handlers it exits.
 
+Queued await resumes must match the coroutine's current `await_resume_job`,
+as well as `await_registered`. Clearing an await on settlement, cancellation,
+or failed activation capture clears that non-owning job pointer. An older job
+must not settle or detach a replacement await. Queued jobs retain the coroutine
+and remain allocated until dispatch, so their addresses provide distinct
+registration identities without a wrapping counter. See the cancellation and
+replacement cases in [test_error_handoffs.c](../../tests/test_error_handoffs.c).
+
 `js_mkerr*` creates and publishes an exception record; it does not return an
 ordinary Error value. `js_reject_promise` consumes exception results through
 `Ant_Error_ConsumeMarker`, even when the Promise has already settled. Ordinary

@@ -133,6 +133,65 @@ static void CheckFulfilledAwaitRoots(ant_t *js) {
   }
 }
 
+static void RegisterTestAwait(ant_t *js, coroutine_t *coro, ant_value_t value) {
+  if (vtype(value) == kTypePromise) {
+    js_await_result_t result = js_promise_await_coroutine(js, value, coro);
+    assert(result.state == JS_AWAIT_PENDING);
+  } else {
+    assert(queue_await_resume_job(coro, value));
+    coro->awaited_promise = js_mkundef();
+    coro->await_registered = true;
+    coroutine_hold(coro, CORO_HOLD_AWAIT);
+  }
+}
+
+static void CheckCancelledAwaitReplacement(ant_t *js) {
+  // Cancel a queued primitive/fulfilled await before its job drains, then
+  // replace it with a primitive, fulfilled, pending, or rejected await.
+  for (int first_kind = 0; first_kind < 2; first_kind++) {
+    for (int next_kind = 0; next_kind < 4; next_kind++) {
+      GC_ROOT_SAVE(mark, js);
+      ant_value_t first = js_mknum(11);
+      ant_value_t next = js_mknum(22);
+      GC_ROOT_PIN(js, first);
+      GC_ROOT_PIN(js, next);
+
+      if (first_kind == 1) {
+        first = js_mkpromise(js);
+        assert(!is_err(first));
+        js_resolve_promise(js, first, js_mknum(11));
+      }
+      coroutine_t *coro = calloc(1, sizeof(*coro));
+      assert(coro);
+      sv_async_init_activation(coro, js, js_mkundef(), js_mkundef(),
+        js_mkundef(), js_mkundef(), js_mkundef(), 0);
+      RegisterTestAwait(js, coro, first);
+      assert(coroutine_cancel(coro));
+
+      if (next_kind != 0) {
+        next = js_mkpromise(js);
+        assert(!is_err(next));
+        if (next_kind == 1) js_resolve_promise(js, next, js_mknum(22));
+        else if (next_kind == 3) js_reject_promise(js, next, js_mknum(22));
+      }
+      RegisterTestAwait(js, coro, next);
+      process_microtasks(js);
+
+      if (next_kind == 2) {
+        // The stale job must neither settle nor detach the pending await.
+        assert(coro->await_registered && coro->result == js_mkundef());
+        js_resolve_promise(js, next, js_mknum(22));
+        process_microtasks(js);
+      }
+      assert(!coro->await_registered && coro->result == js_mknum(22));
+      assert(coro->is_error == (next_kind == 3));
+      assert(coro->refcount == 1);
+      coroutine_release(coro);
+      GC_ROOT_RESTORE(js, mark);
+    }
+  }
+}
+
 static ant_value_t check_callback(ant_params_t) {
   assert(!Ant_Exception_Pending(js));
   assert(nargs > 0 && args[0] == expected_reason);
@@ -481,6 +540,7 @@ int main(void) {
   CheckLongErrorMessages(js);
   CheckFinallyCompletionRoots(js);
   CheckFulfilledAwaitRoots(js);
+  CheckCancelledAwaitReplacement(js);
   GC_ROOT_RESTORE(js, root_mark);
   js_destroy(js);
   puts("PASS error handoffs preserve values and exception ownership");

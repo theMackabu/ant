@@ -9,12 +9,6 @@
 #include <stddef.h>
 #include <stdlib.h>
 
-typedef enum: uint8_t {
-  CORO_ASYNC_AWAIT,
-  CORO_GENERATOR,
-  CORO_ASYNC_GENERATOR
-} coroutine_type_t;
-
 typedef enum {
   CORO_HOLD_ACTIVE    = 1u << 0,
   CORO_HOLD_GENERATOR = 1u << 2,
@@ -42,14 +36,16 @@ struct coroutine {
 
   int nargs;
   uint8_t hold_bits;
-  coroutine_type_t type;
 
-  bool is_error;
-  bool await_registered;
+  bool is_generator: 1;
+  bool is_error: 1;
+  bool await_registered: 1;
 
   uint64_t gc_epoch;
   uint32_t refcount;
   uint32_t remember_index;
+
+  microtask_entry_t *await_resume_job;
 };
 
 typedef enum {
