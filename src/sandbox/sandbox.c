@@ -595,9 +595,10 @@ ant_value_t ant_sandbox_decode_error_value(ant_t *js, const void *payload, size_
     return Ant_Error_Create(js, JS_ERR_TYPE, "malformed sandbox error frame");
   }
 
-  char error_message[256];
-  snprintf(error_message, sizeof(error_message), "%.*s", (int)message_len, message);
+  char *error_message = sandbox_dup_bytes((const uint8_t *)message, message_len);
   ant_value_t err = Ant_Error_Create(js, JS_ERR_GENERIC, error_message);
+
+  free(error_message);
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, err);
 
@@ -605,6 +606,7 @@ ant_value_t ant_sandbox_decode_error_value(ant_t *js, const void *payload, size_
     if (name_len > 0) js_set(js, err, "name", js_mkstr(js, name, name_len));
     if (stack_len > 0) js_set(js, err, "stack", js_mkstr(js, stack, stack_len));
   }
+
   GC_ROOT_RESTORE(js, root_mark);
   return err;
 }
@@ -662,10 +664,7 @@ static bool sandbox_send_error_frame(ant_t *js, ant_value_t value, ant_value_t f
 
 static bool sandbox_send_uncaught_throw(ant_t *js) {
   if (!Ant_Exception_Pending(js)) return false;
-  sandbox_send_error_frame(
-    js, Ant_Exception_Value(js, Ant_Exception_Peek(js)),
-    Ant_Exception_Stack(js, Ant_Exception_Peek(js))
-  );
+  sandbox_send_error_frame(js, Ant_Exception_Peek(js), js_mkundef());
   Ant_Exception_Clear(js);
   return true;
 }

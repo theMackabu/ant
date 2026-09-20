@@ -11,11 +11,31 @@
 #include "modules/symbol.h"
 #include "modules/timer.h"
 #include "sandbox/sandbox.h"
+#include "sandbox/transport.h"
 #include "silver/call.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <wchar.h>
+
+static const char *sandbox_expected_display;
+static unsigned sandbox_error_frames;
+
+static bool CaptureSandboxErrorFrame(ant_sandbox_frame_type_t type, const void *payload, size_t length) {
+  assert(type == ANT_SANDBOX_FRAME_ERROR);
+  const char *display = NULL;
+  size_t display_len = 0;
+  assert(ant_sandbox_error_payload_display(payload, length, &display, &display_len));
+  assert(display_len == strlen(sandbox_expected_display));
+  assert(memcmp(display, sandbox_expected_display, display_len) == 0);
+  sandbox_error_frames++;
+  return true;
+}
+
+// Exercise the actual uncaught-error sender without a guest transport.
+#define ant_sandbox_transport_send_frame CaptureSandboxErrorFrame
+#include "../src/sandbox/sandbox.c"
+#undef ant_sandbox_transport_send_frame
 
 static ant_value_t expected_reason;
 static ant_value_t callback_throw;
@@ -532,6 +552,27 @@ static void CheckSandboxExceptionRecords(ant_t *js) {
   GC_ROOT_RESTORE(js, mark);
 }
 
+static void CheckSandboxUncaughtFrames(ant_t *js) {
+  GC_ROOT_SAVE(mark, js);
+  const char *captured = "captured sandbox stack";
+  ant_value_t stack = js_mkstr(js, captured, strlen(captured));
+  GC_ROOT_PIN(js, stack);
+  ant_value_t error = Ant_Error_Create(js, JS_ERR_TYPE | JS_ERR_NO_STACK, "sandbox diagnostic");
+  GC_ROOT_PIN(js, error);
+  ant_value_t values[] = { js_mknum(73), error, error };
+
+  sandbox_error_frames = 0;
+  for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
+    sandbox_expected_display = i < 2 ? captured : "sandbox diagnostic";
+    Ant_Exception_Raise(js, values[i], i < 2 ? stack : js_mkundef());
+    assert(sandbox_send_uncaught_throw(js));
+    assert(!Ant_Exception_Pending(js) && sandbox_error_frames == i + 1);
+    assert(!sandbox_send_uncaught_throw(js));
+    assert(sandbox_error_frames == i + 1);
+  }
+  GC_ROOT_RESTORE(js, mark);
+}
+
 static void CheckFormattedErrorValues(ant_t *js) {
   GC_ROOT_SAVE(mark, js);
   ant_value_t error = js_mkundef();
@@ -566,7 +607,7 @@ static void CheckLongErrorMessages(ant_t *js) {
   ant_value_t error = js_mkundef();
   GC_ROOT_PIN(js, error);
 
-  const size_t lengths[] = {0, 251, 252, 253, 255, 256, 257, 4096, 16384};
+  const size_t lengths[] = {0, 251, 252, 253, 255, 256, 257, 4096, 16384, 20000};
   for (size_t i = 0; i < sizeof(lengths) / sizeof(lengths[0]); i++) {
     size_t length = lengths[i];
     char *message = malloc(length + 1);
@@ -578,6 +619,15 @@ static void CheckLongErrorMessages(ant_t *js) {
     memcpy(formatted + length, "/7%", 4);
 
     error = Ant_Error_Create(js, JS_ERR_GENERIC | JS_ERR_NO_STACK, message);
+    CheckErrorMessage(js, error, message, length);
+    assert(Ant_Exception_Peek(js) == previous);
+
+    size_t payload_len = 0;
+    uint8_t *payload = ant_sandbox_build_error_payload(js, error, js_mkundef(), &payload_len);
+    assert(payload);
+    error = ant_sandbox_decode_error_value(js, payload, payload_len);
+    memset(payload, 0, payload_len);
+    free(payload);
     CheckErrorMessage(js, error, message, length);
     assert(Ant_Exception_Peek(js) == previous);
 
@@ -768,7 +818,7 @@ int main(void) {
     ant_value_t value = Ant_Exception_Value(js, retained);
     assert(gc_obj_is_marked(js_obj_ptr(value)));
     assert(js_get(js, value, "answer") == js_mknum(42));
-    size_t stack_len;
+    size_t stack_len = 0;
     const char *stack = js_getstr(js, Ant_Exception_Stack(js, retained), &stack_len);
     assert(stack && stack_len == 14 && memcmp(stack, "retained stack", 14) == 0);
     assert(!Ant_Exception_Pending(js));
@@ -776,6 +826,7 @@ int main(void) {
   js_setstackbase(js, &stack_base);
 
   CheckSandboxExceptionRecords(js);
+  CheckSandboxUncaughtFrames(js);
   CheckFormattedErrorValues(js);
   CheckLongErrorMessages(js);
   CheckFinallyCompletionRoots(js);

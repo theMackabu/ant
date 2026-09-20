@@ -27,7 +27,7 @@ try {
     const stderr = result.stderr.replace(/\x1b\[[0-9;]*m/g, '');
     assert.strictEqual(result.status, 1, JSON.stringify(result));
     assert.match(stderr, /actual-callback-failure/);
-    assert.doesNotMatch(stderr, /Error: handled-marker-unique/);
+    assert.doesNotMatch(stderr, /handled-marker-unique/);
   }
   for (const body of [
     "Reflect.apply(() => { throw 'handled-async-marker'; }, null, []);",
@@ -46,7 +46,7 @@ try {
     const stderr = result.stderr.replace(/\x1b\[[0-9;]*m/g, '');
     assert.strictEqual(result.status, 1, JSON.stringify(result));
     assert.match(stderr, /actual-callback-failure/);
-    assert.doesNotMatch(stderr, /Error: handled-async-marker/);
+    assert.doesNotMatch(stderr, /handled-async-marker/);
   }
 
   const stacklessFile = path.join(root, 'stackless-callback.cjs');
