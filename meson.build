@@ -359,6 +359,15 @@ array_dense_length_test = executable(
 )
 test('array-dense-length', array_dense_length_test)
 
+typedarray_from_cleanup_test = executable(
+  'test-typedarray-from-cleanup',
+  files('tests/test_typedarray_from_cleanup.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('typedarray-from-cleanup', typedarray_from_cleanup_test)
+
 error_handoffs_test = executable(
   'test-error-handoffs',
   files('tests/test_error_handoffs.c'),

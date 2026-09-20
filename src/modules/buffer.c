@@ -1655,7 +1655,6 @@ static ant_value_t js_typedarray_from(ant_native_params_t, TypedArrayType type, 
   ant_value_t *collected = NULL;
   
   gc_temp_root_scope_t temp_roots = {0};
-  bool temp_roots_active = false;
 
   if (has_map) {
     if (!is_callable(args[1])) return js_mkerr_typed(
@@ -1665,7 +1664,6 @@ static ant_value_t js_typedarray_from(ant_native_params_t, TypedArrayType type, 
   }
 
   gc_temp_root_scope_begin(js, &temp_roots);
-  temp_roots_active = true;
   
   if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, source))) goto oom;
   if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, map_fn))) goto oom;
@@ -1682,7 +1680,10 @@ static ant_value_t js_typedarray_from(ant_native_params_t, TypedArrayType type, 
       if (count >= cap) {
         cap *= 2;
         ant_value_t *tmp = realloc(collected, cap * sizeof(ant_value_t));
-        if (!tmp) goto oom;
+        if (!tmp) {
+          result = js_mkerr(js, "oom");
+          break;
+        }
         collected = tmp;
       }
       if (has_map) {
@@ -1690,23 +1691,19 @@ static ant_value_t js_typedarray_from(ant_native_params_t, TypedArrayType type, 
         item = sv_vm_call(js->vm, js, map_fn, this_arg, map_args, 2, NULL, js_mkundef());
         if (is_err(item)) {
           result = item;
-          goto done;
+          break;
         }
       }
       collected[count++] = item;
-      if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, item))) goto oom;
-    }
-    js_iter_close(js, &it);
-    if (Ant_Exception_Pending(js)) {
-      result = Ant_Exception_Current(js);
-      goto done;
-    }
-  } else {
-    if (Ant_Exception_Pending(js)) {
-      result = Ant_Exception_Current(js);
-      goto done;
+      if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, item))) {
+        result = js_mkerr(js, "oom");
+        break;
+      }
     }
 
+    if (is_err(result)) Ant_Exception_Set(js, result);
+    js_iter_close(js, &it);
+  } else if (!Ant_Exception_Pending(js)) {
     ant_value_t len_val = js_get(js, source, "length");
     if (is_err(len_val)) {
       result = len_val;
@@ -1740,6 +1737,11 @@ static ant_value_t js_typedarray_from(ant_native_params_t, TypedArrayType type, 
     }
   }
 
+  if (Ant_Exception_Pending(js)) {
+    result = Ant_Exception_Current(js);
+    goto done;
+  }
+
   size_t elem_size = get_element_size(type);
   ArrayBufferData *buffer = create_array_buffer_data(count * elem_size);
   if (!buffer) goto oom;
@@ -1758,7 +1760,7 @@ static ant_value_t js_typedarray_from(ant_native_params_t, TypedArrayType type, 
   }
 
 done:
-  if (temp_roots_active) gc_temp_root_scope_end(&temp_roots);
+  gc_temp_root_scope_end(&temp_roots);
   free(collected);
   return result;
 

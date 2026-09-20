@@ -41,6 +41,12 @@ for (const reason of [new Error('original'), undefined, null]) {
         assert(state.count() === 1, method + ': iterator was not closed once');
       }
 
+      const typedArray = source(closeReason, getter);
+      expectThrow(() => Uint8Array.from(typedArray.iterator, () => {
+        throw reason;
+      }), reason, 'TypedArray.from mapper');
+      assert(typedArray.count() === 1, 'TypedArray.from iterator was not closed once');
+
       class ThrowingMap extends Map {
         set() { throw reason; }
       }
