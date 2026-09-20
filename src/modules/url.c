@@ -1462,6 +1462,34 @@ static bool url_fmt_protocol_needs_slashes(const char *protocol, size_t len) {
     (len == 3 && memcmp(protocol, "wss", 3) == 0);
 }
 
+static ant_value_t builtin_domainToASCII(ant_params_t) {
+  if (nargs < 1) {
+    ant_value_t props = js_mkobj(js);
+    js_set(js, props, "code", js_mkstr(js, "ERR_MISSING_ARGS", 16));
+    return js_mkerr_props(js, JS_ERR_TYPE, props, "The \"domain\" argument must be specified");
+  }
+
+  ant_value_t domain = js_template_to_string(js, args[0]);
+  if (is_err(domain)) return domain;
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+
+  size_t len = 0;
+  const char *value = js_getstr(js, domain, &len);
+  if (!value || len == 0) return js_mkstr(js, "", 0);
+
+  ada_url url = ada_parse("ws://x", 6);
+  if (!ada_set_hostname(url, value, len)) {
+    ada_free(url);
+    return js_mkstr(js, "", 0);
+  }
+
+  ada_string hostname = ada_get_hostname(url);
+  ant_value_t result = js_mkstr(js, hostname.data, hostname.length);
+  ada_free(url);
+  
+  return result;
+}
+
 static ant_value_t builtin_url_parse(ant_params_t) {
   size_t len = 0;
   const char *value = NULL;
@@ -1600,12 +1628,13 @@ ant_value_t url_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
   ant_value_t glob = js_glob(js);
   
-  js_set(js, lib, "URL",            js_get(js, glob, "URL"));
-  js_set(js, lib, "URLSearchParams",js_get(js, glob, "URLSearchParams"));
-  js_set(js, lib, "fileURLToPath",  js_mkfun(builtin_fileURLToPath));
-  js_set(js, lib, "pathToFileURL",  js_mkfun(builtin_pathToFileURL));
-  js_set(js, lib, "parse",          js_mkfun(builtin_url_parse));
-  js_set(js, lib, "format",         js_mkfun(builtin_url_format));
+  js_set(js, lib, "URL", js_get(js, glob, "URL"));
+  js_set(js, lib, "URLSearchParams", js_get(js, glob, "URLSearchParams"));
+  js_set(js, lib, "fileURLToPath", js_mkfun(builtin_fileURLToPath));
+  js_set(js, lib, "pathToFileURL", js_mkfun(builtin_pathToFileURL));
+  js_set(js, lib, "domainToASCII", js_mkfun_arity(builtin_domainToASCII, 1));
+  js_set(js, lib, "parse", js_mkfun(builtin_url_parse));
+  js_set(js, lib, "format", js_mkfun(builtin_url_format));
   js_set(js, lib, "default", lib);
   
   return lib;
