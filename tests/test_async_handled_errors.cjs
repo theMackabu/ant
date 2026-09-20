@@ -112,6 +112,29 @@ const cases = {
     await rejected(once({ on() {}, once() { throw reason; } }, 'x'), reason);
     await rejected(once({ get on() { throw reason; } }, 'x'), reason);
     await rejected(once({ on() {}, get once() { throw reason; } }, 'x'), reason);
+    for (const attachment of ['on getter', 'once getter', 'once call']) {
+      const controller = new AbortController();
+      let removes = 0;
+      const target = { on() {}, removeListener() { removes++; } };
+      if (attachment === 'once call') target.once = () => { throw reason; };
+      else Object.defineProperty(target, attachment === 'on getter' ? 'on' : 'once', {
+        get() { throw reason; }
+      });
+      await rejected(once(target, 'x', { signal: controller.signal }), reason);
+      controller.abort();
+      assert(removes === 0, 'abort reused failed attachment state');
+    }
+    const controller = new AbortController();
+    let removes = 0;
+    const resolved = once({
+      on() {},
+      once(_name, listener) { listener(42); listener(99); throw reason; },
+      removeListener() { removes++; }
+    }, 'x', { signal: controller.signal });
+    const values = await resolved;
+    assert(values.length === 1 && values[0] === 42, 'first settlement must win');
+    controller.abort();
+    assert(removes === 0, 'abort reused completed attachment state');
   `,
   assertionRejections: `
     const a = require('node:assert');

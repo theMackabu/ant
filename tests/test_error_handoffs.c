@@ -3,8 +3,12 @@
 #include "errors.h"
 #include "gc/objects.h"
 #include "gc/roots.h"
+#include "gc/modules.h"
+#include "modules/abort.h"
 #include "modules/assert.h"
+#include "modules/events.h"
 #include "modules/generator.h"
+#include "modules/symbol.h"
 #include "modules/timer.h"
 #include "sandbox/sandbox.h"
 #include "silver/call.h"
@@ -366,6 +370,95 @@ static void check_rejected(ant_value_t p, ant_value_t reason) {
   assert(state && state->state == 2 && state->value == reason);
 }
 
+static ant_value_t once_signal, once_saved_abort;
+static unsigned once_abort_edges, once_removes, once_unrelated_aborts;
+
+static void InspectOnceAbortListener(ant_t *js, ant_value_t value) {
+  if (!is_callable(value)) return;
+  once_abort_edges++;
+  if (vtype(value) == kTypeFunction) once_saved_abort = value;
+}
+
+static ant_value_t FailOnceAttachment(ant_params_t) {
+  once_abort_edges = 0;
+  gc_mark_abort_signal_object(js, once_signal, InspectOnceAbortListener);
+  assert(once_abort_edges == 2 && is_callable(once_saved_abort));
+  return js_throw(js, expected_reason);
+}
+
+static ant_value_t RemoveOnceListener(ant_params_t) {
+  once_removes++;
+  return js_mkundef();
+}
+
+static ant_value_t UnrelatedAbortListener(ant_params_t) {
+  once_unrelated_aborts++;
+  return js_mkundef();
+}
+
+static void CheckOnceAttachmentCleanup(ant_t *js) {
+  init_symbol_module(js);
+  init_abort_module(js);
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t events = events_library(js);
+  GC_ROOT_PIN(js, events);
+  ant_value_t once = js_get(js, events, "once");
+  assert(vtype(once) == kTypeBuiltin);
+  ant_value_t reason = js_mkobj(js);
+  GC_ROOT_PIN(js, reason);
+  ant_value_t event_name = js_mkstr(js, "ready", 5);
+  GC_ROOT_PIN(js, event_name);
+  ant_value_t reasons[] = { js_mkundef(), js_mknull(), reason };
+  const struct { const char *name; bool getter; } failures[] = {
+    { "on", true }, { "once", true }, { "once", false }
+  };
+
+  for (size_t failure = 0; failure < sizeof(failures) / sizeof(failures[0]); failure++) {
+    for (size_t i = 0; i < sizeof(reasons) / sizeof(reasons[0]); i++) {
+      GC_ROOT_SAVE(case_mark, js);
+      once_signal = abort_signal_create_dependent(js, js_mkundef());
+      assert(abort_signal_is_signal(once_signal));
+      GC_ROOT_PIN(js, once_signal);
+      once_saved_abort = js_mkundef();
+      GC_ROOT_PIN(js, once_saved_abort);
+      ant_value_t target = js_mkobj(js);
+      GC_ROOT_PIN(js, target);
+      ant_value_t options = js_mkobj(js);
+      GC_ROOT_PIN(js, options);
+      js_set(js, options, "signal", once_signal);
+      js_set(js, target, "removeListener", js_mkfun(RemoveOnceListener));
+      js_set(js, target, "on", js_mkfun(handled_native_failure));
+      const char *name = failures[failure].name;
+      if (failures[failure].getter)
+        js_set_getter_desc(js, target, name, strlen(name), js_mkfun(FailOnceAttachment), JS_DESC_C);
+      else js_set(js, target, name, js_mkfun(FailOnceAttachment));
+
+      abort_signal_add_listener(js, once_signal, js_mkfun(UnrelatedAbortListener));
+      expected_reason = reasons[i];
+      once_removes = once_unrelated_aborts = 0;
+      ant_value_t args[] = { target, event_name, options };
+      ant_value_t p = js_as_cfunc(once)(js, args, 3, js_mkundef());
+      GC_ROOT_PIN(js, p);
+      assert(vtype(p) == kTypePromise && !Ant_Exception_Pending(js));
+      promise_mark_handled(p);
+      check_rejected(p, expected_reason);
+
+      // The signal must release our listener and retain unrelated listeners.
+      once_abort_edges = 0;
+      gc_mark_abort_signal_object(js, once_signal, InspectOnceAbortListener);
+      assert(once_abort_edges == 1);
+      // Even a saved callback must ignore the settled, failed operation.
+      ant_value_t result = sv_vm_call(js->vm, js, once_saved_abort, once_signal, NULL, 0, NULL, js_mkundef());
+      assert(!is_err(result) && !Ant_Exception_Pending(js) && once_removes == 0);
+      signal_do_abort(js, once_signal, js_mknull());
+      assert(once_unrelated_aborts == 1 && once_removes == 0);
+      check_rejected(p, expected_reason);
+      GC_ROOT_RESTORE(js, case_mark);
+    }
+  }
+  GC_ROOT_RESTORE(js, mark);
+}
+
 static ant_value_t retained_completion(ant_t *js) {
   GC_ROOT_SAVE(mark, js);
   ant_value_t value = js_mkobj(js);
@@ -690,6 +783,7 @@ int main(void) {
   CheckCancelledAwaitReplacement(js);
   CheckExplicitAwaitResume(js);
   CheckFunctionAllocationFailure(js);
+  CheckOnceAttachmentCleanup(js);
   GC_ROOT_RESTORE(js, root_mark);
   js_destroy(js);
   puts("PASS error handoffs preserve values and exception ownership");
