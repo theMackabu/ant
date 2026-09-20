@@ -205,6 +205,7 @@ typedef struct ant_object {
     struct { ant_value_t *data; uint32_t len; uint32_t cap; } array;
     struct { sv_closure_t *closure; } func;
     struct { ant_value_t value; } data;
+    struct { ant_value_t value; ant_value_t stack; } exception;
   } u;
 
   uint32_t prop_count;

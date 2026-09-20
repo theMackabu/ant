@@ -24,6 +24,39 @@
 #include "ops/private.h"
 #include "ops/objects.h"
 
+__attribute__((noinline)) ant_value_t Ant_Silver_InvokeNativeScoped(
+  ant_t *js, ant_cfunc_t fn, ant_value_t *args,
+  int nargs, ant_value_t new_target
+) {
+  ant_value_t previous = Ant_Exception_Peek(js);
+  size_t exception_mark = 0;
+
+  if (is_err(previous)) {
+    exception_mark = gc_root_scope(js);
+    GC_ROOT_PIN(js, previous);
+    Ant_Exception_Clear(js);
+  }
+
+  sv_vm_t *vm = js->vm;
+  sv_native_frame_t frame = {
+    .caller = vm ? vm->native_frame : NULL,
+    .new_target = new_target
+  };
+
+  bool rooted_target = vm && gc_value_is_heap_ref(new_target);
+  if (rooted_target) vm->native_frame = &frame;
+
+  ant_value_t result = fn(js, args, nargs, new_target);
+  if (rooted_target) vm->native_frame = frame.caller;
+
+  result = Ant_Silver_FinishNativeCall(js, result);
+
+  if (!is_err(result) && is_err(previous)) Ant_Exception_Set(js, previous);
+  if (is_err(previous)) GC_ROOT_RESTORE(js, exception_mark);
+
+  return result;
+}
+
 int64_t jit_helper_stack_overflow(ant_t *js) {
   volatile char marker;
   uintptr_t curr = (uintptr_t)&marker;
@@ -556,22 +589,15 @@ static ant_value_t jit_iter_advance_from_buf(
   }}
 }
 
-void jit_helper_destructure_close(
-  sv_vm_t *vm, ant_t *js, ant_value_t *iter_buf
+ant_value_t jit_helper_destructure_close(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t *iter_buf, int suppress_error
 ) {
-  GC_ROOT_SAVE(root_mark, js);
-
-  int tag = (int)js_getnum(iter_buf[2]);
-  if (tag == SV_ITER_GENERIC) {
-    ant_value_t iterator = iter_buf[0];
-    GC_ROOT_PIN(js, iterator);
-    ant_value_t return_fn = js_getprop_fallback(js, iterator, "return");
-    GC_ROOT_PIN(js, return_fn);
-    if (is_callable(return_fn))
-      sv_vm_call(vm, js, return_fn, iterator, NULL, 0, NULL, js_mkundef());
-  }
-
-  GC_ROOT_RESTORE(js, root_mark);
+  if (
+    vtype(iter_buf[2]) == kTypeNumber &&
+    (int)js_getnum(iter_buf[2]) == SV_ITER_GENERIC
+  ) return sv_iter_close(vm, js, iter_buf[0], suppress_error != 0);
+  return js_mkundef();
 }
 
 ant_value_t jit_helper_for_of(
@@ -1126,7 +1152,7 @@ static sv_upvalue_t *jit_capture_upvalue(
 ) {
   sv_upvalue_t **pp = open_upvalues ? open_upvalues : &vm->open_upvalues;
 
-  while (*pp && (*pp)->location > slot) pp = &(*pp)->next;
+  while (*pp && (uintptr_t)(*pp)->location > (uintptr_t)slot) pp = &(*pp)->next;
   if (*pp && (*pp)->location == slot) return *pp;
 
   sv_upvalue_t *uv = js_upvalue_alloc(vm->js);
@@ -1150,12 +1176,14 @@ void jit_helper_take_open_upvalues(
   while (*pp) {
     sv_upvalue_t *uv = *pp;
     ant_value_t *loc = uv->location;
-    if (loc < lo) break;
-    if (loc >= hi) { pp = &uv->next; continue; }
+    
+    if ((uintptr_t)loc < (uintptr_t)lo) break;
+    if ((uintptr_t)loc >= (uintptr_t)hi) { pp = &uv->next; continue; }
     
     *pp = uv->next;
     sv_upvalue_t **dst = open_upvalues;
-    while (*dst && (*dst)->location > loc) dst = &(*dst)->next;
+    while (*dst && (uintptr_t)(*dst)->location > (uintptr_t)loc) dst = &(*dst)->next;
+    
     uv->next = *dst;
     *dst = uv;
   }
@@ -1174,15 +1202,17 @@ void jit_helper_take_open_upvalues_rebase(
   while (*pp) {
     sv_upvalue_t *uv = *pp;
     ant_value_t *loc = uv->location;
-    if (loc < lo) break;
-    if (loc >= hi) { pp = &uv->next; continue; }
+    
+    if ((uintptr_t)loc < (uintptr_t)lo) break;
+    if ((uintptr_t)loc >= (uintptr_t)hi) { pp = &uv->next; continue; }
 
     *pp = uv->next;
     ant_value_t *dst_loc = dst_slots + (loc - src_slots);
     uv->location = dst_loc;
 
     sv_upvalue_t **dst = open_upvalues;
-    while (*dst && (*dst)->location > dst_loc) dst = &(*dst)->next;
+    while (*dst && (uintptr_t)(*dst)->location > (uintptr_t)dst_loc) dst = &(*dst)->next;
+    
     uv->next = *dst;
     *dst = uv;
   }
@@ -1199,7 +1229,7 @@ ant_value_t jit_helper_closure(
   sv_func_t *child = (sv_func_t *)vptr(parent_func->constants[const_idx]);
 
   sv_closure_t *closure = sv_closure_init(js, child, this_val);
-  if (!closure) return mkval(kTypeError, 0);
+  if (!closure) return Ant_Exception_Current(js);
 
   for (int i = 0; i < child->upvalue_count; i++) {
     sv_upval_desc_t *desc = &child->upval_descs[i];
@@ -1244,8 +1274,8 @@ void jit_helper_close_upval(
   
   while (*pp) {
     sv_upvalue_t *uv = *pp;
-    if (uv->location < lo) break;
-    if (uv->location >= lo && uv->location < hi) {
+    if ((uintptr_t)uv->location < (uintptr_t)lo) break;
+    if ((uintptr_t)uv->location < (uintptr_t)hi) {
       uv->closed = *uv->location;
       uv->location = &uv->closed;
       *pp = uv->next;
@@ -1271,7 +1301,7 @@ void jit_helper_adopt_open_upvalues(sv_vm_t *vm, sv_upvalue_t **open_upvalues) {
     }
     
     sv_upvalue_t **pp = &vm->open_upvalues;
-    while (*pp && (*pp)->location > uv->location) pp = &(*pp)->next;
+    while (*pp && (uintptr_t)(*pp)->location > (uintptr_t)uv->location) pp = &(*pp)->next;
     uv->next = *pp;
     *pp = uv;
     uv = next;
@@ -1311,7 +1341,10 @@ ant_value_t jit_helper_bailout_resume(
   ant_value_t *locals, int64_t n_locals,
   int64_t bc_offset
 ) {
-  if (!closure || !closure->func) return mkval(kTypeError, 0);
+  if (!closure || !closure->func) return vm && vm->js
+    ? js_mkerr_typed(vm->js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "invalid bailout closure")
+    : mkval(kTypeError, 0);
+
   sv_jit_on_bailout_at(closure->func, "resume", (int)bc_offset);
   
   return jit_resume_in_interpreter(
@@ -1330,7 +1363,10 @@ ant_value_t jit_helper_promote_resume(
   ant_value_t *locals, int64_t n_locals,
   int64_t bc_offset
 ) {
-  if (!closure || !closure->func) return mkval(kTypeError, 0);
+  if (!closure || !closure->func) return vm && vm->js
+    ? js_mkerr_typed(vm->js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "invalid promotion closure")
+    : mkval(kTypeError, 0);
+
   sv_func_t *fn = closure->func;
 
   if (fn->jit_code_cold) {
@@ -1518,10 +1554,11 @@ ant_value_t jit_helper_object_template(sv_vm_t *vm, ant_t *js, sv_func_t *func, 
       sv_atom_t *key = &func->atoms[site->key_atoms[i]];
       sv_define_slot(js, seed, value, key->str, key->len, i);
       
-      if (js->thrown_exists) {
+      if (Ant_Exception_Pending(js)) {
         GC_ROOT_RESTORE(js, mark);
-        return mkval(kTypeError, 0);
+        return Ant_Exception_Current(js);
       }
+
       ip += size + sv_op_size[OP_DEFINE_SLOT];
     }
     
@@ -1545,15 +1582,7 @@ ant_value_t jit_helper_array(sv_vm_t *vm, ant_t *js, ant_value_t *elements, int 
 }
 
 ant_value_t jit_helper_catch_value(sv_vm_t *vm, ant_t *js, ant_value_t err) {
-  if (
-    vtype(err) == kTypeError && js->thrown_exists &&
-    vtype(js->thrown_value) != kTypeUndefined
-  ) {
-    ant_value_t caught = js->thrown_value;
-    js->thrown_value = js_mkundef();
-    js->thrown_exists = false;
-    return caught;
-  }
+  if (is_err(err)) return js_take_thrown(js, err);
   return err;
 }
 

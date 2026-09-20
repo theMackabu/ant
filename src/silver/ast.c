@@ -364,6 +364,7 @@ static void sv_parse_stmt_list(P, sv_ast_list_t *out, bool stop_at_rbrace, bool 
 
   for (;;) {
     NEXT();
+
     if (TOK == TOK_EOF) break;
     if (stop_at_rbrace && TOK == TOK_RBRACE) break;
 
@@ -374,7 +375,7 @@ static void sv_parse_stmt_list(P, sv_ast_list_t *out, bool stop_at_rbrace, bool 
 
     sv_ast_t *stmt = parse_stmt(p);
     if (stmt) sv_ast_list_push(out, stmt);
-    if (JS->thrown_exists) break;
+    if (Ant_Exception_Pending(JS)) break;
     if (!in_directive_prologue) continue;
     if (!stmt || stmt->type == N_EMPTY) continue;
     
@@ -388,8 +389,10 @@ static void sv_parse_stmt_list(P, sv_ast_list_t *out, bool stop_at_rbrace, bool 
       p->lx.strict = true;
       continue;
     }
+
     in_directive_prologue = false;
   }
+
   p->lx.strict = saved_lexer_strict;
 }
 
@@ -1756,7 +1759,7 @@ static sv_ast_t *parse_block(P, bool directive_ctx) {
   expect(p, TOK_LBRACE);
   sv_ast_t *block = mk(N_BLOCK);
   sv_parse_stmt_list(p, &block->args, true, directive_ctx);
-  if (JS->thrown_exists) return block;
+  if (Ant_Exception_Pending(JS)) return block;
   expect(p, TOK_RBRACE);
   block->src_end = (uint32_t)(TOFF + TLEN);
   return block;
@@ -1782,12 +1785,14 @@ static sv_ast_t *parse_var_decl(P, sv_var_kind_t kind, bool allow_uninit_const) 
       sv_strict_check_binding_ident(p, decl->left->str, decl->left->len);
       CONSUME();
     }
+
     if (NEXT() == TOK_ASSIGN) {
       CONSUME();
       decl->right = parse_assign(p);
     } else if ((kind == SV_VAR_CONST || kind == SV_VAR_USING || kind == SV_VAR_AWAIT_USING) && !allow_uninit_const) {
       SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Missing initializer in const declaration");
     }
+
     sv_ast_list_push(&var->args, decl);
   } while (NEXT() == TOK_COMMA && (CONSUME(), 1));
 
@@ -2503,12 +2508,12 @@ sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, bool strict){
   sv_parse_stmt_list(p, &program->args, false, true);
   if (sv_parse_trace_unlikely) fprintf(
     stderr, "[parse] after-stmt-list thrown=%d strict=%d body=%d\n",
-    js->thrown_exists ? 1 : 0,
+    Ant_Exception_Pending(js) ? 1 : 0,
     p->lx.strict ? 1 : 0,
     program ? program->args.count : -1
   );
 
-  if (js->thrown_exists) {
+  if (Ant_Exception_Pending(js)) {
     if (sv_parse_trace_unlikely) fprintf(stderr, "[parse] return null\n");
     return NULL;
   }

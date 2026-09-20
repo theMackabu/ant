@@ -1,4 +1,6 @@
 #include "window_state.h"
+#include "errors.h"
+#include "silver/call.h"
 
 #include <stdio.h>
 #include <stdlib.h>

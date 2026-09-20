@@ -28,17 +28,18 @@
 #include "ant.h"
 #include "ptr.h"
 #include "errors.h"
+#include "modules/timer.h"
 #include "internal.h"
 #include "utils.h"
 
 #include "esm/loader.h"
 #include "gc/modules.h"
+#include "gc/roots.h"
 #include "silver/call.h"
 
 #include "process_plan.h"
 #include "process_stage.h"
 
-#include "modules/assert.h"
 #include "modules/buffer.h"
 #include "modules/events.h"
 #include "modules/process.h"
@@ -173,28 +174,20 @@ static void fprint_js_str_raw(FILE *out, ant_t *js, ant_value_t s) {
   ant_offset_t len = 0;
   ant_offset_t off = vstr(js, s, &len);
   const char *ptr = (const char *)(uintptr_t)off;
+  
   if (ptr && len > 0) fwrite(ptr, 1, (size_t)len, out);
   if (len == 0 || ptr[len - 1] != '\n') fputc('\n', out);
 }
 
 static void log_listener_error(ant_t *js, const char *event_name, ant_value_t err) {
-  ant_value_t thrown_stack = js->thrown_stack;
+  ant_value_t thrown_stack = Ant_Exception_Stack(js, err);
   if (vtype(thrown_stack) == kTypeString) {
     fprintf(stderr, "Error in child_process '%s' listener:\n", event_name);
     fprint_js_str_raw(stderr, js, thrown_stack);
     return;
   }
 
-  ant_value_t thrown_value = js->thrown_value;
-  ant_value_t src = (vtype(thrown_value) != kTypeUndefined) ? thrown_value : err;
-  
-  ant_value_t stack = js_get(js, src, "stack");
-  if (vtype(stack) == kTypeString) {
-    fprintf(stderr, "Error in child_process '%s' listener:\n", event_name);
-    fprint_js_str_raw(stderr, js, stack);
-    return;
-  }
-
+  ant_value_t src = Ant_Exception_Value(js, err);
   ant_value_t name = js_get(js, src, "name");
   ant_value_t message = js_get(js, src, "message");
 
@@ -395,7 +388,7 @@ static ant_value_t child_spawn_failure_cb(ant_params_t) {
   snprintf(syscall, sizeof(syscall), "spawn %s", file);
   snprintf(message, sizeof(message), "%s %s", syscall, name);
 
-  ant_value_t error = js_make_error_silent(js, JS_ERR_GENERIC, message);
+  ant_value_t error = Ant_Error_Create(js, JS_ERR_GENERIC, message);
 
   if (is_object_type(error)) {
     js_set(js, error, "code", js_mkstr(js, name, strlen(name)));
@@ -416,11 +409,8 @@ static ant_value_t child_spawn_failure_cb(ant_params_t) {
 }
 
 static void child_schedule_spawn_failure(ant_t *js, child_process_t *cp) {
-  ant_value_t promise = js_mkpromise(js);
   ant_value_t callback = js_heavy_mkfun(js, child_spawn_failure_cb, cp->child_obj);
-
-  js_resolve_promise(js, promise, js_mkundef());
-  promise_mark_handled(js_promise_then(js, promise, callback, js_mkundef()));
+  queue_microtask(js, callback);
 }
 
 static void on_handle_close(uv_handle_t *handle) {
@@ -530,11 +520,23 @@ static void on_child_read(
     }
 
     if (vtype(obj) == kTypeObject) {
-      ant_value_t accepted = stream_readable_push(
-        cp->js, obj,
-        make_buffer_chunk(cp->js, buf->base, (size_t)nread),
-        js_mkundef()
-      );
+      ant_value_t chunk = make_buffer_chunk(cp->js, buf->base, (size_t)nread);
+      if (is_err(chunk)) {
+        GC_ROOT_SAVE(root_mark, cp->js);
+        chunk = js_take_thrown(cp->js, chunk);
+
+        GC_ROOT_PIN(cp->js, chunk);
+        eventemitter_emit_args(cp->js, obj, "error", &chunk, 1);
+
+        GC_ROOT_RESTORE(cp->js, root_mark);
+        close_child_pipe(cp, kind, true);
+        check_completion(cp);
+
+        if (buf->base) free(buf->base);
+        return;
+      }
+
+      ant_value_t accepted = stream_readable_push(cp->js, obj, chunk, js_mkundef());
       *seen += (size_t)nread;
       js_set(cp->js, obj, "length", js_mknum((double)*seen));
 
@@ -623,8 +625,8 @@ static void on_child_write_done(uv_write_t *req, int status) {
 
   if (is_callable(write->callback)) {
     if (status < 0) {
-      callback_args[0] = js_mkerr(
-        write->cp->js, "%s", uv_strerror(status)
+      callback_args[0] = Ant_Error_Create(
+        write->cp->js, JS_ERR_TYPE, uv_strerror(status)
       );
       child_stream_call_callback(
         write->cp->js, write->callback, callback_args, 1
@@ -634,8 +636,8 @@ static void on_child_write_done(uv_write_t *req, int status) {
     );
   } else if (status < 0 && write->cp && !write->cp->suppress_stdin_errors &&
              vtype(write->cp->stdin_obj) == kTypeObject) {
-    callback_args[0] = js_mkerr(
-      write->cp->js, "%s", uv_strerror(status)
+    callback_args[0] = Ant_Error_Create(
+      write->cp->js, JS_ERR_TYPE, uv_strerror(status)
     );
     eventemitter_emit_args(
       write->cp->js, write->cp->stdin_obj,
@@ -957,9 +959,30 @@ static ant_value_t create_child_stream_object(ant_t *js, child_process_t *cp, ch
   return obj;
 }
 
+static void abort_child_object_creation(child_process_t *cp) {
+  cp->close_emitted = true;
+  cp->promise = js_mkundef();
+
+  if (cp->process.started) ant_process_stage_kill(&cp->process, SIGKILL);
+  else cp->exited = true;
+
+  for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) {
+    *child_closed_flag(cp, i) = true;
+    if (!child_stdio_is_pipe(cp, i)) continue;
+    uv_pipe_t *pipe = child_pipe(cp, i);
+    if (i != CHILD_STREAM_STDIN) uv_read_stop((uv_stream_t *)pipe);
+    close_child_handle(cp, (uv_handle_t *)pipe);
+  }
+
+  try_free_child(cp);
+}
+
 static ant_value_t create_child_object(ant_t *js, child_process_t *cp) {
   ant_value_t obj = js_mkobj(js);
-  if (is_object_type(js->builtins.child_process_proto)) js_set_proto_init(obj, js->builtins.child_process_proto);
+  cp->child_obj = obj;
+
+  if (is_object_type(js->builtins.child_process_proto))
+    js_set_proto_init(obj, js->builtins.child_process_proto);
   
   js_set_native(obj, cp, CHILD_PROCESS_NATIVE_TAG);
   js_set(js, obj, "pid", js_mknum((double)ant_process_stage_pid(&cp->process)));
@@ -977,7 +1000,12 @@ static ant_value_t create_child_object(ant_t *js, child_process_t *cp) {
   ant_value_t *stream_objs[] = { &cp->stdin_obj, &cp->stdout_obj, &cp->stderr_obj };
   for (int i = 0; i < 3; i++) {
     if (child_stdio_is_pipe(cp, streams[i].kind)) {
-      *stream_objs[i] = create_child_stream_object(js, cp, streams[i].kind);
+      ant_value_t stream_obj = create_child_stream_object(js, cp, streams[i].kind);
+      if (is_err(stream_obj)) {
+        abort_child_object_creation(cp);
+        return stream_obj;
+      }
+      *stream_objs[i] = stream_obj;
     } else *stream_objs[i] = js_mknull();
     js_set(js, obj, streams[i].name, *stream_objs[i]);
   }
@@ -1193,7 +1221,7 @@ static ant_value_t builtin_spawn(ant_params_t) {
   if (nargs >= 2 && vtype(args[1]) == kTypeArray) spawn_args = parse_args_array(js, args[1], &spawn_argc);
   if (spawn_argc < 0) {
     free(cmd_str);
-    return mkval(kTypeError, 0);
+    return Ant_Exception_Current(js);
   }
   
   stdio_mode_t stdio_modes[3] = { 
@@ -1339,7 +1367,8 @@ static ant_value_t builtin_spawn(ant_params_t) {
     }
 
     add_pending_child(cp);
-    cp->child_obj = create_child_object(js, cp);
+    ant_value_t child_obj = create_child_object(js, cp);
+    if (is_err(child_obj)) return child_obj;
     js_set(js, cp->child_obj, "pid", js_mkundef());
     child_schedule_spawn_failure(js, cp);
 
@@ -1356,7 +1385,8 @@ static ant_value_t builtin_spawn(ant_params_t) {
   }
   
   add_pending_child(cp);
-  cp->child_obj = create_child_object(js, cp);
+  ant_value_t child_obj = create_child_object(js, cp);
+  if (is_err(child_obj)) return child_obj;
   
   return cp->child_obj;
 }
@@ -1452,7 +1482,8 @@ static ant_value_t builtin_exec(ant_params_t) {
     }
 
     add_pending_child(cp);
-    cp->child_obj = create_child_object(js, cp);
+    ant_value_t child_obj = create_child_object(js, cp);
+    if (is_err(child_obj)) return child_obj;
     js_set(js, cp->child_obj, "pid", js_mkundef());
 
     if (is_callable(callback)) {
@@ -1481,7 +1512,8 @@ static ant_value_t builtin_exec(ant_params_t) {
   
   add_pending_child(cp);
   
-  cp->child_obj = create_child_object(js, cp);
+  ant_value_t child_obj = create_child_object(js, cp);
+  if (is_err(child_obj)) return child_obj;
 
   if (is_callable(callback)) {
     ant_value_t ctx = js_mkobj(js);
@@ -1564,10 +1596,10 @@ static ant_value_t exec_file_close_callback(ant_params_t) {
           at += stderr_len;
         }
         message[at] = '\0';
-        cb_args[0] = js_make_error_silent(js, JS_ERR_GENERIC, message);
+        cb_args[0] = Ant_Error_Create(js, JS_ERR_GENERIC, message);
         free(message);
       } else {
-        cb_args[0] = js_make_error_silent(js, JS_ERR_GENERIC, "Command failed");
+        cb_args[0] = Ant_Error_Create(js, JS_ERR_GENERIC, "Command failed");
       }
     } else {
       if (was_signaled) {
@@ -1586,7 +1618,7 @@ static ant_value_t exec_file_close_callback(ant_params_t) {
         );
       }
       cb_args[0] =
-        js_make_error_silent(js, JS_ERR_GENERIC, fallback_message);
+        Ant_Error_Create(js, JS_ERR_GENERIC, fallback_message);
     }
 
     if (is_object_type(cb_args[0])) {
@@ -1668,11 +1700,8 @@ static ant_value_t exec_callback_promisified_call(ant_params_t) {
   ant_value_t settled = js_get_slot(state, SLOT_SETTLED);
   bool is_settled = (vtype(settled) == kTypeBool && settled == js_true);
   
-  if (!is_settled && (is_err(call_result) || js->thrown_exists)) {
-    ant_value_t ex = js->thrown_exists ? js->thrown_value : call_result;
-    js->thrown_exists = false;
-    js->thrown_value = js_mkundef();
-    js->thrown_stack = js_mkundef();
+  if (!is_settled && (is_err(call_result) || Ant_Exception_Pending(js))) {
+    ant_value_t ex = js_take_thrown(js, call_result);
     js_set_slot(state, SLOT_SETTLED, js_true);
     js_reject_promise(js, promise, ex);
   }
@@ -1918,8 +1947,9 @@ ant_value_t child_process_exec_file_result(
   if (!child_process_plan_apply_options(js, &plan, options) ||
       !child_process_plan_add_values(js, &plan, values)) {
     ant_process_plan_dispose(&plan);
-    return ant_process_plan_rejected_result(js,
-      js->thrown_exists ? js->thrown_value : js_mkerr(js, "Invalid process plan"));
+    return ant_process_plan_rejected_result(js, Ant_Exception_Pending(js)
+      ? Ant_Exception_Value(js, Ant_Exception_Peek(js))
+      : js_mkerr(js, "Invalid process plan"));
   }
   
   return ant_process_plan_submit(js, &plan);
@@ -1953,8 +1983,9 @@ ant_value_t child_process_pipeline_result(
 
 invalid:
   ant_process_plan_dispose(&plan);
-  return ant_process_plan_rejected_result(js,
-    js->thrown_exists ? js->thrown_value : js_mkerr(js, "Invalid process plan"));
+  return ant_process_plan_rejected_result(js, Ant_Exception_Pending(js)
+    ? Ant_Exception_Value(js, Ant_Exception_Peek(js))
+    : js_mkerr(js, "Invalid process plan"));
 }
 
 static bool sync_encoding_wants_string(ant_t *js, ant_value_t options_arg) {
@@ -2018,7 +2049,7 @@ static ant_value_t spawn_sync_impl(ant_native_params_t, bool force_shell) {
   if (nargs >= 2 && vtype(args[1]) == kTypeArray) spawn_args = parse_args_array(js, args[1], &spawn_argc);
   if (spawn_argc < 0) {
     free(cmd_str);
-    return mkval(kTypeError, 0);
+    return Ant_Exception_Current(js);
   }
 
   if (is_special_object(options_arg)) {
@@ -2153,7 +2184,18 @@ static ant_value_t spawn_sync_impl(ant_native_params_t, bool force_shell) {
   bool as_string = sync_encoding_wants_string(js, options_arg);
 
   ant_value_t stdout_val = sync_make_output(js, stdout_buf, stdout_len, as_string);
+  if (is_err(stdout_val)) {
+    free(stdout_buf);
+    free(stderr_buf);
+    return stdout_val;
+  }
+
   ant_value_t stderr_val = sync_make_output(js, stderr_buf, stderr_len, as_string);
+  if (is_err(stderr_val)) {
+    free(stdout_buf);
+    free(stderr_buf);
+    return stderr_val;
+  }
 
   ant_value_t result = js_mkobj(js);
   js_set(js, result, "stdout", stdout_val);
@@ -2570,7 +2612,10 @@ static ant_value_t sync_build_result(
   const sync_reader_t *out, const sync_reader_t *err
 ) {
   ant_value_t stdout_val = sync_make_output(js, out->buf, out->len, opts->encode_as_string);
+  if (is_err(stdout_val)) return stdout_val;
+
   ant_value_t stderr_val = sync_make_output(js, err->buf, err->len, opts->encode_as_string);
+  if (is_err(stderr_val)) return stderr_val;
 
   ant_value_t result = js_mkobj(js);
   js_set(js, result, "stdout", stdout_val);
@@ -2602,7 +2647,7 @@ static ant_value_t sync_build_result(
     snprintf(syscall, sizeof(syscall), "spawnSync %s", opts->label);
     snprintf(message, sizeof(message), "%s %s", syscall, code);
 
-    ant_value_t error = js_make_error_silent(js, JS_ERR_GENERIC, message);
+    ant_value_t error = Ant_Error_Create(js, JS_ERR_GENERIC, message);
     if (is_object_type(error)) {
       js_set(js, error, "code", js_mkstr(js, code, strlen(code)));
       js_set(js, error, "errno", js_mknum((double)failure));
@@ -2631,7 +2676,7 @@ static ant_value_t spawn_sync_impl(ant_native_params_t, bool force_shell) {
     res.args = parse_args_array(js, args[1], &res.arg_count);
   if (res.arg_count < 0) {
     free(res.command);
-    return mkval(kTypeError, 0);
+    return Ant_Exception_Current(js);
   }
 
   sync_opts_t opts;
@@ -2747,7 +2792,7 @@ static ant_value_t sync_result_error(
     );
   }
 
-  ant_value_t error = js_make_error_silent(js, JS_ERR_GENERIC, message);
+  ant_value_t error = Ant_Error_Create(js, JS_ERR_GENERIC, message);
   if (!is_object_type(error)) return error;
 
   js_set(js, error, "status", status);

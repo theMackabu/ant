@@ -195,9 +195,7 @@ static void ws_chain_promise(ant_t *js, ant_value_t val, ant_value_t res_fn, ant
     js_resolve_promise(js, promise, val);
   }
 
-  ant_value_t then_result = js_promise_then(js, promise, res_fn, rej_fn);
-  GC_ROOT_PIN(js, then_result);
-  promise_mark_handled(then_result);
+  Ant_Promise_Observe(js, promise, res_fn, rej_fn);
   GC_ROOT_RESTORE(js, root_mark);
 }
 
@@ -353,8 +351,7 @@ void writable_stream_finish_erroring(ant_t *js, ant_value_t stream_obj) {
     }
 
     if (is_err(result)) {
-      ant_value_t thrown = js->thrown_value;
-      js_reject_promise(js, abort_promise, is_object_type(thrown) ? thrown : result);
+      js_reject_promise(js, abort_promise, result);
       ws_reject_close_and_closed(js, stream_obj);
     } else {
       ant_value_t wrapper = js_mkobj(js);
@@ -513,8 +510,7 @@ static void ws_default_controller_process_write(ant_t *js, ant_value_t ctrl_obj,
 
   if (is_err(result)) {
     ws_stream_t *stream = ws_get_stream(stream_obj);
-    ant_value_t thrown = js->thrown_value;
-    ant_value_t err = is_object_type(thrown) ? thrown : result;
+    ant_value_t err = js_take_thrown(js, result);
     if (stream && stream->state == WS_STATE_WRITABLE)
       ws_default_controller_clear_algorithms(ctrl_obj);
     writable_stream_finish_in_flight_write_with_error(js, stream_obj, err);
@@ -558,8 +554,7 @@ static void ws_default_controller_process_close(ant_t *js, ant_value_t ctrl_obj)
     result = sv_vm_call(js->vm, js, close_fn, sink, NULL, 0, NULL, js_mkundef());
 
   if (is_err(result)) {
-    ant_value_t thrown = js->thrown_value;
-    ant_value_t err = is_object_type(thrown) ? thrown : result;
+    ant_value_t err = js_take_thrown(js, result);
     writable_stream_finish_in_flight_close_with_error(js, stream_obj, err);
   } else {
     ant_value_t res_fn = js_heavy_mkfun(js, ws_process_close_resolve, stream_obj);
@@ -646,14 +641,12 @@ ant_value_t writable_stream_close(ant_t *js, ant_value_t stream_obj) {
 
   if (stream->state == WS_STATE_CLOSED || stream->state == WS_STATE_ERRORED) {
     ant_value_t p = js_mkpromise(js);
-    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot close a stream that is already closed or errored");
-    js_reject_promise(js, p, js->thrown_value);
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot close a stream that is already closed or errored"));
     return p;
   }
   if (writable_stream_close_queued_or_in_flight(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot close an already-closing stream");
-    js_reject_promise(js, p, js->thrown_value);
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot close an already-closing stream"));
     return p;
   }
 
@@ -699,27 +692,34 @@ ant_value_t writable_stream_abort(ant_t *js, ant_value_t stream_obj, ant_value_t
   return promise;
 }
 
+static ant_value_t ws_reject_size_error(ant_t *js, ant_value_t ctrl_obj, ant_value_t error) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, error);
+  ws_default_controller_error(js, ctrl_obj, error);
+  ant_value_t promise = js_mkpromise(js);
+  js_reject_promise(js, promise, error);
+  GC_ROOT_RESTORE(js, root_mark);
+  return promise;
+}
+
 ant_value_t ws_writer_write(ant_t *js, ant_value_t writer_obj, ant_value_t chunk) {
   ant_value_t stream_obj = ws_writer_stream(writer_obj);
   if (!ws_is_stream(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_mkerr_typed(js, JS_ERR_TYPE, "Writer has no stream");
-    js_reject_promise(js, p, js->thrown_value);
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Writer has no stream"));
     return p;
   }
 
   ws_stream_t *stream = ws_get_stream(stream_obj);
   if (!stream) {
     ant_value_t p = js_mkpromise(js);
-    js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WritableStream");
-    js_reject_promise(js, p, js->thrown_value);
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Invalid WritableStream"));
     return p;
   }
 
   if (stream->state == WS_STATE_CLOSED) {
     ant_value_t p = js_mkpromise(js);
-    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot write to a closed WritableStream");
-    js_reject_promise(js, p, js->thrown_value);
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot write to a closed WritableStream"));
     return p;
   }
   
@@ -731,8 +731,7 @@ ant_value_t ws_writer_write(ant_t *js, ant_value_t writer_obj, ant_value_t chunk
   
   if (writable_stream_close_queued_or_in_flight(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot write to a closing WritableStream");
-    js_reject_promise(js, p, js->thrown_value);
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot write to a closing WritableStream"));
     return p;
   }
   
@@ -750,25 +749,17 @@ ant_value_t ws_writer_write(ant_t *js, ant_value_t writer_obj, ant_value_t chunk
     ant_value_t size_args[1] = { chunk };
     ant_value_t size_result = sv_vm_call(js->vm, js, size_fn, js_mkundef(), size_args, 1, NULL, js_mkundef());
     if (is_err(size_result)) {
-      ant_value_t thrown = js->thrown_value;
-      ant_value_t err = is_object_type(thrown) ? thrown : size_result;
-      ws_default_controller_error(js, ctrl_obj, err);
-      ant_value_t p = js_mkpromise(js);
-      js_reject_promise(js, p, err);
-      return p;
+      ant_value_t err = Ant_Exception_Pending(js) ? js_take_thrown(js, size_result) : size_result;
+      return ws_reject_size_error(js, ctrl_obj, err);
     }
     if (vtype(size_result) == kTypeNumber) chunk_size = js_getnum(size_result);
     else chunk_size = js_to_number(js, size_result);
   }
 
   if (chunk_size < 0 || chunk_size != chunk_size || chunk_size == (double)INFINITY) {
-    js_mkerr_typed(js, JS_ERR_RANGE,
+    ant_value_t err = Ant_Exception_Pending(js) ? js_take_thrown(js, js_mkundef()) : Ant_Error_Create(js, JS_ERR_RANGE,
       "The return value of a queuing strategy's size function must be a finite, non-NaN, non-negative number");
-    ant_value_t err = is_object_type(js->thrown_value) ? js->thrown_value : js_mkundef();
-    ws_default_controller_error(js, ctrl_obj, err);
-    ant_value_t p = js_mkpromise(js);
-    js_reject_promise(js, p, err);
-    return p;
+    return ws_reject_size_error(js, ctrl_obj, err);
   }
 
   ant_value_t p = js_mkpromise(js);
@@ -840,10 +831,10 @@ static ant_value_t js_ws_writer_abort(ant_params_t) {
   ant_value_t stream_obj = ws_writer_stream(js->this_val);
   if (!ws_is_stream(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_mkerr_typed(js, JS_ERR_TYPE, "Writer has no stream");
-    js_reject_promise(js, p, js->thrown_value);
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Writer has no stream"));
     return p;
   }
+
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
   return writable_stream_abort(js, stream_obj, reason);
 }
@@ -852,23 +843,23 @@ static ant_value_t js_ws_writer_close(ant_params_t) {
   ant_value_t stream_obj = ws_writer_stream(js->this_val);
   if (!ws_is_stream(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_mkerr_typed(js, JS_ERR_TYPE, "Writer has no stream");
-    js_reject_promise(js, p, js->thrown_value);
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Writer has no stream"));
     return p;
   }
+
   if (writable_stream_close_queued_or_in_flight(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot close an already-closing stream");
-    js_reject_promise(js, p, js->thrown_value);
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot close an already-closing stream"));
     return p;
   }
+
   return writable_stream_close(js, stream_obj);
 }
 
 static ant_value_t js_ws_writer_release_lock(ant_params_t) {
   ant_value_t stream_obj = ws_writer_stream(js->this_val);
   if (!ws_is_stream(stream_obj)) return js_mkundef();
-  ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Writer was released");
+  ant_value_t release_err = Ant_Error_Create(js, JS_ERR_TYPE, "Writer was released");
 
   ws_writer_reject_ready_promise(js, js->this_val, release_err);
   ws_writer_reject_closed_promise(js, js->this_val, release_err);
@@ -889,8 +880,7 @@ static ant_value_t js_ws_writer_write(ant_params_t) {
   ant_value_t stream_obj = ws_writer_stream(js->this_val);
   if (!ws_is_stream(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
-    js_mkerr_typed(js, JS_ERR_TYPE, "Writer has no stream");
-    js_reject_promise(js, p, js->thrown_value);
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Writer has no stream"));
     return p;
   }
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
@@ -960,8 +950,7 @@ static ant_value_t js_ws_abort(ant_params_t) {
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WritableStream");
   if (ws_is_writer(ws_stream_writer(js->this_val))) {
     ant_value_t p = js_mkpromise(js);
-    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot abort a locked WritableStream");
-    js_reject_promise(js, p, js->thrown_value);
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot abort a locked WritableStream"));
     return p;
   }
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
@@ -973,14 +962,12 @@ static ant_value_t js_ws_close(ant_params_t) {
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WritableStream");
   if (ws_is_writer(ws_stream_writer(js->this_val))) {
     ant_value_t p = js_mkpromise(js);
-    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot close a locked WritableStream");
-    js_reject_promise(js, p, js->thrown_value);
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot close a locked WritableStream"));
     return p;
   }
   if (writable_stream_close_queued_or_in_flight(js->this_val)) {
     ant_value_t p = js_mkpromise(js);
-    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot close an already-closing stream");
-    js_reject_promise(js, p, js->thrown_value);
+    js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot close an already-closing stream"));
     return p;
   }
   return writable_stream_close(js, js->this_val);
@@ -1135,7 +1122,7 @@ static ant_value_t js_ws_ctor(ant_params_t) {
     if (vtype(start_result) == kTypePromise) {
       ant_value_t resolve_fn = js_heavy_mkfun(js, ws_start_resolve_handler, ctrl_obj);
       ant_value_t reject_fn = js_heavy_mkfun(js, ws_start_reject_handler, ctrl_obj);
-      js_promise_then(js, start_result, resolve_fn, reject_fn);
+      ws_chain_promise(js, start_result, resolve_fn, reject_fn);
     }
 
     if (vtype(start_result) != kTypePromise) {
@@ -1143,14 +1130,14 @@ static ant_value_t js_ws_ctor(ant_params_t) {
       js_resolve_promise(js, resolved, js_mkundef());
       ant_value_t res_fn = js_heavy_mkfun(js, ws_start_resolve_handler, ctrl_obj);
       ant_value_t rej_fn = js_heavy_mkfun(js, ws_start_reject_handler, ctrl_obj);
-      js_promise_then(js, resolved, res_fn, rej_fn);
+      ws_chain_promise(js, resolved, res_fn, rej_fn);
     }
   } else {
     ant_value_t resolved = js_mkpromise(js);
     js_resolve_promise(js, resolved, js_mkundef());
     ant_value_t res_fn = js_heavy_mkfun(js, ws_start_resolve_handler, ctrl_obj);
     ant_value_t rej_fn = js_heavy_mkfun(js, ws_start_reject_handler, ctrl_obj);
-    js_promise_then(js, resolved, res_fn, rej_fn);
+    ws_chain_promise(js, resolved, res_fn, rej_fn);
   }
 
   return obj;

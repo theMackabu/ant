@@ -126,12 +126,15 @@ void jit_emit_iteration(jit_compile_t *c) {
                                    MIR_new_int_op(c->ctx,
                                                   (int64_t)iter_base * (int64_t)sizeof(ant_value_t))));
       MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_call_insn(c->ctx, 5,
+                      MIR_new_call_insn(c->ctx, 7,
                                         MIR_new_ref_op(c->ctx, c->destructure_close_proto),
                                         MIR_new_ref_op(c->ctx, c->imp_dclose),
+                                        MIR_new_reg_op(c->ctx, c->r_err_tmp),
                                         MIR_new_reg_op(c->ctx, c->r_vm),
                                         MIR_new_reg_op(c->ctx, c->r_js),
-                                        MIR_new_reg_op(c->ctx, c->r_iter_buf)));
+                                        MIR_new_reg_op(c->ctx, c->r_iter_buf),
+                                        MIR_new_int_op(c->ctx, sv_get_u8(c->ip + 1))));
+      jit_emit_throw_if_error(c, c->r_err_tmp);
       vstack_pop(&c->vs);
       vstack_pop(&c->vs);
       vstack_pop(&c->vs);
@@ -189,12 +192,15 @@ void jit_emit_iteration(jit_compile_t *c) {
                                                     (MIR_disp_t)((iter_base + i) * (int)sizeof(ant_value_t)), c->r_iter_roots, 0, 1)));
       }
       MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_call_insn(c->ctx, 5,
+                      MIR_new_call_insn(c->ctx, 7,
                                         MIR_new_ref_op(c->ctx, c->destructure_close_proto),
                                         MIR_new_ref_op(c->ctx, c->imp_dclose),
+                                        MIR_new_reg_op(c->ctx, c->r_err_tmp),
                                         MIR_new_reg_op(c->ctx, c->r_vm),
                                         MIR_new_reg_op(c->ctx, c->r_js),
-                                        MIR_new_reg_op(c->ctx, c->r_args_buf)));
+                                        MIR_new_reg_op(c->ctx, c->r_args_buf),
+                                        MIR_new_int_op(c->ctx, sv_get_u8(c->ip + 1))));
+      jit_emit_throw_if_error(c, c->r_err_tmp);
       vstack_pop(&c->vs);
       vstack_pop(&c->vs);
       vstack_pop(&c->vs);

@@ -66,7 +66,7 @@ ant_value_t esm_require_cache_store(ant_t *js, const char *key, ant_value_t modu
     }
   }
   result = js_setprop(js, cache, js_mkstr(js, key, strlen(key)), module);
-  if (js->thrown_exists) result = mkval(kTypeError, 0);
+  if (Ant_Exception_Pending(js)) result = Ant_Exception_Current(js);
 done:
   GC_ROOT_RESTORE(js, mark);
   return result;
@@ -208,11 +208,7 @@ static ant_value_t esm_cjs_require_resolve(ant_params_t) {
     for (ant_offset_t i = 0; i < count; i++) {
       ant_value_t path = js_arr_get(js, paths, i);
       if (vtype(path) != kTypeString) continue;
-      if (is_err(resolved)) {
-        js->thrown_exists = false;
-        js->thrown_value = js_mkundef();
-        js->thrown_stack = js_mkundef();
-      }
+      if (is_err(resolved)) Ant_Exception_Clear(js);
       resolved = js_esm_resolve_specifier_require(js, args[0], js_getstr(js, path, NULL));
       if (!is_err(resolved) && vtype(resolved) == kTypeString) break;
     }
@@ -327,7 +323,7 @@ static ant_value_t esm_eval_commonjs_function(
   );
 
   if (!compiled) {
-    if (js->thrown_exists) return mkval(kTypeError, 0);
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
   }
 
@@ -390,17 +386,18 @@ ant_value_t esm_load_commonjs_module(
   );
   
   if (vtype(result) == kTypePromise) js_run_event_loop(js);
-  if (!is_err(result) && !js->thrown_exists) {
-    js_set(js, module_obj, "loaded", js_true);
-  }
+  if (!is_err(result) && !Ant_Exception_Pending(js)) js_set(js, module_obj, "loaded", js_true);
+
   ant_value_t exports_val = js_get(js, module_obj, "exports");
   
-  if (!is_err(result) && !js->thrown_exists) {
+  if (!is_err(result) && !Ant_Exception_Pending(js)) {
     ant_value_t ns_res = esm_populate_cjs_namespace(js, ns, exports_val);
     if (is_err(ns_res)) result = ns_res;
   }
 
-  if (!pending && (is_err(result) || js->thrown_exists)) {
+  if (!is_err(result) && Ant_Exception_Pending(js)) result = Ant_Exception_Current(js);
+
+  if (!pending && is_err(result)) {
     if (!builtin) js_delete_prop(js, esm_require_cache(js), module_path, strlen(module_path));
     esm_cjs_update_children(js, js_get(js, module_obj, "parent"), module_obj, true);
   }

@@ -17,6 +17,8 @@
 #endif
 
 #include "internal.h"
+#include "errors.h"
+#include "gc/roots.h"
 
 #define DNS_CLASS_IN 1
 #define DNS_TYPE_A 1
@@ -24,20 +26,36 @@
 #define DNS_TYPE_AAAA 28
 #define DNS_TYPE_SRV 33
 
+static ant_value_t dns_rejected_promise(ant_t *js, const char *message) {
+  ant_value_t promise = js_mkpromise(js);
+  js_reject_promise(js, promise, js_mkerr(js, "%s", message));
+  return promise;
+}
+
 static ant_value_t dns_promises_lookup(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "hostname is required");
+  if (nargs < 1) return dns_rejected_promise(js, "hostname is required");
 
   size_t len;
   const char *hostname = js_getstr(js, args[0], &len);
-  if (!hostname) return js_mkerr(js, "hostname must be a string");
+  if (!hostname) return dns_rejected_promise(js, "hostname must be a string");
 
   struct addrinfo hints = {0}, *res = NULL;
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
 
   int err = getaddrinfo(hostname, NULL, &hints, &res);
+
   if (err != 0 || !res) {
-    return js_mkerr(js, "getaddrinfo failed for '%s'", hostname);
+    ant_value_t error = js_mkerr(js, "getaddrinfo failed for '%s'", hostname);
+    error = js_take_thrown(js, error);
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, error);
+
+    ant_value_t promise = js_mkpromise(js);
+    js_reject_promise(js, promise, error);
+    GC_ROOT_RESTORE(js, root_mark);
+
+    return promise;
   }
 
   char addr_str[INET6_ADDRSTRLEN];
@@ -53,7 +71,7 @@ static ant_value_t dns_promises_lookup(ant_params_t) {
     family = 6;
   } else {
     freeaddrinfo(res);
-    return js_mkerr(js, "unsupported address family");
+    return dns_rejected_promise(js, "unsupported address family");
   }
 
   freeaddrinfo(res);
@@ -97,12 +115,6 @@ static int dns_rrtype_from_value(ant_t *js, ant_value_t value) {
   if (len == 3 && dns_strncasecmp(rrtype, "SRV", 3) == 0) return DNS_TYPE_SRV;
   if (len == 3 && dns_strncasecmp(rrtype, "TXT", 3) == 0) return DNS_TYPE_TXT;
   return -1;
-}
-
-static ant_value_t dns_rejected_promise(ant_t *js, const char *message) {
-  ant_value_t promise = js_mkpromise(js);
-  js_reject_promise(js, promise, js_mkerr(js, "%s", message));
-  return promise;
 }
 
 static bool dns_process_query(ares_channel_t *channel, dns_query_result_t *result) {

@@ -207,7 +207,16 @@ static inline void sv_iter_result_unpack(
   ant_t *js, ant_value_t result,
   ant_value_t *out_done, ant_value_t *out_value
 ) {
-  *out_done = sv_iter_result_get_named(js, result, js->intern.done, "done", 4);
+  ant_object_t *ptr = is_object_type(result) ? js_obj_ptr(js_as_obj(result)) : NULL;
+  bool should_fallback = false;
+
+  if (js->intern.done && sv_try_get_shape_data_prop(js, ptr, js->intern.done, out_done, &should_fallback)) {
+    if (!js->intern.value || !sv_try_get_shape_data_prop(js, ptr, js->intern.value, out_value, &should_fallback))
+      *out_value = js_getprop_fallback_len(js, result, "value", 5);
+    return;
+  }
+
+  *out_done = js_getprop_fallback_len(js, result, "done", 4);
   *out_value = sv_iter_result_get_named(js, result, js->intern.value, "value", 5);
 }
 
@@ -351,21 +360,43 @@ static inline void sv_op_iter_get_value(sv_vm_t *vm, ant_t *js) {
   vm->stack[vm->sp++] = mkval(kTypeBool, js_truthy(js, done));
 }
 
-static inline void sv_op_iter_close(sv_vm_t *vm, ant_t *js) {
-  ant_value_t tag_val = vm->stack[vm->sp - 1];
-  if (vtype(tag_val) != kTypeNumber) {
-    vm->sp -= 3;
-    return;
+static inline ant_value_t sv_iter_close(
+  sv_vm_t *vm, ant_t *js, ant_value_t iterator, bool suppress_error
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, iterator);
+
+  ant_value_t result = js_getprop_fallback(js, iterator, "return");
+  GC_ROOT_PIN(js, result);
+
+  if (is_err(result) || is_undefined(result) || is_null(result)) goto done;
+  if (!is_callable(result)) {
+    result = js_mkerr_typed(js, JS_ERR_TYPE, "iterator.return is not a function");
+    goto done;
   }
 
-  int tag = (int)js_getnum(tag_val);
-  if (tag == SV_ITER_GENERIC) {
-    ant_value_t iterator = vm->stack[vm->sp - 3];
-    ant_value_t return_fn = js_getprop_fallback(js, iterator, "return");
-    if (is_callable(return_fn))
-      sv_vm_call(vm, js, return_fn, iterator, NULL, 0, NULL, js_mkundef());
+  result = sv_vm_call(vm, js, result, iterator, NULL, 0, NULL, js_mkundef());
+  if (!is_err(result) && !is_object_type(result))
+    result = js_mkerr_typed(js, JS_ERR_TYPE, "iterator.return must return an object");
+
+done:
+  if (suppress_error && is_err(result)) {
+    js_take_thrown(js, result);
+    result = js_mkundef();
   }
+  GC_ROOT_RESTORE(js, root_mark);
+  return is_err(result) ? result : js_mkundef();
+}
+
+static inline ant_value_t sv_op_iter_close(sv_vm_t *vm, ant_t *js, bool suppress_error) {
+  ant_value_t tag_val = vm->stack[vm->sp - 1];
+  ant_value_t result = js_mkundef();
+
+  if (vtype(tag_val) == kTypeNumber && (int)js_getnum(tag_val) == SV_ITER_GENERIC)
+    result = sv_iter_close(vm, js, vm->stack[vm->sp - 3], suppress_error);
   vm->sp -= 3;
+
+  return result;
 }
 
 static inline ant_value_t sv_op_iter_close_async(sv_vm_t *vm, ant_t *js) {
@@ -408,8 +439,8 @@ static inline ant_value_t sv_op_destructure_init(sv_vm_t *vm, ant_t *js) {
   return sv_op_for_of(vm, js);
 }
 
-static inline void sv_op_destructure_close(sv_vm_t *vm, ant_t *js) {
-  sv_op_iter_close(vm, js);
+static inline ant_value_t sv_op_destructure_close(sv_vm_t *vm, ant_t *js, bool suppress_error) {
+  return sv_op_iter_close(vm, js, suppress_error);
 }
 
 static inline ant_value_t sv_op_destructure_next(sv_vm_t *vm, ant_t *js) {

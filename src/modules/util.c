@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "ant.h"
+#include "errors.h"
 #include "internal.h"
 #include "numbers.h"
 #include "esm/library.h"
@@ -133,7 +134,7 @@ static bool util_set_named_value(
 ) {
   if (!multiple) {
     js_set(js, values, name, value);
-    return !js->thrown_exists;
+    return !Ant_Exception_Pending(js);
   }
 
   ant_value_t existing = js_get(js, values, name);
@@ -143,19 +144,19 @@ static bool util_set_named_value(
     ant_value_t arr = js_mkarr(js);
     js_arr_push(js, arr, value);
     js_set(js, values, name, arr);
-    return !js->thrown_exists;
+    return !Ant_Exception_Pending(js);
   }
 
   if (vtype(existing) == kTypeArray) {
     js_arr_push(js, existing, value);
-    return !js->thrown_exists;
+    return !Ant_Exception_Pending(js);
   }
 
   ant_value_t arr = js_mkarr(js);
   js_arr_push(js, arr, existing);
   js_arr_push(js, arr, value);
   js_set(js, values, name, arr);
-  return !js->thrown_exists;
+  return !Ant_Exception_Pending(js);
 }
 
 static util_parse_arg_option_t *util_find_option_by_name(
@@ -205,12 +206,16 @@ static ant_value_t util_parse_args(ant_params_t) {
   if (is_err(options_obj)) return options_obj;
   if (!is_object_type(options_obj)) options_obj = js_mkobj(js);
 
-  bool strict = js_truthy(js, js_get(js, config, "strict"));
-  if (vtype(js_get(js, config, "strict")) == kTypeUndefined) strict = true;
-  bool allow_positionals = js_truthy(js, js_get(js, config, "allowPositionals"));
+  ant_value_t strict_value = js_get(js, config, "strict");
+  if (is_err(strict_value)) return strict_value;
 
-  size_t option_count = 0;
-  {
+  bool strict = is_undefined(strict_value) || js_truthy(js, strict_value);
+  ant_value_t allow_positionals_value = js_get(js, config, "allowPositionals");
+
+  if (is_err(allow_positionals_value)) return allow_positionals_value;
+  bool allow_positionals = js_truthy(js, allow_positionals_value);
+
+  size_t option_count = 0; {
     ant_iter_t iter = js_prop_iter_begin(js, options_obj);
     const char *key = NULL;
     size_t key_len = 0;
@@ -230,10 +235,19 @@ static ant_value_t util_parse_args(ant_params_t) {
     
     while (idx < option_count && js_prop_iter_next(&iter, &key, &key_len, NULL)) {
       ant_value_t spec = js_get(js, options_obj, key);
+      if (is_err(spec)) goto option_error;
+
       ant_value_t type_val = is_object_type(spec) ? js_get(js, spec, "type") : js_mkundef();
+      if (is_err(type_val)) goto option_error;
+
       ant_value_t short_val = is_object_type(spec) ? js_get(js, spec, "short") : js_mkundef();
+      if (is_err(short_val)) goto option_error;
+
       ant_value_t multiple_val = is_object_type(spec) ? js_get(js, spec, "multiple") : js_mkundef();
+      if (is_err(multiple_val)) goto option_error;
+
       ant_value_t default_val = is_object_type(spec) ? js_get(js, spec, "default") : js_mkundef();
+      if (is_err(default_val)) goto option_error;
       
       options[idx].name = strndup(key, key_len);
       if (!options[idx].name) {
@@ -260,6 +274,12 @@ static ant_value_t util_parse_args(ant_params_t) {
       options[idx].multiple = js_truthy(js, multiple_val);
       options[idx].default_value = default_val;
       idx++;
+      continue;
+
+option_error:
+      js_prop_iter_end(&iter);
+      util_free_parse_options(options, option_count);
+      return Ant_Exception_Current(js);
     }
     
     js_prop_iter_end(&iter);
@@ -273,7 +293,7 @@ static ant_value_t util_parse_args(ant_params_t) {
   if (vtype(options[i].default_value) != kTypeUndefined) {
   if (!util_set_named_value(js, values, options[i].name, options[i].default_value, options[i].multiple)) {
     util_free_parse_options(options, option_count);
-    return js->thrown_exists ? js->thrown_value : js_mkerr(js, "parseArgs failed to set default");
+    return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : js_mkerr(js, "parseArgs failed to set default");
   }}}
 
   ant_offset_t arg_len = js_arr_len(js, args_list);
@@ -348,7 +368,7 @@ static ant_value_t util_parse_args(ant_params_t) {
       if (!util_set_named_value(js, values, opt->name, parsed_value, opt->multiple)) {
         free(name_buf);
         util_free_parse_options(options, option_count);
-        return js->thrown_exists ? js->thrown_value : js_mkerr(js, "parseArgs failed");
+        return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : js_mkerr(js, "parseArgs failed");
       }
       
       free(name_buf);
@@ -384,7 +404,7 @@ static ant_value_t util_parse_args(ant_params_t) {
         
         if (!util_set_named_value(js, values, opt->name, parsed_value, opt->multiple)) {
           util_free_parse_options(options, option_count);
-          return js->thrown_exists ? js->thrown_value : js_mkerr(js, "parseArgs failed");
+          return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : js_mkerr(js, "parseArgs failed");
         }
         
         if (opt->type == UTIL_PARSE_ARG_TYPE_STRING) break;
@@ -849,7 +869,7 @@ static ant_value_t util_debuglog(ant_params_t) {
   if (nargs >= 2 && is_callable(args[1])) {
     ant_value_t cb_args[1] = { logger };
     ant_value_t result = sv_vm_call(js->vm, js, args[1], js_mkundef(), cb_args, 1, NULL, js_mkundef());
-    if (is_err(result) || js->thrown_exists) return result;
+    if (is_err(result) || Ant_Exception_Pending(js)) return result;
   }
 
   return logger;
@@ -1203,13 +1223,13 @@ static ant_value_t util_promisified_call(ant_params_t) {
 
   ant_value_t settled = js_get_slot(ctx, SLOT_SETTLED);
   bool is_settled = (vtype(settled) == kTypeBool && settled == js_true);
-  if (!is_settled && (is_err(call_result) || js->thrown_exists)) {
-    ant_value_t ex = js->thrown_exists ? js->thrown_value : call_result;
-    js->thrown_exists = false;
-    js->thrown_value = js_mkundef();
-    js->thrown_stack = js_mkundef();
-    js_set_slot(ctx, SLOT_SETTLED, js_true);
-    js_reject_promise(js, promise, ex);
+
+  if (is_err(call_result) || Ant_Exception_Pending(js)) {
+    ant_value_t ex = js_take_thrown(js, call_result);
+    if (!is_settled) {
+      js_set_slot(ctx, SLOT_SETTLED, js_true);
+      js_reject_promise(js, promise, ex);
+    }
   }
 
   return promise;
@@ -1237,7 +1257,8 @@ static ant_value_t util_callbackify_error(ant_params_t) {
   ant_value_t callback = js_get_slot(state, SLOT_DATA);
   if (!is_callable(callback)) return js_mkundef();
 
-  ant_value_t err = nargs > 0 ? args[0] : js_mkerr(js, "Promise was rejected");
+  ant_value_t err = nargs > 0 ? args[0]
+    : Ant_Error_Create(js, JS_ERR_TYPE, "Promise was rejected");
   ant_value_t cb_args[1] = { err };
   return sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 1, NULL, js_mkundef());
 }
@@ -1263,29 +1284,31 @@ static ant_value_t util_callbackified_call(ant_params_t) {
   ant_value_t result = sv_vm_call(js->vm, js, original, js_getthis(js), call_args, call_nargs, NULL, js_mkundef());
   free(call_args);
 
-  if (is_err(result) || js->thrown_exists) {
-    ant_value_t ex = js->thrown_exists ? js->thrown_value : result;
-    js->thrown_exists = false;
-    js->thrown_value = js_mkundef();
-    js->thrown_stack = js_mkundef();
+  if (is_err(result) || Ant_Exception_Pending(js)) {
+    GC_ROOT_SAVE(root_mark, js);
+    ant_value_t ex = js_take_thrown(js, result);
+
+    GC_ROOT_PIN(js, ex);
     ant_value_t cb_args[1] = { ex };
-    sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 1, NULL, js_mkundef());
-    return js_mkundef();
+    ant_value_t cb_result = sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 1, NULL, js_mkundef());
+
+    GC_ROOT_RESTORE(js, root_mark);
+    return is_err(cb_result) ? cb_result : js_mkundef();
   }
 
   if (vtype(result) != kTypePromise) {
     ant_value_t cb_args[2] = { js_mknull(), result };
-    sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 2, NULL, js_mkundef());
-    return js_mkundef();
+    ant_value_t cb_result = sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 2, NULL, js_mkundef());
+    return is_err(cb_result) ? cb_result : js_mkundef();
   }
 
   ant_value_t state = js_mkobj(js);
   js_set_slot(state, SLOT_DATA, callback);
   ant_value_t success = js_heavy_mkfun(js, util_callbackify_success, state);
   ant_value_t error = js_heavy_mkfun(js, util_callbackify_error, state);
-  js_promise_then(js, result, success, error);
+  ant_value_t then_result = js_promise_then(js, result, success, error);
   
-  return js_mkundef();
+  return is_err(then_result) ? then_result : js_mkundef();
 }
 
 static ant_value_t util_deprecated_call(ant_params_t) {
@@ -1320,20 +1343,19 @@ static ant_value_t util_deprecate(ant_params_t) {
 }
 
 static ant_value_t util_promisify(ant_params_t) {
-  if (nargs < 1 || !is_callable(args[0])) {
+  if (nargs < 1 || !is_callable(args[0]))
     return js_mkerr(js, "promisify(fn) requires a function");
-  }
 
   ant_value_t custom = js_get_symbol(js, args[0], "nodejs.util.promisify.custom");
+  if (is_err(custom)) return custom;
   if (is_callable(custom)) return custom;
 
   return js_heavy_mkfun(js, util_promisified_call, args[0]);
 }
 
 static ant_value_t util_callbackify(ant_params_t) {
-  if (nargs < 1 || !is_callable(args[0])) {
+  if (nargs < 1 || !is_callable(args[0]))
     return js_mkerr(js, "callbackify(fn) requires a function");
-  }
   return js_heavy_mkfun(js, util_callbackified_call, args[0]);
 }
 
@@ -1344,10 +1366,12 @@ static ant_value_t util_aborted_listener(ant_params_t) {
 }
 
 static ant_value_t util_aborted(ant_params_t) {
-  if (nargs < 1 || !abort_signal_is_signal(args[0]))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "aborted(signal, resource) requires an AbortSignal");
-
   ant_value_t promise = js_mkpromise(js);
+  if (nargs < 1 || !abort_signal_is_signal(args[0])) {
+    js_reject_promise(js, promise, Ant_Error_Create(js, JS_ERR_TYPE, "aborted(signal, resource) requires an AbortSignal"));
+    return promise;
+  }
+
   if (abort_signal_is_aborted(args[0])) {
     js_resolve_promise(js, promise, js_mkundef());
     return promise;

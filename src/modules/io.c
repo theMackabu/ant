@@ -599,12 +599,12 @@ static bool console_write_to_stream_obj(ant_t *js, ant_value_t stream_obj, const
   ant_value_t write_fn = js_get(js, stream_obj, "write");
   if (!is_callable(write_fn)) return false;
 
-  bool was_pending = js->thrown_exists;
+  bool was_pending = Ant_Exception_Pending(js);
   ant_value_t argv[1] = { js_mkstr(js, data, len) };
   ant_value_t result = console_call_value(js, write_fn, stream_obj, argv, 1);
   
   if (is_err(result)) return false;
-  if (js->thrown_exists && !was_pending) return false;
+  if (Ant_Exception_Pending(js) && !was_pending) return false;
   
   return true;
 }

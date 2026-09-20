@@ -315,7 +315,7 @@ static void eval_code(
     result = is_err(ns) ? ns : esm_load_commonjs_module(js, tag, script, len, ns, js_mkundef());
   }
   
-  if (js->thrown_exists) {
+  if (Ant_Exception_Pending(js)) {
     if (!process_has_event_listeners(js, "uncaughtException")) {
       print_uncaught_throw(js);
       js_result = EXIT_FAILURE;
@@ -384,7 +384,7 @@ static int execute_module(ant_t *js, const char *filename, const char *cron_peri
   ns = js_esm_import_sync(js, specifier);
   
   free(use_path_owned);
-  if (js->thrown_exists && process_has_event_listeners(js, "uncaughtException")) {
+  if (Ant_Exception_Pending(js) && process_has_event_listeners(js, "uncaughtException")) {
     process_report_uncaught_exception(js);
     return EXIT_SUCCESS;
   }

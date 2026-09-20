@@ -526,7 +526,10 @@ ant_value_t headers_append_literal(ant_t *js, ant_value_t hdrs, const char *name
 
 static ant_value_t init_from_sequence(ant_t *js, hdr_list_t *l, ant_value_t seq) {
   js_iter_t it;
-  if (!js_iter_open(js, seq, &it)) return js_mkerr_typed(js, JS_ERR_TYPE, "Headers init is not iterable");
+
+  if (!js_iter_open(js, seq, &it)) return Ant_Exception_Pending(js)
+    ? Ant_Exception_Current(js)
+    : js_mkerr_typed(js, JS_ERR_TYPE, "Headers init is not iterable");
 
   ant_value_t pair;
   while (js_iter_next(js, &it, &pair)) {
@@ -545,7 +548,7 @@ static ant_value_t init_from_sequence(ant_t *js, hdr_list_t *l, ant_value_t seq)
     if (is_err(r)) { js_iter_close(js, &it); return r; }
   }
   
-  return js_mkundef();
+  return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : js_mkundef();
 }
 
 static ant_value_t init_from_record(ant_t *js, hdr_list_t *l, ant_value_t obj) {
@@ -969,11 +972,12 @@ static ant_value_t js_headers_ctor(ant_params_t) {
     }
 
     ant_value_t iter_fn = js_get_sym(js, init, get_iterator_sym());
+    if (is_err(iter_fn)) { headers_data_destroy(l); return iter_fn; }
     bool has_iter = (vtype(iter_fn) == kTypeFunction || vtype(iter_fn) == kTypeBuiltin);
 
     ant_value_t r;
     if (t == kTypeArray || has_iter) r = init_from_sequence(js, l, init);
-    else                        r = init_from_record(js, l, init);
+    else r = init_from_record(js, l, init);
     if (is_err(r)) { headers_data_destroy(l); return r; }
   }
 

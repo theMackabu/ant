@@ -443,6 +443,44 @@ async function main() {
     });
     assert.equal(deadNestedEphemeron.result.value, true);
 
+    const primitiveThrow = await cdp.send('Runtime.evaluate', {
+      expression: "function diagnosticPrimitiveThrow() { throw 'primitive-stack-marker'; } diagnosticPrimitiveThrow()",
+    });
+    assert.equal(primitiveThrow.result.value, 'primitive-stack-marker');
+    assert.match(primitiveThrow.exceptionDetails.text, /diagnosticPrimitiveThrow/);
+
+    const objectThrow = await cdp.send('Runtime.evaluate', {
+      expression: "function diagnosticObjectThrow() { throw { message: 'object-stack-marker' }; } diagnosticObjectThrow()",
+    });
+    assert.match(objectThrow.exceptionDetails.text, /diagnosticObjectThrow/);
+    await cdp.send('HeapProfiler.collectGarbage');
+    const thrownProperties = await cdp.send('Runtime.getProperties', {
+      objectId: objectThrow.result.objectId, ownProperties: true,
+    });
+    assert.equal(thrownProperties.result.find(property => property.name === 'message').value.value, 'object-stack-marker');
+
+    const capturedStack = await cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        const error = new Error('captured-stack-marker');
+        error.stack = 'original captured stack';
+        Object.defineProperty(error, Symbol.toStringTag, {
+          get() { error.stack = 'mutated object stack'; return 'Error'; },
+        });
+        throw error;
+      })()`,
+    });
+    assert.equal(capturedStack.exceptionDetails.text, 'original captured stack');
+    const mutatedStack = await cdp.send('Runtime.getProperties', {
+      objectId: capturedStack.result.objectId, ownProperties: true,
+    });
+    assert.equal(mutatedStack.result.find(property => property.name === 'stack').value.value, 'mutated object stack');
+
+    const rejectedWithStack = await cdp.send('Runtime.evaluate', {
+      expression: "Promise.reject(Object.assign(new Error('rejected'), { stack: 'ordinary rejection stack' }))",
+      awaitPromise: true,
+    });
+    assert.equal(rejectedWithStack.exceptionDetails.text, 'ordinary rejection stack');
+
     const rejected = await cdp.send('Runtime.evaluate', {
       expression: "Promise.reject(new Error('inspector-await-boom'))",
       awaitPromise: true,

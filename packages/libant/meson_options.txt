@@ -7,4 +7,5 @@ option('allocator', type: 'combo', choices: ['mimalloc', 'system'], value: 'syst
 option('temporal', type: 'feature', value: 'enabled', description: 'build the Temporal API from temporal_capi')
 option('native_tuning', type: 'feature', value: 'disabled', description: 'optimize generated code for the current build host CPU')
 option('pgo', type: 'feature', value: 'disabled', description: 'use profile-guided optimization data when available')
+option('pgo_profile', type: 'string', value: '', description: 'override the LLVM profile path, absolute or relative to the source root; empty uses the platform profile')
 option('pgo_generate_dir', type: 'string', value: '', description: 'emit LLVM PGO raw profiles into this directory')

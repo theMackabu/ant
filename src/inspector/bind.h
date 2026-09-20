@@ -141,7 +141,6 @@ void inspector_get_properties(inspector_client_t *client, int id, yyjson_val *pa
 void inspector_global_lexical_scope_names(inspector_client_t *client, int id);
 void inspector_clear_console_events(void);
 void inspector_replay_console_events(inspector_client_t *client);
-void inspector_clear_exception_state(ant_t *js);
 void inspector_send_eval_result(inspector_client_t *client, int id, ant_value_t result);
 void inspector_await_promise(inspector_client_t *client, int id, yyjson_val *params);
 void inspector_cancel_client_awaits(uint64_t client_id);

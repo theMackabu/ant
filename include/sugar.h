@@ -9,12 +9,6 @@
 #include <stddef.h>
 #include <stdlib.h>
 
-typedef enum: uint8_t {
-  CORO_ASYNC_AWAIT,
-  CORO_GENERATOR,
-  CORO_ASYNC_GENERATOR
-} coroutine_type_t;
-
 typedef enum {
   CORO_HOLD_ACTIVE    = 1u << 0,
   CORO_HOLD_GENERATOR = 1u << 2,
@@ -27,7 +21,6 @@ struct coroutine {
   ant_value_t this_val;
   ant_value_t super_val;
   ant_value_t new_target;
-  ant_value_t result;
   ant_value_t async_func;
   ant_value_t owner_gen;
   ant_value_t *args;
@@ -42,14 +35,15 @@ struct coroutine {
 
   int nargs;
   uint8_t hold_bits;
-  coroutine_type_t type;
 
-  bool is_error;
-  bool await_registered;
+  bool is_generator: 1;
+  bool await_registered: 1;
 
   uint64_t gc_epoch;
   uint32_t refcount;
   uint32_t remember_index;
+
+  microtask_entry_t *await_resume_job;
 };
 
 typedef enum {
@@ -82,7 +76,8 @@ ant_value_t reject_coroutine_wrapper(ant_params_t);
 // TODO: move to promise.c
 js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);
 
-void js_promise_clear_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);
-void settle_and_resume_coroutine(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error);
+void Ant_Promise_ClearAwaitCoroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);
+void Ant_Coroutine_ResumeAwaitJob(ant_t *js, coroutine_t *coro, ant_value_t value);
+void Ant_Coroutine_SettleAndResume(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error);
 
 #endif

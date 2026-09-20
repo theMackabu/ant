@@ -118,16 +118,36 @@ static void release_lock(const char *name) {
 
 static void process_pending_requests(ant_t *js);
 
+static void reject_lock_callback(ant_t *js, const char *name, ant_value_t promise, ant_value_t result) {
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t reason = js_take_thrown(js, result);
+
+  GC_ROOT_PIN(js, reason);
+  GC_ROOT_PIN(js, promise);
+  release_lock(name);
+
+  js_reject_promise(js, promise, reason);
+  process_pending_requests(js);
+  GC_ROOT_RESTORE(js, root_mark);
+}
+
 static ant_value_t make_lock_handler(ant_t *js, ant_value_t cfunc, ant_value_t lock_name, ant_value_t outer_promise) {
+  GC_ROOT_SAVE(root_mark, js);
   ant_value_t fn_obj = js_mkobj(js);
+  GC_ROOT_PIN(js, fn_obj);
   
   ant_value_t data_obj = js_mkobj(js);
+  GC_ROOT_PIN(js, data_obj);
+
   js_set(js, data_obj, "lockName", lock_name);
   js_set(js, data_obj, "outerPromise", outer_promise);
   js_set_slot(fn_obj, SLOT_DATA, data_obj);
   js_set_slot(fn_obj, SLOT_CFUNC, cfunc);
   
-  return js_obj_to_func(js, fn_obj);
+  ant_value_t result = js_obj_to_func(js, fn_obj);
+  GC_ROOT_RESTORE(js, root_mark);
+
+  return result;
 }
 
 static ant_value_t lock_then_handler(ant_params_t) {
@@ -176,17 +196,28 @@ static void execute_lock_callback(ant_t *js, const char *name, lock_mode_t mode,
   ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &lock_obj, 1, NULL, js_mkundef());
   
   if (vtype(result) == kTypeError) {
-    release_lock(name);
-    js_reject_promise(js, outer_promise, result);
-    process_pending_requests(js);
+    reject_lock_callback(js, name, outer_promise, result);
     return;
   }
   
   if (vtype(result) == kTypePromise) {
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, result);
+    GC_ROOT_PIN(js, outer_promise);
     ant_value_t name_str = js_mkstr(js, name, strlen(name));
+
+    GC_ROOT_PIN(js, name_str);
     ant_value_t on_resolve = make_lock_handler(js, js_mkfun(lock_then_handler), name_str, outer_promise);
+
+    GC_ROOT_PIN(js, on_resolve);
     ant_value_t on_reject = make_lock_handler(js, js_mkfun(lock_catch_handler), name_str, outer_promise);
-    js_promise_then(js, result, on_resolve, on_reject);
+
+    GC_ROOT_PIN(js, on_reject);
+    ant_value_t then_result = js_promise_then(js, result, on_resolve, on_reject);
+
+    if (is_err(then_result)) reject_lock_callback(js, name, outer_promise, then_result);
+    GC_ROOT_RESTORE(js, root_mark);
+
     return;
   }
   
@@ -253,13 +284,17 @@ static ant_value_t locks_request(ant_params_t) {
     
     if (is_special_object(options)) {
       ant_value_t mode_val = js_get(js, options, "mode");
+      if (is_err(mode_val)) return mode_val;
+
       if (vtype(mode_val) == kTypeString) {
         size_t mode_len;
         char *mode_str = js_getstr(js, mode_val, &mode_len);
         if (mode_str && strcmp(mode_str, "shared") == 0) mode = LOCK_MODE_SHARED;
       }
       
-      if (js_get(js, options, "ifAvailable") == js_true) if_available = true;
+      ant_value_t available_val = js_get(js, options, "ifAvailable");
+      if (is_err(available_val)) return available_val;
+      if (available_val == js_true) if_available = true;
     }
   }
   
@@ -273,14 +308,36 @@ static ant_value_t locks_request(ant_params_t) {
     ant_value_t null_val = js_mknull();
     ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &null_val, 1, NULL, js_mkundef());
     
-    if (vtype(result) == kTypePromise) {
-      ant_value_t on_resolve = make_lock_handler(
-        js, js_mkfun(lock_then_handler),
-        js_mkstr(js, "", 0), promise
-      );
-      js_promise_then(js, result, on_resolve, js_mkundef());
+    if (is_err(result)) {
+      js_reject_promise(js, promise, result);
       return promise;
     }
+
+    if (vtype(result) == kTypePromise) {
+      GC_ROOT_SAVE(root_mark, js);
+      GC_ROOT_PIN(js, result);
+      GC_ROOT_PIN(js, promise);
+
+      ant_value_t on_resolve = make_lock_handler(
+        js, js_mkfun(lock_then_handler),
+        js_mkundef(), promise
+      );
+
+      GC_ROOT_PIN(js, on_resolve);
+      ant_value_t on_reject = make_lock_handler(
+        js, js_mkfun(lock_catch_handler),
+        js_mkundef(), promise
+      );
+
+      GC_ROOT_PIN(js, on_reject);
+      ant_value_t then_result = js_promise_then(js, result, on_resolve, on_reject);
+
+      if (is_err(then_result)) js_reject_promise(js, promise, then_result);
+      GC_ROOT_RESTORE(js, root_mark);
+
+      return promise;
+    }
+
     js_resolve_promise(js, promise, result);
     return promise;
   }
@@ -288,11 +345,8 @@ static ant_value_t locks_request(ant_params_t) {
   if (can_acquire_lock(name, mode)) {
     lock_entry_t *entry = find_lock(name);
     
-    if (entry && entry->mode == LOCK_MODE_SHARED && mode == LOCK_MODE_SHARED) {
-      entry->shared_count++;
-    } else {
-      create_lock(name, mode);
-    }
+    if (entry && entry->mode == LOCK_MODE_SHARED && mode == LOCK_MODE_SHARED) entry->shared_count++;
+    else create_lock(name, mode);
     
     execute_lock_callback(js, name, mode, callback, promise);
   } else {
@@ -305,9 +359,8 @@ static ant_value_t locks_request(ant_params_t) {
     req->next = NULL;
     
     lock_request_t *tail = pending_requests;
-    if (!tail) {
-      pending_requests = req;
-    } else {
+    if (!tail) pending_requests = req;
+    else {
       while (tail->next) tail = tail->next;
       tail->next = req;
     }
@@ -317,9 +370,6 @@ static ant_value_t locks_request(ant_params_t) {
 }
 
 static ant_value_t locks_query(ant_params_t) {
-  (void)args;
-  (void)nargs;
-  
   ant_value_t result = js_mkobj(js);
   ant_value_t held_arr = js_mkarr(js);
   ant_value_t pending_arr = js_mkarr(js);
@@ -328,7 +378,8 @@ static ant_value_t locks_query(ant_params_t) {
   HASH_ITER(hh, locks, entry, tmp) {
     ant_value_t lock_info = js_mkobj(js);
     js_set(js, lock_info, "name", js_mkstr(js, entry->name, strlen(entry->name)));
-    js_set(js, lock_info, "mode", js_mkstr(js, entry->mode == LOCK_MODE_EXCLUSIVE ? "exclusive" : "shared", entry->mode == LOCK_MODE_EXCLUSIVE ? 9 : 6));
+    js_set(js, lock_info, "mode", js_mkstr(js, entry->mode == LOCK_MODE_EXCLUSIVE
+      ? "exclusive" : "shared", entry->mode == LOCK_MODE_EXCLUSIVE ? 9 : 6));
     js_arr_push(js, held_arr, lock_info);
   }
   
@@ -336,7 +387,8 @@ static ant_value_t locks_query(ant_params_t) {
   while (req) {
     ant_value_t req_info = js_mkobj(js);
     js_set(js, req_info, "name", js_mkstr(js, req->name, strlen(req->name)));
-    js_set(js, req_info, "mode", js_mkstr(js, req->mode == LOCK_MODE_EXCLUSIVE ? "exclusive" : "shared", req->mode == LOCK_MODE_EXCLUSIVE ? 9 : 6));
+    js_set(js, req_info, "mode", js_mkstr(js, req->mode == LOCK_MODE_EXCLUSIVE
+      ? "exclusive" : "shared", req->mode == LOCK_MODE_EXCLUSIVE ? 9 : 6));
     js_arr_push(js, pending_arr, req_info);
     req = req->next;
   }

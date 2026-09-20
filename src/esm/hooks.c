@@ -126,15 +126,27 @@ static ant_value_t esm_run_hook_level(
 
   ant_value_t call_args[3] = { arg0, ctx, next };
   ant_value_t result = sv_vm_call(js->vm, js, fn, js_mkundef(), call_args, 3, NULL, js_mkundef());
-  GC_ROOT_PIN(js, result);
 
-  if (!is_err(result)) {
-    if (!is_object_type(result))
-      result = js_mkerr_typed(js, JS_ERR_TYPE, "%s hook must return an object", hook_name);
-    else if (!esm_hook_next_was_called(js, next) && !js_truthy(js, js_get(js, result, "shortCircuit")))
-      result = js_mkerr_typed(js, JS_ERR_TYPE, "%s hook must call next() or set shortCircuit: true", hook_name);
+  GC_ROOT_PIN(js, result);
+  if (is_err(result)) goto done;
+
+  if (!is_object_type(result)) {
+    result = js_mkerr_typed(js, JS_ERR_TYPE, "%s hook must return an object", hook_name);
+    goto done;
   }
 
+  if (esm_hook_next_was_called(js, next)) goto done;
+
+  ant_value_t short_circuit = js_get(js, result, "shortCircuit");
+  if (is_err(short_circuit)) {
+    result = short_circuit;
+    goto done;
+  }
+
+  if (!js_truthy(js, short_circuit))
+    result = js_mkerr_typed(js, JS_ERR_TYPE, "%s hook must call next() or set shortCircuit: true", hook_name);
+
+done:
   GC_ROOT_RESTORE(js, root_mark);
   return result;
 }

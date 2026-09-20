@@ -7,6 +7,7 @@ option('runtime_binary', type: 'feature', value: 'auto', description: 'build the
 option('temporal', type: 'feature', value: 'enabled', description: 'build the Temporal API from temporal_capi')
 option('native_tuning', type: 'feature', value: 'disabled', description: 'optimize generated code for the current build host CPU')
 option('pgo', type: 'feature', value: 'auto', description: 'use meson/pgo/profiles profile data for the current platform when available')
+option('pgo_profile', type: 'string', value: '', description: 'override the LLVM profile path, absolute or relative to the source root; empty uses the platform profile')
 option('pgo_generate_dir', type: 'string', value: '', description: 'emit LLVM PGO raw profiles for Ant project targets into this directory')
 option('build_timestamp', type: 'string', value: '', description: 'build timestamp (defaults to current time if empty)')
 option('build_git_hash', type: 'string', value: '', description: 'git hash for version metadata (defaults to git rev-parse if empty)')

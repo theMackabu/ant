@@ -2,31 +2,16 @@
 #define ANT_NAPI_INTERNAL_H
 
 #include <compat.h> // IWYU pragma: keep
-
+#include <uv.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
 #include <uthash.h>
-#include <uv.h>
 
-#include "ant.h"
-#include "descriptors.h"
-#include "errors.h"
-#include "internal.h"
-#include "ptr.h"
-#include "silver/engine.h"
-
-#include "gc/modules.h"
-#include "gc/objects.h"
-#include "gc/roots.h"
-#include "modules/buffer.h"
-#include "modules/date.h"
 #include "modules/napi.h"
-#include "utf8.h"
 
 typedef struct napi_cleanup_hook_entry {
   napi_cleanup_hook hook;
@@ -38,8 +23,7 @@ typedef struct ant_napi_env__ {
   ant_t *js;
   napi_extended_error_info last_error;
   char last_error_msg[256];
-  bool has_pending_exception;
-  napi_value pending_exception;
+  ant_value_t exception;
   uint32_t version;
   void *instance_data;
   node_api_basic_finalize instance_data_finalize_cb;

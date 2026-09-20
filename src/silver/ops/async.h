@@ -64,18 +64,16 @@ static inline void sv_async_init_activation(
     .this_val = this_val,
     .super_val = super_val,
     .new_target = new_target,
-    .result = js_mkundef(),
     .async_func = async_func,
     .owner_gen = js_mkundef(),
     .args = NULL,
     .awaited_promise = js_mkundef(),
     .async_promise = promise,
     .active_parent = NULL,
-    .type = CORO_ASYNC_AWAIT,
+    .is_generator = false,
     .nargs = nargs,
     .refcount = 1,
     .hold_bits = 0,
-    .is_error = false,
     .await_registered = false,
   };
 }
@@ -141,9 +139,7 @@ static inline ant_value_t sv_start_tla(
     if (async_coro_out) coroutine_release(coro);
     
     if (is_err(result)) {
-      ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
-      js->thrown_exists = false;
-      js->thrown_value = js_mkundef();
+      ant_value_t reject_value = js_take_thrown(js, result);
       js_reject_promise(js, promise, reject_value);
     } else js_resolve_promise(js, promise, result);
 
@@ -179,9 +175,7 @@ static inline ant_value_t sv_start_async_closure(
     );
     
     if (is_err(result)) {
-      ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
-      js->thrown_exists = false;
-      js->thrown_value = js_mkundef();
+      ant_value_t reject_value = js_take_thrown(js, result);
       js_reject_promise(js, promise, reject_value);
     } else js_resolve_promise(js, promise, result);
     
@@ -226,9 +220,7 @@ static inline ant_value_t sv_start_async_closure(
     }
   
     if (is_err(result)) {
-      ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
-      js->thrown_exists = false;
-      js->thrown_value = js_mkundef();
+      ant_value_t reject_value = js_take_thrown(js, result);
       js_reject_promise(js, promise, reject_value);
     } else js_resolve_promise(js, promise, result);
 
@@ -268,7 +260,6 @@ static inline sv_await_result_t sv_await_value(sv_vm_t *vm, ant_t *js, ant_value
 
     coro->awaited_promise = js_mkundef();
     coro->await_registered = true;
-    coroutine_hold(coro, CORO_HOLD_AWAIT);
   } else {
     value = js_promise_assimilate_awaitable(js, value);
     if (is_err(value)) {

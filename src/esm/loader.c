@@ -1316,17 +1316,18 @@ static ant_value_t esm_eval_ambiguous_js_source(
   const char *resolved_path, const char *js_code,
   size_t js_len, ant_value_t ns, ant_module_format_t *format, ant_value_t require_module
 ) {
-  bool saved_thrown_exists = js->thrown_exists;
-  ant_value_t saved_thrown_value = js->thrown_value;
-  ant_value_t saved_thrown_stack = js->thrown_stack;
+  GC_ROOT_SAVE(exception_mark, js);
+  ant_value_t saved_exception = Ant_Exception_Peek(js);
+
+  GC_ROOT_PIN(js, saved_exception);
   code_arena_mark_t parse_mark = parse_arena_mark();
+
   sv_ast_t *program = sv_parse(js, js_code, (ant_offset_t)js_len, false);
+  GC_ROOT_RESTORE(js, exception_mark);
 
   if (!program) {
     parse_arena_rewind(parse_mark);
-    js->thrown_exists = saved_thrown_exists;
-    js->thrown_value = saved_thrown_value;
-    js->thrown_stack = saved_thrown_stack;
+    Ant_Exception_Set(js, saved_exception);
     *format = MODULE_EVAL_FORMAT_CJS;
     if (js->modules.module_stack) js->modules.module_stack->format = *format;
     return esm_load_commonjs_module(js, resolved_path, js_code, js_len, ns, require_module);
@@ -1342,7 +1343,7 @@ static ant_value_t esm_eval_ambiguous_js_source(
     ); parse_arena_rewind(parse_mark);
     
     if (!func) {
-      if (js->thrown_exists) return mkval(kTypeError, 0);
+      if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
       return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
     }
 
@@ -1633,7 +1634,7 @@ static ant_value_t esm_eval_parsed_record(
   esm_module_record_cleanup(record);
 
   if (func) return js_execute_compiled_bytecode(js, func, NULL);
-  if (js->thrown_exists) return mkval(kTypeError, 0);
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
   
   return js_mkerr_typed(
     js, JS_ERR_INTERNAL | JS_ERR_NO_STACK,
@@ -1675,29 +1676,29 @@ static ant_value_t esm_parse_module_record(
   out->mark = parse_arena_mark();
   out->has_mark = true;
 
-  bool saved_thrown_exists = js->thrown_exists;
-  ant_value_t saved_thrown_value = js->thrown_value;
-  ant_value_t saved_thrown_stack = js->thrown_stack;
+  GC_ROOT_SAVE(exception_mark, js);
+  ant_value_t saved_exception = Ant_Exception_Peek(js);
+  GC_ROOT_PIN(js, saved_exception);
 
   sv_ast_t *program = sv_parse(js, js_code, (ant_offset_t)js_len, false);
+  GC_ROOT_RESTORE(js, exception_mark);
+
   if (!program) {
     if (*format == MODULE_EVAL_FORMAT_UNKNOWN) {
-      js->thrown_exists = saved_thrown_exists;
-      js->thrown_value = saved_thrown_value;
-      js->thrown_stack = saved_thrown_stack;
+      Ant_Exception_Set(js, saved_exception);
       *format = MODULE_EVAL_FORMAT_CJS;
       out->fallback_cjs = true;
       esm_module_record_cleanup(out);
       return js_mkundef();
     }
 
-    ant_value_t err = js->thrown_exists
-      ? mkval(kTypeError, 0)
-      : js_mkerr_typed(
-          js, JS_ERR_INTERNAL | JS_ERR_NO_STACK,
-          "Unexpected parse error in module: %s",
-          resolved_path
-        );
+    ant_value_t err = Ant_Exception_Pending(js)
+      ? Ant_Exception_Current(js) : js_mkerr_typed(
+      js, JS_ERR_INTERNAL | JS_ERR_NO_STACK,
+      "Unexpected parse error in module: %s",
+      resolved_path
+    );
+
     esm_module_record_cleanup(out);
     return err;
   }

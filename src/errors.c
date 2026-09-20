@@ -3,6 +3,7 @@
 #include "descriptors.h"
 #include "output.h"
 #include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/io.h"
 #include "gc/roots.h"
 #include "highlight.h"
@@ -30,7 +31,12 @@ typedef struct { char *buf; size_t size; } errbuf_t;
 constexpr ant_offset_t ERROR_CONTEXT_MAX_SOURCE_BYTES = 256 * 1024;
 
 void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback_stack, const char *prefix) {
-  ant_value_t obj = is_err(value) ? js_as_obj(value) : value;
+  if (is_err(value)) {
+    fallback_stack = Ant_Exception_Stack(js, value);
+    value = Ant_Exception_Value(js, value);
+  }
+
+  ant_value_t obj = value;
   ant_output_stream_t *out = ant_output_stream(stderr);
   
   ant_value_t stack = js_mkundef();
@@ -58,19 +64,94 @@ void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback_stack,
   ant_output_stream_flush(out);
 }
 
+// TODO: exceptions.c
+bool Ant_Exception_Pending(ant_t *js) {
+  return js && js->exception != js_mkundef();
+}
+
+ant_value_t Ant_Exception_Peek(ant_t *js) {
+  return Ant_Exception_Pending(js) ? js->exception : js_mkundef();
+}
+
+ant_value_t Ant_Exception_Current(ant_t *js) {
+  if (Ant_Exception_Pending(js)) return js->exception;
+  return js && is_err(js->exception_oom) ? js->exception_oom : mkval(kTypeError, 0);
+}
+
+void Ant_Exception_Set(ant_t *js, ant_value_t completion) {
+  js->exception = is_err(completion) ? completion : js_mkundef();
+}
+
+void Ant_Exception_Clear(ant_t *js) {
+  js->exception = js_mkundef();
+}
+
+static ant_object_t *exception_record(ant_t *js, ant_value_t completion) {
+  if (!is_err(completion)) return NULL;
+  if (!vdata(completion)) completion = js ? js->exception_oom : js_mkundef();
+  if (!is_err(completion) || vdata(completion) < 2) return NULL;
+  ant_object_t *record = js_obj_ptr(js_as_obj(completion));
+  return record && record->type_tag == kTypeError ? record : NULL;
+}
+
+ant_value_t Ant_Exception_Value(ant_t *js, ant_value_t completion) {
+  ant_object_t *record = exception_record(js, completion);
+  return record ? record->u.exception.value : is_err(completion) ? js_mkundef() : completion;
+}
+
+ant_value_t Ant_Exception_Stack(ant_t *js, ant_value_t completion) {
+  ant_object_t *record = exception_record(js, completion);
+  return record ? record->u.exception.stack : js_mkundef();
+}
+
+ant_value_t Ant_Exception_Raise(ant_t *js, ant_value_t value, ant_value_t stack) {
+  ant_value_t completion = Ant_Exception_CreateRecord(js, value, stack);
+  Ant_Exception_Set(js, completion);
+  return completion;
+}
+
 ant_value_t js_take_thrown(ant_t *js, ant_value_t fallback) {
-  ant_value_t value = js->thrown_exists ? js->thrown_value : fallback;
-
-  js->thrown_exists = false;
-  js->thrown_value = js_mkundef();
-  js->thrown_stack = js_mkundef();
-
+  ant_value_t completion = is_err(fallback) ? fallback : Ant_Exception_Peek(js);
+  if (!is_err(completion)) return fallback;
+  ant_value_t value = Ant_Exception_Value(js, completion);
+  if (js->exception == completion) Ant_Exception_Clear(js);
   return value;
 }
 
+ant_value_t Ant_Error_ConsumeMarker(ant_t *js, ant_value_t value) {
+  return is_err(value) ? js_take_thrown(js, value) : value;
+}
+
+ant_value_t Ant_Error_CallCallback(
+  ant_t *js, ant_value_t callback, ant_value_t this_value,
+  ant_value_t *args, int nargs
+) {
+  if (nargs < 1 || !is_err(args[0]))
+    return sv_vm_call(js->vm, js, callback, this_value, args, nargs, NULL, js_mkundef());
+
+  ant_value_t inline_args[8];
+  ant_value_t *call_args = nargs <= 8 ? inline_args : malloc((size_t)nargs * sizeof(*call_args));
+
+  if (!call_args) return js_mkerr(js, "out of memory invoking error callback");
+  memcpy(call_args, args, (size_t)nargs * sizeof(*call_args));
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, callback);
+  GC_ROOT_PIN(js, this_value);
+  for (int i = 0; i < nargs; i++) GC_ROOT_PIN(js, call_args[i]);
+
+  call_args[0] = Ant_Error_ConsumeMarker(js, call_args[0]);
+  ant_value_t result = sv_vm_call(js->vm, js, callback, this_value, call_args, nargs, NULL, js_mkundef());
+
+  GC_ROOT_RESTORE(js, root_mark);
+  if (call_args != inline_args) free(call_args);
+
+  return result;
+}
+
 bool print_uncaught_throw(ant_t *js) {
-  if (!js->thrown_exists) return false;
-  print_error_value(js, js->thrown_value, js->thrown_stack, NULL);
+  if (!Ant_Exception_Pending(js)) return false;
+  print_error_value(js, Ant_Exception_Value(js, Ant_Exception_Peek(js)), Ant_Exception_Stack(js, Ant_Exception_Peek(js)), NULL);
   js_take_thrown(js, js_mkundef());
   return true;
 }
@@ -812,29 +893,31 @@ void js_capture_stack(ant_t *js, ant_value_t err_obj) {
 }
 
 js_err_type_t get_error_type(ant_t *js) {
-  if (!js->thrown_exists) return JS_ERR_GENERIC;
-  ant_value_t err_type = js_get_slot(js->thrown_value, SLOT_ERR_TYPE);
+  if (!Ant_Exception_Pending(js)) return JS_ERR_GENERIC;
+  ant_value_t err_type = js_get_slot(Ant_Exception_Value(js, Ant_Exception_Peek(js)), SLOT_ERR_TYPE);
   if (vtype(err_type) != kTypeNumber) return JS_ERR_GENERIC;
   return (js_err_type_t)((int)js_getnum(err_type) & ~JS_ERR_NO_STACK);
 }
 
-__attribute__((format(printf, 4, 5)))
-ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props, const char *xx, ...) {
-  va_list ap;
-  char error_msg[256] = {0};
-
+static ant_value_t make_error_value(ant_t *js, js_err_type_t err_type, ant_value_t props, const char *error_msg) {
   bool no_stack = (err_type & JS_ERR_NO_STACK) != 0;
   js_err_type_t base_type = (js_err_type_t)(err_type & ~JS_ERR_NO_STACK);
-
-  va_start(ap, xx);
-    vsnprintf(error_msg, sizeof(error_msg), xx, ap);
-  va_end(ap);
 
   const char *err_name = get_error_type_name(base_type);
   size_t err_name_len = strlen(err_name);
   size_t msg_len = strlen(error_msg);
 
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, props);
+
   ant_value_t err_obj = js_mkobj(js);
+  GC_ROOT_PIN(js, err_obj);
+
+  if (is_err(err_obj)) {
+    GC_ROOT_RESTORE(js, mark);
+    return err_obj;
+  }
+
   js_set(js, err_obj, "name", js_mkstr(js, err_name, err_name_len));
   js_set_descriptor(js, err_obj, "name", 4, JS_DESC_W | JS_DESC_C);
   js_set(js, err_obj, "message", js_mkstr(js, error_msg, msg_len));
@@ -850,70 +933,113 @@ ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props
   if ((T_FLAG_FIND(proto_type) & T_SPECIAL_OBJECT_MASK) != 0)
     js_set_proto_init(err_obj, proto);
 
-  js->thrown_exists = true;
-  js->thrown_value = err_obj;
-
-  if (!no_stack) {
-    js_capture_stack(js, err_obj);
-  }
-
+  if (!no_stack) js_capture_stack(js, err_obj);
   js_clear_error_site(js);
-  return mkval(kTypeError, vdata(err_obj));
+  GC_ROOT_RESTORE(js, mark);
+
+  return err_obj;
 }
 
-ant_value_t js_make_error_silent(ant_t *js, js_err_type_t err_type, const char *message) {
-  bool had_throw = js->thrown_exists;
-  
-  ant_value_t saved_value = had_throw ? js->thrown_value : js_mkundef();
-  ant_value_t saved_stack = had_throw ? js->thrown_stack : js_mkundef();
+__attribute__((format(printf, 4, 0)))
+static ant_value_t CreateFormattedErrorValue(
+  ant_t *js, js_err_type_t err_type, ant_value_t props, const char *fmt, va_list args
+) {
+  char local[256];
+  char *message = local;
 
-  js_create_error(js, err_type, js_mkundef(), "%s", message);
-  ant_value_t err = js->thrown_value;
+  va_list copy;
 
-  js->thrown_exists = had_throw;
-  js->thrown_value = saved_value;
-  js->thrown_stack = saved_stack;
+  va_copy(copy, args);
+  int length = vsnprintf(local, sizeof(local), fmt, copy);
+  va_end(copy);
+
+  if (length < 0) goto format_failed;
+
+  if ((size_t)length >= sizeof(local)) {
+    size_t capacity = (size_t)length + 1;
+    message = malloc(capacity);
+
+    if (!message) {
+      ant_value_t failure = is_err(js->exception_oom) ? js->exception_oom : mkval(kTypeError, 0);
+      Ant_Exception_Set(js, failure);
+      return failure;
+    }
+
+    va_copy(copy, args);
+    int written = vsnprintf(message, capacity, fmt, copy);
+    va_end(copy);
+
+    if (written < 0 || (size_t)written >= capacity) {
+      free(message);
+      goto format_failed;
+    }
+  }
+
+  ant_value_t value = make_error_value(js, err_type, props, message);
+  if (message != local) free(message);
+  return value;
+
+format_failed:
+  return js_throw(js, Ant_Error_Create(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "failed to format error message"));
+}
+
+__attribute__((format(printf, 4, 5)))
+ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props, const char *fmt, ...) {
+  va_list ap;
   
-  return err;
+  va_start(ap, fmt);
+  ant_value_t value = CreateFormattedErrorValue(js, err_type, props, fmt, ap);
+  va_end(ap);
+
+  if (is_err(value)) return value;
+  ant_value_t stack = js_mkundef();
+
+  js_try_get_own_data_prop(js, value, "stack", 5, &stack);
+  return Ant_Exception_Raise(js, value, stack);
+}
+
+ant_value_t Ant_Error_Create(ant_t *js, js_err_type_t err_type, const char *message) {
+  return make_error_value(js, err_type, js_mkundef(), message);
+}
+
+__attribute__((format(printf, 3, 4)))
+ant_value_t Ant_Error_CreateFormatted(ant_t *js, js_err_type_t err_type, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  ant_value_t value = CreateFormattedErrorValue(js, err_type, js_mkundef(), fmt, ap);
+  va_end(ap);
+  return value;
 }
 
 ant_value_t js_throw(ant_t *js, ant_value_t value) {
+  if (is_err(value)) {
+    Ant_Exception_Set(js, value);
+    return value;
+  }
+
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, value);
+
+  ant_value_t stack = js_mkundef();
+  GC_ROOT_PIN(js, stack);
+
+  bool no_stack = false;
   if (vtype(value) == kTypeObject) {
-    ant_value_t existing = js_get(js, value, "stack");
-    if (vtype(existing) == kTypeString) {
-      js->thrown_exists = true;
-      js->thrown_value = value;
-      js_clear_error_site(js);
-      return mkval(kTypeError, vdata(value));
-    }
-    ant_value_t slot = js_get_slot(value, SLOT_ERR_TYPE);
-    if (vtype(slot) == kTypeNumber && ((int)js_getnum(slot) & JS_ERR_NO_STACK)) {
-      js->thrown_exists = true;
-      js->thrown_value = value;
-      js_clear_error_site(js);
-      return mkval(kTypeError, vdata(value));
-    }
+    js_try_get_own_data_prop(js, value, "stack", 5, &stack);
+    ant_value_t kind = js_get_slot(value, SLOT_ERR_TYPE);
+    no_stack = vtype(kind) == kTypeNumber && ((int)js_getnum(kind) & JS_ERR_NO_STACK);
   }
 
-  ant_value_t stack_str = js_build_stack_text(js, JS_STACK_TEXT_FROM_THROW_VALUE, value);
-  if (vtype(stack_str) != kTypeString) {
-    js->thrown_exists = true;
-    js->thrown_value = value;
-    js_clear_error_site(js);
-    return mkval(kTypeError, 0);
-  }
+  if (!no_stack && vtype(stack) != kTypeString)
+    stack = js_build_stack_text(js, JS_STACK_TEXT_FROM_THROW_VALUE, value);
 
-  if (vtype(value) == kTypeObject) {
-    js_set(js, value, "stack", stack_str);
-    js_set_descriptor(js, js_as_obj(value), "stack", 5, JS_DESC_W | JS_DESC_C);
-  }
+  if (vtype(stack) != kTypeString) stack = js_mkundef();
+  ant_value_t result = Ant_Exception_Raise(js, value, stack);
 
-  js->thrown_exists = true;
-  js->thrown_value = value;
-  js->thrown_stack = stack_str;
+  GC_ROOT_RESTORE(js, mark);
   js_clear_error_site(js);
   
-  return mkval(kTypeError, 0);
+  return result;
 }
 
 enum { 

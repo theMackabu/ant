@@ -75,7 +75,7 @@ static ant_value_t reflect_set(ant_params_t) {
 
   ant_value_t result = js_setprop(js, target, key, value);
   if (is_err(result)) return result;
-  if (js->thrown_exists) return mkval(kTypeError, 0);
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
   
   return js_true;
 }

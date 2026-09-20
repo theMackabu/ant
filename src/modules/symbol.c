@@ -31,7 +31,7 @@ ant_value_t js_iter_result(ant_t *js, bool has_value, ant_value_t value) {
     GC_ROOT_PIN(js, seed);
     js_mkprop_fast(js, seed, "done", 4, js_false);
     js_mkprop_fast(js, seed, "value", 5, js_mkundef());
-    if (js->thrown_exists) { GC_ROOT_RESTORE(js, mark); return mkval(kTypeError, 0); }
+    if (Ant_Exception_Pending(js)) { GC_ROOT_RESTORE(js, mark); return Ant_Exception_Current(js); }
     js->mutable_roots.iterator_result_template = seed;
   }
   
@@ -280,6 +280,7 @@ bool js_iter_open(ant_t *js, ant_value_t iterable, js_iter_t *it) {
 
   it->iterator = iterator;
   it->next_fn = js_getprop_fallback(js, iterator, "next");
+  if (is_err(it->next_fn)) return false;
   it->advance = NULL;
 
   ant_value_t proto = (vtype(iterator) == kTypeObject) ? js_get_proto(js, iterator) : js_mkundef();
@@ -307,17 +308,36 @@ bool js_iter_next(ant_t *js, js_iter_t *it, ant_value_t *out) {
 
   if (is_err(result)) return false;
   ant_value_t done = js_getprop_fallback(js, result, "done");
+  if (is_err(done)) return false;
   
   if (js_truthy(js, done)) return false;
   *out = js_getprop_fallback(js, result, "value");
   
-  return true;
+  return !is_err(*out);
+}
+
+static void js_iter_call_return(ant_t *js, js_iter_t *it) {
+  ant_value_t return_fn = js_getprop_fallback(js, it->iterator, "return");
+  if (is_callable(return_fn)) sv_vm_call(js->vm, js, return_fn, it->iterator, NULL, 0, NULL, js_mkundef());
 }
 
 void js_iter_close(ant_t *js, js_iter_t *it) {
   if (it->advance) return;
-  ant_value_t return_fn = js_getprop_fallback(js, it->iterator, "return");
-  if (is_callable(return_fn)) sv_vm_call(js->vm, js, return_fn, it->iterator, NULL, 0, NULL, js_mkundef());
+
+  if (!Ant_Exception_Pending(js)) {
+    js_iter_call_return(js, it);
+    return;
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t completion = Ant_Exception_Peek(js);
+
+  GC_ROOT_PIN(js, completion);
+  Ant_Exception_Clear(js);
+  js_iter_call_return(js, it);
+
+  Ant_Exception_Set(js, completion);
+  GC_ROOT_RESTORE(js, root_mark);
 }
 
 ant_value_t maybe_call_symbol_method(
@@ -398,6 +418,7 @@ void init_symbol_module(ant_t *js) {
   );
 
   // set internal types before ant module snapshot
+  // TODO: do it in a cleaner way like js->sym.array_proto right
   ant_value_t array_ctor = js_get(js, js_glob(js), "Array");
   ant_value_t array_proto = js_get(js, array_ctor, "prototype");
   
@@ -439,7 +460,6 @@ void init_symbol_module(ant_t *js) {
 
   js_define_species_getter(js, promise_ctor);
   js_define_species_getter(js, array_ctor);
-  // These one-time bootstrap definitions establish the protected baseline.
   js->promise_species_protector_invalid = false;
 }
 

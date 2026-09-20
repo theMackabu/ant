@@ -4,6 +4,13 @@
 #include <string.h>
 
 #include <ant.h>
+#include "errors.h"
+#include "gc/roots.h"
+#include "internal.h"
+#include "modules/json.h"
+#include "esm/loader.h"
+#include "runtime.h"
+#include "silver/call.h"
 
 #include "../../app/runtime/ant_runtime.h"
 
@@ -15,31 +22,56 @@ void ant_renderer_runtime_set_stack_base(void *stack_base) {
 }
 
 static char *CopyJson(ant_value_t value) {
-  ant_value_t json = json_stringify_value(renderer_runtime, value);
-  if (vtype(json) != kTypeString) return NULL;
-  size_t length = 0;
-  const char *text = js_getstr(renderer_runtime, json, &length);
-  char *copy = malloc(length + 1);
-  if (!copy) return NULL;
-  memcpy(copy, text, length);
-  copy[length] = '\0';
+  ant_t *js = renderer_runtime;
+  if (is_err(value)) {
+    js_take_thrown(js, value);
+    return NULL;
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, value);
+  ant_value_t json = json_stringify_value(js, value);
+
+  GC_ROOT_PIN(js, json);
+  char *copy = NULL;
+
+  if (is_err(json)) js_take_thrown(js, json);
+  else if (vtype(json) == kTypeString) {
+    size_t length = 0;
+    const char *text = js_getstr(js, json, &length);
+    copy = malloc(length + 1);
+    if (copy) {
+      memcpy(copy, text, length);
+      copy[length] = '\0';
+    }
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
   return copy;
 }
 
 static ant_value_t Response(bool ok, ant_value_t value) {
-  if (!ok && is_err(value)) {
-    if (vdata(value) != 0) {
-      ant_value_t message = js_get(renderer_runtime, mkval(kTypeObject, vdata(value)), "message");
-      if (vtype(message) == kTypeString) value = message;
-    }
-    if (is_err(value)) {
-      const char *text = js_str(renderer_runtime, value);
-      value = js_mkstr(renderer_runtime, text, strlen(text));
-    }
+  ant_t *js = renderer_runtime;
+  GC_ROOT_SAVE(root_mark, js);
+
+  if (!ok) value = js_take_thrown(js, value);
+  GC_ROOT_PIN(js, value);
+
+  if (!ok) {
+    ant_value_t message;
+    if (js_try_get_own_data_prop(js, value, "message", 7, &message) && vtype(message) == kTypeString)
+      value = message;
+    else if (is_err(value)) value = js_mkstr(js, "unknown error", 13);
   }
-  ant_value_t response = js_mkobj(renderer_runtime);
-  js_set(renderer_runtime, response, "ok", js_bool(ok));
-  js_set(renderer_runtime, response, ok ? "value" : "error", value);
+
+  ant_value_t response = js_mkobj(js);
+  GC_ROOT_PIN(js, response);
+  if (!is_err(response)) {
+    js_set(js, response, "ok", js_bool(ok));
+    js_set(js, response, ok ? "value" : "error", value);
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
   return response;
 }
 
@@ -89,7 +121,13 @@ char *ant_renderer_runtime_describe(const char *specifier) {
     if (!stable_name) continue;
     memcpy(stable_name, name, length);
     stable_name[length] = '\0';
+
     ant_value_t value = js_get(renderer_runtime, module, stable_name);
+    if (is_err(value)) {
+      free(stable_name);
+      return CopyJson(Response(false, value));
+    }
+
     ant_value_t entry = js_mkobj(renderer_runtime);
     js_set(renderer_runtime, entry, "name", key);
     js_set(renderer_runtime, entry, "callable", js_bool(is_callable(value)));
@@ -108,6 +146,7 @@ char *ant_renderer_runtime_call(const char *specifier, const char *name, const c
   ant_value_t module = ImportModule(specifier);
   if (is_err(module)) return CopyJson(Response(false, module));
   ant_value_t function = js_get(renderer_runtime, module, name);
+  if (is_err(function)) return CopyJson(Response(false, function));
   if (!is_callable(function)) {
     return CopyJson(Response(false, js_mkerr(renderer_runtime, "%s.%s is not callable", specifier, name)));
   }

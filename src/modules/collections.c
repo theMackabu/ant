@@ -419,6 +419,12 @@ static weakset_entry_t **get_weakset_from_obj(ant_value_t obj) {
 }
 
 map_iterator_state_t *get_map_iter_state(ant_value_t obj) {
+  if (vtype(obj) == kTypeObject) {
+    ant_object_t *ptr = (ant_object_t *)vptr(obj);
+    if (ptr && ptr->native.tag == MAP_ITER_NATIVE_TAG)
+      return (map_iterator_state_t *)ptr->native.ptr;
+  }
+  
   return (map_iterator_state_t *)js_get_native(obj, MAP_ITER_NATIVE_TAG);
 }
 
@@ -1022,10 +1028,9 @@ static ant_value_t set_record_has(ant_t *js, set_record_t *record, ant_value_t v
 }
 
 static ant_value_t set_record_close_keys_iterator(ant_t *js, ant_value_t iterator) {
-  ant_value_t return_fn = js_getprop_fallback(js, iterator, "return");
-  if (is_err(return_fn)) return return_fn;
-  if (!is_callable(return_fn)) return js_mkundef();
-  return sv_vm_call(js->vm, js, return_fn, iterator, NULL, 0, NULL, js_mkundef());
+  js_iter_t it = { .iterator = iterator };
+  js_iter_close(js, &it);
+  return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : js_mkundef();
 }
 
 static ant_value_t set_record_for_each_key(ant_t *js, set_record_t *record, set_key_cb cb, void *ctx) {
@@ -1674,8 +1679,10 @@ static ant_value_t map_init_from_iterable(ant_t *js, ant_value_t map_obj, map_en
     = is_original_collection_adder(adder, map_set);
 
   js_iter_t it;
-  if (!js_iter_open(js, iterable, &it)) 
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Map constructor argument is not iterable");
+  if (!js_iter_open(js, iterable, &it))
+    return Ant_Exception_Pending(js)
+      ? Ant_Exception_Current(js)
+      : js_mkerr_typed(js, JS_ERR_TYPE, "Map constructor argument is not iterable");
 
   ant_value_t result = js_mkundef();
   ant_value_t entry;
@@ -1708,7 +1715,7 @@ static ant_value_t map_init_from_iterable(ant_t *js, ant_value_t map_obj, map_en
     if (is_err(result)) goto close_iter;
   }
 
-  return result;
+  return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : result;
 
 close_iter:
   js_iter_close(js, &it);
@@ -1718,15 +1725,17 @@ close_iter:
 static ant_value_t set_init_from_iterable(ant_t *js, ant_value_t set_obj, set_entry_t **set_head, ant_value_t iterable) {
   ant_value_t adder = js_getprop_fallback(js, set_obj, "add");
   if (is_err(adder)) return adder;
+
   if (!is_callable(adder))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Set constructor requires a callable add method");
   
-  bool use_fast_path 
-    = is_original_collection_adder(adder, set_add);
+  bool use_fast_path  = is_original_collection_adder(adder, set_add);
 
   js_iter_t it;
   if (!js_iter_open(js, iterable, &it))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Set constructor argument is not iterable");
+    return Ant_Exception_Pending(js)
+      ? Ant_Exception_Current(js)
+      : js_mkerr_typed(js, JS_ERR_TYPE, "Set constructor argument is not iterable");
 
   ant_value_t result = js_mkundef();
   ant_value_t value;
@@ -1744,7 +1753,7 @@ static ant_value_t set_init_from_iterable(ant_t *js, ant_value_t set_obj, set_en
     if (is_err(result)) goto close_iter;
   }
 
-  return result;
+  return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : result;
 
 close_iter:
   js_iter_close(js, &it);
@@ -1765,7 +1774,9 @@ static ant_value_t weakmap_init_from_iterable(
 
   js_iter_t it;
   if (!js_iter_open(js, iterable, &it))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap constructor argument is not iterable");
+    return Ant_Exception_Pending(js)
+      ? Ant_Exception_Current(js)
+      : js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap constructor argument is not iterable");
 
   ant_value_t result = js_mkundef();
   ant_value_t entry;
@@ -1803,7 +1814,7 @@ static ant_value_t weakmap_init_from_iterable(
     }
   }
 
-  return result;
+  return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : result;
 
 close_iter:
   js_iter_close(js, &it);
@@ -1820,7 +1831,9 @@ static ant_value_t weakset_init_from_iterable(ant_t *js, ant_value_t ws_obj, wea
 
   js_iter_t it;
   if (!js_iter_open(js, iterable, &it))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "WeakSet constructor argument is not iterable");
+    return Ant_Exception_Pending(js)
+      ? Ant_Exception_Current(js)
+      : js_mkerr_typed(js, JS_ERR_TYPE, "WeakSet constructor argument is not iterable");
 
   ant_value_t result = js_mkundef();
   ant_value_t value;
@@ -1851,7 +1864,7 @@ static ant_value_t weakset_init_from_iterable(ant_t *js, ant_value_t ws_obj, wea
     HASH_ADD(hh, *ws_head, value_obj, sizeof(ant_value_t), entry);
   }
 
-  return result;
+  return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : result;
 
 close_iter:
   js_iter_close(js, &it);

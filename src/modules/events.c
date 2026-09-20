@@ -1152,15 +1152,12 @@ static bool eventemitter_dispatch(
     ant_value_t result = eventemitter_call_listener(js, cb, target, args, nargs);
     invoked = true;
 
-    if (vtype(result) == kTypeError) {
-      if (vtype(evt->js_key) == kTypeString) fprintf(stderr, "Error in event listener for %s: ", js_str(js, evt->js_key));
-      else fprintf(stderr, "Error in event listener: ");
-      fprintf(stderr, "%s\n", js_str(js, result));
-    }
+    if (is_err(result) || Ant_Exception_Pending(js)) break;
   }
 
   evt->emitting--;
   evt_sweep(evt);
+
   return invoked;
 }
 
@@ -1175,13 +1172,16 @@ static bool eventemitter_emit_args_impl(
 
 static ant_value_t js_eventemitter_emit(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "emit requires at least 1 argument (event)");
+
   ant_value_t key = evt_key_from_arg(args[0]);
   if (!key) return js_mkerr(js, "event must be a string or Symbol");
   
-  return js_bool(eventemitter_emit_args_impl(
+  bool invoked = eventemitter_emit_args_impl(
     js, js_getthis(js), key,
     nargs > 1 ? &args[1] : NULL, nargs - 1
-  ));
+  );
+
+  return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : js_bool(invoked);
 }
 
 bool eventemitter_emit_args_val(
@@ -1399,22 +1399,30 @@ static ant_value_t js_eventemitter_eventNames(ant_params_t) {
   return result;
 }
 
-static ant_value_t js_events_once_listener(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+static ant_value_t Ant_Events_SettleOnce(ant_t *js, ant_value_t state) {
   if (!is_object_type(state)) return js_mkundef();
 
   ant_value_t promise = js_get_slot(state, SLOT_DATA);
-  if (vtype(promise) != kTypePromise) return js_mkundef();
+  if (vtype(promise) != kTypePromise || js_get_slot(state, SLOT_SETTLED) == js_true)
+    return js_mkundef();
 
-  ant_value_t settled = js_get_slot(state, SLOT_SETTLED);
-  if (vtype(settled) == kTypeBool && settled == js_true) return js_mkundef();
   js_set_slot(state, SLOT_SETTLED, js_true);
-
-  ant_value_t signal = js_get(js, state, "signal");
-  ant_value_t abort_listener = js_get(js, state, "abortListener");
+  ant_value_t signal, abort_listener;
+  
+  js_try_get_own_data_prop(js, state, "signal", 6, &signal);
+  js_try_get_own_data_prop(js, state, "abortListener", 13, &abort_listener);
+  
   if (abort_signal_is_signal(signal) && is_callable(abort_listener))
     abort_signal_remove_listener(js, signal, abort_listener);
-    
+  
+  return promise;
+}
+
+static ant_value_t js_events_once_listener(ant_params_t) {
+  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t promise = Ant_Events_SettleOnce(js, state);
+  if (vtype(promise) != kTypePromise) return js_mkundef();
+
   ant_value_t values = js_mkarr(js);
   for (int i = 0; i < nargs; i++) js_arr_push(js, values, args[i]);
   js_resolve_promise(js, promise, values);
@@ -1438,19 +1446,10 @@ static void js_events_once_remove_listener_from_target(ant_t *js, ant_value_t st
 
 static ant_value_t js_events_once_abort_listener(ant_params_t) {
   ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
-  if (!is_object_type(state)) return js_mkundef();
-
-  ant_value_t promise = js_get_slot(state, SLOT_DATA);
+  ant_value_t promise = Ant_Events_SettleOnce(js, state);
   if (vtype(promise) != kTypePromise) return js_mkundef();
 
-  ant_value_t settled = js_get_slot(state, SLOT_SETTLED);
-  if (vtype(settled) == kTypeBool && settled == js_true) return js_mkundef();
-  js_set_slot(state, SLOT_SETTLED, js_true);
-
   ant_value_t signal = js_get(js, state, "signal");
-  ant_value_t abort_listener = js_get(js, state, "abortListener");
-  if (abort_signal_is_signal(signal) && is_callable(abort_listener))
-    abort_signal_remove_listener(js, signal, abort_listener);
   js_events_once_remove_listener_from_target(js, state);
     
   ant_value_t reason = abort_signal_get_reason(signal);
@@ -1473,32 +1472,28 @@ static void js_events_once_reject_aborted(ant_t *js, ant_value_t promise, ant_va
 }
 
 static ant_value_t js_events_once_attach(
-  ant_t *js,
-  ant_value_t promise,
-  ant_value_t target,
-  ant_value_t key,
-  ant_value_t listener,
-  ant_value_t signal
+  ant_t *js, ant_value_t target, ant_value_t key, 
+  ant_value_t listener, ant_value_t signal
 ) {
   if (abort_signal_is_signal(target)) {
-    if (!js_events_once_is_abort_key(js, key)) {
-      js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "AbortSignal only supports the abort event"));
-      return promise;
-    }
+    if (!js_events_once_is_abort_key(js, key)) return js_mkerr_typed(
+      js, JS_ERR_TYPE, "AbortSignal only supports the abort event");
     abort_signal_add_listener(js, target, listener);
-    return promise;
+    return js_mkundef();
   }
 
   ant_value_t on_method = js_getprop_fallback(js, target, "on");
+  if (is_err(on_method)) return on_method;
+
   ant_value_t once_method = is_callable(on_method)
     ? js_getprop_fallback(js, target, "once")
     : js_mkundef();
+
+  if (is_err(once_method)) return once_method;
     
   if (is_callable(once_method)) {
     ant_value_t call_args[2] = { key, listener };
-    ant_value_t result = eventemitter_call_listener(js, once_method, target, call_args, 2);
-    if (is_err(result)) js_reject_promise(js, promise, result);
-    return promise;
+    return eventemitter_call_listener(js, once_method, target, call_args, 2);
   }
 
   if (is_eventtarget_instance(target)) {
@@ -1507,14 +1502,10 @@ static ant_value_t js_events_once_attach(
     if (abort_signal_is_signal(signal)) js_set(js, listener_options, "signal", signal);
     
     ant_value_t call_args[3] = { key, listener, listener_options };
-    ant_value_t result = add_listener_to(js, call_args, 3, find_or_create_emitter_event_type(js, target, key));
-    
-    if (is_err(result)) js_reject_promise(js, promise, result);
-    return promise;
+    return add_listener_to(js, call_args, 3, find_or_create_emitter_event_type(js, target, key));
   }
 
-  js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "target is not an EventEmitter or EventTarget"));
-  return promise;
+  return js_mkerr_typed(js, JS_ERR_TYPE, "target is not an EventEmitter or EventTarget");
 }
 
 static ant_value_t js_events_once(ant_params_t) {
@@ -1528,6 +1519,11 @@ static ant_value_t js_events_once(ant_params_t) {
   if (is_err(promise)) return promise;
 
   ant_value_t state = js_mkobj(js);
+  if (is_err(state)) { 
+    js_reject_promise(js, promise, state);
+    return promise;
+  }
+  
   js_set_slot(state, SLOT_DATA, promise);
   js_set_slot(state, SLOT_SETTLED, js_false);
 
@@ -1535,23 +1531,33 @@ static ant_value_t js_events_once(ant_params_t) {
   ant_value_t target = args[0];
   ant_value_t options = nargs >= 3 ? args[2] : js_mkundef();
   ant_value_t signal = js_mkundef();
+  
   js_set(js, state, "target", target);
   js_set(js, state, "eventName", args[1]);
   js_set(js, state, "listener", listener);
   
   if (is_object_type(options)) signal = js_get(js, options, "signal");
+  
   if (abort_signal_is_signal(signal)) {
     if (abort_signal_is_aborted(signal)) {
       js_events_once_reject_aborted(js, promise, signal);
       return promise;
     }
+    
     ant_value_t abort_listener = js_heavy_mkfun(js, js_events_once_abort_listener, state);
     js_set(js, state, "signal", signal);
     js_set(js, state, "abortListener", abort_listener);
+    
     abort_signal_add_listener(js, signal, abort_listener);
   }
 
-  return js_events_once_attach(js, promise, target, key, listener, signal);
+  ant_value_t result = js_events_once_attach(js, target, key, listener, signal);
+  if (is_err(result)) {
+    Ant_Events_SettleOnce(js, state);
+    js_reject_promise(js, promise, result);
+  }
+  
+  return promise;
 }
 
 static ant_value_t js_events_disposable_dispose(ant_params_t) {
@@ -1755,7 +1761,7 @@ static ant_value_t js_events_on_error_cb(ant_params_t) {
 }
 
 static ant_value_t events_make_abort_error(ant_t *js, ant_value_t signal) {
-  ant_value_t error = js_make_error_silent(js, JS_ERR_GENERIC, "The operation was aborted");
+  ant_value_t error = Ant_Error_Create(js, JS_ERR_GENERIC, "The operation was aborted");
   if (!is_object_type(error)) return error;
 
   js_set(js, error, "name", js_mkstr(js, "AbortError", 10));

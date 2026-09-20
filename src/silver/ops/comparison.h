@@ -190,7 +190,7 @@ static inline ant_value_t sv_push_bigint_relational(
 static inline ant_value_t sv_op_lt(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];
   ant_value_t l = vm->stack[--vm->sp];
-  if (!sv_coerce_relational(js, &l, &r)) return mkval(kTypeError, 0);
+  if (!sv_coerce_relational(js, &l, &r)) return Ant_Exception_Current(js);
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == kTypeNumber && rty == kTypeNumber) {
     vm->stack[vm->sp++] = mkval(kTypeBool, tod(l) < tod(r));
@@ -209,7 +209,7 @@ static inline ant_value_t sv_op_lt(sv_vm_t *vm, ant_t *js) {
 static inline ant_value_t sv_op_le(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];
   ant_value_t l = vm->stack[--vm->sp];
-  if (!sv_coerce_relational(js, &l, &r)) return mkval(kTypeError, 0);
+  if (!sv_coerce_relational(js, &l, &r)) return Ant_Exception_Current(js);
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == kTypeNumber && rty == kTypeNumber) {
     vm->stack[vm->sp++] = mkval(kTypeBool, tod(l) <= tod(r));
@@ -228,7 +228,7 @@ static inline ant_value_t sv_op_le(sv_vm_t *vm, ant_t *js) {
 static inline ant_value_t sv_op_gt(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];
   ant_value_t l = vm->stack[--vm->sp];
-  if (!sv_coerce_relational(js, &l, &r)) return mkval(kTypeError, 0);
+  if (!sv_coerce_relational(js, &l, &r)) return Ant_Exception_Current(js);
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == kTypeNumber && rty == kTypeNumber) {
     vm->stack[vm->sp++] = mkval(kTypeBool, tod(l) > tod(r));
@@ -247,7 +247,7 @@ static inline ant_value_t sv_op_gt(sv_vm_t *vm, ant_t *js) {
 static inline ant_value_t sv_op_ge(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];
   ant_value_t l = vm->stack[--vm->sp];
-  if (!sv_coerce_relational(js, &l, &r)) return mkval(kTypeError, 0);
+  if (!sv_coerce_relational(js, &l, &r)) return Ant_Exception_Current(js);
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == kTypeNumber && rty == kTypeNumber) {
     vm->stack[vm->sp++] = mkval(kTypeBool, tod(l) >= tod(r));

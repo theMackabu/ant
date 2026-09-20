@@ -15,6 +15,20 @@ removed during condensation. See the [plan lifecycle](../index.md).
 
 ## Plans
 
+- [Coroutine Resume Performance Recovery](coroutine-resume-performance.md)
+- [Coroutine Resume Arguments](coroutine-resume-arguments.md)
+- [Native Calls and Fulfilled Await Performance](native-async-performance.md)
+- [Exception Performance and Nested Finally](exception-performance-and-finally.md)
+- [Native Profile of the GC Experiment Branch](bench-v8-native-profile.md)
+- [Silver Instruction Sizes](silver-instruction-sizes.md)
+- [Native Call Fast Path](native-call-fast-path.md)
+- [Exception Completion Model](exception-completion-model.md)
+- [Central Error Handoffs](central-error-handoffs.md)
+- [Iterator Cleanup on Return](iterator-return-cleanup.md)
+- [Whole-codebase Error Boundaries](whole-codebase-error-boundaries.md)
+- [Module Error Boundary Audit](module-error-boundaries.md)
+- [Async Error Boundary Performance](async-error-performance.md)
+- [Async Error Boundaries](async-error-boundaries.md)
 - [Zlib Readable State](zlib-readable-state.md)
 
 - [Ant Cron API](ant-cron.md)

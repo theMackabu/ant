@@ -163,9 +163,14 @@ static void sandbox_guest_port_close(sandbox_guest_port_t *port) {
 static void sandbox_guest_deliver_message(sandbox_guest_port_t *port, const void *payload, size_t payload_len) {
   if (!port || !port->js || !is_object_type(port->obj)) return;
   ant_t *js = port->js;
+
   ant_value_t encoded = js_mkstr(js, payload, payload_len);
   ant_value_t message = json_parse_value(js, encoded);
-  if (is_err(message)) return;
+
+  if (is_err(message)) {
+    js_take_thrown(js, message);
+    return;
+  }
 
   ant_value_t handler = js_get(js, port->obj, "onmessage");
   if (!is_callable(handler)) handler = js_get(js, port->obj, "_messageHandler");
@@ -674,8 +679,15 @@ static ant_value_t sandbox_ctor(ant_params_t) {
 }
 
 static ant_value_t sandbox_rejected(ant_t *js, ant_value_t error) {
+  GC_ROOT_SAVE(root_mark, js);
+  if (is_err(error)) error = js_take_thrown(js, error);
+
+  GC_ROOT_PIN(js, error);
   ant_value_t promise = js_mkpromise(js);
-  js_reject_promise(js, promise, error);
+
+  if (!is_err(promise)) js_reject_promise(js, promise, error);
+  GC_ROOT_RESTORE(js, root_mark);
+
   return promise;
 }
 
@@ -789,11 +801,13 @@ static ant_value_t sandbox_vm_result_error(ant_t *js, const ant_sandbox_vm_resul
       break;
   }
 
-  ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE | JS_ERR_NO_STACK, "%s", message);
-  ant_value_t err_obj = js_as_obj(err);
+  ant_value_t err = Ant_Error_Create(js, JS_ERR_TYPE | JS_ERR_NO_STACK, message);
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, err);
   
-  js_set(js, err_obj, "name", js_mkstr(js, name, strlen(name)));
-  js_set(js, err_obj, "code", js_mknum((double)result->code));
+  js_set(js, err, "name", js_mkstr(js, name, strlen(name)));
+  js_set(js, err, "code", js_mknum((double)result->code));
+  GC_ROOT_RESTORE(js, root_mark);
   
   return err;
 }
@@ -882,7 +896,11 @@ static void sandbox_host_deliver_message(sandbox_state_t *state, const char *pay
   ant_t *js = state->js;
   ant_value_t encoded = js_mkstr(js, payload, payload_len);
   ant_value_t message = json_parse_value(js, encoded);
-  if (is_err(message)) return;
+
+  if (is_err(message)) {
+    js_take_thrown(js, message);
+    return;
+  }
 
   sandbox_message_waiter_t **link = &state->waiter_head;
   while (*link) {
@@ -920,15 +938,18 @@ static void sandbox_host_deliver_message(sandbox_state_t *state, const char *pay
 static void sandbox_finish_waiters(sandbox_state_t *state) {
   if (!state || !state->js) return;
   ant_t *js = state->js;
+
   sandbox_message_waiter_t *waiter = state->waiter_head;
   state->waiter_head = state->waiter_tail = NULL;
+
   while (waiter) {
     sandbox_message_waiter_t *next = waiter->next;
+
     if (waiter->iterator)
       js_resolve_promise(js, waiter->promise, js_iter_result(js, false, js_mkundef()));
     else
-      js_reject_promise(js, waiter->promise,
-                        js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox message channel closed"));
+      js_reject_promise(js, waiter->promise, Ant_Error_Create(js, JS_ERR_TYPE, "Sandbox message channel closed"));
+
     free(waiter->type);
     free(waiter);
     waiter = next;
@@ -1280,11 +1301,10 @@ static ant_value_t sandbox_wait_for_message(
   if (!state || state->closed) {
     if (iterator)
       js_resolve_promise(js, promise, js_iter_result(js, false, js_mkundef()));
-    else
-      js_reject_promise(
-        js, promise,
-        js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox message channel is closed")
-      );
+    else js_reject_promise(
+      js, promise,
+      Ant_Error_Create(js, JS_ERR_TYPE, "Sandbox message channel is closed")
+    );
     return promise;
   }
   if (!state->running) {

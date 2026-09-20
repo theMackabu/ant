@@ -186,7 +186,7 @@ static ant_value_t js_syntax_parse_javascript(ant_params_t) {
   if (!program) {
     parse_arena_rewind(mark);
     js->filename = saved_filename;
-    if (js->thrown_exists) return mkval(kTypeError, 0);
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return js_mkerr_typed(js, JS_ERR_INTERNAL, "ant:syntax parser failed without an error");
   }
 
@@ -216,24 +216,25 @@ static ant_value_t js_syntax_parse_javascript(ant_params_t) {
     if (!program) {
       parse_arena_rewind(mark);
       js->filename = saved_filename;
-      if (js->thrown_exists) return mkval(kTypeError, 0);
+      if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
       return js_mkerr_typed(js, JS_ERR_INTERNAL, "ant:syntax parser failed without an error");
     }
   }
 
   const char *actual_source_type =
-    options.parse_mode == SYNTAX_PARSE_MODULE || has_module_syntax ? "module" : "script";
+    options.parse_mode == SYNTAX_PARSE_MODULE ||
+    has_module_syntax ? "module" : "script";
+
   ant_value_t result = sv_ast_export_public(
-    js,
-    program,
-    source,
-    source_len,
+    js, program,
+    source, source_len,
     actual_source_type,
     options.locations
   );
 
   parse_arena_rewind(mark);
   js->filename = saved_filename;
+
   return result;
 }
 

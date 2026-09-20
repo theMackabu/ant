@@ -568,10 +568,11 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                      MIR_T_I32, "hint");
 
   c->destructure_close_proto = MIR_new_proto(c->ctx, "dclose_proto",
-                                             0, NULL, 3,
+                                             1, &iter_next_ret, 4,
                                              MIR_T_I64, "vm",
                                              MIR_T_I64, "js",
-                                             MIR_T_P, "iter_buf");
+                                             MIR_T_P, "iter_buf",
+                                             MIR_T_I32, "suppress_error");
 
   MIR_type_t destructure_next_ret = MIR_JSVAL;
   c->destructure_next_proto = MIR_new_proto(c->ctx, "dnext_proto",

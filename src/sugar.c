@@ -1,5 +1,6 @@
 #include "internal.h"
 #include "sugar.h"
+#include "gc/roots.h"
 
 #include "modules/generator.h"
 #include "modules/timer.h"
@@ -69,50 +70,62 @@ bool coroutine_cancel(coroutine_t *coro) {
   return suspended;
 }
 
-void coroutine_clear_await_registration(coroutine_t *coro) {
-  if (!coro || !coro->await_registered) return;
+static bool coroutine_detach_await_registration(coroutine_t *coro) {
+  if (!coro || !coro->await_registered) return false;
 
   ant_t *js = coro->js;
   ant_value_t promise = coro->awaited_promise;
+  bool direct_resume = coro->await_resume_job != NULL;
+  
   coro->await_registered = false;
   coro->awaited_promise = js_mkundef();
+  coro->await_resume_job = NULL;
 
-  if (js && vtype(promise) == kTypePromise)
-    js_promise_clear_await_coroutine(js, promise, coro);
+  if (!direct_resume && js && vtype(promise) == kTypePromise)
+    Ant_Promise_ClearAwaitCoroutine(js, promise, coro);
 
-  coroutine_unhold(coro, CORO_HOLD_AWAIT);
+  bool held = (coro->hold_bits & CORO_HOLD_AWAIT) != 0;
+  coro->hold_bits &= (uint8_t)~CORO_HOLD_AWAIT;
+  
+  return held;
+}
+
+void coroutine_clear_await_registration(coroutine_t *coro) {
+  if (coroutine_detach_await_registration(coro)) coroutine_release(coro);
 }
 
 static void coroutine_activate(ant_t *js, coroutine_t *coro) {
   if (!js || !coro) return;
+
   coro->active_parent = js->active_async_coro;
   coro->active_prev = NULL;
+
   if (js->active_async_coro) js->active_async_coro->active_prev = coro;
   js->active_async_coro = coro;
+
   if (coro->module_eval_ctx) js_module_eval_ctx_push(js, coro->module_eval_ctx);
   coroutine_hold(coro, CORO_HOLD_ACTIVE);
 }
 
 static void coroutine_deactivate(ant_t *js, coroutine_t *coro) {
   if (!js || !coro) return;
+
   if (coro->module_eval_ctx) js_module_eval_ctx_pop(js, coro->module_eval_ctx);
   if (coro->active_prev) coro->active_prev->active_parent = coro->active_parent;
   else if (js->active_async_coro == coro) js->active_async_coro = coro->active_parent;
   if (coro->active_parent) coro->active_parent->active_prev = coro->active_prev;
+
   coro->active_parent = NULL;
   coro->active_prev = NULL;
   coroutine_unhold(coro, CORO_HOLD_ACTIVE);
 }
 
-static inline void settle_coroutine(coroutine_t *coro, ant_value_t *args, int nargs, bool is_error) {
-  coro->result = nargs > 0 ? args[0] : js_mkundef();
-  coro->is_error = is_error;
-}
-
-static ant_value_t coroutine_resume_and_recapture(ant_t *js, sv_vm_t *vm, coroutine_t *coro) {
-  vm->suspended_resume_value = coro->result;
-  vm->suspended_resume_is_error = coro->is_error;
-  vm->suspended_resume_kind = coro->is_error ? SV_RESUME_THROW : SV_RESUME_NEXT;
+static ant_value_t coroutine_resume_and_recapture(
+  ant_t *js, sv_vm_t *vm, coroutine_t *coro, ant_value_t value, bool is_error
+) {
+  vm->suspended_resume_value = value;
+  vm->suspended_resume_is_error = is_error;
+  vm->suspended_resume_kind = is_error ? SV_RESUME_THROW : SV_RESUME_NEXT;
   vm->suspended_resume_pending = true;
 
   ant_value_t result = sv_resume_suspended(vm);
@@ -129,9 +142,10 @@ static ant_value_t coroutine_resume_and_recapture(ant_t *js, sv_vm_t *vm, corout
   return js_mkerr(js, "out of memory capturing activation");
 }
 
-static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
+static void resume_coroutine_if_suspended(
+  ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error
+) {
   if (!coro) return;
-  coroutine_retain(coro);
 
   if (coro->act && coro->act->frame_count > 0) {
     sv_vm_t *vm = js->vm;
@@ -142,48 +156,47 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
       sv_activation_seal(js, coro->act);
       coro->act->frame_count = 0;
       result = js_mkerr(js, "failed to install async activation");
-    } else result = coroutine_resume_and_recapture(js, vm, coro);
+    } else result = coroutine_resume_and_recapture(js, vm, coro, value, is_error);
 
     bool suspended_again = coro->act && coro->act->frame_count > 0;
     coroutine_deactivate(js, coro);
 
     if (suspended_again) {
       generator_resume_pending_request(js, coro, result);
-      coroutine_release(coro);
       return;
     }
 
-    if (generator_resume_pending_request(js, coro, result)) {
-      coroutine_release(coro);
-      return;
-    }
+    if (generator_resume_pending_request(js, coro, result)) return;
 
     if (is_err(result)) {
-      ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
-      js->thrown_exists = false;
-      js->thrown_value = js_mkundef();
+      ant_value_t reject_value = js_take_thrown(js, result);
       js_reject_promise(js, coro->async_promise, reject_value);
     } else js_resolve_promise(js, coro->async_promise, result);
-
+    
     js_maybe_drain_microtasks_after_async_settle(js);
-    coroutine_release(coro);
     
     return;
   }
-
-  coroutine_release(coro);
 }
 
 ant_value_t resume_coroutine_wrapper(ant_params_t) {
   ant_value_t me = js->current_func;
   ant_value_t coro_val = js_get_slot(me, SLOT_CORO);
+
   if (vtype(coro_val) != kTypeNumber) return js_mkundef();
   
   coroutine_t *coro = (coroutine_t *)(uintptr_t)tod(coro_val);
   if (!coro) return js_mkundef();
 
-  settle_coroutine(coro, args, nargs, false);
-  resume_coroutine_if_suspended(js, coro);
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
+
+  GC_ROOT_PIN(js, value);
+  coroutine_retain(coro);
+  resume_coroutine_if_suspended(js, coro, value, false);
+  
+  coroutine_release(coro);
+  GC_ROOT_RESTORE(js, root_mark);
 
   return js_mkundef();
 }
@@ -197,19 +210,29 @@ ant_value_t reject_coroutine_wrapper(ant_params_t) {
   coroutine_t *coro = (coroutine_t *)(uintptr_t)tod(coro_val);
   if (!coro) return js_mkundef();
 
-  settle_coroutine(coro, args, nargs, true);
-  resume_coroutine_if_suspended(js, coro);
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
+
+  GC_ROOT_PIN(js, value);
+  coroutine_retain(coro);
+  resume_coroutine_if_suspended(js, coro, value, true);
+  
+  coroutine_release(coro);
+  GC_ROOT_RESTORE(js, root_mark);
 
   return js_mkundef();
 }
 
-void settle_and_resume_coroutine(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error) {
+void Ant_Coroutine_ResumeAwaitJob(ant_t *js, coroutine_t *coro, ant_value_t value) {
+  coro->await_registered = false;
+  coro->awaited_promise = js_mkundef();
+  coro->await_resume_job = NULL;
+  resume_coroutine_if_suspended(js, coro, value, false);
+}
+
+void Ant_Coroutine_SettleAndResume(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error) {
   if (!coro) return;
-  coroutine_retain(coro);
-  coroutine_clear_await_registration(coro);
-  
-  ant_value_t args[1] = { value };
-  settle_coroutine(coro, args, 1, is_error);
-  resume_coroutine_if_suspended(js, coro);
+  if (!coroutine_detach_await_registration(coro)) coroutine_retain(coro);
+  resume_coroutine_if_suspended(js, coro, value, is_error);
   coroutine_release(coro);
 }

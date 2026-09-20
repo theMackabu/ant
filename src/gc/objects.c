@@ -307,6 +307,7 @@ static void gc_sweep_young_upvalues(ant_t *js) {
 void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value_t value) {
   if (!js || !func || !is_tagged(value)) return;
   uint8_t type = vtype_tagged(value);
+  if (type == kTypeError && vdata(value) < 2) return;
   
   if (type != kTypeFunction) {
     if (type == kTypeString) goto remember;
@@ -450,6 +451,7 @@ void gc_mark_closure(ant_t *js, sv_closure_t *c) {
 void gc_mark_value(ant_t *js, ant_value_t v) {
   if (!is_tagged(v)) return;
   uint8_t t = vtype_tagged(v);
+  if (t == kTypeError && vdata(v) < 2) return;
 
   if (t == kTypeFunction) {
     gc_mark_closure(js, (sv_closure_t *)vptr(v));
@@ -486,7 +488,14 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   ant_gc_shapes_mark(obj->shape);
   gc_mark_value(js, obj->proto);
 
-  if (obj->type_tag != kTypeArray) gc_mark_value(js, obj->u.data.value);
+  if (obj->type_tag == kTypeError) {
+    gc_mark_value(js, obj->u.exception.value);
+    gc_mark_value(js, obj->u.exception.stack);
+  }
+
+  else if (obj->type_tag != kTypeArray)
+    gc_mark_value(js, obj->u.data.value);
+
   if (obj->type_tag == kTypeGenerator) {
     coroutine_t *coro = generator_get_coro_for_gc(js_obj_from_ptr(obj));
     if (coro) gc_mark_coroutine(js, coro);
@@ -630,10 +639,15 @@ while (gc_mark_sp > 0) {
 
 static void gc_scan_frame_span(
   ant_t *js, ant_value_t *slots, int slot_count,
-  sv_frame_t *frames, int frame_count, sv_upvalue_t *open_upvalues
+  sv_frame_t *frames, int frame_count, sv_upvalue_t *open_upvalues,
+  sv_handler_t *handlers, int handler_count
 ) {
   for (int i = 0; i < slot_count; i++)
     gc_mark_value(js, slots[i]);
+
+  for (int i = 0; i < handler_count; i++)
+    if (handlers[i].kind == SV_HANDLER_FINALLY)
+      gc_mark_value(js, handlers[i].completion.value);
 
   for (int f = 0; f < frame_count; f++) {
     sv_frame_t *frame = &frames[f];
@@ -666,14 +680,21 @@ static void gc_scan_frame_span(
 
 static void gc_scan_vm_stack(ant_t *js, sv_vm_t *vm) {
   if (!vm) return;
-  for (sv_native_frame_t *frame = vm->native_frame; frame; frame = frame->caller)
-    gc_mark_value(js, frame->new_target);
-  gc_scan_frame_span(js, vm->stack, vm->sp, vm->frames, vm->fp + 1, vm->open_upvalues);
+  
+  for (
+    sv_native_frame_t *frame = vm->native_frame; 
+    frame; frame = frame->caller) gc_mark_value(js, frame->new_target);
+  
+  gc_scan_frame_span(
+    js, vm->stack, vm->sp, vm->frames, vm->fp + 1, 
+    vm->open_upvalues, vm->handler_stack, vm->handler_depth);
 }
 
 static void gc_scan_activation(ant_t *js, sv_activation_t *act) {
   if (!act || act->frame_count <= 0) return;
-  gc_scan_frame_span(js, act->slots, act->stack_count, act->frames, act->frame_count, act->open_upvalues);
+  gc_scan_frame_span(
+    js, act->slots, act->stack_count, act->frames, act->frame_count,
+    act->open_upvalues, act->handlers, act->handler_count);
 }
 
 static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
@@ -764,7 +785,6 @@ void gc_mark_coroutine(ant_t *js, coroutine_t *c) {
   gc_mark_value(js, c->async_func);
   gc_mark_value(js, c->async_promise);
   gc_mark_value(js, c->awaited_promise);
-  gc_mark_value(js, c->result);
   gc_mark_value(js, c->owner_gen);
   gc_mark_value(js, c->super_val);
   gc_mark_value(js, c->new_target);
@@ -881,8 +901,8 @@ static void gc_mark_roots(ant_t *js) {
   
   gc_mark_value(js, js->this_val);
   gc_mark_value(js, js->current_func);
-  gc_mark_value(js, js->thrown_value);
-  gc_mark_value(js, js->thrown_stack);
+  gc_mark_value(js, js->exception);
+  gc_mark_value(js, js->exception_oom);
   gc_mark_value(js, js->length_str);
 
   for (ant_module_t *ctx = js->modules.module_stack; ctx; ctx = ctx->prev) {

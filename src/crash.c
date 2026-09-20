@@ -637,6 +637,8 @@ static ant_value_t crash_report_response_text(ant_params_t) {
   if (nargs < 1) return js_mkundef();
 
   ant_value_t text_fn = js_getprop_fallback(js, args[0], "text");
+  if (is_err(text_fn)) return text_fn;
+
   if (!is_callable(text_fn)) {
     if (!crash_report_status_printed) {
       crash_report_status_printed = true;
@@ -655,6 +657,7 @@ static ant_value_t crash_report_response_text(ant_params_t) {
     js_mkfun(crash_report_noop)
   );
   
+  if (is_err(print_promise)) return print_promise;
   promise_mark_handled(text_promise);
   promise_mark_handled(print_promise);
 

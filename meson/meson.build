@@ -73,7 +73,8 @@ if pgo_platform == 'linux'
   pgo_platform += pgo_glibc != '' ? '-glibc' : '-musl'
 endif
 pgo_file = 'ant-' + pgo_platform + '-' + host_machine.cpu_family() + '.profdata'
-pgo_profile = src_root / 'meson' / 'pgo' / 'profiles' / pgo_file
+pgo_profile_override = get_option('pgo_profile')
+pgo_profile = pgo_profile_override != '' ? src_root / pgo_profile_override : src_root / 'meson' / 'pgo' / 'profiles' / pgo_file
 pgo_profile_exists = fs.is_file(pgo_profile)
 
 pgo_c_id = cc.get_id()
