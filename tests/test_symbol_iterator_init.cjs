@@ -8,6 +8,12 @@ function descriptor(object, key, writable, enumerable, configurable) {
     d.configurable === configurable, `wrong descriptor for ${String(key)}`);
 }
 
+if (typeof Ant === 'object') {
+  assert(Object.prototype.toString.call(Ant) === '[object Ant]', 'Ant tag');
+  assert(Object.getOwnPropertyDescriptor(Ant, Symbol.toStringTag).enumerable,
+    'Ant tag preserves assignment attributes');
+}
+
 for (const name of Object.getOwnPropertyNames(Symbol)) {
   if (typeof Symbol[name] === 'symbol') descriptor(Symbol, name, false, false, false);
 }

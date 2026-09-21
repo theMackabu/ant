@@ -35,7 +35,7 @@ static ant_value_t OtherNext(ant_params_t) {
   return js_iter_result(js, true, js_mknum(99));
 }
 
-static bool Advance(ant_t *js, js_iter_t *it, ant_value_t *out) {
+static bool Advance(ant_t *js, iterator_t *it, ant_value_t *out) {
   (void)js;
   (void)it;
   *out = js_mknum(17);
@@ -47,7 +47,7 @@ static void CheckArray(ant_t *js) {
   ant_value_t array = js_mkarr(js);
   GC_ROOT_PIN(js, array);
   js_arr_push(js, array, js_mknum(42));
-  js_iter_t it;
+  iterator_t it;
   assert(js_iter_open(js, array, &it));
   GC_ROOT_PIN(js, it.iterator);
   assert(it.advance);
@@ -80,7 +80,7 @@ static void CheckGrowth(ant_t *js) {
     ant_value_t iterator = js_mkobj(js);
     GC_ROOT_PIN(js, iterator);
     js_set_proto_init(iterator, protos[i]);
-    js_iter_t it;
+    iterator_t it;
     assert(js_iter_open(js, iterator, &it) && it.advance == Advance);
     ant_value_t value;
     assert(js_iter_next(js, &it, &value) && js_getnum(value) == 17);

@@ -26,7 +26,7 @@ void headers_data_for_each(const headers_data_t *data, headers_foreach_cb cb, vo
 bool headers_is_headers(ant_value_t obj);
 bool headers_is_immutable(ant_value_t hdrs);
 bool headers_copy_from(ant_value_t dst, ant_value_t src);
-bool advance_headers(ant_t *js, js_iter_t *it, ant_value_t *out);
+bool advance_headers(ant_t *js, iterator_t *it, ant_value_t *out);
 bool headers_set_literal(ant_value_t hdrs, const char *name, const char *value);
 bool headers_data_append_if_missing(headers_data_t *data, const char *name, const char *value);
 bool headers_data_set_literal(headers_data_t *data, const char *name, const char *value);

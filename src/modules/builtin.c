@@ -458,6 +458,7 @@ static ant_value_t js_highlight_tags(ant_params_t) {
 
 void init_builtin_module(ant_t *js) {
   ant_value_t ant_obj = js->Ant;
+  js_set_sym(js, ant_obj, js->sym.toStringTag_sym, ANT_STRING("Ant"));
 
   js_set_exact(js, ant_obj, "version", ANT_STRING(ANT_VERSION));
   js_set_exact(js, ant_obj, "channel", ANT_CANARY ? ANT_STRING("canary") : ANT_STRING("stable"));

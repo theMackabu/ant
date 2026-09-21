@@ -166,7 +166,7 @@ bool buffer_typedarray_read_index(ant_t *js, ant_value_t value, size_t index, an
   return buffer_typedarray_data_read_index(js, ta_data, index, out);
 }
 
-static bool advance_typedarray(ant_t *js, js_iter_t *it, ant_value_t *out) {
+static bool advance_typedarray(ant_t *js, iterator_t *it, ant_value_t *out) {
   ant_value_t iter = it->iterator;
   ant_value_t ta_obj = js_get_slot(iter, SLOT_DATA);
   ant_value_t state_v = js_get_slot(iter, SLOT_ITER_STATE);
@@ -1674,7 +1674,7 @@ static ant_value_t js_typedarray_from(ant_native_params_t, TypedArrayType type, 
   collected = malloc(cap * sizeof(ant_value_t));
   if (!collected) goto oom;
 
-  js_iter_t it;
+  iterator_t it;
   if (js_iter_open(js, source, &it)) {
     ant_value_t item;
     while (js_iter_next(js, &it, &item)) {

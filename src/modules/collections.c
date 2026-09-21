@@ -730,7 +730,7 @@ static ant_value_t map_forEach(ant_params_t) {
   return js_mkundef();
 }
 
-bool advance_map(ant_t *js, js_iter_t *it, ant_value_t *out) {
+bool advance_map(ant_t *js, iterator_t *it, ant_value_t *out) {
   map_iterator_state_t *state = get_map_iter_state(it->iterator);
   if (!state || !state->current) return false;
 
@@ -793,7 +793,7 @@ static ant_value_t map_entries(ant_params_t) {
   return create_map_iterator(js, js->this_val, ITER_TYPE_MAP_ENTRIES);
 }
 
-bool advance_set(ant_t *js, js_iter_t *it, ant_value_t *out) {
+bool advance_set(ant_t *js, iterator_t *it, ant_value_t *out) {
   set_iterator_state_t *state = get_set_iter_state(it->iterator);
   if (!state || !state->current) return false;
 
@@ -1029,7 +1029,7 @@ static ant_value_t set_record_has(ant_t *js, set_record_t *record, ant_value_t v
 }
 
 static ant_value_t set_record_close_keys_iterator(ant_t *js, ant_value_t iterator) {
-  js_iter_t it = { .iterator = iterator };
+  iterator_t it = { .iterator = iterator };
   js_iter_close(js, &it);
   return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : js_mkundef();
 }
@@ -1679,7 +1679,7 @@ static ant_value_t map_init_from_iterable(ant_t *js, ant_value_t map_obj, map_en
   bool use_fast_path 
     = is_original_collection_adder(adder, map_set);
 
-  js_iter_t it;
+  iterator_t it;
   if (!js_iter_open(js, iterable, &it))
     return Ant_Exception_Pending(js)
       ? Ant_Exception_Current(js)
@@ -1732,7 +1732,7 @@ static ant_value_t set_init_from_iterable(ant_t *js, ant_value_t set_obj, set_en
   
   bool use_fast_path  = is_original_collection_adder(adder, set_add);
 
-  js_iter_t it;
+  iterator_t it;
   if (!js_iter_open(js, iterable, &it))
     return Ant_Exception_Pending(js)
       ? Ant_Exception_Current(js)
@@ -1773,7 +1773,7 @@ static ant_value_t weakmap_init_from_iterable(
   
   bool use_fast_path = is_original_collection_adder(adder, weakmap_set);
 
-  js_iter_t it;
+  iterator_t it;
   if (!js_iter_open(js, iterable, &it))
     return Ant_Exception_Pending(js)
       ? Ant_Exception_Current(js)
@@ -1830,7 +1830,7 @@ static ant_value_t weakset_init_from_iterable(ant_t *js, ant_value_t ws_obj, wea
   
   bool use_fast_path = is_original_collection_adder(adder, weakset_add);
 
-  js_iter_t it;
+  iterator_t it;
   if (!js_iter_open(js, iterable, &it))
     return Ant_Exception_Pending(js)
       ? Ant_Exception_Current(js)
