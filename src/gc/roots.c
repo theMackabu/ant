@@ -1,3 +1,4 @@
+#include "gc.h"
 #include "gc/roots.h"
 #include "internal.h" // IWYU pragma: keep
 
@@ -28,6 +29,31 @@ bool gc_push_root(ant_t *js, ant_value_t *slot) {
   }
 
   js->c_roots[js->c_root_count++] = slot;
+  return true;
+}
+
+bool gc_pin_permanent(ant_t *js, ant_value_t value) {
+  if (!js || !is_tagged(value)) return false;
+
+  uint8_t type = vtype_tagged(value);
+  if (((1u << type) & GC_OBJ_TYPE_MASK) == 0) return false;
+
+  ant_object_t *obj = (ant_object_t *)vptr(value);
+  if (!obj) return false;
+  if (obj->flags.gc_permanent) return true;
+  obj->flags.gc_permanent = 1;
+
+  if (js->permanent_root_len >= js->permanent_root_cap) {
+    size_t new_cap = js->permanent_root_cap ? js->permanent_root_cap * 2 : 64;
+    ant_value_t *next = realloc(js->permanent_roots, new_cap * sizeof(*next));
+    if (!next) return false;
+    
+    js->permanent_roots = next;
+    js->permanent_root_cap = new_cap;
+  }
+
+  js->permanent_roots[js->permanent_root_len++] = value;
+  
   return true;
 }
 

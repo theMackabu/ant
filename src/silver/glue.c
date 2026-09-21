@@ -1563,6 +1563,7 @@ ant_value_t jit_helper_object_template(sv_vm_t *vm, ant_t *js, sv_func_t *func, 
     }
     
     site->literal_template = seed;
+    gc_pin_permanent(js, seed);
     GC_ROOT_RESTORE(js, mark);
   }
   

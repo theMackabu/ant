@@ -41,7 +41,6 @@ void gc_maybe(ant_t *js);
 void gc_pressure(ant_t *js);
 
 void gc_remember_add(ant_t *js, ant_object_t *obj);
-void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value_t value);
 void gc_remember_upvalue(ant_t *js, struct sv_upvalue *uv);
 bool gc_upvalue_is_live(ant_t *js, const struct sv_upvalue *uv);
 void gc_remember_coroutine(ant_t *js, struct coroutine *coro);
