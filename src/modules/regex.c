@@ -20,6 +20,7 @@
 #include "silver/call.h"
 #include "modules/regex.h"
 #include "modules/symbol.h"
+#include "modules/iterator.h"
 
 static constexpr size_t REGEXP_REQUIRED_LITERAL_MAX = 32;
 
@@ -1078,7 +1079,7 @@ static void regexp_init_flags(ant_t *js, ant_value_t obj, ant_value_t flags, boo
 ant_value_t is_regexp_like(ant_t *js, ant_value_t value) {
   if (!is_object_type(value)) return js_false;
 
-  ant_value_t match_sym = get_match_sym();
+  ant_value_t match_sym = js->sym.match_sym;
   if (vtype(match_sym) == kTypeSymbol) {
     ant_value_t match_val = js_get_sym(js, value, match_sym);
     if (is_err(match_val)) return match_val;
@@ -2913,7 +2914,7 @@ static ant_value_t builtin_string_matchAll(ant_params_t) {
     bool called = false;
     ant_value_t call_args[1] = { str };
     ant_value_t dispatched = maybe_call_symbol_method(
-      js, args[0], get_matchAll_sym(), args[0], call_args, 1, &called
+      js, args[0], js->sym.matchAll_sym, args[0], call_args, 1, &called
     );
     
     if (is_err(dispatched)) return dispatched;
@@ -4025,7 +4026,7 @@ static ant_value_t string_replace_impl(ant_native_params_t, bool replace_all) {
     ant_value_t replacement_arg = nargs > 1 ? args[1] : js_mkundef();
     ant_value_t call_args[2] = { str, replacement_arg };
     
-    ant_value_t result = maybe_call_symbol_method(js, args[0], get_replace_sym(), args[0], call_args, 2, &called);
+    ant_value_t result = maybe_call_symbol_method(js, args[0], js->sym.replace_sym, args[0], call_args, 2, &called);
     if (is_err(result)) return result;
     if (called) return result;
     
@@ -4210,7 +4211,7 @@ static bool regexp_literal_replace_builtin_guard(ant_t *js) {
     !js_try_get_own_data_prop(js, regexp_ctor, "prototype", 9, &regexp_proto) ||
     !is_object_type(regexp_proto) || is_proxy(regexp_proto)) return false;
 
-  ant_offset_t sym_off = (ant_offset_t)vdata(get_replace_sym()); prop_meta_t meta;
+  ant_offset_t sym_off = (ant_offset_t)vdata(js->sym.replace_sym); prop_meta_t meta;
   if (lookup_symbol_prop_meta(js, regexp_proto, sym_off, &meta) && (meta.has_getter || meta.has_setter)) return false;
 
   ant_prop_loc_t loc = lkp_sym(regexp_proto, sym_off);
@@ -4302,7 +4303,7 @@ static ant_value_t builtin_string_search(ant_params_t) {
     bool called = false;
     ant_value_t call_args[1] = { str };
     ant_value_t dispatched = maybe_call_symbol_method(
-      js, args[0], get_search_sym(), args[0], call_args, 1, &called
+      js, args[0], js->sym.search_sym, args[0], call_args, 1, &called
     );
     if (is_err(dispatched)) return dispatched;
     if (called) return dispatched;
@@ -4365,7 +4366,7 @@ static ant_value_t builtin_string_match(ant_params_t) {
     bool called = false;
     ant_value_t call_args[1] = { str };
     ant_value_t dispatched = maybe_call_symbol_method(
-      js, args[0], get_match_sym(), args[0], call_args, 1, &called
+      js, args[0], js->sym.match_sym, args[0], call_args, 1, &called
     );
     if (is_err(dispatched)) return dispatched;
     if (called) return dispatched;
@@ -4432,17 +4433,17 @@ void init_regex_module(ant_t *js) {
   js_mkprop_fast(js, regexp_proto, "hasIndices", 10, js_false);
   js_mkprop_fast(js, regexp_proto, "unicodeSets", 11, js_false);
 
-  js_set_sym(js, regexp_proto, get_split_sym(), js_mkfun(builtin_regexp_symbol_split));
-  js_set_sym(js, regexp_proto, get_match_sym(), js_mkfun(builtin_regexp_symbol_match));
-  js_set_sym(js, regexp_proto, get_matchAll_sym(), js_mkfun(builtin_regexp_symbol_matchAll));
+  js_set_sym(js, regexp_proto, js->sym.split_sym, js_mkfun(builtin_regexp_symbol_split));
+  js_set_sym(js, regexp_proto, js->sym.match_sym, js_mkfun(builtin_regexp_symbol_match));
+  js_set_sym(js, regexp_proto, js->sym.matchAll_sym, js_mkfun(builtin_regexp_symbol_matchAll));
 
   js->builtins.regexp_matchall_iter_proto_val = js_mkobj(js);
   js_set_proto_init(js->builtins.regexp_matchall_iter_proto_val, js->sym.iterator_proto);
   defmethod(js, js->builtins.regexp_matchall_iter_proto_val, "next", 4, js_mkfun(regexp_matchall_next));
-  js_set_sym(js, js->builtins.regexp_matchall_iter_proto_val, get_iterator_sym(), js_mkfun(sym_this_cb));
-  js_set_sym(js, regexp_proto, get_replace_sym(), js_mkfun(builtin_regexp_symbol_replace));
-  js_set_sym(js, regexp_proto, get_search_sym(), js_mkfun(builtin_regexp_symbol_search));
-  js_set_sym(js, regexp_proto, get_toStringTag_sym(), js_mkstr(js, "RegExp", 6));
+  js_set_sym(js, js->builtins.regexp_matchall_iter_proto_val, js->sym.iterator_sym, js_mkfun(sym_this_cb));
+  js_set_sym(js, regexp_proto, js->sym.replace_sym, js_mkfun(builtin_regexp_symbol_replace));
+  js_set_sym(js, regexp_proto, js->sym.search_sym, js_mkfun(builtin_regexp_symbol_search));
+  js_set_sym(js, regexp_proto, js->sym.toStringTag_sym, js_mkstr(js, "RegExp", 6));
   js_set_getter_desc(js, regexp_proto, "flags", 5, js_mkfun(builtin_regexp_flags_getter), JS_DESC_C);
   defmethod(js, regexp_proto, "compile", 7, js_mkfun(builtin_regexp_compile));
 

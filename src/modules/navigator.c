@@ -16,7 +16,6 @@
 #include "internal.h"
 #include "silver/call.h"
 #include "modules/navigator.h"
-#include "modules/symbol.h"
 #include "gc/modules.h"
 
 typedef enum {
@@ -191,7 +190,7 @@ static void execute_lock_callback(ant_t *js, const char *name, lock_mode_t mode,
   ant_value_t lock_obj = js_mkobj(js);
   js_set(js, lock_obj, "name", js_mkstr(js, name, strlen(name)));
   js_set(js, lock_obj, "mode", js_mkstr(js, mode == LOCK_MODE_EXCLUSIVE ? "exclusive" : "shared", mode == LOCK_MODE_EXCLUSIVE ? 9 : 6));
-  js_set_sym(js, lock_obj, get_toStringTag_sym(), js_mkstr(js, "Lock", 4));
+  js_set_sym(js, lock_obj, js->sym.toStringTag_sym, js_mkstr(js, "Lock", 4));
   
   ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &lock_obj, 1, NULL, js_mkundef());
   
@@ -422,10 +421,10 @@ void init_navigator_module(ant_t *js) {
   ant_value_t locks_obj = js_mkobj(js);
   js_set(js, locks_obj, "request", js_mkfun(locks_request));
   js_set(js, locks_obj, "query", js_mkfun(locks_query));
-  js_set_sym(js, locks_obj, get_toStringTag_sym(), js_mkstr(js, "LockManager", 11));
+  js_set_sym(js, locks_obj, js->sym.toStringTag_sym, js_mkstr(js, "LockManager", 11));
   js_set(js, navigator_obj, "locks", locks_obj);
   
-  js_set_sym(js, navigator_obj, get_toStringTag_sym(), js_mkstr(js, "Navigator", 9));
+  js_set_sym(js, navigator_obj, js->sym.toStringTag_sym, js_mkstr(js, "Navigator", 9));
   js_set(js, js_glob(js), "navigator", navigator_obj);
 }
 

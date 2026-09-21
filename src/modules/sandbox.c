@@ -16,6 +16,7 @@
 #include "sandbox/vm.h"
 #include "silver/call.h"
 #include "modules/symbol.h"
+#include "modules/iterator.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -1454,8 +1455,8 @@ ant_value_t sandbox_library(ant_t *js) {
     js_set(js, js->builtins.sandbox_proto, "close", js_mkfun(sandbox_close));
     js_set(js, js->builtins.sandbox_proto, "terminate", js_mkfun(sandbox_terminate));
     js_set_getter_desc(js, js->builtins.sandbox_proto, "messages", 8, js_mkfun(sandbox_messages_getter), JS_DESC_C);
-    js_set_sym(js, js->builtins.sandbox_proto, get_asyncIterator_sym(), js_mkfun(sym_this_cb));
-    js_set_sym(js, js->builtins.sandbox_proto, get_toStringTag_sym(), js_mkstr(js, "Sandbox", 7));
+    js_set_sym(js, js->builtins.sandbox_proto, js->sym.asyncIterator_sym, js_mkfun(sym_this_cb));
+    js_set_sym(js, js->builtins.sandbox_proto, js->sym.toStringTag_sym, js_mkstr(js, "Sandbox", 7));
     js->builtins.sandbox_ctor = js_make_ctor(js, sandbox_ctor, js->builtins.sandbox_proto, "Sandbox", 7);
     gc_register_root(&js->builtins.sandbox_ctor);
   }
@@ -1465,7 +1466,7 @@ ant_value_t sandbox_library(ant_t *js) {
   js_set(js, lib, "parentPort", sandbox_guest_parent_port(js));
   js_set(js, lib, "default", lib);
   js_set_slot_wb(js, lib, SLOT_DEFAULT, lib);
-  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "sandbox", 7));
+  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "sandbox", 7));
   
   return lib;
 }

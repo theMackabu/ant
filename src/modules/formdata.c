@@ -14,6 +14,7 @@
 #include "modules/formdata.h"
 #include "modules/blob.h"
 #include "modules/symbol.h"
+#include "modules/iterator.h"
 
 typedef struct {
   size_t index;
@@ -479,8 +480,8 @@ void init_formdata_module(ant_t *js) {
   js_set(js, js->builtins.formdata_proto, "keys",    js_mkfun(js_formdata_keys));
   js_set(js, js->builtins.formdata_proto, "values",  js_mkfun(js_formdata_values));
 
-  js_set_sym(js, js->builtins.formdata_proto, get_iterator_sym(),    js_get(js, js->builtins.formdata_proto, "entries"));
-  js_set_sym(js, js->builtins.formdata_proto, get_toStringTag_sym(), js_mkstr(js, "FormData", 8));
+  js_set_sym(js, js->builtins.formdata_proto, js->sym.iterator_sym,    js_get(js, js->builtins.formdata_proto, "entries"));
+  js_set_sym(js, js->builtins.formdata_proto, js->sym.toStringTag_sym, js_mkstr(js, "FormData", 8));
 
   ant_value_t ctor_obj = js_mkobj(js);
   js_set_slot(ctor_obj, SLOT_CFUNC, js_mkfun(js_formdata_ctor));
@@ -499,5 +500,5 @@ void init_formdata_module(ant_t *js) {
   js_set_proto_init(js->builtins.formdata_iter_proto, js->sym.iterator_proto);
   js_set(js, js->builtins.formdata_iter_proto, "next", js_mkfun(formdata_iter_next));
   js_set_descriptor(js, js->builtins.formdata_iter_proto, "next", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
-  js_set_sym(js, js->builtins.formdata_iter_proto, get_iterator_sym(), js_mkfun(sym_this_cb));
+  js_set_sym(js, js->builtins.formdata_iter_proto, js->sym.iterator_sym, js_mkfun(sym_this_cb));
 }

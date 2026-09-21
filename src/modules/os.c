@@ -42,7 +42,6 @@
 #include "errors.h"
 #include "internal.h"
 #include "gc/roots.h"
-#include "modules/symbol.h"
 
 #ifdef _WIN32
 #define OS_EOL "\r\n"
@@ -1125,7 +1124,7 @@ ant_value_t os_library(ant_t *js) {
   js_set(js, constants, "dlopen", dlopen_obj);
   js_set(js, constants, "UV_UDP_REUSEADDR", js_mknum(4));
   js_set(js, lib, "constants", constants);
-  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "os", 2));
+  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "os", 2));
 
   return lib;
 }

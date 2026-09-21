@@ -11,7 +11,6 @@
 
 #include "gc.h"
 #include "gc/modules.h"
-#include "modules/symbol.h"
 #include "modules/timer.h"
 #include "modules/abort.h"
 #include "modules/domexception.h"
@@ -211,7 +210,7 @@ static ant_value_t make_new_signal(ant_t *js) {
   js_set(js, obj, "aborted", js_false);
   js_set(js, obj, "reason", js_mkundef());
   js_set(js, obj, "onabort", js_mkundef());
-  js_set_sym(js, obj, get_toStringTag_sym(), js_mkstr(js, "AbortSignal", 11));
+  js_set_sym(js, obj, js->sym.toStringTag_sym, js_mkstr(js, "AbortSignal", 11));
 
   return obj;
 }
@@ -419,7 +418,7 @@ static ant_value_t abort_controller_ctor(ant_params_t) {
 
   js_mkprop_fast(js, this_obj, "signal", 6, signal);
   js_set_descriptor(js, this_obj, "signal", 6, 0);
-  js_set_sym(js, this_obj, get_toStringTag_sym(), js_mkstr(js, "AbortController", 15));
+  js_set_sym(js, this_obj, js->sym.toStringTag_sym, js_mkstr(js, "AbortController", 15));
 
   return js_mkundef();
 }
@@ -448,7 +447,7 @@ void init_abort_module(ant_t *js) {
   js_set(js, signal_proto, "removeEventListener", js_mkfun(abort_signal_remove_event_listener));
   js_set(js, signal_proto, "dispatchEvent",       js_mkfun(abort_signal_dispatch_event));
   js_set(js, signal_proto, "throwIfAborted",      js_mkfun(abort_signal_throw_if_aborted));
-  js_set_sym(js, signal_proto, get_toStringTag_sym(), js_mkstr(js, "AbortSignal", 11));
+  js_set_sym(js, signal_proto, js->sym.toStringTag_sym, js_mkstr(js, "AbortSignal", 11));
 
   ant_value_t signal_ctor = js_mkobj(js);
   js_mkprop_fast(js, signal_ctor, "prototype", 9, signal_proto);
@@ -465,7 +464,7 @@ void init_abort_module(ant_t *js) {
 
   ant_value_t ctrl_proto = js_mkobj(js);
   js_set(js, ctrl_proto, "abort", js_mkfun(abort_controller_abort));
-  js_set_sym(js, ctrl_proto, get_toStringTag_sym(), js_mkstr(js, "AbortController", 15));
+  js_set_sym(js, ctrl_proto, js->sym.toStringTag_sym, js_mkstr(js, "AbortController", 15));
 
   ant_value_t ctrl_ctor = js_mkobj(js);
   js_set_slot(ctrl_ctor, SLOT_CFUNC, js_mkfun(abort_controller_ctor));

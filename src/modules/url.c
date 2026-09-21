@@ -17,6 +17,7 @@
 #include "silver/call.h"
 #include "modules/url.h"
 #include "modules/symbol.h"
+#include "modules/iterator.h"
 #include "url/url_internal.h"
 
 enum { URL_NATIVE_TAG = 0x55524c53u }; // URLS
@@ -1086,15 +1087,16 @@ static ant_value_t usp_iter_next(ant_params_t) {
   if (vtype(state_v) != kTypeNumber) return js_iter_result(js, false, js_mkundef());
 
   uint32_t state = (uint32_t)js_getnum(state_v);
-  uint32_t kind  = ITER_STATE_KIND(state);
-  uint32_t idx   = ITER_STATE_INDEX(state);
+  uint32_t kind = iter_state_kind(state);
+  uint32_t idx = iter_state_index(state);
 
   ant_value_t usp = js_get_slot(js->this_val, SLOT_DATA);
   ant_value_t entries = js_get_slot(usp, SLOT_ENTRIES);
+  
   if (!is_special_object(entries) || (ant_offset_t)idx >= js_arr_len(js, entries))
     return js_iter_result(js, false, js_mkundef());
 
-  js_set_slot(js->this_val, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(kind, idx + 1)));
+  js_set_slot(js->this_val, SLOT_ITER_STATE, js_mknum((double)iter_state_pack(kind, idx + 1)));
 
   ant_value_t entry = js_arr_get(js, entries, (ant_offset_t)idx);
   ant_value_t k = js_arr_get(js, entry, 0);
@@ -1118,7 +1120,7 @@ static ant_value_t make_usp_iter(ant_t *js, ant_value_t usp, int kind) {
   ant_value_t iter = js_mkobj(js);
   js_set_proto_init(iter, js->builtins.usp_iter_proto);
   js_set_slot_wb(js, iter, SLOT_DATA, usp);
-  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(kind, 0)));
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)iter_state_pack(kind, 0)));
   return iter;
 }
 
@@ -1258,7 +1260,7 @@ void init_url_module(ant_t *js) {
   js_set_proto_init(js->builtins.usp_iter_proto, js->sym.iterator_proto);
   js_set(js, js->builtins.usp_iter_proto, "next", js_mkfun(usp_iter_next));
   js_set_descriptor(js, js->builtins.usp_iter_proto, "next", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
-  js_set_sym(js, js->builtins.usp_iter_proto, get_iterator_sym(), js_mkfun(sym_this_cb));
+  js_set_sym(js, js->builtins.usp_iter_proto, js->sym.iterator_sym, js_mkfun(sym_this_cb));
 
   js->builtins.usp_proto = js_mkobj(js);
   js_set(js, js->builtins.usp_proto, "get",      js_mkfun(usp_get));
@@ -1276,8 +1278,8 @@ void init_url_module(ant_t *js) {
   js_set(js, js->builtins.usp_proto, "keys",    js_mkfun(usp_keys_fn));
   js_set(js, js->builtins.usp_proto, "values",  js_mkfun(usp_values_fn));
   
-  js_set_sym(js, js->builtins.usp_proto, get_iterator_sym(), js_get(js, js->builtins.usp_proto, "entries"));
-  js_set_sym(js, js->builtins.usp_proto, get_toStringTag_sym(), js_mkstr(js, "URLSearchParams", 15));
+  js_set_sym(js, js->builtins.usp_proto, js->sym.iterator_sym, js_get(js, js->builtins.usp_proto, "entries"));
+  js_set_sym(js, js->builtins.usp_proto, js->sym.toStringTag_sym, js_mkstr(js, "URLSearchParams", 15));
 
   ant_value_t usp_ctor = js_make_ctor(js, js_URLSearchParams, js->builtins.usp_proto, "URLSearchParams", 15);
   js_set_global_builtin(js, "URLSearchParams", usp_ctor);
@@ -1299,7 +1301,7 @@ void init_url_module(ant_t *js) {
   
   js_set(js, js->builtins.url_proto, "toString", js_mkfun(url_toString));
   js_set(js, js->builtins.url_proto, "toJSON",   js_mkfun(url_toString));
-  js_set_sym(js, js->builtins.url_proto, get_toStringTag_sym(), js_mkstr(js, "URL", 3));
+  js_set_sym(js, js->builtins.url_proto, js->sym.toStringTag_sym, js_mkstr(js, "URL", 3));
 
   js->builtins.url_ctor = js_make_ctor(js, js_URL, js->builtins.url_proto, "URL", 3);
   js_set_descriptor(js, js_as_obj(js->builtins.url_ctor), "prototype", 9, 0);

@@ -31,7 +31,6 @@
 #include "modules/io.h"
 #include "modules/util.h"
 #include "sandbox/sandbox.h"
-#include "modules/symbol.h"
 
 bool io_no_color = false;
 
@@ -1510,7 +1509,7 @@ static void console_ensure_constructor(ant_t *js) {
   js->builtins.console_proto = js_mkobj(js);
   console_apply_methods(js, js->builtins.console_proto);
   
-  js_set_sym(js, js->builtins.console_proto, get_toStringTag_sym(), js_mkstr(js, "console", 7));
+  js_set_sym(js, js->builtins.console_proto, js->sym.toStringTag_sym, js_mkstr(js, "console", 7));
   js->builtins.console_ctor = js_make_ctor(js, js_console_constructor, js->builtins.console_proto, "Console", 7);
 }
 
@@ -1523,7 +1522,7 @@ static ant_value_t console_create_default(ant_t *js) {
   js_set_slot_wb(js, console_obj, SLOT_CONSOLE_TIMERS, js_mkobj(js));
   js_set_slot(console_obj, SLOT_CONSOLE_GROUP_INDENT, js_mknum(2));
   js_set_slot(console_obj, SLOT_CONSOLE_GROUP_LEVEL, js_mknum(0));
-  js_set_sym(js, console_obj, get_toStringTag_sym(), js_mkstr(js, "console", 7));
+  js_set_sym(js, console_obj, js->sym.toStringTag_sym, js_mkstr(js, "console", 7));
   
   return console_obj;
 }

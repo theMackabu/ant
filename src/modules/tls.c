@@ -19,7 +19,6 @@
 #include "modules/events.h"
 #include "modules/net.h"
 #include "modules/stream.h"
-#include "modules/symbol.h"
 #include "modules/timer.h"
 #include "silver/call.h"
 
@@ -482,7 +481,7 @@ static void tls_init_context_proto(ant_t *js) {
   if (!js->builtins.tls_context_proto) {
     js->builtins.tls_context_proto = js_mkobj(js);
     js_set(js, js->builtins.tls_context_proto, "close", js_mkfun(js_tls_context_close));
-    js_set_sym(js, js->builtins.tls_context_proto, get_toStringTag_sym(), js_mkstr(js, "SecureContext", 13));
+    js_set_sym(js, js->builtins.tls_context_proto, js->sym.toStringTag_sym, js_mkstr(js, "SecureContext", 13));
   }
 }
 
@@ -930,7 +929,7 @@ void tls_init_socket_proto(ant_t *js) {
     js_set(js, js->builtins.tls_socket_proto, "getSession", js_mkfun(js_tls_socket_getSession));
     js_set(js, js->builtins.tls_socket_proto, "getPeerCertificate", js_mkfun(js_tls_socket_getPeerCertificate));
     js_set(js, js->builtins.tls_socket_proto, "renegotiate", js_mkfun(js_tls_socket_renegotiate));
-    js_set_sym(js, js->builtins.tls_socket_proto, get_toStringTag_sym(), js_mkstr(js, "TLSSocket", 9));
+    js_set_sym(js, js->builtins.tls_socket_proto, js->sym.toStringTag_sym, js_mkstr(js, "TLSSocket", 9));
   }
 
   if (!js->builtins.tls_socket_ctor)
@@ -1299,7 +1298,7 @@ static ant_value_t tls_build_library(ant_t *js) {
   js_set(js, lib, "CLIENT_RENEG_LIMIT", js_mknum(3));
   js_set(js, lib, "CLIENT_RENEG_WINDOW", js_mknum(600));
   js_set(js, lib, "default", lib);
-  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "tls", 3));
+  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "tls", 3));
   
   return lib;
 }

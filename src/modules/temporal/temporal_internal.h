@@ -37,7 +37,6 @@
 #include "ZonedDateTime.h"
 #pragma clang diagnostic pop
 #include "modules/temporal_capi_ext.h"
-#include "modules/symbol.h"
 
 static constexpr uint32_t TEMPORAL_PROVIDER_TAG = 0x54505256u;        /* TPRV */
 static constexpr uint32_t TEMPORAL_DURATION_TAG = 0x54445552u;        /* TDUR */

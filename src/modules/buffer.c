@@ -21,6 +21,7 @@
 #include "modules/bigint.h"
 #include "modules/buffer.h"
 #include "modules/symbol.h"
+#include "modules/iterator.h"
 
 #define BUFFER_REGISTRY_INITIAL_CAP 64
 
@@ -171,8 +172,8 @@ static bool advance_typedarray(ant_t *js, js_iter_t *it, ant_value_t *out) {
   ant_value_t state_v = js_get_slot(iter, SLOT_ITER_STATE);
   uint32_t state = (vtype(state_v) == kTypeNumber) ? (uint32_t)js_getnum(state_v) : 0;
   
-  uint32_t kind = ITER_STATE_KIND(state);
-  uint32_t idx  = ITER_STATE_INDEX(state);
+  uint32_t kind = iter_state_kind(state);
+  uint32_t idx  = iter_state_index(state);
 
   TypedArrayData *ta = buffer_get_typedarray_data(ta_obj);
   if (!ta || !ta->buffer || ta->buffer->is_detached || idx >= (uint32_t)ta->length) return false;
@@ -196,7 +197,7 @@ static bool advance_typedarray(ant_t *js, js_iter_t *it, ant_value_t *out) {
     break;
   }
 
-  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(kind, idx + 1)));
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)iter_state_pack(kind, idx + 1)));
   return true;
 }
 
@@ -207,7 +208,7 @@ static ant_value_t ta_iter_next(ant_params_t) {
 static ant_value_t ta_values(ant_params_t) {
   ant_value_t iter = js_mkobj(js);
   js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
-  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(ARR_ITER_VALUES, 0)));
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)iter_state_pack(ARR_ITER_VALUES, 0)));
   js_set_proto_init(iter, js->builtins.typedarray_iter_proto);
   return iter;
 }
@@ -215,7 +216,7 @@ static ant_value_t ta_values(ant_params_t) {
 static ant_value_t ta_keys(ant_params_t) {
   ant_value_t iter = js_mkobj(js);
   js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
-  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(ARR_ITER_KEYS, 0)));
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)iter_state_pack(ARR_ITER_KEYS, 0)));
   js_set_proto_init(iter, js->builtins.typedarray_iter_proto);
   return iter;
 }
@@ -223,7 +224,7 @@ static ant_value_t ta_keys(ant_params_t) {
 static ant_value_t ta_entries(ant_params_t) {
   ant_value_t iter = js_mkobj(js);
   js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
-  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(ARR_ITER_ENTRIES, 0)));
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)iter_state_pack(ARR_ITER_ENTRIES, 0)));
   js_set_proto_init(iter, js->builtins.typedarray_iter_proto);
   return iter;
 }
@@ -1035,7 +1036,7 @@ static ant_value_t create_typed_array_from_iterable(
     ant_object_t *array = js_obj_ptr(js_as_obj(source));
     size_t length = array->u.array.len;
 
-    js_set_slot(iterator, SLOT_ITER_STATE, js_mknum(ITER_STATE_PACK(ARR_ITER_VALUES, length)));
+    js_set_slot(iterator, SLOT_ITER_STATE, js_mknum(iter_state_pack(ARR_ITER_VALUES, (uint32_t)length)));
     result = create_typed_array_for_length(js, type, length, type_name);
     if (is_err(result)) goto done;
     
@@ -1178,7 +1179,7 @@ static ant_value_t js_typedarray_constructor(ant_native_params_t, TypedArrayType
   }
 
   if (is_special_object(args[0])) {
-    ant_value_t iter_fn = js_get_sym(js, args[0], get_iterator_sym());
+    ant_value_t iter_fn = js_get_sym(js, args[0], js->sym.iterator_sym);
     if (is_err(iter_fn)) return iter_fn;
     
     if (vtype(iter_fn) != kTypeUndefined && vtype(iter_fn) != kTypeNull) {
@@ -3976,7 +3977,7 @@ void init_buffer_module(ant_t *js) {
   js_set(js, arraybuffer_proto, "transferToFixedLength", js_mkfun(js_arraybuffer_transferToFixedLength));
   js_set_getter_desc(js, arraybuffer_proto, "detached", 8, js_mkfun(js_arraybuffer_detached_getter), JS_DESC_E);
   js_set_getter_desc(js, arraybuffer_proto, "byteLength", 10, js_mkfun(js_arraybuffer_byteLength_getter), JS_DESC_C);
-  js_set_sym(js, arraybuffer_proto, get_toStringTag_sym(), js_mkstr(js, "ArrayBuffer", 11));
+  js_set_sym(js, arraybuffer_proto, js->sym.toStringTag_sym, js_mkstr(js, "ArrayBuffer", 11));
   
   js_set_slot(arraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_arraybuffer_constructor));
   js_mkprop_fast(js, arraybuffer_ctor_obj, "prototype", 9, arraybuffer_proto);
@@ -4021,7 +4022,7 @@ void init_buffer_module(ant_t *js) {
   js_set(js, typedarray_proto, "reverse", js_mkfun(js_typedarray_reverse));
   js_set(js, typedarray_proto, "some", js_mkfun(js_typedarray_some));
   js_set(js, typedarray_proto, "sort", js_mkfun(js_typedarray_sort));
-  js_set_sym_getter_desc(js, typedarray_proto, get_toStringTag_sym(), js_mkfun(js_typedarray_toStringTag_getter), JS_DESC_C);
+  js_set_sym_getter_desc(js, typedarray_proto, js->sym.toStringTag_sym, js_mkfun(js_typedarray_toStringTag_getter), JS_DESC_C);
 
   ant_value_t typedarray_ctor_obj = js_mkobj(js);
   js_set_proto_init(typedarray_ctor_obj, function_proto);
@@ -4037,12 +4038,12 @@ void init_buffer_module(ant_t *js) {
   js->builtins.typedarray_iter_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.typedarray_iter_proto, js->sym.iterator_proto);
   js_set(js, js->builtins.typedarray_iter_proto, "next", js_mkfun(ta_iter_next));
-  js_iter_register_advance(js->builtins.typedarray_iter_proto, advance_typedarray);
+  js_iter_register_advance(js, js->builtins.typedarray_iter_proto, advance_typedarray);
 
   js_set(js, typedarray_proto, "values", js_mkfun(ta_values));
   js_set(js, typedarray_proto, "keys", js_mkfun(ta_keys));
   js_set(js, typedarray_proto, "entries", js_mkfun(ta_entries));
-  js_set_sym(js, typedarray_proto, get_iterator_sym(), js_get(js, typedarray_proto, "values"));
+  js_set_sym(js, typedarray_proto, js->sym.iterator_sym, js_get(js, typedarray_proto, "values"));
   
   // TODO: find a better way of doing this, macro is code smell
   #define SETUP_TYPEDARRAY(name, type) \
@@ -4052,7 +4053,7 @@ void init_buffer_module(ant_t *js) {
       ant_value_t elem_size = js_mknum((double)get_element_size(type)); \
       js_set_proto_init(name##_ctor_obj, typedarray_ctor); \
       js_set_proto_init(name##_proto, typedarray_proto); \
-      js_set_sym(js, name##_proto, get_toStringTag_sym(), js_mkstr(js, #name, sizeof(#name) - 1)); \
+      js_set_sym(js, name##_proto, js->sym.toStringTag_sym, js_mkstr(js, #name, sizeof(#name) - 1)); \
       js_set_slot(name##_ctor_obj, SLOT_CFUNC, js_mkfun(js_##name##_constructor)); \
       js_setprop(js, name##_ctor_obj, js_mkstr(js, "prototype", 9), name##_proto); \
       js_set(js, name##_ctor_obj, "BYTES_PER_ELEMENT", elem_size); \
@@ -4117,7 +4118,7 @@ void init_buffer_module(ant_t *js) {
   js_set_getter_desc(js, dataview_proto, "buffer", 6, js_mkfun(js_dataview_buffer_getter), JS_DESC_C);
   js_set_getter_desc(js, dataview_proto, "byteLength", 10, js_mkfun(js_dataview_byteLength_getter), JS_DESC_C);
   js_set_getter_desc(js, dataview_proto, "byteOffset", 10, js_mkfun(js_dataview_byteOffset_getter), JS_DESC_C);
-  js_set_sym(js, dataview_proto, get_toStringTag_sym(), js_mkstr(js, "DataView", 8));
+  js_set_sym(js, dataview_proto, js->sym.toStringTag_sym, js_mkstr(js, "DataView", 8));
 
   js_set_slot(dataview_ctor_obj, SLOT_CFUNC, js_mkfun(js_dataview_constructor));
   js_mkprop_fast(js, dataview_ctor_obj, "prototype", 9, dataview_proto);
@@ -4135,7 +4136,7 @@ void init_buffer_module(ant_t *js) {
   
   js_set(js, sharedarraybuffer_proto, "slice", js_mkfun(js_arraybuffer_slice));
   js_set_getter_desc(js, sharedarraybuffer_proto, "byteLength", 10, js_mkfun(js_arraybuffer_byteLength_getter), JS_DESC_C);
-  js_set_sym(js, sharedarraybuffer_proto, get_toStringTag_sym(), js_mkstr(js, "SharedArrayBuffer", 17));
+  js_set_sym(js, sharedarraybuffer_proto, js->sym.toStringTag_sym, js_mkstr(js, "SharedArrayBuffer", 17));
   
   js_set_slot(sharedarraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_sharedarraybuffer_constructor));
   js_mkprop_fast(js, sharedarraybuffer_ctor_obj, "prototype", 9, sharedarraybuffer_proto);
@@ -4216,9 +4217,9 @@ void init_buffer_module(ant_t *js) {
   js_set(js, buffer_proto, "readBigUInt64BE", read_biguint64_be);
   js_set(js, buffer_proto, "readBigUint64BE", read_biguint64_be);
   
-  js_set_sym(js, buffer_proto, get_toStringTag_sym(), js_mkstr(js, "Buffer", 6));
+  js_set_sym(js, buffer_proto, js->sym.toStringTag_sym, js_mkstr(js, "Buffer", 6));
   js_set(js, buffer_proto, "values", js_get(js, typedarray_proto, "values"));
-  js_set_sym(js, buffer_proto, get_iterator_sym(), js_get(js, buffer_proto, "values"));
+  js_set_sym(js, buffer_proto, js->sym.iterator_sym, js_get(js, buffer_proto, "values"));
   
   js_set(js, buffer_ctor_obj, "from", js_mkfun(js_buffer_from));
   js_set(js, buffer_ctor_obj, "alloc", js_mkfun(js_buffer_alloc));

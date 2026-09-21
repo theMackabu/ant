@@ -29,7 +29,6 @@
 #include "modules/buffer.h"
 #include "modules/cjit.h"
 #include "modules/server.h"
-#include "modules/symbol.h"
 
 static struct {
   ant_t *js;
@@ -400,7 +399,7 @@ static ant_value_t js_match(ant_params_t) {
   js_prop_iter_end(&iter);
   if (vtype(guard_arm) != kTypeUndefined) return match_resolve_arm(js, guard_arm, value);
   
-  ant_value_t fallback = js_get_sym(js, arms, get_default_sym());
+  ant_value_t fallback = js_get_sym(js, arms, js->sym.default_sym);
   if (vtype(fallback) != kTypeUndefined) return match_resolve_arm(js, fallback, value);
 
   return js_mkundef();

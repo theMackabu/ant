@@ -17,6 +17,7 @@
 #include "modules/bigint.h"
 #include "modules/collections.h"
 #include "modules/symbol.h"
+#include "modules/iterator.h"
 
 static bool can_be_held_weakly(ant_value_t value) {
   if (is_object_type(value) || vtype(value) == kTypeBuiltin) return true;
@@ -1996,20 +1997,20 @@ static ant_value_t builtin_WeakSet(ant_params_t) {
 
 void init_collections_module(ant_t *js) {
   ant_value_t object_proto = js->sym.object_proto;  
-  ant_value_t iter_sym = get_iterator_sym();
-  ant_value_t tag_sym = get_toStringTag_sym();
+  ant_value_t iter_sym = js->sym.iterator_sym;
+  ant_value_t tag_sym = js->sym.toStringTag_sym;
   
   js->builtins.map_iter_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.map_iter_proto, js->sym.iterator_proto);
   js_set(js, js->builtins.map_iter_proto, "next", js_mkfun(map_iter_next));
   js_set_sym(js, js->builtins.map_iter_proto, tag_sym, js_mkstr(js, "Map Iterator", 12));
-  js_iter_register_advance(js->builtins.map_iter_proto, advance_map);
+  js_iter_register_advance(js, js->builtins.map_iter_proto, advance_map);
   
   js->builtins.set_iter_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.set_iter_proto, js->sym.iterator_proto);
   js_set(js, js->builtins.set_iter_proto, "next", js_mkfun(set_iter_next));
   js_set_sym(js, js->builtins.set_iter_proto, tag_sym, js_mkstr(js, "Set Iterator", 12));
-  js_iter_register_advance(js->builtins.set_iter_proto, advance_set);
+  js_iter_register_advance(js, js->builtins.set_iter_proto, advance_set);
   
   ant_value_t map_proto = js_mkobj(js);
   js_set_proto_init(map_proto, object_proto);

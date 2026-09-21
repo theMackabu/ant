@@ -35,7 +35,6 @@
 #include "modules/buffer.h"
 #include "modules/events.h"
 #include "modules/stream.h"
-#include "modules/symbol.h"
 #include "modules/url.h"
 
 typedef enum {
@@ -674,14 +673,14 @@ static void fs_init_stream_constructors(ant_t *js) {
   js->builtins.readstream_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.readstream_proto, stream_readable_prototype(js));
   js_set(js, js->builtins.readstream_proto, "close", js_mkfun(fs_stream_close));
-  js_set_sym(js, js->builtins.readstream_proto, get_toStringTag_sym(), js_mkstr(js, "ReadStream", 10));
+  js_set_sym(js, js->builtins.readstream_proto, js->sym.toStringTag_sym, js_mkstr(js, "ReadStream", 10));
   js->builtins.readstream_ctor = js_make_ctor(js, js_readstream_ctor, js->builtins.readstream_proto, "ReadStream", 10);
   js_set_proto_init(js->builtins.readstream_ctor, stream_readable_constructor(js));
 
   js->builtins.writestream_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.writestream_proto, stream_writable_prototype(js));
   js_set(js, js->builtins.writestream_proto, "close", js_mkfun(fs_stream_close));
-  js_set_sym(js, js->builtins.writestream_proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
+  js_set_sym(js, js->builtins.writestream_proto, js->sym.toStringTag_sym, js_mkstr(js, "WriteStream", 11));
   js->builtins.writestream_ctor = js_make_ctor(js, js_writestream_ctor, js->builtins.writestream_proto, "WriteStream", 11);
   js_set_proto_init(js->builtins.writestream_ctor, stream_writable_constructor(js));
 }
@@ -1163,7 +1162,7 @@ static void fs_init_watch_constructors(ant_t *js) {
   js_set(js, js->builtins.fswatcher_proto, "ref", js_mkfun(js_fswatcher_ref));
   js_set(js, js->builtins.fswatcher_proto, "unref", js_mkfun(js_fswatcher_unref));
   
-  js_set_sym(js, js->builtins.fswatcher_proto, get_toStringTag_sym(), js_mkstr(js, "FSWatcher", 9));
+  js_set_sym(js, js->builtins.fswatcher_proto, js->sym.toStringTag_sym, js_mkstr(js, "FSWatcher", 9));
   js->builtins.fswatcher_ctor = js_make_ctor(js, js_fswatcher_ctor, js->builtins.fswatcher_proto, "FSWatcher", 9);
 }
 
@@ -1832,7 +1831,7 @@ static void fs_init_filehandle_proto(ant_t *js) {
   js_set(js, js->builtins.filehandle_proto, "read", js_mkfun(builtin_fs_filehandle_read));
   js_set(js, js->builtins.filehandle_proto, "write", js_mkfun(builtin_fs_filehandle_write));
   js_set(js, js->builtins.filehandle_proto, "writeFile", js_mkfun(builtin_fs_filehandle_writeFile));
-  js_set_sym(js, js->builtins.filehandle_proto, get_toStringTag_sym(), js_mkstr(js, "FileHandle", 10));
+  js_set_sym(js, js->builtins.filehandle_proto, js->sym.toStringTag_sym, js_mkstr(js, "FileHandle", 10));
 }
 
 static ant_value_t fs_make_filehandle(ant_t *js, int fd) {
@@ -5199,7 +5198,7 @@ void init_fs_module(ant_t *js) {
   js_set(js, stats_proto, "isFile", js_mkfun(stat_isFile));
   js_set(js, stats_proto, "isDirectory", js_mkfun(stat_isDirectory));
   js_set(js, stats_proto, "isSymbolicLink", js_mkfun(stat_isSymbolicLink));
-  js_set_sym(js, stats_proto, get_toStringTag_sym(), js_mkstr(js, "Stats", 5));
+  js_set_sym(js, stats_proto, js->sym.toStringTag_sym, js_mkstr(js, "Stats", 5));
   
   js_mkprop_fast(js, stats_ctor, "prototype", 9, stats_proto);
   js_mkprop_fast(js, stats_ctor, "name", 4, js_mkstr(js, "Stats", 5));
@@ -5215,7 +5214,7 @@ void init_fs_module(ant_t *js) {
   js_set(js, js->builtins.dirent_proto, "isCharacterDevice", js_mkfun(dirent_isCharacterDevice));
   js_set(js, js->builtins.dirent_proto, "isFIFO", js_mkfun(dirent_isFIFO));
   js_set(js, js->builtins.dirent_proto, "isSocket", js_mkfun(dirent_isSocket));
-  js_set_sym(js, js->builtins.dirent_proto, get_toStringTag_sym(), js_mkstr(js, "Dirent", 6));
+  js_set_sym(js, js->builtins.dirent_proto, js->sym.toStringTag_sym, js_mkstr(js, "Dirent", 6));
 }
 
 static ant_value_t fs_callback_success_handler(ant_params_t) {
@@ -5582,7 +5581,7 @@ ant_value_t fs_library(ant_t *js) {
   );
   
   js_set(js, lib, "constants", fs_make_constants(js));
-  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "fs", 2));
+  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "fs", 2));
   
   return lib;
 }
@@ -5593,7 +5592,7 @@ ant_value_t fs_promises_library(ant_t *js) {
   fs_set_promise_methods(js, lib);
   js_set(js, lib, "constants", fs_make_constants(js));
 
-  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "fs/promises", 11));
+  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "fs/promises", 11));
   return lib;
 }
 
@@ -5601,7 +5600,7 @@ ant_value_t fs_constants_library(ant_t *js) {
   ant_value_t constants = fs_make_constants(js);
   js_set(js, constants, "default", constants);
   js_set_slot_wb(js, constants, SLOT_DEFAULT, constants);
-  js_set_sym(js, constants, get_toStringTag_sym(), js_mkstr(js, "constants", 9));
+  js_set_sym(js, constants, js->sym.toStringTag_sym, js_mkstr(js, "constants", 9));
   return constants;
 }
 

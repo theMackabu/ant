@@ -20,7 +20,6 @@
 #include "modules/headers.h"
 #include "modules/multipart.h"
 #include "modules/response.h"
-#include "modules/symbol.h"
 #include "modules/url.h"
 #include "modules/json.h"
 #include "streams/pipes.h"
@@ -1117,7 +1116,7 @@ RES_GETTER_END
 #undef RES_GETTER_END
 
 static ant_value_t response_inspect_finish(ant_t *js, ant_value_t this_obj, ant_value_t body_obj) {
-  ant_value_t tag_val = js_get_sym(js, this_obj, get_toStringTag_sym());
+  ant_value_t tag_val = js_get_sym(js, this_obj, js->sym.toStringTag_sym);
   const char *tag = vtype(tag_val) == kTypeString ? js_getstr(js, tag_val, NULL) : "Response";
 
   js_inspect_builder_t builder;
@@ -1386,8 +1385,8 @@ void init_response_module(ant_t *js) {
   GETTER("bodyUsed", body_used);
 #undef GETTER
 
-  js_set_sym(js, js->builtins.response_proto, get_inspect_sym(), js_mkfun(response_inspect));
-  js_set_sym(js, js->builtins.response_proto, get_toStringTag_sym(), js_mkstr(js, "Response", 8));
+  js_set_sym(js, js->builtins.response_proto, js->sym.inspect_sym, js_mkfun(response_inspect));
+  js_set_sym(js, js->builtins.response_proto, js->sym.toStringTag_sym, js_mkstr(js, "Response", 8));
   ctor = js_make_ctor(js, js_response_ctor, js->builtins.response_proto, "Response", 8);
   js_set(js, ctor, "error", js_mkfun(js_response_error));
   js_set(js, ctor, "redirect", js_mkfun(js_response_redirect));

@@ -15,6 +15,7 @@
 #include "modules/headers.h"
 #include "modules/http.h"
 #include "modules/symbol.h"
+#include "modules/iterator.h"
 
 typedef ant_http_header_t hdr_entry_t;
 typedef struct headers_data hdr_list_t;
@@ -896,7 +897,7 @@ static ant_value_t js_headers_entries(ant_params_t) {
 }
 
 static ant_value_t headers_inspect_finish(ant_t *js, ant_value_t this_obj, ant_value_t body_obj) {
-  ant_value_t tag_val = js_get_sym(js, this_obj, get_toStringTag_sym());
+  ant_value_t tag_val = js_get_sym(js, this_obj, js->sym.toStringTag_sym);
   const char *tag = vtype(tag_val) == kTypeString ? js_getstr(js, tag_val, NULL) : "Headers";
 
   js_inspect_builder_t builder;
@@ -971,7 +972,7 @@ static ant_value_t js_headers_ctor(ant_params_t) {
         "Failed to construct 'Headers': The provided value is not of type 'HeadersInit'");
     }
 
-    ant_value_t iter_fn = js_get_sym(js, init, get_iterator_sym());
+    ant_value_t iter_fn = js_get_sym(js, init, js->sym.iterator_sym);
     if (is_err(iter_fn)) { headers_data_destroy(l); return iter_fn; }
     bool has_iter = (vtype(iter_fn) == kTypeFunction || vtype(iter_fn) == kTypeBuiltin);
 
@@ -1222,8 +1223,8 @@ void init_headers_module(ant_t *js) {
   js_set_proto_init(js->builtins.headers_iter_proto, js->sym.iterator_proto);
   js_set(js, js->builtins.headers_iter_proto, "next", js_mkfun(headers_iter_next));
   js_set_descriptor(js, js->builtins.headers_iter_proto, "next", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
-  js_set_sym(js, js->builtins.headers_iter_proto, get_iterator_sym(), js_mkfun(sym_this_cb));
-  js_iter_register_advance(js->builtins.headers_iter_proto, advance_headers);
+  js_set_sym(js, js->builtins.headers_iter_proto, js->sym.iterator_sym, js_mkfun(sym_this_cb));
+  js_iter_register_advance(js, js->builtins.headers_iter_proto, advance_headers);
 
   js->builtins.headers_proto = js_mkobj(js);
 
@@ -1238,9 +1239,9 @@ void init_headers_module(ant_t *js) {
   js_set(js, js->builtins.headers_proto, "entries",      js_mkfun(js_headers_entries));
   js_set(js, js->builtins.headers_proto, "getSetCookie", js_mkfun(js_headers_get_set_cookie));
   
-  js_set_sym(js, js->builtins.headers_proto, get_iterator_sym(),    js_get(js, js->builtins.headers_proto, "entries"));
-  js_set_sym(js, js->builtins.headers_proto, get_inspect_sym(),     js_mkfun(headers_inspect));
-  js_set_sym(js, js->builtins.headers_proto, get_toStringTag_sym(), js_mkstr(js, "Headers", 7));
+  js_set_sym(js, js->builtins.headers_proto, js->sym.iterator_sym,    js_get(js, js->builtins.headers_proto, "entries"));
+  js_set_sym(js, js->builtins.headers_proto, js->sym.inspect_sym,     js_mkfun(headers_inspect));
+  js_set_sym(js, js->builtins.headers_proto, js->sym.toStringTag_sym, js_mkstr(js, "Headers", 7));
 
   ant_value_t ctor_obj = js_mkobj(js);
   js_set_slot(ctor_obj, SLOT_CFUNC, js_mkfun(js_headers_ctor));

@@ -43,7 +43,6 @@
 #include "modules/process.h"
 #include "sandbox/sandbox.h"
 #include "modules/tty.h"
-#include "modules/symbol.h"
 #include "modules/buffer.h"
 #include "modules/napi.h"
 #include "modules/timer.h"
@@ -1793,7 +1792,7 @@ void init_process_module(ant_t *js) {
   ant_value_t process_proto = js_newobj(js);
 
   process_set_methods(js, process_proto, true);
-  js_set_sym(js, process_proto, get_toStringTag_sym(), js_mkstr(js, "process", 7));
+  js_set_sym(js, process_proto, js->sym.toStringTag_sym, js_mkstr(js, "process", 7));
 
   ant_value_t process_obj = js_mkobj(js);
   ant_value_t env_obj = js_newobj(js);
@@ -1907,7 +1906,7 @@ void init_process_module(ant_t *js) {
   js_set(js, stdin_proto, "pause", js_mkfun(js_stdin_pause));
   js_set(js, stdin_proto, "ref", js_mkfun(js_stdin_ref));
   js_set(js, stdin_proto, "unref", js_mkfun(js_stdin_unref));
-  js_set_sym(js, stdin_proto, get_toStringTag_sym(), js_mkstr(js, "ReadStream", 10));
+  js_set_sym(js, stdin_proto, js->sym.toStringTag_sym, js_mkstr(js, "ReadStream", 10));
   
   ant_value_t stdin_obj = js_mkobj(js);
   js_set_proto_init(stdin_obj, stdin_proto);
@@ -1921,7 +1920,7 @@ void init_process_module(ant_t *js) {
   if (is_object_type(ee_proto)) js_set_proto_init(stdout_proto, ee_proto);
   js_set(js, stdout_proto, "write", js_mkfun(js_stdout_write));
   js_set(js, stdout_proto, "getWindowSize", js_mkfun(js_stdout_get_window_size));
-  js_set_sym(js, stdout_proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
+  js_set_sym(js, stdout_proto, js->sym.toStringTag_sym, js_mkstr(js, "WriteStream", 11));
   
   ant_value_t stdout_obj = js_mkobj(js);
   js_set_proto_init(stdout_obj, stdout_proto);
@@ -1935,7 +1934,7 @@ void init_process_module(ant_t *js) {
   ant_value_t stderr_proto = js_mkobj(js);
   if (is_object_type(ee_proto)) js_set_proto_init(stderr_proto, ee_proto);
   js_set(js, stderr_proto, "write", js_mkfun(js_stderr_write));
-  js_set_sym(js, stderr_proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
+  js_set_sym(js, stderr_proto, js->sym.toStringTag_sym, js_mkstr(js, "WriteStream", 11));
   
   ant_value_t stderr_obj = js_mkobj(js);
   js_set_proto_init(stderr_obj, stderr_proto);

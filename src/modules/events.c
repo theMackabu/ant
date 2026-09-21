@@ -16,7 +16,6 @@
 #include "gc/modules.h"
 #include "modules/abort.h"
 #include "modules/events.h"
-#include "modules/symbol.h"
 
 typedef struct {
   bool canceled;
@@ -1896,7 +1895,7 @@ static ant_value_t js_events_on(ant_params_t) {
   ant_value_t iter = js_mkobj(js);
   js_set(js, iter, "next", js_heavy_mkfun(js, js_events_on_next, state));
   js_set(js, iter, "return", js_heavy_mkfun(js, js_events_on_return, state));
-  js_set_sym(js, iter, get_asyncIterator_sym(), js_mkfun(js_events_on_self));
+  js_set_sym(js, iter, js->sym.asyncIterator_sym, js_mkfun(js_events_on_self));
   return iter;
 }
 
@@ -1917,7 +1916,7 @@ ant_value_t events_library(ant_t *js) {
   js_set(js, js->builtins.eventemitter_ctor, "setMaxListeners", js_get(js, lib, "setMaxListeners"));
   js_set(js, js->builtins.eventemitter_ctor, "getMaxListeners", js_get(js, lib, "getMaxListeners"));
   js_set(js, js->builtins.eventemitter_ctor, "getEventListeners", js_get(js, lib, "getEventListeners"));
-  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "events", 6));
+  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "events", 6));
   
   return lib;
 }
@@ -1949,7 +1948,7 @@ ant_value_t eventemitter_prototype(ant_t *js) {
   js_set(js, eventemitter_proto, "listeners",          js_mkfun(js_eventemitter_listeners));
   js_set(js, eventemitter_proto, "rawListeners",       js_mkfun(js_eventemitter_rawListeners));
   js_set(js, eventemitter_proto, "eventNames",         js_mkfun(js_eventemitter_eventNames));
-  js_set_sym(js, eventemitter_proto, get_toStringTag_sym(), js_mkstr(js, "EventEmitter", 12));
+  js_set_sym(js, eventemitter_proto, js->sym.toStringTag_sym, js_mkstr(js, "EventEmitter", 12));
 
   js_set_slot(eventemitter_ctor, SLOT_CFUNC, js_mkfun(js_eventemitter_ctor));
   js_mkprop_fast(js, eventemitter_ctor, "prototype", 9, eventemitter_proto);
@@ -1970,7 +1969,7 @@ void init_events_module(ant_t *js) {
   js->builtins.isTrusted_getter = js_mkfun(js_event_get_isTrusted);
   js->builtins.event_proto = js_mkobj(js);
   
-  js_set_sym(js, js->builtins.event_proto, get_toStringTag_sym(), js_mkstr(js, "Event", 5));
+  js_set_sym(js, js->builtins.event_proto, js->sym.toStringTag_sym, js_mkstr(js, "Event", 5));
   js_set(js, js->builtins.event_proto, "preventDefault",          js_mkfun(js_event_preventDefault));
   js_set(js, js->builtins.event_proto, "stopPropagation",         js_mkfun(js_event_stopPropagation));
   js_set(js, js->builtins.event_proto, "stopImmediatePropagation", js_mkfun(js_event_stopImmediatePropagation));
@@ -1990,21 +1989,21 @@ void init_events_module(ant_t *js) {
 
   js->builtins.customevent_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.customevent_proto, js->builtins.event_proto);
-  js_set_sym(js, js->builtins.customevent_proto, get_toStringTag_sym(), js_mkstr(js, "CustomEvent", 11));
+  js_set_sym(js, js->builtins.customevent_proto, js->sym.toStringTag_sym, js_mkstr(js, "CustomEvent", 11));
 
   ant_value_t customevent_fn = js_make_ctor(js, js_customevent_ctor, js->builtins.customevent_proto, "CustomEvent", 11);
   js_set_global_builtin(js, "CustomEvent", customevent_fn);
 
   js->builtins.errorevent_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.errorevent_proto, js->builtins.event_proto);
-  js_set_sym(js, js->builtins.errorevent_proto, get_toStringTag_sym(), js_mkstr(js, "ErrorEvent", 10));
+  js_set_sym(js, js->builtins.errorevent_proto, js->sym.toStringTag_sym, js_mkstr(js, "ErrorEvent", 10));
 
   ant_value_t errorevent_fn = js_make_ctor(js, js_errorevent_ctor, js->builtins.errorevent_proto, "ErrorEvent", 10);
   js_set_global_builtin(js, "ErrorEvent", errorevent_fn);
 
   js->builtins.promiserejectionevent_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.promiserejectionevent_proto, js->builtins.event_proto);
-  js_set_sym(js, js->builtins.promiserejectionevent_proto, get_toStringTag_sym(), js_mkstr(js, "PromiseRejectionEvent", 21));
+  js_set_sym(js, js->builtins.promiserejectionevent_proto, js->sym.toStringTag_sym, js_mkstr(js, "PromiseRejectionEvent", 21));
 
   ant_value_t pre_fn = js_make_ctor(js, js_promiserejectionevent_ctor, js->builtins.promiserejectionevent_proto, "PromiseRejectionEvent", 21);
   js_set_global_builtin(js, "PromiseRejectionEvent", pre_fn);
@@ -2018,7 +2017,7 @@ void init_events_module(ant_t *js) {
   js_set(js, eventtarget_proto, "addEventListener",    js_mkfun(js_add_event_listener_method));
   js_set(js, eventtarget_proto, "removeEventListener", js_mkfun(js_remove_event_listener_method));
   js_set(js, eventtarget_proto, "dispatchEvent",       js_mkfun(js_dispatch_event_method));
-  js_set_sym(js, eventtarget_proto, get_toStringTag_sym(), js_mkstr(js, "EventTarget", 11));
+  js_set_sym(js, eventtarget_proto, js->sym.toStringTag_sym, js_mkstr(js, "EventTarget", 11));
 
   ant_value_t eventtarget_ctor = js_mkobj(js);
   if (is_object_type(function_proto)) js_set_proto_init(eventtarget_ctor, function_proto);
