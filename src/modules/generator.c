@@ -497,9 +497,7 @@ static ant_value_t generator_async_dispose(ant_params_t) {
   return generator_return(js, NULL, 0, js_mkundef());
 }
 
-void init_generator_module(ant_t *js) {
-  ant_value_t proto = js_mkobj(js);
-  
+void init_generator_module(ant_t *js) {  
   ant_value_t generator_func_proto = js_get_slot(js->global, SLOT_GENERATOR_PROTO);
   ant_value_t async_generator_func_proto = js_get_slot(js->global, SLOT_ASYNC_GENERATOR_PROTO);
   
@@ -511,6 +509,7 @@ void init_generator_module(ant_t *js) {
     js, async_generator_func_proto, js->sym.toStringTag_sym,
     ANT_STRING("AsyncGeneratorFunction"), ANT_PROP_ATTR_CONFIGURABLE);
 
+  ant_value_t proto = js_mkobj(js);
   js->sym.generator_proto = proto;
   js_set_proto_init(proto, js->sym.iterator_proto);
   
