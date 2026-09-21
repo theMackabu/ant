@@ -62,7 +62,6 @@ static inline bool gc_get_stack_bounds(
 
 // TODO: move to isolate
 static gc_func_mark_profile_t g_gc_func_mark_profile = {0};
-static gc_str_mark_fn g_str_mark = NULL;
 
 static uint32_t g_gc_func_mark_profile_depth = 0;
 static uint64_t g_gc_func_mark_profile_start_ns = 0;
@@ -330,6 +329,31 @@ static inline void gc_grey_obj(ant_object_t *obj) {
   gc_mark_stack_push(obj);
 }
 
+static inline void gc_mark_string(ant_t *js, ant_value_t v) {
+  if ((vdata(v) & STR_HEAP_TAG_MASK) == STR_HEAP_TAG_FLAT) {
+    const ant_flat_string_t *flat = vptr_masked(v, STR_HEAP_TAG_MASK);
+    if (flat && !js->rope_gc.minor_marking && !str_flat_is_permanent(flat)) gc_strings_mark(js, flat);
+    return;
+  }
+  
+  if (!js->rope_gc.conservative_marking) gc_mark_str(js, v);
+}
+
+static inline void gc_mark_string_conservative(ant_t *js, ant_value_t w) {
+  uintptr_t tag = (uintptr_t)(vdata(w) & STR_HEAP_TAG_MASK);
+  
+  if (tag == STR_HEAP_TAG_FLAT) {
+    const void *flat = vptr_masked(w, STR_HEAP_TAG_MASK);
+    if (flat && !js->rope_gc.minor_marking) gc_strings_mark(js, flat);
+    return;
+  }
+  
+  if (
+    (tag == STR_HEAP_TAG_ROPE || tag == STR_HEAP_TAG_BUILDER) && 
+    !js->rope_gc.conservative_marking
+  ) gc_mark_str(js, w);
+}
+
 static void gc_mark_func(ant_t *js, sv_func_t *func) {
   if (!func) return;
   if (func->gc_epoch == gc_epoch) return;
@@ -405,8 +429,8 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
     return;
   }
 
-  if (t == kTypeString && g_str_mark) {
-    g_str_mark(js, v);
+  if (t == kTypeString) {
+    gc_mark_string(js, v);
     return;
   }
 
@@ -681,9 +705,8 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
       if (c && fixed_arena_contains(&js->closure_arena, c)) gc_mark_closure(js, c);
     }
     
-    if (type == kTypeString && g_str_mark) g_str_mark(js, w);
-    if (type == kTypeBigInt)
-      gc_bigints_mark((const void *)vptr(w));
+    if (type == kTypeString) gc_mark_string_conservative(js, w);
+    if (type == kTypeBigInt) gc_bigints_mark((const void *)vptr(w));
   }
 }
 
@@ -817,7 +840,7 @@ static inline void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd) 
 static void gc_mark_permanent_roots(ant_t *js) {
   size_t start = g_minor_gc ? js->permanent_root_traced : 0;
   for (size_t i = start; i < js->permanent_root_len; i++)
-    gc_mark_value(js, js->permanent_roots[i]);
+    gc_grey_obj(js->permanent_roots[i]);
 }
 
 static void gc_mark_roots(ant_t *js) {
@@ -1129,13 +1152,10 @@ void gc_pin_existing_objects(ant_t *js) {
   js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
 }
 
-void gc_objects_run(
-  ant_t *js, gc_str_mark_fn str_mark, gc_extra_roots_fn extra_roots
-) {
+void gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
   if (!js) return;
+  
   js->gc_objects_running = true;
-
-  g_str_mark = str_mark;
   if (g_gc_func_mark_profile.enabled) g_gc_func_mark_profile.collections++;
   
   gc_epoch++;
@@ -1253,11 +1273,10 @@ void gc_objects_run(
   js->gc_objects_running = false;
 }
 
-void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
+void gc_objects_run_minor(ant_t *js) {
   if (!js) return;
+  
   js->gc_objects_running = true;
-
-  g_str_mark = str_mark;
   gc_epoch++;
 
   if (gc_epoch == 0) gc_epoch = 1;

@@ -48,7 +48,7 @@ int main(void) {
   js_set(js, tagged_root, "child", tagged_child);
   conservative_words[0] = (uintptr_t)js_obj_ptr(raw_root);
   conservative_words[1] = tagged_root;
-  gc_objects_run(js, NULL, mark_conservative_words);
+  gc_objects_run(js, mark_conservative_words);
   assert(gc_obj_is_marked(js_obj_ptr(raw_root)));
   assert(gc_obj_is_marked(js_obj_ptr(tagged_root)));
   assert(gc_obj_is_marked(js_obj_ptr(raw_child)));

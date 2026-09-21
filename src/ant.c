@@ -2835,21 +2835,24 @@ ant_value_t js_mkstr_permanent(ant_t *js, const void *ptr, size_t len) {
   
   if (js->pool.permanent.block_size == 0)
     js->pool.permanent.block_size = ANT_POOL_STRING_BLOCK_SIZE;
+  
   ant_flat_string_t *flat = (ant_flat_string_t *)pool_alloc_chain(
-    &js->pool.permanent.head, NULL, js->pool.permanent.block_size, size, align
+    &js->pool.permanent.head, NULL, 
+    js->pool.permanent.block_size, size, align
   );
+  
   if (!flat) return js_mkerr(js, "oom");
 
   flat->len = (ant_offset_t)len;
   if (ptr && len > 0) memcpy(flat->bytes, ptr, len);
   
   flat->bytes[len] = '\0';
-  str_flat_init_meta(
-    flat, (ptr || len == 0)
-      ? str_detect_ascii_bytes(flat->bytes, len)
-      : STR_ASCII_UNKNOWN
+  str_flat_init_meta(flat, (ptr || len == 0)
+    ? str_detect_ascii_bytes(flat->bytes, len)
+    : STR_ASCII_UNKNOWN
   );
-
+  
+  flat->meta |= STR_META_PERMANENT;
   return mkref(kTypeString, flat);
 }
 
@@ -4918,7 +4921,7 @@ static ant_offset_t flat_utf16_len(ant_flat_string_t *flat) {
   uint8_t ascii_state = str_flat_ascii_state(flat);
   if (ascii_state == STR_ASCII_UNKNOWN) {
     ascii_state = str_detect_ascii_bytes(flat->bytes, (size_t)flat->len);
-    str_flat_init_meta(flat, ascii_state);
+    str_flat_set_ascii_state(flat, ascii_state);
   }
   
   if (ascii_state == STR_ASCII_YES) return flat->len;

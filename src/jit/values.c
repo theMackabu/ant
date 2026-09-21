@@ -524,15 +524,15 @@ void mir_emit_get_length(
                                MIR_new_mem_op(ctx, MIR_T_U64,
                                               (MIR_disp_t)offsetof(ant_flat_string_t, meta), ptr, 0, 1)));
   MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_URSH,
+                  MIR_new_insn(ctx, MIR_AND,
                                MIR_new_reg_op(ctx, tag),
                                MIR_new_reg_op(ctx, len),
-                               MIR_new_uint_op(ctx, STR_META_ASCII_SHIFT)));
+                               MIR_new_uint_op(ctx, STR_META_ASCII_MASK)));
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_BEQ,
                                MIR_new_label_op(ctx, ascii),
                                MIR_new_reg_op(ctx, tag),
-                               MIR_new_uint_op(ctx, STR_ASCII_YES)));
+                               MIR_new_uint_op(ctx, (uint64_t)STR_ASCII_YES << STR_META_ASCII_SHIFT)));
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_AND,
                                MIR_new_reg_op(ctx, len),

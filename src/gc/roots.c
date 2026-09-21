@@ -41,18 +41,18 @@ bool gc_pin_permanent(ant_t *js, ant_value_t value) {
   ant_object_t *obj = (ant_object_t *)vptr(value);
   if (!obj) return false;
   if (obj->flags.gc_permanent) return true;
-  obj->flags.gc_permanent = 1;
 
   if (js->permanent_root_len >= js->permanent_root_cap) {
     size_t new_cap = js->permanent_root_cap ? js->permanent_root_cap * 2 : 64;
-    ant_value_t *next = realloc(js->permanent_roots, new_cap * sizeof(*next));
+    ant_object_t **next = realloc(js->permanent_roots, new_cap * sizeof(*next));
     if (!next) return false;
     
     js->permanent_roots = next;
     js->permanent_root_cap = new_cap;
   }
 
-  js->permanent_roots[js->permanent_root_len++] = value;
+  obj->flags.gc_permanent = 1;
+  js->permanent_roots[js->permanent_root_len++] = obj;
   
   return true;
 }

@@ -511,7 +511,7 @@ static inline uint8_t sv_builder_chunk_ascii_state(ant_flat_string_t *flat) {
   uint8_t state = str_flat_ascii_state(flat);
   if (state == STR_ASCII_UNKNOWN) {
     state = str_detect_ascii_bytes(flat->bytes, (size_t)flat->len);
-    str_flat_init_meta(flat, state);
+    str_flat_set_ascii_state(flat, state);
   }
   return state;
 }
