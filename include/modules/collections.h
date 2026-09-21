@@ -3,7 +3,7 @@
 
 #include <uthash.h>
 #include "types.h"
-#include "modules/symbol.h"
+#include "modules/iterator.h"
 
 typedef struct map_entry {
   unsigned char *key;

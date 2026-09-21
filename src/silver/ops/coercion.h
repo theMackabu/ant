@@ -8,7 +8,6 @@
 
 #include "esm/loader.h"
 #include "silver/call.h"
-#include "modules/symbol.h"
 
 static inline ant_value_t sv_module_export_to_ns(
   ant_t *js, ant_value_t module_ns,
@@ -313,7 +312,7 @@ static inline bool sv_with_binding_is_unscopable(
 ) {
   *abrupt = false;
 
-  ant_value_t unscopables_sym = get_unscopables_sym();
+  ant_value_t unscopables_sym = js->sym.unscopables_sym;
   if (vtype(unscopables_sym) != kTypeSymbol) return false;
 
   bool is_proxy_obj = is_proxy(js_as_obj(with_obj));

@@ -82,6 +82,7 @@ core_sources = files(
   '../../src/modules/collections.c',
   '../../src/modules/generator.c',
   '../../src/modules/json.c',
+  '../../src/modules/iterator.c',
   '../../src/modules/math.c',
   '../../src/modules/regex.c',
   '../../src/modules/symbol.c',

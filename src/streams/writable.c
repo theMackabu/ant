@@ -9,7 +9,6 @@
 
 #include "gc/roots.h"
 #include "silver/call.h"
-#include "modules/symbol.h"
 #include "modules/assert.h"
 #include "modules/abort.h"
 #include "streams/writable.h"
@@ -1156,7 +1155,7 @@ void init_writable_stream_module(ant_t *js) {
   js_set_getter_desc(js, js->builtins.ws_controller_proto, "signal", 6, js_mkfun(js_ws_controller_get_signal), JS_DESC_C);
   js_set(js, js->builtins.ws_controller_proto, "error", js_mkfun(js_ws_controller_error));
   js_set_descriptor(js, js->builtins.ws_controller_proto, "error", 5, JS_DESC_W | JS_DESC_C);
-  js_set_sym(js, js->builtins.ws_controller_proto, get_toStringTag_sym(), js_mkstr(js, "WritableStreamDefaultController", 31));
+  js_set_sym(js, js->builtins.ws_controller_proto, js->sym.toStringTag_sym, js_mkstr(js, "WritableStreamDefaultController", 31));
 
   ant_value_t ctrl_ctor = js_make_ctor(js, js_ws_controller_ctor, js->builtins.ws_controller_proto, "WritableStreamDefaultController", 31);
   js_set(js, g, "WritableStreamDefaultController", ctrl_ctor);
@@ -1174,7 +1173,7 @@ void init_writable_stream_module(ant_t *js) {
   js_set_descriptor(js, js->builtins.ws_writer_proto, "releaseLock", 11, JS_DESC_W | JS_DESC_C);
   js_set(js, js->builtins.ws_writer_proto, "write", js_mkfun(js_ws_writer_write));
   js_set_descriptor(js, js->builtins.ws_writer_proto, "write", 5, JS_DESC_W | JS_DESC_C);
-  js_set_sym(js, js->builtins.ws_writer_proto, get_toStringTag_sym(), js_mkstr(js, "WritableStreamDefaultWriter", 27));
+  js_set_sym(js, js->builtins.ws_writer_proto, js->sym.toStringTag_sym, js_mkstr(js, "WritableStreamDefaultWriter", 27));
 
   ant_value_t writer_ctor = js_make_ctor(js, js_ws_writer_ctor, js->builtins.ws_writer_proto, "WritableStreamDefaultWriter", 27);
   js_set(js, g, "WritableStreamDefaultWriter", writer_ctor);
@@ -1188,7 +1187,7 @@ void init_writable_stream_module(ant_t *js) {
   js_set_descriptor(js, js->builtins.ws_proto, "close", 5, JS_DESC_W | JS_DESC_C);
   js_set(js, js->builtins.ws_proto, "getWriter", js_mkfun(js_ws_get_writer));
   js_set_descriptor(js, js->builtins.ws_proto, "getWriter", 9, JS_DESC_W | JS_DESC_C);
-  js_set_sym(js, js->builtins.ws_proto, get_toStringTag_sym(), js_mkstr(js, "WritableStream", 14));
+  js_set_sym(js, js->builtins.ws_proto, js->sym.toStringTag_sym, js_mkstr(js, "WritableStream", 14));
 
   ant_value_t ws_ctor = js_make_ctor(js, js_ws_ctor, js->builtins.ws_proto, "WritableStream", 14);
   js_set(js, g, "WritableStream", ws_ctor);

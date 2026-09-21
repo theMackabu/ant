@@ -7,7 +7,6 @@
 #include "shapes.h"
 #include "silver/engine.h"
 #include "modules/bigint.h"
-#include "modules/symbol.h"
 
 static inline void sv_op_seq(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];
@@ -296,7 +295,7 @@ static inline bool sv_instanceof_rhs_ordinary_proto(
 ) {
   if (vtype(r) != kTypeFunction) return false;
 
-  ant_offset_t has_instance_sym_off = (ant_offset_t)vdata(get_hasInstance_sym());
+  ant_offset_t has_instance_sym_off = (ant_offset_t)vdata(js->sym.hasInstance_sym);
   ant_value_t func_obj = js_func_obj(r);
   ant_object_t *func_ptr = js_obj_ptr(func_obj);
   if (!func_ptr || !func_ptr->shape) return false;

@@ -354,6 +354,8 @@ static void example_async_event_loop(void) {
   if (!js) return;
 
   init_symbol_module(js);
+  init_intrinsic_symbols(js);
+  init_iterator_module(js);
   init_builtin_module(js);
   init_timer_module(js);
 

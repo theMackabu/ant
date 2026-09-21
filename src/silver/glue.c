@@ -631,7 +631,7 @@ ant_value_t jit_helper_for_of(
     return tov(0);
   }
 
-  ant_value_t iter_fn = js_get_sym(js, iterable, get_iterator_sym());
+  ant_value_t iter_fn = js_get_sym(js, iterable, js->sym.iterator_sym);
   GC_ROOT_PIN(js, iter_fn);
   if (!is_callable(iter_fn)) {
     GC_ROOT_RESTORE(js, root_mark);

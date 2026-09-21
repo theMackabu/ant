@@ -6,7 +6,6 @@
 #include "internal.h"
 
 #include "gc/roots.h"
-#include "modules/symbol.h"
 #include "silver/engine.h"
 
 #include <math.h>
@@ -97,7 +96,7 @@ static bool inspector_append_function_description(ant_t *js, ant_value_t value, 
 static const char *inspector_object_tag(ant_t *js, ant_value_t value, size_t *len) {
   if (len) *len = 0;
   if (!js || !inspector_is_remote_handle_value(value)) return NULL;
-  ant_value_t tag = js_get_sym(js, value, get_toStringTag_sym());
+  ant_value_t tag = js_get_sym(js, value, js->sym.toStringTag_sym);
   if (vtype(tag) != kTypeString) return NULL;
   return js_getstr(js, tag, len);
 }

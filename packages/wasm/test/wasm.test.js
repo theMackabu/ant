@@ -38,6 +38,17 @@ test('evaluates Silver and preserves instance state', async () => {
   }
 });
 
+test('initializes symbols and iterator protocols with native semantics', async () => {
+  const ant = await Ant.create();
+  try {
+    const source = await readFile(new URL('../../../tests/test_symbol_iterator_init.cjs', import.meta.url), 'utf8');
+    await ant.eval(`{ const console = { log() {} }; ${source} }`);
+    assert.equal(await ant.eval('Object.prototype.toString.call(Ant)'), '[object Ant]');
+  } finally {
+    ant.dispose();
+  }
+});
+
 test('isolates globals and memory between instances', async () => {
   const [left, right] = await Promise.all([Ant.create({ memoryLimit: 32 * 1024 * 1024 }), Ant.create({ memoryLimit: 64 * 1024 * 1024 })]);
   try {

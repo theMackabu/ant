@@ -11,7 +11,6 @@
 
 #include "modules/json.h"
 #include "modules/napi.h"
-#include "modules/symbol.h"
 #include "modules/uri.h"
 
 #include "silver/ast.h"
@@ -488,7 +487,7 @@ static ant_value_t esm_make_namespace_object(ant_t *js) {
   ant_value_t tag = js_mkstr(js, "Module", 6);
   GC_ROOT_PIN(js, tag);
   
-  ant_value_t tag_sym = get_toStringTag_sym();
+  ant_value_t tag_sym = js->sym.toStringTag_sym;
   mkprop_exact_attrs(js, ns, tag_sym, tag, 0);
 
   js_set_slot(ns, SLOT_BRAND, js_mknum(BRAND_MODULE_NAMESPACE));

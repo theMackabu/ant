@@ -164,6 +164,9 @@ struct ant_isolate_t {
     ant_value_t generator_proto;
     ant_value_t async_generator_proto;
     ant_value_t async_iterator_proto;
+
+    #define ANT_SYMBOL(name, _desc) ant_value_t name##_sym;
+    #include "symbol_list.h"
   } sym;
 
   struct {
@@ -177,6 +180,12 @@ struct ant_isolate_t {
     #define ANT_MUTABLE_ROOT_ARR(name, n) ant_value_t name[n];
     #include "isolate_values.h"
   } mutable_roots;
+
+  struct {
+    struct ant_iterator_entry *entries;
+    size_t len;
+    size_t cap;
+  } iterators;
 
   ant_offset_t max_size;
   js_error_site_t errsite;

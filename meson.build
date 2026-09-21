@@ -368,6 +368,15 @@ typedarray_from_cleanup_test = executable(
 )
 test('typedarray-from-cleanup', typedarray_from_cleanup_test)
 
+symbol_iterator_isolates_test = executable(
+  'test-symbol-iterator-isolates',
+  files('tests/test_symbol_iterator_isolates.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('symbol-iterator-isolates', symbol_iterator_isolates_test)
+
 error_handoffs_test = executable(
   'test-error-handoffs',
   files('tests/test_error_handoffs.c'),

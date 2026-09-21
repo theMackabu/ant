@@ -1,4 +1,5 @@
 // meson test -C build typedarray-from-cleanup
+#include "modules/iterator.h"
 #include "internal.h"
 #include "gc/roots.h"
 #include <assert.h>
@@ -95,6 +96,8 @@ int main(void) {
   ant_t *js = ant_create();
   assert(js);
   init_symbol_module(js);
+  init_intrinsic_symbols(js);
+  init_iterator_module(js);
   init_buffer_module(js);
   GC_ROOT_SAVE(mark, js);
   iterator = js_mkobj(js);
@@ -102,7 +105,7 @@ int main(void) {
   original_reason = js_mkobj(js);
   GC_ROOT_PIN(js, original_reason);
   close_reason = js_mknull();
-  js_set_sym(js, iterator, get_iterator_sym(), js_mkfun(IteratorSelf));
+  js_set_sym(js, iterator, js->sym.iterator_sym, js_mkfun(IteratorSelf));
   js_set(js, iterator, "next", js_mkfun(IteratorNext));
   js_setstackbase(js, NULL);
 

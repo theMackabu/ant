@@ -6,7 +6,6 @@
 #include "utf8.h"
 #include "property.h"
 #include "silver/call.h"
-#include "modules/symbol.h"
 #include "modules/collections.h"
 
 enum: uint8_t {
@@ -94,7 +93,7 @@ static inline ant_value_t sv_op_for_of(sv_vm_t *vm, ant_t *js) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, iterable);
 
-  ant_value_t iter_fn = js_get_sym(js, iterable, get_iterator_sym());
+  ant_value_t iter_fn = js_get_sym(js, iterable, js->sym.iterator_sym);
   GC_ROOT_PIN(js, iter_fn);
   if (!is_callable(iter_fn)) {
     GC_ROOT_RESTORE(js, root_mark);
@@ -140,8 +139,8 @@ static inline ant_value_t sv_op_for_of(sv_vm_t *vm, ant_t *js) {
 }
 
 static inline bool sv_array_iter_pristine(ant_t *js, ant_value_t arr) {
-  if (is_callable(js_get_sym(js, arr, get_asyncIterator_sym()))) return false;
-  return js_get_sym(js, arr, get_iterator_sym()) == js->sym.array_values_fn;
+  if (is_callable(js_get_sym(js, arr, js->sym.asyncIterator_sym))) return false;
+  return js_get_sym(js, arr, js->sym.iterator_sym) == js->sym.array_values_fn;
 }
 
 static inline ant_value_t sv_op_for_await_of(sv_vm_t *vm, ant_t *js) {
@@ -157,11 +156,11 @@ static inline ant_value_t sv_op_for_await_of(sv_vm_t *vm, ant_t *js) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, iterable);
 
-  ant_value_t iter_fn = js_get_sym(js, iterable, get_asyncIterator_sym());
+  ant_value_t iter_fn = js_get_sym(js, iterable, js->sym.asyncIterator_sym);
   GC_ROOT_PIN(js, iter_fn);
 
   if (!is_callable(iter_fn)) {
-    iter_fn = js_get_sym(js, iterable, get_iterator_sym());
+    iter_fn = js_get_sym(js, iterable, js->sym.iterator_sym);
     GC_ROOT_PIN(js, iter_fn);
     if (!is_callable(iter_fn)) {
       GC_ROOT_RESTORE(js, root_mark);

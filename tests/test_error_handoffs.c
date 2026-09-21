@@ -9,6 +9,7 @@
 #include "modules/events.h"
 #include "modules/generator.h"
 #include "modules/symbol.h"
+#include "modules/iterator.h"
 #include "modules/timer.h"
 #include "sandbox/sandbox.h"
 #include "sandbox/transport.h"
@@ -160,6 +161,9 @@ static ant_value_t collect_finally_completion(ant_params_t) {
 }
 
 static void CheckFinallyCompletionRoots(ant_t *js) {
+  init_symbol_module(js);
+  init_intrinsic_symbols(js);
+  init_iterator_module(js);
   init_generator_module(js);
   js_set(js, js->global, "__collectFinally", js_mkfun(collect_finally_completion));
   uintptr_t stack_base = (uintptr_t)js->cstk.main_base;
@@ -417,7 +421,6 @@ static ant_value_t UnrelatedAbortListener(ant_params_t) {
 }
 
 static void CheckOnceAttachmentCleanup(ant_t *js) {
-  init_symbol_module(js);
   init_abort_module(js);
   GC_ROOT_SAVE(mark, js);
   ant_value_t events = events_library(js);

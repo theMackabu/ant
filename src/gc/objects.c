@@ -898,6 +898,12 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_value(js, js->sym.bigint_proto);
   gc_mark_value(js, js->sym.symbol_proto);
   gc_mark_value(js, js->sym.array_values_fn);
+  gc_mark_value(js, js->sym.iterator_proto);
+  gc_mark_value(js, js->sym.array_iterator_proto);
+  gc_mark_value(js, js->sym.string_iterator_proto);
+  gc_mark_value(js, js->sym.generator_proto);
+  gc_mark_value(js, js->sym.async_generator_proto);
+  gc_mark_value(js, js->sym.async_iterator_proto);
   
   gc_mark_value(js, js->this_val);
   gc_mark_value(js, js->current_func);
@@ -936,6 +942,7 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_events(js, gc_mark_value);
   gc_mark_lmdb(js, gc_mark_value);
   gc_mark_symbols(js, gc_mark_value);
+  gc_mark_iterators(js, gc_mark_value);
   gc_mark_esm(js, gc_mark_value);
   gc_mark_worker_threads(js, gc_mark_value);
   gc_mark_sandbox(js, gc_mark_value);
