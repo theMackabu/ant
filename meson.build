@@ -416,6 +416,24 @@ gc_exact_edges_test = executable(
 )
 test('gc-exact-edges', gc_exact_edges_test)
 
+gc_untrusted_string_words_test = executable(
+  'test-gc-untrusted-string-words',
+  files('tests/test_gc_untrusted_string_words.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('gc-untrusted-string-words', gc_untrusted_string_words_test)
+
+gc_pin_permanent_oom_test = executable(
+  'test-gc-pin-permanent-oom',
+  files('tests/test_gc_pin_permanent_oom.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('gc-pin-permanent-oom', gc_pin_permanent_oom_test)
+
 upvalue_close_order_test = executable(
   'test-upvalue-close-order',
   files('tests/test_upvalue_close_order.c'),

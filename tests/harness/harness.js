@@ -111,6 +111,7 @@ async function driveLoad(url, total, concurrency) {
 const SNAPSHOT_DIR = 'tests/harness/snapshots';
 
 const DEFAULT_SCRUB = [
+  [/(?:\.\.?\/)*\.ant\/pkg\/cache\/[0-9a-f]+\//g, '<ant-cache>/'],
   [/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<uuid>'],
   [/(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{21}(?=$|[^A-Za-z0-9_-])/gm, '$1<nanoid>'],
   [/t=\d{10,}/g, 't=<timestamp>']

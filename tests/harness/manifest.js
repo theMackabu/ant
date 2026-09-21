@@ -129,7 +129,13 @@ export function targets() {
     'test_jit_open_upvalue_gc.cjs',
     'test_upvalue_close_order.cjs',
     'test_generator_abandon_memory.cjs',
-    'test_generator_open_upvalue_gc.cjs'
+    'test_generator_open_upvalue_gc.cjs',
+    'test_gc_template_const_cache.cjs',
+    'test_jit_literal_template_minor_gc.cjs',
+    'test_regexp_lone_surrogates.cjs',
+    'test_json_lone_surrogates.cjs',
+    'test_timer_fired_timeout_gc.cjs',
+    'tagged_templates.cjs'
   ];
   for (const f of REGRESSION_TESTS) list.push({ group: 'tests', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
 
