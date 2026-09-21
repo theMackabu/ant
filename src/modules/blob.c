@@ -133,7 +133,7 @@ static ant_value_t process_blob_parts(ant_t *js, byte_buf_t *buf, ant_value_t pa
     return js_mkerr_typed(js, JS_ERR_TYPE,
       "Failed to construct 'Blob': The provided value cannot be converted to a sequence.");
 
-  js_iter_t it;
+  iterator_t it;
   if (!js_iter_open(js, parts, &it))
     return Ant_Exception_Pending(js)
       ? Ant_Exception_Current(js)

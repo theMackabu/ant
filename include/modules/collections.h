@@ -84,8 +84,8 @@ set_entry_t **get_set_from_obj(ant_value_t obj);
 map_iterator_state_t *get_map_iter_state(ant_value_t obj);
 set_iterator_state_t *get_set_iter_state(ant_value_t obj);
 
-bool advance_map(ant_t *js, js_iter_t *it, ant_value_t *out);
-bool advance_set(ant_t *js, js_iter_t *it, ant_value_t *out);
+bool advance_map(ant_t *js, iterator_t *it, ant_value_t *out);
+bool advance_set(ant_t *js, iterator_t *it, ant_value_t *out);
 bool collections_is_map_get_builtin(ant_value_t func);
 bool collections_is_map_has_builtin(ant_value_t func);
 bool weakmap_table_delete(weakmap_table_t *table, ant_value_t key);
