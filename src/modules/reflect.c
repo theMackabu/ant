@@ -7,7 +7,6 @@
 #include "silver/call.h"
 
 #include "modules/reflect.h"
-#include "modules/symbol.h"
 
 static ant_value_t reflect_get(ant_params_t) {
   if (nargs < 2) return js_mkundef();
@@ -359,6 +358,6 @@ void init_reflect_module(ant_t *js) {
   js_set(js, reflect_obj, "isExtensible", js_mkfun(reflect_is_extensible));
   js_set(js, reflect_obj, "preventExtensions", js_mkfun(reflect_prevent_extensions));
   
-  js_set_sym(js, reflect_obj, get_toStringTag_sym(), js_mkstr(js, "Reflect", 7));
+  js_set_sym(js, reflect_obj, js->sym.toStringTag_sym, js_mkstr(js, "Reflect", 7));
   js_set_global_builtin(js, "Reflect", reflect_obj);
 }

@@ -28,7 +28,6 @@
 #include "modules/events.h"
 #include "modules/net.h"
 #include "modules/stream.h"
-#include "modules/symbol.h"
 #include "modules/timer.h"
 
 typedef struct net_server_s net_server_t;
@@ -1224,7 +1223,7 @@ static void net_init_constructors(ant_t *js) {
   js_set(js, js->builtins.net_socket_proto, "connect", js_mkfun(js_net_socket_connect));
   js_set(js, js->builtins.net_socket_proto, "ref", js_mkfun(js_net_socket_ref));
   js_set(js, js->builtins.net_socket_proto, "unref", js_mkfun(js_net_socket_unref));
-  js_set_sym(js, js->builtins.net_socket_proto, get_toStringTag_sym(), js_mkstr(js, "Socket", 6));
+  js_set_sym(js, js->builtins.net_socket_proto, js->sym.toStringTag_sym, js_mkstr(js, "Socket", 6));
   js->builtins.net_socket_ctor = js_make_ctor(js, js_net_socket_ctor, js->builtins.net_socket_proto, "Socket", 6);
 
   js->builtins.net_server_proto = js_mkobj(js);
@@ -1235,7 +1234,7 @@ static void net_init_constructors(ant_t *js) {
   js_set(js, js->builtins.net_server_proto, "getConnections", js_mkfun(js_net_server_getConnections));
   js_set(js, js->builtins.net_server_proto, "ref", js_mkfun(js_net_server_ref));
   js_set(js, js->builtins.net_server_proto, "unref", js_mkfun(js_net_server_unref));
-  js_set_sym(js, js->builtins.net_server_proto, get_toStringTag_sym(), js_mkstr(js, "Server", 6));
+  js_set_sym(js, js->builtins.net_server_proto, js->sym.toStringTag_sym, js_mkstr(js, "Server", 6));
   js->builtins.net_server_ctor = js_make_ctor(js, js_net_server_ctor, js->builtins.net_server_proto, "Server", 6);
 }
 
@@ -1256,7 +1255,7 @@ ant_value_t net_library(ant_t *js) {
   js_set(js, lib, "getDefaultAutoSelectFamilyAttemptTimeout", js_mkfun(js_net_getDefaultAutoSelectFamilyAttemptTimeout));
   js_set(js, lib, "setDefaultAutoSelectFamilyAttemptTimeout", js_mkfun(js_net_setDefaultAutoSelectFamilyAttemptTimeout));
   js_set(js, lib, "default", lib);
-  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "net", 3));
+  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "net", 3));
   
   return lib;
 }

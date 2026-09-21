@@ -8,7 +8,6 @@
 #include "descriptors.h"
 #include "gc/roots.h"
 
-#include "modules/symbol.h"
 #include "modules/observable.h"
 
 static void observable_report_error(ant_t *js, ant_value_t result, const char *where) {
@@ -44,7 +43,7 @@ static ant_value_t create_subscription(ant_t *js, ant_value_t observer) {
   ant_value_t subscription = js_mkobj(js);
   js_set_slot(subscription, SLOT_SUBSCRIPTION_OBSERVER, observer);
   js_set_slot(subscription, SLOT_SUBSCRIPTION_CLEANUP, js_mkundef());
-  js_set_sym(js, subscription, get_toStringTag_sym(), js_mkstr(js, "Subscription", 12));
+  js_set_sym(js, subscription, js->sym.toStringTag_sym, js_mkstr(js, "Subscription", 12));
   return subscription;
 }
 
@@ -197,7 +196,7 @@ static ant_value_t create_subscription_observer(ant_t *js, ant_value_t subscript
   js_set(js, subobs, "next", js_mkfun(js_subobs_next));
   js_set(js, subobs, "error", js_mkfun(js_subobs_error));
   js_set(js, subobs, "complete", js_mkfun(js_subobs_complete));
-  js_set_sym(js, subobs, get_toStringTag_sym(), js_mkstr(js, "SubscriptionObserver", 20));
+  js_set_sym(js, subobs, js->sym.toStringTag_sym, js_mkstr(js, "SubscriptionObserver", 20));
   
   ant_value_t closed_getter = js_mkfun(js_subobs_get_closed);
   js_set_getter_desc(js, subobs, "closed", 6, closed_getter, JS_DESC_E | JS_DESC_C);
@@ -443,7 +442,7 @@ static ant_value_t js_observable_from(ant_params_t) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert null or undefined to observable");
   }
   
-  ant_value_t observableMethod = js_get_sym(js, x, get_observable_sym());
+  ant_value_t observableMethod = js_get_sym(js, x, js->sym.observable_sym);
   
   if (is_callable(observableMethod)) {
     ant_value_t observable = sv_vm_call(js->vm, js, observableMethod, x, NULL, 0, NULL, js_mkundef());
@@ -462,7 +461,7 @@ static ant_value_t js_observable_from(ant_params_t) {
     return js_observable_constructor(js, ctor_args, 1, js_mkundef());
   }
   
-  ant_value_t iteratorMethod = js_get_sym(js, x, get_iterator_sym());
+  ant_value_t iteratorMethod = js_get_sym(js, x, js->sym.iterator_sym);
   if (!is_callable(iteratorMethod)) return js_mkerr_typed(js, JS_ERR_TYPE, "Object is not observable or iterable");
   
   ant_value_t data = js_mkobj(js);
@@ -480,8 +479,8 @@ void init_observable_module(ant_t *js) {
   ant_value_t observable_proto = js_mkobj(js);
   
   js_set(js, observable_proto, "subscribe", js_mkfun(js_observable_subscribe));
-  js_set_sym(js, observable_proto, get_observable_sym(), js_mkfun(js_observable_symbol_observable));
-  js_set_sym(js, observable_proto, get_toStringTag_sym(), js_mkstr(js, "Observable", 10));
+  js_set_sym(js, observable_proto, js->sym.observable_sym, js_mkfun(js_observable_symbol_observable));
+  js_set_sym(js, observable_proto, js->sym.toStringTag_sym, js_mkstr(js, "Observable", 10));
   
   js_set_slot(observable_ctor, SLOT_CFUNC, js_mkfun(js_observable_constructor));
   js_mkprop_fast(js, observable_ctor, "prototype", 9, observable_proto);

@@ -19,7 +19,6 @@
 #include "modules/buffer.h"
 #include "modules/date.h"
 #include "modules/json.h"
-#include "modules/symbol.h"
 #include "modules/util.h"
 #include "modules/abort.h"
 
@@ -616,7 +615,7 @@ static bool util_has_to_string_tag(ant_t *js, ant_value_t value, const char *tag
 
   if (!is_object_type(value)) return false;
 
-  to_string_tag = js_get_sym(js, value, get_toStringTag_sym());
+  to_string_tag = js_get_sym(js, value, js->sym.toStringTag_sym);
   if (vtype(to_string_tag) != kTypeString) return false;
 
   actual = js_getstr(js, to_string_tag, &actual_len);
@@ -1433,7 +1432,7 @@ ant_value_t util_library(ant_t *js) {
   
   js_set(js, lib, "TextDecoder", js_get(js, js->global, "TextDecoder"));
   js_set(js, lib, "TextEncoder", js_get(js, js->global, "TextEncoder"));
-  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "util", 4));
+  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "util", 4));
   
   return lib;
 }

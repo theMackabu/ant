@@ -4,7 +4,6 @@
 #include "errors.h"
 #include "internal.h"
 
-#include "modules/symbol.h"
 #include "modules/crypto.h"
 
 #if DBL_MANT_DIG >= 64
@@ -328,6 +327,6 @@ void init_math_module(ant_t *js) {
   defmethod(js, math_obj, "tanh", 4, js_mkfun_arity(builtin_Math_tanh, 1));
   defmethod(js, math_obj, "trunc", 5, js_mkfun_arity(builtin_Math_trunc, 1));
   
-  js_set_sym(js, math_obj, get_toStringTag_sym(), js_mkstr(js, "Math", 4));
+  js_set_sym(js, math_obj, js->sym.toStringTag_sym, js_mkstr(js, "Math", 4));
   js_set_global_builtin(js, "Math", math_obj);
 }

@@ -13,7 +13,6 @@
 
 #include "silver/call.h"
 #include "modules/json.h"
-#include "modules/symbol.h"
 
 static inline bool json_value_needs_temp_root(ant_value_t value) {
   if (!is_tagged(value)) return false;
@@ -1428,6 +1427,6 @@ void init_json_module(ant_t *js) {
   js_set(js, json_obj, "parse", js_mkfun(js_json_parse));
   js_set(js, json_obj, "stringify", js_mkfun(js_json_stringify));
   
-  js_set_sym(js, json_obj, get_toStringTag_sym(), js_mkstr(js, "JSON", 4));
+  js_set_sym(js, json_obj, js->sym.toStringTag_sym, js_mkstr(js, "JSON", 4));
   js_set_global_builtin(js, "JSON", json_obj);
 }

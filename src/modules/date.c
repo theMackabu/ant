@@ -20,7 +20,6 @@
 #include "descriptors.h"
 #include "silver/call.h"
 #include "modules/date.h"
-#include "modules/symbol.h"
 
 static const int month_days[] = {
   31, 28, 31, 30, 31, 30,
@@ -1179,7 +1178,7 @@ static ant_value_t builtin_Date_setYear(ant_params_t) {
 }
 
 static ant_value_t date_to_primitive_number(ant_t *js, ant_value_t obj) {
-  ant_value_t to_primitive_sym = get_toPrimitive_sym();
+  ant_value_t to_primitive_sym = js->sym.toPrimitive_sym;
   if (vtype(to_primitive_sym) == kTypeSymbol) {
     ant_value_t ex = js_get_sym(js, obj, to_primitive_sym);
     uint8_t et = vtype(ex);
@@ -1340,7 +1339,7 @@ void init_date_module(ant_t *js) {
   };
   date_define_methods(js, date_proto, kDateProtoMethods, DATE_COUNT_OF(kDateProtoMethods));
 
-  ant_value_t to_primitive_sym = get_toPrimitive_sym();
+  ant_value_t to_primitive_sym = js->sym.toPrimitive_sym;
   if (vtype(to_primitive_sym) == kTypeSymbol) {
     js_set_sym(js, date_proto, to_primitive_sym, js_mkfun(date_toPrimitive));
   }

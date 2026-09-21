@@ -12,7 +12,6 @@
 #include "esm/commonjs.h"
 #include "esm/library.h"
 #include "gc/roots.h"
-#include "modules/symbol.h"
 
 typedef struct { ant_t *js; ant_value_t arr; } builtin_iter_ctx_t;
 
@@ -185,7 +184,7 @@ ant_value_t module_library(ant_t *js) {
   
   js_set(js, lib, "builtinModules", modules_arr);
   js_set(js, lib, "_resolveFilename", js_mkfun(builtin_resolveFilename));
-  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "Module", 6));
+  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "Module", 6));
 
   return lib;
 }

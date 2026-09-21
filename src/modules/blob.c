@@ -14,7 +14,7 @@
 
 #include "modules/blob.h"
 #include "modules/buffer.h"
-#include "modules/symbol.h"
+#include "modules/iterator.h"
 #include "streams/readable.h"
 
 enum { BLOB_NATIVE_TAG = 0x424c4f42u }; // BLOB
@@ -436,7 +436,7 @@ void init_blob_module(ant_t *js) {
   js_set(js, js->builtins.blob_proto, "slice",       js_mkfun(js_blob_slice));
   js_set(js, js->builtins.blob_proto, "stream",      js_mkfun(js_blob_stream));
 
-  js_set_sym(js, js->builtins.blob_proto, get_toStringTag_sym(), js_mkstr(js, "Blob", 4));
+  js_set_sym(js, js->builtins.blob_proto, js->sym.toStringTag_sym, js_mkstr(js, "Blob", 4));
   ant_value_t blob_ctor = js_make_ctor(js, js_blob_ctor, js->builtins.blob_proto, "Blob", 4);
   
   js_set(js, g, "Blob", blob_ctor);
@@ -448,7 +448,7 @@ void init_blob_module(ant_t *js) {
   js_set_getter_desc(js, js->builtins.file_proto, "name",         4,  js_mkfun(file_get_name),          JS_DESC_C);
   js_set_getter_desc(js, js->builtins.file_proto, "lastModified", 12, js_mkfun(file_get_last_modified),  JS_DESC_C);
 
-  js_set_sym(js, js->builtins.file_proto, get_toStringTag_sym(), js_mkstr(js, "File", 4));
+  js_set_sym(js, js->builtins.file_proto, js->sym.toStringTag_sym, js_mkstr(js, "File", 4));
   ant_value_t file_ctor = js_make_ctor(js, js_file_ctor, js->builtins.file_proto, "File", 4);
   
   js_set(js, g, "File", file_ctor);

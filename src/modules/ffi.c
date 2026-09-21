@@ -26,7 +26,6 @@
 
 #include "modules/buffer.h"
 #include "modules/ffi.h"
-#include "modules/symbol.h"
 
 enum {
   FFI_LIBRARY_NATIVE_TAG  = 0x4646494cu, // FFIL
@@ -927,10 +926,10 @@ static void ffi_init_prototypes(ant_t *js) {
 
   if (is_object_type(function_proto)) js_set_proto_init(js->builtins.ffi_function_proto, function_proto);
 
-  js_set_sym(js, js->builtins.ffi_library_proto, get_toStringTag_sym(), ANT_STRING("FFILibrary"));
-  js_set_sym(js, js->builtins.ffi_function_proto, get_toStringTag_sym(), ANT_STRING("FFIFunction"));
-  js_set_sym(js, js->builtins.ffi_pointer_proto, get_toStringTag_sym(), ANT_STRING("FFIPointer"));
-  js_set_sym(js, js->builtins.ffi_callback_proto, get_toStringTag_sym(), ANT_STRING("FFICallback"));
+  js_set_sym(js, js->builtins.ffi_library_proto, js->sym.toStringTag_sym, ANT_STRING("FFILibrary"));
+  js_set_sym(js, js->builtins.ffi_function_proto, js->sym.toStringTag_sym, ANT_STRING("FFIFunction"));
+  js_set_sym(js, js->builtins.ffi_pointer_proto, js->sym.toStringTag_sym, ANT_STRING("FFIPointer"));
+  js_set_sym(js, js->builtins.ffi_callback_proto, js->sym.toStringTag_sym, ANT_STRING("FFICallback"));
 
   js_set(js, js->builtins.ffi_library_proto, "define", js_mkfun(ffi_library_define));
   js_set(js, js->builtins.ffi_library_proto, "call", js_mkfun(ffi_library_call));
@@ -1450,7 +1449,7 @@ ant_value_t ffi_library(ant_t *js) {
   js_set(js, ffi_types, "spread", ANT_STRING("..."));
   
   js_set(js, ffi_obj, "FFIType", ffi_types);
-  js_set_sym(js, ffi_obj, get_toStringTag_sym(), ANT_STRING("FFI"));
+  js_set_sym(js, ffi_obj, js->sym.toStringTag_sym, ANT_STRING("FFI"));
   
   return ffi_obj;
 }

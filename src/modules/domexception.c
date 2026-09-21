@@ -6,7 +6,6 @@
 #include "internal.h"
 #include "descriptors.h"
 
-#include "modules/symbol.h"
 #include "modules/domexception.h"
 
 static bool g_initialized = false;
@@ -127,7 +126,7 @@ ant_value_t make_dom_exception(ant_t *js, const char *message, const char *name)
   js_set(js, obj, "name",    js_mkstr(js, name,    name_len));
   js_set(js, obj, "code",    js_mknum(code));
   
-  js_set_sym(js, obj, get_toStringTag_sym(), js_mkstr(js, "DOMException", 12));
+  js_set_sym(js, obj, js->sym.toStringTag_sym, js_mkstr(js, "DOMException", 12));
   js_set_slot(obj, SLOT_ERROR_BRAND, js_true);
 
   return obj;
@@ -147,7 +146,7 @@ void init_domexception_module(ant_t *js) {
   js_set(js, proto, "message", js_mkstr(js, "",      0));
   js_set(js, proto, "code",    js_mknum(0));
   
-  js_set_sym(js, proto, get_toStringTag_sym(), js_mkstr(js, "DOMException", 12));
+  js_set_sym(js, proto, js->sym.toStringTag_sym, js_mkstr(js, "DOMException", 12));
   set_constants(js, proto);
 
   ant_value_t ctor = js_mkobj(js);

@@ -9,7 +9,7 @@
 #endif
 
 #include "ant.h"
-#include "modules/symbol.h"
+#include "internal.h"
 #include "modules/performance.h"
 
 static double get_current_time_ms(void) {
@@ -34,7 +34,7 @@ static ant_value_t js_performance_now(ant_params_t) {
 ant_value_t perf_hooks_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
   js_set(js, lib, "performance", js_get(js, js_glob(js), "performance"));
-  js_set_sym(js, lib, get_toStringTag_sym(), ANT_STRING("perf_hooks"));
+  js_set_sym(js, lib, js->sym.toStringTag_sym, ANT_STRING("perf_hooks"));
   return lib;
 }
 
@@ -46,6 +46,6 @@ void init_performance_module(ant_t *js) {
   js_set(js, perf_obj, "now", js_mkfun(js_performance_now));
   js_set(js, perf_obj, "timeOrigin", js_mknum(js->perf_time_origin_ms));
   
-  js_set_sym(js, perf_obj, get_toStringTag_sym(), ANT_STRING("Performance"));
+  js_set_sym(js, perf_obj, js->sym.toStringTag_sym, ANT_STRING("Performance"));
   js_set(js, glob, "performance", perf_obj);
 }

@@ -22,7 +22,6 @@
 #include "modules/bigint.h"
 #include "modules/buffer.h"
 #include "modules/rpc.h"
-#include "modules/symbol.h"
 
 #include "wirecall/client.h"
 #include "wirecall/protocol.h"
@@ -1307,7 +1306,7 @@ static void rpc_init_constructors(ant_t *js) {
   js_set(js, js->builtins.rpc_server_proto, "listen", js_mkfun(rpc_server_listen));
   js_set(js, js->builtins.rpc_server_proto, "close", js_mkfun(rpc_server_close));
   js_set_getter_desc(js, js->builtins.rpc_server_proto, "port", 4, js_mkfun(rpc_server_port_getter), JS_DESC_C);
-  js_set_sym(js, js->builtins.rpc_server_proto, get_toStringTag_sym(), js_mkstr(js, "RpcServer", 9));
+  js_set_sym(js, js->builtins.rpc_server_proto, js->sym.toStringTag_sym, js_mkstr(js, "RpcServer", 9));
   js->builtins.rpc_server_ctor = js_make_ctor(js, rpc_server_ctor, js->builtins.rpc_server_proto, "RpcServer", 9);
 
   js->builtins.rpc_client_proto = js_mkobj(js);
@@ -1316,7 +1315,7 @@ static void rpc_init_constructors(ant_t *js) {
   js_set(js, js->builtins.rpc_client_proto, "call", js_mkfun(rpc_client_call));
   js_set(js, js->builtins.rpc_client_proto, "ping", js_mkfun(rpc_client_ping));
   js_set(js, js->builtins.rpc_client_proto, "close", js_mkfun(rpc_client_close));
-  js_set_sym(js, js->builtins.rpc_client_proto, get_toStringTag_sym(), js_mkstr(js, "RpcClient", 9));
+  js_set_sym(js, js->builtins.rpc_client_proto, js->sym.toStringTag_sym, js_mkstr(js, "RpcClient", 9));
   js->builtins.rpc_client_ctor = js_make_ctor(js, rpc_client_ctor, js->builtins.rpc_client_proto, "RpcClient", 9);
 }
 
@@ -1327,7 +1326,7 @@ ant_value_t rpc_library(ant_t *js) {
   js_set(js, lib, "RpcClient", js->builtins.rpc_client_ctor);
   js_set(js, lib, "default", lib);
   js_set_slot_wb(js, lib, SLOT_DEFAULT, lib);
-  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "rpc", 3));
+  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "rpc", 3));
   return lib;
 }
 

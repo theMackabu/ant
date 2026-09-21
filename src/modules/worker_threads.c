@@ -32,7 +32,6 @@ extern char **environ;
 #include "esm/loader.h"
 #include "silver/call.h"
 #include "modules/json.h"
-#include "modules/symbol.h"
 #include "modules/worker_threads.h"
 #include "gc/modules.h"
 
@@ -998,7 +997,7 @@ ant_value_t worker_threads_library(ant_t *js) {
   js_set(js, message_port_proto, "close", js_mkfun(worker_threads_message_port_close));
   js_set(js, message_port_proto, "ref", js_mkfun(worker_threads_message_port_ref));
   js_set(js, message_port_proto, "unref", js_mkfun(worker_threads_message_port_unref));
-  js_set_sym(js, message_port_proto, get_toStringTag_sym(), js_mkstr(js, "MessagePort", 11));
+  js_set_sym(js, message_port_proto, js->sym.toStringTag_sym, js_mkstr(js, "MessagePort", 11));
 
   js_set_slot(message_port_ctor_obj, SLOT_CFUNC, js_mkfun(worker_threads_message_port_ctor));
   js_mkprop_fast(js, message_port_ctor_obj, "prototype", 9, message_port_proto);
@@ -1009,7 +1008,7 @@ ant_value_t worker_threads_library(ant_t *js) {
 
   ant_value_t message_channel_ctor_obj = js_mkobj(js);
   ant_value_t message_channel_proto = js_mkobj(js);
-  js_set_sym(js, message_channel_proto, get_toStringTag_sym(), js_mkstr(js, "MessageChannel", 14));
+  js_set_sym(js, message_channel_proto, js->sym.toStringTag_sym, js_mkstr(js, "MessageChannel", 14));
   js_set_slot(message_channel_ctor_obj, SLOT_CFUNC, js_mkfun(worker_threads_message_channel_ctor));
   js_mkprop_fast(js, message_channel_ctor_obj, "prototype", 9, message_channel_proto);
   js_mkprop_fast(js, message_channel_ctor_obj, "name", 4, js_mkstr(js, "MessageChannel", 14));
@@ -1047,7 +1046,7 @@ ant_value_t worker_threads_library(ant_t *js) {
   js_set(js, worker_proto, "unref", js_mkfun(worker_threads_worker_unref));
   js_set(js, worker_proto, "ref", js_mkfun(worker_threads_worker_ref));
   js_set(js, worker_proto, "postMessage", js_mkfun(worker_threads_worker_post_message));
-  js_set_sym(js, worker_proto, get_toStringTag_sym(), js_mkstr(js, "Worker", 6));
+  js_set_sym(js, worker_proto, js->sym.toStringTag_sym, js_mkstr(js, "Worker", 6));
 
   js_set_slot(worker_ctor_obj, SLOT_CFUNC, js_mkfun(worker_threads_worker_ctor));
   js_mkprop_fast(js, worker_ctor_obj, "prototype", 9, worker_proto);
@@ -1061,6 +1060,6 @@ ant_value_t worker_threads_library(ant_t *js) {
   js_set(js, lib, "getEnvironmentData", js_mkfun(worker_threads_get_environment_data));
   js_set(js, lib, "moveMessagePortToContext", js_mkfun(worker_threads_move_message_port_to_context));
 
-  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "worker_threads", 14));
+  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "worker_threads", 14));
   return lib;
 }

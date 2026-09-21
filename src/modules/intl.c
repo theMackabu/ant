@@ -12,7 +12,6 @@
 #include "descriptors.h"
 
 #include "modules/intl.h"
-#include "modules/symbol.h"
 
 typedef struct {
   int hour12;
@@ -526,19 +525,19 @@ void init_intl_module(ant_t *js) {
   ant_value_t object_proto = js->sym.object_proto;
 
   if (is_object_type(object_proto)) js_set_proto_init(intl, object_proto);
-  js_set_sym(js, intl, get_toStringTag_sym(), js_mkstr(js, "Intl", 4));
+  js_set_sym(js, intl, js->sym.toStringTag_sym, js_mkstr(js, "Intl", 4));
 
   js->builtins.intl_collator_proto = js_mkobj(js);
   js_set(js, js->builtins.intl_collator_proto, "compare", js_mkfun(intl_collator_compare));
   js_set(js, js->builtins.intl_collator_proto, "resolvedOptions", js_mkfun(intl_collator_resolved_options));
-  js_set_sym(js, js->builtins.intl_collator_proto, get_toStringTag_sym(), js_mkstr(js, "Intl.Collator", 13));
+  js_set_sym(js, js->builtins.intl_collator_proto, js->sym.toStringTag_sym, js_mkstr(js, "Intl.Collator", 13));
   ant_value_t collator_ctor = js_make_ctor(js, intl_collator_constructor, js->builtins.intl_collator_proto, "Collator", 8);
   js_set(js, intl, "Collator", collator_ctor);
 
   js->builtins.intl_numberformat_proto = js_mkobj(js);
   js_set(js, js->builtins.intl_numberformat_proto, "format", js_mkfun(intl_numberformat_format));
   js_set(js, js->builtins.intl_numberformat_proto, "resolvedOptions", js_mkfun(intl_numberformat_resolved_options));
-  js_set_sym(js, js->builtins.intl_numberformat_proto, get_toStringTag_sym(), js_mkstr(js, "Intl.NumberFormat", 17));
+  js_set_sym(js, js->builtins.intl_numberformat_proto, js->sym.toStringTag_sym, js_mkstr(js, "Intl.NumberFormat", 17));
   ant_value_t numberformat_ctor = js_make_ctor(js, intl_numberformat_constructor, js->builtins.intl_numberformat_proto, "NumberFormat", 12);
   js_set(js, intl, "NumberFormat", numberformat_ctor);
 
@@ -546,14 +545,14 @@ void init_intl_module(ant_t *js) {
   js_set(js, js->builtins.intl_datetimeformat_proto, "format", js_mkfun(intl_dtf_format));
   js_set(js, js->builtins.intl_datetimeformat_proto, "resolvedOptions", js_mkfun(intl_dtf_resolved_options));
   js_set(js, js->builtins.intl_datetimeformat_proto, "formatToParts", js_mkfun(intl_dtf_format_to_parts));
-  js_set_sym(js, js->builtins.intl_datetimeformat_proto, get_toStringTag_sym(), js_mkstr(js, "Intl.DateTimeFormat", 19));
+  js_set_sym(js, js->builtins.intl_datetimeformat_proto, js->sym.toStringTag_sym, js_mkstr(js, "Intl.DateTimeFormat", 19));
   ant_value_t dtf_ctor = js_make_ctor(js, intl_dtf_constructor, js->builtins.intl_datetimeformat_proto, "DateTimeFormat", 14);
   js_set(js, intl, "DateTimeFormat", dtf_ctor);
 
   js->builtins.intl_segmenter_proto = js_mkobj(js);
   js_set(js, js->builtins.intl_segmenter_proto, "segment", js_mkfun(intl_segmenter_segment));
   js_set(js, js->builtins.intl_segmenter_proto, "resolvedOptions", js_mkfun(intl_segmenter_resolved_options));
-  js_set_sym(js, js->builtins.intl_segmenter_proto, get_toStringTag_sym(), js_mkstr(js, "Intl.Segmenter", 14));
+  js_set_sym(js, js->builtins.intl_segmenter_proto, js->sym.toStringTag_sym, js_mkstr(js, "Intl.Segmenter", 14));
   ant_value_t segmenter_ctor = js_make_ctor(js, intl_segmenter_constructor, js->builtins.intl_segmenter_proto, "Segmenter", 9);
   js_set(js, intl, "Segmenter", segmenter_ctor);
 

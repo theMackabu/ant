@@ -1044,7 +1044,7 @@ ant_value_t temporal_make_function(
 }
 
 void temporal_set_to_string_tag(ant_t *js, ant_value_t obj, const char *tag) {
-  ant_value_t symbol = get_toStringTag_sym();
+  ant_value_t symbol = js->sym.toStringTag_sym;
   js_set_sym(js, obj, symbol, js_mkstr(js, tag, strlen(tag)));
   js_set_sym_descriptor(js, obj, symbol, JS_DESC_C);
 }

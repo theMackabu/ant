@@ -13,7 +13,6 @@
 #include "descriptors.h"
 
 #include "modules/buffer.h"
-#include "modules/symbol.h"
 #include "modules/textcodec.h"
 #include "modules/string_decoder.h"
 
@@ -268,7 +267,7 @@ ant_value_t string_decoder_library(ant_t *js) {
   js_set_getter_desc(js, js->builtins.string_decoder_proto, "encoding", 8, js_mkfun(js_sd_get_encoding), JS_DESC_C);
   js_set(js, js->builtins.string_decoder_proto, "write", js_mkfun(js_sd_write));
   js_set(js, js->builtins.string_decoder_proto, "end",   js_mkfun(js_sd_end));
-  js_set_sym(js, js->builtins.string_decoder_proto, get_toStringTag_sym(), js_mkstr(js, "StringDecoder", 13));
+  js_set_sym(js, js->builtins.string_decoder_proto, js->sym.toStringTag_sym, js_mkstr(js, "StringDecoder", 13));
 
   ant_value_t ctor = js_make_ctor(js, js_sd_ctor, js->builtins.string_decoder_proto, "StringDecoder", 13);
   ant_value_t lib = js_mkobj(js);
