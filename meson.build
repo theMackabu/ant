@@ -434,6 +434,15 @@ gc_pin_permanent_oom_test = executable(
 )
 test('gc-pin-permanent-oom', gc_pin_permanent_oom_test)
 
+gc_rope_table_oom_test = executable(
+  'test-gc-rope-table-oom',
+  files('tests/test_gc_rope_table_oom.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('gc-rope-table-oom', gc_rope_table_oom_test)
+
 upvalue_close_order_test = executable(
   'test-upvalue-close-order',
   files('tests/test_upvalue_close_order.c'),
