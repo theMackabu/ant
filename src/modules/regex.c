@@ -1899,6 +1899,59 @@ static ant_value_t regexp_exec_plain_literal_fast(
   );
 }
 
+static bool regex_wtf8_validate(const unsigned char *s, size_t len) {
+  const unsigned char *end = s + len;
+
+  while (s < end) {
+    unsigned char c = *s;
+    if (c < 0x80) {
+      s++;
+      continue;
+    }
+
+    size_t cont;
+    unsigned char lo = 0x80;
+    unsigned char hi = 0xbf;
+    
+    if (c >= 0xc2 && c <= 0xdf) cont = 1;
+    else if (c == 0xe0) { cont = 2; lo = 0xa0; }
+    else if (c >= 0xe1 && c <= 0xef) cont = 2;
+    else if (c == 0xf0) { cont = 3; lo = 0x90; }
+    else if (c >= 0xf1 && c <= 0xf3) cont = 3;
+    else if (c == 0xf4) { cont = 3; hi = 0x8f; }
+    else return false;
+
+    if ((size_t)(end - s) <= cont) return false;
+    if (s[1] < lo || s[1] > hi) return false;
+    for (size_t i = 2; i <= cont; i++) if (s[i] < 0x80 || s[i] > 0xbf) return false;
+    s += cont + 1;
+  }
+
+  return true;
+}
+
+static bool regex_subject_can_skip_utf_check(const char *str, size_t len) {
+  if (str_is_valid_utf8(str)) return true;
+
+  static _Thread_local struct {
+    const char *str;
+    size_t len;
+    uint64_t epoch;
+    bool valid;
+  } cache;
+
+  uint64_t epoch = gc_strings_sweep_epoch();
+  if (cache.str == str && cache.len == len && cache.epoch == epoch) return cache.valid;
+
+  bool valid = regex_wtf8_validate((const unsigned char *)str, len);
+  cache.str = str;
+  cache.len = len;
+  cache.epoch = epoch;
+  cache.valid = valid;
+
+  return valid;
+}
+
 static __attribute__((always_inline)) inline int compiled_regex_run_in_scope(
   ant_t *js,
   compiled_regex_cache_entry_t *compiled,
@@ -1927,7 +1980,7 @@ static __attribute__((always_inline)) inline int compiled_regex_run_in_scope(
       match_options, scope->match_data, match_ctx
     );
   } else {
-    if (str_is_valid_utf8(str_ptr)) match_options |= PCRE2_NO_UTF_CHECK;
+    if (regex_subject_can_skip_utf_check(str_ptr, (size_t)str_len)) match_options |= PCRE2_NO_UTF_CHECK;
     rc = pcre2_match(
       compiled->code, (PCRE2_SPTR)str_ptr, str_len, start_offset,
       match_options, scope->match_data, match_ctx
@@ -2676,28 +2729,12 @@ reject:
   return false;
 }
 
-static bool regexp_prepare_batch_builtin_exec(
-  ant_t *js,
-  ant_value_t rx,
-  compiled_regex_cache_entry_t **compiled_out,
-  uint8_t *flags_out
-) {
-  return regexp_prepare_builtin_exec(
-    js, rx, REGEXP_FLAG_GLOBAL, compiled_out, flags_out, NULL, NULL
-  );
+static bool regexp_prepare_batch_builtin_exec(ant_t *js, ant_value_t rx, compiled_regex_cache_entry_t **compiled_out, uint8_t *flags_out) {
+  return regexp_prepare_builtin_exec(js, rx, REGEXP_FLAG_GLOBAL, compiled_out, flags_out, NULL, NULL);
 }
 
-static inline PCRE2_SIZE regexp_advance_empty_match(
-  const char *str_ptr,
-  ant_offset_t str_len,
-  PCRE2_SIZE offset,
-  bool full_unicode
-) {
-  if (full_unicode && offset < (PCRE2_SIZE)str_len) {
-    return offset + (PCRE2_SIZE)utf8_char_len_at(
-      str_ptr, str_len, (ant_offset_t)offset
-    );
-  }
+static inline PCRE2_SIZE regexp_advance_empty_match(const char *str_ptr, ant_offset_t str_len, PCRE2_SIZE offset) {
+  if (offset < (PCRE2_SIZE)str_len) return offset + (PCRE2_SIZE)utf8_char_len_at(str_ptr, str_len, (ant_offset_t)offset);
   return offset + 1;
 }
 
@@ -2705,7 +2742,6 @@ static ant_value_t regexp_match_batch_fast(
   ant_t *js,
   ant_value_t rx,
   ant_value_t str,
-  bool full_unicode,
   bool *used_fast_path
 ) {
   *used_fast_path = false;
@@ -2752,16 +2788,13 @@ static ant_value_t regexp_match_batch_fast(
       count++;
 
       offset = end;
-      if (start == end) {
-        offset = regexp_advance_empty_match(
-          str_ptr, str_len, offset, full_unicode
-        );
-      }
+      if (start == end) offset = regexp_advance_empty_match(str_ptr, str_len, offset);
     }
   }
+  
   regex_match_scope_end(&scope);
-
   stored = regexp_set_lastindex(js, compiled, rx, tov(0));
+  
   if (is_err(stored)) return stored;
   return count == 0 ? js_mknull() : matches;
 }
@@ -2783,11 +2816,8 @@ static ant_value_t builtin_regexp_symbol_match(ant_params_t) {
   ant_value_t unicode_val = js_getprop_fallback(js, rx, "unicode");
   if (is_err(unicode_val)) return unicode_val;
 
-  bool full_unicode = js_truthy(js, unicode_val);
   bool used_fast_path = false;
-  ant_value_t fast = regexp_match_batch_fast(
-    js, rx, str, full_unicode, &used_fast_path
-  );
+  ant_value_t fast = regexp_match_batch_fast(js, rx, str, &used_fast_path);
   if (is_err(fast) || used_fast_path) return fast;
 
   js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(0));
@@ -2814,7 +2844,7 @@ static ant_value_t builtin_regexp_symbol_match(ant_params_t) {
       double li = vtype(li_val) == kTypeNumber ? tod(li_val) : 0;
       ant_offset_t str_len, str_off = vstr(js, str, &str_len);
       double advance = 1;
-      if (full_unicode && li < (double)str_len) {
+      if (li < (double)str_len) {
         advance = (double)utf8_char_len_at((const char *)(uintptr_t)(str_off), str_len, (ant_offset_t)li);
       } js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + advance));
     }
@@ -2848,7 +2878,11 @@ static ant_value_t regexp_matchall_next(ant_params_t) {
     if (mlen == 0) {
       ant_value_t li_val = js_getprop_fallback(js, rx, "lastIndex");
       double li = vtype(li_val) == kTypeNumber ? tod(li_val) : 0;
-      js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + 1));
+      ant_offset_t sl, so = vstr(js, str, &sl);
+      double advance = 1;
+      if (li >= 0 && li < (double)sl)
+        advance = (double)utf8_char_len_at((const char *)(uintptr_t)so, sl, (ant_offset_t)li);
+      js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + advance));
     }
   } else js_set_slot(iter, SLOT_MATCHALL_DONE, js_true);
 
@@ -3118,7 +3152,6 @@ static ant_value_t regexp_replace_batch_fast(
   ant_value_t str,
   ant_value_t replacement,
   bool global,
-  bool full_unicode,
   bool literal_replacement,
   bool *used_fast_path
 ) {
@@ -3238,12 +3271,9 @@ static ant_value_t regexp_replace_batch_fast(
       match_count++;
       next_src_pos = end;
       if (!global) break;
+      
       offset = end;
-      if (start == end) {
-        offset = regexp_advance_empty_match(
-          str_ptr, str_len, offset, full_unicode
-        );
-      }
+      if (start == end) offset = regexp_advance_empty_match(str_ptr, str_len, offset);
     }
   }
   regex_match_scope_end(&scope);
@@ -3424,11 +3454,9 @@ static ant_value_t builtin_regexp_symbol_replace(ant_params_t) {
   if (is_err(global_val)) return global_val;
   bool global = js_truthy(js, global_val);
 
-  bool full_unicode = false;
   if (global) {
     ant_value_t unicode_val = js_getprop_fallback(js, rx, "unicode");
     if (is_err(unicode_val)) return unicode_val;
-    full_unicode = js_truthy(js, unicode_val);
     ant_value_t stored = regexp_set_lastindex(
       js, js_get_native(rx, REGEXP_NATIVE_TAG), rx, tov(0)
     );
@@ -3446,7 +3474,7 @@ static ant_value_t builtin_regexp_symbol_replace(ant_params_t) {
     bool used_fast_path = false;
     ant_value_t fast = regexp_replace_batch_fast(
       js, rx, str, replace_str, 
-      global, full_unicode, literal_replacement, &used_fast_path
+      global, literal_replacement, &used_fast_path
     );
     if (is_err(fast) || used_fast_path) return fast;
   }
@@ -3472,7 +3500,7 @@ static ant_value_t builtin_regexp_symbol_replace(ant_params_t) {
       double li = vtype(li_val) == kTypeNumber ? tod(li_val) : 0;
       ant_offset_t sl, so = vstr(js, str, &sl);
       double advance = 1;
-      if (full_unicode && li < (double)sl) {
+      if (li < (double)sl) {
         advance = (double)utf8_char_len_at((const char *)(uintptr_t)(so), sl, (ant_offset_t)li);
       }
       js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + advance));
@@ -3792,9 +3820,8 @@ static ant_value_t builtin_regexp_symbol_split(ant_params_t) {
 
   ant_offset_t flen, foff = vstr(js, flags_str, &flen);
   const char *fptr = (const char *)(uintptr_t)(foff);
-  bool unicode_matching = false, has_sticky = false;
+  bool has_sticky = false;
   for (ant_offset_t i = 0; i < flen; i++) {
-    if (fptr[i] == 'u' || fptr[i] == 'v') unicode_matching = true;
     if (fptr[i] == 'y') has_sticky = true;
   }
 
@@ -3849,10 +3876,8 @@ static ant_value_t builtin_regexp_symbol_split(ant_params_t) {
     if (is_err(z)) return z;
 
     if (vtype(z) == kTypeNull) {
-      if (unicode_matching) {
-        str_off = vstr(js, str, &str_len);
-        q += utf8_char_len_at((const char *)(uintptr_t)(str_off), str_len, q);
-      } else q++;
+      str_off = vstr(js, str, &str_len);
+      q += utf8_char_len_at((const char *)(uintptr_t)(str_off), str_len, q);
       continue;
     }
 
@@ -3862,10 +3887,8 @@ static ant_value_t builtin_regexp_symbol_split(ant_params_t) {
     ant_offset_t e = (ant_offset_t)(e_raw < 0 ? 0 : (e_raw > (double)size ? (double)size : e_raw));
 
     if (e == p) {
-      if (unicode_matching) {
-        str_off = vstr(js, str, &str_len);
-        q += utf8_char_len_at((const char *)(uintptr_t)(str_off), str_len, q);
-      } else q++;
+      str_off = vstr(js, str, &str_len);
+      q += utf8_char_len_at((const char *)(uintptr_t)(str_off), str_len, q);
       continue;
     }
 
@@ -3960,8 +3983,8 @@ ant_value_t do_regex_match_pcre2(ant_t *js, regex_match_args_t args) {
 
     if (!args.global) break;
     if (match_start == match_end) {
-      pos = match_end + 1;
-    } else { pos = match_end; }
+      pos = match_end + utf8_char_len_at(args.str_ptr, args.str_len, match_end);
+    } else pos = match_end;
   }
 
   regex_match_scope_end(&scope);
