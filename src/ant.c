@@ -2176,7 +2176,7 @@ ant_value_t js_tostring_val(ant_t *js, ant_value_t value) {
   L_NUM: {
     char num_buf[32];
     len = strnum(value, num_buf, sizeof(num_buf));
-    return js_mkstr(js, num_buf, len);
+    return js_mkstr_ascii(js, num_buf, len);
   }
     
   L_BIGINT: {
@@ -2803,18 +2803,19 @@ static inline void arr_del(ant_t *js, ant_value_t arr, ant_offset_t idx) {
 
 static inline ant_value_t mkstr_with_ascii(ant_t *js, const void *ptr, size_t len, bool known_ascii) {
   ant_flat_string_t *flat = (ant_flat_string_t *)js_type_alloc(
-    js, ANT_ALLOC_STRING, sizeof(*flat) + len + 1, _Alignof(ant_flat_string_t)
+    js, ANT_ALLOC_STRING, sizeof(*flat) + len + 1, 
+    _Alignof(ant_flat_string_t)
   );
-  if (!flat) return js_mkerr(js, "oom");
-
-  flat->len = (ant_offset_t)len;
-  if (ptr && len > 0) memcpy(flat->bytes, ptr, len);
   
+  if (!flat) return js_mkerr(js, "oom");
+  flat->len = (ant_offset_t)len;
+  
+  if (ptr && len > 0) memcpy(flat->bytes, ptr, len);
   flat->bytes[len] = '\0';
-  str_flat_init_meta(
-    flat, known_ascii ? STR_ASCII_YES : ((ptr || len == 0)
-      ? str_detect_ascii_bytes(flat->bytes, len)
-      : STR_ASCII_UNKNOWN)
+  
+  str_flat_init_meta(flat, known_ascii ? STR_ASCII_YES : ((ptr || len == 0)
+    ? str_detect_ascii_bytes(flat->bytes, len)
+    : STR_ASCII_UNKNOWN)
   );
 
   return mkref(kTypeString, flat);
@@ -2822,6 +2823,10 @@ static inline ant_value_t mkstr_with_ascii(ant_t *js, const void *ptr, size_t le
 
 ant_value_t js_mkstr(ant_t *js, const void *ptr, size_t len) {
   return mkstr_with_ascii(js, ptr, len, false);
+}
+
+ant_value_t js_mkstr_ascii(ant_t *js, const void *ptr, size_t len) {
+  return mkstr_with_ascii(js, ptr, len, true);
 }
 
 ant_value_t js_mkstr_byte_range(ant_t *js, const char *parent, size_t start, size_t len) {
@@ -5045,6 +5050,49 @@ ant_offset_t str_utf16_len(ant_t *js, ant_value_t str) {
   return flat_utf16_len(ant_str_flat_ptr(str));
 }
 
+ant_value_t do_string_num_concat(ant_t *js, ant_value_t str, ant_value_t num, bool num_first) {
+  char digits[32];
+  size_t num_len = strnum(num, digits, sizeof(digits));
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, str);
+  ant_value_t result;
+
+  bool flat_str = !str_is_heap_rope(str) && !str_is_heap_builder(str);
+  size_t str_len = flat_str ? (size_t)ant_str_flat_ptr(str)->len : 0;
+
+  if (flat_str && str_len > 0 && num_len > 0 && str_len + num_len < STR_SHORT_CONS_THRESHOLD) {
+    size_t total_len = str_len + num_len;
+    result = js_mkstr(js, NULL, total_len);
+    
+    if (!is_err(result)) {
+      ant_flat_string_t *out = ant_str_flat_ptr(result);
+      ant_flat_string_t *in = ant_str_flat_ptr(str);
+      
+      char *num_dst = num_first ? out->bytes : out->bytes + str_len;
+      char *str_dst = num_first ? out->bytes + num_len : out->bytes;
+      
+      str_copy_small(num_dst, digits, num_len);
+      str_copy_small(str_dst, in->bytes, str_len);
+      
+      out->bytes[total_len] = '\0';
+      uint8_t ascii = str_flat_ascii_state(in);
+      
+      if (ascii == STR_ASCII_UNKNOWN)
+        ascii = str_detect_ascii_bytes(out->bytes, total_len);
+      str_flat_init_meta(out, ascii);
+    }
+  } else {
+    ant_value_t num_str = mkstr_with_ascii(js, digits, num_len, true);
+    result = is_err(num_str) ? num_str : (num_first
+      ? do_string_op(js, TOK_PLUS, num_str, str)
+      : do_string_op(js, TOK_PLUS, str, num_str));
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
+}
+
 ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r) {
   if (op == TOK_PLUS) {
     if (str_is_heap_builder(l)) {
@@ -5076,12 +5124,15 @@ ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r) {
         ant_flat_string_t *out = ant_str_flat_ptr(flat);
         ant_flat_string_t *left = ant_str_flat_ptr(l);
         ant_flat_string_t *right = ant_str_flat_ptr(r);
-        memcpy(out->bytes, left->bytes, (size_t)n1);
-        memcpy(out->bytes + n1, right->bytes, (size_t)n2);
+        str_copy_small(out->bytes, left->bytes, (size_t)n1);
+        str_copy_small(out->bytes + n1, right->bytes, (size_t)n2);
         out->bytes[total_len] = '\0';
-        str_flat_init_meta(
-          out, str_detect_ascii_bytes(out->bytes, (size_t)total_len)
+        uint8_t ascii = str_concat_ascii_state(
+          str_flat_ascii_state(left), str_flat_ascii_state(right)
         );
+        if (ascii == STR_ASCII_UNKNOWN)
+          ascii = str_detect_ascii_bytes(out->bytes, (size_t)total_len);
+        str_flat_init_meta(out, ascii);
       }
       GC_ROOT_RESTORE(js, root_mark);
       return flat;

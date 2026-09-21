@@ -143,6 +143,48 @@ static inline ant_large_string_alloc_t *large_string_alloc_from_flat(ant_flat_st
   return flat ? (ant_large_string_alloc_t *)((char *)flat - offsetof(ant_large_string_alloc_t, len)) : NULL;
 }
 
+static inline uint8_t str_concat_ascii_state(uint8_t left, uint8_t right) {
+  if (left == STR_ASCII_NO || right == STR_ASCII_NO) return STR_ASCII_NO;
+  return (left == STR_ASCII_YES && right == STR_ASCII_YES) ? STR_ASCII_YES : STR_ASCII_UNKNOWN;
+}
+
+static inline void str_copy_small(char *dst, const char *src, size_t n) {
+  if (n > 32) { 
+    memcpy(dst, src, n);
+    return;
+  }
+  
+  if (n >= 16) {
+    uint64_t head[2], tail[2];
+    memcpy(head, src, 16); memcpy(tail, src + n - 16, 16);
+    memcpy(dst, head, 16); memcpy(dst + n - 16, tail, 16);
+    return;
+  }
+  
+  if (n >= 8) {
+    uint64_t head, tail;
+    memcpy(&head, src, 8); memcpy(&tail, src + n - 8, 8);
+    memcpy(dst, &head, 8); memcpy(dst + n - 8, &tail, 8);
+    return;
+  }
+  
+  if (n >= 4) {
+    uint32_t head, tail;
+    memcpy(&head, src, 4); memcpy(&tail, src + n - 4, 4);
+    memcpy(dst, &head, 4); memcpy(dst + n - 4, &tail, 4);
+    return;
+  }
+  
+  if (n >= 2) {
+    uint16_t head, tail;
+    memcpy(&head, src, 2); memcpy(&tail, src + n - 2, 2);
+    memcpy(dst, &head, 2); memcpy(dst + n - 2, &tail, 2);
+    return;
+  }
+  
+  if (n) dst[0] = src[0];
+}
+
 static inline uint8_t str_detect_ascii_bytes(const char *str, size_t len) {
   const unsigned char *s = (const unsigned char *)str;
   
@@ -263,6 +305,7 @@ ant_offset_t str_utf16_len(ant_t *js, ant_value_t str);
 ant_value_t rope_flatten(ant_t *js, ant_value_t rope);
 ant_value_t str_materialize(ant_t *js, ant_value_t value);
 ant_value_t js_mkstr_byte_range(ant_t *js, const char *parent, size_t start, size_t len);
+ant_value_t js_mkstr_ascii(ant_t *js, const void *ptr, size_t len);
 
 size_t utf8_export_into(
   const char *str, size_t str_len, uint8_t *dst, 

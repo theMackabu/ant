@@ -528,12 +528,16 @@ static inline void sv_builder_record_flat(
   ant_value_t value, ant_flat_string_t *flat
 ) {
   if (!builder || !flat) return;
+  
   ant_value_t cached = builder->cached;
+  uint8_t ascii = sv_builder_chunk_ascii_state(flat);
+  
   builder->len += flat->len;
   builder->cached = vtype(cached) == kTypeNumber
-    ? tov(tod(cached) + (double)str_utf16_len(js, value))
-    : js_mkundef();
-  sv_builder_note_ascii(builder, sv_builder_chunk_ascii_state(flat));
+    ? tov(tod(cached) + (double)(ascii == STR_ASCII_YES 
+    ? flat->len : str_utf16_len(js, value))) : js_mkundef();
+  
+  sv_builder_note_ascii(builder, ascii);
 }
 
 static ant_value_t sv_builder_normalize_chunk(ant_t *js, ant_value_t value) {
@@ -561,11 +565,17 @@ static ant_value_t sv_builder_flush_tail(
   ant_t *js, ant_string_builder_t *builder
 ) {
   if (!builder || builder->tail_len == 0) return js_mkundef();
-  ant_value_t tail = js_mkstr(js, builder->tail, builder->tail_len);
+  
+  ant_value_t tail = builder->ascii_state == STR_ASCII_YES
+    ? js_mkstr_ascii(js, builder->tail, builder->tail_len)
+    : js_mkstr(js, builder->tail, builder->tail_len);
+    
   if (is_err(tail)) return tail;
   ant_value_t push = sv_builder_push_chunk_value(js, builder, tail);
+  
   if (is_err(push)) return push;
   builder->tail_len = 0;
+  
   return js_mkundef();
 }
 
@@ -580,7 +590,7 @@ static ant_value_t sv_builder_append_flat(
     flat->len <= STR_BUILDER_TAIL_CAP &&
     builder->tail_len + flat->len <= STR_BUILDER_TAIL_CAP
   ) {
-    memcpy(builder->tail + builder->tail_len, flat->bytes, (size_t)flat->len);
+    str_copy_small(builder->tail + builder->tail_len, flat->bytes, (size_t)flat->len);
     builder->tail_len = (uint16_t)(builder->tail_len + flat->len);
     sv_builder_record_flat(js, builder, chunk, flat);
     return js_mkundef();
@@ -732,12 +742,18 @@ static bool sv_try_short_string_append(
   
   if (!is_err(*result)) {
     ant_flat_string_t *out = ant_str_flat_ptr(*result);
-    memcpy(out->bytes, left->bytes, (size_t)left->len);
-    memcpy(out->bytes + left->len, right->bytes, (size_t)right->len);
+
+    str_copy_small(out->bytes, left->bytes, (size_t)left->len);
+    str_copy_small(out->bytes + left->len, right->bytes, (size_t)right->len);
     out->bytes[len] = '\0';
-    str_flat_init_meta(out, str_detect_ascii_bytes(out->bytes, len));
-  } GC_ROOT_RESTORE(js, mark);
+    
+    uint8_t ascii = str_concat_ascii_state(str_flat_ascii_state(left), str_flat_ascii_state(right));
+    if (ascii == STR_ASCII_UNKNOWN) ascii = str_detect_ascii_bytes(out->bytes, len);
+    
+    str_flat_init_meta(out, ascii);
+  } 
   
+  GC_ROOT_RESTORE(js, mark);
   return true;
 }
 
@@ -752,12 +768,18 @@ ant_value_t sv_string_builder_append_slot(
   ant_string_builder_t *builder = sv_string_builder_heap_ptr(lhs);
 
   if (builder) {
-    ant_value_t rhs_str = coerce_to_str_concat(js, rhs);
-    if (is_err(rhs_str)) return rhs_str;
-    rhs_str = sv_builder_normalize_chunk(js, rhs_str);
-    if (is_err(rhs_str)) return rhs_str;
+    ant_value_t rhs_str = rhs;
+    if (!sv_string_builder_flat_ptr(rhs)) {
+      rhs_str = coerce_to_str_concat(js, rhs);
+      if (is_err(rhs_str)) return rhs_str;
+      
+      rhs_str = sv_builder_normalize_chunk(js, rhs_str);
+      if (is_err(rhs_str)) return rhs_str;
+    }
+    
     ant_value_t append_err = sv_builder_append_flat(js, builder, rhs_str);
     if (is_err(append_err)) return append_err;
+    
     sv_record_slot_feedback(frame, func, slot_idx, lhs);
     return js_mkundef();
   }
@@ -817,8 +839,6 @@ ant_value_t sv_string_builder_append_snapshot_slot(
   ant_value_t *slot = sv_frame_slot_ptr(frame, slot_idx);
   if (!slot) return js_mkerr(js, "invalid string builder slot");
 
-  // Snapshot-aware appends have already exposed the old immutable value.
-  // Keep short results flat instead of allocating and immediately reading a builder.
   ant_value_t short_result;
   if (sv_try_short_string_append(js, lhs, rhs, &short_result)) {
     if (is_err(short_result)) return short_result;
@@ -827,7 +847,6 @@ ant_value_t sv_string_builder_append_snapshot_slot(
     return js_mkundef();
   }
 
-  // Reuse active builders when evaluating the RHS did not change the slot.
   if (*slot == lhs)
     return sv_string_builder_append_slot(vm, js, frame, func, slot_idx, rhs);
 
