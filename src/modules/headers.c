@@ -526,7 +526,7 @@ ant_value_t headers_append_literal(ant_t *js, ant_value_t hdrs, const char *name
 }
 
 static ant_value_t init_from_sequence(ant_t *js, hdr_list_t *l, ant_value_t seq) {
-  js_iter_t it;
+  iterator_t it;
 
   if (!js_iter_open(js, seq, &it)) return Ant_Exception_Pending(js)
     ? Ant_Exception_Current(js)
@@ -597,7 +597,7 @@ static ant_value_t init_from_record(ant_t *js, hdr_list_t *l, ant_value_t obj) {
   return js_mkundef();
 }
 
-bool advance_headers(ant_t *js, js_iter_t *it, ant_value_t *out) {
+bool advance_headers(ant_t *js, iterator_t *it, ant_value_t *out) {
   hdr_iter_t *st = (hdr_iter_t *)js_get_native(it->iterator, HEADERS_ITER_NATIVE_TAG);
   if (!st) return false;
 

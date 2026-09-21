@@ -2025,7 +2025,7 @@ static ant_value_t stream_readable_from_start(ant_params_t) {
   
   ant_value_t async_iter_fn = 0;
   ant_value_t reader_fn = 0;
-  js_iter_t it;
+  iterator_t it;
 
   if (js_truthy(js, js_get(js, readable, "destroyed"))) return js_mkundef();
 
