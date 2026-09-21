@@ -3,6 +3,7 @@
 #include "silver/engine.h"
 #include "gc/roots.h"
 #include "modules/symbol.h"
+#include "modules/iterator.h"
 #include <assert.h>
 #include <stdio.h>
 
@@ -15,6 +16,8 @@ int main(void) {
   ant_value_t early = js_create_arguments_object(js, js->vm, js_mkundef(), &empty_frame, 0, 0, true);
   assert(!is_err(early) && js_get_slot(early, SLOT_STRICT_ARGS) == js_true);
   init_symbol_module(js);
+  init_intrinsic_symbols(js);
+  init_iterator_module(js);
   const uint32_t counts[] = {0, 1, 2, 7, 8, 9, 33};
   ant_value_t values[33];
   for (uint32_t i = 0; i < 33; i++) values[i] = js_mknum(i);

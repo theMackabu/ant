@@ -1,0 +1,21 @@
+#ifdef ANT_SYMBOL
+ANT_SYMBOL(iterator, "Symbol.iterator")
+ANT_SYMBOL(asyncIterator, "Symbol.asyncIterator")
+ANT_SYMBOL(inspect, "Symbol.inspect")
+ANT_SYMBOL(toStringTag, "Symbol.toStringTag")
+ANT_SYMBOL(hasInstance, "Symbol.hasInstance")
+ANT_SYMBOL(match, "Symbol.match")
+ANT_SYMBOL(replace, "Symbol.replace")
+ANT_SYMBOL(search, "Symbol.search")
+ANT_SYMBOL(split, "Symbol.split")
+ANT_SYMBOL(matchAll, "Symbol.matchAll")
+ANT_SYMBOL(isConcatSpreadable, "Symbol.isConcatSpreadable")
+ANT_SYMBOL(dispose, "Symbol.dispose")
+ANT_SYMBOL(asyncDispose, "Symbol.asyncDispose")
+ANT_SYMBOL(observable, "Symbol.observable")
+ANT_SYMBOL(toPrimitive, "Symbol.toPrimitive")
+ANT_SYMBOL(species, "Symbol.species")
+ANT_SYMBOL(unscopables, "Symbol.unscopables")
+ANT_SYMBOL(default, "Symbol.default")
+#undef ANT_SYMBOL
+#endif

@@ -7,7 +7,6 @@
 #include "gc/roots.h"
 
 #include "silver/call.h"
-#include "modules/symbol.h"
 
 static inline void sv_define_method(
   ant_t *js, sv_func_t *func, uint8_t *ip,
@@ -250,7 +249,7 @@ static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
     return tov(0);
   }
 
-  ant_value_t iter_fn = js_get_sym(js, iterable, get_iterator_sym());
+  ant_value_t iter_fn = js_get_sym(js, iterable, js->sym.iterator_sym);
   uint8_t ft = vtype(iter_fn);
   if (ft != kTypeFunction && ft != kTypeBuiltin) {
     vm->sp--;

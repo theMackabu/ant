@@ -3,10 +3,7 @@
 #include "ant.h"
 #include "errors.h"
 #include "internal.h"
-#include "silver/engine.h"
 #include "descriptors.h"
-
-#include "modules/symbol.h"
 #include "streams/queuing.h"
 
 static ant_value_t js_count_size(ant_params_t) {
@@ -89,7 +86,7 @@ void init_queuing_strategies_module(ant_t *js) {
   js_set_slot(js->builtins.count_qs_proto, SLOT_DATA, make_size_fn(js, js_count_size, 0));
   js_set_getter_desc(js, js->builtins.count_qs_proto, "highWaterMark", 13, js_mkfun(js_qs_get_highwatermark), JS_DESC_C);
   js_set_getter_desc(js, js->builtins.count_qs_proto, "size", 4, js_mkfun(js_qs_get_size), JS_DESC_C);
-  js_set_sym(js, js->builtins.count_qs_proto, get_toStringTag_sym(), js_mkstr(js, "CountQueuingStrategy", 20));
+  js_set_sym(js, js->builtins.count_qs_proto, js->sym.toStringTag_sym, js_mkstr(js, "CountQueuingStrategy", 20));
 
   ant_value_t cqs_ctor = js_make_ctor(js, js_count_qs_ctor, js->builtins.count_qs_proto, "CountQueuingStrategy", 20);
   js_set(js, g, "CountQueuingStrategy", cqs_ctor);
@@ -99,7 +96,7 @@ void init_queuing_strategies_module(ant_t *js) {
   js_set_slot(js->builtins.bytelength_qs_proto, SLOT_DATA, make_size_fn(js, js_bytelength_size, 1));
   js_set_getter_desc(js, js->builtins.bytelength_qs_proto, "highWaterMark", 13, js_mkfun(js_qs_get_highwatermark), JS_DESC_C);
   js_set_getter_desc(js, js->builtins.bytelength_qs_proto, "size", 4, js_mkfun(js_qs_get_size), JS_DESC_C);
-  js_set_sym(js, js->builtins.bytelength_qs_proto, get_toStringTag_sym(), js_mkstr(js, "ByteLengthQueuingStrategy", 25));
+  js_set_sym(js, js->builtins.bytelength_qs_proto, js->sym.toStringTag_sym, js_mkstr(js, "ByteLengthQueuingStrategy", 25));
 
   ant_value_t blqs_ctor = js_make_ctor(js, js_bytelength_qs_ctor, js->builtins.bytelength_qs_proto, "ByteLengthQueuingStrategy", 25);
   js_set(js, g, "ByteLengthQueuingStrategy", blqs_ctor);

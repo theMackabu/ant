@@ -85,6 +85,7 @@
 
 void ant_bootstrap_modules(ant_t *js) {
   init_symbol_module(js);
+  init_intrinsic_symbols(js);
   init_iterator_module(js);
   init_generator_module(js);
   init_timer_module(js);

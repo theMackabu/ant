@@ -34,7 +34,10 @@ if (!(cond)) {                                                              \
 // create a new ant isolate
 ant_t *ant_create();
 
+// globalThis
 ant_value_t js_glob(ant_t *);
+
+void init_intrinsic_symbols(ant_t *js);
 void js_mark_constructor(ant_value_t value, bool is_constructor);
 
 typedef enum: uint8_t {

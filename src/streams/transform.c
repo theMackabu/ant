@@ -10,7 +10,6 @@
 #include "gc/roots.h"
 #include "silver/call.h"
 #include "modules/assert.h"
-#include "modules/symbol.h"
 #include "streams/transform.h"
 #include "streams/readable.h"
 #include "streams/writable.h"
@@ -1038,7 +1037,7 @@ void init_transform_stream_module(ant_t *js) {
   js_set_descriptor(js, js->builtins.ts_ctrl_proto, "error", 5, JS_DESC_W | JS_DESC_C);
   js_set(js, js->builtins.ts_ctrl_proto, "terminate", js_mkfun(js_ts_ctrl_terminate));
   js_set_descriptor(js, js->builtins.ts_ctrl_proto, "terminate", 9, JS_DESC_W | JS_DESC_C);
-  js_set_sym(js, js->builtins.ts_ctrl_proto, get_toStringTag_sym(), js_mkstr(js, "TransformStreamDefaultController", 32));
+  js_set_sym(js, js->builtins.ts_ctrl_proto, js->sym.toStringTag_sym, js_mkstr(js, "TransformStreamDefaultController", 32));
 
   ant_value_t ctrl_ctor = js_make_ctor(js, js_ts_ctrl_ctor, js->builtins.ts_ctrl_proto, "TransformStreamDefaultController", 32);
   js_set(js, g, "TransformStreamDefaultController", ctrl_ctor);
@@ -1047,7 +1046,7 @@ void init_transform_stream_module(ant_t *js) {
   js->builtins.ts_proto = js_mkobj(js);
   js_set_getter_desc(js, js->builtins.ts_proto, "readable", 8, js_mkfun(js_ts_get_readable), JS_DESC_C);
   js_set_getter_desc(js, js->builtins.ts_proto, "writable", 8, js_mkfun(js_ts_get_writable), JS_DESC_C);
-  js_set_sym(js, js->builtins.ts_proto, get_toStringTag_sym(), js_mkstr(js, "TransformStream", 15));
+  js_set_sym(js, js->builtins.ts_proto, js->sym.toStringTag_sym, js_mkstr(js, "TransformStream", 15));
 
   ant_value_t ts_ctor = js_make_ctor(js, js_ts_ctor, js->builtins.ts_proto, "TransformStream", 15);
   js_set(js, g, "TransformStream", ts_ctor);

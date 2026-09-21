@@ -4,7 +4,6 @@
 #include "silver/call.h"
 #include "errors.h"
 #include "gc/roots.h"
-#include "modules/symbol.h"
 
 typedef enum {
   SV_DISPOSAL_RECORD_DEFER = 0,
@@ -82,10 +81,10 @@ static inline ant_value_t sv_disposal_record_call(ant_t *js, ant_value_t record)
 
 static inline ant_value_t sv_dispose_resource(ant_t *js, ant_value_t resource, bool is_async) {
   if (vtype(resource) == kTypeNull || vtype(resource) == kTypeUndefined) return js_mkundef();
-  ant_value_t method = js_get_sym(js, resource, is_async ? get_asyncDispose_sym() : get_dispose_sym());
+  ant_value_t method = js_get_sym(js, resource, is_async ? js->sym.asyncDispose_sym : js->sym.dispose_sym);
 
   if (is_async && (vtype(method) == kTypeUndefined || vtype(method) == kTypeNull))
-    method = js_get_sym(js, resource, get_dispose_sym());
+    method = js_get_sym(js, resource, js->sym.dispose_sym);
     
   if (is_err(method)) return method;
   if (!is_callable(method)) return js_mkerr_typed(
@@ -118,8 +117,8 @@ static inline ant_value_t sv_using_push(
   GC_ROOT_PIN(js, entries);
   GC_ROOT_PIN(js, resource);
 
-  ant_value_t method = js_get_sym(js, resource, is_async ? get_asyncDispose_sym() : get_dispose_sym());
-  if (is_async && (vtype(method) == kTypeUndefined || vtype(method) == kTypeNull)) method = js_get_sym(js, resource, get_dispose_sym());
+  ant_value_t method = js_get_sym(js, resource, is_async ? js->sym.asyncDispose_sym : js->sym.dispose_sym);
+  if (is_async && (vtype(method) == kTypeUndefined || vtype(method) == kTypeNull)) method = js_get_sym(js, resource, js->sym.dispose_sym);
   
   GC_ROOT_PIN(js, method);
   if (is_err(method)) {

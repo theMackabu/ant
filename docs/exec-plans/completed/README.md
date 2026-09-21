@@ -17,6 +17,7 @@ removed during condensation. See the [plan lifecycle](../index.md).
 
 - [Polymorphic Property Reads and Object Literal Allocation](jit-polymorphic-reads-and-literals.md)
 - [Inspector Global Lexical Resolution](inspector-global-lexicals.md)
+- [Symbol and Iterator Ownership](symbol-iterator-ownership.md)
 - [Coroutine Resume Performance Recovery](coroutine-resume-performance.md)
 - [Coroutine Resume Arguments](coroutine-resume-arguments.md)
 - [Native Calls and Fulfilled Await Performance](native-async-performance.md)

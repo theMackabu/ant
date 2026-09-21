@@ -2,7 +2,7 @@
 #define HEADERS_H
 
 #include "types.h"
-#include "modules/symbol.h"
+#include "modules/iterator.h"
 
 typedef void (*headers_foreach_cb)(
   const char *name,

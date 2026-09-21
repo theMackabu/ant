@@ -1,7 +1,6 @@
 #include "builder.h"
 
 #include "internal.h"
-#include "modules/symbol.h"
 #include "silver/engine.h"
 
 #include <math.h>
@@ -385,9 +384,10 @@ bool js_inspect_object_body(js_inspect_builder_t *builder, ant_value_t obj) {
   }
 
   ant_t *js = builder->js;
-  ant_value_t tag_sym = get_toStringTag_sym();
+  ant_value_t tag_sym = js->sym.toStringTag_sym;
   ant_value_t as_obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(as_obj);
+  
   uintptr_t obj_off = (uintptr_t)vdata(as_obj);
   uint32_t shape_count = (ptr && ptr->shape) ? ant_shape_count(ptr->shape) : 0;
 

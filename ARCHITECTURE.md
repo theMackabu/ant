@@ -78,6 +78,18 @@ focused [runtime invariants](docs/repo/runtime-invariants.md) reference.
   streaming support.
 - `src/esm/` handles module loading, export wiring, and built-in bundle access.
 
+Well-known symbol identities belong to the isolate's `sym` fields.
+`include/symbol_list.h` is a repeatedly included X-macro list used to declare,
+initialize, publish, and trace those identities. Iterator result construction,
+array/string iterators, and native iterator dispatch belong to
+`src/modules/iterator.c` and `include/modules/iterator.h`. Native registrations
+retain their prototype and original `next` method in an isolate-owned registry;
+dispatch uses the fast path only when both identities match the captured method.
+
+Native and embedded startup initialize Symbol, core intrinsic symbol properties,
+Iterator, and Generator in that order, before primordial capture and snapshot
+execution. Symbol initialization does not initialize the other modules.
+
 ### Tooling and generated inputs
 
 - `src/tools/gen_builtins.js` generates both the JavaScript bootstrap snapshot
