@@ -75,6 +75,7 @@
 #include "modules/bigint.h"
 #include "modules/timer.h"
 #include "modules/symbol.h"
+#include "modules/iterator.h"
 #include "modules/date.h"
 #include "modules/buffer.h"
 #include "modules/events.h"
@@ -332,7 +333,7 @@ void ant_symbol_property_mutation_invalidate(
   ant_t *js, ant_object_t *holder, ant_offset_t sym_off
 ) {
   if (
-    sym_off == (ant_offset_t)vdata(get_species_sym()) &&
+    sym_off == (ant_offset_t)vdata(js->sym.species_sym) &&
     holder == js_obj_ptr(js->sym.promise_ctor)
   ) js->promise_species_protector_invalid = true;
 }
@@ -1206,7 +1207,7 @@ static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
     return n;
   }
   
-  ant_value_t tag_sym = get_toStringTag_sym();
+  ant_value_t tag_sym = js->sym.toStringTag_sym;
   ant_value_t tag_val = (vtype(tag_sym) == kTypeSymbol) ? lkp_sym_proto_val(js, obj, (ant_offset_t)vdata(tag_sym)) : js_mkundef();
   bool is_map = false, is_set = false, is_arraybuffer = false;
   ant_offset_t tlen = 0, toff = 0;
@@ -2643,8 +2644,8 @@ static ant_value_t strict_arguments_template(ant_t *js, bool has_iterator) {
     return tag;
   }
   
-  js_set_sym(js, seed, get_toStringTag_sym(), tag);
-  if (has_iterator) js_set_sym(js, seed, get_iterator_sym(), js_mkundef());
+  js_set_sym(js, seed, js->sym.toStringTag_sym, tag);
+  if (has_iterator) js_set_sym(js, seed, js->sym.iterator_sym, js_mkundef());
   
   ant_object_t *ptr = js_obj_ptr(seed);
   if (ptr->prop_count != (has_iterator ? 2u : 1u)) {
@@ -2678,11 +2679,11 @@ ant_value_t js_create_arguments_object(
   if (is_strict) js_obj_ptr(arr)->flags.strict_arguments = 1;
   else if (vtype(callee) == kTypeFunction) setprop_cstr(js, arr, "callee", 6, callee);
   
-  bool template_ready = is_strict && vtype(get_toStringTag_sym()) == kTypeSymbol;
-  if (!template_ready) js_set_sym(js, arr, get_toStringTag_sym(), js_mkstr(js, "Arguments", 9));
+  bool template_ready = is_strict && vtype(js->sym.toStringTag_sym) == kTypeSymbol;
+  if (!template_ready) js_set_sym(js, arr, js->sym.toStringTag_sym, js_mkstr(js, "Arguments", 9));
 
   ant_value_t iter_fn = js_mkundef();
-  if (is_object_type(js->sym.array_proto)) iter_fn = js_get_sym(js, js->sym.array_proto, get_iterator_sym());
+  if (is_object_type(js->sym.array_proto)) iter_fn = js_get_sym(js, js->sym.array_proto, js->sym.iterator_sym);
   bool has_iterator = vtype(iter_fn) == kTypeFunction || vtype(iter_fn) == kTypeBuiltin;
   
   if (template_ready) {
@@ -2707,7 +2708,7 @@ ant_value_t js_create_arguments_object(
       target->inobj[1] = iter_fn;
       gc_write_barrier(js, target, iter_fn);
     }
-  } else if (has_iterator) js_set_sym(js, arr, get_iterator_sym(), iter_fn);
+  } else if (has_iterator) js_set_sym(js, arr, js->sym.iterator_sym, iter_fn);
 
   if (!is_strict && mapped_count > 0 && frame && vm) {
     ant_arguments_state_t *state = calloc(
@@ -3531,7 +3532,7 @@ static inline bool is_wrapper_ctor_target(ant_t *js, ant_value_t this_val, ant_v
 
 ant_value_t get_ctor_species_value(ant_t *js, ant_value_t ctor) {
   if (!is_object_type(ctor) && vtype(ctor) != kTypeBuiltin) return js_mkundef();
-  return js_get_sym(js, ctor, get_species_sym());
+  return js_get_sym(js, ctor, js->sym.species_sym);
 }
 
 bool same_ctor_identity(ant_t *js, ant_value_t a, ant_value_t b) {
@@ -5196,7 +5197,7 @@ static bool js_try_exotic_to_primitive(
   ant_value_t *out_result, bool *out_absent
 ) {
   *out_absent = false;
-  ant_value_t tp_sym = get_toPrimitive_sym();
+  ant_value_t tp_sym = js->sym.toPrimitive_sym;
   
   if (vtype(tp_sym) != kTypeSymbol) {
     *out_absent = true;
@@ -5670,7 +5671,7 @@ static ant_value_t iter_close_iterator(ant_t *js, ant_value_t iterator) {
 }
 
 static ant_value_t iter_foreach(ant_t *js, ant_value_t iterable, iter_callback_t cb, void *ctx) {
-  ant_value_t iter_sym = get_iterator_sym();
+  ant_value_t iter_sym = js->sym.iterator_sym;
   ant_prop_loc_t iter_prop = (vtype(iter_sym) == kTypeSymbol) ? lkp_sym_proto(js, iterable, (ant_offset_t)vdata(iter_sym)) : ANT_PROP_LOC_NONE;
   if (!iter_prop.obj) return js_mkerr(js, "not iterable");
 
@@ -6990,7 +6991,7 @@ static ant_value_t disposable_stack_use(
 static ant_value_t builtin_DisposableStack_use(ant_params_t) {
   ant_value_t resource = nargs > 0 ? args[0] : js_mkundef();
   return disposable_stack_use(
-    js, js->this_val, BRAND_DISPOSABLE_STACK, "DisposableStack", resource, get_dispose_sym(), js_mkundef()
+    js, js->this_val, BRAND_DISPOSABLE_STACK, "DisposableStack", resource, js->sym.dispose_sym, js_mkundef()
   );
 }
 
@@ -6998,7 +6999,7 @@ static ant_value_t builtin_AsyncDisposableStack_use(ant_params_t) {
   ant_value_t resource = nargs > 0 ? args[0] : js_mkundef();
   return disposable_stack_use(
     js, js->this_val, BRAND_ASYNC_DISPOSABLE_STACK, "AsyncDisposableStack",
-    resource, get_asyncDispose_sym(), get_dispose_sym()
+    resource, js->sym.asyncDispose_sym, js->sym.dispose_sym
   );
 }
 
@@ -9205,7 +9206,7 @@ static ant_value_t builtin_object_defineProperty(ant_params_t) {
 }
 
 static ant_value_t strobj_call_custom_inspect(ant_t *js, ant_value_t obj) {
-  ant_value_t inspect_sym = get_inspect_sym();
+  ant_value_t inspect_sym = js->sym.inspect_sym;
   if (vtype(inspect_sym) != kTypeSymbol) return js_mkundef();
 
   ant_value_t inspect_fn = lkp_sym_proto_val(js, obj, (ant_offset_t)vdata(inspect_sym));
@@ -10338,7 +10339,7 @@ static ant_value_t builtin_object_toString(ant_params_t) {
   const char *tag = NULL;
   ant_offset_t tag_len = 0;
 
-  ant_value_t tag_sym = get_toStringTag_sym();
+  ant_value_t tag_sym = js->sym.toStringTag_sym;
   if (vtype(tag_sym) == kTypeSymbol) {
     ant_offset_t sym_off = (ant_offset_t)vdata(tag_sym);
     ant_prop_loc_t tag_off = ANT_PROP_LOC_NONE;
@@ -11526,7 +11527,7 @@ static ant_value_t builtin_array_concat(ant_params_t) {
         array_default_spreadable = (vtype(target) == kTypeArray);
       }
       
-      ant_value_t spread_val = js_get_sym(js, arg, get_isConcatSpreadable_sym());
+      ant_value_t spread_val = js_get_sym(js, arg, js->sym.isConcatSpreadable_sym);
       if (is_err(spread_val)) return spread_val;
       if (vtype(spread_val) == kTypeUndefined) spreadable = array_default_spreadable;
       else spreadable = js_truthy(js, spread_val);
@@ -13017,7 +13018,7 @@ static ant_value_t builtin_Array_from(ant_params_t) {
 
   bool result_is_proxy = is_proxy(result);
   ant_value_t write_target = result_is_proxy ? proxy_read_target(js, result) : result;
-  ant_value_t iter_sym = get_iterator_sym();
+  ant_value_t iter_sym = js->sym.iterator_sym;
 
   if (vtype(src) == kTypeString) {
     if (str_is_heap_rope(src) || str_is_heap_builder(src)) {
@@ -13769,7 +13770,7 @@ static ant_value_t builtin_string_split(ant_params_t) {
       call_nargs = 2;
     }
     ant_value_t dispatched = maybe_call_symbol_method(
-      js, args[0], get_split_sym(), args[0], call_args, call_nargs, &called
+      js, args[0], js->sym.split_sym, args[0], call_args, call_nargs, &called
     );
     if (is_err(dispatched)) return dispatched;
     if (called) return dispatched;
@@ -17253,7 +17254,7 @@ static ant_value_t handle_proxy_instanceof(ant_t *js, ant_value_t l, ant_value_t
   }
   
   {
-    ant_value_t has_instance = js_get_sym(js, r, get_hasInstance_sym());
+    ant_value_t has_instance = js_get_sym(js, r, js->sym.hasInstance_sym);
     if (is_err(has_instance)) return has_instance;
     uint8_t hit = vtype(has_instance);
     if (hit == kTypeFunction || hit == kTypeBuiltin) {
@@ -17352,7 +17353,7 @@ ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r) {
   }
 
   ant_value_t func_obj = js_func_obj(r);
-  ant_offset_t has_instance_sym_off = (ant_offset_t)vdata(get_hasInstance_sym());
+  ant_offset_t has_instance_sym_off = (ant_offset_t)vdata(js->sym.hasInstance_sym);
   bool use_slow_has_instance = false;
   ant_prop_loc_t own_has_instance = lkp_sym(func_obj, has_instance_sym_off);
   if (own_has_instance.obj) {
@@ -17385,7 +17386,7 @@ ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r) {
   }
 
   if (use_slow_has_instance) {
-    ant_value_t has_instance = js_get_sym(js, r, get_hasInstance_sym());
+    ant_value_t has_instance = js_get_sym(js, r, js->sym.hasInstance_sym);
     if (is_err(has_instance)) return has_instance;
     uint8_t hit = vtype(has_instance);
     if (hit == kTypeFunction || hit == kTypeBuiltin) {
@@ -18989,7 +18990,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   defmethod(js, array_proto, "toSpliced", 9, js_mkfun(builtin_array_toSpliced));
   defmethod(js, array_proto, "with", 4, js_mkfun(builtin_array_with));
   defmethod(js, array_proto, "keys", 4, js_mkfun(builtin_array_keys));
-  defmethod(js, array_proto, "values", 6, js_mkfun(builtin_array_values));
+  js->sym.array_values_fn = defmethod(js, array_proto, "values", 6, js_mkfun(builtin_array_values));
   defmethod(js, array_proto, "entries", 7, js_mkfun(builtin_array_entries));
   defmethod(js, array_proto, "toString", 8, js_mkfun(builtin_array_toString));
   defmethod(js, array_proto, "toLocaleString", 14, js_mkfun(builtin_array_toLocaleString));
@@ -19417,6 +19418,46 @@ static ant_t *isolate_init(void *buf, size_t len) {
   return js;
 }
 
+void init_intrinsic_symbols(ant_t *js) {
+  mkprop(js, js->global, js->sym.toStringTag_sym, ANT_STRING("global"), ANT_PROP_ATTR_CONFIGURABLE);
+  
+  mkprop(
+    js, js->sym.array_proto, js->sym.iterator_sym, 
+    js->sym.array_values_fn, ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE);
+
+  ant_value_t unscopables = js_mkobj(js);
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, unscopables);
+  
+  js_set(js, unscopables, "at", js_true);
+  js_set(js, unscopables, "copyWithin", js_true);
+  js_set(js, unscopables, "entries", js_true);
+  js_set(js, unscopables, "fill", js_true);
+  js_set(js, unscopables, "find", js_true);
+  js_set(js, unscopables, "findIndex", js_true);
+  js_set(js, unscopables, "findLast", js_true);
+  js_set(js, unscopables, "findLastIndex", js_true);
+  js_set(js, unscopables, "flat", js_true);
+  js_set(js, unscopables, "flatMap", js_true);
+  js_set(js, unscopables, "includes", js_true);
+  js_set(js, unscopables, "keys", js_true);
+  js_set(js, unscopables, "toReversed", js_true);
+  js_set(js, unscopables, "toSorted", js_true);
+  js_set(js, unscopables, "toSpliced", js_true);
+  js_set(js, unscopables, "values", js_true);
+  
+  mkprop(js, js->sym.array_proto, js->sym.unscopables_sym, unscopables, ANT_PROP_ATTR_CONFIGURABLE);
+  GC_ROOT_RESTORE(js, mark);
+
+  mkprop(js, js->sym.promise_proto, js->sym.toStringTag_sym, ANT_STRING("Promise"), ANT_PROP_ATTR_CONFIGURABLE);
+  ant_value_t async_proto = js_get_slot(js->global, SLOT_ASYNC_PROTO);
+  
+  mkprop(js, async_proto, js->sym.toStringTag_sym, ANT_STRING("AsyncFunction"), ANT_PROP_ATTR_CONFIGURABLE);
+  js_define_species_getter(js, js->sym.promise_ctor);
+  js_define_species_getter(js, js_get(js, js->global, "Array"));
+  js->promise_species_protector_invalid = false;
+}
+
 ant_t *ant_create() {
   ant_t *js = (ant_t *)calloc(1, sizeof(*js));
   if (js == NULL) return NULL;
@@ -19472,6 +19513,13 @@ void js_destroy(ant_t *js) {
   cleanup_rpc_module();
   cleanup_lmdb_module();
   js_descriptor_registry_cleanup(js);
+  cleanup_iterator_module(js);
+
+  sym_registry_entry_t *entry, *tmp;
+  HASH_ITER(hh, js->sym.registry, entry, tmp) {
+    HASH_DEL(js->sym.registry, entry);
+    free(entry);
+  }
 
   ant_object_t *lists[] = { js->objects, js->objects_old, js->permanent_objects };
   for (int i = 0; i < 3; i++) for (ant_object_t *obj = lists[i]; obj;) {
