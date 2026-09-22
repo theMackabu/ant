@@ -4,6 +4,9 @@
 #include <string.h>
 
 #ifdef ANT_GC_VERIFY
+typedef struct ant_isolate_t ant_t;
+typedef struct ant_object ant_object_t;
+
 void gc_verify_stress(ant_t *js);
 void gc_verify_poison_object(ant_object_t *obj);
 #define GC_VERIFY_STRESS(js)          gc_verify_stress(js)

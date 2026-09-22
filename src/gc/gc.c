@@ -31,16 +31,6 @@ static uint32_t gc_major_recl_ewma =  26;
 static uint32_t gc_major_time_share_ewma = 0;
 static uint64_t gc_last_major_end_ns = 0;
 
-static uint64_t gc_now_ns(void) {
-#ifdef ANT_WASM_EMBED
-  return (uint64_t)(ant_wasm_now_ms() * 1000000.0);
-#else
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
-#endif
-}
-
 static uint64_t gc_now_ms(void) {
 #ifdef ANT_WASM_EMBED
   return (uint64_t)ant_wasm_now_ms();

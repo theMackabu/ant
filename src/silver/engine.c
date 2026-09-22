@@ -1271,6 +1271,7 @@ ant_value_t sv_execute_closure_entry(
   );
 }
 
+__attribute__((noinline))
 ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant_value_t super_val, ant_value_t *args, int argc) {
   ant_t *js = vm->js;
   
@@ -1496,16 +1497,25 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       *ip == OP_YIELD_STAR_THROW ||
       *ip == OP_YIELD_STAR_RETURN
     );
-    if (suspended_resume_kind == SV_RESUME_THROW && !yield_star_resume) {
-      sv_err = js_throw(js, suspended_resume_value);
-      goto sv_throw;
+    
+    if (!yield_star_resume) {
+      sv_resume_kind_t resume_kind = suspended_resume_kind;
+      suspended_resume_kind = SV_RESUME_NEXT;
+      
+      if (resume_kind == SV_RESUME_THROW) {
+        sv_err = js_throw(js, suspended_resume_value);
+        goto sv_throw;
+      }
+      
+      if (resume_kind == SV_RESUME_RETURN) {
+        vm->stack[vm->sp++] = suspended_resume_value;
+        goto L_RETURN;
+      }
     }
-    if (suspended_resume_kind == SV_RESUME_RETURN && !yield_star_resume) {
-      vm->stack[vm->sp++] = suspended_resume_value;
-      goto L_RETURN;
-    }
+    
     vm->stack[vm->sp++] = suspended_resume_value;
   }
+  
   DISPATCH();
 
   L_CONST:     { sv_op_const(vm, func, ip);       NEXT(OP_CONST); }
@@ -2700,13 +2710,16 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     bool ys_return = false;
     ant_value_t ys_status;
 
+    sv_resume_kind_t resume_kind = suspended_resume_kind;
+    suspended_resume_kind = SV_RESUME_NEXT;
+
     frame->ip = ip;
     GC_ROOT_SAVE(ys_mark, js);
     GC_ROOT_PIN(js, resume_value);
     
-    if (*ip == OP_YIELD_STAR_THROW || suspended_resume_kind == SV_RESUME_THROW)
+    if (*ip == OP_YIELD_STAR_THROW || resume_kind == SV_RESUME_THROW)
       ys_status = sv_yield_star_throw(vm, js, lp, base, resume_value, &yielded, &done);
-    else if (*ip == OP_YIELD_STAR_RETURN || suspended_resume_kind == SV_RESUME_RETURN) {
+    else if (*ip == OP_YIELD_STAR_RETURN || resume_kind == SV_RESUME_RETURN) {
       ys_return = true;
       ys_status = sv_yield_star_return(vm, js, lp, base, resume_value, &yielded, &done);
     }

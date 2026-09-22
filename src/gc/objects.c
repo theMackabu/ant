@@ -21,9 +21,6 @@
 #include <string.h>
 #ifndef ANT_WASM_EMBED
 #include <setjmp.h>
-#include <sys/time.h>
-#else
-#include "wasm_embed.h"
 #endif
 #include <utarray.h>
 
@@ -82,16 +79,6 @@ static_assert(
   "closure arena sweeps re-read call_flags from free-list links; "
   "HAS_BOUND_ARGS must remain in the pointer-alignment-zero low bits"
 );
-
-static uint64_t gc_now_ns(void) {
-#ifdef ANT_WASM_EMBED
-  return (uint64_t)(ant_wasm_now_ms() * 1000000.0);
-#else
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  return (uint64_t)tv.tv_sec * 1000000000ULL + (uint64_t)tv.tv_usec * 1000ULL;
-#endif
-}
 
 void gc_func_mark_profile_enable(bool enabled) {
   g_gc_func_mark_profile.enabled = enabled;
