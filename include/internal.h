@@ -337,6 +337,7 @@ ant_value_t js_array_includes_call(ant_t *js, ant_value_t this_val, ant_value_t 
 const char *typestr(ant_value_type_t t);
 ant_value_t unwrap_primitive(ant_t *js, ant_value_t val);
 ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r);
+ant_value_t do_string_num_concat(ant_t *js, ant_value_t str, ant_value_t num, bool num_first);
 ant_value_t js_to_primitive(ant_t *js, ant_value_t value, int hint);
 ant_value_t js_is_array_value_checked(ant_t *js, ant_value_t value, bool *out);
 

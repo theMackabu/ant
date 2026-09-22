@@ -62,7 +62,6 @@ static inline bool gc_get_stack_bounds(
 
 // TODO: move to isolate
 static gc_func_mark_profile_t g_gc_func_mark_profile = {0};
-static gc_str_mark_fn g_str_mark = NULL;
 
 static uint32_t g_gc_func_mark_profile_depth = 0;
 static uint64_t g_gc_func_mark_profile_start_ns = 0;
@@ -304,35 +303,6 @@ static void gc_sweep_young_upvalues(ant_t *js) {
   );
 }
 
-void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value_t value) {
-  if (!js || !func || !is_tagged(value)) return;
-  uint8_t type = vtype_tagged(value);
-  if (type == kTypeError && vdata(value) < 2) return;
-  
-  if (type != kTypeFunction) {
-    if (type == kTypeString) goto remember;
-    if (((1u << type) & GC_OBJ_TYPE_MASK) == 0) return;
-    ant_object_t *obj = (ant_object_t *)vptr(value);
-    if (!obj || obj->flags.generation != 0) return;
-  }
-
-remember:
-  for (size_t i = 0; i < js->remembered_func_const_len; i++) 
-    if (js->remembered_func_consts[i].func == func && js->remembered_func_consts[i].slot == slot) return;
-
-  if (js->remembered_func_const_len >= js->remembered_func_const_cap) {
-    size_t new_cap = js->remembered_func_const_cap ? js->remembered_func_const_cap * 2 : 64;
-    void *entries = realloc(js->remembered_func_consts, new_cap * sizeof(*js->remembered_func_consts));
-    if (!entries) return;
-    js->remembered_func_consts = entries;
-    js->remembered_func_const_cap = new_cap;
-  }
-
-  js->remembered_func_consts[js->remembered_func_const_len].func = func;
-  js->remembered_func_consts[js->remembered_func_const_len].slot = slot;
-  js->remembered_func_const_len++;
-}
-
 #define GC_MARK_STACK_INIT 4096
 
 static ant_object_t **gc_mark_stack = NULL;
@@ -357,6 +327,31 @@ static inline void gc_grey_obj(ant_object_t *obj) {
   if (g_minor_gc && obj->flags.generation == 1) return;
   obj->mark_epoch = gc_obj_epoch;
   gc_mark_stack_push(obj);
+}
+
+static inline void gc_mark_string_exact(ant_t *js, ant_value_t v) {
+  if ((vdata(v) & STR_HEAP_TAG_MASK) == STR_HEAP_TAG_FLAT) {
+    const ant_flat_string_t *flat = vptr_masked(v, STR_HEAP_TAG_MASK);
+    if (flat && !js->rope_gc.minor_marking && !str_flat_is_permanent(flat)) gc_strings_mark(js, flat);
+    return;
+  }
+  
+  if (!js->rope_gc.conservative_marking) gc_mark_str(js, v);
+}
+
+static inline void gc_mark_string_conservative(ant_t *js, ant_value_t w) {
+  uintptr_t tag = (uintptr_t)(vdata(w) & STR_HEAP_TAG_MASK);
+  
+  if (tag == STR_HEAP_TAG_FLAT) {
+    const void *flat = vptr_masked(w, STR_HEAP_TAG_MASK);
+    if (flat && !js->rope_gc.minor_marking) gc_strings_mark(js, flat);
+    return;
+  }
+  
+  if (
+    (tag == STR_HEAP_TAG_ROPE || tag == STR_HEAP_TAG_BUILDER) && 
+    !js->rope_gc.conservative_marking
+  ) gc_mark_str(js, w);
 }
 
 static void gc_mark_func(ant_t *js, sv_func_t *func) {
@@ -390,30 +385,6 @@ static void gc_mark_func(ant_t *js, sv_func_t *func) {
 
   if (prof && --g_gc_func_mark_profile_depth == 0)
     g_gc_func_mark_profile.time_ns += gc_now_ns() - g_gc_func_mark_profile_start_ns;
-}
-
-static void gc_mark_remembered_func_consts(ant_t *js) {
-for (size_t i = 0; i < js->remembered_func_const_len; i++) {
-  sv_func_t *func = js->remembered_func_consts[i].func;
-  uint32_t slot = js->remembered_func_consts[i].slot;
-  if (!func || !func->constants || slot >= (uint32_t)func->const_count) continue;
-  gc_mark_value(js, func->constants[slot]);
-}}
-
-static void gc_clear_remembered_func_consts(ant_t *js) {
-  js->remembered_func_const_len = 0;
-
-  if (js->remembered_func_const_cap > 512) {
-  size_t target = 256;
-  void *entries = realloc(
-    js->remembered_func_consts,
-    target * sizeof(*js->remembered_func_consts)
-  );
-  
-  if (entries) {
-    js->remembered_func_consts = entries;
-    js->remembered_func_const_cap = target;
-  }}
 }
 
 void gc_mark_upvalue_cells(ant_t *js, sv_upvalue_t *const *cells, uint32_t count) {
@@ -458,8 +429,8 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
     return;
   }
 
-  if (t == kTypeString && g_str_mark) {
-    g_str_mark(js, v);
+  if (t == kTypeString) {
+    gc_mark_string_exact(js, v);
     return;
   }
 
@@ -734,9 +705,8 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
       if (c && fixed_arena_contains(&js->closure_arena, c)) gc_mark_closure(js, c);
     }
     
-    if (type == kTypeString && g_str_mark) g_str_mark(js, w);
-    if (type == kTypeBigInt)
-      gc_bigints_mark((const void *)vptr(w));
+    if (type == kTypeString) gc_mark_string_conservative(js, w);
+    if (type == kTypeBigInt) gc_bigints_mark((const void *)vptr(w));
   }
 }
 
@@ -867,6 +837,12 @@ static inline void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd) 
     gc_mark_promise_handler(js, h);
 }
 
+static void gc_mark_permanent_roots(ant_t *js) {
+  size_t start = g_minor_gc ? js->permanent_root_traced : 0;
+  for (size_t i = start; i < js->permanent_root_len; i++)
+    gc_grey_obj(js->permanent_roots[i]);
+}
+
 static void gc_mark_roots(ant_t *js) {
   gc_scan_vm_stack(js, js->vm);
   for (coroutine_t *c = js->active_async_coro; c; c = c->active_parent) gc_mark_coroutine(js, c);
@@ -919,6 +895,7 @@ static void gc_mark_roots(ant_t *js) {
 
   gc_weak_mark_kept_alive(js, gc_mark_value);
   gc_visit_roots(js, gc_mark_value);
+  gc_mark_permanent_roots(js);
   gc_mark_timers(js, gc_mark_value);
   gc_mark_cron(js, gc_mark_value);
   gc_mark_atomics(js, gc_mark_value);
@@ -1175,13 +1152,10 @@ void gc_pin_existing_objects(ant_t *js) {
   js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
 }
 
-void gc_objects_run(
-  ant_t *js, gc_str_mark_fn str_mark, gc_extra_roots_fn extra_roots
-) {
+void gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
   if (!js) return;
+  
   js->gc_objects_running = true;
-
-  g_str_mark = str_mark;
   if (g_gc_func_mark_profile.enabled) g_gc_func_mark_profile.collections++;
   
   gc_epoch++;
@@ -1198,7 +1172,6 @@ void gc_objects_run(
     js->remember_set[i]->flags.in_remember_set = 0;
   js->remember_set_len = 0;
   
-  gc_clear_remembered_func_consts(js);
   gc_clear_remembered_upvalues(js);
   gc_clear_remembered_closures(js);
   gc_clear_remembered_coroutines(js);
@@ -1222,21 +1195,21 @@ void gc_objects_run(
   
   if (ant_gc_shapes_sweep()) ant_ic_epoch_bump();
   gc_promote_survivors(js);
+  
+  js->permanent_root_traced = js->permanent_root_len;
 
   ant_fixed_arena_t *ca = &js->closure_arena;
   ca->free_list = NULL;
   ca->live_count = 0;
   
   for (size_t off = 0; off < ca->watermark; off += ca->elem_size) {
-  sv_closure_t *c = (sv_closure_t *)(ca->base + off);
-  
+    sv_closure_t *c = (sv_closure_t *)(ca->base + off);
+    
   if (c->gc_epoch == gc_epoch) {
     c->generation = 1;
     ca->live_count++;
-  }
-  else {
+  } else {
     gc_release_closure_payload(c);
-
     *(void **)c = ca->free_list;
     ca->free_list = c;
   }}
@@ -1244,10 +1217,12 @@ void gc_objects_run(
   ant_fixed_arena_t *ua = &js->upvalue_arena;
   ua->free_list = NULL;
   ua->live_count = 0;
+  
   for (size_t off = 0; off < ua->watermark; off += ua->elem_size) {
     uint8_t *slot = ua->base + off;
     uint64_t epoch;
     memcpy(&epoch, slot + ua->epoch_offset, sizeof(epoch));
+    
     if (epoch == gc_epoch) ua->live_count++;
     else {
       *(void **)slot = ua->free_list;
@@ -1298,11 +1273,10 @@ void gc_objects_run(
   js->gc_objects_running = false;
 }
 
-void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
+void gc_objects_run_minor(ant_t *js) {
   if (!js) return;
+  
   js->gc_objects_running = true;
-
-  g_str_mark = str_mark;
   gc_epoch++;
 
   if (gc_epoch == 0) gc_epoch = 1;
@@ -1317,7 +1291,6 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   for (size_t i = 0; i < js->remember_set_len; i++)
     gc_scan_obj(js, js->remember_set[i]);
 
-  gc_mark_remembered_func_consts(js);
   gc_mark_remembered_upvalues(js);
   gc_mark_remembered_closures(js);
   gc_mark_remembered_coroutines(js);
@@ -1337,10 +1310,11 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
 
   gc_age_regex_cache(js, true);
   gc_sweep_young_and_promote(js);
+  
+  js->permanent_root_traced = js->permanent_root_len;
 
   gc_sweep_young_closures(js);
   gc_sweep_young_upvalues(js);
-  gc_clear_remembered_func_consts(js);
   gc_clear_remembered_closures(js);
   gc_clear_remembered_coroutines(js);
   gc_clear_remembered_upvalues(js);

@@ -61,6 +61,7 @@ char *latin1_to_utf8(const uint8_t *src, size_t len, size_t *out_len);
 
 bool utf16_next_code_unit(utf16_iterator_t *iterator, uint16_t *unit);
 bool utf8_validate_bytes(const char *str, size_t byte_len);
+bool wtf8_validate_bytes(const char *str, size_t byte_len);
 uint8_t *utf8_to_latin1(const char *src, size_t len, size_t *out_len, bool *is_latin1);
 
 uint32_t utf16_code_unit_at(const char *str, size_t byte_len, size_t utf16_idx);

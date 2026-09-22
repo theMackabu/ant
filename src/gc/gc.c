@@ -127,7 +127,7 @@ static void gc_adapt_major_interval(size_t live_before, size_t live_after) {
   }
 }
 
-static void gc_mark_str(ant_t *js, ant_value_t root) {
+void gc_mark_str(ant_t *js, ant_value_t root) {
   static const void *dispatch[] = {
     [STR_HEAP_TAG_FLAT] = &&l_flat,
     [STR_HEAP_TAG_ROPE] = &&l_rope,
@@ -150,7 +150,7 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
 
   if (tag < sizeof(dispatch) / sizeof(*dispatch) && dispatch[tag])
     goto *dispatch[tag];
-  goto l_flat;
+  goto l_pop;
 
   l_rope: {
     ant_rope_heap_t *rope = (ant_rope_heap_t *)data;
@@ -188,8 +188,10 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
   }
 
   l_flat:
-    if (data && !js->rope_gc.minor_marking)
-      gc_strings_mark(js, (const void *)data);
+    if (
+      data && !js->rope_gc.minor_marking &&
+      !str_flat_is_permanent((const ant_flat_string_t *)data)
+    ) gc_strings_mark(js, (const void *)data);
   l_pop:
     if (sp > 0) {
       v = stack[--sp];
@@ -197,13 +199,6 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
     }
     if (stack != local) free(stack);
     return;
-}
-
-static void gc_mark_flat_str(ant_t *js, ant_value_t value) {
-  if (!is_tagged(value) || vtype(value) != kTypeString) return;
-  if ((vdata(value) & STR_HEAP_TAG_MASK) != STR_HEAP_TAG_FLAT) return;
-  const void *ptr = vptr_masked(value, STR_HEAP_TAG_MASK);
-  if (ptr) gc_strings_mark(js, ptr);
 }
 
 void gc_remember_builder(ant_t *js, ant_string_builder_t *builder) {
@@ -247,10 +242,7 @@ void gc_run(ant_t *js) {
   gc_strings_begin(js);
   
   bool conservative = rope_begin == GC_ROPES_BEGIN_CONSERVATIVE_MAJOR;
-  gc_objects_run(
-    js, conservative ? gc_mark_flat_str : gc_mark_str,
-    conservative ? gc_ropes_mark_conservative_roots : NULL
-  );
+  gc_objects_run(js, conservative ? gc_ropes_mark_conservative_roots : NULL);
   
   gc_clear_remembered_builders(js);
   ant_ic_epoch_bump();
@@ -288,6 +280,7 @@ void gc_run_minor(ant_t *js) {
     gc_run(js);
     return;
   }
+  
   if (gc_ropes_begin(js, true) != GC_ROPES_BEGIN_NORMAL) {
     gc_run(js);
     return;
@@ -299,7 +292,8 @@ void gc_run_minor(ant_t *js) {
 
   for (size_t i = 0; i < js->rope_gc.remembered_builder_len; i++)
     gc_mark_str(js, ant_mkbuilder_value(js->rope_gc.remembered_builders[i]));
-  gc_objects_run_minor(js, gc_mark_str);
+  
+  gc_objects_run_minor(js);
   gc_clear_remembered_builders(js);
   gc_ropes_sweep(js, true);
 

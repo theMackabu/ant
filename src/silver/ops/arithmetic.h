@@ -48,12 +48,27 @@ static inline ant_value_t sv_op_add(sv_vm_t *vm, ant_t *js) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value");
   
   if (is_non_numeric(lu) || is_non_numeric(ru)) {
+    if (vtype(lu) == kTypeString && vtype(ru) == kTypeNumber) {
+      ant_value_t res = do_string_num_concat(js, lu, ru, false);
+      vm->stack[vm->sp++] = res;
+      return res;
+    }
+    
+    if (vtype(lu) == kTypeNumber && vtype(ru) == kTypeString) {
+      ant_value_t res = do_string_num_concat(js, ru, lu, true);
+      vm->stack[vm->sp++] = res;
+      return res;
+    }
+    
     ant_value_t l_str = coerce_to_str_concat(js, lu);
     if (is_err(l_str)) return l_str;
+    
     ant_value_t r_str = coerce_to_str_concat(js, ru);
     if (is_err(r_str)) return r_str;
+    
     ant_value_t res = do_string_op(js, TOK_PLUS, l_str, r_str);
     vm->stack[vm->sp++] = res;
+    
     return res;
   }
   

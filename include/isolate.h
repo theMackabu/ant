@@ -214,13 +214,10 @@ struct ant_isolate_t {
   size_t remember_set_len;
   size_t remember_set_cap;
 
-  struct {
-    sv_func_t *func;
-    uint32_t slot;
-  } *remembered_func_consts;
-
-  size_t remembered_func_const_len;
-  size_t remembered_func_const_cap;
+  ant_object_t **permanent_roots;
+  size_t permanent_root_len;
+  size_t permanent_root_cap;
+  size_t permanent_root_traced;
 
   size_t remembered_upvalue_len;
   size_t remembered_upvalue_cap;

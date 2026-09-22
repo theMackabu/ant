@@ -2176,7 +2176,7 @@ ant_value_t js_tostring_val(ant_t *js, ant_value_t value) {
   L_NUM: {
     char num_buf[32];
     len = strnum(value, num_buf, sizeof(num_buf));
-    return js_mkstr(js, num_buf, len);
+    return js_mkstr_ascii(js, num_buf, len);
   }
     
   L_BIGINT: {
@@ -2803,18 +2803,19 @@ static inline void arr_del(ant_t *js, ant_value_t arr, ant_offset_t idx) {
 
 static inline ant_value_t mkstr_with_ascii(ant_t *js, const void *ptr, size_t len, bool known_ascii) {
   ant_flat_string_t *flat = (ant_flat_string_t *)js_type_alloc(
-    js, ANT_ALLOC_STRING, sizeof(*flat) + len + 1, _Alignof(ant_flat_string_t)
+    js, ANT_ALLOC_STRING, sizeof(*flat) + len + 1, 
+    _Alignof(ant_flat_string_t)
   );
-  if (!flat) return js_mkerr(js, "oom");
-
-  flat->len = (ant_offset_t)len;
-  if (ptr && len > 0) memcpy(flat->bytes, ptr, len);
   
+  if (!flat) return js_mkerr(js, "oom");
+  flat->len = (ant_offset_t)len;
+  
+  if (ptr && len > 0) memcpy(flat->bytes, ptr, len);
   flat->bytes[len] = '\0';
-  str_flat_init_meta(
-    flat, known_ascii ? STR_ASCII_YES : ((ptr || len == 0)
-      ? str_detect_ascii_bytes(flat->bytes, len)
-      : STR_ASCII_UNKNOWN)
+  
+  str_flat_init_meta(flat, known_ascii ? STR_ASCII_YES : ((ptr || len == 0)
+    ? str_detect_ascii_bytes(flat->bytes, len)
+    : STR_ASCII_UNKNOWN)
   );
 
   return mkref(kTypeString, flat);
@@ -2822,6 +2823,10 @@ static inline ant_value_t mkstr_with_ascii(ant_t *js, const void *ptr, size_t le
 
 ant_value_t js_mkstr(ant_t *js, const void *ptr, size_t len) {
   return mkstr_with_ascii(js, ptr, len, false);
+}
+
+ant_value_t js_mkstr_ascii(ant_t *js, const void *ptr, size_t len) {
+  return mkstr_with_ascii(js, ptr, len, true);
 }
 
 ant_value_t js_mkstr_byte_range(ant_t *js, const char *parent, size_t start, size_t len) {
@@ -2835,21 +2840,24 @@ ant_value_t js_mkstr_permanent(ant_t *js, const void *ptr, size_t len) {
   
   if (js->pool.permanent.block_size == 0)
     js->pool.permanent.block_size = ANT_POOL_STRING_BLOCK_SIZE;
+  
   ant_flat_string_t *flat = (ant_flat_string_t *)pool_alloc_chain(
-    &js->pool.permanent.head, NULL, js->pool.permanent.block_size, size, align
+    &js->pool.permanent.head, NULL, 
+    js->pool.permanent.block_size, size, align
   );
+  
   if (!flat) return js_mkerr(js, "oom");
 
   flat->len = (ant_offset_t)len;
   if (ptr && len > 0) memcpy(flat->bytes, ptr, len);
   
   flat->bytes[len] = '\0';
-  str_flat_init_meta(
-    flat, (ptr || len == 0)
-      ? str_detect_ascii_bytes(flat->bytes, len)
-      : STR_ASCII_UNKNOWN
+  str_flat_init_meta(flat, (ptr || len == 0)
+    ? str_detect_ascii_bytes(flat->bytes, len)
+    : STR_ASCII_UNKNOWN
   );
-
+  
+  flat->meta |= STR_META_PERMANENT;
   return mkref(kTypeString, flat);
 }
 
@@ -4918,7 +4926,7 @@ static ant_offset_t flat_utf16_len(ant_flat_string_t *flat) {
   uint8_t ascii_state = str_flat_ascii_state(flat);
   if (ascii_state == STR_ASCII_UNKNOWN) {
     ascii_state = str_detect_ascii_bytes(flat->bytes, (size_t)flat->len);
-    str_flat_init_meta(flat, ascii_state);
+    str_flat_set_ascii_state(flat, ascii_state);
   }
   
   if (ascii_state == STR_ASCII_YES) return flat->len;
@@ -5042,6 +5050,45 @@ ant_offset_t str_utf16_len(ant_t *js, ant_value_t str) {
   return flat_utf16_len(ant_str_flat_ptr(str));
 }
 
+ant_value_t do_string_num_concat(ant_t *js, ant_value_t str, ant_value_t num, bool num_first) {
+  char digits[32];
+  size_t num_len = strnum(num, digits, sizeof(digits));
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, str);
+  ant_value_t result;
+
+  bool flat_str = !str_is_heap_rope(str) && !str_is_heap_builder(str);
+  size_t str_len = flat_str ? (size_t)ant_str_flat_ptr(str)->len : 0;
+
+  if (flat_str && str_len == 0) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return mkstr_with_ascii(js, digits, num_len, true);
+  }
+
+  if (flat_str && num_len > 0 && str_len + num_len < STR_SHORT_CONS_THRESHOLD) {
+    size_t total_len = str_len + num_len;
+    result = js_mkstr(js, NULL, total_len);
+    
+    if (!is_err(result)) {
+      ant_flat_string_t *in = ant_str_flat_ptr(str);
+      uint8_t in_ascii = str_flat_ascii_state(in);
+      if (num_first) str_flat_fill_concat(
+        ant_str_flat_ptr(result), digits, num_len, STR_ASCII_YES, in->bytes, str_len, in_ascii);
+      else str_flat_fill_concat(
+        ant_str_flat_ptr(result), in->bytes, str_len, in_ascii, digits, num_len, STR_ASCII_YES);
+    }
+  } else {
+    ant_value_t num_str = mkstr_with_ascii(js, digits, num_len, true);
+    result = is_err(num_str) ? num_str : (num_first
+      ? do_string_op(js, TOK_PLUS, num_str, str)
+      : do_string_op(js, TOK_PLUS, str, num_str));
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
+}
+
 ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r) {
   if (op == TOK_PLUS) {
     if (str_is_heap_builder(l)) {
@@ -5070,14 +5117,12 @@ ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r) {
       GC_ROOT_PIN(js, r);
       ant_value_t flat = js_mkstr(js, NULL, (size_t)total_len);
       if (!is_err(flat)) {
-        ant_flat_string_t *out = ant_str_flat_ptr(flat);
         ant_flat_string_t *left = ant_str_flat_ptr(l);
         ant_flat_string_t *right = ant_str_flat_ptr(r);
-        memcpy(out->bytes, left->bytes, (size_t)n1);
-        memcpy(out->bytes + n1, right->bytes, (size_t)n2);
-        out->bytes[total_len] = '\0';
-        str_flat_init_meta(
-          out, str_detect_ascii_bytes(out->bytes, (size_t)total_len)
+        str_flat_fill_concat(
+          ant_str_flat_ptr(flat),
+          left->bytes, (size_t)n1, str_flat_ascii_state(left),
+          right->bytes, (size_t)n2, str_flat_ascii_state(right)
         );
       }
       GC_ROOT_RESTORE(js, root_mark);
@@ -19494,9 +19539,11 @@ void js_destroy(ant_t *js) {
   js->c_roots = NULL;
   js->c_root_count = js->c_root_cap = 0;
 
-  free(js->remembered_func_consts);
-  js->remembered_func_consts = NULL;
-  js->remembered_func_const_len = js->remembered_func_const_cap = 0;
+  free(js->permanent_roots);
+  js->permanent_roots = NULL;
+  js->permanent_root_len = 0;
+  js->permanent_root_cap = 0;
+  js->permanent_root_traced = 0;
 
   free(js->remembered_upvalues);
   js->remembered_upvalues = NULL;
@@ -19554,6 +19601,7 @@ void js_destroy(ant_t *js) {
   
   js_class_pool_destroy(&js->pool.bigint);
   js_string_pool_destroy(&js->pool.string);
+  gc_strings_epoch_bump();
 
   if (js->owns_mem) free(js);
 }
