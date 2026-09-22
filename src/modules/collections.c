@@ -430,6 +430,12 @@ map_iterator_state_t *get_map_iter_state(ant_value_t obj) {
 }
 
 set_iterator_state_t *get_set_iter_state(ant_value_t obj) {
+  if (vtype(obj) == kTypeObject) {
+    ant_object_t *ptr = (ant_object_t *)vptr(obj);
+    if (ptr && ptr->native.tag == SET_ITER_NATIVE_TAG)
+      return (set_iterator_state_t *)ptr->native.ptr;
+  }
+
   return (set_iterator_state_t *)js_get_native(obj, SET_ITER_NATIVE_TAG);
 }
 

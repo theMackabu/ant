@@ -89,6 +89,8 @@ dispatch uses the fast path only when both identities match the captured method.
 Native and embedded startup initialize Symbol, core intrinsic symbol properties,
 Iterator, and Generator in that order, before primordial capture and snapshot
 execution. Symbol initialization does not initialize the other modules.
+`ant_runtime_init` creates the Ant object; `init_builtin_module` installs its
+properties, including its tag, after Symbol initialization.
 
 ### Tooling and generated inputs
 
