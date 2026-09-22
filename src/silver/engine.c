@@ -2689,8 +2689,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_PUT_CONST: {
     uint32_t idx = sv_get_u32(ip + 1);
     ant_value_t cached = vm->stack[--vm->sp];
+    VM_CHECK(gc_pin_permanent(js, cached) ? js_mkundef() : js_mkerr(js, "oom"));
     func->constants[idx] = cached;
-    gc_pin_permanent(js, cached);
     NEXT(OP_PUT_CONST);
   }
   
