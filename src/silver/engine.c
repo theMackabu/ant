@@ -740,18 +740,11 @@ static bool sv_try_short_string_append(
   size_t len = (size_t)(left->len + right->len);
   *result = js_mkstr(js, NULL, len);
   
-  if (!is_err(*result)) {
-    ant_flat_string_t *out = ant_str_flat_ptr(*result);
-
-    str_copy_small(out->bytes, left->bytes, (size_t)left->len);
-    str_copy_small(out->bytes + left->len, right->bytes, (size_t)right->len);
-    out->bytes[len] = '\0';
-    
-    uint8_t ascii = str_concat_ascii_state(str_flat_ascii_state(left), str_flat_ascii_state(right));
-    if (ascii == STR_ASCII_UNKNOWN) ascii = str_detect_ascii_bytes(out->bytes, len);
-    
-    str_flat_init_meta(out, ascii);
-  } 
+  if (!is_err(*result)) str_flat_fill_concat(
+    ant_str_flat_ptr(*result),
+    left->bytes, (size_t)left->len, str_flat_ascii_state(left),
+    right->bytes, (size_t)right->len, str_flat_ascii_state(right)
+  ); 
   
   GC_ROOT_RESTORE(js, mark);
   return true;

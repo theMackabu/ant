@@ -5066,21 +5066,12 @@ ant_value_t do_string_num_concat(ant_t *js, ant_value_t str, ant_value_t num, bo
     result = js_mkstr(js, NULL, total_len);
     
     if (!is_err(result)) {
-      ant_flat_string_t *out = ant_str_flat_ptr(result);
       ant_flat_string_t *in = ant_str_flat_ptr(str);
-      
-      char *num_dst = num_first ? out->bytes : out->bytes + str_len;
-      char *str_dst = num_first ? out->bytes + num_len : out->bytes;
-      
-      str_copy_small(num_dst, digits, num_len);
-      str_copy_small(str_dst, in->bytes, str_len);
-      
-      out->bytes[total_len] = '\0';
-      uint8_t ascii = str_flat_ascii_state(in);
-      
-      if (ascii == STR_ASCII_UNKNOWN)
-        ascii = str_detect_ascii_bytes(out->bytes, total_len);
-      str_flat_init_meta(out, ascii);
+      uint8_t in_ascii = str_flat_ascii_state(in);
+      if (num_first) str_flat_fill_concat(
+        ant_str_flat_ptr(result), digits, num_len, STR_ASCII_YES, in->bytes, str_len, in_ascii);
+      else str_flat_fill_concat(
+        ant_str_flat_ptr(result), in->bytes, str_len, in_ascii, digits, num_len, STR_ASCII_YES);
     }
   } else {
     ant_value_t num_str = mkstr_with_ascii(js, digits, num_len, true);
@@ -5121,18 +5112,13 @@ ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r) {
       GC_ROOT_PIN(js, r);
       ant_value_t flat = js_mkstr(js, NULL, (size_t)total_len);
       if (!is_err(flat)) {
-        ant_flat_string_t *out = ant_str_flat_ptr(flat);
         ant_flat_string_t *left = ant_str_flat_ptr(l);
         ant_flat_string_t *right = ant_str_flat_ptr(r);
-        str_copy_small(out->bytes, left->bytes, (size_t)n1);
-        str_copy_small(out->bytes + n1, right->bytes, (size_t)n2);
-        out->bytes[total_len] = '\0';
-        uint8_t ascii = str_concat_ascii_state(
-          str_flat_ascii_state(left), str_flat_ascii_state(right)
+        str_flat_fill_concat(
+          ant_str_flat_ptr(flat),
+          left->bytes, (size_t)n1, str_flat_ascii_state(left),
+          right->bytes, (size_t)n2, str_flat_ascii_state(right)
         );
-        if (ascii == STR_ASCII_UNKNOWN)
-          ascii = str_detect_ascii_bytes(out->bytes, (size_t)total_len);
-        str_flat_init_meta(out, ascii);
       }
       GC_ROOT_RESTORE(js, root_mark);
       return flat;

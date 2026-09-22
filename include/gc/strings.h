@@ -148,43 +148,6 @@ static inline uint8_t str_concat_ascii_state(uint8_t left, uint8_t right) {
   return (left == STR_ASCII_YES && right == STR_ASCII_YES) ? STR_ASCII_YES : STR_ASCII_UNKNOWN;
 }
 
-static inline void str_copy_small(char *dst, const char *src, size_t n) {
-  if (n > 32) { 
-    memcpy(dst, src, n);
-    return;
-  }
-  
-  if (n >= 16) {
-    uint64_t head[2], tail[2];
-    memcpy(head, src, 16); memcpy(tail, src + n - 16, 16);
-    memcpy(dst, head, 16); memcpy(dst + n - 16, tail, 16);
-    return;
-  }
-  
-  if (n >= 8) {
-    uint64_t head, tail;
-    memcpy(&head, src, 8); memcpy(&tail, src + n - 8, 8);
-    memcpy(dst, &head, 8); memcpy(dst + n - 8, &tail, 8);
-    return;
-  }
-  
-  if (n >= 4) {
-    uint32_t head, tail;
-    memcpy(&head, src, 4); memcpy(&tail, src + n - 4, 4);
-    memcpy(dst, &head, 4); memcpy(dst + n - 4, &tail, 4);
-    return;
-  }
-  
-  if (n >= 2) {
-    uint16_t head, tail;
-    memcpy(&head, src, 2); memcpy(&tail, src + n - 2, 2);
-    memcpy(dst, &head, 2); memcpy(dst + n - 2, &tail, 2);
-    return;
-  }
-  
-  if (n) dst[0] = src[0];
-}
-
 static inline uint8_t str_detect_ascii_bytes(const char *str, size_t len) {
   const unsigned char *s = (const unsigned char *)str;
   
@@ -238,6 +201,58 @@ static inline void str_flat_set_ascii_state(ant_flat_string_t *flat, uint8_t sta
 static inline void str_flat_init_meta(ant_flat_string_t *flat, uint8_t ascii_state) {
   if (!flat) return;
   flat->meta = ((uint64_t)ascii_state << STR_META_ASCII_SHIFT) | STR_UTF16_LEN_UNKNOWN;
+}
+
+static inline void str_copy_small(char *dst, const char *src, size_t n) {
+  if (n > 32) { 
+    memcpy(dst, src, n);
+    return;
+  }
+  
+  if (n >= 16) {
+    uint64_t head[2], tail[2];
+    memcpy(head, src, 16); memcpy(tail, src + n - 16, 16);
+    memcpy(dst, head, 16); memcpy(dst + n - 16, tail, 16);
+    return;
+  }
+  
+  if (n >= 8) {
+    uint64_t head, tail;
+    memcpy(&head, src, 8); memcpy(&tail, src + n - 8, 8);
+    memcpy(dst, &head, 8); memcpy(dst + n - 8, &tail, 8);
+    return;
+  }
+  
+  if (n >= 4) {
+    uint32_t head, tail;
+    memcpy(&head, src, 4); memcpy(&tail, src + n - 4, 4);
+    memcpy(dst, &head, 4); memcpy(dst + n - 4, &tail, 4);
+    return;
+  }
+  
+  if (n >= 2) {
+    uint16_t head, tail;
+    memcpy(&head, src, 2); memcpy(&tail, src + n - 2, 2);
+    memcpy(dst, &head, 2); memcpy(dst + n - 2, &tail, 2);
+    return;
+  }
+  
+  if (n) dst[0] = src[0];
+}
+
+static inline void str_flat_fill_concat(
+  ant_flat_string_t *out,
+  const char *a, size_t na, uint8_t a_ascii,
+  const char *b, size_t nb, uint8_t b_ascii
+) {
+  str_copy_small(out->bytes, a, na);
+  str_copy_small(out->bytes + na, b, nb);
+  
+  out->bytes[na + nb] = '\0';
+  uint8_t ascii = str_concat_ascii_state(a_ascii, b_ascii);
+  
+  if (ascii == STR_ASCII_UNKNOWN) ascii = str_detect_ascii_bytes(out->bytes, na + nb);
+  str_flat_init_meta(out, ascii);
 }
 
 static inline void str_flat_set_utf16_len(ant_flat_string_t *flat, ant_offset_t len) {
