@@ -516,6 +516,21 @@ static inline uint8_t sv_builder_chunk_ascii_state(ant_flat_string_t *flat) {
   return state;
 }
 
+static bool sv_builder_append_number(ant_string_builder_t *builder, ant_value_t num) {
+  char digits[32];
+  size_t n = js_number_to_chars(num, digits, sizeof(digits));
+  if (n == 0 || builder->tail_len + n > STR_BUILDER_TAIL_CAP) return false;
+
+  str_copy_small(builder->tail + builder->tail_len, digits, n);
+  builder->tail_len = (uint16_t)(builder->tail_len + n);
+  builder->len += (ant_offset_t)n;
+  
+  if (vtype(builder->cached) == kTypeNumber) builder->cached = tov(tod(builder->cached) + (double)n);
+  if (builder->ascii_state != STR_ASCII_NO) builder->ascii_state = STR_ASCII_YES;
+  
+  return true;
+}
+
 static inline void sv_builder_note_ascii(ant_string_builder_t *builder, uint8_t state) {
   if (!builder) return;
   if (state == STR_ASCII_NO) builder->ascii_state = STR_ASCII_NO;
@@ -762,6 +777,11 @@ ant_value_t sv_string_builder_append_slot(
   ant_string_builder_t *builder = sv_string_builder_heap_ptr(lhs);
 
   if (builder) {
+    if (vtype(rhs) == kTypeNumber && sv_builder_append_number(builder, rhs)) {
+      sv_record_slot_feedback(frame, func, slot_idx, lhs);
+      return js_mkundef();
+    }
+
     ant_value_t rhs_str = rhs;
     if (!sv_string_builder_flat_ptr(rhs)) {
       rhs_str = coerce_to_str_concat(js, rhs);

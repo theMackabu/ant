@@ -40,6 +40,26 @@ let expected = '';
 for (let i = 0; i < 2000; i++) expected = expected.concat(String(i));
 assert.strictEqual(acc, expected);
 
+// builder appends of numbers must keep the cached UTF-16 length and ASCII
+// state right, including when .length is read mid-build and after non-ASCII
+{
+  let b = 'caf\u00e9';
+  let total = b.length;
+  for (let i = 0; i < 500; i++) {
+    b += i;
+    b += -i / 4;
+    if (i % 7 === 0) { assert.strictEqual(b.length, total + String(i).length + String(-i / 4).length); }
+    total += String(i).length + String(-i / 4).length;
+  }
+  assert.strictEqual(b.length, total);
+  let ref = 'caf\u00e9';
+  for (let i = 0; i < 500; i++) ref = ref.concat(String(i), String(-i / 4));
+  assert.strictEqual(b, ref);
+  let j = '';
+  for (let i = 0; i < 300; i++) { j += NaN; j += Infinity; j += 1e21; }
+  assert.strictEqual(j.length, 300 * ('NaN'.length + 'Infinity'.length + '1e+21'.length));
+}
+
 assert.strictEqual('v' + -0, 'v0');
 assert.strictEqual(1 + 2 + 'a' + 1 + 2, '3a12');
 console.log('PASS');
