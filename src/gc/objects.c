@@ -329,7 +329,7 @@ static inline void gc_grey_obj(ant_object_t *obj) {
   gc_mark_stack_push(obj);
 }
 
-static inline void gc_mark_string(ant_t *js, ant_value_t v) {
+static inline void gc_mark_string_exact(ant_t *js, ant_value_t v) {
   if ((vdata(v) & STR_HEAP_TAG_MASK) == STR_HEAP_TAG_FLAT) {
     const ant_flat_string_t *flat = vptr_masked(v, STR_HEAP_TAG_MASK);
     if (flat && !js->rope_gc.minor_marking && !str_flat_is_permanent(flat)) gc_strings_mark(js, flat);
@@ -430,7 +430,7 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
   }
 
   if (t == kTypeString) {
-    gc_mark_string(js, v);
+    gc_mark_string_exact(js, v);
     return;
   }
 
