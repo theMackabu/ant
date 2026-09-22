@@ -19608,6 +19608,7 @@ void js_destroy(ant_t *js) {
   
   js_class_pool_destroy(&js->pool.bigint);
   js_string_pool_destroy(&js->pool.string);
+  gc_strings_epoch_bump();
 
   if (js->owns_mem) free(js);
 }

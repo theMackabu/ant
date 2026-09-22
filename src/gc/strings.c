@@ -321,7 +321,11 @@ void gc_strings_sweep(ant_t *js) {
 
   g_string_mark_count = 0;
   g_large_string_mark_count = 0;
-  g_strings_sweep_epoch++;
   
+  gc_strings_epoch_bump();
+}
+
+void gc_strings_epoch_bump(void) {
+  g_strings_sweep_epoch++;
   if (g_strings_sweep_epoch == 0) g_strings_sweep_epoch = 1;
 }
