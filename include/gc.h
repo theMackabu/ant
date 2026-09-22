@@ -5,19 +5,19 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-static constexpr size_t GC_MAJOR_SCALE = 2048;
-static constexpr size_t GC_MIN_TICK    = 1024;
+static constexpr size_t GC_MAJOR_MIN_PROMOTIONS = 4;
+static constexpr size_t GC_MIN_TICK = 1024;
 
-static constexpr uint32_t GC_MAJOR_EVERY_N_MINOR     = 8;
-static constexpr uint64_t GC_FORCE_INTERVAL_MS       = 50;
+static constexpr uint32_t GC_MAJOR_EVERY_N_MINOR = 8;
+static constexpr uint64_t GC_FORCE_INTERVAL_MS = 50;
 static constexpr uint64_t GC_FORCE_MAJOR_INTERVAL_MS = 1000;
 
-static constexpr size_t GC_NURSERY_THRESHOLD         = 32768;
+static constexpr size_t GC_NURSERY_THRESHOLD = 32768;
 static constexpr size_t GC_CLOSURE_NURSERY_THRESHOLD = 131072;
-static constexpr size_t GC_CLOSURE_PROMOTED_MAJOR    = 262144;
+static constexpr size_t GC_CLOSURE_PROMOTED_MAJOR = 262144;
 
-static constexpr size_t GC_CLOSURE_MAJOR_GROWTH   = 16u * 1024u * 1024u;
-static constexpr size_t GC_POOL_PRESSURE_FLOOR    = 8u * 1024u * 1024u;
+static constexpr size_t GC_CLOSURE_MAJOR_GROWTH = 16u * 1024u * 1024u;
+static constexpr size_t GC_POOL_PRESSURE_FLOOR = 8u * 1024u * 1024u;
 static constexpr size_t GC_ROPE_NURSERY_THRESHOLD = 8u * 1024u * 1024u;
 
 #define GC_OBJ_TYPE_MASK (T_FLAG_FIND(kTypeObject) \
@@ -38,6 +38,8 @@ typedef struct gc_func_mark_profile {
 void gc_run(ant_t *js);
 void gc_run_minor(ant_t *js);
 void gc_maybe(ant_t *js);
+bool gc_alloc_due(ant_t *js);
+void gc_alloc_check(ant_t *js);
 void gc_pressure(ant_t *js);
 
 void gc_remember_add(ant_t *js, ant_object_t *obj);

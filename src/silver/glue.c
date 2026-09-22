@@ -76,6 +76,7 @@ ant_value_t jit_helper_normalize_sloppy_this(ant_t *js, ant_value_t value) {
 
 ant_value_t jit_helper_add(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
   if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return tov(tod(l) + tod(r));
+  
   if (vtype(l) == kTypeString && vtype(r) == kTypeString) {
     GC_ROOT_SAVE(root_mark, js);
     GC_ROOT_PIN(js, l);
@@ -84,6 +85,17 @@ ant_value_t jit_helper_add(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r)
     GC_ROOT_RESTORE(js, root_mark);
     return is_err(res) ? SV_JIT_BAILOUT : res;
   }
+  
+  if (vtype(l) == kTypeString && vtype(r) == kTypeNumber) {
+    ant_value_t res = do_string_num_concat(js, l, r, false);
+    return is_err(res) ? SV_JIT_BAILOUT : res;
+  }
+  
+  if (vtype(l) == kTypeNumber && vtype(r) == kTypeString) {
+    ant_value_t res = do_string_num_concat(js, r, l, true);
+    return is_err(res) ? SV_JIT_BAILOUT : res;
+  }
+  
   return SV_JIT_BAILOUT;
 }
 

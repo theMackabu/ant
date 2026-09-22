@@ -60,9 +60,14 @@ static size_t gc_pool_live_bytes(ant_t *js) {
 }
 
 size_t gc_live_major_threshold(ant_t *js) {
+  // major must wait until the old generation has grown by several nursery
+  // promotions since the last major: a multiple of a small baseline is still
+  // small, and the youngest old objects were live moments ago, so a major
+  // right after a promotion reclaims nothing and only inflates the growth
+  // factor. The floor is therefore in units of promotions, not a constant.
   size_t threshold = gc_scaled_threshold(
-    js->gc_last_live, 
-    gc_major_live_growth_x256, GC_MAJOR_SCALE
+    js->gc_last_live, gc_major_live_growth_x256,
+    js->gc_last_live + GC_MAJOR_MIN_PROMOTIONS * gc_nursery_threshold
   );
 
   bool nursery_churn = gc_minor_surv_ewma <= 64;   // <= 25% young survival
@@ -296,10 +301,8 @@ void gc_run_minor(ant_t *js) {
   gc_objects_run_minor(js);
   gc_clear_remembered_builders(js);
   gc_ropes_sweep(js, true);
-
   ant_ic_obj_epoch_bump();
 
-  js->gc_last_live = js->obj_arena.live_count;
   js->old_live_count = js->obj_arena.live_count;
   js->minor_gc_count++;
 
@@ -318,10 +321,7 @@ void gc_pressure(ant_t *js) {
   gc_maybe(js);
 }
 
-void gc_maybe(ant_t *js) {
-  if (__builtin_expect(gc_disabled, 0)) return;
-  if (++gc_tick < GC_MIN_TICK) return;
-  
+static void gc_decide(ant_t *js) {
   size_t live = js->obj_arena.live_count;
   size_t young_count = live > js->old_live_count ? live - js->old_live_count : 0;
   size_t closure_young = js->gc_closure_alloc > js->gc_closure_at_minor
@@ -391,4 +391,25 @@ void gc_maybe(ant_t *js) {
   gc_tick = 0;
   if (gc_now_ms() - gc_last_major_ms >= GC_FORCE_MAJOR_INTERVAL_MS) gc_run(js);
   else gc_run_minor(js);
+}
+
+// the interpreter polls gc_maybe on loop back edges, 
+// but JIT loops and native helpers dont, so without this check their 
+// garbage piles up until a major threshold trips. fires the ungated
+// decision only once the nursery or the major threshold is reached.
+bool gc_alloc_due(ant_t *js) {
+  if (__builtin_expect(gc_disabled, 0)) return false;
+  size_t live = js->obj_arena.live_count;
+  size_t young_count = live > js->old_live_count ? live - js->old_live_count : 0;
+  return young_count >= gc_nursery_threshold || live >= gc_live_major_threshold(js);
+}
+
+void gc_alloc_check(ant_t *js) {
+  if (gc_alloc_due(js)) gc_decide(js);
+}
+
+void gc_maybe(ant_t *js) {
+  if (__builtin_expect(gc_disabled, 0)) return;
+  if (++gc_tick < GC_MIN_TICK) return;
+  gc_decide(js);
 }

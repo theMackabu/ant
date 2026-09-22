@@ -421,8 +421,7 @@ static ant_exotic_ops_t *obj_ensure_exotic_ops(ant_object_t *obj) {
 }
 
 static ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit) {
-  size_t threshold = gc_live_major_threshold(js);
-  if (js->obj_arena.live_count >= threshold) gc_maybe(js);
+  gc_alloc_check(js);
 
   ant_object_t *obj = (ant_object_t *)fixed_arena_alloc_uninit(&js->obj_arena);
   if (!obj) return NULL;
@@ -1489,7 +1488,7 @@ static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
   return n;
 }
 
-static size_t strnum(ant_value_t value, char *buf, size_t len) {
+size_t js_number_to_chars(ant_value_t value, char *buf, size_t len) {
   double dv = tod(value);
 
   if (__builtin_expect(isnan(dv), 0)) 
@@ -2019,14 +2018,14 @@ size_t tostr(ant_t *js, ant_value_t value, char *buf, size_t len) {
       return b ? ANT_COPY(buf, len, "true") : ANT_COPY(buf, len, "false");
     }
     
-    case kTypeArray:     return strarr(js, value, buf, len);
-    case kTypeObject:     return strobj(js, value, buf, len);
-    case kTypeString:     return strstring(js, value, buf, len);
-    case kTypeNumber:     return strnum(value, buf, len);
-    case kTypeBigInt:  return strbigint(js, value, buf, len);
-    case kTypePromise: return strpromise(js, value, buf, len);
-    case kTypeFunction:    return strfunc(js, value, buf, len);
-    case kTypeBuiltin:   return strcfunc(js, value, buf, len);
+    case kTypeArray:    return strarr(js, value, buf, len);
+    case kTypeObject:   return strobj(js, value, buf, len);
+    case kTypeString:   return strstring(js, value, buf, len);
+    case kTypeNumber:   return js_number_to_chars(value, buf, len);
+    case kTypeBigInt:   return strbigint(js, value, buf, len);
+    case kTypePromise:  return strpromise(js, value, buf, len);
+    case kTypeFunction: return strfunc(js, value, buf, len);
+    case kTypeBuiltin:  return strcfunc(js, value, buf, len);
     
     case kTypeError: {
       if (is_err(value)) {
@@ -2175,7 +2174,7 @@ ant_value_t js_tostring_val(ant_t *js, ant_value_t value) {
   
   L_NUM: {
     char num_buf[32];
-    len = strnum(value, num_buf, sizeof(num_buf));
+    len = js_number_to_chars(value, num_buf, sizeof(num_buf));
     return js_mkstr_ascii(js, num_buf, len);
   }
     
@@ -2923,10 +2922,10 @@ ant_value_t js_mkobj_with_inobj_limit(ant_t *js, uint8_t inobj_limit) {
 
 ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t template) {
   if (vtype(template) != kTypeObject) return js_mkerr(js, "invalid object template");
-  if (js->obj_arena.live_count >= gc_live_major_threshold(js)) {
+  if (gc_alloc_due(js)) {
     GC_ROOT_SAVE(mark, js);
     GC_ROOT_PIN(js, template);
-    gc_maybe(js);
+    gc_alloc_check(js);
     GC_ROOT_RESTORE(js, mark);
   }
 
@@ -4899,7 +4898,7 @@ switch (vtype(value)) {
   
   case kTypeNumber: {
     char buf[32];
-    size_t len = strnum(value, buf, sizeof(buf));
+    size_t len = js_number_to_chars(value, buf, sizeof(buf));
     return string_builder_append(sb, buf, len);
   }
   
@@ -5052,7 +5051,7 @@ ant_offset_t str_utf16_len(ant_t *js, ant_value_t str) {
 
 ant_value_t do_string_num_concat(ant_t *js, ant_value_t str, ant_value_t num, bool num_first) {
   char digits[32];
-  size_t num_len = strnum(num, digits, sizeof(digits));
+  size_t num_len = js_number_to_chars(num, digits, sizeof(digits));
 
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, str);
@@ -5212,7 +5211,7 @@ static bool js_try_invoke(ant_t *js, ant_value_t obj, const char *method, ant_va
 
 static size_t format_number_to_locale_string(ant_value_t num, char *buf, size_t capacity) {
   char raw[64];
-  size_t raw_len = strnum(num, raw, sizeof(raw));
+  size_t raw_len = js_number_to_chars(num, raw, sizeof(raw));
   
   double d = tod(num);
   if (!isfinite(d) || memchr(raw, 'e', raw_len) || memchr(raw, 'E', raw_len)) {
@@ -5494,7 +5493,7 @@ static ant_value_t property_key_view_init_slow(
 
   switch (vtype(value)) {
     case kTypeNumber:
-      key->length = strnum(value, stack_buf, stack_capacity);
+      key->length = js_number_to_chars(value, stack_buf, stack_capacity);
       key->bytes = stack_buf;
       return js_mkundef();
     case kTypeBigInt: {
@@ -10756,7 +10755,7 @@ static ant_value_t builtin_array_join(ant_params_t) {
         }
         elem_len = (size_t)vstrlen(js, elem);
         break;
-      case kTypeNumber: elem_len = strnum(elem, num_buf, sizeof(num_buf)); break;
+      case kTypeNumber: elem_len = js_number_to_chars(elem, num_buf, sizeof(num_buf)); break;
       case kTypeBool: elem_len = vdata(elem) ? 4 : 5; break;
       case kTypeNull:
       case kTypeUndefined: break;
@@ -10804,7 +10803,7 @@ static ant_value_t builtin_array_join(ant_params_t) {
           break;
         }
         case kTypeNumber:
-          elem_len = strnum(elem, num_buf, sizeof(num_buf));
+          elem_len = js_number_to_chars(elem, num_buf, sizeof(num_buf));
           elem_ptr = num_buf;
           break;
         case kTypeBool:
@@ -10870,7 +10869,7 @@ static ant_value_t builtin_array_join(ant_params_t) {
         break;
       }
       case kTypeNumber:
-        elem_len = strnum(elem, num_buf, sizeof(num_buf));
+        elem_len = js_number_to_chars(elem, num_buf, sizeof(num_buf));
         elem_ptr = num_buf;
         break;
       case kTypeBool:
@@ -15003,7 +15002,7 @@ static ant_value_t builtin_number_toString(ant_params_t) {
   
   if (radix == 10) {
     char buf[64];
-    size_t len = strnum(num, buf, sizeof(buf));
+    size_t len = js_number_to_chars(num, buf, sizeof(buf));
     return js_mkstr(js, buf, len);
   }
   
@@ -15077,7 +15076,7 @@ static ant_value_t builtin_number_toFixed(ant_params_t) {
   
   if (fabs(d) >= 1e21) {
     char buf[64];
-    size_t len = strnum(num, buf, sizeof(buf));
+    size_t len = js_number_to_chars(num, buf, sizeof(buf));
     return js_mkstr(js, buf, len);
   }
 
@@ -15098,7 +15097,7 @@ static ant_value_t builtin_number_toPrecision(ant_params_t) {
   
   if (nargs < 1 || vtype(args[0]) == kTypeUndefined) {
     char buf[64];
-    size_t len = strnum(num, buf, sizeof(buf));
+    size_t len = js_number_to_chars(num, buf, sizeof(buf));
     return js_mkstr(js, buf, len);
   }
   
@@ -17523,7 +17522,7 @@ ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r) {
     prop_name = d ? d : "symbol";
     prop_len = (ant_offset_t)strlen(prop_name);
   } else if (vtype(key) == kTypeNumber) {
-    prop_len = (ant_offset_t)strnum(key, num_buf, sizeof(num_buf));
+    prop_len = (ant_offset_t)js_number_to_chars(key, num_buf, sizeof(num_buf));
     prop_name = num_buf;
   } else {
     ant_value_t key_str = js_tostring_val(js, key);

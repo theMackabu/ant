@@ -1150,6 +1150,11 @@ void gc_pin_existing_objects(ant_t *js) {
   js->young_closure_len = 0;
   js->young_upvalue_len = 0;
   js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
+
+  // the pinned bootstrap heap is the starting baseline: it is neither young
+  // nor reclaimable, so counting it as young would trip an immediate major
+  js->gc_last_live = js->obj_arena.live_count;
+  js->old_live_count = js->obj_arena.live_count;
 }
 
 void gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
