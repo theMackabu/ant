@@ -26,8 +26,10 @@ try {
     });
     const stderr = result.stderr.replace(/\x1b\[[0-9;]*m/g, '');
     assert.strictEqual(result.status, 1, JSON.stringify(result));
-    assert.match(stderr, /actual-callback-failure/);
-    assert.doesNotMatch(stderr, /handled-marker-unique/);
+    const name = path.basename(file).replace('.', '\\.');
+    assert.match(stderr, new RegExp(`${name}:11:25`), stderr);
+    assert.doesNotMatch(stderr, new RegExp(`${name}:7:`), stderr);
+    assert.strictEqual(stderr.match(/^Error: actual-callback-failure$/gm)?.length, 1, `reported once:\n${stderr}`);
   }
   for (const body of [
     "Reflect.apply(() => { throw 'handled-async-marker'; }, null, []);",
@@ -45,8 +47,9 @@ try {
     const result = spawnSync(process.execPath, [file], { encoding: 'utf8', timeout: 5000 });
     const stderr = result.stderr.replace(/\x1b\[[0-9;]*m/g, '');
     assert.strictEqual(result.status, 1, JSON.stringify(result));
-    assert.match(stderr, /actual-callback-failure/);
-    assert.doesNotMatch(stderr, /handled-async-marker/);
+    assert.match(stderr, /async\.cjs:5:\d+/, stderr);
+    assert.doesNotMatch(stderr, /async\.cjs:3:/, stderr);
+    assert.strictEqual(stderr.match(/^Error: actual-callback-failure$/gm)?.length, 1, `reported once:\n${stderr}`);
   }
 
   const stacklessFile = path.join(root, 'stackless-callback.cjs');

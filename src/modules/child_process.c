@@ -165,46 +165,6 @@ static void child_stream_call_callback(
   int nargs
 );
 
-static void fprint_js_str_raw(FILE *out, ant_t *js, ant_value_t s) {
-  if (vtype(s) != kTypeString) {
-    fprintf(out, "%s\n", js_str(js, s));
-    return;
-  }
-
-  ant_offset_t len = 0;
-  ant_offset_t off = vstr(js, s, &len);
-  const char *ptr = (const char *)(uintptr_t)off;
-  
-  if (ptr && len > 0) fwrite(ptr, 1, (size_t)len, out);
-  if (len == 0 || ptr[len - 1] != '\n') fputc('\n', out);
-}
-
-static void log_listener_error(ant_t *js, const char *event_name, ant_value_t err) {
-  ant_value_t thrown_stack = Ant_Exception_Stack(js, err);
-  if (vtype(thrown_stack) == kTypeString) {
-    fprintf(stderr, "Error in child_process '%s' listener:\n", event_name);
-    fprint_js_str_raw(stderr, js, thrown_stack);
-    return;
-  }
-
-  ant_value_t src = Ant_Exception_Value(js, err);
-  ant_value_t name = js_get(js, src, "name");
-  ant_value_t message = js_get(js, src, "message");
-
-  const char *detail = NULL;
-  if (vtype(name) == kTypeString && vtype(message) == kTypeString) {
-    const char *name_s = js_str(js, name);
-    const char *msg_s = js_str(js, message);
-    if (msg_s && msg_s[0]) fprintf(stderr, "Error in child_process '%s' listener: %s: %s\n", event_name, name_s, msg_s);
-    else detail = name_s;
-  } 
-  else if (vtype(message) == kTypeString) detail = js_str(js, message);
-  else detail = js_str(js, src);
-  
-  if (detail) fprintf(stderr, "Error in child_process '%s' listener: %s\n", event_name, detail);
-  js_print_stack_trace_vm(js, stderr);
-}
-
 static void emit_event(child_process_t *cp, const char *name, ant_value_t *args, int nargs) {
   if (vtype(cp->child_obj) != kTypeObject) return;
   eventemitter_emit_args(cp->js, cp->child_obj, name, args, nargs);
@@ -1636,7 +1596,8 @@ static ant_value_t exec_file_close_callback(ant_params_t) {
   cb_args[2] = stderr_val;
 
   ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 3, NULL, js_mkundef());
-  if (vtype(result) == kTypeError) log_listener_error(js, "execFile", result);
+  if (vtype(result) == kTypeError) return result;
+  
   return js_mkundef();
 }
 
