@@ -532,7 +532,7 @@ size_t utf16_strlen(const char *str, size_t byte_len) {
   return cursor.utf16_pos;
 }
 
-bool utf8_validate_bytes(const char *str, size_t len) {
+static bool utf8_validate_impl(const char *str, size_t len, bool allow_surrogates) {
   const unsigned char *s = (const unsigned char *)str;
   const unsigned char *end = s + len;
 
@@ -546,10 +546,11 @@ bool utf8_validate_bytes(const char *str, size_t len) {
     size_t cont;
     unsigned char lo = 0x80;
     unsigned char hi = 0xbf;
+    
     if (c >= 0xc2 && c <= 0xdf) cont = 1;
     else if (c == 0xe0) { cont = 2; lo = 0xa0; }
     else if (c >= 0xe1 && c <= 0xec) cont = 2;
-    else if (c == 0xed) { cont = 2; hi = 0x9f; }
+    else if (c == 0xed) { cont = 2; if (!allow_surrogates) hi = 0x9f; }
     else if (c == 0xee || c == 0xef) cont = 2;
     else if (c == 0xf0) { cont = 3; lo = 0x90; }
     else if (c >= 0xf1 && c <= 0xf3) cont = 3;
@@ -558,16 +559,27 @@ bool utf8_validate_bytes(const char *str, size_t len) {
 
     if ((size_t)(end - s) <= cont) return false;
     if (s[1] < lo || s[1] > hi) return false;
-    for (size_t i = 2; i <= cont; i++) {
+    
+    for (size_t i = 2; i <= cont; i++)
       if (s[i] < 0x80 || s[i] > 0xbf) return false;
-    }
+    
     s += cont + 1;
   }
+  
   return true;
 }
 
+bool utf8_validate_bytes(const char *str, size_t len) {
+  return utf8_validate_impl(str, len, false);
+}
+
+bool wtf8_validate_bytes(const char *str, size_t len) {
+  return utf8_validate_impl(str, len, true);
+}
+
 static bool utf8_wtf8_surrogate_at(
-  const uint8_t *str, size_t len, size_t pos, uint16_t *out
+  const uint8_t *str, size_t len,
+  size_t pos, uint16_t *out
 ) {
   if (
     pos + 2 >= len || str[pos] != 0xed ||
@@ -580,6 +592,7 @@ static bool utf8_wtf8_surrogate_at(
     ((uint16_t)(str[pos + 1] & 0x3f) << 6) |
     (uint16_t)(str[pos + 2] & 0x3f)
   );
+  
   return *out >= 0xd800 && *out <= 0xdfff;
 }
 

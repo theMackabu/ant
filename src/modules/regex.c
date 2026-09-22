@@ -1899,37 +1899,6 @@ static ant_value_t regexp_exec_plain_literal_fast(
   );
 }
 
-static bool regex_wtf8_validate(const unsigned char *s, size_t len) {
-  const unsigned char *end = s + len;
-
-  while (s < end) {
-    unsigned char c = *s;
-    if (c < 0x80) {
-      s++;
-      continue;
-    }
-
-    size_t cont;
-    unsigned char lo = 0x80;
-    unsigned char hi = 0xbf;
-    
-    if (c >= 0xc2 && c <= 0xdf) cont = 1;
-    else if (c == 0xe0) { cont = 2; lo = 0xa0; }
-    else if (c >= 0xe1 && c <= 0xef) cont = 2;
-    else if (c == 0xf0) { cont = 3; lo = 0x90; }
-    else if (c >= 0xf1 && c <= 0xf3) cont = 3;
-    else if (c == 0xf4) { cont = 3; hi = 0x8f; }
-    else return false;
-
-    if ((size_t)(end - s) <= cont) return false;
-    if (s[1] < lo || s[1] > hi) return false;
-    for (size_t i = 2; i <= cont; i++) if (s[i] < 0x80 || s[i] > 0xbf) return false;
-    s += cont + 1;
-  }
-
-  return true;
-}
-
 static bool regex_subject_can_skip_utf_check(const char *str, size_t len) {
   if (str_is_valid_utf8(str)) return true;
 
@@ -1943,7 +1912,7 @@ static bool regex_subject_can_skip_utf_check(const char *str, size_t len) {
   uint64_t epoch = gc_strings_sweep_epoch();
   if (cache.str == str && cache.len == len && cache.epoch == epoch) return cache.valid;
 
-  bool valid = regex_wtf8_validate((const unsigned char *)str, len);
+  bool valid = wtf8_validate_bytes(str, len);
   cache.str = str;
   cache.len = len;
   cache.epoch = epoch;
