@@ -1305,11 +1305,13 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   __builtin_unwind_init();
 #endif
   gc_vm_seg_t interp_seg;
-  uintptr_t seg_hi = (uintptr_t)__builtin_frame_address(0) - GC_VM_SEG_SAVED_REGS_BYTES;
+  uintptr_t seg_fp = (uintptr_t)__builtin_frame_address(0);
+  uintptr_t seg_hi = seg_fp - GC_VM_SEG_SAVED_REGS_BYTES;
   
   interp_seg.prev = js->vm_segs;
   interp_seg.lo = gc_native_sp();
   interp_seg.hi = seg_hi > interp_seg.lo ? seg_hi : interp_seg.lo;
+  interp_seg.fp = seg_fp;
   interp_seg.jit_depth = js->jit_active_depth;
   js->vm_segs = &interp_seg;
 

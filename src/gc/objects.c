@@ -2,6 +2,7 @@
 #include "sugar.h"
 #include "shapes.h"
 
+#include "jit/entry_stub.h"
 #include "silver/engine.h"
 #include "silver/eval_env.h"
 #include "modules/regex.h"
@@ -719,13 +720,71 @@ void gc_mark_conservative_range(ant_t *js, const void *ptr, size_t size) {
   gc_scan_range(js, lo, lo + bytes);
 }
 
-static void gc_scan_segmented(ant_t *js, uintptr_t lo, uintptr_t hi) {
-  uintptr_t cur = lo;
-  for (gc_vm_seg_t *seg = js->vm_segs; seg; seg = seg->prev) {
-    if (seg->lo < cur || seg->hi > hi || seg->lo >= seg->hi) continue;
-    gc_scan_range(js, cur, seg->lo);
-    cur = seg->hi;
+typedef struct {
+  uintptr_t fp;
+  uintptr_t lo, hi;
+} gc_stub_walk_t;
+
+static bool gc_next_interp_stub_save(ant_t *js, gc_stub_walk_t *w, uintptr_t *save_lo, uintptr_t *save_hi) {
+#if ANT_JIT_ENTER_STUB
+  while (w->fp >= w->lo && w->fp + 16 <= w->hi && (w->fp & 7) == 0) {
+    uintptr_t fp = w->fp;
+    uintptr_t next = ((const uintptr_t *)fp)[0];
+    if (next <= fp) break;
+    w->fp = next;
+
+    if (((const uintptr_t *)fp)[1] != (uintptr_t)ant_jit_enter_clean_ret) continue;
+    if (next + 16 > w->hi) continue;
+
+    uintptr_t lo = next + ANT_JIT_ENTER_SAVED_LO;
+    uintptr_t hi = next + ANT_JIT_ENTER_SAVED_HI;
+    if (lo < w->lo || hi > w->hi) continue;
+
+    uintptr_t caller_fp = ((const uintptr_t *)next)[0];
+    for (gc_vm_seg_t *seg = js->vm_segs; seg; seg = seg->prev) if (seg->fp == caller_fp) {
+      *save_lo = lo;
+      *save_hi = hi;
+      return true;
+    }
   }
+  w->fp = 0;
+#else
+  (void)js; (void)w; (void)save_lo; (void)save_hi;
+#endif
+  return false;
+}
+
+static void gc_scan_segmented(ant_t *js, uintptr_t lo, uintptr_t hi) {
+  gc_stub_walk_t walk = { 
+    .fp = (uintptr_t)__builtin_frame_address(0), 
+    .lo = lo, .hi = hi 
+  };
+  
+  uintptr_t save_lo = 0, save_hi = 0;
+  bool have_save = gc_next_interp_stub_save(js, &walk, &save_lo, &save_hi);
+
+  uintptr_t cur = lo;
+  gc_vm_seg_t *seg = js->vm_segs;
+  
+  for (;;) {
+    while (seg && (seg->lo < cur || seg->hi > hi || seg->lo >= seg->hi)) seg = seg->prev;
+    while (have_save && save_lo < cur) have_save = gc_next_interp_stub_save(js, &walk, &save_lo, &save_hi);
+
+    uintptr_t skip_lo, skip_hi;
+    if (seg && (!have_save || seg->lo <= save_lo)) {
+      skip_lo = seg->lo;
+      skip_hi = seg->hi;
+      seg = seg->prev;
+    } else if (have_save) {
+      skip_lo = save_lo;
+      skip_hi = save_hi;
+      have_save = gc_next_interp_stub_save(js, &walk, &save_lo, &save_hi);
+    } else break;
+
+    gc_scan_range(js, cur, skip_lo);
+    cur = skip_hi;
+  }
+  
   if (cur < hi) gc_scan_range(js, cur, hi);
 }
 

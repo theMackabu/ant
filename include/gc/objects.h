@@ -10,6 +10,7 @@ typedef void (*gc_extra_roots_fn)(ant_t *js);
 typedef struct gc_vm_seg {
   struct gc_vm_seg *prev;
   uintptr_t lo, hi;
+  uintptr_t fp;
   uint32_t jit_depth;
 } gc_vm_seg_t;
 

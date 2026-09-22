@@ -452,6 +452,15 @@ jit_entry_stub_test = executable(
 )
 test('jit-entry-stub', jit_entry_stub_test)
 
+gc_jit_entry_saves_test = executable(
+  'test-gc-jit-entry-saves',
+  files('tests/test_gc_jit_entry_saves.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('gc-jit-entry-saves', gc_jit_entry_saves_test)
+
 upvalue_close_order_test = executable(
   'test-upvalue-close-order',
   files('tests/test_upvalue_close_order.c'),

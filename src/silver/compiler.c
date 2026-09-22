@@ -2500,7 +2500,7 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       bool neg = false;
       const char *digits = node->str;
       uint32_t dlen = node->len;
-      if (dlen > 0 && digits[0] == '-') neg = true; digits++; dlen--;
+      if (dlen > 0 && digits[0] == '-') { neg = true; digits++; dlen--; }
       if (dlen > 0 && digits[dlen - 1] == 'n') dlen--;
       ant_value_t bi = js_mkbigint_permanent(c->js, digits, dlen, neg);
       emit_constant(c, bi);

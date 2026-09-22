@@ -14,9 +14,11 @@
  * where the scan finds it. Zeroing the registers here means compiled frames
  * only ever save zeros or their own values.
  *
- * The stub's own save area lies inside the compiled-frame segment. The
- * collector skips it when compiled frames are excluded and otherwise scans it
- * harmlessly.
+ * The stub's own save area then holds its caller's values. When the caller is
+ * the interpreter those are the stale values in question, and the collector
+ * skips the area (see gc_next_interp_stub_save); when the caller is C they
+ * may be live, and it stays scanned. The collector finds the stub by the
+ * return address its callee saves, ant_jit_enter_clean_ret.
  *
  * The stub keeps a normal frame record, so frame-pointer walks pass through it.
  */
@@ -27,8 +29,10 @@
 
 #if defined(__APPLE__)
 #define STUB_SYM "_ant_jit_enter_clean"
+#define RET_SYM "_ant_jit_enter_clean_ret"
 #else
 #define STUB_SYM "ant_jit_enter_clean"
+#define RET_SYM "ant_jit_enter_clean_ret"
 #endif
 
 #if defined(__aarch64__)
@@ -66,6 +70,8 @@ __asm__(
   "  mov x27, xzr\n"
   "  mov x28, xzr\n"
   "  blr x16\n"
+  ".globl " RET_SYM "\n"
+  RET_SYM ":\n"
   "  ldp x27, x28, [sp, #80]\n"
   "  ldp x25, x26, [sp, #64]\n"
   "  ldp x23, x24, [sp, #48]\n"
@@ -105,6 +111,8 @@ __asm__(
   "  xor %r14d, %r14d\n"
   "  xor %r15d, %r15d\n"
   "  call *%rax\n"
+  ".globl " RET_SYM "\n"
+  RET_SYM ":\n"
   "  add $8, %rsp\n"
   "  pop %r15\n"
   "  pop %r14\n"
