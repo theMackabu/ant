@@ -6,7 +6,9 @@
 #include <stdbool.h>
 #include <ctype.h>
 #include <inttypes.h>
+#ifndef ANT_WASM_EMBED
 #include <uv.h>
+#endif
 #ifdef _WIN32
 #include <io.h>
 #ifndef STDOUT_FILENO
@@ -26,13 +28,21 @@
 #include "output.h"
 #include "internal.h"
 #include "utils.h"
+#ifdef ANT_WASM_EMBED
+#include "wasm_embed.h"
+#else
 #include "inspector.h"
+#endif
 #include "silver/call.h"
 #include "modules/io.h"
 #include "modules/util.h"
 #include "sandbox/sandbox.h"
 
+#ifdef ANT_WASM_EMBED
+bool io_no_color = true;
+#else
 bool io_no_color = false;
+#endif
 
 static bool g_sandbox_terminal_enabled = false;
 static uint32_t g_sandbox_terminal_capabilities = 0;
@@ -893,27 +903,37 @@ ant_value_t console_emit_current(
 }
 
 static ant_value_t js_console_log(ant_params_t) {
+#ifndef ANT_WASM_EMBED
   ant_inspector_console_api_called(js, "log", args, nargs);
+#endif
   return console_emit_current(js, false, NULL, args, nargs);
 }
 
 static ant_value_t js_console_error(ant_params_t) {
+#ifndef ANT_WASM_EMBED
   ant_inspector_console_api_called(js, "error", args, nargs);
+#endif
   return console_emit_current(js, true, NULL, args, nargs);
 }
 
 static ant_value_t js_console_warn(ant_params_t) {
+#ifndef ANT_WASM_EMBED
   ant_inspector_console_api_called(js, "warning", args, nargs);
+#endif
   return console_emit_current(js, true, NULL, args, nargs);
 }
 
 static ant_value_t js_console_info(ant_params_t) {
+#ifndef ANT_WASM_EMBED
   ant_inspector_console_api_called(js, "info", args, nargs);
+#endif
   return console_emit_current(js, false, NULL, args, nargs);
 }
 
 static ant_value_t js_console_debug(ant_params_t) {
+#ifndef ANT_WASM_EMBED
   ant_inspector_console_api_called(js, "debug", args, nargs);
+#endif
   return console_emit_current(js, false, NULL, args, nargs);
 }
 
@@ -921,13 +941,17 @@ static ant_value_t js_console_assert(ant_params_t) {
   if (nargs < 1) return js_mkundef();
   bool is_truthy = js_truthy(js, args[0]);
   if (is_truthy) return js_mkundef();
+#ifndef ANT_WASM_EMBED
   ant_inspector_console_api_called(js, "assert", args + 1, nargs - 1);
+#endif
   return console_emit_current(js, true, "Assertion failed:", args + 1, nargs - 1);
 }
 
 static ant_value_t js_console_trace(ant_params_t) {
   ant_value_t this_obj = console_get_effective_this(js, js_getthis(js));
+#ifndef ANT_WASM_EMBED
   ant_inspector_console_api_called(js, "trace", args, nargs);
+#endif
   console_emit_current(js, true, "Trace:", args, nargs);
   ant_value_t stack = js_capture_raw_stack(js);
   if (vtype(stack) == kTypeString) {
@@ -944,6 +968,14 @@ static ant_value_t js_console_clear(ant_params_t) {
   return js_mkundef();
 }
 
+static double console_now_ms(void) {
+#ifdef ANT_WASM_EMBED
+  return ant_wasm_now_ms();
+#else
+  return (double)uv_hrtime() / 1e6;
+#endif
+}
+
 static ant_value_t js_console_time(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   const char *label = "default";
@@ -955,7 +987,7 @@ static ant_value_t js_console_time(ant_params_t) {
     return console_emit_current(js, true, NULL, warn_args, 1);
   }
   
-  js_set(js, timers, label, js_mknum((double)uv_hrtime() / 1e6));
+  js_set(js, timers, label, js_mknum(console_now_ms()));
   return js_mkundef();
 }
 
@@ -972,7 +1004,7 @@ static ant_value_t js_console_timeEnd(ant_params_t) {
     return console_emit_current(js, true, NULL, warn_args, 1);
   }
   
-  double elapsed = ((double)uv_hrtime() / 1e6) - js_getnum(start);
+  double elapsed = console_now_ms() - js_getnum(start);
   js_delete_prop(js, timers, label, strlen(label));
   char buf[256];
   
@@ -1001,7 +1033,7 @@ static ant_value_t js_console_timeLog(ant_params_t) {
   }
   
   char buf[256];
-  double elapsed = ((double)uv_hrtime() / 1e6) - js_getnum(start);
+  double elapsed = console_now_ms() - js_getnum(start);
   int len = snprintf(buf, sizeof(buf), "%s: %.3fms", label, elapsed);
   
   ant_value_t *out_args = malloc((size_t)(nargs - extra_start + 1) * sizeof(ant_value_t));

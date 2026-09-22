@@ -23,6 +23,7 @@ import {
 const WASI_ERRNO_BADF = 8;
 const WASI_ERRNO_FAULT = 21;
 const WASI_ERRNO_SPIPE = 70;
+const WASI_RIGHTS_FD_WRITE = 1n << 6n;
 const disposeSymbol = Symbol.dispose ?? Symbol.for('Symbol.dispose');
 
 let compiledModulePromise;
@@ -461,10 +462,22 @@ function wasiImports(memory, crypto) {
       return 0;
     },
     fd_close: () => WASI_ERRNO_BADF,
+    fd_fdstat_get: (fd, pointer) => {
+      if (fd !== 1 && fd !== 2) return WASI_ERRNO_BADF;
+      try {
+        pointer = checkedRange(memory, pointer, 24);
+        new Uint8Array(memory.buffer, pointer, 24).fill(0);
+        new DataView(memory.buffer).setBigUint64(pointer + 8, WASI_RIGHTS_FD_WRITE, true);
+        return 0;
+      } catch {
+        return WASI_ERRNO_FAULT;
+      }
+    },
     fd_prestat_dir_name: () => WASI_ERRNO_BADF,
     fd_prestat_get: () => WASI_ERRNO_BADF,
     fd_seek: () => WASI_ERRNO_SPIPE,
-    fd_write: (_fd, iovecs, count, written) => {
+    fd_write: (fd, iovecs, count, written) => {
+      if (fd !== 1 && fd !== 2) return WASI_ERRNO_BADF;
       try {
         let length = 0;
         for (let index = 0; index < count; index++) {
@@ -500,9 +513,7 @@ async function compileModule() {
   if (typeof WebAssembly.compileStreaming === 'function') {
     try {
       return await WebAssembly.compileStreaming(response.clone());
-    } catch {
-      // Servers without application/wasm still work through the byte fallback.
-    }
+    } catch {}
   }
   return WebAssembly.compile(await response.arrayBuffer());
 }

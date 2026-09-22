@@ -11,7 +11,6 @@
 #include "modules/blob.h"
 #include "modules/buffer.h"
 #include "modules/date.h"
-#include "modules/io.h"
 #include "sugar.h"
 #include "silver/call.h"
 #include "wasm_embed.h"
@@ -20,10 +19,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-bool io_no_color = true;
-
-#define ANT_WASM_GC_STUB(name) \
-  void name(ant_t *js, gc_mark_fn mark) { (void)js; (void)mark; }
+// TODO: cleanup
+#define ANT_WASM_GC_STUB(name) void name(ant_t *js, gc_mark_fn mark) { (void)js; (void)mark; }
 
 ANT_WASM_GC_STUB(gc_mark_cron)
 ANT_WASM_GC_STUB(gc_mark_atomics)
