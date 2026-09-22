@@ -14,6 +14,7 @@ test('ships the reviewed reactor import and export contract', async () => {
     { module: 'wasi_snapshot_preview1', name: 'environ_get', kind: 'function' },
     { module: 'wasi_snapshot_preview1', name: 'environ_sizes_get', kind: 'function' },
     { module: 'wasi_snapshot_preview1', name: 'fd_close', kind: 'function' },
+    { module: 'wasi_snapshot_preview1', name: 'fd_fdstat_get', kind: 'function' },
     { module: 'wasi_snapshot_preview1', name: 'fd_prestat_get', kind: 'function' },
     { module: 'wasi_snapshot_preview1', name: 'fd_prestat_dir_name', kind: 'function' },
     { module: 'wasi_snapshot_preview1', name: 'fd_seek', kind: 'function' },
@@ -25,6 +26,84 @@ test('ships the reviewed reactor import and export contract', async () => {
     WebAssembly.Module.exports(module).map(item => item.name),
     ['_initialize', 'ant_alloc', 'ant_free', 'ant_create', 'ant_destroy', 'ant_result_length', 'ant_release_result', 'ant_set_global', 'ant_eval']
   );
+});
+
+test('provides writable WASI output sinks for shared error formatting', async t => {
+  const instantiate = WebAssembly.instantiate;
+  const output = [];
+  let imports;
+  let instance;
+  t.mock.method(WebAssembly, 'instantiate', async (module, suppliedImports) => {
+    imports = suppliedImports;
+    const wasi = imports.wasi_snapshot_preview1;
+    const write = wasi.fd_write;
+    wasi.fd_write = (fd, iovecs, count, written) => {
+      const status = write(fd, iovecs, count, written);
+      if (status === 0) {
+        const memory = imports.env.memory;
+        const view = new DataView(memory.buffer);
+        for (let index = 0; index < count; index++) {
+          const entry = iovecs + index * 8;
+          const pointer = view.getUint32(entry, true);
+          const length = view.getUint32(entry + 4, true);
+          output.push({ fd, bytes: new Uint8Array(memory.buffer, pointer, length).slice() });
+        }
+      }
+      return status;
+    };
+    instance = await instantiate(module, imports);
+    return instance;
+  });
+
+  const ant = await Ant.create();
+  t.mock.restoreAll();
+  const pointer = instance.exports.ant_alloc(64);
+  assert.notEqual(pointer, 0);
+  try {
+    const memory = imports.env.memory;
+    const wasi = imports.wasi_snapshot_preview1;
+    for (const fd of [1, 2]) {
+      const bytes = new Uint8Array(memory.buffer, pointer, 64);
+      bytes.fill(0xa5);
+      assert.equal(wasi.fd_fdstat_get(fd, pointer + 8), 0);
+      const expected = new Uint8Array(64).fill(0xa5);
+      expected.fill(0, 8, 32);
+      expected[16] = 64; // fdstat rights_base: FD_WRITE, little endian.
+      assert.deepEqual(bytes, expected);
+      assert.equal(wasi.fd_write(fd, pointer, 0, pointer + 32), 0);
+      assert.equal(new DataView(memory.buffer).getUint32(pointer + 32, true), 0);
+    }
+    for (const fd of [0, 3, -1]) {
+      assert.equal(wasi.fd_fdstat_get(fd, pointer), 8);
+      assert.equal(wasi.fd_write(fd, pointer, 0, pointer + 32), 8);
+    }
+    assert.equal(wasi.fd_fdstat_get(1, memory.buffer.byteLength - 23), 21);
+    assert.equal(wasi.fd_fdstat_get(2, -1), 21);
+    memory.grow(1);
+    assert.equal(wasi.fd_fdstat_get(1, pointer), 0);
+
+    assert.equal(await ant.eval(`
+      const stacked = new Error('shared stack');
+      stacked.code = 'E_STACK';
+      Promise.reject(stacked);
+      const plain = new TypeError('shared header');
+      plain.stack = undefined;
+      plain.code = 'E_HEADER';
+      Promise.reject(plain);
+      42;
+    `), 42);
+    assert.ok(output.length > 0);
+    assert.ok(output.every(chunk => chunk.fd === 2));
+    const text = Buffer.concat(output.map(chunk => chunk.bytes)).toString('utf8');
+    assert.match(text, /Error: shared stack/);
+    assert.match(text, /TypeError: shared header/);
+    assert.match(text, /E_STACK/);
+    assert.match(text, /E_HEADER/);
+    assert.doesNotMatch(text, /\x1b\[/);
+  } finally {
+    instance.exports.ant_free(pointer);
+    ant.dispose();
+  }
 });
 
 test('evaluates Silver and preserves instance state', async () => {

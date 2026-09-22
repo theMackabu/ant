@@ -8,6 +8,7 @@ Store in-progress execution plans here.
 
 ## Active
 
+- [Shared I/O Formatting in Wasm](wasm-shared-io.md)
 - [TypeScript Captured-variable Cleanup](tsc-upvalue-cleanup.md)
 - [Symbol Description Accessor IC](symbol-description-accessor-ic.md)
 - [bench-v8 Regression Recovery](bench-v8-regression-recovery.md)

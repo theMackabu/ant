@@ -36,6 +36,7 @@ const EXPECTED_IMPORTS = [
   'wasi_snapshot_preview1.environ_get:function',
   'wasi_snapshot_preview1.environ_sizes_get:function',
   'wasi_snapshot_preview1.fd_close:function',
+  'wasi_snapshot_preview1.fd_fdstat_get:function',
   'wasi_snapshot_preview1.fd_prestat_dir_name:function',
   'wasi_snapshot_preview1.fd_prestat_get:function',
   'wasi_snapshot_preview1.fd_seek:function',
