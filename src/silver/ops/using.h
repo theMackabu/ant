@@ -409,22 +409,27 @@ static inline ant_value_t sv_op_using_push(sv_vm_t *vm, ant_t *js, bool is_async
 }
 
 static inline ant_value_t sv_op_dispose_resource(sv_vm_t *vm, ant_t *js, bool is_async) {
-  ant_value_t resource = vm->stack[--vm->sp];
+  ant_value_t resource = vm->stack[vm->sp - 1];
   ant_value_t result = sv_dispose_resource(js, resource, is_async);
+
+  vm->sp--;
   if (!is_err(result)) vm->stack[vm->sp++] = result;
+
   return result;
 }
 
 static inline ant_value_t sv_op_using_dispose(
-  sv_vm_t *vm,
-  ant_t *js,
-  bool is_async,
-  bool suppressed
+  sv_vm_t *vm, ant_t *js, bool is_async, bool suppressed
 ) {
-  ant_value_t completion = suppressed ? vm->stack[--vm->sp] : js_mkundef();
-  ant_value_t entries = vm->stack[--vm->sp];
+  int n_operands = suppressed ? 2 : 1;
+  
+  ant_value_t completion = suppressed ? vm->stack[vm->sp - 1] : js_mkundef();
+  ant_value_t entries = vm->stack[vm->sp - n_operands];
   ant_value_t result = sv_using_dispose(js, entries, completion, is_async, suppressed);
+  
+  vm->sp -= n_operands;
   if (!is_err(result)) vm->stack[vm->sp++] = result;
+  
   return result;
 }
 

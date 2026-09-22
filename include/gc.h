@@ -9,6 +9,9 @@ static constexpr size_t GC_MAJOR_MIN_PROMOTIONS = 4;
 static constexpr size_t GC_MIN_TICK = 1024;
 
 static constexpr uint32_t GC_MAJOR_EVERY_N_MINOR = 8;
+static constexpr uint32_t GC_MAJOR_TIME_SHARE_LOW  = 41;  // ~4%
+static constexpr uint32_t GC_MAJOR_TIME_SHARE_HIGH = 102; // ~10%
+
 static constexpr uint64_t GC_FORCE_INTERVAL_MS = 50;
 static constexpr uint64_t GC_FORCE_MAJOR_INTERVAL_MS = 1000;
 

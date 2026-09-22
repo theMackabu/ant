@@ -5,6 +5,7 @@
 #include "shapes.h"
 
 #include "gc/objects.h"
+#include "gc/verify.h"
 #include "gc/bigints.h"
 #include "gc/strings.h"
 #include "gc/ropes.h"
@@ -26,6 +27,19 @@ static uint32_t gc_major_pool_growth_x256 = 384;
 
 static uint32_t gc_minor_surv_ewma = 128;
 static uint32_t gc_major_recl_ewma =  26;
+
+static uint32_t gc_major_time_share_ewma = 0;
+static uint64_t gc_last_major_end_ns = 0;
+
+static uint64_t gc_now_ns(void) {
+#ifdef ANT_WASM_EMBED
+  return (uint64_t)(ant_wasm_now_ms() * 1000000.0);
+#else
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+#endif
+}
 
 static uint64_t gc_now_ms(void) {
 #ifdef ANT_WASM_EMBED
@@ -99,29 +113,56 @@ static void gc_adapt_nursery(size_t young_before, size_t survivors) {
     gc_nursery_threshold = GC_NURSERY_THRESHOLD;
 }
 
-static void gc_adapt_major_interval(size_t live_before, size_t live_after) {
-  if (live_before == 0) return;
-  size_t freed = live_before > live_after ? live_before - live_after : 0;
-  uint32_t rate = (uint32_t)((freed * 256) / live_before);
+static size_t gc_heap_bytes(ant_t *js, size_t pool_bytes) {
+  return 
+    js->obj_arena.live_count * 
+    js->obj_arena.elem_size + 
+    js->alloc_bytes.arrays + pool_bytes;
+}
+
+static void gc_adapt_major_interval(
+  size_t bytes_before, size_t bytes_after, uint64_t mark_ns, uint64_t end_ns
+) {
+  if (gc_last_major_end_ns != 0 && end_ns > gc_last_major_end_ns) {
+    uint64_t interval_ns = end_ns - gc_last_major_end_ns;
+    uint32_t share = (uint32_t)((mark_ns * 1024) / interval_ns);
+    gc_major_time_share_ewma = (gc_major_time_share_ewma * 3 + share) >> 2;
+  }
+  
+  gc_last_major_end_ns = end_ns;
+  if (bytes_before == 0) return;
+  
+  size_t freed = bytes_before > bytes_after ? bytes_before - bytes_after : 0;
+  uint32_t rate = (uint32_t)((freed * 256) / bytes_before);
   gc_major_recl_ewma = (gc_major_recl_ewma * 3 + rate) >> 2;
 
-  bool gen_ineffective = gc_minor_surv_ewma  > 192; // >75% nursery survival
-  bool high_reclaim    = gc_major_recl_ewma  >  51; // >20% old-gen freed
-  bool low_reclaim     = gc_major_recl_ewma  <  13; // < 5% old-gen freed
+  bool gen_ineffect = gc_minor_surv_ewma  > 192; // >75% nursery survival
+  bool high_reclaim = gc_major_recl_ewma  >  51; // >20% old-gen freed
+  bool low_reclaim  = gc_major_recl_ewma  <  13; // < 5% old-gen freed
+  
+  bool majors_costly = gc_major_time_share_ewma > GC_MAJOR_TIME_SHARE_HIGH;
+  bool majors_cheap  = gc_major_time_share_ewma < GC_MAJOR_TIME_SHARE_LOW;
 
-  if ((gen_ineffective && !low_reclaim) || high_reclaim) {
+  if (majors_costly) {
+    if (gc_major_every_n < GC_MAJOR_EVERY_N_MINOR * 4) gc_major_every_n++;
+    if (gc_major_live_growth_x256 < 1024) gc_major_live_growth_x256 += 64;
+    if (gc_major_pool_growth_x256 < 1536) gc_major_pool_growth_x256 += 64;
+    return;
+  }
+
+  if ((gen_ineffect && !low_reclaim) || (high_reclaim && majors_cheap)) {
     if (gc_major_every_n > 2) gc_major_every_n--;
-  } else if (!gen_ineffective && low_reclaim) {
+  } else if (!gen_ineffect && low_reclaim) {
     if (gc_major_every_n < GC_MAJOR_EVERY_N_MINOR * 4) gc_major_every_n++;
   }
 
-  if (gen_ineffective && low_reclaim) {
+  if (gen_ineffect && low_reclaim) {
     if (gc_major_live_growth_x256 < 1024) gc_major_live_growth_x256 += 96;
     if (gc_major_pool_growth_x256 < 1536) gc_major_pool_growth_x256 += 128;
   } else if (low_reclaim) {
     if (gc_major_live_growth_x256 < 896) gc_major_live_growth_x256 += 48;
     if (gc_major_pool_growth_x256 < 1280) gc_major_pool_growth_x256 += 64;
-  } else if (high_reclaim) {
+  } else if (high_reclaim && majors_cheap) {
     if (gc_major_live_growth_x256 > 320) gc_major_live_growth_x256 -= 32;
     if (gc_major_pool_growth_x256 > 320) gc_major_pool_growth_x256 -= 32;
   } else {
@@ -241,13 +282,13 @@ void gc_run(ant_t *js) {
     "major rope marking cannot request another major"
   );
 
-  size_t live_before = js->obj_arena.live_count;
+  size_t bytes_before = gc_heap_bytes(js, gc_pool_live_bytes(js));
 
   gc_bigints_begin(js);
   gc_strings_begin(js);
   
   bool conservative = rope_begin == GC_ROPES_BEGIN_CONSERVATIVE_MAJOR;
-  gc_objects_run(js, conservative ? gc_ropes_mark_conservative_roots : NULL);
+  uint64_t mark_ns = gc_objects_run(js, conservative ? gc_ropes_mark_conservative_roots : NULL);
   
   gc_clear_remembered_builders(js);
   ant_ic_epoch_bump();
@@ -271,7 +312,12 @@ void gc_run(ant_t *js) {
   js->gc_closure_promoted_since_major = 0;
   js->gc_remember_overflow = false;
 
-  gc_adapt_major_interval(live_before, js->obj_arena.live_count);
+  gc_adapt_major_interval(
+    bytes_before, 
+    gc_heap_bytes(js, js->gc_pool_last_live), 
+    mark_ns, gc_now_ns()
+  );
+  
   gc_last_run_ms = gc_now_ms();
   gc_last_major_ms = gc_last_run_ms;
   js->gc_running = false;
@@ -405,6 +451,7 @@ bool gc_alloc_due(ant_t *js) {
 }
 
 void gc_alloc_check(ant_t *js) {
+  GC_VERIFY_STRESS(js);
   if (gc_alloc_due(js)) gc_decide(js);
 }
 

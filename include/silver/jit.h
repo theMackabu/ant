@@ -3,10 +3,9 @@
 
 #include "silver/engine.h"
 
-// TODO: constexpr
-#define SV_JIT_OSR_THRESHOLD 500
-#define SV_JIT_MAX_CODE_BYTES (64 * 1024)
-#define SV_JIT_OSR_THRESHOLD_SCALE_BYTES 512
+static constexpr int SV_JIT_MAX_CODE_BYTES = 64 * 1024;
+static constexpr uint32_t SV_JIT_OSR_THRESHOLD = 500;
+static constexpr uint32_t SV_JIT_OSR_THRESHOLD_SCALE_BYTES = 512;
 
 typedef enum {
   SV_JIT_TIER_AUTO, // hot context if the function looped, cheap otherwise

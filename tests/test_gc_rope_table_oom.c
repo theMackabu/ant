@@ -32,7 +32,7 @@ static void *FailingRealloc(void *ptr, size_t size) {
 #undef realloc
 
 static ant_value_t eval(ant_t *js, const char *source) {
-  ant_value_t result = js_eval_bytecode(js, source, strlen(source));
+  ant_value_t result = js_eval_bytecode_eval(js, source, strlen(source));
   assert(!is_err(result));
   return result;
 }

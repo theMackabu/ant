@@ -11,6 +11,7 @@
 #include "gc.h"
 #include "gc/bigints.h"
 #include "gc/objects.h"
+#include "gc/verify.h"
 #include "gc/roots.h"
 #include "gc/weak.h"
 #include "gc/modules.h"
@@ -718,21 +719,30 @@ void gc_mark_conservative_range(ant_t *js, const void *ptr, size_t size) {
   gc_scan_range(js, lo, lo + bytes);
 }
 
+static void gc_scan_segmented(ant_t *js, uintptr_t lo, uintptr_t hi) {
+  uintptr_t cur = lo;
+  for (gc_vm_seg_t *seg = js->vm_segs; seg; seg = seg->prev) {
+    if (seg->lo < cur || seg->hi > hi || seg->lo >= seg->hi) continue;
+    gc_scan_range(js, cur, seg->lo);
+    cur = seg->hi;
+  }
+  if (cur < hi) gc_scan_range(js, cur, hi);
+}
+
 __attribute__((noinline))
 static void gc_scan_current_stack(ant_t *js) {
 #ifndef ANT_WASM_EMBED
   jmp_buf jb;
   if (setjmp(jb) != 0) return;
 #endif
-  
-  volatile uint8_t sp_marker = 0;
   uintptr_t lo, hi;
-  
-  if (
-    !gc_get_stack_bounds((uintptr_t)js->cstk.base, 
-    (uintptr_t)&sp_marker, &lo, &hi)
-  ) return;
-  
+  if (!gc_get_stack_bounds((uintptr_t)js->cstk.base, gc_native_sp(), &lo, &hi)) return;
+#if (defined(__aarch64__) || defined(__x86_64__)) && !defined(_WIN32) && !defined(ANT_WASM_EMBED)
+  if (js->vm_segs) {
+    gc_scan_segmented(js, lo, hi);
+    return;
+  }
+#endif
   gc_scan_range(js, lo, hi);
 }
 
@@ -969,6 +979,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     }
     
     if (obj->type_tag == kTypeArray) gc_free_array_storage(js, obj);
+    GC_VERIFY_POISON_OBJECT(obj);
     fixed_arena_free_elem(&js->obj_arena, obj);
     
     return;
@@ -1063,6 +1074,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   obj->overflow_prop = NULL;
   free((void *)obj->exotic_ops);
   obj->exotic_ops = NULL;
+  GC_VERIFY_POISON_OBJECT(obj);
   fixed_arena_free_elem(&js->obj_arena, obj);
 }
 
@@ -1081,34 +1093,43 @@ static void gc_sweep_young_and_promote(ant_t *js) {
   }
 }
 
-static void gc_promote_survivors(ant_t *js) {
-  ant_object_t *obj = js->objects;
-  while (obj) {
-    ant_object_t *next = obj->next;
-    obj->flags.generation = 1;
-    obj->next = js->objects_old;
-    js->objects_old = obj;
-    obj = next;
-  }
-  js->objects = NULL;
-}
-
 static void gc_sweep(ant_t *js) {
-  ant_object_t **pp = &js->objects;
-  while (*pp) {
-  ant_object_t *obj = *pp;
-  if (obj->mark_epoch == gc_obj_epoch) pp = &obj->next; else {
-    *pp = obj->next;
-    gc_object_free(js, obj);
-  }}
+  ant_fixed_arena_t *oa = &js->obj_arena;
+  ant_object_t *old = NULL;
+  size_t new_wm = 0;
 
-  pp = &js->objects_old;
-  while (*pp) {
-  ant_object_t *obj = *pp;
-  if (obj->mark_epoch == gc_obj_epoch) pp = &obj->next; else {
-    *pp = obj->next;
+  js->objects = NULL;
+  oa->free_list = NULL;
+
+  for (size_t off = oa->watermark; off >= oa->elem_size; off -= oa->elem_size) {
+    ant_object_t *obj = (ant_object_t *)(oa->base + off - oa->elem_size);
+    if (off > oa->elem_size) __builtin_prefetch(oa->base + off - 3 * oa->elem_size);
+
+    if (obj->mark_epoch == ANT_GC_DEAD) {
+      if (new_wm) { *(void **)obj = oa->free_list; oa->free_list = obj; }
+      continue;
+    }
+
+    if (obj->flags.gc_permanent || obj->mark_epoch == gc_obj_epoch) {
+      if (!new_wm) new_wm = off;
+      if (obj->flags.gc_permanent) continue;
+      obj->flags.generation = 1;
+      obj->next = old;
+      old = obj;
+      continue;
+    }
+
+    // slots above the new watermark are decommitted instead
     gc_object_free(js, obj);
-  }}
+    if (!new_wm) oa->free_list = *(void **)obj;
+  }
+
+  js->objects_old = old;
+  if (new_wm < oa->watermark) {
+    ant_arena_decommit(oa->base, oa->committed, new_wm);
+    oa->committed = new_wm;
+    oa->watermark = new_wm;
+  }
 }
 
 void gc_pin_existing_objects(ant_t *js) {
@@ -1157,8 +1178,9 @@ void gc_pin_existing_objects(ant_t *js) {
   js->old_live_count = js->obj_arena.live_count;
 }
 
-void gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
-  if (!js) return;
+uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
+  if (!js) return 0;
+  uint64_t mark_start_ns = gc_now_ns();
   
   js->gc_objects_running = true;
   if (g_gc_func_mark_profile.enabled) g_gc_func_mark_profile.collections++;
@@ -1196,11 +1218,11 @@ void gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
   
   gc_clear_napi_weak_refs(js, false);
   gc_age_regex_cache(js, false);
+  
+  uint64_t mark_ns = gc_now_ns() - mark_start_ns;
   gc_sweep(js);
   
   if (ant_gc_shapes_sweep()) ant_ic_epoch_bump();
-  gc_promote_survivors(js);
-  
   js->permanent_root_traced = js->permanent_root_len;
 
   ant_fixed_arena_t *ca = &js->closure_arena;
@@ -1239,29 +1261,6 @@ void gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
   js->young_upvalue_len = 0;
   js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
 
-  ant_fixed_arena_t *oa = &js->obj_arena;
-  size_t new_wm = 0;
-
-  for (size_t off = oa->watermark; off >= oa->elem_size; off -= oa->elem_size) {
-    ant_object_t *slot = (ant_object_t *)(oa->base + off - oa->elem_size);
-    if (slot->mark_epoch != ANT_GC_DEAD) { new_wm = off; break; }
-  }
-
-  if (new_wm < oa->watermark) {
-    oa->free_list = NULL;
-    
-    for (size_t off = 0; off < new_wm; off += oa->elem_size) {
-    ant_object_t *slot = (ant_object_t *)(oa->base + off);
-    if (slot->mark_epoch == ANT_GC_DEAD) {
-      *(void **)slot = oa->free_list;
-      oa->free_list = slot;
-    }}
-    
-    ant_arena_decommit(oa->base, oa->committed, new_wm);
-    oa->committed = new_wm;
-    oa->watermark = new_wm;
-  }
-
   if (gc_mark_cap > GC_MARK_STACK_INIT) {
     size_t target = js->obj_arena.live_count * 2;
     if (target < GC_MARK_STACK_INIT) target = GC_MARK_STACK_INIT;
@@ -1275,7 +1274,10 @@ void gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
     js->remembered_upvalue_len == 0,
     "upvalue remembered set mutated during collection"
   );
+  
   js->gc_objects_running = false;
+  
+  return mark_ns;
 }
 
 void gc_objects_run_minor(ant_t *js) {

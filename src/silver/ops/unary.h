@@ -24,25 +24,35 @@ static inline void sv_op_void(sv_vm_t *vm) {
 }
 
 static inline ant_value_t sv_op_delete(sv_vm_t *vm, ant_t *js) {
-  ant_value_t key = vm->stack[--vm->sp];
-  ant_value_t obj = vm->stack[--vm->sp];
+  ant_value_t key = vm->stack[vm->sp - 1];
+  ant_value_t obj = vm->stack[vm->sp - 2];
   ant_value_t key_str = js_mkundef();
 
   if (vtype(key) == kTypeSymbol) {
     ant_value_t result = js_delete_sym_prop(js, obj, key);
+    vm->sp -= 2;
+    
     if (is_err(result)) return result;
     vm->stack[vm->sp++] = result;
+    
     return js_mkundef();
   } else key_str = coerce_to_str(js, key);
 
   if (!is_err(key_str) && vtype(key_str) == kTypeString) {
+    vm->stack[vm->sp - 1] = key_str;
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
+    
     const char *kptr = (const char *)(uintptr_t)(koff);
     ant_value_t result = js_delete_prop(js, obj, kptr, klen);
+    
+    vm->sp -= 2;
     if (is_err(result)) return result;
     vm->stack[vm->sp++] = result;
-  } else vm->stack[vm->sp++] = mkval(kTypeBool, 0);
+  } else {
+    vm->sp -= 2;
+    vm->stack[vm->sp++] = mkval(kTypeBool, 0);
+  }
 
   return js_mkundef();
 }

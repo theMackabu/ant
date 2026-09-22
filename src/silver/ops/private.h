@@ -3,6 +3,7 @@
 
 #include <stdlib.h>
 #include "gc.h"
+#include "gc/roots.h"
 #include "object.h"
 #include "silver/call.h"
 
@@ -243,20 +244,28 @@ static inline ant_value_t sv_private_put_value(
     ant_value_t setter = sv_private_entry_get(entry, 4);
     if (vtype(setter) == kTypeUndefined)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Private accessor has no setter");
+  
     ant_value_t args[1] = { val };
+    GC_ROOT_SAVE(root_mark, js);
+  
+    GC_ROOT_PIN(js, args[0]);
     ant_value_t result = sv_vm_call_explicit_this(vm, js, setter, obj, args, 1);
+  
+    GC_ROOT_RESTORE(js, root_mark);
     if (is_err(result)) return result;
-    return val;
+    
+    return args[0];
   }
 
   return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot write to private method");
 }
 
 static inline ant_value_t sv_op_put_private(sv_vm_t *vm, ant_t *js) {
-  ant_value_t token = vm->stack[--vm->sp];
-  ant_value_t val = vm->stack[--vm->sp];
-  ant_value_t obj = vm->stack[--vm->sp];
+  ant_value_t token = vm->stack[vm->sp - 1];
+  ant_value_t val = vm->stack[vm->sp - 2];
+  ant_value_t obj = vm->stack[vm->sp - 3];
   ant_value_t result = sv_private_put_value(vm, js, obj, val, token);
+  vm->sp -= 3;
 
   if (is_err(result)) return result;
   vm->stack[vm->sp++] = result;

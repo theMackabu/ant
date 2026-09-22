@@ -3,6 +3,7 @@
 
 #include "shapes.h"
 #include "gc.h"
+#include "gc/roots.h"
 #include "utf8.h"
 
 #include "modules/regex.h"
@@ -47,14 +48,20 @@ static inline ant_value_t sv_mk_nullish_read_error_by_key(
   ant_value_t key_str = sv_key_to_propstr(js, key);
 
   if (!is_err(key_str) && vtype(key_str) == kTypeString) {
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, key_str);
+    
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
     const char *kptr = (const char *)(uintptr_t)(koff);
     
-    return js_mkerr_typed(js, JS_ERR_TYPE,
+    ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE,
       "Cannot read properties of %s (reading '%.*s')",
       ot == kTypeNull ? "null" : "undefined", (int)klen, kptr
     );
+    
+    GC_ROOT_RESTORE(js, root_mark);
+    return err;
   }
 
   return js_mkerr_typed(js, JS_ERR_TYPE,
@@ -576,11 +583,17 @@ static inline ant_value_t sv_getprop_by_key(ant_t *js, ant_value_t obj, ant_valu
   ant_value_t key_str = prop_key;
   if (is_err(key_str) || vtype(key_str) != kTypeString) return js_mkundef();
 
+  GC_ROOT_SAVE(root_mark, js);
+  if (key_str != key) GC_ROOT_PIN(js, key_str);
+
   ant_offset_t klen = 0;
   ant_offset_t koff = vstr(js, key_str, &klen);
 
   const char *kptr = (const char *)(uintptr_t)(koff);
-  return js_getprop_fallback_len(js, obj, kptr, (size_t)klen);
+  ant_value_t res = js_getprop_fallback_len(js, obj, kptr, (size_t)klen);
+  
+  GC_ROOT_RESTORE(js, root_mark);
+  return res;
 }
 
 static inline ant_value_t sv_prop_get_at(
@@ -1100,41 +1113,53 @@ static inline ant_value_t sv_op_put_field(
 ) {
   uint32_t idx = sv_get_u32(ip + 1);
   sv_atom_t *a = &func->atoms[idx];
-  ant_value_t val = vm->stack[--vm->sp];
-  ant_value_t obj = vm->stack[--vm->sp];
-  return sv_put_field_cached(js, obj, val, a, sv_ic_slot_for_ip(func, ip));
+  ant_value_t val = vm->stack[vm->sp - 1];
+  ant_value_t obj = vm->stack[vm->sp - 2];
+  
+  ant_value_t res = sv_put_field_cached(js, obj, val, a, sv_ic_slot_for_ip(func, ip));
+  vm->sp -= 2;
+  
+  return res;
 }
 
 static inline ant_value_t sv_op_get_elem(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
 ) {
-  ant_value_t key = vm->stack[--vm->sp];
-  ant_value_t obj = vm->stack[--vm->sp];
+  ant_value_t key = vm->stack[vm->sp - 1];
+  ant_value_t obj = vm->stack[vm->sp - 2];
   uint8_t ot = vtype(obj);
 
   if (ot == kTypeNull || ot == kTypeUndefined) {
     if (func && ip) js_set_error_site_from_bc(js, func, (int)(ip - func->code), func->debug->filename);
-    return sv_mk_nullish_read_error_by_key(js, obj, key);
+    ant_value_t err = sv_mk_nullish_read_error_by_key(js, obj, key);
+    vm->sp -= 2;
+    return err;
   }
 
   if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
     double d = tod(key);
     if (d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d) {
-      vm->stack[vm->sp++] = js_arr_get(js, obj, (uint32_t)d);
+      ant_value_t elem = js_arr_get(js, obj, (uint32_t)d);
+      vm->sp -= 2;
+      vm->stack[vm->sp++] = elem;
       return js_mkundef();
     }
   }
 
   ant_value_t str_elem = js_mkundef();
   if (sv_try_string_index_get(js, obj, key, &str_elem)) {
+    vm->sp -= 2;
     vm->stack[vm->sp++] = str_elem;
     return js_mkundef();
   }
 
   ant_value_t res = sv_getprop_by_key(js, obj, key);
+  vm->sp -= 2;
+  
   if (is_err(res)) return res;
   vm->stack[vm->sp++] = res;
+  
   return js_mkundef();
 }
 
@@ -1142,42 +1167,56 @@ static inline ant_value_t sv_op_get_elem2(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
 ) {
-  ant_value_t key = vm->stack[--vm->sp];
-  ant_value_t obj = vm->stack[vm->sp - 1];
+  ant_value_t key = vm->stack[vm->sp - 1];
+  ant_value_t obj = vm->stack[vm->sp - 2];
 
   uint8_t ot = vtype(obj);
   if (ot == kTypeNull || ot == kTypeUndefined) {
     if (func && ip) js_set_error_site_from_bc(js, func, (int)(ip - func->code), func->debug->filename);
-    return sv_mk_nullish_read_error_by_key(js, obj, key);
+    ant_value_t err = sv_mk_nullish_read_error_by_key(js, obj, key);
+    vm->sp--;
+    return err;
   }
 
   if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
     double d = tod(key);
     if (d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d) {
-      vm->stack[vm->sp++] = js_arr_get(js, obj, (uint32_t)d);
+      vm->stack[vm->sp - 1] = js_arr_get(js, obj, (uint32_t)d);
       return js_mkundef();
     }
   }
 
   ant_value_t str_elem = js_mkundef();
   if (sv_try_string_index_get(js, obj, key, &str_elem)) {
-    vm->stack[vm->sp++] = str_elem;
+    vm->stack[vm->sp - 1] = str_elem;
     return js_mkundef();
   }
 
   ant_value_t res = sv_getprop_by_key(js, obj, key);
+  vm->sp--;
+  
   if (is_err(res)) return res;
   vm->stack[vm->sp++] = res;
+  
   return js_mkundef();
 }
 
 static inline ant_value_t sv_op_put_elem(sv_vm_t *vm, ant_t *js) {
-  ant_value_t val = vm->stack[--vm->sp];
-  ant_value_t key = vm->stack[--vm->sp];
-  ant_value_t obj = vm->stack[--vm->sp];
+  ant_value_t val = vm->stack[vm->sp - 1];
+  ant_value_t key = vm->stack[vm->sp - 2];
+  ant_value_t obj = vm->stack[vm->sp - 3];
+  
   ant_value_t prop_key = sv_key_to_property_key(js, key);
-  if (is_err(prop_key)) return prop_key;
-  return js_setprop_keyed(js, obj, prop_key, val);
+  if (is_err(prop_key)) { 
+    vm->sp -= 3;
+    return prop_key;
+  }
+  
+  vm->stack[vm->sp - 2] = prop_key;
+  ant_value_t res = js_setprop_keyed(js, obj, prop_key, val);
+  vm->sp -= 3;
+  
+  return res;
 }
 
 static inline bool sv_try_define_field_fast(
@@ -1218,10 +1257,11 @@ static inline void sv_op_define_field(
 ) {
   uint32_t idx = sv_get_u32(ip + 1);
   sv_atom_t *a = &func->atoms[idx];
-  ant_value_t val = vm->stack[--vm->sp];
-  ant_value_t obj = vm->stack[vm->sp - 1];
+  ant_value_t val = vm->stack[vm->sp - 1];
+  ant_value_t obj = vm->stack[vm->sp - 2];
   if (!sv_try_define_field_fast(js, obj, a->str, val))
     js_define_own_prop(js, obj, a->str, a->len, val);
+  vm->sp--;
 }
 
 static inline void sv_define_slot(
@@ -1245,10 +1285,11 @@ static inline void sv_op_define_slot(
 ) {
   uint32_t idx = sv_get_u32(ip + 1);
   uint16_t slot = sv_get_u16(ip + 5);
-  ant_value_t val = vm->stack[--vm->sp];
-  ant_value_t obj = vm->stack[vm->sp - 1];
+  ant_value_t val = vm->stack[vm->sp - 1];
+  ant_value_t obj = vm->stack[vm->sp - 2];
   sv_atom_t *a = &func->atoms[idx];
   sv_define_slot(js, obj, val, a->str, a->len, slot);
+  vm->sp--;
 }
 
 static inline ant_value_t sv_get_length_value(ant_t *js, ant_value_t obj) {

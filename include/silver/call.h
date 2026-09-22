@@ -510,33 +510,34 @@ static inline ant_value_t sv_call_resolve_closure(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
   ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
 ) {
-  if (closure->func->is_generator)
-    return sv_call_generator_closure(vm, js, closure, callee_func, ctx);
-  if (closure->func->is_async)
-    return sv_call_async_closure(vm, js, closure, callee_func, ctx);
-  if (!closure->func->is_generator) {
-    sv_func_t *fn = closure->func;
-    if (fn->jit_code) {
-      sv_jit_enter(js);
-      ant_value_t result = ((sv_jit_func_t)fn->jit_code)(
-        vm, ctx->this_val, ctx->new_target,
-        ctx->super_val, ctx->args, ctx->argc, closure
-      );
-      sv_jit_leave(js);
-      if (sv_is_jit_bailout(result)) {
-        sv_jit_on_bailout(fn);
-      } else { sv_call_cleanup(js, ctx); return result; }
+  sv_func_t *fn = closure->func;
+  
+  if (fn->is_generator) return sv_call_generator_closure(vm, js, closure, callee_func, ctx);
+  if (fn->is_async) return sv_call_async_closure(vm, js, closure, callee_func, ctx);
+
+  if (fn->jit_code) {
+    ant_value_t result = sv_jit_invoke(
+      js, SV_JIT_FROM_C, (sv_jit_func_t)fn->jit_code,vm,
+      ctx->this_val, ctx->new_target, 
+      ctx->super_val, ctx->args, ctx->argc, closure
+    );
+    
+    if (!sv_is_jit_bailout(result)) {
+      sv_call_cleanup(js, ctx);
+      return result;
     }
-    {
-      uint32_t cc = ++fn->call_count;
-      if (__builtin_expect(cc == SV_TFB_ALLOC_THRESHOLD, 0))
-        sv_tfb_ensure(fn);
-      if (!fn->jit_compile_failed && cc > SV_JIT_THRESHOLD) {
-        ant_value_t result = sv_jit_try_compile_and_call(vm, js, closure, callee_func, ctx, out_this);
-        if (result != SV_JIT_RETRY_INTERP) return result;
-      }
-    }
+    
+    sv_jit_on_bailout(fn);
   }
+
+  uint32_t cc = ++fn->call_count;
+  if (__builtin_expect(cc == SV_TFB_ALLOC_THRESHOLD, 0)) sv_tfb_ensure(fn);
+
+  if (!fn->jit_compile_failed && cc > SV_JIT_THRESHOLD) {
+    ant_value_t result = sv_jit_try_compile_and_call(vm, js, closure, callee_func, ctx, out_this);
+    if (result != SV_JIT_RETRY_INTERP) return result;
+  }
+
   return sv_call_closure(vm, js, closure, callee_func, ctx, out_this);
 }
 

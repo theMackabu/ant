@@ -2,6 +2,7 @@
 #define SV_EXCEPTIONS_H
 
 #include "errors.h"
+#include "gc/roots.h"
 #include "silver/engine.h"
 #include "silver/upvalues.h"
 
@@ -213,14 +214,22 @@ static inline uint8_t *sv_vm_throw(sv_vm_t *vm, ant_value_t err, int min_fp) {
       sv_handler_t *h = &vm->handler_stack[i];
       if (h->kind != SV_HANDLER_TRY && h->kind != SV_HANDLER_TRY_FINALLY) continue;
 
+      GC_ROOT_SAVE(unwind_mark, js);
+      GC_ROOT_PIN(js, err);
+      
       for (int drop = vm->fp; drop > f; drop--) {
-        ant_value_t *bp = vm->frames[drop].bp;
-        if (bp) sv_close_upvalues_from_slot(vm, bp);
+        sv_frame_t *dropped = &vm->frames[drop];
+        if (vtype(dropped->arguments_obj) != kTypeUndefined) {
+          js_arguments_detach(js, dropped->arguments_obj);
+          dropped->arguments_obj = js_mkundef();
+        }
+        
+        if (dropped->bp) sv_close_upvalues_from_slot(vm, dropped->bp);
       }
-
+      
+      GC_ROOT_RESTORE(js, unwind_mark);
       ant_value_t caught = err;
-      if (is_err(err))
-        caught = js_take_thrown(js, err);
+      if (is_err(err)) caught = js_take_thrown(js, err);
       
       vm->sp = h->saved_sp;
       vm->fp = f;

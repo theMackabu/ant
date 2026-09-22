@@ -1,3 +1,5 @@
+// TODO: reduce duplicate work in this file
+
 #ifndef SV_BITWISE_H
 #define SV_BITWISE_H
 
@@ -6,56 +8,89 @@
 #include "modules/bigint.h"
 
 static inline ant_value_t sv_op_band(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == kTypeBigInt || rty == kTypeBigInt) {
-    if (lt != kTypeBigInt || rty != kTypeBigInt)
+    if (lt != kTypeBigInt || rty != kTypeBigInt) {
+      vm->sp -= 2;
       return js_mkerr(js, "Cannot mix BigInt value and other types");
+    }
+    
     ant_value_t res = bigint_bitand(js, l, r);
+    vm->sp -= 2;
+    
     if (is_err(res)) return res;
     vm->stack[vm->sp++] = res;
+    
     return tov(0);
   }
+  
   int32_t ai = (lt == kTypeNumber) ? js_to_int32(tod(l)) : js_to_int32(js_to_number(js, l));
   int32_t bi = (rty == kTypeNumber) ? js_to_int32(tod(r)) : js_to_int32(js_to_number(js, r));
+  
+  vm->sp -= 2;
   vm->stack[vm->sp++] = tov((double)(ai & bi));
+  
   return tov(0);
 }
 
 static inline ant_value_t sv_op_bor(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == kTypeBigInt || rty == kTypeBigInt) {
-    if (lt != kTypeBigInt || rty != kTypeBigInt)
+    if (lt != kTypeBigInt || rty != kTypeBigInt) {
+      vm->sp -= 2;
       return js_mkerr(js, "Cannot mix BigInt value and other types");
+    }
+    
     ant_value_t res = bigint_bitor(js, l, r);
+    vm->sp -= 2;
+    
     if (is_err(res)) return res;
     vm->stack[vm->sp++] = res;
+    
     return tov(0);
   }
+  
   int32_t ai = (lt == kTypeNumber) ? js_to_int32(tod(l)) : js_to_int32(js_to_number(js, l));
   int32_t bi = (rty == kTypeNumber) ? js_to_int32(tod(r)) : js_to_int32(js_to_number(js, r));
+  
+  vm->sp -= 2;
   vm->stack[vm->sp++] = tov((double)(ai | bi));
+  
   return tov(0);
 }
 
 static inline ant_value_t sv_op_bxor(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == kTypeBigInt || rty == kTypeBigInt) {
-    if (lt != kTypeBigInt || rty != kTypeBigInt)
+    if (lt != kTypeBigInt || rty != kTypeBigInt) {
+      vm->sp -= 2;
       return js_mkerr(js, "Cannot mix BigInt value and other types");
+    }
+    
     ant_value_t res = bigint_bitxor(js, l, r);
+    vm->sp -= 2;
+    
     if (is_err(res)) return res;
     vm->stack[vm->sp++] = res;
+    
     return tov(0);
   }
+  
   int32_t ai = (lt == kTypeNumber) ? js_to_int32(tod(l)) : js_to_int32(js_to_number(js, l));
   int32_t bi = (rty == kTypeNumber) ? js_to_int32(tod(r)) : js_to_int32(js_to_number(js, r));
+  
+  vm->sp -= 2;
   vm->stack[vm->sp++] = tov((double)(ai ^ bi));
+  
   return tov(0);
 }
 
@@ -72,65 +107,101 @@ static inline ant_value_t sv_op_bnot(sv_vm_t *vm, ant_t *js) {
 }
 
 static inline ant_value_t sv_op_shl(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == kTypeBigInt || rty == kTypeBigInt) {
-    if (lt != kTypeBigInt || rty != kTypeBigInt)
+    if (lt != kTypeBigInt || rty != kTypeBigInt) {
+      vm->sp -= 2;
       return js_mkerr(js, "Cannot mix BigInt value and other types");
+    }
+    
     uint64_t shift = 0;
     ant_value_t err = bigint_asint_bits(js, r, &shift);
-    if (is_err(err)) return err;
+    if (is_err(err)) { vm->sp -= 2; return err; }
+    
     ant_value_t res = bigint_shift_left(js, l, shift);
+    vm->sp -= 2;
+    
     if (is_err(res)) return res;
     vm->stack[vm->sp++] = res;
+    
     return tov(0);
   }
+  
   int32_t ai = (lt == kTypeNumber) ? js_to_int32(tod(l)) : js_to_int32(js_to_number(js, l));
   uint32_t bi = (rty == kTypeNumber) ? js_to_uint32(tod(r)) : js_to_uint32(js_to_number(js, r));
+  
+  vm->sp -= 2;
   vm->stack[vm->sp++] = tov((double)(ai << (bi & 0x1f)));
+  
   return tov(0);
 }
 
 static inline ant_value_t sv_op_shr(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == kTypeBigInt || rty == kTypeBigInt) {
-    if (lt != kTypeBigInt || rty != kTypeBigInt)
+    if (lt != kTypeBigInt || rty != kTypeBigInt) {
+      vm->sp -= 2;
       return js_mkerr(js, "Cannot mix BigInt value and other types");
+    }
+    
     uint64_t shift = 0;
     ant_value_t err = bigint_asint_bits(js, r, &shift);
-    if (is_err(err)) return err;
+    if (is_err(err)) { vm->sp -= 2; return err; }
+    
     ant_value_t res = bigint_shift_right(js, l, shift);
+    vm->sp -= 2;
+    
     if (is_err(res)) return res;
     vm->stack[vm->sp++] = res;
+    
     return tov(0);
   }
+  
   int32_t ai = (lt == kTypeNumber) ? js_to_int32(tod(l)) : js_to_int32(js_to_number(js, l));
   uint32_t bi = (rty == kTypeNumber) ? js_to_uint32(tod(r)) : js_to_uint32(js_to_number(js, r));
+  
+  vm->sp -= 2;
   vm->stack[vm->sp++] = tov((double)(ai >> (bi & 0x1f)));
+  
   return tov(0);
 }
 
 static inline ant_value_t sv_op_ushr(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == kTypeBigInt || rty == kTypeBigInt) {
-    if (lt != kTypeBigInt || rty != kTypeBigInt)
+    if (lt != kTypeBigInt || rty != kTypeBigInt) {
+      vm->sp -= 2;
       return js_mkerr(js, "Cannot mix BigInt value and other types");
+    }
+    
     uint64_t shift = 0;
     ant_value_t err = bigint_asint_bits(js, r, &shift);
-    if (is_err(err)) return err;
+    if (is_err(err)) { vm->sp -= 2; return err; }
+    
     ant_value_t res = bigint_shift_right_logical(js, l, shift);
+    vm->sp -= 2;
+    
     if (is_err(res)) return res;
     vm->stack[vm->sp++] = res;
+    
     return tov(0);
   }
+  
   uint32_t ai = (lt == kTypeNumber) ? js_to_uint32(tod(l)) : js_to_uint32(js_to_number(js, l));
   uint32_t bi = (rty == kTypeNumber) ? js_to_uint32(tod(r)) : js_to_uint32(js_to_number(js, r));
+  
+  vm->sp -= 2;
   vm->stack[vm->sp++] = tov((double)(ai >> (bi & 0x1f)));
+  
   return tov(0);
 }
 

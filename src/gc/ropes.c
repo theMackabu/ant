@@ -97,7 +97,7 @@ gc_ropes_begin_result_t gc_ropes_begin(ant_t *js, bool minor) {
   js->rope_gc.last_mark = NULL;
   size_t needed = 0;
   if (!rope_marks_count_pool(&js->pool.rope, &needed) ||
-      !rope_marks_count_pool(&js->rope_gc.old, &needed) ||
+      (!minor && !rope_marks_count_pool(&js->rope_gc.old, &needed)) ||
       !rope_marks_count_pool(&js->rope_gc.young, &needed) ||
       !rope_marks_reserve(js, needed)) {
     js->rope_gc.mark_count = 0;
@@ -118,12 +118,12 @@ gc_ropes_begin_result_t gc_ropes_begin(ant_t *js, bool minor) {
   }
 
   rope_marks_add_pool(js, &js->pool.rope, GC_ROPE_POOL_MISC);
-  rope_marks_add_pool(js, &js->rope_gc.old, GC_ROPE_POOL_OLD);
+  if (!minor) rope_marks_add_pool(js, &js->rope_gc.old, GC_ROPE_POOL_OLD);
   rope_marks_add_pool(js, &js->rope_gc.young, GC_ROPE_POOL_YOUNG);
 
   if (js->rope_gc.mark_count > 1)
     qsort(js->rope_gc.marks, js->rope_gc.mark_count,
-          sizeof(gc_rope_mark_t), rope_mark_cmp);
+    sizeof(gc_rope_mark_t), rope_mark_cmp);
   return GC_ROPES_BEGIN_NORMAL;
 }
 

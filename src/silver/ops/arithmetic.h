@@ -19,163 +19,239 @@ static inline ant_value_t sv_op_add_bigints(
   sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r
 ) {
   ant_value_t res = bigint_add(js, l, r);
+  vm->sp -= 2;
   vm->stack[vm->sp++] = res;
   return res;
 }
 
 static inline ant_value_t sv_op_add(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
-  
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+
   if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) {
+    vm->sp -= 2;
     vm->stack[vm->sp++] = tov(tod(l) + tod(r));
     return tov(0);
   }
-  
+
   if (vtype(l) == kTypeBigInt && vtype(r) == kTypeBigInt)
     return sv_op_add_bigints(vm, js, l, r);
 
   ant_value_t lu = sv_add_to_primitive(js, l);
-  if (is_err(lu)) return lu;
-  
+  if (is_err(lu)) { vm->sp -= 2; return lu; }
+  vm->stack[vm->sp - 2] = lu;
+
   ant_value_t ru = sv_add_to_primitive(js, r);
-  if (is_err(ru)) return ru;
-  
+  if (is_err(ru)) { vm->sp -= 2; return ru; }
+  vm->stack[vm->sp - 1] = ru;
+
   if (vtype(lu) == kTypeBigInt && vtype(ru) == kTypeBigInt)
     return sv_op_add_bigints(vm, js, lu, ru);
 
-  if (vtype(lu) == kTypeSymbol || vtype(ru) == kTypeSymbol)
+  if (vtype(lu) == kTypeSymbol || vtype(ru) == kTypeSymbol) {
+    vm->sp -= 2;
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value");
-  
+  }
+
   if (is_non_numeric(lu) || is_non_numeric(ru)) {
     if (vtype(lu) == kTypeString && vtype(ru) == kTypeNumber) {
       ant_value_t res = do_string_num_concat(js, lu, ru, false);
+      vm->sp -= 2;
       vm->stack[vm->sp++] = res;
       return res;
     }
-    
+
     if (vtype(lu) == kTypeNumber && vtype(ru) == kTypeString) {
       ant_value_t res = do_string_num_concat(js, ru, lu, true);
+      vm->sp -= 2;
       vm->stack[vm->sp++] = res;
       return res;
     }
-    
+
     ant_value_t l_str = coerce_to_str_concat(js, lu);
-    if (is_err(l_str)) return l_str;
-    
+    if (is_err(l_str)) { vm->sp -= 2; return l_str; }
+    vm->stack[vm->sp - 2] = l_str;
+
     ant_value_t r_str = coerce_to_str_concat(js, ru);
-    if (is_err(r_str)) return r_str;
-    
+    if (is_err(r_str)) { vm->sp -= 2; return r_str; }
+    vm->stack[vm->sp - 1] = r_str;
+
     ant_value_t res = do_string_op(js, TOK_PLUS, l_str, r_str);
+    vm->sp -= 2;
     vm->stack[vm->sp++] = res;
-    
+
     return res;
   }
-  
-  if (vtype(lu) == kTypeBigInt || vtype(ru) == kTypeBigInt)
+
+  if (vtype(lu) == kTypeBigInt || vtype(ru) == kTypeBigInt) {
+    vm->sp -= 2;
     return js_mkerr(js, "Cannot mix BigInt value and other types");
+  }
+
+  double sum = js_to_number(js, lu) + js_to_number(js, ru);
+  vm->sp -= 2;
+  vm->stack[vm->sp++] = tov(sum);
   
-  vm->stack[vm->sp++] = tov(js_to_number(js, lu) + js_to_number(js, ru));
   return tov(0);
 }
 
 static inline ant_value_t sv_op_sub(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) {
+    vm->sp -= 2;
     vm->stack[vm->sp++] = tov(tod(l) - tod(r));
     return tov(0);
   }
+  
   ant_value_t lu = unwrap_primitive(js, l);
   ant_value_t ru = unwrap_primitive(js, r);
+  
   if (vtype(lu) == kTypeBigInt && vtype(ru) == kTypeBigInt) {
     ant_value_t res = bigint_sub(js, lu, ru);
+    vm->sp -= 2;
     vm->stack[vm->sp++] = res;
     return res;
   }
-  if (vtype(lu) == kTypeBigInt || vtype(ru) == kTypeBigInt)
+  
+  if (vtype(lu) == kTypeBigInt || vtype(ru) == kTypeBigInt) {
+    vm->sp -= 2;
     return js_mkerr(js, "Cannot mix BigInt value and other types");
-  vm->stack[vm->sp++] = tov(js_to_number(js, lu) - js_to_number(js, ru));
+  }
+  
+  double num = js_to_number(js, lu) - js_to_number(js, ru);
+  vm->sp -= 2;
+  vm->stack[vm->sp++] = tov(num);
+  
   return tov(0);
 }
 
 static inline ant_value_t sv_op_mul(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) {
+    vm->sp -= 2;
     vm->stack[vm->sp++] = tov(tod(l) * tod(r));
     return tov(0);
   }
+  
   ant_value_t lu = unwrap_primitive(js, l);
   ant_value_t ru = unwrap_primitive(js, r);
+  
   if (vtype(lu) == kTypeBigInt && vtype(ru) == kTypeBigInt) {
     ant_value_t res = bigint_mul(js, lu, ru);
+    vm->sp -= 2;
     vm->stack[vm->sp++] = res;
     return res;
   }
-  if (vtype(lu) == kTypeBigInt || vtype(ru) == kTypeBigInt)
+  
+  if (vtype(lu) == kTypeBigInt || vtype(ru) == kTypeBigInt) {
+    vm->sp -= 2;
     return js_mkerr(js, "Cannot mix BigInt value and other types");
-  vm->stack[vm->sp++] = tov(js_to_number(js, lu) * js_to_number(js, ru));
+  }
+  
+  double num = js_to_number(js, lu) * js_to_number(js, ru);
+  vm->sp -= 2;
+  vm->stack[vm->sp++] = tov(num);
+  
   return tov(0);
 }
 
 static inline ant_value_t sv_op_div(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) {
+    vm->sp -= 2;
     vm->stack[vm->sp++] = tov(tod(l) / tod(r));
     return tov(0);
   }
+  
   ant_value_t lu = unwrap_primitive(js, l);
   ant_value_t ru = unwrap_primitive(js, r);
+  
   if (vtype(lu) == kTypeBigInt && vtype(ru) == kTypeBigInt) {
     ant_value_t res = bigint_div(js, lu, ru);
+    vm->sp -= 2;
     vm->stack[vm->sp++] = res;
     return res;
   }
-  if (vtype(lu) == kTypeBigInt || vtype(ru) == kTypeBigInt)
+  
+  if (vtype(lu) == kTypeBigInt || vtype(ru) == kTypeBigInt) {
+    vm->sp -= 2;
     return js_mkerr(js, "Cannot mix BigInt value and other types");
-  vm->stack[vm->sp++] = tov(js_to_number(js, lu) / js_to_number(js, ru));
+  }
+  
+  double num = js_to_number(js, lu) / js_to_number(js, ru);
+  vm->sp -= 2;
+  vm->stack[vm->sp++] = tov(num);
+  
   return tov(0);
 }
 
 static inline ant_value_t sv_op_mod(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) {
+    vm->sp -= 2;
     vm->stack[vm->sp++] = tov(fmod(tod(l), tod(r)));
     return tov(0);
   }
+  
   ant_value_t lu = unwrap_primitive(js, l);
   ant_value_t ru = unwrap_primitive(js, r);
+  
   if (vtype(lu) == kTypeBigInt && vtype(ru) == kTypeBigInt) {
     ant_value_t res = bigint_mod(js, lu, ru);
+    vm->sp -= 2;
     vm->stack[vm->sp++] = res;
     return res;
   }
-  if (vtype(lu) == kTypeBigInt || vtype(ru) == kTypeBigInt)
+  
+  if (vtype(lu) == kTypeBigInt || vtype(ru) == kTypeBigInt) {
+    vm->sp -= 2;
     return js_mkerr(js, "Cannot mix BigInt value and other types");
-  vm->stack[vm->sp++] = tov(fmod(js_to_number(js, lu), js_to_number(js, ru)));
+  }
+  
+  double num = fmod(js_to_number(js, lu), js_to_number(js, ru));
+  vm->sp -= 2;
+  vm->stack[vm->sp++] = tov(num);
+  
   return tov(0);
 }
 
 static inline ant_value_t sv_op_exp(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) {
+    vm->sp -= 2;
     vm->stack[vm->sp++] = tov(pow(tod(l), tod(r)));
     return tov(0);
   }
+  
   ant_value_t lu = unwrap_primitive(js, l);
   ant_value_t ru = unwrap_primitive(js, r);
+  
   if (vtype(lu) == kTypeBigInt && vtype(ru) == kTypeBigInt) {
     ant_value_t res = bigint_exp(js, lu, ru);
+    vm->sp -= 2;
     vm->stack[vm->sp++] = res;
     return res;
   }
-  if (vtype(lu) == kTypeBigInt || vtype(ru) == kTypeBigInt)
+  
+  if (vtype(lu) == kTypeBigInt || vtype(ru) == kTypeBigInt) {
+    vm->sp -= 2;
     return js_mkerr(js, "Cannot mix BigInt value and other types");
-  vm->stack[vm->sp++] = tov(pow(js_to_number(js, lu), js_to_number(js, ru)));
+  }
+  
+  double num = pow(js_to_number(js, lu), js_to_number(js, ru));
+  vm->sp -= 2;
+  vm->stack[vm->sp++] = tov(num);
+  
   return tov(0);
 }
 

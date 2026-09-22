@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "globals.h"
+#include "gc/roots.h"
 #include "property.h"
 
 #include "esm/loader.h"
@@ -107,21 +108,26 @@ static inline void sv_op_is_null(sv_vm_t *vm) {
 }
 
 static inline ant_value_t sv_op_import(sv_vm_t *vm, ant_t *js) {
-  ant_value_t options = vm->stack[--vm->sp];
-  ant_value_t specifier = vm->stack[--vm->sp];
   ant_value_t import_fn = js_get_module_import_binding(js);
 
   if (vtype(import_fn) != kTypeFunction && vtype(import_fn) != kTypeBuiltin)
     import_fn = js_getprop_fallback(js, js->global, "import");
 
   if (vtype(import_fn) == kTypeFunction || vtype(import_fn) == kTypeBuiltin) {
-    ant_value_t call_args[2] = { specifier, options };
-    ant_value_t result = sv_vm_call(vm, js, import_fn, js->global, call_args, 2, NULL, js_mkundef());
+    ant_value_t result = sv_vm_call(
+      vm, js, import_fn, js->global,
+      &vm->stack[vm->sp - 2], 2, NULL, js_mkundef()
+    );
+    
+    vm->sp -= 2;
     if (!is_err(result)) vm->stack[vm->sp++] = result;
+    
     return result;
   }
 
+  vm->sp -= 2;
   vm->stack[vm->sp++] = mkval(kTypeUndefined, 0);
+  
   return tov(0);
 }
 
@@ -242,28 +248,37 @@ static inline ant_value_t sv_op_export(
   if (atom_idx >= (uint32_t)func->atom_count)
     return js_mkerr(js, "invalid export atom index");
 
-  ant_value_t value = vm->stack[--vm->sp];
+  ant_value_t value = vm->stack[vm->sp - 1];
   sv_atom_t *a = &func->atoms[atom_idx];
+  
   ant_value_t ns = sv_export_target_ns(js, frame ? frame->callee : js_mkundef());
-  return sv_module_export_to_ns(js, ns, a->str, a->len, value);
+  ant_value_t result = sv_module_export_to_ns(js, ns, a->str, a->len, value);
+  
+  vm->sp--;
+  return result;
 }
 
 static inline ant_value_t sv_op_export_all(sv_vm_t *vm, ant_t *js) {
-  ant_value_t ns = vm->stack[--vm->sp];
-  if (vtype(ns) != kTypeObject)
+  ant_value_t ns = vm->stack[vm->sp - 1];
+  if (vtype(ns) != kTypeObject) {
+    vm->sp--;
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "Cannot re-export from non-object module");
+  }
 
   ant_iter_t iter = js_prop_iter_begin(js, ns);
   const char *key = NULL;
+  
   size_t key_len = 0;
   ant_value_t value = js_mkundef();
 
   while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
     ant_value_t export_res = sv_module_export_cstr(js, key, key_len, value);
-    if (is_err(export_res)) { js_prop_iter_end(&iter); return export_res; }
+    if (is_err(export_res)) { js_prop_iter_end(&iter); vm->sp--; return export_res; }
   }
   
   js_prop_iter_end(&iter);
+  vm->sp--;
+  
   return tov(0);
 }
 
@@ -478,8 +493,15 @@ static inline bool sv_try_get_with_bound_value(
     bool should_fallback = false;
     if (sv_try_get_shape_data_prop(js, ptr, interned, out, &should_fallback)) {
       bool abrupt = false;
-      if (sv_with_binding_is_unscopable(js, with_obj, a, out, &abrupt)) return false;
+      GC_ROOT_SAVE(root_mark, js);
+      GC_ROOT_PIN(js, *out);
+      
+      bool unscopable = sv_with_binding_is_unscopable(js, with_obj, a, out, &abrupt);
+      GC_ROOT_RESTORE(js, root_mark);
+      
+      if (unscopable) return false;
       if (abrupt) return true;
+      
       return true;
     }
     if (!should_fallback) return false;
@@ -487,8 +509,10 @@ static inline bool sv_try_get_with_bound_value(
 
   if (!lkp(js, with_obj, a->str, a->len).obj) return false;
   bool abrupt = false;
+  
   if (sv_with_binding_is_unscopable(js, with_obj, a, out, &abrupt)) return false;
   if (abrupt) return true;
+  
   *out = js_getprop_fallback_len(js, with_obj, a->str, a->len);
   
   return true;
@@ -568,17 +592,14 @@ static inline ant_value_t sv_op_with_get_call(
   return js_mkundef();
 }
 
-static inline ant_value_t sv_op_with_put_var(
-  sv_vm_t *vm, ant_t *js,
-  sv_frame_t *frame,
-  sv_func_t *func, uint8_t *ip
+static inline ant_value_t sv_with_put_var_value(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
+  sv_func_t *func, uint8_t *ip, ant_value_t val
 ) {
   uint32_t atom_idx = sv_get_u32(ip + 1);
-  uint8_t  fb_kind  = sv_get_u8(ip + 5);
-  uint16_t fb_idx   = sv_get_u16(ip + 6);
-  
+  uint8_t fb_kind = sv_get_u8(ip + 5);
+  uint16_t fb_idx = sv_get_u16(ip + 6);
   sv_atom_t *a = &func->atoms[atom_idx];
-  ant_value_t val = vm->stack[--vm->sp];
 
   if (vtype(frame->with_obj) != kTypeUndefined) {
     bool has_binding = false;
@@ -608,7 +629,20 @@ fallback:
     );
     if (is_err(set_result)) return set_result;
   } else sv_with_fallback_put(vm, js, frame, fb_kind, fb_idx, val);
+  
   return js_mkundef();
+}
+
+static inline ant_value_t sv_op_with_put_var(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
+  sv_func_t *func, uint8_t *ip
+) {
+  ant_value_t result = sv_with_put_var_value(
+    vm, js, frame, func, 
+    ip, vm->stack[vm->sp - 1]
+  );
+  vm->sp--;
+  return result;
 }
 
 static inline ant_value_t sv_op_with_del_var(

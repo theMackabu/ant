@@ -190,13 +190,7 @@ static void build_gc_const_tables(sv_func_t *func) {
 
   uint8_t *marked_slots = calloc((size_t)func->const_count, sizeof(uint8_t));
   if (!marked_slots) return;
-
   int slot_count = 0;
-  for (int i = 0; i < func->const_count; i++) {
-    if (vtype(func->constants[i]) != kTypeBigInt) continue;
-    marked_slots[i] = 1;
-    slot_count++;
-  }
 
   for (int pc = 0; pc < func->code_len;) {
     sv_op_t op = (sv_op_t)func->code[pc];
@@ -206,7 +200,8 @@ static void build_gc_const_tables(sv_func_t *func) {
     if (op == OP_PUT_CONST) {
       uint32_t idx = sv_get_u32(func->code + pc + 1);
       if (idx < (uint32_t)func->const_count && !marked_slots[idx]) {
-        marked_slots[idx] = 1; slot_count++;
+        marked_slots[idx] = 1; 
+        slot_count++;
       }
     }
 
@@ -2505,11 +2500,9 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       bool neg = false;
       const char *digits = node->str;
       uint32_t dlen = node->len;
-      if (dlen > 0 && digits[0] == '-') {
-        neg = true; digits++; dlen--;
-      }
+      if (dlen > 0 && digits[0] == '-') neg = true; digits++; dlen--;
       if (dlen > 0 && digits[dlen - 1] == 'n') dlen--;
-      ant_value_t bi = js_mkbigint(c->js, digits, dlen, neg);
+      ant_value_t bi = js_mkbigint_permanent(c->js, digits, dlen, neg);
       emit_constant(c, bi);
       break;
     }

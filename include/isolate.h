@@ -3,6 +3,7 @@
 
 #include "arena.h"
 #include "pool.h"
+#include "gc/objects.h"
 #include "primordials.h"
 #include "descriptors.h"
 
@@ -44,6 +45,7 @@ static constexpr int MAX_DENSE_INITIAL_CAP = 8;
 struct ant_isolate_t {
   sv_vm_t *vm;
   void *jit_ctx;
+  gc_vm_seg_t *vm_segs;
 
   ant_object_t *objects;
   ant_object_t *permanent_objects;

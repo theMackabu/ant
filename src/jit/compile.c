@@ -97,6 +97,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 }
 
 sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure, sv_jit_tier_t tier) {
+  if (sv_jitless_unlikely) return NULL;
   struct timespec compile_t0;
   clock_gettime(CLOCK_MONOTONIC, &compile_t0);
   jit_compile_t compile = {
