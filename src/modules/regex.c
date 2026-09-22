@@ -2813,9 +2813,9 @@ static ant_value_t builtin_regexp_symbol_match(ant_params_t) {
       double li = vtype(li_val) == kTypeNumber ? tod(li_val) : 0;
       ant_offset_t str_len, str_off = vstr(js, str, &str_len);
       double advance = 1;
-      if (li < (double)str_len) {
+      if (li >= 0 && li < (double)str_len)
         advance = (double)utf8_char_len_at((const char *)(uintptr_t)(str_off), str_len, (ant_offset_t)li);
-      } js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + advance));
+      js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + advance));
     }
   }
 }
@@ -3469,9 +3469,8 @@ static ant_value_t builtin_regexp_symbol_replace(ant_params_t) {
       double li = vtype(li_val) == kTypeNumber ? tod(li_val) : 0;
       ant_offset_t sl, so = vstr(js, str, &sl);
       double advance = 1;
-      if (li < (double)sl) {
+      if (li >= 0 && li < (double)sl)
         advance = (double)utf8_char_len_at((const char *)(uintptr_t)(so), sl, (ant_offset_t)li);
-      }
       js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + advance));
     }
   }

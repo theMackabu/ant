@@ -37,6 +37,7 @@ bool gc_pin_permanent(ant_t *js, ant_value_t value) {
 
   uint8_t type = vtype_tagged(value);
   if (((1u << type) & GC_OBJ_TYPE_MASK) == 0) return false;
+  if (type == kTypeError && vdata(value) < 2) return false;
 
   ant_object_t *obj = (ant_object_t *)vptr(value);
   if (!obj) return false;

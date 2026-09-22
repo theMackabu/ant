@@ -13,6 +13,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+// cage base + this offset lies beyond the 47-bit user address range, so a
+// marker that reads through one of these words faults
+static constexpr uint64_t UNMAPPED_OFFSET = UINT64_C(0x7FFFFFFFF000);
+static constexpr uint64_t STR_HEAP_TAG_UNUSED = 0x3;
+
 static bool fail_realloc;
 static unsigned failed_reallocs;
 
@@ -37,8 +42,11 @@ static ant_value_t eval(ant_t *js, const char *source) {
 __attribute__((noinline))
 static void collect_without_rope_table(ant_t *js) {
   volatile uint64_t on_stack[4];
-  for (uint64_t tag = 0; tag < 4; tag++)
-    on_stack[tag] = mkval(kTypeString, UINT64_C(0x7FFFFFFFF000) | tag);
+  static const uint64_t tags[] = {
+    STR_HEAP_TAG_FLAT, STR_HEAP_TAG_ROPE, STR_HEAP_TAG_BUILDER, STR_HEAP_TAG_UNUSED
+  };
+  for (size_t i = 0; i < 4; i++)
+    on_stack[i] = mkval(kTypeString, UNMAPPED_OFFSET | tags[i]);
 
   // drop the table so the collection has to allocate one, then refuse it
   free(js->rope_gc.marks);
@@ -54,7 +62,7 @@ static void collect_without_rope_table(ant_t *js) {
 
   assert(failed_reallocs > 0);
   assert(!js->rope_gc.conservative_marking);
-  assert(on_stack[0] == mkval(kTypeString, UINT64_C(0x7FFFFFFFF000)));
+  assert(on_stack[0] == mkval(kTypeString, UNMAPPED_OFFSET | STR_HEAP_TAG_FLAT));
 }
 
 int main(void) {

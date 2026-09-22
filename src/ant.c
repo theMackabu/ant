@@ -5061,7 +5061,12 @@ ant_value_t do_string_num_concat(ant_t *js, ant_value_t str, ant_value_t num, bo
   bool flat_str = !str_is_heap_rope(str) && !str_is_heap_builder(str);
   size_t str_len = flat_str ? (size_t)ant_str_flat_ptr(str)->len : 0;
 
-  if (flat_str && str_len > 0 && num_len > 0 && str_len + num_len < STR_SHORT_CONS_THRESHOLD) {
+  if (flat_str && str_len == 0) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return mkstr_with_ascii(js, digits, num_len, true);
+  }
+
+  if (flat_str && num_len > 0 && str_len + num_len < STR_SHORT_CONS_THRESHOLD) {
     size_t total_len = str_len + num_len;
     result = js_mkstr(js, NULL, total_len);
     
@@ -19536,7 +19541,9 @@ void js_destroy(ant_t *js) {
 
   free(js->permanent_roots);
   js->permanent_roots = NULL;
-  js->permanent_root_len = js->permanent_root_cap = 0;
+  js->permanent_root_len = 0;
+  js->permanent_root_cap = 0;
+  js->permanent_root_traced = 0;
 
   free(js->remembered_upvalues);
   js->remembered_upvalues = NULL;

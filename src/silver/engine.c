@@ -533,9 +533,10 @@ static inline void sv_builder_record_flat(
   uint8_t ascii = sv_builder_chunk_ascii_state(flat);
   
   builder->len += flat->len;
-  builder->cached = vtype(cached) == kTypeNumber
-    ? tov(tod(cached) + (double)(ascii == STR_ASCII_YES 
-    ? flat->len : str_utf16_len(js, value))) : js_mkundef();
+  if (vtype(cached) == kTypeNumber) {
+    ant_offset_t units = ascii == STR_ASCII_YES ? flat->len : str_utf16_len(js, value);
+    builder->cached = tov(tod(cached) + (double)units);
+  } else builder->cached = js_mkundef();
   
   sv_builder_note_ascii(builder, ascii);
 }

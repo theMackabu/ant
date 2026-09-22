@@ -1,10 +1,11 @@
 // meson test -C build gc-pin-permanent-oom
 //
 // gc_pin_permanent flags the object and stores it in the permanent-root
-// vector. The sweep keeps a flagged object, but only the vector makes the
-// collector trace it. If the vector cannot grow, the object must stay
-// unflagged: a flagged object that was never stored makes the retry return
-// early, and everything it references is then freed while reachable.
+// vector. Only the vector makes the collector trace it; the flag just dedupes
+// pins and reports the object live to weak collections. If the vector cannot
+// grow, the object must stay unflagged: a flagged object that was never
+// stored makes the retry return early, so the next sweep frees it while
+// WeakRefs and WeakMaps still report it alive.
 #include "internal.h"
 #include "gc.h"
 #include "gc/objects.h"
