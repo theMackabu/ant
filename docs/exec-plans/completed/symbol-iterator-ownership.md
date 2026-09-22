@@ -1,7 +1,7 @@
 # Symbol and Iterator Ownership
 
 Status: completed
-Last reviewed: 2026-09-20
+Last reviewed: 2026-09-21
 Owner: theMackabu
 
 ## Outcome
@@ -10,7 +10,9 @@ Iterator result construction, array/string iterator objects, and the C
 open/next/close protocol now belong to `src/modules/iterator.c` and its header.
 The Symbol initializer owns Symbol itself. `init_intrinsic_symbols` wires core
 symbol properties before Iterator/Generator initialization and snapshot capture.
-Generator tags and Ant's tag live with their respective initializers.
+Generator tags live in the Generator initializer. `ant_runtime_init` creates Ant;
+bootstrap initializes Symbol before `init_builtin_module` sets Ant's tag using
+`js_set_sym`, preserving the original assignment attributes.
 
 Well-known symbols use direct isolate fields generated from the repeatedly
 included `ANT_SYMBOL` list in `include/symbol_list.h`. The same list initializes,

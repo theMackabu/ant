@@ -15,6 +15,7 @@ removed during condensation. See the [plan lifecycle](../index.md).
 
 ## Plans
 
+- [Iterator Performance Recovery](iterator-performance-recovery.md)
 - [Symbol and Iterator Ownership](symbol-iterator-ownership.md)
 - [Coroutine Resume Performance Recovery](coroutine-resume-performance.md)
 - [Coroutine Resume Arguments](coroutine-resume-arguments.md)

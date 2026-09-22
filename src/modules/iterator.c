@@ -246,6 +246,31 @@ void cleanup_iterator_module(ant_t *js) {
   js->iterators.len = js->iterators.cap = 0;
 }
 
+static inline ant_value_t iterator_get_method(
+  ant_t *js, ant_value_t iterator, const char *name, size_t len
+) {
+  const char *key = intern_find(name, len);
+  ant_value_t current = iterator;
+
+  for (int depth = 0; depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
+    if (vtype(current) != kTypeObject) break;
+    ant_object_t *obj = js_obj_ptr(current);
+    if (!obj || obj->flags.is_exotic) break;
+
+    int32_t slot = key ? ant_shape_lookup_interned(obj->shape, key) : -1;
+    if (slot >= 0) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(obj->shape, (uint32_t)slot);
+      if (!prop || prop->has_getter || prop->has_setter || (uint32_t)slot >= obj->prop_count) break;
+      return ant_object_prop_get_unchecked(obj, (uint32_t)slot);
+    }
+
+    current = obj->proto;
+    if (is_null(current) || is_undefined(current)) return js_mkundef();
+  }
+
+  return js_getprop_fallback_len(js, iterator, name, len);
+}
+
 bool js_iter_open(ant_t *js, ant_value_t iterable, iterator_t *it) {
   memset(it, 0, sizeof(*it));
 
@@ -265,7 +290,7 @@ bool js_iter_open(ant_t *js, ant_value_t iterable, iterator_t *it) {
   }
 
   it->iterator = iterator;
-  it->next_fn = js_getprop_fallback(js, iterator, "next");
+  it->next_fn = iterator_get_method(js, iterator, "next", 4);
   
   if (is_err(it->next_fn)) return false;
   it->advance = NULL;
@@ -319,7 +344,7 @@ bool js_iter_next(ant_t *js, iterator_t *it, ant_value_t *out) {
 }
 
 static void js_iter_call_return(ant_t *js, iterator_t *it) {
-  ant_value_t return_fn = js_getprop_fallback(js, it->iterator, "return");
+  ant_value_t return_fn = iterator_get_method(js, it->iterator, "return", 6);
   if (is_err(return_fn) || (is_undefined(return_fn) || is_null(return_fn))) return;
   
   if (!is_callable(return_fn)) {

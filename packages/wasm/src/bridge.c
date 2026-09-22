@@ -670,7 +670,7 @@ ant_wasm_runtime_t *ant_wasm_create(void) {
   ant_runtime_init(js, 0, NULL, NULL);
   init_symbol_module(js);
   init_intrinsic_symbols(js);
-  mkprop(js, js->Ant, js->sym.toStringTag_sym, ANT_STRING("Ant"), ANT_PROP_ATTR_CONFIGURABLE);
+  js_set_sym(js, js->Ant, js->sym.toStringTag_sym, ANT_STRING("Ant"));
   init_iterator_module(js);
   init_generator_module(js);
   init_math_module(js);
