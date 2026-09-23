@@ -3,8 +3,8 @@
 #include <string.h>
 
 #include "inspector.h"
-#include "../inspector/bind.h"
 #include "internal.h"
+#include "../inspector/bind.h"
 
 static bool repl_preview_ident_char(char c, bool first) {
   unsigned char uc = (unsigned char)c;
@@ -159,16 +159,14 @@ static bool repl_preview_snapshot_add(
 
 bool repl_preview_snapshot_build(
   ant_t *js,
-  const repl_decl_registry_t *decls,
   repl_preview_snapshot_t *snapshot
 ) {
   if (!js || !snapshot) return false;
-
   ant_value_t global = js_glob(js);
-  if (decls) for (size_t i = 0; i < decls->count; i++) {
-    const repl_decl_name_t *decl = &decls->items[i];
-    if (!decl->name || decl->len == 0) continue;
-    if (!repl_preview_snapshot_add(snapshot, decl->name, decl->len)) return false;
+  
+  for (uint32_t i = 0; i < js->global_lexical_count; i++) {
+    const ant_global_lexical_t *lex = &js->global_lexicals[i];
+    if (!repl_preview_snapshot_add(snapshot, lex->name, lex->len)) return false;
   }
 
   if (!repl_preview_snapshot_add(snapshot, "this", 4)) return false;
@@ -177,8 +175,10 @@ bool repl_preview_snapshot_build(
 
   ant_iter_t iter = js_prop_iter_begin(js, global);
   const char *key = NULL;
+  
   size_t key_len = 0;
   ant_value_t value = js_mkundef();
+  
   while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
     if (!repl_preview_expr_is_ident(key, key_len)) continue;
     if (!repl_preview_snapshot_add(snapshot, key, key_len)) {
@@ -186,6 +186,7 @@ bool repl_preview_snapshot_build(
       return false;
     }
   }
+  
   js_prop_iter_end(&iter);
   return true;
 }

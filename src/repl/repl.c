@@ -1,26 +1,24 @@
+#include <compat.h> // IWYU pragma: keep
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <pthread.h>
 #include <signal.h>
+#include <crprintf.h>
 
 #include "ant.h"
 #include "repl.h"
 #include "readline.h"
 #include "reactor.h"
-#include "runtime.h"
 #include "internal.h"
 #include "descriptors.h"
-
-#include "silver/ast.h"
 #include "silver/call.h"
-
-#include <crprintf.h>
 #include "modules/io.h"
 #include "highlight.h"
 #include "highlight/regex.h"
 #include "inspector.h"
+#include "esm/commonjs.h"
 
 typedef enum {
   CMD_OK,
@@ -39,14 +37,6 @@ typedef struct {
   );
 } repl_command_t;
 
-typedef struct {
-  const char **names;
-  uint32_t *lens;
-  size_t count;
-  size_t cap;
-} repl_decl_pending_t;
-
-static repl_decl_registry_t *g_repl_decl_registry = NULL;
 static void repl_read_wake_cb(uv_async_t *handle) { (void)handle; }
 static cmd_result_t cmd_help(ant_t *js, ant_history_t *history, const char *arg);
 
@@ -216,7 +206,6 @@ static bool repl_read_job_is_done(repl_read_job_t *job) {
 
 static ant_readline_result_t repl_readline_async(
   ant_t *js,
-  const repl_decl_registry_t *decl_registry,
   ant_history_t *history,
   const char *prompt,
   highlight_state prefix_state,
@@ -247,7 +236,7 @@ static ant_readline_result_t repl_readline_async(
 #endif
 
   if (out_line) *out_line = NULL;
-  if (repl_preview_snapshot_build(js, decl_registry, &preview_snapshot))
+  if (repl_preview_snapshot_build(js, &preview_snapshot))
     job.preview_snapshot = &preview_snapshot;
   else job.preview_enabled = false;
 
@@ -321,222 +310,6 @@ static ant_readline_result_t repl_readline_async(
   return status;
 }
 
-static void repl_decl_registry_free(repl_decl_registry_t *reg) {
-  if (!reg) return;
-  for (size_t i = 0; i < reg->count; i++)
-    free(reg->items[i].name);
-  free(reg->items);
-  reg->items = NULL;
-  reg->count = 0;
-  reg->cap = 0;
-}
-
-static bool repl_decl_registry_contains(
-  const repl_decl_registry_t *reg,
-  const char *name, uint32_t len
-) {
-  if (!reg || !name) return false;
-  for (size_t i = 0; i < reg->count; i++) if (
-    reg->items[i].len == (size_t)len
-    && memcmp(reg->items[i].name, name, (size_t)len) == 0
-  ) return true;
-  return false;
-}
-
-static bool repl_decl_registry_add(
-  ant_t *js, repl_decl_registry_t *reg,
-  const char *name, uint32_t len
-) {
-  if (!reg || !name) return true;
-  if (repl_decl_registry_contains(reg, name, len)) return true;
-
-  if (reg->count >= reg->cap) {
-    size_t new_cap = reg->cap ? reg->cap * 2 : 32;
-    repl_decl_name_t *ni = realloc(reg->items, new_cap * sizeof(*ni));
-    if (!ni) {
-      js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "out of memory");
-      return false;
-    }
-    reg->items = ni;
-    reg->cap = new_cap;
-  }
-
-  char *copy = malloc((size_t)len + 1);
-  if (!copy) {
-    js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "out of memory");
-    return false;
-  }
-
-  memcpy(copy, name, (size_t)len);
-  copy[len] = '\0';
-  reg->items[reg->count++] = (repl_decl_name_t){ .name = copy, .len = (size_t)len };
-
-  return true;
-}
-
-static void repl_decl_pending_free(repl_decl_pending_t *p) {
-  if (!p) return;
-  free(p->names);
-  free(p->lens);
-  p->names = NULL;
-  p->lens = NULL;
-  p->count = 0;
-  p->cap = 0;
-}
-
-static bool repl_decl_pending_contains(
-  const repl_decl_pending_t *p,
-  const char *name, uint32_t len
-) {
-  if (!p || !name) return false;
-  for (size_t i = 0; i < p->count; i++)
-    if (p->lens[i] == len && memcmp(p->names[i], name, (size_t)len) == 0) return true;
-  return false;
-}
-
-static bool repl_decl_pending_push(
-  ant_t *js, repl_decl_pending_t *p,
-  const char *name, uint32_t len
-) {
-  if (!p || !name || len == 0) return true;
-  if (repl_decl_pending_contains(p, name, len)) return true;
-  if (p->count >= p->cap) {
-    size_t new_cap = p->cap ? p->cap * 2 : 16;
-    const char **nn = realloc(p->names, new_cap * sizeof(*nn));
-    if (!nn) {
-      js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "out of memory");
-      return false;
-    }
-    uint32_t *nl = realloc(p->lens, new_cap * sizeof(*nl));
-    if (!nl) {
-      p->names = nn;
-      js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "out of memory");
-      return false;
-    }
-    p->names = nn;
-    p->lens = nl;
-    p->cap = new_cap;
-  }
-  p->names[p->count] = name;
-  p->lens[p->count] = len;
-  p->count++;
-  return true;
-}
-
-static bool repl_collect_pattern_names(ant_t *js, sv_ast_t *pat, repl_decl_pending_t *p) {
-  if (!pat) return true;
-  switch (pat->type) {
-    case N_IDENT:
-      return repl_decl_pending_push(js, p, pat->str, pat->len);
-    case N_ASSIGN_PAT:
-    case N_ASSIGN:
-      return repl_collect_pattern_names(js, pat->left, p);
-    case N_REST:
-    case N_SPREAD:
-      return repl_collect_pattern_names(js, pat->right, p);
-    case N_ARRAY:
-    case N_ARRAY_PAT:
-      for (int i = 0; i < pat->args.count; i++) {
-        if (!repl_collect_pattern_names(js, pat->args.items[i], p)) return false;
-      }
-      return true;
-    case N_OBJECT:
-    case N_OBJECT_PAT:
-      for (int i = 0; i < pat->args.count; i++) {
-        sv_ast_t *prop = pat->args.items[i];
-        if (!prop) continue;
-        if (prop->type == N_PROPERTY) {
-          if (!repl_collect_pattern_names(js, prop->right, p)) return false;
-        } else if (prop->type == N_REST || prop->type == N_SPREAD) {
-          if (!repl_collect_pattern_names(js, prop->right, p)) return false;
-        }
-      }
-      return true;
-    default: return true;
-  }
-}
-
-static bool repl_collect_top_level_decls(ant_t *js, sv_ast_t *stmt, repl_decl_pending_t *p) {
-  if (!stmt) return true;
-  sv_ast_t *node = (stmt->type == N_EXPORT) ? stmt->left : stmt;
-  if (!node) return true;
-
-  if (node->type == N_VAR && node->var_kind != SV_VAR_VAR) {
-    for (int i = 0; i < node->args.count; i++) {
-      sv_ast_t *decl = node->args.items[i];
-      if (!decl || decl->type != N_VARDECL || !decl->left) continue;
-      if (!repl_collect_pattern_names(js, decl->left, p)) return false;
-    }
-    return true;
-  }
-
-  if (node->type == N_CLASS && node->str && node->len > 0)
-    return repl_decl_pending_push(js, p, node->str, node->len);
-
-  if (node->type == N_IMPORT_DECL) {
-    for (int i = 0; i < node->args.count; i++) {
-      sv_ast_t *spec = node->args.items[i];
-      if (!spec || spec->type != N_IMPORT_SPEC || !spec->right) continue;
-      if (spec->right->type != N_IDENT) continue;
-      if (!repl_decl_pending_push(js, p, spec->right->str, spec->right->len)) return false;
-    }
-  }
-
-  return true;
-}
-
-static bool repl_precheck_and_commit_lexicals(
-  ant_t *js, repl_decl_registry_t *reg,
-  const char *code, size_t len
-) {
-  if (!js || !reg || !code || len == 0) return true;
-
-  code_arena_mark_t mark = parse_arena_mark();
-  repl_decl_pending_t pending = {0};
-  bool ok = true;
-
-  js_take_thrown(js, js_mkundef());
-  sv_ast_t *program = sv_parse(js, code, (ant_offset_t)len, false);
-
-  if (!program || Ant_Exception_Pending(js)) {
-    ok = true;
-    goto done;
-  }
-
-  for (int i = 0; i < program->args.count; i++) {
-    if (
-      !repl_collect_top_level_decls(
-      js, program->args.items[i], &pending)
-    ) { ok = false; goto done; }
-  }
-
-  for (size_t i = 0; i < pending.count; i++) {
-    if (repl_decl_registry_contains(reg, pending.names[i], pending.lens[i])) {
-      js_mkerr_typed(
-        js, JS_ERR_SYNTAX, "Identifier '%.*s' has already been declared",
-        (int)pending.lens[i], pending.names[i]
-      );
-      ok = false; goto done;
-    }
-  }
-
-  for (size_t i = 0; i < pending.count; i++) {
-    if (
-      !repl_decl_registry_add(
-      js, reg, pending.names[i], pending.lens[i])
-    ) { ok = false; goto done; }
-  }
-
-done:
-  parse_arena_rewind(mark);
-  repl_decl_pending_free(&pending);
-
-  if (ok && Ant_Exception_Pending(js))
-    js_take_thrown(js, js_mkundef());
-
-  return ok;
-}
-
 typedef enum {
   REPL_PRINT_INTERACTIVE,
   REPL_PRINT_LOAD,
@@ -583,16 +356,9 @@ static repl_eval_status_t repl_evaluate(
 }
 
 static void repl_eval_chunk(
-  ant_t *js, repl_decl_registry_t *decl_registry,
-  const char *code, size_t len,
+  ant_t *js, const char *code, size_t len,
   repl_print_mode_t print_mode
 ) {
-  if (!repl_precheck_and_commit_lexicals(js, decl_registry, code, len)) {
-    if (Ant_Exception_Pending(js)) js_set(js, js_glob(js), "_error", Ant_Exception_Value(js, Ant_Exception_Peek(js)));
-    print_uncaught_throw(js);
-    return;
-  }
-
   js_take_thrown(js, js_mkundef());
   ant_value_t result = js_mkundef();
   if (repl_evaluate(js, code, len, &result) == REPL_EVAL_INTERRUPTED) {
@@ -654,10 +420,7 @@ static cmd_result_t cmd_load(ant_t *js, ant_history_t *history, const char *arg)
   if (file_buffer) {
     size_t len = fread(file_buffer, 1, file_size, fp);
     file_buffer[len] = '\0';
-    repl_eval_chunk(
-      js, g_repl_decl_registry,
-      file_buffer, len, REPL_PRINT_LOAD
-    );
+    repl_eval_chunk(js, file_buffer, len, REPL_PRINT_LOAD);
     free(file_buffer);
   }
 
@@ -911,11 +674,16 @@ void ant_repl_run(ant_t *js, const char *startup_code) {
   ant_history_init(&history, 512);
   ant_history_load(&history);
 
-  repl_decl_registry_t decl_registry = {0};
-  g_repl_decl_registry = &decl_registry;
-
   js_set_global_builtin(js, "__dirname", js_mkstr(js, ".", 1));
   js_set_global_builtin(js, "__filename", js_mkstr(js, "[repl]", 6));
+
+  char cwd[PATH_MAX];
+  char repl_path[PATH_MAX + 8];
+  
+  if (getcwd(cwd, sizeof(cwd))) {
+    snprintf(repl_path, sizeof(repl_path), "%s/[repl]", cwd);
+    js_set_global_builtin(js, "require", esm_create_require_from_path(js, repl_path));
+  }
 
   js_set(js, js_glob(js), "_", js_mkundef());
   js_set(js, js_glob(js), "_error", js_mkundef());
@@ -923,20 +691,19 @@ void ant_repl_run(ant_t *js, const char *startup_code) {
   js_set_descriptor(js, js_as_obj(js_glob(js)), "_", 1, JS_DESC_W | JS_DESC_C);
   js_set_descriptor(js, js_as_obj(js_glob(js)), "_error", 6, JS_DESC_W | JS_DESC_C);
 
-  if (startup_code) repl_eval_chunk(
-    js, &decl_registry,
-    startup_code, strlen(startup_code),
-    REPL_PRINT_STARTUP
-  );
+  if (startup_code) 
+    repl_eval_chunk(js, startup_code, strlen(startup_code), REPL_PRINT_STARTUP);
 
   int prev_ctrl_c_count = 0;
   char *multiline_buf = NULL;
+  
   size_t multiline_len = 0;
   size_t multiline_cap = 0;
 
   while (1) {
     const char *prompt = multiline_buf ? "\x1b[2m|\x1b[0m " : "\x1b[2m❯\x1b[0m ";
     highlight_state prefix_state = HL_STATE_INIT;
+    
     if (multiline_buf && multiline_len > 0) {
       char scratch[8192];
       ant_highlight_stateful(multiline_buf, multiline_len, scratch, sizeof(scratch), &prefix_state);
@@ -946,8 +713,7 @@ void ant_repl_run(ant_t *js, const char *startup_code) {
     fflush(stdout);
 
     char *line = NULL;
-    ant_readline_result_t readline_status =
-      repl_readline_async(js, &decl_registry, &history, prompt, prefix_state, &line);
+    ant_readline_result_t readline_status = repl_readline_async(js, &history, prompt, prefix_state, &line);
 
     if (readline_status == ANT_READLINE_INTERRUPT) {
       if (multiline_buf) {
@@ -1029,11 +795,7 @@ void ant_repl_run(ant_t *js, const char *startup_code) {
 
     if (is_incomplete_input(multiline_buf, multiline_len)) continue;
     ant_history_add(&history, multiline_buf);
-
-    repl_eval_chunk(
-      js, &decl_registry, multiline_buf,
-      multiline_len, REPL_PRINT_INTERACTIVE
-    );
+    repl_eval_chunk(js, multiline_buf, multiline_len, REPL_PRINT_INTERACTIVE);
 
     free(multiline_buf);
     multiline_buf = NULL;
@@ -1043,10 +805,6 @@ void ant_repl_run(ant_t *js, const char *startup_code) {
 
   if (multiline_buf) free(multiline_buf);
   ant_readline_shutdown();
-
-  repl_decl_registry_free(&decl_registry);
-  g_repl_decl_registry = NULL;
-
   ant_history_save(&history);
   ant_history_free(&history);
 }

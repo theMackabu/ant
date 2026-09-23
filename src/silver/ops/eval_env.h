@@ -3,6 +3,8 @@
 
 #include "silver/engine.h"
 #include "gc/roots.h"
+#include "shapes.h"
+#include "descriptors.h"
 #include "silver/eval_env.h"
 
 typedef struct sv_eval_env_state {
@@ -254,7 +256,44 @@ static inline ant_value_t sv_eval_init_variable_env(sv_vm_t *vm, ant_t *js, sv_f
   return env;
 }
 
-static inline ant_value_t sv_eval_declare_vars(ant_t *js, sv_func_t *func, ant_value_t env) {
+static inline ant_global_lexical_t *sv_global_lexical(ant_t *js, const char *interned) {
+  if (__builtin_expect(js->global_lexical_count == 0, 1)) return NULL;
+  for (uint32_t i = 0; i < js->global_lexical_count; i++)
+    if (js->global_lexicals[i].name == interned) return &js->global_lexicals[i];
+  return NULL;
+}
+
+static inline ant_value_t sv_global_lexical_get(ant_t *js, const ant_global_lexical_t *lex) {
+  if (!is_empty_slot(lex->value)) return lex->value;
+  return js_mkerr_typed(js, JS_ERR_REFERENCE,
+    "Cannot access '%.*s' before initialization", (int)lex->len, lex->name);
+}
+
+static inline ant_value_t sv_global_lexical_set(
+  ant_t *js, ant_global_lexical_t *lex, ant_value_t value, bool initialize
+) {
+  if (!initialize && is_empty_slot(lex->value)) 
+    return sv_global_lexical_get(js, lex);
+  if (!initialize && lex->is_const)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "assignment to constant variable");
+  lex->value = value;
+  return value;
+}
+
+static inline bool sv_eval_envs_bind(
+  ant_t *js, ant_value_t env, ant_value_t target,
+  const sv_eval_decl_t *name, uint8_t with, uint8_t without
+) {
+  for (ant_value_t current = env; current != target; current = js_get_proto(js, current)) {
+    const sv_runtime_binding_t *binding = sv_eval_env_find_binding(sv_eval_env_state(current), name->str, name->len);
+    if (binding && (binding->kind & with) == with && !(binding->kind & without)) return true;
+  }
+  return false;
+}
+
+static inline ant_value_t sv_eval_declare_vars(
+  ant_t *js, sv_func_t *func, ant_value_t env, bool configurable
+) {
   sv_func_metadata_t *metadata = sv_func_metadata(func);
   if (!metadata || !metadata->eval_var_count) return js_mkundef();
   ant_value_t target = env;
@@ -264,34 +303,31 @@ static inline ant_value_t sv_eval_declare_vars(ant_t *js, sv_func_t *func, ant_v
     target = js_get_proto(js, target);
   }
   if (!is_object_type(target)) return js_mkerr(js, "missing eval variable environment");
+  bool global = target == js->global;
 
-  // Check every declaration before publishing any names or executing eval code.
   for (uint32_t i = 0; i < metadata->eval_var_count; i++) {
     sv_eval_decl_t *name = &metadata->eval_vars[i];
-    for (ant_value_t current = env; current != target; current = js_get_proto(js, current)) {
-      const sv_runtime_binding_t *binding = sv_eval_env_find_binding(
-        sv_eval_env_state(current), name->str, name->len);
-      if (binding && (binding->kind & SV_EVAL_BIND_LEXICAL) && !name->annex_b)
-        return js_mkerr_typed(js, JS_ERR_SYNTAX,
-          "Identifier '%.*s' has already been declared", (int)name->len, name->str);
-    }
+    bool conflicts = sv_eval_envs_bind(js, env, target, name, SV_EVAL_BIND_LEXICAL, 0) ||
+      (global && sv_global_lexical(js, name->str));
+    if (conflicts && !name->annex_b) return js_mkerr_typed(js, JS_ERR_SYNTAX,
+      "Identifier '%.*s' has already been declared", (int)name->len, name->str);
   }
+
   GC_ROOT_SAVE(mark, js);
   GC_ROOT_PIN(js, env);
   GC_ROOT_PIN(js, target);
   ant_value_t result = js_mkundef();
+  
   for (uint32_t i = 0; i < metadata->eval_var_count; i++) {
     sv_eval_decl_t *name = &metadata->eval_vars[i];
-    bool exists = false;
-    for (ant_value_t current = env; current != target; current = js_get_proto(js, current)) {
-      const sv_runtime_binding_t *binding = sv_eval_env_find_binding(
-        sv_eval_env_state(current), name->str, name->len);
-      if (binding && !(binding->kind & SV_EVAL_BIND_CATCH)) { exists = true; break; }
-    }
-    if (exists || lkp_interned(target, name->str).obj) continue;
+    bool exists = sv_eval_envs_bind(js, env, target, name, 0, SV_EVAL_BIND_CATCH) ||
+      lkp_interned(target, name->str).obj || (global && sv_global_lexical(js, name->str));
+    if (exists) continue;
     result = setprop_interned(js, target, name->str, name->len, js_mkundef());
     if (is_err(result)) break;
+    if (!configurable) js_set_descriptor(js, target, name->str, name->len, JS_DESC_W | JS_DESC_E);
   }
+  
   GC_ROOT_RESTORE(js, mark);
   return result;
 }
@@ -316,6 +352,50 @@ static inline ant_value_t sv_eval_store_function(
   }
   GC_ROOT_RESTORE(js, mark);
   return result;
+}
+
+static inline bool sv_global_has_restricted_prop(ant_t *js, const char *interned) {
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(js->global));
+  if (!ptr || !ptr->shape) return false;
+  int32_t slot = ant_shape_lookup_interned(ptr->shape, interned);
+  if (slot < 0) return false;
+  const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
+  return prop && !(prop->attrs & ANT_PROP_ATTR_CONFIGURABLE);
+}
+
+static inline ant_value_t sv_global_declare(ant_t *js, sv_func_t *func) {
+  sv_func_metadata_t *metadata = sv_func_metadata(func);
+  if (!metadata) return js_mkundef();
+
+  for (uint32_t i = 0; i < metadata->global_lexical_count; i++) {
+    sv_eval_decl_t *decl = &metadata->global_lexicals[i];
+    if (sv_global_has_restricted_prop(js, decl->str) || sv_global_lexical(js, decl->str))
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "Identifier '%.*s' has already been declared", (int)decl->len, decl->str);
+  }
+
+  ant_value_t result = sv_eval_declare_vars(js, func, js->global, false);
+  if (is_err(result) || metadata->global_lexical_count == 0) return result;
+
+  uint32_t count = js->global_lexical_count + metadata->global_lexical_count;
+  if (count > js->global_lexical_cap) {
+    uint32_t cap = js->global_lexical_cap ? js->global_lexical_cap : 16;
+    while (cap < count) cap *= 2;
+    ant_global_lexical_t *grown = realloc(js->global_lexicals, (size_t)cap * sizeof(*grown));
+    if (!grown) return js_mkerr(js, "out of memory while declaring global lexicals");
+    js->global_lexicals = grown;
+    js->global_lexical_cap = cap;
+  }
+  
+  for (uint32_t i = 0; i < metadata->global_lexical_count; i++) {
+    sv_eval_decl_t *decl = &metadata->global_lexicals[i];
+    js->global_lexicals[js->global_lexical_count++] = (ant_global_lexical_t){
+      .name = decl->str, .len = decl->len, 
+      .is_const = decl->is_const, .value = T_EMPTY,
+    };
+  }
+
+  ant_ic_epoch_bump();
+  return js_mkundef();
 }
 
 #endif

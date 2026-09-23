@@ -330,13 +330,19 @@ typedef struct {
   const char *str;
   uint32_t len;
   bool annex_b;
+  bool is_const;
 } sv_eval_decl_t;
 
 typedef struct {
   sv_eval_scope_t *eval_scopes;
   uint32_t eval_scope_count;
+  
   sv_eval_decl_t *eval_vars;
   uint32_t eval_var_count;
+  
+  sv_eval_decl_t *global_lexicals;
+  uint32_t global_lexical_count;
+  
   sv_type_info_t local_types[];
 } sv_func_metadata_t;
 

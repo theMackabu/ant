@@ -655,11 +655,12 @@ static inline bool is_strict_restricted_ident(const char *name, uint32_t len) {
     is_ident_str(name, len, "arguments", 9);
 }
 
+static inline bool is_repl_root(const sv_compiler_t *c) {
+  return c->mode == SV_COMPILE_REPL && c->enclosing && !c->enclosing->enclosing;
+}
+
 static inline bool is_repl_top_level(const sv_compiler_t *c) {
-  return 
-    c->mode == SV_COMPILE_REPL && c->scope_depth == 0 &&
-    c->enclosing && !c->enclosing->enclosing &&
-    !c->is_strict;
+  return is_repl_root(c) && c->scope_depth == 0;
 }
 
 static inline bool has_completion_value(const sv_compiler_t *c) {
@@ -1257,7 +1258,7 @@ static void sv_func_finalize_type_data(
   func->needs_eval_env = comp->inherits_eval_env;
   func->is_eval = sv_compile_mode_is_eval(comp->mode);
   func->local_type_count = local_type_count;
-  if (comp->eval_scope_count > 0 || comp->eval_var_count > 0) {
+  if (comp->eval_scope_count > 0 || comp->eval_var_count > 0 || comp->global_lexical_count > 0) {
     size_t metadata_size = offsetof(sv_func_metadata_t, local_types) +
       (size_t)local_type_count * sizeof(sv_type_info_t);
     sv_func_metadata_t *metadata = code_arena_bump(metadata_size);
@@ -1277,6 +1278,12 @@ static void sv_func_finalize_type_data(
       size_t size = (size_t)comp->eval_var_count * sizeof(sv_eval_decl_t);
       metadata->eval_vars = code_arena_bump(size);
       memcpy(metadata->eval_vars, comp->eval_vars, size);
+    }
+    metadata->global_lexical_count = comp->global_lexical_count;
+    if (comp->global_lexical_count) {
+      size_t size = (size_t)comp->global_lexical_count * sizeof(sv_eval_decl_t);
+      metadata->global_lexicals = code_arena_bump(size);
+      memcpy(metadata->global_lexicals, comp->global_lexicals, size);
     }
 
     size_t binding_count = 0;
@@ -1938,7 +1945,7 @@ static void mark_char_code_at_binding(sv_compiler_t *c, sv_ast_t *prop) {
 }
 
 static bool is_sloppy_eval(const sv_compiler_t *c) {
-  return sv_compile_mode_is_eval(c->mode) && !c->is_strict;
+  return (sv_compile_mode_is_eval(c->mode) && !c->is_strict) || is_repl_root(c);
 }
 
 static void add_eval_var(sv_compiler_t *c, const char *name, uint32_t len, bool annex_b) {
@@ -1953,7 +1960,28 @@ static void add_eval_var(sv_compiler_t *c, const char *name, uint32_t len, bool 
   if (!vars) { js_mkerr(c->js, "out of memory while declaring eval variables"); return; }
   c->eval_vars = vars;
   int atom = add_atom(c, name, len);
-  c->eval_vars[c->eval_var_count++] = (sv_eval_decl_t){c->atoms[atom].str, len, annex_b};
+  c->eval_vars[c->eval_var_count++] = (sv_eval_decl_t){ .str = c->atoms[atom].str, .len = len, .annex_b = annex_b };
+}
+
+static bool has_global_lexical(const sv_compiler_t *c, const char *name, uint32_t len) {
+  for (uint32_t i = 0; i < c->global_lexical_count; i++)
+    if (c->global_lexicals[i].len == len && !memcmp(c->global_lexicals[i].str, name, len)) return true;
+  return false;
+}
+
+static void add_global_lexical(sv_compiler_t *c, const char *name, uint32_t len, bool is_const) {
+  if (has_global_lexical(c, name, len)) {
+    js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Identifier '%.*s' has already been declared", (int)len, name);
+    return;
+  }
+  
+  sv_eval_decl_t *decls = realloc(
+    c->global_lexicals, ((size_t)c->global_lexical_count + 1) * sizeof(*decls));
+  if (!decls) { js_mkerr(c->js, "out of memory while declaring global lexicals"); return; }
+  c->global_lexicals = decls;
+  int atom = add_atom(c, name, len);
+  c->global_lexicals[c->global_lexical_count++] =
+    (sv_eval_decl_t){ .str = c->atoms[atom].str, .len = len, .is_const = is_const };
 }
 
 static void hoist_var_pattern(sv_compiler_t *c, sv_ast_t *pat) {
@@ -2049,6 +2077,10 @@ static void hoist_lexical_pattern(sv_compiler_t *c, sv_ast_t *pat,
 
   switch (pat->type) {
     case N_IDENT: {
+      if (is_repl_top_level(c)) {
+        add_global_lexical(c, pat->str, pat->len, is_const);
+        break;
+      }
       int local = ensure_local_at_depth(c, pat->str, pat->len, is_const, c->scope_depth);
       c->locals[local].eval_flags |= SV_EVAL_BIND_LEXICAL;
       break;
@@ -2199,10 +2231,11 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
     if (!decl_node) continue;
 
     if (decl_node->type == N_VAR && decl_node->var_kind != SV_VAR_VAR) {
-      bool is_const = 
-        (decl_node->var_kind == SV_VAR_CONST ||
+      bool is_using =
         decl_node->var_kind == SV_VAR_USING ||
-        decl_node->var_kind == SV_VAR_AWAIT_USING);
+        decl_node->var_kind == SV_VAR_AWAIT_USING;
+      bool is_const = decl_node->var_kind == SV_VAR_CONST || is_using;
+      if (is_using && is_repl_top_level(c)) continue;
       int lb = c->local_count;
       for (int j = 0; j < decl_node->args.count; j++) {
         sv_ast_t *decl = decl_node->args.items[j];
@@ -2227,9 +2260,18 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
         if (!spec || spec->type != N_IMPORT_SPEC ||
             !spec->right || spec->right->type != N_IDENT)
           continue;
+        if (is_repl_top_level(c)) {
+          add_global_lexical(c, spec->right->str, spec->right->len, true);
+          continue;
+        }
         int idx = ensure_local_at_depth(c, spec->right->str, spec->right->len, true, c->scope_depth);
         mark_import_binding(c, idx, spec);
       }
+    } else if (
+      decl_node->type == N_CLASS && decl_node->str &&
+      (decl_node->flags & FN_CLASS_DECL) && is_repl_top_level(c)
+    ) {
+      add_global_lexical(c, decl_node->str, decl_node->len, false);
     } else if (
       decl_node->type == N_CLASS && decl_node->str &&
       (decl_node->flags & FN_CLASS_DECL)
@@ -2274,7 +2316,7 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
           add_local(c, fn->str, fn->len, false, c->scope_depth);
       }
     }
-    if (!c->is_strict && decl_node->type == N_BLOCK) {
+    if (!c->is_strict) {
       sv_ast_list_t funcs = {0};
       annex_b_collect_block_var_funcs(decl_node, &funcs);
       for (int j = 0; j < funcs.count; j++) {
@@ -2290,7 +2332,9 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
     for (uint32_t i = 0; i < c->eval_var_count;) {
       sv_eval_decl_t *decl = &c->eval_vars[i];
       int local = resolve_local_at_depth(c, decl->str, decl->len, 0);
-      if (local < 0 || !(c->locals[local].eval_flags & SV_EVAL_BIND_LEXICAL)) { i++; continue; }
+      bool lexical = has_global_lexical(c, decl->str, decl->len) ||
+        (local >= 0 && (c->locals[local].eval_flags & SV_EVAL_BIND_LEXICAL));
+      if (!lexical) { i++; continue; }
       if (!decl->annex_b) {
         js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Identifier '%.*s' has already been declared",
           (int)decl->len, decl->str);
@@ -2343,6 +2387,7 @@ static void hoist_one_func(sv_compiler_t *c, sv_ast_t *node, bool annex_b_update
   emit_closure(c, idx);
   emit_set_function_name(c, node->str, node->len);
   int annex_var = annex_b_update_var && !is_sloppy_eval(c) ? resolve_local_at_depth(c, node->str, node->len, 0) : -1;
+  if (annex_var >= 0 && (c->locals[annex_var].eval_flags & SV_EVAL_BIND_LEXICAL)) annex_var = -1;
   bool eval_annex_var = false;
   if (annex_b_update_var && is_sloppy_eval(c))
     for (uint32_t i = 0; i < c->eval_var_count; i++)
@@ -2356,8 +2401,6 @@ static void hoist_one_func(sv_compiler_t *c, sv_ast_t *node, bool annex_b_update
         declared = true;
     if (declared) emit_atom_op(c, OP_PUT_EVAL_FUNCTION, node->str, node->len);
     else emit_op(c, OP_POP);
-  } else if (is_repl_top_level(c)) {
-    emit_atom_op(c, OP_PUT_GLOBAL, node->str, node->len);
   } else {
     int local = resolve_local(c, node->str, node->len);
     emit_put_local(c, local);
@@ -3316,6 +3359,12 @@ void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
     compile_expr(c, arg->right);
     emit_op(c, OP_DELETE);
   } else if (arg->type == N_IDENT) {
+    if (!has_active_with_scope(c))
+      for (sv_compiler_t *cur = c; cur; cur = cur->enclosing)
+        if (resolve_local(cur, arg->str, arg->len) != -1) {
+          emit_op(c, OP_FALSE);
+          return;
+        }
     emit_atom_op(
       c, c->with_depth > 0
         ? OP_WITH_DEL_VAR
@@ -4784,6 +4833,10 @@ static void compile_destructure_store(sv_compiler_t *c, sv_ast_t *target,
   }
 
   if (target->type == N_IDENT) {
+    if ((kind == SV_VAR_LET || kind == SV_VAR_CONST) && is_repl_top_level(c)) {
+      emit_atom_op(c, OP_INIT_GLOBAL_LEX, target->str, target->len);
+      return;
+    }
     bool is_const = (
       kind == SV_VAR_CONST ||
       kind == SV_VAR_USING ||
@@ -5386,7 +5439,7 @@ void compile_import_decl(sv_compiler_t *c, sv_ast_t *node) {
     emit_get_local(c, ns_local);
     if (repl_top) {
       emit_import_binding_resolve(c, import_kind, import_name, import_name_len);
-      emit_atom_op(c, OP_PUT_GLOBAL, spec->right->str, spec->right->len);
+      emit_atom_op(c, OP_INIT_GLOBAL_LEX, spec->right->str, spec->right->len);
     } else {
       int idx = ensure_local_at_depth(c, spec->right->str, spec->right->len, true, c->scope_depth);
       emit_put_local(c, idx);
@@ -5591,23 +5644,18 @@ void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
   bool is_using = (kind == SV_VAR_USING || kind == SV_VAR_AWAIT_USING);
   bool is_await_using = (kind == SV_VAR_AWAIT_USING);
   bool is_const = (kind == SV_VAR_CONST || is_using);
-  bool repl_top = is_repl_top_level(c);
+  bool global_lexical = !is_using && kind != SV_VAR_VAR && is_repl_top_level(c);
 
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *decl = node->args.items[i];
     if (decl->type != N_VARDECL) continue;
     sv_ast_t *target = decl->left;
 
-    if (repl_top) {
-      if (!decl->right && kind == SV_VAR_VAR) continue;
-      if (decl->right) {
-        if (target->type == N_IDENT)
-          compile_expr_with_inferred_name(c, decl->right, target->str, target->len);
-        else compile_expr(c, decl->right);
-      } else emit_op(c, OP_UNDEF);
-      if (target->type == N_IDENT) {
-        emit_atom_op(c, OP_PUT_GLOBAL, target->str, target->len);
-      } else compile_destructure_pattern(c, target, false, true, DESTRUCTURE_ASSIGN, kind);
+    if (global_lexical && target->type == N_IDENT) {
+      if (decl->right)
+        compile_expr_with_inferred_name(c, decl->right, target->str, target->len);
+      else emit_op(c, OP_UNDEF);
+      emit_atom_op(c, OP_INIT_GLOBAL_LEX, target->str, target->len);
     } else if (kind == SV_VAR_VAR) {
       if (decl->right) {
         uint8_t init_type = infer_expr_type(c, decl->right);
@@ -6635,7 +6683,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   int outer_name_local = -1;
   bool binds_outer_name = node->str &&
     (node->flags & FN_CLASS_DECL);
-  bool class_repl_top = binds_outer_name && is_repl_top_level(c);
+  bool class_global_lexical = binds_outer_name && is_repl_top_level(c);
 
   sv_ast_t *ctor_method = NULL;
   bool has_static_name = false;
@@ -6914,9 +6962,9 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   free(static_init_items);
   emit_get_local(c, ctor_local);
 
-  if (class_repl_top) {
+  if (class_global_lexical) {
     emit_op(c, OP_DUP);
-    emit_atom_op(c, OP_PUT_GLOBAL, node->str, node->len);
+    emit_atom_op(c, OP_INIT_GLOBAL_LEX, node->str, node->len);
   } else if (outer_name_local >= 0) {
     emit_op(c, OP_DUP);
     emit_put_local(c, outer_name_local);
@@ -7163,7 +7211,7 @@ sv_func_t *compile_function_body(
   bool params_bind_eval = false;
   for (int i = 0; i < node->args.count; i++)
     params_bind_eval |= ast_pattern_binds_eval(node->args.items[i]);
-  if (!sv_compile_mode_is_eval(mode) && !comp.is_strict && !params_bind_eval) {
+  if (!sv_compile_mode_is_eval(mode) && !is_repl_root(&comp) && !comp.is_strict && !params_bind_eval) {
     for (int i = 0; !comp.owns_eval_env && i < node->args.count; i++)
       comp.owns_eval_env = ast_has_own_eval(&comp, node->args.items[i]);
     if (!comp.owns_eval_env && !ast_has_eval_var(node->body))
@@ -7171,8 +7219,6 @@ sv_func_t *compile_function_body(
   }
   comp.inherits_eval_env |= comp.owns_eval_env;
   if (comp.owns_eval_env) emit_op(&comp, OP_INIT_EVAL_ENV);
-  bool repl_top = is_repl_top_level(&comp);
-
   if (node->flags & FN_CLASS_CTOR) emit_op(&comp, OP_CHECK_CTOR);
 
   if (!comp.is_arrow && comp.enclosing && (node->flags & FN_USES_NEW_TARGET)) {
@@ -7185,13 +7231,11 @@ sv_func_t *compile_function_body(
   
   if (!has_non_simple_params && node->body) {
     if (node->body->type == N_BLOCK) {
-      if (!repl_top) {
-        for (int i = 0; i < node->body->args.count; i++)
-          hoist_var_decls(&comp, node->body->args.items[i]);
-        hoist_lexical_decls(&comp, &node->body->args);
-      }
+      for (int i = 0; i < node->body->args.count; i++)
+        hoist_var_decls(&comp, node->body->args.items[i]);
+      hoist_lexical_decls(&comp, &node->body->args);
       hoist_func_decls(&comp, &node->body->args);
-    } else if (!repl_top) hoist_var_decls(&comp, node->body);
+    } else hoist_var_decls(&comp, node->body);
   }
 
   if (!has_non_simple_params) {
@@ -7339,13 +7383,11 @@ sv_func_t *compile_function_body(
     sv_ast_t *body = node->body;
 
     if (body && body->type != N_BLOCK) {
-      if (!repl_top) hoist_var_decls(&comp, body);
+      hoist_var_decls(&comp, body);
     } else if (body) {
-      if (!repl_top) {
-        for (int i = 0; i < body->args.count; i++)
-          hoist_var_decls(&comp, body->args.items[i]);
-        hoist_lexical_decls(&comp, &body->args);
-      }
+      for (int i = 0; i < body->args.count; i++)
+        hoist_var_decls(&comp, body->args.items[i]);
+      hoist_lexical_decls(&comp, &body->args);
       hoist_func_decls(&comp, &body->args);
     }
   }

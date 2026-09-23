@@ -922,15 +922,21 @@ static void gc_mark_permanent_roots(ant_t *js) {
 
 static void gc_mark_roots(ant_t *js) {
   gc_scan_vm_stack(js, js->vm);
-  for (coroutine_t *c = js->active_async_coro; c; c = c->active_parent) gc_mark_coroutine(js, c);
+
+  for (coroutine_t *c = js->active_async_coro; c; c = c->active_parent) 
+    gc_mark_coroutine(js, c);
 
   gc_mark_value(js, js->global);
+
+  for (uint32_t i = 0; i < js->global_lexical_count; i++)
+    gc_mark_value(js, js->global_lexicals[i].value);
+
   gc_mark_value(js, js->Ant);
   gc_mark_value(js, js->primordials);
-  
+
   for (size_t i = 0; i < ANT_PRIMORDIAL_COUNT; i++)
     gc_mark_value(js, js->primordial_values[i]);
-  
+
   gc_mark_value(js, js->modules.cjs.cache);
   gc_mark_value(js, js->modules.cjs.parent);
   gc_mark_value(js, js->modules.cjs.main);
