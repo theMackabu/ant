@@ -10,6 +10,7 @@
 #include "modules/collections.h"
 
 #include "gc.h"
+#include "gc/uv.h"
 #include "gc/bigints.h"
 #include "gc/objects.h"
 #include "gc/verify.h"
@@ -707,6 +708,9 @@ void gc_mark_conservative_range(ant_t *js, const void *ptr, size_t size) {
   gc_scan_range(js, lo, lo + bytes);
 }
 
+_Thread_local gc_uv_seg_t *gc_uv_segs = NULL;
+_Thread_local uintptr_t gc_uv_run_sp = 0;
+
 typedef struct {
   uintptr_t fp;
   uintptr_t lo, hi;
@@ -752,21 +756,38 @@ static void gc_scan_segmented(ant_t *js, uintptr_t lo, uintptr_t hi) {
 
   uintptr_t cur = lo;
   gc_vm_seg_t *seg = js->vm_segs;
+  gc_uv_seg_t *useg = gc_uv_segs;
   
   for (;;) {
     while (seg && (seg->lo < cur || seg->hi > hi || seg->lo >= seg->hi)) seg = seg->prev;
+    while (useg && (useg->lo < cur || useg->hi > hi || useg->lo >= useg->hi)) useg = useg->prev;
     while (have_save && save_lo < cur) have_save = gc_next_interp_stub_save(js, &walk, &save_lo, &save_hi);
 
-    uintptr_t skip_lo, skip_hi;
-    if (seg && (!have_save || seg->lo <= save_lo)) {
+    uintptr_t skip_lo = UINTPTR_MAX, skip_hi = 0;
+    int from = 0;
+    
+    if (seg) { 
       skip_lo = seg->lo;
       skip_hi = seg->hi;
-      seg = seg->prev;
-    } else if (have_save) {
+      from = 1;
+    }
+    
+    if (useg && useg->lo < skip_lo) { 
+      skip_lo = useg->lo;
+      skip_hi = useg->hi;
+      from = 2;
+    }
+    
+    if (have_save && save_lo < skip_lo) {
       skip_lo = save_lo;
       skip_hi = save_hi;
-      have_save = gc_next_interp_stub_save(js, &walk, &save_lo, &save_hi);
-    } else break;
+      from = 3;
+    }
+    
+    if (!from) break;
+    if (from == 1) seg = seg->prev;
+    else if (from == 2) useg = useg->prev;
+    else have_save = gc_next_interp_stub_save(js, &walk, &save_lo, &save_hi);
 
     gc_scan_range(js, cur, skip_lo);
     cur = skip_hi;
@@ -784,7 +805,7 @@ static void gc_scan_current_stack(ant_t *js) {
   uintptr_t lo, hi;
   if (!gc_get_stack_bounds((uintptr_t)js->cstk.base, gc_native_sp(), &lo, &hi)) return;
 #if (defined(__aarch64__) || defined(__x86_64__)) && !defined(_WIN32) && !defined(ANT_WASM_EMBED)
-  if (js->vm_segs) {
+  if (js->vm_segs || gc_uv_segs) {
     gc_scan_segmented(js, lo, hi);
     return;
   }

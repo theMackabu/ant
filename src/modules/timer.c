@@ -11,6 +11,7 @@
 #include "internal.h"
 #include "silver/call.h"
 
+#include "gc/uv.h"
 #include "gc/weak.h"
 #include "gc/roots.h"
 #include "gc/modules.h"
@@ -289,6 +290,7 @@ static ant_value_t timer_make_object(
 }
 
 static void timer_callback(uv_timer_t *handle) {
+  GC_UV_CALLBACK();
   timer_entry_t *entry = (timer_entry_t *)handle->data;
   if (!entry || entry->closed || !timer_entry_is_registered(entry) || !entry->active) return;
   

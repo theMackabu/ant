@@ -2,6 +2,7 @@
 #include "base64.h"
 #include "escape.h"
 #include "esm/remote.h"
+#include "reactor.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -298,7 +299,7 @@ char *esm_fetch_url(const char *url, size_t *out_len, char **out_error) {
   }
 
   ctx.http_req->data = &ctx;
-  while (!ctx.completed) uv_run(loop, UV_RUN_ONCE);
+  while (!ctx.completed) ant_uv_run(loop, UV_RUN_ONCE);
 
   if (ctx.failed || ctx.status_code < 200 || ctx.status_code >= 400) {
     if (out_error) {

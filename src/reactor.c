@@ -1,10 +1,8 @@
 #include "gc.h"
+#include "gc/uv.h"
 #include "gc/roots.h"
 #include "reactor.h"
 #include "readline.h"
-
-#include <string.h>
-
 #include "modules/fs.h"
 #include "modules/timer.h"
 #include "modules/fetch.h"
@@ -37,89 +35,46 @@ void js_poll_events(ant_t *js) {
   process_microtasks(js);
 }
 
-/*
- * uv_run()'s poll step keeps a large event buffer on the stack that the
- * kernel only partly fills, leaving the rest holding whatever was there
- * before. The conservative stack scan sees that stale data for as long as
- * uv_run() is active, and one stale pointer to a dead object can keep a chain
- * of later garbage alive. So the region uv_run() uses is zeroed once, and JS
- * work between uv_run() calls runs below it.
- *
- * libuv doesn't export its buffer sizes. The element counts below mirror the
- * vendored backends and must be updated if a libuv bump changes them:
- *
- *   kqueue.c    uv__io_poll()          struct kevent events[1024]
- *   linux.c     uv__io_poll()          struct epoll_event events[1024]
- *                                      struct epoll_event prep[256]
- *               uv__epoll_ctl_flush()  struct epoll_event oldevents[256]
- *   win/core.c  uv__poll()             OVERLAPPED_ENTRY overlappeds[128]
- *
- * The slack covers the rest of uv_run()'s frames.
- */
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
-#include <sys/event.h>
-static constexpr size_t REACTOR_UV_POLL_BUFFER = 1024u * sizeof(struct kevent);
-#elif defined(__linux__)
-#include <sys/epoll.h>
-static constexpr size_t REACTOR_UV_POLL_BUFFER = (1024u + 256u + 256u) * sizeof(struct epoll_event);
-#elif defined(_WIN32)
-static constexpr size_t REACTOR_UV_POLL_BUFFER = 128u * sizeof(OVERLAPPED_ENTRY);
-#else
-static constexpr size_t REACTOR_UV_POLL_BUFFER = 64u * 1024u;
+__attribute__((noinline))
+int ant_uv_run(uv_loop_t *loop, uv_run_mode mode) {
+#if defined(__GNUC__)
+  __builtin_unwind_init();
 #endif
-
-static constexpr size_t REACTOR_UV_STACK_SLACK   = 8u * 1024u;
-static constexpr size_t REACTOR_UV_STACK_RESERVE = REACTOR_UV_POLL_BUFFER + REACTOR_UV_STACK_SLACK;
-
-__attribute__((noinline))
-static void reactor_scrub_uv_stack(void) {
-  char region[REACTOR_UV_STACK_RESERVE];
-  memset(region, 0, sizeof(region));
-  __asm__ volatile("" :: "r"(region) : "memory");
-}
-
-__attribute__((noinline))
-static void reactor_run_below_uv_stack(ant_t *js, void (*work)(ant_t *js)) {
-  void *reserve = __builtin_alloca(REACTOR_UV_STACK_RESERVE);
-  __asm__ volatile("" :: "r"(reserve) : "memory");
-  work(js);
-}
-
-static void reactor_poll(ant_t *js) {
-  process_report_uncaught_exception_if_pending(js);
-  js_poll_events(js);
-}
-
-static void reactor_before_exit(ant_t *js) {
-  process_report_uncaught_exception_if_pending(js);
-  js_poll_events(js);
-  ant_value_t code = js_mknum(0);
-  emit_process_event(js, "beforeExit", &code, 1);
+  uintptr_t prev = gc_uv_run_sp;
+  gc_uv_run_sp = gc_native_sp();
+  int result = uv_run(loop, mode);
+  gc_uv_run_sp = prev;
+  __asm__ volatile("" : "+r"(result) :: "memory");
+  return result;
 }
 
 void js_run_event_loop(ant_t *js) {
-  reactor_scrub_uv_stack();
 drain:
   while (event_loop_alive(js)) {
-    reactor_run_below_uv_stack(js, reactor_poll);
+    process_report_uncaught_exception_if_pending(js);
+    js_poll_events(js);
     work_flags_t work = get_pending_work(js);
   
     if (work & WORK_BLOCKING) 
-      uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+      ant_uv_run(uv_default_loop(), UV_RUN_NOWAIT);
     else if ((work & WORK_ASYNC) || uv_loop_alive(uv_default_loop()))
-      uv_run(uv_default_loop(), UV_RUN_ONCE);
+      ant_uv_run(uv_default_loop(), UV_RUN_ONCE);
     else break;
   
-    reactor_run_below_uv_stack(js, process_report_uncaught_exception_if_pending);
+    process_report_uncaught_exception_if_pending(js);
   }
   
-  reactor_run_below_uv_stack(js, reactor_before_exit);
+  process_report_uncaught_exception_if_pending(js);
+  js_poll_events(js);
+  ant_value_t code = js_mknum(0);
+  
+  emit_process_event(js, "beforeExit", &code, 1);
   if (event_loop_alive(js)) goto drain;
 }
 
 void js_reactor_pump_repl_nowait(ant_t *js) {
   js_poll_events(js);
-  uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+  ant_uv_run(uv_default_loop(), UV_RUN_NOWAIT);
   js_poll_events(js);
 }
 
@@ -181,10 +136,9 @@ js_reactor_await_status_t js_reactor_blocking_await_promise(
     uv_timer_start(&wake_timer, reactor_blocking_await_fallback_wake_cb, 16, 16) == 0;
 
   js_reactor_await_status_t status = JS_REACTOR_AWAIT_INVALID;
-  reactor_scrub_uv_stack();
   
   for (;;) {
-    reactor_run_below_uv_stack(js, js_poll_events);
+    js_poll_events(js);
 
     promise_state = js_promise_get_settlement(js, promise, &settled);
     if (promise_state == JS_PROMISE_FULFILLED) {
@@ -203,7 +157,7 @@ js_reactor_await_status_t js_reactor_blocking_await_promise(
       break;
     }
 
-    uv_run(loop, UV_RUN_ONCE);
+    ant_uv_run(loop, UV_RUN_ONCE);
   }
 
   if (wake_timer_initialized) {
@@ -211,7 +165,7 @@ js_reactor_await_status_t js_reactor_blocking_await_promise(
     bool wake_timer_closed = false;
     wake_timer.data = &wake_timer_closed;
     uv_close((uv_handle_t *)&wake_timer, reactor_await_close_cb);
-    while (!wake_timer_closed) uv_run(loop, UV_RUN_ONCE);
+    while (!wake_timer_closed) ant_uv_run(loop, UV_RUN_ONCE);
   }
   
   if (signal_poll_initialized) {
@@ -219,7 +173,7 @@ js_reactor_await_status_t js_reactor_blocking_await_promise(
     bool signal_poll_closed = false;
     signal_poll.data = &signal_poll_closed;
     uv_close((uv_handle_t *)&signal_poll, reactor_await_close_cb);
-    while (!signal_poll_closed) uv_run(loop, UV_RUN_ONCE);
+    while (!signal_poll_closed) ant_uv_run(loop, UV_RUN_ONCE);
   }
 
   if (

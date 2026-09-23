@@ -4,7 +4,7 @@ source_url = https://dist.libuv.org/dist/v1.52.1/libuv-v1.52.1.tar.gz
 source_filename = libuv-v1.52.1.tar.gz
 source_hash = 66d511b9e6e334c0e62279eb234fbfb2b3110b1479c09b95b44c7afca8cff9e7
 patch_directory = libuv
-diff_files = patches/libuv-drain-accept.patch
+diff_files = patches/libuv-drain-accept.patch, patches/libuv-poll-buffers.patch
 
 [provide]
 libuv = libuv_dep

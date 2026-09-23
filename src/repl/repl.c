@@ -284,7 +284,7 @@ static ant_readline_result_t repl_readline_async(
 #endif
     if (job.async_initialized)
       uv_close((uv_handle_t *)&job.async, repl_read_async_close_cb);
-    while (job.async_initialized) uv_run(uv_default_loop(), UV_RUN_ONCE);
+    while (job.async_initialized) ant_uv_run(uv_default_loop(), UV_RUN_ONCE);
     pthread_cond_destroy(&job.preview_cond);
     pthread_mutex_destroy(&job.mutex);
     repl_preview_snapshot_free(&preview_snapshot);
@@ -294,7 +294,7 @@ static ant_readline_result_t repl_readline_async(
   while (!repl_read_job_is_done(&job)) {
     repl_read_job_handle_preview(js, &job);
     js_reactor_pump_repl_nowait(js);
-    uv_run(uv_default_loop(), UV_RUN_ONCE);
+    ant_uv_run(uv_default_loop(), UV_RUN_ONCE);
     repl_read_job_handle_preview(js, &job);
   }
   repl_read_job_handle_preview(js, &job);
@@ -306,7 +306,7 @@ static ant_readline_result_t repl_readline_async(
 
   if (job.async_initialized)
     uv_close((uv_handle_t *)&job.async, repl_read_async_close_cb);
-  while (job.async_initialized) uv_run(uv_default_loop(), UV_RUN_ONCE);
+  while (job.async_initialized) ant_uv_run(uv_default_loop(), UV_RUN_ONCE);
 
   pthread_mutex_lock(&job.mutex);
   ant_readline_result_t status = job.status;

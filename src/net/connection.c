@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "gc/uv.h"
 #include "net/connection.h"
 #include "net/listener.h"
 
@@ -165,6 +166,7 @@ static void ant_conn_alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf
 }
 
 static void ant_conn_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
+  GC_UV_CALLBACK();
   ant_conn_t *conn = (ant_conn_t *)stream->data;
   ant_listener_t *listener = conn ? conn->listener : NULL;
   if (!conn || !listener) return;
@@ -197,6 +199,7 @@ static void ant_conn_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t 
 }
 
 static void ant_conn_write_cb_impl(uv_write_t *req, int status) {
+  GC_UV_CALLBACK();
   ant_conn_write_req_t *wr = (ant_conn_write_req_t *)req;
 
   if (status >= 0 && wr->conn)
@@ -208,6 +211,7 @@ static void ant_conn_write_cb_impl(uv_write_t *req, int status) {
 }
 
 static void ant_conn_shutdown_cb(uv_shutdown_t *req, int status) {
+  GC_UV_CALLBACK();
   ant_conn_shutdown_req_t *shutdown_req = (ant_conn_shutdown_req_t *)req;
   ant_conn_t *conn = shutdown_req ? shutdown_req->conn : NULL;
   free(shutdown_req);
@@ -306,6 +310,7 @@ int ant_conn_accept(ant_conn_t *conn, uv_stream_t *server_stream) {
 }
 
 static void ant_conn_connect_cb_impl(uv_connect_t *req, int status) {
+  GC_UV_CALLBACK();
   ant_conn_connect_req_t *cr = req ? (ant_conn_connect_req_t *)req->data : NULL;
   ant_conn_t *conn = cr ? cr->conn : NULL;
 
