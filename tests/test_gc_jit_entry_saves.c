@@ -72,8 +72,8 @@ __attribute__((noinline)) static bool enter_with_object_in_registers(ant_t *js, 
   __asm__ volatile(
     "eor x19, %10, %11\n mov x20, x19\n mov x21, x19\n mov x22, x19\n mov x23, x19\n"
     "mov x24, x19\n mov x25, x19\n mov x26, x19\n mov x27, x19\n mov x28, x19\n"
-    : "=r"(r19), "=r"(r20), "=r"(r21), "=r"(r22), "=r"(r23),
-      "=r"(r24), "=r"(r25), "=r"(r26), "=r"(r27), "=r"(r28)
+    : "=&r"(r19), "=&r"(r20), "=&r"(r21), "=&r"(r22), "=&r"(r23),
+      "=&r"(r24), "=&r"(r25), "=&r"(r26), "=&r"(r27), "=&r"(r28)
     : "r"(g_masked), "r"(MASK)
   );
   ant_jit_enter_clean(target, NULL, 0, 0, 0, NULL, 0, NULL);
@@ -84,7 +84,7 @@ __attribute__((noinline)) static bool enter_with_object_in_registers(ant_t *js, 
   __asm__ volatile(
     "mov %5, %%rbx\n xor %6, %%rbx\n mov %%rbx, %%r12\n mov %%rbx, %%r13\n"
     "mov %%rbx, %%r14\n mov %%rbx, %%r15\n"
-    : "=r"(rbx), "=r"(r12), "=r"(r13), "=r"(r14), "=r"(r15)
+    : "=&r"(rbx), "=&r"(r12), "=&r"(r13), "=&r"(r14), "=&r"(r15)
     : "r"(g_masked), "r"(MASK)
   );
   ant_jit_enter_clean(target, NULL, 0, 0, 0, NULL, 0, NULL);

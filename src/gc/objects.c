@@ -1149,7 +1149,7 @@ static void gc_sweep(ant_t *js) {
 
   for (size_t off = oa->watermark; off >= oa->elem_size; off -= oa->elem_size) {
     ant_object_t *obj = (ant_object_t *)(oa->base + off - oa->elem_size);
-    if (off > oa->elem_size) __builtin_prefetch(oa->base + off - 3 * oa->elem_size);
+    if (off >= 3 * oa->elem_size) __builtin_prefetch(oa->base + off - 3 * oa->elem_size);
 
     if (obj->mark_epoch == ANT_GC_DEAD) {
       if (new_wm) { *(void **)obj = oa->free_list; oa->free_list = obj; }
