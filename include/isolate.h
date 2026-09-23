@@ -94,9 +94,12 @@ struct ant_isolate_t {
   ant_value_t length_str;
   ant_value_t ascii_chars[128];
 
+  // TODO: struct
   ant_global_lexical_t *global_lexicals;
   uint32_t global_lexical_count;
   uint32_t global_lexical_cap;
+  uint32_t *global_lexical_index;
+  uint32_t global_lexical_index_cap;
 
   struct {
     ant_value_t hooks;

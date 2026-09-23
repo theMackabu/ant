@@ -868,9 +868,17 @@ void inspector_global_lexical_scope_names(inspector_client_t *client, int id) {
   }
   js_prop_iter_end(&iter);
 
+  for (uint32_t i = 0; i < client->js->global_lexical_count; i++) {
+    const ant_global_lexical_t *lex = &client->js->global_lexicals[i];
+    if (!first && !sbuf_append(&b, ",")) goto oom;
+    first = false;
+    if (!sbuf_json_string_len(&b, lex->name, lex->len)) goto oom;
+  }
+
   if (!sbuf_append(&b, "]}")) goto oom;
   inspector_send_response_obj(client, id, b.data);
   free(b.data);
+  
   return;
 
 oom:

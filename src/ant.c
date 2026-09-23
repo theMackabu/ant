@@ -19539,6 +19539,9 @@ void js_destroy(ant_t *js) {
   free(js->global_lexicals);
   js->global_lexicals = NULL;
   js->global_lexical_count = js->global_lexical_cap = 0;
+  free(js->global_lexical_index);
+  js->global_lexical_index = NULL;
+  js->global_lexical_index_cap = 0;
 
   free(js->permanent_roots);
   js->permanent_roots = NULL;

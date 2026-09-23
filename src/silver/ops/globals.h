@@ -33,7 +33,7 @@ static inline bool sv_global_try_store_own_data(
   return true;
 }
 
-static inline ant_value_t sv_global_put(
+static inline __attribute__((always_inline)) ant_value_t sv_global_put(
   ant_t *js, const char *interned, uint32_t len, ant_value_t val, bool is_strict
 ) {
   ant_global_lexical_t *lex = sv_global_lexical(js, interned);
@@ -220,19 +220,13 @@ static inline bool sv_global_ic_try_fill_unshadowed(
   return sv_global_ic_try_fill(target, ic, interned, out);
 }
 
-static inline ant_value_t sv_global_get_interned_ic(
-  ant_t *js,
-  const char *interned,
-  sv_func_t *func,
-  uint8_t *ip
+static __attribute__((noinline)) ant_value_t sv_global_get_interned_miss(
+  ant_t *js, const char *interned, sv_ic_entry_t *ic
 ) {
   ant_value_t out = js_mkundef();
-  sv_ic_entry_t *ic = sv_global_ic_slot_for_ip(func, ip);
   ant_value_t target = js->global;
-  
-  if (sv_global_ic_try_get_hit(target, ic, interned, &out)) return out;
+
   ant_global_lexical_t *lex = sv_global_lexical(js, interned);
-  
   if (lex) return sv_global_lexical_get(js, lex);
   if (sv_global_ic_try_fill(target, ic, interned, &out)) return out;
 
@@ -243,6 +237,15 @@ static inline ant_value_t sv_global_get_interned_ic(
   if (is_undefined(val)) val = js_getprop_fallback(js, target, interned);
 
   return val;
+}
+
+static inline ant_value_t sv_global_get_interned_ic(
+  ant_t *js, const char *interned, sv_func_t *func, uint8_t *ip
+) {
+  ant_value_t out = js_mkundef();
+  sv_ic_entry_t *ic = sv_global_ic_slot_for_ip(func, ip);
+  if (sv_global_ic_try_get_hit(js->global, ic, interned, &out)) return out;
+  return sv_global_get_interned_miss(js, interned, ic);
 }
 
 static inline ant_value_t sv_eval_global_get_interned_ic(

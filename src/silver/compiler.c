@@ -3360,11 +3360,13 @@ void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
     emit_op(c, OP_DELETE);
   } else if (arg->type == N_IDENT) {
     if (!has_active_with_scope(c))
-      for (sv_compiler_t *cur = c; cur; cur = cur->enclosing)
+      for (sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
         if (resolve_local(cur, arg->str, arg->len) != -1) {
           emit_op(c, OP_FALSE);
           return;
         }
+        if (cur->owns_eval_env) break;
+      }
     emit_atom_op(
       c, c->with_depth > 0
         ? OP_WITH_DEL_VAR
