@@ -5,20 +5,25 @@
 #include <string.h>
 
 #include "shapes.h"
+#include "gc/roots.h"
 #include "silver/engine.h"
 #include "modules/bigint.h"
 #include "modules/symbol.h"
 
 static inline void sv_op_seq(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
-  vm->stack[vm->sp++] = mkval(kTypeBool, strict_eq_values(js, l, r));
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  bool eq = strict_eq_values(js, l, r);
+  vm->sp -= 2;
+  vm->stack[vm->sp++] = mkval(kTypeBool, eq);
 }
 
 static inline void sv_op_sne(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
-  vm->stack[vm->sp++] = mkval(kTypeBool, !strict_eq_values(js, l, r));
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  bool eq = strict_eq_values(js, l, r);
+  vm->sp -= 2;
+  vm->stack[vm->sp++] = mkval(kTypeBool, !eq);
 }
 
 static inline ant_value_t sv_abstract_eq(ant_t *js, ant_value_t l, ant_value_t r) {
@@ -57,25 +62,48 @@ static inline ant_value_t sv_abstract_eq(ant_t *js, ant_value_t l, ant_value_t r
 
   if (is_object_type(l)) {
     ant_value_t lp = js_to_primitive(js, l, 0);
-    if (!is_err(lp)) return sv_abstract_eq(js, lp, r);
+    
+    if (!is_err(lp)) {
+      GC_ROOT_SAVE(root_mark, js);
+      GC_ROOT_PIN(js, lp);
+      
+      ant_value_t res = sv_abstract_eq(js, lp, r);
+      GC_ROOT_RESTORE(js, root_mark);
+      
+      return res;
+    }
   }
+  
   if (is_object_type(r)) {
     ant_value_t rp = js_to_primitive(js, r, 0);
-    if (!is_err(rp)) return sv_abstract_eq(js, l, rp);
+    
+    if (!is_err(rp)) {
+      GC_ROOT_SAVE(root_mark, js);
+      GC_ROOT_PIN(js, rp);
+      
+      ant_value_t res = sv_abstract_eq(js, l, rp);
+      GC_ROOT_RESTORE(js, root_mark);
+      
+      return res;
+    }
   }
+  
   return mkval(kTypeBool, 0);
 }
 
 static inline void sv_op_eq(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
-  vm->stack[vm->sp++] = sv_abstract_eq(js, l, r);
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  ant_value_t eq = sv_abstract_eq(js, l, r);
+  vm->sp -= 2;
+  vm->stack[vm->sp++] = eq;
 }
 
 static inline void sv_op_ne(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
   ant_value_t eq = sv_abstract_eq(js, l, r);
+  vm->sp -= 2;
   vm->stack[vm->sp++] = mkval(kTypeBool, !vdata(eq));
 }
 
@@ -167,14 +195,14 @@ static inline ant_value_t sv_push_bigint_relational(
       ? sv_bigint_compare_number(js, l, tod(r), &ordered, &cmp)
       : sv_bigint_compare_number(js, r, tod(l), &ordered, &cmp);
     
-    if (is_err(status)) return status;
+    if (is_err(status)) { vm->sp -= 2; return status; }
     result = ordered && sv_rel_from_bigint_cmp(cmp, left_is_bigint, op);
   } 
   
   else if (lt == kTypeBigInt || rty == kTypeBigInt) {
     bool left_is_bigint = lt == kTypeBigInt;
     ant_value_t other_bigint = bigint_from_value(js, left_is_bigint ? r : l);
-    if (is_err(other_bigint)) return other_bigint;
+    if (is_err(other_bigint)) { vm->sp -= 2; return other_bigint; }
     
     cmp = left_is_bigint
       ? bigint_compare(js, l, other_bigint)
@@ -183,83 +211,124 @@ static inline ant_value_t sv_push_bigint_relational(
     result = sv_rel_from_bigint_cmp(cmp, left_is_bigint, op);
   }
 
+  vm->sp -= 2;
   vm->stack[vm->sp++] = mkval(kTypeBool, result);
   return tov(0);
 }
 
 static inline ant_value_t sv_op_lt(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
-  if (!sv_coerce_relational(js, &l, &r)) return Ant_Exception_Current(js);
+  if (!sv_coerce_relational(js, &vm->stack[vm->sp - 2], &vm->stack[vm->sp - 1])) {
+    vm->sp -= 2;
+    return Ant_Exception_Current(js);
+  }
+  
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == kTypeNumber && rty == kTypeNumber) {
+    vm->sp -= 2;
     vm->stack[vm->sp++] = mkval(kTypeBool, tod(l) < tod(r));
     return tov(0);
   }
+  
   if (lt == kTypeBigInt || rty == kTypeBigInt)
     return sv_push_bigint_relational(vm, js, l, r, SV_REL_LT);
-  if (lt == kTypeString && rty == kTypeString) {
-    vm->stack[vm->sp++] = mkval(kTypeBool, sv_strcmp(js, l, r) < 0);
-    return tov(0);
-  }
-  vm->stack[vm->sp++] = mkval(kTypeBool, js_to_number(js, l) < js_to_number(js, r));
+  
+  bool res = (lt == kTypeString && rty == kTypeString)
+    ? sv_strcmp(js, l, r) < 0
+    : js_to_number(js, l) < js_to_number(js, r);
+  
+  vm->sp -= 2;
+  vm->stack[vm->sp++] = mkval(kTypeBool, res);
+
   return tov(0);
 }
 
 static inline ant_value_t sv_op_le(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
-  if (!sv_coerce_relational(js, &l, &r)) return Ant_Exception_Current(js);
+  if (!sv_coerce_relational(js, &vm->stack[vm->sp - 2], &vm->stack[vm->sp - 1])) {
+    vm->sp -= 2;
+    return Ant_Exception_Current(js);
+  }
+  
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == kTypeNumber && rty == kTypeNumber) {
+    vm->sp -= 2;
     vm->stack[vm->sp++] = mkval(kTypeBool, tod(l) <= tod(r));
     return tov(0);
   }
+  
   if (lt == kTypeBigInt || rty == kTypeBigInt)
     return sv_push_bigint_relational(vm, js, l, r, SV_REL_LE);
-  if (lt == kTypeString && rty == kTypeString) {
-    vm->stack[vm->sp++] = mkval(kTypeBool, sv_strcmp(js, l, r) <= 0);
-    return tov(0);
-  }
-  vm->stack[vm->sp++] = mkval(kTypeBool, js_to_number(js, l) <= js_to_number(js, r));
+  
+  bool res = (lt == kTypeString && rty == kTypeString)
+    ? sv_strcmp(js, l, r) <= 0
+    : js_to_number(js, l) <= js_to_number(js, r);
+  
+  vm->sp -= 2;
+  vm->stack[vm->sp++] = mkval(kTypeBool, res);
+  
   return tov(0);
 }
 
 static inline ant_value_t sv_op_gt(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
-  if (!sv_coerce_relational(js, &l, &r)) return Ant_Exception_Current(js);
+  if (!sv_coerce_relational(js, &vm->stack[vm->sp - 2], &vm->stack[vm->sp - 1])) {
+    vm->sp -= 2;
+    return Ant_Exception_Current(js);
+  }
+  
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == kTypeNumber && rty == kTypeNumber) {
+    vm->sp -= 2;
     vm->stack[vm->sp++] = mkval(kTypeBool, tod(l) > tod(r));
     return tov(0);
   }
+  
   if (lt == kTypeBigInt || rty == kTypeBigInt)
     return sv_push_bigint_relational(vm, js, l, r, SV_REL_GT);
-  if (lt == kTypeString && rty == kTypeString) {
-    vm->stack[vm->sp++] = mkval(kTypeBool, sv_strcmp(js, l, r) > 0);
-    return tov(0);
-  }
-  vm->stack[vm->sp++] = mkval(kTypeBool, js_to_number(js, l) > js_to_number(js, r));
+  
+  bool res = (lt == kTypeString && rty == kTypeString)
+    ? sv_strcmp(js, l, r) > 0
+    : js_to_number(js, l) > js_to_number(js, r);
+  
+  vm->sp -= 2;
+  vm->stack[vm->sp++] = mkval(kTypeBool, res);
+
   return tov(0);
 }
 
 static inline ant_value_t sv_op_ge(sv_vm_t *vm, ant_t *js) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
-  if (!sv_coerce_relational(js, &l, &r)) return Ant_Exception_Current(js);
+  if (!sv_coerce_relational(js, &vm->stack[vm->sp - 2], &vm->stack[vm->sp - 1])) {
+    vm->sp -= 2;
+    return Ant_Exception_Current(js);
+  }
+  
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == kTypeNumber && rty == kTypeNumber) {
+    vm->sp -= 2;
     vm->stack[vm->sp++] = mkval(kTypeBool, tod(l) >= tod(r));
     return tov(0);
   }
+  
   if (lt == kTypeBigInt || rty == kTypeBigInt)
     return sv_push_bigint_relational(vm, js, l, r, SV_REL_GE);
-  if (lt == kTypeString && rty == kTypeString) {
-    vm->stack[vm->sp++] = mkval(kTypeBool, sv_strcmp(js, l, r) >= 0);
-    return tov(0);
-  }
-  vm->stack[vm->sp++] = mkval(kTypeBool, js_to_number(js, l) >= js_to_number(js, r));
+  
+  bool res = (lt == kTypeString && rty == kTypeString)
+    ? sv_strcmp(js, l, r) >= 0
+    : js_to_number(js, l) >= js_to_number(js, r);
+  
+  vm->sp -= 2;
+  vm->stack[vm->sp++] = mkval(kTypeBool, res);
+
   return tov(0);
 }
 
@@ -390,10 +459,13 @@ static inline ant_value_t sv_op_instanceof(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
 ) {
-  ant_value_t r = vm->stack[--vm->sp];
-  ant_value_t l = vm->stack[--vm->sp];
+  ant_value_t r = vm->stack[vm->sp - 1];
+  ant_value_t l = vm->stack[vm->sp - 2];
+  
   ant_value_t res = sv_instanceof_ic_eval(js, l, r, func, ip);
+  vm->sp -= 2;
   if (!is_err(res)) vm->stack[vm->sp++] = res;
+  
   return res;
 }
 

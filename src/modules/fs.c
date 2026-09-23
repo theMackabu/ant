@@ -26,6 +26,7 @@
 #include "descriptors.h"
 
 #include "gc.h"
+#include "gc/uv.h"
 #include "gc/roots.h"
 #include "gc/modules.h"
 #include "silver/call.h"
@@ -1918,6 +1919,7 @@ static void complete_request(fs_request_t *req) {
 }
 
 static void on_read_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
@@ -1994,6 +1996,7 @@ static void on_open_for_read(uv_fs_t *uv_req) {
 }
 
 static void on_write_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
@@ -2036,6 +2039,7 @@ static void on_open_for_write(uv_fs_t *uv_req) {
 }
 
 static void on_unlink_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
@@ -2048,6 +2052,7 @@ static void on_unlink_complete(uv_fs_t *uv_req) {
 }
 
 static void on_rename_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
 
   if (uv_req->result < 0) {
@@ -2060,6 +2065,7 @@ static void on_rename_complete(uv_fs_t *uv_req) {
 }
 
 static void on_symlink_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
 
   if (uv_req->result < 0) {
@@ -2149,6 +2155,7 @@ done:
 }
 
 static void on_mkdir_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
@@ -2162,6 +2169,7 @@ static void on_mkdir_complete(uv_fs_t *uv_req) {
 }
 
 static void on_rmdir_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
@@ -2174,6 +2182,7 @@ static void on_rmdir_complete(uv_fs_t *uv_req) {
 }
 
 static void on_stat_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
@@ -2192,6 +2201,7 @@ static void on_stat_complete(uv_fs_t *uv_req) {
 }
 
 static void on_realpath_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
 
   if (uv_req->result < 0 || !uv_req->ptr) {
@@ -2229,6 +2239,7 @@ static ant_value_t create_dirent_object(ant_t *js, const char *name, size_t name
 }
 
 static void on_mkdtemp_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
 
   if (uv_req->result < 0) {
@@ -2256,6 +2267,7 @@ static void on_mkdtemp_complete(uv_fs_t *uv_req) {
 }
 
 static void on_exists_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
   ant_value_t result = js_bool(uv_req->result >= 0);
   
@@ -2266,6 +2278,7 @@ static void on_exists_complete(uv_fs_t *uv_req) {
 }
 
 static void on_access_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
@@ -2282,6 +2295,7 @@ static void on_access_complete(uv_fs_t *uv_req) {
 }
 
 static void on_chmod_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
 
   if (uv_req->result < 0) {
@@ -2298,6 +2312,7 @@ static void on_chmod_complete(uv_fs_t *uv_req) {
 }
 
 static void on_readdir_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
@@ -4390,6 +4405,7 @@ static ant_value_t builtin_fs_readdir(ant_params_t) {
 }
 
 static void on_fsync_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
 
   if (uv_req->result < 0) {
@@ -4438,6 +4454,7 @@ static ant_value_t builtin_fs_fsync(ant_params_t) {
 }
 
 static void on_write_fd_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
@@ -4454,6 +4471,7 @@ static void on_write_fd_complete(uv_fs_t *uv_req) {
 }
 
 static void on_read_fd_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
 
   if (uv_req->result < 0) {
@@ -4913,6 +4931,7 @@ static ant_value_t builtin_fs_closeSync(ant_params_t) {
 }
 
 static void on_open_fd_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
@@ -4929,6 +4948,7 @@ static void on_open_fd_complete(uv_fs_t *uv_req) {
 }
 
 static void on_open_filehandle_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
 
   if (uv_req->result < 0) {
@@ -5020,6 +5040,7 @@ static ant_value_t builtin_fs_open_filehandle(ant_params_t) {
 }
 
 static void on_close_fd_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {

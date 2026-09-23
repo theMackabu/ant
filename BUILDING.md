@@ -98,7 +98,7 @@ and are fetched automatically:
 - crprintf `HEAD`
 - google-brotli 1.1.0
 - libffi 3.5.2
-- libuv 1.52.0
+- libuv 1.52.1
 - llhttp 9.3.1
 - LMDB (OpenLDAP LMDB 0.9.33)
 - mimalloc 3.3.2 (default runtime allocator)

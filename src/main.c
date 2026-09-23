@@ -106,7 +106,7 @@ static void ant_debug_apply(const char *key, const char *val) {
   }
 
   else if (strcmp(key, "dump/vm") == 0) {
-    if (strcmp(val, "bytecode") == 0 || strcmp(val, "all") == 0) sv_debug_enable(SV_DEBUG_DUMP_BYTECODE);
+    if (strcmp(val, "bytecode") == 0 || strcmp(val, "all") == 0) sv_debug_enable(SV_DEBUG_DUMP_BC);
     if (strcmp(val, "jit") == 0      || strcmp(val, "all") == 0) sv_debug_enable(SV_DEBUG_DUMP_JIT);
     if (strcmp(val, "op-warn") == 0  || strcmp(val, "all") == 0) sv_debug_enable(SV_DEBUG_JIT_WARN);
   }
@@ -623,6 +623,7 @@ int main(int argc, char *argv[]) {
     X(struct arg_lit *, watch, arg_lit0("w", "watch", "restart process when entry file changes")) \
     X(struct arg_lit *, web, arg_lit0(NULL, "web", "enable web-compatible globals")) \
     X(struct arg_lit *, no_clear_screen, arg_lit0(NULL, "no-clear-screen", "keep output when restarting in watch mode")) \
+    X(struct arg_lit *, jitless, arg_lit0(NULL, "jitless", "run everything in the interpreter, without compiling to native code")) \
     X(struct arg_file *, localstorage_file, arg_file0(NULL, "localstorage-file", "<path>", "file path for localStorage persistence")) \
     X(struct arg_str *, cron_title, arg_str0(NULL, "cron-title", "<title>", NULL)) \
     X(struct arg_str *, cron_period, arg_str0(NULL, "cron-period", "<schedule>", NULL)) \
@@ -863,6 +864,7 @@ int main(int argc, char *argv[]) {
   
   js_setstackbase(js, (void *)&stack_base);
   js_setstacklimit(js, os_thread_stack_size() * 3 / 4);
+  if (jitless->count > 0) sv_debug_enable(SV_DEBUG_JITLESS);
   
   proc_argv = build_process_argv(argc, argv, module_file, script_tail);
   if (sandbox_daemon) ant_sandbox_set_guest_process(true);

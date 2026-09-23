@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "gc/uv.h"
 #include "net/connection.h"
 #include "net/listener.h"
 
@@ -63,6 +64,7 @@ static void ant_listener_close_cb(uv_handle_t *handle) {
 }
 
 static void ant_listener_accept_cb(uv_stream_t *server_stream, int status) {
+  GC_UV_CALLBACK();
   ant_listener_t *listener = (ant_listener_t *)server_stream->data;
   ant_conn_t *conn = NULL;
 

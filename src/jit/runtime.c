@@ -194,12 +194,15 @@ void sv_jit_destroy(ant_t *js) {
 static void sv_jit_compile_callees(ant_t *js, sv_func_t *func) {
   sv_call_target_fb_t *fb = func->call_target_fb;
   int count = func->call_target_fb_count;
+  
   for (int i = 0; i < count; i++) {
     if (fb[i].disabled || !fb[i].target) continue;
     sv_func_t *callee = fb[i].target;
+    
     if (callee->jit_code || callee->jit_compile_failed || callee->jit_compiling) continue;
     if (callee->call_count < SV_JIT_THRESHOLD / 2) continue;
     if (!jit_is_eligible(callee)) continue;
+    
     sv_jit_func_t cjit = sv_jit_compile(js, callee, NULL);
     if (cjit) callee->jit_code = (void *)cjit;
   }
@@ -220,17 +223,18 @@ ant_value_t sv_jit_try_compile_and_call(
   }
 
   fn->jit_code = (void *)jit;
-  sv_jit_enter(js);
-  ant_value_t result = jit(
-      vm, ctx->this_val, ctx->new_target,
-      ctx->super_val, ctx->args, ctx->argc, closure);
-  sv_jit_leave(js);
+  ant_value_t result = sv_jit_invoke(
+    js, SV_JIT_FROM_C, jit, vm, ctx->this_val, ctx->new_target,
+    ctx->super_val, ctx->args, ctx->argc, closure);
+
   if (sv_is_jit_bailout(result)) {
     sv_jit_on_bailout(fn);
     return SV_JIT_RETRY_INTERP;
   }
+
   sv_call_cleanup(js, ctx);
   if (out_this) *out_this = ctx->this_val;
+
   return result;
 }
 
@@ -249,26 +253,31 @@ sv_jit_func_t sv_jit_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) 
 }
 
 ant_value_t sv_jit_try_osr(
-    sv_vm_t *vm, ant_t *js,
-    sv_frame_t *frame, sv_func_t *func,
-    int bc_offset) {
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, 
+  sv_func_t *func, int bc_offset
+) {
   func->jit_loop_hot = true;
 
   sv_closure_t *closure;
   ant_value_t osr_closure_value = js_mkundef();
+  
   size_t root_mark = 0;
   bool synthetic_closure = false;
+  
   if (vtype(frame->callee) == kTypeFunction)
     closure = js_func_closure(frame->callee);
   else {
     root_mark = gc_root_scope(js);
     if (!gc_push_root(js, &osr_closure_value)) return SV_JIT_RETRY_INTERP;
+    
     synthetic_closure = true;
     closure = js_closure_alloc(js);
+    
     if (!closure) {
       gc_pop_roots(js, root_mark);
       return SV_JIT_RETRY_INTERP;
     }
+    
     osr_closure_value = mkref(kTypeFunction, closure);
     closure->func = func;
     closure->upvalues = frame->upvalues;
@@ -281,9 +290,8 @@ ant_value_t sv_jit_try_osr(
   }
 
   sv_jit_func_t jit;
-  if (func->jit_code) {
-    jit = (sv_jit_func_t)func->jit_code;
-  } else {
+  if (func->jit_code) jit = (sv_jit_func_t)func->jit_code;
+  else {
     sv_jit_tier_t tier = sv_jit_promote_pending(func) ? SV_JIT_TIER_HOT
      : func->code_len > JIT_OSR_COLD_COMPILE_MIN_BYTES 
      ? SV_JIT_TIER_COLD : SV_JIT_TIER_AUTO;
@@ -309,8 +317,7 @@ ant_value_t sv_jit_try_osr(
 
   int nl = func->max_locals;
   ant_value_t osr_locals[nl > 0 ? nl : 1];
-  for (int i = 0; i < nl; i++)
-    osr_locals[i] = frame->lp[i];
+  for (int i = 0; i < nl; i++) osr_locals[i] = frame->lp[i];
 
   vm->jit_osr.active = true;
   vm->jit_osr.bc_offset = bc_offset;
@@ -318,16 +325,14 @@ ant_value_t sv_jit_try_osr(
   vm->jit_osr.n_locals = nl;
   vm->jit_osr.lp = frame->lp;
   vm->jit_osr.vstack = frame->lp + nl;
-  vm->jit_osr.vstack_sp =
-      vm->sp - (int)(vm->jit_osr.vstack - vm->stack);
+  vm->jit_osr.vstack_sp = vm->sp - (int)(vm->jit_osr.vstack - vm->stack);
 
   func->back_edge_count = 0;
-  sv_jit_enter(js);
-  ant_value_t result = jit(
-      vm, frame->this, frame->new_target, frame->super_val,
-      frame->bp, frame->argc, closure);
+  ant_value_t result = sv_jit_invoke(
+    js, SV_JIT_FROM_INTERP, jit, vm, frame->this, frame->new_target,
+    frame->super_val, frame->bp, frame->argc, closure);
+
   vm->jit_osr = (sv_jit_osr_t){0};
-  sv_jit_leave(js);
   if (synthetic_closure) gc_pop_roots(js, root_mark);
 
   if (result == SV_JIT_RETRY_INTERP && sv_jit_warn_unlikely) fprintf(

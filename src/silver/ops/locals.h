@@ -3,6 +3,7 @@
 
 #include "silver/feedback.h"
 #include "errors.h"
+#include "gc/roots.h"
 
 static inline ant_value_t sv_op_get_local(
   sv_vm_t *vm, ant_value_t *lp,
@@ -167,10 +168,14 @@ static inline void sv_op_rest(
 ) {
   uint16_t start = sv_get_u16(ip + 1);
   ant_value_t arr = js_mkarr(js);
-  if (frame->bp) {
-    for (int i = (int)start; i < frame->argc; i++)
-      js_arr_push(js, arr, frame->bp[i]);
-  }
+  
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, arr);
+  
+  if (frame->bp) for (int i = (int)start; i < frame->argc; i++)
+    js_arr_push(js, arr, frame->bp[i]);
+  
+  GC_ROOT_RESTORE(js, root_mark);
   vm->stack[vm->sp++] = arr;
 }
 

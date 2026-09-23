@@ -105,6 +105,11 @@ struct ant_process_state {
 };
 
 static atomic_uint_fast64_t process_cwd_epoch;
+
+uint64_t process_cwd_epoch_get(void) {
+  return atomic_load_explicit(&process_cwd_epoch, memory_order_acquire);
+}
+
 static ant_process_state_t *process_state(ant_t *js) {
   if (js->process_state) return js->process_state;
 

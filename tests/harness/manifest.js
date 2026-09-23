@@ -135,6 +135,7 @@ export function targets() {
     'test_regexp_lone_surrogates.cjs',
     'test_json_lone_surrogates.cjs',
     'test_timer_fired_timeout_gc.cjs',
+    'test_uv_nested_poll.mjs',
     'tagged_templates.cjs',
     'test_string_number_concat.cjs',
     'test_jit_short_concat_copy.cjs'

@@ -398,7 +398,7 @@ void ant_inspector_stop(void) {
 
 void ant_inspector_wait_for_session(void) {
   while (g_inspector.started && (!g_inspector.attached || g_inspector.waiting_for_debugger)) {
-    uv_run(uv_default_loop(), UV_RUN_ONCE);
+    ant_uv_run(uv_default_loop(), UV_RUN_ONCE);
     js_poll_events(g_inspector.js);
   }
   if (g_inspector.started) uv_unref((uv_handle_t *)&g_inspector.server);

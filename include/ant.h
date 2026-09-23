@@ -126,6 +126,7 @@ ant_value_t js_mkarr(ant_t *);
 ant_value_t js_mkstr(ant_t *, const void *, size_t);
 ant_value_t js_mkstr_permanent(ant_t *, const void *, size_t);
 ant_value_t js_mkbigint(ant_t *, const char *digits, size_t len, bool negative);
+ant_value_t js_mkbigint_permanent(ant_t *, const char *digits, size_t len, bool negative);
 
 ant_value_t js_mksym(ant_t *, const char *desc);
 ant_value_t js_mksym_well_known(ant_t *, const char *desc);
@@ -167,6 +168,7 @@ void js_arr_reserve(ant_t *, ant_value_t arr, uint32_t n);
 void js_set_proto(ant_t *, ant_value_t obj, ant_value_t proto);
 void js_set_proto_wb(ant_t *, ant_value_t obj, ant_value_t proto);
 void js_set_proto_init(ant_value_t obj, ant_value_t proto);
+void *js_permanent_alloc(ant_t *, size_t size, size_t align);
 
 ant_value_t js_prop_load(ant_prop_loc_t loc);
 ant_value_t js_setprop(ant_t *, ant_value_t obj, ant_value_t key, ant_value_t val);

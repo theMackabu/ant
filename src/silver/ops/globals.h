@@ -337,9 +337,11 @@ static inline ant_value_t sv_op_put_eval_global(
   sv_frame_t *frame, sv_func_t *func, uint8_t *ip
 ) {
   sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
-  return sv_env_put(
+  ant_value_t result = sv_env_put(
     js, sv_frame_eval_env(js, frame),
-    a->str, a->len, vm->stack[--vm->sp], sv_frame_is_strict(frame));
+    a->str, a->len, vm->stack[vm->sp - 1], sv_frame_is_strict(frame));
+  vm->sp--;
+  return result;
 }
 
 #endif

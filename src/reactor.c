@@ -1,8 +1,8 @@
 #include "gc.h"
+#include "gc/uv.h"
 #include "gc/roots.h"
 #include "reactor.h"
 #include "readline.h"
-
 #include "modules/fs.h"
 #include "modules/timer.h"
 #include "modules/fetch.h"
@@ -35,19 +35,32 @@ void js_poll_events(ant_t *js) {
   process_microtasks(js);
 }
 
+__attribute__((noinline))
+int ant_uv_run(uv_loop_t *loop, uv_run_mode mode) {
+#if defined(__GNUC__)
+  __builtin_unwind_init();
+#endif
+  uintptr_t prev = gc_uv_run_sp;
+  gc_uv_run_sp = gc_native_sp();
+  int result = uv_run(loop, mode);
+  gc_uv_run_sp = prev;
+  __asm__ volatile("" : "+r"(result) :: "memory");
+  return result;
+}
+
 void js_run_event_loop(ant_t *js) {
 drain:
   while (event_loop_alive(js)) {
     process_report_uncaught_exception_if_pending(js);
     js_poll_events(js);
     work_flags_t work = get_pending_work(js);
-    
+  
     if (work & WORK_BLOCKING) 
-      uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+      ant_uv_run(uv_default_loop(), UV_RUN_NOWAIT);
     else if ((work & WORK_ASYNC) || uv_loop_alive(uv_default_loop()))
-      uv_run(uv_default_loop(), UV_RUN_ONCE);
+      ant_uv_run(uv_default_loop(), UV_RUN_ONCE);
     else break;
-    
+  
     process_report_uncaught_exception_if_pending(js);
   }
   
@@ -61,7 +74,7 @@ drain:
 
 void js_reactor_pump_repl_nowait(ant_t *js) {
   js_poll_events(js);
-  uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+  ant_uv_run(uv_default_loop(), UV_RUN_NOWAIT);
   js_poll_events(js);
 }
 
@@ -123,6 +136,7 @@ js_reactor_await_status_t js_reactor_blocking_await_promise(
     uv_timer_start(&wake_timer, reactor_blocking_await_fallback_wake_cb, 16, 16) == 0;
 
   js_reactor_await_status_t status = JS_REACTOR_AWAIT_INVALID;
+  
   for (;;) {
     js_poll_events(js);
 
@@ -143,7 +157,7 @@ js_reactor_await_status_t js_reactor_blocking_await_promise(
       break;
     }
 
-    uv_run(loop, UV_RUN_ONCE);
+    ant_uv_run(loop, UV_RUN_ONCE);
   }
 
   if (wake_timer_initialized) {
@@ -151,7 +165,7 @@ js_reactor_await_status_t js_reactor_blocking_await_promise(
     bool wake_timer_closed = false;
     wake_timer.data = &wake_timer_closed;
     uv_close((uv_handle_t *)&wake_timer, reactor_await_close_cb);
-    while (!wake_timer_closed) uv_run(loop, UV_RUN_ONCE);
+    while (!wake_timer_closed) ant_uv_run(loop, UV_RUN_ONCE);
   }
   
   if (signal_poll_initialized) {
@@ -159,7 +173,7 @@ js_reactor_await_status_t js_reactor_blocking_await_promise(
     bool signal_poll_closed = false;
     signal_poll.data = &signal_poll_closed;
     uv_close((uv_handle_t *)&signal_poll, reactor_await_close_cb);
-    while (!signal_poll_closed) uv_run(loop, UV_RUN_ONCE);
+    while (!signal_poll_closed) ant_uv_run(loop, UV_RUN_ONCE);
   }
 
   if (

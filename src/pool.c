@@ -1,5 +1,6 @@
 #include "internal.h"
 #include "gc.h"
+#include "gc/verify.h"
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -309,8 +310,10 @@ void *js_type_alloc(ant_t *js, ant_alloc_kind_t kind, size_t size, size_t align)
   if (!js || size == 0) return NULL;
   if (align == 0) align = sizeof(void *);
 
+  GC_VERIFY_STRESS(js);
   js->gc_pool_alloc += size;
   size_t pool_threshold = gc_pool_major_threshold(js);
+  
   if (js->gc_pool_alloc >= pool_threshold) gc_run(js);
   if (kind == ANT_ALLOC_STRING) return string_pool_alloc(js, size, align);
 

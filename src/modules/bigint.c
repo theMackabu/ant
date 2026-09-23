@@ -92,10 +92,9 @@ static const uint32_t *bigint_limbs(ant_t *js, ant_value_t v, size_t *count) {
   return payload->limbs;
 }
 
-static ant_value_t bigint_alloc_payload(
-  ant_t *js,
-  size_t capacity,
-  bigint_payload_t **payload_out
+static ant_value_t bigint_alloc_payload_in(
+  ant_t *js, size_t capacity,
+  bigint_payload_t **payload_out, bool permanent
 ) {
   if (capacity == 0) capacity = 1;
   if (capacity > UINT32_MAX) return js_mkerr(js, "oom");
@@ -108,10 +107,9 @@ static ant_value_t bigint_alloc_payload(
   if (!checked_add_size(offsetof(bigint_payload_t, limbs), limbs_bytes, &payload_size))
     return js_mkerr(js, "oom");
 
-  bigint_payload_t *payload = (bigint_payload_t *)js_type_alloc(
-    js, ANT_ALLOC_BIGINT, 
-    payload_size, _Alignof(bigint_payload_t)
-  );
+  bigint_payload_t *payload = permanent
+    ? js_permanent_alloc(js, payload_size, _Alignof(bigint_payload_t))
+    : js_type_alloc(js, ANT_ALLOC_BIGINT, payload_size, _Alignof(bigint_payload_t));
   
   if (!payload) return js_mkerr(js, "oom");
 
@@ -138,8 +136,9 @@ static ant_value_t bigint_alloc_binary_payload(
     return js_mkerr(js, "oom");
   }
 
-  ant_value_t out = bigint_alloc_payload(js, capacity, payload_out);
+  ant_value_t out = bigint_alloc_payload_in(js, capacity, payload_out, false);
   GC_ROOT_RESTORE(js, root_mark);
+  
   return out;
 }
 
@@ -155,8 +154,9 @@ static ant_value_t bigint_alloc_unary_payload(
     return js_mkerr(js, "oom");
   }
 
-  ant_value_t out = bigint_alloc_payload(js, capacity, payload_out);
+  ant_value_t out = bigint_alloc_payload_in(js, capacity, payload_out, false);
   GC_ROOT_RESTORE(js, root_mark);
+  
   return out;
 }
 
@@ -265,7 +265,10 @@ double bigint_to_double(ant_t *js, ant_value_t v) {
   return bigint_is_negative(js, v) ? -result : result;
 }
 
-static ant_value_t js_mkbigint_limbs(ant_t *js, const uint32_t *limbs, size_t count, bool negative) {
+static ant_value_t js_mkbigint_limbs_in(
+  ant_t *js, const uint32_t *limbs,
+  size_t count, bool negative, bool permanent
+) {
   uint32_t zero = 0;
 
   if (!limbs || count == 0) {
@@ -276,11 +279,18 @@ static ant_value_t js_mkbigint_limbs(ant_t *js, const uint32_t *limbs, size_t co
   while (count > 1 && limbs[count - 1] == 0) count--;
 
   bigint_payload_t *payload = NULL;
-  ant_value_t out = bigint_alloc_payload(js, count, &payload);
+  ant_value_t out = bigint_alloc_payload_in(js, count, &payload, permanent);
   if (is_err(out)) return out;
 
   memcpy(payload->limbs, limbs, count * sizeof(uint32_t));
   return bigint_finish_payload(out, payload, count, negative);
+}
+
+static inline ant_value_t js_mkbigint_limbs(
+  ant_t *js, const uint32_t *limbs,
+  size_t count, bool negative
+) {
+  return js_mkbigint_limbs_in(js, limbs, count, negative, false);
 }
 
 ant_value_t bigint_from_uint64(ant_t *js, uint64_t value) {
@@ -991,15 +1001,12 @@ static bool bigint_divmod_abs_limbs(
 }
 
 static ant_value_t bigint_from_string_digits(
-  ant_t *js,
-  const char *digits,
-  size_t len,
-  bool negative,
-  bool allow_separators
+  ant_t *js, const char *digits, size_t len,
+  bool negative, bool allow_separators, bool permanent
 ) {
   if (!digits || len == 0) {
     uint32_t zero = 0;
-    return js_mkbigint_limbs(js, &zero, 1, false);
+    return js_mkbigint_limbs_in(js, &zero, 1, false, permanent);
   }
 
   uint32_t base = 10;
@@ -1070,8 +1077,9 @@ static ant_value_t bigint_from_string_digits(
     return js_mkerr(js, "Cannot convert string to BigInt");
   }
 
-  ant_value_t result = js_mkbigint_limbs(js, limbs, count, negative);
+  ant_value_t result = js_mkbigint_limbs_in(js, limbs, count, negative, permanent);
   free(limbs);
+  
   return result;
 }
 
@@ -1203,7 +1211,11 @@ static char *bigint_abs_to_radix_string(const uint32_t *limbs, size_t count, uin
 }
 
 ant_value_t js_mkbigint(ant_t *js, const char *digits, size_t len, bool negative) {
-  return bigint_from_string_digits(js, digits, len, negative, true);
+  return bigint_from_string_digits(js, digits, len, negative, true, false);
+}
+
+ant_value_t js_mkbigint_permanent(ant_t *js, const char *digits, size_t len, bool negative) {
+  return bigint_from_string_digits(js, digits, len, negative, true, true);
 }
 
 ant_value_t bigint_add(ant_t *js, ant_value_t a, ant_value_t b) {
@@ -1625,7 +1637,7 @@ ant_value_t bigint_from_value(ant_t *js, ant_value_t arg) {
     } else if (str[start] == '+') start++;
 
     if (start >= end) return js_mkerr(js, "Cannot convert string to BigInt");
-    return bigint_from_string_digits(js, str + start, end - start, neg, false);
+    return bigint_from_string_digits(js, str + start, end - start, neg, false, false);
   }
 
   if (vtype(arg) == kTypeBool) return js_mkbigint(js, vdata(arg) ? "1" : "0", 1, false);

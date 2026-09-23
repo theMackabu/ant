@@ -10,7 +10,8 @@
 typedef struct {
   ant_value_t *args;
   int argc;
-  ant_value_t *alloc;
+  bool rooted;
+  gc_temp_root_scope_t roots;
 } sv_call_args_t;
 
 static inline ant_value_t sv_load_stable_builtin(
@@ -92,12 +93,12 @@ static inline ant_value_t sv_op_call_string_intrinsic(
 static inline void sv_call_args_reset(sv_call_args_t *a, ant_value_t *args, int argc) {
   a->args = args;
   a->argc = argc;
-  a->alloc = NULL;
+  a->rooted = false;
 }
 
 static inline void sv_call_args_release(sv_call_args_t *a) {
-  if (a->alloc) free(a->alloc);
-  a->alloc = NULL;
+  if (a->rooted) gc_temp_root_scope_end(&a->roots);
+  a->rooted = false;
 }
 
 static inline ant_value_t sv_apply_normalize_args(ant_t *js, sv_call_args_t *a) {
@@ -125,12 +126,16 @@ static inline ant_value_t sv_apply_normalize_args(ant_t *js, sv_call_args_t *a) 
   if (len > INT_MAX)
     return js_mkerr(js, "too many arguments");
 
-  a->alloc = malloc((size_t)len * sizeof(ant_value_t));
-  if (!a->alloc) return js_mkerr(js, "out of memory");
-  for (ant_offset_t i = 0; i < len; i++)
-    a->alloc[i] = js_arr_get(js, arg_array, i);
-  a->args = a->alloc;
+  gc_temp_root_scope_begin(js, &a->roots);
+  a->rooted = true;
+  
+  for (ant_offset_t i = 0; i < len; i++) 
+    if (!gc_temp_root_handle_valid(gc_temp_root_add(&a->roots, js_arr_get(js, arg_array, i)))) 
+    { sv_call_args_release(a); return js_mkerr(js, "out of memory"); }
+  
+  a->args = a->roots.items;
   a->argc = (int)len;
+  
   return js_mkundef();
 }
 
@@ -165,17 +170,28 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
     }
   }
 
-  ant_value_t obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));
+  ant_value_t obj = js_mkundef();
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, proto);
+  GC_ROOT_PIN(js, obj);
+  
+  obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
+  
   ant_value_t ctor_this = obj;
   ant_value_t result = sv_vm_call(vm, js, func, obj, args, argc, &ctor_this, effective_new_target);
+  GC_ROOT_RESTORE(js, root_mark);
+  
   vm->sp -= argc + 2;
   if (is_err(result)) return result;
+  
   ant_value_t final_obj =
     is_object_type(result) ? result
     : (is_object_type(ctor_this) ? ctor_this : obj);
+  
   sv_tfb_record_ctor_prop_count(record_func, final_obj);
   vm->stack[vm->sp++] = final_obj;
+  
   return result;
 }
 
@@ -282,18 +298,30 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
     }
   }
 
-  ant_value_t obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));
+  ant_value_t obj = js_mkundef();
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, proto);
+  GC_ROOT_PIN(js, obj);
+  
+  obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
+  
   ant_value_t ctor_this = obj;
   ant_value_t result = sv_vm_call(vm, js, func, obj, call.args, call.argc, &ctor_this, effective_new_target);
+  
+  GC_ROOT_RESTORE(js, root_mark);
   sv_call_args_release(&call);
+  
   vm->sp -= argc + 2;
   if (is_err(result)) return result;
+  
   ant_value_t final_obj =
     is_object_type(result) ? result
     : (is_object_type(ctor_this) ? ctor_this : obj);
+
   sv_tfb_record_ctor_prop_count(record_func, final_obj);
   vm->stack[vm->sp++] = final_obj;
+
   return result;
 }
 
@@ -323,12 +351,15 @@ static inline ant_value_t sv_eval_in_frame(
 }
 
 static inline ant_value_t sv_op_eval(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint8_t *ip) {
-  ant_value_t new_target = vm->stack[--vm->sp];
-  ant_value_t code = vm->stack[--vm->sp];
+  ant_value_t new_target = vm->stack[vm->sp - 1];
+  ant_value_t code = vm->stack[vm->sp - 2];
+  
   if (vtype(code) != kTypeString) {
+    vm->sp -= 2;
     vm->stack[vm->sp++] = code;
     return code;
   }
+  
   ant_offset_t len;
   ant_offset_t off = vstr(js, code, &len);
   
@@ -336,6 +367,7 @@ static inline ant_value_t sv_op_eval(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, 
   uint32_t scope_index = sv_get_u32(ip + 1);
   
   ant_value_t result = sv_eval_in_frame(vm, js, frame, str, len, scope_index, new_target);
+  vm->sp -= 2;
   if (!is_err(result)) vm->stack[vm->sp++] = result;
   
   return result;
@@ -419,12 +451,10 @@ static inline bool sv_op_call_call_fused(
         fake.inline_upvals[i] = d->is_local ? &cell : c1->upvalues[d->index];
       }
 
-      sv_jit_enter(js);
-      ant_value_t result = ((sv_jit_func_t)f2->jit_code)(
-        vm, js_mkundef(), js_mkundef(), js_mkundef(),
-        args2, n2, &fake
+      ant_value_t result = sv_jit_invoke(
+        js, SV_JIT_FROM_INTERP, (sv_jit_func_t)f2->jit_code,
+        vm, js_mkundef(), js_mkundef(), js_mkundef(), args2, n2, &fake
       );
-      sv_jit_leave(js);
 
       if (sv_is_jit_bailout(result)) {
         sv_jit_on_bailout(f2);
@@ -451,9 +481,7 @@ static inline ant_value_t sv_op_call_call(
   ant_value_t *args1, int n1, ant_value_t *args2, int n2
 ) {
   ant_value_t result;
-  if (sv_op_call_call_fused(
-        vm, js, xv, args1, n1, args2, n2, false, &result))
-    return result;
+  if (sv_op_call_call_fused(vm, js, xv, args1, n1, args2, n2, false, &result)) return result;
   ant_value_t r = sv_vm_call(vm, js, xv, js_mkundef(), args1, n1, NULL, js_mkundef());
   if (is_err(r)) return r;
   return sv_vm_call(vm, js, r, js_mkundef(), args2, n2, NULL, js_mkundef());
@@ -468,21 +496,35 @@ static inline ant_value_t sv_op_call_call_slot(
   ant_value_t *slot = sv_frame_slot_ptr(frame, slot_idx);
   ant_value_t arg2 = slot ? *slot : js_mkundef();
   ant_value_t result;
-  if (sv_op_call_call_fused(
-        vm, js, xv, args1, 1, &arg2, 1, true, &result))
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, arg2);
+
+  if (sv_op_call_call_fused(vm, js, xv, args1, 1, &arg2, 1, true, &result)) {
+    GC_ROOT_RESTORE(js, root_mark);
     return result;
+  }
 
   ant_value_t r = sv_vm_call(vm, js, xv, js_mkundef(), args1, 1, NULL, js_mkundef());
-  if (is_err(r)) return r;
+  if (is_err(r)) { 
+    GC_ROOT_RESTORE(js, root_mark);
+    return r;
+  }
 
   frame = vm->fp >= 0 ? &vm->frames[vm->fp] : NULL;
   slot = sv_frame_slot_ptr(frame, slot_idx);
   arg2 = slot ? *slot : js_mkundef();
+  
   if (vtype(arg2) == kTypeString && str_is_heap_builder(arg2)) {
+    GC_ROOT_PIN(js, r);
     arg2 = sv_string_builder_read_value(js, arg2);
-    if (is_err(arg2)) return arg2;
+    if (is_err(arg2)) { GC_ROOT_RESTORE(js, root_mark); return arg2; }
   }
-  return sv_vm_call(vm, js, r, js_mkundef(), &arg2, 1, NULL, js_mkundef());
+  
+  result = sv_vm_call(vm, js, r, js_mkundef(), &arg2, 1, NULL, js_mkundef());
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  return result;
 }
 
 static inline ant_value_t sv_op_call_call_slot_ptr(
@@ -491,18 +533,19 @@ static inline ant_value_t sv_op_call_call_slot_ptr(
 ) {
   ant_value_t args1[1] = {arg1};
   ant_value_t arg2 = slot ? *slot : js_mkundef();
+  
   ant_value_t result;
-  if (sv_op_call_call_fused(
-        vm, js, xv, args1, 1, &arg2, 1, true, &result))
-    return result;
+  if (sv_op_call_call_fused(vm, js, xv, args1, 1, &arg2, 1, true, &result)) return result;
 
   ant_value_t r = sv_vm_call(vm, js, xv, js_mkundef(), args1, 1, NULL, js_mkundef());
   if (is_err(r)) return r;
+  
   arg2 = slot ? *slot : js_mkundef();
   if (vtype(arg2) == kTypeString && str_is_heap_builder(arg2)) {
     arg2 = sv_string_builder_read_value(js, arg2);
     if (is_err(arg2)) return arg2;
   }
+  
   return sv_vm_call(vm, js, r, js_mkundef(), &arg2, 1, NULL, js_mkundef());
 }
 

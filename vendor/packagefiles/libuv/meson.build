@@ -1,5 +1,5 @@
 project('libuv', 'c',
-  version: '1.52.0',
+  version: '1.52.1',
   default_options: [
     'warning_level=0', 'werror=false',
     meson.version().version_compare('>=1.3.0') ? 'c_std=gnu11,c11' : 'c_std=gnu11',

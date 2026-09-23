@@ -443,6 +443,33 @@ gc_rope_table_oom_test = executable(
 )
 test('gc-rope-table-oom', gc_rope_table_oom_test)
 
+jit_entry_stub_test = executable(
+  'test-jit-entry-stub',
+  files('tests/test_jit_entry_stub.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('jit-entry-stub', jit_entry_stub_test)
+
+gc_jit_entry_saves_test = executable(
+  'test-gc-jit-entry-saves',
+  files('tests/test_gc_jit_entry_saves.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('gc-jit-entry-saves', gc_jit_entry_saves_test)
+
+gc_uv_segments_test = executable(
+  'test-gc-uv-segments',
+  files('tests/test_gc_uv_segments.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('gc-uv-segments', gc_uv_segments_test)
+
 upvalue_close_order_test = executable(
   'test-upvalue-close-order',
   files('tests/test_upvalue_close_order.c'),

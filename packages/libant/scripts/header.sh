@@ -16,7 +16,7 @@ if [ -z "$OUTPUT" ] || [ -z "$ANT_VERSION" ]; then
 fi
 
 VENDOR_DIR="$SCRIPT_DIR/vendor"
-LIBUV_INCLUDE_DIR="$VENDOR_DIR/libuv-v1.52.0/include"
+LIBUV_INCLUDE_DIR="$VENDOR_DIR/libuv-v1.52.1/include"
 
 HEADERS=(
   "uthash.h:$VENDOR_DIR/uthash-2.3.0/src/uthash.h"

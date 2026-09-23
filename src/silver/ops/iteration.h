@@ -145,9 +145,11 @@ static inline bool sv_array_iter_pristine(ant_t *js, ant_value_t arr) {
 }
 
 static inline ant_value_t sv_op_for_await_of(sv_vm_t *vm, ant_t *js) {
-  ant_value_t iterable = vm->stack[--vm->sp];
+  ant_value_t iterable = vm->stack[vm->sp - 1];
+  bool pristine_array = vtype(iterable) == kTypeArray && sv_array_iter_pristine(js, iterable);
+  vm->sp--;
 
-  if (vtype(iterable) == kTypeArray && sv_array_iter_pristine(js, iterable)) {
+  if (pristine_array) {
     vm->stack[vm->sp++] = iterable;
     vm->stack[vm->sp++] = tov(0);
     vm->stack[vm->sp++] = SV_AITER_ARRAY_TAG;
@@ -211,13 +213,21 @@ static inline void sv_iter_result_unpack(
   bool should_fallback = false;
 
   if (js->intern.done && sv_try_get_shape_data_prop(js, ptr, js->intern.done, out_done, &should_fallback)) {
-    if (!js->intern.value || !sv_try_get_shape_data_prop(js, ptr, js->intern.value, out_value, &should_fallback))
+    if (!js->intern.value || !sv_try_get_shape_data_prop(js, ptr, js->intern.value, out_value, &should_fallback)) {
+      GC_ROOT_SAVE(root_mark, js);
+      GC_ROOT_PIN(js, *out_done);
       *out_value = js_getprop_fallback_len(js, result, "value", 5);
+      GC_ROOT_RESTORE(js, root_mark);
+    }
     return;
   }
 
   *out_done = js_getprop_fallback_len(js, result, "done", 4);
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, *out_done);
+  
   *out_value = sv_iter_result_get_named(js, result, js->intern.value, "value", 5);
+  GC_ROOT_RESTORE(js, root_mark);
 }
 
 static inline ant_value_t sv_iter_advance(
@@ -259,8 +269,11 @@ static inline ant_value_t sv_iter_advance(
         break;
       case ITER_TYPE_MAP_ENTRIES: {
         ant_value_t pair = js_mkarr(js);
+        GC_ROOT_SAVE(root_mark, js);
+        GC_ROOT_PIN(js, pair);
         js_arr_push(js, pair, entry->key_val);
         js_arr_push(js, pair, entry->value);
+        GC_ROOT_RESTORE(js, root_mark);
         value = pair;
         break;
       }
@@ -285,8 +298,11 @@ static inline ant_value_t sv_iter_advance(
       ant_value_t value;
       if (st->type == ITER_TYPE_SET_ENTRIES) {
         ant_value_t pair = js_mkarr(js);
+        GC_ROOT_SAVE(root_mark, js);
+        GC_ROOT_PIN(js, pair);
         js_arr_push(js, pair, entry->value);
         js_arr_push(js, pair, entry->value);
+        GC_ROOT_RESTORE(js, root_mark);
         value = pair;
       } else {
         value = entry->value;
@@ -330,7 +346,10 @@ static inline ant_value_t sv_iter_advance(
     if (!is_object_type(result))
       return js_mkerr_typed(js, JS_ERR_TYPE, "Iterator result is not an object");
     ant_value_t done = js_mkundef();
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, result);
     sv_iter_result_unpack(js, result, &done, out_value);
+    GC_ROOT_RESTORE(js, root_mark);
     if (is_err(done)) return done;
     if (is_err(*out_value)) return *out_value;
     *out_done = js_truthy(js, done);
@@ -352,11 +371,11 @@ static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
 }
 
 static inline void sv_op_iter_get_value(sv_vm_t *vm, ant_t *js) {
-  ant_value_t obj = vm->stack[--vm->sp];
+  ant_value_t obj = vm->stack[vm->sp - 1];
   ant_value_t done = js_mkundef();
   ant_value_t value = js_mkundef();
   sv_iter_result_unpack(js, obj, &done, &value);
-  vm->stack[vm->sp++] = value;
+  vm->stack[vm->sp - 1] = value;
   vm->stack[vm->sp++] = mkval(kTypeBool, js_truthy(js, done));
 }
 
@@ -456,15 +475,26 @@ static inline ant_value_t sv_op_destructure_next(sv_vm_t *vm, ant_t *js) {
 
 static inline ant_value_t sv_op_destructure_rest(sv_vm_t *vm, ant_t *js) {
   ant_value_t rest = js_mkarr(js);
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, rest);
+  
   for (;;) {
     ant_value_t value;
     bool done = false;
     ant_value_t status = sv_iter_advance(vm, js, 0, &value, &done);
-    if (is_err(status)) return status;
+    
+    if (is_err(status)) { 
+      GC_ROOT_RESTORE(js, root_mark);
+      return status;
+    }
+    
     if (done) break;
     js_arr_push(js, rest, value);
   }
+  
+  GC_ROOT_RESTORE(js, root_mark);
   vm->stack[vm->sp++] = rest;
+  
   return tov(0);
 }
 
@@ -582,17 +612,21 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
   
   ant_value_t done = js_mkundef();
   ant_value_t value = js_mkundef();
+  
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, result);
+  GC_ROOT_PIN(js, done);
   sv_iter_result_unpack(js, result, &done, &value);
   
-  if (is_err(done)) return (sv_await_result_t){ 
-    .state = SV_AWAIT_ERROR,
-    .value = done
-  };
+  if (is_err(done)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return (sv_await_result_t){ .state = SV_AWAIT_ERROR, .value = done };
+  }
   
-  if (is_err(value)) return (sv_await_result_t){
-    .state = SV_AWAIT_ERROR,
-    .value = value
-  };
+  if (is_err(value)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return (sv_await_result_t){ .state = SV_AWAIT_ERROR, .value = value };
+  }
   
   if (vtype(value) == kTypePromise) {
     vm->stack[vm->sp++] = mkval(kTypeBool, js_truthy(js, done));
@@ -603,12 +637,18 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
     vm->suspended_entry_fp = -1;
     vm->suspended_saved_fp = -1;
     
-    if (awaited_val.state != SV_AWAIT_READY) return awaited_val;
+    if (awaited_val.state != SV_AWAIT_READY) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return awaited_val;
+    }
+    
     vm->sp--;
     value = awaited_val.value;
   }
   
   bool is_done = js_truthy(js, done);
+  GC_ROOT_RESTORE(js, root_mark);
+  
   vm->stack[vm->sp - 1] = is_done ? SV_AITER_STEP_MARK : tov(SV_ITER_GENERIC);
   vm->stack[vm->sp++] = value;
   vm->stack[vm->sp++] = mkval(kTypeBool, is_done);

@@ -2833,24 +2833,21 @@ ant_value_t js_mkstr_byte_range(ant_t *js, const char *parent, size_t start, siz
   return mkstr_with_ascii(js, parent + start, len, known_ascii);
 }
 
+void *js_permanent_alloc(ant_t *js, size_t size, size_t align) {
+  if (js->pool.permanent.block_size == 0) js->pool.permanent.block_size = ANT_POOL_STRING_BLOCK_SIZE;
+  return pool_alloc_chain(&js->pool.permanent.head, NULL, js->pool.permanent.block_size, size, align);
+}
+
 ant_value_t js_mkstr_permanent(ant_t *js, const void *ptr, size_t len) {
   size_t size = sizeof(ant_flat_string_t) + len + 1;
-  size_t align = _Alignof(ant_flat_string_t);
-  
-  if (js->pool.permanent.block_size == 0)
-    js->pool.permanent.block_size = ANT_POOL_STRING_BLOCK_SIZE;
-  
-  ant_flat_string_t *flat = (ant_flat_string_t *)pool_alloc_chain(
-    &js->pool.permanent.head, NULL, 
-    js->pool.permanent.block_size, size, align
-  );
+  ant_flat_string_t *flat = js_permanent_alloc(js, size, _Alignof(ant_flat_string_t));
   
   if (!flat) return js_mkerr(js, "oom");
-
   flat->len = (ant_offset_t)len;
-  if (ptr && len > 0) memcpy(flat->bytes, ptr, len);
   
+  if (ptr && len > 0) memcpy(flat->bytes, ptr, len);
   flat->bytes[len] = '\0';
+  
   str_flat_init_meta(flat, (ptr || len == 0)
     ? str_detect_ascii_bytes(flat->bytes, len)
     : STR_ASCII_UNKNOWN
@@ -12148,22 +12145,23 @@ static ant_value_t builtin_array_sort(ant_params_t) {
       else vals[count++] = v;
     }
   }
+  
   if (count <= 1) goto writeback;
-  for (ant_offset_t i = 0; i < count; i++) {
+  for (ant_offset_t i = 0; i < count; i++)
     if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_scope, vals[i]))) goto oom;
-  }
   
   bool use_keys = (vtype(compareFn) == kTypeUndefined);
   if (use_keys) {
     keys = malloc(count * sizeof(ant_value_t));
     if (!keys) goto oom;
+    
     for (ant_offset_t i = 0; i < count; i++) {
-      const char *s = js_tostring(js, vals[i]);
-      ant_value_t key = js_mkstr(js, s, strlen(s));
+      ant_value_t key = js_tostring_val(js, vals[i]);
       if (is_err(key)) {
         result = key;
         goto done;
       }
+      
       keys[i] = key;
       if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_scope, key))) goto oom;
     }

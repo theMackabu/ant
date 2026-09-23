@@ -27,11 +27,13 @@ typedef enum: uint8_t {
   JS_REACTOR_AWAIT_INVALID,
 } js_reactor_await_status_t;
 
+typedef bool (*js_reactor_interrupt_fn)(void *ctx);
+int ant_uv_run(uv_loop_t *loop, uv_run_mode mode);
+
 void js_poll_events(ant_t *js);
 void js_run_event_loop(ant_t *js);
 void js_reactor_pump_repl_nowait(ant_t *js);
 
-typedef bool (*js_reactor_interrupt_fn)(void *ctx);
 js_reactor_await_status_t js_reactor_blocking_await_promise(
   ant_t *js, ant_value_t promise, ant_value_t *value_out,
   js_reactor_interrupt_fn interrupted, void *interrupt_ctx

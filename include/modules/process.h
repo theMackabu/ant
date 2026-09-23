@@ -2,6 +2,7 @@
 #define PROCESS_H
 
 #include "types.h"
+#include "errors.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -9,6 +10,7 @@
 void init_process_module(ant_t *js);
 ant_value_t process_library(ant_t *js);
 
+uint64_t process_cwd_epoch_get(void);
 int process_signal_number(const char *name);
 const char *process_signal_name(int signum);
 
@@ -22,9 +24,10 @@ bool has_active_stdin(ant_t *js);
 bool process_report_uncaught_exception(ant_t *js);
 bool process_has_event_listeners(ant_t *js, const char *event_type);
 
-#define process_report_uncaught_exception_if_pending(js) \
-  (__builtin_expect(Ant_Exception_Pending(js), 0) &&           \
-  process_report_uncaught_exception(js))
+static inline void process_report_uncaught_exception_if_pending(ant_t *js) {
+  if (__builtin_expect(Ant_Exception_Pending(js), 0))
+    process_report_uncaught_exception(js);
+}
 
 typedef void (*stdin_byte_consumer_fn)(ant_t *js, const char *buf, size_t len);
 typedef void (*stdin_eof_fn)(ant_t *js);

@@ -2,6 +2,7 @@
 #define SILVER_FEEDBACK_H
 
 #include "silver/engine.h"
+#include "jit/entry_stub.h"
 #include "debug.h"
 
 // TODO: constexpr / enum
@@ -28,6 +29,7 @@ static_assert(
   "feedback value classes and specialization state must not overlap"
 );
 
+// OPEN TODO: cleanup
 #define SV_TFB_INOBJ_SLACK_ALLOCATIONS 32
 #define SV_TFB_INOBJ_P90_NUMERATOR     9
 #define SV_TFB_INOBJ_P90_DENOMINATOR   10
@@ -41,18 +43,39 @@ static_assert(
 #define SV_CALL_FB_MISS_DISABLE 4
 
 #define SV_JIT_RETRY_INTERP mkval(kTypeError, 1)
+// CLOSE TODO: cleanup
 
+typedef enum {
+  SV_JIT_FROM_INTERP,
+  SV_JIT_FROM_C,
+} sv_jit_entry_t;
 
 static inline bool sv_is_jit_bailout(ant_value_t v) {
   return v == SV_JIT_BAILOUT;
 }
 
-static inline void sv_jit_enter(ant_t *js) {
-  if (js) js->jit_active_depth++;
+static inline bool sv_jit_interp_innermost(ant_t *js) {
+  return js->vm_segs && js->vm_segs->jit_depth == js->jit_active_depth;
 }
 
-static inline void sv_jit_leave(ant_t *js) {
-  if (js && js->jit_active_depth > 0) js->jit_active_depth--;
+static inline __attribute__((always_inline)) ant_value_t sv_jit_invoke(
+  ant_t *js, sv_jit_entry_t from, sv_jit_func_t fn, sv_vm_t *vm, ant_value_t this_val,
+  ant_value_t new_target, ant_value_t super_val, ant_value_t *args, int argc,
+  sv_closure_t *closure
+) {
+#if ANT_JIT_ENTER_STUB
+  bool clean = from == SV_JIT_FROM_INTERP || sv_jit_interp_innermost(js);
+  js->jit_active_depth++;
+  ant_value_t result = clean
+    ? ant_jit_enter_clean(fn, vm, this_val, new_target, super_val, args, argc, closure)
+    : fn(vm, this_val, new_target, super_val, args, argc, closure);
+#else
+  (void)from;
+  js->jit_active_depth++;
+  ant_value_t result = fn(vm, this_val, new_target, super_val, args, argc, closure);
+#endif
+  js->jit_active_depth--;
+  return result;
 }
 
 static inline void sv_jit_on_bailout_at(sv_func_t *fn, const char *reason, int bc_off) {

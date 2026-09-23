@@ -1,3 +1,4 @@
+#include "gc/verify.h"
 #include "internal.h"
 #include "gc/strings.h"
 
@@ -263,6 +264,7 @@ void gc_strings_sweep(ant_t *js) {
 
     if (!any_live && bucket) {
       unlink_block(bucket, m->block);
+      GC_VERIFY_POISON_BYTES(m->base, m->end - m->base);
       m->block->used = 0;
       m->block->next = NULL;
       if (bucket->current == m->block) bucket->current = NULL;
@@ -274,6 +276,7 @@ void gc_strings_sweep(ant_t *js) {
       for (size_t j = 0; j < n_slots; j++) {
         if (bitmap_get(&m->bitmap, j)) continue;
         void *slot = (void *)(base + j * m->stride);
+        GC_VERIFY_POISON_BYTES(slot, m->stride);
         void *old_head = bucket->slot_free;
         memcpy(slot, &old_head, sizeof(void *));
         bucket->slot_free = slot;
