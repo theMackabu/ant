@@ -3,6 +3,11 @@
 
 #include "types.h"
 
+bool sv_global_lexical_lookup(
+  ant_t *js, const char *name,
+  size_t len, ant_value_t *out
+);
+
 ant_value_t sv_eval_read_import(
   ant_t *js, ant_value_t value, 
   const char *name, uint32_t len, bool is_default

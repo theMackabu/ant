@@ -188,9 +188,13 @@ typedef struct sv_compiler {
   bool allows_new_target;
   bool inherits_eval_env;
   bool owns_eval_env;
+
   sv_eval_decl_t *eval_vars;
   uint32_t eval_var_count;
   sv_compile_mode_t mode;
+
+  sv_eval_decl_t *global_lexicals;
+  uint32_t global_lexical_count;
 
   bool is_tla;
   bool regexp_exec_write_seen;

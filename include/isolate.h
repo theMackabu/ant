@@ -37,6 +37,13 @@ typedef struct {
   uint32_t ic_epoch;
 } ant_to_primitive_cache_t;
 
+typedef struct {
+  const char *name;
+  uint32_t len;
+  bool is_const;
+  ant_value_t value;
+} ant_global_lexical_t;
+
 static constexpr int MAX_STRINGIFY_DEPTH   = 64;
 static constexpr int MAX_PROTO_CHAIN_DEPTH = 256;
 static constexpr int MAX_MULTIREF_OBJS     = 128;
@@ -86,6 +93,13 @@ struct ant_isolate_t {
   ant_value_t current_func;
   ant_value_t length_str;
   ant_value_t ascii_chars[128];
+
+  // TODO: struct
+  ant_global_lexical_t *global_lexicals;
+  uint32_t global_lexical_count;
+  uint32_t global_lexical_cap;
+  uint32_t *global_lexical_index;
+  uint32_t global_lexical_index_cap;
 
   struct {
     ant_value_t hooks;

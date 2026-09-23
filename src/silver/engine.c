@@ -1542,6 +1542,14 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       name->str, name->len, vm->stack[--vm->sp]));
     NEXT(OP_PUT_EVAL_FUNCTION);
   }
+
+  L_INIT_GLOBAL_LEX: {
+    sv_atom_t *name = &func->atoms[sv_get_u32(ip + 1)];
+    ant_global_lexical_t *lex = sv_global_lexical(js, name->str);
+    ant_value_t val = vm->stack[--vm->sp];
+    VM_CHECK(lex ? sv_global_lexical_set(js, lex, val, true) : js_mkerr(js, "missing global lexical"));
+    NEXT(OP_INIT_GLOBAL_LEX);
+  }
   
   L_PRIVATE_TOKEN: { 
     sv_op_private_token(vm, js, ip);

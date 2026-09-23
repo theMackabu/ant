@@ -62,7 +62,7 @@ static inline void sv_op_delete_var(
   sv_func_t *func, uint8_t *ip
 ) {
   sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
-  ant_value_t result = js_delete_prop(js, js->global, a->str, a->len);
+  ant_value_t result = sv_global_delete(js, a->str, a->len);
   vm->stack[vm->sp++] = result;
 }
 

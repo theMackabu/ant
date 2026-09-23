@@ -202,7 +202,7 @@ static bool jit_try_get_global_data(
   if (!js || !func || !ip || !atom || !out) return false;
   sv_ic_entry_t *ic = sv_global_ic_slot_for_ip(func, ip);
   return sv_global_ic_try_get_hit(js->global, ic, atom->str, out) ||
-         sv_global_ic_try_fill(js->global, ic, atom->str, out);
+         sv_global_ic_try_fill_unshadowed(js, js->global, ic, atom->str, out);
 }
 
 bool jit_mark_self_binding_guards(

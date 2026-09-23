@@ -7,7 +7,9 @@
 ant_value_t sv_eval_read_import(
   ant_t *js, ant_value_t value, const char *name, uint32_t len, bool is_default
 ) {
-  return is_default ? sv_import_default_value(value) : sv_import_named_value(js, value, name, len);
+  return is_default 
+    ? sv_import_default_value(value) 
+    : sv_import_named_value(js, value, name, len);
 }
 
 void sv_eval_env_gc_mark(ant_t *js, ant_object_t *obj) {
@@ -27,3 +29,19 @@ void sv_eval_env_gc_free(ant_object_t *obj) {
   free(sidecar->eval_env_state);
   sidecar->eval_env_state = NULL;
 }
+
+bool sv_global_lexical_lookup(
+  ant_t *js, const char *name, size_t len, ant_value_t *out
+) {
+  if (!js || !name || !js->global_lexical_count) return false;
+  const char *interned = intern_find(name, len);
+  
+  if (!interned) return false;
+  const ant_global_lexical_t *lex = sv_global_lexical(js, interned);
+  
+  if (!lex) return false;
+  if (out) *out = lex->value;
+  
+  return true;
+}
+

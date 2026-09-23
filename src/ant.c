@@ -19536,6 +19536,13 @@ void js_destroy(ant_t *js) {
   js->c_roots = NULL;
   js->c_root_count = js->c_root_cap = 0;
 
+  free(js->global_lexicals);
+  js->global_lexicals = NULL;
+  js->global_lexical_count = js->global_lexical_cap = 0;
+  free(js->global_lexical_index);
+  js->global_lexical_index = NULL;
+  js->global_lexical_index_cap = 0;
+
   free(js->permanent_roots);
   js->permanent_roots = NULL;
   js->permanent_root_len = 0;
@@ -20543,6 +20550,24 @@ ant_value_t js_execute_compiled_bytecode(
   return result;
 }
 
+// Runs a REPL entry as a script sharing the global lexical environment.
+static ant_value_t js_execute_compiled_repl_bytecode(
+  ant_t *js, sv_func_t *func, coroutine_t **async_coro_out
+) {
+  if (async_coro_out) *async_coro_out = NULL;
+  GC_ROOT_SAVE(mark, js);
+
+  ant_value_t compiled = mkref(kTypeFunctionInfo, func);
+  GC_ROOT_PIN(js, compiled);
+
+  ant_value_t result = sv_global_declare(js, func);
+  if (!is_err(result))
+    result = js_execute_compiled_bytecode(js, func, async_coro_out);
+
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
 static ant_value_t js_execute_compiled_eval_bytecode(
   ant_t *js, sv_func_t *func,
   ant_value_t this_val, ant_value_t eval_env, ant_value_t new_target
@@ -20551,11 +20576,14 @@ static ant_value_t js_execute_compiled_eval_bytecode(
 
   if (sv_dump_bytecode_unlikely) sv_disasm(js, func, js->filename);
   GC_ROOT_SAVE(mark, js);
+
   ant_value_t compiled = mkref(kTypeFunctionInfo, func);
   GC_ROOT_PIN(js, compiled);
-  ant_value_t result = sv_eval_declare_vars(js, func, eval_env);
+
+  ant_value_t result = sv_eval_declare_vars(js, func, eval_env, true);
   if (!is_err(result))
     result = sv_execute_eval_entry(js->vm, func, this_val, eval_env, new_target);
+
   GC_ROOT_RESTORE(js, mark);
   return result;
 }
@@ -20601,7 +20629,9 @@ static inline js_eval_result_t js_eval_bytecode_mode_result(
   coroutine_t *async_coro = NULL;
   ant_value_t value = sv_compile_mode_is_eval(mode)
     ? js_execute_compiled_eval_bytecode(js, func, eval_this, eval_env, new_target)
-    : js_execute_compiled_bytecode(js, func, mode == SV_COMPILE_REPL ? &async_coro : NULL);
+    : mode == SV_COMPILE_REPL
+      ? js_execute_compiled_repl_bytecode(js, func, &async_coro)
+      : js_execute_compiled_bytecode(js, func, NULL);
   
   return (js_eval_result_t){
     .value = value,

@@ -9,17 +9,6 @@
 #define REPL_PREVIEW_TEXT_MAX 1024
 
 typedef struct {
-  char *name;
-  size_t len;
-} repl_decl_name_t;
-
-typedef struct {
-  repl_decl_name_t *items;
-  size_t count;
-  size_t cap;
-} repl_decl_registry_t;
-
-typedef struct {
   char *expr;
   size_t expr_len;
 } repl_preview_entry_t;
@@ -31,7 +20,7 @@ typedef struct {
 } repl_preview_snapshot_t;
 
 void repl_preview_snapshot_free(repl_preview_snapshot_t *snapshot);
-bool repl_preview_snapshot_build(ant_t *js, const repl_decl_registry_t *decls, repl_preview_snapshot_t *snapshot);
+bool repl_preview_snapshot_build(ant_t *js, repl_preview_snapshot_t *snapshot);
 
 bool repl_preview_compute(
   ant_t *js,

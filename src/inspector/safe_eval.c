@@ -3,6 +3,7 @@
 #include "internal.h"
 #include "runtime.h"
 #include "silver/ast.h"
+#include "silver/eval_env.h"
 #include "tokens.h"
 
 #include <ctype.h>
@@ -70,6 +71,14 @@ static bool inspector_safe_get_prop(
   return false;
 }
 
+static bool inspector_safe_get_binding(
+  ant_t *js, const char *name, size_t len, ant_value_t *out
+) {
+  if (sv_global_lexical_lookup(js, name, len, out))
+    return !is_empty_slot(*out);
+  return inspector_safe_get_prop(js, js_glob(js), name, len, out);
+}
+
 bool inspector_eval_safe_member_expr(ant_t *js, const char *expr, size_t expr_len, ant_value_t *out) {
   if (!js || !expr || !out) return false;
   while (expr_len > 0 && isspace((unsigned char)*expr)) {
@@ -94,15 +103,12 @@ bool inspector_eval_safe_member_expr(ant_t *js, const char *expr, size_t expr_le
     memcpy(key, expr + start, len);
     key[len] = '\0';
 
-    if (
-      first_part &&
-      (strcmp(key, "globalThis") == 0 || strcmp(key, "global") == 0 || strcmp(key, "this") == 0)
-    ) cur = js_glob(js); else {
+    if (first_part) {
+      if (strcmp(key, "globalThis") == 0 || strcmp(key, "this") == 0) cur = js_glob(js);
+      else if (!inspector_safe_get_binding(js, key, len, &cur)) return false;
+    } else {
       ant_value_t next = js_mkundef();
-      if (!inspector_safe_get_prop(
-        js, first_part ? js_glob(js) : cur,
-        key, len, &next
-      )) return false;
+      if (!inspector_safe_get_prop(js, cur, key, len, &next)) return false;
       cur = next;
     }
 
@@ -211,18 +217,6 @@ static bool inspector_value_to_key(
   *out_key = buf;
   *out_key_len = len;
   return true;
-}
-
-static bool inspector_safe_get_existing_prop(
-  ant_t *js,
-  ant_value_t obj,
-  const char *key,
-  size_t key_len,
-  ant_value_t *out
-) {
-  if (!js || !key || !out || memchr(key, '\0', key_len)) return false;
-  if (!lkp_proto(js, obj, key, key_len).obj) return false;
-  return inspector_safe_get_prop(js, obj, key, key_len, out);
 }
 
 static bool inspector_static_property_key(
@@ -350,7 +344,7 @@ static bool inspector_safe_eval_ast(ant_t *js, sv_ast_t *node, ant_value_t *out)
       return true;
     case N_IDENT:
       if (!node->str || memchr(node->str, '\0', node->len)) return false;
-      return inspector_safe_get_existing_prop(js, js_glob(js), node->str, node->len, out);
+      return inspector_safe_get_binding(js, node->str, node->len, out);
     case N_UNARY: {
       ant_value_t value = js_mkundef();
       if (!inspector_safe_eval_ast(js, node->right, &value)) return false;

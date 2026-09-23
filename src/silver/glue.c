@@ -1508,6 +1508,13 @@ ant_value_t jit_helper_put_private(
   return sv_private_put_value(vm, js, obj, val, token);
 }
 
+ant_value_t jit_helper_put_global(
+  sv_vm_t *vm, ant_t *js, ant_value_t val,
+  const char *str, uint32_t len, int is_strict
+) {
+  return sv_global_put(js, str, len, val, is_strict != 0);
+}
+
 ant_value_t jit_helper_put_elem(
   sv_vm_t *vm, ant_t *js,
   ant_value_t obj, ant_value_t key, ant_value_t val
@@ -1521,16 +1528,6 @@ ant_value_t jit_helper_put_elem(
   }
   ant_value_t key_jv = sv_key_to_propstr(js, key);
   return js_setprop_keyed(js, obj, key_jv, val);
-}
-
-ant_value_t jit_helper_put_global(
-  sv_vm_t *vm, ant_t *js, ant_value_t val,
-  const char *str, uint32_t len, int is_strict
-) {
-  if (is_strict && !lkp(js, js->global, str, len).obj)
-    return js_mkerr_typed(js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int)len, str);
-  ant_value_t key = js_mkstr(js, str, len);
-  return js_setprop(js, js->global, key, val);
 }
 
 ant_value_t jit_helper_object(
