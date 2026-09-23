@@ -265,7 +265,7 @@ static inline uint32_t sv_global_lexical_hash(const char *interned) {
 static inline ant_global_lexical_t *sv_global_lexical(ant_t *js, const char *interned) {
   if (__builtin_expect(js->global_lexical_count == 0, 1)) return NULL;
   uint32_t mask = js->global_lexical_index_cap - 1;
-  
+
   for (uint32_t i = sv_global_lexical_hash(interned) & mask;; i = (i + 1) & mask) {
     uint32_t slot = js->global_lexical_index[i];
     if (!slot) return NULL;
@@ -355,23 +355,23 @@ static inline ant_value_t sv_eval_store_function(
   GC_ROOT_SAVE(mark, js);
   GC_ROOT_PIN(js, env);
   GC_ROOT_PIN(js, value);
-  
+
   ant_value_t result = js_mkundef();
   for (ant_value_t current = env; is_object_type(current); current = js_get_proto(js, current)) {
     sv_eval_env_state_t *state = sv_eval_env_state(current);
     if (current == js->global && sv_global_lexical(js, name)) break;
-    
+
     if (current == js->global || (state && state->is_variable)) {
       result = setprop_interned(js, current, name, len, value);
       break;
     }
-    
+
     const sv_runtime_binding_t *binding = sv_eval_env_find_binding(state, name, len);
     if (binding && (binding->kind & SV_EVAL_BIND_LEXICAL)) break;
     if (binding && !(binding->kind & SV_EVAL_BIND_CATCH) &&
       sv_eval_env_try_put(js, current, name, len, value, &result)) break;
   }
-  
+
   GC_ROOT_RESTORE(js, mark);
   return result;
 }
@@ -412,15 +412,15 @@ static inline ant_value_t sv_global_declare(ant_t *js, sv_func_t *func) {
   if (reindex) {
     uint32_t index_cap = js->global_lexical_index_cap ? js->global_lexical_index_cap : 32;
     while (index_cap < count * 2) index_cap *= 2;
-    
+
     uint32_t *index = calloc(index_cap, sizeof(*index));
     if (!index) return js_mkerr(js, "out of memory while declaring global lexicals");
-    
+
     free(js->global_lexical_index);
     js->global_lexical_index = index;
     js->global_lexical_index_cap = index_cap;
-    
-    for (uint32_t i = 0; i < js->global_lexical_count; i++) 
+
+    for (uint32_t i = 0; i < js->global_lexical_count; i++)
       sv_global_lexical_index_insert(js, i);
   }
   

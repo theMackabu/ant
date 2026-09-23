@@ -15,6 +15,7 @@ removed during condensation. See the [plan lifecycle](../index.md).
 
 ## Plans
 
+- [Inspector Global Lexical Resolution](inspector-global-lexicals.md)
 - [Coroutine Resume Performance Recovery](coroutine-resume-performance.md)
 - [Coroutine Resume Arguments](coroutine-resume-arguments.md)
 - [Native Calls and Fulfilled Await Performance](native-async-performance.md)

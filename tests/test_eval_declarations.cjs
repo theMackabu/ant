@@ -182,6 +182,15 @@ function removable() {
 }
 assert.strictEqual(removable(), 2);
 
+function deleteEvalShadow() {
+  let value = 1;
+  return function () {
+    eval('var value = 2;');
+    return [value, delete value, value];
+  };
+}
+assert.deepStrictEqual(deleteEvalShadow()(), [2, true, 1]);
+
 function hotShadow() {
   const read = () => outer;
   for (let i = 0; i < 1000; i++) assert.strictEqual(read(), 10);

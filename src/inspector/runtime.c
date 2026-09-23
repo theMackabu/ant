@@ -8,6 +8,7 @@
 #include "gc/roots.h"
 #include "modules/symbol.h"
 #include "silver/engine.h"
+#include "silver/eval_env.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -852,10 +853,12 @@ void inspector_global_lexical_scope_names(inspector_client_t *client, int id) {
   bool first = true;
   ant_iter_t iter = js_prop_iter_begin(client->js, js_glob(client->js));
   const char *key = NULL;
+  
   size_t key_len = 0;
   ant_value_t value = js_mkundef();
+  
   while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
-    (void)value;
+    if (sv_global_lexical_lookup(client->js, key, key_len, NULL)) continue;
     if (!first && !sbuf_append(&b, ",")) {
       js_prop_iter_end(&iter);
       goto oom;
@@ -866,6 +869,7 @@ void inspector_global_lexical_scope_names(inspector_client_t *client, int id) {
       goto oom;
     }
   }
+  
   js_prop_iter_end(&iter);
 
   for (uint32_t i = 0; i < client->js->global_lexical_count; i++) {
@@ -878,7 +882,7 @@ void inspector_global_lexical_scope_names(inspector_client_t *client, int id) {
   if (!sbuf_append(&b, "]}")) goto oom;
   inspector_send_response_obj(client, id, b.data);
   free(b.data);
-  
+
   return;
 
 oom:
