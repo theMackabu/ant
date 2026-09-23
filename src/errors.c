@@ -1,4 +1,5 @@
 #include "errors.h"
+#include "modules/process.h"
 #include "internal.h"
 #include "descriptors.h"
 #include "output.h"
@@ -530,11 +531,33 @@ static bool error_visit_vm_stack_frames(
   return true;
 }
 
+#ifndef ANT_WASM_EMBED
+static _Thread_local struct {
+  bool fetched, ok;
+  uint64_t epoch;
+  size_t len;
+  char buf[4096];
+} error_cwd_cache;
+
+static const char *error_cwd(size_t *len) {
+  uint64_t epoch = process_cwd_epoch_get();
+  if (!error_cwd_cache.fetched || error_cwd_cache.epoch != epoch) {
+    size_t n = sizeof(error_cwd_cache.buf);
+    error_cwd_cache.ok = uv_cwd(error_cwd_cache.buf, &n) == 0;
+    error_cwd_cache.len = error_cwd_cache.ok ? n : 0;
+    error_cwd_cache.epoch = epoch;
+    error_cwd_cache.fetched = true;
+  }
+  *len = error_cwd_cache.len;
+  return error_cwd_cache.ok ? error_cwd_cache.buf : NULL;
+}
+#endif
+
 static size_t error_frame_path_prefix(const char *file) {
 #ifndef ANT_WASM_EMBED
-  char cwd[4096];
-  size_t len = sizeof(cwd);
-  if (uv_cwd(cwd, &len) == 0 && len > 0 && strncmp(file, cwd, len) == 0) {
+  size_t len = 0;
+  const char *cwd = error_cwd(&len);
+  if (cwd && len > 0 && strncmp(file, cwd, len) == 0) {
     if (cwd[len - 1] == '/' || cwd[len - 1] == '\\') return len;
     if (file[len] == '/' || file[len] == '\\') return len + 1;
   }

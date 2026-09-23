@@ -10,6 +10,7 @@
 void init_process_module(ant_t *js);
 ant_value_t process_library(ant_t *js);
 
+uint64_t process_cwd_epoch_get(void);
 int process_signal_number(const char *name);
 const char *process_signal_name(int signum);
 
