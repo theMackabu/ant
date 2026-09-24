@@ -1159,7 +1159,7 @@ static sv_jit_func_t sv_direct_closure_jit_prepare(
     return NULL;
   }
 
-  callee->jit_code = (void *)jit_fn;
+  callee->jit_code = jit_fn;
   return jit_fn;
 }
 
@@ -1173,17 +1173,20 @@ static inline __attribute__((always_inline)) ant_value_t sv_try_direct_closure_j
   if (caller_func && sv_func_type_feedback(caller_func) && caller_ip)
     sv_tfb_record_call_target(caller_func, (int)(caller_ip - caller_func->code), callee);
 
-  sv_jit_func_t jit_fn = (sv_jit_func_t)callee->jit_code;
+  sv_jit_func_t jit_fn = callee->jit_code;
   if (!jit_fn) {
     jit_fn = sv_direct_closure_jit_prepare(js, callee, closure);
     if (!jit_fn) return SV_JIT_RETRY_INTERP;
   }
 
   if (caller_frame && caller_ip) caller_frame->ip = caller_ip + sv_op_size[*caller_ip];
-  ant_value_t jit_result = sv_jit_invoke(
-    js, SV_JIT_FROM_INTERP, jit_fn, vm, jit_this,
-    js_mkundef(), closure->super_val, call_args, call_argc, closure
-  );
+  ant_value_t jit_result = sv_jit_invoke(js, SV_JIT_FROM_INTERP, jit_fn, vm, &(sv_call_ctx_t){
+    .this_val = jit_this,
+    .new_target = js_mkundef(),
+    .super_val = closure->super_val,
+    .args = call_args,
+    .argc = call_argc,
+  }, closure);
   
   if (sv_is_jit_bailout(jit_result)) {
     sv_jit_on_bailout(callee);

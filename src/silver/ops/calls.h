@@ -451,10 +451,13 @@ static inline bool sv_op_call_call_fused(
         fake.inline_upvals[i] = d->is_local ? &cell : c1->upvalues[d->index];
       }
 
-      ant_value_t result = sv_jit_invoke(
-        js, SV_JIT_FROM_INTERP, (sv_jit_func_t)f2->jit_code,
-        vm, js_mkundef(), js_mkundef(), js_mkundef(), args2, n2, &fake
-      );
+      ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_INTERP, f2->jit_code, vm, &(sv_call_ctx_t){
+        .this_val = js_mkundef(),
+        .new_target = js_mkundef(),
+        .super_val = js_mkundef(),
+        .args = args2,
+        .argc = n2,
+      }, &fake);
 
       if (sv_is_jit_bailout(result)) {
         sv_jit_on_bailout(f2);
@@ -468,11 +471,14 @@ static inline bool sv_op_call_call_fused(
         };
         result = sv_call_closure(vm, js, &fake, xv, &ctx, NULL);
       }
+      
       sv_vm_maybe_checkpoint_microtasks(js);
       *result_out = result;
+      
       return true;
     }
   }
+  
   return false;
 }
 

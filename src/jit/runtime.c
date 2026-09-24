@@ -204,7 +204,7 @@ static void sv_jit_compile_callees(ant_t *js, sv_func_t *func) {
     if (!jit_is_eligible(callee)) continue;
     
     sv_jit_func_t cjit = sv_jit_compile(js, callee, NULL);
-    if (cjit) callee->jit_code = (void *)cjit;
+    if (cjit) callee->jit_code = cjit;
   }
 }
 
@@ -222,10 +222,8 @@ ant_value_t sv_jit_try_compile_and_call(
     return SV_JIT_RETRY_INTERP;
   }
 
-  fn->jit_code = (void *)jit;
-  ant_value_t result = sv_jit_invoke(
-    js, SV_JIT_FROM_C, jit, vm, ctx->this_val, ctx->new_target,
-    ctx->super_val, ctx->args, ctx->argc, closure);
+  fn->jit_code = jit;
+  ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_C, jit, vm, ctx, closure);
 
   if (sv_is_jit_bailout(result)) {
     sv_jit_on_bailout(fn);
@@ -248,7 +246,7 @@ sv_jit_func_t sv_jit_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) 
     func->debug->name ? func->debug->name : "<anonymous>", func->code_len
   );
   
-  if (hot) func->jit_code = (void *)hot;
+  if (hot) func->jit_code = hot;
   return hot;
 }
 
@@ -290,7 +288,7 @@ ant_value_t sv_jit_try_osr(
   }
 
   sv_jit_func_t jit;
-  if (func->jit_code) jit = (sv_jit_func_t)func->jit_code;
+  if (func->jit_code) jit = func->jit_code;
   else {
     sv_jit_tier_t tier = sv_jit_promote_pending(func) ? SV_JIT_TIER_HOT
      : func->code_len > JIT_OSR_COLD_COMPILE_MIN_BYTES 
@@ -311,7 +309,7 @@ ant_value_t sv_jit_try_osr(
       return SV_JIT_RETRY_INTERP;
     }
     
-    func->jit_code = (void *)jit;
+    func->jit_code = jit;
     sv_jit_compile_callees(js, func);
   }
 
@@ -328,9 +326,14 @@ ant_value_t sv_jit_try_osr(
   vm->jit_osr.vstack_sp = vm->sp - (int)(vm->jit_osr.vstack - vm->stack);
 
   func->back_edge_count = 0;
-  ant_value_t result = sv_jit_invoke(
-    js, SV_JIT_FROM_INTERP, jit, vm, frame->this, frame->new_target,
-    frame->super_val, frame->bp, frame->argc, closure);
+  
+  ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_INTERP, jit, vm, &(sv_call_ctx_t){
+    .this_val = frame->this,
+    .new_target = frame->new_target,
+    .super_val = frame->super_val,
+    .args = frame->bp,
+    .argc = frame->argc,
+  }, closure);
 
   vm->jit_osr = (sv_jit_osr_t){0};
   if (synthetic_closure) gc_pop_roots(js, root_mark);

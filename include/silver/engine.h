@@ -107,7 +107,6 @@ typedef struct {
   uint32_t magic;
 } sv_map_template_table_header_t;
 
-
 static inline bool sv_map_template_is_canonical_pair_get(
   const sv_map_template_desc_t *desc
 ) {
@@ -364,6 +363,15 @@ typedef struct {
   int source_end;
 } sv_func_debug_t;
 
+typedef ant_value_t (*sv_jit_func_t)(
+  sv_vm_t *,
+  ant_value_t,
+  ant_value_t,
+  ant_value_t,
+  ant_value_t *,
+  int, sv_closure_t *
+);
+
 struct sv_func {
   uint8_t *code;
   ant_value_t *constants;
@@ -383,7 +391,7 @@ struct sv_func {
     sv_func_metadata_t *metadata;
   } type_data;
 
-  void *jit_code;
+  sv_jit_func_t jit_code;
   uint8_t *type_feedback;
   uint8_t *local_type_feedback;
   
@@ -753,15 +761,6 @@ static inline ant_value_t js_as_obj(ant_value_t v) {
   if (t == kTypeFunction) return js_func_obj(v);
   return mkval(kTypeObject, vdata(v));
 }
-
-typedef ant_value_t (*sv_jit_func_t)(
-  sv_vm_t *,
-  ant_value_t,
-  ant_value_t,
-  ant_value_t,
-  ant_value_t *,
-  int, sv_closure_t *
-);
 
 ant_value_t sv_execute_closure_entry(
   sv_vm_t *vm,sv_closure_t *closure,

@@ -54,25 +54,33 @@ static inline bool sv_is_jit_bailout(ant_value_t v) {
   return v == SV_JIT_BAILOUT;
 }
 
+typedef struct {
+  ant_value_t this_val;
+  ant_value_t super_val;
+  ant_value_t new_target;
+  ant_value_t *args;
+  int argc;
+  ant_value_t *alloc;
+} sv_call_ctx_t;
+
 static inline bool sv_jit_interp_innermost(ant_t *js) {
   return js->vm_segs && js->vm_segs->jit_depth == js->jit_active_depth;
 }
 
 static inline __attribute__((always_inline)) ant_value_t sv_jit_invoke(
-  ant_t *js, sv_jit_entry_t from, sv_jit_func_t fn, sv_vm_t *vm, ant_value_t this_val,
-  ant_value_t new_target, ant_value_t super_val, ant_value_t *args, int argc,
-  sv_closure_t *closure
+  ant_t *js, sv_jit_entry_t from, sv_jit_func_t fn, sv_vm_t *vm,
+  const sv_call_ctx_t *ctx, sv_closure_t *closure
 ) {
 #if ANT_JIT_ENTER_STUB
   bool clean = from == SV_JIT_FROM_INTERP || sv_jit_interp_innermost(js);
   js->jit_active_depth++;
   ant_value_t result = clean
-    ? ant_jit_enter_clean(fn, vm, this_val, new_target, super_val, args, argc, closure)
-    : fn(vm, this_val, new_target, super_val, args, argc, closure);
+    ? ant_jit_enter_clean(fn, vm, ctx->this_val, ctx->new_target, ctx->super_val, ctx->args, ctx->argc, closure)
+    : fn(vm, ctx->this_val, ctx->new_target, ctx->super_val, ctx->args, ctx->argc, closure);
 #else
   (void)from;
   js->jit_active_depth++;
-  ant_value_t result = fn(vm, this_val, new_target, super_val, args, argc, closure);
+  ant_value_t result = fn(vm, ctx->this_val, ctx->new_target, ctx->super_val, ctx->args, ctx->argc, closure);
 #endif
   js->jit_active_depth--;
   return result;

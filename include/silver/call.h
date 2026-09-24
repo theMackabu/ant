@@ -34,15 +34,6 @@ static inline void sv_vm_maybe_checkpoint_microtasks(ant_t *js) {
   js_maybe_drain_microtasks(js);
 }
 
-typedef struct {
-  ant_value_t this_val;
-  ant_value_t super_val;
-  ant_value_t new_target;
-  ant_value_t *args;
-  int argc;
-  ant_value_t *alloc;
-} sv_call_ctx_t;
-
 typedef enum {
   SV_CALL_MODE_NORMAL = 0,
   SV_CALL_MODE_EXPLICIT_THIS,
@@ -516,11 +507,7 @@ static inline ant_value_t sv_call_resolve_closure(
   if (fn->is_async) return sv_call_async_closure(vm, js, closure, callee_func, ctx);
 
   if (fn->jit_code) {
-    ant_value_t result = sv_jit_invoke(
-      js, SV_JIT_FROM_C, (sv_jit_func_t)fn->jit_code,vm,
-      ctx->this_val, ctx->new_target, 
-      ctx->super_val, ctx->args, ctx->argc, closure
-    );
+    ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_C, fn->jit_code, vm, ctx, closure);
     
     if (!sv_is_jit_bailout(result)) {
       sv_call_cleanup(js, ctx);
