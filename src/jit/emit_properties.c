@@ -35,6 +35,12 @@ static void jit_gfp_regs(jit_compile_t *c) {
 #define GFP_INT(v) MIR_new_int_op(c->ctx, v)
 #define GFP_UINT(v) MIR_new_uint_op(c->ctx, v)
 
+static void jit_emit_gfp_exotic_guard(jit_compile_t *c, MIR_reg_t ptr, MIR_label_t full) {
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_U16, offsetof(ant_object_t, flags), ptr));
+  GFP_INSN(MIR_AND, GFP_REG(c->r_gfp_t), GFP_REG(c->r_gfp_t), GFP_UINT(ANT_OBJECT_FLAG_EXOTIC));
+  GFP_INSN(MIR_BNE, GFP_LBL(full), GFP_REG(c->r_gfp_t), GFP_INT(0));
+}
+
 static void jit_emit_get_field_poly_loop(
     jit_compile_t *c, sv_ic_entry_t *ic, MIR_reg_t obj, MIR_reg_t dst,
     MIR_label_t hit, MIR_label_t full) {
@@ -46,6 +52,7 @@ static void jit_emit_get_field_poly_loop(
   GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_e), GFP_MEM(MIR_T_P, 0, c->r_gfp_e));
   GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_e), GFP_INT(0));
   mir_emit_value_to_objptr_or_jmp(c->ctx, c->jit_func, obj, c->r_gfp_ptr, c->r_gfp_tag, full);
+  jit_emit_gfp_exotic_guard(c, c->r_gfp_ptr, full);
   GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_shape), GFP_MEM(MIR_T_P, offsetof(ant_object_t, shape), c->r_gfp_ptr));
   GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_shape), GFP_INT(0));
   GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_epoch), GFP_MEM(MIR_T_U32, 0, c->r_ic_epoch_val));
@@ -74,6 +81,7 @@ static void jit_emit_get_field_poly_loop(
   GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_src), GFP_INT(0));
   GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_P, offsetof(ant_object_t, shape), c->r_gfp_src));
   GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_t), GFP_INT(0));
+  jit_emit_gfp_exotic_guard(c, c->r_gfp_src, full);
   GFP_INSN(MIR_JMP, GFP_LBL(read));
 
   MIR_append_insn(c->ctx, c->jit_func, own);
@@ -110,6 +118,7 @@ static void jit_emit_get_field_mega_probe(
   MIR_label_t load_overflow = MIR_new_label(c->ctx);
 
   mir_emit_value_to_objptr_or_jmp(c->ctx, c->jit_func, obj, c->r_gfp_ptr, c->r_gfp_tag, full);
+  jit_emit_gfp_exotic_guard(c, c->r_gfp_ptr, full);
   GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_shape), GFP_MEM(MIR_T_P, offsetof(ant_object_t, shape), c->r_gfp_ptr));
   GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_shape), GFP_INT(0));
   GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t2), GFP_MEM(MIR_JSVAL, offsetof(ant_object_t, proto), c->r_gfp_ptr));
@@ -148,6 +157,7 @@ static void jit_emit_get_field_mega_probe(
   GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_src), GFP_INT(0));
   GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_P, offsetof(ant_object_t, shape), c->r_gfp_src));
   GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_t), GFP_INT(0));
+  jit_emit_gfp_exotic_guard(c, c->r_gfp_src, full);
   GFP_INSN(MIR_JMP, GFP_LBL(read));
 
   MIR_append_insn(c->ctx, c->jit_func, own);
