@@ -534,6 +534,10 @@ void gc_idle(ant_t *js, int64_t budget_ms) {
     gc_run(js);
   }
   
-  else if (gc_young_count(js) > 0 && gc_idle_fits(gc_minor_cost_ns, true, budget_ms)) gc_run_minor(js);
+  else if (
+    gc_young_count(js) > 0 && gc_idle_fits(
+    gc_minor_cost_ns ? gc_minor_cost_ns : 2000000, true, budget_ms)
+  ) gc_run_minor(js);
+  
   js->gc.idle_retry_at = gc_alloc_marker(js) + GC_NURSERY_THRESHOLD * sizeof(ant_object_t) / 8;
 }
