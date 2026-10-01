@@ -17,6 +17,8 @@ Store in-progress execution plans here.
 - [Automatic GC Rooting for C Runtime Code](automatic-c-gc-rooting.md)
 - [JS Path Node Performance](path-node-performance.md)
 - [Array Backing Store GC Pacing](array-backing-store-gc-pacing.md)
+- [Card Marking for Old Arrays](gc-array-card-marking.md)
+- [Polymorphic Property Reads and Object Literal Allocation](jit-polymorphic-reads-and-literals.md)
 - [Dynamic Property Performance](dynamic-property-perf.md)
   - [Dynamic Property Performance Extras](dynamic-property-perf-extras.md)
 - [Elysia 200k RPS](elysia-200k-rps.md)

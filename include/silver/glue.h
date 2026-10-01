@@ -43,8 +43,12 @@ ant_value_t jit_helper_not(sv_vm_t *vm, ant_t *js, ant_value_t v);
 ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v);
 ant_value_t jit_helper_stack_overflow_error(sv_vm_t *vm, ant_t *js);
 
+ant_value_t jit_helper_new_this(ant_t *js, ant_value_t func, ant_value_t new_target, int32_t checked);
+ant_value_t jit_helper_new_result(ant_value_t func, ant_value_t obj, ant_value_t result);
+
 ant_value_t jit_helper_strict_arguments(sv_vm_t *vm, ant_t *js, ant_value_t *args, int argc);
 ant_value_t jit_helper_delete(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key);
+ant_value_t jit_helper_delete_strict(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key);
 ant_value_t jit_helper_typeof(sv_vm_t *vm, ant_t *js, ant_value_t v);
 ant_value_t jit_helper_special_obj(sv_vm_t *vm, ant_t *js, uint32_t which);
 
@@ -299,8 +303,8 @@ ant_value_t jit_helper_put_field(
 );
 
 ant_value_t jit_helper_put_field_ic(
-  sv_vm_t *vm, ant_t *js, ant_value_t obj,
-  ant_value_t val, const sv_atom_t *atom, sv_ic_entry_t *ic
+  sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t val,
+  const sv_atom_t *atom, sv_ic_entry_t *ic, int strict
 );
 
 ant_value_t jit_helper_get_elem(
@@ -319,6 +323,11 @@ ant_value_t jit_helper_put_private(
 );
 
 ant_value_t jit_helper_put_elem(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t obj, ant_value_t key, ant_value_t val
+);
+
+ant_value_t jit_helper_put_elem_strict(
   sv_vm_t *vm, ant_t *js,
   ant_value_t obj, ant_value_t key, ant_value_t val
 );

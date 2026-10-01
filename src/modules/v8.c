@@ -258,8 +258,8 @@ static ant_value_t v8_get_heap_statistics(ant_params_t) {
   size_t closure_reserved  = js->closure_arena.reserved;
   size_t closure_live      = js->closure_arena.live_count * js->closure_arena.elem_size;
 
-  size_t pool_live  = js->gc_pool_last_live;
-  size_t pool_alloc = js->gc_pool_alloc;
+  size_t pool_live  = js->gc.pool_last_live;
+  size_t pool_alloc = js->gc.pool_alloc;
   size_t pool_total = pool_live + pool_alloc;
 
   size_t extra_alloc = js->alloc_bytes.closures + js->alloc_bytes.upvalues;

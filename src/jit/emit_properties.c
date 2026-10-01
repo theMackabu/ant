@@ -13,6 +13,252 @@ static MIR_reg_t jit_emit_element_index_guard(
       c->r_d_slot, slow, site);
 }
 
+static void jit_gfp_regs(jit_compile_t *c) {
+  if (c->gfp_regs) return;
+  MIR_reg_t *regs[] = {
+    &c->r_gfp_ptr, &c->r_gfp_tag, &c->r_gfp_shape,
+    &c->r_gfp_epoch, &c->r_gfp_e, &c->r_gfp_end, &c->r_gfp_t, &c->r_gfp_t2, &c->r_gfp_src,
+    &c->r_gfp_idx, &c->r_gfp_lim,
+  };
+  for (size_t i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) {
+    char name[16];
+    snprintf(name, sizeof(name), "gfp%zu", i);
+    *regs[i] = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+  }
+  c->gfp_regs = true;
+}
+
+#define GFP_INSN(...) MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, __VA_ARGS__))
+#define GFP_REG(r) MIR_new_reg_op(c->ctx, r)
+#define GFP_MEM(t, off, base) MIR_new_mem_op(c->ctx, t, (MIR_disp_t)(off), base, 0, 1)
+#define GFP_LBL(l) MIR_new_label_op(c->ctx, l)
+#define GFP_INT(v) MIR_new_int_op(c->ctx, v)
+#define GFP_UINT(v) MIR_new_uint_op(c->ctx, v)
+
+static void jit_emit_get_field_poly_loop(
+    jit_compile_t *c, sv_ic_entry_t *ic, MIR_reg_t obj, MIR_reg_t dst,
+    MIR_label_t hit, MIR_label_t full) {
+  MIR_label_t loop = MIR_new_label(c->ctx), next = MIR_new_label(c->ctx);
+  MIR_label_t own = MIR_new_label(c->ctx), read = MIR_new_label(c->ctx);
+  MIR_label_t load_overflow = MIR_new_label(c->ctx);
+
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_e), GFP_UINT((uint64_t)(uintptr_t)&ic->guard.get.poly));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_e), GFP_MEM(MIR_T_P, 0, c->r_gfp_e));
+  GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_e), GFP_INT(0));
+  mir_emit_value_to_objptr_or_jmp(c->ctx, c->jit_func, obj, c->r_gfp_ptr, c->r_gfp_tag, full);
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_shape), GFP_MEM(MIR_T_P, offsetof(ant_object_t, shape), c->r_gfp_ptr));
+  GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_shape), GFP_INT(0));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_epoch), GFP_MEM(MIR_T_U32, 0, c->r_ic_epoch_val));
+  GFP_INSN(MIR_ADD, GFP_REG(c->r_gfp_end), GFP_REG(c->r_gfp_e),
+           GFP_UINT(SV_GF_POLY_WAYS * sizeof(sv_gf_poly_entry_t)));
+
+  MIR_append_insn(c->ctx, c->jit_func, loop);
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_P, offsetof(sv_gf_poly_entry_t, shape), c->r_gfp_e));
+  GFP_INSN(MIR_BNE, GFP_LBL(next), GFP_REG(c->r_gfp_t), GFP_REG(c->r_gfp_shape));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_U32, offsetof(sv_gf_poly_entry_t, epoch), c->r_gfp_e));
+  GFP_INSN(MIR_BNE, GFP_LBL(next), GFP_REG(c->r_gfp_t), GFP_REG(c->r_gfp_epoch));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_U8, offsetof(sv_gf_poly_entry_t, kind), c->r_gfp_e));
+  GFP_INSN(MIR_BEQ, GFP_LBL(own), GFP_REG(c->r_gfp_t), GFP_INT(SV_GF_IC_OWN));
+  GFP_INSN(MIR_BNE, GFP_LBL(next), GFP_REG(c->r_gfp_t), GFP_INT(SV_GF_IC_PROTOTYPE));
+
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_JSVAL, offsetof(ant_object_t, proto), c->r_gfp_ptr));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t2), GFP_MEM(MIR_JSVAL, offsetof(sv_gf_poly_entry_t, receiver_proto), c->r_gfp_e));
+  GFP_INSN(MIR_BNE, GFP_LBL(next), GFP_REG(c->r_gfp_t), GFP_REG(c->r_gfp_t2));
+  GFP_INSN(MIR_URSH, GFP_REG(c->r_gfp_t2), GFP_REG(c->r_gfp_t), GFP_UINT(NANBOX_TYPE_SHIFT));
+  GFP_INSN(MIR_BNE, GFP_LBL(full), GFP_REG(c->r_gfp_t2), GFP_UINT(NANBOX_TOBJ_TAG));
+  mir_emit_decode_ref(c->ctx, c->jit_func, c->r_gfp_t, c->r_gfp_t);
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_U32, offsetof(ant_object_t, ic_identity), c->r_gfp_t));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t2), GFP_MEM(MIR_T_U32, offsetof(sv_gf_poly_entry_t, proto_id), c->r_gfp_e));
+  GFP_INSN(MIR_BNE, GFP_LBL(next), GFP_REG(c->r_gfp_t), GFP_REG(c->r_gfp_t2));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_src), GFP_MEM(MIR_T_P, offsetof(sv_gf_poly_entry_t, holder), c->r_gfp_e));
+  GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_src), GFP_INT(0));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_P, offsetof(ant_object_t, shape), c->r_gfp_src));
+  GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_t), GFP_INT(0));
+  GFP_INSN(MIR_JMP, GFP_LBL(read));
+
+  MIR_append_insn(c->ctx, c->jit_func, own);
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_src), GFP_REG(c->r_gfp_ptr));
+  GFP_INSN(MIR_JMP, GFP_LBL(read));
+
+  MIR_append_insn(c->ctx, c->jit_func, next);
+  GFP_INSN(MIR_ADD, GFP_REG(c->r_gfp_e), GFP_REG(c->r_gfp_e), GFP_UINT(sizeof(sv_gf_poly_entry_t)));
+  GFP_INSN(MIR_UBLT, GFP_LBL(loop), GFP_REG(c->r_gfp_e), GFP_REG(c->r_gfp_end));
+  GFP_INSN(MIR_JMP, GFP_LBL(full));
+
+  MIR_append_insn(c->ctx, c->jit_func, read);
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_idx), GFP_MEM(MIR_T_U32, offsetof(sv_gf_poly_entry_t, index), c->r_gfp_e));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_U32, offsetof(ant_object_t, prop_count), c->r_gfp_src));
+  GFP_INSN(MIR_UBGE, GFP_LBL(full), GFP_REG(c->r_gfp_idx), GFP_REG(c->r_gfp_t));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_lim), GFP_MEM(MIR_T_U8, offsetof(ant_object_t, inobj_limit), c->r_gfp_src));
+  GFP_INSN(MIR_UBGE, GFP_LBL(load_overflow), GFP_REG(c->r_gfp_idx), GFP_REG(c->r_gfp_lim));
+  GFP_INSN(MIR_MOV, GFP_REG(dst), MIR_new_mem_op(c->ctx, MIR_T_I64,
+           (MIR_disp_t)offsetof(ant_object_t, inobj), c->r_gfp_src, c->r_gfp_idx, 8));
+  GFP_INSN(MIR_JMP, GFP_LBL(hit));
+
+  MIR_append_insn(c->ctx, c->jit_func, load_overflow);
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_P, offsetof(ant_object_t, overflow_prop), c->r_gfp_src));
+  GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_t), GFP_INT(0));
+  GFP_INSN(MIR_SUB, GFP_REG(c->r_gfp_idx), GFP_REG(c->r_gfp_idx), GFP_REG(c->r_gfp_lim));
+  GFP_INSN(MIR_MOV, GFP_REG(dst), MIR_new_mem_op(c->ctx, MIR_T_I64, 0, c->r_gfp_t, c->r_gfp_idx, 8));
+  GFP_INSN(MIR_JMP, GFP_LBL(hit));
+}
+
+static void jit_emit_get_field_mega_probe(
+    jit_compile_t *c, sv_gf_mega_cache_t *cache, const char *key,
+    MIR_reg_t obj, MIR_reg_t dst, MIR_label_t hit, MIR_label_t full) {
+  MIR_label_t own = MIR_new_label(c->ctx), read = MIR_new_label(c->ctx);
+  MIR_label_t load_overflow = MIR_new_label(c->ctx);
+
+  mir_emit_value_to_objptr_or_jmp(c->ctx, c->jit_func, obj, c->r_gfp_ptr, c->r_gfp_tag, full);
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_shape), GFP_MEM(MIR_T_P, offsetof(ant_object_t, shape), c->r_gfp_ptr));
+  GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_shape), GFP_INT(0));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t2), GFP_MEM(MIR_JSVAL, offsetof(ant_object_t, proto), c->r_gfp_ptr));
+
+  GFP_INSN(MIR_URSH, GFP_REG(c->r_gfp_e), GFP_REG(c->r_gfp_shape), GFP_UINT(SV_GF_MEGA_SHAPE_SHIFT));
+  GFP_INSN(MIR_XOR, GFP_REG(c->r_gfp_e), GFP_REG(c->r_gfp_e),
+           GFP_UINT((uint64_t)(uintptr_t)key >> SV_GF_MEGA_KEY_SHIFT));
+  GFP_INSN(MIR_URSH, GFP_REG(c->r_gfp_t), GFP_REG(c->r_gfp_t2), GFP_UINT(SV_GF_MEGA_PROTO_SHIFT));
+  GFP_INSN(MIR_XOR, GFP_REG(c->r_gfp_e), GFP_REG(c->r_gfp_e), GFP_REG(c->r_gfp_t));
+  GFP_INSN(MIR_URSH, GFP_REG(c->r_gfp_t), GFP_REG(c->r_gfp_e), GFP_UINT(SV_GF_MEGA_MIX_SHIFT));
+  GFP_INSN(MIR_XOR, GFP_REG(c->r_gfp_e), GFP_REG(c->r_gfp_e), GFP_REG(c->r_gfp_t));
+  GFP_INSN(MIR_AND, GFP_REG(c->r_gfp_e), GFP_REG(c->r_gfp_e), GFP_UINT(SV_GF_MEGA_PRIMARY - 1));
+  GFP_INSN(MIR_MUL, GFP_REG(c->r_gfp_e), GFP_REG(c->r_gfp_e), GFP_UINT(sizeof(sv_gf_mega_entry_t)));
+  GFP_INSN(MIR_ADD, GFP_REG(c->r_gfp_e), GFP_REG(c->r_gfp_e), GFP_UINT((uint64_t)(uintptr_t)cache->primary));
+
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_P, offsetof(sv_gf_mega_entry_t, shape), c->r_gfp_e));
+  GFP_INSN(MIR_BNE, GFP_LBL(full), GFP_REG(c->r_gfp_t), GFP_REG(c->r_gfp_shape));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_P, offsetof(sv_gf_mega_entry_t, key), c->r_gfp_e));
+  GFP_INSN(MIR_BNE, GFP_LBL(full), GFP_REG(c->r_gfp_t), GFP_UINT((uint64_t)(uintptr_t)key));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_JSVAL, offsetof(sv_gf_mega_entry_t, receiver_proto), c->r_gfp_e));
+  GFP_INSN(MIR_BNE, GFP_LBL(full), GFP_REG(c->r_gfp_t), GFP_REG(c->r_gfp_t2));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_epoch), GFP_MEM(MIR_T_U32, 0, c->r_ic_epoch_val));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_U32, offsetof(sv_gf_mega_entry_t, epoch), c->r_gfp_e));
+  GFP_INSN(MIR_BNE, GFP_LBL(full), GFP_REG(c->r_gfp_t), GFP_REG(c->r_gfp_epoch));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_U8, offsetof(sv_gf_mega_entry_t, kind), c->r_gfp_e));
+  GFP_INSN(MIR_BEQ, GFP_LBL(own), GFP_REG(c->r_gfp_t), GFP_INT(SV_GF_IC_OWN));
+  GFP_INSN(MIR_BNE, GFP_LBL(full), GFP_REG(c->r_gfp_t), GFP_INT(SV_GF_IC_PROTOTYPE));
+
+  GFP_INSN(MIR_URSH, GFP_REG(c->r_gfp_t), GFP_REG(c->r_gfp_t2), GFP_UINT(NANBOX_TYPE_SHIFT));
+  GFP_INSN(MIR_BNE, GFP_LBL(full), GFP_REG(c->r_gfp_t), GFP_UINT(NANBOX_TOBJ_TAG));
+  mir_emit_decode_ref(c->ctx, c->jit_func, c->r_gfp_t, c->r_gfp_t2);
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_U32, offsetof(ant_object_t, ic_identity), c->r_gfp_t));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t2), GFP_MEM(MIR_T_U32, offsetof(sv_gf_mega_entry_t, proto_id), c->r_gfp_e));
+  GFP_INSN(MIR_BNE, GFP_LBL(full), GFP_REG(c->r_gfp_t), GFP_REG(c->r_gfp_t2));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_src), GFP_MEM(MIR_T_P, offsetof(sv_gf_mega_entry_t, holder), c->r_gfp_e));
+  GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_src), GFP_INT(0));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_P, offsetof(ant_object_t, shape), c->r_gfp_src));
+  GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_t), GFP_INT(0));
+  GFP_INSN(MIR_JMP, GFP_LBL(read));
+
+  MIR_append_insn(c->ctx, c->jit_func, own);
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_src), GFP_REG(c->r_gfp_ptr));
+
+  MIR_append_insn(c->ctx, c->jit_func, read);
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_idx), GFP_MEM(MIR_T_U32, offsetof(sv_gf_mega_entry_t, index), c->r_gfp_e));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_U32, offsetof(ant_object_t, prop_count), c->r_gfp_src));
+  GFP_INSN(MIR_UBGE, GFP_LBL(full), GFP_REG(c->r_gfp_idx), GFP_REG(c->r_gfp_t));
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_lim), GFP_MEM(MIR_T_U8, offsetof(ant_object_t, inobj_limit), c->r_gfp_src));
+  GFP_INSN(MIR_UBGE, GFP_LBL(load_overflow), GFP_REG(c->r_gfp_idx), GFP_REG(c->r_gfp_lim));
+  GFP_INSN(MIR_MOV, GFP_REG(dst), MIR_new_mem_op(c->ctx, MIR_T_I64,
+           (MIR_disp_t)offsetof(ant_object_t, inobj), c->r_gfp_src, c->r_gfp_idx, 8));
+  GFP_INSN(MIR_JMP, GFP_LBL(hit));
+
+  MIR_append_insn(c->ctx, c->jit_func, load_overflow);
+  GFP_INSN(MIR_MOV, GFP_REG(c->r_gfp_t), GFP_MEM(MIR_T_P, offsetof(ant_object_t, overflow_prop), c->r_gfp_src));
+  GFP_INSN(MIR_BEQ, GFP_LBL(full), GFP_REG(c->r_gfp_t), GFP_INT(0));
+  GFP_INSN(MIR_SUB, GFP_REG(c->r_gfp_idx), GFP_REG(c->r_gfp_idx), GFP_REG(c->r_gfp_lim));
+  GFP_INSN(MIR_MOV, GFP_REG(dst), MIR_new_mem_op(c->ctx, MIR_T_I64, 0, c->r_gfp_t, c->r_gfp_idx, 8));
+  GFP_INSN(MIR_JMP, GFP_LBL(hit));
+}
+
+static void jit_emit_get_field_poly(
+    jit_compile_t *c, uint16_t ic_idx, sv_atom_t *atom,
+    MIR_reg_t obj, MIR_reg_t dst, MIR_label_t hit) {
+  if (!c->func->ic_slots || ic_idx >= c->func->ic_count) return;
+  sv_ic_entry_t *ic = &c->func->ic_slots[ic_idx];
+  const sv_gf_poly_t *poly = ic->guard.get.poly;
+  bool mega = (ic->shape_ref_mask & SV_IC_POLY_MEGA) != 0;
+  if ((!poly && !mega) || is_length_key(atom->str, atom->len)) return;
+  if (ic->get_kind == SV_GF_IC_SYMBOL_DESCRIPTION ||
+      ic->get_kind == SV_GF_IC_PRIMITIVE_SYMBOL_DESCRIPTION) return;
+  if (mega) ic->shape_ref_mask |= SV_IC_MEGA_COMPILED;
+
+  if (!mega && c->func->code_len > JIT_GFP_MAX_CODE_LEN) return;
+  bool probe_shared = mega;
+  sv_gf_mega_cache_t *cache = probe_shared ? sv_gf_mega_ensure(c->js) : NULL;
+  if (probe_shared && !cache) return;
+  if (!probe_shared && poly->kept_epoch == ant_ic_epoch_counter && poly->kept >= SV_GF_POLY_WAYS) return;
+
+  jit_gfp_regs(c);
+  MIR_label_t full = MIR_new_label(c->ctx);
+  if (probe_shared) jit_emit_get_field_mega_probe(c, cache, atom->str, obj, dst, hit, full);
+  else jit_emit_get_field_poly_loop(c, ic, obj, dst, hit, full);
+  MIR_append_insn(c->ctx, c->jit_func, full);
+}
+
+#undef GFP_INSN
+#undef GFP_REG
+#undef GFP_MEM
+#undef GFP_LBL
+#undef GFP_INT
+#undef GFP_UINT
+
+static constexpr int32_t JIT_DEFINE_SLOT_INLINE_MAX_CODE_LEN = 1024;
+
+static void jit_emit_define_slot_inline(
+    jit_compile_t *c, sv_atom_t *atom, uint16_t slot,
+    MIR_reg_t obj, MIR_reg_t val, MIR_label_t done) {
+  if (c->func->code_len > JIT_DEFINE_SLOT_INLINE_MAX_CODE_LEN) return;
+  ant_t *js = c->js;
+  const char *key = atom->str;
+  if (!key || ant_property_key_is_watched(js, key)) return;
+
+  char name[40];
+  snprintf(name, sizeof(name), "ds_p_%d", c->bc_off);
+  MIR_reg_t ptr = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+  snprintf(name, sizeof(name), "ds_t_%d", c->bc_off);
+  MIR_reg_t t = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+  snprintf(name, sizeof(name), "ds_l_%d", c->bc_off);
+  MIR_reg_t lim = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+  MIR_label_t helper = MIR_new_label(c->ctx), overflow = MIR_new_label(c->ctx);
+
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_URSH, MIR_new_reg_op(c->ctx, t),
+      MIR_new_reg_op(c->ctx, obj), MIR_new_uint_op(c->ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, helper),
+      MIR_new_reg_op(c->ctx, t), MIR_new_uint_op(c->ctx, NANBOX_TOBJ_TAG)));
+  mir_emit_decode_ref(c->ctx, c->jit_func, ptr, obj);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, t),
+      MIR_new_mem_op(c->ctx, MIR_T_U16, (MIR_disp_t)offsetof(ant_object_t, flags), ptr, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_AND, MIR_new_reg_op(c->ctx, t),
+      MIR_new_reg_op(c->ctx, t), MIR_new_uint_op(c->ctx, ANT_OBJECT_FLAG_EXOTIC | ANT_OBJECT_FLAG_GENERATION)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, helper),
+      MIR_new_reg_op(c->ctx, t), MIR_new_uint_op(c->ctx, 0)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, t),
+      MIR_new_mem_op(c->ctx, MIR_T_U32, (MIR_disp_t)offsetof(ant_object_t, prop_count), ptr, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_UBLE, MIR_new_label_op(c->ctx, helper),
+      MIR_new_reg_op(c->ctx, t), MIR_new_uint_op(c->ctx, slot)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, lim),
+      MIR_new_mem_op(c->ctx, MIR_T_U8, (MIR_disp_t)offsetof(ant_object_t, inobj_limit), ptr, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_UBLE, MIR_new_label_op(c->ctx, overflow),
+      MIR_new_reg_op(c->ctx, lim), MIR_new_uint_op(c->ctx, slot)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+      MIR_new_mem_op(c->ctx, MIR_JSVAL, (MIR_disp_t)(offsetof(ant_object_t, inobj) + slot * sizeof(ant_value_t)), ptr, 0, 1),
+      MIR_new_reg_op(c->ctx, val)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, done)));
+
+  MIR_append_insn(c->ctx, c->jit_func, overflow);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, t),
+      MIR_new_mem_op(c->ctx, MIR_T_P, (MIR_disp_t)offsetof(ant_object_t, overflow_prop), ptr, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, helper),
+      MIR_new_reg_op(c->ctx, t), MIR_new_uint_op(c->ctx, 0)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_SUB, MIR_new_reg_op(c->ctx, lim),
+      MIR_new_uint_op(c->ctx, slot), MIR_new_reg_op(c->ctx, lim)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+      MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, t, lim, 8), MIR_new_reg_op(c->ctx, val)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, done)));
+  MIR_append_insn(c->ctx, c->jit_func, helper);
+}
+
 void jit_emit_properties(jit_compile_t *c) {
   switch (c->op) {
     case OP_TO_PROPKEY: {
@@ -89,6 +335,7 @@ void jit_emit_properties(jit_compile_t *c) {
                                      MIR_new_label_op(c->ctx, no_err)));
         MIR_append_insn(c->ctx, c->jit_func, slow);
       }
+      jit_emit_get_field_poly(c, ic_idx, atom, obj, dst, no_err);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_call_insn(c->ctx, 9,
                                         MIR_new_ref_op(c->ctx, c->gf_proto),
@@ -148,6 +395,7 @@ void jit_emit_properties(jit_compile_t *c) {
                                      MIR_new_label_op(c->ctx, no_err)));
         MIR_append_insn(c->ctx, c->jit_func, slow);
       }
+      jit_emit_get_field_poly(c, ic_idx, atom, obj, dst, no_err);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_call_insn(c->ctx, 9,
                                         MIR_new_ref_op(c->ctx, c->gf_proto),
@@ -218,6 +466,7 @@ void jit_emit_properties(jit_compile_t *c) {
                                      MIR_new_label_op(c->ctx, no_err)));
         MIR_append_insn(c->ctx, c->jit_func, slow);
       }
+      jit_emit_get_field_poly(c, ic_idx, atom, obj, dst, no_err);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_call_insn(c->ctx, 9,
                                         MIR_new_ref_op(c->ctx, c->gf_proto),
@@ -323,7 +572,7 @@ void jit_emit_properties(jit_compile_t *c) {
         MIR_append_insn(c->ctx, c->jit_func, slow);
       }
       MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_call_insn(c->ctx, 9,
+                      MIR_new_call_insn(c->ctx, 10,
                                         MIR_new_ref_op(c->ctx, c->put_field_proto),
                                         MIR_new_ref_op(c->ctx, c->imp_put_field),
                                         MIR_new_reg_op(c->ctx, c->r_err_tmp),
@@ -332,7 +581,8 @@ void jit_emit_properties(jit_compile_t *c) {
                                         MIR_new_reg_op(c->ctx, obj),
                                         MIR_new_reg_op(c->ctx, val),
                                         MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)atom),
-                                        MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)ic_slot)));
+                                        MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)ic_slot),
+                                        MIR_new_int_op(c->ctx, c->func->is_strict)));
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_URSH,
                                    MIR_new_reg_op(c->ctx, c->r_bool),
@@ -395,6 +645,8 @@ void jit_emit_properties(jit_compile_t *c) {
       vstack_ensure_boxed(&c->vs, c->vs.sp - 2, c->ctx, c->jit_func, c->r_d_slot);
       MIR_reg_t val = vstack_pop(&c->vs);
       MIR_reg_t obj = vstack_top(&c->vs);
+      MIR_label_t define_done = MIR_new_label(c->ctx);
+      jit_emit_define_slot_inline(c, atom, slot, obj, val, define_done);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_call_insn(c->ctx, 9,
                                         MIR_new_ref_op(c->ctx, c->define_slot_proto),
@@ -406,6 +658,7 @@ void jit_emit_properties(jit_compile_t *c) {
                                         MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)atom->str),
                                         MIR_new_uint_op(c->ctx, (uint64_t)atom->len),
                                         MIR_new_int_op(c->ctx, (int64_t)slot)));
+      MIR_append_insn(c->ctx, c->jit_func, define_done);
       break;
     }
 

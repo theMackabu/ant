@@ -1,5 +1,6 @@
 #include "gc.h"
 #include "errors.h"
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -47,18 +48,58 @@ static constexpr size_t SV_STACK_RESERVE = (size_t)SV_STACK_HARD_MAX * sizeof(an
 static constexpr size_t SV_FRAMES_RESERVE = (size_t)SV_FRAMES_HARD_MAX * sizeof(sv_frame_t);
 static constexpr size_t SV_VM_RESERVE = SV_STACK_RESERVE + SV_VM_GUARD_SIZE + SV_FRAMES_RESERVE;
 
+sv_gf_mega_cache_t *sv_gf_mega_ensure(ant_t *js) {
+  if (js->ic.gf_mega) return js->ic.gf_mega;
+  if (!sv_ic_shape_ref_reserve(js, SV_GF_MEGA_PRIMARY + SV_GF_MEGA_SECONDARY)) return NULL;
+  
+  sv_gf_mega_cache_t *cache = calloc(1, sizeof(*cache));
+  if (!cache) return NULL;
+  
+  for (unsigned i = 0; i < SV_GF_MEGA_PRIMARY; i++)
+    sv_ic_shape_ref_register(js, &cache->primary[i].shape);
+  
+  for (unsigned i = 0; i < SV_GF_MEGA_SECONDARY; i++)
+    sv_ic_shape_ref_register(js, &cache->secondary[i].shape);
+  
+  return js->ic.gf_mega = cache;
+}
+
+static void sv_gf_mega_clear_entries(sv_gf_mega_entry_t *entries, unsigned count) {
+  for (unsigned i = 0; i < count; i++) {
+    if (!entries[i].shape) continue;
+    ant_shape_release(entries[i].shape);
+    entries[i] = (sv_gf_mega_entry_t){0};
+  }
+}
+
+void sv_gf_mega_clear(ant_t *js) {
+  sv_gf_mega_cache_t *cache = js->ic.gf_mega;
+  if (!cache) return;
+  sv_gf_mega_clear_entries(cache->primary, SV_GF_MEGA_PRIMARY);
+  sv_gf_mega_clear_entries(cache->secondary, SV_GF_MEGA_SECONDARY);
+}
+
+bool sv_ic_shape_ref_reserve(ant_t *js, size_t count) {
+  if (!js) return false;
+  if (js->ic.shape_ref_cap - js->ic.shape_ref_len >= count) return true;
+
+  size_t cap = js->ic.shape_ref_cap ? js->ic.shape_ref_cap : 64u;
+  while (cap - js->ic.shape_ref_len < count) cap *= 2u;
+  
+  ant_shape_t ***slots = realloc(js->ic.shape_ref_slots, cap * sizeof(*slots));
+  if (!slots) return false;
+  
+  js->ic.shape_ref_slots = slots;
+  js->ic.shape_ref_cap = cap;
+  
+  return true;
+}
+
 bool sv_ic_shape_ref_register(ant_t *js, ant_shape_t **slot) {
   if (!js || !slot) goto fail;
+  if (!sv_ic_shape_ref_reserve(js, 1)) goto fail;
 
-  if (js->ic_shape_ref_len >= js->ic_shape_ref_cap) {
-    size_t cap = js->ic_shape_ref_cap ? js->ic_shape_ref_cap * 2u : 64u;
-    ant_shape_t ***slots = realloc(js->ic_shape_ref_slots, cap * sizeof(*slots));
-    if (!slots) goto fail;
-    js->ic_shape_ref_slots = slots;
-    js->ic_shape_ref_cap = cap;
-  }
-
-  js->ic_shape_ref_slots[js->ic_shape_ref_len++] = slot;
+  js->ic.shape_ref_slots[js->ic.shape_ref_len++] = slot;
   return true;
 
 fail:
@@ -71,17 +112,17 @@ fail:
 void sv_ic_shape_refs_cleanup(ant_t *js) {
   if (!js) return;
 
-  for (size_t i = 0; i < js->ic_shape_ref_len; i++) {
-    ant_shape_t **slot = js->ic_shape_ref_slots[i];
+  for (size_t i = 0; i < js->ic.shape_ref_len; i++) {
+    ant_shape_t **slot = js->ic.shape_ref_slots[i];
     if (!slot || !*slot) continue;
     ant_shape_t *shape = *slot;
     *slot = NULL;
     ant_shape_release(shape);
   }
 
-  free(js->ic_shape_ref_slots);
-  js->ic_shape_ref_slots = NULL;
-  js->ic_shape_ref_len = js->ic_shape_ref_cap = 0;
+  free(js->ic.shape_ref_slots);
+  js->ic.shape_ref_slots = NULL;
+  js->ic.shape_ref_len = js->ic.shape_ref_cap = 0;
 }
 
 static void *sv_vm_reserve_storage(void) {
@@ -146,6 +187,7 @@ sv_vm_t *sv_vm_create(ant_t *js) {
 
   vm->suspended_entry_fp = -1;
   vm->suspended_saved_fp = -1;
+  vm->jit_mode_fp = INT_MIN;
 
   void *base = sv_vm_reserve_storage();
   if (!base) {

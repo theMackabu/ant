@@ -67,8 +67,6 @@ struct ant_isolate_t {
   ant_fixed_arena_t obj_arena;
   ant_fixed_arena_t closure_arena;
   ant_fixed_arena_t upvalue_arena;
-
-  uint32_t next_ic_object_identity;
   uint32_t prototype_write_epoch;
 
   bool promise_constructor_protector_invalid;
@@ -76,9 +74,13 @@ struct ant_isolate_t {
   bool promise_species_protector_invalid;
   bool promise_then_protector_invalid;
 
-  ant_shape_t ***ic_shape_ref_slots;
-  size_t ic_shape_ref_len;
-  size_t ic_shape_ref_cap;
+  struct {
+    uint32_t next_object_identity;
+    ant_shape_t ***shape_ref_slots;
+    size_t shape_ref_len;
+    size_t shape_ref_cap;
+    sv_gf_mega_cache_t *gf_mega;
+  } ic;
 
   ant_value_t **c_roots;
   size_t c_root_count;
@@ -211,14 +213,22 @@ struct ant_isolate_t {
     size_t upvalues;
     size_t arrays;
   } alloc_bytes;
-
-  size_t gc_last_live;
-  size_t gc_pool_alloc;
-  size_t gc_closure_alloc;
-  size_t gc_closure_at_minor;
-  size_t gc_closure_wm_at_major;
-  size_t gc_closure_wm_minor_tried;
-  size_t gc_pool_last_live;
+  
+  struct {
+    size_t last_live;
+    size_t pool_alloc;
+    size_t closure_alloc;
+    size_t closure_at_minor;
+    size_t closure_wm_at_major;
+    size_t closure_wm_minor_tried;
+    size_t pool_last_live;
+    uint64_t alloc_since_major;
+    size_t arrays_at_collect;
+    size_t alloc_limit;
+    size_t array_limit;
+    size_t array_major_limit;
+    size_t idle_retry_at;
+  } gc;
 
   ant_object_t *objects_old;
   ant_object_t *pending_promises;

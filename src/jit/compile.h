@@ -74,6 +74,8 @@ typedef struct jit_compile {
   MIR_item_t regexp_proto;
   MIR_item_t throw_error_proto;
   MIR_item_t new_proto;
+  MIR_item_t new_this_proto;
+  MIR_item_t new_result_proto;
   MIR_item_t special_obj_proto;
   MIR_item_t strict_arguments_proto;
   MIR_item_t forward_arguments_proto;
@@ -176,6 +178,8 @@ typedef struct jit_compile {
   MIR_item_t imp_is_truthy;
   MIR_item_t imp_typeof;
   MIR_item_t imp_new;
+  MIR_item_t imp_new_this;
+  MIR_item_t imp_new_result;
   MIR_item_t imp_instanceof;
   MIR_item_t imp_call_is_proto;
   MIR_item_t imp_delete;
@@ -200,6 +204,9 @@ typedef struct jit_compile {
   MIR_reg_t r_tmp;
   MIR_reg_t r_tmp2;
   MIR_reg_t r_bool;
+  bool gfp_regs;
+  MIR_reg_t r_gfp_ptr, r_gfp_tag, r_gfp_shape;
+  MIR_reg_t r_gfp_epoch, r_gfp_e, r_gfp_end, r_gfp_t, r_gfp_t2, r_gfp_src, r_gfp_idx, r_gfp_lim;
   MIR_reg_t r_err_tmp;
   MIR_reg_t r_d_slot;
   MIR_reg_t r_d_one;

@@ -83,6 +83,7 @@ typedef struct {
   ant_private_table_t private_table;
   ant_proxy_state_t *proxy_state;
   sv_eval_env_state_t *eval_env_state;
+  gc_card_table_t *gc_cards;
   
   uint8_t native_count;
   uint8_t native_cap;

@@ -38,6 +38,8 @@ typedef struct {
   ant_value_t setter;
 } ant_shape_prop_t;
 
+static constexpr size_t ANT_SHAPE_REF_COUNT_OFFSET = 0;
+
 ant_shape_t *ant_shape_new(void);
 ant_shape_t *ant_shape_new_with_inobj_limit(uint8_t inobj_limit);
 ant_shape_t *ant_shape_clone(const ant_shape_t *shape);

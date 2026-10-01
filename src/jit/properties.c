@@ -76,9 +76,7 @@ static void mir_emit_promise_protector_invalidation(
   bool invalidates_global_promise = atom->str == js->intern.promise;
   bool invalidates_promise_resolve = atom->str == js->intern.resolve;
 
-  if (
-      !invalidates_constructor && !invalidates_then &&
-      !invalidates_global_promise && !invalidates_promise_resolve) return;
+  if (!ant_property_key_is_protector(js, atom->str)) return;
 
   size_t protector_offset;
   if (invalidates_constructor)
@@ -189,6 +187,17 @@ static MIR_reg_t mir_emit_put_field_add_guard(
                   MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
                                MIR_new_reg_op(ctx, add_from), MIR_new_reg_op(ctx, shape)));
   MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, scratch),
+                               MIR_new_mem_op(ctx, MIR_T_U64,
+                                              (MIR_disp_t)offsetof(sv_ic_entry_t, add_proto), ric, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, type_tag),
+                               MIR_new_mem_op(ctx, MIR_JSVAL,
+                                              (MIR_disp_t)offsetof(ant_object_t, proto), optr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
+                               MIR_new_reg_op(ctx, type_tag), MIR_new_reg_op(ctx, scratch)));
+  MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, add_to),
                                MIR_new_mem_op(ctx, MIR_T_P,
                                               (MIR_disp_t)offsetof(sv_ic_entry_t, guard.add.to_shape), ric, 0, 1)));
@@ -245,13 +254,30 @@ static void mir_emit_put_field_value_guard(
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, store)));
 
+  MIR_label_t ref_barrier = MIR_new_label(ctx);
   MIR_append_insn(ctx, fn, classify_ref);
   MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, scratch),
+                  MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, vptr),
                                MIR_new_reg_op(ctx, flags), MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_GENERATION)));
   MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
-                               MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, 0)));
+                  MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, store),
+                               MIR_new_reg_op(ctx, vptr), MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, ref_barrier),
+                               MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, NANBOX_TFUNC_TAG)));
+  mir_emit_decode_ref(ctx, fn, vptr, val);
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, vptr),
+                               MIR_new_mem_op(ctx, MIR_T_U16,
+                                              (MIR_disp_t)offsetof(ant_object_t, flags), vptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, vptr),
+                               MIR_new_reg_op(ctx, vptr), MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_GENERATION)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, store),
+                               MIR_new_reg_op(ctx, vptr), MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn, ref_barrier);
+  mir_load_imm(ctx, fn, need_barrier, 1);
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, store)));
 
@@ -305,6 +331,49 @@ static void mir_emit_put_field_barrier(
                   MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
 }
 
+static void mir_emit_shape_transition(
+    MIR_context_t ctx, MIR_item_t fn, int bc_off, uint16_t ic_idx,
+    MIR_reg_t optr, MIR_reg_t to_shape,
+    MIR_item_t shape_transition_proto, MIR_item_t imp_shape_transition) {
+  MIR_reg_t from = mir_new_ic_reg(ctx, fn, "pf", "tfrom", bc_off, ic_idx);
+  MIR_reg_t t = mir_new_ic_reg(ctx, fn, "pf", "tt", bc_off, ic_idx);
+  MIR_label_t call = MIR_new_label(ctx), done = MIR_new_label(ctx);
+
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, from),
+      MIR_new_mem_op(ctx, MIR_T_P, (MIR_disp_t)offsetof(ant_object_t, shape), optr, 0, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, t),
+      MIR_new_mem_op(ctx, MIR_T_U32, ANT_SHAPE_REF_COUNT_OFFSET, from, 0, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBLE, MIR_new_label_op(ctx, call),
+      MIR_new_reg_op(ctx, t), MIR_new_uint_op(ctx, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_SUB, MIR_new_reg_op(ctx, t),
+      MIR_new_reg_op(ctx, t), MIR_new_uint_op(ctx, 1)));
+  MIR_reg_t f = mir_new_ic_reg(ctx, fn, "pf", "tflags", bc_off, ic_idx);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, f),
+      MIR_new_mem_op(ctx, MIR_T_U16, (MIR_disp_t)offsetof(ant_object_t, flags), optr, 0, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, f),
+      MIR_new_reg_op(ctx, f), MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_GUARDS_ABSENCE)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, call),
+      MIR_new_reg_op(ctx, f), MIR_new_uint_op(ctx, 0)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_mem_op(ctx, MIR_T_U32, ANT_SHAPE_REF_COUNT_OFFSET, from, 0, 1), MIR_new_reg_op(ctx, t)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, t),
+      MIR_new_mem_op(ctx, MIR_T_U32, ANT_SHAPE_REF_COUNT_OFFSET, to_shape, 0, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, t),
+      MIR_new_reg_op(ctx, t), MIR_new_uint_op(ctx, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_mem_op(ctx, MIR_T_U32, ANT_SHAPE_REF_COUNT_OFFSET, to_shape, 0, 1), MIR_new_reg_op(ctx, t)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_mem_op(ctx, MIR_T_P, (MIR_disp_t)offsetof(ant_object_t, shape), optr, 0, 1),
+      MIR_new_reg_op(ctx, to_shape)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+
+  MIR_append_insn(ctx, fn, call);
+  MIR_append_insn(ctx, fn, MIR_new_call_insn(ctx, 4,
+      MIR_new_ref_op(ctx, shape_transition_proto), MIR_new_ref_op(ctx, imp_shape_transition),
+      MIR_new_reg_op(ctx, optr), MIR_new_reg_op(ctx, to_shape)));
+  MIR_append_insn(ctx, fn, done);
+}
+
 bool mir_emit_put_field_ic_fastpath(
     MIR_context_t ctx, MIR_item_t fn, ant_t *js,
     sv_func_t *func, int bc_off, uint16_t ic_idx, sv_atom_t *atom,
@@ -314,10 +383,8 @@ bool mir_emit_put_field_ic_fastpath(
     MIR_item_t remember_proto, MIR_item_t imp_remember) {
   if (!func || !func->ic_slots || !atom) return false;
   if (ic_idx == UINT16_MAX || ic_idx >= func->ic_count) return false;
-  if (
-      atom->str == js->intern.prototype ||
-      atom->str == js->intern.exec ||
-      atom->str == js->intern.replace) return false;
+  if (ant_property_key_is_watched(js, atom->str) &&
+      !ant_property_key_is_protector(js, atom->str)) return false;
   bool can_add = atom->len != sizeof("__proto__") - 1 ||
                  memcmp(atom->str, "__proto__", sizeof("__proto__") - 1) != 0;
 
@@ -442,12 +509,8 @@ bool mir_emit_put_field_ic_fastpath(
     mir_emit_put_field_value_guard(
         ctx, fn, val, optr, flags, vtag, vptr, rope_flags,
         need_barrier, slow, add_store);
-    MIR_append_insn(ctx, fn,
-                    MIR_new_call_insn(ctx, 4,
-                                      MIR_new_ref_op(ctx, shape_transition_proto),
-                                      MIR_new_ref_op(ctx, imp_shape_transition),
-                                      MIR_new_reg_op(ctx, optr),
-                                      MIR_new_reg_op(ctx, add_to)));
+    mir_emit_shape_transition(ctx, fn, bc_off, ic_idx, optr, add_to,
+                              shape_transition_proto, imp_shape_transition);
     MIR_append_insn(ctx, fn,
                     MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, prop_count),
                                  MIR_new_reg_op(ctx, idx), MIR_new_int_op(ctx, 1)));

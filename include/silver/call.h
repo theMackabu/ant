@@ -108,6 +108,45 @@ static inline ant_value_t sv_construct_prototype_from_object(
     ? proto : js->sym.object_proto;
 }
 
+static inline bool sv_construct_prototype_data(
+  ant_t *js, ant_object_t *ptr, sv_func_t *func, ant_value_t *out
+) {
+  sv_func_sidecar_t *sidecar = func ? sv_func_sidecar(func) : NULL;
+  if (!sidecar || !ptr || ptr->flags.is_exotic || !ptr->shape) return false;
+
+  if (ptr->shape != sidecar->ctor_proto_shape) {
+    int32_t found = ant_shape_lookup_interned(ptr->shape, js->intern.prototype);
+    if (found < 0 || (uint32_t)found >= ptr->prop_count) return false;
+    
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)found);
+    if (!prop || prop->has_getter || prop->has_setter) return false;
+
+    if (!sidecar->ctor_proto_shape_registered) {
+      if (!sv_ic_shape_ref_register(js, &sidecar->ctor_proto_shape)) return false;
+      sidecar->ctor_proto_shape_registered = true;
+    }
+    
+    ant_shape_retain(ptr->shape);
+    if (sidecar->ctor_proto_shape) ant_shape_release(sidecar->ctor_proto_shape);
+    
+    sidecar->ctor_proto_shape = ptr->shape;
+    sidecar->ctor_proto_slot = (uint32_t)found;
+  }
+
+  ant_value_t proto = ant_object_prop_get_unchecked(ptr, sidecar->ctor_proto_slot);
+  *out = is_object_type(proto) ? proto : js->sym.object_proto;
+  
+  return true;
+}
+
+static inline ant_value_t sv_construct_prototype_cached(
+  ant_t *js, ant_value_t proto_source, ant_object_t *ptr, sv_func_t *func
+) {
+  ant_value_t proto;
+  if (sv_construct_prototype_data(js, ptr, func, &proto)) return proto;
+  return sv_construct_prototype_from_object(js, proto_source, ptr);
+}
+
 static inline ant_value_t sv_construct_prototype_from(
   ant_t *js, ant_value_t proto_source
 ) {

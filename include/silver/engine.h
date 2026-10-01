@@ -172,23 +172,115 @@ typedef enum: uint8_t {
   SV_GF_IC_PRIMITIVE_SYMBOL_DESCRIPTION,
 } sv_get_field_ic_kind_t;
 
+typedef enum: uint8_t {
+  SV_IC_SHAPE_REF_CACHED   = 1u << 0,
+  SV_IC_SHAPE_REF_ADD_FROM = 1u << 1,
+  SV_IC_SHAPE_REF_ADD_TO   = 1u << 2,
+  SV_IC_POLY_MEGA          = 1u << 3,
+  SV_IC_MEGA_COMPILED      = 1u << 4,
+} sv_ic_flags_t;
+
+static_assert(
+  (SV_IC_SHAPE_REF_CACHED | SV_IC_SHAPE_REF_ADD_FROM | SV_IC_SHAPE_REF_ADD_TO | SV_IC_POLY_MEGA | SV_IC_MEGA_COMPILED) == 
+  (SV_IC_SHAPE_REF_CACHED + SV_IC_SHAPE_REF_ADD_FROM + SV_IC_SHAPE_REF_ADD_TO + SV_IC_POLY_MEGA + SV_IC_MEGA_COMPILED),
+  "IC flags must not share bits"
+);
+
+typedef struct {
+  ant_shape_t *shape;
+  ant_value_t receiver_proto;
+  ant_object_t *holder;
+  uint32_t index;
+  uint32_t proto_id;
+  uint32_t epoch;
+  sv_get_field_ic_kind_t kind;
+} sv_gf_poly_entry_t;
+
+static constexpr unsigned SV_GF_POLY_WAYS = 8;
+static constexpr unsigned SV_GF_MEGA_PRIMARY = 4096;
+static constexpr unsigned SV_GF_MEGA_SECONDARY = 1024;
+
+static_assert((SV_GF_MEGA_PRIMARY & (SV_GF_MEGA_PRIMARY - 1)) == 0, "mega tables are masked");
+static_assert((SV_GF_MEGA_SECONDARY & (SV_GF_MEGA_SECONDARY - 1)) == 0, "mega tables are masked");
+
+static constexpr unsigned SV_GF_MEGA_SHAPE_SHIFT = 4;
+static constexpr unsigned SV_GF_MEGA_KEY_SHIFT = 3;
+static constexpr unsigned SV_GF_MEGA_PROTO_SHIFT = 5;
+static constexpr unsigned SV_GF_MEGA_MIX_SHIFT = 13;
+
+typedef struct {
+  ant_shape_t *shape;
+  ant_value_t receiver_proto;
+  const char *key;
+  ant_object_t *holder;
+  uint32_t index;
+  uint32_t proto_id;
+  uint32_t epoch;
+  sv_get_field_ic_kind_t kind;
+} sv_gf_mega_entry_t;
+
+struct sv_gf_mega_cache {
+  sv_gf_mega_entry_t primary[SV_GF_MEGA_PRIMARY];
+  sv_gf_mega_entry_t secondary[SV_GF_MEGA_SECONDARY];
+};
+
+sv_gf_mega_cache_t *sv_gf_mega_ensure(ant_t *js);
+void sv_gf_mega_clear(ant_t *js);
+
+typedef struct sv_gf_poly {
+  sv_gf_poly_entry_t entries[SV_GF_POLY_WAYS];
+  uint8_t next;
+  uint32_t kept;
+  uint32_t kept_epoch;
+} sv_gf_poly_t;
+
+typedef struct {
+  ant_shape_t *shape;
+  ant_shape_t *to_shape;
+  uint32_t index;
+  uint32_t epoch;
+  uintptr_t proto;
+  bool add;
+} sv_pf_poly_entry_t;
+
+typedef struct sv_pf_poly {
+  sv_pf_poly_entry_t entries[SV_GF_POLY_WAYS];
+  uint8_t next;
+  uint32_t kept;
+  uint32_t kept_epoch;
+} sv_pf_poly_t;
+
 typedef struct {
   ant_shape_t *cached_shape;
   uint32_t cached_index;
   uint32_t epoch;
   
   sv_get_field_ic_kind_t get_kind;
-  uint8_t shape_ref_mask;
+  sv_ic_flags_t shape_ref_mask;
+  uint16_t slow_hits;
   uint32_t prototype_epoch;
 
-  ant_object_t *cached_holder;
-  uintptr_t cached_aux;
+  union {
+    ant_object_t *cached_holder;
+    sv_pf_poly_t *put_poly;
+  };
+  
+  union {
+    uintptr_t cached_aux;
+    uintptr_t add_proto;
+  };
   
   // Each IC slot belongs to one bytecode site/op. Field reads use receiver_proto
   // as documented by get_kind; property-add ICs use add, comparisons use comparison.
   // Comparison ICs need both their direct prototype and object-lifetime epoch.
   union {
     ant_value_t receiver_proto;
+    
+    struct {
+      ant_value_t receiver_proto;
+      sv_gf_poly_t *poly;
+    } get;
+    
     struct {
       ant_shape_t *from_shape;
       ant_shape_t *to_shape;
@@ -220,13 +312,8 @@ static_assert(
   "IC read guards must remain in the first 24 bytes"
 );
 
-enum {
-  SV_IC_SHAPE_REF_CACHED   = 1u << 0,
-  SV_IC_SHAPE_REF_ADD_FROM = 1u << 1,
-  SV_IC_SHAPE_REF_ADD_TO   = 1u << 2,
-};
-
 bool sv_ic_shape_ref_register(ant_t *js, ant_shape_t **slot);
+bool sv_ic_shape_ref_reserve(ant_t *js, size_t count);
 void sv_ic_shape_refs_cleanup(ant_t *js);
 
 typedef struct {
@@ -292,6 +379,10 @@ typedef struct {
 typedef struct {
   uint8_t *type_feedback;
   sv_ctor_prop_fb_t ctor_prop_fb;
+  ant_shape_t *ctor_proto_shape;
+  uint32_t ctor_proto_slot;
+  bool ctor_proto_shape_registered;
+  uint8_t poly_recompiles;
 } sv_func_sidecar_t;
 
 static_assert(
@@ -694,7 +785,7 @@ static inline bool sv_closure_has_lexical_this(const sv_closure_t *closure) {
 }
 
 static inline void js_closure_alloc_prepare(ant_t *js) {
-  js->gc_closure_alloc++;
+  js->gc.closure_alloc++;
   if (js->young_closure_len >= js->young_closure_trigger) gc_pressure(js);
 }
 
@@ -847,6 +938,9 @@ struct sv_vm {
 
   sv_jit_osr_t jit_osr;
   sv_native_frame_t *native_frame;
+
+  int jit_mode_fp;
+  bool jit_mode_strict;
 };
 
 static inline uint8_t sv_get_u8(const uint8_t *ip)  { return ip[0]; }
@@ -904,17 +998,22 @@ static inline bool sv_is_nullish_this(ant_value_t v) {
 static inline ant_value_t sv_normalize_this_for_frame(ant_t *js, sv_func_t *func, ant_value_t this_val) {
   if (!func || func->is_arrow) return this_val;
   if (func->is_strict) return this_val;
+  
   uint8_t type = vtype(this_val);
   if (type == kTypeUndefined || type == kTypeNull) return js->global;
   if (is_object_type(this_val) || type == kTypeBuiltin) return this_val;
+  
   return js_normalize_sloppy_this(js, this_val);
 }
 
 static inline bool sv_vm_is_strict(const sv_vm_t *vm) {
+  if (vm && vm->jit_mode_fp == vm->fp) return vm->jit_mode_strict;
+  
   if (vm && vm->fp >= 0) {
     const sv_frame_t *f = &vm->frames[vm->fp];
     return f->func && f->func->is_strict;
   }
+  
   return false;
 }
 

@@ -144,6 +144,7 @@ static ant_value_t ws_ctrl_queue_shift(ant_t *js, ant_value_t ctrl_obj) {
   uint32_t new_len = aobj->u.array.len - 1;
   for (uint32_t i = 0; i < new_len; i++)
     aobj->u.array.data[i] = aobj->u.array.data[i + 1];
+  gc_elements_moved(js, aobj);
   aobj->u.array.len = new_len;
   return val;
 }
@@ -177,6 +178,7 @@ static ant_value_t ws_write_reqs_shift(ant_t *js, ant_value_t stream_obj) {
   uint32_t new_len = aobj->u.array.len - 1;
   for (uint32_t i = 0; i < new_len; i++)
     aobj->u.array.data[i] = aobj->u.array.data[i + 1];
+  gc_elements_moved(js, aobj);
   aobj->u.array.len = new_len;
   return val;
 }

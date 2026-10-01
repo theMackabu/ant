@@ -37,6 +37,32 @@ typedef struct gc_vm_seg {
 #define GC_VM_SEG_SAVED_REGS_BYTES 0u
 #endif
 
+static constexpr uint32_t GC_CARD_SHIFT = 7;
+static constexpr uint32_t GC_CARD_SLOTS = 1u << GC_CARD_SHIFT;
+static constexpr uint32_t GC_CARD_MIN_CAP = 1024;
+
+struct gc_card_table {
+  uint32_t ncards;
+  bool all_dirty;
+  uint64_t bits[];
+};
+
+static inline gc_card_table_t *gc_cards_of(const ant_object_t *arr) {
+  ant_object_sidecar_t *sidecar = ant_object_sidecar(arr);
+  return sidecar ? sidecar->gc_cards : NULL;
+}
+
+static inline bool gc_card_is_set(const gc_card_table_t *cards, uint32_t card) {
+  return (cards->bits[card / 64u] & (UINT64_C(1) << (card % 64u))) != 0;
+}
+
+static inline void gc_card_set(gc_card_table_t *cards, uint32_t card) {
+  cards->bits[card / 64u] |= UINT64_C(1) << (card % 64u);
+}
+
+void gc_remember_element(ant_t *js, ant_object_t *arr, uint32_t idx);
+void gc_cards_mark_all(ant_object_t *arr);
+
 static inline __attribute__((always_inline)) uintptr_t gc_native_sp(void) {
   uintptr_t sp;
 #if defined(__aarch64__)

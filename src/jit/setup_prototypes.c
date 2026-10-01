@@ -432,13 +432,14 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
 
   MIR_type_t pf_ret = MIR_JSVAL;
   c->put_field_proto = MIR_new_proto(c->ctx, "pf_proto",
-                                     1, &pf_ret, 6,
+                                     1, &pf_ret, 7,
                                      MIR_T_I64, "vm",
                                      MIR_T_I64, "js",
                                      MIR_JSVAL, "obj",
                                      MIR_JSVAL, "val",
                                      MIR_T_P, "atom",
-                                     MIR_T_P, "ic");
+                                     MIR_T_P, "ic",
+                                     MIR_T_I32, "strict");
 
   c->remember_obj_proto = MIR_new_proto(c->ctx, "remember_obj_proto",
                                         0, NULL, 2,
@@ -528,6 +529,17 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                MIR_JSVAL, "new_target",
                                MIR_T_P, "args",
                                MIR_T_I32, "argc");
+  c->new_this_proto = MIR_new_proto(c->ctx, "new_this_proto",
+                                    1, &nw_ret, 4,
+                                    MIR_T_I64, "js",
+                                    MIR_JSVAL, "func",
+                                    MIR_JSVAL, "new_target",
+                                    MIR_T_I32, "checked");
+  c->new_result_proto = MIR_new_proto(c->ctx, "new_result_proto",
+                                      1, &nw_ret, 3,
+                                      MIR_JSVAL, "func",
+                                      MIR_JSVAL, "obj",
+                                      MIR_JSVAL, "result");
 
   MIR_type_t special_obj_ret = MIR_JSVAL;
   c->special_obj_proto = MIR_new_proto(c->ctx, "soj_proto",
@@ -661,9 +673,9 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_sne = MIR_new_import(c->ctx, "jit_helper_sne");
   c->imp_put_field = MIR_new_import(c->ctx, "jit_helper_put_field_ic");
   c->imp_shape_transition = MIR_new_import(c->ctx, "jit_helper_shape_transition");
-  c->imp_remember_obj = MIR_new_import(c->ctx, "gc_remember_add");
+  c->imp_remember_obj = MIR_new_import(c->ctx, "gc_remember_props");
   c->imp_get_elem = MIR_new_import(c->ctx, "jit_helper_get_elem");
-  c->imp_put_elem = MIR_new_import(c->ctx, "jit_helper_put_elem");
+  c->imp_put_elem = MIR_new_import(c->ctx, c->func->is_strict ? "jit_helper_put_elem_strict" : "jit_helper_put_elem");
   c->imp_get_private = MIR_new_import(c->ctx, "jit_helper_get_private");
   c->imp_put_private = MIR_new_import(c->ctx, "jit_helper_put_private");
   c->imp_put_global = MIR_new_import(c->ctx, "jit_helper_put_global");
@@ -689,9 +701,11 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_is_truthy = MIR_new_import(c->ctx, "jit_helper_is_truthy");
   c->imp_typeof = MIR_new_import(c->ctx, "jit_helper_typeof");
   c->imp_new = MIR_new_import(c->ctx, "jit_helper_new");
+  c->imp_new_this = MIR_new_import(c->ctx, "jit_helper_new_this");
+  c->imp_new_result = MIR_new_import(c->ctx, "jit_helper_new_result");
   c->imp_instanceof = MIR_new_import(c->ctx, "jit_helper_instanceof");
   c->imp_call_is_proto = MIR_new_import(c->ctx, "jit_helper_call_is_proto");
-  c->imp_delete = MIR_new_import(c->ctx, "jit_helper_delete");
+  c->imp_delete = MIR_new_import(c->ctx, c->func->is_strict ? "jit_helper_delete_strict" : "jit_helper_delete");
   c->imp_set_name = MIR_new_import(c->ctx, "jit_helper_set_name");
   c->imp_stack_ovf_err = MIR_new_import(c->ctx, "jit_helper_stack_overflow_error");
   c->imp_tier_up = MIR_new_import(c->ctx, "jit_helper_tier_up");

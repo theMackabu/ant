@@ -107,11 +107,12 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_put_field);
   LOAD_EXT(jit_helper_put_field_ic);
   LOAD_EXT(jit_helper_shape_transition);
-  LOAD_EXT(gc_remember_add);
+  LOAD_EXT(gc_remember_props);
   LOAD_EXT(jit_helper_get_elem);
   LOAD_EXT(jit_helper_get_elem2);
   LOAD_EXT(jit_helper_get_elem_inline);
   LOAD_EXT(jit_helper_put_elem);
+  LOAD_EXT(jit_helper_put_elem_strict);
   LOAD_EXT(jit_helper_get_private);
   LOAD_EXT(jit_helper_put_private);
   LOAD_EXT(jit_helper_put_global);
@@ -135,7 +136,10 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_is_truthy);
   LOAD_EXT(jit_helper_typeof);
   LOAD_EXT(jit_helper_new);
+  LOAD_EXT(jit_helper_new_this);
+  LOAD_EXT(jit_helper_new_result);
   LOAD_EXT(jit_helper_delete);
+  LOAD_EXT(jit_helper_delete_strict);
   LOAD_EXT(jit_helper_set_name);
   LOAD_EXT(jit_helper_stack_overflow);
   LOAD_EXT(jit_helper_stack_overflow_error);

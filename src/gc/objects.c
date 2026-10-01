@@ -151,8 +151,47 @@ static void *shrink_ptr_roster(void *entries, size_t *cap, size_t target_cap) {
   return shrunk;
 }
 
-void gc_remember_add(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->flags.in_remember_set) return;
+void gc_cards_mark_all(ant_object_t *arr) {
+  gc_card_table_t *cards = gc_cards_of(arr);
+  if (cards) cards->all_dirty = true;
+}
+
+static void gc_cards_clear(ant_object_t *obj) {
+  if (obj->type_tag != kTypeArray) return;
+  gc_card_table_t *cards = gc_cards_of(obj);
+  if (!cards) return;
+  memset(cards->bits, 0, ((cards->ncards + 63u) / 64u) * sizeof(uint64_t));
+  cards->all_dirty = false;
+}
+
+static gc_card_table_t *gc_cards_for(ant_object_t *arr, uint32_t idx) {
+  uint32_t need = (arr->u.array.cap + GC_CARD_SLOTS - 1u) >> GC_CARD_SHIFT;
+  if (need <= (idx >> GC_CARD_SHIFT)) need = (idx >> GC_CARD_SHIFT) + 1u;
+
+  gc_card_table_t *cards = gc_cards_of(arr);
+  if (cards && cards->ncards >= need) return cards;
+
+  size_t old_words = cards ? (cards->ncards + 63u) / 64u : 0;
+  size_t words = (need + 63u) / 64u;
+  gc_card_table_t *grown = realloc(cards, sizeof(*grown) + words * sizeof(uint64_t));
+  
+  if (!grown) return NULL;
+  memset(grown->bits + old_words, 0, (words - old_words) * sizeof(uint64_t));
+
+  if (!cards) {
+    ant_object_sidecar_t *sidecar = ant_object_ensure_sidecar(arr);
+    if (!sidecar) { free(grown); return NULL; }
+    sidecar->gc_cards = grown;
+    grown->all_dirty = arr->flags.in_remember_set;
+  } else ant_object_sidecar(arr)->gc_cards = grown;
+
+  grown->ncards = need;
+  return grown;
+}
+
+static void gc_remember_push(ant_t *js, ant_object_t *obj) {
+  if (obj->flags.in_remember_set) return;
+  
   if (js->remember_set_len >= js->remember_set_cap) {
     size_t new_cap = js->remember_set_cap ? js->remember_set_cap * 2 : 64;
     ant_object_t **ns = realloc(js->remember_set, new_cap * sizeof(*ns));
@@ -160,8 +199,32 @@ void gc_remember_add(ant_t *js, ant_object_t *obj) {
     js->remember_set = ns;
     js->remember_set_cap = new_cap;
   }
+  
   obj->flags.in_remember_set = 1;
   js->remember_set[js->remember_set_len++] = obj;
+}
+
+void gc_remember_add(ant_t *js, ant_object_t *obj) {
+  if (!obj) return;
+  if (obj->type_tag == kTypeArray && ant_object_has_sidecar(obj)) gc_cards_mark_all(obj);
+  gc_remember_push(js, obj);
+}
+
+void gc_remember_props(ant_t *js, ant_object_t *obj) {
+  if (obj) gc_remember_push(js, obj);
+}
+
+void gc_remember_element(ant_t *js, ant_object_t *arr, uint32_t idx) {
+  gc_card_table_t *cards = arr->type_tag == kTypeArray && 
+    arr->u.array.cap >= GC_CARD_MIN_CAP ? gc_cards_for(arr, idx) : NULL;
+    
+  if (!cards) { 
+    gc_remember_add(js, arr);
+    return;
+  }
+
+  gc_card_set(cards, idx >> GC_CARD_SHIFT);
+  gc_remember_push(js, arr);
 }
 
 void gc_remember_upvalue(ant_t *js, struct sv_upvalue *uv) {
@@ -502,7 +565,22 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
 
   if (obj->type_tag == kTypeArray && obj->u.array.data) {
     uint32_t n = obj->u.array.len < obj->u.array.cap ? obj->u.array.len : obj->u.array.cap;
-    for (uint32_t i = 0; i < n; i++) {
+    gc_card_table_t *cards = g_minor_gc && obj->u.array.cap >= GC_CARD_MIN_CAP
+      ? gc_cards_of(obj) : NULL;
+    // TODO: reduce nesting
+    if (cards && !cards->all_dirty) {
+      uint32_t ncards = (n + GC_CARD_SLOTS - 1u) >> GC_CARD_SHIFT;
+      if (ncards > cards->ncards) ncards = cards->ncards;
+      for (uint32_t card = 0; card < ncards; card++) {
+        if (!gc_card_is_set(cards, card)) continue;
+        uint32_t end = (card + 1u) << GC_CARD_SHIFT;
+        if (end > n) end = n;
+        for (uint32_t i = card << GC_CARD_SHIFT; i < end; i++) {
+          ant_value_t value = obj->u.array.data[i];
+          if (is_tagged(value)) gc_mark_value(js, value);
+        }
+      }
+    } else for (uint32_t i = 0; i < n; i++) {
       ant_value_t value = obj->u.array.data[i];
       if (is_tagged(value)) gc_mark_value(js, value);
     }
@@ -1134,6 +1212,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     free(sidecar->native_entries);
     free(sidecar->proxy_state);
     free(sidecar->private_table.entries);
+    free(sidecar->gc_cards);
     free(sidecar);
     obj->extra_slots = NULL;
   } 
@@ -1245,10 +1324,11 @@ void gc_pin_existing_objects(ant_t *js) {
   js->young_upvalue_len = 0;
   js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
 
-  // the pinned bootstrap heap is the starting baseline: it is neither young
-  // nor reclaimable, so counting it as young would trip an immediate major
-  js->gc_last_live = js->obj_arena.live_count;
+  js->gc.last_live = js->obj_arena.live_count;
   js->old_live_count = js->obj_arena.live_count;
+  
+  gc_array_limits_init(js);
+  gc_refresh_alloc_limit(js);
 }
 
 uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
@@ -1268,8 +1348,10 @@ uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
   }
 
   ant_gc_shapes_begin();
-  for (size_t i = 0; i < js->remember_set_len; i++)
+  for (size_t i = 0; i < js->remember_set_len; i++) {
     js->remember_set[i]->flags.in_remember_set = 0;
+    gc_cards_clear(js->remember_set[i]);
+  }
   js->remember_set_len = 0;
   
   gc_clear_remembered_upvalues(js);
@@ -1366,7 +1448,9 @@ void gc_objects_run_minor(ant_t *js) {
     gc_obj_epoch = 1;
     gc_obj_epoch_wrapped(js);
   }
+  
   g_minor_gc = true;
+  GC_VERIFY_CARDS(js);
 
   for (size_t i = 0; i < js->remember_set_len; i++)
     gc_scan_obj(js, js->remember_set[i]);
@@ -1375,8 +1459,10 @@ void gc_objects_run_minor(ant_t *js) {
   gc_mark_remembered_closures(js);
   gc_mark_remembered_coroutines(js);
 
-  for (size_t i = 0; i < js->remember_set_len; i++)
+  for (size_t i = 0; i < js->remember_set_len; i++) {
     js->remember_set[i]->flags.in_remember_set = 0;
+    gc_cards_clear(js->remember_set[i]);
+  }
   js->remember_set_len = 0;
 
   gc_mark_roots(js);

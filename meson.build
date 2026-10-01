@@ -470,6 +470,15 @@ gc_uv_segments_test = executable(
 )
 test('gc-uv-segments', gc_uv_segments_test)
 
+gc_array_cards_test = executable(
+  'test-gc-array-cards',
+  files('tests/test_gc_array_cards.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('gc-array-cards', gc_array_cards_test)
+
 upvalue_close_order_test = executable(
   'test-upvalue-close-order',
   files('tests/test_upvalue_close_order.c'),

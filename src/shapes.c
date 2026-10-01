@@ -624,6 +624,12 @@ bool ant_shape_is_shared(const ant_shape_t *shape) {
   return shape && (shape->ref_count > 1 || shape->descriptors->ref_count > 1);
 }
 
+static_assert(
+  offsetof(struct ant_shape, ref_count) == ANT_SHAPE_REF_COUNT_OFFSET &&
+  sizeof(((struct ant_shape *)0)->ref_count) == 4,
+  "compiled code updates shape reference counts at this offset"
+);
+
 void ant_shape_retain(ant_shape_t *shape) {
   if (!shape) return;
   shape->ref_count++;

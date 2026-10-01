@@ -48,6 +48,18 @@ int ant_uv_run(uv_loop_t *loop, uv_run_mode mode) {
   return result;
 }
 
+static bool reactor_idle_gc(ant_t *js) {
+  if (!gc_idle_wanted(js)) return false;
+  
+  size_t marker = gc_alloc_marker(js);
+  ant_uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+  
+  if (gc_alloc_marker(js) != marker || (get_pending_work(js) & WORK_BLOCKING)) return true;
+  gc_idle(js, uv_backend_timeout(uv_default_loop()));
+  
+  return false;
+}
+
 void js_run_event_loop(ant_t *js) {
 drain:
   while (event_loop_alive(js)) {
@@ -57,9 +69,9 @@ drain:
   
     if (work & WORK_BLOCKING) 
       ant_uv_run(uv_default_loop(), UV_RUN_NOWAIT);
-    else if ((work & WORK_ASYNC) || uv_loop_alive(uv_default_loop()))
-      ant_uv_run(uv_default_loop(), UV_RUN_ONCE);
-    else break;
+    else if ((work & WORK_ASYNC) || uv_loop_alive(uv_default_loop())) {
+      if (!reactor_idle_gc(js)) ant_uv_run(uv_default_loop(), UV_RUN_ONCE);
+    } else break;
   
     process_report_uncaught_exception_if_pending(js);
   }

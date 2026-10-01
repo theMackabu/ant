@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 
 const SPEC_SKIP = new Set(['run.js', 'helpers.js']);
 const SPEC_MANUAL = new Set([]);
@@ -132,6 +132,14 @@ export function targets() {
     'test_generator_open_upvalue_gc.cjs',
     'test_gc_template_const_cache.cjs',
     'test_jit_literal_template_minor_gc.cjs',
+    'test_gc_array_cards.cjs',
+    'test_poly_field_ic.cjs',
+    'test_poly_field_store.cjs',
+    'test_jit_strict_mode.cjs',
+    'test_jit_define_slot.cjs',
+    'test_new_prototype_cache.cjs',
+    'test_jit_new_direct.cjs',
+    'test_jit_store_barrier.cjs',
     'test_regexp_lone_surrogates.cjs',
     'test_json_lone_surrogates.cjs',
     'test_timer_fired_timeout_gc.cjs',
@@ -323,6 +331,22 @@ export function targets() {
       ]
     }
   );
+
+  // React SSR through a request loop without I/O; needs `ant install` in
+  // tests/bench_ssr, since the harness doesn't install dependencies
+  list.push(existsSync('tests/bench_ssr/node_modules/react-dom')
+    ? {
+        group: 'perf',
+        type: 'demo',
+        name: 'bench_ssr',
+        entry: 'tests/bench_ssr/main.js',
+        checks: [
+          { name: 'rendered body', re: /@(\d+) <h1>Hello, world!<\/h1>/, min: 10000, max: 100000 },
+          { name: 'completed requests', re: /@(\d+) <h1>Hello, world!<\/h1>\ndone/, min: 100000, max: 100000 },
+          ms('time ms', /time: ([\d.]+) ms/, 200, 10000)
+        ]
+      }
+    : { group: 'perf', type: 'skip', name: 'bench_ssr', reason: 'run ant install in tests/bench_ssr' });
 
   list.push(
     {

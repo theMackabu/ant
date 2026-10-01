@@ -9,11 +9,9 @@ static constexpr size_t GC_MAJOR_MIN_PROMOTIONS = 4;
 static constexpr size_t GC_MIN_TICK = 1024;
 
 static constexpr uint32_t GC_MAJOR_EVERY_N_MINOR = 8;
-static constexpr uint32_t GC_MAJOR_TIME_SHARE_LOW  = 41;  // ~4%
-static constexpr uint32_t GC_MAJOR_TIME_SHARE_HIGH = 102; // ~10%
-
-static constexpr uint64_t GC_FORCE_INTERVAL_MS = 50;
-static constexpr uint64_t GC_FORCE_MAJOR_INTERVAL_MS = 1000;
+static constexpr uint32_t GC_MAJOR_TIME_SHARE_LOW  = 41;
+static constexpr uint32_t GC_MAJOR_TIME_SHARE_HIGH = 102;
+static constexpr uint32_t GC_MAJOR_WORK_SHARE_HIGH = 800;
 
 static constexpr size_t GC_NURSERY_THRESHOLD = 32768;
 static constexpr size_t GC_CLOSURE_NURSERY_THRESHOLD = 131072;
@@ -22,6 +20,7 @@ static constexpr size_t GC_CLOSURE_PROMOTED_MAJOR = 262144;
 static constexpr size_t GC_CLOSURE_MAJOR_GROWTH = 16u * 1024u * 1024u;
 static constexpr size_t GC_POOL_PRESSURE_FLOOR = 8u * 1024u * 1024u;
 static constexpr size_t GC_ROPE_NURSERY_THRESHOLD = 8u * 1024u * 1024u;
+static constexpr size_t GC_ARRAY_GROWTH_FLOOR = 16u * 1024u * 1024u;
 
 #define GC_OBJ_TYPE_MASK (T_FLAG_FIND(kTypeObject) \
   | T_FLAG_FIND(kTypeError)                        \
@@ -42,10 +41,18 @@ void gc_run(ant_t *js);
 void gc_run_minor(ant_t *js);
 void gc_maybe(ant_t *js);
 bool gc_alloc_due(ant_t *js);
+void gc_refresh_alloc_limit(ant_t *js);
+void gc_array_grew(ant_t *js);
+// the major trigger for array storage, from the heap as it is now
+void gc_array_limits_init(ant_t *js);
 void gc_alloc_check(ant_t *js);
 void gc_pressure(ant_t *js);
+bool gc_idle_wanted(ant_t *js);
+size_t gc_alloc_marker(ant_t *js);
+void gc_idle(ant_t *js, int64_t budget_ms);
 
 void gc_remember_add(ant_t *js, ant_object_t *obj);
+void gc_remember_props(ant_t *js, ant_object_t *obj);
 void gc_remember_upvalue(ant_t *js, struct sv_upvalue *uv);
 bool gc_upvalue_is_live(ant_t *js, const struct sv_upvalue *uv);
 void gc_remember_coroutine(ant_t *js, struct coroutine *coro);
@@ -85,6 +92,34 @@ static inline bool gc_value_ref_is_young(ant_value_t v) {
 static inline void gc_write_barrier(ant_t *js, ant_object_t *writer_obj, ant_value_t new_val) {
   if (writer_obj->flags.generation != 1) return;
   if (gc_value_is_heap_ref(new_val) && gc_value_ref_is_young(new_val)) gc_remember_add(js, writer_obj);
+}
+
+// For a store into a named property slot (ant_object_prop_set_unchecked): a
+// minor rescans every named slot of a remembered object, so an array's card
+// table, which covers only its dense storage, stays as it is.
+static inline void gc_write_barrier_prop(ant_t *js, ant_object_t *writer_obj, ant_value_t new_val) {
+  if (writer_obj->flags.generation != 1) return;
+  if (gc_value_is_heap_ref(new_val) && gc_value_ref_is_young(new_val)) gc_remember_props(js, writer_obj);
+}
+
+// For a store into an array's dense storage at idx: records the slot's card,
+// so a minor rescans that range rather than the whole array (see
+// gc_card_table_t).
+static inline void gc_write_barrier_elem(ant_t *js, ant_object_t *arr, uint32_t idx, ant_value_t new_val) {
+  if (arr->flags.generation != 1) return;
+  if (!gc_value_is_heap_ref(new_val) || !gc_value_ref_is_young(new_val)) return;
+  // too small for a card table (capacity never shrinks, so it never had
+  // one) and already remembered whole: nothing more to record
+  if (arr->flags.in_remember_set && arr->u.array.cap < GC_CARD_MIN_CAP) return;
+  gc_remember_element(js, arr, idx);
+}
+
+// After moving elements within an array (shift, splice, queue shifts): any
+// young reference it holds may now sit in a different card. An array that
+// isn't remembered holds none.
+static inline void gc_elements_moved(ant_t *js, ant_object_t *arr) {
+  (void)js;
+  if (arr->flags.in_remember_set) gc_cards_mark_all(arr);
 }
 
 #endif

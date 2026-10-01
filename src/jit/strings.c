@@ -417,7 +417,7 @@ static void mir_emit_short_string_concat(
     MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tmp), MIR_new_uint_op(ctx, (uint64_t)STR_ASCII_YES << STR_META_ASCII_SHIFT)));
   }
 
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, count), MIR_new_mem_op(ctx, MIR_T_U64, offsetof(ant_t, gc_pool_alloc), r_js, 0, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, count), MIR_new_mem_op(ctx, MIR_T_U64, offsetof(ant_t, gc.pool_alloc), r_js, 0, 1)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, count), MIR_new_reg_op(ctx, count), MIR_new_reg_op(ctx, len)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, count), MIR_new_reg_op(ctx, count), MIR_new_uint_op(ctx, sizeof(ant_flat_string_t) + 1)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBGE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, count), MIR_new_uint_op(ctx, GC_POOL_PRESSURE_FLOOR)));
@@ -454,7 +454,7 @@ static void mir_emit_short_string_concat(
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_SUB, MIR_new_reg_op(ctx, tmp), MIR_new_reg_op(ctx, tmp), MIR_new_uint_op(ctx, offsetof(ant_pool_block_t, data))));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_mem_op(ctx, MIR_T_U64, offsetof(ant_pool_block_t, used), current, 0, 1), MIR_new_reg_op(ctx, tmp)));
   MIR_append_insn(ctx, fn, allocated);
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_mem_op(ctx, MIR_T_U64, offsetof(ant_t, gc_pool_alloc), r_js, 0, 1), MIR_new_reg_op(ctx, count)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_mem_op(ctx, MIR_T_U64, offsetof(ant_t, gc.pool_alloc), r_js, 0, 1), MIR_new_reg_op(ctx, count)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_mem_op(ctx, MIR_T_U64, offsetof(ant_flat_string_t, len), ptr, 0, 1), MIR_new_reg_op(ctx, len)));
   mir_load_imm(ctx, fn, tmp, ((uint64_t)STR_ASCII_YES << STR_META_ASCII_SHIFT) | STR_UTF16_LEN_UNKNOWN);
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_mem_op(ctx, MIR_T_U64, offsetof(ant_flat_string_t, meta), ptr, 0, 1), MIR_new_reg_op(ctx, tmp)));
@@ -571,14 +571,14 @@ void mir_emit_string_concat_fastpath(
     MIR_append_insn(ctx, fn,
                     MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, count),
                                  MIR_new_mem_op(ctx, MIR_T_U64,
-                                                (MIR_disp_t)offsetof(ant_t, gc_pool_alloc), r_js, 0, 1)));
+                                                (MIR_disp_t)offsetof(ant_t, gc.pool_alloc), r_js, 0, 1)));
     MIR_append_insn(ctx, fn,
                     MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, count),
                                  MIR_new_reg_op(ctx, count), MIR_new_uint_op(ctx, sizeof(ant_rope_heap_t))));
     MIR_append_insn(ctx, fn,
                     MIR_new_insn(ctx, MIR_MOV,
                                  MIR_new_mem_op(ctx, MIR_T_U64,
-                                                (MIR_disp_t)offsetof(ant_t, gc_pool_alloc), r_js, 0, 1),
+                                                (MIR_disp_t)offsetof(ant_t, gc.pool_alloc), r_js, 0, 1),
                                  MIR_new_reg_op(ctx, count)));
 
     MIR_append_insn(ctx, fn,

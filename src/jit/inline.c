@@ -1682,7 +1682,7 @@ void jit_emit_inline_body(
           MIR_append_insn(ctx, jit_func, pf_slow);
         }
         MIR_append_insn(ctx, jit_func,
-                        MIR_new_call_insn(ctx, 9,
+                        MIR_new_call_insn(ctx, 10,
                                           MIR_new_ref_op(ctx, ext->put_field_proto),
                                           MIR_new_ref_op(ctx, ext->imp_put_field),
                                           MIR_new_reg_op(ctx, result),
@@ -1691,7 +1691,8 @@ void jit_emit_inline_body(
                                           MIR_new_reg_op(ctx, pf_obj),
                                           MIR_new_reg_op(ctx, pf_val),
                                           MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)pf_atom),
-                                          MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)pf_ic)));
+                                          MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)pf_ic),
+                                          MIR_new_int_op(ctx, callee->is_strict)));
         MIR_append_insn(ctx, jit_func,
                         MIR_new_insn(ctx, MIR_URSH,
                                      MIR_new_reg_op(ctx, r_bool),

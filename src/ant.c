@@ -2278,7 +2278,7 @@ static inline void dense_set(ant_t *js, ant_offset_t doff, ant_offset_t idx, ant
   if (!ptr || idx >= ptr->u.array.cap) return;
   ptr->u.array.data[idx] = val;
   if (!is_empty_slot(val)) ptr->flags.may_have_dense_elements = 1;
-  gc_write_barrier(js, ptr, val);
+  gc_write_barrier_elem(js, ptr, (uint32_t)idx, val);
 }
 
 static ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) {
@@ -2298,6 +2298,7 @@ static ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) 
   if (!next) return 0;
 
   js->alloc_bytes.arrays += (size_t)(new_cap - old_cap) * sizeof(*next);
+  gc_array_grew(js);
   for (ant_offset_t i = old_cap; i < new_cap; i++) next[i] = T_EMPTY;
 
   obj->u.array.data = next;
@@ -2553,6 +2554,7 @@ static ant_value_t alloc_array_with_proto_capacity(
   
   if (obj->u.array.data) {
     js->alloc_bytes.arrays += (size_t)obj->u.array.cap * sizeof(*obj->u.array.data);
+    gc_array_grew(js);
     uint32_t fill_start = overwritten_prefix < obj->u.array.cap
       ? overwritten_prefix
       : obj->u.array.cap;
@@ -11961,6 +11963,7 @@ static ant_value_t builtin_array_shift(ant_params_t) {
     ant_value_t first = dense_get(doff, 0);
     if (is_empty_slot(first)) first = js_mkundef();
     memmove(&d[0], &d[1], sizeof(ant_value_t) * (size_t)(d_len - 1));
+    gc_elements_moved(js, dense_obj(doff));
     dense_set(js, doff, d_len - 1, T_EMPTY);
     array_len_set(js, arr, len - 1);
     return first;
@@ -12034,6 +12037,7 @@ static ant_value_t builtin_array_unshift(ant_params_t) {
     ant_value_t *d = dense_data(doff);
     if (!d) return js_mkerr(js, "oom");
     memmove(&d[nargs], &d[0], sizeof(ant_value_t) * (size_t)d_len);
+    gc_elements_moved(js, dense_obj(doff));
     for (int i = 0; i < nargs; i++)
       dense_set(js, doff, (ant_offset_t)i, args[i]);
     array_len_set(js, arr, new_len);
@@ -12292,7 +12296,10 @@ static ant_value_t builtin_array_splice(ant_params_t) {
       ant_offset_t move_count = d_len - move_start;
       ant_value_t *d = dense_data(doff);
       if (!d) return js_mkerr(js, "oom");
-      if (move_count > 0) memmove(&d[move_dest], &d[move_start], sizeof(ant_value_t) * (size_t)move_count);
+      if (move_count > 0) {
+        memmove(&d[move_dest], &d[move_start], sizeof(ant_value_t) * (size_t)move_count);
+        gc_elements_moved(js, dense_obj(doff));
+      }
     }
 
     for (int i = 0; i < insertCount; i++)
@@ -19510,6 +19517,8 @@ void js_destroy(ant_t *js) {
   js_esm_cleanup_module_cache(js);
   sv_jit_destroy(js);
   sv_ic_shape_refs_cleanup(js);
+  free(js->ic.gf_mega);
+  js->ic.gf_mega = NULL;
   code_arena_reset();
   cleanup_rpc_module();
   cleanup_lmdb_module();

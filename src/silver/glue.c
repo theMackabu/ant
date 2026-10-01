@@ -1084,9 +1084,27 @@ static __attribute__((noinline)) ant_value_t jit_get_field_fallback(
   uint8_t *ip = NULL;
   if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
   sv_atom_t atom = { .str = str, .len = len };
+  
   ant_value_t out = sv_prop_get_field_ic(js, obj, &atom, func, ip);
+  sv_ic_entry_t *ic = ip ? sv_ic_slot_for_ip(func, ip) : NULL;
+  
+  if (ic && (ic->shape_ref_mask & SV_IC_POLY_MEGA) && func->jit_code &&
+      !(ic->shape_ref_mask & SV_IC_MEGA_COMPILED) &&
+      ++ic->slow_hits >= JIT_POLY_RECOMPILE_SLOW_HITS) {
+    ic->shape_ref_mask |= SV_IC_MEGA_COMPILED;
+    
+    sv_func_sidecar_t *sidecar = sv_func_ensure_sidecar(func);
+    
+    if (sidecar && sidecar->poly_recompiles < JIT_POLY_RECOMPILES) {
+      sidecar->poly_recompiles++;
+      func->tfb_version++;
+      func->jit_code = NULL;
+    }
+  }
+  
   if ((vtype(obj) == kTypeNull || vtype(obj) == kTypeUndefined) && is_err(out))
     jit_set_error_site_from_func(js, func, bc_off);
+  
   return out;
 }
 
@@ -1442,11 +1460,31 @@ ant_value_t jit_helper_put_field(
   return js_setprop(js, obj, key, val);
 }
 
+typedef struct { int fp; bool strict; } jit_mode_t;
+
+static inline jit_mode_t jit_mode_enter(ant_t *js, bool strict) {
+  sv_vm_t *vm = js->vm;
+  jit_mode_t saved = { vm->jit_mode_fp, vm->jit_mode_strict };
+  vm->jit_mode_fp = vm->fp;
+  vm->jit_mode_strict = strict;
+  return saved;
+}
+
+static inline void jit_mode_leave(ant_t *js, jit_mode_t saved) {
+  js->vm->jit_mode_fp = saved.fp;
+  js->vm->jit_mode_strict = saved.strict;
+}
+
 ant_value_t jit_helper_put_field_ic(
-  sv_vm_t *vm, ant_t *js, ant_value_t obj,
-  ant_value_t val, const sv_atom_t *atom, sv_ic_entry_t *ic
+  sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t val,
+  const sv_atom_t *atom, sv_ic_entry_t *ic, int strict
 ) {
-  return sv_put_field_cached(js, obj, val, atom, ic);
+  ant_value_t out;
+  if (sv_put_field_try_cached(js, obj, val, atom, ic, &out)) return out;
+  jit_mode_t saved = jit_mode_enter(js, strict != 0);
+  out = sv_put_field_miss(js, obj, val, atom, ic);
+  jit_mode_leave(js, saved);
+  return out;
 }
 
 void jit_helper_shape_transition(ant_object_t *obj, ant_shape_t *to_shape) {
@@ -1515,10 +1553,7 @@ ant_value_t jit_helper_put_global(
   return sv_global_put(js, str, len, val, is_strict != 0);
 }
 
-ant_value_t jit_helper_put_elem(
-  sv_vm_t *vm, ant_t *js,
-  ant_value_t obj, ant_value_t key, ant_value_t val
-) {
+static ant_value_t jit_put_elem(ant_t *js, ant_value_t obj, ant_value_t key, ant_value_t val) {
   if (vtype(key) == kTypeSymbol) return js_setprop_keyed(js, obj, key, val);
   if (vtype(key) == kTypeNumber) {
     double index = tod(key);
@@ -1528,6 +1563,26 @@ ant_value_t jit_helper_put_elem(
   }
   ant_value_t key_jv = sv_key_to_propstr(js, key);
   return js_setprop_keyed(js, obj, key_jv, val);
+}
+
+ant_value_t jit_helper_put_elem(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t obj, ant_value_t key, ant_value_t val
+) {
+  jit_mode_t saved = jit_mode_enter(js, false);
+  ant_value_t result = jit_put_elem(js, obj, key, val);
+  jit_mode_leave(js, saved);
+  return result;
+}
+
+ant_value_t jit_helper_put_elem_strict(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t obj, ant_value_t key, ant_value_t val
+) {
+  jit_mode_t saved = jit_mode_enter(js, true);
+  ant_value_t result = jit_put_elem(js, obj, key, val);
+  jit_mode_leave(js, saved);
+  return result;
 }
 
 ant_value_t jit_helper_object(
@@ -1731,7 +1786,7 @@ ant_value_t jit_helper_ge(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) 
   return SV_JIT_BAILOUT;
 }
 
-ant_value_t jit_helper_delete(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key) {
+static ant_value_t jit_delete(ant_t *js, ant_value_t obj, ant_value_t key) {
   ant_value_t key_str = js_mkundef();
 
   if (vtype(key) == kTypeSymbol)
@@ -1745,6 +1800,55 @@ ant_value_t jit_helper_delete(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value
     return js_delete_prop(js, obj, kptr, klen);
   }
   return mkval(kTypeBool, 0);
+}
+
+ant_value_t jit_helper_delete(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key) {
+  jit_mode_t saved = jit_mode_enter(js, false);
+  ant_value_t result = jit_delete(js, obj, key);
+  jit_mode_leave(js, saved);
+  return result;
+}
+
+ant_value_t jit_helper_delete_strict(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key) {
+  jit_mode_t saved = jit_mode_enter(js, true);
+  ant_value_t result = jit_delete(js, obj, key);
+  jit_mode_leave(js, saved);
+  return result;
+}
+
+ant_value_t jit_helper_new_this(ant_t *js, ant_value_t func, ant_value_t new_target, int32_t checked) {
+  sv_closure_t *closure;
+  if (checked) closure = js_func_closure(func);
+  else {
+    if (vtype(func) != kTypeFunction || new_target != func) return T_EMPTY;
+    closure = js_func_closure(func);
+    if (!sv_closure_is_plain_sync(closure) || closure->func->is_derived_ctor ||
+        !closure->func->jit_code) return T_EMPTY;
+  }
+  if (!is_object_type(closure->func_obj)) return T_EMPTY;
+
+  ant_object_t *func_obj = js_obj_ptr(closure->func_obj);
+  if (!func_obj->flags.is_constructor || sv_check_c_stack_overflow(js)) return T_EMPTY;
+
+  ant_value_t proto;
+  if (!sv_construct_prototype_data(js, func_obj, closure->func, &proto)) return T_EMPTY;
+
+  const sv_ctor_prop_fb_t *fb = &sv_func_sidecar(closure->func)->ctor_prop_fb;
+  uint8_t inobj_limit = fb->inobj_frozen
+    ? sv_tfb_clamp_inobj_limit(fb->inobj_limit) : (uint8_t)ANT_INOBJ_MAX_SLOTS;
+  
+  ant_value_t obj = js_mkobj_with_inobj_limit(js, inobj_limit);
+  if (vtype(obj) != kTypeObject) return T_EMPTY;
+  
+  js_obj_ptr(obj)->proto = proto;
+  
+  return obj;
+}
+
+ant_value_t jit_helper_new_result(ant_value_t func, ant_value_t obj, ant_value_t result) {
+  ant_value_t final_obj = is_object_type(result) ? result : obj;
+  sv_tfb_record_ctor_prop_count(func, final_obj);
+  return final_obj;
 }
 
 ant_value_t jit_helper_new(
@@ -1766,7 +1870,7 @@ ant_value_t jit_helper_new(
 
   ant_value_t proto = js_mkundef();
   if (func_obj && new_target == func && !(closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))) {
-    proto = sv_construct_prototype_from_object(js, func, func_obj);
+    proto = sv_construct_prototype_cached(js, func, func_obj, closure->func);
     if (is_err(proto)) return proto;
   } else if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
     proto = sv_prepare_construct_meta(js, func, new_target, &effective_new_target, &record_func);
