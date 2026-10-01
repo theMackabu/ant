@@ -12,7 +12,7 @@ const nonExtensible = () => Object.preventExtensions({});
 
 function throws(f, make) {
   let n = 0;
-  for (let i = 0; i < N; i++) { try { f(make()); } catch (e) { assert.ok(e instanceof TypeError || e instanceof Error); n++; } }
+  for (let i = 0; i < N; i++) { try { f(make()); } catch (e) { assert.ok(e instanceof TypeError, e); n++; } }
   return n;
 }
 
@@ -40,12 +40,12 @@ const strictStore = strict('o.y = 2;');
 (function () {
   'use strict';
   let n = 0;
-  for (let i = 0; i < N; i++) { try { sloppyStore(readOnly()); } catch (e) { n++; } }
+  for (let i = 0; i < N; i++) { try { sloppyStore(readOnly()); } catch (e) { assert.ok(e instanceof TypeError, e); n++; } }
   assert.strictEqual(n, 0);
 })();
 {
   let n = 0;
-  for (let i = 0; i < N; i++) { try { strictStore(readOnly()); } catch (e) { n++; } }
+  for (let i = 0; i < N; i++) { try { strictStore(readOnly()); } catch (e) { assert.ok(e instanceof TypeError, e); n++; } }
   assert.strictEqual(n, N);
 }
 
