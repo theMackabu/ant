@@ -218,6 +218,25 @@ bool sv_code_unit_retain_template(ant_t *js, sv_func_t *func, ant_value_t value)
   return true;
 }
 
+bool sv_code_units_watch_feedback(sv_func_t *func, sv_func_t *callee) {
+  if (func->fb_unit_watched) return true;
+  sv_code_units_t *u = &callee->unit->js->code_units;
+  
+  if (u->fb_watch_len >= u->fb_watch_cap) {
+    size_t cap = u->fb_watch_cap ? u->fb_watch_cap * 2 : 64;
+    sv_func_t **grown = realloc(u->fb_watch, cap * sizeof(*grown));
+    if (!grown) return false;
+    
+    u->fb_watch = grown;
+    u->fb_watch_cap = cap;
+  }
+  
+  u->fb_watch[u->fb_watch_len++] = func;
+  func->fb_unit_watched = true;
+  
+  return true;
+}
+
 static void func_free_sidecar(sv_func_t *func) {
   uintptr_t raw = (uintptr_t)func->type_feedback;
   if (!(raw & ant_sidecar)) return;
@@ -357,4 +376,8 @@ void sv_code_units_destroy(ant_t *js) {
   free(u->young_values);
   u->young_values = NULL;
   u->young_len = u->young_cap = 0;
+
+  free(u->fb_watch);
+  u->fb_watch = NULL;
+  u->fb_watch_len = u->fb_watch_cap = 0;
 }

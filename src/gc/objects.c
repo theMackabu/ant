@@ -503,6 +503,9 @@ static void gc_clear_dead_call_targets(ant_t *js) {
   for (size_t i = 0; i < js->gc.fb_len; i++)
     gc_func_clear_dead_targets(js, js->gc.fb_funcs[i]);
   js->gc.fb_len = 0;
+  sv_code_units_t *u = &js->code_units;
+  for (size_t i = 0; i < u->fb_watch_len; i++)
+    gc_func_clear_dead_targets(js, u->fb_watch[i]);
 }
 
 static void gc_func_worklists_trim(ant_t *js) {

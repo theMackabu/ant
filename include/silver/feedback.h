@@ -372,8 +372,15 @@ static inline void sv_tfb_ensure(sv_func_t *fn) {
 
 static inline void sv_tfb_record_call_target(sv_func_t *func, int bc_off, sv_func_t *callee) {
   if (!callee) return;
+  
+  if (
+    __builtin_expect(callee->unit && !func->unit && !func->fb_unit_watched, 0) && 
+    !sv_code_units_watch_feedback(func, callee)
+  ) return;
+  
   sv_call_target_fb_t *fb = func->call_target_fb;
   int count = func->call_target_fb_count;
+  
   for (int i = 0; i < count; i++) {
     if (fb[i].bc_off != (uint16_t)bc_off) continue;
     if (fb[i].disabled) return;
@@ -387,12 +394,14 @@ static inline void sv_tfb_record_call_target(sv_func_t *func, int bc_off, sv_fun
     func->tfb_version++;
     return;
   }
+  
   if (count >= SV_CALL_FB_MAX_SLOTS) return;
   if (!fb) {
     fb = calloc(SV_CALL_FB_MAX_SLOTS, sizeof(sv_call_target_fb_t));
     if (!fb) return;
     func->call_target_fb = fb;
   }
+  
   fb[count].bc_off = (uint16_t)bc_off;
   fb[count].target = callee;
   fb[count].miss_count = 0;

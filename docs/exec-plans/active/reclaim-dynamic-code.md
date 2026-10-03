@@ -195,6 +195,15 @@ Status (2026-09-23):
   compiling); unit liveness is decided by majors, and young literal templates
   are roots of their own. `tests/test_code_unit_minor.cjs`; verify build
   under `ANT_GC_STRESS` 97 and 211.
+- 2026-10-03 (review): weak call-target feedback was cleared only in
+  functions the major traced. A script or module function lives forever but
+  need not be traced (nothing reaches it any more), so a target it held in a
+  dead unit pointed into freed memory, for the JIT to read if the function
+  ran again. A function outside units now goes on `code_units.fb_watch` the
+  first time it records a unit target (`fb_unit_watched`), and every major
+  clears that list's dead targets; if the list cannot grow, the target is not
+  recorded. The list is bounded, since such functions are never freed.
+  `tests/test_code_unit_feedback.c` fails without the clearing.
 
 ## Follow-ups
 
