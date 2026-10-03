@@ -48,7 +48,7 @@ int main(void) {
   ant_object_t *ptr = js_obj_ptr(owner);
   assert(!ant_shape_may_have_gc_refs(ptr->shape));
   gc_run(js);
-  assert(gc_obj_is_marked(js_obj_ptr(ordinary)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(ordinary)));
 
   js_set(js, owner, "gc_accessor", js_mkundef());
   int32_t slot = ant_shape_lookup_interned(ptr->shape, intern_string("gc_accessor", 11));
@@ -63,10 +63,10 @@ int main(void) {
   ant_value_t symbol = js_mksym(js, "gc_shape_key");
   assert(!is_err(js_setprop(js, owner, symbol, js_mknum(7))));
   gc_run(js);
-  assert(gc_obj_is_marked(js_obj_ptr(ordinary)));
-  assert(gc_obj_is_marked(js_obj_ptr(getter)));
-  assert(gc_obj_is_marked(js_obj_ptr(setter)));
-  assert(js_symbol_gc_is_marked(symbol, gc_get_epoch()));
+  assert(gc_obj_is_marked(js, js_obj_ptr(ordinary)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(getter)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(setter)));
+  assert(js_symbol_gc_is_marked(symbol, gc_get_epoch(js)));
 
   ant_value_t young = js_mkobj(js);
   slot = ant_shape_lookup_interned(ptr->shape, intern_string("gc_accessor", 11));
@@ -75,7 +75,7 @@ int main(void) {
   prop->getter = young;
   gc_write_barrier(js, ptr, young);
   gc_run_minor(js);
-  assert(gc_obj_is_marked(js_obj_ptr(young)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(young)));
   GC_ROOT_RESTORE(js, roots);
   js_destroy(js);
   puts("PASS GC preserves ordinary values, descriptor references and copied prefixes");

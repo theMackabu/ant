@@ -320,6 +320,7 @@ static_assert(
 bool sv_ic_shape_ref_register(ant_t *js, ant_shape_t **slot);
 bool sv_ic_shape_ref_reserve(ant_t *js, size_t count);
 void sv_ic_shape_refs_cleanup(ant_t *js);
+void sv_ic_shape_refs_drop_dead(ant_t *js);
 
 typedef struct {
   uint32_t bc_off;
@@ -339,8 +340,8 @@ static constexpr uintptr_t SV_GF_IC_AUX_WARMUP_MASK = (uintptr_t)0xFFu;
 static constexpr uintptr_t SV_GF_IC_AUX_MISS_MASK   = (uintptr_t)0xFF00u;
 static constexpr uintptr_t SV_GF_IC_AUX_ACTIVE_BIT  = (uintptr_t)0x10000u;
 
-#define SV_GF_IC_AUX_ALL_MASK \
-  (SV_GF_IC_AUX_WARMUP_MASK | SV_GF_IC_AUX_MISS_MASK | SV_GF_IC_AUX_ACTIVE_BIT)
+#define SV_IC_SHAPE_SLOT_DEAD ((ant_shape_t *)(uintptr_t)1)
+#define SV_GF_IC_AUX_ALL_MASK (SV_GF_IC_AUX_WARMUP_MASK | SV_GF_IC_AUX_MISS_MASK | SV_GF_IC_AUX_ACTIVE_BIT)
 
 static inline uint8_t sv_gf_ic_warmup(uintptr_t aux) {
   return (uint8_t)(aux & SV_GF_IC_AUX_WARMUP_MASK);
@@ -355,8 +356,9 @@ static inline bool sv_gf_ic_active(uintptr_t aux) {
 }
 
 static inline uintptr_t sv_gf_ic_pack_aux(uint8_t warmup, uint8_t miss_streak, bool active) {
-  uintptr_t aux = ((uintptr_t)warmup & SV_GF_IC_AUX_WARMUP_MASK) |
-                  ((uintptr_t)miss_streak << SV_GF_IC_AUX_MISS_SHIFT);
+  uintptr_t aux = 
+    ((uintptr_t)warmup & SV_GF_IC_AUX_WARMUP_MASK) |
+    ((uintptr_t)miss_streak << SV_GF_IC_AUX_MISS_SHIFT);
   if (active) aux |= SV_GF_IC_AUX_ACTIVE_BIT;
   return aux;
 }
@@ -544,7 +546,14 @@ struct sv_func {
 
   bool jit_inline_reuse_checked: 1;
   bool jit_inline_reuse_empty: 1;
+
+  sv_code_unit_t *unit;
+  struct sv_func *unit_next;
 };
+
+static inline void sv_func_retain_for_jit(sv_func_t *func) {
+  if (func && func->unit) func->unit->immortal = true;
+}
 
 static inline const sv_map_template_desc_t *sv_map_template_desc_at(
   const sv_func_t *func, uint32_t index

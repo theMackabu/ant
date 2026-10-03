@@ -170,7 +170,8 @@ export function targets() {
     ['test_promise_resolution_fastpaths.mjs', 48],
     ['test_tla_repeated_await.mjs', 48],
     ['test_upvalue_gc.cjs', 384],
-    ['test_gc_closure_churn.cjs', 96]
+    ['test_gc_closure_churn.cjs', 96],
+    ['test_dynamic_code_reclaim.cjs', 64]
   ];
   for (const [f, maxRssMb] of ASYNC_TESTS) list.push({ group: 'async', type: 'test', name: `tests/${f}`, entry: `tests/${f}`, mem: true, maxRssMb });
 

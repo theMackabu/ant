@@ -48,6 +48,7 @@ ant_shape_t *ant_shape_clone_bulk(const ant_shape_t *shape, uint32_t extra);
 
 void ant_shape_retain(ant_shape_t *shape);
 void ant_shape_release(ant_shape_t *shape);
+void ant_shape_mark_jit_snapshot(ant_shape_t *shape);
 void ant_shape_transition_existing(ant_shape_t **shape_pp, ant_shape_t *to_shape);
 
 uint8_t ant_shape_get_inobj_limit(const ant_shape_t *shape);
@@ -80,7 +81,6 @@ bool ant_shape_may_have_gc_refs(const ant_shape_t *shape);
 uint32_t ant_shape_compact(ant_shape_t *shape);
 uint8_t ant_shape_get_attrs(const ant_shape_t *shape, uint32_t slot);
 
-const uint32_t *ant_shape_jit_guard(const ant_shape_t *shape);
 const ant_shape_prop_t *ant_shape_prop_at(const ant_shape_t *shape, uint32_t slot);
 ant_shape_prop_t *ant_shape_prop_mut_at(ant_shape_t *shape, uint32_t slot);
 

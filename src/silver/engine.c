@@ -117,6 +117,19 @@ fail:
   return false;
 }
 
+void sv_ic_shape_refs_drop_dead(ant_t *js) {
+  if (!js) return;
+  size_t out = 0;
+  
+  for (size_t i = 0; i < js->ic.shape_ref_len; i++) {
+    ant_shape_t **slot = js->ic.shape_ref_slots[i];
+    if (slot && *slot == SV_IC_SHAPE_SLOT_DEAD) continue;
+    js->ic.shape_ref_slots[out++] = slot;
+  }
+  
+  js->ic.shape_ref_len = out;
+}
+
 void sv_ic_shape_refs_cleanup(ant_t *js) {
   if (!js) return;
 
@@ -542,6 +555,8 @@ void js_set_error_site_from_bc(ant_t *js, sv_func_t *func, int bc_offset, const 
   } else return;
 
   js_set_error_site_lc(js, src, src_len, file, off, span_len, line, col);
+  js->errsite.unit = func->unit;
+  sv_code_unit_pin(func->unit);
 }
 
 void js_set_error_site_from_vm_top(ant_t *js) {
@@ -2856,7 +2871,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_PUT_CONST: {
     uint32_t idx = sv_get_u32(ip + 1);
     ant_value_t cached = vm->stack[--vm->sp];
-    VM_CHECK(gc_pin_permanent(js, cached) ? js_mkundef() : js_mkerr(js, "oom"));
+    VM_CHECK(sv_code_unit_retain_template(js, func, cached) ? js_mkundef() : js_mkerr(js, "oom"));
     func->constants[idx] = cached;
     NEXT(OP_PUT_CONST);
   }

@@ -483,6 +483,7 @@ void jit_emit_inline_body(
     MIR_item_t special_obj_proto, MIR_item_t imp_special_obj,
     const jit_inline_ext_t *ext
   ) {
+  sv_func_retain_for_jit(callee);
   if (!callee->is_strict && !callee->is_arrow) {
     bool uses_this = false;
     for (uint8_t *ip = callee->code; ip < callee->code + callee->code_len; ip += sv_op_size[*ip])
@@ -1994,6 +1995,7 @@ void jit_emit_inline_body(
                                      nc_this, r_bool, r_dv_bound);
           sv_func_t *reader = sv_tfb_get_call_target(callee, dv_off);
           if (ext->next_inline_id && jit_inline_reader_leaf(reader) && reader->code_len <= reader_budget) {
+            sv_func_retain_for_jit(reader);
             reader_budget -= reader->code_len;
             MIR_label_t dispatch = MIR_new_label(ctx);
             MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_BNE,

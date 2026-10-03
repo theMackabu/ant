@@ -9,6 +9,7 @@
 #include "silver/eval_env.h"
 
 typedef struct sv_eval_env_state {
+  sv_func_t *func;
   const sv_eval_scope_t *scope;
   uint32_t cell_count;
   ant_value_t arguments_obj;
@@ -81,6 +82,7 @@ static inline sv_eval_env_state_t *sv_eval_env_state_create(
   sv_eval_env_state_t *state = calloc(1, size);
   if (!state) return NULL;
 
+  state->func = frame->func;
   state->scope = scope;
   state->cell_count = scope->count;
   state->arguments_obj = frame->arguments_obj;

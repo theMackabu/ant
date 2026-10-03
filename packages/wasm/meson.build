@@ -70,6 +70,7 @@ core_sources = files(
   '../../src/gc/strings.c',
   '../../src/gc/weak.c',
   '../../src/silver/ast.c',
+  '../../src/silver/code_unit.c',
   '../../src/silver/compile_ctx.c',
   '../../src/silver/compiler.c',
   '../../src/silver/directives.c',

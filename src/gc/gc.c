@@ -56,7 +56,8 @@ static size_t gc_pool_live_bytes(ant_t *js) {
     + rope_old_stats.used
     + symbol_stats.used
     + bigint_stats.used
-    + string_stats.total.used;
+    + string_stats.total.used
+    + js->code_units.held_bytes;
 }
 
 size_t gc_live_major_threshold(ant_t *js) {

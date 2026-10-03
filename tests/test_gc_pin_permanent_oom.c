@@ -48,11 +48,11 @@ int main(void) {
   // the pin alone must now keep the parent traced, and so its child alive
   GC_ROOT_RESTORE(js, roots);
   gc_run(js);
-  assert(gc_obj_is_marked(js_obj_ptr(parent)));
-  assert(gc_obj_is_marked(js_obj_ptr(child)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(parent)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(child)));
   gc_run_minor(js);
   gc_run(js);
-  assert(gc_obj_is_marked(js_obj_ptr(child)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(child)));
 
   js_destroy(js);
   puts("PASS a failed permanent-root grow leaves the object unpinned and retryable");

@@ -29,17 +29,17 @@ int main(void) {
     js_arr_push(js, array, children[i]);
   }
   gc_run(js);
-  assert(gc_obj_is_marked(js_obj_ptr(array)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(array)));
   for (unsigned i = 0; i < 32; i++)
-    assert(gc_obj_is_marked(js_obj_ptr(children[i])));
+    assert(gc_obj_is_marked(js, js_obj_ptr(children[i])));
 
   // The old array's remembered edge must still retain a newly allocated child.
   ant_value_t young = js_mkobj(js);
   js_arr_push(js, array, young);
   gc_run_minor(js);
-  assert(gc_obj_is_marked(js_obj_ptr(young)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(young)));
   gc_run(js);
-  assert(gc_obj_is_marked(js_obj_ptr(young)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(young)));
 
   // Raw and tagged conservative candidates still take the validated path.
   ant_value_t raw_root = js_mkobj(js), tagged_root = js_mkobj(js);
@@ -49,10 +49,10 @@ int main(void) {
   conservative_words[0] = (uintptr_t)js_obj_ptr(raw_root);
   conservative_words[1] = tagged_root;
   gc_objects_run(js, mark_conservative_words);
-  assert(gc_obj_is_marked(js_obj_ptr(raw_root)));
-  assert(gc_obj_is_marked(js_obj_ptr(tagged_root)));
-  assert(gc_obj_is_marked(js_obj_ptr(raw_child)));
-  assert(gc_obj_is_marked(js_obj_ptr(tagged_child)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(raw_root)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(tagged_root)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(raw_child)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(tagged_child)));
   conservative_words[0] = conservative_words[1] = 0;
 
   GC_ROOT_RESTORE(js, roots);

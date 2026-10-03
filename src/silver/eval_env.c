@@ -18,6 +18,7 @@ void sv_eval_env_gc_mark(ant_t *js, ant_object_t *obj) {
   sv_eval_env_state_t *state = sv_eval_env_state(js_obj_from_ptr(obj));
   if (!state) return;
   
+  if (state->func) gc_mark_value(js, mkref(kTypeFunctionInfo, state->func));
   gc_mark_value(js, state->arguments_obj);
   gc_mark_upvalue_cells(js, state->cells, state->cell_count);
 }

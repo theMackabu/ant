@@ -140,7 +140,7 @@ static ant_value_t collect_native_target(ant_params_t) {
   assert(!Ant_Exception_Pending(js));
   assert(js->vm->native_frame && js->vm->native_frame->new_target == call_new_target);
   gc_run(js);
-  assert(gc_obj_is_marked(js_obj_ptr(call_new_target)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(call_new_target)));
   return call_new_target;
 }
 
@@ -152,9 +152,9 @@ static ant_value_t collect_finally_completion(ant_params_t) {
   assert(handler->completion.kind == SV_COMPLETION_RETURN);
   ant_value_t value = handler->completion.value;
   gc_run_minor(js);
-  assert(gc_obj_is_marked(js_obj_ptr(value)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(value)));
   gc_run(js);
-  assert(gc_obj_is_marked(js_obj_ptr(value)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(value)));
   assert(js_get(js, value, "answer") == js_mknum(42));
   return js_mkundef();
 }
@@ -189,7 +189,7 @@ static void CheckFinallyCompletionRoots(ant_t *js) {
   const char *resume = "globalThis.__finallyResult = __finallyGenerator.next().value;";
   assert(!is_err(js_eval_bytecode(js, resume, strlen(resume))));
   ant_value_t value = js_get(js, js->global, "__finallyResult");
-  assert(gc_obj_is_marked(js_obj_ptr(value)));
+  assert(gc_obj_is_marked(js, js_obj_ptr(value)));
   assert(js_get(js, value, "answer") == js_mknum(42));
   js_setstackbase(js, (void *)stack_base);
 }
@@ -253,7 +253,7 @@ static void CheckAwaitValueRoots(ant_t *js) {
     js_setstackbase(js, NULL);
     gc_run_minor(js);
     gc_run(js);
-    assert(gc_obj_is_marked(js_obj_ptr(value)));
+    assert(gc_obj_is_marked(js, js_obj_ptr(value)));
     assert(js_get(js, value, "answer") == js_mknum(42));
     if (cancel) {
       assert(coroutine_cancel(coro));
@@ -261,7 +261,7 @@ static void CheckAwaitValueRoots(ant_t *js) {
         // The cancelled direct job still owns and traces its queued value.
         gc_run_minor(js);
         gc_run(js);
-        assert(gc_obj_is_marked(js_obj_ptr(value)));
+        assert(gc_obj_is_marked(js, js_obj_ptr(value)));
       }
     }
     process_microtasks(js);
@@ -793,7 +793,7 @@ int main(void) {
     js_setstackbase(js, &stack_base);
     assert(success == target && js->vm->native_frame == parent_frame);
     assert(Ant_Exception_Peek(js) == caller_exception);
-    if (pending) assert(gc_obj_is_marked(js_obj_ptr(js_as_obj(caller_exception))));
+    if (pending) assert(gc_obj_is_marked(js, js_obj_ptr(js_as_obj(caller_exception))));
     Ant_Exception_Clear(js);
   }
 
@@ -816,7 +816,7 @@ int main(void) {
     if (i == 0) gc_run_minor(js);
     else gc_run(js);
     ant_value_t value = Ant_Exception_Value(js, retained);
-    assert(gc_obj_is_marked(js_obj_ptr(value)));
+    assert(gc_obj_is_marked(js, js_obj_ptr(value)));
     assert(js_get(js, value, "answer") == js_mknum(42));
     size_t stack_len = 0;
     const char *stack = js_getstr(js, Ant_Exception_Stack(js, retained), &stack_len);

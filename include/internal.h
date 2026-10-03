@@ -295,6 +295,14 @@ ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym);
 ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc);
 ant_value_t js_cfunc_expose_named(ant_t *js, ant_value_t cfunc, const char *name, size_t name_len);
 ant_value_t js_set_function_name(ant_t *js, ant_value_t fn, const char *name, size_t name_len);
+
+typedef enum {
+  JS_FUNC_SOURCE_COPY,
+  JS_FUNC_SOURCE_PINNED,
+  JS_FUNC_SOURCE_UNIT,
+} js_func_source_t;
+
+void js_set_func_source(ant_t *js, ant_value_t fn, const char *code, size_t len, js_func_source_t source);
 ant_value_t js_setprop_index(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t value);
 
 ant_value_t js_set_function_name_prefixed(

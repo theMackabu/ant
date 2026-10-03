@@ -113,4 +113,13 @@ test('closure in loop 0', gen[0](), 0);
 test('closure in loop 1', gen[1](), 1);
 test('closure in loop 2', gen[2](), 2);
 
+const AsyncFunction = (async () => {}).constructor;
+const GeneratorFunction = (function* () {}).constructor;
+const AsyncGeneratorFunction = (async function* () {}).constructor;
+test('empty Function source', String(new Function()), 'function anonymous(\n) {\n\n}');
+test('empty AsyncFunction source', String(AsyncFunction()), 'async function anonymous(\n) {\n\n}');
+test('empty GeneratorFunction source', String(GeneratorFunction()), 'function* anonymous(\n) {\n\n}');
+test('empty AsyncGeneratorFunction source', String(AsyncGeneratorFunction()), 'async function* anonymous(\n) {\n\n}');
+test('empty Function still callable', new Function()(), undefined);
+
 summary();

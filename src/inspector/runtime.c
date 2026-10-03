@@ -395,14 +395,14 @@ bool inspector_value_to_remote_object(ant_t *js, ant_value_t value, sbuf_t *out)
 bool inspector_append_call_location(ant_t *js, sbuf_t *b) {
   if (!js || !b) return true;
 
-  js_error_site_t saved = js->errsite;
+  js_error_site_t saved = js_error_site_save(js);
   js_clear_error_site(js);
 
   const char *filename = NULL;
   int line = 1;
   int column = 1;
   js_get_call_location(js, &filename, &line, &column);
-  js->errsite = saved;
+  js_error_site_restore(js, &saved);
 
   if (!filename || !*filename) return true;
   char *url = inspector_make_script_url(filename);

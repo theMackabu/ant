@@ -50,7 +50,7 @@ static void test_websocket_frames(void) {
   size_t frame_len = 0;
   uint8_t *encoded = ant_ws_encode_frame(ANT_WS_OPCODE_TEXT, hello, 5, true, false, &frame_len);
   check_bool("websocket masked encode", encoded != NULL, true);
-  check_bool("websocket masked parse", ant_ws_parse_frame(encoded, frame_len, true, false, &frame) == ANT_WS_FRAME_OK, true);
+  check_bool("websocket masked parse", ant_ws_parse_frame(encoded, frame_len, true, false, false, &frame) == ANT_WS_FRAME_OK, true);
   check_bool("websocket parsed masked flag", frame.masked, true);
   check_bool("websocket parsed text opcode", frame.opcode == ANT_WS_OPCODE_TEXT, true);
   check_str("websocket parsed text payload", (const char *)frame.payload, "hello");
@@ -59,7 +59,7 @@ static void test_websocket_frames(void) {
 
   encoded = ant_ws_encode_close_frame(1001, "bye", false, &frame_len);
   check_bool("websocket close encode", encoded != NULL, true);
-  check_bool("websocket close parse", ant_ws_parse_frame(encoded, frame_len, false, false, &frame) == ANT_WS_FRAME_OK, true);
+  check_bool("websocket close parse", ant_ws_parse_frame(encoded, frame_len, false, false, false, &frame) == ANT_WS_FRAME_OK, true);
   check_bool("websocket close opcode", frame.opcode == ANT_WS_OPCODE_CLOSE, true);
   check_size("websocket close payload length", frame.payload_len, 5);
   check_bool("websocket close code", frame.payload[0] == 0x03 && frame.payload[1] == 0xe9, true);
@@ -67,16 +67,16 @@ static void test_websocket_frames(void) {
   ant_ws_frame_clear(&frame);
   free(encoded);
 
-  const uint8_t unmasked[] = { 0x89, 0x01, 'x' };
-  check_bool("websocket unmasked client frame rejected", ant_ws_parse_frame(unmasked, sizeof(unmasked), true, false, &frame) == ANT_WS_FRAME_PROTOCOL_ERROR, true);
+  uint8_t unmasked[] = { 0x89, 0x01, 'x' };
+  check_bool("websocket unmasked client frame rejected", ant_ws_parse_frame(unmasked, sizeof(unmasked), true, false, false, &frame) == ANT_WS_FRAME_PROTOCOL_ERROR, true);
 
-  const uint8_t first[] = { 0x01, 0x02, 'h', 'i' };
-  const uint8_t continuation[] = { 0x80, 0x01, '!' };
-  check_bool("websocket fragmented first frame", ant_ws_parse_frame(first, sizeof(first), false, false, &frame) == ANT_WS_FRAME_OK, true);
+  uint8_t first[] = { 0x01, 0x02, 'h', 'i' };
+  uint8_t continuation[] = { 0x80, 0x01, '!' };
+  check_bool("websocket fragmented first frame", ant_ws_parse_frame(first, sizeof(first), false, false, false, &frame) == ANT_WS_FRAME_OK, true);
   check_bool("websocket fragmented first fin", frame.fin, false);
   check_bool("websocket fragmented first opcode", frame.opcode == ANT_WS_OPCODE_TEXT, true);
   ant_ws_frame_clear(&frame);
-  check_bool("websocket continuation frame", ant_ws_parse_frame(continuation, sizeof(continuation), false, false, &frame) == ANT_WS_FRAME_OK, true);
+  check_bool("websocket continuation frame", ant_ws_parse_frame(continuation, sizeof(continuation), false, false, false, &frame) == ANT_WS_FRAME_OK, true);
   check_bool("websocket continuation opcode", frame.opcode == ANT_WS_OPCODE_CONTINUATION, true);
   ant_ws_frame_clear(&frame);
 }

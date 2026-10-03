@@ -2,24 +2,15 @@
 #define ANT_ISOLATE_H
 
 #include "arena.h"
+#include "errors.h"
 #include "pool.h"
 #include "gc/objects.h"
+#include "silver/code_unit.h"
 #include "primordials.h"
 #include "descriptors.h"
 
 #include "esm/loader.h"
 #include "modules/json.h"
-
-typedef struct {
-  const char *src;
-  const char *filename;
-  ant_offset_t src_len;
-  ant_offset_t off;
-  ant_offset_t span_len;
-  uint32_t line;
-  uint32_t col;
-  bool valid;
-} js_error_site_t;
 
 typedef struct {
   ant_object_t *base;
@@ -250,8 +241,14 @@ struct ant_isolate_t {
     size_t mark_cap;
 
     gc_func_mark_profile_t func_profile;
-    uint32_t func_profile_depth;
-    uint64_t func_profile_start_ns;
+    sv_func_t **func_stack;
+    size_t func_sp;
+    size_t func_cap;
+    bool func_draining;
+    
+    sv_func_t **fb_funcs;
+    size_t fb_len;
+    size_t fb_cap;
   } gc;
 
   ant_object_t *objects_old;
@@ -268,6 +265,8 @@ struct ant_isolate_t {
   size_t permanent_root_len;
   size_t permanent_root_cap;
   size_t permanent_root_traced;
+
+  sv_code_units_t code_units;
 
   size_t remembered_upvalue_len;
   size_t remembered_upvalue_cap;

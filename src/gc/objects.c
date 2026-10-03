@@ -78,8 +78,6 @@ void gc_func_mark_profile_enable(ant_t *js, bool enabled) {
 void gc_func_mark_profile_reset(ant_t *js) {
   bool enabled = js->gc.func_profile.enabled;
   js->gc.func_profile = (gc_func_mark_profile_t){ .enabled = enabled };
-  js->gc.func_profile_depth = 0;
-  js->gc.func_profile_start_ns = 0;
 }
 
 gc_func_mark_profile_t gc_func_mark_profile_get(ant_t *js) {
@@ -302,6 +300,7 @@ void gc_track_young_upvalue_slow(ant_t *js, struct sv_upvalue *uv) {
 }
 
 static inline void gc_release_closure_payload(sv_closure_t *c) {
+  c->func = NULL;
   if (!(c->call_flags & SV_CALL_BORROWED_UPVALS) && c->upvalues != c->inline_upvals) free(c->upvalues);
   c->upvalues = NULL;
   if (c->call_flags & SV_CALL_HAS_BOUND_ARGS) free(c->u.bound.argv);
@@ -394,22 +393,80 @@ static inline void gc_mark_string_conservative(ant_t *js, ant_value_t w) {
   ) gc_mark_str(js, w);
 }
 
-static void gc_mark_func(ant_t *js, sv_func_t *func) {
-  if (!func) return;
-  if (func->gc_epoch == js->gc.epoch) return;
+static constexpr size_t GC_FUNC_WORKLIST_RETAIN = 1024;
+static void gc_func_trace(ant_t *js, sv_func_t *func);
 
-  bool prof = __builtin_expect(js->gc.func_profile.enabled, 0);
-  if (prof) {
-    if (js->gc.func_profile_depth++ == 0) js->gc.func_profile_start_ns = gc_now_ns();
+static void gc_func_push(ant_t *js, sv_func_t *func) {
+  if (js->gc.func_sp >= js->gc.func_cap) {
+    size_t cap = js->gc.func_cap ? js->gc.func_cap * 2 : 256;
+    sv_func_t **grown = realloc(js->gc.func_stack, cap * sizeof(*grown));
+    
+    if (!grown) {
+      gc_func_trace(js, func);
+      return;
+    }
+    
+    js->gc.func_stack = grown;
+    js->gc.func_cap = cap;
+  }
+  
+  js->gc.func_stack[js->gc.func_sp++] = func;
+}
+
+static void gc_code_unit_enqueue(ant_t *js, sv_code_unit_t *unit) {
+  if (unit->gc_epoch == js->gc.epoch) return;
+  unit->gc_epoch = js->gc.epoch;
+  
+  for (sv_func_t *func = unit->funcs; func; func = func->unit_next) {
+    if (func->gc_epoch == js->gc.epoch) continue;
+    func->gc_epoch = js->gc.epoch;
+    gc_func_push(js, func);
+  }
+}
+
+static void gc_func_enqueue(ant_t *js, sv_func_t *func) {
+  if (!func || func->gc_epoch == js->gc.epoch) return;
+  
+  if (func->unit) {
+    gc_code_unit_enqueue(js, func->unit);
+    return;
+  }
+  
+  func->gc_epoch = js->gc.epoch;
+  gc_func_push(js, func);
+}
+
+static bool gc_func_targets_unit(const sv_func_t *func) {
+  for (int i = 0; i < func->call_target_fb_count; i++) {
+    const sv_func_t *target = func->call_target_fb[i].target;
+    if (target && target->unit) return true;
+  }
+  
+  return false;
+}
+
+static bool gc_fb_reserve(ant_t *js) {
+  if (js->gc.fb_len < js->gc.fb_cap) return true;
+  size_t cap = js->gc.fb_cap ? js->gc.fb_cap * 2 : 256;
+  
+  sv_func_t **grown = realloc(js->gc.fb_funcs, cap * sizeof(*grown));
+  if (!grown) return false;
+  
+  js->gc.fb_funcs = grown;
+  js->gc.fb_cap = cap;
+  
+  return true;
+}
+
+static void gc_func_trace(ant_t *js, sv_func_t *func) {
+  if (__builtin_expect(js->gc.func_profile.enabled, 0)) {
     js->gc.func_profile.func_visits++;
     js->gc.func_profile.child_edges += (uint64_t)func->child_func_count;
     js->gc.func_profile.const_slots += (uint64_t)func->gc_const_slot_count;
   }
 
-  func->gc_epoch = js->gc.epoch;
-
   for (int i = 0; i < func->child_func_count; i++) 
-    gc_mark_func(js, func->child_funcs[i]);
+    gc_func_enqueue(js, func->child_funcs[i]);
     
   for (uint32_t i = 0; i < func->obj_site_count; i++) {
     if (!func->obj_sites) continue;
@@ -423,8 +480,67 @@ static void gc_mark_func(ant_t *js, sv_func_t *func) {
     gc_mark_value(js, v);
   }
 
-  if (prof && --js->gc.func_profile_depth == 0)
-    js->gc.func_profile.time_ns += gc_now_ns() - js->gc.func_profile_start_ns;
+  if (js->gc.minor || !gc_func_targets_unit(func)) return;
+  
+  if (gc_fb_reserve(js)) {
+    js->gc.fb_funcs[js->gc.fb_len++] = func;
+    return;
+  }
+
+  for (int i = 0; i < func->call_target_fb_count; i++)
+    gc_func_enqueue(js, func->call_target_fb[i].target);
+}
+
+static void gc_func_clear_dead_targets(ant_t *js, sv_func_t *func) {
+  for (int i = 0; i < func->call_target_fb_count; i++) {
+    sv_func_t *target = func->call_target_fb[i].target;
+    if (target && sv_code_unit_dying(target->unit, js->gc.epoch)) 
+      func->call_target_fb[i].target = NULL;
+  }
+}
+
+static void gc_clear_dead_call_targets(ant_t *js) {
+  for (size_t i = 0; i < js->gc.fb_len; i++)
+    gc_func_clear_dead_targets(js, js->gc.fb_funcs[i]);
+  js->gc.fb_len = 0;
+}
+
+static void gc_func_worklists_trim(ant_t *js) {
+  if (js->gc.func_cap > GC_FUNC_WORKLIST_RETAIN) {
+    free(js->gc.func_stack);
+    js->gc.func_stack = NULL;
+    js->gc.func_cap = 0;
+  }
+  
+  if (js->gc.fb_cap > GC_FUNC_WORKLIST_RETAIN) {
+    free(js->gc.fb_funcs);
+    js->gc.fb_funcs = NULL;
+    js->gc.fb_cap = 0;
+  }
+}
+
+static void gc_func_drain(ant_t *js) {
+  if (js->gc.func_draining) return;
+  js->gc.func_draining = true;
+
+  bool prof = __builtin_expect(js->gc.func_profile.enabled, 0);
+  uint64_t start_ns = prof ? gc_now_ns() : 0;
+
+  while (js->gc.func_sp) gc_func_trace(js, js->gc.func_stack[--js->gc.func_sp]);
+  if (prof) js->gc.func_profile.time_ns += gc_now_ns() - start_ns;
+  
+  js->gc.func_draining = false;
+}
+
+static inline void gc_mark_func(ant_t *js, sv_func_t *func) {
+  if (!func || func->gc_epoch == js->gc.epoch) return;
+  gc_func_enqueue(js, func);
+  gc_func_drain(js);
+}
+
+static void gc_mark_code_unit(ant_t *js, sv_code_unit_t *unit) {
+  gc_code_unit_enqueue(js, unit);
+  gc_func_drain(js);
 }
 
 void gc_mark_upvalue_cells(ant_t *js, sv_upvalue_t *const *cells, uint32_t count) {
@@ -486,12 +602,15 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
     return;
   }
 
-  if (!((1u << t) & GC_OBJ_TYPE_MASK)) return;
+  if (!((1u << t) & GC_OBJ_TYPE_MASK)) {
+    if (t == kTypeFunctionInfo) gc_mark_func(js, (sv_func_t *)vptr(v));
+    return;
+  }
+  
   ant_object_t *obj = (ant_object_t *)vptr(v);
-  
   uintptr_t offset = (uintptr_t)obj - (uintptr_t)js->obj_arena.base;
-  if (offset >= js->obj_arena.watermark) return;
   
+  if (offset >= js->obj_arena.watermark) return;
   gc_grey_obj(js, obj);
 }
 
@@ -979,6 +1098,28 @@ static inline void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd) 
     gc_mark_promise_handler(js, h);
 }
 
+static void gc_mark_code_unit_root(ant_t *js, sv_code_unit_t *unit) {
+  if (!unit->compiling) {
+    gc_mark_code_unit(js, unit);
+    return;
+  }
+  
+  for (uint32_t i = 0; i < unit->compile_root_count; i++)
+    gc_mark_value(js, unit->compile_roots[i]);
+}
+
+static void gc_mark_code_units(ant_t *js) {
+  sv_code_units_t *u = &js->code_units;
+
+  for (sv_code_unit_t *unit = u->pinned; unit; unit = unit->pinned_next)
+    gc_mark_code_unit_root(js, unit);
+
+  if (!js->gc.minor) for (sv_code_unit_t *unit = u->units; unit; unit = unit->next)
+    if (unit->immortal && !unit->pins) gc_mark_code_unit(js, unit);
+
+  for (size_t i = 0; i < u->young_len; i++) gc_mark_value(js, u->young_values[i]);
+}
+
 static void gc_mark_permanent_roots(ant_t *js) {
   size_t start = js->gc.minor ? js->permanent_root_traced : 0;
   for (size_t i = start; i < js->permanent_root_len; i++)
@@ -1044,6 +1185,7 @@ static void gc_mark_roots(ant_t *js) {
   gc_weak_mark_kept_alive(js, gc_mark_value);
   gc_visit_roots(js, gc_mark_value);
   gc_mark_permanent_roots(js);
+  gc_mark_code_units(js);
   gc_mark_timers(js, gc_mark_value);
   gc_mark_cron(js, gc_mark_value);
   gc_mark_atomics(js, gc_mark_value);
@@ -1366,6 +1508,7 @@ uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
   
   if (ant_gc_shapes_sweep()) ant_ic_epoch_bump();
   js->permanent_root_traced = js->permanent_root_len;
+  js->code_units.young_len = 0;
 
   ant_fixed_arena_t *ca = &js->closure_arena;
   ca->free_list = NULL;
@@ -1402,6 +1545,10 @@ uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
   js->young_closure_len = 0;
   js->young_upvalue_len = 0;
   js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
+
+  gc_clear_dead_call_targets(js);
+  sv_code_units_sweep(js, js->gc.epoch);
+  gc_func_worklists_trim(js);
 
   if (js->gc.mark_cap > GC_MARK_STACK_INIT) {
     size_t target = js->obj_arena.live_count * 2;
@@ -1465,6 +1612,7 @@ void gc_objects_run_minor(ant_t *js) {
   gc_sweep_young_and_promote(js);
   
   js->permanent_root_traced = js->permanent_root_len;
+  js->code_units.young_len = 0;
 
   gc_sweep_young_closures(js);
   gc_sweep_young_upvalues(js);

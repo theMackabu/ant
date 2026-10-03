@@ -34,7 +34,20 @@ typedef enum {
   JS_ERR_AGGREGATE,
 } js_err_type_t;
 
+typedef struct {
+  const char *src;
+  sv_code_unit_t *unit;
+  const char *filename;
+  ant_offset_t src_len;
+  ant_offset_t off;
+  ant_offset_t span_len;
+  uint32_t line;
+  uint32_t col;
+  bool valid;
+} js_error_site_t;
+
 js_err_type_t get_error_type(ant_t *js);
+js_error_site_t js_error_site_save(ant_t *js);
 
 bool print_uncaught_throw(ant_t *js);
 bool print_unhandled_promise_rejection(ant_t *js, ant_value_t value);
@@ -45,6 +58,7 @@ void js_print_stack_trace_vm(ant_t *js, FILE *stream);
 void js_set_error_site_from_vm_top(ant_t *js);
 void js_capture_stack(ant_t *js, ant_value_t err_obj);
 bool js_mark_errorlike_no_stack(ant_t *js, ant_value_t value);
+void js_error_site_restore(ant_t *js, const js_error_site_t *saved);
 
 void js_get_call_location(
   ant_t *js, const char **out_filename,

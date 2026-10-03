@@ -731,22 +731,23 @@ static bool mir_emit_get_field_shape_snapshot(
     sv_atom_t *atom, int bc_off, uint16_t ic_idx, MIR_reg_t obj,
     MIR_reg_t dst, MIR_label_t miss) {
   ant_shape_t *shape = ic->cached_shape;
-  const uint32_t *guard = ant_shape_jit_guard(shape);
   uint32_t index = ic->cached_index;
   const ant_shape_prop_t *prop = ant_shape_prop_at(shape, index);
-  // Virtual string/index properties can override ordinary slot lookup.
-  if (!js || !guard || *guard || !atom->len ||
+  if (!js || !shape || !atom->len ||
       (atom->str[0] >= '0' && atom->str[0] <= '9') ||
       !prop || prop->type != ANT_SHAPE_KEY_STRING || prop->key.interned != atom->str ||
       prop->has_getter || prop->has_setter) return false;
 
   // IC entries are mutable; keep an independent reference until code teardown.
-  // Retention also makes ordinary object metadata updates take the COW path.
+  // Retention also makes the shape shared, so any later metadata change gives
+  // the object a new shape, and the shape compare below is the whole metadata
+  // check; the mark makes an in-place edit fail loudly instead.
   ant_shape_t **root = code_arena_bump(sizeof(*root));
   if (!root) return false;
   *root = NULL;
   if (!sv_ic_shape_ref_register(js, root)) return false;
   ant_shape_retain(shape);
+  ant_shape_mark_jit_snapshot(shape);
   *root = shape;
 
   MIR_reg_t ptr = mir_new_ic_reg(ctx, fn, "gf_snapshot", "obj", bc_off, ic_idx);
@@ -760,11 +761,6 @@ static bool mir_emit_get_field_shape_snapshot(
       MIR_new_mem_op(ctx, MIR_T_P, offsetof(ant_object_t, shape), ptr, 0, 1)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
       MIR_new_label_op(ctx, miss), MIR_new_reg_op(ctx, tmp), MIR_new_reg_op(ctx, expect)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
-      MIR_new_reg_op(ctx, tmp), MIR_new_mem_op(ctx, MIR_T_U32,
-          (const char *)guard - (const char *)shape, expect, 0, 1)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
-      MIR_new_label_op(ctx, miss), MIR_new_reg_op(ctx, tmp), MIR_new_int_op(ctx, 0)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, tmp),
       MIR_new_mem_op(ctx, MIR_T_U16, offsetof(ant_object_t, flags), ptr, 0, 1)));

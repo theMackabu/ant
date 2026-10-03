@@ -223,6 +223,7 @@ void jit_emit_calls(jit_compile_t *c) {
           inline_callee = sv_tfb_get_call_target(c->func, c->bc_off);
         bool speculative = (inline_callee && !c->vs.known_func[c->vs.sp - call_argc - 1]);
         if (inline_callee && (!is_tail || inline_callee != c->func) && jit_inlineable(inline_callee)) {
+          sv_func_retain_for_jit(inline_callee);
           int cn = c->call_n++;
           int inl_arg_base = c->vs.sp - (int)call_argc;
           if (c->jit_try_depth > 0) {

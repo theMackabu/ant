@@ -1626,7 +1626,7 @@ ant_value_t jit_helper_object_template(sv_vm_t *vm, ant_t *js, sv_func_t *func, 
       ip += size + sv_op_size[OP_DEFINE_SLOT];
     }
     
-    if (!gc_pin_permanent(js, seed)) {
+    if (!sv_code_unit_retain_template(js, func, seed)) {
       GC_ROOT_RESTORE(js, mark);
       return js_mkerr(js, "oom");
     }

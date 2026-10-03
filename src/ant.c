@@ -1924,6 +1924,18 @@ static const struct func_format formats[] = {
   [3] = { "[AsyncGeneratorFunction: ", 25, "[AsyncGeneratorFunction (anonymous)]", 36 },
 };
 
+static inline bool func_has_code(ant_value_t code_val) {
+  uint8_t type = vtype(code_val);
+  return type == kTypeSourceCode || type == kTypeString;
+}
+
+static const char *func_code_text(ant_t *js, ant_value_t code_val) {
+  if (vtype(code_val) == kTypeSourceCode) return (const char *)vptr(code_val);
+  if (vtype(code_val) != kTypeString) return NULL;
+  ant_offset_t len = 0;
+  return (const char *)(uintptr_t)vstr(js, code_val, &len);
+}
+
 // todo: make it work with bytecode NAME
 static size_t strfunc(ant_t *js, ant_value_t value, char *buf, size_t len) {
   ant_offset_t name_len = 0;
@@ -1936,7 +1948,7 @@ static size_t strfunc(ant_t *js, ant_value_t value, char *buf, size_t len) {
   sv_closure_t *closure = js_func_closure(value);
   
   bool is_async = (async_slot == js_true);
-  bool has_code = (vtype(code_slot) == kTypeSourceCode);
+  bool has_code = func_has_code(code_slot);
   bool is_generator = closure != NULL && closure->func != NULL && closure->func->is_generator;
   
   const struct func_format *fmt = &formats[(is_generator ? 2 : 0) | (is_async ? 1 : 0)];
@@ -3298,11 +3310,20 @@ static ant_value_t get_slot(ant_value_t obj, internal_slot_t slot) {
   return obj_extra_get(ptr, slot);
 }
 
-static void set_func_code(ant_t *js, ant_value_t func_obj, const char *code, size_t len) {
-  const char *arena_code = code_arena_alloc(code, len);
-  if (!arena_code || !ant_cage_contains(arena_code)) return;
-  set_slot(func_obj, SLOT_CODE, mkref(kTypeSourceCode, arena_code));
-  set_slot(func_obj, SLOT_CODE_LEN, tov((double)len));
+void js_set_func_source(ant_t *js, ant_value_t fn, const char *code, size_t len, js_func_source_t source) {
+  ant_value_t text;
+  
+  if (source == JS_FUNC_SOURCE_UNIT) {
+    text = js_mkstr(js, code, len);
+    if (is_err(text)) return;
+  } else {
+    if (source == JS_FUNC_SOURCE_COPY || !ant_cage_contains(code)) code = code_arena_alloc(code, len);
+    if (!code || !ant_cage_contains(code)) return;
+    text = mkref(kTypeSourceCode, code);
+  }
+  
+  js_set_slot_wb(js, fn, SLOT_CODE, text);
+  js_set_slot(fn, SLOT_CODE_LEN, tov((double)len));
 }
 
 static inline ant_object_t *js_to_primitive_cache_object(ant_value_t value) {
@@ -3870,10 +3891,10 @@ static ant_value_t call_proto_accessor(
     if (vtype(symbol) == kTypeSymbol) return js_symbol_description_value(js, symbol);
   }
 
-  js_error_site_t saved_errsite = js->errsite;
+  js_error_site_t saved_errsite = js_error_site_save(js);
   ant_value_t result = sv_vm_call(js->vm, js, accessor, prim, arg, arg_count, NULL, js_mkundef());
   
-  js->errsite = saved_errsite;
+  js_error_site_restore(js, &saved_errsite);
   if (is_setter) return is_err(result) ? result : (arg ? *arg : js_mkundef());
 
   return result;
@@ -4082,9 +4103,9 @@ static ant_value_t setprop_impl(ant_t *js, ant_value_t obj, ant_value_t k, ant_v
       ant_value_t setter = desc_setter;
       uint8_t setter_type = vtype(setter);
       if (setter_type == kTypeFunction || setter_type == kTypeBuiltin) {
-        js_error_site_t saved_errsite = js->errsite;
+        js_error_site_t saved_errsite = js_error_site_save(js);
         ant_value_t result = sv_vm_call(js->vm, js, setter, obj, &v, 1, NULL, js_mkundef());
-        js->errsite = saved_errsite;
+        js_error_site_restore(js, &saved_errsite);
         if (is_err(result)) return result;
         return v;
       }
@@ -5926,12 +5947,19 @@ static ant_value_t builtin_Object(ant_params_t) {
 
 static ant_value_t builtin_function_empty(ant_params_t);
 
+static const char *const anonymous_templates[2][2] = {
+  { "function anonymous(\n) {\n\n}", "function* anonymous(\n) {\n\n}" },
+  { "async function anonymous(\n) {\n\n}", "async function* anonymous(\n) {\n\n}" },
+};
+
 static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_target, bool is_async, bool is_generator) {
   if (nargs == 0) {
     ant_value_t func_obj = mkobj(js, 0);
     if (is_err(func_obj)) return func_obj;
     
-    set_func_code(js, func_obj, "(){}", 4);
+    const char *source = anonymous_templates[!!is_async][!!is_generator];
+    js_set_func_source(js, func_obj, source, strlen(source), JS_FUNC_SOURCE_COPY);
+    
     if (is_async && is_generator) {
       set_slot(func_obj, SLOT_ASYNC, js_true);
       ant_value_t async_generator_proto = get_slot(js_glob(js), SLOT_ASYNC_GENERATOR_PROTO);
@@ -6022,11 +6050,17 @@ static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_t
   }
 
   sv_closure_t *closure = js_closure_alloc(js);
-  if (!closure) { free(code_buf); return js_mkerr(js, "oom"); }
+  if (!closure) {
+    sv_code_unit_unpin(compiled->unit);
+    free(code_buf);
+    return js_mkerr(js, "oom");
+  }
+  
   closure->func = compiled;
   closure->bound_this = js_mkundef();
   closure->call_flags = 0;
   closure->func_obj = func_obj;
+  sv_code_unit_unpin(compiled->unit);
 
   size_t params_len = (size_t)(pos - 2) - (size_t)body_len - 2;
   const char *async_prefix = is_async ? "async " : "";
@@ -6048,7 +6082,8 @@ static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_t
   memcpy(display + n, "\n}", 2);                        n += 2;
   
   display[n] = '\0';
-  set_func_code(js, func_obj, display, display_len);
+  js_set_func_source(js, func_obj, display, display_len,
+    compiled->unit ? JS_FUNC_SOURCE_UNIT : JS_FUNC_SOURCE_COPY);
   
   ant_value_t name_result = js_set_function_name(js, func_obj, "anonymous", 9);
   if (is_err(name_result)) {
@@ -6207,11 +6242,16 @@ static ant_value_t builtin_function_toString(ant_params_t) {
     return ANT_STRING("function() { [native code] }");
   }
   
+  sv_closure_t *bound = js_func_closure(func);
+  if (bound && (bound->call_flags & SV_CALL_HAS_BOUND_THIS))
+    return ANT_STRING("function () { [native code] }");
+
   ant_value_t func_obj = js_func_obj(func);
   ant_value_t cfunc_slot = get_slot(func_obj, SLOT_CFUNC);
   
   // TODO: make dry
-  if (vtype(cfunc_slot) == kTypeBuiltin) {
+  // native, unless it carries source text (a body-less dynamic function)
+  if (vtype(cfunc_slot) == kTypeBuiltin && !func_has_code(get_slot(func_obj, SLOT_CODE))) {
     ant_offset_t name_len = 0;
     const char *name = get_func_name(js, func, &name_len);
     if (name && name_len > 0) {
@@ -6231,8 +6271,8 @@ static ant_value_t builtin_function_toString(ant_params_t) {
   ant_value_t code_val = get_slot(func_obj, SLOT_CODE);
   ant_value_t len_val = get_slot(func_obj, SLOT_CODE_LEN);
   
-  if (vtype(code_val) == kTypeSourceCode && vtype(len_val) == kTypeNumber) {
-    const char *code = (const char *)vptr(code_val);
+  const char *code = func_code_text(js, code_val);
+  if (code && vtype(len_val) == kTypeNumber) {
     size_t code_len = (size_t)tod(len_val);
     
     if (code && code_len > 0) {
@@ -6240,7 +6280,7 @@ static ant_value_t builtin_function_toString(ant_params_t) {
       sv_closure_t *closure = js_func_closure(func);
       
       bool is_async = (async_slot == js_true);
-      bool is_arrow = (closure->call_flags & SV_CALL_IS_ARROW) != 0;
+      bool is_arrow = closure && (closure->call_flags & SV_CALL_IS_ARROW) != 0;
       
       if (is_arrow) {
         const char *paren_end = memchr(code, ')', code_len);
@@ -6554,12 +6594,6 @@ static ant_value_t builtin_function_bind(ant_params_t) {
   ant_value_t func_obj = js_func_obj(func);
   ant_value_t bound_func = mkobj(js, 0);
   if (is_err(bound_func)) return bound_func;
-
-  ant_value_t code_val = get_slot(func_obj, SLOT_CODE);
-  if (vtype(code_val) == kTypeString || vtype(code_val) == kTypeSourceCode) {
-    set_slot(bound_func, SLOT_CODE, code_val);
-    set_slot(bound_func, SLOT_CODE_LEN, get_slot(func_obj, SLOT_CODE_LEN));
-  }
 
   sv_closure_t *orig = js_func_closure(func);
   sv_closure_t *bound_closure = js_closure_alloc(js);
@@ -19520,7 +19554,10 @@ void js_destroy(ant_t *js) {
   sv_ic_shape_refs_cleanup(js);
   free(js->ic.gf_mega);
   free(js->gc.mark_stack);
+  free(js->gc.func_stack);
+  free(js->gc.fb_funcs);
   js->ic.gf_mega = NULL;
+  sv_code_units_destroy(js);
   code_arena_reset();
   cleanup_rpc_module();
   cleanup_lmdb_module();
@@ -20643,6 +20680,8 @@ static inline js_eval_result_t js_eval_bytecode_mode_result(
     : mode == SV_COMPILE_REPL
       ? js_execute_compiled_repl_bytecode(js, func, &async_coro)
       : js_execute_compiled_bytecode(js, func, NULL);
+
+  sv_code_unit_unpin(func->unit);
   
   return (js_eval_result_t){
     .value = value,

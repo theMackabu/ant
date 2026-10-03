@@ -37,7 +37,9 @@ int main(void) {
   assert(gc_ropes_mark(&js, young->data, size, align) == GC_ROPE_MARK_TRACE);
   assert(gc_ropes_mark(&js, young->data, size, align) == GC_ROPE_MARK_SKIP);
   assert(gc_ropes_mark(&js, young->data + size, size, align) == GC_ROPE_MARK_TRACE);
-  assert(gc_ropes_mark(&js, old->data, size, align) == GC_ROPE_MARK_SKIP);
+  // a minor does not index the old pool, so old ropes are not marked (callers
+  // only trace on GC_ROPE_MARK_TRACE)
+  assert(gc_ropes_mark(&js, old->data, size, align) == GC_ROPE_MARK_INVALID);
   assert(((ant_rope_heap_t *)old->data)->mark_epoch == 0);
 
   // Builders/chunks use a mixed pool with block marking, not per-rope epochs.
@@ -67,8 +69,11 @@ int main(void) {
   assert(gc_ropes_mark(&js, misc->data, misc->used, align) == GC_ROPE_MARK_TRACE);
   gc_ropes_sweep(&js, false);
   assert(gc_ropes_mark(&js, misc->data, misc->used, align) == GC_ROPE_MARK_INVALID);
+  // the major's sweep promoted the live young block, and a minor does not
+  // index the old pool
+  assert(js.rope_gc.old.head == young && js.rope_gc.young.head == NULL);
   assert(gc_ropes_begin(&js, true) == GC_ROPES_BEGIN_NORMAL);
-  assert(gc_ropes_mark(&js, young->data, size, align) == GC_ROPE_MARK_SKIP);
+  assert(gc_ropes_mark(&js, young->data, size, align) == GC_ROPE_MARK_INVALID);
 
   // A separate isolate has no ownership of the first isolate's pool blocks.
   ant_t other = {0};

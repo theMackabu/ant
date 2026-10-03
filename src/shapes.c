@@ -1,4 +1,5 @@
 #include "shapes.h"
+#include "ant.h"
 #include "hash.h"
 
 #include <stdlib.h>
@@ -95,7 +96,7 @@ struct ant_shape {
   ant_shape_prop_t *props;
   shape_index_entry_t *index;
   uint32_t index_mask;
-  uint32_t jit_invalid;
+  bool jit_snapshot;
   uint64_t first_child_key;
   ant_shape_t *first_child;
   shape_child_entry_t *children;
@@ -366,7 +367,7 @@ static bool shape_prepare_append(ant_shape_t *shape) {
 }
 
 static bool shape_prepare_metadata_write(ant_shape_t *shape) {
-  shape->jit_invalid = 1;
+  ANT_ASSERT(!shape->jit_snapshot, "snapshotted shape metadata written in place");
   shape_reclaim_descriptor_tail(shape->descriptors);
   
   return (
@@ -620,6 +621,10 @@ size_t ant_shape_storage_bytes(const ant_shape_t *shape) {
     (descriptors->index ? (size_t)(descriptors->index_mask + 1) * sizeof(*descriptors->index) : 0);
 }
 
+void ant_shape_mark_jit_snapshot(ant_shape_t *shape) {
+  if (shape) shape->jit_snapshot = true;
+}
+
 bool ant_shape_is_shared(const ant_shape_t *shape) {
   return shape && (shape->ref_count > 1 || shape->descriptors->ref_count > 1);
 }
@@ -733,10 +738,6 @@ bool ant_gc_shapes_sweep(void) {
 uint8_t ant_shape_get_inobj_limit(const ant_shape_t *shape) {
   if (!shape) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
   return shape_clamp_inobj_limit(shape->inobj_limit);
-}
-
-const uint32_t *ant_shape_jit_guard(const ant_shape_t *shape) {
-  return shape ? &shape->jit_invalid : NULL;
 }
 
 int32_t ant_shape_lookup_interned(const ant_shape_t *shape, const char *interned) {

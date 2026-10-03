@@ -1362,6 +1362,14 @@ void inspect_object(ant_t *js, ant_value_t obj, FILE *stream, int depth, inspect
     
     switch (slot) {
       case SLOT_CODE:
+        if (t == kTypeString) {
+          ant_offset_t code_len = 0;
+          vstr(js, slot_val, &code_len);
+          fprintf(stream, "<source, %llu bytes>", (unsigned long long)code_len);
+          break;
+        }
+        fprintf(stream, "<native ptr 0x%" PRIx64 ">", (uint64_t)vdata(slot_val));
+        break;
       case SLOT_CFUNC:
         fprintf(stream, "<native ptr 0x%" PRIx64 ">", (uint64_t)vdata(slot_val));
         break;
