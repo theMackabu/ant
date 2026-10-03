@@ -179,6 +179,14 @@ Status (2026-09-23):
   When a unit is freed, a function's constructor `prototype` cache
   registration is dropped with its IC slots before the sidecar is freed
   (`tests/test_code_unit_ctor_proto.c`).
+- 2026-10-03 (review): polymorphic read and store case blocks
+  (`sv_gf_poly_t`, `sv_pf_poly_t`) lived in the global code arena with their
+  shapes registered there, so a dead unit leaked its blocks and their shapes:
+  200k `new Function` calls over 4 receiver shapes peaked at 117 MiB (reads)
+  and 325 MiB (stores). Blocks are now malloc'd, own their shapes, sit on
+  per-isolate lists for teardown, and are freed with their IC
+  (`SV_IC_HAS_GET_POLY`/`SV_IC_HAS_PUT_POLY` say which union member is live)
+  when it goes megamorphic or its unit dies: 28 and 32 MiB.
 
 ## Follow-ups
 

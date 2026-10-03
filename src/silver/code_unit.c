@@ -227,7 +227,7 @@ static void func_free_sidecar(sv_func_t *func) {
   func->type_feedback = NULL;
 }
 
-static bool func_release(sv_func_t *func) {
+static bool func_release(ant_t *js, sv_func_t *func) {
   bool dropped_slots = false;
   uintptr_t raw = (uintptr_t)func->type_feedback;
   
@@ -256,6 +256,9 @@ static bool func_release(sv_func_t *func) {
 
   for (uint32_t i = 0; func->ic_slots && i < func->ic_count; i++) {
     sv_ic_entry_t *ic = &func->ic_slots[i];
+    sv_gf_poly_free(js, ic);
+    sv_pf_poly_free(js, ic);
+    
     ant_shape_t **slots[3] = {
       (ic->shape_ref_mask & SV_IC_SHAPE_REF_CACHED)   ? &ic->cached_shape         : NULL,
       (ic->shape_ref_mask & SV_IC_SHAPE_REF_ADD_FROM) ? &ic->guard.add.from_shape : NULL,
@@ -305,14 +308,13 @@ void sv_code_units_sweep(ant_t *js, uint64_t epoch) {
     u->unit_count--;
     
     for (sv_func_t *func = unit->funcs; func; func = func->unit_next)
-      dropped_slots |= func_release(func);  
+      dropped_slots |= func_release(js, func);  
     
     unit->next = dying;
     dying = unit;
   }
 
   if (!dying) return;
-
   if (dropped_slots) sv_ic_shape_refs_drop_dead(js);
 
   for (sv_code_unit_t *unit = dying, *next; unit; unit = next) {

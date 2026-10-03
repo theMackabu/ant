@@ -71,6 +71,8 @@ struct ant_isolate_t {
     size_t shape_ref_len;
     size_t shape_ref_cap;
     sv_gf_mega_cache_t *gf_mega;
+    sv_gf_poly_t *gf_polys;
+    sv_pf_poly_t *pf_polys;
   } ic;
 
   ant_value_t **c_roots;

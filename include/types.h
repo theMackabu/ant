@@ -35,6 +35,9 @@ typedef struct sv_eval_env_state    sv_eval_env_state_t;
 typedef struct sv_map_template_desc sv_map_template_desc_t;
 typedef struct sv_gf_mega_cache     sv_gf_mega_cache_t;
 
+typedef struct sv_gf_poly sv_gf_poly_t;
+typedef struct sv_pf_poly sv_pf_poly_t;
+
 typedef struct server_runtime_s    server_runtime_t;
 typedef struct server_request_s    server_request_t;
 typedef struct server_conn_state_s server_conn_state_t;

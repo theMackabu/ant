@@ -6,7 +6,6 @@
 
 #include "utf8.h"
 #include "shapes.h"
-#include "runtime.h"
 
 #include "modules/regex.h"
 #include "modules/symbol.h"
@@ -409,30 +408,19 @@ static __attribute__((noinline, cold)) void sv_gf_poly_keep(
 ) {
   if (ic->shape_ref_mask & SV_IC_POLY_MEGA) return;
   sv_gf_poly_t *poly = ic->guard.get.poly;
+  
   if (poly && poly->kept_epoch != ant_ic_epoch_counter) {
     poly->kept = 0;
     poly->kept_epoch = ant_ic_epoch_counter;
   }
+  
   if (poly && ++poly->kept > SV_GF_POLY_MEGA_KEPT) {
     ic->shape_ref_mask |= SV_IC_POLY_MEGA;
-    ic->guard.get.poly = NULL;
-    for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++) {
-      if (poly->entries[i].shape) ant_shape_release(poly->entries[i].shape);
-      poly->entries[i].shape = NULL;
-    }
+    sv_gf_poly_free(js, ic);
     return;
   }
-  if (!poly) {
-    if (!sv_ic_shape_ref_reserve(js, SV_GF_POLY_WAYS)) return;
-    poly = code_arena_bump(sizeof(*poly));
-    if (!poly) return;
-    memset(poly, 0, sizeof(*poly));
-    for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++)
-      sv_ic_shape_ref_register(js, &poly->entries[i].shape);
-    poly->kept_epoch = ant_ic_epoch_counter;
-    ic->guard.get.poly = poly;
-  }
-
+  
+  if (!poly && !(poly = sv_gf_poly_new(js, ic))) return;
   sv_gf_poly_entry_t *e = &poly->entries[poly->next];
   poly->next = (uint8_t)((poly->next + 1u) % SV_GF_POLY_WAYS);
 
@@ -1231,37 +1219,24 @@ static __attribute__((noinline, cold)) void sv_pf_poly_keep(
 ) {
   if (ic->shape_ref_mask & SV_IC_POLY_MEGA) return;
   sv_pf_poly_t *poly = ic->put_poly;
+  
   if (poly && poly->kept_epoch != ant_ic_epoch_counter) {
     poly->kept = 0;
     poly->kept_epoch = ant_ic_epoch_counter;
   }
+  
   if (poly && ++poly->kept > SV_GF_POLY_MEGA_KEPT) {
     ic->shape_ref_mask |= SV_IC_POLY_MEGA;
-    ic->put_poly = NULL;
-    for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++) {
-      sv_pf_poly_entry_t *e = &poly->entries[i];
-      if (e->shape) ant_shape_release(e->shape);
-      if (e->to_shape) ant_shape_release(e->to_shape);
-      e->shape = e->to_shape = NULL;
-    }
+    sv_pf_poly_free(js, ic);
     return;
   }
-  if (!poly) {
-    if (!sv_ic_shape_ref_reserve(js, 2 * SV_GF_POLY_WAYS)) return;
-    poly = code_arena_bump(sizeof(*poly));
-    if (!poly) return;
-    memset(poly, 0, sizeof(*poly));
-    for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++) {
-      sv_ic_shape_ref_register(js, &poly->entries[i].shape);
-      sv_ic_shape_ref_register(js, &poly->entries[i].to_shape);
-    }
-    poly->kept_epoch = ant_ic_epoch_counter;
-    ic->put_poly = poly;
-  }
-
+  
+  if (!poly && !(poly = sv_pf_poly_new(js, ic))) return;
   sv_pf_poly_entry_t *e = &poly->entries[poly->next];
+  
   poly->next = (uint8_t)((poly->next + 1u) % SV_GF_POLY_WAYS);
   ant_shape_retain(shape);
+  
   if (add) ant_shape_retain(to_shape);
   if (e->shape) ant_shape_release(e->shape);
   if (e->to_shape) ant_shape_release(e->to_shape);

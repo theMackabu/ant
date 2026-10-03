@@ -87,6 +87,101 @@ __attribute__((noinline, cold)) void sv_ic_identities_reset(ant_t *js) {
   }
 }
 
+#define SV_POLY_LINK(list, block) do { \
+  (block)->prev = NULL;                \
+  (block)->link_next = (list);         \
+  if (list) (list)->prev = (block);    \
+  (list) = (block);                    \
+} while (0)
+
+#define SV_POLY_UNLINK(list, block) do {                            \
+  if ((block)->prev) (block)->prev->link_next = (block)->link_next; \
+  else (list) = (block)->link_next;                                 \
+  if ((block)->link_next) (block)->link_next->prev = (block)->prev; \
+} while (0)
+
+sv_gf_poly_t *sv_gf_poly_new(ant_t *js, sv_ic_entry_t *ic) {
+  sv_gf_poly_t *poly = calloc(1, sizeof(*poly));
+  if (!poly) return NULL;
+  
+  poly->kept_epoch = ant_ic_epoch_counter;
+  SV_POLY_LINK(js->ic.gf_polys, poly);
+  
+  ic->guard.get.poly = poly;
+  ic->shape_ref_mask |= SV_IC_HAS_GET_POLY;
+  
+  return poly;
+}
+
+sv_pf_poly_t *sv_pf_poly_new(ant_t *js, sv_ic_entry_t *ic) {
+  sv_pf_poly_t *poly = calloc(1, sizeof(*poly));
+  if (!poly) return NULL;
+  
+  poly->kept_epoch = ant_ic_epoch_counter;
+  SV_POLY_LINK(js->ic.pf_polys, poly);
+  
+  ic->put_poly = poly;
+  ic->shape_ref_mask |= SV_IC_HAS_PUT_POLY;
+  
+  return poly;
+}
+
+static void sv_gf_poly_destroy(sv_gf_poly_t *poly) {
+  for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++)
+    if (poly->entries[i].shape) ant_shape_release(poly->entries[i].shape);
+  free(poly);
+}
+
+static void sv_pf_poly_destroy(sv_pf_poly_t *poly) {
+  for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++) {
+    if (poly->entries[i].shape) ant_shape_release(poly->entries[i].shape);
+    if (poly->entries[i].to_shape) ant_shape_release(poly->entries[i].to_shape);
+  }
+  free(poly);
+}
+
+void sv_gf_poly_free(ant_t *js, sv_ic_entry_t *ic) {
+  if (!(ic->shape_ref_mask & SV_IC_HAS_GET_POLY)) return;
+  sv_gf_poly_t *poly = ic->guard.get.poly;
+  
+  ic->guard.get.poly = NULL;
+  ic->shape_ref_mask &= (sv_ic_flags_t)~SV_IC_HAS_GET_POLY;
+  if (!poly) return;
+  
+  SV_POLY_UNLINK(js->ic.gf_polys, poly);
+  sv_gf_poly_destroy(poly);
+}
+
+void sv_pf_poly_free(ant_t *js, sv_ic_entry_t *ic) {
+  if (!(ic->shape_ref_mask & SV_IC_HAS_PUT_POLY)) return;
+  sv_pf_poly_t *poly = ic->put_poly;
+  
+  ic->put_poly = NULL;
+  ic->shape_ref_mask &= (sv_ic_flags_t)~SV_IC_HAS_PUT_POLY;
+  if (!poly) return;
+  
+  SV_POLY_UNLINK(js->ic.pf_polys, poly);
+  sv_pf_poly_destroy(poly);
+}
+
+void sv_ic_polys_cleanup(ant_t *js) {
+  for (sv_gf_poly_t *poly = js->ic.gf_polys, *next; poly; poly = next) {
+    next = poly->link_next;
+    sv_gf_poly_destroy(poly);
+  }
+  
+  for (sv_pf_poly_t *poly = js->ic.pf_polys, *next; poly; poly = next) {
+    next = poly->link_next;
+    sv_pf_poly_destroy(poly);
+  }
+  
+  js->ic.gf_polys = NULL;
+  js->ic.pf_polys = NULL;
+}
+
+#undef SV_POLY_LINK
+#undef SV_POLY_UNLINK
+
 bool sv_ic_shape_ref_reserve(ant_t *js, size_t count) {
   if (!js) return false;
   if (js->ic.shape_ref_cap - js->ic.shape_ref_len >= count) return true;

@@ -155,4 +155,17 @@ assert.strictEqual(kept.template(), templateBefore);
 assert.strictEqual(kept.str.length, 'escaped-literal-12345'.length);
 assert.strictEqual(kept.DefaultClass.toString(), 'class CollectedSource {}');
 
+// polymorphic read and store sites keep case blocks with shape references;
+// they go with the unit (the harness caps this test's RSS)
+{
+  const make = () => [{ a: 1 }, { b: 1, a: 2 }, { c: 1, a: 3 }, { d: 1, a: 4 }];
+  let sum = 0;
+  for (let i = 0; i < 60000; i++) {
+    const read = new Function('o', 'return o.a + ' + i);
+    const store = new Function('o', 'o.a = ' + i + '; o.z = 1; return o.a;');
+    for (const o of make()) sum += read(o) + store(o);
+  }
+  assert.ok(sum > 0);
+}
+
 console.log('PASS dynamic code is reclaimed and what escapes from it stays valid');

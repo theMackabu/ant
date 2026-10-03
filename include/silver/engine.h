@@ -178,11 +178,15 @@ typedef enum: uint8_t {
   SV_IC_SHAPE_REF_ADD_TO   = 1u << 2,
   SV_IC_POLY_MEGA          = 1u << 3,
   SV_IC_MEGA_COMPILED      = 1u << 4,
+  SV_IC_HAS_GET_POLY       = 1u << 5,
+  SV_IC_HAS_PUT_POLY       = 1u << 6,
 } sv_ic_flags_t;
 
 static_assert(
-  (SV_IC_SHAPE_REF_CACHED | SV_IC_SHAPE_REF_ADD_FROM | SV_IC_SHAPE_REF_ADD_TO | SV_IC_POLY_MEGA | SV_IC_MEGA_COMPILED) == 
-  (SV_IC_SHAPE_REF_CACHED + SV_IC_SHAPE_REF_ADD_FROM + SV_IC_SHAPE_REF_ADD_TO + SV_IC_POLY_MEGA + SV_IC_MEGA_COMPILED),
+  (SV_IC_SHAPE_REF_CACHED | SV_IC_SHAPE_REF_ADD_FROM | SV_IC_SHAPE_REF_ADD_TO | 
+  SV_IC_POLY_MEGA | SV_IC_MEGA_COMPILED | SV_IC_HAS_GET_POLY | SV_IC_HAS_PUT_POLY) ==
+  (SV_IC_SHAPE_REF_CACHED + SV_IC_SHAPE_REF_ADD_FROM + SV_IC_SHAPE_REF_ADD_TO + 
+  SV_IC_POLY_MEGA + SV_IC_MEGA_COMPILED + SV_IC_HAS_GET_POLY + SV_IC_HAS_PUT_POLY),
   "IC flags must not share bits"
 );
 
@@ -232,12 +236,13 @@ sv_gf_mega_cache_t *sv_gf_mega_ensure(ant_t *js);
 void sv_gf_mega_clear(ant_t *js);
 void sv_ic_identities_reset(ant_t *js);
 
-typedef struct sv_gf_poly {
+struct sv_gf_poly {
   sv_gf_poly_entry_t entries[SV_GF_POLY_WAYS];
   uint8_t next;
   uint32_t kept;
   uint32_t kept_epoch;
-} sv_gf_poly_t;
+  sv_gf_poly_t *prev, *link_next;
+};
 
 typedef struct {
   ant_shape_t *shape;
@@ -248,12 +253,18 @@ typedef struct {
   bool add;
 } sv_pf_poly_entry_t;
 
-typedef struct sv_pf_poly {
+struct sv_pf_poly {
   sv_pf_poly_entry_t entries[SV_GF_POLY_WAYS];
   uint8_t next;
   uint32_t kept;
   uint32_t kept_epoch;
-} sv_pf_poly_t;
+  sv_pf_poly_t *prev, *link_next;
+};
+
+static_assert(
+  offsetof(sv_gf_poly_t, entries) == 0, 
+  "compiled code walks poly entries from the block"
+);
 
 typedef struct {
   ant_shape_t *cached_shape;
@@ -309,6 +320,13 @@ static_assert(
   sizeof(sv_ic_entry_t) == 64,
   "IC entries must remain 64 bytes"
 );
+
+sv_gf_poly_t *sv_gf_poly_new(ant_t *js, sv_ic_entry_t *ic);
+sv_pf_poly_t *sv_pf_poly_new(ant_t *js, sv_ic_entry_t *ic);
+
+void sv_gf_poly_free(ant_t *js, sv_ic_entry_t *ic);
+void sv_pf_poly_free(ant_t *js, sv_ic_entry_t *ic);
+void sv_ic_polys_cleanup(ant_t *js);
 
 static_assert(
   offsetof(sv_ic_entry_t, get_kind) < 24 &&
