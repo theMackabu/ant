@@ -427,7 +427,7 @@ static void gc_code_unit_enqueue(ant_t *js, sv_code_unit_t *unit) {
 static void gc_func_enqueue(ant_t *js, sv_func_t *func) {
   if (!func || func->gc_epoch == js->gc.epoch) return;
   
-  if (func->unit) {
+  if (func->unit && !js->gc.minor) {
     gc_code_unit_enqueue(js, func->unit);
     return;
   }
@@ -1099,13 +1099,12 @@ static inline void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd) 
 }
 
 static void gc_mark_code_unit_root(ant_t *js, sv_code_unit_t *unit) {
-  if (!unit->compiling) {
-    gc_mark_code_unit(js, unit);
+  if (unit->compiling) {
+    for (uint32_t i = 0; i < unit->compile_root_count; i++)
+      gc_mark_value(js, unit->compile_roots[i]);
     return;
   }
-  
-  for (uint32_t i = 0; i < unit->compile_root_count; i++)
-    gc_mark_value(js, unit->compile_roots[i]);
+  if (!js->gc.minor) gc_mark_code_unit(js, unit);
 }
 
 static void gc_mark_code_units(ant_t *js) {

@@ -187,6 +187,14 @@ Status (2026-09-23):
   per-isolate lists for teardown, and are freed with their IC
   (`SV_IC_HAS_GET_POLY`/`SV_IC_HAS_PUT_POLY` say which union member is live)
   when it goes megamorphic or its unit dies: 28 and 32 MiB.
+- 2026-10-03 (review): a minor that reached one function of a unit queued
+  every function in the unit, and walked every pinned unit: one hot function
+  out of 5,000 in a `new Function` body took 1.33M function visits against
+  5.5k on master. Minors now trace only the function they reach and skip
+  finished pinned units (their compile roots are still marked while
+  compiling); unit liveness is decided by majors, and young literal templates
+  are roots of their own. `tests/test_code_unit_minor.cjs`; verify build
+  under `ANT_GC_STRESS` 97 and 211.
 
 ## Follow-ups
 

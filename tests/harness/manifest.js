@@ -135,6 +135,7 @@ export function targets() {
     'test_gc_array_cards.cjs',
     'test_poly_field_ic.cjs',
     'test_poly_field_store.cjs',
+    'test_code_unit_minor.cjs',
     'test_jit_strict_mode.cjs',
     'test_jit_define_slot.cjs',
     'test_new_prototype_cache.cjs',
