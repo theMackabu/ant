@@ -234,6 +234,7 @@ struct sv_gf_mega_cache {
 
 sv_gf_mega_cache_t *sv_gf_mega_ensure(ant_t *js);
 void sv_gf_mega_clear(ant_t *js);
+void sv_ic_polys_release_shapes(ant_t *js);
 void sv_ic_identities_reset(ant_t *js);
 
 struct sv_gf_poly {

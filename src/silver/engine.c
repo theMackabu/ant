@@ -164,6 +164,23 @@ void sv_pf_poly_free(ant_t *js, sv_ic_entry_t *ic) {
   sv_pf_poly_destroy(poly);
 }
 
+void sv_ic_polys_release_shapes(ant_t *js) {
+  for (sv_gf_poly_t *poly = js->ic.gf_polys; poly; poly = poly->link_next)
+    for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++) {
+      sv_gf_poly_entry_t *e = &poly->entries[i];
+      if (e->shape) ant_shape_release(e->shape);
+      e->shape = NULL;
+    }
+
+  for (sv_pf_poly_t *poly = js->ic.pf_polys; poly; poly = poly->link_next)
+    for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++) {
+      sv_pf_poly_entry_t *e = &poly->entries[i];
+      if (e->shape) ant_shape_release(e->shape);
+      if (e->to_shape) ant_shape_release(e->to_shape);
+      e->shape = e->to_shape = NULL;
+    }
+}
+
 void sv_ic_polys_cleanup(ant_t *js) {
   for (sv_gf_poly_t *poly = js->ic.gf_polys, *next; poly; poly = next) {
     next = poly->link_next;

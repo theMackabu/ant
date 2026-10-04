@@ -7,6 +7,7 @@ static constexpr int SV_JIT_MAX_CODE_BYTES = 64 * 1024;
 static constexpr uint32_t SV_JIT_OSR_THRESHOLD = 500;
 static constexpr uint32_t SV_JIT_OSR_THRESHOLD_SCALE_BYTES = 512;
 static constexpr int32_t JIT_GFP_MAX_CODE_LEN = 512;
+static constexpr int32_t JIT_NEW_DIRECT_MAX_CODE_LEN = 1024;
 static constexpr uint8_t JIT_POLY_RECOMPILES = 2;
 static constexpr uint16_t JIT_POLY_RECOMPILE_SLOW_HITS = 256;
 

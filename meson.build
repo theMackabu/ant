@@ -497,6 +497,15 @@ code_unit_ctor_proto_test = executable(
 )
 test('code-unit-ctor-proto', code_unit_ctor_proto_test)
 
+ic_poly_shape_release_test = executable(
+  'test-ic-poly-shape-release',
+  files('tests/test_ic_poly_shape_release.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('ic-poly-shape-release', ic_poly_shape_release_test)
+
 gc_two_isolates_test = executable(
   'test-gc-two-isolates',
   files('tests/test_gc_two_isolates.c'),

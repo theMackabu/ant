@@ -134,6 +134,7 @@ export function targets() {
     'test_jit_literal_template_minor_gc.cjs',
     'test_gc_array_cards.cjs',
     'test_poly_field_ic.cjs',
+    'test_ic_read_differential.cjs',
     'test_poly_field_store.cjs',
     'test_code_unit_minor.cjs',
     'test_jit_strict_mode.cjs',

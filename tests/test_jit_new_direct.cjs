@@ -88,4 +88,14 @@ let depthError = null;
 try { new Deep(1e6); } catch (e) { depthError = e; }
 assert.ok(depthError instanceof RangeError, 'deep recursion reports a RangeError');
 
+// a function over the direct-new size cap (JIT_NEW_DIRECT_MAX_CODE_LEN)
+// calls the helper; results and prototypes must be the same
+class Big { constructor(v) { this.v = v; } }
+const bigBody = [];
+for (let k = 0; k < 200; k++) bigBody.push(`s += new Big(i + ${k}).v;`);
+const bigNew = new Function('Big', 'i', `let s = 0; ${bigBody.join(' ')} return s;`);
+for (let i = 0; i < 3000; i++) assert.strictEqual(bigNew(Big, i), 200 * i + 19900);
+const lastBig = new Function('Big', 'return new Big(7);')(Big);
+assert.ok(lastBig instanceof Big && lastBig.v === 7);
+
 console.log('PASS compiled new calls constructors directly');
