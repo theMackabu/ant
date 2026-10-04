@@ -88,7 +88,9 @@ void *sv_code_unit_bump(sv_code_unit_t *unit, size_t size) {
   }
 
   if (unit->block_count == 0 || unit->blocks[unit->block_count - 1] != block) {
-    if (!vec_grow((void **)&unit->blocks, &unit->block_cap, unit->block_count + 1, sizeof(*unit->blocks), 8)) return NULL;
+    sv_code_block_t **blocks = vec_grow(unit->blocks, &unit->block_cap, unit->block_count + 1, sizeof(*blocks), 8);
+    if (!blocks) return NULL;
+    unit->blocks = blocks;
     unit->blocks[unit->block_count++] = block;
     block->live_units++;
   }
@@ -183,10 +185,13 @@ bool sv_code_unit_root(ant_t *js, ant_value_t value) {
   sv_code_unit_t *unit = js->code_units.active;
   if (!unit) return true;
   
-  if (!vec_grow(
-    (void **)&unit->compile_roots, &unit->compile_root_cap,
-    unit->compile_root_count + 1, sizeof(*unit->compile_roots), 8
-  )) return false;
+  ant_value_t *roots = vec_grow(
+    unit->compile_roots, &unit->compile_root_cap,
+    unit->compile_root_count + 1, sizeof(*roots), 8
+  );
+  
+  if (!roots) return false;
+  unit->compile_roots = roots;
   
   unit->compile_roots[unit->compile_root_count++] = value;
   return true;
@@ -196,10 +201,13 @@ bool sv_code_unit_retain_template(ant_t *js, sv_func_t *func, ant_value_t value)
   if (!func || !func->unit) return gc_pin_permanent(js, value);
 
   sv_code_units_t *u = &js->code_units;
-  if (!vec_grow(
-    (void **)&u->young_values, &u->young_cap,
-    u->young_len + 1, sizeof(*u->young_values), 64
-  )) return false;
+  ant_value_t *young = vec_grow(
+    u->young_values, &u->young_cap,
+    u->young_len + 1, sizeof(*young), 64
+  );
+  
+  if (!young) return false;
+  u->young_values = young;
   
   u->young_values[u->young_len++] = value;
   return true;
@@ -212,10 +220,14 @@ void sv_code_unit_make_immortal(sv_func_t *func) {
 bool sv_code_units_watch_feedback(sv_func_t *func, sv_func_t *callee) {
   if (func->fb_unit_watched) return true;
   sv_code_units_t *u = &callee->unit->js->code_units;
-  if (!vec_grow(
-    (void **)&u->fb_watch, &u->fb_watch_cap,
-    u->fb_watch_len + 1, sizeof(*u->fb_watch), 64
-  )) return false;
+  
+  sv_func_t **watch = vec_grow(
+    u->fb_watch, &u->fb_watch_cap,
+    u->fb_watch_len + 1, sizeof(*watch), 64
+  );
+  
+  if (!watch) return false;
+  u->fb_watch = watch;
   
   u->fb_watch[u->fb_watch_len++] = func;
   func->fb_unit_watched = true;

@@ -398,14 +398,17 @@ static constexpr size_t GC_FUNC_WORKLIST_RETAIN = 1024;
 static void gc_func_trace(ant_t *js, sv_func_t *func);
 
 static void gc_func_push(ant_t *js, sv_func_t *func) {
-  if (!vec_grow(
-    (void **)&js->gc.func_stack, &js->gc.func_cap,
-    js->gc.func_sp + 1, sizeof(*js->gc.func_stack), 256
-  )) {
+  sv_func_t **stack = vec_grow(
+    js->gc.func_stack, &js->gc.func_cap,
+    js->gc.func_sp + 1, sizeof(*stack), 256
+  );
+  
+  if (!stack) {
     gc_func_trace(js, func);
     return;
   }
   
+  js->gc.func_stack = stack;
   js->gc.func_stack[js->gc.func_sp++] = func;
 }
 
@@ -433,10 +436,15 @@ static void gc_func_enqueue(ant_t *js, sv_func_t *func) {
 }
 
 static bool gc_fb_reserve(ant_t *js) {
-  return vec_grow(
-    (void **)&js->gc.fb_funcs, &js->gc.fb_cap,
-    js->gc.fb_len + 1, sizeof(*js->gc.fb_funcs), 256
+  sv_func_t **funcs = vec_grow(
+    js->gc.fb_funcs, &js->gc.fb_cap,
+    js->gc.fb_len + 1, sizeof(*funcs), 256
   );
+  
+  if (!funcs) return false;
+  js->gc.fb_funcs = funcs;
+  
+  return true;
 }
 
 static void gc_func_trace(ant_t *js, sv_func_t *func) {
