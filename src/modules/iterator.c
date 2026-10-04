@@ -90,23 +90,33 @@ static bool advance_array(ant_t *js, iterator_t *it, ant_value_t *out) {
   uint32_t kind = iter_state_kind(state);
   uint32_t idx = iter_state_index(state);
   
+  // array-likes read through getters, which may throw; a pending exception
+  // ends the iteration instead of passing the error on as a value
   ant_offset_t len = iter_get_length(js, array);
-  if (idx >= (uint32_t)len) return false;
+  if (Ant_Exception_Pending(js) || idx >= (uint32_t)len) return false;
 
   switch (kind) {
     case ARR_ITER_KEYS:
       *out = js_mknum((double)idx);
       break;
     case ARR_ITER_ENTRIES: {
+      ant_value_t elem = iter_get_element(js, array, idx);
+      if (Ant_Exception_Pending(js)) return false;
+      GC_ROOT_SAVE(mark, js);
+      GC_ROOT_PIN(js, elem);
       ant_value_t pair = js_mkarr(js);
       js_arr_push(js, pair, js_mknum((double)idx));
-      js_arr_push(js, pair, iter_get_element(js, array, idx));
+      js_arr_push(js, pair, elem);
+      GC_ROOT_RESTORE(js, mark);
       *out = pair;
       break;
     }
-    default:
-      *out = iter_get_element(js, array, idx);
+    default: {
+      ant_value_t elem = iter_get_element(js, array, idx);
+      if (Ant_Exception_Pending(js)) return false;
+      *out = elem;
       break;
+    }
   }
 
   js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)iter_state_pack(kind, idx + 1)));

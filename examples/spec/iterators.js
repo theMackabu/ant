@@ -80,4 +80,17 @@ testThrows('string iterator rejects null', () => stringIterator.call(null));
 testThrows('string iterator rejects undefined', () => stringIterator.call(undefined));
 testThrows('string iterator rejects a symbol', () => stringIterator.call(Symbol('s')));
 
+// array-likes read through getters; one that throws ends the iteration
+const throwingLength = () => ({ get length() { throw new Error('length'); } });
+const throwingElement = () => ({ length: 2, get 0() { throw new Error('element'); }, 1: 'b' });
+testThrows('array iterator throws from a length getter', () => [...Array.prototype.values.call(throwingLength())]);
+testThrows('array iterator throws from an element getter', () => [...Array.prototype.values.call(throwingElement())]);
+testThrows('entries iterator throws from an element getter', () => [...Array.prototype.entries.call(throwingElement())]);
+for (const helper of ['every', 'some', 'find', 'forEach']) {
+  const seen = [];
+  testThrows(`${helper} throws from an element getter`, () => Array.prototype.values.call(throwingElement())[helper]((x) => { seen.push(x); return true; }));
+  test(`${helper} does not call back with a thrown element`, seen.length, 0);
+}
+test('entries iterator keeps getter results', JSON.stringify([...Array.prototype.entries.call({ length: 1, get 0() { return { fresh: 1 }; } })]), '[[0,{"fresh":1}]]');
+
 summary();
