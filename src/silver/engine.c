@@ -126,17 +126,30 @@ sv_pf_poly_t *sv_pf_poly_new(ant_t *js, sv_ic_entry_t *ic) {
   return poly;
 }
 
+static void sv_gf_poly_release(sv_gf_poly_t *poly) {
+  for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++) {
+    sv_gf_poly_entry_t *e = &poly->entries[i];
+    if (e->shape) ant_shape_release(e->shape);
+    e->shape = NULL;
+  }
+}
+
+static void sv_pf_poly_release(sv_pf_poly_t *poly) {
+  for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++) {
+    sv_pf_poly_entry_t *e = &poly->entries[i];
+    if (e->shape) ant_shape_release(e->shape);
+    if (e->to_shape) ant_shape_release(e->to_shape);
+    e->shape = e->to_shape = NULL;
+  }
+}
+
 static void sv_gf_poly_destroy(sv_gf_poly_t *poly) {
-  for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++)
-    if (poly->entries[i].shape) ant_shape_release(poly->entries[i].shape);
+  sv_gf_poly_release(poly);
   free(poly);
 }
 
 static void sv_pf_poly_destroy(sv_pf_poly_t *poly) {
-  for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++) {
-    if (poly->entries[i].shape) ant_shape_release(poly->entries[i].shape);
-    if (poly->entries[i].to_shape) ant_shape_release(poly->entries[i].to_shape);
-  }
+  sv_pf_poly_release(poly);
   free(poly);
 }
 
@@ -165,20 +178,8 @@ void sv_pf_poly_free(ant_t *js, sv_ic_entry_t *ic) {
 }
 
 void sv_ic_polys_release_shapes(ant_t *js) {
-  for (sv_gf_poly_t *poly = js->ic.gf_polys; poly; poly = poly->link_next)
-    for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++) {
-      sv_gf_poly_entry_t *e = &poly->entries[i];
-      if (e->shape) ant_shape_release(e->shape);
-      e->shape = NULL;
-    }
-
-  for (sv_pf_poly_t *poly = js->ic.pf_polys; poly; poly = poly->link_next)
-    for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++) {
-      sv_pf_poly_entry_t *e = &poly->entries[i];
-      if (e->shape) ant_shape_release(e->shape);
-      if (e->to_shape) ant_shape_release(e->to_shape);
-      e->shape = e->to_shape = NULL;
-    }
+  for (sv_gf_poly_t *poly = js->ic.gf_polys; poly; poly = poly->link_next) sv_gf_poly_release(poly);
+  for (sv_pf_poly_t *poly = js->ic.pf_polys; poly; poly = poly->link_next) sv_pf_poly_release(poly);
 }
 
 void sv_ic_polys_cleanup(ant_t *js) {

@@ -1697,7 +1697,8 @@ static sv_ast_t *parse_func(P, bool is_async) {
     fn->flags |= FN_GENERATOR;
   }
 
-  if (is_binding_ident_tok(NEXT())) {
+  NEXT();
+  if (binding_ident_here(p)) {
     fn->str = tok_ident_str(p, &fn->len);
     sv_strict_check_binding_ident(p, fn->str, fn->len);
     CONSUME();
@@ -1719,7 +1720,8 @@ static sv_ast_t *parse_func(P, bool is_async) {
 static sv_ast_t *parse_class(P) {
   sv_ast_t *cls = mk(N_CLASS);
 
-  if (is_binding_ident_tok(NEXT()) &&
+  NEXT();
+  if (binding_ident_here(p) &&
       !(TLEN == 7 && memcmp(tok_str(p), "extends", 7) == 0)) {
     cls->str = tok_ident_str(p, &cls->len);
     if (sv_strict_forbidden_binding_ident(cls->str, cls->len)) {

@@ -180,6 +180,8 @@ test('await is a name in scripts', indirectEval('var await = 4; await'), 4);
 test('await names a function in scripts', indirectEval('function await() { return 5 } await()'), 5);
 test('await as a call in scripts', indirectEval('function await(x) { return x } await (6)'), 6);
 test('await is reserved in async functions', indirectEval('async function f() { var await = 1 }'), 'SyntaxError');
+test('await cannot name a function in async code', indirectEval('async function f() { function await() {} }'), 'SyntaxError');
+test('await cannot name a class in async code', indirectEval('async function f() { class await {} }'), 'SyntaxError');
 test('await operand in a plain function', indirectEval('function f() { await x }'), 'SyntaxError');
 test('await in a plain arrow inside async', indirectEval('async function f() { () => await 1 }'), 'SyntaxError');
 test('await in an async arrow', typeof indirectEval('async x => await x'), 'function');

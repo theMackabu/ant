@@ -1390,7 +1390,9 @@ static void sv_func_finalize_type_data(
           (size_t)src->count * sizeof(sv_runtime_binding_t));
         for (uint32_t b = 0; b < src->count; b++) {
           sv_runtime_binding_t *binding = &bindings[binding_offset + b];
-          binding->name = copy_name(comp->js, binding->name, binding->len);
+          const char *name = copy_name(comp->js, binding->name, binding->len);
+          ANT_ASSERT(name != NULL || binding->len == 0, "failed to copy eval binding name");
+          binding->name = name;
         }
         binding_offset += src->count;
       }

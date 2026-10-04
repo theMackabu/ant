@@ -181,7 +181,11 @@ static ant_value_t js_syntax_parse_javascript(ant_params_t) {
   js_clear_error_site(js);
 
   code_arena_mark_t mark = parse_arena_mark();
-  sv_parse_goal_t goal = options.parse_mode == SYNTAX_PARSE_MODULE ? SV_PARSE_MODULE : SV_PARSE_SCRIPT;
+  
+  sv_parse_goal_t goal =
+    options.parse_mode == SYNTAX_PARSE_MODULE ? SV_PARSE_MODULE :
+    options.parse_mode == SYNTAX_PARSE_SCRIPT ? SV_PARSE_SCRIPT : SV_PARSE_DETECT;
+  
   sv_ast_t *program = sv_parse(js, source, (ant_offset_t)source_len, goal, false);
   
   if (!program) {
@@ -208,19 +212,6 @@ static ant_value_t js_syntax_parse_javascript(ant_params_t) {
     );
     js->filename = saved_filename;
     return error;
-  }
-
-  if (options.parse_mode == SYNTAX_PARSE_UNAMBIGUOUS && has_module_syntax) {
-    parse_arena_rewind(mark);
-    js_clear_error_site(js);
-    program = sv_parse(js, source, (ant_offset_t)source_len, SV_PARSE_MODULE, false);
-    
-    if (!program) {
-      parse_arena_rewind(mark);
-      js->filename = saved_filename;
-      if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
-      return js_mkerr_typed(js, JS_ERR_INTERNAL, "ant:syntax parser failed without an error");
-    }
   }
 
   const char *actual_source_type =
