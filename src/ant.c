@@ -5984,6 +5984,9 @@ static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_t
     }
     
     set_slot(func_obj, SLOT_CFUNC, js_mkfun(builtin_function_empty));
+    ant_value_t length_result = mkprop_interned_exact(js, func_obj, js->intern.length, tov(0), ANT_PROP_ATTR_CONFIGURABLE);
+    
+    if (is_err(length_result)) return length_result;
     ant_value_t name_result = js_set_function_name(js, func_obj, "anonymous", 9);
     
     if (is_err(name_result)) return name_result;
@@ -6005,21 +6008,21 @@ static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_t
     return func;
   }
   
-  size_t total_len = 1;
+  size_t params_len = 0;
   
   for (int i = 0; i < nargs - 1; i++) {
     args[i] = coerce_to_str(js, args[i]);
     if (is_err(args[i])) return args[i];
-    total_len += vstrlen(js, args[i]);
-    if (i < nargs - 2) total_len += 1;
+    params_len += vstrlen(js, args[i]);
+    if (i < nargs - 2) params_len += 1;
   }
-  
-  total_len += 2;
   
   ant_value_t body = coerce_to_str(js, args[nargs - 1]);
   if (is_err(body)) return body;
-  total_len += vstrlen(js, body);
-  total_len += 1;
+  size_t body_len = vstrlen(js, body);
+  
+  size_t body_open = 1 + params_len + 2;
+  size_t total_len = body_open + 1 + body_len + 2;
   
   char *code_buf = (char *)malloc(total_len + 1);
   if (!code_buf) return js_mkerr(js, "oom");
@@ -6032,20 +6035,25 @@ static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_t
     pos += param_len;
     if (i < nargs - 2) code_buf[pos++] = ',';
   }
-  code_buf[pos++] = ')';
-  code_buf[pos++] = '{';
-  ant_offset_t body_len, body_off = vstr(js, body, &body_len);
-  memcpy(code_buf + pos, (const void *)(uintptr_t)body_off, body_len);
+  
+  memcpy(code_buf + pos, "\n){", 3);
+  pos += 3;
+  
+  ant_offset_t body_str = vstr(js, body, NULL);
+  memcpy(code_buf + pos, (const void *)(uintptr_t)body_str, body_len);
   pos += body_len;
-  code_buf[pos++] = '}';
+  
+  memcpy(code_buf + pos, "\n}", 2);
+  pos += 2;
   code_buf[pos] = '\0';
 
   ant_value_t func_obj = mkobj(js, 0);
   if (is_err(func_obj)) { free(code_buf); return func_obj; }
 
-  sv_func_t *compiled = sv_compile_function(js, code_buf, pos, is_async, is_generator);
+  sv_func_t *compiled = sv_compile_function(js, code_buf, pos, body_open, is_async, is_generator);
   if (!compiled) {
     free(code_buf);
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "invalid function body");
   }
 
@@ -6062,12 +6070,11 @@ static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_t
   closure->func_obj = func_obj;
   sv_code_unit_unpin(compiled->unit);
 
-  size_t params_len = (size_t)(pos - 2) - (size_t)body_len - 2;
   const char *async_prefix = is_async ? "async " : "";
   const char *generator_marker = is_generator ? "*" : "";
   size_t async_len = is_async ? 6 : 0;
   size_t generator_len = is_generator ? 1 : 0;
-  size_t display_len = async_len + 19 + generator_len + params_len + 5 + (size_t)body_len + 2;
+  size_t display_len = async_len + 19 + generator_len + params_len + 5 + body_len + 2;
   char *display = (char *)malloc(display_len + 1);
   if (!display) { free(code_buf); return js_mkerr(js, "oom"); }
   size_t n = 0;
@@ -6078,14 +6085,22 @@ static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_t
   memcpy(display + n, " anonymous(", 11);               n += 11;
   memcpy(display + n, code_buf + 1, params_len);        n += params_len;
   memcpy(display + n, "\n) {\n", 5);                    n += 5;
-  memcpy(display + n, code_buf + 1 + params_len + 2, (size_t)body_len); n += (size_t)body_len;
+  memcpy(display + n, code_buf + body_open + 1, body_len); n += body_len;
   memcpy(display + n, "\n}", 2);                        n += 2;
   
   display[n] = '\0';
   js_set_func_source(js, func_obj, display, display_len,
     compiled->unit ? JS_FUNC_SOURCE_UNIT : JS_FUNC_SOURCE_COPY);
   
-  ant_value_t name_result = js_set_function_name(js, func_obj, "anonymous", 9);
+  ant_value_t length_result = mkprop_interned_exact(
+    js, func_obj, js->intern.length,
+    tov((double)compiled->function_length), ANT_PROP_ATTR_CONFIGURABLE
+  );
+  
+  ant_value_t name_result = is_err(length_result)
+    ? length_result
+    : js_set_function_name(js, func_obj, "anonymous", 9);
+  
   if (is_err(name_result)) {
     free(display);
     free(code_buf);
@@ -20558,8 +20573,8 @@ bool js_chkargs(ant_value_t *args, int nargs, const char *spec) {
 }
 
 sv_func_t *js_compile_parsed_bytecode(
-  ant_t *js, sv_ast_t *program,
-  const char *buf, size_t len, int mode_value
+  ant_t *js, sv_ast_t *program, const char *buf,
+  size_t len, int mode_value, ant_value_t eval_env
 ) {
   sv_compile_mode_t mode = (sv_compile_mode_t)mode_value;
 
@@ -20573,7 +20588,7 @@ sv_func_t *js_compile_parsed_bytecode(
     if (is_object_type(ns)) esm_predeclare_exports(js, program, ns);
   }
 
-  sv_func_t *func = sv_compile(js, program, mode, buf, (ant_offset_t)len);
+  sv_func_t *func = sv_compile(js, program, mode, buf, (ant_offset_t)len, eval_env);
   if (!func) {
     if (!Ant_Exception_Pending(js)) js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
     return NULL;
@@ -20663,7 +20678,7 @@ static inline js_eval_result_t js_eval_bytecode_mode_result(
     };
   }
 
-  sv_func_t *func = js_compile_parsed_bytecode(js, program, buf, len, mode);
+  sv_func_t *func = js_compile_parsed_bytecode(js, program, buf, len, mode, eval_env);
   parse_arena_rewind(parse_mark);
 
   if (!func) {

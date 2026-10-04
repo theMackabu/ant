@@ -218,6 +218,10 @@ bool sv_code_unit_retain_template(ant_t *js, sv_func_t *func, ant_value_t value)
   return true;
 }
 
+void sv_code_unit_make_immortal(sv_func_t *func) {
+  if (func && func->unit) func->unit->immortal = true;
+}
+
 bool sv_code_units_watch_feedback(sv_func_t *func, sv_func_t *callee) {
   if (func->fb_unit_watched) return true;
   sv_code_units_t *u = &callee->unit->js->code_units;
@@ -343,8 +347,19 @@ void sv_code_units_sweep(ant_t *js, uint64_t epoch) {
   }
 }
 
+static void units_check_pins(ant_t *js) {
+#ifndef NDEBUG
+  if (js->vm_exec_depth) return;
+  for (sv_code_unit_t *unit = js->code_units.pinned; unit; unit = unit->pinned_next) {
+    uint32_t pins = unit->pins - (unit == js->errsite.unit);
+    ANT_ASSERT(unit->immortal || pins == 0, "code unit still pinned at teardown (missing sv_code_unit_unpin)");
+  }
+#endif
+}
+
 void sv_code_units_destroy(ant_t *js) {
   sv_code_units_t *u = &js->code_units;
+  units_check_pins(js);
 
   for (sv_code_unit_t *unit = u->units, *next; unit; unit = next) {
     next = unit->next;

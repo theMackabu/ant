@@ -1339,8 +1339,10 @@ static ant_value_t esm_eval_ambiguous_js_source(
     
     sv_func_t *func = js_compile_parsed_bytecode(
       js, program, js_code, 
-      js_len, SV_COMPILE_MODULE
-    ); parse_arena_rewind(parse_mark);
+      js_len, SV_COMPILE_MODULE, js_mkundef()
+    ); 
+    
+    parse_arena_rewind(parse_mark);
     
     if (!func) {
       if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
@@ -1628,7 +1630,7 @@ static ant_value_t esm_eval_parsed_record(
 ) {
   sv_func_t *func = js_compile_parsed_bytecode(
     js, record->program, source,
-    source_len, SV_COMPILE_MODULE
+    source_len, SV_COMPILE_MODULE, js_mkundef()
   );
   
   esm_module_record_cleanup(record);

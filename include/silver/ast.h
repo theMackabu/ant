@@ -169,6 +169,7 @@ bool ast_contains_direct_eval(const sv_ast_t *node);
 bool ast_contains_lexical_new_target(const sv_ast_t *node);
 bool ast_contains_direct_suspend(const sv_ast_t *node, const sv_ast_t **out_offender);
 bool ast_contains_own_yield(const sv_ast_t *node, const sv_ast_t **out_offender);
+bool ast_pattern_binds(const sv_ast_t *node, const char *name);
 
 sv_ast_t *sv_ast_new(sv_node_type_t type);
 sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, bool strict);

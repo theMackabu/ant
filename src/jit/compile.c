@@ -127,7 +127,7 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
   }
 
   c->func->jit_compiling = true;
-  sv_func_retain_for_jit(c->func);
+  sv_code_unit_make_immortal(c->func);
   c->jc = c->js->jit_ctx;
 
   if (!c->jc) {

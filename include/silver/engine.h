@@ -571,10 +571,6 @@ struct sv_func {
   struct sv_func *unit_next;
 };
 
-static inline void sv_func_retain_for_jit(sv_func_t *func) {
-  if (func && func->unit) func->unit->immortal = true;
-}
-
 static inline const sv_map_template_desc_t *sv_map_template_desc_at(
   const sv_func_t *func, uint32_t index
 ) {

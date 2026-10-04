@@ -122,4 +122,60 @@ test('empty GeneratorFunction source', String(GeneratorFunction()), 'function* a
 test('empty AsyncGeneratorFunction source', String(AsyncGeneratorFunction()), 'async function* anonymous(\n) {\n\n}');
 test('empty Function still callable', new Function()(), undefined);
 
+function syntaxError(...args) {
+  try { new Function(...args); return 'ok'; }
+  catch (e) { return e instanceof SyntaxError ? 'SyntaxError' : String(e); }
+}
+
+test('missing statement separator', syntaxError('a b'), 'SyntaxError');
+test('missing separator after return value', syntaxError('return 1 2'), 'SyntaxError');
+test('missing separator after declaration', syntaxError('var a = 1 var b'), 'SyntaxError');
+test('missing separator after class field', syntaxError('class A { a = 1 b = 2 }'), 'SyntaxError');
+test('line break ends a statement', syntaxError('a\nb'), 'ok');
+test('closing brace ends a statement', syntaxError('{ a } b'), 'ok');
+test('do-while needs no separator', syntaxError('do ; while (0) x'), 'ok');
+test('unclosed condition', syntaxError('if (a ;'), 'SyntaxError');
+test('missing open paren', syntaxError('if a) ;'), 'SyntaxError');
+test('stray token in case', syntaxError('switch (x) { case 1 2: }'), 'SyntaxError');
+test('keyword as var name', syntaxError('var if = 1'), 'SyntaxError');
+test('number as var name', syntaxError('var 1 = 2'), 'SyntaxError');
+test('keyword as parameter', syntaxError('function f(default) {}'), 'SyntaxError');
+test('let as let name', syntaxError('let let = 1'), 'SyntaxError');
+test('let as const name', syntaxError('const let = 1'), 'SyntaxError');
+test('let in lexical pattern', syntaxError('let {let} = {}'), 'SyntaxError');
+test('let in for-of declaration', syntaxError('for (let let of []);'), 'SyntaxError');
+test('let as var name', syntaxError('var let = 1'), 'ok');
+test('let as class name', syntaxError('class let {}'), 'SyntaxError');
+test('unnamed function statement', syntaxError('function () {}'), 'SyntaxError');
+test('contextual words as names', syntaxError('var async, of, static; function yield() {} class await {}'), 'ok');
+
+test('parameters separated by space', syntaxError('a b', ''), 'SyntaxError');
+test('parameters closing early', syntaxError('x) { (function(', '})'), 'SyntaxError');
+test('body closing the function', syntaxError('})({'), 'SyntaxError');
+test('line comment ends a parameter', new Function('a // c', 'return a')(3), 3);
+test('line comment ends the body', new Function('return 4 // c')(), 4);
+test('Function source keeps the parts', String(new Function('a', 'b', 'return a + b')), 'function anonymous(a,b\n) {\nreturn a + b\n}');
+test('Function length', new Function('a', 'b', '').length, 2);
+test('Function length with default', new Function('a', 'b = 1', 'c', '').length, 1);
+test('empty Function length', new Function().length, 0);
+test('Function length is configurable only', JSON.stringify(Object.getOwnPropertyDescriptor(new Function('a', ''), 'length')), '{"value":1,"writable":false,"enumerable":false,"configurable":true}');
+
+test('export in Function body', syntaxError('export const a = 1'), 'SyntaxError');
+test('import in Function body', syntaxError('import x from "y"'), 'SyntaxError');
+test('nested export', syntaxError('if (1) export default 1'), 'SyntaxError');
+test('await in Function body', syntaxError('await 1'), 'SyntaxError');
+test('for await in Function body', syntaxError('for await (const x of []);'), 'SyntaxError');
+test('for await in plain function', syntaxError('function f() { for await (const x of []); }'), 'SyntaxError');
+test('for await in async function', syntaxError('async function f() { for await (const x of []); }'), 'ok');
+test('for await in eval', (() => { try { eval('for await (const x of []);'); return 'ok'; } catch (e) { return e.constructor.name; } })(), 'SyntaxError');
+
+test('undefined parameter shadows', new Function('undefined', 'return undefined')(5), 5);
+test('undefined var shadows', (function () { var undefined = 7; return undefined; })(), 7);
+test('captured undefined shadows', (function () { let undefined = 8; return () => undefined; })()(), 8);
+test('eval sees shadowed undefined', (function () { var undefined = 9; return eval('undefined'); })(), 9);
+test('with object shadows undefined', new Function('with ({ undefined: 11 }) return undefined')(), 11);
+test('globalThis var shadows', (function () { var globalThis = 12; return globalThis; })(), 12);
+test('unshadowed undefined', (function () { return undefined; })(), undefined);
+test('unshadowed globalThis', (function () { return globalThis; })() === globalThis, true);
+
 summary();

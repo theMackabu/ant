@@ -150,7 +150,6 @@ void jit_emit_methods(jit_compile_t *c) {
       if (!is_tail || c->jit_try_depth == 0) {
         sv_func_t *inline_callee = sv_tfb_get_call_target(c->func, c->bc_off);
         if (inline_callee && (!is_tail || inline_callee != c->func) && jit_inlineable(inline_callee)) {
-          sv_func_retain_for_jit(inline_callee);
           int mcn = c->call_n++;
           cm_devirt_slow = MIR_new_label(c->ctx);
           cm_devirt_join = MIR_new_label(c->ctx);

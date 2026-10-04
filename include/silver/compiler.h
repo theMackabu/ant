@@ -188,6 +188,11 @@ typedef struct sv_compiler {
   bool allows_new_target;
   bool inherits_eval_env;
   bool owns_eval_env;
+  bool function_ctor_root;
+  
+  // set on the root: the eval env binds these names, so they are not constants
+  bool eval_shadows_undefined;
+  bool eval_shadows_global_this;
 
   sv_eval_decl_t *eval_vars;
   uint32_t eval_var_count;
@@ -257,15 +262,24 @@ typedef struct sv_compiler {
 #define SV_PARAM(name_literal) \
   ((sv_param_t){ (name_literal), sizeof(name_literal) - 1 })
 
+// In the eval modes (sv_compile_mode_is_eval), and always for
+// sv_compile_function, the function comes back in its own code unit holding the
+// compile pin, so a GC before the caller links it anywhere cannot free it. The caller owns that pin and must release it
+// with sv_code_unit_unpin(func->unit) once the function is reachable (or no
+// longer needed); a forgotten unpin keeps the unit alive for the isolate's
+// lifetime. sv_code_units_destroy checks for leftover pins.
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program,
   sv_compile_mode_t mode,
-  const char *source, ant_offset_t source_len
+  const char *source, ant_offset_t source_len,
+  ant_value_t eval_env
 );
 
+// source is "(params){body}" with the '{' at body_open; the parameters and the
+// body must each parse on their own, as the Function constructor requires.
 sv_func_t *sv_compile_function(
-  ant_t *js, const char *source,
-  size_t len, bool is_async, bool is_generator
+  ant_t *js, const char *source, size_t len,
+  size_t body_open, bool is_async, bool is_generator
 );
 
 sv_func_t *sv_compile_function_with_params(

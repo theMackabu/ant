@@ -65,6 +65,7 @@ bool sv_code_unit_root(ant_t *js, ant_value_t value);
 bool sv_code_unit_retain_template(ant_t *js, sv_func_t *func, ant_value_t value);
 bool sv_code_units_watch_feedback(sv_func_t *func, sv_func_t *callee);
 
+void sv_code_unit_make_immortal(sv_func_t *func);
 void sv_code_unit_pin(sv_code_unit_t *unit);
 void sv_code_unit_unpin(sv_code_unit_t *unit);
 

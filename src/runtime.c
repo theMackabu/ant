@@ -104,14 +104,22 @@ static void *arena_bump(
     ? ((*current)->used + align_mask) & ~align_mask : 0;
     
   if (!*current || used + size > (*current)->capacity) {
-    code_block_t *new_block = code_arena_new_block(size);
-    
-    if (!new_block) return NULL;
-    if (!*head) *head = new_block;
-    else if (*current) (*current)->next = new_block;
-    
-    *current = new_block;
-    used = 0;
+    code_block_t *kept = *current ? (*current)->next : NULL;
+    if (kept && size <= kept->capacity) {
+      kept->used = 0;
+      *current = kept;
+      used = 0;
+    } else {
+      code_block_t *new_block = code_arena_new_block(size);
+      
+      if (!new_block) return NULL;
+      new_block->next = kept;
+      if (!*head) *head = new_block;
+      else if (*current) (*current)->next = new_block;
+      
+      *current = new_block;
+      used = 0;
+    }
   }
 
   void *ptr = &(*current)->data[used];
@@ -140,30 +148,29 @@ static void arena_rewind_plain(
   code_arena_mark_t mark
 ) {
   code_block_t *target = (code_block_t *)mark.block;
+  code_block_t *kept = target ? target->next : *head;
+  code_block_t *rest = kept;
+
+  if (kept && kept->capacity == CODE_ARENA_BLOCK_SIZE) {
+    rest = kept->next;
+    kept->used = 0;
+    kept->next = NULL;
+  } else kept = NULL;
+
+  while (rest) {
+    code_block_t *next = rest->next;
+    ant_cage_free(rest, rest->alloc_size);
+    rest = next;
+  }
 
   if (!target) {
-    code_block_t *block = *head;
-    while (block) {
-      code_block_t *next = block->next;
-      ant_cage_free(block, block->alloc_size);
-      block = next;
-    }
-    *head = NULL;
-    *current = NULL;
+    *head = kept;
+    *current = kept;
     return;
   }
 
-  size_t clamped_used = mark.used <= target->capacity ? mark.used : target->capacity;
-  target->used = clamped_used;
-
-  code_block_t *b = target->next;
-  while (b) {
-    code_block_t *next = b->next;
-    ant_cage_free(b, b->alloc_size);
-    b = next;
-  }
-
-  target->next = NULL;
+  target->used = mark.used <= target->capacity ? mark.used : target->capacity;
+  target->next = kept;
   *current = target;
 }
 
@@ -264,6 +271,8 @@ void parse_arena_rewind(code_arena_mark_t mark) {
 
 void parse_arena_reset(void) {
   parse_arena_rewind((code_arena_mark_t){0});
+  if (parse_arena_head) ant_cage_free(parse_arena_head, parse_arena_head->alloc_size);
+  parse_arena_head = parse_arena_current = NULL;
 }
 
 void code_arena_reset(void) {
