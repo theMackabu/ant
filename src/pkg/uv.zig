@@ -1,6 +1,11 @@
-// Struct layouts come from libuv's own headers: several of them differ on
-// Windows (uv_buf_t is { len, base } there so it can be cast to WSABUF).
+const builtin = @import("builtin");
+
 const c = @cImport({
+  if (builtin.os.tag.isDarwin()) {
+    @cInclude("mach/port.h");
+    @cUndef("xnu_static_assert_struct_size");
+    @cDefine("xnu_static_assert_struct_size(name, expected_size)", "");
+  }
   @cInclude("uv.h");
 });
 
