@@ -5,6 +5,7 @@
 #include "runtime.h"
 #include "gc/roots.h"
 #include "shapes.h"
+#include "utils.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -20,20 +21,6 @@ struct sv_code_block {
   uint32_t live_units;
   alignas(CODE_ARENA_ALIGNMENT) char data[];
 };
-
-static bool vec_grow(void **items, uint32_t *cap, uint32_t need, size_t elem) {
-  if (need <= *cap) return true;
-  uint32_t next = *cap ? *cap * 2 : 8;
-  
-  while (next < need) next *= 2;
-  void *grown = realloc(*items, (size_t)next * elem);
-  if (!grown) return false;
-  
-  *items = grown;
-  *cap = next;
-  
-  return true;
-}
 
 static sv_code_block_t *block_take(sv_code_units_t *u, size_t size) {
   const size_t block_size = SV_CODE_BLOCK_SIZE;
@@ -91,12 +78,17 @@ void *sv_code_unit_bump(sv_code_unit_t *unit, size_t size) {
   if (!block || block->used + size > block->capacity) {
     sv_code_block_t *fresh = block_take(u, size);
     if (!fresh) return NULL;
-    if (block && block->live_units == 0) block_release(u, block);
-    u->current = block = fresh;
+    
+    if (fresh->alloc_size == SV_CODE_BLOCK_SIZE) {
+      if (block && block->live_units == 0) block_release(u, block);
+      u->current = fresh;
+    }
+    
+    block = fresh;
   }
 
   if (unit->block_count == 0 || unit->blocks[unit->block_count - 1] != block) {
-    if (!vec_grow((void **)&unit->blocks, &unit->block_cap, unit->block_count + 1, sizeof(*unit->blocks))) return NULL;
+    if (!vec_grow((void **)&unit->blocks, &unit->block_cap, unit->block_count + 1, sizeof(*unit->blocks), 8)) return NULL;
     unit->blocks[unit->block_count++] = block;
     block->live_units++;
   }
@@ -185,7 +177,6 @@ void sv_code_unit_add_func(ant_t *js, sv_func_t *func) {
   func->unit = unit;
   func->unit_next = unit->funcs;
   unit->funcs = func;
-  unit->func_count++;
 }
 
 bool sv_code_unit_root(ant_t *js, ant_value_t value) {
@@ -194,7 +185,7 @@ bool sv_code_unit_root(ant_t *js, ant_value_t value) {
   
   if (!vec_grow(
     (void **)&unit->compile_roots, &unit->compile_root_cap,
-    unit->compile_root_count + 1, sizeof(*unit->compile_roots)
+    unit->compile_root_count + 1, sizeof(*unit->compile_roots), 8
   )) return false;
   
   unit->compile_roots[unit->compile_root_count++] = value;
@@ -205,14 +196,10 @@ bool sv_code_unit_retain_template(ant_t *js, sv_func_t *func, ant_value_t value)
   if (!func || !func->unit) return gc_pin_permanent(js, value);
 
   sv_code_units_t *u = &js->code_units;
-  if (u->young_len >= u->young_cap) {
-    size_t cap = u->young_cap ? u->young_cap * 2 : 64;
-    ant_value_t *grown = realloc(u->young_values, cap * sizeof(*grown));
-    if (!grown) return false;
-    
-    u->young_values = grown;
-    u->young_cap = cap;
-  }
+  if (!vec_grow(
+    (void **)&u->young_values, &u->young_cap,
+    u->young_len + 1, sizeof(*u->young_values), 64
+  )) return false;
   
   u->young_values[u->young_len++] = value;
   return true;
@@ -225,15 +212,10 @@ void sv_code_unit_make_immortal(sv_func_t *func) {
 bool sv_code_units_watch_feedback(sv_func_t *func, sv_func_t *callee) {
   if (func->fb_unit_watched) return true;
   sv_code_units_t *u = &callee->unit->js->code_units;
-  
-  if (u->fb_watch_len >= u->fb_watch_cap) {
-    size_t cap = u->fb_watch_cap ? u->fb_watch_cap * 2 : 64;
-    sv_func_t **grown = realloc(u->fb_watch, cap * sizeof(*grown));
-    if (!grown) return false;
-    
-    u->fb_watch = grown;
-    u->fb_watch_cap = cap;
-  }
+  if (!vec_grow(
+    (void **)&u->fb_watch, &u->fb_watch_cap,
+    u->fb_watch_len + 1, sizeof(*u->fb_watch), 64
+  )) return false;
   
   u->fb_watch[u->fb_watch_len++] = func;
   func->fb_unit_watched = true;
@@ -250,8 +232,7 @@ static void func_free_sidecar(sv_func_t *func) {
   func->type_feedback = NULL;
 }
 
-static bool func_release(ant_t *js, sv_func_t *func) {
-  bool dropped_slots = false;
+static void func_release(ant_t *js, sv_func_t *func) {
   uintptr_t raw = (uintptr_t)func->type_feedback;
   
   if (raw & ant_sidecar) {
@@ -260,7 +241,6 @@ static bool func_release(ant_t *js, sv_func_t *func) {
       ant_shape_t *shape = sidecar->ctor_proto_shape;
       sidecar->ctor_proto_shape = SV_IC_SHAPE_SLOT_DEAD;
       if (shape) ant_shape_release(shape);
-      dropped_slots = true;
     }
   } else free(func->type_feedback);
 
@@ -293,19 +273,24 @@ static bool func_release(ant_t *js, sv_func_t *func) {
       ant_shape_t *shape = *slots[k];
       *slots[k] = SV_IC_SHAPE_SLOT_DEAD;
       if (shape) ant_shape_release(shape);
-      dropped_slots = true;
     }
     
     ic->shape_ref_mask = 0;
   }
-
-  return dropped_slots;
 }
 
-static void unit_free_memory(sv_code_units_t *u, sv_code_unit_t *unit) {
+static void unit_free(ant_t *js, sv_code_unit_t *unit) {
+  sv_code_units_t *u = &js->code_units;
+  if (js->errsite.unit == unit) js_clear_error_site(js);
+  
+  for (sv_func_t *func = unit->funcs; func; func = func->unit_next) {
+    func_release(js, func);
+    func_free_sidecar(func);
+  }
+  
   u->held_bytes -= SV_CODE_UNIT_OVERHEAD;
   
-  for (uint32_t i = 0; i < unit->block_count; i++) {
+  for (size_t i = 0; i < unit->block_count; i++) {
     sv_code_block_t *block = unit->blocks[i];
     if (--block->live_units == 0 && block != u->current) block_release(u, block);
   }
@@ -318,7 +303,6 @@ static void unit_free_memory(sv_code_units_t *u, sv_code_unit_t *unit) {
 void sv_code_units_sweep(ant_t *js, uint64_t epoch) {
   sv_code_units_t *u = &js->code_units;
   sv_code_unit_t *dying = NULL;
-  bool dropped_slots = false;
 
   for (sv_code_unit_t **link = &u->units; *link;) {
     sv_code_unit_t *unit = *link;
@@ -330,30 +314,21 @@ void sv_code_units_sweep(ant_t *js, uint64_t epoch) {
     *link = unit->next;
     u->unit_count--;
     
-    for (sv_func_t *func = unit->funcs; func; func = func->unit_next)
-      dropped_slots |= func_release(js, func);  
-    
     unit->next = dying;
     dying = unit;
   }
 
-  if (!dying) return;
-  if (dropped_slots) sv_ic_shape_refs_drop_dead(js);
-
   for (sv_code_unit_t *unit = dying, *next; unit; unit = next) {
     next = unit->next;
-    for (sv_func_t *func = unit->funcs; func; func = func->unit_next) func_free_sidecar(func);
-    unit_free_memory(u, unit);
+    unit_free(js, unit);
   }
 }
 
 static void units_check_pins(ant_t *js) {
 #ifndef NDEBUG
   if (js->vm_exec_depth) return;
-  for (sv_code_unit_t *unit = js->code_units.pinned; unit; unit = unit->pinned_next) {
-    uint32_t pins = unit->pins - (unit == js->errsite.unit);
-    ANT_ASSERT(unit->immortal || pins == 0, "code unit still pinned at teardown (missing sv_code_unit_unpin)");
-  }
+  for (sv_code_unit_t *unit = js->code_units.pinned; unit; unit = unit->pinned_next)
+    ANT_ASSERT(unit->immortal, "code unit still pinned at teardown (missing sv_code_unit_unpin)");
 #endif
 }
 
@@ -363,14 +338,7 @@ void sv_code_units_destroy(ant_t *js) {
 
   for (sv_code_unit_t *unit = u->units, *next; unit; unit = next) {
     next = unit->next;
-    for (uint32_t i = 0; i < unit->block_count; i++) {
-      sv_code_block_t *block = unit->blocks[i];
-      if (--block->live_units == 0 && block != u->current) ant_cage_free(block, block->alloc_size);
-    }
-    
-    free(unit->blocks);
-    free(unit->compile_roots);
-    free(unit);
+    unit_free(js, unit);
   }
   
   u->units = NULL;

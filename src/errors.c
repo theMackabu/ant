@@ -726,7 +726,6 @@ void js_set_error_site_lc(
 ) {
   if (!js) return;
   
-  sv_code_unit_unpin(js->errsite.unit);
   js->errsite.unit = NULL;
   js->errsite.src = src;
   js->errsite.src_len = src_len;
@@ -757,7 +756,6 @@ void js_get_call_location(ant_t *js, const char **out_filename, int *out_line, i
 
 void js_clear_error_site(ant_t *js) {
   if (!js) return;
-  sv_code_unit_unpin(js->errsite.unit);
   memset(&js->errsite, 0, sizeof(js->errsite));
 }
 
@@ -767,8 +765,8 @@ js_error_site_t js_error_site_save(ant_t *js) {
 }
 
 void js_error_site_restore(ant_t *js, const js_error_site_t *saved) {
-  sv_code_unit_unpin(js->errsite.unit);
   js->errsite = *saved;
+  sv_code_unit_unpin(saved->unit);
 }
 
 static void resolve_error_site(

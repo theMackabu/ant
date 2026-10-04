@@ -180,13 +180,14 @@ typedef enum: uint8_t {
   SV_IC_MEGA_COMPILED      = 1u << 4,
   SV_IC_HAS_GET_POLY       = 1u << 5,
   SV_IC_HAS_PUT_POLY       = 1u << 6,
+  SV_IC_UNIT_OWNED         = 1u << 7,
 } sv_ic_flags_t;
 
 static_assert(
   (SV_IC_SHAPE_REF_CACHED | SV_IC_SHAPE_REF_ADD_FROM | SV_IC_SHAPE_REF_ADD_TO | 
-  SV_IC_POLY_MEGA | SV_IC_MEGA_COMPILED | SV_IC_HAS_GET_POLY | SV_IC_HAS_PUT_POLY) ==
+  SV_IC_POLY_MEGA | SV_IC_MEGA_COMPILED | SV_IC_HAS_GET_POLY | SV_IC_HAS_PUT_POLY | SV_IC_UNIT_OWNED) ==
   (SV_IC_SHAPE_REF_CACHED + SV_IC_SHAPE_REF_ADD_FROM + SV_IC_SHAPE_REF_ADD_TO + 
-  SV_IC_POLY_MEGA + SV_IC_MEGA_COMPILED + SV_IC_HAS_GET_POLY + SV_IC_HAS_PUT_POLY),
+  SV_IC_POLY_MEGA + SV_IC_MEGA_COMPILED + SV_IC_HAS_GET_POLY + SV_IC_HAS_PUT_POLY + SV_IC_UNIT_OWNED),
   "IC flags must not share bits"
 );
 
@@ -339,7 +340,6 @@ static_assert(
 bool sv_ic_shape_ref_register(ant_t *js, ant_shape_t **slot);
 bool sv_ic_shape_ref_reserve(ant_t *js, size_t count);
 void sv_ic_shape_refs_cleanup(ant_t *js);
-void sv_ic_shape_refs_drop_dead(ant_t *js);
 
 typedef struct {
   uint32_t bc_off;

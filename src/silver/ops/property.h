@@ -166,7 +166,8 @@ static inline void sv_ic_set_shape_ref(
   if (!ic || !slot || *slot == shape) return;
   
   if ((ic->shape_ref_mask & mask) == 0) {
-    if (!shape || !sv_ic_shape_ref_register(js, slot)) return;
+    if (!shape) return;
+    if (!(ic->shape_ref_mask & SV_IC_UNIT_OWNED) && !sv_ic_shape_ref_register(js, slot)) return;
     ic->shape_ref_mask |= mask;
   }
 

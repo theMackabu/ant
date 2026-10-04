@@ -29,7 +29,7 @@ static int unit_targets(const sv_func_t *func) {
 
 int main(void) {
   char stack_base;
-  // compiled code would make the unit immortal (sv_func_retain_for_jit)
+  // compiled code would make the unit immortal (sv_code_unit_make_immortal)
   sv_debug_enable(SV_DEBUG_JITLESS);
   ant_t *js = ant_create();
   assert(js);

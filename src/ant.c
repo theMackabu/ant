@@ -19483,6 +19483,8 @@ void js_destroy(ant_t *js) {
   
   js_esm_cleanup_module_cache(js);
   sv_jit_destroy(js);
+  
+  sv_code_units_destroy(js);
   sv_ic_shape_refs_cleanup(js);
   sv_ic_polys_cleanup(js);
   
@@ -19490,9 +19492,7 @@ void js_destroy(ant_t *js) {
   free(js->gc.mark_stack);
   free(js->gc.func_stack);
   free(js->gc.fb_funcs);
-  
   js->ic.gf_mega = NULL;
-  sv_code_units_destroy(js);
   
   code_arena_reset();
   cleanup_rpc_module();

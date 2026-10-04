@@ -177,18 +177,16 @@ static bool build_gc_const_tables(ant_t *js, sv_func_t *func) {
   if (child_count > 0) {
     func->child_funcs = sv_code_bump(js, (size_t)child_count * sizeof(sv_func_t *));
     if (!func->child_funcs) return false;
-    {
-      int out = 0;
-      
-      for (int i = 0; i < func->const_count; i++) {
-        if (vtype(func->constants[i]) != kTypeFunctionInfo) continue;
-        sv_func_t *child = (sv_func_t *)vptr(func->constants[i]);
-        child->parent = func;
-        func->child_funcs[out++] = child;
-      } 
-      
-      func->child_func_count = child_count;
+    
+    int out = 0;
+    for (int i = 0; i < func->const_count; i++) {
+      if (vtype(func->constants[i]) != kTypeFunctionInfo) continue;
+      sv_func_t *child = (sv_func_t *)vptr(func->constants[i]);
+      child->parent = func;
+      func->child_funcs[out++] = child;
     }
+    
+    func->child_func_count = child_count;
   }
 
   uint8_t *marked_slots = calloc((size_t)func->const_count, sizeof(uint8_t));
@@ -225,18 +223,30 @@ static bool build_gc_const_tables(ant_t *js, sv_func_t *func) {
       free(marked_slots);
       return false;
     }
-    {
-      int out = 0;
-      for (int i = 0; i < func->const_count; i++) {
-        if (!marked_slots[i]) continue;
-        func->gc_const_slots[out++] = (uint32_t)i;
-      }
-      func->gc_const_slot_count = slot_count;
+    
+    int out = 0;
+    for (int i = 0; i < func->const_count; i++) {
+      if (!marked_slots[i]) continue;
+      func->gc_const_slots[out++] = (uint32_t)i;
     }
+    
+    func->gc_const_slot_count = slot_count;
   }
 
   free(marked_slots);
   return true;
+}
+
+static sv_ic_entry_t *alloc_ic_slots(ant_t *js, uint16_t count) {
+  if (count == 0) return NULL;
+  sv_ic_entry_t *slots = sv_code_bump(js, (size_t)count * sizeof(*slots));
+  if (!slots) return NULL;
+  
+  memset(slots, 0, (size_t)count * sizeof(*slots));
+  if (js->code_units.active) for (uint16_t i = 0; i < count; i++)
+    slots[i].shape_ref_mask = SV_IC_UNIT_OWNED;
+  
+  return slots;
 }
 
 static void emit_constant(sv_compiler_t *c, ant_value_t val) {
@@ -6727,10 +6737,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
     fn->atom_count = comp.atom_count;
   }
   fn->ic_count = (uint16_t)comp.ic_count;
-  if (fn->ic_count > 0) {
-    fn->ic_slots = sv_code_bump(c->js, (size_t)fn->ic_count * sizeof(sv_ic_entry_t));
-    memset(fn->ic_slots, 0, (size_t)fn->ic_count * sizeof(sv_ic_entry_t));
-  }
+  fn->ic_slots = alloc_ic_slots(c->js, fn->ic_count);
   if (comp.upvalue_count > 0) {
     fn->upval_descs = sv_code_bump(c->js, (size_t)comp.upvalue_count * sizeof(sv_upval_desc_t));
     memcpy(fn->upval_descs, comp.upval_descs, (size_t)comp.upvalue_count * sizeof(sv_upval_desc_t));
@@ -6955,15 +6962,10 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       fn->atom_count = comp.atom_count;
     }
     fn->ic_count = (uint16_t)comp.ic_count;
-    if (fn->ic_count > 0) {
-      fn->ic_slots = sv_code_bump(c->js, (size_t)fn->ic_count * sizeof(sv_ic_entry_t));
-      memset(fn->ic_slots, 0, (size_t)fn->ic_count * sizeof(sv_ic_entry_t));
-    }
+    fn->ic_slots = alloc_ic_slots(c->js, fn->ic_count);
     if (comp.upvalue_count > 0) {
-      fn->upval_descs = sv_code_bump(c->js, 
-        (size_t)comp.upvalue_count * sizeof(sv_upval_desc_t));
-      memcpy(fn->upval_descs, comp.upval_descs,
-             (size_t)comp.upvalue_count * sizeof(sv_upval_desc_t));
+      fn->upval_descs = sv_code_bump(c->js, (size_t)comp.upvalue_count * sizeof(sv_upval_desc_t));
+      memcpy(fn->upval_descs, comp.upval_descs, (size_t)comp.upvalue_count * sizeof(sv_upval_desc_t));
       fn->upvalue_count = comp.upvalue_count;
     }
     fn->max_locals = comp.max_local_count;
@@ -7588,10 +7590,7 @@ sv_func_t *compile_function_body(
     func->atom_count = comp.atom_count;
   }
   func->ic_count = (uint16_t)comp.ic_count;
-  if (func->ic_count > 0) {
-    func->ic_slots = sv_code_bump(comp.js, (size_t)func->ic_count * sizeof(sv_ic_entry_t));
-    memset(func->ic_slots, 0, (size_t)func->ic_count * sizeof(sv_ic_entry_t));
-  }
+  func->ic_slots = alloc_ic_slots(comp.js, func->ic_count);
 
   if (comp.upvalue_count > 0) {
     func->upval_descs = sv_code_bump(comp.js, 

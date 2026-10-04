@@ -488,6 +488,15 @@ code_unit_feedback_test = executable(
 )
 test('code-unit-feedback', code_unit_feedback_test)
 
+code_unit_lifetime_test = executable(
+  'test-code-unit-lifetime',
+  files('tests/test_code_unit_lifetime.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('code-unit-lifetime', code_unit_lifetime_test)
+
 code_unit_ctor_proto_test = executable(
   'test-code-unit-ctor-proto',
   files('tests/test_code_unit_ctor_proto.c'),

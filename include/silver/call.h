@@ -122,7 +122,7 @@ static inline bool sv_construct_prototype_data(
     if (!prop || prop->has_getter || prop->has_setter) return false;
 
     if (!sidecar->ctor_proto_shape_registered) {
-      if (!sv_ic_shape_ref_register(js, &sidecar->ctor_proto_shape)) return false;
+      if (!func->unit && !sv_ic_shape_ref_register(js, &sidecar->ctor_proto_shape)) return false;
       sidecar->ctor_proto_shape_registered = true;
     }
     

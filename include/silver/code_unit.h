@@ -21,9 +21,8 @@ struct sv_code_unit {
   ant_value_t *compile_roots;
 
   uint64_t gc_epoch;
-  uint32_t func_count;
-  uint32_t block_count, block_cap;
-  uint32_t compile_root_count, compile_root_cap;
+  size_t block_count, block_cap;
+  size_t compile_root_count, compile_root_cap;
   uint32_t pins;
 
   bool compiling;

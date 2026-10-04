@@ -90,4 +90,18 @@ bool repl_template(
   char **buf, size_t *buf_len, size_t *buf_cap
 );
 
+static inline bool vec_grow(void **items, size_t *cap, size_t need, size_t elem, size_t first) {
+  if (need <= *cap) return true;
+  size_t next = *cap ? *cap * 2 : first;
+  
+  while (next < need) next *= 2;
+  void *grown = realloc(*items, next * elem);
+  if (!grown) return false;
+  
+  *items = grown;
+  *cap = next;
+  
+  return true;
+}
+
 #endif
