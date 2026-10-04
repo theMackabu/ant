@@ -1,4 +1,4 @@
-import { test, summary } from './helpers.js';
+import { test, testThrows, summary } from './helpers.js';
 
 console.log('Getter/Setter Tests\n');
 
@@ -94,7 +94,7 @@ let obj9 = {
   }
 };
 test('getter-only read', obj9.readonly, 'constant');
-obj9.readonly = 'changed';
+testThrows('getter-only write throws in strict code', () => { obj9.readonly = 'changed'; });
 test('getter-only unchanged', obj9.readonly, 'constant');
 
 let strictError = (function () {

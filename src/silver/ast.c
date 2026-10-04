@@ -60,8 +60,11 @@ bool sv_ast_can_be_expression_statement(const sv_ast_t *node) {
 typedef struct {
   ant_t *js;
   sv_lexer_t lx;
+  sv_parse_goal_t goal;
   bool no_in;
   bool module_item;
+  bool in_async;
+  bool wants_module;
 } sv_parser_t;
 
 #define P            sv_parser_t *p
@@ -100,13 +103,13 @@ static sv_ast_t *parse_postfix(P);
 static sv_ast_t *parse_call(P);
 static sv_ast_t *parse_primary(P);
 static sv_ast_t *parse_block(P, bool directive_ctx);
-static sv_ast_t *parse_func(P);
+static sv_ast_t *parse_func(P, bool is_async);
 static sv_ast_t *parse_class(P);
 static sv_ast_t *parse_object(P);
 static sv_ast_t *parse_array(P);
 static sv_ast_t *parse_import_stmt(P);
 static sv_ast_t *parse_export_stmt(P);
-static sv_ast_t *parse_arrow_body(P);
+static sv_ast_t *parse_arrow_body(P, bool is_async);
 static sv_ast_t *parse_binding_pattern(P);
 
 static void sv_parse_stop(P) {
@@ -227,6 +230,10 @@ static inline bool is_binding_ident_tok(uint8_t tok) {
     tok == TOK_IDENTIFIER || is_contextual_ident_tok(tok) ||
     tok == TOK_LET || tok == TOK_STATIC || tok == TOK_YIELD || tok == TOK_AWAIT ||
     tok == TOK_UNDEF || tok == TOK_WINDOW || tok == TOK_GLOBAL_THIS;
+}
+
+static inline bool binding_ident_here(P) {
+  return is_binding_ident_tok(TOK) && !(TOK == TOK_AWAIT && (p->in_async || p->goal == SV_PARSE_MODULE));
 }
 
 static inline bool is_private_ident_like_tok(uint8_t tok) {
@@ -370,9 +377,12 @@ static sv_ast_t *parse_member_suffix(P, sv_ast_t *left, uint8_t la) {
   return NULL;
 }
 
-static sv_ast_t *parse_arrow_body(P) {
-  if (NEXT() == TOK_LBRACE) return parse_block(p, true);
-  return parse_assign(p);
+static sv_ast_t *parse_arrow_body(P, bool is_async) {
+  bool saved_async = p->in_async;
+  p->in_async = is_async;
+  sv_ast_t *body = NEXT() == TOK_LBRACE ? parse_block(p, true) : parse_assign(p);
+  p->in_async = saved_async;
+  return body;
 }
 
 static inline uint32_t node_src_end(P, sv_ast_t *node) {
@@ -380,7 +390,7 @@ static inline uint32_t node_src_end(P, sv_ast_t *node) {
   return (uint32_t)(node && node->type == N_BLOCK ? TOFF + TLEN : TOFF);
 }
 
-static void sv_parse_stmt_list(P, sv_ast_list_t *out, bool stop_at_rbrace, bool directive_ctx) {
+static void sv_parse_stmt_list(P, sv_ast_list_t *out, bool stop_at_rbrace, bool directive_ctx, bool module_items) {
   bool strict_mode = p->lx.strict;
   bool saved_lexer_strict = p->lx.strict;
   bool in_directive_prologue = directive_ctx;
@@ -397,7 +407,7 @@ static void sv_parse_stmt_list(P, sv_ast_list_t *out, bool stop_at_rbrace, bool 
       break;
     }
 
-    p->module_item = !stop_at_rbrace;
+    p->module_item = module_items;
     sv_ast_t *stmt = parse_stmt(p);
     if (stmt) sv_ast_list_push(out, stmt);
     if (Ant_Exception_Pending(JS)) break;
@@ -425,7 +435,7 @@ static sv_ast_t *parse_binding_pattern(P) {
   NEXT();
   if (TOK == TOK_LBRACKET) return parse_array(p);
   if (TOK == TOK_LBRACE) return parse_object(p);
-  if (is_binding_ident_tok(TOK)) {
+  if (binding_ident_here(p)) {
     sv_ast_t *id = mk_ident_from_tok(p);
     sv_strict_check_binding_ident(p, id->str, id->len);
     CONSUME();
@@ -546,7 +556,7 @@ static sv_ast_t *try_parse_async_arrow(P) {
         NEXT(); CONSUME();
         sv_ast_t *fn = mk(N_FUNC);
         fn->flags = FN_ARROW | FN_ASYNC;
-        fn->body = parse_arrow_body(p);
+        fn->body = parse_arrow_body(p, true);
         fn->src_off = async_off;
         fn->src_end = node_src_end(p, fn->body);
         return fn;
@@ -561,7 +571,7 @@ static sv_ast_t *try_parse_async_arrow(P) {
       sv_ast_t *fn = mk(N_FUNC);
       fn->flags = FN_ARROW | FN_ASYNC;
       push_arrow_params_from_expr(fn, expr);
-      fn->body = parse_arrow_body(p);
+      fn->body = parse_arrow_body(p, true);
       fn->src_off = async_off;
       fn->src_end = node_src_end(p, fn->body);
       return fn;
@@ -580,7 +590,7 @@ static sv_ast_t *try_parse_async_arrow(P) {
       sv_ast_t *fn = mk(N_FUNC);
       fn->flags = FN_ARROW | FN_ASYNC;
       sv_ast_list_push(&fn->args, id);
-      fn->body = parse_arrow_body(p);
+      fn->body = parse_arrow_body(p, true);
       fn->src_off = async_off;
       fn->src_end = node_src_end(p, fn->body);
       return fn;
@@ -695,7 +705,7 @@ static sv_ast_t *parse_primary(P) {
 
   l_array:  return parse_array(p);
   l_object: return parse_object(p);
-  l_func:   { CONSUME(); return parse_func(p); }
+  l_func:   { CONSUME(); return parse_func(p, false); }
 
   l_class: {
     uint32_t class_off = (uint32_t)TOFF;
@@ -711,7 +721,7 @@ static sv_ast_t *parse_primary(P) {
     bool has_line_term = lookahead_crosses_line_terminator(p);
     if (!has_line_term && LA() == TOK_FUNC) {
       NEXT(); CONSUME();
-      sv_ast_t *fn = parse_func(p);
+      sv_ast_t *fn = parse_func(p, true);
       fn->flags |= FN_ASYNC;
       fn->src_off = async_off;
       return fn;
@@ -875,6 +885,19 @@ static sv_ast_t *parse_primary(P) {
   }
 
   l_await: {
+    if (!p->in_async && p->goal != SV_PARSE_MODULE) {
+      uint8_t la = LA();
+      bool starts_operand = !lookahead_crosses_line_terminator(p) && (
+        la == TOK_IDENTIFIER || la == TOK_NUMBER || la == TOK_STRING ||
+        la == TOK_THIS || la == TOK_NEW || la == TOK_FUNC || la == TOK_CLASS
+      );
+      if (starts_operand) {
+        SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "await is only valid in async functions and the top level bodies of modules");
+        return mk(N_EMPTY);
+      }
+      CONSUME();
+      return mk_ident_from_tok(p);
+    }
     CONSUME();
     sv_ast_t *n = mk(N_AWAIT);
     n->right = parse_unary(p);
@@ -895,6 +918,11 @@ static sv_ast_t *parse_primary(P) {
 
   l_import_expr: {
     CONSUME();
+    if (NEXT() == TOK_DOT && p->goal == SV_PARSE_DETECT) {
+      p->wants_module = true;
+      sv_parse_stop(p);
+      return mk(N_EMPTY);
+    }
     if (NEXT() != TOK_LPAREN) return mk_ident("import", 6);
     CONSUME();
     sv_ast_t *n = mk(N_IMPORT);
@@ -1052,7 +1080,7 @@ static sv_ast_t *parse_object(P) {
         CONSUME();
       }
 
-      prop->right = parse_func(p);
+      prop->right = parse_func(p, false);
       prop->right->flags |= FN_GENERATOR | FN_METHOD;
       prop->right->src_off = prop->src_off;
       sv_ast_list_push(&n->args, prop);
@@ -1088,7 +1116,7 @@ static sv_ast_t *parse_object(P) {
           CONSUME();
         }
 
-        prop->right = parse_func(p);
+        prop->right = parse_func(p, false);
         if (!validate_accessor_params(p, prop->right, prop->flags)) return n;
         prop->right->flags |= FN_METHOD;
         prop->right->src_off = prop->src_off;
@@ -1130,7 +1158,7 @@ static sv_ast_t *parse_object(P) {
           CONSUME();
         }
 
-        prop->right = parse_func(p);
+        prop->right = parse_func(p, true);
         prop->right->flags |= FN_ASYNC | FN_METHOD;
         if (prop->flags & FN_GENERATOR)
           prop->right->flags |= FN_GENERATOR;
@@ -1168,7 +1196,7 @@ static sv_ast_t *parse_object(P) {
       }
       prop->right = parse_assign(p);
     } else if (TOK == TOK_LPAREN) {
-      prop->right = parse_func(p);
+      prop->right = parse_func(p, false);
       prop->right->flags |= FN_METHOD;
       prop->right->src_off = prop->src_off;
     } else {
@@ -1404,7 +1432,7 @@ static sv_ast_t *parse_assign(P) {
       SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Malformed arrow function parameter list");
       return mk(N_EMPTY);
     }
-    fn->body = parse_arrow_body(p);
+    fn->body = parse_arrow_body(p, false);
     fn->src_end = node_src_end(p, fn->body);
     return fn;
   }
@@ -1624,22 +1652,8 @@ bool ast_references_new_target(const sv_ast_t *node) {
   return ast_references_new_target_impl(node, false);
 }
 
-static sv_ast_t *parse_func(P) {
-  sv_ast_t *fn = mk(N_FUNC);
-
-  if (NEXT() == TOK_MUL) {
-    CONSUME();
-    fn->flags |= FN_GENERATOR;
-  }
-
-  if (is_binding_ident_tok(NEXT())) {
-    fn->str = tok_ident_str(p, &fn->len);
-    sv_strict_check_binding_ident(p, fn->str, fn->len);
-    CONSUME();
-  }
-
-  expect(p, TOK_LPAREN);
-  while (NEXT() != TOK_RPAREN && TOK != TOK_EOF) {
+static void parse_formal_params(P, sv_ast_t *fn, uint8_t close) {
+  while (NEXT() != close && TOK != TOK_EOF) {
     if (TOK == TOK_REST) {
       CONSUME();
       sv_ast_t *rest = mk(N_REST);
@@ -1658,13 +1672,12 @@ static sv_ast_t *parse_func(P) {
     sv_ast_list_push(&fn->args, param);
     if (NEXT() == TOK_COMMA) {
       CONSUME();
-      if (NEXT() == TOK_RPAREN) break;
+      if (NEXT() == close) break;
     } else break;
   }
-  expect(p, TOK_RPAREN);
+}
 
-  fn->body = parse_block(p, true);
-  fn->src_end = (uint32_t)(TOFF + TLEN);
+static void finish_func(sv_ast_t *fn) {
   if (!(fn->flags & FN_ARROW) && ast_references_arguments(fn->body))
     fn->flags |= FN_USES_ARGS;
   if (!(fn->flags & FN_ARROW)) {
@@ -1673,6 +1686,33 @@ static sv_ast_t *parse_func(P) {
       uses_new_target = ast_references_new_target(fn->args.items[i]) || ast_contains_direct_eval(fn->args.items[i]);
     if (uses_new_target) fn->flags |= FN_USES_NEW_TARGET;
   }
+}
+
+static sv_ast_t *parse_func(P, bool is_async) {
+  sv_ast_t *fn = mk(N_FUNC);
+  if (is_async) fn->flags |= FN_ASYNC;
+
+  if (NEXT() == TOK_MUL) {
+    CONSUME();
+    fn->flags |= FN_GENERATOR;
+  }
+
+  if (is_binding_ident_tok(NEXT())) {
+    fn->str = tok_ident_str(p, &fn->len);
+    sv_strict_check_binding_ident(p, fn->str, fn->len);
+    CONSUME();
+  }
+
+  bool saved_async = p->in_async;
+  p->in_async = is_async;
+  expect(p, TOK_LPAREN);
+  parse_formal_params(p, fn, TOK_RPAREN);
+  expect(p, TOK_RPAREN);
+  fn->body = parse_block(p, true);
+  p->in_async = saved_async;
+
+  fn->src_end = (uint32_t)(TOFF + TLEN);
+  finish_func(fn);
   return fn;
 }
 
@@ -1780,7 +1820,7 @@ static sv_ast_t *parse_class(P) {
     if (NEXT() == TOK_LPAREN) {
       bool saved_strict = p->lx.strict;
       p->lx.strict = true;
-      method->right = parse_func(p);
+      method->right = parse_func(p, (flags & FN_ASYNC) != 0);
       p->lx.strict = saved_strict;
       if (!validate_accessor_params(p, method->right, method->flags)) return cls;
       method->right->flags |= (flags & (FN_ASYNC | FN_GENERATOR)) | FN_METHOD | FN_CLASS_BODY;
@@ -1804,7 +1844,7 @@ static sv_ast_t *parse_class(P) {
 static sv_ast_t *parse_block(P, bool directive_ctx) {
   expect(p, TOK_LBRACE);
   sv_ast_t *block = mk(N_BLOCK);
-  sv_parse_stmt_list(p, &block->args, true, directive_ctx);
+  sv_parse_stmt_list(p, &block->args, true, directive_ctx, false);
   if (Ant_Exception_Pending(JS)) return block;
   expect(p, TOK_RBRACE);
   block->src_end = (uint32_t)(TOFF + TLEN);
@@ -1823,7 +1863,7 @@ static sv_ast_t *parse_var_decl(P, sv_var_kind_t kind, bool allow_uninit_const) 
       decl->left = parse_array(p);
     } else if (TOK == TOK_LBRACE) {
       decl->left = parse_object(p);
-    } else if (!is_binding_ident_tok(TOK)) {
+    } else if (!binding_ident_here(p)) {
       sv_parse_unexpected_token(p);
       return var;
     } else {
@@ -2009,7 +2049,7 @@ static sv_ast_t *parse_export_stmt(P) {
       uint32_t async_off = (uint32_t)TOFF;
       CONSUME();
       NEXT(); CONSUME();
-      decl->left = parse_func(p);
+      decl->left = parse_func(p, true);
       decl->left->flags |= FN_ASYNC;
       decl->left->src_off = async_off;
       if (NEXT() == TOK_SEMICOLON) CONSUME();
@@ -2017,7 +2057,7 @@ static sv_ast_t *parse_export_stmt(P) {
     }
     if (TOK == TOK_FUNC) {
       CONSUME();
-      decl->left = parse_func(p);
+      decl->left = parse_func(p, false);
       if (NEXT() == TOK_SEMICOLON) CONSUME();
       return decl;
     }
@@ -2041,7 +2081,7 @@ static sv_ast_t *parse_export_stmt(P) {
     uint32_t async_off = (uint32_t)TOFF;
     CONSUME();
     NEXT(); CONSUME();
-    decl->left = parse_func(p);
+    decl->left = parse_func(p, true);
     decl->left->flags |= FN_ASYNC;
     decl->left->src_off = async_off;
     if (!decl->left->str || decl->left->len == 0)
@@ -2052,7 +2092,7 @@ static sv_ast_t *parse_export_stmt(P) {
   if (TOK == TOK_FUNC) {
     decl->flags |= EX_DECL;
     CONSUME();
-    decl->left = parse_func(p);
+    decl->left = parse_func(p, false);
     if (!decl->left->str || decl->left->len == 0)
       SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "exported function declarations require a name");
     return decl;
@@ -2490,7 +2530,7 @@ static sv_ast_t *parse_stmt(P) {
 
   l_func: {
     CONSUME();
-    sv_ast_t *fn = parse_func(p);
+    sv_ast_t *fn = parse_func(p, false);
     if (!fn->str) SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Function statements require a function name");
     return fn;
   }
@@ -2510,7 +2550,7 @@ static sv_ast_t *parse_stmt(P) {
     if (la == TOK_FUNC && !lookahead_crosses_line_terminator(p)) {
       CONSUME();
       NEXT(); CONSUME();
-      sv_ast_t *fn = parse_func(p);
+      sv_ast_t *fn = parse_func(p, true);
       fn->flags |= FN_ASYNC;
       fn->src_off = async_off;
       if (!fn->str) SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Function statements require a function name");
@@ -2527,6 +2567,7 @@ static sv_ast_t *parse_stmt(P) {
       sv_parse_unexpected_token(p);
       return mk(N_EMPTY);
     }
+    if (p->goal == SV_PARSE_DETECT) goto l_wants_module;
     CONSUME();
     return parse_import_stmt(p);
   }
@@ -2536,8 +2577,15 @@ static sv_ast_t *parse_stmt(P) {
       sv_parse_unexpected_token(p);
       return mk(N_EMPTY);
     }
+    if (p->goal == SV_PARSE_DETECT) goto l_wants_module;
     CONSUME();
     return parse_export_stmt(p);
+  }
+
+  l_wants_module: {
+    p->wants_module = true;
+    sv_parse_stop(p);
+    return mk(N_EMPTY);
   }
 
   l_expr_stmt: {
@@ -2559,17 +2607,19 @@ static sv_ast_t *parse_stmt(P) {
   }
 }
 
-sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, bool strict){
-  if (sv_parse_trace_unlikely) {
-    fprintf(stderr, "[parse] start len=%u strict=%d\n", (unsigned)clen, strict ? 1 : 0);
-  }
-
-  sv_parser_t parser = { .js = js };
+static sv_ast_t *parse_program(
+  ant_t *js, const char *code, ant_offset_t clen,
+  sv_parse_goal_t goal, bool strict, bool *wants_module
+) {
+  sv_parser_t parser = {
+    .js = js, .goal = goal,
+    .in_async = goal == SV_PARSE_MODULE || goal == SV_PARSE_REPL,
+  };
   sv_parser_t *p = &parser;
-  sv_lexer_init(&p->lx, js, code, clen, strict);
+  sv_lexer_init(&p->lx, js, code, clen, strict || goal == SV_PARSE_MODULE);
 
   sv_ast_t *program = mk(N_PROGRAM);
-  sv_parse_stmt_list(p, &program->args, false, true);
+  sv_parse_stmt_list(p, &program->args, false, true, true);
   if (sv_parse_trace_unlikely) fprintf(
     stderr, "[parse] after-stmt-list thrown=%d strict=%d body=%d\n",
     Ant_Exception_Pending(js) ? 1 : 0,
@@ -2577,17 +2627,74 @@ sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, bool strict){
     program ? program->args.count : -1
   );
 
-  if (Ant_Exception_Pending(js)) {
-    if (sv_parse_trace_unlikely) fprintf(stderr, "[parse] return null\n");
-    return NULL;
-  }
+  if (wants_module) *wants_module = p->wants_module;
+  if (Ant_Exception_Pending(js) || p->wants_module) return NULL;
   
   if (p->lx.strict) program->flags |= FN_PARSE_STRICT;
   if (program_has_module_syntax(program)) program->flags |= FN_MODULE_SYNTAX;
-  if (sv_parse_trace_unlikely) fprintf(stderr,
-    "[parse] return program strict=%d body=%d\n",
-    p->lx.strict ? 1 : 0, program->args.count
+  return program;
+}
+
+static sv_ast_t *parse_detect(ant_t *js, const char *code, ant_offset_t clen, bool strict) {
+  code_arena_mark_t mark = parse_arena_mark();
+  bool wants_module = false;
+  sv_ast_t *program = parse_program(js, code, clen, SV_PARSE_DETECT, strict, &wants_module);
+  if (program) return program;
+
+  parse_arena_rewind(mark);
+  Ant_Exception_Clear(js);
+  program = parse_program(js, code, clen, SV_PARSE_MODULE, strict, NULL);
+  if (program) {
+    program->flags |= FN_MODULE_SYNTAX;
+    return program;
+  }
+  if (wants_module) return NULL;
+
+  parse_arena_rewind(mark);
+  Ant_Exception_Clear(js);
+  return parse_program(js, code, clen, SV_PARSE_SCRIPT, strict, NULL);
+}
+
+sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, sv_parse_goal_t goal, bool strict) {
+  if (sv_parse_trace_unlikely) fprintf(
+    stderr, "[parse] start len=%u goal=%d strict=%d\n",
+    (unsigned)clen, (int)goal, strict ? 1 : 0
   );
 
+  sv_ast_t *program = goal == SV_PARSE_DETECT
+    ? parse_detect(js, code, clen, strict)
+    : parse_program(js, code, clen, goal, strict, NULL);
+
+  if (sv_parse_trace_unlikely) fprintf(stderr,
+    "[parse] return %s body=%d\n", program ? "program" : "null",
+    program ? program->args.count : -1
+  );
   return program;
+}
+
+sv_ast_t *sv_parse_function_parts(ant_t *js, const sv_function_parts_t *parts) {
+  sv_parser_t parser = { .js = js, .goal = SV_PARSE_SCRIPT, .in_async = parts->is_async };
+  sv_parser_t *p = &parser;
+
+  sv_ast_t *fn = mk_plain(N_FUNC);
+  fn->flags = (parts->is_async ? FN_ASYNC : 0) | (parts->is_generator ? FN_GENERATOR : 0);
+  fn->src_off = 0;
+  fn->src_end = (uint32_t)parts->len;
+
+  sv_lexer_init(&p->lx, js, parts->text, parts->params_end, false);
+  p->lx.st.pos = parts->params_off;
+  parse_formal_params(p, fn, TOK_EOF);
+  if (NEXT() != TOK_EOF) sv_parse_unexpected_token(p);
+  if (Ant_Exception_Pending(js)) return NULL;
+
+  sv_lexer_init(&p->lx, js, parts->text, parts->body_end, false);
+  p->lx.st.pos = parts->body_off;
+  fn->body = mk_plain(N_BLOCK);
+  fn->body->src_off = (uint32_t)parts->body_off;
+  fn->body->src_end = (uint32_t)parts->body_end;
+  sv_parse_stmt_list(p, &fn->body->args, false, true, false);
+  if (Ant_Exception_Pending(js)) return NULL;
+
+  finish_func(fn);
+  return fn;
 }

@@ -537,7 +537,7 @@ bool inspector_eval_safe_expr(ant_t *js, const char *expr, size_t expr_len, ant_
 
   bool ok = false;
   code_arena_mark_t parse_mark = parse_arena_mark();
-  sv_ast_t *program = sv_parse(js, wrapped, (ant_offset_t)(expr_len + 2), false);
+  sv_ast_t *program = sv_parse(js, wrapped, (ant_offset_t)(expr_len + 2), SV_PARSE_SCRIPT, false);
   if (
     program && program->type == N_PROGRAM &&
     program->args.count == 1 &&

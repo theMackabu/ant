@@ -4315,7 +4315,7 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
     return false;
   }
   
-  sv_ast_t *program = sv_parse(c->js, source, arg->len, c->is_strict);
+  sv_ast_t *program = sv_parse(c->js, source, arg->len, SV_PARSE_SCRIPT, c->is_strict);
 
   if (!program) {
     parse_arena_rewind(mark);
@@ -7221,7 +7221,7 @@ static bool ast_has_own_eval(sv_compiler_t *c, const sv_ast_t *node) {
       ant_value_t saved_exception = Ant_Exception_Peek(c->js);
       GC_ROOT_PIN(c->js, saved_exception);
       code_arena_mark_t mark = parse_arena_mark();
-      sv_ast_t *program = sv_parse(c->js, arg->str ? arg->str : "", arg->len, c->is_strict);
+      sv_ast_t *program = sv_parse(c->js, arg->str ? arg->str : "", arg->len, SV_PARSE_SCRIPT, c->is_strict);
       bool needs_env = !program || (program->args.count != 0 &&
         (program->args.count != 1 ||
          !is_inline_literal_eval_expr(program->args.items[0]) ||
@@ -8094,82 +8094,40 @@ sv_func_t *sv_compile(
   return func;
 }
 
-sv_func_t *sv_compile_function(
-  ant_t *js, const char *source, size_t len,
-  size_t body_open, bool is_async, bool is_generator
-) {
+sv_func_t *sv_compile_function(ant_t *js, const sv_function_parts_t *parts) {
   if (sv_compile_trace_unlikely) fprintf(
     stderr, "[compile] start kind=function len=%u async=%d generator=%d\n",
-    (unsigned)len, is_async ? 1 : 0, is_generator ? 1 : 0
+    (unsigned)parts->len, parts->is_async ? 1 : 0, parts->is_generator ? 1 : 0
   );
-  
-  const char *prefix = is_async
-    ? (is_generator ? "(async function*" : "(async function")
-    : (is_generator ? "(function*" : "(function");
-    
-  size_t prefix_len = strlen(prefix);
-  size_t wrapped_len = prefix_len + len + 1;
 
-  char *wrapped = malloc(wrapped_len + 1);
-  if (!wrapped) return NULL;
-
-  memcpy(wrapped, prefix, prefix_len);
-  memcpy(wrapped + prefix_len, source, len);
-  wrapped[prefix_len + len] = ')';
-  wrapped[wrapped_len] = '\0';
-  
   code_arena_mark_t parse_mark = parse_arena_mark();
-  sv_ast_t *program = sv_parse(js, wrapped, (ant_offset_t)wrapped_len, false);
-  
-  if (!program) {
+  sv_ast_t *func_node = sv_parse_function_parts(js, parts);
+  if (!func_node) {
     parse_arena_rewind(parse_mark);
-    free(wrapped);
-    return NULL;
-  }
-
-  sv_ast_t *func_node = program->args.count == 1 ? program->args.items[0] : NULL;
-  const char *invalid = NULL;
-  
-  if (!func_node || func_node->type != N_FUNC || func_node->src_end != prefix_len + len)
-    invalid = "Single function literal required";
-  else if (!func_node->body || func_node->body->src_off != prefix_len + body_open)
-    invalid = "Arg string terminates parameters early";
-
-  if (invalid) {
-    parse_arena_rewind(parse_mark);
-    free(wrapped);
-    js_mkerr_typed(js, JS_ERR_SYNTAX, "%s", invalid);
     return NULL;
   }
 
   sv_code_unit_t *unit = sv_code_unit_begin(js);
-  const char *text = copy_source_text(js, wrapped, (ant_offset_t)wrapped_len);
+  const char *text = copy_source_text(js, parts->text, parts->len);
   
   if (!text) {
     sv_code_unit_finish(unit);
     sv_code_unit_unpin(unit);
     parse_arena_rewind(parse_mark);
-    free(wrapped);
     return NULL;
   }
 
   sv_compiler_t root;
-  
-  sv_compile_ctx_init_root(
-    &root, js, js->filename, text,
-    (ant_offset_t)wrapped_len, SV_COMPILE_SCRIPT,
-    (program->flags & FN_PARSE_STRICT) != 0, NULL
-  );
+  sv_compile_ctx_init_root(&root, js, js->filename, text, parts->len, SV_COMPILE_SCRIPT, false, NULL);
   
   root.allows_new_target = true;
   root.function_ctor_root = true;
-  root.line_table = sv_compile_ctx_build_line_table(root.source, (ant_offset_t)wrapped_len);
+  root.line_table = sv_compile_ctx_build_line_table(root.source, parts->len);
   sv_func_t *func = compile_function_body(&root, func_node, SV_COMPILE_SCRIPT);
   
   sv_compile_ctx_free_line_table(root.line_table);
   sv_code_unit_finish(unit);
   parse_arena_rewind(parse_mark);
-  free(wrapped);
 
   if (sv_compile_trace_unlikely) fprintf(
     stderr, "[compile] end kind=function thrown=%d func=%p\n",
@@ -8203,7 +8161,7 @@ sv_func_t *sv_compile_function_with_params(
 
   bool parse_strict = sv_vm_is_strict(js->vm);
   code_arena_mark_t parse_mark = parse_arena_mark();
-  sv_ast_t *program = sv_parse(js, body, (ant_offset_t)body_len, parse_strict);
+  sv_ast_t *program = sv_parse(js, body, (ant_offset_t)body_len, SV_PARSE_SCRIPT, parse_strict);
   
   if (!program) {
     parse_arena_rewind(parse_mark);

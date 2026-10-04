@@ -25,7 +25,7 @@ test('while false overwrites previous expression with undefined', eval("'a'; whi
 test('for false overwrites previous expression with undefined', eval("'a'; for (;false;) 'b';"), undefined);
 test('for empty body overwrites previous expression with undefined', eval("'a'; for (let i=0;i<1;i++);"), undefined);
 test('do while empty body overwrites previous expression with undefined', eval("'a'; do ; while(false);"), undefined);
-test('with empty body overwrites previous expression with undefined', eval("'a'; with ({}) ;"), undefined);
+test('with empty body overwrites previous expression with undefined', (0, eval)("'a'; with ({}) ;"), undefined);
 
 test('empty finally preserves try completion', eval("try { 'a' } finally { }"), 'a');
 test('non-empty finally overrides try completion', eval("try { 'a' } finally { 'b' }"), 'b');

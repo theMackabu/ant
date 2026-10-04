@@ -171,7 +171,24 @@ bool ast_contains_direct_suspend(const sv_ast_t *node, const sv_ast_t **out_offe
 bool ast_contains_own_yield(const sv_ast_t *node, const sv_ast_t **out_offender);
 bool ast_pattern_binds(const sv_ast_t *node, const char *name);
 
+typedef enum {
+  SV_PARSE_SCRIPT,
+  SV_PARSE_MODULE,
+  SV_PARSE_REPL,
+  SV_PARSE_DETECT,
+} sv_parse_goal_t;
+
+typedef struct {
+  const char *text;
+  ant_offset_t len;
+  ant_offset_t params_off, params_end;
+  ant_offset_t body_off, body_end;
+  bool is_async;
+  bool is_generator;
+} sv_function_parts_t;
+
 sv_ast_t *sv_ast_new(sv_node_type_t type);
-sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, bool strict);
+sv_ast_t *sv_parse_function_parts(ant_t *js, const sv_function_parts_t *parts);
+sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, sv_parse_goal_t goal, bool strict);
 
 #endif

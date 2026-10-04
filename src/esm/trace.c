@@ -894,12 +894,12 @@ static bool trace_scan_ast(trace_ctx_t *ctx, const char *file, const sv_ast_t *n
   return true;
 }
 
-static sv_ast_t *trace_parse(ant_t *js, const char *code, size_t len) {
+static sv_ast_t *trace_parse(ant_t *js, const char *code, size_t len, sv_parse_goal_t goal) {
   GC_ROOT_SAVE(exception_mark, js);
   ant_value_t saved_exception = Ant_Exception_Peek(js);
   GC_ROOT_PIN(js, saved_exception);
 
-  sv_ast_t *program = sv_parse(js, code, (ant_offset_t)len, false);
+  sv_ast_t *program = sv_parse(js, code, (ant_offset_t)len, goal, false);
   if (!program) Ant_Exception_Set(js, saved_exception);
 
   GC_ROOT_RESTORE(js, exception_mark);
@@ -918,8 +918,9 @@ static sv_ast_t *trace_parse_cjs_wrapped(ant_t *js, const char *code, size_t len
   memcpy(wrapped + sizeof(prefix) - 1, code, len);
   memcpy(wrapped + sizeof(prefix) - 1 + len, suffix, sizeof(suffix));
 
-  sv_ast_t *program = trace_parse(js, wrapped, total);
+  sv_ast_t *program = trace_parse(js, wrapped, total, SV_PARSE_SCRIPT);
   free(wrapped);
+  
   return program;
 }
 
@@ -1107,7 +1108,9 @@ static int trace_process_module(ant_t *js, trace_ctx_t *ctx, uint32_t idx) {
   ant_module_format_t format = esm_decide_module_format(js, abs_path);
 
   code_arena_mark_t mark = parse_arena_mark();
-  sv_ast_t *program = trace_parse(js, content, js_len);
+  sv_ast_t *program = trace_parse(js, content, js_len,
+    format == MODULE_EVAL_FORMAT_ESM ? SV_PARSE_MODULE :
+    format == MODULE_EVAL_FORMAT_CJS ? SV_PARSE_SCRIPT : SV_PARSE_DETECT);
 
   if (program && format == MODULE_EVAL_FORMAT_UNKNOWN) {
     format = (program->flags & FN_MODULE_SYNTAX) ? MODULE_EVAL_FORMAT_ESM : MODULE_EVAL_FORMAT_CJS;

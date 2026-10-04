@@ -30,11 +30,10 @@ test('typeof arrow', typeof (() => {}), 'function');
 test('typeof class', typeof class {}, 'function');
 test('typeof symbol', typeof Symbol('test'), 'symbol');
 
-let localNumber = 1;
-let withTypeofResult;
-with ({ localNumber: 'shadowed' }) {
-  withTypeofResult = typeof localNumber;
-}
+const withTypeofResult = new Function(`
+  let localNumber = 1;
+  with ({ localNumber: 'shadowed' }) return typeof localNumber;
+`)();
 test('typeof local respects with binding', withTypeofResult, 'string');
 
 summary();

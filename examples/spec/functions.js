@@ -169,6 +169,27 @@ test('for await in plain function', syntaxError('function f() { for await (const
 test('for await in async function', syntaxError('async function f() { for await (const x of []); }'), 'ok');
 test('for await in eval', (() => { try { eval('for await (const x of []);'); return 'ok'; } catch (e) { return e.constructor.name; } })(), 'SyntaxError');
 
+function indirectEval(src) {
+  try { return (0, eval)(src); }
+  catch (e) { return e instanceof SyntaxError ? 'SyntaxError' : String(e); }
+}
+
+test('await is a name in scripts', indirectEval('var await = 4; await'), 4);
+test('await names a function in scripts', indirectEval('function await() { return 5 } await()'), 5);
+test('await as a call in scripts', indirectEval('function await(x) { return x } await (6)'), 6);
+test('await is reserved in async functions', indirectEval('async function f() { var await = 1 }'), 'SyntaxError');
+test('await operand in a plain function', indirectEval('function f() { await x }'), 'SyntaxError');
+test('await in a plain arrow inside async', indirectEval('async function f() { () => await 1 }'), 'SyntaxError');
+test('await in an async arrow', typeof indirectEval('async x => await x'), 'function');
+test('await name in Function body', new Function('var await = 7; return await')(), 7);
+test('await operator in AsyncFunction body', (async () => {}).constructor('x', 'return await x') instanceof Function, true);
+
+test('parameters cannot leave the parameter list', syntaxError('a) { return 1 } (function (', ''), 'SyntaxError');
+test('body cannot close the function', syntaxError('}; (function () {'), 'SyntaxError');
+test('rest parameter must be last', syntaxError('...a, b', ''), 'SyntaxError');
+test('trailing comma in parameters', syntaxError('a, b,', ''), 'ok');
+test('use strict body applies', (() => { try { new Function('"use strict"; undeclared_strict_fn = 1')(); return 'ok'; } catch (e) { return e.constructor.name; } })(), 'ReferenceError');
+
 test('undefined parameter shadows', new Function('undefined', 'return undefined')(5), 5);
 test('undefined var shadows', (function () { var undefined = 7; return undefined; })(), 7);
 test('captured undefined shadows', (function () { let undefined = 8; return () => undefined; })()(), 8);

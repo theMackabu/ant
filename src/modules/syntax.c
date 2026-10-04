@@ -181,8 +181,9 @@ static ant_value_t js_syntax_parse_javascript(ant_params_t) {
   js_clear_error_site(js);
 
   code_arena_mark_t mark = parse_arena_mark();
-  bool strict = options.parse_mode == SYNTAX_PARSE_MODULE;
-  sv_ast_t *program = sv_parse(js, source, (ant_offset_t)source_len, strict);
+  sv_parse_goal_t goal = options.parse_mode == SYNTAX_PARSE_MODULE ? SV_PARSE_MODULE : SV_PARSE_SCRIPT;
+  sv_ast_t *program = sv_parse(js, source, (ant_offset_t)source_len, goal, false);
+  
   if (!program) {
     parse_arena_rewind(mark);
     js->filename = saved_filename;
@@ -212,7 +213,8 @@ static ant_value_t js_syntax_parse_javascript(ant_params_t) {
   if (options.parse_mode == SYNTAX_PARSE_UNAMBIGUOUS && has_module_syntax) {
     parse_arena_rewind(mark);
     js_clear_error_site(js);
-    program = sv_parse(js, source, (ant_offset_t)source_len, true);
+    program = sv_parse(js, source, (ant_offset_t)source_len, SV_PARSE_MODULE, false);
+    
     if (!program) {
       parse_arena_rewind(mark);
       js->filename = saved_filename;

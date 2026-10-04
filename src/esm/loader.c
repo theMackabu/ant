@@ -1322,7 +1322,7 @@ static ant_value_t esm_eval_ambiguous_js_source(
   GC_ROOT_PIN(js, saved_exception);
   code_arena_mark_t parse_mark = parse_arena_mark();
 
-  sv_ast_t *program = sv_parse(js, js_code, (ant_offset_t)js_len, false);
+  sv_ast_t *program = sv_parse(js, js_code, (ant_offset_t)js_len, SV_PARSE_DETECT, false);
   GC_ROOT_RESTORE(js, exception_mark);
 
   if (!program) {
@@ -1349,7 +1349,7 @@ static ant_value_t esm_eval_ambiguous_js_source(
       return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
     }
 
-    return js_execute_compiled_bytecode(js, func, NULL);
+    return js_execute_compiled_module(js, func);
   }
 
   parse_arena_rewind(parse_mark);
@@ -1635,7 +1635,7 @@ static ant_value_t esm_eval_parsed_record(
   
   esm_module_record_cleanup(record);
 
-  if (func) return js_execute_compiled_bytecode(js, func, NULL);
+  if (func) return js_execute_compiled_module(js, func);
   if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
   
   return js_mkerr_typed(
@@ -1682,7 +1682,8 @@ static ant_value_t esm_parse_module_record(
   ant_value_t saved_exception = Ant_Exception_Peek(js);
   GC_ROOT_PIN(js, saved_exception);
 
-  sv_ast_t *program = sv_parse(js, js_code, (ant_offset_t)js_len, false);
+  sv_parse_goal_t goal = *format == MODULE_EVAL_FORMAT_ESM ? SV_PARSE_MODULE : SV_PARSE_DETECT;
+  sv_ast_t *program = sv_parse(js, js_code, (ant_offset_t)js_len, goal, false);
   GC_ROOT_RESTORE(js, exception_mark);
 
   if (!program) {

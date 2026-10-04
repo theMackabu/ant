@@ -5947,67 +5947,12 @@ static ant_value_t builtin_Object(ant_params_t) {
 
 static ant_value_t builtin_function_empty(ant_params_t);
 
-static const char *const anonymous_templates[2][2] = {
-  { "function anonymous(\n) {\n\n}", "function* anonymous(\n) {\n\n}" },
-  { "async function anonymous(\n) {\n\n}", "async function* anonymous(\n) {\n\n}" },
+static const char *const anonymous_prefixes[2][2] = {
+  { "function anonymous(", "function* anonymous(" },
+  { "async function anonymous(", "async function* anonymous(" },
 };
 
 static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_target, bool is_async, bool is_generator) {
-  if (nargs == 0) {
-    ant_value_t func_obj = mkobj(js, 0);
-    if (is_err(func_obj)) return func_obj;
-    
-    const char *source = anonymous_templates[!!is_async][!!is_generator];
-    js_set_func_source(js, func_obj, source, strlen(source), JS_FUNC_SOURCE_COPY);
-    
-    if (is_async && is_generator) {
-      set_slot(func_obj, SLOT_ASYNC, js_true);
-      ant_value_t async_generator_proto = get_slot(js_glob(js), SLOT_ASYNC_GENERATOR_PROTO);
-      if (vtype(async_generator_proto) == kTypeFunction) js_set_proto_init(func_obj, async_generator_proto);
-    } 
-    
-    else if (is_async) {
-      set_slot(func_obj, SLOT_ASYNC, js_true);
-      ant_value_t async_proto = get_slot(js_glob(js), SLOT_ASYNC_PROTO);
-      if (vtype(async_proto) == kTypeFunction) js_set_proto_init(func_obj, async_proto);
-    } 
-    
-    else if (is_generator) {
-      ant_value_t generator_proto = get_slot(js_glob(js), SLOT_GENERATOR_PROTO);
-      if (vtype(generator_proto) == kTypeFunction) js_set_proto_init(func_obj, generator_proto);
-    } 
-    
-    else {
-      ant_value_t func_proto = get_slot(js_glob(js), SLOT_FUNC_PROTO);
-      ant_value_t instance_proto = js_instance_proto_from_new_target(js, func_proto, new_target);
-      if (is_object_type(instance_proto)) js_set_proto_init(func_obj, instance_proto);
-    }
-    
-    set_slot(func_obj, SLOT_CFUNC, js_mkfun(builtin_function_empty));
-    ant_value_t length_result = mkprop_interned_exact(js, func_obj, js->intern.length, tov(0), ANT_PROP_ATTR_CONFIGURABLE);
-    
-    if (is_err(length_result)) return length_result;
-    ant_value_t name_result = js_set_function_name(js, func_obj, "anonymous", 9);
-    
-    if (is_err(name_result)) return name_result;
-    ant_value_t func = js_obj_to_func(js, func_obj);
-    
-    if (!is_async || is_generator) {
-      ant_value_t proto_setup = is_generator
-        ? setup_func_prototype_property(js, func, false)
-        : setup_func_prototype(js, func);
-      if (is_err(proto_setup)) return proto_setup;
-    }
-
-    if (is_generator) {
-      ant_value_t prototype = js_get(js, func, "prototype");
-      ant_value_t parent_proto = is_async ? js->sym.async_generator_proto : js->sym.generator_proto;
-      if (is_object_type(prototype) && is_object_type(parent_proto)) js_set_proto_wb(js, prototype, parent_proto);
-    }
-    
-    return func;
-  }
-  
   size_t params_len = 0;
   
   for (int i = 0; i < nargs - 1; i++) {
@@ -6017,42 +5962,50 @@ static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_t
     if (i < nargs - 2) params_len += 1;
   }
   
-  ant_value_t body = coerce_to_str(js, args[nargs - 1]);
+  ant_value_t body = nargs > 0 ? coerce_to_str(js, args[nargs - 1]) : js_mkstr(js, "", 0);
   if (is_err(body)) return body;
   size_t body_len = vstrlen(js, body);
   
-  size_t body_open = 1 + params_len + 2;
-  size_t total_len = body_open + 1 + body_len + 2;
+  const char *prefix = anonymous_prefixes[!!is_async][!!is_generator];
+  size_t prefix_len = strlen(prefix);
   
-  char *code_buf = (char *)malloc(total_len + 1);
-  if (!code_buf) return js_mkerr(js, "oom");
-  size_t pos = 0;
-
-  code_buf[pos++] = '(';
+  sv_function_parts_t parts = { .is_async = is_async, .is_generator = is_generator };
+  parts.params_off = (ant_offset_t)prefix_len;
+  parts.params_end = parts.params_off + (ant_offset_t)params_len;
+  parts.body_off = parts.params_end + 5;
+  parts.body_end = parts.body_off + (ant_offset_t)body_len;
+  parts.len = parts.body_end + 2;
+  
+  char *text = (char *)malloc((size_t)parts.len + 1);
+  if (!text) return js_mkerr(js, "oom");
+  
+  size_t pos = prefix_len;
+  memcpy(text, prefix, prefix_len);
   for (int i = 0; i < nargs - 1; i++) {
     ant_offset_t param_len, param_off = vstr(js, args[i], &param_len);
-    memcpy(code_buf + pos, (const void *)(uintptr_t)param_off, param_len);
+    memcpy(text + pos, (const void *)(uintptr_t)param_off, param_len);
     pos += param_len;
-    if (i < nargs - 2) code_buf[pos++] = ',';
+    if (i < nargs - 2) text[pos++] = ',';
   }
   
-  memcpy(code_buf + pos, "\n){", 3);
-  pos += 3;
+  memcpy(text + pos, "\n) {\n", 5);
+  pos += 5;
   
   ant_offset_t body_str = vstr(js, body, NULL);
-  memcpy(code_buf + pos, (const void *)(uintptr_t)body_str, body_len);
+  memcpy(text + pos, (const void *)(uintptr_t)body_str, body_len);
   pos += body_len;
   
-  memcpy(code_buf + pos, "\n}", 2);
+  memcpy(text + pos, "\n}", 2);
   pos += 2;
-  code_buf[pos] = '\0';
+  text[pos] = '\0';
+  parts.text = text;
 
   ant_value_t func_obj = mkobj(js, 0);
-  if (is_err(func_obj)) { free(code_buf); return func_obj; }
+  if (is_err(func_obj)) { free(text); return func_obj; }
 
-  sv_func_t *compiled = sv_compile_function(js, code_buf, pos, body_open, is_async, is_generator);
+  sv_func_t *compiled = sv_compile_function(js, &parts);
   if (!compiled) {
-    free(code_buf);
+    free(text);
     if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "invalid function body");
   }
@@ -6060,7 +6013,7 @@ static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_t
   sv_closure_t *closure = js_closure_alloc(js);
   if (!closure) {
     sv_code_unit_unpin(compiled->unit);
-    free(code_buf);
+    free(text);
     return js_mkerr(js, "oom");
   }
   
@@ -6070,27 +6023,9 @@ static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_t
   closure->func_obj = func_obj;
   sv_code_unit_unpin(compiled->unit);
 
-  const char *async_prefix = is_async ? "async " : "";
-  const char *generator_marker = is_generator ? "*" : "";
-  size_t async_len = is_async ? 6 : 0;
-  size_t generator_len = is_generator ? 1 : 0;
-  size_t display_len = async_len + 19 + generator_len + params_len + 5 + body_len + 2;
-  char *display = (char *)malloc(display_len + 1);
-  if (!display) { free(code_buf); return js_mkerr(js, "oom"); }
-  size_t n = 0;
-  
-  memcpy(display + n, async_prefix, async_len);         n += async_len;
-  memcpy(display + n, "function", 8);                   n += 8;
-  memcpy(display + n, generator_marker, generator_len); n += generator_len;
-  memcpy(display + n, " anonymous(", 11);               n += 11;
-  memcpy(display + n, code_buf + 1, params_len);        n += params_len;
-  memcpy(display + n, "\n) {\n", 5);                    n += 5;
-  memcpy(display + n, code_buf + body_open + 1, body_len); n += body_len;
-  memcpy(display + n, "\n}", 2);                        n += 2;
-  
-  display[n] = '\0';
-  js_set_func_source(js, func_obj, display, display_len,
+  js_set_func_source(js, func_obj, text, (size_t)parts.len,
     compiled->unit ? JS_FUNC_SOURCE_UNIT : JS_FUNC_SOURCE_COPY);
+  free(text);
   
   ant_value_t length_result = mkprop_interned_exact(
     js, func_obj, js->intern.length,
@@ -6100,15 +6035,7 @@ static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_t
   ant_value_t name_result = is_err(length_result)
     ? length_result
     : js_set_function_name(js, func_obj, "anonymous", 9);
-  
-  if (is_err(name_result)) {
-    free(display);
-    free(code_buf);
-    return name_result;
-  }
-  
-  free(display);
-  free(code_buf);
+  if (is_err(name_result)) return name_result;
   
   if (is_async && is_generator) {
     set_slot(func_obj, SLOT_ASYNC, js_true);
@@ -6159,20 +6086,10 @@ static ant_value_t builtin_AsyncFunction(ant_params_t) {
 }
 
 static ant_value_t builtin_AsyncGeneratorFunction(ant_params_t) {
-  if (nargs == 0) {
-    ant_value_t empty = js_mkstr(js, "", 0);
-    if (is_err(empty)) return empty;
-    return build_dynamic_function(js, &empty, 1, call_new_target, true, true);
-  }
   return build_dynamic_function(js, args, nargs, call_new_target, true, true);
 }
 
 static ant_value_t builtin_GeneratorFunction(ant_params_t) {
-  if (nargs == 0) {
-    ant_value_t empty = js_mkstr(js, "", 0);
-    if (is_err(empty)) return empty;
-    return build_dynamic_function(js, &empty, 1, call_new_target, false, true);
-  }
   return build_dynamic_function(js, args, nargs, call_new_target, false, true);
 }
 
@@ -20597,9 +20514,9 @@ sv_func_t *js_compile_parsed_bytecode(
   return func;
 }
 
-ant_value_t js_execute_compiled_bytecode(
+static ant_value_t execute_top_level(
   ant_t *js, sv_func_t *func,
-  coroutine_t **async_coro_out
+  ant_value_t this_val, coroutine_t **async_coro_out
 ) {
   if (async_coro_out) *async_coro_out = NULL;
   js_clear_error_site(js);
@@ -20610,11 +20527,19 @@ ant_value_t js_execute_compiled_bytecode(
 
   if (sv_dump_bytecode_unlikely) sv_disasm(js, func, js->filename);
   if (func->is_tla)
-    result = sv_start_tla(js, func, js->this_val, async_coro_out);
-  else result = sv_execute_entry(js->vm, func, js->this_val, NULL, 0);
+    result = sv_start_tla(js, func, this_val, async_coro_out);
+  else result = sv_execute_entry(js->vm, func, this_val, NULL, 0);
 
   js->this_val = saved_this;
   return result;
+}
+
+ant_value_t js_execute_compiled_bytecode(ant_t *js, sv_func_t *func, coroutine_t **async_coro_out) {
+  return execute_top_level(js, func, js->this_val, async_coro_out);
+}
+
+ant_value_t js_execute_compiled_module(ant_t *js, sv_func_t *func) {
+  return execute_top_level(js, func, js_mkundef(), NULL);
 }
 
 // Runs a REPL entry as a script sharing the global lexical environment.
@@ -20663,7 +20588,10 @@ static inline js_eval_result_t js_eval_bytecode_mode_result(
   if (len == (size_t)~0U) len = strlen(buf);
 
   code_arena_mark_t parse_mark = parse_arena_mark();
-  sv_ast_t *program = sv_parse(js, buf, (ant_offset_t)len, parse_strict);
+  sv_parse_goal_t goal =
+    mode == SV_COMPILE_MODULE ? SV_PARSE_MODULE :
+    mode == SV_COMPILE_REPL ? SV_PARSE_REPL : SV_PARSE_SCRIPT;
+  sv_ast_t *program = sv_parse(js, buf, (ant_offset_t)len, goal, parse_strict);
 
   if (!program) {
     parse_arena_rewind(parse_mark);
@@ -20694,11 +20622,24 @@ static inline js_eval_result_t js_eval_bytecode_mode_result(
   }
 
   coroutine_t *async_coro = NULL;
-  ant_value_t value = sv_compile_mode_is_eval(mode)
-    ? js_execute_compiled_eval_bytecode(js, func, eval_this, eval_env, new_target)
-    : mode == SV_COMPILE_REPL
-      ? js_execute_compiled_repl_bytecode(js, func, &async_coro)
-      : js_execute_compiled_bytecode(js, func, NULL);
+  ant_value_t value;
+  
+  switch (mode) {
+    case SV_COMPILE_EVAL:
+    case SV_COMPILE_EVAL_FUNCTION:
+      value = js_execute_compiled_eval_bytecode(js, func, eval_this, eval_env, new_target);
+      break;
+    case SV_COMPILE_REPL:
+      value = js_execute_compiled_repl_bytecode(js, func, &async_coro);
+      break;
+    case SV_COMPILE_MODULE:
+      value = js_execute_compiled_module(js, func);
+      break;
+    case SV_COMPILE_SCRIPT:
+    default:
+      value = js_execute_compiled_bytecode(js, func, NULL);
+      break;
+  }
 
   sv_code_unit_unpin(func->unit);
   
