@@ -89,7 +89,11 @@ void *sv_code_unit_bump(sv_code_unit_t *unit, size_t size) {
 
   if (unit->block_count == 0 || unit->blocks[unit->block_count - 1] != block) {
     sv_code_block_t **blocks = vec_grow(unit->blocks, &unit->block_cap, unit->block_count + 1, sizeof(*blocks), 8);
-    if (!blocks) return NULL;
+    if (!blocks) {
+      if (block != u->current) block_release(u, block);
+      return NULL;
+    }
+    
     unit->blocks = blocks;
     unit->blocks[unit->block_count++] = block;
     block->live_units++;
