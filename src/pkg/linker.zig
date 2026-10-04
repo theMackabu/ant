@@ -119,6 +119,7 @@ pub const Linker = struct {
   linux_ficlone_failed: std.atomic.Value(bool),
   linux_copy_file_range_failed: std.atomic.Value(bool),
   linux_sendfile_failed: std.atomic.Value(bool),
+  windows_symlinks: std.atomic.Value(u8),
 
   pub fn init(allocator: std.mem.Allocator) Linker {
     return .{
@@ -132,6 +133,7 @@ pub const Linker = struct {
       .linux_ficlone_failed = std.atomic.Value(bool).init(false),
       .linux_copy_file_range_failed = std.atomic.Value(bool).init(false),
       .linux_sendfile_failed = std.atomic.Value(bool).init(false),
+      .windows_symlinks = std.atomic.Value(u8).init(0),
     };
   }
 
@@ -175,6 +177,25 @@ pub const Linker = struct {
     self.cross_device.store(true, .release);
   }
 
+  /// Windows only allows symlinks with Developer Mode or elevation; probe once
+  /// so packages are copied instead of half-linked when they are unavailable.
+  fn dirSymlinksSupported(self: *Linker, node_modules: std.Io.Dir) bool {
+    if (comptime builtin.os.tag != .windows) return true;
+    switch (self.windows_symlinks.load(.acquire)) {
+      1 => return true,
+      2 => return false,
+      else => {},
+    }
+
+    const probe = ".ant-symlink-probe";
+    node_modules.deleteDir(io, probe) catch {};
+    const supported = if (node_modules.symLink(io, ".", probe, .{ .is_directory = true })) |_| true else |_| false;
+    if (supported) node_modules.deleteDir(io, probe) catch {};
+    debug.log("linker: windows directory symlinks supported={}", .{supported});
+    self.windows_symlinks.store(if (supported) 1 else 2, .release);
+    return supported;
+  }
+
   pub fn pathsAreCrossDevice(source_path: []const u8, dest_path: []const u8) bool {
     if (comptime builtin.os.tag != .linux) return false;
 
@@ -200,13 +221,14 @@ pub const Linker = struct {
     };
     defer source_dir.close(io);
 
-    const use_virtual_context = pkg.allow_dir_symlink and self.packageNeedsVirtualContext(source_dir);
+    const allow_dir_symlink = pkg.allow_dir_symlink and self.dirSymlinksSupported(node_modules);
+    const use_virtual_context = allow_dir_symlink and self.packageNeedsVirtualContext(source_dir);
     if (use_virtual_context) {
       if (self.installedVirtualSymlinkMatches(node_modules, install_path, pkg.name, source_dir)) {
         _ = self.stats.packages_skipped.fetchAdd(1, .release);
         return;
       }
-    } else if (pkg.allow_dir_symlink and self.installedSymlinkMatches(node_modules, install_path, pkg.cache_path)) {
+    } else if (allow_dir_symlink and self.installedSymlinkMatches(node_modules, install_path, pkg.cache_path)) {
       _ = self.stats.packages_skipped.fetchAdd(1, .release);
       return;
     }
@@ -257,7 +279,7 @@ pub const Linker = struct {
     }
 
     const use_symlinked_cli = pkg.has_bin and self.packageSupportsSymlinkedCli(source_dir);
-    const use_dir_symlink = pkg.allow_dir_symlink and (!pkg.has_bin or use_symlinked_cli);
+    const use_dir_symlink = allow_dir_symlink and (!pkg.has_bin or use_symlinked_cli);
 
     if (use_dir_symlink) {
       try self.symlinkPackageDirectory(node_modules, pkg.cache_path, install_path);
@@ -326,7 +348,7 @@ pub const Linker = struct {
     }
 
     node_modules.deleteFile(io, install_path) catch {};
-    node_modules.symLink(io, cache_path, install_path, .{}) catch return error.IoError;
+    node_modules.symLink(io, cache_path, install_path, .{ .is_directory = true }) catch return error.IoError;
     _ = self.stats.files_linked.fetchAdd(1, .release);
     _ = self.stats.dirs_created.fetchAdd(1, .release);
   }
@@ -348,7 +370,7 @@ pub const Linker = struct {
     defer self.allocator.free(relative_target);
 
     node_modules.deleteFile(io, install_path) catch {};
-    node_modules.symLink(io, relative_target, install_path, .{}) catch return error.IoError;
+    node_modules.symLink(io, relative_target, install_path, .{ .is_directory = true }) catch return error.IoError;
     _ = self.stats.files_linked.fetchAdd(1, .release);
   }
 
@@ -600,7 +622,7 @@ pub const Linker = struct {
     defer self.allocator.free(relative_target);
 
     virtual_parent.deleteFile(io, dep_name) catch {};
-    virtual_parent.symLink(io, relative_target, dep_name, .{}) catch return error.IoError;
+    virtual_parent.symLink(io, relative_target, dep_name, .{ .is_directory = true }) catch return error.IoError;
     _ = self.stats.files_linked.fetchAdd(1, .release);
   }
 

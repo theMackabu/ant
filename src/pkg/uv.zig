@@ -1,25 +1,19 @@
-pub const loop_t = opaque {};
-pub const handle_t = opaque {};
-pub const stream_t = opaque {};
+// Struct layouts come from libuv's own headers: several of them differ on
+// Windows (uv_buf_t is { len, base } there so it can be cast to WSABUF).
+const c = @cImport({
+  @cInclude("uv.h");
+});
 
-pub const buf_t = extern struct {
-    base: [*c]u8,
-    len: usize,
-};
+pub const loop_t = c.uv_loop_t;
+pub const handle_t = c.uv_handle_t;
+pub const stream_t = c.uv_stream_t;
+pub const buf_t = c.uv_buf_t;
+pub const connect_t = c.uv_connect_t;
+pub const write_t = c.uv_write_t;
 
-pub const connect_t = extern struct {
-    data: ?*anyopaque = null,
-    _pad: [256]u8 = undefined,
-};
-
-pub const write_t = extern struct {
-    data: ?*anyopaque = null,
-    _pad: [256]u8 = undefined,
-};
-
-pub const RUN_DEFAULT: c_int = 0;
-pub const RUN_ONCE: c_int = 1;
-pub const RUN_NOWAIT: c_int = 2;
+pub const RUN_DEFAULT = c.UV_RUN_DEFAULT;
+pub const RUN_ONCE = c.UV_RUN_ONCE;
+pub const RUN_NOWAIT = c.UV_RUN_NOWAIT;
 
 pub const connect_cb = ?*const fn (*connect_t, c_int) callconv(.c) void;
 pub const close_cb = ?*const fn (*handle_t) callconv(.c) void;
@@ -27,5 +21,5 @@ pub const alloc_cb = ?*const fn (*handle_t, usize, *buf_t) callconv(.c) void;
 pub const read_cb = ?*const fn (*stream_t, isize, *const buf_t) callconv(.c) void;
 pub const write_cb = ?*const fn (*write_t, c_int) callconv(.c) void;
 
-pub extern fn uv_default_loop() *loop_t;
-pub extern fn uv_run(*loop_t, c_int) c_int;
+pub const uv_default_loop = c.uv_default_loop;
+pub const uv_run = c.uv_run;

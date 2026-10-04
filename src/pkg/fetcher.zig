@@ -374,7 +374,7 @@ const Http2Client = struct {
       self.write_buf.clearRetainingCapacity();
       const wr = try self.allocator.create(uv.write_t);
       wr.data = data.ptr;
-      var buf = uv.buf_t{ .base = data.ptr, .len = data.len };
+      var buf = uv.buf_t{ .base = data.ptr, .len = @intCast(data.len) };
       if (tlsuv.tlsuv_stream_write(wr, &self.tls, &buf, onWrite) != 0) {
         self.allocator.free(data);
         self.allocator.destroy(wr);
@@ -391,7 +391,7 @@ const Http2Client = struct {
 
   fn allocBuf(_: *uv.handle_t, size: usize, buf: *uv.buf_t) callconv(.c) void {
     buf.base = @ptrCast(std.c.malloc(size) orelse return);
-    buf.len = size;
+    buf.len = @intCast(size);
   }
 
   fn onRead(stream: *uv.stream_t, nread: isize, buf: *const uv.buf_t) callconv(.c) void {
@@ -448,7 +448,7 @@ const Http2Client = struct {
 
     if (!self.connect_pending) {
       const ctx = try self.allocator.create(ConnectCtx);
-      ctx.* = .{ .client = self, .req = .{} };
+      ctx.* = .{ .client = self, .req = std.mem.zeroes(uv.connect_t) };
       ctx.req.data = ctx;
       if (tlsuv.tlsuv_stream_connect(&ctx.req, &self.tls, self.host.ptr, if (self.use_tls) 443 else 80, onConnect) != 0) {
         self.allocator.destroy(ctx);
@@ -474,7 +474,7 @@ const Http2Client = struct {
     if (self.connect_pending) return;
 
     const ctx = try self.allocator.create(ConnectCtx);
-    ctx.* = .{ .client = self, .req = .{} };
+    ctx.* = .{ .client = self, .req = std.mem.zeroes(uv.connect_t) };
     ctx.req.data = ctx;
     if (tlsuv.tlsuv_stream_connect(&ctx.req, &self.tls, self.host.ptr, if (self.use_tls) 443 else 80, onConnect) != 0) {
       self.allocator.destroy(ctx);
