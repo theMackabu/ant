@@ -373,10 +373,10 @@ static inline void sv_tfb_ensure(sv_func_t *fn) {
 static inline void sv_tfb_record_call_target(sv_func_t *func, int bc_off, sv_func_t *callee) {
   if (!callee) return;
   
-  if (
-    __builtin_expect(callee->unit && !func->unit && !func->fb_unit_watched, 0) && 
-    !sv_code_units_watch_feedback(func, callee)
-  ) return;
+  if (__builtin_expect(callee->unit != NULL, 0)) {
+    if (!func->unit && !func->fb_unit_watched && !sv_code_units_watch_feedback(func, callee)) return;
+    func->fb_unit_target = true;
+  }
   
   sv_call_target_fb_t *fb = func->call_target_fb;
   int count = func->call_target_fb_count;

@@ -436,15 +436,6 @@ static void gc_func_enqueue(ant_t *js, sv_func_t *func) {
   gc_func_push(js, func);
 }
 
-static bool gc_func_targets_unit(const sv_func_t *func) {
-  for (int i = 0; i < func->call_target_fb_count; i++) {
-    const sv_func_t *target = func->call_target_fb[i].target;
-    if (target && target->unit) return true;
-  }
-  
-  return false;
-}
-
 static bool gc_fb_reserve(ant_t *js) {
   if (js->gc.fb_len < js->gc.fb_cap) return true;
   size_t cap = js->gc.fb_cap ? js->gc.fb_cap * 2 : 256;
@@ -480,7 +471,7 @@ static void gc_func_trace(ant_t *js, sv_func_t *func) {
     gc_mark_value(js, v);
   }
 
-  if (js->gc.minor || !gc_func_targets_unit(func)) return;
+  if (js->gc.minor || !func->fb_unit_target) return;
   
   if (gc_fb_reserve(js)) {
     js->gc.fb_funcs[js->gc.fb_len++] = func;
@@ -492,11 +483,14 @@ static void gc_func_trace(ant_t *js, sv_func_t *func) {
 }
 
 static void gc_func_clear_dead_targets(ant_t *js, sv_func_t *func) {
+  bool unit_target = false;
   for (int i = 0; i < func->call_target_fb_count; i++) {
     sv_func_t *target = func->call_target_fb[i].target;
-    if (target && sv_code_unit_dying(target->unit, js->gc.epoch)) 
-      func->call_target_fb[i].target = NULL;
+    if (!target || !target->unit) continue;
+    if (sv_code_unit_dying(target->unit, js->gc.epoch)) func->call_target_fb[i].target = NULL;
+    else unit_target = true;
   }
+  func->fb_unit_target = unit_target;
 }
 
 static void gc_clear_dead_call_targets(ant_t *js) {

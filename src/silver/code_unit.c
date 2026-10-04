@@ -10,7 +10,7 @@
 #include <string.h>
 
 static constexpr size_t SV_CODE_BLOCK_SIZE = 16 * 1024;
-static constexpr uint32_t SV_CODE_SPARE_MAX = 16;
+static constexpr uint32_t SV_CODE_SPARE_MAX = 64;
 
 struct sv_code_block {
   sv_code_block_t *next;
@@ -103,7 +103,7 @@ void *sv_code_unit_bump(sv_code_unit_t *unit, size_t size) {
 
   void *ptr = block->data + block->used;
   block->used += size;
-  unit->js->gc.pool_alloc += size;
+  unit->js->gc.code_alloc += size;
   
   return ptr;
 }
@@ -155,7 +155,7 @@ sv_code_unit_t *sv_code_unit_begin(ant_t *js) {
   
   unit->compiling = true;
   js->code_units.held_bytes += SV_CODE_UNIT_OVERHEAD;
-  js->gc.pool_alloc += SV_CODE_UNIT_OVERHEAD;
+  js->gc.code_alloc += SV_CODE_UNIT_OVERHEAD;
   unit->outer = js->code_units.active;
   unit->next = js->code_units.units;
   js->code_units.units = unit;
@@ -176,7 +176,7 @@ void sv_code_unit_finish(sv_code_unit_t *unit) {
   unit->compile_root_count = unit->compile_root_cap = 0;
 
   ant_t *js = unit->js;
-  if (js->gc.pool_alloc >= gc_pool_major_threshold(js)) gc_run(js);
+  if (js->gc.code_alloc >= gc_code_major_threshold(js)) gc_run(js);
 }
 
 void sv_code_unit_add_func(ant_t *js, sv_func_t *func) {

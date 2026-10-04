@@ -204,6 +204,23 @@ Status (2026-09-23):
   clears that list's dead targets; if the list cannot grow, the target is not
   recorded. The list is bounded, since such functions are never freed.
   `tests/test_code_unit_feedback.c` fails without the clearing.
+- 2026-10-03 (review, performance):
+  - Majors scanned up to 32 feedback entries of every traced function for
+    unit targets. A function now carries `fb_unit_target`, set when it records
+    a unit callee and cleared when none is left, and only those are listed.
+    Function-mark time per major dropped 13-70% depending on the workload;
+    the profiler's per-major figure varies several-fold with what the rest of
+    the program does (it includes minors), so whole-program instructions are
+    the steadier comparison.
+  - Unit memory counted toward the pool bytes, so minors started majors for
+    it at the pool threshold however large the heap: 50k `new Function` with
+    4M live objects took 421 ms and 4 majors. It now has its own counter
+    (`js->gc.code_alloc`) against the larger of the pool threshold and an
+    eighth of the live heap (`gc_code_major_threshold`), checked after
+    minors, in idle collection and when a unit finishes: 137 ms, no major
+    (master 156 ms). 300k `eval` still peaks at 20 MiB.
+  - The free-block cache holds 64 blocks (1 MiB) instead of 16; no change in
+    the eval loop's system time was measurable.
 
 ## Follow-ups
 

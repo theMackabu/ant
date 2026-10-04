@@ -55,6 +55,7 @@ void gc_track_young_upvalue_slow(ant_t *js, struct sv_upvalue *uv);
 
 size_t gc_live_major_threshold(ant_t *js);
 size_t gc_pool_major_threshold(ant_t *js);
+size_t gc_code_major_threshold(ant_t *js);
 
 void gc_func_mark_profile_enable(ant_t *js, bool enabled);
 void gc_func_mark_profile_reset(ant_t *js);

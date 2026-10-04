@@ -565,6 +565,7 @@ struct sv_func {
   bool jit_inline_reuse_checked: 1;
   bool jit_inline_reuse_empty: 1;
   bool fb_unit_watched: 1;
+  bool fb_unit_target: 1;
 
   sv_code_unit_t *unit;
   struct sv_func *unit_next;

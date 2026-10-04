@@ -210,6 +210,7 @@ struct ant_isolate_t {
   struct {
     size_t last_live;
     size_t pool_alloc;
+    size_t code_alloc;
     size_t closure_alloc;
     size_t closure_at_minor;
     size_t closure_wm_at_major;
