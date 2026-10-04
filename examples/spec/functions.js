@@ -121,6 +121,8 @@ test('empty AsyncFunction source', String(AsyncFunction()), 'async function anon
 test('empty GeneratorFunction source', String(GeneratorFunction()), 'function* anonymous(\n) {\n\n}');
 test('empty AsyncGeneratorFunction source', String(AsyncGeneratorFunction()), 'async function* anonymous(\n) {\n\n}');
 test('empty Function still callable', new Function()(), undefined);
+test('empty AsyncFunction returns a promise', AsyncFunction()() instanceof Promise, true);
+test('empty GeneratorFunction makes generators', typeof GeneratorFunction()().next, 'function');
 
 function syntaxError(...args) {
   try { new Function(...args); return 'ok'; }
