@@ -1,4 +1,4 @@
-import { test, testDeep, summary } from './helpers.js';
+import { test, testDeep, testThrows, summary } from './helpers.js';
 
 console.log('Iterator Tests\n');
 
@@ -72,5 +72,12 @@ for (const { values = [] } of [{ values: ['a', 'bb'] }]) {
 }
 test('captured nested for-of count', capturedNestedForOf, 2);
 test('captured nested for-of closure', capturedFns.bb(), 2);
+
+const stringIterator = String.prototype[Symbol.iterator];
+test('string iterator coerces a number receiver', [...stringIterator.call(123)].join(','), '1,2,3');
+test('string iterator coerces an object receiver', [...stringIterator.call({ toString() { return 'ob'; } })].join(','), 'o,b');
+testThrows('string iterator rejects null', () => stringIterator.call(null));
+testThrows('string iterator rejects undefined', () => stringIterator.call(undefined));
+testThrows('string iterator rejects a symbol', () => stringIterator.call(Symbol('s')));
 
 summary();

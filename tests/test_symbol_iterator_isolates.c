@@ -65,10 +65,13 @@ static void CheckGrowth(ant_t *js) {
   ant_value_t protos[24];
   size_t before = js->iterators.len;
   for (size_t i = 0; i < 24; i++) {
+    GC_ROOT_SAVE(setup_mark, js);
     protos[i] = js_mkobj(js);
+    GC_ROOT_PIN(js, protos[i]);
     js_set(js, protos[i], "next", js_mkfun(Next));
     js_set_sym(js, protos[i], js->sym.iterator_sym, js_mkfun(sym_this_cb));
     js_iter_register_advance(js, protos[i], Advance);
+    GC_ROOT_RESTORE(js, setup_mark);
   }
   assert(js->iterators.len == before + 24);
 

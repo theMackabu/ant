@@ -188,11 +188,25 @@ static ant_value_t get_string_iterator_prototype(ant_t *js) {
 }
 
 static ant_value_t string_iterator(ant_params_t) {
+  ant_value_t recv = js->this_val;
+  if (is_null(recv) || is_undefined(recv)) return js_mkerr_typed(
+    js, JS_ERR_TYPE, "String.prototype[Symbol.iterator] called on null or undefined"
+  );
+
+  if (vtype(recv) == kTypeSymbol)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a string");
+
+  ant_value_t str = coerce_to_str(js, recv);
+  if (is_err(str)) return str;
+
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, str);
   ant_value_t iter = js_mkobj(js);
 
-  js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
+  js_set_slot_wb(js, iter, SLOT_DATA, str);
   js_set_slot(iter, SLOT_ITER_STATE, js_mknum(0));
   js_set_proto_init(iter, get_string_iterator_prototype(js));
+  GC_ROOT_RESTORE(js, mark);
 
   return iter;
 }
