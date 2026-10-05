@@ -395,7 +395,7 @@ void mir_emit_value_to_objptr_or_jmp(
     MIR_reg_t v, MIR_reg_t out_ptr,
     MIR_reg_t r_tag, MIR_label_t slow);
 void mir_emit_ic_obj_epoch_guard(
-    MIR_context_t ctx, MIR_item_t fn,
+    ant_t *js, MIR_context_t ctx, MIR_item_t fn,
     MIR_reg_t ic, MIR_label_t slow,
     const char *prefix, int bc_off, uint16_t ic_idx);
 void mir_emit_string_concat_fastpath(

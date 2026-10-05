@@ -1487,10 +1487,10 @@ ant_value_t jit_helper_put_field_ic(
   return out;
 }
 
-void jit_helper_shape_transition(ant_object_t *obj, ant_shape_t *to_shape) {
+void jit_helper_shape_transition(ant_t *js, ant_object_t *obj, ant_shape_t *to_shape) {
   if (!obj || !obj->shape || !to_shape || obj->shape == to_shape) return;
   ant_shape_transition_existing(&obj->shape, to_shape);
-  ant_object_invalidate_guarded_absence(obj);
+  ant_object_invalidate_guarded_absence(js, obj);
 }
 
 ant_value_t jit_helper_get_elem(
@@ -1508,7 +1508,7 @@ ant_value_t jit_helper_get_elem(
       sv_atom_t atom = { .str = NULL, .len = 11 };
       ant_value_t result;
       if (ic->get_kind == SV_GF_IC_MISSING && vtype(obj) == kTypeObject &&
-        sv_ic_try_get_hit(ic, obj, js_obj_ptr(obj), &atom, &result)) return result;
+        sv_ic_try_get_hit(js, ic, obj, js_obj_ptr(obj), &atom, &result)) return result;
       if (sv_try_symbol_description_ic(js, obj, &atom, ic, &result)) return result;
       atom.str = intern_string("description", 11);
       if (atom.str && sv_try_prop_get_ic_no_effect(js, obj, &atom, ic, &result)) return result;

@@ -421,7 +421,7 @@ static inline ant_value_t sv_instanceof_ic_eval(
   
   if (!ic || !lhs_cacheable || vtype(r) != kTypeFunction) goto slow_path;
 
-  uint32_t cur_epoch = ant_ic_epoch_counter;
+  uint32_t cur_epoch = js->ic.epoch;
   uintptr_t rhs_id = (uintptr_t)vdata(r);
   
   if (ic->epoch != cur_epoch ||
@@ -430,7 +430,7 @@ static inline ant_value_t sv_instanceof_ic_eval(
   if (lhs_proto == ic->guard.comparison.receiver_proto) return js_true;
 
   if (lhs_ptr->shape == ic->cached_shape && lhs_proto_ptr == ic->cached_holder &&
-      ic->guard.comparison.object_epoch == ant_ic_obj_epoch_counter)
+      ic->guard.comparison.object_epoch == js->ic.obj_epoch)
     return js_bool(ic->cached_index != 0);
 
 slow_path:
@@ -444,10 +444,10 @@ slow_path:
     ic->cached_shape = lhs_ptr->shape;
     ic->cached_holder = lhs_proto_ptr;
     ic->cached_index = (uint32_t)(vdata(res) ? 1u : 0u);
-    ic->epoch = ant_ic_epoch_counter;
+    ic->epoch = js->ic.epoch;
     ic->cached_aux = (uintptr_t)vdata(r);
     ic->guard.comparison.receiver_proto = ctor_proto;
-    ic->guard.comparison.object_epoch = ant_ic_obj_epoch_counter;
+    ic->guard.comparison.object_epoch = js->ic.obj_epoch;
     ic->prototype_epoch = js->prototype_write_epoch;
   }
 
@@ -478,8 +478,8 @@ static inline ant_value_t sv_isproto_ic_eval(
 
   if (
     ic && proto_ptr && obj_ptr &&
-    ic->epoch == ant_ic_epoch_counter &&
-    ic->guard.comparison.object_epoch == ant_ic_obj_epoch_counter &&
+    ic->epoch == js->ic.epoch &&
+    ic->guard.comparison.object_epoch == js->ic.obj_epoch &&
     ic->cached_holder == proto_ptr &&
     (ant_object_t *)(uintptr_t)ic->cached_shape == obj_ptr
   ) {
@@ -491,8 +491,8 @@ static inline ant_value_t sv_isproto_ic_eval(
     ic->cached_holder = proto_ptr;
     ic->cached_shape = (ant_shape_t *)(uintptr_t)obj_ptr;
     ic->cached_index = found ? 1u : 0u;
-    ic->epoch = ant_ic_epoch_counter;
-    ic->guard.comparison.object_epoch = ant_ic_obj_epoch_counter;
+    ic->epoch = js->ic.epoch;
+    ic->guard.comparison.object_epoch = js->ic.obj_epoch;
   }
   return js_bool(found);
 }

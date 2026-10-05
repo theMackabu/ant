@@ -301,8 +301,8 @@ void gc_run(ant_t *js) {
   uint64_t mark_ns = gc_objects_run(js, conservative ? gc_ropes_mark_conservative_roots : NULL);
   
   gc_clear_remembered_builders(js);
-  ant_ic_epoch_bump();
-  ant_ic_obj_epoch_bump();
+  ant_ic_epoch_bump(js);
+  ant_ic_obj_epoch_bump(js);
   sv_gf_mega_clear(js);
   sv_ic_polys_release_shapes(js);
 
@@ -368,7 +368,7 @@ void gc_run_minor(ant_t *js) {
   gc_objects_run_minor(js);
   gc_clear_remembered_builders(js);
   gc_ropes_sweep(js, true);
-  ant_ic_obj_epoch_bump();
+  ant_ic_obj_epoch_bump(js);
 
   js->old_live_count = js->obj_arena.live_count;
   js->minor_gc_count++;

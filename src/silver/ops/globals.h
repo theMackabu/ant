@@ -146,7 +146,7 @@ static inline ant_object_t *sv_global_obj_ptr(ant_value_t target) {
 }
 
 static inline bool sv_global_ic_try_get_hit(
-  ant_value_t target,
+  ant_t *js, ant_value_t target,
   sv_ic_entry_t *ic,
   const char *interned,
   ant_value_t *out
@@ -155,7 +155,7 @@ static inline bool sv_global_ic_try_get_hit(
 
   ant_object_t *gptr = sv_global_obj_ptr(target);
   if (!gptr || gptr->flags.is_exotic || !gptr->shape) return false;
-  if (ic->epoch != ant_ic_epoch_counter) return false;
+  if (ic->epoch != js->ic.epoch) return false;
   if (ic->cached_shape != gptr->shape) return false;
   if (ic->cached_index >= gptr->prop_count) return false;
 
@@ -183,7 +183,7 @@ static inline bool sv_global_prop_is_accessor(
 }
 
 static inline bool sv_global_ic_try_fill(
-  ant_value_t target,
+  ant_t *js, ant_value_t target,
   sv_ic_entry_t *ic,
   const char *interned,
   ant_value_t *out
@@ -207,7 +207,7 @@ static inline bool sv_global_ic_try_fill(
   ic->cached_shape = gptr->shape;
   ic->cached_holder = gptr;
   ic->cached_index = idx;
-  ic->epoch = ant_ic_epoch_counter;
+  ic->epoch = js->ic.epoch;
   *out = ant_object_prop_get_unchecked(gptr, idx);
   return true;
 }
@@ -217,7 +217,7 @@ static inline bool sv_global_ic_try_fill_unshadowed(
   const char *interned, ant_value_t *out
 ) {
   if (target == js->global && sv_global_lexical(js, interned)) return false;
-  return sv_global_ic_try_fill(target, ic, interned, out);
+  return sv_global_ic_try_fill(js, target, ic, interned, out);
 }
 
 static __attribute__((noinline)) ant_value_t sv_global_get_interned_miss(
@@ -228,7 +228,7 @@ static __attribute__((noinline)) ant_value_t sv_global_get_interned_miss(
 
   ant_global_lexical_t *lex = sv_global_lexical(js, interned);
   if (lex) return sv_global_lexical_get(js, lex);
-  if (sv_global_ic_try_fill(target, ic, interned, &out)) return out;
+  if (sv_global_ic_try_fill(js, target, ic, interned, &out)) return out;
 
   if (sv_global_prop_is_accessor(target, interned))
     return js_getprop_fallback(js, target, interned);
@@ -244,7 +244,7 @@ static inline ant_value_t sv_global_get_interned_ic(
 ) {
   ant_value_t out = js_mkundef();
   sv_ic_entry_t *ic = sv_global_ic_slot_for_ip(func, ip);
-  if (sv_global_ic_try_get_hit(js->global, ic, interned, &out)) return out;
+  if (sv_global_ic_try_get_hit(js, js->global, ic, interned, &out)) return out;
   return sv_global_get_interned_miss(js, interned, ic);
 }
 
@@ -258,7 +258,7 @@ static inline ant_value_t sv_eval_global_get_interned_ic(
   ant_value_t target = env;
 
   if (
-    sv_global_ic_try_get_hit(target, ic, interned, &out) || 
+    sv_global_ic_try_get_hit(js, target, ic, interned, &out) || 
     sv_global_ic_try_fill_unshadowed(js, target, ic, interned, &out)
   ) {
     if (found) *found = true;

@@ -101,7 +101,7 @@ enum: ant_value_t {
 
 static inline void ant_prototype_write_epoch_bump(ant_t *js) {
   if (++js->prototype_write_epoch == 0) {
-    ant_ic_epoch_bump();
+    ant_ic_epoch_bump(js);
     js->prototype_write_epoch = 1;
   }
 }

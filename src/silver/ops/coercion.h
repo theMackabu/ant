@@ -339,7 +339,7 @@ static inline bool sv_with_binding_is_unscopable(
     ant_value_t base_proto = (base_ptr && is_object_type(base_ptr->proto)) ? base_ptr->proto : js_mknull();
     ant_object_t *proto_ptr = is_object_type(base_proto) ? js_obj_ptr(js_as_obj(base_proto)) : NULL;
     
-    uint32_t cache_epoch = ant_ic_obj_epoch_counter;
+    uint32_t cache_epoch = js->ic.obj_epoch;
     ant_with_unscopables_cache_t *cache = &js->runtime_cache.with_unscopables_absent;
 
     if (

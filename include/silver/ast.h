@@ -161,7 +161,7 @@ struct sv_ast {
   uint32_t        src_end;
 };
 
-bool sv_ast_list_push(sv_ast_list_t *list, sv_ast_t *node);
+bool sv_ast_list_push(ant_t *js, sv_ast_list_t *list, sv_ast_t *node);
 bool sv_ast_can_be_expression_statement(const sv_ast_t *node);
 bool ast_references_arguments(const sv_ast_t *node);
 bool ast_references_new_target(const sv_ast_t *node);
@@ -187,7 +187,7 @@ typedef struct {
   bool is_generator;
 } sv_function_parts_t;
 
-sv_ast_t *sv_ast_new(sv_node_type_t type);
+sv_ast_t *sv_ast_new(ant_t *js, sv_node_type_t type);
 sv_ast_t *sv_parse_function_parts(ant_t *js, const sv_function_parts_t *parts);
 sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, sv_parse_goal_t goal, bool strict);
 

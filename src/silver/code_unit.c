@@ -108,13 +108,13 @@ void *sv_code_unit_bump(sv_code_unit_t *unit, size_t size) {
 
 void *sv_code_bump(ant_t *js, size_t size) {
   sv_code_unit_t *unit = js->code_units.active;
-  return unit ? sv_code_unit_bump(unit, size) : code_arena_bump(size);
+  return unit ? sv_code_unit_bump(unit, size) : code_arena_bump(js, size);
 }
 
 const char *sv_code_text(ant_t *js, const char *code, size_t len) {
   sv_code_unit_t *unit = js->code_units.active;
   
-  if (!unit) return code_arena_alloc(code, len);
+  if (!unit) return code_arena_alloc(js, code, len);
   if (!code || len == 0) return NULL;
   
   char *dest = sv_code_unit_bump(unit, len + 1);

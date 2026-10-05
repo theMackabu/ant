@@ -105,7 +105,7 @@ static void check_failed_fills(ant_t *js, ant_value_t object, ant_shape_t *old_s
     assert(registration_attempts == attempts + 1);
     assert(ic.cached_shape == NULL && !(ic.shape_ref_mask & SV_IC_SHAPE_REF_CACHED));
     ant_value_t ignored;
-    assert(!sv_ic_try_get_hit(&ic, object, js_obj_ptr(object), &atom, &ignored));
+    assert(!sv_ic_try_get_hit(js, &ic, object, js_obj_ptr(object), &atom, &ignored));
     if (i == 0) assert(js_getnum(out) == 41);
     else assert(vtype(out) == kTypeUndefined);
   }
@@ -126,17 +126,17 @@ static void check_failed_fills(ant_t *js, ant_value_t object, ant_shape_t *old_s
 
 static void check_partial_transition(ant_t *js, ant_shape_t *from, ant_shape_t *to) {
   sv_ic_entry_t ic = {0};
-  ic.guard.add.epoch = ant_ic_epoch_counter;
+  ic.guard.add.epoch = js->ic.epoch;
   registrations_until_failure = 1;
   int attempts = registration_attempts;
-  sv_ic_set_add_transition(js, &ic, from, to, 1, ant_ic_epoch_counter, 0);
+  sv_ic_set_add_transition(js, &ic, from, to, 1, js->ic.epoch, 0);
   assert(registration_attempts == attempts + 2);
-  assert(ic.guard.add.epoch == ant_ic_epoch_counter);
+  assert(ic.guard.add.epoch == js->ic.epoch);
   assert(ic.guard.add.from_shape == from && ic.guard.add.to_shape == NULL);
   assert(ic.shape_ref_mask == SV_IC_SHAPE_REF_ADD_FROM);
   registrations_until_failure = -1;
-  sv_ic_set_add_transition(js, &ic, from, to, 1, ant_ic_epoch_counter, 0);
-  assert(ic.guard.add.epoch == ant_ic_epoch_counter && ic.guard.add.slot == 1);
+  sv_ic_set_add_transition(js, &ic, from, to, 1, js->ic.epoch, 0);
+  assert(ic.guard.add.epoch == js->ic.epoch && ic.guard.add.slot == 1);
   assert(ic.guard.add.to_shape == to);
   // Registered slots must remain alive until the shape-root list is cleared.
   sv_ic_shape_refs_cleanup(js);
@@ -147,7 +147,7 @@ static void check_partial_transition(ant_t *js, ant_shape_t *from, ant_shape_t *
 // pointer, so a shape's property metadata may be edited in place only while
 // it has one owner (shape_prepare_metadata_write); a retained shape is shared,
 // and an edit goes to a copy, leaving the snapshotted shape as it was.
-static void check_shape_metadata_writes_need_one_owner(void) {
+static void check_shape_metadata_writes_need_one_owner(ant_t *js) {
   const char *key = intern_string("snapshot", 8);
   const char *extra = intern_string("extra", 5);
   for (unsigned operation = 0; operation < 4; operation++) {
@@ -155,8 +155,8 @@ static void check_shape_metadata_writes_need_one_owner(void) {
     ant_shape_t *shape = ant_shape_clone(root);
     ant_shape_release(root);
     uint32_t slot;
-    assert(shape && ant_shape_add_interned(shape, key, ANT_PROP_ATTR_DEFAULT, &slot));
-    assert(ant_shape_add_interned(shape, extra, ANT_PROP_ATTR_DEFAULT, &slot));
+    assert(shape && ant_shape_add_interned(js, shape, key, ANT_PROP_ATTR_DEFAULT, &slot));
+    assert(ant_shape_add_interned(js, shape, extra, ANT_PROP_ATTR_DEFAULT, &slot));
 
     // a snapshot's reference makes the shape shared
     ant_shape_retain(shape);
@@ -164,10 +164,10 @@ static void check_shape_metadata_writes_need_one_owner(void) {
     ant_shape_t *copy = ant_shape_clone(shape);
     assert(copy && !ant_shape_is_shared(copy));
 
-    if (operation == 0) assert(ant_shape_set_attrs_interned(copy, key, 0));
+    if (operation == 0) assert(ant_shape_set_attrs_interned(js, copy, key, 0));
     if (operation == 1) assert(ant_shape_prop_mut_at(copy, 0));
-    if (operation == 2) assert(ant_shape_remove_slot(copy, 0));
-    if (operation == 3) assert(ant_shape_clear_accessor_slot(copy, 0));
+    if (operation == 2) assert(ant_shape_remove_slot(js, copy, 0));
+    if (operation == 3) assert(ant_shape_clear_accessor_slot(js, copy, 0));
 
     // the retained shape keeps the metadata compiled code saw
     const ant_shape_prop_t *prop = ant_shape_prop_at(shape, 0);
@@ -185,7 +185,7 @@ int main(void) {
   ant_t *js = ant_create();
   assert(js);
   js_setstackbase(js, &stack_base);
-  check_shape_metadata_writes_need_one_owner();
+  check_shape_metadata_writes_need_one_owner(js);
   GC_ROOT_SAVE(roots, js);
   ant_value_t old = js_mkobj(js);
   GC_ROOT_PIN(js, old);

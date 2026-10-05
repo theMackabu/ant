@@ -901,7 +901,7 @@ void jit_emit_compare(jit_compile_t *c) {
                                      MIR_new_reg_op(c->ctx, r_lhs_proto_obj),
                                      MIR_new_reg_op(c->ctx, r_ic_holder)));
         mir_emit_ic_obj_epoch_guard(
-            c->ctx, c->jit_func, r_ic, slow, "inst", c->bc_off, ic_idx);
+            c->js, c->ctx, c->jit_func, r_ic, slow, "inst", c->bc_off, ic_idx);
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_MOV,
                                      MIR_new_reg_op(c->ctx, r_ic_idx_val),
@@ -1074,7 +1074,7 @@ void jit_emit_compare(jit_compile_t *c) {
                                      MIR_new_reg_op(c->ctx, r_obj_ptr),
                                      MIR_new_reg_op(c->ctx, r_ic_shape)));
         mir_emit_ic_obj_epoch_guard(
-            c->ctx, c->jit_func, r_ic, slow, "cip", c->bc_off, ic_idx);
+            c->js, c->ctx, c->jit_func, r_ic, slow, "cip", c->bc_off, ic_idx);
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_MOV,
                                      MIR_new_reg_op(c->ctx, r_ic_idx_val),

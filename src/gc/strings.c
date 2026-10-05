@@ -1,6 +1,7 @@
 #include "gc/verify.h"
 #include "internal.h"
 #include "gc/strings.h"
+#include "utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,7 +12,7 @@ typedef struct {
   size_t n_slots;
 } gc_bitmap_t;
 
-typedef struct {
+typedef struct gc_string_block_mark {
   uintptr_t base;
   uintptr_t end;
   ant_pool_block_t *block;
@@ -20,20 +21,15 @@ typedef struct {
   gc_bitmap_t bitmap;
 } gc_block_mark_t;
 
-typedef struct {
+typedef struct gc_large_string_mark {
   uintptr_t ptr;
   ant_large_string_alloc_t *alloc;
 } gc_large_string_mark_t;
 
-static gc_block_mark_t *g_string_marks = NULL;
-static int g_string_mark_count = 0;
-static int g_string_mark_cap = 0;
-
-static gc_large_string_mark_t *g_large_string_marks = NULL;
-static int g_large_string_mark_count = 0;
-static int g_large_string_mark_cap = 0;
-
-static uint64_t g_strings_sweep_epoch = 1;
+// Bumped by every string sweep on this thread, in any isolate
+// the thread-local string caches remember a string by address
+// and a sweep may free that address for reuse.
+static _Thread_local uint64_t g_strings_sweep_epoch = 1;
 uint64_t gc_strings_sweep_epoch(void) { return g_strings_sweep_epoch; }
 
 static gc_bitmap_t bitmap_alloc(size_t n_slots) {
@@ -73,7 +69,7 @@ static int large_mark_cmp(const void *a, const void *b) {
   return 0;
 }
 
-static void collect_bucket_blocks(ant_pool_bucket_t *bucket) {
+static void collect_bucket_blocks(ant_t *js, ant_pool_bucket_t *bucket) {
   if (!bucket || bucket->slot_stride == 0) return;
   size_t stride = bucket->slot_stride;
 
@@ -81,35 +77,50 @@ static void collect_bucket_blocks(ant_pool_bucket_t *bucket) {
     size_t n_slots = b->used / stride;
     if (n_slots == 0) continue;
     
-    if (g_string_mark_count >= g_string_mark_cap) {
-      int cap = g_string_mark_cap ? g_string_mark_cap * 2 : 32;
-      g_string_marks = realloc(g_string_marks, (size_t)cap * sizeof(gc_block_mark_t));
-      g_string_mark_cap = cap;
+    gc_bitmap_t bitmap = bitmap_alloc(n_slots);
+    if (!bitmap.bits) continue;
+
+    gc_block_mark_t *marks = vec_grow(
+      js->gc.string_marks, &js->gc.string_mark_cap,
+      js->gc.string_mark_len + 1, sizeof(*marks), 32
+    );
+
+    if (!marks) {
+      bitmap_free(&bitmap);
+      continue;
     }
+
+    js->gc.string_marks = marks;
+    gc_block_mark_t *m = &marks[js->gc.string_mark_len++];
     
-    gc_block_mark_t *m = &g_string_marks[g_string_mark_count++];
     m->base = (uintptr_t)b->data;
     m->end = m->base + b->used;
     m->block = b;
     m->bucket = bucket;
     m->stride = stride;
-    m->bitmap = bitmap_alloc(n_slots);
+    m->bitmap = bitmap;
   }
 }
 
-static void collect_large_strings(ant_large_string_space_t *space) {
+static void collect_large_strings(ant_t *js, ant_large_string_space_t *space) {
   if (!space) return;
 
   for (ant_large_string_alloc_t *cur = space->live; cur; cur = cur->next) {
     cur->marked = 0;
     
-    if (g_large_string_mark_count >= g_large_string_mark_cap) {
-      int cap = g_large_string_mark_cap ? g_large_string_mark_cap * 2 : 32;
-      g_large_string_marks = realloc(g_large_string_marks, (size_t)cap * sizeof(gc_large_string_mark_t));
-      g_large_string_mark_cap = cap;
+    gc_large_string_mark_t *marks = vec_grow(
+      js->gc.large_string_marks, &js->gc.large_string_mark_cap,
+      js->gc.large_string_mark_len + 1, sizeof(*marks), 32
+    );
+    
+    if (!marks) { 
+      cur->marked = 1;
+      continue;
     }
     
-    g_large_string_marks[g_large_string_mark_count++] = (gc_large_string_mark_t){
+    js->gc.large_string_marks = marks;
+
+    marks[js->gc.large_string_mark_len++] = (gc_large_string_mark_t){
       .ptr = (uintptr_t)large_string_flat_ptr(cur),
       .alloc = cur,
     };
@@ -188,27 +199,27 @@ static void large_string_trim_reusable(ant_large_string_space_t *space) {
 }
 
 void gc_strings_begin(ant_t *js) {
-  g_string_mark_count = 0;
-  g_large_string_mark_count = 0;
+  js->gc.string_mark_len = 0;
+  js->gc.large_string_mark_len = 0;
 
   ant_string_pool_t *pool = &js->pool.string;
   for (int i = 0; i < ANT_POOL_SIZE_CLASS_COUNT; i++) {
     pool->classes[i].slot_free = NULL;
-    collect_bucket_blocks(&pool->classes[i]);
+    collect_bucket_blocks(js, &pool->classes[i]);
   }
 
   pool->large.gc_epoch++;
   if (pool->large.gc_epoch == 0) pool->large.gc_epoch = 1;
   
   large_string_promote_quarantine(&pool->large);
-  collect_large_strings(&pool->large);
+  collect_large_strings(js, &pool->large);
 
-  if (g_string_mark_count > 1) qsort(g_string_marks, 
-    (size_t)g_string_mark_count, sizeof(gc_block_mark_t), pooled_mark_cmp
+  if (js->gc.string_mark_len > 1) qsort(js->gc.string_marks, 
+    (size_t)js->gc.string_mark_len, sizeof(gc_block_mark_t), pooled_mark_cmp
   );
   
-  if (g_large_string_mark_count > 1) qsort(g_large_string_marks, 
-    (size_t)g_large_string_mark_count, sizeof(gc_large_string_mark_t), large_mark_cmp
+  if (js->gc.large_string_mark_len > 1) qsort(js->gc.large_string_marks, 
+    (size_t)js->gc.large_string_mark_len, sizeof(gc_large_string_mark_t), large_mark_cmp
   );
 }
 
@@ -216,13 +227,13 @@ void gc_strings_mark(ant_t *js, const void *ptr) {
   if (!ptr) return;
   uintptr_t p = (uintptr_t)ptr;
 
-  if (g_string_mark_count > 0) {
+  if (js->gc.string_mark_len > 0) {
     int lo = 0;
-    int hi = g_string_mark_count - 1;
+    int hi = (int)js->gc.string_mark_len - 1;
     
     while (lo <= hi) {
     int mid = lo + (hi - lo) / 2;
-    gc_block_mark_t *m = &g_string_marks[mid];
+    gc_block_mark_t *m = &js->gc.string_marks[mid];
     
     if (p < m->base) hi = mid - 1;
     else if (p >= m->end) lo = mid + 1;
@@ -233,12 +244,12 @@ void gc_strings_mark(ant_t *js, const void *ptr) {
     }}
   }
 
-  if (g_large_string_mark_count == 0) return;
-  int lo = 0; int hi = g_large_string_mark_count - 1;
+  if (js->gc.large_string_mark_len == 0) return;
+  int lo = 0; int hi = (int)js->gc.large_string_mark_len - 1;
   
   while (lo <= hi) {
   int mid = lo + (hi - lo) / 2;
-  gc_large_string_mark_t *m = &g_large_string_marks[mid];
+  gc_large_string_mark_t *m = &js->gc.large_string_marks[mid];
   
   if (p < m->ptr) hi = mid - 1;
   else if (p > m->ptr) lo = mid + 1;
@@ -249,8 +260,8 @@ void gc_strings_mark(ant_t *js, const void *ptr) {
 }
 
 void gc_strings_sweep(ant_t *js) {
-  for (int i = 0; i < g_string_mark_count; i++) {
-    gc_block_mark_t *m = &g_string_marks[i];
+  for (size_t i = 0; i < js->gc.string_mark_len; i++) {
+    gc_block_mark_t *m = &js->gc.string_marks[i];
     ant_pool_bucket_t *bucket = m->bucket;
 
     bool any_live = false;
@@ -322,8 +333,8 @@ void gc_strings_sweep(ant_t *js) {
     } else bucket->free_head = NULL;
   }
 
-  g_string_mark_count = 0;
-  g_large_string_mark_count = 0;
+  js->gc.string_mark_len = 0;
+  js->gc.large_string_mark_len = 0;
   
   gc_strings_epoch_bump();
 }
@@ -331,4 +342,13 @@ void gc_strings_sweep(ant_t *js) {
 void gc_strings_epoch_bump(void) {
   g_strings_sweep_epoch++;
   if (g_strings_sweep_epoch == 0) g_strings_sweep_epoch = 1;
+}
+
+void gc_strings_destroy(ant_t *js) {
+  free(js->gc.string_marks);
+  free(js->gc.large_string_marks);
+  js->gc.string_marks = NULL;
+  js->gc.large_string_marks = NULL;
+  js->gc.string_mark_len = js->gc.string_mark_cap = 0;
+  js->gc.large_string_mark_len = js->gc.large_string_mark_cap = 0;
 }

@@ -13,18 +13,18 @@
 #include <stdlib.h>
 #include <string.h>
 
-sv_ast_t *sv_ast_new(sv_node_type_t type) {
-  sv_ast_t *n = parse_arena_bump(sizeof(sv_ast_t));
+sv_ast_t *sv_ast_new(ant_t *js, sv_node_type_t type) {
+  sv_ast_t *n = parse_arena_bump(js, sizeof(sv_ast_t));
   if (!n) return NULL;
   memset(n, 0, sizeof(sv_ast_t));
   n->type = type;
   return n;
 }
 
-bool sv_ast_list_push(sv_ast_list_t *list, sv_ast_t *node) {
+bool sv_ast_list_push(ant_t *js, sv_ast_list_t *list, sv_ast_t *node) {
   if (list->count >= list->cap) {
     int new_cap = list->cap ? list->cap * 2 : 4;
-    sv_ast_t **new_items = parse_arena_bump((size_t)new_cap * sizeof(sv_ast_t *));
+    sv_ast_t **new_items = parse_arena_bump(js, (size_t)new_cap * sizeof(sv_ast_t *));
     if (!new_items) return false;
     if (list->items)
       memcpy(new_items, list->items, (size_t)list->count * sizeof(sv_ast_t *));
@@ -131,9 +131,7 @@ static inline const char *tok_str(P) {
   return &CODE[TOFF]; 
 }
 
-static inline sv_ast_t *mk_plain(sv_node_type_t type) {
-  return sv_ast_new(type);
-}
+#define mk_plain(type) sv_ast_new(JS, type)
 
 #define mk(type) ({ \
   sv_ast_t *_n = mk_plain(type); \
@@ -159,7 +157,7 @@ static inline sv_ast_t *mk_num(P, double val) {
   return n;
 }
 
-static inline sv_ast_t *mk_ident(const char *s, uint32_t len) {
+static inline sv_ast_t *mk_ident(P, const char *s, uint32_t len) {
   sv_ast_t *n = mk_plain(N_IDENT);
   n->str = s;
   n->len = len;
@@ -179,13 +177,13 @@ typedef struct {
   bool valid_cooked;
 } sv_tpl_cooked_t;
 
-static inline const char *decode_ident_into_arena(const char *src, uint32_t len, uint32_t *out_len) {
+static inline const char *decode_ident_into_arena(ant_t *js, const char *src, uint32_t len, uint32_t *out_len) {
   if (!src || len == 0 || !memchr(src, '\\', len)) {
     if (out_len) *out_len = len;
     return src;
   }
 
-  char *dst = parse_arena_bump((size_t)len + 1);
+  char *dst = parse_arena_bump(js, (size_t)len + 1);
   if (!dst) {
     if (out_len) *out_len = len;
     return src;
@@ -218,7 +216,7 @@ static inline bool is_contextual_ident_tok(uint8_t tok) {
 }
 
 static inline const char *tok_ident_str(P, uint32_t *out_len) {
-  return decode_ident_into_arena(tok_str(p), (uint32_t)TLEN, out_len);
+  return decode_ident_into_arena(JS, tok_str(p), (uint32_t)TLEN, out_len);
 }
 
 static inline bool is_ident_like_tok(uint8_t tok) {
@@ -273,7 +271,7 @@ static inline bool var_decl_has_initializer(sv_ast_t *n) {
 static inline sv_ast_t *mk_ident_from_tok(P) {
   uint32_t len = 0;
   const char *name = tok_ident_str(p, &len);
-  sv_ast_t *n = mk_ident(name, len);
+  sv_ast_t *n = mk_ident(p, name, len);
   n->src_off = (uint32_t)TOFF;
   n->src_end = (uint32_t)(TOFF + TLEN);
   return n;
@@ -409,7 +407,7 @@ static void sv_parse_stmt_list(P, sv_ast_list_t *out, bool stop_at_rbrace, bool 
 
     p->module_item = module_items;
     sv_ast_t *stmt = parse_stmt(p);
-    if (stmt) sv_ast_list_push(out, stmt);
+    if (stmt) sv_ast_list_push(JS, out, stmt);
     if (Ant_Exception_Pending(JS)) break;
     if (!in_directive_prologue) continue;
     if (!stmt || stmt->type == N_EMPTY) continue;
@@ -462,11 +460,11 @@ bool ast_pattern_binds(const sv_ast_t *node, const char *name) {
   }
 }
 
-static void push_arrow_params_from_expr(sv_ast_t *fn, sv_ast_t *expr) {
+static void push_arrow_params_from_expr(P, sv_ast_t *fn, sv_ast_t *expr) {
   if (!fn || !expr) return;
   if (expr->type == N_SEQUENCE) {
-    push_arrow_params_from_expr(fn, expr->left);
-    push_arrow_params_from_expr(fn, expr->right);
+    push_arrow_params_from_expr(p, fn, expr->left);
+    push_arrow_params_from_expr(p, fn, expr->right);
     return;
   }
   if (expr->type == N_ASSIGN && expr->op == TOK_ASSIGN) {
@@ -474,17 +472,17 @@ static void push_arrow_params_from_expr(sv_ast_t *fn, sv_ast_t *expr) {
     def->left = expr->left;
     def->right = expr->right;
     def->src_off = expr->src_off;
-    sv_ast_list_push(&fn->args, def);
+    sv_ast_list_push(JS, &fn->args, def);
     return;
   }
   if (expr->type == N_SPREAD) {
     sv_ast_t *rest = mk_plain(N_REST);
     rest->right = expr->right;
     rest->src_off = expr->src_off;
-    sv_ast_list_push(&fn->args, rest);
+    sv_ast_list_push(JS, &fn->args, rest);
     return;
   }
-  sv_ast_list_push(&fn->args, expr);
+  sv_ast_list_push(JS, &fn->args, expr);
 }
 
 static sv_tpl_cooked_t decode_template_segment(P, const uint8_t *in, size_t start, size_t end) {
@@ -495,7 +493,7 @@ static sv_tpl_cooked_t decode_template_segment(P, const uint8_t *in, size_t star
     return outv;
   }
 
-  uint8_t *out = parse_arena_bump(raw_len);
+  uint8_t *out = parse_arena_bump(JS, raw_len);
   if (!out) {
     (void)SV_MKERR(JS, "oom");
     outv.ok = false;
@@ -570,7 +568,7 @@ static sv_ast_t *try_parse_async_arrow(P) {
       NEXT(); CONSUME();
       sv_ast_t *fn = mk(N_FUNC);
       fn->flags = FN_ARROW | FN_ASYNC;
-      push_arrow_params_from_expr(fn, expr);
+      push_arrow_params_from_expr(p, fn, expr);
       fn->body = parse_arrow_body(p, true);
       fn->src_off = async_off;
       fn->src_end = node_src_end(p, fn->body);
@@ -589,7 +587,7 @@ static sv_ast_t *try_parse_async_arrow(P) {
       NEXT(); CONSUME();
       sv_ast_t *fn = mk(N_FUNC);
       fn->flags = FN_ARROW | FN_ASYNC;
-      sv_ast_list_push(&fn->args, id);
+      sv_ast_list_push(JS, &fn->args, id);
       fn->body = parse_arrow_body(p, true);
       fn->src_off = async_off;
       fn->src_end = node_src_end(p, fn->body);
@@ -760,7 +758,7 @@ static sv_ast_t *parse_primary(P) {
         s->len = cooked.len;
       } else if (cooked.ok) s->flags |= FN_INVALID_COOKED;
       
-      sv_ast_list_push(&n->args, s);
+      sv_ast_list_push(JS, &n->args, s);
       if (i >= tpl_len - 1 || in[i] != '$') break;
 
       i += 2;
@@ -778,7 +776,7 @@ static sv_ast_t *parse_primary(P) {
       );
 
       sv_ast_t *expr = parse_expr(p);
-      sv_ast_list_push(&n->args, expr);
+      sv_ast_list_push(JS, &n->args, expr);
 
       if (NEXT() != TOK_RBRACE) {
         SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Unterminated template expression");
@@ -834,8 +832,8 @@ static sv_ast_t *parse_primary(P) {
           CONSUME();
           sv_ast_t *spread = mk(N_SPREAD);
           spread->right = parse_assign(p);
-          sv_ast_list_push(&n->args, spread);
-        } else sv_ast_list_push(&n->args, parse_assign(p));
+          sv_ast_list_push(JS, &n->args, spread);
+        } else sv_ast_list_push(JS, &n->args, parse_assign(p));
         if (NEXT() == TOK_COMMA) CONSUME();
         else break;
       } expect(p, TOK_RPAREN);
@@ -906,7 +904,7 @@ static sv_ast_t *parse_primary(P) {
 
   l_super: {
     CONSUME();
-    return mk_ident("super", 5);
+    return mk_ident(p, "super", 5);
   }
 
   l_spread: {
@@ -923,7 +921,7 @@ static sv_ast_t *parse_primary(P) {
       sv_parse_stop(p);
       return mk(N_EMPTY);
     }
-    if (NEXT() != TOK_LPAREN) return mk_ident("import", 6);
+    if (NEXT() != TOK_LPAREN) return mk_ident(p, "import", 6);
     CONSUME();
     sv_ast_t *n = mk(N_IMPORT);
     n->right = parse_assign(p);
@@ -996,16 +994,16 @@ static sv_ast_t *parse_array(P) {
   while (NEXT() != TOK_RBRACKET && TOK != TOK_EOF) {
     if (TOK == TOK_COMMA) {
       CONSUME();
-      sv_ast_list_push(&n->args, mk(N_EMPTY));
+      sv_ast_list_push(JS, &n->args, mk(N_EMPTY));
       continue;
     }
     if (TOK == TOK_REST) {
       CONSUME();
       sv_ast_t *spread = mk(N_SPREAD);
       spread->right = parse_assign(p);
-      sv_ast_list_push(&n->args, spread);
+      sv_ast_list_push(JS, &n->args, spread);
     } else {
-      sv_ast_list_push(&n->args, parse_assign(p));
+      sv_ast_list_push(JS, &n->args, parse_assign(p));
     }
     if (NEXT() == TOK_COMMA) CONSUME();
     else break;
@@ -1046,7 +1044,7 @@ static sv_ast_t *parse_object(P) {
       CONSUME();
       sv_ast_t *spread = mk(N_SPREAD);
       spread->right = parse_assign(p);
-      sv_ast_list_push(&n->args, spread);
+      sv_ast_list_push(JS, &n->args, spread);
       if (NEXT() == TOK_COMMA) CONSUME();
       continue;
     }
@@ -1083,7 +1081,7 @@ static sv_ast_t *parse_object(P) {
       prop->right = parse_func(p, false);
       prop->right->flags |= FN_GENERATOR | FN_METHOD;
       prop->right->src_off = prop->src_off;
-      sv_ast_list_push(&n->args, prop);
+      sv_ast_list_push(JS, &n->args, prop);
       if (NEXT() == TOK_COMMA) CONSUME();
       continue;
     }
@@ -1120,7 +1118,7 @@ static sv_ast_t *parse_object(P) {
         if (!validate_accessor_params(p, prop->right, prop->flags)) return n;
         prop->right->flags |= FN_METHOD;
         prop->right->src_off = prop->src_off;
-        sv_ast_list_push(&n->args, prop);
+        sv_ast_list_push(JS, &n->args, prop);
         if (NEXT() == TOK_COMMA) CONSUME();
         continue;
       }
@@ -1163,7 +1161,7 @@ static sv_ast_t *parse_object(P) {
         if (prop->flags & FN_GENERATOR)
           prop->right->flags |= FN_GENERATOR;
         prop->right->src_off = prop->src_off;
-        sv_ast_list_push(&n->args, prop);
+        sv_ast_list_push(JS, &n->args, prop);
         if (NEXT() == TOK_COMMA) CONSUME();
         continue;
       }
@@ -1200,7 +1198,7 @@ static sv_ast_t *parse_object(P) {
       prop->right->flags |= FN_METHOD;
       prop->right->src_off = prop->src_off;
     } else {
-      prop->right = mk_ident(prop->left->str, prop->left->len);
+      prop->right = mk_ident(p, prop->left->str, prop->left->len);
       if (NEXT() == TOK_ASSIGN) {
         CONSUME();
         sv_ast_t *def = mk(N_ASSIGN);
@@ -1211,7 +1209,7 @@ static sv_ast_t *parse_object(P) {
       }
     }
 
-    sv_ast_list_push(&n->args, prop);
+    sv_ast_list_push(JS, &n->args, prop);
     if (NEXT() == TOK_COMMA) CONSUME();
     else break;
   }
@@ -1234,9 +1232,9 @@ static sv_ast_t *parse_call(P) {
           CONSUME();
           sv_ast_t *spread = mk(N_SPREAD);
           spread->right = parse_assign(p);
-          sv_ast_list_push(&call->args, spread);
+          sv_ast_list_push(JS, &call->args, spread);
         } else {
-          sv_ast_list_push(&call->args, parse_assign(p));
+          sv_ast_list_push(JS, &call->args, parse_assign(p));
         }
         if (NEXT() == TOK_COMMA) CONSUME();
         else break;
@@ -1263,7 +1261,7 @@ static sv_ast_t *parse_call(P) {
         call->left = opt;
         CONSUME();
         while (NEXT() != TOK_RPAREN && TOK != TOK_EOF) {
-          sv_ast_list_push(&call->args, parse_assign(p));
+          sv_ast_list_push(JS, &call->args, parse_assign(p));
           if (NEXT() == TOK_COMMA) CONSUME();
           else break;
         }
@@ -1424,10 +1422,10 @@ static sv_ast_t *parse_assign(P) {
     fn->flags = FN_ARROW;
     fn->src_off = left->src_off;
     if (left->type == N_IDENT) {
-      sv_ast_list_push(&fn->args, left);
+      sv_ast_list_push(JS, &fn->args, left);
     } else if (left->flags & FN_PAREN) {
       if (left->type != N_UNDEF)
-        push_arrow_params_from_expr(fn, left);
+        push_arrow_params_from_expr(p, fn, left);
     } else {
       SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Malformed arrow function parameter list");
       return mk(N_EMPTY);
@@ -1658,7 +1656,7 @@ static void parse_formal_params(P, sv_ast_t *fn, uint8_t close) {
       CONSUME();
       sv_ast_t *rest = mk(N_REST);
       rest->right = parse_binding_pattern(p);
-      sv_ast_list_push(&fn->args, rest);
+      sv_ast_list_push(JS, &fn->args, rest);
       break;
     }
     sv_ast_t *param = parse_binding_pattern(p);
@@ -1669,7 +1667,7 @@ static void parse_formal_params(P, sv_ast_t *fn, uint8_t close) {
       def->right = parse_assign(p);
       param = def;
     }
-    sv_ast_list_push(&fn->args, param);
+    sv_ast_list_push(JS, &fn->args, param);
     if (NEXT() == TOK_COMMA) {
       CONSUME();
       if (NEXT() == close) break;
@@ -1760,7 +1758,7 @@ static sv_ast_t *parse_class(P) {
         p->lx.strict = saved_strict;
         block->type = N_STATIC_BLOCK;
         block->flags = FN_STATIC | FN_CLASS_BODY;
-        sv_ast_list_push(&cls->args, block);
+        sv_ast_list_push(JS, &cls->args, block);
         continue;
       }
     }
@@ -1836,7 +1834,7 @@ static sv_ast_t *parse_class(P) {
       consume_semicolon(p);
     }
 
-    sv_ast_list_push(&cls->args, method);
+    sv_ast_list_push(JS, &cls->args, method);
   }
   expect(p, TOK_RBRACE);
   cls->src_end = (uint32_t)(TOFF + TLEN);
@@ -1886,7 +1884,7 @@ static sv_ast_t *parse_var_decl(P, sv_var_kind_t kind, bool allow_uninit_const) 
       SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Missing initializer in const declaration");
     }
 
-    sv_ast_list_push(&var->args, decl);
+    sv_ast_list_push(JS, &var->args, decl);
   } while (NEXT() == TOK_COMMA && (CONSUME(), 1));
 
   return var;
@@ -1904,7 +1902,7 @@ enum {
 };
 
 static inline void import_decl_add_binding(
-  sv_ast_t *decl,
+  P, sv_ast_t *decl,
   const char *import_name, uint32_t import_len,
   const char *local_name, uint32_t local_len,
   uint8_t flags
@@ -1912,9 +1910,9 @@ static inline void import_decl_add_binding(
   sv_ast_t *spec = mk_plain(N_IMPORT_SPEC);
   spec->flags = flags;
   if (import_name)
-    spec->left = mk_ident(import_name, import_len);
-  spec->right = mk_ident(local_name, local_len);
-  sv_ast_list_push(&decl->args, spec);
+    spec->left = mk_ident(p, import_name, import_len);
+  spec->right = mk_ident(p, local_name, local_len);
+  sv_ast_list_push(JS, &decl->args, spec);
 }
 
 static sv_ast_t *parse_import_stmt(P) {
@@ -1938,7 +1936,7 @@ static sv_ast_t *parse_import_stmt(P) {
     uint32_t local_len = 0;
     const char *local_name = tok_ident_str(p, &local_len);
     import_decl_add_binding(
-      decl,
+      p, decl,
       default_name, (uint32_t)(sizeof(default_name) - 1),
       local_name, local_len,
       IMPORT_BIND_DEFAULT
@@ -1957,7 +1955,7 @@ static sv_ast_t *parse_import_stmt(P) {
     uint32_t ns_len = 0;
     const char *ns_name = tok_ident_str(p, &ns_len);
     import_decl_add_binding(
-      decl,
+      p, decl,
       NULL, 0,
       ns_name, ns_len,
       IMPORT_BIND_NAMESPACE
@@ -1994,7 +1992,7 @@ static sv_ast_t *parse_import_stmt(P) {
         CONSUME();
       }
 
-      import_decl_add_binding(decl, import_name, import_len, local_name, local_len, 0);
+      import_decl_add_binding(p, decl, import_name, import_len, local_name, local_len, 0);
 
       if (NEXT() == TOK_COMMA) {
         CONSUME();
@@ -2139,7 +2137,7 @@ static sv_ast_t *parse_export_stmt(P) {
       sv_ast_t *spec = mk(N_IMPORT_SPEC);
       spec->left = local_name;
       spec->right = export_name;
-      sv_ast_list_push(&decl->args, spec);
+      sv_ast_list_push(JS, &decl->args, spec);
 
       if (NEXT() == TOK_COMMA) {
         CONSUME();
@@ -2181,7 +2179,7 @@ static sv_ast_t *parse_export_stmt(P) {
 
       sv_ast_t *spec = mk(N_IMPORT_SPEC);
       spec->right = name;
-      sv_ast_list_push(&decl->args, spec);
+      sv_ast_list_push(JS, &decl->args, spec);
     }
 
     expect(p, TOK_FROM);
@@ -2507,8 +2505,8 @@ static sv_ast_t *parse_stmt(P) {
       expect(p, TOK_COLON);
       while (NEXT() != TOK_CASE && TOK != TOK_DEFAULT &&
              TOK != TOK_RBRACE && TOK != TOK_EOF)
-        sv_ast_list_push(&c->args, parse_stmt(p));
-      sv_ast_list_push(&n->args, c);
+        sv_ast_list_push(JS, &c->args, parse_stmt(p));
+      sv_ast_list_push(JS, &n->args, c);
     }
     expect(p, TOK_RBRACE);
     return n;
@@ -2638,12 +2636,12 @@ static sv_ast_t *parse_program(
 }
 
 static sv_ast_t *parse_detect(ant_t *js, const char *code, ant_offset_t clen, bool strict) {
-  code_arena_mark_t mark = parse_arena_mark();
+  code_arena_mark_t mark = parse_arena_mark(js);
   bool wants_module = false;
   sv_ast_t *program = parse_program(js, code, clen, SV_PARSE_DETECT, strict, &wants_module);
   if (program) return program;
 
-  parse_arena_rewind(mark);
+  parse_arena_rewind(js, mark);
   Ant_Exception_Clear(js);
   program = parse_program(js, code, clen, SV_PARSE_MODULE, strict, NULL);
   if (program) {
@@ -2652,7 +2650,7 @@ static sv_ast_t *parse_detect(ant_t *js, const char *code, ant_offset_t clen, bo
   }
   if (wants_module) return NULL;
 
-  parse_arena_rewind(mark);
+  parse_arena_rewind(js, mark);
   Ant_Exception_Clear(js);
   return parse_program(js, code, clen, SV_PARSE_SCRIPT, strict, NULL);
 }

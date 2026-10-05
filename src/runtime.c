@@ -21,19 +21,22 @@
 #define ant_getpid getpid
 #endif
 
-typedef struct {
+struct code_intern {
   const char *ptr;
   size_t len;
   UT_hash_handle hh;
-} intern_entry_t;
+};
 
-typedef struct code_block {
+struct code_block {
   struct code_block *next;
   size_t used;
   size_t capacity;
   size_t alloc_size;
   char data[];
-} code_block_t;
+};
+
+typedef struct code_block code_block_t;
+typedef struct code_intern code_intern_t;
 
 static_assert(
   (CODE_ARENA_ALIGNMENT & (CODE_ARENA_ALIGNMENT - 1u)) == 0,
@@ -44,39 +47,7 @@ static_assert(
   "code arena block payload must satisfy the arena alignment"
 );
 
-static intern_entry_t *code_interns = NULL;
-
-static code_block_t *code_arena_head     = NULL;
-static code_block_t *code_arena_current  = NULL;
-static code_block_t *parse_arena_head    = NULL;
-static code_block_t *parse_arena_current = NULL;
-
-static void code_interns_prune_for_block_range(
-  const code_block_t *block,
-  size_t start_offset
-) {
-  if (!block) return;
-
-  const char *start = block->data + start_offset;
-  const char *end = block->data + block->capacity;
-  intern_entry_t *entry = NULL;
-  intern_entry_t *tmp = NULL;
-
-  HASH_ITER(hh, code_interns, entry, tmp)
-  if (entry->ptr >= start && entry->ptr < end) {
-    HASH_DEL(code_interns, entry);
-    free(entry);
-  }
-}
-
-static void code_interns_prune_for_blocks(code_block_t *first) {
-  for (
-    code_block_t *block = first; 
-    block; block = block->next
-  ) code_interns_prune_for_block_range(block, 0);
-}
-
-static code_block_t *code_arena_new_block(size_t min_size) {
+static code_block_t *arena_new_block(size_t min_size) {
   size_t capacity = CODE_ARENA_BLOCK_SIZE;
   if (min_size > capacity) capacity = min_size;
 
@@ -92,63 +63,101 @@ static code_block_t *code_arena_new_block(size_t min_size) {
   return block;
 }
 
-static void *arena_bump(
-  code_block_t **head,
-  code_block_t **current,
-  size_t size
-) {
+static void *arena_bump(ant_code_arena_t *arena, size_t size) {
   const size_t align_mask = (size_t)CODE_ARENA_ALIGNMENT - 1u;
   size = (size + align_mask) & ~align_mask;
   
-  size_t used = *current
-    ? ((*current)->used + align_mask) & ~align_mask : 0;
+  code_block_t *current = arena->current;
+  size_t used = current ? (current->used + align_mask) & ~align_mask : 0;
     
-  if (!*current || used + size > (*current)->capacity) {
-    code_block_t *kept = *current ? (*current)->next : NULL;
+  if (!current || used + size > current->capacity) {
+    code_block_t *kept = current ? current->next : NULL;
     if (kept && size <= kept->capacity) {
       kept->used = 0;
-      *current = kept;
-      used = 0;
+      arena->current = kept;
     } else {
-      code_block_t *new_block = code_arena_new_block(size);
+      code_block_t *block = arena_new_block(size);
       
-      if (!new_block) return NULL;
-      new_block->next = kept;
-      if (!*head) *head = new_block;
-      else if (*current) (*current)->next = new_block;
+      if (!block) return NULL;
+      block->next = kept;
+      if (!arena->head) arena->head = block;
+      else if (current) current->next = block;
       
-      *current = new_block;
-      used = 0;
+      arena->current = block;
     }
+    
+    used = 0;
   }
 
-  void *ptr = &(*current)->data[used];
-  (*current)->used = used + size;
+  void *ptr = &arena->current->data[used];
+  arena->current->used = used + size;
   
   return ptr;
 }
 
-static size_t arena_get_memory(code_block_t *head) {
+static size_t arena_get_memory(const ant_code_arena_t *arena) {
   size_t total = 0;
-  for (code_block_t *b = head; b; b = b->next)
+  for (code_block_t *b = arena->head; b; b = b->next)
     total += sizeof(code_block_t) + b->capacity;
   return total;
 }
 
-static code_arena_mark_t arena_mark(code_block_t *current) {
-  code_arena_mark_t mark = {0};
-  mark.block = current;
-  mark.used = current ? current->used : 0;
-  return mark;
+static void arena_free(ant_code_arena_t *arena) {
+  for (code_block_t *b = arena->head, *next; b; b = next) {
+    next = b->next;
+    ant_cage_free(b, b->alloc_size);
+  }
+  arena->head = arena->current = NULL;
 }
 
-static void arena_rewind_plain(
-  code_block_t **head,
-  code_block_t **current,
-  code_arena_mark_t mark
-) {
+const char *code_arena_alloc(ant_t *js, const char *code, size_t len) {
+  if (!code || len == 0) return NULL;
+
+  code_intern_t *found = NULL;
+  HASH_FIND(hh, js->arenas.interns, code, len, found);
+  if (found) return found->ptr;
+
+  char *dest = arena_bump(&js->arenas.code, len + 1);
+  if (!dest) return NULL;
+  
+  memcpy(dest, code, len);
+  dest[len] = '\0';
+
+  code_intern_t *entry = malloc(sizeof(*entry));
+  if (entry) {
+    entry->ptr = dest;
+    entry->len = len;
+    HASH_ADD_KEYPTR(hh, js->arenas.interns, entry->ptr, entry->len, entry);
+  }
+
+  return dest;
+}
+
+void *code_arena_bump(ant_t *js, size_t size) {
+  return arena_bump(&js->arenas.code, size);
+}
+
+size_t code_arena_get_memory(ant_t *js) {
+  return arena_get_memory(&js->arenas.code);
+}
+
+void *parse_arena_bump(ant_t *js, size_t size) {
+  return arena_bump(&js->arenas.parse, size);
+}
+
+size_t parse_arena_get_memory(ant_t *js) {
+  return arena_get_memory(&js->arenas.parse);
+}
+
+code_arena_mark_t parse_arena_mark(ant_t *js) {
+  code_block_t *current = js->arenas.parse.current;
+  return (code_arena_mark_t){ .block = current, .used = current ? current->used : 0 };
+}
+
+void parse_arena_rewind(ant_t *js, code_arena_mark_t mark) {
+  ant_code_arena_t *arena = &js->arenas.parse;
   code_block_t *target = (code_block_t *)mark.block;
-  code_block_t *kept = target ? target->next : *head;
+  code_block_t *kept = target ? target->next : arena->head;
   code_block_t *rest = kept;
 
   if (kept && kept->capacity == CODE_ARENA_BLOCK_SIZE) {
@@ -164,135 +173,25 @@ static void arena_rewind_plain(
   }
 
   if (!target) {
-    *head = kept;
-    *current = kept;
+    arena->head = arena->current = kept;
     return;
   }
 
   target->used = mark.used <= target->capacity ? mark.used : target->capacity;
   target->next = kept;
-  *current = target;
+  arena->current = target;
 }
 
-const char *code_arena_alloc(const char *code, size_t len) {
-  if (!code || len == 0) return NULL;
-
-  intern_entry_t *found = NULL;
-  HASH_FIND(hh, code_interns, code, len, found);
-  if (found) return found->ptr;
-
-  size_t alloc_size = len + 1;
-  if (!code_arena_current || code_arena_current->used + alloc_size > code_arena_current->capacity) {
-    code_block_t *new_block = code_arena_new_block(alloc_size);
-    if (!new_block) return NULL;
-    if (!code_arena_head) code_arena_head = new_block;
-    else if (code_arena_current) code_arena_current->next = new_block;
-    code_arena_current = new_block;
-  }
-
-  char *dest = &code_arena_current->data[code_arena_current->used];
-  memcpy(dest, code, len);
-  dest[len] = '\0';
-  code_arena_current->used += alloc_size;
-
-  intern_entry_t *entry = malloc(sizeof(*entry));
-  if (entry) {
-    entry->ptr = dest;
-    entry->len = len;
-    HASH_ADD_KEYPTR(hh, code_interns, entry->ptr, entry->len, entry);
-  }
-
-  return dest;
-}
-
-void *code_arena_bump(size_t size) {
-  return arena_bump(&code_arena_head, &code_arena_current, size);
-}
-
-size_t code_arena_get_memory(void) {
-  return arena_get_memory(code_arena_head);
-}
-
-code_arena_mark_t code_arena_mark(void) {
-  return arena_mark(code_arena_current);
-}
-
-void code_arena_rewind(code_arena_mark_t mark) {
-  code_block_t *target = (code_block_t *)mark.block;
-
-  if (!target) {
-    code_interns_prune_for_blocks(code_arena_head);
-    code_block_t *block = code_arena_head;
-    
-    while (block) {
-      code_block_t *next = block->next;
-      ant_cage_free(block, block->alloc_size); 
-      block = next;
-    }
-    
-    code_arena_head = NULL;
-    code_arena_current = NULL;
-    
-    return;
-  }
-
-  size_t clamped_used = mark.used <= target->capacity ? mark.used : target->capacity;
-  code_interns_prune_for_block_range(target, clamped_used);
-  code_interns_prune_for_blocks(target->next);
-
-  if (mark.used <= target->capacity) target->used = mark.used;
-  code_block_t *b = target->next;
-  
-  while (b) {
-    code_block_t *next = b->next;
-    ant_cage_free(b, b->alloc_size); 
-    b = next;
-  }
-  
-  target->next = NULL;
-  code_arena_current = target;
-}
-
-void *parse_arena_bump(size_t size) {
-  return arena_bump(&parse_arena_head, &parse_arena_current, size);
-}
-
-size_t parse_arena_get_memory(void) {
-  return arena_get_memory(parse_arena_head);
-}
-
-code_arena_mark_t parse_arena_mark(void) {
-  return arena_mark(parse_arena_current);
-}
-
-void parse_arena_rewind(code_arena_mark_t mark) {
-  arena_rewind_plain(&parse_arena_head, &parse_arena_current, mark);
-}
-
-void parse_arena_reset(void) {
-  parse_arena_rewind((code_arena_mark_t){0});
-  if (parse_arena_head) ant_cage_free(parse_arena_head, parse_arena_head->alloc_size);
-  parse_arena_head = parse_arena_current = NULL;
-}
-
-void code_arena_reset(void) {
-  intern_entry_t *entry, *tmp;
-  HASH_ITER(hh, code_interns, entry, tmp) {
-    HASH_DEL(code_interns, entry);
+void code_arenas_destroy(ant_t *js) {
+  code_intern_t *entry, *tmp;
+  HASH_ITER(hh, js->arenas.interns, entry, tmp) {
+    HASH_DEL(js->arenas.interns, entry);
     free(entry);
   }
-  code_interns = NULL;
-
-  code_block_t *block = code_arena_head;
-  while (block) {
-    code_block_t *next = block->next;
-    ant_cage_free(block, block->alloc_size);
-    block = next;
-  }
   
-  code_arena_head = NULL;
-  code_arena_current = NULL;
-  parse_arena_reset();
+  js->arenas.interns = NULL;
+  arena_free(&js->arenas.code);
+  arena_free(&js->arenas.parse);
 }
 
 void ant_runtime_init(ant_t *js, int argc, char **argv, struct arg_file *ls_p) {

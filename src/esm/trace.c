@@ -1107,7 +1107,7 @@ static int trace_process_module(ant_t *js, trace_ctx_t *ctx, uint32_t idx) {
 
   ant_module_format_t format = esm_decide_module_format(js, abs_path);
 
-  code_arena_mark_t mark = parse_arena_mark();
+  code_arena_mark_t mark = parse_arena_mark(js);
   sv_ast_t *program = trace_parse(js, content, js_len,
     format == MODULE_EVAL_FORMAT_ESM ? SV_PARSE_MODULE :
     format == MODULE_EVAL_FORMAT_CJS ? SV_PARSE_SCRIPT : SV_PARSE_DETECT);
@@ -1117,7 +1117,7 @@ static int trace_process_module(ant_t *js, trace_ctx_t *ctx, uint32_t idx) {
   }
 
   if (!program && r->modules[idx].lenient) {
-    parse_arena_rewind(mark);
+    parse_arena_rewind(js, mark);
     free(content);
     r->modules[idx].data = original;
     r->modules[idx].data_len = size;
@@ -1131,14 +1131,14 @@ static int trace_process_module(ant_t *js, trace_ctx_t *ctx, uint32_t idx) {
   if (!program) {
     if (format == MODULE_EVAL_FORMAT_ESM) {
       trace_set_error(r, "failed to parse module %s", abs_path);
-      parse_arena_rewind(mark);
+      parse_arena_rewind(js, mark);
       return -1;
     }
     format = MODULE_EVAL_FORMAT_CJS;
     program = trace_parse_cjs_wrapped(js, content, js_len);
     if (!program) {
       trace_set_error(r, "failed to parse module %s", abs_path);
-      parse_arena_rewind(mark);
+      parse_arena_rewind(js, mark);
       return -1;
     }
   }
@@ -1152,7 +1152,7 @@ static int trace_process_module(ant_t *js, trace_ctx_t *ctx, uint32_t idx) {
   trace_consts_clear(ctx);
 
   bool scan_ok = trace_scan_ast(ctx, abs_path, program);
-  parse_arena_rewind(mark);
+  parse_arena_rewind(js, mark);
 
   if (!scan_ok) {
     if (!r->error[0]) trace_set_error(r, "out of memory while tracing module graph");

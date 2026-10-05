@@ -447,7 +447,8 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                         MIR_T_P, "obj");
 
   c->shape_transition_proto = MIR_new_proto(c->ctx, "shape_transition_proto",
-                                            0, NULL, 2,
+                                            0, NULL, 3,
+                                            MIR_T_P, "js",
                                             MIR_T_P, "obj",
                                             MIR_T_P, "to_shape");
 

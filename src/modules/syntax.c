@@ -180,7 +180,7 @@ static ant_value_t js_syntax_parse_javascript(ant_params_t) {
   js->filename = options.filename;
   js_clear_error_site(js);
 
-  code_arena_mark_t mark = parse_arena_mark();
+  code_arena_mark_t mark = parse_arena_mark(js);
   
   sv_parse_goal_t goal =
     options.parse_mode == SYNTAX_PARSE_MODULE ? SV_PARSE_MODULE :
@@ -189,14 +189,14 @@ static ant_value_t js_syntax_parse_javascript(ant_params_t) {
   sv_ast_t *program = sv_parse(js, source, (ant_offset_t)source_len, goal, false);
   
   if (!program) {
-    parse_arena_rewind(mark);
+    parse_arena_rewind(js, mark);
     js->filename = saved_filename;
     if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return js_mkerr_typed(js, JS_ERR_INTERNAL, "ant:syntax parser failed without an error");
   }
 
   if (ast_contains_lexical_new_target(program)) {
-    parse_arena_rewind(mark);
+    parse_arena_rewind(js, mark);
     ant_value_t error = js_mkerr_typed(js, JS_ERR_SYNTAX, "new.target is only valid in functions");
     js->filename = saved_filename;
     return error;
@@ -204,7 +204,7 @@ static ant_value_t js_syntax_parse_javascript(ant_params_t) {
 
   bool has_module_syntax = (program->flags & FN_MODULE_SYNTAX) != 0;
   if (options.parse_mode == SYNTAX_PARSE_SCRIPT && has_module_syntax) {
-    parse_arena_rewind(mark);
+    parse_arena_rewind(js, mark);
     js_set_error_site_lc(js, source, (ant_offset_t)source_len, options.filename, 0, 1, 0, 0);
     ant_value_t error = js_mkerr_typed(
       js, JS_ERR_SYNTAX,
@@ -225,7 +225,7 @@ static ant_value_t js_syntax_parse_javascript(ant_params_t) {
     options.locations
   );
 
-  parse_arena_rewind(mark);
+  parse_arena_rewind(js, mark);
   js->filename = saved_filename;
 
   return result;

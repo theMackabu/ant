@@ -53,8 +53,7 @@ int main(void) {
     check_child(b, gap);
   }
 
-  // the code arena (bytecode, IC slots) is process-wide and js_destroy
-  // resets it, so only one isolate can be destroyed per process
+  js_destroy(a);
   js_destroy(b);
   puts("PASS collections in one isolate leave another isolate's marks alone");
 }

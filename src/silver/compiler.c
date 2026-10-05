@@ -502,7 +502,7 @@ static int add_atom(sv_compiler_t *c, const char *str, uint32_t len) {
   const char *interned = intern_string(str, (size_t)len);
   const char *stored = interned;
   if (!stored) {
-    char *copy = code_arena_bump(len);
+    char *copy = code_arena_bump(c->js, len);
     memcpy(copy, str, len);
     stored = copy;
   }
@@ -2211,51 +2211,51 @@ static void hoist_lexical_pattern(sv_compiler_t *c, sv_ast_t *pat,
   }
 }
 
-static void annex_b_collect_funcs(sv_ast_t *node, sv_ast_list_t *out) {
+static void annex_b_collect_funcs(ant_t *js, sv_ast_t *node, sv_ast_list_t *out) {
   if (!node) return;
   if (node->type == N_FUNC && node->str && !(node->flags & (FN_ARROW | FN_PAREN))) {
-    sv_ast_list_push(out, node);
+    sv_ast_list_push(js, out, node);
     return;
   }
   if (node->type == N_IF) {
-    annex_b_collect_funcs(node->left, out);
-    annex_b_collect_funcs(node->right, out);
-  } else if (node->type == N_LABEL) annex_b_collect_funcs(node->body, out);
+    annex_b_collect_funcs(js, node->left, out);
+    annex_b_collect_funcs(js, node->right, out);
+  } else if (node->type == N_LABEL) annex_b_collect_funcs(js, node->body, out);
 }
 
-static void annex_b_collect_block_var_funcs(sv_ast_t *node, sv_ast_list_t *out) {
+static void annex_b_collect_block_var_funcs(ant_t *js, sv_ast_t *node, sv_ast_list_t *out) {
   if (!node || node->type == N_FUNC || node->type == N_CLASS) return;
   if (node->type == N_BLOCK) {
     for (int i = 0; i < node->args.count; i++) {
       sv_ast_t *stmt = node->args.items[i];
       if (!stmt) continue;
       if (stmt->type == N_FUNC && stmt->str && !(stmt->flags & (FN_ARROW | FN_PAREN))) {
-        sv_ast_list_push(out, stmt);
+        sv_ast_list_push(js, out, stmt);
         continue;
       }
-      annex_b_collect_block_var_funcs(stmt, out);
+      annex_b_collect_block_var_funcs(js, stmt, out);
     }
     return;
   }
   if (node->type == N_IF) {
-    annex_b_collect_block_var_funcs(node->left, out);
-    annex_b_collect_block_var_funcs(node->right, out);
+    annex_b_collect_block_var_funcs(js, node->left, out);
+    annex_b_collect_block_var_funcs(js, node->right, out);
   } else if (node->type == N_LABEL) {
-    annex_b_collect_block_var_funcs(node->body, out);
+    annex_b_collect_block_var_funcs(js, node->body, out);
   } else if (node->type == N_WHILE || node->type == N_DO_WHILE) {
-    annex_b_collect_block_var_funcs(node->body, out);
+    annex_b_collect_block_var_funcs(js, node->body, out);
   } else if (node->type == N_FOR || node->type == N_FOR_IN || node->type == N_FOR_OF || node->type == N_FOR_AWAIT_OF) {
-    annex_b_collect_block_var_funcs(node->body, out);
+    annex_b_collect_block_var_funcs(js, node->body, out);
   } else if (node->type == N_SWITCH) {
     for (int i = 0; i < node->args.count; i++) {
       sv_ast_t *cas = node->args.items[i];
       for (int j = 0; cas && j < cas->args.count; j++)
-        annex_b_collect_block_var_funcs(cas->args.items[j], out);
+        annex_b_collect_block_var_funcs(js, cas->args.items[j], out);
     }
   } else if (node->type == N_TRY) {
-    annex_b_collect_block_var_funcs(node->body, out);
-    annex_b_collect_block_var_funcs(node->catch_body, out);
-    annex_b_collect_block_var_funcs(node->finally_body, out);
+    annex_b_collect_block_var_funcs(js, node->body, out);
+    annex_b_collect_block_var_funcs(js, node->catch_body, out);
+    annex_b_collect_block_var_funcs(js, node->finally_body, out);
   }
 }
 
@@ -2404,7 +2404,7 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
     }
     if (!c->is_strict && (decl_node->type == N_IF || decl_node->type == N_LABEL)) {
       sv_ast_list_t funcs = {0};
-      annex_b_collect_funcs(decl_node, &funcs);
+      annex_b_collect_funcs(c->js, decl_node, &funcs);
       for (int j = 0; j < funcs.count; j++) {
         sv_ast_t *fn = funcs.items[j];
         if (is_sloppy_eval(c) && c->scope_depth == 0) add_eval_var(c, fn->str, fn->len, true);
@@ -2414,7 +2414,7 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
     }
     if (!c->is_strict) {
       sv_ast_list_t funcs = {0};
-      annex_b_collect_block_var_funcs(decl_node, &funcs);
+      annex_b_collect_block_var_funcs(c->js, decl_node, &funcs);
       for (int j = 0; j < funcs.count; j++) {
         sv_ast_t *fn = funcs.items[j];
         if (is_sloppy_eval(c)) add_eval_var(c, fn->str, fn->len, true);
@@ -2516,7 +2516,7 @@ static void hoist_func_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
     }
     if (!c->is_strict && (node->type == N_IF || node->type == N_LABEL)) {
       sv_ast_list_t funcs = {0};
-      annex_b_collect_funcs(node, &funcs);
+      annex_b_collect_funcs(c->js, node, &funcs);
       for (int j = 0; j < funcs.count; j++)
         hoist_one_func(c, funcs.items[j], false);
     }
@@ -4111,7 +4111,7 @@ static bool func_params_contain_await(const sv_ast_t *node) {
   return false;
 }
 
-static bool collect_param_bindings(sv_ast_t *param, sv_ast_list_t *names) {
+static bool collect_param_bindings(ant_t *js, sv_ast_t *param, sv_ast_list_t *names) {
   static const void *dispatch[N__COUNT] = {
     [N_IDENT]      = &&l_ident,
     [N_ASSIGN]     = &&l_left,
@@ -4131,17 +4131,17 @@ static bool collect_param_bindings(sv_ast_t *param, sv_ast_list_t *names) {
 
 l_ident:
   if (!param->len) return true;
-  return sv_ast_list_push(names, param);
+  return sv_ast_list_push(js, names, param);
 
 l_left:
-  return collect_param_bindings(param->left, names);
+  return collect_param_bindings(js, param->left, names);
 
 l_right:
-  return collect_param_bindings(param->right, names);
+  return collect_param_bindings(js, param->right, names);
 
 l_items:
   for (int i = 0; i < param->args.count; i++)
-    if (!collect_param_bindings(param->args.items[i], names)) return false;
+    if (!collect_param_bindings(js, param->args.items[i], names)) return false;
   return true;
 }
 
@@ -4157,7 +4157,7 @@ static bool check_function_param_names(ant_t *js, sv_ast_t *fn, bool strict, boo
   sv_ast_list_t names = {.items = items, .cap = sizeof(items) / sizeof(items[0])};
 
   for (int i = 0; i < fn->args.count; i++) {
-    if (collect_param_bindings(fn->args.items[i], &names)) continue;
+    if (collect_param_bindings(js, fn->args.items[i], &names)) continue;
     if (emit_error) js_mkerr(js, "out of memory");
     return false;
   }
@@ -4318,11 +4318,11 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
   ant_value_t saved_exception = Ant_Exception_Peek(c->js);
   GC_ROOT_PIN(c->js, saved_exception);
 
-  code_arena_mark_t mark = parse_arena_mark();
+  code_arena_mark_t mark = parse_arena_mark(c->js);
   const char *source = copy_source_text(c->js, arg->str ? arg->str : "", arg->len);
   
   if (!source) {
-    parse_arena_rewind(mark);
+    parse_arena_rewind(c->js, mark);
     GC_ROOT_RESTORE(c->js, exception_mark);
     return false;
   }
@@ -4330,7 +4330,7 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *program = sv_parse(c->js, source, arg->len, SV_PARSE_SCRIPT, c->is_strict);
 
   if (!program) {
-    parse_arena_rewind(mark);
+    parse_arena_rewind(c->js, mark);
     Ant_Exception_Set(c->js, saved_exception);
     GC_ROOT_RESTORE(c->js, exception_mark);
     return false;
@@ -4346,7 +4346,7 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
     inline_eval_can_compile_without_early_errors(c->js, program->args.items[0], c->is_strict) &&
     !ast_contains_direct_suspend(program->args.items[0], NULL)
   ) expr = program->args.items[0]; else {
-    parse_arena_rewind(mark);
+    parse_arena_rewind(c->js, mark);
     Ant_Exception_Set(c->js, saved_exception);
     GC_ROOT_RESTORE(c->js, exception_mark);
     return false;
@@ -4360,7 +4360,7 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
   if (expr) compile_expr(c, expr);
   else emit_op(c, OP_UNDEF);
 
-  parse_arena_rewind(mark);
+  parse_arena_rewind(c->js, mark);
   GC_ROOT_RESTORE(c->js, exception_mark);
 
   return true;
@@ -4563,17 +4563,17 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
     node->args.items[1]->type == N_OBJECT
   ) {
     sv_ast_t *obj = node->args.items[1];
-    sv_ast_t *param = sv_ast_new(N_IDENT);
+    sv_ast_t *param = sv_ast_new(c->js, N_IDENT);
     
     param->str = "$"; param->len = 1;
-    sv_ast_t *arrow = sv_ast_new(N_FUNC);
+    sv_ast_t *arrow = sv_ast_new(c->js, N_FUNC);
     
     arrow->flags = FN_ARROW;
     arrow->body = obj;
     arrow->line = obj->line; arrow->col = obj->col;
     arrow->src_off = obj->src_off; arrow->src_end = obj->src_end;
     
-    sv_ast_list_push(&arrow->args, param);
+    sv_ast_list_push(c->js, &arrow->args, param);
     node->args.items[1] = arrow;
   }
 
@@ -7224,7 +7224,7 @@ static bool ast_has_own_eval(sv_compiler_t *c, const sv_ast_t *node) {
       GC_ROOT_SAVE(exception_mark, c->js);
       ant_value_t saved_exception = Ant_Exception_Peek(c->js);
       GC_ROOT_PIN(c->js, saved_exception);
-      code_arena_mark_t mark = parse_arena_mark();
+      code_arena_mark_t mark = parse_arena_mark(c->js);
       sv_ast_t *program = sv_parse(c->js, arg->str ? arg->str : "", arg->len, SV_PARSE_SCRIPT, c->is_strict);
       bool needs_env = !program || (program->args.count != 0 &&
         (program->args.count != 1 ||
@@ -7232,7 +7232,7 @@ static bool ast_has_own_eval(sv_compiler_t *c, const sv_ast_t *node) {
          !inline_eval_can_compile_without_early_errors(c->js, program->args.items[0], c->is_strict) ||
          ast_contains_direct_suspend(program->args.items[0], NULL) ||
          ast_has_own_eval(c, program->args.items[0])));
-      parse_arena_rewind(mark);
+      parse_arena_rewind(c->js, mark);
       Ant_Exception_Set(c->js, saved_exception);
       GC_ROOT_RESTORE(c->js, exception_mark);
       if (needs_env) return true;
@@ -8048,7 +8048,7 @@ sv_func_t *sv_compile(
   top_fn.len = (uint32_t)strlen(top_name);
   top_fn.src_off = 0;
   top_fn.src_end = (source_len > 0) ? (uint32_t)source_len : 0;
-  top_fn.body = sv_ast_new(N_BLOCK);
+  top_fn.body = sv_ast_new(js, N_BLOCK);
   top_fn.body->args = program->args;
   
   if (
@@ -8101,10 +8101,10 @@ sv_func_t *sv_compile_function(ant_t *js, const sv_function_parts_t *parts) {
     (unsigned)parts->len, parts->is_async ? 1 : 0, parts->is_generator ? 1 : 0
   );
 
-  code_arena_mark_t parse_mark = parse_arena_mark();
+  code_arena_mark_t parse_mark = parse_arena_mark(js);
   sv_ast_t *func_node = sv_parse_function_parts(js, parts);
   if (!func_node) {
-    parse_arena_rewind(parse_mark);
+    parse_arena_rewind(js, parse_mark);
     return NULL;
   }
 
@@ -8114,7 +8114,7 @@ sv_func_t *sv_compile_function(ant_t *js, const sv_function_parts_t *parts) {
   if (!text) {
     sv_code_unit_finish(unit);
     sv_code_unit_unpin(unit);
-    parse_arena_rewind(parse_mark);
+    parse_arena_rewind(js, parse_mark);
     return NULL;
   }
 
@@ -8128,7 +8128,7 @@ sv_func_t *sv_compile_function(ant_t *js, const sv_function_parts_t *parts) {
   
   sv_compile_ctx_free_line_table(root.line_table);
   sv_code_unit_finish(unit);
-  parse_arena_rewind(parse_mark);
+  parse_arena_rewind(js, parse_mark);
 
   if (sv_compile_trace_unlikely) fprintf(
     stderr, "[compile] end kind=function thrown=%d func=%p\n",
@@ -8161,17 +8161,17 @@ sv_func_t *sv_compile_function_with_params(
   }
 
   bool parse_strict = sv_vm_is_strict(js->vm);
-  code_arena_mark_t parse_mark = parse_arena_mark();
+  code_arena_mark_t parse_mark = parse_arena_mark(js);
   sv_ast_t *program = sv_parse(js, body, (ant_offset_t)body_len, SV_PARSE_SCRIPT, parse_strict);
   
   if (!program) {
-    parse_arena_rewind(parse_mark);
+    parse_arena_rewind(js, parse_mark);
     return NULL;
   }
 
   if (program->flags & FN_MODULE_SYNTAX) {
     js_mkerr_typed(js, JS_ERR_SYNTAX, "Cannot use import/export syntax in CommonJS");
-    parse_arena_rewind(parse_mark);
+    parse_arena_rewind(js, parse_mark);
     return NULL;
   }
 
@@ -8197,9 +8197,9 @@ sv_func_t *sv_compile_function_with_params(
       name_len = params[i].len ? params[i].len : strlen(name);
     }
 
-    sv_ast_t *ident = sv_ast_new(N_IDENT);
+    sv_ast_t *ident = sv_ast_new(js, N_IDENT);
     if (!ident) {
-      parse_arena_rewind(parse_mark);
+      parse_arena_rewind(js, parse_mark);
       return NULL;
     }
 
@@ -8207,19 +8207,19 @@ sv_func_t *sv_compile_function_with_params(
     ident->len = (uint32_t)name_len;
     ident->line = 1;
     ident->col = 1;
-    sv_ast_list_push(&top_fn.args, ident);
+    sv_ast_list_push(js, &top_fn.args, ident);
   }
 
-  top_fn.body = sv_ast_new(N_BLOCK);
+  top_fn.body = sv_ast_new(js, N_BLOCK);
   if (!top_fn.body) {
-    parse_arena_rewind(parse_mark);
+    parse_arena_rewind(js, parse_mark);
     return NULL;
   }
   
   top_fn.body->args = program->args;
   const char *text = copy_source_text(js, body, (ant_offset_t)body_len);
   if (!text && body && body_len > 0) {
-    parse_arena_rewind(parse_mark);
+    parse_arena_rewind(js, parse_mark);
     return NULL;
   }
 
@@ -8236,7 +8236,7 @@ sv_func_t *sv_compile_function_with_params(
   sv_func_t *func = compile_function_body(&root, &top_fn, SV_COMPILE_SCRIPT);
   
   sv_compile_ctx_free_line_table(root.line_table);
-  parse_arena_rewind(parse_mark);
+  parse_arena_rewind(js, parse_mark);
   
   if (sv_compile_trace_unlikely) fprintf(
     stderr, "[compile] end kind=function-with-params thrown=%d func=%p\n",

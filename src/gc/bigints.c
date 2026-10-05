@@ -1,12 +1,13 @@
 #include "internal.h"
 #include "gc/bigints.h"
 #include "pool.h"
+#include "utils.h"
 
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct {
+typedef struct gc_bigint_block {
   uintptr_t base;
   uintptr_t end;
   ant_pool_block_t *block;
@@ -17,10 +18,6 @@ typedef struct {
   bool block_live;
 } gc_bigint_block_t;
 
-static gc_bigint_block_t *g_bigint_blocks = NULL;
-static size_t g_bigint_block_count = 0;
-static size_t g_bigint_block_cap = 0;
-
 static int bigint_block_cmp(const void *a, const void *b) {
   const gc_bigint_block_t *left = (const gc_bigint_block_t *)a;
   const gc_bigint_block_t *right = (const gc_bigint_block_t *)b;
@@ -29,31 +26,26 @@ static int bigint_block_cmp(const void *a, const void *b) {
   return 0;
 }
 
-static void bigint_blocks_reserve(size_t count) {
-  if (g_bigint_block_count + count <= g_bigint_block_cap) return;
-  size_t cap = g_bigint_block_cap ? g_bigint_block_cap * 2u : 32u;
-  while (cap < g_bigint_block_count + count) cap *= 2u;
-  gc_bigint_block_t *blocks = realloc(g_bigint_blocks, cap * sizeof(*blocks));
-  if (!blocks) return;
-  g_bigint_blocks = blocks;
-  g_bigint_block_cap = cap;
-}
-
 static void bigint_block_add(
-  ant_pool_block_t *block,
+  ant_t *js, ant_pool_block_t *block,
   ant_pool_bucket_t *bucket,
   size_t stride
 ) {
   if (!block || block->used == 0) return;
-  bigint_blocks_reserve(1);
-  if (g_bigint_block_count >= g_bigint_block_cap) return;
+  gc_bigint_block_t *blocks = vec_grow(
+    js->gc.bigint_blocks, &js->gc.bigint_block_cap,
+    js->gc.bigint_block_len + 1, sizeof(*blocks), 32
+  );
+  
+  if (!blocks) return;
+  js->gc.bigint_blocks = blocks;
 
   size_t slot_count = stride ? block->used / stride : 0;
   size_t mark_bytes = (slot_count + 7u) / 8u;
   uint8_t *marks = mark_bytes ? calloc(1, mark_bytes) : NULL;
   if (mark_bytes && !marks) return;
 
-  gc_bigint_block_t *entry = &g_bigint_blocks[g_bigint_block_count++];
+  gc_bigint_block_t *entry = &js->gc.bigint_blocks[js->gc.bigint_block_len++];
   entry->base = (uintptr_t)block->data;
   entry->end = entry->base + block->used;
   entry->block = block;
@@ -109,7 +101,7 @@ static void bigint_free_list_trim(ant_pool_block_t **free_head) {
 }
 
 void gc_bigints_begin(ant_t *js) {
-  g_bigint_block_count = 0;
+  js->gc.bigint_block_len = 0;
 
   ant_class_pool_t *pool = &js->pool.bigint;
   for (int i = 0; i < ANT_POOL_SIZE_CLASS_COUNT; i++) {
@@ -117,25 +109,25 @@ void gc_bigints_begin(ant_t *js) {
     bucket->slot_free = NULL;
     if (bucket->slot_stride == 0) continue;
     for (ant_pool_block_t *block = bucket->head; block; block = block->next)
-      bigint_block_add(block, bucket, bucket->slot_stride);
+      bigint_block_add(js, block, bucket, bucket->slot_stride);
   }
 
   for (ant_pool_block_t *block = pool->base.head; block; block = block->next)
-    bigint_block_add(block, NULL, 0);
+    bigint_block_add(js, block, NULL, 0);
 
-  if (g_bigint_block_count > 1)
-    qsort(g_bigint_blocks, g_bigint_block_count, sizeof(*g_bigint_blocks), bigint_block_cmp);
+  if (js->gc.bigint_block_len > 1)
+    qsort(js->gc.bigint_blocks, js->gc.bigint_block_len, sizeof(*js->gc.bigint_blocks), bigint_block_cmp);
 }
 
-void gc_bigints_mark(const void *ptr) {
-  if (!ptr || g_bigint_block_count == 0) return;
+void gc_bigints_mark(ant_t *js, const void *ptr) {
+  if (!ptr || js->gc.bigint_block_len == 0) return;
   uintptr_t value = (uintptr_t)ptr;
   size_t lo = 0;
-  size_t hi = g_bigint_block_count;
+  size_t hi = js->gc.bigint_block_len;
 
   while (lo < hi) {
     size_t mid = lo + (hi - lo) / 2u;
-    gc_bigint_block_t *entry = &g_bigint_blocks[mid];
+    gc_bigint_block_t *entry = &js->gc.bigint_blocks[mid];
     if (value < entry->base) hi = mid;
     else if (value >= entry->end) lo = mid + 1u;
     else {
@@ -157,8 +149,8 @@ void gc_bigints_mark(const void *ptr) {
 void gc_bigints_sweep(ant_t *js) {
   ant_class_pool_t *pool = &js->pool.bigint;
 
-  for (size_t i = 0; i < g_bigint_block_count; i++) {
-    gc_bigint_block_t *entry = &g_bigint_blocks[i];
+  for (size_t i = 0; i < js->gc.bigint_block_len; i++) {
+    gc_bigint_block_t *entry = &js->gc.bigint_blocks[i];
     ant_pool_block_t *block = entry->block;
 
     if (entry->stride == 0) {
@@ -201,5 +193,11 @@ void gc_bigints_sweep(ant_t *js) {
     bigint_free_list_trim(&pool->classes[i].free_head);
   bigint_free_list_trim(&pool->base.free_head);
 
-  g_bigint_block_count = 0;
+  js->gc.bigint_block_len = 0;
+}
+
+void gc_bigints_destroy(ant_t *js) {
+  free(js->gc.bigint_blocks);
+  js->gc.bigint_blocks = NULL;
+  js->gc.bigint_block_len = js->gc.bigint_block_cap = 0;
 }

@@ -6,6 +6,7 @@
 #include "pool.h"
 #include "gc/objects.h"
 #include "silver/code_unit.h"
+#include "runtime.h"
 #include "primordials.h"
 #include "descriptors.h"
 
@@ -66,6 +67,8 @@ struct ant_isolate_t {
   bool promise_then_protector_invalid;
 
   struct {
+    uint32_t epoch;
+    uint32_t obj_epoch;
     uint32_t next_object_identity;
     ant_shape_t ***shape_ref_slots;
     size_t shape_ref_len;
@@ -244,23 +247,32 @@ struct ant_isolate_t {
     uint64_t last_major_end_ns;
     uint64_t minor_cost_ns;
     uint64_t major_cost_ns;
-
+  
     uint64_t epoch;
     uint8_t obj_epoch;
     bool minor;
     ant_object_t **mark_stack;
     size_t mark_sp;
     size_t mark_cap;
-
+  
     gc_func_mark_profile_t func_profile;
     sv_func_t **func_stack;
     size_t func_sp;
     size_t func_cap;
     bool func_draining;
-    
+  
     sv_func_t **fb_funcs;
     size_t fb_len;
     size_t fb_cap;
+  
+    struct gc_string_block_mark *string_marks;
+    size_t string_mark_len, string_mark_cap;
+  
+    struct gc_large_string_mark *large_string_marks;
+    size_t large_string_mark_len, large_string_mark_cap;
+  
+    struct gc_bigint_block *bigint_blocks;
+    size_t bigint_block_len, bigint_block_cap;
   } gc;
 
   ant_object_t *objects_old;
@@ -279,6 +291,12 @@ struct ant_isolate_t {
   size_t permanent_root_traced;
 
   sv_code_units_t code_units;
+
+  struct {
+    ant_code_arena_t code;
+    ant_code_arena_t parse;
+    struct code_intern *interns;
+  } arenas;
 
   size_t remembered_upvalue_len;
   size_t remembered_upvalue_cap;

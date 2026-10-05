@@ -214,7 +214,7 @@ static inline uint32_t sv_ic_object_identity(ant_t *js, ant_object_t *obj) {
 
   uint32_t id = js->ic.next_object_identity;
   if (__builtin_expect(id >= SV_IC_IDENTITY_MAX, 0)) {
-    ant_ic_epoch_bump();
+    ant_ic_epoch_bump(js);
     sv_ic_identities_reset(js);
     id = 0;
   }
@@ -226,14 +226,14 @@ static inline uint32_t sv_ic_object_identity(ant_t *js, ant_object_t *obj) {
 }
 
 static inline bool sv_ic_try_get_hit(
-  sv_ic_entry_t *ic,
+  ant_t *js, sv_ic_entry_t *ic,
   ant_value_t obj,
   ant_object_t *receiver,
   sv_atom_t *a,
   ant_value_t *out
 ) {
   if (!ic || !receiver) return false;
-  if (ic->epoch != ant_ic_epoch_counter) return false;
+  if (ic->epoch != js->ic.epoch) return false;
   if (ic->cached_shape != receiver->shape) return false;
 
   if (ic->get_kind == SV_GF_IC_MISSING) {
@@ -281,7 +281,7 @@ static inline bool sv_ic_try_get_hit(
 }
 
 static inline int sv_gf_poly_find(
-  const sv_gf_poly_t *poly,
+  ant_t *js, const sv_gf_poly_t *poly,
   ant_object_t *receiver,
   const char *interned,
   ant_value_t *out
@@ -289,7 +289,7 @@ static inline int sv_gf_poly_find(
   if (!receiver->shape) return -1;
   for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++) {
     const sv_gf_poly_entry_t *e = &poly->entries[i];
-    if (e->shape != receiver->shape || e->epoch != ant_ic_epoch_counter) continue;
+    if (e->shape != receiver->shape || e->epoch != js->ic.epoch) continue;
 
     ant_object_t *source = receiver;
     if (e->kind == SV_GF_IC_PROTOTYPE) {
@@ -345,9 +345,9 @@ static inline uint32_t sv_gf_mega_secondary_hash(const ant_shape_t *shape, ant_v
 }
 
 static inline bool sv_gf_mega_entry_hit(
-  const sv_gf_mega_entry_t *e, ant_object_t *receiver, const char *key, ant_value_t *out
+  ant_t *js, const sv_gf_mega_entry_t *e, ant_object_t *receiver, const char *key, ant_value_t *out
 ) {
-  if (e->shape != receiver->shape || e->key != key || e->epoch != ant_ic_epoch_counter ||
+  if (e->shape != receiver->shape || e->key != key || e->epoch != js->ic.epoch ||
       e->receiver_proto != receiver->proto) return false;
 
   ant_object_t *source = receiver;
@@ -372,8 +372,8 @@ static inline bool sv_gf_mega_find(ant_t *js, ant_object_t *receiver, const char
   sv_gf_mega_cache_t *cache = js->ic.gf_mega;
   if (!cache || !receiver->shape) return false;
   const ant_shape_t *shape = receiver->shape;
-  return sv_gf_mega_entry_hit(&cache->primary[sv_gf_mega_primary_hash(shape, receiver->proto, key)], receiver, key, out)
-    || sv_gf_mega_entry_hit(&cache->secondary[sv_gf_mega_secondary_hash(shape, receiver->proto, key)], receiver, key, out);
+  return sv_gf_mega_entry_hit(js, &cache->primary[sv_gf_mega_primary_hash(shape, receiver->proto, key)], receiver, key, out)
+    || sv_gf_mega_entry_hit(js, &cache->secondary[sv_gf_mega_secondary_hash(shape, receiver->proto, key)], receiver, key, out);
 }
 
 static __attribute__((noinline)) void sv_gf_mega_store(
@@ -386,7 +386,7 @@ static __attribute__((noinline)) void sv_gf_mega_store(
   sv_gf_mega_entry_t *p = &cache->primary[sv_gf_mega_primary_hash(receiver->shape, receiver->proto, key)];
   if (p->shape == receiver->shape && p->key == key && p->receiver_proto == receiver->proto) {
     p->holder = holder; p->index = index; p->proto_id = proto_id; p->kind = kind;
-    p->epoch = ant_ic_epoch_counter;
+    p->epoch = js->ic.epoch;
     return;
   }
   if (p->shape) {
@@ -398,7 +398,7 @@ static __attribute__((noinline)) void sv_gf_mega_store(
   *p = (sv_gf_mega_entry_t){
     .shape = receiver->shape, .receiver_proto = receiver->proto, .key = key,
     .holder = holder, .index = index, .proto_id = proto_id,
-    .epoch = ant_ic_epoch_counter, .kind = kind,
+    .epoch = js->ic.epoch, .kind = kind,
   };
 }
 
@@ -410,9 +410,9 @@ static __attribute__((noinline, cold)) void sv_gf_poly_keep(
   if (ic->shape_ref_mask & SV_IC_POLY_MEGA) return;
   sv_gf_poly_t *poly = ic->guard.get.poly;
   
-  if (poly && poly->kept_epoch != ant_ic_epoch_counter) {
+  if (poly && poly->kept_epoch != js->ic.epoch) {
     poly->kept = 0;
-    poly->kept_epoch = ant_ic_epoch_counter;
+    poly->kept_epoch = js->ic.epoch;
   }
   
   if (poly && ++poly->kept > SV_GF_POLY_MEGA_KEPT) {
@@ -625,12 +625,12 @@ static inline ant_shape_t *sv_prim_neg_unpack_shape(uintptr_t aux) {
 }
 
 static inline bool sv_ic_try_get_miss_prim(
-  sv_ic_entry_t *ic,
+  ant_t *js, sv_ic_entry_t *ic,
   uint8_t prim_type,
   ant_value_t *out
 ) {
   if (ic->get_kind != SV_GF_IC_PRIMITIVE_MISSING) return false;
-  if (ic->epoch != ant_ic_epoch_counter) return false;
+  if (ic->epoch != js->ic.epoch) return false;
   if (vtype(ic->guard.receiver_proto) != prim_type) return false;
 
   ant_object_t *holder1 = ic->cached_holder;
@@ -680,13 +680,13 @@ static inline bool sv_ic_probe_chain_absent(
 }
 
 static inline bool sv_ic_try_get_hit_prim(
-  sv_ic_entry_t *ic,
+  ant_t *js, sv_ic_entry_t *ic,
   uint8_t prim_type,
   sv_atom_t *a,
   ant_value_t *out
 ) {
   if (!ic || ic->get_kind != SV_GF_IC_PRIMITIVE_DATA) return false;
-  if (ic->epoch != ant_ic_epoch_counter) return false;
+  if (ic->epoch != js->ic.epoch) return false;
   if (vtype(ic->guard.receiver_proto) != prim_type) return false;
 
   ant_object_t *holder = ic->cached_holder;
@@ -880,12 +880,12 @@ static inline bool sv_prim_ic_lookup(
   if (pt != kTypeString && pt != kTypeNumber && pt != kTypeBool && pt != kTypeSymbol) return false;
   if (pt == kTypeString && a->len > 0 && a->str[0] >= '0' && a->str[0] <= '9') return false;
 
-  if (sv_ic_try_get_hit_prim(ic, pt, a, out)) {
+  if (sv_ic_try_get_hit_prim(js, ic, pt, a, out)) {
     sv_gf_ic_note_success(ic);
     return true;
   }
   
-  if (sv_ic_try_get_miss_prim(ic, pt, out)) return true;
+  if (sv_ic_try_get_miss_prim(js, ic, pt, out)) return true;
   ant_value_t proto = js_primitive_prototype(js, pt);
   if (!is_object_type(proto)) return false;
 
@@ -899,7 +899,7 @@ static inline bool sv_prim_ic_lookup(
     ic->cached_index = prop_idx;
     ic->get_kind = SV_GF_IC_PRIMITIVE_DATA;
     ic->guard.receiver_proto = mkval(pt, 0);
-    ic->epoch = ant_ic_epoch_counter;
+    ic->epoch = js->ic.epoch;
     sv_gf_ic_set_proto_id(ic, 0);
     sv_gf_ic_note_success(ic);
     
@@ -917,7 +917,7 @@ static inline bool sv_prim_ic_lookup(
     ic->get_kind = SV_GF_IC_PRIMITIVE_MISSING;
     ic->guard.receiver_proto = mkval(pt, 0);
     ic->cached_aux = sv_prim_neg_pack_shape(ic->cached_aux, shape2);
-    ic->epoch = ant_ic_epoch_counter;
+    ic->epoch = js->ic.epoch;
     *out = js_mkundef();
     
     return true;
@@ -935,7 +935,7 @@ static inline __attribute__((always_inline)) bool sv_try_prop_get_ic_lookup(
   bool track_obj = track_ic && ptr && !ptr->flags.is_exotic;
 
   ant_value_t hit = js_mkundef();
-  if (track_obj && sv_ic_try_get_hit(ic, obj, ptr, a, &hit)) {
+  if (track_obj && sv_ic_try_get_hit(js, ic, obj, ptr, a, &hit)) {
     sv_gf_ic_note_success(ic);
     *out = hit;
     return true;
@@ -949,7 +949,7 @@ static inline __attribute__((always_inline)) bool sv_try_prop_get_ic_lookup(
   }
 
   if (poly && track_obj && ic->guard.get.poly) {
-    int index = sv_gf_poly_find(ic->guard.get.poly, ptr, a->str, &hit);
+    int index = sv_gf_poly_find(js, ic->guard.get.poly, ptr, a->str, &hit);
     if (index >= 0) {
       sv_gf_poly_promote(ic, ic->guard.get.poly, index);
       sv_gf_ic_note_success(ic);
@@ -976,7 +976,7 @@ static inline __attribute__((always_inline)) bool sv_try_prop_get_ic_lookup(
       }
       if (poly && holder && ic->cached_shape &&
           (ic->cached_shape != ptr->shape || ic->guard.receiver_proto != ptr->proto) &&
-          ic->epoch == ant_ic_epoch_counter &&
+          ic->epoch == js->ic.epoch &&
           (ic->get_kind == SV_GF_IC_OWN || ic->get_kind == SV_GF_IC_PROTOTYPE)) {
         sv_gf_poly_entry_t keep = {
           .shape = ic->cached_shape, .receiver_proto = ic->guard.receiver_proto,
@@ -995,7 +995,7 @@ static inline __attribute__((always_inline)) bool sv_try_prop_get_ic_lookup(
         ? SV_GF_IC_MISSING : holder == ptr 
         ? SV_GF_IC_OWN : SV_GF_IC_PROTOTYPE;
       
-      ic->epoch = ant_ic_epoch_counter;
+      ic->epoch = js->ic.epoch;
       
       sv_gf_ic_set_proto_id(
         ic, ic->get_kind == SV_GF_IC_OWN || !is_object_type(ptr->proto) 
@@ -1062,7 +1062,7 @@ static inline bool sv_try_symbol_description_ic(
   ant_value_t guard = receiver ? proto_value : mkval(kTypeSymbol, 0);
   
   if (
-    ic->get_kind == kind && ic->epoch == ant_ic_epoch_counter &&
+    ic->get_kind == kind && ic->epoch == js->ic.epoch &&
     ic->cached_holder == proto && ic->cached_shape == shape &&
     ic->guard.receiver_proto == guard
   ) {
@@ -1087,7 +1087,7 @@ static inline bool sv_try_symbol_description_ic(
     ic->cached_index = (uint32_t)index;
     ic->guard.receiver_proto = guard;
     ic->get_kind = kind;
-    ic->epoch = ant_ic_epoch_counter;
+    ic->epoch = js->ic.epoch;
   }
   
   *out = js_symbol_description_value(js, symbol);
@@ -1221,9 +1221,9 @@ static __attribute__((noinline, cold)) void sv_pf_poly_keep(
   if (ic->shape_ref_mask & SV_IC_POLY_MEGA) return;
   sv_pf_poly_t *poly = ic->put_poly;
   
-  if (poly && poly->kept_epoch != ant_ic_epoch_counter) {
+  if (poly && poly->kept_epoch != js->ic.epoch) {
     poly->kept = 0;
-    poly->kept_epoch = ant_ic_epoch_counter;
+    poly->kept_epoch = js->ic.epoch;
   }
   
   if (poly && ++poly->kept > SV_GF_POLY_MEGA_KEPT) {
@@ -1271,7 +1271,7 @@ static inline int sv_pf_poly_try_store(
   sv_pf_poly_t *poly = ic->put_poly;
   for (unsigned i = 0; i < SV_GF_POLY_WAYS; i++) {
     sv_pf_poly_entry_t *e = &poly->entries[i];
-    if (e->shape != ptr->shape || e->epoch != ant_ic_epoch_counter) continue;
+    if (e->shape != ptr->shape || e->epoch != js->ic.epoch) continue;
 
     if (!e->add) {
       if (e->index >= ptr->prop_count) continue;
@@ -1294,7 +1294,7 @@ static inline int sv_pf_poly_try_store(
     ant_shape_retain(e->to_shape);
     ptr->shape = e->to_shape;
     ant_shape_release(old_shape);
-    ant_object_invalidate_guarded_absence(ptr);
+    ant_object_invalidate_guarded_absence(js, ptr);
     ant_property_mutation_invalidate(js, ptr, a->str);
     if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(ptr, slot + 1)) return -1;
     ant_object_prop_set_unchecked(ptr, slot, val);
@@ -1314,7 +1314,7 @@ static inline bool sv_put_field_try_cached(
   *out = val;
 
   if (ic && ptr && !ptr->flags.is_exotic && ptr->shape &&
-      ic->epoch == ant_ic_epoch_counter &&
+      ic->epoch == js->ic.epoch &&
       ic->cached_shape == ptr->shape &&
       ic->cached_index < ptr->prop_count) {
     const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, ic->cached_index);
@@ -1335,7 +1335,7 @@ static inline bool sv_put_field_try_cached(
       !ptr->flags.frozen && !ptr->flags.sealed && ptr->flags.extensible &&
       ptr->type_tag != kTypeArray &&
       !sv_is_proto_atom(a) &&
-      ic->guard.add.epoch == ant_ic_epoch_counter &&
+      ic->guard.add.epoch == js->ic.epoch &&
       ic->guard.add.from_shape == ptr->shape &&
       ic->guard.add.to_shape &&
       sv_add_proto_matches(ptr, ic->add_proto)) {
@@ -1344,7 +1344,7 @@ static inline bool sv_put_field_try_cached(
       ant_shape_retain(ic->guard.add.to_shape);
       ptr->shape = ic->guard.add.to_shape;
       ant_shape_release(old_shape);
-      ant_object_invalidate_guarded_absence(ptr);
+      ant_object_invalidate_guarded_absence(js, ptr);
       ant_property_mutation_invalidate(js, ptr, a->str);
       if (ic->guard.add.slot >= ptr->prop_count &&
           !js_obj_ensure_prop_capacity(ptr, ic->guard.add.slot + 1)) {
@@ -1355,7 +1355,7 @@ static inline bool sv_put_field_try_cached(
       gc_write_barrier_prop(js, ptr, val);
       sv_ic_set_cached_shape(js, ic, ptr->shape);
       ic->cached_index = ic->guard.add.slot;
-      ic->epoch = ant_ic_epoch_counter;
+      ic->epoch = js->ic.epoch;
       if ((ic->add_proto & 1u) && js_obj_ptr(js_as_obj(ptr->proto))->flags.generation == 1)
         ic->add_proto = (uintptr_t)ptr->proto;
       return true;
@@ -1377,10 +1377,10 @@ static inline ant_value_t sv_put_field_miss(
 ) {
   ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
 
-  bool keep_existing = ic && ptr && ic->cached_shape && ic->epoch == ant_ic_epoch_counter &&
+  bool keep_existing = ic && ptr && ic->cached_shape && ic->epoch == js->ic.epoch &&
     ic->cached_shape != ptr->shape;
   bool keep_add = ic && ptr && ic->guard.add.from_shape && ic->guard.add.to_shape &&
-    ic->guard.add.epoch == ant_ic_epoch_counter && ic->guard.add.from_shape != ptr->shape;
+    ic->guard.add.epoch == js->ic.epoch && ic->guard.add.from_shape != ptr->shape;
 
   uint32_t fast_idx = 0;
   if (sv_try_put_field_fast(js, obj, a, val, &fast_idx)) {
@@ -1389,7 +1389,7 @@ static inline ant_value_t sv_put_field_miss(
         sv_pf_poly_keep(js, ic, ic->cached_shape, NULL, ic->cached_index, ic->epoch, 0, false);
       sv_ic_set_cached_shape(js, ic, ptr->shape);
       ic->cached_index = fast_idx;
-      ic->epoch = ant_ic_epoch_counter;
+      ic->epoch = js->ic.epoch;
     }
     return val;
   }
@@ -1423,7 +1423,7 @@ static inline ant_value_t sv_put_field_miss(
           sv_pf_poly_keep(js, ic, ic->cached_shape, NULL, ic->cached_index, ic->epoch, 0, false);
         sv_ic_set_cached_shape(js, ic, ptr->shape);
         ic->cached_index = prop_idx;
-        ic->epoch = ant_ic_epoch_counter;
+        ic->epoch = js->ic.epoch;
         uintptr_t proto = adding ? sv_add_proto_key(js, ptr) : 0;
         if (keep_add && adding &&
             (ic->guard.add.from_shape != old_shape || ic->add_proto != proto))
@@ -1439,7 +1439,7 @@ static inline ant_value_t sv_put_field_miss(
             prop->attrs == ANT_PROP_ATTR_DEFAULT &&
             proto != 0) {
           sv_ic_set_add_transition(
-            js, ic, old_shape, ptr->shape, prop_idx, ant_ic_epoch_counter, proto
+            js, ic, old_shape, ptr->shape, prop_idx, js->ic.epoch, proto
           );
         }
       }

@@ -94,7 +94,7 @@ static inline void sv_obj_site_apply(
     for (uint16_t i = 0; i < site->key_count && ok; i++) {
       uint32_t ai = site->key_atoms[i];
       if (ai >= (uint32_t)func->atom_count) { ok = false; break; }
-      ok = ant_shape_add_interned_tr(&sh, func->atoms[ai].str, ANT_PROP_ATTR_DEFAULT, NULL);
+      ok = ant_shape_add_interned_tr(js, &sh, func->atoms[ai].str, ANT_PROP_ATTR_DEFAULT, NULL);
     }
     
     if (ok) site->shared_shape = sh;

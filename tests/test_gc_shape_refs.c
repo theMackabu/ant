@@ -7,13 +7,13 @@
 #include <assert.h>
 #include <stdio.h>
 
-static void check_prefix_copy(void) {
+static void check_prefix_copy(ant_t *js) {
   ant_shape_t *shape = ant_shape_new();
-  assert(ant_shape_add_interned_tr(&shape, "gc_plain_prefix", ANT_PROP_ATTR_DEFAULT, NULL));
+  assert(ant_shape_add_interned_tr(js, &shape, "gc_plain_prefix", ANT_PROP_ATTR_DEFAULT, NULL));
   assert(!ant_shape_may_have_gc_refs(shape));
   ant_shape_t *prefix = shape;
   ant_shape_retain(prefix);
-  assert(ant_shape_add_symbol_tr(&shape, 1234, ANT_PROP_ATTR_DEFAULT, NULL));
+  assert(ant_shape_add_symbol_tr(js, &shape, 1234, ANT_PROP_ATTR_DEFAULT, NULL));
   assert(ant_shape_may_have_gc_refs(shape));
   ant_shape_t *copy = ant_shape_clone(prefix);
   assert(copy && !ant_shape_may_have_gc_refs(copy));
@@ -23,7 +23,7 @@ static void check_prefix_copy(void) {
   prop->getter = js_mknum(42);
   ant_shape_t *with_accessor = ant_shape_clone(copy);
   assert(with_accessor && ant_shape_may_have_gc_refs(with_accessor));
-  assert(ant_shape_clear_accessor_slot(with_accessor, 0));
+  assert(ant_shape_clear_accessor_slot(js, with_accessor, 0));
   ant_shape_t *cleared = ant_shape_clone(with_accessor);
   assert(cleared && !ant_shape_may_have_gc_refs(cleared));
   ant_shape_release(cleared);
@@ -36,7 +36,7 @@ static void check_prefix_copy(void) {
 int main(void) {
   ant_t *js = ant_create();
   assert(js);
-  check_prefix_copy();
+  check_prefix_copy(js);
   // Only explicit roots keep these objects alive. Conservative C-stack copies
   // must not hide a missing ordinary-value or descriptor edge.
   js_setstackbase(js, NULL);

@@ -40,7 +40,7 @@ void mir_emit_value_to_objptr_or_jmp(
 }
 
 void mir_emit_ic_obj_epoch_guard(
-    MIR_context_t ctx, MIR_item_t fn,
+    ant_t *js, MIR_context_t ctx, MIR_item_t fn,
     MIR_reg_t ic, MIR_label_t slow,
     const char *prefix, int bc_off, uint16_t ic_idx) {
   MIR_reg_t epoch_scratch = mir_new_ic_reg(ctx, fn, prefix, "oep", bc_off, ic_idx);
@@ -48,7 +48,7 @@ void mir_emit_ic_obj_epoch_guard(
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_MOV,
                                MIR_new_reg_op(ctx, epoch_scratch),
-                               MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)&ant_ic_obj_epoch_counter)));
+                               MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)&js->ic.obj_epoch)));
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_MOV,
                                MIR_new_reg_op(ctx, current),
@@ -333,7 +333,7 @@ static void mir_emit_put_field_barrier(
 
 static void mir_emit_shape_transition(
     MIR_context_t ctx, MIR_item_t fn, int bc_off, uint16_t ic_idx,
-    MIR_reg_t optr, MIR_reg_t to_shape,
+    MIR_reg_t r_js, MIR_reg_t optr, MIR_reg_t to_shape,
     MIR_item_t shape_transition_proto, MIR_item_t imp_shape_transition) {
   MIR_reg_t from = mir_new_ic_reg(ctx, fn, "pf", "tfrom", bc_off, ic_idx);
   MIR_reg_t t = mir_new_ic_reg(ctx, fn, "pf", "tt", bc_off, ic_idx);
@@ -368,9 +368,9 @@ static void mir_emit_shape_transition(
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
 
   MIR_append_insn(ctx, fn, call);
-  MIR_append_insn(ctx, fn, MIR_new_call_insn(ctx, 4,
+  MIR_append_insn(ctx, fn, MIR_new_call_insn(ctx, 5,
       MIR_new_ref_op(ctx, shape_transition_proto), MIR_new_ref_op(ctx, imp_shape_transition),
-      MIR_new_reg_op(ctx, optr), MIR_new_reg_op(ctx, to_shape)));
+      MIR_new_reg_op(ctx, r_js), MIR_new_reg_op(ctx, optr), MIR_new_reg_op(ctx, to_shape)));
   MIR_append_insn(ctx, fn, done);
 }
 
@@ -509,7 +509,7 @@ bool mir_emit_put_field_ic_fastpath(
     mir_emit_put_field_value_guard(
         ctx, fn, val, optr, flags, vtag, vptr, rope_flags,
         need_barrier, slow, add_store);
-    mir_emit_shape_transition(ctx, fn, bc_off, ic_idx, optr, add_to,
+    mir_emit_shape_transition(ctx, fn, bc_off, ic_idx, r_js, optr, add_to,
                               shape_transition_proto, imp_shape_transition);
     MIR_append_insn(ctx, fn,
                     MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, prop_count),
@@ -742,7 +742,7 @@ static bool mir_emit_get_field_shape_snapshot(
   // Retention also makes the shape shared, so any later metadata change gives
   // the object a new shape, and the shape compare below is the whole metadata
   // check; the mark makes an in-place edit fail loudly instead.
-  ant_shape_t **root = code_arena_bump(sizeof(*root));
+  ant_shape_t **root = code_arena_bump(js, sizeof(*root));
   if (!root) return false;
   *root = NULL;
   if (!sv_ic_shape_ref_register(js, root)) return false;

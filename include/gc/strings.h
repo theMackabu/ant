@@ -334,5 +334,6 @@ void gc_strings_begin(ant_t *js);
 void gc_strings_sweep(ant_t *js);
 void gc_strings_epoch_bump(void);
 void gc_strings_mark(ant_t *js, const void *ptr);
+void gc_strings_destroy(ant_t *js);
 
 #endif

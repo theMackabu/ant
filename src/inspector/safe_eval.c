@@ -536,7 +536,7 @@ bool inspector_eval_safe_expr(ant_t *js, const char *expr, size_t expr_len, ant_
   Ant_Exception_Clear(js);
 
   bool ok = false;
-  code_arena_mark_t parse_mark = parse_arena_mark();
+  code_arena_mark_t parse_mark = parse_arena_mark(js);
   sv_ast_t *program = sv_parse(js, wrapped, (ant_offset_t)(expr_len + 2), SV_PARSE_SCRIPT, false);
   if (
     program && program->type == N_PROGRAM &&
@@ -548,7 +548,7 @@ bool inspector_eval_safe_expr(ant_t *js, const char *expr, size_t expr_len, ant_
     if (ok && is_err(*out)) ok = false;
   }
 
-  parse_arena_rewind(parse_mark);
+  parse_arena_rewind(js, parse_mark);
   free(wrapped);
 
   Ant_Exception_Set(js, saved_exception);

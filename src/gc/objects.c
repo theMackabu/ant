@@ -586,7 +586,7 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
   }
 
   if (t == kTypeBigInt) {
-    gc_bigints_mark((const void *)vptr(v));
+    gc_bigints_mark(js, (const void *)vptr(v));
     return;
   }
 
@@ -875,7 +875,7 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
     }
     
     if (type == kTypeString) gc_mark_string_conservative(js, w);
-    if (type == kTypeBigInt) gc_bigints_mark((const void *)vptr(w));
+    if (type == kTypeBigInt) gc_bigints_mark(js, (const void *)vptr(w));
   }
 }
 
@@ -1507,7 +1507,7 @@ uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
   uint64_t mark_ns = gc_now_ns() - mark_start_ns;
   gc_sweep(js);
   
-  if (ant_gc_shapes_sweep()) ant_ic_epoch_bump();
+  if (ant_gc_shapes_sweep()) ant_ic_epoch_bump(js);
   js->permanent_root_traced = js->permanent_root_len;
   js->code_units.young_len = 0;
 

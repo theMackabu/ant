@@ -435,7 +435,7 @@ static inline ant_value_t sv_global_declare(ant_t *js, sv_func_t *func) {
     sv_global_lexical_index_insert(js, js->global_lexical_count - 1);
   }
 
-  ant_ic_epoch_bump();
+  ant_ic_epoch_bump(js);
   return js_mkundef();
 }
 

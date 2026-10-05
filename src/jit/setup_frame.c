@@ -396,7 +396,7 @@ bool jit_setup_frame(jit_compile_t *c) {
     MIR_append_insn(c->ctx, c->jit_func,
                     MIR_new_insn(c->ctx, MIR_MOV,
                                  MIR_new_reg_op(c->ctx, c->r_ic_epoch_val),
-                                 MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)&ant_ic_epoch_counter)));
+                                 MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)&c->js->ic.epoch)));
   }
 
   c->r_bailout_val = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, "bail_val");

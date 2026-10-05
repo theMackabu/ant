@@ -127,7 +127,7 @@ static constexpr size_t REGEX_COMPILED_TABLE_LOAD_NUM = 3;
 static constexpr size_t REGEX_COMPILED_TABLE_LOAD_DEN = 4;
 
 static bool regexp_result_shape_init(
-  regexp_result_shape_t *cache,
+  ant_t *js, regexp_result_shape_t *cache,
   ant_object_t *array,
   bool with_indices
 ) {
@@ -148,20 +148,13 @@ static bool regexp_result_shape_init(
 
   regexp_result_shape_t built = { .shape = shape };
   bool ok =
-    ant_shape_add_interned(
-      shape, index_key, ANT_PROP_ATTR_DEFAULT, &built.index_slot
-    ) &&
-    ant_shape_add_interned(
-      shape, input_key, ANT_PROP_ATTR_DEFAULT, &built.input_slot
-    ) &&
-    ant_shape_add_interned(
-      shape, groups_key, ANT_PROP_ATTR_DEFAULT, &built.groups_slot
-    );
-  if (ok && with_indices) {
-    ok = ant_shape_add_interned(
-      shape, indices_key, ANT_PROP_ATTR_DEFAULT, &built.indices_slot
-    );
-  }
+    ant_shape_add_interned(js, shape, index_key, ANT_PROP_ATTR_DEFAULT, &built.index_slot) &&
+    ant_shape_add_interned(js, shape, input_key, ANT_PROP_ATTR_DEFAULT, &built.input_slot) &&
+    ant_shape_add_interned(js, shape, groups_key, ANT_PROP_ATTR_DEFAULT, &built.groups_slot);
+  
+  if (ok && with_indices) 
+    ok = ant_shape_add_interned(js, shape, indices_key, ANT_PROP_ATTR_DEFAULT, &built.indices_slot);
+  
   if (!ok) {
     ant_shape_release(shape);
     return false;
@@ -187,7 +180,7 @@ static __attribute__((noinline)) bool regexp_result_apply_shape(
   regexp_result_shape_t *cache = with_indices
     ? &state->result_indices_shape
     : &state->result_shape;
-  if (!regexp_result_shape_init(cache, array, with_indices)) goto fallback;
+  if (!regexp_result_shape_init(js, cache, array, with_indices)) goto fallback;
 
   if (array->shape != cache->shape) {
     ant_shape_retain(cache->shape);
@@ -1011,7 +1004,7 @@ static bool regexp_init_flag_properties(
       const char *key = intern_string(regexp_flag_properties[i].name,
                                       regexp_flag_properties[i].length);
       uint32_t slot;
-      if (!key || !ant_shape_add_interned(shape, key, ANT_PROP_ATTR_DEFAULT, &slot)) {
+      if (!key || !ant_shape_add_interned(js, shape, key, ANT_PROP_ATTR_DEFAULT, &slot)) {
         ant_shape_release(shape);
         return false;
       }
@@ -1022,7 +1015,7 @@ static bool regexp_init_flag_properties(
   if (obj->shape != cache->base ||
       !js_obj_ensure_prop_capacity(obj, 1 + REGEXP_FLAG_PROPERTY_COUNT)) return false;
   ant_shape_transition_existing(&obj->shape, cache->shape);
-  ant_object_invalidate_guarded_absence(obj);
+  ant_object_invalidate_guarded_absence(js, obj);
   for (size_t i = 0; i < REGEXP_FLAG_PROPERTY_COUNT; i++)
     ant_object_prop_set_unchecked(obj, (uint32_t)i + 1, values[i]);
   gc_write_barrier(js, obj, values[0]); // Only the flags string contains a reference.

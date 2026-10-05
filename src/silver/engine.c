@@ -104,7 +104,7 @@ sv_gf_poly_t *sv_gf_poly_new(ant_t *js, sv_ic_entry_t *ic) {
   sv_gf_poly_t *poly = calloc(1, sizeof(*poly));
   if (!poly) return NULL;
   
-  poly->kept_epoch = ant_ic_epoch_counter;
+  poly->kept_epoch = js->ic.epoch;
   SV_POLY_LINK(js->ic.gf_polys, poly);
   
   ic->guard.get.poly = poly;
@@ -117,7 +117,7 @@ sv_pf_poly_t *sv_pf_poly_new(ant_t *js, sv_ic_entry_t *ic) {
   sv_pf_poly_t *poly = calloc(1, sizeof(*poly));
   if (!poly) return NULL;
   
-  poly->kept_epoch = ant_ic_epoch_counter;
+  poly->kept_epoch = js->ic.epoch;
   SV_POLY_LINK(js->ic.pf_polys, poly);
   
   ic->put_poly = poly;

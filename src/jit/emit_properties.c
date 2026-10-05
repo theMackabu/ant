@@ -197,7 +197,7 @@ static void jit_emit_get_field_poly(
   bool probe_shared = mega;
   sv_gf_mega_cache_t *cache = probe_shared ? sv_gf_mega_ensure(c->js) : NULL;
   if (probe_shared && !cache) return;
-  if (!probe_shared && poly->kept_epoch == ant_ic_epoch_counter && poly->kept >= SV_GF_POLY_WAYS) return;
+  if (!probe_shared && poly->kept_epoch == c->js->ic.epoch && poly->kept >= SV_GF_POLY_WAYS) return;
 
   jit_gfp_regs(c);
   MIR_label_t full = MIR_new_label(c->ctx);
@@ -795,7 +795,7 @@ void jit_emit_properties(jit_compile_t *c) {
         mir_load_imm(c->ctx, c->jit_func, c->cached_element_valid, 0);
       }
       c->element_available = !obj_is_num;
-      sv_ic_entry_t *element_ic = code_arena_bump(sizeof(*element_ic));
+      sv_ic_entry_t *element_ic = code_arena_bump(c->js, sizeof(*element_ic));
       if (element_ic) memset(element_ic, 0, sizeof(*element_ic));
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_call_insn(c->ctx, 10,
@@ -832,7 +832,7 @@ void jit_emit_properties(jit_compile_t *c) {
                                    MIR_new_label_op(c->ctx, nullish),
                                    MIR_new_reg_op(c->ctx, obj),
                                    MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0))));
-      sv_ic_entry_t *element_ic = code_arena_bump(sizeof(*element_ic));
+      sv_ic_entry_t *element_ic = code_arena_bump(c->js, sizeof(*element_ic));
       if (element_ic) memset(element_ic, 0, sizeof(*element_ic));
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_call_insn(c->ctx, 10,

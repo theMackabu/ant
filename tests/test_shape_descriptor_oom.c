@@ -21,6 +21,10 @@ static void *hash_malloc(size_t size) { return malloc(size); }
 #undef calloc
 #undef realloc
 
+// shape edits only bump the isolate's IC epochs
+static ant_t test_isolate;
+static ant_t *const js = &test_isolate;
+
 int main(void) {
   char keys[24][16];
   ant_shape_t *root = ant_shape_new();
@@ -30,26 +34,26 @@ int main(void) {
     ant_shape_t *prefix = ant_shape_new();
     for (unsigned i = 0; i < 24; i++) {
       snprintf(keys[i], sizeof(keys[i]), "key%u", i);
-      if (i < 8) assert(ant_shape_add_interned_tr(&prefix, keys[i], ANT_PROP_ATTR_DEFAULT, NULL));
+      if (i < 8) assert(ant_shape_add_interned_tr(js, &prefix, keys[i], ANT_PROP_ATTR_DEFAULT, NULL));
     }
     ant_shape_t *child = prefix;
     ant_shape_retain(child);
     allocation = 0;
     fail_at = failure;
-    bool added = ant_shape_add_interned_tr(&child, keys[8], ANT_PROP_ATTR_DEFAULT, NULL);
+    bool added = ant_shape_add_interned_tr(js, &child, keys[8], ANT_PROP_ATTR_DEFAULT, NULL);
     fail_at = 0;
     assert(ant_shape_count(prefix) == 8);
     assert(ant_shape_lookup_interned(prefix, keys[8]) == -1);
     assert(ant_shape_count(child) == (added ? 9 : 8));
     if (!added) assert(child == prefix);
-    assert(ant_shape_add_interned_tr(&child, keys[9], ANT_PROP_ATTR_DEFAULT, NULL));
+    assert(ant_shape_add_interned_tr(js, &child, keys[9], ANT_PROP_ATTR_DEFAULT, NULL));
     for (unsigned i = 0; i < 8; i++) {
       assert(ant_shape_lookup_interned(prefix, keys[i]) == (int32_t)i);
       assert(ant_shape_lookup_interned(child, keys[i]) == (int32_t)i);
     }
     allocation = 0;
     fail_at = failure;
-    bool changed = ant_shape_set_attrs_interned(prefix, keys[0], 0);
+    bool changed = ant_shape_set_attrs_interned(js, prefix, keys[0], 0);
     fail_at = 0;
     assert(ant_shape_get_attrs(prefix, 0) == (changed ? 0 : ANT_PROP_ATTR_DEFAULT));
     assert(ant_shape_get_attrs(child, 0) == ANT_PROP_ATTR_DEFAULT);
@@ -66,10 +70,10 @@ int main(void) {
     for (unsigned failure = 1; failure <= 24; failure++) {
       ant_shape_t *prefix = ant_shape_new();
       for (unsigned i = 0; i < 8; i++)
-        assert(ant_shape_add_interned_tr(&prefix, keys[i], ANT_PROP_ATTR_DEFAULT, NULL));
+        assert(ant_shape_add_interned_tr(js, &prefix, keys[i], ANT_PROP_ATTR_DEFAULT, NULL));
       ant_shape_t *child = prefix;
       ant_shape_retain(child);
-      assert(ant_shape_add_interned_tr(&child, keys[8], ANT_PROP_ATTR_DEFAULT, NULL));
+      assert(ant_shape_add_interned_tr(js, &child, keys[8], ANT_PROP_ATTR_DEFAULT, NULL));
       if (retired_tail) {
         ant_shape_release(child);
         ant_gc_shapes_begin();
@@ -78,13 +82,13 @@ int main(void) {
       }
       allocation = 0;
       fail_at = failure;
-      bool removed = ant_shape_remove_slot(prefix, 0);
+      bool removed = ant_shape_remove_slot(js, prefix, 0);
       fail_at = 0;
       assert(ant_shape_lookup_interned(prefix, keys[0]) == (removed ? -1 : 0));
       if (!removed) {
         failed_deletes++;
         assert(ant_shape_get_attrs(prefix, 0) == ANT_PROP_ATTR_DEFAULT);
-        assert(ant_shape_remove_slot(prefix, 0));
+        assert(ant_shape_remove_slot(js, prefix, 0));
       }
       assert(ant_shape_prop_at(prefix, 0) == NULL);
       if (!retired_tail) {
