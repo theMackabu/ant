@@ -90,6 +90,7 @@ typedef struct rl_interface {
 #endif
 } rl_interface_t;
 
+// TODO: isolate
 static uint64_t next_interface_id = 1;
 static rl_interface_t *interfaces = NULL;
 

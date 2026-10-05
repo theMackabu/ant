@@ -178,6 +178,7 @@ typedef struct {
   double atime_ms, mtime_ms, ctime_ms, birthtime_ms;
 } fs_stat_fields_t;
 
+// TODO: isolate
 static fs_watcher_t *active_watchers = NULL;
 static UT_array *pending_requests    = NULL;
 

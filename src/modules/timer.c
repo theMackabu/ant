@@ -22,6 +22,7 @@
 
 typedef struct timer_entry {
   uv_timer_t handle;
+  ant_t *js;
   ant_value_t obj;
   ant_value_t callback;
   ant_value_t *args;
@@ -62,63 +63,24 @@ typedef struct immediate_entry {
   struct immediate_entry *next;
 } immediate_entry_t;
 
-static struct {
-  ant_t *js;
-  timer_entry_t *timers;
-  
-  microtask_entry_t *next_ticks;
-  microtask_entry_t *next_ticks_tail;
-  microtask_entry_t *next_ticks_processing;
-  microtask_entry_t *microtasks;
-  microtask_entry_t *microtasks_tail;
-  microtask_entry_t *microtasks_processing;
-  immediate_entry_t *immediates;
-  immediate_entry_t *immediates_tail;
-  
-  int next_timer_id;
-  int next_immediate_id;
-  int active_timer_count;
-  int active_refed_timer_count;
-} timer_state = {
-  .js = NULL,
-  .timers = NULL,
-  .next_ticks = NULL,
-  .next_ticks_tail = NULL,
-  .next_ticks_processing = NULL,
-  .microtasks = NULL,
-  .microtasks_tail = NULL,
-  .microtasks_processing = NULL,
-  .immediates = NULL,
-  .immediates_tail = NULL,
-  .next_timer_id = 1,
-  .next_immediate_id = 1,
-  .active_timer_count = 0,
-  .active_refed_timer_count = 0,
-};
-
-static void add_timer_entry(timer_entry_t *entry) {
-  entry->next = timer_state.timers;
+static void add_timer_entry(ant_t *js, timer_entry_t *entry) {
+  entry->js = js;
+  entry->next = js->timers.timers;
   entry->prev = NULL;
-  if (timer_state.timers) timer_state.timers->prev = entry;
-  timer_state.timers = entry;
+  if (js->timers.timers) js->timers.timers->prev = entry;
+  js->timers.timers = entry;
 }
 
-static void remove_timer_entry(timer_entry_t *entry) {
+static void remove_timer_entry(ant_t *js, timer_entry_t *entry) {
   if (entry->prev) entry->prev->next = entry->next;
-  else timer_state.timers = entry->next;
+  else js->timers.timers = entry->next;
   if (entry->next) entry->next->prev = entry->prev;
   entry->next = NULL;
   entry->prev = NULL;
 }
 
-static int timer_entry_is_registered(timer_entry_t *entry) {
-  for (timer_entry_t *it = timer_state.timers; it != NULL; it = it->next)
-    if (it == entry) return 1;
-  return 0;
-}
-
-static timer_entry_t *find_timer_entry_by_id(int timer_id) {
-  for (timer_entry_t *entry = timer_state.timers; entry != NULL; entry = entry->next)
+static timer_entry_t *find_timer_entry_by_id(ant_t *js, int timer_id) {
+  for (timer_entry_t *entry = js->timers.timers; entry != NULL; entry = entry->next)
     if (entry->timer_id == timer_id) return entry;
   return NULL;
 }
@@ -203,28 +165,28 @@ static ant_value_t timer_inspect(ant_params_t) {
 
 static ant_value_t js_timer_ref(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
-  timer_entry_t *entry = find_timer_entry_by_id((int)js_getnum(js_get_slot(this_obj, SLOT_DATA)));
+  timer_entry_t *entry = find_timer_entry_by_id(js, (int)js_getnum(js_get_slot(this_obj, SLOT_DATA)));
   if (entry && !entry->closed && !uv_is_closing((uv_handle_t *)&entry->handle)) {
     int was_refed = uv_has_ref((const uv_handle_t *)&entry->handle);
     uv_ref((uv_handle_t *)&entry->handle);
-    if (entry->active && !was_refed) timer_state.active_refed_timer_count++;
+    if (entry->active && !was_refed) js->timers.active_refed_timer_count++;
   }
   return this_obj;
 }
 
 static ant_value_t js_timer_unref(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
-  timer_entry_t *entry = find_timer_entry_by_id((int)js_getnum(js_get_slot(this_obj, SLOT_DATA)));
+  timer_entry_t *entry = find_timer_entry_by_id(js, (int)js_getnum(js_get_slot(this_obj, SLOT_DATA)));
   if (entry && !entry->closed && !uv_is_closing((uv_handle_t *)&entry->handle)) {
     int was_refed = uv_has_ref((const uv_handle_t *)&entry->handle);
     uv_unref((uv_handle_t *)&entry->handle);
-    if (entry->active && was_refed) timer_state.active_refed_timer_count--;
+    if (entry->active && was_refed) js->timers.active_refed_timer_count--;
   }
   return this_obj;
 }
 
 static ant_value_t js_timer_has_ref(ant_params_t) {
-  timer_entry_t *entry = find_timer_entry_by_id((int)js_getnum(js_get_slot(js_getthis(js), SLOT_DATA)));
+  timer_entry_t *entry = find_timer_entry_by_id(js, (int)js_getnum(js_get_slot(js_getthis(js), SLOT_DATA)));
   if (!entry || entry->closed || uv_is_closing((uv_handle_t *)&entry->handle)) return js_false;
   return js_bool(uv_has_ref((const uv_handle_t *)&entry->handle) != 0);
 }
@@ -234,27 +196,29 @@ static int timer_id_from_arg(ant_t *js, ant_value_t arg) {
   return (int)js_getnum(js_get_slot(arg, SLOT_DATA));
 }
 
+// uv_close completes on a later loop turn, possibly after the isolate is gone,
+// so the entry leaves its isolate's list when it is closed, not here
 static void timer_close_cb(uv_handle_t *h) {
   timer_entry_t *entry = (timer_entry_t *)h->data;
-  
   if (!entry) return;
-  if (timer_entry_is_registered(entry)) remove_timer_entry(entry);
-  
-  entry->closed = 1;
-  entry->active = 0;
-  entry->obj = js_mkundef();
   timer_release_callback_args(entry);
   free(entry);
 }
 
 static void timer_close_entry(timer_entry_t *entry) {
   if (!entry || entry->closed) return;
+  ant_t *js = entry->js;
+  
   if (entry->active) {
     entry->active = 0;
-    timer_state.active_timer_count--;
+    js->timers.active_timer_count--;
     if (uv_has_ref((const uv_handle_t *)&entry->handle))
-      timer_state.active_refed_timer_count--;
+      js->timers.active_refed_timer_count--;
   }
+  
+  remove_timer_entry(js, entry);
+  entry->closed = 1;
+  entry->obj = js_mkundef();
   if (!uv_is_closing((uv_handle_t *)&entry->handle))
     uv_close((uv_handle_t *)&entry->handle, timer_close_cb);
 }
@@ -262,7 +226,7 @@ static void timer_close_entry(timer_entry_t *entry) {
 static void timer_object_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t timer_obj = js_obj_from_ptr(obj);
   int timer_id = (int)js_getnum(js_get_slot(timer_obj, SLOT_DATA));
-  timer_entry_t *entry = find_timer_entry_by_id(timer_id);
+  timer_entry_t *entry = find_timer_entry_by_id(js, timer_id);
   if (entry) timer_close_entry(entry);
 }
 
@@ -291,16 +255,16 @@ static ant_value_t timer_make_object(
 static void timer_callback(uv_timer_t *handle) {
   GC_UV_CALLBACK();
   timer_entry_t *entry = (timer_entry_t *)handle->data;
-  if (!entry || entry->closed || !timer_entry_is_registered(entry) || !entry->active) return;
+  if (!entry || entry->closed || !entry->active) return;
   
-  ant_t *js = timer_state.js;
+  ant_t *js = entry->js;
   ant_value_t callback = entry->callback;
   
   if (!entry->is_interval) {
     entry->active = 0;
-    timer_state.active_timer_count--;
+    js->timers.active_timer_count--;
     if (uv_has_ref((const uv_handle_t *)&entry->handle))
-      timer_state.active_refed_timer_count--;
+      js->timers.active_refed_timer_count--;
   }
 
   GC_ROOT_SAVE(root_mark, js);
@@ -318,7 +282,7 @@ static void timer_callback(uv_timer_t *handle) {
 static ant_value_t js_timer_refresh(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   
-  timer_entry_t *entry = find_timer_entry_by_id((int)js_getnum(js_get_slot(this_obj, SLOT_DATA)));
+  timer_entry_t *entry = find_timer_entry_by_id(js, (int)js_getnum(js_get_slot(this_obj, SLOT_DATA)));
   if (!entry || entry->closed || uv_is_closing((uv_handle_t *)&entry->handle)) return this_obj;
 
   if (!entry->active) {
@@ -329,9 +293,9 @@ static ant_value_t js_timer_refresh(ant_params_t) {
         return js_mkerr(js, "failed to allocate timer args");
     }
     entry->active = 1;
-    timer_state.active_timer_count++;
+    js->timers.active_timer_count++;
     if (uv_has_ref((const uv_handle_t *)&entry->handle))
-      timer_state.active_refed_timer_count++;
+      js->timers.active_refed_timer_count++;
   }
 
   uv_timer_start(
@@ -366,15 +330,15 @@ static ant_value_t js_set_timeout(ant_params_t) {
   uv_timer_init(uv_default_loop(), &entry->handle);
   entry->handle.data = entry;
   entry->callback = callback;
-  entry->timer_id = timer_state.next_timer_id++;
+  entry->timer_id = js->timers.next_timer_id++;
   entry->active = 1;
   entry->closed = 0;
   entry->is_interval = 0;
   entry->timeout_ms = ms;
   
-  add_timer_entry(entry);
-  timer_state.active_timer_count++;
-  timer_state.active_refed_timer_count++;
+  add_timer_entry(js, entry);
+  js->timers.active_timer_count++;
+  js->timers.active_refed_timer_count++;
   uv_timer_start(&entry->handle, timer_callback, ms, 0);
 
   return timer_make_object(js, entry, delay_ms, 0, timer_args);
@@ -402,15 +366,15 @@ static ant_value_t js_set_interval(ant_params_t) {
   uv_timer_init(uv_default_loop(), &entry->handle);
   entry->handle.data = entry;
   entry->callback = callback;
-  entry->timer_id = timer_state.next_timer_id++;
+  entry->timer_id = js->timers.next_timer_id++;
   entry->active = 1;
   entry->closed = 0;
   entry->is_interval = 1;
   entry->timeout_ms = ms;
   
-  add_timer_entry(entry);
-  timer_state.active_timer_count++;
-  timer_state.active_refed_timer_count++;
+  add_timer_entry(js, entry);
+  js->timers.active_timer_count++;
+  js->timers.active_refed_timer_count++;
   uv_timer_start(&entry->handle, timer_callback, ms, ms);
 
   return timer_make_object(js, entry, delay_ms, 1, timer_args);
@@ -421,7 +385,7 @@ static ant_value_t js_clear_timeout(ant_params_t) {
   if (nargs < 1) return js_mkundef();
   int timer_id = timer_id_from_arg(js, args[0]);
   
-  for (timer_entry_t *entry = timer_state.timers; entry != NULL; entry = entry->next) {
+  for (timer_entry_t *entry = js->timers.timers; entry != NULL; entry = entry->next) {
   if (entry->timer_id == timer_id && !entry->closed) {
     timer_close_entry(entry);
     break;
@@ -444,16 +408,16 @@ static ant_value_t js_set_immediate(ant_params_t) {
   }
   
   entry->callback = callback;
-  entry->immediate_id = timer_state.next_immediate_id++;
+  entry->immediate_id = js->timers.next_immediate_id++;
   entry->active = 1;
   entry->next = NULL;
   
-  if (timer_state.immediates_tail == NULL) {
-    timer_state.immediates = entry;
-    timer_state.immediates_tail = entry;
+  if (js->timers.immediates_tail == NULL) {
+    js->timers.immediates = entry;
+    js->timers.immediates_tail = entry;
   } else {
-    timer_state.immediates_tail->next = entry;
-    timer_state.immediates_tail = entry;
+    js->timers.immediates_tail->next = entry;
+    js->timers.immediates_tail = entry;
   }
 
   ant_value_t obj = js_mkobj(js);
@@ -468,7 +432,7 @@ static ant_value_t js_clear_immediate(ant_params_t) {
   if (nargs < 1) return js_mkundef();
   int immediate_id = timer_id_from_arg(js, args[0]);
   
-  for (immediate_entry_t *entry = timer_state.immediates; entry != NULL; entry = entry->next) {
+  for (immediate_entry_t *entry = js->timers.immediates; entry != NULL; entry = entry->next) {
     if (entry->immediate_id == immediate_id) { entry->active = 0; break; }
   }
   
@@ -709,7 +673,7 @@ void queue_microtask(ant_t *js, ant_value_t callback) {
   entry->next = NULL;
   entry->argc = 0;
   
-  queue_microtask_entry(&timer_state.microtasks, &timer_state.microtasks_tail, entry);
+  queue_microtask_entry(&js->timers.microtasks, &js->timers.microtasks_tail, entry);
 }
 
 void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_value_t *args, int nargs) {
@@ -724,7 +688,7 @@ void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_value_t *arg
   entry->argc = (uint8_t)nargs;
   
   for (int i = 0; i < nargs; i++) entry->argv[i] = args[i];
-  queue_microtask_entry(&timer_state.microtasks, &timer_state.microtasks_tail, entry);
+  queue_microtask_entry(&js->timers.microtasks, &js->timers.microtasks_tail, entry);
 }
 
 bool queue_promise_thenable_job(ant_t *js, ant_value_t promise, ant_value_t thenable, ant_value_t then_fn) {
@@ -739,14 +703,15 @@ bool queue_promise_thenable_job(ant_t *js, ant_value_t promise, ant_value_t then
   entry->argv[0] = promise;
 
   queue_microtask_entry(
-    &timer_state.microtasks, 
-    &timer_state.microtasks_tail, entry
+    &js->timers.microtasks, 
+    &js->timers.microtasks_tail, entry
   );
   
   return true;
 }
 
 bool queue_await_resume_job(coroutine_t *coro, ant_value_t value) {
+  ant_t *js = coro->js;
   microtask_entry_t *entry = calloc(1, sizeof(microtask_entry_t));
   if (entry == NULL) return false;
 
@@ -758,8 +723,8 @@ bool queue_await_resume_job(coroutine_t *coro, ant_value_t value) {
   coroutine_retain(coro);
   coro->await_resume_job = entry;
   queue_microtask_entry(
-    &timer_state.microtasks, 
-    &timer_state.microtasks_tail, entry
+    &js->timers.microtasks, 
+    &js->timers.microtasks_tail, entry
   );
   
   return true;
@@ -774,7 +739,7 @@ void queue_next_tick(ant_t *js, ant_value_t callback) {
   entry->next = NULL;
   entry->argc = 0;
 
-  queue_microtask_entry(&timer_state.next_ticks, &timer_state.next_ticks_tail, entry);
+  queue_microtask_entry(&js->timers.next_ticks, &js->timers.next_ticks_tail, entry);
 }
 
 void queue_next_tick_with_args(ant_t *js, ant_value_t callback, ant_value_t *args, int nargs) {
@@ -789,7 +754,7 @@ void queue_next_tick_with_args(ant_t *js, ant_value_t callback, ant_value_t *arg
   entry->argc = (uint8_t)nargs;
 
   for (int i = 0; i < nargs; i++) entry->argv[i] = args[i];
-  queue_microtask_entry(&timer_state.next_ticks, &timer_state.next_ticks_tail, entry);
+  queue_microtask_entry(&js->timers.next_ticks, &js->timers.next_ticks_tail, entry);
 }
 
 void queue_promise_trigger(ant_t *js, ant_value_t promise) {
@@ -806,7 +771,7 @@ void queue_promise_trigger(ant_t *js, ant_value_t promise) {
   entry->next = NULL;
   entry->kind = MT_PROMISE_TRIGGER;
 
-  queue_microtask_entry(&timer_state.microtasks, &timer_state.microtasks_tail, entry);
+  queue_microtask_entry(&js->timers.microtasks, &js->timers.microtasks_tail, entry);
 }
 
 static inline void process_microtask_entry(ant_t *js, microtask_entry_t *entry) {
@@ -861,22 +826,22 @@ static inline void process_microtask_entry(ant_t *js, microtask_entry_t *entry) 
   process_report_uncaught_exception_if_pending(js);
 }
 
-static inline microtask_entry_t *take_microtask_batch(void) {
-  microtask_entry_t *batch = timer_state.microtasks;
+static inline microtask_entry_t *take_microtask_batch(ant_t *js) {
+  microtask_entry_t *batch = js->timers.microtasks;
 
-  timer_state.microtasks = NULL;
-  timer_state.microtasks_tail = NULL;
-  timer_state.microtasks_processing = batch;
+  js->timers.microtasks = NULL;
+  js->timers.microtasks_tail = NULL;
+  js->timers.microtasks_processing = batch;
   
   return batch;
 }
 
-static inline microtask_entry_t *take_next_tick_batch(void) {
-  microtask_entry_t *batch = timer_state.next_ticks;
+static inline microtask_entry_t *take_next_tick_batch(ant_t *js) {
+  microtask_entry_t *batch = js->timers.next_ticks;
 
-  timer_state.next_ticks = NULL;
-  timer_state.next_ticks_tail = NULL;
-  timer_state.next_ticks_processing = batch;
+  js->timers.next_ticks = NULL;
+  js->timers.next_ticks_tail = NULL;
+  js->timers.next_ticks_processing = batch;
   
   return batch;
 }
@@ -885,7 +850,7 @@ static inline void process_microtask_batch(ant_t *js, microtask_entry_t *batch) 
 while (batch != NULL) {
   microtask_entry_t *entry = batch;
   batch = entry->next;
-  timer_state.microtasks_processing = batch;
+  js->timers.microtasks_processing = batch;
   process_microtask_entry(js, entry);
   free(entry);
 }}
@@ -894,7 +859,7 @@ static inline void process_next_tick_batch(ant_t *js, microtask_entry_t *batch) 
 while (batch != NULL) {
   microtask_entry_t *entry = batch;
   batch = entry->next;
-  timer_state.next_ticks_processing = batch;
+  js->timers.next_ticks_processing = batch;
   process_microtask_entry(js, entry);
   free(entry);
 }}
@@ -906,18 +871,18 @@ static void process_microtasks_internal(ant_t *js, bool check_unhandled_rejectio
   bool at_job_boundary = js->vm_exec_depth == 0;
   js->microtasks_draining = true;
 
-  while (timer_state.next_ticks != NULL || timer_state.microtasks != NULL) {
-  while ((batch = timer_state.next_ticks) != NULL) {
-    batch = take_next_tick_batch();
+  while (js->timers.next_ticks != NULL || js->timers.microtasks != NULL) {
+  while ((batch = js->timers.next_ticks) != NULL) {
+    batch = take_next_tick_batch(js);
     process_next_tick_batch(js, batch);
   }
-  while ((batch = timer_state.microtasks) != NULL) {
-    batch = take_microtask_batch();
+  while ((batch = js->timers.microtasks) != NULL) {
+    batch = take_microtask_batch(js);
     process_microtask_batch(js, batch);
   }}
 
-  timer_state.next_ticks_processing = NULL;
-  timer_state.microtasks_processing = NULL;
+  js->timers.next_ticks_processing = NULL;
+  js->timers.microtasks_processing = NULL;
   if (check_unhandled_rejections) js_check_unhandled_rejections(js);
   js->microtasks_draining = false;
   if (at_job_boundary) gc_weak_clear_kept_alive(js);
@@ -931,7 +896,7 @@ bool js_maybe_drain_microtasks(ant_t *js) {
   if (!js) return false;
   if (js->microtasks_draining) return false;
   if (js->vm_exec_depth != 0) return false;
-  if (!has_pending_microtasks()) return false;
+  if (!has_pending_microtasks(js)) return false;
   process_microtasks_internal(js, true);
   return true;
 }
@@ -940,18 +905,18 @@ bool js_maybe_drain_microtasks_after_async_settle(ant_t *js) {
   if (!js) return false;
 
   if (js->microtasks_draining) return false;
-  if (!has_pending_microtasks()) return false;
+  if (!has_pending_microtasks(js)) return false;
 
   process_microtasks_internal(js, false);
   return true;
 }
 
 void process_immediates(ant_t *js) {
-  while (timer_state.immediates != NULL) {
-    immediate_entry_t *entry = timer_state.immediates;
+  while (js->timers.immediates != NULL) {
+    immediate_entry_t *entry = js->timers.immediates;
     
-    timer_state.immediates = entry->next;
-    if (timer_state.immediates == NULL) timer_state.immediates_tail = NULL;
+    js->timers.immediates = entry->next;
+    if (js->timers.immediates == NULL) js->timers.immediates_tail = NULL;
     
     if (entry->active) {
       ant_value_t args[0];
@@ -964,20 +929,20 @@ void process_immediates(ant_t *js) {
   }
 }
 
-int has_pending_immediates(void) {
+int has_pending_immediates(ant_t *js) {
   for (
-    immediate_entry_t *entry = timer_state.immediates;
+    immediate_entry_t *entry = js->timers.immediates;
     entry != NULL; entry = entry->next
   ) if (entry->active) return 1;
   return 0;
 }
 
-int has_pending_timers(void) {
-  return timer_state.active_refed_timer_count > 0;
+int has_pending_timers(ant_t *js) {
+  return js->timers.active_refed_timer_count > 0;
 }
 
-int has_pending_microtasks(void) {
-  return (timer_state.next_ticks != NULL || timer_state.microtasks != NULL) ? 1 : 0;
+int has_pending_microtasks(ant_t *js) {
+  return (js->timers.next_ticks != NULL || js->timers.microtasks != NULL) ? 1 : 0;
 }
 
 static void timers_define_common(ant_t *js, ant_value_t obj) {
@@ -991,7 +956,8 @@ static void timers_define_common(ant_t *js, ant_value_t obj) {
 }
 
 void init_timer_module(ant_t *js) {
-  timer_state.js = js;
+  js->timers.next_timer_id = 1;
+  js->timers.next_immediate_id = 1;
 
   js->builtins.timeout_proto = js_mkobj(js);
   js->builtins.interval_proto = js_mkobj(js);
@@ -1042,36 +1008,76 @@ ant_value_t timers_promises_library(ant_t *js) {
   return lib;
 }
 
+static void discard_jobs(ant_t *js, microtask_entry_t *entry) {
+  while (entry) {
+    microtask_entry_t *next = entry->next;
+    
+    if (entry->kind == MT_AWAIT_RESUME) {
+      coroutine_clear_await_registration(entry->u.coro);
+      coroutine_release(entry->u.coro);
+    } else if (entry->kind == MT_PROMISE_TRIGGER) js_mark_promise_trigger_dequeued(js, entry->u.promise);
+    
+    free(entry);
+    entry = next;
+  }
+}
+
+void cleanup_timer_module(ant_t *js) {
+  ant_timer_state_t *t = &js->timers;
+  
+  ANT_ASSERT(
+    !t->microtasks_processing && !t->next_ticks_processing,
+    "cannot destroy an isolate while it runs a job batch"
+  );
+
+  while (t->timers) timer_close_entry(t->timers);
+  discard_jobs(js, t->microtasks);
+  discard_jobs(js, t->next_ticks);
+  
+  t->microtasks = t->microtasks_tail = NULL;
+  t->next_ticks = t->next_ticks_tail = NULL;
+
+  for (immediate_entry_t *entry = t->immediates, *next; entry; entry = next) {
+    next = entry->next;
+    free(entry);
+  }
+  
+  t->immediates = t->immediates_tail = NULL;
+}
+
 void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
-  for (timer_entry_t *t = timer_state.timers; t; t = t->next) {
+  for (timer_entry_t *t = js->timers.timers; t; t = t->next) {
     if (!t->active) continue;
     if (is_object_type(t->obj)) mark(js, t->obj);
     mark(js, t->callback);
     for (int i = 0; i < t->nargs; i++) mark(js, t->args[i]);
   }
-  for (microtask_entry_t *m = timer_state.microtasks; m; m = m->next) {
+  
+  for (microtask_entry_t *m = js->timers.microtasks; m; m = m->next) {
     mark(js, m->callback);
     if (m->kind == MT_AWAIT_RESUME) gc_mark_coroutine(js, m->u.coro);
     else mark(js, m->u.promise);
     for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
   }
-  for (microtask_entry_t *m = timer_state.microtasks_processing; m; m = m->next) {
+  
+  for (microtask_entry_t *m = js->timers.microtasks_processing; m; m = m->next) {
     mark(js, m->callback);
     if (m->kind == MT_AWAIT_RESUME) gc_mark_coroutine(js, m->u.coro);
     else mark(js, m->u.promise);
     for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
   }
-  for (microtask_entry_t *m = timer_state.next_ticks; m; m = m->next) {
+  
+  for (microtask_entry_t *m = js->timers.next_ticks; m; m = m->next) {
     mark(js, m->callback);
     mark(js, m->u.promise);
     for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
   }
-  for (microtask_entry_t *m = timer_state.next_ticks_processing; m; m = m->next) {
+  
+  for (microtask_entry_t *m = js->timers.next_ticks_processing; m; m = m->next) {
     mark(js, m->callback);
     mark(js, m->u.promise);
     for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
   }
-  for (immediate_entry_t *i = timer_state.immediates; i; i = i->next) {
-    mark(js, i->callback);
-  }
+  
+  for (immediate_entry_t *i = js->timers.immediates; i; i = i->next) mark(js, i->callback);
 }

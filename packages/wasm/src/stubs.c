@@ -358,9 +358,12 @@ bool js_maybe_drain_microtasks_after_async_settle(ant_t *js) {
   return ant_wasm_drain_microtasks(js, false, false);
 }
 
-int has_pending_microtasks(void) {
+int has_pending_microtasks(ant_t *js) {
+  (void)js;
   return ant_wasm_microtasks.head != NULL;
 }
+
+void cleanup_timer_module(ant_t *js) { (void)js; }
 
 void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
   ant_wasm_microtask_t *lists[] = {

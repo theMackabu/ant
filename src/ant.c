@@ -19516,6 +19516,7 @@ ant_t *ant_create() {
 void js_destroy(ant_t *js) {
   if (js == NULL) return;
   
+  cleanup_timer_module(js);
   json_layout_cache_clear(js);
   cleanup_cron_module(js);
   gc_weak_cleanup(js);
