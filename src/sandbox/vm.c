@@ -14,10 +14,6 @@ static uint64_t sandbox_vm_monotonic_ns(void) {
   return (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
 }
 
-const char *ant_sandbox_vm_backend_name(const ant_sandbox_vm_backend_t *backend) {
-  return backend ? backend->name : "none";
-}
-
 const ant_sandbox_vm_backend_t *ant_sandbox_vm_default_backend(void) {
 #if defined(__APPLE__)
   return &ant_sandbox_vm_darwin_backend;
@@ -28,10 +24,6 @@ const ant_sandbox_vm_backend_t *ant_sandbox_vm_default_backend(void) {
 #else
   return NULL;
 #endif
-}
-
-bool ant_sandbox_vm_supported(void) {
-  return ant_sandbox_vm_default_backend() != NULL;
 }
 
 void ant_sandbox_vm_result_clear(ant_sandbox_vm_result_t *result) {

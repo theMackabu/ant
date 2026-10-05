@@ -53,34 +53,6 @@ static ant_value_t get_ts(ant_value_t obj) {
   return js_get_slot(obj, SLOT_ENTRIES);
 }
 
-bool cs_is_stream(ant_value_t obj) {
-  return is_object_type(obj)
-    && (js_check_native_tag(obj, CS_Z_NATIVE_TAG) || js_check_native_tag(obj, CS_BROTLI_NATIVE_TAG))
-    && ts_is_stream(get_ts(obj));
-}
-
-bool ds_is_stream(ant_value_t obj) {
-  return is_object_type(obj)
-    && (js_check_native_tag(obj, DS_Z_NATIVE_TAG) || js_check_native_tag(obj, DS_BROTLI_NATIVE_TAG))
-    && ts_is_stream(get_ts(obj));
-}
-
-ant_value_t cs_stream_readable(ant_value_t obj) {
-  return ts_stream_readable(get_ts(obj));
-}
-
-ant_value_t cs_stream_writable(ant_value_t obj) {
-  return ts_stream_writable(get_ts(obj));
-}
-
-ant_value_t ds_stream_readable(ant_value_t obj) {
-  return ts_stream_readable(get_ts(obj));
-}
-
-ant_value_t ds_stream_writable(ant_value_t obj) {
-  return ts_stream_writable(get_ts(obj));
-}
-
 static void zstate_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
   zstate_t *st = (zstate_t *)js_get_native(value, CS_Z_NATIVE_TAG);

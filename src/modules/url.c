@@ -123,11 +123,6 @@ char *form_urlencode_n(const char *str, size_t len) {
   return out;
 }
 
-char *form_urlencode(const char *str) {
-  if (!str) return strdup("");
-  return form_urlencode_n(str, strlen(str));
-}
-
 char *form_urldecode_len(const char *str, size_t *out_len) {
   if (out_len) *out_len = 0;
   if (!str) return strdup("");

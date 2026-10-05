@@ -24,12 +24,6 @@ bool ws_is_writer(ant_value_t obj) {
     && vtype(js_get_slot(obj, SLOT_WS_READY)) == kTypePromise;
 }
 
-bool ws_is_controller(ant_value_t obj) {
-  return js_check_brand(obj, BRAND_WRITABLE_STREAM_CONTROLLER)
-    && ws_get_controller(obj) != NULL
-    && ws_is_stream(js_get_slot(obj, SLOT_ENTRIES));
-}
-
 ws_stream_t *ws_get_stream(ant_value_t obj) {
   return (ws_stream_t *)js_get_native(obj, WS_STREAM_NATIVE_TAG);
 }

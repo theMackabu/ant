@@ -1483,35 +1483,6 @@ ant_value_t request_create_from_input_init(ant_t *js, ant_value_t input, ant_val
   return obj;
 }
 
-ant_value_t request_create(ant_t *js,
-    const char *method, const char *url,
-    ant_value_t headers_obj, const uint8_t *body, size_t body_len,
-    const char *body_type) {
-  request_data_t *req = data_new();
-  if (!req) return js_mkerr(js, "out of memory");
-
-  free(req->method);
-  req->method = strdup(method ? method : "GET");
-  free(req->mode);
-  req->mode = strdup("same-origin");
-
-  url_state_t parsed = {0};
-  if (url && parse_url_to_state(url, NULL, &parsed) == 0) req->url = parsed;
-  else url_state_clear(&parsed);
-
-  if (body) req->has_body = true;
-  
-  if (body && body_len > 0) {
-    req->body_data = malloc(body_len);
-    if (!req->body_data) { data_free(req); return js_mkerr(js, "out of memory"); }
-    memcpy(req->body_data, body, body_len);
-    req->body_size = body_len;
-    req->body_type = body_type ? strdup(body_type) : NULL;
-  }
-  req->body_is_stream = false;
-  return request_create_object(js, req, headers_obj, true);
-}
-
 ant_value_t request_create_server(
   ant_t *js,
   const char *method,

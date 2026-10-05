@@ -8,24 +8,6 @@ static inline uint8_t *sv_op_jmp(uint8_t *ip) {
   return ip + sv_op_size[OP_JMP] + off;
 }
 
-static inline uint8_t *sv_op_jmp_false(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
-  ant_value_t v = vm->stack[--vm->sp];
-  if (!js_truthy(js, v)) {
-    int32_t off = sv_get_i32(ip + 1);
-    return ip + sv_op_size[OP_JMP_FALSE] + off;
-  }
-  return ip + sv_op_size[OP_JMP_FALSE];
-}
-
-static inline uint8_t *sv_op_jmp_true(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
-  ant_value_t v = vm->stack[--vm->sp];
-  if (js_truthy(js, v)) {
-    int32_t off = sv_get_i32(ip + 1);
-    return ip + sv_op_size[OP_JMP_TRUE] + off;
-  }
-  return ip + sv_op_size[OP_JMP_TRUE];
-}
-
 static inline uint8_t *sv_op_jmp_false_peek(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   ant_value_t v = vm->stack[vm->sp - 1];
   if (!js_truthy(js, v)) {

@@ -25,12 +25,6 @@ bool rs_is_reader(ant_value_t obj) {
     && vtype(js_get_slot(obj, SLOT_AUX)) == kTypeArray;
 }
 
-bool rs_is_controller(ant_value_t obj) {
-  return js_check_brand(obj, BRAND_READABLE_STREAM_CONTROLLER)
-    && rs_get_controller(obj) != NULL
-    && rs_is_stream(js_get_slot(obj, SLOT_ENTRIES));
-}
-
 bool rs_stream_locked(ant_value_t stream_obj) {
   return rs_is_stream(stream_obj) && rs_is_reader(rs_stream_reader(stream_obj));
 }

@@ -226,12 +226,6 @@ static inline void progress_update(progress_t *p, const char *message) {
   progress_maybe_refresh(p);
 }
 
-static inline void progress_refresh(progress_t *p) {
-  if (!progress_mutex_trylock(&p->mutex)) return;
-  progress_refresh_locked(p);
-  progress_mutex_unlock(&p->mutex);
-}
-
 static void progress_clear_locked(progress_t *p, size_t *end) {
   if (!p->terminal) return;
   

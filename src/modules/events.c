@@ -1090,19 +1090,6 @@ static bool eventemitter_remove_listener_impl(
   return false;
 }
 
-static ant_offset_t eventemitter_listener_count_impl(
-  ant_t *js,
-  ant_value_t target, ant_value_t key
-) {
-  EventType *evt = NULL;
-
-  if (!is_object_type(target) || !key) return 0;
-  evt = find_emitter_event_type(js, target, key);
-  if (!evt) return 0;
-
-  return (ant_offset_t)evt_live_count(evt);
-}
-
 static ant_value_t js_eventemitter_off(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "off requires 2 arguments (event, listener)");
   ant_value_t key = evt_key_from_arg(args[0]);
@@ -1181,14 +1168,6 @@ static ant_value_t js_eventemitter_emit(ant_params_t) {
   );
 
   return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : js_bool(invoked);
-}
-
-bool eventemitter_emit_args_val(
-  ant_t *js,
-  ant_value_t target, ant_value_t key,
-  ant_value_t *args, int nargs
-) {
-  return eventemitter_emit_args_impl(js, target, key, args, nargs);
 }
 
 bool eventemitter_emit_args(
@@ -1270,13 +1249,6 @@ bool eventemitter_remove_listener(
   }
 
   return false;
-}
-
-ant_offset_t eventemitter_listener_count_val(
-  ant_t *js,
-  ant_value_t target, ant_value_t key
-) {
-  return eventemitter_listener_count_impl(js, target, key);
 }
 
 ant_offset_t eventemitter_listener_count(

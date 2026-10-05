@@ -139,10 +139,6 @@ static inline ant_flat_string_t *large_string_flat_ptr(ant_large_string_alloc_t 
   return alloc ? (ant_flat_string_t *)&alloc->len : NULL;
 }
 
-static inline ant_large_string_alloc_t *large_string_alloc_from_flat(ant_flat_string_t *flat) {
-  return flat ? (ant_large_string_alloc_t *)((char *)flat - offsetof(ant_large_string_alloc_t, len)) : NULL;
-}
-
 static inline uint8_t str_concat_ascii_state(uint8_t left, uint8_t right) {
   if (left == STR_ASCII_NO || right == STR_ASCII_NO) return STR_ASCII_NO;
   return (left == STR_ASCII_YES && right == STR_ASCII_YES) ? STR_ASCII_YES : STR_ASCII_UNKNOWN;

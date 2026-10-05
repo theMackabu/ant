@@ -503,17 +503,6 @@ static ant_value_t headers_append_pair(ant_t *js, hdr_list_t *l, ant_value_t nam
   return headers_append_name_value_js_n(js, l, name, name_len, value, value_len);
 }
 
-ant_value_t headers_append_value(ant_t *js, ant_value_t hdrs, ant_value_t name_v, ant_value_t value_v) {
-  hdr_list_t *l = headers_get_data(hdrs);
-  ant_value_t r = 0;
-
-  if (!l) return js_mkerr(js, "Invalid Headers object");
-  r = headers_append_pair(js, l, name_v, value_v);
-  
-  if (is_err(r)) return r;
-  return js_mkundef();
-}
-
 ant_value_t headers_append_literal(ant_t *js, ant_value_t hdrs, const char *name, const char *value) {
   hdr_list_t *l = headers_get_data(hdrs);
   ant_value_t r = 0;

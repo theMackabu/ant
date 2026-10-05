@@ -1083,11 +1083,6 @@ ant_value_t sv_string_builder_append_snapshot_slot(
   return js_mkundef();
 }
 
-void sv_vm_visit_frame_funcs(sv_vm_t *vm, void (*visitor)(void *, sv_func_t *), void *ctx) {
-  if (!vm) return;
-  for (int i = 0; i <= vm->fp; i++) if (vm->frames[i].func) visitor(ctx, vm->frames[i].func);
-}
-
 static inline void sv_sync_frame_locals(
   sv_vm_t *vm, sv_frame_t **frame, sv_func_t **func,
   ant_value_t **lp
@@ -1380,39 +1375,6 @@ ant_value_t sv_execute_entry(
     vm, func, NULL, 0, js_mkundef(), js_mkundef(), js_mkundef(),
     this_val, args, argc, js_mkundef(), NULL
   );
-}
-
-ant_value_t sv_call_compiled_zero_upvalues(
-  ant_t *js, sv_func_t *func,
-  ant_value_t this_val, ant_value_t *args, int argc
-) {
-  if (!js || !js->vm || !func || func->upvalue_count != 0)
-    return js_mkerr(js, "invalid generated function");
-
-  GC_ROOT_SAVE(root_mark, js);
-  GC_ROOT_PIN(js, this_val);
-  for (int i = 0; i < argc; i++) GC_ROOT_PIN(js, args[i]);
-
-  sv_closure_t *closure = sv_closure_init(js, func, this_val);
-  if (!closure) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return js_mkerr(js, "out of memory for generated function");
-  }
-  
-  ant_value_t func_val = mkref(kTypeFunction, closure);
-  const char *name = func->debug ? func->debug->name : NULL;
-  
-  sv_closure_finish_init(
-    js, closure, func_val, js_mkundef(),
-    name, name ? (uint32_t)strlen(name) : 0, js_mkundef(), false
-  );
-  
-  ant_value_t result = sv_vm_call(
-    js->vm, js, func_val, this_val, 
-    args, argc, NULL, js_mkundef()
-  );
-  GC_ROOT_RESTORE(js, root_mark);
-  return result;
 }
 
 ant_value_t sv_execute_eval_entry(

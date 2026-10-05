@@ -232,10 +232,6 @@ static void ant_http_resp_cb(tlsuv_http_resp_t *resp, void *data) {
   if (req->on_response) req->on_response(req, &req->response, req->user_data);
 }
 
-const ant_http_response_t *ant_http_request_response(ant_http_request_t *req) {
-  return req ? &req->response : NULL;
-}
-
 int ant_http_request_cancel(ant_http_request_t *req) {
   if (!req || !req->req || req->completed) return 0;
   req->canceled = true;

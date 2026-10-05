@@ -760,10 +760,6 @@ bool ant_shape_add_interned(ant_t *js, ant_shape_t *shape, const char *interned,
   return shape_add_key(js, shape, ANT_SHAPE_KEY_STRING, interned, 0, attrs, out_slot);
 }
 
-bool ant_shape_add_symbol(ant_t *js, ant_shape_t *shape, ant_offset_t sym_off, uint8_t attrs, uint32_t *out_slot) {
-  return shape_add_key(js, shape, ANT_SHAPE_KEY_SYMBOL, NULL, sym_off, attrs, out_slot);
-}
-
 bool ant_shape_remove_slot(ant_t *js, ant_shape_t *shape, uint32_t slot) {
   if (!shape || slot >= shape->count) return false;
   if (!shape_prepare_metadata_write(shape)) return false;

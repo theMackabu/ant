@@ -179,50 +179,6 @@ static void resume_coroutine_if_suspended(
   }
 }
 
-ant_value_t resume_coroutine_wrapper(ant_params_t) {
-  ant_value_t me = js->current_func;
-  ant_value_t coro_val = js_get_slot(me, SLOT_CORO);
-
-  if (vtype(coro_val) != kTypeNumber) return js_mkundef();
-  
-  coroutine_t *coro = (coroutine_t *)(uintptr_t)tod(coro_val);
-  if (!coro) return js_mkundef();
-
-  GC_ROOT_SAVE(root_mark, js);
-  ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
-
-  GC_ROOT_PIN(js, value);
-  coroutine_retain(coro);
-  resume_coroutine_if_suspended(js, coro, value, false);
-  
-  coroutine_release(coro);
-  GC_ROOT_RESTORE(js, root_mark);
-
-  return js_mkundef();
-}
-
-ant_value_t reject_coroutine_wrapper(ant_params_t) {
-  ant_value_t me = js->current_func;
-  ant_value_t coro_val = js_get_slot(me, SLOT_CORO);
-  
-  if (vtype(coro_val) != kTypeNumber) return js_mkundef();
-  
-  coroutine_t *coro = (coroutine_t *)(uintptr_t)tod(coro_val);
-  if (!coro) return js_mkundef();
-
-  GC_ROOT_SAVE(root_mark, js);
-  ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
-
-  GC_ROOT_PIN(js, value);
-  coroutine_retain(coro);
-  resume_coroutine_if_suspended(js, coro, value, true);
-  
-  coroutine_release(coro);
-  GC_ROOT_RESTORE(js, root_mark);
-
-  return js_mkundef();
-}
-
 void Ant_Coroutine_ResumeAwaitJob(ant_t *js, coroutine_t *coro, ant_value_t value) {
   coro->await_registered = false;
   coro->awaited_promise = js_mkundef();

@@ -509,19 +509,6 @@ uint8_t *utf8_to_latin1(const char *src, size_t len, size_t *out_len, bool *is_l
   return out;
 }
 
-size_t utf8_strlen(const char *str, size_t byte_len) {
-  size_t count = 0;
-  const unsigned char *p = (const unsigned char *)str;
-  const unsigned char *end = p + byte_len;
-  while (p < end) {
-    int seq_len = utf8_sequence_length(*p);
-    if (seq_len <= 0 || (size_t)seq_len > (size_t)(end - p)) {
-      count++; p++;
-    } else { count++; p += seq_len; }
-  }
-  return count;
-}
-
 size_t utf16_strlen(const char *str, size_t byte_len) {
   utf16_scan_cursor_t cursor;
   utf16_scan_cursor_init(&cursor, str, byte_len);

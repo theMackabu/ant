@@ -17,10 +17,4 @@ static inline void promise_mark_handled(ant_value_t v) {
   if (obj && obj->promise_state) obj->promise_state->has_rejection_handler = true;
 }
 
-static inline bool promise_was_fulfilled(ant_value_t result) {
-  if (vtype(result) != kTypePromise) return false;
-  ant_object_t *obj = js_obj_ptr(js_as_obj(result));
-  return obj && obj->promise_state && obj->promise_state->state == 1;
-}
-
 #endif

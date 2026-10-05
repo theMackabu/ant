@@ -46,12 +46,6 @@ bool eventemitter_emit_args(
   ant_value_t *args, int nargs
 );
 
-bool eventemitter_emit_args_val(
-  ant_t *js,
-  ant_value_t target, ant_value_t key,
-  ant_value_t *args, int nargs
-);
-
 bool eventemitter_remove_listener(
   ant_t *js,
   ant_value_t target, const char *event_type,
@@ -67,11 +61,6 @@ bool eventemitter_remove_listener_val(
 ant_offset_t eventemitter_listener_count(
   ant_t *js,
   ant_value_t target, const char *event_type
-);
-
-ant_offset_t eventemitter_listener_count_val(
-  ant_t *js,
-  ant_value_t target, ant_value_t key
 );
 
 #endif

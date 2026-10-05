@@ -23,8 +23,6 @@ typedef struct {
 } WaitQueue;
 
 void wait_queue_init(WaitQueue *queue);
-void wait_queue_cleanup(WaitQueue *queue);
-
 void wait_queue_add(WaitQueue *queue, WaitQueueEntry *entry);
 void wait_queue_remove(WaitQueue *queue, WaitQueueEntry *entry);
 int wait_queue_notify(WaitQueue *queue, int32_t *address, int count);

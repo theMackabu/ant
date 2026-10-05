@@ -101,14 +101,12 @@ extern const ant_sandbox_vm_backend_t ant_sandbox_vm_darwin_backend;
 extern const ant_sandbox_vm_backend_t ant_sandbox_vm_linux_backend;
 extern const ant_sandbox_vm_backend_t ant_sandbox_vm_windows_backend;
 
-const char *ant_sandbox_vm_backend_name(const ant_sandbox_vm_backend_t *backend);
 const char *ant_sandbox_vm_result_name(ant_sandbox_vm_result_kind_t kind);
 const ant_sandbox_vm_backend_t *ant_sandbox_vm_default_backend(void);
 
 void ant_sandbox_vm_session_destroy(ant_sandbox_vm_session_t *session);
 void ant_sandbox_vm_result_clear(ant_sandbox_vm_result_t *result);
 
-bool ant_sandbox_vm_supported(void);
 bool ant_sandbox_vm_helper_is_process(const char *argv0);
 bool ant_sandbox_vm_result_is_infrastructure_failure(const ant_sandbox_vm_result_t *result);
 

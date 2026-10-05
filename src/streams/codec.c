@@ -30,34 +30,6 @@ static ant_value_t tds_get_ts(ant_value_t obj) {
   return js_get_slot(obj, SLOT_ENTRIES);
 }
 
-bool tes_is_stream(ant_value_t obj) {
-  return is_object_type(obj)
-    && js_check_native_tag(obj, TES_NATIVE_TAG)
-    && ts_is_stream(tes_get_ts(obj));
-}
-
-bool tds_is_stream(ant_value_t obj) {
-  return is_object_type(obj)
-    && js_check_native_tag(obj, TDS_NATIVE_TAG)
-    && ts_is_stream(tds_get_ts(obj));
-}
-
-ant_value_t tes_stream_readable(ant_value_t obj) {
-  return ts_stream_readable(tes_get_ts(obj));
-}
-
-ant_value_t tes_stream_writable(ant_value_t obj) {
-  return ts_stream_writable(tes_get_ts(obj));
-}
-
-ant_value_t tds_stream_readable(ant_value_t obj) {
-  return ts_stream_readable(tds_get_ts(obj));
-}
-
-ant_value_t tds_stream_writable(ant_value_t obj) {
-  return ts_stream_writable(tds_get_ts(obj));
-}
-
 static void tes_state_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
   free(js_get_native(value, TES_NATIVE_TAG));

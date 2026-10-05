@@ -177,21 +177,6 @@ static int async_waiter_notify(int32_t *address, int count) {
   return notified;
 }
 
-void wait_queue_cleanup(WaitQueue *queue) {
-  pthread_mutex_lock(&queue->lock);
-  WaitQueueEntry *current = queue->head;
-  while (current) {
-    WaitQueueEntry *next = current->next;
-    pthread_cond_destroy(&current->cond);
-    pthread_mutex_destroy(&current->mutex);
-    free(current);
-    current = next;
-  }
-  queue->head = NULL;
-  pthread_mutex_unlock(&queue->lock);
-  pthread_mutex_destroy(&queue->lock);
-}
-
 void wait_queue_add(WaitQueue *queue, WaitQueueEntry *entry) {
   pthread_mutex_lock(&queue->lock);
   entry->next = queue->head;

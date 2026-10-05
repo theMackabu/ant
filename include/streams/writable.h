@@ -39,7 +39,6 @@ void gc_mark_writable_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));
 
 bool ws_is_stream(ant_value_t obj);
 bool ws_is_writer(ant_value_t obj);
-bool ws_is_controller(ant_value_t obj);
 
 ws_stream_t *ws_get_stream(ant_value_t obj);
 ws_controller_t *ws_get_controller(ant_value_t obj);

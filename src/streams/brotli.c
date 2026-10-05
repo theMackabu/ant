@@ -219,12 +219,6 @@ int brotli_stream_finish(
   return brotli_encoder_step(st, NULL, 0, BROTLI_OPERATION_FINISH, cb, ctx);
 }
 
-bool brotli_stream_is_finished(brotli_stream_state_t *st) {
-  if (!st) return false;
-  if (st->decompress) return BrotliDecoderIsFinished(st->u.dec);
-  return BrotliEncoderIsFinished(st->u.enc);
-}
-
 typedef struct {
   ant_t *js;
   ant_value_t ctrl_obj;

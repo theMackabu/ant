@@ -12,9 +12,4 @@ ant_value_t string_decoder_decode_value(
   ant_value_t chunk, bool flush
 );
 
-ant_value_t string_decoder_decode_bytes(
-  ant_t *js, ant_value_t decoder,
-  const uint8_t *src, size_t len, bool flush
-);
-
 #endif

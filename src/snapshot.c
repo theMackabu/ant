@@ -20,8 +20,3 @@ ant_value_t ant_load_snapshot(ant_t *js) {
   
   return vtype(result) == kTypeError ? result : js_true;
 }
-
-const uint8_t *ant_get_snapshot_source(size_t *len) {
-  if (len) *len = ant_snapshot_source_len;
-  return ant_snapshot_source;
-}

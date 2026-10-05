@@ -212,10 +212,6 @@ int ant_listener_port(const ant_listener_t *listener) {
   return listener ? listener->port : 0;
 }
 
-void *ant_listener_get_user_data(const ant_listener_t *listener) {
-  return listener ? listener->user_data : NULL;
-}
-
 void ant_listener_ref(ant_listener_t *listener) {
   if (!listener) return;
   if (!listener->started) return;
@@ -226,8 +222,4 @@ void ant_listener_unref(ant_listener_t *listener) {
   if (!listener) return;
   if (!listener->started) return;
   if (!uv_is_closing((uv_handle_t *)ant_listener_stream(listener))) uv_unref((uv_handle_t *)ant_listener_stream(listener));
-}
-
-const char *ant_listener_path(const ant_listener_t *listener) {
-  return listener ? listener->path : NULL;
 }

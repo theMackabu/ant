@@ -800,10 +800,6 @@ static inline ant_value_t sv_prop_get_at(
   return js_getprop_fallback_len(js, obj, interned, len);
 }
 
-static inline ant_value_t sv_prop_get(ant_t *js, ant_value_t obj, const char *interned, uint32_t len) {
-  return sv_prop_get_at(js, obj, interned, len, NULL, NULL);
-}
-
 static inline bool sv_parse_string_index_key(ant_t *js, ant_value_t key, size_t *out_idx) {
   if (vtype(key) == kTypeNumber) {
     double d = tod(key);

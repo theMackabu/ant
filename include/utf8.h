@@ -51,7 +51,6 @@ utf16_range_splits_t utf16_range_to_byte_range(
   size_t *byte_end
 );
 
-size_t utf8_strlen(const char *str, size_t byte_len);
 size_t utf16_strlen(const char *str, size_t byte_len);
 size_t byte_offset_to_utf16(const char *str, size_t byte_off);
 size_t utf8_char_len_at(const char *str, size_t byte_len, size_t pos);

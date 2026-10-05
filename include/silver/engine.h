@@ -894,11 +894,6 @@ ant_value_t sv_execute_eval_entry(
   ant_value_t eval_env, ant_value_t new_target
 );
 
-ant_value_t sv_call_compiled_zero_upvalues(
-  ant_t *js, sv_func_t *func,
-  ant_value_t this_val, ant_value_t *args, int argc
-);
-
 typedef struct {
   bool active;
   int bc_offset;
@@ -979,23 +974,12 @@ static inline uint16_t sv_get_u16(const uint8_t *ip) {
   uint16_t v; memcpy(&v, ip, 2); return v;
 }
 
-static inline int16_t sv_get_i16(const uint8_t *ip) {
-  int16_t v; memcpy(&v, ip, 2); return v;
-}
-
 static inline uint32_t sv_get_u32(const uint8_t *ip) {
   uint32_t v; memcpy(&v, ip, 4); return v;
 }
 
 static inline int32_t sv_get_i32(const uint8_t *ip) {
   int32_t v; memcpy(&v, ip, 4); return v;
-}
-
-static inline const char *sv_atom_cstr(sv_atom_t *a, char *buf, size_t bufsz) {
-  size_t n = a->len < bufsz - 1 ? a->len : bufsz - 1;
-  memcpy(buf, a->str, n);
-  buf[n] = '\0';
-  return buf;
 }
 
 static inline bool sv_frame_is_strict(const sv_frame_t *frame) {
@@ -1089,12 +1073,6 @@ static inline ant_value_t *sv_frame_slot_ptr(sv_frame_t *frame, uint16_t slot_id
   }
   if (!frame->lp) return NULL;
   return &frame->lp[slot_idx - param_count];
-}
-
-static inline uint16_t sv_frame_total_slots(const sv_frame_t *frame) {
-  if (!frame || !frame->func) return 0;
-  int total = frame->func->param_count + frame->func->max_locals;
-  return total > 0 ? (uint16_t)total : 0;
 }
 
 ant_value_t sv_string_builder_read_value(

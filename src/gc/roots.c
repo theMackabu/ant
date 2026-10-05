@@ -119,11 +119,6 @@ bool gc_temp_root_set(gc_temp_root_handle_t handle, ant_value_t value) {
   return true;
 }
 
-ant_value_t gc_temp_root_get(gc_temp_root_handle_t handle) {
-  if (!handle.scope || handle.index >= handle.scope->len) return js_mkundef();
-  return handle.scope->items[handle.index];
-}
-
 static void gc_visit_value_slots(
   ant_t *js, gc_root_visitor_t visitor, 
   const ant_value_t *slots, size_t count

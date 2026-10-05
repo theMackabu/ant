@@ -73,6 +73,4 @@ int ant_http_request_write(ant_http_request_t *req, const uint8_t *chunk, size_t
 void ant_http_request_end(ant_http_request_t *req);
 void ant_http_headers_free(ant_http_header_t *headers);
 
-const ant_http_response_t *ant_http_request_response(ant_http_request_t *req);
-
 #endif

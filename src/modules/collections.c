@@ -362,29 +362,6 @@ void weakmap_table_free(weakmap_table_t *table) {
   free(table);
 }
 
-ant_value_t collections_make_weakmap(ant_t *js) {
-  ant_value_t weakmap = js_mkobj(js);
-  if (is_err(weakmap)) return weakmap;
-
-  weakmap_table_t *table = calloc(1, sizeof(*table));
-  if (!table) return js_mkerr(js, "out of memory");
-
-  js_obj_ptr(weakmap)->type_tag = kTypeWeakMap;
-  ant_value_t prototype = js_get_ctor_proto(js, "WeakMap", 7);
-  if (is_special_object(prototype)) js_set_proto_init(weakmap, prototype);
-  js_set_native(weakmap, table, WEAKMAP_NATIVE_TAG);
-  gc_weak_register(js, js_obj_ptr(weakmap));
-  return weakmap;
-}
-
-ant_value_t collections_weakmap_get(ant_value_t weakmap, ant_value_t key) {
-  weakmap_table_t *table = get_weakmap_from_obj(weakmap, NULL);
-  if (!table || !can_be_held_weakly(key)) return js_mkundef();
-
-  weakmap_entry_t *entry = weakmap_table_find(table, key);
-  return entry ? entry->value : js_mkundef();
-}
-
 static inline bool weakmap_store_entry(
   ant_t *js,
   ant_object_t *object,
@@ -399,18 +376,6 @@ static inline bool weakmap_store_entry(
     gc_write_barrier(js, object, value);
   }
   return true;
-}
-
-bool collections_weakmap_set(
-  ant_t *js,
-  ant_value_t weakmap,
-  ant_value_t key,
-  ant_value_t value
-) {
-  ant_object_t *object = NULL;
-  weakmap_table_t *table = get_weakmap_from_obj(weakmap, &object);
-  if (!table || !can_be_held_weakly(key)) return false;
-  return weakmap_store_entry(js, object, table, key, value);
 }
 
 static weakset_entry_t **get_weakset_from_obj(ant_value_t obj) {

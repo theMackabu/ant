@@ -38,11 +38,6 @@ bool formdata_is_formdata(ant_t *js, ant_value_t obj) {
   return js_check_brand(obj, BRAND_FORMDATA);
 }
 
-bool formdata_is_empty(ant_value_t fd) {
-  fd_data_t *d = get_fd_data(fd);
-  return d ? d->count == 0 : true;
-}
-
 static fd_data_t *fd_data_new(void) {
   fd_data_t *d = calloc(1, sizeof(fd_data_t));
   if (!d) return NULL;

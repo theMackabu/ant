@@ -457,11 +457,6 @@ static inline ant_value_t js_module_eval_active_ctx(ant_t *js) {
   return ctx ? ctx->module_ctx : js_mkundef();
 }
 
-static inline ant_value_t js_module_eval_active_import_meta(ant_t *js) {
-  ant_value_t module_ctx = js_module_eval_active_ctx(js);
-  return is_object_type(module_ctx) ? js_get(js, module_ctx, "meta") : js_mkundef();
-}
-
 static inline const char *js_module_eval_active_filename(ant_t *js) {
   ant_value_t module_ctx = js_module_eval_active_ctx(js);
   if (is_object_type(module_ctx)) {
@@ -469,13 +464,6 @@ static inline const char *js_module_eval_active_filename(ant_t *js) {
     if (vtype(filename) == kTypeString) return js_getstr(js, filename, NULL);
   }
   return js->filename;
-}
-
-static inline ant_module_format_t js_module_eval_active_format(ant_t *js) {
-  ant_module_t *ctx = js->modules.module_stack;
-  if (ctx) return ctx->format;
-  ctx = js->active_async_coro ? js_active_tla_module_ctx(js) : NULL;
-  return ctx ? ctx->format : MODULE_EVAL_FORMAT_UNKNOWN;
 }
 
 static inline bool is_length_key(const char *key, size_t len) {

@@ -41,16 +41,6 @@ ant_value_t request_create_from_input_init(
   ant_value_t init
 );
 
-ant_value_t request_create(
-  ant_t *js,
-  const char *method,
-  const char *url,
-  ant_value_t headers,
-  const uint8_t *body,
-  size_t body_len,
-  const char *body_type
-);
-
 ant_value_t request_create_server(
   ant_t *js,
   const char *method,

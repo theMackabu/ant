@@ -498,14 +498,6 @@ bool tty_set_raw_mode(int fd, bool enable) {
 #endif
 }
 
-bool tty_is_raw_mode(int fd) {
-#ifdef _WIN32
-  return false;
-#else
-  return raw_state.active && raw_state.fd == fd;
-#endif
-}
-
 static ant_value_t get_process_stream(ant_t *js, const char *name) {
   ant_value_t process_obj = js_get(js, js_glob(js), "process");
   if (!is_special_object(process_obj)) return js_mkundef();

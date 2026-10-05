@@ -85,7 +85,6 @@ int ant_listener_listen_pipe(
 );
 
 void ant_listener_stop(ant_listener_t *listener, bool force);
-void *ant_listener_get_user_data(const ant_listener_t *listener);
 void ant_listener_ref(ant_listener_t *listener);
 void ant_listener_unref(ant_listener_t *listener);
 
@@ -118,10 +117,8 @@ const char *ant_conn_local_addr(const ant_conn_t *conn);
 const char *ant_conn_remote_addr(const ant_conn_t *conn);
 const char *ant_conn_local_family(const ant_conn_t *conn);
 const char *ant_conn_remote_family(const ant_conn_t *conn);
-const char *ant_listener_path(const ant_listener_t *listener);
 
 size_t ant_conn_buffer_len(const ant_conn_t *conn);
-ant_listener_t *ant_conn_listener(const ant_conn_t *conn);
 
 uint64_t ant_conn_timeout_ms(const ant_conn_t *conn);
 uint64_t ant_conn_bytes_read(const ant_conn_t *conn);

@@ -21,7 +21,6 @@ typedef struct {
 } fd_data_t;
 
 void init_formdata_module(ant_t *js);
-bool formdata_is_empty(ant_value_t fd);
 bool formdata_is_formdata(ant_t *js, ant_value_t obj);
 
 ant_value_t formdata_create_empty(ant_t *js);

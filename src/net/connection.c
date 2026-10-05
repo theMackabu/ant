@@ -474,10 +474,6 @@ void *ant_conn_get_user_data(const ant_conn_t *conn) {
   return conn ? conn->user_data : NULL;
 }
 
-ant_listener_t *ant_conn_listener(const ant_conn_t *conn) {
-  return conn ? conn->listener : NULL;
-}
-
 const char *ant_conn_buffer(const ant_conn_t *conn) {
   return conn ? conn->buffer + conn->buffer_offset : NULL;
 }

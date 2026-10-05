@@ -14,12 +14,4 @@ typedef enum {
 void init_compression_stream_module(ant_t *js);
 void gc_mark_compression_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));
 
-bool cs_is_stream(ant_value_t obj);
-bool ds_is_stream(ant_value_t obj);
-
-ant_value_t cs_stream_readable(ant_value_t obj);
-ant_value_t cs_stream_writable(ant_value_t obj);
-ant_value_t ds_stream_readable(ant_value_t obj);
-ant_value_t ds_stream_writable(ant_value_t obj);
-
 #endif
