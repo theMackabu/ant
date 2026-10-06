@@ -184,6 +184,7 @@ jit_integer_range_t jit_word_range(sv_op_t op, jit_integer_range_t left, jit_int
 void jit_emit_integer_constant(
     MIR_context_t ctx, MIR_item_t fn, jit_vstack_t *vs, MIR_reg_t dst, double number);
 enum { JIT_INDUCTION_SIGNED = 1, JIT_INDUCTION_NONNEG = 2 };
+static constexpr int64_t JIT_COUNTER_MAX = INT64_C(0x7ffffffffffffc00);
 void jit_induction_locals(sv_func_t *func, uint8_t *kinds, int n_locals, int param_count);
 uint8_t jit_induction_params(sv_func_t *func, int param_count);
 void jit_entry_integer_ranges(

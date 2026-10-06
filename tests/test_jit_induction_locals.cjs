@@ -27,6 +27,10 @@ function downConst() { const r = []; for (let i = 4; i >= -4; i--) r.push(data[i
 function joinedConst(c) { let x = c ? 1.5 : 5; let s = 0; for (let i = 0; i < 4; i++) { s += (x & 3) + (data[x] === undefined ? 100 : 0) + (x % 2); x++; } return s; }
 function stepHalf() { const r = []; for (let i = 0; i < 2; i += 0.5) r.push(data[i], i & 1, i % 1); return r; }
 function overwritten(n) { let x = 0; const r = []; for (let i = 0; i < n; i++) { r.push(data[x], x & 3, x % 2); x = i * 0.5; } return r; }
+// constant steps: `i += k` (ADD_LOCAL) and `i = i - k`
+function by4(n) { let s = 0; for (let i = 0; i < n; i += 4) s += data[i & 63] + (i % 7); return s; }
+function down5(n) { const r = []; for (let i = 12; i > -n; i = i - 5) r.push(data[i], i & 7, i % 3); return r; }
+function by512(n) { let s = 0; for (let i = 0; i < n; i += 512) s += (i & 1023) + data[i & 63]; return s; }
 function negZero() { const r = []; for (let z = -0; z < 2; z++) r.push(1 / z, z % 2, data[z]); return r; }
 function counted(n) { let k = 0; for (let i = 0; i < n; i++) k++; return [k & 1023, k % 10, data[k & 63]]; }
 
@@ -36,6 +40,7 @@ for (let r = 0; r < 4000; r++) {
   sumIndexed(64); sumMasked(100); fill(new Array(16).fill(0), 40); fillValue(new Array(16).fill(0), 40);
   down(4); copies(50); joined(r & 1, 2); counted(20);
   downConst(); joinedConst(r & 1); stepHalf(); overwritten(4);
+  by4(64); down5(10); by512(4096);
 }
 high(); negZero();
 
@@ -65,6 +70,9 @@ same(joinedConst(true), (1 + 100 + 1.5) + (2 + 100 + 0.5) + (3 + 100 + 1.5) + (0
 same(joinedConst(false), (1 + 0 + 1) + (2 + 0 + 0) + (3 + 0 + 1) + (0 + 0 + 0), 'integer joined with a fraction');
 sameList(stepHalf(), [1, 0, 0, undefined, 0, 0.5, 4, 1, 0, undefined, 1, 0.5], 'half steps');
 sameList(overwritten(4), [1, 0, 0, 1, 0, 0, undefined, 0, 0.5, 4, 1, 1], 'counter overwritten by arithmetic');
+same(by4(1000), (() => { let s = 0; for (let i = 0; i < 1000; i += 4) s += data[i & 63] + (i % 7); return s; })(), 'i += 4');
+sameList(down5(10), (() => { const r = []; for (let i = 12; i > -10; i -= 5) r.push(data[i], i & 7, i % 3); return r; })(), 'i = i - 5 past zero');
+same(by512(100000), (() => { let s = 0; for (let i = 0; i < 100000; i += 512) s += (i & 1023) + data[i & 63]; return s; })(), 'i += 512');
 sameList(negZero(), [-Infinity, -0, 1, 1, 1, 4], 'counter starting at -0');
 sameList(counted(1000), [1000 & 1023, 0, data[1000 & 63]], 'counter read after the loop');
 

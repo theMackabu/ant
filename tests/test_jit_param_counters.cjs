@@ -27,6 +27,11 @@ function drift(i, n) { const r = []; while (n-- > 0) { r.push(src[i], i & 7); i 
 function alias(i, n) { const r = []; while (n-- > 0) { r.push(src[i++], i & 3); if (n === 2) arguments[0] = 1.5; } return r; }
 // read before the loop, then at the loop head after the back edge wrote it
 function pre(i, n) { const r = [src[i]]; while (n-- > 0) { r.push(src[i], i & 7); i++; } return r; }
+// constant steps up to 511 also count; larger ones do not
+function step2(i, n) { const r = []; while (n-- > 0) { r.push(src[i], i & 7); i += 2; } return r; }
+function stepDown3(i, n) { const r = []; while (n-- > 0) { r.push(src[i], i >> 1); i -= 3; } return r; }
+function stepLeft(i, n) { const r = []; while (n-- > 0) { r.push(src[i & 63], i | 0); i = 5 + i; } return r; }
+function step512(i, n) { const r = []; while (n-- > 0) { r.push(src[i & 63], i & 1023); i += 512; } return r; }
 function back(i, n) { const r = []; for (; n > 0; --n) r.push(src[i--], i >> 1); return r; }
 
 const am3Ref = (i, x, w, j, c, n) => {
@@ -41,6 +46,7 @@ const walkRef = (i, n) => { const r = []; while (n-- > 0) { const v = src[i]; i 
 const driftRef = (i, n) => { const r = []; while (n-- > 0) { r.push(src[i], i & 7); i += 0.5; } return r; };
 const aliasRef = (i, n) => { const r = []; while (n-- > 0) { const v = src[i]; i += 1; r.push(v, i & 3); if (n === 2) i = 1.5; } return r; };
 const preRef = (i, n) => { const r = [src[i]]; while (n-- > 0) { r.push(src[i], i & 7); i += 1; } return r; };
+const stepRef = (k, mask) => (i, n) => { const r = []; while (n-- > 0) { r.push(mask ? src[i & 63] : src[i], mask === 1023 ? i & 1023 : mask ? i | 0 : k === -3 ? i >> 1 : i & 7); i += k; } return r; };
 const backRef = (i, n) => { const r = []; for (; n > 0; --n) { const v = src[i]; i -= 1; r.push(v, i >> 1); } return r; };
 
 function sameList(a, b, what) {
@@ -54,6 +60,10 @@ for (let r = 0; r < 4000; r++) {
   back(40, 20);
   drift(r & 31, 6);
   pre(r & 31, 6);
+  step2(r & 31, 6);
+  stepDown3(40, 6);
+  stepLeft(r & 31, 6);
+  step512(r & 31, 6);
   alias(r & 31, 6);
 }
 
@@ -66,6 +76,11 @@ sameList(walk(60, 8), walkRef(60, 8), 'walk past the end');
 sameList(back(2, 6), backRef(2, 6), 'back below zero');
 sameList(drift(3, 6), driftRef(3, 6), 'reassigned by +0.5');
 sameList(pre(3, 6), preRef(3, 6), 'read before the loop');
+sameList(step2(3, 8), stepRef(2, 0)(3, 8), 'i += 2');
+sameList(stepDown3(10, 8), stepRef(-3, 0)(10, 8), 'i -= 3 past zero');
+sameList(stepLeft(3, 8), stepRef(5, 1)(3, 8), 'i = 5 + i');
+sameList(step512(3, 8), stepRef(512, 1023)(3, 8), 'i += 512');
+sameList(step2(1.5, 4), stepRef(2, 0)(1.5, 4), 'fractional start with i += 2');
 sameList(alias(3, 6), aliasRef(3, 6), 'written through arguments');
 // non-integer and very large starts: the integer copy would be wrong; -0
 // must still read element 0

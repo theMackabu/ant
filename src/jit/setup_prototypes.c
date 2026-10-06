@@ -378,7 +378,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                         MIR_T_I64, "idx",
                                         MIR_T_I64, "val");
   c->param_counters_off_proto = MIR_new_proto(c->ctx, "param_counters_off_proto",
-                                              0, NULL, 1, MIR_T_P, "func");
+                                              0, NULL, 2, MIR_T_P, "func", MIR_T_I64, "params");
 
   c->adopt_open_upvalues_proto = MIR_new_proto(c->ctx, "adopt_open_upvalues_proto",
                                                0, NULL, 2,

@@ -302,6 +302,42 @@ void jit_entry_integer_ranges(
   free(state);
 }
 
+static bool jit_reads_slot(const uint8_t *ip, bool arg, int index) {
+  if (!ip) return false;
+  if (arg) return *ip == OP_GET_ARG && sv_get_u16(ip + 1) == index;
+  if (*ip == OP_GET_LOCAL) return sv_get_u16(ip + 1) == index;
+  return *ip == OP_GET_LOCAL8 && sv_get_u8(ip + 1) == index;
+}
+
+static int jit_constant_step(sv_func_t *func, uint8_t *ip) {
+  jit_integer_range_t k = jit_constant_integer_range(func, ip);
+  return k.known && k.min != 0 && k.min >= -511 && k.min <= 511 ? (int)k.min : 0;
+}
+
+static int jit_counter_step(
+    sv_func_t *func, const uint8_t *target, const uint8_t *store,
+    uint8_t *const back[3], bool arg, int index) {
+  uint8_t *p1 = back[0], *p2 = back[1], *p3 = back[2];
+  if (!p1 || target[store - func->code] || target[p1 - func->code]) return 0;
+  switch (*p1) {
+    case OP_INC: case OP_POST_INC:
+      return jit_reads_slot(p2, arg, index) ? 1 : 0;
+    case OP_DEC: case OP_POST_DEC:
+      return jit_reads_slot(p2, arg, index) ? -1 : 0;
+    case OP_ADD: case OP_ADD_NUM: case OP_SUB: case OP_SUB_NUM: {
+      if (!p2 || !p3 || target[p2 - func->code]) return 0;
+      bool sub = *p1 == OP_SUB || *p1 == OP_SUB_NUM;
+      if (jit_reads_slot(p3, arg, index)) {
+        int k = jit_constant_step(func, p2);
+        return sub ? -k : k;
+      }
+      return !sub && jit_reads_slot(p2, arg, index) ? jit_constant_step(func, p3) : 0;
+    }
+    default:
+      return 0;
+  }
+}
+
 void jit_induction_locals(sv_func_t *func, uint8_t *kinds, int n_locals, int param_count) {
   enum { UNSEEN, NONNEG, SIGNED, REJECTED };
   uint8_t *state = calloc((size_t)n_locals, 1);
@@ -323,11 +359,12 @@ void jit_induction_locals(sv_func_t *func, uint8_t *kinds, int n_locals, int par
     ip += size;
   }
 
-  uint8_t *previous = NULL;
+  uint8_t *back[3] = {0};
   for (uint8_t *ip = func->code; ip < end;) {
     sv_op_t op = (sv_op_t)*ip;
     int size = sv_op_size[op];
     if (!size || ip + size > end || op == OP_PUT_LOCAL_CHK) goto none;
+    uint8_t *previous = back[0];
 
     int index = -1;
     uint8_t kind = REJECTED;
@@ -336,6 +373,11 @@ void jit_induction_locals(sv_func_t *func, uint8_t *kinds, int n_locals, int par
         bool short_op = op == OP_PUT_LOCAL8 || op == OP_SET_LOCAL8;
         index = short_op ? sv_get_u8(ip + 1) : sv_get_u16(ip + 1);
         if (index >= n_locals || !previous || target[ip - func->code]) break;
+        int step = jit_counter_step(func, target, ip, back, false, index);
+        if (step) {
+          kind = step > 0 ? UNSEEN : SIGNED;
+          break;
+        }
         jit_integer_range_t constant = jit_constant_integer_range(func, previous);
         if (constant.known) {
           kind = constant.min >= 0 ? NONNEG : SIGNED;
@@ -366,9 +408,12 @@ void jit_induction_locals(sv_func_t *func, uint8_t *kinds, int n_locals, int par
         index = sv_get_u8(ip + 1);
         kind = SIGNED;
         break;
-      case OP_ADD_LOCAL:
+      case OP_ADD_LOCAL: {
         index = sv_get_u8(ip + 1);
+        int step = previous && !target[ip - func->code] ? jit_constant_step(func, previous) : 0;
+        if (step) kind = step > 0 ? UNSEEN : SIGNED;
         break;
+      }
       case OP_YIELD_STAR_INIT: case OP_YIELD_STAR_NEXT:
       case OP_YIELD_STAR_THROW: case OP_YIELD_STAR_RETURN:
         index = sv_get_u16(ip + 1);
@@ -379,7 +424,9 @@ void jit_induction_locals(sv_func_t *func, uint8_t *kinds, int n_locals, int par
         break;
     }
     if (index >= 0 && index < n_locals && kind > state[index]) state[index] = kind;
-    previous = ip;
+    back[2] = back[1];
+    back[1] = back[0];
+    back[0] = ip;
     ip += size;
   }
 
@@ -405,7 +452,7 @@ none:
 }
 
 uint8_t jit_induction_params(sv_func_t *func, int param_count) {
-  if (func->jit_no_param_counters || func->has_dynamic_eval || param_count <= 0) return 0;
+  if (func->has_dynamic_eval || param_count <= 0) return 0;
   uint8_t *target = calloc((size_t)func->code_len + 1, 1);
   
   if (!target) return 0;
@@ -425,7 +472,7 @@ uint8_t jit_induction_params(sv_func_t *func, int param_count) {
     ip += size;
   }
 
-  uint8_t *previous = NULL, *before_previous = NULL;
+  uint8_t *back[3] = {0};
   for (uint8_t *ip = func->code; ip < end; ip += sv_op_size[*ip]) {
     sv_op_t op = (sv_op_t)*ip;
     int index = -1;
@@ -433,11 +480,7 @@ uint8_t jit_induction_params(sv_func_t *func, int param_count) {
     
     if (op == OP_PUT_ARG || op == OP_SET_ARG) {
       index = sv_get_u16(ip + 1);
-      sv_op_t step = previous ? (sv_op_t)*previous : OP__COUNT;
-      counted = 
-        (step == OP_INC || step == OP_DEC || step == OP_POST_INC || step == OP_POST_DEC) &&
-        before_previous && *before_previous == OP_GET_ARG && sv_get_u16(before_previous + 1) == index &&
-        !target[ip - func->code] && !target[previous - func->code];
+      counted = jit_counter_step(func, target, ip, back, true, index) != 0;
     } else if (sv_op_flags[op] & SV_OPF_BUILDER_TARGET) index = sv_get_u16(ip + 1);
 
     if (index >= 0 && index < param_count && index < JIT_PARAM_HOIST_CAP) {
@@ -445,12 +488,13 @@ uint8_t jit_induction_params(sv_func_t *func, int param_count) {
       else bad |= (uint8_t)(1u << index);
     }
     
-    before_previous = previous;
-    previous = ip;
+    back[2] = back[1];
+    back[1] = back[0];
+    back[0] = ip;
   }
   
   free(target);
-  return ok & (uint8_t)~bad;
+  return ok & (uint8_t)~(bad | func->jit_param_counters_off);
 
 none:
   free(target);

@@ -547,7 +547,6 @@ struct sv_func {
   bool jit_compiling: 1;
   bool jit_loop_hot: 1;
   bool jit_code_cold: 1;
-  bool jit_no_param_counters: 1;
 
   uint32_t call_count;
   uint32_t back_edge_count;
@@ -568,6 +567,7 @@ struct sv_func {
   bool jit_inline_reuse_empty: 1;
   bool fb_unit_watched: 1;
   bool fb_unit_target: 1;
+  uint8_t jit_param_counters_off;
 
   sv_code_unit_t *unit;
   struct sv_func *unit_next;

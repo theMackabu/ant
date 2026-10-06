@@ -52,8 +52,8 @@ static void jit_derive_induction_shadow(jit_compile_t *c, int idx) {
       MIR_new_reg_op(c->ctx, shadow), MIR_new_reg_op(c->ctx, c->local_d_regs[idx])));
   c->integer_locals[idx] = shadow;
   c->integer_local_ranges[idx] = (jit_integer_range_t){
-      .min = c->induction_locals[idx] == JIT_INDUCTION_NONNEG ? 0 : -(INT64_C(1) << 53),
-      .max = INT64_C(1) << 53, .known = true};
+      .min = c->induction_locals[idx] == JIT_INDUCTION_NONNEG ? 0 : -JIT_COUNTER_MAX,
+      .max = JIT_COUNTER_MAX, .known = true};
 }
 
 static bool jit_param_counter_use(jit_compile_t *c, uint16_t idx) {
@@ -241,7 +241,7 @@ void jit_emit_locals(jit_compile_t *c) {
             MIR_new_reg_op(c->ctx, dst), MIR_new_reg_op(c->ctx, c->param_shadow[idx])));
         c->vs.slot_type[c->vs.sp - 1] = SLOT_I32;
         c->vs.integer_range[c->vs.sp - 1] = (jit_integer_range_t){
-            .min = -(INT64_C(1) << 53), .max = INT64_C(1) << 53, .known = true};
+            .min = -JIT_COUNTER_MAX, .max = JIT_COUNTER_MAX, .known = true};
         break;
       }
       if (idx < JIT_PARAM_HOIST_CAP && c->param_d_cache[idx]) {

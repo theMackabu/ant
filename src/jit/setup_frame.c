@@ -759,6 +759,7 @@ bool jit_setup_frame(jit_compile_t *c) {
     if (c->writes_params && !c->cold_tier && !c->feat.needs_tco_args) {
       MIR_label_t bad_type = MIR_new_label(c->ctx);
       MIR_label_t not_integer = MIR_new_label(c->ctx);
+      MIR_label_t not_integer_at[JIT_PARAM_HOIST_CAP] = {0};
       MIR_label_t ready = MIR_new_label(c->ctx);
       bool any_numeric = false;
       uint8_t counters = jit_induction_params(c->func, c->param_count);
@@ -780,18 +781,27 @@ bool jit_setup_frame(jit_compile_t *c) {
             MIR_new_reg_op(c->ctx, integer), MIR_new_reg_op(c->ctx, c->param_d_cache[i])));
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_I2D,
             MIR_new_reg_op(c->ctx, back), MIR_new_reg_op(c->ctx, integer)));
+        not_integer_at[i] = MIR_new_label(c->ctx);
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_DBNE,
-            MIR_new_label_op(c->ctx, not_integer),
+            MIR_new_label_op(c->ctx, not_integer_at[i]),
             MIR_new_reg_op(c->ctx, c->param_d_cache[i]), MIR_new_reg_op(c->ctx, back)));
       }
       if (any_numeric) {
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, ready)));
         if (c->induction_params) {
+          MIR_reg_t failed = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "parg_not_integer");
+          for (int i = 0; i < JIT_PARAM_HOIST_CAP; i++) {
+            if (!not_integer_at[i]) continue;
+            MIR_append_insn(c->ctx, c->jit_func, not_integer_at[i]);
+            mir_load_imm(c->ctx, c->jit_func, failed, 1u << i);
+            MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, not_integer)));
+          }
           MIR_append_insn(c->ctx, c->jit_func, not_integer);
-          MIR_append_insn(c->ctx, c->jit_func, MIR_new_call_insn(c->ctx, 3,
+          MIR_append_insn(c->ctx, c->jit_func, MIR_new_call_insn(c->ctx, 4,
               MIR_new_ref_op(c->ctx, c->param_counters_off_proto),
               MIR_new_ref_op(c->ctx, c->imp_param_counters_off),
-              MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->func)));
+              MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->func),
+              MIR_new_reg_op(c->ctx, failed)));
         }
         MIR_append_insn(c->ctx, c->jit_func, bad_type);
         MIR_label_t call_entry = MIR_new_label(c->ctx);
