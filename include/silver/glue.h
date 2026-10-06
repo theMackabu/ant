@@ -6,8 +6,8 @@
 int64_t jit_helper_stack_overflow(ant_t *js);
 int64_t jit_helper_is_truthy(ant_t *js, ant_value_t v);
 
+void jit_helper_disable_param_counters(sv_func_t *func);
 void jit_helper_shape_transition(ant_t *js, ant_object_t *obj, ant_shape_t *to_shape);
-ant_value_t jit_helper_normalize_sloppy_this(ant_t *js, ant_value_t value);
 
 ant_value_t jit_helper_add(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_sub(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
@@ -21,6 +21,7 @@ ant_value_t jit_helper_get_length_inline(sv_vm_t *vm, ant_t *js, ant_value_t obj
 ant_value_t jit_helper_catch_value(sv_vm_t *vm, ant_t *js, ant_value_t err);
 ant_value_t jit_helper_throw(sv_vm_t *vm, ant_t *js, ant_value_t val);
 ant_value_t jit_helper_native_finish(ant_t *js, ant_value_t result);
+ant_value_t jit_helper_normalize_sloppy_this(ant_t *js, ant_value_t value);
 
 ant_value_t jit_helper_lt(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_le(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);

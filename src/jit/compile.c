@@ -210,6 +210,7 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
       if (c->lm.entries[i].bc_off == c->bc_off) {
         vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
         c->cmp_value = 0;
+        memset(c->param_shadow, 0, sizeof(c->param_shadow));
         c->element_available = false;
         c->previous_ip = NULL;
         if (c->integer_locals) {

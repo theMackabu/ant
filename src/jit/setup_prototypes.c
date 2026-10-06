@@ -377,6 +377,8 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                         MIR_T_I64, "arr",
                                         MIR_T_I64, "idx",
                                         MIR_T_I64, "val");
+  c->param_counters_off_proto = MIR_new_proto(c->ctx, "param_counters_off_proto",
+                                              0, NULL, 1, MIR_T_P, "func");
 
   c->adopt_open_upvalues_proto = MIR_new_proto(c->ctx, "adopt_open_upvalues_proto",
                                                0, NULL, 2,
@@ -685,6 +687,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_close_upval = MIR_new_import(c->ctx, "jit_helper_close_upval");
   c->imp_upval_barrier = MIR_new_import(c->ctx, "jit_helper_upval_barrier");
   c->imp_elem_barrier = MIR_new_import(c->ctx, "jit_helper_elem_barrier");
+  c->imp_param_counters_off = MIR_new_import(c->ctx, "jit_helper_disable_param_counters");
   c->imp_number_to_string = MIR_new_import(c->ctx, "jit_helper_number_to_string");
   for (int i = 0; i < ANT_MATH_INTRINSIC_COUNT; i++) {
     char name[32];

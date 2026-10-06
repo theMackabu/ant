@@ -404,6 +404,59 @@ none:
   free(state);
 }
 
+uint8_t jit_induction_params(sv_func_t *func, int param_count) {
+  if (func->jit_no_param_counters || func->has_dynamic_eval || param_count <= 0) return 0;
+  uint8_t *target = calloc((size_t)func->code_len + 1, 1);
+  
+  if (!target) return 0;
+  uint8_t *end = func->code + func->code_len;
+  uint8_t ok = 0, bad = 0;
+  
+  for (uint8_t *ip = func->code; ip < end;) {
+    sv_op_t op = (sv_op_t)*ip;
+    int size = sv_op_size[op];
+    if (!size || ip + size > end) goto none;
+    uint16_t flags = sv_op_flags[op];
+    int64_t to = -1;
+    if (flags & SV_OPF_JIT_BRANCH32) to = (ip - func->code) + size + sv_get_i32(ip + 1);
+    else if (flags & SV_OPF_JIT_BRANCH8) to = (ip - func->code) + size + sv_get_i8(ip + 1);
+    if (to >= 0 && to <= func->code_len) target[to] = 1;
+    if (op == OP_SPECIAL_OBJ && sv_get_u8(ip + 1) == 0) goto none;
+    ip += size;
+  }
+
+  uint8_t *previous = NULL, *before_previous = NULL;
+  for (uint8_t *ip = func->code; ip < end; ip += sv_op_size[*ip]) {
+    sv_op_t op = (sv_op_t)*ip;
+    int index = -1;
+    bool counted = false;
+    
+    if (op == OP_PUT_ARG || op == OP_SET_ARG) {
+      index = sv_get_u16(ip + 1);
+      sv_op_t step = previous ? (sv_op_t)*previous : OP__COUNT;
+      counted = 
+        (step == OP_INC || step == OP_DEC || step == OP_POST_INC || step == OP_POST_DEC) &&
+        before_previous && *before_previous == OP_GET_ARG && sv_get_u16(before_previous + 1) == index &&
+        !target[ip - func->code] && !target[previous - func->code];
+    } else if (sv_op_flags[op] & SV_OPF_BUILDER_TARGET) index = sv_get_u16(ip + 1);
+
+    if (index >= 0 && index < param_count && index < JIT_PARAM_HOIST_CAP) {
+      if (counted) ok |= (uint8_t)(1u << index);
+      else bad |= (uint8_t)(1u << index);
+    }
+    
+    before_previous = previous;
+    previous = ip;
+  }
+  
+  free(target);
+  return ok & (uint8_t)~bad;
+
+none:
+  free(target);
+  return 0;
+}
+
 bool jit_emit_integer_arithmetic(
     MIR_context_t ctx, MIR_item_t fn, jit_vstack_t *vs, sv_op_t op) {
   int li = vs->sp - 2, ri = vs->sp - 1;

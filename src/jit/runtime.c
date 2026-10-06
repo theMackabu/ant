@@ -91,6 +91,7 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_close_upval);
   LOAD_EXT(jit_helper_upval_barrier);
   LOAD_EXT(jit_helper_elem_barrier);
+  LOAD_EXT(jit_helper_disable_param_counters);
   LOAD_EXT(jit_helper_number_to_string);
   LOAD_EXT(ant_math_ceil);
   LOAD_EXT(ant_math_floor);

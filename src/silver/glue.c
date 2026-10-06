@@ -1593,6 +1593,11 @@ ant_value_t jit_helper_number_to_string(sv_vm_t *vm, ant_t *js, ant_value_t valu
   return js_tostring_val(js, value);
 }
 
+void jit_helper_disable_param_counters(sv_func_t *func) {
+  func->jit_no_param_counters = true;
+  func->tfb_version++;
+}
+
 void jit_helper_elem_barrier(ant_t *js, ant_value_t arr, uint64_t idx, ant_value_t val) {
   gc_write_barrier_elem(js, js_obj_ptr(arr), (uint32_t)idx, val);
 }

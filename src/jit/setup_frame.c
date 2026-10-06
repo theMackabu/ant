@@ -676,6 +676,8 @@ bool jit_setup_frame(jit_compile_t *c) {
   memset(c->param_d_cache, 0, sizeof(c->param_d_cache));
   memset(c->param_num, 0, sizeof(c->param_num));
   memset(c->param_num_ok, 0, sizeof(c->param_num_ok));
+  memset(c->param_shadow, 0, sizeof(c->param_shadow));
+  c->induction_params = 0;
   {
     uint8_t read_mask = 0, written_mask = 0, numeric_mask = 0;
     uint8_t *pscan = c->func->code, *pend = c->func->code + c->func->code_len;
@@ -756,8 +758,10 @@ bool jit_setup_frame(jit_compile_t *c) {
     }
     if (c->writes_params && !c->cold_tier && !c->feat.needs_tco_args) {
       MIR_label_t bad_type = MIR_new_label(c->ctx);
+      MIR_label_t not_integer = MIR_new_label(c->ctx);
       MIR_label_t ready = MIR_new_label(c->ctx);
       bool any_numeric = false;
+      uint8_t counters = jit_induction_params(c->func, c->param_count);
       for (int i = 0; i < c->param_count && i < JIT_PARAM_HOIST_CAP; i++) {
         if (!c->param_cache[i] || !(numeric_mask & (1u << i))) continue;
         char name[24];
@@ -766,9 +770,29 @@ bool jit_setup_frame(jit_compile_t *c) {
         mir_emit_is_num_guard(c->ctx, c->jit_func, c->r_bool, c->param_cache[i], bad_type);
         mir_i64_to_d(c->ctx, c->jit_func, c->param_d_cache[i], c->param_cache[i], c->r_d_slot);
         any_numeric = true;
+        if (!(counters & (1u << i))) continue;
+        c->induction_params |= (uint8_t)(1u << i);
+        snprintf(name, sizeof(name), "parg_int%d", i);
+        MIR_reg_t integer = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+        snprintf(name, sizeof(name), "parg_back%d", i);
+        MIR_reg_t back = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_D, name);
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_D2I,
+            MIR_new_reg_op(c->ctx, integer), MIR_new_reg_op(c->ctx, c->param_d_cache[i])));
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_I2D,
+            MIR_new_reg_op(c->ctx, back), MIR_new_reg_op(c->ctx, integer)));
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_DBNE,
+            MIR_new_label_op(c->ctx, not_integer),
+            MIR_new_reg_op(c->ctx, c->param_d_cache[i]), MIR_new_reg_op(c->ctx, back)));
       }
       if (any_numeric) {
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, ready)));
+        if (c->induction_params) {
+          MIR_append_insn(c->ctx, c->jit_func, not_integer);
+          MIR_append_insn(c->ctx, c->jit_func, MIR_new_call_insn(c->ctx, 3,
+              MIR_new_ref_op(c->ctx, c->param_counters_off_proto),
+              MIR_new_ref_op(c->ctx, c->imp_param_counters_off),
+              MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->func)));
+        }
         MIR_append_insn(c->ctx, c->jit_func, bad_type);
         MIR_label_t call_entry = MIR_new_label(c->ctx);
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
@@ -777,12 +801,9 @@ bool jit_setup_frame(jit_compile_t *c) {
                 offsetof(sv_vm_t, jit_osr) + offsetof(sv_jit_osr_t, active), c->r_vm, 0, 1)));
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ,
             MIR_new_label_op(c->ctx, call_entry), MIR_new_reg_op(c->ctx, c->r_bool), MIR_new_int_op(c->ctx, 0)));
-        // The OSR caller still owns the interpreter frame at its loop offset.
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_ret_insn(c->ctx, 1,
             MIR_new_uint_op(c->ctx, SV_JIT_BAILOUT)));
         MIR_append_insn(c->ctx, c->jit_func, call_entry);
-        // A direct JIT caller expects a JS result, not an internal retry tag.
-        // No bytecode ran yet, so reconstruct from the original call inputs.
         MIR_reg_t entry_result = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, "param_entry_result");
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_call_insn(c->ctx, 17,
             MIR_new_ref_op(c->ctx, c->resume_proto), MIR_new_ref_op(c->ctx, c->imp_resume),

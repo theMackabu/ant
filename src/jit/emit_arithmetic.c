@@ -773,6 +773,21 @@ void jit_emit_arithmetic(jit_compile_t *c) {
     case OP_POST_INC:
     case OP_POST_DEC: {
       int old_idx = c->vs.sp - 1;
+      if (c->vs.slot_type[old_idx] == SLOT_I32) {
+        // the old value stays an integer, new one is a double, so no overflow check
+        MIR_reg_t rold = vstack_top(&c->vs);
+        vstack_push(&c->vs);
+        int new_idx = c->vs.sp - 1;
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_I2D,
+            MIR_new_reg_op(c->ctx, c->vs.d_regs[new_idx]), MIR_new_reg_op(c->ctx, rold)));
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, c->op == OP_POST_INC ? MIR_DADD : MIR_DSUB,
+                                     MIR_new_reg_op(c->ctx, c->vs.d_regs[new_idx]),
+                                     MIR_new_reg_op(c->ctx, c->vs.d_regs[new_idx]),
+                                     MIR_new_reg_op(c->ctx, c->r_d_one)));
+        c->vs.slot_type[new_idx] = SLOT_NUM;
+        break;
+      }
       bool input_is_num = vstack_prepare_num(
           &c->vs, old_idx, c->ctx, c->jit_func, c->r_d_slot);
       MIR_reg_t rold = vstack_top(&c->vs);

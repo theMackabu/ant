@@ -57,6 +57,7 @@ typedef struct jit_compile {
   MIR_item_t close_upval_proto;
   MIR_item_t upval_barrier_proto;
   MIR_item_t elem_barrier_proto;
+  MIR_item_t param_counters_off_proto;
   MIR_item_t adopt_open_upvalues_proto;
   MIR_item_t take_open_upvalues_proto;
   MIR_item_t take_open_upvalues_rebase_proto;
@@ -140,6 +141,7 @@ typedef struct jit_compile {
   MIR_item_t imp_close_upval;
   MIR_item_t imp_upval_barrier;
   MIR_item_t imp_elem_barrier;
+  MIR_item_t imp_param_counters_off;
   MIR_item_t imp_number_to_string;
   MIR_item_t math1_proto;
   MIR_item_t math2_proto;
@@ -253,6 +255,8 @@ typedef struct jit_compile {
   MIR_reg_t param_d_cache[JIT_PARAM_HOIST_CAP];
   MIR_reg_t param_num[JIT_PARAM_HOIST_CAP];
   MIR_reg_t param_num_ok[JIT_PARAM_HOIST_CAP];
+  uint8_t induction_params;
+  MIR_reg_t param_shadow[JIT_PARAM_HOIST_CAP];
   MIR_reg_t hoisted_upvalue_cell;
   int hoisted_upvalue;
   ant_t *js;
