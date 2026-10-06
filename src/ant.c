@@ -3395,8 +3395,13 @@ static inline bool js_to_primitive_cache_hit(ant_t *js, ant_value_t value) {
 
 double js_to_number(ant_t *js, ant_value_t arg) {
   if (vtype(arg) == kTypeNull) return 0.0;
-  if (vtype(arg) == kTypeUndefined) return JS_NAN;
   
+  if (vtype(arg) == kTypeSymbol) {
+    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a number");
+    return JS_NAN;
+  }
+  
+  if (vtype(arg) == kTypeUndefined) return JS_NAN;
   if (vtype(arg) == kTypeNumber) return tod(arg);
   if (vtype(arg) == kTypeBool) return vdata(arg) ? 1.0 : 0.0;
   if (vtype(arg) == kTypeBigInt) return bigint_to_double(js, arg);
@@ -3440,6 +3445,24 @@ double js_to_number(ant_t *js, ant_value_t arg) {
   }
   
   return JS_NAN;
+}
+
+ant_value_t js_to_numeric(ant_t *js, ant_value_t arg) {
+  uint8_t t = vtype(arg);
+  if (t == kTypeNumber || t == kTypeBigInt) return arg;
+  
+  if (is_object_type(arg) || t == kTypeBuiltin) {
+    arg = js_to_primitive_cache_hit(js, arg)
+      ? try_cached_ordinary_to_primitive_number(js, arg)
+      : js_to_primitive(js, arg, 2);
+    if (is_err(arg)) return arg;
+    t = vtype(arg);
+    if (t == kTypeNumber || t == kTypeBigInt) return arg;
+  }
+  
+  if (t == kTypeSymbol)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a number");
+  return tov(js_to_number(js, arg));
 }
 
 static ant_value_t setup_func_prototype(ant_t *js, ant_value_t func) {

@@ -135,6 +135,7 @@ void jit_emit_bitwise(jit_compile_t *c) {
                        c->helper2_proto, imp, c->r_vm, c->r_js, rl, rr);
       mir_emit_bailout_check(c->ctx, c->jit_func, rd,
                              c->r_bailout_val, c->bc_off, c->vs.sp + 1, &c->bailout_ctx);
+      jit_emit_throw_if_error(c, rd);
       break;
     }
 
@@ -196,6 +197,7 @@ void jit_emit_bitwise(jit_compile_t *c) {
       mir_emit_bailout_check(c->ctx, c->jit_func, rs,
                              c->r_bailout_val, c->bc_off, c->vs.sp,
                              &c->bailout_ctx);
+      jit_emit_throw_if_error(c, rs);
       break;
     }
 

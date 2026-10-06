@@ -4,7 +4,6 @@
 #include <math.h>
 #include <string.h>
 
-#include "shapes.h"
 #include "gc/roots.h"
 #include "silver/engine.h"
 #include "modules/bigint.h"
@@ -126,6 +125,11 @@ static inline bool sv_coerce_relational(ant_t *js, ant_value_t *l, ant_value_t *
     ant_value_t prim = js_to_primitive(js, *r, 2);
     if (is_err(prim)) return false;
     *r = prim;
+  }
+  
+  if (vtype(*l) == kTypeSymbol || vtype(*r) == kTypeSymbol) {
+    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a number");
+    return false;
   }
   
   return true;

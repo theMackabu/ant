@@ -226,6 +226,7 @@ void jit_emit_arithmetic(jit_compile_t *c) {
         mir_emit_bailout_check_typed(c->ctx, c->jit_func, rd,
                                      c->r_bailout_val, c->bc_off, c->vs.sp + 1, &c->bailout_ctx,
                                      c->vs.sp - 1, l_is_num, c->vs.sp, r_is_num);
+        jit_emit_throw_if_error(c, rd);
       } else if (fb_num_only && l_is_num && r_is_num) {
         MIR_reg_t fd_r = c->vs.d_regs[c->vs.sp];
         MIR_reg_t fd_dst = c->vs.d_regs[c->vs.sp - 1];
@@ -325,6 +326,7 @@ void jit_emit_arithmetic(jit_compile_t *c) {
         mir_emit_bailout_check_typed(c->ctx, c->jit_func, rd,
                                      c->r_bailout_val, c->bc_off, c->vs.sp + 1, &c->bailout_ctx,
                                      c->vs.sp - 1, l_is_num, c->vs.sp, r_is_num);
+        jit_emit_throw_if_error(c, rd);
         MIR_append_insn(c->ctx, c->jit_func, done);
       }
       break;
@@ -361,6 +363,7 @@ void jit_emit_arithmetic(jit_compile_t *c) {
         mir_emit_bailout_check_typed(c->ctx, c->jit_func, rd,
                                      c->r_bailout_val, c->bc_off, c->vs.sp + 1, &c->bailout_ctx,
                                      c->vs.sp - 1, l_is_num, c->vs.sp, r_is_num);
+        jit_emit_throw_if_error(c, rd);
       } else if (fb_num_only && l_is_num && r_is_num) {
         MIR_reg_t fd_r = c->vs.d_regs[c->vs.sp];
         MIR_reg_t fd_dst = c->vs.d_regs[c->vs.sp - 1];
@@ -460,6 +463,7 @@ void jit_emit_arithmetic(jit_compile_t *c) {
         mir_emit_bailout_check_typed(c->ctx, c->jit_func, rd,
                                      c->r_bailout_val, c->bc_off, c->vs.sp + 1, &c->bailout_ctx,
                                      c->vs.sp - 1, l_is_num, c->vs.sp, r_is_num);
+        jit_emit_throw_if_error(c, rd);
         MIR_append_insn(c->ctx, c->jit_func, done);
       }
       break;
@@ -495,6 +499,7 @@ void jit_emit_arithmetic(jit_compile_t *c) {
         mir_emit_bailout_check_typed(c->ctx, c->jit_func, rd,
                                      c->r_bailout_val, c->bc_off, c->vs.sp + 1, &c->bailout_ctx,
                                      c->vs.sp - 1, l_is_num, c->vs.sp, r_is_num);
+        jit_emit_throw_if_error(c, rd);
       } else if (fb_num_only && l_is_num && r_is_num) {
         MIR_reg_t fd_r = c->vs.d_regs[c->vs.sp];
         MIR_reg_t fd_dst = c->vs.d_regs[c->vs.sp - 1];
@@ -594,6 +599,7 @@ void jit_emit_arithmetic(jit_compile_t *c) {
         mir_emit_bailout_check_typed(c->ctx, c->jit_func, rd,
                                      c->r_bailout_val, c->bc_off, c->vs.sp + 1, &c->bailout_ctx,
                                      c->vs.sp - 1, l_is_num, c->vs.sp, r_is_num);
+        jit_emit_throw_if_error(c, rd);
         MIR_append_insn(c->ctx, c->jit_func, done);
       }
       break;
@@ -626,6 +632,7 @@ void jit_emit_arithmetic(jit_compile_t *c) {
         mir_emit_bailout_check_typed(c->ctx, c->jit_func, rd,
                                      c->r_bailout_val, c->bc_off, c->vs.sp + 1, &c->bailout_ctx,
                                      c->vs.sp - 1, l_is_num, c->vs.sp, r_is_num);
+        jit_emit_throw_if_error(c, rd);
       } else if (fb_num_only) {
         MIR_label_t bail_direct = MIR_new_label(c->ctx);
         MIR_label_t skip_bail = MIR_new_label(c->ctx);
@@ -678,6 +685,7 @@ void jit_emit_arithmetic(jit_compile_t *c) {
         mir_emit_bailout_check_typed(c->ctx, c->jit_func, rd,
                                      c->r_bailout_val, c->bc_off, c->vs.sp + 1, &c->bailout_ctx,
                                      c->vs.sp - 1, l_is_num, c->vs.sp, r_is_num);
+        jit_emit_throw_if_error(c, rd);
         MIR_append_insn(c->ctx, c->jit_func, done);
       }
       break;

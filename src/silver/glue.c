@@ -20,6 +20,8 @@
 #include "ops/iteration.h"
 #include "ops/upvalues.h"
 #include "ops/comparison.h"
+#include "ops/arithmetic.h"
+#include "ops/bitwise.h"
 #include "ops/coercion.h"
 #include "ops/private.h"
 #include "ops/objects.h"
@@ -99,30 +101,24 @@ ant_value_t jit_helper_add(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r)
   return SV_JIT_BAILOUT;
 }
 
-ant_value_t jit_helper_sub(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return tov(tod(l) - tod(r));
-  if ((vtype(l) == kTypeNumber || vtype(l) == kTypeString) && (vtype(r) == kTypeNumber || vtype(r) == kTypeString)) {
-    double ld = (vtype(l) == kTypeNumber) ? tod(l) : js_to_number(js, l);
-    double rd = (vtype(r) == kTypeNumber) ? tod(r) : js_to_number(js, r);
-    return tov(ld - rd);
+static inline bool jit_numeric_operand(ant_value_t v) {
+  switch (vtype(v)) {
+    case kTypeNumber: case kTypeString: case kTypeBool:
+    case kTypeNull: case kTypeUndefined: case kTypeBigInt:
+      return true;
+    default:
+      return false;
   }
-  return SV_JIT_BAILOUT;
 }
 
-ant_value_t jit_helper_mul(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return tov(tod(l) * tod(r));
-  return SV_JIT_BAILOUT;
-}
-
-ant_value_t jit_helper_div(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return tov(tod(l) / tod(r));
-  return SV_JIT_BAILOUT;
-}
-
-ant_value_t jit_helper_mod(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return tov(fmod(tod(l), tod(r)));
-  return SV_JIT_BAILOUT;
-}
+#define JIT_ARITH_HELPERS(X) X(sub, OP_SUB) X(mul, OP_MUL) X(div, OP_DIV) X(mod, OP_MOD)
+#define X(name, op)                                                                    \
+  ant_value_t jit_helper_##name(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) { \
+    if (!jit_numeric_operand(l) || !jit_numeric_operand(r)) return SV_JIT_BAILOUT;     \
+    return sv_arith_values(js, op, l, r);                                              \
+  }
+JIT_ARITH_HELPERS(X)
+#undef X
 
 ant_value_t jit_helper_str_read_value(
   sv_vm_t *vm, ant_t *js, ant_value_t value
@@ -1744,51 +1740,19 @@ ant_value_t jit_helper_set_proto(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_va
   return js_mkundef();
 }
 
-ant_value_t jit_helper_band(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) != kTypeNumber || vtype(r) != kTypeNumber) return SV_JIT_BAILOUT;
-  int32_t ai = js_to_int32(tod(l));
-  int32_t bi = js_to_int32(tod(r));
-  return tov((double)(ai & bi));
-}
-
-ant_value_t jit_helper_bor(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (!((vtype(l) == kTypeNumber || vtype(l) == kTypeString) && (vtype(r) == kTypeNumber || vtype(r) == kTypeString))) return SV_JIT_BAILOUT;
-  int32_t ai = js_to_int32((vtype(l) == kTypeNumber) ? tod(l) : js_to_number(js, l));
-  int32_t bi = js_to_int32((vtype(r) == kTypeNumber) ? tod(r) : js_to_number(js, r));
-  return tov((double)(ai | bi));
-}
-
-ant_value_t jit_helper_bxor(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) != kTypeNumber || vtype(r) != kTypeNumber) return SV_JIT_BAILOUT;
-  int32_t ai = js_to_int32(tod(l));
-  int32_t bi = js_to_int32(tod(r));
-  return tov((double)(ai ^ bi));
-}
+#define JIT_BITWISE_HELPERS(X) \
+  X(band, OP_BAND) X(bor, OP_BOR) X(bxor, OP_BXOR) X(shl, OP_SHL) X(shr, OP_SHR) X(ushr, OP_USHR)
+#define X(name, op)                                                                    \
+  ant_value_t jit_helper_##name(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) { \
+    if (!jit_numeric_operand(l) || !jit_numeric_operand(r)) return SV_JIT_BAILOUT;     \
+    return sv_bitwise_values(js, op, l, r);                                            \
+  }
+JIT_BITWISE_HELPERS(X)
+#undef X
 
 ant_value_t jit_helper_bnot(sv_vm_t *vm, ant_t *js, ant_value_t v) {
-  if (vtype(v) != kTypeNumber) return SV_JIT_BAILOUT;
-  return tov((double)(~js_to_int32(tod(v))));
-}
-
-ant_value_t jit_helper_shl(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) != kTypeNumber || vtype(r) != kTypeNumber) return SV_JIT_BAILOUT;
-  int32_t ai = js_to_int32(tod(l));
-  uint32_t bi = js_to_uint32(tod(r));
-  return tov((double)(ai << (bi & 0x1f)));
-}
-
-ant_value_t jit_helper_shr(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) != kTypeNumber || vtype(r) != kTypeNumber) return SV_JIT_BAILOUT;
-  int32_t ai = js_to_int32(tod(l));
-  uint32_t bi = js_to_uint32(tod(r));
-  return tov((double)(ai >> (bi & 0x1f)));
-}
-
-ant_value_t jit_helper_ushr(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) != kTypeNumber || vtype(r) != kTypeNumber) return SV_JIT_BAILOUT;
-  uint32_t ai = js_to_uint32(tod(l));
-  uint32_t bi = js_to_uint32(tod(r));
-  return tov((double)(ai >> (bi & 0x1f)));
+  if (!jit_numeric_operand(v)) return SV_JIT_BAILOUT;
+  return sv_bitnot_value(js, v);
 }
 
 ant_value_t jit_helper_gt(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {

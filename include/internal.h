@@ -238,6 +238,7 @@ double js_parse_float_value(ant_t *js, ant_value_t arg);
 bool js_obj_ensure_prop_capacity(ant_object_t *obj, uint32_t needed);
 bool js_obj_ensure_unique_shape(ant_object_t *obj);
 
+ant_value_t js_to_numeric(ant_t *js, ant_value_t arg);
 ant_value_t js_template_to_string(ant_t *js, ant_value_t v);
 ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode);
 
