@@ -820,16 +820,11 @@ bool jit_setup_frame(jit_compile_t *c) {
     }
   }
 
-  // The root allocation must not be repeated by a self-tail entry jump.
   if (c->ctx == c->jc->ctx_hot && !c->feat.needs_tco_args)
     c->hoisted_upvalue = jit_hot_loop_upvalue(c->func);
   if (c->hoisted_upvalue >= 0) {
-    // Closure initialization fixes the upvalue table and its cell pointers.
-    // Closing/rebinding a frame can still change cell->location and *location.
     MIR_reg_t table = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "hoisted_upvalue_table");
     c->hoisted_upvalue_cell = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "hoisted_upvalue_cell");
-    // Keep the owner alive using the same native-stack root convention as
-    // normalized this. A raw closure pointer is recognized by gc_scan_range.
     MIR_reg_t root = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "hoisted_closure_root");
     MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_ALLOCA,
         MIR_new_reg_op(c->ctx, root), MIR_new_int_op(c->ctx, sizeof(uint64_t))));
