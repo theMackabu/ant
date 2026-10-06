@@ -154,6 +154,8 @@ export function targets() {
     'test_jit_induction_locals.cjs',
     'test_jit_induction_locals_codegen.cjs',
     'test_jit_captured_local_init.cjs',
+    'test_jit_param_counters.cjs',
+    'test_jit_param_counters_codegen.cjs',
     'test_regexp_lone_surrogates.cjs',
     'test_json_lone_surrogates.cjs',
     'test_timer_fired_timeout_gc.cjs',

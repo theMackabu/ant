@@ -25,6 +25,8 @@ function walk(i, n) { const r = []; while (n-- > 0) r.push(src[i++], i & 7, i | 
 // reassigned by other than ±1, and written through a mapped arguments object
 function drift(i, n) { const r = []; while (n-- > 0) { r.push(src[i], i & 7); i = i + 0.5; } return r; }
 function alias(i, n) { const r = []; while (n-- > 0) { r.push(src[i++], i & 3); if (n === 2) arguments[0] = 1.5; } return r; }
+// read before the loop, then at the loop head after the back edge wrote it
+function pre(i, n) { const r = [src[i]]; while (n-- > 0) { r.push(src[i], i & 7); i++; } return r; }
 function back(i, n) { const r = []; for (; n > 0; --n) r.push(src[i--], i >> 1); return r; }
 
 const am3Ref = (i, x, w, j, c, n) => {
@@ -38,6 +40,7 @@ const am3Ref = (i, x, w, j, c, n) => {
 const walkRef = (i, n) => { const r = []; while (n-- > 0) { const v = src[i]; i += 1; r.push(v, i & 7, i | 0); } return r; };
 const driftRef = (i, n) => { const r = []; while (n-- > 0) { r.push(src[i], i & 7); i += 0.5; } return r; };
 const aliasRef = (i, n) => { const r = []; while (n-- > 0) { const v = src[i]; i += 1; r.push(v, i & 3); if (n === 2) i = 1.5; } return r; };
+const preRef = (i, n) => { const r = [src[i]]; while (n-- > 0) { r.push(src[i], i & 7); i += 1; } return r; };
 const backRef = (i, n) => { const r = []; for (; n > 0; --n) { const v = src[i]; i -= 1; r.push(v, i >> 1); } return r; };
 
 function sameList(a, b, what) {
@@ -50,6 +53,7 @@ for (let r = 0; r < 4000; r++) {
   walk(r & 31, 20);
   back(40, 20);
   drift(r & 31, 6);
+  pre(r & 31, 6);
   alias(r & 31, 6);
 }
 
@@ -61,6 +65,7 @@ for (const [i, j, n] of [[0, 0, 40], [3, 5, 20], [10, 0, 0]]) {
 sameList(walk(60, 8), walkRef(60, 8), 'walk past the end');
 sameList(back(2, 6), backRef(2, 6), 'back below zero');
 sameList(drift(3, 6), driftRef(3, 6), 'reassigned by +0.5');
+sameList(pre(3, 6), preRef(3, 6), 'read before the loop');
 sameList(alias(3, 6), aliasRef(3, 6), 'written through arguments');
 // non-integer and very large starts: the integer copy would be wrong; -0
 // must still read element 0
