@@ -2654,6 +2654,24 @@ ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint3
   return mkarr_dense_literal_capacity(js, elements, count, false);
 }
 
+ant_value_t js_mkarr_dense_uninit(ant_t *js, uint32_t count, ant_value_t **out_data) {
+  *out_data = NULL;
+  if (count == 0) return mkarr(js);
+  
+  ant_value_t arr = alloc_array_with_proto_capacity(js, js->sym.array_proto, count, count, true);
+  if (is_err(arr)) return arr;
+
+  ant_object_t *obj = array_obj_ptr(arr);
+  if (!obj || !obj->flags.fast_array || !obj->u.array.data || obj->u.array.cap < count)
+    return js_mkerr(js, "oom");
+
+  obj->u.array.len = count;
+  obj->flags.may_have_dense_elements = 1;
+  *out_data = obj->u.array.data;
+  
+  return arr;
+}
+
 static ant_value_t strict_arguments_template(ant_t *js, bool has_iterator) {
   ant_value_t *cached = has_iterator
     ? &js->builtins.arguments_iter_template 

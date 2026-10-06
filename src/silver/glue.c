@@ -219,6 +219,10 @@ ant_value_t jit_helper_call(
   return sv_vm_call(vm, js, func, this_val, args, argc, NULL, js_mkundef());
 }
 
+ant_value_t jit_helper_native_finish(ant_t *js, ant_value_t result) {
+  return Ant_Silver_FinishNativeCall(js, result);
+}
+
 ant_value_t jit_helper_call_method(
   sv_vm_t *vm, ant_t *js,
   ant_value_t func, ant_value_t this_val,
@@ -1903,6 +1907,12 @@ ant_value_t jit_helper_new(
     };
     
     result = sv_call_resolve_closure(vm, js, closure, func, &call, &ctor_this);
+  } else if (
+    closure && !closure->func && closure->call_flags == 0 && func_obj &&
+    !sv_check_c_stack_overflow(js)
+  ) {
+    result = sv_call_native(js, func, obj, args, argc, effective_new_target);
+    sv_vm_maybe_checkpoint_microtasks(js);
   } else result = sv_vm_call(vm, js, func, obj, args, argc, &ctor_this, effective_new_target);
 
   if (is_err(result)) return result;

@@ -153,13 +153,17 @@ export function targets() {
     'test_for_update_tonumeric.cjs',
     'test_jit_induction_locals.cjs',
     'test_jit_induction_locals_codegen.cjs',
+    'test_jit_captured_local_init.cjs',
     'test_regexp_lone_surrogates.cjs',
     'test_json_lone_surrogates.cjs',
     'test_timer_fired_timeout_gc.cjs',
     'test_uv_nested_poll.mjs',
     'tagged_templates.cjs',
     'test_string_number_concat.cjs',
-    'test_jit_short_concat_copy.cjs'
+    'test_jit_short_concat_copy.cjs',
+    'test_arguments_length_only.cjs',
+    'test_events_listener_storage.cjs',
+    'test_jit_builtin_direct_call.cjs'
   ];
   for (const f of REGRESSION_TESTS) list.push({ group: 'tests', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
 

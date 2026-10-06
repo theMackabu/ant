@@ -2077,6 +2077,16 @@ void jit_emit_inline_body(
                           MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, dv_done)));
         }
         MIR_append_insn(ctx, jit_func, dv_generic);
+        {
+          MIR_label_t dv_slow = MIR_new_label(ctx);
+          char dv_prefix[24];
+          snprintf(dv_prefix, sizeof(dv_prefix), "inl%d_", id);
+          mir_emit_builtin_call_fast(
+              ctx, jit_func, dv_prefix, (int)(ip - callee->code), r_js, r_bool,
+              ext->cfunc_proto, ext->native_finish_proto, ext->imp_native_finish,
+              nc_fn, nc_this, ext->r_args_buf, nc_argc, nc_dst, dv_slow, dv_done);
+          MIR_append_insn(ctx, jit_func, dv_slow);
+        }
 
         if (nc_method) {
           MIR_append_insn(ctx, jit_func,
@@ -2171,6 +2181,8 @@ void jit_emit_inline_body(
                           MIR_new_insn(ctx, MIR_MOV,
                                        MIR_new_reg_op(ctx, dst),
                                        MIR_new_reg_op(ctx, r_inl_super)));
+        } else if (which == 4) {
+          mir_load_imm(ctx, jit_func, dst, tov((double)caller_argc));
         } else if (which == 3) {
           MIR_append_insn(ctx, jit_func,
                           MIR_new_call_insn(ctx, 6,

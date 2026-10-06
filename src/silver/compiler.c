@@ -4630,6 +4630,15 @@ void compile_member(sv_compiler_t *c, sv_ast_t *node) {
     return;
   }
 
+  if (
+    c->args_length_only && !c->owns_eval_env &&
+    has_implicit_arguments_obj(c) && ast_is_arguments_length(node)
+  ) {
+    emit_op(c, OP_SPECIAL_OBJ);
+    emit(c, 4);
+    return;
+  }
+
   bool direct_length = is_direct_length_member(node);
   int raw_length_local = direct_length ? resolve_raw_length_local(c, node->left) : -1;
 
@@ -7473,7 +7482,10 @@ sv_func_t *compile_function_body(
     }
   }
 
-  if (!comp.is_arrow && has_implicit_arguments_obj(&comp) && (node->flags & FN_USES_ARGS)) {
+  if (
+    !comp.is_arrow && !comp.args_length_only &&
+    has_implicit_arguments_obj(&comp) && (node->flags & FN_USES_ARGS)
+  ) {
     static const char args_name[] = "\x01arguments";
     comp.strict_args_local = add_local(&comp, args_name, sizeof(args_name) - 1, false, comp.scope_depth);
     emit_op(&comp, OP_SPECIAL_OBJ);

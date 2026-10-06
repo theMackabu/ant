@@ -110,6 +110,7 @@ enum {
   FN_CLASS_DECL       = 1 << 18,
   FN_CLASS_CTOR       = 1 << 19,
   FN_YIELD_STAR       = 1 << 20,
+  FN_ARGS_LENGTH_ONLY = 1 << 21,
 };
 
 enum {
@@ -164,6 +165,7 @@ struct sv_ast {
 bool sv_ast_list_push(ant_t *js, sv_ast_list_t *list, sv_ast_t *node);
 bool sv_ast_can_be_expression_statement(const sv_ast_t *node);
 bool ast_references_arguments(const sv_ast_t *node);
+bool ast_is_arguments_length(const sv_ast_t *node);
 bool ast_references_new_target(const sv_ast_t *node);
 bool ast_contains_direct_eval(const sv_ast_t *node);
 bool ast_contains_lexical_new_target(const sv_ast_t *node);

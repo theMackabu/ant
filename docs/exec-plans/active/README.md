@@ -23,6 +23,7 @@ Store in-progress execution plans here.
 - [Dynamic Property Performance](dynamic-property-perf.md)
   - [Dynamic Property Performance Extras](dynamic-property-perf-extras.md)
 - [Elysia 200k RPS](elysia-200k-rps.md)
+- [EventEmitter Node Parity](eventemitter-node-parity.md)
 - [for-of JIT Ineligibility](for-of-jit-ineligibility.md)
 - [OSR Size-Scaled Tiering](osr-size-scaled-tiering.md)
 - [Hash Seed Randomization](hash-seed-randomization.md)

@@ -2,10 +2,11 @@
 #include "silver/lexer.h"
 #include "silver/directives.h"
 
+#include "ant.h"
 #include "escape.h"
 #include "debug.h"
 #include "errors.h"
-#include "internal.h"
+#include "value.h"
 #include "tokens.h"
 
 #include <runtime.h>
@@ -1516,6 +1517,81 @@ bool ast_references_arguments(const sv_ast_t *node) {
   return false;
 }
 
+static inline bool ast_is_ident(const sv_ast_t *node, const char *name, uint32_t len) {
+  return 
+    node && node->type == N_IDENT && 
+    node->len == len && memcmp(node->str, name, len) == 0;
+}
+
+bool ast_is_arguments_length(const sv_ast_t *node) {
+  return
+    node && node->type == N_MEMBER && !(node->flags & 1) &&
+    ast_is_ident(node->left, "arguments", 9) &&
+    ast_is_ident(node->right, "length", 6);
+}
+
+static bool ast_arguments_length_only(const sv_ast_t *node, bool write, bool arrow) {
+  if (!node) return true;
+
+  switch (node->type) {
+    case N_IDENT: return !ast_is_ident(node, "arguments", 9);
+    case N_WITH:  return false;
+    
+    case N_ARROW:
+      arrow = true;
+      break;
+      
+    case N_FUNC:
+    case N_CLASS:
+      if (node->str && node->len == 9 && memcmp(node->str, "arguments", 9) == 0) return false;
+      if (node->type == N_FUNC && !(node->flags & FN_ARROW)) return true;
+      if (node->flags & FN_ARROW) arrow = true;
+      break;
+      
+    case N_CALL:
+      if (ast_is_ident(node->left, "eval", 4)) return false;
+      break;
+      
+    case N_MEMBER:
+      if (ast_is_arguments_length(node)) return !write && !arrow;
+      return
+        ast_arguments_length_only(node->left, false, arrow) &&
+        (!(node->flags & 1) || ast_arguments_length_only(node->right, false, arrow));
+      
+    case N_ASSIGN:
+      return
+        ast_arguments_length_only(node->left, true, arrow) &&
+        ast_arguments_length_only(node->right, false, arrow);
+      
+    case N_FOR_IN:
+    case N_FOR_OF:
+    case N_FOR_AWAIT_OF:
+      return
+        ast_arguments_length_only(node->left, true, arrow) &&
+        ast_arguments_length_only(node->right, write, arrow) &&
+        ast_arguments_length_only(node->body, write, arrow);
+      
+    case N_UPDATE:
+    case N_DELETE:
+      write = true;
+      break;
+      
+    default: break;
+  }
+
+  const sv_ast_t *children[] = {
+    node->left, node->right, node->cond, node->body, node->catch_param,
+    node->catch_body, node->finally_body, node->init, node->update
+  };
+  
+  for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++)
+    if (!ast_arguments_length_only(children[i], write, arrow)) return false;
+  for (int i = 0; i < node->args.count; i++)
+    if (!ast_arguments_length_only(node->args.items[i], write, arrow)) return false;
+
+  return true;
+}
+
 bool ast_contains_direct_suspend(const sv_ast_t *node, const sv_ast_t **out_offender) {
   if (!node) return false;
 
@@ -1676,8 +1752,13 @@ static void parse_formal_params(P, sv_ast_t *fn, uint8_t close) {
 }
 
 static void finish_func(sv_ast_t *fn) {
-  if (!(fn->flags & FN_ARROW) && ast_references_arguments(fn->body))
-    fn->flags |= FN_USES_ARGS;
+  if (!(fn->flags & FN_ARROW)) {
+    if (ast_references_arguments(fn->body)) fn->flags |= FN_USES_ARGS;
+    bool length_only = ast_arguments_length_only(fn->body, false, false);
+    for (int i = 0; length_only && i < fn->args.count; i++)
+      length_only = ast_arguments_length_only(fn->args.items[i], false, false);
+    if (length_only) fn->flags |= FN_ARGS_LENGTH_ONLY;
+  }
   if (!(fn->flags & FN_ARROW)) {
     bool uses_new_target = ast_references_new_target(fn->body) || ast_contains_direct_eval(fn->body);
     for (int i = 0; !uses_new_target && i < fn->args.count; i++)

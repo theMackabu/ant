@@ -717,6 +717,10 @@ void jit_emit_calls(jit_compile_t *c) {
                       MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, lbl_call_done)));
 
       MIR_append_insn(c->ctx, c->jit_func, lbl_interp_call);
+      MIR_label_t lbl_generic_call = MIR_new_label(c->ctx);
+      jit_emit_builtin_call_fast(c, r_call_func, r_call_this, r_arg_arr, call_argc,
+                                 r_call_res, lbl_generic_call, lbl_call_done);
+      MIR_append_insn(c->ctx, c->jit_func, lbl_generic_call);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_call_insn(c->ctx, 9,
                                         MIR_new_ref_op(c->ctx, c->call_proto),

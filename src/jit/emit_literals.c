@@ -112,6 +112,15 @@ void jit_emit_literals(jit_compile_t *c) {
                                           MIR_new_reg_op(c->ctx, c->r_args),
                                           MIR_new_reg_op(c->ctx, c->r_argc)));
         jit_emit_throw_if_error(c, dst);
+      } else if (which == 4) {
+        char name[32];
+        snprintf(name, sizeof(name), "argc_d_%d", c->arith_n++);
+        MIR_reg_t argc_d = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_D, name);
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_I2D,
+                                     MIR_new_reg_op(c->ctx, argc_d),
+                                     MIR_new_reg_op(c->ctx, c->r_argc)));
+        mir_d_to_i64(c->ctx, c->jit_func, dst, argc_d, c->r_d_slot);
       } else if (which == 1) {
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_MOV,

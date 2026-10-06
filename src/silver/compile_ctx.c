@@ -67,6 +67,7 @@ void sv_compile_ctx_init_child(
   ctx->allows_new_target = (!enclosing->enclosing || ctx->is_arrow)
     ? enclosing->allows_new_target : true;
   ctx->is_async = node && !!(node->flags & FN_ASYNC);
+  ctx->args_length_only = node && !!(node->flags & FN_ARGS_LENGTH_ONLY);
   ctx->is_strict = enclosing->is_strict || (node && !!(node->flags & FN_CLASS_BODY));
   ctx->mode = mode;
   ctx->inherits_eval_env =

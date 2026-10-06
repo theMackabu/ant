@@ -20,6 +20,8 @@ typedef struct jit_compile {
   MIR_item_t helper2_proto;
   MIR_item_t private_put_proto;
   MIR_item_t call_proto;
+  MIR_item_t cfunc_proto;
+  MIR_item_t native_finish_proto;
   MIR_item_t call_string_intrinsic_proto;
   MIR_item_t call_map_template_proto;
   MIR_item_t map_template_fast_proto;
@@ -99,6 +101,7 @@ typedef struct jit_compile {
   MIR_item_t imp_gt;
   MIR_item_t imp_ge;
   MIR_item_t imp_call;
+  MIR_item_t imp_native_finish;
   MIR_item_t imp_call_method;
   MIR_item_t imp_call_array_includes;
   MIR_item_t imp_call_char_code_at;
@@ -326,6 +329,11 @@ void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg);
 void jit_emit_element_barrier(
     jit_compile_t *c, MIR_reg_t obj, MIR_reg_t index,
     MIR_reg_t val, MIR_reg_t flags, MIR_label_t skip);
+void jit_emit_builtin_call_fast(
+  jit_compile_t *c, MIR_reg_t func, MIR_reg_t this_val,
+  MIR_reg_t args, uint16_t argc, MIR_reg_t result,
+  MIR_label_t generic, MIR_label_t done
+);
 void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type);
 bool jit_setup_frame(jit_compile_t *c);
 

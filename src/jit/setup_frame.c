@@ -338,6 +338,9 @@ bool jit_setup_frame(jit_compile_t *c) {
       .imp_call = c->imp_call,
       .call_method_proto = c->call_method_proto,
       .imp_call_method = c->imp_call_method,
+      .cfunc_proto = c->cfunc_proto,
+      .native_finish_proto = c->native_finish_proto,
+      .imp_native_finish = c->imp_native_finish,
       .stable_load_proto = c->stable_load_proto,
       .imp_load_stable_builtin = c->imp_load_stable_builtin,
       .stable_call_proto = c->stable_call_proto,
@@ -558,6 +561,15 @@ bool jit_setup_frame(jit_compile_t *c) {
                                  MIR_new_uint_op(c->ctx, (uint64_t)c->n_locals * sizeof(ant_value_t))));
   } else {
     mir_load_imm(c->ctx, c->jit_func, c->r_lbuf, 0);
+  }
+  if (c->has_captures && c->captured_locals && c->n_locals > 0) {
+    for (int i = 0; i < c->n_locals; i++)
+      if (c->captured_locals[i])
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_MOV,
+                                     MIR_new_mem_op(c->ctx, MIR_T_I64,
+                                                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)), c->r_lbuf, 0, 1),
+                                     MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0))));
   }
 
   c->use_jit_upvalue_list = c->has_captured_slots;

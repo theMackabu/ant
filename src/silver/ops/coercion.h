@@ -694,14 +694,22 @@ static inline void sv_op_special_obj(
     vm->stack[vm->sp++] = js_get_module_import_binding(js);
     return;
   }
+  
   if (which == 1) {
     vm->stack[vm->sp++] = frame ? frame->new_target : js_mkundef();
     return;
   }
+  
   if (which == 2) {
     vm->stack[vm->sp++] = frame ? frame->super_val : js_mkundef();
     return;
   }
+  
+  if (which == 4) {
+    vm->stack[vm->sp++] = js_mknum(frame ? (double)frame->argc : 0);
+    return;
+  }
+  
   if (which != 0 || !frame) {
     vm->stack[vm->sp++] = js_mkundef();
     return;
@@ -710,6 +718,7 @@ static inline void sv_op_special_obj(
   if (vtype(frame->arguments_obj) == kTypeUndefined) {
     int mapped_count = sv_frame_is_strict(frame) || !frame->func ? 0 : frame->func->param_count;
     if (mapped_count > frame->argc) mapped_count = frame->argc;
+    
     frame->arguments_obj = js_create_arguments_object(
       js, vm, frame->callee, frame, frame->argc,
       mapped_count, sv_frame_is_strict(frame)

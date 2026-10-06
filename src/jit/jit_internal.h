@@ -133,6 +133,7 @@ typedef struct {
   MIR_item_t remember_obj_proto, imp_remember_obj;
   MIR_item_t call_proto, imp_call;
   MIR_item_t call_method_proto, imp_call_method;
+  MIR_item_t cfunc_proto, native_finish_proto, imp_native_finish;
   MIR_item_t stable_load_proto, imp_load_stable_builtin;
   MIR_item_t stable_call_proto, imp_call_stable_builtin;
   MIR_item_t imp_band, imp_bor, imp_bxor, imp_shl, imp_shr, imp_ushr;
@@ -143,6 +144,14 @@ typedef struct {
   int *next_inline_id;
   bool reader_only;
 } jit_inline_ext_t;
+
+void mir_emit_builtin_call_fast(
+  MIR_context_t ctx, MIR_item_t fn, const char *prefix, int site,
+  MIR_reg_t r_js, MIR_reg_t r_tmp,
+  MIR_item_t cfunc_proto, MIR_item_t native_finish_proto, MIR_item_t imp_native_finish,
+  MIR_reg_t func, MIR_reg_t this_val, MIR_reg_t args, uint16_t argc,
+  MIR_reg_t result, MIR_label_t generic, MIR_label_t done
+);
 #define INL_MAX_LABELS 128
 typedef struct {
   int bc_off;

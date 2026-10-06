@@ -23,8 +23,20 @@ static inline ant_value_t sv_invoke_native(
   ant_t *js, ant_cfunc_t fn, ant_value_t *args,
   int nargs, ant_value_t new_target
 ) {
-  if (__builtin_expect(Ant_Exception_Pending(js) || gc_value_is_heap_ref(new_target), 0))
+  if (__builtin_expect(Ant_Exception_Pending(js), 0))
     return Ant_Silver_InvokeNativeScoped(js, fn, args, nargs, new_target);
+
+  sv_vm_t *vm = js->vm;
+  if (gc_value_is_heap_ref(new_target) && vm) {
+    sv_native_frame_t frame = { .caller = vm->native_frame, .new_target = new_target };
+    vm->native_frame = &frame;
+    
+    ant_value_t result = fn(js, args, nargs, new_target);
+    vm->native_frame = frame.caller;
+    
+    return Ant_Silver_FinishNativeCall(js, result);
+  }
+
   ant_value_t result = fn(js, args, nargs, new_target);
   return Ant_Silver_FinishNativeCall(js, result);
 }
