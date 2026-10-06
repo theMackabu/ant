@@ -246,6 +246,10 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                    MIR_T_P, "func",
                                    MIR_T_I32, "bc_off");
 
+  MIR_type_t math_ret = MIR_T_D;
+  c->math1_proto = MIR_new_proto(c->ctx, "math1_proto", 1, &math_ret, 1, MIR_T_D, "x");
+  c->math2_proto = MIR_new_proto(c->ctx, "math2_proto", 1, &math_ret, 2, MIR_T_D, "a", MIR_T_D, "b");
+
   MIR_type_t h1_ret = MIR_JSVAL;
   c->helper1_proto = MIR_new_proto(c->ctx, "helper1_proto",
                                    1, &h1_ret, 3,
@@ -353,6 +357,12 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                          MIR_T_I64, "js",
                                          MIR_T_P, "uv",
                                          MIR_T_I64, "val");
+  c->elem_barrier_proto = MIR_new_proto(c->ctx, "elem_barrier_proto",
+                                        0, NULL, 4,
+                                        MIR_T_I64, "js",
+                                        MIR_T_I64, "arr",
+                                        MIR_T_I64, "idx",
+                                        MIR_T_I64, "val");
 
   c->adopt_open_upvalues_proto = MIR_new_proto(c->ctx, "adopt_open_upvalues_proto",
                                                0, NULL, 2,
@@ -659,6 +669,13 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_promote_due = MIR_new_import(c->ctx, "jit_helper_promote_due");
   c->imp_close_upval = MIR_new_import(c->ctx, "jit_helper_close_upval");
   c->imp_upval_barrier = MIR_new_import(c->ctx, "jit_helper_upval_barrier");
+  c->imp_elem_barrier = MIR_new_import(c->ctx, "jit_helper_elem_barrier");
+  c->imp_number_to_string = MIR_new_import(c->ctx, "jit_helper_number_to_string");
+  for (int i = 0; i < ANT_MATH_INTRINSIC_COUNT; i++) {
+    char name[32];
+    snprintf(name, sizeof(name), "ant_math_%s", ant_math_intrinsic_names[i]);
+    c->imp_math[i] = i == ANT_MATH_ABS ? NULL : MIR_new_import(c->ctx, name);
+  }
   c->imp_adopt_open_upvalues = MIR_new_import(c->ctx, "jit_helper_adopt_open_upvalues");
   c->imp_take_open_upvalues = MIR_new_import(c->ctx, "jit_helper_take_open_upvalues");
   c->imp_take_open_upvalues_rebase = MIR_new_import(c->ctx, "jit_helper_take_open_upvalues_rebase");

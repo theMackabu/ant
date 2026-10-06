@@ -32,7 +32,7 @@ static void jit_emit_dense_array_next(jit_compile_t *c, MIR_label_t done) {
       MIR_new_mem_op(ctx, MIR_T_D, sizeof(ant_value_t), c->r_iter_buf, 0, 1)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_D2I,
       MIR_new_reg_op(ctx, index), MIR_new_reg_op(ctx, counter)));
-  mir_emit_dense_element_guard(ctx, fn, array, index, value, JIT_ELEMENT_READ, slow, site);
+  mir_emit_dense_element_guard(ctx, fn, array, index, value, JIT_ELEMENT_READ, slow, site, NULL);
 
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_DADD, MIR_new_reg_op(ctx, counter),
       MIR_new_reg_op(ctx, counter), MIR_new_double_op(ctx, 1.0)));

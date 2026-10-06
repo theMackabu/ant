@@ -5,6 +5,7 @@
 #include "internal.h"
 
 #include "modules/crypto.h"
+#include "modules/math.h"
 
 #if DBL_MANT_DIG >= 64
 #error "Unsupported double mantissa width for Math.random"
@@ -17,6 +18,55 @@ enum {
 
 static const double math_random_scale =
   1.0 / (double)(UINT64_C(1) << MATH_RANDOM_MANTISSA_BITS);
+
+const char *const ant_math_intrinsic_names[ANT_MATH_INTRINSIC_COUNT] = {
+  [ANT_MATH_ABS] = "abs",
+  [ANT_MATH_CEIL] = "ceil",
+  [ANT_MATH_FLOOR] = "floor",
+  [ANT_MATH_ROUND] = "round",
+  [ANT_MATH_SIGN] = "sign",
+  [ANT_MATH_SQRT] = "sqrt",
+  [ANT_MATH_TRUNC] = "trunc",
+  [ANT_MATH_IMUL] = "imul",
+  [ANT_MATH_MAX] = "max",
+  [ANT_MATH_MIN] = "min",
+};
+
+double ant_math_ceil(double x) { return ceil(x); }
+double ant_math_floor(double x) { return floor(x); }
+double ant_math_sqrt(double x) { return sqrt(x); }
+double ant_math_trunc(double x) { return trunc(x); }
+
+double ant_math_round(double x) {
+  if (isnan(x) || isinf(x) || x == 0.0) return x;
+  if (x < 0.0 && x >= -0.5) return -0.0;
+  double r = floor(x);
+  return x - r >= 0.5 ? r + 1.0 : r;
+}
+
+double ant_math_sign(double x) {
+  if (x > 0) return 1.0;
+  if (x < 0) return -1.0;
+  return x;
+}
+
+double ant_math_imul(double a, double b) {
+  return (double)(int32_t)((uint32_t)js_to_int32(a) * (uint32_t)js_to_int32(b));
+}
+
+double ant_math_max(double a, double b) {
+  if (isnan(a) || isnan(b)) return JS_NAN;
+  if (b > a) return b;
+  if (b == 0.0 && a == 0.0 && !signbit(b) && signbit(a)) return b;
+  return a;
+}
+
+double ant_math_min(double a, double b) {
+  if (isnan(a) || isnan(b)) return JS_NAN;
+  if (b < a) return b;
+  if (b == 0.0 && a == 0.0 && signbit(b) && !signbit(a)) return b;
+  return a;
+}
 
 static ant_value_t builtin_Math_abs(ant_params_t) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
@@ -76,7 +126,7 @@ static ant_value_t builtin_Math_cbrt(ant_params_t) {
 static ant_value_t builtin_Math_ceil(ant_params_t) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
-  return tov(ceil(x));
+  return tov(ant_math_ceil(x));
 }
 
 static ant_value_t builtin_Math_clz32(ant_params_t) {
@@ -117,7 +167,7 @@ static ant_value_t builtin_Math_expm1(ant_params_t) {
 static ant_value_t builtin_Math_floor(ant_params_t) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
-  return tov(floor(x));
+  return tov(ant_math_floor(x));
 }
 
 static ant_value_t builtin_Math_fround(ant_params_t) {
@@ -142,9 +192,7 @@ static ant_value_t builtin_Math_hypot(ant_params_t) {
 
 static ant_value_t builtin_Math_imul(ant_params_t) {
   if (nargs < 2) return tov(0);
-  int32_t a = js_to_int32(js_to_number(js, args[0]));
-  int32_t b = js_to_int32(js_to_number(js, args[1]));
-  return tov((double)((int32_t)((uint32_t)a * (uint32_t)b)));
+  return tov(ant_math_imul(js_to_number(js, args[0]), js_to_number(js, args[1])));
 }
 
 static ant_value_t builtin_Math_log(ant_params_t) {
@@ -178,8 +226,7 @@ static ant_value_t builtin_Math_max(ant_params_t) {
   for (int i = 1; i < nargs; i++) {
     double v = js_to_number(js, args[i]);
     if (isnan(v)) return tov(JS_NAN);
-    if (v > max_val) { max_val = v; continue; }
-    if (v == 0.0 && max_val == 0.0 && !signbit(v) && signbit(max_val)) max_val = v;
+    max_val = ant_math_max(max_val, v);
   }
   return tov(max_val);
 }
@@ -193,17 +240,7 @@ static ant_value_t builtin_Math_min(ant_params_t) {
   for (int i = 1; i < nargs; i++) {
     double v = vtype(args[i]) == kTypeNumber ? tod(args[i]) : js_to_number(js, args[i]);
     if (isnan(v)) return tov(JS_NAN);
-    
-    if (v < min_val) {
-      min_val = v;
-      continue;
-    }
-    
-    if (v == 0.0 
-      && min_val == 0.0 
-      && signbit(v) 
-      && !signbit(min_val)
-    ) min_val = v;
+    min_val = ant_math_min(min_val, v);
   }
   
   return tov(min_val);
@@ -228,17 +265,14 @@ static ant_value_t builtin_Math_random(ant_params_t) {
 
 static ant_value_t builtin_Math_round(ant_params_t) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
-  if (isnan(x) || isinf(x) || x == 0.0) return tov(x);
-  if (x < 0.0 && x >= -0.5) return tov(-0.0);
-  return tov(floor(x + 0.5));
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(ant_math_round(x));
 }
 
 static ant_value_t builtin_Math_sign(ant_params_t) {
   double v = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(v)) return tov(JS_NAN);
-  if (v > 0) return tov(1.0);
-  if (v < 0) return tov(-1.0);
-  return tov(v);
+  return tov(ant_math_sign(v));
 }
 
 static ant_value_t builtin_Math_sin(ant_params_t) {
@@ -256,7 +290,7 @@ static ant_value_t builtin_Math_sinh(ant_params_t) {
 static ant_value_t builtin_Math_sqrt(ant_params_t) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
-  return tov(sqrt(x));
+  return tov(ant_math_sqrt(x));
 }
 
 static ant_value_t builtin_Math_tan(ant_params_t) {
@@ -274,7 +308,7 @@ static ant_value_t builtin_Math_tanh(ant_params_t) {
 static ant_value_t builtin_Math_trunc(ant_params_t) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
-  return tov(trunc(x));
+  return tov(ant_math_trunc(x));
 }
 
 void init_math_module(ant_t *js) {
@@ -327,6 +361,9 @@ void init_math_module(ant_t *js) {
   defmethod(js, math_obj, "tanh", 4, js_mkfun_arity(builtin_Math_tanh, 1));
   defmethod(js, math_obj, "trunc", 5, js_mkfun_arity(builtin_Math_trunc, 1));
   
+  for (int i = 0; i < ANT_MATH_INTRINSIC_COUNT; i++)
+    js->sym.math_fns[i] = js_get(js, math_obj, ant_math_intrinsic_names[i]);
+
   js_set_sym(js, math_obj, js->sym.toStringTag_sym, js_mkstr(js, "Math", 4));
   js_set_global_builtin(js, "Math", math_obj);
 }

@@ -103,6 +103,7 @@ struct ant_shape {
   shape_index_entry_t *index;
   uint32_t index_mask;
   bool jit_snapshot;
+  bool may_have_index_keys;
   uint64_t first_child_key;
   ant_shape_t *first_child;
   shape_child_entry_t *children;
@@ -422,7 +423,10 @@ static bool shape_add_key(
   if (type == ANT_SHAPE_KEY_SYMBOL) {
     prop->key.sym_off = sym_off;
     shape->descriptors->may_have_gc_refs = true;
-  } else prop->key.interned = interned;
+  } else {
+    prop->key.interned = interned;
+    if (interned[0] >= '0' && interned[0] <= '9') shape->may_have_index_keys = true;
+  }
 
   if (!shape_index_add(shape, key, slot)) {
     shape->count--;
@@ -497,6 +501,7 @@ static ant_shape_t *shape_copy_for_transition(const ant_shape_t *shape) {
   copy->ref_count = 1;
   copy->count = shape->count;
   copy->inobj_limit = shape->inobj_limit;
+  copy->may_have_index_keys = shape->may_have_index_keys;
   shape->descriptors->ref_count++;
   shape_link_descriptors(copy, shape->descriptors);
   return copy;
@@ -606,6 +611,7 @@ ant_shape_t *shape_clone_reserve(const ant_shape_t *shape, uint32_t extra) {
   copy->deleted_count = shape->deleted_count;
   copy->inobj_limit = shape_clamp_inobj_limit(shape->inobj_limit);
   copy->bulk_layout = shape->bulk_layout;
+  copy->may_have_index_keys = shape->may_have_index_keys;
 
   return copy;
 }
@@ -639,6 +645,11 @@ static_assert(
   offsetof(struct ant_shape, ref_count) == ANT_SHAPE_REF_COUNT_OFFSET &&
   sizeof(((struct ant_shape *)0)->ref_count) == 4,
   "compiled code updates shape reference counts at this offset"
+);
+
+static_assert(
+  offsetof(struct ant_shape, may_have_index_keys) == ANT_SHAPE_INDEX_KEYS_OFFSET,
+  "ant_shape_may_have_index_keys reads the flag at this offset"
 );
 
 void ant_shape_retain(ant_shape_t *shape) {

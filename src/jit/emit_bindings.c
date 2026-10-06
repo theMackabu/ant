@@ -171,6 +171,10 @@ void jit_emit_bindings(jit_compile_t *c) {
                                         MIR_new_int_op(c->ctx, (int64_t)c->bc_off)));
       jit_emit_throw_if_error(c, dst);
       if (gg_fast) MIR_append_insn(c->ctx, c->jit_func, gg_done);
+      if (c->vs.known_builtin && atom->len == 6 && memcmp(atom->str, "String", 6) == 0)
+        c->vs.known_builtin[c->vs.sp - 1] = JIT_BUILTIN_STRING;
+      else if (c->vs.known_builtin && atom->len == 4 && memcmp(atom->str, "Math", 4) == 0)
+        c->vs.known_builtin[c->vs.sp - 1] = JIT_BUILTIN_MATH;
       if (known_self_global) {
         c->vs.known_func[c->vs.sp - 1] = c->func;
         mir_emit_self_binding_guard_value_kept(

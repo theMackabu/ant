@@ -54,6 +54,7 @@ typedef struct jit_compile {
   MIR_item_t closure_proto;
   MIR_item_t close_upval_proto;
   MIR_item_t upval_barrier_proto;
+  MIR_item_t elem_barrier_proto;
   MIR_item_t adopt_open_upvalues_proto;
   MIR_item_t take_open_upvalues_proto;
   MIR_item_t take_open_upvalues_rebase_proto;
@@ -135,6 +136,11 @@ typedef struct jit_compile {
   MIR_item_t imp_promote_due;
   MIR_item_t imp_close_upval;
   MIR_item_t imp_upval_barrier;
+  MIR_item_t imp_elem_barrier;
+  MIR_item_t imp_number_to_string;
+  MIR_item_t math1_proto;
+  MIR_item_t math2_proto;
+  MIR_item_t imp_math[ANT_MATH_INTRINSIC_COUNT];
   MIR_item_t imp_adopt_open_upvalues;
   MIR_item_t imp_take_open_upvalues;
   MIR_item_t imp_take_open_upvalues_rebase;
@@ -242,6 +248,8 @@ typedef struct jit_compile {
   MIR_reg_t local_reg_limit;
   MIR_reg_t param_cache[JIT_PARAM_HOIST_CAP];
   MIR_reg_t param_d_cache[JIT_PARAM_HOIST_CAP];
+  MIR_reg_t param_num[JIT_PARAM_HOIST_CAP];
+  MIR_reg_t param_num_ok[JIT_PARAM_HOIST_CAP];
   MIR_reg_t hoisted_upvalue_cell;
   int hoisted_upvalue;
   ant_t *js;
@@ -268,6 +276,7 @@ typedef struct jit_compile {
   bool has_captured_params;
   bool has_captures;
   uint8_t *dnum_locals;
+  uint8_t *induction_locals;
   jit_integer_range_t *entry_integer_ranges;
   bool params_in_slotbuf;
   bool has_captured_slots;
@@ -301,6 +310,9 @@ typedef struct jit_compile {
   int sz;
   MIR_insn_t previous_insn;
   int integer_store;
+  MIR_reg_t cmp_bit;
+  MIR_reg_t cmp_value;
+  int cmp_end;
   MIR_reg_t integer_value;
   jit_integer_range_t integer_range;
 } jit_compile_t;
@@ -311,6 +323,9 @@ static inline bool jit_speculate_unseen_numeric(const jit_compile_t *c, uint8_t 
 
 void jit_emit_exit_ret(jit_compile_t *c, MIR_op_t ret_op);
 void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg);
+void jit_emit_element_barrier(
+    jit_compile_t *c, MIR_reg_t obj, MIR_reg_t index,
+    MIR_reg_t val, MIR_reg_t flags, MIR_label_t skip);
 void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type);
 bool jit_setup_frame(jit_compile_t *c);
 

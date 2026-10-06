@@ -31,7 +31,8 @@ for (const name of ['ChooseCount', 'ChooseNotCount', 'NegateCount', 'OrCount', '
   assert.doesNotMatch(object, /\bcall\b/, `objects and strings must bypass helpers: ${name}`);
   assert.match(object, /\band\s+\w+,\s*inl\d+_s\d+,\s*140737488355324/, 'strip cage and representation tags');
   assert.match(object, /\badd\s+\w+,\s*\w+,\s*cage_base/, 'decode the non-null string offset');
-  const numeric = module[0].slice(numericStart).match(/^L\d+:\s*\n([\s\S]*?)(?=\n\s*L\d+:)/)?.[1];
+  // the block may sit at the end of the function (cold-block layout)
+  const numeric = module[0].slice(numericStart).match(/^L\d+:\s*\n([\s\S]*?)(?=\n\s*(?:L\d+:|endfunc))/)?.[1];
   assert.ok(numeric, 'missing distinct numeric block');
   assert.doesNotMatch(numeric, /\bcall\b/, `numbers must bypass helpers: ${name}`);
   assert.match(numeric, /\blsh\s+\w+,\s*inl\d+_s\d+,\s*1/, 'handle either sign');

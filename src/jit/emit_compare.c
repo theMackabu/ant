@@ -1,6 +1,21 @@
 #include "compile.h"
 #include "silver/feedback.h"
 
+static void jit_emit_compare_bit(jit_compile_t *c, MIR_insn_code_t cmp, MIR_reg_t l, MIR_reg_t r, MIR_reg_t rd) {
+  char name[32];
+  snprintf(name, sizeof(name), "cmp_bit_%d", mir_next_reg_site(&c->reg_site_n));
+  MIR_reg_t bit = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, cmp, MIR_new_reg_op(c->ctx, bit),
+                               MIR_new_reg_op(c->ctx, l), MIR_new_reg_op(c->ctx, r)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_OR, MIR_new_reg_op(c->ctx, rd),
+                               MIR_new_uint_op(c->ctx, js_false), MIR_new_reg_op(c->ctx, bit)));
+  c->cmp_bit = bit;
+  c->cmp_value = rd;
+  c->cmp_end = c->bc_off + c->sz;
+}
+
 void jit_emit_compare(jit_compile_t *c) {
   switch (c->op) {
     case OP_LT: {
@@ -34,20 +49,7 @@ void jit_emit_compare(jit_compile_t *c) {
       } else if (fb_num_only && l_is_num && r_is_num) {
         MIR_reg_t fd_l = c->vs.d_regs[c->vs.sp - 1];
         MIR_reg_t fd_r = c->vs.d_regs[c->vs.sp];
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_DLT,
-                                     MIR_new_reg_op(c->ctx, c->r_bool),
-                                     MIR_new_reg_op(c->ctx, fd_l),
-                                     MIR_new_reg_op(c->ctx, fd_r)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV,
-                                     MIR_new_reg_op(c->ctx, c->r_tmp),
-                                     MIR_new_reg_op(c->ctx, c->r_bool)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_OR,
-                                     MIR_new_reg_op(c->ctx, rd),
-                                     MIR_new_uint_op(c->ctx, js_false),
-                                     MIR_new_reg_op(c->ctx, c->r_tmp)));
+        jit_emit_compare_bit(c, MIR_DLT, fd_l, fd_r, rd);
       } else if (fb_num_only && (l_is_num || r_is_num)) {
         MIR_label_t bail_direct = MIR_new_label(c->ctx);
         MIR_reg_t boxed_reg = l_is_num ? rr : rl;
@@ -57,20 +59,7 @@ void jit_emit_compare(jit_compile_t *c) {
                      c->vs.regs[boxed_idx], c->r_d_slot);
         MIR_reg_t fd_l = c->vs.d_regs[c->vs.sp - 1];
         MIR_reg_t fd_r = c->vs.d_regs[c->vs.sp];
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_DLT,
-                                     MIR_new_reg_op(c->ctx, c->r_bool),
-                                     MIR_new_reg_op(c->ctx, fd_l),
-                                     MIR_new_reg_op(c->ctx, fd_r)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV,
-                                     MIR_new_reg_op(c->ctx, c->r_tmp),
-                                     MIR_new_reg_op(c->ctx, c->r_bool)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_OR,
-                                     MIR_new_reg_op(c->ctx, rd),
-                                     MIR_new_uint_op(c->ctx, js_false),
-                                     MIR_new_reg_op(c->ctx, c->r_tmp)));
+        jit_emit_compare_bit(c, MIR_DLT, fd_l, fd_r, rd);
         MIR_label_t skip_bail = MIR_new_label(c->ctx);
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, skip_bail)));
@@ -91,20 +80,7 @@ void jit_emit_compare(jit_compile_t *c) {
         MIR_reg_t fd2 = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_D, d2);
         mir_i64_to_d(c->ctx, c->jit_func, fd1, rl, c->r_d_slot);
         mir_i64_to_d(c->ctx, c->jit_func, fd2, rr, c->r_d_slot);
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_DLT,
-                                     MIR_new_reg_op(c->ctx, c->r_bool),
-                                     MIR_new_reg_op(c->ctx, fd1),
-                                     MIR_new_reg_op(c->ctx, fd2)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV,
-                                     MIR_new_reg_op(c->ctx, c->r_tmp),
-                                     MIR_new_reg_op(c->ctx, c->r_bool)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_OR,
-                                     MIR_new_reg_op(c->ctx, rd),
-                                     MIR_new_uint_op(c->ctx, js_false),
-                                     MIR_new_reg_op(c->ctx, c->r_tmp)));
+        jit_emit_compare_bit(c, MIR_DLT, fd1, fd2, rd);
         MIR_label_t skip_bail = MIR_new_label(c->ctx);
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, skip_bail)));
@@ -190,20 +166,7 @@ void jit_emit_compare(jit_compile_t *c) {
       } else if (fb_num_only && l_is_num && r_is_num) {
         MIR_reg_t fd_l = c->vs.d_regs[c->vs.sp - 1];
         MIR_reg_t fd_r = c->vs.d_regs[c->vs.sp];
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_DLE,
-                                     MIR_new_reg_op(c->ctx, c->r_bool),
-                                     MIR_new_reg_op(c->ctx, fd_l),
-                                     MIR_new_reg_op(c->ctx, fd_r)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV,
-                                     MIR_new_reg_op(c->ctx, c->r_tmp),
-                                     MIR_new_reg_op(c->ctx, c->r_bool)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_OR,
-                                     MIR_new_reg_op(c->ctx, rd),
-                                     MIR_new_uint_op(c->ctx, js_false),
-                                     MIR_new_reg_op(c->ctx, c->r_tmp)));
+        jit_emit_compare_bit(c, MIR_DLE, fd_l, fd_r, rd);
       } else if (fb_num_only && (l_is_num || r_is_num)) {
         MIR_label_t bail_direct = MIR_new_label(c->ctx);
         MIR_reg_t boxed_reg = l_is_num ? rr : rl;
@@ -213,20 +176,7 @@ void jit_emit_compare(jit_compile_t *c) {
                      c->vs.regs[boxed_idx], c->r_d_slot);
         MIR_reg_t fd_l = c->vs.d_regs[c->vs.sp - 1];
         MIR_reg_t fd_r = c->vs.d_regs[c->vs.sp];
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_DLE,
-                                     MIR_new_reg_op(c->ctx, c->r_bool),
-                                     MIR_new_reg_op(c->ctx, fd_l),
-                                     MIR_new_reg_op(c->ctx, fd_r)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV,
-                                     MIR_new_reg_op(c->ctx, c->r_tmp),
-                                     MIR_new_reg_op(c->ctx, c->r_bool)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_OR,
-                                     MIR_new_reg_op(c->ctx, rd),
-                                     MIR_new_uint_op(c->ctx, js_false),
-                                     MIR_new_reg_op(c->ctx, c->r_tmp)));
+        jit_emit_compare_bit(c, MIR_DLE, fd_l, fd_r, rd);
         MIR_label_t skip_bail = MIR_new_label(c->ctx);
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, skip_bail)));
@@ -247,20 +197,7 @@ void jit_emit_compare(jit_compile_t *c) {
         MIR_reg_t fd2 = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_D, d2);
         mir_i64_to_d(c->ctx, c->jit_func, fd1, rl, c->r_d_slot);
         mir_i64_to_d(c->ctx, c->jit_func, fd2, rr, c->r_d_slot);
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_DLE,
-                                     MIR_new_reg_op(c->ctx, c->r_bool),
-                                     MIR_new_reg_op(c->ctx, fd1),
-                                     MIR_new_reg_op(c->ctx, fd2)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV,
-                                     MIR_new_reg_op(c->ctx, c->r_tmp),
-                                     MIR_new_reg_op(c->ctx, c->r_bool)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_OR,
-                                     MIR_new_reg_op(c->ctx, rd),
-                                     MIR_new_uint_op(c->ctx, js_false),
-                                     MIR_new_reg_op(c->ctx, c->r_tmp)));
+        jit_emit_compare_bit(c, MIR_DLE, fd1, fd2, rd);
         MIR_label_t skip_bail = MIR_new_label(c->ctx);
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, skip_bail)));
@@ -490,20 +427,7 @@ void jit_emit_compare(jit_compile_t *c) {
       } else if (fb_num_only && l_is_num && r_is_num) {
         MIR_reg_t fd_l = c->vs.d_regs[c->vs.sp - 1];
         MIR_reg_t fd_r = c->vs.d_regs[c->vs.sp];
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_DGT,
-                                     MIR_new_reg_op(c->ctx, c->r_bool),
-                                     MIR_new_reg_op(c->ctx, fd_l),
-                                     MIR_new_reg_op(c->ctx, fd_r)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV,
-                                     MIR_new_reg_op(c->ctx, c->r_tmp),
-                                     MIR_new_reg_op(c->ctx, c->r_bool)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_OR,
-                                     MIR_new_reg_op(c->ctx, rd),
-                                     MIR_new_uint_op(c->ctx, js_false),
-                                     MIR_new_reg_op(c->ctx, c->r_tmp)));
+        jit_emit_compare_bit(c, MIR_DGT, fd_l, fd_r, rd);
       } else if (fb_num_only && (l_is_num || r_is_num)) {
         MIR_label_t bail_direct = MIR_new_label(c->ctx);
         MIR_reg_t boxed_reg = l_is_num ? rr : rl;
@@ -513,20 +437,7 @@ void jit_emit_compare(jit_compile_t *c) {
                      c->vs.regs[boxed_idx], c->r_d_slot);
         MIR_reg_t fd_l = c->vs.d_regs[c->vs.sp - 1];
         MIR_reg_t fd_r = c->vs.d_regs[c->vs.sp];
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_DGT,
-                                     MIR_new_reg_op(c->ctx, c->r_bool),
-                                     MIR_new_reg_op(c->ctx, fd_l),
-                                     MIR_new_reg_op(c->ctx, fd_r)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV,
-                                     MIR_new_reg_op(c->ctx, c->r_tmp),
-                                     MIR_new_reg_op(c->ctx, c->r_bool)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_OR,
-                                     MIR_new_reg_op(c->ctx, rd),
-                                     MIR_new_uint_op(c->ctx, js_false),
-                                     MIR_new_reg_op(c->ctx, c->r_tmp)));
+        jit_emit_compare_bit(c, MIR_DGT, fd_l, fd_r, rd);
         MIR_label_t skip_bail = MIR_new_label(c->ctx);
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, skip_bail)));
@@ -612,20 +523,7 @@ void jit_emit_compare(jit_compile_t *c) {
       } else if (fb_num_only && l_is_num && r_is_num) {
         MIR_reg_t fd_l = c->vs.d_regs[c->vs.sp - 1];
         MIR_reg_t fd_r = c->vs.d_regs[c->vs.sp];
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_DGE,
-                                     MIR_new_reg_op(c->ctx, c->r_bool),
-                                     MIR_new_reg_op(c->ctx, fd_l),
-                                     MIR_new_reg_op(c->ctx, fd_r)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV,
-                                     MIR_new_reg_op(c->ctx, c->r_tmp),
-                                     MIR_new_reg_op(c->ctx, c->r_bool)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_OR,
-                                     MIR_new_reg_op(c->ctx, rd),
-                                     MIR_new_uint_op(c->ctx, js_false),
-                                     MIR_new_reg_op(c->ctx, c->r_tmp)));
+        jit_emit_compare_bit(c, MIR_DGE, fd_l, fd_r, rd);
       } else if (fb_num_only && (l_is_num || r_is_num)) {
         MIR_label_t bail_direct = MIR_new_label(c->ctx);
         MIR_reg_t boxed_reg = l_is_num ? rr : rl;
@@ -635,20 +533,7 @@ void jit_emit_compare(jit_compile_t *c) {
                      c->vs.regs[boxed_idx], c->r_d_slot);
         MIR_reg_t fd_l = c->vs.d_regs[c->vs.sp - 1];
         MIR_reg_t fd_r = c->vs.d_regs[c->vs.sp];
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_DGE,
-                                     MIR_new_reg_op(c->ctx, c->r_bool),
-                                     MIR_new_reg_op(c->ctx, fd_l),
-                                     MIR_new_reg_op(c->ctx, fd_r)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV,
-                                     MIR_new_reg_op(c->ctx, c->r_tmp),
-                                     MIR_new_reg_op(c->ctx, c->r_bool)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_OR,
-                                     MIR_new_reg_op(c->ctx, rd),
-                                     MIR_new_uint_op(c->ctx, js_false),
-                                     MIR_new_reg_op(c->ctx, c->r_tmp)));
+        jit_emit_compare_bit(c, MIR_DGE, fd_l, fd_r, rd);
         MIR_label_t skip_bail = MIR_new_label(c->ctx);
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, skip_bail)));

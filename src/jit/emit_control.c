@@ -69,13 +69,32 @@ void jit_emit_control(jit_compile_t *c) {
     case OP_JMP_TRUE8: {
       bool cond_known_bool = c->vs.known_bool && c->vs.sp > 0 &&
                              c->vs.known_bool[c->vs.sp - 1];
-      vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
       bool is_peek = (c->op == OP_JMP_FALSE_PEEK || c->op == OP_JMP_TRUE_PEEK);
+      bool fused = !is_peek && c->cmp_value && c->cmp_end == c->bc_off &&
+                   c->vs.sp > 0 && c->vs.regs[c->vs.sp - 1] == c->cmp_value;
+      c->cmp_value = 0;
+      vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
       MIR_reg_t cond = is_peek ? vstack_top(&c->vs) : vstack_pop(&c->vs);
       bool short_op = (c->op == OP_JMP_FALSE8 || c->op == OP_JMP_TRUE8);
       bool is_false_branch = (c->op == OP_JMP_FALSE || c->op == OP_JMP_FALSE8 || c->op == OP_JMP_FALSE_PEEK);
       int target = c->bc_off + c->sz + (short_op ? (int8_t)sv_get_i8(c->ip + 1) : sv_get_i32(c->ip + 1));
       MIR_label_t lbl = label_for_branch(c->ctx, &c->lm, target, c->vs.sp);
+      if (fused) {
+        if (is_false_branch) {
+          MIR_label_t taken = MIR_new_label(c->ctx);
+          MIR_append_insn(c->ctx, c->jit_func,
+                          MIR_new_insn(c->ctx, MIR_BT, MIR_new_label_op(c->ctx, taken),
+                                       MIR_new_reg_op(c->ctx, c->cmp_bit)));
+          MIR_append_insn(c->ctx, c->jit_func,
+                          MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, lbl)));
+          MIR_append_insn(c->ctx, c->jit_func, taken);
+        } else {
+          MIR_append_insn(c->ctx, c->jit_func,
+                          MIR_new_insn(c->ctx, MIR_BT, MIR_new_label_op(c->ctx, lbl),
+                                       MIR_new_reg_op(c->ctx, c->cmp_bit)));
+        }
+        break;
+      }
       if (cond_known_bool) {
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_BEQ,

@@ -332,6 +332,15 @@ ant_value_t jit_helper_put_elem_strict(
   ant_value_t obj, ant_value_t key, ant_value_t val
 );
 
+ant_value_t jit_helper_number_to_string(
+  sv_vm_t *vm, ant_t *js, ant_value_t value
+);
+
+void jit_helper_elem_barrier(
+  ant_t *js, ant_value_t arr,
+  uint64_t idx, ant_value_t val
+);
+
 ant_value_t jit_helper_put_global(
   sv_vm_t *vm, ant_t *js, ant_value_t val,
   const char *str, uint32_t len, int is_strict

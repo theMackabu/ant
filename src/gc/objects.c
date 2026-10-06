@@ -1136,6 +1136,9 @@ static void gc_mark_roots(ant_t *js) {
 
   for (size_t i = 0; i < ANT_PRIMORDIAL_COUNT; i++)
     gc_mark_value(js, js->primordial_values[i]);
+    
+  for (int i = 0; i < ANT_MATH_INTRINSIC_COUNT; i++) 
+    gc_mark_value(js, js->sym.math_fns[i]);
 
   gc_mark_value(js, js->modules.cjs.cache);
   gc_mark_value(js, js->modules.cjs.parent);
@@ -1157,6 +1160,9 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_value(js, js->sym.bigint_proto);
   gc_mark_value(js, js->sym.symbol_proto);
   gc_mark_value(js, js->sym.array_values_fn);
+  gc_mark_value(js, js->sym.array_push_fn);
+  gc_mark_value(js, js->sym.string_ctor);
+  gc_mark_value(js, js->sym.number_to_string_fn);
   gc_mark_value(js, js->sym.iterator_proto);
   gc_mark_value(js, js->sym.array_iterator_proto);
   gc_mark_value(js, js->sym.string_iterator_proto);

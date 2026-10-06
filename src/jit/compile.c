@@ -92,6 +92,52 @@ static void jit_unroll_numeric_loops(jit_compile_t *c) {
   }
 }
 
+static bool jit_insn_ends_flow(MIR_insn_t insn) {
+  switch (insn->code) {
+    case MIR_JMP: case MIR_JMPI: case MIR_SWITCH: case MIR_RET: case MIR_JRET:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static void jit_sink_cold_blocks(jit_compile_t *c) {
+  enum { SCAN_LIMIT = 512 };
+  DLIST(MIR_insn_t) *insns = &c->jit_func->u.func->insns;
+  MIR_insn_t tail = DLIST_TAIL(MIR_insn_t, *insns);
+  if (!tail || !jit_insn_ends_flow(tail)) return;
+  MIR_insn_t last = tail;
+
+  for (MIR_insn_t jump = DLIST_HEAD(MIR_insn_t, *insns); jump && jump != last;) {
+    MIR_insn_t first = DLIST_NEXT(MIR_insn_t, jump);
+    if (jump->code != MIR_JMP || jump->ops[0].mode != MIR_OP_LABEL ||
+        !first || first->code != MIR_LABEL) {
+      jump = first;
+      continue;
+    }
+    MIR_insn_t target = jump->ops[0].u.label, end = first;
+    int n = 0;
+    while (end && end != target && end != last && n++ < SCAN_LIMIT)
+      end = DLIST_NEXT(MIR_insn_t, end);
+    MIR_insn_t block_last = end == target ? DLIST_PREV(MIR_insn_t, target) : NULL;
+    // `bt body, cond; jmp exit; body:` is an inverted branch, not a slow path
+    MIR_insn_t branch = DLIST_PREV(MIR_insn_t, jump);
+    bool inverted = branch && MIR_branch_code_p(branch->code) && branch->ops[0].u.label == first;
+    if (!block_last || block_last == jump || inverted || !jit_insn_ends_flow(block_last)) {
+      jump = first;
+      continue;
+    }
+    for (MIR_insn_t insn = first, next; ; insn = next) {
+      next = DLIST_NEXT(MIR_insn_t, insn);
+      DLIST_REMOVE(MIR_insn_t, *insns, insn);
+      DLIST_APPEND(MIR_insn_t, *insns, insn);
+      if (insn == block_last) break;
+    }
+    MIR_remove_insn(c->ctx, c->jit_func, jump);
+    jump = target;
+  }
+}
+
 sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure) {
   return sv_jit_compile_tier(js, func, hint_closure, SV_JIT_TIER_AUTO);
 }
@@ -163,6 +209,7 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
     for (int i = 0; i < c->lm.count; i++) {
       if (c->lm.entries[i].bc_off == c->bc_off) {
         vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
+        c->cmp_value = 0;
         c->element_available = false;
         c->previous_ip = NULL;
         if (c->integer_locals) {
@@ -180,6 +227,8 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
           memset(c->vs.has_const, 0, (size_t)c->vs.max * sizeof(bool));
         if (c->vs.known_bool)
           memset(c->vs.known_bool, 0, (size_t)c->vs.max);
+        if (c->vs.known_builtin)
+          memset(c->vs.known_builtin, 0, (size_t)c->vs.max);
         if (c->known_func_locals)
           memset(c->known_func_locals, 0,
                  (size_t)c->n_locals * sizeof(sv_func_t *));
@@ -454,6 +503,7 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
   if (c->needs_promote) jit_emit_resume_tramp(c, &c->promote_ctx, c->imp_promote_resume, "promote_res");
 
   if (c->ctx == c->jc->ctx_hot) jit_unroll_numeric_loops(c);
+  jit_sink_cold_blocks(c);
   MIR_finish_func(c->ctx);
   MIR_finish_module(c->ctx);
   if (sv_dump_jit_unlikely) MIR_output_module(c->ctx, stderr, c->mod);
@@ -465,6 +515,7 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
   free(c->vs.known_const);
   free(c->vs.has_const);
   free(c->vs.known_bool);
+  free(c->vs.known_builtin);
   free(c->vs.integer_range);
   free(c->local_regs);
   free(c->integer_locals);
@@ -473,6 +524,7 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
   free(c->entry_integer_ranges);
   free(c->entry_integer_regs);
   free(c->dnum_locals);
+  free(c->induction_locals);
   free(c->local_d_regs);
   free(c->known_func_locals);
   free(c->known_type_locals);

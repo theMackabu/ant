@@ -9,18 +9,20 @@ static void jit_discard_setup_module(jit_compile_t *c) {
   MIR_remove_module(c->ctx, c->mod);
 }
 
-static bool jit_numeric_param_use(sv_func_t *func, uint8_t *ip, uint8_t *end) {
+bool jit_numeric_param_use(sv_func_t *func, uint8_t *ip, uint8_t *end) {
   if (ip >= end) return false;
   sv_op_t op = (sv_op_t)*ip;
+  bool other_operand = false;
   if (op == OP_CONST_I8 || op == OP_CONST || op == OP_CONST8 ||
       op == OP_GET_ARG || op == OP_GET_LOCAL || op == OP_GET_LOCAL8) {
     ip += sv_op_size[op];
     if (ip >= end) return false;
     op = (sv_op_t)*ip;
+    other_operand = true;
   }
   switch (op) {
     case OP_INC: case OP_DEC: case OP_POST_INC: case OP_POST_DEC:
-      return true;
+      return !other_operand;
     case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
     case OP_LT: case OP_LE: case OP_GT: case OP_GE:
     case OP_BAND: case OP_BOR: case OP_BXOR:
@@ -182,9 +184,10 @@ bool jit_setup_frame(jit_compile_t *c) {
   c->vs.known_const = calloc((size_t)c->vs.max, sizeof(uint64_t));
   c->vs.has_const = calloc((size_t)c->vs.max, sizeof(bool));
   c->vs.known_bool = calloc((size_t)c->vs.max, sizeof(uint8_t));
+  c->vs.known_builtin = calloc((size_t)c->vs.max, sizeof(uint8_t));
   c->vs.integer_range = calloc((size_t)c->vs.max, sizeof(jit_integer_range_t));
 
-  if (!c->vs.regs || !c->vs.known_func || !c->vs.d_regs || !c->vs.slot_type || !c->vs.known_const || !c->vs.has_const || !c->vs.known_bool || !c->vs.integer_range) {
+  if (!c->vs.regs || !c->vs.known_func || !c->vs.d_regs || !c->vs.slot_type || !c->vs.known_const || !c->vs.has_const || !c->vs.known_bool || !c->vs.known_builtin || !c->vs.integer_range) {
     free(c->vs.regs);
     free(c->vs.known_func);
     free(c->vs.d_regs);
@@ -192,6 +195,7 @@ bool jit_setup_frame(jit_compile_t *c) {
     free(c->vs.known_const);
     free(c->vs.has_const);
     free(c->vs.known_bool);
+    free(c->vs.known_builtin);
     free(c->vs.integer_range);
 
     jit_discard_setup_module(c);
@@ -230,6 +234,7 @@ bool jit_setup_frame(jit_compile_t *c) {
       free(c->vs.known_const);
       free(c->vs.has_const);
       free(c->vs.known_bool);
+      free(c->vs.known_builtin);
       free(c->vs.integer_range);
       free(c->local_regs);
       free(c->local_d_regs);
@@ -344,6 +349,9 @@ bool jit_setup_frame(jit_compile_t *c) {
       .imp_shr = c->imp_shr,
       .imp_ushr = c->imp_ushr,
       .self_proto = c->self_proto,
+      .math1_proto = c->math1_proto,
+      .math2_proto = c->math2_proto,
+      .imp_math = c->imp_math,
       .r_args_buf = c->r_args_buf,
   };
 
@@ -471,6 +479,16 @@ bool jit_setup_frame(jit_compile_t *c) {
       char name[48];
       snprintf(name, sizeof(name), "entry_integer_%d", i);
       c->entry_integer_regs[i] = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+    }
+  }
+  c->induction_locals = NULL;
+  if (c->dnum_locals && !c->func->has_dynamic_eval) {
+    c->induction_locals = calloc((size_t)c->n_locals, 1);
+    if (c->induction_locals) {
+      jit_induction_locals(c->func, c->induction_locals, c->n_locals, c->param_count);
+      for (int i = 0; i < c->n_locals; i++)
+        if (!c->dnum_locals[i] || (c->entry_integer_regs && c->entry_integer_regs[i]))
+          c->induction_locals[i] = 0;
     }
   }
   c->params_in_slotbuf = c->writes_params || c->has_captured_params;
@@ -644,6 +662,8 @@ bool jit_setup_frame(jit_compile_t *c) {
   scan_osr_entries(c->func, &c->osr_map);
   memset(c->param_cache, 0, sizeof(c->param_cache));
   memset(c->param_d_cache, 0, sizeof(c->param_d_cache));
+  memset(c->param_num, 0, sizeof(c->param_num));
+  memset(c->param_num_ok, 0, sizeof(c->param_num_ok));
   {
     uint8_t read_mask = 0, written_mask = 0, numeric_mask = 0;
     uint8_t *pscan = c->func->code, *pend = c->func->code + c->func->code_len;
@@ -707,6 +727,20 @@ bool jit_setup_frame(jit_compile_t *c) {
                                    MIR_new_mem_op(c->ctx, MIR_JSVAL,
                                                   (MIR_disp_t)(i * (int)sizeof(ant_value_t)), c->r_args, 0, 1)));
       MIR_append_insn(c->ctx, c->jit_func, done);
+    }
+    if (!c->writes_params && c->needs_bailout) {
+      for (int i = 0; i < c->param_count && i < JIT_PARAM_HOIST_CAP; i++) {
+        if (!c->param_cache[i] || !(numeric_mask & (1u << i))) continue;
+        char name[24];
+        snprintf(name, sizeof(name), "parg_num%d", i);
+        c->param_num[i] = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_D, name);
+        snprintf(name, sizeof(name), "parg_num_ok%d", i);
+        c->param_num_ok[i] = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_ULE,
+            MIR_new_reg_op(c->ctx, c->param_num_ok[i]), MIR_new_reg_op(c->ctx, c->param_cache[i]),
+            MIR_new_uint_op(c->ctx, NANBOX_PREFIX)));
+        mir_i64_to_d(c->ctx, c->jit_func, c->param_num[i], c->param_cache[i], c->r_d_slot);
+      }
     }
     if (c->writes_params && !c->cold_tier && !c->feat.needs_tco_args) {
       MIR_label_t bad_type = MIR_new_label(c->ctx);

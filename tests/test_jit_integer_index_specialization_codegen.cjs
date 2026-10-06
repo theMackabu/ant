@@ -19,7 +19,10 @@ for (const name of ['read', 'write', 'unsignedRead', 'unsignedWrite']) {
   assert.ok(indexGuard, 'missing integer index guard for ' + name);
   const bailoutStart = mirModule[0].indexOf('\n' + indexGuard[3] + ':', indexGuard.index);
   assert.ok(bailoutStart > indexGuard.index, 'missing index bailout for ' + name);
-  const fastPath = mirModule[0].slice(indexGuard.index, bailoutStart);
+  // slow paths are laid out after the function's last return
+  const returnAt = mirModule[0].slice(indexGuard.index).search(/\n\s*ret\b/);
+  const fastEnd = returnAt < 0 ? bailoutStart : Math.min(bailoutStart, indexGuard.index + returnAt);
+  const fastPath = mirModule[0].slice(indexGuard.index, fastEnd);
   assert.doesNotMatch(fastPath, new RegExp('\\bi2d\\s+\\w+,\\s*' + indexGuard[2] + '\\b'),
     'box the integer key only on bailout for ' + name);
 }

@@ -199,6 +199,7 @@ static void *pool_bucket_alloc_fast(ant_pool_bucket_t *bucket, size_t class_size
   }
 
   if (!bucket->current || !bucket->cursor || bucket->cursor + bucket->slot_stride > bucket->end) {
+  bucket->blocks_taken++;
   if (bucket->free_head) {
     ant_pool_block_t *reuse = bucket->free_head;
     bucket->free_head = pool_free_next(reuse);

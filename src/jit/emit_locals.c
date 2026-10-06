@@ -1,6 +1,59 @@
 #include "compile.h"
 #include "silver/feedback.h"
 
+static void jit_emit_numeric_local(jit_compile_t *c, uint8_t idx, MIR_reg_t dst) {
+  MIR_label_t not_num = MIR_new_label(c->ctx);
+  MIR_label_t done = MIR_new_label(c->ctx);
+  mir_emit_is_num_guard(c->ctx, c->jit_func, c->r_bool, c->local_regs[idx], not_num);
+  mir_i64_to_d(c->ctx, c->jit_func, dst, c->local_regs[idx], c->r_d_slot);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, done)));
+  MIR_append_insn(c->ctx, c->jit_func, not_num);
+  mir_emit_bailout_jump_typed(c->ctx, c->jit_func, c->bc_off, c->vs.sp,
+      &c->bailout_ctx, -1, SLOT_BOXED, -1, SLOT_BOXED);
+  MIR_append_insn(c->ctx, c->jit_func, done);
+}
+
+static bool jit_integer_consumer(jit_compile_t *c, bool nonneg) {
+  uint8_t *ip = c->ip + c->sz;
+  for (int pushes = 0; ip < c->end; pushes++) {
+    sv_op_t op = (sv_op_t)*ip;
+    switch (op) {
+      case OP_BAND: case OP_BOR: case OP_BXOR:
+      case OP_SHL: case OP_SHR: case OP_USHR:
+        return true;
+      case OP_GET_ELEM: case OP_GET_ELEM2:
+        return pushes == 0;
+      case OP_PUT_ELEM: case OP_INSERT3:
+        return pushes == 1;
+      case OP_MOD:
+        return nonneg && pushes == 1;
+      case OP_CONST_I8: case OP_CONST: case OP_CONST8:
+      case OP_GET_LOCAL: case OP_GET_LOCAL8: case OP_GET_ARG:
+        if (pushes > 0) return false;
+        ip += sv_op_size[op];
+        break;
+      default:
+        return false;
+    }
+  }
+  return false;
+}
+
+static void jit_derive_induction_shadow(jit_compile_t *c, int idx) {
+  if (!c->induction_locals || !c->induction_locals[idx] || !c->integer_locals ||
+      c->integer_locals[idx] ||
+      !jit_integer_consumer(c, c->induction_locals[idx] == JIT_INDUCTION_NONNEG)) return;
+  char name[48];
+  snprintf(name, sizeof(name), "induction_%d", c->integer_local_site++);
+  MIR_reg_t shadow = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_D2I,
+      MIR_new_reg_op(c->ctx, shadow), MIR_new_reg_op(c->ctx, c->local_d_regs[idx])));
+  c->integer_locals[idx] = shadow;
+  c->integer_local_ranges[idx] = (jit_integer_range_t){
+      .min = c->induction_locals[idx] == JIT_INDUCTION_NONNEG ? 0 : -(INT64_C(1) << 53),
+      .max = INT64_C(1) << 53, .known = true};
+}
+
 void jit_emit_locals(jit_compile_t *c) {
   switch (c->op) {
     case OP_DEC_LOCAL: {
@@ -23,7 +76,7 @@ void jit_emit_locals(jit_compile_t *c) {
                                      MIR_new_reg_op(c->ctx, fd1),
                                      MIR_new_reg_op(c->ctx, c->local_d_regs[idx])));
       else
-        mir_i64_to_d(c->ctx, c->jit_func, fd1, c->local_regs[idx], c->r_d_slot);
+        jit_emit_numeric_local(c, idx, fd1);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_DSUB,
                                    MIR_new_reg_op(c->ctx, fd2),
@@ -167,6 +220,23 @@ void jit_emit_locals(jit_compile_t *c) {
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_DMOV,
             MIR_new_reg_op(c->ctx, c->vs.d_regs[c->vs.sp - 1]),
             MIR_new_reg_op(c->ctx, c->param_d_cache[idx])));
+        c->vs.slot_type[c->vs.sp - 1] = SLOT_NUM;
+        break;
+      }
+      if (idx < JIT_PARAM_HOIST_CAP && c->param_num_ok[idx] &&
+          jit_numeric_param_use(c->func, c->ip + c->sz, c->end)) {
+        MIR_label_t not_num = MIR_new_label(c->ctx);
+        MIR_label_t done = MIR_new_label(c->ctx);
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BF,
+            MIR_new_label_op(c->ctx, not_num), MIR_new_reg_op(c->ctx, c->param_num_ok[idx])));
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_DMOV,
+            MIR_new_reg_op(c->ctx, c->vs.d_regs[c->vs.sp - 1]),
+            MIR_new_reg_op(c->ctx, c->param_num[idx])));
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, done)));
+        MIR_append_insn(c->ctx, c->jit_func, not_num);
+        mir_emit_bailout_jump_typed(c->ctx, c->jit_func, c->bc_off, c->vs.sp - 1,
+            &c->bailout_ctx, -1, SLOT_BOXED, -1, SLOT_BOXED);
+        MIR_append_insn(c->ctx, c->jit_func, done);
         c->vs.slot_type[c->vs.sp - 1] = SLOT_NUM;
         break;
       }
@@ -324,6 +394,7 @@ void jit_emit_locals(jit_compile_t *c) {
         c->ok = false;
         break;
       }
+      jit_derive_induction_shadow(c, idx);
       if (c->integer_locals && c->integer_locals[idx]) {
         MIR_reg_t dst = vstack_push(&c->vs);
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, dst), MIR_new_reg_op(c->ctx, c->integer_locals[idx])));
@@ -367,6 +438,7 @@ void jit_emit_locals(jit_compile_t *c) {
         c->ok = false;
         break;
       }
+      jit_derive_induction_shadow(c, idx);
       if (c->integer_locals && c->integer_locals[idx]) {
         MIR_reg_t dst = vstack_push(&c->vs);
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, dst), MIR_new_reg_op(c->ctx, c->integer_locals[idx])));
@@ -683,7 +755,7 @@ void jit_emit_locals(jit_compile_t *c) {
                                      MIR_new_reg_op(c->ctx, fd1),
                                      MIR_new_reg_op(c->ctx, c->local_d_regs[idx])));
       else
-        mir_i64_to_d(c->ctx, c->jit_func, fd1, c->local_regs[idx], c->r_d_slot);
+        jit_emit_numeric_local(c, idx, fd1);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_DADD,
                                    MIR_new_reg_op(c->ctx, fd2),

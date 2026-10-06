@@ -89,6 +89,17 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_promote_due);
   LOAD_EXT(jit_helper_close_upval);
   LOAD_EXT(jit_helper_upval_barrier);
+  LOAD_EXT(jit_helper_elem_barrier);
+  LOAD_EXT(jit_helper_number_to_string);
+  LOAD_EXT(ant_math_ceil);
+  LOAD_EXT(ant_math_floor);
+  LOAD_EXT(ant_math_round);
+  LOAD_EXT(ant_math_sign);
+  LOAD_EXT(ant_math_sqrt);
+  LOAD_EXT(ant_math_trunc);
+  LOAD_EXT(ant_math_imul);
+  LOAD_EXT(ant_math_max);
+  LOAD_EXT(ant_math_min);
   LOAD_EXT(jit_helper_adopt_open_upvalues);
   LOAD_EXT(jit_helper_take_open_upvalues);
   LOAD_EXT(jit_helper_take_open_upvalues_rebase);

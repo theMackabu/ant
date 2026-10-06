@@ -61,6 +61,141 @@ static void jit_emit_forward_arguments_call(jit_compile_t *c, bool is_tail) {
   if (is_tail) jit_emit_exit_ret(c, MIR_new_reg_op(c->ctx, result));
 }
 
+static MIR_label_t jit_emit_array_push_fastpath(jit_compile_t *c) {
+  MIR_reg_t recv = c->vs.regs[c->vs.sp - 3];
+  MIR_reg_t fn = c->vs.regs[c->vs.sp - 2];
+  MIR_reg_t val = c->vs.regs[c->vs.sp - 1];
+  int site = mir_next_reg_site(&c->reg_site_n);
+  char name[48];
+  snprintf(name, sizeof(name), "push_ptr_%d", site);
+  MIR_reg_t ptr = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+  snprintf(name, sizeof(name), "push_flags_%d", site);
+  MIR_reg_t flags = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+  snprintf(name, sizeof(name), "push_data_%d", site);
+  MIR_reg_t data = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+  snprintf(name, sizeof(name), "push_len_%d", site);
+  MIR_reg_t len = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+  snprintf(name, sizeof(name), "push_d_%d", site);
+  MIR_reg_t length_d = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_D, name);
+  MIR_label_t slow = MIR_new_label(c->ctx);
+  MIR_label_t stored = MIR_new_label(c->ctx);
+  MIR_label_t done = MIR_new_label(c->ctx);
+
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_bool),
+      MIR_new_mem_op(c->ctx, MIR_JSVAL, (MIR_disp_t)offsetof(ant_t, sym.array_push_fn), c->r_js, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, slow),
+      MIR_new_reg_op(c->ctx, fn), MIR_new_reg_op(c->ctx, c->r_bool)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_URSH, MIR_new_reg_op(c->ctx, c->r_bool),
+      MIR_new_reg_op(c->ctx, recv), MIR_new_uint_op(c->ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, slow),
+      MIR_new_reg_op(c->ctx, c->r_bool), MIR_new_uint_op(c->ctx, NANBOX_TARR_TAG)));
+  mir_emit_decode_ref(c->ctx, c->jit_func, ptr, recv);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, flags),
+      MIR_new_mem_op(c->ctx, MIR_T_U16, (MIR_disp_t)offsetof(ant_object_t, flags), ptr, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_AND, MIR_new_reg_op(c->ctx, c->r_bool),
+      MIR_new_reg_op(c->ctx, flags),
+      MIR_new_uint_op(c->ctx, ANT_OBJECT_FLAG_EXOTIC | ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, slow),
+      MIR_new_reg_op(c->ctx, c->r_bool),
+      MIR_new_uint_op(c->ctx, ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, data),
+      MIR_new_mem_op(c->ctx, MIR_T_P, (MIR_disp_t)offsetof(ant_object_t, u.array.data), ptr, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, slow),
+      MIR_new_reg_op(c->ctx, data), MIR_new_int_op(c->ctx, 0)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, len),
+      MIR_new_mem_op(c->ctx, MIR_T_U32, (MIR_disp_t)offsetof(ant_object_t, u.array.len), ptr, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_bool),
+      MIR_new_mem_op(c->ctx, MIR_T_U32, (MIR_disp_t)offsetof(ant_object_t, u.array.cap), ptr, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_UBGE, MIR_new_label_op(c->ctx, slow),
+      MIR_new_reg_op(c->ctx, len), MIR_new_reg_op(c->ctx, c->r_bool)));
+  mir_emit_array_add_guard(c->ctx, c->jit_func, c->r_js, ptr, flags, slow, site);
+
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+      MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, data, len, sizeof(ant_value_t)), MIR_new_reg_op(c->ctx, val)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_ADD, MIR_new_reg_op(c->ctx, c->r_bool),
+      MIR_new_reg_op(c->ctx, len), MIR_new_int_op(c->ctx, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+      MIR_new_mem_op(c->ctx, MIR_T_U32, (MIR_disp_t)offsetof(ant_object_t, u.array.len), ptr, 0, 1),
+      MIR_new_reg_op(c->ctx, c->r_bool)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_OR, MIR_new_reg_op(c->ctx, flags),
+      MIR_new_reg_op(c->ctx, flags), MIR_new_uint_op(c->ctx, ANT_OBJECT_FLAG_MAY_HAVE_DENSE_ELEMENTS)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+      MIR_new_mem_op(c->ctx, MIR_T_U16, (MIR_disp_t)offsetof(ant_object_t, flags), ptr, 0, 1),
+      MIR_new_reg_op(c->ctx, flags)));
+  jit_emit_element_barrier(c, recv, len, val, flags, stored);
+  MIR_append_insn(c->ctx, c->jit_func, stored);
+
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_ADD, MIR_new_reg_op(c->ctx, len),
+      MIR_new_reg_op(c->ctx, len), MIR_new_int_op(c->ctx, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_UI2D, MIR_new_reg_op(c->ctx, length_d),
+      MIR_new_reg_op(c->ctx, len)));
+  mir_d_to_i64_non_nan(c->ctx, c->jit_func, recv, length_d, c->r_d_slot);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, done)));
+  MIR_append_insn(c->ctx, c->jit_func, slow);
+  return done;
+}
+
+// n.toString() on a number, with Number.prototype.toString, formats it
+// without the call
+static MIR_label_t jit_emit_number_to_string_fastpath(jit_compile_t *c) {
+  MIR_reg_t recv = c->vs.regs[c->vs.sp - 2];
+  MIR_reg_t fn = c->vs.regs[c->vs.sp - 1];
+  MIR_label_t slow = MIR_new_label(c->ctx);
+  MIR_label_t done = MIR_new_label(c->ctx);
+
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_bool),
+      MIR_new_mem_op(c->ctx, MIR_JSVAL, (MIR_disp_t)offsetof(ant_t, sym.number_to_string_fn), c->r_js, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, slow),
+      MIR_new_reg_op(c->ctx, fn), MIR_new_reg_op(c->ctx, c->r_bool)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_UBGT, MIR_new_label_op(c->ctx, slow),
+      MIR_new_reg_op(c->ctx, recv), MIR_new_uint_op(c->ctx, NANBOX_PREFIX)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_call_insn(c->ctx, 6,
+                                    MIR_new_ref_op(c->ctx, c->helper1_proto),
+                                    MIR_new_ref_op(c->ctx, c->imp_number_to_string),
+                                    MIR_new_reg_op(c->ctx, recv),
+                                    MIR_new_reg_op(c->ctx, c->r_vm),
+                                    MIR_new_reg_op(c->ctx, c->r_js),
+                                    MIR_new_reg_op(c->ctx, recv)));
+  jit_emit_throw_if_error(c, recv);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, done)));
+  MIR_append_insn(c->ctx, c->jit_func, slow);
+  return done;
+}
+
+static MIR_label_t jit_emit_math_fastpath(jit_compile_t *c, ant_math_intrinsic_t kind, uint16_t call_argc) {
+  if (call_argc != (kind >= ANT_MATH_FIRST_BINARY ? 2 : 1)) return NULL;
+  return mir_emit_math_call(c->ctx, c->jit_func, &(jit_math_call_t){
+    .kind = kind,
+    .result = c->vs.regs[c->vs.sp - call_argc - 2],
+    .callee = c->vs.regs[c->vs.sp - call_argc - 1],
+    .a = c->vs.regs[c->vs.sp - call_argc],
+    .b = call_argc == 2 ? c->vs.regs[c->vs.sp - 1] : 0,
+    .r_js = c->r_js,
+    .r_d_slot = c->r_d_slot,
+    .scratch = c->r_bool,
+    .math1_proto = c->math1_proto,
+    .math2_proto = c->math2_proto,
+    .imp_math = c->imp_math,
+    .site = mir_next_reg_site(&c->reg_site_n),
+  });
+}
+
+static MIR_label_t jit_emit_builtin_method_fastpath(jit_compile_t *c, uint16_t call_argc) {
+  if (!c->vs.known_builtin) return NULL;
+  uint8_t known = c->vs.known_builtin[c->vs.sp - (int)call_argc - 1];
+  if (known >= JIT_BUILTIN_MATH_FN)
+    return jit_emit_math_fastpath(c, (ant_math_intrinsic_t)(known - JIT_BUILTIN_MATH_FN), call_argc);
+  switch (known) {
+    case JIT_BUILTIN_ARRAY_PUSH:
+      return call_argc == 1 ? jit_emit_array_push_fastpath(c) : NULL;
+    case JIT_BUILTIN_NUMBER_TO_STRING:
+      return call_argc == 0 ? jit_emit_number_to_string_fastpath(c) : NULL;
+    default:
+      return NULL;
+  }
+}
+
 void jit_emit_methods(jit_compile_t *c) {
   switch (c->op) {
     case OP_CALL_SUPER: {
@@ -144,6 +279,7 @@ void jit_emit_methods(jit_compile_t *c) {
         break;
       }
 
+      MIR_label_t builtin_done = jit_emit_builtin_method_fastpath(c, call_argc);
       MIR_label_t cm_devirt_slow = NULL;
       MIR_label_t cm_devirt_join = NULL;
 
@@ -484,6 +620,10 @@ void jit_emit_methods(jit_compile_t *c) {
         MIR_reg_t r_join_res = c->vs.regs[c->vs.sp - 1];
         if (is_tail) jit_emit_exit_ret(c, MIR_new_reg_op(c->ctx, r_join_res));
         else jit_emit_throw_if_error(c, r_join_res);
+      }
+      if (builtin_done) {
+        MIR_append_insn(c->ctx, c->jit_func, builtin_done);
+        if (is_tail) jit_emit_exit_ret(c, MIR_new_reg_op(c->ctx, c->vs.regs[c->vs.sp - 1]));
       }
       break;
     }

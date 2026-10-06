@@ -1845,8 +1845,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   
   L_POST_INC:   { VM_CHECK(sv_op_post_update(vm, js, true));    NEXT(OP_POST_INC); }
   L_POST_DEC:   { VM_CHECK(sv_op_post_update(vm, js, false));   NEXT(OP_POST_DEC); }
-  L_INC_LOCAL:  { VM_CHECK(sv_op_inc_local(lp, js, func, ip));  NEXT(OP_INC_LOCAL); }
-  L_DEC_LOCAL:  { VM_CHECK(sv_op_dec_local(lp, js, func, ip));  NEXT(OP_DEC_LOCAL); }
+  L_INC_LOCAL:  { VM_CHECK(sv_op_update_local(lp, js, func, ip, true));  NEXT(OP_INC_LOCAL); }
+  L_DEC_LOCAL:  { VM_CHECK(sv_op_update_local(lp, js, func, ip, false));  NEXT(OP_DEC_LOCAL); }
 
   L_EQ: {
     ant_value_t l = vm->stack[vm->sp - 2];

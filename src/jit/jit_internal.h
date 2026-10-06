@@ -44,6 +44,15 @@ typedef struct {
   bool known;
 } jit_integer_range_t;
 
+typedef enum: uint8_t {
+  JIT_BUILTIN_UNKNOWN = 0,
+  JIT_BUILTIN_ARRAY_PUSH,
+  JIT_BUILTIN_NUMBER_TO_STRING,
+  JIT_BUILTIN_STRING,
+  JIT_BUILTIN_MATH,
+  JIT_BUILTIN_MATH_FN,
+} jit_known_builtin_t;
+
 typedef struct {
   MIR_reg_t *regs, *d_regs;
   sv_func_t **known_func;
@@ -51,6 +60,7 @@ typedef struct {
   uint64_t *known_const;
   bool *has_const;
   uint8_t *known_bool;
+  uint8_t *known_builtin;
   jit_integer_range_t *integer_range;
   int sp, max;
   bool overflow;
@@ -61,6 +71,7 @@ typedef struct {
   uint64_t known_const;
   bool has_const;
   uint8_t known_bool;
+  uint8_t known_builtin;
   jit_integer_range_t integer_range;
 } jit_value_info_t;
 
@@ -126,6 +137,8 @@ typedef struct {
   MIR_item_t stable_call_proto, imp_call_stable_builtin;
   MIR_item_t imp_band, imp_bor, imp_bxor, imp_shl, imp_shr, imp_ushr;
   MIR_item_t self_proto;
+  MIR_item_t math1_proto, math2_proto;
+  MIR_item_t const *imp_math;
   MIR_reg_t r_args_buf;
   int *next_inline_id;
   bool reader_only;
@@ -161,6 +174,8 @@ MIR_reg_t vstack_top(jit_vstack_t *vs);
 jit_integer_range_t jit_word_range(sv_op_t op, jit_integer_range_t left, jit_integer_range_t right);
 void jit_emit_integer_constant(
     MIR_context_t ctx, MIR_item_t fn, jit_vstack_t *vs, MIR_reg_t dst, double number);
+enum { JIT_INDUCTION_SIGNED = 1, JIT_INDUCTION_NONNEG = 2 };
+void jit_induction_locals(sv_func_t *func, uint8_t *kinds, int n_locals, int param_count);
 void jit_entry_integer_ranges(
     sv_func_t *func, jit_integer_range_t *ranges,
     int n_locals, int param_count);
@@ -329,10 +344,28 @@ typedef enum {
   JIT_ELEMENT_READ,
   JIT_ELEMENT_WRITE,
 } jit_element_access_t;
+typedef struct {
+  MIR_label_t past_end;
+  MIR_reg_t ptr, flags, len;
+} jit_dense_element_t;
+typedef struct {
+  ant_math_intrinsic_t kind;
+  MIR_reg_t result, callee, a, b;
+  MIR_reg_t r_js, r_d_slot, scratch;
+  MIR_item_t math1_proto, math2_proto;
+  MIR_item_t const *imp_math;
+  int site;
+} jit_math_call_t;
+MIR_label_t mir_emit_math_call(MIR_context_t ctx, MIR_item_t fn, const jit_math_call_t *call);
+uint8_t jit_math_field_builtin(uint8_t receiver, const char *name, uint32_t len);
+void mir_emit_array_add_guard(
+    MIR_context_t ctx, MIR_item_t fn, MIR_reg_t r_js,
+    MIR_reg_t ptr, MIR_reg_t flags, MIR_label_t slow, int site);
 MIR_reg_t mir_emit_dense_element_guard(
     MIR_context_t ctx, MIR_item_t fn,
     MIR_reg_t object, MIR_reg_t index, MIR_reg_t value,
-    jit_element_access_t access, MIR_label_t slow, int site);
+    jit_element_access_t access, MIR_label_t slow, int site,
+    jit_dense_element_t *element);
 void mir_emit_word32_binary(
     MIR_context_t ctx, MIR_item_t fn, sv_op_t op,
     MIR_reg_t left, MIR_reg_t right, MIR_reg_t result,
@@ -434,6 +467,7 @@ bool *scan_captured_locals(sv_func_t *func, int n_locals);
 bool *scan_captured_params(sv_func_t *func);
 bool jit_inlineable(sv_func_t *f);
 bool jit_can_forward_arguments(sv_func_t *func);
+bool jit_numeric_param_use(sv_func_t *func, uint8_t *ip, uint8_t *end);
 bool jit_has_immediate_numeric_local_init(sv_func_t *func, uint8_t *ip, uint8_t *end, uint16_t local_idx);
 void jit_emit_inline_body(
     MIR_context_t ctx, MIR_item_t jit_func, ant_t *js,

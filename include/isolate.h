@@ -12,6 +12,7 @@
 
 #include "esm/loader.h"
 #include "modules/json.h"
+#include "modules/math.h"
 
 typedef struct {
   ant_object_t *base;
@@ -40,6 +41,10 @@ static constexpr int MAX_STRINGIFY_DEPTH   = 64;
 static constexpr int MAX_PROTO_CHAIN_DEPTH = 256;
 static constexpr int MAX_MULTIREF_OBJS     = 128;
 static constexpr int MAX_DENSE_INITIAL_CAP = 8;
+
+// new Array(n) allocates dense storage for the whole length up to this
+// many elements, so filling it stays on the fast path
+static constexpr uint32_t MAX_DENSE_PREALLOC_LEN = 65536;
 
 struct ant_isolate_t {
   sv_vm_t *vm;
@@ -90,6 +95,7 @@ struct ant_isolate_t {
   ant_value_t this_val;
   ant_value_t current_func;
   ant_value_t length_str;
+  ant_value_t empty_str;
   ant_value_t ascii_chars[128];
 
   // TODO: struct
@@ -172,6 +178,10 @@ struct ant_isolate_t {
     ant_value_t bigint_proto;
     ant_value_t symbol_proto;
     ant_value_t array_values_fn;
+    ant_value_t array_push_fn;
+    ant_value_t string_ctor;
+    ant_value_t number_to_string_fn;
+    ant_value_t math_fns[ANT_MATH_INTRINSIC_COUNT];
     ant_value_t iterator_proto;
     ant_value_t array_iterator_proto;
     ant_value_t string_iterator_proto;

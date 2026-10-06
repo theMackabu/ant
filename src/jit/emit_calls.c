@@ -206,6 +206,57 @@ static void jit_emit_new_direct(
                   MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, done)));
 }
 
+static MIR_label_t jit_emit_string_call_fastpath(jit_compile_t *c, uint16_t call_argc) {
+  int callee_slot = c->vs.sp - (int)call_argc - 1;
+  if (call_argc > 1 || !c->vs.known_builtin ||
+      c->vs.known_builtin[callee_slot] != JIT_BUILTIN_STRING)
+    return NULL;
+
+  vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
+  MIR_reg_t callee = c->vs.regs[callee_slot];
+  MIR_label_t slow = MIR_new_label(c->ctx);
+  MIR_label_t done = MIR_new_label(c->ctx);
+
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_bool),
+      MIR_new_mem_op(c->ctx, MIR_JSVAL, (MIR_disp_t)offsetof(ant_t, sym.string_ctor), c->r_js, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, slow),
+      MIR_new_reg_op(c->ctx, callee), MIR_new_reg_op(c->ctx, c->r_bool)));
+
+  if (call_argc == 0) {
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_bool),
+        MIR_new_mem_op(c->ctx, MIR_JSVAL, (MIR_disp_t)offsetof(ant_t, empty_str), c->r_js, 0, 1)));
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, slow),
+        MIR_new_reg_op(c->ctx, c->r_bool), MIR_new_int_op(c->ctx, 0)));
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, callee),
+        MIR_new_reg_op(c->ctx, c->r_bool)));
+  } else {
+    MIR_reg_t arg = c->vs.regs[c->vs.sp - 1];
+    MIR_label_t number = MIR_new_label(c->ctx);
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_UBLE, MIR_new_label_op(c->ctx, number),
+        MIR_new_reg_op(c->ctx, arg), MIR_new_uint_op(c->ctx, NANBOX_PREFIX)));
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_URSH, MIR_new_reg_op(c->ctx, c->r_bool),
+        MIR_new_reg_op(c->ctx, arg), MIR_new_uint_op(c->ctx, NANBOX_TYPE_SHIFT)));
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, slow),
+        MIR_new_reg_op(c->ctx, c->r_bool), MIR_new_uint_op(c->ctx, JIT_STR_TAG)));
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, callee),
+        MIR_new_reg_op(c->ctx, arg)));
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, done)));
+    MIR_append_insn(c->ctx, c->jit_func, number);
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_call_insn(c->ctx, 6,
+                                      MIR_new_ref_op(c->ctx, c->helper1_proto),
+                                      MIR_new_ref_op(c->ctx, c->imp_number_to_string),
+                                      MIR_new_reg_op(c->ctx, callee),
+                                      MIR_new_reg_op(c->ctx, c->r_vm),
+                                      MIR_new_reg_op(c->ctx, c->r_js),
+                                      MIR_new_reg_op(c->ctx, arg)));
+    jit_emit_throw_if_error(c, callee);
+  }
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, done)));
+  MIR_append_insn(c->ctx, c->jit_func, slow);
+  return done;
+}
+
 void jit_emit_calls(jit_compile_t *c) {
   switch (c->op) {
     case OP_TAIL_CALL:
@@ -217,6 +268,11 @@ void jit_emit_calls(jit_compile_t *c) {
         c->ok = false;
         break;
       }
+
+      MIR_label_t string_done = NULL;
+      if (!c->vs.known_func[c->vs.sp - call_argc - 1] &&
+          !sv_tfb_get_call_target(c->func, c->bc_off))
+        string_done = jit_emit_string_call_fastpath(c, call_argc);
 
       if (!is_tail || c->jit_try_depth == 0) {
         sv_func_t *inline_callee = c->vs.known_func[c->vs.sp - call_argc - 1];
@@ -725,6 +781,10 @@ void jit_emit_calls(jit_compile_t *c) {
         if (is_tail) {
           jit_emit_exit_ret(c, MIR_new_reg_op(c->ctx, r_call_res));
         }
+      }
+      if (string_done) {
+        MIR_append_insn(c->ctx, c->jit_func, string_done);
+        if (is_tail) jit_emit_exit_ret(c, MIR_new_reg_op(c->ctx, c->vs.regs[c->vs.sp - 1]));
       }
       break;
     }

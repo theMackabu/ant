@@ -37,6 +37,7 @@ Store in-progress execution plans here.
 - [Silver Recursive JIT Performance](silver-recursive-jit-perf.md)
 - [Silver JIT Inline Arena Allocation](silver-jit-inline-arena-allocation.md)
 - [Silver Numeric Branch Join Regression](silver-numeric-branch-join.md)
+- [Silver Loop Codegen and Math Intrinsics](silver-loop-codegen-math-intrinsics.md)
 - [Silver Speculative MIR Fast Tier](silver-speculative-mir-fast-tier.md)
 - [Silver Shell Frontend](silver-shell-frontend.md)
 - [Silver Throughput: bench-v8 and Game of Life](silver-throughput-bench-v8-game-of-life.md)

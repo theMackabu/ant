@@ -102,6 +102,11 @@ static bool cage_initialize_locked(void) {
   if (!base) return false;
 
   size_t first = cage_page_size();
+#ifdef _WIN32
+  VirtualAlloc(base, first, MEM_COMMIT, PAGE_READONLY);
+#else
+  mprotect(base, first, PROT_READ);
+#endif
   ant_cage_range_t *range = malloc(sizeof(*range));
   if (!range) {
 #ifdef _WIN32

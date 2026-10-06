@@ -336,23 +336,44 @@ static inline __attribute__((always_inline)) ant_value_t sv_op_post_update(sv_vm
   return js_mkundef();
 }
 
-static inline ant_value_t sv_op_inc_local(ant_value_t *lp, ant_t *js, sv_func_t *func, uint8_t *ip) {
-  uint8_t idx = sv_get_u8(ip + 1);
-  ant_value_t *slot = &lp[idx];
-  
-  if (vtype(*slot) == kTypeString && str_is_heap_builder(*slot)) {
-    ant_value_t out = str_materialize(js, *slot);
-    if (is_err(out)) return out;
-    *slot = out;
+static __attribute__((noinline)) ant_value_t sv_op_update_local_slow(ant_value_t *slot, ant_t *js, bool increment) {
+  ant_value_t old = *slot;
+  if (is_object_type(old) || vtype(old) == kTypeBuiltin) {
+    old = js_to_primitive(js, old, 2);
+    if (is_err(old)) return old;
   }
   
-  *slot = tov(tod(*slot) + 1.0);
-  sv_tfb_record_local(func, (int)idx, *slot);
+  if (vtype(old) == kTypeSymbol)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a number");
+  
+  if (vtype(old) != kTypeBigInt) {
+    double number = js_to_number(js, old);
+    *slot = tov(increment ? number + 1.0 : number - 1.0);
+    return js_mkundef();
+  }
+  
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, old);
+  
+  ant_value_t step = bigint_from_int64(js, increment ? 1 : -1);
+  if (is_err(step)) {
+    GC_ROOT_RESTORE(js, mark);
+    return step;
+  }
+  
+  GC_ROOT_PIN(js, step);
+  ant_value_t next = bigint_add(js, old, step);
+  
+  GC_ROOT_RESTORE(js, mark);
+  if (is_err(next)) return next;
+  *slot = next;
   
   return js_mkundef();
 }
 
-static inline ant_value_t sv_op_dec_local(ant_value_t *lp, ant_t *js, sv_func_t *func, uint8_t *ip) {
+static inline ant_value_t sv_op_update_local(
+  ant_value_t *lp, ant_t *js, sv_func_t *func, uint8_t *ip, bool increment
+) {
   uint8_t idx = sv_get_u8(ip + 1);
   ant_value_t *slot = &lp[idx];
   
@@ -362,9 +383,13 @@ static inline ant_value_t sv_op_dec_local(ant_value_t *lp, ant_t *js, sv_func_t 
     *slot = out;
   }
   
-  *slot = tov(tod(*slot) - 1.0);
-  sv_tfb_record_local(func, (int)idx, *slot);
+  if (vtype(*slot) == kTypeNumber) *slot = tov(tod(*slot) + (increment ? 1.0 : -1.0));
+  else {
+    ant_value_t err = sv_op_update_local_slow(slot, js, increment);
+    if (is_err(err)) return err;
+  }
   
+  sv_tfb_record_local(func, (int)idx, *slot);
   return js_mkundef();
 }
 

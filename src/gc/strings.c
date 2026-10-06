@@ -1,6 +1,7 @@
 #include "gc/verify.h"
 #include "internal.h"
 #include "gc/strings.h"
+#include "gc.h"
 #include "utils.h"
 
 #include <stdio.h>
@@ -280,7 +281,6 @@ void gc_strings_sweep(ant_t *js) {
       m->block->next = NULL;
       if (bucket->current == m->block) bucket->current = NULL;
       pool_free_set_next(m->block, bucket->free_head);
-      pool_block_madvise_free(m->block);
       bucket->free_head = m->block;
     } else if (any_live && bucket && m->stride >= sizeof(void *)) {
       uintptr_t base = m->base;
@@ -310,27 +310,37 @@ void gc_strings_sweep(ant_t *js) {
 
   large_string_trim_reusable(space);
 
+  size_t keep_budget = gc_pool_major_threshold(js);
   for (int i = 0; i < ANT_POOL_SIZE_CLASS_COUNT; i++) {
     ant_pool_bucket_t *bucket = &js->pool.string.classes[i];
     ant_pool_block_t *f = bucket->free_head;
-    int kept = 0;
+    ant_pool_block_t *kept_tail = NULL;
     
-    while (f && kept < 2) {
-      f = pool_free_next(f);
-      kept++;
-    }
+    uint32_t keep_blocks = 
+      bucket->blocks_taken < bucket->blocks_taken_prev
+      ? bucket->blocks_taken : bucket->blocks_taken_prev;
+      
+    bucket->blocks_taken_prev = bucket->blocks_taken;
+    bucket->blocks_taken = 0;
+    bucket->free_head = NULL;
     
     while (f) {
       ant_pool_block_t *next = pool_free_next(f);
-      pool_block_free(f);
+      size_t bytes = sizeof(ant_pool_block_t) + f->cap;
+      
+      if (keep_blocks > 0 && bytes <= keep_budget) {
+        keep_blocks--;
+        keep_budget -= bytes;
+        pool_free_set_next(f, NULL);
+        
+        if (kept_tail) pool_free_set_next(kept_tail, f);
+        else bucket->free_head = f;
+        
+        kept_tail = f;
+      } else pool_block_free(f);
+      
       f = next;
     }
-    
-    f = bucket->free_head;
-    if (kept > 0) {
-      for (int k = 1; k < kept && f; k++) f = pool_free_next(f);
-      if (f) pool_free_set_next(f, NULL);
-    } else bucket->free_head = NULL;
   }
 
   js->gc.string_mark_len = 0;

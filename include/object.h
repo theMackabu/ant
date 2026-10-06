@@ -131,6 +131,8 @@ typedef enum: uint16_t {
     1u << 3,
   ANT_OBJECT_FLAG_FAST_ARRAY =
     1u << 6,
+  ANT_OBJECT_FLAG_MAY_HAVE_DENSE_ELEMENTS =
+    1u << 8,
   ANT_OBJECT_FLAG_GENERATION =
     1u << 10,
   ANT_OBJECT_FLAG_REMEMBERED =
@@ -165,6 +167,9 @@ static inline bool ant_object_flag_masks_match_layout(void) {
 
   flags = (ant_object_flags_t){.fast_array = 1};
   if (flags.raw != ANT_OBJECT_FLAG_FAST_ARRAY) return false;
+
+  flags = (ant_object_flags_t){.may_have_dense_elements = 1};
+  if (flags.raw != ANT_OBJECT_FLAG_MAY_HAVE_DENSE_ELEMENTS) return false;
 
   flags = (ant_object_flags_t){.generation = 1};
   if (flags.raw != ANT_OBJECT_FLAG_GENERATION) return false;

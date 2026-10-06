@@ -493,6 +493,9 @@ void jit_emit_inline_body(
       const uint8_t object_types[] = {
         kTypeObject, kTypeArray, kTypeFunction, kTypeBuiltin, kTypePromise, kTypeGenerator,
       };
+      MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_UBLE,
+          MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_inl_this),
+          MIR_new_uint_op(ctx, NANBOX_PREFIX)));
       MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_URSH,
           MIR_new_reg_op(ctx, r_bool), MIR_new_reg_op(ctx, r_inl_this),
           MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
@@ -523,6 +526,8 @@ void jit_emit_inline_body(
     inl_d[i] = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_D, rn);
     inl_num[i] = 0;
   }
+  uint8_t inl_known[inl_max_stack];
+  memset(inl_known, 0, sizeof(inl_known));
 
 #define INL_ENSURE_D_SLOT()                                        \
   do {                                                             \
@@ -879,6 +884,7 @@ void jit_emit_inline_body(
                         MIR_new_insn(ctx, MIR_MOV,
                                      MIR_new_reg_op(ctx, inl_vs[isp]),
                                      MIR_new_reg_op(ctx, inl_vs[isp - 1])));
+        inl_known[isp] = inl_known[isp - 1];
         isp++;
         break;
       }
@@ -1499,6 +1505,7 @@ void jit_emit_inline_body(
         sv_atom_t *atom = &callee->atoms[idx];
         MIR_reg_t obj = inl_vs[--isp];
         MIR_reg_t dst = inl_vs[isp++];
+        inl_known[isp - 1] = isp >= 2 ? jit_math_field_builtin(inl_known[isp - 2], atom->str, atom->len) : 0;
         uint16_t gf_ic_idx = sv_get_u16(ip + 5);
         MIR_label_t gf_done = MIR_new_label(ctx);
         MIR_label_t gf_slowl = MIR_new_label(ctx);
@@ -1589,6 +1596,7 @@ void jit_emit_inline_body(
         sv_atom_t *atom = &callee->atoms[idx];
         MIR_reg_t obj = inl_vs[isp - 1];
         MIR_reg_t dst = inl_vs[isp++];
+        inl_known[isp - 1] = jit_math_field_builtin(inl_known[isp - 2], atom->str, atom->len);
         MIR_label_t value_ok = MIR_new_label(ctx);
         MIR_label_t gf_slow = MIR_new_label(ctx);
         uint16_t gf_ic_idx = sv_get_u16(ip + 5);
@@ -1621,7 +1629,10 @@ void jit_emit_inline_body(
         uint32_t idx = sv_get_u32(ip + 1);
         ANT_ASSERT(idx < (uint32_t)callee->atom_count,
                    "invalid inline atom index");
+        sv_atom_t *gg_atom = &callee->atoms[idx];
         MIR_reg_t dst = inl_vs[isp++];
+        inl_known[isp - 1] = gg_atom->len == 4 && memcmp(gg_atom->str, "Math", 4) == 0
+          ? JIT_BUILTIN_MATH : JIT_BUILTIN_UNKNOWN;
         int gg_site = -(id * 100000 + inl_bc_off + 1);
         bool gg_fast = r_ic_epoch != 0 &&
                        mir_emit_get_global_ic_fastpath(
@@ -1730,7 +1741,7 @@ void jit_emit_inline_body(
               ctx, jit_func, ge_key, key_double, key_is_num,
               *p_d_slot, slow, index_site);
           (void)mir_emit_dense_element_guard(
-              ctx, jit_func, ge_obj, index, r_bool, JIT_ELEMENT_NUMERIC_READ, slow, element_site);
+              ctx, jit_func, ge_obj, index, r_bool, JIT_ELEMENT_NUMERIC_READ, slow, element_site, NULL);
           mir_i64_to_d(
               ctx, jit_func, inl_d[isp - 1], r_bool, *p_d_slot);
           inl_num[isp - 1] = 1;
@@ -1751,7 +1762,7 @@ void jit_emit_inline_body(
             mir_next_reg_site(p_reg_site));
         (void)mir_emit_dense_element_guard(
             ctx, jit_func, ge_obj, ge_index, r_bool, JIT_ELEMENT_READ,
-            ge_slow, mir_next_reg_site(p_reg_site));
+            ge_slow, mir_next_reg_site(p_reg_site), NULL);
         MIR_append_insn(ctx, jit_func,
                         MIR_new_insn(ctx, MIR_MOV,
                                      MIR_new_reg_op(ctx, ge_dst), MIR_new_reg_op(ctx, r_bool)));
@@ -1925,6 +1936,29 @@ void jit_emit_inline_body(
                    "invalid inline call stack depth");
         INL_FLUSH_ALL();
 
+        MIR_label_t math_done = NULL;
+        uint8_t nc_known = nc_method ? inl_known[isp - (int)nc_argc - 1] : 0;
+        if (nc_known >= JIT_BUILTIN_MATH_FN) {
+          ant_math_intrinsic_t kind = (ant_math_intrinsic_t)(nc_known - JIT_BUILTIN_MATH_FN);
+          if (nc_argc == (kind >= ANT_MATH_FIRST_BINARY ? 2 : 1)) {
+            INL_ENSURE_D_SLOT();
+            math_done = mir_emit_math_call(ctx, jit_func, &(jit_math_call_t){
+              .kind = kind,
+              .result = nc_tail ? result : inl_vs[isp - (int)nc_argc - 2],
+              .callee = inl_vs[isp - (int)nc_argc - 1],
+              .a = inl_vs[isp - (int)nc_argc],
+              .b = nc_argc == 2 ? inl_vs[isp - 1] : 0,
+              .r_js = r_js,
+              .r_d_slot = *p_d_slot,
+              .scratch = r_bool,
+              .math1_proto = ext->math1_proto,
+              .math2_proto = ext->math2_proto,
+              .imp_math = ext->imp_math,
+              .site = mir_next_reg_site(p_reg_site),
+            });
+          }
+        }
+
         MIR_reg_t nc_args[nc_argc ? nc_argc : 1];
         for (int i = 0; i < (int)nc_argc; i++) nc_args[i] = inl_vs[isp - (int)nc_argc + i];
         for (int i = (int)nc_argc - 1; i >= 0; i--)
@@ -2097,6 +2131,12 @@ void jit_emit_inline_body(
                           MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, join)));
           MIR_append_insn(ctx, jit_func, nc_ok);
         }
+        if (math_done) {
+          MIR_append_insn(ctx, jit_func, math_done);
+          if (nc_tail)
+            MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, join)));
+        }
+        if (!nc_tail) inl_known[isp - 1] = JIT_BUILTIN_UNKNOWN;
         break;
       }
 

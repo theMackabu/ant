@@ -46,6 +46,8 @@ typedef struct {
   uint8_t *cursor;
   uint8_t *end;
   size_t slot_stride;
+  uint32_t blocks_taken;
+  uint32_t blocks_taken_prev;
 } ant_pool_bucket_t;
 
 static constexpr int ANT_POOL_SIZE_CLASS_COUNT = 32;

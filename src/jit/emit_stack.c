@@ -103,7 +103,10 @@ void jit_emit_stack(jit_compile_t *c) {
         c->ok = false;
         break;
       }
-      vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
+      bool numeric_value = c->vs.slot_type[c->vs.sp - 1] == SLOT_NUM;
+      bool integer_value = c->vs.slot_type[c->vs.sp - 1] == SLOT_I32;
+      if (!numeric_value && !integer_value)
+        vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
       bool integer_key = c->vs.slot_type[c->vs.sp - 2] == SLOT_I32;
       if (!integer_key)
         vstack_ensure_boxed(&c->vs, c->vs.sp - 2, c->ctx, c->jit_func, c->r_d_slot);
@@ -114,10 +117,16 @@ void jit_emit_stack(jit_compile_t *c) {
       MIR_reg_t r_a = c->vs.regs[c->vs.sp - 1];
       MIR_reg_t r_prop = c->vs.regs[c->vs.sp - 2];
       MIR_reg_t r_obj = c->vs.regs[c->vs.sp - 3];
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_MOV,
-                                   MIR_new_reg_op(c->ctx, c->r_tmp),
-                                   MIR_new_reg_op(c->ctx, r_a)));
+      MIR_reg_t d_a = c->vs.d_regs[c->vs.sp - 1];
+      MIR_reg_t d_bottom = c->vs.d_regs[c->vs.sp - 3];
+      if (numeric_value)
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_DMOV,
+            MIR_new_reg_op(c->ctx, d_bottom), MIR_new_reg_op(c->ctx, d_a)));
+      else
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_MOV,
+                                     MIR_new_reg_op(c->ctx, c->r_tmp),
+                                     MIR_new_reg_op(c->ctx, r_a)));
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_MOV,
                                    MIR_new_reg_op(c->ctx, c->vs.regs[c->vs.sp - 1]),
@@ -126,21 +135,29 @@ void jit_emit_stack(jit_compile_t *c) {
                       MIR_new_insn(c->ctx, MIR_MOV,
                                    MIR_new_reg_op(c->ctx, c->vs.regs[c->vs.sp - 2]),
                                    MIR_new_reg_op(c->ctx, r_obj)));
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_MOV,
-                                   MIR_new_reg_op(c->ctx, c->vs.regs[c->vs.sp - 3]),
-                                   MIR_new_reg_op(c->ctx, c->r_tmp)));
+      if (!numeric_value)
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_MOV,
+                                     MIR_new_reg_op(c->ctx, c->vs.regs[c->vs.sp - 3]),
+                                     MIR_new_reg_op(c->ctx, c->r_tmp)));
       MIR_reg_t dup = vstack_push(&c->vs);
+      uint8_t value_type = numeric_value ? SLOT_NUM : integer_value ? SLOT_I32 : SLOT_BOXED;
+      c->vs.slot_type[c->vs.sp - 4] = value_type;
       c->vs.slot_type[c->vs.sp - 3] = SLOT_BOXED;
       c->vs.slot_type[c->vs.sp - 2] = integer_key ? SLOT_I32 : SLOT_BOXED;
+      c->vs.slot_type[c->vs.sp - 1] = value_type;
       vstack_set_value_info(&c->vs, c->vs.sp - 4, ia);
       vstack_set_value_info(&c->vs, c->vs.sp - 3, io);
       vstack_set_value_info(&c->vs, c->vs.sp - 2, iprop);
       vstack_set_value_info(&c->vs, c->vs.sp - 1, ia);
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_MOV,
-                                   MIR_new_reg_op(c->ctx, dup),
-                                   MIR_new_reg_op(c->ctx, c->r_tmp)));
+      if (numeric_value)
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_DMOV,
+            MIR_new_reg_op(c->ctx, c->vs.d_regs[c->vs.sp - 1]), MIR_new_reg_op(c->ctx, d_bottom)));
+      else
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_MOV,
+                                     MIR_new_reg_op(c->ctx, dup),
+                                     MIR_new_reg_op(c->ctx, c->r_tmp)));
       break;
     }
 
