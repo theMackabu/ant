@@ -69,7 +69,7 @@ static inline bool sv_is_set_iter(
 static inline ant_value_t sv_op_for_of(sv_vm_t *vm, ant_t *js) {
   ant_value_t iterable = vm->stack[--vm->sp];
 
-  if (vtype(iterable) == kTypeArray) {
+  if (vtype(iterable) == kTypeArray && js_array_iteration_default(js, iterable)) {
     vm->stack[vm->sp++] = iterable;
     vm->stack[vm->sp++] = tov(0);
     vm->stack[vm->sp++] = tov(SV_ITER_ARRAY);
@@ -140,7 +140,7 @@ static inline ant_value_t sv_op_for_of(sv_vm_t *vm, ant_t *js) {
 
 static inline bool sv_array_iter_pristine(ant_t *js, ant_value_t arr) {
   if (is_callable(js_get_sym(js, arr, js->sym.asyncIterator_sym))) return false;
-  return js_get_sym(js, arr, js->sym.iterator_sym) == js->sym.array_values_fn;
+  return js_array_iteration_default(js, arr);
 }
 
 static inline ant_value_t sv_op_for_await_of(sv_vm_t *vm, ant_t *js) {

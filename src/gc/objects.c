@@ -1161,6 +1161,8 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_value(js, js->sym.symbol_proto);
   gc_mark_value(js, js->sym.array_values_fn);
   gc_mark_value(js, js->sym.array_push_fn);
+  gc_mark_value(js, js->sym.array_ctor);
+  gc_mark_value(js, js->sym.array_iterator_next);
   gc_mark_value(js, js->sym.string_ctor);
   gc_mark_value(js, js->sym.number_to_string_fn);
   gc_mark_value(js, js->sym.iterator_proto);

@@ -624,7 +624,7 @@ ant_value_t jit_helper_for_of(
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, iterable);
 
-  if (vtype(iterable) == kTypeArray) {
+  if (vtype(iterable) == kTypeArray && js_array_iteration_default(js, iterable)) {
     iter_buf[0] = iterable;
     iter_buf[1] = tov(0);
     iter_buf[2] = tov(SV_ITER_ARRAY);

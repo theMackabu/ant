@@ -100,6 +100,7 @@ ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t recei
 
 ant_offset_t js_arr_len(ant_t *js, ant_value_t arr);
 ant_value_t js_arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx);
+ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src);
 
 bool js_iter(
   ant_t *js, 
@@ -209,6 +210,7 @@ ant_iter_t js_prop_iter_begin(ant_t *js, ant_value_t obj);
 void js_prop_iter_end(ant_iter_t *iter);
 
 bool js_is_constructor(ant_value_t value);
+bool js_array_iteration_default(ant_t *js, ant_value_t arr);
 bool js_mark_promise_trigger_queued(ant_t *js, ant_value_t promise);
 bool js_copy_exotic_own_props(ant_t *js, ant_value_t dst, ant_value_t src);
 bool js_prop_iter_next_val(ant_iter_t *iter, ant_value_t *key_out, ant_value_t *value);

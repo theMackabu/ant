@@ -69,6 +69,8 @@ struct ant_isolate_t {
   bool promise_constructor_protector_invalid;
   bool promise_resolve_lookup_protector_invalid;
   bool promise_species_protector_invalid;
+  bool array_species_protector_invalid;
+  bool array_iteration_protector_invalid;
   bool promise_then_protector_invalid;
 
   struct {
@@ -137,6 +139,7 @@ struct ant_isolate_t {
     const char *set;
     const char *arguments;
     const char *callee;
+    const char *next;
     const char *idx[10];
   } intern;
 
@@ -179,6 +182,8 @@ struct ant_isolate_t {
     ant_value_t symbol_proto;
     ant_value_t array_values_fn;
     ant_value_t array_push_fn;
+    ant_value_t array_ctor;
+    ant_value_t array_iterator_next;
     ant_value_t string_ctor;
     ant_value_t number_to_string_fn;
     ant_value_t math_fns[ANT_MATH_INTRINSIC_COUNT];

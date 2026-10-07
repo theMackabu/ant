@@ -162,6 +162,7 @@ export function targets() {
     'test_jit_proto_method_snapshot.cjs',
     'test_jit_global_snapshot.cjs',
     'test_arguments_object_semantics.cjs',
+    'test_array_builtin_fast_paths.cjs',
     'test_regexp_lone_surrogates.cjs',
     'test_json_lone_surrogates.cjs',
     'test_timer_fired_timeout_gc.cjs',

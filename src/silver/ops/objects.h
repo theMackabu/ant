@@ -218,12 +218,10 @@ static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
     return js_mkerr(js, "spread target is not an array");
   }
 
-  if (vtype(iterable) == kTypeArray) {
-    ant_offset_t len = js_arr_len(js, iterable);
-    for (ant_offset_t i = 0; i < len; i++)
-      js_arr_push(js, arr, js_arr_get(js, iterable, i));
+  if (vtype(iterable) == kTypeArray && js_array_iteration_default(js, iterable)) {
+    ant_value_t spread = js_arr_spread_into(js, arr, iterable);
     vm->sp--;
-    return tov(0);
+    return is_err(spread) ? spread : tov(0);
   }
 
   if (vtype(iterable) == kTypeString) {

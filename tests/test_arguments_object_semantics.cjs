@@ -161,6 +161,17 @@ for (const [name, make, want] of lengthChecks) {
 }
 delete Object.prototype.length;
 
+// slice copies dense arguments directly, except holes the prototype must fill
+function sliceMapped(a, b) { const args = arguments; b = 'B'; return Array.prototype.slice.call(args); }
+function sliceHole() { const args = arguments; delete args[1]; return [].slice.call(args); }
+for (let i = 0; i < 5000; i++) { sliceMapped(1, 2, 3); sliceHole(1, 2, 3); }
+if (JSON.stringify(sliceMapped(1, 2, 3)) !== '[1,"B",3]') throw new Error('slice of mapped arguments');
+Object.prototype[1] = 'proto';
+const inheritedSlice = sliceHole(1, 2, 3);
+delete Object.prototype[1];
+if (!Object.prototype.hasOwnProperty.call(inheritedSlice, 1) || inheritedSlice[1] !== 'proto')
+  throw new Error('slice must read holes through the prototype');
+
 const util = require('node:util');
 const inspected = util.inspect((function () { return arguments; })(1, 'a'));
 if (inspected !== "[Arguments] [ 1, 'a' ]") throw new Error('inspect: ' + inspected);

@@ -146,13 +146,23 @@ static inline void ant_property_mutation_invalidate(
     return;
   }
 
+  if (key == js->intern.next) {
+    if (is_object_type(js->sym.array_iterator_proto) && holder == js_obj_ptr(js->sym.array_iterator_proto))
+      js->array_iteration_protector_invalid = true;
+    return;
+  }
+
   bool invalidates_constructor = key == js->intern.constructor;
   if (!invalidates_constructor && key != js->intern.then) return;
+  
+  if (
+    invalidates_constructor && 
+    (holder->type_tag == kTypeArray || (is_object_type(js->sym.array_proto) && holder == js_obj_ptr(js->sym.array_proto)))
+  ) js->array_species_protector_invalid = true;
 
-  ant_object_t *promise_proto = is_object_type(js->sym.promise_proto)
-    ? js_obj_ptr(js->sym.promise_proto) : NULL;
-
+  ant_object_t *promise_proto = is_object_type(js->sym.promise_proto) ? js_obj_ptr(js->sym.promise_proto) : NULL;
   if (!holder->promise_state && holder != promise_proto) return;
+  
   if (invalidates_constructor) {
     js->promise_constructor_protector_invalid = true;
     js->promise_species_protector_invalid = true;
