@@ -1,7 +1,7 @@
 // Array builtins take dense fast paths (direct buffer reads, a species protector
-// for %Array%, an iteration protector for spread/for-of/Array.from). Each section
-// runs in a fresh process so the protectors start valid, and must print what
-// Node prints: holes, inherited elements, species, proxies and patched iterators.
+// for %Array%, an iteration protector for spread/for-of/Array.from, prepared
+// callbacks). Each section runs in a fresh process so the protectors start
+// valid, and must print what Node prints.
 const { spawnSync } = require('node:child_process');
 
 const sections = [
@@ -155,6 +155,85 @@ const sections = [
     const b = setCtor2(Object.assign([1, 2], { constructor: 0 }), Fake);
     console.log(JSON.stringify([a.map(x => x).fake === true, b.map(x => x).fake === true]));
   }, "[true,true]\n"],
+  [function flatmap() {
+    const a = [1, 2, 3, 4, 5, 6, 7, 8];
+    const r1 = a.flatMap((x, i) => { if (i === 0) for (let k = 0; k < 100; k++) a.push(k); [[9, 9, 9, 9, 9, 9, 9, 9]]; return [x]; });
+    const b = [1, 2, 3, 4];
+    const r2 = b.flatMap((x, i) => { if (i === 0) b.length = 1; return [x]; });
+    const c = [1, 2, 3];
+    const r3 = c.flatMap((x, i) => { if (i === 0) c[2] = 'changed'; return x; });
+    console.log(JSON.stringify([r1.slice(0, 8), r1.length, r2, r3]));
+  }, "[[1,2,3,4,5,6,7,8],8,[1],[1,2,\"changed\"]]\n"],
+  [function groupby() {
+    const out = [];
+    out.push(Object.groupBy([1, 2, 3, 4], x => x % 2 ? 'odd' : 'even'));
+    out.push(Object.groupBy(new Set([1, 2, 3]), x => x > 1 ? 'big' : 'small'));
+    out.push(Object.groupBy((function* () { yield 'a'; yield 'bb'; })(), s => s.length));
+    out.push(Object.groupBy('abca', c => c));
+    out.push(Object.groupBy([1, , 3], x => String(x)));
+    try { Object.groupBy({ length: 2, 0: 'x', 1: 'y' }, x => x); out.push('no throw'); } catch (e) { out.push(e.name); }
+    const m = Map.groupBy([1, 2, 3], x => x % 2); out.push([...m.entries()]);
+    console.log(JSON.stringify(out));
+  }, "[{\"odd\":[1,3],\"even\":[2,4]},{\"small\":[1],\"big\":[2,3]},{\"1\":[\"a\"],\"2\":[\"bb\"]},{\"a\":[\"a\",\"a\"],\"b\":[\"b\"],\"c\":[\"c\"]},{\"1\":[1],\"3\":[3],\"undefined\":[null]},\"TypeError\",[[1,[1,3]],[0,[2]]]]\n"],
+  [function iterusers() {
+    const out = [];
+    const t = f => { try { return f(); } catch (e) { return e.constructor.name; } };
+    out.push(t(() => Object.fromEntries([['a', 1]])), t(() => Object.fromEntries(5)), t(() => Object.fromEntries(null)), t(() => Object.fromEntries(new Map([['k', 2]]))));
+    out.push(t(() => Array.from(new Set([1, 2]))), t(() => Array.from('héllo')), t(() => Array.from({ length: 2, 0: 'x' })), t(() => Array.from(5)));
+    let getterRuns = 0; const withGetter = { get [Symbol.iterator]() { getterRuns++; return [][Symbol.values] || function* () { yield 1; }; } };
+    out.push(t(() => Array.from(withGetter)), getterRuns);
+    const a = [1, 2, 3, 4, 5, 6, 7, 8];
+    out.push(a.flatMap((x, i) => { if (i === 0) for (let k = 0; k < 100; k++) a.push(k); [[9, 9, 9, 9, 9, 9, 9, 9]]; return [x]; }).slice(0, 8));
+    const b = [1, 2, 3, 4]; out.push(b.flatMap((x, i) => { if (i === 0) b.length = 1; return [x]; }));
+    out.push((function () { return [[1], arguments].flat().length; })(7, 8), [[1, [2]], [3]].flat(2), [1, , 3].flatMap(x => [x, x]));
+    Promise.all('ab').then(v => out.push(v)).then(() => Promise.all(5)).catch(e => out.push(e.constructor.name))
+      .then(() => Promise.race([Promise.resolve('r')])).then(v => out.push(v)).then(() => console.log(JSON.stringify(out)));
+  }, "[{\"a\":1},\"TypeError\",\"TypeError\",{\"k\":2},[1,2],[\"h\",\"\u00e9\",\"l\",\"l\",\"o\"],[\"x\",null],[],[1],1,[1,2,3,4,5,6,7,8],[1],2,[1,2,3],[1,1,3,3],[\"a\",\"b\"],\"TypeError\",\"r\"]\n"],
+  [function promiter() {
+    const out = [];
+    const settle = p => p.then(v => ['ok', v], e => ['err', e.constructor.name, e.errors ? e.errors.length : undefined]);
+    (async () => {
+      for (const m of ['all', 'allSettled', 'race', 'any']) for (const input of ['ab', 5, null, undefined, [Promise.resolve(1)], new Set([2])]) out.push([m, String(input), await settle(Promise[m](input))]);
+      console.log(JSON.stringify(out));
+    })();
+  }, "[[\"all\",\"ab\",[\"ok\",[\"a\",\"b\"]]],[\"all\",\"5\",[\"err\",\"TypeError\",null]],[\"all\",\"null\",[\"err\",\"TypeError\",null]],[\"all\",\"undefined\",[\"err\",\"TypeError\",null]],[\"all\",\"[object Promise]\",[\"ok\",[1]]],[\"all\",\"[object Set]\",[\"ok\",[2]]],[\"allSettled\",\"ab\",[\"ok\",[{\"status\":\"fulfilled\",\"value\":\"a\"},{\"status\":\"fulfilled\",\"value\":\"b\"}]]],[\"allSettled\",\"5\",[\"err\",\"TypeError\",null]],[\"allSettled\",\"null\",[\"err\",\"TypeError\",null]],[\"allSettled\",\"undefined\",[\"err\",\"TypeError\",null]],[\"allSettled\",\"[object Promise]\",[\"ok\",[{\"status\":\"fulfilled\",\"value\":1}]]],[\"allSettled\",\"[object Set]\",[\"ok\",[{\"status\":\"fulfilled\",\"value\":2}]]],[\"race\",\"ab\",[\"ok\",\"a\"]],[\"race\",\"5\",[\"err\",\"TypeError\",null]],[\"race\",\"null\",[\"err\",\"TypeError\",null]],[\"race\",\"undefined\",[\"err\",\"TypeError\",null]],[\"race\",\"[object Promise]\",[\"ok\",1]],[\"race\",\"[object Set]\",[\"ok\",2]],[\"any\",\"ab\",[\"ok\",\"a\"]],[\"any\",\"5\",[\"err\",\"TypeError\",null]],[\"any\",\"null\",[\"err\",\"TypeError\",null]],[\"any\",\"undefined\",[\"err\",\"TypeError\",null]],[\"any\",\"[object Promise]\",[\"ok\",1]],[\"any\",\"[object Set]\",[\"ok\",2]]]\n"],
+  [function reduce() {
+    const t = f => { try { return f(); } catch (e) { return e.constructor.name; } };
+    const add = (a, b) => String(a) + ',' + String(b);
+    console.log(JSON.stringify([t(() => [, 1, , 2, ,].reduce(add)), t(() => [, 1, , 2, ,].reduceRight(add)), t(() => [, ,].reduce(add)), t(() => [, ,].reduceRight(add)), t(() => [].reduce(add)), t(() => [5].reduceRight(add)), t(() => [1, 2, 3].reduceRight(add, 'i'))]));
+  }, "[\"1,2\",\"2,1\",\"TypeError\",\"TypeError\",\"TypeError\",5,\"i,3,2,1\"]\n"],
+  [function callbacks() {
+    const out = [];
+    const t = f => { try { return f(); } catch (e) { return 'THROW ' + e.constructor.name; } };
+    const runAll = tag => {
+      const a = () => [1, 2, 3, 4];
+      out.push(tag + ' mutate-push ' + JSON.stringify(t(() => { const x = a(); return x.map((v, i) => { if (i === 0) x.push(9); return v * 2; }); })));
+      out.push(tag + ' mutate-shrink ' + JSON.stringify(t(() => { const x = a(); const r = []; x.forEach(v => { r.push(v); x.length = 2; }); return r; })));
+      out.push(tag + ' mutate-delete ' + JSON.stringify(t(() => { const x = a(); return x.filter((v, i) => { delete x[i + 1]; return true; }); })));
+      out.push(tag + ' mutate-holes ' + JSON.stringify(t(() => { const x = a(); return x.reduce((s, v, i) => { x[i + 2] = 'w'; return s + v; }, ''); })));
+      out.push(tag + ' throw ' + JSON.stringify(t(() => a().some(v => { if (v === 3) throw new TypeError('x'); return false; }))));
+      out.push(tag + ' this ' + JSON.stringify(t(() => { const o = { k: 5 }; return [a().map(function () { return this && this.k; }, o), a().map(function () { 'use strict'; return this; }), a().map(() => typeof this)]; })));
+      out.push(tag + ' bound ' + JSON.stringify(t(() => a().map(function (v, i) { return [this.b, v, i]; }.bind({ b: 1 }, 'bv')))));
+      out.push(tag + ' builtin ' + JSON.stringify(t(() => [a().map(String), a().filter(Boolean).length, ['1', '2'].map(Number), a().every(Number.isInteger)])));
+      class B { m(v) { return 'B' + v; } }
+      class C extends B { run(arr) { return arr.map(v => super.m(v)); } }
+      out.push(tag + ' super ' + JSON.stringify(t(() => new C().run(a()))));
+      out.push(tag + ' async ' + JSON.stringify(t(() => a().map(async v => v).map(p => p instanceof Promise))));
+      out.push(tag + ' generator ' + JSON.stringify(t(() => a().map(function* (v) { yield v; }).map(g => g.next().value))));
+      out.push(tag + ' args-count ' + JSON.stringify(t(() => a().map(function () { return arguments.length; }))));
+      out.push(tag + ' find-holes ' + JSON.stringify(t(() => { const seen = []; [1, , 3].find((v, i) => { seen.push([v, i]); }); return seen; })));
+      out.push(tag + ' reentrant ' + JSON.stringify(t(() => a().map(v => a().map(w => v * w).reduce((s, x) => s + x)))));
+      let depth = 0; const deep = () => { depth++; [1].forEach(deep); };
+      out.push(tag + ' overflow ' + JSON.stringify([t(deep), depth > 100]));
+      out.push(tag + ' flatMap ' + JSON.stringify(t(() => a().flatMap(v => v % 2 ? [v, [v]] : []))));
+      out.push(tag + ' groupBy ' + JSON.stringify(t(() => Object.groupBy(a(), v => v % 2))));
+    };
+    runAll('cold');
+    for (let i = 0; i < 300; i++) runAll('warm');
+    out.length = 0;
+    runAll('hot');
+    console.log(out.join('\n'));
+  }, "hot mutate-push [2,4,6,8]\nhot mutate-shrink [1,2]\nhot mutate-delete [1,3]\nhot mutate-holes \"12ww\"\nhot throw \"THROW TypeError\"\nhot this [[5,5,5,5],[null,null,null,null],[\"object\",\"object\",\"object\",\"object\"]]\nhot bound [[1,\"bv\",1],[1,\"bv\",2],[1,\"bv\",3],[1,\"bv\",4]]\nhot builtin [[\"1\",\"2\",\"3\",\"4\"],4,[1,2],true]\nhot super [\"B1\",\"B2\",\"B3\",\"B4\"]\nhot async [true,true,true,true]\nhot generator [1,2,3,4]\nhot args-count [3,3,3,3]\nhot find-holes [[1,0],[null,1],[3,2]]\nhot reentrant [10,20,30,40]\nhot overflow [\"THROW RangeError\",true]\nhot flatMap [1,[1],3,[3]]\nhot groupBy {\"0\":[2,4],\"1\":[1,3]}\n"],
 ];
 
 let failures = 0;

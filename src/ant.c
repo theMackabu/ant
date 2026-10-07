@@ -632,6 +632,9 @@ static ant_value_t array_method_has_index(ant_t *js, ant_value_t arr, ant_offset
 static ant_value_t array_method_get_index(ant_t *js, ant_value_t arr, ant_offset_t idx);
 static inline bool array_method_dense_element(ant_value_t arr, ant_offset_t idx, ant_value_t *out);
 
+static inline ant_object_t *array_method_elements(ant_value_t arr);
+static inline ant_value_t array_method_element(ant_t *js, ant_value_t arr, ant_object_t *elems, ant_offset_t idx, ant_value_t *out);
+
 #define PROXY_AWARE_LENGTH_OR_RETURN(obj_expr, out_var) \
   ant_offset_t out_var = 0; \
   do { \
@@ -6056,12 +6059,11 @@ static ant_value_t iter_close_iterator(ant_t *js, ant_value_t iterator) {
   return iter_call_noargs_with_this(js, iterator, return_method);
 }
 
-static ant_value_t iter_foreach(ant_t *js, ant_value_t iterable, iter_callback_t cb, void *ctx) {
-  ant_value_t iter_sym = js->sym.iterator_sym;
-  ant_prop_loc_t iter_prop = (vtype(iter_sym) == kTypeSymbol) ? lkp_sym_proto(js, iterable, (ant_offset_t)vdata(iter_sym)) : ANT_PROP_LOC_NONE;
-  if (!iter_prop.obj) return js_mkerr(js, "not iterable");
-
-  ant_value_t iter_method = js_prop_load(iter_prop);
+static ant_value_t iter_foreach_method(
+  ant_t *js, ant_value_t iterable, ant_value_t iter_method, iter_callback_t cb, void *ctx
+) {
+  if (!is_callable(iter_method)) return js_mkerr_typed(js, JS_ERR_TYPE, "not iterable");
+  
   ant_value_t iterator = iter_call_noargs_with_this(js, iterable, iter_method);
   if (is_err(iterator)) return iterator;
   
@@ -6100,6 +6102,13 @@ static ant_value_t iter_foreach(ant_t *js, ant_value_t iterable, iter_callback_t
   }
   
   return out;
+}
+
+static ant_value_t iter_foreach(ant_t *js, ant_value_t iterable, iter_callback_t cb, void *ctx) {
+  if (vtype(js->sym.iterator_sym) != kTypeSymbol) return js_mkerr_typed(js, JS_ERR_TYPE, "not iterable");
+  ant_value_t iter_method = js_get_sym(js, iterable, js->sym.iterator_sym);
+  if (is_err(iter_method)) return iter_method;
+  return iter_foreach_method(js, iterable, iter_method, cb, ctx);
 }
 
 ant_value_t js_symbol_to_string(ant_t *js, ant_value_t sym) {
@@ -9013,6 +9022,36 @@ static ant_value_t builtin_object_hasOwn(ant_params_t) {
   return object_has_own(js, target, key);
 }
 
+typedef struct {
+  ant_value_t result;
+  sv_callback_t cb;
+  ant_offset_t index;
+} object_group_by_ctx_t;
+
+static iter_action_t object_group_by_add(ant_t *js, ant_value_t value, void *ctx, ant_value_t *out) {
+  object_group_by_ctx_t *group_by = ctx;
+  ant_value_t cb_args[2] = { value, tov((double)group_by->index++) };
+  ant_value_t key = sv_callback_call(js->vm, js, &group_by->cb, cb_args, 2);
+  if (is_err(key)) { *out = key; return ITER_ERROR; }
+
+  ant_value_t key_str = js_tostring_val(js, key);
+  if (is_err(key_str)) { *out = key_str; return ITER_ERROR; }
+
+  ant_offset_t klen;
+  ant_offset_t koff = vstr(js, key_str, &klen);
+  ant_prop_loc_t grp_off = lkp(js, group_by->result, (const char *)(uintptr_t)koff, klen);
+  ant_value_t group;
+  
+  if (grp_off.obj) group = js_prop_load(grp_off);
+  else {
+    group = mkarr(js);
+    js_setprop(js, group_by->result, key_str, group);
+  }
+  
+  js_arr_push(js, group, value);
+  return ITER_CONTINUE;
+}
+
 static ant_value_t builtin_object_groupBy(ant_params_t) {
   if (nargs < 2) return js_mkerr_typed(js, JS_ERR_TYPE, "Object.groupBy requires 2 arguments");
   
@@ -9024,33 +9063,24 @@ static ant_value_t builtin_object_groupBy(ant_params_t) {
   
   ant_value_t result = js_mkobj(js);
   js_set_proto_init(result, js_mknull());
+  object_group_by_ctx_t ctx = { result, sv_callback_prepare(js, callback, js_mkundef()), 0 };
 
-  ant_offset_t len = array_like_length(js, items);
-  for (ant_offset_t i = 0; i < len; i++) {
-    ant_value_t val = arr_get(js, items, i);
-    ant_value_t cb_args[2] = { val, tov((double)i) };
-    ant_value_t key = sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 2, NULL, js_mkundef());
-    if (is_err(key)) return key;
-    
-    ant_value_t key_str = js_tostring_val(js, key);
-    if (is_err(key_str)) return key_str;
-    
-    ant_offset_t klen;
-    ant_offset_t koff = vstr(js, key_str, &klen);
-    const char *kptr = (char *)(uintptr_t)(koff);
-    
-    ant_prop_loc_t grp_off = lkp(js, result, kptr, klen);
-    ant_value_t group;
-    if (grp_off.obj) {
-      group = js_prop_load(grp_off);
-    } else {
-      group = mkarr(js);
-      js_setprop(js, result, key_str, group);
+  if (array_obj_ptr(items) && js_array_iteration_default(js, items)) {
+    ant_offset_t len = array_like_length(js, items);
+    for (ant_offset_t i = 0; i < len; i++) {
+      ant_value_t value = array_method_get_index(js, items, i);
+      if (is_err(value)) return value;
+      ant_value_t err = js_mkundef();
+      if (object_group_by_add(js, value, &ctx, &err) == ITER_ERROR) return err;
     }
-    js_arr_push(js, group, val);
+    return result;
   }
+
+  if (vtype(js->sym.iterator_sym) != kTypeSymbol || !is_callable(js_get_sym(js, items, js->sym.iterator_sym)))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "object is not iterable");
   
-  return result;
+  ant_value_t iterated = iter_foreach(js, items, object_group_by_add, &ctx);
+  return is_err(iterated) ? iterated : result;
 }
 
 static bool define_lookup_existing_meta(
@@ -11671,15 +11701,16 @@ static ant_value_t builtin_array_every(ant_params_t) {
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+  sv_callback_t cb = sv_callback_prepare(js, callback, this_arg);
+  ant_object_t *elems = array_method_elements(arr);
   
   for (ant_offset_t i = 0; i < len; i++) {
-    ant_value_t has = array_method_has_index(js, arr, i);
+    ant_value_t val;
+    ant_value_t has = array_method_element(js, arr, elems, i, &val);
     if (is_err(has)) return has;
-    if (!js_truthy(js, has)) continue;
-    ant_value_t val = array_method_get_index(js, arr, i);
-    if (is_err(val)) return val;
+    if (has != js_true) continue;
     ant_value_t call_args[3] = { val, tov((double)i), arr };
-    ant_value_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, js_mkundef());
+    ant_value_t result = sv_callback_call(js->vm, js, &cb, call_args, 3);
     if (is_err(result)) return result;
     if (!js_truthy(js, result)) return mkval(kTypeBool, 0);
   }
@@ -11698,15 +11729,16 @@ static ant_value_t builtin_array_forEach(ant_params_t) {
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+  sv_callback_t cb = sv_callback_prepare(js, callback, this_arg);
+  ant_object_t *elems = array_method_elements(arr);
   
   for (ant_offset_t i = 0; i < len; i++) {
-    ant_value_t has = array_method_has_index(js, arr, i);
+    ant_value_t val;
+    ant_value_t has = array_method_element(js, arr, elems, i, &val);
     if (is_err(has)) return has;
-    if (!js_truthy(js, has)) continue;
-    ant_value_t val = array_method_get_index(js, arr, i);
-    if (is_err(val)) return val;
+    if (has != js_true) continue;
     ant_value_t call_args[3] = { val, tov((double)i), arr };
-    ant_value_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, js_mkundef());
+    ant_value_t result = sv_callback_call(js->vm, js, &cb, call_args, 3);
     if (is_err(result)) return result;
   }
   
@@ -11796,17 +11828,18 @@ static ant_value_t builtin_array_map(ant_params_t) {
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+  sv_callback_t cb = sv_callback_prepare(js, callback, this_arg);
+  ant_object_t *elems = array_method_elements(arr);
   ant_value_t result = array_alloc_like_with_length(js, arr, len);
   if (is_err(result)) return result;
   
   for (ant_offset_t i = 0; i < len; i++) {
-    ant_value_t has = array_method_has_index(js, arr, i);
+    ant_value_t val;
+    ant_value_t has = array_method_element(js, arr, elems, i, &val);
     if (is_err(has)) return has;
-    if (!js_truthy(js, has)) continue;
-    ant_value_t val = array_method_get_index(js, arr, i);
-    if (is_err(val)) return val;
+    if (has != js_true) continue;
     ant_value_t call_args[3] = { val, tov((double)i), arr };
-    ant_value_t mapped = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, js_mkundef());
+    ant_value_t mapped = sv_callback_call(js->vm, js, &cb, call_args, 3);
     if (is_err(mapped)) return mapped;
     arr_set(js, result, i, mapped);
   }
@@ -11825,19 +11858,20 @@ static ant_value_t builtin_array_filter(ant_params_t) {
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+  sv_callback_t cb = sv_callback_prepare(js, callback, this_arg);
+  ant_object_t *elems = array_method_elements(arr);
   ant_value_t result = array_alloc_like(js, arr);
   if (is_err(result)) return result;
   
   ant_offset_t result_idx = 0;
   
   for (ant_offset_t i = 0; i < len; i++) {
-    ant_value_t has = array_method_has_index(js, arr, i);
+    ant_value_t val;
+    ant_value_t has = array_method_element(js, arr, elems, i, &val);
     if (is_err(has)) return has;
-    if (!js_truthy(js, has)) continue;
-    ant_value_t val = array_method_get_index(js, arr, i);
-    if (is_err(val)) return val;
+    if (has != js_true) continue;
     ant_value_t call_args[3] = { val, tov((double)i), arr };
-    ant_value_t test = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, js_mkundef());
+    ant_value_t test = sv_callback_call(js->vm, js, &cb, call_args, 3);
     
     if (is_err(test)) return test;
     if (js_truthy(js, test)) { arr_set(js, result, result_idx, val); result_idx++; }
@@ -11857,19 +11891,20 @@ static ant_value_t builtin_array_reduce(ant_params_t) {
   bool has_initial = (nargs >= 2);
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+  sv_callback_t cb = sv_callback_prepare(js, callback, js_mkundef());
+  ant_object_t *elems = array_method_elements(arr);
   
   ant_value_t accumulator = has_initial ? args[1] : js_mkundef();
   bool first = !has_initial;
   
   for (ant_offset_t i = 0; i < len; i++) {
-    ant_value_t has = array_method_has_index(js, arr, i);
+    ant_value_t val;
+    ant_value_t has = array_method_element(js, arr, elems, i, &val);
     if (is_err(has)) return has;
-    if (!js_truthy(js, has)) continue;
-    ant_value_t val = array_method_get_index(js, arr, i);
-    if (is_err(val)) return val;
+    if (has != js_true) continue;
     if (first) { accumulator = val; first = false; continue; }
     ant_value_t call_args[4] = { accumulator, val, tov((double)i), arr };
-    accumulator = sv_vm_call(js->vm, js, callback, js_mkundef(), call_args, 4, NULL, js_mkundef());
+    accumulator = sv_callback_call(js->vm, js, &cb, call_args, 4);
     if (is_err(accumulator)) return accumulator;
   }
   
@@ -11894,7 +11929,7 @@ static inline ant_value_t flat_should_spread(ant_t *js, ant_value_t val, int dep
   *out = false;
   if (depth <= 0) return js_mkundef();
 
-  if (vtype(val) == kTypeArray) {
+  if (array_length_obj_ptr(val)) {
     *out = true;
     return js_mkundef();
   }
@@ -12156,6 +12191,7 @@ static ant_value_t array_find_impl(ant_native_params_t, bool return_index, const
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+  sv_callback_t cb = sv_callback_prepare(js, callback, this_arg);
   if (len == 0) return return_index ? tov(-1) : js_mkundef();
   
   for (ant_offset_t i = 0; i < len; i++) {
@@ -12163,7 +12199,7 @@ static ant_value_t array_find_impl(ant_native_params_t, bool return_index, const
     if (is_err(val)) return val;
     
     ant_value_t call_args[3] = { val, tov((double)i), arr };
-    ant_value_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, js_mkundef());
+    ant_value_t result = sv_callback_call(js->vm, js, &cb, call_args, 3);
     
     if (is_err(result)) return result;
     if (js_truthy(js, result)) return return_index ? tov((double)i) : val;
@@ -12191,6 +12227,7 @@ static ant_value_t array_find_last_impl(ant_native_params_t, bool return_index, 
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+  sv_callback_t cb = sv_callback_prepare(js, callback, this_arg);
   if (len == 0) return return_index ? tov(-1) : js_mkundef();
   
   for (ant_offset_t i = len; i > 0; i--) {
@@ -12198,7 +12235,7 @@ static ant_value_t array_find_last_impl(ant_native_params_t, bool return_index, 
     if (is_err(val)) return val;
     
     ant_value_t call_args[3] = { val, tov((double)(i - 1)), arr };
-    ant_value_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, js_mkundef());
+    ant_value_t result = sv_callback_call(js->vm, js, &cb, call_args, 3);
     
     if (is_err(result)) return result;
     if (js_truthy(js, result)) return return_index ? tov((double)(i - 1)) : val;
@@ -12236,34 +12273,16 @@ static ant_value_t builtin_array_flatMap(ant_params_t) {
   ant_value_t result = mkarr(js);
   if (is_err(result)) return result;
   ant_offset_t result_idx = 0;
-
-  ant_value_t *dense = packed_array_data_for_length(js, arr, len);
-  if (dense) {
-    for (ant_offset_t i = 0; i < len; i++) {
-      ant_value_t elem = dense[i];
-      ant_value_t call_args[3] = { elem, tov((double)i), arr };
-      ant_value_t mapped = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, js_mkundef());
-      if (is_err(mapped)) return mapped;
-      ant_value_t flat_res = flat_append_mapped_value(js, mapped, result, &result_idx);
-      if (is_err(flat_res)) return flat_res;
-    }
-
-    return mkval(kTypeArray, vdata(result));
-  }
+  sv_callback_t cb = sv_callback_prepare(js, callback, this_arg);
+  ant_object_t *elems = array_method_elements(arr);
 
   for (ant_offset_t i = 0; i < len; i++) {
-    if (input_is_array) {
-      if (!arr_has(js, arr, i)) continue;
-    } else {
-      ant_value_t has = array_method_has_index(js, arr, i);
-      if (is_err(has)) return has;
-      if (!js_truthy(js, has)) continue;
-    }
-
-    ant_value_t elem = input_is_array ? arr_get(js, arr, i) : array_method_get_index(js, arr, i);
-    if (is_err(elem)) return elem;
+    ant_value_t elem;
+    ant_value_t has = array_method_element(js, arr, elems, i, &elem);
+    if (is_err(has)) return has;
+    if (has != js_true) continue;
     ant_value_t call_args[3] = { elem, tov((double)i), arr };
-    ant_value_t mapped = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, js_mkundef());
+    ant_value_t mapped = sv_callback_call(js->vm, js, &cb, call_args, 3);
     if (is_err(mapped)) return mapped;
     ant_value_t flat_res = flat_append_mapped_value(js, mapped, result, &result_idx);
     if (is_err(flat_res)) return flat_res;
@@ -12404,30 +12423,24 @@ static ant_value_t builtin_array_reduceRight(ant_params_t) {
   
   ant_value_t callback = args[0];
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+  sv_callback_t cb = sv_callback_prepare(js, callback, js_mkundef());
   
-  int start_idx = (int)len - 1;
-  ant_value_t accumulator;
+  ant_object_t *elems = array_method_elements(arr);
+  ant_value_t accumulator = nargs >= 2 ? args[1] : js_mkundef();
+  bool first = nargs < 2;
   
-  if (nargs >= 2) {
-    accumulator = args[1];
-  } else {
-    if (len == 0) return js_mkerr(js, "reduceRight of empty array with no initial value");
-    accumulator = array_method_get_index(js, arr, len - 1);
-    if (is_err(accumulator)) return accumulator;
-    start_idx = (int)len - 2;
-  }
-  
-  for (int i = start_idx; i >= 0; i--) {
-    ant_value_t has = array_method_has_index(js, arr, (ant_offset_t)i);
+  for (ant_offset_t i = len; i > 0; i--) {
+    ant_value_t val;
+    ant_value_t has = array_method_element(js, arr, elems, i - 1, &val);
     if (is_err(has)) return has;
-    if (!js_truthy(js, has)) continue;
-    ant_value_t elem = array_method_get_index(js, arr, (ant_offset_t)i);
-    if (is_err(elem)) return elem;
-    ant_value_t call_args[4] = { accumulator, elem, tov((double)i), arr };
-    accumulator = sv_vm_call(js->vm, js, callback, js_mkundef(), call_args, 4, NULL, js_mkundef());
+    if (has != js_true) continue;
+    if (first) { accumulator = val; first = false; continue; }
+    ant_value_t call_args[4] = { accumulator, val, tov((double)(i - 1)), arr };
+    accumulator = sv_callback_call(js->vm, js, &cb, call_args, 4);
     if (is_err(accumulator)) return accumulator;
   }
   
+  if (first) return js_mkerr_typed(js, JS_ERR_TYPE, "reduceRight of empty array with no initial value");
   return accumulator;
 }
 
@@ -12598,17 +12611,18 @@ static ant_value_t builtin_array_some(ant_params_t) {
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+  sv_callback_t cb = sv_callback_prepare(js, callback, this_arg);
+  ant_object_t *elems = array_method_elements(arr);
   if (len == 0) return mkval(kTypeBool, 0);
   
   for (ant_offset_t i = 0; i < len; i++) {
-    ant_value_t has = array_method_has_index(js, arr, i);
+    ant_value_t val;
+    ant_value_t has = array_method_element(js, arr, elems, i, &val);
     if (is_err(has)) return has;
-    if (!js_truthy(js, has)) continue;
-    ant_value_t val = array_method_get_index(js, arr, i);
-    if (is_err(val)) return val;
+    if (has != js_true) continue;
     
     ant_value_t call_args[3] = { val, tov((double)i), arr };
-    ant_value_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, js_mkundef());
+    ant_value_t result = sv_callback_call(js->vm, js, &cb, call_args, 3);
     
     if (is_err(result)) return result;
     if (js_truthy(js, result)) return mkval(kTypeBool, 1);
@@ -13628,18 +13642,11 @@ static ant_value_t builtin_Array_from(ant_params_t) {
     }
   } else {
     ant_value_t iter_method = js_mkundef();
-    ant_prop_loc_t iter_prop = ANT_PROP_LOC_NONE;
     bool src_is_array = false;
     if (vtype(iter_sym) == kTypeSymbol) {
-      if (is_proxy(src)) {
-        iter_method = js_get_sym(js, src, iter_sym);
-        if (is_err(iter_method)) return iter_method;
-        ant_value_t target = proxy_read_target(js, src);
-        src_is_array = vtype(target) == kTypeArray;
-      } else {
-        iter_prop = lkp_sym_proto(js, src, (ant_offset_t)vdata(iter_sym));
-        if (iter_prop.obj) iter_method = js_prop_load(iter_prop);
-      }
+      iter_method = js_get_sym(js, src, iter_sym);
+      if (is_err(iter_method)) return iter_method;
+      if (is_proxy(src)) src_is_array = vtype(proxy_read_target(js, src)) == kTypeArray;
     }
 
     if (src_is_array && vtype(iter_method) == kTypeBuiltin) {
@@ -13653,9 +13660,9 @@ static ant_value_t builtin_Array_from(ant_params_t) {
         if (act == ITER_ERROR) return unused;
       }
       if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, tov((double)len));
-    } else if (vtype(iter_method) != kTypeUndefined) {
+    } else if (vtype(iter_method) != kTypeUndefined && vtype(iter_method) != kTypeNull) {
       array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      ant_value_t iter_result = iter_foreach(js, src, array_from_iter_cb, &ctx);
+      ant_value_t iter_result = iter_foreach_method(js, src, iter_method, array_from_iter_cb, &ctx);
       if (is_err(iter_result)) return iter_result;
       if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, tov((double)ctx.index));
     } else if (vtype(src) == kTypeObject) {
@@ -17302,14 +17309,6 @@ static ant_value_t builtin_Promise_all(ant_params_t) {
 
   ant_value_t iterable = nargs > 0 ? args[0] : js_mkundef();
   GC_ROOT_PIN(js, iterable);
-  if (!is_object_type(iterable)) {
-    ant_value_t err = js_mkerr(js, "Promise.all requires an iterable");
-    ant_value_t result = promise_reject_abrupt(
-      js, result_promise, result_reject, err
-    );
-    GC_ROOT_RESTORE(js, root_mark);
-    return result;
-  }
 
   ant_value_t tracker = mkobj(js, 0);
   GC_ROOT_PIN(js, tracker);
@@ -17401,15 +17400,6 @@ static ant_value_t builtin_Promise_allSettled(ant_params_t) {
 
   ant_value_t iterable = nargs > 0 ? args[0] : js_mkundef();
   GC_ROOT_PIN(js, iterable);
-  if (!is_object_type(iterable)) {
-    ant_value_t err = js_mkerr(js, "Promise.allSettled requires an iterable");
-    ant_value_t result = promise_reject_abrupt(
-      js, result_promise, 
-      result_reject, err
-    );
-    GC_ROOT_RESTORE(js, root_mark);
-    return result;
-  }
 
   ant_value_t tracker = mkobj(js, 0);
   GC_ROOT_PIN(js, tracker);
@@ -17531,15 +17521,6 @@ static ant_value_t builtin_Promise_race(ant_params_t) {
 
   ant_value_t iterable = nargs > 0 ? args[0] : js_mkundef();
   GC_ROOT_PIN(js, iterable);
-  if (!is_object_type(iterable)) {
-    ant_value_t err = js_mkerr(js, "Promise.race requires an iterable");
-    ant_value_t result = promise_reject_abrupt(
-      js, result_promise, 
-      reject_fn, err
-    );
-    GC_ROOT_RESTORE(js, root_mark);
-    return result;
-  }
 
   promise_race_iter_ctx_t ctx = {
     .ctor = ctor,
@@ -17735,15 +17716,6 @@ static ant_value_t builtin_Promise_any(ant_params_t) {
 
   ant_value_t iterable = nargs > 0 ? args[0] : js_mkundef();
   GC_ROOT_PIN(js, iterable);
-  if (!is_object_type(iterable)) {
-    ant_value_t err = js_mkerr(js, "Promise.any requires an iterable");
-    ant_value_t result = promise_reject_abrupt(
-      js, result_promise,
-      result_reject, err
-    );
-    GC_ROOT_RESTORE(js, root_mark);
-    return result;
-  }
 
   ant_value_t tracker = mkobj(js, 0);
   GC_ROOT_PIN(js, tracker);
@@ -18595,6 +18567,28 @@ static inline bool array_method_dense_element(ant_value_t arr, ant_offset_t idx,
   *out = value;
   
   return true;
+}
+
+static inline ant_object_t *array_method_elements(ant_value_t arr) {
+  return is_proxy(arr) ? NULL : array_obj_ptr(arr);
+}
+
+static inline ant_value_t array_method_element(
+  ant_t *js, ant_value_t arr, ant_object_t *elems, ant_offset_t idx, ant_value_t *out
+) {
+  if (
+    elems && elems->flags.fast_array && !elems->flags.is_exotic && elems->u.array.data &&
+    idx < (ant_offset_t)elems->u.array.len && idx < (ant_offset_t)elems->u.array.cap
+  ) {
+    ant_value_t value = elems->u.array.data[idx];
+    if (!is_empty_slot(value)) { *out = value; return js_true; }
+  }
+  
+  ant_value_t has = array_method_has_index(js, arr, idx);
+  if (has != js_true) return has;
+  
+  *out = array_method_get_index(js, arr, idx);
+  return is_err(*out) ? *out : js_true;
 }
 
 static ant_value_t array_method_has_index(ant_t *js, ant_value_t arr, ant_offset_t idx) {

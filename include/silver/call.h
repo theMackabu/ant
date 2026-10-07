@@ -454,6 +454,70 @@ static inline ant_value_t sv_vm_call(
   return result;
 }
 
+typedef struct {
+  ant_value_t func;
+  ant_value_t this_val;
+  ant_value_t super_val;
+  sv_closure_t *closure;
+  bool stack_overflow;
+} sv_callback_t;
+
+static constexpr uint32_t SV_CALLBACK_DIRECT_FLAGS = 
+  SV_CALL_IS_ARROW        | 
+  SV_CALL_HAS_SUPER       | 
+  SV_CALL_BORROWED_UPVALS | 
+  SV_CALL_HAS_EVAL_ENV;
+
+static inline sv_callback_t sv_callback_prepare(ant_t *js, ant_value_t func, ant_value_t this_val) {
+  sv_callback_t cb = { func, this_val, js_mkundef(), NULL, false };
+  if (vtype(func) != kTypeFunction) return cb;
+
+  sv_closure_t *closure = js_func_closure(func);
+  if (!closure->func || closure->func->is_async || closure->func->is_generator) return cb;
+  if (closure->call_flags & ~SV_CALLBACK_DIRECT_FLAGS) return cb;
+
+  cb.closure = closure;
+  cb.stack_overflow = sv_check_c_stack_overflow(js);
+  
+  if (closure->call_flags & SV_CALL_IS_ARROW) cb.this_val = closure->bound_this;
+  if (closure->call_flags & SV_CALL_HAS_SUPER) cb.super_val = closure->super_val;
+  
+  return cb;
+}
+
+static inline ant_value_t sv_callback_call(
+  sv_vm_t *vm, ant_t *js, const sv_callback_t *cb, ant_value_t *args, int argc
+) {
+  if (!cb->closure) 
+    return sv_vm_call(vm, js, cb->func, cb->this_val, args, argc, NULL, js_mkundef());
+  
+  if (cb->stack_overflow) 
+    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+
+  sv_call_ctx_t ctx = {
+    .this_val = cb->this_val,
+    .super_val = cb->super_val,
+    .new_target = js_mkundef(),
+    .args = args,
+    .argc = argc,
+    .alloc = NULL,
+  };
+
+  sv_func_t *fn = cb->closure->func;
+  ant_value_t result;
+  
+  if (fn->jit_code) {
+    result = sv_jit_invoke(js, SV_JIT_FROM_C, fn->jit_code, vm, &ctx, cb->closure);
+    if (!sv_is_jit_bailout(result)) goto done;
+    sv_jit_on_bailout(fn);
+  }
+  result = sv_call_resolve_closure(vm, js, cb->closure, cb->func, &ctx, NULL);
+
+done:
+  sv_vm_maybe_checkpoint_microtasks(js);
+  return result;
+}
+
 static inline ant_value_t sv_vm_call_explicit_this(
   sv_vm_t *vm, ant_t *js, ant_value_t func,
   ant_value_t this_val, ant_value_t *args, int argc
