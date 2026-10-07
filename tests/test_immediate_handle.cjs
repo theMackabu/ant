@@ -2,6 +2,8 @@
 // hasRef and Symbol.dispose on its prototype. Only ref'd immediates keep the
 // process alive, but any queued immediate still runs before the loop waits on
 // timers. Extra arguments reach the callback, and clearImmediate takes the handle.
+// Each loop turn runs only the immediates queued before it, after the main
+// script's microtasks.
 const assert = require('node:assert');
 const { spawnSync } = require('node:child_process');
 
@@ -33,5 +35,9 @@ setTimeout(() => {
   assert.strictEqual(run("const i = setImmediate(() => console.log('ran')); i.unref(); i.ref()"), 'ran\n');
   assert.strictEqual(run("setImmediate(() => console.log('A')); setTimeout(() => console.log('T'), 0); setImmediate(() => console.log('B'))"), 'A\nB\nT\n');
   assert.strictEqual(run("{ using x = setImmediate(() => console.log('ran')); } console.log('after')"), 'after\n');
+  assert.strictEqual(run("setImmediate(() => console.log('imm')); Promise.resolve().then(() => console.log('micro')); process.nextTick(() => console.log('tick'))"), 'tick\nmicro\nimm\n');
+  assert.strictEqual(run("setImmediate(() => { console.log('a'); setImmediate(() => console.log('c')) }); setImmediate(() => console.log('b'))"), 'a\nb\nc\n');
+  assert.strictEqual(run("setImmediate(() => clearImmediate(b)); const b = setImmediate(() => console.log('BAD')); setImmediate(() => console.log('ok'))"), 'ok\n');
+  assert.strictEqual(run("let n = 0, fired = false; setTimeout(() => { fired = true }, 1); (function spin() { if (!fired && ++n < 1e6) setImmediate(spin); else console.log(fired) })()"), 'true\n');
   console.log('PASS Immediate handles behave like Node');
 }, 30);

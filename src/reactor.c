@@ -31,6 +31,7 @@ static inline bool event_loop_alive(ant_t *js) {
 void js_poll_events(ant_t *js) {
   gc_maybe(js);
 
+  process_microtasks(js);
   process_immediates(js);
   process_microtasks(js);
 }

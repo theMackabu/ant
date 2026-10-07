@@ -18,6 +18,8 @@ typedef struct {
   struct microtask_entry *microtasks_processing;
   struct immediate_entry *immediates;
   struct immediate_entry *immediates_tail;
+  struct immediate_entry *immediates_processing;
+  
   int next_timer_id;
   int next_immediate_id;
   int active_timer_count;

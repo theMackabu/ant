@@ -8,6 +8,7 @@
 
 #include "errors.h"
 #include "builder.h"
+#include "ptr.h"
 #include "internal.h"
 #include "silver/call.h"
 
@@ -61,6 +62,7 @@ typedef struct immediate_entry {
   int immediate_id;
   int active;
   bool refed;
+  ant_value_t handle;
   struct immediate_entry *next;
   int argc;
   ant_value_t argv[];
@@ -194,42 +196,49 @@ static ant_value_t js_timer_has_ref(ant_params_t) {
   return js_bool(uv_has_ref((const uv_handle_t *)&entry->handle) != 0);
 }
 
-static immediate_entry_t *find_immediate_entry(ant_t *js, ant_value_t handle) {
-  int id = (int)js_getnum(js_get_slot(handle, SLOT_DATA));
-  for (immediate_entry_t *entry = js->timers.immediates; entry; entry = entry->next)
-    if (entry->immediate_id == id && entry->active) return entry;
-  return NULL;
+static constexpr uint32_t IMMEDIATE_NATIVE_TAG = 0x494d4d44u; // IMMD
+static immediate_entry_t *immediate_entry_of(ant_value_t handle) {
+  return is_object_type(handle) ? js_get_native(handle, IMMEDIATE_NATIVE_TAG) : NULL;
+}
+
+static void immediate_detach_handle(immediate_entry_t *entry) {
+  if (is_object_type(entry->handle)) js_clear_native(entry->handle, IMMEDIATE_NATIVE_TAG);
+  entry->handle = js_mkundef();
 }
 
 static ant_value_t js_immediate_ref(ant_params_t) {
-  immediate_entry_t *entry = find_immediate_entry(js, js_getthis(js));
+  immediate_entry_t *entry = immediate_entry_of(js_getthis(js));
   if (entry) entry->refed = true;
   return js_getthis(js);
 }
 
 static ant_value_t js_immediate_unref(ant_params_t) {
-  immediate_entry_t *entry = find_immediate_entry(js, js_getthis(js));
+  immediate_entry_t *entry = immediate_entry_of(js_getthis(js));
   if (entry) entry->refed = false;
   return js_getthis(js);
 }
 
 static ant_value_t js_immediate_has_ref(ant_params_t) {
-  immediate_entry_t *entry = find_immediate_entry(js, js_getthis(js));
-  return js_bool(entry && entry->refed);
+  immediate_entry_t *entry = immediate_entry_of(js_getthis(js));
+  return js_bool(entry && entry->active && entry->refed);
 }
 
 static ant_value_t js_immediate_dispose(ant_params_t) {
-  immediate_entry_t *entry = find_immediate_entry(js, js_getthis(js));
+  immediate_entry_t *entry = immediate_entry_of(js_getthis(js));
   if (entry) entry->active = 0;
   return js_mkundef();
 }
 
 static ant_value_t immediate_make_object(ant_t *js, immediate_entry_t *entry) {
-  ant_value_t obj = js_mkobj(js);
-  if (is_object_type(js->builtins.immediate_proto)) js_set_proto_init(obj, js->builtins.immediate_proto);
-  js_set_slot(obj, SLOT_DATA, js_mknum((double)entry->immediate_id));
-  js_set(js, obj, "callback", entry->callback);
-  js_set_descriptor(js, obj, "callback", 8, JS_DESC_W | JS_DESC_C);
+  ant_value_t obj = js_mkobj_from_template(js, js->builtins.immediate_template);
+  if (is_err(obj)) return obj;
+  
+  ant_object_t *ptr = js_obj_ptr(obj);
+  ant_object_prop_set_unchecked(ptr, 0, entry->callback);
+  gc_write_barrier(js, ptr, entry->callback);
+  js_set_native(obj, entry, IMMEDIATE_NATIVE_TAG);
+  entry->handle = obj;
+  
   return obj;
 }
 
@@ -456,6 +465,7 @@ static ant_value_t js_set_immediate(ant_params_t) {
   entry->immediate_id = js->timers.next_immediate_id++;
   entry->active = 1;
   entry->refed = true;
+  entry->handle = js_mkundef();
   entry->next = NULL;
   
   if (js->timers.immediates_tail == NULL) {
@@ -472,10 +482,16 @@ static ant_value_t js_set_immediate(ant_params_t) {
 // clearImmediate(immediateId | immediateObject)
 static ant_value_t js_clear_immediate(ant_params_t) {
   if (nargs < 1) return js_mkundef();
-  int immediate_id = timer_id_from_arg(js, args[0]);
   
-  for (immediate_entry_t *entry = js->timers.immediates; entry != NULL; entry = entry->next) {
-    if (entry->immediate_id == immediate_id) { entry->active = 0; break; }
+  immediate_entry_t *entry = immediate_entry_of(args[0]);
+  if (entry) entry->active = 0;
+  else if (vtype(args[0]) == kTypeNumber) {
+    int immediate_id = (int)js_getnum(args[0]);
+    immediate_entry_t *lists[2] = { js->timers.immediates_processing, js->timers.immediates };
+    for (int l = 0; l < 2 && !entry; l++)
+      for (immediate_entry_t *it = lists[l]; it; it = it->next)
+        if (it->immediate_id == immediate_id) { entry = it; break; }
+    if (entry) entry->active = 0;
   }
   
   return js_mkundef();
@@ -954,11 +970,16 @@ bool js_maybe_drain_microtasks_after_async_settle(ant_t *js) {
 }
 
 void process_immediates(ant_t *js) {
-  while (js->timers.immediates != NULL) {
-    immediate_entry_t *entry = js->timers.immediates;
-    
-    js->timers.immediates = entry->next;
-    if (js->timers.immediates == NULL) js->timers.immediates_tail = NULL;
+  ant_timer_state_t *t = &js->timers;
+  if (t->immediates_processing) return;
+  
+  t->immediates_processing = t->immediates;
+  t->immediates = t->immediates_tail = NULL;
+  
+  while (t->immediates_processing) {
+    immediate_entry_t *entry = t->immediates_processing;
+    t->immediates_processing = entry->next;
+    immediate_detach_handle(entry);
     
     if (entry->active) {
       GC_ROOT_SAVE(root_mark, js);
@@ -1035,6 +1056,12 @@ void init_timer_module(ant_t *js) {
   js_set_sym(js, js->builtins.immediate_proto, js->sym.toStringTag_sym, js_mkstr(js, "Immediate", 9));
   js_set_sym(js, js->builtins.immediate_proto, js->sym.inspect_sym, js_mkfun(timer_inspect));
 
+  js->builtins.immediate_template = js_mkobj(js);
+  gc_register_root(&js->builtins.immediate_template);
+  js_set_proto_init(js->builtins.immediate_template, js->builtins.immediate_proto);
+  js_set(js, js->builtins.immediate_template, "callback", js_mkundef());
+  js_set_descriptor(js, js->builtins.immediate_template, "callback", 8, JS_DESC_W | JS_DESC_C);
+
   js_set_proto_init(js->builtins.interval_proto, js->sym.object_proto);
   js_set(js, js->builtins.interval_proto, "ref", js_mkfun(js_timer_ref));
   js_set(js, js->builtins.interval_proto, "unref", js_mkfun(js_timer_unref));
@@ -1089,7 +1116,7 @@ void cleanup_timer_module(ant_t *js) {
   ant_timer_state_t *t = &js->timers;
   
   ANT_ASSERT(
-    !t->microtasks_processing && !t->next_ticks_processing,
+    !t->microtasks_processing && !t->next_ticks_processing && !t->immediates_processing,
     "cannot destroy an isolate while it runs a job batch"
   );
 
@@ -1142,8 +1169,10 @@ void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
     for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
   }
   
-  for (immediate_entry_t *i = js->timers.immediates; i; i = i->next) {
+  immediate_entry_t *immediate_lists[2] = { js->timers.immediates, js->timers.immediates_processing };
+  for (int l = 0; l < 2; l++) for (immediate_entry_t *i = immediate_lists[l]; i; i = i->next) {
     mark(js, i->callback);
+    mark(js, i->handle);
     for (int a = 0; a < i->argc; a++) mark(js, i->argv[a]);
   }
 }
