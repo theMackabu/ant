@@ -35,6 +35,7 @@ bool js_inspect_builder_init_dynamic(js_inspect_builder_t *builder, ant_t *js, s
 void js_inspect_builder_dispose(js_inspect_builder_t *builder);
 bool js_inspect_tagged_header(js_inspect_builder_t *builder, const char *tag, size_t tag_len);
 bool js_inspect_object_body(js_inspect_builder_t *builder, ant_value_t obj);
+bool js_inspect_field(js_inspect_builder_t *builder, const char *key, ant_value_t value);
 bool js_inspect_close(js_inspect_builder_t *builder);
 
 __attribute__((format(printf, 2, 3)))

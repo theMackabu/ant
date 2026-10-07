@@ -156,9 +156,26 @@ static ant_value_t timer_to_primitive(ant_params_t) {
   return entry ? js_mknum((double)entry->timer_id) : js_mkundef();
 }
 
+static constexpr uint32_t IMMEDIATE_NATIVE_TAG = 0x494d4d44u; // IMMD
+static immediate_entry_t *immediate_entry_of(ant_value_t handle) {
+  return is_object_type(handle) ? js_get_native(handle, IMMEDIATE_NATIVE_TAG) : NULL;
+}
+
 static ant_value_t timer_inspect(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   timer_entry_t *entry = timer_entry_of(this_obj);
+  immediate_entry_t *immediate = immediate_entry_of(this_obj);
+  
+  ant_value_t refed = js_mknull();
+  bool destroyed = true;
+  
+  if (entry) {
+    refed = js_bool(uv_has_ref((const uv_handle_t *)&entry->handle));
+    destroyed = entry->closed || !entry->active;
+  } else if (immediate && immediate->active) {
+    refed = js_bool(immediate->refed);
+    destroyed = false;
+  }
 
   ant_value_t tag_val = js_get_sym(js, this_obj, js->sym.toStringTag_sym);
   const char *tag = vtype(tag_val) == kTypeString ? js_getstr(js, tag_val, NULL) : "Timeout";
@@ -168,10 +185,12 @@ static ant_value_t timer_inspect(ant_params_t) {
     return js_mkerr(js, "out of memory");
 
   bool ok = entry
-    ? js_inspect_header_for(&builder, this_obj, "%s (%d)", tag, entry->timer_id)
-    : js_inspect_header_for(&builder, this_obj, "%s", tag);
+    ? js_inspect_header(&builder, "%s (%d)", tag, entry->timer_id)
+    : js_inspect_header(&builder, "%s", tag);
   
   if (ok) ok = js_inspect_object_body(&builder, this_obj);
+  if (ok) ok = js_inspect_field(&builder, "Symbol(refed)", refed);
+  if (ok) ok = js_inspect_field(&builder, "Symbol(destroyed)", js_bool(destroyed));
   if (ok) ok = js_inspect_close(&builder);
   
   if (!ok) {
@@ -212,11 +231,6 @@ static ant_value_t js_timer_has_ref(ant_params_t) {
   timer_entry_t *entry = timer_open_entry_of(js_getthis(js));
   if (!entry) return js_false;
   return js_bool(uv_has_ref((const uv_handle_t *)&entry->handle) != 0);
-}
-
-static constexpr uint32_t IMMEDIATE_NATIVE_TAG = 0x494d4d44u; // IMMD
-static immediate_entry_t *immediate_entry_of(ant_value_t handle) {
-  return is_object_type(handle) ? js_get_native(handle, IMMEDIATE_NATIVE_TAG) : NULL;
 }
 
 static void immediate_detach_handle(immediate_entry_t *entry) {
