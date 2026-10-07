@@ -65,7 +65,9 @@ struct ant_isolate_t {
   ant_fixed_arena_t obj_arena;
   ant_fixed_arena_t closure_arena;
   ant_fixed_arena_t upvalue_arena;
+  
   uint32_t prototype_write_epoch;
+  uint32_t array_chain_plain_epoch;
 
   bool promise_constructor_protector_invalid;
   bool promise_resolve_lookup_protector_invalid;

@@ -1367,8 +1367,6 @@ void mir_emit_array_add_guard(
   MIR_reg_t t = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
   snprintf(name, sizeof(name), "add_ap_%d", site);
   MIR_reg_t ap = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
-  snprintf(name, sizeof(name), "add_op_%d", site);
-  MIR_reg_t op = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
 
 #define LOAD(dst, type, disp, base) \
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, dst), \
@@ -1383,25 +1381,15 @@ void mir_emit_array_add_guard(
   LOAD(t, MIR_JSVAL, offsetof(ant_object_t, proto), ptr);
   LOAD(ap, MIR_JSVAL, offsetof(ant_t, sym.array_proto), r_js);
   BRANCH(MIR_BNE, MIR_new_reg_op(ctx, t), MIR_new_reg_op(ctx, ap));
-  LOAD(op, MIR_JSVAL, offsetof(ant_t, sym.object_proto), r_js);
+  
+  LOAD(t, MIR_T_U32, offsetof(ant_t, ic.epoch), r_js);
+  LOAD(ap, MIR_T_U32, offsetof(ant_t, array_chain_plain_epoch), r_js);
+  BRANCH(MIR_BNE, MIR_new_reg_op(ctx, t), MIR_new_reg_op(ctx, ap));
+  
+  LOAD(ap, MIR_JSVAL, offsetof(ant_t, sym.array_proto), r_js);
   mir_emit_decode_ref(ctx, fn, ap, ap);
-  LOAD(t, MIR_JSVAL, offsetof(ant_object_t, proto), ap);
-  BRANCH(MIR_BNE, MIR_new_reg_op(ctx, t), MIR_new_reg_op(ctx, op));
-  mir_emit_decode_ref(ctx, fn, op, op);
-  LOAD(t, MIR_JSVAL, offsetof(ant_object_t, proto), op);
-  BRANCH(MIR_BNE, MIR_new_reg_op(ctx, t), MIR_new_uint_op(ctx, mkval(kTypeNull, 0)));
-
-  for (int i = 0; i < 2; i++) {
-    MIR_reg_t proto = i ? op : ap;
-    LOAD(t, MIR_T_U16, offsetof(ant_object_t, flags), proto);
-    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, t), MIR_new_reg_op(ctx, t),
-        MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_EXOTIC)));
-    BRANCH(MIR_BNE, MIR_new_reg_op(ctx, t), MIR_new_int_op(ctx, 0));
-    LOAD(t, MIR_T_P, offsetof(ant_object_t, shape), proto);
-    BRANCH(MIR_BEQ, MIR_new_reg_op(ctx, t), MIR_new_int_op(ctx, 0));
-    LOAD(t, MIR_T_U8, ANT_SHAPE_INDEX_KEYS_OFFSET, t);
-    BRANCH(MIR_BNE, MIR_new_reg_op(ctx, t), MIR_new_int_op(ctx, 0));
-  }
+  LOAD(t, MIR_T_U32, offsetof(ant_object_t, u.array.len), ap);
+  BRANCH(MIR_BNE, MIR_new_reg_op(ctx, t), MIR_new_int_op(ctx, 0));
 
 #undef LOAD
 #undef BRANCH

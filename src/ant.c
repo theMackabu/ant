@@ -4000,16 +4000,28 @@ static __attribute__((noinline)) bool array_store_reaches_proto_slow(ant_t *js, 
   return false;
 }
 
-static inline bool array_proto_chain_plain(ant_t *js, ant_object_t *arr) {
-  if (arr->proto != js->sym.array_proto) return false;
+static __attribute__((noinline)) bool array_chain_revalidate(ant_t *js) {
   ant_object_t *array_proto = (ant_object_t *)vptr(js->sym.array_proto);
   ant_object_t *object_proto = (ant_object_t *)vptr(js->sym.object_proto);
-  return
+  bool plain =
     array_proto->proto == js->sym.object_proto && object_proto->proto == mkval(kTypeNull, 0) &&
     !((array_proto->flags.raw | object_proto->flags.raw) & ANT_OBJECT_FLAG_EXOTIC) &&
-    array_proto->u.array.len == 0 &&
     !ant_shape_may_have_index_keys(array_proto->shape) &&
     !ant_shape_may_have_index_keys(object_proto->shape);
+  
+  if (plain) {
+    ant_object_guard_absence(array_proto);
+    ant_object_guard_absence(object_proto);
+    js->array_chain_plain_epoch = js->ic.epoch;
+  }
+  
+  return plain;
+}
+
+static inline bool array_proto_chain_plain(ant_t *js, ant_object_t *arr) {
+  if (arr->proto != js->sym.array_proto) return false;
+  if (((ant_object_t *)vptr(js->sym.array_proto))->u.array.len != 0) return false;
+  return js->array_chain_plain_epoch == js->ic.epoch || array_chain_revalidate(js);
 }
 
 static inline bool arguments_proto_chain_plain(ant_t *js, ant_object_t *args) {
@@ -4551,6 +4563,24 @@ keyed:;
   if (is_err(property)) return property;
   
   return js_setprop_keyed(js, obj, property, value);
+}
+
+static ant_value_t js_setprop_throw(ant_t *js, ant_value_t obj, ant_value_t key, bool is_index, uint32_t idx, ant_value_t value) {
+  sv_vm_t *vm = js->vm;
+  int saved_fp = vm->jit_mode_fp;
+  bool saved_strict = vm->jit_mode_strict;
+  
+  vm->jit_mode_fp = vm->fp;
+  vm->jit_mode_strict = true;
+  ant_value_t stored = is_index ? js_setprop_index(js, obj, idx, value) : js_setprop(js, obj, key, value);
+  vm->jit_mode_fp = saved_fp;
+  vm->jit_mode_strict = saved_strict;
+  
+  return stored;
+}
+
+static inline ant_value_t js_setprop_index_throw(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t value) {
+  return js_setprop_throw(js, obj, js_mkundef(), true, idx, value);
 }
 
 ant_value_t setprop_cstr(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v) {
@@ -11043,25 +11073,23 @@ static ant_value_t builtin_array_push(ant_params_t) {
     if (i == nargs) return tov((double) len);
 
     for (; i < nargs; i++) {
-      ant_value_t stored = js_setprop_index(js, arr, (uint32_t)len, args[i]);
+      ant_value_t stored = js_setprop_index_throw(js, arr, (uint32_t)len, args[i]);
       if (is_err(stored)) return stored;
       len++;
     }
     ant_value_t len_val = tov((double) len);
-    js_setprop(js, arr, js->length_str, len_val);
-    return len_val;
+    ant_value_t set = js_setprop_throw(js, arr, js->length_str, false, 0, len_val);
+    return is_err(set) ? set : len_val;
   }
   
-  for (int i = 0; i < nargs; i++) {
-    char idxstr[16];
-    size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)len);
-    js_mkprop_fast(js, arr, idxstr, idxlen, args[i]); len++;
+  for (int i = 0; i < nargs; i++, len++) {
+    ant_value_t stored = js_setprop_index_throw(js, arr, (uint32_t)len, args[i]);
+    if (is_err(stored)) return stored;
   }
 
   ant_value_t new_len = tov((double) len);
-  array_len_set(js, arr, len);
-
-  return new_len;
+  ant_value_t set = js_setprop_throw(js, arr, js->length_str, false, 0, new_len);
+  return is_err(set) ? set : new_len;
 }
 
 void js_arr_reserve(ant_t *js, ant_value_t arr, uint32_t n) {
