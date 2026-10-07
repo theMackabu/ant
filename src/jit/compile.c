@@ -142,7 +142,18 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   return sv_jit_compile_tier(js, func, hint_closure, SV_JIT_TIER_AUTO);
 }
 
+_Thread_local sv_func_t *jit_compile_owner;
+static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure, sv_jit_tier_t tier);
+
 sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure, sv_jit_tier_t tier) {
+  sv_func_t *outer = jit_compile_owner;
+  jit_compile_owner = func;
+  sv_jit_func_t code = jit_compile_tier(js, func, hint_closure, tier);
+  jit_compile_owner = outer;
+  return code;
+}
+
+static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure, sv_jit_tier_t tier) {
   if (sv_jitless_unlikely) {
     func->jit_compile_failed = true;
     return NULL;

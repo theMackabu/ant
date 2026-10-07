@@ -25,6 +25,9 @@ static constexpr int64_t JIT_COLD_PROMOTE_COMPILE_MULTIPLE = 20;
 static constexpr int64_t JIT_COLD_PROMOTE_CHECK_EVERY = 4096;
 
 static constexpr uint32_t JIT_HOT_COMPILE_BACKEDGE_THRESHOLD = SV_JIT_OSR_THRESHOLD / 8;
+static constexpr uint8_t JIT_SNAPSHOT_RESET_LIMIT = 3;
+
+extern _Thread_local sv_func_t *jit_compile_owner;
 
 typedef struct {
   MIR_context_t ctx;

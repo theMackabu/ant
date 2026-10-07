@@ -161,6 +161,7 @@ export function targets() {
     'test_array_storage_reuse.cjs',
     'test_jit_proto_method_snapshot.cjs',
     'test_jit_global_snapshot.cjs',
+    'test_jit_snapshot_recovery.cjs',
     'test_arguments_object_semantics.cjs',
     'test_array_builtin_fast_paths.cjs',
     'test_gc_native_buffers.cjs',
