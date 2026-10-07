@@ -257,6 +257,11 @@ static inline ant_value_t sv_call_resolve_closure(
   ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
 );
 
+static inline ant_value_t sv_call_closure_after_jit(
+  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
+  ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
+);
+
 static inline bool sv_closure_is_plain_sync(const sv_closure_t *closure) {
   return 
     closure && closure->call_flags == 0 && closure->func &&
@@ -511,7 +516,7 @@ static inline ant_value_t sv_callback_call(
     if (!sv_is_jit_bailout(result)) goto done;
     sv_jit_on_bailout(fn);
   }
-  result = sv_call_resolve_closure(vm, js, cb->closure, cb->func, &ctx, NULL);
+  result = sv_call_closure_after_jit(vm, js, cb->closure, cb->func, &ctx, NULL);
 
 done:
   sv_vm_maybe_checkpoint_microtasks(js);
@@ -632,6 +637,14 @@ static inline ant_value_t sv_call_resolve_closure(
     sv_jit_on_bailout(fn);
   }
 
+  return sv_call_closure_after_jit(vm, js, closure, callee_func, ctx, out_this);
+}
+
+static inline ant_value_t sv_call_closure_after_jit(
+  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
+  ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
+) {
+  sv_func_t *fn = closure->func;
   uint32_t cc = ++fn->call_count;
   if (__builtin_expect(cc == SV_TFB_ALLOC_THRESHOLD, 0)) sv_tfb_ensure(fn);
 

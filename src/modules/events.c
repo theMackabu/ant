@@ -537,7 +537,7 @@ static inline __attribute__((always_inline)) ant_value_t eventemitter_call_liste
         sv_jit_on_bailout(fn);
       }
       
-      return sv_call_resolve_closure(js->vm, js, closure, listener, &ctx, NULL);
+      return sv_call_closure_after_jit(js->vm, js, closure, listener, &ctx, NULL);
     }
   }
 
