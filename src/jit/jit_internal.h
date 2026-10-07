@@ -467,7 +467,7 @@ bool mir_emit_get_field_ic_fastpath(
     MIR_reg_t r_global_epoch);
 bool mir_emit_get_global_ic_fastpath(
     MIR_context_t ctx, MIR_item_t fn,
-    sv_func_t *func, int bc_off,
+    ant_t *js, sv_func_t *func, int bc_off,
     MIR_reg_t r_js, MIR_reg_t dst,
     MIR_label_t slow, MIR_reg_t r_global_epoch,
     uint8_t *ip);

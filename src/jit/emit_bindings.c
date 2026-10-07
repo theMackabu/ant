@@ -153,7 +153,7 @@ void jit_emit_bindings(jit_compile_t *c) {
       MIR_label_t gg_done = MIR_new_label(c->ctx);
       bool gg_fast = c->r_ic_epoch_val != 0 &&
                      mir_emit_get_global_ic_fastpath(
-                         c->ctx, c->jit_func, c->func, c->bc_off,
+                         c->ctx, c->jit_func, c->js, c->func, c->bc_off,
                          c->r_js, dst, gg_slow, c->r_ic_epoch_val, c->ip);
       if (gg_fast) {
         MIR_append_insn(c->ctx, c->jit_func,

@@ -271,6 +271,14 @@ static inline ant_value_t sv_eval_global_get_interned_ic(
   return out;
 }
 
+static inline ant_value_t sv_global_require_defined(ant_t *js, sv_atom_t *a, ant_value_t val) {
+  if (
+    is_undefined(val) && !lkp_interned(js->global, a->str).obj &&
+    !sv_global_lexical(js, a->str)
+  ) return js_mkerr_typed(js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int)a->len, a->str);
+  return val;
+}
+
 static inline ant_value_t sv_op_get_global(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
@@ -284,13 +292,8 @@ static inline ant_value_t sv_op_get_global(
     return sv;
   }
   
-  ant_value_t val = sv_global_get_interned_ic(js, a->str, func, ip);
+  ant_value_t val = sv_global_require_defined(js, a, sv_global_get_interned_ic(js, a->str, func, ip));
   if (is_err(val)) return val;
-  
-  if (
-    is_undefined(val) && !lkp_interned(js->global, a->str).obj &&
-    !sv_global_lexical(js, a->str)
-  ) return js_mkerr_typed(js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int)a->len, a->str);
 
   vm->stack[vm->sp++] = val;
   return val;

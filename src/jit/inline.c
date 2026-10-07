@@ -1636,7 +1636,7 @@ void jit_emit_inline_body(
         int gg_site = -(id * 100000 + inl_bc_off + 1);
         bool gg_fast = r_ic_epoch != 0 &&
                        mir_emit_get_global_ic_fastpath(
-                           ctx, jit_func, callee, gg_site,
+                           ctx, jit_func, js, callee, gg_site,
                            r_js, dst, slow, r_ic_epoch, ip);
         if (!gg_fast)
           MIR_append_insn(ctx, jit_func,

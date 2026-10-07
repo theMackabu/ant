@@ -330,7 +330,12 @@ ant_value_t jit_helper_get_global(
 ) {
   uint8_t *ip = NULL;
   if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
-  return sv_global_get_interned_ic(js, str, func, ip);
+  
+  ant_value_t val = sv_global_get_interned_ic(js, str, func, ip);
+  if (ip && *ip == OP_GET_GLOBAL && !is_err(val))
+    return sv_global_require_defined(js, &func->atoms[sv_get_u32(ip + 1)], val);
+  
+  return val;
 }
 
 static inline ant_value_t jit_eval_env(

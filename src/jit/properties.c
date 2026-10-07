@@ -1205,15 +1205,70 @@ bool mir_emit_get_field_ic_fastpath(
   return true;
 }
 
+static bool mir_emit_get_global_snapshot(
+    MIR_context_t ctx, MIR_item_t fn, ant_t *js, sv_func_t *func,
+    sv_ic_entry_t *ic, int bc_off, MIR_reg_t r_js, MIR_reg_t dst,
+    uint8_t *ip, MIR_label_t miss) {
+  sv_atom_t *atom = &func->atoms[sv_get_u32(ip + 1)];
+  ant_object_t *global = sv_global_obj_ptr(js->global);
+  ant_shape_t *shape = ic->cached_shape;
+  uint32_t index = ic->cached_index;
+  if (!global || global->flags.is_exotic || !shape || ic->epoch != js->ic.epoch ||
+      global->shape != shape || index >= global->prop_count ||
+      sv_global_lexical(js, atom->str)) return false;
+  const ant_shape_prop_t *prop = ant_shape_prop_at(shape, index);
+  if (!prop || prop->type != ANT_SHAPE_KEY_STRING || prop->key.interned != atom->str ||
+      prop->has_getter || prop->has_setter) return false;
+  if (!mir_snapshot_shape(js, shape)) return false;
+
+  MIR_reg_t ptr = mir_new_ic_reg(ctx, fn, "gg_snapshot", "global", bc_off, -1);
+  MIR_reg_t tmp = mir_new_ic_reg(ctx, fn, "gg_snapshot", "tmp", bc_off, -1);
+  MIR_reg_t expect = mir_new_ic_reg(ctx, fn, "gg_snapshot", "expect", bc_off, -1);
+#define LOAD(dst_reg, type, disp, base) \
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, dst_reg), \
+      MIR_new_mem_op(ctx, type, (MIR_disp_t)(disp), base, 0, 1)))
+
+  LOAD(tmp, MIR_T_U32, offsetof(ant_t, global_lexical_count), r_js);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, miss),
+      MIR_new_reg_op(ctx, tmp), MIR_new_uint_op(ctx, js->global_lexical_count)));
+  mir_load_imm(ctx, fn, ptr, (uint64_t)(uintptr_t)global);
+  LOAD(tmp, MIR_T_P, offsetof(ant_object_t, shape), ptr);
+  mir_load_imm(ctx, fn, expect, (uint64_t)(uintptr_t)shape);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, miss),
+      MIR_new_reg_op(ctx, tmp), MIR_new_reg_op(ctx, expect)));
+  LOAD(tmp, MIR_T_U32, offsetof(ant_object_t, prop_count), ptr);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBLE, MIR_new_label_op(ctx, miss),
+      MIR_new_reg_op(ctx, tmp), MIR_new_uint_op(ctx, index)));
+  uint8_t inobj_limit = ant_shape_get_inobj_limit(shape);
+  if (index < inobj_limit) {
+    LOAD(dst, MIR_JSVAL, offsetof(ant_object_t, inobj) + index * sizeof(ant_value_t), ptr);
+  } else {
+    LOAD(tmp, MIR_T_P, offsetof(ant_object_t, overflow_prop), ptr);
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, miss),
+        MIR_new_reg_op(ctx, tmp), MIR_new_int_op(ctx, 0)));
+    LOAD(dst, MIR_JSVAL, (index - inobj_limit) * sizeof(ant_value_t), tmp);
+  }
+#undef LOAD
+  return true;
+}
+
 bool mir_emit_get_global_ic_fastpath(
     MIR_context_t ctx, MIR_item_t fn,
-    sv_func_t *func, int bc_off,
+    ant_t *js, sv_func_t *func, int bc_off,
     MIR_reg_t r_js, MIR_reg_t dst,
     MIR_label_t slow, MIR_reg_t r_global_epoch,
     uint8_t *ip) {
   if (!func || !func->ic_slots || !ip) return false;
   sv_ic_entry_t *ic = sv_global_ic_slot_for_ip(func, ip);
   if (!ic) return false;
+
+  MIR_label_t snapshot_done = NULL;
+  MIR_label_t snapshot_miss = MIR_new_label(ctx);
+  if (js && mir_emit_get_global_snapshot(ctx, fn, js, func, ic, bc_off, r_js, dst, ip, snapshot_miss)) {
+    snapshot_done = MIR_new_label(ctx);
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, snapshot_done)));
+    MIR_append_insn(ctx, fn, snapshot_miss);
+  }
 
   MIR_reg_t r_ic = mir_new_ic_reg(ctx, fn, "gg", "ic", bc_off, -1);
   MIR_reg_t r_e = mir_new_ic_reg(ctx, fn, "gg", "e", bc_off, -1);
@@ -1335,6 +1390,7 @@ bool mir_emit_get_global_ic_fastpath(
                                MIR_new_reg_op(ctx, dst),
                                MIR_new_mem_op(ctx, MIR_T_I64, 0, r_ov, r_oi, 8)));
   MIR_append_insn(ctx, fn, fast_done);
+  if (snapshot_done) MIR_append_insn(ctx, fn, snapshot_done);
 
   return true;
 }
