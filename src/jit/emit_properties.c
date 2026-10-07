@@ -598,9 +598,9 @@ void jit_emit_properties(jit_compile_t *c) {
       MIR_reg_t obj = vstack_pop(&c->vs);
       MIR_reg_t dst = vstack_push(&c->vs);
       mir_emit_get_length(
-          c->ctx, c->jit_func, obj, dst,
-          c->r_vm, c->r_js, c->r_d_slot,
-          c->helper1_proto, c->imp_get_length,
+          c->ctx, c->jit_func, c->js, obj, dst,
+          c->r_js, c->r_d_slot,
+          c->get_length_proto, c->imp_get_length,
           builder_length,
           -1, c->bc_off);
       jit_emit_throw_if_error(c, dst);

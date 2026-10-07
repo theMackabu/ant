@@ -1438,13 +1438,12 @@ void jit_helper_set_name(
   sv_set_name(js, fn, str, len);
 }
 
-ant_value_t jit_helper_get_length(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
+ant_value_t jit_helper_get_length(ant_t *js, ant_value_t obj) {
   return sv_get_length_value(js, obj);
 }
 
-ant_value_t jit_helper_get_length_inline(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
-  (void)vm;
-  if (vtype(obj) == kTypeArray)
+ant_value_t jit_helper_get_length_inline(ant_t *js, ant_value_t obj) {
+  if (vtype(obj) == kTypeArray && !js_obj_ptr(obj)->flags.arguments_object)
     return tov((double)(uint32_t)js_arr_len(js, obj));
 
   if (vtype(obj) == kTypeString)

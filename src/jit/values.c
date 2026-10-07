@@ -667,10 +667,10 @@ void mir_d_to_i64(MIR_context_t ctx, MIR_item_t fn,
 }
 
 void mir_emit_get_length(
-    MIR_context_t ctx, MIR_item_t fn,
+    MIR_context_t ctx, MIR_item_t fn, ant_t *js,
     MIR_reg_t obj, MIR_reg_t dst,
-    MIR_reg_t r_vm, MIR_reg_t r_js, MIR_reg_t r_d_slot,
-    MIR_item_t helper1_proto, MIR_item_t imp_get_length,
+    MIR_reg_t r_js, MIR_reg_t r_d_slot,
+    MIR_item_t get_length_proto, MIR_item_t imp_get_length,
     bool builder_slot,
     int owner_id, int bc_off) {
   char tag_name[48], ptr_name[48], len_name[48], dbl_name[48];
@@ -803,6 +803,23 @@ void mir_emit_get_length(
   mir_emit_decode_ref(ctx, fn, ptr, obj);
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_MOV,
+                               MIR_new_reg_op(ctx, tag),
+                               MIR_new_mem_op(ctx, MIR_T_U8,
+                                              (MIR_disp_t)offsetof(ant_object_t, flags) + 1, ptr, 0, 1)));
+  ant_shape_t *arguments_shapes[2] = {0};
+  if (js) {
+    ant_value_t templates[2] = {js->builtins.arguments_iter_template, js->builtins.sloppy_arguments_iter_template};
+    for (int i = 0; i < 2; i++)
+      if (vtype(templates[i]) == kTypeObject) arguments_shapes[i] = js_obj_ptr(templates[i])->shape;
+  }
+  MIR_label_t arguments = arguments_shapes[0] || arguments_shapes[1] ? MIR_new_label(ctx) : slow;
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_UBGE,
+                               MIR_new_label_op(ctx, arguments),
+                               MIR_new_reg_op(ctx, tag),
+                               MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_ARGUMENTS >> 8)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV,
                                MIR_new_reg_op(ctx, len),
                                MIR_new_mem_op(ctx, MIR_T_U32,
                                               (MIR_disp_t)offsetof(ant_object_t, u.array.len), ptr, 0, 1)));
@@ -816,13 +833,37 @@ void mir_emit_get_length(
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
 
+  if (arguments != slow) {
+    MIR_label_t template_hit = MIR_new_label(ctx);
+    MIR_append_insn(ctx, fn, arguments);
+    MIR_append_insn(ctx, fn,
+                    MIR_new_insn(ctx, MIR_MOV,
+                                 MIR_new_reg_op(ctx, tag),
+                                 MIR_new_mem_op(ctx, MIR_T_P, (MIR_disp_t)offsetof(ant_object_t, shape), ptr, 0, 1)));
+    for (int i = 0; i < 2; i++) {
+      if (!arguments_shapes[i]) continue;
+      mir_load_imm(ctx, fn, len, (uint64_t)(uintptr_t)arguments_shapes[i]);
+      MIR_append_insn(ctx, fn,
+                      MIR_new_insn(ctx, MIR_BEQ,
+                                   MIR_new_label_op(ctx, template_hit),
+                                   MIR_new_reg_op(ctx, tag),
+                                   MIR_new_reg_op(ctx, len)));
+    }
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, slow)));
+    MIR_append_insn(ctx, fn, template_hit);
+    MIR_append_insn(ctx, fn,
+                    MIR_new_insn(ctx, MIR_MOV,
+                                 MIR_new_reg_op(ctx, dst),
+                                 MIR_new_mem_op(ctx, MIR_JSVAL, (MIR_disp_t)offsetof(ant_object_t, inobj), ptr, 0, 1)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+  }
+
   MIR_append_insn(ctx, fn, slow);
   MIR_append_insn(ctx, fn,
-                  MIR_new_call_insn(ctx, 6,
-                                    MIR_new_ref_op(ctx, helper1_proto),
+                  MIR_new_call_insn(ctx, 5,
+                                    MIR_new_ref_op(ctx, get_length_proto),
                                     MIR_new_ref_op(ctx, imp_get_length),
                                     MIR_new_reg_op(ctx, dst),
-                                    MIR_new_reg_op(ctx, r_vm),
                                     MIR_new_reg_op(ctx, r_js),
                                     MIR_new_reg_op(ctx, obj)));
   MIR_append_insn(ctx, fn, done);

@@ -554,8 +554,10 @@ static inline bool sv_try_get_data_prop_no_effect_interned(
     if (t == kTypeArray) {
       ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
       if (!ptr || ptr->flags.is_exotic) return false;
-      *out = tov((double)js_arr_len(js, js_as_obj(obj)));
-      return true;
+      if (!ptr->flags.arguments_object) {
+        *out = tov((double)js_arr_len(js, js_as_obj(obj)));
+        return true;
+      }
     }
   }
 
@@ -778,7 +780,7 @@ static inline ant_value_t sv_prop_get_at(
 
   if (is_length_key(interned, len)) {
     ant_object_t *arr_ptr = sv_array_obj_ptr(obj);
-    if (arr_ptr) return tov((double)js_arr_len(js, js_as_obj(obj)));
+    if (arr_ptr && !arr_ptr->flags.arguments_object) return tov((double)js_arr_len(js, js_as_obj(obj)));
   }
 
   if (t == kTypeObject || t == kTypeArray || t == kTypeFunction || t == kTypePromise) {
@@ -1642,7 +1644,12 @@ static inline void sv_op_define_slot(
 }
 
 static inline ant_value_t sv_get_length_value(ant_t *js, ant_value_t obj) {
-  if (vtype(obj) == kTypeArray) return tov((double)(uint32_t)js_arr_len(js, obj));
+  if (vtype(obj) == kTypeArray) {
+    ant_value_t out;
+    if (!js_obj_ptr(obj)->flags.arguments_object) return tov((double)(uint32_t)js_arr_len(js, obj));
+    if (sv_try_get_data_prop_no_effect_interned(js, obj, js->intern.length, 6, &out)) return out;
+  }
+  
   if (vtype(obj) == kTypeString) return tov((double)str_utf16_len(js, obj));
   
   if (vtype(obj) == kTypeNull || vtype(obj) == kTypeUndefined) return js_mkerr_typed(

@@ -94,7 +94,8 @@ static MIR_label_t jit_emit_array_push_fastpath(jit_compile_t *c) {
       MIR_new_mem_op(c->ctx, MIR_T_U16, (MIR_disp_t)offsetof(ant_object_t, flags), ptr, 0, 1)));
   MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_AND, MIR_new_reg_op(c->ctx, c->r_bool),
       MIR_new_reg_op(c->ctx, flags),
-      MIR_new_uint_op(c->ctx, ANT_OBJECT_FLAG_EXOTIC | ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS)));
+      MIR_new_uint_op(c->ctx, ANT_OBJECT_FLAG_EXOTIC | ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS |
+                              ANT_OBJECT_FLAG_ARGUMENTS)));
   MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, slow),
       MIR_new_reg_op(c->ctx, c->r_bool),
       MIR_new_uint_op(c->ctx, ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS)));

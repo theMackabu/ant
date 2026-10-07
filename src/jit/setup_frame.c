@@ -320,6 +320,7 @@ bool jit_setup_frame(jit_compile_t *c) {
   c->inline_ext = (jit_inline_ext_t){
       .next_inline_id = &c->call_n,
       .helper1_proto = c->helper1_proto,
+      .get_length_proto = c->get_length_proto,
       .object_proto = c->object_proto,
       .imp_object = c->imp_object,
       .truthy_proto = c->truthy_proto,

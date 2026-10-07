@@ -44,6 +44,7 @@ typedef struct jit_compile {
   MIR_item_t call_is_proto;
   MIR_item_t helper1_proto;
   MIR_item_t to_string_proto;
+  MIR_item_t get_length_proto;
   MIR_item_t normalize_this_proto;
   MIR_item_t str_append_local_proto;
   MIR_item_t str_append_local_snapshot_proto;

@@ -123,7 +123,7 @@ typedef enum {
 } jit_child_kind_t;
 #define JIT_INLINE_MAX_BYTECODE 192
 typedef struct {
-  MIR_item_t helper1_proto, imp_get_length_inline;
+  MIR_item_t helper1_proto, get_length_proto, imp_get_length_inline;
   MIR_item_t object_proto, imp_object;
   MIR_item_t truthy_proto, imp_is_truthy;
   MIR_item_t imp_get_field, imp_get_length;
@@ -215,10 +215,10 @@ void mir_d_to_i64(MIR_context_t ctx, MIR_item_t fn,
                   MIR_reg_t dst_i64, MIR_reg_t src_d,
                   MIR_reg_t slot);
 void mir_emit_get_length(
-    MIR_context_t ctx, MIR_item_t fn,
+    MIR_context_t ctx, MIR_item_t fn, ant_t *js,
     MIR_reg_t obj, MIR_reg_t dst,
-    MIR_reg_t r_vm, MIR_reg_t r_js, MIR_reg_t r_d_slot,
-    MIR_item_t helper1_proto, MIR_item_t imp_get_length,
+    MIR_reg_t r_js, MIR_reg_t r_d_slot,
+    MIR_item_t get_length_proto, MIR_item_t imp_get_length,
     bool builder_slot,
     int owner_id, int bc_off);
 void mir_emit_slot_boxed(MIR_context_t ctx, MIR_item_t fn,

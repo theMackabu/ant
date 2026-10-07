@@ -608,28 +608,8 @@ static bool util_is_boxed_primitive(ant_value_t value, uint8_t *type_out) {
   return true;
 }
 
-static bool util_has_to_string_tag(ant_t *js, ant_value_t value, const char *tag, size_t tag_len) {
-  ant_value_t to_string_tag;
-  size_t actual_len = 0;
-  const char *actual;
-
-  if (!is_object_type(value)) return false;
-
-  to_string_tag = js_get_sym(js, value, js->sym.toStringTag_sym);
-  if (vtype(to_string_tag) != kTypeString) return false;
-
-  actual = js_getstr(js, to_string_tag, &actual_len);
-  return actual != NULL && actual_len == tag_len && memcmp(actual, tag, tag_len) == 0;
-}
-
-static bool util_is_arguments_object_value(ant_t *js, ant_value_t value) {
-  ant_value_t callee = js_mkundef();
-
-  if (vtype(value) != kTypeArray) return false;
-  if (js_get_slot(value, SLOT_STRICT_ARGS) == js_true) return true;
-  if (!util_has_to_string_tag(js, value, "Arguments", 9)) return false;
-
-  return js_try_get_own_data_prop(js, value, "callee", 6, &callee);
+static bool util_is_arguments_object_value(ant_value_t value) {
+  return vtype(value) == kTypeArray && js_get_slot(value, SLOT_ARGUMENTS_OBJECT) == js_true;
 }
 
 static ant_value_t util_types_is_any_array_buffer(ant_params_t) {
@@ -752,7 +732,7 @@ static ant_value_t util_types_is_generator_object(ant_params_t) {
 
 static ant_value_t util_types_is_arguments_object(ant_params_t) {
   if (nargs < 1) return js_false;
-  return js_bool(util_is_arguments_object_value(js, args[0]));
+  return js_bool(util_is_arguments_object_value(args[0]));
 }
 
 static ant_value_t util_types_is_native_error(ant_params_t) {

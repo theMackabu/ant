@@ -1,0 +1,15 @@
+diff --git a/mir-gen.c b/mir-gen.c
+index 3de79b4..3a5da9b 100644
+--- a/mir-gen.c
++++ b/mir-gen.c
+@@ -4702,7 +4702,9 @@ static void gvn_modify (gen_ctx_t gen_ctx) {
+         }
+         if (add_sub_const_insn_p (gen_ctx, insn, &val2) && (se = insn->ops[1].data) != NULL
+             && (def_insn = skip_moves (gen_ctx, se->def->insn)) != NULL
+-            && add_sub_const_insn_p (gen_ctx, def_insn, &val)) {
++            && add_sub_const_insn_p (gen_ctx, def_insn, &val)
++            && val == (int32_t) val && (int64_t) ((uint64_t) val + (uint64_t) val2)
++                                          == (int32_t) ((uint64_t) val + (uint64_t) val2)) {
+           /* r1=r0+const; ... r2=r1+const2 =>
+              temp = r0; r1=r0+const; ... r2=r1+const2;r2=temp+(const+const2): */
+           temp_reg = gen_new_temp_reg (gen_ctx, MIR_T_I64, func);

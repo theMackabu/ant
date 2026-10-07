@@ -1785,9 +1785,9 @@ void jit_emit_inline_body(
         MIR_label_t gl_ok = MIR_new_label(ctx);
         INL_ENSURE_D_SLOT();
         mir_emit_get_length(
-            ctx, jit_func, gl_obj, gl_dst,
-            r_vm, r_js, *p_d_slot,
-            ext->helper1_proto, seen_effect ? ext->imp_get_length : ext->imp_get_length_inline,
+            ctx, jit_func, js, gl_obj, gl_dst,
+            r_js, *p_d_slot,
+            ext->get_length_proto, seen_effect ? ext->imp_get_length : ext->imp_get_length_inline,
             false,
             id, inl_bc_off);
         mir_emit_inline_read_guard(

@@ -113,7 +113,7 @@ typedef union ant_object_flags {
     uint8_t in_remember_set: 1;
     uint8_t guards_absence: 1;
     uint8_t dense_length_fits: 1;
-    uint8_t strict_arguments: 1;
+    uint8_t arguments_object: 1;
     uint8_t regexp_brand: 1;
   };
   uint16_t raw;
@@ -141,7 +141,7 @@ typedef enum: uint16_t {
     1u << 12,
   ANT_OBJECT_FLAG_DENSE_LENGTH_FITS =
     1u << 13,
-  ANT_OBJECT_FLAG_STRICT_ARGUMENTS =
+  ANT_OBJECT_FLAG_ARGUMENTS =
     1u << 14,
   ANT_OBJECT_FLAG_REGEXP_BRAND =
     1u << 15,
@@ -183,8 +183,8 @@ static inline bool ant_object_flag_masks_match_layout(void) {
   flags = (ant_object_flags_t){.dense_length_fits = 1};
   if (flags.raw != ANT_OBJECT_FLAG_DENSE_LENGTH_FITS) return false;
 
-  flags = (ant_object_flags_t){.strict_arguments = 1};
-  if (flags.raw != ANT_OBJECT_FLAG_STRICT_ARGUMENTS) return false;
+  flags = (ant_object_flags_t){.arguments_object = 1};
+  if (flags.raw != ANT_OBJECT_FLAG_ARGUMENTS) return false;
 
   flags = (ant_object_flags_t){.regexp_brand = 1};
   return flags.raw == ANT_OBJECT_FLAG_REGEXP_BRAND;

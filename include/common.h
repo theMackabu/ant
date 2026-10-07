@@ -44,7 +44,7 @@
   X(SLOT_OBSERVABLE_SUBSCRIBER)   \
   X(SLOT_SUBSCRIPTION_OBSERVER)   \
   X(SLOT_SUBSCRIPTION_CLEANUP)    \
-  X(SLOT_STRICT_ARGS)             \
+  X(SLOT_ARGUMENTS_OBJECT)        \
   X(SLOT_ITER_STATE)              \
   X(SLOT_ENTRIES)                 \
   X(SLOT_SETTLED)                 \
