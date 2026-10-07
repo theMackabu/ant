@@ -24,6 +24,10 @@ bool has_active_stdin(ant_t *js);
 bool process_report_uncaught_exception(ant_t *js);
 bool process_has_event_listeners(ant_t *js, const char *event_type);
 
+int process_exit_code(ant_t *js);
+int process_run_exit_handlers(ant_t *js, int status);
+[[noreturn]] void process_exit_with(ant_t *js, int status);
+
 static inline void process_report_uncaught_exception_if_pending(ant_t *js) {
   if (__builtin_expect(Ant_Exception_Pending(js), 0))
     process_report_uncaught_exception(js);

@@ -44,6 +44,7 @@
 #include "silver/ops/eval_env.h"
 #include "modules/regex.h"
 #include "modules/json.h"
+#include "modules/process.h"
 
 #ifndef ANT_WASM_EMBED
 #include <uv.h>
@@ -21490,7 +21491,8 @@ void js_check_unhandled_rejections(ant_t *js) {
     if (js->fatal_error) {
       js_throw(js, pd->value);
       print_uncaught_throw(js);
-      js_destroy(js); exit(1);
+      int status = process_run_exit_handlers(js, EXIT_FAILURE);
+      js_destroy(js); exit(status);
     }
 
     GC_ROOT_SAVE(root_mark, js);

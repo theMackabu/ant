@@ -86,6 +86,10 @@ struct ant_process_state {
 
   stdin_state_t stdin_state;
   uint64_t process_start_time;
+  
+  int32_t exit_code;
+  bool has_exit_code;
+  bool exiting;
 
   stdin_byte_consumer_fn stdin_byte_consumer;
   stdin_eof_fn stdin_byte_eof;
@@ -338,7 +342,7 @@ bool process_report_uncaught_exception(ant_t *js) {
   }
 
   print_error_value(js, reason, stack, NULL);
-  if (!js->uncaught_nonfatal) exit(EXIT_FAILURE);
+  if (!js->uncaught_nonfatal) process_exit_with(js, EXIT_FAILURE);
 
   GC_ROOT_RESTORE(js, root_mark);
   return true;
@@ -1416,15 +1420,113 @@ static void load_dotenv_file(ant_t *js, ant_value_t env_obj) {
   fclose(fp);
 }
 
-static ant_value_t process_exit(ant_params_t) {
-  int code = 0;
+static ant_value_t process_code_error(ant_t *js, js_err_type_t type, const char *code, const char *message) {
+  ant_value_t props = js_mkobj(js);
+  js_set(js, props, "code", js_mkstr(js, code, strlen(code)));
+  return js_mkerr_props(js, type, props, "%s", message);
+}
+
+static ant_value_t process_set_exit_code(ant_t *js, ant_process_state_t *ps, ant_value_t code) {
+  if (vtype(code) == kTypeUndefined || vtype(code) == kTypeNull) {
+    ps->has_exit_code = false;
+    return js_mkundef();
+  }
+
+  size_t len = 0;
+  if (vtype(code) == kTypeString) js_getstr(js, code, &len);
   
-  if (nargs > 0 && vtype(args[0]) == kTypeNumber) {
-    code = (int)js_getnum(args[0]);
+  double n = js_to_number(js, code);
+  bool numeric_string = len > 0 && !isnan(n);
+  
+  if (vtype(code) != kTypeNumber && !numeric_string) {
+    char buf[64], message[192];
+    js_cstr_t received = js_to_cstr(js, code, buf, sizeof(buf));
+    const char *quote = vtype(code) == kTypeString ? "'" : "";
+    
+    if (vtype(code) == kTypeString || vtype(code) == kTypeBool || vtype(code) == kTypeBigInt) snprintf(
+      message, sizeof(message), "The \"code\" argument must be of type number. Received type %s (%s%.25s%s%s)",
+      typestr(vtype(code)), quote, received.ptr, received.len > 28 ? "..." : "", quote
+    );
+    else snprintf(
+      message, sizeof(message), "The \"code\" argument must be of type number. Received type %s",
+      typestr(vtype(code))
+    );
+    
+    if (received.needs_free) free((void *)received.ptr);
+    return process_code_error(js, JS_ERR_TYPE, "ERR_INVALID_ARG_TYPE", message);
+  }
+
+  if (!isfinite(n) || n != trunc(n) || fabs(n) > 9007199254740991.0) {
+    char buf[64], message[160];
+    js_cstr_t received = js_to_cstr(js, js_mknum(n), buf, sizeof(buf));
+    snprintf(
+      message, sizeof(message), "The value of \"code\" is out of range. It must be %s. Received %s",
+      isfinite(n) && n == trunc(n) ? ">= -9007199254740991 && <= 9007199254740991" : "an integer", received.ptr
+    );
+    
+    if (received.needs_free) free((void *)received.ptr);
+    return process_code_error(js, JS_ERR_RANGE, "ERR_OUT_OF_RANGE", message);
+  }
+
+  ps->exit_code = (int32_t)(uint32_t)(int64_t)n;
+  ps->has_exit_code = true;
+  
+  return js_mkundef();
+}
+
+static ant_value_t process_exit_code_getter(ant_params_t) {
+  ant_process_state_t *ps = process_state(js);
+  return ps && ps->has_exit_code ? js_mknum(ps->exit_code) : js_mkundef();
+}
+
+static ant_value_t process_exit_code_setter(ant_params_t) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return js_mkundef();
+  return process_set_exit_code(js, ps, nargs > 0 ? args[0] : js_mkundef());
+}
+
+int process_exit_code(ant_t *js) {
+  ant_process_state_t *ps = js->process_state;
+  return ps && ps->has_exit_code ? ps->exit_code : 0;
+}
+
+int process_run_exit_handlers(ant_t *js, int status) {
+  ant_process_state_t *ps = js->process_state;
+  if (!ps) return status;
+
+  if (status != EXIT_SUCCESS) {
+    ps->exit_code = status;
+    ps->has_exit_code = true;
+  }
+
+  if (ps->exiting || !is_object_type(ps->process_obj)) return process_exit_code(js);
+  ps->exiting = true;
+  js_set(js, ps->process_obj, "_exiting", js_true);
+
+  ant_value_t code = js_mknum(process_exit_code(js));
+  emit_process_event(js, "exit", &code, 1);
+  
+  if (print_uncaught_throw(js) && !ps->has_exit_code) {
+    ps->exit_code = EXIT_FAILURE;
+    ps->has_exit_code = true;
+  }
+
+  return process_exit_code(js);
+}
+
+void process_exit_with(ant_t *js, int status) {
+  exit(process_run_exit_handlers(js, status));
+}
+
+static ant_value_t process_exit(ant_params_t) {
+  ant_process_state_t *ps = process_state(js);
+  
+  if (ps && nargs > 0 && vtype(args[0]) != kTypeUndefined) {
+    ant_value_t result = process_set_exit_code(js, ps, args[0]);
+    if (is_err(result)) return result;
   }
   
-  exit(code);
-  return js_mkundef();
+  process_exit_with(js, EXIT_SUCCESS);
 }
 
 typedef struct {
@@ -1809,6 +1911,12 @@ void init_process_module(ant_t *js) {
   
   process_set_methods(js, process_obj, false);
   js_set(js, process_obj, "binding", js_mkfun(process_binding));
+  js_set(js, process_obj, "_exiting", js_false);
+  
+  js_set_accessor_desc(
+    js, process_obj, "exitCode", 8,
+    js_mkfun(process_exit_code_getter), js_mkfun(process_exit_code_setter), JS_DESC_E
+  );
 
   load_dotenv_file(js, env_obj);
   js_set_keys(env_obj, env_keys);

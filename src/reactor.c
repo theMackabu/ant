@@ -81,7 +81,7 @@ drain:
   if (has_pending_immediates(js)) process_immediates(js);
   process_microtasks(js);
   
-  ant_value_t code = js_mknum(0);
+  ant_value_t code = js_mknum(process_exit_code(js));
   emit_process_event(js, "beforeExit", &code, 1);
   if (event_loop_alive(js)) goto drain;
 }

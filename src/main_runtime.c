@@ -19,6 +19,7 @@
 #include "cli/version.h"
 #include "esm/loader.h"
 #include "modules/server.h"
+#include "modules/process.h"
 
 static int run_bundle_entry(ant_t *js, const ant_bundle_module_t *entry) {
   const char *key = entry->key;
@@ -174,6 +175,7 @@ int main(int argc, char *argv[]) {
   } else {
     js_result = run_bundle_entry(js, entry_mod);
     js_run_event_loop(js);
+    js_result = process_run_exit_handlers(js, js_result);
   }
 
   js_destroy(js);

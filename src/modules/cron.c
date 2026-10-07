@@ -918,13 +918,15 @@ handler_failed:
     } else {
       print_error_value(js, reason, js_mkundef(), NULL);
       GC_ROOT_RESTORE(js, root_mark);
-      exit(EXIT_FAILURE);
+      process_exit_with(js, EXIT_FAILURE);
     }
+    
     job->busy = false;
     ant_value_t error = js_mkundef();
     cron_schedule_job(job, &error);
     GC_ROOT_RESTORE(js, root_mark);
     process_microtasks(js);
+    
     return;
   }
 

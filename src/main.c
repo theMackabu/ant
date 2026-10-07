@@ -945,6 +945,9 @@ int main(int argc, char *argv[]) {
     free(resolved_file);
     if (js_result != EXIT_SUCCESS) break;
   }}
+  
+  if (!internal_crash_report_mode) 
+    js_result = process_run_exit_handlers(js, js_result);
     
   cleanup: {
     js_destroy(js);
