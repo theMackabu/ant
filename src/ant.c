@@ -1009,6 +1009,14 @@ static inline void array_mark_may_have_holes(ant_value_t obj) {
   if (ptr) ptr->flags.may_have_holes = 1;
 }
 
+static inline void array_mark_packed(ant_value_t obj) {
+  ant_object_t *ptr = array_obj_ptr(obj);
+  if (
+    ptr && ptr->flags.fast_array && ptr->u.array.data && 
+    ptr->u.array.len <= ptr->u.array.cap
+  ) ptr->flags.may_have_holes = 0;
+}
+
 static inline void array_define_or_set_index(ant_t *js, ant_value_t obj, const char *key, size_t klen) {
   if (!key) return;
   if (!array_obj_ptr(obj)) return;
@@ -2678,10 +2686,9 @@ static ant_value_t alloc_array_with_proto_capacity(
   if (obj->u.array.data) {
     js->alloc_bytes.arrays += (size_t)obj->u.array.cap * sizeof(*obj->u.array.data);
     gc_array_grew(js);
-    uint32_t fill_start = overwritten_prefix < obj->u.array.cap
-      ? overwritten_prefix
-      : obj->u.array.cap;
-    for (uint32_t i = fill_start; i < obj->u.array.cap; i++) obj->u.array.data[i] = T_EMPTY;
+    ant_value_t *data = obj->u.array.data;
+    size_t fill_start = overwritten_prefix < capacity ? overwritten_prefix : capacity;
+    for (size_t i = fill_start; i < capacity; i++) data[i] = T_EMPTY;
     obj->flags.fast_array = 1;
     obj->flags.dense_length_fits = 1;
     obj->flags.may_have_holes = 0;
@@ -3844,11 +3851,23 @@ static ant_value_t array_constructor_from_receiver(ant_t *js, ant_value_t receiv
   return ctor;
 }
 
-static ant_value_t array_alloc_intrinsic(ant_t *js, ant_offset_t length_hint) {
-  ant_value_t arr = mkarr(js);
-  if (is_err(arr) || length_hint == 0) return arr;
+static constexpr ant_offset_t ARRAY_RESULT_PREALLOC_MAX = 1024;
+
+static ant_value_t array_alloc_intrinsic(ant_t *js, ant_value_t source, ant_offset_t length_hint) {
+  if (length_hint == 0) return mkarr(js);
+  
+  ant_object_t *src = array_obj_ptr(source);
+  bool exact = length_hint <= ARRAY_RESULT_PREALLOC_MAX ||
+    (src && src->flags.fast_array && length_hint <= src->u.array.cap);
+  
+  ant_value_t arr = exact && length_hint <= UINT32_MAX
+    ? alloc_array_with_proto_capacity(js, js->sym.array_proto, (uint32_t)length_hint, 0, false)
+    : mkarr(js);
+  
+  if (is_err(arr)) return arr;
   array_len_set(js, arr, length_hint);
   array_mark_may_have_holes(arr);
+  
   return arr;
 }
 
@@ -3871,7 +3890,7 @@ static ant_value_t array_construct_from_ctor(ant_t *js, ant_value_t ctor, ant_of
 
 static ant_value_t array_alloc_from_ctor_with_length(ant_t *js, ant_value_t ctor, ant_offset_t length_hint) {
   if (vtype(ctor) != kTypeFunction && vtype(ctor) != kTypeBuiltin) return mkarr(js);
-  if (same_ctor_identity(js, ctor, js->sym.array_ctor)) return array_alloc_intrinsic(js, length_hint);
+  if (same_ctor_identity(js, ctor, js->sym.array_ctor)) return array_alloc_intrinsic(js, js_mkundef(), length_hint);
   return array_construct_from_ctor(js, ctor, length_hint);
 }
 
@@ -3880,7 +3899,7 @@ static inline ant_value_t array_species_create(ant_t *js, ant_value_t receiver, 
   if (is_err(ctor)) return ctor;
   
   *intrinsic = vtype(ctor) == kTypeUndefined || same_ctor_identity(js, ctor, js->sym.array_ctor);
-  if (*intrinsic) return array_alloc_intrinsic(js, length);
+  if (*intrinsic) return array_alloc_intrinsic(js, receiver, length);
   return array_alloc_from_ctor_with_length(js, ctor, length);
 }
 
@@ -11187,12 +11206,13 @@ static ant_value_t builtin_array_slice(ant_params_t) {
       else has_elements = true;
     }
     dst->u.array.len = (uint32_t)count;
-    dst->flags.may_have_holes |= has_holes;
+    dst->flags.may_have_holes = has_holes;
     dst->flags.may_have_dense_elements |= has_elements;
     return result;
   }
   
   ant_offset_t result_idx = 0;
+  bool skipped = false;
   for (ant_offset_t i = start; i < end; i++, result_idx++) {
     ant_value_t elem;
     if (string_like) {
@@ -11202,7 +11222,7 @@ static ant_value_t builtin_array_slice(ant_params_t) {
     } else {
       ant_value_t has = array_method_has_index(js, arr, i);
       if (is_err(has)) return has;
-      if (!js_truthy(js, has)) continue;
+      if (!js_truthy(js, has)) { skipped = true; continue; }
       elem = array_method_get_index(js, arr, i);
       if (is_err(elem)) return elem;
     }
@@ -11213,6 +11233,7 @@ static ant_value_t builtin_array_slice(ant_params_t) {
   
   if (!string_like && get_array_length(js, result) != result_idx)
     js_setprop(js, result, js->length_str, tov((double)result_idx));
+  if (intrinsic && !skipped && result_idx == count) array_mark_packed(result);
   return result;
 }
 
@@ -11270,7 +11291,6 @@ static ant_value_t builtin_array_join(ant_params_t) {
   for (ant_offset_t i = 0; fast_primitives && i < len; i++) {
     ant_value_t elem = fast_arr->u.array.data[i];
     size_t elem_len = 0;
-    char num_buf[32];
     
     switch (vtype(elem)) {
       case kTypeString:
@@ -11280,7 +11300,6 @@ static ant_value_t builtin_array_join(ant_params_t) {
         }
         elem_len = (size_t)vstrlen(js, elem);
         break;
-      case kTypeNumber: elem_len = js_number_to_chars(elem, num_buf, sizeof(num_buf)); break;
       case kTypeBool: elem_len = vdata(elem) ? 4 : 5; break;
       case kTypeNull:
       case kTypeUndefined: break;
@@ -11315,9 +11334,7 @@ static ant_value_t builtin_array_join(ant_params_t) {
       
       ant_value_t elem = fast_arr->u.array.data[i];
       const char *elem_ptr = NULL;
-      
       size_t elem_len = 0;
-      char num_buf[32];
       
       switch (vtype(elem)) {
         case kTypeString: {
@@ -11327,10 +11344,6 @@ static ant_value_t builtin_array_join(ant_params_t) {
           elem_len = (size_t)str_len;
           break;
         }
-        case kTypeNumber:
-          elem_len = js_number_to_chars(elem, num_buf, sizeof(num_buf));
-          elem_ptr = num_buf;
-          break;
         case kTypeBool:
           elem_ptr = vdata(elem) ? "true" : "false";
           elem_len = vdata(elem) ? 4 : 5;
@@ -11369,7 +11382,7 @@ static ant_value_t builtin_array_join(ant_params_t) {
       return err;
     }
 
-    elem = array_method_get_index(js, arr, i);
+    if (!array_method_dense_element(arr, i, &elem)) elem = array_method_get_index(js, arr, i);
     elem_str = js_mkundef();
     
     if (is_err(elem)) {
@@ -11897,12 +11910,13 @@ static ant_value_t builtin_array_map(ant_params_t) {
   bool intrinsic = false;
   ant_value_t result = array_species_create(js, arr, len, &intrinsic);
   if (is_err(result)) return result;
+  bool skipped = false;
   
   for (ant_offset_t i = 0; i < len; i++) {
     ant_value_t val;
     ant_value_t has = array_method_element(js, arr, elems, i, &val);
     if (is_err(has)) return has;
-    if (has != js_true) continue;
+    if (has != js_true) { skipped = true; continue; }
     ant_value_t call_args[3] = { val, tov((double)i), arr };
     ant_value_t mapped = sv_callback_call(js->vm, js, &cb, call_args, 3);
     if (is_err(mapped)) return mapped;
@@ -11910,6 +11924,7 @@ static ant_value_t builtin_array_map(ant_params_t) {
     if (is_err(set)) return set;
   }
   
+  if (intrinsic && !skipped) array_mark_packed(result);
   return result;
 }
 
@@ -12920,12 +12935,14 @@ static ant_value_t builtin_array_splice(ant_params_t) {
   if (doff && !is_proxy(arr) && !is_arguments_object(arr)) {
     ant_offset_t d_len = dense_iterable_length(js, arr);
     if (d_len != len) goto splice_slow;
+    bool skipped = false;
     for (int i = 0; i < deleteCount; i++) {
-      if (!arr_has(js, arr, (ant_offset_t)(start + i))) continue;
+      if (!arr_has(js, arr, (ant_offset_t)(start + i))) { skipped = true; continue; }
       ant_value_t elem = arr_get(js, arr, (ant_offset_t)(start + i));
       ant_value_t set = array_result_set(js, removed, intrinsic, (ant_offset_t)i, elem);
       if (is_err(set)) return set;
     }
+    if (intrinsic && !skipped) array_mark_packed(removed);
 
     int shift = insertCount - deleteCount;
     ant_offset_t new_len = (ant_offset_t)((int)d_len + shift);
