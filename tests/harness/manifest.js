@@ -159,6 +159,7 @@ export function targets() {
     'test_jit_bitwise_primitives.cjs',
     'test_numeric_coercion_errors.cjs',
     'test_array_storage_reuse.cjs',
+    'test_jit_proto_method_snapshot.cjs',
     'test_regexp_lone_surrogates.cjs',
     'test_json_lone_surrogates.cjs',
     'test_timer_fired_timeout_gc.cjs',
