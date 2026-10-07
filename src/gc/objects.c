@@ -1241,11 +1241,59 @@ static void gc_mark_roots(ant_t *js) {
   ((1u << kTypeMap)    | (1u << kTypeSet) | \
   (1u << kTypeWeakMap) | (1u << kTypeWeakSet))
 
+static inline int gc_array_storage_class(uint32_t cap) {
+  if (!cap || cap > (1u << (GC_ARRAY_STORAGE_CLASSES - 1)) || (cap & (cap - 1))) return -1;
+  return __builtin_ctz(cap);
+}
+
+static inline ant_value_t *gc_array_storage_pop(gc_array_storage_cache_t *cache, int cls) {
+  ant_value_t *buf = cache->head[cls];
+  cache->head[cls] = (ant_value_t *)(uintptr_t)buf[0];
+  cache->count[cls]--;
+  return buf;
+}
+
+ant_value_t *gc_array_storage_alloc(ant_t *js, uint32_t cap) {
+  gc_array_storage_cache_t *cache = &js->array_storage;
+  int cls = gc_array_storage_class(cap);
+  if (cls < 0 || !cache->head[cls]) return malloc(sizeof(ant_value_t) * (size_t)cap);
+  cache->taken[cls]++;
+  return gc_array_storage_pop(cache, cls);
+}
+
+void gc_array_storage_release(ant_t *js, ant_value_t *data, uint32_t cap) {
+  gc_array_storage_cache_t *cache = &js->array_storage;
+  int cls = gc_array_storage_class(cap);
+  
+  if (cls < 0) {
+    free(data);
+    return;
+  }
+  
+  data[0] = (ant_value_t)(uintptr_t)cache->head[cls];
+  cache->head[cls] = data;
+  cache->count[cls]++;
+}
+
+void gc_array_storage_trim(ant_t *js) {
+  gc_array_storage_cache_t *cache = &js->array_storage;
+  for (int cls = 0; cls < GC_ARRAY_STORAGE_CLASSES; cls++) {
+    while (cache->count[cls] > cache->taken[cls]) free(gc_array_storage_pop(cache, cls));
+    cache->taken[cls] = 0;
+  }
+}
+
+void gc_array_storage_cache_destroy(ant_t *js) {
+  gc_array_storage_cache_t *cache = &js->array_storage;
+  for (int cls = 0; cls < GC_ARRAY_STORAGE_CLASSES; cls++)
+    while (cache->count[cls]) free(gc_array_storage_pop(cache, cls));
+}
+
 static inline void gc_free_array_storage(ant_t *js, ant_object_t *obj) {
   if (!obj->u.array.data) return;
   size_t bytes = (size_t)obj->u.array.cap * sizeof(*obj->u.array.data);
   js->alloc_bytes.arrays = js->alloc_bytes.arrays > bytes ? js->alloc_bytes.arrays - bytes : 0;
-  free(obj->u.array.data);
+  gc_array_storage_release(js, obj->u.array.data, obj->u.array.cap);
   obj->u.array.data = NULL;
 }
 

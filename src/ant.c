@@ -2311,7 +2311,12 @@ static ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) 
   if (new_cap > UINT32_MAX) new_cap = UINT32_MAX;
   if ((size_t)new_cap > SIZE_MAX / sizeof(ant_value_t)) return 0;
 
-  ant_value_t *next = realloc(obj->u.array.data, sizeof(*next) * (size_t)new_cap);
+  ant_value_t *next = gc_array_storage_alloc(js, (uint32_t)new_cap);
+  if (next && obj->u.array.data) {
+    memcpy(next, obj->u.array.data, sizeof(*next) * (size_t)old_cap);
+    gc_array_storage_release(js, obj->u.array.data, (uint32_t)old_cap);
+  }
+  
   if (!next) return 0;
 
   js->alloc_bytes.arrays += (size_t)(new_cap - old_cap) * sizeof(*next);
@@ -2579,7 +2584,7 @@ static ant_value_t alloc_array_with_proto_capacity(
 
   obj->u.array.cap = capacity;
   obj->u.array.len = 0;
-  obj->u.array.data = malloc(sizeof(*obj->u.array.data) * (size_t)obj->u.array.cap);
+  obj->u.array.data = gc_array_storage_alloc(js, obj->u.array.cap);
   
   if (obj->u.array.data) {
     js->alloc_bytes.arrays += (size_t)obj->u.array.cap * sizeof(*obj->u.array.data);
@@ -10796,19 +10801,51 @@ static ant_value_t builtin_array_slice(ant_params_t) {
   ant_value_t result = array_alloc_like(js, arr);
   
   if (is_err(result)) return result;
-  ant_offset_t result_idx = 0;
+  ant_offset_t count = end - start;
   
-  for (ant_offset_t i = start; i < end; i++) {
-    ant_value_t elem = js_mkundef();
+  ant_object_t *src = !string_like && vtype(arr) == kTypeArray ? array_obj_ptr(arr) : NULL;
+  ant_object_t *dst = vtype(result) == kTypeArray ? array_obj_ptr(result) : NULL;
+  
+  if (
+    src && dst && src->flags.fast_array && src->u.array.data &&
+    end <= src->u.array.len && end <= src->u.array.cap &&
+    dst->flags.fast_array && dst->u.array.data && dst->u.array.len == 0 &&
+    array_proto_chain_plain(js, src) &&
+    (count <= dst->u.array.cap || dense_grow(js, result, count))
+  ) {
+    bool has_holes = false, has_elements = false;
+    for (ant_offset_t i = 0; i < count; i++) {
+      ant_value_t value = src->u.array.data[start + i];
+      dst->u.array.data[i] = value;
+      if (is_empty_slot(value)) has_holes = true;
+      else has_elements = true;
+    }
+    dst->u.array.len = (uint32_t)count;
+    dst->flags.may_have_holes |= has_holes;
+    dst->flags.may_have_dense_elements |= has_elements;
+    return result;
+  }
+  
+  ant_offset_t result_idx = 0;
+  for (ant_offset_t i = start; i < end; i++, result_idx++) {
+    ant_value_t elem;
     if (string_like) {
       uint32_t code_unit = utf16_code_unit_at((const char *)(uintptr_t)string_off, string_byte_len, i);
       if (code_unit == 0xFFFFFFFF) break;
       elem = js_string_from_utf16_code_unit(js, code_unit);
-    } else elem = arr_get(js, arr, i);
+    } else {
+      ant_value_t has = array_method_has_index(js, arr, i);
+      if (is_err(has)) return has;
+      if (!js_truthy(js, has)) continue;
+      elem = array_method_get_index(js, arr, i);
+      if (is_err(elem)) return elem;
+    }
+    
     arr_set(js, result, result_idx, elem);
-    result_idx++;
   }
   
+  if (!string_like && get_array_length(js, result) != result_idx)
+    js_setprop(js, result, js->length_str, tov((double)result_idx));
   return result;
 }
 
@@ -19725,6 +19762,7 @@ void js_destroy(ant_t *js) {
   cleanup_atomics_module(js);
   cleanup_events_module(js);
   cleanup_regex_module(js);
+  gc_array_storage_cache_destroy(js);
   isolate_arenas_destroy(js);
   
   free(js->c_roots);

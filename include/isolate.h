@@ -229,6 +229,8 @@ struct ant_isolate_t {
     size_t arrays;
   } alloc_bytes;
   
+  gc_array_storage_cache_t array_storage;
+  
   struct {
     size_t last_live;
     size_t pool_alloc;

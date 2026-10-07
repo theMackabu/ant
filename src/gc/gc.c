@@ -309,6 +309,7 @@ void gc_run(ant_t *js) {
   gc_bigints_sweep(js);
   gc_strings_sweep(js);
   gc_ropes_sweep(js, false);
+  gc_array_storage_trim(js);
 
   js->gc.last_live = js->obj_arena.live_count;
   js->old_live_count = js->obj_arena.live_count;
