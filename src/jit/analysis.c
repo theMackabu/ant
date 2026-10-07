@@ -52,7 +52,7 @@ int jit_hot_loop_upvalue(const sv_func_t *func) {
 }
 
 static const uint8_t forward_arguments_prefix[] = {
-  OP_SPECIAL_OBJ,  // arguments object (operand 0)
+  OP_SPECIAL_OBJ,  // arguments object (SV_SPECIAL_ARGUMENTS)
   OP_PUT_LOCAL8,   // -> local 0
   OP_THIS,
   OP_GET_FIELD,    // this.method
@@ -152,8 +152,8 @@ jit_features_t jit_prescan_features(sv_func_t *func, int n_slots) {
     if (op == OP_CHECK_CTOR) f.needs_new_target = true;
     if (op == OP_SPECIAL_OBJ) {
       uint8_t which = sv_get_u8(ip + 1);
-      if (which == 1) f.needs_new_target = true;
-      if (which == 2) f.needs_super = true;
+      if (which == SV_SPECIAL_NEW_TARGET) f.needs_new_target = true;
+      if (which == SV_SPECIAL_SUPER) f.needs_super = true;
     }
     if (op == OP_GET_GLOBAL) {
       const sv_atom_t *atom = &func->atoms[sv_get_u32(ip + 1)];
@@ -280,7 +280,7 @@ bool jit_is_eligible(sv_func_t *func) {
       ant_value_t cv = func->constants[idx];
       if (vtype(cv) != kTypeFunctionInfo) return false;
     } else if (op == OP_SPECIAL_OBJ) {
-      if (sv_get_u8(ip + 1) == 0 && !func->is_strict) {
+      if (sv_get_u8(ip + 1) == SV_SPECIAL_ARGUMENTS && !func->is_strict) {
         if (sv_jit_warn_unlikely)
           fprintf(stderr, "jit: ineligible op SPECIAL_OBJ(%d) in %s\n",
                   sv_get_u8(ip + 1),

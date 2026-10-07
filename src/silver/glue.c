@@ -379,9 +379,9 @@ ant_value_t jit_helper_delete_eval_var(
 }
 
 ant_value_t jit_helper_special_obj(sv_vm_t *vm, ant_t *js, uint32_t which) {
-  if (which == 1) return sv_vm_get_new_target(vm);
-  if (which == 2) return sv_vm_get_super_val(vm);
-  if (which == 3) return js_get_module_import_binding(js);
+  if (which == SV_SPECIAL_NEW_TARGET) return sv_vm_get_new_target(vm);
+  if (which == SV_SPECIAL_SUPER) return sv_vm_get_super_val(vm);
+  if (which == SV_SPECIAL_MODULE_IMPORT) return js_get_module_import_binding(js);
   return js_mkundef();
 }
 

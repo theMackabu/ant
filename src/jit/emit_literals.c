@@ -99,9 +99,9 @@ void jit_emit_literals(jit_compile_t *c) {
     case OP_SPECIAL_OBJ: {
       uint8_t which = sv_get_u8(c->ip + 1);
       MIR_reg_t dst = vstack_push(&c->vs);
-      if (which == 0 && c->forward_arguments) {
+      if (which == SV_SPECIAL_ARGUMENTS && c->forward_arguments) {
         mir_load_imm(c->ctx, c->jit_func, dst, js_mkundef());
-      } else if (which == 0 && c->func->is_strict) {
+      } else if (which == SV_SPECIAL_ARGUMENTS && c->func->is_strict) {
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_call_insn(c->ctx, 7,
                                           MIR_new_ref_op(c->ctx, c->strict_arguments_proto),
@@ -112,7 +112,7 @@ void jit_emit_literals(jit_compile_t *c) {
                                           MIR_new_reg_op(c->ctx, c->r_args),
                                           MIR_new_reg_op(c->ctx, c->r_argc)));
         jit_emit_throw_if_error(c, dst);
-      } else if (which == 4) {
+      } else if (which == SV_SPECIAL_ARGC) {
         char name[32];
         snprintf(name, sizeof(name), "argc_d_%d", c->arith_n++);
         MIR_reg_t argc_d = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_D, name);
@@ -121,17 +121,17 @@ void jit_emit_literals(jit_compile_t *c) {
                                      MIR_new_reg_op(c->ctx, argc_d),
                                      MIR_new_reg_op(c->ctx, c->r_argc)));
         mir_d_to_i64(c->ctx, c->jit_func, dst, argc_d, c->r_d_slot);
-      } else if (which == 1) {
+      } else if (which == SV_SPECIAL_NEW_TARGET) {
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_MOV,
                                      MIR_new_reg_op(c->ctx, dst),
                                      MIR_new_reg_op(c->ctx, c->r_new_target)));
-      } else if (which == 2) {
+      } else if (which == SV_SPECIAL_SUPER) {
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_MOV,
                                      MIR_new_reg_op(c->ctx, dst),
                                      MIR_new_reg_op(c->ctx, c->r_super_val)));
-      } else if (which == 3) {
+      } else if (which == SV_SPECIAL_MODULE_IMPORT) {
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_call_insn(c->ctx, 6,
                                           MIR_new_ref_op(c->ctx, c->special_obj_proto),

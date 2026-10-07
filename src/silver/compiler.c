@@ -1593,7 +1593,7 @@ static void emit_lexical_new_target(sv_compiler_t *c) {
 
 static inline void emit_get_module_import_binding(sv_compiler_t *c) {
   emit_op(c, OP_SPECIAL_OBJ);
-  emit(c, 3);
+  emit(c, SV_SPECIAL_MODULE_IMPORT);
 }
 
 static void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len) {
@@ -1677,7 +1677,7 @@ static void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len) {
         emit_get_local(c, c->strict_args_local);
       } else {
         emit_op(c, OP_SPECIAL_OBJ);
-        emit(c, 0);
+        emit(c, SV_SPECIAL_ARGUMENTS);
       }
       return;
     }
@@ -3650,7 +3650,7 @@ static void compile_typeof_op(sv_compiler_t *c, sv_ast_t *node, int test_type) {
           emit_get_local(c, c->strict_args_local);
         } else {
           emit_op(c, OP_SPECIAL_OBJ);
-          emit(c, 0);
+          emit(c, SV_SPECIAL_ARGUMENTS);
         }
       } else if (c->with_depth > 0) emit_with_get(c, arg->str, arg->len, WITH_FB_GLOBAL_UNDEF, 0);
       else emit_atom_op(
@@ -3947,7 +3947,7 @@ static sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t
     if (c->is_arrow) emit_lexical_new_target(c);
     else {
       emit_op(c, OP_SPECIAL_OBJ);
-      emit(c, 1);
+      emit(c, SV_SPECIAL_NEW_TARGET);
     }
     return SV_CALL_SUPER;
   }
@@ -4894,7 +4894,7 @@ void compile_member(sv_compiler_t *c, sv_ast_t *node) {
     has_implicit_arguments_obj(c) && ast_is_arguments_length(node)
   ) {
     emit_op(c, OP_SPECIAL_OBJ);
-    emit(c, 4);
+    emit(c, SV_SPECIAL_ARGC);
     return;
   }
 
@@ -6981,7 +6981,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
   static const char sv_name[] = "\x01super";
   comp.super_local = add_local(&comp, sv_name, sizeof(sv_name) - 1, false, comp.scope_depth);
   emit_op(&comp, OP_SPECIAL_OBJ);
-  emit(&comp, 2);
+  emit(&comp, SV_SPECIAL_SUPER);
   emit_put_local(&comp, comp.super_local);
 
   if (returns_expr) {
@@ -7207,11 +7207,11 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     if (node->left) {
       emit_op(&comp, OP_THIS);
       emit_op(&comp, OP_SPECIAL_OBJ);
-      emit(&comp, 2);
+      emit(&comp, SV_SPECIAL_SUPER);
       emit_op(&comp, OP_SPECIAL_OBJ);
-      emit(&comp, 1);
+      emit(&comp, SV_SPECIAL_NEW_TARGET);
       emit_op(&comp, OP_SPECIAL_OBJ);
-      emit(&comp, 0);
+      emit(&comp, SV_SPECIAL_ARGUMENTS);
       emit_op(&comp, OP_SUPER_APPLY);
       emit_u16(&comp, 1);
       emit_op(&comp, OP_POP);
@@ -7580,7 +7580,7 @@ sv_func_t *compile_function_body(
     static const char nt_name[] = "\x01new.target";
     comp.new_target_local = add_local(&comp, nt_name, sizeof(nt_name) - 1, false, comp.scope_depth);
     emit_op(&comp, OP_SPECIAL_OBJ);
-    emit(&comp, 1);
+    emit(&comp, SV_SPECIAL_NEW_TARGET);
     emit_put_local(&comp, comp.new_target_local);
   }
   
@@ -7754,7 +7754,7 @@ sv_func_t *compile_function_body(
     static const char args_name[] = "\x01arguments";
     comp.strict_args_local = add_local(&comp, args_name, sizeof(args_name) - 1, false, comp.scope_depth);
     emit_op(&comp, OP_SPECIAL_OBJ);
-    emit(&comp, 0);
+    emit(&comp, SV_SPECIAL_ARGUMENTS);
     emit_put_local(&comp, comp.strict_args_local);
   }
 
@@ -7762,7 +7762,7 @@ sv_func_t *compile_function_body(
     static const char sv_name[] = "\x01super";
     comp.super_local = add_local(&comp, sv_name, sizeof(sv_name) - 1, false, comp.scope_depth);
     emit_op(&comp, OP_SPECIAL_OBJ);
-    emit(&comp, 2);
+    emit(&comp, SV_SPECIAL_SUPER);
     emit_put_local(&comp, comp.super_local);
   }
 

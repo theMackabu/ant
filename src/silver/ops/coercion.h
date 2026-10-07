@@ -689,30 +689,25 @@ static inline void sv_op_special_obj(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame, uint8_t *ip
 ) {
-  uint8_t which = sv_get_u8(ip + 1);
-  if (which == 3) {
-    vm->stack[vm->sp++] = js_get_module_import_binding(js);
-    return;
-  }
-  
-  if (which == 1) {
-    vm->stack[vm->sp++] = frame ? frame->new_target : js_mkundef();
-    return;
-  }
-  
-  if (which == 2) {
-    vm->stack[vm->sp++] = frame ? frame->super_val : js_mkundef();
-    return;
-  }
-  
-  if (which == 4) {
-    vm->stack[vm->sp++] = js_mknum(frame ? (double)frame->argc : 0);
-    return;
-  }
-  
-  if (which != 0 || !frame) {
-    vm->stack[vm->sp++] = js_mkundef();
-    return;
+  switch ((sv_special_obj_t)sv_get_u8(ip + 1)) {
+    case SV_SPECIAL_MODULE_IMPORT:
+      vm->stack[vm->sp++] = js_get_module_import_binding(js);
+      return;
+    case SV_SPECIAL_NEW_TARGET:
+      vm->stack[vm->sp++] = frame ? frame->new_target : js_mkundef();
+      return;
+    case SV_SPECIAL_SUPER:
+      vm->stack[vm->sp++] = frame ? frame->super_val : js_mkundef();
+      return;
+    case SV_SPECIAL_ARGC:
+      vm->stack[vm->sp++] = js_mknum(frame ? (double)frame->argc : 0);
+      return;
+    case SV_SPECIAL_ARGUMENTS:
+      if (frame) break;
+      [[fallthrough]];
+    default:
+      vm->stack[vm->sp++] = js_mkundef();
+      return;
   }
 
   if (vtype(frame->arguments_obj) == kTypeUndefined) {

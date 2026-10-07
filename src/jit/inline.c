@@ -131,10 +131,10 @@ bool jit_inlineable(sv_func_t *f) {
     if ((flags & SV_OPF_JIT_INLINE_ARGC) != 0 && sv_get_u16(ip + 1) > SV_JIT_ARGS_BUF_CAP) return false;
     if (op == OP_CALL_STABLE_BUILTIN && sv_get_u16(ip + 2) > SV_JIT_ARGS_BUF_CAP) return false;
 
-    // OP_SPECIAL_OBJ(0) materializes `arguments`. keep these functions on
+    // OP_SPECIAL_OBJ(SV_SPECIAL_ARGUMENTS) materializes `arguments`. keep these functions on
     // the interpreter until JIT routes a real per-call activation/object
     // with matching lifetime and semantics.
-    if (op == OP_SPECIAL_OBJ && sv_get_u8(ip + 1) == 0) return false;
+    if (op == OP_SPECIAL_OBJ && sv_get_u8(ip + 1) == SV_SPECIAL_ARGUMENTS) return false;
 
     // These guards branch to the shared slow path, which invokes the whole
     // callee. Never emit them after an operation that may already have had an
@@ -2174,19 +2174,19 @@ void jit_emit_inline_body(
         INL_FLUSH_ALL();
         uint8_t which = sv_get_u8(ip + 1);
         MIR_reg_t dst = inl_vs[isp++];
-        if (which == 1) {
+        if (which == SV_SPECIAL_NEW_TARGET) {
           MIR_append_insn(ctx, jit_func,
                           MIR_new_insn(ctx, MIR_MOV,
                                        MIR_new_reg_op(ctx, dst),
                                        MIR_new_reg_op(ctx, r_inl_new_target)));
-        } else if (which == 2) {
+        } else if (which == SV_SPECIAL_SUPER) {
           MIR_append_insn(ctx, jit_func,
                           MIR_new_insn(ctx, MIR_MOV,
                                        MIR_new_reg_op(ctx, dst),
                                        MIR_new_reg_op(ctx, r_inl_super)));
-        } else if (which == 4) {
+        } else if (which == SV_SPECIAL_ARGC) {
           mir_load_imm(ctx, jit_func, dst, tov((double)caller_argc));
-        } else if (which == 3) {
+        } else if (which == SV_SPECIAL_MODULE_IMPORT) {
           MIR_append_insn(ctx, jit_func,
                           MIR_new_call_insn(ctx, 6,
                                             MIR_new_ref_op(ctx, special_obj_proto),

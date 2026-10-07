@@ -57,6 +57,14 @@ typedef enum {
 } sv_op_t;
 
 typedef enum {
+  SV_SPECIAL_ARGUMENTS     = 0,
+  SV_SPECIAL_NEW_TARGET    = 1,
+  SV_SPECIAL_SUPER         = 2,
+  SV_SPECIAL_MODULE_IMPORT = 3,
+  SV_SPECIAL_ARGC          = 4,
+} sv_special_obj_t;
+
+typedef enum {
   SV_STABLE_BUILTIN_PROMISE_RESOLVE = 0,
 } sv_stable_builtin_t;
 

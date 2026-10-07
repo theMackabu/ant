@@ -468,7 +468,7 @@ uint8_t jit_induction_params(sv_func_t *func, int param_count) {
     if (flags & SV_OPF_JIT_BRANCH32) to = (ip - func->code) + size + sv_get_i32(ip + 1);
     else if (flags & SV_OPF_JIT_BRANCH8) to = (ip - func->code) + size + sv_get_i8(ip + 1);
     if (to >= 0 && to <= func->code_len) target[to] = 1;
-    if (op == OP_SPECIAL_OBJ && sv_get_u8(ip + 1) == 0) goto none;
+    if (op == OP_SPECIAL_OBJ && sv_get_u8(ip + 1) == SV_SPECIAL_ARGUMENTS) goto none;
     ip += size;
   }
 

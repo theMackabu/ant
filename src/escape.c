@@ -74,7 +74,7 @@ size_t decode_escape(const uint8_t *in, size_t pos, size_t end, uint8_t *out, si
     case '\\': out[(*out_pos)++] = '\\'; break;
     case '0':
       if (!(in[pos + 2] >= '0' && in[pos + 2] <= '7')) { out[(*out_pos)++] = '\0'; break; }
-      __attribute__((fallthrough));
+      [[fallthrough]];
     case '1': case '2': case '3': case '4': case '5': case '6': case '7':
       advance = decode_octal_escape(in, pos, out, out_pos);
       break;
