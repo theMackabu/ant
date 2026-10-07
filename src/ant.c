@@ -12305,55 +12305,12 @@ static ant_value_t builtin_array_flatMap(ant_params_t) {
   return mkval(kTypeArray, vdata(result));
 }
 
-static const char *js_tostring(ant_t *js, ant_value_t v) {
-  if (vtype(v) == kTypeString) {
-    ant_offset_t slen, off = vstr(js, v, &slen);
-    return (const char *)(uintptr_t)(off);
-  }
-  return js_str(js, v);
-}
-
-static int js_compare_values(ant_t *js, ant_value_t a, ant_value_t b, ant_value_t compareFn) {
-  uint8_t t = vtype(compareFn);
-  if (t == kTypeFunction || t == kTypeBuiltin) {
-    ant_value_t call_args[2] = { a, b };
-    
-    ant_value_t result = sv_vm_call(
-      js->vm, js, compareFn, js_mkundef(), 
-      call_args, 2, NULL, js_mkundef()
-    );
-    
-    if (vtype(result) == kTypeNumber) {
-      double number = tod(result);
-      return (number > 0) - (number < 0);
-    }
-    
-    return 0;
-  }
-  
-  if (vtype(a) == kTypeString && vtype(b) == kTypeString) {
-    ant_offset_t len_a, len_b;
-    const char *sa = (const char *)(uintptr_t)(vstr(js, a, &len_a));
-    const char *sb = (const char *)(uintptr_t)(vstr(js, b, &len_b));
-    return strcmp(sa, sb);
-  }
-  
-  const char *sa = js_tostring(js, a);
-  size_t len = strlen(sa);
-  
-  char *copy = alloca(len + 1);
-  memcpy(copy, sa, len + 1);
-  
-  return strcmp(copy, js_tostring(js, b));
-}
-
 static ant_value_t builtin_array_indexOf(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject) {
+  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
     return js_mkerr(js, "indexOf called on non-array");
-  }
-  if (nargs == 0) return tov(-1);
-  
+
+  if (nargs == 0) return tov(-1);  
   ant_value_t search = args[0];
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
@@ -12645,6 +12602,25 @@ static ant_value_t builtin_array_some(ant_params_t) {
   return mkval(kTypeBool, 0);
 }
 
+static constexpr ant_offset_t SORT_INLINE_KEYS = 32;
+
+static inline uint64_t sort_int_string_key(int32_t value) {
+  uint64_t digits = value < 0 ? (uint64_t)-(int64_t)value : (uint64_t)value;
+  uint64_t count = 1;
+  for (uint64_t v = digits; v >= 10; v /= 10) count++;
+  for (uint64_t d = count; d < 10; d++) digits *= 10;
+  return ((uint64_t)(value >= 0) << 40) | (digits << 4) | count;
+}
+
+static inline int sort_string_cmp(ant_t *js, ant_value_t a, ant_value_t b) {
+  ant_offset_t len_a, len_b;
+  const char *sa = (const char *)(uintptr_t)vstr(js, a, &len_a);
+  const char *sb = (const char *)(uintptr_t)vstr(js, b, &len_b);
+  int cmp = memcmp(sa, sb, len_a < len_b ? len_a : len_b);
+  if (cmp) return cmp;
+  return (len_a > len_b) - (len_a < len_b);
+}
+
 static inline bool array_sort_writes_dense(ant_value_t arr, ant_offset_t len) {
   ant_object_t *ptr = array_length_obj_ptr(arr);
   return
@@ -12658,6 +12634,9 @@ static ant_value_t builtin_array_sort(ant_params_t) {
   
   ant_value_t result = arr;
   ant_value_t *vals = NULL, *keys = NULL, *temp_vals = NULL, *temp_keys = NULL;
+  
+  uint64_t *int_keys = NULL, *temp_int_keys = NULL;
+  uint64_t inline_int_keys[SORT_INLINE_KEYS * 2];
   ant_offset_t count = 0, undef_count = 0, len = 0;
   
   gc_temp_root_scope_t temp_scope = {0};
@@ -12715,7 +12694,23 @@ static ant_value_t builtin_array_sort(ant_params_t) {
   for (ant_offset_t i = 0; i < count; i++)
     if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_scope, vals[i]))) goto oom;
   
-  bool use_keys = (vtype(compareFn) == kTypeUndefined);
+  bool use_cmp = vtype(compareFn) != kTypeUndefined;
+  bool use_ints = !use_cmp;
+  
+  for (ant_offset_t i = 0; use_ints && i < count; i++) use_ints = 
+    vtype(vals[i]) == kTypeNumber && 
+    tod(vals[i]) == (double)(int32_t)tod(vals[i]);
+  
+  bool use_keys = !use_cmp && !use_ints;
+  sv_callback_t cb = sv_callback_prepare(js, compareFn, js_mkundef());
+
+  if (use_ints) {
+    int_keys = count <= SORT_INLINE_KEYS ? inline_int_keys : malloc(count * sizeof(*int_keys));
+    temp_int_keys = count <= SORT_INLINE_KEYS ? inline_int_keys + SORT_INLINE_KEYS : malloc(count * sizeof(*temp_int_keys));
+    if (!int_keys || !temp_int_keys) goto oom;
+    for (ant_offset_t i = 0; i < count; i++) int_keys[i] = sort_int_string_key((int32_t)tod(vals[i]));
+  }
+
   if (use_keys) {
     keys = malloc(count * sizeof(ant_value_t));
     if (!keys) goto oom;
@@ -12728,7 +12723,7 @@ static ant_value_t builtin_array_sort(ant_params_t) {
       }
       
       keys[i] = key;
-      if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_scope, key))) goto oom;
+      if (!gc_temp_root_push(&temp_scope, key)) goto oom;
     }
   }
   
@@ -12745,37 +12740,46 @@ static ant_value_t builtin_array_sort(ant_params_t) {
       ant_offset_t i = left, j = mid, k = 0;
       while (i < mid && j < right) {
         int cmp;
-        if (use_keys) {
-          ant_offset_t len_a, len_b;
-          const char *sa = (const char *)(uintptr_t)(vstr(js, keys[i], &len_a));
-          const char *sb = (const char *)(uintptr_t)(vstr(js, keys[j], &len_b));
-          cmp = strcmp(sa, sb);
-        } else {
-          cmp = js_compare_values(js, vals[i], vals[j], compareFn);
+        if (use_ints) cmp = (int_keys[i] > int_keys[j]) - (int_keys[i] < int_keys[j]);
+        else if (use_keys) cmp = sort_string_cmp(js, keys[i], keys[j]);
+        else {
+          ant_value_t call_args[2] = { vals[i], vals[j] };
+          ant_value_t order = sv_callback_call(js->vm, js, &cb, call_args, 2);
+          if (vtype(order) != kTypeNumber && !is_err(order)) order = js_to_numeric(js, order);
+          if (!is_err(order) && vtype(order) == kTypeBigInt)
+            order = js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a BigInt value to a number");
+          if (is_err(order)) { result = order; goto done; }
+          double d = tod(order);
+          cmp = (d > 0) - (d < 0);
         }
         if (cmp <= 0) {
           temp_vals[k] = vals[i];
           if (use_keys) temp_keys[k] = keys[i];
+          if (use_ints) temp_int_keys[k] = int_keys[i];
           k++; i++;
         } else {
           temp_vals[k] = vals[j];
           if (use_keys) temp_keys[k] = keys[j];
+          if (use_ints) temp_int_keys[k] = int_keys[j];
           k++; j++;
         }
       }
       while (i < mid) {
         temp_vals[k] = vals[i];
         if (use_keys) temp_keys[k] = keys[i];
+        if (use_ints) temp_int_keys[k] = int_keys[i];
         k++; i++;
       }
       while (j < right) {
         temp_vals[k] = vals[j];
         if (use_keys) temp_keys[k] = keys[j];
+        if (use_ints) temp_int_keys[k] = int_keys[j];
         k++; j++;
       }
       
       memcpy(&vals[left], temp_vals, k * sizeof(ant_value_t));
       if (use_keys) memcpy(&keys[left], temp_keys, k * sizeof(ant_value_t));
+      if (use_ints) memcpy(&int_keys[left], temp_int_keys, k * sizeof(*int_keys));
     }
   }
   
@@ -12806,6 +12810,12 @@ oom:
 
 done:
   if (temp_scope_active) gc_temp_root_scope_end(&temp_scope);
+  
+  if (int_keys != inline_int_keys) {
+    free(temp_int_keys);
+    free(int_keys);
+  }
+  
   free(temp_keys);
   free(temp_vals);
   free(keys);
