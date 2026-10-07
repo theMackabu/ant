@@ -1912,8 +1912,13 @@ static ant_value_t js_stream_promises_pipeline(ant_params_t) {
   }
 
   for (int i = 0; i < nargs; i++) call_args[i] = args[i];
+  GC_ROOT_SAVE(root_mark, js);
+  
   call_args[nargs] = js_heavy_mkfun(js, stream_promise_callback, promise);
+  GC_ROOT_PIN(js, call_args[nargs]);
+  
   ant_value_t result = js_stream_pipeline(js, call_args, nargs + 1, js_mkundef());
+  GC_ROOT_RESTORE(js, root_mark);
 
   free(call_args);
   if (is_err(result)) js_reject_promise(js, promise, result);

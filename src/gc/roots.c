@@ -77,7 +77,11 @@ void gc_temp_root_scope_end(gc_temp_root_scope_t *scope) {
   if (!scope) return;
 
   ant_t *js = scope->js;
-  if (js && js->temp_roots == scope) js->temp_roots = scope->prev;
+  if (js) for (gc_temp_root_scope_t **link = &js->temp_roots; *link; link = &(*link)->prev) {
+    if (*link != scope) continue;
+    *link = scope->prev;
+    break;
+  }
 
   free(scope->items);
   scope->items = NULL;
@@ -87,25 +91,42 @@ void gc_temp_root_scope_end(gc_temp_root_scope_t *scope) {
   scope->js = NULL;
 }
 
-gc_temp_root_handle_t gc_temp_root_add(gc_temp_root_scope_t *scope, ant_value_t value) {
-  gc_temp_root_handle_t invalid = {0};
-  if (!scope) return invalid;
+static bool gc_temp_root_grow(gc_temp_root_scope_t *scope, size_t extra) {
+  if (extra > SIZE_MAX / sizeof(ant_value_t) - scope->len) return false;
+  size_t needed = scope->len + extra;
+  if (needed <= scope->cap) return true;
 
-  if (scope->len >= scope->cap) {
-    size_t new_cap = scope->cap ? scope->cap * 2 : 16;
-    ant_value_t *next = realloc(scope->items, new_cap * sizeof(*next));
-    if (!next) return invalid;
-    scope->items = next;
-    scope->cap = new_cap;
-  }
-
-  size_t index = scope->len++;
-  scope->items[index] = value;
-  gc_temp_root_handle_t handle = {
-    .scope = scope,
-    .index = index,
-  };
+  size_t new_cap = scope->cap ? scope->cap : 16;
+  while (new_cap < needed) new_cap = new_cap > SIZE_MAX / 2 / sizeof(ant_value_t) ? needed : new_cap * 2;
   
+  ant_value_t *next = realloc(scope->items, new_cap * sizeof(*next));
+  if (!next) return false;
+
+  scope->items = next;
+  scope->cap = new_cap;
+  
+  return true;
+}
+
+bool gc_temp_root_push(gc_temp_root_scope_t *scope, ant_value_t value) {
+  if (!scope || !gc_temp_root_grow(scope, 1)) return false;
+  scope->items[scope->len++] = value;
+  return true;
+}
+
+ant_value_t *gc_temp_root_slots(gc_temp_root_scope_t *scope, size_t count) {
+  if (!scope || !gc_temp_root_grow(scope, count ? count : 1)) return NULL;
+  ant_value_t *slots = scope->items + scope->len;
+  for (size_t i = 0; i < count; i++) slots[i] = js_mkundef();
+  scope->len += count;
+  return slots;
+}
+
+gc_temp_root_handle_t gc_temp_root_add(gc_temp_root_scope_t *scope, ant_value_t value) {
+  gc_temp_root_handle_t handle = {0};
+  if (!gc_temp_root_push(scope, value)) return handle;
+  handle.scope = scope;
+  handle.index = scope->len - 1;
   return handle;
 }
 

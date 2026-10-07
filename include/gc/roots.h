@@ -26,9 +26,12 @@ typedef void (*gc_root_visitor_t)(
   ant_value_t v
 );
 
+size_t gc_root_scope(ant_t *js);
+
 bool gc_push_root(ant_t *js, ant_value_t *slot);
 bool gc_pin_permanent(ant_t *js, ant_value_t value);
 bool gc_temp_root_set(gc_temp_root_handle_t handle, ant_value_t value);
+bool gc_temp_root_push(gc_temp_root_scope_t *scope, ant_value_t value);
 
 void gc_register_root(ant_value_t *slot);
 void gc_pop_roots(ant_t *js, size_t mark);
@@ -37,9 +40,8 @@ void gc_temp_root_scope_begin(ant_t *js, gc_temp_root_scope_t *scope);
 void gc_temp_root_scope_end(gc_temp_root_scope_t *scope);
 void gc_temp_root_truncate(gc_temp_root_scope_t *scope, size_t mark);
 
-size_t gc_root_scope(ant_t *js);
-
 gc_temp_root_handle_t gc_temp_root_add(gc_temp_root_scope_t *scope, ant_value_t value);
+ant_value_t *gc_temp_root_slots(gc_temp_root_scope_t *scope, size_t count);
 
 #define GC_ROOT_PIN(js, slot) do {                 \
   bool _gc_root_ok = gc_push_root((js), &(slot));  \

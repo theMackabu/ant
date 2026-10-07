@@ -8,6 +8,7 @@
 #include "isolate.h"
 
 #include "gc/strings.h"
+#include "gc/roots.h"
 #include "silver/ast.h"
 #include "descriptors.h"
 #include "esm/loader.h"
@@ -233,8 +234,14 @@ static inline bool js_cfunc_same_entrypoint(ant_value_t fn_val, ant_cfunc_t fn) 
   return meta && meta->fn == fn;
 }
 
-ant_value_t extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_args, int *out_count);
-ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
+typedef struct {
+  gc_temp_root_scope_t roots;
+  ant_value_t *args;
+  int argc;
+} js_arg_list_t;
+
+ant_value_t js_arg_list_from(ant_t *js, ant_value_t array_like, js_arg_list_t *list);
+void js_arg_list_release(js_arg_list_t *list);
 
 size_t uint_to_str(char *buf, size_t bufsize, uint64_t val);
 size_t tostr(ant_t *js, ant_value_t value, char *buf, size_t len);
@@ -251,6 +258,7 @@ bool js_obj_ensure_unique_shape(ant_object_t *obj);
 ant_value_t js_to_numeric(ant_t *js, ant_value_t arg);
 ant_value_t js_template_to_string(ant_t *js, ant_value_t v);
 ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode);
+ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
 
 ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs);
 ant_value_t mkprop_exact_attrs(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs);
@@ -302,6 +310,7 @@ ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t template);
 ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj);
 ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbols, bool enumerable_only);
 ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t len);
+ant_value_t js_delete_prop_ordinary(ant_t *js, ant_value_t obj, const char *key, size_t len);
 ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym);
 
 ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc);

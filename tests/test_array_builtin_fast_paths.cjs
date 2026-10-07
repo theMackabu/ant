@@ -1,7 +1,8 @@
 // Array builtins take dense fast paths (direct buffer reads, a species protector
 // for %Array%, an iteration protector for spread/for-of/Array.from, prepared
 // callbacks). Each section runs in a fresh process so the protectors start
-// valid, and must print what Node prints.
+// valid, and must print what Node prints, including when getters collect
+// garbage while values are being copied.
 const { spawnSync } = require('node:child_process');
 
 const sections = [
@@ -234,11 +235,49 @@ const sections = [
     runAll('hot');
     console.log(out.join('\n'));
   }, "hot mutate-push [2,4,6,8]\nhot mutate-shrink [1,2]\nhot mutate-delete [1,3]\nhot mutate-holes \"12ww\"\nhot throw \"THROW TypeError\"\nhot this [[5,5,5,5],[null,null,null,null],[\"object\",\"object\",\"object\",\"object\"]]\nhot bound [[1,\"bv\",1],[1,\"bv\",2],[1,\"bv\",3],[1,\"bv\",4]]\nhot builtin [[\"1\",\"2\",\"3\",\"4\"],4,[1,2],true]\nhot super [\"B1\",\"B2\",\"B3\",\"B4\"]\nhot async [true,true,true,true]\nhot generator [1,2,3,4]\nhot args-count [3,3,3,3]\nhot find-holes [[1,0],[null,1],[3,2]]\nhot reentrant [10,20,30,40]\nhot overflow [\"THROW RangeError\",true]\nhot flatMap [1,[1],3,[3]]\nhot groupBy {\"0\":[2,4],\"1\":[1,3]}\n"],
+  [function gcrepros() {
+    const churn = () => { const j = []; for (let k = 0; k < 2000; k++) j.push({ k, s: 'x' + k }); };
+    const bad = arr => arr.filter(v => !v || v.payload !== 'v' + v.id).length;
+    const getters = (n, mk) => { const a = new Array(n).fill(0); for (let i = 0; i < n; i++) Object.defineProperty(a, i, { get() { churn(); return mk(i); } }); return a; };
+    const obj = i => ({ id: i, payload: 'v' + i });
+    const out = {};
+    for (const m of ['toReversed', 'toSorted', 'toSpliced', 'with']) {
+      const a = getters(48, obj);
+      const r = m === 'toSorted' ? a.toSorted((x, y) => x.id - y.id) : m === 'toSpliced' ? a.toSpliced(0, 0) : m === 'with' ? a.with(0, obj(0)) : a.toReversed();
+      out[m] = bad(r);
+    }
+    out.applyArguments = bad((function () { return [...arguments]; }).apply(null, getters(48, obj)));
+    out.reflectApply = bad(Reflect.apply((...r) => r, null, getters(48, obj)));
+    out.pushApply = (() => { const g = []; Array.prototype.push.apply(g, getters(48, obj)); return bad(g); })();
+    class K { constructor(...r) { this.r = r; } }
+    out.reflectConstruct = bad(Reflect.construct(K, getters(48, obj)).r);
+    out.spread = bad([...getters(48, obj)]);
+    out.from = bad(Array.from(getters(48, obj)));
+    out.concat = bad([].concat(getters(48, obj)));
+    out.sortGenerated = (() => { const a = getters(32, obj); const plain = Array.prototype.slice.call(a); plain.sort((x, y) => { churn(); return y.id - x.id; }); return bad(plain); })();
+    console.log(JSON.stringify(out));
+  }, "{\"toReversed\":0,\"toSorted\":0,\"toSpliced\":0,\"with\":0,\"applyArguments\":0,\"reflectApply\":0,\"pushApply\":0,\"reflectConstruct\":0,\"spread\":0,\"from\":0,\"concat\":0,\"sortGenerated\":0}\n"],
+  [function sortsem() {
+    const show = a => JSON.stringify([a, a.length, Object.keys(a).join()]);
+    const out = [];
+    out.push(show([3, , 1].sort()), show([3, undefined, , 1].sort()), show([3, undefined, , 1].sort((a, b) => b - a)));
+    { const a = Array.from({ length: 10 }, (_, i) => 9 - i); let first = true; a.sort((x, y) => { if (first) { first = false; a.length = 0; } return x - y; }); out.push(show(a)); }
+    { const a = [5, 4, 3, 2, 1]; let first = true; a.sort((x, y) => { if (first) { first = false; for (let k = 0; k < 50; k++) a.push(99); } return x - y; }); out.push(JSON.stringify([a.slice(0, 7), a.length])); }
+    Array.prototype[1] = 'P'; out.push(show([3, , 1].sort())); delete Array.prototype[1];
+    out.push(show(Array.prototype.sort.call({ length: 3, 0: 'c', 2: 'a' })));
+    out.push(show((function () { return [].sort.call(arguments); })(3, 1, 2)));
+    out.push(show(Object.freeze([1]).sort()));
+    try { Object.freeze([2, 1]).sort(); out.push('no throw'); } catch (e) { out.push(e.constructor.name); }
+    out.push(show([10, 9, 1, 2].sort()), show(['b', 'a', 'B'].sort()), show([2, 1].toSorted()), show([3, , 1].toSorted()));
+    console.log(out.join('\n'));
+  }, "[[1,3,null],3,\"0,1\"]\n[[1,3,null,null],4,\"0,1,2\"]\n[[3,1,null,null],4,\"0,1,2\"]\n[[0,1,2,3,4,5,6,7,8,9],10,\"0,1,2,3,4,5,6,7,8,9\"]\n[[1,2,3,4,5,99,99],55]\n[[1,3,\"P\"],3,\"0,1,2\"]\n[{\"0\":\"a\",\"1\":\"c\",\"length\":3},3,\"0,1,length\"]\n[{\"0\":1,\"1\":2,\"2\":3},3,\"0,1,2\"]\n[[1],1,\"0\"]\nTypeError\n[[1,10,2,9],4,\"0,1,2,3\"]\n[[\"B\",\"a\",\"b\"],3,\"0,1,2\"]\n[[1,2],2,\"0,1\"]\n[[1,3,null],3,\"0,1,2\"]\n"],
 ];
 
 let failures = 0;
+const env = { ...process.env, NO_COLOR: '1' };
+delete env.FORCE_COLOR;
 for (const [section, expected] of sections) {
-  const child = spawnSync(process.execPath, ['-e', `(${section})()`], { encoding: 'utf8', timeout: 60000 });
+  const child = spawnSync(process.execPath, ['-e', `(${section})()`], { encoding: 'utf8', timeout: 60000, env });
   if (child.status !== 0 || child.stdout !== expected) {
     failures++;
     console.log(`FAIL ${section.name} (status ${child.status})\n--- got\n${child.stdout}${child.stderr}\n--- expected\n${expected}`);

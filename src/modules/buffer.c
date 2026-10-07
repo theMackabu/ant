@@ -835,35 +835,34 @@ static ant_value_t js_typedarray_filter(ant_params_t) {
   if (!ta_data->buffer || ta_data->buffer->is_detached)
     return js_mkerr(js, "Cannot operate on a detached TypedArray");
 
-  ant_value_t *kept = NULL;
-  if (ta_data->length > 0) {
-    kept = malloc(sizeof(ant_value_t) * ta_data->length);
-    if (!kept) return js_mkerr(js, "oom");
-  }
+  gc_temp_root_scope_t kept;
+  gc_temp_root_scope_begin(js, &kept);
 
-  size_t count = 0;
   ant_value_t this_arg = nargs > 1 ? args[1] : js_mkundef();
+  ant_value_t out = js_mkundef();
   for (size_t i = 0; i < ta_data->length; i++) {
     ant_value_t value = js_mkundef();
     if (!buffer_typedarray_data_read_index(js, ta_data, i, &value)) continue;
     ant_value_t call_args[3] = { value, js_mknum((double)i), this_val };
     ant_value_t result = sv_vm_call(js->vm, js, args[0], this_arg, call_args, 3, NULL, js_mkundef());
-    if (is_err(result)) { free(kept); return result; }
-    if (js_truthy(js, result)) kept[count++] = value;
+    if (is_err(result)) { out = result; goto done; }
+    if (js_truthy(js, result) && !gc_temp_root_push(&kept, value)) { out = js_mkerr(js, "oom"); goto done; }
   }
 
+  size_t count = kept.len;
   ArrayBufferData *buffer = create_array_buffer_data(count * get_element_size(ta_data->type));
-  if (!buffer) { free(kept); return js_mkerr(js, "Failed to allocate buffer"); }
-  ant_value_t out = create_typed_array_like(js, this_val, ta_data->type, buffer, 0, count);
-  if (is_err(out)) { free(kept); return out; }
+  if (!buffer) { out = js_mkerr(js, "Failed to allocate buffer"); goto done; }
+  out = create_typed_array_like(js, this_val, ta_data->type, buffer, 0, count);
+  if (is_err(out)) goto done;
   TypedArrayData *out_ta = buffer_get_typedarray_data(out);
 
   for (size_t i = 0; i < count; i++) {
-    ant_value_t write_result = typedarray_write_value(js, out_ta, i, kept[i]);
-    if (is_err(write_result)) { free(kept); return write_result; }
+    ant_value_t write_result = typedarray_write_value(js, out_ta, i, kept.items[i]);
+    if (is_err(write_result)) { out = write_result; goto done; }
   }
 
-  free(kept);
+done:
+  gc_temp_root_scope_end(&kept);
   return out;
 }
 
@@ -3064,11 +3063,17 @@ static ant_value_t js_typedarray_sort(ant_params_t) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "TypedArray.prototype.sort comparefn must be callable");
 
   size_t len = ta_data->length;
-  ant_value_t *values = len ? malloc(sizeof(ant_value_t) * len) : NULL;
-  if (len && !values) return js_mkerr(js, "oom");
+  gc_temp_root_scope_t roots;
+  gc_temp_root_scope_begin(js, &roots);
+  
+  ant_value_t *values = gc_temp_root_slots(&roots, len);
+  if (!values) {
+    gc_temp_root_scope_end(&roots);
+    return js_mkerr(js, "oom");
+  }
 
   for (size_t i = 0; i < len; i++) if (!buffer_typedarray_data_read_index(js, ta_data, i, &values[i])) {
-    free(values);
+    gc_temp_root_scope_end(&roots);
     return js_mkerr(js, "Failed to read from TypedArray");
   }
 
@@ -3080,7 +3085,7 @@ static ant_value_t js_typedarray_sort(ant_params_t) {
       if (has_compare) {
         ant_value_t cmp_args[2] = { values[j - 1], key };
         ant_value_t cmp_val = sv_vm_call(js->vm, js, args[0], js_mkundef(), cmp_args, 2, NULL, js_mkundef());
-        if (is_err(cmp_val)) { free(values); return cmp_val; }
+        if (is_err(cmp_val)) { gc_temp_root_scope_end(&roots); return cmp_val; }
         cmp = js_to_number(js, cmp_val);
       } else {
         double left = js_to_number(js, values[j - 1]);
@@ -3096,10 +3101,10 @@ static ant_value_t js_typedarray_sort(ant_params_t) {
 
   for (size_t i = 0; i < len; i++) {
     ant_value_t write_result = typedarray_write_value(js, ta_data, i, values[i]);
-    if (is_err(write_result)) { free(values); return write_result; }
+    if (is_err(write_result)) { gc_temp_root_scope_end(&roots); return write_result; }
   }
 
-  free(values);
+  gc_temp_root_scope_end(&roots);
   return this_val;
 }
 

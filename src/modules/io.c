@@ -1038,10 +1038,15 @@ static ant_value_t js_console_timeLog(ant_params_t) {
   
   ant_value_t *out_args = malloc((size_t)(nargs - extra_start + 1) * sizeof(ant_value_t));
   if (!out_args) return js_mkerr(js, "Out of memory");
+  GC_ROOT_SAVE(root_mark, js);
   
   out_args[0] = js_mkstr(js, buf, (size_t)(len > 0 ? len : 0));
+  GC_ROOT_PIN(js, out_args[0]);
+  
   for (int i = extra_start; i < nargs; i++) out_args[i - extra_start + 1] = args[i];
   ant_value_t result = console_emit_current(js, false, NULL, out_args, nargs - extra_start + 1);
+  
+  GC_ROOT_RESTORE(js, root_mark);
   free(out_args);
   
   return result;

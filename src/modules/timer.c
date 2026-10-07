@@ -60,7 +60,10 @@ typedef struct immediate_entry {
   ant_value_t callback;
   int immediate_id;
   int active;
+  bool refed;
   struct immediate_entry *next;
+  int argc;
+  ant_value_t argv[];
 } immediate_entry_t;
 
 static void add_timer_entry(ant_t *js, timer_entry_t *entry) {
@@ -189,6 +192,45 @@ static ant_value_t js_timer_has_ref(ant_params_t) {
   timer_entry_t *entry = find_timer_entry_by_id(js, (int)js_getnum(js_get_slot(js_getthis(js), SLOT_DATA)));
   if (!entry || entry->closed || uv_is_closing((uv_handle_t *)&entry->handle)) return js_false;
   return js_bool(uv_has_ref((const uv_handle_t *)&entry->handle) != 0);
+}
+
+static immediate_entry_t *find_immediate_entry(ant_t *js, ant_value_t handle) {
+  int id = (int)js_getnum(js_get_slot(handle, SLOT_DATA));
+  for (immediate_entry_t *entry = js->timers.immediates; entry; entry = entry->next)
+    if (entry->immediate_id == id && entry->active) return entry;
+  return NULL;
+}
+
+static ant_value_t js_immediate_ref(ant_params_t) {
+  immediate_entry_t *entry = find_immediate_entry(js, js_getthis(js));
+  if (entry) entry->refed = true;
+  return js_getthis(js);
+}
+
+static ant_value_t js_immediate_unref(ant_params_t) {
+  immediate_entry_t *entry = find_immediate_entry(js, js_getthis(js));
+  if (entry) entry->refed = false;
+  return js_getthis(js);
+}
+
+static ant_value_t js_immediate_has_ref(ant_params_t) {
+  immediate_entry_t *entry = find_immediate_entry(js, js_getthis(js));
+  return js_bool(entry && entry->refed);
+}
+
+static ant_value_t js_immediate_dispose(ant_params_t) {
+  immediate_entry_t *entry = find_immediate_entry(js, js_getthis(js));
+  if (entry) entry->active = 0;
+  return js_mkundef();
+}
+
+static ant_value_t immediate_make_object(ant_t *js, immediate_entry_t *entry) {
+  ant_value_t obj = js_mkobj(js);
+  if (is_object_type(js->builtins.immediate_proto)) js_set_proto_init(obj, js->builtins.immediate_proto);
+  js_set_slot(obj, SLOT_DATA, js_mknum((double)entry->immediate_id));
+  js_set(js, obj, "callback", entry->callback);
+  js_set_descriptor(js, obj, "callback", 8, JS_DESC_W | JS_DESC_C);
+  return obj;
 }
 
 static int timer_id_from_arg(ant_t *js, ant_value_t arg) {
@@ -394,22 +436,26 @@ static ant_value_t js_clear_timeout(ant_params_t) {
   return js_mkundef();
 }
 
-// setImmediate(callback)
+// setImmediate(callback, ...args)
 static ant_value_t js_set_immediate(ant_params_t) {
   if (nargs < 1) {
     return js_mkerr(js, "setImmediate requires 1 argument (callback)");
   }
   
   ant_value_t callback = args[0];
+  int argc = nargs - 1;
   
-  immediate_entry_t *entry = calloc(1, sizeof(immediate_entry_t));
+  immediate_entry_t *entry = calloc(1, sizeof(immediate_entry_t) + (size_t)argc * sizeof(ant_value_t));
   if (entry == NULL) {
     return js_mkerr(js, "failed to allocate immediate");
   }
   
   entry->callback = callback;
+  entry->argc = argc;
+  for (int i = 0; i < argc; i++) entry->argv[i] = args[i + 1];
   entry->immediate_id = js->timers.next_immediate_id++;
   entry->active = 1;
+  entry->refed = true;
   entry->next = NULL;
   
   if (js->timers.immediates_tail == NULL) {
@@ -420,11 +466,7 @@ static ant_value_t js_set_immediate(ant_params_t) {
     js->timers.immediates_tail = entry;
   }
 
-  ant_value_t obj = js_mkobj(js);
-  js_set(js, obj, "id", js_mknum((double)entry->immediate_id));
-  js_set(js, obj, "callback", callback);
-  
-  return obj;
+  return immediate_make_object(js, entry);
 }
 
 // clearImmediate(immediateId | immediateObject)
@@ -919,8 +961,11 @@ void process_immediates(ant_t *js) {
     if (js->timers.immediates == NULL) js->timers.immediates_tail = NULL;
     
     if (entry->active) {
-      ant_value_t args[0];
-      sv_vm_call(js->vm, js, entry->callback, js_mkundef(), args, 0, NULL, js_mkundef());
+      GC_ROOT_SAVE(root_mark, js);
+      GC_ROOT_PIN(js, entry->callback);
+      for (int i = 0; i < entry->argc; i++) GC_ROOT_PIN(js, entry->argv[i]);
+      sv_vm_call(js->vm, js, entry->callback, js_mkundef(), entry->argv, entry->argc, NULL, js_mkundef());
+      GC_ROOT_RESTORE(js, root_mark);
       process_report_uncaught_exception_if_pending(js);
       process_microtasks(js);
     }
@@ -930,6 +975,14 @@ void process_immediates(ant_t *js) {
 }
 
 int has_pending_immediates(ant_t *js) {
+  for (
+    immediate_entry_t *entry = js->timers.immediates;
+    entry != NULL; entry = entry->next
+  ) if (entry->active && entry->refed) return 1;
+  return 0;
+}
+
+int has_active_immediates(ant_t *js) {
   for (
     immediate_entry_t *entry = js->timers.immediates;
     entry != NULL; entry = entry->next
@@ -971,6 +1024,16 @@ void init_timer_module(ant_t *js) {
   js_set(js, js->builtins.timeout_proto, "refresh", js_mkfun(js_timer_refresh));
   js_set_sym(js, js->builtins.timeout_proto, js->sym.toStringTag_sym, js_mkstr(js, "Timeout", 7));
   js_set_sym(js, js->builtins.timeout_proto, js->sym.inspect_sym, js_mkfun(timer_inspect));
+
+  js->builtins.immediate_proto = js_mkobj(js);
+  gc_register_root(&js->builtins.immediate_proto);
+  js_set_proto_init(js->builtins.immediate_proto, js->sym.object_proto);
+  js_set(js, js->builtins.immediate_proto, "ref", js_mkfun(js_immediate_ref));
+  js_set(js, js->builtins.immediate_proto, "unref", js_mkfun(js_immediate_unref));
+  js_set(js, js->builtins.immediate_proto, "hasRef", js_mkfun(js_immediate_has_ref));
+  js_set_sym(js, js->builtins.immediate_proto, js->sym.dispose_sym, js_mkfun(js_immediate_dispose));
+  js_set_sym(js, js->builtins.immediate_proto, js->sym.toStringTag_sym, js_mkstr(js, "Immediate", 9));
+  js_set_sym(js, js->builtins.immediate_proto, js->sym.inspect_sym, js_mkfun(timer_inspect));
 
   js_set_proto_init(js->builtins.interval_proto, js->sym.object_proto);
   js_set(js, js->builtins.interval_proto, "ref", js_mkfun(js_timer_ref));
@@ -1079,5 +1142,8 @@ void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
     for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
   }
   
-  for (immediate_entry_t *i = js->timers.immediates; i; i = i->next) mark(js, i->callback);
+  for (immediate_entry_t *i = js->timers.immediates; i; i = i->next) {
+    mark(js, i->callback);
+    for (int a = 0; a < i->argc; a++) mark(js, i->argv[a]);
+  }
 }

@@ -1194,10 +1194,17 @@ static ant_value_t util_promisified_call(ant_params_t) {
   for (int i = 0; i < nargs; i++) call_args[i] = args[i];
   call_args[nargs] = cb;
 
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, cb);
+  GC_ROOT_PIN(js, ctx);
+  
   ant_value_t this_arg = js_getthis(js);
   ant_value_t call_result = sv_vm_call(
-    js->vm, js, original, this_arg, call_args, nargs + 1, NULL, js_mkundef()
+    js->vm, js, original, this_arg, 
+    call_args, nargs + 1, NULL, js_mkundef()
   );
+  
+  GC_ROOT_RESTORE(js, root_mark);
   free(call_args);
 
   ant_value_t settled = js_get_slot(ctx, SLOT_SETTLED);

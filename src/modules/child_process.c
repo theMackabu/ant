@@ -1650,10 +1650,17 @@ static ant_value_t exec_callback_promisified_call(ant_params_t) {
   for (int i = 0; i < nargs; i++) call_args[i] = args[i];
   call_args[nargs] = callback;
 
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, callback);
+  GC_ROOT_PIN(js, state);
+  
   ant_value_t call_result = sv_vm_call(
     js->vm, js, original, js_getthis(js), 
     call_args, nargs + 1, NULL, js_mkundef()
-  ); free(call_args);
+  );
+  
+  free(call_args);
+  GC_ROOT_RESTORE(js, root_mark);
 
   ant_value_t settled = js_get_slot(state, SLOT_SETTLED);
   bool is_settled = (vtype(settled) == kTypeBool && settled == js_true);

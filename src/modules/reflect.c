@@ -137,9 +137,8 @@ static ant_value_t reflect_delete_property(ant_params_t) {
   char *key_str = js_getstr(js, key, NULL);
   if (!key_str) return js_false;
   
-  ant_value_t del_result = js_delete_prop(js, target, key_str, strlen(key_str));
-  bool deleted = !is_err(del_result) && js_truthy(js, del_result);
-  return js_bool(deleted);
+  ant_value_t del_result = js_delete_prop_ordinary(js, target, key_str, strlen(key_str));
+  return is_err(del_result) ? del_result : js_bool(js_truthy(js, del_result));
 }
 
 static ant_value_t reflect_own_keys(ant_params_t) {
@@ -171,35 +170,23 @@ static ant_value_t reflect_construct(ant_params_t) {
     return js_mkerr(js, "Reflect.construct: third argument must be a constructor");
   }
   
-  ant_value_t length_val = js_get(js, args_arr, "length");
-  int arg_count = 0;
-  if (vtype(length_val) == kTypeNumber) {
-    arg_count = (int)js_getnum(length_val);
-  }
+  if (!is_object_type(args_arr))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Reflect.construct: second argument must be an array-like object");
   
-  ant_value_t *call_args = NULL;
-  if (arg_count > 0) {
-    call_args = malloc(arg_count * sizeof(ant_value_t));
-    if (!call_args) return js_mkerr(js, "Out of memory");
-    
-    for (int i = 0; i < arg_count; i++) {
-      char idx[16];
-      snprintf(idx, sizeof(idx), "%d", i);
-      call_args[i] = js_get(js, args_arr, idx);
-    }
-  }
+  js_arg_list_t list;
+  ant_value_t err = js_arg_list_from(js, args_arr, &list);
+  if (is_err(err)) return err;
   
   ant_value_t result;
   if (vtype(target) == kTypeObject && is_proxy(target)) {
-    result = js_proxy_construct(js, target, call_args, arg_count, new_target);
+    result = js_proxy_construct(js, target, list.args, list.argc, new_target);
   } else {
     ant_value_t effective_new_target = new_target;
     ant_value_t record_func = target;
-    ant_value_t proto = sv_prepare_construct_meta(
-      js, target, new_target, &effective_new_target, &record_func
-    );
+    
+    ant_value_t proto = sv_prepare_construct_meta(js, target, new_target, &effective_new_target, &record_func);
     if (is_err(proto)) {
-      if (call_args) free(call_args);
+      js_arg_list_release(&list);
       return proto;
     }
 
@@ -208,13 +195,13 @@ static ant_value_t reflect_construct(ant_params_t) {
 
     ant_value_t ctor_this = new_obj;
     result = sv_vm_call(
-      js->vm, js, target, new_obj, call_args, arg_count, &ctor_this, effective_new_target
+      js->vm, js, target, new_obj, list.args, list.argc, &ctor_this, effective_new_target
     );
     if (!is_err(result) && !is_object_type(result))
       result = is_object_type(ctor_this) ? ctor_this : new_obj;
   }
   
-  if (call_args) free(call_args);
+  js_arg_list_release(&list);
   return result;
 }
 
@@ -236,21 +223,16 @@ static ant_value_t reflect_apply(ant_params_t) {
     "Reflect.apply: third argument must be an array-like object"
   );
 
-  ant_value_t result;
-  if (is_object_type(args_arr)) {
-    ant_value_t *call_args = NULL;
-    int arg_count = 0;
-    ant_value_t extracted = extract_array_args(js, args_arr, &call_args, &arg_count);
-    if (is_err(extracted)) return extracted;
-    result = sv_vm_call_explicit_this(
-      js->vm, js, target, this_arg, 
-      call_args, arg_count
-    );
-    if (call_args) free(call_args);
-    return result;
-  }
+  if (!is_object_type(args_arr))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Reflect.apply: third argument must be an array-like object");
 
-  return js_mkerr_typed(js, JS_ERR_TYPE, "Reflect.apply: third argument must be an array-like object");
+  js_arg_list_t list;
+  ant_value_t err = js_arg_list_from(js, args_arr, &list);
+  if (is_err(err)) return err;
+
+  ant_value_t result = sv_vm_call_explicit_this(js->vm, js, target, this_arg, list.args, list.argc);
+  js_arg_list_release(&list);
+  return result;
 }
 
 static ant_value_t reflect_get_own_property_descriptor(ant_params_t) {

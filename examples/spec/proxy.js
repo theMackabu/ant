@@ -41,7 +41,7 @@ const deleteHandler = {
 };
 const delProxy = new Proxy({ _keep: 1, remove: 2 }, deleteHandler);
 delete delProxy.remove;
-delete delProxy._keep;
+test('proxy delete refused', Reflect.deleteProperty(delProxy, '_keep'), false);
 test('proxy delete allowed', delProxy.remove, undefined);
 test('proxy delete blocked', delProxy._keep, 1);
 
