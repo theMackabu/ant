@@ -2580,6 +2580,8 @@ static ant_value_t alloc_array_with_proto_capacity(
   
   while (capacity < minimum_capacity && capacity <= UINT32_MAX / 2) capacity *= 2;
   if (capacity < minimum_capacity) capacity = minimum_capacity;
+  if (exact_capacity && capacity < 32 && (capacity & (capacity - 1)))
+    capacity = 1u << (32 - __builtin_clz(capacity));
   if ((size_t)capacity > SIZE_MAX / sizeof(*obj->u.array.data)) return js_mkerr(js, "oom");
 
   obj->u.array.cap = capacity;
