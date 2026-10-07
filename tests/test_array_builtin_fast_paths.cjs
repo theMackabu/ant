@@ -291,6 +291,40 @@ const sections = [
       t(() => [1, 1n, 0, -1n].sort()),
     ].join('\n'));
   }, "[1,2,3]\n[1,2,3]\nRangeError:cmp\n[3,1,2]\n[-1,-10,-2147483648,0,0,1,10,100,2.5,21,2147483647,3e+21,4294967296,9]\n[10,3,5,\"B\",\"a\"]\nTypeError:Do not know how to serialize a BigInt\n"],
+  [function speciesresult() {
+    const holder = [];
+    for (let i = 0; i < 64; i++) holder.push([0, 1, 2, 3, 4, 5, 6, 7]);
+    for (let r = 0; r < 20; r++) for (let i = 0; i < 300000; i++) ({ i });
+    const sliceInto = (target, round) => {
+      const src = Array.from({ length: 8 }, (_, i) => ({ v: round * 8 + i, pad: [round, i] }));
+      src.constructor = { [Symbol.species]: function () { return target; } };
+      src.slice(0, 8);
+    };
+    let bad = 0;
+    for (let round = 0; round < 120; round++) {
+      const target = holder[round % 64];
+      target.length = 0;
+      sliceInto(target, round);
+      for (let i = 0; i < 400000; i++) ({ junk: i, more: [i] });
+      for (let i = 0; i < 8; i++) {
+        const o = target[i];
+        if (!o || o.v !== round * 8 + i || !Array.isArray(o.pad) || o.pad[1] !== i) { bad++; break; }
+      }
+    }
+    const out = ['old species target lost values: ' + bad];
+    const using = (result, fn) => {
+      class S extends Array { static get [Symbol.species]() { return function () { return result; }; } }
+      try { fn(S.from([1, 2, 3])); return 'ok ' + result.join(); } catch (e) { return e.constructor.name; }
+    };
+    const ops = { slice: a => a.slice(0, 2), concat: a => a.concat([9]), splice: a => a.splice(0, 2), map: a => a.map(x => x), filter: a => a.filter(() => true), flat: a => a.flat(), flatMap: a => a.flatMap(x => [x]) };
+    for (const [name, fn] of Object.entries(ops)) {
+      out.push(name + ' ' + ['freeze', 'seal', 'preventExtensions'].map(lock => using(Object[lock]([]), fn)).join(' / ') + ' / existing ' + using(Object.preventExtensions([0, 0]), fn));
+    }
+    let calls = 0;
+    using(Object.freeze([]), a => a.map(x => (calls++, x)));
+    out.push('map callback calls before throwing: ' + calls);
+    console.log(out.join('\n'));
+  }, "old species target lost values: 0\nslice TypeError / TypeError / TypeError / existing ok 1,2\nconcat TypeError / TypeError / TypeError / existing TypeError\nsplice TypeError / TypeError / TypeError / existing ok 1,2\nmap TypeError / TypeError / TypeError / existing TypeError\nfilter TypeError / TypeError / TypeError / existing TypeError\nflat TypeError / TypeError / TypeError / existing TypeError\nflatMap TypeError / TypeError / TypeError / existing TypeError\nmap callback calls before throwing: 1\n"],
 ];
 
 let failures = 0;

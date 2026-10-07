@@ -235,6 +235,20 @@ static inline bool binding_ident_here(P) {
   return is_binding_ident_tok(TOK) && !(TOK == TOK_AWAIT && (p->in_async || p->goal == SV_PARSE_MODULE));
 }
 
+static bool using_declaration_here(P, bool for_head) {
+  if (TOK != TOK_USING) return false;
+  
+  sv_lexer_state_t saved;
+  sv_lexer_save_state(&p->lx, &saved);
+  CONSUMED = 1;
+  uint8_t next = NEXT();
+  
+  bool declares = !HAD_NEWLINE && is_binding_ident_tok(next) && !(for_head && next == TOK_OF);
+  sv_lexer_restore_state(&p->lx, &saved);
+  
+  return declares;
+}
+
 static inline bool is_private_ident_like_tok(uint8_t tok) {
   return tok >= TOK_IDENTIFIER && tok < TOK_IDENT_LIKE_END;
 }
@@ -2313,7 +2327,7 @@ static sv_ast_t *parse_stmt(P) {
     [TOK_IMPORT]    = &&l_import,
   };
 
-  if (TOK == TOK_USING) {
+  if (using_declaration_here(p, false)) {
     CONSUME();
     sv_ast_t *n = parse_var_decl(p, SV_VAR_USING, false);
     consume_semicolon(p);
@@ -2325,7 +2339,7 @@ static sv_ast_t *parse_stmt(P) {
     sv_lexer_save_state(&p->lx, &saved);
     CONSUME();
     NEXT();
-    if (TOK == TOK_USING) {
+    if (!HAD_NEWLINE && using_declaration_here(p, false)) {
       CONSUME();
       sv_ast_t *n = parse_var_decl(p, SV_VAR_AWAIT_USING, false);
       consume_semicolon(p);
@@ -2424,7 +2438,7 @@ static sv_ast_t *parse_stmt(P) {
       sv_lexer_save_state(&p->lx, &saved);
       CONSUME();
       NEXT();
-      if (TOK == TOK_USING) {
+      if (!HAD_NEWLINE && using_declaration_here(p, true)) {
         CONSUME();
         p->no_in = true;
         init_node = parse_var_decl(p, SV_VAR_AWAIT_USING, true);
@@ -2432,7 +2446,7 @@ static sv_ast_t *parse_stmt(P) {
       } else sv_lexer_restore_state(&p->lx, &saved);
     }
     
-    if (!init_node && TOK == TOK_USING) {
+    if (!init_node && using_declaration_here(p, true)) {
       CONSUME();
       p->no_in = true;
       init_node = parse_var_decl(p, SV_VAR_USING, true);
