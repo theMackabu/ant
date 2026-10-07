@@ -1,22 +1,12 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { rolldown, type Plugin } from 'rolldown';
-
-const FORBIDDEN = new Set(['fs', 'fs/promises', 'child_process']);
-const strip = (spec: string): string => spec.replace(/^node:/, '').replace(/^ant:/, '');
-
-const denied = (spec: string): never => {
-  throw new Error(`"${spec}" is not allowed on ants.page — filesystem and subprocess access are blocked.`);
-};
+import { sha256hex } from './utils';
 
 const antPlugin: Plugin = {
   name: 'ant-platform',
   resolveId(source) {
-    if (/^(node:|ant:)/.test(source)) {
-      if (FORBIDDEN.has(strip(source))) denied(source);
-      return { id: source, external: true };
-    }
-    if (FORBIDDEN.has(source)) denied(source);
+    if (/^(node:|ant:)/.test(source)) return { id: source, external: true };
     return null;
   }
 };
@@ -53,13 +43,17 @@ const MIME: Record<string, string> = {
   '.map': 'application/json; charset=utf-8'
 };
 
+// A static file, named by the sha256 of its bytes. The bytes stay on disk until
+// an upload needs them: the server is asked which hashes it's missing first.
 export interface Asset {
   path: string;
   ct: string;
-  body: string;
+  hash: string;
+  size: number;
+  file: string;
 }
 
-const ASSET_LIMIT = 5 * 1024 * 1024;
+const ASSET_LIMIT = 25 * 1024 * 1024; // the server's per-file cap
 
 export function collectAssets(dir: string): Asset[] {
   if (!existsSync(dir)) throw new Error(`assets directory not found: ${dir}`);
@@ -81,7 +75,9 @@ export function collectAssets(dir: string): Asset[] {
       out.push({
         path: urlPath,
         ct: MIME[extname(entry.name).toLowerCase()] || 'application/octet-stream',
-        body: readFileSync(assetPath).toString('base64')
+        hash: sha256hex(readFileSync(assetPath)),
+        size,
+        file: assetPath
       });
     }
   };

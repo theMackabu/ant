@@ -53,6 +53,7 @@ typedef struct fetch_request_s {
 
 enum { FETCH_REQUEST_NATIVE_TAG = 0x46524551u }; // FREQ
 
+// TODO: isolate
 static UT_array *pending_requests = NULL;
 static const int k_fetch_max_redirects = 20;
 static void fetch_start_http(fetch_request_t *req);

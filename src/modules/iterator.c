@@ -242,17 +242,11 @@ void js_iter_register_advance(ant_t *js, ant_value_t proto, js_iter_advance_fn f
 
   if (js->iterators.len == js->iterators.cap) {
     size_t cap = js->iterators.cap ? js->iterators.cap * 2 : 8;
-    if (cap < js->iterators.cap || cap > SIZE_MAX / sizeof(ant_iterator_entry_t)) {
-      js_mkerr(js, "too many native iterator registrations");
-      return;
-    }
-    
+    if (cap < js->iterators.cap || cap > SIZE_MAX / sizeof(ant_iterator_entry_t)) return;
+
     ant_iterator_entry_t *entries = realloc(js->iterators.entries, cap * sizeof(*entries));
-    if (!entries) { 
-      js_mkerr(js, "out of memory registering native iterator");
-      return;
-    }
-    
+    if (!entries) return;
+
     js->iterators.entries = entries;
     js->iterators.cap = cap;
   }

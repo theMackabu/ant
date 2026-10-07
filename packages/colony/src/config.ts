@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { parse } from 'smol-toml';
 
 export function consoleUrl(): string {
@@ -7,16 +7,13 @@ export function consoleUrl(): string {
 }
 
 export interface BindingDef {
-  kind: 'kv' | 'sql';
-  binding: string;
-  id: string;
-  name?: string;
+  kind: 'kv' | 'sql' | 'files';
+  binding: string; // env.<binding> in the app
+  name: string; // the store, owned by you; projects binding the same name share it (files: always your account's one store)
   migrationsDir?: string;
 }
 
 export interface AssetsDef {
-  binding: string;
-  name?: string;
   directory: string;
   notFound: 'single-page-application' | 'none';
   startAnt: boolean | string[];
@@ -24,8 +21,7 @@ export interface AssetsDef {
 
 export interface ColonyConfig {
   name: string;
-  main: string;
-  placement: string;
+  main: string | null; // null: a static site (assets only, no script)
   observability: boolean;
   vars: Record<string, string>;
   bindings: BindingDef[];
@@ -69,12 +65,19 @@ function bindings(value: unknown, kind: BindingDef['kind']): BindingDef[] {
   return value.map((entry, index) => {
     const prefix = `${kind}[${index}]`;
     const item = table(entry, prefix);
+    const name = string(item.binding, `${prefix}.binding`);
+    if (kind === 'files') {
+      // One Files store per account, shared by all your projects: no name.
+      if (item.name !== undefined) throw new Error(`\`${prefix}.name\`: Files is one store per account, so it takes no name.`);
+      return { kind, binding: name, name: 'files' };
+    }
     const binding: BindingDef = {
       kind,
-      binding: string(item.binding, `${prefix}.binding`),
-      id: string(item.id, `${prefix}.id`),
-      name: optionalString(item.name, `${prefix}.name`)
+      binding: name,
+      name: string(item.name, `${prefix}.name`, name.toLowerCase())
     };
+    if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(binding.name))
+      throw new Error(`\`${prefix}.name\` must be lowercase letters, numbers, \`-\` or \`_\`.`);
     if (kind === 'sql') binding.migrationsDir = optionalString(item.migrations_dir, `${prefix}.migrations_dir`);
     return binding;
   });
@@ -106,7 +109,7 @@ export function loadColonyToml(dir = process.cwd()): ColonyConfig {
     vars[key] = String(value);
   }
 
-  const allBindings = [...bindings(doc.kv, 'kv'), ...bindings(doc.sql, 'sql')];
+  const allBindings = [...bindings(doc.kv, 'kv'), ...bindings(doc.sql, 'sql'), ...bindings(doc.files, 'files')];
   const names = new Set<string>();
   for (const binding of allBindings) {
     if (names.has(binding.binding)) throw new Error(`duplicate binding: ${binding.binding}`);
@@ -120,8 +123,6 @@ export function loadColonyToml(dir = process.cwd()): ColonyConfig {
     if (notFound !== 'none' && notFound !== 'single-page-application')
       throw new Error('`assets.not_found_handling` must be `none` or `single-page-application`.');
     assets = {
-      binding: string(a.binding, 'assets.binding', 'ASSETS'),
-      name: optionalString(a.name, 'assets.name'),
       directory: string(a.directory, 'assets.directory', './dist'),
       notFound,
       startAnt: startAnt(a.start_ant)
@@ -132,10 +133,13 @@ export function loadColonyToml(dir = process.cwd()): ColonyConfig {
   if (observability.enabled !== undefined && typeof observability.enabled !== 'boolean')
     throw new Error('`observability.enabled` must be a boolean.');
 
+  // No `main` and no server.js, but [assets]: a static site, served without ant.
+  const explicit = doc.main ?? doc.entry;
+  const main = explicit !== undefined ? string(explicit, 'main') : assets && !existsSync(join(dirname(p), 'server.js')) ? null : 'server.js';
+
   return {
     name: normalizeProjectName(string(doc.name, 'name')),
-    main: string(doc.main ?? doc.entry, 'main', 'server.js'),
-    placement: string(doc.placement, 'placement', 'default'),
+    main,
     observability: observability.enabled === true,
     vars,
     bindings: allBindings,

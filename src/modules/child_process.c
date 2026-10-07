@@ -122,6 +122,7 @@ struct child_process_s {
   struct child_process_s *prev;
 };
 
+// TODO: isolate
 static child_process_t *pending_children_head = NULL;
 static child_process_t *pending_children_tail = NULL;
 

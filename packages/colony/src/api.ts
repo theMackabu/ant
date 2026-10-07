@@ -1,24 +1,30 @@
+import { gzipSync } from 'node:zlib';
 import { consoleUrl } from './config';
 import { requireToken } from './auth';
 
 export interface Project {
   name: string;
-  placement: string;
-  active_deployment: string | null;
+  active: string | null;
 }
 
 export interface DeployResult {
-  deployment: { id: string; status: string; size: number };
+  deployment: { id: string; size: number };
   url: string;
   previewUrl: string;
 }
 
-async function api(method: string, path: string, init: { json?: unknown } = {}): Promise<Response> {
-  const headers: Record<string, string> = { authorization: `Bearer ${requireToken()}` };
-  let body: string | undefined;
+// json bodies over a few KB go gzip-compressed (the server accepts
+// content-encoding: gzip); raw bodies are sent as-is, see uploadAsset.
+async function api(method: string, path: string, init: { json?: unknown; raw?: Uint8Array; headers?: Record<string, string> } = {}): Promise<Response> {
+  const headers: Record<string, string> = { authorization: `Bearer ${requireToken()}`, ...init.headers };
+  let body: string | Uint8Array | undefined = init.raw;
   if (init.json !== undefined) {
     headers['content-type'] = 'application/json';
-    body = JSON.stringify(init.json);
+    const text = JSON.stringify(init.json);
+    if (text.length > 4096) {
+      body = gzipSync(text);
+      headers['content-encoding'] = 'gzip';
+    } else body = text;
   }
   return fetch(`${consoleUrl()}${path}`, { method, headers, body });
 }
@@ -50,15 +56,35 @@ export async function getProject(name: string): Promise<Project | null> {
 }
 
 export interface DeployManifest {
-  hash: string;
   script: string;
-  placement: string;
   observability: boolean;
   vars: Record<string, string>;
-  bindings: { kind: string; name: string; id: string; resourceName?: string }[];
+  bindings: { kind: string; binding: string; name: string }[];
   migrations: Record<string, { tag: string; sql: string }[]>;
-  assets: { path: string; ct: string; body: string }[];
-  assetsConfig: { notFound: string; startAnt: boolean | string[]; binding: string; name?: string } | null;
+  assets: { path: string; ct: string; hash: string }[]; // uploaded first: missingAssets + uploadAsset
+  assetsConfig: { notFound: string; startAnt: boolean | string[] } | null;
+}
+
+// The hashes this account still has to upload (the server keeps every file it
+// was sent, so unchanged ones never travel twice).
+export async function missingAssets(hashes: string[]): Promise<string[]> {
+  if (!hashes.length) return [];
+  const { missing } = await asJson<{ missing: string[] }>(await api('POST', '/api/blobs/missing', { json: { hashes } }));
+  return missing;
+}
+
+// Uploads one file's raw bytes, gzip-compressed when that makes it smaller
+// (text yes, already-compressed images and fonts no). Returns bytes sent.
+export async function uploadAsset(hash: string, bytes: Uint8Array): Promise<number> {
+  const gz = gzipSync(bytes);
+  const useGz = gz.byteLength < bytes.byteLength * 0.9;
+  const body = useGz ? gz : bytes;
+  const res = await api('PUT', `/api/blobs/${hash}`, {
+    raw: body,
+    headers: { 'content-type': 'application/octet-stream', ...(useGz ? { 'content-encoding': 'gzip' } : {}) }
+  });
+  await asJson(res);
+  return body.byteLength;
 }
 
 export async function deployManifest(name: string, manifest: DeployManifest): Promise<DeployResult> {

@@ -22,6 +22,16 @@ test('collects assets in deterministic URL order', () => {
     writeFileSync(join(dir, 'nested', 'app.js'), 'export default 1');
 
     const assets = collectAssets(dir);
+    const sha = s => require('node:crypto').createHash('sha256').update(s).digest('hex');
+    assert.deepEqual(
+      assets.map(asset => [asset.path, asset.hash, asset.size]),
+      [
+        ['/a.html', sha('<h1>first</h1>'), 14],
+        ['/nested/app.js', sha('export default 1'), 16],
+        ['/z.txt', sha('last'), 4]
+      ]
+    );
+    assert.ok(assets.every(asset => !('body' in asset)), 'no inlined bodies');
     assert.deepEqual(
       assets.map(asset => [asset.path, asset.ct]),
       [

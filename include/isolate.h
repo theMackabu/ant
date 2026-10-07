@@ -13,6 +13,7 @@
 #include "esm/loader.h"
 #include "modules/json.h"
 #include "modules/math.h"
+#include "modules/timer.h"
 
 typedef struct {
   ant_object_t *base;
@@ -381,7 +382,9 @@ struct ant_isolate_t {
   bool wasm_interrupt_enabled;
 #endif
 
+  ant_timer_state_t timers;
   bool microtasks_draining;
+  
   struct coroutine *active_async_coro;
   struct gc_temp_root_scope *temp_roots;
 
