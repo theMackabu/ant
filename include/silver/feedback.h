@@ -409,6 +409,29 @@ static inline void sv_tfb_record_call_target(sv_func_t *func, int bc_off, sv_fun
   func->call_target_fb_count = (uint8_t)(count + 1);
 }
 
+static constexpr uint8_t SV_TFB_CALLED_BUILTIN = 1u << 0;
+
+static inline void sv_tfb_record_builtin_call(sv_func_t *func, uint8_t *ip) {
+  uint8_t *type_feedback = sv_func_type_feedback(func);
+  if (!type_feedback) return;
+  
+  uint8_t *site = &type_feedback[ip - func->code];
+  if (*site & SV_TFB_CALLED_BUILTIN) return;
+  
+  *site |= SV_TFB_CALLED_BUILTIN;
+  func->tfb_version++;
+}
+
+static inline bool sv_tfb_call_site_may_call_builtin(sv_func_t *func, int bc_off) {
+  uint8_t *type_feedback = sv_func_type_feedback(func);
+  if (type_feedback && (type_feedback[bc_off] & SV_TFB_CALLED_BUILTIN)) return true;
+  
+  for (int i = 0; i < func->call_target_fb_count; i++)
+    if (func->call_target_fb[i].bc_off == (uint16_t)bc_off) return false;
+  
+  return true;
+}
+
 static inline sv_func_t *sv_tfb_get_call_target(sv_func_t *func, int bc_off) {
   sv_call_target_fb_t *fb = func->call_target_fb;
   int count = func->call_target_fb_count;

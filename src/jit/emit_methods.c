@@ -553,8 +553,11 @@ void jit_emit_methods(jit_compile_t *c) {
 
       MIR_append_insn(c->ctx, c->jit_func, lbl_cm_interp);
       MIR_label_t lbl_cm_generic = MIR_new_label(c->ctx);
-      jit_emit_builtin_call_fast(c, r_call_func, r_call_this, r_arg_arr, call_argc,
-                                 r_call_res, lbl_cm_generic, lbl_cm_done);
+      if (sv_tfb_call_site_may_call_builtin(c->func, c->bc_off))
+        jit_emit_builtin_call_fast(c, r_call_func, r_call_this, r_arg_arr, call_argc,
+                                   r_call_res, lbl_cm_generic, lbl_cm_done);
+      else mir_emit_builtin_call_watch(c->ctx, c->jit_func, c->js, "cmw", c->bc_off,
+                                       c->r_bool, r_call_func, c->func, c->bc_off);
       MIR_append_insn(c->ctx, c->jit_func, lbl_cm_generic);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_call_insn(c->ctx, 9,

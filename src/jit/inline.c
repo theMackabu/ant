@@ -2081,10 +2081,13 @@ void jit_emit_inline_body(
           MIR_label_t dv_slow = MIR_new_label(ctx);
           char dv_prefix[24];
           snprintf(dv_prefix, sizeof(dv_prefix), "inl%d_", id);
-          mir_emit_builtin_call_fast(
-              ctx, jit_func, dv_prefix, (int)(ip - callee->code), r_js, r_bool,
-              ext->cfunc_proto, ext->native_finish_proto, ext->imp_native_finish,
-              nc_fn, nc_this, ext->r_args_buf, nc_argc, nc_dst, dv_slow, dv_done);
+          int dv_site = (int)(ip - callee->code);
+          if (sv_tfb_call_site_may_call_builtin(callee, dv_site))
+            mir_emit_builtin_call_fast(
+                ctx, jit_func, dv_prefix, dv_site, r_js, r_bool,
+                ext->cfunc_proto, ext->native_finish_proto, ext->imp_native_finish,
+                nc_fn, nc_this, ext->r_args_buf, nc_argc, nc_dst, dv_slow, dv_done);
+          else mir_emit_builtin_call_watch(ctx, jit_func, js, dv_prefix, dv_site, r_bool, nc_fn, callee, dv_site);
           MIR_append_insn(ctx, jit_func, dv_slow);
         }
 

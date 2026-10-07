@@ -52,4 +52,39 @@ assert(hot(chain, 100000) === 20, 'chained builtin calls');
 function maxOf(i) { return Math.max(i, 1, 2, 3, 4, 5, 6, 7); }
 assert(hot(maxOf, 100000) === 99999, 'many-argument builtin call');
 
+// sites compiled after calling only JS functions skip the direct builtin
+// block; builtins reaching them later must still work, as must sites that
+// mix both and sites that switch the other way
+function viaJs(f, x) { return f(x); }
+function viaBuiltin(f, x) { return f(x); }
+function mixed(f, x) { return f(x); }
+function viaMethod(o, x) { return o.m(x); }
+const inc = x => x + 1;
+let mixedSum = 0;
+for (let i = 0; i < 5000; i++) {
+  mixedSum += viaJs(inc, i) + viaBuiltin(Math.abs, -i) + mixed(i & 1 ? inc : Math.abs, -i);
+  mixedSum += viaMethod(i & 1 ? { m: inc } : { m: Math.abs }, -i);
+}
+for (let i = 0; i < 5000; i++) mixedSum += viaJs(Math.abs, -i) + viaBuiltin(inc, i) + viaMethod({ m: String }, i).length;
+assert(mixedSum === 50018890, 'call sites switching between JS functions and builtins');
+
+// a site compiled JS-only records the first builtin that reaches it and
+// recompiles once, so it ends up on the direct path
+const { spawnSync } = require('node:child_process');
+const lateEnv = { ...process.env, ANT_DEBUG: 'dump/vm:op-warn', NO_COLOR: '1' };
+delete lateEnv.FORCE_COLOR;
+const late = spawnSync(process.execPath, ['-e', `
+function site(f, x) { return f(x); }
+const inc = x => x + 1;
+for (let i = 0; i < 20000; i++) site(inc, i);
+function loop(n) { let s = 0; for (let i = 0; i < n; i++) s += site(Math.abs, -i); return s; }
+let total = 0;
+for (let r = 0; r < 300; r++) total += loop(1000);
+console.log(total);
+`], { encoding: 'utf8', env: lateEnv, timeout: 30000 });
+assert(late.status === 0, late.stderr);
+assert(late.stdout.trim() === String(300 * 499500), 'late builtin results');
+const loopCompiles = (late.stderr.match(/^jit: compiled func=loop /gm) || []).length;
+assert(loopCompiles === 2, 'late builtin recompiled the caller once, got ' + loopCompiles);
+
 console.log('test_jit_builtin_direct_call: ok');

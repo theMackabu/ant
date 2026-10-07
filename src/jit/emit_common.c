@@ -37,6 +37,79 @@ void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg) {
   MIR_append_insn(c->ctx, c->jit_func, no_error);
 }
 
+void mir_emit_drop_owner_code_once(
+  MIR_context_t ctx, MIR_item_t fn, ant_t *js, const char *prefix, int site,
+  uint8_t *mark, uint8_t mark_bit, bool count_snapshot_reset
+) {
+  sv_func_t *owner = jit_compile_owner;
+  uint8_t *fired = owner ? code_arena_bump(js, sizeof(*fired)) : NULL;
+  if (!fired) return;
+  *fired = 0;
+
+  char name[48];
+  snprintf(name, sizeof(name), "%s%d_drop_cell", prefix, site);
+  MIR_reg_t cell = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+  snprintf(name, sizeof(name), "%s%d_drop_func", prefix, site);
+  MIR_reg_t func = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+  snprintf(name, sizeof(name), "%s%d_drop_tmp", prefix, site);
+  MIR_reg_t tmp = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+  MIR_label_t done = MIR_new_label(ctx);
+
+#define STORE(type, disp, base, op) \
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_mem_op(ctx, type, (MIR_disp_t)(disp), base, 0, 1), op))
+#define LOAD(type, disp, base) \
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, tmp), MIR_new_mem_op(ctx, type, (MIR_disp_t)(disp), base, 0, 1)))
+
+  mir_load_imm(ctx, fn, cell, (uint64_t)(uintptr_t)fired);
+  LOAD(MIR_T_U8, 0, cell);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, done),
+      MIR_new_reg_op(ctx, tmp), MIR_new_int_op(ctx, 0)));
+  STORE(MIR_T_U8, 0, cell, MIR_new_int_op(ctx, 1));
+
+  if (mark) {
+    mir_load_imm(ctx, fn, cell, (uint64_t)(uintptr_t)mark);
+    LOAD(MIR_T_U8, 0, cell);
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_OR,
+        MIR_new_reg_op(ctx, tmp), MIR_new_reg_op(ctx, tmp), MIR_new_int_op(ctx, mark_bit)));
+    STORE(MIR_T_U8, 0, cell, MIR_new_reg_op(ctx, tmp));
+  }
+
+  mir_load_imm(ctx, fn, func, (uint64_t)(uintptr_t)owner);
+  STORE(MIR_T_P, offsetof(sv_func_t, jit_code), func, MIR_new_int_op(ctx, 0));
+  STORE(MIR_T_U32, offsetof(sv_func_t, back_edge_count), func, MIR_new_int_op(ctx, 0));
+  STORE(MIR_T_U32, offsetof(sv_func_t, jit_compiled_tfb_ver), func, MIR_new_int_op(ctx, 0));
+  STORE(MIR_T_U32, offsetof(sv_func_t, call_count), func, MIR_new_int_op(ctx, SV_JIT_THRESHOLD - SV_JIT_RECOMPILE_DELAY));
+  
+  if (count_snapshot_reset) {
+    LOAD(MIR_T_U8, offsetof(sv_func_t, jit_snapshot_resets), func);
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_ADD,
+        MIR_new_reg_op(ctx, tmp), MIR_new_reg_op(ctx, tmp), MIR_new_int_op(ctx, 1)));
+    STORE(MIR_T_U8, offsetof(sv_func_t, jit_snapshot_resets), func, MIR_new_reg_op(ctx, tmp));
+  }
+#undef LOAD
+#undef STORE
+
+  MIR_append_insn(ctx, fn, done);
+}
+
+void mir_emit_builtin_call_watch(
+  MIR_context_t ctx, MIR_item_t fn, ant_t *js, const char *prefix, int site,
+  MIR_reg_t r_tmp, MIR_reg_t func, sv_func_t *feedback_func, int bc_off
+) {
+  uint8_t *type_feedback = sv_func_type_feedback(feedback_func);
+  if (!type_feedback || !jit_compile_owner) return;
+
+  MIR_label_t not_builtin = MIR_new_label(ctx);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_URSH,
+    MIR_new_reg_op(ctx, r_tmp), MIR_new_reg_op(ctx, func),
+    MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
+    MIR_new_label_op(ctx, not_builtin), MIR_new_reg_op(ctx, r_tmp),
+    MIR_new_uint_op(ctx, (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypeBuiltin)));
+  mir_emit_drop_owner_code_once(ctx, fn, js, prefix, site, &type_feedback[bc_off], SV_TFB_CALLED_BUILTIN, false);
+  MIR_append_insn(ctx, fn, not_builtin);
+}
+
 void mir_emit_builtin_call_fast(
   MIR_context_t ctx, MIR_item_t fn, const char *prefix, int site,
   MIR_reg_t r_js, MIR_reg_t r_tmp,

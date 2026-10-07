@@ -2112,6 +2112,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     }
     call_fallback:;
     frame->ip = ip;
+    if (vtype(call_func) == kTypeBuiltin) sv_tfb_record_builtin_call(func, ip);
     ant_value_t super_this_c = call_this;
     ant_value_t call_result = sv_vm_call(
       vm, js, call_func, call_this, call_args, call_argc,
@@ -2232,6 +2233,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     }
     call_method_fallback:;
     frame->ip = ip;
+    if (vtype(call_func) == kTypeBuiltin) sv_tfb_record_builtin_call(func, ip);
     ant_value_t super_this_cm = call_this;
     ant_value_t call_result = sv_vm_call(
       vm, js, call_func, call_this, call_args, call_argc,
@@ -2448,6 +2450,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         }
       }
     }
+    if (vtype(call_func) == kTypeBuiltin) sv_tfb_record_builtin_call(func, ip);
     ant_value_t *call_args = &vm->stack[vm->sp - tc_argc];
     frame->ip = ip;
     ant_value_t call_result = sv_vm_call(
@@ -2514,6 +2517,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         }
       }
     }
+    if (vtype(call_func) == kTypeBuiltin) sv_tfb_record_builtin_call(func, ip);
     ant_value_t *call_args = &vm->stack[vm->sp - tc_argc];
     ant_value_t call_result = sv_vm_call(
       vm, js, call_func, tc_this, call_args, tc_argc, NULL, js_mkundef());

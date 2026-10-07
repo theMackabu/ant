@@ -1,5 +1,4 @@
 #include "jit_internal.h"
-#include "silver/feedback.h"
 #include "../silver/ops/globals.h"
 
 static MIR_reg_t mir_new_ic_reg(
@@ -760,41 +759,7 @@ static bool jit_snapshots_allowed(void) {
 static void mir_emit_snapshot_stale(
     MIR_context_t ctx, MIR_item_t fn, ant_t *js, int bc_off, MIR_label_t stale) {
   MIR_append_insn(ctx, fn, stale);
-  sv_func_t *owner = jit_compile_owner;
-  uint8_t *fired = owner ? code_arena_bump(js, sizeof(*fired)) : NULL;
-  if (!fired) return;
-  *fired = 0;
-
-  MIR_label_t done = MIR_new_label(ctx);
-  MIR_reg_t cell = mir_new_ic_reg(ctx, fn, "snapshot_stale", "cell", bc_off, -1);
-  MIR_reg_t func = mir_new_ic_reg(ctx, fn, "snapshot_stale", "func", bc_off, -1);
-  MIR_reg_t tmp = mir_new_ic_reg(ctx, fn, "snapshot_stale", "tmp", bc_off, -1);
-  
-  mir_load_imm(ctx, fn, cell, (uint64_t)(uintptr_t)fired);
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, tmp),
-      MIR_new_mem_op(ctx, MIR_T_U8, 0, cell, 0, 1)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, done),
-      MIR_new_reg_op(ctx, tmp), MIR_new_int_op(ctx, 0)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
-      MIR_new_mem_op(ctx, MIR_T_U8, 0, cell, 0, 1), MIR_new_int_op(ctx, 1)));
-  
-  mir_load_imm(ctx, fn, func, (uint64_t)(uintptr_t)owner);
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
-      MIR_new_mem_op(ctx, MIR_T_P, offsetof(sv_func_t, jit_code), func, 0, 1), MIR_new_int_op(ctx, 0)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
-      MIR_new_mem_op(ctx, MIR_T_U32, offsetof(sv_func_t, back_edge_count), func, 0, 1), MIR_new_int_op(ctx, 0)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
-      MIR_new_mem_op(ctx, MIR_T_U32, offsetof(sv_func_t, jit_compiled_tfb_ver), func, 0, 1), MIR_new_int_op(ctx, 0)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
-      MIR_new_mem_op(ctx, MIR_T_U32, offsetof(sv_func_t, call_count), func, 0, 1),
-      MIR_new_int_op(ctx, SV_JIT_THRESHOLD - SV_JIT_RECOMPILE_DELAY)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, tmp),
-      MIR_new_mem_op(ctx, MIR_T_U8, offsetof(sv_func_t, jit_snapshot_resets), func, 0, 1)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_ADD,
-      MIR_new_reg_op(ctx, tmp), MIR_new_reg_op(ctx, tmp), MIR_new_int_op(ctx, 1)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
-      MIR_new_mem_op(ctx, MIR_T_U8, offsetof(sv_func_t, jit_snapshot_resets), func, 0, 1), MIR_new_reg_op(ctx, tmp)));
-  MIR_append_insn(ctx, fn, done);
+  mir_emit_drop_owner_code_once(ctx, fn, js, "snapshot_stale", bc_off, NULL, 0, true);
 }
 
 static bool mir_emit_get_field_shape_snapshot(

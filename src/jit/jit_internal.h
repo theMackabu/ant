@@ -148,6 +148,16 @@ typedef struct {
   bool reader_only;
 } jit_inline_ext_t;
 
+void mir_emit_drop_owner_code_once(
+  MIR_context_t ctx, MIR_item_t fn, ant_t *js, const char *prefix, int site,
+  uint8_t *mark, uint8_t mark_bit, bool count_snapshot_reset
+);
+
+void mir_emit_builtin_call_watch(
+  MIR_context_t ctx, MIR_item_t fn, ant_t *js, const char *prefix, int site,
+  MIR_reg_t r_tmp, MIR_reg_t func, sv_func_t *feedback_func, int bc_off
+);
+
 void mir_emit_builtin_call_fast(
   MIR_context_t ctx, MIR_item_t fn, const char *prefix, int site,
   MIR_reg_t r_js, MIR_reg_t r_tmp,
