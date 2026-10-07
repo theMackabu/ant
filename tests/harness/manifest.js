@@ -165,6 +165,8 @@ export function targets() {
     'test_array_builtin_fast_paths.cjs',
     'test_gc_native_buffers.cjs',
     'test_immediate_handle.cjs',
+    'test_timer_handle.cjs',
+    'test_process_exit_code.cjs',
     'test_regexp_lone_surrogates.cjs',
     'test_json_lone_surrogates.cjs',
     'test_timer_fired_timeout_gc.cjs',

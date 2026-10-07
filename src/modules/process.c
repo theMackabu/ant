@@ -1433,23 +1433,23 @@ static ant_value_t process_set_exit_code(ant_t *js, ant_process_state_t *ps, ant
   }
 
   size_t len = 0;
-  if (vtype(code) == kTypeString) js_getstr(js, code, &len);
+  ant_value_type_t type = vtype(code);
+  if (type == kTypeString) js_getstr(js, code, &len);
   
-  double n = js_to_number(js, code);
-  bool numeric_string = len > 0 && !isnan(n);
-  
-  if (vtype(code) != kTypeNumber && !numeric_string) {
+  double n = type == kTypeNumber ? js_getnum(code) : len > 0 ? tod(js_to_numeric(js, code)) : NAN;
+  if (isnan(n) && type != kTypeNumber) {
     char buf[64], message[192];
-    js_cstr_t received = js_to_cstr(js, code, buf, sizeof(buf));
-    const char *quote = vtype(code) == kTypeString ? "'" : "";
+    bool primitive = type == kTypeString || type == kTypeBool || type == kTypeBigInt || type == kTypeSymbol;
+    js_cstr_t received = primitive ? js_to_cstr(js, code, buf, sizeof(buf)) : (js_cstr_t){ 0 };
+    const char *quote = type == kTypeString ? "'" : "";
     
-    if (vtype(code) == kTypeString || vtype(code) == kTypeBool || vtype(code) == kTypeBigInt) snprintf(
-      message, sizeof(message), "The \"code\" argument must be of type number. Received type %s (%s%.25s%s%s)",
-      typestr(vtype(code)), quote, received.ptr, received.len > 28 ? "..." : "", quote
+    if (primitive) snprintf(
+      message, sizeof(message), "The \"code\" argument must be of type number. Received type %s (%s%.25s%s%s%s)",
+      typestr(type), quote, received.ptr, received.len > 28 ? "..." : "", quote, type == kTypeBigInt ? "n" : ""
     );
     else snprintf(
       message, sizeof(message), "The \"code\" argument must be of type number. Received type %s",
-      typestr(vtype(code))
+      typestr(type)
     );
     
     if (received.needs_free) free((void *)received.ptr);
