@@ -1064,12 +1064,6 @@ static ant_offset_t array_like_length(ant_t *js, ant_value_t obj) {
   
   if (ptr) return (ant_offset_t)ptr->u.array.len;
   if (!is_object_type(obj)) return 0;
-  
-  if (is_arguments_object(obj)) {
-    ant_offset_t len = 0;
-    array_like_length_checked(js, obj, &len);
-    return len;
-  }
 
   ant_value_t val = lkp_interned_val(js, obj, js->intern.length);
   uint8_t t = vtype(val);
@@ -9099,13 +9093,17 @@ static ant_value_t builtin_object_groupBy(ant_params_t) {
   object_group_by_ctx_t ctx = { result, sv_callback_prepare(js, callback, js_mkundef()), 0 };
 
   if (array_obj_ptr(items) && js_array_iteration_default(js, items)) {
-    ant_offset_t len = array_like_length(js, items);
+    ant_offset_t len = 0;
+    ant_value_t len_result = array_like_length_checked(js, items, &len);
+    if (is_err(len_result)) return len_result;
+    
     for (ant_offset_t i = 0; i < len; i++) {
       ant_value_t value = array_method_get_index(js, items, i);
       if (is_err(value)) return value;
       ant_value_t err = js_mkundef();
       if (object_group_by_add(js, value, &ctx, &err) == ITER_ERROR) return err;
     }
+    
     return result;
   }
 
@@ -12698,7 +12696,8 @@ static ant_value_t builtin_array_sort(ant_params_t) {
   if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_scope, arr))) goto oom;
   if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_scope, compareFn))) goto oom;
   
-  len = array_like_length(js, arr);
+  ant_value_t len_result = array_like_length_checked(js, arr, &len);
+  if (is_err(len_result)) { result = len_result; goto done; }
   if (len == 0) goto done;
   
   ant_object_t *target = is_proxy(arr) ? NULL : js_obj_ptr(js_as_obj(arr));
@@ -13703,7 +13702,9 @@ static ant_value_t builtin_Array_from(ant_params_t) {
       if (is_err(copied)) return copied;
     } else if (default_iter) {
       array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      ant_offset_t len = array_like_length(js, src);
+      ant_offset_t len = 0;
+      ant_value_t len_result = array_like_length_checked(js, src, &len);
+      if (is_err(len_result)) return len_result;
       for (ant_offset_t i = 0; i < len; i++) {
         ant_value_t unused;
         iter_action_t act = array_from_iter_cb(js, arr_get(js, src, i), &ctx, &unused);

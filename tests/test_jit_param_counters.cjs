@@ -91,6 +91,19 @@ sameList(walk(1e300, 2), walkRef(1e300, 2), 'huge start');
 sameList(walk(-Infinity, 2), walkRef(-Infinity, 2), '-Infinity start');
 sameList(walk(NaN, 2), walkRef(NaN, 2), 'NaN start');
 sameList(back(1.25, 3), backRef(1.25, 3), 'fractional counting down');
+// the first huge start turns the speculation off, so each edge gets its own
+// function: 2^63 saturates when converted and must not pass as INT64_MAX
+const edge = () => [
+  function (i, n) { let s = 0; while (n-- > 0) { s += i & 0xffff; i++; } return s; },
+  function (i, n) { let s = 0; while (n-- > 0) { s += i >> 16; i--; } return s; },
+];
+const edgeRef = [(i, n) => n * (i & 0xffff), (i, n) => n * (i >> 16)];
+for (const v of [2 ** 63, -(2 ** 63), 2 ** 63 - 1024, -(2 ** 63 - 1024), 2 ** 64]) {
+  edge().forEach((f, k) => {
+    for (let r = 0; r < 3000; r++) f(r, 3);
+    same(f(v, 3), edgeRef[k](v, 3), `counter start ${v} (${k ? 'down' : 'up'})`);
+  });
+}
 // back on integers afterwards
 for (let r = 0; r < 4000; r++) walk(r & 31, 20);
 sameList(walk(5, 10), walkRef(5, 10), 'integers again');

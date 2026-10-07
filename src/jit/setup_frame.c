@@ -778,11 +778,18 @@ bool jit_setup_frame(jit_compile_t *c) {
         MIR_reg_t integer = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
         snprintf(name, sizeof(name), "parg_back%d", i);
         MIR_reg_t back = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_D, name);
+        snprintf(name, sizeof(name), "parg_top%d", i);
+        MIR_reg_t top = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+        not_integer_at[i] = MIR_new_label(c->ctx);
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_D2I,
             MIR_new_reg_op(c->ctx, integer), MIR_new_reg_op(c->ctx, c->param_d_cache[i])));
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_I2D,
             MIR_new_reg_op(c->ctx, back), MIR_new_reg_op(c->ctx, integer)));
-        not_integer_at[i] = MIR_new_label(c->ctx);
+        // D2I saturates, so ±2^63 round-trip as INT64_MAX/MIN; doubling without overflow bounds the counter to ±2^62
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_ADDO,
+            MIR_new_reg_op(c->ctx, top), MIR_new_reg_op(c->ctx, integer), MIR_new_reg_op(c->ctx, integer)));
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BO,
+            MIR_new_label_op(c->ctx, not_integer_at[i])));
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_DBNE,
             MIR_new_label_op(c->ctx, not_integer_at[i]),
             MIR_new_reg_op(c->ctx, c->param_d_cache[i]), MIR_new_reg_op(c->ctx, back)));
