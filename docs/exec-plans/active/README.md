@@ -18,6 +18,7 @@ Store in-progress execution plans here.
 - [Automatic GC Rooting for C Runtime Code](automatic-c-gc-rooting.md)
 - [JS Path Node Performance](path-node-performance.md)
 - [Array Backing Store GC Pacing](array-backing-store-gc-pacing.md)
+- [Array and Arguments Runtime Invariants](array-arguments-runtime-invariants.md)
 - [Card Marking for Old Arrays](gc-array-card-marking.md)
 - [Reclaim Dynamic Code](reclaim-dynamic-code.md)
 - [Dynamic Property Performance](dynamic-property-perf.md)

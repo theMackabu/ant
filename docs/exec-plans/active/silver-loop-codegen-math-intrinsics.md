@@ -1,7 +1,7 @@
 # Silver Loop Codegen and Math Intrinsics
 
 Status: active
-Last reviewed: 2026-10-05
+Last reviewed: 2026-10-07
 Owner: theMackabu
 
 ## Goal
@@ -159,14 +159,56 @@ From the MIR of that loop:
   instructions per store), so it stays. Cumulative stages 1–4 against
   9cfe53f1: bench-v8 −2.2% instructions / −4.1% cycles, Crypto −4.3%
   instructions, navier-stokes −6.1% / −16% cycles.
-- Follow-up candidates found on the way: `am3` keeps `i`, `j`, `n` (written
-  parameters) as doubles, so each `this_array[i]` pays a 5-instruction index
-  check and each element a word32 guard; an entry check that integer
-  parameters stepped by ±1 are induction variables (stage 4 for parameters)
-  and integer element reads would attack Crypto directly. Separately,
-  `x | 0` on `undefined` in compiled code bails out and the recompile is
-  refused, leaving the function interpreted (pre-existing, same cliff as the
-  stage 3 `GET_ARG` regression).
+- Follow-ups landed after stage 5 (each with node-differential tests):
+  - **Integer parameter counters** (`9b7f2f72`, `48209e15`). Parameters that
+    are only stepped by a constant up to ±511 are checked once at entry and
+    read as int64 copies (`parg_counter_N`) at integer consumers, the
+    stage 4 scheme applied to `am3`'s `i`, `j`, `n`. The entry check is a
+    `D2I`/`I2D` round trip plus, since 2026-10-07, a doubling `ADDO`/`BO`
+    overflow test: `D2I` saturates, so 2^63 used to pass as `INT64_MAX`
+    (`h(2**63)` returned 196605 instead of 0). The bound narrows counters to
+    ±2^62 and costs 2 instructions per counter parameter at entry (am3 0%,
+    a 2-parameter call microbenchmark +1.3%). A failed check calls
+    `jit_helper_disable_param_counters`, which sets a sticky per-parameter
+    bit (`jit_param_counters_off`) and bumps `tfb_version` so the recompile
+    is allowed. Tests: `tests/test_jit_param_counters.cjs`,
+    `tests/test_jit_param_counters_codegen.cjs`.
+  - **`x | 0` and arithmetic on non-number primitives** (`b7565877`).
+    Compiled bitwise and arithmetic ops on `undefined`, `null`, booleans,
+    strings and BigInt are computed in the helper instead of bailing out on
+    every call; ToNumeric errors (throwing `valueOf`, Symbols) now propagate
+    in both tiers. Tests: `tests/test_jit_bitwise_primitives.cjs`,
+    `tests/test_numeric_coercion_errors.cjs`.
+  - **Global-read snapshot** (`2a9392d2`). Compiled global reads compare the
+    global object's shape and `global_lexical_count` against compile-time
+    values and load the slot directly: `s += K` 61 -> 37 instructions per
+    iteration, `Math.abs(i - 5)` 118 -> 96. Also fixed compiled reads of a
+    deleted global returning `undefined`. Test:
+    `tests/test_jit_global_snapshot.cjs`.
+  - **Prototype method snapshot** (`a291bd22`). Same idea for a method one
+    level up the prototype chain (receiver shape and proto, prototype shape
+    and non-exotic flag). `ee.emit('foo')` 246 -> 212 instructions per call.
+    A check on the prototype's `ic_identity` was rejected: identities restart
+    after 2^32 and could alias. Test: `tests/test_jit_proto_method_snapshot.cjs`.
+  - **Stale snapshot recovery** (2026-10-07). A prototype or global snapshot
+    whose holder changes shape can never match again, so holder-side misses
+    jump to a cold block that, once per site, drops the owner's compiled code
+    (`mir_emit_drop_owner_code_once`; the owner is `jit_compile_owner`, so
+    inlined sites drop the outer function). It also clears
+    `jit_compiled_tfb_ver`, without which the compiler refuses the recompile.
+    Receiver-side misses stay on the generic path. After three resets
+    (`JIT_SNAPSHOT_RESET_LIMIT`) a function stops snapshotting. Method call
+    after a prototype gains a method 294 -> 224 instructions per iteration
+    (hit path 221 -> 222), global read after a new global 71 -> 37. A
+    change in the middle of one long compiled call still finishes that call
+    on the generic path. Test: `tests/test_jit_snapshot_recovery.cjs`.
+  - **Call-site gating of inline builtin paths** (2026-10-07). The direct
+    builtin-call block and the `push`/`toString` known-builtin paths are
+    emitted only when feedback says the site can reach the builtin; see
+    [EventEmitter Node Parity](eventemitter-node-parity.md) for the call
+    block. For `push`/`toString`, `jit_field_ic_may_load` reads the site's
+    method-load IC: a function with 40 user `queue.push(...)` sites compiles
+    in 21.0 ms instead of 25.9 ms.
 - Pre-existing bug fixed alongside: a for-loop update `i++` / `i--` compiles to
   `INC_LOCAL` / `DEC_LOCAL`, which added 1 to the raw bits without ToNumeric
   (`for (let i = '1'; i <= 4; i++)` ran once; BigInt counters became NaN;

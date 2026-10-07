@@ -2815,6 +2815,12 @@ static ant_value_t arguments_template(ant_t *js, bool is_strict, bool has_iterat
     return js_mkerr(js, "oom");
   }
   
+  ANT_ASSERT(
+    ant_shape_lookup_interned(ptr->shape, js->intern.length) == ANT_ARGUMENTS_SLOT_LENGTH &&
+    ant_shape_lookup_interned(ptr->shape, intern_string("callee", 6)) == ANT_ARGUMENTS_SLOT_CALLEE,
+    "arguments template slots out of order"
+  );
+  
   *cached = seed;
   GC_ROOT_RESTORE(js, roots);
   
@@ -2861,12 +2867,12 @@ ant_value_t js_create_arguments_object(
   target->shape = source->shape;
   target->inobj_limit = source->inobj_limit;
   target->prop_count = source->prop_count;
-  target->inobj[0] = tov((double)count);
-  target->inobj[1] = is_strict ? source->inobj[1] : callee;
-  gc_write_barrier(js, target, target->inobj[1]);
+  target->inobj[ANT_ARGUMENTS_SLOT_LENGTH] = tov((double)count);
+  target->inobj[ANT_ARGUMENTS_SLOT_CALLEE] = is_strict ? source->inobj[ANT_ARGUMENTS_SLOT_CALLEE] : callee;
+  gc_write_barrier(js, target, target->inobj[ANT_ARGUMENTS_SLOT_CALLEE]);
   
   if (has_iterator) {
-    target->inobj[2] = iter_fn;
+    target->inobj[ANT_ARGUMENTS_SLOT_ITERATOR] = iter_fn;
     gc_write_barrier(js, target, iter_fn);
   }
 

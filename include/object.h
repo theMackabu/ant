@@ -226,6 +226,29 @@ typedef struct ant_object {
   uint32_t ic_identity;
 } ant_object_t;
 
+static constexpr size_t ANT_OBJECT_FLAGS_HIGH_BYTE = offsetof(ant_object_t, flags) + 1;
+
+static_assert(
+  __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, 
+  "ANT_OBJECT_FLAGS_HIGH_BYTE assumes a little-endian flags word"
+);
+
+static_assert(
+  ANT_OBJECT_FLAG_ARGUMENTS >= 0x100, 
+  "the arguments flag must live in the high flags byte"
+);
+
+static_assert(
+  (0xffffu & ~((ANT_OBJECT_FLAG_ARGUMENTS << 1) - 1u)) == ANT_OBJECT_FLAG_REGEXP_BRAND,
+  "only the RegExp brand may sit above the arguments flag"
+);
+
+enum {
+  ANT_ARGUMENTS_SLOT_LENGTH = 0,
+  ANT_ARGUMENTS_SLOT_CALLEE = 1,
+  ANT_ARGUMENTS_SLOT_ITERATOR = 2,
+};
+
 static inline void ant_object_guard_absence(ant_object_t *obj) {
   if (obj) obj->flags.guards_absence = 1;
 }

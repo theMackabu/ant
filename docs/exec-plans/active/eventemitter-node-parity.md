@@ -1,7 +1,7 @@
 # EventEmitter Node Parity
 
 Status: active
-Last reviewed: 2026-10-05
+Last reviewed: 2026-10-07
 Owner: theMackabu
 
 ## Goal
@@ -9,8 +9,7 @@ Owner: theMackabu
 Match or beat Node on the `EventEmitter1` (`require('events')`) rows of the
 [tseep](https://github.com/Morglod/tseep) `benchmarks/run/ee` suites:
 emit-empty, remove-emit, add-remove, init, once, emit,
-emit-multiple-listeners, hundreds, listeners. Keep Node semantics. No commits
-until the user asks.
+emit-multiple-listeners, hundreds, listeners. Keep Node semantics.
 
 ## Scope
 
@@ -39,6 +38,13 @@ builtins, native constructor calls, and dense array creation.
   (microtask checkpoint) or with an exception already pending. This adds
   about 30 MIR instructions per call site (hot compile of the benchmark.js
   loop: 7.4 ms -> 8.2 ms).
+  Since 2026-10-07 the block is emitted only where it can pay off: the
+  interpreter records `SV_TFB_CALLED_BUILTIN` in a call site's type-feedback
+  byte, and a site that only ever called JS functions gets a 2-instruction
+  watch instead (`mir_emit_builtin_call_watch`). The first builtin reaching
+  it sets the bit and drops the owner's code once, so the recompile has the
+  direct path. A site with no feedback keeps the block. bench-v8: up to
+  -0.9% instructions and -1 to -5% compile time.
 - **Listener dispatch.** Plain sync closures are entered through
   `sv_jit_invoke` when they have JIT code, otherwise through
   `sv_call_resolve_closure`; the call plan is skipped. Dispatch, lookup and
@@ -90,7 +96,27 @@ PGO build with the checked-in (now partly stale) profile:
 | hundreds | 1.27M | 0.20M | 0.95M |
 | listeners | 42.1M | 4.0M | 23.7M |
 
-## Remaining gaps and follow-ups
+## Follow-ups
+
+Done since the table above (details in the linked plans):
+
+- **Property-load IC on method calls.** Monomorphic prototype hits are
+  checked against compile-time constants and the slot loaded directly
+  (`mir_emit_get_field_proto_snapshot`): `ee.emit('foo')` with no listeners
+  246 -> 212 instructions per call. Snapshots whose prototype or global
+  object later changes shape drop the compiled code once and recompile
+  ([Silver Loop Codegen](silver-loop-codegen-math-intrinsics.md)).
+- **Array element storage.** Power-of-two buffers up to 32 slots are reused
+  from a per-isolate free list: `[]` 22.1 -> 14.6 ns, `ee.listeners('foo')`
+  958 -> 688 instructions per call
+  ([Array and Arguments Runtime Invariants](array-arguments-runtime-invariants.md)).
+- **`slice`, `forEach`, `delete arguments.length`.** Dense fast paths in the
+  array helpers (`slice` of 25 elements 3,931 -> 1,162 instructions),
+  prepared callbacks (`forEach` about 6 -> 3 ns per element), and spec
+  arguments objects whose `length` is an ordinary configurable property
+  (same plan).
+
+Still open:
 
 - **benchmark.js compile overhead.** benchmark.js builds a fresh loop
   function every cycle. Each is OSR-compiled at the hot tier because its
@@ -100,17 +126,4 @@ PGO build with the checked-in (now partly stale) profile:
   OSR compile (3.2 ms) raised every suite 10-25%. A cutoff based on the
   inlined size rather than raw bytecode would address it without
   re-litigating the bench-v8 data in that plan.
-- **Property-load IC on method calls.** Each `ee.emit(...)` site runs ~80 JIT
-  instructions, mostly the generic GET_FIELD IC, which reads the cache entry
-  at runtime (receiver shape, proto, proto shape, holder). 64% of
-  emit-empty is JIT code. Specializing monomorphic proto hits at compile time
-  is the main lever for emit-empty, remove-emit and emit.
-- **Array element storage.** Every array mallocs its element storage
-  separately (~12 ns alloc+free; an empty array costs ~25 ns vs ~13 ns for
-  an object). A per-isolate free list of small buffers would lift
-  `listeners` and array-heavy code in general.
-- **Unrelated slow paths found while profiling:** `Array.prototype.slice`
-  copies through `arr_get`/`arr_set` (445 ns for 25 elements vs 15 ns in
-  Node); `forEach` callbacks cost ~22 ns each vs <1 ns in Node;
-  `delete arguments.length` fails because Ant makes it non-configurable.
-- Regenerate the PGO profile once the diff settles.
+- Regenerate the PGO profile, together with the deferred bench-v8 run.

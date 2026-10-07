@@ -805,7 +805,7 @@ void mir_emit_get_length(
                   MIR_new_insn(ctx, MIR_MOV,
                                MIR_new_reg_op(ctx, tag),
                                MIR_new_mem_op(ctx, MIR_T_U8,
-                                              (MIR_disp_t)offsetof(ant_object_t, flags) + 1, ptr, 0, 1)));
+                                              (MIR_disp_t)ANT_OBJECT_FLAGS_HIGH_BYTE, ptr, 0, 1)));
   ant_shape_t *arguments_shapes[2] = {0};
   if (js) {
     ant_value_t templates[2] = {js->builtins.arguments_iter_template, js->builtins.sloppy_arguments_iter_template};
@@ -854,7 +854,9 @@ void mir_emit_get_length(
     MIR_append_insn(ctx, fn,
                     MIR_new_insn(ctx, MIR_MOV,
                                  MIR_new_reg_op(ctx, dst),
-                                 MIR_new_mem_op(ctx, MIR_JSVAL, (MIR_disp_t)offsetof(ant_object_t, inobj), ptr, 0, 1)));
+                                 MIR_new_mem_op(ctx, MIR_JSVAL,
+                                                (MIR_disp_t)(offsetof(ant_object_t, inobj) + ANT_ARGUMENTS_SLOT_LENGTH * sizeof(ant_value_t)),
+                                                ptr, 0, 1)));
     MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
   }
 
