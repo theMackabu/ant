@@ -12645,6 +12645,13 @@ static ant_value_t builtin_array_some(ant_params_t) {
   return mkval(kTypeBool, 0);
 }
 
+static inline bool array_sort_writes_dense(ant_value_t arr, ant_offset_t len) {
+  ant_object_t *ptr = array_length_obj_ptr(arr);
+  return
+    ptr && !is_proxy(arr) && ptr->flags.fast_array && !ptr->flags.is_exotic && ptr->u.array.data &&
+    ptr->u.array.len == len && ptr->u.array.cap >= len && ptr->flags.extensible && !ptr->flags.sealed;
+}
+
 static ant_value_t builtin_array_sort(ant_params_t) {
   ant_value_t arr = js->this_val;
   ant_value_t compareFn = js_mkundef();
@@ -12773,27 +12780,22 @@ static ant_value_t builtin_array_sort(ant_params_t) {
   }
   
 writeback:;
-  ant_object_t *dst = array_length_obj_ptr(arr);
-  if (
-    dst && !is_proxy(arr) && dst->flags.fast_array && !dst->flags.is_exotic && dst->u.array.data &&
-    dst->u.array.len == len && dst->u.array.cap >= len && dst->flags.extensible && !dst->flags.sealed
-  ) {
+  ant_offset_t filled = count + undef_count;
+  if (array_sort_writes_dense(arr, len)) {
     ant_offset_t doff = get_dense_buf(arr);
-    for (ant_offset_t i = 0; i < count; i++) dense_set(js, doff, i, vals[i]);
-    for (ant_offset_t i = count; i < count + undef_count; i++) dense_set(js, doff, i, js_mkundef());
-    for (ant_offset_t i = count + undef_count; i < len; i++) dense_set(js, doff, i, T_EMPTY);
-    if (count + undef_count < len) array_mark_may_have_holes(arr);
-  } else {
-    ant_offset_t out = 0;
-    for (; out < count + undef_count; out++) {
-      ant_value_t stored = js_setprop_index(js, arr, (uint32_t)out, out < count ? vals[out] : js_mkundef());
-      if (is_err(stored)) { result = stored; goto done; }
-    }
-    for (; out < len; out++) {
+    for (ant_offset_t i = 0; i < len; i++)
+      dense_set(js, doff, i, i < count ? vals[i] : i < filled ? js_mkundef() : T_EMPTY);
+    if (filled < len) array_mark_may_have_holes(arr);
+  } else for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t step;
+    if (i < filled) step = js_setprop_index(js, arr, (uint32_t)i, i < count ? vals[i] : js_mkundef());
+    else {
       char key[24];
-      size_t key_len = uint_to_str(key, sizeof(key), (uint64_t)out);
-      ant_value_t deleted = js_delete_prop(js, arr, key, key_len);
-      if (is_err(deleted)) { result = deleted; goto done; }
+      step = js_delete_prop(js, arr, key, uint_to_str(key, sizeof(key), (uint64_t)i));
+    }
+    if (is_err(step)) { 
+      result = step; 
+      goto done; 
     }
   }
   result = arr;
