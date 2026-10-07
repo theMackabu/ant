@@ -73,7 +73,7 @@ assert(mixedSum === 50018890, 'call sites switching between JS functions and bui
 const { spawnSync } = require('node:child_process');
 const lateEnv = { ...process.env, ANT_DEBUG: 'dump/vm:op-warn', NO_COLOR: '1' };
 delete lateEnv.FORCE_COLOR;
-const late = spawnSync(process.execPath, ['-e', `
+const lateSite = spawnSync(process.execPath, ['-e', `
 function site(f, x) { return f(x); }
 const inc = x => x + 1;
 for (let i = 0; i < 20000; i++) site(inc, i);
@@ -82,9 +82,22 @@ let total = 0;
 for (let r = 0; r < 300; r++) total += loop(1000);
 console.log(total);
 `], { encoding: 'utf8', env: lateEnv, timeout: 30000 });
-assert(late.status === 0, late.stderr);
-assert(late.stdout.trim() === String(300 * 499500), 'late builtin results');
-const loopCompiles = (late.stderr.match(/^jit: compiled func=loop /gm) || []).length;
-assert(loopCompiles === 2, 'late builtin recompiled the caller once, got ' + loopCompiles);
+assert(lateSite.status === 0, lateSite.stderr);
+assert(lateSite.stdout.trim() === String(300 * 499500), 'late builtin results');
+if (typeof Ant !== 'undefined') {
+  const loopCompiles = (lateSite.stderr.match(/^jit: compiled func=loop /gm) || []).length;
+  assert(loopCompiles === 2, 'late builtin recompiled the caller once, got ' + loopCompiles);
+}
+
+// push/toString sites whose cache only saw user methods skip the inline
+// builtin paths; real arrays and numbers reaching them later still work
+class Queue { constructor() { this.n = 0; } push(x) { this.n += x; } toString() { return 'Q' + this.n; } }
+const userQueue = new Queue();
+function pushOne(target, x) { target.push(x); return target.length === undefined ? target.n : target.length; }
+function show(v) { return v.toString(); }
+for (let i = 0; i < 3000; i++) { pushOne(userQueue, 1); show(userQueue); }
+const realArray = [];
+assert(pushOne(realArray, 7) === 1 && pushOne(realArray, 8) === 2 && realArray.join() === '7,8', 'array reaching a user push site');
+assert(show(255) === '255' && show(userQueue) === 'Q3000', 'number reaching a user toString site');
 
 console.log('test_jit_builtin_direct_call: ok');

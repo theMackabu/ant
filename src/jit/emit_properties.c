@@ -320,6 +320,20 @@ void jit_emit_element_barrier(
                                     MIR_new_reg_op(c->ctx, val)));
 }
 
+static bool jit_field_ic_may_load(jit_compile_t *c, ant_value_t builtin) {
+  sv_func_t *func = c->func;
+  uint16_t ic_idx = sv_get_u16(c->ip + 5);
+  if (!func->ic_slots || ic_idx >= func->ic_count) return true;
+  
+  sv_ic_entry_t *ic = &func->ic_slots[ic_idx];
+  if (!sv_gf_ic_active(ic->cached_aux) || !ic->cached_shape) return true;
+  if (ic->get_kind != SV_GF_IC_PROTOTYPE && ic->get_kind != SV_GF_IC_PRIMITIVE_DATA) return false;
+  
+  ant_object_t *holder = ic->cached_holder;
+  if (!holder || ic->cached_index >= holder->prop_count) return true;
+  return ant_object_prop_get_unchecked(holder, ic->cached_index) == builtin;
+}
+
 static void jit_note_known_builtin(jit_compile_t *c, const sv_atom_t *atom) {
   if (!c->vs.known_builtin) return;
   // a method load keeps its receiver below the method on the stack
@@ -327,9 +341,9 @@ static void jit_note_known_builtin(jit_compile_t *c, const sv_atom_t *atom) {
     c->vs.known_builtin[c->vs.sp - 1] = jit_math_field_builtin(JIT_BUILTIN_MATH, atom->str, atom->len);
     return;
   }
-  if (atom->len == 4 && memcmp(atom->str, "push", 4) == 0)
+  if (atom->len == 4 && memcmp(atom->str, "push", 4) == 0 && jit_field_ic_may_load(c, c->js->sym.array_push_fn))
     c->vs.known_builtin[c->vs.sp - 1] = JIT_BUILTIN_ARRAY_PUSH;
-  else if (atom->len == 8 && memcmp(atom->str, "toString", 8) == 0)
+  else if (atom->len == 8 && memcmp(atom->str, "toString", 8) == 0 && jit_field_ic_may_load(c, c->js->sym.number_to_string_fn))
     c->vs.known_builtin[c->vs.sp - 1] = JIT_BUILTIN_NUMBER_TO_STRING;
 }
 

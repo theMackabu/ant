@@ -1375,7 +1375,7 @@ void mir_emit_array_add_guard(
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, code, MIR_new_label_op(ctx, slow), a, b))
 
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, t), MIR_new_reg_op(ctx, flags),
-      MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_FROZEN)));
+      MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_EXOTIC)));
   BRANCH(MIR_BNE, MIR_new_reg_op(ctx, t), MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_EXTENSIBLE));
 
   LOAD(t, MIR_JSVAL, offsetof(ant_object_t, proto), ptr);

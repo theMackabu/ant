@@ -22,6 +22,20 @@ static descriptor_entry_t arr_length_desc = {
   .setter = 0,
 };
 
+static descriptor_entry_t arr_length_readonly_desc = {
+  .key = 0,
+  .obj_off = 0,
+  .prop_name = "length",
+  .prop_len = 6,
+  .writable = false,
+  .enumerable = false,
+  .configurable = false,
+  .has_getter = false,
+  .has_setter = false,
+  .getter = 0,
+  .setter = 0,
+};
+
 static inline bool is_canonical_desc_obj(ant_value_t obj) {
   return vtype(obj) == kTypeObject;
 }
@@ -97,11 +111,16 @@ descriptor_entry_t *lookup_descriptor(ant_t *js, ant_value_t obj, const char *ke
   if (
     klen == 6 && memcmp(key, "length", 6) == 0 && ptr && 
     ptr->type_tag == kTypeArray && !ptr->flags.arguments_object
-  ) return &arr_length_desc;
+  ) {
+    if (ptr->flags.frozen) return &arr_length_readonly_desc;
+    descriptor_entry_t *own = ptr->flags.is_exotic ? registry_lookup_desc(js, obj, key, klen) : NULL;
+    return own ? own : &arr_length_desc;
+  }
 
   if (!is_exotic_desc_obj(obj)) return NULL;
   return registry_lookup_desc(js, obj, key, klen);
 }
+
 
 descriptor_entry_t *lookup_sym_descriptor(ant_t *js, ant_value_t obj, ant_offset_t sym_off) {
   assert(js && is_canonical_desc_obj(obj) && "lookup_sym_descriptor expects an isolate and js_as_obj(...)");
@@ -495,4 +514,21 @@ void js_descriptor_registry_cleanup(ant_t *js) {
     HASH_DEL(js->desc_registry, entry);
     free(entry);
   }
+}
+
+bool js_array_make_length_readonly(ant_t *js, ant_value_t arr) {
+  ant_value_t obj = js_as_obj(arr);
+  ant_object_t *ptr = js_obj_ptr(obj);
+  if (!ptr || ptr->type_tag != kTypeArray) return false;
+  
+  ptr->flags.is_exotic = 1;
+  descriptor_entry_t *entry = get_or_create_desc(js, obj, "length", 6);
+  if (!entry) return false;
+  
+  entry->writable = false;
+  entry->enumerable = false;
+  entry->configurable = false;
+  ant_ic_epoch_bump(js);
+  
+  return true;
 }

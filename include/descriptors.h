@@ -26,6 +26,7 @@ typedef struct descriptor_entry {
 
 descriptor_entry_t *lookup_descriptor(ant_t *js, ant_value_t obj, const char *key, size_t klen);
 descriptor_entry_t *lookup_sym_descriptor(ant_t *js, ant_value_t obj, ant_offset_t sym_off);
+bool js_array_make_length_readonly(ant_t *js, ant_value_t arr);
 
 uint64_t make_desc_key(ant_value_t obj, const char *key, size_t klen);
 uint64_t make_sym_desc_key(ant_value_t obj, ant_offset_t sym_off);
