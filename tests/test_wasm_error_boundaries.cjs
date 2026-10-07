@@ -5,7 +5,7 @@ const bytes = new Uint8Array([
   3, 2, 1, 0, 7, 7, 1, 3, 114, 117, 110, 0, 1,
   10, 6, 1, 4, 0, 16, 0, 11,
 ]);
-const module = new WebAssembly.Module(bytes);
+const wasmModule = new WebAssembly.Module(bytes);
 
 (async () => {
   for (const reason of [undefined, null, new Error('import getter')]) {
@@ -15,14 +15,14 @@ const module = new WebAssembly.Module(bytes);
     ]) {
       let caught = false;
       try {
-        new WebAssembly.Instance(module, imports);
+        new WebAssembly.Instance(wasmModule, imports);
       } catch (error) {
         caught = true;
         assert.strictEqual(error, reason);
       }
       assert.ok(caught, 'instance import getter must throw');
 
-      for (const source of [module, bytes]) {
+      for (const source of [wasmModule, bytes]) {
         const promise = WebAssembly.instantiate(source, imports);
         assert.ok(promise instanceof Promise, 'instantiate must return a Promise');
         caught = false;
@@ -36,7 +36,7 @@ const module = new WebAssembly.Module(bytes);
       }
     }
   }
-  const instance = await WebAssembly.instantiate(module, { env: { fail() {} } });
+  const instance = await WebAssembly.instantiate(wasmModule, { env: { fail() {} } });
   instance.exports.run();
   await new Promise(resolve => setTimeout(resolve, 0));
   console.log('Wasm error boundaries ok');

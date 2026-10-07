@@ -2080,6 +2080,265 @@ static void add_global_lexical(sv_compiler_t *c, const char *name, uint32_t len,
     (sv_eval_decl_t){ .str = c->atoms[atom].str, .len = len, .is_const = is_const };
 }
 
+typedef struct {
+  const char *str;
+  uint32_t len;
+  bool is_function;
+} sv_decl_name_t;
+
+typedef struct {
+  sv_decl_name_t *items;
+  int count;
+  int cap;
+  sv_decl_name_t inline_items[16];
+} sv_decl_names_t;
+
+static inline void decl_names_init(sv_decl_names_t *names) {
+  names->items = names->inline_items;
+  names->count = 0;
+  names->cap = 16;
+}
+
+static inline void decl_names_free(sv_decl_names_t *names) {
+  if (names->items != names->inline_items) free(names->items);
+}
+
+static void decl_names_add(sv_decl_names_t *names, const char *str, uint32_t len, bool is_function) {
+  if (!str || !len) return;
+  if (names->count == names->cap) {
+    int cap = names->cap * 2;
+    sv_decl_name_t *items = names->items == names->inline_items
+      ? malloc((size_t)cap * sizeof(*items))
+      : realloc(names->items, (size_t)cap * sizeof(*items));
+    if (!items) return;
+    if (names->items == names->inline_items) memcpy(items, names->inline_items, sizeof(names->inline_items));
+    names->items = items;
+    names->cap = cap;
+  }
+  names->items[names->count++] = (sv_decl_name_t){ str, len, is_function };
+}
+
+static void collect_pattern_names(sv_ast_t *pat, sv_decl_names_t *out) {
+  if (!pat) return;
+  switch (pat->type) {
+    case N_IDENT: decl_names_add(out, pat->str, pat->len, false); break;
+    case N_ARRAY: case N_ARRAY_PAT:
+      for (int i = 0; i < pat->args.count; i++) collect_pattern_names(pat->args.items[i], out);
+      break;
+    case N_OBJECT: case N_OBJECT_PAT:
+      for (int i = 0; i < pat->args.count; i++) {
+        sv_ast_t *prop = pat->args.items[i];
+        if (prop && (prop->type == N_PROPERTY || prop->type == N_REST || prop->type == N_SPREAD))
+          collect_pattern_names(prop->right, out);
+      }
+      break;
+    case N_ASSIGN_PAT: case N_ASSIGN: collect_pattern_names(pat->left, out); break;
+    case N_REST: case N_SPREAD: collect_pattern_names(pat->right, out); break;
+    default: break;
+  }
+}
+
+static void collect_var_names(sv_ast_t *node, sv_decl_names_t *out) {
+  if (!node) return;
+  switch (node->type) {
+    case N_VAR:
+      if (node->var_kind == SV_VAR_VAR)
+        for (int i = 0; i < node->args.count; i++) {
+          sv_ast_t *decl = node->args.items[i];
+          if (decl && decl->type == N_VARDECL) collect_pattern_names(decl->left, out);
+        }
+      break;
+    case N_BLOCK:
+      for (int i = 0; i < node->args.count; i++) collect_var_names(node->args.items[i], out);
+      break;
+    case N_IF: collect_var_names(node->left, out); collect_var_names(node->right, out); break;
+    case N_WHILE: case N_DO_WHILE: case N_LABEL: collect_var_names(node->body, out); break;
+    case N_FOR: collect_var_names(node->init, out); collect_var_names(node->body, out); break;
+    case N_FOR_IN: case N_FOR_OF: case N_FOR_AWAIT_OF:
+      collect_var_names(node->left, out); collect_var_names(node->body, out); break;
+    case N_SWITCH:
+      for (int i = 0; i < node->args.count; i++) {
+        sv_ast_t *cas = node->args.items[i];
+        for (int j = 0; cas && j < cas->args.count; j++) collect_var_names(cas->args.items[j], out);
+      }
+      break;
+    case N_TRY:
+      collect_var_names(node->body, out);
+      collect_var_names(node->catch_body, out);
+      collect_var_names(node->finally_body, out);
+      break;
+    case N_EXPORT: collect_var_names(node->left, out); break;
+    default: break;
+  }
+}
+
+static inline bool is_function_declaration(sv_ast_t *node) {
+  return node && node->type == N_FUNC && node->str && !(node->flags & (FN_ARROW | FN_PAREN));
+}
+
+static void collect_lexical_names(sv_ast_list_t *stmts, bool functions_lexical, sv_decl_names_t *lex, sv_decl_names_t *vars) {
+  for (int i = 0; i < stmts->count; i++) {
+    sv_ast_t *node = stmts->items[i];
+    if (node && node->type == N_EXPORT) node = node->left;
+    if (!node) continue;
+    
+    if (node->type == N_VAR && node->var_kind != SV_VAR_VAR) {
+      for (int j = 0; j < node->args.count; j++) {
+        sv_ast_t *decl = node->args.items[j];
+        if (decl && decl->type == N_VARDECL) collect_pattern_names(decl->left, lex);
+      }
+    } else if (node->type == N_CLASS && node->str && (node->flags & FN_CLASS_DECL)) {
+      decl_names_add(lex, node->str, node->len, false);
+    } else if (is_function_declaration(node)) {
+      decl_names_add(functions_lexical ? lex : vars, node->str, node->len, true);
+    } else if (node->type == N_IMPORT_DECL) {
+      for (int j = 0; j < node->args.count; j++) {
+        sv_ast_t *spec = node->args.items[j];
+        if (spec && spec->type == N_IMPORT_SPEC && spec->right && spec->right->type == N_IDENT)
+          decl_names_add(lex, spec->right->str, spec->right->len, false);
+      }
+    }
+  }
+}
+
+static uint32_t decl_name_hash(const sv_decl_name_t *name) {
+  uint32_t h = 2166136261u;
+  for (uint32_t i = 0; i < name->len; i++) h = (h ^ (uint8_t)name->str[i]) * 16777619u;
+  return h;
+}
+
+static inline bool decl_name_eq(const sv_decl_name_t *a, const sv_decl_name_t *b) {
+  return a->len == b->len && memcmp(a->str, b->str, a->len) == 0;
+}
+
+static bool report_redeclaration(sv_compiler_t *c, const sv_decl_name_t *name) {
+  js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Identifier '%.*s' has already been declared", (int)name->len, name->str);
+  return false;
+}
+
+static bool check_scope_declarations(
+  sv_compiler_t *c, const sv_decl_names_t *lex,
+  const sv_decl_names_t *vars, const sv_decl_names_t *params
+) {
+  if (lex->count == 0) return true;
+  
+  uint32_t size = 16;
+  while (size < (uint32_t)lex->count * 2) size *= 2;
+  int inline_table[64];
+  int *table = size <= 64 ? inline_table : malloc(size * sizeof(*table));
+  if (!table) return true;
+  for (uint32_t i = 0; i < size; i++) table[i] = -1;
+  
+  bool ok = true;
+  for (int i = 0; ok && i < lex->count; i++) {
+    uint32_t slot = decl_name_hash(&lex->items[i]) & (size - 1);
+    for (; table[slot] >= 0; slot = (slot + 1) & (size - 1)) {
+      const sv_decl_name_t *prev = &lex->items[table[slot]];
+      if (!decl_name_eq(prev, &lex->items[i])) continue;
+      if (!(prev->is_function && lex->items[i].is_function && !c->is_strict)) ok = report_redeclaration(c, &lex->items[i]);
+      break;
+    }
+    if (ok && table[slot] < 0) table[slot] = i;
+  }
+  
+  const sv_decl_names_t *others[2] = { vars, params };
+  for (int k = 0; ok && k < 2; k++) for (int i = 0; ok && others[k] && i < others[k]->count; i++) {
+    uint32_t slot = decl_name_hash(&others[k]->items[i]) & (size - 1);
+    for (; table[slot] >= 0; slot = (slot + 1) & (size - 1))
+      if (decl_name_eq(&lex->items[table[slot]], &others[k]->items[i])) { ok = report_redeclaration(c, &others[k]->items[i]); break; }
+  }
+  
+  if (table != inline_table) free(table);
+  return ok;
+}
+
+static inline void var_bloom_add(uint64_t bloom[4], uint32_t h) {
+  bloom[(h >> 6) & 3] |= 1ull << (h & 63);
+  bloom[(h >> 14) & 3] |= 1ull << ((h >> 8) & 63);
+}
+
+static inline bool var_bloom_may_contain(const uint64_t bloom[4], uint32_t h) {
+  return (bloom[(h >> 6) & 3] & (1ull << (h & 63))) && (bloom[(h >> 14) & 3] & (1ull << ((h >> 8) & 63)));
+}
+
+static void check_statement_list_declarations(
+  sv_compiler_t *c, sv_ast_list_t *stmts, bool functions_lexical,
+  const sv_decl_names_t *params, bool function_body
+) {
+  sv_decl_names_t lex, vars;
+  decl_names_init(&lex);
+  decl_names_init(&vars);
+  collect_lexical_names(stmts, functions_lexical, &lex, &vars);
+  
+  bool walk_vars = function_body;
+  if (!function_body) for (int i = 0; i < lex.count && !walk_vars; i++)
+    walk_vars = var_bloom_may_contain(c->var_name_bloom, decl_name_hash(&lex.items[i]));
+  
+  if (walk_vars) for (int i = 0; i < stmts->count; i++) collect_var_names(stmts->items[i], &vars);
+  if (function_body) {
+    memset(c->var_name_bloom, 0, sizeof(c->var_name_bloom));
+    for (int i = 0; i < vars.count; i++) var_bloom_add(c->var_name_bloom, decl_name_hash(&vars.items[i]));
+  }
+  
+  check_scope_declarations(c, &lex, &vars, params);
+  decl_names_free(&lex);
+  decl_names_free(&vars);
+}
+
+static bool lexical_names_may_be_vars(sv_compiler_t *c, const sv_decl_names_t *lex) {
+  for (int i = 0; i < lex->count; i++)
+    if (var_bloom_may_contain(c->var_name_bloom, decl_name_hash(&lex->items[i]))) return true;
+  return false;
+}
+
+static void check_switch_declarations(sv_compiler_t *c, sv_ast_t *node) {
+  sv_decl_names_t lex, vars;
+  decl_names_init(&lex);
+  decl_names_init(&vars);
+  for (int i = 0; i < node->args.count; i++) {
+    sv_ast_t *cas = node->args.items[i];
+    if (cas) collect_lexical_names(&cas->args, true, &lex, &vars);
+  }
+  if (lexical_names_may_be_vars(c, &lex)) for (int i = 0; i < node->args.count; i++) {
+    sv_ast_t *cas = node->args.items[i];
+    for (int j = 0; cas && j < cas->args.count; j++) collect_var_names(cas->args.items[j], &vars);
+  }
+  check_scope_declarations(c, &lex, &vars, NULL);
+  decl_names_free(&lex);
+  decl_names_free(&vars);
+}
+
+static void check_for_head_declarations(sv_compiler_t *c, sv_ast_t *head, sv_ast_t *body) {
+  if (!head || head->type != N_VAR || head->var_kind == SV_VAR_VAR) return;
+  sv_decl_names_t lex, vars;
+  decl_names_init(&lex);
+  decl_names_init(&vars);
+  for (int i = 0; i < head->args.count; i++) {
+    sv_ast_t *decl = head->args.items[i];
+    if (decl && decl->type == N_VARDECL) collect_pattern_names(decl->left, &lex);
+  }
+  if (lexical_names_may_be_vars(c, &lex)) collect_var_names(body, &vars);
+  check_scope_declarations(c, &lex, &vars, NULL);
+  decl_names_free(&lex);
+  decl_names_free(&vars);
+}
+
+static void check_catch_declarations(sv_compiler_t *c, sv_ast_t *param, sv_ast_t *body) {
+  if (!param || !body || body->type != N_BLOCK) return;
+  sv_decl_names_t names, body_lex, body_vars;
+  decl_names_init(&names);
+  decl_names_init(&body_lex);
+  decl_names_init(&body_vars);
+  collect_pattern_names(param, &names);
+  collect_lexical_names(&body->args, true, &body_lex, &body_vars);
+  if (param->type != N_IDENT && lexical_names_may_be_vars(c, &names))
+    for (int i = 0; i < body->args.count; i++) collect_var_names(body->args.items[i], &body_vars);
+  check_scope_declarations(c, &names, &body_lex, param->type != N_IDENT ? &body_vars : NULL);
+  decl_names_free(&names);
+  decl_names_free(&body_lex);
+  decl_names_free(&body_vars);
+}
+
 static void hoist_var_pattern(sv_compiler_t *c, sv_ast_t *pat) {
   if (!pat) return;
   switch (pat->type) {
@@ -5351,6 +5610,7 @@ static void compile_block_with_using(sv_compiler_t *c, sv_ast_t *node) {
   bool has_using = stmt_list_has_using_decl(&node->args, &has_await_using);
 
   begin_scope(c);
+  check_statement_list_declarations(c, &node->args, true, NULL, false);
   hoist_lexical_decls(c, &node->args);
   hoist_func_decls(c, &node->args);
 
@@ -5988,6 +6248,7 @@ static void for_collect_var_decl_slots(sv_compiler_t *c, sv_ast_t *init_var, int
 
 void compile_for(sv_compiler_t *c, sv_ast_t *node) {
   emit_set_completion_undefined(c);
+  check_for_head_declarations(c, node->init, node->body);
   begin_scope(c);
 
   int *iter_slots = NULL;
@@ -6164,6 +6425,7 @@ static bool compile_using_push_target(sv_compiler_t *c, sv_ast_t *lhs, int stack
 
 static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   emit_set_completion_undefined(c);
+  check_for_head_declarations(c, node->left, node->body);
   begin_scope(c);
 
   int *iter_slots = NULL;
@@ -6460,6 +6722,7 @@ static void compile_finally_block(sv_compiler_t *c, sv_ast_t *finally_body) {
 }
 
 static void compile_catch_body(sv_compiler_t *c, sv_ast_t *node) {
+  check_catch_declarations(c, node->catch_param, node->catch_body);
   begin_scope(c);
   if (node->catch_param && node->catch_param->type == N_IDENT) {
     int loc = add_local(c, node->catch_param->str, node->catch_param->len, false, c->scope_depth);
@@ -6550,6 +6813,7 @@ void compile_switch(sv_compiler_t *c, sv_ast_t *node) {
 
   compile_expr(c, node->cond);  
   begin_scope(c);
+  check_switch_declarations(c, node);
   push_loop(c, c->code_len, NULL, 0, true);
 
   for (int i = 0; i < case_count; i++) {
@@ -6725,6 +6989,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
     else emit_op(&comp, OP_UNDEF);
     emit_return_from_stack(&comp);
   } else {
+    check_statement_list_declarations(&comp, &node->args, false, NULL, true);
     compile_stmts(&comp, &node->args);
     emit_close_upvals(&comp);
     emit_op(&comp, OP_RETURN_UNDEF);
@@ -7540,6 +7805,15 @@ sv_func_t *compile_function_body(
     should_emit_module_static_declarations(&comp, node->body);
   if (emitted_static_declarations)
     compile_module_static_declaration_prologue(&comp, &node->body->args);
+
+  if (node->body && node->body->type == N_BLOCK) {
+    sv_decl_names_t params;
+    decl_names_init(&params);
+    for (int i = 0; i < node->args.count; i++) collect_pattern_names(node->args.items[i], &params);
+    bool module_top = comp.mode == SV_COMPILE_MODULE && comp.enclosing && !comp.enclosing->enclosing;
+    check_statement_list_declarations(&comp, &node->body->args, module_top, &params, true);
+    decl_names_free(&params);
+  }
 
   if (node->body) {
     if (node->body->type == N_BLOCK)

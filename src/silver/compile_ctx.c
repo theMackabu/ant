@@ -40,6 +40,7 @@ void sv_compile_ctx_init_root(
   ctx->inherits_eval_env = sv_compile_mode_is_eval(mode);
   ctx->allows_new_target = mode == SV_COMPILE_EVAL_FUNCTION;
   ctx->is_strict = is_strict;
+  memset(ctx->var_name_bloom, 0xff, sizeof(ctx->var_name_bloom));
   ctx->completion_local = -1;
   ctx->strict_args_local = -1;
   ctx->new_target_local = -1;
@@ -69,6 +70,7 @@ void sv_compile_ctx_init_child(
   ctx->is_async = node && !!(node->flags & FN_ASYNC);
   ctx->args_length_only = node && !!(node->flags & FN_ARGS_LENGTH_ONLY);
   ctx->is_strict = enclosing->is_strict || (node && !!(node->flags & FN_CLASS_BODY));
+  memset(ctx->var_name_bloom, 0xff, sizeof(ctx->var_name_bloom));
   ctx->mode = mode;
   ctx->inherits_eval_env =
     enclosing->inherits_eval_env || sv_compile_mode_is_eval(mode);
