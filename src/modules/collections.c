@@ -1592,14 +1592,24 @@ static ant_value_t finreg_unregister(ant_params_t) {
   return js_bool(removed);
 }
 
+static ant_value_t map_group_add(ant_t *js, void *ctx, ant_value_t key, ant_value_t value) {
+  map_entry_t **map_head = ctx;
+  key = normalize_map_key(key);
+  
+  map_entry_t *entry = map_find_entry(js, map_head, key);
+  ant_value_t group;
+
+  if (entry) group = entry->value; else {
+    group = js_mkarr(js);
+    if (!map_store_entry(js, map_head, key, key, group)) return js_mkerr(js, "out of memory");
+  }
+  
+  js_arr_push(js, group, value);
+  return js_mkundef();
+}
+
 static ant_value_t map_groupBy(ant_params_t) {
   if (nargs < 2) return js_mkerr_typed(js, JS_ERR_TYPE, "Map.groupBy requires 2 arguments");
-  
-  ant_value_t items = args[0];
-  ant_value_t callback = args[1];
-  
-  if (vtype(callback) != kTypeFunction && vtype(callback) != kTypeBuiltin)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "callback is not a function");
   
   ant_value_t map_obj = js_mkobj(js);
   js_obj_ptr(map_obj)->type_tag = kTypeMap;
@@ -1612,29 +1622,8 @@ static ant_value_t map_groupBy(ant_params_t) {
   *map_head = NULL;
   js_set_native(map_obj, map_head, MAP_NATIVE_TAG);
   
-  ant_offset_t len = js_arr_len(js, items);
-  for (ant_offset_t i = 0; i < len; i++) {
-    ant_value_t val = js_arr_get(js, items, i);
-    ant_value_t cb_args[2] = { val, tov((double)i) };
-    
-    ant_value_t key = normalize_map_key(
-      sv_vm_call(js->vm, js, callback, 
-      js_mkundef(), cb_args, 2, NULL, js_mkundef())
-    );
-    
-    if (is_err(key)) return key;
-    map_entry_t *entry = map_find_entry(js, map_head, key);
-    ant_value_t group;
-
-    if (entry) group = entry->value; else {
-      group = js_mkarr(js);
-      if (!map_store_entry(js, map_head, key, key, group)) return js_mkerr(js, "out of memory");
-    }
-    
-    js_arr_push(js, group, val);
-  }
-  
-  return map_obj;
+  ant_value_t grouped = js_group_by(js, args[0], args[1], map_group_add, map_head);
+  return is_err(grouped) ? grouped : map_obj;
 }
 
 static bool is_original_collection_adder(ant_value_t adder, ant_cfunc_t fn) {

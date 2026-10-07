@@ -240,6 +240,13 @@ typedef struct {
   int argc;
 } js_arg_list_t;
 
+typedef ant_value_t (*js_group_add_fn)(
+  ant_t *js,
+  void *ctx,
+  ant_value_t key,
+  ant_value_t value
+);
+
 ant_value_t js_arg_list_from(ant_t *js, ant_value_t array_like, js_arg_list_t *list);
 void js_arg_list_release(js_arg_list_t *list);
 
@@ -255,8 +262,7 @@ double js_parse_float_value(ant_t *js, ant_value_t arg);
 bool js_obj_ensure_prop_capacity(ant_object_t *obj, uint32_t needed);
 bool js_obj_ensure_unique_shape(ant_object_t *obj);
 
-ant_value_t js_to_numeric(ant_t *js, ant_value_t arg);
-ant_value_t js_template_to_string(ant_t *js, ant_value_t v);
+ant_value_t js_group_by(ant_t *js, ant_value_t items, ant_value_t callback, js_group_add_fn add, void *ctx);
 ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode);
 ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
 
@@ -269,6 +275,8 @@ ant_value_t mkprop_append_fast(ant_t *js, ant_value_t obj, const char *key, size
 ant_value_t setprop_cstr(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 ant_value_t setprop_interned(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 
+ant_value_t js_template_to_string(ant_t *js, ant_value_t v);
+ant_value_t js_to_numeric(ant_t *js, ant_value_t arg);
 ant_value_t js_define_own_prop(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t v);
 ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto, ant_value_t new_target);
 ant_value_t js_construct_native(ant_t *js, ant_cfunc_t ctor, ant_value_t *args, int nargs);

@@ -9050,47 +9050,27 @@ static ant_value_t builtin_object_hasOwn(ant_params_t) {
 }
 
 typedef struct {
-  ant_value_t result;
   sv_callback_t cb;
+  js_group_add_fn add;
+  void *ctx;
   ant_offset_t index;
-} object_group_by_ctx_t;
+} group_by_ctx_t;
 
-static iter_action_t object_group_by_add(ant_t *js, ant_value_t value, void *ctx, ant_value_t *out) {
-  object_group_by_ctx_t *group_by = ctx;
+static iter_action_t group_by_step(ant_t *js, ant_value_t value, void *ctx, ant_value_t *out) {
+  group_by_ctx_t *group_by = ctx;
   ant_value_t cb_args[2] = { value, tov((double)group_by->index++) };
   ant_value_t key = sv_callback_call(js->vm, js, &group_by->cb, cb_args, 2);
   if (is_err(key)) { *out = key; return ITER_ERROR; }
-
-  ant_value_t key_str = js_tostring_val(js, key);
-  if (is_err(key_str)) { *out = key_str; return ITER_ERROR; }
-
-  ant_offset_t klen;
-  ant_offset_t koff = vstr(js, key_str, &klen);
-  ant_prop_loc_t grp_off = lkp(js, group_by->result, (const char *)(uintptr_t)koff, klen);
-  ant_value_t group;
   
-  if (grp_off.obj) group = js_prop_load(grp_off);
-  else {
-    group = mkarr(js);
-    js_setprop(js, group_by->result, key_str, group);
-  }
+  ant_value_t added = group_by->add(js, group_by->ctx, key, value);
+  if (is_err(added)) { *out = added; return ITER_ERROR; }
   
-  js_arr_push(js, group, value);
   return ITER_CONTINUE;
 }
 
-static ant_value_t builtin_object_groupBy(ant_params_t) {
-  if (nargs < 2) return js_mkerr_typed(js, JS_ERR_TYPE, "Object.groupBy requires 2 arguments");
-  
-  ant_value_t items = args[0];
-  ant_value_t callback = args[1];
-  
-  if (vtype(callback) != kTypeFunction && vtype(callback) != kTypeBuiltin)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "callback is not a function");
-  
-  ant_value_t result = js_mkobj(js);
-  js_set_proto_init(result, js_mknull());
-  object_group_by_ctx_t ctx = { result, sv_callback_prepare(js, callback, js_mkundef()), 0 };
+ant_value_t js_group_by(ant_t *js, ant_value_t items, ant_value_t callback, js_group_add_fn add, void *ctx) {
+  if (!is_callable(callback)) return js_mkerr_typed(js, JS_ERR_TYPE, "callback is not a function");
+  group_by_ctx_t group_by = { sv_callback_prepare(js, callback, js_mkundef()), add, ctx, 0 };
 
   if (array_obj_ptr(items) && js_array_iteration_default(js, items)) {
     ant_offset_t len = 0;
@@ -9101,17 +9081,59 @@ static ant_value_t builtin_object_groupBy(ant_params_t) {
       ant_value_t value = array_method_get_index(js, items, i);
       if (is_err(value)) return value;
       ant_value_t err = js_mkundef();
-      if (object_group_by_add(js, value, &ctx, &err) == ITER_ERROR) return err;
+      if (group_by_step(js, value, &group_by, &err) == ITER_ERROR) return err;
     }
     
-    return result;
+    return js_mkundef();
   }
 
   if (vtype(js->sym.iterator_sym) != kTypeSymbol || !is_callable(js_get_sym(js, items, js->sym.iterator_sym)))
     return js_mkerr_typed(js, JS_ERR_TYPE, "object is not iterable");
   
-  ant_value_t iterated = iter_foreach(js, items, object_group_by_add, &ctx);
-  return is_err(iterated) ? iterated : result;
+  ant_value_t iterated = iter_foreach(js, items, group_by_step, &group_by);
+  return is_err(iterated) ? iterated : js_mkundef();
+}
+
+static ant_value_t object_group_add(ant_t *js, void *ctx, ant_value_t key, ant_value_t value) {
+  ant_value_t result = *(ant_value_t *)ctx;
+  
+  if (vtype(key) == kTypeSymbol) {
+    ant_value_t group = js_get_sym(js, result, key);
+    if (vtype(group) != kTypeArray) {
+      group = mkarr(js);
+      js_set_sym(js, result, key, group);
+    }
+    
+    js_arr_push(js, group, value);
+    return js_mkundef();
+  }
+  
+  ant_value_t key_str = js_tostring_val(js, key);
+  if (is_err(key_str)) return key_str;
+
+  ant_offset_t klen;
+  ant_offset_t koff = vstr(js, key_str, &klen);
+  ant_prop_loc_t grp_off = lkp(js, result, (const char *)(uintptr_t)koff, klen);
+  ant_value_t group;
+  
+  if (grp_off.obj) group = js_prop_load(grp_off);
+  else {
+    group = mkarr(js);
+    js_setprop(js, result, key_str, group);
+  }
+  
+  js_arr_push(js, group, value);
+  return js_mkundef();
+}
+
+static ant_value_t builtin_object_groupBy(ant_params_t) {
+  if (nargs < 2) return js_mkerr_typed(js, JS_ERR_TYPE, "Object.groupBy requires 2 arguments");
+  
+  ant_value_t result = js_mkobj(js);
+  js_set_proto_init(result, js_mknull());
+  
+  ant_value_t grouped = js_group_by(js, args[0], args[1], object_group_add, &result);
+  return is_err(grouped) ? grouped : result;
 }
 
 static bool define_lookup_existing_meta(
