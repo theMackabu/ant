@@ -10972,11 +10972,33 @@ static ant_value_t arguments_unshift(ant_t *js, ant_value_t obj, ant_value_t *ar
   return arguments_set_length(js, obj, len + (ant_offset_t)nargs);
 }
 
+static inline bool array_string_wrapper_length(ant_t *js, ant_value_t arr, ant_offset_t *len) {
+  if (vtype(arr) != kTypeObject) return false;
+  ant_value_t prim = get_slot(arr, SLOT_PRIMITIVE);
+  if (vtype(prim) != kTypeString) return false;
+  *len = str_utf16_len(js, prim);
+  return true;
+}
+
+static ant_value_t array_string_wrapper_write_error(ant_t *js, const char *key) {
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot assign to read only property '%s' of object '[object String]'", key);
+}
+
+static ant_value_t array_method_receiver(ant_t *js, ant_value_t value, const char *name) {
+  uint8_t t = vtype(value);
+  if (t == kTypeArray || t == kTypeObject) return value;
+  if (t == kTypeUndefined || t == kTypeNull)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Array.prototype.%s called on null or undefined", name);
+  return is_boxable_primitive_type(t) ? js_normalize_sloppy_this(js, value) : value;
+}
+
 static ant_value_t builtin_array_push(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject) {
-    return js_mkerr(js, "push called on non-array");
-  }
+  arr = array_method_receiver(js, arr, "push");
+  
+  if (is_err(arr)) return arr;
+  ant_offset_t string_len;
+  if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "length");
 
   if (is_proxy(arr)) {
     PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
@@ -11079,9 +11101,10 @@ void js_arr_push(ant_t *js, ant_value_t arr, ant_value_t val) {
 static ant_value_t builtin_array_pop(ant_params_t) {
   ant_value_t arr = js->this_val;
 
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject) {
-    return js_mkerr(js, "pop called on non-array");
-  }
+  arr = array_method_receiver(js, arr, "pop");
+  if (is_err(arr)) return arr;
+  ant_offset_t string_len;
+  if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "length");
 
   if (is_proxy(arr)) {
     PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
@@ -11149,8 +11172,9 @@ static ant_value_t builtin_array_slice(ant_params_t) {
   ant_value_t string_val = unwrap_primitive(js, arr);
   bool string_like = (vtype(string_val) == kTypeString);
 
-  if (!string_like && vtype(arr) != kTypeArray && vtype(arr) != kTypeObject) {
-    return js_mkerr(js, "slice called on non-array");
+  if (!string_like) {
+    arr = array_method_receiver(js, arr, "slice");
+    if (is_err(arr)) return arr;
   }
   
   ant_offset_t len = 0;
@@ -11239,8 +11263,8 @@ static ant_value_t builtin_array_slice(ant_params_t) {
 
 static ant_value_t builtin_array_join(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "join called on non-array");
+  arr = array_method_receiver(js, arr, "join");
+  if (is_err(arr)) return arr;
 
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, arr);
@@ -11510,19 +11534,7 @@ static inline ant_offset_t array_includes_start_index(ant_native_params_t, ant_o
 static ant_value_t array_includes_length_value(ant_t *js, ant_value_t arr) {
   if (array_length_obj_ptr(arr) && !is_proxy(arr)) return tov((double)get_array_length(js, arr));
   if (is_proxy(arr)) return proxy_get(js, arr, "length", 6);
-
-  ant_prop_loc_t off = lkp(js, arr, "length", 6);
-  if (off.obj) {
-    const ant_shape_prop_t *prop_meta = prop_shape_meta(off);
-    if (prop_meta && prop_meta->has_getter) {
-      ant_value_t accessor_result;
-      if (try_accessor_getter(js, arr, "length", 6, &accessor_result)) return accessor_result;
-    }
-    return js_prop_load(off);
-  }
-
-  if (!lkp_proto(js, arr, "length", 6).obj) return js_mkundef();
-  return js_getprop_super(js, get_proto(js, arr), arr, "length");
+  return js_getprop_fallback_len(js, arr, "length", 6);
 }
 
 static ant_value_t array_includes_get_index_value(
@@ -11537,19 +11549,7 @@ static ant_value_t array_includes_get_index_value(
     return js_getprop_super(js, get_proto(js, arr), arr, idxstr);
   }
 
-  ant_prop_loc_t off = lkp(js, arr, idxstr, idxlen);
-  if (off.obj) {
-    const ant_shape_prop_t *prop_meta = prop_shape_meta(off);
-    if (prop_meta && prop_meta->has_getter) {
-      ant_value_t accessor_result;
-      if (try_accessor_getter(js, arr, idxstr, idxlen, &accessor_result)) return accessor_result;
-    }
-    return js_prop_load(off);
-  }
-
-  if (!lkp_proto(js, arr, idxstr, idxlen).obj) return js_mkundef();
-  idxstr[idxlen] = '\0';
-  return js_getprop_super(js, get_proto(js, arr), arr, idxstr);
+  return js_getprop_fallback_len(js, arr, idxstr, idxlen);
 }
 
 static bool array_includes_get_dense_index_value(
@@ -11735,8 +11735,8 @@ static ant_value_t array_includes_generic(
 }
 
 ant_value_t js_array_includes_call(ant_t *js, ant_value_t arr, ant_value_t *args, int nargs) {
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "includes called on non-array");
+  arr = array_method_receiver(js, arr, "includes");
+  if (is_err(arr)) return arr;
   
   array_includes_query_t query = array_includes_prepare_query(
     (nargs > 0) ? args[0] : js_mkundef()
@@ -11769,8 +11769,8 @@ ant_value_t builtin_array_includes(ant_params_t) {
 static ant_value_t builtin_array_every(ant_params_t) {
   ant_value_t arr = js->this_val;
   
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "every called on non-array");
+  arr = array_method_receiver(js, arr, "every");
+  if (is_err(arr)) return arr;
   
   ant_value_t callback = require_callback(js, args, nargs, "every");
   if (is_err(callback)) return callback;
@@ -11797,8 +11797,8 @@ static ant_value_t builtin_array_every(ant_params_t) {
 static ant_value_t builtin_array_forEach(ant_params_t) {
   ant_value_t arr = js->this_val;
   
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "forEach called on non-array");
+  arr = array_method_receiver(js, arr, "forEach");
+  if (is_err(arr)) return arr;
   
   ant_value_t callback = require_callback(js, args, nargs, "forEach");
   if (is_err(callback)) return callback;
@@ -11825,8 +11825,10 @@ static ant_value_t builtin_array_reverse(ant_params_t) {
   (void)args; (void)nargs;
   ant_value_t arr = js->this_val;
 
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "reverse called on non-array");
+  arr = array_method_receiver(js, arr, "reverse");
+  if (is_err(arr)) return arr;
+  ant_offset_t string_len;
+  if (array_string_wrapper_length(js, arr, &string_len) && string_len > 1) return array_string_wrapper_write_error(js, "0");
 
   if (is_proxy(arr)) {
     PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
@@ -11896,8 +11898,8 @@ static ant_value_t builtin_array_reverse(ant_params_t) {
 static ant_value_t builtin_array_map(ant_params_t) {
   ant_value_t arr = js->this_val;
   
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "map called on non-array");
+  arr = array_method_receiver(js, arr, "map");
+  if (is_err(arr)) return arr;
   
   ant_value_t callback = require_callback(js, args, nargs, "map");
   if (is_err(callback)) return callback;
@@ -11931,8 +11933,8 @@ static ant_value_t builtin_array_map(ant_params_t) {
 static ant_value_t builtin_array_filter(ant_params_t) {
   ant_value_t arr = js->this_val;
   
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "filter called on non-array");
+  arr = array_method_receiver(js, arr, "filter");
+  if (is_err(arr)) return arr;
   
   ant_value_t callback = require_callback(js, args, nargs, "filter");
   if (is_err(callback)) return callback;
@@ -11968,8 +11970,8 @@ static ant_value_t builtin_array_filter(ant_params_t) {
 static ant_value_t builtin_array_reduce(ant_params_t) {
   ant_value_t arr = js->this_val;
   
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "reduce called on non-array");
+  arr = array_method_receiver(js, arr, "reduce");
+  if (is_err(arr)) return arr;
   
   ant_value_t callback = require_callback(js, args, nargs, "reduce");
   if (is_err(callback)) return callback;
@@ -12092,9 +12094,8 @@ static inline ant_value_t flat_append_mapped_value(ant_t *js, ant_value_t mapped
 
 static ant_value_t builtin_array_flat(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject) {
-    return js_mkerr(js, "flat called on non-array");
-  }
+  arr = array_method_receiver(js, arr, "flat");
+  if (is_err(arr)) return arr;
   
   int depth = 1;
   if (nargs >= 1 && vtype(args[0]) == kTypeNumber) {
@@ -12114,9 +12115,8 @@ static ant_value_t builtin_array_flat(ant_params_t) {
 
 static ant_value_t builtin_array_concat(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject) {
-    return js_mkerr(js, "concat called on non-array");
-  }
+  arr = array_method_receiver(js, arr, "concat");
+  if (is_err(arr)) return arr;
   
   bool intrinsic = false;
   ant_value_t result = array_species_create(js, arr, 0, &intrinsic);
@@ -12192,24 +12192,30 @@ static ant_value_t builtin_array_concat(ant_params_t) {
 
 static ant_value_t builtin_array_at(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject) {
-    return js_mkerr(js, "at called on non-array");
-  }
-  
-  if (nargs == 0 || vtype(args[0]) != kTypeNumber) return js_mkundef();
+  arr = array_method_receiver(js, arr, "at");
+  if (is_err(arr)) return arr;
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
-  int idx = (int) tod(args[0]);
-  if (idx < 0) idx = (int)len + idx;
-  if (idx < 0 || (ant_offset_t)idx >= len) return js_mkundef();
+  ant_value_t rel_val = nargs > 0 ? js_to_numeric(js, args[0]) : tov(0);
+  if (is_err(rel_val)) return rel_val;
+  if (vtype(rel_val) == kTypeBigInt)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a BigInt value to a number");
   
-  return arr_get(js, arr, (ant_offset_t)idx);
+  double rel = tod(rel_val);
+  rel = isnan(rel) ? 0 : trunc(rel);
+  double k = rel < 0 ? (double)len + rel : rel;
+  if (k < 0 || k >= (double)len) return js_mkundef();
+  
+  return array_method_get_index(js, arr, (ant_offset_t)k);
 }
 
 static ant_value_t array_fill_writable(ant_t *js, ant_value_t arr, ant_offset_t start, ant_offset_t end) {
   ant_object_t *target = js_obj_ptr(js_as_obj(arr));
   if (is_proxy(arr) || !target || start >= end) return js_mkundef();
+  
+  ant_offset_t string_len;
+  if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "0");
   
   if (target->flags.frozen)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot assign to read only property of frozen object");
@@ -12226,9 +12232,8 @@ static ant_value_t array_fill_writable(ant_t *js, ant_value_t arr, ant_offset_t 
 
 static ant_value_t builtin_array_fill(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject) {
-    return js_mkerr(js, "fill called on non-array");
-  }
+  arr = array_method_receiver(js, arr, "fill");
+  if (is_err(arr)) return arr;
 
   ant_value_t value = nargs >= 1 ? args[0] : js_mkundef();
 
@@ -12272,10 +12277,8 @@ static ant_value_t builtin_array_fill(ant_params_t) {
 }
 
 static ant_value_t array_find_impl(ant_native_params_t, bool return_index, const char *name) {
-  ant_value_t arr = js->this_val;
-  
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "%s called on non-array", name);
+  ant_value_t arr = array_method_receiver(js, js->this_val, name);
+  if (is_err(arr)) return arr;
   
   ant_value_t callback = require_callback(js, args, nargs, name);
   if (is_err(callback)) return callback;
@@ -12308,10 +12311,8 @@ static ant_value_t builtin_array_findIndex(ant_params_t) {
 }
 
 static ant_value_t array_find_last_impl(ant_native_params_t, bool return_index, const char *name) {
-  ant_value_t arr = js->this_val;
-  
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "%s called on non-array", name);
+  ant_value_t arr = array_method_receiver(js, js->this_val, name);
+  if (is_err(arr)) return arr;
   
   ant_value_t callback = require_callback(js, args, nargs, name);
   if (is_err(callback)) return callback;
@@ -12345,9 +12346,8 @@ static ant_value_t builtin_array_findLastIndex(ant_params_t) {
 
 static ant_value_t builtin_array_flatMap(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject) {
-    return js_mkerr(js, "flatMap called on non-array");
-  }
+  arr = array_method_receiver(js, arr, "flatMap");
+  if (is_err(arr)) return arr;
   
   ant_value_t callback = require_callback(js, args, nargs, "flatMap");
   if (is_err(callback)) return callback;
@@ -12383,8 +12383,8 @@ static ant_value_t builtin_array_flatMap(ant_params_t) {
 
 static ant_value_t builtin_array_indexOf(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "indexOf called on non-array");
+  arr = array_method_receiver(js, arr, "indexOf");
+  if (is_err(arr)) return arr;
 
   if (nargs == 0) return tov(-1);  
   ant_value_t search = args[0];
@@ -12422,9 +12422,8 @@ static ant_value_t builtin_array_indexOf(ant_params_t) {
 
 static ant_value_t builtin_array_lastIndexOf(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject) {
-    return js_mkerr(js, "lastIndexOf called on non-array");
-  }
+  arr = array_method_receiver(js, arr, "lastIndexOf");
+  if (is_err(arr)) return arr;
   if (nargs == 0) return tov(-1);
   
   ant_value_t search = args[0];
@@ -12461,9 +12460,8 @@ static ant_value_t builtin_array_lastIndexOf(ant_params_t) {
 
 static ant_value_t builtin_array_reduceRight(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject) {
-    return js_mkerr(js, "reduceRight called on non-array");
-  }
+  arr = array_method_receiver(js, arr, "reduceRight");
+  if (is_err(arr)) return arr;
   if (nargs == 0 || vtype(args[0]) != kTypeFunction) {
     return js_mkerr(js, "reduceRight requires a function argument");
   }
@@ -12495,9 +12493,10 @@ static ant_value_t builtin_array_shift(ant_params_t) {
   (void) args;
   (void) nargs;
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject) {
-    return js_mkerr(js, "shift called on non-array");
-  }
+  arr = array_method_receiver(js, arr, "shift");
+  if (is_err(arr)) return arr;
+  ant_offset_t string_len;
+  if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "length");
   if (is_arguments_object(arr)) return arguments_shift(js, arr);
 
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
@@ -12566,9 +12565,10 @@ static ant_value_t builtin_array_shift(ant_params_t) {
 
 static ant_value_t builtin_array_unshift(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject) {
-    return js_mkerr(js, "unshift called on non-array");
-  }
+  arr = array_method_receiver(js, arr, "unshift");
+  if (is_err(arr)) return arr;
+  ant_offset_t string_len;
+  if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "length");
   if (is_arguments_object(arr)) return arguments_unshift(js, arr, args, nargs);
 
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
@@ -12650,8 +12650,8 @@ static ant_value_t builtin_array_unshift(ant_params_t) {
 static ant_value_t builtin_array_some(ant_params_t) {
   ant_value_t arr = js->this_val;
   
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "some called on non-array");
+  arr = array_method_receiver(js, arr, "some");
+  if (is_err(arr)) return arr;
   
   ant_value_t callback = require_callback(js, args, nargs, "some");
   if (is_err(callback)) return callback;
@@ -12718,8 +12718,11 @@ static ant_value_t builtin_array_sort(ant_params_t) {
   gc_temp_root_scope_t temp_scope = {0};
   bool temp_scope_active = false;
   
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "sort called on non-array");
+  arr = array_method_receiver(js, arr, "sort");
+  if (is_err(arr)) return arr;
+  result = arr;
+  ant_offset_t string_len;
+  if (array_string_wrapper_length(js, arr, &string_len) && string_len > 1) return array_string_wrapper_write_error(js, "0");
   
   if (nargs >= 1) {
     uint8_t t = vtype(args[0]);
@@ -12903,9 +12906,10 @@ done:
 
 static ant_value_t builtin_array_splice(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject) {
-    return js_mkerr(js, "splice called on non-array");
-  }
+  arr = array_method_receiver(js, arr, "splice");
+  if (is_err(arr)) return arr;
+  ant_offset_t string_len;
+  if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "length");
 
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   ant_value_t read_from = is_proxy(arr) ? proxy_read_target(js, arr) : arr;
@@ -13116,9 +13120,8 @@ static ant_value_t builtin_array_copyWithin(ant_params_t) {
   gc_temp_root_scope_t temp_roots = {0};
   
   bool temp_roots_active = false;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject) {
-    return js_mkerr(js, "copyWithin called on non-array");
-  }
+  arr = array_method_receiver(js, arr, "copyWithin");
+  if (is_err(arr)) return arr;
 
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   ant_value_t read_from = is_proxy(arr) ? proxy_read_target(js, arr) : arr;
@@ -13144,6 +13147,9 @@ static ant_value_t builtin_array_copyWithin(ant_params_t) {
   int count = end - start;
   if (count > (int)len - target) count = (int)len - target;
   if (count <= 0) return arr;
+  
+  ant_offset_t string_len;
+  if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "0");
 
   ant_offset_t doff = get_dense_buf(arr);
   if (doff && !is_proxy(arr)) {
@@ -13240,8 +13246,8 @@ oom:
 
 static ant_value_t builtin_array_toSorted(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "toSorted called on non-array");
+  arr = array_method_receiver(js, arr, "toSorted");
+  if (is_err(arr)) return arr;
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   ant_value_t result = array_copy_values(js, arr, len);
@@ -13258,8 +13264,8 @@ static ant_value_t builtin_array_toSorted(ant_params_t) {
 
 static ant_value_t builtin_array_toReversed(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "toReversed called on non-array");
+  arr = array_method_receiver(js, arr, "toReversed");
+  if (is_err(arr)) return arr;
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   ant_value_t result = array_copy_values(js, arr, len);
@@ -13276,8 +13282,8 @@ static ant_value_t builtin_array_toReversed(ant_params_t) {
 
 static ant_value_t builtin_array_toSpliced(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "toSpliced called on non-array");
+  arr = array_method_receiver(js, arr, "toSpliced");
+  if (is_err(arr)) return arr;
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   ant_value_t result = array_copy_values(js, arr, len);
@@ -13293,8 +13299,8 @@ static ant_value_t builtin_array_toSpliced(ant_params_t) {
 
 static ant_value_t builtin_array_with(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "with called on non-array");
+  arr = array_method_receiver(js, arr, "with");
+  if (is_err(arr)) return arr;
   
   if (nargs < 2) return js_mkerr(js, "with requires index and value arguments");
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
@@ -13310,21 +13316,18 @@ static ant_value_t builtin_array_with(ant_params_t) {
 }
 
 static ant_value_t builtin_array_keys(ant_params_t) {
-  if (vtype(js->this_val) != kTypeArray && vtype(js->this_val) != kTypeObject)
-    return js_mkerr(js, "keys called on non-array");
-  return make_array_iterator(js, js->this_val, ARR_ITER_KEYS);
+  ant_value_t arr = array_method_receiver(js, js->this_val, "keys");
+  return is_err(arr) ? arr : make_array_iterator(js, arr, ARR_ITER_KEYS);
 }
 
 static ant_value_t builtin_array_values(ant_params_t) {
-  if (vtype(js->this_val) != kTypeArray && vtype(js->this_val) != kTypeObject)
-    return js_mkerr(js, "values called on non-array");
-  return make_array_iterator(js, js->this_val, ARR_ITER_VALUES);
+  ant_value_t arr = array_method_receiver(js, js->this_val, "values");
+  return is_err(arr) ? arr : make_array_iterator(js, arr, ARR_ITER_VALUES);
 }
 
 static ant_value_t builtin_array_entries(ant_params_t) {
-  if (vtype(js->this_val) != kTypeArray && vtype(js->this_val) != kTypeObject)
-    return js_mkerr(js, "entries called on non-array");
-  return make_array_iterator(js, js->this_val, ARR_ITER_ENTRIES);
+  ant_value_t arr = array_method_receiver(js, js->this_val, "entries");
+  return is_err(arr) ? arr : make_array_iterator(js, arr, ARR_ITER_ENTRIES);
 }
 
 static ant_value_t builtin_array_toString(ant_params_t) {
@@ -13446,8 +13449,8 @@ static bool array_try_builtin_string_locale(
 
 static ant_value_t builtin_array_toLocaleString(ant_params_t) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
-    return js_mkerr(js, "toLocaleString called on non-array");
+  arr = array_method_receiver(js, arr, "toLocaleString");
+  if (is_err(arr)) return arr;
 
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, arr);
@@ -18141,6 +18144,11 @@ ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r) {
     if (try_array_key_membership(js, r, prop_name, prop_len, &array_result))
       return array_result;
   }
+  
+  ant_value_t string_exotic_value;
+  if (!is_sym && vtype(r) == kTypeObject &&
+      js_try_get_string_own_exotic(js, r, prop_name, (size_t)prop_len, &string_exotic_value, NULL))
+    return js_true;
 
   ant_value_t cur = r;
   uint8_t cur_t = vtype(cur);
@@ -18647,17 +18655,12 @@ static ant_value_t proxy_aware_length(ant_t *js, ant_value_t obj, ant_offset_t *
     if (vtype(len_val) == kTypeNumber) *out_len = (ant_offset_t)tod(len_val);
     return js_mkundef();
   }
-  if (obj_type == kTypeArray) return array_like_length_checked(js, obj, out_len);
-  TypedArrayData *ta = array_method_typedarray_data(obj, obj_type);
+  TypedArrayData *ta = obj_type == kTypeArray ? NULL : array_method_typedarray_data(obj, obj_type);
   if (ta) {
     *out_len = (ant_offset_t)ta->length;
     return js_mkundef();
   }
-  ant_prop_loc_t off = lkp_interned(obj, js->intern.length);
-  if (!off.obj) return js_mkundef();
-  ant_value_t len_val = js_prop_load(off);
-  if (vtype(len_val) == kTypeNumber) *out_len = (ant_offset_t)tod(len_val);
-  return js_mkundef();
+  return array_like_length_checked(js, obj, out_len);
 }
 
 static ant_value_t proxy_aware_get_elem(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
@@ -18720,6 +18723,7 @@ static ant_value_t array_method_has_index(ant_t *js, ant_value_t arr, ant_offset
   if (arr_type != kTypeArray) {
     TypedArrayData *ta = array_method_typedarray_data(arr, arr_type);
     if (ta) return js_bool((size_t)idx < ta->length);
+    return do_in(js, tov((double)idx), arr);
   }
   
   return js_bool(arr_has(js, arr, idx));
@@ -18736,11 +18740,15 @@ static ant_value_t array_method_get_index(ant_t *js, ant_value_t arr, ant_offset
   
   uint8_t arr_type = vtype(arr);
   if (arr_type != kTypeArray) {
-  TypedArrayData *ta = array_method_typedarray_data(arr, arr_type);
-  if (ta) {
+    TypedArrayData *ta = array_method_typedarray_data(arr, arr_type);
     ant_value_t item = js_mkundef();
-    if (buffer_typedarray_data_read_index(js, ta, (size_t)idx, &item)) return item;
-  }}
+    if (ta && buffer_typedarray_data_read_index(js, ta, (size_t)idx, &item)) return item;
+    if (!ta) {
+      char idxstr[16];
+      size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)idx);
+      return js_getprop_fallback_len(js, arr, idxstr, idxlen);
+    }
+  }
   
   return arr_get(js, arr, idx);
 }
@@ -20995,6 +21003,7 @@ static bool js_try_get_len(ant_t *js, ant_value_t obj, const char *key, size_t k
   else if (t != kTypeObject) return false;
   ant_prop_loc_t off = lkp(js, obj, key, key_len);
   
+  if (!off.obj && t == kTypeObject && js_try_get_string_own_exotic(js, obj, key, key_len, out, NULL)) return true;
   if (!off.obj) {
     ant_value_t result = try_dynamic_getter(js, obj, key, key_len);
     if (vtype(result) != kTypeUndefined) { *out = result; return true; }
@@ -21557,6 +21566,32 @@ void js_prop_iter_end(ant_iter_t *iter) {
   iter->off = 0;
 }
 
+static void report_unhandled_rejection(ant_t *js, ant_value_t promise, ant_value_t reason) {
+  if (process_has_event_listeners(js, "unhandledRejection")) {
+    ant_value_t event_args[2] = { reason, promise };
+    emit_process_event(js, "unhandledRejection", event_args, 2);
+    process_report_uncaught_exception_if_pending(js);
+    return;
+  }
+
+  if (js_fire_unhandled_rejection(js, promise, reason)) return;
+
+  if (process_has_event_listeners(js, "uncaughtException")) {
+    ant_value_t event_args[2] = { reason, js_mkstr(js, "unhandledRejection", 18) };
+    emit_process_event(js, "uncaughtException", event_args, 2);
+    
+    if (Ant_Exception_Pending(js)) {
+      js_take_thrown(js, js_mkundef());
+      if (!js->uncaught_nonfatal) exit(7);
+    }
+    
+    return;
+  }
+
+  print_unhandled_promise_rejection(js, reason);
+  if (!js->uncaught_nonfatal) process_exit_with(js, EXIT_FAILURE);
+}
+
 void js_check_unhandled_rejections(ant_t *js) {
   size_t keep = 0;
   
@@ -21581,11 +21616,9 @@ void js_check_unhandled_rejections(ant_t *js) {
     ant_value_t reason = pd->value;
     GC_ROOT_PIN(js, p); GC_ROOT_PIN(js, reason);
     
-    if (!js_fire_unhandled_rejection(js, p, reason))
-      print_unhandled_promise_rejection(js, reason);
-      
-    GC_ROOT_RESTORE(js, root_mark);
     pd->unhandled_reported = true;
+    report_unhandled_rejection(js, p, reason);
+    GC_ROOT_RESTORE(js, root_mark);
   }
   
   js->pending_rejections.len = keep;

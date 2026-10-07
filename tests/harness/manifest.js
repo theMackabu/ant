@@ -168,6 +168,7 @@ export function targets() {
     'test_immediate_handle.cjs',
     'test_timer_handle.cjs',
     'test_process_exit_code.cjs',
+    'test_unhandled_rejection_exit.cjs',
     'test_using_identifier.cjs',
     'test_regexp_lone_surrogates.cjs',
     'test_json_lone_surrogates.cjs',
