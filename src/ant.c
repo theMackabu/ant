@@ -2692,27 +2692,31 @@ static bool js_arguments_setter(
   return true;
 }
 
-static void js_arguments_after_define(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t desc) {
+typedef struct {
+  bool accessor;
+  bool has_value;
+  bool has_writable;
+  bool writable;
+  ant_value_t value;
+} define_desc_fields_t;
+
+static void js_arguments_after_define(
+  ant_t *js, ant_value_t obj, const char *key, 
+  size_t key_len, const define_desc_fields_t *desc
+) {
   unsigned long idx = 0;
   if (!parse_array_index(key, key_len, (ant_offset_t)-1, &idx)) return;
   
   ant_arguments_state_t *state = js_arguments_state(obj);
   if (!state || (uint32_t)idx >= state->mapped_count || state->deleted[idx]) return;
 
-  bool accessor = 
-    vtype(js_get(js, desc, "get")) != kTypeUndefined || 
-    vtype(js_get(js, desc, "set")) != kTypeUndefined;
-  
-  if (accessor) {
+  if (desc->accessor) {
     state->deleted[idx] = 1;
     return;
   }
 
-  ant_value_t has_value = do_in(js, js_mkstr(js, "value", 5), desc);
-  if (has_value == js_true) js_arguments_write_mapped(js, state, idx, js_get(js, desc, "value"));
-
-  ant_value_t writable = js_get(js, desc, "writable");
-  if (vtype(writable) != kTypeUndefined && !js_truthy(js, writable)) state->deleted[idx] = 1;
+  if (desc->has_value) js_arguments_write_mapped(js, state, idx, desc->value);
+  if (desc->has_writable && !desc->writable) state->deleted[idx] = 1;
 }
 
 static void js_arguments_unmap_all(ant_t *js, ant_value_t obj) {
@@ -9415,7 +9419,8 @@ static void array_materialize_dense_for_define(ant_t *js, ant_value_t obj, const
 
 // TODO: decompose this huge function into small pieces
 static ant_value_t object_define_property_keyed(
-  ant_t *js, ant_value_t obj, property_key_view_t *key, ant_value_t descriptor
+  ant_t *js, ant_value_t obj, property_key_view_t *key, 
+  ant_value_t descriptor, define_desc_fields_t *fields
 ) {
   bool sym_key = key->is_symbol;
   ant_value_t prop = key->js_key;
@@ -9514,6 +9519,11 @@ static ant_value_t object_define_property_keyed(
   if ((has_value || has_writable) && (has_get || has_set)) {
     return js_mkerr(js, "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute");
   }
+
+  if (fields) *fields = (define_desc_fields_t){
+    .accessor = has_get || has_set, .has_value = has_value,
+    .has_writable = has_writable, .writable = writable, .value = value,
+  };
 
   ant_object_t *arr_ptr = (!sym_key && is_length_key(prop_str, prop_len))
     ? array_length_obj_ptr(as_obj)
@@ -9809,9 +9819,12 @@ static ant_value_t object_define_property(
   size_t root_mark = root_key ? gc_root_scope(js) : 0;
   if (root_key) GC_ROOT_PIN(js, key.js_key);
 
-  ant_value_t result = object_define_property_keyed(js, obj, &key, descriptor);
+  define_desc_fields_t fields = {0};
+  ant_value_t result = object_define_property_keyed(js, obj, &key, descriptor, &fields);
+  
   if (!is_err(result) && !key.is_symbol && is_arguments_object(obj))
-    js_arguments_after_define(js, obj, key.bytes, key.length, descriptor);
+    js_arguments_after_define(js, obj, key.bytes, key.length, &fields);
+  
   property_key_view_dispose(&key);
   if (root_key) GC_ROOT_RESTORE(js, root_mark);
   
