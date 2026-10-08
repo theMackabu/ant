@@ -1,0 +1,11 @@
+--- a/src/uv-common.c
++++ b/src/uv-common.c
+@@ -957,7 +957,7 @@
+   int i;
+ 
+   for (i = 0; i < count; i++)
+-    uv__free(cpu_infos[i].model);
++    uv__free((void *) cpu_infos[i].model);
+ 
+   uv__free(cpu_infos);
+ #endif  /* __linux__ */

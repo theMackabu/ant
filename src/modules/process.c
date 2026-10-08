@@ -1436,7 +1436,10 @@ static ant_value_t process_set_exit_code(ant_t *js, ant_process_state_t *ps, ant
   ant_value_type_t type = vtype(code);
   if (type == kTypeString) js_getstr(js, code, &len);
   
-  double n = type == kTypeNumber ? js_getnum(code) : len > 0 ? tod(js_to_numeric(js, code)) : NAN;
+  double n = type == kTypeNumber 
+    ? js_getnum(code) : len > 0 
+    ? tod(js_to_numeric(js, code)) : JS_NAN;
+  
   if (isnan(n) && type != kTypeNumber) {
     char buf[64], message[192];
     bool primitive = type == kTypeString || type == kTypeBool || type == kTypeBigInt || type == kTypeSymbol;

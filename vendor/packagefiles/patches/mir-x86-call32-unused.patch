@@ -1,0 +1,10 @@
+--- a/mir-gen-x86_64.c
++++ b/mir-gen-x86_64.c
+@@ -3055,6 +3055,7 @@
+                (call32_p ? "32" : "64"), ref_func->name, (unsigned long long) addr_loc,
+                (unsigned long long) addr_before, (unsigned long long) addr);
+     });
++    (void) call32_p;
+   }
+   VARR_TRUNC (call_ref_t, gen_ctx->target_ctx->call_refs, 0);
+ }
