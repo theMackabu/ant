@@ -76,11 +76,11 @@ bench('concat with escapes', () => {
   for (let i = 0; i < 2000; i++) s += "\n\t\x41\u0042";
 }, 20);
 
-// octal escapes (legacy)
-bench('octal escapes', () => {
+bench('octal escapes', new Function(`
   let s = '';
-  for (let i = 0; i < 5000; i++) s = "\101\102\103\141\142\143";
-}, 50);
+  for (let i = 0; i < 5000; i++) s = "\\101\\102\\103\\141\\142\\143";
+  return s;
+`), 50);
 
 // form feed, vertical tab, backspace
 bench('rare escapes (\\v\\f\\b)', () => {
