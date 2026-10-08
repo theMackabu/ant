@@ -8008,17 +8008,15 @@ bool sv_op_stack_effect(const sv_func_t *func, const uint8_t *ip, int *pops, int
   return true;
 }
 
-static int sv_func_compute_max_stack(const sv_func_t *func) {
+static int sv_func_stack_depths(const sv_func_t *func, int *depth) {
   const int len = func->code_len;
   const uint8_t *code = func->code;
   if (len <= 0) return 0;
 
-  int *depth = malloc((size_t)len * sizeof(int));
   int *work = malloc((size_t)len * sizeof(int));
   uint8_t *queued = calloc((size_t)len, sizeof(uint8_t));
   
-  if (!depth || !work || !queued) {
-    free(depth);
+  if (!work || !queued) {
     free(work);
     free(queued);
     return -1;
@@ -8099,10 +8097,27 @@ static int sv_func_compute_max_stack(const sv_func_t *func) {
     }
   }
 
-  free(depth);
   free(work);
   free(queued);
   return ok ? max : -1;
+}
+
+static int sv_func_compute_max_stack(const sv_func_t *func) {
+  if (func->code_len <= 0) return 0;
+  int *depth = malloc((size_t)func->code_len * sizeof(int));
+  int max = depth ? sv_func_stack_depths(func, depth) : -1;
+  free(depth);
+  return max;
+}
+
+int *sv_func_stack_depth_map(const sv_func_t *func) {
+  if (func->code_len <= 0) return NULL;
+  int *depth = malloc((size_t)func->code_len * sizeof(int));
+  if (depth && sv_func_stack_depths(func, depth) < 0) {
+    free(depth);
+    return NULL;
+  }
+  return depth;
 }
 
 void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {

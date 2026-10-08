@@ -752,30 +752,9 @@ bool jit_setup_frame(jit_compile_t *c) {
 
     c->promote_sites = calloc((size_t)c->func->code_len, 1);
     if (c->promote_sites) {
-      uint8_t *code = c->func->code;
-      int n = 0, cap = 16;
-      int (*edges)[2] = malloc((size_t)cap * sizeof(*edges));
-      bool edges_ok = edges != NULL;
-      for (int off = 0; edges_ok && off < c->func->code_len; ) {
-        uint8_t op = code[off];
-        int sz = sv_op_size[op];
-        if (sz == 0) break;
-        uint16_t flags = sv_op_flags[op];
-        int target = -1;
-        if (flags & SV_OPF_JIT_BRANCH32) target = off + sz + sv_get_i32(code + off + 1);
-        else if (flags & SV_OPF_JIT_BRANCH8) target = off + sz + (int8_t)sv_get_i8(code + off + 1);
-        if (target >= 0 && target <= off) {
-          if (n == cap) {
-            int (*grown)[2] = realloc(edges, (size_t)cap * 2 * sizeof(*edges));
-            if (!grown) { edges_ok = false; break; }
-            edges = grown;
-            cap *= 2;
-          }
-          edges[n][0] = target; edges[n][1] = off; n++;
-        }
-        off += sz;
-      }
-      if (edges_ok) {
+      int (*edges)[2] = NULL;
+      int n = jit_back_edges(c->func, &edges);
+      if (n >= 0) {
         for (int i = 0; i < n; i++) {
           bool nested = false, has_inner = false;
           for (int j = 0; j < n; j++) {

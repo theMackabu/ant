@@ -2,45 +2,61 @@
 #include "../silver/ops/globals.h"
 #include "silver/feedback.h"
 
-int jit_hot_loop_upvalue(const sv_func_t *func) {
-  // This only chooses which immutable cell pointer to hoist, not its value
-  // or location. Prefer deeper loops, then repeated reads at that depth.
-  // Fixed bounds keep the optional heuristic cheap for large functions.
-  if (!func || !func->code || func->upvalue_count <= 0) return -1;
-  struct { int start, end; } loops[64];
-  struct { unsigned depth, reads; } scores[32] = {{0}};
-  unsigned loop_count = 0;
+int jit_back_edges(const sv_func_t *func, int (**out)[2]) {
+  int n = 0, cap = 0;
+  *out = NULL;
   for (int off = 0; off < func->code_len;) {
     sv_op_t op = func->code[off];
-    if (op >= OP__COUNT) return -1;
+    if (op >= OP__COUNT) goto fail;
     int size = sv_op_size[op];
-    if (!size || size > func->code_len - off) return -1;
+    if (!size || size > func->code_len - off) goto fail;
     uint16_t flags = sv_op_flags[op];
-    int64_t target = func->code_len;
+    int64_t target = -1;
     if (flags & SV_OPF_JIT_BRANCH32)
       target = (int64_t)off + size + sv_get_i32(func->code + off + 1);
     else if (flags & SV_OPF_JIT_BRANCH8)
-      target = (int64_t)off + size + sv_get_i8(func->code + off + 1);
+      target = (int64_t)off + size + (int8_t)sv_get_i8(func->code + off + 1);
     if (target >= 0 && target <= off) {
-      if (loop_count == sizeof loops / sizeof *loops) return -1;
-      loops[loop_count].start = (int)target;
-      loops[loop_count++].end = off;
+      if (n == cap) {
+        cap = cap ? cap * 2 : 16;
+        int (*grown)[2] = realloc(*out, (size_t)cap * sizeof(**out));
+        if (!grown) goto fail;
+        *out = grown;
+      }
+      (*out)[n][0] = (int)target;
+      (*out)[n++][1] = off;
     }
     off += size;
   }
-  if (!loop_count) return -1;
+  return n;
+fail:
+  free(*out);
+  *out = NULL;
+  return -1;
+}
+
+int jit_hot_loop_upvalue(const sv_func_t *func) {
+  if (!func || !func->code || func->upvalue_count <= 0) return -1;
+  struct { unsigned depth, reads; } scores[32] = {{0}};
+  int (*loops)[2] = NULL;
+  int loop_count = jit_back_edges(func, &loops);
+  if (loop_count <= 0 || loop_count > 64) {
+    free(loops);
+    return -1;
+  }
   for (int off = 0; off < func->code_len; off += sv_op_size[func->code[off]]) {
     if (func->code[off] != OP_GET_UPVAL) continue;
     uint16_t index = sv_get_u16(func->code + off + 1);
     if (index >= func->upvalue_count || index >= sizeof scores / sizeof *scores) continue;
     unsigned depth = 0;
-    for (unsigned i = 0; i < loop_count; i++)
-      if (off >= loops[i].start && off <= loops[i].end) depth++;
+    for (int i = 0; i < loop_count; i++)
+      if (off >= loops[i][0] && off <= loops[i][1]) depth++;
     if (depth > scores[index].depth) {
       scores[index].depth = depth;
       scores[index].reads = 1;
     } else if (depth && depth == scores[index].depth) scores[index].reads++;
   }
+  free(loops);
   int best = -1;
   for (unsigned i = 0; i < sizeof scores / sizeof *scores; i++) {
     if (!scores[i].depth) continue;

@@ -159,26 +159,31 @@ void jit_emit_bindings(jit_compile_t *c) {
 
       MIR_label_t gg_slow = MIR_new_label(c->ctx);
       MIR_label_t gg_done = MIR_new_label(c->ctx);
+      jit_stale_exit_t stale;
+      jit_stale_exit_t *stale_exit = c->r_ic_epoch_val ? jit_stale_exit_for(c, &stale) : NULL;
       bool gg_fast = c->r_ic_epoch_val != 0 &&
                      mir_emit_get_global_ic_fastpath(
                          c->ctx, c->jit_func, c->js, c->func, c->bc_off,
-                         c->r_js, dst, gg_slow, c->r_ic_epoch_val, c->ip);
-      if (gg_fast) {
+                         c->r_js, dst, gg_slow, c->r_ic_epoch_val, c->ip, stale_exit);
+      jit_note_stale_exit(c, stale_exit, pre_op_sp);
+      if (!gg_fast || !stale_exit || !stale_exit->replaces_slow_path) {
+        if (gg_fast) {
+          MIR_append_insn(c->ctx, c->jit_func,
+                          MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, gg_done)));
+          MIR_append_insn(c->ctx, c->jit_func, gg_slow);
+        }
         MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, gg_done)));
-        MIR_append_insn(c->ctx, c->jit_func, gg_slow);
+                        MIR_new_call_insn(c->ctx, 7,
+                                          MIR_new_ref_op(c->ctx, c->gg_proto),
+                                          MIR_new_ref_op(c->ctx, c->imp_gg),
+                                          MIR_new_reg_op(c->ctx, dst),
+                                          MIR_new_reg_op(c->ctx, c->r_js),
+                                          MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)atom->str),
+                                          MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->func),
+                                          MIR_new_int_op(c->ctx, (int64_t)c->bc_off)));
+        jit_emit_throw_if_error(c, dst);
+        if (gg_fast) MIR_append_insn(c->ctx, c->jit_func, gg_done);
       }
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_call_insn(c->ctx, 7,
-                                        MIR_new_ref_op(c->ctx, c->gg_proto),
-                                        MIR_new_ref_op(c->ctx, c->imp_gg),
-                                        MIR_new_reg_op(c->ctx, dst),
-                                        MIR_new_reg_op(c->ctx, c->r_js),
-                                        MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)atom->str),
-                                        MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->func),
-                                        MIR_new_int_op(c->ctx, (int64_t)c->bc_off)));
-      jit_emit_throw_if_error(c, dst);
-      if (gg_fast) MIR_append_insn(c->ctx, c->jit_func, gg_done);
       if (c->vs.known_builtin && atom->len == 6 && memcmp(atom->str, "String", 6) == 0)
         c->vs.known_builtin[c->vs.sp - 1] = JIT_BUILTIN_STRING;
       else if (c->vs.known_builtin && atom->len == 4 && memcmp(atom->str, "Math", 4) == 0)

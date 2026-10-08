@@ -1385,7 +1385,20 @@ ant_value_t jit_helper_bailout_resume(
     ? js_mkerr_typed(vm->js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "invalid bailout closure")
     : mkval(kTypeError, 0);
 
-  sv_jit_on_bailout_at(closure->func, "resume", (int)bc_offset);
+  sv_func_t *fn = closure->func;
+  if (bc_offset & SV_JIT_RESUME_STALE) {
+    bc_offset &= ~SV_JIT_RESUME_STALE;
+    
+    if (!fn->jit_code) fn->jit_code_cold = false;
+    sv_jit_prime_osr(fn);
+    
+    if (sv_jit_warn_unlikely) fprintf(
+      stderr, "jit: stale-exit func=%s at bc=%d\n",
+      fn->debug->name ? fn->debug->name : "<anonymous>", (int)bc_offset
+    );
+  } 
+  
+  else sv_jit_on_bailout_at(fn, "resume", (int)bc_offset);
   
   return jit_resume_in_interpreter(
     vm, closure, this_val, new_target, super_val,
@@ -1417,8 +1430,7 @@ ant_value_t jit_helper_promote_resume(
     );
   }
   
-  if (sv_jit_promote_pending(fn) || fn->jit_code)
-    fn->back_edge_count = fn->jit_osr_threshold > 0 ? fn->jit_osr_threshold - 1 : 0;
+  if (sv_jit_promote_pending(fn) || fn->jit_code) sv_jit_prime_osr(fn);
   
   return jit_resume_in_interpreter(
     vm, closure, this_val, new_target, super_val,

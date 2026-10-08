@@ -109,6 +109,12 @@ typedef struct {
   int n_locals;
   MIR_reg_t lbuf, d_slot;
 } jit_bailout_emit_t;
+
+typedef struct {
+  MIR_label_t label;
+  bool replaces_slow_path;
+} jit_stale_exit_t;
+
 #define NANBOX_TFUNC_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeFunction)
 #define NANBOX_TOBJ_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeObject)
 #define NANBOX_TPROM_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypePromise)
@@ -478,14 +484,16 @@ bool mir_emit_get_field_ic_fastpath(
     MIR_reg_t obj,
     MIR_reg_t dst,
     MIR_label_t slow,
-    MIR_reg_t r_global_epoch);
+    MIR_reg_t r_global_epoch,
+    jit_stale_exit_t *stale_exit);
 bool mir_emit_get_global_ic_fastpath(
     MIR_context_t ctx, MIR_item_t fn,
     ant_t *js, sv_func_t *func, int bc_off,
     MIR_reg_t r_js, MIR_reg_t dst,
     MIR_label_t slow, MIR_reg_t r_global_epoch,
-    uint8_t *ip);
+    uint8_t *ip, jit_stale_exit_t *stale_exit);
 void scan_osr_entries(sv_func_t *func, osr_entry_map_t *osr);
+int jit_back_edges(const sv_func_t *func, int (**out)[2]);
 bool func_writes_params(sv_func_t *func);
 jit_child_kind_t classify_child_closure_kind(sv_func_t *parent, sv_func_t *child);
 bool *scan_captured_locals(sv_func_t *func, int n_locals);

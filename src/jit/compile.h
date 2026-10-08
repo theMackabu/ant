@@ -15,6 +15,13 @@ typedef struct {
   int saved_sp;
 } jit_catch_sp_t;
 
+typedef struct {
+  MIR_label_t label;
+  int bc_off;
+  int sp;
+  int types_at;
+} jit_stale_site_t;
+
 typedef struct jit_compile {
   MIR_item_t self_proto;
   MIR_item_t helper2_proto;
@@ -296,6 +303,12 @@ typedef struct jit_compile {
   jit_bailout_emit_t bailout_ctx;
   jit_bailout_emit_t promote_ctx;
   uint8_t *promote_sites;
+  uint8_t *osr_loop_body;
+  jit_stale_site_t *stale_sites;
+  int stale_site_count, stale_site_cap;
+  uint8_t *stale_types;
+  int stale_types_len, stale_types_cap;
+  MIR_label_t *stale_sp_exits;
   jit_label_map_t lm;
   osr_entry_map_t osr_map;
   jit_try_entry_t jit_try_stack[JIT_TRY_MAX];
@@ -331,6 +344,8 @@ static inline bool jit_speculate_unseen_numeric(const jit_compile_t *c, uint8_t 
 }
 
 void jit_emit_exit_ret(jit_compile_t *c, MIR_op_t ret_op);
+jit_stale_exit_t *jit_stale_exit_for(jit_compile_t *c, jit_stale_exit_t *exit);
+void jit_note_stale_exit(jit_compile_t *c, const jit_stale_exit_t *exit, int pre_op_sp);
 void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg);
 void jit_emit_element_barrier(
     jit_compile_t *c, MIR_reg_t obj, MIR_reg_t index,

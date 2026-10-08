@@ -57,6 +57,56 @@ static void jit_emit_resume_tramp(jit_compile_t *c, const jit_bailout_emit_t *ba
                 MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, r_resume_res)));
 }
 
+static void jit_emit_stale_exits(jit_compile_t *c) {
+  MIR_context_t ctx = c->ctx;
+  MIR_item_t fn = c->jit_func;
+
+  for (int s = 0; s < c->stale_site_count; s++) {
+    const jit_stale_site_t *site = &c->stale_sites[s];
+    MIR_append_insn(ctx, fn, site->label);
+    for (int i = 0; i < site->sp; i++) {
+      uint8_t type = c->stale_types[site->types_at + i];
+      if (type != SLOT_BOXED)
+        mir_emit_slot_boxed(ctx, fn, c->vs.regs[i], c->vs.d_regs[i], type, c->r_d_slot);
+    }
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, c->r_bailout_off),
+        MIR_new_int_op(ctx, (int64_t)site->bc_off | SV_JIT_RESUME_STALE)));
+    MIR_label_t *depth_exit = &c->stale_sp_exits[site->sp];
+    if (!*depth_exit) *depth_exit = MIR_new_label(ctx);
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, *depth_exit)));
+  }
+
+  if (!c->needs_bailout) {
+    c->bailout_ctx.spill = MIR_new_label(ctx);
+    c->bailout_ctx.tramp = MIR_new_label(ctx);
+    c->needs_bailout = true;
+  }
+
+  // The prologue may have skipped the bailout buffers; a frame leaves here once
+  MIR_label_t drop = MIR_new_label(ctx);
+  for (int sp = 0; sp <= c->vs.max; sp++) {
+    if (!c->stale_sp_exits[sp]) continue;
+    MIR_append_insn(ctx, fn, c->stale_sp_exits[sp]);
+    if (!c->feat.needs_args_buf && sp > 0)
+      MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_ALLOCA, MIR_new_reg_op(ctx, c->r_args_buf),
+          MIR_new_uint_op(ctx, (uint64_t)sp * sizeof(ant_value_t))));
+    for (int i = 0; i < sp; i++)
+      MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+          MIR_new_mem_op(ctx, MIR_T_I64, (MIR_disp_t)(i * (int)sizeof(ant_value_t)), c->r_args_buf, 0, 1),
+          MIR_new_reg_op(ctx, c->vs.regs[i])));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, c->r_bailout_sp), MIR_new_int_op(ctx, sp)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, drop)));
+  }
+
+  MIR_append_insn(ctx, fn, drop);
+  mir_emit_drop_owner_code_once(ctx, fn, c->js, "stale", 0, NULL, 0, true);
+  if (!c->needs_lbuf && !c->use_unified_slotbuf && c->n_locals > 0)
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_ALLOCA, MIR_new_reg_op(ctx, c->r_lbuf),
+        MIR_new_uint_op(ctx, (uint64_t)c->n_locals * sizeof(ant_value_t))));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, c->bailout_ctx.spill)));
+}
+
 static void jit_unroll_numeric_loops(jit_compile_t *c) {
   for (MIR_insn_t jump = DLIST_HEAD(MIR_insn_t, c->jit_func->u.func->insns); jump;
        jump = DLIST_NEXT(MIR_insn_t, jump)) {
@@ -101,12 +151,12 @@ static bool jit_insn_ends_flow(MIR_insn_t insn) {
   }
 }
 
-static void jit_sink_cold_blocks(jit_compile_t *c) {
+static void jit_sink_cold_blocks(jit_compile_t *c, MIR_insn_t body_tail) {
   enum { SCAN_LIMIT = 512 };
   DLIST(MIR_insn_t) *insns = &c->jit_func->u.func->insns;
   MIR_insn_t tail = DLIST_TAIL(MIR_insn_t, *insns);
-  if (!tail || !jit_insn_ends_flow(tail)) return;
-  MIR_insn_t last = tail;
+  if (!tail || !jit_insn_ends_flow(tail) || !body_tail) return;
+  MIR_insn_t last = body_tail;
 
   for (MIR_insn_t jump = DLIST_HEAD(MIR_insn_t, *insns); jump && jump != last;) {
     MIR_insn_t first = DLIST_NEXT(MIR_insn_t, jump);
@@ -511,11 +561,13 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
     jit_emit_exit_ret(c, MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0)));
   }
 
+  MIR_insn_t body_tail = DLIST_TAIL(MIR_insn_t, c->jit_func->u.func->insns);
+  if (c->stale_site_count) jit_emit_stale_exits(c);
   if (c->needs_bailout) jit_emit_resume_tramp(c, &c->bailout_ctx, c->imp_resume, "resume_res");
   if (c->needs_promote) jit_emit_resume_tramp(c, &c->promote_ctx, c->imp_promote_resume, "promote_res");
 
   if (c->ctx == c->jc->ctx_hot) jit_unroll_numeric_loops(c);
-  jit_sink_cold_blocks(c);
+  jit_sink_cold_blocks(c, body_tail);
   MIR_finish_func(c->ctx);
   MIR_finish_module(c->ctx);
   if (sv_dump_jit_unlikely) MIR_output_module(c->ctx, stderr, c->mod);
@@ -545,6 +597,10 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   free(c->captured_locals);
   free(c->feat.builder_target_slots);
   free(c->promote_sites);
+  free(c->osr_loop_body);
+  free(c->stale_sites);
+  free(c->stale_types);
+  free(c->stale_sp_exits);
 
   if (!c->ok) {
     if (sv_jit_warn_unlikely) fprintf(
