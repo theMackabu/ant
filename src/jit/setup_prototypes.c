@@ -692,6 +692,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_promote_due = MIR_new_import(c->ctx, "jit_helper_promote_due");
   c->imp_close_upval = MIR_new_import(c->ctx, "jit_helper_close_upval");
   c->imp_upval_barrier = MIR_new_import(c->ctx, "jit_helper_upval_barrier");
+  c->imp_upval_flagged = MIR_new_import(c->ctx, "jit_helper_upval_flagged");
   c->imp_elem_barrier = MIR_new_import(c->ctx, "jit_helper_elem_barrier");
   c->imp_param_counters_off = MIR_new_import(c->ctx, "jit_helper_disable_param_counters");
   c->imp_number_to_string = MIR_new_import(c->ctx, "jit_helper_number_to_string");

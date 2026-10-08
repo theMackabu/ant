@@ -61,7 +61,7 @@ try {
   assert.equal(r.stdout, antChannel.stdout);
 
   r = spawnSync(out, ['--throw'], { encoding: 'utf8', cwd: os.homedir() });
-  assert.equal(r.status, 0, `unhandled TLA rejection exits 0 like plain ant, got ${r.status}`);
+  assert.equal(r.status, 1, `unhandled TLA rejection exits 1, got ${r.status}`);
   assert.match(r.stderr, /\/\$ant\/lib\/util\.ts:\d+:\d+/, r.stderr);
   assert.match(r.stderr, /kaboom/, r.stderr);
 

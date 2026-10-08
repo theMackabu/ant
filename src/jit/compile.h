@@ -141,6 +141,7 @@ typedef struct jit_compile {
   MIR_item_t imp_promote_due;
   MIR_item_t imp_close_upval;
   MIR_item_t imp_upval_barrier;
+  MIR_item_t imp_upval_flagged;
   MIR_item_t imp_elem_barrier;
   MIR_item_t imp_param_counters_off;
   MIR_item_t imp_number_to_string;

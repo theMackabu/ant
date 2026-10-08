@@ -274,6 +274,11 @@ void jit_helper_upval_barrier(
   sv_upvalue_t *uv, ant_value_t val
 );
 
+void jit_helper_upval_flagged(
+  ant_t *js,
+  sv_upvalue_t *uv, ant_value_t val
+);
+
 void jit_helper_adopt_open_upvalues(
   sv_vm_t *vm,
   sv_upvalue_t **open_upvalues

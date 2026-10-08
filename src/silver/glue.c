@@ -1296,6 +1296,11 @@ void jit_helper_upval_barrier(ant_t *js, sv_upvalue_t *uv, ant_value_t val) {
   gc_upvalue_write_barrier(js, uv, val);
 }
 
+void jit_helper_upval_flagged(ant_t *js, sv_upvalue_t *uv, ant_value_t val) {
+  gc_upvalue_write_barrier(js, uv, val);
+  if (uv->maps_arguments) js_arguments_upvalue_written(js, uv, val);
+}
+
 void jit_helper_close_upval(
   sv_vm_t *vm, int32_t slot_idx, ant_value_t *locals, int n_locals,
   sv_upvalue_t **open_upvalues

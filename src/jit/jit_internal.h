@@ -307,6 +307,7 @@ void mir_emit_close_marked_slots(
 void mir_emit_upval_write_barrier(
     MIR_context_t ctx, MIR_item_t jit_func,
     MIR_item_t upval_barrier_proto, MIR_item_t imp_upval_barrier,
+    MIR_item_t imp_upval_flagged,
     MIR_reg_t r_js, MIR_reg_t r_uv, MIR_reg_t src, int un);
 void mir_emit_exit_ret(
     MIR_context_t ctx, MIR_item_t fn,

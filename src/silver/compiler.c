@@ -2730,7 +2730,9 @@ static void emit_closure(sv_compiler_t *c, int index) {
   sv_func_t *child = (sv_func_t *)vptr(c->constants[index]);
   uint32_t scope = 0;
   if (child->needs_eval_env && !capture_dynamic_eval_scope(c, &scope)) return;
-  emit_op(c, child->needs_eval_env ? OP_CLOSURE_EVAL : OP_CLOSURE);
+  sv_op_t op = child->needs_eval_env ? OP_CLOSURE_EVAL
+    : (!c->is_strict && c->strict_args_local >= 0) ? OP_CLOSURE_ARGS : OP_CLOSURE;
+  emit_op(c, op);
   emit_u32(c, (uint32_t)index);
   if (child->needs_eval_env) emit_u32(c, scope);
 }
@@ -7373,6 +7375,7 @@ static bool sv_func_compute_fusable_leaf(sv_func_t *func) {
     sv_op_t op = (sv_op_t)*ip;
     switch (op) {
       case OP_CLOSURE_EVAL:
+      case OP_CLOSURE_ARGS:
       case OP_INIT_EVAL_ENV:
       case OP_CLOSURE:
       case OP_THIS:

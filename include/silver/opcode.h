@@ -297,6 +297,7 @@ OP_DEF(  INIT_EVAL_ENV,     1,   0,   0, none)
 OP_DEF(  CLOSURE_EVAL,      9,   0,   1, u32)
 OP_DEF(  PUT_EVAL_FUNCTION, 5,   1,   0, atom)
 OP_DEF(  INIT_GLOBAL_LEX,   5,   1,   0, atom)
+OP_DEF(  CLOSURE_ARGS,      5,   0,   1, const)     /* closure in a function with mapped arguments: link captured params */
 #undef OP_DEF
 #undef op_def
 #endif

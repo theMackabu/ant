@@ -713,6 +713,7 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   if (obj->native.tag != 0 || ant_object_has_sidecar(obj)) {
     ant_value_t value = js_obj_from_ptr(obj);
     sv_eval_env_gc_mark(js, obj);
+    if (obj->flags.arguments_object) gc_mark_arguments_cells(js, value);
     gc_mark_abort_signal_object(js, value, gc_mark_value);
     gc_mark_eventemitter_object(js, value, gc_mark_value);
   }

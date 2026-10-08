@@ -138,16 +138,14 @@ static inline void sv_op_put_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) 
   uint16_t idx = sv_get_u16(ip + 1);
   sv_upvalue_t *uv = frame->upvalues[idx];
   ant_value_t val = vm->stack[--vm->sp];
-  *uv->location = val;
-  gc_upvalue_write_barrier(vm->js, uv, val);
+  sv_upvalue_store(vm->js, uv, val);
 }
 
 static inline void sv_op_set_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) {
   uint16_t idx = sv_get_u16(ip + 1);
   sv_upvalue_t *uv = frame->upvalues[idx];
   ant_value_t val = vm->stack[vm->sp - 1];
-  *uv->location = val;
-  gc_upvalue_write_barrier(vm->js, uv, val);
+  sv_upvalue_store(vm->js, uv, val);
 }
 
 static inline ant_value_t sv_op_close_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) {
@@ -246,6 +244,19 @@ static inline ant_value_t sv_op_closure(
   GC_ROOT_RESTORE(js, mark);
 
   return js_mkundef();
+}
+
+static inline ant_value_t sv_op_closure_args(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
+  sv_func_t *func, uint8_t *ip
+) {
+  ant_value_t result = sv_op_closure(vm, js, frame, func, ip);
+  if (is_err(result) || vtype(frame->arguments_obj) == kTypeUndefined) return result;
+
+  sv_closure_t *closure = js_func_closure(vm->stack[vm->sp - 1]);
+  for (int i = 0; i < closure->func->upvalue_count; i++)
+    if (closure->func->upval_descs[i].is_local) js_arguments_link_upvalue(js, frame, closure->upvalues[i]);
+  return result;
 }
 
 #endif

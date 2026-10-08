@@ -2585,6 +2585,7 @@ enum { ANT_ARGUMENTS_NATIVE_TAG = 0x41524753u }; // ARGS
 
 typedef struct {
   sv_frame_t *direct_frame;
+  sv_upvalue_t **cells;
   int frame_index;
   uint32_t mapped_count;
   uint8_t in_setter;
@@ -2600,6 +2601,69 @@ static inline ant_arguments_state_t *js_arguments_state(ant_value_t obj) {
   return (ant_arguments_state_t *)js_get_native(obj, ANT_ARGUMENTS_NATIVE_TAG);
 }
 
+static inline sv_upvalue_t *js_arguments_cell(ant_arguments_state_t *state, unsigned long idx) {
+  if (!state || !state->cells || idx >= state->mapped_count || state->deleted[idx]) return NULL;
+  return state->cells[idx];
+}
+
+static inline ant_value_t js_arguments_mapped_value(ant_t *js, ant_arguments_state_t *state, unsigned long idx, bool *mapped) {
+  sv_upvalue_t *cell = js_arguments_cell(state, idx);
+  *mapped = true;
+  if (cell) return *cell->location;
+  if (state && state->frame_index >= 0 && idx < state->mapped_count && !state->deleted[idx])
+    return js_arguments_frame(js, state)->bp[idx];
+  *mapped = false;
+  return js_mkundef();
+}
+
+static inline void js_arguments_write_mapped(ant_t *js, ant_arguments_state_t *state, unsigned long idx, ant_value_t value) {
+  sv_upvalue_t *cell = js_arguments_cell(state, idx);
+  if (cell) {
+    *cell->location = value;
+    gc_upvalue_write_barrier(js, cell, value);
+  } else if (state && state->frame_index >= 0 && idx < state->mapped_count && !state->deleted[idx])
+    js_arguments_frame(js, state)->bp[idx] = value;
+}
+
+static void js_arguments_link_cell(ant_t *js, ant_value_t obj, ant_arguments_state_t *state, size_t idx, sv_upvalue_t *uv) {
+  if (!state || idx >= state->mapped_count || idx > UINT8_MAX || state->deleted[idx]) return;
+  state->cells[idx] = uv;
+  uv->maps_arguments = 1;
+  uv->args_index = (uint8_t)idx;
+  uv->args_owner = (uint32_t)(((uint8_t *)js_obj_ptr(obj) - js->obj_arena.base) / js->obj_arena.elem_size);
+}
+
+void js_arguments_link_upvalue(ant_t *js, sv_frame_t *frame, sv_upvalue_t *uv) {
+  if (!frame->bp || uv->location < frame->bp) return;
+  ant_value_t obj = frame->arguments_obj;
+  js_arguments_link_cell(js, obj, js_arguments_state(obj), (size_t)(uv->location - frame->bp), uv);
+}
+
+void js_arguments_upvalue_written(ant_t *js, sv_upvalue_t *uv, ant_value_t value) {
+  ant_object_t *owner = (ant_object_t *)(js->obj_arena.base + (size_t)uv->args_owner * js->obj_arena.elem_size);
+  if (!fixed_arena_contains(&js->obj_arena, owner) || owner->mark_epoch == ANT_GC_DEAD) return;
+  if (owner->type_tag != kTypeArray || !owner->flags.arguments_object) return;
+
+  ant_value_t obj = js_obj_from_ptr(owner);
+  ant_arguments_state_t *state = js_arguments_state(obj);
+  uint32_t idx = uv->args_index;
+  if (!state || idx >= state->mapped_count || state->cells[idx] != uv || state->deleted[idx]) return;
+
+  if (owner->u.array.data && idx < owner->u.array.len && idx < owner->u.array.cap) {
+    owner->u.array.data[idx] = value;
+    gc_write_barrier(js, owner, value);
+    return;
+  }
+  state->in_setter = 1;
+  arr_set(js, obj, (ant_offset_t)idx, value);
+  state->in_setter = 0;
+}
+
+void gc_mark_arguments_cells(ant_t *js, ant_value_t obj) {
+  ant_arguments_state_t *state = js_arguments_state(obj);
+  if (state && state->cells) gc_mark_upvalue_cells(js, state->cells, state->mapped_count);
+}
+
 static ant_value_t js_arguments_getter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
   ant_offset_t arr_len = get_array_length(js, obj);
   unsigned long idx = 0;
@@ -2607,17 +2671,9 @@ static ant_value_t js_arguments_getter(ant_t *js, ant_value_t obj, const char *k
   if (!parse_array_index(key, key_len, arr_len, &idx)) return js_mkundef();
   if ((ant_offset_t)idx >= arr_len) return js_mkundef();
 
-  ant_arguments_state_t *state = js_arguments_state(obj);
-  if (
-    state && state->frame_index >= 0 &&
-    (uint32_t)idx < state->mapped_count &&
-    !state->deleted[idx]
-  ) {
-    sv_frame_t *frame = js_arguments_frame(js, state);
-    return frame->bp[idx];
-  }
-
-  return arr_get(js, obj, (ant_offset_t)idx);
+  bool mapped = false;
+  ant_value_t value = js_arguments_mapped_value(js, js_arguments_state(obj), idx, &mapped);
+  return mapped ? value : arr_get(js, obj, (ant_offset_t)idx);
 }
 
 static bool js_arguments_setter(
@@ -2632,15 +2688,7 @@ static bool js_arguments_setter(
   arr_set(js, obj, (ant_offset_t)idx, value);
   
   if (state) state->in_setter = 0;
-  if (
-    state && state->frame_index >= 0 &&
-    (uint32_t)idx < state->mapped_count &&
-    !state->deleted[idx]
-  ) {
-    sv_frame_t *frame = js_arguments_frame(js, state);
-    frame->bp[idx] = value;
-  }
-
+  js_arguments_write_mapped(js, state, idx, value);
   return true;
 }
 
@@ -2661,8 +2709,7 @@ static void js_arguments_after_define(ant_t *js, ant_value_t obj, const char *ke
   }
 
   ant_value_t has_value = do_in(js, js_mkstr(js, "value", 5), desc);
-  if (has_value == js_true && state->frame_index >= 0)
-    js_arguments_frame(js, state)->bp[idx] = js_get(js, desc, "value");
+  if (has_value == js_true) js_arguments_write_mapped(js, state, idx, js_get(js, desc, "value"));
 
   ant_value_t writable = js_get(js, desc, "writable");
   if (vtype(writable) != kTypeUndefined && !js_truthy(js, writable)) state->deleted[idx] = 1;
@@ -2673,14 +2720,13 @@ static void js_arguments_unmap_all(ant_t *js, ant_value_t obj) {
   if (!state) return;
   
   for (uint32_t i = 0; i < state->mapped_count; i++) {
-    if (state->deleted[i]) continue;
+    bool mapped = false;
+    ant_value_t value = js_arguments_mapped_value(js, state, i, &mapped);
+    if (!mapped) continue;
     
-    if (state->frame_index >= 0) {
-      state->in_setter = 1;
-      arr_set(js, obj, (ant_offset_t)i, js_arguments_frame(js, state)->bp[i]);
-      state->in_setter = 0;
-    }
-    
+    state->in_setter = 1;
+    arr_set(js, obj, (ant_offset_t)i, value);
+    state->in_setter = 0;
     state->deleted[i] = 1;
   }
 }
@@ -2694,9 +2740,18 @@ static bool js_arguments_deleter(ant_t *js, ant_value_t obj, const char *key, si
   return true;
 }
 
+static const ant_exotic_ops_t js_arguments_exotic_ops = {
+  .getter = js_arguments_getter,
+  .setter = js_arguments_setter,
+  .deleter = js_arguments_deleter,
+};
+
 static void js_arguments_finalizer(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
-  free(js_get_native(value, ANT_ARGUMENTS_NATIVE_TAG));
+  ant_arguments_state_t *state = js_arguments_state(value);
+  
+  free(state);
+  obj->exotic_ops = NULL;
   js_clear_native(value, ANT_ARGUMENTS_NATIVE_TAG);
 }
 
@@ -2919,24 +2974,28 @@ ant_value_t js_create_arguments_object(
   }
 
   if (!is_strict && mapped_count > 0 && frame && vm) {
-    ant_arguments_state_t *state = calloc(
-      1, sizeof(*state) + 
-      (size_t)mapped_count * sizeof(state->deleted[0])
-    );
+    size_t cells_off = (sizeof(ant_arguments_state_t) + (size_t)mapped_count + _Alignof(sv_upvalue_t *) - 1) & ~(_Alignof(sv_upvalue_t *) - 1);
+    ant_arguments_state_t *state = calloc(1, cells_off + (size_t)mapped_count * sizeof(sv_upvalue_t *));
     
     if (!state) {
       GC_ROOT_RESTORE(js, root_mark);
       return js_mkerr(js, "oom");
     }
 
+    state->cells = (sv_upvalue_t **)((uint8_t *)state + cells_off);
     state->frame_index = (int)(frame - vm->frames);
     state->mapped_count = (uint32_t)mapped_count;
     
     js_set_native(arr, state, ANT_ARGUMENTS_NATIVE_TAG);
-    js_set_finalizer(arr, js_arguments_finalizer);
-    js_set_getter(arr, js_arguments_getter);
-    js_set_setter(arr, js_arguments_setter);
-    js_set_deleter(arr, js_arguments_deleter);
+    target->finalizer = js_arguments_finalizer;
+    target->flags.is_exotic = 1;
+    target->exotic_ops = &js_arguments_exotic_ops;
+
+    for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next) {
+      if (uv->location < frame->bp) break;
+      if (uv->location < frame->bp + mapped_count)
+        js_arguments_link_cell(js, arr, state, (size_t)(uv->location - frame->bp), uv);
+    }
   }
 
   GC_ROOT_RESTORE(js, root_mark);
@@ -2970,8 +3029,9 @@ void js_arguments_detach(ant_t *js, ant_value_t obj) {
 
   for (ant_offset_t i = 0; i < limit; i++) {
     if (state->deleted[i]) continue;
+    sv_upvalue_t *cell = js_arguments_cell(state, (unsigned long)i);
     state->in_setter = 1;
-    arr_set(js, obj, i, frame->bp[i]);
+    arr_set(js, obj, i, cell ? *cell->location : frame->bp[i]);
     state->in_setter = 0;
   }
 

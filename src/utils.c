@@ -137,6 +137,12 @@ static int ant_xdg_path(
 #endif
 }
 
+static bool ant_mkdir_one(const char *path) {
+  if (ANT_MKDIR(path) == 0 || errno == EEXIST) return true;
+  struct stat st;
+  return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
 int ant_mkdir_p(const char *path) {
   if (!path || !path[0]) return -1;
 
@@ -151,15 +157,24 @@ int ant_mkdir_p(const char *path) {
     tmp[len - 1] == '\\')
   ) tmp[--len] = '\0';
 
-  for (char *p = tmp + 1; *p; p++) {
+  char *start = tmp + 1;
+#ifdef _WIN32
+  if (len >= 2 && tmp[1] == ':') start = (tmp[2] == '\\' || tmp[2] == '/') ? tmp + 3 : tmp + 2;
+  else if ((tmp[0] == '\\' || tmp[0] == '/') && (tmp[1] == '\\' || tmp[1] == '/')) {
+    int seps = 0;
+    for (start = tmp + 2; *start && seps < 2; start++)
+      if ((*start == '\\' || *start == '/') && ++seps == 2) break;
+  }
+#endif
+
+  for (char *p = start; *p; p++) {
     if (*p != '/' && *p != '\\') continue;
     char sep = *p; *p = '\0';
-    if (ANT_MKDIR(tmp) != 0 && errno != EEXIST) return -1;
+    if (p > tmp && !ant_mkdir_one(tmp)) return -1;
     *p = sep;
   }
 
-  if (ANT_MKDIR(tmp) != 0 && errno != EEXIST) return -1;
-  return 0;
+  return ant_mkdir_one(tmp) ? 0 : -1;
 }
 
 int ant_xdg_cache_path(char *out, size_t out_size, const char *suffix) {

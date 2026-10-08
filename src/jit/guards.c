@@ -297,8 +297,10 @@ void mir_emit_close_marked_slots(
 void mir_emit_upval_write_barrier(
     MIR_context_t ctx, MIR_item_t jit_func,
     MIR_item_t upval_barrier_proto, MIR_item_t imp_upval_barrier,
+    MIR_item_t imp_upval_flagged,
     MIR_reg_t r_js, MIR_reg_t r_uv, MIR_reg_t src, int un) {
   MIR_label_t skip_barrier = MIR_new_label(ctx);
+  MIR_label_t check_value = MIR_new_label(ctx);
   char rn_tmp[32];
   snprintf(rn_tmp, sizeof(rn_tmp), "uvwb%d", un);
   MIR_reg_t r_tmp = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, rn_tmp);
@@ -306,13 +308,28 @@ void mir_emit_upval_write_barrier(
   MIR_append_insn(ctx, jit_func,
                   MIR_new_insn(ctx, MIR_MOV,
                                MIR_new_reg_op(ctx, r_tmp),
-                               MIR_new_mem_op(ctx, MIR_T_U8,
+                               MIR_new_mem_op(ctx, MIR_T_U16,
                                               (MIR_disp_t)offsetof(sv_upvalue_t, in_remember_set),
                                               r_uv, 0, 1)));
   MIR_append_insn(ctx, jit_func,
-                  MIR_new_insn(ctx, MIR_BT,
+                  MIR_new_insn(ctx, MIR_BEQ,
                                MIR_new_label_op(ctx, skip_barrier),
+                               MIR_new_reg_op(ctx, r_tmp),
+                               MIR_new_int_op(ctx, 1)));
+  MIR_append_insn(ctx, jit_func,
+                  MIR_new_insn(ctx, MIR_BF,
+                               MIR_new_label_op(ctx, check_value),
                                MIR_new_reg_op(ctx, r_tmp)));
+  MIR_append_insn(ctx, jit_func,
+                  MIR_new_call_insn(ctx, 5,
+                                    MIR_new_ref_op(ctx, upval_barrier_proto),
+                                    MIR_new_ref_op(ctx, imp_upval_flagged),
+                                    MIR_new_reg_op(ctx, r_js),
+                                    MIR_new_reg_op(ctx, r_uv),
+                                    MIR_new_reg_op(ctx, src)));
+  MIR_append_insn(ctx, jit_func,
+                  MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, skip_barrier)));
+  MIR_append_insn(ctx, jit_func, check_value);
   MIR_append_insn(ctx, jit_func,
                   MIR_new_insn(ctx, MIR_UBLE,
                                MIR_new_label_op(ctx, skip_barrier),

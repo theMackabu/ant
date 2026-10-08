@@ -1660,10 +1660,11 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_ARRAY:     { sv_op_array(vm, js, ip);         NEXT(OP_ARRAY); }
   L_SET_BRAND: { sv_op_set_brand(vm, ip);         NEXT(OP_SET_BRAND); }
 
-  L_REGEXP:        { sv_op_regexp(vm, js);                               NEXT(OP_REGEXP); }
-  L_CLOSURE:       { VM_CHECK(sv_op_closure(vm, js, frame, func, ip));   NEXT(OP_CLOSURE); }
-  L_CLOSURE_EVAL:  { VM_CHECK(sv_op_closure(vm, js, frame, func, ip));   NEXT(OP_CLOSURE_EVAL); }
-  L_INIT_EVAL_ENV: { VM_CHECK(sv_eval_init_variable_env(vm, js, frame)); NEXT(OP_INIT_EVAL_ENV); }
+  L_REGEXP:        { sv_op_regexp(vm, js);                                  NEXT(OP_REGEXP); }
+  L_CLOSURE:       { VM_CHECK(sv_op_closure(vm, js, frame, func, ip));      NEXT(OP_CLOSURE); }
+  L_CLOSURE_EVAL:  { VM_CHECK(sv_op_closure(vm, js, frame, func, ip));      NEXT(OP_CLOSURE_EVAL); }
+  L_CLOSURE_ARGS:  { VM_CHECK(sv_op_closure_args(vm, js, frame, func, ip)); NEXT(OP_CLOSURE_ARGS); }
+  L_INIT_EVAL_ENV: { VM_CHECK(sv_eval_init_variable_env(vm, js, frame));    NEXT(OP_INIT_EVAL_ENV); }
   
   L_PUT_EVAL_FUNCTION: {
     sv_atom_t *name = &func->atoms[sv_get_u32(ip + 1)];

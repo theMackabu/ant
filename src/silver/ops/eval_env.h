@@ -50,6 +50,9 @@ static inline sv_upvalue_t *sv_eval_capture_upvalue(sv_vm_t *vm, ant_value_t *sl
   uv->location = slot;
   uv->next = *pp;
   *pp = uv;
+  
+  if (vm->fp >= 0 && vtype(vm->frames[vm->fp].arguments_obj) != kTypeUndefined)
+    js_arguments_link_upvalue(vm->js, &vm->frames[vm->fp], uv);
 
   return uv;
 }
@@ -136,8 +139,7 @@ static inline bool sv_eval_binding_store(
   sv_upvalue_t *uv = state->cells[index];
   
   if (!uv) return false;
-  *uv->location = value;
-  gc_upvalue_write_barrier(js, uv, value);
+  sv_upvalue_store(js, uv, value);
   
   if (
     (binding->kind & SV_EVAL_BIND_KIND_MASK) == SV_EVAL_BIND_PARAM &&
