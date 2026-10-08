@@ -321,6 +321,7 @@ static ant_value_t timer_make_object(ant_t *js, timer_entry_t *entry, double del
   
   if (is_err(obj)) {
     entry->detached = true;
+    timer_close_entry(entry);
     return obj;
   }
 
