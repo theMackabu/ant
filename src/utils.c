@@ -138,7 +138,7 @@ static int ant_xdg_path(
 }
 
 static bool ant_mkdir_one(const char *path) {
-  if (ANT_MKDIR(path) == 0 || errno == EEXIST) return true;
+  if (ANT_MKDIR(path) == 0) return true;
   struct stat st;
   return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }

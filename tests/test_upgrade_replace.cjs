@@ -78,6 +78,9 @@ const server = http.createServer((req, res) => {
   res.end(body);
 });
 
+// Windows CRT stdout is text mode, so the child's "\n" arrives as "\r\n"
+const lf = text => text.replace(/\r\n/g, '\n');
+
 function runAnt(args, extraEnv = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(installedAnt, args, {
@@ -140,18 +143,18 @@ async function main() {
     });
     assert.strictEqual(result.timedOut, false);
     assert.strictEqual(result.status, 0, result.stderr);
-    assert.strictEqual(result.stdout, `${currentVersion}\n`);
+    assert.strictEqual(lf(result.stdout), `${currentVersion}\n`, JSON.stringify(result.stdout));
 
     const beforeChannelRequests = requests.length;
     result = await runAnt(['--version-channel'], { ANT_CANARY: isCanary ? '0' : '1' });
     assert.strictEqual(result.timedOut, false);
     assert.strictEqual(result.status, 0, result.stderr);
-    assert.strictEqual(result.stdout, `${Ant.channel}\n`);
+    assert.strictEqual(lf(result.stdout), `${Ant.channel}\n`, JSON.stringify(result.stdout));
     assert.strictEqual(requests.length, beforeChannelRequests, 'channel lookup should not use the network');
 
     result = await runAnt(['--no-color', '-e', 'console.log(Ant.version)']);
     assert.strictEqual(result.status, 0, result.stderr);
-    assert.strictEqual(result.stdout, `${currentVersion}\n`);
+    assert.strictEqual(lf(result.stdout), `${currentVersion}\n`, JSON.stringify(result.stdout));
 
     result = await runAnt(['--no-color', '--version'], { ANT_NO_VERSION_CHECK: '1' });
     assert.strictEqual(result.status, 0, result.stderr);
