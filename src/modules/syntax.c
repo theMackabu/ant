@@ -178,7 +178,6 @@ static ant_value_t js_syntax_parse_javascript(ant_params_t) {
 
   const char *saved_filename = js->filename;
   js->filename = options.filename;
-  js_clear_error_site(js);
 
   code_arena_mark_t mark = parse_arena_mark(js);
   
@@ -205,9 +204,9 @@ static ant_value_t js_syntax_parse_javascript(ant_params_t) {
   bool has_module_syntax = (program->flags & FN_MODULE_SYNTAX) != 0;
   if (options.parse_mode == SYNTAX_PARSE_SCRIPT && has_module_syntax) {
     parse_arena_rewind(js, mark);
-    js_set_error_site_lc(js, source, (ant_offset_t)source_len, options.filename, 0, 1, 0, 0);
-    ant_value_t error = js_mkerr_typed(
-      js, JS_ERR_SYNTAX,
+    js_error_site_t site = js_error_site_lc(source, (ant_offset_t)source_len, options.filename, 0, 1, 0, 0);
+    ant_value_t error = js_mkerr_at(
+      js, &site, JS_ERR_SYNTAX,
       "import/export syntax is not allowed when sourceType is 'script'"
     );
     js->filename = saved_filename;

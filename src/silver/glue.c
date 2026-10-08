@@ -1072,11 +1072,6 @@ __attribute__((noinline)) int64_t jit_helper_is_truthy(ant_t *js, ant_value_t v)
   return 0;
 }
 
-static inline void jit_set_error_site_from_func(ant_t *js, sv_func_t *func, int32_t bc_off) {
-  if (!func) return;
-  js_set_error_site_from_bc(js, func, (int)bc_off, func->debug->filename);
-}
-
 static __attribute__((noinline)) ant_value_t jit_get_field_fallback(
   ant_t *js, ant_value_t obj,
   const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
@@ -1101,9 +1096,6 @@ static __attribute__((noinline)) ant_value_t jit_get_field_fallback(
       func->jit_code = NULL;
     }
   }
-  
-  if ((vtype(obj) == kTypeNull || vtype(obj) == kTypeUndefined) && is_err(out))
-    jit_set_error_site_from_func(js, func, bc_off);
   
   return out;
 }
@@ -1156,9 +1148,7 @@ ant_value_t jit_helper_import_named(
   const char *str, uint32_t len,
   sv_func_t *func, int32_t bc_off
 ) {
-  ant_value_t out = sv_import_named_value(js, ns, str, len);
-  if (is_err(out)) jit_set_error_site_from_func(js, func, bc_off);
-  return out;
+  return sv_import_named_value(js, ns, str, len);
 }
 
 ant_value_t jit_helper_export(
@@ -1517,8 +1507,9 @@ ant_value_t jit_helper_get_elem(
   
   uint8_t ot = vtype(obj);
   if (ot == kTypeNull || ot == kTypeUndefined) {
-    jit_set_error_site_from_func(js, func, bc_off);
-    return sv_mk_nullish_read_error_by_key(js, obj, key);
+    uint8_t *ip = (func && bc_off >= 0 && bc_off < func->code_len) ? func->code + bc_off : NULL;
+    js_error_site_t site = sv_error_site_at(func, ip);
+    return sv_mk_nullish_read_error_by_key(js, &site, obj, key);
   }
   
   if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {

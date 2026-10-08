@@ -3892,10 +3892,7 @@ static ant_value_t call_proto_accessor(
     if (vtype(symbol) == kTypeSymbol) return js_symbol_description_value(js, symbol);
   }
 
-  js_error_site_t saved_errsite = js_error_site_save(js);
   ant_value_t result = sv_vm_call(js->vm, js, accessor, prim, arg, arg_count, NULL, js_mkundef());
-  
-  js_error_site_restore(js, &saved_errsite);
   if (is_setter) return is_err(result) ? result : (arg ? *arg : js_mkundef());
 
   return result;
@@ -4104,9 +4101,7 @@ static ant_value_t setprop_impl(ant_t *js, ant_value_t obj, ant_value_t k, ant_v
       ant_value_t setter = desc_setter;
       uint8_t setter_type = vtype(setter);
       if (setter_type == kTypeFunction || setter_type == kTypeBuiltin) {
-        js_error_site_t saved_errsite = js_error_site_save(js);
         ant_value_t result = sv_vm_call(js->vm, js, setter, obj, &v, 1, NULL, js_mkundef());
-        js_error_site_restore(js, &saved_errsite);
         if (is_err(result)) return result;
         return v;
       }
@@ -20573,7 +20568,6 @@ static ant_value_t execute_top_level(
   ant_value_t this_val, coroutine_t **async_coro_out
 ) {
   if (async_coro_out) *async_coro_out = NULL;
-  js_clear_error_site(js);
 
   ant_value_t result;
   // TODO: this-newtarget-frame-migration
@@ -20618,8 +20612,6 @@ static ant_value_t js_execute_compiled_eval_bytecode(
   ant_t *js, sv_func_t *func,
   ant_value_t this_val, ant_value_t eval_env, ant_value_t new_target
 ) {
-  js_clear_error_site(js);
-
   if (sv_dump_bytecode_unlikely) sv_disasm(js, func, js->filename);
   GC_ROOT_SAVE(mark, js);
 

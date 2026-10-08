@@ -632,8 +632,8 @@ static ant_offset_t sv_srcpos_to_offset_local(const char *code, ant_offset_t cle
   return off;
 }
 
-void js_set_error_site_from_bc(ant_t *js, sv_func_t *func, int bc_offset, const char *filename) {
-  if (!js || !func || !func->debug->source || func->debug->source_len <= 0) return;
+bool js_error_site_from_bc(js_error_site_t *out, sv_func_t *func, int bc_offset, const char *filename) {
+  if (!out || !func || !func->debug->source || func->debug->source_len <= 0) return false;
 
   const char *src = func->debug->source;
   ant_offset_t src_len = (ant_offset_t)func->debug->source_len;
@@ -652,23 +652,23 @@ void js_set_error_site_from_bc(ant_t *js, sv_func_t *func, int bc_offset, const 
   } else if (have_pos) {
     off = sv_srcpos_to_offset_local(src, src_len, line, col);
     span_len = 0;
-  } else return;
+  } else return false;
 
-  js_set_error_site_lc(js, src, src_len, file, off, span_len, line, col);
-  js->errsite.unit = func->unit;
+  *out = js_error_site_lc(src, src_len, file, off, span_len, line, col);
+  return out->valid;
 }
 
-void js_set_error_site_from_vm_top(ant_t *js) {
-  sv_vm_t *vm = js->vm;
-  if (!js || !vm || vm->fp < 0) return;
+bool js_error_site_from_vm_top(ant_t *js, js_error_site_t *out) {
+  sv_vm_t *vm = js ? js->vm : NULL;
+  if (!vm || vm->fp < 0) return false;
   
   sv_frame_t *frame = &vm->frames[vm->fp];
   sv_func_t *func = frame->func;
-  if (!func) return;
+  if (!func) return false;
   
   int bc_off = 0;
   if (frame->ip && func->code) bc_off = (int)(frame->ip - func->code);
-  js_set_error_site_from_bc(js, func, bc_off, func->debug->filename);
+  return js_error_site_from_bc(out, func, bc_off, func->debug->filename);
 }
 
 static inline ant_flat_string_t *sv_string_builder_flat_ptr(ant_value_t value) {

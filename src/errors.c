@@ -230,8 +230,13 @@ static size_t append_errbuf_fmt(errbuf_t *eb, size_t used, const char *fmt, ...)
   }
 }
 
-static size_t append_error_header(errbuf_t *eb, ant_t *js, size_t used, int line, int col) {
-  const char *file = (js->errsite.valid && js->errsite.filename) ? js->errsite.filename : js->filename;
+static const char *error_site_file(ant_t *js, const js_error_site_t *site, const char *fallback) {
+  if (site && site->valid && site->filename) return site->filename;
+  return js->filename ? js->filename : fallback;
+}
+
+static size_t append_error_header(errbuf_t *eb, ant_t *js, const js_error_site_t *site, size_t used, int line, int col) {
+  const char *file = error_site_file(js, site, NULL);
   if (file) return append_errbuf_fmt(eb, used, "%s:%d:%d\n", file, line, col);
   return append_errbuf_fmt(eb, used, "<eval>:%d:%d\n", line, col);
 }
@@ -612,9 +617,7 @@ ant_value_t js_capture_raw_stack(ant_t *js) {
   eb.buf[0] = '\0';
 
   size_t n = 0;
-  const char *file = (js->errsite.valid && js->errsite.filename)
-    ? js->errsite.filename
-    : (js->filename ? js->filename : "<eval>");
+  const char *file = error_site_file(js, NULL, "<eval>");
 
   sv_vm_t *vm = js->vm;
   if (vm && vm->fp >= 0) {
@@ -710,87 +713,46 @@ static bool append_error_context(
   return true;
 }
 
-static void format_error_stack(errbuf_t *eb, ant_t *js, size_t *n, int line, int col) {
-  const char *file = (js->errsite.valid && js->errsite.filename)
-    ? js->errsite.filename
-    : (js->filename ? js->filename : "<eval>");
+static void format_error_stack(errbuf_t *eb, ant_t *js, const js_error_site_t *site, size_t *n, int line, int col) {
+  const char *file = error_site_file(js, site, "<eval>");
   
   error_frame_errbuf_ctx_t ctx = { eb, n, true };
   if (!error_visit_vm_stack_frames(js, file, error_visit_frame_append_errbuf, &ctx)) return;
   if (!js->vm || js->vm->fp <= 0) append_error_frame(eb, n, NULL, file, line, col, true);
 }
 
-void js_set_error_site_lc(
-  ant_t *js, const char *src, ant_offset_t src_len, const char *filename,
+js_error_site_t js_error_site_lc(
+  const char *src, ant_offset_t src_len, const char *filename,
   ant_offset_t off, ant_offset_t span_len, uint32_t line, uint32_t col
 ) {
-  if (!js) return;
-  
-  js->errsite.unit = NULL;
-  js->errsite.src = src;
-  js->errsite.src_len = src_len;
-  js->errsite.filename = filename;
-  js->errsite.off = off < 0 ? 0 : off;
-  js->errsite.span_len = span_len < 0 ? 0 : span_len;
-  js->errsite.line = line;
-  js->errsite.col = col;
-  js->errsite.valid = (src != NULL && src_len >= 0);
+  return (js_error_site_t){
+    .src = src,
+    .filename = filename,
+    .src_len = src_len,
+    .off = off < 0 ? 0 : off,
+    .span_len = span_len < 0 ? 0 : span_len,
+    .line = line,
+    .col = col,
+    .valid = (src != NULL && src_len >= 0),
+  };
 }
 
 void js_get_call_location(ant_t *js, const char **out_filename, int *out_line, int *out_col) {
   if (!js) return;
-  if (!js->errsite.valid) js_set_error_site_from_vm_top(js);
+  js_error_site_t site = {0};
+  js_error_site_from_vm_top(js, &site);
   
-  if (out_filename) *out_filename = (js->errsite.valid && js->errsite.filename) ? js->errsite.filename : js->filename;
+  if (out_filename) *out_filename = error_site_file(js, &site, NULL);
   if (out_line) *out_line = 1;
   if (out_col)  *out_col  = 1;
   
-  if (js->errsite.valid && js->errsite.line > 0) {
-    if (out_line) *out_line = (int)js->errsite.line;
-    if (out_col)  *out_col  = (int)js->errsite.col;
-  } else if (js->errsite.valid && js->errsite.src) get_line_col(
-    js->errsite.src, js->errsite.src_len, 
-    js->errsite.off, out_line, out_col
+  if (site.valid && site.line > 0) {
+    if (out_line) *out_line = (int)site.line;
+    if (out_col)  *out_col  = (int)site.col;
+  } else if (site.valid && site.src) get_line_col(
+    site.src, site.src_len, 
+    site.off, out_line, out_col
   );
-}
-
-void js_clear_error_site(ant_t *js) {
-  if (!js) return;
-  memset(&js->errsite, 0, sizeof(js->errsite));
-}
-
-js_error_site_t js_error_site_save(ant_t *js) {
-  sv_code_unit_pin(js->errsite.unit);
-  return js->errsite;
-}
-
-void js_error_site_restore(ant_t *js, const js_error_site_t *saved) {
-  js->errsite = *saved;
-  sv_code_unit_unpin(saved->unit);
-}
-
-static void resolve_error_site(
-  ant_t *js, const char **out_src, ant_offset_t *out_src_len,
-  ant_offset_t *out_src_pos, ant_offset_t *out_span_len
-) {
-  if (js && !js->errsite.valid) js_set_error_site_from_vm_top(js);
-
-  const char *src = NULL;
-  ant_offset_t src_len = 0;
-  ant_offset_t src_pos = 0;
-  ant_offset_t span_len = 0;
-
-  if (js->errsite.valid) {
-    src = js->errsite.src;
-    src_len = js->errsite.src_len;
-    src_pos = js->errsite.off;
-    span_len = js->errsite.span_len;
-  }
-
-  if (out_src) *out_src = src;
-  if (out_src_len) *out_src_len = src_len;
-  if (out_src_pos) *out_src_pos = src_pos;
-  if (out_span_len) *out_span_len = span_len;
 }
 
 typedef struct {
@@ -804,7 +766,9 @@ typedef struct {
   char error_line[256];
 } js_error_render_site_t;
 
-static void js_prepare_error_render_site(ant_t *js, js_error_render_site_t *site) {
+static void js_prepare_error_render_site(
+  const js_error_site_t *errsite, js_error_render_site_t *site
+) {
   if (!site) return;
   memset(site, 0, sizeof(*site));
   site->line = 1;
@@ -814,15 +778,17 @@ static void js_prepare_error_render_site(ant_t *js, js_error_render_site_t *site
 
   ant_offset_t src_span_len = 0;
   ant_offset_t line_start = 0, line_end = 0;
-  resolve_error_site(js, &site->src, &site->src_len, &site->src_pos, &src_span_len);
-
-  bool have_lc = 
-    js->errsite.valid && js->errsite.line > 0 &&
-    js->errsite.src == site->src && js->errsite.off == site->src_pos;
   
-  if (have_lc) {
-    site->line = (int)js->errsite.line;
-    site->col = (int)js->errsite.col;
+  if (errsite->valid) {
+    site->src = errsite->src;
+    site->src_len = errsite->src_len;
+    site->src_pos = errsite->off;
+    src_span_len = errsite->span_len;
+  }
+  
+  if (errsite->valid && errsite->line > 0) {
+    site->line = (int)errsite->line;
+    site->col = (int)errsite->col;
   } else get_line_col(site->src, site->src_len, site->src_pos, &site->line, &site->col);
 
   if (site->src_len > ERROR_CONTEXT_MAX_SOURCE_BYTES) {
@@ -839,18 +805,27 @@ static void js_prepare_error_render_site(ant_t *js, js_error_render_site_t *site
   site->error_span_cols = error_span_cols_for_line(site->src_pos, src_span_len, line_start, line_end);
 }
 
-static ant_value_t js_build_stack_text(ant_t *js, js_stack_text_kind_t kind, ant_value_t value) {
+static ant_value_t js_build_stack_text(
+  ant_t *js, const js_error_site_t *errsite,
+  js_stack_text_kind_t kind, ant_value_t value
+) {
   errbuf_t eb = { malloc(4096), 4096 };
   if (!eb.buf) return js_mkundef();
   eb.buf[0] = '\0';
 
+  js_error_site_t top_site = {0};
+  if (!errsite || !errsite->valid) {
+    js_error_site_from_vm_top(js, &top_site);
+    errsite = &top_site;
+  }
+
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, value);
   js_error_render_site_t site;
-  js_prepare_error_render_site(js, &site);
+  js_prepare_error_render_site(errsite, &site);
 
   size_t n = 0;
-  n = append_error_header(&eb, js, 0, site.line, site.col);
+  n = append_error_header(&eb, js, errsite, 0, site.line, site.col);
 
   if (n > 0 && eb.buf[n - 1] == '\n') {
     n--;
@@ -890,7 +865,7 @@ static ant_value_t js_build_stack_text(ant_t *js, js_stack_text_kind_t kind, ant
   } else n = append_error_value(&eb, js, n, value);
 
   size_t frames_offset = n;
-  format_error_stack(&eb, js, &n, site.line, site.col);
+  format_error_stack(&eb, js, errsite, &n, site.line, site.col);
 
   ant_value_t stack_str = js_mkstr(js, eb.buf, n);
   free(eb.buf);
@@ -910,20 +885,23 @@ static ant_value_t js_build_stack_text(ant_t *js, js_stack_text_kind_t kind, ant
   return stack_str;
 }
 
-void js_capture_stack(ant_t *js, ant_value_t err_obj) {
+void js_capture_stack_at(ant_t *js, ant_value_t err_obj, const js_error_site_t *site) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, err_obj);
   
-  ant_value_t stack_str = js_build_stack_text(js, JS_STACK_TEXT_FROM_ERROR_OBJECT, err_obj);
+  ant_value_t stack_str = js_build_stack_text(js, site, JS_STACK_TEXT_FROM_ERROR_OBJECT, err_obj);
   GC_ROOT_PIN(js, stack_str);
   
   if (vtype(stack_str) == kTypeString) {
     js_set(js, err_obj, "stack", stack_str);
     js_set_descriptor(js, js_as_obj(err_obj), "stack", 5, JS_DESC_W | JS_DESC_C);
-    js_clear_error_site(js);
   }
   
   GC_ROOT_RESTORE(js, root_mark);
+}
+
+void js_capture_stack(ant_t *js, ant_value_t err_obj) {
+  js_capture_stack_at(js, err_obj, NULL);
 }
 
 js_err_type_t get_error_type(ant_t *js) {
@@ -933,7 +911,10 @@ js_err_type_t get_error_type(ant_t *js) {
   return (js_err_type_t)((int)js_getnum(err_type) & ~JS_ERR_NO_STACK);
 }
 
-static ant_value_t make_error_value(ant_t *js, js_err_type_t err_type, ant_value_t props, const char *error_msg) {
+static ant_value_t make_error_value(
+  ant_t *js, const js_error_site_t *site,
+  js_err_type_t err_type, ant_value_t props, const char *error_msg
+) {
   bool no_stack = (err_type & JS_ERR_NO_STACK) != 0;
   js_err_type_t base_type = (js_err_type_t)(err_type & ~JS_ERR_NO_STACK);
 
@@ -967,16 +948,16 @@ static ant_value_t make_error_value(ant_t *js, js_err_type_t err_type, ant_value
   if ((T_FLAG_FIND(proto_type) & T_SPECIAL_OBJECT_MASK) != 0)
     js_set_proto_init(err_obj, proto);
 
-  if (!no_stack) js_capture_stack(js, err_obj);
-  js_clear_error_site(js);
+  if (!no_stack) js_capture_stack_at(js, err_obj, site);
   GC_ROOT_RESTORE(js, mark);
 
   return err_obj;
 }
 
-__attribute__((format(printf, 4, 0)))
+__attribute__((format(printf, 5, 0)))
 static ant_value_t CreateFormattedErrorValue(
-  ant_t *js, js_err_type_t err_type, ant_value_t props, const char *fmt, va_list args
+  ant_t *js, const js_error_site_t *site, js_err_type_t err_type,
+  ant_value_t props, const char *fmt, va_list args
 ) {
   char local[256];
   char *message = local;
@@ -1009,7 +990,7 @@ static ant_value_t CreateFormattedErrorValue(
     }
   }
 
-  ant_value_t value = make_error_value(js, err_type, props, message);
+  ant_value_t value = make_error_value(js, site, err_type, props, message);
   if (message != local) free(message);
   return value;
 
@@ -1017,14 +998,7 @@ format_failed:
   return js_throw(js, Ant_Error_Create(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "failed to format error message"));
 }
 
-__attribute__((format(printf, 4, 5)))
-ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props, const char *fmt, ...) {
-  va_list ap;
-  
-  va_start(ap, fmt);
-  ant_value_t value = CreateFormattedErrorValue(js, err_type, props, fmt, ap);
-  va_end(ap);
-
+static ant_value_t raise_error_value(ant_t *js, ant_value_t value) {
   if (is_err(value)) return value;
   ant_value_t stack = js_mkundef();
 
@@ -1032,15 +1006,37 @@ ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props
   return Ant_Exception_Raise(js, value, stack);
 }
 
+__attribute__((format(printf, 4, 5)))
+ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props, const char *fmt, ...) {
+  va_list ap;
+  
+  va_start(ap, fmt);
+  ant_value_t value = CreateFormattedErrorValue(js, NULL, err_type, props, fmt, ap);
+  va_end(ap);
+
+  return raise_error_value(js, value);
+}
+
+__attribute__((format(printf, 4, 5)))
+ant_value_t js_create_error_at(ant_t *js, const js_error_site_t *site, js_err_type_t err_type, const char *fmt, ...) {
+  va_list ap;
+  
+  va_start(ap, fmt);
+  ant_value_t value = CreateFormattedErrorValue(js, site, err_type, js_mkundef(), fmt, ap);
+  va_end(ap);
+
+  return raise_error_value(js, value);
+}
+
 ant_value_t Ant_Error_Create(ant_t *js, js_err_type_t err_type, const char *message) {
-  return make_error_value(js, err_type, js_mkundef(), message);
+  return make_error_value(js, NULL, err_type, js_mkundef(), message);
 }
 
 __attribute__((format(printf, 3, 4)))
 ant_value_t Ant_Error_CreateFormatted(ant_t *js, js_err_type_t err_type, const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  ant_value_t value = CreateFormattedErrorValue(js, err_type, js_mkundef(), fmt, ap);
+  ant_value_t value = CreateFormattedErrorValue(js, NULL, err_type, js_mkundef(), fmt, ap);
   va_end(ap);
   return value;
 }
@@ -1065,14 +1061,12 @@ ant_value_t js_throw(ant_t *js, ant_value_t value) {
   }
 
   if (!no_stack && vtype(stack) != kTypeString)
-    stack = js_build_stack_text(js, JS_STACK_TEXT_FROM_THROW_VALUE, value);
+    stack = js_build_stack_text(js, NULL, JS_STACK_TEXT_FROM_THROW_VALUE, value);
 
   if (vtype(stack) != kTypeString) stack = js_mkundef();
   ant_value_t result = Ant_Exception_Raise(js, value, stack);
 
   GC_ROOT_RESTORE(js, mark);
-  js_clear_error_site(js);
-  
   return result;
 }
 
@@ -1164,10 +1158,7 @@ ant_value_t js_build_callsite_array(ant_t *js) {
   ant_value_t arr = js_mkarr(js);
   callsite_build_ctx_t ctx = { js, arr, proto };
 
-  const char *file = (js->errsite.valid && js->errsite.filename)
-    ? js->errsite.filename
-    : (js->filename ? js->filename : "<eval>");
-
+  const char *file = error_site_file(js, NULL, "<eval>");
   error_visit_vm_stack_frames(js, file, callsite_visit_frame, &ctx);
   return arr;
 }

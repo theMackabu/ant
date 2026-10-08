@@ -1,9 +1,8 @@
 // meson test -C build code-unit-lifetime
 //
 // What may and may not keep a code unit (eval and Function code) alive:
-// - the error site can be left pointing at unit code (reportError reads the
-//   call location and keeps it), but it does not pin the unit; the unit dies
-//   with the rest of the eval and clears the site;
+// - an error site built from unit code is a plain value passed to the error
+//   being created; holding one does not keep the unit alive;
 // - an allocation bigger than a code block gets a block of its own, which is
 //   released with its unit even when a small unit compiled right after it is
 //   still alive;
@@ -38,15 +37,15 @@ int main(void) {
   collect(js);
   size_t units = js->code_units.unit_count;
 
-  // an error site left in eval code, as reportError leaves it
+  // an error site taken in eval code, as reportError takes it
   run(js, "globalThis.reporter = new Function('return 1');");
   sv_func_t *reporter = js_func_closure(js_get(js, js->global, "reporter"))->func;
   assert(reporter->unit);
-  js_set_error_site_from_bc(js, reporter, 0, NULL);
-  assert(js->errsite.unit == reporter->unit);
+  js_error_site_t site = {0};
+  js_error_site_from_bc(&site, reporter, 0, NULL);
+  assert(site.valid);
   run(js, "globalThis.reporter = undefined;");
   collect(js);
-  assert(js->errsite.unit == NULL);
   assert(js->code_units.unit_count == units);
 
   // a 64 KiB literal, then a small unit that stays alive

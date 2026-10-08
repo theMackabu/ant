@@ -25,10 +25,9 @@ void sv_lexer_init(sv_lexer_t *lx, ant_t *js, const char *code, ant_offset_t cle
   lx->st.had_newline = false;
 }
 
-void sv_lexer_set_error_site(sv_lexer_t *lx) {
-  ant_t *js = lx->js;
+js_error_site_t sv_lexer_error_site(const sv_lexer_t *lx) {
   ant_offset_t off = lx->st.toff > 0 ? lx->st.toff : lx->st.pos;
-  js_set_error_site_lc(js, lx->code, lx->clen, js->filename, off, lx->st.tlen, 0, 0);
+  return js_error_site_lc(lx->code, lx->clen, lx->js->filename, off, lx->st.tlen, 0, 0);
 }
 
 void sv_lexer_save_state(const sv_lexer_t *lx, sv_lexer_state_t *st) {
@@ -85,8 +84,8 @@ sv_lex_string_t sv_lexer_str_literal(sv_lexer_t *lx) {
   while (n2++ + 2 < (size_t)lx->st.tlen) {
     if (in[n2] == '\\') {
       if (lx->strict && is_octal_escape(in, n2)) {
-        sv_lexer_set_error_site(lx);
-        (void)js_mkerr_typed(js, JS_ERR_SYNTAX,
+        js_error_site_t site = sv_lexer_error_site(lx);
+        (void)js_mkerr_at(js, &site, JS_ERR_SYNTAX,
           "Octal escape sequences are not allowed in strict mode.");
         return outv;
       }
