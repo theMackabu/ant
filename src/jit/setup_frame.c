@@ -89,6 +89,146 @@ static void jit_emit_cold_entry_counter(jit_compile_t *c, const char *site) {
   MIR_append_insn(c->ctx, c->jit_func, body);
 }
 
+typedef struct {
+  uint32_t start, end;
+  bool handler;
+} jit_dnum_block_t;
+
+static int jit_dnum_local_access(sv_op_t op, const uint8_t *ip, int param_count, bool *writes) {
+  *writes = false;
+  switch (op) {
+    case OP_GET_LOCAL: case OP_GET_LOCAL_CHK: return sv_get_u16(ip + 1);
+    case OP_GET_LOCAL8: return sv_get_u8(ip + 1);
+    case OP_INC_LOCAL: case OP_DEC_LOCAL: case OP_ADD_LOCAL: return sv_get_u8(ip + 1);
+    case OP_GET_SLOT_RAW: case OP_CALL_CALL_SLOT: return (int)sv_get_u16(ip + 1) - param_count;
+    case OP_PUT_LOCAL: case OP_SET_LOCAL: case OP_PUT_LOCAL_CHK: *writes = true; return sv_get_u16(ip + 1);
+    case OP_PUT_LOCAL8: case OP_SET_LOCAL8: *writes = true; return sv_get_u8(ip + 1);
+    default: return -1;
+  }
+}
+
+static int jit_dnum_block_of(const jit_dnum_block_t *blocks, int count, uint32_t off) {
+  int lo = 0, hi = count - 1;
+  while (lo <= hi) {
+    int mid = (lo + hi) / 2;
+    if (off < blocks[mid].start) hi = mid - 1;
+    else if (off >= blocks[mid].end) lo = mid + 1;
+    else return mid;
+  }
+  return -1;
+}
+
+static void jit_clear_maybe_unassigned_dnum(
+  sv_func_t *func, uint8_t *dnum, uint8_t *known_type, int n_locals, int param_count
+) {
+  int *cand = calloc((size_t)n_locals, sizeof(int));
+  int ncand = 0;
+  for (int i = 0; i < n_locals && cand; i++) cand[i] = (dnum[i] || known_type[i] == SV_TI_NUM) ? ncand++ : -1;
+  uint32_t len = (uint32_t)func->code_len;
+  uint8_t *leader = ncand ? calloc((size_t)len + 1, 1) : NULL;
+  if (!leader) { free(cand); return; }
+
+  leader[0] = 1;
+  for (uint32_t off = 0; off < len;) {
+    sv_op_t op = (sv_op_t)func->code[off];
+    int sz = sv_op_size[op];
+    if (sz == 0) break;
+    uint16_t flags = sv_op_flags[op];
+    int64_t target = -1;
+    if (flags & SV_OPF_JIT_BRANCH32) target = (int64_t)off + sz + sv_get_i32(func->code + off + 1);
+    else if (flags & SV_OPF_JIT_BRANCH8) target = (int64_t)off + sz + sv_get_i8(func->code + off + 1);
+    else if (op == OP_TRY_PUSH || op == OP_TRY_PUSH_FINALLY || op == OP_CATCH || op == OP_UNWIND_JMP)
+      target = (int64_t)off + 5 + sv_get_i32(func->code + off + 1);
+    if (target >= 0 && target <= len) leader[target] |= (op == OP_TRY_PUSH || op == OP_TRY_PUSH_FINALLY || op == OP_CATCH || op == OP_UNWIND_JMP) ? 3 : 1;
+    if (target >= 0 || (flags & SV_OPF_TERMINAL)) leader[off + sz < len ? off + sz : len] |= 1;
+    off += (uint32_t)sz;
+  }
+
+  int nblocks = 0;
+  for (uint32_t off = 0; off < len; off++) if (leader[off]) nblocks++;
+  int words = (ncand + 63) / 64;
+  jit_dnum_block_t *blocks = calloc((size_t)nblocks, sizeof(*blocks));
+  uint64_t *in = calloc((size_t)nblocks * (size_t)words, sizeof(uint64_t));
+  uint64_t *state = calloc((size_t)words, sizeof(uint64_t));
+  bool *queued = calloc((size_t)nblocks, sizeof(bool));
+  bool *seen = calloc((size_t)nblocks, sizeof(bool));
+  int *work = calloc((size_t)nblocks + 1, sizeof(int));
+  bool *bad = calloc((size_t)ncand, sizeof(bool));
+  if (!blocks || !in || !state || !queued || !seen || !work || !bad) goto done;
+
+  for (uint32_t off = 0, b = 0; off < len; off++) {
+    if (!leader[off]) continue;
+    if (b > 0) blocks[b - 1].end = off;
+    blocks[b] = (jit_dnum_block_t){ .start = off, .end = len, .handler = (leader[off] & 2) != 0 };
+    b++;
+  }
+
+  int wn = 0;
+  for (int b = 0; b < nblocks; b++) if (b == 0 || blocks[b].handler) {
+    memset(in + (size_t)b * words, 0xff, (size_t)words * sizeof(uint64_t));
+    work[wn++] = b; queued[b] = seen[b] = true;
+  }
+
+  for (int pass = 0; pass < 2; pass++) {
+    while (wn > 0) {
+      int b = work[--wn];
+      queued[b] = false;
+      memcpy(state, in + (size_t)b * words, (size_t)words * sizeof(uint64_t));
+      bool falls = true;
+      int64_t target = -1;
+      for (uint32_t off = blocks[b].start; off < blocks[b].end;) {
+        sv_op_t op = (sv_op_t)func->code[off];
+        int sz = sv_op_size[op];
+        if (sz == 0) { falls = false; break; }
+        bool writes = false;
+        int local = jit_dnum_local_access(op, func->code + off, param_count, &writes);
+        if (local >= 0 && local < n_locals && cand[local] >= 0) {
+          int ci = cand[local];
+          uint64_t bit = 1ull << (ci & 63);
+          if (!writes && (state[ci >> 6] & bit)) bad[ci] = true;
+          if (op == OP_INC_LOCAL || op == OP_DEC_LOCAL || op == OP_ADD_LOCAL || writes) state[ci >> 6] &= ~bit;
+        }
+        if (op == OP_SET_LOCAL_UNDEF) {
+          uint16_t li = sv_get_u16(func->code + off + 1);
+          if (li < n_locals && cand[li] >= 0) state[cand[li] >> 6] |= 1ull << (cand[li] & 63);
+        }
+        uint16_t flags = sv_op_flags[op];
+        if (flags & SV_OPF_JIT_BRANCH32) target = (int64_t)off + sz + sv_get_i32(func->code + off + 1);
+        else if (flags & SV_OPF_JIT_BRANCH8) target = (int64_t)off + sz + sv_get_i8(func->code + off + 1);
+        if (flags & SV_OPF_TERMINAL) falls = false;
+        off += (uint32_t)sz;
+      }
+      int succ[2] = { falls && b + 1 < nblocks ? b + 1 : -1, target >= 0 ? jit_dnum_block_of(blocks, nblocks, (uint32_t)target) : -1 };
+      for (int k = 0; k < 2; k++) {
+        int sb = succ[k];
+        if (sb < 0) continue;
+        uint64_t *dst = in + (size_t)sb * words;
+        bool changed = !seen[sb];
+        for (int w = 0; w < words; w++) {
+          uint64_t merged = dst[w] | state[w];
+          if (merged != dst[w]) { dst[w] = merged; changed = true; }
+        }
+        seen[sb] = true;
+        if (changed && !queued[sb]) { queued[sb] = true; work[wn++] = sb; }
+      }
+    }
+    for (int b = 0; b < nblocks && pass == 0; b++) if (!seen[b]) {
+      memset(in + (size_t)b * words, 0xff, (size_t)words * sizeof(uint64_t));
+      seen[b] = queued[b] = true;
+      work[wn++] = b;
+    }
+  }
+
+  for (int i = 0; i < n_locals; i++) if (cand[i] >= 0 && bad[cand[i]]) {
+    dnum[i] = 0;
+    known_type[i] = SV_TI_UNKNOWN;
+  }
+
+done:
+  free(cand); free(leader); free(blocks); free(in); free(state);
+  free(queued); free(seen); free(work); free(bad);
+}
+
 bool jit_setup_frame(jit_compile_t *c) {
   c->hoisted_upvalue = -1;
   c->hoisted_upvalue_cell = 0;
@@ -473,6 +613,7 @@ bool jit_setup_frame(jit_compile_t *c) {
       }
     }
   }
+  if (c->dnum_locals) jit_clear_maybe_unassigned_dnum(c->func, c->dnum_locals, c->known_type_locals, c->n_locals, c->param_count);
   c->entry_integer_ranges = calloc((size_t)c->n_locals, sizeof(jit_integer_range_t));
   c->entry_integer_regs = calloc((size_t)c->n_locals, sizeof(MIR_reg_t));
   if (c->entry_integer_ranges && c->entry_integer_regs && c->dnum_locals) {

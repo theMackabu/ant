@@ -2627,6 +2627,7 @@ static bool js_arguments_setter(
   if (!parse_array_index(key, key_len, (ant_offset_t)-1, &idx)) return false;
 
   ant_arguments_state_t *state = js_arguments_state(obj);
+  if (state && state->in_setter) return false;
   if (state) state->in_setter = 1;
   arr_set(js, obj, (ant_offset_t)idx, value);
   
@@ -2641,6 +2642,47 @@ static bool js_arguments_setter(
   }
 
   return true;
+}
+
+static void js_arguments_after_define(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t desc) {
+  unsigned long idx = 0;
+  if (!parse_array_index(key, key_len, (ant_offset_t)-1, &idx)) return;
+  
+  ant_arguments_state_t *state = js_arguments_state(obj);
+  if (!state || (uint32_t)idx >= state->mapped_count || state->deleted[idx]) return;
+
+  bool accessor = 
+    vtype(js_get(js, desc, "get")) != kTypeUndefined || 
+    vtype(js_get(js, desc, "set")) != kTypeUndefined;
+  
+  if (accessor) {
+    state->deleted[idx] = 1;
+    return;
+  }
+
+  ant_value_t has_value = do_in(js, js_mkstr(js, "value", 5), desc);
+  if (has_value == js_true && state->frame_index >= 0)
+    js_arguments_frame(js, state)->bp[idx] = js_get(js, desc, "value");
+
+  ant_value_t writable = js_get(js, desc, "writable");
+  if (vtype(writable) != kTypeUndefined && !js_truthy(js, writable)) state->deleted[idx] = 1;
+}
+
+static void js_arguments_unmap_all(ant_t *js, ant_value_t obj) {
+  ant_arguments_state_t *state = js_arguments_state(obj);
+  if (!state) return;
+  
+  for (uint32_t i = 0; i < state->mapped_count; i++) {
+    if (state->deleted[i]) continue;
+    
+    if (state->frame_index >= 0) {
+      state->in_setter = 1;
+      arr_set(js, obj, (ant_offset_t)i, js_arguments_frame(js, state)->bp[i]);
+      state->in_setter = 0;
+    }
+    
+    state->deleted[i] = 1;
+  }
 }
 
 static bool js_arguments_deleter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
@@ -9708,6 +9750,8 @@ static ant_value_t object_define_property(
   if (root_key) GC_ROOT_PIN(js, key.js_key);
 
   ant_value_t result = object_define_property_keyed(js, obj, &key, descriptor);
+  if (!is_err(result) && !key.is_symbol && is_arguments_object(obj))
+    js_arguments_after_define(js, obj, key.bytes, key.length, descriptor);
   property_key_view_dispose(&key);
   if (root_key) GC_ROOT_RESTORE(js, root_mark);
   
@@ -10186,6 +10230,7 @@ ant_value_t builtin_object_freeze(ant_params_t) {
   ant_object_t *ptr = js_obj_ptr(as_obj);
   if (!ptr || !ptr->shape) return obj;
   if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
+  if (is_arguments_object(obj)) js_arguments_unmap_all(js, obj);
 
   uint32_t count = ant_shape_count(ptr->shape);
   for (uint32_t i = 0; i < count; i++) {

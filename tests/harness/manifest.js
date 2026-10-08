@@ -171,6 +171,8 @@ export function targets() {
     'test_unhandled_rejection_exit.cjs',
     'test_array_readonly_length.cjs',
     'test_duplicate_declarations.cjs',
+    'test_arguments_define_mapped.cjs',
+    'test_jit_uninitialized_numeric_local.cjs',
     'test_using_identifier.cjs',
     'test_regexp_lone_surrogates.cjs',
     'test_json_lone_surrogates.cjs',
