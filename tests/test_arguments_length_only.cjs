@@ -48,6 +48,10 @@ eq(viaEval(1, 2), 2, 'direct eval');
 eq(spread(1, 2), 4, 'spread');
 eq(computed(1, 2), 2, 'computed length key');
 eq(optional(1), 1, 'optional member');
+function paramDefault(x = arguments.length) { return x; }
+function paramOnly(a, b = arguments.length * 10) { return a + b; }
+eq(paramDefault(undefined, 9), 2, 'length in a parameter default');
+eq(paramOnly(1), 11, 'length only in parameters');
 
 // hot enough to reach the JIT and the inliner
 let total = 0;

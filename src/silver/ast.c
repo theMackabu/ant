@@ -1767,8 +1767,12 @@ static void parse_formal_params(P, sv_ast_t *fn, uint8_t close) {
 
 static void finish_func(sv_ast_t *fn) {
   if (!(fn->flags & FN_ARROW)) {
-    if (ast_references_arguments(fn->body)) fn->flags |= FN_USES_ARGS;
-    bool length_only = ast_arguments_length_only(fn->body, false, false);
+    bool in_body = ast_references_arguments(fn->body);
+    bool in_params = false;
+    for (int i = 0; !in_params && i < fn->args.count; i++)
+      in_params = ast_references_arguments(fn->args.items[i]);
+    if (in_body) fn->flags |= FN_USES_ARGS;
+    bool length_only = (in_body || in_params) && ast_arguments_length_only(fn->body, false, false);
     for (int i = 0; length_only && i < fn->args.count; i++)
       length_only = ast_arguments_length_only(fn->args.items[i], false, false);
     if (length_only) fn->flags |= FN_ARGS_LENGTH_ONLY;
