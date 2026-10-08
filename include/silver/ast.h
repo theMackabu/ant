@@ -111,6 +111,9 @@ enum {
   FN_CLASS_CTOR       = 1 << 19,
   FN_YIELD_STAR       = 1 << 20,
   FN_ARGS_LENGTH_ONLY = 1 << 21,
+  FN_SCOPE_FACTS      = 1 << 22,
+  FN_DIRECT_EVAL      = 1 << 23,
+  FN_OWN_YIELD        = 1 << 24,
 };
 
 enum {

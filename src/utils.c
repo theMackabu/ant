@@ -137,6 +137,17 @@ static int ant_xdg_path(
 #endif
 }
 
+#ifdef _WIN32
+static inline bool ant_is_path_sep(char c) {
+  return c == '\\' || c == '/';
+}
+
+static char *ant_skip_path_components(char *s, int n) {
+  while (*s && n > 0) if (ant_is_path_sep(*s++)) n--;
+  return s;
+}
+#endif
+
 static bool ant_mkdir_one(const char *path) {
   if (ANT_MKDIR(path) == 0) return true;
   struct stat st;
@@ -159,12 +170,17 @@ int ant_mkdir_p(const char *path) {
 
   char *start = tmp + 1;
 #ifdef _WIN32
-  if (len >= 2 && tmp[1] == ':') start = (tmp[2] == '\\' || tmp[2] == '/') ? tmp + 3 : tmp + 2;
-  else if ((tmp[0] == '\\' || tmp[0] == '/') && (tmp[1] == '\\' || tmp[1] == '/')) {
-    int seps = 0;
-    for (start = tmp + 2; *start && seps < 2; start++)
-      if ((*start == '\\' || *start == '/') && ++seps == 2) break;
-  }
+  char *root = tmp;
+  bool unc = ant_is_path_sep(tmp[0]) && ant_is_path_sep(tmp[1]);
+  if (unc && (tmp[2] == '?' || tmp[2] == '.') && ant_is_path_sep(tmp[3])) {
+    root = tmp + 4;
+    unc = _strnicmp(root, "UNC", 3) == 0 && ant_is_path_sep(root[3]);
+    if (unc) root += 4;
+  } else if (unc) root = tmp + 2;
+
+  if (unc) start = ant_skip_path_components(root, 2);
+  else if (root[0] && root[1] == ':') start = ant_is_path_sep(root[2]) ? root + 3 : root + 2;
+  else if (root != tmp) start = ant_skip_path_components(root, 1);
 #endif
 
   for (char *p = start; *p; p++) {
