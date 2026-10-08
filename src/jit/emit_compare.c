@@ -5,20 +5,35 @@ static void jit_emit_compare_bit(jit_compile_t *c, MIR_insn_code_t cmp, MIR_reg_
   char name[32];
   snprintf(name, sizeof(name), "cmp_bit_%d", mir_next_reg_site(&c->reg_site_n));
   MIR_reg_t bit = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, cmp, MIR_new_reg_op(c->ctx, bit),
-                               MIR_new_reg_op(c->ctx, l), MIR_new_reg_op(c->ctx, r)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_OR, MIR_new_reg_op(c->ctx, rd),
-                               MIR_new_uint_op(c->ctx, js_false), MIR_new_reg_op(c->ctx, bit)));
+  c->cmp_insn = MIR_new_insn(c->ctx, cmp, MIR_new_reg_op(c->ctx, bit),
+                             MIR_new_reg_op(c->ctx, l), MIR_new_reg_op(c->ctx, r));
+  c->cmp_box = MIR_new_insn(c->ctx, MIR_OR, MIR_new_reg_op(c->ctx, rd),
+                            MIR_new_uint_op(c->ctx, js_false), MIR_new_reg_op(c->ctx, bit));
+  MIR_append_insn(c->ctx, c->jit_func, c->cmp_insn);
+  MIR_append_insn(c->ctx, c->jit_func, c->cmp_box);
   c->cmp_bit = bit;
   c->cmp_value = rd;
   c->cmp_end = c->bc_off + c->sz;
+  c->cmp_code = cmp;
+  c->cmp_left = l;
+  c->cmp_right = r;
+}
+
+static bool jit_emit_integer_compare(jit_compile_t *c, MIR_insn_code_t cmp) {
+  if (!c->vs.slot_type || c->vs.sp < 2 ||
+      c->vs.slot_type[c->vs.sp - 2] != SLOT_I32 || c->vs.slot_type[c->vs.sp - 1] != SLOT_I32) return false;
+  MIR_reg_t r = vstack_pop(&c->vs);
+  MIR_reg_t l = vstack_pop(&c->vs);
+  MIR_reg_t rd = vstack_push(&c->vs);
+  if (c->vs.known_bool) c->vs.known_bool[c->vs.sp - 1] = 1;
+  jit_emit_compare_bit(c, cmp, l, r, rd);
+  return true;
 }
 
 void jit_emit_compare(jit_compile_t *c) {
   switch (c->op) {
     case OP_LT: {
+      if (jit_emit_integer_compare(c, MIR_LT)) break;
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
       bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~SV_TFB_NUM));
       bool fb_never_num = fb && !(fb & SV_TFB_NUM);
@@ -136,6 +151,7 @@ void jit_emit_compare(jit_compile_t *c) {
     }
 
     case OP_LE: {
+      if (jit_emit_integer_compare(c, MIR_LE)) break;
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
       bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~SV_TFB_NUM));
       bool fb_never_num = fb && !(fb & SV_TFB_NUM);
@@ -397,6 +413,7 @@ void jit_emit_compare(jit_compile_t *c) {
     }
 
     case OP_GT: {
+      if (jit_emit_integer_compare(c, MIR_GT)) break;
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
       bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~SV_TFB_NUM));
       bool fb_never_num = fb && !(fb & SV_TFB_NUM);
@@ -493,6 +510,7 @@ void jit_emit_compare(jit_compile_t *c) {
     }
 
     case OP_GE: {
+      if (jit_emit_integer_compare(c, MIR_GE)) break;
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
       bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~SV_TFB_NUM));
       bool fb_never_num = fb && !(fb & SV_TFB_NUM);

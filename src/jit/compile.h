@@ -334,6 +334,9 @@ typedef struct jit_compile {
   MIR_reg_t cmp_bit;
   MIR_reg_t cmp_value;
   int cmp_end;
+  MIR_insn_code_t cmp_code;
+  MIR_reg_t cmp_left, cmp_right;
+  MIR_insn_t cmp_insn, cmp_box;
   MIR_reg_t integer_value;
   jit_integer_range_t integer_range;
 } jit_compile_t;
