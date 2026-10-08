@@ -12557,20 +12557,26 @@ static ant_value_t builtin_array_at(ant_params_t) {
   return array_method_get_index(js, arr, (ant_offset_t)k);
 }
 
-static ant_value_t array_fill_writable(ant_t *js, ant_value_t arr, ant_offset_t start, ant_offset_t end) {
+static ant_value_t array_fill_writable(ant_t *js, ant_value_t arr, ant_offset_t start, ant_offset_t *end) {
   ant_object_t *target = js_obj_ptr(js_as_obj(arr));
-  if (is_proxy(arr) || !target || start >= end) return js_mkundef();
+  if (is_proxy(arr) || !target || start >= *end) return js_mkundef();
   
   ant_offset_t string_len;
-  if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "0");
+  if (array_string_wrapper_length(js, arr, &string_len)) {
+    *end = start;
+    return array_string_wrapper_write_error(js, "0");
+  }
   
-  if (target->flags.frozen)
+  if (target->flags.frozen) {
+    *end = start;
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot assign to read only property of frozen object");
+  }
   
   if (target->flags.extensible && !target->flags.sealed) return js_mkundef();
 
-  for (ant_offset_t i = start; i < end; i++) {
+  for (ant_offset_t i = start; i < *end; i++) {
     if (js_truthy(js, array_method_has_index(js, arr, i))) continue;
+    *end = i;
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot add property %llu, object is not extensible", (unsigned long long)i);
   }
   
@@ -12602,8 +12608,11 @@ static ant_value_t builtin_array_fill(ant_params_t) {
   if (start > len) start = len;
   if (end > len) end = len;
   
-  ant_value_t writable = array_fill_writable(js, arr, start, end);
-  if (is_err(writable)) return writable;
+  ant_value_t unwritable = array_fill_writable(js, arr, start, &end);
+  if (is_err(unwritable)) {
+    for (ant_offset_t i = start; i < end; i++) arr_set(js, arr, i, value);
+    return unwritable;
+  }
   
   ant_object_t *dense = array_length_obj_ptr(arr);
   if (
