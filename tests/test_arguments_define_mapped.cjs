@@ -30,11 +30,15 @@ let s = 0; for (let i = 0; i < 20000; i++) s += hot(i); out.push('hot ' + s);
 function hot2(a, b) { Object.defineProperty(arguments, 1, { get() { return 3; } }); b = 7; return arguments[1] + b; }
 let s2 = 0; for (let i = 0; i < 20000; i++) s2 += hot2(i, i); out.push('hot2 ' + s2);
 console.log(out.join('\n'));
+function getterOnce(a) { let reads = 0; Object.defineProperty(arguments, '0', { get value() { return ++reads; } }); return [a, arguments[0], reads]; }
+function getterFields(a) { const log = []; Object.defineProperty(arguments, '0', { get value() { log.push('value'); return 5; }, get writable() { log.push('writable'); return false; } }); a = 7; return [a, arguments[0], log.join()]; }
+function undefinedGet(a) { Object.defineProperty(arguments, '0', { get: undefined }); a = 3; return [a, String(arguments[0])]; }
+console.log(JSON.stringify([getterOnce(9), getterFields(9), undefinedGet(1)]));
 `;
 
 const env = { ...process.env, NO_COLOR: '1' };
 delete env.FORCE_COLOR;
 const child = spawnSync(process.execPath, ['-e', body], { encoding: 'utf8', timeout: 60000, env });
 assert.strictEqual(child.status, 0, child.stderr);
-assert.strictEqual(child.stdout, "value [9,9]\nvalueThenParam [4,4]\nroThenParam [4,9]\nroThenArg [1,1]\ngetter [4,\"g\"]\nenumOnly [6,6,[]]\nreflect [true,\"r\",\"r\"]\ndefineProps [\"x\",\"z\",\"x\",\"y\"]\nbeyond [1,\"w\",1,[\"0\",\"3\"]]\nunpassed [1,null,\"u\",1]\nstrict [4,9]\ndeleteThen [4,9]\ntwice [2,2]\nfreeze [4,1,true]\nhot 200010000\nhot2 200000\n");
+assert.strictEqual(child.stdout, "value [9,9]\nvalueThenParam [4,4]\nroThenParam [4,9]\nroThenArg [1,1]\ngetter [4,\"g\"]\nenumOnly [6,6,[]]\nreflect [true,\"r\",\"r\"]\ndefineProps [\"x\",\"z\",\"x\",\"y\"]\nbeyond [1,\"w\",1,[\"0\",\"3\"]]\nunpassed [1,null,\"u\",1]\nstrict [4,9]\ndeleteThen [4,9]\ntwice [2,2]\nfreeze [4,1,true]\nhot 200010000\nhot2 200000\n[[1,1,1],[7,5,\"value,writable\"],[3,\"undefined\"]]\n");
 console.log('PASS mapped arguments defineProperty matches Node');
