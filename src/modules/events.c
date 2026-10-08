@@ -72,17 +72,12 @@ static const UT_icd event_listener_icd = {
   NULL, NULL, NULL
 };
 
-// TODO: the global EventTarget listener table holds isolate-heap values, so it
-// lives on the isolate like process_state; allocated on first touch
-// -- START ---
-typedef struct EventTypeList EventTypeList;
-
 typedef struct {
   UT_array *listeners;
   ant_value_t js_key;
   const char *key_bytes;
   size_t key_len;
-  EventTypeList *owner;
+  ant_event_list_t *owner;
   uint32_t generation;
   unsigned int dead_count;
   int emitting;
@@ -93,7 +88,7 @@ typedef struct {
   uint32_t key_matches;
 } EventType;
 
-struct EventTypeList {
+struct ant_event_list {
   EventType **types;
   unsigned int count;
   unsigned int cap;
@@ -102,22 +97,17 @@ struct EventTypeList {
   void *listener_change_context;
 };
 
-struct ant_events_state {
-  EventTypeList global_events;
-};
-// --- END: TO BE MIGRATED ---
-
 static void emitter_write_barrier(ant_t *js, ant_value_t owner, ant_value_t stored) {
   if (!is_object_type(owner)) return;
   gc_write_barrier(js, js_obj_ptr(owner), stored);
 }
 
-static EventTypeList *global_events_list(ant_t *js) {
-  if (!js->events_state) js->events_state = calloc(1, sizeof(*js->events_state));
-  return js->events_state ? &js->events_state->global_events : NULL;
+static ant_event_list_t *global_events_list(ant_t *js) {
+  if (!js->global_events) js->global_events = calloc(1, sizeof(*js->global_events));
+  return js->global_events;
 }
 
-static void evt_list_free(EventTypeList *list) {
+static void evt_list_free(ant_event_list_t *list) {
   if (!list) return;
 
   for (unsigned int i = 0; i < list->count; i++) {
@@ -261,7 +251,7 @@ static bool entry_pending_prepend(
 static unsigned int evt_live_count(EventType *evt);
 
 static void evt_notify_listener_change(ant_t *js, EventType *evt) {
-  EventTypeList *list = evt ? evt->owner : NULL;
+  ant_event_list_t *list = evt ? evt->owner : NULL;
   if (!list || !list->listener_change_hook) return;
   list->listener_change_hook(
     js,
@@ -273,7 +263,7 @@ static void evt_notify_listener_change(ant_t *js, EventType *evt) {
 }
 
 static void evt_release_if_empty(EventType *evt) {
-  EventTypeList *list = evt->owner;
+  ant_event_list_t *list = evt->owner;
 
   if (!list || evt->emitting != 0 || utarray_len(evt->listeners) != 0) return;
   
@@ -385,7 +375,7 @@ static unsigned int evt_live_count(EventType *evt) {
   return live;
 }
 
-static EventType *evt_list_find_cstr(EventTypeList *list, const char *name, size_t len) {
+static EventType *evt_list_find_cstr(ant_event_list_t *list, const char *name, size_t len) {
   for (unsigned int i = 0; i < list->count; i++) {
     EventType *evt = list->types[i];
     if (evt->key_len != len || !evt->key_bytes) continue;
@@ -395,7 +385,7 @@ static EventType *evt_list_find_cstr(EventTypeList *list, const char *name, size
 }
 
 static __attribute__((noinline, cold)) void evt_cache_key(
-  ant_t *js, EventTypeList *list, EventType *evt, ant_value_t js_key, const char *bytes
+  ant_t *js, ant_event_list_t *list, EventType *evt, ant_value_t js_key, const char *bytes
 ) {
   uint32_t matches = ++evt->key_matches;
   if (matches & (matches - 1)) return;
@@ -404,7 +394,7 @@ static __attribute__((noinline, cold)) void evt_cache_key(
   emitter_write_barrier(js, list->target, js_key);
 }
 
-static EventType *evt_list_find_slow(ant_t *js, EventTypeList *list, ant_value_t js_key) {
+static EventType *evt_list_find_slow(ant_t *js, ant_event_list_t *list, ant_value_t js_key) {
   if (vtype(js_key) != kTypeString) return NULL;
 
   size_t probe_len = 0;
@@ -415,14 +405,14 @@ static EventType *evt_list_find_slow(ant_t *js, EventTypeList *list, ant_value_t
 }
 
 static inline __attribute__((always_inline)) EventType *evt_list_find(
-  ant_t *js, EventTypeList *list, ant_value_t js_key
+  ant_t *js, ant_event_list_t *list, ant_value_t js_key
 ) {
   for (unsigned int i = 0; i < list->count; i++)
     if (list->types[i]->js_key == js_key) return list->types[i];
   return evt_list_find_slow(js, list, js_key);
 }
 
-static EventType *evt_list_find_or_create(ant_t *js, EventTypeList *list, ant_value_t js_key) {
+static EventType *evt_list_find_or_create(ant_t *js, ant_event_list_t *list, ant_value_t js_key) {
   EventType *evt = evt_list_find(js, list, js_key);
   if (evt) return evt;
 
@@ -442,12 +432,12 @@ static EventType *evt_list_find_or_create(ant_t *js, EventTypeList *list, ant_va
   return evt;
 }
 
-static inline EventTypeList *find_emitter_events(ant_value_t this_obj) {
-  return (EventTypeList *)js_get_native(this_obj, EVENT_EMITTER_NATIVE_TAG);
+static inline ant_event_list_t *find_emitter_events(ant_value_t this_obj) {
+  return (ant_event_list_t *)js_get_native(this_obj, EVENT_EMITTER_NATIVE_TAG);
 }
 
-static EventTypeList *get_or_create_emitter_events(ant_t *js, ant_value_t this_obj) {
-  EventTypeList *events = find_emitter_events(this_obj);
+static ant_event_list_t *get_or_create_emitter_events(ant_t *js, ant_value_t this_obj) {
+  ant_event_list_t *events = find_emitter_events(this_obj);
   if (!events) {
     events = calloc(1, sizeof(*events));
     if (!events) return NULL;
@@ -459,17 +449,17 @@ static EventTypeList *get_or_create_emitter_events(ant_t *js, ant_value_t this_o
 
 static EventType *find_or_create_global_event_type(ant_t *js, ant_value_t js_key) {
   if (vtype(js_key) != kTypeString && vtype(js_key) != kTypeSymbol) return NULL;
-  EventTypeList *list = global_events_list(js);
+  ant_event_list_t *list = global_events_list(js);
   return list ? evt_list_find_or_create(js, list, js_key) : NULL;
 }
 
 static EventType *find_global_event_type(ant_t *js, ant_value_t js_key) {
-  EventTypeList *list = global_events_list(js);
+  ant_event_list_t *list = global_events_list(js);
   return list ? evt_list_find(js, list, js_key) : NULL;
 }
 
 static EventType *find_or_create_emitter_event_type(ant_t *js, ant_value_t this_obj, ant_value_t js_key) {
-  EventTypeList *events = NULL;
+  ant_event_list_t *events = NULL;
 
   if (vtype(js_key) != kTypeString && vtype(js_key) != kTypeSymbol) return NULL;
   events = get_or_create_emitter_events(js, this_obj);
@@ -478,13 +468,13 @@ static EventType *find_or_create_emitter_event_type(ant_t *js, ant_value_t this_
 }
 
 static EventType *find_emitter_event_type_cstr(ant_t *js, ant_value_t this_obj, const char *name, size_t len) {
-  EventTypeList *events = find_emitter_events(this_obj);
+  ant_event_list_t *events = find_emitter_events(this_obj);
   if (!events) return NULL;
   return evt_list_find_cstr(events, name, len);
 }
 
 static EventType *find_emitter_event_type(ant_t *js, ant_value_t this_obj, ant_value_t js_key) {
-  EventTypeList *events = find_emitter_events(this_obj);
+  ant_event_list_t *events = find_emitter_events(this_obj);
   if (!events) return NULL;
   return evt_list_find(js, events, js_key);
 }
@@ -1214,7 +1204,7 @@ static ant_value_t js_eventemitter_emit(ant_params_t) {
   ant_value_t target = js_getthis(js);
   if (!is_object_type(target)) return js_false;
   
-  EventTypeList *events = find_emitter_events(target);
+  ant_event_list_t *events = find_emitter_events(target);
   if (!events) return js_false;
   
   bool invoked = eventemitter_dispatch(
@@ -1252,7 +1242,7 @@ bool eventemitter_set_listener_change_hook(
   eventemitter_listener_change_fn hook,
   void *context
 ) {
-  EventTypeList *events = NULL;
+  ant_event_list_t *events = NULL;
   if (!is_object_type(target)) return false;
   events = get_or_create_emitter_events(js, target);
   if (!events) return false;
@@ -1282,7 +1272,7 @@ bool eventemitter_remove_listener(
   ant_value_t target, const char *event_type,
   ant_value_t listener
 ) {
-  EventTypeList *events = NULL;
+  ant_event_list_t *events = NULL;
   EventType *evt = NULL;
 
   if (!is_object_type(target) || !event_type) return false;
@@ -1310,7 +1300,7 @@ ant_offset_t eventemitter_listener_count(
   ant_t *js,
   ant_value_t target, const char *event_type
 ) {
-  EventTypeList *events = NULL;
+  ant_event_list_t *events = NULL;
 
   if (!is_object_type(target) || !event_type) return 0;
   events = find_emitter_events(target);
@@ -1348,7 +1338,7 @@ static ant_value_t js_eventemitter_prepend_once_listener(ant_params_t) {
 
 static ant_value_t js_eventemitter_removeAllListeners(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
-  EventTypeList *events = NULL;
+  ant_event_list_t *events = NULL;
 
   if (nargs < 1 || vtype(args[0]) == kTypeUndefined) {
     events = find_emitter_events(this_obj);
@@ -1416,7 +1406,7 @@ static ant_value_t js_eventemitter_eventNames(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   ant_value_t result = js_mkarr(js);
   
-  EventTypeList *events = find_emitter_events(this_obj);
+  ant_event_list_t *events = find_emitter_events(this_obj);
   if (events) {
     for (unsigned int i = 0; i < events->count; i++)
       if (evt_live_count(events->types[i]) > 0) js_arr_push(js, result, events->types[i]->js_key);
@@ -2062,7 +2052,7 @@ void init_events_module(ant_t *js) {
   js_set_global_builtin(js, "EventTarget", eventtarget_fn);
 }
 
-static void mark_event_type_listeners(ant_t *js, gc_mark_fn mark, EventTypeList *list) {
+static void mark_event_type_listeners(ant_t *js, gc_mark_fn mark, ant_event_list_t *list) {
   if (!list) return;
   for (unsigned int t = 0; t < list->count; t++) {
   EventType *evt = list->types[t];
@@ -2078,24 +2068,24 @@ static void mark_event_type_listeners(ant_t *js, gc_mark_fn mark, EventTypeList 
 }}
 
 void cleanup_events_module(ant_t *js) {
-  if (!js || !js->events_state) return;
-  evt_list_free(&js->events_state->global_events);
-  free(js->events_state);
-  js->events_state = NULL;
+  if (!js || !js->global_events) return;
+  evt_list_free(js->global_events);
+  free(js->global_events);
+  js->global_events = NULL;
 }
 
 void gc_mark_events(ant_t *js, gc_mark_fn mark) {
-  if (js->events_state) mark_event_type_listeners(js, mark, &js->events_state->global_events); 
+  if (js->global_events) mark_event_type_listeners(js, mark, js->global_events);
 }
 
 void gc_mark_eventemitter_object(ant_t *js, ant_value_t obj, gc_mark_fn mark) {
-  EventTypeList *events = find_emitter_events(obj);
+  ant_event_list_t *events = find_emitter_events(obj);
   if (events) mark_event_type_listeners(js, mark, events);
 }
 
 void gc_finalize_events_object(ant_t *js, ant_value_t obj) {
   event_data_t *data = (event_data_t *)js_get_native(obj, EVENT_NATIVE_TAG);
-  EventTypeList *events = find_emitter_events(obj);
+  ant_event_list_t *events = find_emitter_events(obj);
 
   if (data) {
     js_clear_native(obj, EVENT_NATIVE_TAG);
