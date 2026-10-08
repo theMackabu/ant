@@ -3286,6 +3286,8 @@ ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src) {
     if (!array_method_dense_element(src, i, &value)) {
       value = array_method_get_index(js, src, i);
       if (is_err(value)) return value;
+      len_result = array_like_length_checked(js, src, &len);
+      if (is_err(len_result)) return len_result;
     }
     
     if (doff && base + i < dense_capacity(doff) && base + i == get_array_length(js, dst)) {
@@ -9277,6 +9279,8 @@ ant_value_t js_group_by(ant_t *js, ant_value_t items, ant_value_t callback, js_g
       if (is_err(value)) return value;
       ant_value_t err = js_mkundef();
       if (group_by_step(js, value, &group_by, &err) == ITER_ERROR) return err;
+      len_result = array_like_length_checked(js, items, &len);
+      if (is_err(len_result)) return len_result;
     }
     
     return js_mkundef();
@@ -14044,8 +14048,10 @@ static ant_value_t builtin_Array_from(ant_params_t) {
         ant_value_t unused;
         iter_action_t act = array_from_iter_cb(js, arr_get(js, src, i), &ctx, &unused);
         if (act == ITER_ERROR) return unused;
+        len_result = array_like_length_checked(js, src, &len);
+        if (is_err(len_result)) return len_result;
       }
-      if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, tov((double)len));
+      if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, tov((double)ctx.index));
     } else {
       array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
       ant_value_t iter_result = iter_foreach(js, src, array_from_iter_cb, &ctx);
