@@ -269,9 +269,8 @@ static void jit_emit_define_slot_inline(
   MIR_append_insn(c->ctx, c->jit_func, helper);
 }
 
-void jit_emit_element_barrier(
-    jit_compile_t *c, MIR_reg_t obj, MIR_reg_t index,
-    MIR_reg_t val, MIR_reg_t flags, MIR_label_t skip) {
+static void jit_emit_element_barrier_filter(
+    jit_compile_t *c, MIR_reg_t val, MIR_reg_t flags, MIR_label_t skip) {
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_insn(c->ctx, MIR_UBLE, MIR_new_label_op(c->ctx, skip),
                                MIR_new_reg_op(c->ctx, val), MIR_new_uint_op(c->ctx, NANBOX_PREFIX)));
@@ -282,6 +281,13 @@ void jit_emit_element_barrier(
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, skip),
                                MIR_new_reg_op(c->ctx, c->r_bool), MIR_new_int_op(c->ctx, 0)));
+}
+
+void jit_emit_element_barrier(
+    jit_compile_t *c, MIR_reg_t obj, MIR_reg_t index,
+    MIR_reg_t val, MIR_reg_t flags, MIR_label_t skip, MIR_label_t shared) {
+  jit_emit_element_barrier_filter(c, val, flags, skip);
+  if (shared) MIR_append_insn(c->ctx, c->jit_func, shared);
   MIR_label_t string = MIR_new_label(c->ctx);
   MIR_label_t barrier = MIR_new_label(c->ctx);
   MIR_append_insn(c->ctx, c->jit_func,
@@ -1075,7 +1081,8 @@ void jit_emit_properties(jit_compile_t *c) {
                         MIR_new_insn(c->ctx, MIR_MOV,
                                      MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, data, index, sizeof(ant_value_t)),
                                      MIR_new_reg_op(c->ctx, val)));
-        jit_emit_element_barrier(c, obj, index, val, flags, element_done);
+        MIR_label_t barrier = MIR_new_label(c->ctx);
+        jit_emit_element_barrier(c, obj, index, val, flags, element_done, barrier);
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, element_done)));
 
@@ -1119,9 +1126,9 @@ void jit_emit_properties(jit_compile_t *c) {
                         MIR_new_insn(c->ctx, MIR_MOV,
                                      MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, data, index, sizeof(ant_value_t)),
                                      MIR_new_reg_op(c->ctx, val)));
-        jit_emit_element_barrier(c, obj, index, val, flags, element_done);
+        jit_emit_element_barrier_filter(c, val, flags, element_done);
         MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, element_done)));
+                        MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, barrier)));
         MIR_append_insn(c->ctx, c->jit_func, slow);
       }
       MIR_append_insn(c->ctx, c->jit_func,

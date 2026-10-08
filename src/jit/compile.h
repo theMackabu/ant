@@ -349,7 +349,7 @@ void jit_note_stale_exit(jit_compile_t *c, const jit_stale_exit_t *exit, int pre
 void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg);
 void jit_emit_element_barrier(
     jit_compile_t *c, MIR_reg_t obj, MIR_reg_t index,
-    MIR_reg_t val, MIR_reg_t flags, MIR_label_t skip);
+    MIR_reg_t val, MIR_reg_t flags, MIR_label_t skip, MIR_label_t shared);
 void jit_emit_builtin_call_fast(
   jit_compile_t *c, MIR_reg_t func, MIR_reg_t this_val,
   MIR_reg_t args, uint16_t argc, MIR_reg_t result,

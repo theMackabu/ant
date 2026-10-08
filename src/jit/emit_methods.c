@@ -123,7 +123,7 @@ static MIR_label_t jit_emit_array_push_fastpath(jit_compile_t *c) {
   MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
       MIR_new_mem_op(c->ctx, MIR_T_U16, (MIR_disp_t)offsetof(ant_object_t, flags), ptr, 0, 1),
       MIR_new_reg_op(c->ctx, flags)));
-  jit_emit_element_barrier(c, recv, len, val, flags, stored);
+  jit_emit_element_barrier(c, recv, len, val, flags, stored, NULL);
   MIR_append_insn(c->ctx, c->jit_func, stored);
 
   MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_ADD, MIR_new_reg_op(c->ctx, len),
