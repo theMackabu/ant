@@ -153,7 +153,6 @@ typedef struct jit_compile {
   MIR_item_t imp_param_counters_off;
   MIR_item_t imp_number_to_string;
   MIR_item_t math1_proto;
-  MIR_item_t math2_proto;
   MIR_item_t imp_math[ANT_MATH_INTRINSIC_COUNT];
   MIR_item_t imp_adopt_open_upvalues;
   MIR_item_t imp_take_open_upvalues;

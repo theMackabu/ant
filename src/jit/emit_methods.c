@@ -176,7 +176,6 @@ static MIR_label_t jit_emit_math_fastpath(jit_compile_t *c, ant_math_intrinsic_t
     .r_d_slot = c->r_d_slot,
     .scratch = c->r_bool,
     .math1_proto = c->math1_proto,
-    .math2_proto = c->math2_proto,
     .imp_math = c->imp_math,
     .site = mir_next_reg_site(&c->reg_site_n),
   });

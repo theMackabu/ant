@@ -494,7 +494,6 @@ bool jit_setup_frame(jit_compile_t *c) {
       .imp_ushr = c->imp_ushr,
       .self_proto = c->self_proto,
       .math1_proto = c->math1_proto,
-      .math2_proto = c->math2_proto,
       .imp_math = c->imp_math,
       .r_args_buf = c->r_args_buf,
   };

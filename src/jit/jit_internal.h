@@ -147,7 +147,7 @@ typedef struct {
   MIR_item_t stable_call_proto, imp_call_stable_builtin;
   MIR_item_t imp_band, imp_bor, imp_bxor, imp_shl, imp_shr, imp_ushr;
   MIR_item_t self_proto;
-  MIR_item_t math1_proto, math2_proto;
+  MIR_item_t math1_proto;
   MIR_item_t const *imp_math;
   MIR_reg_t r_args_buf;
   int *next_inline_id;
@@ -383,11 +383,16 @@ typedef struct {
   ant_math_intrinsic_t kind;
   MIR_reg_t result, callee, a, b;
   MIR_reg_t r_js, r_d_slot, scratch;
-  MIR_item_t math1_proto, math2_proto;
+  MIR_item_t math1_proto;
   MIR_item_t const *imp_math;
   int site;
 } jit_math_call_t;
 MIR_label_t mir_emit_math_call(MIR_context_t ctx, MIR_item_t fn, const jit_math_call_t *call);
+
+static inline bool jit_math_calls_c(ant_math_intrinsic_t kind) {
+  return kind == ANT_MATH_CEIL || kind == ANT_MATH_FLOOR || kind == ANT_MATH_ROUND ||
+         kind == ANT_MATH_SQRT || kind == ANT_MATH_TRUNC;
+}
 uint8_t jit_math_field_builtin(uint8_t receiver, const char *name, uint32_t len);
 void mir_emit_array_add_guard(
     MIR_context_t ctx, MIR_item_t fn, MIR_reg_t r_js,

@@ -97,12 +97,8 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(ant_math_ceil);
   LOAD_EXT(ant_math_floor);
   LOAD_EXT(ant_math_round);
-  LOAD_EXT(ant_math_sign);
   LOAD_EXT(ant_math_sqrt);
   LOAD_EXT(ant_math_trunc);
-  LOAD_EXT(ant_math_imul);
-  LOAD_EXT(ant_math_max);
-  LOAD_EXT(ant_math_min);
   LOAD_EXT(jit_helper_adopt_open_upvalues);
   LOAD_EXT(jit_helper_take_open_upvalues);
   LOAD_EXT(jit_helper_take_open_upvalues_rebase);

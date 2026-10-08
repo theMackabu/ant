@@ -262,7 +262,6 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
 
   MIR_type_t math_ret = MIR_T_D;
   c->math1_proto = MIR_new_proto(c->ctx, "math1_proto", 1, &math_ret, 1, MIR_T_D, "x");
-  c->math2_proto = MIR_new_proto(c->ctx, "math2_proto", 1, &math_ret, 2, MIR_T_D, "a", MIR_T_D, "b");
 
   MIR_type_t h1_ret = MIR_JSVAL;
   c->helper1_proto = MIR_new_proto(c->ctx, "helper1_proto",
@@ -699,7 +698,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   for (int i = 0; i < ANT_MATH_INTRINSIC_COUNT; i++) {
     char name[32];
     snprintf(name, sizeof(name), "ant_math_%s", ant_math_intrinsic_names[i]);
-    c->imp_math[i] = i == ANT_MATH_ABS ? NULL : MIR_new_import(c->ctx, name);
+    c->imp_math[i] = jit_math_calls_c((ant_math_intrinsic_t)i) ? MIR_new_import(c->ctx, name) : NULL;
   }
   c->imp_adopt_open_upvalues = MIR_new_import(c->ctx, "jit_helper_adopt_open_upvalues");
   c->imp_take_open_upvalues = MIR_new_import(c->ctx, "jit_helper_take_open_upvalues");

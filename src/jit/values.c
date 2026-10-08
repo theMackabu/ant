@@ -1324,38 +1324,97 @@ MIR_label_t mir_emit_math_call(MIR_context_t ctx, MIR_item_t fn, const jit_math_
     MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBGT, MIR_new_label_op(ctx, slow),
         MIR_new_reg_op(ctx, call->b), MIR_new_uint_op(ctx, NANBOX_PREFIX)));
 
-  if (call->kind == ANT_MATH_ABS) {
-    // clearing the sign bit keeps the canonical NaN canonical
-    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, call->result),
-        MIR_new_reg_op(ctx, call->a), MIR_new_uint_op(ctx, UINT64_C(0x7fffffffffffffff))));
-  } else {
-    char name[48];
-    snprintf(name, sizeof(name), "math_a_%d", call->site);
-    MIR_reg_t da = MIR_new_func_reg(ctx, fn->u.func, MIR_T_D, name);
-    snprintf(name, sizeof(name), "math_b_%d", call->site);
-    MIR_reg_t db = MIR_new_func_reg(ctx, fn->u.func, MIR_T_D, name);
-    snprintf(name, sizeof(name), "math_r_%d", call->site);
-    MIR_reg_t dr = MIR_new_func_reg(ctx, fn->u.func, MIR_T_D, name);
-    mir_i64_to_d(ctx, fn, da, call->a, call->r_d_slot);
-    if (binary) {
-      mir_i64_to_d(ctx, fn, db, call->b, call->r_d_slot);
-      MIR_append_insn(ctx, fn,
-                      MIR_new_call_insn(ctx, 5,
-                                        MIR_new_ref_op(ctx, call->math2_proto),
-                                        MIR_new_ref_op(ctx, call->imp_math[call->kind]),
-                                        MIR_new_reg_op(ctx, dr),
-                                        MIR_new_reg_op(ctx, da),
-                                        MIR_new_reg_op(ctx, db)));
-    } else {
-      MIR_append_insn(ctx, fn,
-                      MIR_new_call_insn(ctx, 4,
-                                        MIR_new_ref_op(ctx, call->math1_proto),
-                                        MIR_new_ref_op(ctx, call->imp_math[call->kind]),
-                                        MIR_new_reg_op(ctx, dr),
-                                        MIR_new_reg_op(ctx, da)));
+  char name[48];
+#define REG(var, type, tag) \
+  snprintf(name, sizeof(name), "math_" tag "_%d", call->site); \
+  MIR_reg_t var = MIR_new_func_reg(ctx, fn->u.func, type, name)
+#define INSN(...) MIR_append_insn(ctx, fn, MIR_new_insn(ctx, __VA_ARGS__))
+#define R(reg) MIR_new_reg_op(ctx, reg)
+#define U(value) MIR_new_uint_op(ctx, value)
+#define L(label) MIR_new_label_op(ctx, label)
+  const uint64_t abs_mask = UINT64_C(0x7fffffffffffffff), inf_bits = UINT64_C(0x7ff0000000000000);
+
+  switch (call->kind) {
+    case ANT_MATH_ABS:
+      INSN(MIR_AND, R(call->result), R(call->a), U(abs_mask));
+      break;
+
+    case ANT_MATH_SIGN: {
+      REG(t, MIR_T_I64, "t");
+      MIR_label_t keep = MIR_new_label(ctx), negative = MIR_new_label(ctx);
+      INSN(MIR_AND, R(t), R(call->a), U(abs_mask));
+      INSN(MIR_BEQ, L(keep), R(t), MIR_new_int_op(ctx, 0));
+      INSN(MIR_UBGT, L(keep), R(t), U(inf_bits));
+      INSN(MIR_BLT, L(negative), R(call->a), MIR_new_int_op(ctx, 0));
+      INSN(MIR_MOV, R(call->result), U(UINT64_C(0x3ff0000000000000)));
+      INSN(MIR_JMP, L(done));
+      MIR_append_insn(ctx, fn, negative);
+      INSN(MIR_MOV, R(call->result), U(UINT64_C(0xbff0000000000000)));
+      INSN(MIR_JMP, L(done));
+      MIR_append_insn(ctx, fn, keep);
+      INSN(MIR_MOV, R(call->result), R(call->a));
+      break;
     }
-    mir_d_to_i64(ctx, fn, call->result, dr, call->r_d_slot);
+
+    case ANT_MATH_MAX:
+    case ANT_MATH_MIN: {
+      bool max = call->kind == ANT_MATH_MAX;
+      REG(da, MIR_T_D, "a");
+      REG(db, MIR_T_D, "b");
+      MIR_label_t pick_a = MIR_new_label(ctx), pick_b = MIR_new_label(ctx), tie = MIR_new_label(ctx);
+      mir_i64_to_d(ctx, fn, da, call->a, call->r_d_slot);
+      mir_i64_to_d(ctx, fn, db, call->b, call->r_d_slot);
+      INSN(max ? MIR_DBGT : MIR_DBLT, L(pick_b), R(db), R(da));
+      INSN(max ? MIR_DBLT : MIR_DBGT, L(pick_a), R(db), R(da));
+      INSN(MIR_DBEQ, L(tie), R(db), R(da));
+      INSN(MIR_MOV, R(call->result), U(UINT64_C(0x7ff8000000000000)));
+      INSN(MIR_JMP, L(done));
+      MIR_append_insn(ctx, fn, tie);
+      INSN(max ? MIR_AND : MIR_OR, R(call->result), R(call->a), R(call->b));
+      INSN(MIR_JMP, L(done));
+      MIR_append_insn(ctx, fn, pick_b);
+      INSN(MIR_MOV, R(call->result), R(call->b));
+      INSN(MIR_JMP, L(done));
+      MIR_append_insn(ctx, fn, pick_a);
+      INSN(MIR_MOV, R(call->result), R(call->a));
+      break;
+    }
+
+    case ANT_MATH_IMUL: {
+      REG(ia, MIR_T_I64, "ia");
+      REG(ib, MIR_T_I64, "ib");
+      REG(d, MIR_T_D, "d");
+      INSN(MIR_AND, R(ia), R(call->a), U(abs_mask));
+      INSN(MIR_UBGE, L(slow), R(ia), U(UINT64_C(0x43e0000000000000)));
+      INSN(MIR_AND, R(ib), R(call->b), U(abs_mask));
+      INSN(MIR_UBGE, L(slow), R(ib), U(UINT64_C(0x43e0000000000000)));
+      mir_i64_to_d(ctx, fn, d, call->a, call->r_d_slot);
+      INSN(MIR_D2I, R(ia), R(d));
+      mir_i64_to_d(ctx, fn, d, call->b, call->r_d_slot);
+      INSN(MIR_D2I, R(ib), R(d));
+      INSN(MIR_MUL, R(ia), R(ia), R(ib));
+      INSN(MIR_EXT32, R(ia), R(ia));
+      INSN(MIR_I2D, R(d), R(ia));
+      mir_d_to_i64_non_nan(ctx, fn, call->result, d, call->r_d_slot);
+      break;
+    }
+
+    default: {
+      REG(da, MIR_T_D, "a");
+      REG(dr, MIR_T_D, "r");
+      mir_i64_to_d(ctx, fn, da, call->a, call->r_d_slot);
+      MIR_append_insn(ctx, fn, MIR_new_call_insn(ctx, 4,
+          MIR_new_ref_op(ctx, call->math1_proto), MIR_new_ref_op(ctx, call->imp_math[call->kind]),
+          R(dr), R(da)));
+      mir_d_to_i64(ctx, fn, call->result, dr, call->r_d_slot);
+      break;
+    }
   }
+#undef REG
+#undef INSN
+#undef R
+#undef U
+#undef L
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
   MIR_append_insn(ctx, fn, slow);
   return done;

@@ -37,7 +37,7 @@ const cases = {
     [0.49999999999999994, 0], [0.5, 1], [-0.5, -0], [-0.4, -0], [2.5, 3], [-2.5, -2], [-2.6, -3],
     [1.5, 2], [-0, -0], [0, 0], [4503599627370495.5, 4503599627370496], [Infinity, Infinity], [NaN, NaN],
   ],
-  sign: [[-0, -0], [0, 0], [-3, -1], [7.5, 1], [NaN, NaN], [-Infinity, -1]],
+  sign: [[-0, -0], [0, 0], [-3, -1], [7.5, 1], [NaN, NaN], [-Infinity, -1], [Infinity, 1], [-1e-310, -1], [5e-324, 1]],
   sqrt: [[4, 2], [-1, NaN], [-0, -0], [Infinity, Infinity], [2, Math.SQRT2]],
   trunc: [[-0.5, -0], [2.7, 2], [-2.7, -2], [NaN, NaN], [1e21, 1e21]],
 };
@@ -48,9 +48,12 @@ for (const [name, rows] of Object.entries(cases))
   }
 
 const pairs = {
-  imul: [[0xffffffff, 5, -5], [2 ** 31, 2, 0], [3.7, 2, 6], [NaN, 1, 0], [Infinity, 1, 0], [-1, 8, -8], [-0, 3, 0]],
-  max: [[0, -0, 0], [-0, 0, 0], [NaN, 1, NaN], [1, NaN, NaN], [-Infinity, -5, -5], [2, 1, 2]],
-  min: [[0, -0, -0], [-0, 0, -0], [NaN, 1, NaN], [1, NaN, NaN], [Infinity, 5, 5], [2, 1, 1]],
+  imul: [[0xffffffff, 5, -5], [2 ** 31, 2, 0], [3.7, 2, 6], [NaN, 1, 0], [Infinity, 1, 0], [-1, 8, -8], [-0, 3, 0],
+    [2 ** 62 + 2 ** 40, 3, 0], [-(2 ** 32) - 5, 7, -35], [-4294967295.9, -3, -3], [2 ** 63, 5, 0], [-(2 ** 63), 5, 0], [1e300, 1, 0], [0x7fffffff, 0x7fffffff, 1]],
+  max: [[0, -0, 0], [-0, 0, 0], [NaN, 1, NaN], [1, NaN, NaN], [-Infinity, -5, -5], [2, 1, 2],
+    [-0, -0, -0], [-2, -3, -2], [-3, -2, -2], [1.5, 1.5, 1.5], [Infinity, NaN, NaN], [-Infinity, Infinity, Infinity]],
+  min: [[0, -0, -0], [-0, 0, -0], [NaN, 1, NaN], [1, NaN, NaN], [Infinity, 5, 5], [2, 1, 1],
+    [0, 0, 0], [-2, -3, -3], [-3, -2, -3], [-1.5, -1.5, -1.5], [NaN, -Infinity, NaN], [-Infinity, Infinity, -Infinity]],
 };
 for (const [name, rows] of Object.entries(pairs))
   for (const [i, [a, b, expected]] of rows.entries())

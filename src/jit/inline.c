@@ -1952,7 +1952,6 @@ void jit_emit_inline_body(
               .r_d_slot = *p_d_slot,
               .scratch = r_bool,
               .math1_proto = ext->math1_proto,
-              .math2_proto = ext->math2_proto,
               .imp_math = ext->imp_math,
               .site = mir_next_reg_site(p_reg_site),
             });
