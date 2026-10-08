@@ -165,7 +165,7 @@ export function targets() {
     'test_jit_snapshot_recovery.cjs',
     'test_jit_snapshot_stale_exit.cjs',
     'test_jit_resume_try_depth.cjs',
-    'test_jit_compare_branch.cjs',
+    'test_events_key_cache.cjs',
     'test_arguments_object_semantics.cjs',
     'test_array_builtin_fast_paths.cjs',
     'test_gc_native_buffers.cjs',

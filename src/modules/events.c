@@ -90,6 +90,7 @@ typedef struct {
   uint32_t next_listener_id;
   bool needs_reorder;
   bool warned_max_listeners;
+  uint32_t key_matches;
 } EventType;
 
 struct EventTypeList {
@@ -393,19 +394,23 @@ static EventType *evt_list_find_cstr(EventTypeList *list, const char *name, size
   return NULL;
 }
 
+static __attribute__((noinline, cold)) void evt_cache_key(
+  ant_t *js, EventTypeList *list, EventType *evt, ant_value_t js_key, const char *bytes
+) {
+  uint32_t matches = ++evt->key_matches;
+  if (matches & (matches - 1)) return;
+  evt->js_key = js_key;
+  evt->key_bytes = bytes;
+  emitter_write_barrier(js, list->target, js_key);
+}
+
 static EventType *evt_list_find_slow(ant_t *js, EventTypeList *list, ant_value_t js_key) {
   if (vtype(js_key) != kTypeString) return NULL;
 
   size_t probe_len = 0;
   const char *probe = js_getstr(js, js_key, &probe_len);
   EventType *evt = probe ? evt_list_find_cstr(list, probe, probe_len) : NULL;
-  
-  if (evt) {
-    evt->js_key = js_key;
-    evt->key_bytes = probe;
-    emitter_write_barrier(js, list->target, js_key);
-  }
-  
+  if (evt) evt_cache_key(js, list, evt, js_key, probe);
   return evt;
 }
 
