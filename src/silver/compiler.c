@@ -498,6 +498,39 @@ static bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
   return true;
 }
 
+static constexpr int ATOM_SCAN_MAX = 16;
+
+static uint32_t atom_slot(const sv_compiler_t *c, const char *str) {
+  uint64_t h = ant_hash_mix((uint64_t)(uintptr_t)str ^ ant_hash_secret[0], ant_hash_secret[1]);
+  return (uint32_t)h & (c->atom_index_cap - 1);
+}
+
+static void atom_index_insert(sv_compiler_t *c, int atom) {
+  uint32_t slot = atom_slot(c, c->atoms[atom].str);
+  while (c->atom_index[slot]) slot = (slot + 1) & (c->atom_index_cap - 1);
+  c->atom_index[slot] = (uint32_t)atom + 1;
+}
+
+static bool atom_index_reserve(sv_compiler_t *c) {
+  if ((uint32_t)(c->atom_count + 1) * 2 <= c->atom_index_cap) return true;
+  uint32_t cap = ATOM_SCAN_MAX * 4;
+  
+  while ((uint32_t)(c->atom_count + 1) * 2 > cap) cap *= 2;
+  uint32_t *index = calloc(cap, sizeof(*index));
+  
+  free(c->atom_index);
+  c->atom_index = NULL;
+  c->atom_index_cap = 0;
+  
+  if (!index) return false;
+  c->atom_index = index;
+  c->atom_index_cap = cap;
+  
+  for (int i = 0; i < c->atom_count; i++) atom_index_insert(c, i);
+  
+  return true;
+}
+
 static int add_atom(sv_compiler_t *c, const char *str, uint32_t len) {
   const char *interned = intern_string(str, (size_t)len);
   const char *stored = interned;
@@ -507,15 +540,23 @@ static int add_atom(sv_compiler_t *c, const char *str, uint32_t len) {
     stored = copy;
   }
 
-  for (int i = 0; i < c->atom_count; i++) {
-    if (c->atoms[i].len == len && c->atoms[i].str == stored)
-      return i;
+  bool indexed = c->atom_count >= ATOM_SCAN_MAX && atom_index_reserve(c);
+  if (indexed) {
+    for (uint32_t slot = atom_slot(c, stored); c->atom_index[slot]; slot = (slot + 1) & (c->atom_index_cap - 1)) {
+      const sv_atom_t *atom = &c->atoms[c->atom_index[slot] - 1];
+      if (atom->str == stored && atom->len == len) return (int)c->atom_index[slot] - 1;
+    }
+  } else {
+    for (int i = 0; i < c->atom_count; i++) 
+      if (c->atoms[i].len == len && c->atoms[i].str == stored) return i;
   }
+
   if (c->atom_count >= c->atom_cap) {
     c->atom_cap = c->atom_cap ? c->atom_cap * 2 : 16;
     c->atoms = realloc(c->atoms, (size_t)c->atom_cap * sizeof(sv_atom_t));
   }
   c->atoms[c->atom_count] = (sv_atom_t){ .str = stored, .len = len };
+  if (indexed) atom_index_insert(c, c->atom_count);
   return c->atom_count++;
 }
 
@@ -7543,10 +7584,11 @@ sv_func_t *compile_function_body(
   )) return NULL;
 
   if (!(node->flags & FN_GENERATOR)) {
-    const sv_ast_t *offender = NULL;
-    bool found = ast_contains_own_yield(node->body, &offender);
-    for (int i = 0; !found && i < node->args.count; i++)
-      found = ast_contains_own_yield(node->args.items[i], &offender);
+    bool found = node->flags & FN_SCOPE_FACTS
+      ? !!(node->flags & FN_OWN_YIELD)
+      : ast_contains_own_yield(node->body, NULL);
+    for (int i = 0; !found && !(node->flags & FN_SCOPE_FACTS) && i < node->args.count; i++)
+      found = ast_contains_own_yield(node->args.items[i], NULL);
     if (found) {
       js_mkerr_typed(comp.js, JS_ERR_SYNTAX, "yield is only valid in generator functions");
       return NULL;
@@ -7569,7 +7611,8 @@ sv_func_t *compile_function_body(
   bool params_bind_eval = false;
   for (int i = 0; i < node->args.count; i++)
     params_bind_eval |= ast_pattern_binds(node->args.items[i], "eval");
-  if (!sv_compile_mode_is_eval(mode) && !is_repl_root(&comp) && !comp.is_strict && !params_bind_eval) {
+  bool may_eval = !(node->flags & FN_SCOPE_FACTS) || (node->flags & FN_DIRECT_EVAL);
+  if (may_eval && !sv_compile_mode_is_eval(mode) && !is_repl_root(&comp) && !comp.is_strict && !params_bind_eval) {
     for (int i = 0; !comp.owns_eval_env && i < node->args.count; i++)
       comp.owns_eval_env = ast_has_own_eval(&comp, node->args.items[i]);
     if (!comp.owns_eval_env && !ast_has_eval_var(node->body))
@@ -8008,21 +8051,24 @@ bool sv_op_stack_effect(const sv_func_t *func, const uint8_t *ip, int *pops, int
   return true;
 }
 
-static int sv_func_compute_max_stack(const sv_func_t *func) {
+static constexpr int STACK_DEPTH_SCRATCH = 512;
+
+static int sv_func_stack_depths(const sv_func_t *func, int *depth) {
   const int len = func->code_len;
   const uint8_t *code = func->code;
   if (len <= 0) return 0;
 
-  int *depth = malloc((size_t)len * sizeof(int));
-  int *work = malloc((size_t)len * sizeof(int));
-  uint8_t *queued = calloc((size_t)len, sizeof(uint8_t));
+  int work_small[STACK_DEPTH_SCRATCH];
+  uint8_t queued_small[STACK_DEPTH_SCRATCH];
+  bool small = len <= STACK_DEPTH_SCRATCH;
+  int *work = small ? work_small : malloc((size_t)len * sizeof(int));
+  uint8_t *queued = small ? queued_small : malloc((size_t)len);
   
-  if (!depth || !work || !queued) {
-    free(depth);
-    free(work);
-    free(queued);
+  if (!work || !queued) {
+    if (!small) { free(work); free(queued); }
     return -1;
   }
+  memset(queued, 0, (size_t)len);
   
   for (int i = 0; i < len; i++) depth[i] = -1;
   int wn = 0, max = 0, off = -1;
@@ -8099,10 +8145,28 @@ static int sv_func_compute_max_stack(const sv_func_t *func) {
     }
   }
 
-  free(depth);
-  free(work);
-  free(queued);
+  if (!small) { free(work); free(queued); }
   return ok ? max : -1;
+}
+
+static int sv_func_compute_max_stack(const sv_func_t *func) {
+  if (func->code_len <= 0) return 0;
+  int depth_small[STACK_DEPTH_SCRATCH];
+  bool small = func->code_len <= STACK_DEPTH_SCRATCH;
+  int *depth = small ? depth_small : malloc((size_t)func->code_len * sizeof(int));
+  int max = depth ? sv_func_stack_depths(func, depth) : -1;
+  if (!small) free(depth);
+  return max;
+}
+
+int *sv_func_stack_depth_map(const sv_func_t *func) {
+  if (func->code_len <= 0) return NULL;
+  int *depth = malloc((size_t)func->code_len * sizeof(int));
+  if (depth && sv_func_stack_depths(func, depth) < 0) {
+    free(depth);
+    return NULL;
+  }
+  return depth;
 }
 
 void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
@@ -8339,6 +8403,7 @@ sv_func_t *sv_compile(
   top_fn.src_end = (source_len > 0) ? (uint32_t)source_len : 0;
   top_fn.body = sv_ast_new(js, N_BLOCK);
   top_fn.body->args = program->args;
+  top_fn.flags |= program->flags & (FN_SCOPE_FACTS | FN_DIRECT_EVAL | FN_OWN_YIELD);
   
   if (
     sv_compile_mode_is_eval(mode) && 
@@ -8506,6 +8571,7 @@ sv_func_t *sv_compile_function_with_params(
   }
   
   top_fn.body->args = program->args;
+  top_fn.flags |= program->flags & (FN_SCOPE_FACTS | FN_DIRECT_EVAL | FN_OWN_YIELD);
   const char *text = copy_source_text(js, body, (ant_offset_t)body_len);
   if (!text && body && body_len > 0) {
     parse_arena_rewind(js, parse_mark);

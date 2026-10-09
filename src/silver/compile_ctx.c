@@ -87,6 +87,7 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
   free(ctx->code);
   free(ctx->constants);
   free(ctx->atoms);
+  free(ctx->atom_index);
   free(ctx->map_templates);
   free(ctx->locals);
   free(ctx->local_lookup_heads);
@@ -123,6 +124,7 @@ sv_line_table_t *sv_compile_ctx_build_line_table(const char *source, ant_offset_
   int cap = (int)(source_len / 32) + 64;
   lt->offsets = malloc((size_t)cap * sizeof(uint32_t));
   lt->count = 0;
+  lt->hint = 0;
   lt->offsets[lt->count++] = 0;
 
   for (ant_offset_t i = 0; i < source_len; i++) {
@@ -149,17 +151,26 @@ void sv_compile_ctx_line_table_lookup(
   uint32_t *out_line,
   uint32_t *out_col
 ) {
-  int lo = 0;
-  int hi = lt->count - 1;
+  int line = lt->hint;
+  bool ahead = line < lt->count && lt->offsets[line] <= off;
+  for (int step = 0; ahead && step < 8; step++) {
+    if (line + 1 >= lt->count || lt->offsets[line + 1] > off) goto found;
+    line++;
+  }
 
+  int lo = ahead ? line : 0;
+  int hi = lt->count - 1;
   while (lo < hi) {
     int mid = lo + (hi - lo + 1) / 2;
     if (lt->offsets[mid] <= off) lo = mid;
     else hi = mid - 1;
   }
+  line = lo;
 
-  *out_line = (uint32_t)(lo + 1);
-  *out_col = off - lt->offsets[lo] + 1;
+found:
+  lt->hint = line;
+  *out_line = (uint32_t)(line + 1);
+  *out_col = off - lt->offsets[line] + 1;
 }
 
 uint32_t sv_compile_ctx_hash_local_name(const char *name, uint32_t len) {

@@ -27,6 +27,11 @@ static constexpr int64_t JIT_COLD_PROMOTE_CHECK_EVERY = 4096;
 static constexpr uint32_t JIT_HOT_COMPILE_BACKEDGE_THRESHOLD = SV_JIT_OSR_THRESHOLD / 8;
 static constexpr uint8_t JIT_SNAPSHOT_RESET_LIMIT = 3;
 
+static constexpr int JIT_BASE_OPT_LEVEL = 1;
+static constexpr int JIT_HOT_OPT_LEVEL = 3;
+static constexpr int JIT_BIG_HOT_OPT_LEVEL = 1;
+static constexpr int JIT_BIG_HOT_INSN_LIMIT = 2000;
+
 extern _Thread_local sv_func_t *jit_compile_owner;
 
 typedef struct {
@@ -109,6 +114,12 @@ typedef struct {
   int n_locals;
   MIR_reg_t lbuf, d_slot;
 } jit_bailout_emit_t;
+
+typedef struct {
+  MIR_label_t label;
+  bool replaces_slow_path;
+} jit_stale_exit_t;
+
 #define NANBOX_TFUNC_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeFunction)
 #define NANBOX_TOBJ_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeObject)
 #define NANBOX_TPROM_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypePromise)
@@ -141,7 +152,7 @@ typedef struct {
   MIR_item_t stable_call_proto, imp_call_stable_builtin;
   MIR_item_t imp_band, imp_bor, imp_bxor, imp_shl, imp_shr, imp_ushr;
   MIR_item_t self_proto;
-  MIR_item_t math1_proto, math2_proto;
+  MIR_item_t math1_proto;
   MIR_item_t const *imp_math;
   MIR_reg_t r_args_buf;
   int *next_inline_id;
@@ -197,7 +208,8 @@ jit_integer_range_t jit_word_range(sv_op_t op, jit_integer_range_t left, jit_int
 void jit_emit_integer_constant(
     MIR_context_t ctx, MIR_item_t fn, jit_vstack_t *vs, MIR_reg_t dst, double number);
 enum { JIT_INDUCTION_SIGNED = 1, JIT_INDUCTION_NONNEG = 2 };
-static constexpr int64_t JIT_COUNTER_MAX = INT64_C(0x7ffffffffffffc00);
+static constexpr int64_t JIT_COUNTER_STEP_MAX = 511;
+static constexpr int64_t JIT_COUNTER_MAX = (INT64_MAX - JIT_COUNTER_STEP_MAX) & ~INT64_C(1023);
 void jit_induction_locals(sv_func_t *func, uint8_t *kinds, int n_locals, int param_count);
 uint8_t jit_induction_params(sv_func_t *func, int param_count);
 void jit_entry_integer_ranges(
@@ -318,16 +330,6 @@ void mir_emit_exit_ret(
     bool has_captured_slots, bool *captured_params, int param_count,
     bool has_captures, bool *captured_locals, int n_locals,
     int *next_site, MIR_op_t ret_op);
-void mir_emit_self_tail(
-    MIR_context_t ctx, MIR_item_t fn,
-    int call_argc, int param_count,
-    MIR_reg_t r_tco_args, MIR_reg_t r_arg_arr,
-    MIR_reg_t r_args, MIR_reg_t r_argc,
-    MIR_reg_t *local_regs, int n_locals,
-    bool has_captured_slots, MIR_reg_t r_slotbuf, bool *captured_params,
-    bool fill_all_params,
-    bool has_captures, bool *captured_locals,
-    MIR_reg_t r_lbuf, MIR_label_t entry);
 bool jit_const_is_heap(ant_value_t cv);
 void mir_load_const_slot(MIR_context_t ctx, MIR_item_t fn,
                          MIR_reg_t dst, ant_value_t *slot);
@@ -377,11 +379,16 @@ typedef struct {
   ant_math_intrinsic_t kind;
   MIR_reg_t result, callee, a, b;
   MIR_reg_t r_js, r_d_slot, scratch;
-  MIR_item_t math1_proto, math2_proto;
+  MIR_item_t math1_proto;
   MIR_item_t const *imp_math;
   int site;
 } jit_math_call_t;
 MIR_label_t mir_emit_math_call(MIR_context_t ctx, MIR_item_t fn, const jit_math_call_t *call);
+
+static inline bool jit_math_calls_c(ant_math_intrinsic_t kind) {
+  return kind == ANT_MATH_CEIL || kind == ANT_MATH_FLOOR || kind == ANT_MATH_ROUND ||
+         kind == ANT_MATH_SQRT || kind == ANT_MATH_TRUNC;
+}
 uint8_t jit_math_field_builtin(uint8_t receiver, const char *name, uint32_t len);
 void mir_emit_array_add_guard(
     MIR_context_t ctx, MIR_item_t fn, MIR_reg_t r_js,
@@ -478,14 +485,16 @@ bool mir_emit_get_field_ic_fastpath(
     MIR_reg_t obj,
     MIR_reg_t dst,
     MIR_label_t slow,
-    MIR_reg_t r_global_epoch);
+    MIR_reg_t r_global_epoch,
+    jit_stale_exit_t *stale_exit);
 bool mir_emit_get_global_ic_fastpath(
     MIR_context_t ctx, MIR_item_t fn,
     ant_t *js, sv_func_t *func, int bc_off,
     MIR_reg_t r_js, MIR_reg_t dst,
     MIR_label_t slow, MIR_reg_t r_global_epoch,
-    uint8_t *ip);
+    uint8_t *ip, jit_stale_exit_t *stale_exit);
 void scan_osr_entries(sv_func_t *func, osr_entry_map_t *osr);
+int jit_back_edges(const sv_func_t *func, int (**out)[2]);
 bool func_writes_params(sv_func_t *func);
 jit_child_kind_t classify_child_closure_kind(sv_func_t *parent, sv_func_t *child);
 bool *scan_captured_locals(sv_func_t *func, int n_locals);

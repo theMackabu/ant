@@ -9,7 +9,7 @@
 #include "silver/feedback.h"
 
 void *jit_helper_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) {
-  if (!func->jit_code_cold) return NULL;
+  if (!func->jit_code_cold && !func->jit_code_retier) return NULL;
   return (void *)sv_jit_tier_up(js, func, closure);
 }
 
@@ -97,12 +97,8 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(ant_math_ceil);
   LOAD_EXT(ant_math_floor);
   LOAD_EXT(ant_math_round);
-  LOAD_EXT(ant_math_sign);
   LOAD_EXT(ant_math_sqrt);
   LOAD_EXT(ant_math_trunc);
-  LOAD_EXT(ant_math_imul);
-  LOAD_EXT(ant_math_max);
-  LOAD_EXT(ant_math_min);
   LOAD_EXT(jit_helper_adopt_open_upvalues);
   LOAD_EXT(jit_helper_take_open_upvalues);
   LOAD_EXT(jit_helper_take_open_upvalues_rebase);
@@ -178,11 +174,9 @@ void sv_jit_init(ant_t *js) {
   jc->ctx = MIR_init2(jit_heap_mir_alloc(jc->mir_heap), NULL);
   
   MIR_gen_init(jc->ctx);
-  MIR_gen_set_optimize_level(jc->ctx, 1);
 
   jc->ctx_hot = MIR_init2(jit_heap_mir_alloc(jc->mir_heap), NULL);
   MIR_gen_init(jc->ctx_hot);
-  MIR_gen_set_optimize_level(jc->ctx_hot, 3);
 
   jit_load_externals_once(jc);
   js->jit_ctx = jc;
@@ -191,7 +185,6 @@ void sv_jit_init(ant_t *js) {
 void jit_release_gen_scratch(sv_jit_ctx_t *jc, MIR_context_t ctx) {
   MIR_gen_finish(ctx);
   MIR_gen_init(ctx);
-  MIR_gen_set_optimize_level(ctx, ctx == jc->ctx_hot ? 3 : 1);
   jit_heap_release(jc->mir_heap);
 }
 
@@ -218,7 +211,7 @@ static void sv_jit_compile_callees(ant_t *js, sv_func_t *func) {
     sv_func_t *callee = fb[i].target;
     
     if (callee->jit_code || callee->jit_compile_failed || callee->jit_compiling) continue;
-    if (callee->call_count < SV_JIT_THRESHOLD / 2) continue;
+    if (callee->call_count < SV_JIT_WARM_CALLS) continue;
     if (!jit_is_eligible(callee)) continue;
     
     sv_jit_func_t cjit = sv_jit_compile(js, callee, NULL);
@@ -256,6 +249,7 @@ ant_value_t sv_jit_try_compile_and_call(
 
 sv_jit_func_t sv_jit_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) {
   func->jit_code_cold = false;
+  func->jit_code_retier = false;
   sv_jit_func_t hot = sv_jit_compile_tier(js, func, closure, SV_JIT_TIER_HOT);
   
   if (sv_jit_warn_unlikely) fprintf(

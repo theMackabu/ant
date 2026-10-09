@@ -15,6 +15,13 @@ typedef struct {
   int saved_sp;
 } jit_catch_sp_t;
 
+typedef struct {
+  MIR_label_t label;
+  int bc_off;
+  int sp;
+  int types_at;
+} jit_stale_site_t;
+
 typedef struct jit_compile {
   MIR_item_t self_proto;
   MIR_item_t helper2_proto;
@@ -146,7 +153,6 @@ typedef struct jit_compile {
   MIR_item_t imp_param_counters_off;
   MIR_item_t imp_number_to_string;
   MIR_item_t math1_proto;
-  MIR_item_t math2_proto;
   MIR_item_t imp_math[ANT_MATH_INTRINSIC_COUNT];
   MIR_item_t imp_adopt_open_upvalues;
   MIR_item_t imp_take_open_upvalues;
@@ -248,6 +254,9 @@ typedef struct jit_compile {
   MIR_reg_t r_lbuf;
   MIR_reg_t r_jit_open_upvalues;
   MIR_label_t self_tail_entry;
+  MIR_label_t self_tail_reentry;
+  MIR_label_t call_entry;
+  bool skipped_inline_paths;
   MIR_reg_t r_result;
   uint8_t *ip;
   const uint8_t *previous_ip;
@@ -296,6 +305,12 @@ typedef struct jit_compile {
   jit_bailout_emit_t bailout_ctx;
   jit_bailout_emit_t promote_ctx;
   uint8_t *promote_sites;
+  uint8_t *osr_loop_body;
+  jit_stale_site_t *stale_sites;
+  int stale_site_count, stale_site_cap;
+  uint8_t *stale_types;
+  int stale_types_len, stale_types_cap;
+  MIR_label_t *stale_sp_exits;
   jit_label_map_t lm;
   osr_entry_map_t osr_map;
   jit_try_entry_t jit_try_stack[JIT_TRY_MAX];
@@ -322,6 +337,9 @@ typedef struct jit_compile {
   MIR_reg_t cmp_bit;
   MIR_reg_t cmp_value;
   int cmp_end;
+  MIR_insn_code_t cmp_code;
+  MIR_reg_t cmp_left, cmp_right;
+  MIR_insn_t cmp_insn, cmp_box;
   MIR_reg_t integer_value;
   jit_integer_range_t integer_range;
 } jit_compile_t;
@@ -331,10 +349,16 @@ static inline bool jit_speculate_unseen_numeric(const jit_compile_t *c, uint8_t 
 }
 
 void jit_emit_exit_ret(jit_compile_t *c, MIR_op_t ret_op);
+jit_stale_exit_t *jit_stale_exit_for(jit_compile_t *c, jit_stale_exit_t *exit);
+bool jit_site_runs_hot(jit_compile_t *c);
+void jit_note_stale_exit(jit_compile_t *c, const jit_stale_exit_t *exit, int pre_op_sp);
 void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg);
+void jit_emit_dense_add(
+    jit_compile_t *c, MIR_reg_t ptr, MIR_reg_t data, MIR_reg_t flags,
+    MIR_reg_t index, MIR_reg_t len, MIR_reg_t val, MIR_label_t slow, int site);
 void jit_emit_element_barrier(
     jit_compile_t *c, MIR_reg_t obj, MIR_reg_t index,
-    MIR_reg_t val, MIR_reg_t flags, MIR_label_t skip);
+    MIR_reg_t val, MIR_reg_t flags, MIR_label_t skip, MIR_label_t shared);
 void jit_emit_builtin_call_fast(
   jit_compile_t *c, MIR_reg_t func, MIR_reg_t this_val,
   MIR_reg_t args, uint16_t argc, MIR_reg_t result,
@@ -342,6 +366,7 @@ void jit_emit_builtin_call_fast(
 );
 void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type);
 bool jit_setup_frame(jit_compile_t *c);
+void jit_emit_entry_counter(jit_compile_t *c, const char *site, MIR_insn_t before);
 
 void jit_emit_literals(jit_compile_t *c);
 void jit_emit_stack(jit_compile_t *c);

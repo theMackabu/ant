@@ -26,6 +26,48 @@ static void jit_emit_promote_check(jit_compile_t *c, MIR_label_t loop, int64_t e
 
 }
 
+static void jit_emit_fused_compare_branch(jit_compile_t *c, bool if_false, MIR_label_t target) {
+  MIR_insn_code_t branch, inverse = MIR_INSN_BOUND;
+  switch (c->cmp_code) {
+    case MIR_LT: branch = MIR_BLT; inverse = MIR_BGE; break;
+    case MIR_LE: branch = MIR_BLE; inverse = MIR_BGT; break;
+    case MIR_GT: branch = MIR_BGT; inverse = MIR_BLE; break;
+    case MIR_GE: branch = MIR_BGE; inverse = MIR_BLT; break;
+    case MIR_DLT: branch = MIR_DBLT; break;
+    case MIR_DLE: branch = MIR_DBLE; break;
+    case MIR_DGT: branch = MIR_DBGT; break;
+    case MIR_DGE: branch = MIR_DBGE; break;
+    default:
+      // anything else keeps testing the bit
+      if (if_false) {
+        MIR_label_t taken = MIR_new_label(c->ctx);
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_BT, MIR_new_label_op(c->ctx, taken), MIR_new_reg_op(c->ctx, c->cmp_bit)));
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, target)));
+        MIR_append_insn(c->ctx, c->jit_func, taken);
+      } else {
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_BT, MIR_new_label_op(c->ctx, target), MIR_new_reg_op(c->ctx, c->cmp_bit)));
+      }
+      return;
+  }
+
+  MIR_remove_insn(c->ctx, c->jit_func, c->cmp_insn);
+  MIR_remove_insn(c->ctx, c->jit_func, c->cmp_box);
+#define BRANCH(code, label) \
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, code, MIR_new_label_op(c->ctx, label), \
+      MIR_new_reg_op(c->ctx, c->cmp_left), MIR_new_reg_op(c->ctx, c->cmp_right)))
+  if (!if_false) BRANCH(branch, target);
+  else if (inverse != MIR_INSN_BOUND) BRANCH(inverse, target);
+  else {
+    MIR_label_t taken = MIR_new_label(c->ctx);
+    BRANCH(branch, taken);
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, target)));
+    MIR_append_insn(c->ctx, c->jit_func, taken);
+  }
+#undef BRANCH
+}
+
 void jit_emit_control(jit_compile_t *c) {
   switch (c->op) {
     case OP_JMP:
@@ -80,19 +122,7 @@ void jit_emit_control(jit_compile_t *c) {
       int target = c->bc_off + c->sz + (short_op ? (int8_t)sv_get_i8(c->ip + 1) : sv_get_i32(c->ip + 1));
       MIR_label_t lbl = label_for_branch(c->ctx, &c->lm, target, c->vs.sp);
       if (fused) {
-        if (is_false_branch) {
-          MIR_label_t taken = MIR_new_label(c->ctx);
-          MIR_append_insn(c->ctx, c->jit_func,
-                          MIR_new_insn(c->ctx, MIR_BT, MIR_new_label_op(c->ctx, taken),
-                                       MIR_new_reg_op(c->ctx, c->cmp_bit)));
-          MIR_append_insn(c->ctx, c->jit_func,
-                          MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, lbl)));
-          MIR_append_insn(c->ctx, c->jit_func, taken);
-        } else {
-          MIR_append_insn(c->ctx, c->jit_func,
-                          MIR_new_insn(c->ctx, MIR_BT, MIR_new_label_op(c->ctx, lbl),
-                                       MIR_new_reg_op(c->ctx, c->cmp_bit)));
-        }
+        jit_emit_fused_compare_branch(c, is_false_branch, lbl);
         break;
       }
       if (cond_known_bool) {

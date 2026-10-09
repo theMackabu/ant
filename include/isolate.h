@@ -57,7 +57,7 @@ struct ant_isolate_t {
   
   descriptor_entry_t *desc_registry;
   ant_process_state_t *process_state;
-  ant_events_state_t *events_state;
+  ant_event_list_t *global_events;
   ant_regex_state_t *regex_state;
   json_layout_cache_t *json_layout_cache;
   server_runtime_t *server_runtimes;

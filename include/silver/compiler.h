@@ -99,6 +99,7 @@ typedef struct const_dedup_entry {
 typedef struct sv_line_table {
   uint32_t *offsets;
   int count;
+  int hint;
 } sv_line_table_t;
 
 typedef struct {
@@ -143,6 +144,8 @@ typedef struct sv_compiler {
   sv_atom_t *atoms;
   int atom_count;
   int atom_cap;
+  uint32_t *atom_index;
+  uint32_t atom_index_cap;
 
   sv_map_template_desc_t *map_templates;
   int map_template_count;

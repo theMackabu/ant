@@ -1512,7 +1512,7 @@ void jit_emit_inline_body(
         bool gf_fast = r_ic_epoch != 0 &&
                        mir_emit_get_field_ic_fastpath(
                            ctx, jit_func, js, callee, -(id * 100000 + inl_bc_off + 1), gf_ic_idx,
-                           atom, obj, dst, gf_slowl, r_ic_epoch);
+                           atom, obj, dst, gf_slowl, r_ic_epoch, NULL);
         if (gf_fast) {
           MIR_append_insn(ctx, jit_func,
                           MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, gf_done)));
@@ -1560,7 +1560,7 @@ void jit_emit_inline_body(
         bool gf_fast = r_ic_epoch != 0 &&
                        mir_emit_get_field_ic_fastpath(
                            ctx, jit_func, js, callee, -(id * 100000 + inl_bc_off + 1), gf_ic_idx,
-                           atom, obj, dst, gf_slow, r_ic_epoch);
+                           atom, obj, dst, gf_slow, r_ic_epoch, NULL);
         if (gf_fast) {
           MIR_append_insn(ctx, jit_func,
                           MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, no_err)));
@@ -1603,7 +1603,7 @@ void jit_emit_inline_body(
         bool gf_fast = r_ic_epoch != 0 &&
                        mir_emit_get_field_ic_fastpath(
                            ctx, jit_func, js, callee, -(id * 100000 + inl_bc_off + 1), gf_ic_idx,
-                           atom, obj, dst, gf_slow, r_ic_epoch);
+                           atom, obj, dst, gf_slow, r_ic_epoch, NULL);
         if (gf_fast) {
           MIR_append_insn(ctx, jit_func,
                           MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, value_ok)));
@@ -1637,7 +1637,7 @@ void jit_emit_inline_body(
         bool gg_fast = r_ic_epoch != 0 &&
                        mir_emit_get_global_ic_fastpath(
                            ctx, jit_func, js, callee, gg_site,
-                           r_js, dst, slow, r_ic_epoch, ip);
+                           r_js, dst, slow, r_ic_epoch, ip, NULL);
         if (!gg_fast)
           MIR_append_insn(ctx, jit_func,
                           MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, slow)));
@@ -1952,7 +1952,6 @@ void jit_emit_inline_body(
               .r_d_slot = *p_d_slot,
               .scratch = r_bool,
               .math1_proto = ext->math1_proto,
-              .math2_proto = ext->math2_proto,
               .imp_math = ext->imp_math,
               .site = mir_next_reg_site(p_reg_site),
             });

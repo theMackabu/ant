@@ -36,6 +36,10 @@ static_assert(
 
 #define SV_JIT_THRESHOLD       100
 #define SV_JIT_RECOMPILE_DELAY 50
+
+static constexpr uint32_t SV_JIT_WARM_CALLS = SV_JIT_THRESHOLD / 2;
+static_assert(SV_JIT_THRESHOLD - SV_JIT_RECOMPILE_DELAY >= SV_JIT_WARM_CALLS, "a bailout must leave the function warm");
+
 #define SV_TFB_ALLOC_THRESHOLD 2
 
 #define SV_CALL_FB_MAX_SLOTS    32
@@ -99,6 +103,7 @@ static inline void sv_jit_on_bailout_at(sv_func_t *fn, const char *reason, int b
 
   fn->jit_code = NULL;
   fn->jit_code_cold = false;
+  fn->jit_code_retier = false;
   fn->back_edge_count = 0;
 
   if (sv_jit_warn_unlikely) {

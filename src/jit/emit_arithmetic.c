@@ -46,7 +46,7 @@ void jit_emit_arithmetic(jit_compile_t *c) {
       bool fb_num_only = force_num_only || jit_speculate_unseen_numeric(c, fb) ||
                          (fb && !(fb & ~SV_TFB_NUM));
       bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
-      bool fb_str_only = !force_num_only && fb && !(fb & ~SV_TFB_STR);
+      bool fb_str_only = !force_num_only && fb && !(fb & ~SV_TFB_STR) && jit_site_runs_hot(c);
 
       bool l_is_num = vstack_prepare_num(
           &c->vs, c->vs.sp - 2, c->ctx, c->jit_func, c->r_d_slot);

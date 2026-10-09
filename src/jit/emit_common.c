@@ -10,6 +10,70 @@ void jit_emit_exit_ret(jit_compile_t *c, MIR_op_t ret_op) {
                     &c->reg_site_n, ret_op);
 }
 
+static bool jit_bc_in_osr_loop(jit_compile_t *c) {
+  sv_func_t *func = c->func;
+  if (!c->osr_loop_body) {
+    c->osr_loop_body = calloc((size_t)func->code_len + 1, 1);
+    int (*edges)[2] = NULL;
+    int n = c->osr_loop_body ? jit_back_edges(func, &edges) : -1;
+    int *delta = n > 0 ? calloc((size_t)func->code_len + 1, sizeof(int)) : NULL;
+    for (int i = 0; delta && i < n; i++) {
+      for (int k = 0; k < c->osr_map.count; k++) {
+        if (c->osr_map.offsets[k] != edges[i][0]) continue;
+        delta[edges[i][0]]++;
+        delta[edges[i][1] + 1]--;
+        break;
+      }
+    }
+    for (int off = 0, d = 0; delta && off < func->code_len; off++)
+      c->osr_loop_body[off] = (d += delta[off]) > 0;
+    free(delta);
+    free(edges);
+  }
+  return c->osr_loop_body && c->bc_off < c->func->code_len && c->osr_loop_body[c->bc_off];
+}
+
+bool jit_site_runs_hot(jit_compile_t *c) {
+  if (c->func->call_count >= SV_JIT_WARM_CALLS || jit_bc_in_osr_loop(c)) return true;
+  c->skipped_inline_paths = true;
+  return false;
+}
+
+jit_stale_exit_t *jit_stale_exit_for(jit_compile_t *c, jit_stale_exit_t *exit) {
+  if (c->func->jit_snapshot_resets || !jit_bc_in_osr_loop(c)) return NULL;
+  if (!c->stale_sp_exits) {
+    c->stale_sp_exits = calloc((size_t)c->vs.max + 1, sizeof(*c->stale_sp_exits));
+    if (!c->stale_sp_exits) return NULL;
+  }
+  if (c->stale_site_count == c->stale_site_cap) {
+    int cap = c->stale_site_cap ? c->stale_site_cap * 2 : 8;
+    jit_stale_site_t *sites = realloc(c->stale_sites, (size_t)cap * sizeof(*sites));
+    if (!sites) return NULL;
+    c->stale_sites = sites;
+    c->stale_site_cap = cap;
+  }
+  if (c->stale_types_len + c->vs.sp > c->stale_types_cap) {
+    int cap = c->stale_types_cap * 2 + c->vs.sp + 16;
+    uint8_t *types = realloc(c->stale_types, (size_t)cap);
+    if (!types) return NULL;
+    c->stale_types = types;
+    c->stale_types_cap = cap;
+  }
+  *exit = (jit_stale_exit_t){0};
+  return exit;
+}
+
+void jit_note_stale_exit(jit_compile_t *c, const jit_stale_exit_t *exit, int pre_op_sp) {
+  if (!exit || !exit->label) return;
+  uint8_t *types = c->stale_types + c->stale_types_len;
+  for (int i = 0; i < pre_op_sp; i++)
+    types[i] = c->vs.slot_type ? c->vs.slot_type[i] : SLOT_BOXED;
+  c->stale_sites[c->stale_site_count++] = (jit_stale_site_t){
+    .label = exit->label, .bc_off = c->bc_off, .sp = pre_op_sp, .types_at = c->stale_types_len,
+  };
+  c->stale_types_len += pre_op_sp;
+}
+
 void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg) {
   MIR_label_t no_error = MIR_new_label(c->ctx);
   MIR_append_insn(c->ctx, c->jit_func,

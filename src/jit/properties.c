@@ -885,7 +885,8 @@ bool mir_emit_get_field_ic_fastpath(
     MIR_reg_t obj,
     MIR_reg_t dst,
     MIR_label_t slow,
-    MIR_reg_t r_global_epoch) {
+    MIR_reg_t r_global_epoch,
+    jit_stale_exit_t *stale_exit) {
   if (!func || !func->ic_slots || !atom) return false;
   if (ic_idx == UINT16_MAX || ic_idx >= func->ic_count) return false;
   if (is_length_key(atom->str, atom->len)) return false;
@@ -915,7 +916,8 @@ bool mir_emit_get_field_ic_fastpath(
     MIR_label_t done = MIR_new_label(ctx);
     if (mir_emit_get_field_proto_snapshot(ctx, fn, js, ic, atom, bc_off, ic_idx, obj, dst, miss, stale)) {
       MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
-      mir_emit_snapshot_stale(ctx, fn, js, bc_off, stale);
+      if (stale_exit) stale_exit->label = stale;
+      else mir_emit_snapshot_stale(ctx, fn, js, bc_off, stale);
       MIR_append_insn(ctx, fn, miss);
       proto_snapshot_done = done;
     }
@@ -1255,7 +1257,7 @@ bool mir_emit_get_global_ic_fastpath(
     ant_t *js, sv_func_t *func, int bc_off,
     MIR_reg_t r_js, MIR_reg_t dst,
     MIR_label_t slow, MIR_reg_t r_global_epoch,
-    uint8_t *ip) {
+    uint8_t *ip, jit_stale_exit_t *stale_exit) {
   if (!func || !func->ic_slots || !ip) return false;
   sv_ic_entry_t *ic = sv_global_ic_slot_for_ip(func, ip);
   if (!ic) return false;
@@ -1263,6 +1265,10 @@ bool mir_emit_get_global_ic_fastpath(
   MIR_label_t snapshot_done = NULL;
   MIR_label_t snapshot_stale = MIR_new_label(ctx);
   if (js && mir_emit_get_global_snapshot(ctx, fn, js, func, ic, bc_off, r_js, dst, ip, snapshot_stale)) {
+    if (stale_exit) {
+      *stale_exit = (jit_stale_exit_t){ .label = snapshot_stale, .replaces_slow_path = true };
+      return true;
+    }
     snapshot_done = MIR_new_label(ctx);
     MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, snapshot_done)));
     mir_emit_snapshot_stale(ctx, fn, js, bc_off, snapshot_stale);

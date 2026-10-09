@@ -75,6 +75,8 @@ bool sv_op_stack_effect(
   const uint8_t *ip, int *pops, int *pushes
 );
 
+int *sv_func_stack_depth_map(const sv_func_t *func);
+
 static const uint8_t sv_op_size[OP__COUNT] = {
 #define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = (size),
 #include "silver/opcode.h"
@@ -555,6 +557,7 @@ struct sv_func {
   bool jit_compiling: 1;
   bool jit_loop_hot: 1;
   bool jit_code_cold: 1;
+  bool jit_code_retier: 1;
 
   uint32_t call_count;
   uint32_t back_edge_count;

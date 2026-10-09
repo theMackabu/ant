@@ -10,6 +10,7 @@ static constexpr int32_t JIT_GFP_MAX_CODE_LEN = 512;
 static constexpr int32_t JIT_NEW_DIRECT_MAX_CODE_LEN = 1024;
 static constexpr uint8_t JIT_POLY_RECOMPILES = 2;
 static constexpr uint16_t JIT_POLY_RECOMPILE_SLOW_HITS = 256;
+static constexpr int64_t SV_JIT_RESUME_STALE = (int64_t)1 << 32;
 
 typedef enum {
   SV_JIT_TIER_AUTO, // hot context if the function looped, cheap otherwise
@@ -43,6 +44,10 @@ ant_value_t sv_jit_try_osr(
 
 static inline bool sv_jit_promote_pending(const sv_func_t *func) {
   return func->jit_code_cold && func->jit_code == NULL;
+}
+
+static inline void sv_jit_prime_osr(sv_func_t *func) {
+  func->back_edge_count = func->jit_osr_threshold > 0 ? func->jit_osr_threshold - 1 : 0;
 }
 
 static inline uint32_t sv_jit_osr_threshold_for(int code_len) {

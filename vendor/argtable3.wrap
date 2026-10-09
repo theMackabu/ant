@@ -8,6 +8,7 @@ patch_filename = argtable3_3.3.1-1_patch.zip
 patch_url = https://wrapdb.mesonbuild.com/v2/argtable3_3.3.1-1/get_patch
 patch_fallback_url = https://github.com/mesonbuild/wrapdb/releases/download/argtable3_3.3.1-1/argtable3_3.3.1-1_patch.zip
 patch_hash = 6bbe3bfd71536fd0dbf806eeaa8b20e721d3364d7d494e698c5a8f346bb778d2
+diff_files = patches/argtable3-const-strchr.patch
 wrapdb_version = 3.3.1-1
 
 [provide]

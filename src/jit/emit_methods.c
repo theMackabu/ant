@@ -109,21 +109,8 @@ static MIR_label_t jit_emit_array_push_fastpath(jit_compile_t *c) {
       MIR_new_mem_op(c->ctx, MIR_T_U32, (MIR_disp_t)offsetof(ant_object_t, u.array.cap), ptr, 0, 1)));
   MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_UBGE, MIR_new_label_op(c->ctx, slow),
       MIR_new_reg_op(c->ctx, len), MIR_new_reg_op(c->ctx, c->r_bool)));
-  mir_emit_array_add_guard(c->ctx, c->jit_func, c->r_js, ptr, flags, slow, site);
-
-  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
-      MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, data, len, sizeof(ant_value_t)), MIR_new_reg_op(c->ctx, val)));
-  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_ADD, MIR_new_reg_op(c->ctx, c->r_bool),
-      MIR_new_reg_op(c->ctx, len), MIR_new_int_op(c->ctx, 1)));
-  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
-      MIR_new_mem_op(c->ctx, MIR_T_U32, (MIR_disp_t)offsetof(ant_object_t, u.array.len), ptr, 0, 1),
-      MIR_new_reg_op(c->ctx, c->r_bool)));
-  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_OR, MIR_new_reg_op(c->ctx, flags),
-      MIR_new_reg_op(c->ctx, flags), MIR_new_uint_op(c->ctx, ANT_OBJECT_FLAG_MAY_HAVE_DENSE_ELEMENTS)));
-  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
-      MIR_new_mem_op(c->ctx, MIR_T_U16, (MIR_disp_t)offsetof(ant_object_t, flags), ptr, 0, 1),
-      MIR_new_reg_op(c->ctx, flags)));
-  jit_emit_element_barrier(c, recv, len, val, flags, stored);
+  jit_emit_dense_add(c, ptr, data, flags, len, 0, val, slow, site);
+  jit_emit_element_barrier(c, recv, len, val, flags, stored, NULL);
   MIR_append_insn(c->ctx, c->jit_func, stored);
 
   MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_ADD, MIR_new_reg_op(c->ctx, len),
@@ -176,7 +163,6 @@ static MIR_label_t jit_emit_math_fastpath(jit_compile_t *c, ant_math_intrinsic_t
     .r_d_slot = c->r_d_slot,
     .scratch = c->r_bool,
     .math1_proto = c->math1_proto,
-    .math2_proto = c->math2_proto,
     .imp_math = c->imp_math,
     .site = mir_next_reg_site(&c->reg_site_n),
   });

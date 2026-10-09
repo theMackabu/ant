@@ -299,6 +299,7 @@ ant_value_t get_ctor_species_value(ant_t *js, ant_value_t ctor);
 
 bool proto_chain_contains(ant_t *js, ant_value_t obj, ant_value_t proto_target);
 bool same_ctor_identity(ant_t *js, ant_value_t a, ant_value_t b);
+bool js_array_iteration_default(ant_t *js, ant_value_t arr);
 
 ant_value_t lkp_interned_val(ant_t *js, ant_value_t obj, const char *search_intern);
 ant_prop_loc_t lkp_interned(ant_value_t obj, const char *search_intern);
@@ -313,6 +314,7 @@ ant_value_t mkobj(ant_t *js, ant_offset_t parent);
 ant_value_t js_mkobj_with_inobj_limit(ant_t *js, uint8_t inobj_limit);
 ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint32_t count);
 ant_value_t js_mkarr_dense_uninit(ant_t *js, uint32_t count, ant_value_t **out_data);
+ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src);
 ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t template);
 
 ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj);

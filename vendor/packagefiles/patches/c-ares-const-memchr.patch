@@ -1,0 +1,11 @@
+--- a/src/lib/str/ares_str.c
++++ b/src/lib/str/ares_str.c
+@@ -246,7 +246,7 @@
+   return ptr;
+ #else
+   while (1) {
+-    ptr = memchr(big, little[0], big_len);
++    ptr = (unsigned char *)memchr(big, little[0], big_len);
+     if (ptr == NULL) {
+       break;
+     }

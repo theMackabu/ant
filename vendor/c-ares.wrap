@@ -8,7 +8,7 @@ patch_filename = c-ares_1.34.6-1_patch.zip
 patch_url = https://wrapdb.mesonbuild.com/v2/c-ares_1.34.6-1/get_patch
 patch_fallback_url = https://github.com/mesonbuild/wrapdb/releases/download/c-ares_1.34.6-1/c-ares_1.34.6-1_patch.zip
 patch_hash = 3754d07b75eb672471b3c94015f6190f183db1c3c550eedb09ee01344107fb9c
-diff_files = patches/c-ares-static-hidden.patch
+diff_files = patches/c-ares-static-hidden.patch, patches/c-ares-const-memchr.patch
 wrapdb_version = 1.34.6-1
 
 [provide]

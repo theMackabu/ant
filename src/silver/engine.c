@@ -1516,13 +1516,14 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   ant_value_t *lp = frame->lp;
 
   if (!resuming && vm->jit_resume.active) {
+    int base_sp = vm->sp;
     for (int64_t i = 0; i < vm->jit_resume.vstack_sp; i++)
       vm->stack[vm->sp++] = vm->jit_resume.vstack[i];
 
     int resume_off = (int)vm->jit_resume.ip_offset;
     uint8_t *scan = func->code;
     uint8_t *scan_end = func->code + resume_off;
-    typedef struct { uint8_t *catch_ip; int saved_sp; } pending_h;
+    typedef struct { uint8_t *catch_ip; int try_off; } pending_h;
     
     pending_h h_stack[SV_TRY_MAX];
     int enclosing_count = 0;
@@ -1539,7 +1540,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         is_enclosing[total_depth] = (catch_off > resume_off);
         if (is_enclosing[total_depth]) {
           h_stack[enclosing_count].catch_ip = func->code + catch_off;
-          h_stack[enclosing_count].saved_sp = vm->sp;
+          h_stack[enclosing_count].try_off = (int)(scan - func->code);
           enclosing_count++;
         }
         total_depth++;
@@ -1550,16 +1551,19 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       scan += scan_sz;
     }
     
+    int *depth = enclosing_count > 0 ? sv_func_stack_depth_map(func) : NULL;
     for (int i = 0; i < enclosing_count; i++) {
       if (vm->handler_depth < SV_HANDLER_MAX) {
         sv_handler_t *h = &vm->handler_stack[vm->handler_depth++];
+        int try_depth = depth ? depth[h_stack[i].try_off] : -1;
         h->kind = SV_HANDLER_TRY;
         h->ip = h_stack[i].catch_ip;
-        h->saved_sp = h_stack[i].saved_sp;
+        h->saved_sp = try_depth >= 0 ? base_sp + try_depth : vm->sp;
         frame->handler_top = (uint16_t)vm->handler_depth;
       }
     }
-
+    
+    free(depth);
     sv_clear_jit_resume(vm);
   }
 

@@ -1,0 +1,11 @@
+--- a/src/arg_getopt_long.c
++++ b/src/arg_getopt_long.c
+@@ -547,7 +547,7 @@
+ 
+ 	if ((optchar = (int)*place++) == (int)':' ||
+ 	    (optchar == (int)'-' && *place != '\0') ||
+-	    (oli = strchr(options, optchar)) == NULL) {
++	    (oli = (char *)strchr(options, optchar)) == NULL) {
+ 		/*
+ 		 * If the user specified "-" and  '-' isn't listed in
+ 		 * options, return -1 (non-option) as per POSIX.
