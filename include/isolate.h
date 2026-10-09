@@ -141,6 +141,9 @@ struct ant_isolate_t {
     const char *value;
     const char *get;
     const char *set;
+    const char *enumerable;
+    const char *configurable;
+    const char *writable;
     const char *arguments;
     const char *callee;
     const char *next;

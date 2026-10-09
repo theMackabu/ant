@@ -805,11 +805,8 @@ static inline ant_value_t sv_prop_get_at(
 static inline bool sv_number_key_index(ant_value_t key, uint32_t *idx) {
   if (vtype(key) != kTypeNumber) return false;
   double d = tod(key);
-  
-  if (!(d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d)) return false;
-  *idx = (uint32_t)d;
-  
-  return true;
+  *idx = (uint32_t)d;  
+  return d >= 0 && d < (double)UINT32_MAX && d == *idx;
 }
 
 static inline bool sv_parse_string_index_key(ant_t *js, ant_value_t key, size_t *out_idx) {
@@ -842,18 +839,7 @@ static inline bool sv_parse_string_index_key(ant_t *js, ant_value_t key, size_t 
   return true;
 }
 
-static inline bool sv_try_index_get(ant_t *js, ant_value_t obj, ant_value_t key, ant_value_t *out) {
-  uint32_t plain_idx;
-  
-  bool is_obj = vtype(obj) == kTypeObject;
-  if (is_obj && sv_number_key_index(key, &plain_idx) && js_get_plain_index(js, obj, plain_idx, out)) return true;
-  
-  ant_value_t str = is_obj ? js_string_wrapper_value(obj) : obj;
-  if (vtype(str) != kTypeString) return false;
-
-  size_t idx = 0;
-  if (!sv_parse_string_index_key(js, key, &idx)) return false;
-
+static inline bool sv_string_char_get(ant_t *js, ant_value_t obj, ant_value_t str, size_t idx, ant_value_t *out) {
   ant_offset_t byte_len = 0;
   ant_offset_t str_off = vstr(js, str, &byte_len);
   const char *str_data = (const char *)(uintptr_t)(str_off);
@@ -865,17 +851,23 @@ static inline bool sv_try_index_get(ant_t *js, ant_value_t obj, ant_value_t key,
     return true;
   }
 
-  char buf[4];
-  size_t out_len = 0;
-  if (code_unit >= 0xD800 && code_unit <= 0xDFFF) {
-    buf[0] = (char)(0xE0 | (code_unit >> 12));
-    buf[1] = (char)(0x80 | ((code_unit >> 6) & 0x3F));
-    buf[2] = (char)(0x80 | (code_unit & 0x3F));
-    out_len = 3;
-  } else out_len = (size_t)utf8_encode(code_unit, buf);
-  *out = js_mkstr(js, buf, out_len);
-  
+  *out = js_string_from_utf16_code_unit(js, code_unit);
   return true;
+}
+
+static inline bool sv_try_index_get(ant_t *js, ant_value_t obj, ant_value_t key, ant_value_t *out) {
+  uint32_t num_idx;
+  if (sv_number_key_index(key, &num_idx)) {
+    if (vtype(obj) == kTypeObject) return js_get_plain_index(js, obj, num_idx, out);
+    return vtype(obj) == kTypeString && sv_string_char_get(js, obj, obj, num_idx, out);
+  }
+  
+  size_t idx = 0;
+  ant_value_t str = vtype(obj) == kTypeObject ? js_string_wrapper_value(obj) : obj;
+  
+  return vtype(str) == kTypeString && 
+    sv_parse_string_index_key(js, key, &idx) && 
+    sv_string_char_get(js, obj, str, idx, out);
 }
 
 static inline bool sv_prim_ic_lookup(
