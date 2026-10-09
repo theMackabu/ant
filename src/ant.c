@@ -4187,12 +4187,14 @@ static inline bool arguments_proto_chain_plain(ant_t *js, ant_object_t *args) {
     !ant_shape_may_have_index_keys(object_proto->shape);
 }
 
+static inline bool array_elements_proto_plain(ant_t *js, ant_object_t *ptr) {
+  return ptr->flags.arguments_object ? arguments_proto_chain_plain(js, ptr) : array_proto_chain_plain(js, ptr);
+}
+
 static inline ant_object_t *array_dense_source(ant_t *js, ant_value_t arr) {
   if (is_proxy(arr)) return NULL;
   ant_object_t *ptr = array_obj_ptr(arr);
-  if (!array_dense_storage(ptr)) return NULL;
-  bool plain = ptr->flags.arguments_object ? arguments_proto_chain_plain(js, ptr) : array_proto_chain_plain(js, ptr);
-  return plain ? ptr : NULL;
+  return array_dense_storage(ptr) && array_elements_proto_plain(js, ptr) ? ptr : NULL;
 }
 
 static inline bool array_search_eq(ant_t *js, ant_value_t elem, ant_value_t search) {
@@ -11569,12 +11571,13 @@ static ant_value_t builtin_array_slice(ant_params_t) {
   ant_value_t result = array_species_create(js, arr, count, &intrinsic);
   if (is_err(result)) return result;
   
-  ant_object_t *src = !string_like && vtype(arr) == kTypeArray ? array_dense_source(js, arr) : NULL;
+  ant_object_t *src = !string_like && vtype(arr) == kTypeArray ? array_obj_ptr(arr) : NULL;
   ant_object_t *dst = intrinsic && vtype(result) == kTypeArray ? array_obj_ptr(result) : NULL;
   
   if (
     src && dst && array_dense_covers(src, end) &&
     dst->flags.fast_array && dst->u.array.data && (dst->u.array.len == 0 || dst->u.array.len == count) &&
+    array_elements_proto_plain(js, src) &&
     (count <= dst->u.array.cap || dense_grow(js, result, count))
   ) {
     bool has_holes = false, has_elements = false;
