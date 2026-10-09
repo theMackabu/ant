@@ -111,6 +111,25 @@ async function main() {
     disposed[Symbol.dispose]();
     disposed[Symbol.dispose]();
     assert.throws(() => disposed.readSync(), { code: 'ERR_DIR_CLOSED' });
+
+    // async dispose after close() was called, even before it settles, is a no-op
+    const closing = await fs.promises.opendir(root);
+    const closed = closing.close();
+    assert.strictEqual(await closing[Symbol.asyncDispose](), undefined);
+    await closed;
+
+    // a close() still queued behind a read has not started, so dispose closes
+    // again and that second close fails, as in Node
+    const queued = await fs.promises.opendir(root);
+    const reading = queued.read();
+    const closedAfterRead = queued.close();
+    await assert.rejects(queued[Symbol.asyncDispose](), { code: 'ERR_DIR_CLOSED' });
+    await reading;
+    await closedAfterRead;
+
+    const asyncDisposed = await fs.promises.opendir(root);
+    assert.strictEqual(await asyncDisposed[Symbol.asyncDispose](), undefined);
+    await assert.rejects(asyncDisposed.close(), { code: 'ERR_DIR_CLOSED' });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

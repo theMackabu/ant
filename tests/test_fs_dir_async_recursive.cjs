@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 const show = (root) => (entry) => `${entry.name}|${String(entry.parentPath).replace(root, 'R')}|${entry.isDirectory()}`;
 
@@ -21,7 +22,9 @@ async function main() {
     fs.writeFileSync(path.join(root, 'a', 'g'), '');
     fs.writeFileSync(path.join(root, 'a', 'b', 'h'), '');
     fs.symlinkSync(path.join(root, 'a'), path.join(root, 'lnk'));
-    const expected = ['a|R|true', 'f|R|false', 'g|R/a|false', 'b|R/a|true', 'h|R/a/b|false', 'lnk|R|false'].sort();
+    const expected = ['a|R|true', 'f|R|false', 'g|R/a|false', 'b|R/a|true', 'h|R/a/b|false', 'lnk|R|false']
+      .map((entry) => entry.split('/').join(path.sep))
+      .sort();
 
     // readdir withFileTypes carries parentPath in the argument's own type
     assert.deepStrictEqual(
@@ -31,7 +34,7 @@ async function main() {
     const bufferParent = fs.readdirSync(Buffer.from(root), { withFileTypes: true })[0].parentPath;
     assert.ok(Buffer.isBuffer(bufferParent));
     assert.strictEqual(bufferParent.toString(), root);
-    assert.strictEqual(fs.readdirSync(new URL(`file://${root}`), { withFileTypes: true })[0].parentPath, root);
+    assert.strictEqual(fs.readdirSync(pathToFileURL(root), { withFileTypes: true })[0].parentPath, root);
     assert.strictEqual((await fsp.readdir(root, { withFileTypes: true }))[0].parentPath, root);
     assert.ok(Buffer.isBuffer((await fsp.readdir(Buffer.from(root), { withFileTypes: true }))[0].parentPath));
     assert.strictEqual('path' in fs.readdirSync(root, { withFileTypes: true })[0], false);
@@ -43,10 +46,12 @@ async function main() {
     while ((entry = syncDir.readSync()) !== null) syncEntries.push(entry);
     syncDir.closeSync();
     assert.deepStrictEqual(syncEntries.map(show(root)).sort(), expected);
-    assert.deepStrictEqual(
-      syncEntries.map((e) => e.name).slice(-3),
-      ['g', 'b', 'h'].filter((name) => syncEntries.slice(-3).some((e) => e.name === name))
-    );
+    // breadth-first: depth never decreases, and the deepest level comes last
+    const depth = (e) => path.relative(root, e.parentPath).split(path.sep).filter(Boolean).length;
+    const depths = syncEntries.map(depth);
+    assert.deepStrictEqual(depths, [...depths].sort((x, y) => x - y));
+    assert.deepStrictEqual(syncEntries.slice(-3).map((e) => e.name).sort(), ['b', 'g', 'h']);
+    assert.strictEqual(syncEntries.at(-1).name, 'h');
 
     process.chdir(root);
     const relative = fs.opendirSync('./', { recursive: true });
@@ -55,7 +60,7 @@ async function main() {
     relative.closeSync();
     assert.ok(relativeEntries.includes('a|./'));
     assert.ok(relativeEntries.includes('g|a'));
-    assert.ok(relativeEntries.includes('h|a/b'));
+    assert.ok(relativeEntries.includes(`h|${path.join('a', 'b')}`));
 
     for (const bufferSize of [1, 2, 32]) {
       const asyncDir = await fsp.opendir(root, { recursive: true, bufferSize });
@@ -120,7 +125,8 @@ async function main() {
     const R = (message) => message.split(root).join('R');
     const linkError = await fsp.link(path.join(root, 'f'), path.join(root, 'f')).catch((e) => e);
     assert.strictEqual(linkError.constructor, Error);
-    assert.strictEqual(R(linkError.message), "EEXIST: file already exists, link 'R/f' -> 'R/f'");
+    const linkPath = path.join('R', 'f');
+    assert.strictEqual(R(linkError.message), `EEXIST: file already exists, link '${linkPath}' -> '${linkPath}'`);
     assert.strictEqual(linkError.syscall, 'link');
     assert.strictEqual(linkError.code, 'EEXIST');
 

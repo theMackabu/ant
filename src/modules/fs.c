@@ -6393,7 +6393,7 @@ static ant_value_t builtin_fs_dir_dispose(ant_params_t) {
 
 static ant_value_t builtin_fs_dir_asyncDispose(ant_params_t) {
   fs_dir_t *d = (fs_dir_t *)js_get_native(js->this_val, FS_DIR_NATIVE_TAG);
-  if (!d || (d->closed && !d->ops_head)) return fs_resolved_promise(js, js_mkundef());
+  if (!d || d->closed) return fs_resolved_promise(js, js_mkundef());
   return fs_dir_enqueue(js, js->this_val, d, FS_OP_DIR_CLOSE, js_mkundef());
 }
 

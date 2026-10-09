@@ -14,7 +14,7 @@ const names = ['a', 'a/b', 'a/b/h', 'a/g', 'dangling', 'empty', 'f', 'flnk', 'ln
 const dirents = [
   'a|R|D', 'b|R/a|D', 'b|R/lnk|D', 'dangling|R|L', 'empty|R|D', 'flnk|R|L',
   'f|R|F', 'g|R/a|F', 'g|R/lnk|F', 'h|R/a/b|F', 'h|R/lnk/b|F', 'lnk|R|L',
-];
+].map((entry) => entry.split('/').join(path.sep));
 
 async function main() {
   fs.mkdirSync(path.join(root, 'a', 'b'), { recursive: true });
@@ -40,7 +40,7 @@ async function main() {
   assert.deepStrictEqual([...(await fsp.readdir(root, { recursive: true }))].sort(), names);
   // Node's fs/promises alone skips symlinked directories with withFileTypes;
   // Ant follows them consistently, so only the shared part is compared here
-  const outsideLink = (list) => list.filter((entry) => !entry.includes('R/lnk'));
+  const outsideLink = (list) => list.filter((entry) => !entry.includes(path.join('R', 'lnk')));
   assert.deepStrictEqual(
     outsideLink((await fsp.readdir(root, { recursive: true, withFileTypes: true })).map(dirent).sort()),
     outsideLink(dirents)
@@ -71,7 +71,7 @@ async function main() {
         assert.ok(error, 'expected EACCES');
         assert.strictEqual(error.code, 'EACCES');
         assert.strictEqual(error.syscall, 'scandir');
-        assert.strictEqual(R(error.path), 'R/empty');
+        assert.strictEqual(R(error.path), path.join('R', 'empty'));
       }
     } finally {
       fs.chmodSync(path.join(root, 'empty'), 0o755);

@@ -24,7 +24,7 @@ function moduleBytes(sections) {
   return new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, ...sections.flat()]);
 }
 
-const module = moduleBytes([
+const wasmBytes = moduleBytes([
   section(1, [
     2,
     0x60, 0, 1, 0x7f,
@@ -54,7 +54,7 @@ const module = moduleBytes([
 const global = new WebAssembly.Global({ value: 'i32', mutable: true }, 7);
 global.value = 19;
 
-const instance = new WebAssembly.Instance(new WebAssembly.Module(module), {
+const instance = new WebAssembly.Instance(new WebAssembly.Module(wasmBytes), {
   env: { g: global },
 });
 
