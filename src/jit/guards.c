@@ -400,39 +400,3 @@ void mir_emit_exit_ret(
                                 has_captures, captured_locals, n_locals, next_site);
   MIR_append_insn(ctx, fn, MIR_new_ret_insn(ctx, 1, ret_op));
 }
-
-void mir_emit_self_tail(
-    MIR_context_t ctx, MIR_item_t fn,
-    int call_argc, int param_count,
-    MIR_reg_t r_tco_args,
-    MIR_reg_t r_args, MIR_reg_t r_argc,
-    MIR_reg_t *local_regs, int n_locals,
-    bool has_captured_slots, MIR_reg_t r_slotbuf, bool *captured_params,
-    bool fill_all_params,
-    bool has_captures, bool *captured_locals,
-    MIR_reg_t r_lbuf, MIR_label_t entry) {
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_MOV,
-                               MIR_new_reg_op(ctx, r_args),
-                               MIR_new_reg_op(ctx, r_tco_args)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_MOV,
-                               MIR_new_reg_op(ctx, r_argc),
-                               MIR_new_int_op(ctx, (int64_t)call_argc)));
-  if (has_captured_slots)
-    mir_emit_fill_param_slots_from_args(ctx, fn, r_slotbuf, r_tco_args, r_argc, captured_params, param_count, fill_all_params);
-  for (int i = 0; i < n_locals; i++)
-    mir_load_imm(ctx, fn, local_regs[i], mkval(kTypeUndefined, 0));
-  if (has_captures) {
-    for (int i = 0; i < n_locals; i++)
-      if (captured_locals[i])
-        MIR_append_insn(ctx, fn,
-                        MIR_new_insn(ctx, MIR_MOV,
-                                     MIR_new_mem_op(ctx, MIR_T_I64,
-                                                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
-                                     MIR_new_uint_op(ctx, mkval(kTypeUndefined, 0))));
-  }
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_JMP,
-                               MIR_new_label_op(ctx, entry)));
-}

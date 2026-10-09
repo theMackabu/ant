@@ -178,8 +178,10 @@ void jit_emit_strings(jit_compile_t *c) {
         MIR_reg_t rhs = vstack_pop(&c->vs);
         MIR_reg_t lhs = vstack_pop(&c->vs);
 
-        if ((!c->captured_locals || !c->captured_locals[local_idx]) &&
-            (!c->known_type_locals || c->known_type_locals[local_idx] != SV_TI_NUM)) {
+        bool inline_append = (!c->captured_locals || !c->captured_locals[local_idx]) &&
+                             (!c->known_type_locals || c->known_type_locals[local_idx] != SV_TI_NUM) &&
+                             jit_site_runs_hot(c);
+        if (inline_append) {
           MIR_label_t flat_append_slow = MIR_new_label(c->ctx);
           flat_append_done = MIR_new_label(c->ctx);
           mir_emit_string_concat_fastpath(c->ctx, c->jit_func, c->r_js, lhs, rhs, c->r_tmp, flat_append_slow, -1, c->bc_off, true);

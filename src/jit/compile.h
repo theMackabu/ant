@@ -254,7 +254,9 @@ typedef struct jit_compile {
   MIR_reg_t r_lbuf;
   MIR_reg_t r_jit_open_upvalues;
   MIR_label_t self_tail_entry;
-  MIR_label_t self_tail_params;
+  MIR_label_t self_tail_reentry;
+  MIR_label_t call_entry;
+  bool skipped_inline_paths;
   MIR_reg_t r_result;
   uint8_t *ip;
   const uint8_t *previous_ip;
@@ -361,6 +363,7 @@ void jit_emit_builtin_call_fast(
 );
 void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type);
 bool jit_setup_frame(jit_compile_t *c);
+void jit_emit_entry_counter(jit_compile_t *c, const char *site, MIR_insn_t before);
 
 void jit_emit_literals(jit_compile_t *c);
 void jit_emit_stack(jit_compile_t *c);

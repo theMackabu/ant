@@ -33,10 +33,10 @@ static bool jit_bc_in_osr_loop(jit_compile_t *c) {
   return c->osr_loop_body && c->bc_off < c->func->code_len && c->osr_loop_body[c->bc_off];
 }
 
-// Code that runs often enough to earn large inline fast paths: inside a loop,
-// or anywhere in a function that is hot through calls
 bool jit_site_runs_hot(jit_compile_t *c) {
-  return c->func->call_count >= SV_JIT_THRESHOLD / 2 || jit_bc_in_osr_loop(c);
+  if (c->func->call_count >= SV_JIT_WARM_CALLS || jit_bc_in_osr_loop(c)) return true;
+  c->skipped_inline_paths = true;
+  return false;
 }
 
 jit_stale_exit_t *jit_stale_exit_for(jit_compile_t *c, jit_stale_exit_t *exit) {

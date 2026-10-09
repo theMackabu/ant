@@ -142,9 +142,6 @@ static void jit_unroll_numeric_loops(jit_compile_t *c) {
   }
 }
 
-// Hot-tier functions past this many emitted MIR instructions compile at level 1
-static constexpr int JIT_HOT_INSN_LIMIT = 2000;
-
 static bool jit_insn_ends_flow(MIR_insn_t insn) {
   switch (insn->code) {
     case MIR_JMP: case MIR_JMPI: case MIR_SWITCH: case MIR_RET: case MIR_JRET:
@@ -173,7 +170,6 @@ static void jit_sink_cold_blocks(jit_compile_t *c, MIR_insn_t body_tail) {
     while (end && end != target && end != last && n++ < SCAN_LIMIT)
       end = DLIST_NEXT(MIR_insn_t, end);
     MIR_insn_t block_last = end == target ? DLIST_PREV(MIR_insn_t, target) : NULL;
-    // labels just before the join stay with it, since the slow path may branch to them
     while (block_last && block_last != jump && block_last->code == MIR_LABEL)
       block_last = DLIST_PREV(MIR_insn_t, block_last);
     // `bt body, cond; jmp exit; body:` is an inverted branch, not a slow path
@@ -567,6 +563,9 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
     jit_emit_exit_ret(c, MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0)));
   }
 
+  bool retier = c->skipped_inline_paths && !c->cold_tier && c->call_entry;
+  if (retier) jit_emit_entry_counter(c, "call", c->call_entry);
+
   MIR_insn_t body_tail = DLIST_TAIL(MIR_insn_t, c->jit_func->u.func->insns);
   if (c->stale_site_count) jit_emit_stale_exits(c);
   if (c->needs_bailout) jit_emit_resume_tramp(c, &c->bailout_ctx, c->imp_resume, "resume_res");
@@ -622,14 +621,13 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
     return NULL;
   }
 
-  // MIR's level-3 passes grow faster than linearly with size, so a big hot
-  // function compiles at level 1; jit_release_gen_scratch restores the level
-  if (c->ctx == c->jc->ctx_hot) {
-    int insns = 0;
-    for (MIR_insn_t insn = DLIST_HEAD(MIR_insn_t, c->jit_func->u.func->insns);
-         insn && insns <= JIT_HOT_INSN_LIMIT; insn = DLIST_NEXT(MIR_insn_t, insn)) insns++;
-    if (insns > JIT_HOT_INSN_LIMIT) MIR_gen_set_optimize_level(c->ctx, 1);
-  }
+  bool hot_ctx = c->ctx == c->jc->ctx_hot;
+  int insns = 0;
+  if (hot_ctx || sv_jit_warn_unlikely)
+    for (MIR_insn_t insn = DLIST_HEAD(MIR_insn_t, c->jit_func->u.func->insns); insn; insn = DLIST_NEXT(MIR_insn_t, insn))
+      insns++;
+  MIR_gen_set_optimize_level(c->ctx, !hot_ctx ? JIT_BASE_OPT_LEVEL
+                                     : insns > JIT_BIG_HOT_INSN_LIMIT ? JIT_BIG_HOT_OPT_LEVEL : JIT_HOT_OPT_LEVEL);
 
   MIR_load_module(c->ctx, c->mod);
   MIR_link(c->ctx, MIR_set_gen_interface, NULL);
@@ -657,15 +655,16 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
 
   c->func->jit_compiled_tfb_ver = c->func->tfb_version;
   c->func->jit_code_cold = tier == SV_JIT_TIER_COLD;
+  c->func->jit_code_retier = retier;
   
   if (tier == SV_JIT_TIER_COLD && c->cold_ns_item && c->cold_ns_item->addr) {
     ((int64_t *)c->cold_ns_item->addr)[1] = JIT_COLD_PROMOTE_COMPILE_MULTIPLE * JIT_HOT_COMPILE_COLD_RATIO * compile_ns;
   }
   
   if (sv_jit_warn_unlikely) fprintf(
-    stderr, "jit: compiled func=%s code_len=%d max_stack=%d locals=%d tier=%s ms=%.1f\n",
+    stderr, "jit: compiled func=%s code_len=%d max_stack=%d locals=%d insns=%d tier=%s ms=%.1f\n",
     c->func->debug->name ? c->func->debug->name : "<anonymous>",
-    c->func->code_len, c->func->max_stack, c->func->max_locals,
+    c->func->code_len, c->func->max_stack, c->func->max_locals, insns,
     tier == SV_JIT_TIER_COLD ? "cold" : jit_compile_hot ? "hot" : "cheap",
     (double)compile_ns / 1e6
   );

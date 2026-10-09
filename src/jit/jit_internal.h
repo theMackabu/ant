@@ -27,6 +27,11 @@ static constexpr int64_t JIT_COLD_PROMOTE_CHECK_EVERY = 4096;
 static constexpr uint32_t JIT_HOT_COMPILE_BACKEDGE_THRESHOLD = SV_JIT_OSR_THRESHOLD / 8;
 static constexpr uint8_t JIT_SNAPSHOT_RESET_LIMIT = 3;
 
+static constexpr int JIT_BASE_OPT_LEVEL = 1;
+static constexpr int JIT_HOT_OPT_LEVEL = 3;
+static constexpr int JIT_BIG_HOT_OPT_LEVEL = 1;
+static constexpr int JIT_BIG_HOT_INSN_LIMIT = 2000;
+
 extern _Thread_local sv_func_t *jit_compile_owner;
 
 typedef struct {
@@ -324,16 +329,6 @@ void mir_emit_exit_ret(
     bool has_captured_slots, bool *captured_params, int param_count,
     bool has_captures, bool *captured_locals, int n_locals,
     int *next_site, MIR_op_t ret_op);
-void mir_emit_self_tail(
-    MIR_context_t ctx, MIR_item_t fn,
-    int call_argc, int param_count,
-    MIR_reg_t r_tco_args,
-    MIR_reg_t r_args, MIR_reg_t r_argc,
-    MIR_reg_t *local_regs, int n_locals,
-    bool has_captured_slots, MIR_reg_t r_slotbuf, bool *captured_params,
-    bool fill_all_params,
-    bool has_captures, bool *captured_locals,
-    MIR_reg_t r_lbuf, MIR_label_t entry);
 bool jit_const_is_heap(ant_value_t cv);
 void mir_load_const_slot(MIR_context_t ctx, MIR_item_t fn,
                          MIR_reg_t dst, ant_value_t *slot);

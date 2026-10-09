@@ -557,6 +557,7 @@ struct sv_func {
   bool jit_compiling: 1;
   bool jit_loop_hot: 1;
   bool jit_code_cold: 1;
+  bool jit_code_retier: 1;
 
   uint32_t call_count;
   uint32_t back_edge_count;

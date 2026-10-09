@@ -257,11 +257,7 @@ static MIR_label_t jit_emit_string_call_fastpath(jit_compile_t *c, uint16_t call
   return done;
 }
 
-// A self tail call restarts the function with new arguments. The hoisted
-// parameter registers take the new values directly and the jump lands past
-// their reload, so the loop-carried values never round-trip through memory;
-// the args buffer is still written for bailouts and uncached parameter reads.
-static void jit_emit_self_tail(jit_compile_t *c, int call_argc, const MIR_reg_t *arg_regs) {
+static void jit_emit_self_tail(jit_compile_t *c, int call_argc, const MIR_reg_t *arg_regs, MIR_reg_t r_call_this) {
   for (int i = 0; i < call_argc; i++)
     MIR_append_insn(c->ctx, c->jit_func,
                     MIR_new_insn(c->ctx, MIR_MOV,
@@ -269,32 +265,44 @@ static void jit_emit_self_tail(jit_compile_t *c, int call_argc, const MIR_reg_t 
                                                 (MIR_disp_t)(i * (int)sizeof(ant_value_t)), c->r_tco_args, 0, 1),
                                  MIR_new_reg_op(c->ctx, arg_regs[i])));
   MIR_label_t entry = c->self_tail_entry;
-  if (c->self_tail_params) {
-    MIR_reg_t next[JIT_PARAM_HOIST_CAP] = {0};
+  if (c->self_tail_reentry) {
     for (int i = 0; i < c->param_count && i < JIT_PARAM_HOIST_CAP; i++) {
       if (!c->param_cache[i]) continue;
-      char name[32];
-      snprintf(name, sizeof(name), "tco_next%d_%d", c->call_n, i);
-      next[i] = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, name);
       if (i < call_argc)
         MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, next[i]),
-                                     MIR_new_reg_op(c->ctx, arg_regs[i])));
-      else mir_load_imm(c->ctx, c->jit_func, next[i], mkval(kTypeUndefined, 0));
-    }
-    for (int i = 0; i < c->param_count && i < JIT_PARAM_HOIST_CAP; i++)
-      if (next[i])
-        MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->param_cache[i]),
-                                     MIR_new_reg_op(c->ctx, next[i])));
-    entry = c->self_tail_params;
+                                     MIR_new_reg_op(c->ctx, arg_regs[i])));
+      else mir_load_imm(c->ctx, c->jit_func, c->param_cache[i], mkval(kTypeUndefined, 0));
+    }
+    entry = c->self_tail_reentry;
   }
-  mir_emit_self_tail(c->ctx, c->jit_func, call_argc, c->param_count,
-                     c->r_tco_args, c->r_args, c->r_argc,
-                     c->local_regs, c->n_locals, c->has_captured_slots, c->r_slotbuf, c->captured_params,
-                     c->writes_params,
-                     c->has_captures,
-                     c->captured_locals, c->r_lbuf, entry);
+  if (!c->func->is_arrow) {
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_this_curr),
+                                 MIR_new_reg_op(c->ctx, r_call_this)));
+    mir_load_imm(c->ctx, c->jit_func, c->r_new_target, mkval(kTypeUndefined, 0));
+  }
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_args),
+                               MIR_new_reg_op(c->ctx, c->r_tco_args)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_argc),
+                               MIR_new_int_op(c->ctx, (int64_t)call_argc)));
+  if (c->has_captured_slots)
+    mir_emit_fill_param_slots_from_args(c->ctx, c->jit_func, c->r_slotbuf, c->r_tco_args, c->r_argc,
+                                        c->captured_params, c->param_count, c->writes_params);
+  for (int i = 0; i < c->n_locals; i++)
+    mir_load_imm(c->ctx, c->jit_func, c->local_regs[i], mkval(kTypeUndefined, 0));
+  if (c->has_captures) {
+    for (int i = 0; i < c->n_locals; i++)
+      if (c->captured_locals[i])
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_MOV,
+                                     MIR_new_mem_op(c->ctx, MIR_T_I64,
+                                                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)), c->r_lbuf, 0, 1),
+                                     MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0))));
+  }
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, entry)));
 }
 
 void jit_emit_calls(jit_compile_t *c) {
@@ -525,10 +533,15 @@ void jit_emit_calls(jit_compile_t *c) {
 
       MIR_reg_t r_arg_arr = c->r_args_buf;
       MIR_reg_t arg_regs[SV_JIT_ARGS_BUF_CAP];
+      sv_func_t *call_known = c->vs.known_func
+                                  ? c->vs.known_func[c->vs.sp - call_argc - 1]
+                                  : NULL;
+      bool known_self_tail = call_known == c->func && is_tail && c->jit_try_depth == 0;
 
       for (int i = (int)call_argc - 1; i >= 0; i--) {
         MIR_reg_t areg = vstack_pop(&c->vs);
         arg_regs[i] = areg;
+        if (known_self_tail) continue;
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_MOV,
                                      MIR_new_mem_op(c->ctx, MIR_JSVAL,
@@ -537,21 +550,17 @@ void jit_emit_calls(jit_compile_t *c) {
                                      MIR_new_reg_op(c->ctx, areg)));
       }
 
-      sv_func_t *call_known = c->vs.known_func
-                                  ? c->vs.known_func[c->vs.sp - 1]
-                                  : NULL;
-
       MIR_reg_t r_call_func = vstack_pop(&c->vs);
       MIR_reg_t r_call_this = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, rn_this);
       mir_load_imm(c->ctx, c->jit_func, r_call_this, mkval(kTypeUndefined, 0));
 
       MIR_reg_t r_call_res = vstack_push(&c->vs);
 
+      if (known_self_tail) {
+        jit_emit_self_tail(c, (int)call_argc, arg_regs, r_call_this);
+        break;
+      }
       if (call_known == c->func) {
-        if (is_tail && c->jit_try_depth == 0) {
-          jit_emit_self_tail(c, (int)call_argc, arg_regs);
-          break;
-        }
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_call_insn(c->ctx, 10,
                                           MIR_new_ref_op(c->ctx, c->self_proto),
@@ -704,7 +713,7 @@ void jit_emit_calls(jit_compile_t *c) {
 
       MIR_append_insn(c->ctx, c->jit_func, lbl_self_call);
       if (is_tail && c->jit_try_depth == 0) {
-        jit_emit_self_tail(c, (int)call_argc, arg_regs);
+        jit_emit_self_tail(c, (int)call_argc, arg_regs, r_call_this);
       } else {
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_call_insn(c->ctx, 10,
