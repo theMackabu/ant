@@ -724,6 +724,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_shape_transition = MIR_new_import(c->ctx, "jit_helper_shape_transition");
   c->imp_remember_obj = MIR_new_import(c->ctx, "gc_remember_props");
   c->imp_get_elem = MIR_new_import(c->ctx, "jit_helper_get_elem");
+  c->imp_get_index_fast = MIR_new_import(c->ctx, "js_get_index_fast");
   c->imp_put_elem = MIR_new_import(c->ctx, c->func->is_strict ? "jit_helper_put_elem_strict" : "jit_helper_put_elem");
   c->imp_get_private = MIR_new_import(c->ctx, "jit_helper_get_private");
   c->imp_put_private = MIR_new_import(c->ctx, "jit_helper_put_private");

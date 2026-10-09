@@ -4826,6 +4826,37 @@ bool js_string_past_end_is_undefined(ant_t *js, ant_value_t str) {
   return ptr && !ptr->flags.is_exotic && !ant_shape_may_have_index_keys(ptr->shape) && index_keys_absent_from_protos(ptr);
 }
 
+ant_value_t js_get_index_fast(ant_t *js, ant_value_t obj, ant_value_t key) {
+  if (vtype(key) != kTypeNumber) return T_EMPTY;
+  
+  double d = tod(key);
+  uint32_t idx = (uint32_t)d;
+  if (!(d >= 0 && d < (double)UINT32_MAX && d == idx)) return T_EMPTY;
+
+  if (vtype(obj) == kTypeString) {
+    ant_offset_t byte_len = 0;
+    const char *data = (const char *)(uintptr_t)vstr(js, obj, &byte_len);
+    uint32_t code_unit = utf16_code_unit_at(data, (size_t)byte_len, idx);
+    if (code_unit != 0xFFFFFFFF) return js_string_from_utf16_code_unit(js, code_unit);
+    return js_string_past_end_is_undefined(js, obj) ? js_mkundef() : T_EMPTY;
+  }
+
+  ant_object_t *ptr = vtype(obj) == kTypeObject ? (ant_object_t *)vptr(obj) : NULL;
+  if (!ptr || ptr->flags.is_exotic || !ptr->shape) return T_EMPTY;
+  
+  const char *interned = idx < INTERN_INDEX_CACHE_SIZE ? js->intern.idx[idx] : NULL;
+  int32_t slot = interned ? ant_shape_lookup_interned(ptr->shape, interned) : -1;
+  
+  if (slot >= 0) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
+    if (!prop || prop->has_getter || prop->has_setter) return T_EMPTY;
+    return ant_object_prop_get_unchecked(ptr, (uint32_t)slot);
+  }
+
+  ant_value_t out;
+  return js_get_plain_index(js, obj, idx, &out) ? out : T_EMPTY;
+}
+
 static ant_value_t setprop_index_impl(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t value, bool *declined) {
   ant_arguments_state_t *args_state = js_arguments_state(obj);
   if (args_state && !args_state->in_setter) {
@@ -9654,11 +9685,25 @@ static ant_value_t define_desc_read(ant_t *js, ant_value_t descriptor, define_de
     { "set", 3 },
   };
 
-  if (!define_desc_read_plain(js, descriptor, raw)) for (int f = 0; f < DESC_FIELD_COUNT; f++) {
+  bool proxy = is_proxy(descriptor);
+  if (proxy || !define_desc_read_plain(js, descriptor, raw)) for (int f = 0; f < DESC_FIELD_COUNT; f++) {
     ant_value_t err = 0;
-    if (!define_desc_field(js, descriptor, fields[f].name, fields[f].len, &raw->has[f], &raw->val[f], &err)) return err;
-    if (f == DESC_GET && raw->has[f] && define_desc_accessor_invalid(raw->val[f])) 
-      return js_mkerr(js, "Getter must be a function");
+    
+    if (proxy) {
+      ant_value_t has = proxy_has(js, descriptor, fields[f].name, fields[f].len);
+      
+      if (is_err(has)) return has;
+      if (!js_truthy(js, has)) continue;
+      
+      ant_value_t val = proxy_get(js, descriptor, fields[f].name, fields[f].len);
+      if (is_err(val)) return val;
+      
+      raw->has[f] = true;
+      raw->val[f] = val;
+    } 
+    
+    else if (!define_desc_field(js, descriptor, fields[f].name, fields[f].len, &raw->has[f], &raw->val[f], &err)) return err;
+    if (f == DESC_GET && raw->has[f] && define_desc_accessor_invalid(raw->val[f])) return js_mkerr(js, "Getter must be a function");
   }
 
   if (raw->has[DESC_GET] && define_desc_accessor_invalid(raw->val[DESC_GET])) return js_mkerr(js, "Getter must be a function");
@@ -9727,9 +9772,8 @@ static ant_value_t object_define_property_keyed(
   bool sym_key = key->is_symbol;
   ant_value_t prop = key->js_key;
 
-  if (vtype(descriptor) != kTypeObject) {
-    return js_mkerr(js, "Property descriptor must be an object");
-  }
+  if (vtype(descriptor) == kTypeBuiltin) descriptor = js_cfunc_promote(js, descriptor);
+  if (!is_object_type(descriptor)) return js_mkerr(js, "Property descriptor must be an object");
   
   ant_value_t as_obj = js_as_obj(obj);
   if (is_proxy(as_obj)) {
@@ -9763,38 +9807,7 @@ static ant_value_t object_define_property_keyed(
   ant_value_t setter_val = js_mkundef();
   bool writable = false, enumerable = false, configurable = false;
 
-  if (is_proxy(descriptor)) {
-    ant_value_t e_val = proxy_get(js, descriptor, "enumerable", 10);
-    if (is_err(e_val)) return e_val;
-    has_enumerable = vtype(e_val) != kTypeUndefined;
-    enumerable = js_truthy(js, e_val);
-
-    ant_value_t c_val = proxy_get(js, descriptor, "configurable", 12);
-    if (is_err(c_val)) return c_val;
-    has_configurable = vtype(c_val) != kTypeUndefined;
-    configurable = js_truthy(js, c_val);
-
-    value = proxy_get(js, descriptor, "value", 5);
-    if (is_err(value)) return value;
-    has_value = vtype(value) != kTypeUndefined;
-
-    ant_value_t w_val = proxy_get(js, descriptor, "writable", 8);
-    if (is_err(w_val)) return w_val;
-    has_writable = vtype(w_val) != kTypeUndefined;
-    writable = js_truthy(js, w_val);
-
-    getter_val = proxy_get(js, descriptor, "get", 3);
-    if (is_err(getter_val)) return getter_val;
-    has_get = vtype(getter_val) != kTypeUndefined;
-    if (has_get && vtype(getter_val) != kTypeFunction && vtype(getter_val) != kTypeBuiltin)
-      return js_mkerr(js, "Getter must be a function");
-
-    setter_val = proxy_get(js, descriptor, "set", 3);
-    if (is_err(setter_val)) return setter_val;
-    has_set = vtype(setter_val) != kTypeUndefined;
-    if (has_set && vtype(setter_val) != kTypeFunction && vtype(setter_val) != kTypeBuiltin)
-      return js_mkerr(js, "Setter must be a function");
-  } else {
+  {
     define_desc_raw_t raw = {0};
     ant_value_t read_err = define_desc_read(js, descriptor, &raw);
     if (is_err(read_err)) return read_err;

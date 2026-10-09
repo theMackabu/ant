@@ -2,8 +2,9 @@ const assert = require('node:assert');
 
 // Ordinary descriptor objects are read in one pass over their shape; fields
 // that are accessors, or that an object on the prototype chain also holds,
-// take the per-field reads so getter order stays observable. Expected values
-// come from Node.
+// take the per-field reads so getter order stays observable. A proxy reads
+// only the fields its has trap reports, and arrays and functions are valid
+// descriptors. Expected values come from Node.
 
 {
   const r = [];
@@ -42,5 +43,40 @@ const assert = require('node:assert');
     "Object.create props: {\"value\":1,\"writable\":true,\"enumerable\":false,\"configurable\":false}",
     "Reflect: [true,false]",
     "class instance desc: {\"value\":9,\"writable\":false,\"enumerable\":true,\"configurable\":false}"
+  ]);
+}
+
+// proxy, array, function and builtin descriptors
+{
+  const r = [];
+  const t = (n, f) => { try { r.push(n + ': ' + JSON.stringify(f())); } catch (e) { r.push(n + ': ' + e.constructor.name); } };
+  const d = (o, k) => Object.getOwnPropertyDescriptor(o, k);
+  t('proxy has/get order', () => { const log = []; const p = new Proxy({ value: 2, enumerable: true }, { get(t, k) { log.push('get ' + k); return t[k]; }, has(t, k) { log.push('has ' + k); return k in t; } }); const o = {}; Object.defineProperty(o, 'x', p); return [d(o, 'x'), log]; });
+  t('proxy without has trap', () => { const log = []; const p = new Proxy({ value: 3 }, { get(t, k) { log.push(k); return t[k]; } }); const o = {}; Object.defineProperty(o, 'x', p); return [o.x, log]; });
+  t('proxy has throws', () => Object.defineProperty({}, 'x', new Proxy({}, { has() { throw new RangeError('h'); } })));
+  t('proxy bad getter', () => Object.defineProperty({}, 'x', new Proxy({ get: 1 }, {})));
+  t('proxy getter undefined', () => { const o = {}; Object.defineProperty(o, 'x', new Proxy({ get: undefined }, {})); return d(o, 'x'); });
+  t('array desc', () => { const a = []; a.value = 3; a.enumerable = true; const o = {}; Object.defineProperty(o, 'x', a); return d(o, 'x'); });
+  t('function desc', () => { const f = function () {}; f.value = 8; const o = {}; Object.defineProperty(o, 'x', f); return d(o, 'x'); });
+  t('builtin desc', () => { const o = {}; Object.defineProperty(o, 'x', Math.max); return d(o, 'x'); });
+  t('defineProperties array desc', () => { const a = []; a.value = 5; const o = Object.defineProperties({}, { x: a }); return o.x; });
+  t('Object.create function desc', () => { const f = function () {}; f.value = 6; return Object.create(null, { x: f }).x; });
+  t('Reflect array desc', () => { const a = []; a.value = 1; const o = {}; return [Reflect.defineProperty(o, 'x', a), o.x]; });
+  t('primitive desc', () => Object.defineProperty({}, 'x', 1));
+  t('null desc', () => Object.defineProperty({}, 'x', null));
+  assert.deepStrictEqual(r, [
+    "proxy has/get order: [{\"value\":2,\"writable\":false,\"enumerable\":true,\"configurable\":false},[\"has enumerable\",\"get enumerable\",\"has configurable\",\"has value\",\"get value\",\"has writable\",\"has get\",\"has set\"]]",
+    "proxy without has trap: [3,[\"value\"]]",
+    "proxy has throws: RangeError",
+    "proxy bad getter: TypeError",
+    "proxy getter undefined: {\"enumerable\":false,\"configurable\":false}",
+    "array desc: {\"value\":3,\"writable\":false,\"enumerable\":true,\"configurable\":false}",
+    "function desc: {\"value\":8,\"writable\":false,\"enumerable\":false,\"configurable\":false}",
+    "builtin desc: {\"writable\":false,\"enumerable\":false,\"configurable\":false}",
+    "defineProperties array desc: 5",
+    "Object.create function desc: 6",
+    "Reflect array desc: [true,1]",
+    "primitive desc: TypeError",
+    "null desc: TypeError"
   ]);
 }

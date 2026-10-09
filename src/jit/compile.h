@@ -172,6 +172,7 @@ typedef struct jit_compile {
   MIR_item_t imp_shape_transition;
   MIR_item_t imp_remember_obj;
   MIR_item_t imp_get_elem;
+  MIR_item_t imp_get_index_fast;
   MIR_item_t imp_put_elem;
   MIR_item_t imp_get_private;
   MIR_item_t imp_put_private;

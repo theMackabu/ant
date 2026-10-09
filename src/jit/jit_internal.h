@@ -121,8 +121,10 @@ typedef struct {
 } jit_stale_exit_t;
 
 #define NANBOX_TFUNC_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeFunction)
-#define NANBOX_TOBJ_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeObject)
+#define NANBOX_TOBJ_TAG  ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeObject)
 #define NANBOX_TPROM_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypePromise)
+#define NANBOX_TSTR_TAG  ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeString)
+
 #define MAX_OSR_ENTRIES 64
 typedef struct {
   int offsets[MAX_OSR_ENTRIES];

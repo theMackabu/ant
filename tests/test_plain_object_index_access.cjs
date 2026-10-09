@@ -67,14 +67,15 @@ const assert = require('node:assert');
 {
   const r = [];
   const t = (n, f) => { try { r.push(n + ': ' + JSON.stringify(f())); } catch (e) { r.push(n + ': ' + e.constructor.name); } };
-  const readAll = (o, n) => { const out = []; for (let i = 0; i < n; i++) out.push(o[i]); return out; };
+  // own slots, so an index accessor on Object.prototype never intercepts the writes
+  const readAll = (o, n) => { const out = Array.from({ length: n }, () => null); for (let i = 0; i < n; i++) out[i] = o[i]; return out; };
   const hot = (o, n) => { let last; for (let r = 0; r < 400; r++) last = readAll(o, n); return last; };
   t('own data', () => hot({ 0: 'a', 1: 'b', 3: 'd' }, 5));
   t('own getter', () => hot({ get 1() { return 'g'; } }, 3));
   t('inherited data', () => hot(Object.create({ 2: 'p' }), 4));
   t('inherited getter', () => hot(Object.create({ get 0() { return 'pg'; } }), 2));
   t('Object.prototype data', () => { Object.prototype[5] = 'OP'; const v = hot({}, 7); delete Object.prototype[5]; return v; });
-  t('Object.prototype getter', () => { Object.defineProperty(Object.prototype, '1', { get() { return 'OPG'; }, configurable: true }); const v = hot({}, 3); delete Object.prototype[1]; return v; });
+  t('Object.prototype getter', () => { Object.defineProperty(Object.prototype, '1', { get() { return 'OPG'; }, configurable: true }); try { return hot({}, 3); } finally { delete Object.prototype[1]; } });
   t('proto added later', () => { const p = {}; const o = Object.create(p); hot(o, 3); p[1] = 'late'; return hot(o, 3); });
   t('null proto', () => hot(Object.create(null), 3));
   t('proxy proto', () => hot(Object.create(new Proxy({}, { get(t, k) { return 'px' + String(k); } })), 2));
@@ -93,19 +94,69 @@ const assert = require('node:assert');
     "inherited data: [null,null,\"p\",null]",
     "inherited getter: [\"pg\",null]",
     "Object.prototype data: [null,null,null,null,null,\"OP\",null]",
-    "Object.prototype getter: TypeError",
-    "proto added later: TypeError",
-    "null proto: TypeError",
-    "proxy proto: TypeError",
-    "typed array: TypeError",
-    "buffer: TypeError",
-    "string wrapper: TypeError",
-    "function: TypeError",
-    "class instance: TypeError",
-    "frozen: TypeError",
-    "after delete: TypeError",
+    "Object.prototype getter: [null,\"OPG\",null]",
+    "proto added later: [null,\"late\",null]",
+    "null proto: [null,null,null]",
+    "proxy proto: [\"px0\",\"px1\"]",
+    "typed array: [7,8,null]",
+    "buffer: [1,2,null]",
+    "string wrapper: [\"a\",\"b\",null]",
+    "function: [null,\"f1\"]",
+    "class instance: [\"c0\",null]",
+    "frozen: [\"z\",null]",
+    "after delete: [null,2]",
     "negative/fraction: [\"m\",\"h\"]",
-    "top-level interp: TypeError"
+    "top-level interp: [\"x\",null,\"y\"]"
+  ]);
+}
+
+// hot number-key reads across object kinds, which the JIT first sends to
+// js_get_index_fast
+{
+  const hot = (o, n) => { let out; for (let r = 0; r < 500; r++) { out = []; for (let i = 0; i < n; i++) out.push(o[i]); } return out; };
+  const r = [];
+  const t = (n, f) => { try { r.push(n + ': ' + JSON.stringify(f())); } catch (e) { r.push(n + ': ' + e.constructor.name); } };
+  t('arguments sloppy', () => (function () { return hot(arguments, 4); })(1, 2, 3));
+  t('arguments strict', () => (function () { 'use strict'; return hot(arguments, 4); })(4, 5));
+  t('arguments mutated', () => (function (a) { a = 9; arguments[1] = 7; return hot(arguments, 3); })(1, 2));
+  t('typed array', () => hot(new Int16Array([1, -2, 3]), 4));
+  t('buffer', () => hot(Buffer.from([5, 6]), 3));
+  t('array-like', () => hot({ 0: 'a', 1: 'b', length: 2 }, 3));
+  t('string', () => hot('héllo\u{1F600}', 8));
+  t('wrapper', () => hot(new String('ab'), 3));
+  t('proxy', () => hot(new Proxy([1, 2], {}), 3));
+  t('getter', () => hot({ get 0() { return 'g'; } }, 2));
+  t('proto data', () => hot(Object.create({ 1: 'p' }), 2));
+  t('Object.prototype index', () => { Object.prototype[2] = 'O'; const v = hot({}, 3); delete Object.prototype[2]; return v; });
+  t('String.prototype index', () => { String.prototype[3] = 'S'; const v = hot('ab', 4); delete String.prototype[3]; return v; });
+  t('map/set', () => [hot(new Map([[0, 1]]), 1), hot(new Set([1]), 1)]);
+  t('function', () => { function f() {} f[0] = 'f0'; return hot(f, 2); });
+  t('class instance', () => { class C { constructor() { this[0] = 'c'; } } return hot(new C(), 2); });
+  t('negative zero', () => { const o = { 0: 'z' }; let v; for (let i = 0; i < 500; i++) v = o[-0]; return v; });
+  t('large index', () => { const o = { 5000: 'big', 4294967294: 'max' }; let v; for (let i = 0; i < 500; i++) v = [o[5000], o[4294967294], o[4294967295]]; return v; });
+  t('frozen', () => hot(Object.freeze({ 0: 1 }), 2));
+  t('deleted', () => { const o = { 0: 1, 1: 2 }; hot(o, 2); delete o[0]; return hot(o, 2); });
+  assert.deepStrictEqual(r, [
+    "arguments sloppy: [1,2,3,null]",
+    "arguments strict: [4,5,null,null]",
+    "arguments mutated: [9,7,null]",
+    "typed array: [1,-2,3,null]",
+    "buffer: [5,6,null]",
+    "array-like: [\"a\",\"b\",null]",
+    "string: [\"h\",\"é\",\"l\",\"l\",\"o\",\"\\ud83d\",\"\\ude00\",null]",
+    "wrapper: [\"a\",\"b\",null]",
+    "proxy: [1,2,null]",
+    "getter: [\"g\",null]",
+    "proto data: [null,\"p\"]",
+    "Object.prototype index: [null,null,\"O\"]",
+    "String.prototype index: [\"a\",\"b\",null,\"S\"]",
+    "map/set: [[null],[null]]",
+    "function: [\"f0\",null]",
+    "class instance: [\"c\",null]",
+    "negative zero: \"z\"",
+    "large index: [\"big\",\"max\",null]",
+    "frozen: [1,null]",
+    "deleted: [null,2]"
   ]);
 }
 
