@@ -237,7 +237,7 @@ static ant_value_t esm_run_resolve_chain(ant_t *js, const esm_chain_t *chain, in
     || esm_is_data_url(spec_copy)
     || esm_is_url(spec_copy);
 
-  if (!scheme_passthrough && !esm_lookup_builtin_alias(spec_copy, strlen(spec_copy))) {
+  if (!scheme_passthrough && esm_find_builtin(spec_copy, strlen(spec_copy)).kind == ANT_BUILTIN_NAME_NONE) {
     if (!base_path || !base_path[0]) base_path = esm_default_base_path(js);
 
     char **cond_override = NULL;

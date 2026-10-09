@@ -4,7 +4,6 @@
 #include "modules/module.h"
 #include "gc/roots.h"
 #include "esm/library.h"
-#include "esm/builtin_bundle.h"
 
 #include "internal.h"
 #include "reactor.h"
@@ -179,7 +178,7 @@ static ant_value_t esm_cjs_require_paths(ant_params_t) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "require.resolve.paths expects a string");
   size_t len;
   const char *spec = js_getstr(js, args[0], &len);
-  if (js_esm_is_registered_library(spec, len) || esm_lookup_builtin_alias(spec, len)) return js_mknull();
+  if (esm_find_builtin(spec, len).kind != ANT_BUILTIN_NAME_NONE) return js_mknull();
   ant_value_t module = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   ant_value_t directory = js_get(js, module, "path");
   const char *path = js_getstr(js, directory, NULL);

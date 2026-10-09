@@ -29,6 +29,12 @@ function toAliasSpecifiers(specifier) {
   return [];
 }
 
+function toNameKind(specifier) {
+  if (specifier.startsWith('node:')) return 'ANT_BUILTIN_NAME_NODE';
+  if (specifier.startsWith('ant:')) return 'ANT_BUILTIN_NAME_ANT';
+  return 'ANT_BUILTIN_NAME_BARE';
+}
+
 function toFormat(filePath) {
   if (/\.(cts|cjs)$/u.test(filePath)) return 'MODULE_EVAL_FORMAT_CJS';
   if (/\.(mts|mjs)$/u.test(filePath)) return 'MODULE_EVAL_FORMAT_ESM';
@@ -161,7 +167,7 @@ function generateBuiltinHeader(rootDir, bundles) {
   lines.push('static const ant_builtin_bundle_alias_t ant_builtin_bundle_aliases[] = {');
   bundles.forEach((bundle, index) => {
     for (const specifier of bundle.specifiers) {
-      lines.push(`  { ${JSON.stringify(specifier)}, ${specifier.length}, ${JSON.stringify(bundle.specifier)}, ${index} },`);
+      lines.push(`  { ${JSON.stringify(specifier)}, ${specifier.length}, ${JSON.stringify(bundle.specifier)}, ${index}, ${toNameKind(specifier)} },`);
     }
   });
   lines.push('};');

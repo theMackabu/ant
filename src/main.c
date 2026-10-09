@@ -880,7 +880,7 @@ int main(int argc, char *argv[]) {
   }
 
   ant_bootstrap_modules(js);
-  ant_register_library(sandbox_library, "ant:sandbox", NULL);
+  ant_register_library(sandbox_library, "ant:sandbox");
 
   if (sandbox_daemon) {
     js_result = run_sandbox_daemon_loop(js, &sandbox, original_argv[0]);

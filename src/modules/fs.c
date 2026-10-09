@@ -1,3 +1,6 @@
+// TODO: split into multiple files src/fs 
+// AND move handles to isolate
+
 #include <compat.h> // IWYU pragma: keep
 
 #include <uv.h>
@@ -37,6 +40,9 @@
 #include "modules/events.h"
 #include "modules/stream.h"
 #include "modules/url.h"
+#include "modules/iterator.h"
+#include "esm/loader.h"
+#include "esm/commonjs.h"
 
 typedef enum {
   FS_ENC_NONE = 0,
@@ -69,7 +75,14 @@ typedef enum {
   FS_OP_CHMOD,
   FS_OP_RENAME,
   FS_OP_SYMLINK,
-  FS_OP_FSYNC
+  FS_OP_LINK,
+  FS_OP_FSYNC,
+  FS_OP_OPENDIR,
+  FS_OP_DIR_READ,
+  FS_OP_DIR_CLOSE,
+  FS_OP_DIR_ITER_NEXT,
+  FS_OP_DIR_ITER_RETURN,
+  FS_OP_DIR_ITER_CLOSE
 } fs_op_type_t;
 
 typedef struct fs_request_s {
@@ -78,11 +91,13 @@ typedef struct fs_request_s {
   ant_value_t promise;
   ant_value_t target_buffer;
   ant_value_t callback_fn;
+  ant_value_t owner;
 
   char *path;
   char *path2;
   char *data;
   char *error_msg;
+  const char *syscall;
   size_t data_len;
   size_t buf_offset;
 
@@ -96,6 +111,8 @@ typedef struct fs_request_s {
   int error_code;
   int with_file_types;
   bool buffer_encoding;
+  bool retried;
+  struct fs_request_s *next;
 } fs_request_t;
 
 typedef struct {
@@ -183,8 +200,9 @@ static fs_watcher_t *active_watchers = NULL;
 static UT_array *pending_requests    = NULL;
 
 enum { 
-  FS_WATCHER_NATIVE_TAG = 0x46535754u,   // FSWT
-  FS_FILEHANDLE_NATIVE_TAG = 0x46534648u // FSFH
+  FS_WATCHER_NATIVE_TAG = 0x46535754u,    // FSWT
+  FS_FILEHANDLE_NATIVE_TAG = 0x46534648u, // FSFH
+  FS_DIR_NATIVE_TAG = 0x46534452u         // FSDR
 };
 
 static fs_watcher_t *fs_watcher_data(ant_value_t value) {
@@ -1301,9 +1319,43 @@ static ant_value_t fs_watcher_make_object(ant_t *js, fs_watcher_t *watcher) {
   return obj;
 }
 
+static const char *fs_uv_syscall_name(uv_fs_type type) {
+  switch (type) {
+    case UV_FS_OPEN:      return "open";
+    case UV_FS_CLOSE:     return "close";
+    case UV_FS_READ:      return "read";
+    case UV_FS_WRITE:     return "write";
+    case UV_FS_STAT:      return "stat";
+    case UV_FS_LSTAT:     return "lstat";
+    case UV_FS_FSTAT:     return "fstat";
+    case UV_FS_FTRUNCATE: return "ftruncate";
+    case UV_FS_UTIME:     return "utime";
+    case UV_FS_FUTIME:    return "futime";
+    case UV_FS_ACCESS:    return "access";
+    case UV_FS_CHMOD:     return "chmod";
+    case UV_FS_FSYNC:     return "fsync";
+    case UV_FS_UNLINK:    return "unlink";
+    case UV_FS_RMDIR:     return "rmdir";
+    case UV_FS_MKDIR:     return "mkdir";
+    case UV_FS_MKDTEMP:   return "mkdtemp";
+    case UV_FS_RENAME:    return "rename";
+    case UV_FS_SCANDIR:   return "scandir";
+    case UV_FS_LINK:      return "link";
+    case UV_FS_SYMLINK:   return "symlink";
+    case UV_FS_READLINK:  return "readlink";
+    case UV_FS_REALPATH:  return "realpath";
+    case UV_FS_COPYFILE:  return "copyfile";
+    case UV_FS_OPENDIR:   return "opendir";
+    case UV_FS_READDIR:   return "readdir";
+    case UV_FS_CLOSEDIR:  return "closedir";
+    default:              return NULL;
+  }
+}
+
 static void fs_request_fail(fs_request_t *req, int uv_code) {
   req->failed = 1;
   req->error_code = uv_code;
+  req->syscall = fs_uv_syscall_name(req->uv_req.fs_type);
   if (req->error_msg) free(req->error_msg);
   req->error_msg = strdup(uv_strerror(uv_code));
 }
@@ -1876,23 +1928,34 @@ static ant_value_t fs_path_result(ant_t *js, const char *data, size_t len, bool 
   return as_buffer ? fs_read_to_uint8array(js, data, len) : js_mkstr(js, data, len);
 }
 
+static ant_value_t fs_mk_uv_error(
+  ant_t *js, int uv_code,
+  const char *syscall, const char *path, const char *dest
+);
+
 static void complete_request(fs_request_t *req) {
   if (req->failed) {
     const char *err_msg = req->error_msg 
       ? req->error_msg 
       : "Unknown error";
       
-    ant_value_t props = js_mkobj(req->js);
     ant_value_t reject_value;
 
-    if (req->error_code) {
+    if (req->error_code && req->syscall) reject_value = fs_mk_uv_error(
+      req->js, req->error_code, req->syscall, req->path, req->path2
+    );
+    
+    else if (req->error_code) {
+      ant_value_t props = js_mkobj(req->js);
       const char *code = uv_err_name(req->error_code);
       js_set(req->js, props, "code", js_mkstr(req->js, code, strlen(code)));
       js_set(req->js, props, "errno", js_mknum((double)req->error_code));
       if (req->path) js_set(req->js, props, "path", js_mkstr(req->js, req->path, strlen(req->path)));
       if (req->path2) js_set(req->js, props, "dest", js_mkstr(req->js, req->path2, strlen(req->path2)));
       reject_value = js_mkerr_props(req->js, JS_ERR_TYPE, props, "%s", err_msg);
-    } else reject_value = js_mkerr(req->js, "%s", err_msg);
+    } 
+    
+    else reject_value = js_mkerr(req->js, "%s", err_msg);
 
     if (is_err(reject_value)) {
       reject_value = js_take_thrown(req->js, js_mkundef());
@@ -2076,6 +2139,19 @@ static void on_symlink_complete(uv_fs_t *uv_req) {
   complete_request(req);
 }
 
+static void on_link_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+
+  if (uv_req->result < 0) {
+    fs_request_fail(req, (int)uv_req->result);
+  }
+
+  uv_fs_req_cleanup(uv_req);
+  req->completed = 1;
+  complete_request(req);
+}
+
 static bool mkdirp_is_separator(char ch) {
 #ifdef _WIN32
   return ch == '/' || ch == '\\';
@@ -2224,7 +2300,40 @@ static void on_realpath_complete(uv_fs_t *uv_req) {
   complete_request(req);
 }
 
-static ant_value_t create_dirent_object(ant_t *js, const char *name, size_t name_len, uv_dirent_type_t type, bool as_buffer) {
+static ant_value_t fs_path_join(ant_t *js, const char *a, const char *b) {
+  bool found = false;
+  ant_value_t path_ns = js_esm_load_node_builtin(js, "node:path", 9, &found);
+  if (is_err(path_ns)) return path_ns;
+  if (!found) return js_mkerr(js, "node:path is unavailable");
+
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t path_mod = esm_require_unwrap(js, path_ns);
+  GC_ROOT_PIN(js, path_mod);
+  
+  ant_value_t join = js_get(js, path_mod, "join");
+  GC_ROOT_PIN(js, join);
+  
+  ant_value_t join_args[2] = { js_mkstr(js, a, strlen(a)), js_mkundef() };
+  GC_ROOT_PIN(js, join_args[0]);
+  join_args[1] = js_mkstr(js, b, strlen(b));
+  GC_ROOT_PIN(js, join_args[1]);
+  
+  ant_value_t joined = fs_call_value(js, join, path_mod, join_args, 2);
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  if (is_err(joined)) return joined;
+  if (vtype(joined) != kTypeString) return js_mkerr(js, "path.join() did not return a string");
+  return joined;
+}
+
+static ant_value_t fs_parent_path_value(ant_value_t original, ant_value_t coerced) {
+  return buffer_get_typedarray_data(original) ? original : coerced;
+}
+
+static ant_value_t create_dirent_object(
+  ant_t *js, const char *name, size_t name_len,
+  uv_dirent_type_t type, bool as_buffer, ant_value_t parent_path
+) {
   ant_value_t name_value = fs_path_result(js, name, name_len, as_buffer);
   if (is_err(name_value)) return name_value;
   GC_ROOT_SAVE(root_mark, js);
@@ -2232,6 +2341,7 @@ static ant_value_t create_dirent_object(ant_t *js, const char *name, size_t name
   ant_value_t obj = js_newobj(js);
   js_set_proto(js, obj, js->builtins.dirent_proto);
   js_set(js, obj, "name", name_value);
+  js_set(js, obj, "parentPath", parent_path);
   js_set_slot(obj, SLOT_DATA, tov((double)type));
   GC_ROOT_RESTORE(js, root_mark);
   return obj;
@@ -2321,23 +2431,34 @@ static void on_readdir_complete(uv_fs_t *uv_req) {
     return;
   }
   
-  ant_value_t arr = js_mkarr(req->js);
+  ant_t *js = req->js;
+  GC_ROOT_SAVE(root_mark, js);
+  
+  ant_value_t parent = is_object_type(req->owner)
+    ? req->owner
+    : js_mkstr(js, req->path, strlen(req->path));
+  GC_ROOT_PIN(js, parent);
+  
+  ant_value_t arr = js_mkarr(js);
+  GC_ROOT_PIN(js, arr);
   uv_dirent_t dirent;
   
   while (uv_fs_scandir_next(uv_req, &dirent) != UV_EOF) {
     ant_value_t entry = req->with_file_types
-      ? create_dirent_object(req->js, dirent.name, strlen(dirent.name), dirent.type, req->buffer_encoding)
-      : fs_path_result(req->js, dirent.name, strlen(dirent.name), req->buffer_encoding);
+      ? create_dirent_object(js, dirent.name, strlen(dirent.name), dirent.type, req->buffer_encoding, parent)
+      : fs_path_result(js, dirent.name, strlen(dirent.name), req->buffer_encoding);
     if (is_err(entry)) {
-      js_reject_promise(req->js, req->promise, entry);
+      GC_ROOT_RESTORE(js, root_mark);
+      js_reject_promise(js, req->promise, entry);
       req->completed = 1;
       remove_pending_request(req);
       free_fs_request(req);
       return;
     }
-    js_arr_push(req->js, arr, entry);
+    js_arr_push(js, arr, entry);
   }
   
+  GC_ROOT_RESTORE(js, root_mark);
   req->completed = 1;
   js_resolve_promise(req->js, req->promise, arr);
   remove_pending_request(req);
@@ -4205,7 +4326,7 @@ static ant_value_t builtin_fs_symlinkSync(ant_params_t) {
   int result = uv_fs_symlink(NULL, &req, target_cstr, path_cstr, flags, NULL);
   uv_fs_req_cleanup(&req);
   if (result < 0) {
-    ant_value_t err = fs_mk_uv_error(js, result, "symlink", path_cstr, target_cstr);
+    ant_value_t err = fs_mk_uv_error(js, result, "symlink", target_cstr, path_cstr);
     free(target_cstr);
     free(path_cstr);
     return err;
@@ -4275,6 +4396,96 @@ static ant_value_t builtin_fs_symlink(ant_params_t) {
   return promise;
 }
 
+static ant_value_t builtin_fs_linkSync(ant_params_t) {
+  if (nargs < 2) return js_mkerr(js, "linkSync() requires existingPath and newPath arguments");
+
+  ant_value_t existing_val = args[0] = fs_coerce_path(js, args[0]);
+  if (is_err(existing_val)) return existing_val;
+  
+  ant_value_t new_val = args[1] = fs_coerce_path(js, args[1]);
+  if (is_err(new_val)) return new_val;
+  
+  if (vtype(existing_val) != kTypeString || vtype(new_val) != kTypeString) {
+    return js_mkerr(js, "linkSync() existingPath and newPath must be strings");
+  }
+
+  size_t existing_len = 0;
+  size_t new_len = 0;
+  
+  const char *existing = js_getstr(js, existing_val, &existing_len);
+  const char *new_path = js_getstr(js, new_val, &new_len);
+  if (!existing || !new_path) return js_mkerr(js, "Failed to get link path strings");
+
+  char *existing_cstr = strndup(existing, existing_len);
+  char *new_cstr = strndup(new_path, new_len);
+  if (!existing_cstr || !new_cstr) {
+    free(existing_cstr);
+    free(new_cstr);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  uv_fs_t req;
+  int result = uv_fs_link(NULL, &req, existing_cstr, new_cstr, NULL);
+  uv_fs_req_cleanup(&req);
+  
+  ant_value_t out = result < 0
+    ? fs_mk_uv_error(js, result, "link", existing_cstr, new_cstr)
+    : js_mkundef();
+
+  free(existing_cstr);
+  free(new_cstr);
+  return out;
+}
+
+static ant_value_t builtin_fs_link(ant_params_t) {
+  if (nargs < 2) return js_mkerr(js, "link() requires existingPath and newPath arguments");
+
+  ant_value_t existing_val = args[0] = fs_coerce_path(js, args[0]);
+  if (is_err(existing_val)) return existing_val;
+  
+  ant_value_t new_val = args[1] = fs_coerce_path(js, args[1]);
+  if (is_err(new_val)) return new_val;
+  
+  if (vtype(existing_val) != kTypeString || vtype(new_val) != kTypeString) {
+    return js_mkerr(js, "link() existingPath and newPath must be strings");
+  }
+
+  size_t existing_len = 0;
+  size_t new_len = 0;
+  
+  const char *existing = js_getstr(js, existing_val, &existing_len);
+  const char *new_path = js_getstr(js, new_val, &new_len);
+  if (!existing || !new_path) return js_mkerr(js, "Failed to get link path strings");
+
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+
+  req->js = js;
+  req->op_type = FS_OP_LINK;
+  req->promise = js_mkpromise(js);
+  
+  ant_value_t promise = req->promise;
+  req->path = strndup(existing, existing_len);
+  req->path2 = strndup(new_path, new_len);
+  req->uv_req.data = req;
+
+  if (!req->path || !req->path2) {
+    free_fs_request(req);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  utarray_push_back(pending_requests, &req);
+  int result = uv_fs_link(uv_default_loop(), &req->uv_req, req->path, req->path2, on_link_complete);
+
+  if (result < 0) {
+    fs_request_fail(req, result);
+    req->completed = 1;
+    complete_request(req);
+  }
+
+  return promise;
+}
+
 static ant_value_t builtin_fs_readlink(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "readlink() requires a path argument");
 
@@ -4313,8 +4524,289 @@ static ant_value_t builtin_fs_readlink(ant_params_t) {
   return req->promise;
 }
 
+#ifdef _WIN32
+#define FS_REL_SEP '\\'
+#else
+#define FS_REL_SEP '/'
+#endif
+
+typedef struct {
+  char *name;
+  uv_dirent_type_t type;
+} fs_walk_entry_t;
+
+typedef struct {
+  char *rel;
+  size_t first;
+  size_t count;
+  size_t parent;
+  uint64_t dev, ino;
+  bool has_id;
+} fs_walk_dir_t;
+
+typedef struct {
+  char *root;
+  fs_walk_dir_t *dirs;
+  fs_walk_entry_t *entries;
+  size_t dir_len, dir_cap;
+  size_t entry_len, entry_cap;
+  size_t error_dir;
+  int error;
+} fs_walk_t;
+
+static void fs_walk_free(fs_walk_t *w) {
+  for (size_t i = 0; i < w->dir_len; i++) free(w->dirs[i].rel);
+  for (size_t i = 0; i < w->entry_len; i++) free(w->entries[i].name);
+  free(w->dirs);
+  free(w->entries);
+  free(w->root);
+  memset(w, 0, sizeof(*w));
+}
+
+static bool fs_walk_push_dir(fs_walk_t *w, char *rel, size_t parent, const uv_stat_t *id) {
+  if (w->dir_len == w->dir_cap) {
+    size_t cap = w->dir_cap ? w->dir_cap * 2 : 16;
+    fs_walk_dir_t *grown = realloc(w->dirs, cap * sizeof(*grown));
+    if (!grown) return false;
+    w->dirs = grown;
+    w->dir_cap = cap;
+  }
+  w->dirs[w->dir_len++] = (fs_walk_dir_t){
+    .rel = rel, .parent = parent,
+    .dev = id ? id->st_dev : 0, .ino = id ? id->st_ino : 0, .has_id = id != NULL,
+  };
+  return true;
+}
+
+static bool fs_walk_push_entry(fs_walk_t *w, const char *name, uv_dirent_type_t type) {
+  if (w->entry_len == w->entry_cap) {
+    size_t cap = w->entry_cap ? w->entry_cap * 2 : 64;
+    fs_walk_entry_t *grown = realloc(w->entries, cap * sizeof(*grown));
+    if (!grown) return false;
+    w->entries = grown;
+    w->entry_cap = cap;
+  }
+  char *copy = strdup(name);
+  if (!copy) return false;
+  w->entries[w->entry_len++] = (fs_walk_entry_t){ .name = copy, .type = type };
+  return true;
+}
+
+static char *fs_walk_rel(const char *prefix, const char *name) {
+  if (!prefix) return strdup(name);
+  size_t prefix_len = strlen(prefix), name_len = strlen(name);
+  char *rel = malloc(prefix_len + name_len + 2);
+  if (!rel) return NULL;
+  memcpy(rel, prefix, prefix_len);
+  rel[prefix_len] = FS_REL_SEP;
+  memcpy(rel + prefix_len + 1, name, name_len + 1);
+  return rel;
+}
+
+static bool fs_walk_is_dir(const char *dir, const uv_dirent_t *dirent, uv_stat_t *id, bool *has_id) {
+  *has_id = false;
+  if (dirent->type == UV_DIRENT_DIR) return true;
+  if (dirent->type != UV_DIRENT_LINK && dirent->type != UV_DIRENT_UNKNOWN) return false;
+
+  char *child = fs_join_path(dir, dirent->name);
+  if (!child) return false;
+
+  uv_fs_t req;
+  bool is_dir = uv_fs_stat(NULL, &req, child, NULL) == 0 && (req.statbuf.st_mode & S_IFMT) == S_IFDIR;
+  if (is_dir) {
+    *id = req.statbuf;
+    *has_id = true;
+  }
+  uv_fs_req_cleanup(&req);
+  free(child);
+
+  return is_dir;
+}
+
+static bool fs_walk_dir_id(fs_walk_t *w, size_t index) {
+  fs_walk_dir_t *d = &w->dirs[index];
+  if (d->has_id) return true;
+
+  char *path = d->rel ? fs_join_path(w->root, d->rel) : strdup(w->root);
+  if (!path) return false;
+
+  uv_fs_t req;
+  if (uv_fs_stat(NULL, &req, path, NULL) == 0) {
+    d->dev = req.statbuf.st_dev;
+    d->ino = req.statbuf.st_ino;
+    d->has_id = true;
+  }
+  uv_fs_req_cleanup(&req);
+  free(path);
+
+  return d->has_id;
+}
+
+static bool fs_walk_is_ancestor(fs_walk_t *w, size_t index, const uv_stat_t *id) {
+  for (size_t i = index; i != SIZE_MAX; i = w->dirs[i].parent) {
+    if (!fs_walk_dir_id(w, i)) continue;
+    if (w->dirs[i].dev == id->st_dev && w->dirs[i].ino == id->st_ino) return true;
+  }
+  return false;
+}
+
+static void fs_walk_run(fs_walk_t *w, char *root) {
+  w->root = root;
+  if (!fs_walk_push_dir(w, NULL, SIZE_MAX, NULL)) {
+    w->error = UV_ENOMEM;
+    return;
+  }
+
+  for (size_t i = 0; i < w->dir_len && !w->error; i++) {
+    char *dir = w->dirs[i].rel ? fs_join_path(w->root, w->dirs[i].rel) : strdup(w->root);
+    if (!dir) {
+      w->error = UV_ENOMEM;
+      break;
+    }
+
+    uv_fs_t req;
+    int rc = uv_fs_scandir(NULL, &req, dir, 0, NULL);
+    if (rc < 0) {
+      uv_fs_req_cleanup(&req);
+      free(dir);
+      w->error = rc;
+      w->error_dir = i;
+      break;
+    }
+
+    w->dirs[i].first = w->entry_len;
+    uv_dirent_t dirent;
+
+    while (!w->error && uv_fs_scandir_next(&req, &dirent) != UV_EOF) {
+      if (!fs_walk_push_entry(w, dirent.name, dirent.type)) {
+        w->error = UV_ENOMEM;
+        break;
+      }
+      w->dirs[i].count++;
+
+      uv_stat_t id;
+      bool has_id;
+      if (!fs_walk_is_dir(dir, &dirent, &id, &has_id)) continue;
+      if (has_id && fs_walk_is_ancestor(w, i, &id)) continue;
+
+      char *rel = fs_walk_rel(w->dirs[i].rel, dirent.name);
+      if (!rel || !fs_walk_push_dir(w, rel, i, has_id ? &id : NULL)) {
+        free(rel);
+        w->error = UV_ENOMEM;
+      }
+    }
+
+    uv_fs_req_cleanup(&req);
+    free(dir);
+  }
+}
+
+static ant_value_t fs_walk_dir_path(ant_t *js, const fs_walk_t *w, size_t index) {
+  const char *rel = w->dirs[index].rel;
+  if (!rel) return js_mkstr(js, w->root, strlen(w->root));
+  return fs_path_join(js, w->root, rel);
+}
+
+static ant_value_t fs_walk_result(
+  ant_t *js, const fs_walk_t *w, ant_value_t root_value,
+  bool with_file_types, bool as_buffer
+) {
+  if (w->error == UV_ENOMEM) return js_mkerr(js, "Out of memory");
+  if (w->error) {
+    ant_value_t dir_path = fs_walk_dir_path(js, w, w->error_dir);
+    if (is_err(dir_path)) return dir_path;
+    const char *path = js_getstr(js, dir_path, NULL);
+    return fs_mk_uv_error(js, w->error, "scandir", path ? path : w->root, NULL);
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t arr = js_mkarr(js);
+  GC_ROOT_PIN(js, arr);
+  ant_value_t result = arr;
+
+  for (size_t d = 0; d < w->dir_len && !is_err(result); d++) {
+    const fs_walk_dir_t *dir = &w->dirs[d];
+    ant_value_t parent = js_mkundef();
+
+    if (with_file_types) {
+      parent = dir->rel ? fs_walk_dir_path(js, w, d) : root_value;
+      if (is_err(parent)) {
+        result = parent;
+        break;
+      }
+    }
+    GC_ROOT_PIN(js, parent);
+
+    for (size_t i = dir->first; i < dir->first + dir->count; i++) {
+      const fs_walk_entry_t *entry = &w->entries[i];
+      ant_value_t value;
+
+      if (with_file_types) value = create_dirent_object(
+        js, entry->name, strlen(entry->name), entry->type, as_buffer, parent
+      ); else {
+        char *rel = fs_walk_rel(dir->rel, entry->name);
+        value = rel ? fs_path_result(js, rel, strlen(rel), as_buffer) : js_mkerr(js, "Out of memory");
+        free(rel);
+      }
+
+      if (is_err(value)) {
+        result = value;
+        break;
+      }
+      js_arr_push(js, arr, value);
+    }
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
+}
+
+typedef struct {
+  uv_work_t work;
+  fs_request_t *req;
+  fs_walk_t walk;
+} fs_walk_job_t;
+
+static void fs_walk_work(uv_work_t *work) {
+  fs_walk_job_t *job = (fs_walk_job_t *)work->data;
+  fs_walk_run(&job->walk, job->req->path2);
+  job->req->path2 = NULL;
+}
+
+static void fs_walk_after_work(uv_work_t *work, int status) {
+  GC_UV_CALLBACK();
+  fs_walk_job_t *job = (fs_walk_job_t *)work->data;
+  fs_request_t *req = job->req;
+  ant_t *js = req->js;
+
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t root_value = is_object_type(req->owner)
+    ? req->owner
+    : js_mkstr(js, req->path, strlen(req->path));
+  GC_ROOT_PIN(js, root_value);
+
+  ant_value_t result = status < 0
+    ? fs_mk_uv_error(js, status, "scandir", req->path, NULL)
+    : fs_walk_result(js, &job->walk, root_value, req->with_file_types, req->buffer_encoding);
+  GC_ROOT_RESTORE(js, root_mark);
+
+  if (is_err(result)) js_reject_promise(js, req->promise, js_take_thrown(js, result));
+  else js_resolve_promise(js, req->promise, result);
+
+  fs_walk_free(&job->walk);
+  free(job);
+  req->completed = 1;
+  remove_pending_request(req);
+  free_fs_request(req);
+}
+
+static bool fs_readdir_recursive_option(ant_t *js, ant_value_t options) {
+  return is_object_type(options) && js_truthy(js, js_get(js, options, "recursive"));
+}
+
 static ant_value_t builtin_fs_readdirSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "readdirSync() requires a path argument");
+  ant_value_t original_path = args[0];
   args[0] = fs_coerce_path(js, args[0]);
   if (is_err(args[0])) return args[0];
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "readdirSync() path must be a string");
@@ -4332,6 +4824,21 @@ static ant_value_t builtin_fs_readdirSync(ant_params_t) {
   
   char *path_cstr = strndup(path, path_len);
   if (!path_cstr) return js_mkerr(js, "Out of memory");
+
+  if (nargs > 1 && fs_readdir_recursive_option(js, args[1])) {
+    fs_walk_t walk = {0};
+    fs_walk_run(&walk, path_cstr);
+    
+    GC_ROOT_SAVE(root_mark, js);
+    ant_value_t root_value = fs_parent_path_value(original_path, args[0]);
+    GC_ROOT_PIN(js, root_value);
+    
+    ant_value_t walked = fs_walk_result(js, &walk, root_value, with_file_types, as_buffer);
+    GC_ROOT_RESTORE(js, root_mark);
+    
+    fs_walk_free(&walk);
+    return walked;
+  }
   
   uv_fs_t req;
   int result = uv_fs_scandir(NULL, &req, path_cstr, 0, NULL);
@@ -4345,26 +4852,34 @@ static ant_value_t builtin_fs_readdirSync(ant_params_t) {
   
   free(path_cstr);
   
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t parent = fs_parent_path_value(original_path, args[0]);
+  GC_ROOT_PIN(js, parent);
+  
   ant_value_t arr = js_mkarr(js);
+  GC_ROOT_PIN(js, arr);
   uv_dirent_t dirent;
   
   while (uv_fs_scandir_next(&req, &dirent) != UV_EOF) {
     ant_value_t entry = with_file_types
-      ? create_dirent_object(js, dirent.name, strlen(dirent.name), dirent.type, as_buffer)
+      ? create_dirent_object(js, dirent.name, strlen(dirent.name), dirent.type, as_buffer, parent)
       : fs_path_result(js, dirent.name, strlen(dirent.name), as_buffer);
     if (is_err(entry)) {
       uv_fs_req_cleanup(&req);
+      GC_ROOT_RESTORE(js, root_mark);
       return entry;
     }
     js_arr_push(js, arr, entry);
   }
   
   uv_fs_req_cleanup(&req);
+  GC_ROOT_RESTORE(js, root_mark);
   return arr;
 }
 
 static ant_value_t builtin_fs_readdir(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "readdir() requires a path argument");
+  ant_value_t original_path = args[0];
   args[0] = fs_coerce_path(js, args[0]);
   if (is_err(args[0])) return args[0];
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "readdir() path must be a string");
@@ -4387,9 +4902,39 @@ static ant_value_t builtin_fs_readdir(ant_params_t) {
   req->op_type = FS_OP_READDIR;
   req->buffer_encoding = nargs > 1 && fs_buffer_encoding(js, args[1]);
   req->with_file_types = with_file_types;
+  req->owner = buffer_get_typedarray_data(original_path) ? original_path : js_mkundef();
   req->promise = js_mkpromise(js);
   req->path = strndup(path, path_len);
   req->uv_req.data = req;
+
+  if (!req->path) {
+    free_fs_request(req);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  if (nargs > 1 && fs_readdir_recursive_option(js, args[1])) {
+    fs_walk_job_t *job = calloc(1, sizeof(fs_walk_job_t));
+    req->path2 = strdup(req->path);
+    if (!job || !req->path2) {
+      free(job);
+      free_fs_request(req);
+      return js_mkerr(js, "Out of memory");
+    }
+    
+    job->req = req;
+    job->work.data = job;
+    ant_value_t promise = req->promise;
+    utarray_push_back(pending_requests, &req);
+    
+    int rc = uv_queue_work(uv_default_loop(), &job->work, fs_walk_work, fs_walk_after_work);
+    if (rc < 0) {
+      free(job);
+      fs_request_fail(req, rc);
+      req->completed = 1;
+      complete_request(req);
+    }
+    return promise;
+  }
   
   utarray_push_back(pending_requests, &req);
   int result = uv_fs_scandir(uv_default_loop(), &req->uv_req, req->path, 0, on_readdir_complete);
@@ -5424,6 +5969,739 @@ static ant_value_t fs_make_promise_wrapper(ant_t *js, ant_value_t original) {
   return js_heavy_mkfun(js, fs_promise_wrapper_call, original);
 }
 
+typedef struct {
+  char *name;
+  uv_dirent_type_t type;
+} fs_dir_entry_t;
+
+typedef struct {
+  uv_dir_t *dir;
+  uv_dirent_t *dirents;
+  fs_dir_entry_t *entries;
+
+  char *path;
+  char *current;
+  char **pending;
+
+  fs_request_t *ops_head;
+  fs_request_t *ops_tail;
+
+  size_t nentries;
+  size_t pos;
+  size_t count;
+  size_t pending_head;
+  size_t pending_len;
+  size_t pending_cap;
+
+  bool buffer_encoding;
+  bool recursive;
+  bool closed;
+} fs_dir_t;
+
+static void fs_dir_clear_entries(fs_dir_t *d) {
+  for (size_t i = 0; i < d->count; i++) free(d->entries[i].name);
+  d->pos = d->count = 0;
+}
+
+static void fs_dir_store_entries(fs_dir_t *d, size_t count) {
+  fs_dir_clear_entries(d);
+  for (size_t i = 0; i < count; i++) {
+    char *name = strdup(d->dirents[i].name);
+    if (!name) continue;
+    d->entries[d->count].name = name;
+    d->entries[d->count++].type = d->dirents[i].type;
+  }
+}
+
+static bool fs_dir_push_pending(fs_dir_t *d, char *path) {
+  if (d->pending_head + d->pending_len == d->pending_cap) {
+    if (d->pending_head > 0) {
+      memmove(d->pending, d->pending + d->pending_head, d->pending_len * sizeof(char *));
+      d->pending_head = 0;
+    } else {
+      size_t cap = d->pending_cap ? d->pending_cap * 2 : 8;
+      char **grown = realloc(d->pending, cap * sizeof(char *));
+      if (!grown) return false;
+      d->pending = grown;
+      d->pending_cap = cap;
+    }
+  }
+  d->pending[d->pending_head + d->pending_len++] = path;
+  return true;
+}
+
+static char *fs_dir_pop_pending(fs_dir_t *d) {
+  if (d->pending_len == 0) return NULL;
+  d->pending_len--;
+  return d->pending[d->pending_head++];
+}
+
+static const char *fs_dir_current_path(fs_dir_t *d) {
+  return d->current ? d->current : d->path;
+}
+
+static int fs_dir_close_handle(fs_dir_t *d) {
+  if (!d->dir) return 0;
+  uv_fs_t req;
+  int rc = uv_fs_closedir(NULL, &req, d->dir, NULL);
+  uv_fs_req_cleanup(&req);
+  d->dir = NULL;
+  return rc;
+}
+
+static int fs_dir_release(fs_dir_t *d) {
+  int rc = fs_dir_close_handle(d);
+  fs_dir_clear_entries(d);
+  while (d->pending_len > 0) free(fs_dir_pop_pending(d));
+  free(d->current);
+  d->current = NULL;
+  d->closed = true;
+  return rc;
+}
+
+static void fs_dir_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t value = js_obj_from_ptr(obj);
+  fs_dir_t *d = (fs_dir_t *)js_get_native(value, FS_DIR_NATIVE_TAG);
+  js_clear_native(value, FS_DIR_NATIVE_TAG);
+  if (!d) return;
+
+  fs_dir_release(d);
+  free(d->pending);
+  free(d->entries);
+  free(d->dirents);
+  free(d->path);
+  free(d);
+}
+
+static ant_value_t fs_dir_coded_error(ant_t *js, const char *code, const char *message) {
+  ant_value_t props = js_mkobj(js);
+  js_set(js, props, "code", js_mkstr(js, code, strlen(code)));
+  return js_mkerr_props(js, JS_ERR_GENERIC, props, "%s", message);
+}
+
+static ant_value_t fs_dir_closed_error(ant_t *js) {
+  return fs_dir_coded_error(js, "ERR_DIR_CLOSED", "Directory handle was closed");
+}
+
+static fs_dir_t *fs_dir_data(ant_t *js, ant_value_t obj, ant_value_t *err) {
+  fs_dir_t *d = is_object_type(obj) ? (fs_dir_t *)js_get_native(obj, FS_DIR_NATIVE_TAG) : NULL;
+  if (!d) *err = js_mkerr_typed(js, JS_ERR_TYPE, "Value of \"this\" must be of type Dir");
+  return d;
+}
+
+static fs_dir_t *fs_dir_sync_data(ant_t *js, ant_value_t obj, ant_value_t *err) {
+  fs_dir_t *d = fs_dir_data(js, obj, err);
+  if (!d) return NULL;
+  if (d->closed) {
+    *err = fs_dir_closed_error(js);
+    return NULL;
+  }
+  if (d->ops_head) {
+    *err = fs_dir_coded_error(
+      js, "ERR_DIR_CONCURRENT_OPERATION",
+      "Cannot do synchronous work on directory handle with concurrent asynchronous operations"
+    );
+    return NULL;
+  }
+  return d;
+}
+
+static ant_value_t fs_dir_queue_subdir(ant_t *js, fs_dir_t *d, const char *name) {
+  ant_value_t joined = fs_path_join(js, fs_dir_current_path(d), name);
+  if (is_err(joined)) return joined;
+
+  size_t len = 0;
+  const char *str = js_getstr(js, joined, &len);
+  char *copy = str ? strndup(str, len) : NULL;
+  if (!copy || !fs_dir_push_pending(d, copy)) {
+    free(copy);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  return js_mkundef();
+}
+
+static ant_value_t fs_dir_take_entry(ant_t *js, ant_value_t dir_obj, fs_dir_t *d) {
+  fs_dir_entry_t *entry = &d->entries[d->pos++];
+  GC_ROOT_SAVE(root_mark, js);
+
+  ant_value_t parent = d->current
+    ? js_mkstr(js, d->current, strlen(d->current))
+    : js_get(js, dir_obj, "path");
+  GC_ROOT_PIN(js, parent);
+
+  ant_value_t dirent = create_dirent_object(
+    js, entry->name, strlen(entry->name),
+    entry->type, d->buffer_encoding, parent
+  );
+
+  if (!is_err(dirent) && d->recursive && entry->type == UV_DIRENT_DIR) {
+    GC_ROOT_PIN(js, dirent);
+    ant_value_t queued = fs_dir_queue_subdir(js, d, entry->name);
+    if (is_err(queued)) dirent = queued;
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return dirent;
+}
+
+static ant_value_t fs_dir_read_sync(ant_t *js, ant_value_t dir_obj, fs_dir_t *d) {
+  for (;;) {
+    if (d->pos < d->count) return fs_dir_take_entry(js, dir_obj, d);
+
+    uv_fs_t req;
+    if (!d->dir) {
+      char *next = fs_dir_pop_pending(d);
+      if (!next) return js_mknull();
+
+      int rc = uv_fs_opendir(NULL, &req, next, NULL);
+      uv_dir_t *handle = rc < 0 ? NULL : (uv_dir_t *)req.ptr;
+      uv_fs_req_cleanup(&req);
+
+      if (rc < 0) {
+        ant_value_t err = fs_mk_uv_error(js, rc, "opendir", next, NULL);
+        free(next);
+        return err;
+      }
+
+      free(d->current);
+      d->current = next;
+      d->dir = handle;
+    }
+
+    d->dir->dirents = d->dirents;
+    d->dir->nentries = d->nentries;
+    int rc = uv_fs_readdir(NULL, &req, d->dir, NULL);
+
+    if (rc < 0) {
+      uv_fs_req_cleanup(&req);
+      return fs_mk_uv_error(js, rc, "readdir", fs_dir_current_path(d), NULL);
+    }
+
+    fs_dir_store_entries(d, (size_t)rc);
+    uv_fs_req_cleanup(&req);
+    if (rc == 0) fs_dir_close_handle(d);
+  }
+}
+
+static void fs_dir_run_ops(fs_dir_t *d);
+
+static void fs_dir_complete_op(fs_request_t *req, fs_dir_t *d, ant_value_t value, bool reject) {
+  ant_t *js = req->js;
+  if (reject) js_reject_promise(js, req->promise, value);
+  else js_resolve_promise(js, req->promise, value);
+
+  d->ops_head = req->next;
+  if (!d->ops_head) d->ops_tail = NULL;
+
+  remove_pending_request(req);
+  free_fs_request(req);
+  if (d->ops_head) fs_dir_run_ops(d);
+}
+
+static void fs_dir_finish_op(fs_request_t *req, fs_dir_t *d, ant_value_t result) {
+  if (is_err(result)) fs_dir_complete_op(req, d, js_take_thrown(req->js, result), true);
+  else fs_dir_complete_op(req, d, result, false);
+}
+
+static fs_dir_t *fs_dir_of_op(fs_request_t *req) {
+  return (fs_dir_t *)js_get_native(req->owner, FS_DIR_NATIVE_TAG);
+}
+
+static void fs_dir_iter_finish(fs_request_t *req, fs_dir_t *d, ant_value_t outcome) {
+  if (d->closed) {
+    fs_dir_finish_op(req, d, outcome);
+    return;
+  }
+  req->failed = is_err(outcome);
+  req->target_buffer = req->failed ? js_take_thrown(req->js, outcome) : outcome;
+  req->op_type = FS_OP_DIR_ITER_CLOSE;
+  fs_dir_run_ops(d);
+}
+
+static void fs_dir_settle_read(fs_request_t *req, fs_dir_t *d, ant_value_t value) {
+  ant_t *js = req->js;
+  if (req->op_type != FS_OP_DIR_ITER_NEXT) {
+    fs_dir_finish_op(req, d, value);
+    return;
+  }
+
+  if (is_err(value)) {
+    fs_dir_iter_finish(req, d, value);
+    return;
+  }
+
+  if (vtype(value) == kTypeNull) {
+    fs_dir_iter_finish(req, d, js_iter_result(js, false, js_mkundef()));
+    return;
+  }
+
+  fs_dir_finish_op(req, d, js_iter_result(js, true, value));
+}
+
+static void on_dir_op_closed(uv_fs_t *uv_req);
+static void fs_dir_after_close(fs_request_t *req, fs_dir_t *d, int rc);
+
+static void on_dir_op_opened(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  fs_dir_t *d = fs_dir_of_op(req);
+  int rc = (int)uv_req->result;
+  uv_dir_t *handle = rc < 0 ? NULL : (uv_dir_t *)uv_req->ptr;
+  uv_fs_req_cleanup(uv_req);
+
+  if (rc < 0) {
+    fs_dir_settle_read(req, d, fs_mk_uv_error(req->js, rc, "opendir", req->path, NULL));
+    return;
+  }
+
+  free(d->current);
+  d->current = req->path;
+  req->path = NULL;
+  d->dir = handle;
+  fs_dir_run_ops(d);
+}
+
+static void on_dir_op_read(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  fs_dir_t *d = fs_dir_of_op(req);
+  int rc = (int)uv_req->result;
+
+  if (rc < 0) {
+    uv_fs_req_cleanup(uv_req);
+    fs_dir_settle_read(req, d, fs_mk_uv_error(req->js, rc, "readdir", fs_dir_current_path(d), NULL));
+    return;
+  }
+
+  fs_dir_store_entries(d, (size_t)rc);
+  uv_fs_req_cleanup(uv_req);
+
+  if (rc > 0) {
+    fs_dir_run_ops(d);
+    return;
+  }
+
+  uv_dir_t *handle = d->dir;
+  d->dir = NULL;
+  int close_rc = uv_fs_closedir(uv_default_loop(), &req->uv_req, handle, on_dir_op_closed);
+  if (close_rc < 0) fs_dir_after_close(req, d, close_rc);
+}
+
+static void fs_dir_after_close(fs_request_t *req, fs_dir_t *d, int rc) {
+  if (req->op_type == FS_OP_DIR_READ || req->op_type == FS_OP_DIR_ITER_NEXT) {
+    fs_dir_run_ops(d);
+    return;
+  }
+
+  if (req->op_type == FS_OP_DIR_ITER_CLOSE) {
+    fs_dir_complete_op(req, d, req->target_buffer, req->failed);
+    return;
+  }
+
+  fs_dir_finish_op(req, d, rc < 0
+    ? fs_mk_uv_error(req->js, rc, "closedir", d->path, NULL)
+    : js_mkundef()
+  );
+}
+
+static void on_dir_op_closed(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  int rc = (int)uv_req->result;
+  uv_fs_req_cleanup(uv_req);
+  fs_dir_after_close(req, fs_dir_of_op(req), rc);
+}
+
+static void fs_dir_run_ops(fs_dir_t *d) {
+  fs_request_t *req = d->ops_head;
+  if (!req) return;
+  ant_t *js = req->js;
+
+  bool closing =
+    req->op_type == FS_OP_DIR_CLOSE ||
+    req->op_type == FS_OP_DIR_ITER_CLOSE ||
+    req->op_type == FS_OP_DIR_ITER_RETURN;
+
+  if (closing) {
+    if (d->closed && req->op_type == FS_OP_DIR_CLOSE) {
+      fs_dir_finish_op(req, d, fs_dir_closed_error(js));
+      return;
+    }
+    if (req->op_type == FS_OP_DIR_ITER_RETURN) req->op_type = FS_OP_DIR_ITER_CLOSE;
+
+    uv_dir_t *handle = d->dir;
+    d->dir = NULL;
+    fs_dir_release(d);
+
+    int rc = handle ? uv_fs_closedir(uv_default_loop(), &req->uv_req, handle, on_dir_op_closed) : 0;
+    if (!handle || rc < 0) fs_dir_after_close(req, d, rc);
+    return;
+  }
+
+  if (d->closed) {
+    fs_dir_settle_read(req, d, fs_dir_closed_error(js));
+    return;
+  }
+
+  if (d->pos < d->count) {
+    fs_dir_settle_read(req, d, fs_dir_take_entry(js, req->owner, d));
+    return;
+  }
+
+  int rc = 0;
+  if (!d->dir) {
+    char *next = fs_dir_pop_pending(d);
+    if (!next) {
+      fs_dir_settle_read(req, d, js_mknull());
+      return;
+    }
+    free(req->path);
+    req->path = next;
+    rc = uv_fs_opendir(uv_default_loop(), &req->uv_req, req->path, on_dir_op_opened);
+    if (rc < 0) fs_dir_settle_read(req, d, fs_mk_uv_error(js, rc, "opendir", req->path, NULL));
+    return;
+  }
+
+  d->dir->dirents = d->dirents;
+  d->dir->nentries = d->nentries;
+  rc = uv_fs_readdir(uv_default_loop(), &req->uv_req, d->dir, on_dir_op_read);
+  if (rc < 0) fs_dir_settle_read(req, d, fs_mk_uv_error(js, rc, "readdir", fs_dir_current_path(d), NULL));
+}
+
+static ant_value_t fs_dir_enqueue(
+  ant_t *js, ant_value_t dir_obj, fs_dir_t *d,
+  fs_op_type_t op_type, ant_value_t stash
+) {
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+
+  req->js = js;
+  req->op_type = op_type;
+  req->promise = js_mkpromise(js);
+  req->owner = dir_obj;
+  req->target_buffer = stash;
+  req->uv_req.data = req;
+
+  utarray_push_back(pending_requests, &req);
+  ant_value_t promise = req->promise;
+
+  if (d->ops_tail) d->ops_tail->next = req;
+  else d->ops_head = req;
+  d->ops_tail = req;
+
+  if (d->ops_head == req) fs_dir_run_ops(d);
+  return promise;
+}
+
+static ant_value_t builtin_fs_dir_readSync(ant_params_t) {
+  ant_value_t err = js_mkundef();
+  fs_dir_t *d = fs_dir_sync_data(js, js->this_val, &err);
+  if (!d) return err;
+  return fs_dir_read_sync(js, js->this_val, d);
+}
+
+static ant_value_t builtin_fs_dir_read(ant_params_t) {
+  ant_value_t err = js_mkundef();
+  fs_dir_t *d = fs_dir_data(js, js->this_val, &err);
+  if (!d) return fs_rejected_promise(js, err);
+  if (d->closed && !d->ops_head) return fs_rejected_promise(js, fs_dir_closed_error(js));
+  return fs_dir_enqueue(js, js->this_val, d, FS_OP_DIR_READ, js_mkundef());
+}
+
+static ant_value_t builtin_fs_dir_closeSync(ant_params_t) {
+  ant_value_t err = js_mkundef();
+  fs_dir_t *d = fs_dir_sync_data(js, js->this_val, &err);
+  if (!d) return err;
+
+  int rc = fs_dir_release(d);
+  if (rc < 0) return fs_mk_uv_error(js, rc, "closedir", d->path, NULL);
+  return js_mkundef();
+}
+
+static ant_value_t builtin_fs_dir_close(ant_params_t) {
+  ant_value_t err = js_mkundef();
+  fs_dir_t *d = fs_dir_data(js, js->this_val, &err);
+  if (!d) return fs_rejected_promise(js, err);
+  if (d->closed && !d->ops_head) return fs_rejected_promise(js, fs_dir_closed_error(js));
+  return fs_dir_enqueue(js, js->this_val, d, FS_OP_DIR_CLOSE, js_mkundef());
+}
+
+static ant_value_t builtin_fs_dir_dispose(ant_params_t) {
+  fs_dir_t *d = (fs_dir_t *)js_get_native(js->this_val, FS_DIR_NATIVE_TAG);
+  if (!d || d->closed) return js_mkundef();
+  return builtin_fs_dir_closeSync(js, args, nargs, call_new_target);
+}
+
+static ant_value_t builtin_fs_dir_asyncDispose(ant_params_t) {
+  fs_dir_t *d = (fs_dir_t *)js_get_native(js->this_val, FS_DIR_NATIVE_TAG);
+  if (!d || d->closed) return fs_resolved_promise(js, js_mkundef());
+  return fs_dir_enqueue(js, js->this_val, d, FS_OP_DIR_CLOSE, js_mkundef());
+}
+
+static ant_value_t fs_dir_iter_next(ant_params_t) {
+  ant_value_t dir_obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t err = js_mkundef();
+
+  fs_dir_t *d = fs_dir_data(js, dir_obj, &err);
+  if (!d) return fs_rejected_promise(js, err);
+  if (d->closed && !d->ops_head) return fs_rejected_promise(js, fs_dir_closed_error(js));
+
+  return fs_dir_enqueue(js, dir_obj, d, FS_OP_DIR_ITER_NEXT, js_mkundef());
+}
+
+static ant_value_t fs_dir_iter_return(ant_params_t) {
+  ant_value_t dir_obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
+
+  fs_dir_t *d = (fs_dir_t *)js_get_native(dir_obj, FS_DIR_NATIVE_TAG);
+  GC_ROOT_SAVE(root_mark, js);
+  
+  ant_value_t done = js_mkobj(js);
+  GC_ROOT_PIN(js, done);
+  js_set(js, done, "value", value);
+  js_set(js, done, "done", js_true);
+
+  ant_value_t promise = (!d || (d->closed && !d->ops_head))
+    ? fs_resolved_promise(js, done)
+    : fs_dir_enqueue(js, dir_obj, d, FS_OP_DIR_ITER_RETURN, done);
+  GC_ROOT_RESTORE(js, root_mark);
+
+  return promise;
+}
+
+static ant_value_t builtin_fs_dir_asyncIterator(ant_params_t) {
+  ant_value_t dir_obj = js->this_val;
+  if (!js_get_native(dir_obj, FS_DIR_NATIVE_TAG))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Value of \"this\" must be of type Dir");
+
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t iter = js_mkobj(js);
+  GC_ROOT_PIN(js, iter);
+
+  js_set_proto_init(iter, js->sym.async_iterator_proto);
+  js_set(js, iter, "next", js_heavy_mkfun(js, fs_dir_iter_next, dir_obj));
+  js_set(js, iter, "return", js_heavy_mkfun(js, fs_dir_iter_return, dir_obj));
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return iter;
+}
+
+static void fs_init_dir_proto(ant_t *js) {
+  if (is_object_type(js->builtins.dir_proto)) return;
+  ant_value_t proto = js->builtins.dir_proto = js_mkobj(js);
+
+  js_set(js, proto, "read", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_dir_read), false));
+  js_set(js, proto, "readSync", js_mkfun(builtin_fs_dir_readSync));
+  js_set(js, proto, "close", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_dir_close), false));
+  js_set(js, proto, "closeSync", js_mkfun(builtin_fs_dir_closeSync));
+
+  js_set_sym(js, proto, js->sym.asyncIterator_sym, js_mkfun(builtin_fs_dir_asyncIterator));
+  js_set_sym(js, proto, js->sym.dispose_sym, js_mkfun(builtin_fs_dir_dispose));
+  js_set_sym(js, proto, js->sym.asyncDispose_sym, js_mkfun(builtin_fs_dir_asyncDispose));
+  js_set_sym(js, proto, js->sym.toStringTag_sym, js_mkstr(js, "Dir", 3));
+}
+
+typedef struct {
+  ant_value_t path_value;
+  char *path;
+  size_t nentries;
+  bool buffer_encoding;
+  bool recursive;
+} fs_opendir_options_t;
+
+static ant_value_t fs_parse_opendir_args(
+  ant_t *js, ant_value_t *args, int nargs,
+  const char *fn_name, fs_opendir_options_t *out
+) {
+  memset(out, 0, sizeof(*out));
+  out->nentries = 32;
+
+  if (nargs < 1) return js_mkerr(js, "%s() requires a path argument", fn_name);
+  ant_value_t original_path = args[0];
+
+  args[0] = fs_coerce_path(js, args[0]);
+  if (is_err(args[0])) return args[0];
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "%s() path must be a string", fn_name);
+
+  ant_value_t options = nargs > 1 ? args[1] : js_mkundef();
+  if (is_object_type(options)) {
+    ant_value_t size_val = js_get(js, options, "bufferSize");
+    if (is_err(size_val)) return size_val;
+    if (vtype(size_val) != kTypeUndefined) {
+      double size = vtype(size_val) == kTypeNumber ? js_getnum(size_val) : 0;
+      if (!(size >= 1 && size <= 4294967295.0) || size != (double)(size_t)size) return js_mkerr_typed(
+        js, JS_ERR_RANGE,
+        "The value of \"options.bufferSize\" is out of range. It must be >= 1 && <= 4294967295. Received %g", size
+      );
+      out->nentries = (size_t)size;
+    }
+
+    ant_value_t recursive = js_get(js, options, "recursive");
+    if (is_err(recursive)) return recursive;
+    out->recursive = js_truthy(js, recursive);
+  }
+
+  size_t path_len = 0;
+  const char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+
+  out->path = strndup(path, path_len);
+  if (!out->path) return js_mkerr(js, "Out of memory");
+
+  out->buffer_encoding = fs_buffer_encoding(js, options);
+  out->path_value = fs_parent_path_value(original_path, args[0]);
+
+  return js_mkundef();
+}
+
+static ant_value_t fs_make_dir(ant_t *js, uv_dir_t *handle, fs_opendir_options_t *opts) {
+  fs_dir_t *d = calloc(1, sizeof(fs_dir_t));
+  if (d) {
+    d->dirents = calloc(opts->nentries, sizeof(uv_dirent_t));
+    d->entries = calloc(opts->nentries, sizeof(fs_dir_entry_t));
+  }
+
+  if (!d || !d->dirents || !d->entries) {
+    if (d) { free(d->dirents); free(d->entries); }
+    free(d);
+    uv_fs_t req;
+    uv_fs_closedir(NULL, &req, handle, NULL);
+    uv_fs_req_cleanup(&req);
+    free(opts->path);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  d->dir = handle;
+  d->path = opts->path;
+  d->nentries = opts->nentries;
+  d->buffer_encoding = opts->buffer_encoding;
+  d->recursive = opts->recursive;
+
+  fs_init_dir_proto(js);
+  GC_ROOT_SAVE(root_mark, js);
+
+  ant_value_t obj = js_mkobj(js);
+  GC_ROOT_PIN(js, obj);
+
+  js_set_proto_init(obj, js->builtins.dir_proto);
+  js_set_native(obj, d, FS_DIR_NATIVE_TAG);
+  js_set_finalizer(obj, fs_dir_finalize);
+  js_set(js, obj, "path", opts->path_value);
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return obj;
+}
+
+static ant_value_t builtin_fs_opendirSync(ant_params_t) {
+  fs_opendir_options_t opts;
+  ant_value_t parsed = fs_parse_opendir_args(js, args, nargs, "opendirSync", &opts);
+  if (is_err(parsed)) {
+    free(opts.path);
+    return parsed;
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, opts.path_value);
+
+  uv_fs_t req;
+  int rc = uv_fs_opendir(NULL, &req, opts.path, NULL);
+
+  if (rc == UV_EMFILE || rc == UV_ENFILE) {
+    uv_fs_req_cleanup(&req);
+    gc_run(js);
+    rc = uv_fs_opendir(NULL, &req, opts.path, NULL);
+  }
+
+  uv_dir_t *handle = rc < 0 ? NULL : (uv_dir_t *)req.ptr;
+  uv_fs_req_cleanup(&req);
+
+  ant_value_t result = rc < 0
+    ? fs_mk_uv_error(js, rc, "opendir", opts.path, NULL)
+    : fs_make_dir(js, handle, &opts);
+
+  if (rc < 0) free(opts.path);
+  GC_ROOT_RESTORE(js, root_mark);
+
+  return result;
+}
+
+static void on_opendir_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  ant_t *js = req->js;
+  int rc = (int)uv_req->result;
+  uv_dir_t *handle = rc < 0 ? NULL : (uv_dir_t *)uv_req->ptr;
+  uv_fs_req_cleanup(uv_req);
+
+  if ((rc == UV_EMFILE || rc == UV_ENFILE) && !req->retried) {
+    req->retried = true;
+    gc_run(js);
+    if (uv_fs_opendir(uv_default_loop(), &req->uv_req, req->path, on_opendir_complete) == 0) return;
+  }
+
+  ant_value_t result;
+  if (rc < 0) result = fs_mk_uv_error(js, rc, "opendir", req->path, NULL);
+  else {
+    fs_opendir_options_t opts = {
+      .path_value = is_object_type(req->owner) ? req->owner : js_mkstr(js, req->path, strlen(req->path)),
+      .path = req->path,
+      .nentries = req->data_len,
+      .buffer_encoding = req->buffer_encoding,
+      .recursive = req->recursive,
+    };
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, opts.path_value);
+    req->path = NULL;
+    result = fs_make_dir(js, handle, &opts);
+    GC_ROOT_RESTORE(js, root_mark);
+  }
+
+  if (is_err(result)) js_reject_promise(js, req->promise, js_take_thrown(js, result));
+  else js_resolve_promise(js, req->promise, result);
+
+  req->completed = 1;
+  remove_pending_request(req);
+  free_fs_request(req);
+}
+
+static ant_value_t builtin_fs_opendir(ant_params_t) {
+  fs_opendir_options_t opts;
+  ant_value_t parsed = fs_parse_opendir_args(js, args, nargs, "opendir", &opts);
+  if (is_err(parsed)) {
+    free(opts.path);
+    return fs_rejected_promise(js, parsed);
+  }
+
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) {
+    free(opts.path);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  req->js = js;
+  req->op_type = FS_OP_OPENDIR;
+  req->promise = js_mkpromise(js);
+  req->path = opts.path;
+  req->owner = is_object_type(opts.path_value) ? opts.path_value : js_mkundef();
+  req->data_len = opts.nentries;
+  req->buffer_encoding = opts.buffer_encoding;
+  req->recursive = opts.recursive;
+  req->uv_req.data = req;
+
+  ant_value_t promise = req->promise;
+  utarray_push_back(pending_requests, &req);
+
+  int rc = uv_fs_opendir(uv_default_loop(), &req->uv_req, req->path, on_opendir_complete);
+  if (rc < 0) {
+    fs_request_fail(req, rc);
+    req->completed = 1;
+    complete_request(req);
+  }
+
+  return promise;
+}
+
 static void fs_set_promise_methods(ant_t *js, ant_value_t lib) {
   js_set(js, lib, "appendFile", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_appendFile)));
   js_set(js, lib, "cp", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_cp)));
@@ -5452,6 +6730,8 @@ static void fs_set_promise_methods(ant_t *js, ant_value_t lib) {
   js_set(js, lib, "realpath", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_realpath)));
   js_set(js, lib, "readlink", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_readlink)));
   js_set(js, lib, "symlink", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_symlink)));
+  js_set(js, lib, "link", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_link)));
+  js_set(js, lib, "opendir", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_opendir)));
 }
 
 static void fs_set_callback_compatible_methods(ant_t *js, ant_value_t lib) {
@@ -5483,6 +6763,8 @@ static void fs_set_callback_compatible_methods(ant_t *js, ant_value_t lib) {
   js_set(js, lib, "readdir", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_readdir), false));
   js_set(js, lib, "readlink", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_readlink), false));
   js_set(js, lib, "symlink", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_symlink), false));
+  js_set(js, lib, "link", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_link), false));
+  js_set(js, lib, "opendir", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_opendir), false));
 
   js_set(js, realpath, "native", realpath);
   js_set(js, lib, "realpath", realpath);
@@ -5586,6 +6868,8 @@ ant_value_t fs_library(ant_t *js) {
   js_set(js, lib, "realpathSync", realpath_sync);
   js_set(js, lib, "readlinkSync", js_mkfun(builtin_fs_readlinkSync));
   js_set(js, lib, "symlinkSync", js_mkfun(builtin_fs_symlinkSync));
+  js_set(js, lib, "linkSync", js_mkfun(builtin_fs_linkSync));
+  js_set(js, lib, "opendirSync", js_mkfun(builtin_fs_opendirSync));
   js_set(js, lib, "watch", js_mkfun(builtin_fs_watch));
   js_set(js, lib, "watchFile", js_mkfun(builtin_fs_watchFile));
   js_set(js, lib, "unwatchFile", js_mkfun(builtin_fs_unwatchFile));
@@ -5640,6 +6924,7 @@ void gc_mark_fs(ant_t *js, gc_mark_fn mark) {
     if (reqp && *reqp) {
     mark(js, (*reqp)->promise);
     if (is_object_type((*reqp)->target_buffer)) mark(js, (*reqp)->target_buffer);
+    if (is_object_type((*reqp)->owner))         mark(js, (*reqp)->owner);
     if (is_callable((*reqp)->callback_fn))      mark(js, (*reqp)->callback_fn);
   }}
 

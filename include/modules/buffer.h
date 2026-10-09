@@ -73,6 +73,11 @@ ArrayBufferData *buffer_get_arraybuffer_data(ant_value_t value);
 TypedArrayData *buffer_get_typedarray_data(ant_value_t value);
 DataViewData *buffer_get_dataview_data(ant_value_t value);
 
+bool buffer_bytes_to_string(
+  ant_t *js, const uint8_t *data, size_t len,
+  const char *encoding, size_t encoding_len, ant_value_t *out
+);
+
 ant_value_t create_typed_array(
   ant_t *js, TypedArrayType type, ArrayBufferData *buffer,
   size_t byte_offset, size_t length, const char *type_name

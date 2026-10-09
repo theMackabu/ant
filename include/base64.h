@@ -7,4 +7,7 @@
 char *ant_base64_encode(const uint8_t *data, size_t len, size_t *out_len);
 uint8_t *ant_base64_decode(const char *data, size_t len, size_t *out_len);
 
+char *ant_base64url_encode(const uint8_t *data, size_t len, size_t *out_len);
+uint8_t *ant_base64_decode_loose(const char *data, size_t len, size_t *out_len);
+
 #endif

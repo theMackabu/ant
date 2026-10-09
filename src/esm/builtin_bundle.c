@@ -71,6 +71,13 @@ const ant_builtin_bundle_alias_t *esm_lookup_builtin_alias(const char *specifier
   return NULL;
 }
 
+void esm_builtin_bundle_foreach(ant_library_iter_fn cb, void *userdata) {
+  for (size_t i = 0; i < ant_builtin_bundle_alias_count; i++) {
+    const ant_builtin_bundle_alias_t *alias = &ant_builtin_bundle_aliases[i];
+    if (alias->kind == ANT_BUILTIN_NAME_BARE) cb(alias->specifier, userdata);
+  }
+}
+
 const ant_builtin_bundle_module_t *esm_lookup_builtin_module(size_t module_id) {
   if (module_id >= ant_builtin_bundle_module_count) return NULL;
 

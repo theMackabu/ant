@@ -56,27 +56,25 @@ static ant_value_t reflect_set(ant_params_t) {
     if (is_err(target)) return target;
     t = kTypeFunction;
   }
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return js_false;
   
-  if (vtype(key) != kTypeString) return js_false;
+  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Reflect.set called on non-object");
   
-  size_t key_len;
-  char *key_str = js_getstr(js, key, &key_len);
-  if (!key_str) return js_false;
-
-  ant_value_t target_obj = js_as_obj(target);
-  prop_meta_t meta;
-  
-  if (!is_proxy(target_obj) && lookup_string_prop_meta(js, target_obj, key_str, key_len, &meta)) {
-    bool writable = (meta.has_getter || meta.has_setter) ? meta.has_setter : meta.writable;
-    if (!writable) return js_false;
+  if (is_object_type(key)) {
+    key = js_to_primitive(js, key, 1);
+    if (is_err(key)) return key;
   }
-
-  ant_value_t result = js_setprop(js, target, key, value);
+  
+  if (vtype(key) != kTypeSymbol && vtype(key) != kTypeString) {
+    key = js_tostring_val(js, key);
+    if (is_err(key)) return key;
+  }
+  
+  ant_value_t result = js_set_reporting(js, target, key, value);
   if (is_err(result)) return result;
   if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
   
-  return js_true;
+  return result;
 }
 
 static ant_value_t reflect_has(ant_params_t) {

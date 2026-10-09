@@ -2,6 +2,8 @@
 
 #include "types.h"
 #include "esm/loader.h"
+#include "esm/library.h"
+#include "esm/builtin_bundle.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -62,6 +64,14 @@ char *esm_resolve_path_require(ant_t *js, const char *specifier, const char *bas
 ant_module_format_t esm_decide_module_format(ant_t *js, const char *resolved_path);
 esm_module_kind_t esm_classify_kind_for_path(const char *resolved_path);
 esm_module_t *esm_find_module(ant_t *js, const char *module_key);
+
+typedef struct {
+  const ant_builtin_bundle_alias_t *alias;
+  ant_library_entry_t *library;
+  ant_builtin_name_kind_t kind;
+} esm_builtin_t;
+
+esm_builtin_t esm_find_builtin(const char *specifier, size_t spec_len);
 ant_value_t esm_node_module_paths(ant_t *js, const char *directory);
 
 ant_value_t esm_read_file(

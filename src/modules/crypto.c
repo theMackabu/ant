@@ -19,9 +19,11 @@
 #include "ant.h"
 #include "ptr.h"
 #include "gc.h"
+#include "utf8.h"
 #include "base64.h"
 #include "errors.h"
 #include "gc/roots.h"
+#include "gc/strings.h"
 #include "modules/crypto.h"
 #include "modules/buffer.h"
 #include "modules/domexception.h"
@@ -436,17 +438,19 @@ static ant_value_t crypto_get_input_bytes(
       bytes = buf;
       break;
     case CRYPTO_TEXT_BASE64:
-      buf = ant_base64_decode(str, str_len, &len);
-      if (!buf) return js_mkerr(js, "Invalid base64 string");
-      bytes = buf;
-      break;
-    case CRYPTO_TEXT_LATIN1:
-      buf = malloc(str_len);
+      buf = ant_base64_decode_loose(str, str_len, &len);
       if (!buf) return js_mkerr(js, "Out of memory");
-      for (size_t i = 0; i < str_len; i++) buf[i] = (uint8_t)str[i];
       bytes = buf;
-      len = str_len;
       break;
+    case CRYPTO_TEXT_LATIN1: {
+      size_t units = (size_t)str_utf16_len(js, string_val);
+      buf = malloc(units == 0 ? 1 : units);
+      if (!buf) return js_mkerr(js, "Out of memory");
+      for (size_t i = 0; i < units; i++) buf[i] = (uint8_t)utf16_code_unit_at(str, str_len, i);
+      bytes = buf;
+      len = units;
+      break;
+    }
     case CRYPTO_TEXT_UTF8:
     default:
       bytes = (const uint8_t *)str;
@@ -624,37 +628,8 @@ static ant_value_t crypto_digest_result(
   const char *enc = js_getstr(js, encoding_val, &enc_len);
   if (!enc) return crypto_make_buffer(js, digest, digest_len);
 
-  crypto_text_encoding_t encoding = crypto_parse_encoding(enc, enc_len);
-
-  if (encoding == CRYPTO_TEXT_HEX) {
-    char *hex = malloc(digest_len * 2u + 1u);
-    if (!hex) return js_mkerr(js, "Out of memory");
-    for (size_t i = 0; i < digest_len; i++) {
-      snprintf(hex + (i * 2u), 3, "%02x", digest[i]);
-    }
-    ant_value_t result = js_mkstr(js, hex, digest_len * 2u);
-    free(hex);
-    return result;
-  }
-
-  if (encoding == CRYPTO_TEXT_BASE64) {
-    size_t out_len = 0;
-    char *encoded = ant_base64_encode(digest, digest_len, &out_len);
-    if (!encoded) return js_mkerr(js, "Failed to encode base64");
-    
-    if (enc_len == 9 && strncasecmp(enc, "base64url", 9) == 0) {
-      for (size_t i = 0; i < out_len; i++) {
-        if (encoded[i] == '+') encoded[i] = '-';
-        else if (encoded[i] == '/') encoded[i] = '_';
-      }
-      while (out_len > 0 && encoded[out_len - 1u] == '=') out_len--;
-    }
-    
-    ant_value_t result = js_mkstr(js, encoded, out_len);
-    free(encoded);
-    
-    return result;
-  }
+  ant_value_t result = js_mkundef();
+  if (buffer_bytes_to_string(js, digest, digest_len, enc, enc_len, &result)) return result;
 
   return crypto_make_buffer(js, digest, digest_len);
 }
