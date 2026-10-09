@@ -93,13 +93,26 @@ and the JIT guards in `src/jit/values.c` and `src/jit/emit_properties.c`.
 
 ### Storage cache
 
-- Backing stores with a power-of-two capacity of at most 32
-  (`GC_ARRAY_STORAGE_CLASSES = 6`) are returned to a per-isolate free list
+- Backing stores with a cached capacity (`GC_ARRAY_STORAGE_SIZES`: 1, 2, 3,
+  4, 6, 8, 12, 16, 24, 32) are returned to a per-isolate free list
   (`js->array_storage`) when an array dies. The next pointer lives in slot 0
   of the freed buffer.
+- Exact-size stores pick their rounding at the call site: arguments objects
+  and listener snapshots use `gc_array_storage_fit` (the next class, under a
+  third of the slots spare); `with`/`to*` copies round below 32 to a power of
+  two, since callers often append to them, and `toSpliced` reserves room for
+  its inserted items.
+- `js->alloc_bytes.arrays` counts stores in use, kept by the storage
+  functions rather than their callers. Cached stores are left out; only the
+  major-GC array trigger adds them (`gc_array_storage_cached_bytes`, summed
+  from the per-class counts), so a growing cache forces a major (and a trim)
+  without skewing reclaim or heap-size estimates.
 - `gc_array_storage_trim` runs after each major GC. It keeps as many buffers
   per class as were taken since the previous major GC and frees the rest, so
   idle retention stays bounded.
+- Growth allocates, copies all `old_cap` slots and releases the old store.
+  Copying only the length would drop elements: multi-value `push` and
+  `concat` write past the length and publish it at the end.
 
 ## Decisions
 
@@ -113,6 +126,13 @@ and the JIT guards in `src/jit/values.c` and `src/jit/emit_properties.c`.
   `map`: the per-store check showed up as a regression.
 - Hoisting the fill loop in `alloc_array_with_proto_capacity` lets it lower to
   a `memset`, which recovered the exact-capacity allocation regression.
+- Growth stays alloc-copy-release instead of `realloc` for large stores: on
+  macOS `realloc` nearly doubled peak RSS on a 2M-element push loop (185 to
+  331 MB) and ran 2.5% slower.
+- Cached bytes stay out of `alloc_bytes.arrays`: counting them there made
+  majors look unproductive (fewer majors, +21 MB peak RSS on a ring of 300k
+  short-lived small arrays). A per-class cache cap was also rejected: it cost
+  47% on small-array churn.
 
 ## Validation
 

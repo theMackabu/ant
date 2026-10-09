@@ -1,5 +1,7 @@
-// Element buffers of power-of-two capacity up to 32 are reused from a free list after
-// their array dies (the next-free pointer lives in slot 0). Every path that
+// Small element buffers (see GC_ARRAY_STORAGE_SIZES) are reused from a free
+// list after their array dies; the next-free pointer lives in slot 0. Exact
+// stores (arguments objects, `with` copies) round up, so their spare slots
+// must read as holes too. Every path that
 // builds an array must initialise its slots: holes must read as holes, and no
 // stale element or pointer may show through, across minor and major GCs.
 function same(actual, expected, what) {
@@ -40,6 +42,19 @@ for (let round = 0; round < 400; round++) {
   check(pushed.map((v) => v), n, `map ${n}`);
   check(Array.from(pushed), n, `from ${n}`);
   check([].concat(pushed), n, `concat ${n}`);
+  if (n) {
+    // an exact-capacity copy (same values), then growth past its rounded size
+    const replaced = pushed.with(n - 1, (n - 1) * 3 + 1);
+    check(replaced, n, `with ${n}`);
+    replaced.length = n + 1;
+    same(n in replaced, false, `with ${n} spare slot`);
+    replaced.length = n;
+    replaced.push(n * 3 + 1);
+    check(replaced, n + 1, `with then push ${n}`);
+    const args = (function () { return arguments; })(...pushed);
+    check(args, n, `arguments ${n}`);
+    same(n in args, false, `arguments ${n} spare slot`);
+  }
   const spliced = pushed.slice();
   spliced.splice(0, 0);
   check(spliced, n, `splice ${n}`);

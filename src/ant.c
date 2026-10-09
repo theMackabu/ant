@@ -2411,15 +2411,9 @@ static ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) 
   if (new_cap > UINT32_MAX) new_cap = UINT32_MAX;
   if ((size_t)new_cap > SIZE_MAX / sizeof(ant_value_t)) return 0;
 
-  ant_value_t *next = gc_array_storage_alloc(js, (uint32_t)new_cap);
-  if (next && obj->u.array.data) {
-    memcpy(next, obj->u.array.data, sizeof(*next) * (size_t)old_cap);
-    gc_array_storage_release(js, obj->u.array.data, (uint32_t)old_cap);
-  }
-  
+  ant_value_t *next = gc_array_storage_grow(js, obj->u.array.data, (uint32_t)old_cap, (uint32_t)new_cap);
   if (!next) return 0;
-
-  js->alloc_bytes.arrays += (size_t)(new_cap - old_cap) * sizeof(*next);
+  
   gc_array_grew(js);
   for (ant_offset_t i = old_cap; i < new_cap; i++) next[i] = T_EMPTY;
 
@@ -2433,14 +2427,15 @@ static ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) 
 
 // TODO: make get and set dry
 static inline ant_value_t arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx) {
-  {
-    ant_object_t *fast = array_obj_ptr(arr);
-    if (fast && fast->flags.fast_array && fast->u.array.data &&
-        idx < (ant_offset_t)fast->u.array.len &&
-        idx < (ant_offset_t)fast->u.array.cap) {
-      ant_value_t v = fast->u.array.data[idx];
-      if (!is_empty_slot(v)) return v;
-    }
+  ant_object_t *fast = array_obj_ptr(arr);
+  
+  if (
+    fast && fast->flags.fast_array && fast->u.array.data &&
+    idx < (ant_offset_t)fast->u.array.len &&
+    idx < (ant_offset_t)fast->u.array.cap
+  ) {
+    ant_value_t v = fast->u.array.data[idx];
+    if (!is_empty_slot(v)) return v;
   }
 
   ant_offset_t semantic_len = get_array_length(js, arr);
@@ -2810,8 +2805,6 @@ static ant_value_t alloc_array_with_proto_capacity(
   
   while (capacity < minimum_capacity && capacity <= UINT32_MAX / 2) capacity *= 2;
   if (capacity < minimum_capacity) capacity = minimum_capacity;
-  if (exact_capacity && capacity < 32 && (capacity & (capacity - 1)))
-    capacity = 1u << (32 - __builtin_clz(capacity));
   if ((size_t)capacity > SIZE_MAX / sizeof(*obj->u.array.data)) return js_mkerr(js, "oom");
 
   obj->u.array.cap = capacity;
@@ -2819,7 +2812,6 @@ static ant_value_t alloc_array_with_proto_capacity(
   obj->u.array.data = gc_array_storage_alloc(js, obj->u.array.cap);
   
   if (obj->u.array.data) {
-    js->alloc_bytes.arrays += (size_t)obj->u.array.cap * sizeof(*obj->u.array.data);
     gc_array_grew(js);
     ant_value_t *data = obj->u.array.data;
     size_t fill_start = overwritten_prefix < capacity ? overwritten_prefix : capacity;
@@ -2855,7 +2847,8 @@ ant_value_t js_mkarr(ant_t *js) {
 static ant_value_t mkarr_dense_literal_capacity(
   ant_t *js, const ant_value_t *elements, uint32_t count, bool exact_capacity
 ) {
-  ant_value_t arr = alloc_array_with_proto_capacity(js, js->sym.array_proto, count, count, exact_capacity);
+  uint32_t capacity = exact_capacity ? gc_array_storage_fit(count) : count;
+  ant_value_t arr = alloc_array_with_proto_capacity(js, js->sym.array_proto, capacity, count, exact_capacity);
   if (is_err(arr)) return arr;
 
   ant_object_t *obj = array_obj_ptr(arr);
@@ -2894,7 +2887,7 @@ ant_value_t js_mkarr_dense_uninit(ant_t *js, uint32_t count, ant_value_t **out_d
   *out_data = NULL;
   if (count == 0) return mkarr(js);
   
-  ant_value_t arr = alloc_array_with_proto_capacity(js, js->sym.array_proto, count, count, true);
+  ant_value_t arr = alloc_array_with_proto_capacity(js, js->sym.array_proto, gc_array_storage_fit(count), count, true);
   if (is_err(arr)) return arr;
 
   ant_object_t *obj = array_obj_ptr(arr);
@@ -11371,13 +11364,19 @@ static inline ant_value_t require_callback(ant_native_params_t, const char *name
 }
 
 static ant_value_t array_copy_values_replacing(
-  ant_t *js, ant_value_t arr, ant_offset_t len,
+  ant_t *js, ant_value_t arr, ant_offset_t len, ant_offset_t reserve,
   ant_offset_t replace, ant_value_t with
 ) {
-  if (len > UINT32_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
+  if (len > UINT32_MAX || reserve > UINT32_MAX - len) 
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
+  
+  uint32_t capacity = (uint32_t)(len + reserve);
+  if (capacity < 32 && (capacity & (capacity - 1))) capacity = 1u << (32 - __builtin_clz(capacity));
+  
   ant_value_t result = len
-    ? alloc_array_with_proto_capacity(js, js->sym.array_proto, (uint32_t)len, 0, true)
+    ? alloc_array_with_proto_capacity(js, js->sym.array_proto, capacity, 0, true)
     : mkarr(js);
+  
   if (is_err(result) || len == 0) return result;
   
   GC_ROOT_SAVE(roots, js);
@@ -11407,8 +11406,8 @@ static ant_value_t array_copy_values_replacing(
   return result;
 }
 
-static inline ant_value_t array_copy_values(ant_t *js, ant_value_t arr, ant_offset_t len) {
-  return array_copy_values_replacing(js, arr, len, (ant_offset_t)-1, js_mkundef());
+static inline ant_value_t array_copy_values(ant_t *js, ant_value_t arr, ant_offset_t len, ant_offset_t reserve) {
+  return array_copy_values_replacing(js, arr, len, reserve, (ant_offset_t)-1, js_mkundef());
 }
 
 static ant_value_t arguments_get_index(ant_t *js, ant_value_t obj, ant_offset_t idx) {
@@ -13842,7 +13841,7 @@ static ant_value_t builtin_array_toSorted(ant_params_t) {
   if (is_err(arr)) return arr;
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
-  ant_value_t result = array_copy_values(js, arr, len);
+  ant_value_t result = array_copy_values(js, arr, len, 0);
   if (is_err(result)) return result;
   
   ant_value_t saved_this = js->this_val;
@@ -13860,7 +13859,7 @@ static ant_value_t builtin_array_toReversed(ant_params_t) {
   if (is_err(arr)) return arr;
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
-  ant_value_t result = array_copy_values(js, arr, len);
+  ant_value_t result = array_copy_values(js, arr, len, 0);
   if (is_err(result)) return result;
   
   ant_value_t saved_this = js->this_val;
@@ -13878,7 +13877,7 @@ static ant_value_t builtin_array_toSpliced(ant_params_t) {
   if (is_err(arr)) return arr;
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
-  ant_value_t result = array_copy_values(js, arr, len);
+  ant_value_t result = array_copy_values(js, arr, len, nargs > 2 ? (ant_offset_t)(nargs - 2) : 0);
   if (is_err(result)) return result;
   
   ant_value_t saved_this = js->this_val;
@@ -13901,7 +13900,7 @@ static ant_value_t builtin_array_with(ant_params_t) {
   if (idx < 0) idx = (int)len + idx;
   if (idx < 0 || (ant_offset_t)idx >= len) return js_mkerr(js, "Invalid index");
   
-  ant_value_t result = array_copy_values_replacing(js, arr, len, (ant_offset_t)idx, args[1]);
+  ant_value_t result = array_copy_values_replacing(js, arr, len, 0, (ant_offset_t)idx, args[1]);
   if (is_err(result)) return result;
   
   return mkval(kTypeArray, vdata(result));
