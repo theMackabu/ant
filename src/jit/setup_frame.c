@@ -469,6 +469,7 @@ bool jit_setup_frame(jit_compile_t *c) {
       .imp_get_length_inline = c->imp_get_length_inline,
       .imp_get_field = c->imp_get_field,
       .imp_get_length = c->imp_get_length,
+      .get_elem_inline_proto = c->get_elem_inline_proto,
       .imp_get_elem_inline = c->imp_get_elem_inline,
       .put_field_proto = c->put_field_proto,
       .imp_put_field = c->imp_put_field,

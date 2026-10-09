@@ -141,7 +141,7 @@ typedef struct {
   MIR_item_t object_proto, imp_object;
   MIR_item_t truthy_proto, imp_is_truthy;
   MIR_item_t imp_get_field, imp_get_length;
-  MIR_item_t imp_get_elem_inline;
+  MIR_item_t get_elem_inline_proto, imp_get_elem_inline;
   MIR_item_t put_field_proto, imp_put_field;
   MIR_item_t shape_transition_proto, imp_shape_transition;
   MIR_item_t remember_obj_proto, imp_remember_obj;

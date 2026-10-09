@@ -802,6 +802,16 @@ static inline ant_value_t sv_prop_get_at(
   return js_getprop_fallback_len(js, obj, interned, len);
 }
 
+static inline bool sv_number_key_index(ant_value_t key, uint32_t *idx) {
+  if (vtype(key) != kTypeNumber) return false;
+  double d = tod(key);
+  
+  if (!(d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d)) return false;
+  *idx = (uint32_t)d;
+  
+  return true;
+}
+
 static inline bool sv_parse_string_index_key(ant_t *js, ant_value_t key, size_t *out_idx) {
   if (vtype(key) == kTypeNumber) {
     double d = tod(key);
@@ -832,12 +842,13 @@ static inline bool sv_parse_string_index_key(ant_t *js, ant_value_t key, size_t 
   return true;
 }
 
-static inline bool sv_try_string_index_get(ant_t *js, ant_value_t obj, ant_value_t key, ant_value_t *out) {
-  ant_value_t str = obj;
-  if (vtype(obj) == kTypeObject) {
-    ant_value_t prim = js_get_slot(obj, SLOT_PRIMITIVE);
-    if (vtype(prim) == kTypeString) str = prim;
-  }
+static inline bool sv_try_index_get(ant_t *js, ant_value_t obj, ant_value_t key, ant_value_t *out) {
+  uint32_t plain_idx;
+  
+  bool is_obj = vtype(obj) == kTypeObject;
+  if (is_obj && sv_number_key_index(key, &plain_idx) && js_get_plain_index(js, obj, plain_idx, out)) return true;
+  
+  ant_value_t str = is_obj ? js_string_wrapper_value(obj) : obj;
   if (vtype(str) != kTypeString) return false;
 
   size_t idx = 0;
@@ -849,6 +860,7 @@ static inline bool sv_try_string_index_get(ant_t *js, ant_value_t obj, ant_value
   
   uint32_t code_unit = utf16_code_unit_at(str_data, byte_len, idx);
   if (code_unit == 0xFFFFFFFF) {
+    if (str != obj || !js_string_protos_lack_index_keys(js)) return false;
     *out = js_mkundef();
     return true;
   }
@@ -1488,18 +1500,16 @@ static inline ant_value_t sv_op_get_elem(
     return err;
   }
 
-  if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
-    double d = tod(key);
-    if (d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d) {
-      ant_value_t elem = js_arr_get(js, obj, (uint32_t)d);
-      vm->sp -= 2;
-      vm->stack[vm->sp++] = elem;
-      return js_mkundef();
-    }
+  uint32_t idx;
+  if (vtype(obj) == kTypeArray && sv_number_key_index(key, &idx)) {
+    ant_value_t elem = js_arr_get(js, obj, idx);
+    vm->sp -= 2;
+    vm->stack[vm->sp++] = elem;
+    return js_mkundef();
   }
 
   ant_value_t str_elem = js_mkundef();
-  if (sv_try_string_index_get(js, obj, key, &str_elem)) {
+  if (sv_try_index_get(js, obj, key, &str_elem)) {
     vm->sp -= 2;
     vm->stack[vm->sp++] = str_elem;
     return js_mkundef();
@@ -1529,16 +1539,14 @@ static inline ant_value_t sv_op_get_elem2(
     return err;
   }
 
-  if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
-    double d = tod(key);
-    if (d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d) {
-      vm->stack[vm->sp - 1] = js_arr_get(js, obj, (uint32_t)d);
-      return js_mkundef();
-    }
+  uint32_t idx;
+  if (vtype(obj) == kTypeArray && sv_number_key_index(key, &idx)) {
+    vm->stack[vm->sp - 1] = js_arr_get(js, obj, idx);
+    return js_mkundef();
   }
 
   ant_value_t str_elem = js_mkundef();
-  if (sv_try_string_index_get(js, obj, key, &str_elem)) {
+  if (sv_try_index_get(js, obj, key, &str_elem)) {
     vm->stack[vm->sp - 1] = str_elem;
     return js_mkundef();
   }

@@ -46,6 +46,7 @@ static constexpr int MAX_DENSE_INITIAL_CAP = 8;
 // new Array(n) allocates dense storage for the whole length up to this
 // many elements, so filling it stays on the fast path
 static constexpr uint32_t MAX_DENSE_PREALLOC_LEN = 65536;
+static constexpr uint32_t INTERN_INDEX_CACHE_SIZE = 1024;
 
 struct ant_isolate_t {
   sv_vm_t *vm;
@@ -143,7 +144,7 @@ struct ant_isolate_t {
     const char *arguments;
     const char *callee;
     const char *next;
-    const char *idx[10];
+    const char *idx[INTERN_INDEX_CACHE_SIZE];
   } intern;
 
   ant_value_t exception;
