@@ -136,6 +136,7 @@ const assert = require('node:assert');
   t('large index', () => { const o = { 5000: 'big', 4294967294: 'max' }; let v; for (let i = 0; i < 500; i++) v = [o[5000], o[4294967294], o[4294967295]]; return v; });
   t('frozen', () => hot(Object.freeze({ 0: 1 }), 2));
   t('deleted', () => { const o = { 0: 1, 1: 2 }; hot(o, 2); delete o[0]; return hot(o, 2); });
+  t('non-index number keys', () => { const o = { NaN: 'n', '-5': 'm', Infinity: 'i', '-Infinity': 'j', '1.5': 'h', 4294967295: 'u' }; let v; for (let i = 0; i < 500; i++) v = [o[NaN], o[-5], o[1e20], o[Infinity], o[-Infinity], o[1.5], o[4294967295], 'abc'[NaN], 'abc'[-1], 'abc'[1e20]]; return v; });
   assert.deepStrictEqual(r, [
     "arguments sloppy: [1,2,3,null]",
     "arguments strict: [4,5,null,null]",
@@ -156,7 +157,8 @@ const assert = require('node:assert');
     "negative zero: \"z\"",
     "large index: [\"big\",\"max\",null]",
     "frozen: [1,null]",
-    "deleted: [null,2]"
+    "deleted: [null,2]",
+    "non-index number keys: [\"n\",\"m\",null,\"i\",\"j\",\"h\",\"u\",null,null,null]"
   ]);
 }
 
