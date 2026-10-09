@@ -10,6 +10,20 @@ import { STATUS_CODES } from 'ant:internal/http_metadata';
 
 export const maxHeaderSize = 16 * 1024;
 
+const EMPTY_BUFFER = Buffer.alloc(0);
+
+let cachedDate = '';
+let cachedDateExpires = 0;
+
+function utcDate() {
+  const now = Date.now();
+  if (now >= cachedDateExpires) {
+    cachedDate = new Date(now).toUTCString();
+    cachedDateExpires = now - (now % 1000) + 1000;
+  }
+  return cachedDate;
+}
+
 function createHeadersObject() {
   return Object.create(null);
 }
@@ -46,7 +60,7 @@ function buildHeaders(rawHeaders) {
 }
 
 function bufferFrom(value, encoding) {
-  if (value === undefined || value === null) return Buffer.alloc(0);
+  if (value === undefined || value === null) return EMPTY_BUFFER;
   if (Buffer.isBuffer(value)) return value;
   if (value && typeof value === 'object' && typeof value.byteLength === 'number') return Buffer.from(value);
   if (typeof value === 'string') return Buffer.from(value, encoding || 'utf8');
@@ -55,7 +69,7 @@ function bufferFrom(value, encoding) {
 
 function appendRawHeader(rawHeaders, name, value) {
   if (Array.isArray(value)) {
-    value.forEach(item => rawHeaders.push(name, String(item)));
+    for (let i = 0; i < value.length; i++) rawHeaders.push(name, String(value[i]));
     return;
   }
 
@@ -87,7 +101,7 @@ function makeSocketState(server, socket) {
   return {
     server,
     socket,
-    buffered: Buffer.alloc(0),
+    buffered: EMPTY_BUFFER,
     activeResponse: null,
     closed: false
   };
@@ -243,7 +257,7 @@ function buildHeadersFromFetch(response) {
     rawHeaders.push(name, value);
     appendHeaderValue(headers, normalizeHeaderName(name), value);
   }
-
+  
   return { headers, rawHeaders };
 }
 
@@ -905,8 +919,8 @@ export class IncomingMessage extends Readable {
     this.connection = socket;
     this.method = parsed.method;
     this.url = parsed.target;
-    this.headers = buildHeaders(parsed.rawHeaders || []);
-    this.rawHeaders = (parsed.rawHeaders || []).slice();
+    this.rawHeaders = parsed.rawHeaders || [];
+    this.headers = buildHeaders(this.rawHeaders);
     this.httpVersion = parsed.httpVersion;
     this.httpVersionMajor = parsed.httpVersionMajor;
     this.httpVersionMinor = parsed.httpVersionMinor;
@@ -915,14 +929,14 @@ export class IncomingMessage extends Readable {
     this.aborted = false;
     this.destroyed = false;
     this.readableEnded = false;
-    this._body = bufferFrom(parsed.body);
+    this._rawBody = bufferFrom(parsed.body);
     this._bodyConsumed = false;
   }
 
   _takeBody() {
-    if (this._bodyConsumed) return Buffer.alloc(0);
+    if (this._bodyConsumed) return EMPTY_BUFFER;
     this._bodyConsumed = true;
-    return this._body;
+    return this._rawBody;
   }
 
   _deliverBody() {
@@ -991,10 +1005,23 @@ export class ServerResponse extends EventEmitter {
     this.writableEnded = false;
     this.writableFinished = false;
     this.finished = false;
+    this._headerData = null;
     this._headers = createHeadersObject();
     this._headerNames = createHeadersObject();
     this._socketState = socketState;
     this._streaming = false;
+    this._chunked = false;
+    this._keepAlive = false;
+  }
+
+  get _header() {
+    const header = this._headerData;
+    if (header === null || typeof header === 'string') return header;
+    return (this._headerData = header.toString('latin1'));
+  }
+
+  set _header(value) {
+    this._headerData = value;
   }
 
   setHeader(name, value) {
@@ -1047,32 +1074,54 @@ export class ServerResponse extends EventEmitter {
     return this;
   }
 
-  writeHead(statusCode, statusMessage, headers) {
+  writeHead(statusCode, statusMessage, headers, bodySize) {
+    if (this.headersSent) return this;
+
+    if (typeof statusMessage === 'object' && statusMessage !== null) {
+      headers = statusMessage;
+      statusMessage = undefined;
+    }
+
     this.statusCode = statusCode | 0;
 
     if (typeof statusMessage === 'string') {
       this.statusMessage = statusMessage;
-      applyHeaderObject(this, headers);
-    } else {
-      applyHeaderObject(this, statusMessage);
     }
+
+    if (headers) {
+      applyHeaderObject(this, headers);
+    }
+
+    let chunked = this._streaming;
+    let size = 0;
+
+    if (!chunked) {
+      if (bodySize !== undefined) size = bodySize;
+      else {
+        const length = this.getHeader('content-length');
+        if (length !== undefined) size = Number(length) || 0;
+        else chunked = hasResponseBody(this.req && this.req.method, this.statusCode);
+      }
+    }
+
+    this._writeHead(chunked, size);
 
     return this;
   }
 
   _rawHeaders() {
     const rawHeaders = [];
+    const headers = this._headers;
+    const headerNames = this._headerNames;
 
-    if (this.sendDate && !this.hasHeader('date')) {
-      this.setHeader('Date', new Date().toUTCString());
-    }
-
-    Object.keys(this._headers).forEach(key => {
-      const name = this._headerNames[key] || key;
-      appendRawHeader(rawHeaders, name, this._headers[key]);
-    });
+    for (const key in headers) appendRawHeader(rawHeaders, headerNames[key] || key, headers[key]);
+    if (this.sendDate && headers.date === undefined) rawHeaders.push('Date', utcDate());
 
     return rawHeaders;
+  }
+
+  _implicitHeader() {
+    this.writeHead(this.statusCode);
   }
 
   _shouldKeepAlive() {
@@ -1089,28 +1138,33 @@ export class ServerResponse extends EventEmitter {
     if (this.headersSent) return;
 
     const statusText = this.statusMessage || STATUS_CODES[this.statusCode] || httpWriter.defaultStatusText(this.statusCode);
-    const head = httpWriter.writeHead(this.statusCode, statusText, this._rawHeaders(), bodyIsStream, bodySize, this._shouldKeepAlive());
+    const keepAlive = this._shouldKeepAlive();
+    const head = httpWriter.writeHead(this.statusCode, statusText, this._rawHeaders(), bodyIsStream, bodySize, keepAlive);
 
     this.headersSent = true;
+    this._chunked = !!bodyIsStream;
+    this._keepAlive = keepAlive;
+    this._headerData = head;
     this.socket.write(head);
   }
 
   write(chunk, encoding, callback) {
     const body = hasResponseBody(this.req && this.req.method, this.statusCode)
       ? bufferFrom(chunk, typeof encoding === 'string' ? encoding : undefined)
-      : Buffer.alloc(0);
+      : EMPTY_BUFFER;
 
-    if (typeof encoding === 'function') callback = encoding;
-    if (!this.headersSent) this._writeHead(true, 0);
     this._streaming = true;
 
-    if (body.length > 0) this.socket.write(httpWriter.writeChunk(body));
+    if (typeof encoding === 'function') callback = encoding;
+    if (!this.headersSent) this.writeHead(this.statusCode, this.statusMessage, null, 0);
+
+    if (body.length > 0) this.socket.write(this._chunked ? httpWriter.writeChunk(body) : body);
     if (typeof callback === 'function') callback();
     return true;
   }
 
   end(chunk, encoding, callback) {
-    let body = Buffer.alloc(0);
+    let body = EMPTY_BUFFER;
     let keepAlive = false;
 
     if (this.writableEnded) return this;
@@ -1128,14 +1182,12 @@ export class ServerResponse extends EventEmitter {
       body = bufferFrom(chunk, typeof encoding === 'string' ? encoding : undefined);
     }
 
-    if (this._streaming) {
-      if (!this.headersSent) this._writeHead(true, 0);
+    if (!this.headersSent) this.writeHead(this.statusCode, this.statusMessage, null, body.length);
+
+    if (this._chunked) {
       if (body.length > 0) this.socket.write(httpWriter.writeChunk(body));
       this.socket.write(httpWriter.writeFinalChunk());
-    } else {
-      this._writeHead(false, body.length);
-      if (body.length > 0) this.socket.write(body);
-    }
+    } else if (body.length > 0) this.socket.write(body);
 
     this.writableEnded = true;
     this.writableFinished = true;
@@ -1143,7 +1195,7 @@ export class ServerResponse extends EventEmitter {
     this.emit('finish');
     this.emit('close');
 
-    keepAlive = !this._socketState.server._closing && this._shouldKeepAlive();
+    keepAlive = !this._socketState.server._closing && this._keepAlive;
     this._socketState.activeResponse = null;
     if (typeof callback === 'function') callback();
 
@@ -1253,8 +1305,8 @@ export class Server extends net.Server {
         return;
       }
 
-      state.buffered = parsed.consumed < state.buffered.length ? state.buffered.subarray(parsed.consumed) : Buffer.alloc(0);
-
+      state.buffered = parsed.consumed < state.buffered.length ? state.buffered.subarray(parsed.consumed) : EMPTY_BUFFER;
+      
       const req = new IncomingMessage(socket, parsed);
       const res = new ServerResponse(req, socket, state);
       state.activeResponse = res;

@@ -121,7 +121,6 @@ for (const name of [
   'AsyncIterator',
   'Observable',
   'Buffer',
-  'Stats',
   'console',
   'process',
   'import',

@@ -815,8 +815,7 @@ static ant_value_t fs_stats_object_new(ant_t *js, const fs_stat_fields_t *f) {
   GC_ROOT_SAVE(mark, js);
   GC_ROOT_PIN(js, stat_obj);
   
-  ant_value_t proto = js_get_ctor_proto(js, "Stats", 5);
-  if (is_object_type(proto) || is_special_object(proto)) js_set_proto_init(stat_obj, proto);
+  js_set_proto_init(stat_obj, js->builtins.stats_proto);
 
   js_set_slot(stat_obj, SLOT_DATA, js_mknum((double)f->mode));
   ant_object_t *obj = js_obj_ptr(stat_obj);
@@ -5215,18 +5214,18 @@ void init_fs_module(ant_t *js) {
   utarray_new(pending_requests, &ut_ptr_icd);
   
   ant_value_t stats_ctor = js_mkobj(js);
-  ant_value_t stats_proto = js_mkobj(js);
+  js->builtins.stats_proto = js_mkobj(js);
   
-  js_set(js, stats_proto, "isFile", js_mkfun(stat_isFile));
-  js_set(js, stats_proto, "isDirectory", js_mkfun(stat_isDirectory));
-  js_set(js, stats_proto, "isSymbolicLink", js_mkfun(stat_isSymbolicLink));
-  js_set_sym(js, stats_proto, js->sym.toStringTag_sym, js_mkstr(js, "Stats", 5));
+  js_set(js, js->builtins.stats_proto, "isFile", js_mkfun(stat_isFile));
+  js_set(js, js->builtins.stats_proto, "isDirectory", js_mkfun(stat_isDirectory));
+  js_set(js, js->builtins.stats_proto, "isSymbolicLink", js_mkfun(stat_isSymbolicLink));
+  js_set_sym(js, js->builtins.stats_proto, js->sym.toStringTag_sym, js_mkstr(js, "Stats", 5));
   
-  js_mkprop_fast(js, stats_ctor, "prototype", 9, stats_proto);
+  js_mkprop_fast(js, stats_ctor, "prototype", 9, js->builtins.stats_proto);
   js_mkprop_fast(js, stats_ctor, "name", 4, js_mkstr(js, "Stats", 5));
   js_set_descriptor(js, stats_ctor, "name", 4, 0);
   
-  js_set_global_builtin(js, "Stats", js_obj_to_func(js, stats_ctor));
+  js->builtins.stats_ctor = js_obj_to_func(js, stats_ctor);
 
   js->builtins.dirent_proto = js_mkobj(js);
   js_set(js, js->builtins.dirent_proto, "isFile", js_mkfun(dirent_isFile));
@@ -5593,6 +5592,7 @@ ant_value_t fs_library(ant_t *js) {
   js_set(js, lib, "FSWatcher", js->builtins.fswatcher_ctor);
   js_set(js, lib, "ReadStream", js->builtins.readstream_ctor);
   js_set(js, lib, "WriteStream", js->builtins.writestream_ctor);
+  js_set(js, lib, "Stats", js->builtins.stats_ctor);
   js_set(js, realpath_sync, "native", realpath_sync);
   
   js_set_getter_desc(

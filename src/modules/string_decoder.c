@@ -192,7 +192,7 @@ static ant_value_t js_sd_end(ant_params_t) {
   return sd_do_write(js, st, src, len, true);
 }
 
-ant_value_t string_decoder_create(ant_t *js, ant_value_t encoding, ant_value_t new_target) {
+static inline __attribute__((always_inline)) int sd_encoding_from_value(ant_t *js, ant_value_t encoding) {
   int enc = SD_ENC_UTF8;
   if (!is_undefined(encoding)) {
   ant_value_t label_val = (vtype(encoding) == kTypeString) ? encoding : coerce_to_str(js, encoding);
@@ -202,22 +202,36 @@ ant_value_t string_decoder_create(ant_t *js, ant_value_t encoding, ant_value_t n
     if (label) enc = sd_parse_encoding(label, llen);
   }}
 
+  return enc;
+}
+
+static inline __attribute__((always_inline)) sd_state_t *sd_state_new(int enc) {
   sd_state_t *st = calloc(1, sizeof(sd_state_t));
-  if (!st) return js_mkerr(js, "out of memory");
+  if (!st) return NULL;
   st->encoding = enc;
 
   if (enc == SD_ENC_UTF8 || enc == SD_ENC_UTF16LE || enc == SD_ENC_UTF16BE) {
     td_encoding_t td_enc = (enc == SD_ENC_UTF16LE) ? TD_ENC_UTF16LE : (enc == SD_ENC_UTF16BE) ? TD_ENC_UTF16BE : TD_ENC_UTF8;
     st->td = td_state_new(td_enc, false, false);
-    if (!st->td) { free(st); return js_mkerr(js, "out of memory"); }
+    if (!st->td) { free(st); return NULL; }
   }
 
-  ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.string_decoder_proto, new_target);
-  
+  return st;
+}
+
+static inline __attribute__((always_inline)) void sd_attach(ant_value_t obj, ant_value_t proto, sd_state_t *st) {
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, st, STRING_DECODER_NATIVE_TAG);
   js_set_finalizer(obj, sd_finalize);
+}
+
+ant_value_t string_decoder_create(ant_t *js, ant_value_t encoding, ant_value_t new_target) {
+  sd_state_t *st = sd_state_new(sd_encoding_from_value(js, encoding));
+  if (!st) return js_mkerr(js, "out of memory");
+
+  ant_value_t obj = js_mkobj(js);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.string_decoder_proto, new_target);
+  sd_attach(obj, proto, st);
 
   return obj;
 }
@@ -243,12 +257,23 @@ ant_value_t string_decoder_decode_value(
   return sd_do_write(js, st, src, len, flush);
 }
 
+// StringDecoder.call(this, enc) without new initializes `this` in place
+static __attribute__((noinline)) ant_value_t sd_init_this(ant_t *js, ant_value_t self, ant_value_t encoding) {
+  if (sd_get_state(self)) return self;
+
+  sd_state_t *st = sd_state_new(sd_encoding_from_value(js, encoding));
+  if (!st) return js_mkerr(js, "out of memory");
+
+  sd_attach(self, js->builtins.string_decoder_proto, st);
+  return self;
+}
+
 static ant_value_t js_sd_ctor(ant_params_t) {
-  if (vtype(call_new_target) == kTypeUndefined)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "StringDecoder constructor requires 'new'");
-    
   ant_value_t encoding = nargs > 0 ? args[0] : js_mkundef();
-  return string_decoder_create(js, encoding, call_new_target);
+
+  if (!is_undefined(call_new_target) || !is_object_type(js->this_val))
+    return string_decoder_create(js, encoding, call_new_target);
+  return sd_init_this(js, js->this_val, encoding);
 }
 
 ant_value_t string_decoder_library(ant_t *js) {
