@@ -1,4 +1,5 @@
-// TODO: split into smaller modules per type
+// TODO: split into smaller modules per type (src/buffer/*.c)
+// AND optimize AND move to PER isolate buffer registry
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -34,7 +35,6 @@ static size_t ta_metadata_bytes     = 0;
 static size_t buffer_registry_count = 0;
 static size_t buffer_registry_cap   = 0;
 
-// TODO: move to isolate
 static ArrayBufferData **buffer_registry = NULL;
 
 static void *ta_meta_alloc(size_t size) {
@@ -2638,6 +2638,7 @@ typedef enum {
   ENC_UTF8,
   ENC_HEX,
   ENC_BASE64,
+  ENC_BASE64URL,
   ENC_ASCII,
   ENC_LATIN1,
   ENC_UCS2,
@@ -2648,6 +2649,7 @@ static BufferEncoding parse_encoding(const char *enc, size_t len) {
   if (len == 3 && strncasecmp(enc, "hex", 3) == 0) return ENC_HEX;
   if (len == 5 && strncasecmp(enc, "ascii", 5) == 0) return ENC_ASCII;
   if (len == 6 && strncasecmp(enc, "base64", 6) == 0) return ENC_BASE64;
+  if (len == 9 && strncasecmp(enc, "base64url", 9) == 0) return ENC_BASE64URL;
   if ((len == 4 && strncasecmp(enc, "utf8", 4) == 0) || (len == 5 && strncasecmp(enc, "utf-8", 5) == 0)) return ENC_UTF8;
   if ((len == 6 && strncasecmp(enc, "latin1", 6) == 0) || (len == 6 && strncasecmp(enc, "binary", 6) == 0)) return ENC_LATIN1;
   
@@ -2659,6 +2661,42 @@ static BufferEncoding parse_encoding(const char *enc, size_t len) {
   ) return ENC_UCS2;
   
   return ENC_UNKNOWN;
+}
+
+static ant_value_t buffer_coded_error(ant_t *js, js_err_type_t type, const char *code, const char *message) {
+  ant_value_t props = js_mkobj(js);
+  js_set(js, props, "code", js_mkstr(js, code, strlen(code)));
+  return js_mkerr_props(js, type, props, "%s", message);
+}
+
+static ant_value_t buffer_unknown_encoding_error(ant_t *js, ant_value_t encoding) {
+  ant_value_t str = js_tostring_val(js, encoding);
+  if (is_err(str)) return str;
+  
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, str);
+  
+  size_t len = 0;
+  const char *enc = js_getstr(js, str, &len);
+  ant_value_t props = js_mkobj(js);
+  
+  js_set(js, props, "code", js_mkstr(js, "ERR_UNKNOWN_ENCODING", 20));
+  ant_value_t err = js_mkerr_props(js, JS_ERR_TYPE, props, "Unknown encoding: %.*s", (int)len, enc ? enc : "");
+  
+  GC_ROOT_RESTORE(js, root_mark);
+  return err;
+}
+
+static ant_value_t buffer_require_encoding(ant_t *js, ant_value_t value, BufferEncoding *out) {
+  ant_value_t str = vtype(value) == kTypeString ? value : js_tostring_val(js, value);
+  if (is_err(str)) return str;
+  
+  size_t len = 0;
+  const char *enc = js_getstr(js, str, &len);
+  *out = enc ? parse_encoding(enc, len) : ENC_UNKNOWN;
+  
+  if (*out == ENC_UNKNOWN) return buffer_unknown_encoding_error(js, str);
+  return js_mkundef();
 }
 
 static size_t buffer_encode_single_byte_into(
@@ -2690,16 +2728,15 @@ static ant_value_t js_buffer_from(ant_params_t) {
     char *str = js_getstr(js, args[0], &len);
     
     BufferEncoding encoding = ENC_UTF8;
-    if (nargs >= 2 && vtype(args[1]) == kTypeString) {
-      size_t enc_len;
-      char *enc_str = js_getstr(js, args[1], &enc_len);
-      encoding = parse_encoding(enc_str, enc_len);
-      if (encoding == ENC_UNKNOWN) encoding = ENC_UTF8;
+    size_t enc_len = 0;
+    if (nargs >= 2 && vtype(args[1]) == kTypeString && js_getstr(js, args[1], &enc_len) && enc_len > 0) {
+      ant_value_t checked = buffer_require_encoding(js, args[1], &encoding);
+      if (is_err(checked)) return checked;
     }
     
-    if (encoding == ENC_BASE64) {
+    if (encoding == ENC_BASE64 || encoding == ENC_BASE64URL) {
       size_t decoded_len;
-      uint8_t *decoded = ant_base64_decode(str, len, &decoded_len);
+      uint8_t *decoded = ant_base64_decode_loose(str, len, &decoded_len);
       if (!decoded) return js_mkerr(js, "Failed to decode base64");
       
       ArrayBufferData *buffer = create_array_buffer_data(decoded_len);
@@ -2710,8 +2747,8 @@ static ant_value_t js_buffer_from(ant_params_t) {
       return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, decoded_len, "Buffer");
     } else if (encoding == ENC_HEX) {
       size_t decoded_len;
-      uint8_t *decoded = hex_decode(str, len, &decoded_len);
-      if (!decoded) return js_mkerr(js, "Failed to decode hex");
+      uint8_t *decoded = hex_decode_node_prefix(str, len, &decoded_len);
+      if (!decoded) return js_mkerr(js, "Failed to allocate buffer");
       
       ArrayBufferData *buffer = create_array_buffer_data(decoded_len);
       if (!buffer) { free(decoded); return js_mkerr(js, "Failed to allocate buffer"); }
@@ -2790,7 +2827,12 @@ static ant_value_t js_buffer_from(ant_params_t) {
   return js_mkerr(js, "Invalid argument to Buffer.from");
 }
 
-// Buffer.alloc(size)
+static ant_value_t buffer_fill_range(
+  ant_t *js, uint8_t *data, size_t start, size_t end,
+  ant_value_t value, ant_value_t encoding_val
+);
+
+// Buffer.alloc(size[, fill[, encoding]])
 static ant_value_t js_buffer_alloc(ant_params_t) {
   if (nargs < 1) {
     return js_mkerr(js, "Buffer.alloc requires a size argument");
@@ -2801,7 +2843,23 @@ static ant_value_t js_buffer_alloc(ant_params_t) {
   if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
   
   memset(buffer->data, 0, size);
-  return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, size, "Buffer");
+  ant_value_t result = create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, size, "Buffer");
+  if (is_err(result)) return result;
+
+  ant_value_t fill = nargs > 1 ? args[1] : js_mkundef();
+  if (size == 0 || vtype(fill) == kTypeUndefined) return result;
+  if (vtype(fill) == kTypeNumber && js_getnum(fill) == 0) return result;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, result);
+  
+  ant_value_t filled = buffer_fill_range(
+    js, buffer->data, 0, size, fill,
+    vtype(fill) == kTypeString && nargs > 2 ? args[2] : js_mkundef()
+  );
+  
+  GC_ROOT_RESTORE(js, root_mark);
+  return is_err(filled) ? filled : result;
 }
 
 // Buffer.allocUnsafe(size)
@@ -3113,41 +3171,14 @@ static ant_value_t js_buffer_slice(ant_params_t) {
   return js_typedarray_subarray(js, args, nargs, js_mkundef());
 }
 
-// Buffer.prototype.toString(encoding)
-static ant_value_t js_buffer_toString(ant_params_t) {
-  ant_value_t this_val = js_getthis(js);
-  TypedArrayData *ta_data = buffer_get_typedarray_data(this_val);
-  if (!ta_data) return js_mkerr(js, "Invalid Buffer");
-  
-  BufferEncoding encoding = ENC_UTF8;
-  if (nargs > 0 && vtype(args[0]) == kTypeString) {
-    size_t enc_len;
-    char *enc_str = js_getstr(js, args[0], &enc_len);
-    encoding = parse_encoding(enc_str, enc_len);
-    if (encoding == ENC_UNKNOWN) encoding = ENC_UTF8;
-  }
-  
-  if (!ta_data->buffer || ta_data->buffer->is_detached) {
-    return js_mkerr(js, "Cannot read from detached buffer");
-  }
-  
-  size_t start = 0;
-  size_t len = 0;
-  
-  buffer_string_bounds(
-    nargs > 1 ? args[1] : js_mkundef(),
-    nargs > 2 ? args[2] : js_mkundef(),
-    ta_data->byte_length,
-    &start, &len
-  );
-  
-  uint8_t *data = 
-    ta_data->buffer->data + 
-    ta_data->byte_offset + start;
-  
-  if (encoding == ENC_BASE64) {
+static ant_value_t buffer_bytes_to_string_enc(ant_t *js, const uint8_t *data, size_t len, BufferEncoding encoding) {
+  if (encoding == ENC_BASE64 || encoding == ENC_BASE64URL) {
     size_t out_len;
-    char *encoded = ant_base64_encode(data, len, &out_len);
+    
+    char *encoded = encoding == ENC_BASE64URL
+      ? ant_base64url_encode(data, len, &out_len)
+      : ant_base64_encode(data, len, &out_len);
+    
     if (!encoded) return js_mkerr(js, "Failed to encode base64");
     
     ant_value_t result = js_mkstr(js, encoded, out_len);
@@ -3213,6 +3244,51 @@ static ant_value_t js_buffer_toString(ant_params_t) {
     
     return result;
   }
+}
+
+bool buffer_bytes_to_string(
+  ant_t *js, const uint8_t *data, size_t len,
+  const char *encoding, size_t encoding_len, ant_value_t *out
+) {
+  BufferEncoding parsed = parse_encoding(encoding, encoding_len);
+  if (parsed == ENC_UNKNOWN) return false;
+  *out = buffer_bytes_to_string_enc(js, data, len, parsed);
+  return true;
+}
+
+// Buffer.prototype.toString(encoding)
+static ant_value_t js_buffer_toString(ant_params_t) {
+  ant_value_t this_val = js_getthis(js);
+  TypedArrayData *ta_data = buffer_get_typedarray_data(this_val);
+  if (!ta_data) return js_mkerr(js, "Invalid Buffer");
+  
+  if (!ta_data->buffer || ta_data->buffer->is_detached) {
+    return js_mkerr(js, "Cannot read from detached buffer");
+  }
+  
+  size_t start = 0;
+  size_t len = 0;
+  
+  buffer_string_bounds(
+    nargs > 1 ? args[1] : js_mkundef(),
+    nargs > 2 ? args[2] : js_mkundef(),
+    ta_data->byte_length,
+    &start, &len
+  );
+  
+  if (len == 0) return js_mkstr(js, "", 0);
+  
+  BufferEncoding encoding = ENC_UTF8;
+  if (nargs > 0 && vtype(args[0]) != kTypeUndefined) {
+    ant_value_t checked = buffer_require_encoding(js, args[0], &encoding);
+    if (is_err(checked)) return checked;
+  }
+  
+  uint8_t *data = 
+    ta_data->buffer->data + 
+    ta_data->byte_offset + start;
+  
+  return buffer_bytes_to_string_enc(js, data, len, encoding);
 }
 
 static ant_value_t js_buffer_utf8Slice(ant_params_t) {
@@ -3286,9 +3362,9 @@ static ant_value_t buffer_encode_search_string(ant_t *js, ant_value_t value, Buf
   *out_len = len;
   *owned = NULL;
 
-  if (encoding == ENC_BASE64) {
+  if (encoding == ENC_BASE64 || encoding == ENC_BASE64URL) {
     size_t decoded_len = 0;
-    uint8_t *decoded = ant_base64_decode(str, len, &decoded_len);
+    uint8_t *decoded = ant_base64_decode_loose(str, len, &decoded_len);
     if (!decoded) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid base64 string");
     *out = decoded;
     *out_len = decoded_len;
@@ -3326,7 +3402,24 @@ static ant_value_t buffer_encode_search_string(ant_t *js, ant_value_t value, Buf
   return js_mkundef();
 }
 
-static ant_value_t js_buffer_indexOf(ant_params_t) {
+static int64_t buffer_last_index_offset(int64_t len, double offset, int64_t needle_len) {
+  if (isnan(offset)) offset = (double)len;
+  if (offset > 9e15) offset = 9e15;
+  if (offset < -9e15) offset = -9e15;
+
+  int64_t off = (int64_t)(offset < 0 ? ceil(offset) : floor(offset));
+  if (off < 0) {
+    if (off + len >= 0) return len + off;
+    return needle_len == 0 ? 0 : -1;
+  }
+  
+  if (off + needle_len <= len) return off;
+  if (needle_len == 0) return len;
+  
+  return len - 1;
+}
+
+static ant_value_t buffer_index_of(ant_t *js, ant_value_t *args, int nargs, bool forward) {
   ant_value_t this_val = js_getthis(js);
   TypedArrayData *ta_data = buffer_get_typedarray_data(this_val);
   if (!ta_data || !ta_data->buffer || ta_data->buffer->is_detached) return js_mknum(-1);
@@ -3334,15 +3427,16 @@ static ant_value_t js_buffer_indexOf(ant_params_t) {
 
   uint8_t *haystack = ta_data->buffer->data + ta_data->byte_offset;
   size_t haystack_len = ta_data->byte_length;
-  double offset_num = 0.0;
+  double offset_num = forward ? 0.0 : (double)NAN;
   BufferEncoding encoding = ENC_UTF8;
+  ant_value_t encoding_arg = js_mkundef();
 
   if (nargs > 1 && vtype(args[1]) != kTypeUndefined) {
     if (vtype(args[1]) == kTypeString) {
       size_t enc_len = 0;
       char *enc_str = js_getstr(js, args[1], &enc_len);
       encoding = parse_encoding(enc_str, enc_len);
-      if (encoding == ENC_UNKNOWN) return js_mkerr_typed(js, JS_ERR_TYPE, "Unknown encoding");
+      encoding_arg = args[1];
     } else {
       offset_num = js_to_number(js, args[1]);
     }
@@ -3354,15 +3448,24 @@ static ant_value_t js_buffer_indexOf(ant_params_t) {
     size_t enc_len = 0;
     char *enc_str = js_getstr(js, enc_value, &enc_len);
     encoding = parse_encoding(enc_str, enc_len);
-    if (encoding == ENC_UNKNOWN) return js_mkerr_typed(js, JS_ERR_TYPE, "Unknown encoding");
+    encoding_arg = enc_value;
   }
 
-  size_t start = buffer_normalize_indexof_offset(haystack_len, offset_num);
+  size_t start = forward ? buffer_normalize_indexof_offset(haystack_len, offset_num) : 0;
   ant_value_t search = args[0];
 
   if (vtype(search) == kTypeNumber) {
-    if (start >= haystack_len) return js_mknum(-1);
     uint8_t needle = (uint8_t)js_to_uint32(js_getnum(search));
+    if (!forward) {
+      int64_t last = buffer_last_index_offset((int64_t)haystack_len, offset_num, 1);
+      if (last < 0 || haystack_len == 0) return js_mknum(-1);
+      for (int64_t i = last; i >= 0; i--) {
+        if (haystack[i] == needle) return js_mknum((double)i);
+      }
+      return js_mknum(-1);
+    }
+    
+    if (start >= haystack_len) return js_mknum(-1);
     for (size_t i = start; i < haystack_len; i++) {
       if (haystack[i] == needle) return js_mknum((double)i);
     }
@@ -3374,33 +3477,195 @@ static ant_value_t js_buffer_indexOf(ant_params_t) {
   uint8_t *owned_needle = NULL;
 
   if (vtype(search) == kTypeString) {
+    if (encoding == ENC_UNKNOWN) return buffer_unknown_encoding_error(js, encoding_arg);
     ant_value_t encoded = buffer_encode_search_string(js, search, encoding, &needle, &needle_len, &owned_needle);
     if (is_err(encoded)) return encoded;
   } else if (!buffer_source_get_bytes(js, search, &needle, &needle_len)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "The value argument must be one of type number or string or an instance of Buffer or Uint8Array");
   }
 
-  if (needle_len == 0) {
-    if (owned_needle) free(owned_needle);
-    return js_mknum((double)start);
-  }
-
-  if (start >= haystack_len || needle_len > haystack_len - start) {
-    if (owned_needle) free(owned_needle);
-    return js_mknum(-1);
-  }
-
-  size_t limit = haystack_len - needle_len;
-  uint8_t first = needle[0];
-  for (size_t i = start; i <= limit; i++) {
-    if (haystack[i] == first && (needle_len == 1 || memcmp(haystack + i, needle, needle_len) == 0)) {
-      if (owned_needle) free(owned_needle);
-      return js_mknum((double)i);
+  double found = -1;
+  if (!forward) {
+    int64_t last = buffer_last_index_offset((int64_t)haystack_len, offset_num, (int64_t)needle_len);
+    if (needle_len == 0) found = (double)last;
+    else if (last >= 0 && needle_len <= haystack_len) {
+      int64_t pos = last < (int64_t)(haystack_len - needle_len) ? last : (int64_t)(haystack_len - needle_len);
+      for (; pos >= 0; pos--) if (haystack[pos] == needle[0] && memcmp(haystack + pos, needle, needle_len) == 0) {
+        found = (double)pos;
+        break;
+      }
+    }
+  } else if (needle_len == 0) {
+    found = (double)start;
+  } else if (start < haystack_len && needle_len <= haystack_len - start) {
+    size_t limit = haystack_len - needle_len;
+    uint8_t first = needle[0];
+    for (size_t i = start; i <= limit; i++) if (haystack[i] == first && (needle_len == 1 || memcmp(haystack + i, needle, needle_len) == 0)) {
+      found = (double)i;
+      break;
     }
   }
 
   if (owned_needle) free(owned_needle);
-  return js_mknum(-1);
+  return js_mknum(found);
+}
+
+static ant_value_t js_buffer_indexOf(ant_params_t) {
+  return buffer_index_of(js, args, nargs, true);
+}
+
+static ant_value_t js_buffer_lastIndexOf(ant_params_t) {
+  return buffer_index_of(js, args, nargs, false);
+}
+
+static ant_value_t js_buffer_includes(ant_params_t) {
+  ant_value_t result = buffer_index_of(js, args, nargs, true);
+  if (is_err(result)) return result;
+  return js_bool(js_getnum(result) != -1);
+}
+
+static ant_value_t buffer_fill_range(
+  ant_t *js, uint8_t *data, size_t start, size_t end,
+  ant_value_t value, ant_value_t encoding_val
+) {
+  if (start >= end) return js_mkundef();
+  size_t span = end - start;
+
+  if (vtype(value) == kTypeString) {
+    BufferEncoding encoding = ENC_UTF8;
+    size_t enc_len = 0;
+    bool empty_encoding = vtype(encoding_val) == kTypeString && js_getstr(js, encoding_val, &enc_len) && enc_len == 0;
+    if (vtype(encoding_val) != kTypeUndefined && vtype(encoding_val) != kTypeNull && !empty_encoding) {
+      ant_value_t checked = buffer_require_encoding(js, encoding_val, &encoding);
+      if (is_err(checked)) return checked;
+    }
+
+    size_t str_len = 0;
+    char *str = js_getstr(js, value, &str_len);
+    if (str_len == 0) {
+      memset(data + start, 0, span);
+      return js_mkundef();
+    }
+
+    const uint8_t *pattern = NULL;
+    size_t pattern_len = 0;
+    uint8_t *owned = NULL;
+
+    if (encoding == ENC_UTF8) {
+      owned = malloc(str_len);
+      if (!owned) return js_mkerr(js, "Failed to allocate buffer");
+      pattern_len = utf8_export_into(str, str_len, owned, str_len, NULL);
+      pattern = owned;
+    } else {
+      ant_value_t encoded = buffer_encode_search_string(js, value, encoding, &pattern, &pattern_len, &owned);
+      if (is_err(encoded)) return encoded;
+    }
+
+    if (pattern_len == 0) {
+      free(owned);
+      ant_value_t props = js_mkobj(js);
+      js_set(js, props, "code", js_mkstr(js, "ERR_INVALID_ARG_VALUE", 21));
+      return js_mkerr_props(js, JS_ERR_TYPE, props, "The argument 'value' is invalid. Received '%.*s'", (int)str_len, str);
+    }
+
+    for (size_t i = 0; i < span; i += pattern_len) {
+      size_t chunk = span - i < pattern_len ? span - i : pattern_len;
+      memcpy(data + start + i, pattern, chunk);
+    }
+    
+    free(owned);
+    return js_mkundef();
+  }
+
+  if (buffer_get_typedarray_data(value) || buffer_is_dataview(value)) {
+    const uint8_t *source = NULL;
+    size_t source_len = 0;
+    buffer_source_get_bytes(js, value, &source, &source_len);
+    if (source_len == 0) return buffer_coded_error(
+      js, JS_ERR_TYPE, "ERR_INVALID_ARG_VALUE",
+      "The argument 'value' is invalid. Received an empty buffer"
+    );
+
+    uint8_t *pattern = malloc(source_len);
+    if (!pattern) return js_mkerr(js, "Failed to allocate buffer");
+    memcpy(pattern, source, source_len);
+    
+    for (size_t i = 0; i < span; i += source_len) {
+      size_t chunk = span - i < source_len ? span - i : source_len;
+      memcpy(data + start + i, pattern, chunk);
+    }
+    
+    free(pattern);
+    return js_mkundef();
+  }
+
+  double num = js_to_number(js, value);
+  memset(data + start, (int)(js_to_uint32(num) & 0xff), span);
+  return js_mkundef();
+}
+
+static ant_value_t buffer_validate_offset(ant_t *js, ant_value_t value, const char *name, size_t max, size_t *out) {
+  if (vtype(value) != kTypeNumber) {
+    ant_value_t props = js_mkobj(js);
+    js_set(js, props, "code", js_mkstr(js, "ERR_INVALID_ARG_TYPE", 20));
+    return js_mkerr_props(js, JS_ERR_TYPE, props, "The \"%s\" argument must be of type number", name);
+  }
+  
+  double num = js_getnum(value);
+  if (num != floor(num) || num < 0 || num > (double)max) {
+    ant_value_t props = js_mkobj(js);
+    js_set(js, props, "code", js_mkstr(js, "ERR_OUT_OF_RANGE", 16));
+    return js_mkerr_props(
+      js, JS_ERR_RANGE, props,
+      "The value of \"%s\" is out of range. It must be an integer >= 0 && <= %zu. Received %g",
+      name, max, num
+    );
+  }
+  
+  *out = (size_t)num;
+  return js_mkundef();
+}
+
+// Buffer.prototype.fill(value[, offset[, end]][, encoding])
+static ant_value_t js_buffer_fill(ant_params_t) {
+  ant_value_t this_val = js_getthis(js);
+  TypedArrayData *ta_data = buffer_get_typedarray_data(this_val);
+  if (!ta_data) return js_mkerr(js, "Invalid Buffer");
+  if (!ta_data->buffer || ta_data->buffer->is_detached)
+    return js_mkerr(js, "Cannot write to detached buffer");
+
+  ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t offset_val = nargs > 1 ? args[1] : js_mkundef();
+  ant_value_t end_val = nargs > 2 ? args[2] : js_mkundef();
+  ant_value_t encoding_val = nargs > 3 ? args[3] : js_mkundef();
+
+  if (vtype(value) == kTypeString) {
+    if (vtype(offset_val) == kTypeUndefined || vtype(offset_val) == kTypeString) {
+      encoding_val = offset_val;
+      offset_val = end_val = js_mkundef();
+    } else if (vtype(end_val) == kTypeString) {
+      encoding_val = end_val;
+      end_val = js_mkundef();
+    }
+  } else encoding_val = js_mkundef();
+
+  size_t len = ta_data->byte_length;
+  size_t start = 0, end = len;
+
+  if (vtype(offset_val) != kTypeUndefined) {
+    ant_value_t checked = buffer_validate_offset(js, offset_val, "offset", SIZE_MAX >> 1, &start);
+    if (is_err(checked)) return checked;
+    if (vtype(end_val) != kTypeUndefined) {
+      checked = buffer_validate_offset(js, end_val, "end", len, &end);
+      if (is_err(checked)) return checked;
+    }
+    if (start >= end) return this_val;
+  }
+
+  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
+  ant_value_t result = buffer_fill_range(js, data, start, end, value, encoding_val);
+  
+  return is_err(result) ? result : this_val;
 }
 
 // Buffer.prototype.write(string, offset, length, encoding)
@@ -3414,22 +3679,36 @@ static ant_value_t js_buffer_write(ant_params_t) {
   size_t str_len;
   char *str = js_getstr(js, args[0], &str_len);
   
+  size_t buf_len = ta_data->byte_length;
   size_t offset = 0;
-  size_t length = ta_data->byte_length;
+  size_t length = buf_len;
   BufferEncoding encoding = ENC_UTF8;
   
-  for (int i = 1; i < nargs && i <= 3; i++) {
-    if (vtype(args[i]) == kTypeString) {
-      size_t enc_len;
-      char *enc_str = js_getstr(js, args[i], &enc_len);
-      BufferEncoding parsed = parse_encoding(enc_str, enc_len);
-      if (parsed != ENC_UNKNOWN) encoding = parsed;
-      break;
+  ant_value_t offset_val = nargs > 1 ? args[1] : js_mkundef();
+  ant_value_t length_val = nargs > 2 ? args[2] : js_mkundef();
+  ant_value_t encoding_val = nargs > 3 ? args[3] : js_mkundef();
+
+  if (vtype(offset_val) == kTypeUndefined) encoding_val = js_mkundef();
+  else if (vtype(length_val) == kTypeUndefined && vtype(offset_val) == kTypeString) encoding_val = offset_val;
+  else {
+    ant_value_t checked = buffer_validate_offset(js, offset_val, "offset", buf_len, &offset);
+    if (is_err(checked)) return checked;
+    
+    size_t remaining = buf_len - offset;
+    if (vtype(length_val) == kTypeUndefined) length = remaining;
+    else if (vtype(length_val) == kTypeString) {
+      encoding_val = length_val;
+      length = remaining;
+    } else {
+      checked = buffer_validate_offset(js, length_val, "length", buf_len, &length);
+      if (is_err(checked)) return checked;
+      if (length > remaining) length = remaining;
     }
-    if (vtype(args[i]) == kTypeNumber) {
-      if (i == 1) offset = (size_t)js_getnum(args[i]);
-      else if (i == 2) length = (size_t)js_getnum(args[i]);
-    }
+  }
+
+  if (js_truthy(js, encoding_val)) {
+    ant_value_t checked = buffer_require_encoding(js, encoding_val, &encoding);
+    if (is_err(checked)) return checked;
   }
   
   if (offset >= ta_data->byte_length) return js_mknum(0);  
@@ -3441,10 +3720,32 @@ static ant_value_t js_buffer_write(ant_params_t) {
   
   if (encoding == ENC_LATIN1 || encoding == ENC_ASCII)
     to_write = buffer_encode_single_byte_into(str, str_len, dst, available);
-  else {
+  else if (encoding == ENC_BASE64 || encoding == ENC_BASE64URL) {
+    size_t decoded_len = 0;
+    uint8_t *decoded = ant_base64_decode_loose(str, str_len, &decoded_len);
+    if (!decoded) return js_mkerr(js, "Failed to allocate buffer");
+    to_write = decoded_len < available ? decoded_len : available;
+    memcpy(dst, decoded, to_write);
+    free(decoded);
+  } else if (encoding == ENC_HEX) {
+    size_t decoded_len = 0;
+    uint8_t *decoded = hex_decode_node_prefix(str, str_len, &decoded_len);
+    if (!decoded) return js_mkerr(js, "Failed to allocate buffer");
+    to_write = decoded_len < available ? decoded_len : available;
+    memcpy(dst, decoded, to_write);
+    free(decoded);
+  } else if (encoding == ENC_UCS2) {
+    size_t units = (size_t)str_utf16_len(js, args[0]);
+    if (units > available / 2) units = available / 2;
+    for (size_t i = 0; i < units; i++) {
+      uint32_t unit = utf16_code_unit_at(str, str_len, i);
+      dst[i * 2] = (uint8_t)(unit & 0xff);
+      dst[i * 2 + 1] = (uint8_t)((unit >> 8) & 0xff);
+    }
+    to_write = units * 2;
+  } else {
     to_write = str_len < available ? str_len : available;
-    if (encoding == ENC_UTF8) to_write = utf8_export_into(str, str_len, dst, to_write, NULL);
-    else memcpy(dst, str, to_write);
+    to_write = utf8_export_into(str, str_len, dst, to_write, NULL);
   }
   
   return js_mknum((double)to_write);
@@ -3769,6 +4070,7 @@ static ant_value_t js_buffer_isEncoding(ant_params_t) {
       (len == 5 && strncasecmp(enc, "utf-8", 5) == 0) ||
       (len == 3 && strncasecmp(enc, "hex", 3) == 0) ||
       (len == 6 && strncasecmp(enc, "base64", 6) == 0) ||
+      (len == 9 && strncasecmp(enc, "base64url", 9) == 0) ||
       (len == 5 && strncasecmp(enc, "ascii", 5) == 0) ||
       (len == 6 && strncasecmp(enc, "latin1", 6) == 0) ||
       (len == 6 && strncasecmp(enc, "binary", 6) == 0) ||
@@ -3811,6 +4113,11 @@ static ant_value_t js_buffer_byteLength(ant_params_t) {
     if (encoding == ENC_UTF8) len = utf8_export_length(str, len);
     else if (encoding == ENC_LATIN1 || encoding == ENC_ASCII)
       len = (size_t)str_utf16_len(js, arg);
+    else if (encoding == ENC_BASE64 || encoding == ENC_BASE64URL) {
+      if (len > 0 && str[len - 1] == '=') len--;
+      if (len > 0 && str[len - 1] == '=') len--;
+      len = (len * 3) >> 2;
+    }
     return js_mknum((double)len);
   }
   
@@ -4168,9 +4475,12 @@ void init_buffer_module(ant_t *js) {
   js_set(js, buffer_proto, "utf8Slice", js_mkfun(js_buffer_utf8Slice));
   js_set(js, buffer_proto, "toBase64", js_mkfun(js_buffer_toBase64));
   js_set(js, buffer_proto, "indexOf", js_mkfun(js_buffer_indexOf));
+  js_set(js, buffer_proto, "lastIndexOf", js_mkfun(js_buffer_lastIndexOf));
+  js_set(js, buffer_proto, "includes", js_mkfun(js_buffer_includes));
   js_set(js, buffer_proto, "compare", js_mkfun(js_buffer_proto_compare));
   js_set(js, buffer_proto, "equals", js_mkfun(js_buffer_proto_equals));
   js_set(js, buffer_proto, "write", js_mkfun(js_buffer_write));
+  js_set(js, buffer_proto, "fill", js_mkfun(js_buffer_fill));
   js_set(js, buffer_proto, "copy", js_mkfun(js_buffer_copy));
   js_set(js, buffer_proto, "writeInt16BE", js_mkfun(js_buffer_writeInt16BE));
   js_set(js, buffer_proto, "writeInt32BE", js_mkfun(js_buffer_writeInt32BE));

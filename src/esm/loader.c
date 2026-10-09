@@ -2096,6 +2096,52 @@ const char *esm_default_base_path(ant_t *js) {
   return (active && active[0]) ? active : ".";
 }
 
+typedef struct {
+  const ant_builtin_bundle_alias_t *alias;
+  ant_library_entry_t *library;
+  ant_builtin_name_kind_t kind;
+} esm_builtin_t;
+
+static esm_builtin_t esm_find_builtin(const char *specifier, size_t spec_len) {
+  const ant_builtin_bundle_alias_t *alias = esm_lookup_builtin_alias(specifier, spec_len);
+  if (alias) return (esm_builtin_t){ .alias = alias, .kind = alias->kind };
+
+  ant_library_entry_t *library = ant_library_find(specifier, spec_len);
+  if (library) return (esm_builtin_t){ .library = library, .kind = ant_library_kind(library) };
+
+  return (esm_builtin_t){ .kind = ANT_BUILTIN_NAME_NONE };
+}
+
+static bool esm_builtin_is_node(esm_builtin_t builtin) {
+  return builtin.kind == ANT_BUILTIN_NAME_NODE || builtin.kind == ANT_BUILTIN_NAME_BARE;
+}
+
+static ant_value_t esm_load_builtin(ant_t *js, const char *specifier, esm_builtin_t builtin) {
+  if (builtin.library) return ant_library_load(js, builtin.library);
+
+  const ant_builtin_bundle_module_t *module = esm_lookup_builtin_module(builtin.alias->module_id);
+  if (!module) return js_mkerr(js, "Invalid builtin module id");
+
+  return esm_get_or_load(
+    js, specifier,
+    builtin.alias->source_name,
+    builtin.alias->source_name,
+    module->format,
+    module->code,
+    module->code_len
+  );
+}
+
+bool js_esm_is_node_builtin(const char *specifier, size_t spec_len) {
+  return esm_builtin_is_node(esm_find_builtin(specifier, spec_len));
+}
+
+ant_value_t js_esm_load_node_builtin(ant_t *js, const char *specifier, size_t spec_len, bool *found) {
+  esm_builtin_t builtin = esm_find_builtin(specifier, spec_len);
+  *found = esm_builtin_is_node(builtin);
+  return *found ? esm_load_builtin(js, specifier, builtin) : js_mkundef();
+}
+
 static ant_value_t esm_import_cstr_attrs(
   ant_t *js,
   const char *specifier,
@@ -2108,8 +2154,6 @@ static ant_value_t esm_import_cstr_attrs(
     ant_value_t ns = esm_import_via_hooks(js, specifier, spec_len, base_path, attrs, false, &handled);
     if (handled) return ns;
   }
-  const ant_builtin_bundle_alias_t *bundle = NULL;
-  const ant_builtin_bundle_module_t *module = NULL;
   
   char *spec_copy = strndup(specifier, spec_len);
   if (!spec_copy) return js_mkerr(js, "oom");
@@ -2121,32 +2165,11 @@ static ant_value_t esm_import_cstr_attrs(
     spec_len = strlen(spec_copy);
   }
 
-  bundle = esm_lookup_builtin_alias(spec_copy, spec_len);
-  if (bundle) {
-    module = esm_lookup_builtin_module(bundle->module_id);
-    if (!module) {
-      free(spec_copy);
-      return js_mkerr(js, "Invalid builtin module id");
-    }
-
-    ant_value_t ns = esm_get_or_load(
-      js, spec_copy,
-      bundle->source_name,
-      bundle->source_name,
-      module->format,
-      module->code,
-      module->code_len
-    );
-    
+  esm_builtin_t builtin = esm_find_builtin(spec_copy, spec_len);
+  if (builtin.kind != ANT_BUILTIN_NAME_NONE) {
+    ant_value_t ns = esm_load_builtin(js, spec_copy, builtin);
     free(spec_copy);
     return ns;
-  }
-
-  bool loaded = false;
-  ant_value_t lib = js_esm_load_registered_library(js, spec_copy, spec_len, &loaded);
-  if (loaded) {
-    free(spec_copy);
-    return lib;
   }
 
   if (!base_path || !base_path[0]) base_path = esm_default_base_path(js);
@@ -2158,16 +2181,15 @@ static ant_value_t esm_import_cstr_attrs(
   }
 
   ant_value_t ns = esm_get_or_load(
-    js,
-    spec_copy,
-    resolved_path,
-    resolved_path,
+    js, spec_copy,
+    resolved_path, resolved_path,
     MODULE_EVAL_FORMAT_UNKNOWN,
-    NULL,
-    0
+    NULL, 0
   );
+  
   free(resolved_path);
   free(spec_copy);
+  
   return ns;
 }
 
@@ -2205,9 +2227,6 @@ ant_value_t js_esm_import_sync_cstr_from_require(
     ant_value_t ns = esm_import_via_hooks(js, specifier, spec_len, base_path, js_mkundef(), true, &handled);
     if (handled) return ns;
   }
-  const ant_builtin_bundle_alias_t *bundle = NULL;
-  const ant_builtin_bundle_module_t *module = NULL;
-
   char *spec_copy = strndup(specifier, spec_len);
   if (!spec_copy) return js_mkerr(js, "oom");
 
@@ -2218,9 +2237,8 @@ ant_value_t js_esm_import_sync_cstr_from_require(
     spec_len = strlen(spec_copy);
   }
 
-  bool bare_builtin = !strchr(spec_copy, ':') &&
-    (js_esm_is_registered_library(spec_copy, spec_len) || esm_lookup_builtin_alias(spec_copy, spec_len));
-  if (bare_builtin) {
+  esm_builtin_t builtin = esm_find_builtin(spec_copy, spec_len);
+  if (builtin.kind == ANT_BUILTIN_NAME_BARE) {
     ant_value_t cached = esm_require_cache_lookup(js, spec_copy);
     if (is_err(cached) || vtype(cached) != kTypeUndefined) {
       ant_value_t exports = is_err(cached) ? cached : esm_require_cached_exports(js, cached);
@@ -2229,32 +2247,10 @@ ant_value_t js_esm_import_sync_cstr_from_require(
     }
   }
 
-  bundle = esm_lookup_builtin_alias(spec_copy, spec_len);
-  if (bundle) {
-    module = esm_lookup_builtin_module(bundle->module_id);
-    if (!module) {
-      free(spec_copy);
-      return js_mkerr(js, "Invalid builtin module id");
-    }
-
-    ant_value_t ns = esm_get_or_load(
-      js, spec_copy,
-      bundle->source_name,
-      bundle->source_name,
-      module->format,
-      module->code,
-      module->code_len
-    );
-
+  if (builtin.kind != ANT_BUILTIN_NAME_NONE) {
+    ant_value_t ns = esm_load_builtin(js, spec_copy, builtin);
     free(spec_copy);
     return ns;
-  }
-
-  bool loaded = false;
-  ant_value_t lib = js_esm_load_registered_library(js, spec_copy, spec_len, &loaded);
-  if (loaded) {
-    free(spec_copy);
-    return lib;
   }
 
   if (!base_path || !base_path[0]) base_path = esm_default_base_path(js);

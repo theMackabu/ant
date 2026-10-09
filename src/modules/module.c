@@ -8,10 +8,11 @@
 #include "ant.h"
 #include "errors.h"
 #include "internal.h"
+#include "gc/roots.h"
 #include "esm/loader.h"
 #include "esm/commonjs.h"
 #include "esm/library.h"
-#include "gc/roots.h"
+#include "esm/builtin_bundle.h"
 
 typedef struct { ant_t *js; ant_value_t arr; } builtin_iter_ctx_t;
 
@@ -63,27 +64,12 @@ static ant_value_t builtin_resolveFilename(ant_params_t) {
   return resolve_strip_file_url(js, resolved);
 }
 
-typedef struct { 
-  const char *name; 
-  bool found; 
-} builtin_lookup_ctx_t;
-
-static void match_builtin_name(const char *name, void *ud) {
-  builtin_lookup_ctx_t *ctx = (builtin_lookup_ctx_t *)ud;
-  if (!ctx->found && strcmp(name, ctx->name) == 0) ctx->found = true;
-}
-
 static ant_value_t builtin_module_isBuiltin(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString) return js_false;
 
   size_t name_len = 0;
   const char *name = js_getstr(js, args[0], &name_len);
-  if (!name || strlen(name) != name_len) return js_false;
-  if (strncmp(name, "node:", 5) == 0) name += 5;
-
-  builtin_lookup_ctx_t ctx = { name, false };
-  ant_library_foreach(match_builtin_name, &ctx);
-  return js_bool(ctx.found);
+  return js_bool(name && js_esm_is_node_builtin(name, name_len));
 }
 
 static ant_value_t builtin_module_deregisterHooks(ant_params_t) {
@@ -181,6 +167,7 @@ ant_value_t module_library(ant_t *js) {
   ant_value_t modules_arr = js_mkarr(js);
   builtin_iter_ctx_t ctx = { js, modules_arr };
   ant_library_foreach(push_builtin_name, &ctx);
+  esm_builtin_bundle_foreach(push_builtin_name, &ctx);
   
   js_set(js, lib, "builtinModules", modules_arr);
   js_set(js, lib, "_resolveFilename", js_mkfun(builtin_resolveFilename));

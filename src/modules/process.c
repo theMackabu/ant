@@ -38,6 +38,8 @@
 #include "silver/engine.h"
 #include "gc/roots.h"
 #include "gc/modules.h"
+#include "esm/loader.h"
+#include "esm/commonjs.h"
 
 #include "modules/events.h"
 #include "modules/process.h"
@@ -1426,6 +1428,50 @@ static ant_value_t process_code_error(ant_t *js, js_err_type_t type, const char 
   return js_mkerr_props(js, type, props, "%s", message);
 }
 
+static void process_describe_received(ant_t *js, ant_value_t value, char *out, size_t out_len) {
+  ant_value_type_t type = vtype(value);
+
+  if (type == kTypeUndefined || type == kTypeNull) {
+    snprintf(out, out_len, "Received %s", type == kTypeNull ? "null" : "undefined");
+    return;
+  }
+
+  if (is_object_type(value)) {
+    bool callable = is_callable(value);
+    
+    ant_value_t named = callable ? value : js_get(js, value, "constructor");
+    ant_value_t name = is_err(named) || !is_object_type(named) ? js_mkundef() : js_get(js, named, "name");
+    if (is_err(named) || is_err(name)) Ant_Exception_Clear(js);
+
+    size_t name_len = 0;
+    const char *name_str = vtype(name) == kTypeString ? js_getstr(js, name, &name_len) : NULL;
+    
+    if (callable) snprintf(out, out_len, "Received function %.*s", (int)name_len, name_str ? name_str : "");
+    else if (name_len) snprintf(out, out_len, "Received an instance of %.*s", (int)name_len, name_str);
+    else snprintf(out, out_len, "Received type object");
+    
+    return;
+  }
+
+  char buf[64];
+  js_cstr_t received = js_to_cstr(js, value, buf, sizeof(buf));
+  const char *quote = type == kTypeString ? "'" : "";
+  
+  snprintf(
+    out, out_len, "Received type %s (%s%.25s%s%s%s)",
+    typestr(type), quote, received.ptr, received.len > 28 ? "..." : "", quote, type == kTypeBigInt ? "n" : ""
+  );
+  
+  if (received.needs_free) free((void *)received.ptr);
+}
+
+static ant_value_t process_invalid_arg_type(ant_t *js, const char *name, const char *expected, ant_value_t value) {
+  char received[160], message[256];
+  process_describe_received(js, value, received, sizeof(received));
+  snprintf(message, sizeof(message), "The \"%s\" argument must be of type %s. %s", name, expected, received);
+  return process_code_error(js, JS_ERR_TYPE, "ERR_INVALID_ARG_TYPE", message);
+}
+
 static ant_value_t process_set_exit_code(ant_t *js, ant_process_state_t *ps, ant_value_t code) {
   if (vtype(code) == kTypeUndefined || vtype(code) == kTypeNull) {
     ps->has_exit_code = false;
@@ -1440,24 +1486,8 @@ static ant_value_t process_set_exit_code(ant_t *js, ant_process_state_t *ps, ant
     ? js_getnum(code) : len > 0 
     ? tod(js_to_numeric(js, code)) : JS_NAN;
   
-  if (isnan(n) && type != kTypeNumber) {
-    char buf[64], message[192];
-    bool primitive = type == kTypeString || type == kTypeBool || type == kTypeBigInt || type == kTypeSymbol;
-    js_cstr_t received = primitive ? js_to_cstr(js, code, buf, sizeof(buf)) : (js_cstr_t){ 0 };
-    const char *quote = type == kTypeString ? "'" : "";
-    
-    if (primitive) snprintf(
-      message, sizeof(message), "The \"code\" argument must be of type number. Received type %s (%s%.25s%s%s%s)",
-      typestr(type), quote, received.ptr, received.len > 28 ? "..." : "", quote, type == kTypeBigInt ? "n" : ""
-    );
-    else snprintf(
-      message, sizeof(message), "The \"code\" argument must be of type number. Received type %s",
-      typestr(type)
-    );
-    
-    if (received.needs_free) free((void *)received.ptr);
-    return process_code_error(js, JS_ERR_TYPE, "ERR_INVALID_ARG_TYPE", message);
-  }
+  if (isnan(n) && type != kTypeNumber) 
+    return process_invalid_arg_type(js, "code", "number", code);
 
   if (!isfinite(n) || n != trunc(n) || fabs(n) > 9007199254740991.0) {
     char buf[64], message[160];
@@ -1839,6 +1869,19 @@ static void process_listener_change(
   }
 }
 
+static ant_value_t process_get_builtin_module(ant_params_t) {
+  ant_value_t id = nargs > 0 ? args[0] : js_mkundef();
+  if (vtype(id) != kTypeString) return process_invalid_arg_type(js, "id", "string", id);
+
+  size_t len = 0;
+  const char *name = js_getstr(js, id, &len);
+  if (!name) return js_mkundef();
+
+  bool found = false;
+  ant_value_t ns = js_esm_load_node_builtin(js, name, len, &found);
+  return found ? esm_require_unwrap(js, ns) : js_mkundef();
+}
+
 static void process_set_methods(ant_t *js, ant_value_t obj, bool include_event_methods) {
   js_set(js, obj, "exit", js_mkfun(process_exit));
   js_set(js, obj, "cwd", js_mkfun(process_cwd));
@@ -1850,6 +1893,7 @@ static void process_set_methods(ant_t *js, ant_value_t obj, bool include_event_m
   js_set(js, obj, "umask", js_mkfun(process_umask));
   js_set(js, obj, "nextTick", js_mkfun(process_next_tick));
   js_set(js, obj, "emitWarning", js_mkfun(process_emit_warning));
+  js_set(js, obj, "getBuiltinModule", js_mkfun(process_get_builtin_module));
   js_set(js, obj, "dlopen", js_mkfun(napi_process_dlopen_js));
 
   ant_value_t mem_usage_fn = js_heavy_mkfun(js, process_memory_usage, js_mkundef());

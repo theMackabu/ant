@@ -37,6 +37,7 @@
 #include "modules/events.h"
 #include "modules/stream.h"
 #include "modules/url.h"
+#include "modules/iterator.h"
 
 typedef enum {
   FS_ENC_NONE = 0,
@@ -69,6 +70,7 @@ typedef enum {
   FS_OP_CHMOD,
   FS_OP_RENAME,
   FS_OP_SYMLINK,
+  FS_OP_LINK,
   FS_OP_FSYNC
 } fs_op_type_t;
 
@@ -183,8 +185,9 @@ static fs_watcher_t *active_watchers = NULL;
 static UT_array *pending_requests    = NULL;
 
 enum { 
-  FS_WATCHER_NATIVE_TAG = 0x46535754u,   // FSWT
-  FS_FILEHANDLE_NATIVE_TAG = 0x46534648u // FSFH
+  FS_WATCHER_NATIVE_TAG = 0x46535754u,    // FSWT
+  FS_FILEHANDLE_NATIVE_TAG = 0x46534648u, // FSFH
+  FS_DIR_NATIVE_TAG = 0x46534452u         // FSDR
 };
 
 static fs_watcher_t *fs_watcher_data(ant_value_t value) {
@@ -2064,6 +2067,19 @@ static void on_rename_complete(uv_fs_t *uv_req) {
 }
 
 static void on_symlink_complete(uv_fs_t *uv_req) {
+  GC_UV_CALLBACK();
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+
+  if (uv_req->result < 0) {
+    fs_request_fail(req, (int)uv_req->result);
+  }
+
+  uv_fs_req_cleanup(uv_req);
+  req->completed = 1;
+  complete_request(req);
+}
+
+static void on_link_complete(uv_fs_t *uv_req) {
   GC_UV_CALLBACK();
   fs_request_t *req = (fs_request_t *)uv_req->data;
 
@@ -4275,6 +4291,96 @@ static ant_value_t builtin_fs_symlink(ant_params_t) {
   return promise;
 }
 
+static ant_value_t builtin_fs_linkSync(ant_params_t) {
+  if (nargs < 2) return js_mkerr(js, "linkSync() requires existingPath and newPath arguments");
+
+  ant_value_t existing_val = args[0] = fs_coerce_path(js, args[0]);
+  if (is_err(existing_val)) return existing_val;
+  
+  ant_value_t new_val = args[1] = fs_coerce_path(js, args[1]);
+  if (is_err(new_val)) return new_val;
+  
+  if (vtype(existing_val) != kTypeString || vtype(new_val) != kTypeString) {
+    return js_mkerr(js, "linkSync() existingPath and newPath must be strings");
+  }
+
+  size_t existing_len = 0;
+  size_t new_len = 0;
+  
+  const char *existing = js_getstr(js, existing_val, &existing_len);
+  const char *new_path = js_getstr(js, new_val, &new_len);
+  if (!existing || !new_path) return js_mkerr(js, "Failed to get link path strings");
+
+  char *existing_cstr = strndup(existing, existing_len);
+  char *new_cstr = strndup(new_path, new_len);
+  if (!existing_cstr || !new_cstr) {
+    free(existing_cstr);
+    free(new_cstr);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  uv_fs_t req;
+  int result = uv_fs_link(NULL, &req, existing_cstr, new_cstr, NULL);
+  uv_fs_req_cleanup(&req);
+  
+  ant_value_t out = result < 0
+    ? fs_mk_uv_error(js, result, "link", existing_cstr, new_cstr)
+    : js_mkundef();
+
+  free(existing_cstr);
+  free(new_cstr);
+  return out;
+}
+
+static ant_value_t builtin_fs_link(ant_params_t) {
+  if (nargs < 2) return js_mkerr(js, "link() requires existingPath and newPath arguments");
+
+  ant_value_t existing_val = args[0] = fs_coerce_path(js, args[0]);
+  if (is_err(existing_val)) return existing_val;
+  
+  ant_value_t new_val = args[1] = fs_coerce_path(js, args[1]);
+  if (is_err(new_val)) return new_val;
+  
+  if (vtype(existing_val) != kTypeString || vtype(new_val) != kTypeString) {
+    return js_mkerr(js, "link() existingPath and newPath must be strings");
+  }
+
+  size_t existing_len = 0;
+  size_t new_len = 0;
+  
+  const char *existing = js_getstr(js, existing_val, &existing_len);
+  const char *new_path = js_getstr(js, new_val, &new_len);
+  if (!existing || !new_path) return js_mkerr(js, "Failed to get link path strings");
+
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+
+  req->js = js;
+  req->op_type = FS_OP_LINK;
+  req->promise = js_mkpromise(js);
+  
+  ant_value_t promise = req->promise;
+  req->path = strndup(existing, existing_len);
+  req->path2 = strndup(new_path, new_len);
+  req->uv_req.data = req;
+
+  if (!req->path || !req->path2) {
+    free_fs_request(req);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  utarray_push_back(pending_requests, &req);
+  int result = uv_fs_link(uv_default_loop(), &req->uv_req, req->path, req->path2, on_link_complete);
+
+  if (result < 0) {
+    fs_request_fail(req, result);
+    req->completed = 1;
+    complete_request(req);
+  }
+
+  return promise;
+}
+
 static ant_value_t builtin_fs_readlink(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "readlink() requires a path argument");
 
@@ -5424,6 +5530,286 @@ static ant_value_t fs_make_promise_wrapper(ant_t *js, ant_value_t original) {
   return js_heavy_mkfun(js, fs_promise_wrapper_call, original);
 }
 
+typedef struct {
+  uv_dir_t *dir;
+  uv_fs_t read_req;
+  uv_dirent_t *dirents;
+  char *path;
+  size_t nentries;
+  size_t pos;
+  size_t count;
+  bool has_entries;
+  bool buffer_encoding;
+} fs_dir_t;
+
+static void fs_dir_release_entries(fs_dir_t *d) {
+  if (!d->has_entries) return;
+  uv_fs_req_cleanup(&d->read_req);
+  d->has_entries = false;
+  d->pos = d->count = 0;
+}
+
+static int fs_dir_close_native(fs_dir_t *d) {
+  fs_dir_release_entries(d);
+  if (!d->dir) return 0;
+
+  uv_fs_t req;
+  int rc = uv_fs_closedir(NULL, &req, d->dir, NULL);
+  uv_fs_req_cleanup(&req);
+  d->dir = NULL;
+  
+  return rc;
+}
+
+static void fs_dir_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t value = js_obj_from_ptr(obj);
+  fs_dir_t *d = (fs_dir_t *)js_get_native(value, FS_DIR_NATIVE_TAG);
+  js_clear_native(value, FS_DIR_NATIVE_TAG);
+  if (!d) return;
+
+  fs_dir_close_native(d);
+  free(d->dirents);
+  free(d->path);
+  free(d);
+}
+
+static ant_value_t fs_dir_closed_error(ant_t *js) {
+  ant_value_t props = js_mkobj(js);
+  js_set(js, props, "code", js_mkstr(js, "ERR_DIR_CLOSED", 14));
+  return js_mkerr_props(js, JS_ERR_GENERIC, props, "Directory handle was closed");
+}
+
+static fs_dir_t *fs_dir_open_data(ant_t *js, ant_value_t obj, ant_value_t *err) {
+  fs_dir_t *d = is_object_type(obj) ? (fs_dir_t *)js_get_native(obj, FS_DIR_NATIVE_TAG) : NULL;
+  if (!d) {
+    *err = js_mkerr_typed(js, JS_ERR_TYPE, "Value of \"this\" must be of type Dir");
+    return NULL;
+  }
+  if (!d->dir) {
+    *err = fs_dir_closed_error(js);
+    return NULL;
+  }
+  return d;
+}
+
+static ant_value_t fs_dir_read_entry(ant_t *js, ant_value_t dir_obj, fs_dir_t *d) {
+  if (d->pos >= d->count) {
+    fs_dir_release_entries(d);
+    d->dir->dirents = d->dirents;
+    d->dir->nentries = d->nentries;
+
+    int rc = uv_fs_readdir(NULL, &d->read_req, d->dir, NULL);
+    if (rc < 0) {
+      uv_fs_req_cleanup(&d->read_req);
+      return fs_mk_uv_error(js, rc, "readdir", d->path, NULL);
+    }
+
+    d->has_entries = true;
+    d->count = (size_t)rc;
+    if (rc == 0) return js_mknull();
+  }
+
+  uv_dirent_t *entry = &d->dirents[d->pos++];
+  ant_value_t dirent = create_dirent_object(
+    js, entry->name, strlen(entry->name),
+    entry->type, d->buffer_encoding
+  );
+  
+  if (is_err(dirent)) return dirent;
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, dirent);
+  js_set(js, dirent, "parentPath", js_get(js, dir_obj, "path"));
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  return dirent;
+}
+
+static ant_value_t builtin_fs_dir_readSync(ant_params_t) {
+  ant_value_t err = js_mkundef();
+  fs_dir_t *d = fs_dir_open_data(js, js->this_val, &err);
+  if (!d) return err;
+  return fs_dir_read_entry(js, js->this_val, d);
+}
+
+static ant_value_t builtin_fs_dir_read(ant_params_t) {
+  ant_value_t result = builtin_fs_dir_readSync(js, args, nargs, call_new_target);
+  return is_err(result) ? fs_rejected_promise(js, result) : fs_resolved_promise(js, result);
+}
+
+static ant_value_t builtin_fs_dir_closeSync(ant_params_t) {
+  ant_value_t err = js_mkundef();
+  fs_dir_t *d = fs_dir_open_data(js, js->this_val, &err);
+  if (!d) return err;
+
+  int rc = fs_dir_close_native(d);
+  if (rc < 0) return fs_mk_uv_error(js, rc, "closedir", d->path, NULL);
+  return js_mkundef();
+}
+
+static ant_value_t builtin_fs_dir_close(ant_params_t) {
+  ant_value_t result = builtin_fs_dir_closeSync(js, args, nargs, call_new_target);
+  return is_err(result) ? fs_rejected_promise(js, result) : fs_resolved_promise(js, result);
+}
+
+static ant_value_t builtin_fs_dir_dispose(ant_params_t) {
+  fs_dir_t *d = (fs_dir_t *)js_get_native(js->this_val, FS_DIR_NATIVE_TAG);
+  if (!d || !d->dir) return js_mkundef();
+  return builtin_fs_dir_closeSync(js, args, nargs, call_new_target);
+}
+
+static ant_value_t builtin_fs_dir_asyncDispose(ant_params_t) {
+  ant_value_t result = builtin_fs_dir_dispose(js, args, nargs, call_new_target);
+  return is_err(result) ? fs_rejected_promise(js, result) : fs_resolved_promise(js, result);
+}
+
+static ant_value_t fs_dir_iter_next(ant_params_t) {
+  ant_value_t dir_obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t err = js_mkundef();
+  
+  fs_dir_t *d = fs_dir_open_data(js, dir_obj, &err);
+  if (!d) return fs_rejected_promise(js, err);
+
+  ant_value_t entry = fs_dir_read_entry(js, dir_obj, d);
+  if (is_err(entry)) {
+    fs_dir_close_native(d);
+    return fs_rejected_promise(js, entry);
+  }
+
+  if (vtype(entry) == kTypeNull) {
+    int rc = fs_dir_close_native(d);
+    if (rc < 0) return fs_rejected_promise(js, fs_mk_uv_error(js, rc, "closedir", d->path, NULL));
+    return fs_resolved_promise(js, js_iter_result(js, false, js_mkundef()));
+  }
+
+  return fs_resolved_promise(js, js_iter_result(js, true, entry));
+}
+
+static ant_value_t fs_dir_iter_return(ant_params_t) {
+  ant_value_t dir_obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  fs_dir_t *d = (fs_dir_t *)js_get_native(dir_obj, FS_DIR_NATIVE_TAG);
+  if (d) fs_dir_close_native(d);
+  return fs_resolved_promise(js, js_iter_result(js, false, nargs > 0 ? args[0] : js_mkundef()));
+}
+
+static ant_value_t builtin_fs_dir_asyncIterator(ant_params_t) {
+  ant_value_t dir_obj = js->this_val;
+  if (!js_get_native(dir_obj, FS_DIR_NATIVE_TAG))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Value of \"this\" must be of type Dir");
+
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t iter = js_mkobj(js);
+  GC_ROOT_PIN(js, iter);
+  
+  js_set_proto_init(iter, js->sym.async_iterator_proto);
+  js_set(js, iter, "next", js_heavy_mkfun(js, fs_dir_iter_next, dir_obj));
+  js_set(js, iter, "return", js_heavy_mkfun(js, fs_dir_iter_return, dir_obj));
+  
+  GC_ROOT_RESTORE(js, root_mark);
+  return iter;
+}
+
+static void fs_init_dir_proto(ant_t *js) {
+  if (is_object_type(js->builtins.dir_proto)) return;
+  ant_value_t proto = js->builtins.dir_proto = js_mkobj(js);
+  
+  js_set(js, proto, "read", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_dir_read), false));
+  js_set(js, proto, "readSync", js_mkfun(builtin_fs_dir_readSync));
+  js_set(js, proto, "close", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_dir_close), false));
+  js_set(js, proto, "closeSync", js_mkfun(builtin_fs_dir_closeSync));
+  
+  js_set_sym(js, proto, js->sym.asyncIterator_sym, js_mkfun(builtin_fs_dir_asyncIterator));
+  js_set_sym(js, proto, js->sym.dispose_sym, js_mkfun(builtin_fs_dir_dispose));
+  js_set_sym(js, proto, js->sym.asyncDispose_sym, js_mkfun(builtin_fs_dir_asyncDispose));
+  js_set_sym(js, proto, js->sym.toStringTag_sym, js_mkstr(js, "Dir", 3));
+}
+
+static ant_value_t fs_opendir_common(ant_t *js, ant_value_t *args, int nargs, const char *fn_name) {
+  if (nargs < 1) return js_mkerr(js, "%s() requires a path argument", fn_name);
+  args[0] = fs_coerce_path(js, args[0]);
+  if (is_err(args[0])) return args[0];
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "%s() path must be a string", fn_name);
+
+  ant_value_t options = nargs > 1 ? args[1] : js_mkundef();
+  size_t nentries = 32;
+  
+  if (is_object_type(options)) {
+    ant_value_t size_val = js_get(js, options, "bufferSize");
+    if (is_err(size_val)) return size_val;
+    if (vtype(size_val) != kTypeUndefined) {
+      double size = vtype(size_val) == kTypeNumber ? js_getnum(size_val) : 0;
+      if (!(size >= 1 && size <= 4294967295.0) || size != (double)(size_t)size) return js_mkerr_typed(
+        js, JS_ERR_RANGE,
+        "The value of \"options.bufferSize\" is out of range. It must be >= 1 && <= 4294967295. Received %g", size
+      );
+      nentries = (size_t)size;
+    }
+  }
+
+  size_t path_len = 0;
+  const char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+
+  fs_dir_t *d = calloc(1, sizeof(fs_dir_t));
+  if (!d) return js_mkerr(js, "Out of memory");
+  
+  d->path = strndup(path, path_len);
+  d->dirents = calloc(nentries, sizeof(uv_dirent_t));
+  d->nentries = nentries;
+  d->buffer_encoding = fs_buffer_encoding(js, options);
+  
+  if (!d->path || !d->dirents) {
+    free(d->path);
+    free(d->dirents);
+    free(d);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  uv_fs_t req;
+  int rc = uv_fs_opendir(NULL, &req, d->path, NULL);
+  
+  // unclosed Dir handles only release their descriptor when collected,
+  // so collect them and retry once before reporting exhaustion
+  if (rc == UV_EMFILE || rc == UV_ENFILE) {
+    uv_fs_req_cleanup(&req);
+    gc_run(js);
+    rc = uv_fs_opendir(NULL, &req, d->path, NULL);
+  }
+  
+  d->dir = rc < 0 ? NULL : (uv_dir_t *)req.ptr;
+  uv_fs_req_cleanup(&req);
+  
+  if (rc < 0) {
+    ant_value_t err = fs_mk_uv_error(js, rc, "opendir", d->path, NULL);
+    free(d->path);
+    free(d->dirents);
+    free(d);
+    return err;
+  }
+
+  fs_init_dir_proto(js);
+  GC_ROOT_SAVE(root_mark, js);
+  
+  ant_value_t obj = js_mkobj(js);
+  GC_ROOT_PIN(js, obj);
+  
+  js_set_proto_init(obj, js->builtins.dir_proto);
+  js_set_native(obj, d, FS_DIR_NATIVE_TAG);
+  js_set_finalizer(obj, fs_dir_finalize);
+  js_set(js, obj, "path", js_mkstr(js, d->path, path_len));
+  
+  GC_ROOT_RESTORE(js, root_mark);
+  return obj;
+}
+
+static ant_value_t builtin_fs_opendirSync(ant_params_t) {
+  return fs_opendir_common(js, args, nargs, "opendirSync");
+}
+
+static ant_value_t builtin_fs_opendir(ant_params_t) {
+  ant_value_t result = fs_opendir_common(js, args, nargs, "opendir");
+  return is_err(result) ? fs_rejected_promise(js, result) : fs_resolved_promise(js, result);
+}
+
 static void fs_set_promise_methods(ant_t *js, ant_value_t lib) {
   js_set(js, lib, "appendFile", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_appendFile)));
   js_set(js, lib, "cp", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_cp)));
@@ -5452,6 +5838,8 @@ static void fs_set_promise_methods(ant_t *js, ant_value_t lib) {
   js_set(js, lib, "realpath", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_realpath)));
   js_set(js, lib, "readlink", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_readlink)));
   js_set(js, lib, "symlink", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_symlink)));
+  js_set(js, lib, "link", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_link)));
+  js_set(js, lib, "opendir", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_opendir)));
 }
 
 static void fs_set_callback_compatible_methods(ant_t *js, ant_value_t lib) {
@@ -5483,6 +5871,8 @@ static void fs_set_callback_compatible_methods(ant_t *js, ant_value_t lib) {
   js_set(js, lib, "readdir", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_readdir), false));
   js_set(js, lib, "readlink", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_readlink), false));
   js_set(js, lib, "symlink", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_symlink), false));
+  js_set(js, lib, "link", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_link), false));
+  js_set(js, lib, "opendir", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_opendir), false));
 
   js_set(js, realpath, "native", realpath);
   js_set(js, lib, "realpath", realpath);
@@ -5586,6 +5976,8 @@ ant_value_t fs_library(ant_t *js) {
   js_set(js, lib, "realpathSync", realpath_sync);
   js_set(js, lib, "readlinkSync", js_mkfun(builtin_fs_readlinkSync));
   js_set(js, lib, "symlinkSync", js_mkfun(builtin_fs_symlinkSync));
+  js_set(js, lib, "linkSync", js_mkfun(builtin_fs_linkSync));
+  js_set(js, lib, "opendirSync", js_mkfun(builtin_fs_opendirSync));
   js_set(js, lib, "watch", js_mkfun(builtin_fs_watch));
   js_set(js, lib, "watchFile", js_mkfun(builtin_fs_watchFile));
   js_set(js, lib, "unwatchFile", js_mkfun(builtin_fs_unwatchFile));
