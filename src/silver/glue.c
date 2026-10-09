@@ -1542,14 +1542,11 @@ ant_value_t jit_helper_get_elem(
     return sv_mk_nullish_read_error_by_key(js, obj, key);
   }
   
-  if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
-    double d = tod(key);
-    if (d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d)
-      return js_arr_get(js, obj, (uint32_t)d);
-  }
+  uint32_t idx;
+  if (vtype(obj) == kTypeArray && sv_number_key_index(key, &idx)) return js_arr_get(js, obj, idx);
   
   ant_value_t str_elem = js_mkundef();
-  if (sv_try_string_index_get(js, obj, key, &str_elem)) return str_elem;
+  if (sv_try_index_get(js, obj, key, &str_elem)) return str_elem;
   
   return sv_getprop_by_key(js, obj, key);
 }
@@ -1690,45 +1687,36 @@ ant_value_t jit_helper_catch_value(sv_vm_t *vm, ant_t *js, ant_value_t err) {
 }
 
 ant_value_t jit_helper_throw_error(
-  sv_vm_t *vm, ant_t *js,
-  const char *str, uint32_t len, int err_type
-) { return js_mkerr_typed(js, (js_err_type_t)err_type, "%.*s", (int)len, str); }
+  sv_vm_t *vm, ant_t *js, const char *str, uint32_t len, int err_type
+) { 
+  return js_mkerr_typed(js, (js_err_type_t)err_type, "%.*s", (int)len, str); 
+}
 
 ant_value_t jit_helper_get_elem2(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key) {
-  if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
-    double d = tod(key);
-    if (d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d)
-      return js_arr_get(js, obj, (uint32_t)d);
-  }
+  uint32_t idx;
+  if (vtype(obj) == kTypeArray && sv_number_key_index(key, &idx)) return js_arr_get(js, obj, idx);
+  
   ant_value_t str_elem = js_mkundef();
-  if (sv_try_string_index_get(js, obj, key, &str_elem))
-    return str_elem;
+  if (sv_try_index_get(js, obj, key, &str_elem)) return str_elem;
+  
   return sv_getprop_by_key(js, obj, key);
 }
 
-ant_value_t jit_helper_get_elem_inline(
-  sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key
-) {
-  (void)vm;
-
-  if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
-    double d = tod(key);
-    if (d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d) {
-      // TODO: reduce nesting
-      ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-      if (ptr && !ptr->flags.is_exotic && ptr->flags.fast_array && ptr->u.array.data) {
-        uint32_t idx = (uint32_t)d;
-        if (idx < ptr->u.array.len && idx < ptr->u.array.cap) {
-          ant_value_t value = ptr->u.array.data[idx];
-          if (!is_empty_slot(value)) return value;
-        }
-      }
-      return SV_JIT_BAILOUT;
-    }
+ant_value_t jit_helper_get_elem_inline(ant_t *js, ant_value_t obj, ant_value_t key) {
+  uint32_t idx;
+  if (vtype(obj) == kTypeArray && sv_number_key_index(key, &idx)) {
+    ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+    
+    bool dense = 
+      ptr && !ptr->flags.is_exotic && ptr->flags.fast_array && 
+      ptr->u.array.data && idx < ptr->u.array.len && idx < ptr->u.array.cap;
+    
+    ant_value_t value = dense ? ptr->u.array.data[idx] : T_EMPTY;
+    return is_empty_slot(value) ? SV_JIT_BAILOUT : value;
   }
 
   ant_value_t str_elem = js_mkundef();
-  if (sv_try_string_index_get(js, obj, key, &str_elem)) return str_elem;
+  if (sv_try_index_get(js, obj, key, &str_elem)) return str_elem;
 
   ant_value_t key_str;
   switch (vtype(key)) {
@@ -1763,10 +1751,10 @@ ant_value_t jit_helper_set_proto(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_va
 
 #define JIT_BITWISE_HELPERS(X) \
   X(band, OP_BAND) X(bor, OP_BOR) X(bxor, OP_BXOR) X(shl, OP_SHL) X(shr, OP_SHR) X(ushr, OP_USHR)
-#define X(name, op)                                                                    \
+#define X(name, op)                                                                     \
   ant_value_t jit_helper_##name(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) { \
-    if (!jit_numeric_operand(l) || !jit_numeric_operand(r)) return SV_JIT_BAILOUT;     \
-    return sv_bitwise_values(js, op, l, r);                                            \
+    if (!jit_numeric_operand(l) || !jit_numeric_operand(r)) return SV_JIT_BAILOUT;      \
+    return sv_bitwise_values(js, op, l, r);                                             \
   }
 JIT_BITWISE_HELPERS(X)
 #undef X

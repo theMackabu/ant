@@ -119,6 +119,7 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_shape_transition);
   LOAD_EXT(gc_remember_props);
   LOAD_EXT(jit_helper_get_elem);
+  LOAD_EXT(js_get_index_fast);
   LOAD_EXT(jit_helper_get_elem2);
   LOAD_EXT(jit_helper_get_elem_inline);
   LOAD_EXT(jit_helper_put_elem);

@@ -1769,9 +1769,14 @@ void jit_emit_inline_body(
         MIR_append_insn(ctx, jit_func,
                         MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, ge_ok)));
         MIR_append_insn(ctx, jit_func, ge_slow);
-        mir_call_helper2(ctx, jit_func, ge_dst,
-                         helper2_proto, ext->imp_get_elem_inline,
-                         r_vm, r_js, ge_obj, ge_key);
+        MIR_append_insn(ctx, jit_func,
+                        MIR_new_call_insn(ctx, 6,
+                                          MIR_new_ref_op(ctx, ext->get_elem_inline_proto),
+                                          MIR_new_ref_op(ctx, ext->imp_get_elem_inline),
+                                          MIR_new_reg_op(ctx, ge_dst),
+                                          MIR_new_reg_op(ctx, r_js),
+                                          MIR_new_reg_op(ctx, ge_obj),
+                                          MIR_new_reg_op(ctx, ge_key)));
         mir_emit_inline_read_guard(
             ctx, jit_func, ge_dst, result, r_bool, slow, join, ge_ok);
         MIR_append_insn(ctx, jit_func, ge_ok);

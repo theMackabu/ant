@@ -22,6 +22,7 @@ ant_value_t jit_helper_catch_value(sv_vm_t *vm, ant_t *js, ant_value_t err);
 ant_value_t jit_helper_throw(sv_vm_t *vm, ant_t *js, ant_value_t val);
 ant_value_t jit_helper_native_finish(ant_t *js, ant_value_t result);
 ant_value_t jit_helper_normalize_sloppy_this(ant_t *js, ant_value_t value);
+ant_value_t jit_helper_get_elem_inline(ant_t *js, ant_value_t obj, ant_value_t key);
 
 ant_value_t jit_helper_lt(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_le(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
@@ -384,10 +385,6 @@ ant_value_t jit_helper_throw_error(
 );
 
 ant_value_t jit_helper_get_elem2(
-  sv_vm_t *vm, ant_t *js,
-  ant_value_t obj, ant_value_t key
-);
-ant_value_t jit_helper_get_elem_inline(
   sv_vm_t *vm, ant_t *js,
   ant_value_t obj, ant_value_t key
 );

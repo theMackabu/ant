@@ -1,6 +1,37 @@
 #include "compile.h"
 #include "silver/feedback.h"
 
+static void jit_emit_index_read_fast(
+    jit_compile_t *c, MIR_reg_t obj, MIR_reg_t key, MIR_reg_t dst, MIR_label_t done) {
+  char name[40];
+  snprintf(name, sizeof(name), "ix_t_%d", c->bc_off);
+  MIR_reg_t t = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+  MIR_label_t call = MIR_new_label(c->ctx);
+  MIR_label_t generic = MIR_new_label(c->ctx);
+
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_UBGT, MIR_new_label_op(c->ctx, generic),
+      MIR_new_reg_op(c->ctx, key), MIR_new_uint_op(c->ctx, NANBOX_PREFIX)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_URSH, MIR_new_reg_op(c->ctx, t),
+      MIR_new_reg_op(c->ctx, obj), MIR_new_uint_op(c->ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, call),
+      MIR_new_reg_op(c->ctx, t), MIR_new_uint_op(c->ctx, NANBOX_TOBJ_TAG)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, generic),
+      MIR_new_reg_op(c->ctx, t), MIR_new_uint_op(c->ctx, NANBOX_TSTR_TAG)));
+  MIR_append_insn(c->ctx, c->jit_func, call);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_call_insn(c->ctx, 6,
+      MIR_new_ref_op(c->ctx, c->get_elem_inline_proto),
+      MIR_new_ref_op(c->ctx, c->imp_get_index_fast),
+      MIR_new_reg_op(c->ctx, t),
+      MIR_new_reg_op(c->ctx, c->r_js),
+      MIR_new_reg_op(c->ctx, obj),
+      MIR_new_reg_op(c->ctx, key)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, generic),
+      MIR_new_reg_op(c->ctx, t), MIR_new_uint_op(c->ctx, T_EMPTY)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+      MIR_new_reg_op(c->ctx, dst), MIR_new_reg_op(c->ctx, t)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, done)));
+  MIR_append_insn(c->ctx, c->jit_func, generic);
+}
 static MIR_reg_t jit_emit_element_index_guard(
     jit_compile_t *c, MIR_reg_t key, MIR_reg_t integer_index,
     MIR_reg_t double_key, bool key_is_num, MIR_label_t slow, int site) {
@@ -904,6 +935,7 @@ void jit_emit_properties(jit_compile_t *c) {
                         MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, element_done)));
         MIR_append_insn(c->ctx, c->jit_func, slow);
         mir_load_imm(c->ctx, c->jit_func, c->cached_element_valid, 0);
+        jit_emit_index_read_fast(c, obj, key, dst, element_done);
       }
       c->element_available = !obj_is_num;
       sv_ic_entry_t *element_ic = code_arena_bump(c->js, sizeof(*element_ic));

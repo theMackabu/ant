@@ -121,8 +121,10 @@ typedef struct {
 } jit_stale_exit_t;
 
 #define NANBOX_TFUNC_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeFunction)
-#define NANBOX_TOBJ_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeObject)
+#define NANBOX_TOBJ_TAG  ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeObject)
 #define NANBOX_TPROM_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypePromise)
+#define NANBOX_TSTR_TAG  ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeString)
+
 #define MAX_OSR_ENTRIES 64
 typedef struct {
   int offsets[MAX_OSR_ENTRIES];
@@ -141,7 +143,7 @@ typedef struct {
   MIR_item_t object_proto, imp_object;
   MIR_item_t truthy_proto, imp_is_truthy;
   MIR_item_t imp_get_field, imp_get_length;
-  MIR_item_t imp_get_elem_inline;
+  MIR_item_t get_elem_inline_proto, imp_get_elem_inline;
   MIR_item_t put_field_proto, imp_put_field;
   MIR_item_t shape_transition_proto, imp_shape_transition;
   MIR_item_t remember_obj_proto, imp_remember_obj;
