@@ -311,7 +311,7 @@ static bool jit_reads_slot(const uint8_t *ip, bool arg, int index) {
 
 static int jit_constant_step(sv_func_t *func, uint8_t *ip) {
   jit_integer_range_t k = jit_constant_integer_range(func, ip);
-  return k.known && k.min != 0 && k.min >= -511 && k.min <= 511 ? (int)k.min : 0;
+  return k.known && k.min != 0 && k.min >= -JIT_COUNTER_STEP_MAX && k.min <= JIT_COUNTER_STEP_MAX ? (int)k.min : 0;
 }
 
 static int jit_counter_step(

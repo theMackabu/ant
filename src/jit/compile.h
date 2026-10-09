@@ -353,6 +353,9 @@ jit_stale_exit_t *jit_stale_exit_for(jit_compile_t *c, jit_stale_exit_t *exit);
 bool jit_site_runs_hot(jit_compile_t *c);
 void jit_note_stale_exit(jit_compile_t *c, const jit_stale_exit_t *exit, int pre_op_sp);
 void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg);
+void jit_emit_dense_add(
+    jit_compile_t *c, MIR_reg_t ptr, MIR_reg_t data, MIR_reg_t flags,
+    MIR_reg_t index, MIR_reg_t len, MIR_reg_t val, MIR_label_t slow, int site);
 void jit_emit_element_barrier(
     jit_compile_t *c, MIR_reg_t obj, MIR_reg_t index,
     MIR_reg_t val, MIR_reg_t flags, MIR_label_t skip, MIR_label_t shared);

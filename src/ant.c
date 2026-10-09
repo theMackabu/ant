@@ -989,6 +989,22 @@ static inline ant_object_t *array_length_obj_ptr(ant_value_t obj) {
   return (ptr && !ptr->flags.arguments_object) ? ptr : NULL;
 }
 
+static inline bool array_dense_storage(const ant_object_t *ptr) {
+  return ptr && ptr->flags.fast_array && !ptr->flags.is_exotic && ptr->u.array.data;
+}
+
+static inline bool array_dense_covers(const ant_object_t *ptr, ant_offset_t n) {
+  return array_dense_storage(ptr) && n <= ptr->u.array.len && n <= ptr->u.array.cap;
+}
+
+static inline bool array_dense_read(const ant_object_t *ptr, ant_offset_t idx, ant_value_t *out) {
+  if (!array_dense_storage(ptr) || idx >= ptr->u.array.len || idx >= ptr->u.array.cap) return false;
+  ant_value_t value = ptr->u.array.data[idx];
+  if (is_empty_slot(value)) return false;
+  *out = value;
+  return true;
+}
+
 static inline bool is_arguments_object(ant_value_t obj) {
   ant_object_t *ptr = array_obj_ptr(obj);
   return ptr && ptr->flags.arguments_object;
@@ -4174,7 +4190,7 @@ static inline bool arguments_proto_chain_plain(ant_t *js, ant_object_t *args) {
 static inline ant_object_t *array_dense_source(ant_t *js, ant_value_t arr) {
   if (is_proxy(arr)) return NULL;
   ant_object_t *ptr = array_obj_ptr(arr);
-  if (!ptr || !ptr->flags.fast_array || ptr->flags.is_exotic || !ptr->u.array.data) return NULL;
+  if (!array_dense_storage(ptr)) return NULL;
   bool plain = ptr->flags.arguments_object ? arguments_proto_chain_plain(js, ptr) : array_proto_chain_plain(js, ptr);
   return plain ? ptr : NULL;
 }
@@ -11553,14 +11569,12 @@ static ant_value_t builtin_array_slice(ant_params_t) {
   ant_value_t result = array_species_create(js, arr, count, &intrinsic);
   if (is_err(result)) return result;
   
-  ant_object_t *src = !string_like && vtype(arr) == kTypeArray ? array_obj_ptr(arr) : NULL;
+  ant_object_t *src = !string_like && vtype(arr) == kTypeArray ? array_dense_source(js, arr) : NULL;
   ant_object_t *dst = intrinsic && vtype(result) == kTypeArray ? array_obj_ptr(result) : NULL;
   
   if (
-    src && dst && src->flags.fast_array && !src->flags.is_exotic && src->u.array.data &&
-    end <= src->u.array.len && end <= src->u.array.cap &&
+    src && dst && array_dense_covers(src, end) &&
     dst->flags.fast_array && dst->u.array.data && (dst->u.array.len == 0 || dst->u.array.len == count) &&
-    (src->flags.arguments_object ? arguments_proto_chain_plain(js, src) : array_proto_chain_plain(js, src)) &&
     (count <= dst->u.array.cap || dense_grow(js, result, count))
   ) {
     bool has_holes = false, has_elements = false;
@@ -12620,9 +12634,8 @@ static ant_value_t builtin_array_fill(ant_params_t) {
   
   ant_object_t *dense = array_length_obj_ptr(arr);
   if (
-    dense && !is_proxy(arr) && dense->flags.fast_array && !dense->flags.is_exotic && dense->u.array.data &&
-    dense->flags.extensible && !dense->flags.sealed && !dense->flags.frozen &&
-    end <= dense->u.array.len && end <= dense->u.array.cap
+    !is_proxy(arr) && array_dense_covers(dense, end) &&
+    dense->flags.extensible && !dense->flags.sealed && !dense->flags.frozen
   ) {
     ant_offset_t doff = get_dense_buf(arr);
     for (ant_offset_t i = start; i < end; i++) dense_set(js, doff, i, value);
@@ -13061,7 +13074,7 @@ static inline int sort_string_cmp(ant_t *js, ant_value_t a, ant_value_t b) {
 static inline bool array_sort_writes_dense(ant_value_t arr, ant_offset_t len) {
   ant_object_t *ptr = array_length_obj_ptr(arr);
   return
-    ptr && !is_proxy(arr) && ptr->flags.fast_array && !ptr->flags.is_exotic && ptr->u.array.data &&
+    !is_proxy(arr) && array_dense_storage(ptr) &&
     ptr->u.array.len == len && ptr->u.array.cap >= len && ptr->flags.extensible && !ptr->flags.sealed;
 }
 
@@ -18975,16 +18988,7 @@ static ant_value_t proxy_delete_index(ant_t *js, ant_value_t obj, ant_offset_t i
 }
 
 static inline bool array_method_dense_element(ant_value_t arr, ant_offset_t idx, ant_value_t *out) {
-  ant_object_t *ptr = array_obj_ptr(arr);
-  
-  if (!ptr || !ptr->flags.fast_array || ptr->flags.is_exotic || !ptr->u.array.data) return false;
-  if (idx >= (ant_offset_t)ptr->u.array.len || idx >= (ant_offset_t)ptr->u.array.cap) return false;
-  
-  ant_value_t value = ptr->u.array.data[idx];
-  if (is_empty_slot(value)) return false;
-  *out = value;
-  
-  return true;
+  return array_dense_read(array_obj_ptr(arr), idx, out);
 }
 
 static inline ant_object_t *array_method_elements(ant_value_t arr) {
@@ -18994,13 +18998,7 @@ static inline ant_object_t *array_method_elements(ant_value_t arr) {
 static inline ant_value_t array_method_element(
   ant_t *js, ant_value_t arr, ant_object_t *elems, ant_offset_t idx, ant_value_t *out
 ) {
-  if (
-    elems && elems->flags.fast_array && !elems->flags.is_exotic && elems->u.array.data &&
-    idx < (ant_offset_t)elems->u.array.len && idx < (ant_offset_t)elems->u.array.cap
-  ) {
-    ant_value_t value = elems->u.array.data[idx];
-    if (!is_empty_slot(value)) { *out = value; return js_true; }
-  }
+  if (array_dense_read(elems, idx, out)) return js_true;
   
   ant_value_t has = array_method_has_index(js, arr, idx);
   if (has != js_true) return has;
