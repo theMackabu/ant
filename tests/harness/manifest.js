@@ -171,6 +171,7 @@ export function targets() {
     'test_stream_readable_to_web.cjs',
     'test_string_length_accumulation.cjs',
     'test_string_number_concat.cjs',
+    'test_symbol_set_semantics.cjs',
     'test_syntax.cjs',
     'test_template_self_append.cjs',
     'test_temporal.js',
