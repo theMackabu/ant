@@ -4539,6 +4539,9 @@ typedef struct {
   char *rel;
   size_t first;
   size_t count;
+  size_t parent;
+  uint64_t dev, ino;
+  bool has_id;
 } fs_walk_dir_t;
 
 typedef struct {
@@ -4560,7 +4563,7 @@ static void fs_walk_free(fs_walk_t *w) {
   memset(w, 0, sizeof(*w));
 }
 
-static bool fs_walk_push_dir(fs_walk_t *w, char *rel) {
+static bool fs_walk_push_dir(fs_walk_t *w, char *rel, size_t parent, const uv_stat_t *id) {
   if (w->dir_len == w->dir_cap) {
     size_t cap = w->dir_cap ? w->dir_cap * 2 : 16;
     fs_walk_dir_t *grown = realloc(w->dirs, cap * sizeof(*grown));
@@ -4568,7 +4571,10 @@ static bool fs_walk_push_dir(fs_walk_t *w, char *rel) {
     w->dirs = grown;
     w->dir_cap = cap;
   }
-  w->dirs[w->dir_len++] = (fs_walk_dir_t){ .rel = rel };
+  w->dirs[w->dir_len++] = (fs_walk_dir_t){
+    .rel = rel, .parent = parent,
+    .dev = id ? id->st_dev : 0, .ino = id ? id->st_ino : 0, .has_id = id != NULL,
+  };
   return true;
 }
 
@@ -4597,7 +4603,8 @@ static char *fs_walk_rel(const char *prefix, const char *name) {
   return rel;
 }
 
-static bool fs_walk_is_dir(const char *dir, const uv_dirent_t *dirent) {
+static bool fs_walk_is_dir(const char *dir, const uv_dirent_t *dirent, uv_stat_t *id, bool *has_id) {
+  *has_id = false;
   if (dirent->type == UV_DIRENT_DIR) return true;
   if (dirent->type != UV_DIRENT_LINK && dirent->type != UV_DIRENT_UNKNOWN) return false;
 
@@ -4606,15 +4613,46 @@ static bool fs_walk_is_dir(const char *dir, const uv_dirent_t *dirent) {
 
   uv_fs_t req;
   bool is_dir = uv_fs_stat(NULL, &req, child, NULL) == 0 && (req.statbuf.st_mode & S_IFMT) == S_IFDIR;
+  if (is_dir) {
+    *id = req.statbuf;
+    *has_id = true;
+  }
   uv_fs_req_cleanup(&req);
   free(child);
 
   return is_dir;
 }
 
+static bool fs_walk_dir_id(fs_walk_t *w, size_t index) {
+  fs_walk_dir_t *d = &w->dirs[index];
+  if (d->has_id) return true;
+
+  char *path = d->rel ? fs_join_path(w->root, d->rel) : strdup(w->root);
+  if (!path) return false;
+
+  uv_fs_t req;
+  if (uv_fs_stat(NULL, &req, path, NULL) == 0) {
+    d->dev = req.statbuf.st_dev;
+    d->ino = req.statbuf.st_ino;
+    d->has_id = true;
+  }
+  uv_fs_req_cleanup(&req);
+  free(path);
+
+  return d->has_id;
+}
+
+static bool fs_walk_is_ancestor(fs_walk_t *w, size_t index, const uv_stat_t *id) {
+  for (size_t i = index; i != SIZE_MAX; i = w->dirs[i].parent) {
+    if (!fs_walk_dir_id(w, i)) continue;
+    if (w->dirs[i].dev == id->st_dev && w->dirs[i].ino == id->st_ino) return true;
+  }
+  return false;
+}
+
 static void fs_walk_run(fs_walk_t *w, char *root) {
   w->root = root;
-  if (!fs_walk_push_dir(w, NULL)) {
+  if (!fs_walk_push_dir(w, NULL, SIZE_MAX, NULL)) {
     w->error = UV_ENOMEM;
     return;
   }
@@ -4646,9 +4684,13 @@ static void fs_walk_run(fs_walk_t *w, char *root) {
       }
       w->dirs[i].count++;
 
-      if (!fs_walk_is_dir(dir, &dirent)) continue;
+      uv_stat_t id;
+      bool has_id;
+      if (!fs_walk_is_dir(dir, &dirent, &id, &has_id)) continue;
+      if (has_id && fs_walk_is_ancestor(w, i, &id)) continue;
+
       char *rel = fs_walk_rel(w->dirs[i].rel, dirent.name);
-      if (!rel || !fs_walk_push_dir(w, rel)) {
+      if (!rel || !fs_walk_push_dir(w, rel, i, has_id ? &id : NULL)) {
         free(rel);
         w->error = UV_ENOMEM;
       }

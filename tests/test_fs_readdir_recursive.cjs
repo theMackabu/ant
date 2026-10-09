@@ -81,6 +81,24 @@ async function main() {
   const missing = await fsp.readdir(path.join(root, 'nope'), { recursive: true }).catch((e) => e);
   assert.strictEqual(missing.code, 'ENOENT');
   assert.throws(() => fs.readdirSync(path.join(root, 'nope'), { recursive: true }), { code: 'ENOENT', syscall: 'scandir' });
+
+  // symlinks back to an ancestor are listed but not descended; other directory links still are
+  const cycle = path.join(root, 'cycle');
+  fs.mkdirSync(path.join(cycle, 'a', 'b'), { recursive: true });
+  fs.mkdirSync(path.join(cycle, 'c'));
+  fs.writeFileSync(path.join(cycle, 'c', 'x'), '');
+  fs.symlinkSync(cycle, path.join(cycle, 'self'));
+  fs.symlinkSync(path.join(cycle, 'a'), path.join(cycle, 'a', 'b', 'up'));
+  fs.symlinkSync(path.join(cycle, 'c'), path.join(cycle, 'a', 'side'));
+  const cycleNames = ['a', 'a/b', 'a/b/up', 'a/side', 'a/side/x', 'c', 'c/x', 'self'].map(
+    (name) => name.split('/').join(path.sep)
+  );
+  assert.deepStrictEqual([...fs.readdirSync(cycle, { recursive: true })].sort(), cycleNames);
+  assert.deepStrictEqual([...(await fsp.readdir(cycle, { recursive: true }))].sort(), cycleNames);
+  assert.deepStrictEqual(
+    fs.readdirSync(cycle, { recursive: true, withFileTypes: true }).map((e) => path.relative(cycle, path.join(e.parentPath, e.name))).sort(),
+    cycleNames
+  );
 }
 
 main()
