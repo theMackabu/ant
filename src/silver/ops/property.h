@@ -860,7 +860,7 @@ static inline bool sv_try_index_get(ant_t *js, ant_value_t obj, ant_value_t key,
   
   uint32_t code_unit = utf16_code_unit_at(str_data, byte_len, idx);
   if (code_unit == 0xFFFFFFFF) {
-    if (str != obj || !js_string_protos_lack_index_keys(js)) return false;
+    if (!js_string_past_end_is_undefined(js, obj)) return false;
     *out = js_mkundef();
     return true;
   }
