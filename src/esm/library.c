@@ -54,7 +54,7 @@ ant_library_entry_t *ant_library_find(const char *specifier, size_t spec_len) {
   ant_library_entry_t *lib = NULL;
   char key[256];
 
-  if (spec_len >= sizeof(key)) return NULL;
+  if (spec_len >= sizeof(key) || memchr(specifier, 0, spec_len)) return NULL;
   memcpy(key, specifier, spec_len);
   key[spec_len] = '\0';
 

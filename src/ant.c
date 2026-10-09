@@ -19358,6 +19358,65 @@ ant_value_t js_proxy_set_sym(ant_t *js, ant_value_t proxy, ant_value_t sym, ant_
   return is_err(stored) ? stored : js_true;
 }
 
+ant_value_t js_set_reporting(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value) {
+  ant_value_t receiver = vtype(target) == kTypeFunction ? js_func_obj(target) : js_as_obj(target);
+  bool is_sym = vtype(key) == kTypeSymbol;
+  ant_offset_t klen = 0;
+  const char *kstr = is_sym ? NULL : (const char *)(uintptr_t)vstr(js, key, &klen);
+  
+  ant_value_t cur = receiver;
+  proto_overflow_guard_t guard;
+  proto_overflow_guard_init(&guard);
+  while (is_object_type(cur)) {
+    ant_value_t cur_obj = js_as_obj(cur);
+    if (is_proxy(cur_obj)) {
+      if (!is_sym) return proxy_set_with_receiver(js, cur_obj, kstr, (size_t)klen, value, receiver);
+      ant_value_t next = js_mkundef();
+      ant_value_t result = proxy_set_sym(js, cur_obj, key, value, receiver, &next);
+      if (vtype(result) != kTypeUndefined) return result;
+      if (same_object_identity(cur_obj, receiver)) return js_proxy_set_sym(js, cur_obj, key, value);
+      cur = next;
+      continue;
+    }
+    prop_meta_t meta;
+    bool found = is_sym
+      ? lookup_symbol_prop_meta(js, cur_obj, (ant_offset_t)vdata(key), &meta)
+      : lookup_string_prop_meta(js, cur_obj, kstr, (size_t)klen, &meta);
+    if (found) {
+      if (meta.has_getter || meta.has_setter) {
+        if (!meta.has_setter) return js_false;
+        goto store;
+      }
+      if (!meta.writable) return js_false;
+      break;
+    }
+    ant_value_t proto = get_proto(js, cur_obj);
+    if (!is_object_type(proto)) break;
+    cur = proto;
+    if (proto_overflow_guard_hit_cycle(js, &guard, cur)) break;
+  }
+  
+  {
+    ant_object_t *ptr = js_obj_ptr(receiver);
+    ant_value_t own = object_has_own(js, receiver, key);
+    if (is_err(own)) return own;
+    if (own == js_true ? ptr && ptr->flags.frozen
+                       : ptr && (ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible))
+      return js_false;
+    if (!is_sym && array_obj_ptr(receiver)) {
+      unsigned long idx;
+      bool grows = is_length_key(kstr, (size_t)klen) ||
+        (parse_array_index(kstr, (size_t)klen, (ant_offset_t)UINT32_MAX, &idx) &&
+         (ant_offset_t)idx >= get_array_length(js, receiver));
+      if (grows && array_length_readonly(js, receiver)) return js_false;
+    }
+  }
+  
+store:;
+  ant_value_t stored = js_setprop(js, target, key, value);
+  return is_err(stored) ? stored : js_true;
+}
+
 static ant_value_t proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len) {
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data) return js_false;

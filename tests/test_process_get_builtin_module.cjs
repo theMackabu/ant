@@ -50,4 +50,10 @@ for (const id of ['fs', 'node:fs', 'path', 'node:path', 'http', 'util/types']) {
   assert.strictEqual(require.resolve.paths(id), null, id);
 }
 
+// a NUL inside the name is not a prefix match
+for (const id of ['fs\0x', 'node:fs\0', 'path\0', 'util/types\0']) {
+  assert.strictEqual(isBuiltin(id), false, JSON.stringify(id));
+  assert.strictEqual(process.getBuiltinModule(id), undefined, JSON.stringify(id));
+}
+
 console.log('process:get-builtin-module:ok');
