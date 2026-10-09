@@ -45,4 +45,9 @@ for (const [id, received] of invalid) {
 }
 assert.throws(() => process.getBuiltinModule(Symbol('fs')), { name: 'TypeError', code: 'ERR_INVALID_ARG_TYPE' });
 
+for (const id of ['fs', 'node:fs', 'path', 'node:path', 'http', 'util/types']) {
+  assert.strictEqual(require.resolve(id), id, id);
+  assert.strictEqual(require.resolve.paths(id), null, id);
+}
+
 console.log('process:get-builtin-module:ok');

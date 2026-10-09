@@ -986,9 +986,8 @@ static int trace_resolve_spec(ant_t *js, trace_ctx_t *ctx, uint32_t parent_idx, 
   const char *spec = sp->spec;
   size_t spec_len = strlen(spec);
 
-  if (esm_lookup_builtin_alias(spec, spec_len)) return 0;
+  if (esm_find_builtin(spec, spec_len).kind != ANT_BUILTIN_NAME_NONE) return 0;
   if (esm_has_builtin_scheme(spec)) return 0;
-  if (js_esm_is_registered_library(spec, spec_len)) return 0;
   if (esm_is_data_url(spec)) return 0;
 
   char *file_url_path = esm_file_url_to_path(js, spec);
