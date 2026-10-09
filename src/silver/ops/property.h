@@ -805,8 +805,11 @@ static inline ant_value_t sv_prop_get_at(
 static inline bool sv_number_key_index(ant_value_t key, uint32_t *idx) {
   if (vtype(key) != kTypeNumber) return false;
   double d = tod(key);
-  *idx = (uint32_t)d;  
-  return d >= 0 && d < (double)UINT32_MAX && d == *idx;
+  
+  if (!(d >= 0 && d < (double)UINT32_MAX)) return false;
+  *idx = (uint32_t)d;
+  
+  return d == (double)*idx;
 }
 
 static inline bool sv_parse_string_index_key(ant_t *js, ant_value_t key, size_t *out_idx) {

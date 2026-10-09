@@ -13,7 +13,7 @@ const assert = require('node:assert');
   t('basic', () => { const o = {}; Object.defineProperty(o, 'x', { value: 1 }); return d(o, 'x'); });
   t('all', () => { const o = {}; Object.defineProperty(o, 'x', { value: 1, writable: 1, enumerable: '', configurable: 0 }); return d(o, 'x'); });
   t('inherited field', () => { const o = {}; Object.defineProperty(o, 'x', Object.create({ value: 7, enumerable: true })); return d(o, 'x'); });
-  t('getter field order', () => { const log = []; const desc = {}; for (const k of ['set', 'get', 'writable', 'value', 'configurable', 'enumerable']) Object.defineProperty(desc, k, { get() { log.push(k); return undefined; }, enumerable: true }); Object.defineProperty({}, 'x', desc); return log; });
+  t('getter field order', () => { const log = []; const desc = {}; for (const k of ['set', 'get', 'writable', 'value', 'configurable', 'enumerable']) Object.defineProperty(desc, k, { get() { log.push(k); return undefined; }, enumerable: true }); try { Object.defineProperty({}, 'x', desc); } catch (e) { return [e.constructor.name, log]; } return log; });
   t('Object.prototype field', () => { Object.prototype.enumerable = true; const o = {}; Object.defineProperty(o, 'x', { value: 1 }); delete Object.prototype.enumerable; return d(o, 'x'); });
   t('Object.prototype get', () => { Object.prototype.get = function () { return 5; }; const o = {}; try { Object.defineProperty(o, 'x', {}); return d(o, 'x').get !== undefined; } finally { delete Object.prototype.get; } });
   t('bad getter', () => Object.defineProperty({}, 'x', { get: 1 }));
@@ -30,7 +30,7 @@ const assert = require('node:assert');
     "basic: {\"value\":1,\"writable\":false,\"enumerable\":false,\"configurable\":false}",
     "all: {\"value\":1,\"writable\":true,\"enumerable\":false,\"configurable\":false}",
     "inherited field: {\"value\":7,\"writable\":false,\"enumerable\":true,\"configurable\":false}",
-    "getter field order: TypeError",
+    "getter field order: [\"TypeError\",[\"enumerable\",\"configurable\",\"value\",\"writable\",\"get\",\"set\"]]",
     "Object.prototype field: {\"value\":1,\"writable\":false,\"enumerable\":true,\"configurable\":false}",
     "Object.prototype get: true",
     "bad getter: TypeError",

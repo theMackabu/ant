@@ -4830,8 +4830,10 @@ ant_value_t js_get_index_fast(ant_t *js, ant_value_t obj, ant_value_t key) {
   if (vtype(key) != kTypeNumber) return T_EMPTY;
   
   double d = tod(key);
+  if (!(d >= 0 && d < (double)UINT32_MAX)) return T_EMPTY;
+  
   uint32_t idx = (uint32_t)d;
-  if (!(d >= 0 && d < (double)UINT32_MAX && d == idx)) return T_EMPTY;
+  if (d != (double)idx) return T_EMPTY;
 
   if (vtype(obj) == kTypeString) {
     ant_offset_t byte_len = 0;
