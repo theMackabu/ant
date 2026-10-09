@@ -254,6 +254,7 @@ typedef struct jit_compile {
   MIR_reg_t r_lbuf;
   MIR_reg_t r_jit_open_upvalues;
   MIR_label_t self_tail_entry;
+  MIR_label_t self_tail_params;
   MIR_reg_t r_result;
   uint8_t *ip;
   const uint8_t *previous_ip;
@@ -347,6 +348,7 @@ static inline bool jit_speculate_unseen_numeric(const jit_compile_t *c, uint8_t 
 
 void jit_emit_exit_ret(jit_compile_t *c, MIR_op_t ret_op);
 jit_stale_exit_t *jit_stale_exit_for(jit_compile_t *c, jit_stale_exit_t *exit);
+bool jit_site_runs_hot(jit_compile_t *c);
 void jit_note_stale_exit(jit_compile_t *c, const jit_stale_exit_t *exit, int pre_op_sp);
 void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg);
 void jit_emit_element_barrier(

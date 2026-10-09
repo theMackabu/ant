@@ -327,7 +327,7 @@ void mir_emit_exit_ret(
 void mir_emit_self_tail(
     MIR_context_t ctx, MIR_item_t fn,
     int call_argc, int param_count,
-    MIR_reg_t r_tco_args, MIR_reg_t r_arg_arr,
+    MIR_reg_t r_tco_args,
     MIR_reg_t r_args, MIR_reg_t r_argc,
     MIR_reg_t *local_regs, int n_locals,
     bool has_captured_slots, MIR_reg_t r_slotbuf, bool *captured_params,

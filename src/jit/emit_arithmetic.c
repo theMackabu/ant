@@ -47,6 +47,11 @@ void jit_emit_arithmetic(jit_compile_t *c) {
                          (fb && !(fb & ~SV_TFB_NUM));
       bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
       bool fb_str_only = !force_num_only && fb && !(fb & ~SV_TFB_STR);
+      // the inline concat path is ~200 MIR instructions; elsewhere the helper is enough
+      if (fb_str_only && !jit_site_runs_hot(c)) {
+        fb_str_only = false;
+        fb_never_num = true;
+      }
 
       bool l_is_num = vstack_prepare_num(
           &c->vs, c->vs.sp - 2, c->ctx, c->jit_func, c->r_d_slot);

@@ -142,6 +142,9 @@ static void jit_unroll_numeric_loops(jit_compile_t *c) {
   }
 }
 
+// Hot-tier functions past this many emitted MIR instructions compile at level 1
+static constexpr int JIT_HOT_INSN_LIMIT = 2000;
+
 static bool jit_insn_ends_flow(MIR_insn_t insn) {
   switch (insn->code) {
     case MIR_JMP: case MIR_JMPI: case MIR_SWITCH: case MIR_RET: case MIR_JRET:
@@ -170,6 +173,9 @@ static void jit_sink_cold_blocks(jit_compile_t *c, MIR_insn_t body_tail) {
     while (end && end != target && end != last && n++ < SCAN_LIMIT)
       end = DLIST_NEXT(MIR_insn_t, end);
     MIR_insn_t block_last = end == target ? DLIST_PREV(MIR_insn_t, target) : NULL;
+    // labels just before the join stay with it, since the slow path may branch to them
+    while (block_last && block_last != jump && block_last->code == MIR_LABEL)
+      block_last = DLIST_PREV(MIR_insn_t, block_last);
     // `bt body, cond; jmp exit; body:` is an inverted branch, not a slow path
     MIR_insn_t branch = DLIST_PREV(MIR_insn_t, jump);
     bool inverted = branch && MIR_branch_code_p(branch->code) && branch->ops[0].u.label == first;
@@ -614,6 +620,15 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
     c->func->jit_compiling = false;
     
     return NULL;
+  }
+
+  // MIR's level-3 passes grow faster than linearly with size, so a big hot
+  // function compiles at level 1; jit_release_gen_scratch restores the level
+  if (c->ctx == c->jc->ctx_hot) {
+    int insns = 0;
+    for (MIR_insn_t insn = DLIST_HEAD(MIR_insn_t, c->jit_func->u.func->insns);
+         insn && insns <= JIT_HOT_INSN_LIMIT; insn = DLIST_NEXT(MIR_insn_t, insn)) insns++;
+    if (insns > JIT_HOT_INSN_LIMIT) MIR_gen_set_optimize_level(c->ctx, 1);
   }
 
   MIR_load_module(c->ctx, c->mod);

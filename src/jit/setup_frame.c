@@ -862,6 +862,11 @@ bool jit_setup_frame(jit_compile_t *c) {
                                                   (MIR_disp_t)(i * (int)sizeof(ant_value_t)), c->r_args, 0, 1)));
       MIR_append_insn(c->ctx, c->jit_func, done);
     }
+    c->self_tail_params = NULL;
+    if (!c->writes_params && !c->has_captured_slots) {
+      c->self_tail_params = MIR_new_label(c->ctx);
+      MIR_append_insn(c->ctx, c->jit_func, c->self_tail_params);
+    }
     if (!c->writes_params && c->needs_bailout) {
       for (int i = 0; i < c->param_count && i < JIT_PARAM_HOIST_CAP; i++) {
         if (!c->param_cache[i] || !(numeric_mask & (1u << i))) continue;

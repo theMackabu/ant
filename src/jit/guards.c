@@ -404,20 +404,13 @@ void mir_emit_exit_ret(
 void mir_emit_self_tail(
     MIR_context_t ctx, MIR_item_t fn,
     int call_argc, int param_count,
-    MIR_reg_t r_tco_args, MIR_reg_t r_arg_arr,
+    MIR_reg_t r_tco_args,
     MIR_reg_t r_args, MIR_reg_t r_argc,
     MIR_reg_t *local_regs, int n_locals,
     bool has_captured_slots, MIR_reg_t r_slotbuf, bool *captured_params,
     bool fill_all_params,
     bool has_captures, bool *captured_locals,
     MIR_reg_t r_lbuf, MIR_label_t entry) {
-  for (int i = 0; i < call_argc; i++)
-    MIR_append_insn(ctx, fn,
-                    MIR_new_insn(ctx, MIR_MOV,
-                                 MIR_new_mem_op(ctx, MIR_T_I64,
-                                                (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_tco_args, 0, 1),
-                                 MIR_new_mem_op(ctx, MIR_T_I64,
-                                                (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_arg_arr, 0, 1)));
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_MOV,
                                MIR_new_reg_op(ctx, r_args),
