@@ -49,6 +49,7 @@ void js_error_define_stack(ant_t *js, ant_value_t obj, ant_value_t record, ant_v
 
 ant_value_t js_error_header_text(ant_t *js, ant_value_t obj);
 ant_value_t js_error_stack_value(ant_t *js, ant_value_t obj);
+ant_value_t js_error_header_parts(ant_t *js, ant_value_t obj, ant_value_t *name, ant_value_t *message);
 
 js_error_site_t js_error_site_from_bc(sv_func_t *func, int bc_offset);
 js_error_site_t js_error_site_from_frame(sv_func_t *func, int bc_offset);

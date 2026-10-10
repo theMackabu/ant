@@ -52,6 +52,8 @@ core_sources = files(
   '../../src/debug.c',
   '../../src/descriptors.c',
   '../../src/errors.c',
+  '../../src/error_render.c',
+  '../../src/exceptions.c',
   '../../src/escape.c',
   '../../src/handles.c',
   '../../src/numbers.cc',

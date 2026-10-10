@@ -721,29 +721,28 @@ bool io_print_error_header(ant_t *js, ant_output_stream_t *out, ant_value_t err)
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, err);
   
-  ant_value_t name = js_getprop_fallback_len(js, err, "name", 4);
-  GC_ROOT_PIN(js, name);
+  ant_value_t name, message;
+  if (is_err(js_error_header_parts(js, err, &name, &message))) {
+    js_take_thrown(js, js_mkundef());
+    name = js_mkstr(js, "Error", 5);
+    message = js_mkstr(js, "", 0);
+  }
   
-  ant_value_t message = js_getprop_fallback_len(js, err, "message", 7);
+  GC_ROOT_PIN(js, name);
   GC_ROOT_PIN(js, message);
 
-  size_t name_len = 5, message_len = 0;
-  const char *name_text = vtype(name) == kTypeString ? js_getstr(js, name, &name_len) : "Error";
-  const char *message_text = vtype(message) == kTypeString ? js_getstr(js, message, &message_len) : NULL;
-  
-  if (!name_text) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return false;
-  }
+  size_t name_len = 0, message_len = 0;
+  const char *name_text = js_getstr(js, name, &name_len);
+  const char *message_text = js_getstr(js, message, &message_len);
   
   ant_offset_t class_len = 0;
   const char *class_name = get_class_name(js, err, &class_len, "Object");
 
-  bool ok;
-  if (class_name && class_len > 0 && ((size_t)class_len != name_len || memcmp(class_name, name_text, name_len) != 0)) {
+  bool ok = true;
+  if (name_len && class_name && class_len > 0 && ((size_t)class_len != name_len || memcmp(class_name, name_text, name_len) != 0)) {
     ok = ant_output_stream_appendf(out, "%s%.*s [%.*s]%s", C_RED, (int)class_len, class_name, (int)name_len, name_text, C_RESET);
-  } else ok = ant_output_stream_appendf(out, "%s%.*s%s", C_RED, (int)name_len, name_text, C_RESET);
-  if (ok && message_text) ok = ant_output_stream_appendf(out, ": %s%.*s%s", C_BOLD, (int)message_len, message_text, C_RESET);
+  } else if (name_len) ok = ant_output_stream_appendf(out, "%s%.*s%s", C_RED, (int)name_len, name_text, C_RESET);
+  if (ok && message_len) ok = ant_output_stream_appendf(out, "%s%s%.*s%s", name_len ? ": " : "", C_BOLD, (int)message_len, message_text, C_RESET);
 
   GC_ROOT_RESTORE(js, root_mark);
   return ok;

@@ -29,7 +29,8 @@ longer go stale or be clobbered by a nested call.
 
 ## Step 1 — capture record and lazy `stack` (done 2026-10-09)
 
-- `js_capture_stack` stores a record array in `SLOT_ERROR_STACK`. The record
+- `js_capture_stack` stores a capture record in `SLOT_ERROR_STACK` (an array at
+  first; now a native struct, see Layout below). The record
   holds the site (`kTypeFunctionInfo` of the site function, source position,
   span, line, column), and three fields per VM frame: the function as
   `kTypeFunctionInfo`, the callee, and the bytecode offset. It also holds a
@@ -223,8 +224,8 @@ one record per safepoint holding the tagged slots and the bytecode offset.
 
 - Capture records hold at most `Error.stackTraceLimit` frames (read from the
   original Error constructor without getters; a non-number captures no
-  stack, as in V8), three values per frame, and no site unless one is given:
-  the site is derived from the newest frame when the stack is formatted.
+  stack, as in V8), and no site unless one is given: the site is derived
+  from the newest frame when the stack is formatted.
   Source positions are found by binary search. The bottom module-wrapper
   frame is dropped at capture.
 - Primitive throws keep a capture record on the exception record;
@@ -239,6 +240,29 @@ one record per safepoint holding the tagged slots and the bytecode offset.
 - The inspector reports an error's own `stack` value in
   `Runtime.getProperties`, and `js_throw` snapshots stack text that was
   already formatted, as master did with the data property.
+
+## Layout (2026-10-10)
+
+- `src/errors.c`: error objects (creation, `js_throw`, the `stack` accessor)
+  and `js_error_header_parts`, the one place the `name: message` rules live
+  (also used by `util.inspect`, the uncaught header in `io.c` and thrown
+  values' text).
+- `src/exceptions.c`: the exception record API (`Ant_Exception_*`).
+- `src/error_render.c` (`include/error_render.h`): text building — the
+  growable buffer, source context with caret, and one frame formatter with
+  three styles (colored, plain console trace, `err.stack`).
+- `src/silver/stack_trace.c` (`include/silver/stack_trace.h`): the stack
+  iterator, error sites, capture records and their three renderings, and
+  the CallSite API (methods from one table, prototype cached in
+  `js->builtins.callsite_proto`).
+- A capture record is an internal object whose native pointer
+  (`ERROR_RECORD_NATIVE_TAG`) is an `error_record_t`: a site kind (newest
+  frame, a source position, or text rendered at capture), line and column,
+  the fallback file, the limit, and the frames as (function, callee, return
+  address, bytecode offset). `gc_mark_error_record` marks its values from the
+  native-object path of `gc_scan_obj`; a finalizer frees it. Each render
+  expands the frames once (`error_render_begin`) and derives the site and
+  file from that.
 
 ## Follow-ups and known gaps
 
