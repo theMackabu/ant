@@ -110,7 +110,9 @@ and the JIT guards in `src/jit/values.c` and `src/jit/emit_properties.c`.
   zero is a fatal accounting bug. Cached stores are left out; only the
   major-GC array trigger adds them (`gc_array_storage_cached_bytes`, summed
   from the per-class counts), so a growing cache forces a major (and a trim)
-  without skewing reclaim or heap-size estimates.
+  without skewing reclaim or heap-size estimates. The trigger's baseline
+  (`gc_array_limits_init`) includes the stores the trim kept, so reusing
+  them is not counted as growth.
 - `gc_array_storage_trim` runs after each major GC. It keeps as many buffers
   per class as were taken since the previous major GC and frees the rest, so
   idle retention stays bounded.
@@ -137,6 +139,12 @@ and the JIT guards in `src/jit/values.c` and `src/jit/emit_properties.c`.
   majors look unproductive (fewer majors, +21 MB peak RSS on a ring of 300k
   short-lived small arrays). A per-class cache cap was also rejected: it cost
   47% on small-array churn.
+- The major array trigger's baseline counts the stores the trim kept. Without
+  that, a kept cache above the growth allowance re-fired the trigger at every
+  check: 80k promoted 32-slot arrays dying under steady short-lived 32-slot
+  churn left 27 MB cached against a 16 MB limit, and the run did 33 majors
+  instead of 1 (+2.6% cycles), each sweeping ~30k live objects with no array
+  growth.
 - No 1-slot class: malloc gives 1 and 2 slots the same block on macOS and
   glibc, so it saved no memory and only split the free list.
 - Copies round with `fit` rather than to a power of two: append-after-copy

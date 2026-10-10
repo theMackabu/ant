@@ -476,8 +476,9 @@ void gc_refresh_alloc_limit(ant_t *js) {
 }
 
 void gc_array_limits_init(ant_t *js) {
-  js->gc.array_major_limit = js->alloc_bytes.arrays + 
-    gc_array_growth(gc_heap_bytes(js, js->gc.pool_last_live));
+  js->gc.array_major_limit = js->alloc_bytes.arrays 
+    + gc_array_storage_cached_bytes(js) 
+    + gc_array_growth(gc_heap_bytes(js, js->gc.pool_last_live));
 }
 
 void gc_array_grew(ant_t *js) {
