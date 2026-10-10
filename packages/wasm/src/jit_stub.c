@@ -1,6 +1,7 @@
 #include "silver/call.h"
 #include "silver/feedback.h"
 #include "silver/jit.h"
+#include "silver/stack_trace.h"
 
 void sv_jit_init(ant_t *js) {
   (void)js;
@@ -43,3 +44,18 @@ ant_value_t sv_jit_try_osr(
   return SV_JIT_RETRY_INTERP;
 }
 
+int sv_jit_collect_activations(sv_vm_t *vm, sv_jit_activation_t **acts, int cap, int limit) {
+  (void)vm;
+  (void)acts;
+  (void)cap;
+  (void)limit;
+  return 0;
+}
+
+int sv_jit_frames_at(ant_t *js, uintptr_t pc, sv_jit_frame_t *out, int cap) {
+  (void)js;
+  (void)pc;
+  (void)out;
+  (void)cap;
+  return 0;
+}

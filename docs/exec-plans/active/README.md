@@ -8,6 +8,7 @@ Store in-progress execution plans here.
 
 ## Active
 
+- [Per-Error Capture and Lazy Error Stacks](per-error-capture-lazy-stack.md)
 - [Shared I/O Formatting in Wasm](wasm-shared-io.md)
 - [TypeScript Captured-variable Cleanup](tsc-upvalue-cleanup.md)
 - [Symbol Description Accessor IC](symbol-description-accessor-ic.md)

@@ -10,18 +10,6 @@ typedef struct sv_func sv_func_t;
 #define ERR_FMT "\x1b[31m%.*s\x1b[0m: \x1b[1m%.*s\x1b[0m"
 #define ERR_NAME_ONLY "\x1b[31m%.*s\x1b[0m"
 
-enum {
-  JS_ERROR_STACK_TEXT,
-  JS_ERROR_STACK_HEADER_START,
-  JS_ERROR_STACK_HEADER_END,
-  JS_ERROR_STACK_FIELD_COUNT
-};
-
-typedef enum {
-  JS_STACK_TEXT_FROM_ERROR_OBJECT = 0,
-  JS_STACK_TEXT_FROM_THROW_VALUE = 1,
-} js_stack_text_kind_t;
-
 typedef enum {
   JS_ERR_GENERIC = 0,
   JS_ERR_TYPE,
@@ -36,7 +24,7 @@ typedef enum {
 
 typedef struct {
   const char *src;
-  sv_code_unit_t *unit;
+  sv_func_t *func;
   const char *filename;
   ant_offset_t src_len;
   ant_offset_t off;
@@ -47,34 +35,39 @@ typedef struct {
 } js_error_site_t;
 
 js_err_type_t get_error_type(ant_t *js);
-js_error_site_t js_error_site_save(ant_t *js);
 
 bool print_uncaught_throw(ant_t *js);
 bool print_unhandled_promise_rejection(ant_t *js, ant_value_t value);
 void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback_stack, const char *prefix);
 
-void js_clear_error_site(ant_t *js);
-void js_print_stack_trace_vm(ant_t *js, FILE *stream);
-void js_set_error_site_from_vm_top(ant_t *js);
-void js_capture_stack(ant_t *js, ant_value_t err_obj);
+char *js_error_render_pretty(ant_t *js, ant_value_t err, ant_value_t stack, size_t *out_len, size_t *header_at);
 bool js_mark_errorlike_no_stack(ant_t *js, ant_value_t value);
-void js_error_site_restore(ant_t *js, const js_error_site_t *saved);
+
+void js_print_stack_trace_vm(ant_t *js, FILE *stream);
+void js_capture_stack(ant_t *js, ant_value_t err_obj);
+void js_error_define_stack(ant_t *js, ant_value_t obj, ant_value_t record, ant_value_t text);
+
+ant_value_t js_error_header_text(ant_t *js, ant_value_t obj);
+ant_value_t js_error_stack_value(ant_t *js, ant_value_t obj);
+
+js_error_site_t js_error_site_from_bc(sv_func_t *func, int bc_offset);
+js_error_site_t js_error_site_from_frame(sv_func_t *func, int bc_offset);
+js_error_site_t js_error_site_from_vm_top(ant_t *js);
 
 void js_get_call_location(
   ant_t *js, const char **out_filename,
   int *out_line, int *out_col
 );
 
-void js_set_error_site_from_bc(
-  ant_t *js, sv_func_t *func, 
-  int bc_offset, const char *filename
+js_error_site_t js_error_site_from_source(
+  const char *src, ant_offset_t src_len, const char *filename,
+  ant_offset_t off, ant_offset_t span_len
 );
 
-void js_set_error_site_lc(
-  ant_t *js, const char *src,
-  ant_offset_t src_len, const char *filename,
-  ant_offset_t off, ant_offset_t span_len,
-  uint32_t line, uint32_t col
+__attribute__((format(printf, 5, 6)))
+ant_value_t js_create_error_at(
+  ant_t *js, const js_error_site_t *site, js_err_type_t err_type,
+  ant_value_t props, const char *fmt, ...
 );
 
 __attribute__((format(printf, 4, 5)))
@@ -110,5 +103,7 @@ ant_value_t Ant_Error_CallCallback(
 #define js_mkerr(js, ...) js_create_error(js, JS_ERR_TYPE, js_mkundef(), __VA_ARGS__)
 #define js_mkerr_typed(js, err_type, ...) js_create_error(js, err_type, js_mkundef(), __VA_ARGS__)
 #define js_mkerr_props(js, err_type, props, ...) js_create_error(js, err_type, props, __VA_ARGS__)
+#define js_mkerr_at(site, js, ...) js_create_error_at(js, site, JS_ERR_TYPE, js_mkundef(), __VA_ARGS__)
+#define js_mkerr_typed_at(site, js, err_type, ...) js_create_error_at(js, site, err_type, js_mkundef(), __VA_ARGS__)
 
 #endif

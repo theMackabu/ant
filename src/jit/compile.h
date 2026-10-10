@@ -255,6 +255,7 @@ typedef struct jit_compile {
   MIR_reg_t r_slotbuf;
   MIR_reg_t r_lbuf;
   MIR_reg_t r_jit_open_upvalues;
+  jit_call_tagging_t call_tagging;
   MIR_label_t self_tail_entry;
   MIR_label_t self_tail_reentry;
   MIR_label_t call_entry;

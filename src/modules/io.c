@@ -537,15 +537,18 @@ void print_repl_value(ant_t *js, ant_value_t val, FILE *stream) {
   }
 
   if (vtype(val) == kTypeObject && vtype(js_get_slot(val, SLOT_ERR_TYPE)) != kTypeUndefined) {
-  const char *stack = get_str_prop(js, val, "stack", 5, NULL);
-
-  if (stack) {
-    ant_output_stream_begin(out);
-    io_print_to_output(stack, out, io_no_color);
-    ant_output_stream_putc(out, '\n');
-    ant_output_stream_flush(out);
-    return;
-  }}
+    ant_value_t stack = js_getprop_fallback_len(js, val, "stack", 5);
+  
+    if (vtype(stack) == kTypeString) {
+      ant_output_stream_begin(out);
+      io_print_error_stack(js, out, val, stack);
+      
+      ant_output_stream_putc(out, '\n');
+      ant_output_stream_flush(out);
+      
+      return;
+    }
+  }
 
   char cbuf[512];
   js_cstr_t cstr = js_to_cstr(js, val, cbuf, sizeof(cbuf));
@@ -746,23 +749,6 @@ bool io_print_error_header(ant_t *js, ant_output_stream_t *out, ant_value_t err)
   return ok;
 }
 
-static void io_error_stack_header_range(
-  ant_t *js, ant_value_t err, ant_value_t stack, size_t len,
-  size_t *header_start, size_t *header_end
-) {
-  ant_value_t cache = js_get_slot(err, SLOT_ERROR_STACK);
-  if (vtype(cache) != kTypeArray || js_arr_get(js, cache, JS_ERROR_STACK_TEXT) != stack) return;
-
-  ant_value_t start = js_arr_get(js, cache, JS_ERROR_STACK_HEADER_START);
-  ant_value_t end = js_arr_get(js, cache, JS_ERROR_STACK_HEADER_END);
-  if (vtype(start) != kTypeNumber || vtype(end) != kTypeNumber) return;
-
-  double s = js_getnum(start), e = js_getnum(end);
-  if (!(s >= 0 && s < e && e <= (double)len)) return;
-  *header_start = (size_t)s;
-  *header_end = (size_t)e;
-}
-
 bool io_print_error_stack(
   ant_t *js, ant_output_stream_t *out,
   ant_value_t err, ant_value_t stack
@@ -771,18 +757,18 @@ bool io_print_error_stack(
   GC_ROOT_PIN(js, err);
   GC_ROOT_PIN(js, stack);
 
-  size_t len = 0;
-  const char *text = js_getstr(js, stack, &len);
+  size_t len = 0, header_at = 0;
+  char *pretty = js_error_render_pretty(js, err, stack, &len, &header_at);
+  bool ok;
 
-  size_t header_start = len, header_end = len;
-  io_error_stack_header_range(js, err, stack, len, &header_start, &header_end);
-
-  bool ok = text && io_print_to_output_n(text, header_start, out, io_no_color);
-  if (ok && header_start < header_end) ok = io_print_error_header(js, out, err);
-
-  if (ok && header_end < len) {
-    text = js_getstr(js, stack, &len);
-    ok = io_print_to_output_n(text + header_end, len - header_end, out, io_no_color);
+  if (pretty) {
+    ok = io_print_to_output_n(pretty, header_at, out, io_no_color);
+    if (ok) ok = io_print_error_header(js, out, err);
+    if (ok) ok = io_print_to_output_n(pretty + header_at, len - header_at, out, io_no_color);
+    free(pretty);
+  } else {
+    const char *text = js_getstr(js, stack, &len);
+    ok = text && io_print_to_output_n(text, len, out, io_no_color);
   }
   
   if (ok) ok = io_print_error_props(js, out, err);
@@ -800,6 +786,12 @@ bool io_print_error_props(ant_t *js, ant_output_stream_t *out, ant_value_t err) 
 
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, err);
+
+  ant_value_t stack = js_get_slot(err, SLOT_ERROR_STACK_TEXT);
+  if (vtype(stack) == kTypeString) {
+    GC_ROOT_PIN(js, stack);
+    builder.error_stack = js_getstr(js, stack, &builder.error_stack_len);
+  }
 
   typeof(js->stringify) saved_stringify = js->stringify;
   js->stringify = (typeof(js->stringify)){0};

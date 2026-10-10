@@ -405,6 +405,28 @@ void js_set_setter_desc(ant_t *js, ant_value_t obj, const char *key, size_t klen
   );
 }
 
+void js_define_accessor_desc(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t getter, ant_value_t setter, int flags) {
+  ant_object_t *ptr = js_obj_ptr(obj);
+  const char *interned = ptr && ptr->shape && !ptr->flags.is_exotic ? intern_string(key, klen) : NULL;
+  
+  uint32_t slot = 0;
+  if (
+    !interned || ant_shape_lookup_interned(ptr->shape, interned) >= 0 ||
+    !ant_shape_add_accessor_tr(js, &ptr->shape, interned, attrs_from_flags(flags, false), getter, setter, &slot)
+  ) {
+    js_set_accessor_desc(js, obj, key, klen, getter, setter, flags);
+    return;
+  }
+
+  ant_object_invalidate_guarded_absence(js, ptr);
+  if (!ensure_added_shape_slot_storage(ptr, slot)) return;
+  
+  ant_object_prop_set_unchecked(ptr, slot, js_mkundef());
+  ant_property_mutation_invalidate(js, ptr, interned);
+  gc_write_barrier(js, ptr, getter);
+  gc_write_barrier(js, ptr, setter);
+}
+
 void js_set_accessor_desc(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t getter, ant_value_t setter, int flags) {
   assert(is_canonical_desc_obj(obj) && "js_set_accessor_desc expects js_as_obj(...)");
 

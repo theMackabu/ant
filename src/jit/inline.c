@@ -619,10 +619,17 @@ void jit_emit_inline_body(
   bool seen_effect = false;
   int *inl_depth = sv_func_stack_depth_map(callee);
 
+  jit_call_tagging_t *tagging = jit_call_tagging;
+  if (tagging && tagging->inl.depth++ < SV_JIT_INLINE_FRAMES_MAX)
+    tagging->inl.frames[tagging->inl.depth - 1] = (sv_jit_frame_t){ callee, 0 };
+  int tag_depth = tagging ? tagging->inl.depth : 0;
+
   while (ip < end) {
     sv_op_t op = (sv_op_t)*ip;
     int sz = sv_op_size[op];
     int inl_bc_off = (int)(ip - code_base);
+    if (tagging && tag_depth <= SV_JIT_INLINE_FRAMES_MAX)
+      tagging->inl.frames[tag_depth - 1].bc_off = inl_bc_off;
 
     if (inl_depth && inl_depth[inl_bc_off] < 0) {
       ip += sz;
@@ -2227,5 +2234,6 @@ void jit_emit_inline_body(
   }
   
   free(inl_depth);
+  if (tagging) tagging->inl.depth--;
   ANT_ASSERT(!reuse_empty_objects || !seen_effect, "empty object reuse requires an effect-free inline body");
 }

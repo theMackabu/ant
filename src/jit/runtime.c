@@ -160,6 +160,11 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   jc->externals_loaded = true;
 }
 
+static void jit_gen_init(sv_jit_ctx_t *jc, MIR_context_t ctx) {
+  MIR_gen_init(ctx);
+  MIR_gen_set_code_info_func(ctx, jit_code_info, jc);
+}
+
 void sv_jit_init(ant_t *js) {
   if (js->jit_ctx) return;
 
@@ -173,11 +178,10 @@ void sv_jit_init(ant_t *js) {
 
   jc->mir_heap = jit_heap_create();
   jc->ctx = MIR_init2(jit_heap_mir_alloc(jc->mir_heap), NULL);
-  
-  MIR_gen_init(jc->ctx);
+  jit_gen_init(jc, jc->ctx);
 
   jc->ctx_hot = MIR_init2(jit_heap_mir_alloc(jc->mir_heap), NULL);
-  MIR_gen_init(jc->ctx_hot);
+  jit_gen_init(jc, jc->ctx_hot);
 
   jit_load_externals_once(jc);
   js->jit_ctx = jc;
@@ -185,7 +189,7 @@ void sv_jit_init(ant_t *js) {
 
 void jit_release_gen_scratch(sv_jit_ctx_t *jc, MIR_context_t ctx) {
   MIR_gen_finish(ctx);
-  MIR_gen_init(ctx);
+  jit_gen_init(jc, ctx);
   jit_heap_release(jc->mir_heap);
 }
 
@@ -197,6 +201,7 @@ void sv_jit_destroy(ant_t *js) {
   MIR_finish(jc->ctx);
   MIR_gen_finish(jc->ctx_hot);
   MIR_finish(jc->ctx_hot);
+  jit_code_registry_destroy(jc);
   jit_heap_destroy(jc->mir_heap);
 
   free(jc);
@@ -263,7 +268,7 @@ sv_jit_func_t sv_jit_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) 
   return hot;
 }
 
-ant_value_t sv_jit_try_osr(
+__attribute__((noinline)) ant_value_t sv_jit_try_osr(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame, 
   sv_func_t *func, int bc_offset
 ) {
@@ -345,6 +350,8 @@ ant_value_t sv_jit_try_osr(
   vm->jit_osr.vstack_sp = vm->sp - (int)(vm->jit_osr.vstack - vm->stack);
 
   func->back_edge_count = 0;
+  sv_jit_osr_mark_t osr_mark = { vm->jit_osr_marks };
+  vm->jit_osr_marks = &osr_mark;
   
   ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_INTERP, jit, vm, &(sv_call_ctx_t){
     .this_val = frame->this,
@@ -354,6 +361,7 @@ ant_value_t sv_jit_try_osr(
     .argc = frame->argc,
   }, closure);
 
+  vm->jit_osr_marks = osr_mark.prev;
   vm->jit_osr = (sv_jit_osr_t){0};
   if (synthetic_closure) gc_pop_roots(js, root_mark);
 

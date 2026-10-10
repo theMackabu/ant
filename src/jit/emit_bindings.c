@@ -360,16 +360,14 @@ void jit_emit_bindings(jit_compile_t *c) {
       MIR_reg_t ns = vstack_pop(&c->vs);
       MIR_reg_t dst = vstack_push(&c->vs);
       MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_call_insn(c->ctx, 9,
+                      MIR_new_call_insn(c->ctx, 7,
                                         MIR_new_ref_op(c->ctx, c->import_named_proto),
                                         MIR_new_ref_op(c->ctx, c->imp_import_named),
                                         MIR_new_reg_op(c->ctx, dst),
                                         MIR_new_reg_op(c->ctx, c->r_js),
                                         MIR_new_reg_op(c->ctx, ns),
                                         MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)atom->str),
-                                        MIR_new_uint_op(c->ctx, (uint64_t)atom->len),
-                                        MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->func),
-                                        MIR_new_int_op(c->ctx, (int64_t)c->bc_off)));
+                                        MIR_new_uint_op(c->ctx, (uint64_t)atom->len)));
       jit_emit_throw_if_error(c, dst);
       break;
     }

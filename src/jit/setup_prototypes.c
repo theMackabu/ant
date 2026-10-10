@@ -211,13 +211,11 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
 
   MIR_type_t impn_ret = MIR_JSVAL;
   c->import_named_proto = MIR_new_proto(c->ctx, "impn_proto",
-                                        1, &impn_ret, 6,
+                                        1, &impn_ret, 4,
                                         MIR_T_I64, "js",
                                         MIR_JSVAL, "ns",
                                         MIR_T_P, "str",
-                                        MIR_T_I32, "len",
-                                        MIR_T_P, "func",
-                                        MIR_T_I32, "bc_off");
+                                        MIR_T_I32, "len");
 
   MIR_type_t exp_ret = MIR_JSVAL;
   c->export_proto = MIR_new_proto(c->ctx, "exp_proto",

@@ -60,6 +60,8 @@ export function targets() {
     'test_direct_eval_environment.cjs',
     'test_disposal_error_values.cjs',
     'test_duplicate_declarations.cjs',
+    'test_error_stack_format.cjs',
+    'test_error_stack_jit_frames.cjs',
     'test_esm_package_self_reference.cjs',
     'test_events_key_cache.cjs',
     'test_events_listener_storage.cjs',

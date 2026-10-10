@@ -297,7 +297,6 @@ static void func_release(ant_t *js, sv_func_t *func) {
 
 static void unit_free(ant_t *js, sv_code_unit_t *unit) {
   sv_code_units_t *u = &js->code_units;
-  if (js->errsite.unit == unit) js_clear_error_site(js);
   
   for (sv_func_t *func = unit->funcs; func; func = func->unit_next) {
     func_release(js, func);

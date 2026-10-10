@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include "types.h"
+#include "errors.h"
 
 typedef struct {
   ant_offset_t pos;
@@ -47,7 +48,7 @@ void sv_lexer_push_source(
   const char *code, ant_offset_t start, ant_offset_t end
 );
 
-void sv_lexer_set_error_site(sv_lexer_t *lx);
+js_error_site_t sv_lexer_error_site(const sv_lexer_t *lx);
 void sv_lexer_save_state(const sv_lexer_t *lx, sv_lexer_state_t *st);
 void sv_lexer_restore_state(sv_lexer_t *lx, const sv_lexer_state_t *st);
 void sv_lexer_pop_source(sv_lexer_t *lx, const sv_lexer_checkpoint_t *cp);

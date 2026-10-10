@@ -392,6 +392,7 @@ static inline uintptr_t sv_gf_ic_pack_aux(uint8_t warmup, uint8_t miss_streak, b
   return aux;
 }
 
+const sv_srcpos_t *sv_srcpos_at(sv_func_t *func, int bc_offset);
 bool sv_lookup_srcpos(sv_func_t *func, int bc_offset, uint32_t *line, uint32_t *col);
 bool sv_lookup_srcspan(sv_func_t *func, int bc_offset, uint32_t *src_off, uint32_t *src_end);
 
@@ -479,10 +480,11 @@ static_assert(
 
 typedef struct {
   const char *name;
+  const char *display_name;
   const char *filename;
   sv_srcpos_t *srcpos;
   const char *source;
-
+  bool display_name_varies;
   int srcpos_count;
   int source_line;
   int source_len;
@@ -970,6 +972,10 @@ typedef struct sv_native_frame {
   ant_value_t new_target;
 } sv_native_frame_t;
 
+typedef struct sv_jit_osr_mark {
+  struct sv_jit_osr_mark *prev;
+} sv_jit_osr_mark_t;
+
 struct sv_vm {
   ant_t *js;
 
@@ -1008,6 +1014,7 @@ struct sv_vm {
 
   sv_jit_osr_t jit_osr;
   sv_native_frame_t *native_frame;
+  sv_jit_osr_mark_t *jit_osr_marks;
 
   int jit_mode_fp;
   bool jit_mode_strict;

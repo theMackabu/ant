@@ -4,6 +4,7 @@
 #include "descriptors.h"
 #include "output.h"
 #include "silver/engine.h"
+#include "silver/stack_trace.h"
 #include "silver/call.h"
 #include "modules/io.h"
 #include "gc/roots.h"
@@ -98,11 +99,6 @@ static ant_object_t *exception_record(ant_t *js, ant_value_t completion) {
 ant_value_t Ant_Exception_Value(ant_t *js, ant_value_t completion) {
   ant_object_t *record = exception_record(js, completion);
   return record ? record->u.exception.value : is_err(completion) ? js_mkundef() : completion;
-}
-
-ant_value_t Ant_Exception_Stack(ant_t *js, ant_value_t completion) {
-  ant_object_t *record = exception_record(js, completion);
-  return record ? record->u.exception.stack : js_mkundef();
 }
 
 ant_value_t Ant_Exception_Raise(ant_t *js, ant_value_t value, ant_value_t stack) {
@@ -228,12 +224,6 @@ static size_t append_errbuf_fmt(errbuf_t *eb, size_t used, const char *fmt, ...)
     if (written < 0 || (size_t)written > SIZE_MAX - used - 1) return used;
     if (!ensure_errbuf_capacity(eb, used + (size_t)written + 1)) return used;
   }
-}
-
-static size_t append_error_header(errbuf_t *eb, ant_t *js, size_t used, int line, int col) {
-  const char *file = (js->errsite.valid && js->errsite.filename) ? js->errsite.filename : js->filename;
-  if (file) return append_errbuf_fmt(eb, used, "%s:%d:%d\n", file, line, col);
-  return append_errbuf_fmt(eb, used, "<eval>:%d:%d\n", line, col);
 }
 
 static void get_line_col(const char *code, ant_offset_t code_len, ant_offset_t pos, int *out_line, int *out_col) {
@@ -454,13 +444,19 @@ static int error_context_src_cols_limit(int gutter_w) {
   return budget;
 }
 
-static const char *error_frame_name(ant_t *js, sv_frame_t *frame, sv_func_t *func) {
+static const char *error_frame_name_of(ant_t *js, ant_value_t callee, sv_func_t *func) {
   if (func && func->debug->name && func->debug->name[0]) return func->debug->name;
-  if (js && frame && vtype(frame->callee) == kTypeFunction) {
-    ant_offset_t name_len = 0;
-    const char *name = get_str_prop(js, js_func_obj(frame->callee), "name", 4, &name_len);
-    if (name && name_len > 0) return name;
+  
+  ant_value_t name;
+  if (vtype(callee) == kTypeFunction && js_try_get_own_data_prop(js, callee, "name", 4, &name) && vtype(name) == kTypeString) {
+    size_t len = 0;
+    const char *text = js_getstr(js, name, &len);
+    if (text && len > 0) return text;
   }
+  
+  if (func && func->debug->display_name && !func->debug->display_name_varies) 
+    return func->debug->display_name;
+  
   return "<anonymous>";
 }
 
@@ -469,66 +465,70 @@ typedef struct {
   const char *file;
   int line;
   int col;
-  int index;
-  int depth;
 } js_vm_frame_view_t;
 
 typedef bool 
   (*js_vm_frame_visitor_fn)
   (ant_t *js, const js_vm_frame_view_t *view, void *ctx);
 
-static bool error_skip_bottom_wrapper_frame(const js_vm_frame_view_t *view) {
-  return 
-    view &&
-    view->index == 0 &&
-    view->depth > 0 &&
-    strcmp(view->name, "<anonymous>") == 0 &&
-    view->line == 1 &&
-    view->col == 1;
-}
-
-static bool error_fill_vm_frame_view(
-  ant_t *js, sv_vm_t *vm, int depth, int i, 
+static void error_frame_view(
+  ant_t *js, sv_func_t *func, ant_value_t callee, int bc_off,
   const char *fallback_file, js_vm_frame_view_t *out
 ) {
-  if (!js || !vm || i < 0 || i > depth || !out) return false;
-
-  sv_frame_t *frame = &vm->frames[i];
-  sv_func_t *func = frame->func;
-
-  out->name = error_frame_name(js, frame, func);
+  out->name = error_frame_name_of(js, callee, func);
   out->file = (func && func->debug->filename) ? func->debug->filename : fallback_file;
   out->line = (func && func->debug->source_line > 0) ? func->debug->source_line : 1;
   out->col = 1;
-  out->index = i;
-  out->depth = depth;
 
-  if (func && func->debug->srcpos && frame->ip) {
-    uint32_t l, c;
-    if (sv_lookup_srcpos(func, (int)(frame->ip - func->code), &l, &c)) {
-      out->line = (int)l; 
-      out->col = (int)c;
-    }
+  uint32_t l, c;
+  if (bc_off >= 0 && sv_lookup_srcpos(func, bc_off, &l, &c)) {
+    out->line = (int)l; 
+    out->col = (int)c;
   }
-
-  return true;
 }
 
-static bool error_visit_vm_stack_frames(
-  ant_t *js, const char *fallback_file, js_vm_frame_visitor_fn visitor, void *ctx
-) {
-  if (!js || !visitor) return true;
-  sv_vm_t *vm = js->vm;
-  if (!vm) return true;
+static bool error_frame_is_wrapper(const sv_stack_entry_t *e, const js_vm_frame_view_t *view, int newer) {
+  return 
+    e->frame_index == 0 && newer > 0 &&
+    view->line == 1 && view->col == 1 &&
+    strcmp(view->name, "<anonymous>") == 0;
+}
 
-  int depth = vm->fp;
-  for (int i = depth; i >= 0; i--) {
+static bool error_visit_live_frames(
+  ant_t *js, int limit, const char *fallback_file, js_vm_frame_visitor_fn visitor, void *ctx
+) {
+  if (!js || !js->vm) return true;
+  
+  sv_stack_iter_t it;
+  sv_stack_entry_t e;
+  
+  bool ok = true;
+  int count = 0;
+  
+  sv_stack_iter_init(js->vm, &it, limit, true);
+  while (ok && (limit < 0 || count < limit) && sv_stack_iter_next(&it, &e)) {
     js_vm_frame_view_t view;
-    if (!error_fill_vm_frame_view(js, vm, depth, i, fallback_file, &view)) continue;
-    if (error_skip_bottom_wrapper_frame(&view)) continue;
-    if (!visitor(js, &view, ctx)) return false;
+    error_frame_view(js, e.func, e.callee, e.bc_off, fallback_file, &view);
+    
+    if (error_frame_is_wrapper(&e, &view, count)) continue;
+    count++;
+    ok = visitor(js, &view, ctx);
   }
-  return true;
+  
+  sv_stack_iter_finish(&it);
+  return ok;
+}
+
+static int error_stack_trace_limit(ant_t *js) {
+  ant_value_t ctor = js->builtins.error_ctor, limit;
+  
+  if (vtype(ctor) != kTypeFunction) return 10;
+  if (!js_try_get_own_data_prop(js, ctor, "stackTraceLimit", 15, &limit) || vtype(limit) != kTypeNumber) return -1;
+  
+  double d = js_getnum(limit);
+  if (!(d > 0)) return 0;
+  
+  return d >= (double)INT_MAX ? INT_MAX : (int)d;
 }
 
 #ifndef ANT_WASM_EMBED
@@ -612,15 +612,10 @@ ant_value_t js_capture_raw_stack(ant_t *js) {
   eb.buf[0] = '\0';
 
   size_t n = 0;
-  const char *file = (js->errsite.valid && js->errsite.filename)
-    ? js->errsite.filename
-    : (js->filename ? js->filename : "<eval>");
-
-  sv_vm_t *vm = js->vm;
-  if (vm && vm->fp >= 0) {
-    error_frame_errbuf_ctx_t ctx = { &eb, &n, false };
-    error_visit_vm_stack_frames(js, file, error_visit_frame_append_errbuf, &ctx);
-  }
+  const char *file = js->filename ? js->filename : "<eval>";
+  
+  error_frame_errbuf_ctx_t ctx = { &eb, &n, false };
+  error_visit_live_frames(js, error_stack_trace_limit(js), file, error_visit_frame_append_errbuf, &ctx);
 
   ant_value_t stack_str = js_mkstr(js, eb.buf, n);
   free(eb.buf);
@@ -710,93 +705,41 @@ static bool append_error_context(
   return true;
 }
 
-static void format_error_stack(errbuf_t *eb, ant_t *js, size_t *n, int line, int col) {
-  const char *file = (js->errsite.valid && js->errsite.filename)
-    ? js->errsite.filename
-    : (js->filename ? js->filename : "<eval>");
-  
-  error_frame_errbuf_ctx_t ctx = { eb, n, true };
-  if (!error_visit_vm_stack_frames(js, file, error_visit_frame_append_errbuf, &ctx)) return;
-  if (!js->vm || js->vm->fp <= 0) append_error_frame(eb, n, NULL, file, line, col, true);
-}
-
-void js_set_error_site_lc(
-  ant_t *js, const char *src, ant_offset_t src_len, const char *filename,
-  ant_offset_t off, ant_offset_t span_len, uint32_t line, uint32_t col
+js_error_site_t js_error_site_from_source(
+  const char *src, ant_offset_t src_len, const char *filename,
+  ant_offset_t off, ant_offset_t span_len
 ) {
-  if (!js) return;
-  
-  js->errsite.unit = NULL;
-  js->errsite.src = src;
-  js->errsite.src_len = src_len;
-  js->errsite.filename = filename;
-  js->errsite.off = off < 0 ? 0 : off;
-  js->errsite.span_len = span_len < 0 ? 0 : span_len;
-  js->errsite.line = line;
-  js->errsite.col = col;
-  js->errsite.valid = (src != NULL && src_len >= 0);
+  return (js_error_site_t){
+    .src = src,
+    .src_len = src_len,
+    .filename = filename,
+    .off = off < 0 ? 0 : off,
+    .span_len = span_len < 0 ? 0 : span_len,
+    .valid = src != NULL && src_len >= 0,
+  };
 }
 
 void js_get_call_location(ant_t *js, const char **out_filename, int *out_line, int *out_col) {
   if (!js) return;
-  if (!js->errsite.valid) js_set_error_site_from_vm_top(js);
+  js_error_site_t site = js_error_site_from_vm_top(js);
   
-  if (out_filename) *out_filename = (js->errsite.valid && js->errsite.filename) ? js->errsite.filename : js->filename;
+  if (out_filename) *out_filename = (site.valid && site.filename) ? site.filename : js->filename;
   if (out_line) *out_line = 1;
   if (out_col)  *out_col  = 1;
   
-  if (js->errsite.valid && js->errsite.line > 0) {
-    if (out_line) *out_line = (int)js->errsite.line;
-    if (out_col)  *out_col  = (int)js->errsite.col;
-  } else if (js->errsite.valid && js->errsite.src) get_line_col(
-    js->errsite.src, js->errsite.src_len, 
-    js->errsite.off, out_line, out_col
+  if (site.valid && site.line > 0) {
+    if (out_line) *out_line = (int)site.line;
+    if (out_col)  *out_col  = (int)site.col;
+  } else if (site.valid && site.src) get_line_col(
+    site.src, site.src_len, site.off, out_line, out_col
   );
-}
-
-void js_clear_error_site(ant_t *js) {
-  if (!js) return;
-  memset(&js->errsite, 0, sizeof(js->errsite));
-}
-
-js_error_site_t js_error_site_save(ant_t *js) {
-  sv_code_unit_pin(js->errsite.unit);
-  return js->errsite;
-}
-
-void js_error_site_restore(ant_t *js, const js_error_site_t *saved) {
-  js->errsite = *saved;
-  sv_code_unit_unpin(saved->unit);
-}
-
-static void resolve_error_site(
-  ant_t *js, const char **out_src, ant_offset_t *out_src_len,
-  ant_offset_t *out_src_pos, ant_offset_t *out_span_len
-) {
-  if (js && !js->errsite.valid) js_set_error_site_from_vm_top(js);
-
-  const char *src = NULL;
-  ant_offset_t src_len = 0;
-  ant_offset_t src_pos = 0;
-  ant_offset_t span_len = 0;
-
-  if (js->errsite.valid) {
-    src = js->errsite.src;
-    src_len = js->errsite.src_len;
-    src_pos = js->errsite.off;
-    span_len = js->errsite.span_len;
-  }
-
-  if (out_src) *out_src = src;
-  if (out_src_len) *out_src_len = src_len;
-  if (out_src_pos) *out_src_pos = src_pos;
-  if (out_span_len) *out_span_len = span_len;
 }
 
 typedef struct {
   const char *src;
   ant_offset_t src_len;
   ant_offset_t src_pos;
+  ant_offset_t src_span_len;
   int error_col;
   int error_span_cols;
   int line;
@@ -804,126 +747,512 @@ typedef struct {
   char error_line[256];
 } js_error_render_site_t;
 
-static void js_prepare_error_render_site(ant_t *js, js_error_render_site_t *site) {
-  if (!site) return;
+static void error_render_site_init(const js_error_site_t *es, js_error_render_site_t *site) {
   memset(site, 0, sizeof(*site));
   site->line = 1;
   site->col = 1;
   site->error_col = 1;
   site->error_span_cols = 1;
+  if (!es->valid) return;
 
-  ant_offset_t src_span_len = 0;
-  ant_offset_t line_start = 0, line_end = 0;
-  resolve_error_site(js, &site->src, &site->src_len, &site->src_pos, &src_span_len);
-
-  bool have_lc = 
-    js->errsite.valid && js->errsite.line > 0 &&
-    js->errsite.src == site->src && js->errsite.off == site->src_pos;
+  site->src = es->src;
+  site->src_len = es->src_len;
+  site->src_pos = es->off;
+  site->src_span_len = es->span_len;
   
-  if (have_lc) {
-    site->line = (int)js->errsite.line;
-    site->col = (int)js->errsite.col;
+  if (es->line > 0) {
+    site->line = (int)es->line;
+    site->col = (int)es->col;
   } else get_line_col(site->src, site->src_len, site->src_pos, &site->line, &site->col);
+}
 
+static void error_render_site_finish(js_error_render_site_t *site) {
   if (site->src_len > ERROR_CONTEXT_MAX_SOURCE_BYTES) {
     site->src = NULL;
     site->src_len = 0;
     return;
   }
 
+  ant_offset_t line_start = 0, line_end = 0;
   get_error_line(
     site->src, site->src_len, site->src_pos,
     site->error_line, sizeof(site->error_line),
     &site->error_col, &line_start, &line_end
   );
-  site->error_span_cols = error_span_cols_for_line(site->src_pos, src_span_len, line_start, line_end);
+  site->error_span_cols = error_span_cols_for_line(site->src_pos, site->src_span_len, line_start, line_end);
 }
 
-static ant_value_t js_build_stack_text(ant_t *js, js_stack_text_kind_t kind, ant_value_t value) {
+static const char *error_site_file(ant_t *js, const js_error_site_t *es) {
+  if (es->valid && es->filename) return es->filename;
+  return js->filename ? js->filename : "<eval>";
+}
+
+static void append_site_prefix(errbuf_t *eb, size_t *n, const char *file, const js_error_render_site_t *site) {
+  *n = append_errbuf_fmt(eb, *n, "%s:%d:%d", file, site->line, site->col);
+
+  bool rendered_context = append_error_context(
+    eb, n, site->src, site->src_len, site->src_pos,
+    site->line, site->error_col, site->error_span_cols
+  );
+
+  if (!rendered_context && site->error_line[0]) {
+    *n = append_errbuf_fmt(eb, *n, "\n%s\n", site->error_line);
+    append_error_caret(eb, n, site->error_col, site->error_span_cols);
+  }
+
+  *n = append_errbuf_fmt(eb, *n, "\n");
+}
+
+enum {
+  ERR_REC_SITE_FUNC,
+  ERR_REC_SITE_POS,
+  ERR_REC_SITE_SPAN,
+  ERR_REC_LINE,
+  ERR_REC_COL,
+  ERR_REC_PREFIX,
+  ERR_REC_FILE,
+  ERR_REC_LIMIT,
+  ERR_REC_FRAMES
+};
+
+enum {
+  ERR_FRAME_FUNC,
+  ERR_FRAME_CALLEE,
+  ERR_FRAME_POS,
+  ERR_FRAME_FIELDS
+};
+
+static constexpr int ERR_REC_INLINE_FRAMES = 16;
+
+static sv_func_t *error_funcinfo_ptr(ant_value_t v) {
+  return vtype(v) == kTypeFunctionInfo ? (sv_func_t *)vptr(v) : NULL;
+}
+
+static ant_value_t error_frame_pos(const sv_stack_entry_t *e) {
+  return js_mknum(e->pc ? -(double)e->pc : (double)e->bc_off);
+}
+
+static bool error_capture_frame(
+  ant_t *js, const sv_stack_entry_t *e, int count, ant_value_t **fields, ant_value_t *local, int *cap
+) {
+  if (count == *cap) {
+    int grown_cap = *cap * 2;
+    size_t bytes = (ERR_REC_FRAMES + (size_t)grown_cap * ERR_FRAME_FIELDS) * sizeof(ant_value_t);
+    ant_value_t *grown = *fields == local ? malloc(bytes) : realloc(*fields, bytes);
+    
+    if (!grown) return false;
+    if (*fields == local) memcpy(grown, local, (ERR_REC_FRAMES + (size_t)count * ERR_FRAME_FIELDS) * sizeof(ant_value_t));
+    
+    *fields = grown;
+    *cap = grown_cap;
+  }
+
+  ant_value_t *slot = &(*fields)[ERR_REC_FRAMES + (size_t)count * ERR_FRAME_FIELDS];
+  bool named = e->func && e->func->debug->name && e->func->debug->name[0];
+  
+  slot[ERR_FRAME_FUNC] = e->func ? mkref(kTypeFunctionInfo, e->func) : js_mkundef();
+  slot[ERR_FRAME_CALLEE] = named ? js_mkundef() : e->callee;
+  slot[ERR_FRAME_POS] = error_frame_pos(e);
+  
+  return true;
+}
+
+static ant_value_t error_capture_record(ant_t *js, const js_error_site_t *at) {
+  int limit = error_stack_trace_limit(js);
+  if (limit < 0) return js_mkundef();
+
+  ant_value_t local[ERR_REC_FRAMES + ERR_REC_INLINE_FRAMES * ERR_FRAME_FIELDS];
+  ant_value_t *fields = local;
+  int cap = ERR_REC_INLINE_FRAMES, count = 0;
+  bool need_file = false;
+
+  sv_stack_iter_t it;
+  sv_stack_entry_t e;
+  sv_stack_iter_init(js->vm, &it, limit, false);
+  
+  while (count < limit && sv_stack_iter_next(&it, &e)) {
+    if (e.frame_index == 0 && count > 0) {
+      js_vm_frame_view_t view;
+      error_frame_view(js, e.func, e.callee, e.bc_off, "", &view);
+      if (error_frame_is_wrapper(&e, &view, count)) continue;
+    }
+    if (!error_capture_frame(js, &e, count, &fields, local, &cap)) break;
+    if (!e.func || !e.func->debug->filename) need_file = true;
+    count++;
+  }
+  sv_stack_iter_finish(&it);
+
+  js_error_site_t es = at && at->valid ? *at : (js_error_site_t){0};
+  js_error_render_site_t site;
+  error_render_site_init(&es, &site);
+
+  const char *file = es.valid ? error_site_file(js, &es) : js->filename ? js->filename : "<eval>";
+  bool lazy_site = es.func && site.src == es.func->debug->source && site.src_len <= ERROR_CONTEXT_MAX_SOURCE_BYTES;
+  if (es.valid) need_file |= !lazy_site || file != es.func->debug->filename;
+  else need_file |= count == 0;
+
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t prefix = js_mkundef();
+  
+  if (es.valid && !lazy_site) {
+    errbuf_t eb = { malloc(1024), 1024 };
+    if (eb.buf) {
+      size_t n = 0;
+      error_render_site_finish(&site);
+      append_site_prefix(&eb, &n, file, &site);
+      prefix = js_mkstr(js, eb.buf, n);
+      free(eb.buf);
+    }
+    GC_ROOT_PIN(js, prefix);
+  }
+
+  ant_value_t file_str = need_file ? js_mkstr(js, file, strlen(file)) : js_mkundef();
+  GC_ROOT_PIN(js, file_str);
+
+  fields[ERR_REC_SITE_FUNC] = lazy_site ? mkref(kTypeFunctionInfo, es.func) : js_mkundef();
+  fields[ERR_REC_SITE_POS] = js_mknum((double)site.src_pos);
+  fields[ERR_REC_SITE_SPAN] = js_mknum((double)site.src_span_len);
+  fields[ERR_REC_LINE] = es.valid ? js_mknum(site.line) : js_mkundef();
+  fields[ERR_REC_COL] = js_mknum(site.col);
+  fields[ERR_REC_PREFIX] = prefix;
+  fields[ERR_REC_FILE] = file_str;
+  fields[ERR_REC_LIMIT] = js_mknum(limit);
+
+  ant_value_t record = js_mkarr_dense_literal(js, fields, (uint32_t)(ERR_REC_FRAMES + (size_t)count * ERR_FRAME_FIELDS));
+  if (fields != local) free(fields);
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return record;
+}
+
+static int error_record_int(ant_t *js, ant_value_t rec, int field) {
+  ant_value_t v = js_arr_get(js, rec, field);
+  return vtype(v) == kTypeNumber ? (int)js_getnum(v) : 0;
+}
+
+static int error_record_frame_count(ant_t *js, ant_value_t rec) {
+  return (int)((js_arr_len(js, rec) - ERR_REC_FRAMES) / ERR_FRAME_FIELDS);
+}
+
+typedef struct {
+  sv_func_t *func;
+  ant_value_t callee;
+  int bc_off;
+} error_record_frame_t;
+
+static int error_record_frame(ant_t *js, ant_value_t rec, int k, error_record_frame_t *out) {
+  ant_offset_t base = ERR_REC_FRAMES + (ant_offset_t)k * ERR_FRAME_FIELDS;
+  sv_func_t *func = error_funcinfo_ptr(js_arr_get(js, rec, base + ERR_FRAME_FUNC));
+  ant_value_t callee = js_arr_get(js, rec, base + ERR_FRAME_CALLEE);
+  ant_value_t pos = js_arr_get(js, rec, base + ERR_FRAME_POS);
+  double p = vtype(pos) == kTypeNumber ? js_getnum(pos) : -1;
+
+  if (p >= -1) {
+    out[0] = (error_record_frame_t){ func, callee, (int)p };
+    return 1;
+  }
+
+  sv_jit_frame_t frames[SV_JIT_INLINE_FRAMES_MAX + 1];
+  int n = sv_jit_frames_at(js, (uintptr_t)-p, frames, SV_JIT_INLINE_FRAMES_MAX + 1);
+  if (n <= 0) frames[n++] = (sv_jit_frame_t){ func, -1 };
+  for (int i = 0; i < n; i++)
+    out[i] = (error_record_frame_t){ frames[i].func, i == n - 1 ? callee : js_mkundef(), frames[i].bc_off };
+  return n;
+}
+
+static const char *error_record_file(ant_t *js, ant_value_t rec) {
+  ant_value_t file = js_arr_get(js, rec, ERR_REC_FILE);
+  if (vtype(file) == kTypeString) return js_getstr(js, file, NULL);
+  
+  sv_func_t *func = error_funcinfo_ptr(js_arr_get(js, rec, ERR_REC_SITE_FUNC));
+  error_record_frame_t top[SV_JIT_INLINE_FRAMES_MAX + 1];
+  if (!func && error_record_frame_count(js, rec) > 0 && error_record_frame(js, rec, 0, top) > 0) func = top[0].func;
+  
+  return func && func->debug->filename ? func->debug->filename : "<eval>";
+}
+
+static js_error_site_t error_record_site(ant_t *js, ant_value_t rec) {
+  sv_func_t *func = error_funcinfo_ptr(js_arr_get(js, rec, ERR_REC_SITE_FUNC));
+  if (func) {
+    js_error_site_t es = js_error_site_from_source(
+      func->debug->source, (ant_offset_t)func->debug->source_len, func->debug->filename,
+      (ant_offset_t)error_record_int(js, rec, ERR_REC_SITE_POS),
+      (ant_offset_t)error_record_int(js, rec, ERR_REC_SITE_SPAN)
+    );
+    es.func = func;
+    es.line = (uint32_t)error_record_int(js, rec, ERR_REC_LINE);
+    es.col = (uint32_t)error_record_int(js, rec, ERR_REC_COL);
+    return es;
+  }
+
+  error_record_frame_t top[SV_JIT_INLINE_FRAMES_MAX + 1];
+  bool derived = vtype(js_arr_get(js, rec, ERR_REC_LINE)) == kTypeUndefined;
+  if (derived && error_record_frame_count(js, rec) > 0 && error_record_frame(js, rec, 0, top) > 0)
+    return js_error_site_from_frame(top[0].func, top[0].bc_off);
+  return (js_error_site_t){0};
+}
+
+typedef struct {
+  const char *file;
+  int line, col;
+} error_record_tail_t;
+
+static error_record_tail_t error_render_record_prefix(ant_t *js, ant_value_t rec, errbuf_t *eb, size_t *n) {
+  error_record_tail_t tail = { error_record_file(js, rec), 1, 1 };
+  ant_value_t prefix = js_arr_get(js, rec, ERR_REC_PREFIX);
+
+  if (vtype(prefix) == kTypeString) {
+    size_t len = 0;
+    const char *text = js_getstr(js, prefix, &len);
+    *n = append_errbuf_fmt(eb, *n, "%.*s", (int)len, text);
+    tail.line = error_record_int(js, rec, ERR_REC_LINE);
+    tail.col = error_record_int(js, rec, ERR_REC_COL);
+    return tail;
+  }
+
+  js_error_site_t es = error_record_site(js, rec);
+  js_error_render_site_t site;
+  error_render_site_init(&es, &site);
+  error_render_site_finish(&site);
+  append_site_prefix(eb, n, tail.file, &site);
+  tail.line = site.line;
+  tail.col = site.col;
+  return tail;
+}
+
+static int error_visit_record_frames(
+  ant_t *js, ant_value_t rec, const char *fallback_file,
+  js_vm_frame_visitor_fn visitor, void *ctx
+) {
+  int limit = error_record_int(js, rec, ERR_REC_LIMIT);
+  int count = error_record_frame_count(js, rec), printed = 0;
+  
+  for (int k = 0; k < count && printed < limit; k++) {
+    error_record_frame_t frames[SV_JIT_INLINE_FRAMES_MAX + 1];
+    int n = error_record_frame(js, rec, k, frames);
+    for (int i = 0; i < n && printed < limit; i++) {
+      js_vm_frame_view_t view;
+      error_frame_view(js, frames[i].func, frames[i].callee, frames[i].bc_off, fallback_file, &view);
+      printed++;
+      if (!visitor(js, &view, ctx)) return printed;
+    }
+  }
+  
+  return printed;
+}
+
+static void error_render_record_frames(ant_t *js, ant_value_t rec, errbuf_t *eb, size_t *n, error_record_tail_t tail) {
+  error_frame_errbuf_ctx_t ctx = { eb, n, true };
+  if (error_visit_record_frames(js, rec, tail.file, error_visit_frame_append_errbuf, &ctx) == 0 && error_record_int(js, rec, ERR_REC_LIMIT) > 0)
+    append_error_frame(eb, n, NULL, tail.file, tail.line, tail.col, true);
+}
+
+char *js_error_render_pretty(ant_t *js, ant_value_t err, ant_value_t stack, size_t *out_len, size_t *header_at) {
+  if (!is_object_type(err) || vtype(stack) != kTypeString) return NULL;
+  ant_value_t rec = js_get_slot(err, SLOT_ERROR_STACK);
+  if (vtype(rec) != kTypeArray || js_get_slot(err, SLOT_ERROR_STACK_TEXT) != stack) return NULL;
+
+  errbuf_t eb = { malloc(4096), 4096 };
+  if (!eb.buf) return NULL;
+  eb.buf[0] = '\0';
+
+  size_t n = 0;
+  error_record_tail_t tail = error_render_record_prefix(js, rec, &eb, &n);
+  *header_at = n;
+  error_render_record_frames(js, rec, &eb, &n, tail);
+
+  *out_len = n;
+  return eb.buf;
+}
+
+static ant_value_t error_render_throw_text(ant_t *js, ant_value_t value, ant_value_t rec) {
   errbuf_t eb = { malloc(4096), 4096 };
   if (!eb.buf) return js_mkundef();
   eb.buf[0] = '\0';
 
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, value);
-  js_error_render_site_t site;
-  js_prepare_error_render_site(js, &site);
+  GC_ROOT_PIN(js, rec);
 
   size_t n = 0;
-  n = append_error_header(&eb, js, 0, site.line, site.col);
+  error_record_tail_t tail = error_render_record_prefix(js, rec, &eb, &n);
+  n = append_error_value(&eb, js, n, value);
+  error_render_record_frames(js, rec, &eb, &n, tail);
 
-  if (n > 0 && eb.buf[n - 1] == '\n') {
-    n--;
-    eb.buf[n] = '\0';
-  }
-
-  bool rendered_context = append_error_context(
-    &eb, &n, site.src, site.src_len, site.src_pos,
-    site.line, site.error_col, site.error_span_cols
-  );
-
-  if (!rendered_context && site.error_line[0]) {
-    n = append_errbuf_fmt(&eb, n, "\n%s\n", site.error_line);
-    append_error_caret(&eb, &n, site.error_col, site.error_span_cols);
-  }
-
-  n = append_errbuf_fmt(&eb, n, "\n");
-  size_t header_offset = n;
-
-  if (kind == JS_STACK_TEXT_FROM_ERROR_OBJECT) {
-    const char *err_name = "Error";
-    const char *err_msg = NULL;
-    
-    ant_offset_t name_len = 5, msg_len = 0; 
-    const char *n_str = get_str_prop(js, value, "name", 4, &name_len);
-    
-    if (n_str) err_name = n_str;
-    err_msg = get_str_prop(js, value, "message", 7, &msg_len);
-
-    if (err_msg) n = append_errbuf_fmt(&eb, n,
-      "%s%.*s%s: %s%.*s%s",
-      C_RED, (int)name_len, err_name, C_RESET,
-      C_BOLD, (int)msg_len, err_msg, C_RESET);
-    else n = append_errbuf_fmt(&eb, n,
-      "%s%.*s%s",
-      C_RED, (int)name_len, err_name, C_RESET);
-  } else n = append_error_value(&eb, js, n, value);
-
-  size_t frames_offset = n;
-  format_error_stack(&eb, js, &n, site.line, site.col);
-
-  ant_value_t stack_str = js_mkstr(js, eb.buf, n);
+  ant_value_t text = js_mkstr(js, eb.buf, n);
   free(eb.buf);
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return text;
+}
+
+ant_value_t Ant_Exception_Stack(ant_t *js, ant_value_t completion) {
+  ant_object_t *record = exception_record(js, completion);
+  if (!record) return js_mkundef();
   
-  if (kind == JS_STACK_TEXT_FROM_ERROR_OBJECT && vtype(stack_str) == kTypeString && is_object_type(value)) {
-    GC_ROOT_PIN(js, stack_str);
-    ant_value_t fields[JS_ERROR_STACK_FIELD_COUNT] = {
-      [JS_ERROR_STACK_TEXT] = stack_str,
-      [JS_ERROR_STACK_HEADER_START] = js_mknum((double)header_offset),
-      [JS_ERROR_STACK_HEADER_END] = js_mknum((double)frames_offset)
-    };
-    ant_value_t cache = js_mkarr_dense_literal(js, fields, JS_ERROR_STACK_FIELD_COUNT);
-    if (vtype(cache) == kTypeArray) js_set_slot_wb(js, value, SLOT_ERROR_STACK, cache);
+  ant_value_t stack = record->u.exception.stack;
+  ant_value_t value = record->u.exception.value;
+  
+  if (vtype(stack) == kTypeArray) {
+    stack = error_render_throw_text(js, value, stack);
+    record->u.exception.stack = vtype(stack) == kTypeString ? stack : js_mkundef();
+    gc_write_barrier(js, record, record->u.exception.stack);
+    return record->u.exception.stack;
   }
   
+  if (vtype(stack) == kTypeString || !is_object_type(value)) return stack;
+  if (vtype(js_get_slot(value, SLOT_ERROR_STACK)) != kTypeArray) return stack;
+  
+  stack = js_error_stack_value(js, value);
+  return vtype(stack) == kTypeString ? stack : js_mkundef();
+}
+
+typedef struct {
+  errbuf_t *eb;
+  size_t *n;
+} error_plain_frame_ctx_t;
+
+static bool error_visit_frame_append_plain(ant_t *js, const js_vm_frame_view_t *view, void *ctx) {
+  error_plain_frame_ctx_t *c = (error_plain_frame_ctx_t *)ctx;
+  size_t start = *c->n;
+  *c->n = append_errbuf_fmt(c->eb, *c->n, "\n    at %s (%s:%d:%d)", view->name, view->file, view->line, view->col);
+  return *c->n > start;
+}
+
+static ant_value_t error_header_part(ant_t *js, ant_value_t obj, const char *key, size_t key_len, const char *fallback) {
+  ant_value_t v = js_getprop_fallback_len(js, obj, key, key_len);
+  if (is_err(v)) return v;
+  if (vtype(v) == kTypeUndefined) return js_mkstr(js, fallback, strlen(fallback));
+  return vtype(v) == kTypeString ? v : js_tostring_val(js, v);
+}
+
+ant_value_t js_error_header_text(ant_t *js, ant_value_t obj) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, obj);
+
+  ant_value_t name = error_header_part(js, obj, "name", 4, "Error");
+  GC_ROOT_PIN(js, name);
+  ant_value_t msg = is_err(name) ? name : error_header_part(js, obj, "message", 7, "");
+  GC_ROOT_PIN(js, msg);
+  
+  if (is_err(msg)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return msg;
+  }
+
+  size_t name_len = 0, msg_len = 0;
+  const char *name_text = js_getstr(js, name, &name_len);
+  const char *msg_text = js_getstr(js, msg, &msg_len);
+
+  ant_value_t text = name_len == 0 ? msg : name;
+  if (name_len > 0 && msg_len > 0) {
+    errbuf_t eb = { malloc(name_len + msg_len + 3), name_len + msg_len + 3 };
+    if (eb.buf) {
+      size_t n = append_errbuf_fmt(&eb, 0, "%.*s: %.*s", (int)name_len, name_text, (int)msg_len, msg_text);
+      text = js_mkstr(js, eb.buf, n);
+      free(eb.buf);
+    }
+  }
+
   GC_ROOT_RESTORE(js, root_mark);
-  return stack_str;
+  return text;
+}
+
+static ant_value_t error_stack_materialize(ant_t *js, ant_value_t obj, ant_value_t rec) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, rec);
+
+  ant_value_t header = js_error_header_text(js, obj);
+  GC_ROOT_PIN(js, header);
+  
+  errbuf_t eb = { malloc(1024), 1024 };
+  if (is_err(header) || !eb.buf) {
+    free(eb.buf);
+    GC_ROOT_RESTORE(js, root_mark);
+    return is_err(header) ? header : js_mkerr(js, "out of memory");
+  }
+
+  size_t len = 0;
+  const char *text = js_getstr(js, header, &len);
+  size_t n = append_errbuf_fmt(&eb, 0, "%.*s", (int)len, text);
+
+  const char *file = error_record_file(js, rec);
+  error_plain_frame_ctx_t ctx = { &eb, &n };
+  if (error_visit_record_frames(js, rec, file, error_visit_frame_append_plain, &ctx) == 0 && error_record_int(js, rec, ERR_REC_LIMIT) > 0) {
+    js_error_site_t es = error_record_site(js, rec);
+    js_error_render_site_t site;
+    error_render_site_init(&es, &site);
+    if (!es.valid && vtype(js_arr_get(js, rec, ERR_REC_LINE)) == kTypeNumber) {
+      site.line = error_record_int(js, rec, ERR_REC_LINE);
+      site.col = error_record_int(js, rec, ERR_REC_COL);
+    }
+    n = append_errbuf_fmt(&eb, n, "\n    at %s:%d:%d", file, site.line, site.col);
+  }
+
+  ant_value_t stack = js_mkstr(js, eb.buf, n);
+  free(eb.buf);
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return stack;
+}
+
+ant_value_t js_error_stack_value(ant_t *js, ant_value_t obj) {
+  ant_value_t text = js_mkundef(), rec = js_mkundef();
+  for (int depth = 0; is_object_type(obj) && depth < 64; depth++) {
+    text = js_get_slot(obj, SLOT_ERROR_STACK_TEXT);
+    rec = js_get_slot(obj, SLOT_ERROR_STACK);
+    if (vtype(rec) == kTypeArray || vtype(text) != kTypeUndefined) break;
+    obj = js_get_proto(js, obj);
+  }
+
+  if (vtype(rec) != kTypeArray || vtype(text) != kTypeUndefined) return text;
+
+  js_set_slot(obj, SLOT_ERROR_STACK_TEXT, js_mkstr(js, "", 0));
+  ant_value_t stack = error_stack_materialize(js, obj, rec);
+  js_set_slot_wb(js, obj, SLOT_ERROR_STACK_TEXT, is_err(stack) ? js_mkundef() : stack);
+  
+  return stack;
+}
+
+static ant_value_t builtin_error_stack_get(ant_params_t) {
+  return js_error_stack_value(js, js_getthis(js));
+}
+
+static ant_value_t builtin_error_stack_set(ant_params_t) {
+  ant_value_t obj = js_getthis(js);
+  if (!is_object_type(obj)) return js_mkundef();
+  js_set_slot(obj, SLOT_ERROR_STACK, js_mkundef());
+  js_set_slot_wb(js, obj, SLOT_ERROR_STACK_TEXT, nargs > 0 ? args[0] : js_mkundef());
+  return js_mkundef();
+}
+
+void js_error_define_stack(ant_t *js, ant_value_t obj, ant_value_t record, ant_value_t text) {
+  js_reserve_slots(obj, 3);
+  js_set_slot_wb(js, obj, SLOT_ERROR_STACK, record);
+  if (vtype(text) != kTypeUndefined || vtype(js_get_slot(obj, SLOT_ERROR_STACK_TEXT)) != kTypeUndefined)
+    js_set_slot_wb(js, obj, SLOT_ERROR_STACK_TEXT, text);
+  js_define_accessor_desc(
+    js, js_as_obj(obj), "stack", 5,
+    js_mkfun(builtin_error_stack_get),
+    js_mkfun(builtin_error_stack_set), JS_DESC_C
+  );
+}
+
+static bool error_has_captured_stack(ant_value_t obj) {
+  return 
+    vtype(js_get_slot(obj, SLOT_ERROR_STACK)) == kTypeArray ||
+    vtype(js_get_slot(obj, SLOT_ERROR_STACK_TEXT)) != kTypeUndefined;
+}
+
+static void error_capture_stack_at(ant_t *js, ant_value_t err_obj, const js_error_site_t *site) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, err_obj);
+  js_error_define_stack(js, err_obj, error_capture_record(js, site), js_mkundef());
+  GC_ROOT_RESTORE(js, root_mark);
 }
 
 void js_capture_stack(ant_t *js, ant_value_t err_obj) {
-  GC_ROOT_SAVE(root_mark, js);
-  GC_ROOT_PIN(js, err_obj);
-  
-  ant_value_t stack_str = js_build_stack_text(js, JS_STACK_TEXT_FROM_ERROR_OBJECT, err_obj);
-  GC_ROOT_PIN(js, stack_str);
-  
-  if (vtype(stack_str) == kTypeString) {
-    js_set(js, err_obj, "stack", stack_str);
-    js_set_descriptor(js, js_as_obj(err_obj), "stack", 5, JS_DESC_W | JS_DESC_C);
-    js_clear_error_site(js);
-  }
-  
-  GC_ROOT_RESTORE(js, root_mark);
+  error_capture_stack_at(js, err_obj, NULL);
 }
 
 js_err_type_t get_error_type(ant_t *js) {
@@ -933,7 +1262,10 @@ js_err_type_t get_error_type(ant_t *js) {
   return (js_err_type_t)((int)js_getnum(err_type) & ~JS_ERR_NO_STACK);
 }
 
-static ant_value_t make_error_value(ant_t *js, js_err_type_t err_type, ant_value_t props, const char *error_msg) {
+static ant_value_t make_error_value(
+  ant_t *js, const js_error_site_t *site, js_err_type_t err_type,
+  ant_value_t props, const char *error_msg
+) {
   bool no_stack = (err_type & JS_ERR_NO_STACK) != 0;
   js_err_type_t base_type = (js_err_type_t)(err_type & ~JS_ERR_NO_STACK);
 
@@ -952,10 +1284,9 @@ static ant_value_t make_error_value(ant_t *js, js_err_type_t err_type, ant_value
     return err_obj;
   }
 
-  js_set(js, err_obj, "name", js_mkstr(js, err_name, err_name_len));
-  js_set_descriptor(js, err_obj, "name", 4, JS_DESC_W | JS_DESC_C);
-  js_set(js, err_obj, "message", js_mkstr(js, error_msg, msg_len));
-  js_set_descriptor(js, err_obj, "message", 7, JS_DESC_W | JS_DESC_C);
+  ant_value_t message = js_mkstr(js, error_msg, msg_len);
+  GC_ROOT_PIN(js, message);
+  mkprop_interned(js, err_obj, js->intern.message, message, ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE);
   js_set_slot(err_obj, SLOT_ERR_TYPE, js_mknum((double)err_type));
 
   int props_type = vtype(props);
@@ -966,17 +1297,21 @@ static ant_value_t make_error_value(ant_t *js, js_err_type_t err_type, ant_value
   int proto_type = vtype(proto);
   if ((T_FLAG_FIND(proto_type) & T_SPECIAL_OBJECT_MASK) != 0)
     js_set_proto_init(err_obj, proto);
+  else {
+    js_set(js, err_obj, "name", js_mkstr(js, err_name, err_name_len));
+    js_set_descriptor(js, err_obj, "name", 4, JS_DESC_W | JS_DESC_C);
+  }
 
-  if (!no_stack) js_capture_stack(js, err_obj);
-  js_clear_error_site(js);
+  if (!no_stack) error_capture_stack_at(js, err_obj, site);
   GC_ROOT_RESTORE(js, mark);
 
   return err_obj;
 }
 
-__attribute__((format(printf, 4, 0)))
+__attribute__((format(printf, 5, 0)))
 static ant_value_t CreateFormattedErrorValue(
-  ant_t *js, js_err_type_t err_type, ant_value_t props, const char *fmt, va_list args
+  ant_t *js, const js_error_site_t *site, js_err_type_t err_type,
+  ant_value_t props, const char *fmt, va_list args
 ) {
   char local[256];
   char *message = local;
@@ -1009,7 +1344,7 @@ static ant_value_t CreateFormattedErrorValue(
     }
   }
 
-  ant_value_t value = make_error_value(js, err_type, props, message);
+  ant_value_t value = make_error_value(js, site, err_type, props, message);
   if (message != local) free(message);
   return value;
 
@@ -1017,30 +1352,41 @@ format_failed:
   return js_throw(js, Ant_Error_Create(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "failed to format error message"));
 }
 
+static ant_value_t raise_created_error(ant_t *js, ant_value_t value) {
+  if (is_err(value)) return value;
+  return Ant_Exception_Raise(js, value, js_mkundef());
+}
+
 __attribute__((format(printf, 4, 5)))
 ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props, const char *fmt, ...) {
   va_list ap;
-  
   va_start(ap, fmt);
-  ant_value_t value = CreateFormattedErrorValue(js, err_type, props, fmt, ap);
+  ant_value_t value = CreateFormattedErrorValue(js, NULL, err_type, props, fmt, ap);
   va_end(ap);
+  return raise_created_error(js, value);
+}
 
-  if (is_err(value)) return value;
-  ant_value_t stack = js_mkundef();
-
-  js_try_get_own_data_prop(js, value, "stack", 5, &stack);
-  return Ant_Exception_Raise(js, value, stack);
+__attribute__((format(printf, 5, 6)))
+ant_value_t js_create_error_at(
+  ant_t *js, const js_error_site_t *site, js_err_type_t err_type,
+  ant_value_t props, const char *fmt, ...
+) {
+  va_list ap;
+  va_start(ap, fmt);
+  ant_value_t value = CreateFormattedErrorValue(js, site, err_type, props, fmt, ap);
+  va_end(ap);
+  return raise_created_error(js, value);
 }
 
 ant_value_t Ant_Error_Create(ant_t *js, js_err_type_t err_type, const char *message) {
-  return make_error_value(js, err_type, js_mkundef(), message);
+  return make_error_value(js, NULL, err_type, js_mkundef(), message);
 }
 
 __attribute__((format(printf, 3, 4)))
 ant_value_t Ant_Error_CreateFormatted(ant_t *js, js_err_type_t err_type, const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  ant_value_t value = CreateFormattedErrorValue(js, err_type, js_mkundef(), fmt, ap);
+  ant_value_t value = CreateFormattedErrorValue(js, NULL, err_type, js_mkundef(), fmt, ap);
   va_end(ap);
   return value;
 }
@@ -1059,20 +1405,19 @@ ant_value_t js_throw(ant_t *js, ant_value_t value) {
 
   bool no_stack = false;
   if (vtype(value) == kTypeObject) {
-    js_try_get_own_data_prop(js, value, "stack", 5, &stack);
     ant_value_t kind = js_get_slot(value, SLOT_ERR_TYPE);
-    no_stack = vtype(kind) == kTypeNumber && ((int)js_getnum(kind) & JS_ERR_NO_STACK);
+    if (error_has_captured_stack(value)) {
+      no_stack = true;
+      stack = js_get_slot(value, SLOT_ERROR_STACK_TEXT);
+    } else if (vtype(kind) == kTypeNumber && ((int)js_getnum(kind) & JS_ERR_NO_STACK)) no_stack = true;
+    else no_stack = js_try_get_own_data_prop(js, value, "stack", 5, &stack) && vtype(stack) == kTypeString;
+    if (vtype(stack) != kTypeString) stack = js_mkundef();
   }
 
-  if (!no_stack && vtype(stack) != kTypeString)
-    stack = js_build_stack_text(js, JS_STACK_TEXT_FROM_THROW_VALUE, value);
-
-  if (vtype(stack) != kTypeString) stack = js_mkundef();
+  if (!no_stack) stack = error_capture_record(js, NULL);
   ant_value_t result = Ant_Exception_Raise(js, value, stack);
 
   GC_ROOT_RESTORE(js, mark);
-  js_clear_error_site(js);
-  
   return result;
 }
 
@@ -1164,11 +1509,9 @@ ant_value_t js_build_callsite_array(ant_t *js) {
   ant_value_t arr = js_mkarr(js);
   callsite_build_ctx_t ctx = { js, arr, proto };
 
-  const char *file = (js->errsite.valid && js->errsite.filename)
-    ? js->errsite.filename
-    : (js->filename ? js->filename : "<eval>");
+  const char *file = js->filename ? js->filename : "<eval>";
 
-  error_visit_vm_stack_frames(js, file, callsite_visit_frame, &ctx);
+  error_visit_live_frames(js, error_stack_trace_limit(js), file, callsite_visit_frame, &ctx);
   return arr;
 }
 
@@ -1182,7 +1525,7 @@ void js_print_stack_trace_vm(ant_t *js, FILE *stream) {
   const char *file = js->filename ? js->filename : "<unknown>";
   error_frame_errbuf_ctx_t ctx = { &eb, &n, true };
   
-  error_visit_vm_stack_frames(js, file, error_visit_frame_append_errbuf, &ctx);
+  error_visit_live_frames(js, -1, file, error_visit_frame_append_errbuf, &ctx);
   if (n > 0) {
     fwrite(eb.buf + 1, 1, n - 1, stream);
     fputc('\n', stream);

@@ -79,6 +79,7 @@ core_sources = files(
   '../../src/silver/glue.c',
   '../../src/silver/lexer.c',
   '../../src/silver/limits.c',
+  '../../src/silver/stack_trace.c',
   '../../src/modules/bigint.c',
   '../../src/modules/collections.c',
   '../../src/modules/generator.c',

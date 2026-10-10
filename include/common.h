@@ -92,7 +92,8 @@
   X(SLOT_MATCHALL_STR)            \
   X(SLOT_MATCHALL_DONE)           \
   X(SLOT_EVAL_ENV)                \
-  X(SLOT_ERROR_STACK)
+  X(SLOT_ERROR_STACK)             \
+  X(SLOT_ERROR_STACK_TEXT)
 
 #define ANT_DECLARE_INTERNAL_SLOT(name) name,
 typedef enum {

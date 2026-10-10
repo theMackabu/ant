@@ -66,6 +66,11 @@ bool ant_shape_add_symbol_tr(ant_t *js, ant_shape_t **shape_pp, ant_offset_t sym
 bool ant_shape_add_interned_keyed_tr(ant_t *js, ant_shape_t **shape_pp, const char *interned, uint8_t attrs, uint32_t *out_slot);
 bool ant_shape_add_symbol_keyed_tr(ant_t *js, ant_shape_t **shape_pp, ant_offset_t sym_off, uint8_t attrs, uint32_t *out_slot);
 
+bool ant_shape_add_accessor_tr(
+  ant_t *js, ant_shape_t **shape_pp, const char *interned, uint8_t attrs,
+  ant_value_t getter, ant_value_t setter, uint32_t *out_slot
+);
+
 // Marks a slot deleted without moving later properties. Slot order is property order,
 // and the spec requires string keys in insertion order. Reusing or swapping the hole
 // would make a re-added property appear in its old position. Deleted slots are compacted
