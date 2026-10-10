@@ -11,6 +11,7 @@
 #include "modules/blob.h"
 #include "modules/buffer.h"
 #include "modules/date.h"
+#include "modules/process.h"
 #include "sugar.h"
 #include "silver/call.h"
 #include "wasm_embed.h"
@@ -78,6 +79,34 @@ void cleanup_lmdb_module(void) {}
 void cleanup_buffer_module(void) {}
 void cleanup_atomics_module(ant_t *js) { (void)js; }
 void cleanup_events_module(ant_t *js) { (void)js; }
+
+bool process_has_event_listeners(ant_t *js, const char *event_type) {
+  (void)js;
+  (void)event_type;
+  return false;
+}
+
+void emit_process_event(ant_t *js, const char *event_type, ant_value_t *args, int nargs) {
+  (void)js;
+  (void)event_type;
+  (void)args;
+  (void)nargs;
+}
+
+bool process_report_uncaught_exception(ant_t *js) {
+  (void)js;
+  return false;
+}
+
+int process_run_exit_handlers(ant_t *js, int status) {
+  (void)js;
+  return status;
+}
+
+void process_exit_with(ant_t *js, int status) {
+  (void)js;
+  exit(status);
+}
 
 bool is_date_instance(ant_value_t value) {
   (void)value;

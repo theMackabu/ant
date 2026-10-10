@@ -39,7 +39,7 @@ typedef struct {
 } ant_shape_prop_t;
 
 static constexpr size_t ANT_SHAPE_REF_COUNT_OFFSET = 0;
-static constexpr size_t ANT_SHAPE_INDEX_KEYS_OFFSET = 45;
+static constexpr size_t ANT_SHAPE_INDEX_KEYS_OFFSET = 21 + 3 * sizeof(void *);
 
 static inline bool ant_shape_may_have_index_keys(const ant_shape_t *shape) {
   return shape && *(const bool *)((const char *)shape + ANT_SHAPE_INDEX_KEYS_OFFSET);

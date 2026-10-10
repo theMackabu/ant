@@ -507,6 +507,18 @@ static bool define_payload_property(
   );
 }
 
+static bool error_data_prop(
+  ant_t *js, ant_value_t obj, const char *key, size_t key_length, ant_value_t *out
+) {
+  for (int depth = 0; is_object_type(obj) && depth < 64; depth++) {
+    if (js_try_get_own_data_prop(js, obj, key, key_length, out)) return true;
+    prop_meta_t meta;
+    if (is_proxy(obj) || lookup_string_prop_meta(js, obj, key, key_length, &meta)) return false;
+    obj = js_get_proto(js, obj);
+  }
+  return false;
+}
+
 static ant_value_t error_payload(
   ant_wasm_runtime_t *runtime, ant_value_t fallback
 ) {
@@ -525,9 +537,12 @@ static ant_value_t error_payload(
   GC_ROOT_PIN(js, stack);
 
   if (is_object_type(thrown)) {
-    js_try_get_own_data_prop(js, thrown, "name", 4, &name);
-    js_try_get_own_data_prop(js, thrown, "message", 7, &message);
+    bool plain_header =
+      error_data_prop(js, thrown, "name", 4, &name) &&
+      error_data_prop(js, thrown, "message", 7, &message);
     js_try_get_own_data_prop(js, thrown, "stack", 5, &stack);
+    if (plain_header && vtype(stack) != kTypeString)
+      stack = Ant_Error_ConsumeMarker(js, js_error_stack_value(js, thrown));
   }
   if (vtype(name) != kTypeString)
     name = js_mkstr(js, "Error", 5);
@@ -665,6 +680,7 @@ ant_wasm_runtime_t *ant_wasm_create(void) {
   }
 
   runtime->js = js;
+  js->uncaught_nonfatal = true;
   active_runtime = runtime;
   ant_wasm_microtasks_reset(js);
   ant_runtime_init(js, 0, NULL, NULL);
