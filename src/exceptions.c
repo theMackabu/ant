@@ -48,19 +48,35 @@ ant_value_t Ant_Exception_Stack(ant_t *js, ant_value_t completion) {
   
   ant_value_t stack = record->u.exception.stack;
   ant_value_t value = record->u.exception.value;
+  bool lazy_record = js_is_error_record(stack);
   
-  if (js_is_error_record(stack)) {
-    stack = js_error_record_throw_text(js, value, stack);
-    record->u.exception.stack = vtype(stack) == kTypeString ? stack : js_mkundef();
-    gc_write_barrier(js, record, record->u.exception.stack);
-    return record->u.exception.stack;
+  bool lazy_value = 
+    !lazy_record && vtype(stack) != kTypeString && is_object_type(value) && 
+    js_is_error_record(js_get_slot(value, SLOT_ERROR_STACK));
+    
+  if (!lazy_record && !lazy_value) return stack;
+  GC_ROOT_SAVE(root_mark, js);
+  
+  ant_value_t previous = Ant_Exception_Peek(js);
+  GC_ROOT_PIN(js, previous);
+  GC_ROOT_PIN(js, completion);
+  
+  Ant_Exception_Clear(js);
+  
+  stack = lazy_record
+    ? js_error_record_throw_text(js, value, stack)
+    : js_error_stack_value(js, value);
+  if (vtype(stack) != kTypeString) stack = js_mkundef();
+  
+  if (lazy_record) {
+    record->u.exception.stack = stack;
+    gc_write_barrier(js, record, stack);
   }
   
-  if (vtype(stack) == kTypeString || !is_object_type(value)) return stack;
-  if (!js_is_error_record(js_get_slot(value, SLOT_ERROR_STACK))) return stack;
+  Ant_Exception_Set(js, previous);
+  GC_ROOT_RESTORE(js, root_mark);
   
-  stack = js_error_stack_value(js, value);
-  return vtype(stack) == kTypeString ? stack : js_mkundef();
+  return stack;
 }
 
 ant_value_t Ant_Exception_Raise(ant_t *js, ant_value_t value, ant_value_t stack) {

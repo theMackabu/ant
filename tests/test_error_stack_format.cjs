@@ -134,6 +134,18 @@ try {
   assert.strictEqual(stale.status, 1);
   assert.match(staleErr, /^.*stale\.cjs:7:\d+\n/, staleErr);
   assert.doesNotMatch(staleErr, /stale\.cjs:[1-6]:/, staleErr);
+
+  const handlerFile = path.join(root, 'handler.cjs');
+  fs.writeFileSync(handlerFile, [
+    "const e = new Error('real');",
+    'let reads = 0;',
+    "Object.defineProperty(e, 'name', { get() { if (reads++ === 0) throw new Error('name getter'); return 'Error'; } });",
+    "process.on('uncaughtException', (err) => console.log(err === e, err.message));",
+    'throw e;',
+    '',
+  ].join('\n'));
+  const handler = spawnSync(process.execPath, [handlerFile], { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } });
+  assert.strictEqual(handler.stdout.trim(), 'true real', handler.stdout + handler.stderr);
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }
