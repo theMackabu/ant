@@ -3,29 +3,26 @@ const events = require('node:events');
 
 const { EventEmitter } = events;
 
-globalThis.onunhandledrejection = () => {};
-
+// Matches Node: an object made from EventEmitter.prototype without the
+// constructor is still an emitter (its methods create _events lazily), so
+// once() waits for the event; one made from EventTarget.prototype has no
+// internal listener state and rejects.
 (async () => {
   const timeout = setTimeout(() => {
-    throw new Error('events.once prototype spoof rejection timed out');
-  }, 50);
+    throw new Error('events.once prototype spoof timed out');
+  }, 1000);
 
   try {
-    let emitterRejected = false;
-    try {
-      await events.once(Object.create(EventEmitter.prototype), 'ready');
-    } catch {
-      emitterRejected = true;
-    }
-    assert.strictEqual(emitterRejected, true);
+    const emitter = Object.create(EventEmitter.prototype);
+    const ready = events.once(emitter, 'ready');
+    emitter.emit('ready', 1, 2);
+    assert.deepStrictEqual(await ready, [1, 2]);
+    assert.strictEqual(emitter.listenerCount('ready'), 0);
 
-    let targetRejected = false;
-    try {
-      await events.once(Object.create(EventTarget.prototype), 'ready');
-    } catch {
-      targetRejected = true;
-    }
-    assert.strictEqual(targetRejected, true);
+    await assert.rejects(
+      events.once(Object.create(EventTarget.prototype), 'ready'),
+      TypeError
+    );
   } finally {
     clearTimeout(timeout);
   }

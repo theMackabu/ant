@@ -423,7 +423,7 @@ static void gc_decide(ant_t *js) {
       else if (js->gc.code_alloc >= gc_code_major_threshold(js)) major_due = true;
       else if (js->closure_arena.watermark - js->gc.closure_wm_at_major >= GC_CLOSURE_MAJOR_GROWTH) major_due = true;
       else if (js->gc_closure_promoted_since_major >= GC_CLOSURE_PROMOTED_MAJOR) major_due = true;
-      else if (js->alloc_bytes.arrays >= js->gc.array_major_limit) major_due = true;
+      else if (js->alloc_bytes.arrays + gc_array_storage_cached_bytes(js) >= js->gc.array_major_limit) major_due = true;
       
       if (major_due) {
         js->minor_gc_count = 0;
@@ -476,8 +476,9 @@ void gc_refresh_alloc_limit(ant_t *js) {
 }
 
 void gc_array_limits_init(ant_t *js) {
-  js->gc.array_major_limit = js->alloc_bytes.arrays + 
-    gc_array_growth(gc_heap_bytes(js, js->gc.pool_last_live));
+  js->gc.array_major_limit = js->alloc_bytes.arrays 
+    + gc_array_storage_cached_bytes(js) 
+    + gc_array_growth(gc_heap_bytes(js, js->gc.pool_last_live));
 }
 
 void gc_array_grew(ant_t *js) {

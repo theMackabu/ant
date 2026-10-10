@@ -9,7 +9,7 @@
 #include "wasm_embed.h"
 #endif
 
-static constexpr int GC_ARRAY_STORAGE_CLASSES = 6;
+static constexpr int GC_ARRAY_STORAGE_CLASSES = 9;
 static constexpr uint8_t ANT_GC_DEAD = 0xFF;
 
 typedef struct {
@@ -95,8 +95,8 @@ typedef void (*gc_extra_roots_fn)(ant_t *js);
 uint64_t gc_get_epoch(ant_t *js);
 uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots);
 
+uint32_t gc_array_storage_fit(uint32_t cap);
 bool gc_obj_is_marked(ant_t *js, const ant_object_t *obj);
-ant_value_t *gc_array_storage_alloc(ant_t *js, uint32_t cap);
 
 void gc_mark_str(ant_t *js, ant_value_t v);
 void gc_mark_value(ant_t *js, ant_value_t v);
@@ -108,10 +108,16 @@ void gc_mark_conservative_range(ant_t *js, const void *ptr, size_t size);
 
 void gc_objects_run_minor(ant_t *js);
 void gc_object_free(ant_t *js, ant_object_t *obj);
+void gc_pin_existing_objects(ant_t *js);
+
+ant_value_t *gc_array_storage_alloc(ant_t *js, uint32_t cap);
+ant_value_t *gc_array_storage_grow(ant_t *js, ant_value_t *data, uint32_t old_cap, uint32_t new_cap);
+
 void gc_array_storage_release(ant_t *js, ant_value_t *data, uint32_t cap);
+size_t gc_array_storage_cached_bytes(ant_t *js);
+
 void gc_array_storage_trim(ant_t *js);
 void gc_array_storage_cache_destroy(ant_t *js);
-void gc_pin_existing_objects(ant_t *js);
 
 void gc_root_pending_promise(ant_t *js, ant_object_t *obj);
 void gc_unroot_pending_promise(ant_t *js, ant_object_t *obj);
