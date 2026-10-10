@@ -8,10 +8,17 @@
 //   const dirObj = this.fsw._getWatchedDir(dirname(pp));
 //   if (dirObj.has(base)) return;
 
+import { existsSync as viteExists } from 'node:fs';
+import { homedir as viteHome } from 'node:os';
 import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
-import fsevents from '/Users/themackabu/.ant/pkg/exec/vite/node_modules/fsevents/fsevents.js';
+const viteModules = `${viteHome()}/.ant/pkg/exec/vite/node_modules`;
+if (!viteExists(viteModules)) {
+  console.log(`skip: no Vite install at ${viteModules}`);
+  process.exit(0);
+}
+const fsevents = (await import(`${viteModules}/fsevents/fsevents.js`)).default;
 
 class DirEntry {
   constructor(dir) {

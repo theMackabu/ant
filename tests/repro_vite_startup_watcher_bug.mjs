@@ -4,7 +4,14 @@
 // Run with:
 //   ant tests/repro_vite_startup_watcher_bug.mjs
 
-import * as vite from '/Users/themackabu/.ant/pkg/exec/vite/node_modules/vite/dist/node/index.js';
+import { existsSync as viteExists } from 'node:fs';
+import { homedir as viteHome } from 'node:os';
+const viteModules = `${viteHome()}/.ant/pkg/exec/vite/node_modules`;
+if (!viteExists(viteModules)) {
+  console.log(`skip: no Vite install at ${viteModules}`);
+  process.exit(0);
+}
+const vite = await import(`${viteModules}/vite/dist/node/index.js`);
 
 process.on('unhandledRejection', (reason) => {
   console.log('[unhandledRejection]', reason?.name, reason?.message);

@@ -1,63 +1,43 @@
-// Test that 'this' works with regular functions in async callbacks
+const assert = require('node:assert');
 
 class AsyncRegularFunctionTest {
   constructor(name) {
     this.name = name;
     this.value = 100;
   }
-  
-  testPromiseWithRegularFunction() {
-    console.log('=== testPromiseWithRegularFunction ===');
-    console.log('Before promise: this.name = ' + this.name);
-    
-    return Promise.resolve(42).then(function(val) {
-      console.log('Inside .then() with function:');
-      console.log('  typeof this: ' + typeof this);
-      console.log('  this.name: ' + this.name);
-      console.log('  this.value: ' + this.value);
-      return val + 1;
+
+  withRegularFunction() {
+    return Promise.resolve(42).then(function (val) {
+      return { self: this, val: val + 1 };
     });
   }
-  
-  testPromiseWithArrowFunction() {
-    console.log('\n=== testPromiseWithArrowFunction ===');
-    console.log('Before promise: this.name = ' + this.name);
-    
-    return Promise.resolve(42).then((val) => {
-      console.log('Inside .then() with arrow:');
-      console.log('  typeof this: ' + typeof this);
-      console.log('  this.name: ' + this.name);
-      console.log('  this.value: ' + this.value);
-      return val + 1;
-    });
+
+  withArrowFunction() {
+    return Promise.resolve(42).then((val) => ({ self: this, val: val + 1 }));
   }
-  
-  testMethodCallingPromiseWithFunction() {
-    console.log('\n=== testMethodCallingPromiseWithFunction ===');
+
+  withCapturedSelf() {
     const self = this;
-    console.log('Before promise: this.name = ' + this.name);
-    
-    return Promise.resolve(1).then(function() {
-      console.log('In .then() with function:');
-      console.log('  this.name: ' + this.name);
-      console.log('  self.name: ' + self.name);
-      return self.value;
+    return Promise.resolve(1).then(function () {
+      return { self: this, value: self.value };
     });
   }
 }
 
 const obj = new AsyncRegularFunctionTest('TestObject');
 
-obj.testPromiseWithRegularFunction().then(function(result) {
-  console.log('Result 1: ' + result);
-});
+(async () => {
+  const regular = await obj.withRegularFunction();
+  assert.strictEqual(regular.self, undefined);
+  assert.strictEqual(regular.val, 43);
 
-obj.testPromiseWithArrowFunction().then((result) => {
-  console.log('Result 2: ' + result);
-});
+  const arrow = await obj.withArrowFunction();
+  assert.strictEqual(arrow.self, obj);
+  assert.strictEqual(arrow.val, 43);
 
-obj.testMethodCallingPromiseWithFunction().then((result) => {
-  console.log('Result 3: ' + result);
-});
+  const captured = await obj.withCapturedSelf();
+  assert.strictEqual(captured.self, undefined);
+  assert.strictEqual(captured.value, 100);
 
-console.log('\n=== All tests queued ===');
+  console.log('async regular function this ok');
+})();

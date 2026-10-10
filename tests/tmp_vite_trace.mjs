@@ -1,5 +1,12 @@
-const vite = await import('/Users/themackabu/.ant/pkg/exec/vite/node_modules/vite/dist/node/index.js');
-const chunk = await import('/Users/themackabu/.ant/pkg/exec/vite/node_modules/vite/dist/node/chunks/node.js');
+import { existsSync as viteExists } from 'node:fs';
+import { homedir as viteHome } from 'node:os';
+const viteModules = `${viteHome()}/.ant/pkg/exec/vite/node_modules`;
+if (!viteExists(viteModules)) {
+  console.log(`skip: no Vite install at ${viteModules}`);
+  process.exit(0);
+}
+const vite = await import(`${viteModules}/vite/dist/node/index.js`);
+const chunk = await import(`${viteModules}/vite/dist/node/chunks/node.js`);
 const config = await vite.resolveConfig({ configFile: false, root: process.cwd() }, 'serve');
 const env = new vite.DevEnvironment('client', config, {
   hot: true,
