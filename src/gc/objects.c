@@ -1245,25 +1245,24 @@ static void gc_mark_roots(ant_t *js) {
   (1u << kTypeWeakMap) | (1u << kTypeWeakSet))
 
 static constexpr uint32_t GC_ARRAY_STORAGE_MAX_CAP = 32;
-static constexpr uint8_t GC_ARRAY_STORAGE_SIZES[] = {1, 2, 3, 4, 6, 8, 12, 16, 24, 32};
+static constexpr uint8_t GC_ARRAY_STORAGE_SIZES[] = {2, 3, 4, 6, 8, 12, 16, 24, 32};
+
 static_assert(sizeof GC_ARRAY_STORAGE_SIZES == GC_ARRAY_STORAGE_CLASSES, "one size per cache class");
+static_assert(GC_ARRAY_STORAGE_SIZES[GC_ARRAY_STORAGE_CLASSES - 1] == GC_ARRAY_STORAGE_MAX_CAP, "largest class");
+
+static constexpr uint8_t GC_ARRAY_STORAGE_FIT_CLASS[GC_ARRAY_STORAGE_MAX_CAP + 1] = {
+  0, 0, 0, 1, 2, 3, 3, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6,
+  7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8,
+};
 
 static inline int gc_array_storage_class(uint32_t cap) {
-  static constexpr int8_t class_of[GC_ARRAY_STORAGE_MAX_CAP + 1] = {
-    [1] = 1, [2] = 2, [3] = 3, [4] = 4, [6] = 5, 
-    [8] = 6, [12] = 7, [16] = 8, [24] = 9, [32] = 10,
-  };
-  
-  return cap <= GC_ARRAY_STORAGE_MAX_CAP ? class_of[cap] - 1 : -1;
+  if (cap > GC_ARRAY_STORAGE_MAX_CAP) return -1;
+  int cls = GC_ARRAY_STORAGE_FIT_CLASS[cap];
+  return GC_ARRAY_STORAGE_SIZES[cls] == cap ? cls : -1;
 }
 
 uint32_t gc_array_storage_fit(uint32_t cap) {
-  static constexpr uint8_t fit_of[GC_ARRAY_STORAGE_MAX_CAP + 1] = {
-    1, 1, 2, 3, 4, 6, 6, 8, 8, 12, 12, 12, 12, 16, 16, 16, 16,
-    24, 24, 24, 24, 24, 24, 24, 24, 32, 32, 32, 32, 32, 32, 32, 32,
-  };
-  
-  return cap <= GC_ARRAY_STORAGE_MAX_CAP ? fit_of[cap] : cap;
+  return cap <= GC_ARRAY_STORAGE_MAX_CAP ? GC_ARRAY_STORAGE_SIZES[GC_ARRAY_STORAGE_FIT_CLASS[cap]] : cap;
 }
 
 static inline size_t gc_array_storage_bytes(uint32_t cap) {
@@ -1287,8 +1286,9 @@ ant_value_t *gc_array_storage_alloc(ant_t *js, uint32_t cap) {
   if (cls >= 0 && cache->head[cls]) {
     cache->taken[cls]++;
     data = gc_array_storage_pop(cache, cls);
-  } else if (!(data = malloc(bytes))) return NULL;
+  } else data = malloc(bytes);
   
+  if (!data) return NULL;
   js->alloc_bytes.arrays += bytes;
   return data;
 }
@@ -1296,7 +1296,9 @@ ant_value_t *gc_array_storage_alloc(ant_t *js, uint32_t cap) {
 void gc_array_storage_release(ant_t *js, ant_value_t *data, uint32_t cap) {
   gc_array_storage_cache_t *cache = &js->array_storage;
   size_t bytes = gc_array_storage_bytes(cap);
-  js->alloc_bytes.arrays = js->alloc_bytes.arrays > bytes ? js->alloc_bytes.arrays - bytes : 0;
+  
+  ANT_ASSERT(js->alloc_bytes.arrays >= bytes, "array storage released more bytes than were allocated");
+  js->alloc_bytes.arrays -= bytes;
   
   int cls = gc_array_storage_class(cap);
   if (cls < 0) {

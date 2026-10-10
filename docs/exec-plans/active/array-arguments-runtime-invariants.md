@@ -93,17 +93,21 @@ and the JIT guards in `src/jit/values.c` and `src/jit/emit_properties.c`.
 
 ### Storage cache
 
-- Backing stores with a cached capacity (`GC_ARRAY_STORAGE_SIZES`: 1, 2, 3,
-  4, 6, 8, 12, 16, 24, 32) are returned to a per-isolate free list
+- Backing stores with a cached capacity (`GC_ARRAY_STORAGE_SIZES`: 2, 3, 4,
+  6, 8, 12, 16, 24, 32) are returned to a per-isolate free list
   (`js->array_storage`) when an array dies. The next pointer lives in slot 0
   of the freed buffer.
-- Exact-size stores pick their rounding at the call site: arguments objects
-  and listener snapshots use `gc_array_storage_fit` (the next class, under a
-  third of the slots spare); `with`/`to*` copies round below 32 to a power of
-  two, since callers often append to them, and `toSpliced` reserves room for
-  its inserted items.
+- One table (`GC_ARRAY_STORAGE_FIT_CLASS`) maps a capacity to the smallest
+  class holding it. `gc_array_storage_fit` rounds with it; the class lookup
+  only accepts a capacity equal to its class size, so a wrong entry can
+  only round badly, never put a buffer in the wrong class.
+- Exact-size stores round with `gc_array_storage_fit` (the next class, under
+  a third of the slots spare): arguments objects, listener snapshots, and
+  the copies built by `with`/`toSorted`/`toReversed`/`toSpliced`
+  (`array_copy_spliced`, sized exactly and filled in one pass).
 - `js->alloc_bytes.arrays` counts stores in use, kept by the storage
-  functions rather than their callers. Cached stores are left out; only the
+  functions rather than their callers; a release that would take it below
+  zero is a fatal accounting bug. Cached stores are left out; only the
   major-GC array trigger adds them (`gc_array_storage_cached_bytes`, summed
   from the per-class counts), so a growing cache forces a major (and a trim)
   without skewing reclaim or heap-size estimates.
@@ -133,13 +137,21 @@ and the JIT guards in `src/jit/values.c` and `src/jit/emit_properties.c`.
   majors look unproductive (fewer majors, +21 MB peak RSS on a ring of 300k
   short-lived small arrays). A per-class cache cap was also rejected: it cost
   47% on small-array churn.
+- No 1-slot class: malloc gives 1 and 2 slots the same block on macOS and
+  glibc, so it saved no memory and only split the free list.
+- Copies round with `fit` rather than to a power of two: append-after-copy
+  showed no benefit from the extra room, and retained `with` copies used
+  14% less RSS.
+- `toSpliced` builds its result directly instead of copying and calling
+  `splice`: it no longer reads skipped elements, converts its arguments
+  before reading any, and skips the discarded `removed` array.
 
 ## Validation
 
 - Tests: `tests/test_array_builtin_fast_paths.cjs` (sections including
   `speciesresult`, `packedresults`, `arraylikes`, `protochain`),
   `tests/test_array_readonly_length.cjs`, `tests/test_array_storage_reuse.cjs`,
-  `tests/test_arguments_object_semantics.cjs`,
+  `tests/test_array_copy_methods.cjs`, `tests/test_arguments_object_semantics.cjs`,
   `tests/test_arguments_length_only.cjs`. Expected values were generated with
   Node.
 - Measured by instruction count, no-PGO builds:
@@ -149,6 +161,9 @@ and the JIT guards in `src/jit/values.c` and `src/jit/emit_properties.c`.
   - `slice`: 3,931 -> 1,162.
   - `pop`/`shift` mask fast paths: -14%.
   - array helpers against `origin/master`: 1.4-7.5x faster.
+  - size classes and exact copies against master: retained arguments
+    objects -11% RSS, retained `with` copies -14% RSS, 0/1-argument
+    `arguments` -6%; small `with` copies +0.9% (about 11 instructions).
 
 ## Follow-ups
 

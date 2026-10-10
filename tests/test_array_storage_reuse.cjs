@@ -1,9 +1,12 @@
 // Small element buffers (see GC_ARRAY_STORAGE_SIZES) are reused from a free
 // list after their array dies; the next-free pointer lives in slot 0. Exact
-// stores (arguments objects, `with` copies) round up, so their spare slots
-// must read as holes too. Every path that
-// builds an array must initialise its slots: holes must read as holes, and no
-// stale element or pointer may show through, across minor and major GCs.
+// stores (arguments objects, copies such as `with` and `toSpliced`, listener
+// snapshots) round up to a cached size, so their spare slots must read as
+// holes too. Every path that builds an array must initialise its slots: holes
+// must read as holes, and no stale element or pointer may show through,
+// across minor and major GCs.
+const { EventEmitter } = require('node:events');
+
 function same(actual, expected, what) {
   if (!Object.is(actual, expected)) throw new Error(`${what}: ${String(actual)} !== ${String(expected)}`);
 }
@@ -54,7 +57,24 @@ for (let round = 0; round < 400; round++) {
     const args = (function () { return arguments; })(...pushed);
     check(args, n, `arguments ${n}`);
     same(n in args, false, `arguments ${n} spare slot`);
+    // an exact copy of the first and last elements around inserted ones
+    const insert = [];
+    for (let k = 1; k < n - 1; k++) insert.push(k * 3 + 1);
+    const sp = n > 1 ? [pushed[0], pushed[n - 1]].toSpliced(1, 0, ...insert) : pushed.toSpliced(0, 0);
+    check(sp, n, `toSpliced ${n}`);
+    sp.length = n + 1;
+    same(n in sp, false, `toSpliced ${n} spare slot`);
+    sp.length = n;
+    sp.push(n * 3 + 1);
+    check(sp, n + 1, `toSpliced then push ${n}`);
   }
+  // emit snapshots its listeners into an exact store
+  const emitter = new EventEmitter();
+  emitter.setMaxListeners(0);
+  const heard = [];
+  for (let k = 0; k < n; k++) emitter.on('e', () => heard.push(k * 3 + 1));
+  emitter.emit('e');
+  check(heard, n, `listeners ${n}`);
   const spliced = pushed.slice();
   spliced.splice(0, 0);
   check(spliced, n, `splice ${n}`);
