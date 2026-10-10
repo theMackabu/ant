@@ -154,6 +154,10 @@ MIR_reg_t vstack_push_const(jit_vstack_t *vs, uint64_t val) {
 }
 
 MIR_reg_t vstack_pop(jit_vstack_t *vs) {
+  if (vs->sp <= 0) {
+    vs->overflow = true;
+    return vs->regs[0];
+  }
   return vs->regs[--vs->sp];
 }
 
@@ -545,14 +549,14 @@ bool jit_emit_integer_arithmetic(
 
 MIR_label_t label_for_offset(MIR_context_t ctx, jit_label_map_t *lm,
                              int bc_off) {
-  for (int i = 0; i < lm->count; i++)
-    if (lm->entries[i].bc_off == bc_off) return lm->entries[i].label;
+  if (bc_off < 0 || bc_off >= lm->index_len) return NULL;
+  int at = lm->index[bc_off] - 1;
+  if (at >= 0) return lm->entries[at].label;
   if (lm->count >= MAX_LABELS) return NULL;
   MIR_label_t lbl = MIR_new_label(ctx);
   lm->entries[lm->count].bc_off = bc_off;
   lm->entries[lm->count].label = lbl;
-  lm->entries[lm->count].sp = -1;
-  lm->count++;
+  lm->index[bc_off] = ++lm->count;
   return lbl;
 }
 
@@ -569,26 +573,9 @@ int jit_constant_object_span(sv_func_t *func, sv_obj_site_cache_t *site, jit_lab
         sv_get_u32(ip + 1) != site->key_atoms[i] || sv_get_u16(ip + 5) != i) return 0;
     ip += sv_op_size[OP_DEFINE_SLOT];
   }
-  for (int i = 0; i < lm->count; i++)
-    if (lm->entries[i].bc_off >= begin - func->code && lm->entries[i].bc_off < ip - func->code) return 0;
+  for (int off = (int)(begin - func->code); off < (int)(ip - func->code); off++)
+    if (jit_label_at(lm, off) >= 0) return 0;
   return (int)(ip - begin);
-}
-
-static void label_record_sp(jit_label_map_t *lm, int bc_off, int sp) {
-  for (int i = 0; i < lm->count; i++)
-    if (lm->entries[i].bc_off != bc_off)
-      continue;
-    else {
-      if (lm->entries[i].sp < 0) lm->entries[i].sp = sp;
-      return;
-    }
-}
-
-MIR_label_t label_for_branch(MIR_context_t ctx, jit_label_map_t *lm,
-                             int bc_off, int sp) {
-  MIR_label_t lbl = label_for_offset(ctx, lm, bc_off);
-  label_record_sp(lm, bc_off, sp);
-  return lbl;
 }
 
 void mir_emit_decode_ref(

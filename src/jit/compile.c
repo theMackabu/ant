@@ -269,39 +269,46 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       break;
     }
 
-    for (int i = 0; i < c->lm.count; i++) {
-      if (c->lm.entries[i].bc_off == c->bc_off) {
-        vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
-        c->cmp_value = 0;
-        memset(c->param_shadow, 0, sizeof(c->param_shadow));
-        c->element_available = false;
-        c->previous_ip = NULL;
-        if (c->integer_locals) {
-          for (int li = 0; li < c->n_locals; li++)
-            if (!c->entry_integer_regs || !c->entry_integer_regs[li]) c->integer_locals[li] = 0;
-        }
-        MIR_append_insn(c->ctx, c->jit_func, c->lm.entries[i].label);
-        if (c->lm.entries[i].sp >= 0)
-          c->vs.sp = c->lm.entries[i].sp;
-        if (c->vs.slot_type)
-          memset(c->vs.slot_type, SLOT_BOXED, (size_t)c->vs.max);
-        if (c->vs.known_func)
-          memset(c->vs.known_func, 0, (size_t)c->vs.max * sizeof(sv_func_t *));
-        if (c->vs.has_const)
-          memset(c->vs.has_const, 0, (size_t)c->vs.max * sizeof(bool));
-        if (c->vs.known_bool)
-          memset(c->vs.known_bool, 0, (size_t)c->vs.max);
-        if (c->vs.known_builtin)
-          memset(c->vs.known_builtin, 0, (size_t)c->vs.max);
-        if (c->known_func_locals)
-          memset(c->known_func_locals, 0,
-                 (size_t)c->n_locals * sizeof(sv_func_t *));
-        if (c->known_type_locals && c->local_d_regs) {
-          for (int li = 0; li < c->n_locals; li++)
-            if (c->known_type_locals[li] == SV_TI_NUM && c->has_captures && c->captured_locals && c->captured_locals[li])
-              mir_i64_to_d(c->ctx, c->jit_func, c->local_d_regs[li],
-                           c->local_regs[li], c->r_d_slot);
-        }
+    if (c->depth[c->bc_off] < 0) {
+      if (c->op == OP_TRY_PUSH) c->dead_try_depth++;
+      else if (c->op == OP_TRY_POP && c->dead_try_depth > 0) c->dead_try_depth--;
+      else if (c->op == OP_TRY_POP && c->jit_try_depth > 0) c->jit_try_depth--;
+      c->previous_ip = NULL;
+      c->ip += c->sz;
+      continue;
+    }
+
+    int i = jit_label_at(&c->lm, c->bc_off);
+    if (i >= 0) {
+      vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
+      c->cmp_value = 0;
+      memset(c->param_shadow, 0, sizeof(c->param_shadow));
+      c->element_available = false;
+      c->previous_ip = NULL;
+      if (c->integer_locals) {
+        for (int li = 0; li < c->n_locals; li++)
+          if (!c->entry_integer_regs || !c->entry_integer_regs[li]) c->integer_locals[li] = 0;
+      }
+      MIR_append_insn(c->ctx, c->jit_func, c->lm.entries[i].label);
+      c->vs.sp = c->depth[c->bc_off];
+      if (c->vs.slot_type)
+        memset(c->vs.slot_type, SLOT_BOXED, (size_t)c->vs.max);
+      if (c->vs.known_func)
+        memset(c->vs.known_func, 0, (size_t)c->vs.max * sizeof(sv_func_t *));
+      if (c->vs.has_const)
+        memset(c->vs.has_const, 0, (size_t)c->vs.max * sizeof(bool));
+      if (c->vs.known_bool)
+        memset(c->vs.known_bool, 0, (size_t)c->vs.max);
+      if (c->vs.known_builtin)
+        memset(c->vs.known_builtin, 0, (size_t)c->vs.max);
+      if (c->known_func_locals)
+        memset(c->known_func_locals, 0,
+               (size_t)c->n_locals * sizeof(sv_func_t *));
+      if (c->known_type_locals && c->local_d_regs) {
+        for (int li = 0; li < c->n_locals; li++)
+          if (c->known_type_locals[li] == SV_TI_NUM && c->has_captures && c->captured_locals && c->captured_locals[li])
+            mir_i64_to_d(c->ctx, c->jit_func, c->local_d_regs[li],
+                         c->local_regs[li], c->r_d_slot);
       }
     }
 
@@ -606,6 +613,8 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   free(c->stale_sites);
   free(c->stale_types);
   free(c->stale_sp_exits);
+  free(c->lm.index);
+  free(c->depth);
 
   if (!c->ok) {
     if (sv_jit_warn_unlikely) fprintf(

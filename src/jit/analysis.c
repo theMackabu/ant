@@ -119,8 +119,13 @@ bool jit_can_forward_arguments(sv_func_t *func) {
 }
 
 bool scan_branch_targets(sv_func_t *func, jit_label_map_t *lm, MIR_context_t ctx) {
+  lm->index_len = func->code_len + 1;
+  lm->index = calloc((size_t)lm->index_len, sizeof(*lm->index));
+  if (!lm->index) return false;
+
   uint8_t *ip = func->code;
   uint8_t *end = func->code + func->code_len;
+  
   while (ip < end) {
     sv_op_t op = (sv_op_t)*ip;
     int sz = sv_op_size[op];

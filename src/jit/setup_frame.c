@@ -7,6 +7,10 @@ static void jit_discard_setup_module(jit_compile_t *c) {
   MIR_finish_func(c->ctx);
   MIR_finish_module(c->ctx);
   MIR_remove_module(c->ctx, c->mod);
+  free(c->lm.index);
+  free(c->depth);
+  c->lm.index = NULL;
+  c->depth = NULL;
 }
 
 bool jit_numeric_param_use(sv_func_t *func, uint8_t *ip, uint8_t *end) {
@@ -254,7 +258,9 @@ bool jit_setup_frame(jit_compile_t *c) {
                              MIR_T_P, "closure");
 
   c->lm = (jit_label_map_t){0};
-  if (!scan_branch_targets(c->func, &c->lm, c->ctx)) {
+  c->depth = sv_func_stack_depth_map(c->func);
+  
+  if (!c->depth || !scan_branch_targets(c->func, &c->lm, c->ctx)) {
     jit_discard_setup_module(c);
     c->func->jit_compile_failed = true;
     c->func->jit_compiling = false;

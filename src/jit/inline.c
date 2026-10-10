@@ -615,19 +615,27 @@ void jit_emit_inline_body(
   uint8_t *code_base = callee->code;
   uint8_t *ip = callee->code;
   uint8_t *end = callee->code + callee->code_len;
+  
   bool seen_effect = false;
+  int *inl_depth = sv_func_stack_depth_map(callee);
 
   while (ip < end) {
     sv_op_t op = (sv_op_t)*ip;
     int sz = sv_op_size[op];
     int inl_bc_off = (int)(ip - code_base);
 
+    if (inl_depth && inl_depth[inl_bc_off] < 0) {
+      ip += sz;
+      continue;
+    }
+
     int label_sp = -1;
     MIR_label_t target_lbl = inl_label_lookup(&inl_lm, inl_bc_off, &label_sp);
     if (target_lbl) {
       INL_FLUSH_ALL();
       MIR_append_insn(ctx, jit_func, target_lbl);
-      if (label_sp >= 0) isp = label_sp;
+      if (inl_depth) isp = inl_depth[inl_bc_off];
+      else if (label_sp >= 0) isp = label_sp;
       memset(inl_num, 0, (size_t)inl_max_stack);
     }
 
@@ -2218,5 +2226,6 @@ void jit_emit_inline_body(
     ip += sz;
   }
   
+  free(inl_depth);
   ANT_ASSERT(!reuse_empty_objects || !seen_effect, "empty object reuse requires an effect-free inline body");
 }

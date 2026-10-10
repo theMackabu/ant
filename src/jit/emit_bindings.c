@@ -253,14 +253,7 @@ void jit_emit_bindings(jit_compile_t *c) {
       uint8_t *next_ip = c->ip + c->sz;
       if (next_ip < c->end && (sv_op_t)*next_ip == OP_SET_NAME) {
         int next_sz = sv_op_size[OP_SET_NAME];
-        bool next_has_label = false;
-        int next_bc_off = (int)(next_ip - c->func->code);
-        for (int i = 0; i < c->lm.count; i++) {
-          if (c->lm.entries[i].bc_off == next_bc_off) {
-            next_has_label = true;
-            break;
-          }
-        }
+        bool next_has_label = jit_label_at(&c->lm, (int)(next_ip - c->func->code)) >= 0;
         if (!next_has_label && next_ip + next_sz <= c->end) {
           uint32_t name_idx = sv_get_u32(next_ip + 1);
           if (name_idx < (uint32_t)c->func->atom_count) {

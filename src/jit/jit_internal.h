@@ -87,12 +87,19 @@ typedef struct {
 typedef struct {
   int bc_off;
   MIR_label_t label;
-  int sp;
 } jit_label_t;
+
 typedef struct {
   jit_label_t entries[MAX_LABELS];
   int count;
+  int *index;
+  int index_len;
 } jit_label_map_t;
+
+static inline int jit_label_at(const jit_label_map_t *lm, int bc_off) {
+  return lm->index && bc_off >= 0 && bc_off < lm->index_len ? lm->index[bc_off] - 1 : -1;
+}
+
 #define MIR_JSVAL MIR_T_I64
 #define JIT_ERR_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypeError)
 #define JIT_STR_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypeString)
@@ -222,8 +229,7 @@ bool jit_emit_integer_arithmetic(
 MIR_label_t label_for_offset(MIR_context_t ctx, jit_label_map_t *lm,
                              int bc_off);
 int jit_constant_object_span(sv_func_t *func, sv_obj_site_cache_t *site, jit_label_map_t *lm);
-MIR_label_t label_for_branch(MIR_context_t ctx, jit_label_map_t *lm,
-                             int bc_off, int sp);
+
 void mir_emit_decode_ref(
     MIR_context_t ctx, MIR_item_t fn, MIR_reg_t dst, MIR_reg_t value);
 void mir_emit_truthy_branch(

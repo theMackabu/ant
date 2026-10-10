@@ -75,7 +75,7 @@ void jit_emit_control(jit_compile_t *c) {
       vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
       bool short_op = (c->op == OP_JMP8);
       int target = c->bc_off + c->sz + (short_op ? (int8_t)sv_get_i8(c->ip + 1) : sv_get_i32(c->ip + 1));
-      MIR_label_t lbl = label_for_branch(c->ctx, &c->lm, target, c->vs.sp);
+      MIR_label_t lbl = label_for_offset(c->ctx, &c->lm, target);
       if (c->cold_tier && target <= c->bc_off && c->promote_sites && c->promote_sites[c->bc_off])
         jit_emit_promote_check(c, lbl, c->promote_sites[c->bc_off] == 2 ? 1 : JIT_COLD_PROMOTE_CHECK_EVERY);
       MIR_append_insn(c->ctx, c->jit_func,
@@ -87,7 +87,7 @@ void jit_emit_control(jit_compile_t *c) {
       vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
       MIR_reg_t cond = vstack_top(&c->vs);
       int target = c->bc_off + c->sz + sv_get_i32(c->ip + 1);
-      MIR_label_t lbl = label_for_branch(c->ctx, &c->lm, target, c->vs.sp);
+      MIR_label_t lbl = label_for_offset(c->ctx, &c->lm, target);
       MIR_label_t done = MIR_new_label(c->ctx);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_BEQ,
@@ -120,7 +120,7 @@ void jit_emit_control(jit_compile_t *c) {
       bool short_op = (c->op == OP_JMP_FALSE8 || c->op == OP_JMP_TRUE8);
       bool is_false_branch = (c->op == OP_JMP_FALSE || c->op == OP_JMP_FALSE8 || c->op == OP_JMP_FALSE_PEEK);
       int target = c->bc_off + c->sz + (short_op ? (int8_t)sv_get_i8(c->ip + 1) : sv_get_i32(c->ip + 1));
-      MIR_label_t lbl = label_for_branch(c->ctx, &c->lm, target, c->vs.sp);
+      MIR_label_t lbl = label_for_offset(c->ctx, &c->lm, target);
       if (fused) {
         jit_emit_fused_compare_branch(c, is_false_branch, lbl);
         break;
@@ -235,7 +235,7 @@ void jit_emit_control(jit_compile_t *c) {
       }
       int32_t off = sv_get_i32(c->ip + 1);
       int catch_off = c->bc_off + c->sz + off;
-      MIR_label_t catch_lbl = label_for_branch(c->ctx, &c->lm, catch_off, c->vs.sp);
+      MIR_label_t catch_lbl = label_for_offset(c->ctx, &c->lm, catch_off);
       c->jit_try_stack[c->jit_try_depth].catch_label = catch_lbl;
       c->jit_try_stack[c->jit_try_depth].catch_bc_off = catch_off;
       c->jit_try_stack[c->jit_try_depth].saved_sp = c->vs.sp;

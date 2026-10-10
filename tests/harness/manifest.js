@@ -140,6 +140,7 @@ export function targets() {
     'test_jit_tail_call_inline.cjs',
     'test_jit_tail_call_inline_codegen.cjs',
     'test_jit_uninitialized_numeric_local.cjs',
+    'test_jit_unreachable_code.cjs',
     'test_json_error_boundaries.cjs',
     'test_json_lone_surrogates.cjs',
     'test_lock_error_boundaries.cjs',

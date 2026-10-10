@@ -314,9 +314,11 @@ typedef struct jit_compile {
   int stale_types_len, stale_types_cap;
   MIR_label_t *stale_sp_exits;
   jit_label_map_t lm;
+  int *depth;
   osr_entry_map_t osr_map;
   jit_try_entry_t jit_try_stack[JIT_TRY_MAX];
   int jit_try_depth;
+  int dead_try_depth;
   jit_catch_sp_t catch_sp_map[JIT_TRY_MAX];
   int catch_sp_count;
   MIR_reg_t *integer_locals;
