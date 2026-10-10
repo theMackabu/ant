@@ -124,13 +124,16 @@ static void sv_parse_stop(P) {
   p->lx.st.tlen = 0;
 }
 
-#define SV_SYNC_ERR() ((void)sv_lexer_set_error_site(&p->lx))
-#define SV_RAISE(mkerr) ({                                          \
-  if (!Ant_Exception_Pending(JS)) { SV_SYNC_ERR(); (void)(mkerr); } \
-  sv_parse_stop(p);                                                 \
+#define SV_RAISE(mkerr) ({                                  \
+  if (!Ant_Exception_Pending(JS)) {                         \
+    js_error_site_t sv_site_ = sv_lexer_error_site(&p->lx); \
+    (void)(mkerr);                                          \
+  }                                                         \
+  sv_parse_stop(p);                                         \
 })
-#define SV_MKERR(...) SV_RAISE(js_mkerr(__VA_ARGS__))
-#define SV_MKERR_TYPED(...) SV_RAISE(js_mkerr_typed(__VA_ARGS__))
+
+#define SV_MKERR(...) SV_RAISE(js_mkerr_at(&sv_site_, __VA_ARGS__))
+#define SV_MKERR_TYPED(...) SV_RAISE(js_mkerr_typed_at(&sv_site_, __VA_ARGS__))
 
 static inline const char *tok_str(P) { 
   return &CODE[TOFF]; 

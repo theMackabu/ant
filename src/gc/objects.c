@@ -715,6 +715,7 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
     sv_eval_env_gc_mark(js, obj);
     if (obj->flags.arguments_object) gc_mark_arguments_cells(js, value);
     gc_mark_abort_signal_object(js, value, gc_mark_value);
+    gc_mark_error_record(js, value, gc_mark_value);
     gc_mark_eventemitter_object(js, value, gc_mark_value);
   }
 }

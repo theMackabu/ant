@@ -36,7 +36,6 @@ static inline ant_value_t sv_make_suppressed_error_value(
   js_mkprop_fast(js, obj, "error", 5, error);
   js_mkprop_fast(js, obj, "suppressed", 10, suppressed);
   js_mkprop_fast(js, obj, "message", 7, ANT_STRING("An error was suppressed during disposal."));
-  js_mkprop_fast(js, obj, "name", 4, ANT_STRING("SuppressedError"));
   js_set_slot(obj, SLOT_ERROR_BRAND, js_true);
   js_capture_stack(js, obj);
 

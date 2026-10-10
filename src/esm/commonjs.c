@@ -326,7 +326,6 @@ static ant_value_t esm_eval_commonjs_function(
     return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
   }
 
-  js_clear_error_site(js);
   ant_value_t args[] = {require_fn, module_obj, exports_obj, filename_val, dirname_val};
   return sv_execute_entry(js->vm, compiled, exports_obj, args, param_count);
 }

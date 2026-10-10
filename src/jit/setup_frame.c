@@ -234,6 +234,8 @@ done:
   free(queued); free(seen); free(work); free(bad);
 }
 
+_Thread_local jit_call_tagging_t *jit_call_tagging;
+
 bool jit_setup_frame(jit_compile_t *c) {
   c->hoisted_upvalue = -1;
   c->hoisted_upvalue_cell = 0;
@@ -266,6 +268,9 @@ bool jit_setup_frame(jit_compile_t *c) {
     c->func->jit_compiling = false;
     return false;
   }
+
+  c->call_tagging = (jit_call_tagging_t){ .ctx = c->ctx, .bc_off = &c->bc_off };
+  jit_call_tagging = &c->call_tagging;
 
   c->r_vm = MIR_reg(c->ctx, "vm", c->jit_func->u.func);
   c->r_this = MIR_reg(c->ctx, "this_val", c->jit_func->u.func);
@@ -955,6 +960,7 @@ bool jit_setup_frame(jit_compile_t *c) {
             MIR_new_uint_op(c->ctx, SV_JIT_BAILOUT)));
         MIR_append_insn(c->ctx, c->jit_func, call_entry);
         MIR_reg_t entry_result = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, "param_entry_result");
+        c->call_tagging.resume = true;
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_call_insn(c->ctx, 17,
             MIR_new_ref_op(c->ctx, c->resume_proto), MIR_new_ref_op(c->ctx, c->imp_resume),
             MIR_new_reg_op(c->ctx, entry_result), MIR_new_reg_op(c->ctx, c->r_vm),
@@ -964,6 +970,7 @@ bool jit_setup_frame(jit_compile_t *c) {
             MIR_new_uint_op(c->ctx, 0), MIR_new_int_op(c->ctx, 0),
             MIR_new_uint_op(c->ctx, 0), MIR_new_int_op(c->ctx, 0),
             MIR_new_uint_op(c->ctx, 0), MIR_new_int_op(c->ctx, 0), MIR_new_int_op(c->ctx, 0)));
+        c->call_tagging.resume = false;
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, entry_result)));
         MIR_append_insn(c->ctx, c->jit_func, ready);
       }

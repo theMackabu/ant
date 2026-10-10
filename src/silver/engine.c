@@ -586,89 +586,35 @@ static inline void sv_clear_jit_resume(sv_vm_t *vm) {
   vm->jit_resume.vstack_sp = 0;
 }
 
-bool sv_lookup_srcpos(sv_func_t *func, int bc_offset, uint32_t *line, uint32_t *col) {
-  if (!func || !func->debug->srcpos || func->debug->srcpos_count <= 0) return false;
-  int best = -1;
-  for (int i = 0; i < func->debug->srcpos_count; i++) {
-    if ((int)func->debug->srcpos[i].bc_offset <= bc_offset) best = i;
-    else break;
+const sv_srcpos_t *sv_srcpos_at(sv_func_t *func, int bc_offset) {
+  if (!func || !func->debug->srcpos || func->debug->srcpos_count <= 0) return NULL;
+  
+  const sv_srcpos_t *pos = func->debug->srcpos;
+  int lo = 0, hi = func->debug->srcpos_count;
+  
+  while (lo < hi) {
+    int mid = lo + (hi - lo) / 2;
+    if ((int)pos[mid].bc_offset <= bc_offset) lo = mid + 1;
+    else hi = mid;
   }
-  if (best < 0) return false;
-  if (line) *line = func->debug->srcpos[best].line;
-  if (col) *col = func->debug->srcpos[best].col;
+  
+  return lo > 0 ? &pos[lo - 1] : NULL;
+}
+
+bool sv_lookup_srcpos(sv_func_t *func, int bc_offset, uint32_t *line, uint32_t *col) {
+  const sv_srcpos_t *pos = sv_srcpos_at(func, bc_offset);
+  if (!pos) return false;
+  if (line) *line = pos->line;
+  if (col) *col = pos->col;
   return true;
 }
 
 bool sv_lookup_srcspan(sv_func_t *func, int bc_offset, uint32_t *src_off, uint32_t *src_end) {
-  if (!func || !func->debug->srcpos || func->debug->srcpos_count <= 0) return false;
-  int best = -1;
-  for (int i = 0; i < func->debug->srcpos_count; i++) {
-    if ((int)func->debug->srcpos[i].bc_offset <= bc_offset) best = i;
-    else break;
-  }
-  
-  if (best < 0) return false;
-  uint32_t off = func->debug->srcpos[best].src_off;
-  uint32_t end = func->debug->srcpos[best].src_end;
-  
-  if (end < off) end = off;
-  if (src_off) *src_off = off;
-  if (src_end) *src_end = end;
-  
+  const sv_srcpos_t *pos = sv_srcpos_at(func, bc_offset);
+  if (!pos) return false;
+  if (src_off) *src_off = pos->src_off;
+  if (src_end) *src_end = pos->src_end < pos->src_off ? pos->src_off : pos->src_end;
   return true;
-}
-
-static ant_offset_t sv_srcpos_to_offset_local(const char *code, ant_offset_t clen, uint32_t line, uint32_t col) {
-  ant_offset_t off = 0;
-  uint32_t cur = 1;
-  
-  while (off < clen && cur < line) {
-    if (code[off] == '\n') cur++;
-    off++;
-  }
-  
-  if (col > 0) off += col - 1;
-  if (off > clen) off = clen;
-  return off;
-}
-
-void js_set_error_site_from_bc(ant_t *js, sv_func_t *func, int bc_offset, const char *filename) {
-  if (!js || !func || !func->debug->source || func->debug->source_len <= 0) return;
-
-  const char *src = func->debug->source;
-  ant_offset_t src_len = (ant_offset_t)func->debug->source_len;
-  const char *file = filename ? filename : func->debug->filename;
-
-  uint32_t line = 0, col = 0;
-  bool have_pos = sv_lookup_srcpos(func, bc_offset, &line, &col);
-
-  ant_offset_t off, span_len;
-  uint32_t src_off = 0, src_end = 0;
-
-  if (sv_lookup_srcspan(func, bc_offset, &src_off, &src_end)) {
-    off = (ant_offset_t)src_off;
-    span_len = (ant_offset_t)(src_end > src_off ? (src_end - src_off) : 0);
-    if (span_len <= 0 && off < src_len) span_len = 1;
-  } else if (have_pos) {
-    off = sv_srcpos_to_offset_local(src, src_len, line, col);
-    span_len = 0;
-  } else return;
-
-  js_set_error_site_lc(js, src, src_len, file, off, span_len, line, col);
-  js->errsite.unit = func->unit;
-}
-
-void js_set_error_site_from_vm_top(ant_t *js) {
-  sv_vm_t *vm = js->vm;
-  if (!js || !vm || vm->fp < 0) return;
-  
-  sv_frame_t *frame = &vm->frames[vm->fp];
-  sv_func_t *func = frame->func;
-  if (!func) return;
-  
-  int bc_off = 0;
-  if (frame->ip && func->code) bc_off = (int)(frame->ip - func->code);
-  js_set_error_site_from_bc(js, func, bc_off, func->debug->filename);
 }
 
 static inline ant_flat_string_t *sv_string_builder_flat_ptr(ant_value_t value) {
@@ -1338,7 +1284,7 @@ static inline __attribute__((always_inline)) ant_value_t sv_try_direct_closure_j
     if (!jit_fn) return SV_JIT_RETRY_INTERP;
   }
 
-  if (caller_frame && caller_ip) caller_frame->ip = caller_ip + sv_op_size[*caller_ip];
+  if (caller_frame && caller_ip) caller_frame->ip = caller_ip;
   ant_value_t jit_result = sv_jit_invoke(js, SV_JIT_FROM_INTERP, jit_fn, vm, &(sv_call_ctx_t){
     .this_val = jit_this,
     .new_target = js_mkundef(),
@@ -1443,6 +1389,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   interp_seg.hi = seg_hi > interp_seg.lo ? seg_hi : interp_seg.lo;
   interp_seg.fp = seg_fp;
   interp_seg.jit_depth = js->jit_active_depth;
+  interp_seg.entry_vm_fp = entry_fp;
   js->vm_segs = &interp_seg;
 
   sv_frame_t *frame = &vm->frames[vm->fp];
@@ -2063,7 +2010,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
             vm->sp -= call_argc + 1;
             if (is_err(jit_result)) { sv_err = jit_result; goto sv_throw; }
             vm->stack[vm->sp++] = jit_result;
-            ip = frame->ip;
+            ip = frame->ip + sv_op_size[OP_CALL];
             DISPATCH();
           }
         }
@@ -2185,7 +2132,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
             vm->sp -= call_argc + 2;
             if (is_err(jit_result)) { sv_err = jit_result; goto sv_throw; }
             vm->stack[vm->sp++] = jit_result;
-            ip = frame->ip;
+            ip = frame->ip + sv_op_size[OP_CALL_METHOD];
             DISPATCH();
           }
         }

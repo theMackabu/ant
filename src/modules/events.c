@@ -536,14 +536,10 @@ static inline __attribute__((always_inline)) ant_value_t eventemitter_call_liste
     }
   }
 
-  sv_call_plan_t plan;
-  ant_value_t err = sv_prepare_call(
-    js->vm, js, listener, this_val, args, nargs, 
-    NULL, SV_CALL_MODE_NORMAL, js_mkundef(), &plan
+  return sv_vm_call_mode(
+    js->vm, js, listener, this_val, args, nargs,
+    NULL, SV_CALL_MODE_NORMAL, js_mkundef()
   );
-  
-  if (is_err(err)) return err;
-  return sv_execute_call_plan(js->vm, js, &plan, NULL);
 }
 
 static ant_value_t eventemitter_call_listener(

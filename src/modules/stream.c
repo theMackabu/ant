@@ -110,24 +110,17 @@ static void stream_finalize(ant_t *js, ant_object_t *obj) {
 }
 
 static ant_value_t stream_call(
-  ant_t *js,
-  ant_value_t fn,
-  ant_value_t this_val,
-  ant_value_t *args,
-  int nargs
+  ant_t *js, ant_value_t fn, ant_value_t this_val, ant_value_t *args, int nargs
 ) {
   if (!is_callable(fn)) return js_mkundef();
+  
   if (sv_check_c_stack_overflow(js))
     return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
 
-  sv_call_plan_t plan;
-  ant_value_t err = sv_prepare_call(
+  return sv_vm_call_mode(
     js->vm, js, fn, this_val, args, nargs, NULL,
-    SV_CALL_MODE_NORMAL, js_mkundef(), &plan
+    SV_CALL_MODE_NORMAL, js_mkundef()
   );
-  if (is_err(err)) return err;
-
-  return sv_execute_call_plan(js->vm, js, &plan, NULL);
 }
 
 static ant_value_t stream_call_prop(

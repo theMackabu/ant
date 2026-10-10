@@ -394,14 +394,10 @@ bool inspector_value_to_remote_object(ant_t *js, ant_value_t value, sbuf_t *out)
 bool inspector_append_call_location(ant_t *js, sbuf_t *b) {
   if (!js || !b) return true;
 
-  js_error_site_t saved = js_error_site_save(js);
-  js_clear_error_site(js);
-
   const char *filename = NULL;
   int line = 1;
   int column = 1;
   js_get_call_location(js, &filename, &line, &column);
-  js_error_site_restore(js, &saved);
 
   if (!filename || !*filename) return true;
   char *url = inspector_make_script_url(filename);
@@ -787,6 +783,10 @@ void inspector_get_properties(inspector_client_t *client, int id, yyjson_val *pa
     size_t key_len = 0;
     ant_value_t value = js_mkundef();
     while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
+      bool error_stack = key_len == 5 && !memcmp(key, "stack", 5) && (
+        vtype(js_get_slot(cur, SLOT_ERROR_STACK)) != kTypeUndefined ||
+        vtype(js_get_slot(cur, SLOT_ERROR_STACK_TEXT)) != kTypeUndefined);
+      if (error_stack) value = Ant_Error_ConsumeMarker(client->js, js_error_stack_value(client->js, cur));
       if (!first && !sbuf_append(&b, ",")) {
         js_prop_iter_end(&iter);
         goto oom;

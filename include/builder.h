@@ -17,6 +17,8 @@ typedef struct {
   bool first;
   bool closed;
   bool did_indent;
+  const char *error_stack;
+  size_t error_stack_len;
 } js_inspect_builder_t;
 
 static inline char *fixed_buf_write_ptr(char *buf, size_t len, size_t n, size_t *avail) {
@@ -37,6 +39,7 @@ bool js_inspect_tagged_header(js_inspect_builder_t *builder, const char *tag, si
 bool js_inspect_object_body(js_inspect_builder_t *builder, ant_value_t obj);
 bool js_inspect_field(js_inspect_builder_t *builder, const char *key, ant_value_t value);
 bool js_inspect_close(js_inspect_builder_t *builder);
+bool js_inspect_error(js_inspect_builder_t *builder, ant_value_t obj);
 
 __attribute__((format(printf, 2, 3)))
 bool js_inspect_header(js_inspect_builder_t *builder, const char *fmt, ...);

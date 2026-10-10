@@ -25,10 +25,9 @@ void sv_lexer_init(sv_lexer_t *lx, ant_t *js, const char *code, ant_offset_t cle
   lx->st.had_newline = false;
 }
 
-void sv_lexer_set_error_site(sv_lexer_t *lx) {
-  ant_t *js = lx->js;
+js_error_site_t sv_lexer_error_site(const sv_lexer_t *lx) {
   ant_offset_t off = lx->st.toff > 0 ? lx->st.toff : lx->st.pos;
-  js_set_error_site_lc(js, lx->code, lx->clen, js->filename, off, lx->st.tlen, 0, 0);
+  return js_error_site_from_source(lx->code, lx->clen, lx->js->filename, off, lx->st.tlen);
 }
 
 void sv_lexer_save_state(const sv_lexer_t *lx, sv_lexer_state_t *st) {
@@ -69,36 +68,42 @@ void sv_lexer_pop_source(sv_lexer_t *lx, const sv_lexer_checkpoint_t *cp) {
 sv_lex_string_t sv_lexer_str_literal(sv_lexer_t *lx) {
   ant_t *js = lx->js;
   sv_lex_string_t outv = { .str = NULL, .len = 0, .ok = false };
+  
   uint8_t *in = (uint8_t *)&lx->code[lx->st.toff];
   size_t n1 = 0, n2 = 0;
   size_t cap = (size_t)lx->st.tlen;
+  
   if (cap == 0) {
     outv.str = "";
     outv.ok = true;
     return outv;
   }
+  
   uint8_t *out = parse_arena_bump(lx->js, cap);
   if (!out) {
     (void)js_mkerr(js, "oom");
     return outv;
   }
+  
   while (n2++ + 2 < (size_t)lx->st.tlen) {
     if (in[n2] == '\\') {
+      // TODO: reduce nesting
       if (lx->strict && is_octal_escape(in, n2)) {
-        sv_lexer_set_error_site(lx);
-        (void)js_mkerr_typed(js, JS_ERR_SYNTAX,
+        js_error_site_t site = sv_lexer_error_site(lx);
+        (void)js_mkerr_typed_at(&site, js, JS_ERR_SYNTAX,
           "Octal escape sequences are not allowed in strict mode.");
         return outv;
       }
       size_t extra = decode_escape(in, n2, (size_t)lx->st.tlen, out, &n1, in[0]);
       n2 += extra + 1;
-    } else {
-      out[n1++] = ((uint8_t *)lx->code)[lx->st.toff + n2];
     }
+    else out[n1++] = ((uint8_t *)lx->code)[lx->st.toff + n2];
   }
+  
   outv.str = (const char *)out;
   outv.len = (uint32_t)n1;
   outv.ok = true;
+  
   return outv;
 }
 

@@ -131,6 +131,17 @@ async function main() {
     assert.equal(await value('lexicalObject.answer', true), 42);
     await value("import { sep as lexicalSeparator } from 'node:path';");
     assert.equal(await value('lexicalSeparator', true), require('node:path').sep);
+    const throwingName = await evaluate(`(() => {
+      const e = new Error('m');
+      Object.defineProperty(e, 'name', { get() { throw new Error('name getter'); } });
+      return e;
+    })()`);
+    const props = await cdp.send('Runtime.getProperties', { objectId: throwingName.result.objectId, ownProperties: true });
+    assert.ok(props.result.some(prop => prop.name === 'stack'));
+    await cdp.send('Runtime.runIfWaitingForDebugger');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(child.exitCode, null, output);
+    assert.equal(await value('1 + 1'), 2);
     console.log('inspector global lexical resolution passed');
   } finally {
     clearTimeout(timeout);

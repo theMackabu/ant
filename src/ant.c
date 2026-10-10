@@ -1303,6 +1303,17 @@ static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
     return n;
   }
 
+  if (get_slot(obj, SLOT_ERROR_BRAND) == js_true || vtype(get_slot(obj, SLOT_ERR_TYPE)) == kTypeNumber) {
+    js_inspect_builder_t builder;
+    js_inspect_builder_init_fixed(&builder, js, buf, len, n);
+    js_inspect_error(&builder, obj);
+    
+    n = builder.n;
+    pop_stringify(js);
+    
+    return n;
+  }
+
   if (is_date_instance(obj)) {
     n += strdate(js, obj, buf + n, REMAIN(n, len));
     pop_stringify(js);
@@ -1310,7 +1321,10 @@ static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
   }
   
   ant_value_t tag_sym = js->sym.toStringTag_sym;
-  ant_value_t tag_val = (vtype(tag_sym) == kTypeSymbol) ? lkp_sym_proto_val(js, obj, (ant_offset_t)vdata(tag_sym)) : js_mkundef();
+  ant_value_t tag_val = (vtype(tag_sym) == kTypeSymbol) 
+    ? lkp_sym_proto_val(js, obj, (ant_offset_t)vdata(tag_sym)) 
+    : js_mkundef();
+  
   bool is_map = false, is_set = false, is_arraybuffer = false;
   ant_offset_t tlen = 0, toff = 0;
   const char *tag_str = NULL;
@@ -4419,10 +4433,7 @@ static ant_value_t call_proto_accessor(
     if (vtype(symbol) == kTypeSymbol) return js_symbol_description_value(js, symbol);
   }
 
-  js_error_site_t saved_errsite = js_error_site_save(js);
   ant_value_t result = sv_vm_call(js->vm, js, accessor, prim, arg, arg_count, NULL, js_mkundef());
-  
-  js_error_site_restore(js, &saved_errsite);
   if (is_setter) return is_err(result) ? result : (arg ? *arg : js_mkundef());
 
   return result;
@@ -4697,9 +4708,7 @@ static ant_value_t setprop_impl(ant_t *js, ant_value_t obj, ant_value_t k, ant_v
       ant_value_t setter = desc_setter;
       uint8_t setter_type = vtype(setter);
       if (setter_type == kTypeFunction || setter_type == kTypeBuiltin) {
-        js_error_site_t saved_errsite = js_error_site_save(js);
         ant_value_t result = sv_vm_call(js->vm, js, setter, obj, &v, 1, NULL, js_mkundef());
-        js_error_site_restore(js, &saved_errsite);
         if (is_err(result)) return result;
         return v;
       }
@@ -7456,8 +7465,7 @@ static ant_value_t builtin_error_captureStackTrace(ant_params_t) {
     ant_value_t prep_args[2] = { target, callsites };
     ant_value_t result = sv_vm_call(js->vm, js, prep, js_mkundef(), prep_args, 2, NULL, js_mkundef());
     if (Ant_Exception_Pending(js)) return js_mkundef();
-    js_set(js, target, "stack", result);
-    js_set_descriptor(js, js_as_obj(target), "stack", 5, JS_DESC_W | JS_DESC_C);
+    js_error_define_stack(js, target, js_mkundef(), result);
   } else js_capture_stack(js, target);
 
   return js_mkundef();
@@ -7474,20 +7482,14 @@ static ant_value_t builtin_Error(ant_params_t) {
   bool is_new = (vtype(call_new_target) != kTypeUndefined);
   ant_value_t this_val = js->this_val;
   
-  ant_value_t target = is_new ? call_new_target : js->current_func;
-  ant_value_t name = ANT_STRING("Error");
-
-  if (vtype(target) == kTypeFunction) {
-    ant_value_t n = lkp_val(js, js_func_obj(target), "name", 4);
-    if (vtype(n) != kTypeUndefined) name = n;
-  }
-
   if (!is_new) {
     this_val = js_mkobj(js);
     ant_value_t proto = lkp_interned_val(js, js_func_obj(js->current_func), js->intern.prototype);
     if (vtype(proto) != kTypeUndefined) js_set_proto_init(this_val, proto);
     else js_set_proto_init(this_val, js_get_ctor_proto(js, "Error", 5));
   }
+  
+  js_capture_stack(js, this_val);
   
   if (nargs > 0) {
     ant_value_t msg = args[0];
@@ -7503,10 +7505,8 @@ static ant_value_t builtin_Error(ant_params_t) {
     if (cause_off.obj) mkprop_bytes(js, this_val, "cause", 5, js_prop_load(cause_off), JS_DESC_W | JS_DESC_C);
   }
   
-  mkprop_bytes(js, this_val, "name", 4, name, JS_DESC_W | JS_DESC_C);
   set_slot(this_val, SLOT_ERROR_BRAND, js_true);
-  js_capture_stack(js, this_val);
-
+  
   return this_val;
 }
 
@@ -7581,8 +7581,8 @@ static ant_value_t builtin_AggregateError(ant_params_t) {
     if (cause_off.obj) js_mkprop_fast(js, this_val, "cause", 5, js_prop_load(cause_off));
   }
   
-  mkprop_bytes(js, this_val, "name", 4, ANT_STRING("AggregateError"), JS_DESC_W | JS_DESC_C);
   set_slot(this_val, SLOT_ERROR_BRAND, js_true);
+  js_capture_stack(js, this_val);
 
   return this_val;
 }
@@ -7613,7 +7613,6 @@ static ant_value_t builtin_SuppressedError(ant_params_t) {
     mkprop_bytes(js, this_val, "message", 7, msg, JS_DESC_W | JS_DESC_C);
   }
 
-  mkprop_bytes(js, this_val, "name", 4, ANT_STRING("SuppressedError"), JS_DESC_W | JS_DESC_C);
   set_slot(this_val, SLOT_ERROR_BRAND, js_true);
   js_capture_stack(js, this_val);
 
@@ -20449,6 +20448,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   
   ant_value_t err_ctor_func = js_obj_to_func(js, err_ctor_obj);
   js_set_global_builtin(js, "Error", err_ctor_func);
+  js->builtins.error_ctor = err_ctor_func;
   js_setprop(js, error_proto, js_mkstr(js, "constructor", 11), err_ctor_func);
   js_set_descriptor(js, error_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
   defmethod(js, err_ctor_func, "isError", 7, js_mkfun(builtin_error_isError));
@@ -21047,12 +21047,26 @@ static ant_value_t js_cfunc_length_value(ant_value_t cfunc) {
   return tov((double)js_cfunc_length(cfunc));
 }
 
+static void js_note_function_display_name(ant_t *js, ant_value_t fn, ant_value_t name_val) {
+  sv_func_t *func = vtype(fn) == kTypeFunction ? js_func_closure(fn)->func : NULL;
+  if (!func || (func->debug->name && func->debug->name[0]) || func->debug->display_name_varies) return;
+
+  size_t len = 0;
+  const char *name = js_getstr(js, name_val, &len);
+  if (!name || len == 0) return;
+  
+  const char *interned = intern_string(name, len);
+  if (!func->debug->display_name) func->debug->display_name = interned;
+  else if (func->debug->display_name != interned) func->debug->display_name_varies = true;
+}
+
 static ant_value_t js_define_function_name_value(ant_t *js, ant_value_t fn, ant_value_t name_val) {
   ant_value_t fn_obj = js_as_obj(fn);
   ant_object_t *ptr = js_obj_ptr(fn_obj);
   
   if (!ptr) return js_mkundef();
   if (vtype(name_val) != kTypeString) return js_mkerr(js, "function name must be a string");
+  js_note_function_display_name(js, fn, name_val);
 
   const char *name_key = js->intern.name ? js->intern.name : intern_string("name", 4);
   if (!name_key) return js_mkerr(js, "oom");
@@ -21928,7 +21942,6 @@ static ant_value_t execute_top_level(
   ant_value_t this_val, coroutine_t **async_coro_out
 ) {
   if (async_coro_out) *async_coro_out = NULL;
-  js_clear_error_site(js);
 
   ant_value_t result;
   // TODO: this-newtarget-frame-migration
@@ -21973,8 +21986,6 @@ static ant_value_t js_execute_compiled_eval_bytecode(
   ant_t *js, sv_func_t *func,
   ant_value_t this_val, ant_value_t eval_env, ant_value_t new_target
 ) {
-  js_clear_error_site(js);
-
   if (sv_dump_bytecode_unlikely) sv_disasm(js, func, js->filename);
   GC_ROOT_SAVE(mark, js);
 

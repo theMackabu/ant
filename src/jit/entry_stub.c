@@ -20,7 +20,8 @@
  * may be live, and it stays scanned. The collector finds the stub by the
  * return address its callee saves, ant_jit_enter_clean_ret.
  *
- * The stub keeps a normal frame record, so frame-pointer walks pass through it.
+ * The stub keeps a normal frame record and CFI, so frame-pointer walks and the
+ * unwinder (src/jit/unwind.c) pass through it.
  */
 
 #include "jit/entry_stub.h"
@@ -30,9 +31,11 @@
 #if defined(__APPLE__)
 #define STUB_SYM "_ant_jit_enter_clean"
 #define RET_SYM "_ant_jit_enter_clean_ret"
+#define RET_ALT_ENTRY ".alt_entry " RET_SYM "\n"
 #else
 #define STUB_SYM "ant_jit_enter_clean"
 #define RET_SYM "ant_jit_enter_clean_ret"
+#define RET_ALT_ENTRY ""
 #endif
 
 #if defined(__aarch64__)
@@ -44,13 +47,28 @@ __asm__(
   ".type " STUB_SYM ", %function\n"
 #endif
   STUB_SYM ":\n"
+  "  .cfi_startproc\n"
   "  stp x29, x30, [sp, #-96]!\n"
+  "  .cfi_def_cfa_offset 96\n"
+  "  .cfi_offset x29, -96\n"
+  "  .cfi_offset x30, -88\n"
   "  mov x29, sp\n"
+  "  .cfi_def_cfa x29, 96\n"
   "  stp x19, x20, [sp, #16]\n"
   "  stp x21, x22, [sp, #32]\n"
   "  stp x23, x24, [sp, #48]\n"
   "  stp x25, x26, [sp, #64]\n"
   "  stp x27, x28, [sp, #80]\n"
+  "  .cfi_offset x19, -80\n"
+  "  .cfi_offset x20, -72\n"
+  "  .cfi_offset x21, -64\n"
+  "  .cfi_offset x22, -56\n"
+  "  .cfi_offset x23, -48\n"
+  "  .cfi_offset x24, -40\n"
+  "  .cfi_offset x25, -32\n"
+  "  .cfi_offset x26, -24\n"
+  "  .cfi_offset x27, -16\n"
+  "  .cfi_offset x28, -8\n"
   "  mov x16, x0\n"
   "  mov x0, x1\n"
   "  mov x1, x2\n"
@@ -71,6 +89,7 @@ __asm__(
   "  mov x28, xzr\n"
   "  blr x16\n"
   ".globl " RET_SYM "\n"
+  RET_ALT_ENTRY
   RET_SYM ":\n"
   "  ldp x27, x28, [sp, #80]\n"
   "  ldp x25, x26, [sp, #64]\n"
@@ -79,6 +98,7 @@ __asm__(
   "  ldp x19, x20, [sp, #16]\n"
   "  ldp x29, x30, [sp], #96\n"
   "  ret\n"
+  "  .cfi_endproc\n"
 );
 #elif defined(__x86_64__)
 __asm__(
@@ -89,13 +109,22 @@ __asm__(
   ".type " STUB_SYM ", @function\n"
 #endif
   STUB_SYM ":\n"
+  "  .cfi_startproc\n"
   "  push %rbp\n"
+  "  .cfi_def_cfa_offset 16\n"
+  "  .cfi_offset %rbp, -16\n"
   "  mov %rsp, %rbp\n"
+  "  .cfi_def_cfa_register %rbp\n"
   "  push %rbx\n"
   "  push %r12\n"
   "  push %r13\n"
   "  push %r14\n"
   "  push %r15\n"
+  "  .cfi_offset %rbx, -24\n"
+  "  .cfi_offset %r12, -32\n"
+  "  .cfi_offset %r13, -40\n"
+  "  .cfi_offset %r14, -48\n"
+  "  .cfi_offset %r15, -56\n"
   "  mov %rdi, %rax\n"
   "  mov %rsi, %rdi\n"
   "  mov %rdx, %rsi\n"
@@ -112,6 +141,7 @@ __asm__(
   "  xor %r15d, %r15d\n"
   "  call *%rax\n"
   ".globl " RET_SYM "\n"
+  RET_ALT_ENTRY
   RET_SYM ":\n"
   "  add $8, %rsp\n"
   "  pop %r15\n"
@@ -121,6 +151,7 @@ __asm__(
   "  pop %rbx\n"
   "  pop %rbp\n"
   "  ret\n"
+  "  .cfi_endproc\n"
 );
 #endif
 

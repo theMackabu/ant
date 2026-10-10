@@ -32,6 +32,7 @@ static void jit_emit_resume_tramp(jit_compile_t *c, const jit_bailout_emit_t *ba
           MIR_new_reg_op(c->ctx, c->param_cache[i])));
     }
   }
+  c->call_tagging.resume = true;
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_call_insn(c->ctx, 17,
                                     MIR_new_ref_op(c->ctx, c->resume_proto),
@@ -53,6 +54,7 @@ static void jit_emit_resume_tramp(jit_compile_t *c, const jit_bailout_emit_t *ba
                                     MIR_new_reg_op(c->ctx, c->r_lbuf),
                                     MIR_new_int_op(c->ctx, c->n_locals),
                                     MIR_new_reg_op(c->ctx, c->r_bailout_off)));
+  c->call_tagging.resume = false;
   MIR_append_insn(c->ctx, c->jit_func,
                 MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, r_resume_res)));
 }
@@ -199,9 +201,11 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
 
 sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure, sv_jit_tier_t tier) {
   sv_func_t *outer = jit_compile_owner;
+  jit_call_tagging_t *outer_tagging = jit_call_tagging;
   jit_compile_owner = func;
   sv_jit_func_t code = jit_compile_tier(js, func, hint_closure, tier);
   jit_compile_owner = outer;
+  jit_call_tagging = outer_tagging;
   return code;
 }
 
@@ -258,7 +262,10 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   c->ctx = jit_compile_hot ? c->jc->ctx_hot : c->jc->ctx;
 
   c->forward_arguments = jit_can_forward_arguments(func);
-  if (!jit_setup_frame(c)) return NULL;
+  if (!jit_setup_frame(c)) {
+    free(c->call_tagging.sites);
+    return NULL;
+  }
 
   while (c->ip < c->end) {
     c->bc_off = (int)(c->ip - c->func->code);
@@ -577,6 +584,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   if (c->stale_site_count) jit_emit_stale_exits(c);
   if (c->needs_bailout) jit_emit_resume_tramp(c, &c->bailout_ctx, c->imp_resume, "resume_res");
   if (c->needs_promote) jit_emit_resume_tramp(c, &c->promote_ctx, c->imp_promote_resume, "promote_res");
+  jit_call_tagging = NULL;
 
   if (c->ctx == c->jc->ctx_hot) jit_unroll_numeric_loops(c);
   jit_sink_cold_blocks(c, body_tail);
@@ -624,6 +632,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
     );
     
     MIR_remove_module(c->ctx, c->mod);
+    free(c->call_tagging.sites);
     c->func->jit_compile_failed = true;
     c->func->jit_compiling = false;
     
@@ -638,11 +647,18 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   MIR_gen_set_optimize_level(c->ctx, !hot_ctx ? JIT_BASE_OPT_LEVEL
                                      : insns > JIT_BIG_HOT_INSN_LIMIT ? JIT_BIG_HOT_OPT_LEVEL : JIT_HOT_OPT_LEVEL);
 
+  jit_code_info_ctx = (jit_code_info_ctx_t){
+    .item = c->jit_func,
+    .func = c->func,
+    .tagging = &c->call_tagging,
+  };
   MIR_load_module(c->ctx, c->mod);
   MIR_link(c->ctx, MIR_set_gen_interface, NULL);
 
   sv_jit_func_t generated = MIR_gen(c->ctx, c->jit_func);
   c->func->jit_compiling = false;
+  jit_code_info_ctx = (jit_code_info_ctx_t){0};
+  free(c->call_tagging.sites);
 
   MIR_insn_t insn;
   while ((insn = DLIST_HEAD(MIR_insn_t, c->jit_func->u.func->insns)) != NULL)

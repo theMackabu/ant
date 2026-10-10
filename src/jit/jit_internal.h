@@ -3,6 +3,7 @@
 
 #include "heap.h"
 #include "silver/jit.h"
+#include "silver/stack_trace.h"
 #include "silver/opcode.h"
 
 #pragma GCC diagnostic push
@@ -38,8 +39,47 @@ typedef struct {
   MIR_context_t ctx;
   MIR_context_t ctx_hot;
   MIR_heap_t mir_heap;
+  struct jit_code_registry *code_registry;
   bool externals_loaded;
 } sv_jit_ctx_t;
+
+void jit_code_info(
+  void *data, MIR_item_t func_item, void *code, size_t code_len,
+  uint32_t fp_cfa_off, const MIR_call_site_t *sites, size_t n_sites
+);
+void jit_code_registry_destroy(sv_jit_ctx_t *jc);
+
+typedef struct {
+  int depth;
+  sv_jit_frame_t frames[SV_JIT_INLINE_FRAMES_MAX];
+} jit_inline_stack_t;
+
+typedef struct {
+  int bc_off;
+  bool resume;
+  jit_inline_stack_t inl;
+} jit_call_site_info_t;
+
+typedef struct {
+  MIR_context_t ctx;
+  const int *bc_off;
+  bool resume;
+  jit_inline_stack_t inl;
+  jit_call_site_info_t *sites;
+  uint32_t n_sites, cap_sites;
+} jit_call_tagging_t;
+
+typedef struct {
+  MIR_item_t item;
+  sv_func_t *func;
+  const jit_call_tagging_t *tagging;
+} jit_code_info_ctx_t;
+
+extern _Thread_local jit_call_tagging_t *jit_call_tagging;
+extern _Thread_local jit_code_info_ctx_t jit_code_info_ctx;
+
+MIR_insn_t jit_tag_new_call(MIR_context_t ctx, MIR_insn_t insn);
+#define MIR_new_call_insn(ctx, ...) jit_tag_new_call(ctx, (MIR_new_call_insn)(ctx, __VA_ARGS__))
 
 enum jit_slot_type { 
   SLOT_BOXED = 0,

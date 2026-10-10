@@ -23,6 +23,7 @@ typedef struct gc_vm_seg {
   uintptr_t lo, hi;
   uintptr_t fp;
   uint32_t jit_depth;
+  int entry_vm_fp;
 } gc_vm_seg_t;
 
 typedef struct gc_func_mark_profile {

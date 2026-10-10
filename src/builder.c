@@ -2,6 +2,8 @@
 
 #include "internal.h"
 #include "silver/engine.h"
+#include "errors.h"
+#include "gc/roots.h"
 
 #include <math.h>
 #include <stdarg.h>
@@ -80,6 +82,8 @@ void js_inspect_builder_init_fixed(js_inspect_builder_t *builder, ant_t *js, cha
   builder->first = true;
   builder->closed = false;
   builder->did_indent = false;
+  builder->error_stack = NULL;
+  builder->error_stack_len = 0;
 }
 
 bool js_inspect_builder_init_dynamic(js_inspect_builder_t *builder, ant_t *js, size_t initial_cap) {
@@ -98,6 +102,8 @@ bool js_inspect_builder_init_dynamic(js_inspect_builder_t *builder, ant_t *js, s
   builder->first = true;
   builder->closed = false;
   builder->did_indent = false;
+  builder->error_stack = NULL;
+  builder->error_stack_len = 0;
   
   return true;
 }
@@ -393,6 +399,21 @@ bool js_inspect_field(js_inspect_builder_t *builder, const char *key, ant_value_
   return js_inspect_append_tostr(builder, value);
 }
 
+static bool js_inspect_contains(const char *hay, size_t hay_len, const char *needle, size_t needle_len) {
+  if (needle_len == 0) return true;
+  for (size_t i = 0; i + needle_len <= hay_len; i++)
+    if (hay[i] == needle[0] && memcmp(hay + i, needle, needle_len) == 0) return true;
+  return false;
+}
+
+static bool js_inspect_error_key_in_stack(js_inspect_builder_t *builder, const char *key, size_t klen, ant_value_t val) {
+  if (!builder->error_stack || vtype(val) != kTypeString) return false;
+  if (!streq(key, klen, "name", 4) && !streq(key, klen, "message", 7) && !streq(key, klen, "stack", 5)) return false;
+  size_t len = 0;
+  const char *text = js_getstr(builder->js, val, &len);
+  return text && js_inspect_contains(builder->error_stack, builder->error_stack_len, text, len);
+}
+
 bool js_inspect_object_body(js_inspect_builder_t *builder, ant_value_t obj) {
   if (builder->closed) return true;
   js_inspect_begin_body(builder);
@@ -449,6 +470,7 @@ bool js_inspect_object_body(js_inspect_builder_t *builder, ant_value_t obj) {
       continue;
     }
 
+    if (js_inspect_error_key_in_stack(builder, key, (size_t)klen, val)) continue;
     if (!js_inspect_property_prefix(builder)) return false;
 
     bool is_special_global = false;
@@ -512,4 +534,105 @@ bool js_inspect_close(js_inspect_builder_t *builder) {
 
   builder->closed = true;
   return true;
+}
+
+static ant_value_t js_inspect_error_to_string(ant_t *js, ant_value_t obj) {
+  ant_value_t text = js_error_header_text(js, obj);
+  if (!is_err(text)) return text;
+  js_take_thrown(js, text);
+  return js_mkstr(js, "Error", 5);
+}
+
+static bool js_inspect_append_error_stack(js_inspect_builder_t *builder, ant_value_t obj, const char *stack, size_t stack_len) {
+  ant_t *js = builder->js;
+  size_t skip = 0;
+
+  ant_offset_t class_len = 0;
+  const char *class_name = get_class_name(js, obj, &class_len, NULL);
+  ant_value_t name_val = js_getprop_fallback_len(js, obj, "name", 4);
+  if (is_err(name_val)) name_val = js_take_thrown(js, name_val);
+
+  size_t name_len = 0;
+  const char *name = vtype(name_val) == kTypeString ? js_getstr(js, name_val, &name_len) : NULL;
+
+  bool improve = 
+    class_name && name && name_len >= 5 &&
+    memcmp(name + name_len - 5, "Error", 5) == 0 &&
+    stack_len >= name_len && memcmp(stack, name, name_len) == 0 &&
+    (stack_len == name_len || stack[name_len] == ':' || stack[name_len] == '\n') &&
+    !((size_t)class_len == name_len && memcmp(class_name, name, name_len) == 0);
+
+  bool bracket = !js_inspect_contains(stack, stack_len, "\n    at", 7);
+  if (bracket && !js_inspect_append(builder, "[", 1)) return false;
+
+  if (improve) {
+    if (!js_inspect_append(builder, class_name, (size_t)class_len)) return false;
+    if (!js_inspect_contains(class_name, (size_t)class_len, name, name_len)) {
+      if (!js_inspect_append(builder, " [", 2)) return false;
+      if (!js_inspect_append(builder, name, name_len)) return false;
+      if (!js_inspect_append(builder, "]", 1)) return false;
+    }
+    skip = name_len;
+  }
+
+  int indent = js->stringify.indent;
+  for (const char *p = stack + skip, *end = stack + stack_len; p < end;) {
+    const char *nl = memchr(p, '\n', (size_t)(end - p));
+    size_t run = nl ? (size_t)(nl - p) + 1 : (size_t)(end - p);
+    if (!js_inspect_append(builder, p, run)) return false;
+    if (nl && !js_inspect_append_indent(builder, indent)) return false;
+    p += run;
+  }
+
+  return !bracket || js_inspect_append(builder, "]", 1);
+}
+
+static bool js_inspect_hidden_own(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t *out) {
+  prop_meta_t meta;
+  if (!lookup_string_prop_meta(js, js_as_obj(obj), key, klen, &meta) || meta.enumerable) return false;
+  return js_try_get_own_data_prop(js, obj, key, klen, out);
+}
+
+bool js_inspect_error(js_inspect_builder_t *builder, ant_value_t obj) {
+  ant_t *js = builder->js;
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, obj);
+
+  ant_value_t stack = js_getprop_fallback_len(js, obj, "stack", 5);
+  if (is_err(stack)) stack = js_take_thrown(js, stack);
+  if (vtype(stack) != kTypeString) stack = js_inspect_error_to_string(js, obj);
+  GC_ROOT_PIN(js, stack);
+
+  size_t stack_len = 0;
+  const char *stack_text = js_getstr(js, stack, &stack_len);
+  bool ok = stack_text && js_inspect_append_error_stack(builder, obj, stack_text, stack_len);
+
+  size_t mark = builder->n;
+  if (ok) ok = js_inspect_append(builder, " {\n", 3);
+  builder->inline_mode = false;
+  builder->first = true;
+  builder->closed = false;
+  builder->did_indent = false;
+  builder->error_stack = stack_text;
+  builder->error_stack_len = stack_len;
+
+  if (ok) ok = js_inspect_object_body(builder, obj);
+
+  ant_value_t hidden;
+  if (ok && js_inspect_hidden_own(js, obj, "cause", 5, &hidden)) ok = js_inspect_field(builder, "[cause]", hidden);
+  if (ok && js_inspect_hidden_own(js, obj, "errors", 6, &hidden)) ok = js_inspect_field(builder, "[errors]", hidden);
+
+  builder->error_stack = NULL;
+  builder->error_stack_len = 0;
+
+  if (ok && builder->first) {
+    if (builder->did_indent) js->stringify.indent--;
+    builder->did_indent = false;
+    builder->closed = true;
+    builder->n = mark;
+    if (mark < builder->len) builder->buf[mark] = '\0';
+  } else if (ok) ok = js_inspect_close(builder);
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return ok;
 }
