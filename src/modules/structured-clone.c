@@ -301,6 +301,11 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
   ant_value_t clone = js_mkobj(js);
   sc_add(seen, val, clone);
 
+  if (js_proxy_is_host(val)) {
+    ant_value_t copied = js_copy_proxy_own_props(js, clone, val);
+    return is_err(copied) ? copied : clone;
+  }
+
   ant_iter_t iter = js_prop_iter_begin(js, val);
   const char *key;
   size_t key_len;

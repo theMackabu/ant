@@ -300,6 +300,9 @@ struct ant_isolate_t {
 
   ant_object_t *objects_old;
   ant_object_t *pending_promises;
+  
+  ant_object_t *pending_promises_young;
+  ant_object_t *pending_promises_young_tail;
 
   size_t old_live_count;
   size_t minor_gc_count;

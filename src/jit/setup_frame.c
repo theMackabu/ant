@@ -38,7 +38,7 @@ bool jit_numeric_param_use(sv_func_t *func, uint8_t *ip, uint8_t *end) {
   }
 }
 
-void jit_emit_entry_counter(jit_compile_t *c, const char *site, MIR_insn_t before) {
+void jit_emit_entry_counter(jit_compile_t *c, const char *site, MIR_insn_t before, uint32_t threshold) {
   char fn_name[32], calls_name[32], hot_name[32], res_name[32];
   snprintf(fn_name, sizeof fn_name, "tier_fn_%s", site);
   snprintf(calls_name, sizeof calls_name, "tier_calls_%s", site);
@@ -60,7 +60,7 @@ void jit_emit_entry_counter(jit_compile_t *c, const char *site, MIR_insn_t befor
                  MIR_new_reg_op(c->ctx, r_calls), MIR_new_int_op(c->ctx, 1)),
     MIR_new_insn(c->ctx, MIR_MOV, call_count, MIR_new_reg_op(c->ctx, r_calls)),
     MIR_new_insn(c->ctx, MIR_UBLE, MIR_new_label_op(c->ctx, body),
-                 MIR_new_reg_op(c->ctx, r_calls), MIR_new_int_op(c->ctx, SV_JIT_THRESHOLD)),
+                 MIR_new_reg_op(c->ctx, r_calls), MIR_new_int_op(c->ctx, threshold)),
     MIR_new_call_insn(c->ctx, 6,
                       MIR_new_ref_op(c->ctx, c->tier_up_proto),
                       MIR_new_ref_op(c->ctx, c->imp_tier_up),
@@ -91,7 +91,7 @@ void jit_emit_entry_counter(jit_compile_t *c, const char *site, MIR_insn_t befor
 }
 
 static void jit_emit_cold_entry_counter(jit_compile_t *c, const char *site) {
-  if (c->cold_tier) jit_emit_entry_counter(c, site, NULL);
+  if (c->cold_tier) jit_emit_entry_counter(c, site, NULL, SV_JIT_THRESHOLD);
 }
 
 typedef struct {
@@ -327,29 +327,7 @@ bool jit_setup_frame(jit_compile_t *c) {
     MIR_append_insn(c->ctx, c->jit_func, no_overflow);
   }
 
-  c->vs = (jit_vstack_t){0};
-  c->vs.max = c->func->max_stack + JIT_VSTACK_SLACK;
-  c->vs.regs = calloc((size_t)c->vs.max, sizeof(MIR_reg_t));
-  c->vs.known_func = calloc((size_t)c->vs.max, sizeof(sv_func_t *));
-  c->vs.d_regs = calloc((size_t)c->vs.max, sizeof(MIR_reg_t));
-  c->vs.slot_type = calloc((size_t)c->vs.max, sizeof(uint8_t));
-  c->vs.known_const = calloc((size_t)c->vs.max, sizeof(uint64_t));
-  c->vs.has_const = calloc((size_t)c->vs.max, sizeof(bool));
-  c->vs.known_bool = calloc((size_t)c->vs.max, sizeof(uint8_t));
-  c->vs.known_builtin = calloc((size_t)c->vs.max, sizeof(uint8_t));
-  c->vs.integer_range = calloc((size_t)c->vs.max, sizeof(jit_integer_range_t));
-
-  if (!c->vs.regs || !c->vs.known_func || !c->vs.d_regs || !c->vs.slot_type || !c->vs.known_const || !c->vs.has_const || !c->vs.known_bool || !c->vs.known_builtin || !c->vs.integer_range) {
-    free(c->vs.regs);
-    free(c->vs.known_func);
-    free(c->vs.d_regs);
-    free(c->vs.slot_type);
-    free(c->vs.known_const);
-    free(c->vs.has_const);
-    free(c->vs.known_bool);
-    free(c->vs.known_builtin);
-    free(c->vs.integer_range);
-
+  if (!vstack_alloc(&c->vs, c->func->max_stack + JIT_VSTACK_SLACK)) {
     jit_discard_setup_module(c);
 
     c->func->jit_compiling = false;
@@ -379,15 +357,7 @@ bool jit_setup_frame(jit_compile_t *c) {
     c->known_type_locals = calloc((size_t)c->n_locals, sizeof(uint8_t));
 
     if (!c->local_regs || !c->local_d_regs || !c->known_func_locals || !c->known_type_locals) {
-      free(c->vs.regs);
-      free(c->vs.known_func);
-      free(c->vs.d_regs);
-      free(c->vs.slot_type);
-      free(c->vs.known_const);
-      free(c->vs.has_const);
-      free(c->vs.known_bool);
-      free(c->vs.known_builtin);
-      free(c->vs.integer_range);
+      vstack_free(&c->vs);
       free(c->local_regs);
       free(c->local_d_regs);
       free(c->known_func_locals);

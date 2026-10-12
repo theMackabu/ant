@@ -674,7 +674,7 @@ static ant_value_t util_types_is_promise(ant_params_t) {
 
 static ant_value_t util_types_is_proxy(ant_params_t) {
   if (nargs < 1 || !is_object_type(args[0])) return js_false;
-  return js_bool(is_proxy(args[0]));
+  return js_bool(is_proxy(args[0]) && !js_proxy_is_host(args[0]));
 }
 
 static ant_value_t util_types_is_regexp(ant_params_t) {

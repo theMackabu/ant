@@ -5,19 +5,31 @@
 #include "jit/entry_stub.h"
 #include "debug.h"
 
-// TODO: constexpr / enum
-#define SV_TFB_NUM   (1 << 0)
-#define SV_TFB_STR   (1 << 1)
-#define SV_TFB_BOOL  (1 << 2)
-#define SV_TFB_OTHER (1 << 3)
+typedef enum sv_tfb_class: uint8_t {
+  SV_TFB_NUM   = 1u << 0,
+  SV_TFB_STR   = 1u << 1,
+  SV_TFB_BOOL  = 1u << 2,
+  SV_TFB_OTHER = 1u << 3,
+} sv_tfb_class_t;
 
-#define SV_TFB_SPEC_COUNT_SHIFT 4
-#define SV_TFB_SPEC_MIN_SAMPLES 7u
+static constexpr uint8_t SV_TFB_SPEC_COUNT_SHIFT = 4;
+static constexpr uint8_t SV_TFB_SPEC_MIN_SAMPLES = 7;
 
-#define SV_TFB_SPEC_COUNT_MASK  (7u << SV_TFB_SPEC_COUNT_SHIFT)
-#define SV_TFB_SPEC_MISMATCH    (1u << 7)
+static constexpr uint8_t SV_TFB_SPEC_COUNT_MASK = 7u << SV_TFB_SPEC_COUNT_SHIFT;
+static constexpr uint8_t SV_TFB_SPEC_MISMATCH   = 1u << 7;
 
-#define SV_TFB_CLASS_MASK (SV_TFB_NUM | SV_TFB_STR | SV_TFB_BOOL | SV_TFB_OTHER)
+static constexpr int SV_CALL_FB_MAX_SLOTS = 32;
+static constexpr uint8_t SV_JIT_BAILOUT_LIMIT = 5;
+static constexpr uint8_t SV_CALL_FB_MISS_DISABLE = 4;
+
+static constexpr uint32_t SV_JIT_THRESHOLD = 100;
+static constexpr uint32_t SV_JIT_RECOMPILE_DELAY = 50;
+
+static constexpr uint32_t SV_TFB_ALLOC_THRESHOLD = 2;
+static constexpr uint32_t SV_JIT_WARM_CALLS = SV_JIT_THRESHOLD / 2;
+
+static constexpr uint8_t SV_TFB_CLASS_MASK = SV_TFB_NUM | SV_TFB_STR | SV_TFB_BOOL | SV_TFB_OTHER;
+static constexpr ant_value_t SV_JIT_RETRY_INTERP = NANBOX_PREFIX | ((ant_value_t)kTypeError << NANBOX_TYPE_SHIFT) | 1;
 
 static_assert(
   SV_TFB_SPEC_MIN_SAMPLES <= (SV_TFB_SPEC_COUNT_MASK >> SV_TFB_SPEC_COUNT_SHIFT),
@@ -29,25 +41,10 @@ static_assert(
   "feedback value classes and specialization state must not overlap"
 );
 
-// OPEN TODO: cleanup
-#define SV_TFB_INOBJ_SLACK_ALLOCATIONS 32
-#define SV_TFB_INOBJ_P90_NUMERATOR     9
-#define SV_TFB_INOBJ_P90_DENOMINATOR   10
-
-#define SV_JIT_THRESHOLD       100
-#define SV_JIT_RECOMPILE_DELAY 50
-
-static constexpr uint32_t SV_JIT_WARM_CALLS = SV_JIT_THRESHOLD / 2;
-static_assert(SV_JIT_THRESHOLD - SV_JIT_RECOMPILE_DELAY >= SV_JIT_WARM_CALLS, "a bailout must leave the function warm");
-
-#define SV_TFB_ALLOC_THRESHOLD 2
-
-#define SV_CALL_FB_MAX_SLOTS    32
-#define SV_JIT_BAILOUT_LIMIT    5
-#define SV_CALL_FB_MISS_DISABLE 4
-
-#define SV_JIT_RETRY_INTERP mkval(kTypeError, 1)
-// CLOSE TODO: cleanup
+static_assert(
+  SV_JIT_THRESHOLD - SV_JIT_RECOMPILE_DELAY >= SV_JIT_WARM_CALLS,
+  "a bailout must leave the function warm"
+);
 
 typedef enum {
   SV_JIT_FROM_INTERP,
@@ -454,111 +451,5 @@ static inline void sv_tfb_record_local(sv_func_t *func, int idx, ant_value_t v) 
     if (neu != old) { func->local_type_feedback[idx] = neu; func->tfb_version++; }
   }
 }
-
-static inline uint8_t sv_tfb_clamp_inobj_limit(uint32_t limit) {
-  return (limit > ANT_INOBJ_MAX_SLOTS) ? (uint8_t)ANT_INOBJ_MAX_SLOTS : (uint8_t)limit;
-}
-
-static inline sv_ctor_prop_fb_t *sv_tfb_ctor_prop_fb(sv_func_t *func, bool create) {
-  if (!func) return NULL;
-  sv_func_sidecar_t *sidecar = create ? sv_func_ensure_sidecar(func) : sv_func_sidecar(func);
-  return sidecar ? &sidecar->ctor_prop_fb : NULL;
-}
-
-static inline uint64_t sv_tfb_ctor_prop_samples(const sv_func_t *func) {
-  sv_ctor_prop_fb_t *fb = func ? sv_tfb_ctor_prop_fb((sv_func_t *)func, false) : NULL;
-  return fb ? fb->samples : 0;
-}
-
-static inline uint64_t sv_tfb_ctor_prop_bin(const sv_func_t *func, uint32_t bin) {
-  sv_ctor_prop_fb_t *fb = func ? sv_tfb_ctor_prop_fb((sv_func_t *)func, false) : NULL;
-  if (!fb || bin >= SV_TFB_CTOR_PROP_BINS) return 0;
-  return fb->hist[bin];
-}
-
-static inline uint8_t sv_tfb_infer_inobj_limit(const sv_func_t *func, uint64_t samples) {
-  if (!func || samples == 0) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-  sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb((sv_func_t *)func, false);
-  if (!fb) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-
-  uint64_t target = (
-    (samples * SV_TFB_INOBJ_P90_NUMERATOR)
-    + (SV_TFB_INOBJ_P90_DENOMINATOR - 1)
-  ) / SV_TFB_INOBJ_P90_DENOMINATOR;
-  if (target == 0) target = 1;
-
-  uint64_t seen = 0;
-  for (uint32_t i = 0; i < SV_TFB_CTOR_PROP_BINS; i++) {
-    seen += fb->hist[i];
-    if (seen < target) continue;
-    if (i >= SV_TFB_CTOR_PROP_OVERFLOW_FROM) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-    return sv_tfb_clamp_inobj_limit(i);
-  }
-
-  return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-}
-
-static inline void sv_tfb_record_ctor_prop_count(ant_value_t ctor_func, ant_value_t instance) {
-  if (vtype(ctor_func) != kTypeFunction) return;
-  if (!is_object_type(instance)) return;
-
-  sv_closure_t *closure = js_func_closure(ctor_func);
-  if (!closure || !closure->func) return;
-
-  ant_object_t *obj = js_obj_ptr(js_as_obj(instance));
-  if (!obj) return;
-
-  sv_func_t *func = closure->func;
-  sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb(func, true);
-  if (!fb) return;
-
-  uint32_t count = obj->prop_count;
-  uint32_t bin = (count < SV_TFB_CTOR_PROP_OVERFLOW_FROM)
-    ? count
-    : SV_TFB_CTOR_PROP_OVERFLOW_FROM;
-
-  fb->hist[bin]++;
-  uint64_t samples = ++fb->samples;
-
-  if (!fb->inobj_frozen && samples >= SV_TFB_INOBJ_SLACK_ALLOCATIONS) {
-    fb->inobj_limit = sv_tfb_infer_inobj_limit(func, samples);
-    fb->inobj_frozen = 1;
-  }
-}
-
-static inline uint8_t sv_tfb_ctor_inobj_limit(ant_value_t ctor_func) {
-  if (vtype(ctor_func) != kTypeFunction) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-  sv_closure_t *closure = js_func_closure(ctor_func);
-  if (!closure || !closure->func) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-
-  sv_func_t *func = closure->func;
-  sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb(func, false);
-
-  if (!fb || !fb->inobj_frozen) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-  return sv_tfb_clamp_inobj_limit(fb->inobj_limit);
-}
-
-static inline bool sv_tfb_ctor_inobj_limit_frozen(ant_value_t ctor_func) {
-  if (vtype(ctor_func) != kTypeFunction) return false;
-  sv_closure_t *closure = js_func_closure(ctor_func);
-  if (!closure || !closure->func) return false;
-  sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb(closure->func, false);
-  return fb && fb->inobj_frozen != 0;
-}
-
-static inline uint32_t sv_tfb_ctor_inobj_slack_remaining(ant_value_t ctor_func) {
-  if (vtype(ctor_func) != kTypeFunction) return SV_TFB_INOBJ_SLACK_ALLOCATIONS;
-  sv_closure_t *closure = js_func_closure(ctor_func);
-
-  if (!closure || !closure->func) return SV_TFB_INOBJ_SLACK_ALLOCATIONS;
-  sv_func_t *func = closure->func;
-  sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb(func, false);
-
-  if (!fb) return SV_TFB_INOBJ_SLACK_ALLOCATIONS;
-  if (fb->inobj_frozen || fb->samples >= SV_TFB_INOBJ_SLACK_ALLOCATIONS) return 0;
-
-  return (uint32_t)(SV_TFB_INOBJ_SLACK_ALLOCATIONS - fb->samples);
-}
-
 
 #endif

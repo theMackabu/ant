@@ -572,11 +572,6 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                     MIR_JSVAL, "func",
                                     MIR_JSVAL, "new_target",
                                     MIR_T_I32, "checked");
-  c->new_result_proto = MIR_new_proto(c->ctx, "new_result_proto",
-                                      1, &nw_ret, 3,
-                                      MIR_JSVAL, "func",
-                                      MIR_JSVAL, "obj",
-                                      MIR_JSVAL, "result");
 
   MIR_type_t special_obj_ret = MIR_JSVAL;
   c->special_obj_proto = MIR_new_proto(c->ctx, "soj_proto",
@@ -750,7 +745,6 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_typeof = MIR_new_import(c->ctx, "jit_helper_typeof");
   c->imp_new = MIR_new_import(c->ctx, "jit_helper_new");
   c->imp_new_this = MIR_new_import(c->ctx, "jit_helper_new_this");
-  c->imp_new_result = MIR_new_import(c->ctx, "jit_helper_new_result");
   c->imp_instanceof = MIR_new_import(c->ctx, "jit_helper_instanceof");
   c->imp_call_is_proto = MIR_new_import(c->ctx, "jit_helper_call_is_proto");
   c->imp_delete = MIR_new_import(c->ctx, c->func->is_strict ? "jit_helper_delete_strict" : "jit_helper_delete");

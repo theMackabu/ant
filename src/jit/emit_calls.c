@@ -22,10 +22,6 @@ static bool jit_new_func_flags(uint32_t *offset, uint16_t *mask) {
 #endif
 }
 
-static_assert(sizeof(((sv_ctor_prop_fb_t *)0)->samples) == 8, "samples is an I64 counter");
-static_assert(sizeof(((sv_ctor_prop_fb_t *)0)->hist[0]) == 8, "hist bins are I64 counters, scale 8");
-static_assert(sizeof(((sv_ctor_prop_fb_t *)0)->inobj_frozen) == 1, "inobj_frozen is a U8");
-
 static void jit_emit_new_direct(
     jit_compile_t *c, MIR_reg_t func, MIR_reg_t target, MIR_reg_t res,
     int argc, MIR_label_t slow, MIR_label_t done) {
@@ -128,80 +124,14 @@ static void jit_emit_new_direct(
                   MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, done),
                                MIR_new_reg_op(c->ctx, c->r_bool), MIR_new_uint_op(c->ctx, JIT_ERR_TAG)));
 
-  MIR_label_t result_helper = MIR_new_label(c->ctx);
-  MIR_reg_t r_fb = r_code, r_n = r_super, r_p = r_cl;
+  MIR_label_t use_this = MIR_new_label(c->ctx);
   MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, result_helper),
+                  MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, use_this),
                                MIR_new_reg_op(c->ctx, res), MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0))));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, r_fb),
-                               MIR_new_mem_op(c->ctx, MIR_T_P, (MIR_disp_t)offsetof(sv_closure_t, func), r_cl, 0, 1)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, r_fb),
-                               MIR_new_mem_op(c->ctx, MIR_T_P, (MIR_disp_t)offsetof(sv_func_t, type_feedback), r_fb, 0, 1)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_AND, MIR_new_reg_op(c->ctx, r_n),
-                               MIR_new_reg_op(c->ctx, r_fb), MIR_new_uint_op(c->ctx, ant_sidecar)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, result_helper),
-                               MIR_new_reg_op(c->ctx, r_n), MIR_new_uint_op(c->ctx, 0)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_SUB, MIR_new_reg_op(c->ctx, r_fb),
-                               MIR_new_reg_op(c->ctx, r_fb), MIR_new_uint_op(c->ctx, ant_sidecar)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, r_n),
-                               MIR_new_mem_op(c->ctx, MIR_T_U8,
-                                              (MIR_disp_t)(offsetof(sv_func_sidecar_t, ctor_prop_fb) +
-                                                           offsetof(sv_ctor_prop_fb_t, inobj_frozen)), r_fb, 0, 1)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, result_helper),
-                               MIR_new_reg_op(c->ctx, r_n), MIR_new_uint_op(c->ctx, 0)));
-  mir_emit_decode_ref(c->ctx, c->jit_func, r_p, r_this);
-  MIR_label_t bin_ok = MIR_new_label(c->ctx);
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, r_n),
-                               MIR_new_mem_op(c->ctx, MIR_T_U32, (MIR_disp_t)offsetof(ant_object_t, prop_count), r_p, 0, 1)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_UBLE, MIR_new_label_op(c->ctx, bin_ok),
-                               MIR_new_reg_op(c->ctx, r_n), MIR_new_uint_op(c->ctx, SV_TFB_CTOR_PROP_OVERFLOW_FROM)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, r_n),
-                               MIR_new_uint_op(c->ctx, SV_TFB_CTOR_PROP_OVERFLOW_FROM)));
-  MIR_append_insn(c->ctx, c->jit_func, bin_ok);
-  const MIR_disp_t hist = (MIR_disp_t)(offsetof(sv_func_sidecar_t, ctor_prop_fb) + offsetof(sv_ctor_prop_fb_t, hist));
-  const MIR_disp_t samples = (MIR_disp_t)(offsetof(sv_func_sidecar_t, ctor_prop_fb) + offsetof(sv_ctor_prop_fb_t, samples));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, r_p),
-                               MIR_new_mem_op(c->ctx, MIR_T_I64, hist, r_fb, r_n, 8)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_ADD, MIR_new_reg_op(c->ctx, r_p),
-                               MIR_new_reg_op(c->ctx, r_p), MIR_new_uint_op(c->ctx, 1)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_mem_op(c->ctx, MIR_T_I64, hist, r_fb, r_n, 8),
-                               MIR_new_reg_op(c->ctx, r_p)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, r_p),
-                               MIR_new_mem_op(c->ctx, MIR_T_I64, samples, r_fb, 0, 1)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_ADD, MIR_new_reg_op(c->ctx, r_p),
-                               MIR_new_reg_op(c->ctx, r_p), MIR_new_uint_op(c->ctx, 1)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_mem_op(c->ctx, MIR_T_I64, samples, r_fb, 0, 1),
-                               MIR_new_reg_op(c->ctx, r_p)));
+  mir_emit_branch_if_object(c->ctx, c->jit_func, done, res, c->r_bool);
+  MIR_append_insn(c->ctx, c->jit_func, use_this);
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, res), MIR_new_reg_op(c->ctx, r_this)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, done)));
-
-  MIR_append_insn(c->ctx, c->jit_func, result_helper);
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_call_insn(c->ctx, 6,
-                                    MIR_new_ref_op(c->ctx, c->new_result_proto),
-                                    MIR_new_ref_op(c->ctx, c->imp_new_result),
-                                    MIR_new_reg_op(c->ctx, res),
-                                    MIR_new_reg_op(c->ctx, func),
-                                    MIR_new_reg_op(c->ctx, r_this),
-                                    MIR_new_reg_op(c->ctx, res)));
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, done)));
 }

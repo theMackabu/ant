@@ -2,6 +2,7 @@
 #define ANT_OBJECT_H
 
 #include "types.h"
+#include "value.h"
 #include "sugar.h"
 #include "shapes.h"
 
@@ -16,6 +17,13 @@ typedef struct {
   bool (*setter)(ant_t *, ant_value_t, const char *, size_t, ant_value_t);
   bool (*deleter)(ant_t *, ant_value_t, const char *, size_t);
 } ant_exotic_ops_t;
+
+typedef struct {
+  ant_value_t (*get)(ant_t *, ant_value_t target, const char *key, size_t key_len);
+  ant_value_t (*set)(ant_t *, ant_value_t target, const char *key, size_t key_len, ant_value_t value);
+  void (*del)(ant_t *, ant_value_t target, const char *key, size_t key_len);
+  ant_value_t (*keys)(ant_t *, ant_value_t target);
+} ant_host_proxy_ops_t;
 
 typedef struct promise_handler {
   ant_value_t onFulfilled;
@@ -34,19 +42,25 @@ typedef struct {
   
   UT_array *handlers;
   uint32_t promise_id;
-  uint16_t handler_count;
   uint8_t state;
   
-  bool trigger_queued;
-  bool has_rejection_handler;
-  bool processing;
-  bool unhandled_reported;
-  bool gc_pending_rooted;
+  bool has_inline_handler: 1;
+  bool trigger_queued: 1;
+  bool has_rejection_handler: 1;
+  bool processing: 1;
+  bool unhandled_reported: 1;
+  bool gc_pending_rooted: 1;
 } ant_promise_state_t;
+
+static_assert(
+  sizeof(void *) != 8 || sizeof(ant_promise_state_t) == 80,
+  "promise state no longer fits an 80-byte allocation"
+);
 
 typedef struct {
   ant_value_t target;
   ant_value_t handler;
+  const ant_host_proxy_ops_t *host;
   bool revoked;
 } ant_proxy_state_t;
 
@@ -198,9 +212,6 @@ typedef struct ant_object {
   ant_value_t *overflow_prop;
   
   const ant_exotic_ops_t *exotic_ops;
-  ant_value_t (*exotic_keys)(ant_t *, ant_value_t);
-  
-  ant_promise_state_t *promise_state;
   ant_extra_slot_t *extra_slots;
   
   void (*finalizer)(ant_t *, struct ant_object *);
@@ -212,6 +223,7 @@ typedef struct ant_object {
     struct { sv_closure_t *closure; } func;
     struct { ant_value_t value; } data;
     struct { ant_value_t value; ant_value_t stack; } exception;
+    struct { ant_value_t value; ant_promise_state_t *state; } promise;
   } u;
 
   uint32_t prop_count;
@@ -227,6 +239,24 @@ typedef struct ant_object {
 } ant_object_t;
 
 static constexpr size_t ANT_OBJECT_FLAGS_HIGH_BYTE = offsetof(ant_object_t, flags) + 1;
+
+static_assert(
+  sizeof(void *) != 8 || ANT_INOBJ_MAX_SLOTS != 4 || sizeof(ant_object_t) == 136,
+  "ordinary 64-bit object layout changed"
+);
+
+static_assert(
+  offsetof(ant_object_t, u.promise.value) == offsetof(ant_object_t, u.data.value),
+  "promise objects keep SLOT_DATA in u.data.value"
+);
+
+static_assert(
+  offsetof(ant_object_t, u.promise.state) == offsetof(ant_object_t, u.array.len) &&
+  offsetof(
+    ant_object_t, u.promise.state) + sizeof(ant_promise_state_t *) == 
+    offsetof(ant_object_t, u.array.cap) + sizeof(uint32_t),
+  "obj_alloc clears the promise state pointer through u.array.len and u.array.cap"
+);
 
 static_assert(
   __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, 
@@ -358,6 +388,15 @@ static inline sv_eval_env_state_t *ant_object_eval_env_state(const ant_object_t 
 static inline ant_private_table_t *ant_object_private_table(const ant_object_t *obj) {
   ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
   return sidecar ? (ant_private_table_t *)&sidecar->private_table : NULL;
+}
+
+static inline ant_promise_state_t *ant_object_promise_state(const ant_object_t *obj) {
+  return obj && obj->type_tag == kTypePromise ? obj->u.promise.state : NULL;
+}
+
+static inline void ant_object_make_promise(ant_object_t *obj, ant_promise_state_t *state) {
+  obj->type_tag = kTypePromise;
+  obj->u.promise.state = state;
 }
 
 static inline uint32_t ant_object_overflow_cap(const ant_object_t *obj) {

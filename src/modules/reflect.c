@@ -180,9 +180,8 @@ static ant_value_t reflect_construct(ant_params_t) {
     result = js_proxy_construct(js, target, list.args, list.argc, new_target);
   } else {
     ant_value_t effective_new_target = new_target;
-    ant_value_t record_func = target;
+    ant_value_t proto = sv_prepare_construct_meta(js, target, new_target, &effective_new_target);
     
-    ant_value_t proto = sv_prepare_construct_meta(js, target, new_target, &effective_new_target, &record_func);
     if (is_err(proto)) {
       js_arg_list_release(&list);
       return proto;
@@ -193,8 +192,10 @@ static ant_value_t reflect_construct(ant_params_t) {
 
     ant_value_t ctor_this = new_obj;
     result = sv_vm_call(
-      js->vm, js, target, new_obj, list.args, list.argc, &ctor_this, effective_new_target
+      js->vm, js, target, new_obj, list.args, 
+      list.argc, &ctor_this, effective_new_target
     );
+    
     if (!is_err(result) && !is_object_type(result))
       result = is_object_type(ctor_this) ? ctor_this : new_obj;
   }

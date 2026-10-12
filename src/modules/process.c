@@ -615,20 +615,18 @@ static void get_tty_size(ant_t *js, int fd, int *rows, int *cols) {
   if (cols) *cols = out_cols;
 }
 
-static void process_update_sandbox_env(ant_t *js, ant_value_t process_obj) {
+static void process_update_sandbox_env(ant_t *js) {
   ant_process_state_t *ps = process_state(js);
-  if (!ps || !ps->sandbox_terminal_enabled || !is_special_object(process_obj)) return;
-
-  ant_value_t env_obj = js_get(js, process_obj, "env");
-  if (!is_special_object(env_obj)) return;
+  if (!ps || !ps->sandbox_terminal_enabled) return;
 
   if (ps->sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) {
-    js_set(js, env_obj, "NO_COLOR", js_mkstr(js, "1", 1));
-    js_delete_prop(js, env_obj, "FORCE_COLOR", 11);
+    setenv("NO_COLOR", "1", 1);
+    unsetenv("FORCE_COLOR");
   }
+  
   else if (ps->sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_FORCE) {
-    js_delete_prop(js, env_obj, "NO_COLOR", 8);
-    js_set(js, env_obj, "FORCE_COLOR", js_mkstr(js, "1", 1));
+    unsetenv("NO_COLOR");
+    setenv("FORCE_COLOR", "1", 1);
   }
 }
 
@@ -663,9 +661,9 @@ void process_set_sandbox_terminal(ant_t *js, uint32_t capabilities, uint16_t row
   ps->sandbox_tty_rows = rows ? rows : 24;
   ps->sandbox_tty_cols = cols ? cols : 80;
 
+  process_update_sandbox_env(js);
   ant_value_t process_obj = js_get(js, js_glob(js), "process");
   if (!is_special_object(process_obj)) return;
-  process_update_sandbox_env(js, process_obj);
 
   ant_value_t stdout_obj = js_get(js, process_obj, "stdout");
   if (is_special_object(stdout_obj)) js_set(js, stdout_obj, "isTTY", js_bool(stdout_is_tty(js)));
@@ -1335,7 +1333,7 @@ static ant_value_t process_initgroups(ant_params_t) {
 }
 #endif
 
-static ant_value_t env_getter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
+static ant_value_t env_get(ant_t *js, ant_value_t target, const char *key, size_t key_len) {
   CSTR_BUF(buf, 256);
   char *key_str = CSTR_INIT(buf, key, key_len);
   if (!key_str) return js_mkundef();
@@ -1347,31 +1345,36 @@ static ant_value_t env_getter(ant_t *js, ant_value_t obj, const char *key, size_
   return js_mkstr(js, value, strlen(value));
 }
 
-static bool env_setter(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t value) {
+static ant_value_t env_set(ant_t *js, ant_value_t target, const char *key, size_t key_len, ant_value_t value) {
   ant_value_t str_val = coerce_to_str(js, value);
-  if (is_err(str_val)) return false;
-  setprop_cstr(js, obj, key, key_len, str_val);
+  if (is_err(str_val)) return str_val;
+  
+  size_t val_len = 0;
+  const char *val_str = js_getstr(js, str_val, &val_len);
+  
+  if (!val_str) return js_mkerr(js, "out of memory");
   
   CSTR_BUF(buf, 256);
   char *key_str = CSTR_INIT(buf, key, key_len);
-  if (key_str) {
-    size_t val_len;
-    char *val_str = js_getstr(js, str_val, &val_len);
-    if (val_str) setenv(key_str, val_str, 1);
-    cstr_free(&buf);
-  }
+  if (!key_str) return js_mkerr(js, "out of memory");
   
-  return true;
+  const char *current = getenv(key_str);
+  if (
+    !current || strlen(current) != val_len || 
+    memcmp(current, val_str, val_len) != 0
+  ) setenv(key_str, val_str, 1);
+  
+  cstr_free(&buf);
+  return js_mkundef();
 }
 
-static bool env_deleter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
+static void env_del(ant_t *js, ant_value_t target, const char *key, size_t key_len) {
   CSTR_BUF(buf, 256);
   char *key_str = CSTR_INIT(buf, key, key_len);
   if (key_str) { unsetenv(key_str); cstr_free(&buf); }
-  return true;
 }
 
-static void load_dotenv_file(ant_t *js, ant_value_t env_obj) {
+static void load_dotenv_file() {
   FILE *fp = fopen(".env", "r");
   if (fp == NULL) return;
   
@@ -1416,7 +1419,7 @@ static void load_dotenv_file(ant_t *js, ant_value_t env_obj) {
       value++;
     }
     
-    js_set(js, env_obj, key, js_mkstr(js, value, strlen(value)));
+    setenv(key, value, 1);
   }
   
   fclose(fp);
@@ -1577,7 +1580,7 @@ typedef void (*env_iter_cb)(
   void *ctx
 );
 
-static void env_foreach(ant_t *js, ant_value_t env_obj, env_iter_cb cb, void *ctx) {
+static void env_foreach(ant_t *js, env_iter_cb cb, void *ctx) {
   for (char **env = environ; *env != NULL; env++) {
     char *entry = *env;
     char *equals = strchr(entry, '=');
@@ -1587,28 +1590,6 @@ static void env_foreach(ant_t *js, ant_value_t env_obj, env_iter_cb cb, void *ct
     char *value = equals + 1;
     cb(js, entry, key_len, value, strlen(value), ctx);
   }
-  
-  ant_iter_t iter = js_prop_iter_begin(js, env_obj);
-  const char *key; size_t key_len; ant_value_t value;
-  
-  while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
-    if (vtype(value) != kTypeString) continue;
-    
-    CSTR_BUF(buf, 256);
-    char *key_str = CSTR_INIT(buf, key, key_len);
-    if (!key_str) continue;
-    
-    if (getenv(key_str)) {
-      cstr_free(&buf);
-      continue;
-    } cstr_free(&buf);
-    
-    size_t val_len;
-    char *val_str = js_getstr(js, value, &val_len);
-    cb(js, key, key_len, val_str ? val_str : "", val_str ? val_len : 0, ctx);
-  }
-  
-  js_prop_iter_end(&iter);
 }
 
 static void env_to_object_cb(ant_t *js, const char *key, size_t key_len, const char *value, size_t val_len, void *ctx) {
@@ -1622,7 +1603,7 @@ static void env_to_object_cb(ant_t *js, const char *key, size_t key_len, const c
 
 static ant_value_t env_to_object(ant_params_t) {
   ant_value_t obj = js_mkobj(js);
-  env_foreach(js, js->this_val, env_to_object_cb, &obj);
+  env_foreach(js, env_to_object_cb, &obj);
   return obj;
 }
 
@@ -1650,7 +1631,7 @@ static ant_value_t env_toString(ant_params_t) {
   env_str_ctx ctx = { .buf = malloc(4096), .pos = 0, .cap = 4096 };
   if (!ctx.buf) return js_mkstr(js, "", 0);
   
-  env_foreach(js, js->this_val, env_tostring_cb, &ctx);
+  env_foreach(js, env_tostring_cb, &ctx);
   ctx.buf[ctx.pos] = '\0';
   
   ant_value_t ret = js_mkstr(js, ctx.buf, ctx.pos);
@@ -1658,16 +1639,29 @@ static ant_value_t env_toString(ant_params_t) {
   return ret;
 }
 
-static void env_keys_cb(ant_t *js, const char *key, size_t key_len, const char *value, size_t val_len, void *ctx) {
-  ant_value_t arr = *(ant_value_t *)ctx;
-  js_arr_push(js, arr, js_mkstr(js, key, key_len));
+static void env_keys_cb(
+  ant_t *js, const char *key, size_t key_len, const char *value, size_t val_len, void *ctx
+) {
+  js_arr_push(js, *(ant_value_t *)ctx, js_mkstr(js, key, key_len));
 }
 
-static ant_value_t env_keys(ant_t *js, ant_value_t obj) {
+static ant_value_t env_keys(ant_t *js, ant_value_t target) {
+  GC_ROOT_SAVE(root_mark, js);
   ant_value_t arr = js_mkarr(js);
-  env_foreach(js, obj, env_keys_cb, &arr);
+  GC_ROOT_PIN(js, arr);
+  
+  env_foreach(js, env_keys_cb, &arr);
+  GC_ROOT_RESTORE(js, root_mark);
+  
   return arr;
 }
+
+static const ant_host_proxy_ops_t env_host_ops = {
+  .get = env_get,
+  .set = env_set,
+  .del = env_del,
+  .keys = env_keys,
+};
 
 static ant_value_t process_cwd(ant_params_t) {
   ant_process_state_t *ps = process_state(js);
@@ -1965,18 +1959,16 @@ void init_process_module(ant_t *js) {
     js_mkfun(process_exit_code_getter), js_mkfun(process_exit_code_setter), JS_DESC_E
   );
 
-  load_dotenv_file(js, env_obj);
-  js_set_keys(env_obj, env_keys);
-
-  js_set_getter(env_obj, env_getter);
-  js_set_setter(env_obj, env_setter);
-  js_set_deleter(env_obj, env_deleter);
-  
+  load_dotenv_file();
   defmethod(js, env_obj, "toObject", 8, js_mkfun(env_to_object));
   defmethod(js, env_obj, "toString", 8, js_mkfun(env_toString));
   
-  js_set(js, process_obj, "env", env_obj);
-  process_update_sandbox_env(js, process_obj);
+  ant_value_t env_proxy = js_mkproxy_host(js, env_obj, &env_host_ops);
+  if (!is_err(env_proxy)) js->builtins.process_env = env_proxy;
+  else env_proxy = env_obj;
+  
+  js_set(js, process_obj, "env", env_proxy);
+  process_update_sandbox_env(js);
   
   ant_value_t argv_arr = js_mkarr(js);
   for (int i = 0; i < js->runtime.argc; i++) js_arr_push(

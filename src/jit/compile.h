@@ -88,7 +88,6 @@ typedef struct jit_compile {
   MIR_item_t throw_error_proto;
   MIR_item_t new_proto;
   MIR_item_t new_this_proto;
-  MIR_item_t new_result_proto;
   MIR_item_t special_obj_proto;
   MIR_item_t strict_arguments_proto;
   MIR_item_t forward_arguments_proto;
@@ -200,7 +199,6 @@ typedef struct jit_compile {
   MIR_item_t imp_typeof;
   MIR_item_t imp_new;
   MIR_item_t imp_new_this;
-  MIR_item_t imp_new_result;
   MIR_item_t imp_instanceof;
   MIR_item_t imp_call_is_proto;
   MIR_item_t imp_delete;
@@ -371,7 +369,7 @@ void jit_emit_builtin_call_fast(
 );
 void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type);
 bool jit_setup_frame(jit_compile_t *c);
-void jit_emit_entry_counter(jit_compile_t *c, const char *site, MIR_insn_t before);
+void jit_emit_entry_counter(jit_compile_t *c, const char *site, MIR_insn_t before, uint32_t threshold);
 
 void jit_emit_literals(jit_compile_t *c);
 void jit_emit_stack(jit_compile_t *c);

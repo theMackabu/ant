@@ -30,7 +30,8 @@ function assert(cond, msg) {
 
 function inflateHeap() {
   let junk = [];
-  for (let i = 0; i < 40000; i++) {
+  // sized to clear 10MB with 136-byte objects
+  for (let i = 0; i < 50000; i++) {
     junk.push({ idx: i, payload: 'padding_string_' + i + '_extra_data_to_bulk_up_the_arena_size' });
   }
   const stats = Ant.stats();

@@ -1809,11 +1809,7 @@ ant_value_t jit_helper_new_this(ant_t *js, ant_value_t func, ant_value_t new_tar
   ant_value_t proto;
   if (!sv_construct_prototype_data(js, func_obj, closure->func, &proto)) return T_EMPTY;
 
-  const sv_ctor_prop_fb_t *fb = &sv_func_sidecar(closure->func)->ctor_prop_fb;
-  uint8_t inobj_limit = fb->inobj_frozen
-    ? sv_tfb_clamp_inobj_limit(fb->inobj_limit) : (uint8_t)ANT_INOBJ_MAX_SLOTS;
-  
-  ant_value_t obj = js_mkobj_with_inobj_limit(js, inobj_limit);
+  ant_value_t obj = js_mkobj(js);
   if (vtype(obj) != kTypeObject) return T_EMPTY;
   
   js_obj_ptr(obj)->proto = proto;
@@ -1821,18 +1817,11 @@ ant_value_t jit_helper_new_this(ant_t *js, ant_value_t func, ant_value_t new_tar
   return obj;
 }
 
-ant_value_t jit_helper_new_result(ant_value_t func, ant_value_t obj, ant_value_t result) {
-  ant_value_t final_obj = is_object_type(result) ? result : obj;
-  sv_tfb_record_ctor_prop_count(func, final_obj);
-  return final_obj;
-}
-
 ant_value_t jit_helper_new(
   sv_vm_t *vm, ant_t *js,
   ant_value_t func, ant_value_t new_target,
   ant_value_t *args, int argc
 ) {
-  ant_value_t record_func = func;
   ant_value_t effective_new_target = new_target;
 
   if (vtype(func) == kTypeObject && is_proxy(func))
@@ -1849,11 +1838,11 @@ ant_value_t jit_helper_new(
     proto = sv_construct_prototype_cached(js, func, func_obj, closure->func);
     if (is_err(proto)) return proto;
   } else if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
-    proto = sv_prepare_construct_meta(js, func, new_target, &effective_new_target, &record_func);
+    proto = sv_prepare_construct_meta(js, func, new_target, &effective_new_target);
     if (is_err(proto)) return proto;
   }
 
-  ant_value_t obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));
+  ant_value_t obj = js_mkobj(js);
   if (vtype(obj) == kTypeObject && is_object_type(proto)) js_obj_ptr(obj)->proto = proto;
   ant_value_t ctor_this = obj;
   ant_value_t result;
@@ -1880,10 +1869,5 @@ ant_value_t jit_helper_new(
   } else result = sv_vm_call(vm, js, func, obj, args, argc, &ctor_this, effective_new_target);
 
   if (is_err(result)) return result;
-  ant_value_t final_obj =
-    is_object_type(result) ? result
-    : (is_object_type(ctor_this) ? ctor_this : obj);
-  sv_tfb_record_ctor_prop_count(record_func, final_obj);
-  
-  return final_obj;
+  return is_object_type(result) ? result : (is_object_type(ctor_this) ? ctor_this : obj);
 }

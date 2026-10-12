@@ -9,8 +9,10 @@
 #include "silver/feedback.h"
 
 void *jit_helper_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) {
-  if (!func->jit_code_cold && !func->jit_code_retier) return NULL;
-  return (void *)sv_jit_tier_up(js, func, closure);
+  bool due = func->jit_code_cold || func->jit_code_retier;
+  sv_jit_func_t hot = due ? sv_jit_tier_up(js, func, closure) : NULL;
+  if (!hot) func->call_count = 0;
+  return (void *)hot;
 }
 
 static int64_t jit_promote_now(void) {
@@ -148,7 +150,6 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_typeof);
   LOAD_EXT(jit_helper_new);
   LOAD_EXT(jit_helper_new_this);
-  LOAD_EXT(jit_helper_new_result);
   LOAD_EXT(jit_helper_delete);
   LOAD_EXT(jit_helper_delete_strict);
   LOAD_EXT(jit_helper_set_name);

@@ -105,7 +105,6 @@ interface AntStatsResult {
 interface AntRaw {
   readonly stack: string;
   typeof(t: unknown): number;
-  ctorPropFeedback(fn: Function): AntCtorPropFeedback;
   gcMarkProfile(): AntGcMarkProfile;
   gcMarkProfileEnable(enabled?: boolean): boolean;
   gcMarkProfileReset(): void;
@@ -158,17 +157,6 @@ interface AntUnsafe {
       (...args: AntCArgumentValues<TArgs>) => AntCReturnValue<TReturn>;
   c<TReturn extends AntCReturnType>(options: AntCOptions<TReturn>):
     (strings: TemplateStringsArray, ...values: unknown[]) => AntCReturnValue<TReturn>;
-}
-
-interface AntCtorPropFeedback {
-  samples: number;
-  overflowFrom: number;
-  inobjLimit: number;
-  inobjLimitFrozen: boolean;
-  slackRemaining: number;
-  bins: number[];
-  name?: string;
-  filename?: string;
 }
 
 interface AntGcMarkProfile {

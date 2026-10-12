@@ -100,6 +100,51 @@ void mir_emit_truthy_branch(
   MIR_append_insn(ctx, fn, done);
 }
 
+bool vstack_alloc(jit_vstack_t *vs, int max) {
+  size_t n = (size_t)max;
+  
+  *vs = (jit_vstack_t){ .max = max };
+  vs->regs = calloc(n, sizeof(MIR_reg_t));
+  vs->d_regs = calloc(n, sizeof(MIR_reg_t));
+  vs->known_func = calloc(n, sizeof(sv_func_t *));
+  vs->slot_type = calloc(n, sizeof(uint8_t));
+  vs->known_const = calloc(n, sizeof(uint64_t));
+  vs->has_const = calloc(n, sizeof(bool));
+  vs->known_bool = calloc(n, sizeof(uint8_t));
+  vs->known_builtin = calloc(n, sizeof(uint8_t));
+  vs->integer_range = calloc(n, sizeof(jit_integer_range_t));
+
+  if (
+    vs->regs && vs->d_regs && vs->known_func && vs->slot_type && vs->known_const &&
+    vs->has_const && vs->known_bool && vs->known_builtin && vs->integer_range
+  ) return true;
+
+  vstack_free(vs);
+  return false;
+}
+
+void vstack_free(jit_vstack_t *vs) {
+  free(vs->regs);
+  free(vs->d_regs);
+  free(vs->known_func);
+  free(vs->slot_type);
+  free(vs->known_const);
+  free(vs->has_const);
+  free(vs->known_bool);
+  free(vs->known_builtin);
+  free(vs->integer_range);
+  *vs = (jit_vstack_t){0};
+}
+
+void vstack_forget_facts(jit_vstack_t *vs) {
+  size_t n = (size_t)vs->max;
+  memset(vs->slot_type, SLOT_BOXED, n);
+  memset(vs->known_func, 0, n * sizeof(sv_func_t *));
+  memset(vs->has_const, 0, n * sizeof(bool));
+  memset(vs->known_bool, 0, n);
+  memset(vs->known_builtin, 0, n);
+}
+
 jit_value_info_t vstack_value_info(const jit_vstack_t *vs, int idx) {
   jit_value_info_t info = {0};
   if (vs->known_func) info.known_func = vs->known_func[idx];
@@ -576,6 +621,24 @@ int jit_constant_object_span(sv_func_t *func, sv_obj_site_cache_t *site, jit_lab
   for (int off = (int)(begin - func->code); off < (int)(ip - func->code); off++)
     if (jit_label_at(lm, off) >= 0) return 0;
   return (int)(ip - begin);
+}
+
+void mir_emit_branch_if_object(
+    MIR_context_t ctx, MIR_item_t fn, MIR_label_t target, MIR_reg_t value, MIR_reg_t scratch) {
+  MIR_label_t not_object = MIR_new_label(ctx);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBLE,
+      MIR_new_label_op(ctx, not_object), MIR_new_reg_op(ctx, value), MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_URSH,
+      MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, value), MIR_new_int_op(ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, NANBOX_TYPE_MASK)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_LSH,
+      MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, 1), MIR_new_reg_op(ctx, scratch)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, (int64_t)T_OBJECT_MASK)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BT,
+      MIR_new_label_op(ctx, target), MIR_new_reg_op(ctx, scratch)));
+  MIR_append_insn(ctx, fn, not_object);
 }
 
 void mir_emit_decode_ref(

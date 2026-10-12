@@ -210,7 +210,6 @@ void js_prop_iter_end(ant_iter_t *iter);
 
 bool js_is_constructor(ant_value_t value);
 bool js_mark_promise_trigger_queued(ant_t *js, ant_value_t promise);
-bool js_copy_exotic_own_props(ant_t *js, ant_value_t dst, ant_value_t src);
 bool js_prop_iter_next_val(ant_iter_t *iter, ant_value_t *key_out, ant_value_t *value);
 bool js_prop_iter_next_key(ant_iter_t *iter, ant_iter_key_t *key_out, ant_value_t *value);
 bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, ant_value_t *value);
@@ -234,8 +233,6 @@ void js_resolve_promise(ant_t *js, ant_value_t promise, ant_value_t value);
 void js_process_promise_thenable_job(ant_t *js, ant_value_t promise, ant_value_t thenable, ant_value_t then_fn);
 
 typedef ant_value_t (*js_getter_fn)(ant_t *js, ant_value_t obj, const char *key, size_t key_len);
-typedef ant_value_t (*js_keys_fn)(ant_t *js, ant_value_t obj);
-
 typedef bool (*js_setter_fn)(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t value);
 typedef bool (*js_deleter_fn)(ant_t *js, ant_value_t obj, const char *key, size_t key_len);
 typedef void (*js_finalizer_fn)(ant_t *js, ant_object_t *obj);
@@ -243,7 +240,6 @@ typedef void (*js_finalizer_fn)(ant_t *js, ant_object_t *obj);
 void js_set_getter(ant_value_t obj, js_getter_fn getter);
 void js_set_setter(ant_value_t obj, js_setter_fn setter);
 void js_set_deleter(ant_value_t obj, js_deleter_fn deleter);
-void js_set_keys(ant_value_t obj, js_keys_fn keys);
 void js_set_finalizer(ant_value_t obj, js_finalizer_fn fn);
 
 ant_value_t js_get_slot(ant_value_t obj, internal_slot_t slot);

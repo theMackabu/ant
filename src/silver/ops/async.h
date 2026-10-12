@@ -3,6 +3,7 @@
 
 #include "ant.h"
 #include "sugar.h"
+#include "gc.h"
 #include "gc/roots.h"
 #include "silver/engine.h"
 #include "modules/timer.h"
@@ -304,6 +305,10 @@ static inline sv_await_result_t sv_await_value(sv_vm_t *vm, ant_t *js, ant_value
   }
 
   coro->act = act;
+  
+  // minor collections reach a suspended coroutine only through this set; the
+  // promise it waits on may be old, and old handlers are not rescanned
+  gc_remember_coroutine(js, coro);
   out.state = SV_AWAIT_SUSPENDED;
   
   return out;

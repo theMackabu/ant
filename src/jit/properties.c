@@ -87,7 +87,7 @@ static void mir_emit_promise_protector_invalidation(
     protector_offset =
         offsetof(ant_t, promise_resolve_lookup_protector_invalid);
 
-  MIR_reg_t promise_state = mir_new_ic_reg(ctx, fn, "pf", "ps", bc_off, ic_idx);
+  MIR_reg_t type_tag = mir_new_ic_reg(ctx, fn, "pf", "ps_tag", bc_off, ic_idx);
   MIR_label_t invalidate = MIR_new_label(ctx);
   MIR_label_t done = MIR_new_label(ctx);
 
@@ -101,12 +101,12 @@ static void mir_emit_promise_protector_invalidation(
                                  MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)js_obj_ptr(holder))));
   } else {
     MIR_append_insn(ctx, fn,
-                    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, promise_state),
-                                 MIR_new_mem_op(ctx, MIR_T_P,
-                                                (MIR_disp_t)offsetof(ant_object_t, promise_state), obj_ptr, 0, 1)));
+                    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, type_tag),
+                                 MIR_new_mem_op(ctx, MIR_T_U8,
+                                                (MIR_disp_t)offsetof(ant_object_t, type_tag), obj_ptr, 0, 1)));
     MIR_append_insn(ctx, fn,
-                    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, invalidate),
-                                 MIR_new_reg_op(ctx, promise_state), MIR_new_int_op(ctx, 0)));
+                    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, invalidate),
+                                 MIR_new_reg_op(ctx, type_tag), MIR_new_uint_op(ctx, kTypePromise)));
     MIR_append_insn(ctx, fn,
                     MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, done),
                                  MIR_new_reg_op(ctx, obj_ptr),
@@ -729,17 +729,17 @@ static bool mir_emit_get_field_missing_fastpath(
 static void mir_emit_snapshot_slot_load(
     MIR_context_t ctx, MIR_item_t fn, ant_shape_t *shape, uint32_t index,
     MIR_reg_t holder, MIR_reg_t tmp, MIR_reg_t dst, MIR_label_t miss) {
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, tmp),
-      MIR_new_mem_op(ctx, MIR_T_U32, offsetof(ant_object_t, prop_count), holder, 0, 1)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBLE, MIR_new_label_op(ctx, miss),
-      MIR_new_reg_op(ctx, tmp), MIR_new_uint_op(ctx, index)));
-  
   uint8_t inobj_limit = ant_shape_get_inobj_limit(shape);
   if (index < inobj_limit) {
     MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, dst),
         MIR_new_mem_op(ctx, MIR_JSVAL, offsetof(ant_object_t, inobj) + index * sizeof(ant_value_t), holder, 0, 1)));
     return;
   }
+  
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, tmp),
+      MIR_new_mem_op(ctx, MIR_T_U32, offsetof(ant_object_t, prop_count), holder, 0, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBLE, MIR_new_label_op(ctx, miss),
+      MIR_new_reg_op(ctx, tmp), MIR_new_uint_op(ctx, index)));
   
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, tmp),
       MIR_new_mem_op(ctx, MIR_T_P, offsetof(ant_object_t, overflow_prop), holder, 0, 1)));

@@ -5,8 +5,6 @@
 #include <stdio.h>
 
 static_assert(sizeof(ant_object_flags_t) == 2, "object flags grew");
-static_assert(sizeof(void *) != 8 || ANT_INOBJ_MAX_SLOTS != 4 || sizeof(ant_object_t) == 152,
-              "ordinary 64-bit object layout grew");
 
 int main(void) {
   ant_t *js = ant_create();

@@ -24,7 +24,6 @@
 #include "descriptors.h"
 
 #include "silver/call.h"
-#include "silver/feedback.h"
 #include "modules/builtin.h"
 #include "modules/buffer.h"
 #include "modules/cjit.h"
@@ -74,38 +73,6 @@ static ant_value_t js_raw_typeof(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "Ant.raw.typeof() requires 1 argument");
   const uint8_t type = vtype(args[0]);
   return js_mknum((double)type);
-}
-
-// Ant.raw.ctorPropFeedback(constructorFn)
-static ant_value_t js_raw_ctor_prop_feedback(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "Ant.raw.ctorPropFeedback() requires 1 argument");
-  if (vtype(args[0]) != kTypeFunction) return js_mkerr(js, "constructor must be a function");
-
-  ant_value_t ctor = args[0];
-  ant_value_t ctor_obj = js_func_obj(ctor);
-  ant_value_t target_func = js_get_slot(ctor_obj, SLOT_TARGET_FUNC);
-  if (vtype(target_func) == kTypeFunction) ctor = target_func;
-
-  sv_closure_t *closure = js_func_closure(ctor);
-  if (!closure || !closure->func) return js_mkundef();
-  sv_func_t *fn = closure->func;
-
-  ant_value_t out = js_newobj(js);
-  js_set(js, out, "samples", js_mknum((double)sv_tfb_ctor_prop_samples(fn)));
-  js_set(js, out, "overflowFrom", js_mknum((double)SV_TFB_CTOR_PROP_OVERFLOW_FROM));
-  js_set(js, out, "inobjLimit", js_mknum((double)sv_tfb_ctor_inobj_limit(ctor)));
-  js_set(js, out, "inobjLimitFrozen", js_bool(sv_tfb_ctor_inobj_limit_frozen(ctor)));
-  js_set(js, out, "slackRemaining", js_mknum((double)sv_tfb_ctor_inobj_slack_remaining(ctor)));
-
-  ant_value_t bins = js_mkarr(js);
-  for (uint32_t i = 0; i < SV_TFB_CTOR_PROP_BINS; i++) 
-    js_arr_push(js, bins, js_mknum((double)sv_tfb_ctor_prop_bin(fn, i)));
-  js_set(js, out, "bins", bins);
-
-  if (fn->debug->name) js_set(js, out, "name", js_mkstr(js, fn->debug->name, strlen(fn->debug->name)));
-  if (fn->debug->filename) js_set(js, out, "filename", js_mkstr(js, fn->debug->filename, strlen(fn->debug->filename)));
-
-  return out;
 }
 
 static ant_value_t js_raw_gc_mark_profile(ant_params_t) {
@@ -247,17 +214,23 @@ static ant_value_t js_stats_fn(ant_params_t) {
   size_t exotic_bytes   = 0;
 
   for (int pass = 0; pass < 3; pass++) {
-    ant_object_t *head = pass == 0 ? js->objects : pass == 1 ? js->objects_old : js->permanent_objects;
+    ant_object_t *head = pass == 0 
+      ? js->objects : pass == 1 
+      ? js->objects_old : js->permanent_objects;
+    
     for (ant_object_t *obj = head; obj; obj = obj->next) {
       obj_count++;
       obj_bytes += sizeof(ant_object_t);
+      
       uint32_t inobj_limit = ant_object_inobj_limit(obj);
       if (obj->overflow_prop && obj->prop_count > inobj_limit)
         overflow_bytes += (obj->prop_count - inobj_limit) * sizeof(ant_value_t);
+      
       uint8_t extra_count = 0;
       ant_extra_slot_t *slots = ant_object_extra_slots(obj, &extra_count);
+      
       if (slots) extra_bytes += ant_object_extra_capacity(obj) * sizeof(ant_extra_slot_t);
-      if (obj->promise_state) promise_bytes += sizeof(ant_promise_state_t);
+      if (ant_object_promise_state(obj)) promise_bytes += sizeof(ant_promise_state_t);
       if (ant_object_proxy_state(obj)) proxy_bytes += sizeof(ant_proxy_state_t);
       if (ant_object_has_sidecar(obj)) extra_bytes += sizeof(ant_object_sidecar_t);
       if (obj->exotic_ops) exotic_bytes += sizeof(ant_exotic_ops_t);
@@ -487,7 +460,6 @@ void init_builtin_module(ant_t *js) {
   ant_value_t raw_obj = js_newobj(js);
   js_set_getter_desc(js, js_as_obj(raw_obj), "stack", 5, js_mkfun(js_raw_stack), JS_DESC_C);
   js_set(js, raw_obj, "typeof", js_mkfun(js_raw_typeof));
-  js_set(js, raw_obj, "ctorPropFeedback", js_mkfun(js_raw_ctor_prop_feedback));
   js_set(js, raw_obj, "gcMarkProfile", js_mkfun(js_raw_gc_mark_profile));
   js_set(js, raw_obj, "gcMarkProfileEnable", js_mkfun(js_raw_gc_mark_profile_enable));
   js_set(js, raw_obj, "gcMarkProfileReset", js_mkfun(js_raw_gc_mark_profile_reset));

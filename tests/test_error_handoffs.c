@@ -390,7 +390,7 @@ static ant_value_t promise(ant_t *js) {
 }
 
 static void check_rejected(ant_value_t p, ant_value_t reason) {
-  ant_promise_state_t *state = js_obj_ptr(js_as_obj(p))->promise_state;
+  ant_promise_state_t *state = ant_object_promise_state(js_obj_ptr(js_as_obj(p)));
   assert(state && state->state == 2 && state->value == reason);
 }
 
@@ -733,7 +733,7 @@ int main(void) {
   p = promise(js);
   js_resolve_promise(js, p, js_mknum(99));
   js_reject_promise(js, p, js_throw(js, js_mkundef()));
-  ant_promise_state_t *settled = js_obj_ptr(js_as_obj(p))->promise_state;
+  ant_promise_state_t *settled = ant_object_promise_state(js_obj_ptr(js_as_obj(p)));
   assert(!Ant_Exception_Pending(js) && settled->state == 1 && settled->value == js_mknum(99));
 
   // Internal observation queues setup failures; it does not call the owner inline.

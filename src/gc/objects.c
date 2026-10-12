@@ -99,29 +99,53 @@ static void gc_obj_epoch_wrapped(ant_t *js) {
     if (o->mark_epoch != ANT_GC_DEAD) o->mark_epoch = 0;
 }
 
+static inline ant_promise_state_t *gc_pending_pd(ant_object_t *obj) {
+  return obj->u.promise.state;
+}
+
 void gc_root_pending_promise(ant_t *js, ant_object_t *obj) {
-  ant_promise_state_t *pd = obj ? obj->promise_state : NULL;
+  ant_promise_state_t *pd = ant_object_promise_state(obj);
   if (!js || !pd || pd->gc_pending_rooted) return;
 
   pd->gc_pending_rooted = true;
+  bool young = obj->flags.generation == 0;
+  ant_object_t **list = young ? &js->pending_promises_young : &js->pending_promises;
+  
+  if (young && !*list) js->pending_promises_young_tail = obj;
   pd->gc_pending_prev = NULL;
-  pd->gc_pending_next = js->pending_promises;
-  if (js->pending_promises && js->pending_promises->promise_state)
-    js->pending_promises->promise_state->gc_pending_prev = obj;
-  js->pending_promises = obj;
+  pd->gc_pending_next = *list;
+  
+  if (*list) gc_pending_pd(*list)->gc_pending_prev = obj;
+  *list = obj;
+}
+
+static void gc_promote_pending_promises(ant_t *js) {
+  ant_object_t *young = js->pending_promises_young;
+  if (!young) return;
+  
+  ant_object_t *tail = js->pending_promises_young_tail;
+  gc_pending_pd(tail)->gc_pending_next = js->pending_promises;
+  if (js->pending_promises) gc_pending_pd(js->pending_promises)->gc_pending_prev = tail;
+  
+  js->pending_promises = young;
+  js->pending_promises_young = NULL;
+  js->pending_promises_young_tail = NULL;
 }
 
 void gc_unroot_pending_promise(ant_t *js, ant_object_t *obj) {
-  ant_promise_state_t *pd = obj ? obj->promise_state : NULL;
+  ant_promise_state_t *pd = ant_object_promise_state(obj);
   if (!js || !pd || !pd->gc_pending_rooted) return;
 
   pd->gc_pending_rooted = false;
   ant_object_t *prev = pd->gc_pending_prev;
   ant_object_t *next = pd->gc_pending_next;
 
-  if (prev && prev->promise_state) prev->promise_state->gc_pending_next = next;
+  if (prev) gc_pending_pd(prev)->gc_pending_next = next;
+  else if (js->pending_promises_young == obj) js->pending_promises_young = next;
   else if (js->pending_promises == obj) js->pending_promises = next;
-  if (next && next->promise_state) next->promise_state->gc_pending_prev = prev;
+  
+  if (next) gc_pending_pd(next)->gc_pending_prev = prev;
+  if (js->pending_promises_young_tail == obj) js->pending_promises_young_tail = prev;
 
   pd->gc_pending_next = NULL;
   pd->gc_pending_prev = NULL;
@@ -687,7 +711,7 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
     }
   }
 
-  ant_promise_state_t *pd = obj->promise_state;
+  ant_promise_state_t *pd = ant_object_promise_state(obj);
   if (pd) {
     gc_mark_value(js, pd->value);
     gc_mark_value(js, pd->trigger_parent);
@@ -1083,12 +1107,12 @@ static inline void gc_mark_promise_handler(ant_t *js, const promise_handler_t *h
 static inline void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd) {
   if (!pd) return;
 
-  if (pd->handler_count == 1) {
+  if (pd->has_inline_handler) {
     gc_mark_promise_handler(js, &pd->inline_handler);
     return;
   }
 
-  if (pd->handler_count <= 1 || !pd->handlers) return;
+  if (!pd->handlers) return;
   promise_handler_t *h = NULL;
   
   while ((h = (promise_handler_t *)utarray_next(pd->handlers, h)))
@@ -1223,12 +1247,15 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_napi(js, gc_mark_value);
   gc_mark_rpc(js, gc_mark_value);
 
-  for (ant_object_t *obj = js->pending_promises; obj;) {
-    ant_promise_state_t *pd = obj->promise_state;
-    ant_object_t *next = pd ? pd->gc_pending_next : NULL;
-    gc_grey_obj(js, obj);
-    obj = next;
-  }
+  for (
+    ant_object_t *obj = js->pending_promises_young; obj; 
+    obj = gc_pending_pd(obj)->gc_pending_next
+  ) gc_grey_obj(js, obj);
+  
+  if (!js->gc.minor) for (
+    ant_object_t *obj = js->pending_promises; obj; 
+    obj = gc_pending_pd(obj)->gc_pending_next
+  ) gc_grey_obj(js, obj);
 
   gc_scan_current_stack(js);
   gc_scan_other_stacks(js);
@@ -1241,9 +1268,10 @@ static void gc_mark_roots(ant_t *js) {
   gc_drain_mark_stack(js);
 }
 
-#define GC_FREE_HASH_TABLE_MASK              \
-  ((1u << kTypeMap)    | (1u << kTypeSet) |  \
-  (1u << kTypeWeakMap) | (1u << kTypeWeakSet))
+#define GC_FREE_SLOW_TYPE_MASK                   \
+  ((1u << kTypeMap)    | (1u << kTypeSet)     |  \
+  (1u << kTypeWeakMap) | (1u << kTypeWeakSet) |  \
+  (1u << kTypePromise))
 
 static constexpr uint32_t GC_ARRAY_STORAGE_MAX_CAP = 32;
 static constexpr uint8_t GC_ARRAY_STORAGE_SIZES[] = {2, 3, 4, 6, 8, 12, 16, 24, 32};
@@ -1353,12 +1381,13 @@ static inline void gc_free_array_storage(ant_t *js, ant_object_t *obj) {
 void gc_object_free(ant_t *js, ant_object_t *obj) {
   if (!obj) return;
 
-  if (
-    (((uintptr_t)obj->finalizer | (uintptr_t)obj->promise_state |
-    (uintptr_t)obj->extra_slots | (uintptr_t)obj->overflow_prop |
-    (uintptr_t)obj->exotic_ops) | obj->native.tag) == 0 &&
-    (((1u << obj->type_tag) & GC_FREE_HASH_TABLE_MASK) == 0)
-  ) {
+  uintptr_t attached =
+    (uintptr_t)obj->finalizer | (uintptr_t)obj->extra_slots |
+    (uintptr_t)obj->overflow_prop | (uintptr_t)obj->exotic_ops | obj->native.tag;
+  
+  bool slow_type = (1u << obj->type_tag) & GC_FREE_SLOW_TYPE_MASK;
+
+  if (attached == 0 && !slow_type) {
     obj->mark_epoch = ANT_GC_DEAD;
     
     if (obj->shape) {
@@ -1384,14 +1413,12 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     obj->shape = NULL;
   }
 
-  if (obj->promise_state && obj->promise_state->gc_pending_rooted)
-    gc_unroot_pending_promise(js, obj);
-
-  if (obj->promise_state) {
-    if (obj->promise_state->handlers)
-      utarray_free(obj->promise_state->handlers);
-    free(obj->promise_state);
-    obj->promise_state = NULL;
+  ant_promise_state_t *pd = ant_object_promise_state(obj);
+  if (pd) {
+    if (pd->gc_pending_rooted) gc_unroot_pending_promise(js, obj);
+    if (pd->handlers) utarray_free(pd->handlers);
+    free(pd);
+    obj->u.promise.state = NULL;
   }
 
   if (obj->type_tag == kTypeArray) gc_free_array_storage(js, obj);
@@ -1612,7 +1639,9 @@ uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
   gc_age_regex_cache(js, false);
   
   uint64_t mark_ns = gc_now_ns() - mark_start_ns;
+  
   gc_sweep(js);
+  gc_promote_pending_promises(js);
   
   if (ant_gc_shapes_sweep()) ant_ic_epoch_bump(js);
   js->permanent_root_traced = js->permanent_root_len;
@@ -1718,6 +1747,7 @@ void gc_objects_run_minor(ant_t *js) {
 
   gc_age_regex_cache(js, true);
   gc_sweep_young_and_promote(js);
+  gc_promote_pending_promises(js);
   
   js->permanent_root_traced = js->permanent_root_len;
   js->code_units.young_len = 0;

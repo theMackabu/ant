@@ -144,7 +144,6 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   ant_value_t *args = &vm->stack[vm->sp - argc];
   ant_value_t new_target = vm->stack[vm->sp - argc - 1];
   ant_value_t func = vm->stack[vm->sp - argc - 2];
-  ant_value_t record_func = func;
   ant_value_t effective_new_target = new_target;
 
   if (vtype(func) == kTypeObject && is_proxy(func)) {
@@ -161,9 +160,7 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
 
   ant_value_t proto = js_mkundef();
   if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
-    proto = sv_prepare_construct_meta(
-      js, func, new_target, &effective_new_target, &record_func
-    );
+    proto = sv_prepare_construct_meta(js, func, new_target, &effective_new_target);
     if (is_err(proto)) {
       vm->sp -= argc + 2;
       return proto;
@@ -175,7 +172,7 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   GC_ROOT_PIN(js, proto);
   GC_ROOT_PIN(js, obj);
   
-  obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));
+  obj = js_mkobj(js);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   
   ant_value_t ctor_this = obj;
@@ -185,11 +182,10 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   vm->sp -= argc + 2;
   if (is_err(result)) return result;
   
-  ant_value_t final_obj =
-    is_object_type(result) ? result
+  ant_value_t final_obj = is_object_type(result) 
+    ? result
     : (is_object_type(ctor_this) ? ctor_this : obj);
   
-  sv_tfb_record_ctor_prop_count(record_func, final_obj);
   vm->stack[vm->sp++] = final_obj;
   
   return result;
@@ -264,7 +260,6 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   ant_value_t *args = &vm->stack[vm->sp - argc];
   ant_value_t new_target = vm->stack[vm->sp - argc - 1];
   ant_value_t func = vm->stack[vm->sp - argc - 2];
-  ant_value_t record_func = func;
   ant_value_t effective_new_target = new_target;
 
   sv_call_args_t call;
@@ -288,9 +283,7 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
 
   ant_value_t proto = js_mkundef();
   if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
-    proto = sv_prepare_construct_meta(
-      js, func, new_target, &effective_new_target, &record_func
-    );
+    proto = sv_prepare_construct_meta(js, func, new_target, &effective_new_target);
     if (is_err(proto)) {
       sv_call_args_release(&call);
       vm->sp -= argc + 2;
@@ -303,7 +296,7 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   GC_ROOT_PIN(js, proto);
   GC_ROOT_PIN(js, obj);
   
-  obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));
+  obj = js_mkobj(js);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   
   ant_value_t ctor_this = obj;
@@ -319,7 +312,6 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
     is_object_type(result) ? result
     : (is_object_type(ctor_this) ? ctor_this : obj);
 
-  sv_tfb_record_ctor_prop_count(record_func, final_obj);
   vm->stack[vm->sp++] = final_obj;
 
   return result;

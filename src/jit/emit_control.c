@@ -152,41 +152,11 @@ void jit_emit_control(jit_compile_t *c) {
                                     c->r_vm, c->r_lbuf, c->r_jit_open_upvalues, c->captured_locals, 0, c->n_locals,
                                     mir_next_reg_site(&c->reg_site_n));
       if (c->func->is_derived_ctor) {
-        MIR_label_t dctor_replace = MIR_new_label(c->ctx);
         MIR_label_t dctor_keep = MIR_new_label(c->ctx);
         char rn_dt[32];
         snprintf(rn_dt, sizeof(rn_dt), "dctor%d", c->upval_n++);
         MIR_reg_t r_dt = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_dt);
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_UBLE,
-                                     MIR_new_label_op(c->ctx, dctor_replace),
-                                     MIR_new_reg_op(c->ctx, ret_val),
-                                     MIR_new_uint_op(c->ctx, NANBOX_PREFIX)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_URSH,
-                                     MIR_new_reg_op(c->ctx, r_dt),
-                                     MIR_new_reg_op(c->ctx, ret_val),
-                                     MIR_new_int_op(c->ctx, NANBOX_TYPE_SHIFT)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_AND,
-                                     MIR_new_reg_op(c->ctx, r_dt),
-                                     MIR_new_reg_op(c->ctx, r_dt),
-                                     MIR_new_int_op(c->ctx, NANBOX_TYPE_MASK)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_LSH,
-                                     MIR_new_reg_op(c->ctx, r_dt),
-                                     MIR_new_int_op(c->ctx, 1),
-                                     MIR_new_reg_op(c->ctx, r_dt)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_AND,
-                                     MIR_new_reg_op(c->ctx, r_dt),
-                                     MIR_new_reg_op(c->ctx, r_dt),
-                                     MIR_new_int_op(c->ctx, (int64_t)T_OBJECT_MASK)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_BT,
-                                     MIR_new_label_op(c->ctx, dctor_keep),
-                                     MIR_new_reg_op(c->ctx, r_dt)));
-        MIR_append_insn(c->ctx, c->jit_func, dctor_replace);
+        mir_emit_branch_if_object(c->ctx, c->jit_func, dctor_keep, ret_val, r_dt);
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_MOV,
                                      MIR_new_reg_op(c->ctx, ret_val),

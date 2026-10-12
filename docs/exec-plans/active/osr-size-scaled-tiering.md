@@ -1,7 +1,7 @@
 # OSR Size-Scaled Tiering
 
 Status: active
-Last reviewed: 2026-09-11
+Last reviewed: 2026-10-11
 Owner: theMackabu
 
 ## Goal
@@ -447,3 +447,43 @@ It predates this plan and is independent of the OSR entry change.
   run-to-run noise on the kernels or bench-v8.
 - Pre-existing failures on the release binary too: `test_hono_adapter`,
   `test_throw_stack`, `test_wasm_exported_memory_grow`, `test_with_strict`.
+
+## Base-Level Call-Path Retier (2026-10-11, PR #136)
+
+Call-path code compiled at the base level (MIR level 1) now carries an entry
+counter and recompiles hot (`sv_jit_tier_up`) once it proves busy:
+
+- functions with a back edge retier after `JIT_BASE_RETIER_LOOP_CALLS` (1000)
+  calls; loop-free functions after `JIT_BASE_RETIER_LEAF_CALLS` (50000)
+- no counter when the base compile is already over `JIT_BIG_HOT_INSN_LIMIT`:
+  the hot recompile would run at level 1 again
+- code with skipped inline paths keeps the older `SV_JIT_THRESHOLD` retier
+- a failed or redundant tier-up resets `call_count`, so cheap code calls the
+  helper once per threshold instead of on every entry
+
+The first cut retiered every base-level function after 1000 calls. Measured
+on 300 distinct small loop-free functions (`many3.js`) and fixed bench-v8
+workloads, medians of 3 interleaved runs, JIT compile ms from
+`dump/vm:op-warn` (machine load ~6, so wall times are indicative):
+
+| Workload            | base (d64742c5) | retier all @1000 | loop 1000 / leaf 50000 | leaf never |
+| ------------------- | --------------- | ---------------- | ---------------------- | ---------- |
+| many3 1500 calls    | 280 ms / 249    | 839 ms / 804     | 278 ms / 248           | 278 / 248  |
+| many3 20000 calls   | 620 ms / 271    | 1176 ms / 829    | 624 ms / 278           | 617 / 271  |
+| many3 200000 calls  | 3724 ms / 326   | 4224 ms / 899    | 4296 ms / 940          | 3732 / 339 |
+| Richards score      | 7943 / 64       | 9341 / 150       | 9464 / 102             | 8762 / 68  |
+| RayTrace score      | 16781 / 154     | 18722 / 267      | 18463 / 243            | 17686 / 150 |
+| Splay score         | 7897 / 53       | 9257 / 91        | 9135 / 84              | 9029 / 59  |
+| DeltaBlue score     | 7478 / 160      | 7914 / 297       | 7161 / 284             | 7729 / 191 |
+
+Loop-free leaves called past 50k times carry most of the bench-v8 gain, while
+startup-shaped code (each function called a few thousand times) no longer
+pays a second compile. The open cost: many small loop-free functions each
+called 200k+ times still recompile hot for no gain on that body shape.
+
+The same review found the first-await capture in `sv_await_value`
+(`src/silver/ops/async.h`) never joined the coroutine remembered set, so an
+async function waiting on an old pending promise lost its young locals at the
+next minor collection (2000 of 2000 corrupted, master too). It now calls
+`gc_remember_coroutine` like the generator and resume capture sites.
+Test: `tests/test_async_await_old_promise_gc.cjs`.

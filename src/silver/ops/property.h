@@ -771,6 +771,12 @@ static inline ant_value_t sv_prop_get_at(
       t == kTypeNull ? "null" : "undefined", (int)len, interned);
   }
 
+  ant_value_t host_out;
+  if (
+    t == kTypeObject && js_obj_ptr(obj)->flags.is_exotic && 
+    js_try_host_proxy_get(js, obj, interned, len, &host_out)
+  ) return host_out;
+
   ant_value_t str_prim = js_mkundef();
   if (t == kTypeString) str_prim = obj;
   else if (t == kTypeObject) {

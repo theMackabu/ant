@@ -396,26 +396,15 @@ const sv_srcpos_t *sv_srcpos_at(sv_func_t *func, int bc_offset);
 bool sv_lookup_srcpos(sv_func_t *func, int bc_offset, uint32_t *line, uint32_t *col);
 bool sv_lookup_srcspan(sv_func_t *func, int bc_offset, uint32_t *src_off, uint32_t *src_end);
 
-static constexpr uint32_t SV_TFB_CTOR_PROP_BINS = 17;
-static constexpr uint32_t SV_TFB_CTOR_PROP_OVERFLOW_FROM = SV_TFB_CTOR_PROP_BINS - 1;
-
 typedef struct {
-  uint16_t    bc_off;
-  uint8_t     miss_count;
-  uint8_t     disabled;
-  sv_func_t  *target;
+  uint16_t bc_off;
+  uint8_t miss_count;
+  uint8_t disabled;
+  sv_func_t *target;
 } sv_call_target_fb_t;
 
 typedef struct {
-  uint64_t samples;
-  uint64_t hist[SV_TFB_CTOR_PROP_BINS];
-  uint8_t  inobj_limit;
-  uint8_t  inobj_frozen;
-} sv_ctor_prop_fb_t;
-
-typedef struct {
   uint8_t *type_feedback;
-  sv_ctor_prop_fb_t ctor_prop_fb;
   ant_shape_t *ctor_proto_shape;
   uint32_t ctor_proto_slot;
   bool ctor_proto_shape_registered;

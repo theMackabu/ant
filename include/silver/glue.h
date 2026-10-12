@@ -48,7 +48,6 @@ ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v);
 ant_value_t jit_helper_stack_overflow_error(sv_vm_t *vm, ant_t *js);
 
 ant_value_t jit_helper_new_this(ant_t *js, ant_value_t func, ant_value_t new_target, int32_t checked);
-ant_value_t jit_helper_new_result(ant_value_t func, ant_value_t obj, ant_value_t result);
 
 ant_value_t jit_helper_strict_arguments(sv_vm_t *vm, ant_t *js, ant_value_t *args, int argc);
 ant_value_t jit_helper_delete(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key);
