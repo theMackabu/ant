@@ -1729,6 +1729,13 @@ ant_value_t jit_helper_get_elem_inline(ant_t *js, ant_value_t obj, ant_value_t k
     ? out : SV_JIT_BAILOUT;
 }
 
+ant_value_t jit_helper_copy_data_props(
+  ant_t *js, ant_value_t dst, ant_value_t src,
+  ant_value_t *excluded, int32_t excluded_count
+) {
+  return js_copy_data_props(js, dst, src, excluded, excluded_count);
+}
+
 ant_value_t jit_helper_set_proto(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t proto) {
   uint8_t pt = vtype(proto);
   if (pt == kTypeObject || pt == kTypeNull || pt == kTypeFunction || pt == kTypeArray) js_set_proto_wb(js, obj, proto);

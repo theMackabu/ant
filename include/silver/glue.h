@@ -388,6 +388,11 @@ ant_value_t jit_helper_set_proto(
   ant_value_t obj, ant_value_t proto
 );
 
+ant_value_t jit_helper_copy_data_props(
+  ant_t *js, ant_value_t dst, ant_value_t src,
+  ant_value_t *excluded, int32_t excluded_count
+);
+
 ant_value_t jit_helper_new(
   sv_vm_t *vm, ant_t *js,
   ant_value_t func, ant_value_t new_target,

@@ -1220,6 +1220,34 @@ void jit_emit_properties(jit_compile_t *c) {
       break;
     }
 
+    case OP_COPY_DATA_PROPS: {
+      uint16_t excluded = sv_get_u16(c->ip + 1);
+      vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
+      
+      for (int i = (int)excluded - 1; i >= 0; i--) {
+        MIR_reg_t key = vstack_pop(&c->vs);
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_MOV,
+                                     MIR_new_mem_op(c->ctx, MIR_JSVAL,
+                                                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
+                                                    c->r_args_buf, 0, 1),
+                                     MIR_new_reg_op(c->ctx, key)));
+      }
+      
+      MIR_append_insn(c->ctx, c->jit_func,
+                      MIR_new_call_insn(c->ctx, 8,
+                                        MIR_new_ref_op(c->ctx, c->copy_props_proto),
+                                        MIR_new_ref_op(c->ctx, c->imp_copy_data_props),
+                                        MIR_new_reg_op(c->ctx, c->r_err_tmp),
+                                        MIR_new_reg_op(c->ctx, c->r_js),
+                                        MIR_new_reg_op(c->ctx, c->vs.regs[c->vs.sp - 2]),
+                                        MIR_new_reg_op(c->ctx, c->vs.regs[c->vs.sp - 1]),
+                                        MIR_new_reg_op(c->ctx, c->r_args_buf),
+                                        MIR_new_int_op(c->ctx, excluded)));
+      jit_emit_throw_if_error(c, c->r_err_tmp);
+      break;
+    }
+
     case OP_SET_PROTO: {
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
       MIR_reg_t proto = vstack_pop(&c->vs);

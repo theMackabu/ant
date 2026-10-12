@@ -10518,11 +10518,75 @@ static ant_value_t copy_proxy_data_props(
   return is_err(result) ? result : js_mkundef();
 }
 
+static ant_value_t copy_index_props(
+  ant_t *js, ant_value_t dst, ant_value_t indexed, const ant_value_t *excluded, int excluded_count
+) {
+  bool is_str = vtype(indexed) == kTypeString;
+  ant_offset_t doff = is_str ? 0 : get_dense_buf(indexed);
+  ant_offset_t len = is_str ? str_utf16_len(js, indexed) : doff ? dense_iterable_length(js, indexed) : 0;
+  
+  for (ant_offset_t i = 0; i < len; i++) {
+    char key[16];
+    size_t key_len = uint_to_str(key, sizeof(key), (uint64_t)i);
+    if (copy_key_excluded(js, js_mkundef(), key, key_len, excluded, excluded_count)) continue;
+    
+    ant_value_t val;
+    if (is_str) {
+      ant_offset_t byte_len = 0;
+      const char *data = (const char *)(uintptr_t)vstr(js, indexed, &byte_len);
+      val = js_string_from_utf16_code_unit(js, utf16_code_unit_at(data, (size_t)byte_len, (size_t)i));
+    } else {
+      val = dense_get(doff, i);
+      if (is_empty_slot(val)) continue;
+    }
+    
+    ant_value_t result = copy_define(js, dst, js_mkundef(), key, key_len, val);
+    if (is_err(result)) return result;
+  }
+  
+  return js_mkundef();
+}
+
+static bool copy_plain_data_props(
+  ant_t *js, ant_value_t dst, ant_value_t src, const ant_value_t *excluded, int excluded_count, ant_value_t *result
+) {
+  ant_object_t *ptr = vtype(src) == kTypeObject ? js_obj_ptr(src) : NULL;
+  if (!ptr || !ptr->shape || ptr->flags.is_exotic || ptr->flags.arguments_object) return false;
+  if (vtype(js_string_wrapper_value(src)) == kTypeString) return false;
+  
+  ant_shape_t *shape = ptr->shape;
+  uint32_t count = ant_shape_count(shape);
+  
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(shape, i);
+    if (prop && (prop->has_getter || prop->has_setter)) return false;
+  }
+  
+  *result = js_mkundef();
+  for (uint32_t i = 0; i < count && !is_err(*result); i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(shape, i);
+    if (!prop || i >= ptr->prop_count) continue;
+    if ((ant_shape_get_attrs(shape, i) & ANT_PROP_ATTR_ENUMERABLE) == 0) continue;
+    
+    bool is_sym = prop->type == ANT_SHAPE_KEY_SYMBOL;
+    ant_value_t sym = is_sym ? mkval(kTypeSymbol, prop->key.sym_off) : js_mkundef();
+    const char *str = is_sym ? NULL : prop->key.interned;
+    size_t len = is_sym ? 0 : intern_length(str);
+    
+    if (copy_key_excluded(js, sym, str, len, excluded, excluded_count)) continue;
+    *result = copy_define(js, dst, sym, str, len, ant_object_prop_get_unchecked(ptr, i));
+  }
+  
+  return true;
+}
+
 ant_value_t js_copy_data_props(
   ant_t *js, ant_value_t dst, ant_value_t src, 
   const ant_value_t *excluded, int excluded_count
 ) {
-  if (!is_object_type(src) || !is_object_type(dst)) return js_mkundef();
+  if (!is_object_type(dst)) return js_mkundef();
+  if (vtype(src) == kTypeString) return copy_index_props(js, dst, src, excluded, excluded_count);
+  if (!is_object_type(src)) return js_mkundef();
   
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, dst);
@@ -10533,6 +10597,27 @@ ant_value_t js_copy_data_props(
     ant_value_t result = copy_proxy_data_props(js, dst, source, excluded, excluded_count);
     GC_ROOT_RESTORE(js, root_mark);
     return result;
+  }
+  
+  ant_value_t wrapped = js_string_wrapper_value(source);
+  
+  ant_value_t indexed = vtype(src) == kTypeArray 
+    ? src : vtype(wrapped) == kTypeString 
+    ? wrapped : js_mkundef();
+  
+  ant_value_t index_result = vtype(indexed) == kTypeUndefined 
+    ? js_mkundef() 
+    : copy_index_props(js, dst, indexed, excluded, excluded_count);
+  
+  if (is_err(index_result)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return index_result;
+  }
+  
+  ant_value_t plain_result;
+  if (copy_plain_data_props(js, dst, source, excluded, excluded_count, &plain_result)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return plain_result;
   }
   
   ant_object_t *source_ptr = js_obj_ptr(source);

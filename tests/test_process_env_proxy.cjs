@@ -61,6 +61,12 @@ assert(Reflect.set(process.env, 'ANT_ENV_PROXY_EQ=Q', '2') === false, "a name wi
 assert(process.env.ANT_ENV_PROXY_EQ === '1', "a refused write leaves the prefix variable alone");
 delete process.env.ANT_ENV_PROXY_EQ;
 
+process.env.ANT_ENV_PROXY_NUL = 'kept';
+assert(Reflect.set(process.env, 'ANT_ENV_PROXY_NUL\0X', 'clobbered') === false, 'a name with NUL is refused');
+assert(process.env['ANT_ENV_PROXY_NUL\0X'] === undefined, 'a name with NUL reads as absent');
+assert(delete process.env['ANT_ENV_PROXY_NUL\0X'] && process.env.ANT_ENV_PROXY_NUL === 'kept', 'a name with NUL never reaches the var before it');
+delete process.env.ANT_ENV_PROXY_NUL;
+
 const inheritsEnv = Object.create(process.env);
 inheritsEnv.ANT_ENV_PROXY_RECV = 'r';
 assert(Object.hasOwn(inheritsEnv, 'ANT_ENV_PROXY_RECV'), 'a write through the prototype chain lands on the receiver');

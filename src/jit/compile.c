@@ -495,6 +495,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_GET_LENGTH:
       case OP_DELETE:
       case OP_SET_PROTO:
+      case OP_COPY_DATA_PROPS:
         jit_emit_properties(c);
         break;
       case OP_GET_UPVAL:

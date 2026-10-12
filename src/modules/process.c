@@ -100,6 +100,10 @@ struct ant_process_state {
   uint16_t sandbox_tty_rows;
   uint16_t sandbox_tty_cols;
   bool sandbox_terminal_enabled;
+  
+  bool sandbox_color_saved;
+  char *sandbox_no_color;
+  char *sandbox_force_color;
 
   #ifndef _WIN32
   uv_signal_t sigwinch_handle;
@@ -615,9 +619,28 @@ static void get_tty_size(ant_t *js, int fd, int *rows, int *cols) {
   if (cols) *cols = out_cols;
 }
 
+static char *env_dup(const char *name) {
+  const char *value = getenv(name);
+  return value ? strdup(value) : NULL;
+}
+
+static void env_restore(const char *name, const char *saved) {
+  if (saved) setenv(name, saved, 1);
+  else unsetenv(name);
+}
+
 static void process_update_sandbox_env(ant_t *js) {
   ant_process_state_t *ps = process_state(js);
   if (!ps || !ps->sandbox_terminal_enabled) return;
+  
+  if (!ps->sandbox_color_saved) {
+    ps->sandbox_no_color = env_dup("NO_COLOR");
+    ps->sandbox_force_color = env_dup("FORCE_COLOR");
+    ps->sandbox_color_saved = true;
+  }
+  
+  env_restore("NO_COLOR", ps->sandbox_no_color);
+  env_restore("FORCE_COLOR", ps->sandbox_force_color);
 
   if (ps->sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) {
     setenv("NO_COLOR", "1", 1);
@@ -1334,6 +1357,8 @@ static ant_value_t process_initgroups(ant_params_t) {
 #endif
 
 static ant_value_t env_get(ant_t *js, ant_value_t target, const char *key, size_t key_len) {
+  if (memchr(key, '\0', key_len)) return js_mkundef();
+  
   CSTR_BUF(buf, 256);
   char *key_str = CSTR_INIT(buf, key, key_len);
   if (!key_str) return js_mkundef();
@@ -1353,7 +1378,7 @@ static ant_value_t env_set(ant_t *js, ant_value_t target, const char *key, size_
   const char *val_str = js_getstr(js, str_val, &val_len);
   
   if (!val_str) return js_mkerr(js, "out of memory");
-  if (key_len == 0 || memchr(key, '=', key_len)) return js_false;
+  if (key_len == 0 || memchr(key, '=', key_len) || memchr(key, '\0', key_len)) return js_false;
   
   CSTR_BUF(buf, 256);
   char *key_str = CSTR_INIT(buf, key, key_len);
@@ -1368,6 +1393,8 @@ static ant_value_t env_set(ant_t *js, ant_value_t target, const char *key, size_
 }
 
 static ant_value_t env_del(ant_t *js, ant_value_t target, const char *key, size_t key_len) {
+  if (memchr(key, '\0', key_len)) return js_true;
+  
   CSTR_BUF(buf, 256);
   char *key_str = CSTR_INIT(buf, key, key_len);
   if (!key_str) return js_mkerr(js, "out of memory");

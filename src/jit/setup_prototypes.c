@@ -573,6 +573,15 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                     MIR_JSVAL, "new_target",
                                     MIR_T_I32, "checked");
 
+  MIR_type_t copy_props_ret = MIR_JSVAL;
+  c->copy_props_proto = MIR_new_proto(c->ctx, "copy_props_proto",
+                                      1, &copy_props_ret, 5,
+                                      MIR_T_I64, "js",
+                                      MIR_JSVAL, "dst",
+                                      MIR_JSVAL, "src",
+                                      MIR_T_P, "excluded",
+                                      MIR_T_I32, "excluded_count");
+
   MIR_type_t special_obj_ret = MIR_JSVAL;
   c->special_obj_proto = MIR_new_proto(c->ctx, "soj_proto",
                                        1, &special_obj_ret, 3,
@@ -731,6 +740,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_throw = MIR_new_import(c->ctx, "jit_helper_throw");
   c->imp_throw_error = MIR_new_import(c->ctx, "jit_helper_throw_error");
   c->imp_set_proto = MIR_new_import(c->ctx, "jit_helper_set_proto");
+  c->imp_copy_data_props = MIR_new_import(c->ctx, "jit_helper_copy_data_props");
   c->imp_get_elem2 = MIR_new_import(c->ctx, "jit_helper_get_elem2");
   c->imp_get_elem_inline = MIR_new_import(c->ctx, "jit_helper_get_elem_inline");
   c->imp_band = MIR_new_import(c->ctx, "jit_helper_band");
