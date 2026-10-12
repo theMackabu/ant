@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "gc/roots.h"
+#include "property.h"
 #include "silver/engine.h"
 #include "modules/bigint.h"
 
@@ -366,36 +367,17 @@ static inline bool sv_instanceof_rhs_ordinary_proto(
   ant_value_t r,
   ant_value_t *out_proto
 ) {
-  if (vtype(r) != kTypeFunction) return false;
+  if (vtype(r) != kTypeFunction || js_resolve_bound_target(r) != r) return false;
 
-  ant_offset_t has_instance_sym_off = (ant_offset_t)vdata(js->sym.hasInstance_sym);
   ant_value_t func_obj = js_func_obj(r);
   ant_object_t *func_ptr = js_obj_ptr(func_obj);
-  if (!func_ptr || !func_ptr->shape) return false;
-  
-  if (
-    lkp_sym(func_obj, has_instance_sym_off).obj ||
-    lookup_sym_descriptor(js, func_obj, has_instance_sym_off) != NULL
-  ) return false;
-
-  ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
-  ant_value_t func_proto_obj = is_object_type(func_proto) ? js_as_obj(func_proto) : js_mkundef();
-  ant_object_t *func_proto_ptr = is_object_type(func_proto_obj) ? js_obj_ptr(func_proto_obj) : NULL;
-  if (!func_proto_ptr || !func_proto_ptr->shape) return false;
-  
-  if (is_object_type(func_proto_obj) && (
-    lkp_sym(func_proto_obj, has_instance_sym_off).obj ||
-    lookup_sym_descriptor(js, func_proto_obj, has_instance_sym_off) != NULL
-  )) return false;
+  if (!func_ptr || !func_ptr->shape || js_chain_may_override_has_instance(js, func_obj, true)) return false;
 
   ant_prop_loc_t proto_off = lkp_interned(func_obj, js->intern.prototype);
   if (!proto_off.obj) return false;
 
   ant_value_t proto = js_prop_load(proto_off);
   if (!is_object_type(proto)) return false;
-
-  ant_object_guard_absence(func_ptr);
-  ant_object_guard_absence(func_proto_ptr);
   if (out_proto) *out_proto = proto;
   
   return true;
@@ -423,7 +405,8 @@ static inline ant_value_t sv_instanceof_ic_eval(
     &lhs_proto, &lhs_proto_ptr
   );
   
-  if (!ic || !lhs_cacheable || vtype(r) != kTypeFunction) goto slow_path;
+  bool primitive = !is_object_type(l) && vtype(l) != kTypeBuiltin;
+  if (!ic || vtype(r) != kTypeFunction) goto slow_path;
 
   uint32_t cur_epoch = js->ic.epoch;
   uintptr_t rhs_id = (uintptr_t)vdata(r);
@@ -431,18 +414,34 @@ static inline ant_value_t sv_instanceof_ic_eval(
   if (ic->epoch != cur_epoch ||
       ic->prototype_epoch != js->prototype_write_epoch ||
       ic->cached_aux != rhs_id) goto slow_path;
+  
+  if (primitive) return js_false;
+  if (!lhs_cacheable) goto slow_path;
   if (lhs_proto == ic->guard.comparison.receiver_proto) return js_true;
 
-  if (lhs_ptr->shape == ic->cached_shape && lhs_proto_ptr == ic->cached_holder &&
-      ic->guard.comparison.object_epoch == js->ic.obj_epoch)
-    return js_bool(ic->cached_index != 0);
+  if (
+    lhs_ptr->shape == ic->cached_shape && lhs_proto_ptr == ic->cached_holder &&
+    ic->guard.comparison.object_epoch == js->ic.obj_epoch
+  ) return js_bool(ic->cached_index != 0);
 
 slow_path:
   ant_value_t ctor_proto = js_mkundef();
-  bool rhs_cacheable = ic && lhs_cacheable && sv_instanceof_rhs_ordinary_proto(js, r, &ctor_proto);
+  bool rhs_cacheable = ic && (lhs_cacheable || primitive) && sv_instanceof_rhs_ordinary_proto(js, r, &ctor_proto);
   
-  ant_value_t res = do_instanceof(js, l, r);
-  lhs_cacheable = sv_instanceof_lhs_cache_key(l, &lhs_ptr, &lhs_proto, &lhs_proto_ptr);
+  if (rhs_cacheable && primitive) {
+    ic->cached_shape = NULL;
+    ic->cached_holder = NULL;
+    ic->cached_index = 0;
+    ic->epoch = js->ic.epoch;
+    ic->cached_aux = (uintptr_t)vdata(r);
+    ic->guard.comparison.receiver_proto = ctor_proto;
+    ic->guard.comparison.object_epoch = js->ic.obj_epoch;
+    ic->prototype_epoch = js->prototype_write_epoch;
+    return js_false;
+  }
+  
+  ant_value_t res = rhs_cacheable ? js_bool(js_instance_of_proto(js, l, ctor_proto)) : do_instanceof(js, l, r);
+  if (!rhs_cacheable) lhs_cacheable = sv_instanceof_lhs_cache_key(l, &lhs_ptr, &lhs_proto, &lhs_proto_ptr);
 
   if (!is_err(res) && rhs_cacheable && lhs_cacheable && vtype(res) == kTypeBool) {
     ic->cached_shape = lhs_ptr->shape;
@@ -504,7 +503,7 @@ static inline ant_value_t sv_isproto_ic_eval(
 static inline ant_value_t sv_op_in(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];
   ant_value_t l = vm->stack[--vm->sp];
-  ant_value_t res = do_in(js, l, r);
+  ant_value_t res = sv_prop_in_value(js, l, r);
   if (!is_err(res)) vm->stack[vm->sp++] = res;
   return res;
 }

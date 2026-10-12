@@ -72,6 +72,77 @@ static void jit_emit_gfp_exotic_guard(jit_compile_t *c, MIR_reg_t ptr, MIR_label
   GFP_INSN(MIR_BNE, GFP_LBL(full), GFP_REG(c->r_gfp_t), GFP_INT(0));
 }
 
+static void jit_emit_in_field_fast(
+  jit_compile_t *c, uint16_t ic_idx, MIR_reg_t obj, MIR_reg_t dst, MIR_label_t slow, MIR_label_t done
+) {
+  sv_func_t *func = c->func;
+  if (!func->ic_slots || ic_idx >= func->ic_count || !c->r_ic_epoch_val) return;
+  
+  sv_ic_entry_t *ic = &func->ic_slots[ic_idx];
+  uint8_t kind = ic->get_kind;
+  if (
+    !(ic->cached_aux & SV_GF_IC_AUX_ACTIVE_BIT) ||
+    (kind != SV_GF_IC_OWN && kind != SV_GF_IC_PROTOTYPE && kind != SV_GF_IC_MISSING)
+  ) return;
+  
+  jit_gfp_regs(c);
+  MIR_reg_t r_ic = c->r_gfp_e, r_ptr = c->r_gfp_ptr, r_tag = c->r_gfp_tag;
+  MIR_reg_t r_t = c->r_gfp_t, r_t2 = c->r_gfp_t2, r_proto = c->r_gfp_src;
+  MIR_label_t result = MIR_new_label(c->ctx);
+  
+  GFP_INSN(MIR_MOV, GFP_REG(r_ic), GFP_UINT((uint64_t)(uintptr_t)ic));
+  GFP_INSN(MIR_MOV, GFP_REG(r_t), GFP_MEM(MIR_T_I64, offsetof(sv_ic_entry_t, cached_aux), r_ic));
+  GFP_INSN(MIR_AND, GFP_REG(r_t), GFP_REG(r_t), GFP_UINT(SV_GF_IC_AUX_ACTIVE_BIT));
+  GFP_INSN(MIR_BEQ, GFP_LBL(slow), GFP_REG(r_t), GFP_INT(0));
+  GFP_INSN(MIR_MOV, GFP_REG(r_t), GFP_MEM(MIR_T_U32, offsetof(sv_ic_entry_t, epoch), r_ic));
+  GFP_INSN(MIR_MOV, GFP_REG(r_t2), GFP_MEM(MIR_T_U32, 0, c->r_ic_epoch_val));
+  GFP_INSN(MIR_BNE, GFP_LBL(slow), GFP_REG(r_t), GFP_REG(r_t2));
+  GFP_INSN(MIR_MOV, GFP_REG(r_t), GFP_MEM(MIR_T_U8, offsetof(sv_ic_entry_t, get_kind), r_ic));
+  GFP_INSN(MIR_BNE, GFP_LBL(slow), GFP_REG(r_t), GFP_INT(kind));
+  
+  mir_emit_value_to_objptr_or_jmp(c->ctx, c->jit_func, obj, r_ptr, r_tag, slow);
+  jit_emit_gfp_exotic_guard(c, r_ptr, slow);
+  GFP_INSN(MIR_MOV, GFP_REG(r_t), GFP_MEM(MIR_T_P, offsetof(ant_object_t, shape), r_ptr));
+  GFP_INSN(MIR_MOV, GFP_REG(r_t2), GFP_MEM(MIR_T_P, offsetof(sv_ic_entry_t, cached_shape), r_ic));
+  GFP_INSN(MIR_BNE, GFP_LBL(slow), GFP_REG(r_t), GFP_REG(r_t2));
+  if (kind == SV_GF_IC_OWN) {
+    mir_load_imm(c->ctx, c->jit_func, dst, js_true);
+    GFP_INSN(MIR_JMP, GFP_LBL(done));
+    return;
+  }
+  
+  if (kind == SV_GF_IC_MISSING) {
+    GFP_INSN(MIR_BNE, GFP_LBL(slow), GFP_REG(r_tag), GFP_UINT(NANBOX_TOBJ_TAG));
+    GFP_INSN(MIR_MOV, GFP_REG(r_t), GFP_MEM(MIR_T_U8, offsetof(ant_object_t, type_tag), r_ptr));
+    GFP_INSN(MIR_BNE, GFP_LBL(slow), GFP_REG(r_t), GFP_INT(kTypeObject));
+  }
+  
+  GFP_INSN(MIR_MOV, GFP_REG(r_proto), GFP_MEM(MIR_T_I64, offsetof(ant_object_t, proto), r_ptr));
+  GFP_INSN(MIR_MOV, GFP_REG(r_t), GFP_MEM(MIR_T_I64, offsetof(sv_ic_entry_t, guard.receiver_proto), r_ic));
+  GFP_INSN(MIR_BNE, GFP_LBL(slow), GFP_REG(r_proto), GFP_REG(r_t));
+  if (kind == SV_GF_IC_MISSING)
+    GFP_INSN(MIR_BEQ, GFP_LBL(result), GFP_REG(r_proto), GFP_UINT(mkval(kTypeNull, 0)));
+  GFP_INSN(MIR_URSH, GFP_REG(r_t), GFP_REG(r_proto), GFP_UINT(NANBOX_TYPE_SHIFT));
+  GFP_INSN(MIR_BNE, GFP_LBL(slow), GFP_REG(r_t), GFP_UINT(NANBOX_TOBJ_TAG));
+  mir_emit_decode_ref(c->ctx, c->jit_func, r_proto, r_proto);
+  GFP_INSN(MIR_MOV, GFP_REG(r_t), GFP_MEM(MIR_T_U32, offsetof(ant_object_t, ic_identity), r_proto));
+  GFP_INSN(MIR_MOV, GFP_REG(r_t2), GFP_MEM(MIR_T_U64, offsetof(sv_ic_entry_t, cached_aux), r_ic));
+  GFP_INSN(MIR_URSH, GFP_REG(r_t2), GFP_REG(r_t2), GFP_UINT(SV_GF_IC_PROTO_ID_SHIFT));
+  GFP_INSN(MIR_BNE, GFP_LBL(slow), GFP_REG(r_t), GFP_REG(r_t2));
+  
+  if (kind == SV_GF_IC_PROTOTYPE) {
+    GFP_INSN(MIR_MOV, GFP_REG(r_t2), GFP_MEM(MIR_T_P, offsetof(sv_ic_entry_t, cached_holder), r_ic));
+    GFP_INSN(MIR_BEQ, GFP_LBL(slow), GFP_REG(r_t2), GFP_INT(0));
+    jit_emit_gfp_exotic_guard(c, r_t2, slow);
+    GFP_INSN(MIR_MOV, GFP_REG(r_t), GFP_MEM(MIR_T_P, offsetof(ant_object_t, shape), r_t2));
+    GFP_INSN(MIR_BEQ, GFP_LBL(slow), GFP_REG(r_t), GFP_INT(0));
+  }
+  
+  MIR_append_insn(c->ctx, c->jit_func, result);
+  mir_load_imm(c->ctx, c->jit_func, dst, kind == SV_GF_IC_MISSING ? js_false : js_true);
+  GFP_INSN(MIR_JMP, GFP_LBL(done));
+}
+
 static void jit_emit_get_field_poly_loop(
     jit_compile_t *c, sv_ic_entry_t *ic, MIR_reg_t obj, MIR_reg_t dst,
     MIR_label_t hit, MIR_label_t full) {
@@ -548,6 +619,10 @@ void jit_emit_properties(jit_compile_t *c) {
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
       MIR_reg_t obj = vstack_pop(&c->vs);
       MIR_reg_t dst = vstack_push(&c->vs);
+      MIR_label_t in_slow = MIR_new_label(c->ctx);
+      MIR_label_t in_done = MIR_new_label(c->ctx);
+      jit_emit_in_field_fast(c, sv_get_u16(c->ip + 5), obj, dst, in_slow, in_done);
+      MIR_append_insn(c->ctx, c->jit_func, in_slow);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_call_insn(c->ctx, 9,
                                         MIR_new_ref_op(c->ctx, c->gf_proto),
@@ -560,6 +635,7 @@ void jit_emit_properties(jit_compile_t *c) {
                                         MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->func),
                                         MIR_new_int_op(c->ctx, (int64_t)c->bc_off)));
       jit_emit_throw_if_error(c, dst);
+      MIR_append_insn(c->ctx, c->jit_func, in_done);
       break;
     }
 

@@ -187,18 +187,21 @@ static __attribute__((noinline)) bool regexp_result_apply_shape(
     ant_shape_release(array->shape);
     array->shape = cache->shape;
   }
-  if (!js_obj_ensure_prop_capacity(array, with_indices ? 4 : 3))
-    goto fallback;
+  
+  if (!js_obj_ensure_prop_capacity(js, array, with_indices ? 4 : 3)) goto fallback;
 
   ant_object_prop_set_unchecked(array, cache->index_slot, index);
   ant_object_prop_set_unchecked(array, cache->input_slot, input);
   ant_object_prop_set_unchecked(array, cache->groups_slot, groups);
+  
   gc_write_barrier(js, array, input);
   gc_write_barrier(js, array, groups);
+  
   if (with_indices) {
     ant_object_prop_set_unchecked(array, cache->indices_slot, indices);
     gc_write_barrier(js, array, indices);
   }
+  
   return true;
 
 fallback:
@@ -1017,13 +1020,16 @@ static bool regexp_init_flag_properties(
     ant_shape_retain(obj->shape);
     *cache = (regexp_instance_shape_t){.base = obj->shape, .shape = shape};
   }
-  if (obj->shape != cache->base ||
-      !js_obj_ensure_prop_capacity(obj, 1 + REGEXP_FLAG_PROPERTY_COUNT)) return false;
+  
+  if (obj->shape != cache->base || !js_obj_ensure_prop_capacity(js, obj, 1 + REGEXP_FLAG_PROPERTY_COUNT)) return false;
   ant_shape_transition_existing(&obj->shape, cache->shape);
   ant_object_invalidate_guarded_absence(js, obj);
+  
   for (size_t i = 0; i < REGEXP_FLAG_PROPERTY_COUNT; i++)
     ant_object_prop_set_unchecked(obj, (uint32_t)i + 1, values[i]);
-  gc_write_barrier(js, obj, values[0]); // Only the flags string contains a reference.
+  
+  gc_write_barrier(js, obj, values[0]);
+  
   return true;
 }
 

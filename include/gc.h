@@ -21,6 +21,8 @@ static constexpr size_t GC_CLOSURE_MAJOR_GROWTH = 16u * 1024u * 1024u;
 static constexpr size_t GC_POOL_PRESSURE_FLOOR = 8u * 1024u * 1024u;
 static constexpr size_t GC_ROPE_NURSERY_THRESHOLD = 8u * 1024u * 1024u;
 static constexpr size_t GC_ARRAY_GROWTH_FLOOR = 16u * 1024u * 1024u;
+static constexpr size_t GC_OFFHEAP_NURSERY_THRESHOLD = 8u * 1024u * 1024u;
+static constexpr size_t GC_OFFHEAP_MAJOR_FLOOR = 32u * 1024u * 1024u;
 
 #define GC_OBJ_TYPE_MASK (T_FLAG_FIND(kTypeObject) \
   | T_FLAG_FIND(kTypeError)                        \
@@ -102,6 +104,22 @@ static inline void gc_write_barrier_elem(ant_t *js, ant_object_t *arr, uint32_t 
 
 static inline void gc_elements_moved(ant_object_t *arr) {
   if (arr->flags.in_remember_set) gc_cards_mark_all(arr);
+}
+
+static inline void gc_note_offheap_alloc(ant_t *js, size_t bytes) {
+  if (!js) return;
+  js->gc.offheap_alloc += bytes;
+  if (js->gc.offheap_alloc >= GC_OFFHEAP_NURSERY_THRESHOLD) js->gc.alloc_limit = 0;
+}
+
+static inline void gc_note_overflow_alloc(ant_t *js, size_t bytes) {
+  js->gc.overflow_live += bytes;
+  gc_note_offheap_alloc(js, bytes);
+}
+
+static inline void gc_note_overflow_free(ant_t *js, size_t bytes) {
+  ANT_ASSERT(js->gc.overflow_live >= bytes, "overflow slots released more bytes than were allocated");
+  js->gc.overflow_live -= bytes;
 }
 
 #endif

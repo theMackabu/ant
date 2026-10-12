@@ -1,7 +1,6 @@
-#include "gc/verify.h"
-#include "internal.h"
-#include "gc/strings.h"
 #include "gc.h"
+#include "gc/verify.h"
+#include "gc/strings.h"
 #include "utils.h"
 
 #include <stdio.h>
@@ -346,6 +345,7 @@ void gc_strings_sweep(ant_t *js) {
   js->gc.string_mark_len = 0;
   js->gc.large_string_mark_len = 0;
   
+  memset(js->intern_memo, 0, sizeof(js->intern_memo));
   gc_strings_epoch_bump();
 }
 

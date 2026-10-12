@@ -53,11 +53,10 @@ static inline bool desc_registry_allowed(ant_value_t obj) {
   return false;
 }
 
-static bool ensure_added_shape_slot_storage(ant_object_t *ptr, uint32_t slot) {
+static bool ensure_added_shape_slot_storage(ant_t *js, ant_object_t *ptr, uint32_t slot) {
   if (!ptr || !ptr->shape) return false;
-  if (!js_obj_ensure_prop_capacity(ptr, ant_shape_count(ptr->shape))) return false;
-  if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(ptr, slot + 1)) return false;
-
+  if (!js_obj_ensure_prop_capacity(js, ptr, ant_shape_count(ptr->shape))) return false;
+  if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(js, ptr, slot + 1)) return false;
   return true;
 }
 
@@ -191,7 +190,7 @@ static bool ensure_string_shape_slot(ant_t *js, ant_value_t obj, const char *key
     uint32_t added_slot = 0;
     if (!ant_shape_add_interned_tr(js, &ptr->shape, interned, ANT_PROP_ATTR_DEFAULT, &added_slot)) return false;
     ant_object_invalidate_guarded_absence(js, ptr);
-    if (!ensure_added_shape_slot_storage(ptr, added_slot)) return false;
+    if (!ensure_added_shape_slot_storage(js, ptr, added_slot)) return false;
     slot = (int32_t)added_slot;
   }
 
@@ -419,7 +418,7 @@ void js_define_accessor_desc(ant_t *js, ant_value_t obj, const char *key, size_t
   }
 
   ant_object_invalidate_guarded_absence(js, ptr);
-  if (!ensure_added_shape_slot_storage(ptr, slot)) return;
+  if (!ensure_added_shape_slot_storage(js, ptr, slot)) return;
   
   ant_object_prop_set_unchecked(ptr, slot, js_mkundef());
   ant_property_mutation_invalidate(js, ptr, interned);

@@ -1694,12 +1694,32 @@ static ant_value_t env_keys(ant_t *js, ant_value_t target) {
   return arr;
 }
 
+static void env_entries_cb(
+  ant_t *js, const char *key, size_t key_len, const char *value, size_t val_len, void *ctx
+) {
+  ant_value_t pairs = *(ant_value_t *)ctx;
+  js_arr_push(js, pairs, js_mkstr(js, key, key_len));
+  js_arr_push(js, pairs, js_mkstr(js, value, val_len));
+}
+
+static ant_value_t env_entries(ant_t *js, ant_value_t target) {
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t pairs = js_mkarr(js);
+  GC_ROOT_PIN(js, pairs);
+  
+  env_foreach(js, env_entries_cb, &pairs);
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  return pairs;
+}
+
 static const ant_host_proxy_ops_t env_host_ops = {
   .name = "process.env",
   .get = env_get,
   .set = env_set,
   .del = env_del,
   .keys = env_keys,
+  .flat_entries = env_entries,
 };
 
 static ant_value_t process_cwd(ant_params_t) {

@@ -112,11 +112,12 @@ bool vstack_alloc(jit_vstack_t *vs, int max) {
   vs->has_const = calloc(n, sizeof(bool));
   vs->known_bool = calloc(n, sizeof(uint8_t));
   vs->known_builtin = calloc(n, sizeof(uint8_t));
+  vs->known_str = calloc(n, sizeof(*vs->known_str));
   vs->integer_range = calloc(n, sizeof(jit_integer_range_t));
 
   if (
     vs->regs && vs->d_regs && vs->known_func && vs->slot_type && vs->known_const &&
-    vs->has_const && vs->known_bool && vs->known_builtin && vs->integer_range
+    vs->has_const && vs->known_bool && vs->known_builtin && vs->known_str && vs->integer_range
   ) return true;
 
   vstack_free(vs);
@@ -132,6 +133,7 @@ void vstack_free(jit_vstack_t *vs) {
   free(vs->has_const);
   free(vs->known_bool);
   free(vs->known_builtin);
+  free(vs->known_str);
   free(vs->integer_range);
   
   vs->regs = vs->d_regs = NULL;
@@ -139,6 +141,7 @@ void vstack_free(jit_vstack_t *vs) {
   vs->slot_type = vs->known_bool = vs->known_builtin = NULL;
   vs->known_const = NULL;
   vs->has_const = NULL;
+  vs->known_str = NULL;
   vs->integer_range = NULL;
 }
 
@@ -149,6 +152,7 @@ void vstack_forget_facts(jit_vstack_t *vs) {
   memset(vs->has_const, 0, n * sizeof(bool));
   memset(vs->known_bool, 0, n);
   memset(vs->known_builtin, 0, n);
+  memset(vs->known_str, 0, n * sizeof(*vs->known_str));
 }
 
 jit_value_info_t vstack_value_info(const jit_vstack_t *vs, int idx) {
@@ -160,6 +164,7 @@ jit_value_info_t vstack_value_info(const jit_vstack_t *vs, int idx) {
   }
   if (vs->known_bool) info.known_bool = vs->known_bool[idx];
   if (vs->known_builtin) info.known_builtin = vs->known_builtin[idx];
+  if (vs->known_str) info.known_str = vs->known_str[idx];
   if (vs->integer_range) info.integer_range = vs->integer_range[idx];
   return info;
 }
@@ -173,6 +178,7 @@ void vstack_set_value_info(
   }
   if (vs->known_bool) vs->known_bool[idx] = info.known_bool;
   if (vs->known_builtin) vs->known_builtin[idx] = info.known_builtin;
+  if (vs->known_str) vs->known_str[idx] = info.known_str;
   if (vs->integer_range) vs->integer_range[idx] = info.integer_range;
 }
 
@@ -658,6 +664,24 @@ void mir_emit_decode_ref(
                                MIR_new_reg_op(ctx, dst), MIR_new_reg_op(ctx, base)));
 }
 
+static void mir_emit_string_flat_ptr(
+    MIR_context_t ctx, MIR_item_t fn, MIR_reg_t dst, MIR_reg_t value,
+    MIR_reg_t tag, MIR_label_t other, MIR_label_t slow) {
+  MIR_label_t flat = MIR_new_label(ctx);
+  mir_emit_decode_ref(ctx, fn, dst, value);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, tag), MIR_new_reg_op(ctx, dst), MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, flat), MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, STR_HEAP_TAG_FLAT)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, other), MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, STR_HEAP_TAG_ROPE)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, dst), MIR_new_reg_op(ctx, dst), MIR_new_uint_op(ctx, ~STR_HEAP_TAG_MASK)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, dst), MIR_new_mem_op(ctx, MIR_JSVAL, offsetof(ant_rope_heap_t, cached), dst, 0, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_URSH, MIR_new_reg_op(ctx, tag), MIR_new_reg_op(ctx, dst), MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, JIT_STR_TAG)));
+  mir_emit_decode_ref(ctx, fn, dst, dst);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, tag), MIR_new_reg_op(ctx, dst), MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, STR_HEAP_TAG_FLAT)));
+  MIR_append_insn(ctx, fn, flat);
+}
+
 void mir_emit_cage_offset(
     MIR_context_t ctx, MIR_item_t fn, MIR_reg_t dst, MIR_reg_t ptr) {
   MIR_reg_t base = MIR_reg(ctx, "cage_base", fn->u.func);
@@ -743,8 +767,6 @@ void mir_emit_get_length(
   MIR_label_t encode = MIR_new_label(ctx);
   MIR_label_t slow = MIR_new_label(ctx);
   MIR_label_t done = MIR_new_label(ctx);
-  MIR_label_t flat = MIR_new_label(ctx);
-  MIR_label_t nonflat = MIR_new_label(ctx);
   MIR_label_t builder = builder_slot ? MIR_new_label(ctx) : slow;
 
   MIR_append_insn(ctx, fn,
@@ -763,18 +785,7 @@ void mir_emit_get_length(
                                MIR_new_reg_op(ctx, tag),
                                MIR_new_uint_op(ctx, JIT_STR_TAG)));
 
-  mir_emit_decode_ref(ctx, fn, ptr, obj);
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_AND,
-                               MIR_new_reg_op(ctx, tag),
-                               MIR_new_reg_op(ctx, ptr),
-                               MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_BNE,
-                               MIR_new_label_op(ctx, nonflat),
-                               MIR_new_reg_op(ctx, tag),
-                               MIR_new_uint_op(ctx, STR_HEAP_TAG_FLAT)));
-  MIR_append_insn(ctx, fn, flat);
+  mir_emit_string_flat_ptr(ctx, fn, ptr, obj, tag, builder, slow);
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_MOV,
                                MIR_new_reg_op(ctx, len),
@@ -812,16 +823,6 @@ void mir_emit_get_length(
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, encode)));
 
-  MIR_append_insn(ctx, fn, nonflat);
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, builder), MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, STR_HEAP_TAG_ROPE)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, ptr), MIR_new_reg_op(ctx, ptr), MIR_new_uint_op(ctx, ~STR_HEAP_TAG_MASK)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, len), MIR_new_mem_op(ctx, MIR_JSVAL, offsetof(ant_rope_heap_t, cached), ptr, 0, 1)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_URSH, MIR_new_reg_op(ctx, tag), MIR_new_reg_op(ctx, len), MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, JIT_STR_TAG)));
-  mir_emit_decode_ref(ctx, fn, ptr, len);
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, tag), MIR_new_reg_op(ctx, ptr), MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, STR_HEAP_TAG_FLAT)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, flat)));
 
   if (builder_slot) {
     MIR_append_insn(ctx, fn, builder);
@@ -1131,7 +1132,6 @@ void mir_emit_uncurried_char_code_at(
   MIR_reg_t tag = regs[0], ptr = regs[1], value = regs[2], index = regs[3], len = regs[4];
   snprintf(name, sizeof(name), "char_double_%d", site);
   MIR_reg_t number = MIR_new_func_reg(ctx, fn->u.func, MIR_T_D, name);
-  MIR_label_t flat = MIR_new_label(ctx);
 
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_URSH, MIR_new_reg_op(ctx, tag), MIR_new_reg_op(ctx, target), MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypeFunction)));
@@ -1149,19 +1149,7 @@ void mir_emit_uncurried_char_code_at(
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, value), MIR_new_mem_op(ctx, MIR_JSVAL, 0, args, 0, 1)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_URSH, MIR_new_reg_op(ctx, tag), MIR_new_reg_op(ctx, value), MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, JIT_STR_TAG)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, tag), MIR_new_reg_op(ctx, value), MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, flat), MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, STR_HEAP_TAG_FLAT)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, STR_HEAP_TAG_ROPE)));
-  mir_emit_decode_ref(ctx, fn, ptr, value);
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, ptr), MIR_new_reg_op(ctx, ptr), MIR_new_uint_op(ctx, ~STR_HEAP_TAG_MASK)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, value), MIR_new_mem_op(ctx, MIR_JSVAL, offsetof(ant_rope_heap_t, cached), ptr, 0, 1)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_URSH, MIR_new_reg_op(ctx, tag), MIR_new_reg_op(ctx, value), MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, JIT_STR_TAG)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, tag), MIR_new_reg_op(ctx, value), MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, STR_HEAP_TAG_FLAT)));
-
-  MIR_append_insn(ctx, fn, flat);
-  mir_emit_decode_ref(ctx, fn, ptr, value);
+  mir_emit_string_flat_ptr(ctx, fn, ptr, value, tag, slow, slow);
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, tag), MIR_new_mem_op(ctx, MIR_T_U64, offsetof(ant_flat_string_t, meta), ptr, 0, 1)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, tag), MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, STR_META_ASCII_MASK)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, (uint64_t)STR_ASCII_YES << STR_META_ASCII_SHIFT)));
@@ -1589,10 +1577,195 @@ void mir_emit_numeric_equality(
                                MIR_new_reg_op(ctx, scratch)));
 }
 
+static void mir_emit_string_equality(
+    MIR_context_t ctx, MIR_item_t fn, MIR_reg_t left, MIR_reg_t right,
+    MIR_reg_t scratch, bool inline_long_strings,
+    MIR_label_t equal, MIR_label_t not_equal, MIR_label_t slow) {
+  MIR_reg_t lp = MIR_reg(ctx, "str_eq_l", fn->u.func);
+  MIR_reg_t rp = MIR_reg(ctx, "str_eq_r", fn->u.func);
+  MIR_reg_t len = MIR_reg(ctx, "str_eq_n", fn->u.func);
+  MIR_reg_t word = MIR_reg(ctx, "str_eq_w", fn->u.func);
+  MIR_label_t long_strings = inline_long_strings ? MIR_new_label(ctx) : slow;
+  MIR_label_t word_loop = MIR_new_label(ctx);
+  MIR_label_t last_word = MIR_new_label(ctx);
+
+  if (inline_long_strings) {
+    mir_emit_string_flat_ptr(ctx, fn, lp, left, scratch, slow, slow);
+    mir_emit_string_flat_ptr(ctx, fn, rp, right, scratch, slow, slow);
+    MIR_append_insn(ctx, fn,
+                    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, equal),
+                                 MIR_new_reg_op(ctx, lp), MIR_new_reg_op(ctx, rp)));
+  } else {
+    MIR_append_insn(ctx, fn,
+                    MIR_new_insn(ctx, MIR_OR, MIR_new_reg_op(ctx, scratch),
+                                 MIR_new_reg_op(ctx, left), MIR_new_reg_op(ctx, right)));
+    MIR_append_insn(ctx, fn,
+                    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, scratch),
+                                 MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
+    MIR_append_insn(ctx, fn,
+                    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
+                                 MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, 0)));
+    mir_emit_decode_ref(ctx, fn, lp, left);
+    mir_emit_decode_ref(ctx, fn, rp, right);
+  }
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, len),
+                               MIR_new_mem_op(ctx, MIR_T_I64, offsetof(ant_flat_string_t, len), lp, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, scratch),
+                               MIR_new_mem_op(ctx, MIR_T_I64, offsetof(ant_flat_string_t, len), rp, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, not_equal),
+                               MIR_new_reg_op(ctx, len), MIR_new_reg_op(ctx, scratch)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_UBGT, MIR_new_label_op(ctx, long_strings),
+                               MIR_new_reg_op(ctx, len), MIR_new_uint_op(ctx, 8)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, equal),
+                               MIR_new_reg_op(ctx, len), MIR_new_uint_op(ctx, 0)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, lp),
+                               MIR_new_mem_op(ctx, MIR_T_I64, offsetof(ant_flat_string_t, bytes), lp, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, rp),
+                               MIR_new_mem_op(ctx, MIR_T_I64, offsetof(ant_flat_string_t, bytes), rp, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_XOR, MIR_new_reg_op(ctx, lp),
+                               MIR_new_reg_op(ctx, lp), MIR_new_reg_op(ctx, rp)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_LSH, MIR_new_reg_op(ctx, len),
+                               MIR_new_reg_op(ctx, len), MIR_new_uint_op(ctx, 3)));
+  mir_load_imm(ctx, fn, scratch, 64);
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_SUB, MIR_new_reg_op(ctx, len),
+                               MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, len)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_LSH, MIR_new_reg_op(ctx, lp),
+                               MIR_new_reg_op(ctx, lp), MIR_new_reg_op(ctx, len)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, not_equal),
+                               MIR_new_reg_op(ctx, lp), MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, equal)));
+  if (!inline_long_strings) return;
+
+  MIR_append_insn(ctx, fn, long_strings);
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, lp),
+                               MIR_new_reg_op(ctx, lp), MIR_new_uint_op(ctx, offsetof(ant_flat_string_t, bytes))));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, rp),
+                               MIR_new_reg_op(ctx, rp), MIR_new_uint_op(ctx, offsetof(ant_flat_string_t, bytes))));
+  MIR_append_insn(ctx, fn, word_loop);
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_UBLE, MIR_new_label_op(ctx, last_word),
+                               MIR_new_reg_op(ctx, len), MIR_new_uint_op(ctx, 8)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, scratch),
+                               MIR_new_mem_op(ctx, MIR_T_I64, 0, lp, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, word),
+                               MIR_new_mem_op(ctx, MIR_T_I64, 0, rp, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, not_equal),
+                               MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, word)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, lp),
+                               MIR_new_reg_op(ctx, lp), MIR_new_uint_op(ctx, 8)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, rp),
+                               MIR_new_reg_op(ctx, rp), MIR_new_uint_op(ctx, 8)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_SUB, MIR_new_reg_op(ctx, len),
+                               MIR_new_reg_op(ctx, len), MIR_new_uint_op(ctx, 8)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, word_loop)));
+  MIR_append_insn(ctx, fn, last_word);
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, scratch),
+                               MIR_new_reg_op(ctx, lp), MIR_new_reg_op(ctx, len)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, scratch),
+                               MIR_new_mem_op(ctx, MIR_T_I64, -8, scratch, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, word),
+                               MIR_new_reg_op(ctx, rp), MIR_new_reg_op(ctx, len)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, word),
+                               MIR_new_mem_op(ctx, MIR_T_I64, -8, word, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, not_equal),
+                               MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, word)));
+}
+
+static void mir_emit_const_word_check(
+    MIR_context_t ctx, MIR_item_t fn, MIR_reg_t ptr, MIR_reg_t scratch,
+    const ant_flat_string_t *lit, ant_offset_t off, uint64_t mask, MIR_label_t not_equal) {
+  uint64_t word = 0;
+  memcpy(&word, lit->bytes + off, lit->len - off < 8 ? (size_t)(lit->len - off) : 8);
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, scratch),
+                               MIR_new_mem_op(ctx, MIR_T_I64,
+                                              (MIR_disp_t)(offsetof(ant_flat_string_t, bytes) + off), ptr, 0, 1)));
+  if (mask != UINT64_MAX)
+    MIR_append_insn(ctx, fn,
+                    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, scratch),
+                                 MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, mask)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, not_equal),
+                               MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, word)));
+}
+
+void mir_emit_const_string_equality(
+    MIR_context_t ctx, MIR_item_t fn,
+    MIR_reg_t value, MIR_reg_t literal, const ant_flat_string_t *lit,
+    MIR_reg_t result, MIR_reg_t scratch, bool invert,
+    MIR_label_t slow, MIR_label_t done) {
+  MIR_label_t equal = MIR_new_label(ctx);
+  MIR_label_t not_equal = MIR_new_label(ctx);
+  MIR_reg_t ptr = MIR_reg(ctx, "str_eq_l", fn->u.func);
+  ant_offset_t len = lit->len;
+
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, equal),
+                               MIR_new_reg_op(ctx, value), MIR_new_reg_op(ctx, literal)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_URSH, MIR_new_reg_op(ctx, scratch),
+                               MIR_new_reg_op(ctx, value), MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, not_equal),
+                               MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, JIT_STR_TAG)));
+  mir_emit_string_flat_ptr(ctx, fn, ptr, value, scratch, slow, slow);
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, scratch),
+                               MIR_new_mem_op(ctx, MIR_T_I64, offsetof(ant_flat_string_t, len), ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, not_equal),
+                               MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, (uint64_t)len)));
+
+  if (len > 0 && len < 8)
+    mir_emit_const_word_check(ctx, fn, ptr, scratch, lit, 0, (UINT64_C(1) << (len * 8)) - 1, not_equal);
+  else if (len >= 8) {
+    ant_offset_t off = 0;
+    for (; off + 8 <= len; off += 8)
+      mir_emit_const_word_check(ctx, fn, ptr, scratch, lit, off, UINT64_MAX, not_equal);
+    if (off < len) mir_emit_const_word_check(ctx, fn, ptr, scratch, lit, len - 8, UINT64_MAX, not_equal);
+  }
+
+  MIR_append_insn(ctx, fn, equal);
+  mir_load_imm(ctx, fn, result, invert ? js_false : js_true);
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+  MIR_append_insn(ctx, fn, not_equal);
+  mir_load_imm(ctx, fn, result, invert ? js_true : js_false);
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+}
+
 void mir_emit_strict_tagged_equality(
     MIR_context_t ctx, MIR_item_t fn,
     MIR_reg_t left, MIR_reg_t right, MIR_reg_t result,
-    MIR_reg_t scratch, bool invert,
+    MIR_reg_t scratch, bool invert, bool inline_long_strings,
     MIR_label_t slow, MIR_label_t done) {
   MIR_label_t left_number = MIR_new_label(ctx);
   MIR_label_t strings = MIR_new_label(ctx);
@@ -1643,57 +1816,7 @@ void mir_emit_strict_tagged_equality(
                   MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, slow)));
 
   MIR_append_insn(ctx, fn, strings);
-  MIR_reg_t lp = MIR_reg(ctx, "str_eq_l", fn->u.func);
-  MIR_reg_t rp = MIR_reg(ctx, "str_eq_r", fn->u.func);
-  MIR_reg_t len = MIR_reg(ctx, "str_eq_n", fn->u.func);
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_OR, MIR_new_reg_op(ctx, scratch),
-                               MIR_new_reg_op(ctx, left), MIR_new_reg_op(ctx, right)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, scratch),
-                               MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
-                               MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, 0)));
-  mir_emit_decode_ref(ctx, fn, lp, left);
-  mir_emit_decode_ref(ctx, fn, rp, right);
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, len),
-                               MIR_new_mem_op(ctx, MIR_T_I64, offsetof(ant_flat_string_t, len), lp, 0, 1)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, scratch),
-                               MIR_new_mem_op(ctx, MIR_T_I64, offsetof(ant_flat_string_t, len), rp, 0, 1)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, not_equal),
-                               MIR_new_reg_op(ctx, len), MIR_new_reg_op(ctx, scratch)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_UBGT, MIR_new_label_op(ctx, slow),
-                               MIR_new_reg_op(ctx, len), MIR_new_uint_op(ctx, 8)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, equal),
-                               MIR_new_reg_op(ctx, len), MIR_new_uint_op(ctx, 0)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, lp),
-                               MIR_new_mem_op(ctx, MIR_T_I64, offsetof(ant_flat_string_t, bytes), lp, 0, 1)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, rp),
-                               MIR_new_mem_op(ctx, MIR_T_I64, offsetof(ant_flat_string_t, bytes), rp, 0, 1)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_XOR, MIR_new_reg_op(ctx, lp),
-                               MIR_new_reg_op(ctx, lp), MIR_new_reg_op(ctx, rp)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_LSH, MIR_new_reg_op(ctx, len),
-                               MIR_new_reg_op(ctx, len), MIR_new_uint_op(ctx, 3)));
-  mir_load_imm(ctx, fn, scratch, 64);
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_SUB, MIR_new_reg_op(ctx, len),
-                               MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, len)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_LSH, MIR_new_reg_op(ctx, lp),
-                               MIR_new_reg_op(ctx, lp), MIR_new_reg_op(ctx, len)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, not_equal),
-                               MIR_new_reg_op(ctx, lp), MIR_new_int_op(ctx, 0)));
+  mir_emit_string_equality(ctx, fn, left, right, scratch, inline_long_strings, equal, not_equal, slow);
 
   MIR_append_insn(ctx, fn, equal);
   mir_load_imm(ctx, fn, result, invert ? js_false : js_true);

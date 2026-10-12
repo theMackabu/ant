@@ -48,6 +48,14 @@ static constexpr int MAX_DENSE_INITIAL_CAP = 8;
 static constexpr uint32_t MAX_DENSE_PREALLOC_LEN = 65536;
 static constexpr uint32_t INTERN_INDEX_CACHE_SIZE = 1024;
 
+static constexpr uint32_t INTERN_MEMO_SIZE = 64;
+static_assert((INTERN_MEMO_SIZE & (INTERN_MEMO_SIZE - 1)) == 0, "the intern memo is indexed by a mask");
+
+typedef struct {
+  const char *bytes;
+  const char *interned;
+} ant_intern_memo_entry_t;
+
 struct ant_isolate_t {
   sv_vm_t *vm;
   void *jit_ctx;
@@ -147,6 +155,8 @@ struct ant_isolate_t {
     const char *arguments;
     const char *callee;
     const char *next;
+    const char *define_property;
+    const char *get_own_property_descriptor;
     const char *idx[INTERN_INDEX_CACHE_SIZE];
   } intern;
 
@@ -245,6 +255,9 @@ struct ant_isolate_t {
   struct {
     size_t last_live;
     size_t pool_alloc;
+    size_t offheap_alloc;
+    size_t overflow_live;
+    size_t offheap_last_live;
     size_t code_alloc;
     size_t closure_alloc;
     size_t closure_at_minor;
@@ -456,6 +469,15 @@ struct ant_isolate_t {
   
   ant_value_t primordials;
   ant_value_t primordial_values[ANT_PRIMORDIAL_COUNT];
+  ant_intern_memo_entry_t intern_memo[INTERN_MEMO_SIZE];
 };
+
+static inline void ant_ic_epoch_bump(ant_t *js) {
+  if (++js->ic.epoch == 0) js->ic.epoch = 1;
+}
+
+static inline void ant_ic_obj_epoch_bump(ant_t *js) {
+  if (++js->ic.obj_epoch == 0) js->ic.obj_epoch = 1;
+}
 
 #endif

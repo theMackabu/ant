@@ -332,6 +332,8 @@ void jit_emit_compare(jit_compile_t *c) {
 
       int right_idx = c->vs.sp - 1;
       int left_idx = c->vs.sp - 2;
+      const ant_flat_string_t *r_str = c->vs.known_str ? c->vs.known_str[right_idx] : NULL;
+      const ant_flat_string_t *l_str = c->vs.known_str ? c->vs.known_str[left_idx] : NULL;
       uint8_t right_type = c->vs.slot_type
                                ? c->vs.slot_type[right_idx]
                                : SLOT_BOXED;
@@ -372,8 +374,14 @@ void jit_emit_compare(jit_compile_t *c) {
       } else if (strict) {
         MIR_label_t eq_slow = MIR_new_label(c->ctx);
         MIR_label_t eq_done = MIR_new_label(c->ctx);
-        mir_emit_strict_tagged_equality(
-            c->ctx, c->jit_func, rl, rr, dst, c->r_bool, invert, eq_slow, eq_done);
+        const ant_flat_string_t *lit = r_str ? r_str : l_str;
+        if (lit && lit->len <= JIT_CONST_STR_EQ_MAX)
+          mir_emit_const_string_equality(
+              c->ctx, c->jit_func, r_str ? rl : rr, r_str ? rr : rl, lit,
+              dst, c->r_bool, invert, eq_slow, eq_done);
+        else mir_emit_strict_tagged_equality(
+            c->ctx, c->jit_func, rl, rr, dst, c->r_bool, invert,
+            (feedback & SV_TFB_STR) && jit_site_runs_hot(c), eq_slow, eq_done);
         MIR_append_insn(c->ctx, c->jit_func, eq_slow);
         MIR_item_t helper = c->op == OP_SEQ ? c->imp_seq : c->imp_sne;
         mir_call_helper2(c->ctx, c->jit_func, dst,

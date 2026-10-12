@@ -100,6 +100,12 @@ enum: ant_value_t {
   SV_AITER_CLOSE_SKIP = ANT_SENTINEL_TAG | 0xFA4ULL,
 };
 
+static inline void ant_object_invalidate_guarded_absence(ant_t *js, ant_object_t *obj) {
+  if (!obj || !obj->flags.guards_absence) return;
+  obj->flags.guards_absence = 0;
+  ant_ic_epoch_bump(js);
+}
+
 static inline void ant_prototype_write_epoch_bump(ant_t *js) {
   if (++js->prototype_write_epoch == 0) {
     ant_ic_epoch_bump(js);
@@ -259,7 +265,7 @@ double js_to_number(ant_t *js, ant_value_t arg);
 double js_parse_int_value(ant_t *js, ant_value_t arg);
 double js_parse_float_value(ant_t *js, ant_value_t arg);
 
-bool js_obj_ensure_prop_capacity(ant_object_t *obj, uint32_t needed);
+bool js_obj_ensure_prop_capacity(ant_t *js, ant_object_t *obj, uint32_t needed);
 bool js_obj_ensure_unique_shape(ant_object_t *obj);
 bool js_get_plain_index(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t *out);
 bool js_string_past_end_is_undefined(ant_t *js, ant_value_t str);
@@ -274,6 +280,7 @@ ant_value_t js_proxy_prevent_extensions(ant_t *js, ant_value_t proxy);
 ant_value_t js_proxy_set(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t value);
 ant_value_t js_proxy_set_sym(ant_t *js, ant_value_t proxy, ant_value_t sym, ant_value_t value);
 ant_value_t js_set_reporting(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value);
+ant_value_t js_set_with_receiver(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value, ant_value_t receiver);
 
 ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs);
 ant_value_t mkprop_exact_attrs(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs);
@@ -389,6 +396,8 @@ bool same_value_values(ant_t *js, ant_value_t l, ant_value_t r);
 bool js_string_intrinsic_builtin_matches(ant_value_t func, ant_string_intrinsic_kind_t kind);
 bool js_deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict);
 bool js_is_prototype_of(ant_t *js, ant_value_t proto_obj, ant_value_t obj);
+bool js_chain_may_override_has_instance(ant_t *js, ant_value_t obj, bool guard_absence);
+bool js_instance_of_proto(ant_t *js, ant_value_t obj, ant_value_t ctor_proto);
 
 ant_value_t js_mkproxy_host(ant_t *js, ant_value_t target, const ant_host_proxy_ops_t *ops);
 ant_value_t js_copy_data_props(ant_t *js, ant_value_t dst, ant_value_t src, const ant_value_t *excluded, int excluded_count);
@@ -413,6 +422,7 @@ ant_value_t js_is_array_value_checked(ant_t *js, ant_value_t value, bool *out);
 ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t js_in_str(ant_t *js, ant_value_t r, const char *key, size_t key_len);
+const char *intern_find_flat(ant_t *js, const char *bytes, size_t len);
 
 ant_value_t builtin_function_apply(ant_params_t);
 ant_value_t builtin_object_isPrototypeOf(ant_params_t);

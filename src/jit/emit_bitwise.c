@@ -21,6 +21,7 @@ void jit_emit_bitwise(jit_compile_t *c) {
       MIR_append_insn(c->ctx, c->jit_func, is_true);
       mir_load_imm(c->ctx, c->jit_func, rs, js_true);
       MIR_append_insn(c->ctx, c->jit_func, is_done);
+      vstack_clear_value_info(&c->vs, c->vs.sp - 1);
       if (c->vs.known_bool) c->vs.known_bool[c->vs.sp - 1] = 1;
       break;
     }
@@ -46,6 +47,7 @@ void jit_emit_bitwise(jit_compile_t *c) {
       MIR_append_insn(c->ctx, c->jit_func, is_true);
       mir_load_imm(c->ctx, c->jit_func, rs, js_true);
       MIR_append_insn(c->ctx, c->jit_func, is_done);
+      vstack_clear_value_info(&c->vs, c->vs.sp - 1);
       if (c->vs.known_bool) c->vs.known_bool[c->vs.sp - 1] = 1;
       break;
     }
@@ -214,6 +216,7 @@ void jit_emit_bitwise(jit_compile_t *c) {
       MIR_append_insn(c->ctx, c->jit_func, falsy);
       mir_load_imm(c->ctx, c->jit_func, rs, js_true);
       MIR_append_insn(c->ctx, c->jit_func, done);
+      vstack_clear_value_info(&c->vs, c->vs.sp - 1);
       if (c->vs.known_bool) c->vs.known_bool[c->vs.sp - 1] = 1;
       break;
     }

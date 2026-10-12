@@ -16,6 +16,16 @@ const spread = { ...process.env };
 assert(spread.ANT_ENV_PROXY_T === '7' && typeof spread.HOME === 'string', 'spread copies the environment');
 assert(Object.assign({}, process.env).ANT_ENV_PROXY_T === '7', 'Object.assign copies the environment');
 
+const envKeys = Object.keys(process.env);
+const envEntries = Object.entries(process.env);
+assert(envEntries.map(([k]) => k).join('\0') === envKeys.join('\0'), 'entries follow keys in order');
+assert(envEntries.every(([k, v]) => process.env[k] === v), 'entries carry the current values');
+assert(Object.values(process.env).join('\0') === envKeys.map(k => process.env[k]).join('\0'), 'values follow keys');
+assert(Object.keys({ ...process.env }).join('\0') === envKeys.join('\0'), 'spread keeps the key order');
+assert(Object.keys(Object.assign({}, process.env)).join('\0') === envKeys.join('\0'), 'Object.assign keeps the key order');
+const { ANT_ENV_PROXY_T: restT, ...envRest } = process.env;
+assert(restT === '7' && !('ANT_ENV_PROXY_T' in envRest) && envRest.HOME === process.env.HOME, 'rest excludes named vars');
+
 let seen = 0;
 for (const k in process.env) if (k === 'HOME' || k === 'ANT_ENV_PROXY_T') seen++;
 assert(seen === 2, 'for-in visits set and inherited vars');

@@ -103,7 +103,4 @@ bool ant_gc_shapes_sweep(void);
 size_t ant_shape_total_bytes(void);
 size_t ant_shape_storage_bytes(const ant_shape_t *shape);
 
-void ant_ic_epoch_bump(ant_t *js);
-void ant_ic_obj_epoch_bump(ant_t *js);
-
 #endif

@@ -15,6 +15,7 @@
 #include "errors.h"
 #include "base64.h"
 #include "internal.h"
+#include "numbers.h"
 #include "gc/roots.h"
 #include "descriptors.h"
 
@@ -617,40 +618,76 @@ static ant_value_t typedarray_write_value(ant_t *js, TypedArrayData *ta_data, si
   }
 }
 
-static ant_value_t typedarray_index_getter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
-  if (key_len == 0 || key_len > 10) return js_mkundef();
+typedef enum {
+  TYPEDARRAY_KEY_ORDINARY,
+  TYPEDARRAY_KEY_INDEX,
+  TYPEDARRAY_KEY_INVALID,
+} typedarray_key_kind_t;
+
+static constexpr size_t TYPEDARRAY_CANONICAL_KEY_MAX = 32;
+static constexpr size_t TYPEDARRAY_EXACT_DIGITS_MAX = 15;
+
+static inline bool typedarray_key_may_be_numeric(const char *key, size_t len) {
+  if (len == 0 || len > TYPEDARRAY_CANONICAL_KEY_MAX) return false;
+  char c = key[0];
+  return c == '-' || c == 'I' || c == 'N' || (c >= '0' && c <= '9');
+}
+
+static typedarray_key_kind_t typedarray_key_kind(const TypedArrayData *ta, const char *key, size_t len, size_t *index) {
+  bool live = ta->buffer && !ta->buffer->is_detached;
+  bool digits = len <= TYPEDARRAY_EXACT_DIGITS_MAX && (key[0] != '0' || len == 1);
+  uint64_t whole = 0;
   
-  size_t index = 0;
-  for (size_t i = 0; i < key_len; i++) {
-    char c = key[i];
-    if (c < '0' || c > '9') return js_mkundef();
-    index = index * 10 + (c - '0');
+  for (size_t i = 0; i < len && digits; i++) {
+    digits = key[i] >= '0' && key[i] <= '9';
+    whole = whole * 10 + (uint64_t)(key[i] - '0');
   }
   
+  if (digits) {
+    if (!live || whole >= ta->length) return TYPEDARRAY_KEY_INVALID;
+    *index = (size_t)whole;
+    return TYPEDARRAY_KEY_INDEX;
+  }
+  
+  if (len == 2 && key[0] == '-' && key[1] == '0') return TYPEDARRAY_KEY_INVALID;
+  
+  double number = 0;
+  size_t processed = 0;
+  if (!ant_number_parse(key, len, ANT_NUMBER_PARSE_JS_NUMBER, &number, &processed) || processed != len)
+    return TYPEDARRAY_KEY_ORDINARY;
+  
+  char canonical[TYPEDARRAY_CANONICAL_KEY_MAX + 8];
+  size_t canonical_len = js_number_to_chars(tov(number), canonical, sizeof(canonical));
+  return canonical_len == len && memcmp(canonical, key, len) == 0 ? TYPEDARRAY_KEY_INVALID : TYPEDARRAY_KEY_ORDINARY;
+}
+
+static ant_value_t typedarray_coerce_value(ant_t *js, const TypedArrayData *ta, ant_value_t value) {
+  if (ta->type == TYPED_ARRAY_BIGINT64 || ta->type == TYPED_ARRAY_BIGUINT64) return buffer_require_bigint_value(js, value);
+  double number = js_to_number(js, value);
+  return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : tov(number);
+}
+
+static ant_value_t typedarray_index_getter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
+  if (!typedarray_key_may_be_numeric(key, key_len)) return js_mkundef();
   TypedArrayData *ta_data = buffer_get_typedarray_data(obj);
-  if (!ta_data || index >= ta_data->length) return js_mkundef();
-  if (!ta_data->buffer || ta_data->buffer->is_detached) return js_mkundef();
+  size_t index = 0;
+  typedarray_key_kind_t kind = ta_data ? typedarray_key_kind(ta_data, key, key_len, &index) : TYPEDARRAY_KEY_ORDINARY;
+  if (kind == TYPEDARRAY_KEY_ORDINARY) return js_mkundef();
 
   ant_value_t value;
-  if (!buffer_typedarray_data_read_index(js, ta_data, index, &value)) return js_mkundef();
+  if (kind == TYPEDARRAY_KEY_INVALID || !buffer_typedarray_data_read_index(js, ta_data, index, &value)) return T_EMPTY;
   return value;
 }
 
 static bool typedarray_index_setter(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t value) {
-  if (key_len == 0 || key_len > 10) return false;
-  
-  size_t index = 0;
-  for (size_t i = 0; i < key_len; i++) {
-    char c = key[i];
-    if (c < '0' || c > '9') return false;
-    index = index * 10 + (c - '0');
-  }
-  
+  if (!typedarray_key_may_be_numeric(key, key_len)) return false;
   TypedArrayData *ta_data = buffer_get_typedarray_data(obj);
-  if (!ta_data || index >= ta_data->length) return true;
-  if (!ta_data->buffer || ta_data->buffer->is_detached) return true;
-  (void)typedarray_write_value(js, ta_data, index, value);
+  size_t index = 0;
+  typedarray_key_kind_t kind = ta_data ? typedarray_key_kind(ta_data, key, key_len, &index) : TYPEDARRAY_KEY_ORDINARY;
+  if (kind == TYPEDARRAY_KEY_ORDINARY) return false;
   
+  ant_value_t coerced = typedarray_coerce_value(js, ta_data, value);
+  if (!is_err(coerced) && kind == TYPEDARRAY_KEY_INDEX) (void)typedarray_write_value(js, ta_data, index, coerced);
   return true;
 }
 

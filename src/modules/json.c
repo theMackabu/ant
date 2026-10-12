@@ -302,7 +302,7 @@ static bool json_prepare_object(
   *duplicates = false;
   if (json_shape_matches(expected, val)) {
     ant_shape_transition_existing(&obj->shape, expected);
-    return js_obj_ensure_prop_capacity(obj, ant_shape_count(expected));
+    return js_obj_ensure_prop_capacity(js, obj, ant_shape_count(expected));
   }
 
   size_t count = yyjson_obj_size(val);
@@ -315,7 +315,7 @@ static bool json_prepare_object(
     ant_shape_t *cached = json_layout_cache_find(js, val, hash);
     if (cached) {
       ant_shape_transition_existing(&obj->shape, cached);
-      return js_obj_ensure_prop_capacity(obj, ant_shape_count(cached));
+      return js_obj_ensure_prop_capacity(js, obj, ant_shape_count(cached));
     }
     ant_shape_t *shape = ant_shape_clone_bulk(obj->shape, (uint32_t)count);
     if (!shape) return false;
@@ -340,7 +340,7 @@ static bool json_prepare_object(
     if (slot != idx) *duplicates = true;
   }
   
-  if (!js_obj_ensure_prop_capacity(obj, ant_shape_count(obj->shape))) return false;
+  if (!js_obj_ensure_prop_capacity(js, obj, ant_shape_count(obj->shape))) return false;
   if (bulk && !*duplicates) json_layout_cache_insert(js, obj->shape, hash, key_bytes);
   
   return true;
@@ -415,7 +415,7 @@ static ant_value_t yyjson_to_jsval(
     
     if (prepared) {
       if (!json_prepare_object(js, ptr, val, expected, &duplicates)) return json_parse_oom(js);
-    } else if (count > 1 && !js_obj_ensure_prop_capacity(ptr, (uint32_t)count)) return json_parse_oom(js);
+    } else if (count > 1 && !js_obj_ensure_prop_capacity(js, ptr, (uint32_t)count)) return json_parse_oom(js);
 
     size_t idx, max; yyjson_val *key, *item;
     size_t mark = roots->len;

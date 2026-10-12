@@ -90,6 +90,15 @@ size_t gc_pool_major_threshold(ant_t *js) {
   return gc_scaled_threshold(js->gc.pool_last_live, js->gc.major_pool_growth_x256, GC_POOL_PRESSURE_FLOOR);
 }
 
+static size_t gc_offheap_live(ant_t *js) {
+  return js->gc.overflow_live + ant_shape_total_bytes();
+}
+
+static size_t gc_offheap_major_threshold(ant_t *js) {
+  size_t last = js->gc.offheap_last_live;
+  return last + (last > GC_OFFHEAP_MAJOR_FLOOR ? last : GC_OFFHEAP_MAJOR_FLOOR);
+}
+
 static void gc_adapt_nursery(ant_t *js, size_t young_before, size_t survivors) {
   if (young_before == 0) return;
   uint32_t rate = (uint32_t)((survivors * 256) / young_before);
@@ -317,6 +326,8 @@ void gc_run(ant_t *js) {
 
   js->gc.pool_last_live = gc_pool_live_bytes(js);
   js->gc.pool_alloc = 0;
+  js->gc.offheap_alloc = 0;
+  js->gc.offheap_last_live = gc_offheap_live(js);
   js->gc.code_alloc = 0;
   js->rope_gc.young_alloc = 0;
   js->gc.closure_alloc = 0;
@@ -378,6 +389,8 @@ void gc_run_minor(ant_t *js) {
     ? js->obj_arena.live_count - old_before : 0;
 
   js->gc.closure_at_minor = js->gc.closure_alloc;
+  js->gc.offheap_alloc = 0;
+  
   gc_adapt_nursery(js, young_before, survivors);
   
   js->gc.arrays_at_collect = js->alloc_bytes.arrays;
@@ -403,9 +416,10 @@ static void gc_decide(ant_t *js) {
     js->gc.closure_alloc - js->gc.closure_at_minor : 0;
 
   if (
-    young_count >= js->gc.nursery_threshold                  ||
+    young_count >= js->gc.nursery_threshold              ||
     js->rope_gc.young_alloc >= GC_ROPE_NURSERY_THRESHOLD ||
     closure_young >= GC_CLOSURE_NURSERY_THRESHOLD        ||
+    js->gc.offheap_alloc >= GC_OFFHEAP_NURSERY_THRESHOLD ||
     js->alloc_bytes.arrays >= js->gc.array_limit
   ) {
     js->gc.tick = 0;
@@ -421,6 +435,7 @@ static void gc_decide(ant_t *js) {
       if (live_before_minor >= major_threshold) major_due = true;
       else if (js->gc.pool_alloc >= pool_threshold) major_due = true;
       else if (js->gc.code_alloc >= gc_code_major_threshold(js)) major_due = true;
+      else if (gc_offheap_live(js) >= gc_offheap_major_threshold(js)) major_due = true;
       else if (js->closure_arena.watermark - js->gc.closure_wm_at_major >= GC_CLOSURE_MAJOR_GROWTH) major_due = true;
       else if (js->gc_closure_promoted_since_major >= GC_CLOSURE_PROMOTED_MAJOR) major_due = true;
       else if (js->alloc_bytes.arrays + gc_array_storage_cached_bytes(js) >= js->gc.array_major_limit) major_due = true;

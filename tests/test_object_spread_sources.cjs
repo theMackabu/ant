@@ -79,6 +79,36 @@ assert(same({ ...new Uint8Array([7, 8]) }, { 0: 7, 1: 8 }), 'typed arrays spread
 assert(Object.keys(new Uint8Array([7, 8])).join() === '0,1', 'typed array keys are its indices');
 assert(Object.hasOwn(new Uint8Array([7]), 0) && !Object.hasOwn(new Uint8Array([7]), 1), 'typed array indices are own properties');
 
+const original = { a: 1, b: 2, c: 3 };
+const copied = { ...original };
+copied.d = 4;
+delete copied.a;
+Object.defineProperty(copied, 'b', { enumerable: false });
+assert(same(original, { a: 1, b: 2, c: 3 }), 'changing a copy leaves the source alone');
+original.e = 5;
+Object.freeze(original);
+assert(same({ ...copied }, { c: 3, d: 4 }) && !Object.isFrozen(copied), 'changing the source leaves a copy alone');
+
+const big = {};
+for (let i = 0; i < 40; i++) big['p' + i] = i;
+const bigCopy = { ...big };
+bigCopy.p0 = 'x';
+assert(big.p0 === 0 && bigCopy.p39 === 39 && Object.keys(bigCopy).length === 40, 'large sources copy every slot');
+
+class Point { constructor() { this.x = 1; this.y = 2; this.z = 3; this.w = 4; this.v = 5; } }
+const point = new Point();
+const pointCopy = { ...point };
+assert(Object.getPrototypeOf(pointCopy) === Object.prototype && same(pointCopy, { x: 1, y: 2, z: 3, w: 4, v: 5 }), 'class instances copy as plain data');
+
+const watchedKeys = { then: 1, prototype: 2, constructor: 3 };
+assert(same({ ...watchedKeys }, { then: 1, prototype: 2, constructor: 3 }), 'watched names copy as data');
+const hiddenSrc = Object.defineProperty({ shown: 1 }, 'hidden', { value: 2, enumerable: false });
+assert(same({ ...hiddenSrc }, { shown: 1 }), 'non-enumerable keys are left out');
+
+let lastCopy;
+for (let i = 0; i < 5000; i++) { lastCopy = { ...original }; lastCopy.n = i; }
+assert(same(lastCopy, { a: 1, b: 2, c: 3, e: 5, n: 4999 }) && !('n' in original), 'hot copies stay independent');
+
 const internalOnly = [
   new ArrayBuffer(2), new DataView(new ArrayBuffer(2)), /a/g, new Event('x'), (class K { m() {} }).prototype,
 ];
@@ -137,5 +167,26 @@ assert(excludedGetterCalls === 1 && noX.y === 2 && !('x' in noX), 'an excluded g
 const withProtoKey = JSON.parse('{"__proto__": {"polluted": true}, "z": 1}');
 const protoCopy = { ...withProtoKey };
 assert(Object.getPrototypeOf(protoCopy) === Object.prototype && Object.hasOwn(protoCopy, '__proto__'), 'spread defines __proto__ as an own key');
+
+// excluded keys stay out of rest even when the source creates its keys lazily
+const fresh = n => ['k', n, Date.now() % 1].join('');
+const { '0': s0, ...strRest } = 'xyz';
+assert(s0 === 'x' && JSON.stringify(strRest) === '{"1":"y","2":"z"}', 'a string source drops the excluded index');
+const { 0: n0, ...numKeyRest } = 'xyz';
+assert(n0 === 'x' && !('0' in numKeyRest), 'a numeric excluded key matches the index');
+const { [1]: w1, ...wrapRest } = new String('ab');
+assert(w1 === 'b' && JSON.stringify(wrapRest) === '{"0":"a"}', 'a String wrapper source drops the excluded index');
+const bigArr = Array.from({ length: 5000 }, (_, i) => i);
+const idx = String(4000 + (Date.now() % 1));
+const { [idx]: bigAt, ...bigRest } = bigArr;
+assert(bigAt === 4000 && !(idx in bigRest) && bigRest[3999] === 3999, 'a dense array drops a computed index key');
+const proxyKey = fresh(1);
+const { [proxyKey]: pv, ...proxyRest } = new Proxy({ [proxyKey]: 1, keep: 2 }, {});
+assert(pv === 1 && !(proxyKey in proxyRest) && proxyRest.keep === 2, 'a proxy source drops a never-interned key');
+const envKey = ['ANT', 'REST', 'EXCL', process.pid].join('_');
+process.env[envKey] = 'v';
+const { [envKey]: ev, ...envRest } = process.env;
+assert(ev === 'v' && !(envKey in envRest), 'process.env drops a runtime-built key');
+delete process.env[envKey];
 
 console.log('object spread sources OK');

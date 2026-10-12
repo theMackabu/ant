@@ -67,4 +67,45 @@ big[4294967295] = 'not an index';
 assert.deepStrictEqual(hot(() => [4294967295 in big, 4294967294 in big]), [true, false]);
 assert.strictEqual(hot(() => (function () { return 0 in arguments && !(1 in arguments); })(7)), true);
 
+// computed keys are short-lived strings whose bytes get reused after collections; every answer
+// must follow the key's text, never a reused address
+const evens = {};
+for (let k = 0; k < 400; k += 2) evens['k' + k] = k;
+let garbage = [];
+for (let i = 0; i < 200000; i++) {
+  const key = 'k' + (i % 400);
+  const want = (i % 400) % 2 === 0;
+  if ((key in evens) !== want) assert.fail(`${key} in evens at ${i}`);
+  if (Object.hasOwn(evens, key) !== want) assert.fail(`hasOwn ${key} at ${i}`);
+  if (i % 997 === 0) {
+    const { [key]: _, ...others } = evens;
+    if ((key in others) || Object.keys(others).length !== (want ? 199 : 200)) assert.fail(`rest without ${key} at ${i}`);
+  }
+  garbage.push('g' + i + 'x'.repeat(i % 50));
+  if (garbage.length > 5000) garbage = [];
+}
+
+// a never-interned key is absent from plain chains; anything else on the chain still gets asked
+const fresh = i => ['never', i, 'seen', Date.now() % 1].join('_');
+const trapped = [];
+const viaProxy = Object.create(new Proxy({}, { has(t, k) { trapped.push(k); return k.endsWith('_hit_0'); } }));
+const viaFunction = Object.create(Object.assign(function () {}, {}));
+const dynIn = (k, o) => k in o;
+for (let i = 0; i < 3000; i++) {
+  const k = fresh(i);
+  assert.strictEqual(dynIn(k, { a: 1 }), false);
+  assert.strictEqual(dynIn(k, Object.create(null)), false);
+  assert.strictEqual(dynIn(k, Object.create({ b: 2 })), false);
+  assert.strictEqual(dynIn(k, viaFunction), false);
+}
+assert.strictEqual(dynIn(['x', 'hit', 0].join('_'), viaProxy), true, 'a proxy on the chain answers a fresh key');
+assert.strictEqual(trapped.length, 1, 'the has trap ran');
+const late = { [fresh('own')]: 1 };
+assert.strictEqual(dynIn(Object.keys(late)[0], late), true, 'a fresh key that became a property is found');
+
+const inX = o => 'x' in o;
+const inY = o => 'y' in o;
+for (let i = 0; i < 3000; i++) assert.deepStrictEqual([inX(Object.create({ x: 1 })), inY(Object.create({ x: 1 }))], [true, false]);
+assert.deepStrictEqual([inX(Object.create(new Proxy({ x: 1 }, {}))), inY(Object.create(new Proxy({ y: 1 }, {})))], [true, true], 'a failed guard keeps the object for the slow path');
+
 console.log('in operator ic OK');

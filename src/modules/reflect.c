@@ -68,7 +68,9 @@ static ant_value_t reflect_set(ant_params_t) {
     if (is_err(key)) return key;
   }
   
-  ant_value_t result = js_set_reporting(js, target, key, value);
+  ant_value_t receiver = nargs > 3 ? args[3] : args[0];
+  ant_value_t result = js_set_with_receiver(js, target, key, value, receiver);
+  
   if (is_err(result)) return result;
   if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
   

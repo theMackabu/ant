@@ -6,9 +6,9 @@ let num = 42;
 let bool = true;
 let obj = {};
 
-console.log(str instanceof String);      // true
-console.log(num instanceof Number);      // true
-console.log(bool instanceof Boolean);    // true
+console.log(str instanceof String);      // false
+console.log(num instanceof Number);      // false
+console.log(bool instanceof Boolean);    // false
 console.log(obj instanceof Object);      // true
 
 // Test instanceof with wrong types
@@ -28,7 +28,7 @@ let funcExpr = function() {
 
 console.log(myFunc instanceof Function); // true
 console.log(funcExpr instanceof Function); // true
-console.log(myFunc instanceof Object);   // false
+console.log(myFunc instanceof Object);   // true
 
 // Test String() constructor
 console.log(String(42));                 // "42"
@@ -38,7 +38,7 @@ console.log(String(null));               // "null"
 console.log(String({}));                 // [object Object] or similar
 
 let converted = String(123);
-console.log(converted instanceof String); // true
+console.log(converted instanceof String); // false
 console.log(typeof converted);           // string
 
 // Test Number() constructor
@@ -49,7 +49,7 @@ console.log(Number(false));              // 0
 console.log(Number(null));               // 0
 
 let numConverted = Number("456");
-console.log(numConverted instanceof Number); // true
+console.log(numConverted instanceof Number); // false
 console.log(typeof numConverted);        // number
 
 // Test Boolean() constructor
@@ -61,7 +61,7 @@ console.log(Boolean(null));              // false
 console.log(Boolean({}));                // true
 
 let boolConverted = Boolean("test");
-console.log(boolConverted instanceof Boolean); // true
+console.log(boolConverted instanceof Boolean); // false
 console.log(typeof boolConverted);       // boolean
 
 // Test Object() constructor
@@ -81,8 +81,8 @@ let x = Number("10");
 let y = Number("20");
 let result = x + y;
 console.log(result);                     // 30
-console.log(result instanceof Number);   // true
+console.log(result instanceof Number);   // false
 
 let greeting = String("Hello ") + String("World");
 console.log(greeting);                   // Hello World
-console.log(greeting instanceof String); // true
+console.log(greeting instanceof String); // false

@@ -111,7 +111,7 @@ static inline void sv_obj_site_apply(
       ptr->shape = site->shared_shape;
     }
     uint32_t count = ant_shape_count(ptr->shape);
-    if (count > ptr->prop_count) (void)js_obj_ensure_prop_capacity(ptr, count);
+    if (count > ptr->prop_count) (void)js_obj_ensure_prop_capacity(js, ptr, count);
   } else if (!site->key_atoms) {
     site->shared_shape = ptr->shape;
     ant_shape_retain(site->shared_shape);

@@ -1378,7 +1378,7 @@ void jit_emit_inline_body(
             MIR_label_t eq_done = MIR_new_label(ctx);
             mir_emit_strict_tagged_equality(
                 ctx, jit_func, rl, rr, rd, r_bool, op == OP_SNE,
-                eq_slow, eq_done);
+                (feedback & SV_TFB_STR) != 0, eq_slow, eq_done);
             MIR_append_insn(ctx, jit_func, eq_slow);
             mir_call_helper2(ctx, jit_func, rd,
                              helper2_proto, helper,

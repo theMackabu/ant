@@ -50,8 +50,9 @@ typedef struct {
   size_t byte_length;
 } DataViewData;
 
+static constexpr size_t BUFFER_INSPECT_MAX_BYTES = 50;
+
 enum {
-  BUFFER_INSPECT_MAX_BYTES      = 50,
   BUFFER_ARRAYBUFFER_NATIVE_TAG = 0x41425546u, // ABUF
   BUFFER_TYPEDARRAY_NATIVE_TAG  = 0x54594152u, // TYAR
   BUFFER_DATAVIEW_NATIVE_TAG    = 0x44564957u, // DVIW

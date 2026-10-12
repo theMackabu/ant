@@ -725,7 +725,7 @@ ant_value_t jit_helper_seq(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r)
 }
 
 ant_value_t jit_helper_in(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  return do_in(js, l, r);
+  return sv_prop_in_value(js, l, r);
 }
 
 ant_value_t jit_helper_eq(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {

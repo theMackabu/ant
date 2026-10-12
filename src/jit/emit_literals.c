@@ -26,9 +26,10 @@ void jit_emit_literals(jit_compile_t *c) {
       }
       ant_value_t cv = c->func->constants[idx];
       MIR_reg_t dst = vstack_push(&c->vs);
-      if (jit_const_is_heap(cv))
+      if (jit_const_is_heap(cv)) {
         mir_load_const_slot(c->ctx, c->jit_func, dst, &c->func->constants[idx]);
-      else {
+        if (c->vs.known_str) c->vs.known_str[c->vs.sp - 1] = ant_str_flat_ptr(cv);
+      } else {
         mir_load_imm(c->ctx, c->jit_func, dst, cv);
         if (vtype(cv) == kTypeNumber) {
           union {
@@ -54,9 +55,10 @@ void jit_emit_literals(jit_compile_t *c) {
       }
       ant_value_t cv = c->func->constants[idx];
       MIR_reg_t dst = vstack_push(&c->vs);
-      if (jit_const_is_heap(cv))
+      if (jit_const_is_heap(cv)) {
         mir_load_const_slot(c->ctx, c->jit_func, dst, &c->func->constants[idx]);
-      else {
+        if (c->vs.known_str) c->vs.known_str[c->vs.sp - 1] = ant_str_flat_ptr(cv);
+      } else {
         mir_load_imm(c->ctx, c->jit_func, dst, cv);
         if (vtype(cv) == kTypeNumber) {
           union {

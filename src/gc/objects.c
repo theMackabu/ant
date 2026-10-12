@@ -1483,10 +1483,15 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     obj->extra_slots = NULL;
   }
 
+  if (obj->overflow_prop)
+    gc_note_overflow_free(js, ant_object_overflow_cap(obj) * sizeof(*obj->overflow_prop));
+  
   free(obj->overflow_prop);
   obj->overflow_prop = NULL;
+  
   free((void *)obj->exotic_ops);
   obj->exotic_ops = NULL;
+  
   GC_VERIFY_POISON_OBJECT(obj);
   fixed_arena_free_elem(&js->obj_arena, obj);
 }

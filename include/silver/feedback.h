@@ -181,33 +181,23 @@ static inline sv_func_sidecar_t *sv_func_ensure_sidecar(sv_func_t *func) {
   return sidecar;
 }
 
-static inline void sv_tfb_record2(sv_func_t *func, uint8_t *ip, ant_value_t l, ant_value_t r) {
+static inline uint8_t *sv_tfb_site(sv_func_t *func, uint8_t *ip) {
   uint8_t *type_feedback = sv_func_type_feedback(func);
+  return type_feedback ? &type_feedback[(int)(ip - func->code)] : NULL;
+}
 
-  if (type_feedback) {
-  int off = (int)(ip - func->code);
+static inline void sv_tfb_site_update(sv_func_t *func, uint8_t *site, uint8_t old, uint8_t neu) {
+  if (neu != old) { *site = neu; func->tfb_version++; }
+}
 
-  uint8_t old = type_feedback[off];
-  uint8_t neu = old | sv_tfb_classify(l) | sv_tfb_classify(r);
-
-  if (neu != old) {
-    type_feedback[off] = neu;
-    func->tfb_version++;
-  }}
+static inline void sv_tfb_record2(sv_func_t *func, uint8_t *ip, ant_value_t l, ant_value_t r) {
+  uint8_t *site = sv_tfb_site(func, ip);
+  if (site) sv_tfb_site_update(func, site, *site, *site | sv_tfb_classify(l) | sv_tfb_classify(r));
 }
 
 static inline void sv_tfb_record1(sv_func_t *func, uint8_t *ip, ant_value_t v) {
-  uint8_t *type_feedback = sv_func_type_feedback(func);
-  if (type_feedback) {
-  int off = (int)(ip - func->code);
-
-  uint8_t old = type_feedback[off];
-  uint8_t neu = old | sv_tfb_classify(v);
-
-  if (neu != old) {
-    type_feedback[off] = neu;
-    func->tfb_version++;
-  }}
+  uint8_t *site = sv_tfb_site(func, ip);
+  if (site) sv_tfb_site_update(func, site, *site, *site | sv_tfb_classify(v));
 }
 
 static inline uint8_t sv_tfb_add_specialization_sample(
@@ -226,21 +216,16 @@ static inline uint8_t sv_tfb_add_specialization_sample(
 static inline uint8_t *sv_tfb_specialization_site(
   sv_func_t *func, uint8_t *ip, uint8_t *old
 ) {
-  uint8_t *type_feedback = sv_func_type_feedback(func);
-  if (!type_feedback) return NULL;
-
-  uint8_t *site = &type_feedback[(int)(ip - func->code)];
+  uint8_t *site = sv_tfb_site(func, ip);
+  if (!site || (*site & SV_TFB_SPEC_MISMATCH)) return NULL;
   *old = *site;
-
-  if (*old & SV_TFB_SPEC_MISMATCH) return NULL;
   return site;
 }
 
 static inline void sv_tfb_record_specialization_at(
   sv_func_t *func, uint8_t *site, uint8_t old, bool matches
 ) {
-  uint8_t neu = sv_tfb_add_specialization_sample(old, old, matches);
-  if (neu != old) { *site = neu; func->tfb_version++; }
+  sv_tfb_site_update(func, site, old, sv_tfb_add_specialization_sample(old, old, matches));
 }
 
 static inline bool sv_tfb_specialization_ready(uint8_t feedback) {
@@ -254,33 +239,37 @@ static inline bool sv_tfb_is_word32_number(ant_value_t value) {
   return isfinite(number) && number >= (double)INT32_MIN && number <= (double)UINT32_MAX;
 }
 
+static inline bool sv_tfb_still_sampling(uint8_t old) {
+  return (old & SV_TFB_SPEC_MISMATCH) == 0;
+}
+
 static inline void sv_tfb_record2_spec(
-  sv_func_t *func, uint8_t *ip, ant_value_t l, ant_value_t r,
-  bool word32
+  sv_func_t *func, uint8_t *ip, ant_value_t l, ant_value_t r, bool word32
 ) {
-  uint8_t old;
-  uint8_t *site = sv_tfb_specialization_site(func, ip, &old);
+  uint8_t *site = sv_tfb_site(func, ip);
   if (!site) return;
 
-  bool matches = word32
-    ? sv_tfb_is_word32_number(l) && sv_tfb_is_word32_number(r)
-    : vtype(l) == kTypeNumber && vtype(r) == kTypeNumber;
-
+  uint8_t old = *site;
   uint8_t neu = old | sv_tfb_classify(l) | sv_tfb_classify(r);
-  neu = sv_tfb_add_specialization_sample(old, neu, matches);
-  if (neu != old) { *site = neu; func->tfb_version++; }
+  
+  if (sv_tfb_still_sampling(old)) neu = sv_tfb_add_specialization_sample(old, neu, word32
+    ? sv_tfb_is_word32_number(l) && sv_tfb_is_word32_number(r)
+    : vtype(l) == kTypeNumber && vtype(r) == kTypeNumber);
+
+  sv_tfb_site_update(func, site, old, neu);
 }
 
 static inline void sv_tfb_record1_word32_spec(
   sv_func_t *func, uint8_t *ip, ant_value_t value
 ) {
-  uint8_t old;
-  uint8_t *site = sv_tfb_specialization_site(func, ip, &old);
+  uint8_t *site = sv_tfb_site(func, ip);
   if (!site) return;
 
+  uint8_t old = *site;
   uint8_t neu = old | sv_tfb_classify(value);
-  neu = sv_tfb_add_specialization_sample(old, neu, sv_tfb_is_word32_number(value));
-  if (neu != old) { *site = neu; func->tfb_version++; }
+  if (sv_tfb_still_sampling(old)) neu = sv_tfb_add_specialization_sample(old, neu, sv_tfb_is_word32_number(value));
+
+  sv_tfb_site_update(func, site, old, neu);
 }
 
 static inline bool sv_tfb_dense_numeric_element(
@@ -354,8 +343,7 @@ static inline void sv_tfb_record_dense_numeric_put(
   bool matches = sv_tfb_dense_numeric_put(object, key, value, &tagged_old);
 
   uint8_t neu = tagged_old ? (uint8_t)(old | SV_TFB_OTHER) : old;
-  neu = sv_tfb_add_specialization_sample(old, neu, matches);
-  if (neu != old) { *site = neu; func->tfb_version++; }
+  sv_tfb_site_update(func, site, old, sv_tfb_add_specialization_sample(old, neu, matches));
 }
 
 static inline bool sv_tfb_put_needs_tagged_old_guard(uint8_t feedback) {

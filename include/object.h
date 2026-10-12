@@ -24,6 +24,7 @@ typedef struct {
   ant_value_t (*set)(ant_t *, ant_value_t target, const char *key, size_t key_len, ant_value_t value);
   ant_value_t (*del)(ant_t *, ant_value_t target, const char *key, size_t key_len);
   ant_value_t (*keys)(ant_t *, ant_value_t target);
+  ant_value_t (*flat_entries)(ant_t *, ant_value_t target);
 } ant_host_proxy_ops_t;
 
 typedef struct promise_handler {
@@ -281,12 +282,6 @@ enum {
 
 static inline void ant_object_guard_absence(ant_object_t *obj) {
   if (obj) obj->flags.guards_absence = 1;
-}
-
-static inline void ant_object_invalidate_guarded_absence(ant_t *js, ant_object_t *obj) {
-  if (!obj || !obj->flags.guards_absence) return;
-  obj->flags.guards_absence = 0;
-  ant_ic_epoch_bump(js);
 }
 
 static inline bool ant_object_has_sidecar(const ant_object_t *obj) {
