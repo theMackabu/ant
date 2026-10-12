@@ -1674,6 +1674,7 @@ static inline void rope_canonicalize_flat(ant_value_t rope, ant_value_t flat) {
   ptr->left = js_mkundef();
   ptr->right = js_mkundef();
   ptr->depth = 0;
+  ptr->len = ant_str_flat_ptr(flat)->len;
 }
 
 static inline ant_string_builder_t *assert_builder_ptr(ant_value_t value) {
@@ -1701,7 +1702,7 @@ static inline void builder_set_cached_flat(ant_value_t builder, ant_value_t flat
   ptr->cached = flat;
 }
 
-static bool rope_flatten_into(ant_value_t str, char *dest, ant_offset_t total_len) {
+static bool rope_flatten_into(ant_value_t str, char *dest, ant_offset_t total_len, ant_offset_t *start) {
   assert(vtype(str) == kTypeString);
 
   ant_value_t local[32];
@@ -1743,7 +1744,9 @@ static bool rope_flatten_into(ant_value_t str, char *dest, ant_offset_t total_le
   }
 
   if (stack != local) free(stack);
-  return pos == 0;
+  *start = pos;
+  
+  return true;
 }
 
 ant_value_t rope_flatten(ant_t *js, ant_value_t rope) {
@@ -1770,19 +1773,18 @@ ant_value_t rope_flatten(ant_t *js, ant_value_t rope) {
   }
 
   ant_flat_string_t *flat_ptr = (ant_flat_string_t *)vptr(flat);
-  if (!rope_flatten_into(rope, flat_ptr->bytes, total_len)) {
+  ant_offset_t start = 0;
+  
+  if (!rope_flatten_into(rope, flat_ptr->bytes, total_len, &start)) {
     GC_ROOT_RESTORE(js, root_mark);
     return js_mkerr(js, "string flatten failed");
   }
-  flat_ptr->bytes[total_len] = '\0';
   
-  str_flat_init_meta(
-    flat_ptr,
-    str_detect_ascii_bytes(flat_ptr->bytes, (size_t)total_len)
-  );
+  if (start > 0) memmove(flat_ptr->bytes, flat_ptr->bytes + start, (size_t)(total_len - start));
+  flat_ptr->len = total_len - start;
   
-  if (vtype(cached) == kTypeNumber)
-    str_flat_set_utf16_len(flat_ptr, (ant_offset_t)tod(cached));
+  str_flat_finish(flat_ptr, str_detect_ascii_bytes(flat_ptr->bytes, (size_t)flat_ptr->len));
+  if (vtype(cached) == kTypeNumber) str_flat_set_utf16_len(flat_ptr, (ant_offset_t)tod(cached));
 
   rope_canonicalize_flat(rope, flat);
   GC_ROOT_RESTORE(js, root_mark);
@@ -1853,14 +1855,18 @@ static ant_value_t builder_flatten(ant_t *js, ant_value_t builder) {
     cursor += ptr->tail_len;
   }
   
-  flat_ptr->bytes[cursor] = '\0';
-  str_flat_init_meta(flat_ptr, ptr->ascii_state);
+  flat_ptr->len = (ant_offset_t)cursor;
+  str_flat_finish(flat_ptr, ptr->ascii_state);
+  ptr->len = flat_ptr->len;
+  
   if (vtype(cached) == kTypeNumber)
     str_flat_set_utf16_len(flat_ptr, (ant_offset_t)tod(cached));
+  
   ptr->snapshot = flat;
   ptr->head = NULL;
   ptr->chunk_tail = NULL;
   ptr->tail_len = 0;
+  
   builder_set_cached_flat(builder, flat);
   GC_ROOT_RESTORE(js, root_mark);
   
@@ -3137,10 +3143,12 @@ static inline ant_value_t mkstr_with_ascii(ant_t *js, const void *ptr, size_t le
   if (ptr && len > 0) memcpy(flat->bytes, ptr, len);
   flat->bytes[len] = '\0';
   
-  str_flat_init_meta(flat, known_ascii ? STR_ASCII_YES : ((ptr || len == 0)
+  uint8_t ascii = known_ascii ? STR_ASCII_YES : ((ptr || len == 0)
     ? str_detect_ascii_bytes(flat->bytes, len)
-    : STR_ASCII_UNKNOWN)
-  );
+    : STR_ASCII_UNKNOWN);
+  
+  if (ptr) str_flat_finish(flat, ascii);
+  else str_flat_init_meta(flat, ascii);
 
   return mkref(kTypeString, flat);
 }
@@ -9409,7 +9417,7 @@ static ant_value_t object_has_own_key(ant_t *js, ant_value_t obj, property_key_v
   ant_object_t *ptr = js_obj_ptr(as_obj);
   
   bool exotic = ptr && ptr->flags.is_exotic;
-  if (!exotic && !key->interned && !key->index_like) return mkval(kTypeBool, 0);
+  if (!exotic && !key->index_like) return js_bool(lkp_interned(as_obj, key->interned).obj);
   
   if (exotic && is_proxy(as_obj)) {
     ant_value_t materialized = property_key_view_materialize(js, key);
@@ -12421,7 +12429,7 @@ static ant_value_t builtin_array_join(ant_params_t) {
     }
     
     flat->bytes[pos] = '\0';
-    str_flat_init_meta(flat, str_detect_ascii_bytes(flat->bytes, pos));
+    str_flat_finish(flat, str_detect_ascii_bytes(flat->bytes, pos));
     GC_ROOT_RESTORE(js, root_mark);
     
     return result;
@@ -14426,7 +14434,7 @@ static bool array_try_builtin_string_locale(
   }
   
   flat->bytes[pos] = '\0';
-  str_flat_init_meta(flat, ascii_state);
+  str_flat_finish(flat, ascii_state);
   GC_ROOT_RESTORE(js, root_mark);
   
   return true;
@@ -16064,11 +16072,11 @@ static ant_value_t builtin_string_repeat(ant_params_t) {
   ant_offset_t result_len, result_off = vstr(js, result, &result_len);
   char *result_ptr = (char *)(uintptr_t)(result_off);
   
-  for (ant_offset_t i = 0; i < count; i++) {
+  for (ant_offset_t i = 0; i < count; i++)
     memcpy(result_ptr + i * str_len, str_ptr, str_len);
-  }
-  str_set_ascii_state(
-    result_ptr,
+  
+  str_flat_finish(
+    str_flat_from_bytes(result_ptr),
     str_is_ascii(str_ptr) ? STR_ASCII_YES : STR_ASCII_NO
   );
   
@@ -16122,13 +16130,15 @@ static ant_value_t builtin_string_padStart(ant_params_t) {
     memcpy(result_ptr + pos, pad_str, (size_t)pad_len);
     pos += (size_t)pad_len;
   }
+  
   if (rem_bytes > 0) {
     memcpy(result_ptr + pos, pad_str, rem_bytes);
     pos += rem_bytes;
   }
+  
   memcpy(result_ptr + pos, str_ptr, (size_t)str_len);
-  str_set_ascii_state(
-    result_ptr,
+  str_flat_finish(
+    str_flat_from_bytes(result_ptr),
     (str_is_ascii(pad_str) && str_is_ascii(str_ptr)) ? STR_ASCII_YES : STR_ASCII_NO
   );
   
@@ -16183,12 +16193,14 @@ static ant_value_t builtin_string_padEnd(ant_params_t) {
     memcpy(result_ptr + pos, pad_str, (size_t)pad_len);
     pos += (size_t)pad_len;
   }
+  
   if (rem_bytes > 0) {
     memcpy(result_ptr + pos, pad_str, rem_bytes);
     pos += rem_bytes;
   }
-  str_set_ascii_state(
-    result_ptr,
+  
+  str_flat_finish(
+    str_flat_from_bytes(result_ptr),
     (str_is_ascii(str_ptr) && str_is_ascii(pad_str)) ? STR_ASCII_YES : STR_ASCII_NO
   );
   
@@ -16416,7 +16428,7 @@ static ant_value_t builtin_string_concat(ant_params_t) {
   }
   
   flat->bytes[pos] = '\0';
-  str_flat_init_meta(flat, str_detect_ascii_bytes(flat->bytes, pos));
+  str_flat_finish(flat, str_detect_ascii_bytes(flat->bytes, pos));
   
   if (args_need_free) free(str_args);
   GC_ROOT_RESTORE(js, root_mark);
@@ -19149,11 +19161,14 @@ ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r) {
   if (vtype(r) == kTypeBuiltin) r = js_cfunc_promote(js, r);
   if (is_err(r)) return r;
 
-  ant_value_t key = js_to_primitive(js, l, 1);
+  ant_value_t key = vtype(l) == kTypeString ? l : js_to_primitive(js, l, 1);
   if (is_err(key)) return key;
   bool is_sym = (vtype(key) == kTypeSymbol);
   
-  if (is_sym) {
+  if (vtype(key) == kTypeString) {
+    ant_offset_t prop_off = vstr(js, key, &prop_len);
+    prop_name = (char *)(uintptr_t)(prop_off);
+  } else if (is_sym) {
     const char *d = js_sym_desc(key);
     prop_name = d ? d : "symbol";
     prop_len = (ant_offset_t)strlen(prop_name);
@@ -21630,7 +21645,7 @@ static ant_value_t js_mkstr_concat2(
   if (right_len) memcpy(flat->bytes + left_len, right, right_len);
   
   flat->bytes[total] = '\0';
-  str_flat_init_meta(flat, str_detect_ascii_bytes(flat->bytes, total));
+  str_flat_finish(flat, str_detect_ascii_bytes(flat->bytes, total));
   
   return out;
 }

@@ -396,6 +396,9 @@ bool jit_setup_frame(jit_compile_t *c) {
   c->r_tmp = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, "tmp");
   c->r_tmp2 = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, "tmp2");
   c->r_bool = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "bool_tmp");
+  MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "str_eq_l");
+  MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "str_eq_r");
+  MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "str_eq_n");
   c->r_err_tmp = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, "err_tmp");
   mir_load_imm(c->ctx, c->jit_func, c->r_tmp2, 0);
 

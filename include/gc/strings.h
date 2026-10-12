@@ -100,6 +100,7 @@ typedef struct {
 
 bool utf8_validate_bytes(const char *str, size_t byte_len);
 size_t utf8_export_length_slow(const char *str, size_t str_len);
+size_t wtf8_join_surrogate_pairs(char *bytes, size_t len);
 
 static inline bool str_is_heap_rope(ant_value_t value) {
   return vtype(value) == kTypeString && ((vdata(value) & STR_HEAP_TAG_MASK) == STR_HEAP_TAG_ROPE);
@@ -199,6 +200,14 @@ static inline void str_flat_init_meta(ant_flat_string_t *flat, uint8_t ascii_sta
   flat->meta = ((uint64_t)ascii_state << STR_META_ASCII_SHIFT) | STR_UTF16_LEN_UNKNOWN;
 }
 
+static inline void str_flat_finish(ant_flat_string_t *flat, uint8_t ascii_state) {
+  if (ascii_state != STR_ASCII_YES) {
+    flat->len = (ant_offset_t)wtf8_join_surrogate_pairs(flat->bytes, (size_t)flat->len);
+    flat->bytes[flat->len] = '\0';
+  }
+  str_flat_init_meta(flat, ascii_state);
+}
+
 static inline void str_copy_small(char *dst, const char *src, size_t n) {
   if (n > 32) { 
     memcpy(dst, src, n);
@@ -248,7 +257,7 @@ static inline void str_flat_fill_concat(
   uint8_t ascii = str_concat_ascii_state(a_ascii, b_ascii);
   
   if (ascii == STR_ASCII_UNKNOWN) ascii = str_detect_ascii_bytes(out->bytes, na + nb);
-  str_flat_init_meta(out, ascii);
+  str_flat_finish(out, ascii);
 }
 
 static inline void str_flat_set_utf16_len(ant_flat_string_t *flat, ant_offset_t len) {

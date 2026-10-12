@@ -1011,3 +1011,34 @@ uint32_t utf16_codepoint_at(const char *str, size_t byte_len, size_t utf16_idx) 
   utf16_scan_cursor_store(&cursor);
   return 0xFFFFFFFF;
 }
+
+size_t wtf8_join_surrogate_pairs(char *bytes, size_t len) {
+  unsigned char *s = (unsigned char *)bytes;
+  size_t r = 0, w = 0;
+  
+  for (;;) {
+    unsigned char *hit = r + 6 <= len ? memchr(s + r, 0xED, len - r - 5) : NULL;
+    size_t next = hit ? (size_t)(hit - s) : len;
+    
+    if (w != r) memmove(s + w, s + r, next - r);
+    w += next - r;
+    r = next;
+    if (!hit) return w;
+    
+    bool pair = (s[r + 1] & 0xF0) == 0xA0 && s[r + 3] == 0xED && (s[r + 4] & 0xF0) == 0xB0;
+    if (!pair) {
+      s[w++] = s[r++];
+      continue;
+    }
+    
+    uint32_t hi = ((uint32_t)(s[r + 1] & 0x0F) << 6) | (s[r + 2] & 0x3F);
+    uint32_t lo = ((uint32_t)(s[r + 4] & 0x0F) << 6) | (s[r + 5] & 0x3F);
+    uint32_t cp = 0x10000 + (hi << 10) + lo;
+    
+    s[w++] = (unsigned char)(0xF0 | (cp >> 18));
+    s[w++] = (unsigned char)(0x80 | ((cp >> 12) & 0x3F));
+    s[w++] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+    s[w++] = (unsigned char)(0x80 | (cp & 0x3F));
+    r += 6;
+  }
+}
