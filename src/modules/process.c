@@ -1359,13 +1359,14 @@ static ant_value_t env_set(ant_t *js, ant_value_t target, const char *key, size_
   if (!key_str) return js_mkerr(js, "out of memory");
   
   const char *current = getenv(key_str);
-  if (
-    !current || strlen(current) != val_len || 
-    memcmp(current, val_str, val_len) != 0
-  ) setenv(key_str, val_str, 1);
+  bool changed = !current || strlen(current) != val_len || memcmp(current, val_str, val_len) != 0;
+  bool stored = !changed || setenv(key_str, val_str, 1) == 0;
   
   cstr_free(&buf);
-  return js_mkundef();
+
+  return stored 
+    ? js_mkundef() 
+    : js_mkerr_typed(js, JS_ERR_TYPE, "Invalid environment variable name");
 }
 
 static void env_del(ant_t *js, ant_value_t target, const char *key, size_t key_len) {

@@ -27,16 +27,13 @@ static constexpr int64_t JIT_HOT_COMPILE_COLD_RATIO = 3;
 static constexpr int64_t JIT_COLD_PROMOTE_COMPILE_MULTIPLE = 20;
 static constexpr int64_t JIT_COLD_PROMOTE_CHECK_EVERY = 4096;
 
-static constexpr uint32_t JIT_BASE_RETIER_LOOP_CALLS = 1000;
-static constexpr uint32_t JIT_BASE_RETIER_LEAF_CALLS = 50000;
-
 static constexpr uint32_t JIT_HOT_COMPILE_BACKEDGE_THRESHOLD = SV_JIT_OSR_THRESHOLD / 8;
 static constexpr uint8_t JIT_SNAPSHOT_RESET_LIMIT = 3;
 
 static constexpr int JIT_BASE_OPT_LEVEL = 1;
 static constexpr int JIT_HOT_OPT_LEVEL = 3;
 static constexpr int JIT_BIG_HOT_OPT_LEVEL = 1;
-static constexpr int JIT_BIG_HOT_INSN_LIMIT = 3000;
+static constexpr int JIT_BIG_HOT_INSN_LIMIT = 2000;
 
 typedef struct {
   MIR_context_t ctx;

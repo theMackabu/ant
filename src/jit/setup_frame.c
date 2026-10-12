@@ -38,7 +38,7 @@ bool jit_numeric_param_use(sv_func_t *func, uint8_t *ip, uint8_t *end) {
   }
 }
 
-void jit_emit_entry_counter(jit_compile_t *c, const char *site, MIR_insn_t before, uint32_t threshold) {
+void jit_emit_entry_counter(jit_compile_t *c, const char *site, MIR_insn_t before) {
   char fn_name[32], calls_name[32], hot_name[32], res_name[32];
   snprintf(fn_name, sizeof fn_name, "tier_fn_%s", site);
   snprintf(calls_name, sizeof calls_name, "tier_calls_%s", site);
@@ -60,7 +60,7 @@ void jit_emit_entry_counter(jit_compile_t *c, const char *site, MIR_insn_t befor
                  MIR_new_reg_op(c->ctx, r_calls), MIR_new_int_op(c->ctx, 1)),
     MIR_new_insn(c->ctx, MIR_MOV, call_count, MIR_new_reg_op(c->ctx, r_calls)),
     MIR_new_insn(c->ctx, MIR_UBLE, MIR_new_label_op(c->ctx, body),
-                 MIR_new_reg_op(c->ctx, r_calls), MIR_new_int_op(c->ctx, threshold)),
+                 MIR_new_reg_op(c->ctx, r_calls), MIR_new_int_op(c->ctx, SV_JIT_THRESHOLD)),
     MIR_new_call_insn(c->ctx, 6,
                       MIR_new_ref_op(c->ctx, c->tier_up_proto),
                       MIR_new_ref_op(c->ctx, c->imp_tier_up),
@@ -91,7 +91,7 @@ void jit_emit_entry_counter(jit_compile_t *c, const char *site, MIR_insn_t befor
 }
 
 static void jit_emit_cold_entry_counter(jit_compile_t *c, const char *site) {
-  if (c->cold_tier) jit_emit_entry_counter(c, site, NULL, SV_JIT_THRESHOLD);
+  if (c->cold_tier) jit_emit_entry_counter(c, site, NULL);
 }
 
 typedef struct {

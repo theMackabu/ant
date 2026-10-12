@@ -123,8 +123,10 @@ static inline ant_value_t sv_construct_prototype_from_object(
 static inline bool sv_construct_prototype_data(
   ant_t *js, ant_object_t *ptr, sv_func_t *func, ant_value_t *out
 ) {
-  sv_func_sidecar_t *sidecar = func ? sv_func_sidecar(func) : NULL;
-  if (!sidecar || !ptr || ptr->flags.is_exotic || !ptr->shape) return false;
+  if (!func || !ptr || ptr->flags.is_exotic || !ptr->shape) return false;
+  
+  sv_func_sidecar_t *sidecar = sv_func_ensure_sidecar(func);
+  if (!sidecar) return false;
 
   if (ptr->shape != sidecar->ctor_proto_shape) {
     int32_t found = ant_shape_lookup_interned(ptr->shape, js->intern.prototype);

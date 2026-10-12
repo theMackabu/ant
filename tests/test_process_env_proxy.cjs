@@ -46,6 +46,11 @@ try { process.env.ANT_ENV_PROXY_BAD = { toString() { throw new Error('bad-tostri
 catch (e) { setErr = e; }
 assert(setErr && setErr.message === 'bad-tostring', 'a failing set reports the original error');
 
+let badNameErr;
+try { process.env['ANT_ENV=BAD'] = 'x'; }
+catch (e) { badNameErr = e; }
+assert(badNameErr instanceof TypeError, 'an invalid variable name throws');
+
 Object.defineProperty(process.env, 'ANT_ENV_PROXY_DEF', { value: 5 });
 assert(process.env.ANT_ENV_PROXY_DEF === '5', 'defineProperty stores the value in the environment');
 let accessorErr;

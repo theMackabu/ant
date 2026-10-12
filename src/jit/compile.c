@@ -197,21 +197,6 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 }
 
 _Thread_local sv_func_t *jit_compile_owner;
-
-static uint32_t jit_base_retier_calls(jit_compile_t *c) {
-  int insns = 0;
-  for (
-    MIR_insn_t insn = DLIST_HEAD(MIR_insn_t, c->jit_func->u.func->insns); 
-    insn; insn = DLIST_NEXT(MIR_insn_t, insn)
-  ) if (++insns > JIT_BIG_HOT_INSN_LIMIT) return 0;
-
-  int (*edges)[2] = NULL;
-  int loops = jit_back_edges(c->func, &edges);
-  free(edges);
-
-  return loops > 0 ? JIT_BASE_RETIER_LOOP_CALLS : JIT_BASE_RETIER_LEAF_CALLS;
-}
-
 static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure, sv_jit_tier_t tier);
 
 sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure, sv_jit_tier_t tier) {
@@ -584,17 +569,8 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   }
 
   bool hot_ctx = c->ctx == c->jc->ctx_hot;
-  bool can_retier = !c->cold_tier && c->call_entry;
-  
-  uint32_t base_retier_calls = can_retier && !hot_ctx ? jit_base_retier_calls(c) : 0;
-  
-  bool base_retier = base_retier_calls != 0;
-  bool retier = can_retier && (c->skipped_inline_paths || base_retier);
-  
-  if (retier) jit_emit_entry_counter(
-    c, "call", c->call_entry,
-    c->skipped_inline_paths ? SV_JIT_THRESHOLD : base_retier_calls
-  );
+  bool retier = c->skipped_inline_paths && !c->cold_tier && c->call_entry;
+  if (retier) jit_emit_entry_counter(c, "call", c->call_entry);
 
   MIR_insn_t body_tail = DLIST_TAIL(MIR_insn_t, c->jit_func->u.func->insns);
   if (c->stale_site_count) jit_emit_stale_exits(c);
@@ -690,8 +666,6 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   c->func->jit_compiled_tfb_ver = c->func->tfb_version;
   c->func->jit_code_cold = tier == SV_JIT_TIER_COLD;
   c->func->jit_code_retier = retier;
-  
-  if (base_retier && !c->skipped_inline_paths) c->func->call_count = 0;
   
   if (tier == SV_JIT_TIER_COLD && c->cold_ns_item && c->cold_ns_item->addr) {
     ((int64_t *)c->cold_ns_item->addr)[1] = JIT_COLD_PROMOTE_COMPILE_MULTIPLE * JIT_HOT_COMPILE_COLD_RATIO * compile_ns;
