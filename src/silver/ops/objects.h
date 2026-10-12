@@ -307,12 +307,15 @@ static inline ant_value_t sv_op_define_class(
   GC_ROOT_PIN(js, ctor);
   GC_ROOT_PIN(js, proto);
 
-  if (vtype(ctor) == kTypeUndefined) {
+  bool default_ctor = vtype(ctor) == kTypeUndefined;
+  if (default_ctor) {
     ant_value_t ctor_obj = mkobj(js, 0);
+    
     ctor = js_obj_to_func_ex(js, ctor_obj, SV_CALL_IS_DEFAULT_CTOR);
     ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
-    if (vtype(func_proto) == kTypeFunction)
-      js_set_proto_init(ctor_obj, func_proto);
+    
+    if (vtype(func_proto) == kTypeFunction) js_set_proto_init(ctor_obj, func_proto);
+    mkprop_interned_exact(js, ctor_obj, js->intern.length, tov(0), ANT_PROP_ATTR_CONFIGURABLE);
   }
 
   proto = mkobj(js, 0);
@@ -372,10 +375,9 @@ static inline ant_value_t sv_op_define_class(
   
   defhidden(js, proto, "constructor", 11, ctor);
   ant_value_t ctor_obj = (vtype(ctor) == kTypeFunction) ? js_func_obj(ctor) : ctor;
-  js_mkprop_fast(js, ctor_obj, "prototype", 9, proto);
   
-  if (has_name) 
-    js_set_function_name(js, ctor, a ? a->str : "", a ? a->len : 0);
+  if (has_name || default_ctor) js_set_function_name(js, ctor, a ? a->str : "", a ? a->len : 0);
+  mkprop_exact_attrs(js, ctor_obj, ANT_STRING("prototype"), proto, 0);
 
   vm->stack[vm->sp - 2] = ctor;
   vm->stack[vm->sp - 1] = proto;
