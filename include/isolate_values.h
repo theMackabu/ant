@@ -165,6 +165,9 @@ ANT_MUTABLE_ROOT_ARR(crypto_usage_strings, 8)
 ANT_MUTABLE_ROOT(wasm_pending_import_throw)
 ANT_MUTABLE_ROOT(regexp_static_subject)
 ANT_MUTABLE_ROOT_ARR(regexp_static_values, 11)
+ANT_MUTABLE_ROOT_ARR(object_tag_strings, 13)
+ANT_MUTABLE_ROOT_ARR(object_tag_cache_keys, 8)
+ANT_MUTABLE_ROOT_ARR(object_tag_cache_values, 8)
 #undef ANT_MUTABLE_ROOT
 #undef ANT_MUTABLE_ROOT_ARR
 #endif

@@ -55,6 +55,17 @@ for (const kind of [GeneratorFunction, AsyncGeneratorFunction, AsyncFunctionProt
   assert.deepStrictEqual([keys(C), attrs(C, 'length'), attrs(C, 'name'), attrs(C, 'prototype'), attrs(kind, 'constructor'), C.prototype], [['length', 'name', 'prototype'], [false, false, true], [false, false, true], [false, false, false], [false, false, true], kind], C.name);
 }
 
+const ts = v => Object.prototype.toString.call(v);
+assert.deepStrictEqual(
+  [new String('a'), new Number(1), new Boolean(false), Object(1n), new Date(0), new Proxy([], {}), new Proxy(() => 1, {}), new Int8Array(1), Buffer.alloc(1), Uint8Array.prototype, [].values(), { get [Symbol.toStringTag]() { return 'G'; } }].map(ts),
+  ['[object String]', '[object Number]', '[object Boolean]', '[object BigInt]', '[object Date]', '[object Array]', '[object Function]', '[object Int8Array]', '[object Uint8Array]', '[object Object]', '[object Array Iterator]', '[object G]'],
+  'builtin tags and accessor tags'
+);
+assert.throws(() => ts({ get [Symbol.toStringTag]() { throw new RangeError('t'); } }), RangeError);
+const revocable = Proxy.revocable([], {}); revocable.revoke();
+assert.throws(() => ts(revocable.proxy), TypeError);
+assert.deepStrictEqual([tag(BigInt.prototype), Object.hasOwn(Uint8Array.prototype, Symbol.toStringTag), Object.hasOwn(Buffer.prototype, Symbol.toStringTag)], [['BigInt', false, false, true], false, false]);
+
 const AsyncIteratorPrototype = Object.getPrototypeOf(AsyncGeneratorPrototype);
 const asyncDispose = AsyncIteratorPrototype[Symbol.asyncDispose];
 assert.deepStrictEqual([typeof asyncDispose, asyncDispose.name, asyncDispose.length, Object.hasOwn(AsyncGeneratorPrototype, Symbol.asyncDispose)], ['function', '[Symbol.asyncDispose]', 0, false], 'asyncDispose lives on %AsyncIteratorPrototype%');

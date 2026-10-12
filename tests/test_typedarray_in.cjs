@@ -117,5 +117,20 @@ for (const C of [Int16Array, Uint8Array, Float64Array]) {
 }
 for (const C of [ArrayBuffer, SharedArrayBuffer, DataView, Object.getPrototypeOf(Uint8Array)]) assert.deepStrictEqual(attrs(C, 'prototype'), [false, false, false], C.name);
 assert.deepStrictEqual(attrs(Buffer, 'prototype'), [true, false, false]);
+for (const C of [Int8Array, Float16Array, BigUint64Array]) {
+  assert.deepStrictEqual([C.length, attrs(C, 'name'), attrs(C, 'length'), Reflect.ownKeys(C).slice(0, 4), Reflect.ownKeys(C.prototype), attrs(C.prototype, 'constructor')],
+    [3, [false, false, true], [false, false, true], ['length', 'name', 'prototype', 'BYTES_PER_ELEMENT'], ['constructor', 'BYTES_PER_ELEMENT'], [true, false, true]], C.name);
+}
+const TypedArray = Object.getPrototypeOf(Int8Array);
+assert.deepStrictEqual([TypedArray.length, attrs(TypedArray, 'name'), Reflect.ownKeys(TypedArray).slice(0, 3)], [0, [false, false, true], ['length', 'name', 'prototype']]);
+assert.throws(() => Uint8Array(2), TypeError);
+assert.strictEqual(new (class extends Uint16Array {})(2).length, 2);
+assert.deepStrictEqual([Int8Array.from, Int8Array.of, Object.hasOwn(Int8Array, 'from'), Object.hasOwn(Int8Array, Symbol.species)], [TypedArray.from, TypedArray.of, false, false], 'from, of and species are inherited from %TypedArray%');
+class Sub16 extends Uint16Array {}
+assert.deepStrictEqual([Sub16.from([1, 70000]).constructor, [...Sub16.from([1, 70000])], Sub16.of(3).constructor, Float32Array.of(1.5)[0], BigInt64Array.from([1n])[0]], [Sub16, [1, 4464], Sub16, 1.5, 1n], 'from and of build instances of this');
+for (const bad of [TypedArray, {}, function () {}, Promise.resolve]) {
+  assert.throws(() => TypedArray.from.call(bad, [1]), TypeError);
+  assert.throws(() => TypedArray.of.call(bad, 1), TypeError);
+}
 
 console.log('typed array in OK');

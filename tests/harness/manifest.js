@@ -41,6 +41,7 @@ export function targets() {
     'test_bigint.js',
     'test_buffer_base64url.cjs',
     'test_buffer_fill_and_encoding_errors.cjs',
+    'test_buffer_numeric_rw.cjs',
     'test_buffer_search_and_write_encodings.cjs',
     'test_buffer_statics.cjs',
     'test_buffer_wtf8_utf8.cjs',

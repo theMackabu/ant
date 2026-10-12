@@ -1797,8 +1797,10 @@ void init_bigint_module(ant_t *js) {
   ant_value_t bigint_proto = js_mkobj(js);
   js->sym.bigint_proto = bigint_proto;
   js_set_proto_init(bigint_proto, object_proto);
+  
   defmethod(js, bigint_proto, "toString", 8, js_mkfun(builtin_bigint_toString));
   defmethod(js, bigint_proto, "valueOf", 7, js_mkfun(builtin_bigint_valueOf));
+  js_set_tostringtag(js, bigint_proto, ANT_STRING("BigInt"));
 
   ant_value_t bigint_ctor_obj = mkobj(js, 0);
   js_set_proto_init(bigint_ctor_obj, function_proto);
