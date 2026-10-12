@@ -313,7 +313,9 @@ static ant_value_t reflect_prevent_extensions(ant_params_t) {
   
   ant_value_t target = args[0];
   int t = vtype(target);
+  
   if (t != kTypeObject && t != kTypeFunction) return js_false;
+  if (is_proxy(js_as_obj(target))) return js_proxy_prevent_extensions(js, js_as_obj(target));
 
   ant_object_t *obj = js_obj_ptr(js_as_obj(target));
   if (!obj) return js_false;

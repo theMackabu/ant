@@ -173,40 +173,16 @@ static inline void sv_op_append(sv_vm_t *vm, ant_t *js) {
 }
 
 static inline ant_value_t sv_op_copy_data_props(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
-  if (vm->sp < 2) return js_mkundef();
-  ant_value_t src = vm->stack[vm->sp - 1];
-  ant_value_t dst = vm->stack[vm->sp - 2];
+  uint16_t excluded_count = sv_get_u16(ip + 1);
+  ant_value_t *excluded = &vm->stack[vm->sp - excluded_count];
   
-  if (!is_object_type(src) || !is_object_type(dst)) return js_mkundef();
-  if (is_proxy(js_as_obj(src))) return js_copy_proxy_own_props(js, dst, src);
+  ant_value_t src = vm->stack[vm->sp - excluded_count - 1];
+  ant_value_t dst = vm->stack[vm->sp - excluded_count - 2];
   
-  ant_object_t *source_ptr = js_obj_ptr(js_as_obj(src));
-  ant_iter_t iter = js_prop_iter_begin(js, src);
+  ant_value_t result = js_copy_data_props(js, dst, src, excluded, excluded_count);
+  vm->sp -= excluded_count;
   
-  ant_iter_key_t key = {0};
-  ant_value_t val = js_mkundef();
-  ant_value_t result = js_mkundef();
-  
-  GC_ROOT_SAVE(root_mark, js);
-  GC_ROOT_PIN(js, val);
-
-  while (js_prop_iter_next_key(&iter, &key, NULL)) {
-    if (!js_is_own_enumerable_prop(js, src, source_ptr, &key)) continue;
-    if (key.is_symbol) {
-      ant_value_t prop_key = mkval(kTypeSymbol, key.sym_off);
-      val = js_get_sym(js, src, prop_key);
-      result = is_err(val) ? val : js_setprop(js, dst, prop_key, val);
-    } else {
-      val = js_get(js, src, key.str);
-      result = is_err(val) ? val : js_setprop(js, dst, js_mkstr(js, key.str, key.key_len), val);
-    }
-    if (is_err(result)) break;
-  }
-
-  GC_ROOT_RESTORE(js, root_mark);
-  js_prop_iter_end(&iter);
-  
-  return is_err(result) ? result : js_mkundef();
+  return result;
 }
 
 static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {

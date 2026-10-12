@@ -578,7 +578,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   if (c->needs_promote) jit_emit_resume_tramp(c, &c->promote_ctx, c->imp_promote_resume, "promote_res");
   jit_call_tagging = NULL;
 
-  if (c->ctx == c->jc->ctx_hot) jit_unroll_numeric_loops(c);
+  if (hot_ctx) jit_unroll_numeric_loops(c);
   
   jit_sink_cold_blocks(c, body_tail);
   MIR_finish_func(c->ctx);
@@ -586,6 +586,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   
   if (sv_dump_jit_unlikely) MIR_output_module(c->ctx, stderr, c->mod);
 
+  bool vstack_overflow = c->vs.overflow;
   vstack_free(&c->vs);
   free(c->local_regs);
   free(c->integer_locals);
@@ -614,7 +615,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
     if (sv_jit_warn_unlikely) fprintf(
       stderr, "jit: compile-failed func=%s code_len=%d%s\n",
       c->func->debug->name ? c->func->debug->name : "<anonymous>",
-      c->func->code_len, c->vs.overflow ? " reason=vstack-overflow" : ""
+      c->func->code_len, vstack_overflow ? " reason=vstack-overflow" : ""
     );
     
     MIR_remove_module(c->ctx, c->mod);

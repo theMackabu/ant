@@ -19,9 +19,10 @@ typedef struct {
 } ant_exotic_ops_t;
 
 typedef struct {
+  const char *name;
   ant_value_t (*get)(ant_t *, ant_value_t target, const char *key, size_t key_len);
   ant_value_t (*set)(ant_t *, ant_value_t target, const char *key, size_t key_len, ant_value_t value);
-  void (*del)(ant_t *, ant_value_t target, const char *key, size_t key_len);
+  ant_value_t (*del)(ant_t *, ant_value_t target, const char *key, size_t key_len);
   ant_value_t (*keys)(ant_t *, ant_value_t target);
 } ant_host_proxy_ops_t;
 
@@ -252,9 +253,8 @@ static_assert(
 
 static_assert(
   offsetof(ant_object_t, u.promise.state) == offsetof(ant_object_t, u.array.len) &&
-  offsetof(
-    ant_object_t, u.promise.state) + sizeof(ant_promise_state_t *) == 
-    offsetof(ant_object_t, u.array.cap) + sizeof(uint32_t),
+  offsetof(ant_object_t, u.promise.state) + sizeof(ant_promise_state_t *) ==
+  offsetof(ant_object_t, u.array.cap) + sizeof(uint32_t),
   "obj_alloc clears the promise state pointer through u.array.len and u.array.cap"
 );
 

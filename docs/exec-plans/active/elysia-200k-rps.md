@@ -457,6 +457,11 @@ the override/custom-method tests and benchmark.
 
 ## Phase 3: Compact the Hot Object Header
 
+> Superseded by PR #136 (2026-10-11): `ant_object_t` is 136 bytes without a
+> sidecar move. Promise state lives in the value union and `exotic_keys` is
+> gone (`process.env` became a host proxy); `exotic_ops` stays in the object.
+> The analysis below describes the PR #44 layout it replaced.
+
 PR #44 moves `exotic_ops` and `exotic_keys` from every `ant_object_t` into the
 optional sidecar. On the current Darwin ARM64 ABI the observed sizes are:
 

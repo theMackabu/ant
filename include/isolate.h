@@ -299,7 +299,7 @@ struct ant_isolate_t {
   } gc;
 
   ant_object_t *objects_old;
-  ant_object_t *pending_promises;
+  ant_object_t *pending_promises_old;
   
   ant_object_t *pending_promises_young;
   ant_object_t *pending_promises_young_tail;

@@ -223,9 +223,10 @@ static ant_value_t js_stats_fn(ant_params_t) {
       obj_bytes += sizeof(ant_object_t);
       
       uint32_t inobj_limit = ant_object_inobj_limit(obj);
+      
       if (obj->overflow_prop && obj->prop_count > inobj_limit)
         overflow_bytes += (obj->prop_count - inobj_limit) * sizeof(ant_value_t);
-      
+        
       uint8_t extra_count = 0;
       ant_extra_slot_t *slots = ant_object_extra_slots(obj, &extra_count);
       

@@ -122,10 +122,9 @@ ant_value_t js_get_symbol(ant_t *, ant_value_t obj, const char *key);
 ant_value_t js_get_sym_with_receiver(ant_t *, ant_value_t obj, ant_value_t sym, ant_value_t receiver);
 
 ant_value_t js_mkobj(ant_t *);
-ant_value_t js_mkobj_with_inobj_limit(ant_t *, uint8_t inobj_limit);
-
 ant_value_t js_newobj(ant_t *);
 ant_value_t js_mkarr(ant_t *);
+
 ant_value_t js_mkstr(ant_t *, const void *, size_t);
 ant_value_t js_mkstr_permanent(ant_t *, const void *, size_t);
 ant_value_t js_mkbigint(ant_t *, const char *digits, size_t len, bool negative);

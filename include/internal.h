@@ -270,6 +270,7 @@ ant_value_t js_get_index_fast(ant_t *js, ant_value_t obj, ant_value_t key);
 ant_value_t js_group_by(ant_t *js, ant_value_t items, ant_value_t callback, js_group_add_fn add, void *ctx);
 ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode);
 ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
+ant_value_t js_proxy_prevent_extensions(ant_t *js, ant_value_t proxy);
 ant_value_t js_proxy_set(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t value);
 ant_value_t js_proxy_set_sym(ant_t *js, ant_value_t proxy, ant_value_t sym, ant_value_t value);
 ant_value_t js_set_reporting(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value);
@@ -319,7 +320,6 @@ ant_prop_loc_t lkp_sym(ant_value_t obj, ant_offset_t sym_off);
 ant_prop_loc_t lkp_sym_proto(ant_t *js, ant_value_t obj, ant_offset_t sym_off);
 
 ant_value_t mkobj(ant_t *js, ant_offset_t parent);
-ant_value_t js_mkobj_with_inobj_limit(ant_t *js, uint8_t inobj_limit);
 ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint32_t count);
 ant_value_t js_mkarr_dense_uninit(ant_t *js, uint32_t count, ant_value_t **out_data);
 ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src);
@@ -390,9 +390,8 @@ bool js_string_intrinsic_builtin_matches(ant_value_t func, ant_string_intrinsic_
 bool js_deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict);
 bool js_is_prototype_of(ant_t *js, ant_value_t proto_obj, ant_value_t obj);
 
-ant_value_t js_proxy_target(ant_value_t obj);
 ant_value_t js_mkproxy_host(ant_t *js, ant_value_t target, const ant_host_proxy_ops_t *ops);
-ant_value_t js_copy_proxy_own_props(ant_t *js, ant_value_t dst, ant_value_t src);
+ant_value_t js_copy_data_props(ant_t *js, ant_value_t dst, ant_value_t src, const ant_value_t *excluded, int excluded_count);
 ant_value_t js_primitive_prototype(ant_t *js, uint8_t type);
 ant_value_t js_normalize_sloppy_this(ant_t *js, ant_value_t value);
 ant_value_t js_resolve_bound_target(ant_value_t value);

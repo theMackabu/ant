@@ -46,17 +46,39 @@ try { process.env.ANT_ENV_PROXY_BAD = { toString() { throw new Error('bad-tostri
 catch (e) { setErr = e; }
 assert(setErr && setErr.message === 'bad-tostring', 'a failing set reports the original error');
 
-let badNameErr;
-try { process.env['ANT_ENV=BAD'] = 'x'; }
-catch (e) { badNameErr = e; }
-assert(badNameErr instanceof TypeError, 'an invalid variable name throws');
+function throws(fn) {
+  try { fn(); } catch (e) { return e; }
+  return null;
+}
 
-Object.defineProperty(process.env, 'ANT_ENV_PROXY_DEF', { value: 5 });
-assert(process.env.ANT_ENV_PROXY_DEF === '5', 'defineProperty stores the value in the environment');
-let accessorErr;
-try { Object.defineProperty(process.env, 'ANT_ENV_PROXY_ACC', { get() { return 1; } }); }
-catch (e) { accessorErr = e; }
-assert(accessorErr instanceof TypeError, 'accessors cannot be defined on env vars');
+process.env['ANT_ENV=BAD'] = 'x';
+assert(!('ANT_ENV=BAD' in process.env), 'a sloppy write to an invalid name is ignored');
+assert(Reflect.set(process.env, '', 'x') === false, 'Reflect.set reports an invalid name as false');
+assert(throws(() => { 'use strict'; process.env['ANT_ENV=BAD'] = 'x'; }) instanceof TypeError, 'a strict write to an invalid name throws');
+
+process.env.ANT_ENV_PROXY_EQ = '1';
+assert(Reflect.set(process.env, 'ANT_ENV_PROXY_EQ=Q', '2') === false, "a name with '=' is refused even when its prefix exists");
+assert(process.env.ANT_ENV_PROXY_EQ === '1', "a refused write leaves the prefix variable alone");
+delete process.env.ANT_ENV_PROXY_EQ;
+
+const inheritsEnv = Object.create(process.env);
+inheritsEnv.ANT_ENV_PROXY_RECV = 'r';
+assert(Object.hasOwn(inheritsEnv, 'ANT_ENV_PROXY_RECV'), 'a write through the prototype chain lands on the receiver');
+assert(process.env.ANT_ENV_PROXY_RECV === undefined, 'a write through the prototype chain leaves the environment alone');
+
+const full = { value: 5, writable: true, enumerable: true, configurable: true };
+Object.defineProperty(process.env, 'ANT_ENV_PROXY_DEF', full);
+assert(process.env.ANT_ENV_PROXY_DEF === '5', 'a full data descriptor stores the value in the environment');
+assert(throws(() => Object.defineProperty(process.env, 'ANT_ENV_PROXY_DEF', { value: 'x' })) instanceof TypeError, 'a partial descriptor is rejected');
+assert(throws(() => Object.defineProperty(process.env, 'ANT_ENV_PROXY_ACC', { get() { return 1; } })) instanceof TypeError, 'accessors cannot be defined on env vars');
+assert(process.env.ANT_ENV_PROXY_DEF === '5', 'a rejected descriptor changes nothing');
+
+const envSym = Symbol('env');
+process.env[envSym] = 1;
+assert(Object.getOwnPropertySymbols(process.env).includes(envSym), 'symbol keys on process.env are listed');
+assert(Object.getOwnPropertyNames(process.env).includes('toObject'), 'own methods of process.env are listed');
+assert(!Object.keys(process.env).includes('toObject'), 'own methods of process.env are not enumerable');
+delete process.env[envSym];
 
 delete process.env.ANT_ENV_PROXY_CHILD;
 delete process.env.ANT_ENV_PROXY_DEF;
@@ -76,11 +98,6 @@ const withSym = new Proxy({ x: 1, [sym]: 2 }, {});
 const symCopy = { ...withSym };
 assert(symCopy.x === 1 && symCopy[sym] === 2, 'object spread copies symbol keys from proxies');
 
-function throws(fn) {
-  try { fn(); } catch (e) { return e; }
-  return null;
-}
-
 const throwing = new Proxy({}, {
   ownKeys: () => ['a'],
   getOwnPropertyDescriptor: () => ({ value: 0, enumerable: true, configurable: true }),
@@ -96,9 +113,44 @@ assert(throws(() => ({ ...revocable })) instanceof TypeError, 'spreading a revok
 const getterThrows = { get a() { throw new Error('boom-accessor'); } };
 assert(throws(() => ({ ...getterThrows }))?.message === 'boom-accessor', 'spread rethrows getter errors');
 
-Object.freeze(process.env);
-process.env.ANT_ENV_PROXY_AFTER_FREEZE = 'x';
-assert(process.env.ANT_ENV_PROXY_AFTER_FREEZE === 'x', 'freezing process.env leaves the environment writable');
-delete process.env.ANT_ENV_PROXY_AFTER_FREEZE;
+const log = [];
+const traced = new Proxy({ a: 1, b: 2, c: 3 }, {
+  ownKeys: (t) => { log.push('ownKeys'); return Reflect.ownKeys(t); },
+  getOwnPropertyDescriptor: (t, k) => { log.push('desc:' + k); return Reflect.getOwnPropertyDescriptor(t, k); },
+  get: (t, k) => { log.push('get:' + String(k)); return t[k]; },
+});
+const { a: tracedA, ...tracedRest } = traced;
+assert(tracedA === 1 && tracedRest.b === 2 && tracedRest.c === 3 && !('a' in tracedRest), 'rest leaves out named keys');
+assert(log.join() === 'get:a,ownKeys,desc:b,get:b,desc:c,get:c', 'rest skips excluded keys and reads each key before the next: ' + log.join());
+
+let keyCalls = 0;
+const key = () => { keyCalls++; return 'b'; };
+const { [key()]: computedB, ...afterComputed } = { a: 1, b: 2 };
+assert(keyCalls === 1 && computedB === 2 && !('b' in afterComputed) && afterComputed.a === 1, 'a computed rest key is evaluated once');
+
+let excludedGetterCalls = 0;
+const { x: namedX, ...noX } = { get x() { excludedGetterCalls++; return 1; }, y: 2 };
+assert(excludedGetterCalls === 1 && noX.y === 2 && !('x' in noX), 'an excluded getter runs only for its own binding');
+
+const withProtoKey = JSON.parse('{"__proto__": {"polluted": true}, "z": 1}');
+const protoCopy = { ...withProtoKey };
+assert(Object.getPrototypeOf(protoCopy) === Object.prototype && Object.hasOwn(protoCopy, '__proto__'), 'spread defines __proto__ as an own key');
+
+assert(throws(() => Object.freeze(process.env)) instanceof TypeError, 'freezing process.env throws');
+assert(throws(() => Object.preventExtensions(process.env)) instanceof TypeError, 'preventExtensions on process.env throws');
+assert(Reflect.preventExtensions(process.env) === false, 'Reflect.preventExtensions on process.env returns false');
+assert(Object.isExtensible(process.env) && !Object.isFrozen(process.env), 'process.env stays extensible');
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const dotenvDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ant-dotenv-'));
+fs.writeFileSync(path.join(dotenvDir, '.env'), 'ANT_DOTENV_BOTH=file\nANT_DOTENV_FILE=file\n');
+const dotenvChild = cp.spawnSync(process.execPath, ['-e', 'console.log(process.env.ANT_DOTENV_BOTH + "|" + process.env.ANT_DOTENV_FILE)'], {
+  cwd: dotenvDir,
+  env: { ...process.env, ANT_DOTENV_BOTH: 'env' },
+});
+fs.rmSync(dotenvDir, { recursive: true, force: true });
+assert(String(dotenvChild.stdout).trim() === 'env|file', '.env fills gaps but the real environment wins: ' + String(dotenvChild.stdout).trim());
 
 console.log('process.env proxy OK');

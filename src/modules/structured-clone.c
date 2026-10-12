@@ -302,7 +302,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
   sc_add(seen, val, clone);
 
   if (js_proxy_is_host(val)) {
-    ant_value_t copied = js_copy_proxy_own_props(js, clone, val);
+    ant_value_t copied = js_copy_data_props(js, clone, val, NULL, 0);
     return is_err(copied) ? copied : clone;
   }
 

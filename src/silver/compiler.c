@@ -5115,7 +5115,7 @@ void compile_object(sv_compiler_t *c, sv_ast_t *node) {
     if (prop->type == N_SPREAD) {
       compile_expr(c, prop->right);
       emit_op(c, OP_COPY_DATA_PROPS);
-      emit(c, 0);
+      emit_u16(c, 0);
       emit_op(c, OP_POP);
       continue;
     }
@@ -5208,27 +5208,31 @@ typedef enum {
   DESTRUCTURE_BIND   = 1,
 } sv_destructure_mode_t;
 
-static void emit_build_object_rest(sv_compiler_t *c) {
+static void emit_build_object_rest(sv_compiler_t *c, sv_ast_t *pat, int rest_idx, const int *key_locals) {
   emit_op(c, OP_DUP);
   emit_op(c, OP_OBJECT);
   emit_op(c, OP_SWAP);
-  emit_op(c, OP_COPY_DATA_PROPS);
-  emit(c, 0);
-  emit_op(c, OP_POP);
-}
-
-static void emit_delete_rest_key(sv_compiler_t *c, sv_ast_t *key) {
-  emit_op(c, OP_DUP);
-  if (key->type == N_IDENT) {
-    emit_constant(c, sv_const_str(c, key->str, key->len));
-  } else if (key->type == N_STRING) {
-    emit_constant(c, ast_string_const(c, key));
-  } else if (key->type == N_NUMBER) {
-    emit_number(c, key->num);
-  } else {
-    compile_expr(c, key);
+  
+  uint16_t excluded = 0;
+  for (int j = 0; j < rest_idx; j++) {
+    sv_ast_t *prev = pat->args.items[j];
+    if (!prev || prev->type != N_PROPERTY || !prev->left) continue;
+    
+    sv_ast_t *key = prev->left;
+    if (prev->flags & FN_COMPUTED) emit_get_local(c, key_locals[j]);
+    else if (key->type == N_IDENT) emit_constant(c, sv_const_str(c, key->str, key->len));
+    else if (key->type == N_STRING) emit_constant(c, ast_string_const(c, key));
+    
+    else {
+      compile_expr(c, key);
+      emit_op(c, OP_TO_PROPKEY);
+    }
+    
+    excluded++;
   }
-  emit_op(c, OP_DELETE);
+  
+  emit_op(c, OP_COPY_DATA_PROPS);
+  emit_u16(c, excluded);
   emit_op(c, OP_POP);
 }
 
@@ -5351,17 +5355,16 @@ static void compile_destructure_pattern(
     
     return;
   } else if (pat->type == N_OBJECT_PAT || pat->type == N_OBJECT) {
+    sv_ast_t *last = pat->args.count ? pat->args.items[pat->args.count - 1] : NULL;
+    bool has_rest = last && (last->type == N_REST || last->type == N_SPREAD);
+    int key_locals[pat->args.count ? pat->args.count : 1];
+    
     for (int i = 0; i < pat->args.count; i++) {
       sv_ast_t *prop = pat->args.items[i];
       if (!prop) continue;
 
       if (prop->type == N_REST || prop->type == N_SPREAD) {
-        emit_build_object_rest(c);
-        for (int j = 0; j < i; j++) {
-          sv_ast_t *prev = pat->args.items[j];
-          if (!prev || prev->type != N_PROPERTY || !prev->left) continue;
-          emit_delete_rest_key(c, prev->left);
-        }
+        emit_build_object_rest(c, pat, i, key_locals);
         compile_destructure_store(c, prop->right, mode, kind);
         continue;
       }
@@ -5379,10 +5382,15 @@ static void compile_destructure_pattern(
       emit_op(c, OP_DUP);
       if ((prop->flags & FN_COMPUTED)) {
         compile_expr(c, key);
+        if (has_rest) {
+          key_locals[i] = add_local(c, "", 0, false, c->scope_depth);
+          emit_op(c, OP_TO_PROPKEY);
+          emit_op(c, OP_DUP);
+          emit_put_local(c, key_locals[i]);
+        }
         emit_op(c, OP_GET_ELEM);
-      } else if (key->type == N_IDENT) {
-        emit_atom_op(c, OP_GET_FIELD, key->str, key->len);
-      } else {
+      } else if (key->type == N_IDENT) emit_atom_op(c, OP_GET_FIELD, key->str, key->len);
+      else {
         compile_expr(c, key);
         emit_op(c, OP_GET_ELEM);
       }

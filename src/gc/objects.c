@@ -99,7 +99,7 @@ static void gc_obj_epoch_wrapped(ant_t *js) {
     if (o->mark_epoch != ANT_GC_DEAD) o->mark_epoch = 0;
 }
 
-static inline ant_promise_state_t *gc_pending_pd(ant_object_t *obj) {
+static inline ant_promise_state_t *gc_promise_state_unchecked(ant_object_t *obj) {
   return obj->u.promise.state;
 }
 
@@ -109,13 +109,13 @@ void gc_root_pending_promise(ant_t *js, ant_object_t *obj) {
 
   pd->gc_pending_rooted = true;
   bool young = obj->flags.generation == 0;
-  ant_object_t **list = young ? &js->pending_promises_young : &js->pending_promises;
+  ant_object_t **list = young ? &js->pending_promises_young : &js->pending_promises_old;
   
   if (young && !*list) js->pending_promises_young_tail = obj;
   pd->gc_pending_prev = NULL;
   pd->gc_pending_next = *list;
   
-  if (*list) gc_pending_pd(*list)->gc_pending_prev = obj;
+  if (*list) gc_promise_state_unchecked(*list)->gc_pending_prev = obj;
   *list = obj;
 }
 
@@ -124,10 +124,10 @@ static void gc_promote_pending_promises(ant_t *js) {
   if (!young) return;
   
   ant_object_t *tail = js->pending_promises_young_tail;
-  gc_pending_pd(tail)->gc_pending_next = js->pending_promises;
-  if (js->pending_promises) gc_pending_pd(js->pending_promises)->gc_pending_prev = tail;
+  gc_promise_state_unchecked(tail)->gc_pending_next = js->pending_promises_old;
+  if (js->pending_promises_old) gc_promise_state_unchecked(js->pending_promises_old)->gc_pending_prev = tail;
   
-  js->pending_promises = young;
+  js->pending_promises_old = young;
   js->pending_promises_young = NULL;
   js->pending_promises_young_tail = NULL;
 }
@@ -140,11 +140,11 @@ void gc_unroot_pending_promise(ant_t *js, ant_object_t *obj) {
   ant_object_t *prev = pd->gc_pending_prev;
   ant_object_t *next = pd->gc_pending_next;
 
-  if (prev) gc_pending_pd(prev)->gc_pending_next = next;
+  if (prev) gc_promise_state_unchecked(prev)->gc_pending_next = next;
   else if (js->pending_promises_young == obj) js->pending_promises_young = next;
-  else if (js->pending_promises == obj) js->pending_promises = next;
+  else if (js->pending_promises_old == obj) js->pending_promises_old = next;
   
-  if (next) gc_pending_pd(next)->gc_pending_prev = prev;
+  if (next) gc_promise_state_unchecked(next)->gc_pending_prev = prev;
   if (js->pending_promises_young_tail == obj) js->pending_promises_young_tail = prev;
 
   pd->gc_pending_next = NULL;
@@ -1056,7 +1056,7 @@ void gc_remember_coroutine(ant_t *js, coroutine_t *coro) {
   if (js->remembered_coroutine_len >= js->remembered_coroutine_cap) {
     size_t new_cap = js->remembered_coroutine_cap ? js->remembered_coroutine_cap * 2 : 64;
     coroutine_t **entries = realloc(js->remembered_coroutines, new_cap * sizeof(*entries));
-    if (!entries) return;
+    if (!entries) { js->gc_remember_overflow = true; return; }
     js->remembered_coroutines = entries;
     js->remembered_coroutine_cap = new_cap;
   }
@@ -1144,6 +1144,10 @@ static void gc_mark_permanent_roots(ant_t *js) {
   size_t start = js->gc.minor ? js->permanent_root_traced : 0;
   for (size_t i = start; i < js->permanent_root_len; i++)
     gc_grey_obj(js, js->permanent_roots[i]);
+}
+
+static void gc_grey_pending_promises(ant_t *js, ant_object_t *head) {
+  for (ant_object_t *obj = head; obj; obj = gc_promise_state_unchecked(obj)->gc_pending_next) gc_grey_obj(js, obj);
 }
 
 static void gc_mark_roots(ant_t *js) {
@@ -1247,15 +1251,8 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_napi(js, gc_mark_value);
   gc_mark_rpc(js, gc_mark_value);
 
-  for (
-    ant_object_t *obj = js->pending_promises_young; obj; 
-    obj = gc_pending_pd(obj)->gc_pending_next
-  ) gc_grey_obj(js, obj);
-  
-  if (!js->gc.minor) for (
-    ant_object_t *obj = js->pending_promises; obj; 
-    obj = gc_pending_pd(obj)->gc_pending_next
-  ) gc_grey_obj(js, obj);
+  gc_grey_pending_promises(js, js->pending_promises_young);
+  if (!js->gc.minor) gc_grey_pending_promises(js, js->pending_promises_old);
 
   gc_scan_current_stack(js);
   gc_scan_other_stacks(js);

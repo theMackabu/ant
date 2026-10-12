@@ -140,7 +140,7 @@ static inline void sv_jit_on_bailout(sv_func_t *fn) {
   sv_jit_on_bailout_at(fn, "direct", -1);
 }
 
-static inline uint8_t sv_tfb_classify(ant_value_t v) {
+static inline sv_tfb_class_t sv_tfb_classify(ant_value_t v) {
   if (vtype(v) == kTypeNumber) return SV_TFB_NUM;
   if (vtype(v) == kTypeString) return SV_TFB_STR;
   if (vtype(v) == kTypeBool) return SV_TFB_BOOL;

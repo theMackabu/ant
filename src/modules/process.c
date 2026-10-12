@@ -1353,6 +1353,7 @@ static ant_value_t env_set(ant_t *js, ant_value_t target, const char *key, size_
   const char *val_str = js_getstr(js, str_val, &val_len);
   
   if (!val_str) return js_mkerr(js, "out of memory");
+  if (key_len == 0 || memchr(key, '=', key_len)) return js_false;
   
   CSTR_BUF(buf, 256);
   char *key_str = CSTR_INIT(buf, key, key_len);
@@ -1363,19 +1364,21 @@ static ant_value_t env_set(ant_t *js, ant_value_t target, const char *key, size_
   bool stored = !changed || setenv(key_str, val_str, 1) == 0;
   
   cstr_free(&buf);
-
-  return stored 
-    ? js_mkundef() 
-    : js_mkerr_typed(js, JS_ERR_TYPE, "Invalid environment variable name");
+  return stored ? js_true : js_mkerr(js, "out of memory");
 }
 
-static void env_del(ant_t *js, ant_value_t target, const char *key, size_t key_len) {
+static ant_value_t env_del(ant_t *js, ant_value_t target, const char *key, size_t key_len) {
   CSTR_BUF(buf, 256);
   char *key_str = CSTR_INIT(buf, key, key_len);
-  if (key_str) { unsetenv(key_str); cstr_free(&buf); }
+  if (!key_str) return js_mkerr(js, "out of memory");
+  
+  unsetenv(key_str);
+  cstr_free(&buf);
+  
+  return js_true;
 }
 
-static void load_dotenv_file() {
+static void load_dotenv_file(void) {
   FILE *fp = fopen(".env", "r");
   if (fp == NULL) return;
   
@@ -1420,7 +1423,7 @@ static void load_dotenv_file() {
       value++;
     }
     
-    setenv(key, value, 1);
+    setenv(key, value, 0);
   }
   
   fclose(fp);
@@ -1658,6 +1661,7 @@ static ant_value_t env_keys(ant_t *js, ant_value_t target) {
 }
 
 static const ant_host_proxy_ops_t env_host_ops = {
+  .name = "process.env",
   .get = env_get,
   .set = env_set,
   .del = env_del,
@@ -1945,7 +1949,6 @@ void init_process_module(ant_t *js) {
 
   ant_value_t process_obj = js_mkobj(js);
   ant_value_t env_obj = js_newobj(js);
-  js->builtins.process_env = env_obj;
   
   js_set_proto_init(process_obj, process_proto);
   ps->process_obj = process_obj;
@@ -1965,9 +1968,9 @@ void init_process_module(ant_t *js) {
   defmethod(js, env_obj, "toString", 8, js_mkfun(env_toString));
   
   ant_value_t env_proxy = js_mkproxy_host(js, env_obj, &env_host_ops);
-  if (!is_err(env_proxy)) js->builtins.process_env = env_proxy;
-  else env_proxy = env_obj;
+  if (is_err(env_proxy)) return;
   
+  js->builtins.process_env = env_proxy;
   js_set(js, process_obj, "env", env_proxy);
   process_update_sandbox_env(js);
   
