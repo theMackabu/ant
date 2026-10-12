@@ -370,7 +370,7 @@ static inline ant_value_t sv_op_define_class(
     );
   }
   
-  setprop_interned(js, proto, "constructor", 11, ctor);
+  defhidden(js, proto, "constructor", 11, ctor);
   ant_value_t ctor_obj = (vtype(ctor) == kTypeFunction) ? js_func_obj(ctor) : ctor;
   js_mkprop_fast(js, ctor_obj, "prototype", 9, proto);
   

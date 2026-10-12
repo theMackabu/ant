@@ -8131,6 +8131,10 @@ ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbol
     if (!enumerable_only) arr_set(js, arr, out_idx++, js->length_str);
   }
 
+  TypedArrayData *typed = ptr && ptr->flags.is_exotic ? buffer_get_typedarray_data(obj) : NULL;
+  if (typed && typed->buffer && !typed->buffer->is_detached)
+    own_keys_push_string_indexes(js, arr, &out_idx, (ant_offset_t)typed->length);
+
   if (!ptr || !ptr->shape) goto done;
   bool is_arr = (vtype(obj) == kTypeArray);
   uint32_t count = ant_shape_count(ptr->shape);
@@ -8509,10 +8513,9 @@ static ant_value_t proxy_own_keys_filtered(ant_t *js, ant_value_t obj, bool incl
   return out;
 }
 
-static ant_value_t proxy_not_prevented_error(ant_t *js, ant_value_t proxy, const char *message) {
+static ant_value_t proxy_not_prevented_error(ant_t *js, ant_value_t proxy, const char *host_message, const char *message) {
   ant_proxy_state_t *data = get_proxy_data(proxy);
-  if (data && data->host) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot prevent extensions on '%s'", data->host->name);
-  return js_mkerr_typed(js, JS_ERR_TYPE, "%s", message);
+  return js_mkerr_typed(js, JS_ERR_TYPE, "%s", data && data->host ? host_message : message);
 }
 
 static ant_value_t proxy_set_integrity_level(ant_t *js, ant_value_t obj, bool freeze) {
@@ -8524,9 +8527,10 @@ static ant_value_t proxy_set_integrity_level(ant_t *js, ant_value_t obj, bool fr
     GC_ROOT_RESTORE(js, root_mark);
     return prevent_result;
   }
+  
   if (!js_truthy(js, prevent_result)) {
     GC_ROOT_RESTORE(js, root_mark);
-    return proxy_not_prevented_error(js, obj, "Proxy preventExtensions trap returned falsy");
+    return proxy_not_prevented_error(js, obj, freeze ? "Cannot freeze" : "Cannot seal", "Proxy preventExtensions trap returned falsy");
   }
 
   ant_value_t keys = proxy_own_keys_raw(js, obj);
@@ -8539,11 +8543,13 @@ static ant_value_t proxy_set_integrity_level(ant_t *js, ant_value_t obj, bool fr
   ant_offset_t len = get_array_length(js, keys);
   for (ant_offset_t i = 0; i < len; i++) {
     GC_ROOT_SAVE(iter_mark, js);
+    
     ant_value_t key = arr_get(js, keys, i);
     GC_ROOT_PIN(js, key);
 
     ant_value_t desc = js_mkobj(js);
     GC_ROOT_PIN(js, desc);
+    
     js_setprop(js, desc, js_mkstr(js, "configurable", 12), js_false);
     if (freeze) js_setprop(js, desc, js_mkstr(js, "writable", 8), js_false);
 
@@ -8551,10 +8557,9 @@ static ant_value_t proxy_set_integrity_level(ant_t *js, ant_value_t obj, bool fr
     if (is_err(result) || !js_truthy(js, result)) {
       GC_ROOT_RESTORE(js, iter_mark);
       GC_ROOT_RESTORE(js, root_mark);
-      return is_err(result)
-        ? result
-        : js_mkerr_typed(js, JS_ERR_TYPE, "Proxy defineProperty trap returned falsy");
+      return is_err(result) ? result : js_mkerr_typed(js, JS_ERR_TYPE, "Proxy defineProperty trap returned falsy");
     }
+    
     GC_ROOT_RESTORE(js, iter_mark);
   }
 
@@ -9390,6 +9395,14 @@ static ant_value_t object_has_own_key(ant_t *js, ant_value_t obj, property_key_v
   ant_object_t *ptr = js_obj_ptr(as_obj);
   
   if (ptr && ptr->flags.is_exotic) {
+    TypedArrayData *typed = buffer_get_typedarray_data(as_obj);
+    unsigned long index = 0;
+    
+    if (
+      typed && typed->buffer && !typed->buffer->is_detached &&
+      parse_array_index(key_str, key_len, (ant_offset_t)typed->length, &index)
+    ) return mkval(kTypeBool, 1);
+    
     descriptor_entry_t *desc = lookup_descriptor(js, as_obj, key_str, key_len);
     return mkval(kTypeBool, (desc && (desc->has_getter || desc->has_setter)) ? 1 : 0);
   }
@@ -10675,18 +10688,23 @@ static bool copy_ordinary_data_props(
   if (!ptr || !ptr->shape || ptr->flags.is_exotic || ptr->flags.arguments_object) return false;
   if (vtype(js_string_wrapper_value(src)) == kTypeString) return false;
   
-  *result = is_arr ? copy_dense_props(js, dst, src, ex) : js_mkundef();
-  if (is_err(*result)) return true;
-  
   ant_shape_t *shape = ptr->shape;
   uint32_t count = ant_shape_count(shape);
   
-  for (uint32_t i = 0; i < count; i++) {
+  bool has_accessor = false;
+  for (uint32_t i = 0; i < count && !has_accessor; i++) {
     const ant_shape_prop_t *prop = ant_shape_prop_at(shape, i);
-    if (prop && (prop->has_getter || prop->has_setter)) {
-      *result = copy_shape_keys_snapshot(js, dst, src, ptr, ex);
-      return true;
-    }
+    has_accessor = prop && (prop->has_getter || prop->has_setter);
+  }
+  
+  if (is_arr && has_accessor) return false;
+  
+  *result = is_arr ? copy_dense_props(js, dst, src, ex) : js_mkundef();
+  if (is_err(*result)) return true;
+  
+  if (has_accessor) {
+    *result = copy_shape_keys_snapshot(js, dst, src, ptr, ex);
+    return true;
   }
   
   ant_object_t *dst_ptr = js_obj_ptr(dst);
@@ -11498,8 +11516,12 @@ static ant_value_t builtin_object_preventExtensions(ant_params_t) {
   if (is_proxy(as_obj)) {
     ant_value_t result = proxy_prevent_extensions(js, as_obj);
     if (is_err(result)) return result;
-    if (!js_truthy(js, result))
-      return proxy_not_prevented_error(js, as_obj, "'preventExtensions' on proxy: trap returned falsy");
+    
+    if (!js_truthy(js, result)) return proxy_not_prevented_error(
+      js, as_obj, "Cannot prevent extensions", 
+      "'preventExtensions' on proxy: trap returned falsy"
+    );
+    
     return obj;
   }
   
@@ -19977,6 +19999,7 @@ static ant_value_t proxy_set_sym(
   *target_out = js_mkundef();
   if (!data) return js_mkundef();
   if (data->revoked) return throw_proxy_error(js, "Cannot perform 'set' on a proxy that has been revoked");
+  if (data->host) return js_mkerr_typed(js, JS_ERR_TYPE, "%s", "Cannot convert a Symbol value to a string");
   
   ant_value_t target = data->target;
   *target_out = target;
@@ -20440,6 +20463,7 @@ static ant_value_t proxy_define_property(ant_t *js, ant_value_t proxy, ant_value
     return throw_proxy_error(js, "Cannot perform 'defineProperty' on a proxy that has been revoked");
 
   ant_value_t target = data->target;
+  if (data->host && vtype(key_val) == kTypeSymbol) return js_mkerr_typed(js, JS_ERR_TYPE, "%s", "Cannot convert a Symbol value to a string");
   if (data->host && vtype(key_val) == kTypeString) {
     size_t key_len;
     const char *key = js_getstr(js, key_val, &key_len);

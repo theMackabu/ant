@@ -2,7 +2,6 @@
 #include "silver/lexer.h"
 #include "silver/directives.h"
 
-#include "ant.h"
 #include "escape.h"
 #include "debug.h"
 #include "errors.h"
@@ -290,21 +289,74 @@ static inline bool var_decl_has_initializer(sv_ast_t *n) {
   return false;
 }
 
+static const char *bigint_key_decimal(ant_t *js, const char *lit, uint32_t len, uint32_t *out_len) {
+  uint32_t radix = 10, i = 0;
+  if (len > 2 && lit[0] == '0') {
+    char tag = (char)(lit[1] | 0x20);
+    radix = tag == 'x' ? 16 : tag == 'o' ? 8 : tag == 'b' ? 2 : 10;
+    if (radix != 10) i = 2;
+  }
+  
+  uint32_t limbs[len + 1];
+  uint32_t used = 1;
+  limbs[0] = 0;
+  
+  for (; i < len; i++) {
+    char ch = lit[i];
+    if (ch == '_' || ch == 'n') continue;
+    uint32_t digit = ch <= '9' ? (uint32_t)(ch - '0') : (uint32_t)((ch | 0x20) - 'a' + 10);
+    
+    uint64_t carry = digit;
+    for (uint32_t l = 0; l < used; l++) {
+      uint64_t v = (uint64_t)limbs[l] * radix + carry;
+      limbs[l] = (uint32_t)(v % 1000000000u);
+      carry = v / 1000000000u;
+    }
+    
+    if (carry) limbs[used++] = (uint32_t)carry;
+  }
+  
+  char *out = parse_arena_bump(js, (size_t)used * 9 + 1);
+  if (!out) return NULL;
+  
+  int n = snprintf(out, 10, "%u", limbs[used - 1]);
+  for (uint32_t l = used - 1; l-- > 0;) n += snprintf(out + n, 10, "%09u", limbs[l]);
+  
+  *out_len = (uint32_t)n;
+  return out;
+}
+
 static inline sv_ast_t *mk_ident_from_tok(P) {
+  if (TOK == TOK_BIGINT) {
+    uint32_t key_len = 0;
+    const char *key = bigint_key_decimal(JS, tok_str(p), (uint32_t)TLEN, &key_len);
+    sv_ast_t *n = mk(N_STRING);
+    
+    n->str = key ? key : tok_str(p);
+    n->len = key ? key_len : (uint32_t)TLEN;
+    n->src_end = (uint32_t)(TOFF + TLEN);
+    
+    return n;
+  }
+  
   uint32_t len = 0;
   const char *name = tok_ident_str(p, &len);
   sv_ast_t *n = mk_ident(p, name, len);
+  
   n->src_off = (uint32_t)TOFF;
   n->src_end = (uint32_t)(TOFF + TLEN);
+  
   return n;
 }
 
 static inline sv_ast_t *mk_private_ident_from_tok(P) {
   sv_ast_t *n = mk(N_IDENT);
+  
   n->str = &CODE[TOFF - 1];
   n->len = (uint32_t)(TLEN + 1);
   n->src_off = (uint32_t)(TOFF > 0 ? TOFF - 1 : TOFF);
   n->src_end = (uint32_t)(TOFF + TLEN);
+  
   return n;
 }
 

@@ -547,14 +547,16 @@ static inline ant_value_t defmethod(ant_t *js, ant_value_t obj, const char *name
   );
 }
 
+static inline ant_value_t defhidden(ant_t *js, ant_value_t obj, const char *name, size_t len, ant_value_t value) {
+  const char *interned = intern_string(name, len);
+  if (!interned) return js_mkerr(js, "oom");
+  return mkprop_interned_exact(js, obj, interned, value, ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE);
+}
+
 static inline ant_value_t defalias(ant_t *js, ant_value_t obj, const char *name, size_t len, ant_value_t fn) {
   const char *interned = intern_string(name, len);
   if (!interned) return js_mkerr(js, "oom");
-
-  return mkprop_interned_exact(
-    js, obj, interned, fn,
-    ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE
-  );
+  return mkprop_interned_exact(js, obj, interned, fn, ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE);
 }
 
 static inline void js_set_global_builtin(

@@ -51,18 +51,18 @@ function throws(fn) {
   return null;
 }
 
+// like node and bun, a name the environment cannot hold is accepted and dropped
 process.env['ANT_ENV=BAD'] = 'x';
-assert(!('ANT_ENV=BAD' in process.env), 'a sloppy write to an invalid name is ignored');
-assert(Reflect.set(process.env, '', 'x') === false, 'Reflect.set reports an invalid name as false');
-assert(throws(() => { 'use strict'; process.env['ANT_ENV=BAD'] = 'x'; }) instanceof TypeError, 'a strict write to an invalid name throws');
+assert(Reflect.set(process.env, '', 'x') === true && !('' in process.env), 'an empty name is accepted and dropped');
+assert(throws(() => { 'use strict'; process.env['ANT_ENV=BAD'] = 'x'; }) === null, 'a strict write to an invalid name does not throw');
 
 process.env.ANT_ENV_PROXY_EQ = '1';
-assert(Reflect.set(process.env, 'ANT_ENV_PROXY_EQ=Q', '2') === false, "a name with '=' is refused even when its prefix exists");
-assert(process.env.ANT_ENV_PROXY_EQ === '1', "a refused write leaves the prefix variable alone");
+assert(Reflect.set(process.env, 'ANT_ENV_PROXY_EQ=Q', '2') === true, "a name with '=' is accepted");
+assert(process.env.ANT_ENV_PROXY_EQ === '1', "a name with '=' never reaches the var before it");
 delete process.env.ANT_ENV_PROXY_EQ;
 
 process.env.ANT_ENV_PROXY_NUL = 'kept';
-assert(Reflect.set(process.env, 'ANT_ENV_PROXY_NUL\0X', 'clobbered') === false, 'a name with NUL is refused');
+assert(Reflect.set(process.env, 'ANT_ENV_PROXY_NUL\0X', 'clobbered') === true, 'a name with NUL is accepted');
 assert(process.env['ANT_ENV_PROXY_NUL\0X'] === undefined, 'a name with NUL reads as absent');
 assert(delete process.env['ANT_ENV_PROXY_NUL\0X'] && process.env.ANT_ENV_PROXY_NUL === 'kept', 'a name with NUL never reaches the var before it');
 delete process.env.ANT_ENV_PROXY_NUL;
@@ -80,11 +80,13 @@ assert(throws(() => Object.defineProperty(process.env, 'ANT_ENV_PROXY_ACC', { ge
 assert(process.env.ANT_ENV_PROXY_DEF === '5', 'a rejected descriptor changes nothing');
 
 const envSym = Symbol('env');
-process.env[envSym] = 1;
-assert(Object.getOwnPropertySymbols(process.env).includes(envSym), 'symbol keys on process.env are listed');
+const symbolError = throws(() => { process.env[envSym] = 1; });
+assert(symbolError instanceof TypeError && symbolError.message === 'Cannot convert a Symbol value to a string', 'a symbol key cannot be set');
+assert(throws(() => Object.defineProperty(process.env, envSym, full)) instanceof TypeError, 'a symbol key cannot be defined');
+assert(throws(() => { process.env.ANT_ENV_PROXY_SYMV = Symbol('v'); }) instanceof TypeError, 'a symbol value cannot be stored');
+assert(process.env[envSym] === undefined && !(envSym in process.env) && delete process.env[envSym], 'a symbol key reads as absent');
 assert(Object.getOwnPropertyNames(process.env).includes('toObject'), 'own methods of process.env are listed');
 assert(!Object.keys(process.env).includes('toObject'), 'own methods of process.env are not enumerable');
-delete process.env[envSym];
 
 delete process.env.ANT_ENV_PROXY_CHILD;
 delete process.env.ANT_ENV_PROXY_DEF;
@@ -142,8 +144,9 @@ const withProtoKey = JSON.parse('{"__proto__": {"polluted": true}, "z": 1}');
 const protoCopy = { ...withProtoKey };
 assert(Object.getPrototypeOf(protoCopy) === Object.prototype && Object.hasOwn(protoCopy, '__proto__'), 'spread defines __proto__ as an own key');
 
-assert(throws(() => Object.freeze(process.env)) instanceof TypeError, 'freezing process.env throws');
-assert(throws(() => Object.preventExtensions(process.env)) instanceof TypeError, 'preventExtensions on process.env throws');
+assert(throws(() => Object.freeze(process.env))?.message === 'Cannot freeze', 'freezing process.env throws');
+assert(throws(() => Object.seal(process.env))?.message === 'Cannot seal', 'sealing process.env throws');
+assert(throws(() => Object.preventExtensions(process.env))?.message === 'Cannot prevent extensions', 'preventExtensions on process.env throws');
 assert(Reflect.preventExtensions(process.env) === false, 'Reflect.preventExtensions on process.env returns false');
 assert(Object.isExtensible(process.env) && !Object.isFrozen(process.env), 'process.env stays extensible');
 

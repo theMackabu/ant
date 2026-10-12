@@ -1371,6 +1371,9 @@ static ant_value_t env_get(ant_t *js, ant_value_t target, const char *key, size_
 }
 
 static ant_value_t env_set(ant_t *js, ant_value_t target, const char *key, size_t key_len, ant_value_t value) {
+  if (vtype(value) == kTypeSymbol) 
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a string");
+  
   ant_value_t str_val = coerce_to_str(js, value);
   if (is_err(str_val)) return str_val;
   
@@ -1378,7 +1381,7 @@ static ant_value_t env_set(ant_t *js, ant_value_t target, const char *key, size_
   const char *val_str = js_getstr(js, str_val, &val_len);
   
   if (!val_str) return js_mkerr(js, "out of memory");
-  if (key_len == 0 || memchr(key, '=', key_len) || memchr(key, '\0', key_len)) return js_false;
+  if (key_len == 0 || memchr(key, '=', key_len) || memchr(key, '\0', key_len)) return js_true;
   
   CSTR_BUF(buf, 256);
   char *key_str = CSTR_INIT(buf, key, key_len);

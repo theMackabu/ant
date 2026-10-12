@@ -602,17 +602,17 @@ static ant_value_t eventemitter_get_listeners_array(ant_t *js, ant_value_t targe
 }
 
 static void js_init_event_obj(ant_t *js, ant_value_t obj, ant_value_t type_val, bool bubbles, bool cancelable) {
-  js_set(js, obj, "type",             type_val);
-  js_set(js, obj, "target",           js_mknull());
-  js_set(js, obj, "srcElement",       js_mknull());
-  js_set(js, obj, "currentTarget",    js_mknull());
-  js_set(js, obj, "eventPhase",       js_mknum(0));
-  js_set(js, obj, "bubbles",          js_bool(bubbles));
-  js_set(js, obj, "cancelable",       js_bool(cancelable));
-  js_set(js, obj, "defaultPrevented", js_false);
-  js_set(js, obj, "returnValue",      js_true);
-  js_set(js, obj, "cancelBubble",     js_false);
-  js_set(js, obj, "timeStamp",        js_mknum(get_timestamp_ms()));
+  defhidden(js, obj, "type", 4, type_val);
+  defhidden(js, obj, "target", 6, js_mknull());
+  defhidden(js, obj, "srcElement", 10, js_mknull());
+  defhidden(js, obj, "currentTarget", 13, js_mknull());
+  defhidden(js, obj, "eventPhase", 10, js_mknum(0));
+  defhidden(js, obj, "bubbles", 7, js_bool(bubbles));
+  defhidden(js, obj, "cancelable", 10, js_bool(cancelable));
+  defhidden(js, obj, "defaultPrevented", 16, js_false);
+  defhidden(js, obj, "returnValue", 11, js_true);
+  defhidden(js, obj, "cancelBubble", 12, js_false);
+  defhidden(js, obj, "timeStamp", 9, js_mknum(get_timestamp_ms()));
 
   if (js->builtins.isTrusted_getter)
     js_set_accessor_desc(js, obj, "isTrusted", 9, js->builtins.isTrusted_getter, js_mkundef(), 0);

@@ -987,6 +987,12 @@ static const struct {
 static constexpr size_t REGEXP_FLAG_PROPERTY_COUNT =
   sizeof(regexp_flag_properties) / sizeof(regexp_flag_properties[0]);
 
+static inline uint8_t regexp_flag_property_attrs(size_t i) {
+  return i + 1 == REGEXP_FLAG_PROPERTY_COUNT 
+    ? ANT_PROP_ATTR_WRITABLE 
+    : ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE;
+}
+
 static bool regexp_init_flag_properties(
   ant_t *js, ant_value_t value, const ant_value_t *values
 ) {
@@ -1001,10 +1007,9 @@ static bool regexp_init_flag_properties(
     ant_shape_t *shape = ant_shape_clone(obj->shape);
     if (!shape) return false;
     for (size_t i = 0; i < REGEXP_FLAG_PROPERTY_COUNT; i++) {
-      const char *key = intern_string(regexp_flag_properties[i].name,
-                                      regexp_flag_properties[i].length);
+      const char *key = intern_string(regexp_flag_properties[i].name, regexp_flag_properties[i].length);
       uint32_t slot;
-      if (!key || !ant_shape_add_interned(js, shape, key, ANT_PROP_ATTR_DEFAULT, &slot)) {
+      if (!key || !ant_shape_add_interned(js, shape, key, regexp_flag_property_attrs(i), &slot)) {
         ant_shape_release(shape);
         return false;
       }
@@ -1023,7 +1028,7 @@ static bool regexp_init_flag_properties(
 }
 
 #define REGEXP_SET_PROP(js, obj, key, klen, val, is_new) \
-  ((is_new) ? js_mkprop_fast(js, obj, key, klen, val) \
+  ((is_new) ? defhidden(js, obj, key, klen, val)         \
             : js_setprop(js, obj, js_mkstr(js, key, klen), val))
 
 static void regexp_init_flags(ant_t *js, ant_value_t obj, ant_value_t flags, bool is_new) {
@@ -1710,7 +1715,7 @@ static ant_value_t builtin_RegExp(ant_params_t) {
     }
   }
 
-  js_mkprop_fast(js, regexp_obj, "source", 6, pattern);
+  defhidden(js, regexp_obj, "source", 6, pattern);
   js_set_slot(regexp_obj, SLOT_DATA, pattern);
   regexp_init_flags(js, regexp_obj, flags, true);
 
@@ -3349,9 +3354,9 @@ ant_value_t regexp_create_literal(ant_t *js, ant_value_t pattern, ant_value_t fl
   if (is_object_type(regexp_proto)) js_set_proto_init(regexp_obj, regexp_proto);
 
   ant_offset_t pattern_len; vstr(js, pattern, &pattern_len);
-  if (is_err(js_mkprop_fast(js, regexp_obj, "source", 6, pattern))) return js_mkerr(js, "oom");
+  if (is_err(defhidden(js, regexp_obj, "source", 6, pattern))) return js_mkerr(js, "oom");
+  
   js_set_slot(regexp_obj, SLOT_DATA, pattern);
-
   regexp_init_flags(js, regexp_obj, flags, true);
   
   return regexp_obj;

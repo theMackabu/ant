@@ -403,7 +403,7 @@ static ant_value_t js_arraybuffer_constructor(ant_params_t) {
 
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  js_set(js, obj, "byteLength", js_mknum((double)length));
+  defhidden(js, obj, "byteLength", 10, js_mknum((double)length));
   js_set_finalizer(obj, arraybuffer_finalize);
 
   return obj;
@@ -436,7 +436,7 @@ static ant_value_t js_arraybuffer_slice(ant_params_t) {
 
   if (is_special_object(proto)) js_set_proto_init(new_obj, proto);
   js_set_native(new_obj, new_data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  js_set(js, new_obj, "byteLength", js_mknum((double)new_length));
+  defhidden(js, new_obj, "byteLength", 10, js_mknum((double)new_length));
   js_set_finalizer(new_obj, arraybuffer_finalize);
   
   return new_obj;
@@ -480,7 +480,7 @@ static ant_value_t js_arraybuffer_transfer(ant_params_t) {
 
   if (is_special_object(proto)) js_set_proto_init(new_obj, proto);
   js_set_native(new_obj, new_data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  js_set(js, new_obj, "byteLength", js_mknum((double)new_length));
+  defhidden(js, new_obj, "byteLength", 10, js_mknum((double)new_length));
   js_set_finalizer(new_obj, arraybuffer_finalize);
   
   return new_obj;
@@ -913,7 +913,7 @@ ant_value_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer) {
   if (is_special_object(ab_proto)) js_set_proto_init(ab_obj, ab_proto);
   
   js_set_native(ab_obj, buffer, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  js_set(js, ab_obj, "byteLength", js_mknum((double)buffer->length));
+  defhidden(js, ab_obj, "byteLength", 10, js_mknum((double)buffer->length));
   js_set_finalizer(ab_obj, arraybuffer_finalize);
   buffer->ref_count++;
   
@@ -940,8 +940,8 @@ ant_value_t create_typed_array_with_buffer(
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
   
   js_set_native(obj, ta_data, BUFFER_TYPEDARRAY_NATIVE_TAG);
-  js_set(js, obj, "BYTES_PER_ELEMENT", js_mknum((double)element_size));
-  js_set(js, obj, "buffer", arraybuffer_obj);
+  defhidden(js, obj, "BYTES_PER_ELEMENT", 17, js_mknum((double)element_size));
+  defhidden(js, obj, "buffer", 6, arraybuffer_obj);
   
   js_set_getter(obj, typedarray_index_getter);
   js_set_setter(obj, typedarray_index_setter);
@@ -978,10 +978,9 @@ ant_value_t create_dataview_with_buffer(
 
   js_set_native(obj, dv_data, BUFFER_DATAVIEW_NATIVE_TAG);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_DATAVIEW));
-  js_mkprop_fast(js, obj, "buffer", 6, arraybuffer_obj);
-  js_set_descriptor(js, obj, "buffer", 6, 0);
-  js_set(js, obj, "byteLength", js_mknum((double)byte_length));
-  js_set(js, obj, "byteOffset", js_mknum((double)byte_offset));
+  mkprop_interned_exact(js, obj, intern_string("buffer", 6), arraybuffer_obj, ANT_PROP_ATTR_CONFIGURABLE);
+  defhidden(js, obj, "byteLength", 10, js_mknum((double)byte_length));
+  defhidden(js, obj, "byteOffset", 10, js_mknum((double)byte_offset));
   js_set_finalizer(obj, dataview_finalize);
 
   return obj;
@@ -1870,11 +1869,9 @@ static ant_value_t js_dataview_constructor(ant_params_t) {
   
   js_set_native(obj, dv_data, BUFFER_DATAVIEW_NATIVE_TAG);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_DATAVIEW));
-  js_mkprop_fast(js, obj, "buffer", 6, args[0]);
-  js_set_descriptor(js, obj, "buffer", 6, 0);
-
-  js_set(js, obj, "byteLength", js_mknum((double)byte_length));
-  js_set(js, obj, "byteOffset", js_mknum((double)byte_offset)); 
+  mkprop_interned_exact(js, obj, intern_string("buffer", 6), args[0], ANT_PROP_ATTR_CONFIGURABLE);
+  defhidden(js, obj, "byteLength", 10, js_mknum((double)byte_length));
+  defhidden(js, obj, "byteOffset", 10, js_mknum((double)byte_offset));
   js_set_finalizer(obj, dataview_finalize);
   
   return obj;
@@ -4245,7 +4242,7 @@ static ant_value_t js_sharedarraybuffer_constructor(ant_params_t) {
 
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  js_set(js, obj, "byteLength", js_mknum((double)length));
+  defhidden(js, obj, "byteLength", 10, js_mknum((double)length));
   js_set_finalizer(obj, arraybuffer_finalize);
   
   return obj;

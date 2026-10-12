@@ -733,6 +733,13 @@ static void compile_expr_with_inferred_name(
   c->inferred_name_len = saved_len;
 }
 
+static void emit_throw_type_error(sv_compiler_t *c, const char *msg, uint32_t len) {
+  int atom = add_atom(c, msg, len);
+  emit_op(c, OP_THROW_ERROR);
+  emit_u32(c, (uint32_t)atom);
+  emit(c, (uint8_t)JS_ERR_TYPE);
+}
+
 static void emit_const_assign_error(sv_compiler_t *c, const char *name, uint32_t len) {
   static const char prefix[] = "Assignment to constant variable '";
   static const char suffix[] = "'";
@@ -5247,6 +5254,22 @@ static void emit_build_object_rest(sv_compiler_t *c, sv_ast_t *pat, int rest_idx
   emit_op(c, OP_POP);
 }
 
+static void emit_require_destructurable(sv_compiler_t *c) {
+  static const char undef_msg[] = "Cannot destructure 'undefined' as it is undefined.";
+  static const char null_msg[] = "Cannot destructure 'null' as it is null.";
+  
+  int ok = emit_jump(c, OP_JMP_NOT_NULLISH);
+  emit_op(c, OP_DUP);
+  emit_op(c, OP_IS_UNDEF);
+  
+  int is_null = emit_jump(c, OP_JMP_FALSE);
+  emit_throw_type_error(c, undef_msg, sizeof(undef_msg) - 1);
+  
+  patch_jump(c, is_null);
+  emit_throw_type_error(c, null_msg, sizeof(null_msg) - 1);
+  patch_jump(c, ok);
+}
+
 static bool is_destructure_pattern_node(sv_ast_t *node) {
   return node && (node->type == N_ARRAY_PAT || node->type == N_ARRAY ||
                   node->type == N_OBJECT_PAT || node->type == N_OBJECT);
@@ -5368,6 +5391,12 @@ static void compile_destructure_pattern(
   } else if (pat->type == N_OBJECT_PAT || pat->type == N_OBJECT) {
     sv_ast_t *last = pat->args.count ? pat->args.items[pat->args.count - 1] : NULL;
     bool has_rest = last && (last->type == N_REST || last->type == N_SPREAD);
+    
+    bool reads_property = false;
+    for (int i = 0; i < pat->args.count && !reads_property; i++)
+      reads_property = pat->args.items[i] && pat->args.items[i]->type == N_PROPERTY;
+    
+    if (!reads_property) emit_require_destructurable(c);
     int key_locals[pat->args.count ? pat->args.count : 1];
     
     for (int i = 0; i < pat->args.count; i++) {

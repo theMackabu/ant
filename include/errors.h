@@ -1,6 +1,7 @@
 #ifndef ERRORS_H
 #define ERRORS_H
 
+#include "ant.h"
 #include "types.h"
 #include <stdio.h>
 #include <stdbool.h>

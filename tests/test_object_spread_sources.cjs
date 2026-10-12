@@ -64,4 +64,18 @@ let tooMany = null;
 try { new Function('o', 'const {' + wideKeys + ', ...r} = o; return r;'); } catch (e) { tooMany = e; }
 assert(tooMany instanceof SyntaxError, 'too many keys before a rest element is a SyntaxError');
 
+const lowGetter = [1, 2, 3];
+Object.defineProperty(lowGetter, 0, { get() { lowGetter[2] = 99; return 1; }, enumerable: true });
+assert(same({ ...lowGetter }, { 0: 1, 1: 2, 2: 99 }), 'array elements are read in order, after earlier getters run');
+
+assert(same({ ...new Uint8Array([7, 8]) }, { 0: 7, 1: 8 }), 'typed arrays spread their elements');
+assert(Object.keys(new Uint8Array([7, 8])).join() === '0,1', 'typed array keys are its indices');
+assert(Object.hasOwn(new Uint8Array([7]), 0) && !Object.hasOwn(new Uint8Array([7]), 1), 'typed array indices are own properties');
+
+const internalOnly = [
+  new ArrayBuffer(2), new DataView(new ArrayBuffer(2)), /a/g, new Event('x'), (class K { m() {} }).prototype,
+];
+for (const value of internalOnly)
+  assert(Object.keys(value).length === 0 && Object.keys({ ...value }).length === 0, 'internal state stays out of keys and spread: ' + Object.prototype.toString.call(value));
+
 console.log('object spread sources OK');
