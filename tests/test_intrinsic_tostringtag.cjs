@@ -35,4 +35,37 @@ assert.deepStrictEqual(
   'collection iterator tags match'
 );
 
-console.log('intrinsic toStringTag OK');
+const AsyncFunctionPrototype = Object.getPrototypeOf(async function () {});
+assert.deepStrictEqual([typeof GeneratorFunction, typeof AsyncGeneratorFunction, typeof AsyncFunctionPrototype], ['object', 'object', 'object'], 'function kind prototypes are ordinary objects');
+assert.deepStrictEqual([Object.getPrototypeOf(GeneratorFunction), Object.getPrototypeOf(AsyncFunctionPrototype)], [Function.prototype, Function.prototype]);
+const keys = o => Reflect.ownKeys(o).map(String);
+assert.deepStrictEqual([keys(GeneratorFunction), keys(AsyncGeneratorFunction), keys(AsyncFunctionPrototype)], [
+  ['prototype', 'constructor', 'Symbol(Symbol.toStringTag)'],
+  ['prototype', 'constructor', 'Symbol(Symbol.toStringTag)'],
+  ['constructor', 'Symbol(Symbol.toStringTag)'],
+]);
+assert.deepStrictEqual([keys(GeneratorPrototype), keys(AsyncGeneratorPrototype)], [
+  ['constructor', 'next', 'return', 'throw', 'Symbol(Symbol.toStringTag)'],
+  ['constructor', 'next', 'return', 'throw', 'Symbol(Symbol.toStringTag)'],
+], 'generator prototypes list keys in spec order');
+
+const attrs = (o, k) => { const d = Object.getOwnPropertyDescriptor(o, k); return [d.writable, d.enumerable, d.configurable]; };
+for (const kind of [GeneratorFunction, AsyncGeneratorFunction, AsyncFunctionPrototype]) {
+  const C = kind.constructor;
+  assert.deepStrictEqual([keys(C), attrs(C, 'length'), attrs(C, 'name'), attrs(C, 'prototype'), attrs(kind, 'constructor'), C.prototype], [['length', 'name', 'prototype'], [false, false, true], [false, false, true], [false, false, false], [false, false, true], kind], C.name);
+}
+
+const AsyncIteratorPrototype = Object.getPrototypeOf(AsyncGeneratorPrototype);
+const asyncDispose = AsyncIteratorPrototype[Symbol.asyncDispose];
+assert.deepStrictEqual([typeof asyncDispose, asyncDispose.name, asyncDispose.length, Object.hasOwn(AsyncGeneratorPrototype, Symbol.asyncDispose)], ['function', '[Symbol.asyncDispose]', 0, false], 'asyncDispose lives on %AsyncIteratorPrototype%');
+
+(async () => {
+  let closed = false;
+  const it = (async function* () { try { yield 1; } finally { closed = true; } })();
+  await it.next();
+  assert.deepStrictEqual([await it[Symbol.asyncDispose](), closed], [undefined, true]);
+  assert.deepStrictEqual([await asyncDispose.call({}), await asyncDispose.call({ return: () => Promise.resolve(5) })], [undefined, undefined], 'any object works and the result is dropped');
+  await assert.rejects(asyncDispose.call({ return: 1 }), TypeError);
+  await assert.rejects(asyncDispose.call({ return() { throw new RangeError('x'); } }), RangeError);
+  console.log('intrinsic toStringTag OK');
+})();

@@ -96,5 +96,26 @@ for (const k in new DataView(new ArrayBuffer(2))) forInBuffers.push(k);
 for (const k in new ArrayBuffer(2)) forInBuffers.push(k);
 assert.deepStrictEqual(forInBuffers, [], 'buffer and view accessors are not enumerable');
 assert.deepStrictEqual([Object.keys({ ...own }), Object.keys(Object.assign({}, own))], [['0', '1', 'extra'], ['0', '1', 'extra']]);
+assert.deepStrictEqual([Object.values(own), Object.entries(own)], [[7, 8, 1], [['0', 7], ['1', 8], ['extra', 1]]], 'values and entries include elements');
+assert.deepStrictEqual([Object.values(new BigInt64Array([1n, -2n])), Object.entries(new Float64Array([0.5]))], [[1n, -2n], [['0', 0.5]]]);
+
+assert.deepStrictEqual([Object.values(own), Object.entries(own)], [[7, 8, 1], [['0', 7], ['1', 8], ['extra', 1]]], 'values and entries include elements');
+assert.deepStrictEqual([Object.values(new BigInt64Array([1n, -2n])), Object.entries(new Float64Array([0.5]))], [[1n, -2n], [['0', 0.5]]]);
+
+const ab = new ArrayBuffer(4);
+const int16View = new Int16Array(ab, 2);
+assert.deepStrictEqual([Object.getOwnPropertyNames(int16View), int16View.buffer === ab, int16View.BYTES_PER_ELEMENT], [['0'], true, 2], 'buffer and BYTES_PER_ELEMENT are inherited, not own');
+assert.deepStrictEqual([Object.getOwnPropertyNames(ab), Object.getOwnPropertyNames(new DataView(ab, 1)), new DataView(ab, 1).buffer === ab], [[], [], true]);
+const moved = ab.transfer(8);
+assert.deepStrictEqual([ab.byteLength, moved.byteLength, ab.detached], [0, 8, true], 'byteLength follows the buffer after a transfer');
+assert.throws(() => Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array).prototype, 'buffer').get.call({}), TypeError);
+
+const attrs = (o, k) => { const d = Object.getOwnPropertyDescriptor(o, k); return [d.writable, d.enumerable, d.configurable]; };
+for (const C of [Int16Array, Uint8Array, Float64Array]) {
+  assert.deepStrictEqual([attrs(C, 'BYTES_PER_ELEMENT'), attrs(C.prototype, 'BYTES_PER_ELEMENT'), attrs(C, 'prototype')], [[false, false, false], [false, false, false], [false, false, false]], C.name);
+  assert.deepStrictEqual(Object.keys(C), [], 'typed array constructor statics are not enumerable');
+}
+for (const C of [ArrayBuffer, SharedArrayBuffer, DataView, Object.getPrototypeOf(Uint8Array)]) assert.deepStrictEqual(attrs(C, 'prototype'), [false, false, false], C.name);
+assert.deepStrictEqual(attrs(Buffer, 'prototype'), [true, false, false]);
 
 console.log('typed array in OK');

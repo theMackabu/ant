@@ -487,16 +487,6 @@ static ant_value_t generator_throw(ant_params_t) {
   return generator_is_async(gen) ? generator_async_wrap_result(js, result) : result;
 }
 
-static ant_value_t generator_async_dispose(ant_params_t) {
-  ant_value_t gen = js->this_val;
-  if (vtype(gen) != kTypeGenerator || !generator_is_async(gen)) return js_mkerr_typed(
-    js, JS_ERR_TYPE,
-    "AsyncGenerator.prototype[Symbol.asyncDispose] called on incompatible receiver"
-  );
-
-  return generator_return(js, NULL, 0, js_mkundef());
-}
-
 void init_generator_module(ant_t *js) {  
   ant_value_t generator_func_proto = js_get_slot(js->global, SLOT_GENERATOR_PROTO);
   ant_value_t async_generator_func_proto = js_get_slot(js->global, SLOT_ASYNC_GENERATOR_PROTO);
@@ -509,34 +499,22 @@ void init_generator_module(ant_t *js) {
     js, async_generator_func_proto, js->sym.toStringTag_sym,
     ANT_STRING("AsyncGeneratorFunction"), ANT_PROP_ATTR_CONFIGURABLE);
 
-  ant_value_t proto = js_mkobj(js);
-  js->sym.generator_proto = proto;
-  js_set_proto_init(proto, js->sym.iterator_proto);
+  ant_value_t proto = js->sym.generator_proto;
+  js_set_proto_wb(js, proto, js->sym.iterator_proto);
   
   defmethod(js, proto, "next", 4, js_mkfun(generator_next));
   defmethod(js, proto, "return", 6, js_mkfun(generator_return));
   defmethod(js, proto, "throw", 5, js_mkfun(generator_throw));
   mkprop(js, proto, js->sym.toStringTag_sym, ANT_STRING("Generator"), ANT_PROP_ATTR_CONFIGURABLE);
 
-  ant_value_t async_proto = js_mkobj(js);
-  js->sym.async_generator_proto = async_proto;
-  js_set_proto_init(async_proto, js->sym.async_iterator_proto);
+  ant_value_t async_proto = js->sym.async_generator_proto;
+  js_set_proto_wb(js, async_proto, js->sym.async_iterator_proto);
+  
   defmethod(js, async_proto, "next", 4, js_mkfun(generator_next));
   defmethod(js, async_proto, "return", 6, js_mkfun(generator_return));
   defmethod(js, async_proto, "throw", 5, js_mkfun(generator_throw));
   
   mkprop(js, async_proto, js->sym.toStringTag_sym, ANT_STRING("AsyncGenerator"), ANT_PROP_ATTR_CONFIGURABLE);
-  js_set_sym(js, async_proto, js->sym.asyncDispose_sym, js_mkfun(generator_async_dispose));
-
-  if (is_object_type(generator_func_proto)) {
-    mkprop(js, js_as_obj(generator_func_proto), ANT_STRING("prototype"), proto, ANT_PROP_ATTR_CONFIGURABLE);
-    mkprop(js, proto, ANT_STRING("constructor"), generator_func_proto, ANT_PROP_ATTR_CONFIGURABLE);
-  }
-  
-  if (is_object_type(async_generator_func_proto)) {
-    mkprop(js, js_as_obj(async_generator_func_proto), ANT_STRING("prototype"), async_proto, ANT_PROP_ATTR_CONFIGURABLE);
-    mkprop(js, async_proto, ANT_STRING("constructor"), async_generator_func_proto, ANT_PROP_ATTR_CONFIGURABLE);
-  }
 }
 
 ant_value_t sv_call_generator_closure_dispatch(

@@ -1703,6 +1703,45 @@ static ant_value_t iterator_tag_get(ant_params_t) {
   return ANT_STRING("Iterator");
 }
 
+static ant_value_t iter_dispose(ant_params_t) {
+  ant_value_t self = js->this_val;
+  ant_value_t return_fn = iterator_get_method(js, self, "return", 6);
+  
+  if (is_err(return_fn)) return return_fn;
+  if (is_undefined(return_fn) || is_null(return_fn)) return js_mkundef();
+  if (!is_callable(return_fn)) return js_mkerr_typed(js, JS_ERR_TYPE, "iterator return is not callable");
+  
+  ant_value_t result = sv_vm_call(js->vm, js, return_fn, self, NULL, 0, NULL, js_mkundef());
+  return is_err(result) ? result : js_mkundef();
+}
+
+static ant_value_t async_iter_dispose_done(ant_params_t) {
+  return js_mkundef();
+}
+
+static ant_value_t async_iter_async_dispose(ant_params_t) {
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t self = js->this_val;
+  GC_ROOT_PIN(js, self);
+  
+  ant_value_t out;
+  ant_value_t return_fn = iterator_get_method(js, self, "return", 6);
+  GC_ROOT_PIN(js, return_fn);
+  
+  if (is_err(return_fn)) out = rejected_promise(js, return_fn);
+  else if (is_undefined(return_fn) || is_null(return_fn)) out = fulfilled_promise(js, js_mkundef());
+  else if (!is_callable(return_fn)) out = rejected_promise(js, js_mkerr_typed(js, JS_ERR_TYPE, "iterator return is not callable"));
+  else {
+    ant_value_t arg = js_mkundef();
+    ant_value_t result = sv_vm_call(js->vm, js, return_fn, self, &arg, 1, NULL, js_mkundef());
+    if (!is_err(result)) result = js_promise_assimilate_awaitable(js, result);
+    out = is_err(result) ? rejected_promise(js, result) : js_promise_then(js, result, js_mkfun(async_iter_dispose_done), js_mkundef());
+  }
+  
+  GC_ROOT_RESTORE(js, root_mark);
+  return out;
+}
+
 static ant_value_t async_iterator_tag_get(ant_params_t) {
   return ANT_STRING("AsyncIterator");
 }
@@ -1761,6 +1800,9 @@ void init_iterator_module(ant_t *js) {
   js_set(js, iter_proto, "toArray", js_mkfun(iter_toArray));
   
   js_set_sym_getter_desc(js, iter_proto, js->sym.toStringTag_sym, js_mkfun(iterator_tag_get), JS_DESC_C);
+  static const ant_cfunc_meta_t dispose_meta = { iter_dispose, "[Symbol.dispose]", 0, 0 };
+  
+  mkprop(js, iter_proto, js->sym.dispose_sym, js_mkfun_meta(&dispose_meta), ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE);
   js_set_sym_setter_desc(js, iter_proto, js->sym.toStringTag_sym, js_mkfun(iterator_tag_set), JS_DESC_C);
 
   ant_value_t ctor_obj = js_mkobj(js);
@@ -1783,6 +1825,9 @@ void init_iterator_module(ant_t *js) {
     js_mkfun(sym_this_cb), ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE);
   
   js_set_sym_getter_desc(js, async_iter_proto, js->sym.toStringTag_sym, js_mkfun(async_iterator_tag_get), JS_DESC_C);
+  static const ant_cfunc_meta_t async_dispose_meta = { async_iter_async_dispose, "[Symbol.asyncDispose]", 0, 0 };
+  
+  mkprop(js, async_iter_proto, js->sym.asyncDispose_sym, js_mkfun_meta(&async_dispose_meta), ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE);
   js_set_sym_setter_desc(js, async_iter_proto, js->sym.toStringTag_sym, js_mkfun(iterator_tag_set), JS_DESC_C);
 
   ant_value_t async_ctor_obj = js_mkobj(js);

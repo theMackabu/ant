@@ -404,7 +404,6 @@ static ant_value_t js_arraybuffer_constructor(ant_params_t) {
 
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  defhidden(js, obj, "byteLength", 10, js_mknum((double)length));
   js_set_finalizer(obj, arraybuffer_finalize);
 
   return obj;
@@ -437,7 +436,6 @@ static ant_value_t js_arraybuffer_slice(ant_params_t) {
 
   if (is_special_object(proto)) js_set_proto_init(new_obj, proto);
   js_set_native(new_obj, new_data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  defhidden(js, new_obj, "byteLength", 10, js_mknum((double)new_length));
   js_set_finalizer(new_obj, arraybuffer_finalize);
   
   return new_obj;
@@ -474,14 +472,12 @@ static ant_value_t js_arraybuffer_transfer(ant_params_t) {
   
   data->is_detached = 1;
   data->length = 0;
-  js_set(js, this_val, "byteLength", js_mknum(0));
 
   ant_value_t new_obj = js_mkobj(js);
   ant_value_t proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
 
   if (is_special_object(proto)) js_set_proto_init(new_obj, proto);
   js_set_native(new_obj, new_data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  defhidden(js, new_obj, "byteLength", 10, js_mknum((double)new_length));
   js_set_finalizer(new_obj, arraybuffer_finalize);
   
   return new_obj;
@@ -533,7 +529,13 @@ static ant_value_t js_dataview_buffer_getter(ant_params_t) {
   ant_value_t this_val = js_getthis(js);
   DataViewData *dv = buffer_get_dataview_data(this_val);
   if (!dv) return js_mkerr_typed(js, JS_ERR_TYPE, "Not a DataView");
-  return js_get(js, this_val, "buffer");
+  return js_get_slot(this_val, SLOT_DATA);
+}
+
+static ant_value_t js_typedarray_buffer_getter(ant_params_t) {
+  ant_value_t this_val = js_getthis(js);
+  if (!buffer_get_typedarray_data(this_val)) return js_mkerr_typed(js, JS_ERR_TYPE, "Not a TypedArray");
+  return js_get_slot(this_val, SLOT_DATA);
 }
 
 static ant_value_t js_dataview_byteLength_getter(ant_params_t) {
@@ -975,7 +977,6 @@ ant_value_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer) {
   if (is_special_object(ab_proto)) js_set_proto_init(ab_obj, ab_proto);
   
   js_set_native(ab_obj, buffer, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  defhidden(js, ab_obj, "byteLength", 10, js_mknum((double)buffer->length));
   js_set_finalizer(ab_obj, arraybuffer_finalize);
   buffer->ref_count++;
   
@@ -1002,8 +1003,7 @@ ant_value_t create_typed_array_with_buffer(
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
   
   js_set_native(obj, ta_data, BUFFER_TYPEDARRAY_NATIVE_TAG);
-  defhidden(js, obj, "BYTES_PER_ELEMENT", 17, js_mknum((double)element_size));
-  defhidden(js, obj, "buffer", 6, arraybuffer_obj);
+  js_set_slot_wb(js, obj, SLOT_DATA, arraybuffer_obj);
   
   js_set_getter(obj, typedarray_index_getter);
   js_set_definer(obj, typedarray_index_definer);
@@ -1042,9 +1042,7 @@ ant_value_t create_dataview_with_buffer(
 
   js_set_native(obj, dv_data, BUFFER_DATAVIEW_NATIVE_TAG);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_DATAVIEW));
-  mkprop_interned_exact(js, obj, intern_string("buffer", 6), arraybuffer_obj, ANT_PROP_ATTR_CONFIGURABLE);
-  defhidden(js, obj, "byteLength", 10, js_mknum((double)byte_length));
-  defhidden(js, obj, "byteOffset", 10, js_mknum((double)byte_offset));
+  js_set_slot_wb(js, obj, SLOT_DATA, arraybuffer_obj);
   js_set_finalizer(obj, dataview_finalize);
 
   return obj;
@@ -1933,9 +1931,7 @@ static ant_value_t js_dataview_constructor(ant_params_t) {
   
   js_set_native(obj, dv_data, BUFFER_DATAVIEW_NATIVE_TAG);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_DATAVIEW));
-  mkprop_interned_exact(js, obj, intern_string("buffer", 6), args[0], ANT_PROP_ATTR_CONFIGURABLE);
-  defhidden(js, obj, "byteLength", 10, js_mknum((double)byte_length));
-  defhidden(js, obj, "byteOffset", 10, js_mknum((double)byte_offset));
+  js_set_slot_wb(js, obj, SLOT_DATA, args[0]);
   js_set_finalizer(obj, dataview_finalize);
   
   return obj;
@@ -2937,6 +2933,47 @@ static ant_value_t js_buffer_allocUnsafe(ant_params_t) {
 
 static ant_value_t js_buffer_allocUnsafeSlow(ant_params_t) {
   return js_buffer_allocUnsafe(js, args, nargs, js_mkundef());
+}
+
+static ant_value_t js_buffer_of(ant_params_t) {
+  return js_typedarray_of(js, args, nargs, TYPED_ARRAY_UINT8, "Buffer");
+}
+
+static ant_value_t buffer_index_arg(ant_t *js, ant_value_t v, const char *name, size_t *out) {
+  if (vtype(v) != kTypeNumber) return js_mkerr_typed(js, JS_ERR_TYPE, "The \"%s\" argument must be of type number", name);
+  double d = js_getnum(v);
+  if (d != floor(d) || d < 0 || d > 9007199254740991.0) return js_mkerr_typed(js, JS_ERR_RANGE, "The value of \"%s\" is out of range", name);
+  *out = (size_t)d;
+  return js_mkundef();
+}
+
+static ant_value_t js_buffer_copyBytesFrom(ant_params_t) {
+  TypedArrayData *view = nargs > 0 ? buffer_get_typedarray_data(args[0]) : NULL;
+  if (!view) return js_mkerr_typed(js, JS_ERR_TYPE, "The \"view\" argument must be an instance of TypedArray");
+  
+  size_t len = view->buffer && !view->buffer->is_detached ? view->length : 0;
+  size_t start = 0, count = len;
+  
+  if (nargs > 1 && vtype(args[1]) != kTypeUndefined) {
+    ant_value_t r = buffer_index_arg(js, args[1], "offset", &start);
+    if (is_err(r)) return r;
+  }
+  
+  if (nargs > 2 && vtype(args[2]) != kTypeUndefined) {
+    ant_value_t r = buffer_index_arg(js, args[2], "length", &count);
+    if (is_err(r)) return r;
+  }
+  
+  start = start < len ? start : len;
+  count = count < len - start ? count : len - start;
+  
+  size_t elem_size = get_element_size(view->type);
+  size_t bytes = count * elem_size;
+  ArrayBufferData *buffer = create_array_buffer_data(bytes);
+  if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
+  
+  if (bytes) memcpy(buffer->data, view->buffer->data + view->byte_offset + start * elem_size, bytes);
+  return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, bytes, "Buffer");
 }
 
 static ant_value_t typedarray_join_with(ant_t *js, ant_value_t this_val, const char *sep, size_t sep_len) {
@@ -4306,7 +4343,6 @@ static ant_value_t js_sharedarraybuffer_constructor(ant_params_t) {
 
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  defhidden(js, obj, "byteLength", 10, js_mknum((double)length));
   js_set_finalizer(obj, arraybuffer_finalize);
   
   return obj;
@@ -4353,7 +4389,7 @@ void init_buffer_module(ant_t *js) {
   js_set_tostringtag(js, arraybuffer_proto, js_mkstr(js, "ArrayBuffer", 11));
   
   js_set_slot(arraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_arraybuffer_constructor));
-  js_mkprop_fast(js, arraybuffer_ctor_obj, "prototype", 9, arraybuffer_proto);
+  mkprop_exact_attrs(js, arraybuffer_ctor_obj, ANT_STRING("prototype"), arraybuffer_proto, 0);
   js_mkprop_fast(js, arraybuffer_ctor_obj, "name", 4, ANT_STRING("ArrayBuffer"));
   js_set_descriptor(js, arraybuffer_ctor_obj, "name", 4, 0);
   defmethod(js, arraybuffer_ctor_obj, "isView", 6, js_mkfun(js_arraybuffer_isView));
@@ -4366,6 +4402,7 @@ void init_buffer_module(ant_t *js) {
   ant_value_t typedarray_proto = js_mkobj(js);
   js_set_proto_init(typedarray_proto, object_proto);
 
+  js_set_getter_desc(js, typedarray_proto, "buffer", 6, js_mkfun(js_typedarray_buffer_getter), JS_DESC_C);
   js_set_getter_desc(js, typedarray_proto, "length", 6, js_mkfun(js_typedarray_length_getter), JS_DESC_C);
   js_set_getter_desc(js, typedarray_proto, "byteLength", 10, js_mkfun(js_typedarray_byteLength_getter), JS_DESC_C);
   js_set_getter_desc(js, typedarray_proto, "byteOffset", 10, js_mkfun(js_typedarray_byteOffset_getter), JS_DESC_C);
@@ -4400,7 +4437,7 @@ void init_buffer_module(ant_t *js) {
   ant_value_t typedarray_ctor_obj = js_mkobj(js);
   js_set_proto_init(typedarray_ctor_obj, function_proto);
   js_set_slot(typedarray_ctor_obj, SLOT_CFUNC, js_mkfun(js_typedarray_base_constructor));
-  js_mkprop_fast(js, typedarray_ctor_obj, "prototype", 9, typedarray_proto);
+  mkprop_exact_attrs(js, typedarray_ctor_obj, ANT_STRING("prototype"), typedarray_proto, 0);
   js_mkprop_fast(js, typedarray_ctor_obj, "name", 4, ANT_STRING("TypedArray"));
   js_set_descriptor(js, typedarray_ctor_obj, "name", 4, 0);
   
@@ -4428,9 +4465,9 @@ void init_buffer_module(ant_t *js) {
       js_set_proto_init(name##_proto, typedarray_proto); \
       js_set_tostringtag(js, name##_proto, js_mkstr(js, #name, sizeof(#name) - 1)); \
       js_set_slot(name##_ctor_obj, SLOT_CFUNC, js_mkfun(js_##name##_constructor)); \
-      js_setprop(js, name##_ctor_obj, js_mkstr(js, "prototype", 9), name##_proto); \
-      mkprop_interned_exact(js, name##_ctor_obj, intern_string("BYTES_PER_ELEMENT", 17), elem_size, 0); \
-      mkprop_interned_exact(js, name##_proto, intern_string("BYTES_PER_ELEMENT", 17), elem_size, 0); \
+      mkprop_exact_attrs(js, name##_ctor_obj, ANT_STRING("prototype"), name##_proto, 0); \
+      mkprop_exact_attrs(js, name##_ctor_obj, ANT_STRING("BYTES_PER_ELEMENT"), elem_size, 0); \
+      mkprop_exact_attrs(js, name##_proto, ANT_STRING("BYTES_PER_ELEMENT"), elem_size, 0); \
       js_mkprop_fast(js, name##_ctor_obj, "name", 4, ANT_STRING(#name)); \
       js_set_descriptor(js, name##_ctor_obj, "name", 4, 0); \
       js_define_species_getter(js, name##_ctor_obj); \
@@ -4496,7 +4533,7 @@ void init_buffer_module(ant_t *js) {
   js_set_tostringtag(js, dataview_proto, js_mkstr(js, "DataView", 8));
 
   js_set_slot(dataview_ctor_obj, SLOT_CFUNC, js_mkfun(js_dataview_constructor));
-  js_mkprop_fast(js, dataview_ctor_obj, "prototype", 9, dataview_proto);
+  mkprop_exact_attrs(js, dataview_ctor_obj, ANT_STRING("prototype"), dataview_proto, 0);
   js_mkprop_fast(js, dataview_ctor_obj, "name", 4, ANT_STRING("DataView"));
   js_set_descriptor(js, dataview_ctor_obj, "name", 4, 0);
   
@@ -4514,7 +4551,7 @@ void init_buffer_module(ant_t *js) {
   js_set_tostringtag(js, sharedarraybuffer_proto, js_mkstr(js, "SharedArrayBuffer", 17));
   
   js_set_slot(sharedarraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_sharedarraybuffer_constructor));
-  js_mkprop_fast(js, sharedarraybuffer_ctor_obj, "prototype", 9, sharedarraybuffer_proto);
+  mkprop_exact_attrs(js, sharedarraybuffer_ctor_obj, ANT_STRING("prototype"), sharedarraybuffer_proto, 0);
   js_mkprop_fast(js, sharedarraybuffer_ctor_obj, "name", 4, ANT_STRING("SharedArrayBuffer"));
   js_set_descriptor(js, sharedarraybuffer_ctor_obj, "name", 4, 0);
   js_define_species_getter(js, sharedarraybuffer_ctor_obj);
@@ -4599,19 +4636,23 @@ void init_buffer_module(ant_t *js) {
   js_set(js, buffer_proto, "values", js_get(js, typedarray_proto, "values"));
   js_set_sym(js, buffer_proto, js->sym.iterator_sym, js_get(js, buffer_proto, "values"));
   
+  if (vtype(uint8array_ctor) == kTypeFunction) js_set_proto_init(buffer_ctor_obj, uint8array_ctor);
+  js_set(js, buffer_ctor_obj, "poolSize", js_mknum(8192));
   js_set(js, buffer_ctor_obj, "from", js_mkfun(js_buffer_from));
+  js_set(js, buffer_ctor_obj, "copyBytesFrom", js_mkfun(js_buffer_copyBytesFrom));
+  js_set(js, buffer_ctor_obj, "of", js_mkfun(js_buffer_of));
   js_set(js, buffer_ctor_obj, "alloc", js_mkfun(js_buffer_alloc));
   js_set(js, buffer_ctor_obj, "allocUnsafe", js_mkfun(js_buffer_allocUnsafe));
   js_set(js, buffer_ctor_obj, "allocUnsafeSlow", js_mkfun(js_buffer_allocUnsafeSlow));
   js_set(js, buffer_ctor_obj, "isBuffer", js_mkfun(js_buffer_isBuffer));
-  js_set(js, buffer_ctor_obj, "isEncoding", js_mkfun(js_buffer_isEncoding));
-  js_set(js, buffer_ctor_obj, "byteLength", js_mkfun(js_buffer_byteLength));
-  js_set(js, buffer_ctor_obj, "concat", js_mkfun(js_buffer_concat));
   js_set(js, buffer_ctor_obj, "compare", js_mkfun(js_buffer_compare));
+  js_set(js, buffer_ctor_obj, "isEncoding", js_mkfun(js_buffer_isEncoding));
+  js_set(js, buffer_ctor_obj, "concat", js_mkfun(js_buffer_concat));
+  js_set(js, buffer_ctor_obj, "byteLength", js_mkfun(js_buffer_byteLength));
   js_define_species_getter(js, buffer_ctor_obj);
 
   js_set_slot(buffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_buffer_from));
-  js_mkprop_fast(js, buffer_ctor_obj, "prototype", 9, buffer_proto);
+  mkprop_exact_attrs(js, buffer_ctor_obj, ANT_STRING("prototype"), buffer_proto, ANT_PROP_ATTR_WRITABLE);
   js_mkprop_fast(js, buffer_ctor_obj, "name", 4, ANT_STRING("Buffer"));
   js_set_descriptor(js, buffer_ctor_obj, "name", 4, 0);
   
