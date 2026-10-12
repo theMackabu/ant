@@ -35,4 +35,33 @@ assert(same(s, { x: 19999, y: 2, extra: 1 }), 'compiled spread copies every key'
 assert(same(r, { c: 19999, d: 3 }), 'compiled rest leaves out named keys');
 assert(g === 'boom', 'compiled spread rethrows getter errors');
 
+const zz = Symbol.for('ant.spread.zz');
+let setterHits = 0;
+Object.defineProperty(Object.prototype, zz, { set() { setterHits++; }, configurable: true });
+const symCopy = { ...{ [zz]: 1 } };
+const { a: _a, ...symRest } = { a: 1, [zz]: 2 };
+delete Object.prototype[zz];
+assert(setterHits === 0 && symCopy[zz] === 1 && symRest[zz] === 2, 'symbol keys are defined, not set through inherited setters');
+
+const ro = Symbol('ro');
+Object.defineProperty(Object.prototype, ro, { value: 0, writable: false, configurable: true });
+const roCopy = { ...{ [ro]: 7 } };
+delete Object.prototype[ro];
+assert(Object.hasOwn(roCopy, ro) && roCopy[ro] === 7, 'an inherited read-only symbol does not block the copy');
+
+const grows = { a: 1, get b() { this.d = 4; return 2; }, c: 3 };
+assert(same({ ...grows }, { a: 1, b: 2, c: 3 }), 'keys a getter adds are not copied');
+const shrinks = { get a() { delete this.c; this.z = 9; return 1; }, b: 2, c: 3 };
+assert(same({ ...shrinks }, { a: 1, b: 2 }), 'keys a getter deletes are skipped');
+assert(same({ get a() { return 'acc'; }, ...{ a: 1 } }, { a: 1 }), 'spread replaces an accessor already on the literal');
+
+const arrAcc = [1, , 3];
+Object.defineProperty(arrAcc, 'acc', { get() { return 'g'; }, enumerable: true });
+assert(same({ ...arrAcc }, { 0: 1, 2: 3, acc: 'g' }), 'array spread copies elements, then own accessors');
+
+const wideKeys = Array.from({ length: 65540 }, (_, i) => 'k' + i).join(',');
+let tooMany = null;
+try { new Function('o', 'const {' + wideKeys + ', ...r} = o; return r;'); } catch (e) { tooMany = e; }
+assert(tooMany instanceof SyntaxError, 'too many keys before a rest element is a SyntaxError');
+
 console.log('object spread sources OK');

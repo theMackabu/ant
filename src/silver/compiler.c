@@ -5213,6 +5213,17 @@ static void emit_build_object_rest(sv_compiler_t *c, sv_ast_t *pat, int rest_idx
   emit_op(c, OP_OBJECT);
   emit_op(c, OP_SWAP);
   
+  int named = 0;
+  for (int j = 0; j < rest_idx; j++) {
+    sv_ast_t *prev = pat->args.items[j];
+    if (prev && prev->type == N_PROPERTY && prev->left) named++;
+  }
+  
+  if (named > UINT16_MAX) {
+    js_mkerr_typed(c->js, JS_ERR_SYNTAX, "too many properties before the rest element");
+    rest_idx = 0;
+  }
+  
   uint16_t excluded = 0;
   for (int j = 0; j < rest_idx; j++) {
     sv_ast_t *prev = pat->args.items[j];

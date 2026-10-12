@@ -10454,36 +10454,94 @@ static ant_value_t object_assign_fast_ordinary_source(
   return js_mkundef();
 }
 
-static bool copy_key_excluded(
-  ant_t *js, ant_value_t sym, const char *str, size_t len, 
-  const ant_value_t *excluded, int excluded_count
-) {
-  for (int i = 0; i < excluded_count; i++) {
-    ant_value_t ex = excluded[i];
-    
-    if (vtype(ex) == kTypeSymbol) {
-      if (ex == sym) return true;
-      continue;
-    }
-    
-    size_t ex_len = 0;
-    const char *ex_str = str && vtype(ex) == kTypeString ? js_getstr(js, ex, &ex_len) : NULL;
-    if (ex_str && ex_len == len && memcmp(ex_str, str, len) == 0) return true;
+typedef struct {
+  ant_value_t sym;
+  const char *interned;
+} copy_key_t;
+
+typedef struct {
+  const copy_key_t *keys;
+  int count;
+} copy_exclusions_t;
+
+static bool copy_key_of(ant_t *js, ant_value_t key, copy_key_t *out) {
+  if (vtype(key) == kTypeSymbol) {
+    *out = (copy_key_t){ .sym = key };
+    return true;
   }
   
+  size_t len = 0;
+  const char *str = vtype(key) == kTypeString ? js_getstr(js, key, &len) : NULL;
+  *out = (copy_key_t){ .sym = js_mkundef(), .interned = str ? intern_string(str, len) : NULL };
+  
+  return out->interned != NULL;
+}
+
+static bool copy_key_excluded(const copy_exclusions_t *ex, copy_key_t key) {
+  for (int i = 0; i < ex->count; i++)
+    if (ex->keys[i].sym == key.sym && ex->keys[i].interned == key.interned) return true;
   return false;
 }
 
-static ant_value_t copy_define(
-  ant_t *js, ant_value_t dst, ant_value_t sym, 
-  const char *str, size_t len, ant_value_t val
-) {
-  if (vtype(sym) == kTypeSymbol) return js_setprop(js, dst, sym, val);
-  return js_define_own_prop(js, dst, str, len, val);
+static ant_value_t copy_define_slow(ant_t *js, ant_value_t dst, copy_key_t key, ant_value_t val) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, val);
+  
+  ant_value_t key_val = vtype(key.sym) == kTypeSymbol
+    ? key.sym 
+    : js_mkstr(js, key.interned, intern_length(key.interned));
+    
+  GC_ROOT_PIN(js, key_val);
+  
+  ant_value_t desc = js_mkobj(js);
+  GC_ROOT_PIN(js, desc);
+  
+  js_set(js, desc, "value", val);
+  js_set(js, desc, "writable", js_true);
+  js_set(js, desc, "enumerable", js_true);
+  js_set(js, desc, "configurable", js_true);
+  
+  ant_value_t result = object_define_property(js, dst, key_val, desc);
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  return is_err(result) ? result : val;
+}
+
+static ant_value_t copy_define(ant_t *js, ant_value_t dst, copy_key_t key, ant_value_t val) {
+  ant_object_t *ptr = js_obj_ptr(dst);
+  if (vtype(dst) != kTypeObject || !ptr || !ptr->shape || ptr->flags.is_exotic || !ptr->flags.extensible)
+    return copy_define_slow(js, dst, key, val);
+  
+  bool is_sym = vtype(key.sym) == kTypeSymbol;
+  ant_offset_t sym_off = is_sym ? (ant_offset_t)vdata(key.sym) : 0;
+  
+  int32_t slot = is_sym
+    ? ant_shape_lookup_symbol(ptr->shape, sym_off)
+    : ant_shape_lookup_interned(ptr->shape, key.interned);
+  
+  if (slot < 0) return is_sym
+    ? mkprop_symbol_attrs_impl(js, dst, key.sym, val, 0, MKPROP_USE_DEFAULT_ATTRS)
+    : mkprop_interned_exact(js, dst, key.interned, val, 0);
+  
+  const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
+  
+  bool plain = 
+    prop && !prop->has_getter && !prop->has_setter &&
+    ant_shape_get_attrs(ptr->shape, (uint32_t)slot) == ANT_PROP_ATTR_DEFAULT;
+  
+  if (!plain || (uint32_t)slot >= ptr->prop_count) return copy_define_slow(js, dst, key, val);
+  
+  ant_object_prop_set_unchecked(ptr, (uint32_t)slot, val);
+  gc_write_barrier(js, ptr, val);
+  
+  if (is_sym) ant_symbol_property_mutation_invalidate(js, ptr, sym_off);
+  else ant_property_mutation_invalidate(js, ptr, key.interned);
+  
+  return val;
 }
 
 static ant_value_t copy_proxy_data_props(
-  ant_t *js, ant_value_t dst, ant_value_t proxy, const ant_value_t *excluded, int excluded_count
+  ant_t *js, ant_value_t dst, ant_value_t proxy, const copy_exclusions_t *ex
 ) {
   bool host = js_proxy_is_host(proxy);
   ant_value_t keys = host ? proxy_own_keys_filtered(js, proxy, true, true) : proxy_own_keys_raw(js, proxy);
@@ -10496,21 +10554,21 @@ static ant_value_t copy_proxy_data_props(
   ant_offset_t key_count = js_arr_len(js, keys);
   for (ant_offset_t k = 0; k < key_count && !is_err(result); k++) {
     GC_ROOT_SAVE(key_mark, js);
+    
     ant_value_t key = js_arr_get(js, keys, k);
     GC_ROOT_PIN(js, key);
     
-    bool is_sym = vtype(key) == kTypeSymbol;
-    size_t len = 0;
-    const char *str = is_sym ? NULL : js_getstr(js, key, &len);
-    ant_value_t sym = is_sym ? key : js_mkundef();
+    copy_key_t ck;
+    if (!copy_key_of(js, key, &ck)) result = js_mkerr(js, "out of memory");
+    else if (!copy_key_excluded(ex, ck)) {
+      ant_value_t enumerable = host ? js_true : proxy_key_enumerable(js, proxy, key);
+      ant_value_t val = js_truthy(js, enumerable) ? proxy_get_val(js, proxy, key) : enumerable;
+      GC_ROOT_PIN(js, val);
+      
+      if (is_err(val)) result = val;
+      else if (js_truthy(js, enumerable)) result = copy_define(js, dst, ck, val);
+    }
     
-    ant_value_t enumerable = copy_key_excluded(js, sym, str, len, excluded, excluded_count)
-      ? js_false : host ? js_true : proxy_key_enumerable(js, proxy, key);
-    ant_value_t val = js_truthy(js, enumerable) ? proxy_get_val(js, proxy, key) : enumerable;
-    GC_ROOT_PIN(js, val);
-    
-    if (is_err(val)) result = val;
-    else if (js_truthy(js, enumerable)) result = copy_define(js, dst, sym, str, len, val);
     GC_ROOT_RESTORE(js, key_mark);
   }
 
@@ -10518,66 +10576,185 @@ static ant_value_t copy_proxy_data_props(
   return is_err(result) ? result : js_mkundef();
 }
 
-static ant_value_t copy_index_props(
-  ant_t *js, ant_value_t dst, ant_value_t indexed, const ant_value_t *excluded, int excluded_count
-) {
-  bool is_str = vtype(indexed) == kTypeString;
-  ant_offset_t doff = is_str ? 0 : get_dense_buf(indexed);
-  ant_offset_t len = is_str ? str_utf16_len(js, indexed) : doff ? dense_iterable_length(js, indexed) : 0;
+static ant_value_t copy_string_props(ant_t *js, ant_value_t dst, ant_value_t str, const copy_exclusions_t *ex) {
+  ant_offset_t len = str_utf16_len(js, str);
   
   for (ant_offset_t i = 0; i < len; i++) {
     char key[16];
     size_t key_len = uint_to_str(key, sizeof(key), (uint64_t)i);
-    if (copy_key_excluded(js, js_mkundef(), key, key_len, excluded, excluded_count)) continue;
+    copy_key_t ck = { .sym = js_mkundef(), .interned = intern_string(key, key_len) };
     
-    ant_value_t val;
-    if (is_str) {
-      ant_offset_t byte_len = 0;
-      const char *data = (const char *)(uintptr_t)vstr(js, indexed, &byte_len);
-      val = js_string_from_utf16_code_unit(js, utf16_code_unit_at(data, (size_t)byte_len, (size_t)i));
-    } else {
-      val = dense_get(doff, i);
-      if (is_empty_slot(val)) continue;
-    }
+    if (!ck.interned) return js_mkerr(js, "out of memory");
+    if (copy_key_excluded(ex, ck)) continue;
     
-    ant_value_t result = copy_define(js, dst, js_mkundef(), key, key_len, val);
+    ant_offset_t byte_len = 0;
+    const char *data = (const char *)(uintptr_t)vstr(js, str, &byte_len);
+    ant_value_t val = js_string_from_utf16_code_unit(js, utf16_code_unit_at(data, (size_t)byte_len, (size_t)i));
+    
+    ant_value_t result = copy_define(js, dst, ck, val);
     if (is_err(result)) return result;
   }
   
   return js_mkundef();
 }
 
-static bool copy_plain_data_props(
-  ant_t *js, ant_value_t dst, ant_value_t src, const ant_value_t *excluded, int excluded_count, ant_value_t *result
+static ant_value_t copy_dense_props(ant_t *js, ant_value_t dst, ant_value_t arr, const copy_exclusions_t *ex) {
+  ant_offset_t doff = get_dense_buf(arr);
+  ant_offset_t len = doff ? dense_iterable_length(js, arr) : 0;
+  
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t val = dense_get(doff, i);
+    if (is_empty_slot(val)) continue;
+    
+    char key[16];
+    size_t key_len = uint_to_str(key, sizeof(key), (uint64_t)i);
+    copy_key_t ck = { .sym = js_mkundef(), .interned = intern_string(key, key_len) };
+    
+    if (!ck.interned) return js_mkerr(js, "out of memory");
+    if (copy_key_excluded(ex, ck)) continue;
+    
+    ant_value_t result = copy_define(js, dst, ck, val);
+    if (is_err(result)) return result;
+  }
+  
+  return js_mkundef();
+}
+
+static copy_key_t copy_key_at(const ant_shape_prop_t *prop) {
+  return prop->type == ANT_SHAPE_KEY_SYMBOL
+    ? (copy_key_t){ .sym = mkval(kTypeSymbol, prop->key.sym_off) }
+    : (copy_key_t){ .sym = js_mkundef(), .interned = prop->key.interned };
+}
+
+static ant_value_t copy_shape_keys_snapshot(
+  ant_t *js, ant_value_t dst, ant_value_t src, ant_object_t *ptr, const copy_exclusions_t *ex
 ) {
-  ant_object_t *ptr = vtype(src) == kTypeObject ? js_obj_ptr(src) : NULL;
+  uint32_t count = ant_shape_count(ptr->shape);
+  
+  copy_key_t stack_keys[32];
+  copy_key_t *keys = count <= 32 ? stack_keys : malloc((size_t)count * sizeof(*keys));
+  if (!keys) return js_mkerr(js, "out of memory");
+  
+  uint32_t key_count = 0;
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+    if (prop && i < ptr->prop_count) keys[key_count++] = copy_key_at(prop);
+  }
+  
+  ant_value_t result = js_mkundef();
+  for (uint32_t k = 0; k < key_count && !is_err(result); k++) {
+    copy_key_t ck = keys[k];
+    if (copy_key_excluded(ex, ck)) continue;
+    
+    bool is_sym = vtype(ck.sym) == kTypeSymbol;
+    int32_t slot = is_sym
+      ? ant_shape_lookup_symbol(ptr->shape, (ant_offset_t)vdata(ck.sym))
+      : ant_shape_lookup_interned(ptr->shape, ck.interned);
+    
+    if (slot < 0 || (uint32_t)slot >= ptr->prop_count) continue;
+    if ((ant_shape_get_attrs(ptr->shape, (uint32_t)slot) & ANT_PROP_ATTR_ENUMERABLE) == 0) continue;
+    
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
+    ant_value_t val = !(prop->has_getter || prop->has_setter)
+      ? ant_object_prop_get_unchecked(ptr, (uint32_t)slot)
+      : is_sym ? js_get_sym(js, src, ck.sym) : js_get(js, src, ck.interned);
+    
+    result = is_err(val) ? val : copy_define(js, dst, ck, val);
+  }
+  
+  if (keys != stack_keys) free(keys);
+  return result;
+}
+
+static bool copy_ordinary_data_props(
+  ant_t *js, ant_value_t dst, ant_value_t src, const copy_exclusions_t *ex, ant_value_t *result
+) {
+  bool is_arr = vtype(src) == kTypeArray;
+  ant_object_t *ptr = is_arr || vtype(src) == kTypeObject ? js_obj_ptr(src) : NULL;
+  
   if (!ptr || !ptr->shape || ptr->flags.is_exotic || ptr->flags.arguments_object) return false;
   if (vtype(js_string_wrapper_value(src)) == kTypeString) return false;
+  
+  *result = is_arr ? copy_dense_props(js, dst, src, ex) : js_mkundef();
+  if (is_err(*result)) return true;
   
   ant_shape_t *shape = ptr->shape;
   uint32_t count = ant_shape_count(shape);
   
   for (uint32_t i = 0; i < count; i++) {
     const ant_shape_prop_t *prop = ant_shape_prop_at(shape, i);
-    if (prop && (prop->has_getter || prop->has_setter)) return false;
+    if (prop && (prop->has_getter || prop->has_setter)) {
+      *result = copy_shape_keys_snapshot(js, dst, src, ptr, ex);
+      return true;
+    }
   }
   
-  *result = js_mkundef();
+  ant_object_t *dst_ptr = js_obj_ptr(dst);
+  if (dst_ptr && dst_ptr->shape && !js_obj_ensure_prop_capacity(dst_ptr, ant_shape_count(dst_ptr->shape) + count)) {
+    *result = js_mkerr(js, "out of memory");
+    return true;
+  }
+  
   for (uint32_t i = 0; i < count && !is_err(*result); i++) {
     const ant_shape_prop_t *prop = ant_shape_prop_at(shape, i);
     if (!prop || i >= ptr->prop_count) continue;
     if ((ant_shape_get_attrs(shape, i) & ANT_PROP_ATTR_ENUMERABLE) == 0) continue;
     
-    bool is_sym = prop->type == ANT_SHAPE_KEY_SYMBOL;
-    ant_value_t sym = is_sym ? mkval(kTypeSymbol, prop->key.sym_off) : js_mkundef();
-    const char *str = is_sym ? NULL : prop->key.interned;
-    size_t len = is_sym ? 0 : intern_length(str);
-    
-    if (copy_key_excluded(js, sym, str, len, excluded, excluded_count)) continue;
-    *result = copy_define(js, dst, sym, str, len, ant_object_prop_get_unchecked(ptr, i));
+    copy_key_t ck = copy_key_at(prop);
+    if (copy_key_excluded(ex, ck)) continue;
+    *result = copy_define(js, dst, ck, ant_object_prop_get_unchecked(ptr, i));
   }
   
   return true;
+}
+
+static ant_value_t copy_object_data_props(ant_t *js, ant_value_t dst, ant_value_t src, const copy_exclusions_t *ex) {
+  ant_value_t keys = js_own_property_keys(js, src, true, true);
+  if (is_err(keys)) return keys;
+  
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, keys);
+  ant_value_t view = js_object_view(src);
+  ant_value_t result = js_mkundef();
+  
+  ant_offset_t key_count = js_arr_len(js, keys);
+  for (ant_offset_t k = 0; k < key_count && !is_err(result); k++) {
+    GC_ROOT_SAVE(key_mark, js);
+    
+    ant_value_t key = js_arr_get(js, keys, k);
+    GC_ROOT_PIN(js, key);
+    
+    copy_key_t ck;
+    if (!copy_key_of(js, key, &ck)) result = js_mkerr(js, "out of memory");
+    else if (!copy_key_excluded(ex, ck)) {
+      ant_value_t own = object_has_own(js, view, key);
+      
+      ant_value_t val = !js_truthy(js, own) 
+        ? own : vtype(ck.sym) == kTypeSymbol 
+        ? js_get_sym(js, src, ck.sym) : js_get(js, src, ck.interned);
+      GC_ROOT_PIN(js, val);
+      
+      if (is_err(val)) result = val;
+      else if (js_truthy(js, own)) result = copy_define(js, dst, ck, val);
+    }
+    
+    GC_ROOT_RESTORE(js, key_mark);
+  }
+  
+  GC_ROOT_RESTORE(js, root_mark);
+  return is_err(result) ? result : js_mkundef();
+}
+
+static ant_value_t copy_data_props(ant_t *js, ant_value_t dst, ant_value_t src, const copy_exclusions_t *ex) {
+  if (vtype(src) == kTypeString) return copy_string_props(js, dst, src, ex);
+  if (!is_object_type(src)) return js_mkundef();
+  
+  ant_value_t source = js_as_obj(src);
+  if (is_proxy(source)) return copy_proxy_data_props(js, dst, source, ex);
+  
+  ant_value_t result;
+  if (copy_ordinary_data_props(js, dst, src, ex, &result)) return result;
+  return copy_object_data_props(js, dst, src, ex);
 }
 
 ant_value_t js_copy_data_props(
@@ -10585,63 +10762,24 @@ ant_value_t js_copy_data_props(
   const ant_value_t *excluded, int excluded_count
 ) {
   if (!is_object_type(dst)) return js_mkundef();
-  if (vtype(src) == kTypeString) return copy_index_props(js, dst, src, excluded, excluded_count);
-  if (!is_object_type(src)) return js_mkundef();
+  
+  copy_key_t stack_keys[16];
+  copy_key_t *keys = excluded_count <= 16 ? stack_keys : malloc((size_t)excluded_count * sizeof(*keys));
+  if (!keys) return js_mkerr(js, "out of memory");
+  
+  int count = 0;
+  for (int i = 0; i < excluded_count; i++)
+    if (copy_key_of(js, excluded[i], &keys[count])) count++;
   
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, dst);
   GC_ROOT_PIN(js, src);
   
-  ant_value_t source = js_as_obj(src);
-  if (is_proxy(source)) {
-    ant_value_t result = copy_proxy_data_props(js, dst, source, excluded, excluded_count);
-    GC_ROOT_RESTORE(js, root_mark);
-    return result;
-  }
+  copy_exclusions_t ex = { keys, count };
+  ant_value_t result = copy_data_props(js, dst, src, &ex);
   
-  ant_value_t wrapped = js_string_wrapper_value(source);
-  
-  ant_value_t indexed = vtype(src) == kTypeArray 
-    ? src : vtype(wrapped) == kTypeString 
-    ? wrapped : js_mkundef();
-  
-  ant_value_t index_result = vtype(indexed) == kTypeUndefined 
-    ? js_mkundef() 
-    : copy_index_props(js, dst, indexed, excluded, excluded_count);
-  
-  if (is_err(index_result)) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return index_result;
-  }
-  
-  ant_value_t plain_result;
-  if (copy_plain_data_props(js, dst, source, excluded, excluded_count, &plain_result)) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return plain_result;
-  }
-  
-  ant_object_t *source_ptr = js_obj_ptr(source);
-  ant_iter_t iter = js_prop_iter_begin(js, src);
-  
-  ant_iter_key_t key = {0};
-  ant_value_t val = js_mkundef();
-  ant_value_t result = js_mkundef();
-  GC_ROOT_PIN(js, val);
-
-  while (!is_err(result) && js_prop_iter_next_key(&iter, &key, NULL)) {
-    if (!js_is_own_enumerable_prop(js, src, source_ptr, &key)) continue;
-    
-    ant_value_t sym = key.is_symbol ? mkval(kTypeSymbol, key.sym_off) : js_mkundef();
-    const char *str = key.is_symbol ? NULL : key.str;
-    size_t len = key.is_symbol ? 0 : key.key_len;
-    if (copy_key_excluded(js, sym, str, len, excluded, excluded_count)) continue;
-    
-    val = key.is_symbol ? js_get_sym(js, src, sym) : js_get(js, src, key.str);
-    result = is_err(val) ? val : copy_define(js, dst, sym, str, len, val);
-  }
-
-  js_prop_iter_end(&iter);
   GC_ROOT_RESTORE(js, root_mark);
+  if (keys != stack_keys) free(keys);
   
   return is_err(result) ? result : js_mkundef();
 }
