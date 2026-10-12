@@ -11,10 +11,10 @@
 #include "debug.h"
 #include "tokens.h"
 #include "common.h"
-#include "utils.h"
 #include "sugar.h"
 #include "base64.h"
 #include "builder.h"
+#include "stringify.h"
 #include "runtime.h"
 #include "internal.h"
 #include "errors.h"
@@ -82,7 +82,6 @@
 #include "modules/buffer.h"
 #include "modules/events.h"
 #include "modules/blob.h"
-#include "modules/collections.h"
 #include "modules/cron.h"
 #include "modules/lmdb.h"
 #include "modules/regex.h"
@@ -665,6 +664,7 @@ static bool js_try_get(ant_t *js, ant_value_t obj, const char *key, ant_value_t 
 static bool js_try_get_len(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t *out);
 static inline ant_value_t lkp_sym_proto_val(ant_t *js, ant_value_t obj, ant_offset_t sym_off);
 static size_t strpromise(ant_t *js, ant_value_t value, char *buf, size_t len);
+static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len);
 
 static ant_value_t coerce_to_str_hint(ant_t *js, ant_value_t value, int hint);
 static ant_value_t js_mkstr_int32(ant_t *js, int32_t value);
@@ -1280,341 +1280,83 @@ static size_t strdate(ant_t *js, ant_value_t obj, char *buf, size_t len) {
   return cpy(buf, len, (const char *)(uintptr_t)(soff), slen);
 }
 
-// todo: split into smaller functions
+static size_t strobj_host_proxy(ant_t *js, ant_value_t obj, char *buf, size_t len) {
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t copy = js_mkobj(js);
+  
+  GC_ROOT_PIN(js, copy);
+  (void)js_copy_data_props(js, copy, obj, NULL, 0);
+  
+  size_t n = strobj(js, copy, buf, len);
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  return n;
+}
+
+static size_t strobj_error(ant_t *js, ant_value_t obj, char *buf, size_t len, size_t n) {
+  js_inspect_builder_t builder;
+  js_inspect_builder_init_fixed(&builder, js, buf, len, n);
+  js_inspect_error(&builder, obj);
+  return builder.n;
+}
+
+static size_t strobj_inspect(ant_t *js, ant_value_t obj, char *buf, size_t len, size_t n) {
+  ant_value_t tag = lkp_sym_proto_val(js, obj, (ant_offset_t)vdata(js->sym.toStringTag_sym));
+  js_inspect_builder_t builder;
+  js_inspect_builder_init_fixed(&builder, js, buf, len, n);
+  
+  bool ok;
+  if (vtype(tag) == kTypeString) {
+    ant_offset_t tag_len = 0;
+    const char *tag_str = (const char *)(uintptr_t)vstr(js, tag, &tag_len);
+    ok = js_inspect_tagged_header(&builder, tag_str, (size_t)tag_len);
+  } else ok = js_inspect_plain_header(&builder, obj);
+  
+  if (ok) ok = js_inspect_object_body(&builder, obj);
+  if (ok) js_inspect_close(&builder);
+  return builder.n;
+}
+
+static size_t strobj_body(ant_t *js, ant_value_t obj, char *buf, size_t len, size_t n) {
+  if (get_slot(obj, SLOT_ERROR_BRAND) == js_true || vtype(get_slot(obj, SLOT_ERR_TYPE)) == kTypeNumber)
+    return strobj_error(js, obj, buf, len, n);
+  if (is_date_instance(obj)) return n + strdate(js, obj, buf + n, REMAIN(n, len));
+  
+  TypedArrayData *ta = buffer_get_typedarray_data(obj);
+  if (ta && ta->buffer) return n + stringify_typedarray(js, obj, ta, buf + n, REMAIN(n, len));
+  
+  ArrayBufferData *ab = buffer_get_arraybuffer_data(obj);
+  if (ab) return n + stringify_arraybuffer(ab, buf + n, REMAIN(n, len));
+  
+  DataViewData *dv = buffer_get_dataview_data(obj);
+  if (dv && dv->buffer) return n + stringify_dataview(dv, buf + n, REMAIN(n, len));
+  
+  blob_data_t *bd = blob_get_data(obj);
+  if (bd) return n + stringify_blob(bd, js_brand_id(obj) == BRAND_FILE, buf + n, REMAIN(n, len));
+  
+  return strobj_inspect(js, obj, buf, len, n);
+}
+
 static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
-  if (js_proxy_is_host(obj)) {
-    GC_ROOT_SAVE(root_mark, js);
-    ant_value_t copy = js_mkobj(js);
-    
-    GC_ROOT_PIN(js, copy);
-    (void)js_copy_data_props(js, copy, obj, NULL, 0);
-    
-    size_t n = strobj(js, copy, buf, len);
-    GC_ROOT_RESTORE(js, root_mark);
-    
-    return n;
-  }
+  if (js_proxy_is_host(obj)) return strobj_host_proxy(js, obj, buf, len);
   
   int ref = get_circular_ref(js, obj);
-  if (ref) return ref > 0 ? (size_t) snprintf(buf, len, "[Circular *%d]", ref) : cpy(buf, len, "[Circular]", 10);
+  if (ref) return ref > 0 ? (size_t)snprintf(buf, len, "[Circular *%d]", ref) : cpy(buf, len, "[Circular]", 10);
   
   push_stringify(js, obj);
   
   size_t n = 0;
   int self_ref = get_self_ref(js, obj);
-  if (self_ref) {
-    n += (size_t) snprintf(buf + n, REMAIN(n, len), "<ref *%d> ", self_ref);
-  }
-
-  ant_value_t inspect_val = strobj_call_custom_inspect(js, obj);
-  if (vtype(inspect_val) == kTypeString) {
+  if (self_ref) n += (size_t)snprintf(buf, len, "<ref *%d> ", self_ref);
+  
+  ant_value_t custom = strobj_call_custom_inspect(js, obj);
+  if (vtype(custom) == kTypeString) {
     size_t slen = 0;
-    const char *s = js_getstr(js, inspect_val, &slen);
+    const char *s = js_getstr(js, custom, &slen);
     n += cpy(buf + n, REMAIN(n, len), s ? s : "", slen);
-    pop_stringify(js);
-    return n;
-  }
-
-  if (get_slot(obj, SLOT_ERROR_BRAND) == js_true || vtype(get_slot(obj, SLOT_ERR_TYPE)) == kTypeNumber) {
-    js_inspect_builder_t builder;
-    js_inspect_builder_init_fixed(&builder, js, buf, len, n);
-    js_inspect_error(&builder, obj);
-    
-    n = builder.n;
-    pop_stringify(js);
-    
-    return n;
-  }
-
-  if (is_date_instance(obj)) {
-    n += strdate(js, obj, buf + n, REMAIN(n, len));
-    pop_stringify(js);
-    return n;
-  }
+  } else n = strobj_body(js, obj, buf, len, n);
   
-  ant_value_t tag_sym = js->sym.toStringTag_sym;
-  ant_value_t tag_val = (vtype(tag_sym) == kTypeSymbol) 
-    ? lkp_sym_proto_val(js, obj, (ant_offset_t)vdata(tag_sym)) 
-    : js_mkundef();
-  
-  bool is_map = false, is_set = false, is_arraybuffer = false;
-  ant_offset_t tlen = 0, toff = 0;
-  const char *tag_str = NULL;
-  
-  if (vtype(tag_val) == kTypeString) {
-    toff = vstr(js, tag_val, &tlen);
-    tag_str = (const char *)(uintptr_t)(toff);
-    is_map = (tlen == 3 && memcmp(tag_str, "Map", 3) == 0);
-    is_set = (tlen == 3 && memcmp(tag_str, "Set", 3) == 0);
-    is_arraybuffer = (tlen >= 11 && memcmp(tag_str + tlen - 11, "ArrayBuffer", 11) == 0);
-
-    TypedArrayData *ta = buffer_get_typedarray_data(obj);
-    if (ta && ta->buffer) {
-      const char *type_name = NULL;
-      size_t type_len = 0;
-      
-      ant_value_t proto = js_get_proto(js, obj);
-      ant_value_t buffer_proto = js_get_ctor_proto(js, "Buffer", 6);
-      if (vtype(proto) == kTypeObject && vtype(buffer_proto) == kTypeObject && vdata(proto) == vdata(buffer_proto)) {
-        type_name = "Buffer";
-        type_len = 6;
-      } else if (ta->type <= TYPED_ARRAY_BIGUINT64) {
-        type_name = buffer_typedarray_type_name(ta->type);
-        type_len = strlen(type_name);
-      } else {
-        type_name = "TypedArray";
-        type_len = 10;
-      }
-
-      uint8_t *data = ta->buffer->data + ta->byte_offset;
-      if (type_len == 6 && memcmp(type_name, "Buffer", 6) == 0) {
-        size_t shown = ta->byte_length < BUFFER_INSPECT_MAX_BYTES
-          ? ta->byte_length
-          : BUFFER_INSPECT_MAX_BYTES;
-
-        n += cpy(buf + n, REMAIN(n, len), "<Buffer", 7);
-        for (size_t i = 0; i < shown; i++) {
-          n += (size_t) snprintf(buf + n, REMAIN(n, len), " %02x", data[i]);
-        }
-        if (shown < ta->byte_length) {
-          size_t remaining = ta->byte_length - shown;
-          n += (size_t) snprintf(
-            buf + n, REMAIN(n, len), " ... %zu more byte%s",
-            remaining, remaining == 1 ? "" : "s"
-          );
-        }
-        n += cpy(buf + n, REMAIN(n, len), shown == 0 ? " >" : ">", shown == 0 ? 2 : 1);
-        pop_stringify(js);
-        return n;
-      }
-      
-      n += cpy(buf + n, REMAIN(n, len), type_name, type_len);
-      n += (size_t) snprintf(buf + n, REMAIN(n, len), "(%zu) ", ta->length);
-      n += cpy(buf + n, REMAIN(n, len), "[ ", 2);
-      
-      for (size_t i = 0; i < ta->length && i < 100; i++) {
-        if (i > 0) n += cpy(buf + n, REMAIN(n, len), ", ", 2);
-        
-        switch (ta->type) {
-          case TYPED_ARRAY_INT8:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%d", (int)((int8_t*)data)[i]);
-            break;
-          case TYPED_ARRAY_UINT8:
-          case TYPED_ARRAY_UINT8_CLAMPED:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", (unsigned)data[i]);
-            break;
-          case TYPED_ARRAY_INT16:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%d", (int)((int16_t*)data)[i]);
-            break;
-          case TYPED_ARRAY_UINT16:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", (unsigned)((uint16_t*)data)[i]);
-            break;
-          case TYPED_ARRAY_INT32:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%d", ((int32_t*)data)[i]);
-            break;
-          case TYPED_ARRAY_UINT32:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", ((uint32_t*)data)[i]);
-            break;
-          case TYPED_ARRAY_FLOAT16:
-            n += (size_t) snprintf(
-              buf + n, REMAIN(n, len), "%g", half_to_double(((uint16_t*)data)[i])
-            );
-            break;
-          case TYPED_ARRAY_FLOAT32:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%g", (double)((float*)data)[i]);
-            break;
-          case TYPED_ARRAY_FLOAT64:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%g", ((double*)data)[i]);
-            break;
-          case TYPED_ARRAY_BIGINT64:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%lldn", (long long)((int64_t*)data)[i]);
-            break;
-          case TYPED_ARRAY_BIGUINT64:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%llun", (unsigned long long)((uint64_t*)data)[i]);
-            break;
-          default:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", (unsigned)data[i]);
-            break;
-        }
-      }
-      
-      if (ta->length > 100) n += cpy(buf + n, REMAIN(n, len), ", ...", 5);
-      n += cpy(buf + n, REMAIN(n, len), " ]", 2);
-      pop_stringify(js);
-      return n;
-    }
-    
-    if (is_arraybuffer) {
-      ArrayBufferData *ab_data = buffer_get_arraybuffer_data(obj);
-      if (ab_data) {
-        size_t bytelen = ab_data ? ab_data->length : 0;
-        
-        n += cpy(buf + n, REMAIN(n, len), tag_str, tlen);
-        n += cpy(buf + n, REMAIN(n, len), " {\n", 3);
-        n += cpy(buf + n, REMAIN(n, len), "  [Uint8Contents]: <", 20);
-        
-        if (ab_data && ab_data->data && bytelen > 0) {
-          for (size_t i = 0; i < bytelen; i++) {
-            if (i > 0) n += cpy(buf + n, REMAIN(n, len), " ", 1);
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%02x", ab_data->data[i]);
-          }
-        }
-        
-        n += cpy(buf + n, REMAIN(n, len), ">,\n", 3);
-        n += cpy(buf + n, REMAIN(n, len), "  [byteLength]: ", 16);
-        n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", bytelen);
-        n += cpy(buf + n, REMAIN(n, len), "\n}", 2);
-        pop_stringify(js);
-        return n;
-      }
-    }
-    
-    bool is_dataview = (tlen == 8 && memcmp(tag_str, "DataView", 8) == 0);
-    if (is_dataview) {
-      DataViewData *dv = buffer_get_dataview_data(obj);
-      if (dv && dv->buffer) {
-        n += cpy(buf + n, REMAIN(n, len), "DataView {\n", 11);
-        n += cpy(buf + n, REMAIN(n, len), "  [byteLength]: ", 16);
-        n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", dv->byte_length);
-        n += cpy(buf + n, REMAIN(n, len), ",\n", 2);
-        n += cpy(buf + n, REMAIN(n, len), "  [byteOffset]: ", 16);
-        n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", dv->byte_offset);
-        n += cpy(buf + n, REMAIN(n, len), ",\n", 2);
-        n += cpy(buf + n, REMAIN(n, len), "  [buffer]: ArrayBuffer {\n", 26);
-        n += cpy(buf + n, REMAIN(n, len), "    [Uint8Contents]: <", 22);
-        
-        if (dv->buffer->data && dv->buffer->length > 0) {
-          for (size_t i = 0; i < dv->buffer->length; i++) {
-            if (i > 0) n += cpy(buf + n, REMAIN(n, len), " ", 1);
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%02x", dv->buffer->data[i]);
-          }
-        }
-        
-        n += cpy(buf + n, REMAIN(n, len), ">,\n", 3);
-        n += cpy(buf + n, REMAIN(n, len), "    [byteLength]: ", 18);
-        n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", dv->buffer->length);
-        n += cpy(buf + n, REMAIN(n, len), "\n  }\n}", 6);
-        pop_stringify(js);
-        return n;
-      }
-    }
-    
-    if (is_map) {
-      ant_value_t map_val = js_get_slot(obj, SLOT_MAP);
-      if (vtype(map_val) != kTypeUndefined) {
-        map_entry_t **map_ptr = (map_entry_t**)(size_t)tod(map_val);
-        n += cpy(buf + n, REMAIN(n, len), "Map(", 4);
-        
-        unsigned int count = 0;
-        if (map_ptr && *map_ptr) count = HASH_COUNT(*map_ptr);
-        n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", count);
-        n += cpy(buf + n, REMAIN(n, len), ") ", 2);
-        
-        if (count == 0) {
-          n += cpy(buf + n, REMAIN(n, len), "{}", 2);
-        } else {
-          n += cpy(buf + n, REMAIN(n, len), "{\n", 2);
-          js->stringify.indent++;
-          bool first = true;
-          if (map_ptr && *map_ptr) {
-            map_entry_t *entry, *tmp;
-            HASH_ITER(hh, *map_ptr, entry, tmp) {
-              if (!first) n += cpy(buf + n, REMAIN(n, len), ",\n", 2);
-              first = false;
-              n += add_indent(buf + n, REMAIN(n, len), js->stringify.indent);
-              n += tostr(js, entry->key_val, buf + n, REMAIN(n, len));
-              n += cpy(buf + n, REMAIN(n, len), " => ", 4);
-              n += tostr(js, entry->value, buf + n, REMAIN(n, len));
-            }
-          }
-          js->stringify.indent--;
-          n += cpy(buf + n, REMAIN(n, len), "\n", 1);
-          n += add_indent(buf + n, REMAIN(n, len), js->stringify.indent);
-          n += cpy(buf + n, REMAIN(n, len), "}", 1);
-        }
-        pop_stringify(js);
-        return n;
-      }
-    }
-    
-    if (is_set) {
-      ant_value_t set_val = js_get_slot(obj, SLOT_SET);
-      if (vtype(set_val) != kTypeUndefined) {
-        set_entry_t **set_ptr = (set_entry_t**)(size_t)tod(set_val);
-        n += cpy(buf + n, REMAIN(n, len), "Set(", 4);
-        
-        unsigned int count = 0;
-        if (set_ptr && *set_ptr) count = HASH_COUNT(*set_ptr);
-        n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", count);
-        n += cpy(buf + n, REMAIN(n, len), ") ", 2);
-        
-        if (count == 0) {
-          n += cpy(buf + n, REMAIN(n, len), "{}", 2);
-        } else {
-          n += cpy(buf + n, REMAIN(n, len), "{\n", 2);
-          js->stringify.indent++;
-          bool first = true;
-          if (set_ptr && *set_ptr) {
-            set_entry_t *entry, *tmp;
-            HASH_ITER(hh, *set_ptr, entry, tmp) {
-              if (!first) n += cpy(buf + n, REMAIN(n, len), ",\n", 2);
-              first = false;
-              n += add_indent(buf + n, REMAIN(n, len), js->stringify.indent);
-              n += tostr(js, entry->value, buf + n, REMAIN(n, len));
-            }
-          }
-          js->stringify.indent--;
-          n += cpy(buf + n, REMAIN(n, len), "\n", 1);
-          n += add_indent(buf + n, REMAIN(n, len), js->stringify.indent);
-          n += cpy(buf + n, REMAIN(n, len), "}", 1);
-        }
-        pop_stringify(js);
-        return n;
-      }
-    }
-    
-    if (tag_str) {
-      bool is_blob = (tlen == 4 && memcmp(tag_str, "Blob", 4) == 0);
-      bool is_file = (tlen == 4 && memcmp(tag_str, "File", 4) == 0);
-      if (is_blob || is_file) {
-        blob_data_t *bd = blob_get_data(obj);
-        n += cpy(buf + n, REMAIN(n, len), is_file ? "File" : "Blob", 4);
-        n += cpy(buf + n, REMAIN(n, len), " { size: ", 9);
-        n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", bd ? bd->size : 0);
-        n += cpy(buf + n, REMAIN(n, len), ", type: '", 9);
-        if (bd && bd->type) n += cpy(buf + n, REMAIN(n, len), bd->type, strlen(bd->type));
-        n += cpy(buf + n, REMAIN(n, len), "'", 1);
-        if (is_file) {
-          n += cpy(buf + n, REMAIN(n, len), ", name: '", 9);
-          if (bd && bd->name) n += cpy(buf + n, REMAIN(n, len), bd->name, strlen(bd->name));
-          n += cpy(buf + n, REMAIN(n, len), "'", 1);
-          n += cpy(buf + n, REMAIN(n, len), ", lastModified: ", 16);
-          n += (size_t) snprintf(buf + n, REMAIN(n, len), "%" PRId64, bd ? bd->last_modified : 0);
-        }
-        n += cpy(buf + n, REMAIN(n, len), " }", 2);
-        pop_stringify(js);
-        return n;
-      }
-    }
-
-    js_inspect_builder_t builder;
-    js_inspect_builder_init_fixed(&builder, js, buf, len, n);
-    bool ok = js_inspect_tagged_header(&builder, (const char *)(uintptr_t)toff, (size_t)tlen);
-    if (ok) ok = js_inspect_object_body(&builder, obj);
-    if (ok) ok = js_inspect_close(&builder);
-    n = builder.n;
-    pop_stringify(js);
-    return n;
-  }
-
-  js_inspect_builder_t builder;
-  js_inspect_builder_init_fixed(&builder, js, buf, len, n);
-  bool ok = js_inspect_plain_header(&builder, obj);
-  if (ok) ok = js_inspect_object_body(&builder, obj);
-  if (ok) ok = js_inspect_close(&builder);
-  n = builder.n;
   pop_stringify(js);
-  
   return n;
 }
 
@@ -11878,66 +11620,124 @@ static ant_value_t builtin_object_propertyIsEnumerable(ant_params_t) {
   return result;
 }
 
-static ant_value_t builtin_object_toString(ant_params_t) {
-  (void)args; (void)nargs;
-  ant_value_t obj = js->this_val;
-  
-  uint8_t t = vtype(obj);
-  
-  const char *tag = NULL;
-  ant_offset_t tag_len = 0;
+typedef enum {
+  OBJECT_TAG_OBJECT,
+  OBJECT_TAG_UNDEFINED,
+  OBJECT_TAG_NULL,
+  OBJECT_TAG_ARRAY,
+  OBJECT_TAG_ARGUMENTS,
+  OBJECT_TAG_FUNCTION,
+  OBJECT_TAG_ERROR,
+  OBJECT_TAG_BOOLEAN,
+  OBJECT_TAG_NUMBER,
+  OBJECT_TAG_STRING,
+  OBJECT_TAG_DATE,
+  OBJECT_TAG_BIGINT,
+  OBJECT_TAG_PROMISE,
+  OBJECT_TAG_COUNT,
+} object_tag_t;
 
-  ant_value_t tag_sym = js->sym.toStringTag_sym;
-  if (vtype(tag_sym) == kTypeSymbol) {
-    ant_offset_t sym_off = (ant_offset_t)vdata(tag_sym);
-    ant_prop_loc_t tag_off = ANT_PROP_LOC_NONE;
-    if (is_object_type(obj)) {
-      tag_off = lkp_sym_proto(js, obj, sym_off);
-    } else {
-      ant_value_t proto = js_primitive_prototype(js, t);
-      if (is_object_type(proto)) {
-        tag_off = lkp_sym_proto(js, proto, sym_off);
-      }
-    }
-    if (tag_off.obj) {
-      ant_value_t tag_val = js_prop_load(tag_off);
-      if (vtype(tag_val) == kTypeString) {
-        ant_offset_t str_off = vstr(js, tag_val, &tag_len);
-        tag = (const char *)(uintptr_t)(str_off);
-      }
-    }
+static_assert(
+  OBJECT_TAG_COUNT == sizeof(((ant_t *)0)->mutable_roots.object_tag_strings) / sizeof(ant_value_t), 
+  "resize object_tag_strings in isolate_values.h"
+);
+
+#define OBJECT_TAG_TEXT(name) { "[object " name "]", sizeof("[object " name "]") - 1 }
+
+static const struct { const char *text; uint8_t len; } object_tag_texts[OBJECT_TAG_COUNT] = {
+  [OBJECT_TAG_OBJECT]    = OBJECT_TAG_TEXT("Object"),
+  [OBJECT_TAG_UNDEFINED] = OBJECT_TAG_TEXT("Undefined"),
+  [OBJECT_TAG_NULL]      = OBJECT_TAG_TEXT("Null"),
+  [OBJECT_TAG_ARRAY]     = OBJECT_TAG_TEXT("Array"),
+  [OBJECT_TAG_ARGUMENTS] = OBJECT_TAG_TEXT("Arguments"),
+  [OBJECT_TAG_FUNCTION]  = OBJECT_TAG_TEXT("Function"),
+  [OBJECT_TAG_ERROR]     = OBJECT_TAG_TEXT("Error"),
+  [OBJECT_TAG_BOOLEAN]   = OBJECT_TAG_TEXT("Boolean"),
+  [OBJECT_TAG_NUMBER]    = OBJECT_TAG_TEXT("Number"),
+  [OBJECT_TAG_STRING]    = OBJECT_TAG_TEXT("String"),
+  [OBJECT_TAG_DATE]      = OBJECT_TAG_TEXT("Date"),
+  [OBJECT_TAG_BIGINT]    = OBJECT_TAG_TEXT("BigInt"),
+  [OBJECT_TAG_PROMISE]   = OBJECT_TAG_TEXT("Promise"),
+};
+
+static const uint8_t object_type_tags[kTypeSourceCode + 1] = {
+  [kTypeUndefined] = OBJECT_TAG_UNDEFINED,
+  [kTypeNull]      = OBJECT_TAG_NULL,
+  [kTypeBool]      = OBJECT_TAG_BOOLEAN,
+  [kTypeNumber]    = OBJECT_TAG_NUMBER,
+  [kTypeString]    = OBJECT_TAG_STRING,
+  [kTypeArray]     = OBJECT_TAG_ARRAY,
+  [kTypeFunction]  = OBJECT_TAG_FUNCTION,
+  [kTypeBuiltin]   = OBJECT_TAG_FUNCTION,
+  [kTypeError]     = OBJECT_TAG_ERROR,
+  [kTypeBigInt]    = OBJECT_TAG_BIGINT,
+  [kTypePromise]   = OBJECT_TAG_PROMISE,
+};
+
+static object_tag_t object_object_tag(ant_t *js, ant_value_t obj, ant_object_t *ptr, ant_value_t *err) {
+  if (ptr->flags.is_exotic && is_proxy(obj)) {
+    bool is_array = false;
+    *err = js_is_array_value_checked(js, obj, &is_array);
+    if (is_array) return OBJECT_TAG_ARRAY;
   }
   
-  if (!tag) {
-  if (is_object_type(obj) && get_slot(obj, SLOT_ERROR_BRAND) == js_true) {
-    tag = "Error"; tag_len = 5;
-  } else if (is_arguments_object(obj)) {
-    tag = "Arguments"; tag_len = 9;
-  } else switch (t) {
-    case kTypeUndefined:   tag = "Undefined"; tag_len = 9; break;
-    case kTypeNull:    tag = "Null";      tag_len = 4; break;
-    case kTypeBool:    tag = "Boolean";   tag_len = 7; break;
-    case kTypeNumber:     tag = "Number";    tag_len = 6; break;
-    case kTypeString:     tag = "String";    tag_len = 6; break;
-    case kTypeArray:     tag = "Array";     tag_len = 5; break;
-    case kTypeFunction:    tag = "Function";  tag_len = 8; break;
-    case kTypeBuiltin:   tag = "Function";  tag_len = 8; break;
-    case kTypeError:     tag = "Error";     tag_len = 5; break;
-    case kTypeBigInt:  tag = "BigInt";    tag_len = 6; break;
-    case kTypePromise: tag = "Promise";   tag_len = 7; break;
-    case kTypeObject:     tag = "Object";    tag_len = 6; break;
-    default:        tag = "Unknown";   tag_len = 7; break;
-  }}
+  if (is_callable(obj)) return OBJECT_TAG_FUNCTION;
+  if (ant_object_extra_count(ptr) == 0) return OBJECT_TAG_OBJECT;
+  if (get_slot(obj, SLOT_ERROR_BRAND) == js_true) return OBJECT_TAG_ERROR;
+  
+  switch (vtype(get_slot(obj, SLOT_PRIMITIVE))) {
+    case kTypeBool:   return OBJECT_TAG_BOOLEAN;
+    case kTypeNumber: return OBJECT_TAG_NUMBER;
+    case kTypeString: return OBJECT_TAG_STRING;
+    default: break;
+  }
+  
+  return is_date_instance(obj) ? OBJECT_TAG_DATE : OBJECT_TAG_OBJECT;
+}
 
+static ant_value_t object_tag_string(ant_t *js, object_tag_t tag) {
+  ant_value_t *cached = &js->mutable_roots.object_tag_strings[tag];
+  if (!*cached) *cached = js_mkstr(js, object_tag_texts[tag].text, object_tag_texts[tag].len);
+  return *cached;
+}
+
+static ant_value_t object_tag_string_for(ant_t *js, ant_value_t tag_val) {
+  size_t way = (size_t)(vdata(tag_val) >> 4) & 7;
+  ant_value_t *key = &js->mutable_roots.object_tag_cache_keys[way];
+  ant_value_t *value = &js->mutable_roots.object_tag_cache_values[way];
+  if (*key == tag_val) return *value;
+  
+  ant_offset_t tag_len = 0;
+  const char *tag = (const char *)(uintptr_t)vstr(js, tag_val, &tag_len);
+  
   char static_buf[64];
   string_builder_t sb;
-  
   string_builder_init(&sb, static_buf, sizeof(static_buf));
   string_builder_append(&sb, "[object ", 8);
   string_builder_append(&sb, tag, tag_len);
   string_builder_append(&sb, "]", 1);
   
-  return string_builder_finalize(js, &sb);
+  ant_value_t result = string_builder_finalize(js, &sb);
+  if (!is_err(result)) { *key = tag_val; *value = result; }
+  return result;
+}
+
+static ant_value_t builtin_object_toString(ant_params_t) {
+  ant_value_t obj = js->this_val;
+  uint8_t t = vtype(obj);
+  
+  if (t != kTypeUndefined && t != kTypeNull) {
+    ant_value_t tag_val = js_get_sym(js, obj, js->sym.toStringTag_sym);
+    if (is_err(tag_val)) return tag_val;
+    if (vtype(tag_val) == kTypeString) return object_tag_string_for(js, tag_val);
+  }
+  
+  ant_value_t err = js_mkundef();
+  object_tag_t tag = is_arguments_object(obj) ? OBJECT_TAG_ARGUMENTS
+    : t == kTypeObject ? object_object_tag(js, obj, js_obj_ptr(obj), &err)
+    : t <= kTypeSourceCode ? (object_tag_t)object_type_tags[t] : OBJECT_TAG_OBJECT;
+  
+  return is_err(err) ? err : object_tag_string(js, tag);
 }
 
 static ant_value_t builtin_object_valueOf(ant_params_t) {
@@ -21871,7 +21671,7 @@ void js_destroy(ant_t *js) {
   js->objects_old = NULL;
   js->permanent_objects = NULL;
   
-  cleanup_buffer_module();
+  cleanup_buffer_module(js);
   cleanup_atomics_module(js);
   cleanup_events_module(js);
   cleanup_regex_module(js);
