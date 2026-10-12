@@ -183,7 +183,12 @@ static inline ant_value_t sv_prepare_construct_meta(
 
   if (closure && !bound) {
     if (effective_new_target) *effective_new_target = requested_new_target;
-    return sv_construct_prototype_from(js, requested_new_target);
+    if (requested_new_target != func) return sv_construct_prototype_from(js, requested_new_target);
+
+    ant_value_t func_obj = js_func_obj(func);
+    ant_object_t *ptr = is_object_type(func_obj) ? js_obj_ptr(func_obj) : NULL;
+    
+    return sv_construct_prototype_cached(js, func, ptr, closure->func);
   }
 
   ant_value_t target = bound ? js_resolve_bound_target_known_bound(func) : func;
