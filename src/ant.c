@@ -2031,6 +2031,32 @@ const char *intern_find(const char *str, size_t len) {
   return NULL;
 }
 
+typedef struct { 
+  const char *bytes; 
+  const char *interned;
+} intern_memo_entry_t;
+
+static _Thread_local struct { 
+  uint64_t epoch; 
+  intern_memo_entry_t entries[64];
+} intern_memo;
+
+static const char *intern_find_flat(const char *bytes, size_t len) {
+  uint64_t epoch = gc_strings_sweep_epoch();
+  if (intern_memo.epoch != epoch) {
+    memset(intern_memo.entries, 0, sizeof(intern_memo.entries));
+    intern_memo.epoch = epoch;
+  }
+  
+  intern_memo_entry_t *entry = &intern_memo.entries[((uintptr_t)bytes >> 4) & 63];
+  if (entry->bytes == bytes) return entry->interned;
+  
+  const char *interned = intern_find(bytes, len);
+  if (interned) *entry = (intern_memo_entry_t){ bytes, interned };
+  
+  return interned;
+}
+
 size_t intern_length(const char *interned) {
   return ((const interned_string_t *)(const void *)interned)[-1].len;
 }
@@ -6255,7 +6281,12 @@ static void property_key_view_dispose(property_key_view_t *key) {
 static inline void property_key_view_resolve(property_key_view_t *key) {
   if (key->resolved || key->is_symbol) return;
   key->resolved = true;
-  key->interned = intern_find(key->bytes, key->length);
+  
+  ant_flat_string_t *flat = ant_str_flat_ptr(key->js_key);
+  key->interned = flat && flat->bytes == key->bytes
+    ? intern_find_flat(key->bytes, key->length)
+    : intern_find(key->bytes, key->length);
+
   key->index_like = is_length_key(key->bytes, key->length) || is_array_index(key->bytes, (ant_offset_t)key->length);
 }
 
