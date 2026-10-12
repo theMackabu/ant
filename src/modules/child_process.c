@@ -973,7 +973,7 @@ static ant_value_t create_child_object(ant_t *js, child_process_t *cp) {
   js_set(js, obj, "write", js_mkfun(child_write));
   js_set(js, obj, "end", js_mkfun(child_end));
   
-  js_set_sym(js, obj, js->sym.toStringTag_sym, js_mkstr(js, "ChildProcess", 12));
+  js_set_tostringtag(js, obj, js_mkstr(js, "ChildProcess", 12));
   
   return obj;
 }
@@ -2679,7 +2679,7 @@ ant_value_t child_process_library(ant_t *js) {
   js_set(js, lib, "execFileSync", js_mkfun(builtin_execFileSync));
   js_set(js, lib, "spawnSync", js_mkfun(builtin_spawnSync));
   js_set(js, lib, "fork", js_mkfun(builtin_fork));
-  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "child_process", 13));
+  js_set_tostringtag(js, lib, js_mkstr(js, "child_process", 13));
   
   return lib;
 }

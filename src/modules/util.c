@@ -1418,7 +1418,7 @@ ant_value_t util_library(ant_t *js) {
   
   js_set(js, lib, "TextDecoder", js_get(js, js->global, "TextDecoder"));
   js_set(js, lib, "TextEncoder", js_get(js, js->global, "TextEncoder"));
-  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "util", 4));
+  js_set_tostringtag(js, lib, js_mkstr(js, "util", 4));
   
   return lib;
 }

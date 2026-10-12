@@ -73,4 +73,11 @@ class Warm {}
 const viaWarm = v => v instanceof Warm;
 for (let i = 0; i < 300; i++) assert.deepStrictEqual([viaWarm(1), viaWarm('s'), viaWarm(new Warm()), viaWarm({})], [false, false, true, false]);
 
+function NonObjectProto() {}
+NonObjectProto.prototype = 1;
+assert.throws(() => ({}) instanceof NonObjectProto, TypeError, 'a non-object prototype throws for an object');
+assert.strictEqual(1 instanceof NonObjectProto, false, 'a primitive is checked before the prototype');
+assert.throws(() => ({}) instanceof (() => {}), TypeError, 'an arrow function has no prototype');
+assert.throws(() => ({}) instanceof new Proxy(NonObjectProto, {}), TypeError, 'a proxied constructor is checked the same way');
+
 console.log('instanceof primitives OK');

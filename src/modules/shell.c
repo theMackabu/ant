@@ -777,7 +777,7 @@ ant_value_t shell_ops_library(ant_t *js) {
   js_set(js, lib, "finish", js_mkfun(sh_runtime_finish));
   js_set(js, lib, "context", js_mkfun(sh_runtime_context));
   js_set(js, lib, "debugEnabled", sv_dump_shell_unlikely ? js_true : js_false);
-  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "shell ops", 9));
+  js_set_tostringtag(js, lib, js_mkstr(js, "shell ops", 9));
 
   return lib;
 }

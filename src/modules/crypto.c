@@ -1090,7 +1090,7 @@ static ant_value_t crypto_new_key_record(ant_t *js, unsigned index) {
       mkprop(js, seed, ANT_STRING("extractable"), js_false, ANT_PROP_ATTR_ENUMERABLE);
       mkprop(js, seed, ANT_STRING("algorithm"), js_mkundef(), ANT_PROP_ATTR_ENUMERABLE);
       mkprop(js, seed, ANT_STRING("usages"), js_mkundef(), ANT_PROP_ATTR_ENUMERABLE);
-      js_set_sym(js, seed, js->sym.toStringTag_sym, ANT_STRING("CryptoKey"));
+      js_set_tostringtag(js, seed, ANT_STRING("CryptoKey"));
     } else {
       static const char *const hashes[] = { "SHA-1", "SHA-256", "SHA-384", "SHA-512" };
       ant_value_t name = index == CRYPTO_KEY_AES_GCM ? ANT_STRING("AES-GCM") :
@@ -1712,7 +1712,7 @@ static ant_value_t js_crypto_create_hash(ant_params_t) {
   
   js_set_native(obj, state, CRYPTO_HASH_NATIVE_TAG);
   js_set_finalizer(obj, crypto_hash_finalize);
-  js_set_sym(js, obj, js->sym.toStringTag_sym, js_mkstr(js, "Hash", 4));
+  js_set_tostringtag(js, obj, js_mkstr(js, "Hash", 4));
   
   return obj;
 }
@@ -1811,7 +1811,7 @@ static ant_value_t js_crypto_create_hmac(ant_params_t) {
   js_set(js, obj, "digest", js_mkfun(js_hmac_digest));
   js_set_native(obj, state, CRYPTO_HMAC_NATIVE_TAG);
   js_set_finalizer(obj, crypto_hmac_finalize);
-  js_set_sym(js, obj, js->sym.toStringTag_sym, js_mkstr(js, "Hmac", 4));
+  js_set_tostringtag(js, obj, js_mkstr(js, "Hmac", 4));
   return obj;
 }
 
@@ -2263,10 +2263,10 @@ static ant_value_t create_crypto_obj(ant_t *js) {
   js_set(js, subtle_obj, "encrypt", js_mkfun(js_crypto_subtle_encrypt));
   js_set(js, subtle_obj, "decrypt", js_mkfun(js_crypto_subtle_decrypt));
   js_set(js, subtle_obj, "timingSafeEqual", js_mkfun(js_crypto_timing_safe_equal));
-  js_set_sym(js, subtle_obj, js->sym.toStringTag_sym, js_mkstr(js, "SubtleCrypto", 12));
+  js_set_tostringtag(js, subtle_obj, js_mkstr(js, "SubtleCrypto", 12));
   js_set(js, crypto_obj, "subtle", subtle_obj);
   
-  js_set_sym(js, crypto_obj, js->sym.toStringTag_sym, js_mkstr(js, "Crypto", 6));
+  js_set_tostringtag(js, crypto_obj, js_mkstr(js, "Crypto", 6));
   return crypto_obj;
 }
 
@@ -2301,7 +2301,7 @@ ant_value_t crypto_library(ant_t *js) {
   js_set(js, lib, "getCurves", js_mkfun(js_crypto_get_curves));
   js_set(js, lib, "getHashes", js_mkfun(js_crypto_get_hashes));
   js_set(js, lib, "timingSafeEqual", js_mkfun(js_crypto_timing_safe_equal));
-  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "crypto", 6));
+  js_set_tostringtag(js, lib, js_mkstr(js, "crypto", 6));
 
   return lib;
 }

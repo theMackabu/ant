@@ -137,7 +137,7 @@ ant_value_t async_hooks_library(ant_t *js) {
   js_set(js, als_proto, "enterWith", js_mkfun(async_local_storage_enterWith));
   js_set(js, als_proto, "getStore", js_mkfun(async_local_storage_getStore));
   js_set(js, als_proto, "disable", js_mkfun(async_local_storage_disable));
-  js_set_sym(js, als_proto, js->sym.toStringTag_sym, ANT_STRING("AsyncLocalStorage"));
+  js_set_tostringtag(js, als_proto, ANT_STRING("AsyncLocalStorage"));
   js_mkprop_fast(js, als_ctor, "prototype", 9, als_proto);
   js_mkprop_fast(js, als_ctor, "name", 4, ANT_STRING("AsyncLocalStorage"));
   js_set_descriptor(js, als_ctor, "name", 4, 0);
@@ -149,7 +149,7 @@ ant_value_t async_hooks_library(ant_t *js) {
   js_set(js, resource_proto, "emitDestroy", js_mkfun(async_resource_emitDestroy));
   js_set(js, resource_proto, "asyncId", js_mkfun(async_resource_asyncId));
   js_set(js, resource_proto, "triggerAsyncId", js_mkfun(async_resource_triggerAsyncId));
-  js_set_sym(js, resource_proto, js->sym.toStringTag_sym, ANT_STRING("AsyncResource"));
+  js_set_tostringtag(js, resource_proto, ANT_STRING("AsyncResource"));
   js_mkprop_fast(js, resource_ctor, "prototype", 9, resource_proto);
   js_mkprop_fast(js, resource_ctor, "name", 4, ANT_STRING("AsyncResource"));
   js_set_descriptor(js, resource_ctor, "name", 4, 0);
@@ -160,7 +160,7 @@ ant_value_t async_hooks_library(ant_t *js) {
   js_set(js, lib, "triggerAsyncId", js_mkfun(async_hooks_triggerAsyncId));
   js_set(js, lib, "executionAsyncResource", js_mkfun(async_hooks_executionAsyncResource));
   js_set(js, lib, "asyncWrapProviders", js_mkobj(js));
-  js_set_sym(js, lib, js->sym.toStringTag_sym, ANT_STRING("async_hooks"));
+  js_set_tostringtag(js, lib, ANT_STRING("async_hooks"));
 
   return lib;
 }

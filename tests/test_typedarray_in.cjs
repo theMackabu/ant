@@ -74,4 +74,7 @@ for (const inheritor of [new FromTyped(), Object.setPrototypeOf({}, new Uint8Arr
   assert.deepStrictEqual([inheritor['1.5'], inheritor[1], '1.5' in inheritor, '1' in inheritor, Object.keys(inheritor)], [undefined, 0, false, true, []], 'every way of inheriting from a typed array gets its key rules');
 }
 
+const shadowedRead = Object.setPrototypeOf(new Uint8Array(2), { 5: 'proto', 1.5: 'frac' });
+assert.deepStrictEqual([Reflect.get(shadowedRead, '5', {}), Reflect.get(shadowedRead, '1.5', {}), Reflect.get(shadowedRead, '1', {})], [undefined, undefined, 0], 'a receiver read still stops at the typed array');
+
 console.log('typed array in OK');

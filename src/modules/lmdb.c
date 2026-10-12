@@ -1014,7 +1014,7 @@ static void ensure_lmdb_prototypes(ant_t *js) {
   js_set(js, env_proto, "sync", js_mkfun(lmdb_env_sync_method));
   js_set(js, env_proto, "stat", js_mkfun(lmdb_env_stat_method));
   js_set(js, env_proto, "info", js_mkfun(lmdb_env_info_method));
-  js_set_sym(js, env_proto, js->sym.toStringTag_sym, js_mkstr(js, "LMDBEnv", 7));
+  js_set_tostringtag(js, env_proto, js_mkstr(js, "LMDBEnv", 7));
   js_set_slot(env_ctor_obj, SLOT_CFUNC, js_mkfun(lmdb_env_constructor));
   js_mkprop_fast(js, env_ctor_obj, "prototype", 9, env_proto);
   js_mkprop_fast(js, env_ctor_obj, "name", 4, ANT_STRING("LMDBEnv"));
@@ -1032,7 +1032,7 @@ static void ensure_lmdb_prototypes(ant_t *js) {
   js_set(js, db_proto, "clear", js_mkfun(lmdb_db_clear));
   js_set(js, db_proto, "drop", js_mkfun(lmdb_db_drop));
   js_set(js, db_proto, "close", js_mkfun(lmdb_db_close));
-  js_set_sym(js, db_proto, js->sym.toStringTag_sym, js_mkstr(js, "LMDBDatabase", 12));
+  js_set_tostringtag(js, db_proto, js_mkstr(js, "LMDBDatabase", 12));
   js_set_slot(db_ctor_obj, SLOT_CFUNC, js_mkfun(lmdb_db_constructor));
   js_mkprop_fast(js, db_ctor_obj, "prototype", 9, db_proto);
   js_mkprop_fast(js, db_ctor_obj, "name", 4, ANT_STRING("LMDBDatabase"));
@@ -1049,7 +1049,7 @@ static void ensure_lmdb_prototypes(ant_t *js) {
   js_set(js, txn_proto, "del", js_mkfun(lmdb_txn_del));
   js_set(js, txn_proto, "commit", js_mkfun(lmdb_txn_commit));
   js_set(js, txn_proto, "abort", js_mkfun(lmdb_txn_abort));
-  js_set_sym(js, txn_proto, js->sym.toStringTag_sym, js_mkstr(js, "LMDBTxn", 7));
+  js_set_tostringtag(js, txn_proto, js_mkstr(js, "LMDBTxn", 7));
   js_set_slot(txn_ctor_obj, SLOT_CFUNC, js_mkfun(lmdb_txn_constructor));
   js_mkprop_fast(js, txn_ctor_obj, "prototype", 9, txn_proto);
   js_mkprop_fast(js, txn_ctor_obj, "name", 4, ANT_STRING("LMDBTxn"));
@@ -1129,7 +1129,7 @@ ant_value_t lmdb_library(ant_t *js) {
   js_set(js, constants, "NOMEMINIT", js_mknum((double)MDB_NOMEMINIT));
   js_set(js, lib, "constants", constants);
 
-  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "lmdb", 4));
+  js_set_tostringtag(js, lib, js_mkstr(js, "lmdb", 4));
   return lib;
 }
 

@@ -1230,7 +1230,7 @@ void init_headers_module(ant_t *js) {
   
   js_set_sym(js, js->builtins.headers_proto, js->sym.iterator_sym,    js_get(js, js->builtins.headers_proto, "entries"));
   js_set_sym(js, js->builtins.headers_proto, js->sym.inspect_sym,     js_mkfun(headers_inspect));
-  js_set_sym(js, js->builtins.headers_proto, js->sym.toStringTag_sym, js_mkstr(js, "Headers", 7));
+  js_set_tostringtag(js, js->builtins.headers_proto, js_mkstr(js, "Headers", 7));
 
   ant_value_t ctor_obj = js_mkobj(js);
   js_set_slot(ctor_obj, SLOT_CFUNC, js_mkfun(js_headers_ctor));

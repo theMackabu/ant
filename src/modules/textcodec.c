@@ -426,7 +426,7 @@ void init_textcodec_module(ant_t *js) {
   js_set_getter_desc(js, js->builtins.textencoder_proto, "encoding", 8, js_mkfun(js_textencoder_get_encoding), JS_DESC_C);
   js_set(js, js->builtins.textencoder_proto, "encode",     js_mkfun(js_textencoder_encode));
   js_set(js, js->builtins.textencoder_proto, "encodeInto", js_mkfun(js_textencoder_encode_into));
-  js_set_sym(js, js->builtins.textencoder_proto, js->sym.toStringTag_sym, js_mkstr(js, "TextEncoder", 11));
+  js_set_tostringtag(js, js->builtins.textencoder_proto, js_mkstr(js, "TextEncoder", 11));
   
   ant_value_t te_ctor = js_make_ctor(js, js_textencoder_ctor, js->builtins.textencoder_proto, "TextEncoder", 11);
   js_set(js, g, "TextEncoder", te_ctor);
@@ -437,7 +437,7 @@ void init_textcodec_module(ant_t *js) {
   js_set_getter_desc(js, js->builtins.textdecoder_proto, "fatal",     5, js_mkfun(js_textdecoder_get_fatal),     JS_DESC_C);
   js_set_getter_desc(js, js->builtins.textdecoder_proto, "ignoreBOM", 9, js_mkfun(js_textdecoder_get_ignore_bom), JS_DESC_C);
   js_set(js, js->builtins.textdecoder_proto, "decode", js_mkfun(js_textdecoder_decode));
-  js_set_sym(js, js->builtins.textdecoder_proto, js->sym.toStringTag_sym, js_mkstr(js, "TextDecoder", 11));
+  js_set_tostringtag(js, js->builtins.textdecoder_proto, js_mkstr(js, "TextDecoder", 11));
   
   ant_value_t td_ctor = js_make_ctor(js, js_textdecoder_ctor, js->builtins.textdecoder_proto, "TextDecoder", 11);
   js_set(js, g, "TextDecoder", td_ctor);

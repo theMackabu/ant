@@ -169,6 +169,6 @@ void init_sessionstorage_module(ant_t *js) {
   ant_value_t length_getter = js_mkfun(js_sessionstorage_length);
   js_set_getter_desc(js, storage_obj, "length", 6, length_getter, 0);
   
-  js_set_sym(js, storage_obj, js->sym.toStringTag_sym, ANT_STRING("Storage"));
+  js_set_tostringtag(js, storage_obj, ANT_STRING("Storage"));
   js_set(js, glob, "sessionStorage", storage_obj);
 }

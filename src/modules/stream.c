@@ -2287,7 +2287,7 @@ void stream_init_constructors(ant_t *js) {
   js_set(js, js->builtins.stream_proto, "resume", js_mkfun(js_stream_resume));
   js_set(js, js->builtins.stream_proto, "isPaused", js_mkfun(js_stream_is_paused));
   js_set(js, js->builtins.stream_proto, "destroy", js_mkfun(js_stream_destroy));
-  js_set_sym(js, js->builtins.stream_proto, js->sym.toStringTag_sym, js_mkstr(js, "Stream", 6));
+  js_set_tostringtag(js, js->builtins.stream_proto, js_mkstr(js, "Stream", 6));
   js->builtins.stream_ctor = js_make_ctor(js, js_stream_ctor, js->builtins.stream_proto, "Stream", 6);
 
   js->builtins.readable_proto = js_mkobj(js);
@@ -2301,7 +2301,7 @@ void stream_init_constructors(ant_t *js) {
   js_set(js, js->builtins.readable_proto, "once", js_mkfun(js_readable_once));
   js_set(js, js->builtins.readable_proto, "resume", js_mkfun(js_readable_resume));
   js_set(js, js->builtins.readable_proto, "pause", js_mkfun(js_readable_pause));
-  js_set_sym(js, js->builtins.readable_proto, js->sym.toStringTag_sym, js_mkstr(js, "Readable", 8));
+  js_set_tostringtag(js, js->builtins.readable_proto, js_mkstr(js, "Readable", 8));
   js->builtins.readable_ctor = js_make_ctor(js, js_readable_ctor, js->builtins.readable_proto, "Readable", 8);
   js_set(js, js->builtins.readable_ctor, "from", js_mkfun(js_readable_from));
   js_set(js, js->builtins.readable_ctor, "fromWeb", js_mkfun(js_readable_from_web));
@@ -2316,7 +2316,7 @@ void stream_init_constructors(ant_t *js) {
   js_set(js, js->builtins.writable_proto, "end", js_mkfun(js_writable_end));
   js_set(js, js->builtins.writable_proto, "cork", js_mkfun(stream_noop));
   js_set(js, js->builtins.writable_proto, "uncork", js_mkfun(stream_noop));
-  js_set_sym(js, js->builtins.writable_proto, js->sym.toStringTag_sym, js_mkstr(js, "Writable", 8));
+  js_set_tostringtag(js, js->builtins.writable_proto, js_mkstr(js, "Writable", 8));
   js->builtins.writable_ctor = js_make_ctor(js, js_writable_ctor, js->builtins.writable_proto, "Writable", 8);
 
   js->builtins.duplex_proto = js_mkobj(js);
@@ -2328,7 +2328,7 @@ void stream_init_constructors(ant_t *js) {
   js_set(js, js->builtins.duplex_proto, "end", js_mkfun(js_writable_end));
   js_set(js, js->builtins.duplex_proto, "cork", js_mkfun(stream_noop));
   js_set(js, js->builtins.duplex_proto, "uncork", js_mkfun(stream_noop));
-  js_set_sym(js, js->builtins.duplex_proto, js->sym.toStringTag_sym, js_mkstr(js, "Duplex", 6));
+  js_set_tostringtag(js, js->builtins.duplex_proto, js_mkstr(js, "Duplex", 6));
   js->builtins.duplex_ctor = js_make_ctor(js, js_duplex_ctor, js->builtins.duplex_proto, "Duplex", 6);
 
   js->builtins.stream_transform_proto = js_mkobj(js);
@@ -2336,13 +2336,13 @@ void stream_init_constructors(ant_t *js) {
   js_set(js, js->builtins.stream_transform_proto, "_transform", js_mkfun(js_transform__transform));
   js_set(js, js->builtins.stream_transform_proto, "_write", js_mkfun(js_transform__write));
   js_set(js, js->builtins.stream_transform_proto, "_final", js_mkfun(js_transform__final));
-  js_set_sym(js, js->builtins.stream_transform_proto, js->sym.toStringTag_sym, js_mkstr(js, "Transform", 9));
+  js_set_tostringtag(js, js->builtins.stream_transform_proto, js_mkstr(js, "Transform", 9));
   js->builtins.stream_transform_ctor = js_make_ctor(js, js_transform_ctor, js->builtins.stream_transform_proto, "Transform", 9);
 
   js->builtins.passthrough_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.passthrough_proto, js->builtins.stream_transform_proto);
   js_set(js, js->builtins.passthrough_proto, "_transform", js_mkfun(js_passthrough__transform));
-  js_set_sym(js, js->builtins.passthrough_proto, js->sym.toStringTag_sym, js_mkstr(js, "PassThrough", 11));
+  js_set_tostringtag(js, js->builtins.passthrough_proto, js_mkstr(js, "PassThrough", 11));
   js->builtins.passthrough_ctor = js_make_ctor(js, js_passthrough_ctor, js->builtins.passthrough_proto, "PassThrough", 11);
 
   js->builtins.stream_utf8 = js_mkstr(js, "utf8", 4);
@@ -2553,7 +2553,7 @@ ant_value_t stream_library(ant_t *js) {
 
   js_set(js, promises, "default", promises);
   js_set_slot_wb(js, promises, SLOT_DEFAULT, promises);
-  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "stream", 6));
+  js_set_tostringtag(js, lib, js_mkstr(js, "stream", 6));
   
   return lib;
 }
@@ -2578,7 +2578,7 @@ ant_value_t stream_web_library(ant_t *js) {
   stream_web_define_common(js, lib);
   js_set(js, lib, "default", lib);
   js_set_slot_wb(js, lib, SLOT_DEFAULT, lib);
-  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "stream/web", 10));
+  js_set_tostringtag(js, lib, js_mkstr(js, "stream/web", 10));
 
   return lib;
 }

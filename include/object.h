@@ -16,6 +16,7 @@ typedef struct {
   ant_value_t (*getter)(ant_t *, ant_value_t, const char *, size_t);
   bool (*setter)(ant_t *, ant_value_t, const char *, size_t, ant_value_t);
   bool (*deleter)(ant_t *, ant_value_t, const char *, size_t);
+  ant_value_t (*definer)(ant_t *, ant_value_t, const char *, size_t, ant_value_t value, bool has_value, bool plain_data);
 } ant_exotic_ops_t;
 
 typedef struct {
@@ -64,6 +65,7 @@ typedef struct {
   ant_value_t handler;
   const ant_host_proxy_ops_t *host;
   bool revoked;
+  uint32_t plain_handler_epoch;
 } ant_proxy_state_t;
 
 typedef struct {

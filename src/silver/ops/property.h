@@ -1164,11 +1164,6 @@ static inline ant_value_t sv_op_get_field(
   return js_mkundef();
 }
 
-static inline int sv_in_mega_find(ant_t *js, sv_gf_mega_cache_t *cache, ant_object_t *receiver, const char *key) {
-  int kind = -1;
-  return sv_gf_mega_lookup(js, cache, receiver, key, &kind) ? kind != SV_GF_IC_MISSING : -1;
-}
-
 static inline bool sv_chain_is_plain(ant_object_t *ptr) {
   for (int depth = 0; depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
     if (vtype(ptr->proto) == kTypeNull) return true;
@@ -1179,7 +1174,7 @@ static inline bool sv_chain_is_plain(ant_object_t *ptr) {
   return false;
 }
 
-static inline ant_value_t sv_prop_in_value(ant_t *js, ant_value_t l, ant_value_t r) {
+static inline __attribute__((noinline)) ant_value_t sv_prop_in_value(ant_t *js, ant_value_t l, ant_value_t r) {
   ant_flat_string_t *flat = vtype(r) == kTypeObject ? ant_str_flat_ptr(l) : NULL;
   ant_object_t *ptr = flat ? js_obj_ptr(r) : NULL;
   
@@ -1194,8 +1189,8 @@ static inline ant_value_t sv_prop_in_value(ant_t *js, ant_value_t l, ant_value_t
   sv_gf_mega_cache_t *cache = sv_gf_mega_ensure(js);
   if (!cache) return do_in(js, l, r);
   
-  int hit = sv_in_mega_find(js, cache, ptr, key);
-  if (hit >= 0) return js_bool(hit);
+  int kind = -1;
+  if (sv_gf_mega_lookup(js, cache, ptr, key, &kind)) return js_bool(kind != SV_GF_IC_MISSING);
   
   ant_object_t *holder = NULL;
   uint32_t prop_idx = 0;

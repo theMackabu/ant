@@ -822,7 +822,7 @@ static ant_value_t tty_write_stream_constructor(ant_params_t) {
 static void setup_readstream_proto(ant_t *js, ant_value_t proto) {
   if (!is_special_object(proto)) return;
   js_set(js, proto, "setRawMode", js_mkfun(tty_read_stream_set_raw_mode));
-  js_set_sym(js, proto, js->sym.toStringTag_sym, js_mkstr(js, "ReadStream", 10));
+  js_set_tostringtag(js, proto, js_mkstr(js, "ReadStream", 10));
 }
 
 static void setup_writestream_proto(ant_t *js, ant_value_t proto) {
@@ -838,7 +838,7 @@ static void setup_writestream_proto(ant_t *js, ant_value_t proto) {
   js_set(js, proto, "hasColors", js_mkfun(tty_write_stream_has_colors));
   js_set_getter_desc(js, proto, "rows", 4, js_mkfun(tty_write_stream_rows_getter), JS_DESC_E | JS_DESC_C);
   js_set_getter_desc(js, proto, "columns", 7, js_mkfun(tty_write_stream_columns_getter), JS_DESC_E | JS_DESC_C);
-  js_set_sym(js, proto, js->sym.toStringTag_sym, js_mkstr(js, "WriteStream", 11));
+  js_set_tostringtag(js, proto, js_mkstr(js, "WriteStream", 11));
 }
 
 static void tty_init_stream_constructors(ant_t *js) {
@@ -929,7 +929,7 @@ ant_value_t tty_library(ant_t *js) {
   js_set(js, lib, "isatty", js_mkfun(tty_isatty));
   js_set(js, lib, "ReadStream", js->builtins.tty_readstream_ctor);
   js_set(js, lib, "WriteStream", js->builtins.tty_writestream_ctor);
-  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "tty", 3));
+  js_set_tostringtag(js, lib, js_mkstr(js, "tty", 3));
 
   return lib;
 }

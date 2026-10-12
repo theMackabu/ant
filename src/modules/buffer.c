@@ -691,6 +691,24 @@ static bool typedarray_index_setter(ant_t *js, ant_value_t obj, const char *key,
   return true;
 }
 
+static ant_value_t typedarray_index_definer(
+  ant_t *js, ant_value_t obj, const char *key, size_t key_len,
+  ant_value_t value, bool has_value, bool plain_data
+) {
+  if (!typedarray_key_may_be_numeric(key, key_len)) return js_mkundef();
+  TypedArrayData *ta_data = buffer_get_typedarray_data(obj);
+  size_t index = 0;
+  typedarray_key_kind_t kind = ta_data ? typedarray_key_kind(ta_data, key, key_len, &index) : TYPEDARRAY_KEY_ORDINARY;
+  if (kind == TYPEDARRAY_KEY_ORDINARY) return js_mkundef();
+  if (kind == TYPEDARRAY_KEY_INVALID || !plain_data) return T_EMPTY;
+  if (!has_value) return js_true;
+  
+  ant_value_t coerced = typedarray_coerce_value(js, ta_data, value);
+  if (is_err(coerced)) return coerced;
+  (void)typedarray_write_value(js, ta_data, index, coerced);
+  return js_true;
+}
+
 static bool typedarray_read_number(const TypedArrayData *ta_data, size_t index, double *out) {
   if (!ta_data || !ta_data->buffer || ta_data->buffer->is_detached || index >= ta_data->length) return false;
   uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
@@ -981,6 +999,7 @@ ant_value_t create_typed_array_with_buffer(
   defhidden(js, obj, "buffer", 6, arraybuffer_obj);
   
   js_set_getter(obj, typedarray_index_getter);
+  js_set_definer(obj, typedarray_index_definer);
   js_set_setter(obj, typedarray_index_setter);
   js_set_finalizer(obj, typedarray_finalize);
   
@@ -4323,7 +4342,7 @@ void init_buffer_module(ant_t *js) {
   js_set(js, arraybuffer_proto, "transferToFixedLength", js_mkfun(js_arraybuffer_transferToFixedLength));
   js_set_getter_desc(js, arraybuffer_proto, "detached", 8, js_mkfun(js_arraybuffer_detached_getter), JS_DESC_E);
   js_set_getter_desc(js, arraybuffer_proto, "byteLength", 10, js_mkfun(js_arraybuffer_byteLength_getter), JS_DESC_C);
-  js_set_sym(js, arraybuffer_proto, js->sym.toStringTag_sym, js_mkstr(js, "ArrayBuffer", 11));
+  js_set_tostringtag(js, arraybuffer_proto, js_mkstr(js, "ArrayBuffer", 11));
   
   js_set_slot(arraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_arraybuffer_constructor));
   js_mkprop_fast(js, arraybuffer_ctor_obj, "prototype", 9, arraybuffer_proto);
@@ -4399,7 +4418,7 @@ void init_buffer_module(ant_t *js) {
       ant_value_t elem_size = js_mknum((double)get_element_size(type)); \
       js_set_proto_init(name##_ctor_obj, typedarray_ctor); \
       js_set_proto_init(name##_proto, typedarray_proto); \
-      js_set_sym(js, name##_proto, js->sym.toStringTag_sym, js_mkstr(js, #name, sizeof(#name) - 1)); \
+      js_set_tostringtag(js, name##_proto, js_mkstr(js, #name, sizeof(#name) - 1)); \
       js_set_slot(name##_ctor_obj, SLOT_CFUNC, js_mkfun(js_##name##_constructor)); \
       js_setprop(js, name##_ctor_obj, js_mkstr(js, "prototype", 9), name##_proto); \
       js_set(js, name##_ctor_obj, "BYTES_PER_ELEMENT", elem_size); \
@@ -4464,7 +4483,7 @@ void init_buffer_module(ant_t *js) {
   js_set_getter_desc(js, dataview_proto, "buffer", 6, js_mkfun(js_dataview_buffer_getter), JS_DESC_C);
   js_set_getter_desc(js, dataview_proto, "byteLength", 10, js_mkfun(js_dataview_byteLength_getter), JS_DESC_C);
   js_set_getter_desc(js, dataview_proto, "byteOffset", 10, js_mkfun(js_dataview_byteOffset_getter), JS_DESC_C);
-  js_set_sym(js, dataview_proto, js->sym.toStringTag_sym, js_mkstr(js, "DataView", 8));
+  js_set_tostringtag(js, dataview_proto, js_mkstr(js, "DataView", 8));
 
   js_set_slot(dataview_ctor_obj, SLOT_CFUNC, js_mkfun(js_dataview_constructor));
   js_mkprop_fast(js, dataview_ctor_obj, "prototype", 9, dataview_proto);
@@ -4482,7 +4501,7 @@ void init_buffer_module(ant_t *js) {
   
   js_set(js, sharedarraybuffer_proto, "slice", js_mkfun(js_arraybuffer_slice));
   js_set_getter_desc(js, sharedarraybuffer_proto, "byteLength", 10, js_mkfun(js_arraybuffer_byteLength_getter), JS_DESC_C);
-  js_set_sym(js, sharedarraybuffer_proto, js->sym.toStringTag_sym, js_mkstr(js, "SharedArrayBuffer", 17));
+  js_set_tostringtag(js, sharedarraybuffer_proto, js_mkstr(js, "SharedArrayBuffer", 17));
   
   js_set_slot(sharedarraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_sharedarraybuffer_constructor));
   js_mkprop_fast(js, sharedarraybuffer_ctor_obj, "prototype", 9, sharedarraybuffer_proto);
@@ -4566,7 +4585,7 @@ void init_buffer_module(ant_t *js) {
   js_set(js, buffer_proto, "readBigUInt64BE", read_biguint64_be);
   js_set(js, buffer_proto, "readBigUint64BE", read_biguint64_be);
   
-  js_set_sym(js, buffer_proto, js->sym.toStringTag_sym, js_mkstr(js, "Buffer", 6));
+  js_set_tostringtag(js, buffer_proto, js_mkstr(js, "Buffer", 6));
   js_set(js, buffer_proto, "values", js_get(js, typedarray_proto, "values"));
   js_set_sym(js, buffer_proto, js->sym.iterator_sym, js_get(js, buffer_proto, "values"));
   

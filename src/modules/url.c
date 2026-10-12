@@ -1274,7 +1274,7 @@ void init_url_module(ant_t *js) {
   js_set(js, js->builtins.usp_proto, "values",  js_mkfun(usp_values_fn));
   
   js_set_sym(js, js->builtins.usp_proto, js->sym.iterator_sym, js_get(js, js->builtins.usp_proto, "entries"));
-  js_set_sym(js, js->builtins.usp_proto, js->sym.toStringTag_sym, js_mkstr(js, "URLSearchParams", 15));
+  js_set_tostringtag(js, js->builtins.usp_proto, js_mkstr(js, "URLSearchParams", 15));
 
   ant_value_t usp_ctor = js_make_ctor(js, js_URLSearchParams, js->builtins.usp_proto, "URLSearchParams", 15);
   js_set_global_builtin(js, "URLSearchParams", usp_ctor);
@@ -1296,7 +1296,7 @@ void init_url_module(ant_t *js) {
   
   js_set(js, js->builtins.url_proto, "toString", js_mkfun(url_toString));
   js_set(js, js->builtins.url_proto, "toJSON",   js_mkfun(url_toString));
-  js_set_sym(js, js->builtins.url_proto, js->sym.toStringTag_sym, js_mkstr(js, "URL", 3));
+  js_set_tostringtag(js, js->builtins.url_proto, js_mkstr(js, "URL", 3));
 
   js->builtins.url_ctor = js_make_ctor(js, js_URL, js->builtins.url_proto, "URL", 3);
   js_set_descriptor(js, js_as_obj(js->builtins.url_ctor), "prototype", 9, 0);

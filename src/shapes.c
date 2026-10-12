@@ -554,7 +554,13 @@ static bool shape_child_has_accessor(const ant_shape_t *child, uint32_t slot, co
     prop->setter == accessor->setter;
 }
 
-static bool shape_add_transition(
+static inline bool shape_note_growth(ant_t *js, size_t before, bool added) {
+  size_t after = shape_bytes();
+  if (after > before) gc_note_offheap_alloc(js, after - before);
+  return added;
+}
+
+static bool shape_add_tr(
   ant_t *js, ant_shape_t **shape_pp, ant_shape_key_type_t type, const char *interned,
   ant_offset_t sym_off, uint8_t attrs, const ant_shape_prop_t *accessor,
   uint32_t *out_slot, uint32_t max_tree_props
@@ -562,8 +568,10 @@ static bool shape_add_transition(
   ant_shape_t *shape = *shape_pp;
   
   if (!shape) return false;
-  if (!shape_is_in_tree(shape))
-    return shape_add_any_key(js, shape, type, interned, sym_off, attrs, accessor, out_slot);
+  if (!shape_is_in_tree(shape)) {
+    size_t before = shape_bytes();
+    return shape_note_growth(js, before, shape_add_any_key(js, shape, type, interned, sym_off, attrs, accessor, out_slot));
+  }
   
   uint64_t prop_key = type == ANT_SHAPE_KEY_SYMBOL
     ? shape_key_symbol(sym_off) 
@@ -584,19 +592,20 @@ static bool shape_add_transition(
     }
   }
 
+  size_t before = shape_bytes();
   if (shape->bulk_layout || shape->count >= max_tree_props) {
     ant_shape_t *copy = shape_clone_reserve(shape, 1);
     if (!copy) return false;
     
     if (!shape_add_any_key(js, copy, type, interned, sym_off, attrs, accessor, out_slot)) {
       ant_shape_release(copy);
-      return false;
+      return shape_note_growth(js, before, false);
     }
     
     ant_shape_release(shape);
     *shape_pp = copy;
     
-    return true;
+    return shape_note_growth(js, before, true);
   }
 
   ant_shape_t *shared = shape_copy_for_transition(shape);
@@ -604,27 +613,14 @@ static bool shape_add_transition(
   
   if (!shape_add_any_key(js, shared, type, interned, sym_off, attrs, accessor, out_slot)) {
     ant_shape_release(shared);
-    return false;
+    return shape_note_growth(js, before, false);
   }
   
   shape_record_child(shape, ckey, shared);
   ant_shape_release(shape);
   *shape_pp = shared;
   
-  return true;
-}
-
-static bool shape_add_tr(
-  ant_t *js, ant_shape_t **shape_pp, ant_shape_key_type_t type, const char *interned,
-  ant_offset_t sym_off, uint8_t attrs, const ant_shape_prop_t *accessor,
-  uint32_t *out_slot, uint32_t max_tree_props
-) {
-  size_t before = shape_bytes();
-  bool added = shape_add_transition(js, shape_pp, type, interned, sym_off, attrs, accessor, out_slot, max_tree_props);
-  
-  size_t after = shape_bytes();
-  if (after > before) gc_note_offheap_alloc(js, after - before);
-  return added;
+  return shape_note_growth(js, before, true);
 }
 
 bool ant_shape_add_interned_tr(ant_t *js, ant_shape_t **shape_pp, const char *interned, uint8_t attrs, uint32_t *out_slot) {

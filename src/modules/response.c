@@ -1320,7 +1320,7 @@ void init_response_module(ant_t *js) {
 #undef GETTER
 
   js_set_sym(js, js->builtins.response_proto, js->sym.inspect_sym, js_mkfun(response_inspect));
-  js_set_sym(js, js->builtins.response_proto, js->sym.toStringTag_sym, js_mkstr(js, "Response", 8));
+  js_set_tostringtag(js, js->builtins.response_proto, js_mkstr(js, "Response", 8));
   ctor = js_make_ctor(js, js_response_ctor, js->builtins.response_proto, "Response", 8);
   js_set(js, ctor, "error", js_mkfun(js_response_error));
   js_set(js, ctor, "redirect", js_mkfun(js_response_redirect));

@@ -1193,7 +1193,7 @@ static ant_value_t rl_get_async_iter_proto(ant_t *js) {
   js_set(js, js->builtins.rl_async_iter_proto, "next", js_mkfun(rl_async_iter_next));
   js_set(js, js->builtins.rl_async_iter_proto, "return", js_mkfun(rl_async_iter_return));
   js_set_sym(js, js->builtins.rl_async_iter_proto, js->sym.asyncIterator_sym, js_mkfun(sym_this_cb));
-  js_set_sym(js, js->builtins.rl_async_iter_proto, js->sym.toStringTag_sym, js_mkstr(js, "AsyncIterator", 13));
+  js_set_tostringtag(js, js->builtins.rl_async_iter_proto, js_mkstr(js, "AsyncIterator", 13));
 
   return js->builtins.rl_async_iter_proto;
 }
@@ -1257,7 +1257,7 @@ static ant_value_t rl_get_interface_proto(ant_t *js) {
   js_set_getter_desc(js, js->builtins.rl_interface_proto, "cursor", 6, js_mkfun(rl_interface_cursor_getter), JS_DESC_E | JS_DESC_C);
   js_set_getter_desc(js, js->builtins.rl_interface_proto, "closed", 6, js_mkfun(rl_interface_closed_getter), JS_DESC_E | JS_DESC_C);
   js_set_sym(js, js->builtins.rl_interface_proto, js->sym.asyncIterator_sym, js_mkfun(rl_interface_async_iterator));
-  js_set_sym(js, js->builtins.rl_interface_proto, js->sym.toStringTag_sym, js_mkstr(js, "Interface", 9));
+  js_set_tostringtag(js, js->builtins.rl_interface_proto, js_mkstr(js, "Interface", 9));
 
   return js->builtins.rl_interface_proto;
 }
@@ -1383,7 +1383,7 @@ ant_value_t readline_library(ant_t *js) {
   js_set(js, lib, "cursorTo", js_mkfun(rl_cursor_to));
   js_set(js, lib, "moveCursor", js_mkfun(rl_move_cursor));
   js_set(js, lib, "emitKeypressEvents", js_mkfun(rl_emit_keypress_events));
-  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "readline", 8));
+  js_set_tostringtag(js, lib, js_mkstr(js, "readline", 8));
   
   return lib;
 }
@@ -1397,7 +1397,7 @@ ant_value_t readline_promises_library(ant_t *js) {
   js_set(js, lib, "cursorTo", js_mkfun(rl_cursor_to));
   js_set(js, lib, "moveCursor", js_mkfun(rl_move_cursor));
   js_set(js, lib, "emitKeypressEvents", js_mkfun(rl_emit_keypress_events));
-  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "readline/promises", 17));
+  js_set_tostringtag(js, lib, js_mkstr(js, "readline/promises", 17));
   
   return lib;
 }

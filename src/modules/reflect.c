@@ -68,8 +68,9 @@ static ant_value_t reflect_set(ant_params_t) {
     if (is_err(key)) return key;
   }
   
-  ant_value_t receiver = nargs > 3 ? args[3] : args[0];
-  ant_value_t result = js_set_with_receiver(js, target, key, value, receiver);
+  ant_value_t result = nargs > 3 || vtype(args[0]) == kTypeBuiltin
+    ? js_set_with_receiver(js, target, key, value, nargs > 3 ? args[3] : args[0])
+    : js_set_reporting(js, target, key, value);
   
   if (is_err(result)) return result;
   if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
@@ -309,6 +310,6 @@ void init_reflect_module(ant_t *js) {
   js_set(js, reflect_obj, "isExtensible", js_mkfun(reflect_is_extensible));
   js_set(js, reflect_obj, "preventExtensions", js_mkfun(reflect_prevent_extensions));
   
-  js_set_sym(js, reflect_obj, js->sym.toStringTag_sym, js_mkstr(js, "Reflect", 7));
+  js_set_tostringtag(js, reflect_obj, js_mkstr(js, "Reflect", 7));
   js_set_global_builtin(js, "Reflect", reflect_obj);
 }

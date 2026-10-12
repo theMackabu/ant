@@ -149,4 +149,21 @@ assert.throws(() => Reflect.defineProperty({}, 'x', { get: 1 }), TypeError, 'a n
 assert.strictEqual(Reflect.defineProperty(Object.freeze({}), 'x', { value: 1 }), false);
 assert.strictEqual(Reflect.defineProperty(Object.defineProperty({}, 'x', { value: 1 }), 'x', { value: 2 }), false);
 
+const lateHandler = { set(t, k, v, r) { return Reflect.set(t, k, v, r); } };
+const lateRaw = { n: 0 };
+const late = new Proxy(lateRaw, lateHandler);
+for (let i = 0; i < 3000; i++) late.n = i;
+const lateDefines = [];
+lateHandler.defineProperty = (t, k, d) => { lateDefines.push(k); return Reflect.defineProperty(t, k, d); };
+late.n = -1;
+assert.deepStrictEqual([lateDefines, lateRaw.n], [['n'], -1], 'a trap added to a warm handler is seen');
+const lateProtoHandler = Object.create({});
+lateProtoHandler.set = (t, k, v, r) => Reflect.set(t, k, v, r);
+const lateProto = new Proxy({ m: 0 }, lateProtoHandler);
+for (let i = 0; i < 3000; i++) lateProto.m = i;
+let protoTrapped = false;
+Object.getPrototypeOf(lateProtoHandler).getOwnPropertyDescriptor = (t, k) => { protoTrapped = true; return Reflect.getOwnPropertyDescriptor(t, k); };
+lateProto.m = 1;
+assert.strictEqual(protoTrapped, true, 'a trap added to a handler prototype is seen');
+
 console.log('reflect set receiver OK');

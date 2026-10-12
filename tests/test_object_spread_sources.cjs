@@ -189,4 +189,9 @@ const { [envKey]: ev, ...envRest } = process.env;
 assert(ev === 'v' && !(envKey in envRest), 'process.env drops a runtime-built key');
 delete process.env[envKey];
 
+const getterOrder = [];
+const indexGetters = { get b() { getterOrder.push('b'); return 1; }, get 1() { getterOrder.push('1'); return 2; }, get 0() { getterOrder.push('0'); return 3; } };
+const orderedSpread = { ...indexGetters };
+assert(JSON.stringify([getterOrder, Object.keys(orderedSpread)]) === '[["0","1","b"],["0","1","b"]]', 'index getters run first, in ascending order');
+
 console.log('object spread sources OK');

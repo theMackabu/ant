@@ -2527,10 +2527,7 @@ void init_cron_module(ant_t *js) {
   js_set_function_name(js, dispose, "dispose", 7);
   js_set_sym(js, js->builtins.cron_proto, dispose_symbol, dispose);
   js_set_sym_descriptor(js, js->builtins.cron_proto, dispose_symbol, JS_DESC_C);
-  js_set_sym(
-    js, js->builtins.cron_proto, js->sym.toStringTag_sym, js_mkstr(js, "CronJob", 7)
-  );
-  js_set_sym_descriptor(js, js->builtins.cron_proto, js->sym.toStringTag_sym, JS_DESC_C);
+  js_set_tostringtag(js, js->builtins.cron_proto, js_mkstr(js, "CronJob", 7));
 
   js_set(js, js->Ant, "cron", js_mkfun_arity(cron_call, 3));
   ant_value_t function = js_cfunc_promote(js, js_get(js, js->Ant, "cron"));

@@ -1556,7 +1556,7 @@ void init_request_module(ant_t *js) {
 #undef GETTER
 
   js_set_sym(js, js->builtins.request_proto, js->sym.inspect_sym, js_mkfun(request_inspect));
-  js_set_sym(js, js->builtins.request_proto, js->sym.toStringTag_sym, js_mkstr(js, "Request", 7));
+  js_set_tostringtag(js, js->builtins.request_proto, js_mkstr(js, "Request", 7));
   ant_value_t ctor = js_make_ctor(js, js_request_ctor, js->builtins.request_proto, "Request", 7);
   
   js_set(js, g, "Request", ctor);

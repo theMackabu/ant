@@ -4438,7 +4438,7 @@ void init_regex_module(ant_t *js) {
   js_set_sym(js, js->builtins.regexp_matchall_iter_proto_val, js->sym.iterator_sym, js_mkfun(sym_this_cb));
   js_set_sym(js, regexp_proto, js->sym.replace_sym, js_mkfun(builtin_regexp_symbol_replace));
   js_set_sym(js, regexp_proto, js->sym.search_sym, js_mkfun(builtin_regexp_symbol_search));
-  js_set_sym(js, regexp_proto, js->sym.toStringTag_sym, js_mkstr(js, "RegExp", 6));
+  js_set_tostringtag(js, regexp_proto, js_mkstr(js, "RegExp", 6));
   js_set_getter_desc(js, regexp_proto, "flags", 5, js_mkfun(builtin_regexp_flags_getter), JS_DESC_C);
   defmethod(js, regexp_proto, "compile", 7, js_mkfun(builtin_regexp_compile));
 

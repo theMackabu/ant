@@ -171,7 +171,7 @@ ant_value_t module_library(ant_t *js) {
   
   js_set(js, lib, "builtinModules", modules_arr);
   js_set(js, lib, "_resolveFilename", js_mkfun(builtin_resolveFilename));
-  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "Module", 6));
+  js_set_tostringtag(js, lib, js_mkstr(js, "Module", 6));
 
   return lib;
 }

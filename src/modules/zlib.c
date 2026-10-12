@@ -1177,7 +1177,7 @@ ant_value_t zlib_library(ant_t *js) {
   js_set(js, lib, "codes", codes);
   zlib_install_constants(js, lib);
   js_set(js, lib, "crc32", js_mkfun(js_zlib_crc32));
-  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "zlib", 4));
+  js_set_tostringtag(js, lib, js_mkstr(js, "zlib", 4));
   
   return lib;
 }

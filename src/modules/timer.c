@@ -1088,7 +1088,7 @@ void init_timer_module(ant_t *js) {
   js_set(js, js->builtins.timeout_proto, "unref", js_mkfun(js_timer_unref));
   js_set(js, js->builtins.timeout_proto, "hasRef", js_mkfun(js_timer_has_ref));
   js_set(js, js->builtins.timeout_proto, "refresh", js_mkfun(js_timer_refresh));
-  js_set_sym(js, js->builtins.timeout_proto, js->sym.toStringTag_sym, js_mkstr(js, "Timeout", 7));
+  js_set_tostringtag(js, js->builtins.timeout_proto, js_mkstr(js, "Timeout", 7));
   js_set_sym(js, js->builtins.timeout_proto, js->sym.inspect_sym, js_mkfun(timer_inspect));
   js_set_sym(js, js->builtins.timeout_proto, js->sym.toPrimitive_sym, js_mkfun(timer_to_primitive));
 
@@ -1099,7 +1099,7 @@ void init_timer_module(ant_t *js) {
   js_set(js, js->builtins.immediate_proto, "unref", js_mkfun(js_immediate_unref));
   js_set(js, js->builtins.immediate_proto, "hasRef", js_mkfun(js_immediate_has_ref));
   js_set_sym(js, js->builtins.immediate_proto, js->sym.dispose_sym, js_mkfun(js_immediate_dispose));
-  js_set_sym(js, js->builtins.immediate_proto, js->sym.toStringTag_sym, js_mkstr(js, "Immediate", 9));
+  js_set_tostringtag(js, js->builtins.immediate_proto, js_mkstr(js, "Immediate", 9));
   js_set_sym(js, js->builtins.immediate_proto, js->sym.inspect_sym, js_mkfun(timer_inspect));
 
   js->builtins.immediate_template = js_mkobj(js);
@@ -1113,7 +1113,7 @@ void init_timer_module(ant_t *js) {
   js_set(js, js->builtins.interval_proto, "unref", js_mkfun(js_timer_unref));
   js_set(js, js->builtins.interval_proto, "hasRef", js_mkfun(js_timer_has_ref));
   js_set(js, js->builtins.interval_proto, "refresh", js_mkfun(js_timer_refresh));
-  js_set_sym(js, js->builtins.interval_proto, js->sym.toStringTag_sym, js_mkstr(js, "Interval", 8));
+  js_set_tostringtag(js, js->builtins.interval_proto, js_mkstr(js, "Interval", 8));
   js_set_sym(js, js->builtins.interval_proto, js->sym.inspect_sym, js_mkfun(timer_inspect));
   js_set_sym(js, js->builtins.interval_proto, js->sym.toPrimitive_sym, js_mkfun(timer_to_primitive));
   
@@ -1129,7 +1129,7 @@ ant_value_t timers_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
 
   timers_define_common(js, lib);
-  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "timers", 6));
+  js_set_tostringtag(js, lib, js_mkstr(js, "timers", 6));
 
   return lib;
 }
@@ -1145,7 +1145,7 @@ ant_value_t timers_promises_library(ant_t *js) {
   js_set(js, lib, "setInterval", js_mkfun(js_timers_promises_setInterval));
   js_set(js, scheduler, "wait", js_mkfun(js_timers_promises_scheduler_wait));
   js_set(js, scheduler, "yield", js_mkfun(js_timers_promises_scheduler_yield));
-  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "timers/promises", 16));
+  js_set_tostringtag(js, lib, js_mkstr(js, "timers/promises", 16));
 
   return lib;
 }

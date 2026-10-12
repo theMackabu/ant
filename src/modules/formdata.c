@@ -476,7 +476,7 @@ void init_formdata_module(ant_t *js) {
   js_set(js, js->builtins.formdata_proto, "values",  js_mkfun(js_formdata_values));
 
   js_set_sym(js, js->builtins.formdata_proto, js->sym.iterator_sym,    js_get(js, js->builtins.formdata_proto, "entries"));
-  js_set_sym(js, js->builtins.formdata_proto, js->sym.toStringTag_sym, js_mkstr(js, "FormData", 8));
+  js_set_tostringtag(js, js->builtins.formdata_proto, js_mkstr(js, "FormData", 8));
 
   ant_value_t ctor_obj = js_mkobj(js);
   js_set_slot(ctor_obj, SLOT_CFUNC, js_mkfun(js_formdata_ctor));

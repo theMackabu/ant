@@ -1124,7 +1124,7 @@ ant_value_t os_library(ant_t *js) {
   js_set(js, constants, "dlopen", dlopen_obj);
   js_set(js, constants, "UV_UDP_REUSEADDR", js_mknum(4));
   js_set(js, lib, "constants", constants);
-  js_set_sym(js, lib, js->sym.toStringTag_sym, js_mkstr(js, "os", 2));
+  js_set_tostringtag(js, lib, js_mkstr(js, "os", 2));
 
   return lib;
 }

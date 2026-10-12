@@ -390,41 +390,16 @@ static inline sv_ic_entry_t *sv_isproto_ic_slot(sv_func_t *func, uint8_t *ip) {
   return &func->ic_slots[ic_idx];
 }
 
-static inline ant_value_t sv_instanceof_ic_eval(
-  ant_t *js, ant_value_t l, ant_value_t r,
-  sv_func_t *func, uint8_t *ip
+static inline __attribute__((noinline)) ant_value_t sv_instanceof_ic_miss(
+  ant_t *js, ant_value_t l, ant_value_t r, sv_ic_entry_t *ic
 ) {
-  sv_ic_entry_t *ic = sv_instanceof_ic_slot(func, ip);
-  
   ant_object_t *lhs_ptr = NULL;
   ant_value_t lhs_proto = js_mkundef();
   ant_object_t *lhs_proto_ptr = NULL;
   
-  bool lhs_cacheable = sv_instanceof_lhs_cache_key(
-    l, &lhs_ptr, 
-    &lhs_proto, &lhs_proto_ptr
-  );
-  
+  bool lhs_cacheable = sv_instanceof_lhs_cache_key(l, &lhs_ptr, &lhs_proto, &lhs_proto_ptr);
   bool primitive = !is_object_type(l) && vtype(l) != kTypeBuiltin;
-  if (!ic || vtype(r) != kTypeFunction) goto slow_path;
-
-  uint32_t cur_epoch = js->ic.epoch;
-  uintptr_t rhs_id = (uintptr_t)vdata(r);
   
-  if (ic->epoch != cur_epoch ||
-      ic->prototype_epoch != js->prototype_write_epoch ||
-      ic->cached_aux != rhs_id) goto slow_path;
-  
-  if (primitive) return js_false;
-  if (!lhs_cacheable) goto slow_path;
-  if (lhs_proto == ic->guard.comparison.receiver_proto) return js_true;
-
-  if (
-    lhs_ptr->shape == ic->cached_shape && lhs_proto_ptr == ic->cached_holder &&
-    ic->guard.comparison.object_epoch == js->ic.obj_epoch
-  ) return js_bool(ic->cached_index != 0);
-
-slow_path:
   ant_value_t ctor_proto = js_mkundef();
   bool rhs_cacheable = ic && (lhs_cacheable || primitive) && sv_instanceof_rhs_ordinary_proto(js, r, &ctor_proto);
   
@@ -455,6 +430,40 @@ slow_path:
   }
 
   return res;
+}
+
+static inline ant_value_t sv_instanceof_ic_eval(
+  ant_t *js, ant_value_t l, ant_value_t r,
+  sv_func_t *func, uint8_t *ip
+) {
+  sv_ic_entry_t *ic = sv_instanceof_ic_slot(func, ip);
+  
+  ant_object_t *lhs_ptr = NULL;
+  ant_value_t lhs_proto = js_mkundef();
+  ant_object_t *lhs_proto_ptr = NULL;
+  bool lhs_cacheable = sv_instanceof_lhs_cache_key(l, &lhs_ptr, &lhs_proto, &lhs_proto_ptr);
+  
+  if (!ic || vtype(r) != kTypeFunction) goto miss;
+  
+  if (
+    ic->epoch != js->ic.epoch || ic->prototype_epoch != js->prototype_write_epoch || 
+    ic->cached_aux != (uintptr_t)vdata(r)
+  ) goto miss;
+  
+  if (!lhs_cacheable) {
+    if (!is_object_type(l) && vtype(l) != kTypeBuiltin) return js_false;
+    goto miss;
+  }
+  
+  if (lhs_proto == ic->guard.comparison.receiver_proto) return js_true;
+  
+  if (
+    lhs_ptr->shape == ic->cached_shape && lhs_proto_ptr == ic->cached_holder &&
+    ic->guard.comparison.object_epoch == js->ic.obj_epoch
+  ) return js_bool(ic->cached_index != 0);
+
+miss:
+  return sv_instanceof_ic_miss(js, l, r, ic);
 }
 
 static inline ant_value_t sv_op_instanceof(

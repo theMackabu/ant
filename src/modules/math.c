@@ -364,6 +364,6 @@ void init_math_module(ant_t *js) {
   for (int i = 0; i < ANT_MATH_INTRINSIC_COUNT; i++)
     js->sym.math_fns[i] = js_get(js, math_obj, ant_math_intrinsic_names[i]);
 
-  js_set_sym(js, math_obj, js->sym.toStringTag_sym, js_mkstr(js, "Math", 4));
+  js_set_tostringtag(js, math_obj, js_mkstr(js, "Math", 4));
   js_set_global_builtin(js, "Math", math_obj);
 }
