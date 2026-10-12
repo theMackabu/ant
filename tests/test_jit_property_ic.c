@@ -38,7 +38,7 @@ static void check_field_codegen(
   MIR_label_t slow = MIR_new_label(ctx);
   sv_jit_ctx_t jc = {.ctx_hot = hot ? ctx : NULL};
   ant_t emitter_js = {.jit_ctx = &jc};
-  assert(mir_emit_get_field_ic_fastpath(ctx, fn, &emitter_js, &callee, 0, 0, &atom, obj, dst, slow, epoch));
+  assert(mir_emit_get_field_ic_fastpath(ctx, fn, &emitter_js, &callee, 0, 0, &atom, obj, dst, slow, epoch, NULL));
   MIR_append_insn(ctx, fn, slow);
   MIR_append_insn(ctx, fn, MIR_new_ret_insn(ctx, 1, MIR_new_reg_op(ctx, dst)));
   MIR_finish_func(ctx);

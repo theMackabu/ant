@@ -139,6 +139,7 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_throw_error);
   LOAD_EXT(jit_helper_set_proto);
   LOAD_EXT(jit_helper_copy_data_props);
+  LOAD_EXT(jit_helper_in_field);
   LOAD_EXT(jit_helper_band);
   LOAD_EXT(jit_helper_bor);
   LOAD_EXT(jit_helper_bxor);

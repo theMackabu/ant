@@ -137,6 +137,7 @@ typedef struct jit_compile {
   MIR_item_t imp_put_eval_global;
   MIR_item_t imp_delete_eval_var;
   MIR_item_t imp_get_field;
+  MIR_item_t imp_in_field;
   MIR_item_t imp_get_field_inline;
   MIR_item_t imp_import_default;
   MIR_item_t imp_import_named;

@@ -3243,8 +3243,20 @@ void compile_binary(sv_compiler_t *c, sv_ast_t *node) {
     return;
   }
 
+  sv_ast_t *key = node->left;
+  if (
+    op == TOK_IN && key->type == N_STRING && key->str &&
+    !(key->len > 0 && key->str[0] >= '0' && key->str[0] <= '9') &&
+    !(key->len == 6 && !memcmp(key->str, "length", 6))
+  ) {
+    compile_expr(c, node->right);
+    emit_atom_op(c, OP_IN_FIELD, key->str, key->len);
+    return;
+  }
+
   uint8_t left_type = SV_TI_UNKNOWN;
   uint8_t right_type = SV_TI_UNKNOWN;
+  
   if (op == TOK_PLUS || op == TOK_MINUS || op == TOK_MUL || op == TOK_DIV) {
     left_type = infer_expr_type(c, node->left);
     right_type = infer_expr_type(c, node->right);

@@ -687,6 +687,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_delete_eval_var =
       MIR_new_import(c->ctx, "jit_helper_delete_eval_var");
   c->imp_get_field = MIR_new_import(c->ctx, "jit_helper_get_field");
+  c->imp_in_field = MIR_new_import(c->ctx, "jit_helper_in_field");
   c->imp_get_field_inline =
       MIR_new_import(c->ctx, "jit_helper_get_field_inline");
   c->imp_import_default = MIR_new_import(c->ctx, "jit_helper_import_default");

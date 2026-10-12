@@ -145,6 +145,7 @@ OP_DEF(  GT,                1,   2,   1, none)
 OP_DEF(  GE,                1,   2,   1, none)
 OP_DEF(  INSTANCEOF,        3,   2,   1, u16)       /* l r -> bool (ic_idx:u16) */
 OP_DEF(  IN,                1,   2,   1, none)
+OP_DEF(  IN_FIELD,          7,   1,   1, atom)      /* obj -> bool (atom in obj; atom + ic_idx:u16) */
 OP_DEF(  IS_NULLISH,        1,   1,   1, none)      /* TOS is null|undefined? */
 OP_DEF(  IS_UNDEF_OR_NULL,  1,   1,   1, none)      /* same, for ?? chains */
 
@@ -404,6 +405,7 @@ OP_FLAG(GT                    , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV
 OP_FLAG(GE                    , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_BAILOUT)
 OP_FLAG(INSTANCEOF            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(IN                    , SV_OPF_JIT_ELIGIBLE)
+OP_FLAG(IN_FIELD              , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(IS_UNDEF_OR_NULL      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 
 OP_FLAG(BAND                  , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_BAILOUT)
@@ -499,6 +501,7 @@ OP_IC_SLOT(GET_EVAL_GLOBAL_UNDEF)
 OP_IC_SLOT(GET_FIELD)
 OP_IC_SLOT(GET_FIELD2)
 OP_IC_SLOT(GET_FIELD_OPT)
+OP_IC_SLOT(IN_FIELD)
 OP_IC_SLOT(PUT_FIELD)
 #undef OP_IC_SLOT
 #endif

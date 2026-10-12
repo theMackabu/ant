@@ -209,6 +209,12 @@ ant_value_t jit_helper_get_field(
   sv_func_t *func, int32_t bc_off
 );
 
+ant_value_t jit_helper_in_field(
+  ant_t *js, ant_value_t obj,
+  const char *str, uint32_t len,
+  sv_func_t *func, int32_t bc_off
+);
+
 ant_value_t jit_helper_get_field_inline(
   ant_t *js, ant_value_t obj,
   const char *str, uint32_t len,

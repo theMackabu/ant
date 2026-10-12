@@ -107,7 +107,7 @@ static void check_dense_read_guard(void) {
   MIR_reg_t value = MIR_new_func_reg(ctx, function->u.func, MIR_T_I64, "value");
   MIR_label_t slow = MIR_new_label(ctx);
   mir_emit_dense_element_guard(ctx, function, object, index, value,
-      JIT_ELEMENT_NUMERIC_READ, slow, 0);
+      JIT_ELEMENT_NUMERIC_READ, slow, 0, NULL);
   MIR_append_insn(ctx, function, MIR_new_ret_insn(ctx, 1, MIR_new_reg_op(ctx, value)));
   MIR_append_insn(ctx, function, slow);
   MIR_append_insn(ctx, function, MIR_new_ret_insn(ctx, 1, MIR_new_uint_op(ctx, js_mkundef())));

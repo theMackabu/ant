@@ -1842,9 +1842,10 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_GE:  { sv_tfb_record2(func, ip, vm->stack[vm->sp-2], vm->stack[vm->sp-1]); VM_CHECK(sv_op_ge(vm, js));  NEXT(OP_GE); }
   
   L_INSTANCEOF:        { VM_CHECK(sv_op_instanceof(vm, js, func, ip));  NEXT(OP_INSTANCEOF); }
-  L_IN:                { VM_CHECK(sv_op_in(vm, js));          NEXT(OP_IN); }
-  L_IS_NULLISH:        { sv_op_is_nullish(vm);                NEXT(OP_IS_NULLISH); }
-  L_IS_UNDEF_OR_NULL:  { sv_op_is_undef_or_null(vm);          NEXT(OP_IS_UNDEF_OR_NULL); }
+  L_IN:                { VM_CHECK(sv_op_in(vm, js));                    NEXT(OP_IN); }
+  L_IN_FIELD:          { VM_CHECK(sv_op_in_field(vm, js, func, ip));    NEXT(OP_IN_FIELD); }
+  L_IS_NULLISH:        { sv_op_is_nullish(vm);                          NEXT(OP_IS_NULLISH); }
+  L_IS_UNDEF_OR_NULL:  { sv_op_is_undef_or_null(vm);                    NEXT(OP_IS_UNDEF_OR_NULL); }
 
   L_BAND: {
     ant_value_t l = vm->stack[vm->sp - 2];

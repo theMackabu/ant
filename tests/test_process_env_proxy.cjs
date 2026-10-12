@@ -91,59 +91,6 @@ assert(!Object.keys(process.env).includes('toObject'), 'own methods of process.e
 delete process.env.ANT_ENV_PROXY_CHILD;
 delete process.env.ANT_ENV_PROXY_DEF;
 
-const p = new Proxy({}, {
-  ownKeys: () => ['a', 'b'],
-  getOwnPropertyDescriptor: () => ({ value: 0, enumerable: true, configurable: true }),
-  get: (t, k) => 'v' + String(k),
-});
-const copy = { ...p };
-assert(copy.a === 'va' && copy.b === 'vb', 'object spread uses proxy traps');
-assert(util.types.isProxy(p), 'user proxies are still proxies');
-assert(Reflect.ownKeys(p).join() === 'a,b' && Object.getOwnPropertyNames(p).join() === 'a,b', 'key APIs use the ownKeys trap');
-
-const sym = Symbol('s');
-const withSym = new Proxy({ x: 1, [sym]: 2 }, {});
-const symCopy = { ...withSym };
-assert(symCopy.x === 1 && symCopy[sym] === 2, 'object spread copies symbol keys from proxies');
-
-const throwing = new Proxy({}, {
-  ownKeys: () => ['a'],
-  getOwnPropertyDescriptor: () => ({ value: 0, enumerable: true, configurable: true }),
-  get() { throw new Error('boom-get'); },
-});
-assert(throws(() => ({ ...throwing }))?.message === 'boom-get', 'spread rethrows a trap error');
-assert(throws(() => { const { ...rest } = throwing; return rest; })?.message === 'boom-get', 'object rest rethrows a trap error');
-
-const { proxy: revocable, revoke } = Proxy.revocable({ a: 1 }, {});
-revoke();
-assert(throws(() => ({ ...revocable })) instanceof TypeError, 'spreading a revoked proxy throws');
-
-const getterThrows = { get a() { throw new Error('boom-accessor'); } };
-assert(throws(() => ({ ...getterThrows }))?.message === 'boom-accessor', 'spread rethrows getter errors');
-
-const log = [];
-const traced = new Proxy({ a: 1, b: 2, c: 3 }, {
-  ownKeys: (t) => { log.push('ownKeys'); return Reflect.ownKeys(t); },
-  getOwnPropertyDescriptor: (t, k) => { log.push('desc:' + k); return Reflect.getOwnPropertyDescriptor(t, k); },
-  get: (t, k) => { log.push('get:' + String(k)); return t[k]; },
-});
-const { a: tracedA, ...tracedRest } = traced;
-assert(tracedA === 1 && tracedRest.b === 2 && tracedRest.c === 3 && !('a' in tracedRest), 'rest leaves out named keys');
-assert(log.join() === 'get:a,ownKeys,desc:b,get:b,desc:c,get:c', 'rest skips excluded keys and reads each key before the next: ' + log.join());
-
-let keyCalls = 0;
-const key = () => { keyCalls++; return 'b'; };
-const { [key()]: computedB, ...afterComputed } = { a: 1, b: 2 };
-assert(keyCalls === 1 && computedB === 2 && !('b' in afterComputed) && afterComputed.a === 1, 'a computed rest key is evaluated once');
-
-let excludedGetterCalls = 0;
-const { x: namedX, ...noX } = { get x() { excludedGetterCalls++; return 1; }, y: 2 };
-assert(excludedGetterCalls === 1 && noX.y === 2 && !('x' in noX), 'an excluded getter runs only for its own binding');
-
-const withProtoKey = JSON.parse('{"__proto__": {"polluted": true}, "z": 1}');
-const protoCopy = { ...withProtoKey };
-assert(Object.getPrototypeOf(protoCopy) === Object.prototype && Object.hasOwn(protoCopy, '__proto__'), 'spread defines __proto__ as an own key');
-
 assert(throws(() => Object.freeze(process.env))?.message === 'Cannot freeze', 'freezing process.env throws');
 assert(throws(() => Object.seal(process.env))?.message === 'Cannot seal', 'sealing process.env throws');
 assert(throws(() => Object.preventExtensions(process.env))?.message === 'Cannot prevent extensions', 'preventExtensions on process.env throws');

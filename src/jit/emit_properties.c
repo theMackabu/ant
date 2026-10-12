@@ -538,6 +538,31 @@ void jit_emit_properties(jit_compile_t *c) {
       break;
     }
 
+    case OP_IN_FIELD: {
+      uint32_t idx = sv_get_u32(c->ip + 1);
+      if (idx >= (uint32_t)c->func->atom_count) {
+        c->ok = false;
+        break;
+      }
+      sv_atom_t *atom = &c->func->atoms[idx];
+      vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
+      MIR_reg_t obj = vstack_pop(&c->vs);
+      MIR_reg_t dst = vstack_push(&c->vs);
+      MIR_append_insn(c->ctx, c->jit_func,
+                      MIR_new_call_insn(c->ctx, 9,
+                                        MIR_new_ref_op(c->ctx, c->gf_proto),
+                                        MIR_new_ref_op(c->ctx, c->imp_in_field),
+                                        MIR_new_reg_op(c->ctx, dst),
+                                        MIR_new_reg_op(c->ctx, c->r_js),
+                                        MIR_new_reg_op(c->ctx, obj),
+                                        MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)atom->str),
+                                        MIR_new_uint_op(c->ctx, (uint64_t)atom->len),
+                                        MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->func),
+                                        MIR_new_int_op(c->ctx, (int64_t)c->bc_off)));
+      jit_emit_throw_if_error(c, dst);
+      break;
+    }
+
     case OP_GET_FIELD2: {
       uint32_t idx = sv_get_u32(c->ip + 1);
       if (idx >= (uint32_t)c->func->atom_count) {

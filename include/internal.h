@@ -412,6 +412,7 @@ ant_value_t js_is_array_value_checked(ant_t *js, ant_value_t value, bool *out);
 
 ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r);
+ant_value_t js_in_str(ant_t *js, ant_value_t r, const char *key, size_t key_len);
 
 ant_value_t builtin_function_apply(ant_params_t);
 ant_value_t builtin_object_isPrototypeOf(ant_params_t);

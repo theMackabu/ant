@@ -1123,6 +1123,14 @@ ant_value_t jit_helper_get_field(
   return jit_get_field_fallback(js, obj, str, len, func, bc_off);
 }
 
+ant_value_t jit_helper_in_field(
+  ant_t *js, ant_value_t obj,
+  const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
+) {
+  sv_atom_t atom = { .str = str, .len = len };
+  return sv_prop_in_field_ic(js, obj, &atom, sv_ic_slot_for_ip(func, func->code + bc_off));
+}
+
 ant_value_t jit_helper_get_field_inline(
   ant_t *js, ant_value_t obj,
   const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
@@ -1841,10 +1849,7 @@ ant_value_t jit_helper_new(
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
 
   ant_value_t proto = js_mkundef();
-  if (func_obj && new_target == func && !(closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))) {
-    proto = sv_construct_prototype_cached(js, func, func_obj, closure->func);
-    if (is_err(proto)) return proto;
-  } else if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
+  if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
     proto = sv_prepare_construct_meta(js, func, new_target, &effective_new_target);
     if (is_err(proto)) return proto;
   }
