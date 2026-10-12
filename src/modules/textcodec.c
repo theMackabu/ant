@@ -97,7 +97,7 @@ static ant_value_t js_textencoder_get_encoding(ant_params_t) {
 }
 
 ant_value_t te_encode(ant_t *js, const char *str, size_t str_len) {
-  ArrayBufferData *ab = create_array_buffer_data(str_len);
+  ArrayBufferData *ab = create_array_buffer_data(js, str_len);
   if (!ab) return js_mkerr(js, "out of memory");
   size_t written = utf8_export_into(str, str_len, ab->data, str_len, NULL);
   return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, written, "Uint8Array");

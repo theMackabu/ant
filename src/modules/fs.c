@@ -452,7 +452,7 @@ static ant_value_t fs_readstream__read(ant_params_t) {
     if ((int64_t)want > (end - pos + 1)) want = (size_t)(end - pos + 1);
   }
 
-  ArrayBufferData *ab = create_array_buffer_data(want);
+  ArrayBufferData *ab = create_array_buffer_data(js, want);
   if (!ab) {
     GC_ROOT_SAVE(mark, js);
     ant_value_t err = js_mkerr(js, "Failed to allocate ReadStream buffer");
@@ -474,14 +474,14 @@ static ant_value_t fs_readstream__read(ant_params_t) {
     ant_value_t err = fs_stream_error(js, stream_obj, "read", result);
     GC_ROOT_PIN(js, err);
     ant_value_t destroy_fn = js_getprop_fallback(js, stream_obj, "destroy");
-    free_array_buffer_data(ab);
+    free_array_buffer_data(js, ab);
     if (is_callable(destroy_fn)) fs_call_value(js, destroy_fn, stream_obj, &err, 1);
     GC_ROOT_RESTORE(js, mark);
     return js_mkundef();
   }
 
   if (result == 0) {
-    free_array_buffer_data(ab);
+    free_array_buffer_data(js, ab);
     if (js_truthy(js, js_get(js, stream_obj, "autoClose")))
       (void)fs_stream_close_fd_sync(js, stream_obj);
     return fs_stream_push_chunk(js, stream_obj, js_mknull());
@@ -1918,7 +1918,7 @@ static bool fs_buffer_encoding(ant_t *js, ant_value_t options) {
 }
 
 static ant_value_t fs_read_to_uint8array(ant_t *js, const char *data, size_t len) {
-  ArrayBufferData *ab = create_array_buffer_data(len);
+  ArrayBufferData *ab = create_array_buffer_data(js, len);
   if (!ab) return js_mkerr(js, "Out of memory");
   memcpy(ab->data, data, len);
   return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Buffer");

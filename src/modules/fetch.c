@@ -435,7 +435,7 @@ static ant_value_t fetch_headers_from_http(ant_t *js, const ant_http_header_t *h
 }
 
 static ant_value_t fetch_create_chunk(ant_t *js, const uint8_t *data, size_t len) {
-  ArrayBufferData *ab = create_array_buffer_data(len);
+  ArrayBufferData *ab = create_array_buffer_data(js, len);
   if (!ab) return js_mkerr(js, "out of memory");
   if (len > 0) memcpy(ab->data, data, len);
   return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Uint8Array");

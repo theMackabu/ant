@@ -835,7 +835,7 @@ static ant_value_t js_wasm_module_custom_sections(ant_params_t) {
       data_start = name_start + name_len;
       if (data_start <= section_end && name_len == wanted_len
           && memcmp(handle->bytes + name_start, wanted, wanted_len) == 0) {
-        buffer = create_array_buffer_data(section_end - data_start);
+        buffer = create_array_buffer_data(js, section_end - data_start);
         if (!buffer) return js_mkerr(js, "out of memory");
         memcpy(buffer->data, handle->bytes + data_start, section_end - data_start);
         js_arr_push(js, result, create_arraybuffer_obj(js, buffer));
@@ -1379,7 +1379,6 @@ static void wasm_detach_external_arraybuffer(ant_t *js, ant_value_t buffer) {
   data->data = NULL;
   data->length = 0;
   data->capacity = 0;
-  if (is_object_type(buffer)) js_set(js, buffer, "byteLength", js_mknum(0));
 }
 
 static ant_value_t wasm_make_external_arraybuffer(ant_t *js, uint8_t *data, size_t len, ant_value_t owner) {

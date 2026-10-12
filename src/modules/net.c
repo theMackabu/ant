@@ -375,7 +375,7 @@ static bool net_parse_connect_args(ant_native_params_t, net_connect_args_t *out)
 }
 
 static ant_value_t net_make_buffer_chunk(ant_t *js, const char *data, size_t len) {
-  ArrayBufferData *ab = create_array_buffer_data(len);
+  ArrayBufferData *ab = create_array_buffer_data(js, len);
   if (!ab) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
   if (len > 0 && data) memcpy(ab->data, data, len);
   return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Buffer");

@@ -31,23 +31,16 @@
 #define BUFFER_COMPAT_MAX_LENGTH 4294967296.0
 #define BUFFER_COMPAT_MAX_STRING_LENGTH 536870888.0
 
-static size_t ta_metadata_bytes     = 0;
-static size_t buffer_registry_count = 0;
-static size_t buffer_registry_cap   = 0;
-
-static ArrayBufferData **buffer_registry = NULL;
-
-static void *ta_meta_alloc(size_t size) {
+static void *ta_meta_alloc(ant_t *js, size_t size) {
   void *ptr = calloc(1, size);
   if (!ptr) return NULL;
-  ta_metadata_bytes += size;
+  js->buffers.meta_bytes += size;
   return ptr;
 }
 
-static void ta_meta_free(void *ptr, size_t size) {
+static void ta_meta_free(ant_t *js, void *ptr, size_t size) {
   if (!ptr) return;
-  if (ta_metadata_bytes >= size) ta_metadata_bytes -= size;
-  else ta_metadata_bytes = 0;
+  js->buffers.meta_bytes = js->buffers.meta_bytes >= size ? js->buffers.meta_bytes - size : 0;
   free(ptr);
 }
 
@@ -73,7 +66,7 @@ static void arraybuffer_finalize(ant_t *js, ant_object_t *obj) {
   ArrayBufferData *data = (ArrayBufferData *)js_get_native(value, BUFFER_ARRAYBUFFER_NATIVE_TAG);
   if (!data) return;
   js_clear_native(value, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  free_array_buffer_data(data);
+  free_array_buffer_data(js, data);
 }
 
 static void typedarray_finalize(ant_t *js, ant_object_t *obj) {
@@ -82,8 +75,8 @@ static void typedarray_finalize(ant_t *js, ant_object_t *obj) {
   if (!ta_data) return;
   js_clear_native(value, BUFFER_TYPEDARRAY_NATIVE_TAG);
 
-  if (ta_data->buffer) free_array_buffer_data(ta_data->buffer);
-  ta_meta_free(ta_data, sizeof(*ta_data));
+  if (ta_data->buffer) free_array_buffer_data(js, ta_data->buffer);
+  ta_meta_free(js, ta_data, sizeof(*ta_data));
 }
 
 static void dataview_finalize(ant_t *js, ant_object_t *obj) {
@@ -92,8 +85,8 @@ static void dataview_finalize(ant_t *js, ant_object_t *obj) {
   if (!dv_data) return;
   js_clear_native(value, BUFFER_DATAVIEW_NATIVE_TAG);
 
-  if (dv_data->buffer) free_array_buffer_data(dv_data->buffer);
-  ta_meta_free(dv_data, sizeof(*dv_data));
+  if (dv_data->buffer) free_array_buffer_data(js, dv_data->buffer);
+  ta_meta_free(js, dv_data, sizeof(*dv_data));
 }
 
 bool buffer_is_dataview(ant_value_t obj) {
@@ -229,35 +222,29 @@ static ant_value_t ta_entries(ant_params_t) {
   return iter;
 }
 
-static void register_buffer(ArrayBufferData *data) {
-  if (!data || buffer_registry_count >= UINT32_MAX) return;
+static void register_buffer(ant_t *js, ArrayBufferData *data) {
+  if (js->buffers.count >= UINT32_MAX) return;
   
-  if (!buffer_registry) {
-    buffer_registry = calloc(BUFFER_REGISTRY_INITIAL_CAP, sizeof(ArrayBufferData *));
-    if (!buffer_registry) return;
-    buffer_registry_cap = BUFFER_REGISTRY_INITIAL_CAP;
+  if (js->buffers.count == js->buffers.cap) {
+    size_t cap = js->buffers.cap ? js->buffers.cap * 2 : BUFFER_REGISTRY_INITIAL_CAP;
+    ArrayBufferData **entries = realloc(js->buffers.entries, cap * sizeof(*entries));
+    if (!entries) return;
+    js->buffers.entries = entries;
+    js->buffers.cap = cap;
   }
   
-  if (buffer_registry_count >= buffer_registry_cap) {
-    size_t new_cap = buffer_registry_cap * 2;
-    ArrayBufferData **new_reg = realloc(buffer_registry, new_cap * sizeof(ArrayBufferData *));
-    if (!new_reg) return;
-    buffer_registry = new_reg;
-    buffer_registry_cap = new_cap;
-  }
-  
-  buffer_registry[buffer_registry_count++] = data;
-  data->registry_slot = (uint32_t)buffer_registry_count;
+  js->buffers.entries[js->buffers.count++] = data;
+  data->registry_slot = (uint32_t)js->buffers.count;
 }
 
-static void unregister_buffer(ArrayBufferData *data) {
-  if (!data || !buffer_registry || data->registry_slot == 0) return;
-
+static void unregister_buffer(ant_t *js, ArrayBufferData *data) {
+  if (data->registry_slot == 0) return;
+  
   size_t idx = (size_t)data->registry_slot - 1;
-  if (idx >= buffer_registry_count || buffer_registry[idx] != data) return;
-
-  ArrayBufferData *last = buffer_registry[--buffer_registry_count];
-  buffer_registry[idx] = last;
+  if (idx >= js->buffers.count || js->buffers.entries[idx] != data) return;
+  
+  ArrayBufferData *last = js->buffers.entries[--js->buffers.count];
+  js->buffers.entries[idx] = last;
   last->registry_slot = (uint32_t)idx + 1;
   data->registry_slot = 0;
 }
@@ -288,7 +275,7 @@ static inline void buffer_string_bounds(
   *len_out = end - start;
 }
 
-ArrayBufferData *create_array_buffer_data(size_t length) {
+static ArrayBufferData *alloc_array_buffer_data(size_t length) {
   if (length > SIZE_MAX - sizeof(ArrayBufferData)) return NULL;
   ArrayBufferData *data = calloc(1, sizeof(ArrayBufferData) + length);
   if (!data) return NULL;
@@ -299,24 +286,25 @@ ArrayBufferData *create_array_buffer_data(size_t length) {
   data->ref_count = 1;
   data->is_shared = 0;
   data->is_detached = 0;
-  
-  register_buffer(data);
+  return data;
+}
+
+ArrayBufferData *create_array_buffer_data(ant_t *js, size_t length) {
+  ArrayBufferData *data = alloc_array_buffer_data(length);
+  if (data) register_buffer(js, data);
   return data;
 }
 
 static ArrayBufferData *create_shared_array_buffer_data(size_t length) {
-  ArrayBufferData *data = create_array_buffer_data(length);
+  ArrayBufferData *data = alloc_array_buffer_data(length);
   if (data) data->is_shared = 1;
   return data;
 }
 
-void free_array_buffer_data(ArrayBufferData *data) {
-  if (!data) return;
-  data->ref_count--;
-  if (data->ref_count <= 0) {
-    unregister_buffer(data);
-    free(data);
-  }
+void free_array_buffer_data(ant_t *js, ArrayBufferData *data) {
+  if (!data || --data->ref_count > 0) return;
+  if (!data->is_shared) unregister_buffer(js, data);
+  free(data);
 }
 
 static size_t get_element_size(TypedArrayType type) {
@@ -395,7 +383,7 @@ static ant_value_t js_arraybuffer_constructor(ant_params_t) {
     if (is_err(result)) return result;
   }
   
-  ArrayBufferData *data = create_array_buffer_data(length);
+  ArrayBufferData *data = create_array_buffer_data(js, length);
   if (!data) return js_mkerr(js, "Failed to allocate ArrayBuffer");
   
   ant_value_t obj = js_mkobj(js);
@@ -425,7 +413,7 @@ static ant_value_t js_arraybuffer_slice(ant_params_t) {
   if (end < begin) end = begin;
   
   size_t new_length = (size_t)(end - begin);
-  ArrayBufferData *new_data = create_array_buffer_data(new_length);
+  ArrayBufferData *new_data = create_array_buffer_data(js, new_length);
   if (!new_data) return js_mkerr(js, "Failed to allocate new ArrayBuffer");
   
   memcpy(new_data->data, data->data + begin, new_length);
@@ -463,7 +451,7 @@ static ant_value_t js_arraybuffer_transfer(ant_params_t) {
   if (data->is_detached)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot transfer a detached ArrayBuffer");
 
-  ArrayBufferData *new_data = create_array_buffer_data(new_length);
+  ArrayBufferData *new_data = create_array_buffer_data(js, new_length);
   if (!new_data) return js_mkerr(js, "Failed to allocate new ArrayBuffer");
   
   size_t copy_length = data->length < new_length ? data->length : new_length;
@@ -868,7 +856,7 @@ static ant_value_t js_typedarray_map(ant_params_t) {
   if (!ta_data->buffer || ta_data->buffer->is_detached)
     return js_mkerr(js, "Cannot operate on a detached TypedArray");
 
-  ArrayBufferData *buffer = create_array_buffer_data(ta_data->byte_length);
+  ArrayBufferData *buffer = create_array_buffer_data(js, ta_data->byte_length);
   if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
   ant_value_t out = create_typed_array_like(js, this_val, ta_data->type, buffer, 0, ta_data->length);
   if (is_err(out)) return out;
@@ -913,7 +901,7 @@ static ant_value_t js_typedarray_filter(ant_params_t) {
   }
 
   size_t count = kept.len;
-  ArrayBufferData *buffer = create_array_buffer_data(count * get_element_size(ta_data->type));
+  ArrayBufferData *buffer = create_array_buffer_data(js, count * get_element_size(ta_data->type));
   if (!buffer) { out = js_mkerr(js, "Failed to allocate buffer"); goto done; }
   out = create_typed_array_like(js, this_val, ta_data->type, buffer, 0, count);
   if (is_err(out)) goto done;
@@ -986,7 +974,7 @@ ant_value_t create_typed_array_with_buffer(
   ant_t *js, TypedArrayType type, ArrayBufferData *buffer,
   size_t byte_offset, size_t length, const char *type_name, ant_value_t arraybuffer_obj
 ) {
-  TypedArrayData *ta_data = ta_meta_alloc(sizeof(TypedArrayData));
+  TypedArrayData *ta_data = ta_meta_alloc(js, sizeof(TypedArrayData));
   if (!ta_data) return js_mkerr(js, "Failed to allocate TypedArray");
   
   size_t element_size = get_element_size(type);
@@ -1019,7 +1007,7 @@ ant_value_t create_typed_array(
 ) {
   ant_value_t ab_obj = create_arraybuffer_obj(js, buffer);
   ant_value_t result = create_typed_array_with_buffer(js, type, buffer, byte_offset, length, type_name, ab_obj);
-  free_array_buffer_data(buffer); return result;
+  free_array_buffer_data(js, buffer); return result;
 }
 
 ant_value_t create_dataview_with_buffer(
@@ -1027,7 +1015,7 @@ ant_value_t create_dataview_with_buffer(
   size_t byte_offset, size_t byte_length,
   ant_value_t arraybuffer_obj
 ) {
-  DataViewData *dv_data = ta_meta_alloc(sizeof(DataViewData));
+  DataViewData *dv_data = ta_meta_alloc(js, sizeof(DataViewData));
   if (!dv_data) return js_mkerr(js, "Failed to allocate DataView");
 
   dv_data->buffer = buffer;
@@ -1054,7 +1042,7 @@ static ant_value_t create_typed_array_for_length(
   if (length > (SIZE_MAX - sizeof(ArrayBufferData)) / element_size)
     return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid TypedArray length");
 
-  ArrayBufferData *buffer = create_array_buffer_data(length * element_size);
+  ArrayBufferData *buffer = create_array_buffer_data(js, length * element_size);
   if (!buffer) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid TypedArray length");
 
   return create_typed_array(js, type, buffer, 0, length, type_name);
@@ -1313,7 +1301,7 @@ static ant_value_t js_typedarray_slice(ant_params_t) {
   
   size_t new_length = (size_t)(end - begin);
   size_t element_size = get_element_size(ta_data->type);
-  ArrayBufferData *new_buffer = create_array_buffer_data(new_length * element_size);
+  ArrayBufferData *new_buffer = create_array_buffer_data(js, new_length * element_size);
   if (!new_buffer) return js_mkerr(js, "Failed to allocate new buffer");
   
   memcpy(
@@ -1325,7 +1313,7 @@ static ant_value_t js_typedarray_slice(ant_params_t) {
   ant_value_t out = create_typed_array_like(
     js, this_val, ta_data->type, 
     new_buffer, 0, new_length
-  ); free_array_buffer_data(new_buffer);
+  ); free_array_buffer_data(js, new_buffer);
   
   return out;
 }
@@ -1544,7 +1532,7 @@ static ant_value_t js_typedarray_toReversed(ant_params_t) {
   
   size_t length = ta_data->length;
   size_t element_size = get_element_size(ta_data->type);
-  ArrayBufferData *new_buffer = create_array_buffer_data(length * element_size);
+  ArrayBufferData *new_buffer = create_array_buffer_data(js, length * element_size);
   if (!new_buffer) return js_mkerr(js, "Failed to allocate new buffer");
   
   uint8_t *src = ta_data->buffer->data + ta_data->byte_offset;
@@ -1557,7 +1545,7 @@ static ant_value_t js_typedarray_toReversed(ant_params_t) {
   ant_value_t out = create_typed_array_like(
     js, this_val, ta_data->type,
     new_buffer, 0, length
-  ); free_array_buffer_data(new_buffer);
+  ); free_array_buffer_data(js, new_buffer);
   
   return out;
 }
@@ -1570,13 +1558,13 @@ static ant_value_t js_typedarray_toSorted(ant_params_t) {
   
   size_t length = ta_data->length;
   size_t element_size = get_element_size(ta_data->type);
-  ArrayBufferData *new_buffer = create_array_buffer_data(length * element_size);
+  ArrayBufferData *new_buffer = create_array_buffer_data(js, length * element_size);
   if (!new_buffer) return js_mkerr(js, "Failed to allocate new buffer");
   
   memcpy(new_buffer->data, ta_data->buffer->data + ta_data->byte_offset, length * element_size);
   ant_value_t result = create_typed_array_like(js, this_val, ta_data->type, new_buffer, 0, length);
   
-  free_array_buffer_data(new_buffer);
+  free_array_buffer_data(js, new_buffer);
   if (is_err(result)) return result;
   
   TypedArrayData *result_ta = buffer_get_typedarray_data(result);
@@ -1662,7 +1650,7 @@ static ant_value_t js_typedarray_with(ant_params_t) {
   }
   
   size_t element_size = get_element_size(ta_data->type);
-  ArrayBufferData *new_buffer = create_array_buffer_data(length * element_size);
+  ArrayBufferData *new_buffer = create_array_buffer_data(js, length * element_size);
   if (!new_buffer) return js_mkerr(js, "Failed to allocate new buffer");
   
   memcpy(new_buffer->data, ta_data->buffer->data + ta_data->byte_offset, length * element_size);
@@ -1670,7 +1658,7 @@ static ant_value_t js_typedarray_with(ant_params_t) {
   ant_value_t out = create_typed_array_like(
     js, this_val, ta_data->type,
     new_buffer, 0, length
-  ); free_array_buffer_data(new_buffer);
+  ); free_array_buffer_data(js, new_buffer);
   if (is_err(out)) return out;
 
   TypedArrayData *out_ta = buffer_get_typedarray_data(out);
@@ -1780,7 +1768,7 @@ static ant_value_t js_typedarray_from(ant_native_params_t, TypedArrayType type, 
   }
 
   size_t elem_size = get_element_size(type);
-  ArrayBufferData *buffer = create_array_buffer_data(count * elem_size);
+  ArrayBufferData *buffer = create_array_buffer_data(js, count * elem_size);
   if (!buffer) goto oom;
 
   result = create_typed_array(js, type, buffer, 0, count, type_name);
@@ -1809,7 +1797,7 @@ oom:
 static ant_value_t js_typedarray_of(ant_native_params_t, TypedArrayType type, const char *type_name) {
   size_t count = (size_t)nargs;
   size_t elem_size = get_element_size(type);
-  ArrayBufferData *buffer = create_array_buffer_data(count * elem_size);
+  ArrayBufferData *buffer = create_array_buffer_data(js, count * elem_size);
   if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
 
   ant_value_t result = create_typed_array(js, type, buffer, 0, count, type_name);
@@ -1927,7 +1915,7 @@ static ant_value_t js_dataview_constructor(ant_params_t) {
   if (buffer->is_detached)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot create a view of a detached ArrayBuffer");
 
-  DataViewData *dv_data = ta_meta_alloc(sizeof(DataViewData));
+  DataViewData *dv_data = ta_meta_alloc(js, sizeof(DataViewData));
   if (!dv_data) return js_mkerr(js, "Failed to allocate DataView");
   
   dv_data->buffer = buffer;
@@ -2561,7 +2549,7 @@ static uint8_t *hex_decode_node_prefix(const char *data, size_t len, size_t *out
 }
 
 static ant_value_t uint8array_from_bytes(ant_t *js, const uint8_t *bytes, size_t len) {
-  ArrayBufferData *buffer = create_array_buffer_data(len);
+  ArrayBufferData *buffer = create_array_buffer_data(js, len);
   if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
   if (len > 0) memcpy(buffer->data, bytes, len);
   return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, len, "Uint8Array");
@@ -2806,7 +2794,7 @@ static ant_value_t js_buffer_from(ant_params_t) {
       uint8_t *decoded = ant_base64_decode_loose(str, len, &decoded_len);
       if (!decoded) return js_mkerr(js, "Failed to decode base64");
       
-      ArrayBufferData *buffer = create_array_buffer_data(decoded_len);
+      ArrayBufferData *buffer = create_array_buffer_data(js, decoded_len);
       if (!buffer) { free(decoded); return js_mkerr(js, "Failed to allocate buffer"); }
       
       memcpy(buffer->data, decoded, decoded_len);
@@ -2817,7 +2805,7 @@ static ant_value_t js_buffer_from(ant_params_t) {
       uint8_t *decoded = hex_decode_node_prefix(str, len, &decoded_len);
       if (!decoded) return js_mkerr(js, "Failed to allocate buffer");
       
-      ArrayBufferData *buffer = create_array_buffer_data(decoded_len);
+      ArrayBufferData *buffer = create_array_buffer_data(js, decoded_len);
       if (!buffer) { free(decoded); return js_mkerr(js, "Failed to allocate buffer"); }
       
       memcpy(buffer->data, decoded, decoded_len);
@@ -2826,7 +2814,7 @@ static ant_value_t js_buffer_from(ant_params_t) {
     } else if (encoding == ENC_UCS2) {
       size_t unit_count = (size_t)str_utf16_len(js, args[0]);
       size_t decoded_len = unit_count * 2;
-      ArrayBufferData *buffer = create_array_buffer_data(decoded_len);
+      ArrayBufferData *buffer = create_array_buffer_data(js, decoded_len);
       if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
       
       for (size_t i = 0; i < unit_count; i++) {
@@ -2837,12 +2825,12 @@ static ant_value_t js_buffer_from(ant_params_t) {
       return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, decoded_len, "Buffer");
     } else if (encoding == ENC_LATIN1 || encoding == ENC_ASCII) {
       size_t unit_count = (size_t)str_utf16_len(js, args[0]);
-      ArrayBufferData *buffer = create_array_buffer_data(unit_count);
+      ArrayBufferData *buffer = create_array_buffer_data(js, unit_count);
       if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
       size_t written = buffer_encode_single_byte_into(str, len, buffer->data, unit_count);
       return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, written, "Buffer");
     } else {
-      ArrayBufferData *buffer = create_array_buffer_data(len);
+      ArrayBufferData *buffer = create_array_buffer_data(js, len);
       if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
 
       size_t written = len;
@@ -2876,7 +2864,7 @@ static ant_value_t js_buffer_from(ant_params_t) {
   ant_value_t length_val = js_get(js, args[0], "length");
   if (vtype(length_val) == kTypeNumber) {
     size_t len = (size_t)js_getnum(length_val);
-    ArrayBufferData *buffer = create_array_buffer_data(len);
+    ArrayBufferData *buffer = create_array_buffer_data(js, len);
     if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
     
     for (size_t i = 0; i < len; i++) {
@@ -2906,7 +2894,7 @@ static ant_value_t js_buffer_alloc(ant_params_t) {
   }
   
   size_t size = (size_t)js_getnum(args[0]);
-  ArrayBufferData *buffer = create_array_buffer_data(size);
+  ArrayBufferData *buffer = create_array_buffer_data(js, size);
   if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
   
   memset(buffer->data, 0, size);
@@ -2936,7 +2924,7 @@ static ant_value_t js_buffer_allocUnsafe(ant_params_t) {
   }
   
   size_t size = (size_t)js_getnum(args[0]);
-  ArrayBufferData *buffer = create_array_buffer_data(size);
+  ArrayBufferData *buffer = create_array_buffer_data(js, size);
   if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
   return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, size, "Buffer");
 }
@@ -2979,7 +2967,7 @@ static ant_value_t js_buffer_copyBytesFrom(ant_params_t) {
   
   size_t elem_size = get_element_size(view->type);
   size_t bytes = count * elem_size;
-  ArrayBufferData *buffer = create_array_buffer_data(bytes);
+  ArrayBufferData *buffer = create_array_buffer_data(js, bytes);
   if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
   
   if (bytes) memcpy(buffer->data, view->buffer->data + view->byte_offset + start * elem_size, bytes);
@@ -4208,7 +4196,7 @@ static ant_value_t js_buffer_concat(ant_params_t) {
     }
   }
   
-  ArrayBufferData *buffer = create_array_buffer_data(total_length);
+  ArrayBufferData *buffer = create_array_buffer_data(js, total_length);
   if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
   
   size_t offset = 0;
@@ -4588,26 +4576,18 @@ void init_buffer_module(ant_t *js) {
   js_set_global_builtin(js, "Buffer", buffer_ctor);
 }
 
-void cleanup_buffer_module(void) {
-  if (buffer_registry) {
-    for (size_t i = 0; i < buffer_registry_count; i++) {
-      if (buffer_registry[i]) free(buffer_registry[i]);
-    }
-    free(buffer_registry);
-    buffer_registry = NULL;
-    buffer_registry_count = 0;
-    buffer_registry_cap = 0;
-  }
-  
-  ta_metadata_bytes = 0;
+void cleanup_buffer_module(ant_t *js) {
+  for (size_t i = 0; i < js->buffers.count; i++) free(js->buffers.entries[i]);
+  free(js->buffers.entries);
+  js->buffers.entries = NULL;
+  js->buffers.count = 0;
+  js->buffers.cap = 0;
+  js->buffers.meta_bytes = 0;
 }
 
-size_t buffer_get_external_memory(void) {
-  size_t total = ta_metadata_bytes;
-  
-  for (size_t i = 0; i < buffer_registry_count; i++) if (buffer_registry[i])
-    total += sizeof(ArrayBufferData) + buffer_registry[i]->capacity;
-  total += buffer_registry_cap * sizeof(ArrayBufferData *);
-  
+size_t buffer_get_external_memory(ant_t *js) {
+  size_t total = js->buffers.meta_bytes + js->buffers.cap * sizeof(ArrayBufferData *);
+  for (size_t i = 0; i < js->buffers.count; i++)
+    total += sizeof(ArrayBufferData) + js->buffers.entries[i]->capacity;
   return total;
 }

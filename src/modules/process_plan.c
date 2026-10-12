@@ -758,7 +758,7 @@ static ant_value_t process_plan_make_result(
   ant_value_t stderr_value;
 
   if (result_mode == ANT_PROCESS_RESULT_BYTES) {
-    ArrayBufferData *stdout_buffer = create_array_buffer_data(stdout_len);
+    ArrayBufferData *stdout_buffer = create_array_buffer_data(js, stdout_len);
     if (!stdout_buffer) goto oom;
     if (stdout_len) memcpy(stdout_buffer->data, stdout_data, stdout_len);
     stdout_value = create_typed_array(
@@ -767,7 +767,7 @@ static ant_value_t process_plan_make_result(
     if (is_err(stdout_value)) goto failed;
     GC_ROOT_PIN(js, stdout_value);
 
-    ArrayBufferData *stderr_buffer = create_array_buffer_data(stderr_len);
+    ArrayBufferData *stderr_buffer = create_array_buffer_data(js, stderr_len);
     if (!stderr_buffer) goto oom;
     if (stderr_len) memcpy(stderr_buffer->data, stderr_data, stderr_len);
     stderr_value = create_typed_array(

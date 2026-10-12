@@ -137,7 +137,7 @@ static ant_value_t v8_serialize(ant_params_t) {
   if (!enc_u8(&e, SER_MAGIC_0) || !enc_u8(&e, SER_MAGIC_1)) goto oom;
   if (!ser_val(js, &e, args[0], 0)) goto oom;
 
-  ArrayBufferData *ab = create_array_buffer_data(e.len);
+  ArrayBufferData *ab = create_array_buffer_data(js, e.len);
   if (!ab) goto oom;
   memcpy(ab->data, e.data, e.len);
   free(e.data);

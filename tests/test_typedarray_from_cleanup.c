@@ -119,6 +119,5 @@ int main(void) {
 
   GC_ROOT_RESTORE(js, mark);
   js_destroy(js);
-  cleanup_buffer_module();
   puts("PASS TypedArray.from closes once and preserves abrupt completions");
 }

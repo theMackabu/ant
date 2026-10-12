@@ -124,7 +124,7 @@ static ant_value_t tes_transform(ant_params_t) {
 
   free(buf);
 
-  ArrayBufferData *ab = create_array_buffer_data(o);
+  ArrayBufferData *ab = create_array_buffer_data(js, o);
   if (!ab) { free(out); return js_mkerr(js, "out of memory"); }
   memcpy(ab->data, out, o);
   free(out);
@@ -143,7 +143,7 @@ static ant_value_t tes_flush(ant_params_t) {
 
   if (st->pending_len > 0) {
     uint8_t fffd[3] = { 0xEF, 0xBF, 0xBD };
-    ArrayBufferData *ab = create_array_buffer_data(3);
+    ArrayBufferData *ab = create_array_buffer_data(js, 3);
     if (!ab) return js_mkerr(js, "out of memory");
     memcpy(ab->data, fffd, 3);
     st->pending_len = 0;

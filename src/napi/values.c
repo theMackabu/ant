@@ -543,7 +543,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_buffer(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
-  ArrayBufferData *buf = create_array_buffer_data(length);
+  ArrayBufferData *buf = create_array_buffer_data(nenv->js, length);
   if (!buf) return napi_set_last(env, napi_generic_failure, "allocation failed");
 
   ant_value_t value = create_typed_array(nenv->js, TYPED_ARRAY_UINT8, buf, 0, length, "Buffer");
@@ -592,11 +592,11 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_arraybuffer(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
-  ArrayBufferData *ab = create_array_buffer_data(byte_length);
+  ArrayBufferData *ab = create_array_buffer_data(nenv->js, byte_length);
   if (!ab) return napi_set_last(env, napi_generic_failure, "allocation failed");
 
   ant_value_t ab_obj = create_arraybuffer_obj(nenv->js, ab);
-  free_array_buffer_data(ab);
+  free_array_buffer_data(nenv->js, ab);
 
   if (data) *data = ab->data;
   *result = NAPI_RETURN(nenv, ab_obj);

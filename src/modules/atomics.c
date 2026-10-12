@@ -75,7 +75,7 @@ static void async_waiter_remove_locked(AsyncWaitEntry *entry) {
 
 static void async_waiter_release_buffer(AsyncWaitEntry *entry) {
   if (!entry || !entry->buffer) return;
-  free_array_buffer_data(entry->buffer);
+  free_array_buffer_data(entry->js, entry->buffer);
   entry->buffer = NULL;
 }
 

@@ -366,7 +366,7 @@ static ant_value_t rpc_values_to_js_array(ant_t *js, const wirecall_value *value
         break;
       case WIRECALL_TYPE_BYTES: {
         uint32_t len = values[i].as.bytes.len;
-        ArrayBufferData *ab = create_array_buffer_data(len);
+        ArrayBufferData *ab = create_array_buffer_data(js, len);
         if (!ab) {
           GC_ROOT_RESTORE(js, root_mark);
           return js_mkerr(js, "out of memory");

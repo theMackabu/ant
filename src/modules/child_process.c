@@ -176,7 +176,7 @@ switch (kind) {
 }}
 
 static ant_value_t make_buffer_chunk(ant_t *js, const char *data, size_t len) {
-  ArrayBufferData *ab = create_array_buffer_data(len);
+  ArrayBufferData *ab = create_array_buffer_data(js, len);
   if (!ab) return js_mkerr(js, "Out of memory");
   if (len > 0 && data) memcpy(ab->data, data, len);
   return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Buffer");
@@ -1759,7 +1759,7 @@ static bool sync_value_bytes(ant_t *js, ant_value_t value, const char **out, siz
 static ant_value_t sync_make_output(ant_t *js, const char *bytes, size_t len, bool as_string) {
   if (as_string) return js_mkstr(js, bytes ? bytes : "", len);
 
-  ArrayBufferData *buffer = create_array_buffer_data(len);
+  ArrayBufferData *buffer = create_array_buffer_data(js, len);
   if (!buffer) return js_mkerr(js, "Out of memory");
   if (bytes && len > 0) memcpy(buffer->data, bytes, len);
 

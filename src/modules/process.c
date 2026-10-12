@@ -722,7 +722,7 @@ static inline ant_value_t make_stdin_data_value(ant_t *js, const uv_buf_t *buf, 
   ant_process_state_t *ps = process_state(js);
   if (!ps) return js_mkundef();
   
-  ArrayBufferData *ab = create_array_buffer_data((size_t)nread);
+  ArrayBufferData *ab = create_array_buffer_data(js, (size_t)nread);
   if (ab) memcpy(ab->data, buf->base, (size_t)nread);
 
   ant_value_t raw_val = ab

@@ -70,7 +70,7 @@ static bool sh_bytes_append(sh_bytes_t *bytes, const char *data, size_t len) {
 static ant_value_t sh_make_byte_array(
   ant_t *js, const char *data, size_t len
 ) {
-  ArrayBufferData *buffer = create_array_buffer_data(len);
+  ArrayBufferData *buffer = create_array_buffer_data(js, len);
   if (!buffer) return js_mkerr(js, "Out of memory");
   if (len) memcpy(buffer->data, data, len);
   return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, len, "Buffer");

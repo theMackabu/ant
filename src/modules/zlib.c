@@ -255,7 +255,7 @@ static void zlib_stream_release(zlib_stream_t *st) {
 }
 
 static ant_value_t zlib_make_buffer(ant_t *js, const uint8_t *data, size_t len) {
-  ArrayBufferData *ab = create_array_buffer_data(len);
+  ArrayBufferData *ab = create_array_buffer_data(js, len);
   if (!ab) return js_mkerr(js, "out of memory");
   if (data && len > 0) memcpy(ab->data, data, len);
   return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Buffer");

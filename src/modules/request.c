@@ -526,7 +526,7 @@ static void resolve_body_promise(
     break;
   }
   case BODY_ARRAYBUFFER: {
-    ArrayBufferData *ab = create_array_buffer_data(size);
+    ArrayBufferData *ab = create_array_buffer_data(js, size);
     if (!ab) { js_reject_promise(js, promise, js_mkerr(js, "out of memory")); break; }
     if (data && size > 0) memcpy(ab->data, data, size);
     js_resolve_promise(js, promise, create_arraybuffer_obj(js, ab));
@@ -540,7 +540,7 @@ static void resolve_body_promise(
     break;
   }
   case BODY_BYTES: {
-    ArrayBufferData *ab = create_array_buffer_data(size);
+    ArrayBufferData *ab = create_array_buffer_data(js, size);
     if (!ab) { js_reject_promise(js, promise, js_mkerr(js, "out of memory")); break; }
     if (data && size > 0) memcpy(ab->data, data, size);
     ant_value_t bytes = create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, size, "Uint8Array");
@@ -893,7 +893,7 @@ static ant_value_t req_body_pull(ant_params_t) {
   ant_value_t ctrl = (nargs > 0) ? args[0] : js_mkundef();
 
   if (d && d->body_data && d->body_size > 0) {
-    ArrayBufferData *ab = create_array_buffer_data(d->body_size);
+    ArrayBufferData *ab = create_array_buffer_data(js, d->body_size);
     if (!ab) return js_mkerr(js, "out of memory");
     memcpy(ab->data, d->body_data, d->body_size);
 

@@ -33,7 +33,7 @@ static int brotli_emit_chunk(
 static ant_value_t brotli_enqueue_buffer(
   ant_t *js, ant_value_t ctrl_obj, const uint8_t *data, size_t len
 ) {
-  ArrayBufferData *ab = create_array_buffer_data(len);
+  ArrayBufferData *ab = create_array_buffer_data(js, len);
   if (!ab) return js_mkerr(js, "out of memory");
   memcpy(ab->data, data, len);
   ant_value_t arr = create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Uint8Array");

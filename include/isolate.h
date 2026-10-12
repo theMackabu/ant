@@ -14,6 +14,7 @@
 #include "modules/json.h"
 #include "modules/math.h"
 #include "modules/timer.h"
+#include "modules/buffer.h"
 
 typedef struct {
   ant_object_t *base;
@@ -232,6 +233,13 @@ struct ant_isolate_t {
     size_t len;
     size_t cap;
   } iterators;
+
+  struct {
+    ArrayBufferData **entries;
+    size_t count;
+    size_t cap;
+    size_t meta_bytes;
+  } buffers;
 
   ant_offset_t max_size;
   double perf_time_origin_ms;

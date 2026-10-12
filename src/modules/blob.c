@@ -211,7 +211,7 @@ static ant_value_t js_blob_array_buffer(ant_params_t) {
   ant_value_t promise = js_mkpromise(js);
 
   size_t sz = (bd && bd->data) ? bd->size : 0;
-  ArrayBufferData *abd = create_array_buffer_data(sz);
+  ArrayBufferData *abd = create_array_buffer_data(js, sz);
   if (!abd) { js_reject_promise(js, promise, js_mkerr(js, "out of memory")); return promise; }
   if (sz > 0 && bd) memcpy(abd->data, bd->data, sz);
 
@@ -224,7 +224,7 @@ static ant_value_t js_blob_bytes(ant_params_t) {
   ant_value_t promise = js_mkpromise(js);
 
   size_t sz = (bd && bd->data) ? bd->size : 0;
-  ArrayBufferData *abd = create_array_buffer_data(sz);
+  ArrayBufferData *abd = create_array_buffer_data(js, sz);
 
   if (!abd) { js_reject_promise(js, promise, js_mkerr(js, "out of memory")); return promise; }
   if (sz > 0 && bd) memcpy(abd->data, bd->data, sz);
@@ -284,7 +284,7 @@ static ant_value_t blob_stream_pull(ant_params_t) {
   ant_value_t ctrl = (nargs > 0) ? args[0] : js_mkundef();
 
   if (bd && bd->size > 0 && bd->data) {
-  ArrayBufferData *ab = create_array_buffer_data(bd->size);
+  ArrayBufferData *ab = create_array_buffer_data(js, bd->size);
   if (ab) {
     memcpy(ab->data, bd->data, bd->size);
     rs_controller_enqueue(js, ctrl, create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, bd->size, "Uint8Array"));

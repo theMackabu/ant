@@ -117,7 +117,7 @@ static void tty_read_stream_push_chunk(tty_read_stream_state_t *state, const cha
   ant_value_t chunk = 0;
 
   if (!state || !state->js || !data || len == 0) return;
-  ab = create_array_buffer_data(len);
+  ab = create_array_buffer_data(state->js, len);
   if (ab) memcpy(ab->data, data, len);
   
   chunk = ab

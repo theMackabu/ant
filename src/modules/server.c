@@ -548,7 +548,7 @@ static void server_sse_finalize(ant_t *js, ant_object_t *obj) {
 }
 
 static ant_value_t server_make_chunk(ant_t *js, const char *data, size_t len) {
-  ArrayBufferData *ab = create_array_buffer_data(len);
+  ArrayBufferData *ab = create_array_buffer_data(js, len);
   if (!ab) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
   if (len > 0 && data) memcpy(ab->data, data, len);
   return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Uint8Array");

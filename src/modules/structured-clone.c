@@ -59,7 +59,7 @@ static ant_value_t sc_clone_typed_array(
     js, make_dom_exception(js, "TypedArray could not be cloned", "DataCloneError")
   );
 
-  ArrayBufferData *new_buf = create_array_buffer_data(ta_data->byte_length);
+  ArrayBufferData *new_buf = create_array_buffer_data(js, ta_data->byte_length);
   if (!new_buf) return js_mkerr(js, "out of memory");
   if (ta_data->byte_length > 0) {
     memcpy(new_buf->data, ta_data->buffer->data + ta_data->byte_offset, ta_data->byte_length);
@@ -104,56 +104,43 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
   if (vtype(existing) != kTypeUndefined) return existing;
 
   ArrayBufferData *abd = buffer_get_arraybuffer_data(val);
-  if (abd) {
-    if (abd && !abd->is_detached) {
-    if (transfer && sc_has(transfer, val)) {
-      ArrayBufferData *new_abd = calloc(1, sizeof(ArrayBufferData));
-      if (!new_abd) return js_mkerr(js, "out of memory");
-      new_abd->data      = abd->data;
-      new_abd->length    = abd->length;
-      new_abd->capacity  = abd->capacity;
-      new_abd->ref_count = 1;
-      abd->data        = NULL;
-      abd->length      = 0;
-      abd->capacity    = 0;
-      abd->is_detached = 1;
-      js_set(js, val, "byteLength", js_mknum(0));
-      ant_value_t clone = create_arraybuffer_obj(js, new_abd);
-      sc_add(seen, val, clone);
-      return clone;
-    }
-    ArrayBufferData *new_abd = create_array_buffer_data(abd->length);
+  if (abd && !abd->is_detached) {
+    ArrayBufferData *new_abd = create_array_buffer_data(js, abd->length);
+    
     if (!new_abd) return js_mkerr(js, "out of memory");
     if (abd->length > 0) memcpy(new_abd->data, abd->data, abd->length);
+    
+    if (transfer && sc_has(transfer, val)) {
+      abd->length = 0;
+      abd->is_detached = 1;
+    }
+    
     ant_value_t clone = create_arraybuffer_obj(js, new_abd);
+    free_array_buffer_data(js, new_abd);
     sc_add(seen, val, clone);
+    
     return clone;
-  }}
+  }
 
   if (buffer_is_dataview(val)) {
     DataViewData *dv = buffer_get_dataview_data(val);
     if (!dv || !dv->buffer)
       return js_throw(js, make_dom_exception(js, "DataView could not be cloned", "DataCloneError"));
-      
-    ArrayBufferData *new_buf = create_array_buffer_data(dv->buffer->length);
+    
+    ArrayBufferData *new_buf = create_array_buffer_data(js, dv->buffer->length);
     if (!new_buf) return js_mkerr(js, "out of memory");
     if (dv->buffer->length > 0) memcpy(new_buf->data, dv->buffer->data, dv->buffer->length);
-
+    
     ant_value_t ab_obj = create_arraybuffer_obj(js, new_buf);
-    ant_value_t clone = create_dataview_with_buffer(
-      js, new_buf, dv->byte_offset, dv->byte_length, ab_obj
-    );
+    ant_value_t clone = create_dataview_with_buffer(js, new_buf, dv->byte_offset, dv->byte_length, ab_obj);
     
     if (is_err(clone)) {
-      free_array_buffer_data(new_buf);
+      free_array_buffer_data(js, new_buf);
       return clone;
     }
-
-    js_set(js, clone, "byteOffset", js_mknum((double)dv->byte_offset));
-    js_set(js, clone, "byteLength", js_mknum((double)dv->byte_length));
     
     sc_add(seen, val, clone);
-    free_array_buffer_data(new_buf);
+    free_array_buffer_data(js, new_buf);
     return clone;
   }
 

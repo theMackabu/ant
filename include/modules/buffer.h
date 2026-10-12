@@ -61,15 +61,14 @@ enum {
 ant_value_t buffer_library(ant_t *js);
 
 void init_buffer_module(ant_t *js);
-void cleanup_buffer_module(void);
-void free_array_buffer_data(ArrayBufferData *data);
-
-size_t buffer_get_external_memory(void);
+void cleanup_buffer_module(ant_t *js);
+size_t buffer_get_external_memory(ant_t *js);
+void free_array_buffer_data(ant_t *js, ArrayBufferData *data);
 
 ant_value_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer);
 const char *buffer_typedarray_type_name(TypedArrayType type);
 
-ArrayBufferData *create_array_buffer_data(size_t length);
+ArrayBufferData *create_array_buffer_data(ant_t *js, size_t length);
 ArrayBufferData *buffer_get_arraybuffer_data(ant_value_t value);
 TypedArrayData *buffer_get_typedarray_data(ant_value_t value);
 DataViewData *buffer_get_dataview_data(ant_value_t value);

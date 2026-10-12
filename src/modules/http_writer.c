@@ -21,7 +21,7 @@ static ant_value_t http_writer_make_buffer_value(ant_t *js, ant_http1_buffer_t *
   ArrayBufferData *ab = NULL;
 
   data = ant_http1_buffer_take(buf, &len);
-  ab = create_array_buffer_data(len);
+  ab = create_array_buffer_data(js, len);
   if (!ab) {
     free(data);
     return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");

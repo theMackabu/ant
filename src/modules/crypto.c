@@ -331,7 +331,7 @@ int crypto_random_uuid(char out[37]) {
 }
 
 static ant_value_t crypto_make_buffer(ant_t *js, const uint8_t *data, size_t len) {
-  ArrayBufferData *buffer = create_array_buffer_data(len);
+  ArrayBufferData *buffer = create_array_buffer_data(js, len);
   if (!buffer) return js_mkerr(js, "Failed to allocate Buffer");
   if (len > 0 && data) memcpy(buffer->data, data, len);
   return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, len, "Buffer");
@@ -574,7 +574,7 @@ static ant_value_t crypto_get_hmac_digest(
 }
 
 static ant_value_t crypto_make_arraybuffer(ant_t *js, const uint8_t *data, size_t len) {
-  ArrayBufferData *buffer = create_array_buffer_data(len);
+  ArrayBufferData *buffer = create_array_buffer_data(js, len);
   if (!buffer) return js_mkerr(js, "Out of memory");
   if (len > 0 && data) memcpy(buffer->data, data, len);
   return create_arraybuffer_obj(js, buffer);
@@ -897,7 +897,7 @@ static ant_value_t crypto_subtle_digest_impl(
     return js_mkerr(js, "Digest failed");
   }
 
-  ArrayBufferData *buffer = create_array_buffer_data(digest_len);
+  ArrayBufferData *buffer = create_array_buffer_data(js, digest_len);
   if (!buffer) return js_mkerr(js, "Out of memory");
   if (digest_len > 0) memcpy(buffer->data, digest, digest_len);
   
