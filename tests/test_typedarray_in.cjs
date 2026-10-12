@@ -77,4 +77,24 @@ for (const inheritor of [new FromTyped(), Object.setPrototypeOf({}, new Uint8Arr
 const shadowedRead = Object.setPrototypeOf(new Uint8Array(2), { 5: 'proto', 1.5: 'frac' });
 assert.deepStrictEqual([Reflect.get(shadowedRead, '5', {}), Reflect.get(shadowedRead, '1.5', {}), Reflect.get(shadowedRead, '1', {})], [undefined, undefined, 0], 'a receiver read still stops at the typed array');
 
+const own = new Uint8Array([7, 8]);
+const ownDesc = Object.getOwnPropertyDescriptor(own, '0');
+assert.deepStrictEqual([ownDesc.value, ownDesc.writable, ownDesc.enumerable, ownDesc.configurable, Object.getOwnPropertyDescriptor(own, '5')], [7, true, true, true, undefined], 'an element reads as a data descriptor');
+assert.deepStrictEqual([delete own[0], delete own[5], delete own['1.5'], delete own.foo, own[0]], [false, true, true, true, 7], 'a valid index cannot be deleted');
+assert.throws(() => { 'use strict'; delete own[1]; }, TypeError, 'strict delete of an element throws');
+assert.deepStrictEqual((function (a) { return [delete arguments[0], arguments[0], delete arguments.foo]; })(1), [true, undefined, true]);
+
+own.extra = 1;
+const forInOwn = [];
+for (const k in own) forInOwn.push(k);
+assert.deepStrictEqual(forInOwn, ['0', '1', 'extra'], 'for-in lists elements first and skips prototype methods');
+const forInInherited = [];
+for (const k in Object.create(new Uint8Array(2))) forInInherited.push(k);
+assert.deepStrictEqual(forInInherited, ['0', '1'], 'for-in walks into a typed array prototype');
+const forInBuffers = [];
+for (const k in new DataView(new ArrayBuffer(2))) forInBuffers.push(k);
+for (const k in new ArrayBuffer(2)) forInBuffers.push(k);
+assert.deepStrictEqual(forInBuffers, [], 'buffer and view accessors are not enumerable');
+assert.deepStrictEqual([Object.keys({ ...own }), Object.keys(Object.assign({}, own))], [['0', '1', 'extra'], ['0', '1', 'extra']]);
+
 console.log('typed array in OK');

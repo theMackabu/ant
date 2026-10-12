@@ -93,6 +93,7 @@ export function targets() {
     'test_in_operator_ic.cjs',
     'test_instanceof_primitives.cjs',
     'test_intern_table_bounded.cjs',
+    'test_intrinsic_tostringtag.cjs',
     'test_io_error_boundary_audit.cjs',
     'test_io_handled_errors.cjs',
     'test_iterator_close_errors.cjs',

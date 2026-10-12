@@ -1958,18 +1958,17 @@ static ant_value_t builtin_WeakSet(ant_params_t) {
 void init_collections_module(ant_t *js) {
   ant_value_t object_proto = js->sym.object_proto;  
   ant_value_t iter_sym = js->sym.iterator_sym;
-  ant_value_t tag_sym = js->sym.toStringTag_sym;
   
   js->builtins.map_iter_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.map_iter_proto, js->sym.iterator_proto);
   js_set(js, js->builtins.map_iter_proto, "next", js_mkfun(map_iter_next));
-  js_set_sym(js, js->builtins.map_iter_proto, tag_sym, js_mkstr(js, "Map Iterator", 12));
+  js_set_tostringtag(js, js->builtins.map_iter_proto, js_mkstr(js, "Map Iterator", 12));
   js_iter_register_advance(js, js->builtins.map_iter_proto, advance_map);
   
   js->builtins.set_iter_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.set_iter_proto, js->sym.iterator_proto);
   js_set(js, js->builtins.set_iter_proto, "next", js_mkfun(set_iter_next));
-  js_set_sym(js, js->builtins.set_iter_proto, tag_sym, js_mkstr(js, "Set Iterator", 12));
+  js_set_tostringtag(js, js->builtins.set_iter_proto, js_mkstr(js, "Set Iterator", 12));
   js_iter_register_advance(js, js->builtins.set_iter_proto, advance_set);
   
   ant_value_t map_proto = js_mkobj(js);
@@ -1986,7 +1985,7 @@ void init_collections_module(ant_t *js) {
   js_set(js, map_proto, "values", js_mkfun(map_values));
   js_set(js, map_proto, "forEach", js_mkfun_arity(map_forEach, 1));
   js_set_sym(js, map_proto, iter_sym, js_get(js, map_proto, "entries"));
-  js_set_sym(js, map_proto, tag_sym, js_mkstr(js, "Map", 3));
+  js_set_tostringtag(js, map_proto, js_mkstr(js, "Map", 3));
   
   ant_value_t map_ctor = js_mkobj(js);
   js_set_slot(map_ctor, SLOT_CFUNC, js_mkfun(builtin_Map));
@@ -2016,7 +2015,7 @@ void init_collections_module(ant_t *js) {
   js_set(js, set_proto, "isSupersetOf", js_mkfun_arity(set_isSupersetOf, 1));
   js_set(js, set_proto, "isDisjointFrom", js_mkfun_arity(set_isDisjointFrom, 1));
   js_set_sym(js, set_proto, iter_sym, js_get(js, set_proto, "values"));
-  js_set_sym(js, set_proto, tag_sym, js_mkstr(js, "Set", 3));
+  js_set_tostringtag(js, set_proto, js_mkstr(js, "Set", 3));
   
   ant_value_t set_ctor = js_mkobj(js);
   js_set_slot(set_ctor, SLOT_CFUNC, js_mkfun(builtin_Set));
@@ -2033,7 +2032,7 @@ void init_collections_module(ant_t *js) {
   js_set(js, weakmap_proto, "has", js_mkfun_arity(weakmap_has, 1));
   js_set(js, weakmap_proto, "upsert", js_mkfun_arity(weakmap_upsert, 3));
   js_set(js, weakmap_proto, "delete", js_mkfun_arity(weakmap_delete, 1));
-  js_set_sym(js, weakmap_proto, tag_sym, js_mkstr(js, "WeakMap", 7));
+  js_set_tostringtag(js, weakmap_proto, js_mkstr(js, "WeakMap", 7));
   
   ant_value_t weakmap_ctor = js_mkobj(js);
   js_set_slot(weakmap_ctor, SLOT_CFUNC, js_mkfun(builtin_WeakMap));
@@ -2047,7 +2046,7 @@ void init_collections_module(ant_t *js) {
   js_set(js, weakset_proto, "add", js_mkfun_arity(weakset_add, 1));
   js_set(js, weakset_proto, "has", js_mkfun_arity(weakset_has, 1));
   js_set(js, weakset_proto, "delete", js_mkfun_arity(weakset_delete, 1));
-  js_set_sym(js, weakset_proto, tag_sym, js_mkstr(js, "WeakSet", 7));
+  js_set_tostringtag(js, weakset_proto, js_mkstr(js, "WeakSet", 7));
   
   ant_value_t weakset_ctor = js_mkobj(js);
   js_set_slot(weakset_ctor, SLOT_CFUNC, js_mkfun(builtin_WeakSet));
@@ -2059,7 +2058,7 @@ void init_collections_module(ant_t *js) {
   ant_value_t weakref_proto = js_mkobj(js);
   js_set_proto_init(weakref_proto, object_proto);
   js_set(js, weakref_proto, "deref", js_mkfun(weakref_deref));
-  js_set_sym(js, weakref_proto, tag_sym, js_mkstr(js, "WeakRef", 7));
+  js_set_tostringtag(js, weakref_proto, js_mkstr(js, "WeakRef", 7));
   
   ant_value_t weakref_ctor = js_mkobj(js);
   js_set_slot(weakref_ctor, SLOT_CFUNC, js_mkfun(builtin_WeakRef));
@@ -2072,7 +2071,7 @@ void init_collections_module(ant_t *js) {
   js_set_proto_init(finreg_proto, object_proto);
   js_set(js, finreg_proto, "register", js_mkfun(finreg_register));
   js_set(js, finreg_proto, "unregister", js_mkfun(finreg_unregister));
-  js_set_sym(js, finreg_proto, tag_sym, js_mkstr(js, "FinalizationRegistry", 20));
+  js_set_tostringtag(js, finreg_proto, js_mkstr(js, "FinalizationRegistry", 20));
   
   ant_value_t finreg_ctor = js_mkobj(js);
   js_set_slot(finreg_ctor, SLOT_CFUNC, js_mkfun(builtin_FinalizationRegistry));

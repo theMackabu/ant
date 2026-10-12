@@ -2815,7 +2815,7 @@ static void js_arguments_unmap_all(ant_t *js, ant_value_t obj) {
 
 static bool js_arguments_deleter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
   unsigned long idx = 0;
-  if (!parse_array_index(key, key_len, (ant_offset_t)-1, &idx)) return false;
+  if (!parse_array_index(key, key_len, (ant_offset_t)-1, &idx)) return true;
 
   ant_arguments_state_t *state = js_arguments_state(obj);
   if (state && (uint32_t)idx < state->mapped_count) state->deleted[idx] = 1;
@@ -5634,10 +5634,9 @@ static bool try_dynamic_setter(ant_t *js, ant_value_t obj, const char *key, size
   return ptr->exotic_ops->setter(js, obj, key, key_len, value);
 }
 
-static bool try_dynamic_deleter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
+static bool exotic_delete_allowed(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-  if (!ptr || !ptr->flags.is_exotic) return false;
-  if (!ptr->exotic_ops || !ptr->exotic_ops->deleter) return false;
+  if (!ptr || !ptr->flags.is_exotic || !ptr->exotic_ops || !ptr->exotic_ops->deleter) return true;
   return ptr->exotic_ops->deleter(js, obj, key, key_len);
 }
 
@@ -6509,16 +6508,10 @@ ant_value_t js_delete_prop_ordinary(ant_t *js, ant_value_t obj, const char *key,
   }
 
   const char *interned = intern_string(key, len);
-  if (!interned) {
-    try_dynamic_deleter(js, obj, key, len);
-    return js_true;
-  }
+  if (!interned) return js_bool(exotic_delete_allowed(js, obj, key, len));
 
   int32_t shape_slot = ant_shape_lookup_interned(ptr->shape, interned);
-  if (shape_slot < 0) {
-    try_dynamic_deleter(js, obj, key, len);
-    return js_true;
-  }
+  if (shape_slot < 0) return js_bool(exotic_delete_allowed(js, obj, key, len));
 
   uint8_t attrs = ant_shape_get_attrs(ptr->shape, (uint32_t)shape_slot);
   if ((attrs & ANT_PROP_ATTR_CONFIGURABLE) == 0) return js_false;
@@ -8873,14 +8866,12 @@ done:
   return js_mkundef();
 }
 
-static ant_value_t for_in_keys_add_string_indices(ant_t *js, ant_value_t out, ant_value_t seen, ant_value_t str) {
+static ant_value_t for_in_keys_add_indices(ant_t *js, ant_value_t out, ant_value_t seen, ant_offset_t len) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, out);
   GC_ROOT_PIN(js, seen);
-  GC_ROOT_PIN(js, str);
   
-  ant_offset_t slen = vstrlen(js, str);
-  for (ant_offset_t i = 0; i < slen; i++) {
+  for (ant_offset_t i = 0; i < len; i++) {
     char idx[16];
     size_t idx_len = uint_to_str(idx, sizeof(idx), (uint64_t)i);
     
@@ -9019,6 +9010,18 @@ static ant_value_t for_in_keys_collect_ordinary_own(
   return js_mkundef();
 }
 
+static ant_value_t for_in_keys_add_exotic_indices(
+  ant_t *js, ant_value_t out, ant_value_t seen, ant_value_t obj, ant_object_t *ptr
+) {
+  if (vtype(obj) != kTypeObject) return js_mkundef();
+  ant_value_t prim = get_slot(obj, SLOT_PRIMITIVE);
+  if (vtype(prim) == kTypeString) return for_in_keys_add_indices(js, out, seen, vstrlen(js, prim));
+  TypedArrayData *typed = ptr->flags.is_exotic ? buffer_get_typedarray_data(obj) : NULL;
+  if (typed && typed->buffer && !typed->buffer->is_detached)
+    return for_in_keys_add_indices(js, out, seen, (ant_offset_t)typed->length);
+  return js_mkundef();
+}
+
 static inline ant_value_t for_in_keys_collect_chain(
   ant_t *js, ant_value_t out, ant_value_t seen, ant_value_t obj
 ) {
@@ -9032,7 +9035,11 @@ static inline ant_value_t for_in_keys_collect_chain(
     ant_object_t *cur_ptr = js_obj_ptr(as_cur);
     ant_value_t r, proto;
     
-    if (!cur_ptr || !cur_ptr->shape) goto next_proto;
+    if (!cur_ptr) goto next_proto;
+    r = for_in_keys_add_exotic_indices(js, out, seen, as_cur, cur_ptr);
+    if (is_err(r)) goto err;
+    
+    if (!cur_ptr->shape) goto next_proto;
     r = for_in_keys_collect_ordinary_own(js, out, seen, as_cur, cur_ptr);
     
     if (is_err(r)) goto err;
@@ -9067,7 +9074,7 @@ ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj) {
   GC_ROOT_PIN(js, seen);
 
   if (t == kTypeString) {
-    result = for_in_keys_add_string_indices(js, out, seen, obj);
+    result = for_in_keys_add_indices(js, out, seen, vstrlen(js, obj));
     if (is_err(result)) goto done;
     result = out;
     goto done;
@@ -9080,21 +9087,13 @@ ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj) {
     t = kTypeFunction;
   }
 
-  if (t == kTypeObject) {
-    ant_value_t prim = get_slot(obj, SLOT_PRIMITIVE);
-    GC_ROOT_PIN(js, prim);
-    if (vtype(prim) == kTypeString) {
-      result = for_in_keys_add_string_indices(js, out, seen, prim);
-      if (is_err(result)) goto done;
-      result = out;
-    }
-  }
-
   if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) goto done;
+  
   if (is_proxy(obj)) {
     result = proxy_enum(js, obj, OBJ_ENUM_KEYS);
     goto done;
   }
+  
   result = for_in_keys_collect_chain(js, out, seen, obj);
 
 done:
@@ -11020,20 +11019,15 @@ static bool copy_ordinary_data_props(
   ant_shape_t *shape = ptr->shape;
   uint32_t count = ant_shape_count(shape);
   
-  bool has_accessor = false, accessor_order_visible = false;
-  bool may_index = ant_shape_may_have_index_keys(shape);
-  
-  for (uint32_t i = 0; i < count && !accessor_order_visible; i++) {
+  bool has_accessor = false, symbol_accessor = false;
+  for (uint32_t i = 0; i < count && !symbol_accessor; i++) {
     const ant_shape_prop_t *prop = ant_shape_prop_at(shape, i);
     if (!prop || !(prop->has_getter || prop->has_setter)) continue;
     has_accessor = true;
-    unsigned long index = 0;
-    accessor_order_visible = prop->type == ANT_SHAPE_KEY_SYMBOL || (
-      may_index && prop->type == ANT_SHAPE_KEY_STRING &&
-      own_key_is_array_index(prop->key.interned, intern_length(prop->key.interned), &index)
-    );
+    symbol_accessor = prop->type == ANT_SHAPE_KEY_SYMBOL;
   }
   
+  bool accessor_order_visible = symbol_accessor || (has_accessor && ant_shape_may_have_index_keys(shape));
   if (is_arr && has_accessor) return false;
   
   bool indexed = is_arr || vtype(wrapped) == kTypeString;
@@ -11452,7 +11446,27 @@ static ant_value_t object_get_own_property_descriptor_keyed(
       js, obj, key_str, (size_t)key_len, 
       &string_exotic_value, &string_exotic_length
     );
-    if (!has_string_exotic) return js_mkundef();
+    
+    if (!has_string_exotic) {
+      const ant_object_t *exotic_ptr = js_obj_ptr(as_obj);
+      ant_value_t element = !is_sym && exotic_ptr
+        ? exotic_own_get(js, as_obj, exotic_ptr, key_str, (size_t)key_len) : js_mkundef();
+      if (vtype(element) == kTypeUndefined || element == T_EMPTY) return js_mkundef();
+      
+      GC_ROOT_SAVE(element_mark, js);
+      GC_ROOT_PIN(js, element);
+      
+      ant_value_t desc = js_mkobj(js);
+      GC_ROOT_PIN(js, desc);
+      
+      js_setprop(js, desc, js_mkstr(js, "value", 5), element);
+      js_setprop(js, desc, js_mkstr(js, "writable", 8), js_true);
+      js_setprop(js, desc, js_mkstr(js, "enumerable", 10), js_true);
+      js_setprop(js, desc, js_mkstr(js, "configurable", 12), js_true);
+      
+      GC_ROOT_RESTORE(js, element_mark);
+      return desc;
+    }
   }
 
   bool has_getter = false;

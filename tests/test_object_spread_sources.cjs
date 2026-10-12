@@ -194,4 +194,7 @@ const indexGetters = { get b() { getterOrder.push('b'); return 1; }, get 1() { g
 const orderedSpread = { ...indexGetters };
 assert(JSON.stringify([getterOrder, Object.keys(orderedSpread)]) === '[["0","1","b"],["0","1","b"]]', 'index getters run first, in ascending order');
 
+const mutatingSource = { get a() { mutatingSource[0] = 'changed'; return 0; }, 0: 'orig' };
+assert(({ ...mutatingSource })[0] === 'orig', 'an index key is read before a string getter can change it');
+
 console.log('object spread sources OK');
