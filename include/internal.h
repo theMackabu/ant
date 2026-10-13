@@ -398,7 +398,9 @@ bool js_deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict);
 bool js_is_prototype_of(ant_t *js, ant_value_t proto_obj, ant_value_t obj);
 bool js_chain_may_override_has_instance(ant_t *js, ant_value_t obj, bool guard_absence);
 bool js_instance_of_proto(ant_t *js, ant_value_t obj, ant_value_t ctor_proto);
+void js_set_exotic_ops(ant_value_t obj, const ant_exotic_ops_t *ops);
 
+ant_value_t js_call_getter(ant_t *js, ant_value_t receiver, ant_value_t getter);
 ant_value_t js_mkproxy_host(ant_t *js, ant_value_t target, const ant_host_proxy_ops_t *ops);
 ant_value_t js_copy_data_props(ant_t *js, ant_value_t dst, ant_value_t src, const ant_value_t *excluded, int excluded_count);
 ant_value_t js_primitive_prototype(ant_t *js, uint8_t type);
@@ -518,6 +520,18 @@ static inline const char *js_module_eval_active_filename(ant_t *js) {
     if (vtype(filename) == kTypeString) return js_getstr(js, filename, NULL);
   }
   return js->filename;
+}
+
+static constexpr size_t ANT_CANONICAL_NUMERIC_KEY_MAX = 32;
+
+static inline bool ant_key_may_be_numeric(const char *key, size_t len) {
+  if (!key || len == 0 || len > ANT_CANONICAL_NUMERIC_KEY_MAX) return false;
+  switch (key[0]) {
+    case 'I': return len == 8 && memcmp(key, "Infinity", 8) == 0;
+    case 'N': return len == 3 && memcmp(key, "NaN", 3) == 0;
+    case '-': return true;
+    default:  return key[0] >= '0' && key[0] <= '9';
+  }
 }
 
 static inline bool is_length_key(const char *key, size_t len) {

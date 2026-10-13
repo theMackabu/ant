@@ -105,7 +105,7 @@ static void check_failed_fills(ant_t *js, ant_value_t object, ant_shape_t *old_s
     assert(registration_attempts == attempts + 1);
     assert(ic.cached_shape == NULL && !(ic.shape_ref_mask & SV_IC_SHAPE_REF_CACHED));
     ant_value_t ignored;
-    assert(!sv_ic_try_get_hit(js, &ic, object, js_obj_ptr(object), &atom, &ignored));
+    assert(!sv_ic_try_get_hit(js, &ic, object, js_obj_ptr(object), &atom, &ignored, NULL));
     if (i == 0) assert(js_getnum(out) == 41);
     else assert(vtype(out) == kTypeUndefined);
   }

@@ -587,10 +587,33 @@ static void mir_emit_get_field_kind_epoch_guard(
   }
 }
 
+static void mir_emit_exotic_flag_load(MIR_context_t ctx, MIR_item_t fn, MIR_reg_t ptr, MIR_reg_t tmp) {
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, tmp), MIR_new_mem_op(ctx, MIR_T_U16, offsetof(ant_object_t, flags), ptr, 0, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, tmp), MIR_new_reg_op(ctx, tmp), MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_EXOTIC)));
+}
+
+void mir_emit_receiver_exotic_guard(MIR_context_t ctx, MIR_item_t fn, MIR_reg_t ptr, MIR_reg_t tmp, MIR_label_t slow) {
+  mir_emit_exotic_flag_load(ctx, fn, ptr, tmp);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tmp), MIR_new_int_op(ctx, 0)));
+}
+
+void mir_emit_receiver_numeric_atom_guard(
+    MIR_context_t ctx, MIR_item_t fn, const sv_atom_t *atom,
+    MIR_reg_t ptr, MIR_reg_t tmp, MIR_label_t slow) {
+  if (!atom->maybe_numeric) return;
+  mir_emit_exotic_flag_load(ctx, fn, ptr, tmp);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tmp), MIR_new_int_op(ctx, 0)));
+}
+
 static bool mir_emit_get_field_own_slot_fastpath(
     MIR_context_t ctx,
     MIR_item_t fn,
     sv_ic_entry_t *ic,
+    sv_atom_t *atom,
     int bc_off,
     uint16_t ic_idx,
     MIR_reg_t obj,
@@ -608,6 +631,7 @@ static bool mir_emit_get_field_own_slot_fastpath(
       ctx, fn, ic, SV_GF_IC_OWN, cache, tmp, tmp, expect, r_global_epoch, slow);
 
   mir_emit_value_to_objptr_or_jmp(ctx, fn, obj, ptr, tmp, slow);
+  mir_emit_receiver_numeric_atom_guard(ctx, fn, atom, ptr, tmp, slow);
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, tmp),
       MIR_new_mem_op(ctx, MIR_T_P, offsetof(ant_object_t, shape), ptr, 0, 1)));
@@ -797,13 +821,7 @@ static bool mir_emit_get_field_shape_snapshot(
       MIR_new_mem_op(ctx, MIR_T_P, offsetof(ant_object_t, shape), ptr, 0, 1)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
       MIR_new_label_op(ctx, miss), MIR_new_reg_op(ctx, tmp), MIR_new_reg_op(ctx, expect)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
-      MIR_new_reg_op(ctx, tmp),
-      MIR_new_mem_op(ctx, MIR_T_U16, offsetof(ant_object_t, flags), ptr, 0, 1)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND,
-      MIR_new_reg_op(ctx, tmp), MIR_new_reg_op(ctx, tmp), MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_EXOTIC)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
-      MIR_new_label_op(ctx, miss), MIR_new_reg_op(ctx, tmp), MIR_new_int_op(ctx, 0)));
+  mir_emit_receiver_exotic_guard(ctx, fn, ptr, tmp, miss);
   mir_emit_snapshot_slot_load(ctx, fn, shape, index, ptr, tmp, dst, miss);
   return true;
 }
@@ -853,11 +871,7 @@ static bool mir_emit_get_field_proto_snapshot(
   mir_emit_value_to_objptr_or_jmp(ctx, fn, obj, ptr, tmp, miss);
   LOAD(tmp, MIR_T_P, offsetof(ant_object_t, shape), ptr);
   MISS_UNLESS_EQ(tmp, (uintptr_t)shape, miss);
-  LOAD(tmp, MIR_T_U16, offsetof(ant_object_t, flags), ptr);
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND,
-      MIR_new_reg_op(ctx, tmp), MIR_new_reg_op(ctx, tmp), MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_EXOTIC)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
-      MIR_new_label_op(ctx, miss), MIR_new_reg_op(ctx, tmp), MIR_new_int_op(ctx, 0)));
+  mir_emit_receiver_exotic_guard(ctx, fn, ptr, tmp, miss);
   LOAD(tmp, MIR_T_I64, offsetof(ant_object_t, proto), ptr);
   MISS_UNLESS_EQ(tmp, proto, miss);
   mir_load_imm(ctx, fn, holder_ptr, (uint64_t)(uintptr_t)holder);
@@ -892,8 +906,7 @@ bool mir_emit_get_field_ic_fastpath(
   if (is_length_key(atom->str, atom->len)) return false;
 
   sv_ic_entry_t *ic = &func->ic_slots[ic_idx];
-  if (ic->get_kind == SV_GF_IC_SYMBOL_DESCRIPTION ||
-      ic->get_kind == SV_GF_IC_PRIMITIVE_SYMBOL_DESCRIPTION) return false;
+  if (sv_gf_kind_is_symbol_description(ic->get_kind)) return false;
   if (!sv_gf_ic_active(ic->cached_aux) && func->code_len > 1024) return false;
   if (sv_gf_ic_active(ic->cached_aux) && ic->get_kind == SV_GF_IC_OWN && ic->cached_shape) {
     MIR_label_t miss = MIR_new_label(ctx);
@@ -905,7 +918,7 @@ bool mir_emit_get_field_ic_fastpath(
       MIR_append_insn(ctx, fn, miss);
     }
     mir_emit_get_field_own_slot_fastpath(
-        ctx, fn, ic, bc_off, ic_idx, obj, dst, slow, r_global_epoch);
+        ctx, fn, ic, atom, bc_off, ic_idx, obj, dst, slow, r_global_epoch);
     if (snapshot) MIR_append_insn(ctx, fn, done);
     return true;
   }
@@ -997,6 +1010,7 @@ bool mir_emit_get_field_ic_fastpath(
 
   mir_emit_value_to_objptr_or_jmp(
       ctx, fn, obj, r_obj_ptr, r_obj_tag, slow);
+  mir_emit_receiver_numeric_atom_guard(ctx, fn, atom, r_obj_ptr, r_obj_shape, slow);
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_MOV,
                                MIR_new_reg_op(ctx, r_obj_shape),

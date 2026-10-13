@@ -234,7 +234,7 @@ static ant_value_t js_stats_fn(ant_params_t) {
       if (ant_object_promise_state(obj)) promise_bytes += sizeof(ant_promise_state_t);
       if (ant_object_proxy_state(obj)) proxy_bytes += sizeof(ant_proxy_state_t);
       if (ant_object_has_sidecar(obj)) extra_bytes += sizeof(ant_object_sidecar_t);
-      if (obj->exotic_ops) exotic_bytes += sizeof(ant_exotic_ops_t);
+      if (obj->exotic_ops && obj->exotic_ops->heap) exotic_bytes += sizeof(ant_exotic_ops_t);
     }
   }
 

@@ -421,12 +421,17 @@ static void obj_delete_prop_slot(ant_object_t *obj, uint32_t slot) {
 
 static ant_exotic_ops_t *obj_ensure_exotic_ops(ant_object_t *obj) {
   if (!obj) return NULL;
-  if (!obj->exotic_ops) {
-    ant_exotic_ops_t *ops = calloc(1, sizeof(*ops));
-    if (!ops) return NULL;
-    obj->exotic_ops = ops;
-  }
-  return (ant_exotic_ops_t *)(void *)obj->exotic_ops;
+  if (obj->exotic_ops && obj->exotic_ops->heap) return (ant_exotic_ops_t *)(void *)obj->exotic_ops;
+  
+  ant_exotic_ops_t *ops = calloc(1, sizeof(*ops));
+  if (!ops) return NULL;
+  if (obj->exotic_ops) *ops = *obj->exotic_ops;
+  
+  ops->keys = ANT_EXOTIC_KEYS_ANY;
+  ops->heap = true;
+  obj->exotic_ops = ops;
+  
+  return ops;
 }
 
 static ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit) {
@@ -2575,7 +2580,6 @@ static void js_arguments_finalizer(ant_t *js, ant_object_t *obj) {
   ant_arguments_state_t *state = js_arguments_state(value);
   
   free(state);
-  obj->exotic_ops = NULL;
   js_clear_native(value, ANT_ARGUMENTS_NATIVE_TAG);
 }
 
@@ -4217,6 +4221,17 @@ static ant_value_t call_proto_accessor(
   ant_value_t result = sv_vm_call(js->vm, js, accessor, prim, arg, arg_count, NULL, js_mkundef());
   if (is_setter) return is_err(result) ? result : (arg ? *arg : js_mkundef());
 
+  return result;
+}
+
+ant_value_t js_call_getter(ant_t *js, ant_value_t receiver, ant_value_t getter) {
+  if (vtype(getter) != kTypeBuiltin) return call_proto_accessor(js, receiver, getter, true, NULL, 0, false);
+  ant_value_t saved_this = js->this_val;
+  
+  js->this_val = receiver;
+  ant_value_t result = sv_invoke_native(js, js_as_cfunc(getter), NULL, 0, js_mkundef());
+  js->this_val = saved_this;
+  
   return result;
 }
 
@@ -23084,6 +23099,14 @@ void js_set_getter(ant_value_t obj, js_getter_fn getter) {
   ant_exotic_ops_t *ops = obj_ensure_exotic_ops(ptr);
   if (!ops) return;
   ops->getter = getter;
+}
+
+void js_set_exotic_ops(ant_value_t obj, const ant_exotic_ops_t *ops) {
+  ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
+  if (!ptr) return;
+  if (ptr->exotic_ops && ptr->exotic_ops->heap) free((void *)ptr->exotic_ops);
+  ptr->flags.is_exotic = 1;
+  ptr->exotic_ops = ops;
 }
 
 void js_set_definer(ant_value_t obj, js_definer_fn definer) {

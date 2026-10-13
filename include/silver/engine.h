@@ -98,7 +98,8 @@ static inline bool sv_op_has_ic_slot(sv_op_t op) {
 
 typedef struct {
   const char *str;
-  uint32_t    len;
+  uint32_t len;
+  bool maybe_numeric;
 } sv_atom_t;
 
 typedef enum {
@@ -180,6 +181,8 @@ typedef enum: uint8_t {
   SV_GF_IC_PRIMITIVE_MISSING,
   SV_GF_IC_SYMBOL_DESCRIPTION,
   SV_GF_IC_PRIMITIVE_SYMBOL_DESCRIPTION,
+  SV_GF_IC_OWN_GETTER,
+  SV_GF_IC_PROTO_GETTER,
 } sv_get_field_ic_kind_t;
 
 typedef enum: uint8_t {
@@ -382,6 +385,18 @@ static inline uint8_t sv_gf_ic_miss_streak(uintptr_t aux) {
 
 static inline bool sv_gf_ic_active(uintptr_t aux) {
   return (aux & SV_GF_IC_AUX_ACTIVE_BIT) != 0;
+}
+
+static inline bool sv_gf_kind_is_own(sv_get_field_ic_kind_t kind) {
+  return kind == SV_GF_IC_OWN || kind == SV_GF_IC_OWN_GETTER;
+}
+
+static inline bool sv_gf_kind_is_proto(sv_get_field_ic_kind_t kind) {
+  return kind == SV_GF_IC_PROTOTYPE || kind == SV_GF_IC_PROTO_GETTER;
+}
+
+static inline bool sv_gf_kind_is_symbol_description(sv_get_field_ic_kind_t kind) {
+  return kind == SV_GF_IC_SYMBOL_DESCRIPTION || kind == SV_GF_IC_PRIMITIVE_SYMBOL_DESCRIPTION;
 }
 
 static inline uintptr_t sv_gf_ic_pack_aux(uint8_t warmup, uint8_t miss_streak, bool active) {

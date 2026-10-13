@@ -212,6 +212,16 @@ invalidate before a reused value can pass a guard. See
 [minor-GC ABA](../../tests/test_ic_minor_aba.cjs) and
 [prototype-write](../../tests/test_prototype_write_epoch.cjs) regressions.
 
+Exotic receivers reach the get IC only through `ANT_EXOTIC_KEYS_NUMERIC`
+ops, whose hooks must decline every key `ant_key_may_be_numeric` rejects. The
+IC reads that answer from `sv_atom_t.maybe_numeric`, set by the compiler, so
+JIT helpers must receive the function's atom, never a rebuilt one. The
+C admission check runs per hit; JIT snapshot, poly and mega paths reject
+exotic receivers, and the generic and own-slot paths guard them whenever the
+atom passes that prefilter. Static ops tables are shared and immutable; public hook
+setters copy them to a heap table first. See the
+[exotic accessor IC plan](../exec-plans/active/exotic-accessor-read-ic.md).
+
 ## Closure And Upvalue Reachability
 
 Lazy function-object materialization and writes into listener sidecars can

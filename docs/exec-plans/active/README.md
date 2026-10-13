@@ -12,6 +12,7 @@ Store in-progress execution plans here.
 - [Shared I/O Formatting in Wasm](wasm-shared-io.md)
 - [TypeScript Captured-variable Cleanup](tsc-upvalue-cleanup.md)
 - [Symbol Description Accessor IC](symbol-description-accessor-ic.md)
+- [Exotic Receiver and Accessor Read IC](exotic-accessor-read-ic.md)
 - [bench-v8 Regression Recovery](bench-v8-regression-recovery.md)
 - [Shared Shape Descriptors and JSON Construction](shared-shape-descriptors-json.md)
 - [Sloppy Direct Eval Declarations](sloppy-eval-declarations.md)

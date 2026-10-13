@@ -14,6 +14,7 @@ export function targets() {
   // keep sorted
   const REGRESSION_TESTS = [
     'tagged_templates.cjs',
+    'test_accessor_ic.cjs',
     'test_accessor_undefined_result.cjs',
     'test_ant_c.cjs',
     'test_ant_cron.cjs',
@@ -216,6 +217,7 @@ export function targets() {
     'test_timer_handle.cjs',
     'test_tty_error_boundaries.cjs',
     'test_typedarray_in.cjs',
+    'test_typedarray_named_read_ic.cjs',
     'test_typeof_closure_assignment.mjs',
     'test_uncaught_callback_exceptions.cjs',
     'test_unhandled_rejection_exit.cjs',

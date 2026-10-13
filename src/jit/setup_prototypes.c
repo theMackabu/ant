@@ -195,11 +195,10 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
 
   MIR_type_t gf_ret = MIR_JSVAL;
   c->gf_proto = MIR_new_proto(c->ctx, "gf_proto",
-                              1, &gf_ret, 6,
+                              1, &gf_ret, 5,
                               MIR_T_I64, "js",
                               MIR_JSVAL, "obj",
-                              MIR_T_P, "str",
-                              MIR_T_I32, "len",
+                              MIR_T_P, "atom",
                               MIR_T_P, "func",
                               MIR_T_I32, "bc_off");
 

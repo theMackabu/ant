@@ -1489,7 +1489,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   free(obj->overflow_prop);
   obj->overflow_prop = NULL;
   
-  free((void *)obj->exotic_ops);
+  if (obj->exotic_ops && obj->exotic_ops->heap) free((void *)obj->exotic_ops);
   obj->exotic_ops = NULL;
   
   GC_VERIFY_POISON_OBJECT(obj);

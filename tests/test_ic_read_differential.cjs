@@ -86,6 +86,13 @@ for (const count of [1, 6, 24]) {
   const ordinary = mixed(6).out;
   check('exotic/length', [args, typed, [1, 2], 'str', ...ordinary], 'length');
   check('exotic/k', [args, typed, ...ordinary], 'k');
+  
+  const typedMix = [typed, new Float64Array(2), Buffer.alloc(3), new BigInt64Array(1), new DataView(new ArrayBuffer(5), 1), new ArrayBuffer(7)];
+  check('exotic/BYTES_PER_ELEMENT', [...typedMix, ...ordinary], 'BYTES_PER_ELEMENT');
+  check('exotic/byteLength', [...typedMix, ...ordinary], 'byteLength');
+  check('exotic/buffer', typedMix.slice(0, 5), 'buffer', () => {
+    Object.defineProperty(Object.getPrototypeOf(Uint8Array.prototype), 'buffer', { get() { return 'swapped'; }, configurable: true });
+  });
 }
 
 console.log('PASS cached reads agree with an uncached lookup');

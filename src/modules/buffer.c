@@ -613,18 +613,9 @@ typedef enum {
   TYPEDARRAY_KEY_INVALID,
 } typedarray_key_kind_t;
 
-static constexpr size_t TYPEDARRAY_CANONICAL_KEY_MAX = 32;
-static constexpr size_t TYPEDARRAY_EXACT_DIGITS_MAX = 15;
-
-static inline bool typedarray_key_may_be_numeric(const char *key, size_t len) {
-  if (len == 0 || len > TYPEDARRAY_CANONICAL_KEY_MAX) return false;
-  char c = key[0];
-  return c == '-' || c == 'I' || c == 'N' || (c >= '0' && c <= '9');
-}
-
 static typedarray_key_kind_t typedarray_key_kind(const TypedArrayData *ta, const char *key, size_t len, size_t *index) {
   bool live = ta->buffer && !ta->buffer->is_detached;
-  bool digits = len <= TYPEDARRAY_EXACT_DIGITS_MAX && (key[0] != '0' || len == 1);
+  bool digits = len <= 15 && (key[0] != '0' || len == 1);
   uint64_t whole = 0;
   
   for (size_t i = 0; i < len && digits; i++) {
@@ -645,7 +636,7 @@ static typedarray_key_kind_t typedarray_key_kind(const TypedArrayData *ta, const
   if (!ant_number_parse(key, len, ANT_NUMBER_PARSE_JS_NUMBER, &number, &processed) || processed != len)
     return TYPEDARRAY_KEY_ORDINARY;
   
-  char canonical[TYPEDARRAY_CANONICAL_KEY_MAX + 8];
+  char canonical[ANT_CANONICAL_NUMERIC_KEY_MAX + 8];
   size_t canonical_len = js_number_to_chars(tov(number), canonical, sizeof(canonical));
   return canonical_len == len && memcmp(canonical, key, len) == 0 ? TYPEDARRAY_KEY_INVALID : TYPEDARRAY_KEY_ORDINARY;
 }
@@ -657,7 +648,7 @@ static ant_value_t typedarray_coerce_value(ant_t *js, const TypedArrayData *ta, 
 }
 
 static ant_value_t typedarray_index_getter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
-  if (!typedarray_key_may_be_numeric(key, key_len)) return js_mkundef();
+  if (!ant_key_may_be_numeric(key, key_len)) return js_mkundef();
   TypedArrayData *ta_data = buffer_get_typedarray_data(obj);
   size_t index = 0;
   typedarray_key_kind_t kind = ta_data ? typedarray_key_kind(ta_data, key, key_len, &index) : TYPEDARRAY_KEY_ORDINARY;
@@ -669,7 +660,7 @@ static ant_value_t typedarray_index_getter(ant_t *js, ant_value_t obj, const cha
 }
 
 static bool typedarray_index_setter(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t value) {
-  if (!typedarray_key_may_be_numeric(key, key_len)) return false;
+  if (!ant_key_may_be_numeric(key, key_len)) return false;
   TypedArrayData *ta_data = buffer_get_typedarray_data(obj);
   size_t index = 0;
   typedarray_key_kind_t kind = ta_data ? typedarray_key_kind(ta_data, key, key_len, &index) : TYPEDARRAY_KEY_ORDINARY;
@@ -681,7 +672,7 @@ static bool typedarray_index_setter(ant_t *js, ant_value_t obj, const char *key,
 }
 
 static bool typedarray_index_deleter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
-  if (!typedarray_key_may_be_numeric(key, key_len)) return true;
+  if (!ant_key_may_be_numeric(key, key_len)) return true;
   TypedArrayData *ta_data = buffer_get_typedarray_data(obj);
   size_t index = 0;
   return !ta_data || typedarray_key_kind(ta_data, key, key_len, &index) != TYPEDARRAY_KEY_INDEX;
@@ -691,7 +682,7 @@ static ant_value_t typedarray_index_definer(
   ant_t *js, ant_value_t obj, const char *key, size_t key_len,
   ant_value_t value, bool has_value, bool plain_data
 ) {
-  if (!typedarray_key_may_be_numeric(key, key_len)) return js_mkundef();
+  if (!ant_key_may_be_numeric(key, key_len)) return js_mkundef();
   TypedArrayData *ta_data = buffer_get_typedarray_data(obj);
   size_t index = 0;
   typedarray_key_kind_t kind = ta_data ? typedarray_key_kind(ta_data, key, key_len, &index) : TYPEDARRAY_KEY_ORDINARY;
@@ -970,6 +961,14 @@ ant_value_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer) {
   return ab_obj;
 }
 
+static const ant_exotic_ops_t typedarray_exotic_ops = {
+  .getter = typedarray_index_getter,
+  .setter = typedarray_index_setter,
+  .deleter = typedarray_index_deleter,
+  .definer = typedarray_index_definer,
+  .keys = ANT_EXOTIC_KEYS_NUMERIC,
+};
+
 ant_value_t create_typed_array_with_buffer(
   ant_t *js, TypedArrayType type, ArrayBufferData *buffer,
   size_t byte_offset, size_t length, const char *type_name, ant_value_t arraybuffer_obj
@@ -992,10 +991,7 @@ ant_value_t create_typed_array_with_buffer(
   js_set_native(obj, ta_data, BUFFER_TYPEDARRAY_NATIVE_TAG);
   js_set_slot_wb(js, obj, SLOT_DATA, arraybuffer_obj);
   
-  js_set_getter(obj, typedarray_index_getter);
-  js_set_definer(obj, typedarray_index_definer);
-  js_set_deleter(obj, typedarray_index_deleter);
-  js_set_setter(obj, typedarray_index_setter);
+  js_set_exotic_ops(obj, &typedarray_exotic_ops);
   js_set_finalizer(obj, typedarray_finalize);
   
   return obj;

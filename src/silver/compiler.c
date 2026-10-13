@@ -555,8 +555,15 @@ static int add_atom(sv_compiler_t *c, const char *str, uint32_t len) {
     c->atom_cap = c->atom_cap ? c->atom_cap * 2 : 16;
     c->atoms = realloc(c->atoms, (size_t)c->atom_cap * sizeof(sv_atom_t));
   }
-  c->atoms[c->atom_count] = (sv_atom_t){ .str = stored, .len = len };
+  
+  c->atoms[c->atom_count] = (sv_atom_t){ 
+    .str = stored, 
+    .len = len,
+    .maybe_numeric = ant_key_may_be_numeric(stored, len)
+  };
+  
   if (indexed) atom_index_insert(c, c->atom_count);
+  
   return c->atom_count++;
 }
 

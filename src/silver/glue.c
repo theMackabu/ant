@@ -1078,14 +1078,12 @@ __attribute__((noinline)) int64_t jit_helper_is_truthy(ant_t *js, ant_value_t v)
 }
 
 static __attribute__((noinline)) ant_value_t jit_get_field_fallback(
-  ant_t *js, ant_value_t obj,
-  const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
+  ant_t *js, ant_value_t obj, sv_atom_t *atom, sv_func_t *func, int32_t bc_off
 ) {
   uint8_t *ip = NULL;
   if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
-  sv_atom_t atom = { .str = str, .len = len };
   
-  ant_value_t out = sv_prop_get_field_ic(js, obj, &atom, func, ip);
+  ant_value_t out = sv_prop_get_field_ic(js, obj, atom, func, ip);
   sv_ic_entry_t *ic = ip ? sv_ic_slot_for_ip(func, ip) : NULL;
   
   if (ic && (ic->shape_ref_mask & SV_IC_POLY_MEGA) && func->jit_code &&
@@ -1106,43 +1104,36 @@ static __attribute__((noinline)) ant_value_t jit_get_field_fallback(
 }
 
 ant_value_t jit_helper_get_field(
-  ant_t *js, ant_value_t obj,
-  const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
+  ant_t *js, ant_value_t obj, sv_atom_t *atom, sv_func_t *func, int32_t bc_off
 ) {
-  if (func && bc_off >= 0 && bc_off < func->code_len) {
-  sv_ic_entry_t *ic = sv_ic_slot_for_ip(func, func->code + bc_off);
-  if (
-    ic && (ic->get_kind == SV_GF_IC_SYMBOL_DESCRIPTION || 
-    ic->get_kind == SV_GF_IC_PRIMITIVE_SYMBOL_DESCRIPTION)
-  ) {
-    sv_atom_t atom = { .str = str, .len = len };
-    ant_value_t out;
-    if (sv_try_symbol_description_ic(js, obj, &atom, ic, &out)) return out;
-  }}
+  bool in_code = func && bc_off >= 0 && bc_off < func->code_len;
+  sv_ic_entry_t *ic = in_code ? sv_ic_slot_for_ip(func, func->code + bc_off) : NULL;
   
-  return jit_get_field_fallback(js, obj, str, len, func, bc_off);
+  ant_value_t out;
+  if (
+    ic && sv_gf_kind_is_symbol_description(ic->get_kind) && 
+    sv_try_symbol_description_ic(js, obj, atom, ic, &out)
+  ) return out;
+  
+  return jit_get_field_fallback(js, obj, atom, func, bc_off);
 }
 
 ant_value_t jit_helper_in_field(
-  ant_t *js, ant_value_t obj,
-  const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
+  ant_t *js, ant_value_t obj, sv_atom_t *atom, sv_func_t *func, int32_t bc_off
 ) {
-  sv_atom_t atom = { .str = str, .len = len };
-  return sv_prop_in_field_ic(js, obj, &atom, sv_ic_slot_for_ip(func, func->code + bc_off));
+  return sv_prop_in_field_ic(js, obj, atom, sv_ic_slot_for_ip(func, func->code + bc_off));
 }
 
 ant_value_t jit_helper_get_field_inline(
-  ant_t *js, ant_value_t obj,
-  const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
+  ant_t *js, ant_value_t obj, sv_atom_t *atom, sv_func_t *func, int32_t bc_off
 ) {
   uint8_t *ip = NULL;
   
   if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
-  sv_atom_t atom = { .str = str, .len = len };
   ant_value_t out = js_mkundef();
   
-  if (sv_try_prop_get_field_ic_no_effect(js, obj, &atom, func, ip, &out)) return out;
-  if (sv_try_get_data_prop_no_effect_interned(js, obj, str, len, &out)) return out;
+  if (sv_try_prop_get_field_ic_no_effect(js, obj, atom, func, ip, &out)) return out;
+  if (sv_try_get_data_prop_no_effect_interned(js, obj, atom->str, atom->len, &out)) return out;
   
   return SV_JIT_BAILOUT;
 }
@@ -1523,7 +1514,7 @@ ant_value_t jit_helper_get_elem(
       sv_atom_t atom = { .str = NULL, .len = 11 };
       ant_value_t result;
       if (ic->get_kind == SV_GF_IC_MISSING && vtype(obj) == kTypeObject &&
-        sv_ic_try_get_hit(js, ic, obj, js_obj_ptr(obj), &atom, &result)) return result;
+        sv_ic_try_get_hit(js, ic, obj, js_obj_ptr(obj), &atom, &result, NULL)) return result;
       if (sv_try_symbol_description_ic(js, obj, &atom, ic, &result)) return result;
       atom.str = intern_string("description", 11);
       if (atom.str && sv_try_prop_get_ic_no_effect(js, obj, &atom, ic, &result)) return result;

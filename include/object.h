@@ -12,11 +12,18 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+typedef enum: uint8_t {
+  ANT_EXOTIC_KEYS_ANY,
+  ANT_EXOTIC_KEYS_NUMERIC,
+} ant_exotic_keys_t;
+
 typedef struct {
   ant_value_t (*getter)(ant_t *, ant_value_t, const char *, size_t);
   bool (*setter)(ant_t *, ant_value_t, const char *, size_t, ant_value_t);
   bool (*deleter)(ant_t *, ant_value_t, const char *, size_t);
   ant_value_t (*definer)(ant_t *, ant_value_t, const char *, size_t, ant_value_t value, bool has_value, bool plain_data);
+  ant_exotic_keys_t keys;
+  bool heap;
 } ant_exotic_ops_t;
 
 typedef struct {
