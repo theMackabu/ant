@@ -5,8 +5,11 @@
 #include "internal.h"
 
 #include <inttypes.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
+
+static constexpr size_t STRINGIFY_MAX_ARRAY_LENGTH = 100;
 
 static size_t stringify_hex_bytes(const uint8_t *data, size_t count, bool lead_space, char *buf, size_t len) {
   size_t n = 0;
@@ -17,22 +20,13 @@ static size_t stringify_hex_bytes(const uint8_t *data, size_t count, bool lead_s
   return n;
 }
 
-static size_t stringify_typed_element(TypedArrayType type, const uint8_t *data, size_t i, char *buf, size_t len) {
-  switch (type) {
-    case TYPED_ARRAY_INT8:          return (size_t)snprintf(buf, len, "%d", (int)((const int8_t *)data)[i]);
-    case TYPED_ARRAY_UINT8:
-    case TYPED_ARRAY_UINT8_CLAMPED: return (size_t)snprintf(buf, len, "%u", (unsigned)data[i]);
-    case TYPED_ARRAY_INT16:         return (size_t)snprintf(buf, len, "%d", (int)((const int16_t *)data)[i]);
-    case TYPED_ARRAY_UINT16:        return (size_t)snprintf(buf, len, "%u", (unsigned)((const uint16_t *)data)[i]);
-    case TYPED_ARRAY_INT32:         return (size_t)snprintf(buf, len, "%d", ((const int32_t *)data)[i]);
-    case TYPED_ARRAY_UINT32:        return (size_t)snprintf(buf, len, "%u", ((const uint32_t *)data)[i]);
-    case TYPED_ARRAY_FLOAT16:       return (size_t)snprintf(buf, len, "%g", half_to_double(((const uint16_t *)data)[i]));
-    case TYPED_ARRAY_FLOAT32:       return (size_t)snprintf(buf, len, "%g", (double)((const float *)data)[i]);
-    case TYPED_ARRAY_FLOAT64:       return (size_t)snprintf(buf, len, "%g", ((const double *)data)[i]);
-    case TYPED_ARRAY_BIGINT64:      return (size_t)snprintf(buf, len, "%lldn", (long long)((const int64_t *)data)[i]);
-    case TYPED_ARRAY_BIGUINT64:     return (size_t)snprintf(buf, len, "%llun", (unsigned long long)((const uint64_t *)data)[i]);
-    default:                        return (size_t)snprintf(buf, len, "%u", (unsigned)data[i]);
-  }
+static size_t stringify_typed_element(ant_t *js, const TypedArrayData *ta, size_t i, char *buf, size_t len) {
+  ant_value_t value;
+  if (!buffer_typedarray_data_read_index(js, ta, i, &value)) return 0;
+  if (vtype(value) == kTypeNumber && tod(value) == 0 && signbit(tod(value))) return cpy(buf, len, "-0", 2);
+  
+  size_t n = tostr(js, value, buf, len);
+  return vtype(value) == kTypeBigInt ? n + cpy(buf + n, REMAIN(n, len), "n", 1) : n;
 }
 
 static bool stringify_is_buffer(ant_t *js, ant_value_t obj) {
@@ -41,49 +35,67 @@ static bool stringify_is_buffer(ant_t *js, ant_value_t obj) {
   return vtype(proto) == kTypeObject && vtype(buffer_proto) == kTypeObject && vdata(proto) == vdata(buffer_proto);
 }
 
-static size_t stringify_node_buffer(const TypedArrayData *ta, const uint8_t *data, char *buf, size_t len) {
-  size_t shown = ta->byte_length < BUFFER_INSPECT_MAX_BYTES ? ta->byte_length : BUFFER_INSPECT_MAX_BYTES;
+static size_t stringify_more_bytes(size_t remaining, char *buf, size_t len) {
+  return (size_t)snprintf(buf, len, " ... %zu more byte%s", remaining, remaining == 1 ? "" : "s");
+}
+
+static size_t stringify_node_buffer(const uint8_t *data, size_t byte_length, char *buf, size_t len) {
+  size_t shown = byte_length < BUFFER_INSPECT_MAX_BYTES ? byte_length : BUFFER_INSPECT_MAX_BYTES;
   size_t n = cpy(buf, len, "<Buffer", 7);
   n += stringify_hex_bytes(data, shown, true, buf + n, REMAIN(n, len));
-  
-  if (shown < ta->byte_length) {
-    size_t remaining = ta->byte_length - shown;
-    n += (size_t)snprintf(buf + n, REMAIN(n, len), " ... %zu more byte%s", remaining, remaining == 1 ? "" : "s");
-  }
-  
+  if (shown < byte_length) n += stringify_more_bytes(byte_length - shown, buf + n, REMAIN(n, len));
   return n + cpy(buf + n, REMAIN(n, len), shown == 0 ? " >" : ">", shown == 0 ? 2 : 1);
 }
 
 size_t stringify_typedarray(ant_t *js, ant_value_t obj, const TypedArrayData *ta, char *buf, size_t len) {
+  bool detached = ta->buffer->is_detached;
+  size_t length = detached ? 0 : ta->length;
   const uint8_t *data = ta->buffer->data + ta->byte_offset;
-  if (stringify_is_buffer(js, obj)) return stringify_node_buffer(ta, data, buf, len);
+  
+  if (stringify_is_buffer(js, obj)) return stringify_node_buffer(data, detached ? 0 : ta->byte_length, buf, len);
   
   const char *name = ta->type <= TYPED_ARRAY_BIGUINT64 ? buffer_typedarray_type_name(ta->type) : "TypedArray";
   size_t n = cpy(buf, len, name, strlen(name));
-  n += (size_t)snprintf(buf + n, REMAIN(n, len), "(%zu) [ ", ta->length);
+  n += (size_t)snprintf(buf + n, REMAIN(n, len), "(%zu) [", length);
+  if (length == 0) return n + cpy(buf + n, REMAIN(n, len), "]", 1);
   
-  for (size_t i = 0; i < ta->length && i < 100; i++) {
-    if (i > 0) n += cpy(buf + n, REMAIN(n, len), ", ", 2);
-    n += stringify_typed_element(ta->type, data, i, buf + n, REMAIN(n, len));
+  size_t shown = length < STRINGIFY_MAX_ARRAY_LENGTH ? length : STRINGIFY_MAX_ARRAY_LENGTH;
+  for (size_t i = 0; i < shown; i++) {
+    n += cpy(buf + n, REMAIN(n, len), i ? ", " : " ", i ? 2 : 1);
+    n += stringify_typed_element(js, ta, i, buf + n, REMAIN(n, len));
   }
   
-  if (ta->length > 100) n += cpy(buf + n, REMAIN(n, len), ", ...", 5);
+  if (shown < length) n += cpy(buf + n, REMAIN(n, len), ", ...", 5);
   return n + cpy(buf + n, REMAIN(n, len), " ]", 2);
 }
 
+static size_t stringify_arraybuffer_body(const ArrayBufferData *ab, const char *indent, char *buf, size_t len) {
+  const char *name = ab->is_shared ? "SharedArrayBuffer" : "ArrayBuffer";
+  if (ab->is_detached) return (size_t)snprintf(buf, len, "%s { (detached), [byteLength]: 0 }", name);
+  
+  size_t shown = ab->length < STRINGIFY_MAX_ARRAY_LENGTH ? ab->length : STRINGIFY_MAX_ARRAY_LENGTH;
+  size_t n = (size_t)snprintf(buf, len, "%s {\n%s  [Uint8Contents]: <", name, indent);
+  
+  if (ab->data) n += stringify_hex_bytes(ab->data, shown, false, buf + n, REMAIN(n, len));
+  if (shown < ab->length) n += stringify_more_bytes(ab->length - shown, buf + n, REMAIN(n, len));
+  
+  return n + (size_t)snprintf(buf + n, REMAIN(n, len), ">,\n%s  [byteLength]: %zu\n%s}", indent, ab->length, indent);
+}
+
 size_t stringify_arraybuffer(const ArrayBufferData *ab, char *buf, size_t len) {
-  size_t n = (size_t)snprintf(buf, len, "%s {\n  [Uint8Contents]: <", ab->is_shared ? "SharedArrayBuffer" : "ArrayBuffer");
-  if (ab->data) n += stringify_hex_bytes(ab->data, ab->length, false, buf + n, REMAIN(n, len));
-  return n + (size_t)snprintf(buf + n, REMAIN(n, len), ">,\n  [byteLength]: %zu\n}", ab->length);
+  return stringify_arraybuffer_body(ab, "", buf, len);
 }
 
 size_t stringify_dataview(const DataViewData *dv, char *buf, size_t len) {
-  size_t n = (size_t)snprintf(
-    buf, len, "DataView {\n  [byteLength]: %zu,\n  [byteOffset]: %zu,\n  [buffer]: ArrayBuffer {\n    [Uint8Contents]: <",
-    dv->byte_length, dv->byte_offset
-  );
-  if (dv->buffer->data) n += stringify_hex_bytes(dv->buffer->data, dv->buffer->length, false, buf + n, REMAIN(n, len));
-  return n + (size_t)snprintf(buf + n, REMAIN(n, len), ">,\n    [byteLength]: %zu\n  }\n}", dv->buffer->length);
+  size_t n = dv->buffer->is_detached
+    ? (size_t)snprintf(buf, len, "DataView {\n  [byteLength]: 0,\n  [byteOffset]: undefined,\n  [buffer]: ")
+    : (size_t)snprintf(
+      buf, len, "DataView {\n  [byteLength]: %zu,\n  [byteOffset]: %zu,\n  [buffer]: ",
+      dv->byte_length, dv->byte_offset
+    );
+  
+  n += stringify_arraybuffer_body(dv->buffer, "  ", buf + n, REMAIN(n, len));
+  return n + cpy(buf + n, REMAIN(n, len), "\n}", 2);
 }
 
 size_t stringify_blob(const blob_data_t *bd, bool is_file, char *buf, size_t len) {
@@ -92,5 +104,6 @@ size_t stringify_blob(const blob_data_t *bd, bool is_file, char *buf, size_t len
     buf + n, REMAIN(n, len), ", name: '%s', lastModified: %" PRId64,
     bd->name ? bd->name : "", bd->last_modified
   );
+  
   return n + cpy(buf + n, REMAIN(n, len), " }", 2);
 }

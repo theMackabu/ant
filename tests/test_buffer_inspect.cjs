@@ -16,6 +16,37 @@ assert.strictEqual(
   'Uint8Array(2) [ 72, 101 ]'
 );
 
+assert.strictEqual(inspect(new Uint8Array(0)), 'Uint8Array(0) []');
+assert.strictEqual(inspect(new Float64Array([NaN, -Infinity, -0])), 'Float64Array(3) [ NaN, -Infinity, -0 ]');
+assert.strictEqual(inspect(new Float64Array([0.1 + 0.2, 123456789])), 'Float64Array(2) [ 0.30000000000000004, 123456789 ]');
+assert.strictEqual(inspect(new Float32Array([1 / 3])), 'Float32Array(1) [ 0.3333333432674408 ]');
+assert.strictEqual(inspect(new BigUint64Array([18446744073709551615n])), 'BigUint64Array(1) [ 18446744073709551615n ]');
+
+const wide = new ArrayBuffer(101);
+assert.ok(inspect(wide).endsWith('00 00 ... 1 more byte>,\n  [byteLength]: 101\n}'));
+assert.strictEqual(inspect(new ArrayBuffer(100)).includes('more byte'), false);
+assert.ok(inspect(new DataView(new ArrayBuffer(120))).includes(' ... 20 more bytes>'));
+
+const huge = new ArrayBuffer(64 * 1024 * 1024);
+const started = Date.now();
+assert.ok(inspect(huge).length < 1024);
+assert.ok(Date.now() - started < 1000);
+
+const detachedBuffer = new ArrayBuffer(4);
+const detachedBytes = new Uint8Array(detachedBuffer);
+const detachedView = new DataView(detachedBuffer, 1, 2);
+const detachedNode = Buffer.from(detachedBuffer);
+detachedBytes.set([1, 2, 3, 4]);
+detachedBuffer.transfer();
+
+assert.strictEqual(inspect(detachedBuffer), 'ArrayBuffer { (detached), [byteLength]: 0 }');
+assert.strictEqual(inspect(detachedBytes), 'Uint8Array(0) []');
+assert.strictEqual(inspect(detachedNode), '<Buffer >');
+assert.strictEqual(
+  inspect(detachedView),
+  'DataView {\n  [byteLength]: 0,\n  [byteOffset]: undefined,\n  [buffer]: ArrayBuffer { (detached), [byteLength]: 0 }\n}'
+);
+
 function captureColored(value) {
   const previousForceColor = process.env.FORCE_COLOR;
   const write = process.stdout.write;

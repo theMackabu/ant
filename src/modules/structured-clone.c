@@ -49,6 +49,10 @@ static void sc_free(sc_entry_t **table) {
   }
 }
 
+static ant_value_t sc_detached_error(ant_t *js) {
+  return js_throw(js, make_dom_exception(js, "An ArrayBuffer is detached and could not be cloned.", "DataCloneError"));
+}
+
 static ant_value_t sc_clone_typed_array(
   ant_t *js, ant_value_t key, TypedArrayData *ta_data, sc_entry_t **seen
 ) {
@@ -58,6 +62,8 @@ static ant_value_t sc_clone_typed_array(
   if (!ta_data || !ta_data->buffer) return js_throw(
     js, make_dom_exception(js, "TypedArray could not be cloned", "DataCloneError")
   );
+  
+  if (ta_data->buffer->is_detached) return sc_detached_error(js);
 
   ArrayBufferData *new_buf = create_array_buffer_data(js, ta_data->byte_length);
   if (!new_buf) return js_mkerr(js, "out of memory");
@@ -104,7 +110,9 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
   if (vtype(existing) != kTypeUndefined) return existing;
 
   ArrayBufferData *abd = buffer_get_arraybuffer_data(val);
-  if (abd && !abd->is_detached) {
+  if (abd && abd->is_detached) return sc_detached_error(js);
+  
+  if (abd) {
     ArrayBufferData *new_abd = create_array_buffer_data(js, abd->length);
     
     if (!new_abd) return js_mkerr(js, "out of memory");
@@ -126,6 +134,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     DataViewData *dv = buffer_get_dataview_data(val);
     if (!dv || !dv->buffer)
       return js_throw(js, make_dom_exception(js, "DataView could not be cloned", "DataCloneError"));
+    if (dv->buffer->is_detached) return sc_detached_error(js);
     
     ArrayBufferData *new_buf = create_array_buffer_data(js, dv->buffer->length);
     if (!new_buf) return js_mkerr(js, "out of memory");

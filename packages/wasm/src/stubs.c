@@ -76,7 +76,7 @@ void gc_finalize_events_object(ant_t *js, ant_value_t obj) {
 void cleanup_cron_module(ant_t *js) { (void)js; }
 void cleanup_rpc_module(void) {}
 void cleanup_lmdb_module(void) {}
-void cleanup_buffer_module(void) {}
+void cleanup_buffer_module(ant_t *js) { (void)js; }
 void cleanup_atomics_module(ant_t *js) { (void)js; }
 void cleanup_events_module(ant_t *js) { (void)js; }
 
