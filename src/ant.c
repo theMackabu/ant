@@ -7805,13 +7805,32 @@ static bool own_key_is_array_index(const char *key, size_t key_len, unsigned lon
   return true;
 }
 
+static bool arr_fill_numeric_typed(ant_t *js, ant_value_t arr, const TypedArrayData *ta) {
+  if (ta->type == TYPED_ARRAY_BIGINT64 || ta->type == TYPED_ARRAY_BIGUINT64) return false;
+  
+  ant_object_t *dst = array_obj_ptr(arr);
+  
+  if (
+    !dst || !dst->flags.fast_array || !dst->u.array.data || 
+    dst->u.array.len || dst->u.array.cap < ta->length
+  ) return false;
+  
+  for (size_t i = 0; i < ta->length; i++) 
+    buffer_typedarray_data_read_index(js, ta, i, &dst->u.array.data[i]);
+  
+  dst->u.array.len = (uint32_t)ta->length;
+  dst->flags.may_have_dense_elements = ta->length > 0;
+  
+  return true;
+}
+
 static inline void object_enum_push(
-  ant_t *js, ant_value_t arr, ant_offset_t *idx, enum obj_enum_mode mode,
+  ant_t *js, ant_value_t arr, enum obj_enum_mode mode,
   const char *key, size_t klen, ant_value_t val
 ) {
   ant_value_t item = mode == OBJ_ENUM_VALUES ? val : js_mkstr(js, key, klen);
   if (mode == OBJ_ENUM_ENTRIES) item = map_to_entry(js, item, val);
-  arr_set(js, arr, (*idx)++, item);
+  js_arr_push(js, arr, item);
 }
 
 static ant_value_t object_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mode) {
@@ -7828,19 +7847,23 @@ static ant_value_t object_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mo
   if (!ptr || !ptr->shape) return mkarr(js);
   
   ant_value_t arr = mkarr(js);
-  ant_offset_t idx = 0;
-  
   ant_offset_t doff = is_arr ? get_dense_buf(obj) : 0;
-  TypedArrayData *typed = exotic_has_getter(ptr) ? buffer_get_typedarray_data(obj) : NULL;
+  TypedArrayData *typed = ptr->flags.is_exotic ? buffer_get_typedarray_data(obj) : NULL;
   
   bool typed_live = typed && typed->buffer && !typed->buffer->is_detached;
   ant_offset_t elem_len = doff ? dense_iterable_length(js, obj) : typed_live ? (ant_offset_t)typed->length : 0;
+  if (elem_len) js_arr_reserve(js, arr, (uint32_t)elem_len);
   
-  for (ant_offset_t i = 0; i < elem_len; i++) {
+  bool filled = mode == OBJ_ENUM_VALUES && typed_live && arr_fill_numeric_typed(js, arr, typed);
+  for (ant_offset_t i = filled ? elem_len : 0; i < elem_len; i++) {
+    ant_value_t v = js_mkundef();
+    if (doff) v = dense_get(doff, i);
+    else if (!buffer_typedarray_data_read_index(js, typed, (size_t)i, &v)) return is_err(v) ? v : arr;
+    if (is_empty_slot(v)) continue;
+    
     char idxstr[24];
-    size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
-    ant_value_t v = doff ? dense_get(doff, i) : ptr->exotic_ops->getter(js, obj, idxstr, idxlen);
-    if (!is_empty_slot(v)) object_enum_push(js, arr, &idx, mode, idxstr, idxlen, v);
+    size_t idxlen = mode == OBJ_ENUM_VALUES ? 0 : uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
+    object_enum_push(js, arr, mode, idxstr, idxlen, v);
   }
 
   uint32_t shape_count = ant_shape_count(ptr->shape);
@@ -7855,8 +7878,9 @@ static ant_value_t object_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mo
     
     bool enumerable = (ant_shape_get_attrs(ptr->shape, i) & ANT_PROP_ATTR_ENUMERABLE) != 0;
     descriptor_entry_t *desc = enumerable && ptr->flags.is_exotic ? lookup_descriptor(js, js_as_obj(obj), key, klen) : NULL;
+    
     if (desc) enumerable = desc->enumerable;
-    if (enumerable) object_enum_push(js, arr, &idx, mode, key, klen, ant_object_prop_get_unchecked(ptr, i));
+    if (enumerable) object_enum_push(js, arr, mode, key, klen, ant_object_prop_get_unchecked(ptr, i));
   }
   
   return mkval(kTypeArray, vdata(arr));
@@ -10703,9 +10727,8 @@ static ant_value_t copy_key_snapshot_props(
     if ((ant_shape_get_attrs(ptr->shape, (uint32_t)slot) & ANT_PROP_ATTR_ENUMERABLE) == 0) continue;
     
     const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
-    ant_value_t val = !(prop->has_getter || prop->has_setter)
-      ? ant_object_prop_get_unchecked(ptr, (uint32_t)slot)
-      : copy_key_get(js, src, ck);
+    ant_value_t val = !(prop->has_getter || prop->has_setter) ? ant_object_prop_get_unchecked(ptr, (uint32_t)slot)
+      : prop->has_getter ? js_call_getter(js, src, prop->getter) : js_mkundef();
     
     result = is_err(val) ? val : copy_store(js, cx, dst, ck, val);
   }
@@ -10719,9 +10742,9 @@ static bool copy_adopt_shape(ant_t *js, ant_value_t dst, ant_object_t *src, bool
   uint32_t count = ant_shape_count(shape);
   
   if (
+    count == 0 || count > src->prop_count || ant_shape_may_have_index_keys(shape) ||
     !dst_ptr || !dst_ptr->shape || ant_shape_count(dst_ptr->shape) != 0 || dst_ptr->prop_count != 0 ||
     dst_ptr->flags.is_exotic || !dst_ptr->flags.extensible || dst_ptr->type_tag != kTypeObject ||
-    count == 0 || count > src->prop_count || ant_shape_may_have_index_keys(shape) ||
     ant_object_inobj_limit(dst_ptr) != ant_shape_get_inobj_limit(shape) ||
     (via_set && vtype(js_string_wrapper_value(dst)) == kTypeString)
   ) return false;
@@ -10763,6 +10786,11 @@ static bool copy_ordinary_data_props(
   ant_shape_t *shape = ptr->shape;
   uint32_t count = ant_shape_count(shape);
   
+  if (count == 0 && !is_arr && vtype(wrapped) != kTypeString) {
+    *result = js_mkundef();
+    return true;
+  }
+  
   bool has_accessor = false, symbol_accessor = false;
   for (uint32_t i = 0; i < count && !symbol_accessor; i++) {
     const ant_shape_prop_t *prop = ant_shape_prop_at(shape, i);
@@ -10775,7 +10803,10 @@ static bool copy_ordinary_data_props(
   if (is_arr && has_accessor) return false;
   
   bool indexed = is_arr || vtype(wrapped) == kTypeString;
-  if (!has_accessor && !indexed && !cx->count && copy_adopt_shape(js, dst, ptr, cx->assign)) {
+  if (
+    !has_accessor && !indexed && !cx->count && !ant_shape_may_have_index_keys(shape) && 
+    copy_adopt_shape(js, dst, ptr, cx->assign)
+  ) {
     *result = js_mkundef();
     return true;
   }
@@ -22292,10 +22323,7 @@ static bool js_try_get_sym_with_receiver(
     if (off.obj) {
       const ant_shape_prop_t *meta = prop_shape_meta(off);
       if (meta && meta->has_getter) {
-        ant_value_t g = meta->getter;
-        *out = is_callable(g)
-          ? sv_vm_call(js->vm, js, g, receiver, NULL, 0, NULL, js_mkundef())
-          : js_mkundef();
+        *out = is_callable(meta->getter) ? js_call_getter(js, receiver, meta->getter) : js_mkundef();
         return true;
       }
       *out = (meta && meta->has_setter) ? js_mkundef() : js_prop_load(off);
@@ -22304,6 +22332,7 @@ static bool js_try_get_sym_with_receiver(
 
     ant_value_t proto = get_proto(js, cur_obj);
     if (!is_object_type(proto)) break;
+    
     cur = js_as_obj(proto);
     if (proto_overflow_guard_hit_cycle(js, &guard, cur)) break;
   }

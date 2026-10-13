@@ -925,17 +925,19 @@ static inline bool sv_try_index_get(ant_t *js, ant_value_t obj, ant_value_t key,
     sv_string_char_get(js, obj, str, idx, out);
 }
 
+static inline bool sv_cfunc_virtual_own_key(ant_t *js, const sv_atom_t *a) {
+  return a->str == js->intern.prototype || (a->len == 4 && memcmp(a->str, "name", 4) == 0);
+}
+
 static inline bool sv_prim_ic_lookup(
-  ant_t *js,
-  ant_value_t obj,
-  sv_atom_t *a,
-  sv_ic_entry_t *ic,
-  ant_value_t *out
+  ant_t *js, ant_value_t obj, sv_atom_t *a, sv_ic_entry_t *ic, ant_value_t *out
 ) {
   uint8_t pt = vtype(obj);
+  bool builtin = pt == kTypeBuiltin;
   
-  if (pt != kTypeString && pt != kTypeNumber && pt != kTypeBool && pt != kTypeSymbol) return false;
+  if (!builtin && pt != kTypeString && pt != kTypeNumber && pt != kTypeBool && pt != kTypeSymbol) return false;
   if (pt == kTypeString && a->len > 0 && a->str[0] >= '0' && a->str[0] <= '9') return false;
+  if (builtin && (sv_cfunc_virtual_own_key(js, a) || js_cfunc_lookup_promoted(js, obj) != obj)) return false;
 
   if (sv_ic_try_get_hit_prim(js, ic, pt, a, out)) {
     sv_gf_ic_note_success(ic);
@@ -943,7 +945,7 @@ static inline bool sv_prim_ic_lookup(
   }
   
   if (sv_ic_try_get_miss_prim(js, ic, pt, out)) return true;
-  ant_value_t proto = js_primitive_prototype(js, pt);
+  ant_value_t proto = builtin ? js->sym.function_proto : js_primitive_prototype(js, pt);
   if (!is_object_type(proto)) return false;
 
   ant_object_t *holder = NULL;
@@ -1774,6 +1776,21 @@ static inline void sv_op_define_slot(
   vm->sp--;
 }
 
+static ant_value_t sv_get_length_numeric_exotic(ant_t *js, ant_value_t obj, ant_object_t *ptr) {
+  ant_value_t out = js_mkundef(), getter = js_mkundef();
+  if (sv_gf_mega_find(js, ptr, js->intern.length, &out, &getter))
+    return vtype(getter) == kTypeUndefined ? out : js_call_getter(js, obj, getter);
+  
+  ant_object_t *holder = NULL;
+  uint32_t index = 0;
+  bool accessor = false;
+  if (!sv_ic_probe_get_chain(obj, js->intern.length, false, true, &accessor, &holder, &index, &out))
+    return js_getprop_fallback(js, obj, "length");
+  
+  if (holder) sv_gf_mega_store(js, ptr, js->intern.length, holder, index, accessor);
+  return accessor ? js_call_getter(js, obj, out) : out;
+}
+
 static inline ant_value_t sv_get_length_value(ant_t *js, ant_value_t obj) {
   if (vtype(obj) == kTypeArray) {
     ant_value_t out;
@@ -1787,6 +1804,10 @@ static inline ant_value_t sv_get_length_value(ant_t *js, ant_value_t obj) {
     js, JS_ERR_TYPE, "Cannot read properties of %s (reading 'length')",
     vtype(obj) == kTypeNull ? "null" : "undefined"
   );
+  
+  ant_object_t *ptr = vtype(obj) == kTypeObject ? js_obj_ptr(obj) : NULL;
+  if (ptr && ptr->shape && ptr->type_tag == kTypeObject && sv_ic_numeric_exotic(ptr))
+    return sv_get_length_numeric_exotic(js, obj, ptr);
   
   return js_getprop_fallback(js, obj, "length");
 }

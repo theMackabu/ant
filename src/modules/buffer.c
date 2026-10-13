@@ -21,6 +21,7 @@
 #include "silver/call.h"
 #include "modules/bigint.h"
 #include "modules/buffer.h"
+#include "native_getter.h"
 #include "modules/symbol.h"
 #include "modules/iterator.h"
 
@@ -348,8 +349,14 @@ static ant_value_t js_typedarray_toStringTag_getter(ant_params_t) {
   TypedArrayData *ta = buffer_get_typedarray_data(this_val);
   if (!ta) return js_mkundef();
 
+  ant_value_t *cached = &js->mutable_roots.typedarray_names[ta->type];
+  if (*cached) return *cached;
+  
   const char *name = buffer_typedarray_type_name(ta->type);
-  return js_mkstr(js, name, strlen(name));
+  ant_value_t str = js_mkstr(js, name, strlen(name));
+  if (!is_err(str)) *cached = str;
+  
+  return str;
 }
 
 static ant_value_t create_typed_array_like(
@@ -538,6 +545,32 @@ static ant_value_t js_dataview_byteOffset_getter(ant_params_t) {
   if (!dv) return js_mkerr_typed(js, JS_ERR_TYPE, "Not a DataView");
   return js_mknum((double)dv->byte_offset);
 }
+
+#define BUFFER_SIZE_GETTER(name, fn, tag, detach_mode, ref, flag, field) \
+  static const ant_native_getter_t name = { \
+    .meta = { fn, NULL, 0, CFUNC_NATIVE_GETTER }, .native_tag = tag, .kind = ANT_NATIVE_GETTER_SIZE, \
+    .detach = detach_mode, .ref_offset = ref, .flag_offset = flag, .field_offset = field }
+
+#define BUFFER_SLOT_GETTER(name, fn, tag) \
+  static const ant_native_getter_t name = { \
+    .meta = { fn, NULL, 0, CFUNC_NATIVE_GETTER }, .native_tag = tag, .kind = ANT_NATIVE_GETTER_SLOT_DATA }
+
+BUFFER_SIZE_GETTER(typedarray_length_getter, js_typedarray_length_getter, BUFFER_TYPEDARRAY_NATIVE_TAG,
+  ANT_NATIVE_DETACH_REF, offsetof(TypedArrayData, buffer), offsetof(ArrayBufferData, is_detached), offsetof(TypedArrayData, length));
+BUFFER_SIZE_GETTER(typedarray_byte_length_getter, js_typedarray_byteLength_getter, BUFFER_TYPEDARRAY_NATIVE_TAG,
+  ANT_NATIVE_DETACH_REF, offsetof(TypedArrayData, buffer), offsetof(ArrayBufferData, is_detached), offsetof(TypedArrayData, byte_length));
+BUFFER_SIZE_GETTER(typedarray_byte_offset_getter, js_typedarray_byteOffset_getter, BUFFER_TYPEDARRAY_NATIVE_TAG,
+  ANT_NATIVE_DETACH_REF, offsetof(TypedArrayData, buffer), offsetof(ArrayBufferData, is_detached), offsetof(TypedArrayData, byte_offset));
+BUFFER_SIZE_GETTER(dataview_byte_length_getter, js_dataview_byteLength_getter, BUFFER_DATAVIEW_NATIVE_TAG,
+  ANT_NATIVE_DETACH_NONE, 0, 0, offsetof(DataViewData, byte_length));
+BUFFER_SIZE_GETTER(dataview_byte_offset_getter, js_dataview_byteOffset_getter, BUFFER_DATAVIEW_NATIVE_TAG,
+  ANT_NATIVE_DETACH_NONE, 0, 0, offsetof(DataViewData, byte_offset));
+BUFFER_SIZE_GETTER(arraybuffer_byte_length_getter, js_arraybuffer_byteLength_getter, BUFFER_ARRAYBUFFER_NATIVE_TAG,
+  ANT_NATIVE_DETACH_SELF, 0, offsetof(ArrayBufferData, is_detached), offsetof(ArrayBufferData, length));
+BUFFER_SIZE_GETTER(sharedarraybuffer_byte_length_getter, js_arraybuffer_byteLength_getter, BUFFER_ARRAYBUFFER_NATIVE_TAG,
+  ANT_NATIVE_DETACH_SELF, 0, offsetof(ArrayBufferData, is_detached), offsetof(ArrayBufferData, length));
+BUFFER_SLOT_GETTER(typedarray_buffer_getter, js_typedarray_buffer_getter, BUFFER_TYPEDARRAY_NATIVE_TAG);
+BUFFER_SLOT_GETTER(dataview_buffer_getter, js_dataview_buffer_getter, BUFFER_DATAVIEW_NATIVE_TAG);
 
 // ArrayBuffer.isView(value)
 static ant_value_t js_arraybuffer_isView(ant_params_t) {
@@ -4327,8 +4360,9 @@ void init_buffer_module(ant_t *js) {
   defmethod(js, arraybuffer_proto, "slice", 5, js_mkfun(js_arraybuffer_slice));
   defmethod(js, arraybuffer_proto, "transfer", 8, js_mkfun(js_arraybuffer_transfer));
   defmethod(js, arraybuffer_proto, "transferToFixedLength", 21, js_mkfun(js_arraybuffer_transferToFixedLength));
+  
   js_set_getter_desc(js, arraybuffer_proto, "detached", 8, js_mkfun(js_arraybuffer_detached_getter), JS_DESC_C);
-  js_set_getter_desc(js, arraybuffer_proto, "byteLength", 10, js_mkfun(js_arraybuffer_byteLength_getter), JS_DESC_C);
+  js_set_getter_desc(js, arraybuffer_proto, "byteLength", 10, js_mkfun_meta(&arraybuffer_byte_length_getter.meta), JS_DESC_C);
   js_set_tostringtag(js, arraybuffer_proto, js_mkstr(js, "ArrayBuffer", 11));
   
   js_set_slot(arraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_arraybuffer_constructor));
@@ -4337,6 +4371,7 @@ void init_buffer_module(ant_t *js) {
   js_set_descriptor(js, arraybuffer_ctor_obj, "name", 4, 0);
   defmethod(js, arraybuffer_ctor_obj, "isView", 6, js_mkfun(js_arraybuffer_isView));
   js_define_species_getter(js, arraybuffer_ctor_obj);
+  
   ant_value_t arraybuffer_ctor = js_obj_to_func(js, arraybuffer_ctor_obj);
   defmethod(js, arraybuffer_proto, "constructor", 11, arraybuffer_ctor);
   js_set_descriptor(js, arraybuffer_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
@@ -4345,10 +4380,10 @@ void init_buffer_module(ant_t *js) {
   ant_value_t typedarray_proto = js_mkobj(js);
   js_set_proto_init(typedarray_proto, object_proto);
 
-  js_set_getter_desc(js, typedarray_proto, "buffer", 6, js_mkfun(js_typedarray_buffer_getter), JS_DESC_C);
-  js_set_getter_desc(js, typedarray_proto, "length", 6, js_mkfun(js_typedarray_length_getter), JS_DESC_C);
-  js_set_getter_desc(js, typedarray_proto, "byteLength", 10, js_mkfun(js_typedarray_byteLength_getter), JS_DESC_C);
-  js_set_getter_desc(js, typedarray_proto, "byteOffset", 10, js_mkfun(js_typedarray_byteOffset_getter), JS_DESC_C);
+  js_set_getter_desc(js, typedarray_proto, "buffer", 6, js_mkfun_meta(&typedarray_buffer_getter.meta), JS_DESC_C);
+  js_set_getter_desc(js, typedarray_proto, "length", 6, js_mkfun_meta(&typedarray_length_getter.meta), JS_DESC_C);
+  js_set_getter_desc(js, typedarray_proto, "byteLength", 10, js_mkfun_meta(&typedarray_byte_length_getter.meta), JS_DESC_C);
+  js_set_getter_desc(js, typedarray_proto, "byteOffset", 10, js_mkfun_meta(&typedarray_byte_offset_getter.meta), JS_DESC_C);
   
   defmethod(js, typedarray_proto, "at", 2, js_mkfun(js_typedarray_at));
   defmethod(js, typedarray_proto, "set", 3, js_mkfun(js_typedarray_set));
@@ -4440,9 +4475,9 @@ void init_buffer_module(ant_t *js) {
   defmethod(js, dataview_proto, "getBigUint64", 12, js_mkfun(js_dataview_getBigUint64));
   defmethod(js, dataview_proto, "setBigUint64", 12, js_mkfun(js_dataview_setBigUint64));
   
-  js_set_getter_desc(js, dataview_proto, "buffer", 6, js_mkfun(js_dataview_buffer_getter), JS_DESC_C);
-  js_set_getter_desc(js, dataview_proto, "byteLength", 10, js_mkfun(js_dataview_byteLength_getter), JS_DESC_C);
-  js_set_getter_desc(js, dataview_proto, "byteOffset", 10, js_mkfun(js_dataview_byteOffset_getter), JS_DESC_C);
+  js_set_getter_desc(js, dataview_proto, "buffer", 6, js_mkfun_meta(&dataview_buffer_getter.meta), JS_DESC_C);
+  js_set_getter_desc(js, dataview_proto, "byteLength", 10, js_mkfun_meta(&dataview_byte_length_getter.meta), JS_DESC_C);
+  js_set_getter_desc(js, dataview_proto, "byteOffset", 10, js_mkfun_meta(&dataview_byte_offset_getter.meta), JS_DESC_C);
   js_set_tostringtag(js, dataview_proto, js_mkstr(js, "DataView", 8));
 
   js_set_slot(dataview_ctor_obj, SLOT_CFUNC, js_mkfun(js_dataview_constructor));
@@ -4460,7 +4495,7 @@ void init_buffer_module(ant_t *js) {
   js_set_proto_init(sharedarraybuffer_proto, object_proto);
   
   defmethod(js, sharedarraybuffer_proto, "slice", 5, js_mkfun(js_arraybuffer_slice));
-  js_set_getter_desc(js, sharedarraybuffer_proto, "byteLength", 10, js_mkfun(js_arraybuffer_byteLength_getter), JS_DESC_C);
+  js_set_getter_desc(js, sharedarraybuffer_proto, "byteLength", 10, js_mkfun_meta(&sharedarraybuffer_byte_length_getter.meta), JS_DESC_C);
   js_set_tostringtag(js, sharedarraybuffer_proto, js_mkstr(js, "SharedArrayBuffer", 17));
   
   js_set_slot(sharedarraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_sharedarraybuffer_constructor));

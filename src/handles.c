@@ -156,6 +156,10 @@ const ant_cfunc_meta_t *ant_cfunc_meta_intern(const ant_cfunc_meta_t *meta) {
   return &entry->meta;
 }
 
+const ant_cfunc_meta_t *ant_cfunc_meta_source(const ant_cfunc_meta_t *stored) {
+  return stored ? ((const ant_cfunc_entry_t *)stored)->source : NULL;
+}
+
 const ant_cfunc_meta_t *ant_cfunc_meta_create(const ant_cfunc_meta_t *meta) {
   if (!meta) return NULL;
   handles_lock_acquire();

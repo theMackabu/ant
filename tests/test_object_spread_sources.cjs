@@ -197,4 +197,8 @@ assert(JSON.stringify([getterOrder, Object.keys(orderedSpread)]) === '[["0","1",
 const mutatingSource = { get a() { mutatingSource[0] = 'changed'; return 0; }, 0: 'orig' };
 assert(({ ...mutatingSource })[0] === 'orig', 'an index key is read before a string getter can change it');
 
+const mutatingOrder = [];
+const mutating = { get b() { mutatingOrder.push('b'); delete mutating.c; mutating.z = 1; return 1; }, c: 2, get 1() { mutatingOrder.push('1'); return 'one'; }, 0: 'zero' };
+assert(JSON.stringify([{ ...mutating }, mutatingOrder]) === '[{"0":"zero","1":"one","b":1},["1","b"]]', 'getters run in key order and keys removed by a getter are skipped');
+
 console.log('object spread sources OK');

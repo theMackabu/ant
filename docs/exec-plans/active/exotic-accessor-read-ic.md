@@ -40,6 +40,27 @@ the same cost because a Buffer is an exotic receiver.
   new kinds route to its helper; `sv_prop_get_field_ic` calls the getter via
   `js_call_getter`, which invokes native getters directly.
 - Stage D. `length` reads are cached for `NUMERIC` exotic plain objects in C.
+  `OP_GET_LENGTH` has no IC slot, so its fallback uses the shared megamorphic
+  cache for `NUMERIC` exotic receivers and calls the cached getter directly.
+- Stage E. Native getters that read a field of their receiver's native data
+  are registered from static `ant_native_getter_t` descriptors (native tag,
+  detach rule, field offset or `SLOT_DATA`) and flagged `CFUNC_NATIVE_GETTER`.
+  The interned cfunc meta keeps its source pointer, so the descriptor is found
+  with no lookup. For an active `PROTO_GETTER` site whose getter has a
+  descriptor, the JIT guards the entry and holder shape (snapshotted) and loads
+  the field inline; a native tag mismatch falls back to the helper.
+- Builtin receivers. Unpromoted builtin functions use the primitive IC with
+  `Function.prototype` as their prototype, excluding the virtual `name` and
+  `prototype` keys; `length` stays uncached.
+
+## Related
+
+- `%TypedArray%.prototype[@@toStringTag]` returns per-isolate cached type-name
+  strings, and symbol Gets call native getters directly.
+- `Object.values`/`entries` read typed array elements directly; numeric
+  element values are written straight into the reserved dense result.
+- Spread snapshot copies call an own accessor's getter directly instead of a
+  second lookup, and empty sources return before any copy setup.
 
 ## Rejected
 
@@ -60,5 +81,6 @@ the same cost because a Buffer is an exotic receiver.
 
 ## Open
 
-- Stage E (slot-reading intrinsics for `buffer`/`byteLength`) if accessor reads
-  must reach own-data-property speed.
+- DataView and ArrayBuffer accessor reads remain above the old own-data-property
+  cost because every inline read re-validates the IC entry; hoisting the guards
+  out of loops would close it.

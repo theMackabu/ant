@@ -168,6 +168,7 @@ ANT_MUTABLE_ROOT_ARR(regexp_static_values, 11)
 ANT_MUTABLE_ROOT_ARR(object_tag_strings, 13)
 ANT_MUTABLE_ROOT_ARR(object_tag_cache_keys, 8)
 ANT_MUTABLE_ROOT_ARR(object_tag_cache_values, 8)
+ANT_MUTABLE_ROOT_ARR(typedarray_names, 12)
 #undef ANT_MUTABLE_ROOT
 #undef ANT_MUTABLE_ROOT_ARR
 #endif
