@@ -577,7 +577,9 @@ static ant_value_t crypto_make_arraybuffer(ant_t *js, const uint8_t *data, size_
   ArrayBufferData *buffer = create_array_buffer_data(js, len);
   if (!buffer) return js_mkerr(js, "Out of memory");
   if (len > 0 && data) memcpy(buffer->data, data, len);
-  return create_arraybuffer_obj(js, buffer);
+  ant_value_t ab_obj = create_arraybuffer_obj(js, buffer);
+  free_array_buffer_data(js, buffer);
+  return ab_obj;
 }
 
 static bool crypto_algorithm_is(ant_t *js, ant_value_t algorithm, const char *expected) {
@@ -897,11 +899,7 @@ static ant_value_t crypto_subtle_digest_impl(
     return js_mkerr(js, "Digest failed");
   }
 
-  ArrayBufferData *buffer = create_array_buffer_data(js, digest_len);
-  if (!buffer) return js_mkerr(js, "Out of memory");
-  if (digest_len > 0) memcpy(buffer->data, digest, digest_len);
-  
-  return create_arraybuffer_obj(js, buffer);
+  return crypto_make_arraybuffer(js, digest, digest_len);
 }
 
 static ant_value_t crypto_subtle_call(

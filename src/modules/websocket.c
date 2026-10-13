@@ -504,6 +504,7 @@ static void websocket_emit_message(websocket_state_t *ws, const uint8_t *data, s
       if (!ab) return;
       if (len > 0) memcpy(ab->data, data, len);
       data_val = create_arraybuffer_obj(js, ab);
+      free_array_buffer_data(js, ab);
     }
   } else data_val = js_mkstr(js, data, len);
 

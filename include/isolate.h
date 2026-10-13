@@ -236,8 +236,9 @@ struct ant_isolate_t {
 
   struct {
     ArrayBufferData **entries;
-    size_t count;
-    size_t cap;
+    uint32_t count;
+    uint32_t cap;
+    size_t bytes;
     size_t meta_bytes;
   } buffers;
 

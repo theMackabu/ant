@@ -362,7 +362,7 @@ static void wasi_bind_memory_export(
   buffer->data = (uint8_t *)mem_data;
   buffer->length = mem_size;
   buffer->capacity = mem_size;
-  buffer->ref_count = 1;
+  buffer->ref_count = 0;
 
   ant_value_t ab = create_arraybuffer_obj(js, buffer);
   ant_value_t mem_obj = js_mkobj(js);

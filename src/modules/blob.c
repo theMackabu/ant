@@ -215,7 +215,10 @@ static ant_value_t js_blob_array_buffer(ant_params_t) {
   if (!abd) { js_reject_promise(js, promise, js_mkerr(js, "out of memory")); return promise; }
   if (sz > 0 && bd) memcpy(abd->data, bd->data, sz);
 
-  js_resolve_promise(js, promise, create_arraybuffer_obj(js, abd));
+  ant_value_t ab_obj = create_arraybuffer_obj(js, abd);
+  free_array_buffer_data(js, abd);
+  js_resolve_promise(js, promise, ab_obj);
+
   return promise;
 }
 

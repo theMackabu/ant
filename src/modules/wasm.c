@@ -839,6 +839,7 @@ static ant_value_t js_wasm_module_custom_sections(ant_params_t) {
         if (!buffer) return js_mkerr(js, "out of memory");
         memcpy(buffer->data, handle->bytes + data_start, section_end - data_start);
         js_arr_push(js, result, create_arraybuffer_obj(js, buffer));
+        free_array_buffer_data(js, buffer);
       }
     }
 

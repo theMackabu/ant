@@ -227,15 +227,21 @@ static void register_buffer(ant_t *js, ArrayBufferData *data) {
   if (js->buffers.count >= UINT32_MAX) return;
   
   if (js->buffers.count == js->buffers.cap) {
-    size_t cap = js->buffers.cap ? js->buffers.cap * 2 : BUFFER_REGISTRY_INITIAL_CAP;
+    size_t cap = js->buffers.cap ? (size_t)js->buffers.cap * 2 : BUFFER_REGISTRY_INITIAL_CAP;
+    if (cap > UINT32_MAX) cap = UINT32_MAX;
+    
     ArrayBufferData **entries = realloc(js->buffers.entries, cap * sizeof(*entries));
     if (!entries) return;
+    
     js->buffers.entries = entries;
-    js->buffers.cap = cap;
+    js->buffers.cap = (uint32_t)cap;
   }
   
   js->buffers.entries[js->buffers.count++] = data;
-  data->registry_slot = (uint32_t)js->buffers.count;
+  js->buffers.bytes += data->capacity;
+  data->registry_slot = js->buffers.count;
+  
+  gc_note_offheap_alloc(js, data->capacity);
 }
 
 static void unregister_buffer(ant_t *js, ArrayBufferData *data) {
@@ -248,6 +254,7 @@ static void unregister_buffer(ant_t *js, ArrayBufferData *data) {
   js->buffers.entries[idx] = last;
   last->registry_slot = (uint32_t)idx + 1;
   data->registry_slot = 0;
+  js->buffers.bytes -= data->capacity;
 }
 
 static inline ssize_t normalize_index(ssize_t idx, ssize_t len) {
@@ -882,7 +889,10 @@ static ant_value_t js_typedarray_map(ant_params_t) {
 
   ArrayBufferData *buffer = create_array_buffer_data(js, ta_data->byte_length);
   if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
+  
   ant_value_t out = create_typed_array_like(js, this_val, ta_data->type, buffer, 0, ta_data->length);
+  free_array_buffer_data(js, buffer);
+  
   if (is_err(out)) return out;
   TypedArrayData *out_ta = buffer_get_typedarray_data(out);
 
@@ -927,7 +937,10 @@ static ant_value_t js_typedarray_filter(ant_params_t) {
   size_t count = kept.len;
   ArrayBufferData *buffer = create_array_buffer_data(js, count * get_element_size(ta_data->type));
   if (!buffer) { out = js_mkerr(js, "Failed to allocate buffer"); goto done; }
+  
   out = create_typed_array_like(js, this_val, ta_data->type, buffer, 0, count);
+  free_array_buffer_data(js, buffer);
+  
   if (is_err(out)) goto done;
   TypedArrayData *out_ta = buffer_get_typedarray_data(out);
 
@@ -4613,12 +4626,13 @@ void cleanup_buffer_module(ant_t *js) {
   js->buffers.entries = NULL;
   js->buffers.count = 0;
   js->buffers.cap = 0;
+  js->buffers.bytes = 0;
   js->buffers.meta_bytes = 0;
 }
 
 size_t buffer_get_external_memory(ant_t *js) {
-  size_t total = js->buffers.meta_bytes + js->buffers.cap * sizeof(ArrayBufferData *);
-  for (size_t i = 0; i < js->buffers.count; i++)
-    total += sizeof(ArrayBufferData) + js->buffers.entries[i]->capacity;
-  return total;
+  return
+    js->buffers.meta_bytes + js->buffers.bytes +
+    js->buffers.cap * sizeof(ArrayBufferData *) +
+    js->buffers.count * sizeof(ArrayBufferData);
 }
