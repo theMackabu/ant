@@ -133,23 +133,6 @@ static void tls_remove_active_socket(ant_tls_socket_t *socket) {
   Ant_List_Remove(socket);
 }
 
-static ant_value_t tls_call_value(
-  ant_t *js,
-  ant_value_t fn,
-  ant_value_t this_val,
-  ant_value_t *args,
-  int nargs
-) {
-  ant_value_t saved_this = js->this_val;
-  ant_value_t result = js_mkundef();
-
-  js->this_val = this_val;
-  if (vtype(fn) == kTypeBuiltin) result = sv_invoke_builtin(js, fn, args, nargs, js_mkundef());
-  else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, js_mkundef());
-  js->this_val = saved_this;
-  return result;
-}
-
 static bool tls_emit(ant_t *js, ant_value_t target, const char *event, ant_value_t *args, int nargs) {
   return eventemitter_emit_args(js, target, event, args, nargs);
 }
@@ -503,8 +486,7 @@ static void tls_socket_write_cb(uv_write_t *req, int status) {
   } else {
     socket->bytes_written += write->len;
     tls_socket_sync_state(socket);
-    if (is_callable(write->callback))
-      tls_call_value(js, write->callback, js_mkundef(), NULL, 0);
+    if (is_callable(write->callback)) sv_call_value(js, write->callback, js_mkundef(), NULL, 0);
   }
 
   free(write->data);
@@ -666,8 +648,9 @@ static ant_value_t js_tls_socket_write(ant_params_t) {
   if (!socket) return Ant_Exception_Current(js);
   if (socket->destroyed || socket->closing) return js_false;
   if (!tls_parse_write_args(js, args, nargs, &bytes, &len, &callback, &err)) return err;
+  
   if (len == 0) {
-    if (is_callable(callback)) tls_call_value(js, callback, js_mkundef(), NULL, 0);
+    if (is_callable(callback)) sv_call_value(js, callback, js_mkundef(), NULL, 0);
     return js_true;
   }
 
@@ -843,7 +826,7 @@ static ant_value_t js_tls_socket_renegotiate(ant_params_t) {
   else if (nargs > 0 && is_callable(args[0])) callback = args[0];
   if (is_callable(callback)) {
     ant_value_t cb_args[] = {js_mknull()};
-    tls_call_value(js, callback, js_getthis(js), cb_args, 1);
+    sv_call_value(js, callback, js_getthis(js), cb_args, 1);
   }
   return js_true;
 }

@@ -191,12 +191,7 @@ ant_value_t sv_vm_call(
     ant_value_t native_this = sv_call_normalize_this(js, this_val, mode);
 
     if (out_this) *out_this = native_this;
-    ant_value_t saved_this = js->this_val;
-
-    js->this_val = native_this;
-    ant_value_t native_res = sv_invoke_builtin(js, func, args, argc, js_mkundef());
-    js->this_val = saved_this;
-
+    ant_value_t native_res = sv_call_builtin_this(js, func, native_this, args, argc, js_mkundef());
     sv_vm_maybe_checkpoint_microtasks(js);
     return native_res;
   }

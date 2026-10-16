@@ -248,24 +248,6 @@ static void fs_remove_active_watcher(fs_watcher_t *watcher) {
   }
 }
 
-static ant_value_t fs_call_value(
-  ant_t *js,
-  ant_value_t fn,
-  ant_value_t this_val,
-  ant_value_t *args,
-  int nargs
-) {
-  ant_value_t saved_this = js->this_val;
-  ant_value_t result = js_mkundef();
-
-  js->this_val = this_val;
-  if (vtype(fn) == kTypeBuiltin) result = sv_invoke_builtin(js, fn, args, nargs, js_mkundef());
-  else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, js_mkundef());
-  js->this_val = saved_this;
-  
-  return result;
-}
-
 static ant_value_t fs_call_callback(
   ant_t *js, ant_value_t fn,
   ant_value_t *args, int nargs
@@ -426,12 +408,12 @@ static ant_value_t fs_stream_close(ant_params_t) {
   if (nargs > 0 && is_callable(args[0])) {
     eventemitter_add_listener(js, stream_obj, "close", args[0], true);
     if (js_truthy(js, js_get(js, stream_obj, "closed")))
-      fs_call_value(js, args[0], js_mkundef(), NULL, 0);
+      sv_call_value(js, args[0], js_mkundef(), NULL, 0);
   }
 
   if (!js_truthy(js, js_get(js, stream_obj, "destroyed"))) {
     ant_value_t destroy_fn = js_getprop_fallback(js, stream_obj, "destroy");
-    if (is_callable(destroy_fn)) fs_call_value(js, destroy_fn, stream_obj, NULL, 0);
+    if (is_callable(destroy_fn)) sv_call_value(js, destroy_fn, stream_obj, NULL, 0);
   }
 
   return stream_obj;
@@ -455,7 +437,7 @@ static ant_value_t fs_readstream__read(ant_params_t) {
     ant_value_t err = fs_stream_error(js, stream_obj, "open", fd);
     GC_ROOT_PIN(js, err);
     ant_value_t destroy_fn = js_getprop_fallback(js, stream_obj, "destroy");
-    if (is_callable(destroy_fn)) fs_call_value(js, destroy_fn, stream_obj, &err, 1);
+    if (is_callable(destroy_fn)) sv_call_value(js, destroy_fn, stream_obj, &err, 1);
     GC_ROOT_RESTORE(js, mark);
     return js_mkundef();
   }
@@ -478,7 +460,7 @@ static ant_value_t fs_readstream__read(ant_params_t) {
     err = js_take_thrown(js, err);
     GC_ROOT_PIN(js, err);
     ant_value_t destroy_fn = js_getprop_fallback(js, stream_obj, "destroy");
-    if (is_callable(destroy_fn)) fs_call_value(js, destroy_fn, stream_obj, &err, 1);
+    if (is_callable(destroy_fn)) sv_call_value(js, destroy_fn, stream_obj, &err, 1);
     GC_ROOT_RESTORE(js, mark);
     return js_mkundef();
   }
@@ -494,7 +476,7 @@ static ant_value_t fs_readstream__read(ant_params_t) {
     GC_ROOT_PIN(js, err);
     ant_value_t destroy_fn = js_getprop_fallback(js, stream_obj, "destroy");
     free_array_buffer_data(js, ab);
-    if (is_callable(destroy_fn)) fs_call_value(js, destroy_fn, stream_obj, &err, 1);
+    if (is_callable(destroy_fn)) sv_call_value(js, destroy_fn, stream_obj, &err, 1);
     GC_ROOT_RESTORE(js, mark);
     return js_mkundef();
   }
@@ -2338,7 +2320,7 @@ static ant_value_t fs_path_join(ant_t *js, const char *a, const char *b) {
   join_args[1] = js_mkstr(js, b, strlen(b));
   GC_ROOT_PIN(js, join_args[1]);
   
-  ant_value_t joined = fs_call_value(js, join, path_mod, join_args, 2);
+  ant_value_t joined = sv_call_value(js, join, path_mod, join_args, 2);
   GC_ROOT_RESTORE(js, root_mark);
   
   if (is_err(joined)) return joined;
@@ -2924,7 +2906,7 @@ static ant_value_t fs_copy_path_sync_impl(
       js_mkstr(js, src_cstr, strlen(src_cstr)),
       js_mkstr(js, dest_cstr, strlen(dest_cstr))
     };
-    ant_value_t included = fs_call_value(
+    ant_value_t included = sv_call_value(
       js, opts->filter, js_mkundef(), filter_args, 2
     );
     if (is_err(included)) return included;
@@ -4982,7 +4964,7 @@ static ant_value_t builtin_fs_fsync(ant_params_t) {
     ant_value_t err = fs_mk_uv_error(js, result, "fsync", NULL, NULL);
     err = js_take_thrown(js, err);
     ant_value_t cb_args[1] = { err };
-    fs_call_value(js, req->callback_fn, js_mkundef(), cb_args, 1);
+    sv_call_value(js, req->callback_fn, js_mkundef(), cb_args, 1);
     remove_pending_request(req);
     free_fs_request(req);
   }
@@ -5879,7 +5861,7 @@ static ant_value_t fs_callback_wrapper_call(ant_params_t) {
     call_nargs--;
   }
 
-  result = fs_call_value(js, original, this_arg, args, call_nargs);
+  result = sv_call_value(js, original, this_arg, args, call_nargs);
   GC_ROOT_PIN(js, result);
 
   if (!is_callable(callback)) {
@@ -5930,7 +5912,7 @@ static ant_value_t fs_promise_wrapper_call(ant_params_t) {
   GC_ROOT_PIN(js, original);
   GC_ROOT_PIN(js, this_arg);
 
-  result = fs_call_value(js, original, this_arg, args, nargs);
+  result = sv_call_value(js, original, this_arg, args, nargs);
   GC_ROOT_PIN(js, result);
 
   if (is_err(result) || Ant_Exception_Pending(js)) {

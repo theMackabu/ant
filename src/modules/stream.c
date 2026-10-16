@@ -829,13 +829,7 @@ ant_value_t stream_readable_begin_flowing(ant_t *js, ant_value_t stream_obj) {
   if (!is_object_type(state)) return js_mkundef();
   if (!js_truthy(js, js_get(js, state, "flowing"))) return js_mkundef();
 
-  {
-    ant_value_t saved_this = js->this_val;
-    js->this_val = stream_obj;
-    js_stream_resume(js, NULL, 0, js_mkundef());
-    js->this_val = saved_this;
-  }
-
+  sv_call_native_this(js, js_stream_resume, stream_obj, NULL, 0);
   stream_readable_maybe_read(js, stream_obj);
   stream_readable_flush(js, stream_obj);
   
@@ -1241,18 +1235,18 @@ static ant_value_t stream_writable_write_done(ant_params_t) {
 
   if (!is_undefined(err) && !is_null(err)) {
     ant_value_t destroy_args[1] = { err };
-    ant_value_t saved_this = 0;
 
-    if (priv) { priv->pending_final = false; priv->writing = false; }
+    if (priv) { 
+      priv->pending_final = false; 
+      priv->writing = false;
+    }
+    
     stream_set_errored(js, stream_obj, err);
     if (is_callable(callback)) stream_call_callback(js, callback, &err, 1);
+    
     stream_writable_fail_buffered(js, stream_obj, err);
-
-    saved_this = js->this_val;
-    js->this_val = stream_obj;
-    js_stream_destroy(js, destroy_args, 1, js_mkundef());
-    js->this_val = saved_this;
-
+    sv_call_native_this(js, js_stream_destroy, stream_obj, destroy_args, 1);
+    
     return js_mkundef();
   }
 
@@ -1491,12 +1485,8 @@ static ant_value_t stream_writable_finish_tick(ant_params_t) {
       ? js_get(js, options, "autoDestroy")
       : js_mkundef();
 
-    if (is_undefined(auto_destroy) || js_truthy(js, auto_destroy)) {
-      ant_value_t saved_this = js->this_val;
-      js->this_val = stream_obj;
-      js_stream_destroy(js, NULL, 0, js_mkundef());
-      js->this_val = saved_this;
-    }
+    if (is_undefined(auto_destroy) || js_truthy(js, auto_destroy))
+      sv_call_native_this(js, js_stream_destroy, stream_obj, NULL, 0);
   }
 
   return js_mkundef();
@@ -1510,10 +1500,7 @@ static ant_value_t stream_writable_end_done(ant_params_t) {
 
   if (!is_undefined(err) && !is_null(err)) {
     ant_value_t destroy_args[1] = { err };
-    ant_value_t saved_this = js->this_val;
-    js->this_val = stream_obj;
-    js_stream_destroy(js, destroy_args, 1, js_mkundef());
-    js->this_val = saved_this;
+    sv_call_native_this(js, js_stream_destroy, stream_obj, destroy_args, 1);
     if (is_callable(callback)) stream_call_callback(js, callback, &err, 1);
     return js_mkundef();
   }
@@ -1558,10 +1545,7 @@ static ant_value_t stream_writable_end_after_write(ant_params_t) {
 
   if (!is_undefined(err) && !is_null(err)) {
     ant_value_t destroy_args[1] = { err };
-    ant_value_t saved_this = js->this_val;
-    js->this_val = stream_obj;
-    js_stream_destroy(js, destroy_args, 1, js_mkundef());
-    js->this_val = saved_this;
+    sv_call_native_this(js, js_stream_destroy, stream_obj, destroy_args, 1);
     if (is_callable(callback)) stream_call_callback(js, callback, &err, 1);
     return js_mkundef();
   }
@@ -1942,10 +1926,7 @@ static ant_value_t stream_readable_from_fail(ant_t *js, ant_value_t state_obj, a
   stream_release_reader(js, state_obj);
   if (stream_is_instance(readable)) {
     ant_value_t destroy_args[1] = { error };
-    ant_value_t saved_this = js->this_val;
-    js->this_val = readable;
-    js_stream_destroy(js, destroy_args, 1, js_mkundef());
-    js->this_val = saved_this;
+    sv_call_native_this(js, js_stream_destroy, readable, destroy_args, 1);
   }
   GC_ROOT_RESTORE(js, root_mark);
   return js_mkundef();

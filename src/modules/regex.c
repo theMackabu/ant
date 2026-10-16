@@ -2482,12 +2482,7 @@ static ant_value_t regexp_exec_with_exec_fn(ant_t *js, ant_value_t rx, ant_value
   }
 
   ant_value_t call_args[1] = { str };
-  ant_value_t saved = js->this_val;
-  js->this_val = rx;
-  ant_value_t result = builtin_regexp_exec(js, call_args, 1, js_mkundef());
-  js->this_val = saved;
-
-  return result;
+  return sv_call_native_this(js, builtin_regexp_exec, rx, call_args, 1);
 }
 
 static ant_value_t regexp_exec_abstract(ant_t *js, ant_value_t rx, ant_value_t str) {
@@ -2943,9 +2938,7 @@ static ant_value_t builtin_string_matchAll(ant_params_t) {
   if (is_err(rx)) return rx;
 
   ant_value_t ma_args[1] = { str };
-  js->this_val = rx;
-  
-  return builtin_regexp_symbol_matchAll(js, ma_args, 1, js_mkundef());
+  return sv_call_native_this(js, builtin_regexp_symbol_matchAll, rx, ma_args, 1);
 }
 
 static __attribute__((noinline)) const char *find_bytes_long(

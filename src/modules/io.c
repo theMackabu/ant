@@ -593,22 +593,6 @@ void print_repl_value(ant_t *js, ant_value_t val, FILE *stream) {
   if (cstr.needs_free) free((void *)cstr.ptr);
 }
 
-static ant_value_t console_call_value(
-  ant_t *js, ant_value_t fn,
-  ant_value_t this_val,
-  ant_value_t *args, int nargs
-) {
-  ant_value_t saved_this = js->this_val;
-  ant_value_t result = js_mkundef();
-
-  js->this_val = this_val;
-  if (vtype(fn) == kTypeBuiltin) result = sv_invoke_builtin(js, fn, args, nargs, js_mkundef());
-  else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, js_mkundef());
-  js->this_val = saved_this;
-
-  return result;
-}
-
 static ant_value_t console_get_process_stream(ant_t *js, const char *name) {
   ant_value_t process_obj = js_get(js, js_glob(js), "process");
   return js_get(js, process_obj, name);
@@ -637,7 +621,7 @@ static bool console_write_to_stream_obj(ant_t *js, ant_value_t stream_obj, const
 
   bool was_pending = Ant_Exception_Pending(js);
   ant_value_t argv[1] = { js_mkstr(js, data, len) };
-  ant_value_t result = console_call_value(js, write_fn, stream_obj, argv, 1);
+  ant_value_t result = sv_call_value(js, write_fn, stream_obj, argv, 1);
   
   if (is_err(result)) return false;
   if (Ant_Exception_Pending(js) && !was_pending) return false;

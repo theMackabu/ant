@@ -308,11 +308,7 @@ static ant_value_t realm_lib_evaluate(ant_params_t) {
   const char *source = js_getstr(js, args[1], &len);
   
   ant_realm_t *prev = ant_realm_enter(js, realm);
-  ant_value_t saved_this = js->this_val;
-  js->this_val = js->global_this;
-  
   js_eval_result_t result = js_eval_bytecode_repl(js, source, len);
-  js->this_val = saved_this;
   ant_realm_enter(js, prev);
   
   return result.value;

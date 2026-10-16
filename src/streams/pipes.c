@@ -778,13 +778,7 @@ static ant_value_t js_rs_tee(ant_params_t) {
 }
 
 ant_value_t readable_stream_tee(ant_t *js, ant_value_t source) {
-  ant_value_t saved_this = js->this_val;
-  js->this_val = source;
-  
-  ant_value_t result = js_rs_tee(js, NULL, 0, js_mkundef());
-  js->this_val = saved_this;
-  
-  return result;
+  return sv_call_native_this(js, js_rs_tee, source, NULL, 0);
 }
 
 void init_pipes_proto(ant_t *js, ant_value_t rs_proto) {

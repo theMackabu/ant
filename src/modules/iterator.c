@@ -366,22 +366,12 @@ bool js_iter_next(ant_t *js, iterator_t *it, ant_value_t *out) {
   if (it->advance) return it->advance(js, it, out);
 
   ant_value_t next_fn = it->next_fn;
-  ant_value_t result;
-
-  if (vtype(next_fn) == kTypeBuiltin) {
-    ant_value_t old_this = js->this_val;
-    js->this_val = it->iterator;
-    result = sv_invoke_builtin(js, next_fn, NULL, 0, js_mkundef());
-    js->this_val = old_this;
-  }
-
-  else if (is_callable(next_fn)) 
-    result = sv_vm_call(js->vm, js, next_fn, it->iterator, NULL, 0, NULL, js_mkundef());
-  else {
+  if (!is_callable(next_fn)) {
     js_mkerr_typed(js, JS_ERR_TYPE, "iterator next is not callable");
     return false;
   }
 
+  ant_value_t result = sv_call_value(js, next_fn, it->iterator, NULL, 0);
   if (is_err(result)) return false;
   
   if (!is_object_type(result) && vtype(result) != kTypeBuiltin) {
@@ -497,14 +487,8 @@ static ant_value_t wrap_iter_next(ant_params_t) {
       js_set_slot(self, SLOT_ENTRIES, js_mkundef());
     }}
 
-    ant_value_t step;
-    if (vtype(next_fn) == kTypeBuiltin) {
-      ant_value_t old_this = js->this_val;
-      js->this_val = source;
-      step = sv_invoke_builtin(js, next_fn, NULL, 0, js_mkundef());
-      js->this_val = old_this;
-    } else step = sv_vm_call(js->vm, js, next_fn, source, NULL, 0, NULL, js_mkundef());
-    
+    ant_value_t step = sv_call_value(js, next_fn, source, NULL, 0);
+
     if (is_err(step)) return step;
     ant_value_t done = js_getprop_fallback(js, step, "done");
     if (is_err(done)) return done;

@@ -68,15 +68,7 @@ static inline ant_value_t sv_disposal_record_call(ant_t *js, ant_value_t record)
   if (!is_callable(method))
     return js_mkerr_typed(js, JS_ERR_TYPE, "disposer is not callable");
   
-  if (vtype(method) == kTypeBuiltin) {
-    ant_value_t saved_this = js->this_val;
-    js->this_val = this_arg;
-    ant_value_t result = sv_invoke_builtin(js, method, args, nargs, js_mkundef());
-    js->this_val = saved_this;
-    return result;
-  }
-
-  return sv_vm_call(js->vm, js, method, this_arg, args, nargs, NULL, js_mkundef());
+  return sv_call_value(js, method, this_arg, args, nargs);
 }
 
 static inline ant_value_t sv_dispose_resource(ant_t *js, ant_value_t resource, bool is_async) {
@@ -93,15 +85,7 @@ static inline ant_value_t sv_dispose_resource(ant_t *js, ant_value_t resource, b
       : "resource is not disposable"
   );
 
-  if (vtype(method) == kTypeBuiltin) {
-    ant_value_t saved_this = js->this_val;
-    js->this_val = resource;
-    ant_value_t result = sv_invoke_builtin(js, method, NULL, 0, js_mkundef());
-    js->this_val = saved_this;
-    return result;
-  }
-
-  return sv_vm_call(js->vm, js, method, resource, NULL, 0, NULL, js_mkundef());
+  return sv_call_value(js, method, resource, NULL, 0);
 }
 
 static inline ant_value_t sv_using_push(

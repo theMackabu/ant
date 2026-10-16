@@ -30,6 +30,7 @@
 #include "errors.h"
 #include "internal.h"
 #include "descriptors.h"
+#include "silver/call.h"
 #include "tty_ctrl.h"
 
 #include "gc/modules.h"
@@ -1175,12 +1176,8 @@ static ant_value_t rl_async_iter_return(ant_params_t) {
     ant_value_t iface_obj = js_get(js, state, "iface");
     rl_interface_t *iface = get_interface(js, iface_obj);
     
-    if (iface && !iface->closed) {
-      ant_value_t old_this = js_getthis(js);
-      js_setthis(js, iface_obj);
-      rl_interface_close(js, NULL, 0, js_mkundef());
-      js_setthis(js, old_this);
-    } else rl_async_iter_finish(js, state);
+    if (iface && !iface->closed) sv_call_native_this(js, rl_interface_close, iface_obj, NULL, 0);
+    else rl_async_iter_finish(js, state);
   }
 
   js_resolve_promise(js, promise, js_iter_result(js, false, js_mkundef()));

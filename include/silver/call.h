@@ -295,6 +295,40 @@ ant_value_t sv_vm_call_explicit_this(
   ant_value_t this_val, ant_value_t *args, int argc
 );
 
+static inline ant_value_t sv_call_native_this(
+  ant_t *js, ant_cfunc_t fn, ant_value_t this_val,
+  ant_value_t *args, int nargs
+) {
+  ant_value_t saved_this = js->this_val;
+  js->this_val = this_val;
+  
+  ant_value_t result = fn(js, args, nargs, js_mkundef());
+  js->this_val = saved_this;
+  
+  return result;
+}
+
+static inline ant_value_t sv_call_builtin_this(
+  ant_t *js, ant_value_t builtin, ant_value_t this_val,
+  ant_value_t *args, int nargs, ant_value_t new_target
+) {
+  ant_value_t saved_this = js->this_val;
+  js->this_val = this_val;
+  
+  ant_value_t result = sv_invoke_builtin(js, builtin, args, nargs, new_target);
+  js->this_val = saved_this;
+  
+  return result;
+}
+
+static inline ant_value_t sv_call_value(
+  ant_t *js, ant_value_t fn, ant_value_t this_val,
+  ant_value_t *args, int nargs
+) {
+  if (vtype(fn) == kTypeBuiltin) return sv_call_builtin_this(js, fn, this_val, args, nargs, js_mkundef());
+  return sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, js_mkundef());
+}
+
 static inline bool sv_closure_is_plain_sync(const sv_closure_t *closure) {
   return 
     closure && closure->call_flags == 0 && closure->func &&
