@@ -36,6 +36,7 @@ static void jit_emit_forward_arguments_call(jit_compile_t *c, bool is_tail) {
     MIR_new_mem_op(c->ctx, MIR_T_P, offsetof(sv_closure_t, func), closure, 0, 1)));
   MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ,
     MIR_new_label_op(c->ctx, slow), MIR_new_reg_op(c->ctx, function), MIR_new_int_op(c->ctx, 0)));
+  mir_emit_realm_guard(c->ctx, c->jit_func, function, code, c->js, slow);
   MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
     MIR_new_reg_op(c->ctx, code),
     MIR_new_mem_op(c->ctx, MIR_T_P, offsetof(sv_func_t, jit_code), function, 0, 1)));
@@ -468,6 +469,7 @@ void jit_emit_methods(jit_compile_t *c) {
                                    MIR_new_reg_op(c->ctx, c->r_closure)));
 
       MIR_reg_t r_jit_ptr = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_jptr);
+      mir_emit_realm_guard(c->ctx, c->jit_func, r_callee_fn, r_jit_ptr, c->js, lbl_cm_interp);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_MOV,
                                    MIR_new_reg_op(c->ctx, r_jit_ptr),

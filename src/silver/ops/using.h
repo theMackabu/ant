@@ -71,7 +71,7 @@ static inline ant_value_t sv_disposal_record_call(ant_t *js, ant_value_t record)
   if (vtype(method) == kTypeBuiltin) {
     ant_value_t saved_this = js->this_val;
     js->this_val = this_arg;
-    ant_value_t result = sv_invoke_native(js, js_as_cfunc(method), args, nargs, js_mkundef());
+    ant_value_t result = sv_invoke_builtin(js, method, args, nargs, js_mkundef());
     js->this_val = saved_this;
     return result;
   }
@@ -96,7 +96,7 @@ static inline ant_value_t sv_dispose_resource(ant_t *js, ant_value_t resource, b
   if (vtype(method) == kTypeBuiltin) {
     ant_value_t saved_this = js->this_val;
     js->this_val = resource;
-    ant_value_t result = sv_invoke_native(js, js_as_cfunc(method), NULL, 0, js_mkundef());
+    ant_value_t result = sv_invoke_builtin(js, method, NULL, 0, js_mkundef());
     js->this_val = saved_this;
     return result;
   }

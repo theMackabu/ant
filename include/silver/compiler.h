@@ -44,6 +44,11 @@ typedef struct {
 } sv_binding_meta_t;
 
 typedef struct {
+  int local;
+  int depth;
+} sv_with_scope_t;
+
+typedef struct {
   const char *name;
   uint32_t name_len;
   uint32_t name_hash;
@@ -215,7 +220,11 @@ typedef struct sv_compiler {
   uint8_t *unwind_kinds;
   int unwind_count;
   int unwind_cap;
+  
+  sv_with_scope_t *with_scopes;
+  int with_cap;
   int with_depth;
+  
   int completion_local;
   int strict_args_local;
   int new_target_local;

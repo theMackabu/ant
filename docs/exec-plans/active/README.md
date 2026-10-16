@@ -8,6 +8,7 @@ Store in-progress execution plans here.
 
 ## Active
 
+- [Realms](realms.md)
 - [Per-Error Capture and Lazy Error Stacks](per-error-capture-lazy-stack.md)
 - [Per-Isolate Event Loops](per-isolate-event-loops.md)
 - [Shared I/O Formatting in Wasm](wasm-shared-io.md)

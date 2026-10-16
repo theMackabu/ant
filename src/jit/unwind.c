@@ -4,6 +4,7 @@
 
 #include "jit_internal.h"
 #include "silver/engine.h"
+#include "silver/feedback.h"
 
 #include <pthread.h>
 #include <unwind.h>
@@ -429,6 +430,21 @@ void jit_code_info(
   reg->len++;
   if (!reg->lo || r.start < reg->lo) reg->lo = r.start;
   if (r.end > reg->hi) reg->hi = r.end;
+}
+
+void jit_drop_all_code(sv_jit_ctx_t *jc) {
+  struct jit_code_registry *reg = jc ? jc->code_registry : NULL;
+  if (!reg) return;
+  
+  for (size_t i = 0; i < reg->len; i++) {
+    sv_func_t *func = reg->ranges[i].func;
+    if (!func) continue;
+    func->jit_code = NULL;
+    func->jit_code_cold = false;
+    func->back_edge_count = 0;
+    func->jit_compiled_tfb_ver = 0;
+    func->call_count = SV_JIT_THRESHOLD - SV_JIT_RECOMPILE_DELAY;
+  }
 }
 
 void jit_code_registry_destroy(sv_jit_ctx_t *jc) {

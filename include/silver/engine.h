@@ -491,9 +491,14 @@ typedef struct {
   const char *name;
   const char *display_name;
   const char *filename;
+  
+  ant_value_t import_handler;
+  ant_value_t import_referrer;
+  
   sv_srcpos_t *srcpos;
   const char *source;
   bool display_name_varies;
+  
   int srcpos_count;
   int source_line;
   int source_len;
@@ -523,6 +528,7 @@ struct sv_func {
   sv_obj_site_cache_t *obj_sites;
   sv_upval_desc_t *upval_descs;
   sv_func_debug_t *debug;
+  ant_realm_t *realm;
 
   union {
     sv_type_info_t *local_types;
@@ -571,6 +577,9 @@ struct sv_func {
   bool jit_code_cold: 1;
   bool jit_code_retier: 1;
 
+  uint8_t jit_param_counters_off;
+  uint8_t jit_snapshot_resets;
+
   uint32_t call_count;
   uint32_t back_edge_count;
   uint32_t jit_osr_threshold;
@@ -590,9 +599,6 @@ struct sv_func {
   bool jit_inline_reuse_empty: 1;
   bool fb_unit_watched: 1;
   bool fb_unit_target: 1;
-  
-  uint8_t jit_param_counters_off;
-  uint8_t jit_snapshot_resets;
 
   sv_code_unit_t *unit;
   struct sv_func *unit_next;
@@ -716,7 +722,6 @@ typedef struct sv_frame {
   uint16_t handler_base;
   uint16_t handler_top;
   
-  ant_value_t with_obj;
   ant_value_t arguments_obj;
   ant_value_t eval_env;
 } sv_frame_t;
@@ -1076,7 +1081,7 @@ static inline ant_value_t sv_normalize_this_for_frame(ant_t *js, sv_func_t *func
   if (func->is_strict) return this_val;
   
   uint8_t type = vtype(this_val);
-  if (type == kTypeUndefined || type == kTypeNull) return js->global;
+  if (type == kTypeUndefined || type == kTypeNull) return js->global_this;
   if (is_object_type(this_val) || type == kTypeBuiltin) return this_val;
   
   return js_normalize_sloppy_this(js, this_val);

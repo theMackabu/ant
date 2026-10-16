@@ -780,15 +780,6 @@ static bool cron_relative_ms(
   return true;
 }
 
-static ant_value_t cron_make_date(ant_t *js, int64_t epoch_ms) {
-  ant_value_t object = Ant_Object_CreateBare(js);
-  ant_value_t prototype = js->builtins.date_proto;
-  if (is_object_type(prototype)) js_set_proto_init(object, prototype);
-  js_set_slot(object, SLOT_DATA, js_mknum((double)epoch_ms));
-  js_set_slot(object, SLOT_BRAND, js_mknum(BRAND_DATE));
-  return object;
-}
-
 static void cron_add_job(cron_job_t *job) {
   job->prev = NULL;
   job->next = cron_state.jobs;
@@ -1039,8 +1030,9 @@ static ant_value_t cron_parse(ant_params_t) {
 
   int64_t next = 0;
   bool found = false;
+  
   if (!cron_next_epoch(js, &expression, zone, relative, &next, &found, &error)) return error;
-  return found ? cron_make_date(js, next) : js_mknull();
+  return found ? js_mkdate(js, (double)next) : js_mknull();
 }
 
 static ant_value_t cron_create_job(

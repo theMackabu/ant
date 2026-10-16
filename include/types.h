@@ -7,6 +7,7 @@
 typedef unsigned long long u64;
 
 typedef struct ant_isolate_t      ant_t;
+typedef struct ant_realm          ant_realm_t;
 typedef struct ant_pool_block     ant_pool_block_t;
 typedef struct ant_http_request_s ant_http_request_t;
 typedef struct ant_process_state  ant_process_state_t;

@@ -830,7 +830,7 @@ void jit_emit_properties(jit_compile_t *c) {
           c->ctx, c->jit_func, c->js, c->func, c->bc_off, pf_ic_idx, atom,
           c->r_js, obj, val, slow, c->r_ic_epoch_val,
           c->shape_transition_proto, c->imp_shape_transition,
-          c->remember_obj_proto, c->imp_remember_obj, false);
+          c->imp_protector_store, c->remember_obj_proto, c->imp_remember_obj, false);
       if (fast) {
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, no_err)));

@@ -529,7 +529,7 @@ static ant_value_t server_call_fetch(server_runtime_t *server, ant_value_t reque
   ant_value_t result = js_mkundef();
 
   js->this_val = server->export_obj;
-  if (vtype(server->fetch_fn) == kTypeBuiltin) result = sv_invoke_native(js, js_as_cfunc(server->fetch_fn), args, 2, js_mkundef());
+  if (vtype(server->fetch_fn) == kTypeBuiltin) result = sv_invoke_builtin(js, server->fetch_fn, args, 2, js_mkundef());
   else result = sv_vm_call(js->vm, js, server->fetch_fn, server->export_obj, args, 2, NULL, js_mkundef());
   js->this_val = saved_this;
   

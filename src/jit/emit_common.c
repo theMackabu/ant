@@ -1,3 +1,4 @@
+#include "handles.h"
 #include "compile.h"
 
 void jit_emit_exit_ret(jit_compile_t *c, MIR_op_t ret_op) {
@@ -8,6 +9,29 @@ void jit_emit_exit_ret(jit_compile_t *c, MIR_op_t ret_op) {
                     c->has_captured_slots, c->captured_params, c->param_count,
                     c->has_captures, c->captured_locals, c->n_locals,
                     &c->reg_site_n, ret_op);
+}
+
+void jit_emit_interrupt_poll(jit_compile_t *c) {
+  if (!c->js->interrupts_armed) return;
+  
+  MIR_label_t go = MIR_new_label(c->ctx);
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_tmp2),
+                               MIR_new_mem_op(c->ctx, MIR_T_U8, (MIR_disp_t)offsetof(ant_t, interrupt_pending),
+                                              c->r_js, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, go),
+                               MIR_new_reg_op(c->ctx, c->r_tmp2), MIR_new_int_op(c->ctx, 0)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_call_insn(c->ctx, 6,
+                                    MIR_new_ref_op(c->ctx, c->helper1_proto),
+                                    MIR_new_ref_op(c->ctx, c->imp_interrupt),
+                                    MIR_new_reg_op(c->ctx, c->r_err_tmp),
+                                    MIR_new_reg_op(c->ctx, c->r_vm),
+                                    MIR_new_reg_op(c->ctx, c->r_js),
+                                    MIR_new_uint_op(c->ctx, js_mkundef())));
+  jit_emit_exit_ret(c, MIR_new_reg_op(c->ctx, c->r_err_tmp));
+  MIR_append_insn(c->ctx, c->jit_func, go);
 }
 
 static bool jit_bc_in_osr_loop(jit_compile_t *c) {
@@ -214,6 +238,14 @@ void mir_emit_builtin_call_fast(
     MIR_new_uint_op(ctx, js_mkundef())));
 
   mir_emit_decode_ref(ctx, fn, r_fn, func);
+  if (jit_compile_owner) {
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, r_tmp),
+      MIR_new_mem_op(ctx, MIR_T_P, offsetof(ant_cfunc_record_t, realm), r_fn, 0, 1)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, generic), MIR_new_reg_op(ctx, r_tmp),
+      MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)ant_realm_builtin_key(jit_compile_owner->realm))));
+  }
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
     MIR_new_reg_op(ctx, r_fn),
     MIR_new_mem_op(ctx, MIR_T_P, offsetof(ant_cfunc_meta_t, fn), r_fn, 0, 1)));

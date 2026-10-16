@@ -100,6 +100,7 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
   free(ctx->eval_vars);
   free(ctx->global_lexicals);
   free(ctx->loops);
+  free(ctx->with_scopes);
   free(ctx->unwind_kinds);
   free(ctx->srcpos);
   free(ctx->slot_types);

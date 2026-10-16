@@ -160,19 +160,9 @@ static napi_status napi_create_date_common(napi_env env, double time, napi_value
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
-  ant_t *js = nenv->js;
-  ant_value_t ctor = js_get(js, js_glob(js), "Date");
-  if (!is_callable(ctor)) return napi_set_last(env, napi_generic_failure, "Date constructor unavailable");
-
-  ant_value_t obj = Ant_Object_CreateBare(js);
-  ant_value_t proto = js_get(js, ctor, "prototype");
-  if (is_object_type(proto)) js_set_proto_init(obj, proto);
-
-  ant_value_t argv[1] = {js_mknum(time)};
-  ant_value_t out = sv_vm_call(js->vm, js, ctor, obj, argv, 1, NULL, ctor);
-
-  if (is_err(out) || Ant_Exception_Pending(js)) return napi_check_pending_from_result(env, out);
-  *result = NAPI_RETURN(nenv, is_object_type(out) ? out : obj);
+  ant_value_t date = js_mkdate(nenv->js, date_timeclip(time));
+  if (is_err(date)) return napi_check_pending_from_result(env, date);
+  *result = NAPI_RETURN(nenv, date);
   return napi_set_last(env, napi_ok, NULL);
 }
 

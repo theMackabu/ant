@@ -514,10 +514,17 @@ void gc_alloc_check(ant_t *js) {
   if (gc_alloc_due(js)) gc_decide(js);
 }
 
-void gc_maybe(ant_t *js) {
-  if (__builtin_expect(gc_disabled, 0)) return;
-  if (++js->gc.tick < GC_MIN_TICK) return;
+bool gc_maybe(ant_t *js) {
+  if (++js->gc.tick < GC_MIN_TICK) return false;
+  if (__builtin_expect(atomic_load_explicit(&js->interrupt_pending, memory_order_relaxed), 0)) return true;
+  
+  if (__builtin_expect(gc_disabled, 0)) {
+    js->gc.tick = 0;
+    return false;
+  }
+  
   gc_decide(js);
+  return false;
 }
 
 size_t gc_alloc_marker(ant_t *js) {

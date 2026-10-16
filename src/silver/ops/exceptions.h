@@ -66,8 +66,8 @@ static inline void sv_op_try_pop(sv_vm_t *vm) {
   }
 }
 
-static inline void sv_op_catch(sv_vm_t *vm, ant_value_t caught, uint8_t *ip) {
-  if (vm->sp == 0) vm->stack[vm->sp++] = caught;
+static inline void sv_op_catch(sv_vm_t *vm, uint8_t *ip) {
+  if (vm->sp == 0) vm->stack[vm->sp++] = vm->frames[vm->fp].completion.value;
   sv_clear_completion(vm);
 }
 
@@ -203,7 +203,9 @@ static inline void sv_op_nip_catch(sv_vm_t *vm) {
 
 static inline uint8_t *sv_vm_throw(sv_vm_t *vm, ant_value_t err, int min_fp) {
   ant_t *js = vm->js;
+  
   if (min_fp < 0) min_fp = 0;
+  if (__builtin_expect(js->terminating, 0)) return NULL;
 
   for (int f = vm->fp; f >= min_fp; f--) {
     sv_frame_t *frame = &vm->frames[f];

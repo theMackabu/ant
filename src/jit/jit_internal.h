@@ -1,6 +1,7 @@
 #ifndef ANT_JIT_INTERNAL_H
 #define ANT_JIT_INTERNAL_H
 
+#include "realm.h"
 #include "heap.h"
 #include "silver/jit.h"
 #include "silver/stack_trace.h"
@@ -48,6 +49,7 @@ void jit_code_info(
   uint32_t fp_cfa_off, const MIR_call_site_t *sites, size_t n_sites
 );
 void jit_code_registry_destroy(sv_jit_ctx_t *jc);
+void jit_drop_all_code(sv_jit_ctx_t *jc);
 
 typedef struct {
   int depth;
@@ -169,6 +171,18 @@ typedef struct {
   bool replaces_slow_path;
 } jit_stale_exit_t;
 
+static inline void mir_emit_realm_guard(
+  MIR_context_t ctx, MIR_item_t fn, MIR_reg_t r_callee_func, MIR_reg_t r_tmp,
+  ant_t *js, MIR_label_t other
+) {
+  if (!ant_realm_multiple(js)) return;
+  const ant_realm_t *realm = js->realm;
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, r_tmp),
+    MIR_new_mem_op(ctx, MIR_T_P, (MIR_disp_t)offsetof(sv_func_t, realm), r_callee_func, 0, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, other),
+    MIR_new_reg_op(ctx, r_tmp), MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)realm)));
+}
+
 #define NANBOX_TFUNC_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeFunction)
 #define NANBOX_TOBJ_TAG  ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeObject)
 #define NANBOX_TPROM_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypePromise)
@@ -194,7 +208,7 @@ typedef struct {
   MIR_item_t imp_get_field, imp_get_length;
   MIR_item_t get_elem_inline_proto, imp_get_elem_inline;
   MIR_item_t put_field_proto, imp_put_field;
-  MIR_item_t shape_transition_proto, imp_shape_transition;
+  MIR_item_t shape_transition_proto, imp_shape_transition, imp_protector_store;
   MIR_item_t remember_obj_proto, imp_remember_obj;
   MIR_item_t call_proto, imp_call;
   MIR_item_t call_method_proto, imp_call_method;
@@ -547,7 +561,7 @@ bool mir_emit_put_field_ic_fastpath(
     MIR_reg_t r_js, MIR_reg_t obj, MIR_reg_t val,
     MIR_label_t slow, MIR_reg_t r_global_epoch,
     MIR_item_t shape_transition_proto, MIR_item_t imp_shape_transition,
-    MIR_item_t remember_proto, MIR_item_t imp_remember, bool add_only);
+    MIR_item_t imp_protector_store, MIR_item_t remember_proto, MIR_item_t imp_remember, bool add_only);
 bool mir_emit_get_field_ic_fastpath(
     MIR_context_t ctx,
     MIR_item_t fn,

@@ -327,6 +327,34 @@ bool jit_setup_frame(jit_compile_t *c) {
     MIR_append_insn(c->ctx, c->jit_func, no_overflow);
   }
 
+  if (ant_realm_multiple(c->js)) {
+    MIR_reg_t r_realm = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "cur_realm");
+    MIR_label_t same_realm = MIR_new_label(c->ctx);
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, r_realm),
+                                 MIR_new_mem_op(c->ctx, MIR_T_P, (MIR_disp_t)offsetof(ant_t, realm), c->r_js, 0, 1)));
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, same_realm),
+                                 MIR_new_reg_op(c->ctx, r_realm),
+                                 MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->func->realm)));
+    MIR_reg_t r_reentered = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, "realm_result");
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_call_insn(c->ctx, 10,
+                                      MIR_new_ref_op(c->ctx, c->self_proto),
+                                      MIR_new_ref_op(c->ctx, c->imp_realm_reenter),
+                                      MIR_new_reg_op(c->ctx, r_reentered),
+                                      MIR_new_reg_op(c->ctx, c->r_vm),
+                                      MIR_new_reg_op(c->ctx, c->r_this),
+                                      MIR_new_reg_op(c->ctx, c->r_new_target),
+                                      MIR_new_reg_op(c->ctx, c->r_super_val),
+                                      MIR_new_reg_op(c->ctx, c->r_args),
+                                      MIR_new_reg_op(c->ctx, c->r_argc),
+                                      MIR_new_reg_op(c->ctx, c->r_closure)));
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, r_reentered)));
+    MIR_append_insn(c->ctx, c->jit_func, same_realm);
+  }
+
   if (!vstack_alloc(&c->vs, c->func->max_stack + JIT_VSTACK_SLACK)) {
     jit_discard_setup_module(c);
 
@@ -460,6 +488,7 @@ bool jit_setup_frame(jit_compile_t *c) {
       .imp_put_field = c->imp_put_field,
       .shape_transition_proto = c->shape_transition_proto,
       .imp_shape_transition = c->imp_shape_transition,
+      .imp_protector_store = c->imp_protector_store,
       .remember_obj_proto = c->remember_obj_proto,
       .imp_remember_obj = c->imp_remember_obj,
       .call_proto = c->call_proto,
@@ -1281,7 +1310,7 @@ bool jit_setup_frame(jit_compile_t *c) {
                     MIR_new_insn(c->ctx, MIR_MOV,
                                  MIR_new_reg_op(c->ctx, c->r_this_curr),
                                  MIR_new_mem_op(c->ctx, MIR_JSVAL,
-                                                (MIR_disp_t)offsetof(ant_t, global), c->r_js, 0, 1)));
+                                                (MIR_disp_t)offsetof(ant_t, global_this), c->r_js, 0, 1)));
     MIR_append_insn(c->ctx, c->jit_func,
                     MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, normalize_done)));
 

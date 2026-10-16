@@ -59,3 +59,7 @@ int sv_jit_frames_at(ant_t *js, uintptr_t pc, sv_jit_frame_t *out, int cap) {
   (void)cap;
   return 0;
 }
+
+void sv_jit_arm_interrupts(ant_t *js) {
+  js->interrupts_armed = true;
+}

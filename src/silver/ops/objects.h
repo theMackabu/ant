@@ -314,14 +314,9 @@ static inline ant_value_t sv_op_define_class(
   }
 
   proto = mkobj(js, 0);
-
-  if (!has_heritage) {
-    ant_value_t object_ctor = js_getprop_fallback(js, js->global, "Object");
-    if (vtype(object_ctor) == kTypeFunction) {
-      ant_value_t object_proto = js_getprop_fallback(js, object_ctor, "prototype");
-      if (is_object_type(object_proto)) js_set_proto_init(proto, object_proto);
-    }
-  } else if (pt == kTypeNull) {
+  if (!has_heritage) js_set_proto_init(proto, js->sym.object_proto);
+  
+  else if (pt == kTypeNull) {
     js_set_proto_init(proto, js_mknull());
     ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
     if (vtype(func_proto) == kTypeFunction) js_set_proto_wb(js, ctor, func_proto);

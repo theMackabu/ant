@@ -145,6 +145,7 @@ static void jit_emit_new_direct(
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, slow),
                                MIR_new_reg_op(c->ctx, r_code), MIR_new_int_op(c->ctx, 0)));
+  mir_emit_realm_guard(c->ctx, c->jit_func, r_code, r_super, c->js, slow);
   uint32_t flags_offset;
   uint16_t flags_mask;
   bool flags_checked = jit_new_func_flags(&flags_offset, &flags_mask);
@@ -276,6 +277,7 @@ static MIR_label_t jit_emit_string_call_fastpath(jit_compile_t *c, uint16_t call
 }
 
 static void jit_emit_self_tail(jit_compile_t *c, int call_argc, const MIR_reg_t *arg_regs, MIR_reg_t r_call_this) {
+  jit_emit_interrupt_poll(c);
   for (int i = 0; i < call_argc; i++)
     MIR_append_insn(c->ctx, c->jit_func,
                     MIR_new_insn(c->ctx, MIR_MOV,
@@ -480,7 +482,7 @@ void jit_emit_calls(jit_compile_t *c) {
           }
           if (inl_uses_this) {
             mir_load_imm(c->ctx, c->jit_func, r_inl_this,
-                inline_callee->is_strict || inline_callee->is_arrow ? js_mkundef() : c->js->global);
+                inline_callee->is_strict || inline_callee->is_arrow ? js_mkundef() : c->js->global_this);
             mir_emit_resolve_call_this(c->ctx, c->jit_func, r_inl_this, r_inl_cl,
                                        r_inl_this, r_inl_flags, r_inl_bound);
           } else
@@ -701,6 +703,7 @@ void jit_emit_calls(jit_compile_t *c) {
                                    MIR_new_reg_op(c->ctx, c->r_closure)));
 
       MIR_reg_t r_jit_ptr = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_jptr);
+      mir_emit_realm_guard(c->ctx, c->jit_func, r_callee_fn, r_jit_ptr, c->js, lbl_interp_call);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_MOV,
                                    MIR_new_reg_op(c->ctx, r_jit_ptr),

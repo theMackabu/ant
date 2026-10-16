@@ -347,8 +347,7 @@ void gc_mark_error_record(ant_t *js, ant_value_t value, gc_mark_fn mark) {
 }
 
 static void error_record_finalize(ant_t *js, ant_object_t *obj) {
-  (void)js;
-  if (obj->native.tag == ERROR_RECORD_NATIVE_TAG) free(obj->native.ptr);
+  if (obj->native_tag == ERROR_RECORD_NATIVE_TAG) free(obj->native_ptr);
 }
 
 ant_value_t js_error_record_capture(ant_t *js, const js_error_site_t *at) {

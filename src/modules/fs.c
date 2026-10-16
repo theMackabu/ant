@@ -259,7 +259,7 @@ static ant_value_t fs_call_value(
   ant_value_t result = js_mkundef();
 
   js->this_val = this_val;
-  if (vtype(fn) == kTypeBuiltin) result = sv_invoke_native(js, js_as_cfunc(fn), args, nargs, js_mkundef());
+  if (vtype(fn) == kTypeBuiltin) result = sv_invoke_builtin(js, fn, args, nargs, js_mkundef());
   else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, js_mkundef());
   js->this_val = saved_this;
   
@@ -818,24 +818,8 @@ static ant_value_t fs_new_io_result(ant_t *js, bool written, double bytes, ant_v
   return result;
 }
 
-static ant_value_t fs_make_date(ant_t *js, double ms) {
-  ant_value_t obj = Ant_Object_CreateBare(js);
-  if (is_err(obj)) return obj;
-  GC_ROOT_SAVE(mark, js);
-  GC_ROOT_PIN(js, obj);
-  
-  ant_value_t date_proto = js->builtins.date_proto;
-  if (is_object_type(date_proto)) js_set_proto_init(obj, date_proto);
-  
-  js_set_slot(obj, SLOT_DATA, tov(ms));
-  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_DATE));
-  GC_ROOT_RESTORE(js, mark);
-  
-  return obj;
-}
-
 static bool fs_stats_set_date(ant_t *js, ant_value_t record, fs_stats_slot_t slot, double ms) {
-  ant_value_t date = fs_make_date(js, ms);
+  ant_value_t date = js_mkdate(js, ms);
   if (is_err(date)) return false;
   
   ant_object_t *obj = js_obj_ptr(record);

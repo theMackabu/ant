@@ -1,6 +1,7 @@
 #ifndef SILVER_FEEDBACK_H
 #define SILVER_FEEDBACK_H
 
+#include "realm.h"
 #include "silver/engine.h"
 #include "jit/entry_stub.h"
 #include "debug.h"
@@ -68,7 +69,7 @@ static inline bool sv_jit_interp_innermost(ant_t *js) {
   return js->vm_segs && js->vm_segs->jit_depth == js->jit_active_depth;
 }
 
-static inline __attribute__((always_inline)) ant_value_t sv_jit_invoke(
+static inline __attribute__((always_inline)) ant_value_t sv_jit_invoke_same_realm(
   ant_t *js, sv_jit_entry_t from, sv_jit_func_t fn, sv_vm_t *vm,
   const sv_call_ctx_t *ctx, sv_closure_t *closure
 ) {
@@ -85,6 +86,20 @@ static inline __attribute__((always_inline)) ant_value_t sv_jit_invoke(
 #endif
   js->jit_active_depth--;
   return result;
+}
+
+ant_value_t sv_jit_invoke_in_realm(
+  ant_t *js, sv_jit_entry_t from, sv_jit_func_t fn, sv_vm_t *vm,
+  const sv_call_ctx_t *ctx, sv_closure_t *closure
+);
+
+static inline __attribute__((always_inline)) ant_value_t sv_jit_invoke(
+  ant_t *js, sv_jit_entry_t from, sv_jit_func_t fn, sv_vm_t *vm,
+  const sv_call_ctx_t *ctx, sv_closure_t *closure
+) {
+  if (__builtin_expect(closure && closure->func->realm != js->realm, 0))
+    return sv_jit_invoke_in_realm(js, from, fn, vm, ctx, closure);
+  return sv_jit_invoke_same_realm(js, from, fn, vm, ctx, closure);
 }
 
 static inline void sv_jit_on_bailout_at(sv_func_t *fn, const char *reason, int bc_off) {

@@ -144,7 +144,7 @@ static ant_value_t tls_call_value(
   ant_value_t result = js_mkundef();
 
   js->this_val = this_val;
-  if (vtype(fn) == kTypeBuiltin) result = sv_invoke_native(js, js_as_cfunc(fn), args, nargs, js_mkundef());
+  if (vtype(fn) == kTypeBuiltin) result = sv_invoke_builtin(js, fn, args, nargs, js_mkundef());
   else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, js_mkundef());
   js->this_val = saved_this;
   return result;

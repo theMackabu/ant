@@ -1,0 +1,22 @@
+#ifdef ANT_REALM_FIELD
+ANT_REALM_FIELD(global)
+ANT_REALM_FIELD(global_this)
+ANT_REALM_FIELD(global_sandbox)
+ANT_REALM_FIELD(microtask_realm)
+ANT_REALM_FIELD(codegen_blocked)
+ANT_REALM_FIELD(global_lexicals)
+ANT_REALM_FIELD(global_lexical_count)
+ANT_REALM_FIELD(global_lexical_cap)
+ANT_REALM_FIELD(global_lexical_index)
+ANT_REALM_FIELD(global_lexical_index_cap)
+ANT_REALM_FIELD(array_chain_plain_epoch)
+ANT_REALM_FIELD(promise_constructor_protector_invalid)
+ANT_REALM_FIELD(promise_resolve_lookup_protector_invalid)
+ANT_REALM_FIELD(promise_species_protector_invalid)
+ANT_REALM_FIELD(array_species_protector_invalid)
+ANT_REALM_FIELD(array_iteration_protector_invalid)
+ANT_REALM_FIELD(promise_then_protector_invalid)
+ANT_REALM_FIELD(regexp)
+ANT_REALM_FIELD(iterators)
+#undef ANT_REALM_FIELD
+#endif

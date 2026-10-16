@@ -3,6 +3,7 @@
 
 #include "types.h"
 
+struct ant_iterator_registry;
 typedef void (*gc_mark_fn)(ant_t *js, ant_value_t v);
 
 void gc_mark_timers(ant_t *js, gc_mark_fn mark);
@@ -25,6 +26,7 @@ void gc_mark_eventemitter_object(ant_t *js, ant_value_t obj, gc_mark_fn mark);
 void gc_finalize_events_object(ant_t *js, ant_value_t obj);
 void gc_mark_lmdb(ant_t *js, gc_mark_fn mark);
 void gc_mark_iterators(ant_t *js, gc_mark_fn mark);
+void gc_mark_iterator_registry(ant_t *js, const struct ant_iterator_registry *registry, gc_mark_fn mark);
 void gc_mark_symbols(ant_t *js, gc_mark_fn mark);
 void gc_mark_esm(ant_t *js, gc_mark_fn mark);
 void gc_mark_worker_threads(ant_t *js, gc_mark_fn mark);

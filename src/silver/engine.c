@@ -1,4 +1,5 @@
 #include "gc.h"
+#include "realm.h"
 #include "errors.h"
 #include <limits.h>
 #include <stdlib.h>
@@ -1242,9 +1243,13 @@ static inline ant_value_t sv_execute_entry_common(
   vm->frames[vm->fp].eval_env = eval_env;
   vm->frames[vm->fp].new_target = new_target;
 
+  ant_realm_t *prev_realm = ant_realm_switch(js, func->realm);
   ant_value_t result = sv_execute_frame(vm, func, this_val, super_val, args, argc);
+  
   if (out_this) *out_this = vm->frames[vm->fp].this;
   if (!vm->suspended) vm->fp = saved_fp;
+  
+  ant_realm_restore(js, prev_realm);
 
   return result;
 }
@@ -1305,9 +1310,22 @@ static inline __attribute__((always_inline)) ant_value_t sv_try_direct_closure_j
   return jit_result;
 }
 
+__attribute__((noinline, cold))
+ant_value_t sv_jit_invoke_in_realm(
+  ant_t *js, sv_jit_entry_t from, sv_jit_func_t fn, sv_vm_t *vm,
+  const sv_call_ctx_t *ctx, sv_closure_t *closure
+) {
+  ant_realm_t *prev_realm = ant_realm_enter(js, closure->func->realm);
+  ant_value_t result = sv_jit_invoke_same_realm(js, from, fn, vm, ctx, closure);
+  ant_realm_enter(js, prev_realm);
+  return result;
+}
+
 ant_value_t sv_closure_materialize_func_obj(ant_t *js, sv_closure_t *c, ant_value_t func_val) {
   if (c->func_obj) return c->func_obj;
+  ant_realm_t *prev_realm = ant_realm_switch(js, c->func ? c->func->realm : NULL);
   sv_init_closure_function_object(js, c, func_val, c->module_ctx);
+  ant_realm_restore(js, prev_realm);
   return c->func_obj;
 }
 
@@ -1409,7 +1427,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     frame->argc = argc;
     frame->completion.kind = SV_COMPLETION_NONE;
     frame->completion.value = js_mkundef();
-    frame->with_obj = js_mkundef();
     frame->arguments_obj = js_mkundef();
   } else {
     func = frame->func;
@@ -1906,7 +1923,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_JMP: {
     uint8_t *prev = ip; ip = sv_op_jmp(ip);
     if (ip <= prev) {
-      gc_maybe(js);
+      if (__builtin_expect(gc_maybe(js), 0)) goto sv_interrupt;
       JIT_OSR_BACK_EDGE();
     }
     DISPATCH();
@@ -1996,9 +2013,10 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     if (!is_super_call && vtype(frame->new_target) == kTypeUndefined && vtype(call_func) == kTypeFunction) {
       sv_closure_t *closure = js_func_closure(call_func);
       if (closure->func != NULL) {
-        if (closure->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_SUPER))
+        if (closure->call_flags & SV_CALL_HAS_BOUND_ARGS)
           goto call_fallback;
         if (closure->func->is_async || closure->func->is_generator) goto call_fallback;
+        if (__builtin_expect(closure->func->realm != js->realm, 0)) goto call_fallback;
         {
           ant_value_t jit_this = sv_closure_has_lexical_this(closure)
             ? closure->bound_this : js_mkundef();
@@ -2028,14 +2046,13 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         frame->callee = call_func;
         frame->this = call_this;
         frame->new_target = js_mkundef();
-        frame->super_val = js_mkundef();
+        frame->super_val = closure->super_val;
         frame->prev_sp = vm->sp;
         frame->handler_base = (uint16_t)vm->handler_depth;
         frame->handler_top = (uint16_t)vm->handler_depth;
         frame->argc = call_argc;
         frame->completion.kind = SV_COMPLETION_NONE;
         frame->completion.value = js_mkundef();
-        frame->with_obj = js_mkundef();
         frame->arguments_obj = js_mkundef();
         frame->eval_env = sv_closure_eval_env(closure);
         ant_value_t *call_bp = NULL;
@@ -2118,12 +2135,10 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         vtype(call_func) == kTypeFunction) {
       sv_closure_t *closure = js_func_closure(call_func);
       if (closure->func != NULL) {
-        if (closure->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_SUPER)) {
-          if (!(closure->call_flags & SV_CALL_HAS_BOUND_ARGS) && sv_func_type_feedback(func))
-            sv_tfb_record_call_target(func, (int)(ip - func->code), closure->func);
+        if (closure->call_flags & SV_CALL_HAS_BOUND_ARGS)
           goto call_method_fallback;
-        }
         if (closure->func->is_async || closure->func->is_generator) goto call_method_fallback;
+        if (__builtin_expect(closure->func->realm != js->realm, 0)) goto call_method_fallback;
         {
           ant_value_t jit_this = sv_closure_has_lexical_this(closure)
             ? closure->bound_this : call_this;
@@ -2153,14 +2168,13 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         frame->callee = call_func;
         frame->this = call_this;
         frame->new_target = js_mkundef();
-        frame->super_val = js_mkundef();
+        frame->super_val = closure->super_val;
         frame->prev_sp = vm->sp;
         frame->handler_base = (uint16_t)vm->handler_depth;
         frame->handler_top = (uint16_t)vm->handler_depth;
         frame->argc = call_argc;
         frame->completion.kind = SV_COMPLETION_NONE;
         frame->completion.value = js_mkundef();
-        frame->with_obj = js_mkundef();
         frame->arguments_obj = js_mkundef();
         frame->eval_env = sv_closure_eval_env(closure);
         ant_value_t *call_bp = NULL;
@@ -2396,7 +2410,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       sv_closure_t *closure = js_func_closure(call_func);
       if (closure->func != NULL) {
         if (!closure->func->is_async && !closure->func->is_generator &&
-            !(closure->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_SUPER))) {
+            !(closure->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_SUPER)) &&
+            closure->func->realm == js->realm) {
           if (sv_closure_has_lexical_this(closure))
             tc_this = closure->bound_this;
           goto tail_call_inline;
@@ -2463,7 +2478,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       sv_closure_t *closure = js_func_closure(call_func);
       if (closure->func != NULL) {
         if (!closure->func->is_async && !closure->func->is_generator &&
-            !(closure->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_SUPER))) {
+            !(closure->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_SUPER)) &&
+            closure->func->realm == js->realm) {
           if (sv_closure_has_lexical_this(closure))
             tc_this = closure->bound_this;
           goto tail_call_inline;
@@ -2485,6 +2501,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   }
 
   tail_call_inline: {
+    if (__builtin_expect(atomic_load_explicit(&js->interrupt_pending, memory_order_relaxed), 0)) goto sv_interrupt;
     ant_value_t call_func = vm->stack[vm->sp - tc_argc - 1];
     sv_closure_t *closure = js_func_closure(call_func);
 
@@ -2527,7 +2544,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     frame->handler_top = (uint16_t)vm->handler_depth;
     frame->completion.kind = SV_COMPLETION_NONE;
     frame->completion.value = js_mkundef();
-    frame->with_obj = js_mkundef();
     frame->arguments_obj = js_mkundef();
     frame->eval_env = sv_closure_eval_env(closure);
     frame->bp = base;
@@ -2666,7 +2682,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_TRY_PUSH:         { sv_op_try_push(vm, ip, SV_HANDLER_TRY);          NEXT(OP_TRY_PUSH); }
   L_TRY_PUSH_FINALLY: { sv_op_try_push(vm, ip, SV_HANDLER_TRY_FINALLY);  NEXT(OP_TRY_PUSH_FINALLY); }
   L_TRY_POP:          { sv_op_try_pop(vm);                               NEXT(OP_TRY_POP); }
-  L_CATCH:            { sv_op_catch(vm, sv_err, ip);                     NEXT(OP_CATCH); }
+  L_CATCH:            { sv_op_catch(vm, ip);                             NEXT(OP_CATCH); }
   L_FINALLY:          { VM_CHECK(sv_op_finally(vm, js, ip));             NEXT(OP_FINALLY); }
   L_FINALLY_DISCARD:  { sv_op_finally_discard(vm);                       NEXT(OP_FINALLY_DISCARD); }
   L_NIP_CATCH:        { sv_op_nip_catch(vm);                             NEXT(OP_NIP_CATCH); }
@@ -2896,20 +2912,26 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_IS_UNDEF:    { sv_op_is_undef(vm);                 NEXT(OP_IS_UNDEF); }
   L_IS_NULL:     { sv_op_is_null(vm);                  NEXT(OP_IS_NULL); }
 
-  L_IMPORT:          { VM_CHECK(sv_op_import(vm, js));                 NEXT(OP_IMPORT); }
-  L_IMPORT_SYNC:     { VM_CHECK(sv_op_import_sync(vm, js));            NEXT(OP_IMPORT_SYNC); }
-  L_IMPORT_DEFAULT:  { sv_op_import_default(vm, js);                   NEXT(OP_IMPORT_DEFAULT); }
-  L_IMPORT_NAMED:    { VM_CHECK(sv_op_import_named(vm, js, func, ip)); NEXT(OP_IMPORT_NAMED); }
+  L_IMPORT:          { VM_CHECK(sv_op_import(vm, js, func));            NEXT(OP_IMPORT); }
+  L_IMPORT_SYNC:     { VM_CHECK(sv_op_import_sync(vm, js));             NEXT(OP_IMPORT_SYNC); }
+  L_IMPORT_DEFAULT:  { sv_op_import_default(vm, js);                    NEXT(OP_IMPORT_DEFAULT); }
+  L_IMPORT_NAMED:    { VM_CHECK(sv_op_import_named(vm, js, func, ip));  NEXT(OP_IMPORT_NAMED); }
   L_EXPORT:          { VM_CHECK(sv_op_export(vm, js, frame, func, ip)); NEXT(OP_EXPORT); }
-  L_EXPORT_ALL:      { VM_CHECK(sv_op_export_all(vm, js));             NEXT(OP_EXPORT_ALL); }
+  L_EXPORT_ALL:      { VM_CHECK(sv_op_export_all(vm, js));              NEXT(OP_EXPORT_ALL); }
 
-  L_ENTER_WITH:   { VM_CHECK(sv_op_enter_with(vm, js, frame));  NEXT(OP_ENTER_WITH); }
-  L_EXIT_WITH:    { sv_op_exit_with(vm, frame);                 NEXT(OP_EXIT_WITH); }
 
-  L_WITH_GET_VAR:  { VM_CHECK(sv_op_with_get_var(vm, js, frame, func, ip));  NEXT(OP_WITH_GET_VAR); }
-  L_WITH_GET_CALL: { VM_CHECK(sv_op_with_get_call(vm, js, frame, func, ip)); NEXT(OP_WITH_GET_CALL); }
-  L_WITH_PUT_VAR:  { VM_CHECK(sv_op_with_put_var(vm, js, frame, func, ip));  NEXT(OP_WITH_PUT_VAR); }
-  L_WITH_DEL_VAR:  { VM_CHECK(sv_op_with_del_var(vm, js, frame, func, ip));  NEXT(OP_WITH_DEL_VAR); }
+  #define WITH_TRY(op, fn) {                                              \
+    bool taken = false;                                                   \
+    VM_CHECK(fn(vm, js, func, ip, &taken));                               \
+    if (taken) { ip += sv_op_size[op] + sv_get_i32(ip + 5); DISPATCH(); } \
+    NEXT(op);                                                             \
+  }
+  
+  L_WITH_TRY_GET:  WITH_TRY(OP_WITH_TRY_GET, sv_op_with_try_get)
+  L_WITH_TRY_CALL: WITH_TRY(OP_WITH_TRY_CALL, sv_op_with_try_call)
+  L_WITH_TRY_PUT:  WITH_TRY(OP_WITH_TRY_PUT, sv_op_with_try_put)
+  L_WITH_TRY_DEL:  WITH_TRY(OP_WITH_TRY_DEL, sv_op_with_try_del)
+  #undef WITH_TRY
 
   L_SPECIAL_OBJ:  { sv_op_special_obj(vm, js, frame, ip);                       NEXT(OP_SPECIAL_OBJ); }
   L_EMPTY:        { vm->stack[vm->sp++] = T_EMPTY;                              NEXT(OP_EMPTY); }
@@ -2931,6 +2953,12 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_INVALID:
     sv_err = js_mkerr(js, "invalid opcode %d", (int)*ip);
     goto sv_throw;
+
+  sv_interrupt: {
+    frame->ip = ip;
+    sv_err = js_interrupt_raise(js);
+    goto sv_throw;
+  }
 
   sv_throw: {
     uint8_t *catch_ip = sv_vm_throw(vm, sv_err, entry_fp);
@@ -3025,9 +3053,9 @@ ant_value_t sv_resume_suspended(sv_vm_t *vm) {
       : mkval(kTypeError, 0);
   }
 
-  ant_value_t result = sv_execute_frame(
-    vm, frame->func, frame->this, frame->super_val, NULL, frame->argc
-  );
+  ant_realm_t *prev_realm = ant_realm_switch(vm->js, frame->func->realm);
+  ant_value_t result = sv_execute_frame(vm, frame->func, frame->this, frame->super_val, NULL, frame->argc);
+  ant_realm_restore(vm->js, prev_realm);
 
   if (!vm->suspended) {
     vm->fp = saved_fp;

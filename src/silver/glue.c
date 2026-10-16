@@ -1,3 +1,4 @@
+#include "realm.h"
 #include <math.h>
 #include <stdlib.h>
 
@@ -1495,6 +1496,10 @@ ant_value_t jit_helper_put_field_ic(
   return out;
 }
 
+void jit_helper_protector_store(ant_t *js, ant_object_t *holder, const char *key) {
+  ant_property_mutation_invalidate(js, holder, key);
+}
+
 void jit_helper_shape_transition(ant_t *js, ant_object_t *obj, ant_shape_t *to_shape) {
   if (!obj || !obj->shape || !to_shape || obj->shape == to_shape) return;
   ant_shape_transition_existing(&obj->shape, to_shape);
@@ -1682,6 +1687,10 @@ void jit_helper_define_slot(
 
 ant_value_t jit_helper_array(sv_vm_t *vm, ant_t *js, ant_value_t *elements, int count) {
   return js_mkarr_dense_literal(js, elements, (uint32_t)count);
+}
+
+ant_value_t jit_helper_interrupt(sv_vm_t *vm, ant_t *js, ant_value_t unused) {
+  return js_interrupt_raise(js);
 }
 
 ant_value_t jit_helper_catch_value(sv_vm_t *vm, ant_t *js, ant_value_t err) {
@@ -1886,3 +1895,26 @@ ant_value_t jit_helper_new(
   if (is_err(result)) return result;
   return is_object_type(result) ? result : (is_object_type(ctor_this) ? ctor_this : obj);
 }
+
+ant_value_t jit_helper_realm_reenter(
+  sv_vm_t *vm, ant_value_t this_val, ant_value_t new_target, ant_value_t super_val,
+  ant_value_t *args, int argc, sv_closure_t *closure
+) {
+  ant_t *js = vm->js;
+  sv_func_t *fn = closure->func;
+  ant_realm_t *prev_realm = ant_realm_enter(js, fn->realm);
+  
+  ant_value_t result;
+  if (fn->jit_code) result = fn->jit_code(vm, this_val, new_target, super_val, args, argc, closure);
+  else {
+    sv_call_ctx_t ctx = {
+      .this_val = this_val, .super_val = super_val, .new_target = new_target,
+      .args = args, .argc = argc, .alloc = NULL,
+    };
+    result = sv_call_closure_after_jit(vm, js, closure, mkref(kTypeFunction, closure), &ctx, NULL);
+  }
+  
+  ant_realm_enter(js, prev_realm);
+  return result;
+}
+

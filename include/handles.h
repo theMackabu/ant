@@ -4,6 +4,18 @@
 #include "types.h"
 #include <stdint.h>
 
+typedef struct ant_cfunc_record {
+  ant_cfunc_meta_t meta;
+  ant_realm_t *realm;
+} ant_cfunc_record_t;
+
+static inline ant_realm_t *ant_cfunc_meta_realm(const ant_cfunc_meta_t *meta) {
+  return ((const ant_cfunc_record_t *)meta)->realm;
+}
+
+void ant_cfunc_release_realm(ant_realm_t *realm);
+extern _Thread_local ant_realm_t *ant_cfunc_intern_realm;
+
 const ant_cfunc_meta_t *ant_cfunc_meta_intern(const ant_cfunc_meta_t *meta);
 const ant_cfunc_meta_t *ant_cfunc_meta_source(const ant_cfunc_meta_t *stored);
 const ant_cfunc_meta_t *ant_cfunc_meta_derive(const ant_cfunc_meta_t *base, const ant_cfunc_meta_t *meta);

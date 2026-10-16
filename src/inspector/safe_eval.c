@@ -1,6 +1,7 @@
 #include "gc/roots.h"
 #include "bind.h"
 #include "internal.h"
+#include "cfunc.h"
 #include "runtime.h"
 #include "silver/ast.h"
 #include "silver/eval_env.h"

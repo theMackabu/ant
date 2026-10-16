@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "main": "index.mjs",
+  "dependencies": {
+    "jiti": "^2.7.0"
+  }
+}

@@ -5,6 +5,20 @@
 #include "gc/strings.h"
 #include <string.h>
 
+static constexpr int ANT_REGEXP_STATIC_CAPTURE_COUNT = 9;
+static constexpr int ANT_REGEXP_STATIC_OVECTOR_COUNT = ANT_REGEXP_STATIC_CAPTURE_COUNT + 1;
+
+typedef struct {
+  size_t static_ovector[ANT_REGEXP_STATIC_OVECTOR_COUNT * 2];
+  uint16_t static_materialized_mask;
+  uint8_t static_ovcount;
+  
+  bool static_pending;
+  bool write_guard_armed;
+  bool exec_written;
+  bool replace_written;
+} ant_regexp_realm_t;
+
 typedef struct {
   const char *pattern_ptr;
   ant_offset_t pattern_len;

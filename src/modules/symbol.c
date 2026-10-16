@@ -118,7 +118,10 @@ void js_define_species_getter(ant_t *js, ant_value_t ctor) {
 void init_symbol_module(ant_t *js) {
   #define ANT_SYMBOL(name, desc) js->sym.name##_sym = js_mksym_well_known(js, desc);
   #include "symbol_list.h"
+  init_symbol_ctor(js);
+}
 
+void init_symbol_ctor(ant_t *js) {
   ant_value_t proto = Ant_Object_CreateBare(js);
   js->sym.symbol_proto = proto;
   js_set_proto_init(proto, js->sym.object_proto);

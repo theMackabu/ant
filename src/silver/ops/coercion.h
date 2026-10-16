@@ -2,13 +2,9 @@
 #define SV_COERCION_H
 
 #include <string.h>
-
-#include "globals.h"
-#include "gc/roots.h"
-#include "property.h"
-
 #include "esm/loader.h"
 #include "silver/call.h"
+#include "modules/vm.h"
 
 static inline ant_value_t sv_module_export_to_ns(
   ant_t *js, ant_value_t module_ns,
@@ -106,9 +102,15 @@ static inline void sv_op_is_null(sv_vm_t *vm) {
   vm->stack[vm->sp - 1] = mkval(kTypeBool, vtype(v) == kTypeNull);
 }
 
-static inline ant_value_t sv_op_import(sv_vm_t *vm, ant_t *js) {
-  ant_value_t import_fn = js_get_module_import_binding(js);
+static inline ant_value_t sv_op_import(sv_vm_t *vm, ant_t *js, sv_func_t *func) {
+  if (__builtin_expect(func->debug && func->debug->import_handler, 0)) {
+    ant_value_t result = js_vm_dynamic_import(js, func->debug, vm->stack[vm->sp - 2], vm->stack[vm->sp - 1]);
+    vm->sp -= 2;
+    if (!is_err(result)) vm->stack[vm->sp++] = result;
+    return result;
+  }
 
+  ant_value_t import_fn = js_get_module_import_binding(js);
   if (vtype(import_fn) != kTypeFunction && vtype(import_fn) != kTypeBuiltin)
     import_fn = js_getprop_fallback(js, js->global, "import");
 
@@ -281,43 +283,6 @@ static inline ant_value_t sv_op_export_all(sv_vm_t *vm, ant_t *js) {
   return tov(0);
 }
 
-static inline ant_value_t sv_op_enter_with(sv_vm_t *vm, ant_t *js, sv_frame_t *frame) {
-  if (sv_frame_is_strict(frame))
-    return js_mkerr_typed(js, JS_ERR_SYNTAX, "with statement not allowed in strict mode");
-  frame->with_obj = vm->stack[--vm->sp];
-  return js_mkundef();
-}
-
-static inline void sv_op_exit_with(sv_vm_t *vm, sv_frame_t *frame) {
-  frame->with_obj = js_mkundef();
-}
-
-enum { 
-  WITH_FB_GLOBAL       = 0,
-  WITH_FB_LOCAL        = 1,
-  WITH_FB_ARG          = 2,
-  WITH_FB_UPVAL        = 3,
-  WITH_FB_GLOBAL_UNDEF = 4
-};
-
-static inline ant_value_t sv_with_fallback_get(
-  sv_vm_t *vm, ant_t *js,
-  sv_frame_t *frame,
-  uint8_t kind, uint16_t idx
-) {
-switch (kind) {
-  case WITH_FB_LOCAL: return frame->lp ? frame->lp[idx] : js_mkundef();
-  case WITH_FB_ARG:   return sv_frame_get_arg_value(frame, idx);
-  case WITH_FB_UPVAL: {
-    if (!frame->upvalues || (int)idx >= frame->upvalue_count) return js_mkundef();
-    sv_upvalue_t *uv = frame->upvalues[idx];
-    return uv ? *uv->location : js_mkundef();
-  }
-  case WITH_FB_GLOBAL_UNDEF:
-    return js_mkundef();
-  default: return sv_env_get(js, sv_frame_eval_env(js, frame), NULL, 0);
-}}
-
 static inline bool sv_with_binding_is_unscopable(
   ant_t *js,
   ant_value_t with_obj,
@@ -437,248 +402,76 @@ static inline bool sv_with_binding_is_unscopable(
   return js_truthy(js, blocked);
 }
 
-static inline void sv_with_fallback_put(
-  sv_vm_t *vm, ant_t *js,
-  sv_frame_t *frame,
-  uint8_t kind, uint16_t idx,
-  ant_value_t val
-) {
-  switch (kind) {
-    case WITH_FB_LOCAL:
-      if (frame->lp) frame->lp[idx] = val;
-      break;
-    case WITH_FB_ARG:
-      sv_frame_set_arg_value(js, frame, idx, val);
-      break;
-    case WITH_FB_UPVAL:
-      if (frame->upvalues && (int)idx < frame->upvalue_count) {
-        sv_upvalue_t *uv = frame->upvalues[idx];
-        if (uv) sv_upvalue_store(js, uv, val);
-      }
-      break;
-    default: break;
-  }
-}
+static inline ant_value_t sv_with_binds(ant_t *js, ant_value_t obj, const sv_atom_t *a, bool *binds) {
+  *binds = false;
+  
+  ant_value_t has = do_in(js, js_mkstr(js, a->str, a->len), obj);
+  if (is_err(has) || !js_truthy(js, has)) return has;
 
-static inline bool sv_try_get_with_bound_value(
-  ant_t *js,
-  ant_value_t with_obj,
-  const sv_atom_t *a,
-  ant_value_t *out
-) {
-  ant_object_t *ptr = is_object_type(with_obj) ? js_obj_ptr(js_as_obj(with_obj)) : NULL;
-  const char *interned = intern_string(a->str, a->len);
-
-  if (ptr && is_proxy(js_as_obj(with_obj))) {
-    ant_value_t has = js_proxy_has(js, with_obj, a->str, a->len);
-    if (is_err(has)) {
-      *out = has;
-      return true;
-    }
-    if (!js_truthy(js, has)) return false;
-    
-    bool abrupt = false;
-    if (sv_with_binding_is_unscopable(js, with_obj, a, out, &abrupt)) return false;
-    if (abrupt) return true;
-    *out = js_getprop_fallback(js, with_obj, a->str);
-    
-    return true;
-  }
-
-  if (ptr && interned) {
-    bool should_fallback = false;
-    if (sv_try_get_shape_data_prop(js, ptr, interned, out, &should_fallback)) {
-      bool abrupt = false;
-      GC_ROOT_SAVE(root_mark, js);
-      GC_ROOT_PIN(js, *out);
-      
-      bool unscopable = sv_with_binding_is_unscopable(js, with_obj, a, out, &abrupt);
-      GC_ROOT_RESTORE(js, root_mark);
-      
-      if (unscopable) return false;
-      if (abrupt) return true;
-      
-      return true;
-    }
-    if (!should_fallback) return false;
-  }
-
-  if (!lkp(js, with_obj, a->str, a->len).obj) return false;
+  ant_value_t error = js_mkundef();
   bool abrupt = false;
+  bool unscopable = sv_with_binding_is_unscopable(js, obj, a, &error, &abrupt);
+  if (abrupt) return error;
   
-  if (sv_with_binding_is_unscopable(js, with_obj, a, out, &abrupt)) return false;
-  if (abrupt) return true;
-  
-  *out = js_getprop_fallback_len(js, with_obj, a->str, a->len);
-  
-  return true;
-}
-
-static inline ant_value_t sv_op_with_get_var(
-  sv_vm_t *vm, ant_t *js,
-  sv_frame_t *frame,
-  sv_func_t *func, uint8_t *ip
-) {
-  uint32_t atom_idx = sv_get_u32(ip + 1);
-  uint8_t  fb_kind  = sv_get_u8(ip + 5);
-  uint16_t fb_idx   = sv_get_u16(ip + 6);
-  sv_atom_t *a = &func->atoms[atom_idx];
-
-  if (vtype(frame->with_obj) != kTypeUndefined) {
-  ant_value_t val = js_mkundef();
-  if (sv_try_get_with_bound_value(js, frame->with_obj, a, &val)) {
-    if (is_err(val)) return val;
-    vm->stack[vm->sp++] = val;
-    return js_mkundef();
-  }}
-
-  if (fb_kind == WITH_FB_GLOBAL || fb_kind == WITH_FB_GLOBAL_UNDEF) {
-    const char *interned = intern_string(a->str, a->len);
-    ant_value_t val = js_mkundef();
-    bool found = interned && sv_env_try_get_interned(
-      js, sv_frame_eval_env(js, frame), interned, a->len, &val
-    );
-    if (!found && fb_kind == WITH_FB_GLOBAL)
-      return js_mkerr_typed(
-        js, JS_ERR_REFERENCE, "'%.*s' is not defined",
-        (int)a->len, a->str);
-    if (is_err(val)) return val;
-    vm->stack[vm->sp++] = val;
-  } else vm->stack[vm->sp++] = sv_with_fallback_get(vm, js, frame, fb_kind, fb_idx);
+  *binds = !unscopable;
   return js_mkundef();
 }
 
-static inline ant_value_t sv_op_with_get_call(
-  sv_vm_t *vm, ant_t *js,
-  sv_frame_t *frame,
-  sv_func_t *func, uint8_t *ip
-) {
-  uint32_t atom_idx = sv_get_u32(ip + 1);
-  uint8_t fb_kind = sv_get_u8(ip + 5);
-  uint16_t fb_idx = sv_get_u16(ip + 6);
-  sv_atom_t *a = &func->atoms[atom_idx];
+static inline ant_value_t sv_op_with_try_get(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip, bool *taken) {
+  const sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
+  
+  ant_value_t obj = vm->stack[vm->sp - 1];
+  ant_value_t checked = sv_with_binds(js, obj, a, taken);
+  if (is_err(checked) || !*taken) return checked;
+  
+  ant_value_t value = js_getprop_fallback_len(js, obj, a->str, a->len);
+  if (is_err(value)) return value;
+  vm->stack[vm->sp - 1] = value;
+  
+  return js_mkundef();
+}
 
-  if (vtype(frame->with_obj) != kTypeUndefined) {
-    ant_value_t val = js_mkundef();
-    if (sv_try_get_with_bound_value(js, frame->with_obj, a, &val)) {
-      if (is_err(val)) return val;
-      vm->stack[vm->sp++] = frame->with_obj;
-      vm->stack[vm->sp++] = val;
-      return js_mkundef();
-    }
+static inline ant_value_t sv_op_with_try_call(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip, bool *taken) {
+  const sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
+  
+  ant_value_t obj = vm->stack[vm->sp - 1];
+  ant_value_t checked = sv_with_binds(js, obj, a, taken);
+  if (is_err(checked)) return checked;
+  
+  ant_value_t value = *taken ? js_getprop_fallback_len(js, obj, a->str, a->len) : js_mkundef();
+  if (is_err(value)) return value;
+  vm->stack[vm->sp++] = value;
+  
+  return js_mkundef();
+}
+
+static inline ant_value_t sv_op_with_try_put(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip, bool *taken) {
+  const sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
+  
+  ant_value_t obj = vm->stack[vm->sp - 1];
+  ant_value_t checked = sv_with_binds(js, obj, a, taken);
+  if (is_err(checked)) return checked;
+
+  if (*taken) {
+    ant_value_t stored = js_setprop(js, obj, js_mkstr(js, a->str, a->len), vm->stack[vm->sp - 2]);
+    if (is_err(stored)) return stored;
   }
-
-  ant_value_t val;
-  if (fb_kind == WITH_FB_GLOBAL || fb_kind == WITH_FB_GLOBAL_UNDEF) {
-    const char *interned = intern_string(a->str, a->len);
-    val = js_mkundef();
-    bool found = interned && sv_env_try_get_interned(
-      js, sv_frame_eval_env(js, frame), interned, a->len, &val
-    );
-    if (!found && fb_kind == WITH_FB_GLOBAL)
-      return js_mkerr_typed(
-        js, JS_ERR_REFERENCE, "'%.*s' is not defined",
-        (int)a->len, a->str);
-  } else val = sv_with_fallback_get(vm, js, frame, fb_kind, fb_idx);
-
-  if (is_err(val)) return val;
-  vm->stack[vm->sp++] = js_mkundef();
-  vm->stack[vm->sp++] = val;
   
-  return js_mkundef();
-}
-
-static inline ant_value_t sv_with_put_var_value(
-  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
-  sv_func_t *func, uint8_t *ip, ant_value_t val
-) {
-  uint32_t atom_idx = sv_get_u32(ip + 1);
-  uint8_t fb_kind = sv_get_u8(ip + 5);
-  uint16_t fb_idx = sv_get_u16(ip + 6);
-  sv_atom_t *a = &func->atoms[atom_idx];
-
-  if (vtype(frame->with_obj) != kTypeUndefined) {
-    bool has_binding = false;
-    if (is_proxy(js_as_obj(frame->with_obj))) {
-      ant_value_t has = js_proxy_has(js, frame->with_obj, a->str, a->len);
-      if (is_err(has)) return has;
-      has_binding = js_truthy(js, has);
-    } else has_binding = lkp(js, frame->with_obj, a->str, a->len).obj;
-
-    if (has_binding) {
-      ant_value_t out = js_mkundef();
-      bool abrupt = false;
-      if (sv_with_binding_is_unscopable(js, frame->with_obj, a, &out, &abrupt)) goto fallback;
-      if (abrupt) return out;
-      ant_value_t key = js_mkstr(js, a->str, a->len);
-      ant_value_t set_result = js_setprop(js, frame->with_obj, key, val);
-      if (is_err(set_result)) return set_result;
-      return js_mkundef();
-    }
-  }
-
-fallback:
-  if (fb_kind == WITH_FB_GLOBAL) {
-    ant_value_t set_result = sv_env_put(
-      js, sv_frame_eval_env(js, frame), 
-      a->str, a->len, val, false
-    );
-    if (is_err(set_result)) return set_result;
-  } else sv_with_fallback_put(vm, js, frame, fb_kind, fb_idx, val);
-  
-  return js_mkundef();
-}
-
-static inline ant_value_t sv_op_with_put_var(
-  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
-  sv_func_t *func, uint8_t *ip
-) {
-  ant_value_t result = sv_with_put_var_value(
-    vm, js, frame, func, 
-    ip, vm->stack[vm->sp - 1]
-  );
   vm->sp--;
-  return result;
+  return js_mkundef();
 }
 
-static inline ant_value_t sv_op_with_del_var(
-  sv_vm_t *vm, ant_t *js,
-  sv_frame_t *frame,
-  sv_func_t *func, uint8_t *ip
-) {
-  uint32_t atom_idx = sv_get_u32(ip + 1);
-  sv_atom_t *a = &func->atoms[atom_idx];
+static inline ant_value_t sv_op_with_try_del(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip, bool *taken) {
+  const sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
   
-  if (vtype(frame->with_obj) != kTypeUndefined) {
-    bool has_binding = false;
-    if (is_proxy(js_as_obj(frame->with_obj))) {
-      ant_value_t has = js_proxy_has(js, frame->with_obj, a->str, a->len);
-      if (is_err(has)) return has;
-      has_binding = js_truthy(js, has);
-    } else has_binding = lkp(js, frame->with_obj, a->str, a->len).obj;
-
-    if (has_binding) {
-      ant_value_t out = js_mkundef();
-      bool abrupt = false;
-      if (sv_with_binding_is_unscopable(js, frame->with_obj, a, &out, &abrupt)) goto fallback;
-      if (abrupt) return out;
-      ant_value_t result = js_delete_prop(js, frame->with_obj, a->str, a->len);
-      if (is_err(result)) return result;
-      vm->stack[vm->sp++] = result;
-      return js_mkundef();
-    }
-  }
+  ant_value_t obj = vm->stack[vm->sp - 1];
+  ant_value_t checked = sv_with_binds(js, obj, a, taken);
+  if (is_err(checked) || !*taken) return checked;
   
-fallback:
-  ant_value_t result = sv_env_delete(
-    js, sv_frame_eval_env(js, frame), 
-    a->str, a->len
-  );
+  ant_value_t deleted = js_delete_prop(js, obj, a->str, a->len);
+  if (is_err(deleted)) return deleted;
+  vm->stack[vm->sp - 1] = deleted;
   
-  if (is_err(result)) return result;
-  bool ok = js_truthy(js, result);
-  
-  vm->stack[vm->sp++] = mkval(kTypeBool, ok);
   return js_mkundef();
 }
 

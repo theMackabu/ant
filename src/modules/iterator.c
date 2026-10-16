@@ -172,6 +172,7 @@ static ant_value_t get_array_iterator_prototype(ant_t *js) {
   bool iteration_patched = js->array_iteration_protector_invalid;
   js->sym.array_iterator_next = defmethod(js, js->sym.array_iterator_proto, "next", 4, Ant_Function_Create(arr_iter_next));
   js->array_iteration_protector_invalid = iteration_patched;
+  ant_protector_holder_mark(js->sym.array_iterator_proto);
   
   mkprop(js, js->sym.array_iterator_proto, js->sym.toStringTag_sym, ANT_STRING("Array Iterator"), ANT_PROP_ATTR_CONFIGURABLE);
   js_set_proto_init(js->sym.array_iterator_proto, iterator_proto);
@@ -260,11 +261,15 @@ void js_iter_register_advance(ant_t *js, ant_value_t proto, js_iter_advance_fn f
   js->iterators.entries[js->iterators.len++] = (ant_iterator_entry_t){proto, next, fn};
 }
 
-void gc_mark_iterators(ant_t *js, gc_mark_fn mark) {
-  for (size_t i = 0; i < js->iterators.len; i++) {
-    mark(js, js->iterators.entries[i].proto);
-    mark(js, js->iterators.entries[i].next);
+void gc_mark_iterator_registry(ant_t *js, const ant_iterator_registry_t *registry, gc_mark_fn mark) {
+  for (size_t i = 0; i < registry->len; i++) {
+    mark(js, registry->entries[i].proto);
+    mark(js, registry->entries[i].next);
   }
+}
+
+void gc_mark_iterators(ant_t *js, gc_mark_fn mark) {
+  gc_mark_iterator_registry(js, &js->iterators, mark);
 }
 
 void cleanup_iterator_module(ant_t *js) {
@@ -366,7 +371,7 @@ bool js_iter_next(ant_t *js, iterator_t *it, ant_value_t *out) {
   if (vtype(next_fn) == kTypeBuiltin) {
     ant_value_t old_this = js->this_val;
     js->this_val = it->iterator;
-    result = sv_invoke_native(js, js_as_cfunc(next_fn), NULL, 0, js_mkundef());
+    result = sv_invoke_builtin(js, next_fn, NULL, 0, js_mkundef());
     js->this_val = old_this;
   }
 
@@ -496,7 +501,7 @@ static ant_value_t wrap_iter_next(ant_params_t) {
     if (vtype(next_fn) == kTypeBuiltin) {
       ant_value_t old_this = js->this_val;
       js->this_val = source;
-      step = sv_invoke_native(js, js_as_cfunc(next_fn), NULL, 0, js_mkundef());
+      step = sv_invoke_builtin(js, next_fn, NULL, 0, js_mkundef());
       js->this_val = old_this;
     } else step = sv_vm_call(js->vm, js, next_fn, source, NULL, 0, NULL, js_mkundef());
     

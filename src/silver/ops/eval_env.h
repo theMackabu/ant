@@ -312,6 +312,33 @@ static inline bool sv_eval_envs_bind(
   return false;
 }
 
+static inline bool sv_global_sandboxed(const ant_t *js) {
+  return __builtin_expect(is_object_type(js->global_sandbox), 0);
+}
+
+static inline __attribute__((noinline, cold)) bool sv_sandbox_has(ant_t *js, const char *interned, uint32_t len) {
+  ant_value_t sandbox = js->global_sandbox;
+  if (!is_proxy(sandbox)) return lkp_proto(js, sandbox, interned, len).obj != NULL;
+  ant_value_t has = js_proxy_has(js, sandbox, interned, len);
+  return is_err(has) || js_truthy(js, has);
+}
+
+static inline __attribute__((noinline, cold)) bool sv_sandbox_global_lookup(
+  ant_t *js, const char *interned, uint32_t len, ant_value_t *out
+) {
+  ant_global_lexical_t *lex = sv_global_lexical(js, interned);
+  if (lex) {
+    *out = sv_global_lexical_get(js, lex);
+    return true;
+  }
+
+  ant_value_t holder = sv_sandbox_has(js, interned, len) ? js->global_sandbox : js->global;
+  if (holder == js->global && !lkp_proto(js, holder, interned, len).obj) return false;
+  
+  *out = js_getprop_fallback(js, holder, interned);
+  return true;
+}
+
 static inline ant_value_t sv_eval_declare_vars(
   ant_t *js, sv_func_t *func, ant_value_t env, bool configurable
 ) {
@@ -339,14 +366,21 @@ static inline ant_value_t sv_eval_declare_vars(
   GC_ROOT_PIN(js, target);
   ant_value_t result = js_mkundef();
   
+  bool sandboxed = global && sv_global_sandboxed(js);
+  ant_value_t holder = sandboxed ? js->global_sandbox : target;
+
   for (uint32_t i = 0; i < metadata->eval_var_count; i++) {
     sv_eval_decl_t *name = &metadata->eval_vars[i];
-    bool exists = sv_eval_envs_bind(js, env, target, name, 0, SV_EVAL_BIND_CATCH) ||
-      lkp_interned(target, name->str).obj || (global && sv_global_lexical(js, name->str));
+    
+    bool exists = sv_eval_envs_bind(js, env, target, name, 0, SV_EVAL_BIND_CATCH)         ||
+      lkp_interned(target, name->str).obj || (global && sv_global_lexical(js, name->str)) ||
+      (sandboxed && sv_sandbox_has(js, name->str, name->len));
+    
     if (exists) continue;
-    result = setprop_interned(js, target, name->str, name->len, js_mkundef());
+    result = setprop_interned(js, holder, name->str, name->len, js_mkundef());
+    
     if (is_err(result)) break;
-    if (!configurable) js_set_descriptor(js, target, name->str, name->len, JS_DESC_W | JS_DESC_E);
+    if (!configurable && !sandboxed) js_set_descriptor(js, target, name->str, name->len, JS_DESC_W | JS_DESC_E);
   }
   
   GC_ROOT_RESTORE(js, mark);
@@ -366,7 +400,8 @@ static inline ant_value_t sv_eval_store_function(
     if (current == js->global && sv_global_lexical(js, name)) break;
 
     if (current == js->global || (state && state->is_variable)) {
-      result = setprop_interned(js, current, name, len, value);
+      ant_value_t holder = current == js->global && sv_global_sandboxed(js) ? js->global_sandbox : current;
+      result = setprop_interned(js, holder, name, len, value);
       break;
     }
 

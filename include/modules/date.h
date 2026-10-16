@@ -58,11 +58,11 @@ typedef struct {
 } date_set_field_spec_t;
 
 void init_date_module(ant_t *js);
+
+double date_timeclip(double t);
 bool is_date_instance(ant_value_t value);
 
-ant_value_t get_date_string(
-  ant_t *js, ant_value_t this_val, 
-  date_string_spec_t spec
-);
+ant_value_t js_mkdate(ant_t *js, double ms);
+ant_value_t get_date_string(ant_t *js, ant_value_t this_val, date_string_spec_t spec);
 
 #endif

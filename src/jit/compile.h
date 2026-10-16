@@ -176,8 +176,10 @@ typedef struct jit_compile {
   MIR_item_t imp_sne;
   MIR_item_t imp_put_field;
   MIR_item_t imp_shape_transition;
+  MIR_item_t imp_protector_store;
   MIR_item_t imp_remember_obj;
   MIR_item_t imp_get_elem;
+  MIR_item_t imp_realm_reenter;
   MIR_item_t imp_get_index_fast;
   MIR_item_t imp_put_elem;
   MIR_item_t imp_get_private;
@@ -192,6 +194,7 @@ typedef struct jit_compile {
   MIR_item_t imp_define_slot;
   MIR_item_t imp_array;
   MIR_item_t imp_catch_value;
+  MIR_item_t imp_interrupt;
   MIR_item_t imp_throw;
   MIR_item_t imp_throw_error;
   MIR_item_t imp_set_proto;
@@ -363,6 +366,7 @@ static inline bool jit_speculate_unseen_numeric(const jit_compile_t *c, uint8_t 
 }
 
 void jit_emit_exit_ret(jit_compile_t *c, MIR_op_t ret_op);
+void jit_emit_interrupt_poll(jit_compile_t *c);
 jit_stale_exit_t *jit_stale_exit_for(jit_compile_t *c, jit_stale_exit_t *exit);
 bool jit_site_runs_hot(jit_compile_t *c);
 void jit_note_stale_exit(jit_compile_t *c, const jit_stale_exit_t *exit, int pre_op_sp);

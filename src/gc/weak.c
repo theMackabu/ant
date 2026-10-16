@@ -170,8 +170,11 @@ void gc_weak_cleanup(ant_t *js) {
 }
 
 static bool gc_weak_is_collection(const ant_object_t *obj) {
-  return obj && (obj->type_tag == kTypeWeakMap ||
-    obj->type_tag == kTypeWeakSet || obj->native.tag == WEAKREF_NATIVE_TAG);
+  return obj && (
+    obj->type_tag == kTypeWeakMap || 
+    obj->type_tag == kTypeWeakSet || 
+    obj->native_tag == WEAKREF_NATIVE_TAG
+  );
 }
 
 static uint32_t gc_weak_pending_index_find_slot(

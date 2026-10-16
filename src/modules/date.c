@@ -74,6 +74,15 @@ static inline bool date_is_primitive(ant_value_t v) {
     || t == kTypeBigInt;
 }
 
+ant_value_t js_mkdate(ant_t *js, double ms) {
+  ant_value_t obj = Ant_Object_CreateBare(js);
+  if (is_err(obj)) return obj;
+  js_set_proto_init(obj, js->builtins.date_proto);
+  js_set_slot(obj, SLOT_DATA, tov(ms));
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_DATE));
+  return obj;
+}
+
 bool is_date_instance(ant_value_t value) {
   if (!is_object_type(value)) return false;
   ant_value_t brand = js_get_slot(js_as_obj(value), SLOT_BRAND);
@@ -110,7 +119,7 @@ static int64_t floor_div_int64(int64_t a, int64_t b) {
   return (a - (m + (m < 0) * b)) / b;
 }
 
-static double date_timeclip(double t) {
+double date_timeclip(double t) {
   if (t >= -8.64e15 && t <= 8.64e15) return trunc(t) + 0.0;
   return JS_NAN;
 }
@@ -804,15 +813,7 @@ static ant_value_t builtin_Date(ant_params_t) {
 
   if (vtype(call_new_target) == kTypeUndefined) {
     val = (double)date_now();
-    
-    ant_value_t tmp = Ant_Object_CreateBare(js);
-    ant_value_t date_proto = js->builtins.date_proto;
-    if (is_object_type(date_proto)) js_set_proto_init(tmp, date_proto);
-    
-    js_set_slot(tmp, SLOT_DATA, tov(val));
-    js_set_slot(tmp, SLOT_BRAND, js_mknum(BRAND_DATE));
-    
-    return get_date_string(js, tmp, kDateToStringSpec);
+    return get_date_string(js, js_mkdate(js, val), kDateToStringSpec);
   }
 
   if (nargs == 0) {

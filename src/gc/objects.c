@@ -1,7 +1,9 @@
 #include "ptr.h"
+#include "realm.h"
 #include "sugar.h"
 #include "shapes.h"
 #include "utils.h"
+#include "handles.h"
 
 #include "jit/entry_stub.h"
 #include "silver/engine.h"
@@ -480,6 +482,11 @@ static void gc_func_trace(ant_t *js, sv_func_t *func) {
 
   for (int i = 0; i < func->child_func_count; i++) 
     gc_func_enqueue(js, func->child_funcs[i]);
+
+  if (__builtin_expect(func->debug && func->debug->import_handler, 0)) {
+    gc_mark_value(js, func->debug->import_handler);
+    gc_mark_value(js, func->debug->import_referrer);
+  }
     
   for (uint32_t i = 0; i < func->obj_site_count; i++) {
     if (!func->obj_sites) continue;
@@ -574,23 +581,25 @@ void gc_mark_upvalue_cells(ant_t *js, sv_upvalue_t *const *cells, uint32_t count
 
 void gc_mark_closure(ant_t *js, sv_closure_t *c) {
   if (!c) return;
-  if (c->gc_epoch == js->gc.epoch) return;
   
+  if (c->gc_epoch == js->gc.epoch) return;
   c->gc_epoch = js->gc.epoch;
-  if (js->weak_gc.pending_active)
-    gc_weak_key_marked(js, mkref(kTypeFunction, c));
+  
+  if (js->weak_gc.pending_active) gc_weak_key_marked(js, mkref(kTypeFunction, c));
+  if (c->func && !js->gc.minor) ant_realm_reach(js, c->func->realm, gc_mark_value);
+  
   gc_mark_func(js, c->func);
   if (c->func_obj) gc_mark_value(js, c->func_obj);
+  
   gc_mark_value(js, c->module_ctx);
   gc_mark_value(js, c->bound_this);
   gc_mark_value(js, c->super_val);
 
-  if (c->func)
-    gc_mark_upvalue_cells(js, c->upvalues, (uint32_t)c->func->upvalue_count);
+  if (c->func) gc_mark_upvalue_cells(js, c->upvalues, (uint32_t)c->func->upvalue_count);
+  
   if (c->call_flags & SV_CALL_HAS_BOUND_ARGS) {
     gc_mark_value(js, c->u.bound.args_arr);
-    if (c->u.bound.argv)
-      for (int i = 0; i < c->bound_argc; i++) gc_mark_value(js, c->u.bound.argv[i]);
+    if (c->u.bound.argv) for (int i = 0; i < c->bound_argc; i++) gc_mark_value(js, c->u.bound.argv[i]);
   }
 }
 
@@ -623,6 +632,8 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
 
   if (!((1u << t) & GC_OBJ_TYPE_MASK)) {
     if (t == kTypeFunctionInfo) gc_mark_func(js, (sv_func_t *)vptr(v));
+    else if (t == kTypeBuiltin && !js->gc.minor)
+      ant_realm_reach(js, ant_cfunc_meta_realm((const ant_cfunc_meta_t *)vptr(v)), gc_mark_value);
     return;
   }
   
@@ -734,7 +745,7 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
     gc_mark_value(js, entry->setter);
   }
 
-  if (obj->native.tag != 0 || ant_object_has_sidecar(obj)) {
+  if (obj->native_tag != 0 || ant_object_has_sidecar(obj)) {
     ant_value_t value = js_obj_from_ptr(obj);
     sv_eval_env_gc_mark(js, obj);
     if (obj->flags.arguments_object) gc_mark_arguments_cells(js, value);
@@ -822,7 +833,6 @@ static void gc_scan_frame_span(
     gc_mark_value(js, frame->this);
     gc_mark_value(js, frame->new_target);
     gc_mark_value(js, frame->super_val);
-    gc_mark_value(js, frame->with_obj);
     gc_mark_value(js, frame->completion.value);
     gc_mark_value(js, frame->arguments_obj);
     gc_mark_value(js, frame->eval_env);
@@ -1157,6 +1167,9 @@ static void gc_mark_roots(ant_t *js) {
     gc_mark_coroutine(js, c);
 
   gc_mark_value(js, js->global);
+  gc_mark_value(js, js->global_this);
+  gc_mark_value(js, js->global_sandbox);
+  ant_realm_mark(js, gc_mark_value);
 
   for (uint32_t i = 0; i < js->global_lexical_count; i++)
     gc_mark_value(js, js->global_lexicals[i].value);
@@ -1217,8 +1230,8 @@ static void gc_mark_roots(ant_t *js) {
   for (size_t i = 0; i < js->pending_rejections.len; i++)
     gc_mark_value(js, js->pending_rejections.items[i]);
 
-  for (uint8_t i = 0; i < js->cfunc_promote_cache.len; i++)
-    gc_mark_value(js, js->cfunc_promote_cache.promoted[i]);
+  if (js->cfunc_promoted.entries) for (uint32_t i = 0; i <= js->cfunc_promoted.mask; i++)
+    if (js->cfunc_promoted.entries[i].key_a) gc_mark_value(js, js->cfunc_promoted.entries[i].value);
 
   gc_weak_mark_kept_alive(js, gc_mark_value);
   gc_visit_roots(js, gc_mark_value);
@@ -1381,7 +1394,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
 
   uintptr_t attached =
     (uintptr_t)obj->finalizer | (uintptr_t)obj->extra_slots |
-    (uintptr_t)obj->overflow_prop | (uintptr_t)obj->exotic_ops | obj->native.tag;
+    (uintptr_t)obj->overflow_prop | (uintptr_t)obj->exotic_ops | obj->native_tag;
   
   bool slow_type = (1u << obj->type_tag) & GC_FREE_SLOW_TYPE_MASK;
 
@@ -1401,7 +1414,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   }
 
   if (obj->finalizer) obj->finalizer(js, obj);
-  if (obj->native.tag != 0 || ant_object_has_sidecar(obj)) 
+  if (obj->native_tag != 0 || ant_object_has_sidecar(obj)) 
     gc_finalize_events_object(js, js_obj_from_ptr(obj));
   
   obj->mark_epoch = ANT_GC_DEAD;
@@ -1639,6 +1652,7 @@ uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
   
   gc_clear_napi_weak_refs(js, false);
   gc_age_regex_cache(js, false);
+  ant_realm_collect(js);
   
   uint64_t mark_ns = gc_now_ns() - mark_start_ns;
   

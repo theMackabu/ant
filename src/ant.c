@@ -28,6 +28,8 @@
 #include "gc.h"
 #include "gc/objects.h"
 #include "gc/roots.h"
+#include "realm.h"
+#include "bootstrap.h"
 #include "gc/weak.h"
 #include "gc/bigints.h"
 
@@ -336,22 +338,6 @@ bool js_prop_store(ant_t *js, ant_prop_loc_t loc, ant_value_t value) {
   return true;
 }
 
-void ant_symbol_property_mutation_invalidate(
-  ant_t *js, ant_object_t *holder, ant_offset_t sym_off
-) {
-  if (sym_off == (ant_offset_t)vdata(js->sym.iterator_sym)) {
-    if (holder->type_tag == kTypeArray || (is_object_type(js->sym.array_proto) && holder == js_obj_ptr(js->sym.array_proto)))
-      js->array_iteration_protector_invalid = true;
-    return;
-  }
-  
-  if (sym_off != (ant_offset_t)vdata(js->sym.species_sym)) return;
-  if (holder == js_obj_ptr(js->sym.promise_ctor)) js->promise_species_protector_invalid = true;
-  
-  if (is_object_type(js->sym.array_ctor) && holder == js_obj_ptr(js_func_obj(js->sym.array_ctor)))
-    js->array_species_protector_invalid = true;
-}
-
 bool js_obj_ensure_prop_capacity(ant_t *js, ant_object_t *obj, uint32_t needed) {
   if (!obj) return false;
   uint32_t inobj_limit = ant_object_inobj_limit(obj);
@@ -496,8 +482,8 @@ static ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit)
   obj->extra_cap = 0;
   
   obj->finalizer = NULL;
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  obj->native_ptr = NULL;
+  obj->native_tag = 0;
   
   obj->mark_epoch = 0;
   obj->flags = (ant_object_flags_t){.extensible = 1};
@@ -541,6 +527,9 @@ const char *typestr(ant_value_type_t t) {
 static void js_native_ctor_prepare(ant_t *js, ant_value_t obj, uint8_t flags) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr) return;
+
+  if (vtype(ptr->proto) == kTypeUndefined && is_object_type(js->sym.function_proto))
+    ptr->proto = js->sym.function_proto;
 
   if (flags & SV_CALL_IS_DEFAULT_CTOR) {
     ptr->flags.is_constructor = 1;
@@ -1438,7 +1427,7 @@ static ant_value_t strobj_call_custom_inspect(ant_t *js, ant_value_t obj) {
   if (vtype(inspect_fn) == kTypeBuiltin) {
     ant_value_t saved_this = js->this_val;
     js->this_val = obj;
-    result = sv_invoke_native(js, js_as_cfunc(inspect_fn), &depth_arg, 1, js_mkundef());
+    result = sv_invoke_builtin(js, inspect_fn, &depth_arg, 1, js_mkundef());
     js->this_val = saved_this;
   } else result = sv_vm_call(js->vm, js, inspect_fn, obj, &depth_arg, 1, NULL, js_mkundef());
 
@@ -3214,7 +3203,7 @@ ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t template) {
 
   ant_object_t *source = js_obj_ptr(template);
   if (
-    source->flags.is_exotic || source->finalizer || source->native.ptr ||
+    source->flags.is_exotic || source->finalizer || source->native_ptr ||
     source->extra_slots || ant_object_promise_state(source)
   ) return js_mkerr(js, "invalid object template state");
 
@@ -3953,6 +3942,7 @@ static ant_value_t array_constructor_from_receiver(ant_t *js, ant_value_t receiv
 
   ant_value_t ctor = js_getprop_fallback(js, receiver, "constructor");
   if (is_err(ctor)) return ctor;
+  if (ant_realm_foreign_array_ctor(js, ctor)) return js_mkundef();
 
   if (is_object_type(ctor) || vtype(ctor) == kTypeBuiltin) {
     ctor = get_ctor_species_value(js, ctor);
@@ -4417,7 +4407,7 @@ ant_value_t js_call_getter(ant_t *js, ant_value_t receiver, ant_value_t getter) 
   ant_value_t saved_this = js->this_val;
   
   js->this_val = receiver;
-  ant_value_t result = sv_invoke_native(js, js_as_cfunc(getter), NULL, 0, js_mkundef());
+  ant_value_t result = sv_invoke_builtin(js, getter, NULL, 0, js_mkundef());
   js->this_val = saved_this;
   
   return result;
@@ -5391,6 +5381,12 @@ static uintptr_t lkp_with_setter(ant_t *js, ant_value_t obj, const char *buf, si
 ant_value_t js_get_proto(ant_t *js, ant_value_t obj) {
   uint8_t t = vtype(obj);
 
+  if (t == kTypeBuiltin) {
+    ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
+    if (vtype(promoted) == kTypeFunction) return js_get_proto(js, promoted);
+    return ant_realm_function_proto(js, ant_realm_of_builtin(js, obj));
+  }
+
   if (!is_object_type(obj)) return js_mknull();
   ant_value_t as_obj = js_as_obj(obj);
 
@@ -5976,7 +5972,7 @@ static ant_value_t js_invoke_known(
   if (vtype(fn) == kTypeBuiltin) {
     ant_value_t saved_this = js->this_val;
     js->this_val = receiver;
-    ant_value_t result = sv_invoke_native(js, js_as_cfunc(fn), args, nargs, js_mkundef());
+    ant_value_t result = sv_invoke_builtin(js, fn, args, nargs, js_mkundef());
     js->this_val = saved_this;
     return result;
   }
@@ -6658,18 +6654,29 @@ static ant_value_t builtin_global_isFinite(ant_params_t) {
   return mkval(kTypeBool, isfinite(val) ? 1 : 0);
 }
 
+ant_value_t js_codegen_refused(ant_t *js) {
+  return js_mkerr_typed(js, JS_ERR_EVAL, "Code generation from strings disallowed for this context");
+}
+
 static ant_value_t builtin_eval(ant_params_t) {
   if (nargs == 0) return js_mkundef();
   ant_value_t code = args[0];
+  
   if (vtype(code) != kTypeString) return code;
+  if (__builtin_expect(js->codegen_blocked & ANT_CODEGEN_NO_STRINGS, 0)) return js_codegen_refused(js);
+  
   ant_offset_t code_len = 0;
   ant_offset_t code_off = vstr(js, code, &code_len);
   const char *code_str = (const char *)(uintptr_t)(code_off);
+  
   return js_eval_bytecode_eval_with_strict(js, code_str, (size_t)code_len, false);
 }
 
 ant_value_t js_builtin_eval(ant_t *js) {
-  return js_cfunc_expose_named(js, Ant_Function_CreateWithArity(builtin_eval, 1), "eval", 4);
+  if (vtype(js->sym.eval_fn) == kTypeBuiltin) return js->sym.eval_fn;
+  ant_value_t eval_fn = js_cfunc_expose_named(js, Ant_Function_CreateWithArity(builtin_eval, 1), "eval", 4);
+  if (vtype(eval_fn) == kTypeBuiltin) js->sym.eval_fn = eval_fn;
+  return eval_fn;
 }
 
 static ant_value_t builtin_Number_isInteger(ant_params_t) {
@@ -6711,7 +6718,7 @@ static ant_value_t builtin_Boolean(ant_params_t) {
 }
 
 ant_value_t js_normalize_sloppy_this(ant_t *js, ant_value_t value) {
-  if (vtype(value) == kTypeUndefined || vtype(value) == kTypeNull) return js->global;
+  if (vtype(value) == kTypeUndefined || vtype(value) == kTypeNull) return js->global_this;
   if (is_object_type(value) || vtype(value) == kTypeBuiltin) return value;
 
   uint8_t type = vtype(value);
@@ -6880,18 +6887,22 @@ static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_t
 }
 
 static ant_value_t builtin_Function(ant_params_t) {
+  if (__builtin_expect(js->codegen_blocked & ANT_CODEGEN_NO_STRINGS, 0)) return js_codegen_refused(js);
   return build_dynamic_function(js, args, nargs, call_new_target, false, false);
 }
 
 static ant_value_t builtin_AsyncFunction(ant_params_t) {
+  if (__builtin_expect(js->codegen_blocked & ANT_CODEGEN_NO_STRINGS, 0)) return js_codegen_refused(js);
   return build_dynamic_function(js, args, nargs, call_new_target, true, false);
 }
 
 static ant_value_t builtin_AsyncGeneratorFunction(ant_params_t) {
+  if (__builtin_expect(js->codegen_blocked & ANT_CODEGEN_NO_STRINGS, 0)) return js_codegen_refused(js);
   return build_dynamic_function(js, args, nargs, call_new_target, true, true);
 }
 
 static ant_value_t builtin_GeneratorFunction(ant_params_t) {
+  if (__builtin_expect(js->codegen_blocked & ANT_CODEGEN_NO_STRINGS, 0)) return js_codegen_refused(js);
   return build_dynamic_function(js, args, nargs, call_new_target, false, true);
 }
 
@@ -9304,11 +9315,7 @@ static ant_value_t builtin_object_getPrototypeOf(ant_params_t) {
   
   if (t == kTypeString || t == kTypeNumber || t == kTypeBool || t == kTypeBigInt)
     return js_primitive_prototype(js, t);
-  if (t == kTypeBuiltin) {
-    ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
-    if (vtype(promoted) == kTypeFunction) return get_proto(js, promoted);
-    return js_primitive_prototype(js, t);
-  }
+  if (t == kTypeBuiltin) return js_get_proto(js, obj);
   
   if (is_object_type(obj)) {
     if (is_proxy(obj)) return proxy_get_prototype_of(js, obj);
@@ -12202,6 +12209,11 @@ static ant_value_t object_add_descriptors_for_keys(
   }
 
   return js_mkundef();
+}
+
+ant_value_t js_get_own_property_descriptor(ant_t *js, ant_value_t obj, ant_value_t key) {
+  ant_value_t args[2] = { obj, key };
+  return builtin_object_getOwnPropertyDescriptor(js, args, 2, js_mkundef());
 }
 
 static ant_value_t builtin_object_getOwnPropertyDescriptors(ant_params_t) {
@@ -15389,7 +15401,7 @@ static ant_value_t array_to_locale_string_body(ant_params_t) {
     if (method_type == kTypeBuiltin) {
       ant_value_t saved_this = js->this_val;
       js->this_val = elem;
-      localized = sv_invoke_native(js, js_as_cfunc(method), args, nargs, js_mkundef());
+      localized = sv_invoke_builtin(js, method, args, nargs, js_mkundef());
       js->this_val = saved_this;
     } else localized = sv_vm_call(
       js->vm, js, method, elem, 
@@ -18465,8 +18477,7 @@ void js_process_promise_handlers(ant_t *js, ant_value_t promise) {
     
     ant_value_t res = js_mkundef();
     if (vtype(callback) == kTypeBuiltin) {
-      ant_cfunc_t fn = js_as_cfunc(callback);
-      res = sv_invoke_native(js, fn, &val, 1, js_mkundef());
+      res = sv_invoke_builtin(js, callback, &val, 1, js_mkundef());
     } else {
       ant_value_t call_args[] = { val };
       res = sv_vm_call(js->vm, js, callback, js_mkundef(), call_args, 1, NULL, js_mkundef());
@@ -22058,6 +22069,10 @@ static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {
   return proxy_obj;
 }
 
+ant_value_t js_mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {
+  return mkproxy(js, target, handler);
+}
+
 ant_value_t js_mkproxy_host(ant_t *js, ant_value_t target, const ant_host_proxy_ops_t *ops) {
   ANT_ASSERT(ops && ops->name && ops->get && ops->set && ops->del && ops->keys, "host proxies need every hook");
   
@@ -22174,59 +22189,10 @@ static void init_function_kind(
   mkprop(js, kind_proto, ANT_STRING("constructor"), js_obj_to_func(js, ctor_obj), ANT_PROP_ATTR_CONFIGURABLE);
 }
 
-static ant_t *isolate_init(void *buf, size_t len) {
-  #if UINTPTR_MAX > 9007199254740991ULL
-  ANT_ASSERT(
-    (uintptr_t)buf <= ((1ULL << 53) - 1),
-    "pointer exceeds 53-bit double-precision integer limit"
-  );
-  #endif
-  
-  ant_t *js = NULL;
-  
-  if (len < sizeof(*js)) return js;
-  memset(buf, 0, len);
-  
-  js = (ant_t *)buf;
-  js->stringify_root.max_depth = ANT_INSPECT_MAX_DEPTH;
-  Ant_List_Insert(&js->stringify, &js->stringify_root);
-  
-  js->exception = js_mkundef();
-  js->exception_oom = js_mkundef();
-  js_init_intern_cache(js);
-  
-  js->pool.rope.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
-  js->rope_gc.young.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
-  js->rope_gc.old.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
-  js->gc_use_nursery_major_floor = true;
-  
-  js->ic.epoch = 1;
-  js->ic.obj_epoch = 1;
-  gc_state_init(js);
-  
-  if (!isolate_arenas_init(js)) return NULL;
-  if (!Ant_Loop_Init(js)) return NULL;
-
-  js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
-  js->c_root_cap = 64;
-  js->c_roots = calloc(js->c_root_cap, sizeof(*js->c_roots));
-  
-  if (!js->c_roots) {
-    isolate_arenas_destroy(js);
-    return NULL;
-  }
-
+static void realm_init_core(ant_t *js) {
   js->global = mkobj(js, 0);
-  js->this_val = js->global;
-  js->modules.cjs.cache = js_mkundef();
-  js->modules.cjs.parent = js_mkundef();
-  js->modules.cjs.main = js_mkundef();
-  js->modules.cjs.constructor = js_mkundef();
-  js->modules.cjs.generation = 0;
-  js->modules.hooks = js_mkundef();
-  js->modules.import_meta = js_mkundef();
-  js->modules.state = NULL;
-  js->length_str = ANT_STRING("length");
+  js->global_this = js->global;
+  js->global_sandbox = js_mkundef();
 
   ant_value_t glob = js->global;
   ant_value_t object_proto = Ant_Object_CreateBare(js);
@@ -22661,6 +22627,80 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js->sym.promise_ctor = p_ctor_func;
   js->sym.promise_proto = promise_proto;
   js->promise_resolve_lookup_protector_invalid = false;
+
+  ant_protector_holder_mark(glob);
+  ant_protector_holder_mark(array_proto);
+  ant_protector_holder_mark(js->sym.array_ctor);
+  ant_protector_holder_mark(p_ctor_func);
+  ant_protector_holder_mark(promise_proto);
+}
+
+static ant_t *isolate_init(void *buf, size_t len) {
+  #if UINTPTR_MAX > 9007199254740991ULL
+  ANT_ASSERT(
+    (uintptr_t)buf <= ((1ULL << 53) - 1),
+    "pointer exceeds 53-bit double-precision integer limit"
+  );
+  #endif
+  
+  ant_t *js = NULL;
+  
+  if (len < sizeof(*js)) return js;
+  memset(buf, 0, len);
+  
+  js = (ant_t *)buf;
+  js->stringify_root.max_depth = ANT_INSPECT_MAX_DEPTH;
+  Ant_List_Insert(&js->stringify, &js->stringify_root);
+  
+  js->exception = js_mkundef();
+  js->exception_oom = js_mkundef();
+  js_init_intern_cache(js);
+  
+  js->pool.rope.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
+  js->rope_gc.young.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
+  js->rope_gc.old.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
+  js->gc_use_nursery_major_floor = true;
+  
+  js->ic.epoch = 1;
+  js->ic.obj_epoch = 1;
+  gc_state_init(js);
+  
+  if (!isolate_arenas_init(js)) return NULL;
+  if (!Ant_Loop_Init(js)) return NULL;
+
+  js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
+  js->c_root_cap = 64;
+  js->c_roots = calloc(js->c_root_cap, sizeof(*js->c_roots));
+  
+  if (!js->c_roots) {
+    isolate_arenas_destroy(js);
+    return NULL;
+  }
+
+  ant_realm_t *main_realm = calloc(1, sizeof(ant_realm_t));
+  if (!main_realm) {
+    free(js->c_roots);
+    isolate_arenas_destroy(js);
+    return NULL;
+  }
+  
+  main_realm->is_main = true;
+  Ant_List_Insert(&js->realms, main_realm);
+  js->realm = js->main_realm = main_realm;
+
+  js->modules.cjs.cache = js_mkundef();
+  js->modules.cjs.parent = js_mkundef();
+  js->modules.cjs.main = js_mkundef();
+  js->modules.cjs.constructor = js_mkundef();
+  js->modules.cjs.generation = 0;
+  js->modules.hooks = js_mkundef();
+  js->modules.import_meta = js_mkundef();
+  js->modules.state = NULL;
+  js->length_str = ANT_STRING("length");
+  
+  realm_init_core(js);
+  
+  js->this_val = js->global;
   js->owns_mem = false;
   js->max_size = 0;
   
@@ -22709,6 +22749,19 @@ void init_intrinsic_symbols(ant_t *js) {
   js->promise_species_protector_invalid = false;
   js->array_species_protector_invalid = false;
   js->array_iteration_protector_invalid = false;
+}
+
+bool js_realm_init_intrinsics(ant_t *js) {
+  realm_init_core(js);
+  ant_bootstrap_realm_intrinsics(js);
+  js_set_global_builtin(js, "globalThis", js->global);
+  
+  static const char *const not_ecmascript[] = { "Buffer", "atob", "btoa", "AsyncIterator", "InternalError", "import" };
+  for (size_t i = 0; i < sizeof(not_ecmascript) / sizeof(*not_ecmascript); i++)
+    js_delete_prop_ordinary(js, js->global, not_ecmascript[i], strlen(not_ecmascript[i]));
+    
+  ant_realm_install_console(js);
+  return !Ant_Exception_Pending(js);
 }
 
 ant_t *ant_create() {
@@ -22817,10 +22870,13 @@ void js_destroy(ant_t *js) {
   js->c_roots = NULL;
   js->c_root_count = js->c_root_cap = 0;
 
+  ant_realm_destroy_all(js);
   free(js->global_lexicals);
+  
   js->global_lexicals = NULL;
   js->global_lexical_count = js->global_lexical_cap = 0;
   free(js->global_lexical_index);
+  
   js->global_lexical_index = NULL;
   js->global_lexical_index_cap = 0;
 
@@ -22863,20 +22919,8 @@ void js_destroy(ant_t *js) {
   js->pending_rejections.items = NULL;
   js->pending_rejections.len = js->pending_rejections.cap = 0;
 
-  free(js->cfunc_promote_cache.cfunc_ptr);
-  free(js->cfunc_promote_cache.promoted);
-  js->cfunc_promote_cache.cfunc_ptr = NULL;
-  js->cfunc_promote_cache.promoted = NULL;
-  js->cfunc_promote_cache.len = js->cfunc_promote_cache.cap = 0;
-
-  free(js->cfunc_name_cache.base_meta);
-  free(js->cfunc_name_cache.name_ptr);
-  free(js->cfunc_name_cache.named);
-  
-  js->cfunc_name_cache.base_meta = NULL;
-  js->cfunc_name_cache.name_ptr = NULL;
-  js->cfunc_name_cache.named = NULL;
-  js->cfunc_name_cache.len = js->cfunc_name_cache.cap = 0;
+  ant_ptr_pair_free(&js->cfunc_promoted);
+  ant_ptr_pair_free(&js->cfunc_named);
 
   js_pool_destroy(&js->pool.rope);
   js_pool_destroy(&js->rope_gc.young);
@@ -22914,6 +22958,7 @@ ant_value_t js_mkfun_meta(const ant_cfunc_meta_t *meta) {
 }
 
 ant_value_t js_mkfun_site(ant_cfunc_site_t *site) {
+  if (__builtin_expect(ant_cfunc_intern_realm != NULL, 0)) return js_cfunc_value(ant_cfunc_meta_intern(&site->meta));
   const ant_cfunc_meta_t *stored = __atomic_load_n(&site->stored, __ATOMIC_ACQUIRE);
   if (stored) return mkref(kTypeBuiltin, stored);
   
@@ -23154,10 +23199,13 @@ static ant_value_t cfunc_expose_named(ant_t *js, ant_value_t cfunc, const char *
   const char *interned = intern_string(name, name_len);
   if (!interned) return js_mkerr(js, "oom");
 
-  for (uint16_t i = 0; i < js->cfunc_name_cache.len; i++) if (
-    js->cfunc_name_cache.base_meta[i] == base && 
-    js->cfunc_name_cache.name_ptr[i] == interned
-  ) return js->cfunc_name_cache.named[i];
+  ant_value_t cached;
+  ant_ptr_pair_map_t *named_map = js_cfunc_named_map(js, base);
+  
+  if (
+    ant_ptr_pair_get(named_map, (uintptr_t)base, (uintptr_t)interned, &cached) &&
+    js_as_cfunc_meta(cached)->length == length
+  ) return cached;
 
   ant_cfunc_meta_t named_meta = {
     .fn = base->fn,
@@ -23166,36 +23214,11 @@ static ant_value_t cfunc_expose_named(ant_t *js, ant_value_t cfunc, const char *
     .flags = base->flags,
   };
 
-  if (js->cfunc_name_cache.len >= js->cfunc_name_cache.cap) {
-    uint16_t new_cap = js->cfunc_name_cache.cap ? js->cfunc_name_cache.cap * 2 : 8;
-    
-    const ant_cfunc_meta_t **new_base = realloc(
-      js->cfunc_name_cache.base_meta, 
-      new_cap * sizeof(ant_cfunc_meta_t *)
-    );
-    
-    const char **new_names = realloc(js->cfunc_name_cache.name_ptr, new_cap * sizeof(const char *));
-    ant_value_t *new_named = realloc(js->cfunc_name_cache.named, new_cap * sizeof(ant_value_t));
-    
-    if (!new_base || !new_names || !new_named) {
-      return js_mkerr(js, "oom");
-    }
-    
-    js->cfunc_name_cache.base_meta = new_base;
-    js->cfunc_name_cache.name_ptr = new_names;
-    js->cfunc_name_cache.named = new_named;
-    js->cfunc_name_cache.cap = new_cap;
-  }
-
   const ant_cfunc_meta_t *stored = ant_cfunc_meta_derive(base, &named_meta);
   if (!stored) return js_mkerr(js, "oom");
 
   ant_value_t named = mkref(kTypeBuiltin, stored);
-  uint16_t idx = js->cfunc_name_cache.len++;
-  
-  js->cfunc_name_cache.base_meta[idx] = base;
-  js->cfunc_name_cache.name_ptr[idx] = interned;
-  js->cfunc_name_cache.named[idx] = named;
+  if (!ant_ptr_pair_put(named_map, (uintptr_t)base, (uintptr_t)interned, named)) return js_mkerr(js, "oom");
   
   return named;
 }
@@ -23228,14 +23251,8 @@ static ant_value_t js_expose_cfunc_for_key(ant_t *js, ant_value_t value, const c
   return js_cfunc_expose_named(js, value, key, key_len);
 }
 
-ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc) {
-  uintptr_t ptr = vdata(cfunc);
+static ant_value_t js_cfunc_promote_in_realm(ant_t *js, ant_value_t cfunc) {
   const ant_cfunc_meta_t *meta = js_as_cfunc_meta(cfunc);
-
-  for (uint8_t i = 0; i < js->cfunc_promote_cache.len; i++) {
-    if (js->cfunc_promote_cache.cfunc_ptr[i] == ptr)
-    return js->cfunc_promote_cache.promoted[i];
-  }
 
   ant_value_t fn_obj = mkobj(js, 0);
   set_slot(fn_obj, SLOT_CFUNC, cfunc);
@@ -23264,24 +23281,20 @@ ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc) {
     if (is_err(proto_result)) return proto_result;
   } else if (is_constructor) js_mark_constructor(promoted, true);
 
-  if (js->cfunc_promote_cache.len >= js->cfunc_promote_cache.cap) {
-    uint8_t new_cap = js->cfunc_promote_cache.cap ? js->cfunc_promote_cache.cap * 2 : 4;
-    uintptr_t *new_ptrs = realloc(js->cfunc_promote_cache.cfunc_ptr, new_cap * sizeof(uintptr_t));
-    ant_value_t *new_vals = realloc(js->cfunc_promote_cache.promoted, new_cap * sizeof(ant_value_t));
-    
-    if (new_ptrs && new_vals) {
-      js->cfunc_promote_cache.cfunc_ptr = new_ptrs;
-      js->cfunc_promote_cache.promoted = new_vals;
-      js->cfunc_promote_cache.cap = new_cap;
-    }
-  }
-  
-  if (js->cfunc_promote_cache.len < js->cfunc_promote_cache.cap) {
-    uint8_t idx = js->cfunc_promote_cache.len++;
-    js->cfunc_promote_cache.cfunc_ptr[idx] = ptr;
-    js->cfunc_promote_cache.promoted[idx] = promoted;
-  }
+  if (!ant_ptr_pair_put(js_cfunc_promoted_map(js, meta), vdata(cfunc), 0, promoted))
+    return js_mkerr(js, "oom");
 
+  return promoted;
+}
+
+ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc) {
+  ant_value_t cached;
+  if (ant_ptr_pair_get(js_cfunc_promoted_map(js, js_as_cfunc_meta(cfunc)), vdata(cfunc), 0, &cached)) return cached;
+  
+  ant_realm_t *prev = ant_realm_switch(js, ant_realm_of_builtin(js, cfunc));
+  ant_value_t promoted = js_cfunc_promote_in_realm(js, cfunc);
+  ant_realm_restore(js, prev);
+  
   return promoted;
 }
 
@@ -24033,6 +24046,40 @@ ant_value_t js_eval_bytecode_eval_in_env_with_strict(
   );
 }
 
+ant_value_t js_vm_script_compile(ant_t *js, const char *buf, size_t len) {
+  code_arena_mark_t parse_mark = parse_arena_mark(js);
+  sv_ast_t *program = sv_parse(js, buf, (ant_offset_t)len, SV_PARSE_SCRIPT, false);
+  
+  sv_func_t *func = program
+    ? js_compile_parsed_bytecode(js, program, buf, len, SV_COMPILE_REPL, js_mkundef())
+    : NULL;
+  
+  parse_arena_rewind(js, parse_mark);
+
+  if (!func) return Ant_Exception_Pending(js)
+    ? Ant_Exception_Current(js)
+    : js_mkerr_typed(js, JS_ERR_SYNTAX | JS_ERR_NO_STACK, "Unexpected parse error");
+
+  if (func->debug) func->debug->name = func->debug->display_name = "<script>";
+
+  ant_value_t compiled = mkref(kTypeFunctionInfo, func);
+  sv_code_unit_unpin(func->unit);
+  
+  return compiled;
+}
+
+ant_value_t js_vm_script_run(ant_t *js, ant_value_t compiled) {
+  ant_value_t saved_this = js->this_val;
+  js->this_val = js->global_this;
+  ant_value_t result = js_execute_compiled_repl_bytecode(js, (sv_func_t *)vptr(compiled), NULL);
+  js->this_val = saved_this;
+  return result;
+}
+
+ant_value_t js_function_from_source(ant_t *js, ant_value_t *params_and_body, int nargs) {
+  return build_dynamic_function(js, params_and_body, nargs, js_mkundef(), false, false);
+}
+
 js_eval_result_t js_eval_bytecode_repl(
   ant_t *js, const char *buf, size_t len
 ) {
@@ -24045,7 +24092,7 @@ js_eval_result_t js_eval_bytecode_repl(
 static inline ant_value_t sv_call_cfunc(ant_t *js, ant_value_t func, ant_value_t this_val, ant_value_t *args, int nargs, ant_value_t new_target) {
   ant_value_t saved_this = js->this_val;
   js->this_val = this_val;
-  ant_value_t res = sv_invoke_native(js, js_as_cfunc(func), args, nargs, new_target);
+  ant_value_t res = sv_invoke_builtin(js, func, args, nargs, new_target);
   js->this_val = saved_this;
   return res;
 }
@@ -24055,7 +24102,7 @@ static inline ant_value_t sv_call_slot_cfunc(ant_t *js, ant_value_t func, ant_va
   ant_value_t saved_this = js->this_val;
   js->current_func = func;
   js->this_val = this_val;
-  ant_value_t res = sv_invoke_native(js, js_as_cfunc(cfunc_slot), args, nargs, new_target);
+  ant_value_t res = sv_invoke_builtin(js, cfunc_slot, args, nargs, new_target);
   js->current_func = saved_func;
   js->this_val = saved_this;
   return res;
@@ -24219,6 +24266,8 @@ void js_check_unhandled_rejections(ant_t *js) {
       int status = process_run_exit_handlers(js, EXIT_FAILURE);
       js_destroy(js); exit(status);
     }
+
+    if (js_is_termination(pd->value)) continue;
 
     GC_ROOT_SAVE(root_mark, js);
     ant_value_t reason = pd->value;

@@ -7,6 +7,7 @@
 #include "internal.h" // IWYU pragma: keep
 
 void init_symbol_module(ant_t *js);
+void init_symbol_ctor(ant_t *js);
 void js_define_species_getter(ant_t *js, ant_value_t ctor);
 
 bool js_is_symbol_description_getter(ant_value_t getter);

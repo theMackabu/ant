@@ -496,13 +496,15 @@ static ant_value_t js_arraybuffer_slice(ant_params_t) {
   if (end < begin) end = begin;
   
   size_t new_length = (size_t)(end - begin);
-  ArrayBufferData *new_data = create_array_buffer_data(js, new_length);
-  if (!new_data) return js_mkerr(js, "Failed to allocate new ArrayBuffer");
+  ArrayBufferData *new_data = data->is_shared
+    ? create_shared_array_buffer_data(new_length)
+    : create_array_buffer_data(js, new_length);
   
+  if (!new_data) return js_mkerr(js, "Failed to allocate new ArrayBuffer");
   memcpy(new_data->data, data->data + begin, new_length);
 
   ant_value_t new_obj = Ant_Object_CreateBare(js);
-  ant_value_t proto = js->builtins.arraybuffer_proto;
+  ant_value_t proto = data->is_shared ? js->builtins.sharedarraybuffer_proto : js->builtins.arraybuffer_proto;
 
   if (is_special_object(proto)) js_set_proto_init(new_obj, proto);
   js_set_native(new_obj, new_data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
@@ -4265,7 +4267,7 @@ void init_buffer_module(ant_t *js) {
   
   ant_value_t buffer_ctor_obj = Ant_Object_CreateBare(js);
   ant_value_t buffer_proto = Ant_Object_CreateBare(js);
-  js->builtins.buffer_proto = buffer_proto;
+  if (!is_object_type(js->builtins.buffer_proto)) js->builtins.buffer_proto = buffer_proto;
   
   ant_value_t uint8array_ctor = js_get(js, glob, "Uint8Array");
   ant_value_t uint8array_proto = js_get(js, uint8array_ctor, "prototype");

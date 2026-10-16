@@ -4,6 +4,7 @@
 
 #include "ant.h"
 #include "bootstrap.h"
+#include "realm.h"
 #include "snapshot.h"
 #include "primordials.h"
 #include "messages.h"
@@ -70,6 +71,7 @@
 #include "modules/stream.h"
 #include "modules/structured-clone.h"
 #include "modules/v8.h"
+#include "modules/vm.h"
 #include "modules/worker_threads.h"
 #include "modules/headers.h"
 #include "modules/blob.h"
@@ -82,6 +84,28 @@
 #include "streams/transform.h"
 #include "streams/codec.h"
 #include "streams/compression.h"
+
+void ant_bootstrap_realm_intrinsics(ant_t *js) {
+  init_symbol_ctor(js);
+  init_intrinsic_symbols(js);
+  init_iterator_module(js);
+  init_generator_module(js);
+  init_intl_module(js);
+  init_wasm_module(js);
+  init_buffer_module(js);
+  init_math_module(js);
+  init_bigint_module(js);
+  init_date_module(js);
+  #ifdef ANT_HAVE_TEMPORAL
+  init_temporal_module(js);
+  #endif
+  init_regex_module(js);
+  init_collections_module(js);
+  init_atomics_module(js);
+  init_json_module(js);
+  init_reflect_module(js);
+  init_uri_module(js);
+}
 
 void ant_bootstrap_modules(ant_t *js) {
   init_symbol_module(js);
@@ -146,6 +170,7 @@ void ant_bootstrap_modules(ant_t *js) {
 
   ant_register_library(shell_ops_library, "ant:internal/shell_ops");
   ant_register_library(primordial_library, "ant:internal/primordials");
+  ant_register_library(realm_internal_library, "ant:internal/realm");
   ant_register_library(internal_http_parser_library, "ant:internal/http_parser");
   ant_register_library(internal_http_writer_library, "ant:internal/http_writer");
   ant_register_library(internal_http_metadata_library, "ant:internal/http_metadata");
@@ -173,6 +198,7 @@ void ant_bootstrap_modules(ant_t *js) {
   ant_standard_library("worker_threads", worker_threads_library);
   ant_standard_library("async_hooks", async_hooks_library);
   ant_standard_library("v8", v8_library);
+  ant_standard_library("vm", vm_library);
   ant_standard_library("zlib", zlib_library);
   ant_standard_library("string_decoder", string_decoder_library);
   ant_standard_library("stream", stream_library);

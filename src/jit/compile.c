@@ -1,3 +1,4 @@
+#include "realm.h"
 #include "compile.h"
 #include "debug.h"
 #include <time.h>
@@ -203,7 +204,9 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
   sv_func_t *outer = jit_compile_owner;
   jit_call_tagging_t *outer_tagging = jit_call_tagging;
   jit_compile_owner = func;
+  ant_realm_t *prev_realm = ant_realm_switch(js, func->realm);
   sv_jit_func_t code = jit_compile_tier(js, func, hint_closure, tier);
+  ant_realm_restore(js, prev_realm);
   jit_compile_owner = outer;
   jit_call_tagging = outer_tagging;
   return code;

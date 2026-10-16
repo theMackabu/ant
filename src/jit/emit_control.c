@@ -76,6 +76,7 @@ void jit_emit_control(jit_compile_t *c) {
       bool short_op = (c->op == OP_JMP8);
       int target = c->bc_off + c->sz + (short_op ? (int8_t)sv_get_i8(c->ip + 1) : sv_get_i32(c->ip + 1));
       MIR_label_t lbl = label_for_offset(c->ctx, &c->lm, target);
+      if (target <= c->bc_off) jit_emit_interrupt_poll(c);
       if (c->cold_tier && target <= c->bc_off && c->promote_sites && c->promote_sites[c->bc_off])
         jit_emit_promote_check(c, lbl, c->promote_sites[c->bc_off] == 2 ? 1 : JIT_COLD_PROMOTE_CHECK_EVERY);
       MIR_append_insn(c->ctx, c->jit_func,
@@ -299,6 +300,7 @@ void jit_emit_control(jit_compile_t *c) {
                                           MIR_new_reg_op(c->ctx, c->r_vm),
                                           MIR_new_reg_op(c->ctx, c->r_js),
                                           MIR_new_reg_op(c->ctx, c->vs.regs[catch_saved_sp])));
+        jit_emit_interrupt_poll(c);
       } else {
         c->ok = false;
       }

@@ -10,6 +10,7 @@ OP_FMT(u8_npop)
 OP_FMT(npop_u8_u8)
 OP_FMT(atom)
 OP_FMT(atom_u8)
+OP_FMT(atom_label)
 OP_FMT(label)
 OP_FMT(label8)
 OP_FMT(loc)
@@ -275,13 +276,10 @@ OP_DEF(  IMPORT_NAMED,      5,   1,   1, atom)      /* ns -> named export (throw
 OP_DEF(  EXPORT,            5,   1,   0, atom)      /* value -> (module namespace[name] = value) */
 OP_DEF(  EXPORT_ALL,        1,   1,   0, none)      /* ns -> (export all properties) */
 
-OP_DEF(  ENTER_WITH,        1,   1,   0, none)      /* enter with(obj) block */
-OP_DEF(  EXIT_WITH,         1,   0,   0, none)      /* exit with(obj) block */
-
-OP_DEF(  WITH_GET_VAR,      8,   0,   1, atom)      /* -> val (check with-obj then fallback) */
-OP_DEF(  WITH_GET_CALL,     8,   0,   2, atom)      /* -> receiver, val for identifier call */
-OP_DEF(  WITH_PUT_VAR,      8,   1,   0, atom)      /* val -> (check with-obj then fallback) */
-OP_DEF(  WITH_DEL_VAR,      5,   0,   1, atom)      /* -> bool (delete from with-obj/global) */
+OP_DEF(  WITH_TRY_GET,      9,   1,   1, atom_label)
+OP_DEF(  WITH_TRY_CALL,     9,   1,   2, atom_label)
+OP_DEF(  WITH_TRY_PUT,      9,   2,   1, atom_label)
+OP_DEF(  WITH_TRY_DEL,      9,   1,   1, atom_label)
 
 OP_DEF(  SPECIAL_OBJ,       2,   0,   1, u8)        /* arguments, new.target, super, module import, arguments.length */
 OP_DEF(  EMPTY,             1,   0,   1, none)      /* push T_EMPTY (array hole) */

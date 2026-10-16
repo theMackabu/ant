@@ -106,7 +106,7 @@ void jit_emit_literals(jit_compile_t *c) {
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_MOV,
                                    MIR_new_reg_op(c->ctx, dst),
-                                   MIR_new_mem_op(c->ctx, MIR_JSVAL, (MIR_disp_t)offsetof(ant_t, global), c->r_js, 0, 1)));
+                                   MIR_new_mem_op(c->ctx, MIR_JSVAL, (MIR_disp_t)offsetof(ant_t, global_this), c->r_js, 0, 1)));
       break;
     }
 

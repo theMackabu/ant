@@ -762,6 +762,12 @@ empty:
   *tail = entry;
 }
 
+static inline void queue_job(ant_t *js, microtask_entry_t *entry) {
+  ant_realm_t *own = js->microtask_realm;
+  if (__builtin_expect(own != NULL, 0)) queue_microtask_entry(&own->microtasks, &own->microtasks_tail, entry);
+  else queue_microtask_entry(&js->timers.microtasks, &js->timers.microtasks_tail, entry);
+}
+
 void queue_microtask(ant_t *js, ant_value_t callback) {
   microtask_entry_t *entry = calloc(1, sizeof(microtask_entry_t));
   if (entry == NULL) return;
@@ -771,7 +777,7 @@ void queue_microtask(ant_t *js, ant_value_t callback) {
   entry->next = NULL;
   entry->argc = 0;
   
-  queue_microtask_entry(&js->timers.microtasks, &js->timers.microtasks_tail, entry);
+  queue_job(js, entry);
 }
 
 void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_value_t *args, int nargs) {
@@ -786,7 +792,7 @@ void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_value_t *arg
   entry->argc = (uint8_t)nargs;
   
   for (int i = 0; i < nargs; i++) entry->argv[i] = args[i];
-  queue_microtask_entry(&js->timers.microtasks, &js->timers.microtasks_tail, entry);
+  queue_job(js, entry);
 }
 
 bool queue_promise_thenable_job(ant_t *js, ant_value_t promise, ant_value_t thenable, ant_value_t then_fn) {
@@ -800,10 +806,7 @@ bool queue_promise_thenable_job(ant_t *js, ant_value_t promise, ant_value_t then
   entry->kind = MT_THENABLE_JOB;
   entry->argv[0] = promise;
 
-  queue_microtask_entry(
-    &js->timers.microtasks, 
-    &js->timers.microtasks_tail, entry
-  );
+  queue_job(js, entry);
   
   return true;
 }
@@ -832,10 +835,7 @@ bool queue_await_resume_job(coroutine_t *coro, ant_value_t value) {
 
   coroutine_retain(coro);
   coro->await_resume_job = entry;
-  queue_microtask_entry(
-    &js->timers.microtasks, 
-    &js->timers.microtasks_tail, entry
-  );
+  queue_job(js, entry);
   
   return true;
 }
@@ -881,7 +881,7 @@ void queue_promise_trigger(ant_t *js, ant_value_t promise) {
   entry->next = NULL;
   entry->kind = MT_PROMISE_TRIGGER;
 
-  queue_microtask_entry(&js->timers.microtasks, &js->timers.microtasks_tail, entry);
+  queue_job(js, entry);
 }
 
 static inline void process_microtask_entry(ant_t *js, microtask_entry_t *entry) {
@@ -1002,6 +1002,20 @@ static void process_microtasks_internal(ant_t *js, bool check_unhandled_rejectio
   js->microtasks_draining = false;
   if (at_job_boundary) gc_weak_clear_kept_alive(js);
 }
+
+void ant_realm_run_microtasks(ant_t *js, ant_realm_t *realm) {
+while (realm->microtasks) {
+  microtask_entry_t *batch = realm->microtasks;
+  realm->microtasks = realm->microtasks_tail = NULL;
+  
+  while (batch) {
+    microtask_entry_t *entry = batch;
+    batch = entry->next;
+    realm->microtasks_processing = batch;
+    process_microtask_entry(js, entry);
+    free(entry);
+  }
+}}
 
 void process_microtasks(ant_t *js) {
   process_microtasks_internal(js, true);
@@ -1200,6 +1214,11 @@ void cleanup_timer_module(ant_t *js) {
   discard_jobs(js, t->microtasks);
   discard_jobs(js, t->next_ticks);
   
+  for (ant_realm_t *realm = js->realms; realm; realm = realm->next) {
+    discard_jobs(js, realm->microtasks);
+    realm->microtasks = realm->microtasks_tail = NULL;
+  }
+  
   t->microtasks = t->microtasks_tail = NULL;
   t->next_ticks = t->next_ticks_tail = NULL;
 
@@ -1209,6 +1228,15 @@ void cleanup_timer_module(ant_t *js) {
   }
   
   t->immediates = t->immediates_tail = NULL;
+}
+
+static void gc_mark_jobs(ant_t *js, microtask_entry_t *m, gc_mark_fn mark) {
+  for (; m; m = m->next) {
+    mark(js, m->callback);
+    if (m->kind == MT_AWAIT_RESUME) gc_mark_coroutine(js, m->u.coro);
+    else mark(js, m->u.promise);
+    for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
+  }
 }
 
 void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
@@ -1222,18 +1250,12 @@ void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
     for (int i = 0; i < t->nargs; i++) mark(js, t->args[i]);
   }
   
-  for (microtask_entry_t *m = js->timers.microtasks; m; m = m->next) {
-    mark(js, m->callback);
-    if (m->kind == MT_AWAIT_RESUME) gc_mark_coroutine(js, m->u.coro);
-    else mark(js, m->u.promise);
-    for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
-  }
+  gc_mark_jobs(js, js->timers.microtasks, mark);
+  gc_mark_jobs(js, js->timers.microtasks_processing, mark);
   
-  for (microtask_entry_t *m = js->timers.microtasks_processing; m; m = m->next) {
-    mark(js, m->callback);
-    if (m->kind == MT_AWAIT_RESUME) gc_mark_coroutine(js, m->u.coro);
-    else mark(js, m->u.promise);
-    for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
+  for (ant_realm_t *realm = js->realms; realm; realm = realm->next) {
+    gc_mark_jobs(js, realm->microtasks, mark);
+    gc_mark_jobs(js, realm->microtasks_processing, mark);
   }
   
   for (microtask_entry_t *m = js->timers.next_ticks; m; m = m->next) {

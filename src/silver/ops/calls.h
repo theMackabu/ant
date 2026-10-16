@@ -26,16 +26,19 @@ static inline ant_value_t sv_load_stable_builtin(
     return js->sym.promise_resolve;
   }
 
-  if (!lkp_proto(js, js->global, js->intern.promise, 7).obj)
-    return js_mkerr_typed(js, JS_ERR_REFERENCE, "'Promise' is not defined");
+  ant_value_t receiver = js_mkundef();
+  if (sv_global_sandboxed(js)) {
+    if (!sv_sandbox_global_lookup(js, js->intern.promise, 7, &receiver))
+      return js_mkerr_typed(js, JS_ERR_REFERENCE, "'Promise' is not defined");
+  } else {
+    if (!lkp_proto(js, js->global, js->intern.promise, 7).obj)
+      return js_mkerr_typed(js, JS_ERR_REFERENCE, "'Promise' is not defined");
+    receiver = js_getprop_fallback(js, js->global, js->intern.promise);
+  }
 
   GC_ROOT_SAVE(root_mark, js);
-  ant_value_t receiver = js_getprop_fallback(
-    js, js->global, 
-    js->intern.promise
-  );
-
   GC_ROOT_PIN(js, receiver);
+  
   if (is_err(receiver)) {
     GC_ROOT_RESTORE(js, root_mark);
     return receiver;
@@ -351,6 +354,8 @@ static inline ant_value_t sv_op_eval(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, 
     vm->stack[vm->sp++] = code;
     return code;
   }
+  
+  if (__builtin_expect(js->codegen_blocked & ANT_CODEGEN_NO_STRINGS, 0)) return js_codegen_refused(js);
   
   ant_offset_t len;
   ant_offset_t off = vstr(js, code, &len);

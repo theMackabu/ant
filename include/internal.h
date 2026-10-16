@@ -6,6 +6,7 @@
 #include "object.h"
 #include "errors.h"
 #include "isolate.h"
+#include "protectors.h"
 
 #include "gc/strings.h"
 #include "gc/roots.h"
@@ -98,76 +99,6 @@ static inline void ant_object_invalidate_guarded_absence(ant_t *js, ant_object_t
   if (!obj || !obj->flags.guards_absence) return;
   obj->flags.guards_absence = 0;
   ant_ic_epoch_bump(js);
-}
-
-static inline void ant_prototype_write_epoch_bump(ant_t *js) {
-  if (++js->prototype_write_epoch == 0) {
-    ant_ic_epoch_bump(js);
-    js->prototype_write_epoch = 1;
-  }
-}
-
-static inline bool ant_property_key_is_protector(ant_t *js, const char *key) {
-  return 
-    key == js->intern.promise     || 
-    key == js->intern.resolve     ||
-    key == js->intern.constructor || 
-    key == js->intern.then;
-}
-
-static inline bool ant_property_key_is_watched(ant_t *js, const char *key) {
-  return 
-    ant_property_key_is_protector(js, key) || 
-    key == js->intern.prototype ||
-    key == js->intern.exec      ||
-    key == js->intern.replace;
-}
-
-static inline void ant_property_mutation_invalidate(
-  ant_t *js, ant_object_t *holder, const char *key
-) {
-  if (!js || !holder || !key) return;
-
-  if (key == js->intern.promise) {
-    if (holder == js_obj_ptr(js->global)) 
-      js->promise_resolve_lookup_protector_invalid = true;
-    return;
-  }
-
-  if (key == js->intern.resolve) {
-    if (
-      is_object_type(js->sym.promise_ctor) &&
-      holder == js_obj_ptr(js->sym.promise_ctor)
-    ) js->promise_resolve_lookup_protector_invalid = true;
-    return;
-  }
-
-  if (key == js->intern.prototype) {
-    ant_prototype_write_epoch_bump(js);
-    return;
-  }
-
-  if (key == js->intern.next) {
-    if (is_object_type(js->sym.array_iterator_proto) && holder == js_obj_ptr(js->sym.array_iterator_proto))
-      js->array_iteration_protector_invalid = true;
-    return;
-  }
-
-  bool invalidates_constructor = key == js->intern.constructor;
-  if (!invalidates_constructor && key != js->intern.then) return;
-  
-  if (
-    invalidates_constructor && 
-    (holder->type_tag == kTypeArray || (is_object_type(js->sym.array_proto) && holder == js_obj_ptr(js->sym.array_proto)))
-  ) js->array_species_protector_invalid = true;
-
-  ant_object_t *promise_proto = is_object_type(js->sym.promise_proto) ? js_obj_ptr(js->sym.promise_proto) : NULL;
-  if (!ant_object_promise_state(holder) && holder != promise_proto) return;
-  
-  if (invalidates_constructor) {
-    js->promise_constructor_protector_invalid = true;
-    js->promise_species_protector_invalid = true;
-  } else js->promise_then_protector_invalid = true;
 }
 
 typedef struct {
@@ -275,6 +206,19 @@ ant_value_t js_group_by(ant_t *js, ant_value_t items, ant_value_t callback, js_g
 ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode);
 ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
 ant_value_t js_proxy_prevent_extensions(ant_t *js, ant_value_t proxy);
+ant_value_t js_mkproxy(ant_t *js, ant_value_t target, ant_value_t handler);
+ant_value_t js_get_own_property_descriptor(ant_t *js, ant_value_t obj, ant_value_t key);
+
+ant_value_t js_vm_script_compile(ant_t *js, const char *buf, size_t len);
+ant_value_t js_vm_script_run(ant_t *js, ant_value_t compiled);
+ant_value_t js_function_from_source(ant_t *js, ant_value_t *params_and_body, int nargs);
+
+ant_value_t js_codegen_refused(ant_t *js);
+ant_value_t js_interrupt_raise(ant_t *js);
+
+bool js_is_termination(ant_value_t value);
+void sv_jit_arm_interrupts(ant_t *js);
+
 ant_value_t js_proxy_set(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t value);
 ant_value_t js_proxy_set_sym(ant_t *js, ant_value_t proxy, ant_value_t sym, ant_value_t value);
 ant_value_t js_set_reporting(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value);
@@ -305,7 +249,6 @@ void js_arguments_detach(ant_t *js, ant_value_t obj);
 void js_arguments_sync_slot(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t value);
 void js_arguments_rebind_frame(ant_t *js, ant_value_t obj, int frame_index);
 void js_arguments_bind_direct(ant_t *js, ant_value_t obj, struct sv_frame *frame);
-void ant_symbol_property_mutation_invalidate(ant_t *js, ant_object_t *holder, ant_offset_t sym_off);
 
 ant_value_t coerce_to_str(ant_t *js, ant_value_t v);
 ant_value_t coerce_to_str_concat(ant_t *js, ant_value_t v);
@@ -600,11 +543,7 @@ static inline ant_value_t defalias_sym_of(ant_t *js, ant_value_t obj, ant_value_
   return mkprop(js, obj, sym, js_get(js, obj, target), ANT_PROP_ATTR_METHOD);
 }
 
-static inline void js_set_global_builtin(
-  ant_t *js,
-  const char *name,
-  ant_value_t value
-) {
+static inline void js_set_global_builtin(ant_t *js, const char *name, ant_value_t value) {
   ant_value_t global = js->global;
   size_t name_len = strlen(name);
   js_set(js, global, name, value);
@@ -617,14 +556,6 @@ static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t
   js_set(js, lib, "default", ctor_fn);
   js_set(js, ctor_fn, "default", ctor_fn);
   js_set_slot_wb(js, lib, SLOT_DEFAULT, ctor_fn);
-}
-
-static inline ant_value_t js_cfunc_lookup_promoted(ant_t *js, ant_value_t cfunc) {
-  uintptr_t ptr = vdata(cfunc);
-  for (uint8_t i = 0; i < js->cfunc_promote_cache.len; i++) if (
-    js->cfunc_promote_cache.cfunc_ptr[i] == ptr
-  ) return js->cfunc_promote_cache.promoted[i];
-  return cfunc;
 }
 
 #endif

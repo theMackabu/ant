@@ -698,6 +698,8 @@ static ant_value_t wasm_module_from_bytes(ant_t *js, ant_value_t value, ant_valu
   char error_buf[128] = {0};
 
   *out_module = js_mkundef();
+  if (js->codegen_blocked & ANT_CODEGEN_NO_WASM)
+    return wasm_make_compile_error(js, "Wasm code generation disallowed by embedder");
 
   if (!ensure_wasm_engine()) return js_mkerr(js, "Failed to initialize WebAssembly engine");
   if (!(store = wasm_store_new(g_wasm_engine))) return js_mkerr(js, "Failed to create WebAssembly store");

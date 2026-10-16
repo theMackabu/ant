@@ -325,6 +325,11 @@ bool process_has_event_listeners(ant_t *js, const char *event_type) {
 bool process_report_uncaught_exception(ant_t *js) {
   if (!js || !Ant_Exception_Pending(js)) return false;
 
+  if (js_is_termination(Ant_Exception_Peek(js))) {
+    js_take_thrown(js, js_mkundef());
+    return false;
+  }
+
   GC_ROOT_SAVE(root_mark, js);
   ant_value_t stack = Ant_Exception_Stack(js, Ant_Exception_Peek(js));
   ant_value_t reason = js_take_thrown(js, js_mkundef());
