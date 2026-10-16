@@ -463,7 +463,9 @@ static ant_value_t vm_script_compiled(ant_t *js, ant_value_t script, ant_realm_t
 
   ant_value_t handler = js_get_slot(script, SLOT_VM_IMPORT);
   vm_set_import(js, (sv_func_t *)vptr(compiled), handler, is_callable(handler) ? script : js_mkundef());
+  
   if (!ant_ptr_pair_put(&realm->vm_scripts, (uintptr_t)st->id, 0, compiled)) return js_mkerr(js, "out of memory");
+  realm->gc_dirty = true;
 
   return compiled;
 }

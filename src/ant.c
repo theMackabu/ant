@@ -23225,6 +23225,9 @@ static ant_value_t js_cfunc_promote_in_realm(ant_t *js, ant_value_t cfunc) {
 
   if (!ant_ptr_pair_put(js_cfunc_promoted_map(js, meta), vdata(cfunc), 0, promoted))
     return js_mkerr(js, "oom");
+  
+  ant_realm_t *owner = ant_cfunc_meta_realm(meta);
+  if (owner) owner->gc_dirty = true;
 
   return promoted;
 }

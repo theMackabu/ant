@@ -13,14 +13,14 @@
 
 static inline work_flags_t get_pending_work(ant_t *js) {
   work_flags_t flags = 0;
-  if (has_pending_microtasks(js))       flags |= WORK_MICROTASKS;
-  if (has_pending_timers(js))           flags |= WORK_TIMERS;
-  if (has_pending_immediates(js))       flags |= WORK_IMMEDIATES;
-  if (has_pending_fetches())            flags |= WORK_FETCHES;
-  if (has_pending_fs_ops())             flags |= WORK_FS_OPS;
-  if (has_pending_child_processes(js))  flags |= WORK_CHILD_PROCS;
-  if (has_active_readline_interfaces()) flags |= WORK_READLINE;
-  if (has_active_stdin(js))             flags |= WORK_STDIN;
+  if (has_pending_microtasks(js))         flags |= WORK_MICROTASKS;
+  if (has_pending_timers(js))             flags |= WORK_TIMERS;
+  if (has_pending_immediates(js))         flags |= WORK_IMMEDIATES;
+  if (has_pending_fetches(js))            flags |= WORK_FETCHES;
+  if (has_pending_fs_ops(js))             flags |= WORK_FS_OPS;
+  if (has_pending_child_processes(js))    flags |= WORK_CHILD_PROCS;
+  if (has_active_readline_interfaces(js)) flags |= WORK_READLINE;
+  if (has_active_stdin(js))               flags |= WORK_STDIN;
   return flags;
 }
 

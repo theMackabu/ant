@@ -1,5 +1,6 @@
 const assert = require('node:assert');
 const realm = require('ant:internal/realm');
+const local = (value) => JSON.parse(JSON.stringify(value));
 
 function fresh() {
   const r = realm.create();
@@ -25,7 +26,7 @@ async function main() {
   {
     const { g, run } = fresh();
     g.Array.prototype[Symbol.iterator] = function* () { yield 'patched'; };
-    assert.deepStrictEqual(run('[...[1, 2]]'), ['patched']);
+    assert.deepStrictEqual(local(run('[...[1, 2]]')), ['patched']);
   }
 
   {
@@ -33,14 +34,14 @@ async function main() {
     const iterProto = run('Object.getPrototypeOf([][Symbol.iterator]())');
     const next = iterProto.next;
     iterProto.next = function () { const step = next.call(this); if (!step.done) step.value *= 10; return step; };
-    assert.deepStrictEqual(run('[...[1, 2]]'), [10, 20]);
+    assert.deepStrictEqual(local(run('[...[1, 2]]')), [10, 20]);
   }
 
   {
     const { g, run } = fresh();
     g.arr = run('[1, 2]');
     g.arr[Symbol.iterator] = function* () { yield 'own'; };
-    assert.deepStrictEqual(run('[...arr]'), ['own']);
+    assert.deepStrictEqual(local(run('[...arr]')), ['own']);
   }
 
   {
@@ -113,12 +114,12 @@ async function main() {
     /(b)(c)/.exec('abcd');
     run('/(x)(y)(z)/.exec("__xyz")');
     assert.deepStrictEqual([RegExp.$1, RegExp.$2, RegExp.lastMatch], ['b', 'c', 'bc']);
-    assert.deepStrictEqual(run('[RegExp.$1, RegExp.$3, RegExp.lastMatch]'), ['x', 'z', 'xyz']);
+    assert.deepStrictEqual(local(run('[RegExp.$1, RegExp.$3, RegExp.lastMatch]')), ['x', 'z', 'xyz']);
   }
 
   {
     const { run } = fresh();
-    assert.deepStrictEqual(run('[...[1, 2]]'), [1, 2]);
+    assert.deepStrictEqual(local(run('[...[1, 2]]')), [1, 2]);
     assert.strictEqual(run('"aXb".replace(/X/, "-")'), 'a-b');
     assert.ok(!(run('[1].map((x) => x)') instanceof Array));
   }

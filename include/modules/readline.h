@@ -6,7 +6,6 @@
 
 ant_value_t readline_library(ant_t *js);
 ant_value_t readline_promises_library(ant_t *js);
-
-bool has_active_readline_interfaces(void);
+bool has_active_readline_interfaces(ant_t *js);
 
 #endif

@@ -1,5 +1,6 @@
 const assert = require('node:assert');
 const vm = require('node:vm');
+const local = (value) => JSON.parse(JSON.stringify(value));
 
 const count = process.env.ANT_GC_STRESS ? 60 : 2000;
 const keptContexts = [];
@@ -16,13 +17,13 @@ for (let i = 0; i < count; i++) {
 }
 
 const script = new vm.Script('globalThis.k = (globalThis.k || 0) + 1; [1, 2].map((x) => x * k)');
-for (let i = 0; i < count; i++) assert.deepStrictEqual(script.runInNewContext({}), [1, 2]);
+for (let i = 0; i < count; i++) assert.deepStrictEqual(local(script.runInNewContext({})), [1, 2]);
 
 keptContexts.forEach((context, index) => {
   assert.strictEqual(vm.runInContext('i', context), index * 500);
   assert.strictEqual(vm.runInContext('typeof Array.from', context), 'function');
 });
-assert.deepStrictEqual(keptClosure(1), [1, 5, true, 5]);
+assert.deepStrictEqual(local(keptClosure(1)), [1, 5, true, 5]);
 const target = [];
 assert.strictEqual(keptBuiltin.call(target, 'x'), 1);
 assert.deepStrictEqual(target, ['x']);

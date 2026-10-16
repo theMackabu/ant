@@ -10,6 +10,7 @@ struct ant_realm {
   
   bool is_main;
   bool initializing;
+  bool gc_dirty;
   
   ant_ptr_pair_map_t builtin_records;
   uint64_t gc_epoch;

@@ -6,9 +6,9 @@
 #include <string.h>
 #include <strings.h>
 #include <uv.h>
-#include <utarray.h>
 
 #include "ant.h"
+#include "list.h"
 #include "cfunc.h"
 #include "ptr.h"
 #include "common.h"
@@ -29,9 +29,11 @@
 #include "modules/url.h"
 #include "streams/readable.h"
 
-typedef struct fetch_request_s {
-  ant_t *js;
+struct fetch_request_s {
+  fetch_request_t *next;
+  fetch_request_t **pprev;
   
+  ant_t *js;
   ant_value_t promise;
   ant_value_t request_obj;
   ant_value_t response_obj;
@@ -50,29 +52,10 @@ typedef struct fetch_request_s {
   
   uint64_t network_request_id;
   size_t network_encoded_length;
-} fetch_request_t;
+};
 
-enum { FETCH_REQUEST_NATIVE_TAG = 0x46524551u }; // FREQ
-
-// TODO: isolate
-static UT_array *pending_requests = NULL;
-static const int k_fetch_max_redirects = 20;
-static void fetch_start_http(fetch_request_t *req);
-
-static void fetch_request_retain(fetch_request_t *req) {
-  if (req) req->refs++;
-}
-
-static void remove_pending_request(fetch_request_t *req) {
-  if (!req || !pending_requests) return;
-
-  fetch_request_t **p = NULL;
-  unsigned int i = 0;
-  
-  while ((p = (fetch_request_t **)utarray_next(pending_requests, p))) {
-    if (*p == req) { utarray_erase(pending_requests, i, 1); return; } i++;
-  }
-}
+static constexpr int FETCH_MAX_REDIRECTS = 20;
+static constexpr uint32_t FETCH_REQUEST_NATIVE_TAG = Ant_NativeTag("FREQ");
 
 static void destroy_fetch_request(fetch_request_t *req) {
   ant_value_t signal = 0;
@@ -83,7 +66,7 @@ static void destroy_fetch_request(fetch_request_t *req) {
   if (abort_signal_is_signal(signal) && is_callable(req->abort_listener))
     abort_signal_remove_listener(req->js, signal, req->abort_listener);
 
-  remove_pending_request(req);
+  Ant_List_Remove(req);
   free(req);
 }
 
@@ -279,7 +262,7 @@ static ant_value_t fetch_prepare_redirect(fetch_request_t *req, const ant_http_r
   bool rewrite_to_get = false;
 
   if (!request || !location || location[0] == '\0') return js_mkundef();
-  if (req->redirect_count >= k_fetch_max_redirects) {
+  if (req->redirect_count >= FETCH_MAX_REDIRECTS) {
     return fetch_type_error(req->js, "fetch failed: too many redirects");
   }
 
@@ -576,56 +559,6 @@ static ant_value_t fetch_transport_reason(fetch_request_t *req, ant_http_result_
   return fetch_type_error(req->js, error_message ? error_message : "fetch failed");
 }
 
-static void fetch_http_on_complete(
-  ant_http_request_t *http_req,
-  ant_http_result_t result,
-  int error_code, const char *error_message, void *user_data
-) {
-  fetch_request_t *req = (fetch_request_t *)user_data;
-  
-  ant_t *js = req->js;
-  ant_value_t stream = 0;
-  ant_value_t controller = 0;
-  ant_value_t reason = 0;
-  req->http_req = NULL;
-
-  if (req->restart_pending) {
-    ant_inspector_network_finish(req->network_request_id, req->network_encoded_length);
-    req->network_request_id = 0;
-    req->network_encoded_length = 0;
-    req->restart_pending = false;
-    fetch_start_http(req);
-    return;
-  }
-
-  if (result != ANT_HTTP_RESULT_OK || error_code != 0) {
-    ant_inspector_network_fail(
-      req->network_request_id,
-      error_message ? error_message : "fetch failed",
-      result == ANT_HTTP_RESULT_ABORTED,
-      "Fetch"
-    );
-    
-    reason = fetch_transport_reason(req, result, error_message);
-    if (is_object_type(req->response_obj)) fetch_error_response_body(req, reason);
-    else fetch_reject(req, reason);
-    
-    fetch_request_release(req);
-    return;
-  }
-
-  if (is_object_type(req->response_obj)) {
-    stream = js_get_slot(req->response_obj, SLOT_RESPONSE_BODY_STREAM);
-    if (rs_is_stream(stream)) {
-      controller = rs_stream_controller(js, stream);
-      rs_controller_close(js, controller);
-    }
-  } else fetch_reject(req, fetch_type_error(js, "fetch completed without a response"));
-
-  ant_inspector_network_finish(req->network_request_id, req->network_encoded_length);
-  fetch_request_release(req);
-}
-
 static char *fetch_data_url_content_type(const char *url) {
   const char *header = url + 5;
   const char *comma = strchr(header, ',');
@@ -819,7 +752,7 @@ static void fetch_upload_schedule_next_read(fetch_request_t *req) {
   fulfill = js_heavy_mkfun_native(js, fetch_upload_on_read, req, FETCH_REQUEST_NATIVE_TAG);
   reject = js_heavy_mkfun_native(js, fetch_upload_on_reject, req, FETCH_REQUEST_NATIVE_TAG);
   
-  fetch_request_retain(req);
+  req->refs++;
   Ant_Promise_Observe(js, next_p, fulfill, reject);
 }
 
@@ -850,10 +783,61 @@ static void fetch_start_upload(fetch_request_t *req) {
   fetch_upload_schedule_next_read(req);
 }
 
-static void fetch_start_http(fetch_request_t *req) {
+static void fetch_http_on_complete(
+  ant_http_request_t *http_req, ant_http_result_t result,
+  int error_code, const char *error_message, void *user_data
+) {
+  fetch_request_t *req = (fetch_request_t *)user_data;
+  
+  ant_t *js = req->js;
+  ant_value_t stream = 0;
+  ant_value_t controller = 0;
+  ant_value_t reason = 0;
+  req->http_req = NULL;
+
+  if (req->restart_pending) {
+    ant_inspector_network_finish(req->network_request_id, req->network_encoded_length);
+    req->network_request_id = 0;
+    req->network_encoded_length = 0;
+    req->restart_pending = false;
+    fetch_start_http(req);
+    return;
+  }
+
+  if (result != ANT_HTTP_RESULT_OK || error_code != 0) {
+    ant_inspector_network_fail(
+      req->network_request_id,
+      error_message ? error_message : "fetch failed",
+      result == ANT_HTTP_RESULT_ABORTED,
+      "Fetch"
+    );
+    
+    reason = fetch_transport_reason(req, result, error_message);
+    if (is_object_type(req->response_obj)) fetch_error_response_body(req, reason);
+    else fetch_reject(req, reason);
+    
+    fetch_request_release(req);
+    return;
+  }
+
+  if (is_object_type(req->response_obj)) {
+    stream = js_get_slot(req->response_obj, SLOT_RESPONSE_BODY_STREAM);
+    if (rs_is_stream(stream)) {
+      controller = rs_stream_controller(js, stream);
+      rs_controller_close(js, controller);
+    }
+  } else fetch_reject(req, fetch_type_error(js, "fetch completed without a response"));
+
+  ant_inspector_network_finish(req->network_request_id, req->network_encoded_length);
+  fetch_request_release(req);
+}
+
+void fetch_start_http(fetch_request_t *req) {
   request_data_t *request = request_get_data(req->request_obj);
+  
   ant_http_request_options_t options = {0};
   ant_http_header_t *headers = NULL;
+  
   char *url = NULL;
   int rc = 0;
 
@@ -988,7 +972,7 @@ ant_value_t ant_fetch(ant_params_t) {
   req->upload_reader = js_mkundef();
   req->upload_read_promise = js_mkundef();
   req->refs = 1;
-  utarray_push_back(pending_requests, &req);
+  Ant_List_Insert(&js->fetch_requests, req);
 
   signal = request_get_signal(js, request_obj);
   if (abort_signal_is_signal(signal)) {
@@ -1008,26 +992,20 @@ ant_value_t ant_fetch(ant_params_t) {
 }
 
 void init_fetch_module(ant_t *js) {
-  utarray_new(pending_requests, &ut_ptr_icd);
   js_set(js, js->global, "fetch", Ant_Function_CreateEx(ant_fetch, 1, CFUNC_HAS_PROTOTYPE));
 }
 
-int has_pending_fetches(void) {
-  return pending_requests && utarray_len(pending_requests) > 0;
+int has_pending_fetches(ant_t *js) {
+  return js->fetch_requests != NULL;
 }
 
 void gc_mark_fetch(ant_t *js, gc_mark_fn mark) {
-  if (!pending_requests) return;
-  unsigned int len = utarray_len(pending_requests);
-  
-  for (unsigned int i = 0; i < len; i++) {
-    fetch_request_t **reqp = (fetch_request_t **)utarray_eltptr(pending_requests, i);
-    if (!reqp || !*reqp) continue;
-    mark(js, (*reqp)->promise);
-    mark(js, (*reqp)->request_obj);
-    mark(js, (*reqp)->response_obj);
-    mark(js, (*reqp)->abort_listener);
-    mark(js, (*reqp)->upload_reader);
-    mark(js, (*reqp)->upload_read_promise);
+  for (fetch_request_t *req = js->fetch_requests; req; req = req->next) {
+    mark(js, req->promise);
+    mark(js, req->request_obj);
+    mark(js, req->response_obj);
+    mark(js, req->abort_listener);
+    mark(js, req->upload_reader);
+    mark(js, req->upload_read_promise);
   }
 }

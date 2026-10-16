@@ -9,6 +9,7 @@
 #include "silver/call.h"
 
 static void realm_save(ant_t *js, ant_realm_t *realm) {
+  realm->gc_dirty = true;
   #define ANT_REALM_FIELD(name) realm->name = js->name;
   #include "realm/fields.h"
 
@@ -109,6 +110,7 @@ static void realm_mark_map(ant_t *js, const ant_ptr_pair_map_t *map, void (*mark
 }
 
 static void realm_mark_one(ant_t *js, ant_realm_t *realm, void (*mark)(ant_t *js, ant_value_t value)) {
+  realm->gc_dirty = false;
   realm_mark_map(js, &realm->cfunc_promoted, mark);
   realm_mark_map(js, &realm->vm_scripts, mark);
   if (realm == js->realm) return;
@@ -141,7 +143,7 @@ static void realm_mark_one(ant_t *js, ant_realm_t *realm, void (*mark)(ant_t *js
 
 void ant_realm_mark(ant_t *js, void (*mark)(ant_t *js, ant_value_t value)) {
   for (ant_realm_t *realm = js->realms; realm; realm = realm->next) {
-    bool root = js->gc.minor || realm->is_main || realm == js->realm;
+    bool root = js->gc.minor ? realm->gc_dirty : realm->is_main || realm == js->realm;
     if (!root) continue;
     realm->gc_epoch = js->gc.epoch;
     realm_mark_one(js, realm, mark);

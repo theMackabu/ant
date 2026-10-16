@@ -1656,6 +1656,18 @@ static void with_shadows(sv_compiler_t *c, const char *name, uint32_t len, sv_wi
   }
 }
 
+static bool local_with_shadowed(sv_compiler_t *c, const char *name, uint32_t len) {
+  if (!has_active_with_scope(c) || is_ident_str(name, len, "super", 5)) return false;
+
+  for (sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
+    int local = resolve_local(cur, name, len);
+    for (int i = cur->with_depth - 1; i >= 0; i--)
+      if (local < 0 || cur->locals[local].depth < cur->with_scopes[i].depth) return true;
+    if (local >= 0 || cur->owns_eval_env) break;
+  }
+  return false;
+}
+
 static void emit_with_ref_load(sv_compiler_t *c, const sv_with_ref_t *ref) {
   if (ref->is_upval) {
     emit_op(c, OP_GET_UPVAL);
@@ -2267,7 +2279,7 @@ static void collect_var_names(sv_ast_t *node, sv_decl_names_t *out) {
       for (int i = 0; i < node->args.count; i++) collect_var_names(node->args.items[i], out);
       break;
     case N_IF: collect_var_names(node->left, out); collect_var_names(node->right, out); break;
-    case N_WHILE: case N_DO_WHILE: case N_LABEL: collect_var_names(node->body, out); break;
+    case N_WHILE: case N_DO_WHILE: case N_LABEL: case N_WITH: collect_var_names(node->body, out); break;
     case N_FOR: collect_var_names(node->init, out); collect_var_names(node->body, out); break;
     case N_FOR_IN: case N_FOR_OF: case N_FOR_AWAIT_OF:
       collect_var_names(node->left, out); collect_var_names(node->body, out); break;
@@ -2511,7 +2523,7 @@ static void hoist_var_decls(sv_compiler_t *c, sv_ast_t *node) {
       hoist_var_decls(c, node->left);
       hoist_var_decls(c, node->right);
       break;
-    case N_WHILE: case N_DO_WHILE: case N_LABEL:
+    case N_WHILE: case N_DO_WHILE: case N_LABEL: case N_WITH:
       hoist_var_decls(c, node->body);
       break;
     case N_FOR:
@@ -2616,7 +2628,7 @@ static void annex_b_collect_block_var_funcs(ant_t *js, sv_ast_t *node, sv_ast_li
     annex_b_collect_block_var_funcs(js, node->right, out);
   } else if (node->type == N_LABEL) {
     annex_b_collect_block_var_funcs(js, node->body, out);
-  } else if (node->type == N_WHILE || node->type == N_DO_WHILE) {
+  } else if (node->type == N_WHILE || node->type == N_DO_WHILE || node->type == N_WITH) {
     annex_b_collect_block_var_funcs(js, node->body, out);
   } else if (node->type == N_FOR || node->type == N_FOR_IN || node->type == N_FOR_OF || node->type == N_FOR_AWAIT_OF) {
     annex_b_collect_block_var_funcs(js, node->body, out);
@@ -2917,8 +2929,8 @@ static uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node) {
 
     case N_IDENT: {
       int local = resolve_local(c, node->str, node->len);
-      if (local >= 0) return get_local_inferred_type(c, local);
-      return SV_TI_UNKNOWN;
+      if (local < 0 || local_with_shadowed(c, node->str, node->len)) return SV_TI_UNKNOWN;
+      return get_local_inferred_type(c, local);
     }
 
     case N_SEQUENCE:
@@ -3503,7 +3515,8 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   if (target->type == N_IDENT) {
-    int lhs_local = resolve_local(c, target->str, target->len);
+    bool shadowed = local_with_shadowed(c, target->str, target->len);
+    int lhs_local = shadowed ? -1 : resolve_local(c, target->str, target->len);
     uint8_t lhs_type = (lhs_local >= 0) ? get_local_inferred_type(c, lhs_local) : SV_TI_UNKNOWN;
     uint8_t rhs_type = infer_expr_type(c, node->right);
 
@@ -3513,7 +3526,7 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
       return;
     }
 
-    if (op == TOK_PLUS_ASSIGN) {
+    if (op == TOK_PLUS_ASSIGN && !shadowed) {
       int slot = resolve_local_slot(c, target->str, target->len);
       if (slot >= 0 && !c->locals[slot + c->param_locals].is_const) {
         sv_ast_t *rhs = node->right;
@@ -6229,7 +6242,7 @@ void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
         else compile_expr(c, decl->right);
         if (target->type == N_IDENT) {
           int idx = resolve_local(c, target->str, target->len);
-          if (idx >= 0 && c->locals[idx].depth != -1)
+          if (idx >= 0 && c->locals[idx].depth != -1 && !local_with_shadowed(c, target->str, target->len))
             emit_put_local_typed(c, idx, init_type);
           else compile_lhs_set(c, target, false);
         } else compile_lhs_set(c, target, false);
@@ -6503,7 +6516,8 @@ void compile_for(sv_compiler_t *c, sv_ast_t *node) {
     int slot;
     if (upd->type == N_UPDATE && upd->right && upd->right->type == N_IDENT &&
         (slot = resolve_local_slot(c, upd->right->str, upd->right->len)) >= 0 &&
-        !c->locals[c->param_locals + slot].captured) {
+        !c->locals[c->param_locals + slot].captured &&
+        !local_with_shadowed(c, upd->right->str, upd->right->len)) {
       emit_op(c, upd->op == TOK_POSTINC ? OP_INC_LOCAL : OP_DEC_LOCAL);
       emit(c, (uint8_t)slot);
       set_local_inferred_type(c, c->param_locals + slot, SV_TI_UNKNOWN);
@@ -6550,7 +6564,7 @@ static void compile_for_each_assign_target(sv_compiler_t *c, sv_ast_t *lhs) {
     sv_ast_t *decl = lhs->args.items[0];
     sv_ast_t *target = decl->left ? decl->left : decl;
     if (target->type == N_IDENT) {
-      if (lhs->var_kind == SV_VAR_VAR && is_sloppy_eval(c)) {
+      if (lhs->var_kind == SV_VAR_VAR && (is_sloppy_eval(c) || local_with_shadowed(c, target->str, target->len))) {
         emit_set_var(c, target->str, target->len, false);
         return;
       }
@@ -6647,7 +6661,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
     if (decl && decl->right) {
       compile_expr(c, decl->right);
       sv_ast_t *target = decl->left ? decl->left : decl;
-      if (target->type == N_IDENT && !is_sloppy_eval(c)) {
+      if (target->type == N_IDENT && !is_sloppy_eval(c) && !local_with_shadowed(c, target->str, target->len)) {
         int loc = resolve_local(c, target->str, target->len);
         if (loc == -1)
           loc = add_local(c, target->str, target->len, false, c->scope_depth);

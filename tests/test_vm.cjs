@@ -1,5 +1,6 @@
 const assert = require('node:assert');
 const vm = require('node:vm');
+const local = (value) => JSON.parse(JSON.stringify(value));
 
 async function main() {
   {
@@ -42,7 +43,7 @@ async function main() {
     assert.strictEqual(context.bar, 2);
     assert.strictEqual(vm.runInContext('this', context), inner);
     assert.strictEqual(inner.Array, vm.runInContext('Array', context));
-    assert.deepStrictEqual(vm.runInContext('Object.keys(globalThis)', context).sort(), ['bar', 'foo']);
+    assert.deepStrictEqual(local(vm.runInContext('Object.keys(globalThis)', context)).sort(), ['bar', 'foo']);
   }
 
   {

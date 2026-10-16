@@ -283,116 +283,109 @@ static inline ant_value_t sv_op_export_all(sv_vm_t *vm, ant_t *js) {
   return tov(0);
 }
 
-static inline bool sv_with_binding_is_unscopable(
-  ant_t *js,
-  ant_value_t with_obj,
-  const sv_atom_t *a,
-  ant_value_t *out,
-  bool *abrupt
-) {
-  *abrupt = false;
+static inline ant_object_t *sv_with_proto_ptr(ant_object_t *base_ptr) {
+  return (base_ptr && is_object_type(base_ptr->proto)) ? js_obj_ptr(js_as_obj(base_ptr->proto)) : NULL;
+}
 
-  ant_value_t unscopables_sym = js->sym.unscopables_sym;
-  if (vtype(unscopables_sym) != kTypeSymbol) return false;
+static inline bool sv_with_unscopables_cached_absent(ant_t *js, ant_object_t *base_ptr) {
+  ant_object_t *proto_ptr = sv_with_proto_ptr(base_ptr);
+  const ant_with_unscopables_cache_t *cache = &js->runtime_cache.with_unscopables_absent;
 
-  bool is_proxy_obj = is_proxy(js_as_obj(with_obj));
-  ant_value_t unscopables = js_mkundef();
+  return
+    cache->object_epoch == js->ic.obj_epoch &&
+    base_ptr == cache->base &&
+    (base_ptr ? base_ptr->shape : NULL) == cache->base_shape &&
+    proto_ptr == cache->proto &&
+    (proto_ptr ? proto_ptr->shape : NULL) == cache->proto_shape;
+}
 
-  if (!is_proxy_obj) {
-    ant_offset_t sym_off = (ant_offset_t)vdata(unscopables_sym);
-    ant_object_t *base_ptr = js_obj_ptr(js_as_obj(with_obj));
-    ant_value_t base_proto = (base_ptr && is_object_type(base_ptr->proto)) ? base_ptr->proto : js_mknull();
-    ant_object_t *proto_ptr = is_object_type(base_proto) ? js_obj_ptr(js_as_obj(base_proto)) : NULL;
+static inline void sv_with_unscopables_remember_absent(ant_t *js, ant_object_t *base_ptr) {
+  ant_object_t *proto_ptr = sv_with_proto_ptr(base_ptr);
+  if (proto_ptr && is_object_type(proto_ptr->proto)) return;
+
+  ant_with_unscopables_cache_t *cache = &js->runtime_cache.with_unscopables_absent;
+  cache->base = base_ptr;
+  cache->base_shape = base_ptr ? base_ptr->shape : NULL;
+  cache->proto = proto_ptr;
+  cache->proto_shape = proto_ptr ? proto_ptr->shape : NULL;
+  cache->object_epoch = js->ic.obj_epoch;
+}
+
+static inline bool sv_with_exotic_chain_has_sym(ant_t *js, ant_value_t obj, ant_offset_t sym_off, bool *saw_exotic) {
+  *saw_exotic = false;
+  
+  for (ant_value_t cur = obj; is_object_type(cur); cur = js_get_proto(js, js_as_obj(cur))) {
+    ant_object_t *cur_ptr = js_obj_ptr(js_as_obj(cur));
+    if (!cur_ptr || !cur_ptr->flags.is_exotic) continue;
     
-    uint32_t cache_epoch = js->ic.obj_epoch;
-    ant_with_unscopables_cache_t *cache = &js->runtime_cache.with_unscopables_absent;
+    *saw_exotic = true;
+    prop_meta_t meta;
+    if (lookup_symbol_prop_meta(js, js_as_obj(cur), sym_off, &meta)) return true;
+  }
+  
+  return false;
+}
 
-    if (
-      cache->object_epoch == cache_epoch &&
-      base_ptr == cache->base &&
-      (base_ptr ? base_ptr->shape : NULL) == cache->base_shape &&
-      proto_ptr == cache->proto &&
-      (proto_ptr ? proto_ptr->shape : NULL) == cache->proto_shape
-    ) return false;
-    
-    ant_prop_loc_t unscopables_off = lkp_sym_proto(js, with_obj, sym_off);
-    bool has_unscopables = unscopables_off.obj;
-    bool saw_exotic = base_ptr && base_ptr->flags.is_exotic;
+static inline ant_value_t sv_with_unscopables_value(ant_t *js, ant_value_t with_obj) {
+  ant_value_t sym = js->sym.unscopables_sym;
+  if (is_proxy(js_as_obj(with_obj))) return js_get_sym(js, with_obj, sym);
 
-    if (!has_unscopables) {
-      ant_value_t cur = with_obj;
-      while (is_object_type(cur)) {
-        ant_value_t cur_obj = js_as_obj(cur);
-        ant_object_t *cur_ptr = js_obj_ptr(cur_obj);
-        if (cur_ptr && cur_ptr->flags.is_exotic) saw_exotic = true;
-        prop_meta_t meta;
-        if (cur_ptr && cur_ptr->flags.is_exotic && lookup_symbol_prop_meta(js, cur_obj, sym_off, &meta)) {
-          has_unscopables = true;
-          break;
-        }
+  ant_object_t *base_ptr = js_obj_ptr(js_as_obj(with_obj));
+  if (sv_with_unscopables_cached_absent(js, base_ptr)) return js_mkundef();
 
-        ant_value_t proto = js_get_proto(js, cur_obj);
-        if (!is_object_type(proto)) break;
-        cur = proto;
-      }
-    }
-
-    if (!has_unscopables) {
-      ant_value_t proto_proto = (proto_ptr && is_object_type(proto_ptr->proto)) 
-        ? proto_ptr->proto : js_mknull();
-        
-      if (!saw_exotic && !is_object_type(proto_proto)) {
-        cache->base = base_ptr;
-        cache->base_shape = base_ptr ? base_ptr->shape : NULL;
-        cache->proto = proto_ptr;
-        cache->proto_shape = proto_ptr ? proto_ptr->shape : NULL;
-        cache->object_epoch = cache_epoch;
-      }
-      
-      return false;
-    }
-    
-    if (unscopables_off.obj) 
-      unscopables = js_prop_load(unscopables_off);
+  ant_offset_t sym_off = (ant_offset_t)vdata(sym);
+  ant_prop_loc_t found = lkp_sym_proto(js, with_obj, sym_off);
+  
+  if (found.obj) {
+    ant_value_t value = js_prop_load(found);
+    return vtype(value) == kTypeUndefined ? js_get_sym(js, with_obj, sym) : value;
   }
 
-  if (is_proxy_obj || vtype(unscopables) == kTypeUndefined)
-    unscopables = js_get_sym(js, with_obj, unscopables_sym);
+  bool saw_exotic = false;
+  if (sv_with_exotic_chain_has_sym(js, with_obj, sym_off, &saw_exotic)) return js_get_sym(js, with_obj, sym);
+  if (!saw_exotic) sv_with_unscopables_remember_absent(js, base_ptr);
   
+  return js_mkundef();
+}
+
+static inline bool sv_with_unscopables_blocked_fast(
+  ant_t *js, ant_value_t unscopables, const sv_atom_t *a, ant_value_t *blocked
+) {
+  if (is_proxy(js_as_obj(unscopables))) return false;
+  *blocked = js_mkundef();
+
+  for (ant_value_t cur = unscopables; is_object_type(cur); cur = js_get_proto(js, js_as_obj(cur))) {
+    prop_meta_t meta;
+    if (!lookup_string_prop_meta(js, js_as_obj(cur), a->str, a->len, &meta)) continue;
+    if (meta.has_getter || meta.has_setter) return false;
+
+    ant_prop_loc_t off = lkp(js, js_as_obj(cur), a->str, a->len);
+    if (off.obj) *blocked = js_prop_load(off);
+    return true;
+  }
+
+  return true;
+}
+
+static inline bool sv_with_binding_is_unscopable(
+  ant_t *js, ant_value_t with_obj, const sv_atom_t *a, ant_value_t *out, bool *abrupt
+) {
+  *abrupt = false;
+  if (vtype(js->sym.unscopables_sym) != kTypeSymbol) return false;
+
+  ant_value_t unscopables = sv_with_unscopables_value(js, with_obj);
   if (is_err(unscopables)) {
     *out = unscopables;
     *abrupt = true;
     return false;
   }
-
+  
   if (!is_object_type(unscopables)) return false;
-  ant_value_t blocked = js_mkundef();
-  bool got_blocked_fast = false;
 
-  if (!is_proxy(js_as_obj(unscopables))) {
-    ant_value_t cur = unscopables;
-    while (is_object_type(cur)) {
-      ant_value_t cur_obj = js_as_obj(cur);
-      prop_meta_t meta;
-      if (lookup_string_prop_meta(js, cur_obj, a->str, a->len, &meta)) {
-        if (meta.has_getter || meta.has_setter) break;
-        ant_prop_loc_t off = lkp(js, cur_obj, a->str, a->len);
-        blocked = off.obj ? js_prop_load(off) : js_mkundef();
-        got_blocked_fast = true;
-        break;
-      }
-
-      ant_value_t proto = js_get_proto(js, cur_obj);
-      if (!is_object_type(proto)) {
-        got_blocked_fast = true;
-        break;
-      }
-      cur = proto;
-    }
-  }
-
-  if (!got_blocked_fast)
+  ant_value_t blocked;
+  if (!sv_with_unscopables_blocked_fast(js, unscopables, a, &blocked))
     blocked = js_getprop_fallback(js, unscopables, a->str);
+  
   if (is_err(blocked)) {
     *out = blocked;
     *abrupt = true;
@@ -402,58 +395,116 @@ static inline bool sv_with_binding_is_unscopable(
   return js_truthy(js, blocked);
 }
 
-static inline ant_value_t sv_with_binds(ant_t *js, ant_value_t obj, const sv_atom_t *a, bool *binds) {
-  *binds = false;
-  
-  ant_value_t has = do_in(js, js_mkstr(js, a->str, a->len), obj);
-  if (is_err(has) || !js_truthy(js, has)) return has;
+typedef enum {
+  SV_WITH_MISS,
+  SV_WITH_FOUND,
+  SV_WITH_SLOW,
+} sv_with_fast_t;
+
+static inline sv_with_fast_t sv_with_find_own(ant_object_t *ptr, const sv_atom_t *a, ant_value_t *value) {
+  int32_t slot = ant_shape_lookup_interned(ptr->shape, a->str);
+  if (slot < 0) return SV_WITH_MISS;
+
+  const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
+  if (prop && (prop->has_getter || prop->has_setter)) return SV_WITH_SLOW;
+
+  *value = (uint32_t)slot < ptr->prop_count
+    ? ant_object_prop_get_unchecked(ptr, (uint32_t)slot)
+    : js_mkundef();
+
+  return SV_WITH_FOUND;
+}
+
+static inline sv_with_fast_t sv_with_find_fast(ant_t *js, ant_value_t obj, const sv_atom_t *a, ant_value_t *value) {
+  if (a->str == js->intern.length) return SV_WITH_SLOW;
+  ant_value_t cur = obj;
+
+  for (int depth = 0; depth < 64; depth++, cur = js_get_proto(js, cur)) {
+    if (vtype(cur) != kTypeObject) return is_object_type(cur) ? SV_WITH_SLOW : SV_WITH_MISS;
+
+    ant_object_t *ptr = js_obj_ptr(cur);
+    if (!ptr || !ptr->shape || ptr->flags.is_exotic) return SV_WITH_SLOW;
+
+    sv_with_fast_t own = sv_with_find_own(ptr, a, value);
+    if (own != SV_WITH_MISS) return own;
+  }
+
+  return SV_WITH_SLOW;
+}
+
+static inline ant_value_t sv_with_lookup(
+  ant_t *js, ant_value_t obj, const sv_atom_t *a,
+  bool want_value, ant_value_t *value, bool *taken
+) {
+  *taken = false;
+  sv_with_fast_t fast = sv_with_find_fast(js, obj, a, value);
+  if (fast == SV_WITH_MISS) return js_mkundef();
+
+  if (fast == SV_WITH_FOUND && sv_with_unscopables_cached_absent(js, js_obj_ptr(obj))) {
+    *taken = true;
+    return js_mkundef();
+  }
+
+  if (fast == SV_WITH_SLOW) {
+    ant_value_t has = do_in(js, js_mkstr(js, a->str, a->len), obj);
+    if (is_err(has) || !js_truthy(js, has)) return has;
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
+  if (fast == SV_WITH_FOUND) GC_ROOT_PIN(js, *value);
 
   ant_value_t error = js_mkundef();
   bool abrupt = false;
   bool unscopable = sv_with_binding_is_unscopable(js, obj, a, &error, &abrupt);
-  if (abrupt) return error;
   
-  *binds = !unscopable;
+  GC_ROOT_RESTORE(js, root_mark);
+
+  if (abrupt) return error;
+  if (unscopable) return js_mkundef();
+
+  if (fast == SV_WITH_SLOW && want_value) {
+    *value = js_getprop_fallback_len(js, obj, a->str, a->len);
+    if (is_err(*value)) return *value;
+  }
+
+  *taken = true;
   return js_mkundef();
 }
 
 static inline ant_value_t sv_op_with_try_get(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip, bool *taken) {
   const sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
-  
   ant_value_t obj = vm->stack[vm->sp - 1];
-  ant_value_t checked = sv_with_binds(js, obj, a, taken);
+  ant_value_t value = js_mkundef();
+
+  ant_value_t checked = sv_with_lookup(js, obj, a, true, &value, taken);
   if (is_err(checked) || !*taken) return checked;
   
-  ant_value_t value = js_getprop_fallback_len(js, obj, a->str, a->len);
-  if (is_err(value)) return value;
   vm->stack[vm->sp - 1] = value;
-  
   return js_mkundef();
 }
 
 static inline ant_value_t sv_op_with_try_call(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip, bool *taken) {
   const sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
-  
   ant_value_t obj = vm->stack[vm->sp - 1];
-  ant_value_t checked = sv_with_binds(js, obj, a, taken);
+  ant_value_t value = js_mkundef();
+
+  ant_value_t checked = sv_with_lookup(js, obj, a, true, &value, taken);
   if (is_err(checked)) return checked;
   
-  ant_value_t value = *taken ? js_getprop_fallback_len(js, obj, a->str, a->len) : js_mkundef();
-  if (is_err(value)) return value;
-  vm->stack[vm->sp++] = value;
-  
+  vm->stack[vm->sp++] = *taken ? value : js_mkundef();
   return js_mkundef();
 }
 
 static inline ant_value_t sv_op_with_try_put(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip, bool *taken) {
   const sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
-  
   ant_value_t obj = vm->stack[vm->sp - 1];
-  ant_value_t checked = sv_with_binds(js, obj, a, taken);
+  ant_value_t current = js_mkundef();
+
+  ant_value_t checked = sv_with_lookup(js, obj, a, false, &current, taken);
   if (is_err(checked)) return checked;
 
   if (*taken) {
-    ant_value_t stored = js_setprop(js, obj, js_mkstr(js, a->str, a->len), vm->stack[vm->sp - 2]);
+    ant_value_t stored = setprop_interned(js, obj, a->str, a->len, vm->stack[vm->sp - 2]);
     if (is_err(stored)) return stored;
   }
   
@@ -463,9 +514,10 @@ static inline ant_value_t sv_op_with_try_put(sv_vm_t *vm, ant_t *js, sv_func_t *
 
 static inline ant_value_t sv_op_with_try_del(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip, bool *taken) {
   const sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
-  
   ant_value_t obj = vm->stack[vm->sp - 1];
-  ant_value_t checked = sv_with_binds(js, obj, a, taken);
+  ant_value_t current = js_mkundef();
+
+  ant_value_t checked = sv_with_lookup(js, obj, a, false, &current, taken);
   if (is_err(checked) || !*taken) return checked;
   
   ant_value_t deleted = js_delete_prop(js, obj, a->str, a->len);

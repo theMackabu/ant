@@ -51,6 +51,10 @@ static bool inspector_network_has_ready_client(void) {
   return false;
 }
 
+static inline bool inspector_network_tracking(uint64_t request_id) {
+  return __builtin_expect(request_id && g_inspector.started && g_inspector.attached, 0);
+}
+
 bool ant_inspector_network_active(void) {
   return g_inspector.started &&
     g_inspector.attached &&
@@ -143,7 +147,7 @@ static bool inspector_append_headers_object(sbuf_t *b, const ant_http_header_t *
 }
 
 static void inspector_notify_request_extra(uint64_t request_id, const ant_http_header_t *headers) {
-  if (!request_id || !g_inspector.started || !g_inspector.attached) return;
+  if (!inspector_network_tracking(request_id)) return;
 
   sbuf_t b = {0};
   if (!sbuf_append(&b, "{\"method\":\"Network.requestWillBeSentExtraInfo\",\"params\":{\"requestId\":\"")) goto done;
@@ -160,7 +164,7 @@ done:
 }
 
 static void inspector_notify_response_extra(uint64_t request_id, int status, const ant_http_header_t *headers) {
-  if (!request_id || !g_inspector.started || !g_inspector.attached) return;
+  if (!inspector_network_tracking(request_id)) return;
 
   sbuf_t b = {0};
   if (!sbuf_append(&b, "{\"method\":\"Network.responseReceivedExtraInfo\",\"params\":{\"requestId\":\"")) goto done;
@@ -296,7 +300,7 @@ void ant_inspector_network_response(
   const char *type,
   const ant_http_header_t *headers
 ) {
-  if (!request_id || !g_inspector.started || !g_inspector.attached) return;
+  if (!inspector_network_tracking(request_id)) return;
 
   sbuf_t b = {0};
   if (!sbuf_append(&b, "{\"method\":\"Network.responseReceived\",\"params\":{\"requestId\":\"")) goto done;
@@ -324,7 +328,7 @@ done:
 }
 
 void ant_inspector_network_finish(uint64_t request_id, size_t encoded_data_length) {
-  if (!request_id || !g_inspector.started || !g_inspector.attached) return;
+  if (!inspector_network_tracking(request_id)) return;
 
   sbuf_t b = {0};
   if (!sbuf_append(&b, "{\"method\":\"Network.loadingFinished\",\"params\":{\"requestId\":\"")) goto done;
@@ -346,7 +350,7 @@ void ant_inspector_network_fail(
   bool canceled,
   const char *type
 ) {
-  if (!request_id || !g_inspector.started || !g_inspector.attached) return;
+  if (!inspector_network_tracking(request_id)) return;
 
   sbuf_t b = {0};
   if (!sbuf_append(&b, "{\"method\":\"Network.loadingFailed\",\"params\":{\"requestId\":\"")) goto done;
@@ -390,7 +394,7 @@ void ant_inspector_network_append_response_body(uint64_t request_id, const uint8
     len,
     true
   );
-  if (request_id && len > 0 && g_inspector.started && g_inspector.attached) {
+  if (len > 0 && inspector_network_tracking(request_id)) {
     sbuf_t b = {0};
     if (sbuf_append(&b, "{\"method\":\"Network.dataReceived\",\"params\":{\"requestId\":\"") &&
         sbuf_appendf(&b, "%" PRIu64, request_id) &&
@@ -427,7 +431,7 @@ done:
 }
 
 void ant_inspector_websocket_request(uint64_t request_id, const ant_http_header_t *headers) {
-  if (!request_id || !g_inspector.started || !g_inspector.attached) return;
+  if (!inspector_network_tracking(request_id)) return;
 
   sbuf_t b = {0};
   if (!sbuf_append(&b, "{\"method\":\"Network.webSocketWillSendHandshakeRequest\",\"params\":{\"requestId\":\"")) goto done;
@@ -446,7 +450,7 @@ done:
 }
 
 void ant_inspector_websocket_response(uint64_t request_id, int status, const char *status_text, const ant_http_header_t *headers) {
-  if (!request_id || !g_inspector.started || !g_inspector.attached) return;
+  if (!inspector_network_tracking(request_id)) return;
 
   sbuf_t b = {0};
   if (!sbuf_append(&b, "{\"method\":\"Network.webSocketHandshakeResponseReceived\",\"params\":{\"requestId\":\"")) goto done;
@@ -467,7 +471,7 @@ done:
 }
 
 static void inspector_websocket_frame(uint64_t request_id, const char *method, const uint8_t *data, size_t len, bool binary) {
-  if (!request_id || !g_inspector.started || !g_inspector.attached) return;
+  if (!inspector_network_tracking(request_id)) return;
 
   sbuf_t b = {0};
   char *encoded = NULL;
@@ -509,7 +513,7 @@ void ant_inspector_websocket_frame_received(uint64_t request_id, const uint8_t *
 }
 
 void ant_inspector_websocket_error(uint64_t request_id, const char *message) {
-  if (!request_id || !g_inspector.started || !g_inspector.attached) return;
+  if (!inspector_network_tracking(request_id)) return;
 
   sbuf_t b = {0};
   if (!sbuf_append(&b, "{\"method\":\"Network.webSocketFrameError\",\"params\":{\"requestId\":\"")) goto done;
@@ -526,7 +530,7 @@ done:
 }
 
 void ant_inspector_websocket_closed(uint64_t request_id) {
-  if (!request_id || !g_inspector.started || !g_inspector.attached) return;
+  if (!inspector_network_tracking(request_id)) return;
 
   sbuf_t b = {0};
   if (!sbuf_append(&b, "{\"method\":\"Network.webSocketClosed\",\"params\":{\"requestId\":\"")) goto done;

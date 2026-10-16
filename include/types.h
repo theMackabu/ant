@@ -54,6 +54,10 @@ typedef struct dns_request_s    dns_request_t;
 typedef struct net_server_s     net_server_t;
 typedef struct net_socket_s     net_socket_t;
 typedef struct ant_tls_socket_s ant_tls_socket_t;
+typedef struct fs_watcher_s     fs_watcher_t;
+typedef struct fs_request_s     fs_request_t;
+typedef struct fetch_request_s  fetch_request_t;
+typedef struct rl_interface_s   rl_interface_t;
 
 typedef uint64_t ant_offset_t;
 typedef uint64_t ant_value_t;

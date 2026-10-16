@@ -139,10 +139,15 @@ struct ant_isolate_t {
   uint8_t dns_result_order;
   ant_regexp_realm_t regexp;
   ant_iterator_registry_t iterators;
-
   net_server_t *net_servers;
   net_socket_t *net_sockets;
   ant_tls_socket_t *tls_sockets;
+  fetch_request_t *fetch_requests;
+  fs_request_t *fs_requests;
+  fs_watcher_t *fs_watchers;
+  rl_interface_t *rl_interfaces;
+  uint64_t rl_next_interface_id;
+  // END TODO
 
   ant_fixed_arena_t obj_arena;
   ant_fixed_arena_t closure_arena;

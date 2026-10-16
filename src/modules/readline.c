@@ -54,7 +54,7 @@ typedef struct {
   int current;
 } rl_history_t;
 
-typedef struct rl_interface {
+struct rl_interface_s {
   ant_t *js;
   uint64_t id;
   ant_value_t input_stream;
@@ -90,11 +90,7 @@ typedef struct rl_interface {
   bool sigint_watcher_active;
   bool sigint_watcher_initialized;
 #endif
-} rl_interface_t;
-
-// TODO: isolate
-static uint64_t next_interface_id = 1;
-static rl_interface_t *interfaces = NULL;
+};
 
 static const char *rl_render_prompt(const rl_interface_t *iface) {
   if (!iface) return "";
@@ -458,7 +454,7 @@ static void stop_reading(rl_interface_t *iface) {
     iface->sigint_watcher_active = false;
   }
 #endif
-  if (!has_active_readline_interfaces()) process_stdin_detach_reader(iface->js);
+  if (!has_active_readline_interfaces(iface->js)) process_stdin_detach_reader(iface->js);
 }
 
 static bool rl_has_event_listener(ant_t *js, rl_interface_t *iface, const char *event_type) {
@@ -565,22 +561,16 @@ static void process_byte(ant_t *js, rl_interface_t *iface, char c) {
 
 static void rl_feed_stdin_bytes(ant_t *js, const char *buf, size_t len) {
   rl_interface_t *iface, *tmp;
-
-  HASH_ITER(hh, interfaces, iface, tmp) {
+  HASH_ITER(hh, js->rl_interfaces, iface, tmp) {
     if (iface->closed || !iface->reading || iface->paused) continue;
-    for (size_t i = 0; i < len; i++) {
-      process_byte(js, iface, buf[i]);
-      if (iface->closed) break;
-    }
+    for (size_t i = 0; i < len; i++) { process_byte(js, iface, buf[i]); if (iface->closed) break; }
   }
 }
 
 static void rl_handle_stdin_eof(ant_t *js) {
   rl_interface_t *iface, *tmp;
-
-  HASH_ITER(hh, interfaces, iface, tmp) {
+  HASH_ITER(hh, js->rl_interfaces, iface, tmp)
     if (!iface->closed && iface->reading) rl_close_interface(js, iface);
-  }
 }
 
 #ifndef _WIN32
@@ -630,7 +620,8 @@ static rl_interface_t *get_interface(ant_t *js, ant_value_t this_obj) {
   
   uint64_t id = (uint64_t)js_getnum(id_val);
   rl_interface_t *iface = NULL;
-  HASH_FIND(hh, interfaces, &id, sizeof(uint64_t), iface);
+  HASH_FIND(hh, js->rl_interfaces, &id, sizeof(uint64_t), iface);
+  
   return iface;
 }
 
@@ -1045,9 +1036,9 @@ static ant_value_t rl_emit_keypress_events(ant_params_t) {
   return js_mkundef();
 }
 
-bool has_active_readline_interfaces(void) {
+bool has_active_readline_interfaces(ant_t *js) {
   rl_interface_t *iface, *tmp;
-  HASH_ITER(hh, interfaces, iface, tmp) {
+  HASH_ITER(hh, js->rl_interfaces, iface, tmp) {
     if (!iface->closed && iface->reading) return true;
   }
   return false;
@@ -1270,7 +1261,7 @@ static ant_value_t rl_create_interface(ant_params_t) {
   if (!iface) return js_mkerr(js, "out of memory");
 
   iface->js = js;
-  iface->id = next_interface_id++;
+  iface->id = ++js->rl_next_interface_id;
   iface->prompt = strdup(DEFAULT_PROMPT);
   iface->active_prompt = NULL;
   iface->line_buffer = calloc(MAX_LINE_LENGTH, 1);
@@ -1350,17 +1341,19 @@ static ant_value_t rl_create_interface(ant_params_t) {
         if (line) rl_history_add(&iface->history, line, false);
       }
     }
-  } else rl_history_init(&iface->history, iface->history_size);
-  HASH_ADD(hh, interfaces, id, sizeof(uint64_t), iface);
+  } 
+  
+  else rl_history_init(&iface->history, iface->history_size);
+  HASH_ADD(hh, js->rl_interfaces, id, sizeof(uint64_t), iface);
   
   ant_value_t obj = Ant_Object_CreateBare(js);
   js_set_proto_init(obj, rl_get_interface_proto(js));
   iface->js_obj = obj;
+  
   js_set(js, obj, "_rl_id", js_mknum((double)iface->id));
   js_set(js, obj, "terminal", js_bool(iface->terminal));
 
   start_reading(iface);
-  
   return obj;
 }
 
@@ -1402,7 +1395,7 @@ ant_value_t readline_promises_library(ant_t *js) {
 
 void gc_mark_readline(ant_t *js, gc_mark_fn mark) {
   rl_interface_t *iface, *tmp;
-  HASH_ITER(hh, interfaces, iface, tmp) {
+  HASH_ITER(hh, js->rl_interfaces, iface, tmp) {
     mark(js, iface->input_stream);
     mark(js, iface->output_stream);
     mark(js, iface->completer);

@@ -387,6 +387,25 @@ Phase 4 gaps closed:
   the phases (none of the GC code paths changed enough to explain it alone);
   bench-v8 overall is flat.
 
+Review fixes after the merge into master:
+
+- `var` and Annex B function declarations inside `with` are hoisted
+  (`collect_var_names`, `hoist_var_decls`, `annex_b_collect_block_var_funcs`
+  had no `N_WITH` case).
+- Compiler paths that write or type a local directly check
+  `local_with_shadowed`: `+=` through `ADD_LOCAL`, the for-update
+  `INC_LOCAL`/`DEC_LOCAL`, `var` initializers, `for (var k in ...)` targets
+  and `infer_expr_type`.
+- `ant_realm_main` reads `js->main_realm`.
+- A realm is a minor-GC root only while `gc_dirty`: set when its fields are
+  saved or its promoted-builtin or script maps gain an entry, cleared when it
+  is marked. Every minor GC promotes its survivors, so a clean realm holds no
+  young values.
+- `WITH_TRY_*` look the name up once: a shape walk over ordinary objects
+  (interned atom, data properties, no `length`), the unscopables cache, and
+  the value read from the same lookup. Exotic objects, proxies, accessors and
+  `length` take the generic `in`/get path. Stores use `setprop_interned`.
+
 ## Risks
 
 - Protector invalidation for inactive realms: silent wrong results if a
