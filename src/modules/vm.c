@@ -11,6 +11,7 @@
 #include "errors.h"
 #include "cfunc.h"
 #include "internal.h"
+#include "interrupt.h"
 #include "realm.h"
 #include "silver/engine.h"
 #include "silver/call.h"
@@ -482,6 +483,7 @@ typedef struct vm_interrupt {
   bool done;
   bool watching;
   
+  struct vm_interrupt *outer;
   struct vm_interrupt *outer_sigint;
 #ifndef _WIN32
   struct sigaction prev_sigint;
@@ -559,6 +561,9 @@ static ant_value_t vm_run_options(ant_t *js, ant_value_t options, vm_interrupt_t
 static void vm_interrupt_begin(vm_interrupt_t *it) {
   if (!it->timeout_ms && !it->sigint) return;
   sv_jit_arm_interrupts(it->js);
+  
+  it->outer = it->js->interrupt_run;
+  it->js->interrupt_run = it;
 
   if (it->timeout_ms) {
     uv_mutex_init(&it->lock);
@@ -579,9 +584,16 @@ static void vm_interrupt_begin(vm_interrupt_t *it) {
   }
 }
 
+static bool vm_interrupt_outer_fired(vm_interrupt_t *it) {
+  for (vm_interrupt_t *outer = it->outer; outer; outer = outer->outer)
+    if (atomic_load(&outer->fired)) return true;
+  return false;
+}
+
 static ant_value_t vm_interrupt_end(vm_interrupt_t *it, ant_value_t result) {
   if (!it->timeout_ms && !it->sigint) return result;
   ant_t *js = it->js;
+  js->interrupt_run = it->outer;
 
   if (it->sigint) {
   #ifndef _WIN32
@@ -607,8 +619,10 @@ static ant_value_t vm_interrupt_end(vm_interrupt_t *it, ant_value_t result) {
   if (!fired) return result;
 
   if (is_err(result)) js_take_thrown(js, result);
-  js->terminating = false;
   atomic_store_explicit(&js->interrupt_pending, 0, memory_order_relaxed);
+  
+  js->terminating = vm_interrupt_outer_fired(it);
+  if (js->terminating) atomic_store_explicit(&js->interrupt_pending, 1, memory_order_relaxed);
 
   char message[96];
   if (fired == VM_FIRED_TIMEOUT) {

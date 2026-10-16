@@ -32,6 +32,7 @@ typedef struct sv_upvalue   sv_upvalue_t;
 typedef struct sv_closure   sv_closure_t;
 typedef struct sv_frame     sv_frame_t;
 typedef struct sv_code_unit sv_code_unit_t;
+typedef struct vm_interrupt vm_interrupt_t;
 
 typedef struct sv_eval_env_state    sv_eval_env_state_t;
 typedef struct sv_map_template_desc sv_map_template_desc_t;

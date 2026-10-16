@@ -1,5 +1,6 @@
 #include "jit_internal.h"
 #include "native_getter.h"
+#include "protectors.h"
 #include "../silver/ops/globals.h"
 
 static MIR_reg_t mir_new_ic_reg(

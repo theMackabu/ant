@@ -19,6 +19,8 @@
 #include "runtime.h"
 #include "loop.h"
 #include "internal.h"
+#include "interrupt.h"
+#include "protectors.h"
 #include "errors.h"
 #include "handles.h"
 #include "descriptors.h"
@@ -18666,6 +18668,11 @@ static ant_value_t builtin_Promise(ant_params_t) {
 
   ant_value_t exec_args[] = { res_fn, rej_fn };
   ant_value_t exec_result = sv_vm_call(js->vm, js, executor, js_mkundef(), exec_args, 2, NULL, js_mkundef());
+  
+  if (js_terminating_error(js, exec_result)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return exec_result;
+  }
   
   if (is_err(exec_result) || Ant_Exception_Pending(js)) {
     ant_value_t reject_val = js_take_thrown(js, exec_result);

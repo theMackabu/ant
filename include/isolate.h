@@ -198,6 +198,7 @@ struct ant_isolate_t {
   
   bool interrupts_armed;
   bool terminating;
+  vm_interrupt_t *interrupt_run;
   
   ant_value_t this_val;
   ant_value_t current_func;

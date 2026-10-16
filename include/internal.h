@@ -6,7 +6,6 @@
 #include "object.h"
 #include "errors.h"
 #include "isolate.h"
-#include "protectors.h"
 
 #include "gc/strings.h"
 #include "gc/roots.h"
@@ -215,9 +214,6 @@ ant_value_t js_function_from_source(ant_t *js, ant_value_t *params_and_body, int
 
 ant_value_t js_codegen_refused(ant_t *js);
 ant_value_t js_interrupt_raise(ant_t *js);
-
-bool js_is_termination(ant_value_t value);
-void sv_jit_arm_interrupts(ant_t *js);
 
 ant_value_t js_proxy_set(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t value);
 ant_value_t js_proxy_set_sym(ant_t *js, ant_value_t proxy, ant_value_t sym, ant_value_t value);

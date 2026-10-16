@@ -1,5 +1,6 @@
 #include "compile.h"
 #include "silver/feedback.h"
+#include "protectors.h"
 
 static void jit_emit_index_read_fast(
     jit_compile_t *c, MIR_reg_t obj, MIR_reg_t key, MIR_reg_t dst, MIR_label_t done) {

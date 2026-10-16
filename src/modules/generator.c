@@ -6,6 +6,7 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
+#include "interrupt.h"
 #include "sugar.h"
 
 #include "gc/roots.h"
@@ -14,7 +15,7 @@
 #include "modules/iterator.h"
 #include "modules/timer.h"
 
-enum { GENERATOR_NATIVE_TAG = 0x47454e52u }; // GENR
+static constexpr uint32_t GENERATOR_NATIVE_TAG = Ant_NativeTag("GENR");
 
 typedef enum {
   GEN_SUSPENDED_START = 0,
@@ -67,6 +68,8 @@ static bool generator_is_async(ant_value_t gen) {
 }
 
 static ant_value_t generator_async_wrap_result(ant_t *js, ant_value_t result) {
+  if (js_terminating_error(js, result)) return result;
+  
   ant_value_t promise = js_mkpromise(js);
   if (is_err(promise)) return promise;
 

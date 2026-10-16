@@ -35,6 +35,7 @@
 #include "utils.h"
 #include "tty_ctrl.h"
 #include "internal.h"
+#include "interrupt.h"
 #include "descriptors.h"
 #include "silver/engine.h"
 #include "gc/roots.h"

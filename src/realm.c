@@ -141,9 +141,13 @@ static void realm_mark_one(ant_t *js, ant_realm_t *realm, void (*mark)(ant_t *js
   #include "isolate_values.h"
 }
 
+static inline bool realm_has_jobs(const ant_realm_t *realm) {
+  return realm->microtasks || realm->microtasks_processing;
+}
+
 void ant_realm_mark(ant_t *js, void (*mark)(ant_t *js, ant_value_t value)) {
   for (ant_realm_t *realm = js->realms; realm; realm = realm->next) {
-    bool root = js->gc.minor ? realm->gc_dirty : realm->is_main || realm == js->realm;
+    bool root = js->gc.minor ? realm->gc_dirty : realm->is_main || realm == js->realm || realm_has_jobs(realm);
     if (!root) continue;
     realm->gc_epoch = js->gc.epoch;
     realm_mark_one(js, realm, mark);
@@ -175,7 +179,7 @@ void ant_realm_collect(ant_t *js) {
   ant_realm_t *next;
   for (ant_realm_t *realm = js->realms; realm; realm = next) {
     next = realm->next;
-    if (realm->is_main || realm == js->realm || realm->gc_epoch == js->gc.epoch || realm->microtasks) continue;
+    if (realm->is_main || realm == js->realm || realm->gc_epoch == js->gc.epoch || realm_has_jobs(realm)) continue;
     Ant_List_Remove(realm);
     realm_free(js, realm);
   }
@@ -280,22 +284,36 @@ void ant_realm_install_console(ant_t *js) {
   js_set_global_builtin(js, "console", console);
 }
 
+static ant_value_t realm_handle_anchor(ant_params_t) {
+  return js_mkundef();
+}
+
 static ant_realm_t *realm_from_handle(ant_t *js, ant_value_t handle) {
   if (vtype(handle) != kTypeObject) return NULL;
-  ant_value_t ptr = js_get_slot(handle, SLOT_DATA);
-  if (vtype(ptr) != kTypeNumber) return NULL;
-  return (ant_realm_t *)(uintptr_t)tod(ptr);
+  ant_value_t anchor = js_get_slot(handle, SLOT_DATA);
+  return vtype(anchor) == kTypeBuiltin ? ant_cfunc_meta_realm(js_as_cfunc_meta(anchor)) : NULL;
 }
 
 static ant_value_t realm_lib_create(ant_params_t) {
   ant_realm_t *realm = ant_realm_create(js);
   if (!realm) return js_mkerr(js, "could not create realm");
   
+  ant_realm_t *prev = ant_realm_enter(js, realm);
+  ant_value_t anchor = Ant_Function_Create(realm_handle_anchor);
+  ant_realm_enter(js, prev);
+
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, anchor);
+
   ant_value_t handle = Ant_Object_CreateBare(js);
-  if (is_err(handle)) return handle;
-  
-  js_set_slot(handle, SLOT_DATA, tov((double)(uintptr_t)realm));
+  if (is_err(handle)) {
+    GC_ROOT_RESTORE(js, mark);
+    return handle;
+  }
+
+  js_set_slot(handle, SLOT_DATA, anchor);
   js_set(js, handle, "global", realm->global);
+  GC_ROOT_RESTORE(js, mark);
   
   return handle;
 }

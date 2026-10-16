@@ -2,6 +2,7 @@
 #include <time.h>
 
 #include "gc/roots.h"
+#include "interrupt.h"
 #include "jit_internal.h"
 #include "modules/regex.h"
 

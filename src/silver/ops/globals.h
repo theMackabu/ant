@@ -3,6 +3,7 @@
 
 #include "silver/engine.h"
 #include "errors.h"
+#include "protectors.h"
 #include "shapes.h"
 #include "eval_env.h"
 #include "modules/regex.h"

@@ -6,6 +6,7 @@
 #include "silver/call.h"
 #include "silver/feedback.h"
 #include "internal.h"
+#include "protectors.h"
 #include "errors.h"
 #include "gc/roots.h"
 #include "tokens.h"

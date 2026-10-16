@@ -10,6 +10,7 @@
 #include "cfunc.h"
 #include "errors.h"
 #include "internal.h"
+#include "protectors.h"
 #include "ptr.h"
 #include "silver/call.h"
 #include "descriptors.h"

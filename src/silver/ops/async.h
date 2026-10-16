@@ -5,6 +5,7 @@
 #include "sugar.h"
 #include "gc.h"
 #include "gc/roots.h"
+#include "interrupt.h"
 #include "silver/engine.h"
 #include "modules/timer.h"
 
@@ -139,6 +140,12 @@ static inline ant_value_t sv_start_tla(
     
     if (async_coro_out) coroutine_release(coro);
     
+    if (js_terminating_error(js, result)) {
+      coroutine_release(coro);
+      GC_ROOT_RESTORE(js, root_mark);
+      return result;
+    }
+    
     if (is_err(result)) {
       ant_value_t reject_value = js_take_thrown(js, result);
       js_reject_promise(js, promise, reject_value);
@@ -174,6 +181,11 @@ static inline ant_value_t sv_start_async_closure(
     ant_value_t result = sv_execute_closure_entry(
       caller_vm, closure, callee_func, super_val, new_target, this_val, args, argc, NULL
     );
+    
+    if (js_terminating_error(js, result)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return result;
+    }
     
     if (is_err(result)) {
       ant_value_t reject_value = js_take_thrown(js, result);
@@ -218,6 +230,12 @@ static inline ant_value_t sv_start_async_closure(
       coroutine_release(coro);
       GC_ROOT_RESTORE(js, root_mark);
       return promise;
+    }
+  
+    if (js_terminating_error(js, result)) {
+      coroutine_release(coro);
+      GC_ROOT_RESTORE(js, root_mark);
+      return result;
     }
   
     if (is_err(result)) {

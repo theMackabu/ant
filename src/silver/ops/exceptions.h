@@ -205,12 +205,12 @@ static inline uint8_t *sv_vm_throw(sv_vm_t *vm, ant_value_t err, int min_fp) {
   ant_t *js = vm->js;
   
   if (min_fp < 0) min_fp = 0;
-  if (__builtin_expect(js->terminating, 0)) return NULL;
+  bool terminating = __builtin_expect(js->terminating, 0);
 
   for (int f = vm->fp; f >= min_fp; f--) {
     sv_frame_t *frame = &vm->frames[f];
     int base = frame->handler_base;
-    int top = (f == vm->fp) ? vm->handler_depth : frame->handler_top;
+    int top = terminating ? base : (f == vm->fp) ? vm->handler_depth : frame->handler_top;
 
     for (int i = top - 1; i >= base; i--) {
       sv_handler_t *h = &vm->handler_stack[i];

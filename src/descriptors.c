@@ -2,6 +2,7 @@
 #include "hash.h"
 #include "shapes.h"
 #include "internal.h"
+#include "protectors.h"
 #include "descriptors.h"
 #include "silver/engine.h"
 
