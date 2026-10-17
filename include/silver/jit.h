@@ -20,6 +20,14 @@ typedef enum {
 
 void sv_jit_init(ant_t *js);
 void sv_jit_destroy(ant_t *js);
+void sv_jit_drop_all_code(ant_t *js);
+void sv_jit_drop_func_code(sv_func_t *func);
+
+static inline void sv_func_note_multi_closure(sv_func_t *func) {
+  if (func->multi_closure) return;
+  func->multi_closure = true;
+  if (func->jit_tdz_specialized) sv_jit_drop_func_code(func);
+}
 
 sv_jit_func_t sv_jit_tier_up(
   ant_t *js, sv_func_t *func, 

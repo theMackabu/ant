@@ -34,7 +34,7 @@ static inline bool ant_property_key_is_watched(ant_t *js, const char *key) {
 
 static inline void ant_protector_holder_mark(ant_value_t value) {
   ant_object_t *obj = js_obj_ptr(value);
-  if (obj) obj->flags.protector_holder = 1;
+  if (obj) obj->protector_holder = 1;
 }
 
 static inline void ant_property_mutation_invalidate(ant_t *js, ant_object_t *holder, const char *key) {
@@ -45,14 +45,14 @@ static inline void ant_property_mutation_invalidate(ant_t *js, ant_object_t *hol
     return;
   }
 
-  if (!holder->flags.protector_holder && holder->type_tag != kTypeArray && !ant_object_promise_state(holder)) return;
+  if (!holder->protector_holder && holder->type_tag != kTypeArray && !ant_object_promise_state(holder)) return;
   if (!ant_property_key_is_protector(js, key) && key != js->intern.next) return;
   
   ant_protectors_invalidate(js, holder, key);
 }
 
 static inline void ant_symbol_property_mutation_invalidate(ant_t *js, ant_object_t *holder, ant_offset_t sym_off) {
-  if (!holder->flags.protector_holder && holder->type_tag != kTypeArray) return;
+  if (!holder->protector_holder && holder->type_tag != kTypeArray) return;
   
   if (
     sym_off != (ant_offset_t)vdata(js->sym.iterator_sym) &&

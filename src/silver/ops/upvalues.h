@@ -3,6 +3,7 @@
 
 #include "internal.h"
 #include "silver/engine.h"
+#include "silver/jit.h"
 #include "silver/upvalues.h"
 #include "eval_env.h"
 
@@ -194,16 +195,18 @@ static inline sv_closure_t *sv_closure_init(
   sv_closure_t *closure = js_closure_alloc_hot(js);
   if (!closure) return NULL;
 
+  if (__builtin_expect(child->has_closure, 1)) sv_func_note_multi_closure(child);
+  else child->has_closure = true;
+  
   closure->func = child;
   closure->bound_this = child->is_arrow ? this_val : js_mkundef();
   closure->bound_argc = 0;
   closure->super_val = js_mkundef();
   closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
 
-  if (child->upvalue_count > 0)
-    closure->upvalues = child->upvalue_count <= SV_CLOSURE_INLINE_UPVALS
-      ? closure->inline_upvals
-      : calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
+  if (child->upvalue_count > 0) closure->upvalues = child->upvalue_count <= SV_CLOSURE_INLINE_UPVALS
+    ? closure->inline_upvals
+    : calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
 
   return closure;
 }

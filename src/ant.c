@@ -487,6 +487,7 @@ static ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit)
   obj->finalizer = NULL;
   obj->native_ptr = NULL;
   obj->native_tag = 0;
+  obj->protector_holder = 0;
   
   obj->mark_epoch = 0;
   obj->flags = (ant_object_flags_t){.extensible = 1};
@@ -3221,6 +3222,7 @@ ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t template) {
   ant_shape_retain(target->shape);
   target->mark_epoch = 0;
   target->ic_identity = 0;
+  target->protector_holder = 0;
   target->flags.generation = 0;
   target->flags.in_remember_set = 0;
   target->flags.gc_permanent = 0;
@@ -5368,23 +5370,25 @@ static uintptr_t lkp_with_setter(ant_t *js, ant_value_t obj, const char *buf, si
   return 0;
 }
 
+static __attribute__((noinline)) ant_value_t js_get_builtin_proto(ant_t *js, ant_value_t obj) {
+  ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
+  if (vtype(promoted) == kTypeFunction) return js_get_proto(js, promoted);
+  return ant_realm_function_proto(js, ant_realm_of_builtin(js, obj));
+}
+
 ant_value_t js_get_proto(ant_t *js, ant_value_t obj) {
   uint8_t t = vtype(obj);
 
-  if (t == kTypeBuiltin) {
-    ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
-    if (vtype(promoted) == kTypeFunction) return js_get_proto(js, promoted);
-    return ant_realm_function_proto(js, ant_realm_of_builtin(js, obj));
-  }
-
+  if (__builtin_expect(t == kTypeBuiltin, 0)) return js_get_builtin_proto(js, obj);
   if (!is_object_type(obj)) return js_mknull();
+  
   ant_value_t as_obj = js_as_obj(obj);
-
   ant_object_t *ptr = js_obj_ptr(as_obj);
   ant_value_t proto = ptr ? ptr->proto : js_mkundef();
-  if (is_object_type(proto) || vtype(proto) == kTypeNull) return proto;
   
+  if (is_object_type(proto) || vtype(proto) == kTypeNull) return proto;
   if (t != kTypeObject) return js_primitive_prototype(js, t);
+  
   return js_mknull();
 }
 

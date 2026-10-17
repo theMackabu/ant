@@ -24,12 +24,19 @@ void mir_emit_bailout_jump_typed(MIR_context_t ctx, MIR_item_t fn,
     mir_emit_slot_boxed(
         ctx, fn, bail->vstack->regs[i], bail->vstack->d_regs[i],
         slot_type, bail->d_slot);
+  }
+  mir_emit_bailout_boxed_exit(ctx, fn, bc_off, pre_op_sp, bail);
+}
+
+void mir_emit_bailout_boxed_exit(MIR_context_t ctx, MIR_item_t fn,
+                                 int bc_off, int pre_op_sp,
+                                 const jit_bailout_emit_t *bail) {
+  for (int i = 0; i < pre_op_sp; i++)
     MIR_append_insn(ctx, fn,
                     MIR_new_insn(ctx, MIR_MOV,
                                  MIR_new_mem_op(ctx, MIR_T_I64,
                                                 (MIR_disp_t)(i * (int)sizeof(ant_value_t)), bail->args_buf, 0, 1),
                                  MIR_new_reg_op(ctx, bail->vstack->regs[i])));
-  }
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_MOV,
                                MIR_new_reg_op(ctx, bail->off),
@@ -249,12 +256,58 @@ void mir_emit_spill_child_captured_locals(
   }
 }
 
-void mir_emit_close_marked_slots(
+static void mir_emit_close_single_upvalue(
+    MIR_context_t ctx, MIR_item_t fn,
+    MIR_reg_t r_vm, MIR_reg_t r_slots, MIR_reg_t r_open_upvalues, MIR_reg_t r_open,
+    int first_captured, int slot_count, int site_id, MIR_label_t done) {
+  char name[48];
+  snprintf(name, sizeof(name), "close_loc_%d", site_id);
+  MIR_reg_t r_loc = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+  snprintf(name, sizeof(name), "close_bound_%d", site_id);
+  MIR_reg_t r_bound = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+  snprintf(name, sizeof(name), "close_next_%d", site_id);
+  MIR_reg_t r_next = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+  snprintf(name, sizeof(name), "close_tmp_%d", site_id);
+  MIR_reg_t r_tmp = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+  MIR_label_t slow = MIR_new_label(ctx), single = MIR_new_label(ctx);
+#define UV_FIELD(type, field, base) MIR_new_mem_op(ctx, type, (MIR_disp_t)offsetof(sv_upvalue_t, field), base, 0, 1)
+#define EMIT(...) MIR_append_insn(ctx, fn, MIR_new_insn(ctx, __VA_ARGS__))
+  EMIT(MIR_MOV, MIR_new_reg_op(ctx, r_loc), UV_FIELD(MIR_T_P, location, r_open));
+  EMIT(MIR_ADD, MIR_new_reg_op(ctx, r_bound), MIR_new_reg_op(ctx, r_slots),
+       MIR_new_int_op(ctx, first_captured * (int64_t)sizeof(ant_value_t)));
+  EMIT(MIR_UBLT, MIR_new_label_op(ctx, done), MIR_new_reg_op(ctx, r_loc), MIR_new_reg_op(ctx, r_bound));
+  EMIT(MIR_MOV, MIR_new_reg_op(ctx, r_next), UV_FIELD(MIR_T_P, next, r_open));
+  EMIT(MIR_BEQ, MIR_new_label_op(ctx, single), MIR_new_reg_op(ctx, r_next), MIR_new_int_op(ctx, 0));
+  EMIT(MIR_MOV, MIR_new_reg_op(ctx, r_tmp), UV_FIELD(MIR_T_P, location, r_next));
+  EMIT(MIR_UBGE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_tmp), MIR_new_reg_op(ctx, r_bound));
+  MIR_append_insn(ctx, fn, single);
+  EMIT(MIR_ADD, MIR_new_reg_op(ctx, r_bound), MIR_new_reg_op(ctx, r_slots),
+       MIR_new_int_op(ctx, slot_count * (int64_t)sizeof(ant_value_t)));
+  EMIT(MIR_UBGE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_loc), MIR_new_reg_op(ctx, r_bound));
+  EMIT(MIR_MOV, MIR_new_reg_op(ctx, r_tmp), UV_FIELD(MIR_T_U64, gc_epoch, r_open));
+  EMIT(MIR_BNE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_tmp), MIR_new_int_op(ctx, 0));
+  EMIT(MIR_MOV, MIR_new_reg_op(ctx, r_tmp), MIR_new_mem_op(ctx, MIR_JSVAL, 0, r_loc, 0, 1));
+  EMIT(MIR_MOV, UV_FIELD(MIR_JSVAL, closed, r_open), MIR_new_reg_op(ctx, r_tmp));
+  EMIT(MIR_ADD, MIR_new_reg_op(ctx, r_tmp), MIR_new_reg_op(ctx, r_open),
+       MIR_new_int_op(ctx, (int64_t)offsetof(sv_upvalue_t, closed)));
+  EMIT(MIR_MOV, UV_FIELD(MIR_T_P, location, r_open), MIR_new_reg_op(ctx, r_tmp));
+  EMIT(MIR_MOV, UV_FIELD(MIR_T_P, next, r_open), MIR_new_int_op(ctx, 0));
+  EMIT(MIR_MOV, MIR_new_mem_op(ctx, MIR_T_I64,
+                               r_open_upvalues ? 0 : (MIR_disp_t)offsetof(sv_vm_t, open_upvalues),
+                               r_open_upvalues ? r_open_upvalues : r_vm, 0, 1),
+       MIR_new_reg_op(ctx, r_next));
+  EMIT(MIR_JMP, MIR_new_label_op(ctx, done));
+#undef EMIT
+#undef UV_FIELD
+  MIR_append_insn(ctx, fn, slow);
+}
+
+static void mir_emit_close_slots(
     MIR_context_t ctx, MIR_item_t fn,
     MIR_item_t close_upval_proto, MIR_item_t imp_close_upval,
     MIR_reg_t r_vm, MIR_reg_t r_slots,
     MIR_reg_t r_open_upvalues,
-    bool *captured, int start_idx, int slot_count, int site_id) {
+    bool *captured, int start_idx, int slot_count, int site_id, bool inline_single) {
   if (!captured || start_idx >= slot_count || slot_count <= 0 || !r_slots) return;
   if (start_idx < 0) start_idx = 0;
 
@@ -281,47 +334,9 @@ void mir_emit_close_marked_slots(
                                MIR_new_label_op(ctx, no_open),
                                MIR_new_reg_op(ctx, r_open),
                                MIR_new_uint_op(ctx, 0)));
-
-  char name[48];
-  snprintf(name, sizeof(name), "close_loc_%d", site_id);
-  MIR_reg_t r_loc = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
-  snprintf(name, sizeof(name), "close_bound_%d", site_id);
-  MIR_reg_t r_bound = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
-  snprintf(name, sizeof(name), "close_next_%d", site_id);
-  MIR_reg_t r_next = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
-  snprintf(name, sizeof(name), "close_tmp_%d", site_id);
-  MIR_reg_t r_tmp = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
-  MIR_label_t slow = MIR_new_label(ctx), single = MIR_new_label(ctx);
-#define UV_FIELD(type, field, base) MIR_new_mem_op(ctx, type, (MIR_disp_t)offsetof(sv_upvalue_t, field), base, 0, 1)
-#define EMIT(...) MIR_append_insn(ctx, fn, MIR_new_insn(ctx, __VA_ARGS__))
-  EMIT(MIR_MOV, MIR_new_reg_op(ctx, r_loc), UV_FIELD(MIR_T_P, location, r_open));
-  EMIT(MIR_ADD, MIR_new_reg_op(ctx, r_bound), MIR_new_reg_op(ctx, r_slots),
-       MIR_new_int_op(ctx, first_captured * (int64_t)sizeof(ant_value_t)));
-  EMIT(MIR_UBLT, MIR_new_label_op(ctx, no_open), MIR_new_reg_op(ctx, r_loc), MIR_new_reg_op(ctx, r_bound));
-  EMIT(MIR_MOV, MIR_new_reg_op(ctx, r_next), UV_FIELD(MIR_T_P, next, r_open));
-  EMIT(MIR_BEQ, MIR_new_label_op(ctx, single), MIR_new_reg_op(ctx, r_next), MIR_new_int_op(ctx, 0));
-  EMIT(MIR_MOV, MIR_new_reg_op(ctx, r_tmp), UV_FIELD(MIR_T_P, location, r_next));
-  EMIT(MIR_UBGE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_tmp), MIR_new_reg_op(ctx, r_bound));
-  MIR_append_insn(ctx, fn, single);
-  EMIT(MIR_ADD, MIR_new_reg_op(ctx, r_bound), MIR_new_reg_op(ctx, r_slots),
-       MIR_new_int_op(ctx, slot_count * (int64_t)sizeof(ant_value_t)));
-  EMIT(MIR_UBGE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_loc), MIR_new_reg_op(ctx, r_bound));
-  EMIT(MIR_MOV, MIR_new_reg_op(ctx, r_tmp), UV_FIELD(MIR_T_U64, gc_epoch, r_open));
-  EMIT(MIR_BNE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_tmp), MIR_new_int_op(ctx, 0));
-  EMIT(MIR_MOV, MIR_new_reg_op(ctx, r_tmp), MIR_new_mem_op(ctx, MIR_JSVAL, 0, r_loc, 0, 1));
-  EMIT(MIR_MOV, UV_FIELD(MIR_JSVAL, closed, r_open), MIR_new_reg_op(ctx, r_tmp));
-  EMIT(MIR_ADD, MIR_new_reg_op(ctx, r_tmp), MIR_new_reg_op(ctx, r_open),
-       MIR_new_int_op(ctx, (int64_t)offsetof(sv_upvalue_t, closed)));
-  EMIT(MIR_MOV, UV_FIELD(MIR_T_P, location, r_open), MIR_new_reg_op(ctx, r_tmp));
-  EMIT(MIR_MOV, UV_FIELD(MIR_T_P, next, r_open), MIR_new_int_op(ctx, 0));
-  EMIT(MIR_MOV, MIR_new_mem_op(ctx, MIR_T_I64,
-                               r_open_upvalues ? 0 : (MIR_disp_t)offsetof(sv_vm_t, open_upvalues),
-                               r_open_upvalues ? r_open_upvalues : r_vm, 0, 1),
-       MIR_new_reg_op(ctx, r_next));
-  EMIT(MIR_JMP, MIR_new_label_op(ctx, no_open));
-#undef EMIT
-#undef UV_FIELD
-  MIR_append_insn(ctx, fn, slow);
+  if (inline_single)
+    mir_emit_close_single_upvalue(ctx, fn, r_vm, r_slots, r_open_upvalues, r_open,
+                                  first_captured, slot_count, site_id, no_open);
 
   MIR_append_insn(ctx, fn,
                   MIR_new_call_insn(ctx, 7,
@@ -333,6 +348,26 @@ void mir_emit_close_marked_slots(
                                     MIR_new_int_op(ctx, slot_count),
                                     r_open_upvalues ? MIR_new_reg_op(ctx, r_open_upvalues) : MIR_new_uint_op(ctx, 0)));
   MIR_append_insn(ctx, fn, no_open);
+}
+
+void mir_emit_close_marked_slots(
+    MIR_context_t ctx, MIR_item_t fn,
+    MIR_item_t close_upval_proto, MIR_item_t imp_close_upval,
+    MIR_reg_t r_vm, MIR_reg_t r_slots,
+    MIR_reg_t r_open_upvalues,
+    bool *captured, int start_idx, int slot_count, int site_id) {
+  mir_emit_close_slots(ctx, fn, close_upval_proto, imp_close_upval, r_vm, r_slots, r_open_upvalues,
+                       captured, start_idx, slot_count, site_id, false);
+}
+
+void mir_emit_close_marked_slots_inline(
+    MIR_context_t ctx, MIR_item_t fn,
+    MIR_item_t close_upval_proto, MIR_item_t imp_close_upval,
+    MIR_reg_t r_vm, MIR_reg_t r_slots,
+    MIR_reg_t r_open_upvalues,
+    bool *captured, int start_idx, int slot_count, int site_id) {
+  mir_emit_close_slots(ctx, fn, close_upval_proto, imp_close_upval, r_vm, r_slots, r_open_upvalues,
+                       captured, start_idx, slot_count, site_id, true);
 }
 
 void mir_emit_upval_write_barrier(

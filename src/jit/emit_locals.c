@@ -758,6 +758,14 @@ void jit_emit_locals(jit_compile_t *c) {
              jit_has_immediate_numeric_local_init(c->func, c->ip + c->sz, c->end, idx));
         c->known_type_locals[idx] = immediate_num_init ? SV_TI_NUM : SV_TI_UNKNOWN;
       }
+      if (c->has_captures && c->captured_locals && c->captured_locals[idx]) {
+        mir_load_imm(c->ctx, c->jit_func, c->local_regs[idx], SV_TDZ);
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_MOV,
+                                     MIR_new_mem_op(c->ctx, MIR_T_I64,
+                                                    (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), c->r_lbuf, 0, 1),
+                                     MIR_new_reg_op(c->ctx, c->local_regs[idx])));
+      }
       break;
     }
 

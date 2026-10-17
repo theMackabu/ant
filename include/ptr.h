@@ -1,10 +1,11 @@
 #ifndef ANT_NATIVE_PTR_H
 #define ANT_NATIVE_PTR_H
 
-#include "types.h"
-#include "internal.h" // IWYU pragma: keep
 #include "hash.h"
-#include "native_tag.h"
+#include "types.h"
+
+#include "internal.h"   // IWYU pragma: keep
+#include "native_tag.h" // IWYU pragma: keep
 
 void ant_ptr_pair_free(ant_ptr_pair_map_t *map);
 void js_set_native_slow(ant_object_t *o, void *ptr, uint32_t tag);
@@ -92,8 +93,8 @@ static inline uint32_t ant_ptr_pair_hash(uintptr_t key_a, uintptr_t key_b) {
 static inline bool ant_ptr_pair_get(
   const ant_ptr_pair_map_t *map, uintptr_t key_a, uintptr_t key_b, ant_value_t *out
 ) {
-  if (!map->entries) return false;
-  
+  if (!map->len) return false;
+
   for (uint32_t i = ant_ptr_pair_hash(key_a, key_b);; i++) {
     const ant_ptr_pair_entry_t *entry = &map->entries[i & map->mask];
     

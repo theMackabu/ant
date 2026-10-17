@@ -140,13 +140,12 @@ typedef union ant_object_flags {
     uint8_t dense_length_fits: 1;
     uint8_t arguments_object: 1;
     uint8_t regexp_brand: 1;
-    uint8_t protector_holder: 1;
   };
-  uint32_t raw;
-  uint8_t bytes[4];
+  uint16_t raw;
+  uint8_t bytes[2];
 } ant_object_flags_t;
 
-typedef enum: uint32_t {
+typedef enum: uint16_t {
   ANT_OBJECT_FLAG_EXTENSIBLE =
     1u << 0,
   ANT_OBJECT_FLAG_FROZEN =
@@ -171,12 +170,10 @@ typedef enum: uint32_t {
     1u << 14,
   ANT_OBJECT_FLAG_REGEXP_BRAND =
     1u << 15,
-  ANT_OBJECT_FLAG_PROTECTOR_HOLDER =
-    1u << 16,
 } ant_object_flag_mask_t;
 
 static_assert(
-  sizeof(ant_object_flags_t) == 4,
+  sizeof(ant_object_flags_t) == 2,
   "ant_object_flags_t must cover the packed object bitfields"
 );
 
@@ -215,10 +212,7 @@ static inline bool ant_object_flag_masks_match_layout(void) {
   if (flags.raw != ANT_OBJECT_FLAG_ARGUMENTS) return false;
 
   flags = (ant_object_flags_t){.regexp_brand = 1};
-  if (flags.raw != ANT_OBJECT_FLAG_REGEXP_BRAND) return false;
-
-  flags = (ant_object_flags_t){.protector_holder = 1};
-  return flags.raw == ANT_OBJECT_FLAG_PROTECTOR_HOLDER;
+  return flags.raw == ANT_OBJECT_FLAG_REGEXP_BRAND;
 }
 
 typedef struct ant_object {
@@ -236,7 +230,7 @@ typedef struct ant_object {
 
   void *native_ptr;
   uint32_t native_tag;
-  ant_object_flags_t flags;
+  uint8_t protector_holder;
 
   union {
     struct { ant_value_t *data; uint32_t len; uint32_t cap; } array;
@@ -253,6 +247,8 @@ typedef struct ant_object {
   uint8_t extra_count;
   uint8_t extra_cap;
   uint8_t overflow_cap;
+  
+  ant_object_flags_t flags;
   uint32_t ic_identity;
 } ant_object_t;
 

@@ -3,6 +3,14 @@
 #include "debug.h"
 #include <time.h>
 
+static void jit_emit_deferred_bails(jit_compile_t *c) {
+  for (int i = 0; i < c->deferred_bail_count; i++) {
+    jit_deferred_bail_t *site = &c->deferred_bails[i];
+    MIR_append_insn(c->ctx, c->jit_func, site->label);
+    mir_emit_bailout_boxed_exit(c->ctx, c->jit_func, site->bc_off, site->sp, &c->bailout_ctx);
+  }
+}
+
 static void jit_emit_resume_tramp(jit_compile_t *c, const jit_bailout_emit_t *bail, MIR_item_t imp, const char *res_name) {
   mir_emit_bailout_spill_block(c->ctx, c->jit_func, bail);
   MIR_append_insn(c->ctx, c->jit_func, bail->tramp);
@@ -587,6 +595,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   MIR_insn_t body_tail = DLIST_TAIL(MIR_insn_t, c->jit_func->u.func->insns);
   if (c->stale_site_count) jit_emit_stale_exits(c);
   jit_emit_interrupt_exit(c);
+  if (c->deferred_bail_count) jit_emit_deferred_bails(c);
   if (c->needs_bailout) jit_emit_resume_tramp(c, &c->bailout_ctx, c->imp_resume, "resume_res");
   if (c->needs_promote) jit_emit_resume_tramp(c, &c->promote_ctx, c->imp_promote_resume, "promote_res");
   jit_call_tagging = NULL;
@@ -620,6 +629,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   free(c->stale_sites);
   free(c->stale_types);
   free(c->stale_sp_exits);
+  free(c->deferred_bails);
   free(c->lm.index);
   free(c->depth);
 

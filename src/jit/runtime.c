@@ -281,6 +281,20 @@ sv_jit_func_t sv_jit_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) 
   return hot;
 }
 
+static void jit_osr_seed_invariant_locals(sv_func_t *func, sv_frame_t *frame) {
+  if (!func->local_type_feedback) return;
+  
+  uint8_t *loop_written = jit_locals_written_in_loops(func);
+  if (!loop_written) return;
+
+  for (int i = 0; i < func->max_locals; i++) {
+    if (loop_written[i] || func->local_type_feedback[i]) continue;
+    if (vtype(frame->lp[i]) == kTypeNumber) sv_tfb_record_local(func, i, frame->lp[i]);
+  }
+
+  free(loop_written);
+}
+
 __attribute__((noinline)) ant_value_t sv_jit_try_osr(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame, 
   sv_func_t *func, int bc_offset
@@ -331,10 +345,7 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
      : func->code_len > JIT_OSR_COLD_COMPILE_MIN_BYTES 
      ? SV_JIT_TIER_COLD : SV_JIT_TIER_AUTO;
 
-    if (func->local_type_feedback) for (int i = 0; i < func->max_locals; i++)
-      if (!func->local_type_feedback[i] && vtype(frame->lp[i]) == kTypeNumber)
-        sv_tfb_record_local(func, i, frame->lp[i]);
-    
+    jit_osr_seed_invariant_locals(func, frame);
     jit = sv_jit_compile_tier(js, func, closure, tier);
     
     if (sv_jit_warn_unlikely) fprintf(
@@ -393,6 +404,19 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
   }
 
   return result;
+}
+
+void sv_jit_drop_func_code(sv_func_t *func) {
+  func->jit_code = NULL;
+  func->jit_code_cold = false;
+  func->jit_tdz_specialized = false;
+  func->back_edge_count = 0;
+  func->jit_compiled_tfb_ver = 0;
+  func->call_count = SV_JIT_THRESHOLD - SV_JIT_RECOMPILE_DELAY;
+}
+
+void sv_jit_drop_all_code(ant_t *js) {
+  jit_drop_all_code(js->jit_ctx);
 }
 
 void sv_jit_arm_interrupts(ant_t *js) {

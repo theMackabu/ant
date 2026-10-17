@@ -67,6 +67,47 @@ int jit_hot_loop_upvalue(const sv_func_t *func) {
   return best;
 }
 
+static int jit_local_write_target(const uint8_t *ip) {
+  switch ((sv_op_t)*ip) {
+    case OP_PUT_LOCAL: case OP_SET_LOCAL: case OP_PUT_LOCAL_CHK: case OP_SET_LOCAL_UNDEF:
+      return sv_get_u16(ip + 1);
+    case OP_PUT_LOCAL8: case OP_SET_LOCAL8:
+    case OP_INC_LOCAL: case OP_DEC_LOCAL: case OP_ADD_LOCAL:
+      return sv_get_u8(ip + 1);
+    default:
+      return -1;
+  }
+}
+
+uint8_t *jit_locals_written_in_loops(const sv_func_t *func) {
+  if (!func || !func->code || func->max_locals <= 0) return NULL;
+  uint8_t *written = calloc((size_t)func->max_locals, 1);
+  if (!written) return NULL;
+  int (*loops)[2] = NULL;
+  int loop_count = jit_back_edges(func, &loops);
+  if (loop_count < 0) {
+    free(written);
+    return NULL;
+  }
+  for (int i = 0; i < loop_count; i++)
+    for (int off = loops[i][0]; off <= loops[i][1]; off += sv_op_size[func->code[off]]) {
+      int local = jit_local_write_target(func->code + off);
+      if (local >= 0 && local < func->max_locals) written[local] = 1;
+    }
+  free(loops);
+  return written;
+}
+
+bool jit_offset_in_loop(const sv_func_t *func, int bc_off) {
+  int (*loops)[2] = NULL;
+  int loop_count = jit_back_edges(func, &loops);
+  bool inside = false;
+  for (int i = 0; i < loop_count && !inside; i++)
+    inside = bc_off >= loops[i][0] && bc_off <= loops[i][1];
+  free(loops);
+  return inside;
+}
+
 bool jit_loop_reads_global(const sv_func_t *func) {
   if (!func || !func->code) return false;
   int (*loops)[2] = NULL;
@@ -169,7 +210,7 @@ static bool jit_local_has_numeric_hint(sv_func_t *func, int idx) {
   return false;
 }
 
-jit_features_t jit_prescan_features(sv_func_t *func, int n_slots) {
+jit_features_t jit_prescan_features(sv_func_t *func, int n_slots, const sv_closure_t *hint) {
   jit_features_t f = {
     .needs_new_target = func->is_derived_ctor,
     .needs_super = func->is_method || func->is_static || func->is_derived_ctor,
@@ -203,7 +244,8 @@ jit_features_t jit_prescan_features(sv_func_t *func, int n_slots) {
     if (op == OP_THIS || op == OP_CLOSURE || op == OP_EVAL)
       f.needs_this = true;
     if ((op == OP_GET_UPVAL || op == OP_PUT_UPVAL || op == OP_SET_UPVAL) &&
-        jit_upvalue_may_tdz(func, sv_get_u16(ip + 1)))
+        jit_upvalue_may_tdz(func, sv_get_u16(ip + 1)) &&
+        !jit_hint_cell_initialized(hint, func, sv_get_u16(ip + 1)))
       f.needs_bailout = true;
     if ((flags & SV_OPF_BUILDER_TARGET) != 0 && f.builder_target_slots) {
       uint16_t slot = sv_get_u16(ip + 1);

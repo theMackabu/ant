@@ -22,6 +22,12 @@ typedef struct {
   int types_at;
 } jit_stale_site_t;
 
+typedef struct {
+  MIR_label_t label;
+  int bc_off;
+  int sp;
+} jit_deferred_bail_t;
+
 typedef struct jit_compile {
   MIR_item_t self_proto;
   MIR_item_t helper2_proto;
@@ -327,6 +333,8 @@ typedef struct jit_compile {
   uint8_t *osr_loop_body;
   jit_stale_site_t *stale_sites;
   int stale_site_count, stale_site_cap;
+  jit_deferred_bail_t *deferred_bails;
+  int deferred_bail_count, deferred_bail_cap;
   uint8_t *stale_types;
   int stale_types_len, stale_types_cap;
   MIR_label_t *stale_sp_exits;
@@ -376,6 +384,13 @@ jit_stale_exit_t *jit_stale_exit_for(jit_compile_t *c, jit_stale_exit_t *exit);
 bool jit_site_runs_hot(jit_compile_t *c);
 void jit_note_stale_exit(jit_compile_t *c, const jit_stale_exit_t *exit, int pre_op_sp);
 void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg);
+
+static inline bool jit_upvalue_needs_tdz_guard(jit_compile_t *c, uint16_t index) {
+  if (!jit_upvalue_may_tdz(c->func, index)) return false;
+  if (!jit_hint_cell_initialized(c->hint_closure, c->func, index)) return true;
+  c->func->jit_tdz_specialized = true;
+  return false;
+}
 void jit_emit_dense_add(
     jit_compile_t *c, MIR_reg_t ptr, MIR_reg_t data, MIR_reg_t flags,
     MIR_reg_t index, MIR_reg_t len, MIR_reg_t val, MIR_label_t slow, int site);

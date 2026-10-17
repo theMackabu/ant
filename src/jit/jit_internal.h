@@ -248,7 +248,7 @@ void mir_emit_builtin_call_watch(
 );
 
 void mir_emit_builtin_call_fast(
-  MIR_context_t ctx, MIR_item_t fn, const char *prefix, int site,
+  MIR_context_t ctx, MIR_item_t fn, ant_t *js, const char *prefix, int site,
   MIR_reg_t r_js, MIR_reg_t r_tmp,
   MIR_item_t cfunc_proto, MIR_item_t native_finish_proto, MIR_item_t imp_native_finish,
   MIR_reg_t func, MIR_reg_t this_val, MIR_reg_t args, uint16_t argc,
@@ -275,6 +275,20 @@ void jit_load_externals_once(sv_jit_ctx_t *jc);
 void jit_release_gen_scratch(sv_jit_ctx_t *jc, MIR_context_t ctx);
 int jit_hot_loop_upvalue(const sv_func_t *func);
 bool jit_loop_reads_global(const sv_func_t *func);
+bool jit_offset_in_loop(const sv_func_t *func, int bc_off);
+uint8_t *jit_locals_written_in_loops(const sv_func_t *func);
+
+static inline bool jit_local_slot_shared(sv_func_t *func, int idx) {
+  sv_type_info_t *types = sv_func_local_types(func);
+  return !types || idx >= func->local_type_count || types[idx].shared_slot;
+}
+
+static inline bool jit_hint_cell_initialized(const sv_closure_t *hint, const sv_func_t *func, uint16_t index) {
+  if (!hint || hint->func != func || !func->has_closure || func->multi_closure) return false;
+  if (!hint->upvalues || index >= func->upvalue_count) return false;
+  const sv_upvalue_t *cell = hint->upvalues[index];
+  return cell && cell->location && *cell->location != SV_TDZ;
+}
 
 static inline bool jit_upvalue_may_tdz(const sv_func_t *func, uint16_t index) {
   return func->upval_descs && index < func->upvalue_count && func->upval_descs[index].may_tdz;
@@ -353,6 +367,9 @@ void vstack_rebox_binop_operands(
     jit_vstack_t *vs, MIR_context_t ctx, MIR_item_t fn,
     uint8_t lhs_type, uint8_t rhs_type,
     MIR_reg_t d_slot);
+void mir_emit_bailout_boxed_exit(MIR_context_t ctx, MIR_item_t fn,
+                                 int bc_off, int pre_op_sp,
+                                 const jit_bailout_emit_t *bail);
 void mir_emit_bailout_spill_block(MIR_context_t ctx, MIR_item_t fn,
                                   const jit_bailout_emit_t *bail);
 void mir_emit_bailout_jump_typed(MIR_context_t ctx, MIR_item_t fn,
@@ -399,6 +416,12 @@ void mir_emit_spill_child_captured_locals(
     sv_func_t *parent_func, sv_func_t *child,
     MIR_reg_t *local_regs, int n_locals, MIR_reg_t r_lbuf);
 void mir_emit_close_marked_slots(
+    MIR_context_t ctx, MIR_item_t fn,
+    MIR_item_t close_upval_proto, MIR_item_t imp_close_upval,
+    MIR_reg_t r_vm, MIR_reg_t r_slots,
+    MIR_reg_t r_open_upvalues,
+    bool *captured, int start_idx, int slot_count, int site_id);
+void mir_emit_close_marked_slots_inline(
     MIR_context_t ctx, MIR_item_t fn,
     MIR_item_t close_upval_proto, MIR_item_t imp_close_upval,
     MIR_reg_t r_vm, MIR_reg_t r_slots,
@@ -620,7 +643,7 @@ void jit_emit_inline_body(
     MIR_item_t special_obj_proto, MIR_item_t imp_special_obj,
     const jit_inline_ext_t *ext);
 bool scan_branch_targets(sv_func_t *func, jit_label_map_t *lm, MIR_context_t ctx);
-jit_features_t jit_prescan_features(sv_func_t *func, int n_slots);
+jit_features_t jit_prescan_features(sv_func_t *func, int n_slots, const sv_closure_t *hint);
 bool jit_mark_self_binding_guards(
     ant_t *js, sv_func_t *func, sv_closure_t *hint_closure,
     uint8_t *guard_sites);

@@ -1786,10 +1786,17 @@ bool ast_contains_direct_eval(const sv_ast_t *node) {
   return false;
 }
 
-bool ast_may_capture_bindings(const sv_ast_t *node) {
+static bool ast_closure_captures_name_impl(
+  const sv_ast_t *node, const char *name, uint32_t len, bool in_closure
+) {
   if (!node) return false;
   switch (node->type) {
-    case N_FUNC: case N_ARROW: case N_CLASS: case N_METHOD: case N_STATIC_BLOCK: return true;
+    case N_FUNC: case N_ARROW: case N_CLASS: case N_METHOD: case N_STATIC_BLOCK:
+      in_closure = true;
+      break;
+    case N_IDENT:
+      if (in_closure && node->len == len && memcmp(node->str, name, len) == 0) return true;
+      break;
     default: break;
   }
   if (
@@ -1803,11 +1810,19 @@ bool ast_may_capture_bindings(const sv_ast_t *node) {
   };
 
   for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++)
-    if (ast_may_capture_bindings(children[i])) return true;
+    if (ast_closure_captures_name_impl(children[i], name, len, in_closure)) return true;
   for (int i = 0; i < node->args.count; i++)
-    if (ast_may_capture_bindings(node->args.items[i])) return true;
+    if (ast_closure_captures_name_impl(node->args.items[i], name, len, in_closure)) return true;
 
   return false;
+}
+
+bool ast_closure_captures_name(const sv_ast_t *node, const char *name, uint32_t len) {
+  return ast_closure_captures_name_impl(node, name, len, false);
+}
+
+bool ast_mentions_name(const sv_ast_t *node, const char *name, uint32_t len) {
+  return ast_closure_captures_name_impl(node, name, len, true);
 }
 
 static bool ast_references_new_target_impl(const sv_ast_t *node, bool in_arrow) {

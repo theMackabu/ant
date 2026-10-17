@@ -39,18 +39,45 @@ static void jit_emit_hoisted_upval_tdz_guard(jit_compile_t *c, MIR_reg_t value, 
   MIR_append_insn(c->ctx, c->jit_func, ready);
 }
 
-static void jit_emit_upval_tdz_guard(jit_compile_t *c, uint16_t index, MIR_reg_t r_loc, int pre_op_sp) {
-  if (!jit_upvalue_may_tdz(c->func, index)) return;
+static MIR_label_t jit_defer_boxed_bailout(jit_compile_t *c, int pre_op_sp) {
+  if (!c->needs_bailout) return NULL;
+  for (int i = 0; i < pre_op_sp; i++)
+    if (c->vs.slot_type && c->vs.slot_type[i] != SLOT_BOXED) return NULL;
+  if (c->deferred_bail_count == c->deferred_bail_cap) {
+    int cap = c->deferred_bail_cap ? c->deferred_bail_cap * 2 : 16;
+    jit_deferred_bail_t *grown = realloc(c->deferred_bails, (size_t)cap * sizeof(*grown));
+    if (!grown) return NULL;
+    c->deferred_bails = grown;
+    c->deferred_bail_cap = cap;
+  }
+  MIR_label_t label = MIR_new_label(c->ctx);
+  c->deferred_bails[c->deferred_bail_count++] = (jit_deferred_bail_t){ label, c->bc_off, pre_op_sp };
+  return label;
+}
+
+static void jit_emit_upval_tdz_guard(jit_compile_t *c, uint16_t index, MIR_reg_t value, int pre_op_sp) {
+  if (!jit_upvalue_needs_tdz_guard(c, index)) return;
+  MIR_label_t deferred = jit_defer_boxed_bailout(c, pre_op_sp);
+  if (deferred) {
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ,
+        MIR_new_label_op(c->ctx, deferred), MIR_new_reg_op(c->ctx, value), MIR_new_uint_op(c->ctx, SV_TDZ)));
+    return;
+  }
   MIR_label_t tdz = MIR_new_label(c->ctx), ready = MIR_new_label(c->ctx);
-  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
-      MIR_new_reg_op(c->ctx, c->r_bool), MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, r_loc, 0, 1)));
   MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ,
-      MIR_new_label_op(c->ctx, tdz), MIR_new_reg_op(c->ctx, c->r_bool), MIR_new_uint_op(c->ctx, SV_TDZ)));
+      MIR_new_label_op(c->ctx, tdz), MIR_new_reg_op(c->ctx, value), MIR_new_uint_op(c->ctx, SV_TDZ)));
   MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, ready)));
   MIR_append_insn(c->ctx, c->jit_func, tdz);
   mir_emit_bailout_jump_typed(c->ctx, c->jit_func, c->bc_off, pre_op_sp, &c->bailout_ctx,
                               -1, false, -1, false);
   MIR_append_insn(c->ctx, c->jit_func, ready);
+}
+
+static void jit_emit_upval_store_tdz_guard(jit_compile_t *c, uint16_t index, MIR_reg_t r_loc, int pre_op_sp) {
+  if (!jit_upvalue_needs_tdz_guard(c, index)) return;
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+      MIR_new_reg_op(c->ctx, c->r_bool), MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, r_loc, 0, 1)));
+  jit_emit_upval_tdz_guard(c, index, c->r_bool, pre_op_sp);
 }
 
 void jit_emit_bindings(jit_compile_t *c) {
@@ -79,10 +106,10 @@ void jit_emit_bindings(jit_compile_t *c) {
                       MIR_new_insn(c->ctx, MIR_MOV,
                                    MIR_new_reg_op(c->ctx, dst),
                                    MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, r_loc, 0, 1)));
-      if (r_uv == c->hoisted_upvalue_cell && c->hoisted_upvalue_tdz)
+      if (!guarded_self_upval && r_uv == c->hoisted_upvalue_cell && c->hoisted_upvalue_tdz)
         jit_emit_hoisted_upval_tdz_guard(c, dst, pre_op_sp);
-      else
-        jit_emit_upval_tdz_guard(c, idx, r_loc, pre_op_sp);
+      else if (!guarded_self_upval)
+        jit_emit_upval_tdz_guard(c, idx, dst, pre_op_sp);
       if (guarded_self_upval) {
         c->vs.known_func[c->vs.sp - 1] = c->func;
         mir_emit_self_binding_guard(
@@ -115,7 +142,7 @@ void jit_emit_bindings(jit_compile_t *c) {
                                    MIR_new_mem_op(c->ctx, MIR_T_P,
                                                   (MIR_disp_t)offsetof(sv_upvalue_t, location),
                                                   r_uv, 0, 1)));
-      jit_emit_upval_tdz_guard(c, idx, r_loc, pre_op_sp);
+      jit_emit_upval_store_tdz_guard(c, idx, r_loc, pre_op_sp);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_MOV,
                                    MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, r_loc, 0, 1),
@@ -144,7 +171,7 @@ void jit_emit_bindings(jit_compile_t *c) {
                                    MIR_new_mem_op(c->ctx, MIR_T_P,
                                                   (MIR_disp_t)offsetof(sv_upvalue_t, location),
                                                   r_uv, 0, 1)));
-      jit_emit_upval_tdz_guard(c, idx, r_loc, pre_op_sp);
+      jit_emit_upval_store_tdz_guard(c, idx, r_loc, pre_op_sp);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_MOV,
                                    MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, r_loc, 0, 1),
@@ -174,11 +201,12 @@ void jit_emit_bindings(jit_compile_t *c) {
                                     c->captured_params, (int)idx, c->param_count,
                                     mir_next_reg_site(&c->reg_site_n));
       if (c->has_captures)
-        mir_emit_close_marked_slots(c->ctx, c->jit_func,
-                                    c->close_upval_proto, c->imp_close_upval,
-                                    c->r_vm, c->r_lbuf, c->r_jit_open_upvalues, c->captured_locals,
-                                    idx >= (uint16_t)c->param_count ? (int)idx - c->param_count : 0, c->n_locals,
-                                    mir_next_reg_site(&c->reg_site_n));
+        (c->func->code_len <= JIT_GFP_MAX_CODE_LEN && jit_offset_in_loop(c->func, c->bc_off)
+            ? mir_emit_close_marked_slots_inline : mir_emit_close_marked_slots)(
+            c->ctx, c->jit_func, c->close_upval_proto, c->imp_close_upval,
+            c->r_vm, c->r_lbuf, c->r_jit_open_upvalues, c->captured_locals,
+            idx >= (uint16_t)c->param_count ? (int)idx - c->param_count : 0, c->n_locals,
+            mir_next_reg_site(&c->reg_site_n));
       break;
     }
 

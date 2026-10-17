@@ -8,6 +8,7 @@
 #include "handles.h"
 #include "gc/modules.h"
 #include "silver/call.h"
+#include "silver/jit.h"
 
 static void realm_save_intrinsics(ant_t *js, ant_realm_t *realm) {
   realm->intrinsics_saved = true;
@@ -79,6 +80,8 @@ ant_realm_t *ant_realm_create(ant_t *js) {
   if (!realm) return NULL;
 
   ant_realm_t *prev = js->realm;
+  bool was_single = !ant_realm_multiple(js);
+  
   realm_save(js, prev);
   realm_load(js, &realm_empty);
 
@@ -92,6 +95,8 @@ ant_realm_t *ant_realm_create(ant_t *js) {
 
   realm_load(js, prev);
   realm_activate(js, prev);
+  
+  if (ok && was_single && ant_realm_multiple(js) && js->jit_ctx) sv_jit_drop_all_code(js);
   if (ok) return realm;
 
   Ant_List_Remove(realm);

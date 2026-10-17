@@ -435,7 +435,7 @@ bool jit_setup_frame(jit_compile_t *c) {
   c->self_binding_guards = calloc(
       c->func->code_len > 0 ? (size_t)c->func->code_len : 1u, 1u);
   c->feat = jit_prescan_features(
-      c->func, c->func->param_count + c->n_locals);
+      c->func, c->func->param_count + c->n_locals, c->hint_closure);
   if (jit_mark_self_binding_guards(
           c->js, c->func, c->hint_closure, c->self_binding_guards)) {
     c->feat.needs_bailout = true;
@@ -616,7 +616,12 @@ bool jit_setup_frame(jit_compile_t *c) {
         sv_op_t dop = (sv_op_t)*dp;
         int dsz = sv_op_size[dop];
         if (dsz == 0) break;
-        if ((sv_op_flags[dop] & SV_OPF_BUILDER_TARGET) != 0) {
+        if (dop == OP_SET_LOCAL_UNDEF) {
+          uint16_t di = sv_get_u16(dp + 1);
+          if (di < (uint16_t)c->n_locals && jit_local_slot_shared(c->func, di) &&
+              !jit_has_immediate_numeric_local_init(c->func, dp + dsz, de, di))
+            c->dnum_locals[di] = 0;
+        } else if ((sv_op_flags[dop] & SV_OPF_BUILDER_TARGET) != 0) {
           uint16_t ds = sv_get_u16(dp + 1);
           if (ds >= (uint16_t)c->param_count &&
               (int)ds - c->param_count < c->n_locals)
@@ -1000,7 +1005,7 @@ bool jit_setup_frame(jit_compile_t *c) {
     MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
         MIR_new_reg_op(c->ctx, c->hoisted_upvalue_cell), MIR_new_mem_op(c->ctx, MIR_T_P,
             c->hoisted_upvalue * sizeof(sv_upvalue_t *), table, 0, 1)));
-    if (jit_upvalue_may_tdz(c->func, (uint16_t)c->hoisted_upvalue)) {
+    if (jit_upvalue_needs_tdz_guard(c, (uint16_t)c->hoisted_upvalue)) {
       c->hoisted_upvalue_tdz = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "hoisted_upvalue_tdz");
       MIR_label_t loaded = MIR_new_label(c->ctx);
       mir_load_imm(c->ctx, c->jit_func, c->hoisted_upvalue_tdz, 0);
@@ -1098,13 +1103,20 @@ bool jit_setup_frame(jit_compile_t *c) {
       }
     }
 
-    for (int i = 0; i < c->n_locals; i++)
+    for (int i = 0; i < c->n_locals; i++) {
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_MOV,
                                    MIR_new_reg_op(c->ctx, c->local_regs[i]),
                                    MIR_new_mem_op(c->ctx, MIR_JSVAL,
                                                   (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
                                                   r_osr_locals, 0, 1)));
+      MIR_append_insn(c->ctx, c->jit_func,
+                      MIR_new_insn(c->ctx, MIR_MOV,
+                                   MIR_new_mem_op(c->ctx, MIR_JSVAL,
+                                                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
+                                                  r_osr_locals, 0, 1),
+                                   MIR_new_uint_op(c->ctx, 0)));
+    }
 
     if (c->known_type_locals && c->local_d_regs) {
       MIR_label_t osr_types_ok = MIR_new_label(c->ctx);

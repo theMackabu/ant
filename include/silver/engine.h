@@ -180,8 +180,15 @@ typedef enum {
 } sv_local_type_t;
 
 typedef struct {
-  uint8_t type;
+  uint8_t type: 6;
+  bool bound: 1;
+  bool shared_slot: 1;
 } sv_type_info_t;
+
+static_assert(
+  sizeof(sv_type_info_t) == 1, 
+  "sv_type_info_t must stay one byte"
+);
 
 typedef enum: uint8_t {
   SV_GF_IC_OWN = 0,
@@ -579,6 +586,9 @@ struct sv_func {
   bool jit_loop_hot: 1;
   bool jit_code_cold: 1;
   bool jit_code_retier: 1;
+  bool has_closure: 1;
+  bool multi_closure: 1;
+  bool jit_tdz_specialized: 1;
 
   uint8_t jit_param_counters_off;
   uint8_t jit_snapshot_resets;

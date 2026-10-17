@@ -204,7 +204,7 @@ void mir_emit_builtin_call_watch(
 }
 
 void mir_emit_builtin_call_fast(
-  MIR_context_t ctx, MIR_item_t fn, const char *prefix, int site,
+  MIR_context_t ctx, MIR_item_t fn, ant_t *js, const char *prefix, int site,
   MIR_reg_t r_js, MIR_reg_t r_tmp,
   MIR_item_t cfunc_proto, MIR_item_t native_finish_proto, MIR_item_t imp_native_finish,
   MIR_reg_t func, MIR_reg_t this_val, MIR_reg_t args, uint16_t argc,
@@ -243,7 +243,7 @@ void mir_emit_builtin_call_fast(
     MIR_new_uint_op(ctx, js_mkundef())));
 
   mir_emit_decode_ref(ctx, fn, r_fn, func);
-  if (jit_compile_owner) {
+  if (jit_compile_owner && ant_realm_multiple(js)) {
     MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, r_tmp),
       MIR_new_mem_op(ctx, MIR_T_P, offsetof(ant_cfunc_record_t, realm), r_fn, 0, 1)));
@@ -314,7 +314,7 @@ void jit_emit_builtin_call_fast(
   MIR_label_t generic, MIR_label_t done
 ) {
   mir_emit_builtin_call_fast(
-    c->ctx, c->jit_func, "c", c->call_n++, c->r_js, c->r_bool,
+    c->ctx, c->jit_func, c->js, "c", c->call_n++, c->r_js, c->r_bool,
     c->cfunc_proto, c->native_finish_proto, c->imp_native_finish,
     func, this_val, args, argc, result, generic, done
   );

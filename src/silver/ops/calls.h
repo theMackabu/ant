@@ -3,6 +3,7 @@
 
 #include <limits.h>
 #include "silver/call.h"
+#include "silver/jit.h"
 #include "silver/feedback.h"
 #include "gc/roots.h"
 #include "eval_env.h"
@@ -383,6 +384,16 @@ static inline void sv_op_check_ctor_ret(sv_vm_t *vm, sv_frame_t *frame) {
   } else vm->stack[vm->sp++] = frame->this;
 }
 
+static inline ant_value_t sv_materialize_builder_args(ant_t *js, ant_value_t *args, int n) {
+  for (int i = 0; i < n; i++) {
+    if (vtype(args[i]) != kTypeString || !str_is_heap_builder(args[i])) continue;
+    ant_value_t value = sv_string_builder_read_value(js, args[i]);
+    if (is_err(value)) return value;
+    args[i] = value;
+  }
+  return js_mkundef();
+}
+
 static inline bool sv_op_call_call_fused(
   sv_vm_t *vm, ant_t *js, ant_value_t xv,
   ant_value_t *args1, int n1, ant_value_t *args2, int n2,
@@ -397,20 +408,14 @@ static inline bool sv_op_call_call_fused(
     ) {
       uint32_t kidx = sv_get_u32(f1->code + 1);
       sv_func_t *f2 = (sv_func_t *)vptr(f1->constants[kidx]);
+      sv_func_note_multi_closure(f2);
       if (!f2->jit_code) return false;
 
-      // TODO: reduce nesting
       if (materialize_args2) {
-        for (int i = 0; i < n2; i++) {
-          ant_value_t value = args2[i];
-          if (vtype(value) == kTypeString && str_is_heap_builder(value)) {
-            value = sv_string_builder_read_value(js, value);
-            if (is_err(value)) {
-              *result_out = value;
-              return true;
-            }
-            args2[i] = value;
-          }
+        ant_value_t err = sv_materialize_builder_args(js, args2, n2);
+        if (is_err(err)) {
+          *result_out = err;
+          return true;
         }
       }
 

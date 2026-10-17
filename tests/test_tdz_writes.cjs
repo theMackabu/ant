@@ -51,4 +51,33 @@ for (let r = 0; r < 50; r++) throwsRef(() => sum(2000), 'hoisted loop read befor
 it.next();
 for (let r = 0; r < 50; r++) assert.strictEqual(sum(2000), 4000);
 
+function factory(n) {
+  const read = () => late;
+  const write = (v) => { late = v; };
+  let errors = 0;
+  if (n > 1) {
+    for (let i = 0; i < 3000; i++) {
+      try { read(); } catch (e) { assert.ok(e instanceof ReferenceError); errors++; }
+      try { write(i); } catch (e) { assert.ok(e instanceof ReferenceError); errors++; }
+    }
+  }
+  let late = n;
+  let sum = 0;
+  for (let i = 0; i < 3000; i++) sum += read();
+  write(7);
+  return [errors, sum, read()];
+}
+assert.deepStrictEqual(factory(1), [0, 3000, 7]);
+assert.deepStrictEqual(factory(2), [6000, 6000, 7]);
+assert.deepStrictEqual(factory(3), [6000, 9000, 7]);
+
+function lateReader() {
+  const sum = (n) => { let s = 0; for (let i = 0; i < n; i++) s += base; return s; };
+  let caught = 0;
+  for (let k = 0; k < 50; k++) { try { sum(100); } catch (e) { caught++; } }
+  let base = 3;
+  return [caught, sum(5000)];
+}
+assert.deepStrictEqual(lateReader(), [50, 15000]);
+
 console.log('tdz writes: ok');
