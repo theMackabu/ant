@@ -583,6 +583,20 @@ static bool utf8_wtf8_surrogate_at(
   return *out >= 0xd800 && *out <= 0xdfff;
 }
 
+bool wtf8_is_well_formed(const char *str, size_t byte_len) {
+  const uint8_t *p = (const uint8_t *)str;
+  const uint8_t *end = p + byte_len;
+
+  while ((p = memchr(p, 0xed, (size_t)(end - p)))) {
+    if (end - p < 3 || (p[1] & 0xe0) != 0xa0 || (p[2] & 0xc0) != 0x80) { p++; continue; }
+    if (p[1] >= 0xb0) return false;
+    if (end - p < 6 || p[3] != 0xed || (p[4] & 0xf0) != 0xb0 || (p[5] & 0xc0) != 0x80) return false;
+    p += 6;
+  }
+
+  return true;
+}
+
 static size_t utf8_export_wtf8(
   const char *str, size_t str_len,
   uint8_t *dst, size_t dst_len,

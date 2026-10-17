@@ -120,8 +120,8 @@ static ant_value_t reflect_construct(ant_params_t) {
   if (!is_object_type(args_arr))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Reflect.construct: second argument must be an array-like object");
   
-  js_arg_list_t list;
-  ant_value_t err = js_arg_list_from(js, args_arr, &list);
+  ant_arg_list_t list;
+  ant_value_t err = Ant_ArgList_FromArrayLike(js, args_arr, &list);
   if (is_err(err)) return err;
   
   ant_value_t result;
@@ -132,7 +132,7 @@ static ant_value_t reflect_construct(ant_params_t) {
     ant_value_t proto = sv_prepare_construct_meta(js, target, new_target, &effective_new_target);
     
     if (is_err(proto)) {
-      js_arg_list_release(&list);
+      Ant_ArgList_Release(&list);
       return proto;
     }
 
@@ -149,7 +149,7 @@ static ant_value_t reflect_construct(ant_params_t) {
       result = is_object_type(ctor_this) ? ctor_this : new_obj;
   }
   
-  js_arg_list_release(&list);
+  Ant_ArgList_Release(&list);
   return result;
 }
 
@@ -174,12 +174,13 @@ static ant_value_t reflect_apply(ant_params_t) {
   if (!is_object_type(args_arr))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Reflect.apply: third argument must be an array-like object");
 
-  js_arg_list_t list;
-  ant_value_t err = js_arg_list_from(js, args_arr, &list);
+  ant_arg_list_t list;
+  ant_value_t err = Ant_ArgList_FromArrayLike(js, args_arr, &list);
   if (is_err(err)) return err;
 
   ant_value_t result = sv_vm_call_explicit_this(js->vm, js, target, this_arg, list.args, list.argc);
-  js_arg_list_release(&list);
+  Ant_ArgList_Release(&list);
+  
   return result;
 }
 

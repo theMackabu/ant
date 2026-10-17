@@ -8,6 +8,7 @@
 
 static constexpr int STR_SHORT_CONS_THRESHOLD = 32;
 static constexpr size_t STR_BUILDER_TAIL_CAP = 256;
+static constexpr double ANT_STRING_MAX_LENGTH = 536870888.0;
 
 enum: uint64_t {
   STR_HEAP_TAG_MASK    = 0x3,

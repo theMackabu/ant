@@ -133,7 +133,9 @@ typedef struct jit_compile {
   MIR_item_t imp_regexp_exec_truthy;
   MIR_item_t imp_load_stable_builtin;
   MIR_item_t imp_call_stable_builtin;
+  MIR_item_t apply_proto;
   MIR_item_t imp_apply;
+  MIR_item_t imp_call_spread;
   MIR_item_t imp_call_call;
   MIR_item_t imp_call_call_slot;
   MIR_item_t imp_rest;
@@ -252,6 +254,7 @@ typedef struct jit_compile {
   MIR_reg_t r_d_one;
   MIR_reg_t r_args_buf;
   MIR_reg_t r_call_out_this;
+  int args_buf_slots;
   MIR_reg_t r_this_root;
   MIR_reg_t r_iter_roots;
   MIR_reg_t r_iter_buf;

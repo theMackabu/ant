@@ -665,6 +665,7 @@ static ant_value_t array_set_length_throw(ant_t *js, ant_value_t obj, ant_offset
 
 static ant_offset_t get_dense_buf(ant_value_t arr);
 static ant_offset_t dense_capacity(ant_offset_t doff);
+static inline ant_value_t dense_get(ant_offset_t doff, ant_offset_t idx);
 static ant_offset_t get_array_length(ant_t *js, ant_value_t arr);
 static ant_value_t arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx);
 
@@ -752,6 +753,14 @@ static ant_value_t to_string_val(ant_t *js, ant_value_t val) {
     if (vtype(prim) == kTypeString) return prim;
   }
   return coerce_to_str_hint(js, val, 1);
+}
+
+ant_value_t Ant_String_CoerceThis(ant_t *js, const char *name) {
+  uint8_t t = vtype(js->this_val);
+  if (t == kTypeString) return js->this_val;
+  if (t == kTypeUndefined || t == kTypeNull)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "String.prototype.%s called on null or undefined", name);
+  return to_string_val(js, js->this_val);
 }
 
 bool js_truthy(ant_t *js, ant_value_t v) {
@@ -915,21 +924,6 @@ const char *get_str_prop(ant_t *js, ant_value_t obj, const char *key, ant_offset
   GC_ROOT_RESTORE(js, root_mark);
   
   return str;
-}
-
-static bool is_small_array(ant_t *js, ant_value_t obj, int *elem_count) {
-  ant_offset_t length = get_array_length(js, obj);
-  if (length > 64) { if (elem_count) *elem_count = (int)length; return false; }
-  
-  int count = 0; bool has_nested = false;
-  for (ant_offset_t i = 0; i < length; i++) {
-    ant_value_t val = arr_get(js, obj, i); uint8_t t = vtype(val);
-    if (t == kTypeObject || t == kTypeArray || t == kTypeFunction) has_nested = true;
-    count++;
-  }
-  
-  if (elem_count) *elem_count = count;
-  return count <= 4 && !has_nested && !(js->stringify && (js->stringify->flags & ANT_INSPECT_EXPAND));
 }
 
 static inline bool is_array_index(const char *key, ant_offset_t klen) {
@@ -1160,6 +1154,147 @@ static inline ant_offset_t dense_iterable_length(ant_t *js, ant_value_t obj) {
   return dense_len < semantic_len ? dense_len : semantic_len;
 }
 
+typedef struct {
+  ant_offset_t index;
+  ant_value_t value;
+  const char *accessor;
+} arr_sparse_entry_t;
+
+typedef bool (*arr_entry_fn)(
+  ant_t *js, void *ctx, ant_offset_t index, 
+  ant_offset_t holes, ant_value_t value, const char *accessor
+);
+
+static const char *const arr_accessor_labels[] = {
+  NULL, "[Getter]", "[Setter]", "[Getter/Setter]",
+};
+
+static int arr_sparse_entry_cmp(const void *a, const void *b) {
+  ant_offset_t x = ((const arr_sparse_entry_t *)a)->index;
+  ant_offset_t y = ((const arr_sparse_entry_t *)b)->index;
+  return x < y ? -1 : x > y;
+}
+
+static void arr_for_each_entry(ant_t *js, ant_value_t obj, arr_entry_fn fn, void *ctx) {
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+  ant_offset_t length = get_array_length(js, obj);
+  ant_offset_t d_len = dense_iterable_length(js, obj);
+  ant_offset_t iter_len = d_len < length ? d_len : length;
+  ant_offset_t doff = get_dense_buf(obj);
+
+  arr_sparse_entry_t *sparse = NULL;
+  size_t sparse_len = 0, sparse_cap = 0;
+  uint32_t shape_count = ptr && ptr->shape ? ant_shape_count(ptr->shape) : 0;
+  
+  for (uint32_t i = 0; i < shape_count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+    if (!prop || prop->type == ANT_SHAPE_KEY_SYMBOL) continue;
+    
+    const char *key = prop->key.interned;
+    unsigned long idx;
+    if (!parse_array_index(key, intern_length(key), length, &idx)) continue;
+    
+    if (sparse_len == sparse_cap) {
+      size_t cap = sparse_cap ? sparse_cap * 2 : 8;
+      arr_sparse_entry_t *grown = realloc(sparse, cap * sizeof(*grown));
+      if (!grown) break;
+      sparse = grown;
+      sparse_cap = cap;
+    }
+    
+    sparse[sparse_len++] = (arr_sparse_entry_t){
+      (ant_offset_t)idx,
+      i < ptr->prop_count ? ant_object_prop_get_unchecked(ptr, i) : js_mkundef(),
+      arr_accessor_labels[(prop->has_getter ? 1 : 0) | (prop->has_setter ? 2 : 0)],
+    };
+  }
+  
+  if (sparse_len > 1) qsort(sparse, sparse_len, sizeof(*sparse), arr_sparse_entry_cmp);
+
+  size_t k = 0;
+  ant_offset_t pos = 0, holes = 0;
+  
+  while (pos < length) {
+    while (k < sparse_len && sparse[k].index < pos) k++;
+    
+    ant_value_t value = T_EMPTY;
+    const char *accessor = NULL;
+    if (pos < iter_len && doff) value = dense_get(doff, pos);
+    if (is_empty_slot(value) && k < sparse_len && sparse[k].index == pos) {
+      value = sparse[k].accessor ? js_mkundef() : sparse[k].value;
+      accessor = sparse[k].accessor;
+    }
+    
+    if (!is_empty_slot(value)) {
+      if (holes && !fn(js, ctx, pos - holes, holes, js_mkundef(), NULL)) goto done;
+      holes = 0;
+      if (!fn(js, ctx, pos, 0, value, accessor)) goto done;
+      pos++;
+      continue;
+    }
+    
+    ant_offset_t next = pos + 1;
+    if (pos >= iter_len) next = k < sparse_len ? sparse[k].index : length;
+    holes += next - pos;
+    pos = next;
+  }
+  
+  if (holes) fn(js, ctx, length - holes, holes, js_mkundef(), NULL);
+
+done:
+  free(sparse);
+}
+
+typedef struct {
+  int count;
+  bool nested;
+} arr_small_ctx_t;
+
+static bool arr_small_entry(
+  ant_t *js, void *ctx, ant_offset_t index, 
+  ant_offset_t holes, ant_value_t value, const char *accessor
+) {
+  arr_small_ctx_t *small = ctx;
+  uint8_t t = vtype(value);
+  if (!holes && (t == kTypeObject || t == kTypeArray || t == kTypeFunction)) small->nested = true;
+  return ++small->count <= 4 && !small->nested;
+}
+
+static bool is_small_array(ant_t *js, ant_value_t obj) {
+  if (js->stringify && (js->stringify->flags & ANT_INSPECT_EXPAND)) return false;
+  arr_small_ctx_t small = {0};
+  arr_for_each_entry(js, obj, arr_small_entry, &small);
+  return small.count <= 4 && !small.nested;
+}
+
+typedef struct {
+  char *buf;
+  size_t len;
+  size_t n;
+  bool inline_mode;
+  bool printed_first;
+} arr_print_ctx_t;
+
+static bool arr_print_entry(
+  ant_t *js, void *ctx, ant_offset_t index, 
+  ant_offset_t holes, ant_value_t value, const char *accessor
+) {
+  arr_print_ctx_t *p = ctx;
+  if (p->printed_first) p->n += cpy(p->buf + p->n, REMAIN(p->n, p->len), p->inline_mode ? ", " : ",\n", 2);
+  if (!p->inline_mode) p->n += add_indent(p->buf + p->n, REMAIN(p->n, p->len), js->stringify->indent);
+  
+  if (holes) p->n += (size_t) snprintf(
+    p->buf + p->n, REMAIN(p->n, p->len), "<%llu empty item%s>", 
+    (unsigned long long)holes, holes == 1 ? "" : "s"
+  );
+  
+  else if (accessor) p->n += cpy(p->buf + p->n, REMAIN(p->n, p->len), accessor, strlen(accessor));
+  else p->n += tostr(js, value, p->buf + p->n, REMAIN(p->n, p->len));
+    
+  p->printed_first = true;
+  return true;
+}
+
 static size_t strarr_body(ant_t *js, ant_value_t obj, char *buf, size_t len) {
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
   ant_offset_t length = get_array_length(js, obj);
@@ -1171,10 +1306,9 @@ static size_t strarr_body(ant_t *js, ant_value_t obj, char *buf, size_t len) {
   ant_offset_t class_len = 0;
   const char *class_name = arguments ? NULL : get_class_name(js, obj, &class_len, "Array");
   
-  int elem_count = 0;
   bool hidden_nested = false;
   int hidden = js_inspect_hidden_count(js, obj, &hidden_nested);
-  bool inline_mode = is_small_array(js, obj, &elem_count) && !hidden_nested;
+  bool inline_mode = is_small_array(js, obj) && !hidden_nested;
   size_t n = 0;
   
   if (arguments) n += cpy(buf + n, REMAIN(n, len), "[Arguments] ", 12);
@@ -1192,16 +1326,19 @@ static size_t strarr_body(ant_t *js, ant_value_t obj, char *buf, size_t len) {
   if (!inline_mode) js->stringify->indent++;
   
   bool printed_first = false;
-  for (ant_offset_t i = 0; i < iter_len; i++) {
-    bool found = arr_has(js, obj, i);
-    if (arguments && !found) continue;
+  if (arguments) for (ant_offset_t i = 0; i < iter_len; i++) {
+    if (!arr_has(js, obj, i)) continue;
     if (printed_first) n += cpy(buf + n, REMAIN(n, len), inline_mode ? ", " : ",\n", 2);
     if (!inline_mode) n += add_indent(buf + n, REMAIN(n, len), js->stringify->indent);
 
-    if (arguments) n += (size_t) snprintf(buf + n, REMAIN(n, len), "'%u': ", (unsigned) i);
-    ant_value_t val = arr_get(js, obj, i);
-    n += found ? tostr(js, val, buf + n, REMAIN(n, len)) : cpy(buf + n, REMAIN(n, len), "undefined", 9);
+    n += (size_t) snprintf(buf + n, REMAIN(n, len), "'%u': ", (unsigned) i);
+    n += tostr(js, arr_get(js, obj, i), buf + n, REMAIN(n, len));
     printed_first = true;
+  } else {
+    arr_print_ctx_t print = { buf, len, n, inline_mode, false };
+    arr_for_each_entry(js, obj, arr_print_entry, &print);
+    n = print.n;
+    printed_first = print.printed_first;
   }
 
   if (ptr && ptr->shape) {
@@ -1215,6 +1352,7 @@ static size_t strarr_body(ant_t *js, ant_value_t obj, char *buf, size_t len) {
       
       if (is_length_key(key, klen)) continue;
       if (!(prop->attrs & ANT_PROP_ATTR_ENUMERABLE)) continue;
+      if (!arguments && is_array_index(key, klen)) continue;
       
       if (printed_first) n += cpy(buf + n, REMAIN(n, len), inline_mode ? ", " : ",\n", 2);
       if (!inline_mode) n += add_indent(buf + n, REMAIN(n, len), js->stringify->indent);
@@ -1223,7 +1361,7 @@ static size_t strarr_body(ant_t *js, ant_value_t obj, char *buf, size_t len) {
       if (arguments && is_array_index(key, klen)) {
         n += (size_t) snprintf(buf + n, REMAIN(n, len), "'%.*s': ", (int)klen, key);
         n += tostr(js, val, buf + n, REMAIN(n, len));
-      } else if (is_array_index(key, klen)) n += tostr(js, val, buf + n, REMAIN(n, len)); else {
+      } else {
         n += cpy(buf + n, REMAIN(n, len), key, klen);
         n += cpy(buf + n, REMAIN(n, len), ": ", 2);
         n += tostr(js, val, buf + n, REMAIN(n, len));
@@ -6904,10 +7042,48 @@ static ant_value_t builtin_function_call(ant_params_t) {
   return sv_vm_call_explicit_this(js->vm, js, func, this_arg, call_args, call_nargs);
 }
 
-ant_value_t js_arg_list_from(ant_t *js, ant_value_t array_like, js_arg_list_t *list) {
-  list->args = NULL;
+const ant_value_t *Ant_Array_DenseView(ant_value_t arr, int *len_out) {
+  static const ant_value_t empty[1];
+  ant_object_t *ptr = real_array_obj_ptr(arr);
+  if (!ptr || !ptr->flags.fast_array || ptr->flags.is_exotic) return NULL;
+
+  ant_offset_t len = ptr->u.array.len;
+  if (len == 0) { *len_out = 0; return empty; }
+  if (!ptr->u.array.data) return NULL;
+  if (len > ptr->u.array.cap || len > (ant_offset_t)INT_MAX) return NULL;
+
+  const ant_value_t *src = ptr->u.array.data;
+  for (ant_offset_t i = 0; i < len; i++)
+    if (is_empty_slot(src[i])) return NULL;
+
+  *len_out = (int)len;
+  return src;
+}
+
+ant_value_t Ant_ArgList_FromArrayLike(ant_t *js, ant_value_t array_like, ant_arg_list_t *list) {
+  int dense_len = 0;
+  const ant_value_t *dense = Ant_Array_DenseView(array_like, &dense_len);
+  list->rooted = false;
+  list->args = list->inline_args;
   list->argc = 0;
+
+  if (dense && dense_len <= ANT_ARG_LIST_INLINE) {
+    memcpy(list->inline_args, dense, (size_t)dense_len * sizeof(ant_value_t));
+    list->argc = dense_len;
+    return js_mkundef();
+  }
+
   gc_temp_root_scope_begin(js, &list->roots);
+  list->rooted = true;
+
+  if (dense) {
+    ant_value_t *slots = gc_temp_root_slots(&list->roots, (size_t)dense_len);
+    if (!slots) { Ant_ArgList_Release(list); return js_mkerr(js, "out of memory"); }
+    memcpy(slots, dense, (size_t)dense_len * sizeof(ant_value_t));
+    list->args = slots;
+    list->argc = dense_len;
+    return js_mkundef();
+  }
 
   ant_offset_t len = 0;
   ant_value_t result = js_mkundef();
@@ -6935,12 +7111,13 @@ ant_value_t js_arg_list_from(ant_t *js, ant_value_t array_like, js_arg_list_t *l
   return js_mkundef();
 
 fail:
-  js_arg_list_release(list);
+  Ant_ArgList_Release(list);
   return result;
 }
 
-void js_arg_list_release(js_arg_list_t *list) {
-  gc_temp_root_scope_end(&list->roots);
+void Ant_ArgList_Release(ant_arg_list_t *list) {
+  if (list->rooted) gc_temp_root_scope_end(&list->roots);
+  list->rooted = false;
   list->args = NULL;
   list->argc = 0;
 }
@@ -7069,12 +7246,12 @@ ant_value_t builtin_function_apply(ant_params_t) {
   if (vtype(arg_array) != kTypeArray && vtype(arg_array) != kTypeObject)
     return sv_vm_call_explicit_this(js->vm, js, func, this_arg, NULL, 0);
 
-  js_arg_list_t list;
-  ant_value_t err = js_arg_list_from(js, arg_array, &list);
+  ant_arg_list_t list;
+  ant_value_t err = Ant_ArgList_FromArrayLike(js, arg_array, &list);
   if (is_err(err)) return err;
 
   ant_value_t result = sv_vm_call_explicit_this(js->vm, js, func, this_arg, list.args, list.argc);
-  js_arg_list_release(&list);
+  Ant_ArgList_Release(&list);
   
   return result;
 }
@@ -16262,8 +16439,8 @@ bool js_string_intrinsic_builtin_matches(ant_value_t func, ant_string_intrinsic_
 }
 
 static ant_value_t builtin_string_substr(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "substr called on non-string");
+  ant_value_t str = Ant_String_CoerceThis(js, "substr");
+  if (is_err(str)) return str;
   ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   size_t utf16_len = (size_t)str_utf16_len(js, str);
@@ -16516,8 +16693,8 @@ return_whole:
 }
 
 static ant_value_t builtin_string_split(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "split called on non-string");
+  ant_value_t str = Ant_String_CoerceThis(js, "split");
+  if (is_err(str)) return str;
 
   if (nargs > 0 && is_object_type(args[0])) {
     bool called = false;
@@ -16572,8 +16749,7 @@ static ant_value_t builtin_string_slice(ant_params_t) {
     return result;
   }
 
-  ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
-  ant_value_t str = js_tostring_val(js, this_unwrapped);
+  ant_value_t str = Ant_String_CoerceThis(js, "slice");
   if (is_err(str)) return str;
   
   ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
@@ -16633,8 +16809,8 @@ static inline ant_offset_t string_clamped_position(ant_t *js, ant_value_t value,
 }
 
 static ant_value_t builtin_string_startsWith(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "startsWith called on non-string");
+  ant_value_t str = Ant_String_CoerceThis(js, "startsWith");
+  if (is_err(str)) return str;
   if (nargs == 0) return mkval(kTypeBool, 0);
   ant_value_t search = args[0];
   
@@ -16673,8 +16849,8 @@ static ant_value_t builtin_string_startsWith(ant_params_t) {
 }
 
 static ant_value_t builtin_string_endsWith(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "endsWith called on non-string");
+  ant_value_t str = Ant_String_CoerceThis(js, "endsWith");
+  if (is_err(str)) return str;
   if (nargs == 0) return mkval(kTypeBool, 0);
   ant_value_t search = args[0];
   
@@ -16792,8 +16968,8 @@ static void html_attr_append_escaped(char *out, size_t *pos, const char *s, ant_
   } else out[(*pos)++] = s[i];
 }
 
-static ant_value_t builtin_string_html(ant_native_params_t, const char *tag, const char *attr) {
-  ant_value_t str = js_tostring_val(js, unwrap_primitive(js, js->this_val));
+static ant_value_t builtin_string_html(ant_native_params_t, const char *name, const char *tag, const char *attr) {
+  ant_value_t str = Ant_String_CoerceThis(js, name);
   if (is_err(str)) return str;
 
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
@@ -16849,56 +17025,14 @@ static ant_value_t builtin_string_html(ant_native_params_t, const char *tag, con
   return out;
 }
 
-static ant_value_t builtin_string_anchor(ant_params_t) {
-  return builtin_string_html(js, args, nargs, "a", "name");
-}
-
-static ant_value_t builtin_string_big(ant_params_t) {
-  return builtin_string_html(js, args, nargs, "big", NULL);
-}
-
-static ant_value_t builtin_string_bold(ant_params_t) {
-  return builtin_string_html(js, args, nargs, "b", NULL);
-}
-
-static ant_value_t builtin_string_fixed(ant_params_t) {
-  return builtin_string_html(js, args, nargs, "tt", NULL);
-}
-
-static ant_value_t builtin_string_fontcolor(ant_params_t) {
-  return builtin_string_html(js, args, nargs, "font", "color");
-}
-
-static ant_value_t builtin_string_fontsize(ant_params_t) {
-  return builtin_string_html(js, args, nargs, "font", "size");
-}
-
-static ant_value_t builtin_string_italics(ant_params_t) {
-  return builtin_string_html(js, args, nargs, "i", NULL);
-}
-
-static ant_value_t builtin_string_link(ant_params_t) {
-  return builtin_string_html(js, args, nargs, "a", "href");
-}
-
-static ant_value_t builtin_string_small(ant_params_t) {
-  return builtin_string_html(js, args, nargs, "small", NULL);
-}
-
-static ant_value_t builtin_string_strike(ant_params_t) {
-  return builtin_string_html(js, args, nargs, "strike", NULL);
-}
-
-static ant_value_t builtin_string_sub(ant_params_t) {
-  return builtin_string_html(js, args, nargs, "sub", NULL);
-}
-
-static ant_value_t builtin_string_sup(ant_params_t) {
-  return builtin_string_html(js, args, nargs, "sup", NULL);
-}
+#define STRING_HTML_METHOD(name, tag, attr, arity) \
+  static ant_value_t builtin_string_##name(ant_params_t) { \
+    return builtin_string_html(js, args, nargs, #name, tag, attr); \
+  }
+#include "string/html_methods.h"
 
 ant_value_t builtin_string_charCodeAt(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
+  ant_value_t str = Ant_String_CoerceThis(js, "charCodeAt");
   
   if (is_err(str)) return str;
   if (vtype(str) != kTypeString) return js_mkerr(js, "charCodeAt called on non-string");
@@ -16957,8 +17091,8 @@ bool js_try_char_code_at(
 }
 
 static ant_value_t builtin_string_codePointAt(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "codePointAt called on non-string");
+  ant_value_t str = Ant_String_CoerceThis(js, "codePointAt");
+  if (is_err(str)) return str;
   
   double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
   if (isnan(idx_d)) idx_d = 0.0;
@@ -16977,9 +17111,9 @@ static ant_value_t builtin_string_codePointAt(ant_params_t) {
   return tov((double) cp);
 }
 
-static ant_value_t builtin_string_toLowerCase(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "toLowerCase called on non-string");
+static ant_value_t string_toLowerCase_impl(ant_t *js, ant_value_t *args, int nargs, const char *name) {
+  ant_value_t str = Ant_String_CoerceThis(js, name);
+  if (is_err(str)) return str;
   
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
@@ -17032,9 +17166,17 @@ static ant_value_t builtin_string_toLowerCase(ant_params_t) {
   return result;
 }
 
-static ant_value_t builtin_string_toUpperCase(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "toUpperCase called on non-string");
+static ant_value_t builtin_string_toLowerCase(ant_params_t) {
+  return string_toLowerCase_impl(js, args, nargs, "toLowerCase");
+}
+
+static ant_value_t builtin_string_toLocaleLowerCase(ant_params_t) {
+  return string_toLowerCase_impl(js, args, nargs, "toLocaleLowerCase");
+}
+
+static ant_value_t string_toUpperCase_impl(ant_t *js, ant_value_t *args, int nargs, const char *name) {
+  ant_value_t str = Ant_String_CoerceThis(js, name);
+  if (is_err(str)) return str;
   
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
@@ -17087,9 +17229,17 @@ static ant_value_t builtin_string_toUpperCase(ant_params_t) {
   return result;
 }
 
+static ant_value_t builtin_string_toUpperCase(ant_params_t) {
+  return string_toUpperCase_impl(js, args, nargs, "toUpperCase");
+}
+
+static ant_value_t builtin_string_toLocaleUpperCase(ant_params_t) {
+  return string_toUpperCase_impl(js, args, nargs, "toLocaleUpperCase");
+}
+
 static ant_value_t builtin_string_trim(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "trim called on non-string");
+  ant_value_t str = Ant_String_CoerceThis(js, "trim");
+  if (is_err(str)) return str;
   
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
@@ -17102,8 +17252,8 @@ static ant_value_t builtin_string_trim(ant_params_t) {
 }
 
 static ant_value_t builtin_string_trimStart(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "trimStart called on non-string");
+  ant_value_t str = Ant_String_CoerceThis(js, "trimStart");
+  if (is_err(str)) return str;
   
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
@@ -17115,8 +17265,8 @@ static ant_value_t builtin_string_trimStart(ant_params_t) {
 }
 
 static ant_value_t builtin_string_trimEnd(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "trimEnd called on non-string");
+  ant_value_t str = Ant_String_CoerceThis(js, "trimEnd");
+  if (is_err(str)) return str;
   
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
@@ -17128,18 +17278,27 @@ static ant_value_t builtin_string_trimEnd(ant_params_t) {
 }
 
 static ant_value_t builtin_string_repeat(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "repeat called on non-string");
-  if (nargs < 1 || vtype(args[0]) != kTypeNumber) return js_mkerr(js, "repeat count required");
+  ant_value_t str = Ant_String_CoerceThis(js, "repeat");
+  if (is_err(str)) return str;
+
+  double count_d = 0;
+  if (nargs > 0) {
+    ant_value_t status = string_to_integer_or_infinity(js, args[0], &count_d);
+    if (is_err(status)) return status;
+  }
   
-  double count_d = tod(args[0]);
-  if (count_d < 0 || count_d != (double)(long)count_d) return js_mkerr(js, "invalid repeat count");
-  ant_offset_t count = (ant_offset_t) count_d;
+  if (isinf(count_d))
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid count value: %sInfinity", count_d < 0 ? "-" : "");
+  if (count_d < 0)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid count value: %.0f", count_d);
   
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   
-  if (count == 0 || str_len == 0) return js_mkstr(js, "", 0);
+  if (count_d == 0 || str_len == 0) return js_mkstr(js, "", 0);
+  if (count_d * (double)str_utf16_len(js, str) > ANT_STRING_MAX_LENGTH)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid string length");
+  ant_offset_t count = (ant_offset_t)count_d;
   
   ant_value_t result = js_mkstr(js, NULL, str_len * count);
   if (is_err(result)) return result;
@@ -17159,28 +17318,34 @@ static ant_value_t builtin_string_repeat(ant_params_t) {
 }
 
 static ant_value_t builtin_string_padStart(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "padStart called on non-string");
-  if (nargs < 1 || vtype(args[0]) != kTypeNumber) return str;
+  ant_value_t str = Ant_String_CoerceThis(js, "padStart");
+  if (is_err(str)) return str;
   
-  ant_offset_t target_len = (ant_offset_t)tod(args[0]);
-  if (target_len <= 0) return str;
-  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *)(uintptr_t)(str_off);
+  double target_d = 0;
+  if (nargs > 0) {
+    ant_value_t status = string_to_integer_or_infinity(js, args[0], &target_d);
+    if (is_err(status)) return status;
+  }
+  
   size_t str_units_len = (size_t)str_utf16_len(js, str);
-  
-  if ((size_t)target_len <= str_units_len) return str;
+  if (target_d <= (double)str_units_len) return str;
   
   ant_value_t pad_val = js_mkstr(js, " ", 1);
   if (nargs >= 2 && vtype(args[1]) != kTypeUndefined) {
     pad_val = coerce_to_str(js, args[1]);
     if (is_err(pad_val)) return pad_val;
   }
+  
   ant_offset_t pad_len, pad_off = vstr(js, pad_val, &pad_len);
   const char *pad_str = (char *)(uintptr_t)(pad_off);
   size_t pad_utf16_len = (size_t)str_utf16_len(js, pad_val);
   
   if (pad_utf16_len == 0) return str;
+  if (target_d > ANT_STRING_MAX_LENGTH) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid string length");
+  
+  ant_offset_t target_len = (ant_offset_t)target_d;
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (char *)(uintptr_t)(str_off);
   
   size_t fill_utf16_len = (size_t)target_len - str_units_len;
   size_t full_repeats = fill_utf16_len / pad_utf16_len;
@@ -17221,28 +17386,34 @@ static ant_value_t builtin_string_padStart(ant_params_t) {
 }
 
 static ant_value_t builtin_string_padEnd(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "padEnd called on non-string");
-  if (nargs < 1 || vtype(args[0]) != kTypeNumber) return str;
+  ant_value_t str = Ant_String_CoerceThis(js, "padEnd");
+  if (is_err(str)) return str;
   
-  ant_offset_t target_len = (ant_offset_t)tod(args[0]);
-  if (target_len <= 0) return str;
-  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *)(uintptr_t)(str_off);
+  double target_d = 0;
+  if (nargs > 0) {
+    ant_value_t status = string_to_integer_or_infinity(js, args[0], &target_d);
+    if (is_err(status)) return status;
+  }
+  
   size_t str_units_len = (size_t)str_utf16_len(js, str);
-  
-  if ((size_t)target_len <= str_units_len) return str;
+  if (target_d <= (double)str_units_len) return str;
   
   ant_value_t pad_val = js_mkstr(js, " ", 1);
   if (nargs >= 2 && vtype(args[1]) != kTypeUndefined) {
     pad_val = coerce_to_str(js, args[1]);
     if (is_err(pad_val)) return pad_val;
   }
+  
   ant_offset_t pad_len, pad_off = vstr(js, pad_val, &pad_len);
   const char *pad_str = (char *)(uintptr_t)(pad_off);
   size_t pad_utf16_len = (size_t)str_utf16_len(js, pad_val);
   
   if (pad_utf16_len == 0) return str;
+  if (target_d > ANT_STRING_MAX_LENGTH) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid string length");
+  
+  ant_offset_t target_len = (ant_offset_t)target_d;
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (char *)(uintptr_t)(str_off);
   
   size_t fill_utf16_len = (size_t)target_len - str_units_len;
   size_t full_repeats = fill_utf16_len / pad_utf16_len;
@@ -17283,8 +17454,8 @@ static ant_value_t builtin_string_padEnd(ant_params_t) {
 }
 
 static ant_value_t builtin_string_charAt(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "charAt called on non-string");
+  ant_value_t str = Ant_String_CoerceThis(js, "charAt");
+  if (is_err(str)) return str;
   
   double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
   if (isnan(idx_d)) idx_d = 0;
@@ -17304,8 +17475,8 @@ static ant_value_t builtin_string_charAt(ant_params_t) {
 }
 
 static ant_value_t builtin_string_at(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "at called on non-string");
+  ant_value_t str = Ant_String_CoerceThis(js, "at");
+  if (is_err(str)) return str;
   
   double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
   if (isnan(idx_d) || isinf(idx_d)) return js_mkundef();
@@ -17325,8 +17496,8 @@ static ant_value_t builtin_string_at(ant_params_t) {
 }
 
 static ant_value_t builtin_string_localeCompare(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "localeCompare called on non-string");
+  ant_value_t str = Ant_String_CoerceThis(js, "localeCompare");
+  if (is_err(str)) return str;
   if (nargs < 1) return tov(0);
   
   ant_value_t that = args[0];
@@ -17348,8 +17519,8 @@ static ant_value_t builtin_string_localeCompare(ant_params_t) {
 }
 
 static ant_value_t builtin_string_lastIndexOf(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "lastIndexOf called on non-string");
+  ant_value_t str = Ant_String_CoerceThis(js, "lastIndexOf");
+  if (is_err(str)) return str;
   if (nargs == 0) return tov(-1);
 
   ant_value_t search = args[0];
@@ -17421,8 +17592,7 @@ static ant_value_t builtin_string_lastIndexOf(ant_params_t) {
 static ant_value_t builtin_string_concat(ant_params_t) {
   GC_ROOT_SAVE(root_mark, js);
   
-  ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
-  ant_value_t str = coerce_to_str_hint(js, this_unwrapped, 1);
+  ant_value_t str = Ant_String_CoerceThis(js, "concat");
   
   GC_ROOT_PIN(js, str);
   if (is_err(str)) {
@@ -17511,9 +17681,42 @@ static ant_value_t builtin_string_concat(ant_params_t) {
   return ret;
 }
 
+static bool string_is_well_formed(const char *ptr, size_t len) {
+  return str_is_valid_utf8(ptr) || wtf8_is_well_formed(ptr, len);
+}
+
+static ant_value_t builtin_string_isWellFormed(ant_params_t) {
+  ant_value_t str = Ant_String_CoerceThis(js, "isWellFormed");
+  if (is_err(str)) return str;
+  
+  ant_offset_t len, off = vstr(js, str, &len);
+  return js_bool(string_is_well_formed((const char *)(uintptr_t)off, (size_t)len));
+}
+
+static ant_value_t builtin_string_toWellFormed(ant_params_t) {
+  ant_value_t str = Ant_String_CoerceThis(js, "toWellFormed");
+  if (is_err(str)) return str;
+  
+  ant_offset_t len, off = vstr(js, str, &len);
+  if (string_is_well_formed((const char *)(uintptr_t)off, (size_t)len)) return str;
+  
+  size_t out_len = utf8_export_length((const char *)(uintptr_t)off, (size_t)len);
+  ant_value_t result = js_mkstr(js, NULL, (ant_offset_t)out_len);
+  if (is_err(result)) return result;
+  
+  off = vstr(js, str, &len);
+  ant_offset_t result_len, result_off = vstr(js, result, &result_len);
+  char *result_ptr = (char *)(uintptr_t)result_off;
+  
+  utf8_export_into((const char *)(uintptr_t)off, (size_t)len, (uint8_t *)result_ptr, out_len, NULL);
+  str_flat_finish(str_flat_from_bytes(result_ptr), STR_ASCII_NO);
+  
+  return result;
+}
+
 static ant_value_t builtin_string_normalize(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "normalize called on non-string");
+  ant_value_t str = Ant_String_CoerceThis(js, "normalize");
+  if (is_err(str)) return str;
 
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (const char *)(uintptr_t)(str_off);
@@ -22242,8 +22445,8 @@ static void realm_init_core(ant_t *js) {
   defmethod(js, string_proto, "codePointAt", 11, Ant_Function_CreateWithArity(builtin_string_codePointAt, 1));
   defmethod(js, string_proto, "toLowerCase", 11, Ant_Function_Create(builtin_string_toLowerCase));
   defmethod(js, string_proto, "toUpperCase", 11, Ant_Function_Create(builtin_string_toUpperCase));
-  defmethod(js, string_proto, "toLocaleLowerCase", 17, Ant_Function_Create(builtin_string_toLowerCase));
-  defmethod(js, string_proto, "toLocaleUpperCase", 17, Ant_Function_Create(builtin_string_toUpperCase));
+  defmethod(js, string_proto, "toLocaleLowerCase", 17, Ant_Function_Create(builtin_string_toLocaleLowerCase));
+  defmethod(js, string_proto, "toLocaleUpperCase", 17, Ant_Function_Create(builtin_string_toLocaleUpperCase));
   defmethod(js, string_proto, "trim", 4, Ant_Function_Create(builtin_string_trim));
   defmethod(js, string_proto, "trimStart", 9, Ant_Function_Create(builtin_string_trimStart));
   defmethod(js, string_proto, "trimEnd", 7, Ant_Function_Create(builtin_string_trimEnd));
@@ -22258,20 +22461,13 @@ static void realm_init_core(ant_t *js) {
   defmethod(js, string_proto, "concat", 6, Ant_Function_CreateWithArity(builtin_string_concat, 1));
   defmethod(js, string_proto, "localeCompare", 13, Ant_Function_CreateWithArity(builtin_string_localeCompare, 1));
   defmethod(js, string_proto, "normalize", 9, Ant_Function_Create(builtin_string_normalize));
+  defmethod(js, string_proto, "isWellFormed", 12, Ant_Function_Create(builtin_string_isWellFormed));
+  defmethod(js, string_proto, "toWellFormed", 12, Ant_Function_Create(builtin_string_toWellFormed));
   defmethod(js, string_proto, "valueOf", 7, Ant_Function_Create(builtin_string_valueOf));
   defmethod(js, string_proto, "toString", 8, Ant_Function_Create(builtin_string_toString));
-  defmethod(js, string_proto, "anchor", 6, Ant_Function_CreateWithArity(builtin_string_anchor, 1));
-  defmethod(js, string_proto, "big", 3, Ant_Function_Create(builtin_string_big));
-  defmethod(js, string_proto, "bold", 4, Ant_Function_Create(builtin_string_bold));
-  defmethod(js, string_proto, "fixed", 5, Ant_Function_Create(builtin_string_fixed));
-  defmethod(js, string_proto, "fontcolor", 9, Ant_Function_CreateWithArity(builtin_string_fontcolor, 1));
-  defmethod(js, string_proto, "fontsize", 8, Ant_Function_CreateWithArity(builtin_string_fontsize, 1));
-  defmethod(js, string_proto, "italics", 7, Ant_Function_Create(builtin_string_italics));
-  defmethod(js, string_proto, "link", 4, Ant_Function_CreateWithArity(builtin_string_link, 1));
-  defmethod(js, string_proto, "small", 5, Ant_Function_Create(builtin_string_small));
-  defmethod(js, string_proto, "strike", 6, Ant_Function_Create(builtin_string_strike));
-  defmethod(js, string_proto, "sub", 3, Ant_Function_Create(builtin_string_sub));
-  defmethod(js, string_proto, "sup", 3, Ant_Function_Create(builtin_string_sup));
+  #define STRING_HTML_METHOD(name, tag, attr, arity) \
+    defmethod(js, string_proto, #name, sizeof(#name) - 1, Ant_Function_CreateWithArity(builtin_string_##name, arity));
+  #include "string/html_methods.h"
 
   ant_value_t number_proto = Ant_Object_CreateBare(js);
   set_proto(js, number_proto, object_proto);

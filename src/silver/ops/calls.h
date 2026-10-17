@@ -7,6 +7,7 @@
 #include "silver/feedback.h"
 #include "gc/roots.h"
 #include "eval_env.h"
+#include "objects.h"
 
 typedef struct {
   ant_value_t *args;
@@ -105,7 +106,42 @@ static inline void sv_call_args_release(sv_call_args_t *a) {
   a->rooted = false;
 }
 
-static inline ant_value_t sv_apply_normalize_args(ant_t *js, sv_call_args_t *a) {
+static constexpr int SV_STACK_ARGS_MAX = 1024;
+
+static inline int sv_stack_args_cap(sv_vm_t *vm, int first) {
+  int room = (vm->stack_size - first) / 2;
+  return room < SV_STACK_ARGS_MAX ? room : SV_STACK_ARGS_MAX;
+}
+
+static inline ant_value_t *sv_call_args_root(ant_t *js, sv_call_args_t *a, int count) {
+  gc_temp_root_scope_begin(js, &a->roots);
+  a->rooted = true;
+  ant_value_t *slots = gc_temp_root_slots(&a->roots, (size_t)count);
+  if (!slots) sv_call_args_release(a);
+  return slots;
+}
+
+static inline ant_value_t sv_call_args_place(
+  ant_t *js, sv_call_args_t *a, int fixed,
+  const ant_value_t *src, int len, int cap
+) {
+  if ((int64_t)fixed + len > INT_MAX) return js_mkerr(js, "too many arguments");
+  ant_value_t *dst = a->args;
+  
+  if (fixed + len > cap) {
+    dst = sv_call_args_root(js, a, fixed + len);
+    if (!dst) return js_mkerr(js, "out of memory");
+    if (fixed > 0) memcpy(dst, a->args, (size_t)fixed * sizeof(ant_value_t));
+  }
+
+  if (len > 0) memcpy(dst + fixed, src, (size_t)len * sizeof(ant_value_t));
+  a->args = dst;
+  a->argc = fixed + len;
+  
+  return js_mkundef();
+}
+
+static inline ant_value_t sv_apply_normalize_args(ant_t *js, sv_call_args_t *a, int cap) {
   if (a->argc != 1) return js_mkundef();
 
   ant_value_t arg_array = a->args[0];
@@ -120,6 +156,10 @@ static inline ant_value_t sv_apply_normalize_args(ant_t *js, sv_call_args_t *a) 
       "apply arguments must be an array or null/undefined");
   }
 
+  int dense_len = 0;
+  const ant_value_t *dense = Ant_Array_DenseView(arg_array, &dense_len);
+  if (dense) return sv_call_args_place(js, a, 0, dense, dense_len, cap);
+
   ant_offset_t len = js_arr_len(js, arg_array);
   if (len <= 0) {
     a->args = NULL;
@@ -130,17 +170,58 @@ static inline ant_value_t sv_apply_normalize_args(ant_t *js, sv_call_args_t *a) 
   if (len > INT_MAX)
     return js_mkerr(js, "too many arguments");
 
-  gc_temp_root_scope_begin(js, &a->roots);
-  a->rooted = true;
+  ant_value_t *slots = sv_call_args_root(js, a, (int)len);
+  if (!slots) return js_mkerr(js, "out of memory");
+  for (ant_offset_t i = 0; i < len; i++) slots[i] = js_arr_get(js, arg_array, i);
   
-  for (ant_offset_t i = 0; i < len; i++) 
-    if (!gc_temp_root_handle_valid(gc_temp_root_add(&a->roots, js_arr_get(js, arg_array, i)))) 
-    { sv_call_args_release(a); return js_mkerr(js, "out of memory"); }
-  
-  a->args = a->roots.items;
+  a->args = slots;
   a->argc = (int)len;
   
   return js_mkundef();
+}
+
+static inline ant_value_t sv_spread_call_args(sv_vm_t *vm, ant_t *js, sv_call_args_t *a, int cap) {
+  int fixed = a->argc - 1;
+  ant_value_t iterable = a->args[fixed];
+  int len = 0;
+
+  if (vtype(iterable) == kTypeArray && js_array_iteration_default(js, iterable)) {
+    const ant_value_t *dense = Ant_Array_DenseView(iterable, &len);
+    if (dense) return sv_call_args_place(js, a, fixed, dense, len, cap);
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, iterable);
+  
+  ant_value_t arr = js_mkarr(js);
+  GC_ROOT_PIN(js, arr);
+
+  ant_value_t status = is_err(arr) ? arr : sv_spread_into(vm, js, arr, iterable);
+  if (!is_err(status)) {
+    const ant_value_t *spread = Ant_Array_DenseView(arr, &len);
+    status = spread
+      ? sv_call_args_place(js, a, fixed, spread, len, cap)
+      : js_mkerr(js, "invalid spread state");
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return status;
+}
+
+static inline ant_value_t sv_stack_call_args(
+  sv_vm_t *vm, ant_t *js, sv_call_args_t *call,
+  int first, int argc, bool spread
+) {
+  ant_value_t *args = &vm->stack[first];
+  sv_call_args_reset(call, args, argc);
+  
+  int cap = sv_stack_args_cap(vm, first);
+  ant_value_t status = spread
+    ? sv_spread_call_args(vm, js, call, cap)
+    : sv_apply_normalize_args(js, call, cap);
+  
+  if (!is_err(status) && call->args == args) vm->sp = first + call->argc;
+  return status;
 }
 
 static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
@@ -153,10 +234,13 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   if (vtype(func) == kTypeObject && is_proxy(func)) {
     ant_value_t result = js_proxy_construct(js, func, args, argc, new_target);
     vm->sp -= argc + 2;
+    
     if (is_err(result)) return result;
     vm->stack[vm->sp++] = result;
+    
     return result;
   }
+  
   if (!js_is_constructor(func)) {
     vm->sp -= argc + 2;
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
@@ -165,6 +249,7 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   ant_value_t proto = js_mkundef();
   if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
     proto = sv_prepare_construct_meta(js, func, new_target, &effective_new_target);
+    
     if (is_err(proto)) {
       vm->sp -= argc + 2;
       return proto;
@@ -195,102 +280,133 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   return result;
 }
 
-static inline ant_value_t sv_op_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+static inline __attribute__((noinline)) ant_value_t sv_op_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   uint16_t argc = sv_get_u16(ip + 1);
-  ant_value_t *args = &vm->stack[vm->sp - argc];
-  ant_value_t this = vm->stack[vm->sp - argc - 1];
-  ant_value_t func = vm->stack[vm->sp - argc - 2];
-  sv_call_args_t call;
+  int base = vm->sp - argc - 2;
   
-  sv_call_args_reset(&call, args, (int)argc);
-  ant_value_t norm = sv_apply_normalize_args(js, &call);
-  if (is_err(norm)) return norm;
+  ant_value_t func = vm->stack[base];
+  ant_value_t this = vm->stack[base + 1];
+  sv_call_args_t call;
+
+  ant_value_t status = sv_stack_call_args(vm, js, &call, base + 2, argc, false);
+  if (is_err(status)) { vm->sp = base; return status; }
 
   ant_value_t result = sv_vm_call(vm, js, func, this, call.args, call.argc, NULL, js_mkundef());
   sv_call_args_release(&call);
-  vm->sp -= argc + 2;
+  
+  vm->sp = base;
   if (!is_err(result)) vm->stack[vm->sp++] = result;
+  
   return result;
+}
+
+static inline __attribute__((noinline)) ant_value_t sv_op_call_spread(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+  uint16_t argc = sv_get_u16(ip + 1);
+  int base = vm->sp - argc - 2;
+  
+  ant_value_t func = vm->stack[base];
+  ant_value_t this = vm->stack[base + 1];
+  sv_call_args_t call;
+
+  ant_value_t status = sv_stack_call_args(vm, js, &call, base + 2, argc, true);
+  if (is_err(status)) { vm->sp = base; return status; }
+
+  ant_value_t result = sv_vm_call(vm, js, func, this, call.args, call.argc, NULL, js_mkundef());
+  sv_call_args_release(&call);
+  
+  vm->sp = base;
+  if (!is_err(result)) vm->stack[vm->sp++] = result;
+  
+  return result;
+}
+
+static inline ant_value_t sv_super_call(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
+  int base, ant_value_t *args, int argc
+) {
+  ant_value_t this_val = vm->stack[base];
+  ant_value_t func = vm->stack[base + 1];
+  ant_value_t new_target = vm->stack[base + 2];
+
+  ant_value_t super_this = this_val;
+  ant_value_t result = sv_vm_call(vm, js, func, this_val, args, argc, &super_this, new_target);
+  
+  vm->sp = base;
+  if (is_err(result)) return result;
+
+  ant_value_t effective_this = is_object_type(result) 
+    ? result 
+    : super_this;
+  
+  if (frame) frame->this = effective_this;
+  vm->stack[vm->sp++] = effective_this;
+  
+  return effective_this;
 }
 
 static inline ant_value_t sv_op_call_super(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint8_t *ip) {
   uint16_t argc = sv_get_u16(ip + 1);
-  
-  ant_value_t *args = &vm->stack[vm->sp - argc];
-  ant_value_t new_target = vm->stack[vm->sp - argc - 1];
-  ant_value_t func = vm->stack[vm->sp - argc - 2];
-  ant_value_t this_val = vm->stack[vm->sp - argc - 3];
-
-  ant_value_t super_this = this_val;
-  ant_value_t result = sv_vm_call(vm, js, func, this_val, args, argc, &super_this, new_target);
-  vm->sp -= argc + 3;
-  if (is_err(result)) return result;
-
-  ant_value_t effective_this = is_object_type(result) ? result : super_this;
-  if (frame) frame->this = effective_this;
-  vm->stack[vm->sp++] = effective_this;
-  
-  return effective_this;
+  int base = vm->sp - argc - 3;
+  return sv_super_call(vm, js, frame, base, &vm->stack[base + 3], argc);
 }
 
-static inline ant_value_t sv_op_super_apply(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint8_t *ip) {
+static inline ant_value_t sv_op_super_forward(sv_vm_t *vm, ant_t *js, sv_frame_t *frame) {
+  return sv_super_call(vm, js, frame, vm->sp - 3, frame ? frame->bp : NULL, frame ? frame->argc : 0);
+}
+
+static inline __attribute__((noinline)) ant_value_t sv_op_super_apply(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint8_t *ip) {
   uint16_t argc = sv_get_u16(ip + 1);
-  
-  ant_value_t *args = &vm->stack[vm->sp - argc];
-  ant_value_t new_target = vm->stack[vm->sp - argc - 1];
-  ant_value_t func = vm->stack[vm->sp - argc - 2];
-  ant_value_t this = vm->stack[vm->sp - argc - 3];
+  int base = vm->sp - argc - 3;
   sv_call_args_t call;
 
-  sv_call_args_reset(&call, args, (int)argc);
-  ant_value_t norm = sv_apply_normalize_args(js, &call);
-  if (is_err(norm)) return norm;
+  ant_value_t status = sv_stack_call_args(vm, js, &call, base + 3, argc, false);
+  if (is_err(status)) { vm->sp = base; return status; }
 
-  ant_value_t super_this = this;
-  ant_value_t result = sv_vm_call(vm, js, func, this, call.args, call.argc, &super_this, new_target);
+  ant_value_t result = sv_super_call(vm, js, frame, base, call.args, call.argc);
   sv_call_args_release(&call);
-  vm->sp -= argc + 3;
-  if (is_err(result)) return result;
-
-  ant_value_t effective_this = is_object_type(result) ? result : super_this;
-  if (frame) frame->this = effective_this;
-  vm->stack[vm->sp++] = effective_this;
   
-  return effective_this;
+  return result;
 }
 
-static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+static inline __attribute__((noinline)) ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   uint16_t argc = sv_get_u16(ip + 1);
-  ant_value_t *args = &vm->stack[vm->sp - argc];
-  ant_value_t new_target = vm->stack[vm->sp - argc - 1];
-  ant_value_t func = vm->stack[vm->sp - argc - 2];
+  int base = vm->sp - argc - 2;
+  
+  ant_value_t func = vm->stack[base];
+  ant_value_t new_target = vm->stack[base + 1];
   ant_value_t effective_new_target = new_target;
-
   sv_call_args_t call;
-  sv_call_args_reset(&call, args, (int)argc);
-  ant_value_t norm = sv_apply_normalize_args(js, &call);
-  if (is_err(norm)) { vm->sp -= argc + 2; return norm; }
+
+  ant_value_t status = sv_stack_call_args(vm, js, &call, base + 2, argc, false);
+  if (is_err(status)) { 
+    vm->sp = base; 
+    return status; 
+  }
 
   if (vtype(func) == kTypeObject && is_proxy(func)) {
     ant_value_t result = js_proxy_construct(js, func, call.args, call.argc, new_target);
     sv_call_args_release(&call);
-    vm->sp -= argc + 2;
+    vm->sp = base;
+    
     if (is_err(result)) return result;
     vm->stack[vm->sp++] = result;
+    
     return result;
   }
+  
   if (!js_is_constructor(func)) {
     sv_call_args_release(&call);
-    vm->sp -= argc + 2;
+    vm->sp = base;
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
   }
 
   ant_value_t proto = js_mkundef();
   if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
     proto = sv_prepare_construct_meta(js, func, new_target, &effective_new_target);
+    
     if (is_err(proto)) {
       sv_call_args_release(&call);
-      vm->sp -= argc + 2;
+      vm->sp = base;
       return proto;
     }
   }
@@ -309,12 +425,12 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   GC_ROOT_RESTORE(js, root_mark);
   sv_call_args_release(&call);
   
-  vm->sp -= argc + 2;
+  vm->sp = base;
   if (is_err(result)) return result;
   
-  ant_value_t final_obj =
-    is_object_type(result) ? result
-    : (is_object_type(ctor_this) ? ctor_this : obj);
+  ant_value_t final_obj = 
+    is_object_type(result) ? result : 
+    (is_object_type(ctor_this) ? ctor_this : obj);
 
   vm->stack[vm->sp++] = final_obj;
 

@@ -184,6 +184,52 @@ static MIR_label_t jit_emit_builtin_method_fastpath(jit_compile_t *c, uint16_t c
   }
 }
 
+static void jit_emit_super_call(jit_compile_t *c, MIR_op_t args, MIR_op_t argc) {
+  MIR_reg_t r_super_nt = vstack_pop(&c->vs);
+  MIR_reg_t r_super_fn = vstack_pop(&c->vs);
+  MIR_reg_t r_super_this = vstack_pop(&c->vs);
+  MIR_reg_t r_super_res = vstack_push(&c->vs);
+
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV,
+                               MIR_new_mem_op(c->ctx, MIR_T_I64, 0, c->r_call_out_this, 0, 1),
+                               MIR_new_reg_op(c->ctx, r_super_this)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_call_insn(c->ctx, 12,
+                                    MIR_new_ref_op(c->ctx, c->call_method_proto),
+                                    MIR_new_ref_op(c->ctx, c->imp_call_method),
+                                    MIR_new_reg_op(c->ctx, r_super_res),
+                                    MIR_new_reg_op(c->ctx, c->r_vm),
+                                    MIR_new_reg_op(c->ctx, c->r_js),
+                                    MIR_new_reg_op(c->ctx, r_super_fn),
+                                    MIR_new_reg_op(c->ctx, r_super_this),
+                                    args,
+                                    argc,
+                                    MIR_new_reg_op(c->ctx, r_super_fn),
+                                    MIR_new_reg_op(c->ctx, r_super_nt),
+                                    MIR_new_reg_op(c->ctx, c->r_call_out_this)));
+
+  if (c->has_captures) {
+    for (int i = 0; i < c->n_locals; i++)
+      if (c->captured_locals[i])
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_MOV,
+                                     MIR_new_reg_op(c->ctx, c->local_regs[i]),
+                                     MIR_new_mem_op(c->ctx, MIR_T_I64,
+                                                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)), c->r_lbuf, 0, 1)));
+  }
+
+  jit_emit_throw_if_error(c, r_super_res);
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV,
+                               MIR_new_reg_op(c->ctx, c->r_this_curr),
+                               MIR_new_mem_op(c->ctx, MIR_T_I64, 0, c->r_call_out_this, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV,
+                               MIR_new_reg_op(c->ctx, r_super_res),
+                               MIR_new_reg_op(c->ctx, c->r_this_curr)));
+}
+
 void jit_emit_methods(jit_compile_t *c) {
   switch (c->op) {
     case OP_CALL_SUPER: {
@@ -205,49 +251,17 @@ void jit_emit_methods(jit_compile_t *c) {
                                      MIR_new_reg_op(c->ctx, areg)));
       }
 
-      MIR_reg_t r_super_nt = vstack_pop(&c->vs);
-      MIR_reg_t r_super_fn = vstack_pop(&c->vs);
-      MIR_reg_t r_super_this = vstack_pop(&c->vs);
-      MIR_reg_t r_super_res = vstack_push(&c->vs);
+      jit_emit_super_call(c, MIR_new_reg_op(c->ctx, c->r_args_buf), MIR_new_int_op(c->ctx, (int64_t)call_argc));
+      break;
+    }
 
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_MOV,
-                                   MIR_new_mem_op(c->ctx, MIR_T_I64, 0, c->r_call_out_this, 0, 1),
-                                   MIR_new_reg_op(c->ctx, r_super_this)));
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_call_insn(c->ctx, 12,
-                                        MIR_new_ref_op(c->ctx, c->call_method_proto),
-                                        MIR_new_ref_op(c->ctx, c->imp_call_method),
-                                        MIR_new_reg_op(c->ctx, r_super_res),
-                                        MIR_new_reg_op(c->ctx, c->r_vm),
-                                        MIR_new_reg_op(c->ctx, c->r_js),
-                                        MIR_new_reg_op(c->ctx, r_super_fn),
-                                        MIR_new_reg_op(c->ctx, r_super_this),
-                                        MIR_new_reg_op(c->ctx, c->r_args_buf),
-                                        MIR_new_int_op(c->ctx, (int64_t)call_argc),
-                                        MIR_new_reg_op(c->ctx, r_super_fn),
-                                        MIR_new_reg_op(c->ctx, r_super_nt),
-                                        MIR_new_reg_op(c->ctx, c->r_call_out_this)));
-
-      if (c->has_captures) {
-        for (int i = 0; i < c->n_locals; i++)
-          if (c->captured_locals[i])
-            MIR_append_insn(c->ctx, c->jit_func,
-                            MIR_new_insn(c->ctx, MIR_MOV,
-                                         MIR_new_reg_op(c->ctx, c->local_regs[i]),
-                                         MIR_new_mem_op(c->ctx, MIR_T_I64,
-                                                        (MIR_disp_t)(i * (int)sizeof(ant_value_t)), c->r_lbuf, 0, 1)));
+    case OP_SUPER_FORWARD: {
+      vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
+      if (c->vs.sp < 3) {
+        c->ok = false;
+        break;
       }
-
-      jit_emit_throw_if_error(c, r_super_res);
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_MOV,
-                                   MIR_new_reg_op(c->ctx, c->r_this_curr),
-                                   MIR_new_mem_op(c->ctx, MIR_T_I64, 0, c->r_call_out_this, 0, 1)));
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_MOV,
-                                   MIR_new_reg_op(c->ctx, r_super_res),
-                                   MIR_new_reg_op(c->ctx, c->r_this_curr)));
+      jit_emit_super_call(c, MIR_new_reg_op(c->ctx, c->r_args), MIR_new_reg_op(c->ctx, c->r_argc));
       break;
     }
 
@@ -772,7 +786,8 @@ void jit_emit_methods(jit_compile_t *c) {
       break;
     }
 
-    case OP_APPLY: {
+    case OP_APPLY:
+    case OP_CALL_SPREAD: {
       vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
       uint16_t apply_argc = sv_get_u16(c->ip + 1);
       if (apply_argc > SV_JIT_ARGS_BUF_CAP ||
@@ -799,16 +814,17 @@ void jit_emit_methods(jit_compile_t *c) {
       MIR_reg_t r_apply_res = vstack_push(&c->vs);
 
       MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_call_insn(c->ctx, 9,
-                                        MIR_new_ref_op(c->ctx, c->call_proto),
-                                        MIR_new_ref_op(c->ctx, c->imp_apply),
+                      MIR_new_call_insn(c->ctx, 10,
+                                        MIR_new_ref_op(c->ctx, c->apply_proto),
+                                        MIR_new_ref_op(c->ctx, c->op == OP_APPLY ? c->imp_apply : c->imp_call_spread),
                                         MIR_new_reg_op(c->ctx, r_apply_res),
                                         MIR_new_reg_op(c->ctx, c->r_vm),
                                         MIR_new_reg_op(c->ctx, c->r_js),
                                         MIR_new_reg_op(c->ctx, r_apply_func),
                                         MIR_new_reg_op(c->ctx, r_apply_this),
                                         MIR_new_reg_op(c->ctx, r_arg_arr),
-                                        MIR_new_int_op(c->ctx, (int64_t)apply_argc)));
+                                        MIR_new_int_op(c->ctx, (int64_t)apply_argc),
+                                        MIR_new_int_op(c->ctx, (int64_t)c->args_buf_slots)));
 
       if (c->jit_try_depth > 0) {
         jit_try_entry_t *h = &c->jit_try_stack[c->jit_try_depth - 1];

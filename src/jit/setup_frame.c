@@ -464,6 +464,7 @@ bool jit_setup_frame(jit_compile_t *c) {
     int scratch_slots = SV_JIT_ARGS_BUF_CAP;
     if (c->vs.max > scratch_slots) scratch_slots = c->vs.max;
     if (c->n_locals > scratch_slots) scratch_slots = c->n_locals;
+    c->args_buf_slots = scratch_slots;
     MIR_append_insn(c->ctx, c->jit_func,
                     MIR_new_insn(c->ctx, MIR_ALLOCA,
                                  MIR_new_reg_op(c->ctx, c->r_args_buf),

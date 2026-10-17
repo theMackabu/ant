@@ -168,11 +168,15 @@ static inline bool js_cfunc_same_entrypoint(ant_value_t fn_val, ant_cfunc_t fn) 
   return meta && meta->fn == fn;
 }
 
+static constexpr int ANT_ARG_LIST_INLINE = 16;
+
 typedef struct {
   gc_temp_root_scope_t roots;
   ant_value_t *args;
   int argc;
-} js_arg_list_t;
+  bool rooted;
+  ant_value_t inline_args[ANT_ARG_LIST_INLINE];
+} ant_arg_list_t;
 
 typedef ant_value_t (*js_group_add_fn)(
   ant_t *js,
@@ -181,8 +185,11 @@ typedef ant_value_t (*js_group_add_fn)(
   ant_value_t value
 );
 
-ant_value_t js_arg_list_from(ant_t *js, ant_value_t array_like, js_arg_list_t *list);
-void js_arg_list_release(js_arg_list_t *list);
+void Ant_ArgList_Release(ant_arg_list_t *list);
+const ant_value_t *Ant_Array_DenseView(ant_value_t arr, int *len_out);
+
+ant_value_t Ant_String_CoerceThis(ant_t *js, const char *name);
+ant_value_t Ant_ArgList_FromArrayLike(ant_t *js, ant_value_t array_like, ant_arg_list_t *list);
 
 size_t uint_to_str(char *buf, size_t bufsize, uint64_t val);
 size_t tostr(ant_t *js, ant_value_t value, char *buf, size_t len);

@@ -51,6 +51,16 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                 MIR_JSVAL, "this_val",
                                 MIR_T_P, "args",
                                 MIR_T_I32, "argc");
+  c->apply_proto = MIR_new_proto(c->ctx, "apply_proto",
+                                 1, &call_ret,
+                                 7,
+                                 MIR_T_I64, "vm",
+                                 MIR_T_I64, "js_p",
+                                 MIR_JSVAL, "func",
+                                 MIR_JSVAL, "this_val",
+                                 MIR_T_P, "args",
+                                 MIR_T_I32, "argc",
+                                 MIR_T_I32, "cap");
 
   c->call_string_intrinsic_proto = MIR_new_proto(
       c->ctx, "call_string_intrinsic_proto",
@@ -701,6 +711,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_load_stable_builtin = MIR_new_import(c->ctx, "jit_helper_load_stable_builtin");
   c->imp_call_stable_builtin = MIR_new_import(c->ctx, "jit_helper_call_stable_builtin");
   c->imp_apply = MIR_new_import(c->ctx, "jit_helper_apply");
+  c->imp_call_spread = MIR_new_import(c->ctx, "jit_helper_call_spread");
   c->imp_call_call = MIR_new_import(c->ctx, "jit_helper_call_call");
   c->imp_call_call_slot = MIR_new_import(c->ctx, "jit_helper_call_call_slot");
   c->imp_rest = MIR_new_import(c->ctx, "jit_helper_rest");

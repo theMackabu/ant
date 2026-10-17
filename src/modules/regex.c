@@ -2899,8 +2899,8 @@ static ant_value_t builtin_regexp_symbol_matchAll(ant_params_t) {
 }
 
 static ant_value_t builtin_string_matchAll(ant_params_t) {
-  ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
-  ant_value_t str = js_tostring_val(js, this_unwrapped);
+  ant_value_t str = Ant_String_CoerceThis(js, "matchAll");
+  
   if (is_err(str)) return str;
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "matchAll requires at least 1 argument");
 
@@ -2915,6 +2915,7 @@ static ant_value_t builtin_string_matchAll(ant_params_t) {
       
       const char *fp = (const char *)(uintptr_t)(foff);
       bool has_g = false;
+      
       for (ant_offset_t i = 0; i < flen; i++) if (fp[i] == 'g') has_g = true;
       if (!has_g) return js_mkerr_typed(js, JS_ERR_TYPE, "String.prototype.matchAll called with a non-global RegExp");
     }
@@ -3499,7 +3500,9 @@ static ant_value_t builtin_regexp_symbol_replace(ant_params_t) {
     }
     if (vtype(pos_val) == kTypeBigInt || vtype(pos_val) == kTypeSymbol) {
       free(buf);
-      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert value to a number");
+      return js_mkerr_typed(
+        js, JS_ERR_TYPE, "Cannot convert a %s value to a number",
+        vtype(pos_val) == kTypeSymbol ? "Symbol" : "BigInt");
     }
 
     double position_units = js_to_number(js, pos_val);
@@ -3993,8 +3996,7 @@ static inline ant_value_t emit_str_replacement(
 }
 
 static ant_value_t string_replace_impl(ant_native_params_t, bool replace_all) {
-  ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
-  ant_value_t str = js_tostring_val(js, this_unwrapped);
+  ant_value_t str = Ant_String_CoerceThis(js, replace_all ? "replaceAll" : "replace");
   
   if (is_err(str)) return str;
   if (nargs < 1) return str;
@@ -4265,17 +4267,20 @@ ant_value_t regexp_literal_replace_call(
 }
 
 static ant_value_t builtin_string_search(ant_params_t) {
-  ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
-  ant_value_t str = js_tostring_val(js, this_unwrapped);
+  ant_value_t str = Ant_String_CoerceThis(js, "search");
+  
   if (is_err(str)) return str;
   if (nargs < 1) return tov(-1);
 
   if (is_object_type(args[0])) {
     bool called = false;
     ant_value_t call_args[1] = { str };
+    
     ant_value_t dispatched = maybe_call_symbol_method(
-      js, args[0], js->sym.search_sym, args[0], call_args, 1, &called
+      js, args[0], js->sym.search_sym, 
+      args[0], call_args, 1, &called
     );
+    
     if (is_err(dispatched)) return dispatched;
     if (called) return dispatched;
   }
@@ -4328,17 +4333,20 @@ search_string_pattern:;
 }
 
 static ant_value_t builtin_string_match(ant_params_t) {
-  ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
-  ant_value_t str = js_tostring_val(js, this_unwrapped);
+  ant_value_t str = Ant_String_CoerceThis(js, "match");
+  
   if (is_err(str)) return str;
   if (nargs < 1) return js_mknull();
 
   if (is_object_type(args[0])) {
     bool called = false;
     ant_value_t call_args[1] = { str };
+    
     ant_value_t dispatched = maybe_call_symbol_method(
-      js, args[0], js->sym.match_sym, args[0], call_args, 1, &called
+      js, args[0], js->sym.match_sym, 
+      args[0], call_args, 1, &called
     );
+    
     if (is_err(dispatched)) return dispatched;
     if (called) return dispatched;
   }

@@ -238,6 +238,62 @@ static bool repl_preview_snapshot_complete(
   return false;
 }
 
+typedef struct {
+  const char *prefix;
+  size_t prefix_len;
+  const char *match;
+  size_t match_len;
+  size_t common_len;
+  size_t count;
+  bool exact;
+} repl_member_matches_t;
+
+static void repl_member_matches_add(repl_member_matches_t *m, const char *key, size_t key_len) {
+  if (!repl_preview_expr_is_ident(key, key_len)) return;
+  if (key_len < m->prefix_len || memcmp(key, m->prefix, m->prefix_len) != 0) return;
+  if (key_len == m->prefix_len) { m->exact = true; return; }
+
+  if (!m->match) {
+    m->match = key;
+    m->match_len = key_len;
+    m->common_len = key_len;
+    m->count = 1;
+    return;
+  }
+  if (key_len == m->match_len && memcmp(key, m->match, key_len) == 0) return;
+
+  size_t max_common = m->common_len < key_len ? m->common_len : key_len;
+  size_t j = m->prefix_len;
+  while (j < max_common && m->match[j] == key[j]) j++;
+  m->common_len = j;
+  m->count++;
+}
+
+static ant_value_t repl_member_holder(ant_t *js, ant_value_t value) {
+  uint8_t t = vtype(value);
+  if (is_object_type(value) || t == kTypeBuiltin) return value;
+  if (t == kTypeUndefined || t == kTypeNull) return js_mkundef();
+  return js_primitive_prototype(js, t);
+}
+
+static void repl_member_matches_collect(ant_t *js, ant_value_t value, repl_member_matches_t *m) {
+  ant_value_t cur = repl_member_holder(js, value);
+
+  for (int depth = 0; depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
+    if (!is_object_type(cur) && vtype(cur) != kTypeBuiltin) return;
+    if (is_object_type(cur) && is_proxy(cur)) return;
+
+    ant_iter_t iter = js_prop_iter_begin(js, cur);
+    const char *key = NULL;
+    size_t key_len = 0;
+    while (js_prop_iter_next(&iter, &key, &key_len, NULL))
+      repl_member_matches_add(m, key, key_len);
+    js_prop_iter_end(&iter);
+
+    cur = js_get_proto(js, cur);
+  }
+}
+
 static bool repl_preview_member_complete(
   ant_t *js,
   const char *line,
@@ -253,56 +309,27 @@ static bool repl_preview_member_complete(
   dot--;
 
   size_t prefix_start = dot + 1;
-  size_t prefix_len = len - prefix_start;
-  const char *prefix = line + prefix_start;
-  if (prefix_len > 0 && !repl_preview_expr_is_ident(prefix, prefix_len))
+  repl_member_matches_t m = { .prefix = line + prefix_start, .prefix_len = len - prefix_start };
+  if (m.prefix_len > 0 && !repl_preview_expr_is_ident(m.prefix, m.prefix_len))
     return false;
 
   ant_value_t obj = js_mkundef();
-  if (!inspector_eval_safe_member_expr(js, line, dot, &obj)) return false;
+  if (
+    !inspector_eval_safe_member_expr(js, line, dot, &obj) &&
+    !inspector_eval_safe_expr(js, line, dot, &obj)
+  ) return false;
 
-  const char *match = NULL;
-  size_t match_len = 0;
-  size_t match_count = 0;
-  size_t common_len = 0;
+  repl_member_matches_collect(js, obj, &m);
+  if (!m.match || m.exact) return false;
 
-  ant_iter_t iter = js_prop_iter_begin(js, obj);
-  const char *key = NULL;
-  size_t key_len = 0;
-  ant_value_t value = js_mkundef();
-  while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
-    (void)value;
-    if (!repl_preview_expr_is_ident(key, key_len)) continue;
-    if (key_len < prefix_len || memcmp(key, prefix, prefix_len) != 0)
-      continue;
-    if (key_len == prefix_len) {
-      js_prop_iter_end(&iter);
-      return false;
-    }
-
-    if (!match) {
-      match = key;
-      match_len = key_len;
-      common_len = key_len;
-    } else {
-      size_t max_common = common_len < key_len ? common_len : key_len;
-      size_t j = prefix_len;
-      while (j < max_common && match[j] == key[j]) j++;
-      common_len = j;
-    }
-    match_count++;
-  }
-  js_prop_iter_end(&iter);
-
-  if (!match) return false;
-  size_t completed_len = match_count == 1 ? match_len : common_len;
-  if (completed_len <= prefix_len) return false;
+  size_t completed_len = m.count == 1 ? m.match_len : m.common_len;
+  if (completed_len <= m.prefix_len) return false;
 
   return repl_preview_write_suffix(
     suffix_out,
     suffix_len,
-    match + prefix_len,
-    completed_len - prefix_len
+    m.match + m.prefix_len,
+    completed_len - m.prefix_len
   );
 }
 

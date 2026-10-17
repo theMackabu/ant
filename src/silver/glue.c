@@ -260,18 +260,46 @@ ant_value_t jit_helper_call_call_slot(
   return sv_op_call_call_slot_ptr(vm, js, func, arg1, slot);
 }
 
+static ant_value_t jit_call_prepared(
+  sv_vm_t *vm, ant_t *js, ant_value_t func, 
+  ant_value_t this_val, sv_call_args_t *call, ant_value_t status
+) {
+  if (is_err(status)) return status;
+  
+  ant_value_t result = sv_vm_call(
+    vm, js, func, this_val, call->args, 
+    call->argc, NULL, js_mkundef()
+  );
+  
+  sv_call_args_release(call);
+  return result;
+}
+
 ant_value_t jit_helper_apply(
-  sv_vm_t *vm, ant_t *js,
-  ant_value_t func, ant_value_t this_val,
-  ant_value_t *args, int argc
+  sv_vm_t *vm, ant_t *js, ant_value_t func, 
+  ant_value_t this_val, ant_value_t *args, int argc, int cap
 ) {
   sv_call_args_t call;
   sv_call_args_reset(&call, args, argc);
-  ant_value_t norm = sv_apply_normalize_args(js, &call);
-  if (is_err(norm)) return norm;
-  ant_value_t result = sv_vm_call(vm, js, func, this_val, call.args, call.argc, NULL, js_mkundef());
-  sv_call_args_release(&call);
-  return result;
+  
+  return jit_call_prepared(
+    vm, js, func, this_val, &call, 
+    sv_apply_normalize_args(js, &call, cap)
+  );
+}
+
+ant_value_t jit_helper_call_spread(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t func, ant_value_t this_val,
+  ant_value_t *args, int argc, int cap
+) {
+  sv_call_args_t call;
+  sv_call_args_reset(&call, args, argc);
+  
+  return jit_call_prepared(
+    vm, js, func, this_val, &call, 
+    sv_spread_call_args(vm, js, &call, cap)
+  );
 }
 
 ant_value_t jit_helper_forward_arguments(

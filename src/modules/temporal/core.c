@@ -180,7 +180,9 @@ bool temporal_to_number(
   ant_value_t primitive = is_object_type(value) ? js_to_primitive(js, value, 2) : value;
   if (is_err(primitive)) { *err = primitive; return false; }
   if (vtype(primitive) == kTypeSymbol || vtype(primitive) == kTypeBigInt) {
-    *err = js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert value to a number");
+    *err = js_mkerr_typed(
+      js, JS_ERR_TYPE, "Cannot convert a %s value to a number",
+      vtype(primitive) == kTypeSymbol ? "Symbol" : "BigInt");
     return false;
   }
   *out = js_to_number(js, primitive);

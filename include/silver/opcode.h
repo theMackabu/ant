@@ -198,6 +198,8 @@ OP_DEF(  NEW,               3,   2,   1, npop)      /* func new.target args -> o
 OP_DEF(  APPLY,             3,   2,   1, npop)      /* func this args... -> result */
 OP_DEF(  SUPER_APPLY,       3,   3,   1, npop)      /* this super new.target args... -> this */
 OP_DEF(  NEW_APPLY,         3,   2,   1, npop)      /* func new.target args... -> obj */
+OP_DEF(  CALL_SPREAD,       3,   2,   1, npop)      /* func this args... iterable -> result */
+OP_DEF(  SUPER_FORWARD,     1,   3,   1, none)      /* this super new.target -> this (frame arguments) */
 OP_DEF(  EVAL,              5,   2,   1, u32)       /* source new.target -> result (scope:u32) */
 OP_DEF(  RETURN,            1,   1,   0, none)
 OP_DEF(  RETURN_UNDEF,      1,   0,   0, none)
@@ -452,6 +454,8 @@ OP_FLAG(TAIL_CALL             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV
 OP_FLAG(TAIL_CALL_METHOD      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_TCO_ARGS | SV_OPF_JIT_NEEDS_IC_EPOCH | SV_OPF_JIT_INLINE_ARGC | SV_OPF_TERMINAL)
 OP_FLAG(NEW                   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(APPLY                 , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
+OP_FLAG(CALL_SPREAD           , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
+OP_FLAG(SUPER_FORWARD         , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(NEW_APPLY             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(RETURN                , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_TERMINAL)
 OP_FLAG(RETURN_UNDEF          , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_TERMINAL)

@@ -1053,10 +1053,13 @@ static inline ant_value_t sv_stage_frame_args(
   
   if (vm->sp + reserve > vm->stack_size) {
     int args_idx = (
-      args && args >= vm->stack && args < vm->stack + vm->stack_size)
-      ? (int)(args - vm->stack) : -1;
-    while (vm->sp + reserve > vm->stack_size)
-      if (!sv_vm_grow_stack(vm)) return js_mkerr(js, "stack overflow");
+      args && args >= vm->stack && 
+      args < vm->stack + vm->stack_size
+    ) ? (int)(args - vm->stack) : -1;
+    
+    while (vm->sp + reserve > vm->stack_size) if (!sv_vm_grow_stack(vm)) 
+      return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+    
     if (args_idx >= 0) args = &vm->stack[args_idx];
   }
 
@@ -2517,7 +2520,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     int reserve = need + closure->func->max_stack;
     
     while (frame->prev_sp + reserve > vm->stack_size) if (!sv_vm_grow_stack(vm)) {
-      sv_err = js_mkerr(js, "stack overflow");
+      sv_err = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
       goto sv_throw;
     }
 
@@ -2570,10 +2573,12 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     NEXT(OP_NEW);
   }
   
-  L_APPLY:       { VM_CHECK(sv_op_apply(vm, js, ip));              NEXT(OP_APPLY); }
-  L_SUPER_APPLY: { VM_CHECK(sv_op_super_apply(vm, js, frame, ip)); NEXT(OP_SUPER_APPLY); }
-  L_NEW_APPLY:   { VM_CHECK(sv_op_new_apply(vm, js, ip));          NEXT(OP_NEW_APPLY); }
-  L_EVAL:        { VM_CHECK(sv_op_eval(vm, js, frame, ip));        NEXT(OP_EVAL); }
+  L_APPLY:         { VM_CHECK(sv_op_apply(vm, js, ip));              NEXT(OP_APPLY); }
+  L_SUPER_APPLY:   { VM_CHECK(sv_op_super_apply(vm, js, frame, ip)); NEXT(OP_SUPER_APPLY); }
+  L_NEW_APPLY:     { VM_CHECK(sv_op_new_apply(vm, js, ip));          NEXT(OP_NEW_APPLY); }
+  L_CALL_SPREAD:   { VM_CHECK(sv_op_call_spread(vm, js, ip));        NEXT(OP_CALL_SPREAD); }
+  L_SUPER_FORWARD: { VM_CHECK(sv_op_super_forward(vm, js, frame));   NEXT(OP_SUPER_FORWARD); }
+  L_EVAL:          { VM_CHECK(sv_op_eval(vm, js, frame, ip));        NEXT(OP_EVAL); }
   
   L_GET_EVAL_GLOBAL:       { VM_CHECK(sv_op_get_eval_global(vm, js, frame, func, ip));       NEXT(OP_GET_EVAL_GLOBAL); }
   L_GET_EVAL_GLOBAL_UNDEF: { VM_CHECK(sv_op_get_eval_global_undef(vm, js, frame, func, ip)); NEXT(OP_GET_EVAL_GLOBAL_UNDEF); }
