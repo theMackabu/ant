@@ -18295,7 +18295,7 @@ static ant_promise_state_t *get_promise_data(ant_t *js, ant_value_t promise, boo
   if (existing) return existing;
   if (!create) return NULL;
 
-  ant_promise_state_t *entry = (ant_promise_state_t *)calloc(1, sizeof(*entry));
+  ant_promise_state_t *entry = gc_promise_state_alloc(js);
   if (!entry) return NULL;
   
   entry->promise_id = next_promise_id++;
@@ -18346,10 +18346,7 @@ void js_mark_promise_trigger_dequeued(ant_t *js, ant_value_t promise) {
   pd->trigger_queued = false;
 }
 
-static ant_value_t make_data_cfunc(
-  ant_t *js, ant_value_t data,
-  ant_cfunc_t fn
-) {
+static ant_value_t make_data_cfunc(ant_t *js, ant_value_t data, ant_cfunc_t fn) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, data);
 
@@ -18360,11 +18357,13 @@ static ant_value_t make_data_cfunc(
   }
 
   GC_ROOT_PIN(js, obj);
+  obj_extra_reserve(js_obj_ptr(obj), 3);
   set_slot(obj, SLOT_DATA, data);
   set_slot(obj, SLOT_CFUNC, js_mkfun_dyn(fn));
 
   ant_value_t func = js_obj_to_func(js, obj);
   GC_ROOT_RESTORE(js, root_mark);
+  
   return func;
 }
 
@@ -18375,10 +18374,9 @@ ant_value_t js_mkpromise(ant_t *js) {
   if (!get_promise_data(js, mkval(kTypePromise, vdata(obj)), true))
     return js_mkerr(js, "out of memory");
 
-  set_slot(obj, SLOT_CTOR, js->sym.promise_ctor);
   ant_value_t promise_proto = js->sym.promise_proto;
-  
   if (is_object_type(promise_proto)) js_set_proto_init(obj, promise_proto);
+  
   return mkval(kTypePromise, vdata(obj));
 }
 
@@ -18584,6 +18582,30 @@ js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, cor
   return result;
 }
 
+static void promise_all_settle_element(
+  ant_t *js, ant_value_t tracker, ant_value_t index, ant_value_t value, bool fulfilled
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, tracker);
+  GC_ROOT_PIN(js, value);
+  
+  ant_value_t result = get_slot(tracker, SLOT_DATA);
+  if (!fulfilled) {
+    js_reject_promise(js, result, value);
+    GC_ROOT_RESTORE(js, root_mark);
+    return;
+  }
+
+  ant_value_t results = get_slot(tracker, SLOT_ENTRIES);
+  arr_set(js, results, (ant_offset_t)tod(index), value);
+  
+  int remaining = (int)tod(get_slot(tracker, SLOT_MAP)) - 1;
+  set_slot(tracker, SLOT_MAP, tov((double)remaining));
+  if (remaining == 0) js_resolve_promise(js, result, mkval(kTypeArray, vdata(results)));
+  
+  GC_ROOT_RESTORE(js, root_mark);
+}
+
 void js_process_promise_handlers(ant_t *js, ant_value_t promise) {
   ant_object_t *pobj = js_obj_ptr(promise);
   ant_promise_state_t *pd = get_promise_data(js, promise, false);
@@ -18618,6 +18640,11 @@ void js_process_promise_handlers(ant_t *js, ant_value_t promise) {
       coroutine_t *await_coro = handler.await_coro;
       h->await_coro = NULL;
       Ant_Coroutine_SettleAndResume(js, await_coro, val, state != 1);
+      continue;
+    }
+    
+    if (handler.nextPromise == PROMISE_ALL_ELEMENT) {
+      promise_all_settle_element(js, handler.onFulfilled, handler.onRejected, val, state == 1);
       continue;
     }
     
@@ -19107,6 +19134,33 @@ static void promise_init_derived_promise(
   if (is_constructor_value(parent_ctor)) set_slot(next_obj, SLOT_CTOR, parent_ctor);
 }
 
+static ant_value_t promise_then_species_ctor(ant_t *js, ant_value_t p_obj, ant_value_t *out) {
+  *out = js->sym.promise_ctor;
+  if (!js->promise_species_protector_invalid && get_slot(p_obj, SLOT_PROTO) == js->sym.promise_proto)
+    return js_mkundef();
+
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t ctor = js_get(js, p_obj, "constructor");
+  
+  GC_ROOT_PIN(js, ctor);
+  if (is_err(ctor)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return ctor;
+  }
+  
+  if (vtype(ctor) == kTypeUndefined) ctor = get_slot(p_obj, SLOT_CTOR);
+  ant_value_t species = get_ctor_species_value(js, ctor);
+  
+  GC_ROOT_RESTORE(js, root_mark);
+  if (is_err(species)) return species;
+
+  if (vtype(species) == kTypeFunction || vtype(species) == kTypeBuiltin) *out = species;
+  else if (vtype(species) != kTypeNull && vtype(species) != kTypeUndefined)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Promise species is not a constructor");
+
+  return js_mkundef();
+}
+
 static ant_value_t builtin_promise_then(ant_params_t) {
   ant_value_t p = js->this_val;
   if (vtype(p) != kTypePromise) return js_mkerr(js, "not a promise");
@@ -19115,34 +19169,13 @@ static ant_value_t builtin_promise_then(ant_params_t) {
   GC_ROOT_PIN(js, p);
 
   ant_value_t promise_ctor = js->sym.promise_ctor;
-  GC_ROOT_PIN(js, promise_ctor);
   ant_value_t species_ctor = promise_ctor;
   GC_ROOT_PIN(js, species_ctor);
-  ant_value_t p_obj = js_as_obj(p);
-  ant_value_t ctor = js_get(js, p_obj, "constructor");
-  GC_ROOT_PIN(js, ctor);
 
-  if (is_err(ctor)) {
+  ant_value_t species_err = promise_then_species_ctor(js, js_as_obj(p), &species_ctor);
+  if (is_err(species_err)) {
     GC_ROOT_RESTORE(js, root_mark);
-    return ctor;
-  }
-  if (vtype(ctor) == kTypeUndefined) ctor = get_slot(p_obj, SLOT_CTOR);
-
-  ant_value_t species = get_ctor_species_value(js, ctor);
-  GC_ROOT_PIN(js, species);
-  if (is_err(species)) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return species;
-  }
-
-  if (vtype(species) == kTypeFunction || vtype(species) == kTypeBuiltin) {
-    species_ctor = species;
-  } else if (vtype(species) == kTypeNull) {
-    species_ctor = promise_ctor;
-  } else if (vtype(species) != kTypeUndefined) {
-    ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "Promise species is not a constructor");
-    GC_ROOT_RESTORE(js, root_mark);
-    return err;
+    return species_err;
   }
 
   ant_value_t nextP = js_mkpromise(js);
@@ -19580,6 +19613,7 @@ static iter_action_t promise_all_iter_cb(ant_t *js, ant_value_t value, void *ctx
     return ITER_ERROR;
   }
   GC_ROOT_PIN(js, resolve_obj);
+  obj_extra_reserve(js_obj_ptr(resolve_obj), 4);
   set_slot(resolve_obj, SLOT_CFUNC, Ant_Function_Create(builtin_Promise_all_resolve_handler));
   set_slot(resolve_obj, SLOT_DATA, pctx->tracker);
   set_slot(resolve_obj, SLOT_AUX, tov((double)pctx->index));
@@ -19596,6 +19630,7 @@ static iter_action_t promise_all_iter_cb(ant_t *js, ant_value_t value, void *ctx
   }
   
   GC_ROOT_PIN(js, reject_obj);
+  obj_extra_reserve(js_obj_ptr(reject_obj), 2);
   set_slot(reject_obj, SLOT_CFUNC, Ant_Function_Create(builtin_Promise_all_reject_handler));
   set_slot(reject_obj, SLOT_DATA, resolve_fn);
   ant_value_t reject_fn = js_obj_to_func(js, reject_obj);
@@ -19638,7 +19673,10 @@ static iter_action_t promise_all_settled_iter_cb(ant_t *js, ant_value_t value, v
     GC_ROOT_RESTORE(js, root_mark);
     return ITER_ERROR;
   }
+  
   GC_ROOT_PIN(js, resolve_obj);
+  obj_extra_reserve(js_obj_ptr(resolve_obj), 4);
+  
   set_slot(resolve_obj, SLOT_CFUNC, Ant_Function_Create(builtin_Promise_allSettled_resolve_handler));
   set_slot(resolve_obj, SLOT_DATA, pctx->tracker);
   set_slot(resolve_obj, SLOT_AUX, tov((double)pctx->index));
@@ -19655,6 +19693,8 @@ static iter_action_t promise_all_settled_iter_cb(ant_t *js, ant_value_t value, v
   }
   
   GC_ROOT_PIN(js, reject_obj);
+  obj_extra_reserve(js_obj_ptr(reject_obj), 2);
+  
   set_slot(reject_obj, SLOT_CFUNC, Ant_Function_Create(builtin_Promise_allSettled_reject_handler));
   set_slot(reject_obj, SLOT_DATA, resolve_fn);
   ant_value_t reject_fn = js_obj_to_func(js, reject_obj);
@@ -19675,7 +19715,103 @@ static iter_action_t promise_all_settled_iter_cb(ant_t *js, ant_value_t value, v
   return ITER_CONTINUE;
 }
 
+static bool promise_all_fast_eligible(ant_t *js, ant_value_t ctor, ant_value_t iterable) {
+  if (ctor != js->sym.promise_ctor) return false;
+  
+  if (
+    js->promise_constructor_protector_invalid || js->promise_resolve_lookup_protector_invalid ||
+    js->promise_species_protector_invalid || js->promise_then_protector_invalid
+  ) return false;
+
+  if (vtype(iterable) != kTypeArray || !js_array_iteration_default(js, iterable)) return false;
+
+  ant_object_t *arr = real_array_obj_ptr(iterable);
+  if (!array_dense_storage(arr) || arr->u.array.len > arr->u.array.cap) return false;
+
+  for (ant_offset_t i = 0; i < arr->u.array.len; i++) {
+    ant_value_t v = arr->u.array.data[i];
+    if (is_empty_slot(v)) return false;
+    
+    if (vtype(v) == kTypePromise) {
+      if (get_slot(v, SLOT_PROTO) != js->sym.promise_proto) return false;
+      continue;
+    }
+    
+    if (is_object_type(v) || vtype(v) == kTypeBuiltin) return false;
+  }
+  
+  return true;
+}
+
+static ant_value_t promise_all_fast(ant_t *js, ant_value_t iterable) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, iterable);
+  
+  ant_object_t *arr = real_array_obj_ptr(iterable);
+  uint32_t len = (uint32_t)arr->u.array.len;
+
+  ant_value_t result = js_mkpromise(js);
+  GC_ROOT_PIN(js, result);
+  
+  ant_value_t results = js_mkarr_dense_literal(js, arr->u.array.data, len);
+  GC_ROOT_PIN(js, results);
+  
+  ant_value_t tracker = mkobj(js, 0);
+  GC_ROOT_PIN(js, tracker);
+  
+  if (is_err(result) || is_err(results) || is_err(tracker)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return is_err(result) ? result : is_err(results) ? results : tracker;
+  }
+
+  obj_extra_reserve(js_obj_ptr(tracker), 3);
+  js_set_slot_wb(js, tracker, SLOT_DATA, result);
+  js_set_slot_wb(js, tracker, SLOT_ENTRIES, results);
+  set_slot(tracker, SLOT_MAP, tov((double)len));
+
+  if (len == 0) {
+    js_resolve_promise(js, result, mkval(kTypeArray, vdata(results)));
+    GC_ROOT_RESTORE(js, root_mark);
+    return result;
+  }
+
+  for (uint32_t i = 0; i < len; i++) {
+    ant_value_t item = real_array_obj_ptr(iterable)->u.array.data[i];
+    GC_ROOT_SAVE(item_mark, js);
+    GC_ROOT_PIN(js, item);
+    
+    if (vtype(item) != kTypePromise) {
+      ant_value_t wrapped = js_mkpromise(js);
+      if (is_err(wrapped)) {
+        GC_ROOT_RESTORE(js, root_mark);
+        return wrapped;
+      }
+      js_resolve_promise(js, wrapped, item);
+      item = wrapped;
+    }
+
+    ant_promise_state_t *pd = get_promise_data(js, item, false);
+    promise_handler_t handler = { tracker, tov((double)i), PROMISE_ALL_ELEMENT, NULL };
+    if (!pd || !promise_handler_append(pd, &handler)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return js_mkerr(js, "out of memory");
+    }
+
+    gc_write_barrier(js, js_obj_ptr(js_as_obj(item)), tracker);
+    js_mark_promise_rejection_handled_chain(js, item);
+    if (pd->state == 0) gc_root_pending_promise(js, js_obj_ptr(js_as_obj(item)));
+    else queue_promise_trigger(js, item);
+    GC_ROOT_RESTORE(js, item_mark);
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
+}
+
 static ant_value_t builtin_Promise_all(ant_params_t) {
+  if (nargs > 0 && promise_all_fast_eligible(js, js->this_val, args[0]))
+    return promise_all_fast(js, args[0]);
+
   GC_ROOT_SAVE(root_mark, js);
   ant_value_t ctor = js->this_val;
   GC_ROOT_PIN(js, ctor);
@@ -22303,6 +22439,7 @@ static ant_value_t builtin_Proxy_revocable(ant_params_t) {
 }
 
 static inline void isolate_arenas_destroy(ant_t *js) {
+  fixed_arena_destroy(&js->promise_arena);
   fixed_arena_destroy(&js->upvalue_arena);
   fixed_arena_destroy(&js->closure_arena);
   fixed_arena_destroy(&js->obj_arena);
@@ -22312,7 +22449,8 @@ static inline bool isolate_arenas_init(ant_t *js) {
   if (
     !fixed_arena_init(&js->obj_arena, sizeof(ant_object_t), offsetof(ant_object_t, mark_epoch), ANT_ARENA_MAX)           ||
     !fixed_arena_init(&js->closure_arena, sizeof(sv_closure_t), offsetof(sv_closure_t, gc_epoch), ANT_CLOSURE_ARENA_MAX) ||
-    !fixed_arena_init(&js->upvalue_arena, sizeof(sv_upvalue_t), offsetof(sv_upvalue_t, gc_epoch), ANT_UPVALUE_ARENA_MAX)
+    !fixed_arena_init(&js->upvalue_arena, sizeof(sv_upvalue_t), offsetof(sv_upvalue_t, gc_epoch), ANT_UPVALUE_ARENA_MAX) ||
+    !fixed_arena_init(&js->promise_arena, sizeof(ant_promise_state_t), 0, ANT_PROMISE_ARENA_MAX)
   ) {
     isolate_arenas_destroy(js);
     return false;
@@ -23012,8 +23150,11 @@ void js_destroy(ant_t *js) {
   cleanup_atomics_module(js);
   cleanup_events_module(js);
   cleanup_regex_module(js);
+  
   Ant_Loop_Destroy(js);
   gc_array_storage_cache_destroy(js);
+  
+  coroutine_pool_destroy(js);
   isolate_arenas_destroy(js);
   
   free(js->c_roots);

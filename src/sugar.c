@@ -1,12 +1,42 @@
 #include "internal.h"
 #include "sugar.h"
-#include "gc/roots.h"
 
 #include "modules/generator.h"
 #include "modules/timer.h"
 #include "silver/engine.h"
 
-static void destroy_coroutine_resources(coroutine_t *coro) {
+static constexpr uint32_t CORO_FREE_MAX = 256;
+static constexpr size_t CORO_POOLED_ACT_MAX = 4096;
+
+coroutine_t *coroutine_alloc(ant_t *js) {
+  coroutine_t *coro = js->coro_free;
+  if (!coro) return calloc(1, sizeof(coroutine_t));
+  
+  js->coro_free = coro->active_parent;
+  js->coro_free_count--;
+  
+  sv_activation_t *act = coro->act;
+  *coro = (coroutine_t){ .act = act };
+  
+  return coro;
+}
+
+bool coroutine_pending(const coroutine_t *coro) {
+  return coro->tail_await || (coro->act && coro->act->frame_count > 0);
+}
+
+void coroutine_pool_destroy(ant_t *js) {
+  while (js->coro_free) {
+    coroutine_t *next = js->coro_free->active_parent;
+    free(js->coro_free->act);
+    free(js->coro_free);
+    js->coro_free = next;
+  }
+  
+  js->coro_free_count = 0;
+}
+
+static void destroy_coroutine_resources(coroutine_t *coro, bool keep_act) {
   if (!coro) return;
   if (coro->js) gc_forget_coroutine(coro->js, coro);
 
@@ -17,8 +47,12 @@ static void destroy_coroutine_resources(coroutine_t *coro) {
 
   if (coro->act) {
     sv_activation_seal(coro->js, coro->act);
-    free(coro->act);
-    coro->act = NULL;
+    coro->act->frame_count = 0;
+    
+    if (!keep_act || coro->act->capacity > CORO_POOLED_ACT_MAX) {
+      free(coro->act);
+      coro->act = NULL;
+    }
   }
 
   if (coro->module_eval_ctx) {
@@ -37,8 +71,20 @@ void coroutine_retain(coroutine_t *coro) {
 
 static void coroutine_release_storage(coroutine_t *coro) {
   if (!coro) return;
-  destroy_coroutine_resources(coro);
-  free(coro);
+  
+  ant_t *js = coro->js;
+  bool pooled = js && !js->destroying && js->coro_free_count < CORO_FREE_MAX;
+  destroy_coroutine_resources(coro, pooled);
+  
+  if (!pooled) {
+    free(coro->act);
+    free(coro);
+    return;
+  }
+  
+  coro->active_parent = js->coro_free;
+  js->coro_free = coro;
+  js->coro_free_count++;
 }
 
 void coroutine_release(coroutine_t *coro) {
@@ -142,10 +188,25 @@ static ant_value_t coroutine_resume_and_recapture(
   return js_mkerr(js, "out of memory capturing activation");
 }
 
+static void settle_tail_await(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error) {
+  coro->tail_await = false;
+  gc_forget_coroutine(js, coro);
+  
+  if (is_error) js_reject_promise(js, coro->async_promise, value);
+  else js_resolve_promise(js, coro->async_promise, value);
+  
+  js_maybe_drain_microtasks_after_async_settle(js);
+}
+
 static void resume_coroutine_if_suspended(
   ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error
 ) {
   if (!coro) return;
+  
+  if (coro->tail_await) {
+    settle_tail_await(js, coro, value, is_error);
+    return;
+  }
 
   if (coro->act && coro->act->frame_count > 0) {
     sv_vm_t *vm = js->vm;
@@ -158,7 +219,7 @@ static void resume_coroutine_if_suspended(
       result = js_mkerr(js, "failed to install async activation");
     } else result = coroutine_resume_and_recapture(js, vm, coro, value, is_error);
 
-    bool suspended_again = coro->act && coro->act->frame_count > 0;
+    bool suspended_again = coroutine_pending(coro);
     coroutine_deactivate(js, coro);
 
     if (suspended_again) {

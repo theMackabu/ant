@@ -3,7 +3,6 @@
 
 #include "types.h"
 
-struct coroutine;
 struct timer_entry;
 struct microtask_entry;
 struct immediate_entry;
@@ -19,7 +18,9 @@ typedef struct {
   struct immediate_entry *immediates;
   struct immediate_entry *immediates_tail;
   struct immediate_entry *immediates_processing;
+  struct microtask_entry *free_jobs;
   
+  uint32_t free_job_count;
   int next_timer_id;
   int next_immediate_id;
   int active_timer_count;
@@ -46,7 +47,7 @@ bool js_maybe_drain_microtasks(ant_t *js);
 bool js_maybe_drain_microtasks_after_async_settle(ant_t *js);
 
 bool queue_promise_thenable_job(ant_t *js, ant_value_t promise, ant_value_t thenable, ant_value_t then_fn);
-bool queue_await_resume_job(struct coroutine *coro, ant_value_t value);
+bool queue_await_resume_job(coroutine_t *coro, ant_value_t value);
 bool queue_generator_yield_job(ant_t *js, ant_value_t gen, ant_value_t value);
 
 int has_pending_timers(ant_t *js);

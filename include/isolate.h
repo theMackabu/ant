@@ -155,6 +155,7 @@ struct ant_isolate_t {
   ant_fixed_arena_t obj_arena;
   ant_fixed_arena_t closure_arena;
   ant_fixed_arena_t upvalue_arena;
+  ant_fixed_arena_t promise_arena;
   
   uint32_t prototype_write_epoch;
   uint32_t array_chain_plain_epoch;
@@ -418,6 +419,9 @@ struct ant_isolate_t {
   
   ant_object_t *pending_promises_young;
   ant_object_t *pending_promises_young_tail;
+
+  coroutine_t *coro_free;
+  uint32_t coro_free_count;
 
   size_t old_live_count;
   size_t minor_gc_count;

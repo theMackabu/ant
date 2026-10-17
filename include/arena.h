@@ -29,14 +29,16 @@ typedef struct {
 
 #ifdef ANT_WASM_EMBED
 static constexpr size_t ANT_ARENA_MAX         = 8ULL * 1024 * 1024;
+static constexpr size_t ARENA_GROW_INCREMENT  = 1ULL * 1024 * 1024;
 static constexpr size_t ANT_CLOSURE_ARENA_MAX = 4ULL * 1024 * 1024;
 static constexpr size_t ANT_UPVALUE_ARENA_MAX = 2ULL * 1024 * 1024;
-static constexpr size_t ARENA_GROW_INCREMENT  = 1ULL * 1024 * 1024;
+static constexpr size_t ANT_PROMISE_ARENA_MAX = 2ULL * 1024 * 1024;
 #else
 static constexpr size_t ANT_ARENA_MAX         = 4ULL * 1024 * 1024 * 1024;
+static constexpr size_t ARENA_GROW_INCREMENT  = 8ULL * 1024 * 1024;
 static constexpr size_t ANT_CLOSURE_ARENA_MAX = 512ULL * 1024 * 1024;
 static constexpr size_t ANT_UPVALUE_ARENA_MAX = 512ULL * 1024 * 1024;
-static constexpr size_t ARENA_GROW_INCREMENT  = 8ULL * 1024 * 1024;
+static constexpr size_t ANT_PROMISE_ARENA_MAX = 512ULL * 1024 * 1024;
 #endif
 
 static inline size_t ant_arena_page_size(void) {

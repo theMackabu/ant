@@ -92,6 +92,7 @@ enum: ant_value_t {
   SV_AITER_AWAIT_MARK = ANT_SENTINEL_TAG | 0xFA2ULL,
   SV_AITER_STEP_MARK  = ANT_SENTINEL_TAG | 0xFA3ULL,
   SV_AITER_CLOSE_SKIP = ANT_SENTINEL_TAG | 0xFA4ULL,
+  PROMISE_ALL_ELEMENT = ANT_SENTINEL_TAG | 0xA11ULL,
 };
 
 static inline void ant_object_invalidate_guarded_absence(ant_t *js, ant_object_t *obj) {

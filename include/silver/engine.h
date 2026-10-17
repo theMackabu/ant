@@ -1005,6 +1005,11 @@ typedef struct sv_jit_osr_mark {
   struct sv_jit_osr_mark *prev;
 } sv_jit_osr_mark_t;
 
+typedef struct sv_async_inline {
+  int fp;
+  struct coroutine *coro;
+} sv_async_inline_t;
+
 struct sv_vm {
   ant_t *js;
 
@@ -1044,6 +1049,10 @@ struct sv_vm {
   sv_jit_osr_t jit_osr;
   sv_native_frame_t *native_frame;
   sv_jit_osr_mark_t *jit_osr_marks;
+
+  sv_async_inline_t *async_inline;
+  int async_inline_len;
+  int async_inline_cap;
 
   int jit_mode_fp;
   bool jit_mode_strict;
