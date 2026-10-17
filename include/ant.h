@@ -17,6 +17,7 @@
 static constexpr uint8_t CFUNC_HAS_PROTOTYPE  = 0x01u;
 static constexpr uint8_t CFUNC_IS_CONSTRUCTOR = 0x02u;
 static constexpr uint8_t CFUNC_NATIVE_GETTER  = 0x04u;
+static constexpr uint8_t CFUNC_REALM_FREE     = 0x08u;
 
 #define ANT_ASSERT(cond, msg) ({                                            \
 if (!(cond)) {                                                              \

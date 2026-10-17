@@ -34,9 +34,10 @@ typedef struct sv_frame     sv_frame_t;
 typedef struct sv_code_unit sv_code_unit_t;
 typedef struct vm_interrupt vm_interrupt_t;
 
-typedef struct sv_eval_env_state    sv_eval_env_state_t;
-typedef struct sv_map_template_desc sv_map_template_desc_t;
-typedef struct sv_gf_mega_cache     sv_gf_mega_cache_t;
+typedef struct sv_eval_env_state      sv_eval_env_state_t;
+typedef struct sv_map_template_desc   sv_map_template_desc_t;
+typedef struct sv_gf_mega_cache       sv_gf_mega_cache_t;
+typedef struct wasm_import_func_env_s wasm_import_func_env_t;
 
 typedef struct sv_gf_poly sv_gf_poly_t;
 typedef struct sv_pf_poly sv_pf_poly_t;

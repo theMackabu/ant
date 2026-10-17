@@ -448,6 +448,24 @@ Second review round:
   `module.exports`, tagged `Module`, as in Node. `require` and
   `process.getBuiltinModule` still return the exports object.
 
+Realm switch cost:
+
+- `realm_save` copies the intrinsics (`sym` fields, math functions,
+  `ANT_REALM_BUILTIN` entries) once per realm, on its first save
+  (`intrinsics_saved`). Later saves copy only state that changes after
+  init: `realm/fields.h`, `ANT_REALM_MUTABLE_ROOT` entries, and the two
+  lazily created intrinsics, `sym.eval_fn` and `builtins.callsite_proto`.
+  Every other intrinsic writer runs from bootstrap init.
+- Builtins flagged `CFUNC_REALM_FREE` (all `Math` functions, `parseInt`,
+  `parseFloat`, global and `Number` `isNaN`/`isFinite`, `Number.isInteger`,
+  `Number.isSafeInteger`) skip the switch when every argument is a
+  primitive, so no user code can run during the call. Errors they create
+  take their prototypes from `js->error_realm`, the builtin's realm. Object
+  arguments still take the full switch.
+- A cross-realm `Math.max` call went from 61.8 ns to about 12 ns (Node
+  3.9 ns). Other builtins called across realms (`push`: 76 to 60 ns) still
+  pay `realm_load`, which is most of the remaining cost.
+
 ## Risks
 
 - Protector invalidation for inactive realms: silent wrong results if a

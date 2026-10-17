@@ -50,6 +50,7 @@
 #include "silver/ops/eval_env.h"
 
 #include "modules/regex.h"
+#include "modules/wasm.h"
 #include "modules/domexception.h"
 #include "modules/json.h"
 #include "modules/collections.h"
@@ -22464,12 +22465,12 @@ static void realm_init_core(ant_t *js) {
   set_proto(js, number_ctor_obj, function_proto);
   
   set_slot(number_ctor_obj, SLOT_CFUNC, Ant_Function_CreateWithArity(builtin_Number, 1));
-  defmethod(js, number_ctor_obj, "isNaN", 5, Ant_Function_CreateWithArity(builtin_Number_isNaN, 1));
-  defmethod(js, number_ctor_obj, "isFinite", 8, Ant_Function_CreateWithArity(builtin_Number_isFinite, 1));
-  defmethod(js, number_ctor_obj, "isInteger", 9, Ant_Function_CreateWithArity(builtin_Number_isInteger, 1));
-  defmethod(js, number_ctor_obj, "isSafeInteger", 13, Ant_Function_CreateWithArity(builtin_Number_isSafeInteger, 1));
-  ant_value_t number_parse_int = defmethod(js, number_ctor_obj, "parseInt", 8, Ant_Function_CreateWithArity(builtin_parseInt, 2));
-  ant_value_t number_parse_float = defmethod(js, number_ctor_obj, "parseFloat", 10, Ant_Function_CreateWithArity(builtin_parseFloat, 1));
+  defmethod(js, number_ctor_obj, "isNaN", 5, Ant_Function_CreateEx(builtin_Number_isNaN, 1, CFUNC_REALM_FREE));
+  defmethod(js, number_ctor_obj, "isFinite", 8, Ant_Function_CreateEx(builtin_Number_isFinite, 1, CFUNC_REALM_FREE));
+  defmethod(js, number_ctor_obj, "isInteger", 9, Ant_Function_CreateEx(builtin_Number_isInteger, 1, CFUNC_REALM_FREE));
+  defmethod(js, number_ctor_obj, "isSafeInteger", 13, Ant_Function_CreateEx(builtin_Number_isSafeInteger, 1, CFUNC_REALM_FREE));
+  ant_value_t number_parse_int = defmethod(js, number_ctor_obj, "parseInt", 8, Ant_Function_CreateEx(builtin_parseInt, 2, CFUNC_REALM_FREE));
+  ant_value_t number_parse_float = defmethod(js, number_ctor_obj, "parseFloat", 10, Ant_Function_CreateEx(builtin_parseFloat, 1, CFUNC_REALM_FREE));
   
   js_setprop_readonly_nonconfigurable(js, number_ctor_obj, "MAX_VALUE", 9, tov(1.7976931348623157e+308));
   js_setprop_readonly_nonconfigurable(js, number_ctor_obj, "MIN_VALUE", 9, tov(5e-324));
@@ -22539,8 +22540,8 @@ static void realm_init_core(ant_t *js) {
   defalias(js, glob, "parseInt", 8, number_parse_int);
   defalias(js, glob, "parseFloat", 10, number_parse_float);
   defmethod(js, glob, "eval", 4, js_builtin_eval(js));
-  defmethod(js, glob, "isNaN", 5, Ant_Function_CreateWithArity(builtin_global_isNaN, 1));
-  defmethod(js, glob, "isFinite", 8, Ant_Function_CreateWithArity(builtin_global_isFinite, 1));
+  defmethod(js, glob, "isNaN", 5, Ant_Function_CreateEx(builtin_global_isNaN, 1, CFUNC_REALM_FREE));
+  defmethod(js, glob, "isFinite", 8, Ant_Function_CreateEx(builtin_global_isFinite, 1, CFUNC_REALM_FREE));
   defmethod(js, glob, "btoa", 4, Ant_Function_CreateWithArity(builtin_btoa, 1));
   js_set_descriptor(js, glob, "btoa", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
   defmethod(js, glob, "atob", 4, Ant_Function_CreateWithArity(builtin_atob, 1));
@@ -22870,6 +22871,7 @@ void js_destroy(ant_t *js) {
 
   ant_ptr_pair_free(&js->cfunc_promoted);
   ant_ptr_pair_free(&js->cfunc_named);
+  wasm_isolate_destroy(js);
 
   js_pool_destroy(&js->pool.rope);
   js_pool_destroy(&js->rope_gc.young);

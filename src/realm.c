@@ -9,11 +9,9 @@
 #include "gc/modules.h"
 #include "silver/call.h"
 
-static void realm_save(ant_t *js, ant_realm_t *realm) {
-  realm->gc_dirty = true;
-  #define ANT_REALM_FIELD(name) realm->name = js->name;
-  #include "realm/fields.h"
-
+static void realm_save_intrinsics(ant_t *js, ant_realm_t *realm) {
+  realm->intrinsics_saved = true;
+  
   #define ANT_REALM_SYM_FIELD(name) realm->sym.name = js->sym.name;
   #include "realm/sym_fields.h"
   memcpy(realm->sym.math_fns, js->sym.math_fns, sizeof(realm->sym.math_fns));
@@ -24,6 +22,17 @@ static void realm_save(ant_t *js, ant_realm_t *realm) {
   #define ANT_REALM_BUILTIN_ARR(name, n) \
     memcpy(realm->builtins.name, js->builtins.name, sizeof(realm->builtins.name));
   #include "isolate_values.h"
+}
+
+static void realm_save(ant_t *js, ant_realm_t *realm) {
+  realm->gc_dirty = true;
+  if (!realm->intrinsics_saved) realm_save_intrinsics(js, realm);
+  
+  #define ANT_REALM_FIELD(name) realm->name = js->name;
+  #include "realm/fields.h"
+  
+  realm->sym.eval_fn = js->sym.eval_fn;
+  realm->builtins.callsite_proto = js->builtins.callsite_proto;
 
   #define ANT_MUTABLE_ROOT(name)
   #define ANT_MUTABLE_ROOT_ARR(name, n)
@@ -238,14 +247,36 @@ bool ant_realm_foreign_array_ctor(ant_t *js, ant_value_t ctor) {
 }
 
 __attribute__((noinline, cold))
+static bool realm_free_call(const ant_cfunc_meta_t *meta, ant_value_t *args, int nargs) {
+  if (!(meta->flags & CFUNC_REALM_FREE)) return false;
+  
+  for (int i = 0; i < nargs; i++) {
+    uint8_t t = vtype(args[i]);
+    if (!is_boxable_primitive_type(t) && t != kTypeNull && t != kTypeUndefined) return false;
+  }
+  
+  return true;
+}
+
 ant_value_t sv_invoke_builtin_in_realm(
   ant_t *js, const ant_cfunc_meta_t *meta, ant_value_t *args,
   int nargs, ant_value_t new_target
 ) {
   ant_realm_t *realm = ant_cfunc_meta_realm(meta);
-  ant_realm_t *prev = ant_realm_enter(js, realm ? realm : ant_realm_main(js));
+  if (!realm) realm = ant_realm_main(js);
+  
+  if (realm_free_call(meta, args, nargs)) {
+    ant_realm_t *prev_error = js->error_realm;
+    js->error_realm = realm;
+    ant_value_t result = sv_invoke_native(js, meta->fn, args, nargs, new_target);
+    js->error_realm = prev_error;
+    return result;
+  }
+  
+  ant_realm_t *prev = ant_realm_enter(js, realm);
   ant_value_t result = sv_invoke_native(js, meta->fn, args, nargs, new_target);
   ant_realm_enter(js, prev);
+  
   return result;
 }
 

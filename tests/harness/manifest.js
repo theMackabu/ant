@@ -313,6 +313,7 @@ export function targets() {
     'test_util_error_boundaries.cjs',
     'test_uv_nested_poll.mjs',
     'test_version_check_cache.cjs',
+    'test_realm_free_builtins.cjs',
     'test_vm.cjs',
     'test_vm_realm_gc.cjs',
     'test_vm_iterator_close_errors.cjs',

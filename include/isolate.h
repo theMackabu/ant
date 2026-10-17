@@ -142,6 +142,9 @@ struct ant_isolate_t {
   net_server_t *net_servers;
   net_socket_t *net_sockets;
   ant_tls_socket_t *tls_sockets;
+  wasm_import_func_env_t *wasm_import_envs;
+  ant_ptr_pair_map_t wasm_instance_owners;
+  bool wasm_pending_import_throw;
   fetch_request_t *fetch_requests;
   fs_request_t *fs_requests;
   fs_watcher_t *fs_watchers;
@@ -182,12 +185,16 @@ struct ant_isolate_t {
   const char *code;
   const char *filename;
 
-  // TODO: struct
+  // globalThis.Ant
   ant_value_t Ant;
+  
   ant_realm_t *realm;
   ant_realm_t *realms;
+  
   ant_realm_t *main_realm;
   ant_realm_t *builtin_realm;
+  ant_realm_t *error_realm;
+  
   ant_value_t global;
   ant_value_t global_this;
   ant_value_t global_sandbox;

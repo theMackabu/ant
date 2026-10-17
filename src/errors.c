@@ -8,6 +8,7 @@
 #include "gc/roots.h"
 #include "silver/stack_trace.h"
 #include "modules/bigint.h"
+#include "realm.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -267,9 +268,11 @@ static ant_value_t make_error_value(
   }
   
   js_set_slot(err_obj, SLOT_ERR_TYPE, js_mknum((double)type_bits));
-  ant_value_t proto = js->builtins.error_protos[base_type];
-  int proto_type = vtype(proto);
+  ant_value_t proto = js->error_realm
+    ? js->error_realm->builtins.error_protos[base_type]
+    : js->builtins.error_protos[base_type];
   
+  int proto_type = vtype(proto);
   if ((T_FLAG_FIND(proto_type) & T_SPECIAL_OBJECT_MASK) != 0)
     js_set_proto_init(err_obj, proto);
   else {

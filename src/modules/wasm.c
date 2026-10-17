@@ -15,6 +15,7 @@
 #pragma clang diagnostic pop
 
 #include "ant.h"
+#include "list.h"
 #include "cfunc.h"
 #include "ptr.h"
 #include "errors.h"
@@ -55,14 +56,18 @@ typedef enum {
 typedef struct {
   wasm_extern_wrap_kind_t kind;
   wasm_store_t *store;
+  
   bool own_handle;
   bool use_cached_value;
   bool standalone_table;
+  
   wasm_valkind_t standalone_table_element;
   ant_value_t memory_buffer;
   wasm_val_t cached_value;
+  
   uint32_t standalone_table_size;
   uint32_t standalone_table_max_size;
+  
   union {
     wasm_global_t *global;
     wasm_memory_t *memory;
@@ -70,80 +75,51 @@ typedef struct {
   } as;
 } wasm_extern_handle_t;
 
-typedef struct {
+struct wasm_import_func_env_s {
+  wasm_import_func_env_t *next;
+  wasm_import_func_env_t **pprev;
+  
   ant_t *js;
   wasm_store_t *store;
   ant_value_t owner;
   ant_value_t fn;
   wasm_valkind_t *result_kinds;
   size_t result_count;
-} wasm_import_func_env_t;
+};
 
 typedef struct {
   wasm_func_t *func;
   bool own_func;
 } wasm_func_handle_t;
 
-typedef struct {
-  WASMModuleInstanceCommon *runtime_instance;
-  ant_value_t owner;
-} wasm_instance_owner_t;
+static wasm_engine_t *g_wasm_engine = NULL;
 
 static constexpr uint32_t WASM_FUNC_STATE_TAG = Ant_NativeTag("WFST");
 static constexpr uint32_t WASM_MODULE_NATIVE_TAG = Ant_NativeTag("WMOD");
 static constexpr uint32_t WASM_INSTANCE_NATIVE_TAG = Ant_NativeTag("WINS");
 static constexpr uint32_t WASM_EXTERN_NATIVE_TAG = Ant_NativeTag("WEXT");
 
-static size_t g_wasm_import_env_count = 0;
-static size_t g_wasm_import_env_cap   = 0;
-
-static wasm_engine_t *g_wasm_engine                = NULL;
-static wasm_import_func_env_t **g_wasm_import_envs = NULL;
-static bool g_wasm_pending_import_throw_exists     = false;
-static wasm_instance_owner_t *g_wasm_instance_owners = NULL;
-static size_t g_wasm_instance_owner_count = 0;
-static size_t g_wasm_instance_owner_cap = 0;
-
 static void wasm_clear_pending_import_throw(ant_t *js) {
-  g_wasm_pending_import_throw_exists = false;
+  js->wasm_pending_import_throw = false;
   js->mutable_roots.wasm_pending_import_throw = js_mkundef();
 }
 
 static void wasm_set_pending_import_throw(ant_t *js, ant_value_t value) {
-  g_wasm_pending_import_throw_exists = true;
+  js->wasm_pending_import_throw = true;
   js->mutable_roots.wasm_pending_import_throw = value;
 }
 
 static ant_value_t wasm_consume_pending_import_throw(ant_t *js) {
-  ant_value_t value = g_wasm_pending_import_throw_exists
+  ant_value_t value = js->wasm_pending_import_throw
     ? js->mutable_roots.wasm_pending_import_throw
     : js_mkundef();
   wasm_clear_pending_import_throw(js);
   return value;
 }
 
-static void wasm_register_import_env(wasm_import_func_env_t *env) {
-  if (g_wasm_import_env_count == g_wasm_import_env_cap) {
-    size_t new_cap = g_wasm_import_env_cap ? g_wasm_import_env_cap * 2 : 16;
-    wasm_import_func_env_t **new_arr = realloc(g_wasm_import_envs, new_cap * sizeof(*new_arr));
-    if (!new_arr) return;
-    g_wasm_import_envs = new_arr;
-    g_wasm_import_env_cap = new_cap;
-  }
-  g_wasm_import_envs[g_wasm_import_env_count++] = env;
-}
-
-static void wasm_unregister_import_env(wasm_import_func_env_t *env) {
-  for (size_t i = 0; i < g_wasm_import_env_count; i++) {
-    if (g_wasm_import_envs[i] != env) continue;
-    g_wasm_import_envs[i] = g_wasm_import_envs[--g_wasm_import_env_count];
-    return;
-  }
-}
-
 static void wasm_import_func_env_finalizer(void *env_ptr) {
   wasm_import_func_env_t *env = (wasm_import_func_env_t *)env_ptr;
-  wasm_unregister_import_env(env);
+  Ant_List_Remove(env);
   free(env->result_kinds);
   free(env);
 }
@@ -155,55 +131,29 @@ static void wasm_delete_owned_globals(wasm_global_t **globals, size_t count) {
 }
 
 static void wasm_delete_owned_imports(
-  wasm_func_t **funcs,
-  size_t func_count,
-  wasm_global_t **globals,
-  size_t global_count
+  wasm_func_t **funcs, size_t func_count, wasm_global_t **globals, size_t global_count
 ) {
-  if (funcs) {
-    for (size_t i = 0; i < func_count; i++)
-      if (funcs[i]) wasm_func_delete(funcs[i]);
-  }
+  if (funcs) for (size_t i = 0; i < func_count; i++) 
+    if (funcs[i]) wasm_func_delete(funcs[i]);
+  
   wasm_delete_owned_globals(globals, global_count);
   free(funcs);
   free(globals);
 }
 
-static bool wasm_register_instance_owner(wasm_instance_t *instance, ant_value_t owner) {
+static bool wasm_register_instance_owner(ant_t *js, wasm_instance_t *instance, ant_value_t owner) {
   if (!instance || !instance->inst_comm_rt || !is_object_type(owner)) return true;
-
-  if (g_wasm_instance_owner_count == g_wasm_instance_owner_cap) {
-    size_t new_cap = g_wasm_instance_owner_cap ? g_wasm_instance_owner_cap * 2 : 16;
-    wasm_instance_owner_t *new_arr = realloc(g_wasm_instance_owners, new_cap * sizeof(*new_arr));
-    if (!new_arr) return false;
-    g_wasm_instance_owners = new_arr;
-    g_wasm_instance_owner_cap = new_cap;
-  }
-
-  g_wasm_instance_owners[g_wasm_instance_owner_count++] = (wasm_instance_owner_t){
-    .runtime_instance = instance->inst_comm_rt,
-    .owner = owner,
-  };
-  return true;
+  return ant_ptr_pair_put(&js->wasm_instance_owners, (uintptr_t)instance->inst_comm_rt, 0, owner);
 }
 
-static void wasm_unregister_instance_owner(wasm_instance_t *instance) {
-  WASMModuleInstanceCommon *runtime_instance = instance ? instance->inst_comm_rt : NULL;
-  if (!runtime_instance) return;
-
-  for (size_t i = 0; i < g_wasm_instance_owner_count; i++) {
-    if (g_wasm_instance_owners[i].runtime_instance != runtime_instance) continue;
-    g_wasm_instance_owners[i] = g_wasm_instance_owners[--g_wasm_instance_owner_count];
-    return;
-  }
+static void wasm_unregister_instance_owner(ant_t *js, wasm_instance_t *instance) {
+  if (instance && instance->inst_comm_rt)
+    ant_ptr_pair_remove(&js->wasm_instance_owners, (uintptr_t)instance->inst_comm_rt, 0);
 }
 
-static ant_value_t wasm_find_instance_owner(WASMModuleInstanceCommon *runtime_instance) {
-  if (!runtime_instance) return js_mkundef();
-  for (size_t i = 0; i < g_wasm_instance_owner_count; i++) {
-    if (g_wasm_instance_owners[i].runtime_instance == runtime_instance)
-      return g_wasm_instance_owners[i].owner;
-  }
+static ant_value_t wasm_find_instance_owner(ant_t *js, WASMModuleInstanceCommon *runtime_instance) {
+  ant_value_t owner;
+  if (runtime_instance && ant_ptr_pair_get(&js->wasm_instance_owners, (uintptr_t)runtime_instance, 0, &owner)) return owner;
   return js_mkundef();
 }
 
@@ -466,15 +416,18 @@ static void wasm_instance_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
   wasm_instance_handle_t *handle = (wasm_instance_handle_t *)js_get_native(value, WASM_INSTANCE_NATIVE_TAG);
   if (!handle) return;
-  wasm_unregister_instance_owner(handle->instance);
+  
+  wasm_unregister_instance_owner(js, handle->instance);
   for (size_t j = 0; j < handle->host_func_count; j++) 
     if (handle->host_funcs[j]) wasm_func_delete(handle->host_funcs[j]);
+  
   for (size_t j = 0; j < handle->host_global_count; j++)
     if (handle->host_globals[j]) wasm_global_delete(handle->host_globals[j]);
   
   free(handle->host_funcs);
   free(handle->host_globals);
   wasm_extern_vec_delete(&handle->exports);
+  
   free(handle);
   js_clear_native(value, WASM_INSTANCE_NATIVE_TAG);
 }
@@ -572,7 +525,7 @@ static ant_value_t js_wasm_exported_func_call(ant_params_t) {
   trap = wasm_func_call(func, &wasm_args, &wasm_results);
   
   if (trap) {
-    if (g_wasm_pending_import_throw_exists) {
+    if (js->wasm_pending_import_throw) {
       result = wasm_consume_pending_import_throw(js);
       js_mark_errorlike_no_stack(js, result);
       wasm_val_vec_delete(&wasm_args);
@@ -1050,14 +1003,12 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
         for (size_t j = 0; j < env->result_count; j++)
           env->result_kinds[j] = wasm_valtype_kind(result_types->data[j]);
       }
-      wasm_register_import_env(env);
-
+      
+      Ant_List_Insert(&env->js->wasm_import_envs, env);
 
       owned_host_funcs[owned_host_func_count] = wasm_func_new_with_env(
-        module_handle->store,
-        func_type,
-        wasm_import_func_callback,
-        env,
+        module_handle->store, func_type,
+        wasm_import_func_callback, env,
         wasm_import_func_env_finalizer
       );
 
@@ -1144,7 +1095,7 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
     );
     
     if (trap) {
-      if (g_wasm_pending_import_throw_exists) {
+      if (js->wasm_pending_import_throw) {
         ant_value_t thrown = wasm_consume_pending_import_throw(js);
         js_mark_errorlike_no_stack(js, thrown);
         wasm_trap_delete(trap);
@@ -1178,12 +1129,14 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
 
     instance_obj = wasm_wrap_instance(js, inst_handle, module_obj);
   }
+  
   if (vtype(instance_obj) != kTypeObject) {
     wasm_exporttype_vec_delete(&export_types);
     return instance_obj;
   }
+  
   js_set_finalizer(instance_obj, wasm_instance_finalize);
-  if (!wasm_register_instance_owner(instance, instance_obj)) {
+  if (!wasm_register_instance_owner(js, instance, instance_obj)) {
     wasm_exporttype_vec_delete(&export_types);
     return js_mkerr(js, "out of memory");
   }
@@ -1614,9 +1567,8 @@ static ant_value_t js_wasm_table_get(ant_params_t) {
   func = wasm_ref_as_func(ref);
   
   if (func) {
-    ant_value_t owner = wasm_find_instance_owner(func->inst_comm_rt);
-    if (!is_object_type(owner))
-      owner = js_get_slot(js->this_val, SLOT_ENTRIES);
+    ant_value_t owner = wasm_find_instance_owner(js, func->inst_comm_rt);
+    if (!is_object_type(owner)) owner = js_get_slot(js->this_val, SLOT_ENTRIES);
     ant_value_t wrapped = wasm_wrap_func(js, func, owner, true);
     wasm_ref_delete(ref);
     return wrapped;
@@ -2237,11 +2189,15 @@ static ant_value_t js_wasm_instantiate_streaming(ant_params_t) {
 }
 
 void gc_mark_wasm(ant_t *js, gc_mark_fn mark) {
-  for (size_t i = 0; i < g_wasm_import_env_count; i++) {
-    wasm_import_func_env_t *env = g_wasm_import_envs[i];
+  for (wasm_import_func_env_t *env = js->wasm_import_envs; env; env = env->next) {
     mark(js, env->fn);
     mark(js, env->owner);
   }
+}
+
+void wasm_isolate_destroy(ant_t *js) {
+  while (js->wasm_import_envs) Ant_List_Remove(js->wasm_import_envs);
+  ant_ptr_pair_free(&js->wasm_instance_owners);
 }
 
 static ant_value_t wasm_make_proto(ant_t *js, const char *tag) {
@@ -2318,6 +2274,5 @@ void init_wasm_module(ant_t *js) {
   ant_value_t js_tag_kinds = js_mkarr(js);
   js_arr_push(js, js_tag_kinds, js_mknum((double)WASM_EXTERNREF));
   defhidden(js, ns, "JSTag", 5, wasm_make_tag(js, js->builtins.wasm_tag_proto, js_tag_kinds, true));
-
   js_set_global_builtin(js, "WebAssembly", ns);
 }
