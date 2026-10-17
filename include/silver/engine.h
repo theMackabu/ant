@@ -821,8 +821,9 @@ static inline void gc_upvalue_capture_barrier(ant_t *js, sv_upvalue_t *uv) {
 }
 
 static inline sv_upvalue_t *js_upvalue_alloc(ant_t *js) {
-  sv_upvalue_t *uv = (sv_upvalue_t *)fixed_arena_alloc(&js->upvalue_arena);
+  sv_upvalue_t *uv = (sv_upvalue_t *)fixed_arena_alloc_uninit(&js->upvalue_arena);
   if (uv) {
+    memset(uv, 0, sizeof(*uv));
     if (js->young_upvalue_len < js->young_upvalue_cap)
       js->young_upvalues[js->young_upvalue_len++] = uv;
     else gc_track_young_upvalue_slow(js, uv);

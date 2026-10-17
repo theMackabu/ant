@@ -282,6 +282,47 @@ void mir_emit_close_marked_slots(
                                MIR_new_reg_op(ctx, r_open),
                                MIR_new_uint_op(ctx, 0)));
 
+  char name[48];
+  snprintf(name, sizeof(name), "close_loc_%d", site_id);
+  MIR_reg_t r_loc = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+  snprintf(name, sizeof(name), "close_bound_%d", site_id);
+  MIR_reg_t r_bound = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+  snprintf(name, sizeof(name), "close_next_%d", site_id);
+  MIR_reg_t r_next = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+  snprintf(name, sizeof(name), "close_tmp_%d", site_id);
+  MIR_reg_t r_tmp = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+  MIR_label_t slow = MIR_new_label(ctx), single = MIR_new_label(ctx);
+#define UV_FIELD(type, field, base) MIR_new_mem_op(ctx, type, (MIR_disp_t)offsetof(sv_upvalue_t, field), base, 0, 1)
+#define EMIT(...) MIR_append_insn(ctx, fn, MIR_new_insn(ctx, __VA_ARGS__))
+  EMIT(MIR_MOV, MIR_new_reg_op(ctx, r_loc), UV_FIELD(MIR_T_P, location, r_open));
+  EMIT(MIR_ADD, MIR_new_reg_op(ctx, r_bound), MIR_new_reg_op(ctx, r_slots),
+       MIR_new_int_op(ctx, first_captured * (int64_t)sizeof(ant_value_t)));
+  EMIT(MIR_UBLT, MIR_new_label_op(ctx, no_open), MIR_new_reg_op(ctx, r_loc), MIR_new_reg_op(ctx, r_bound));
+  EMIT(MIR_MOV, MIR_new_reg_op(ctx, r_next), UV_FIELD(MIR_T_P, next, r_open));
+  EMIT(MIR_BEQ, MIR_new_label_op(ctx, single), MIR_new_reg_op(ctx, r_next), MIR_new_int_op(ctx, 0));
+  EMIT(MIR_MOV, MIR_new_reg_op(ctx, r_tmp), UV_FIELD(MIR_T_P, location, r_next));
+  EMIT(MIR_UBGE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_tmp), MIR_new_reg_op(ctx, r_bound));
+  MIR_append_insn(ctx, fn, single);
+  EMIT(MIR_ADD, MIR_new_reg_op(ctx, r_bound), MIR_new_reg_op(ctx, r_slots),
+       MIR_new_int_op(ctx, slot_count * (int64_t)sizeof(ant_value_t)));
+  EMIT(MIR_UBGE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_loc), MIR_new_reg_op(ctx, r_bound));
+  EMIT(MIR_MOV, MIR_new_reg_op(ctx, r_tmp), UV_FIELD(MIR_T_U64, gc_epoch, r_open));
+  EMIT(MIR_BNE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_tmp), MIR_new_int_op(ctx, 0));
+  EMIT(MIR_MOV, MIR_new_reg_op(ctx, r_tmp), MIR_new_mem_op(ctx, MIR_JSVAL, 0, r_loc, 0, 1));
+  EMIT(MIR_MOV, UV_FIELD(MIR_JSVAL, closed, r_open), MIR_new_reg_op(ctx, r_tmp));
+  EMIT(MIR_ADD, MIR_new_reg_op(ctx, r_tmp), MIR_new_reg_op(ctx, r_open),
+       MIR_new_int_op(ctx, (int64_t)offsetof(sv_upvalue_t, closed)));
+  EMIT(MIR_MOV, UV_FIELD(MIR_T_P, location, r_open), MIR_new_reg_op(ctx, r_tmp));
+  EMIT(MIR_MOV, UV_FIELD(MIR_T_P, next, r_open), MIR_new_int_op(ctx, 0));
+  EMIT(MIR_MOV, MIR_new_mem_op(ctx, MIR_T_I64,
+                               r_open_upvalues ? 0 : (MIR_disp_t)offsetof(sv_vm_t, open_upvalues),
+                               r_open_upvalues ? r_open_upvalues : r_vm, 0, 1),
+       MIR_new_reg_op(ctx, r_next));
+  EMIT(MIR_JMP, MIR_new_label_op(ctx, no_open));
+#undef EMIT
+#undef UV_FIELD
+  MIR_append_insn(ctx, fn, slow);
+
   MIR_append_insn(ctx, fn,
                   MIR_new_call_insn(ctx, 7,
                                     MIR_new_ref_op(ctx, close_upval_proto),

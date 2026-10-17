@@ -1146,7 +1146,9 @@ static int resolve_upvalue_raw(sv_compiler_t *c, const char *name, uint32_t len)
     sv_local_t *loc = &c->enclosing->locals[local];
     c->enclosing->locals[local].captured = true;
     uint16_t slot = (uint16_t)local_to_frame_slot(c->enclosing, local);
-    return add_upvalue_binding(c, slot, true, loc->is_const, &loc->binding);
+    sv_binding_meta_t binding = loc->binding;
+    binding.may_tdz = loc->is_tdz;
+    return add_upvalue_binding(c, slot, true, loc->is_const, &binding);
   }
 
   int upvalue = resolve_upvalue_raw(c->enclosing, name, len);
@@ -2736,7 +2738,6 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
       }
       for (int j = lb; j < c->local_count; j++) {
         c->locals[j].is_tdz = true;
-        c->locals[j].binding.may_tdz = true;
         set_local_inferred_type(c, j, SV_TI_UNKNOWN);
         int slot = j - c->param_locals;
         emit_op(c, OP_SET_LOCAL_UNDEF);
@@ -2774,7 +2775,6 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
       c->locals[class_local].eval_flags |= SV_EVAL_BIND_LEXICAL;
       if (c->local_count > lb) {
         c->locals[c->local_count - 1].is_tdz = true;
-        c->locals[c->local_count - 1].binding.may_tdz = true;
         set_local_inferred_type(c, c->local_count - 1, SV_TI_UNKNOWN);
         int slot = (c->local_count - 1) - c->param_locals;
         emit_op(c, OP_SET_LOCAL_UNDEF);
@@ -6453,7 +6453,6 @@ static void hoist_loop_head_lexicals(sv_compiler_t *c, sv_ast_t *var_node) {
   }
   for (int i = lb; i < c->local_count; i++) {
     c->locals[i].is_tdz = true;
-    c->locals[i].binding.may_tdz = true;
     set_local_inferred_type(c, i, SV_TI_UNKNOWN);
     emit_op(c, OP_SET_LOCAL_UNDEF);
     emit_u16(c, (uint16_t)(i - c->param_locals));
@@ -7845,7 +7844,6 @@ sv_func_t *compile_function_body(
       if (pname && plen) {
         int loc = add_local(&comp, pname, plen, false, 0);
         comp.locals[loc].is_tdz = true;
-        comp.locals[loc].binding.may_tdz = true;
         set_local_inferred_type(&comp, loc, SV_TI_UNKNOWN);
         int slot = loc - comp.param_locals;
         emit_op(&comp, OP_SET_LOCAL_UNDEF);

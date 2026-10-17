@@ -185,56 +185,45 @@ static inline void fixed_arena_destroy(ant_fixed_arena_t *a) {
   a->free_list = NULL;
 }
 
-static inline void *fixed_arena_alloc(ant_fixed_arena_t *a) {
-  if (a->free_list) {
-    void *p = a->free_list;
-    a->free_list = *(void **)p;
-    memset(p, 0, a->elem_size);
-    a->live_count++;
-    return p;
-  }
-
-  size_t needed = a->watermark + a->elem_size;
-  if (needed > a->committed) {
-    size_t grow = a->committed / 4;
-    if (grow < (64ULL * 1024)) grow = 64ULL * 1024;
-    if (grow > ARENA_GROW_INCREMENT) grow = ARENA_GROW_INCREMENT;
-    size_t new_committed = a->committed + grow;
-    if (new_committed > a->reserved) return NULL;
-    if (ant_arena_commit(a->base, a->committed, new_committed) != 0) return NULL;
-    a->committed = new_committed;
-  }
-
-  void *p = a->base + a->watermark;
-  a->watermark = needed;
-  memset(p, 0, a->elem_size);
-  a->live_count++;
-  return p;
+static inline __attribute__((noinline)) bool fixed_arena_grow(ant_fixed_arena_t *a) {
+  size_t grow = a->committed / 4;
+  
+  if (grow < (64ULL * 1024)) grow = 64ULL * 1024;
+  if (grow > ARENA_GROW_INCREMENT) grow = ARENA_GROW_INCREMENT;
+  
+  size_t new_committed = a->committed + grow;
+  
+  if (new_committed > a->reserved) return false;
+  if (ant_arena_commit(a->base, a->committed, new_committed) != 0) return false;
+  
+  a->committed = new_committed;
+  
+  return true;
 }
 
 static inline void *fixed_arena_alloc_uninit(ant_fixed_arena_t *a) {
   if (a->free_list) {
     void *p = a->free_list;
+    
     a->free_list = *(void **)p;
     a->live_count++;
+    
     return p;
   }
 
   size_t needed = a->watermark + a->elem_size;
-  if (needed > a->committed) {
-    size_t grow = a->committed / 4;
-    if (grow < (64ULL * 1024)) grow = 64ULL * 1024;
-    if (grow > ARENA_GROW_INCREMENT) grow = ARENA_GROW_INCREMENT;
-    size_t new_committed = a->committed + grow;
-    if (new_committed > a->reserved) return NULL;
-    if (ant_arena_commit(a->base, a->committed, new_committed) != 0) return NULL;
-    a->committed = new_committed;
-  }
+  if (__builtin_expect(needed > a->committed, 0) && !fixed_arena_grow(a)) return NULL;
 
   void *p = a->base + a->watermark;
   a->watermark = needed;
   a->live_count++;
   
+  return p;
+}
+
+static inline void *fixed_arena_alloc(ant_fixed_arena_t *a) {
+  void *p = fixed_arena_alloc_uninit(a);
+  if (p) memset(p, 0, a->elem_size);
   return p;
 }
 
