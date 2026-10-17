@@ -754,7 +754,8 @@ void jit_emit_locals(jit_compile_t *c) {
         bool immediate_num_init =
             was_num &&
             (!c->captured_locals || !c->captured_locals[idx]) &&
-            jit_has_immediate_numeric_local_init(c->func, c->ip + c->sz, c->end, idx);
+            ((c->dnum_locals && c->dnum_locals[idx]) ||
+             jit_has_immediate_numeric_local_init(c->func, c->ip + c->sz, c->end, idx));
         c->known_type_locals[idx] = immediate_num_init ? SV_TI_NUM : SV_TI_UNKNOWN;
       }
       break;

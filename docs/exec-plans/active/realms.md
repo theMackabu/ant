@@ -466,6 +466,24 @@ Realm switch cost:
   3.9 ns). Other builtins called across realms (`push`: 76 to 60 ns) still
   pay `realm_load`, which is most of the remaining cost.
 
+Main-realm global reads in loops (`s += x`, 100M iterations, M-series):
+
+- Hot-tier functions that read a global inside a loop load the global
+  object and its shape from a two-word MIR data item in the prologue
+  (`global_hoist`), so snapshot guards stop rebuilding 64-bit immediates
+  per site: 37 to 25 instructions per iteration.
+- `for (let ...)` skips the per-iteration copy of the loop variable when
+  no closure, class or direct `eval` in the condition, update or body can
+  capture it. The copy put a register move on the induction chain
+  (1.10 to 0.68 ns for upvalue and parameter bounds).
+- Locals behind a `SET_LOCAL_UNDEF` keep their double register when the
+  maybe-unassigned dataflow proves no read before the first write, and OSR
+  seeds local type feedback from live frame values that have none. Together
+  these keep `const y = x; s += y` numeric (2.84 to 0.70 ns).
+- Every variant now runs at the `s += 1` floor, about 2.8 cycles
+  (0.6 to 0.7 ns), which is the latency of the loop-carried `fadd`. Going
+  lower needs integer accumulators.
+
 ## Risks
 
 - Protector invalidation for inactive realms: silent wrong results if a

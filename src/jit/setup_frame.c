@@ -239,6 +239,7 @@ _Thread_local jit_call_tagging_t *jit_call_tagging;
 bool jit_setup_frame(jit_compile_t *c) {
   c->hoisted_upvalue = -1;
   c->hoisted_upvalue_cell = 0;
+  c->hoisted_upvalue_tdz = 0;
   char fname[128];
   snprintf(fname, sizeof(fname), "jit_%s_%p",
            c->func->debug->name ? c->func->debug->name : "anon", (void *)c->func);
@@ -615,12 +616,7 @@ bool jit_setup_frame(jit_compile_t *c) {
         sv_op_t dop = (sv_op_t)*dp;
         int dsz = sv_op_size[dop];
         if (dsz == 0) break;
-        if (dop == OP_SET_LOCAL_UNDEF) {
-          uint16_t di = sv_get_u16(dp + 1);
-          if (di < (uint16_t)c->n_locals &&
-              !jit_has_immediate_numeric_local_init(c->func, dp + dsz, de, di))
-            c->dnum_locals[di] = 0;
-        } else if ((sv_op_flags[dop] & SV_OPF_BUILDER_TARGET) != 0) {
+        if ((sv_op_flags[dop] & SV_OPF_BUILDER_TARGET) != 0) {
           uint16_t ds = sv_get_u16(dp + 1);
           if (ds >= (uint16_t)c->param_count &&
               (int)ds - c->param_count < c->n_locals)
@@ -1004,7 +1000,34 @@ bool jit_setup_frame(jit_compile_t *c) {
     MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
         MIR_new_reg_op(c->ctx, c->hoisted_upvalue_cell), MIR_new_mem_op(c->ctx, MIR_T_P,
             c->hoisted_upvalue * sizeof(sv_upvalue_t *), table, 0, 1)));
+    if (jit_upvalue_may_tdz(c->func, (uint16_t)c->hoisted_upvalue)) {
+      c->hoisted_upvalue_tdz = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "hoisted_upvalue_tdz");
+      MIR_label_t loaded = MIR_new_label(c->ctx);
+      mir_load_imm(c->ctx, c->jit_func, c->hoisted_upvalue_tdz, 0);
+      MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ,
+          MIR_new_label_op(c->ctx, loaded), MIR_new_reg_op(c->ctx, c->hoisted_upvalue_cell), MIR_new_int_op(c->ctx, 0)));
+      MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+          MIR_new_reg_op(c->ctx, table), MIR_new_mem_op(c->ctx, MIR_T_P,
+              offsetof(sv_upvalue_t, location), c->hoisted_upvalue_cell, 0, 1)));
+      MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+          MIR_new_reg_op(c->ctx, table), MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, table, 0, 1)));
+      MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_EQ,
+          MIR_new_reg_op(c->ctx, c->hoisted_upvalue_tdz), MIR_new_reg_op(c->ctx, table), MIR_new_uint_op(c->ctx, SV_TDZ)));
+      MIR_append_insn(c->ctx, c->jit_func, loaded);
+    }
     MIR_append_insn(c->ctx, c->jit_func, done);
+  }
+
+  if (c->global_hoist_item) {
+    MIR_reg_t addr = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "global_hoist_addr");
+    c->global_hoist.r_global = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "global_hoist_obj");
+    c->global_hoist.r_shape = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "global_hoist_shape");
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+        MIR_new_reg_op(c->ctx, addr), MIR_new_ref_op(c->ctx, c->global_hoist_item)));
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+        MIR_new_reg_op(c->ctx, c->global_hoist.r_global), MIR_new_mem_op(c->ctx, MIR_T_U64, 0, addr, 0, 1)));
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+        MIR_new_reg_op(c->ctx, c->global_hoist.r_shape), MIR_new_mem_op(c->ctx, MIR_T_U64, 8, addr, 0, 1)));
   }
 
   if (c->osr_map.count > 0) {

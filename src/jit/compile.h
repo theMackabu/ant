@@ -64,6 +64,7 @@ typedef struct jit_compile {
   MIR_item_t resume_proto;
   MIR_item_t promote_start_proto;
   MIR_item_t cold_ns_item;
+  MIR_item_t global_hoist_item;
   MIR_item_t promote_due_proto;
   MIR_item_t closure_proto;
   MIR_item_t close_upval_proto;
@@ -285,6 +286,8 @@ typedef struct jit_compile {
   uint8_t induction_params;
   MIR_reg_t param_shadow[JIT_PARAM_HOIST_CAP];
   MIR_reg_t hoisted_upvalue_cell;
+  MIR_reg_t hoisted_upvalue_tdz;
+  jit_global_hoist_t global_hoist;
   int hoisted_upvalue;
   ant_t *js;
   sv_func_t *func;

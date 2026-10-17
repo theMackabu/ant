@@ -171,6 +171,12 @@ typedef struct {
   bool replaces_slow_path;
 } jit_stale_exit_t;
 
+typedef struct {
+  ant_object_t *global;
+  ant_shape_t *shape;
+  MIR_reg_t r_global, r_shape;
+} jit_global_hoist_t;
+
 static inline void mir_emit_realm_guard(
   MIR_context_t ctx, MIR_item_t fn, MIR_reg_t r_callee_func, MIR_reg_t r_tmp,
   ant_t *js, MIR_label_t other
@@ -268,6 +274,11 @@ typedef struct {
 void jit_load_externals_once(sv_jit_ctx_t *jc);
 void jit_release_gen_scratch(sv_jit_ctx_t *jc, MIR_context_t ctx);
 int jit_hot_loop_upvalue(const sv_func_t *func);
+bool jit_loop_reads_global(const sv_func_t *func);
+
+static inline bool jit_upvalue_may_tdz(const sv_func_t *func, uint16_t index) {
+  return func->upval_descs && index < func->upvalue_count && func->upval_descs[index].may_tdz;
+}
 bool vstack_alloc(jit_vstack_t *vs, int max);
 void vstack_free(jit_vstack_t *vs);
 void vstack_forget_facts(jit_vstack_t *vs);
@@ -581,7 +592,8 @@ bool mir_emit_get_global_ic_fastpath(
     ant_t *js, sv_func_t *func, int bc_off,
     MIR_reg_t r_js, MIR_reg_t dst,
     MIR_label_t slow, MIR_reg_t r_global_epoch,
-    uint8_t *ip, jit_stale_exit_t *stale_exit);
+    uint8_t *ip, jit_stale_exit_t *stale_exit,
+    const jit_global_hoist_t *hoist);
 void scan_osr_entries(sv_func_t *func, osr_entry_map_t *osr);
 int jit_back_edges(const sv_func_t *func, int (**out)[2]);
 bool func_writes_params(sv_func_t *func);

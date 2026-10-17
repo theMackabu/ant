@@ -1786,6 +1786,30 @@ bool ast_contains_direct_eval(const sv_ast_t *node) {
   return false;
 }
 
+bool ast_may_capture_bindings(const sv_ast_t *node) {
+  if (!node) return false;
+  switch (node->type) {
+    case N_FUNC: case N_ARROW: case N_CLASS: case N_METHOD: case N_STATIC_BLOCK: return true;
+    default: break;
+  }
+  if (
+    node->type == N_CALL && node->left && node->left->type == N_IDENT &&
+    node->left->len == 4 && memcmp(node->left->str, "eval", 4) == 0
+  ) return true;
+
+  const sv_ast_t *children[] = {
+    node->left, node->right, node->cond, node->body, node->catch_body,
+    node->finally_body, node->catch_param, node->init, node->update
+  };
+
+  for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++)
+    if (ast_may_capture_bindings(children[i])) return true;
+  for (int i = 0; i < node->args.count; i++)
+    if (ast_may_capture_bindings(node->args.items[i])) return true;
+
+  return false;
+}
+
 static bool ast_references_new_target_impl(const sv_ast_t *node, bool in_arrow) {
   if (!node) return false;
   if (node->type == N_NEW_TARGET) return true;

@@ -208,12 +208,16 @@ static ant_value_t builtin_error_stack_set(ant_params_t) {
 void js_error_define_stack(ant_t *js, ant_value_t obj, ant_value_t record, ant_value_t text) {
   js_reserve_slots(obj, 3);
   js_set_slot_wb(js, obj, SLOT_ERROR_STACK, record);
-  if (vtype(text) != kTypeUndefined || vtype(js_get_slot(obj, SLOT_ERROR_STACK_TEXT)) != kTypeUndefined)
-    js_set_slot_wb(js, obj, SLOT_ERROR_STACK_TEXT, text);
+  
+  if (
+    vtype(text) != kTypeUndefined || 
+    vtype(js_get_slot(obj, SLOT_ERROR_STACK_TEXT)) != kTypeUndefined
+  ) js_set_slot_wb(js, obj, SLOT_ERROR_STACK_TEXT, text);
+    
   js_define_accessor_desc(
     js, js_as_obj(obj), "stack", 5,
-    Ant_Function_Create(builtin_error_stack_get),
-    Ant_Function_Create(builtin_error_stack_set), JS_DESC_C
+    Ant_Function_CreateWithMeta(builtin_error_stack_get, "get stack", 0, 0),
+    Ant_Function_CreateWithMeta(builtin_error_stack_set, "set stack", 1, 0), JS_DESC_C
   );
 }
 

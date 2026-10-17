@@ -67,6 +67,18 @@ int jit_hot_loop_upvalue(const sv_func_t *func) {
   return best;
 }
 
+bool jit_loop_reads_global(const sv_func_t *func) {
+  if (!func || !func->code) return false;
+  int (*loops)[2] = NULL;
+  int loop_count = jit_back_edges(func, &loops);
+  bool found = false;
+  for (int i = 0; i < loop_count && !found; i++)
+    for (int off = loops[i][0]; off <= loops[i][1] && !found; off += sv_op_size[func->code[off]])
+      found = func->code[off] == OP_GET_GLOBAL || func->code[off] == OP_GET_GLOBAL_UNDEF;
+  free(loops);
+  return found;
+}
+
 static const uint8_t forward_arguments_prefix[] = {
   OP_SPECIAL_OBJ,  // arguments object (SV_SPECIAL_ARGUMENTS)
   OP_PUT_LOCAL8,   // -> local 0
@@ -190,6 +202,9 @@ jit_features_t jit_prescan_features(sv_func_t *func, int n_slots) {
     if ((flags & SV_OPF_JIT_NEEDS_IC_EPOCH) != 0) f.needs_ic_epoch = true;
     if (op == OP_THIS || op == OP_CLOSURE || op == OP_EVAL)
       f.needs_this = true;
+    if ((op == OP_GET_UPVAL || op == OP_PUT_UPVAL || op == OP_SET_UPVAL) &&
+        jit_upvalue_may_tdz(func, sv_get_u16(ip + 1)))
+      f.needs_bailout = true;
     if ((flags & SV_OPF_BUILDER_TARGET) != 0 && f.builder_target_slots) {
       uint16_t slot = sv_get_u16(ip + 1);
       if ((int)slot < n_slots) f.builder_target_slots[slot] = true;

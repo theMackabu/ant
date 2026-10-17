@@ -178,7 +178,9 @@ static void jit_sink_cold_blocks(jit_compile_t *c, MIR_insn_t body_tail) {
     // `bt body, cond; jmp exit; body:` is an inverted branch, not a slow path
     MIR_insn_t branch = DLIST_PREV(MIR_insn_t, jump);
     bool inverted = branch && MIR_branch_code_p(branch->code) && branch->ops[0].u.label == first;
-    if (!block_last || block_last == jump || inverted || !jit_insn_ends_flow(block_last)) {
+    bool bail_stub = block_last && block_last->code == MIR_JMP &&
+                     block_last->ops[0].u.label == c->bailout_ctx.spill;
+    if (!block_last || block_last == jump || (inverted && !bail_stub) || !jit_insn_ends_flow(block_last)) {
       jump = first;
       continue;
     }

@@ -1018,7 +1018,7 @@ static int local_to_frame_slot(sv_compiler_t *c, int local_idx) {
 
 static int resolve_local_slot(sv_compiler_t *c, const char *name, uint32_t len) {
   int local = resolve_local(c, name, len);
-  if (local == -1 || c->locals[local].depth == -1) return -1;
+  if (local == -1 || c->locals[local].depth == -1 || c->locals[local].is_tdz) return -1;
   int slot = local - c->param_locals;
   return (slot >= 0 && slot <= 255) ? slot : -1;
 }
@@ -1039,6 +1039,7 @@ static void merge_binding_meta(sv_binding_meta_t *dst, const sv_binding_meta_t *
   }
 
   if (!dst->exports && src->exports) dst->exports = src->exports;
+  dst->may_tdz |= src->may_tdz;
 }
 
 static void ensure_upvalue_capacity(sv_compiler_t *c) {
@@ -1074,6 +1075,7 @@ static int add_upvalue_binding(
   
   if (existing != -1) {
     merge_binding_meta(&c->upval_bindings[existing], binding);
+    if (binding && binding->may_tdz) c->upval_descs[existing].may_tdz = true;
     return existing;
   }
 
@@ -1084,6 +1086,7 @@ static int add_upvalue_binding(
     .index = index, 
     .is_local = is_local, 
     .is_const = is_const,
+    .may_tdz = binding && binding->may_tdz,
   };
   
   if (binding) c->upval_bindings[idx] = *binding;
@@ -1726,6 +1729,13 @@ static inline void emit_get_module_import_binding(sv_compiler_t *c) {
   emit(c, SV_SPECIAL_MODULE_IMPORT);
 }
 
+static void emit_slot_atom_op(sv_compiler_t *c, sv_op_t op, int local, const char *name, uint32_t len) {
+  int ai = add_atom(c, name, len);
+  emit_op(c, op);
+  emit_u16(c, (uint16_t)(local - c->param_locals));
+  emit_u32(c, (uint32_t)ai);
+}
+
 static void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len) {
   bool is_super = is_ident_str(name, len, "super", 5);
 
@@ -1750,10 +1760,7 @@ static void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len)
     } else {
       int slot = local - c->param_locals;
       if (c->locals[local].is_tdz) {
-        int ai = add_atom(c, name, len);
-        emit_op(c, OP_GET_LOCAL_CHK);
-        emit_u16(c, (uint16_t)slot);
-        emit_u32(c, (uint32_t)ai);
+        emit_slot_atom_op(c, OP_GET_LOCAL_CHK, local, name, len);
       } else if (slot <= 255) {
         emit_op(c, OP_GET_LOCAL8);
         emit(c, (uint8_t)slot);
@@ -1857,7 +1864,12 @@ static void emit_local_export_writes(sv_compiler_t *c, int local) {
 static void emit_set_var_plain(sv_compiler_t *c, const char *name, uint32_t len, bool keep) {
   int local = resolve_local(c, name, len);
   if (local != -1) {
+    bool tdz = c->locals[local].is_tdz && c->locals[local].depth != -1;
     if (c->locals[local].is_const) {
+      if (tdz) {
+        emit_slot_atom_op(c, OP_GET_LOCAL_CHK, local, name, len);
+        emit_op(c, OP_POP);
+      }
       emit_const_assign_error(c, name, len);
       return;
     }
@@ -1868,6 +1880,9 @@ static void emit_set_var_plain(sv_compiler_t *c, const char *name, uint32_t len,
     if (c->locals[local].depth == -1) {
       emit_op(c, keep ? OP_SET_ARG : OP_PUT_ARG);
       emit_u16(c, (uint16_t)local);
+    } else if (tdz) {
+      if (keep) emit_op(c, OP_DUP);
+      emit_slot_atom_op(c, OP_PUT_LOCAL_CHK, local, name, len);
     } else {
       int slot = local - c->param_locals;
       sv_op_t op = keep
@@ -2721,6 +2736,7 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
       }
       for (int j = lb; j < c->local_count; j++) {
         c->locals[j].is_tdz = true;
+        c->locals[j].binding.may_tdz = true;
         set_local_inferred_type(c, j, SV_TI_UNKNOWN);
         int slot = j - c->param_locals;
         emit_op(c, OP_SET_LOCAL_UNDEF);
@@ -2758,6 +2774,7 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
       c->locals[class_local].eval_flags |= SV_EVAL_BIND_LEXICAL;
       if (c->local_count > lb) {
         c->locals[c->local_count - 1].is_tdz = true;
+        c->locals[c->local_count - 1].binding.may_tdz = true;
         set_local_inferred_type(c, c->local_count - 1, SV_TI_UNKNOWN);
         int slot = (c->local_count - 1) - c->param_locals;
         emit_op(c, OP_SET_LOCAL_UNDEF);
@@ -6423,26 +6440,86 @@ static void for_collect_var_decl_slots(sv_compiler_t *c, sv_ast_t *init_var, int
   }
 }
 
+static void hoist_loop_head_lexicals(sv_compiler_t *c, sv_ast_t *var_node) {
+  bool is_const =
+    var_node->var_kind == SV_VAR_CONST ||
+    var_node->var_kind == SV_VAR_USING ||
+    var_node->var_kind == SV_VAR_AWAIT_USING;
+  int lb = c->local_count;
+  for (int i = 0; i < var_node->args.count; i++) {
+    sv_ast_t *decl = var_node->args.items[i];
+    if (!decl || decl->type != N_VARDECL || !decl->left) continue;
+    hoist_lexical_pattern(c, decl->left, is_const);
+  }
+  for (int i = lb; i < c->local_count; i++) {
+    c->locals[i].is_tdz = true;
+    c->locals[i].binding.may_tdz = true;
+    set_local_inferred_type(c, i, SV_TI_UNKNOWN);
+    emit_op(c, OP_SET_LOCAL_UNDEF);
+    emit_u16(c, (uint16_t)(i - c->param_locals));
+  }
+}
+
+static bool for_may_capture_bindings(sv_ast_t *node) {
+  return 
+    ast_may_capture_bindings(node->init)   || ast_may_capture_bindings(node->cond) ||
+    ast_may_capture_bindings(node->update) || ast_may_capture_bindings(node->body);
+}
+
+static int for_iteration_close_slot(sv_compiler_t *c, sv_ast_t *node) {
+  sv_var_kind_t kind = node->init->var_kind;
+  if ((kind != SV_VAR_LET && kind != SV_VAR_CONST) || !for_may_capture_bindings(node)) return -1;
+
+  int *iter_slots = NULL;
+  int iter_count = 0, iter_cap = 0;
+  for_collect_var_decl_slots(c, node->init, &iter_slots, &iter_count, &iter_cap);
+
+  int close_slot = -1;
+  for (int i = 0; i < iter_count; i++) {
+    int slot = local_to_frame_slot(c, iter_slots[i]);
+    if (close_slot < 0 || slot < close_slot) close_slot = slot;
+  }
+  free(iter_slots);
+  return close_slot;
+}
+
+static int compile_for_init(sv_compiler_t *c, sv_ast_t *node) {
+  if (!node->init) return -1;
+  if (node->init->type != N_VAR) {
+    compile_expr(c, node->init);
+    emit_op(c, OP_POP);
+    return -1;
+  }
+  if (node->init->var_kind != SV_VAR_VAR) hoist_loop_head_lexicals(c, node->init);
+  compile_var_decl(c, node->init);
+  return for_iteration_close_slot(c, node);
+}
+
+static void compile_for_update(sv_compiler_t *c, sv_ast_t *upd) {
+  if (!upd) return;
+  int slot = -1;
+  bool local_step =
+    upd->type == N_UPDATE && upd->right && upd->right->type == N_IDENT &&
+    (slot = resolve_local_slot(c, upd->right->str, upd->right->len)) >= 0 &&
+    !c->locals[c->param_locals + slot].captured &&
+    !local_with_shadowed(c, upd->right->str, upd->right->len);
+  if (!local_step) {
+    compile_expr(c, upd);
+    emit_op(c, OP_POP);
+    return;
+  }
+  emit_op(c, upd->op == TOK_POSTINC ? OP_INC_LOCAL : OP_DEC_LOCAL);
+  emit(c, (uint8_t)slot);
+  set_local_inferred_type(c, c->param_locals + slot, SV_TI_UNKNOWN);
+}
+
 void compile_for(sv_compiler_t *c, sv_ast_t *node) {
   emit_set_completion_undefined(c);
   check_for_head_declarations(c, node->init, node->body);
   begin_scope(c);
 
-  int *iter_slots = NULL;
-  int iter_count = 0;
-  int iter_cap = 0;
-
-  if (node->init) {
-    if (node->init->type == N_VAR) {
-      sv_var_kind_t kind = node->init->var_kind;
-      compile_var_decl(c, node->init);
-      if (kind == SV_VAR_LET || kind == SV_VAR_CONST)
-        for_collect_var_decl_slots(c, node->init, &iter_slots, &iter_count, &iter_cap);
-    } else {
-      compile_expr(c, node->init);
-      emit_op(c, OP_POP);
-    }
-  }
+  int close_slot = compile_for_init(c, node);
+  if (close_slot >= 0) emit_slot_op(c, OP_CLOSE_UPVAL, (uint16_t)close_slot);
 
   int loop_start = c->code_len;
   push_loop(c, loop_start, NULL, 0, false);
@@ -6453,73 +6530,17 @@ void compile_for(sv_compiler_t *c, sv_ast_t *node) {
     exit_jump = emit_jump(c, OP_JMP_FALSE);
   }
 
-  int iter_inner_start = -1;
-  if (iter_count > 0) {
-  begin_scope(c);
-  iter_inner_start = c->local_count;
-  for (int i = 0; i < iter_count; i++) {
-    int outer_idx = iter_slots[i];
-    sv_local_t outer = c->locals[outer_idx];
-    emit_get_local(c, outer_idx);
-    int inner_idx = add_local(c, outer.name, outer.name_len, outer.is_const, c->scope_depth);
-    c->locals[inner_idx].eval_flags = outer.eval_flags;
-    emit_put_local(c, inner_idx);
-  }}
-
   compile_stmt(c, node->body);
   sv_loop_t *loop = &c->loops[c->loop_count - 1];
   for (int i = 0; i < loop->continues.count; i++)
     patch_jump(c, loop->continues.offsets[i]);
 
-  int break_close_slot = -1;
-  if (iter_count > 0) {
-    for (int i = 0; i < iter_count; i++) {
-      int inner_idx = iter_inner_start + i;
-      if (!c->locals[inner_idx].captured) continue;
-      int slot = local_to_frame_slot(c, inner_idx);
-      if (break_close_slot < 0 || slot < break_close_slot)
-        break_close_slot = slot;
-    }
-
-    for (int i = 0; i < iter_count; i++) {
-      emit_get_local(c, iter_inner_start + i);
-      emit_put_local(c, iter_slots[i]);
-    }
-    end_scope(c);
-  }
-
-  if (node->update) {
-    sv_ast_t *upd = node->update;
-    int slot;
-    if (upd->type == N_UPDATE && upd->right && upd->right->type == N_IDENT &&
-        (slot = resolve_local_slot(c, upd->right->str, upd->right->len)) >= 0 &&
-        !c->locals[c->param_locals + slot].captured &&
-        !local_with_shadowed(c, upd->right->str, upd->right->len)) {
-      emit_op(c, upd->op == TOK_POSTINC ? OP_INC_LOCAL : OP_DEC_LOCAL);
-      emit(c, (uint8_t)slot);
-      set_local_inferred_type(c, c->param_locals + slot, SV_TI_UNKNOWN);
-    } else {
-      compile_expr(c, upd);
-      emit_op(c, OP_POP);
-    }
-  }
+  if (close_slot >= 0) emit_slot_op(c, OP_CLOSE_UPVAL, (uint16_t)close_slot);
+  compile_for_update(c, node->update);
 
   emit_loop(c, loop_start);
   if (exit_jump >= 0) patch_jump(c, exit_jump);
-
-  int skip_break_cleanup = -1;
-  if (break_close_slot >= 0)
-    skip_break_cleanup = emit_jump(c, OP_JMP);
-
   pop_loop(c);
-
-  if (break_close_slot >= 0) {
-    emit_op(c, OP_CLOSE_UPVAL);
-    emit_u16(c, (uint16_t)break_close_slot);
-    patch_jump(c, skip_break_cleanup);
-  }
-
-  free(iter_slots);
   end_scope(c);
 }
 
@@ -6612,23 +6633,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
 
   if (node->left && node->left->type == N_VAR &&
       node->left->var_kind != SV_VAR_VAR) {
-    bool is_const = 
-      (node->left->var_kind == SV_VAR_CONST ||
-       node->left->var_kind == SV_VAR_USING ||
-       node->left->var_kind == SV_VAR_AWAIT_USING);
-    int lb = c->local_count;
-    for (int i = 0; i < node->left->args.count; i++) {
-      sv_ast_t *decl = node->left->args.items[i];
-      if (!decl || decl->type != N_VARDECL || !decl->left) continue;
-      hoist_lexical_pattern(c, decl->left, is_const);
-    }
-    for (int i = lb; i < c->local_count; i++) {
-      c->locals[i].is_tdz = true;
-      set_local_inferred_type(c, i, SV_TI_UNKNOWN);
-      int slot = i - c->param_locals;
-      emit_op(c, OP_SET_LOCAL_UNDEF);
-      emit_u16(c, (uint16_t)slot);
-    }
+    hoist_loop_head_lexicals(c, node->left);
     for_collect_var_decl_slots(c, node->left, &iter_slots, &iter_count, &iter_cap);
   }
 
@@ -7840,6 +7845,7 @@ sv_func_t *compile_function_body(
       if (pname && plen) {
         int loc = add_local(&comp, pname, plen, false, 0);
         comp.locals[loc].is_tdz = true;
+        comp.locals[loc].binding.may_tdz = true;
         set_local_inferred_type(&comp, loc, SV_TI_UNKNOWN);
         int slot = loc - comp.param_locals;
         emit_op(&comp, OP_SET_LOCAL_UNDEF);

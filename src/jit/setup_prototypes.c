@@ -1,4 +1,5 @@
 #include "compile.h"
+#include "../silver/ops/globals.h"
 
 void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->self_proto = MIR_new_proto(c->ctx, "jit_proto",
@@ -452,6 +453,15 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                        MIR_T_P, "slot");
 
   if (c->cold_tier) c->cold_ns_item = MIR_new_bss(c->ctx, "cold_ns", 3 * sizeof(int64_t));
+
+  ant_object_t *global = sv_global_obj_ptr(c->js->global);
+  if (c->ctx == c->jc->ctx_hot && global && !global->flags.is_exotic && global->shape &&
+      jit_loop_reads_global(c->func)) {
+    uint64_t words[2] = { (uint64_t)(uintptr_t)global, (uint64_t)(uintptr_t)global->shape };
+    c->global_hoist_item = MIR_new_data(c->ctx, "global_hoist", MIR_T_U64, 2, words);
+    c->global_hoist.global = global;
+    c->global_hoist.shape = global->shape;
+  }
 
   MIR_type_t tier_ret = MIR_T_I64;
   c->tier_up_proto = MIR_new_proto(c->ctx, "tier_up_proto",

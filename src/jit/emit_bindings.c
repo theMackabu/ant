@@ -23,6 +23,36 @@ static MIR_reg_t jit_upvalue_cell(jit_compile_t *c, uint16_t index, int site) {
   return cell;
 }
 
+static void jit_emit_hoisted_upval_tdz_guard(jit_compile_t *c, MIR_reg_t value, int pre_op_sp) {
+  MIR_label_t check = MIR_new_label(c->ctx), tdz = MIR_new_label(c->ctx), ready = MIR_new_label(c->ctx);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BNE,
+      MIR_new_label_op(c->ctx, check), MIR_new_reg_op(c->ctx, c->hoisted_upvalue_tdz), MIR_new_int_op(c->ctx, 0)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, ready)));
+  MIR_append_insn(c->ctx, c->jit_func, check);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ,
+      MIR_new_label_op(c->ctx, tdz), MIR_new_reg_op(c->ctx, value), MIR_new_uint_op(c->ctx, SV_TDZ)));
+  mir_load_imm(c->ctx, c->jit_func, c->hoisted_upvalue_tdz, 0);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, ready)));
+  MIR_append_insn(c->ctx, c->jit_func, tdz);
+  mir_emit_bailout_jump_typed(c->ctx, c->jit_func, c->bc_off, pre_op_sp, &c->bailout_ctx,
+                              -1, false, -1, false);
+  MIR_append_insn(c->ctx, c->jit_func, ready);
+}
+
+static void jit_emit_upval_tdz_guard(jit_compile_t *c, uint16_t index, MIR_reg_t r_loc, int pre_op_sp) {
+  if (!jit_upvalue_may_tdz(c->func, index)) return;
+  MIR_label_t tdz = MIR_new_label(c->ctx), ready = MIR_new_label(c->ctx);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+      MIR_new_reg_op(c->ctx, c->r_bool), MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, r_loc, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ,
+      MIR_new_label_op(c->ctx, tdz), MIR_new_reg_op(c->ctx, c->r_bool), MIR_new_uint_op(c->ctx, SV_TDZ)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, ready)));
+  MIR_append_insn(c->ctx, c->jit_func, tdz);
+  mir_emit_bailout_jump_typed(c->ctx, c->jit_func, c->bc_off, pre_op_sp, &c->bailout_ctx,
+                              -1, false, -1, false);
+  MIR_append_insn(c->ctx, c->jit_func, ready);
+}
+
 void jit_emit_bindings(jit_compile_t *c) {
   switch (c->op) {
     case OP_GET_UPVAL: {
@@ -49,6 +79,10 @@ void jit_emit_bindings(jit_compile_t *c) {
                       MIR_new_insn(c->ctx, MIR_MOV,
                                    MIR_new_reg_op(c->ctx, dst),
                                    MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, r_loc, 0, 1)));
+      if (r_uv == c->hoisted_upvalue_cell && c->hoisted_upvalue_tdz)
+        jit_emit_hoisted_upval_tdz_guard(c, dst, pre_op_sp);
+      else
+        jit_emit_upval_tdz_guard(c, idx, r_loc, pre_op_sp);
       if (guarded_self_upval) {
         c->vs.known_func[c->vs.sp - 1] = c->func;
         mir_emit_self_binding_guard(
@@ -72,6 +106,7 @@ void jit_emit_bindings(jit_compile_t *c) {
       MIR_reg_t r_uv = jit_upvalue_cell(c, idx, un);
       MIR_reg_t r_loc = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_loc);
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
+      int pre_op_sp = c->vs.sp;
       MIR_reg_t src = vstack_pop(&c->vs);
 
       MIR_append_insn(c->ctx, c->jit_func,
@@ -80,6 +115,7 @@ void jit_emit_bindings(jit_compile_t *c) {
                                    MIR_new_mem_op(c->ctx, MIR_T_P,
                                                   (MIR_disp_t)offsetof(sv_upvalue_t, location),
                                                   r_uv, 0, 1)));
+      jit_emit_upval_tdz_guard(c, idx, r_loc, pre_op_sp);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_MOV,
                                    MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, r_loc, 0, 1),
@@ -99,6 +135,7 @@ void jit_emit_bindings(jit_compile_t *c) {
       MIR_reg_t r_uv = jit_upvalue_cell(c, idx, un);
       MIR_reg_t r_loc = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_loc);
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
+      int pre_op_sp = c->vs.sp;
       MIR_reg_t src = vstack_top(&c->vs);
 
       MIR_append_insn(c->ctx, c->jit_func,
@@ -107,6 +144,7 @@ void jit_emit_bindings(jit_compile_t *c) {
                                    MIR_new_mem_op(c->ctx, MIR_T_P,
                                                   (MIR_disp_t)offsetof(sv_upvalue_t, location),
                                                   r_uv, 0, 1)));
+      jit_emit_upval_tdz_guard(c, idx, r_loc, pre_op_sp);
       MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_insn(c->ctx, MIR_MOV,
                                    MIR_new_mem_op(c->ctx, MIR_JSVAL, 0, r_loc, 0, 1),
@@ -164,7 +202,8 @@ void jit_emit_bindings(jit_compile_t *c) {
       bool gg_fast = c->r_ic_epoch_val != 0 &&
                      mir_emit_get_global_ic_fastpath(
                          c->ctx, c->jit_func, c->js, c->func, c->bc_off,
-                         c->r_js, dst, gg_slow, c->r_ic_epoch_val, c->ip, stale_exit);
+                         c->r_js, dst, gg_slow, c->r_ic_epoch_val, c->ip, stale_exit,
+                         c->global_hoist.r_global ? &c->global_hoist : NULL);
       jit_note_stale_exit(c, stale_exit, pre_op_sp);
       if (!gg_fast || !stale_exit || !stale_exit->replaces_slow_path) {
         if (gg_fast) {

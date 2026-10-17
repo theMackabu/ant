@@ -171,6 +171,7 @@ bool ast_references_arguments(const sv_ast_t *node);
 bool ast_is_arguments_length(const sv_ast_t *node);
 bool ast_references_new_target(const sv_ast_t *node);
 bool ast_contains_direct_eval(const sv_ast_t *node);
+bool ast_may_capture_bindings(const sv_ast_t *node);
 bool ast_contains_lexical_new_target(const sv_ast_t *node);
 bool ast_contains_direct_suspend(const sv_ast_t *node, const sv_ast_t **out_offender);
 bool ast_contains_own_yield(const sv_ast_t *node, const sv_ast_t **out_offender);

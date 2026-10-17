@@ -121,6 +121,10 @@ static inline void sv_init_closure_function_object(
   }
 }
 
+static inline ant_value_t sv_upval_tdz_error(ant_t *js) {
+  return js_mkerr_typed(js, JS_ERR_REFERENCE, "Cannot access variable before initialization");
+}
+
 static inline ant_value_t sv_op_get_upval(
   sv_vm_t *vm, sv_frame_t *frame,
   ant_t *js, uint8_t *ip
@@ -128,30 +132,38 @@ static inline ant_value_t sv_op_get_upval(
   uint16_t idx = sv_get_u16(ip + 1);
   sv_upvalue_t *uv = frame->upvalues[idx];
   ant_value_t val = *uv->location;
-  if (val == SV_TDZ) return js_mkerr_typed(js, 
-    JS_ERR_REFERENCE, 
-    "Cannot access variable before initialization"
-  );
+  
+  if (val == SV_TDZ) return sv_upval_tdz_error(js);
+  
   if (vtype(val) == kTypeString && str_is_heap_builder(val)) {
     val = str_materialize(js, val);
     if (is_err(val)) return val;
   }
+  
   vm->stack[vm->sp++] = val;
   return js_mkundef();
 }
 
-static inline void sv_op_put_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) {
+static inline ant_value_t sv_op_put_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) {
   uint16_t idx = sv_get_u16(ip + 1);
   sv_upvalue_t *uv = frame->upvalues[idx];
+  
+  if (__builtin_expect(*uv->location == SV_TDZ, 0)) return sv_upval_tdz_error(vm->js);
   ant_value_t val = vm->stack[--vm->sp];
   sv_upvalue_store(vm->js, uv, val);
+  
+  return js_mkundef();
 }
 
-static inline void sv_op_set_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) {
+static inline ant_value_t sv_op_set_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) {
   uint16_t idx = sv_get_u16(ip + 1);
   sv_upvalue_t *uv = frame->upvalues[idx];
+  
+  if (__builtin_expect(*uv->location == SV_TDZ, 0)) return sv_upval_tdz_error(vm->js);
   ant_value_t val = vm->stack[vm->sp - 1];
   sv_upvalue_store(vm->js, uv, val);
+  
+  return js_mkundef();
 }
 
 static inline ant_value_t sv_op_close_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) {

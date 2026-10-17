@@ -149,10 +149,16 @@ static_assert(
 #endif
 
 typedef struct {
-  uint16_t  index;
-  bool      is_local;
-  bool      is_const;
+  uint16_t index;
+  bool is_local: 1;
+  bool is_const: 1;
+  bool may_tdz: 1;
 } sv_upval_desc_t;
+
+static_assert(
+  sizeof(sv_upval_desc_t) == 4, 
+  "sv_upval_desc_t must stay 4 bytes"
+);
 
 typedef struct {
   uint32_t bc_offset;

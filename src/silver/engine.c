@@ -1683,10 +1683,10 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_SET_ARG:  { sv_op_set_arg(vm, js, frame, ip);            NEXT(OP_SET_ARG); }
   L_REST:     { sv_op_rest(vm, frame, js, ip);               NEXT(OP_REST); }
 
-  L_GET_UPVAL:    { VM_CHECK(sv_op_get_upval(vm, frame, js, ip));  NEXT(OP_GET_UPVAL); }
-  L_PUT_UPVAL:    { sv_op_put_upval(vm, frame, ip);                NEXT(OP_PUT_UPVAL); }
-  L_SET_UPVAL:    { sv_op_set_upval(vm, frame, ip);                NEXT(OP_SET_UPVAL); }
-  L_CLOSE_UPVAL:  { VM_CHECK(sv_op_close_upval(vm, frame, ip));    NEXT(OP_CLOSE_UPVAL); }
+  L_GET_UPVAL:    { VM_CHECK(sv_op_get_upval(vm, frame, js, ip)); NEXT(OP_GET_UPVAL); }
+  L_PUT_UPVAL:    { VM_CHECK(sv_op_put_upval(vm, frame, ip));     NEXT(OP_PUT_UPVAL); }
+  L_SET_UPVAL:    { VM_CHECK(sv_op_set_upval(vm, frame, ip));     NEXT(OP_SET_UPVAL); }
+  L_CLOSE_UPVAL:  { VM_CHECK(sv_op_close_upval(vm, frame, ip));   NEXT(OP_CLOSE_UPVAL); }
 
   L_GET_GLOBAL:        { VM_CHECK(sv_op_get_global(vm, js, func, ip));         NEXT(OP_GET_GLOBAL); }
   L_GET_GLOBAL_UNDEF:  { VM_CHECK(sv_op_get_global_undef(vm, js, func, ip));   NEXT(OP_GET_GLOBAL_UNDEF); }

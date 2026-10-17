@@ -41,6 +41,7 @@ typedef struct {
   const char *import_name;
   uint32_t import_name_len;
   sv_export_name_t *exports;
+  bool may_tdz;
 } sv_binding_meta_t;
 
 typedef struct {

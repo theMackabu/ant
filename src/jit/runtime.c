@@ -330,6 +330,10 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
     sv_jit_tier_t tier = sv_jit_promote_pending(func) ? SV_JIT_TIER_HOT
      : func->code_len > JIT_OSR_COLD_COMPILE_MIN_BYTES 
      ? SV_JIT_TIER_COLD : SV_JIT_TIER_AUTO;
+
+    if (func->local_type_feedback) for (int i = 0; i < func->max_locals; i++)
+      if (!func->local_type_feedback[i] && vtype(frame->lp[i]) == kTypeNumber)
+        sv_tfb_record_local(func, i, frame->lp[i]);
     
     jit = sv_jit_compile_tier(js, func, closure, tier);
     
