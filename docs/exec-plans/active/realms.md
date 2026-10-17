@@ -78,10 +78,12 @@ init, never from the global's current bindings.
 Protector flags are per realm. A mutation can reach another realm's
 intrinsic (objects pass between contexts), so once a second realm exists
 invalidation also checks every inactive realm's saved intrinsics and flags.
-The check is written once (`ANT_DEFINE_PROTECTOR_INVALIDATE`) and
-instantiated for the isolate and for `ant_realm_t`, which name their fields
-alike. Arrays and promises can belong to any realm, so a write on one
-invalidates in every realm.
+Objects that hold a protected property carry the `protector_holder` flag, so
+the inline check is a flag test before any key compare. The out-of-line check
+(`src/protectors.c`) runs against a `protector_view_t` built from the isolate
+or from an inactive `ant_realm_t`, which name their fields alike. Arrays and
+promises can belong to any realm, so a write on one invalidates in every
+realm.
 
 ### Realm creation
 
@@ -140,7 +142,7 @@ a compiled function belongs to one realm.
 Phase 1 done:
 
 - `include/realm.h`, `src/realm.c`: `ant_realm_t`, the per-realm field lists
-  (`ANT_REALM_FIELDS`, `ANT_REALM_SYM_FIELDS`, and `ANT_REALM_BUILTIN` /
+  (`include/realm/fields.h`, `include/realm/sym_fields.h`, and `ANT_REALM_BUILTIN` /
   `ANT_REALM_MUTABLE_ROOT` entries in `isolate_values.h`), save/load on
   `ant_realm_enter`, GC marking of inactive realms from `gc_mark_roots`
   (minor and major).
@@ -245,8 +247,7 @@ Validation: `tests/test_realm_builtins.cjs`, `tests/test_realm_intrinsics.cjs`
 (also under `ANT_GC_STRESS`), harness, spec suite. Against master: bench-v8
 -0.25% instructions and -0.9% cycles, ytdlp flat.
 
-Known gaps (the ones below the first were closed after phase 4, see
-"Phase 4 gaps closed"):
+Known gaps:
 
 - Lazy prototypes of other object kinds are unchanged.
 - The `vm.Module` family (behind `--experimental-vm-modules` in Node) is not
@@ -256,8 +257,8 @@ Phase 3 done:
 
 - `ant_property_mutation_invalidate` and
   `ant_symbol_property_mutation_invalidate` check the active realm inline and,
-  with several realms, every inactive one (`ant_realm_protectors_invalidate`,
-  `ant_realm_symbol_protectors_invalidate`). Writes while a realm initializes
+  with several realms, every inactive one (`ant_protectors_invalidate`,
+  `ant_symbol_protectors_invalidate`). Writes while a realm initializes
   (`ant_realm_t.initializing`) touch only its new objects and skip the other
   realms; before this, creating a realm turned off the main realm's array
   species and iteration fast paths, because `Array.prototype` is an array.
@@ -324,8 +325,8 @@ Phase 4 done:
 
 Phase 4 gaps closed:
 
-- `with` scopes are compile-time scopes: the object lives in a hidden local
-  (`"\x01with<scope>"`), and every identifier a `with` may shadow compiles to
+- `with` scopes are compile-time scopes: the object lives in an unnamed
+  hidden local, and every identifier a `with` may shadow compiles to
   `OP_WITH_TRY_GET/CALL/PUT/DEL` per enclosing `with` (innermost first, found
   through upvalues across functions), each jumping past the plain access
   when the object has the binding and `@@unscopables` allows it. Closures
@@ -383,9 +384,12 @@ Phase 4 gaps closed:
   `CALL`/`CALL_METHOD` path with `frame->super_val` set from the closure,
   instead of a C call through `sv_vm_call`. Against HEAD: `--jitless`
   method loops 16-20% fewer cycles, the JIT `c_method` loop 11%.
-- Remaining: splay runs 0.5% more instructions in GC, added gradually across
-  the phases (none of the GC code paths changed enough to explain it alone);
-  bench-v8 overall is flat.
+- Splay after the merge into master (no-PGO builds of `c4c96d72` and
+  `28895982`, instructions retired on `splay-long.js`, same checksum): the
+  realms commit runs 0.80% fewer instructions in total, 0.46% fewer with GC
+  disabled, and about 2.0% fewer in GC (total minus GC-disabled run: 7,790 M
+  against 7,947 M). The 0.5% GC increase measured on the branch before the
+  merge does not appear against the merged master. bench-v8 overall is flat.
 
 Review fixes after the merge into master:
 
@@ -405,6 +409,44 @@ Review fixes after the merge into master:
   (interned atom, data properties, no `length`), the unscopables cache, and
   the value read from the same lookup. Exotic objects, proxies, accessors and
   `length` take the generic `in`/get path. Stores use `setprop_interned`.
+
+Second review round:
+
+- Termination is not converted into a rejection: async function starts,
+  the Promise executor and async generator `next`/`return`/`throw` return
+  the termination error while `js->terminating` is set
+  (`js_terminating_error`, `include/interrupt.h`). `sv_vm_throw` treats
+  every frame as handler-free while terminating instead of returning early.
+- Runs with interrupt options form a stack (`js->interrupt_run`); ending a
+  fired run keeps `interrupt_pending` and `terminating` set when an outer
+  run has fired.
+- The `importModuleDynamically` handler and referrer live on the code unit
+  (16 bytes less per function, no tree walk). REPL-mode compiles, which
+  include vm Scripts, now get a code unit, so their code is collectable. A
+  Script's referrer is held through an internal WeakRef
+  (`js_weakref_create`), so the realm's script cache no longer keeps the
+  Script alive.
+- A Script records refcounted realm tokens (`ant_realm_token_t`) for the
+  realms it compiled into; the finalizer removes only those cache entries,
+  and a freed realm clears its token.
+- Realms with queued or processing microtasks are major-GC roots. The
+  `ant:internal/realm` handle holds an anchor builtin instead of a raw
+  pointer.
+- `compileFunction` shifts source positions back by the wrapper lines, so
+  error lines match Node with and without `contextExtensions`.
+- `with` emission goes through `emit_with_tries` and `sv_patch_list_t`;
+  hidden locals are unnamed (`add_hidden_local`). Inner functions capture
+  them by owner and slot (`resolve_upvalue_to`) instead of by name, as
+  `super`, `arguments` and `new.target` now do too, so no `\x01` names are
+  formatted or interned.
+- Realm reach during marking is gated by `js->gc.realm_reach`
+  (`!minor && ant_realm_multiple`), computed per collection. Splay
+  instructions did not move (+0.05%, within noise), so it is not the source
+  of the splay +0.5%.
+- Builtin libraries imported through ESM get a cached namespace
+  (`ant_library_namespace`): named exports plus `default` =
+  `module.exports`, tagged `Module`, as in Node. `require` and
+  `process.getBuiltinModule` still return the exports object.
 
 ## Risks
 

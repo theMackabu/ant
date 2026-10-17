@@ -24,10 +24,8 @@ typedef struct {
   bool prevent_cancel;
 } pipe_state_t;
 
-enum {
-  PIPE_STATE_NATIVE_TAG = 0x50495045u, // PIPE
-  TEE_STATE_NATIVE_TAG = 0x54454553u   // TEES
-};
+static constexpr uint32_t PIPE_STATE_NATIVE_TAG = Ant_NativeTag("PIPE");
+static constexpr uint32_t TEE_STATE_NATIVE_TAG = Ant_NativeTag("TEES");
 
 static void pipes_chain_promise(
   ant_t *js, ant_value_t value,

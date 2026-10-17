@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "list.h"
 #include "realm.h"
 #include "cfunc.h"
 #include "internal.h"
@@ -159,7 +160,27 @@ void ant_realm_reach_slow(ant_t *js, ant_realm_t *realm, void (*mark)(ant_t *js,
   realm_mark_one(js, realm, mark);
 }
 
+ant_realm_token_t *ant_realm_token_retain(ant_realm_t *realm) {
+  if (!realm->token) {
+    realm->token = calloc(1, sizeof(*realm->token));
+    if (!realm->token) return NULL;
+    *realm->token = (ant_realm_token_t){ .realm = realm, .refs = 1 };
+  }
+  
+  realm->token->refs++;
+  return realm->token;
+}
+
+void ant_realm_token_release(ant_realm_token_t *token) {
+  if (token && --token->refs == 0) free(token);
+}
+
 static void realm_free(ant_t *js, ant_realm_t *realm) {
+  if (realm->token) {
+    realm->token->realm = NULL;
+    ant_realm_token_release(realm->token);
+  }
+  
   if (realm != js->realm) {
     free(realm->global_lexicals);
     free(realm->global_lexical_index);

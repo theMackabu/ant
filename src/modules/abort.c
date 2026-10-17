@@ -40,10 +40,8 @@ static const UT_icd abort_value_icd = {
   NULL, NULL, NULL 
 };
 
-enum {
-  ABORT_SIGNAL_NATIVE_TAG = 0x41534947u,     // ASIG
-  ABORT_CONTROLLER_NATIVE_TAG = 0x41435452u, // ACTR
-};
+static constexpr uint32_t ABORT_SIGNAL_NATIVE_TAG = Ant_NativeTag("ASIG");
+static constexpr uint32_t ABORT_CONTROLLER_NATIVE_TAG = Ant_NativeTag("ACTR");
 
 static inline abort_signal_data_t *get_signal_data(ant_value_t obj) {
   return is_object_type(obj) ? (abort_signal_data_t *)js_get_native(obj, ABORT_SIGNAL_NATIVE_TAG) : NULL;

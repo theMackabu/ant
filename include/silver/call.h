@@ -3,6 +3,7 @@
 
 #include "silver/engine.h"
 #include "handles.h"
+#include "interrupt.h"
 #include "silver/feedback.h"
 #include "modules/timer.h"
 #include "../../src/silver/ops/async.h"
@@ -375,6 +376,8 @@ static inline ant_value_t sv_callback_call(
   
   if (cb->stack_overflow) 
     return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+  
+  if (js_interrupt_pending(js)) return js_interrupt_raise(js);
 
   sv_call_ctx_t ctx = {
     .this_val = cb->this_val,

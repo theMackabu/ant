@@ -34,6 +34,7 @@ ant_value_t js_esm_import_sync_from_require(ant_t *js, ant_value_t specifier, co
 ant_value_t js_esm_resolve_specifier_require(ant_t *js, ant_value_t specifier, const char *base_path);
 
 char *esm_make_absolute_path(const char *path);
+ant_value_t esm_node_module_paths(ant_t *js, const char *directory);
 char *js_esm_resolve_path_for_watch(ant_t *js, const char *specifier, const char *base_path, bool prefer_require);
 
 ant_value_t js_esm_import_sync_cstr_from(ant_t *js, const char *specifier, size_t spec_len, const char *base_path);

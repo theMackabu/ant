@@ -2557,7 +2557,7 @@ static inline ant_value_t array_result_set(ant_t *js, ant_value_t result, bool f
 }
 
 // TODO: move into arguments.c
-enum { ANT_ARGUMENTS_NATIVE_TAG = 0x41524753u }; // ARGS
+static constexpr uint32_t ANT_ARGUMENTS_NATIVE_TAG = Ant_NativeTag("ARGS");
 
 typedef struct {
   sv_frame_t *direct_frame;

@@ -2,6 +2,7 @@
 #define STREAMS_READABLE_H
 
 #include "types.h"
+#include "native_tag.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -31,10 +32,8 @@ typedef struct {
   bool disturbed;
 } rs_stream_t;
 
-enum {
-  RS_STREAM_NATIVE_TAG = 0x52535452u,    // RSTR
-  RS_CONTROLLER_NATIVE_TAG = 0x52534354u // RSCT
-};
+static constexpr uint32_t RS_STREAM_NATIVE_TAG = Ant_NativeTag("RSTR");
+static constexpr uint32_t RS_CONTROLLER_NATIVE_TAG = Ant_NativeTag("RSCT");
 
 void init_readable_stream_module(ant_t *js);
 void gc_mark_readable_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));

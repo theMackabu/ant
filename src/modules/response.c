@@ -26,7 +26,7 @@
 #include "streams/pipes.h"
 #include "streams/readable.h"
 
-enum { RESPONSE_NATIVE_TAG = 0x52455350u }; // RESP
+static constexpr uint32_t RESPONSE_NATIVE_TAG = Ant_NativeTag("RESP");
 static const char RESPONSE_TEXT_CONTENT_TYPE[] = "text/plain;charset=UTF-8";
 
 response_data_t *response_get_data(ant_value_t obj) {

@@ -42,11 +42,9 @@
 #include "modules/domexception.h"
 #include "modules/websocket.h"
 
-enum {
-  SERVER_REQUEST_NATIVE_TAG = 0x53524551u, // SREQ
-  SERVER_RUNTIME_NATIVE_TAG = 0x5352544du, // SRTM
-  SERVER_SSE_NATIVE_TAG     = 0x53534552u  // SSER
-};
+static constexpr uint32_t SERVER_REQUEST_NATIVE_TAG = Ant_NativeTag("SREQ");
+static constexpr uint32_t SERVER_RUNTIME_NATIVE_TAG = Ant_NativeTag("SRTM");
+static constexpr uint32_t SERVER_SSE_NATIVE_TAG = Ant_NativeTag("SSER");
 
 typedef struct stop_waiter_s {
   ant_value_t promise;

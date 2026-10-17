@@ -13,7 +13,7 @@
 #include "modules/textcodec.h"
 #include "modules/buffer.h"
 
-enum { TEXT_DECODER_NATIVE_TAG = 0x54444543u }; // TDEC
+static constexpr uint32_t TEXT_DECODER_NATIVE_TAG = Ant_NativeTag("TDEC");
 
 td_state_t *td_state_new(td_encoding_t enc, bool fatal, bool ignore_bom) {
   td_state_t *st = calloc(1, sizeof(td_state_t));

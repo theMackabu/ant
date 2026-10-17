@@ -21,7 +21,7 @@
 #include "modules/iterator.h"
 #include "url/url_internal.h"
 
-enum { URL_NATIVE_TAG = 0x55524c53u }; // URLS
+static constexpr uint32_t URL_NATIVE_TAG = Ant_NativeTag("URLS");
 
 enum {
   USP_ITER_ENTRIES = 0,

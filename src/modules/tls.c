@@ -82,11 +82,8 @@ struct ant_tls_socket_s {
   bool read_drain_scheduled;
 };
 
-enum {
-  TLS_CONTEXT_NATIVE_TAG = 0x544c5343u, // TLSC
-  TLS_SOCKET_NATIVE_TAG = 0x544c534bu,  // TLSK
-};
-
+static constexpr uint32_t TLS_CONTEXT_NATIVE_TAG = Ant_NativeTag("TLSC");
+static constexpr uint32_t TLS_SOCKET_NATIVE_TAG = Ant_NativeTag("TLSK");
 
 static void tls_context_dispose(ant_tls_context_wrap_t *wrap) {
   if (!wrap) return;

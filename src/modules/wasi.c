@@ -17,10 +17,8 @@
 #define WASM_MAX_PARAMS 32
 #define WASM_MAX_ARGS   256
 
-enum {
-  WASI_INSTANCE_TAG = 0x57415349u, // WASI
-  WASI_FUNC_TAG     = 0x57415346u, // WASF
-};
+static constexpr uint32_t WASI_INSTANCE_TAG = Ant_NativeTag("WASI");
+static constexpr uint32_t WASI_FUNC_TAG = Ant_NativeTag("WASF");
 
 typedef struct {
   uint8_t *binary;

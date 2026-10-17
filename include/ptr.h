@@ -4,10 +4,7 @@
 #include "types.h"
 #include "internal.h" // IWYU pragma: keep
 #include "hash.h"
-
-#define Ant_NativeTag(s) ((uint32_t)(                                    \
-  (uint32_t)(uint8_t)(s)[0] << 24 | (uint32_t)(uint8_t)(s)[1] << 16 |    \
-  (uint32_t)(uint8_t)(s)[2] << 8  | (uint32_t)(uint8_t)(s)[3]))
+#include "native_tag.h"
 
 void ant_ptr_pair_free(ant_ptr_pair_map_t *map);
 void js_set_native_slow(ant_object_t *o, void *ptr, uint32_t tag);

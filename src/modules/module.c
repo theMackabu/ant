@@ -136,46 +136,12 @@ static ant_value_t builtin_module_registerHooks(ant_params_t) {
   return out;
 }
 
-static const char node_modules_suffix[] = "/node_modules";
-
 static ant_value_t builtin_module_node_module_paths(ant_params_t) {
-  if (nargs < 1 || vtype(args[0]) != kTypeString)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "The \"from\" argument must be of type string");
-
-  const char *from = js_getstr(js, args[0], NULL);
-  char *dir = esm_make_absolute_path(*from ? from : ".");
-  if (!dir) return js_mkerr(js, "out of memory");
-
-  size_t end = strlen(dir);
-  if (end == 1) end = 0;
-
-  const size_t suffix_len = sizeof(node_modules_suffix) - 1;
-  char *buf = realloc(dir, end + suffix_len + 1);
-  if (!buf) {
-    free(dir);
-    return js_mkerr(js, "out of memory");
-  }
-
-  ant_value_t out = js_mkarr(js);
-  while (end > 0) {
-    size_t start = end;
-    while (start > 0 && buf[start - 1] != '/') start--;
-
-    bool is_node_modules =
-      end - start == suffix_len - 1 &&
-      memcmp(buf + start, node_modules_suffix + 1, suffix_len - 1) == 0;
-
-    if (!is_node_modules) {
-      memcpy(buf + end, node_modules_suffix, suffix_len);
-      js_arr_push(js, out, js_mkstr(js, buf, end + suffix_len));
-    }
-    end = start > 0 ? start - 1 : 0;
-  }
-
-  free(buf);
-  js_arr_push(js, out, js_mkstr(js, node_modules_suffix, suffix_len));
+  ant_value_t from = nargs > 0 ? args[0] : js_mkundef();
+  if (vtype(from) != kTypeString) return Ant_Error_CreateInvalidArgType(js, "paths[0]", "of type string", from);
   
-  return out;
+  const char *directory = js_getstr(js, from, NULL);
+  return esm_node_module_paths(js, *directory ? directory : ".");
 }
 
 static ant_value_t builtin_module_constructor(ant_params_t) {

@@ -19,7 +19,7 @@
 #include "modules/string_decoder.h"
 #include "streams/readable.h"
 
-enum { STREAM_NATIVE_TAG = 0x5354524Du }; // STRM
+static constexpr uint32_t STREAM_NATIVE_TAG = Ant_NativeTag("STRM");
 
 static double g_default_high_water_mark = 16384.0;
 static double g_default_object_high_water_mark = 16.0;

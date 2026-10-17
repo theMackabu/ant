@@ -322,7 +322,7 @@ typedef struct {
   error_frame_t frames[];
 } error_record_t;
 
-static constexpr uint32_t ERROR_RECORD_NATIVE_TAG = 0x45525252u; // ERRR
+static constexpr uint32_t ERROR_RECORD_NATIVE_TAG = Ant_NativeTag("ERRR");
 
 static error_record_t *error_record_of(ant_value_t value) {
   return vtype(value) == kTypeObject ? js_get_native(value, ERROR_RECORD_NATIVE_TAG) : NULL;

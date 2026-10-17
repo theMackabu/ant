@@ -118,6 +118,13 @@ async function main() {
   }
 
   {
+    const lineOf = (fn) => { try { fn(); } catch (e) { return Number(/cf\.js:(\d+)/.exec(e.stack)[1]); } };
+    const body = 'let a = 1;\nthrow new Error("boom");';
+    assert.strictEqual(lineOf(vm.compileFunction(body, [], { filename: 'cf.js' })), 2);
+    assert.strictEqual(lineOf(vm.compileFunction(body, ['p'], { filename: 'cf.js', contextExtensions: [{}, {}] })), 2);
+  }
+
+  {
     assert.strictEqual(vm.compileFunction('return a + b', ['a', 'b'])(2, 3), 5);
     const context = vm.createContext({ k: 5 });
     const fn = vm.compileFunction('return k', [], { parsingContext: context });
@@ -149,7 +156,9 @@ async function main() {
 
     assert.throws(() => new vm.Script('let let'), SyntaxError);
     assert.throws(() => new vm.Script('await 1'), SyntaxError);
-    assert.throws(() => new vm.Script(1), (e) => e.code === 'ERR_INVALID_ARG_TYPE');
+    assert.strictEqual(new vm.Script(1).runInThisContext(), 1);
+    assert.throws(() => new vm.Script('1', { cachedData: 1 }), (e) => e.code === 'ERR_INVALID_ARG_TYPE');
+    assert.throws(() => vm.measureMemory({ mode: 'x' }), (e) => e.code === 'ERR_INVALID_ARG_VALUE');
     assert.throws(() => vm.runInContext('1', {}), (e) => e.code === 'ERR_INVALID_ARG_TYPE');
     assert.throws(() => vm.isContext(1), (e) => e.code === 'ERR_INVALID_ARG_TYPE');
     assert.throws(() => vm.createContext({}, { microtaskMode: 'x' }), (e) => e.code === 'ERR_INVALID_ARG_VALUE');
@@ -215,6 +224,20 @@ async function main() {
     assert.throws(() => vm.runInNewContext('while (true) {}', {}, { timeout: 50 }), timedOut);
     assert.throws(() => vm.runInNewContext('for (;;) { try { for (;;) {} } catch (e) {} finally { x = 1 } }', {}, { timeout: 50 }), timedOut);
     assert.throws(() => vm.runInNewContext('"use strict"; function f(n) { if (n < 0) return 0; return f(n); } f(1)', {}, { timeout: 50 }), timedOut);
+    for (const src of [
+      '(async () => { for (;;) {} })(); globalThis.after = 1;',
+      '(async () => { if (globalThis.never) await 0; for (;;) {} })(); globalThis.after = 1;',
+      'new Promise(() => { for (;;) {} }); globalThis.after = 1;',
+      '(async function* () { for (;;) {} })().next(); globalThis.after = 1;',
+    ]) {
+      const sandbox = {};
+      assert.throws(() => vm.runInNewContext(src, sandbox, { timeout: 50 }), timedOut);
+      assert.strictEqual(sandbox.after, undefined, src);
+    }
+    const nested = vm.createContext({ vm, inner: vm.createContext({}) });
+    for (let i = 0; i < 20; i++) assert.throws(() => vm.runInContext(
+      'try { vm.runInContext("for (;;) {}", inner, { timeout: 20 }); } catch (e) {} for (;;) {}', nested, { timeout: 50 }
+    ), timedOut);
     function outerLoop() { for (;;) {} }
     assert.throws(() => vm.runInNewContext('loop()', { loop: outerLoop }, { timeout: 50 }), timedOut);
     assert.throws(() => vm.runInThisContext('while (true) {}', { timeout: 50 }), timedOut);

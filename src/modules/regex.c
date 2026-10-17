@@ -115,7 +115,7 @@ struct ant_regex_state {
 
 };
 
-static constexpr uint32_t REGEXP_NATIVE_TAG = 0x52454758u;
+static constexpr uint32_t REGEXP_NATIVE_TAG = Ant_NativeTag("REGX");
 static constexpr uint16_t REGEXP_STATIC_ALL_MATERIALIZED = (1u << REGEXP_STATIC_VALUE_COUNT) - 1;
 
 static constexpr size_t REGEX_COMPILED_CACHE_MAX = 1024;

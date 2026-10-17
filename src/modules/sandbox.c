@@ -36,7 +36,7 @@
 #include <sys/socket.h>
 #endif
 
-enum { SANDBOX_NATIVE_TAG = 0x53424f58u }; // SBOX
+static constexpr uint32_t SANDBOX_NATIVE_TAG = Ant_NativeTag("SBOX");
 
 typedef struct sandbox_state {
   ant_sandbox_assets_t assets;

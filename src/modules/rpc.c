@@ -28,11 +28,9 @@
 #include "wirecall/protocol.h"
 #include "wirecall/server.h"
 
-enum {
-  RPC_SERVER_NATIVE_TAG = 0x52504353u, // RPCS
-  RPC_CLIENT_NATIVE_TAG = 0x52504343u, // RPCC
-  RPC_TASK_NATIVE_TAG   = 0x52504354u  // RPCT
-};
+static constexpr uint32_t RPC_SERVER_NATIVE_TAG = Ant_NativeTag("RPCS");
+static constexpr uint32_t RPC_CLIENT_NATIVE_TAG = Ant_NativeTag("RPCC");
+static constexpr uint32_t RPC_TASK_NATIVE_TAG = Ant_NativeTag("RPCT");
 
 typedef struct rpc_server rpc_server_t;
 typedef struct rpc_route rpc_route_t;

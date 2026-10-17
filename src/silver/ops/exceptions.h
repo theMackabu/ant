@@ -66,7 +66,7 @@ static inline void sv_op_try_pop(sv_vm_t *vm) {
   }
 }
 
-static inline void sv_op_catch(sv_vm_t *vm, uint8_t *ip) {
+static inline void sv_op_catch(sv_vm_t *vm) {
   if (vm->sp == 0) vm->stack[vm->sp++] = vm->frames[vm->fp].completion.value;
   sv_clear_completion(vm);
 }

@@ -49,7 +49,7 @@ struct eventsource_state_s {
   bool error_emitted_for_request : 1;
 };
 
-static constexpr uint32_t ES_NATIVE_TAG = 0x45565352u; // EVSR
+static constexpr uint32_t ES_NATIVE_TAG = Ant_NativeTag("EVSR");
 enum { ES_CONNECTING = 0, ES_OPEN = 1, ES_CLOSED = 2 };
 
 static eventsource_state_t *eventsource_data(ant_value_t value) {

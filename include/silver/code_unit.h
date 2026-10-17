@@ -19,6 +19,8 @@ struct sv_code_unit {
   sv_func_t *funcs;
   sv_code_block_t **blocks;
   ant_value_t *compile_roots;
+  ant_value_t import_handler;
+  ant_value_t import_referrer;
 
   uint64_t gc_epoch;
   size_t block_count, block_cap;

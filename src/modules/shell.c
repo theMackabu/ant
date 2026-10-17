@@ -34,8 +34,8 @@ typedef struct {
   sh_bytes_t stderr_bytes;
 } sh_output_accumulator_t;
 
-enum { SH_OUTPUT_ACCUMULATOR_TAG = 0x53484143u }; // SHAC
-enum { SH_PROCESS_BUILDER_TAG = 0x53485042u }; // SHPB
+static constexpr uint32_t SH_OUTPUT_ACCUMULATOR_TAG = Ant_NativeTag("SHAC");
+static constexpr uint32_t SH_PROCESS_BUILDER_TAG = Ant_NativeTag("SHPB");
 
 typedef struct {
   ant_process_plan_t plan;

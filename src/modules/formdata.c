@@ -30,10 +30,8 @@ enum {
 
 static fd_data_t *get_fd_data(ant_value_t obj);
 
-enum {
-  FORMDATA_NATIVE_TAG = 0x46444154u,     // FDAT
-  FORMDATA_ITER_NATIVE_TAG = 0x46444954u // FDIT
-};
+static constexpr uint32_t FORMDATA_NATIVE_TAG = Ant_NativeTag("FDAT");
+static constexpr uint32_t FORMDATA_ITER_NATIVE_TAG = Ant_NativeTag("FDIT");
 
 bool formdata_is_formdata(ant_t *js, ant_value_t obj) {
   return js_check_brand(obj, BRAND_FORMDATA);

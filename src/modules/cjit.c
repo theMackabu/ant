@@ -75,8 +75,8 @@ typedef struct {
   MIR_type_t mir;
 } ant_c_arg_mapping_t;
 
-static constexpr uint32_t ANT_C_FUNCTION_NATIVE_TAG = 0x434a4954u;
 static constexpr size_t ANT_C_MAX_ARGS = 16;
+static constexpr uint32_t ANT_C_FUNCTION_NATIVE_TAG = Ant_NativeTag("CJIT");
 
 typedef struct {
   ant_value_t entry_value;

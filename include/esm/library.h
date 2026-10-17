@@ -22,6 +22,7 @@ void ant_register_library(ant_library_init_fn init_fn, const char *name);
 void ant_register_standard_library(ant_library_init_fn init_fn, const char *bare, const char *ant_name, const char *node_name);
 
 ant_value_t ant_library_load(ant_t *js, ant_library_entry_t *lib);
+ant_value_t ant_library_namespace(ant_t *js, ant_library_entry_t *lib);
 ant_library_entry_t *ant_library_find(const char *specifier, size_t spec_len);
 
 ant_builtin_name_kind_t ant_library_kind(const ant_library_entry_t *lib);

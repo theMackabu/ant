@@ -492,9 +492,6 @@ typedef struct {
   const char *display_name;
   const char *filename;
   
-  ant_value_t import_handler;
-  ant_value_t import_referrer;
-  
   sv_srcpos_t *srcpos;
   const char *source;
   bool display_name_varies;

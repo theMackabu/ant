@@ -1,6 +1,7 @@
 #include "gc.h"
 #include "realm.h"
 #include "errors.h"
+#include "interrupt.h"
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1923,7 +1924,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_JMP: {
     uint8_t *prev = ip; ip = sv_op_jmp(ip);
     if (ip <= prev) {
-      if (__builtin_expect(gc_maybe(js), 0)) goto sv_interrupt;
+      if (__builtin_expect(gc_safepoint(js), 0)) goto sv_interrupt;
       JIT_OSR_BACK_EDGE();
     }
     DISPATCH();
@@ -2501,7 +2502,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   }
 
   tail_call_inline: {
-    if (__builtin_expect(atomic_load_explicit(&js->interrupt_pending, memory_order_relaxed), 0)) goto sv_interrupt;
+    if (js_interrupt_pending(js)) goto sv_interrupt;
     ant_value_t call_func = vm->stack[vm->sp - tc_argc - 1];
     sv_closure_t *closure = js_func_closure(call_func);
 
@@ -2682,7 +2683,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_TRY_PUSH:         { sv_op_try_push(vm, ip, SV_HANDLER_TRY);          NEXT(OP_TRY_PUSH); }
   L_TRY_PUSH_FINALLY: { sv_op_try_push(vm, ip, SV_HANDLER_TRY_FINALLY);  NEXT(OP_TRY_PUSH_FINALLY); }
   L_TRY_POP:          { sv_op_try_pop(vm);                               NEXT(OP_TRY_POP); }
-  L_CATCH:            { sv_op_catch(vm, ip);                             NEXT(OP_CATCH); }
+  L_CATCH:            { sv_op_catch(vm);                                 NEXT(OP_CATCH); }
   L_FINALLY:          { VM_CHECK(sv_op_finally(vm, js, ip));             NEXT(OP_FINALLY); }
   L_FINALLY_DISCARD:  { sv_op_finally_discard(vm);                       NEXT(OP_FINALLY_DISCARD); }
   L_NIP_CATCH:        { sv_op_nip_catch(vm);                             NEXT(OP_NIP_CATCH); }
@@ -2918,7 +2919,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_IMPORT_NAMED:    { VM_CHECK(sv_op_import_named(vm, js, func, ip));  NEXT(OP_IMPORT_NAMED); }
   L_EXPORT:          { VM_CHECK(sv_op_export(vm, js, frame, func, ip)); NEXT(OP_EXPORT); }
   L_EXPORT_ALL:      { VM_CHECK(sv_op_export_all(vm, js));              NEXT(OP_EXPORT_ALL); }
-
 
   #define WITH_TRY(op, fn) {                                              \
     bool taken = false;                                                   \

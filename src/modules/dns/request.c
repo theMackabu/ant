@@ -123,18 +123,3 @@ ant_value_t dns_uv_error(ant_t *js, int status, const char *syscall, const char 
   const char *code = status == UV_EAI_NONAME || status == UV_EAI_NODATA ? "ENOTFOUND" : uv_err_name(status);
   return dns_error(js, syscall, code, status, true, hostname);
 }
-
-ant_value_t dns_invalid_arg_value(ant_t *js, const char *name, ant_value_t value, const char *expected) {
-  char received[160], message[384];
-  js_cstr_t text = js_inspect_cstr(js, value, received, sizeof(received));
-
-  if (expected) snprintf(
-    message, sizeof(message), "The %s '%s' must be one of: %s. Received %s",
-    strchr(name, '.') ? "property" : "argument", name, expected, text.ptr
-  );
-
-  else snprintf(message, sizeof(message), "The argument '%s' is invalid. Received %s", name, text.ptr);
-  if (text.needs_free) free((void *)text.ptr);
-
-  return js_mkerr_code(js, JS_ERR_TYPE, "ERR_INVALID_ARG_VALUE", message);
-}

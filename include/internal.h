@@ -212,9 +212,6 @@ ant_value_t js_vm_script_compile(ant_t *js, const char *buf, size_t len);
 ant_value_t js_vm_script_run(ant_t *js, ant_value_t compiled);
 ant_value_t js_function_from_source(ant_t *js, ant_value_t *params_and_body, int nargs);
 
-ant_value_t js_codegen_refused(ant_t *js);
-ant_value_t js_interrupt_raise(ant_t *js);
-
 ant_value_t js_proxy_set(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t value);
 ant_value_t js_proxy_set_sym(ant_t *js, ant_value_t proxy, ant_value_t sym, ant_value_t value);
 ant_value_t js_set_reporting(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value);
@@ -229,6 +226,7 @@ ant_value_t mkprop_append_fast(ant_t *js, ant_value_t obj, const char *key, size
 ant_value_t setprop_cstr(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 ant_value_t setprop_interned(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 
+ant_value_t js_codegen_refused(ant_t *js);
 ant_value_t js_template_to_string(ant_t *js, ant_value_t v);
 ant_value_t js_to_numeric(ant_t *js, ant_value_t arg);
 ant_value_t js_define_own_prop(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t v);

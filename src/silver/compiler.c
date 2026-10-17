@@ -918,6 +918,10 @@ static int add_local(
   return idx;
 }
 
+static inline int add_hidden_local(sv_compiler_t *c) {
+  return add_local(c, "", 0, false, c->scope_depth);
+}
+
 static int reserve_hidden_locals(sv_compiler_t *c, int count) {
   int base = c->local_count;
   for (int i = 0; i < count; i++)
@@ -1090,39 +1094,45 @@ static inline int add_upvalue(sv_compiler_t *c, uint16_t index, bool is_local, b
   return add_upvalue_binding(c, index, is_local, is_const, NULL);
 }
 
-static int resolve_super_upvalue(sv_compiler_t *c) {
-  if (!c->enclosing) return -1;
+static int resolve_upvalue_to(sv_compiler_t *c, sv_compiler_t *owner, int local) {
   sv_compiler_t *enc = c->enclosing;
+  if (!enc || local < 0) return -1;
 
-  if (!enc->is_arrow) {
-    if (enc->super_local < 0) return -1;
-    enc->locals[enc->super_local].captured = true;
-    uint16_t slot = (uint16_t)local_to_frame_slot(enc, enc->super_local);
-    return add_upvalue(c, slot, true, false);
+  if (enc == owner) {
+    enc->locals[local].captured = true;
+    uint16_t slot = (uint16_t)local_to_frame_slot(enc, local);
+    return add_upvalue(c, slot, true, enc->locals[local].is_const);
   }
 
-  int upvalue = resolve_super_upvalue(enc);
+  int upvalue = resolve_upvalue_to(enc, owner, local);
   if (upvalue == -1) return -1;
-  
-  return add_upvalue(c, (uint16_t)upvalue, false, false);
+
+  return add_upvalue(c, (uint16_t)upvalue, false, owner->locals[local].is_const);
+}
+
+static sv_compiler_t *enclosing_non_arrow(sv_compiler_t *c) {
+  sv_compiler_t *enc = c->enclosing;
+  while (enc && enc->is_arrow) enc = enc->enclosing;
+  return enc;
+}
+
+static int resolve_super_upvalue(sv_compiler_t *c) {
+  sv_compiler_t *owner = enclosing_non_arrow(c);
+  return owner ? resolve_upvalue_to(c, owner, owner->super_local) : -1;
 }
 
 static int resolve_arguments_upvalue(sv_compiler_t *c) {
-  if (!c->enclosing) return -1;
-  sv_compiler_t *enc = c->enclosing;
-  if (enc->owns_eval_env || sv_compile_mode_is_eval(enc->mode)) return -1;
-
-  if (!enc->is_arrow) {
-    if (enc->strict_args_local < 0) return -1;
-    enc->locals[enc->strict_args_local].captured = true;
-    uint16_t slot = (uint16_t)local_to_frame_slot(enc, enc->strict_args_local);
-    return add_upvalue(c, slot, true, false);
+  for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing) {
+    if (enc->owns_eval_env || sv_compile_mode_is_eval(enc->mode)) return -1;
+    if (!enc->is_arrow) return resolve_upvalue_to(c, enc, enc->strict_args_local);
   }
+  return -1;
+}
 
-  int upvalue = resolve_arguments_upvalue(enc);
-  if (upvalue == -1) return -1;
-  
-  return add_upvalue(c, (uint16_t)upvalue, false, false);
+static int resolve_new_target_upvalue(sv_compiler_t *c) {
+  for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing)
+    if (enc->new_target_local >= 0) return resolve_upvalue_to(c, enc, enc->new_target_local);
+  return -1;
 }
 
 static int resolve_upvalue_raw(sv_compiler_t *c, const char *name, uint32_t len) {
@@ -1147,7 +1157,7 @@ static int resolve_upvalue_raw(sv_compiler_t *c, const char *name, uint32_t len)
 }
 
 static int resolve_upvalue(sv_compiler_t *c, const char *name, uint32_t len) {
-  if (name && len && name[0] != '\x01') {
+  if (name && len) {
     if (!c->is_arrow && !sv_compile_mode_is_eval(c->mode) && is_ident_str(name, len, "arguments", 9)) return -1;
     if (c->owns_eval_env) return -1;
     for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing) {
@@ -1257,7 +1267,7 @@ static bool eval_scope_builder_add_binding(
   const char *name, uint32_t len,
   uint8_t kind, uint16_t index, bool is_const, const sv_binding_meta_t *meta
 ) {
-  if (!name || len == 0 || name[0] == '\x01') return true;
+  if (!name || len == 0) return true;
   uint32_t *lookup_slot = eval_binding_set_slot(set, scope, name, len);
   if (!lookup_slot || *lookup_slot != UINT32_MAX) return true;
 
@@ -1286,8 +1296,7 @@ static bool eval_scope_builder_add_binding(
 }
 
 static inline bool eval_local_is_visible(const sv_local_t *local) {
-  return local && local->name && local->name_len > 0 &&
-    local->name[0] != '\x01';
+  return local && local->name && local->name_len > 0;
 }
 
 static bool eval_scope_builder_capture_local(
@@ -1619,13 +1628,6 @@ typedef struct {
   int cap;
 } sv_with_refs_t;
 
-static const char *with_local_name(sv_compiler_t *c, int scope, uint32_t *len) {
-  char name[48];
-  int n = snprintf(name, sizeof(name), "\x01with%p.%d", (void *)c, scope);
-  *len = (uint32_t)n;
-  return intern_string(name, (size_t)n);
-}
-
 static void with_refs_push(sv_with_refs_t *out, bool is_upval, int idx) {
   if (idx < 0) return;
   if (out->count >= out->cap) {
@@ -1646,11 +1648,7 @@ static void with_shadows(sv_compiler_t *c, const char *name, uint32_t len, sv_wi
       if (local >= 0 && cur->locals[local].depth >= scope->depth) continue;
       if (cur == c) {
         with_refs_push(out, false, local_to_frame_slot(c, scope->local) - c->param_count);
-      } else {
-        uint32_t hidden_len = 0;
-        const char *hidden = with_local_name(cur, i, &hidden_len);
-        with_refs_push(out, true, hidden ? resolve_upvalue(c, hidden, hidden_len) : -1);
-      }
+      } else with_refs_push(out, true, resolve_upvalue_to(c, cur, scope->local));
     }
     if (local >= 0 || cur->owns_eval_env) break;
   }
@@ -1690,19 +1688,30 @@ static int emit_with_try(sv_compiler_t *c, sv_op_t op, const sv_with_ref_t *ref,
   return jump;
 }
 
+static void emit_with_tries(
+  sv_compiler_t *c, sv_with_refs_t *shadows, sv_op_t op,
+  const char *name, uint32_t len, int pops, sv_patch_list_t *out
+) {
+  for (int i = 0; i < shadows->count; i++) {
+    patch_list_add(out, emit_with_try(c, op, &shadows->refs[i], name, len));
+    for (int p = 0; p < pops; p++) emit_op(c, OP_POP);
+  }
+  
+  free(shadows->refs);
+  *shadows = (sv_with_refs_t){0};
+}
+
 static void emit_put_local(sv_compiler_t *c, int local_idx);
 static void emit_get_local(sv_compiler_t *c, int local_idx);
 static void emit_put_local_typed(sv_compiler_t *c, int local_idx, uint8_t type);
 
 static void emit_lexical_new_target(sv_compiler_t *c) {
-  static const char nt_name[] = "\x01new.target";
-  int local = resolve_local(c, nt_name, sizeof(nt_name) - 1);
-  if (local >= 0) {
-    emit_get_local(c, local);
+  if (c->new_target_local >= 0) {
+    emit_get_local(c, c->new_target_local);
     return;
   }
 
-  int upval = resolve_upvalue(c, nt_name, sizeof(nt_name) - 1);
+  int upval = resolve_new_target_upvalue(c);
   if (upval >= 0) {
     emit_op(c, OP_GET_UPVAL);
     emit_u16(c, (uint16_t)upval);
@@ -1812,22 +1821,12 @@ static void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len)
 
 static void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len) {
   sv_with_refs_t shadows = {0};
-  with_shadows(c, name, len, &shadows);
-  if (shadows.count == 0) {
-    emit_get_var_plain(c, name, len);
-    return;
-  }
-
-  int *found = malloc((size_t)shadows.count * sizeof(int));
-  for (int i = 0; i < shadows.count; i++) {
-    found[i] = emit_with_try(c, OP_WITH_TRY_GET, &shadows.refs[i], name, len);
-    emit_op(c, OP_POP);
-  }
-  emit_get_var_plain(c, name, len);
-  for (int i = 0; i < shadows.count; i++) patch_jump(c, found[i]);
+  sv_patch_list_t found = {0};
   
-  free(found);
-  free(shadows.refs);
+  with_shadows(c, name, len, &shadows);
+  emit_with_tries(c, &shadows, OP_WITH_TRY_GET, name, len, 1, &found);
+  emit_get_var_plain(c, name, len);
+  patch_list_resolve(c, &found);
 }
 
 static void emit_export_dups(sv_compiler_t *c, const sv_export_name_t *exports) {
@@ -1913,18 +1912,14 @@ static void emit_set_var(sv_compiler_t *c, const char *name, uint32_t len, bool 
   }
 
   if (keep) emit_op(c, OP_DUP);
-  int *stored = malloc((size_t)shadows.count * sizeof(int));
-  for (int i = 0; i < shadows.count; i++)
-    stored[i] = emit_with_try(c, OP_WITH_TRY_PUT, &shadows.refs[i], name, len);
+  sv_patch_list_t stored = {0};
+  emit_with_tries(c, &shadows, OP_WITH_TRY_PUT, name, len, 0, &stored);
   emit_set_var_plain(c, name, len, false);
   
   int done = emit_jump(c, OP_JMP);
-  for (int i = 0; i < shadows.count; i++) patch_jump(c, stored[i]);
+  patch_list_resolve(c, &stored);
   emit_op(c, OP_POP);
   patch_jump(c, done);
-  
-  free(stored);
-  free(shadows.refs);
 }
 
 static void emit_put_local_typed(sv_compiler_t *c, int local_idx, uint8_t type) {
@@ -3759,22 +3754,20 @@ void compile_ternary(sv_compiler_t *c, sv_ast_t *node) {
 
 static void compile_typeof_op(sv_compiler_t *c, sv_ast_t *node, int test_type) {
   sv_ast_t *arg = node->right;
-  sv_with_refs_t shadows = {0};
-  int *found = NULL;
+  sv_patch_list_t found = {0};
   
   if (arg->type == N_IDENT) {
+    sv_with_refs_t shadows = {0};
     with_shadows(c, arg->str, arg->len, &shadows);
-    if (shadows.count) found = malloc((size_t)shadows.count * sizeof(int));
-    for (int i = 0; i < shadows.count; i++) {
-      found[i] = emit_with_try(c, OP_WITH_TRY_GET, &shadows.refs[i], arg->str, arg->len);
-      emit_op(c, OP_POP);
-    }
+    
+    bool shadowed = shadows.count > 0;
+    emit_with_tries(c, &shadows, OP_WITH_TRY_GET, arg->str, arg->len, 1, &found);
     
     int local = resolve_local(c, arg->str, arg->len);
     if (local != -1) {
       uint8_t inferred = get_local_inferred_type(c, local);
       const char *known = typeof_name_for_type(inferred);
-      if (test_type < 0 && known && shadows.count == 0 && c->locals[local].is_const) {
+      if (test_type < 0 && known && !shadowed && c->locals[local].is_const) {
         emit_constant(c, sv_const_str(c, known, strlen(known)));
         return;
       }
@@ -3807,9 +3800,7 @@ static void compile_typeof_op(sv_compiler_t *c, sv_ast_t *node, int test_type) {
         arg->str, arg->len);
     }
     
-    for (int i = 0; i < shadows.count; i++) patch_jump(c, found[i]);
-    free(found);
-    free(shadows.refs);
+    patch_list_resolve(c, &found);
   } else compile_expr(c, arg);
   
   if (test_type >= 0) {
@@ -3871,12 +3862,9 @@ void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
     emit_op(c, OP_DELETE);
   } else if (arg->type == N_IDENT) {
     sv_with_refs_t shadows = {0};
+    sv_patch_list_t deleted = {0};
     with_shadows(c, arg->str, arg->len, &shadows);
-    int *deleted = shadows.count ? malloc((size_t)shadows.count * sizeof(int)) : NULL;
-    for (int i = 0; i < shadows.count; i++) {
-      deleted[i] = emit_with_try(c, OP_WITH_TRY_DEL, &shadows.refs[i], arg->str, arg->len);
-      emit_op(c, OP_POP);
-    }
+    emit_with_tries(c, &shadows, OP_WITH_TRY_DEL, arg->str, arg->len, 1, &deleted);
 
     bool binding_is_local = false;
     for (sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
@@ -3890,9 +3878,7 @@ void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
     if (binding_is_local) emit_op(c, OP_FALSE);
     else emit_atom_op(c, env_resolution_op(c, OP_DELETE_VAR, OP_DELETE_EVAL_VAR), arg->str, arg->len);
     
-    for (int i = 0; i < shadows.count; i++) patch_jump(c, deleted[i]);
-    free(deleted);
-    free(shadows.refs);
+    patch_list_resolve(c, &deleted);
   } else {
     compile_expr(c, arg);
     emit_op(c, OP_POP);
@@ -3956,19 +3942,12 @@ static bool compile_with_identifier_call(
   with_shadows(c, name, len, &shadows);
   if (shadows.count == 0) return false;
 
-  int *found = malloc((size_t)shadows.count * sizeof(int));
-  for (int i = 0; i < shadows.count; i++) {
-    found[i] = emit_with_try(c, OP_WITH_TRY_CALL, &shadows.refs[i], name, len);
-    emit_op(c, OP_POP);
-    emit_op(c, OP_POP);
-  }
-  
+  sv_patch_list_t found = {0};
+  emit_with_tries(c, &shadows, OP_WITH_TRY_CALL, name, len, 2, &found);
   emit_op(c, OP_UNDEF);
   emit_get_var_plain(c, name, len);
-  for (int i = 0; i < shadows.count; i++) patch_jump(c, found[i]);
+  patch_list_resolve(c, &found);
   
-  free(found);
-  free(shadows.refs);
   return true;
 }
 
@@ -5962,9 +5941,7 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
       emit_op(c, OP_TO_OBJECT);
       
       begin_scope(c);
-      uint32_t hidden_len = 0;
-      const char *hidden = with_local_name(c, c->with_depth, &hidden_len);
-      int local = add_local(c, hidden, hidden_len, false, c->scope_depth);
+      int local = add_hidden_local(c);
       emit_put_local(c, local);
       
       if (c->with_depth >= c->with_cap) {
@@ -7179,8 +7156,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
   sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
   comp.is_strict = true;
 
-  static const char sv_name[] = "\x01super";
-  comp.super_local = add_local(&comp, sv_name, sizeof(sv_name) - 1, false, comp.scope_depth);
+  comp.super_local = add_hidden_local(&comp);
   emit_op(&comp, OP_SPECIAL_OBJ);
   emit(&comp, SV_SPECIAL_SUPER);
   emit_put_local(&comp, comp.super_local);
@@ -7783,8 +7759,7 @@ sv_func_t *compile_function_body(
   if (node->flags & FN_CLASS_CTOR) emit_op(&comp, OP_CHECK_CTOR);
 
   if (!comp.is_arrow && comp.enclosing && (node->flags & FN_USES_NEW_TARGET)) {
-    static const char nt_name[] = "\x01new.target";
-    comp.new_target_local = add_local(&comp, nt_name, sizeof(nt_name) - 1, false, comp.scope_depth);
+    comp.new_target_local = add_hidden_local(&comp);
     emit_op(&comp, OP_SPECIAL_OBJ);
     emit(&comp, SV_SPECIAL_NEW_TARGET);
     emit_put_local(&comp, comp.new_target_local);
@@ -7957,16 +7932,14 @@ sv_func_t *compile_function_body(
     !comp.is_arrow && !comp.args_length_only &&
     has_implicit_arguments_obj(&comp) && (node->flags & FN_USES_ARGS)
   ) {
-    static const char args_name[] = "\x01arguments";
-    comp.strict_args_local = add_local(&comp, args_name, sizeof(args_name) - 1, false, comp.scope_depth);
+    comp.strict_args_local = add_hidden_local(&comp);
     emit_op(&comp, OP_SPECIAL_OBJ);
     emit(&comp, SV_SPECIAL_ARGUMENTS);
     emit_put_local(&comp, comp.strict_args_local);
   }
 
   if (!comp.is_arrow && comp.enclosing && (node->flags & (FN_METHOD | FN_GETTER | FN_SETTER | FN_STATIC))) {
-    static const char sv_name[] = "\x01super";
-    comp.super_local = add_local(&comp, sv_name, sizeof(sv_name) - 1, false, comp.scope_depth);
+    comp.super_local = add_hidden_local(&comp);
     emit_op(&comp, OP_SPECIAL_OBJ);
     emit(&comp, SV_SPECIAL_SUPER);
     emit_put_local(&comp, comp.super_local);
@@ -8582,7 +8555,7 @@ sv_func_t *sv_compile(
     ast_contains_direct_eval(program))
   ) top_fn.flags |= FN_USES_NEW_TARGET;
 
-  sv_code_unit_t *unit = sv_compile_mode_is_eval(mode) ? sv_code_unit_begin(js) : NULL;
+  sv_code_unit_t *unit = sv_compile_mode_is_eval(mode) || mode == SV_COMPILE_REPL ? sv_code_unit_begin(js) : NULL;
   const char *text = copy_source_text(js, source, source_len);
   
   if (!text && source && source_len > 0) {

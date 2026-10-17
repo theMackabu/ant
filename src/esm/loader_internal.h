@@ -70,7 +70,7 @@ typedef struct {
 } esm_builtin_t;
 
 esm_builtin_t esm_find_builtin(const char *specifier, size_t spec_len);
-ant_value_t esm_node_module_paths(ant_t *js, const char *directory);
+ant_value_t esm_value_namespace(ant_t *js, ant_value_t value, ant_value_t default_value);
 
 ant_value_t esm_read_file(
   ant_t *js,

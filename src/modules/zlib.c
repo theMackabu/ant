@@ -22,8 +22,8 @@
 #include "modules/timer.h"
 #include "modules/zlib.h"
 
-static constexpr int      ZLIB_CHUNK      = 16384;
-static constexpr uint32_t ZLIB_STREAM_TAG = 0x5A4C4942u; // ZLIB
+static constexpr int ZLIB_CHUNK = 16384;
+static constexpr uint32_t ZLIB_STREAM_TAG = Ant_NativeTag("ZLIB");
 
 typedef enum {
   ZLIB_KIND_GZIP,

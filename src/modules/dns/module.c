@@ -17,7 +17,7 @@
 #include "modules/dns.h"
 #include "dns_internal.h"
 
-enum { DNS_RESOLVER_NATIVE_TAG = 0x444e5352u }; // DNSR
+static constexpr uint32_t DNS_RESOLVER_NATIVE_TAG = Ant_NativeTag("DNSR");
 
 static const char *const dns_order_names[] = {
   [DNS_ORDER_VERBATIM] = "verbatim",
@@ -27,8 +27,8 @@ static const char *const dns_order_names[] = {
 
 dns_channel_t *dns_this_channel(ant_t *js) {
   ant_value_t self = js_getthis(js);
-  dns_resolver_t *resolver = is_object_type(self) ? js_get_native(self, DNS_RESOLVER_NATIVE_TAG) : NULL;
-  return resolver ? resolver->channel : dns_default_channel(js);
+  dns_channel_t **cell = is_object_type(self) ? js_get_native(self, DNS_RESOLVER_NATIVE_TAG) : NULL;
+  return cell ? *cell : dns_default_channel(js);
 }
 
 #define DNS_RECORD_TYPE(name, method, syscall, ares)                                                   \
@@ -100,12 +100,12 @@ static ant_value_t dns_resolver_set_local_address(ant_params_t) {
 
 static void dns_resolver_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
-  dns_resolver_t *resolver = js_get_native(value, DNS_RESOLVER_NATIVE_TAG);
-  if (!resolver) return;
+  dns_channel_t **cell = js_get_native(value, DNS_RESOLVER_NATIVE_TAG);
+  if (!cell) return;
 
   js_clear_native(value, DNS_RESOLVER_NATIVE_TAG);
-  if (resolver->channel) dns_channel_destroy(resolver->channel);
-  free(resolver);
+  if (*cell) dns_channel_destroy(*cell);
+  free(cell);
 }
 
 static ant_value_t dns_resolver_option(ant_t *js, ant_value_t options, const char *name, int min, int fallback, int *out) {
@@ -138,20 +138,20 @@ static ant_value_t dns_resolver_construct(ant_t *js, ant_value_t *args, int narg
   if (is_err(r)) return r;
   if (is_err(r = dns_resolver_option(js, options, "tries", 1, 4, &tries))) return r;
 
-  dns_resolver_t *resolver = calloc(1, sizeof(*resolver));
-  if (!resolver) return js_mkerr(js, "out of memory");
+  dns_channel_t **cell = malloc(sizeof(dns_channel_t *));
+  if (!cell) return js_mkerr(js, "out of memory");
 
-  resolver->channel = dns_channel_create(js, timeout, tries);
-  if (!resolver->channel) {
-    free(resolver);
+  *cell = dns_channel_create(js, timeout, tries);
+  if (!*cell) {
+    free(cell);
     return js_mkerr(js, "failed to create DNS channel");
   }
 
-  resolver->channel->owner_ref = &resolver->channel;
+  (*cell)->owner_ref = cell;
 
   ant_value_t obj = Ant_Object_CreateBare(js);
   js_set_proto_init(obj, js_instance_proto_from_new_target(js, fallback_proto, new_target));
-  js_set_native(obj, resolver, DNS_RESOLVER_NATIVE_TAG);
+  js_set_native(obj, cell, DNS_RESOLVER_NATIVE_TAG);
   js_set_finalizer(obj, dns_resolver_finalize);
   return obj;
 }

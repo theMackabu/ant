@@ -378,7 +378,10 @@ struct ant_isolate_t {
   
     uint64_t epoch;
     uint8_t obj_epoch;
+    
     bool minor;
+    bool realm_reach;
+    
     ant_object_t **mark_stack;
     size_t mark_sp;
     size_t mark_cap;

@@ -20,55 +20,21 @@
 #include "modules/vm.h"
 #include "modules/timer.h"
 #include "modules/buffer.h"
+#include "modules/collections.h"
 
 typedef struct {
   const char *filename;
   int32_t line_offset;
   int32_t column_offset;
   uint64_t id;
+  ant_realm_token_t **realms;
+  uint32_t realm_count;
+  uint32_t realm_cap;
 } vm_script_t;
 
 static _Atomic uint64_t vm_next_script_id = 1;
 static constexpr uint32_t VM_SCRIPT_NATIVE_TAG = Ant_NativeTag("VMSC");
 static const char vm_default_filename[] = "evalmachine.<anonymous>";
-
-static ant_value_t vm_code_error(ant_t *js, js_err_type_t type, const char *code, const char *message) {
-  ant_value_t props = Ant_Object_CreateBare(js);
-  js_set(js, props, "code", js_mkstr(js, code, strlen(code)));
-  return js_mkerr_props(js, type, props, "%s", message);
-}
-
-static const char *vm_type_name(ant_value_t value) {
-  switch (vtype(value)) {
-    case kTypeUndefined: return "undefined";
-    case kTypeNull:      return "null";
-    case kTypeBool:      return "boolean";
-    case kTypeNumber:    return "number";
-    case kTypeBigInt:    return "bigint";
-    case kTypeString:    return "string";
-    case kTypeSymbol:    return "symbol";
-    case kTypeFunction:
-    case kTypeBuiltin:   return "function";
-    default:             return "object";
-  }
-}
-
-static ant_value_t vm_arg_error(ant_t *js, const char *name, const char *expected, ant_value_t value) {
-  char message[256];
-  uint8_t type = vtype(value);
-  
-  if (type == kTypeUndefined || type == kTypeNull) snprintf(
-    message, sizeof(message), "The \"%s\" argument must be %s. Received %s",
-    name, expected, vm_type_name(value)
-  );
-  
-  else snprintf(
-    message, sizeof(message), "The \"%s\" argument must be %s. Received type %s",
-    name, expected, vm_type_name(value)
-  );
-  
-  return vm_code_error(js, JS_ERR_TYPE, "ERR_INVALID_ARG_TYPE", message);
-}
 
 static ant_value_t vm_context_anchor(ant_params_t) {
   return js_mkundef();
@@ -259,7 +225,7 @@ static ant_value_t vm_option_string(ant_t *js, ant_value_t options, const char *
   if (vtype(value) == kTypeUndefined || vtype(value) == kTypeString) return js_mkundef();
   char arg[64];
   snprintf(arg, sizeof(arg), "options.%s", name);
-  return vm_arg_error(js, arg, "of type string", value);
+  return Ant_Error_CreateInvalidArgType(js, arg, "of type string", value);
 }
 
 static ant_value_t vm_import_option(ant_t *js, ant_value_t options, ant_value_t *out) {
@@ -269,7 +235,7 @@ static ant_value_t vm_import_option(ant_t *js, ant_value_t options, ant_value_t 
   ant_value_t value = js_get(js, options, "importModuleDynamically");
   if (vtype(value) == kTypeUndefined) return js_mkundef();
   if (!is_callable(value) && value != js->builtins.vm_main_context_loader)
-    return vm_arg_error(js, "options.importModuleDynamically", "of type function or vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER", value);
+    return Ant_Error_CreateInvalidArgType(js, "options.importModuleDynamically", "of type function", value);
   
   *out = value;
   return js_mkundef();
@@ -291,7 +257,7 @@ static ant_value_t vm_context_options(ant_t *js, ant_value_t options, bool prefi
   if (vtype(codegen) != kTypeUndefined) {
     char arg[64];
     snprintf(arg, sizeof(arg), "options.%s", codegen_name);
-    if (!is_object_type(codegen)) return vm_arg_error(js, arg, "of type object", codegen);
+    if (!is_object_type(codegen)) return Ant_Error_CreateInvalidArgType(js, arg, "of type object", codegen);
 
     static const struct { const char *name; ant_codegen_flags_t flag; } kinds[] = {
       { "strings", ANT_CODEGEN_NO_STRINGS },
@@ -305,7 +271,7 @@ static ant_value_t vm_context_options(ant_t *js, ant_value_t options, bool prefi
       if (vtype(allowed) != kTypeBool) {
         char field[80];
         snprintf(field, sizeof(field), "%s.%s", arg, kinds[i].name);
-        return vm_arg_error(js, field, "of type boolean", allowed);
+        return Ant_Error_CreateInvalidArgType(js, field, "of type boolean", allowed);
       }
       
       if (!js_truthy(js, allowed)) out->codegen_blocked |= kinds[i].flag;
@@ -317,10 +283,9 @@ static ant_value_t vm_context_options(ant_t *js, ant_value_t options, bool prefi
     size_t len = 0;
     const char *text = vtype(mode) == kTypeString ? js_getstr(js, mode, &len) : NULL;
     
-    if (!text || len != 13 || memcmp(text, "afterEvaluate", 13) != 0) return vm_code_error(
-      js, JS_ERR_TYPE, "ERR_INVALID_ARG_VALUE",
-      "The property 'options.microtaskMode' must be one of: 'afterEvaluate', undefined"
-    );
+    static const char after_evaluate[] = "afterEvaluate";
+    if (!text || len != sizeof(after_evaluate) - 1 || memcmp(text, after_evaluate, len) != 0)
+      return Ant_Error_CreateInvalidArgValue(js, "options.microtaskMode", "'afterEvaluate', undefined", mode);
     
     out->microtasks_after_evaluate = true;
   }
@@ -334,12 +299,12 @@ static ant_value_t vm_context_for(ant_t *js, ant_value_t object, ant_value_t opt
   bool dont_contextify = object == js->builtins.vm_dont_contextify;
 
   if (!dont_contextify && (!is_object_type(object) || vtype(object) == kTypeFunction))
-    return vm_arg_error(js, "contextObject", "an object or vm.constants.DONT_CONTEXTIFY", object);
+    return Ant_Error_CreateInvalidArgType(js, "object", "of type object", object);
   
   if (!dont_contextify && vm_context_realm(object)) return object;
   
   if (vtype(options) != kTypeUndefined && !is_object_type(options))
-    return vm_arg_error(js, "options", "of type object", options);
+    return Ant_Error_CreateInvalidArgType(js, "options", "of type object", options);
 
   vm_context_options_t settings;
   ant_value_t checked = vm_context_options(js, options, prefixed, &settings);
@@ -354,7 +319,7 @@ static ant_value_t vm_create_context(ant_params_t) {
 
 static ant_value_t vm_is_context(ant_params_t) {
   ant_value_t object = nargs > 0 ? args[0] : js_mkundef();
-  if (!is_object_type(object)) return vm_arg_error(js, "object", "of type object", object);
+  if (!is_object_type(object)) return Ant_Error_CreateInvalidArgType(js, "object", "of type object", object);
   return js_bool(vm_context_realm(object) != NULL);
 }
 
@@ -365,11 +330,18 @@ static vm_script_t *vm_script_state(ant_value_t script) {
 static void vm_script_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
   vm_script_t *st = vm_script_state(value);
+  
   if (st) {
-    for (ant_realm_t *realm = js->realms; realm; realm = realm->next)
-      ant_ptr_pair_remove(&realm->vm_scripts, (uintptr_t)st->id, 0);
+    for (uint32_t i = 0; i < st->realm_count; i++) {
+      ant_realm_token_t *token = st->realms[i];
+      if (token->realm) ant_ptr_pair_remove(&token->realm->vm_scripts, (uintptr_t)st->id, 0);
+      ant_realm_token_release(token);
+    }
+    
+    free(st->realms);
     free(st);
   }
+  
   js_clear_native(value, VM_SCRIPT_NATIVE_TAG);
 }
 
@@ -388,25 +360,21 @@ static void vm_offset_positions(sv_func_t *func, int32_t lines, int32_t columns)
     vm_offset_positions(func->child_funcs[i], lines, columns);
 }
 
-static void vm_set_import_tree(sv_func_t *func, ant_value_t handler, ant_value_t referrer) {
-  if (func->debug) {
-    func->debug->import_handler = handler;
-    func->debug->import_referrer = referrer;
-  }
-  
-  for (int i = 0; i < func->child_func_count; i++)
-    vm_set_import_tree(func->child_funcs[i], handler, referrer);
-}
-
 static void vm_set_import(ant_t *js, sv_func_t *func, ant_value_t handler, ant_value_t referrer) {
-  if (!func) return;
+  if (!func || !func->unit) return;
   sv_code_unit_retain_template(js, func, handler);
   sv_code_unit_retain_template(js, func, referrer);
-  vm_set_import_tree(func, handler, referrer);
+  func->unit->import_handler = handler;
+  func->unit->import_referrer = referrer;
 }
 
-ant_value_t js_vm_dynamic_import(ant_t *js, sv_func_debug_t *debug, ant_value_t specifier, ant_value_t options) {
-  ant_value_t handler = debug->import_handler;
+static ant_value_t vm_import_referrer(sv_code_unit_t *unit) {
+  ant_value_t script;
+  return js_weakref_target(unit->import_referrer, &script) ? script : unit->import_referrer;
+}
+
+ant_value_t js_vm_dynamic_import(ant_t *js, sv_code_unit_t *unit, ant_value_t specifier, ant_value_t options) {
+  ant_value_t handler = unit->import_handler;
   
   if (handler == js->builtins.vm_main_context_loader) {
     ant_realm_t *main = ant_realm_main(js);
@@ -427,9 +395,9 @@ ant_value_t js_vm_dynamic_import(ant_t *js, sv_func_debug_t *debug, ant_value_t 
     ant_value_t attributes = is_object_type(options) ? js_get(js, options, "with") : js_mkundef();
     if (!is_object_type(attributes)) attributes = Ant_Object_CreateBare(js);
     
-    ant_value_t argv[3] = { name, debug->import_referrer, attributes };
+    ant_value_t argv[3] = { name, vm_import_referrer(unit), attributes };
     outcome = is_err(name) ? name : sv_vm_call(js->vm, js, handler, js_mkundef(), argv, 3, NULL, js_mkundef());
-  } else outcome = vm_code_error(
+  } else outcome = js_mkerr_code(
     js, JS_ERR_TYPE, "ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING",
     "A dynamic import callback was not specified."
   );
@@ -439,6 +407,22 @@ ant_value_t js_vm_dynamic_import(ant_t *js, sv_func_debug_t *debug, ant_value_t 
   
   GC_ROOT_RESTORE(js, mark);
   return promise;
+}
+
+static bool vm_script_note_realm(vm_script_t *st, ant_realm_t *realm) {
+  if (st->realm_count == st->realm_cap) {
+    uint32_t cap = st->realm_cap ? st->realm_cap * 2 : 2;
+    ant_realm_token_t **realms = realloc(st->realms, cap * sizeof(*realms));
+    if (!realms) return false;
+    st->realms = realms;
+    st->realm_cap = cap;
+  }
+  
+  ant_realm_token_t *token = ant_realm_token_retain(realm);
+  if (!token) return false;
+  
+  st->realms[st->realm_count++] = token;
+  return true;
 }
 
 static ant_value_t vm_script_compiled(ant_t *js, ant_value_t script, ant_realm_t *realm) {
@@ -463,9 +447,12 @@ static ant_value_t vm_script_compiled(ant_t *js, ant_value_t script, ant_realm_t
     vm_offset_positions((sv_func_t *)vptr(compiled), st->line_offset, st->column_offset);
 
   ant_value_t handler = js_get_slot(script, SLOT_VM_IMPORT);
-  vm_set_import(js, (sv_func_t *)vptr(compiled), handler, is_callable(handler) ? script : js_mkundef());
+  ant_value_t referrer = is_callable(handler) ? js_weakref_create(js, script) : js_mkundef();
+  if (is_err(referrer)) return referrer;
+  vm_set_import(js, (sv_func_t *)vptr(compiled), handler, referrer);
   
-  if (!ant_ptr_pair_put(&realm->vm_scripts, (uintptr_t)st->id, 0, compiled)) return js_mkerr(js, "out of memory");
+  if (!vm_script_note_realm(st, realm) || !ant_ptr_pair_put(&realm->vm_scripts, (uintptr_t)st->id, 0, compiled))
+    return js_mkerr(js, "out of memory");
   realm->gc_dirty = true;
 
   return compiled;
@@ -494,17 +481,6 @@ typedef struct vm_interrupt {
 
 enum { VM_FIRED_TIMEOUT = 1, VM_FIRED_SIGINT = 2 };
 static vm_interrupt_t *_Atomic vm_sigint_run;
-
-ant_value_t js_interrupt_raise(ant_t *js) {
-  js->terminating = true;
-  ant_value_t error = js_take_thrown(js, js_mkerr(js, "Script execution interrupted"));
-  if (is_object_type(error)) js_set_slot(error, SLOT_VM_TERMINATION, js_true);
-  return js_throw(js, error);
-}
-
-bool js_is_termination(ant_value_t value) {
-  return is_object_type(value) && js_get_slot(value, SLOT_VM_TERMINATION) == js_true;
-}
 
 static void vm_interrupt_fire(vm_interrupt_t *it, uint8_t why) {
   uint8_t none = 0;
@@ -541,18 +517,16 @@ static ant_value_t vm_run_options(ant_t *js, ant_value_t options, vm_interrupt_t
 
   ant_value_t timeout = js_get(js, options, "timeout");
   if (vtype(timeout) != kTypeUndefined) {
-    if (vtype(timeout) != kTypeNumber) return vm_arg_error(js, "options.timeout", "of type number", timeout);
+    if (vtype(timeout) != kTypeNumber) return Ant_Error_CreateInvalidArgType(js, "options.timeout", "of type number", timeout);
     double ms = js_getnum(timeout);
-    if (ms != floor(ms) || ms <= 0 || ms > 4294967295.0) return vm_code_error(
-      js, JS_ERR_RANGE, "ERR_OUT_OF_RANGE",
-      "The value of \"options.timeout\" is out of range. It must be >= 1 && <= 4294967295."
-    );
+    if (ms != floor(ms)) return Ant_Error_CreateOutOfRange(js, "options.timeout", "an integer", timeout);
+    if (ms <= 0 || ms > 4294967295.0) return Ant_Error_CreateOutOfRange(js, "options.timeout", ">= 1 && <= 4294967295", timeout);
     it->timeout_ms = (uint32_t)ms;
   }
 
   ant_value_t sigint = js_get(js, options, "breakOnSigint");
   if (vtype(sigint) != kTypeUndefined && vtype(sigint) != kTypeBool)
-    return vm_arg_error(js, "options.breakOnSigint", "of type boolean", sigint);
+    return Ant_Error_CreateInvalidArgType(js, "options.breakOnSigint", "of type boolean", sigint);
   it->sigint = js_truthy(js, sigint);
   
   return js_mkundef();
@@ -627,9 +601,9 @@ static ant_value_t vm_interrupt_end(vm_interrupt_t *it, ant_value_t result) {
   char message[96];
   if (fired == VM_FIRED_TIMEOUT) {
     snprintf(message, sizeof(message), "Script execution timed out after %ums", (unsigned)it->timeout_ms);
-    return vm_code_error(js, JS_ERR_GENERIC, "ERR_SCRIPT_EXECUTION_TIMEOUT", message);
+    return js_mkerr_code(js, JS_ERR_GENERIC, "ERR_SCRIPT_EXECUTION_TIMEOUT", message);
   }
-  return vm_code_error(js, JS_ERR_GENERIC, "ERR_SCRIPT_EXECUTION_INTERRUPTED", "Script execution was interrupted by `SIGINT`");
+  return js_mkerr_code(js, JS_ERR_GENERIC, "ERR_SCRIPT_EXECUTION_INTERRUPTED", "Script execution was interrupted by `SIGINT`");
 }
 
 static ant_value_t vm_script_run(ant_t *js, ant_value_t script, ant_realm_t *realm, ant_value_t options) {
@@ -663,18 +637,14 @@ static ant_value_t vm_option_int32(ant_t *js, ant_value_t options, const char *n
   ant_value_t value = js_get(js, options, name);
   if (vtype(value) == kTypeUndefined) return js_mkundef();
 
-  if (vtype(value) != kTypeNumber) {
-    char arg[64];
-    snprintf(arg, sizeof(arg), "options.%s", name);
-    return vm_arg_error(js, arg, "of type number", value);
-  }
-
+  char arg[64];
+  snprintf(arg, sizeof(arg), "options.%s", name);
+  if (vtype(value) != kTypeNumber) return Ant_Error_CreateInvalidArgType(js, arg, "of type number", value);
+  
   double number = js_getnum(value);
-  if (number != floor(number) || number < -2147483648.0 || number > 2147483647.0) {
-    char message[128];
-    snprintf(message, sizeof(message), "The value of \"options.%s\" is out of range. It must be an integer.", name);
-    return vm_code_error(js, JS_ERR_RANGE, "ERR_OUT_OF_RANGE", message);
-  }
+  if (number != floor(number)) return Ant_Error_CreateOutOfRange(js, arg, "an integer", value);
+  if (number < -2147483648.0 || number > 2147483647.0)
+    return Ant_Error_CreateOutOfRange(js, arg, ">= -2147483648 && <= 2147483647", value);
 
   *out = (int32_t)number;
   return js_mkundef();
@@ -697,14 +667,15 @@ static ant_value_t vm_source_map_url(ant_t *js, const char *source, size_t len) 
 }
 
 static ant_value_t vm_script_init(ant_t *js, ant_value_t script, ant_value_t code, ant_value_t options) {
-  if (vtype(code) != kTypeString) return vm_arg_error(js, "code", "of type string", code);
+  if (vtype(code) != kTypeString) code = js_tostring_val(js, code);
+  if (is_err(code)) return code;
   
   if (vtype(options) == kTypeString) {
     ant_value_t filename = options;
     options = Ant_Object_CreateBare(js);
     js_set(js, options, "filename", filename);
   } else if (vtype(options) != kTypeUndefined && !is_object_type(options))
-    return vm_arg_error(js, "options", "of type object", options);
+    return Ant_Error_CreateInvalidArgType(js, "options", "of type object", options);
 
   vm_script_t *st = calloc(1, sizeof(*st));
   if (!st) return js_mkerr(js, "out of memory");
@@ -725,7 +696,7 @@ static ant_value_t vm_script_init(ant_t *js, ant_value_t script, ant_value_t cod
       const char *text = js_getstr(js, filename, &len);
       st->filename = intern_string(text, len);
       if (!st->filename) return js_mkerr(js, "out of memory");
-    } else if (vtype(filename) != kTypeUndefined) return vm_arg_error(js, "options.filename", "of type string", filename);
+    } else if (vtype(filename) != kTypeUndefined) return Ant_Error_CreateInvalidArgType(js, "options.filename", "of type string", filename);
 
     ant_value_t import_handler;
     ant_value_t result = vm_import_option(js, options, &import_handler);
@@ -739,7 +710,13 @@ static ant_value_t vm_script_init(ant_t *js, ant_value_t script, ant_value_t cod
     result = vm_option_int32(js, options, "columnOffset", &st->column_offset);
     if (is_err(result)) return result;
 
-    if (vtype(js_get(js, options, "cachedData")) != kTypeUndefined) js_set(js, script, "cachedDataRejected", js_false);
+    ant_value_t cached = js_get(js, options, "cachedData");
+    if (vtype(cached) != kTypeUndefined) {
+      if (!buffer_is_dataview(cached) && !buffer_get_typedarray_data(cached)) return Ant_Error_CreateInvalidArgType(
+        js, "options.cachedData", "an instance of Buffer, TypedArray, or DataView", cached
+      );
+      js_set(js, script, "cachedDataRejected", js_false);
+    }
     
     if (vm_option_bool(js, options, "produceCachedData")) {
       js_set(js, script, "cachedDataProduced", js_true);
@@ -785,7 +762,7 @@ static ant_value_t vm_script_run_in_context(ant_params_t) {
 
   ant_value_t context = nargs > 0 ? args[0] : js_mkundef();
   ant_realm_t *realm = vm_context_realm(context);
-  if (!realm) return vm_arg_error(js, "contextifiedObject", "an vm.Context", context);
+  if (!realm) return Ant_Error_CreateInvalidArgType(js, "contextifiedObject", "an vm.Context", context);
 
   return vm_script_run(js, script, realm, nargs > 1 ? args[1] : js_mkundef());
 }
@@ -822,7 +799,7 @@ static ant_value_t vm_run_in_this_context(ant_params_t) {
 static ant_value_t vm_run_in_context(ant_params_t) {
   ant_value_t context = nargs > 1 ? args[1] : js_mkundef();
   ant_realm_t *realm = vm_context_realm(context);
-  if (!realm) return vm_arg_error(js, "contextifiedObject", "an vm.Context", context);
+  if (!realm) return Ant_Error_CreateInvalidArgType(js, "contextifiedObject", "an vm.Context", context);
 
   ant_value_t options = nargs > 2 ? args[2] : js_mkundef();
   ant_value_t script = vm_new_script(js, nargs > 0 ? args[0] : js_mkundef(), options);
@@ -846,6 +823,8 @@ static ant_value_t vm_run_in_new_context(ant_params_t) {
   return result;
 }
 
+static constexpr int32_t VM_FUNCTION_WRAPPER_LINES = 2;
+
 static ant_value_t vm_function_with_extensions(
   ant_t *js, ant_value_t *parts, int param_count, ant_value_t extensions
 ) {
@@ -854,7 +833,8 @@ static ant_value_t vm_function_with_extensions(
   static const char middle[] = "\n) {\n";
   static const char tail[] = "\n}";
 
-  size_t total = (size_t)count * 40 + sizeof(head) + sizeof(middle) + sizeof(tail);
+  size_t total = sizeof(head) + sizeof(middle) + sizeof(tail);
+  for (ant_offset_t i = 0; i < count; i++) total += (size_t)snprintf(NULL, 0, "with (this[%u]) ", (unsigned)i);
   for (int i = 0; i <= param_count; i++) {
     size_t len = 0;
     js_getstr(js, parts[i], &len);
@@ -866,7 +846,7 @@ static ant_value_t vm_function_with_extensions(
   size_t pos = 0;
 
   for (ant_offset_t i = 0; i < count; i++)
-    pos += (size_t)snprintf(text + pos, total - pos, "with (__ant_vm_extension_%u) ", (unsigned)i);
+    pos += (size_t)snprintf(text + pos, total - pos, "with (this[%u]) ", (unsigned)i);
   memcpy(text + pos, head, sizeof(head) - 1);
   pos += sizeof(head) - 1;
   
@@ -889,42 +869,23 @@ static ant_value_t vm_function_with_extensions(
   memcpy(text + pos, tail, sizeof(tail) - 1);
   pos += sizeof(tail) - 1;
 
-  ant_value_t *wrapper_parts = calloc((size_t)count + 1, sizeof(*wrapper_parts));
-  if (!wrapper_parts) {
-    free(text);
-    return js_mkerr(js, "out of memory");
-  }
-
   GC_ROOT_SAVE(mark, js);
-  for (ant_offset_t i = 0; i < count; i++) {
-    char name[48];
-    int len = snprintf(name, sizeof(name), "__ant_vm_extension_%u", (unsigned)i);
-    wrapper_parts[i] = js_mkstr(js, name, (size_t)len);
-    GC_ROOT_PIN(js, wrapper_parts[i]);
-  }
-  
-  wrapper_parts[count] = js_mkstr(js, text, pos);
+  ant_value_t source = js_mkstr(js, text, pos);
   free(text);
-  GC_ROOT_PIN(js, wrapper_parts[count]);
+  GC_ROOT_PIN(js, source);
 
-  ant_value_t wrapper = js_function_from_source(js, wrapper_parts, (int)count + 1);
-  free(wrapper_parts);
+  ant_value_t wrapper = js_function_from_source(js, &source, 1);
   if (is_err(wrapper)) {
     GC_ROOT_RESTORE(js, mark);
     return wrapper;
   }
-
   GC_ROOT_PIN(js, wrapper);
-  ant_value_t *argv = calloc((size_t)count, sizeof(*argv));
-  if (!argv) {
-    GC_ROOT_RESTORE(js, mark);
-    return js_mkerr(js, "out of memory");
-  }
-  
-  for (ant_offset_t i = 0; i < count; i++) argv[i] = js_arr_get(js, extensions, i);
-  ant_value_t fn = sv_vm_call(js->vm, js, wrapper, js_mkundef(), argv, (int)count, NULL, js_mkundef());
-  free(argv);
-  
+
+  ant_value_t scopes = js_mkarr(js);
+  GC_ROOT_PIN(js, scopes);
+  for (ant_offset_t i = 0; i < count; i++) js_arr_push(js, scopes, js_arr_get(js, extensions, i));
+
+  ant_value_t fn = sv_vm_call(js->vm, js, wrapper, scopes, NULL, 0, NULL, js_mkundef());
   GC_ROOT_RESTORE(js, mark);
   return fn;
 }
@@ -934,11 +895,11 @@ static ant_value_t vm_compile_function(ant_params_t) {
   ant_value_t params = nargs > 1 ? args[1] : js_mkundef();
   ant_value_t options = nargs > 2 ? args[2] : js_mkundef();
 
-  if (vtype(code) != kTypeString) return vm_arg_error(js, "code", "of type string", code);
+  if (vtype(code) != kTypeString) return Ant_Error_CreateInvalidArgType(js, "code", "of type string", code);
   if (vtype(params) != kTypeUndefined && vtype(params) != kTypeArray)
-    return vm_arg_error(js, "params", "an instance of Array", params);
+    return Ant_Error_CreateInvalidArgType(js, "params", "an instance of Array", params);
   if (vtype(options) != kTypeUndefined && !is_object_type(options))
-    return vm_arg_error(js, "options", "of type object", options);
+    return Ant_Error_CreateInvalidArgType(js, "options", "of type object", options);
 
   ant_realm_t *realm = js->realm;
   const char *filename = "";
@@ -949,18 +910,18 @@ static ant_value_t vm_compile_function(ant_params_t) {
     ant_value_t parsing_context = js_get(js, options, "parsingContext");
     if (vtype(parsing_context) != kTypeUndefined) {
       realm = vm_context_realm(parsing_context);
-      if (!realm) return vm_arg_error(js, "options.parsingContext", "an vm.Context", parsing_context);
+      if (!realm) return Ant_Error_CreateInvalidArgType(js, "options.parsingContext", "an instance of Context", parsing_context);
     }
 
     extensions = js_get(js, options, "contextExtensions");
     if (vtype(extensions) != kTypeUndefined && vtype(extensions) != kTypeArray)
-      return vm_arg_error(js, "options.contextExtensions", "an instance of Array", extensions);
+      return Ant_Error_CreateInvalidArgType(js, "options.contextExtensions", "an instance of Array", extensions);
     for (ant_offset_t i = 0; vtype(extensions) == kTypeArray && i < js_arr_len(js, extensions); i++) {
       ant_value_t extension = js_arr_get(js, extensions, i);
       if (!is_object_type(extension)) {
         char arg[48];
         snprintf(arg, sizeof(arg), "options.contextExtensions[%u]", (unsigned)i);
-        return vm_arg_error(js, arg, "of type object", extension);
+        return Ant_Error_CreateInvalidArgType(js, arg, "of type object", extension);
       }
     }
 
@@ -973,7 +934,7 @@ static ant_value_t vm_compile_function(ant_params_t) {
       const char *text = js_getstr(js, name, &len);
       filename = intern_string(text, len);
       if (!filename) return js_mkerr(js, "out of memory");
-    } else if (vtype(name) != kTypeUndefined) return vm_arg_error(js, "options.filename", "of type string", name);
+    } else if (vtype(name) != kTypeUndefined) return Ant_Error_CreateInvalidArgType(js, "options.filename", "of type string", name);
   }
 
   ant_offset_t param_count = vtype(params) == kTypeArray ? js_arr_len(js, params) : 0;
@@ -988,7 +949,7 @@ static ant_value_t vm_compile_function(ant_params_t) {
     if (vtype(parts[i]) != kTypeString) {
       char arg[32];
       snprintf(arg, sizeof(arg), "params[%u]", (unsigned)i);
-      ant_value_t error = vm_arg_error(js, arg, "of type string", parts[i]);
+      ant_value_t error = Ant_Error_CreateInvalidArgType(js, arg, "of type string", parts[i]);
       free(parts);
       GC_ROOT_RESTORE(js, mark);
       return error;
@@ -1001,12 +962,15 @@ static ant_value_t vm_compile_function(ant_params_t) {
   const char *saved_filename = js->filename;
   js->filename = filename;
   
+  bool extended = vtype(extensions) == kTypeArray && js_arr_len(js, extensions) > 0;
   ant_value_t fn = js_function_from_source(js, parts, (int)param_count + 1);
-  if (!is_err(fn) && vtype(extensions) == kTypeArray && js_arr_len(js, extensions) > 0)
-    fn = vm_function_with_extensions(js, parts, (int)param_count, extensions);
+  if (!is_err(fn) && extended) fn = vm_function_with_extensions(js, parts, (int)param_count, extensions);
   
-  if (vtype(fn) == kTypeFunction)
-    vm_set_import(js, js_func_closure(fn)->func, import_handler, is_callable(import_handler) ? fn : js_mkundef());
+  if (vtype(fn) == kTypeFunction) {
+    sv_func_t *func = js_func_closure(fn)->func;
+    vm_offset_positions(func, -VM_FUNCTION_WRAPPER_LINES * (extended ? 2 : 1), 0);
+    vm_set_import(js, func, import_handler, is_callable(import_handler) ? fn : js_mkundef());
+  }
   
   js->filename = saved_filename;
   ant_realm_restore(js, prev);
@@ -1016,10 +980,34 @@ static ant_value_t vm_compile_function(ant_params_t) {
   return fn;
 }
 
+static ant_value_t vm_option_one_of(
+  ant_t *js, ant_value_t options, const char *name, const char *arg,
+  const char *const *allowed, size_t count, const char *expected
+) {
+  ant_value_t value = js_get(js, options, name);
+  if (vtype(value) == kTypeUndefined) return js_mkundef();
+  
+  const char *text = vtype(value) == kTypeString ? js_getstr(js, value, NULL) : NULL;
+  for (size_t i = 0; text && i < count; i++) if (strcmp(text, allowed[i]) == 0) return js_mkundef();
+  
+  return Ant_Error_CreateInvalidArgValue(js, arg, expected, value);
+}
+
 static ant_value_t vm_measure_memory(ant_params_t) {
   ant_value_t options = nargs > 0 ? args[0] : js_mkundef();
   if (vtype(options) != kTypeUndefined && !is_object_type(options))
-    return vm_arg_error(js, "options", "of type object", options);
+    return Ant_Error_CreateInvalidArgType(js, "options", "of type object", options);
+
+  if (is_object_type(options)) {
+    static const char *const modes[] = { "summary", "detailed" };
+    static const char *const executions[] = { "default", "eager" };
+    
+    ant_value_t checked = vm_option_one_of(js, options, "mode", "options.mode", modes, countof(modes), "'summary', 'detailed'");
+    if (is_err(checked)) return checked;
+    
+    checked = vm_option_one_of(js, options, "execution", "options.execution", executions, countof(executions), "'default', 'eager'");
+    if (is_err(checked)) return checked;
+  }
 
   size_t used =
     js->obj_arena.live_count * js->obj_arena.elem_size +

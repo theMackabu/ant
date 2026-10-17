@@ -38,15 +38,15 @@
 #pragma clang diagnostic pop
 #include "modules/temporal_capi_ext.h"
 
-static constexpr uint32_t TEMPORAL_PROVIDER_TAG = 0x54505256u;        /* TPRV */
-static constexpr uint32_t TEMPORAL_DURATION_TAG = 0x54445552u;        /* TDUR */
-static constexpr uint32_t TEMPORAL_INSTANT_TAG = 0x54494e53u;         /* TINS */
-static constexpr uint32_t TEMPORAL_PLAIN_DATE_TAG = 0x54504441u;      /* TPDA */
-static constexpr uint32_t TEMPORAL_PLAIN_DATETIME_TAG = 0x54504454u;  /* TPDT */
-static constexpr uint32_t TEMPORAL_PLAIN_MONTHDAY_TAG = 0x54504d44u;  /* TPMD */
-static constexpr uint32_t TEMPORAL_PLAIN_TIME_TAG = 0x54505449u;      /* TPTI */
-static constexpr uint32_t TEMPORAL_PLAIN_YEARMONTH_TAG = 0x5450594du; /* TPYM */
-static constexpr uint32_t TEMPORAL_ZONED_DATETIME_TAG = 0x545a4454u;  /* TZDT */
+static constexpr uint32_t TEMPORAL_PROVIDER_TAG = Ant_NativeTag("TPRV");
+static constexpr uint32_t TEMPORAL_DURATION_TAG = Ant_NativeTag("TDUR");
+static constexpr uint32_t TEMPORAL_INSTANT_TAG = Ant_NativeTag("TINS");
+static constexpr uint32_t TEMPORAL_PLAIN_DATE_TAG = Ant_NativeTag("TPDA");
+static constexpr uint32_t TEMPORAL_PLAIN_DATETIME_TAG = Ant_NativeTag("TPDT");
+static constexpr uint32_t TEMPORAL_PLAIN_MONTHDAY_TAG = Ant_NativeTag("TPMD");
+static constexpr uint32_t TEMPORAL_PLAIN_TIME_TAG = Ant_NativeTag("TPTI");
+static constexpr uint32_t TEMPORAL_PLAIN_YEARMONTH_TAG = Ant_NativeTag("TPYM");
+static constexpr uint32_t TEMPORAL_ZONED_DATETIME_TAG = Ant_NativeTag("TZDT");
 
 typedef enum {
   TEMPORAL_DURATION,

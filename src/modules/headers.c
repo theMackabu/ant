@@ -50,10 +50,8 @@ enum {
   ITER_VALUES = 2
 };
 
-enum {
-  HEADERS_NATIVE_TAG = 0x48445253u, // HDRS
-  HEADERS_ITER_NATIVE_TAG = 0x48444954u // HDIT
-};
+static constexpr uint32_t HEADERS_NATIVE_TAG = Ant_NativeTag("HDRS");
+static constexpr uint32_t HEADERS_ITER_NATIVE_TAG = Ant_NativeTag("HDIT");
 
 headers_data_t *headers_data_create(void) {
   hdr_list_t *l = calloc(1, sizeof(hdr_list_t));

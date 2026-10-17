@@ -57,7 +57,7 @@ static ant_value_t dns_parse_family(ant_t *js, ant_value_t value, const char *na
   }
 
   double family = vtype(value) == kTypeNumber ? js_getnum(value) : -1;
-  if (family != 0 && family != 4 && family != 6) return dns_invalid_arg_value(js, name, value, "0, 4, 6");
+  if (family != 0 && family != 4 && family != 6) return Ant_Error_CreateInvalidArgValue(js, name, "0, 4, 6", value);
 
   *out = (int)family;
   return js_mkundef();
@@ -78,7 +78,7 @@ static ant_value_t dns_parse_order(ant_t *js, ant_value_t value, const char *nam
     return js_mkundef();
   }
 
-  return dns_invalid_arg_value(js, name, value, "'verbatim', 'ipv4first', 'ipv6first'");
+  return Ant_Error_CreateInvalidArgValue(js, name, "'verbatim', 'ipv4first', 'ipv6first'", value);
 }
 
 ant_value_t dns_parse_result_order(ant_t *js, ant_value_t value, dns_order_t *out) {
@@ -93,7 +93,7 @@ static ant_value_t dns_parse_lookup_object(ant_t *js, ant_value_t options, dns_l
   if (vtype(hints) != kTypeUndefined && vtype(hints) != kTypeNull) {
     if (vtype(hints) != kTypeNumber) return dns_invalid_type(js, "options.hints", "of type number", hints);
     uint32_t flags = (uint32_t)(int64_t)js_getnum(hints);
-    if (flags & ~(uint32_t)DNS_HINTS_MASK) return dns_invalid_arg_value(js, "hints", hints, NULL);
+    if (flags & ~(uint32_t)DNS_HINTS_MASK) return Ant_Error_CreateInvalidArgValue(js, "hints", NULL, hints);
     out->hints = (int)flags;
   }
 
@@ -323,7 +323,7 @@ ant_value_t dns_lookup_service_impl(ant_t *js, ant_value_t *args, int nargs, boo
 
   const char *text = js_getstr(js, address, NULL);
   int family = dns_ip_family(text);
-  if (!family) return dns_invalid_arg_value(js, "address", address, NULL);
+  if (!family) return Ant_Error_CreateInvalidArgValue(js, "address", NULL, address);
 
   int port = 0;
   ant_value_t r = dns_parse_port(js, args[1], &port);
@@ -334,7 +334,7 @@ ant_value_t dns_lookup_service_impl(ant_t *js, ant_value_t *args, int nargs, boo
   int rc = family == 4
     ? uv_ip4_addr(text, port, (struct sockaddr_in *)&addr)
     : uv_ip6_addr(text, port, (struct sockaddr_in6 *)&addr);
-  if (rc < 0) return dns_invalid_arg_value(js, "address", address, NULL);
+  if (rc < 0) return Ant_Error_CreateInvalidArgValue(js, "address", NULL, address);
 
   dns_request_t *req = dns_request_new(js, DNS_REQ_LOOKUP_SERVICE, callback, address);
   if (!req) return js_mkerr(js, "out of memory");

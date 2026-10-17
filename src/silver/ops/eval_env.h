@@ -18,7 +18,7 @@ typedef struct sv_eval_env_state {
 } sv_eval_env_state_t;
 
 static inline bool sv_eval_binding_visible(const sv_runtime_binding_t *binding) {
-  return binding && binding->name && binding->len > 0 && binding->name[0] != '\x01';
+  return binding && binding->name && binding->len > 0;
 }
 
 static inline sv_eval_env_state_t *sv_eval_env_state(ant_value_t env) {

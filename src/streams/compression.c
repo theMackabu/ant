@@ -14,13 +14,11 @@
 #include "streams/compression.h"
 #include "streams/transform.h"
 
-enum {
-  CS_Z_NATIVE_TAG = 0x43535a53u, // CSZS
-  DS_Z_NATIVE_TAG = 0x44535a53u, // DSZS
-  
-  CS_BROTLI_NATIVE_TAG = 0x43534252u, // CSBR
-  DS_BROTLI_NATIVE_TAG = 0x44534252u  // DSBR
-};
+static constexpr uint32_t CS_Z_NATIVE_TAG = Ant_NativeTag("CSZS");
+static constexpr uint32_t DS_Z_NATIVE_TAG = Ant_NativeTag("DSZS");
+
+static constexpr uint32_t CS_BROTLI_NATIVE_TAG = Ant_NativeTag("CSBR");
+static constexpr uint32_t DS_BROTLI_NATIVE_TAG = Ant_NativeTag("DSBR");
 
 typedef struct {
   z_stream strm;

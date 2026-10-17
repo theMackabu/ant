@@ -2,11 +2,16 @@
 #define ANT_REALM_H
 
 #include "isolate.h"
-#include "list.h"
+
+typedef struct ant_realm_token {
+  ant_realm_t *realm;
+  uint32_t refs;
+} ant_realm_token_t;
 
 struct ant_realm {
   ant_realm_t *next;
   ant_realm_t **pprev;
+  ant_realm_token_t *token;
   
   bool is_main;
   bool initializing;
@@ -47,11 +52,26 @@ struct ant_realm {
   } mutable_roots;
 };
 
+ant_realm_t *ant_realm_create(ant_t *js);
+ant_realm_token_t *ant_realm_token_retain(ant_realm_t *realm);
+ant_realm_t *ant_realm_enter(ant_t *js, ant_realm_t *realm);
+
+ant_value_t realm_internal_library(ant_t *js);
+ant_realm_t *ant_realm_of_builtin(ant_t *js, ant_value_t builtin);
+ant_value_t ant_realm_function_proto(ant_t *js, ant_realm_t *realm);
+
+void ant_realm_collect(ant_t *js);
+void ant_realm_destroy_all(ant_t *js);
+void ant_realm_install_console(ant_t *js);
+void ant_realm_token_release(ant_realm_token_t *token);
+
+bool ant_realm_foreign_array_ctor(ant_t *js, ant_value_t ctor);
+void ant_realm_mark(ant_t *js, void (*mark)(ant_t *js, ant_value_t value));
+void ant_realm_reach_slow(ant_t *js, ant_realm_t *realm, void (*mark)(ant_t *js, ant_value_t value));
+
 static inline ant_realm_t *ant_realm_main(ant_t *js) {
   return js->main_realm;
 }
-ant_realm_t *ant_realm_create(ant_t *js);
-ant_realm_t *ant_realm_enter(ant_t *js, ant_realm_t *realm);
 
 static inline ant_realm_t *ant_realm_builtin_key(ant_realm_t *realm) {
   return realm && !realm->is_main ? realm : NULL;
@@ -71,20 +91,8 @@ static inline void ant_realm_restore(ant_t *js, ant_realm_t *prev) {
   if (__builtin_expect(js->realm != prev, 0)) ant_realm_enter(js, prev);
 }
 
-ant_realm_t *ant_realm_of_builtin(ant_t *js, ant_value_t builtin);
-ant_value_t ant_realm_function_proto(ant_t *js, ant_realm_t *realm);
-
-bool ant_realm_foreign_array_ctor(ant_t *js, ant_value_t ctor);
-void ant_realm_mark(ant_t *js, void (*mark)(ant_t *js, ant_value_t value));
-void ant_realm_reach_slow(ant_t *js, ant_realm_t *realm, void (*mark)(ant_t *js, ant_value_t value));
-
 static inline void ant_realm_reach(ant_t *js, ant_realm_t *realm, void (*mark)(ant_t *js, ant_value_t value)) {
   if (realm && realm->gc_epoch != js->gc.epoch) ant_realm_reach_slow(js, realm, mark);
 }
-
-void ant_realm_collect(ant_t *js);
-void ant_realm_destroy_all(ant_t *js);
-ant_value_t realm_internal_library(ant_t *js);
-void ant_realm_install_console(ant_t *js);
 
 #endif

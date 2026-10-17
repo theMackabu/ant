@@ -18,7 +18,7 @@
 #include "modules/iterator.h"
 #include "streams/readable.h"
 
-enum { BLOB_NATIVE_TAG = 0x424c4f42u }; // BLOB
+static constexpr uint32_t BLOB_NATIVE_TAG = Ant_NativeTag("BLOB");
 
 bool blob_is_blob(ant_t *js, ant_value_t obj) {
   int id = js_brand_id(obj);

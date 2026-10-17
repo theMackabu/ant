@@ -412,7 +412,7 @@ void ant_inspector_network_append_response_body(uint64_t request_id, const uint8
 }
 
 uint64_t ant_inspector_websocket_created(const char *url) {
-  if (!g_inspector.started || !g_inspector.attached || !inspector_network_has_ready_client()) return 0;
+  if (!__builtin_expect(ant_inspector_network_active(), 0)) return 0;
   uint64_t request_id = ++g_inspector.next_network_request_id;
   if (request_id == 0) request_id = ++g_inspector.next_network_request_id;
   inspector_network_entry_for_id(request_id, true);

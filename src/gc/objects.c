@@ -442,6 +442,11 @@ static void gc_code_unit_enqueue(ant_t *js, sv_code_unit_t *unit) {
   if (unit->gc_epoch == js->gc.epoch) return;
   unit->gc_epoch = js->gc.epoch;
   
+  if (__builtin_expect(unit->import_handler != 0, 0)) {
+    gc_mark_value(js, unit->import_handler);
+    gc_mark_value(js, unit->import_referrer);
+  }
+  
   for (sv_func_t *func = unit->funcs; func; func = func->unit_next) {
     if (func->gc_epoch == js->gc.epoch) continue;
     func->gc_epoch = js->gc.epoch;
@@ -483,11 +488,6 @@ static void gc_func_trace(ant_t *js, sv_func_t *func) {
   for (int i = 0; i < func->child_func_count; i++) 
     gc_func_enqueue(js, func->child_funcs[i]);
 
-  if (__builtin_expect(func->debug && func->debug->import_handler, 0)) {
-    gc_mark_value(js, func->debug->import_handler);
-    gc_mark_value(js, func->debug->import_referrer);
-  }
-    
   for (uint32_t i = 0; i < func->obj_site_count; i++) {
     if (!func->obj_sites) continue;
     ant_gc_shapes_mark(func->obj_sites[i].shared_shape);
@@ -586,7 +586,7 @@ void gc_mark_closure(ant_t *js, sv_closure_t *c) {
   c->gc_epoch = js->gc.epoch;
   
   if (js->weak_gc.pending_active) gc_weak_key_marked(js, mkref(kTypeFunction, c));
-  if (c->func && !js->gc.minor) ant_realm_reach(js, c->func->realm, gc_mark_value);
+  if (js->gc.realm_reach && c->func) ant_realm_reach(js, c->func->realm, gc_mark_value);
   
   gc_mark_func(js, c->func);
   if (c->func_obj) gc_mark_value(js, c->func_obj);
@@ -632,7 +632,7 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
 
   if (!((1u << t) & GC_OBJ_TYPE_MASK)) {
     if (t == kTypeFunctionInfo) gc_mark_func(js, (sv_func_t *)vptr(v));
-    else if (t == kTypeBuiltin && !js->gc.minor)
+    else if (t == kTypeBuiltin && js->gc.realm_reach)
       ant_realm_reach(js, ant_cfunc_meta_realm((const ant_cfunc_meta_t *)vptr(v)), gc_mark_value);
     return;
   }
@@ -1615,6 +1615,7 @@ uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
   uint64_t mark_start_ns = gc_now_ns();
   
   js->gc_objects_running = true;
+  js->gc.realm_reach = ant_realm_multiple(js);
   if (js->gc.func_profile.enabled) js->gc.func_profile.collections++;
   
   js->gc.epoch++;
@@ -1737,6 +1738,7 @@ void gc_objects_run_minor(ant_t *js) {
   }
   
   js->gc.minor = true;
+  js->gc.realm_reach = false;
   GC_VERIFY_CARDS(js);
 
   for (size_t i = 0; i < js->remember_set_len; i++)

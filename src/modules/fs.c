@@ -217,11 +217,9 @@ typedef struct {
   double atime_ms, mtime_ms, ctime_ms, birthtime_ms;
 } fs_stat_fields_t;
 
-enum { 
-  FS_WATCHER_NATIVE_TAG = 0x46535754u,    // FSWT
-  FS_FILEHANDLE_NATIVE_TAG = 0x46534648u, // FSFH
-  FS_DIR_NATIVE_TAG = 0x46534452u         // FSDR
-};
+static constexpr uint32_t FS_WATCHER_NATIVE_TAG = Ant_NativeTag("FSWT");
+static constexpr uint32_t FS_FILEHANDLE_NATIVE_TAG = Ant_NativeTag("FSFH");
+static constexpr uint32_t FS_DIR_NATIVE_TAG = Ant_NativeTag("FSDR");
 
 static fs_watcher_t *fs_watcher_data(ant_value_t value) {
   return (fs_watcher_t *)js_get_native(value, FS_WATCHER_NATIVE_TAG);

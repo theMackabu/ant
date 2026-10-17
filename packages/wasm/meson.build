@@ -59,6 +59,7 @@ core_sources = files(
   '../../src/numbers.cc',
   '../../src/output.c',
   '../../src/pool.c',
+  '../../src/interrupt.c',
   '../../src/protectors.c',
   '../../src/ptr.c',
   '../../src/realm.c',

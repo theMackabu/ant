@@ -3,6 +3,7 @@
 
 #include <uthash.h>
 #include "types.h"
+#include "native_tag.h"
 
 typedef struct map_entry {
   unsigned char *key;
@@ -61,17 +62,15 @@ typedef struct set_iterator_state {
   iter_type_t type;
 } set_iterator_state_t;
 
-enum {
-  MAP_NATIVE_TAG = 0x4d415050u, // MAPP
-  SET_NATIVE_TAG = 0x53455450u, // SETP
-  
-  WEAKMAP_NATIVE_TAG = 0x574d4150u, // WMAP
-  WEAKSET_NATIVE_TAG = 0x57534554u, // WSET
-  WEAKREF_NATIVE_TAG = 0x57524546u, // WREF
-  
-  MAP_ITER_NATIVE_TAG = 0x4d495452u, // MITR
-  SET_ITER_NATIVE_TAG = 0x53495452u  // SITR
-};
+static constexpr uint32_t MAP_NATIVE_TAG = Ant_NativeTag("MAPP");
+static constexpr uint32_t SET_NATIVE_TAG = Ant_NativeTag("SETP");
+
+static constexpr uint32_t WEAKMAP_NATIVE_TAG = Ant_NativeTag("WMAP");
+static constexpr uint32_t WEAKSET_NATIVE_TAG = Ant_NativeTag("WSET");
+static constexpr uint32_t WEAKREF_NATIVE_TAG = Ant_NativeTag("WREF");
+
+static constexpr uint32_t MAP_ITER_NATIVE_TAG = Ant_NativeTag("MITR");
+static constexpr uint32_t SET_ITER_NATIVE_TAG = Ant_NativeTag("SITR");
 
 void init_collections_module(ant_t *js);
 void weakmap_table_free(weakmap_table_t *table);
@@ -90,8 +89,10 @@ bool advance_map(ant_t *js, iterator_t *it, ant_value_t *out);
 bool advance_set(ant_t *js, iterator_t *it, ant_value_t *out);
 bool collections_is_map_get_builtin(ant_value_t func);
 bool collections_is_map_has_builtin(ant_value_t func);
-
+bool js_weakref_target(ant_value_t ref, ant_value_t *target);
 bool weakmap_table_delete(weakmap_table_t *table, ant_value_t key);
+
+ant_value_t js_weakref_create(ant_t *js, ant_value_t target);
 weakmap_entry_t *weakmap_table_find(weakmap_table_t *table, ant_value_t key);
 
 bool collections_map_store_cloned_entry(

@@ -103,8 +103,8 @@ static inline void sv_op_is_null(sv_vm_t *vm) {
 }
 
 static inline ant_value_t sv_op_import(sv_vm_t *vm, ant_t *js, sv_func_t *func) {
-  if (__builtin_expect(func->debug && func->debug->import_handler, 0)) {
-    ant_value_t result = js_vm_dynamic_import(js, func->debug, vm->stack[vm->sp - 2], vm->stack[vm->sp - 1]);
+  if (__builtin_expect(func->unit && func->unit->import_handler, 0)) {
+    ant_value_t result = js_vm_dynamic_import(js, func->unit, vm->stack[vm->sp - 2], vm->stack[vm->sp - 1]);
     vm->sp -= 2;
     if (!is_err(result)) vm->stack[vm->sp++] = result;
     return result;

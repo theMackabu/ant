@@ -2,6 +2,7 @@
 #define STREAMS_WRITABLE_H
 
 #include "types.h"
+#include "native_tag.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -29,10 +30,8 @@ typedef struct {
   bool pending_abort_was_already_erroring;
 } ws_stream_t;
 
-enum {
-  WS_STREAM_NATIVE_TAG = 0x57535452u,    // WSTR
-  WS_CONTROLLER_NATIVE_TAG = 0x57534354u // WSCT
-};
+static constexpr uint32_t WS_STREAM_NATIVE_TAG = Ant_NativeTag("WSTR");
+static constexpr uint32_t WS_CONTROLLER_NATIVE_TAG = Ant_NativeTag("WSCT");
 
 void init_writable_stream_module(ant_t *js);
 void gc_mark_writable_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));

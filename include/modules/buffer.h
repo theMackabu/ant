@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "types.h"
+#include "native_tag.h"
 
 typedef enum {
   ARRAY_BUFFER_STORAGE_EXTERNAL,
@@ -61,22 +62,18 @@ typedef struct {
 
 static constexpr size_t BUFFER_INSPECT_MAX_BYTES = 50;
 
-enum {
-  BUFFER_ARRAYBUFFER_NATIVE_TAG = 0x41425546u, // ABUF
-  BUFFER_TYPEDARRAY_NATIVE_TAG  = 0x54594152u, // TYAR
-  BUFFER_DATAVIEW_NATIVE_TAG    = 0x44564957u, // DVIW
-};
+static constexpr uint32_t BUFFER_ARRAYBUFFER_NATIVE_TAG = Ant_NativeTag("ABUF");
+static constexpr uint32_t BUFFER_TYPEDARRAY_NATIVE_TAG  = Ant_NativeTag("TYAR");
+static constexpr uint32_t BUFFER_DATAVIEW_NATIVE_TAG    = Ant_NativeTag("DVIW");
 
 ant_value_t buffer_library(ant_t *js);
+size_t buffer_get_external_memory(ant_t *js);
 
 void init_buffer_module(ant_t *js);
 void cleanup_buffer_module(ant_t *js);
-size_t buffer_get_external_memory(ant_t *js);
 void free_array_buffer_data(ant_t *js, ArrayBufferData *data);
-bool buffer_can_transfer(const ArrayBufferData *data);
 void buffer_transfer_storage(ant_t *js, ArrayBufferData *from, ArrayBufferData *to);
 void buffer_detach(ant_t *js, ArrayBufferData *data);
-ArrayBufferData *create_external_array_buffer_data(uint8_t *data, size_t length);
 
 ant_value_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer);
 ant_value_t create_arraybuffer_copy(ant_t *js, const void *bytes, size_t length);
@@ -86,7 +83,15 @@ ArrayBufferData *create_array_buffer_data(ant_t *js, size_t length);
 ArrayBufferData *buffer_get_arraybuffer_data(ant_value_t value);
 TypedArrayData *buffer_get_typedarray_data(ant_value_t value);
 DataViewData *buffer_get_dataview_data(ant_value_t value);
+ArrayBufferData *create_external_array_buffer_data(uint8_t *data, size_t length);
 
+bool buffer_is_dataview(ant_value_t obj);
+bool buffer_is_binary_source(ant_value_t value);
+bool buffer_can_transfer(const ArrayBufferData *data);
+
+bool buffer_source_get_bytes(ant_t *js, ant_value_t value, const uint8_t **out, size_t *len);
+bool buffer_typedarray_data_read_index(ant_t *js, const TypedArrayData *ta_data, size_t index, ant_value_t *out);
+bool buffer_typedarray_read_index(ant_t *js, ant_value_t value, size_t index, ant_value_t *out);
 
 bool buffer_bytes_to_string(
   ant_t *js, const uint8_t *data, size_t len,
@@ -109,13 +114,6 @@ ant_value_t create_dataview_with_buffer(
   size_t byte_offset, size_t byte_length,
   ant_value_t arraybuffer_obj
 );
-
-bool buffer_is_dataview(ant_value_t obj);
-bool buffer_is_binary_source(ant_value_t value);
-
-bool buffer_source_get_bytes(ant_t *js, ant_value_t value, const uint8_t **out, size_t *len);
-bool buffer_typedarray_data_read_index(ant_t *js, const TypedArrayData *ta_data, size_t index, ant_value_t *out);
-bool buffer_typedarray_read_index(ant_t *js, ant_value_t value, size_t index, ant_value_t *out);
 
 static inline bool Ant_Buffer_IsLive(const ArrayBufferData *buffer) {
   return buffer && !buffer->is_detached;

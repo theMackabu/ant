@@ -31,7 +31,7 @@ typedef struct {
   int pending_len;
 } sd_state_t;
 
-enum { STRING_DECODER_NATIVE_TAG = 0x53444543u }; // SDEC
+static constexpr uint32_t STRING_DECODER_NATIVE_TAG = Ant_NativeTag("SDEC");
 
 static sd_state_t *sd_get_state(ant_value_t obj) {
   return (sd_state_t *)js_get_native(obj, STRING_DECODER_NATIVE_TAG);

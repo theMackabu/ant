@@ -40,10 +40,8 @@ typedef struct {
   ant_value_t fields[];
 } event_data_t;
 
-enum {
-  EVENT_NATIVE_TAG = 0x45564e54u,        // EVNT
-  EVENT_EMITTER_NATIVE_TAG = 0x45454d54u // EEMT
-};
+static constexpr uint32_t EVENT_NATIVE_TAG = Ant_NativeTag("EVNT");
+static constexpr uint32_t EVENT_EMITTER_NATIVE_TAG = Ant_NativeTag("EEMT");
 
 static event_data_t *get_event_data(ant_value_t obj) {
   return (event_data_t *)js_get_native(obj, EVENT_NATIVE_TAG);

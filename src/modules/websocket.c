@@ -70,7 +70,7 @@ enum {
   WS_CLOSED = 3,
 };
 
-static constexpr uint32_t WS_NATIVE_TAG = 0x57534f42u; // WSOB
+static constexpr uint32_t WS_NATIVE_TAG = Ant_NativeTag("WSOB");
 static constexpr uint32_t WS_DEFAULT_MAX_PAYLOAD_LEN = 16u * 1024u * 1024u;
 
 static websocket_state_t *websocket_data(ant_value_t value) {

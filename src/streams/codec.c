@@ -13,10 +13,8 @@
 #include "streams/codec.h"
 #include "streams/transform.h"
 
-enum {
-  TES_NATIVE_TAG = 0x54455354u, // TEST
-  TDS_NATIVE_TAG = 0x54445354u  // TDST
-};
+static constexpr uint32_t TES_NATIVE_TAG = Ant_NativeTag("TEST");
+static constexpr uint32_t TDS_NATIVE_TAG = Ant_NativeTag("TDST");
 
 typedef struct {
   uint8_t pending[3];

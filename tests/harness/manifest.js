@@ -98,6 +98,7 @@ export function targets() {
     'test_direct_eval_environment.cjs',
     'test_disposal_error_values.cjs',
     'test_duplicate_declarations.cjs',
+    'test_dynamic_import_builtin_default.mjs',
     'test_arguments_not_array.cjs',
     'test_object_spread_semantics.cjs',
     'test_define_properties_semantics.cjs',

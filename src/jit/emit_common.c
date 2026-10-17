@@ -13,15 +13,21 @@ void jit_emit_exit_ret(jit_compile_t *c, MIR_op_t ret_op) {
 
 void jit_emit_interrupt_poll(jit_compile_t *c) {
   if (!c->js->interrupts_armed) return;
+  if (!c->interrupt_exit) c->interrupt_exit = MIR_new_label(c->ctx);
   
-  MIR_label_t go = MIR_new_label(c->ctx);
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_tmp2),
                                MIR_new_mem_op(c->ctx, MIR_T_U8, (MIR_disp_t)offsetof(ant_t, interrupt_pending),
                                               c->r_js, 0, 1)));
   MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, go),
+                  MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, c->interrupt_exit),
                                MIR_new_reg_op(c->ctx, c->r_tmp2), MIR_new_int_op(c->ctx, 0)));
+}
+
+void jit_emit_interrupt_exit(jit_compile_t *c) {
+  if (!c->interrupt_exit) return;
+  
+  MIR_append_insn(c->ctx, c->jit_func, c->interrupt_exit);
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_call_insn(c->ctx, 6,
                                     MIR_new_ref_op(c->ctx, c->helper1_proto),
@@ -31,7 +37,6 @@ void jit_emit_interrupt_poll(jit_compile_t *c) {
                                     MIR_new_reg_op(c->ctx, c->r_js),
                                     MIR_new_uint_op(c->ctx, js_mkundef())));
   jit_emit_exit_ret(c, MIR_new_reg_op(c->ctx, c->r_err_tmp));
-  MIR_append_insn(c->ctx, c->jit_func, go);
 }
 
 static bool jit_bc_in_osr_loop(jit_compile_t *c) {

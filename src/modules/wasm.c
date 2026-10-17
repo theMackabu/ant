@@ -89,17 +89,13 @@ typedef struct {
   ant_value_t owner;
 } wasm_instance_owner_t;
 
-enum {
-  WASM_FUNC_STATE_TAG = 0x57465354u, // WFST
-  WASM_MODULE_NATIVE_TAG = 0x574d4f44u, // WMOD
-  WASM_INSTANCE_NATIVE_TAG = 0x57494e53u, // WINS
-  WASM_EXTERN_NATIVE_TAG = 0x57455854u // WEXT
-};
+static constexpr uint32_t WASM_FUNC_STATE_TAG = Ant_NativeTag("WFST");
+static constexpr uint32_t WASM_MODULE_NATIVE_TAG = Ant_NativeTag("WMOD");
+static constexpr uint32_t WASM_INSTANCE_NATIVE_TAG = Ant_NativeTag("WINS");
+static constexpr uint32_t WASM_EXTERN_NATIVE_TAG = Ant_NativeTag("WEXT");
 
 static size_t g_wasm_import_env_count = 0;
 static size_t g_wasm_import_env_cap   = 0;
-
-
 
 static wasm_engine_t *g_wasm_engine                = NULL;
 static wasm_import_func_env_t **g_wasm_import_envs = NULL;

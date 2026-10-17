@@ -2677,55 +2677,13 @@ static ant_value_t buffer_fill_range(
   return js_mkundef();
 }
 
-static void buffer_group_digits(const char *digits, char *out, size_t len) {
-  size_t n = strlen(digits), start = digits[0] == '-' ? 1 : 0, head = n;
-  while (head >= start + 4) head -= 3;
-  
-  size_t w = 0;
-  for (size_t i = 0; i < n && w + 1 < len; i++) {
-    if (i >= head && i > start && (i - head) % 3 == 0) out[w++] = '_';
-    if (w + 1 < len) out[w++] = digits[i];
-  }
-  out[w] = '\0';
-}
-
-static void buffer_describe_value(ant_t *js, ant_value_t value, char *out, size_t len) {
-  char raw[96];
-  
-  if (vtype(value) == kTypeBigInt) {
-    size_t n = strbigint(js, value, raw, sizeof(raw) - 1);
-    raw[n < sizeof(raw) - 1 ? n : sizeof(raw) - 2] = '\0';
-    const char *digits = raw[0] == '-' ? raw + 1 : raw;
-    bool large = strlen(digits) > 10 || (strlen(digits) == 10 && strcmp(digits, "4294967296") > 0);
-    if (large) buffer_group_digits(raw, out, len - 1);
-    else snprintf(out, len - 1, "%s", raw);
-    strncat(out, "n", len - strlen(out) - 1);
-    return;
-  }
-  
-  double d = js_getnum(value);
-  if (d == 0 && signbit(d)) { snprintf(out, len, "-0"); return; }
-  
-  size_t n = js_number_to_chars(value, raw, sizeof(raw) - 1);
-  raw[n < sizeof(raw) - 1 ? n : sizeof(raw) - 2] = '\0';
-  if (isfinite(d) && d == trunc(d) && fabs(d) > 4294967296.0) buffer_group_digits(raw, out, len);
-  else snprintf(out, len, "%s", raw);
-}
-
-__attribute__((noinline, cold)) static ant_value_t buffer_out_of_range(ant_t *js, const char *name, const char *range, ant_value_t received) {
-  char got[128], message[384];
-  buffer_describe_value(js, received, got, sizeof(got));
-  snprintf(message, sizeof(message), "The value of \"%s\" is out of range. It must be %s. Received %s", name, range, got);
-  return js_mkerr_code(js, JS_ERR_RANGE, "ERR_OUT_OF_RANGE", message);
-}
-
 static ant_value_t buffer_size_arg(ant_t *js, ant_value_t *args, int nargs, size_t *out) {
   ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
   if (vtype(value) != kTypeNumber) return Ant_Error_CreateInvalidArgType(js, "size", "of type number", value);
 
   double size = js_getnum(value);
   if (!(size >= 0 && size <= 9007199254740991.0))
-    return buffer_out_of_range(js, "size", ">= 0 && <= 9007199254740991", value);
+    return Ant_Error_CreateOutOfRange(js, "size", ">= 0 && <= 9007199254740991", value);
 
   *out = (size_t)size;
   return js_mkundef();
@@ -2783,8 +2741,8 @@ static ant_value_t buffer_index_arg(ant_t *js, ant_value_t v, const char *name, 
   if (vtype(v) != kTypeNumber) return Ant_Error_CreateInvalidArgType(js, name, "of type number", v);
   
   double d = js_getnum(v);
-  if (!isfinite(d) || d != trunc(d)) return buffer_out_of_range(js, name, "an integer", v);
-  if (d < 0 || d > 9007199254740991.0) return buffer_out_of_range(js, name, ">= 0 && <= 9007199254740991", v);
+  if (!isfinite(d) || d != trunc(d)) return Ant_Error_CreateOutOfRange(js, name, "an integer", v);
+  if (d < 0 || d > 9007199254740991.0) return Ant_Error_CreateOutOfRange(js, name, ">= 0 && <= 9007199254740991", v);
   
   *out = (size_t)d;
   return js_mkundef();
@@ -3587,13 +3545,13 @@ static inline void buffer_store_bytes(uint8_t *ptr, size_t width, bool little_en
 
 static __attribute__((noinline, cold)) ant_value_t buffer_bounds_error(ant_t *js, ant_value_t offset, double max) {
   double n = js_getnum(offset);
-  if (floor(n) != n) return buffer_out_of_range(js, "offset", "an integer", offset);
+  if (floor(n) != n) return Ant_Error_CreateOutOfRange(js, "offset", "an integer", offset);
   if (max < 0) return js_mkerr_code(js, JS_ERR_RANGE, "ERR_BUFFER_OUT_OF_BOUNDS", "Attempt to access memory outside buffer bounds");
   
   char range[64];
   if (isnan(max)) snprintf(range, sizeof(range), ">= 0 and <= NaN");
   else snprintf(range, sizeof(range), ">= 0 and <= %.0f", max);
-  return buffer_out_of_range(js, "offset", range, offset);
+  return Ant_Error_CreateOutOfRange(js, "offset", range, offset);
 }
 
 static ant_value_t buffer_access_ptr(ant_t *js, ant_value_t offset_value, size_t width, uint8_t **ptr, size_t *offset) {
@@ -3638,7 +3596,7 @@ static ant_value_t buffer_write_bigint64(ant_native_params_t, bool little_endian
   const char *range = is_signed ? ">= -(2n ** 63n) and < 2n ** 63n" : ">= 0n and < 2n ** 64n";
   
   uint64_t bits = 0;
-  if (!buffer_bigint64_in_range(js, value, is_signed, &bits)) return buffer_out_of_range(js, "value", range, value);
+  if (!buffer_bigint64_in_range(js, value, is_signed, &bits)) return Ant_Error_CreateOutOfRange(js, "value", range, value);
   
   size_t offset; uint8_t *ptr;
   ant_value_t error = buffer_access_ptr(js, nargs > 1 ? args[1] : js_mkundef(), 8, &ptr, &offset);
@@ -3666,8 +3624,8 @@ typedef enum {
 static ant_value_t buffer_num_width(ant_t *js, ant_value_t value, size_t *width) {
   if (vtype(value) != kTypeNumber) return Ant_Error_CreateInvalidArgType(js, "byteLength", "of type number", value);
   double n = js_getnum(value);
-  if (floor(n) != n) return buffer_out_of_range(js, "byteLength", "an integer", value);
-  if (n < 1 || n > 6) return buffer_out_of_range(js, "byteLength", ">= 1 and <= 6", value);
+  if (floor(n) != n) return Ant_Error_CreateOutOfRange(js, "byteLength", "an integer", value);
+  if (n < 1 || n > 6) return Ant_Error_CreateOutOfRange(js, "byteLength", ">= 1 and <= 6", value);
   *width = (size_t)n;
   return js_mkundef();
 }
@@ -3712,7 +3670,7 @@ static __attribute__((cold, noinline)) ant_value_t buffer_num_range_error(
   if (width <= 4) snprintf(range, sizeof(range), ">= %.0f and <= %.0f", lo, hi);
   else if (kind == BUFFER_NUM_UINT) snprintf(range, sizeof(range), ">= 0 and < 2 ** %u", bits_width);
   else snprintf(range, sizeof(range), ">= -(2 ** %u) and < 2 ** %u", bits_width - 1, bits_width - 1);
-  return buffer_out_of_range(js, "value", range, js_mknum(value));
+  return Ant_Error_CreateOutOfRange(js, "value", range, js_mknum(value));
 }
 
 static inline __attribute__((always_inline)) ant_value_t buffer_read_num(

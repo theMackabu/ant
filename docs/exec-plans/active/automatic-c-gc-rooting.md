@@ -139,7 +139,7 @@ Reproduce and extend the census with:
 ```sh
 rg -n 'GC_ROOT_(PIN|SAVE|RESTORE)|gc_push_root|gc_pop_roots|gc_root_scope' include src packages/wasm
 rg -n 'gc_temp_root_|gc_register_root' include src packages/wasm
-rg -n '\b(gc_run|gc_run_minor|gc_maybe|gc_pressure)\(' include src packages/wasm
+rg -n '\b(gc_run|gc_run_minor|gc_safepoint|gc_pressure)\(' include src packages/wasm
 ```
 
 These are discovery commands, not a sound call-graph analysis. Search results

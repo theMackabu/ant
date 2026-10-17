@@ -255,6 +255,7 @@ typedef struct jit_compile {
   MIR_reg_t r_bailout_sp;
   MIR_label_t bailout_tramp;
   MIR_label_t promote_tramp;
+  MIR_label_t interrupt_exit;
   MIR_reg_t r_promote;
   MIR_reg_t cached_index_key;
   MIR_reg_t cached_index_value;
@@ -367,6 +368,7 @@ static inline bool jit_speculate_unseen_numeric(const jit_compile_t *c, uint8_t 
 
 void jit_emit_exit_ret(jit_compile_t *c, MIR_op_t ret_op);
 void jit_emit_interrupt_poll(jit_compile_t *c);
+void jit_emit_interrupt_exit(jit_compile_t *c);
 jit_stale_exit_t *jit_stale_exit_for(jit_compile_t *c, jit_stale_exit_t *exit);
 bool jit_site_runs_hot(jit_compile_t *c);
 void jit_note_stale_exit(jit_compile_t *c, const jit_stale_exit_t *exit, int pre_op_sp);

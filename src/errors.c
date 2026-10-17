@@ -7,7 +7,9 @@
 #include "modules/io.h"
 #include "gc/roots.h"
 #include "silver/stack_trace.h"
+#include "modules/bigint.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
@@ -441,12 +443,77 @@ void js_describe_received(ant_t *js, ant_value_t value, char *out, size_t out_le
   if (received.needs_free) free((void *)received.ptr);
 }
 
+static const char *js_arg_kind(const char *name) {
+  return strchr(name, '.') ? "property" : "argument";
+}
+
 __attribute__((noinline, cold)) ant_value_t Ant_Error_CreateInvalidArgType(
   ant_t *js, const char *name, const char *expected, ant_value_t received
 ) {
   char got[160], message[320];
   js_describe_received(js, received, got, sizeof(got));
-  snprintf(message, sizeof(message), "The \"%s\" argument must be %s. %s", name, expected, got);
+  snprintf(message, sizeof(message), "The \"%s\" %s must be %s. %s", name, js_arg_kind(name), expected, got);
   return js_mkerr_code(js, JS_ERR_TYPE, "ERR_INVALID_ARG_TYPE", message);
+}
+
+__attribute__((noinline, cold)) ant_value_t Ant_Error_CreateInvalidArgValue(
+  ant_t *js, const char *name, const char *expected, ant_value_t received
+) {
+  char inspected[160], message[384];
+  js_cstr_t text = js_inspect_cstr(js, received, inspected, sizeof(inspected));
+
+  if (expected) snprintf(
+    message, sizeof(message), "The %s '%s' must be one of: %s. Received %s",
+    js_arg_kind(name), name, expected, text.ptr
+  );
+
+  else snprintf(message, sizeof(message), "The %s '%s' is invalid. Received %s", js_arg_kind(name), name, text.ptr);
+  if (text.needs_free) free((void *)text.ptr);
+
+  return js_mkerr_code(js, JS_ERR_TYPE, "ERR_INVALID_ARG_VALUE", message);
+}
+
+static void js_group_digits(const char *digits, char *out, size_t len) {
+  size_t n = strlen(digits), start = digits[0] == '-' ? 1 : 0, head = n;
+  while (head >= start + 4) head -= 3;
+  
+  size_t w = 0;
+  for (size_t i = 0; i < n && w + 1 < len; i++) {
+    if (i >= head && i > start && (i - head) % 3 == 0) out[w++] = '_';
+    if (w + 1 < len) out[w++] = digits[i];
+  }
+  out[w] = '\0';
+}
+
+static void js_describe_range_value(ant_t *js, ant_value_t value, char *out, size_t len) {
+  char raw[96];
+  
+  if (vtype(value) == kTypeBigInt) {
+    size_t n = strbigint(js, value, raw, sizeof(raw) - 1);
+    raw[n < sizeof(raw) - 1 ? n : sizeof(raw) - 2] = '\0';
+    const char *digits = raw[0] == '-' ? raw + 1 : raw;
+    bool large = strlen(digits) > 10 || (strlen(digits) == 10 && strcmp(digits, "4294967296") > 0);
+    if (large) js_group_digits(raw, out, len - 1);
+    else snprintf(out, len - 1, "%s", raw);
+    strncat(out, "n", len - strlen(out) - 1);
+    return;
+  }
+  
+  double d = js_getnum(value);
+  if (d == 0 && signbit(d)) { snprintf(out, len, "-0"); return; }
+  
+  size_t n = js_number_to_chars(value, raw, sizeof(raw) - 1);
+  raw[n < sizeof(raw) - 1 ? n : sizeof(raw) - 2] = '\0';
+  if (isfinite(d) && d == trunc(d) && fabs(d) > 4294967296.0) js_group_digits(raw, out, len);
+  else snprintf(out, len, "%s", raw);
+}
+
+__attribute__((noinline, cold)) ant_value_t Ant_Error_CreateOutOfRange(
+  ant_t *js, const char *name, const char *range, ant_value_t received
+) {
+  char got[128], message[384];
+  js_describe_range_value(js, received, got, sizeof(got));
+  snprintf(message, sizeof(message), "The value of \"%s\" is out of range. It must be %s. Received %s", name, range, got);
+  return js_mkerr_code(js, JS_ERR_RANGE, "ERR_OUT_OF_RANGE", message);
 }
 

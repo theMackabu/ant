@@ -28,12 +28,10 @@
 #include "modules/buffer.h"
 #include "modules/ffi.h"
 
-enum {
-  FFI_LIBRARY_NATIVE_TAG  = 0x4646494cu, // FFIL
-  FFI_FUNCTION_NATIVE_TAG = 0x46464946u, // FFIF
-  FFI_POINTER_NATIVE_TAG  = 0x46464950u, // FFIP
-  FFI_CALLBACK_NATIVE_TAG = 0x46464943u, // FFIC
-};
+static constexpr uint32_t FFI_LIBRARY_NATIVE_TAG = Ant_NativeTag("FFIL");
+static constexpr uint32_t FFI_FUNCTION_NATIVE_TAG = Ant_NativeTag("FFIF");
+static constexpr uint32_t FFI_POINTER_NATIVE_TAG = Ant_NativeTag("FFIP");
+static constexpr uint32_t FFI_CALLBACK_NATIVE_TAG = Ant_NativeTag("FFIC");
 
 typedef enum {
   FFI_VALUE_VOID = 0,

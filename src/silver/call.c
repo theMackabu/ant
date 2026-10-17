@@ -178,6 +178,7 @@ ant_value_t sv_vm_call(
   ant_value_t *out_this, ant_value_t new_target
 ) {
   if (__builtin_expect(js->destroying, 0)) return js_mkundef();
+  if (js_interrupt_pending(js)) return js_interrupt_raise(js);
   
   if (sv_check_c_stack_overflow(js))
     return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");

@@ -70,4 +70,12 @@ with ({ u9: 1, [Symbol.unscopables]: { u9: true } }) { assert.strictEqual(typeof
 var plain9 = { a9: 1 };
 for (var n9 = 0; n9 < 3; n9++) with (plain9) { a9 += 1; }
 assert.strictEqual(plain9.a9, 4);
+function nestedWith9() {
+  with ({ v: 'outer' }) {
+    return (function () {
+      with ({ w: 'inner' }) return () => [v, w, typeof v, delete w];
+    })();
+  }
+}
+assert.deepStrictEqual(nestedWith9()(), ['outer', 'inner', 'string', true]);
 console.log('with scopes: ok');

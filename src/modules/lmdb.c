@@ -69,11 +69,9 @@ static lmdb_env_ref_t *env_refs = NULL;
 static lmdb_db_ref_t *db_refs = NULL;
 static lmdb_txn_ref_t *txn_refs = NULL;
 
-enum {
-  LMDB_ENV_NATIVE_TAG = 0x4c454e56u, // LENV
-  LMDB_DB_NATIVE_TAG = 0x4c444242u,  // LDBB
-  LMDB_TXN_NATIVE_TAG = 0x4c54584eu  // LTXN
-};
+static constexpr uint32_t LMDB_ENV_NATIVE_TAG = Ant_NativeTag("LENV");
+static constexpr uint32_t LMDB_DB_NATIVE_TAG = Ant_NativeTag("LDBB");
+static constexpr uint32_t LMDB_TXN_NATIVE_TAG = Ant_NativeTag("LTXN");
 
 static ant_value_t make_env_obj(ant_t *js, lmdb_env_handle_t *env);
 static ant_value_t make_db_obj(ant_t *js, lmdb_db_handle_t *db, ant_value_t env_obj);

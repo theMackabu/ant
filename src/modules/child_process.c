@@ -137,10 +137,8 @@ static void close_child_pipe(
   bool stop_read
 );
 
-enum {
-  CHILD_PROCESS_NATIVE_TAG = 0x43505243u, // CPRC
-  CHILD_STREAM_NATIVE_TAG = 0x4353544du   // CSTM
-};
+static constexpr uint32_t CHILD_PROCESS_NATIVE_TAG = Ant_NativeTag("CPRC");
+static constexpr uint32_t CHILD_STREAM_NATIVE_TAG = Ant_NativeTag("CSTM");
 
 static child_process_t *get_child_process(ant_value_t obj) {
   return (child_process_t *)js_get_native(obj, CHILD_PROCESS_NATIVE_TAG);

@@ -78,37 +78,32 @@ struct dns_request_s {
   bool issuing;
 };
 
-typedef struct {
-  dns_channel_t *channel;
-} dns_resolver_t;
+int dns_ip_family(const char *address);
 
-dns_request_t *dns_request_new(ant_t *js, dns_req_kind_t kind, ant_value_t callback, ant_value_t hostname);
-ant_value_t dns_request_result(dns_request_t *req);
 void dns_request_free(dns_request_t *req);
-void dns_request_reject(dns_request_t *req, ant_value_t error);
-void dns_request_resolve(dns_request_t *req, ant_value_t value, const ant_value_t *cb_args, int cb_argc);
-
-ant_value_t dns_error(ant_t *js, const char *syscall, const char *code, int errno_value, bool has_errno, const char *hostname);
-ant_value_t dns_ares_error(ant_t *js, int status, const char *syscall, const char *hostname);
-ant_value_t dns_uv_error(ant_t *js, int status, const char *syscall, const char *hostname);
-ant_value_t dns_invalid_arg_value(ant_t *js, const char *name, ant_value_t value, const char *expected);
-
-dns_channel_t *dns_channel_create(ant_t *js, int timeout_ms, int tries);
-dns_channel_t *dns_default_channel(ant_t *js);
 void dns_channel_destroy(dns_channel_t *channel);
 void dns_channel_schedule(dns_channel_t *channel);
-ant_value_t dns_channel_get_servers(ant_t *js, dns_channel_t *channel);
-ant_value_t dns_channel_set_servers(ant_t *js, dns_channel_t *channel, ant_value_t servers);
-
 void dns_channel_query_started(dns_channel_t *channel);
 void dns_channel_query_finished(dns_channel_t *channel);
 
-int dns_ip_family(const char *address);
-ant_value_t dns_parse_result_order(ant_t *js, ant_value_t value, dns_order_t *out);
+void dns_request_reject(dns_request_t *req, ant_value_t error);
+void dns_request_resolve(dns_request_t *req, ant_value_t value, const ant_value_t *cb_args, int cb_argc);
+
 dns_channel_t *dns_this_channel(ant_t *js);
+dns_channel_t *dns_default_channel(ant_t *js);
+dns_channel_t *dns_channel_create(ant_t *js, int timeout_ms, int tries);
+dns_request_t *dns_request_new(ant_t *js, dns_req_kind_t kind, ant_value_t callback, ant_value_t hostname);
+
+ant_value_t dns_request_result(dns_request_t *req);
+ant_value_t dns_error(ant_t *js, const char *syscall, const char *code, int errno_value, bool has_errno, const char *hostname);
+ant_value_t dns_ares_error(ant_t *js, int status, const char *syscall, const char *hostname);
+ant_value_t dns_uv_error(ant_t *js, int status, const char *syscall, const char *hostname);
+ant_value_t dns_parse_result_order(ant_t *js, ant_value_t value, dns_order_t *out);
 ant_value_t dns_lookup_impl(ant_t *js, ant_value_t *args, int nargs, bool promises);
 ant_value_t dns_lookup_service_impl(ant_t *js, ant_value_t *args, int nargs, bool promises);
 ant_value_t dns_resolve_impl(ant_t *js, ant_value_t *args, int nargs, int rr, bool promises);
 ant_value_t dns_reverse_impl(ant_t *js, ant_value_t *args, int nargs, bool promises);
+ant_value_t dns_channel_get_servers(ant_t *js, dns_channel_t *channel);
+ant_value_t dns_channel_set_servers(ant_t *js, dns_channel_t *channel, ant_value_t servers);
 
 #endif

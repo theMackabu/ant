@@ -107,10 +107,8 @@ struct net_write_args_s {
 static bool g_default_auto_select_family = true;
 static double g_default_auto_select_family_attempt_timeout = 250.0;
 
-enum {
-  NET_SERVER_NATIVE_TAG = 0x4e455453u, // NETS
-  NET_SOCKET_NATIVE_TAG = 0x4e45544bu, // NETK
-};
+static constexpr uint32_t NET_SERVER_NATIVE_TAG = Ant_NativeTag("NETS");
+static constexpr uint32_t NET_SOCKET_NATIVE_TAG = Ant_NativeTag("NETK");
 
 static net_server_t *net_server_data(ant_value_t value) {
   return (net_server_t *)js_get_native(value, NET_SERVER_NATIVE_TAG);

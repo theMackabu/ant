@@ -126,7 +126,7 @@ static struct {
   .active_request = NULL,
 };
 
-enum { CRON_JOB_NATIVE_TAG = 0x43524f4eu }; // CRON
+static constexpr uint32_t CRON_JOB_NATIVE_TAG = Ant_NativeTag("CRON");
 
 static const char *const month_names[] = {
   "january", "february", "march", "april", "may", "june",

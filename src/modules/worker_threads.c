@@ -65,7 +65,7 @@ typedef struct ant_worker_thread {
 
 static ant_worker_thread_t *active_workers_head = NULL;
 
-enum { WORKER_NATIVE_TAG = 0x57524b52u }; // WRKR
+static constexpr uint32_t WORKER_NATIVE_TAG = Ant_NativeTag("WRKR");
 
 static bool wt_is_worker_mode(void) {
   const char *mode = getenv(WT_ENV_MODE);

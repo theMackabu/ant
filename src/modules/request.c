@@ -26,10 +26,8 @@
 #include "streams/pipes.h"
 #include "streams/readable.h"
 
-enum {
-  REQUEST_NATIVE_TAG = 0x52455153u, // REQS
-  REQUEST_RESERVED_SLOTS = 7,
-};
+static constexpr int REQUEST_RESERVED_SLOTS = 7;
+static constexpr uint32_t REQUEST_NATIVE_TAG = Ant_NativeTag("REQS");
 
 request_data_t *request_get_data(ant_value_t obj) {
   return (request_data_t *)js_get_native(obj, REQUEST_NATIVE_TAG);

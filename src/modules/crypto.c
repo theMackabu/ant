@@ -88,12 +88,10 @@ typedef struct {
   size_t auth_tag_len;
 } ant_cipher_state_t;
 
-enum { 
-  CRYPTO_HASH_NATIVE_TAG = 0x48415348u,  // HASH
-  CRYPTO_HMAC_NATIVE_TAG = 0x484d4143u,  // HMAC
-  CRYPTO_KEY_NATIVE_TAG = 0x434b4559u,   // CKEY
-  CRYPTO_CIPHER_NATIVE_TAG = 0x43495048u // CIPH
-};
+static constexpr uint32_t CRYPTO_HASH_NATIVE_TAG   = Ant_NativeTag("HASH");
+static constexpr uint32_t CRYPTO_HMAC_NATIVE_TAG   = Ant_NativeTag("HMAC");
+static constexpr uint32_t CRYPTO_KEY_NATIVE_TAG    = Ant_NativeTag("CKEY");
+static constexpr uint32_t CRYPTO_CIPHER_NATIVE_TAG = Ant_NativeTag("CIPH");
 
 static const char *const k_crypto_cipher_names[] = {
   "aes-128-cbc",

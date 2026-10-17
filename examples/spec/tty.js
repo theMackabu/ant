@@ -4,7 +4,7 @@ import * as tty from 'node:tty';
 console.log('TTY Tests\n');
 
 test('tty module exists', typeof tty, 'object');
-test('tty toStringTag', Object.prototype.toString.call(tty), '[object tty]');
+test('tty toStringTag', Object.prototype.toString.call(tty.default), '[object tty]');
 test('tty.isatty is function', typeof tty.isatty, 'function');
 test('tty.ReadStream is function', typeof tty.ReadStream, 'function');
 test('tty.WriteStream is function', typeof tty.WriteStream, 'function');

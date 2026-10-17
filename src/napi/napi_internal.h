@@ -12,6 +12,7 @@
 #include <uthash.h>
 
 #include "modules/napi.h"
+#include "native_tag.h"
 
 typedef struct napi_cleanup_hook_entry {
   napi_cleanup_hook hook;
@@ -183,7 +184,7 @@ typedef struct {
   uint32_t limbs[];
 } napi_bigint_payload_t;
 
-enum { NAPI_CALLBACK_NATIVE_TAG = 0x4e43424bu }; // NCBK
+static constexpr uint32_t NAPI_CALLBACK_NATIVE_TAG = Ant_NativeTag("NCBK");
 
 ant_napi_env_t *ant_napi_get_or_create_env(ant_t *js);
 napi_status ant_napi_set_last(napi_env env, napi_status status, const char *message);
@@ -192,13 +193,10 @@ napi_status ant_napi_return_pending_if_any(napi_env env);
 napi_value ant_napi_scope_pin(ant_napi_env_t *nenv, napi_value val);
 bool ant_napi_is_external(ant_t *js, napi_value value);
 
-/* Keep private cross-file helpers out of the exported napi_* symbol namespace. */
 #define napi_set_last ant_napi_set_last
 #define napi_check_pending_from_result ant_napi_check_pending_from_result
-
 #define NAPI_RETURN(nenv, val) ant_napi_scope_pin((nenv), (napi_value)(val))
 
-/* Pull every N-API archive member in with the loader. */
 void ant_napi_link_async(void);
 void ant_napi_link_objects(void);
 void ant_napi_link_references(void);

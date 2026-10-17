@@ -259,7 +259,7 @@ ant_value_t dns_resolve_impl(ant_t *js, ant_value_t *args, int nargs, int rr, bo
     if (!promises && is_callable(second)) { rr = DNS_RR_A; callback = second; }
     else if (vtype(second) == kTypeUndefined && promises) rr = DNS_RR_A;
     else if (vtype(second) != kTypeString) return Ant_Error_CreateInvalidArgType(js, "rrtype", "of type string", second);
-    else if ((rr = dns_rr_from_name(js, second)) < 0) return dns_invalid_arg_value(js, "rrtype", second, NULL);
+    else if ((rr = dns_rr_from_name(js, second)) < 0) return Ant_Error_CreateInvalidArgValue(js, "rrtype", NULL, second);
   } else if (!promises && is_callable(second)) callback = second;
   else ttl = is_object_type(second) && js_truthy(js, js_get(js, second, "ttl"));
 

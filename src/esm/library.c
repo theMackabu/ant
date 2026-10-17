@@ -1,6 +1,7 @@
 #include "esm/library.h"
 #include "gc/roots.h"
 #include "internal.h"
+#include "loader_internal.h"
 
 #include <string.h>
 #include <uthash.h>
@@ -11,6 +12,7 @@ struct ant_library_entry {
   ant_library_init_fn init_fn;
   ant_builtin_name_kind_t kind;
   ant_value_t cached_ns;
+  ant_value_t cached_esm_ns;
   bool ns_initialized;
   bool root_registered;
   struct ant_library_entry *canonical;
@@ -50,6 +52,25 @@ void ant_register_standard_library(ant_library_init_fn init_fn, const char *bare
   library_add(init_fn, node_name, ANT_BUILTIN_NAME_NODE, canonical);
 }
 
+ant_value_t ant_library_namespace(ant_t *js, ant_library_entry_t *lib) {
+  ant_library_entry_t *canon = lib->canonical;
+  if (is_object_type(canon->cached_esm_ns)) return canon->cached_esm_ns;
+
+  ant_value_t exports = ant_library_load(js, lib);
+  if (is_err(exports) || !is_object_type(exports)) return exports;
+
+  ant_value_t default_value = js_get_slot(exports, SLOT_DEFAULT);
+  if (vtype(default_value) == kTypeUndefined) default_value = exports;
+
+  ant_value_t ns = esm_value_namespace(js, exports, default_value);
+  if (is_err(ns)) return ns;
+  
+  js_set_slot(ns, SLOT_MODULE_LOADING, js_mkundef());
+  canon->cached_esm_ns = ns;
+  
+  return ns;
+}
+
 ant_library_entry_t *ant_library_find(const char *specifier, size_t spec_len) {
   ant_library_entry_t *lib = NULL;
   char key[256];
@@ -81,6 +102,7 @@ ant_value_t ant_library_load(ant_t *js, ant_library_entry_t *lib) {
 
   if (!canon->root_registered) {
     gc_register_root(&canon->cached_ns);
+    gc_register_root(&canon->cached_esm_ns);
     canon->root_registered = true;
   }
 

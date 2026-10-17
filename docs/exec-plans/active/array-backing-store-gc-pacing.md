@@ -38,7 +38,7 @@ and freed in one place:
 
 - `src/gc/objects.c` `obj_free()` - `free(obj->u.array.data)`
 
-`gc_maybe()` paces on two signals, and neither one sees these bytes:
+`gc_safepoint()` paces on two signals, and neither one sees these bytes:
 
 1. `js->obj_arena.live_count` - arena object count. An array is one object no matter how
    large its backing store is.
@@ -53,12 +53,12 @@ PR #44 rewrites much of `src/gc/gc.c`: it adds `gc/stats.{h,c}` telemetry, adds
 `gc_remember_ewma` / `gc_promoted_ewma`, reworks `gc_adapt_nursery()` around remembered
 set pressure, and adds saturating `gc_grow_toward()` / `gc_shrink_toward()` helpers.
 
-It does **not** touch array backing store accounting. `gc_maybe()` keeps its existing
+It does **not** touch array backing store accounting. `gc_safepoint()` keeps its existing
 shape: pool pressure is consulted only *inside* the `young_count >= gc_nursery_threshold`
 branch, and only *behind* the `js->minor_gc_count >= gc_major_every_n` gate. An array-heavy
 workload never enters that branch, so it never reaches the pool check.
 
-PR #44 also **deletes** the tick-based fallback at the end of `gc_maybe()`:
+PR #44 also **deletes** the tick-based fallback at the end of `gc_safepoint()`:
 
 ```c
 -  if (gc_tick < 8192) return;
@@ -70,7 +70,7 @@ PR #44 also **deletes** the tick-based fallback at the end of `gc_maybe()`:
 
 That path was the only thing that eventually caught this workload on master. Removing it
 makes the gap unbounded rather than merely slow: if `young_count` never reaches the
-nursery threshold and `live` never reaches the live threshold, `gc_maybe()` now returns
+nursery threshold and `live` never reaches the live threshold, `gc_safepoint()` now returns
 without doing anything, regardless of how many bytes of array data exist.
 
 This is not a regression introduced by PR #44 - the underlying blindness predates it - but
@@ -179,7 +179,7 @@ call sites (`src/ant.c` lines 2778, 6216, 10002, 10033, 11386, 11641, 15091, 151
 `obj_alloc()` but before the new object is reachable, so a collection there frees the
 object being built.
 
-`gc_maybe()` is called at safepoints. That is the reason to put the decision there and
+`gc_safepoint()` is called at safepoints. That is the reason to put the decision there and
 not at the allocation site, even though the allocation site reacts sooner.
 
 ## Already landed on PR #66
@@ -225,9 +225,9 @@ then assert `arraysCounter === arrays` at each step. There is no exposed `Ant.gc
 
 - 2026-07-31: Kept the byte accounting on PR #66, moved the pacing change to PR #44.
   The accounting is a self-contained stats fix with no policy effect; the pacing change
-  overlaps PR #44's `gc_maybe()` and `gc_adapt_nursery()` rewrite and would conflict.
+  overlaps PR #44's `gc_safepoint()` and `gc_adapt_nursery()` rewrite and would conflict.
 - 2026-07-31: Rejected a top-level `if (pool_pressure) { gc_run(js); return; }` in
-  `gc_maybe()`. It duplicates the existing pool decision with different gating and
+  `gc_safepoint()`. It duplicates the existing pool decision with different gating and
   early-returns past `gc_run_minor()`, starving the EWMA feedback loops.
 - 2026-07-31: Rejected the `js_type_alloc()`-style eager check inside `dense_grow()`.
   See "Do not do this".

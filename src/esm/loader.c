@@ -534,14 +534,10 @@ static ant_value_t esm_require_esm_exports(ant_t *js, ant_value_t ns) {
   return wrapper;
 }
 
-static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_value_t value, ant_value_t require_module) {
-  if (is_err(value)) {
-    mod->is_loading = false;
-    return value;
-  }
-
+ant_value_t esm_value_namespace(ant_t *js, ant_value_t value, ant_value_t default_value) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, value);
+  GC_ROOT_PIN(js, default_value);
 
   ant_value_t ns = esm_make_namespace_object(js);
   GC_ROOT_PIN(js, ns);
@@ -562,8 +558,24 @@ static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_v
     }
   }
 
-  js_set(js, ns, "default", value);
-  js_set_slot(ns, SLOT_DEFAULT, value);
+  js_set(js, ns, "default", default_value);
+  js_set_slot(ns, SLOT_DEFAULT, default_value);
+  
+  GC_ROOT_RESTORE(js, root_mark);
+  return ns;
+}
+
+static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_value_t value, ant_value_t require_module) {
+  if (is_err(value)) {
+    mod->is_loading = false;
+    return value;
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, value);
+
+  ant_value_t ns = esm_value_namespace(js, value, value);
+  GC_ROOT_PIN(js, ns);
 
   if (mod->kind == ESM_MODULE_KIND_JSON && !is_object_type(require_module)) {
     ant_value_t entry = esm_require_cache_lookup(js, mod->resolved_path);
@@ -1875,7 +1887,7 @@ static const char *esm_builtin_name(esm_builtin_t builtin) {
 }
 
 static ant_value_t esm_load_builtin(ant_t *js, const char *specifier, esm_builtin_t builtin) {
-  if (builtin.library) return ant_library_load(js, builtin.library);
+  if (builtin.library) return ant_library_namespace(js, builtin.library);
 
   const ant_builtin_bundle_module_t *module = esm_lookup_builtin_module(builtin.alias->module_id);
   if (!module) return js_mkerr(js, "Invalid builtin module id");
@@ -1897,8 +1909,13 @@ bool js_esm_is_node_builtin(const char *specifier, size_t spec_len) {
 
 ant_value_t js_esm_load_node_builtin(ant_t *js, const char *specifier, size_t spec_len, bool *found) {
   esm_builtin_t builtin = esm_find_builtin(specifier, spec_len);
+  
   *found = esm_builtin_is_node(builtin);
-  return *found ? esm_load_builtin(js, specifier, builtin) : js_mkundef();
+  if (!*found) return js_mkundef();
+  
+  return builtin.library
+    ? ant_library_load(js, builtin.library)
+    : esm_load_builtin(js, specifier, builtin);
 }
 
 static ant_value_t esm_load_static_dependency(

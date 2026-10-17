@@ -439,7 +439,7 @@ enum {
   ASYNC_TERM_TOARRAY = 5,
 };
 
-enum { ASYNC_TERMINAL_STATE_TAG = 0x41544954u }; // ATIT 
+static constexpr uint32_t ASYNC_TERMINAL_STATE_TAG = Ant_NativeTag("ATIT");
 
 typedef struct {
   double index;
