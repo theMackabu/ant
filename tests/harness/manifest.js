@@ -41,6 +41,7 @@ export function targets() {
     'test_async_handled_errors.cjs',
     'test_async_iterator_completed_result.cjs',
     'test_async_iterator_promise_errors.cjs',
+    'test_async_return_await_order.cjs',
     'test_bigint.js',
     'test_buffer_base64url.cjs',
     'test_buffer_fill_and_encoding_errors.cjs',
@@ -260,6 +261,7 @@ export function targets() {
     'test_process_get_builtin_module.cjs',
     'test_module_node_module_paths.cjs',
     'test_promise.cjs',
+    'test_promise_all_fast_path.cjs',
     'test_promise_continuation_errors.cjs',
     'test_promise_many_handlers.cjs',
     'test_property_delete_compaction.cjs',
@@ -547,8 +549,8 @@ export function targets() {
       name: 'bench_churn',
       entry: 'tests/bench_churn.js',
       checks: [
-        ms('gen churn ms', /gen-churn: ([\d.]+)ms/, 100, 1300),
-        ms('async churn ms', /async-churn: ([\d.]+)ms/, 25, 400),
+        ms('gen churn ms', /gen-churn: ([\d.]+)ms/, 50, 400),
+        ms('async churn ms', /async-churn: ([\d.]+)ms/, 10, 100),
         { name: 'gen total', re: /gen-churn: [\d.]+ms (\d+)/, min: 9000000, max: 9000000 },
         { name: 'async total', re: /async-churn: [\d.]+ms (\d+)/, min: 1350000, max: 1350000 }
       ]

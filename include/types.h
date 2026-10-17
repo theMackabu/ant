@@ -6,6 +6,7 @@
 
 typedef unsigned long long u64;
 
+// TODO: prune
 typedef struct ant_isolate_t      ant_t;
 typedef struct ant_realm          ant_realm_t;
 typedef struct ant_pool_block     ant_pool_block_t;
@@ -15,6 +16,7 @@ typedef struct ant_event_list     ant_event_list_t;
 typedef struct ant_esm_state      ant_esm_state_t;
 typedef struct ant_regex_state    ant_regex_state_t;
 typedef struct ant_string_builder ant_string_builder_t;
+typedef struct ant_promise_state  ant_promise_state_t;
 
 typedef struct iterator        iterator_t;
 typedef struct coroutine       coroutine_t;

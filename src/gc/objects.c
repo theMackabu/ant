@@ -1371,6 +1371,15 @@ void gc_array_storage_trim(ant_t *js) {
   }
 }
 
+ant_promise_state_t *gc_promise_state_alloc(ant_t *js) {
+  return fixed_arena_alloc(&js->promise_arena);
+}
+
+static void gc_promise_state_release(ant_t *js, ant_promise_state_t *pd) {
+  if (pd->handlers) utarray_free(pd->handlers);
+  fixed_arena_free_elem(&js->promise_arena, pd);
+}
+
 void gc_array_storage_cache_destroy(ant_t *js) {
   for (int cls = 0; cls < GC_ARRAY_STORAGE_CLASSES; cls++)
     gc_array_storage_drain(&js->array_storage, cls, 0);
@@ -1427,8 +1436,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   ant_promise_state_t *pd = ant_object_promise_state(obj);
   if (pd) {
     if (pd->gc_pending_rooted) gc_unroot_pending_promise(js, obj);
-    if (pd->handlers) utarray_free(pd->handlers);
-    free(pd);
+    gc_promise_state_release(js, pd);
     obj->u.promise.state = NULL;
   }
 

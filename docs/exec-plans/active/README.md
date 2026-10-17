@@ -35,6 +35,7 @@ Store in-progress execution plans here.
 - [Large AST Workload Performance](large-ast-workload-perf.md)
 - [LLVM 21 Codegen Investigation](llvm-21-codegen-investigation.md)
 - [Microtask Checkpoint Timing](microtask-checkpoint-timing.md)
+- [Async Await Performance and Settle Order](async-await-performance.md)
 - [Nanos Sandbox](nanos-sandbox.md)
 - [Node–Ant Differential Runner](node-ant-differential-runner.md)
 - [Vendored Node.js Compatibility Suite](node-compat-suite.md)

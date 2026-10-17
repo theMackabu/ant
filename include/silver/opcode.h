@@ -203,7 +203,6 @@ OP_DEF(  SUPER_FORWARD,     1,   3,   1, none)      /* this super new.target -> 
 OP_DEF(  EVAL,              5,   2,   1, u32)       /* source new.target -> result (scope:u32) */
 OP_DEF(  RETURN,            1,   1,   0, none)
 OP_DEF(  RETURN_UNDEF,      1,   0,   0, none)
-OP_DEF(  RETURN_ASYNC,      1,   1,   0, none)      /* return from async func */
 OP_DEF(  CHECK_CTOR,        1,   0,   0, none)      /* verify called with new */
 OP_DEF(  CHECK_CTOR_RET,    1,   1,   2, none)      /* validate constructor return */
 OP_DEF(  HALT,              1,   0,   0, none)      /* stop execution */
@@ -246,6 +245,7 @@ OP_DEF(  DESTRUCTURE_REST,  1,   3,   4, none)      /* iter next tag -> iter nex
 OP_DEF(  DESTRUCTURE_CLOSE, 2,   3,   0, u8)        /* close destructuring iterator; u8 suppresses errors */
 
 OP_DEF(  AWAIT,             1,   1,   1, none)      /* promise -> resolved value */
+OP_DEF(  AWAIT_RETURN,      1,   1,   0, none)      /* value -> (settles the async promise once awaited) */
 OP_DEF(  YIELD,             1,   1,   1, none)      /* val -> received */
 OP_DEF(  ASYNC_YIELD,       1,   1,   1, none)      /* val -> awaited val, or yields a primitive and skips the next YIELD */
 OP_DEF(  YIELD_STAR_INIT,   3,   1,   0, loc)       /* iterable -> delegate locals */
@@ -459,7 +459,7 @@ OP_FLAG(SUPER_FORWARD         , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(NEW_APPLY             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(RETURN                , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_TERMINAL)
 OP_FLAG(RETURN_UNDEF          , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_TERMINAL)
-OP_FLAG(RETURN_ASYNC          , SV_OPF_TERMINAL)
+OP_FLAG(AWAIT_RETURN          , SV_OPF_TERMINAL)
 OP_FLAG(CHECK_CTOR            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 OP_FLAG(HALT                  , SV_OPF_JIT_ELIGIBLE | SV_OPF_TERMINAL)
 

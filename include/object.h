@@ -41,7 +41,7 @@ typedef struct promise_handler {
   struct coroutine *await_coro;
 } promise_handler_t;
 
-typedef struct {
+typedef struct ant_promise_state {
   ant_value_t value;
   ant_value_t trigger_parent;
   

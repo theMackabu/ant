@@ -5706,6 +5706,14 @@ static void compile_tail_call(sv_compiler_t *c, sv_ast_t *node) {
   emit_u16(c, (uint16_t)argc);
 }
 
+static bool can_tail_await(sv_compiler_t *c) {
+  if (!c->is_async || c->is_async_generator || c->is_tla) return false;
+  if (c->try_depth != 0 || c->using_cleanup_count != 0) return false;
+  for (int i = 0; i < c->loop_count; i++)
+    if (c->loops[i].iter_unwind_index >= 0) return false;
+  return true;
+}
+
 void compile_tail_return_expr(sv_compiler_t *c, sv_ast_t *expr) {
   if (expr->type == N_TERNARY) {
     compile_truthy_test_expr(c, expr->cond);
@@ -5716,10 +5724,10 @@ void compile_tail_return_expr(sv_compiler_t *c, sv_ast_t *expr) {
     return;
   }
 
-  if (expr->type == N_AWAIT && c->is_async && c->try_depth == 0 && !c->is_tla &&
-      c->using_cleanup_count == 0) {
+  if (expr->type == N_AWAIT && can_tail_await(c)) {
     compile_expr(c, expr->right);
-    emit_return_from_stack(c);
+    emit_close_upvals(c);
+    emit_op(c, OP_AWAIT_RETURN);
     return;
   }
 
@@ -8167,18 +8175,28 @@ sv_func_t *compile_function_body(
   }
 
   if (func->is_async || func->is_tla) {
-  const uint8_t *ip = func->code;
-  const uint8_t *end = func->code + func->code_len;
-  while (ip < end) {
-    sv_op_t op = (sv_op_t)*ip;
-    if (op == OP_AWAIT || op == OP_ASYNC_YIELD || op == OP_FOR_AWAIT_OF || op == OP_AWAIT_ITER_NEXT) {
-      func->has_await = true;
-      break;
+    const uint8_t *ip = func->code;
+    const uint8_t *end = func->code + func->code_len;
+    
+    while (ip < end) {
+      sv_op_t op = (sv_op_t)*ip;
+      
+      if (
+        op == OP_AWAIT        || 
+        op == OP_AWAIT_RETURN || 
+        op == OP_ASYNC_YIELD  || 
+        op == OP_FOR_AWAIT_OF || 
+        op == OP_AWAIT_ITER_NEXT
+      ) {
+        func->has_await = true;
+        break;
+      }
+      
+      int sz = sv_op_size[op];
+      if (sz <= 0) break;
+      ip += sz;
     }
-    int sz = sv_op_size[op];
-    if (sz <= 0) break;
-    ip += sz;
-  }}
+  }
 
   func->is_fusable_leaf = sv_func_compute_fusable_leaf(func);
   func->is_curried_step = sv_func_compute_curried_step(func);
