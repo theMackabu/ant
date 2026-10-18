@@ -37,13 +37,9 @@ static inline ant_value_t sv_op_throw_error(
   return js_mkerr_typed(js, (js_err_type_t)err_type, "%.*s", (int)a->len, a->str);
 }
 
-static inline ant_value_t sv_handler_overflow(ant_t *js) {
-  return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
-}
-
 static inline ant_value_t sv_op_try_push(sv_vm_t *vm, ant_t *js, uint8_t *ip, sv_handler_kind_t kind) {
   if (__builtin_expect(vm->handler_depth >= vm->handler_cap, 0) && !sv_vm_reserve_handlers(vm, 1)) 
-    return sv_handler_overflow(js);
+    return Ant_Error_CreateStackOverflow(js);
   
   sv_frame_t *frame = &vm->frames[vm->fp];
   int32_t off = sv_get_i32(ip + 1);
@@ -82,7 +78,7 @@ static inline void sv_op_catch(sv_vm_t *vm) {
 static inline ant_value_t sv_op_finally(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   sv_frame_t *frame = &vm->frames[vm->fp];
   if (vm->handler_depth >= vm->handler_cap && !sv_vm_reserve_handlers(vm, 1))
-    return sv_handler_overflow(js);
+    return Ant_Error_CreateStackOverflow(js);
 
   int32_t off = sv_get_i32(ip + 1);
   sv_handler_t *h = &vm->handler_stack[vm->handler_depth++];

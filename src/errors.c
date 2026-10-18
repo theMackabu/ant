@@ -515,6 +515,10 @@ static void js_describe_range_value(ant_t *js, ant_value_t value, char *out, siz
   else snprintf(out, len, "%s", raw);
 }
 
+__attribute__((noinline, cold)) ant_value_t Ant_Error_CreateStackOverflow(ant_t *js) {
+  return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+}
+
 __attribute__((noinline, cold)) ant_value_t Ant_Error_CreateOutOfRange(
   ant_t *js, const char *name, const char *range, ant_value_t received
 ) {

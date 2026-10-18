@@ -536,8 +536,7 @@ static inline bool sv_op_call_call_fused(
       }
 
       if (sv_check_c_stack_overflow(js)) {
-        *result_out = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK,
-          "Maximum call stack size exceeded");
+        *result_out = Ant_Error_CreateStackOverflow(js);
         return true;
       }
 

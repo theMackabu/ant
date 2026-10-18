@@ -1093,8 +1093,8 @@ static inline ant_value_t sv_stage_frame_args(
       args < vm->stack + vm->stack_size
     ) ? (int)(args - vm->stack) : -1;
     
-    while (vm->sp + reserve > vm->stack_size) if (!sv_vm_grow_stack(vm)) 
-      return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+    while (vm->sp + reserve > vm->stack_size) 
+      if (!sv_vm_grow_stack(vm)) return Ant_Error_CreateStackOverflow(js);
     
     if (args_idx >= 0) args = &vm->stack[args_idx];
   }
@@ -1273,7 +1273,7 @@ static inline ant_value_t sv_execute_entry_common(
     return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "invalid function entry");
 
   if (vm->fp + 1 >= vm->max_frames && !sv_vm_grow_frames(vm))
-    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+    return Ant_Error_CreateStackOverflow(js);
 
   int saved_fp = vm->fp;
   vm->fp = saved_fp + 1;
@@ -1714,7 +1714,7 @@ static __attribute__((noinline)) ant_value_t sv_async_inline_call(
   ant_value_t *call_args, int call_argc, int pop_count, uint8_t *next_ip
 ) {
   if (vm->fp + 1 >= vm->max_frames && !sv_vm_grow_frames(vm))
-    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+    return Ant_Error_CreateStackOverflow(js);
 
   if (!sv_async_inline_reserve(vm)) return js_mkerr(js, "out of memory");
   if (sv_closure_has_lexical_this(closure)) call_this = closure->bound_this;
@@ -2419,7 +2419,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
           }
         }
         if (vm->fp + 1 >= vm->max_frames && !sv_vm_grow_frames(vm)) {
-          sv_err = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+          sv_err = Ant_Error_CreateStackOverflow(js);
           goto sv_throw;
         }
         if (sv_closure_has_lexical_this(closure))
@@ -2553,7 +2553,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
           }
         }
         if (vm->fp + 1 >= vm->max_frames && !sv_vm_grow_frames(vm)) {
-          sv_err = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+          sv_err = Ant_Error_CreateStackOverflow(js);
           goto sv_throw;
         }
         if (sv_closure_has_lexical_this(closure))
@@ -2916,7 +2916,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     int reserve = need + closure->func->max_stack;
     
     while (frame->prev_sp + reserve > vm->stack_size) if (!sv_vm_grow_stack(vm)) {
-      sv_err = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+      sv_err = Ant_Error_CreateStackOverflow(js);
       goto sv_throw;
     }
 

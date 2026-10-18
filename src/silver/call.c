@@ -181,7 +181,7 @@ ant_value_t sv_vm_call(
   if (js_interrupt_pending(js)) return js_interrupt_raise(js);
   
   if (sv_check_c_stack_overflow(js))
-    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+    return Ant_Error_CreateStackOverflow(js);
 
   bool is_construct_call = new_target != js_mkundef();
   sv_call_mode_t mode = is_construct_call
@@ -228,7 +228,7 @@ ant_value_t sv_vm_call_explicit_this(
   ant_value_t this_val, ant_value_t *args, int argc
 ) {
   if (sv_check_c_stack_overflow(js))
-    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+    return Ant_Error_CreateStackOverflow(js);
 
   sv_call_plan_t plan;
   ant_value_t err = sv_prepare_call(

@@ -114,9 +114,7 @@ static ant_value_t stream_call(
   ant_t *js, ant_value_t fn, ant_value_t this_val, ant_value_t *args, int nargs
 ) {
   if (!is_callable(fn)) return js_mkundef();
-  
-  if (sv_check_c_stack_overflow(js))
-    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
 
   return sv_vm_call_mode(
     js->vm, js, fn, this_val, args, nargs, NULL,

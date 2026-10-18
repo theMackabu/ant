@@ -228,7 +228,7 @@ static bool dec_u32(dec_t *d, uint32_t *out) {
 }
 
 static ant_value_t des_val(ant_t *js, dec_t *d) {
-  if (sv_check_c_stack_overflow(js)) return js_mkerr_typed(js, JS_ERR_RANGE, "Maximum call stack size exceeded");
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   
   uint8_t tag;
   if (!dec_u8(d, &tag)) return js_mkundef();

@@ -518,15 +518,10 @@ static int eventemitter_get_max_listeners_impl(ant_value_t target) {
 }
 
 static inline __attribute__((always_inline)) ant_value_t eventemitter_call_listener_inline(
-  ant_t *js,
-  ant_value_t listener,
-  ant_value_t this_val,
-  ant_value_t *args,
-  int nargs
+  ant_t *js, ant_value_t listener, ant_value_t this_val, ant_value_t *args, int nargs
 ) {
   if (!is_callable(listener)) return js_mkundef();
-  if (sv_check_c_stack_overflow(js))
-    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
 
   if (vtype(listener) == kTypeFunction) {
     sv_closure_t *closure = js_func_closure(listener);
