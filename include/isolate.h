@@ -156,6 +156,7 @@ struct ant_isolate_t {
   ant_fixed_arena_t closure_arena;
   ant_fixed_arena_t upvalue_arena;
   ant_fixed_arena_t promise_arena;
+  uint32_t last_promise_id;
   
   uint32_t prototype_write_epoch;
   uint32_t array_chain_plain_epoch;

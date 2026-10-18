@@ -11,6 +11,9 @@ static constexpr int32_t JIT_NEW_DIRECT_MAX_CODE_LEN = 1024;
 static constexpr uint8_t JIT_POLY_RECOMPILES = 2;
 static constexpr uint16_t JIT_POLY_RECOMPILE_SLOW_HITS = 256;
 static constexpr int64_t SV_JIT_RESUME_STALE = (int64_t)1 << 32;
+static constexpr int64_t SV_JIT_RESUME_AWAIT = (int64_t)1 << 33;
+static constexpr int64_t SV_JIT_RESUME_DIRECT = (int64_t)1 << 34;
+static constexpr uint8_t SV_JIT_ASYNC_DIRECT_AWAIT_LIMIT = 32;
 
 typedef enum {
   SV_JIT_TIER_AUTO, // hot context if the function looped, cheap otherwise
@@ -48,6 +51,11 @@ ant_value_t sv_jit_try_osr(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame, sv_func_t *func,
   int bc_offset
+);
+
+ant_value_t sv_jit_await_resume(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
+  sv_func_t *func, int resume_off
 );
 
 static inline bool sv_jit_promote_pending(const sv_func_t *func) {

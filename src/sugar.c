@@ -4,6 +4,7 @@
 #include "modules/generator.h"
 #include "modules/timer.h"
 #include "silver/engine.h"
+#include "modules/promise.h"
 
 static constexpr uint32_t CORO_FREE_MAX = 256;
 static constexpr size_t CORO_POOLED_ACT_MAX = 4096;
@@ -169,22 +170,22 @@ static void coroutine_deactivate(ant_t *js, coroutine_t *coro) {
 static ant_value_t coroutine_resume_and_recapture(
   ant_t *js, sv_vm_t *vm, coroutine_t *coro, ant_value_t value, bool is_error
 ) {
-  vm->suspended_resume_value = value;
-  vm->suspended_resume_is_error = is_error;
-  vm->suspended_resume_kind = is_error ? SV_RESUME_THROW : SV_RESUME_NEXT;
-  vm->suspended_resume_pending = true;
+  vm->suspend.value = value;
+  vm->suspend.is_error = is_error;
+  vm->suspend.kind = is_error ? SV_RESUME_THROW : SV_RESUME_NEXT;
+  vm->suspend.pending = true;
 
   ant_value_t result = sv_resume_suspended(vm);
-  if (!vm->suspended || vm->suspended_entry_fp < 0) return result;
+  if (!vm->suspend.active || vm->suspend.entry_fp < 0) return result;
 
-  sv_activation_t *act = sv_activation_capture(vm, vm->suspended_entry_fp, coro->act);
+  sv_activation_t *act = sv_activation_capture(vm, vm->suspend.entry_fp, coro->act);
   if (act) {
     coro->act = act;
     gc_remember_coroutine(js, coro);
     return result;
   }
 
-  sv_activation_discard(vm, vm->suspended_entry_fp);
+  sv_activation_discard(vm, vm->suspend.entry_fp);
   return js_mkerr(js, "out of memory capturing activation");
 }
 
@@ -240,11 +241,21 @@ static void resume_coroutine_if_suspended(
   }
 }
 
-void Ant_Coroutine_ResumeAwaitJob(ant_t *js, coroutine_t *coro, ant_value_t value) {
+void Ant_Coroutine_ResumeAwaitJob(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error) {
   coro->await_registered = false;
   coro->awaited_promise = js_mkundef();
   coro->await_resume_job = NULL;
-  resume_coroutine_if_suspended(js, coro, value, false);
+  resume_coroutine_if_suspended(js, coro, value, is_error);
+}
+
+void Ant_Coroutine_DeferResume(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error) {
+  if (!coro) return;
+  bool held = coroutine_detach_await_registration(coro);
+  
+  if (queue_await_settle_job(coro, value, is_error)) coro->await_registered = true;
+  else resume_coroutine_if_suspended(js, coro, value, is_error);
+  
+  if (held) coroutine_release(coro);
 }
 
 void Ant_Coroutine_SettleAndResume(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error) {

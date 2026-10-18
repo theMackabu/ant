@@ -1,11 +1,13 @@
 #ifndef SILVER_CALL_H
 #define SILVER_CALL_H
 
-#include "silver/engine.h"
+#include "realm.h"
 #include "handles.h"
 #include "interrupt.h"
-#include "silver/feedback.h"
 #include "modules/timer.h"
+
+#include "silver/engine.h"
+#include "silver/feedback.h"
 #include "../../src/silver/ops/async.h"
 
 static constexpr int SV_CALL_INLINE_ARGS_CAP = 4;
@@ -416,8 +418,7 @@ static inline ant_value_t sv_call_async_closure(
 ) {
   ant_value_t result = sv_start_async_closure(
     vm, js, closure, callee_func,
-    ctx->super_val, ctx->new_target,
-    ctx->this_val, ctx->args, ctx->argc
+    ctx->super_val, ctx->this_val, ctx->args, ctx->argc
   );
   sv_call_cleanup(js, ctx);
   return result;

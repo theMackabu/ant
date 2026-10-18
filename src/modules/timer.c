@@ -48,7 +48,17 @@ enum {
   MT_THENABLE_JOB,
   MT_AWAIT_RESUME,
   MT_GENERATOR_YIELD,
+  MT_PROMISE_RESOLVE,
+  MT_AWAIT_RESUME_THROW,
+  MT_AWAIT_DEFER,
 };
+
+static inline bool microtask_holds_coro(uint8_t kind) {
+  return 
+    kind == MT_AWAIT_RESUME       || 
+    kind == MT_AWAIT_RESUME_THROW || 
+    kind == MT_AWAIT_DEFER;
+}
 
 typedef struct microtask_entry {
   ant_value_t callback;
@@ -853,7 +863,19 @@ bool queue_generator_yield_job(ant_t *js, ant_value_t gen, ant_value_t value) {
   return true;
 }
 
-bool queue_await_resume_job(coroutine_t *coro, ant_value_t value) {
+bool queue_promise_resolve_job(ant_t *js, ant_value_t promise, ant_value_t value) {
+  microtask_entry_t *entry = microtask_entry_new(js, 0);
+  if (entry == NULL) return false;
+
+  entry->callback = value;
+  entry->u.promise = promise;
+  entry->kind = MT_PROMISE_RESOLVE;
+  queue_job(js, entry);
+  
+  return true;
+}
+
+static bool queue_coro_job(coroutine_t *coro, ant_value_t value, uint8_t kind) {
   ant_t *js = coro->js;
   microtask_entry_t *entry = microtask_entry_new(js, 0);
   if (entry == NULL) return false;
@@ -861,13 +883,25 @@ bool queue_await_resume_job(coroutine_t *coro, ant_value_t value) {
   entry->callback = value;
   entry->u.coro = coro;
   entry->next = NULL;
-  entry->kind = MT_AWAIT_RESUME;
+  entry->kind = kind;
 
   coroutine_retain(coro);
   coro->await_resume_job = entry;
   queue_job(js, entry);
   
   return true;
+}
+
+bool queue_await_resume_job(coroutine_t *coro, ant_value_t value) {
+  return queue_coro_job(coro, value, MT_AWAIT_RESUME);
+}
+
+bool queue_await_settle_job(coroutine_t *coro, ant_value_t value, bool is_error) {
+  return queue_coro_job(coro, value, is_error ? MT_AWAIT_RESUME_THROW : MT_AWAIT_RESUME);
+}
+
+bool queue_await_defer_job(coroutine_t *coro, ant_value_t value) {
+  return queue_coro_job(coro, value, MT_AWAIT_DEFER);
 }
 
 void queue_next_tick(ant_t *js, ant_value_t callback) {
@@ -942,14 +976,49 @@ static inline void process_microtask_entry(ant_t *js, microtask_entry_t *entry) 
     return;
   }
 
-  if (entry->kind == MT_AWAIT_RESUME) {
+  if (entry->kind == MT_PROMISE_RESOLVE) {
     GC_ROOT_SAVE(root_mark, js);
+    ant_value_t promise = entry->u.promise;
+    ant_value_t value = entry->callback;
+    
+    GC_ROOT_PIN(js, promise);
+    GC_ROOT_PIN(js, value);
+    
+    js_resolve_promise(js, promise, value);
+    GC_ROOT_RESTORE(js, root_mark);
+    
+    return;
+  }
+
+  if (entry->kind == MT_AWAIT_DEFER) {
+    GC_ROOT_SAVE(root_mark, js);
+    
     ant_value_t value = entry->callback;
     coroutine_t *coro = entry->u.coro;
+    
+    GC_ROOT_PIN(js, value);
+
+    if (
+      coro->await_registered && coro->await_resume_job == entry && 
+      !queue_await_resume_job(coro, value)
+    ) Ant_Coroutine_ResumeAwaitJob(js, coro, value, false);
+
+    coroutine_release(coro);
+    GC_ROOT_RESTORE(js, root_mark);
+    
+    return;
+  }
+
+  if (entry->kind == MT_AWAIT_RESUME || entry->kind == MT_AWAIT_RESUME_THROW) {
+    GC_ROOT_SAVE(root_mark, js);
+    
+    ant_value_t value = entry->callback;
+    coroutine_t *coro = entry->u.coro;
+    
     GC_ROOT_PIN(js, value);
 
     if (coro->await_registered && coro->await_resume_job == entry)
-      Ant_Coroutine_ResumeAwaitJob(js, coro, value);
+      Ant_Coroutine_ResumeAwaitJob(js, coro, value, entry->kind == MT_AWAIT_RESUME_THROW);
 
     coroutine_release(coro);
     GC_ROOT_RESTORE(js, root_mark);
@@ -1234,10 +1303,11 @@ static void discard_jobs(ant_t *js, microtask_entry_t *entry) {
   while (entry) {
     microtask_entry_t *next = entry->next;
     
-    if (entry->kind == MT_AWAIT_RESUME) {
+    if (microtask_holds_coro(entry->kind)) {
       coroutine_clear_await_registration(entry->u.coro);
       coroutine_release(entry->u.coro);
-    } else if (entry->kind == MT_PROMISE_TRIGGER) js_mark_promise_trigger_dequeued(js, entry->u.promise);
+    } else if (entry->kind == MT_PROMISE_TRIGGER) 
+      js_mark_promise_trigger_dequeued(js, entry->u.promise);
     
     free(entry);
     entry = next;
@@ -1283,7 +1353,7 @@ void cleanup_timer_module(ant_t *js) {
 static void gc_mark_jobs(ant_t *js, microtask_entry_t *m, gc_mark_fn mark) {
   for (; m; m = m->next) {
     mark(js, m->callback);
-    if (m->kind == MT_AWAIT_RESUME) gc_mark_coroutine(js, m->u.coro);
+    if (microtask_holds_coro(m->kind)) gc_mark_coroutine(js, m->u.coro);
     else mark(js, m->u.promise);
     for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
   }

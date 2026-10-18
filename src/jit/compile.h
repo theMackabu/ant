@@ -35,6 +35,9 @@ typedef struct jit_compile {
   MIR_item_t private_put_proto;
   MIR_item_t private_def_proto;
   MIR_item_t call_proto;
+  MIR_item_t call_awaited_proto;
+  MIR_item_t await_park_proto;
+  MIR_item_t await_return_proto;
   MIR_item_t cfunc_proto;
   MIR_item_t native_finish_proto;
   MIR_item_t call_string_intrinsic_proto;
@@ -122,6 +125,9 @@ typedef struct jit_compile {
   MIR_item_t imp_gt;
   MIR_item_t imp_ge;
   MIR_item_t imp_call;
+  MIR_item_t imp_call_awaited;
+  MIR_item_t imp_await_park;
+  MIR_item_t imp_await_return_direct;
   MIR_item_t imp_native_finish;
   MIR_item_t imp_call_method;
   MIR_item_t imp_call_array_includes;
@@ -135,6 +141,7 @@ typedef struct jit_compile {
   MIR_item_t imp_call_stable_builtin;
   MIR_item_t apply_proto;
   MIR_item_t imp_apply;
+  MIR_item_t imp_async_start;
   MIR_item_t imp_call_spread;
   MIR_item_t imp_call_call;
   MIR_item_t imp_call_call_slot;
@@ -326,6 +333,14 @@ typedef struct jit_compile {
   jit_integer_range_t *entry_integer_ranges;
   bool params_in_slotbuf;
   bool has_captured_slots;
+  bool await_park;
+  MIR_reg_t r_async_direct;
+  MIR_reg_t r_async_next_op;
+  MIR_reg_t r_frame_lp;
+  MIR_reg_t r_park_site;
+  MIR_reg_t r_park_sp;
+  MIR_reg_t r_park_value;
+  MIR_label_t await_park_block;
   bool use_unified_slotbuf;
   int slotbuf_count;
   bool needs_lbuf;
@@ -383,6 +398,9 @@ static inline bool jit_speculate_unseen_numeric(const jit_compile_t *c, uint8_t 
 void jit_emit_exit_ret(jit_compile_t *c, MIR_op_t ret_op);
 void jit_emit_interrupt_poll(jit_compile_t *c);
 void jit_emit_interrupt_exit(jit_compile_t *c);
+void jit_emit_await_exit(jit_compile_t *c, int n_pop, int n_push);
+uint8_t jit_awaited_async_call_op(jit_compile_t *c, sv_func_t *known);
+void jit_emit_awaited_call(jit_compile_t *c, int call_argc, bool method, uint8_t next_op);
 jit_stale_exit_t *jit_stale_exit_for(jit_compile_t *c, jit_stale_exit_t *exit);
 bool jit_site_runs_hot(jit_compile_t *c);
 void jit_note_stale_exit(jit_compile_t *c, const jit_stale_exit_t *exit, int pre_op_sp);

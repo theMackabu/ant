@@ -11,6 +11,34 @@ static void jit_emit_deferred_bails(jit_compile_t *c) {
   }
 }
 
+static void jit_emit_await_park_block(jit_compile_t *c) {
+  MIR_append_insn(c->ctx, c->jit_func, c->await_park_block);
+  if (c->writes_params) {
+    MIR_reg_t r_param = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, "park_param");
+    for (int i = 0; i < c->param_count; i++) {
+      MIR_reg_t value = r_param;
+      if (i < JIT_PARAM_HOIST_CAP && c->param_cache[i]) {
+        value = c->param_cache[i];
+        if (c->param_d_cache[i]) mir_d_to_i64(c->ctx, c->jit_func, value, c->param_d_cache[i], c->r_d_slot);
+      } else MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, r_param),
+        MIR_new_mem_op(c->ctx, MIR_JSVAL, (MIR_disp_t)(i * (int)sizeof(ant_value_t)), c->r_slotbuf, 0, 1)));
+      MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+        MIR_new_mem_op(c->ctx, MIR_JSVAL, (MIR_disp_t)(i * (int)sizeof(ant_value_t)), c->r_args, 0, 1),
+        MIR_new_reg_op(c->ctx, value)));
+    }
+  }
+  MIR_reg_t r_res = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, "park_res");
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_call_insn(c->ctx, 7,
+    MIR_new_ref_op(c->ctx, c->await_park_proto),
+    MIR_new_ref_op(c->ctx, c->imp_await_park),
+    MIR_new_reg_op(c->ctx, r_res),
+    MIR_new_reg_op(c->ctx, c->r_vm),
+    MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->func),
+    MIR_new_reg_op(c->ctx, c->r_park_site),
+    MIR_new_reg_op(c->ctx, c->r_park_sp)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, r_res)));
+}
+
 static void jit_emit_resume_tramp(jit_compile_t *c, const jit_bailout_emit_t *bail, MIR_item_t imp, const char *res_name) {
   mir_emit_bailout_spill_block(c->ctx, c->jit_func, bail);
   MIR_append_insn(c->ctx, c->jit_func, bail->tramp);
@@ -40,6 +68,15 @@ static void jit_emit_resume_tramp(jit_compile_t *c, const jit_bailout_emit_t *ba
               (MIR_disp_t)(i * sizeof(ant_value_t)), c->r_slotbuf, 0, 1),
           MIR_new_reg_op(c->ctx, c->param_cache[i])));
     }
+  }
+  if (c->r_async_direct) {
+    MIR_label_t not_direct = MIR_new_label(c->ctx);
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ,
+      MIR_new_label_op(c->ctx, not_direct), MIR_new_reg_op(c->ctx, c->r_async_direct), MIR_new_int_op(c->ctx, 0)));
+    MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_OR,
+      MIR_new_reg_op(c->ctx, c->r_bailout_off), MIR_new_reg_op(c->ctx, c->r_bailout_off),
+      MIR_new_int_op(c->ctx, SV_JIT_RESUME_DIRECT)));
+    MIR_append_insn(c->ctx, c->jit_func, not_direct);
   }
   c->call_tagging.resume = true;
   MIR_append_insn(c->ctx, c->jit_func,
@@ -448,6 +485,9 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_JMP_TRUE8:
       case OP_RETURN:
       case OP_RETURN_UNDEF:
+      case OP_AWAIT:
+      case OP_AWAIT_RETURN:
+      case OP_AWAIT_ITER_NEXT:
       case OP_TRY_PUSH:
       case OP_TRY_POP:
       case OP_THROW:
@@ -598,6 +638,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   if (c->stale_site_count) jit_emit_stale_exits(c);
   jit_emit_interrupt_exit(c);
   if (c->deferred_bail_count) jit_emit_deferred_bails(c);
+  if (c->await_park_block) jit_emit_await_park_block(c);
   if (c->needs_bailout) jit_emit_resume_tramp(c, &c->bailout_ctx, c->imp_resume, "resume_res");
   if (c->needs_promote) jit_emit_resume_tramp(c, &c->promote_ctx, c->imp_promote_resume, "promote_res");
   jit_call_tagging = NULL;
@@ -691,6 +732,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   c->func->jit_compiled_tfb_ver = c->func->tfb_version;
   c->func->jit_code_cold = tier == SV_JIT_TIER_COLD;
   c->func->jit_code_retier = retier;
+  c->func->jit_await_park = c->await_park;
   
   if (tier == SV_JIT_TIER_COLD && c->cold_ns_item && c->cold_ns_item->addr) {
     ((int64_t *)c->cold_ns_item->addr)[1] = JIT_COLD_PROMOTE_COMPILE_MULTIPLE * JIT_HOT_COMPILE_COLD_RATIO * compile_ns;

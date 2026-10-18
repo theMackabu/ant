@@ -386,30 +386,27 @@ static ant_value_t generator_resume_kind_inner(
     if (!closure || !closure->func) result = js_mkerr(js, "invalid generator function");
     else result = sv_execute_closure_entry(
       exec_vm, closure, coro->async_func,
-      coro->super_val, coro->new_target, coro->this_val, coro->args, coro->nargs, NULL
+      coro->super_val, coro->new_target, 
+      coro->this_val, coro->args, coro->nargs, NULL
     );
   } else if (coro->act && sv_activation_install(exec_vm, coro->act)) {
-    exec_vm->suspended_resume_value = resume_value;
-    exec_vm->suspended_resume_is_error = (resume_kind == SV_RESUME_THROW);
-    exec_vm->suspended_resume_kind = resume_kind;
-    exec_vm->suspended_resume_pending = true;
+    exec_vm->suspend.value = resume_value;
+    exec_vm->suspend.is_error = (resume_kind == SV_RESUME_THROW);
+    exec_vm->suspend.kind = resume_kind;
+    exec_vm->suspend.pending = true;
     result = sv_resume_suspended(exec_vm);
   } else result = js_mkerr(js, "generator activation lost");
 
   bool suspended_now = true;
-  bool yielded_here = exec_vm->suspended && exec_vm->suspended_entry_fp >= 0;
+  bool yielded_here = exec_vm->suspend.active && exec_vm->suspend.entry_fp >= 0;
   
   if (yielded_here) {
-    sv_activation_t *act = sv_activation_capture(
-      exec_vm, exec_vm->suspended_entry_fp, 
-      coro->act
-    );
-    
+    sv_activation_t *act = sv_activation_capture(exec_vm, exec_vm->suspend.entry_fp, coro->act);
     if (act) {
       coro->act = act;
       gc_remember_coroutine(js, coro);
     } else {
-      sv_activation_discard(exec_vm, exec_vm->suspended_entry_fp);
+      sv_activation_discard(exec_vm, exec_vm->suspend.entry_fp);
       suspended_now = false;
       result = js_mkerr(js, "out of memory capturing generator activation");
     }

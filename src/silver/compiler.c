@@ -597,6 +597,16 @@ static uint32_t add_map_template_desc(
 
 static int sv_func_compute_max_stack(const sv_func_t *func);
 
+static bool sv_func_compute_has_try(const sv_func_t *func) {
+  for (const uint8_t *ip = func->code, *end = func->code + func->code_len; ip < end;) {
+    int sz = sv_op_size[*ip];
+    if (sz <= 0) return false;
+    if (*ip == OP_TRY_PUSH) return true;
+    ip += sz;
+  }
+  return false;
+}
+
 static void sv_func_init_code_and_map_templates(
   const sv_compiler_t *c, sv_func_t *func
 ) {
@@ -629,6 +639,7 @@ static void sv_func_init_code_and_map_templates(
   
   memcpy(func->code, c->code, (size_t)c->code_len);
   func->code_len = c->code_len;
+  func->has_try = sv_func_compute_has_try(func);
   func->jit_osr_threshold = sv_jit_osr_threshold_for(func->code_len);
 
   int max_stack = sv_func_compute_max_stack(func);
@@ -913,25 +924,29 @@ static void ensure_slot_type_cap(sv_compiler_t *c, int slot) {
 static void mark_slot_bound(sv_compiler_t *c, int slot) {
   if (slot < 0) return;
   ensure_slot_type_cap(c, slot);
+  
   if (!c->slot_types || slot >= c->slot_type_cap) return;
   sv_type_info_t *info = &c->slot_types[slot];
+  
   if (info->bound) info->shared_slot = true;
   info->bound = true;
 }
 
 static int add_local(
-  sv_compiler_t *c, const char *name, uint32_t len,
-  bool is_const, int depth
+  sv_compiler_t *c, const char *name, uint32_t len, bool is_const, int depth
 ) {
   sv_compile_ctx_ensure_local_lookup_capacity(c, c->local_count + 1);
+  
   if (c->local_count >= c->local_cap) {
     c->local_cap = c->local_cap ? c->local_cap * 2 : 16;
     c->locals = realloc(c->locals, (size_t)c->local_cap * sizeof(sv_local_t));
   }
+  
   int idx = c->local_count++;
-  if (c->local_count > c->max_local_count)
-    c->max_local_count = c->local_count;
-  mark_slot_bound(c, idx - c->param_locals);
+  
+  if (c->local_count > c->max_local_count) c->max_local_count = c->local_count;
+  if (depth >= 0) mark_slot_bound(c, idx - c->param_locals);
+  
   c->locals[idx] = (sv_local_t){
     .name = name, .name_len = len,
     .name_hash = sv_compile_ctx_hash_local_name(name, len),
@@ -939,7 +954,9 @@ static int add_local(
     .depth = depth, .is_const = is_const, .captured = false,
     .inferred_type = SV_TI_UNKNOWN,
   };
+  
   sv_compile_ctx_local_lookup_insert(c, idx);
+  
   return idx;
 }
 
@@ -965,16 +982,17 @@ static inline bool sv_type_is_num(uint8_t t) {
 static void mark_slot_type(sv_compiler_t *c, int slot, uint8_t type) {
   if (slot < 0) return;
   ensure_slot_type_cap(c, slot);
+  
   if (!c->slot_types || slot >= c->slot_type_cap) return;
   uint8_t old = c->slot_types[slot].type;
+  
   if (!sv_type_is_known(type)) {
     c->slot_types[slot].type = SV_TI_UNKNOWN;
     return;
   }
-  if (!sv_type_is_known(old))
-    c->slot_types[slot].type = type;
-  else if (old != type)
-    c->slot_types[slot].type = SV_TI_UNKNOWN;
+  
+  if (!sv_type_is_known(old)) c->slot_types[slot].type = type;
+  else if (old != type) c->slot_types[slot].type = SV_TI_UNKNOWN;
 }
 
 static void set_local_inferred_type(sv_compiler_t *c, int local_idx, uint8_t type) {
@@ -8207,17 +8225,6 @@ sv_func_t *compile_function_body(
 
 const char *const sv_op_names[OP__COUNT] = {
 #define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = #name,
-#include "silver/opcode.h"
-};
-
-enum {
-#define OP_FMT(name) SVF_##name,
-#include "silver/opcode.h"
-  SVF__COUNT,
-};
-
-static const uint8_t sv_op_fmts[OP__COUNT] = {
-#define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = SVF_##f,
 #include "silver/opcode.h"
 };
 

@@ -337,6 +337,12 @@ void jit_emit_calls(jit_compile_t *c) {
         break;
       }
 
+      uint8_t awaited_op = is_tail ? 0 : jit_awaited_async_call_op(c, c->vs.known_func[c->vs.sp - call_argc - 1]);
+      if (awaited_op) {
+        jit_emit_awaited_call(c, (int)call_argc, false, awaited_op);
+        break;
+      }
+
       MIR_label_t string_done = NULL;
       if (!c->vs.known_func[c->vs.sp - call_argc - 1] &&
           !sv_tfb_get_call_target(c->func, c->bc_off))
@@ -556,7 +562,7 @@ void jit_emit_calls(jit_compile_t *c) {
       sv_func_t *call_known = c->vs.known_func
                                   ? c->vs.known_func[c->vs.sp - call_argc - 1]
                                   : NULL;
-      bool known_self_tail = call_known == c->func && is_tail && c->jit_try_depth == 0;
+      bool known_self_tail = call_known == c->func && is_tail && c->jit_try_depth == 0 && !c->func->is_async;
 
       for (int i = (int)call_argc - 1; i >= 0; i--) {
         MIR_reg_t areg = vstack_pop(&c->vs);
@@ -638,6 +644,7 @@ void jit_emit_calls(jit_compile_t *c) {
           jit_emit_exit_ret(c, MIR_new_reg_op(c->ctx, r_call_res));
           MIR_append_insn(c->ctx, c->jit_func, no_err);
         }
+        if (is_tail) jit_emit_exit_ret(c, MIR_new_reg_op(c->ctx, r_call_res));
         break;
       }
 
@@ -733,7 +740,7 @@ void jit_emit_calls(jit_compile_t *c) {
                       MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, lbl_call_done)));
 
       MIR_append_insn(c->ctx, c->jit_func, lbl_self_call);
-      if (is_tail && c->jit_try_depth == 0) {
+      if (is_tail && c->jit_try_depth == 0 && !c->func->is_async) {
         jit_emit_self_tail(c, (int)call_argc, arg_regs, r_call_this);
       } else {
         MIR_append_insn(c->ctx, c->jit_func,

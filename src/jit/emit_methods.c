@@ -276,6 +276,12 @@ void jit_emit_methods(jit_compile_t *c) {
         break;
       }
 
+      uint8_t awaited_op = is_tail ? 0 : jit_awaited_async_call_op(c, NULL);
+      if (awaited_op) {
+        jit_emit_awaited_call(c, (int)call_argc, true, awaited_op);
+        break;
+      }
+
       if (c->forward_arguments) {
         jit_emit_forward_arguments_call(c, is_tail);
         break;

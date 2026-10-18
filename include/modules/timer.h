@@ -48,6 +48,9 @@ bool js_maybe_drain_microtasks_after_async_settle(ant_t *js);
 
 bool queue_promise_thenable_job(ant_t *js, ant_value_t promise, ant_value_t thenable, ant_value_t then_fn);
 bool queue_await_resume_job(coroutine_t *coro, ant_value_t value);
+bool queue_await_settle_job(coroutine_t *coro, ant_value_t value, bool is_error);
+bool queue_await_defer_job(coroutine_t *coro, ant_value_t value);
+bool queue_promise_resolve_job(ant_t *js, ant_value_t promise, ant_value_t value);
 bool queue_generator_yield_job(ant_t *js, ant_value_t gen, ant_value_t value);
 
 int has_pending_timers(ant_t *js);

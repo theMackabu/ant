@@ -82,6 +82,17 @@ static const uint8_t sv_op_size[OP__COUNT] = {
 #include "silver/opcode.h"
 };
 
+enum {
+#define OP_FMT(name) SVF_##name,
+#include "silver/opcode.h"
+  SVF__COUNT,
+};
+
+static const uint8_t sv_op_fmts[OP__COUNT] = {
+#define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = SVF_##f,
+#include "silver/opcode.h"
+};
+
 static const uint16_t sv_op_flags[OP__COUNT] = {
 #define OP_FLAG(name, flags) [OP_##name] = (flags),
 #include "silver/opcode.h"
@@ -186,7 +197,7 @@ typedef struct {
 } sv_type_info_t;
 
 static_assert(
-  sizeof(sv_type_info_t) == 1, 
+  sizeof(sv_type_info_t) == 1,
   "sv_type_info_t must stay one byte"
 );
 
@@ -442,6 +453,8 @@ typedef struct {
   uint32_t ctor_proto_slot;
   bool ctor_proto_shape_registered;
   uint8_t poly_recompiles;
+  struct sv_jit_await_map *jit_await_map;
+  const struct sv_try_table *try_table;
 } sv_func_sidecar_t;
 
 static_assert(
@@ -580,6 +593,7 @@ struct sv_func {
   bool has_dynamic_eval: 1;
   bool is_curried_step: 1;
   bool is_fusable_leaf: 1;
+  bool has_try: 1;
 
   bool jit_compile_failed: 1;
   bool jit_compiling: 1;
@@ -589,8 +603,11 @@ struct sv_func {
   bool has_closure: 1;
   bool multi_closure: 1;
   bool jit_tdz_specialized: 1;
+  bool jit_await_park: 1;
+  bool jit_async_direct_off: 1;
 
   uint8_t jit_param_counters_off;
+  uint8_t jit_async_direct_awaits;
   uint8_t jit_snapshot_resets;
 
   uint32_t call_count;
@@ -616,6 +633,11 @@ struct sv_func {
   sv_code_unit_t *unit;
   struct sv_func *unit_next;
 };
+
+static_assert(
+  sizeof(void *) != 8 || sizeof(sv_func_t) <= 232,
+  "sv_func_t must not grow past 232 bytes on 64-bit targets"
+);
 
 static inline const sv_map_template_desc_t *sv_map_template_desc_at(
   const sv_func_t *func, uint32_t index
@@ -796,6 +818,9 @@ sv_activation_t *sv_activation_capture(
 bool sv_activation_install(sv_vm_t *vm, sv_activation_t *act);
 void sv_activation_seal(ant_t *js, sv_activation_t *act);
 void sv_activation_discard(sv_vm_t *vm, int entry_fp);
+bool sv_vm_reserve_handlers(sv_vm_t *vm, int extra);
+void sv_frame_push_try_handlers(sv_vm_t *vm, sv_frame_t *frame, sv_func_t *func, int off, int base_sp);
+void sv_try_table_free(const struct sv_try_table *table);
 
 static inline void gc_upvalue_write_barrier(ant_t *js, sv_upvalue_t *uv, ant_value_t new_val) {
   if (uv->in_remember_set || uv->gc_epoch == 0) return;
@@ -936,6 +961,8 @@ static inline sv_closure_t *js_func_closure(ant_value_t func) {
   return (sv_closure_t *)vptr(func);
 }
 
+ant_value_t sv_string_builder_read_value(ant_t *js, ant_value_t value);
+ant_value_t sv_async_entry_finish(sv_vm_t *vm, int entry_fp, ant_value_t result);
 ant_value_t sv_closure_materialize_func_obj(ant_t *js, sv_closure_t *c, ant_value_t func_val);
 
 static inline ant_value_t js_func_obj(ant_value_t func) {
@@ -966,13 +993,24 @@ ant_value_t sv_execute_closure_entry(
   ant_value_t *args, int argc, ant_value_t *out_this
 );
 
+ant_value_t sv_async_call_lazy(
+  sv_vm_t *vm, sv_closure_t *closure, ant_value_t callee_func, ant_value_t super_val,
+  ant_value_t this_val, ant_value_t *args, int argc, uint8_t next_op
+);
+
 ant_value_t sv_execute_eval_entry(
   sv_vm_t *vm, sv_func_t *func, ant_value_t this_val, 
   ant_value_t eval_env, ant_value_t new_target
 );
 
+enum: uint8_t {
+  SV_JIT_OSR_NONE = 0,
+  SV_JIT_OSR_LOOP = 1,
+  SV_JIT_OSR_AWAIT = 2,
+};
+
 typedef struct {
-  bool active;
+  uint8_t active;
   int bc_offset;
   ant_value_t *locals;
   int n_locals;
@@ -981,12 +1019,11 @@ typedef struct {
   int vstack_sp;
 } sv_jit_osr_t;
 
-#define SV_TRY_MAX  64
-#define SV_TDZ      T_EMPTY
-#define SV_HANDLER_MAX (SV_TRY_MAX * 2)
+#define SV_TRY_MAX 64
+#define SV_TDZ T_EMPTY
 
-static_assert(SV_HANDLER_MAX <= UINT16_MAX,
-  "frame handler indexes must fit in uint16_t");
+#define SV_HANDLER_INITIAL (SV_TRY_MAX * 2)
+#define SV_HANDLER_HARD_MAX UINT16_MAX
 
 #ifdef ANT_WASM_EMBED
 #define SV_FRAMES_HARD_MAX 16384
@@ -1005,8 +1042,49 @@ typedef struct sv_jit_osr_mark {
   struct sv_jit_osr_mark *prev;
 } sv_jit_osr_mark_t;
 
+typedef struct {
+  uint32_t bc_off;
+  uint32_t live_start;
+  uint16_t live_count;
+  bool resumable;
+  bool in_try;
+} sv_jit_await_site_t;
+
+typedef struct sv_jit_await_map {
+  int site_count;
+  sv_jit_await_site_t *sites;
+  uint16_t *live;
+} sv_jit_await_map_t;
+
+typedef struct {
+  uint32_t try_off;
+  uint32_t pop_off;
+  uint32_t catch_off;
+  int32_t depth;
+} sv_try_region_t;
+
+typedef struct sv_try_table {
+  int count;
+  sv_try_region_t regions[];
+} sv_try_table_t;
+
+static inline int sv_jit_await_site_index(const sv_jit_await_map_t *map, uint32_t bc_off) {
+  int lo = 0, hi = map->site_count - 1;
+  
+  while (lo <= hi) {
+    int mid = (lo + hi) / 2;
+    if (map->sites[mid].bc_off < bc_off) lo = mid + 1;
+    else if (map->sites[mid].bc_off > bc_off) hi = mid - 1;
+    else return mid;
+  }
+  
+  return -1;
+}
+
 typedef struct sv_async_inline {
   int fp;
+  bool entry;
+  uint8_t next_op;
   struct coroutine *coro;
 } sv_async_inline_t;
 
@@ -1021,42 +1099,61 @@ struct sv_vm {
   int fp;
   int max_frames;
 
-  sv_handler_t handler_stack[SV_HANDLER_MAX];
   sv_upvalue_t *open_upvalues;
+
+  struct {
+    sv_jit_osr_t osr;
+    
+    bool async_direct;
+    uint8_t async_next_op;
+    bool async_settled;
+    
+    bool mode_strict;
+    int mode_fp;
+    
+    sv_jit_osr_mark_t *osr_marks;
+    struct {
+      bool active;
+      int ip_offset;
+      int n_params;
+      int n_locals;
+      int vstack_sp;
+      ant_value_t *params;
+      ant_value_t *locals;
+      ant_value_t *vstack;
+    } resume;
+  } jit;
+
+  sv_handler_t *handler_stack;
   int handler_depth;
-  
-  // TODO: move to nested struct
-  bool suspended;
-  bool suspended_resume_pending;
-  bool suspended_resume_is_error;
-  sv_resume_kind_t suspended_resume_kind;
-  
-  int suspended_entry_fp;
-  int suspended_saved_fp;
-  ant_value_t suspended_resume_value;
+  int handler_cap;
 
   struct {
     bool active;
-    int64_t ip_offset;
-    ant_value_t *params;
-    int64_t n_params;
-    ant_value_t *locals;
-    int64_t n_locals;
-    ant_value_t *vstack;
-    int64_t vstack_sp;
-  } jit_resume;
+    bool pending;
+    bool is_error;
+    sv_resume_kind_t kind;
+    int entry_fp;
+    int saved_fp;
+    ant_value_t value;
+  } suspend;
 
-  sv_jit_osr_t jit_osr;
   sv_native_frame_t *native_frame;
-  sv_jit_osr_mark_t *jit_osr_marks;
 
-  sv_async_inline_t *async_inline;
-  int async_inline_len;
-  int async_inline_cap;
-
-  int jit_mode_fp;
-  bool jit_mode_strict;
+  struct {
+    sv_async_inline_t *records;
+    int len;
+    int cap;
+    bool deferred;
+  } async_inline;
 };
+
+static_assert(
+  offsetof(struct sv_vm, jit.async_next_op) < 4096,
+  "fields read by compiled-code entry stubs need short immediate offsets"
+);
+
+int sv_async_entry_begin(sv_vm_t *vm, uint8_t next_op);
 
 static inline uint8_t sv_get_u8(const uint8_t *ip)  { return ip[0]; }
 static inline int8_t  sv_get_i8(const uint8_t *ip)  { return (int8_t)ip[0]; }
@@ -1111,7 +1208,7 @@ static inline ant_value_t sv_normalize_this_for_frame(ant_t *js, sv_func_t *func
 }
 
 static inline bool sv_vm_is_strict(const sv_vm_t *vm) {
-  if (vm && vm->jit_mode_fp == vm->fp) return vm->jit_mode_strict;
+  if (vm && vm->jit.mode_fp == vm->fp) return vm->jit.mode_strict;
   
   if (vm && vm->fp >= 0) {
     const sv_frame_t *f = &vm->frames[vm->fp];
@@ -1165,10 +1262,6 @@ static inline ant_value_t *sv_frame_slot_ptr(sv_frame_t *frame, uint16_t slot_id
   if (!frame->lp) return NULL;
   return &frame->lp[slot_idx - param_count];
 }
-
-ant_value_t sv_string_builder_read_value(
-  ant_t *js, ant_value_t value
-);
 
 ant_value_t sv_string_builder_flush_slot(
   sv_vm_t *vm, ant_t *js, 

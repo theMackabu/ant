@@ -51,6 +51,30 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                 MIR_JSVAL, "this_val",
                                 MIR_T_P, "args",
                                 MIR_T_I32, "argc");
+  c->call_awaited_proto = MIR_new_proto(c->ctx, "call_awaited_proto",
+                                        1, &call_ret,
+                                        7,
+                                        MIR_T_I64, "vm",
+                                        MIR_T_I64, "js_p",
+                                        MIR_JSVAL, "func",
+                                        MIR_JSVAL, "this_val",
+                                        MIR_T_P, "args",
+                                        MIR_T_I32, "argc",
+                                        MIR_T_I32, "next_op");
+  c->await_park_proto = MIR_new_proto(c->ctx, "await_park_proto",
+                                      1, &call_ret,
+                                      4,
+                                      MIR_T_I64, "vm",
+                                      MIR_T_P, "fn",
+                                      MIR_T_I64, "site",
+                                      MIR_T_I64, "sp");
+  c->await_return_proto = MIR_new_proto(c->ctx, "await_return_proto",
+                                        1, &call_ret,
+                                        4,
+                                        MIR_T_I64, "vm",
+                                        MIR_T_I64, "js_p",
+                                        MIR_JSVAL, "value",
+                                        MIR_T_I64, "next_op");
   c->apply_proto = MIR_new_proto(c->ctx, "apply_proto",
                                  1, &call_ret,
                                  7,
@@ -694,6 +718,9 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_gt = MIR_new_import(c->ctx, "jit_helper_gt");
   c->imp_ge = MIR_new_import(c->ctx, "jit_helper_ge");
   c->imp_call = MIR_new_import(c->ctx, "jit_helper_call");
+  c->imp_call_awaited = MIR_new_import(c->ctx, "jit_helper_call_awaited");
+  c->imp_await_park = MIR_new_import(c->ctx, "jit_helper_await_park");
+  c->imp_await_return_direct = MIR_new_import(c->ctx, "jit_helper_await_return_direct");
   c->imp_native_finish = MIR_new_import(c->ctx, "jit_helper_native_finish");
   c->imp_call_method = MIR_new_import(c->ctx, "jit_helper_call_method");
   c->imp_call_array_includes = MIR_new_import(c->ctx, "jit_helper_call_array_includes");
@@ -711,6 +738,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_load_stable_builtin = MIR_new_import(c->ctx, "jit_helper_load_stable_builtin");
   c->imp_call_stable_builtin = MIR_new_import(c->ctx, "jit_helper_call_stable_builtin");
   c->imp_apply = MIR_new_import(c->ctx, "jit_helper_apply");
+  c->imp_async_start = MIR_new_import(c->ctx, "jit_helper_async_start");
   c->imp_call_spread = MIR_new_import(c->ctx, "jit_helper_call_spread");
   c->imp_call_call = MIR_new_import(c->ctx, "jit_helper_call_call");
   c->imp_call_call_slot = MIR_new_import(c->ctx, "jit_helper_call_call_slot");

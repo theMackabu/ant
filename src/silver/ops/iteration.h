@@ -543,11 +543,12 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
     }
 
     vm->stack[vm->sp - 1] = SV_AITER_AWAIT_MARK;
-    vm->suspended_entry_fp = vm->fp;
-    vm->suspended_saved_fp = vm->fp - 1;
-    sv_await_result_t awaited = sv_await_value(vm, js, value);
-    vm->suspended_entry_fp = -1;
-    vm->suspended_saved_fp = -1;
+    vm->suspend.entry_fp = vm->fp;
+    vm->suspend.saved_fp = vm->fp - 1;
+    
+    sv_await_result_t awaited = sv_await_value(vm, js, value, false);
+    vm->suspend.entry_fp = -1;
+    vm->suspend.saved_fp = -1;
     if (awaited.state != SV_AWAIT_READY) return awaited;
 
     vm->stack[vm->sp - 1] = SV_AITER_ARRAY_TAG;
@@ -598,12 +599,12 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
   }
 
   if (!has_resumed_result && vtype(result) == kTypePromise) {
-    vm->suspended_entry_fp = vm->fp;
-    vm->suspended_saved_fp = vm->fp - 1;
+    vm->suspend.entry_fp = vm->fp;
+    vm->suspend.saved_fp = vm->fp - 1;
     
-    sv_await_result_t awaited = sv_await_value(vm, js, result);
-    vm->suspended_entry_fp = -1;
-    vm->suspended_saved_fp = -1;
+    sv_await_result_t awaited = sv_await_value(vm, js, result, false);
+    vm->suspend.entry_fp = -1;
+    vm->suspend.saved_fp = -1;
     
     if (awaited.state != SV_AWAIT_READY) return awaited;
     result = awaited.value;
@@ -629,12 +630,12 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
   
   if (vtype(value) == kTypePromise) {
     vm->stack[vm->sp++] = mkval(kTypeBool, js_truthy(js, done));
-    vm->suspended_entry_fp = vm->fp;
-    vm->suspended_saved_fp = vm->fp - 1;
+    vm->suspend.entry_fp = vm->fp;
+    vm->suspend.saved_fp = vm->fp - 1;
     
-    sv_await_result_t awaited_val = sv_await_value(vm, js, value);
-    vm->suspended_entry_fp = -1;
-    vm->suspended_saved_fp = -1;
+    sv_await_result_t awaited_val = sv_await_value(vm, js, value, false);
+    vm->suspend.entry_fp = -1;
+    vm->suspend.saved_fp = -1;
     
     if (awaited_val.state != SV_AWAIT_READY) {
       GC_ROOT_RESTORE(js, root_mark);

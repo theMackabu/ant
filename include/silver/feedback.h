@@ -1,10 +1,9 @@
 #ifndef SILVER_FEEDBACK_H
 #define SILVER_FEEDBACK_H
 
-#include "realm.h"
+#include "debug.h"
 #include "silver/engine.h"
 #include "jit/entry_stub.h"
-#include "debug.h"
 
 typedef enum sv_tfb_class: uint8_t {
   SV_TFB_NUM   = 1u << 0,
@@ -171,6 +170,11 @@ static inline sv_func_sidecar_t *sv_func_sidecar(const sv_func_t *func) {
   uintptr_t raw = (uintptr_t)func->type_feedback;
   if ((raw & ant_sidecar) == 0) return NULL;
   return (sv_func_sidecar_t *)(raw & ~ant_sidecar);
+}
+
+static inline struct sv_jit_await_map *sv_func_jit_await_map(const sv_func_t *func) {
+  sv_func_sidecar_t *sidecar = sv_func_sidecar(func);
+  return sidecar ? sidecar->jit_await_map : NULL;
 }
 
 static inline uint8_t *sv_func_type_feedback(const sv_func_t *func) {

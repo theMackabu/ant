@@ -108,6 +108,252 @@ bool jit_offset_in_loop(const sv_func_t *func, int bc_off) {
   return inside;
 }
 
+bool jit_loop_has_await(const sv_func_t *func, int head) {
+  int (*loops)[2] = NULL;
+  int loop_count = jit_back_edges(func, &loops);
+  bool found = false;
+  for (int i = 0; i < loop_count && !found; i++) {
+    if (loops[i][0] != head) continue;
+    for (int off = loops[i][0]; off <= loops[i][1] && !found; off += sv_op_size[func->code[off]]) {
+      sv_op_t op = (sv_op_t)func->code[off];
+      found = op == OP_AWAIT || op == OP_AWAIT_RETURN || op == OP_AWAIT_ITER_NEXT || op == OP_FOR_AWAIT_OF;
+    }
+  }
+  free(loops);
+  return found;
+}
+
+static int jit_await_map_scan(const sv_func_t *func, const int *depth, sv_jit_await_map_t *map) {
+  uint32_t open[SV_TRY_MAX];
+  int sites = 0, open_count = 0;
+  for (int off = 0; off < func->code_len;) {
+    sv_op_t op = (sv_op_t)func->code[off];
+    int sz = sv_op_size[op];
+    if (sz == 0) break;
+    if (op == OP_TRY_PUSH && open_count < SV_TRY_MAX)
+      open[open_count++] = (uint32_t)(off + sz + sv_get_i32(func->code + off + 1));
+    else if (op == OP_TRY_POP && open_count > 0) open_count--;
+    else if ((op == OP_AWAIT || op == OP_AWAIT_RETURN || op == OP_AWAIT_ITER_NEXT) && depth[off] >= 0) {
+      bool in_try = false;
+      for (int i = 0; i < open_count && !in_try; i++) in_try = open[i] > (uint32_t)off;
+      if (map) map->sites[sites] = (sv_jit_await_site_t){
+        .bc_off = (uint32_t)off, .resumable = op == OP_AWAIT, .in_try = in_try,
+      };
+      sites++;
+    }
+    off += sz;
+  }
+  return sites;
+}
+
+typedef struct {
+  int reads[2], nreads;
+  int write;
+  bool all;
+} jit_local_effect_t;
+
+static jit_local_effect_t jit_local_effect(const sv_func_t *func, int off) {
+  const uint8_t *ip = func->code + off;
+  sv_op_t op = (sv_op_t)*ip;
+  jit_local_effect_t e = { .nreads = 0, .write = -1, .all = false };
+  switch (op) {
+    case OP_GET_LOCAL: case OP_GET_LOCAL_CHK: e.reads[e.nreads++] = sv_get_u16(ip + 1); break;
+    case OP_GET_LOCAL8: e.reads[e.nreads++] = sv_get_u8(ip + 1); break;
+    case OP_PUT_LOCAL: case OP_SET_LOCAL: case OP_SET_LOCAL_UNDEF: e.write = sv_get_u16(ip + 1); break;
+    case OP_PUT_LOCAL8: case OP_SET_LOCAL8: e.write = sv_get_u8(ip + 1); break;
+    case OP_INC_LOCAL: case OP_DEC_LOCAL: case OP_ADD_LOCAL: e.reads[e.nreads++] = sv_get_u8(ip + 1); break;
+    case OP_PUT_LOCAL_CHK: e.reads[e.nreads++] = sv_get_u16(ip + 1); break;
+    case OP_YIELD_STAR_INIT: case OP_YIELD_STAR_NEXT: case OP_YIELD_STAR_THROW: case OP_YIELD_STAR_RETURN:
+      e.all = true;
+      break;
+    default: {
+      uint8_t fmt = sv_op_fmts[op];
+      if (fmt != SVF_loc && fmt != SVF_loc8 && fmt != SVF_loc_atom) break;
+      int idx = fmt == SVF_loc8 ? sv_get_u8(ip + 1) : sv_get_u16(ip + 1);
+      e.reads[e.nreads++] = idx;
+      if (idx >= func->param_count) e.reads[e.nreads++] = idx - func->param_count;
+      break;
+    }
+  }
+  return e;
+}
+
+static void jit_live_apply(const sv_func_t *func, int off, uint64_t *live, int words) {
+  jit_local_effect_t e = jit_local_effect(func, off);
+  if (e.all) {
+    memset(live, 0xff, (size_t)words * sizeof(uint64_t));
+    return;
+  }
+  if (e.write >= 0 && e.write < func->max_locals) live[e.write >> 6] &= ~(1ull << (e.write & 63));
+  for (int i = 0; i < e.nreads; i++)
+    if (e.reads[i] >= 0 && e.reads[i] < func->max_locals) live[e.reads[i] >> 6] |= 1ull << (e.reads[i] & 63);
+}
+
+static int64_t jit_live_branch_target(const sv_func_t *func, int off, sv_op_t op, int sz) {
+  uint16_t flags = sv_op_flags[op];
+  if (flags & SV_OPF_JIT_BRANCH32) return (int64_t)off + sz + sv_get_i32(func->code + off + 1);
+  if (flags & SV_OPF_JIT_BRANCH8) return (int64_t)off + sz + sv_get_i8(func->code + off + 1);
+  if (op == OP_TRY_PUSH || op == OP_TRY_PUSH_FINALLY || op == OP_CATCH || op == OP_UNWIND_JMP)
+    return (int64_t)off + 5 + sv_get_i32(func->code + off + 1);
+  return -1;
+}
+
+static uint64_t *jit_await_liveness(const sv_func_t *func, const sv_jit_await_map_t *map, int words) {
+  int len = func->code_len;
+  uint8_t *leader = calloc((size_t)len + 1, 1);
+  int *block_of = malloc((size_t)(len + 1) * sizeof(int));
+  uint64_t *result = calloc((size_t)map->site_count * (size_t)words, sizeof(uint64_t));
+  if (!leader || !block_of || !result) goto fail;
+
+  leader[0] = 1;
+  for (int off = 0; off < len;) {
+    sv_op_t op = (sv_op_t)func->code[off];
+    int sz = sv_op_size[op];
+    if (sz == 0 || off + sz > len) goto fail;
+    int64_t target = jit_live_branch_target(func, off, op, sz);
+    if (target > len) goto fail;
+    if (target >= 0) leader[target] = 1;
+    if (target >= 0 || (sv_op_flags[op] & SV_OPF_TERMINAL)) leader[off + sz] = 1;
+    off += sz;
+  }
+
+  int nblocks = 0;
+  for (int off = 0; off < len; off++) {
+    if (leader[off]) nblocks++;
+    block_of[off] = nblocks - 1;
+  }
+  block_of[len] = -1;
+
+  int *start = malloc((size_t)nblocks * sizeof(int));
+  int *succ = malloc((size_t)nblocks * 2 * sizeof(int));
+  uint64_t *gen = calloc((size_t)nblocks * (size_t)words, sizeof(uint64_t));
+  uint64_t *kill = calloc((size_t)nblocks * (size_t)words, sizeof(uint64_t));
+  uint64_t *in = calloc((size_t)nblocks * (size_t)words, sizeof(uint64_t));
+  uint64_t *out = calloc((size_t)nblocks * (size_t)words, sizeof(uint64_t));
+  uint64_t *tmp = calloc((size_t)words, sizeof(uint64_t));
+  int region_cap = 0;
+  for (int off = 0; off < len; off += sv_op_size[func->code[off]])
+    if (func->code[off] == OP_TRY_PUSH || func->code[off] == OP_TRY_PUSH_FINALLY) region_cap++;
+  struct { int try_off, pop_off, catch_block; } *regions = region_cap ? malloc((size_t)region_cap * sizeof(*regions)) : NULL;
+  bool ok = start && succ && gen && kill && in && out && tmp && (!region_cap || regions);
+
+  for (int off = 0, b = 0; ok && off < len; off++) if (leader[off]) start[b++] = off;
+
+  for (int b = 0; ok && b < nblocks; b++) {
+    int end = b + 1 < nblocks ? start[b + 1] : len;
+    succ[b * 2] = succ[b * 2 + 1] = -1;
+    uint64_t *g = gen + (size_t)b * words, *k = kill + (size_t)b * words;
+    for (int off = start[b]; off < end;) {
+      sv_op_t op = (sv_op_t)func->code[off];
+      int sz = sv_op_size[op];
+      jit_local_effect_t e = jit_local_effect(func, off);
+      if (e.all) memset(g, 0xff, (size_t)words * sizeof(uint64_t));
+      for (int i = 0; i < e.nreads; i++) {
+        int r = e.reads[i];
+        if (r >= 0 && r < func->max_locals && !(k[r >> 6] & (1ull << (r & 63)))) g[r >> 6] |= 1ull << (r & 63);
+      }
+      if (e.write >= 0 && e.write < func->max_locals) k[e.write >> 6] |= 1ull << (e.write & 63);
+      if (off + sz == end) {
+        int64_t target = jit_live_branch_target(func, off, op, sz);
+        if (!(sv_op_flags[op] & SV_OPF_TERMINAL) && end < len) succ[b * 2] = block_of[end];
+        if (target >= 0 && target < len) succ[b * 2 + 1] = block_of[target];
+      }
+      off += sz;
+    }
+  }
+
+  int region_count = 0, open[SV_TRY_MAX], open_count = 0;
+  for (int off = 0; ok && off < len; off += sv_op_size[func->code[off]]) {
+    sv_op_t op = (sv_op_t)func->code[off];
+    if (op == OP_TRY_PUSH || op == OP_TRY_PUSH_FINALLY) {
+      int catch_off = (int)jit_live_branch_target(func, off, op, sv_op_size[op]);
+      if (open_count == SV_TRY_MAX || catch_off < 0 || catch_off >= len) { ok = false; break; }
+      regions[region_count] = (typeof(*regions)){ .try_off = off, .pop_off = len, .catch_block = block_of[catch_off] };
+      open[open_count++] = region_count++;
+    } else if (op == OP_TRY_POP && open_count > 0) regions[open[--open_count]].pop_off = off;
+  }
+
+  for (bool changed = ok; changed;) {
+    changed = false;
+    for (int b = nblocks - 1; b >= 0; b--) {
+      uint64_t *o = out + (size_t)b * words;
+      memset(tmp, 0, (size_t)words * sizeof(uint64_t));
+      for (int k = 0; k < 2; k++) {
+        int s = succ[b * 2 + k];
+        if (s < 0) continue;
+        for (int w = 0; w < words; w++) tmp[w] |= in[(size_t)s * words + w];
+      }
+      int b_end = b + 1 < nblocks ? start[b + 1] : len;
+      for (int r = 0; r < region_count; r++) {
+        if (regions[r].try_off >= b_end || regions[r].pop_off < start[b]) continue;
+        int s = regions[r].catch_block;
+        for (int w = 0; w < words; w++) tmp[w] |= in[(size_t)s * words + w];
+      }
+      memcpy(o, tmp, (size_t)words * sizeof(uint64_t));
+      for (int w = 0; w < words; w++) {
+        uint64_t v = gen[(size_t)b * words + w] | (o[w] & ~kill[(size_t)b * words + w]);
+        if (v != in[(size_t)b * words + w]) { in[(size_t)b * words + w] = v; changed = true; }
+      }
+    }
+  }
+
+  for (int i = 0; ok && i < map->site_count; i++) {
+    int site_off = (int)map->sites[i].bc_off;
+    int b = block_of[site_off];
+    int end = b + 1 < nblocks ? start[b + 1] : len;
+    uint64_t *live = result + (size_t)i * words;
+    memcpy(live, out + (size_t)b * words, (size_t)words * sizeof(uint64_t));
+    int offs[256], n = 0;
+    for (int off = site_off; off < end && n < 256; off += sv_op_size[func->code[off]]) offs[n++] = off;
+    if (n == 256) { memset(live, 0xff, (size_t)words * sizeof(uint64_t)); continue; }
+    for (int k = n - 1; k >= 0; k--) jit_live_apply(func, offs[k], live, words);
+  }
+
+  free(start); free(succ); free(gen); free(kill); free(in); free(out); free(tmp); free(regions);
+  free(leader); free(block_of);
+  if (ok) return result;
+  free(result);
+  return NULL;
+
+fail:
+  free(leader); free(block_of); free(result);
+  return NULL;
+}
+
+sv_jit_await_map_t *jit_await_map_build(const sv_func_t *func, const int *depth) {
+  int sites = jit_await_map_scan(func, depth, NULL);
+  sv_jit_await_map_t probe = { .site_count = sites };
+  probe.sites = sites ? malloc((size_t)sites * sizeof(sv_jit_await_site_t)) : NULL;
+  
+  if (sites && !probe.sites) return NULL;
+  jit_await_map_scan(func, depth, &probe);
+
+  int n_locals = func->max_locals;
+  int words = (n_locals + 63) / 64;
+  uint64_t *bits = sites && n_locals ? jit_await_liveness(func, &probe, words) : NULL;
+  int live_total = 0;
+  for (int i = 0; i < sites; i++) for (int l = 0; l < n_locals; l++)
+    if (!bits || (bits[(size_t)i * words + (l >> 6)] & (1ull << (l & 63)))) live_total++;
+
+  sv_jit_await_map_t *map = malloc(sizeof(*map) + (size_t)sites * sizeof(sv_jit_await_site_t) + (size_t)live_total * sizeof(uint16_t));
+  if (map) {
+    map->site_count = sites;
+    map->sites = (sv_jit_await_site_t *)(map + 1);
+    map->live = (uint16_t *)(map->sites + sites);
+    if (sites) memcpy(map->sites, probe.sites, (size_t)sites * sizeof(sv_jit_await_site_t));
+    int k = 0;
+    for (int i = 0; i < sites; i++) {
+      map->sites[i].live_start = (uint32_t)k;
+      for (int l = 0; l < n_locals; l++)
+        if (!bits || (bits[(size_t)i * words + (l >> 6)] & (1ull << (l & 63)))) map->live[k++] = (uint16_t)l;
+      map->sites[i].live_count = (uint16_t)(k - (int)map->sites[i].live_start);
+    }
+  }
+  free(bits);
+  free(probe.sites);
+  return map;
+}
+
 bool jit_loop_reads_global(const sv_func_t *func) {
   if (!func || !func->code) return false;
   int (*loops)[2] = NULL;
@@ -324,7 +570,7 @@ bool jit_mark_self_binding_guards(
 }
 
 bool jit_is_eligible(sv_func_t *func) {
-  if (func->is_async || func->is_generator) return false;
+  if (func->is_generator || func->is_tla) return false;
   
   if (func->code_len > SV_JIT_MAX_CODE_BYTES) {
     if (sv_jit_warn_unlikely) fprintf(

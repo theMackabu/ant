@@ -51,6 +51,8 @@ ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v);
 ant_value_t jit_helper_stack_overflow_error(sv_vm_t *vm, ant_t *js);
 ant_value_t jit_helper_new_this(ant_t *js, ant_value_t func, ant_value_t new_target, int32_t checked);
 ant_value_t jit_helper_spread(sv_vm_t *vm, ant_t *js, ant_value_t arr, ant_value_t iterable);
+ant_value_t jit_helper_await_park(sv_vm_t *vm, sv_func_t *fn, int64_t site_index, int64_t vstack_sp);
+ant_value_t jit_helper_await_return_direct(sv_vm_t *vm, ant_t *js, ant_value_t value, int64_t next_op);
 
 ant_value_t jit_helper_strict_arguments(sv_vm_t *vm, ant_t *js, ant_value_t *args, int argc);
 ant_value_t jit_helper_delete(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key);
@@ -96,6 +98,12 @@ ant_value_t jit_helper_call(
   sv_vm_t *vm, ant_t *js,
   ant_value_t func, ant_value_t this_val,
   ant_value_t *args, int argc
+);
+
+ant_value_t jit_helper_call_awaited(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t func, ant_value_t this_val,
+  ant_value_t *args, int argc, int next_op
 );
 
 ant_value_t jit_helper_call_method(
@@ -179,6 +187,11 @@ ant_value_t jit_helper_apply(
   sv_vm_t *vm, ant_t *js,
   ant_value_t func, ant_value_t this_val,
   ant_value_t *args, int argc, int cap
+);
+
+ant_value_t jit_helper_async_start(
+  sv_vm_t *vm, ant_value_t this_val, ant_value_t new_target, ant_value_t super_val,
+  ant_value_t *args, int argc, sv_closure_t *closure
 );
 
 ant_value_t jit_helper_call_spread(

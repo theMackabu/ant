@@ -79,17 +79,44 @@ the interpreter.
   `constructor` on the prototype, which is the same function. Subclass and
   species promises still set it.
 - Interpreted `CALL`/`CALL_METHOD` of a same-realm async closure runs the body
-  in the caller's dispatch loop. `sv_async_inline_call` creates the promise and
-  a coroutine, pushes a normal frame and records `(fp, coroutine)` on
-  `vm->async_inline`. Every path that leaves or suspends such a frame settles
-  through `sv_async_inline_settle` and continues the caller with the promise:
-  `RETURN`, `RETURN_UNDEF`, `FINALLY_RET`, the OSR frame pop, `AWAIT`,
-  `AWAIT_ITER_NEXT` and `AWAIT_RETURN`. `sv_vm_throw` stops at the innermost
-  inline frame, which rejects its promise; terminating errors still unwind the
-  entry, and `sv_leave` discards records at or above `entry_fp`. A suspended
-  inline frame resumes later as the entry frame of the resumed run, so the
-  existing resume path is unchanged. Generators and JIT callers keep the old
-  path.
+  in the caller's dispatch loop. `sv_async_inline_call` pushes a normal frame
+  and records `(fp, NULL)` on `vm->async_inline`; the promise and coroutine are
+  created only when the frame first suspends or enters OSR
+  (`sv_async_inline_ensure_coro`). Every path that leaves or suspends such a
+  frame settles through `sv_async_inline_settle` and continues the caller with
+  the promise: `RETURN`, `RETURN_UNDEF`, `FINALLY_RET`, the OSR frame pop,
+  `AWAIT`, `AWAIT_ITER_NEXT` and `AWAIT_RETURN`. `sv_vm_throw` stops at the
+  innermost inline frame, which rejects its promise; terminating errors still
+  unwind the entry, and `sv_leave` discards records at or above `entry_fp`. A
+  suspended inline frame resumes later as the entry frame of the resumed run,
+  so the existing resume path is unchanged. Generators keep the old path.
+- An inline frame without a coroutine that returns a primitive to a caller
+  whose next op is `AWAIT` or `AWAIT_RETURN` pushes the raw value instead of a
+  promise. Awaiting a fulfilled native promise and awaiting a primitive both
+  take one tick, so the order is unchanged.
+- `return await x` in an inline frame without a coroutine does not suspend.
+  When the caller's next op is `AWAIT`, it pushes `x` (or its assimilated
+  promise) and sets `vm->await_deferred`; the caller's await then registers
+  with `PROMISE_AWAIT_DEFER` / `MT_AWAIT_DEFER`, which re-queues the resume once
+  to add the tick the callee's own await would have taken. Otherwise
+  `js_promise_tail_await` returns a promise that adopts `x` with the same tick
+  count. `test_async_call_await_ticks` pins every form to Node's order.
+- JIT, phase J1: async functions (not generators or top-level await) are
+  JIT-eligible. `AWAIT`, `AWAIT_RETURN` and `AWAIT_ITER_NEXT` compile to a
+  boxed exit tagged `SV_JIT_RESUME_AWAIT`; the interpreter runs the op itself,
+  without bailout accounting. The prologue sends every non-OSR entry to
+  `jit_helper_async_start`, so compiled bodies run only through OSR, and OSR
+  is refused for loops that contain an await (`jit_loop_has_await`). Self tail
+  calls are off in async functions, and the known-self call path now returns
+  its result when it is in tail position (it fell through to the trailing
+  `RETURN_UNDEF` before).
+- The JIT no longer clears double-register locals for shared slots whose
+  hoisted `SET_LOCAL_UNDEF` is not followed by a numeric init. That rule
+  predates the maybe-unassigned dataflow (`jit_clear_maybe_unassigned_dnum`),
+  which already covers it, and it kept any `let` declared after a call or an
+  `await` boxed (4x slower loops). Functions that can observe TDZ use
+  `GET_LOCAL_CHK`, which is not JIT-eligible. `shared_slot` and `bound` were
+  removed from `sv_type_info_t`.
 - `then` skips the `constructor` and `@@species` lookups when the species
   protector holds and the receiver's prototype is `Promise.prototype`.
 - `Promise.all` on the intrinsic constructor, with intact promise protectors
@@ -107,28 +134,42 @@ the interpreter.
 
 ## Checkpoint
 
-Steps 1 and 2 done, plus the promise follow-ups. Interleaved medians, ns per
-operation (`orig` is master with the incorrect rewrite):
+Steps 1 and 2 done, the promise follow-ups, and step 3 phase J1. Interleaved
+medians, ns per operation (`orig` is master with the incorrect rewrite; Node is
+22.22):
 
 | case | orig | now | Node |
 |---|---|---|---|
-| `await` empty async fn | 81 | 69 | 38 |
-| `return await p` | 120 | 90 | 60 |
-| `const v = await p` | 142 | 116 | 60 |
-| `return await 3` | 80 | 86 | 66 |
-| `const v = await 3` | 138 | 113 | 66 |
-| `return await thenable` | 192 | 194 | 84 |
-| `const v = await thenable` | 282 | 222 | 78 |
-| `await new Promise(r => r(i))` | 194 | 174 | 46 |
-| `await p.then(f)` | 135 | 93 | 36 |
-| `await Promise.resolve(i)` | 64 | 51 | 26 |
-| `await Promise.all([4 items])` | 1506 | 296 | 188 |
+| `await` empty async fn | 82 | 48 | 38 |
+| `return await p` | 121 | 58 | 63 |
+| `const v = await p` | 146 | 122 | 63 |
+| `return await 3` | 82 | 54 | 69 |
+| `const v = await 3` | 139 | 119 | 69 |
+| `return await thenable` | 194 | 172 | 88 |
+| `const v = await thenable` | 290 | 236 | 84 |
 
-Validation: harness 463 passed (the 17 failures are the npm examples without
-modules, `test_hono_adapter`, and `test_uv_nested_poll`, which also fails
-about 1 in 30 runs on master); spec 4342/4342; the 102 async-related test
-files match master except timings and the settle-order fixes, which match
-Node. New tests: `test_async_inline_calls`, `test_promise_all_fast_path`.
+Not re-measured since the previous checkpoint (ns, orig / then / Node):
+`await new Promise(r => r(i))` 194 / 174 / 46, `await p.then(f)`
+135 / 93 / 36, `await Promise.resolve(i)` 64 / 51 / 26,
+`await Promise.all([4 items])` 1506 / 296 / 188.
 
-Next: step 3, JIT `await`. `new Promise` and thenable awaits remain 3-4x Node;
-most of that is the two resolving functions each needs.
+Hot loops inside async functions, 4e7 iterations (ms):
+
+| case | orig | now | Node |
+|---|---|---|---|
+| sync function | 27.5 | 28.0 | 25.5 |
+| async, no await | 349.8 | 26.9 | 24.0 |
+| async, loop after `await` | 329.6 | 27.4 | 24.2 |
+
+Validation: harness 469 passed, 16 failed (the npm examples without modules
+and `test_hono_adapter`, which need packages that are not installed in the
+worktree; the baseline binary fails them the same way); spec 103 suites, 0
+failures. New tests: `test_async_inline_calls`, `test_promise_all_fast_path`,
+`test_async_call_await_ticks`, `test_jit_async_await`,
+`test_jit_late_let_numeric`, `test_jit_late_let_numeric_codegen`.
+
+Next: J2, loops that contain an await (resume entries at await offsets, so a
+resumed coroutine re-enters compiled code). `const v = await x` is about 2x
+Node: the coroutine suspends and resumes through the activation capture.
+`new Promise` and thenable awaits remain 3-4x Node; most of that is the two
+resolving functions each needs.

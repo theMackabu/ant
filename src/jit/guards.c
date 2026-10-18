@@ -29,7 +29,7 @@ void mir_emit_bailout_jump_typed(MIR_context_t ctx, MIR_item_t fn,
 }
 
 void mir_emit_bailout_boxed_exit(MIR_context_t ctx, MIR_item_t fn,
-                                 int bc_off, int pre_op_sp,
+                                 int64_t bc_off, int pre_op_sp,
                                  const jit_bailout_emit_t *bail) {
   for (int i = 0; i < pre_op_sp; i++)
     MIR_append_insn(ctx, fn,

@@ -241,10 +241,16 @@ bool sv_code_units_watch_feedback(sv_func_t *func, sv_func_t *callee) {
 
 static void func_free_sidecar(sv_func_t *func) {
   uintptr_t raw = (uintptr_t)func->type_feedback;
+  
   if (!(raw & ant_sidecar)) return;
   sv_func_sidecar_t *sidecar = (sv_func_sidecar_t *)(raw & ~ant_sidecar);
+  
   free(sidecar->type_feedback);
+  free(sidecar->jit_await_map);
+  
+  sv_try_table_free(sidecar->try_table);
   free(sidecar);
+  
   func->type_feedback = NULL;
 }
 

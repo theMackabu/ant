@@ -6,6 +6,7 @@
 #include "silver/call.h"
 #include "silver/feedback.h"
 #include "internal.h"
+#include "modules/promise.h"
 #include "protectors.h"
 #include "interrupt.h"
 #include "errors.h"
@@ -215,6 +216,27 @@ ant_value_t jit_helper_call(
   ant_value_t func, ant_value_t this_val,
   ant_value_t *args, int argc
 ) {
+  return sv_vm_call(vm, js, func, this_val, args, argc, NULL, js_mkundef());
+}
+
+ant_value_t jit_helper_call_awaited(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t func, ant_value_t this_val,
+  ant_value_t *args, int argc, int next_op
+) {
+  if (vtype(func) == kTypeFunction) {
+    sv_closure_t *closure = js_func_closure(func);
+    sv_func_t *fn = closure->func;
+    
+    if (fn && fn->is_async && !fn->is_generator && !(closure->call_flags & SV_CALL_HAS_BOUND_ARGS)) {
+      if (__builtin_expect(js->destroying, 0)) return js_mkundef();
+      if (js_interrupt_pending(js)) return js_interrupt_raise(js);
+      if (sv_check_c_stack_overflow(js)) return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+      if (sv_closure_has_lexical_this(closure)) this_val = closure->bound_this;
+      return sv_async_call_lazy(vm, closure, func, closure->super_val, this_val, args, argc, (uint8_t)next_op);
+    }
+  }
+  
   return sv_vm_call(vm, js, func, this_val, args, argc, NULL, js_mkundef());
 }
 
@@ -1371,21 +1393,71 @@ static ant_value_t jit_resume_in_interpreter(
   ant_value_t *vstack, int64_t vstack_sp,
   ant_value_t *params, int64_t n_params,
   ant_value_t *locals, int64_t n_locals,
-  int64_t bc_offset
+  int64_t bc_offset, bool async_direct
 ) {
-  vm->jit_resume.active     = true;
-  vm->jit_resume.ip_offset  = (int)bc_offset;
-  vm->jit_resume.params     = params;
-  vm->jit_resume.n_params   = n_params;
-  vm->jit_resume.locals     = locals;
-  vm->jit_resume.n_locals   = n_locals;
-  vm->jit_resume.vstack     = vstack;
-  vm->jit_resume.vstack_sp  = vstack_sp;
+  int entry_fp = async_direct ? sv_async_entry_begin(vm, 0) : -1;
+  if (async_direct && entry_fp < 0) return js_mkerr(vm->js, "out of memory");
 
-  return sv_execute_closure_entry(
+  vm->jit.resume.active     = true;
+  vm->jit.resume.ip_offset  = (int)bc_offset;
+  vm->jit.resume.params     = params;
+  vm->jit.resume.n_params   = (int)n_params;
+  vm->jit.resume.locals     = locals;
+  vm->jit.resume.n_locals   = (int)n_locals;
+  vm->jit.resume.vstack     = vstack;
+  vm->jit.resume.vstack_sp  = (int)vstack_sp;
+
+  ant_value_t result = sv_execute_closure_entry(
     vm, closure, mkref(kTypeFunction, closure),
     super_val, new_target, this_val, args, argc, NULL
   );
+  
+  if (!async_direct) return result;
+  vm->jit.async_settled = true;
+  
+  return sv_async_entry_finish(vm, entry_fp, result);
+}
+
+ant_value_t jit_helper_async_start(
+  sv_vm_t *vm, ant_value_t this_val, ant_value_t new_target, ant_value_t super_val,
+  ant_value_t *args, int argc, sv_closure_t *closure
+) {
+  return sv_start_async_closure(
+    vm, vm->js, closure, mkref(kTypeFunction, closure),
+    super_val, this_val, args, argc
+  );
+}
+
+ant_value_t jit_helper_await_return_direct(sv_vm_t *vm, ant_t *js, ant_value_t value, int64_t next_op) {
+  bool caller_awaits = next_op == OP_AWAIT;
+  
+  ant_value_t result = caller_awaits
+    ? sv_await_type_is_primitive(vtype(value)) ? value : js_promise_assimilate_awaitable(js, value)
+    : js_promise_tail_await(js, value);
+  
+  if (is_err(result)) return result;
+  
+  vm->async_inline.deferred = caller_awaits;
+  vm->jit.async_settled = true;
+  
+  return result;
+}
+
+ant_value_t jit_helper_await_park(sv_vm_t *vm, sv_func_t *fn, int64_t site_index, int64_t vstack_sp) {
+  const sv_jit_await_map_t *map = sv_func_jit_await_map(fn);
+  const sv_jit_await_site_t *site = &map->sites[site_index];
+  
+  sv_frame_t *frame = &vm->frames[vm->fp];
+  int base_sp = (int)(frame->lp + fn->max_locals - vm->stack);
+  vm->sp = base_sp + (int)vstack_sp;
+
+  vm->handler_depth = frame->handler_base;
+  frame->handler_top = frame->handler_base;
+  
+  if (site->in_try) sv_frame_push_try_handlers(vm, frame, fn, (int)site->bc_off, base_sp);
+  frame->ip = fn->code + site->bc_off;
+  
+  return SV_JIT_AWAIT_PARKED;
 }
 
 ant_value_t jit_helper_bailout_resume(
@@ -1402,7 +1474,17 @@ ant_value_t jit_helper_bailout_resume(
     : mkval(kTypeError, 0);
 
   sv_func_t *fn = closure->func;
-  if (bc_offset & SV_JIT_RESUME_STALE) {
+  bool async_direct = (bc_offset & SV_JIT_RESUME_DIRECT) != 0;
+  
+  bc_offset &= ~SV_JIT_RESUME_DIRECT;
+  
+  if (
+    async_direct && (bc_offset & SV_JIT_RESUME_AWAIT) && 
+    ++fn->jit_async_direct_awaits >= SV_JIT_ASYNC_DIRECT_AWAIT_LIMIT
+  ) fn->jit_async_direct_off = true;
+  
+  if (bc_offset & SV_JIT_RESUME_AWAIT) bc_offset &= ~SV_JIT_RESUME_AWAIT;
+  else if (bc_offset & SV_JIT_RESUME_STALE) {
     bc_offset &= ~SV_JIT_RESUME_STALE;
     
     if (!fn->jit_code) fn->jit_code_cold = false;
@@ -1419,7 +1501,7 @@ ant_value_t jit_helper_bailout_resume(
   return jit_resume_in_interpreter(
     vm, closure, this_val, new_target, super_val,
     args, argc, vstack, vstack_sp, params, n_params,
-    locals, n_locals, bc_offset
+    locals, n_locals, bc_offset, async_direct
   );
 }
 
@@ -1437,6 +1519,8 @@ ant_value_t jit_helper_promote_resume(
     : mkval(kTypeError, 0);
 
   sv_func_t *fn = closure->func;
+  bool async_direct = (bc_offset & SV_JIT_RESUME_DIRECT) != 0;
+  bc_offset &= ~SV_JIT_RESUME_DIRECT;
 
   if (fn->jit_code_cold) {
     fn->jit_code = NULL;
@@ -1451,7 +1535,7 @@ ant_value_t jit_helper_promote_resume(
   return jit_resume_in_interpreter(
     vm, closure, this_val, new_target, super_val,
     args, argc, vstack, vstack_sp, params, n_params,
-    locals, n_locals, bc_offset
+    locals, n_locals, bc_offset, async_direct
   );
 }
 
@@ -1503,15 +1587,17 @@ typedef struct { int fp; bool strict; } jit_mode_t;
 
 static inline jit_mode_t jit_mode_enter(ant_t *js, bool strict) {
   sv_vm_t *vm = js->vm;
-  jit_mode_t saved = { vm->jit_mode_fp, vm->jit_mode_strict };
-  vm->jit_mode_fp = vm->fp;
-  vm->jit_mode_strict = strict;
+  jit_mode_t saved = { vm->jit.mode_fp, vm->jit.mode_strict };
+  
+  vm->jit.mode_fp = vm->fp;
+  vm->jit.mode_strict = strict;
+  
   return saved;
 }
 
 static inline void jit_mode_leave(ant_t *js, jit_mode_t saved) {
-  js->vm->jit_mode_fp = saved.fp;
-  js->vm->jit_mode_strict = saved.strict;
+  js->vm->jit.mode_fp = saved.fp;
+  js->vm->jit.mode_strict = saved.strict;
 }
 
 ant_value_t jit_helper_put_field_ic(

@@ -368,7 +368,7 @@ void vstack_rebox_binop_operands(
     uint8_t lhs_type, uint8_t rhs_type,
     MIR_reg_t d_slot);
 void mir_emit_bailout_boxed_exit(MIR_context_t ctx, MIR_item_t fn,
-                                 int bc_off, int pre_op_sp,
+                                 int64_t bc_off, int pre_op_sp,
                                  const jit_bailout_emit_t *bail);
 void mir_emit_bailout_spill_block(MIR_context_t ctx, MIR_item_t fn,
                                   const jit_bailout_emit_t *bail);
@@ -625,6 +625,8 @@ bool *scan_captured_locals(sv_func_t *func, int n_locals);
 bool *scan_captured_params(sv_func_t *func);
 bool jit_inlineable(sv_func_t *f);
 bool jit_can_forward_arguments(sv_func_t *func);
+bool jit_loop_has_await(const sv_func_t *func, int head);
+sv_jit_await_map_t *jit_await_map_build(const sv_func_t *func, const int *depth);
 bool jit_numeric_param_use(sv_func_t *func, uint8_t *ip, uint8_t *end);
 bool jit_has_immediate_numeric_local_init(sv_func_t *func, uint8_t *ip, uint8_t *end, uint16_t local_idx);
 void jit_emit_inline_body(

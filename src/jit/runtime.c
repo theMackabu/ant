@@ -56,6 +56,9 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_gt);
   LOAD_EXT(jit_helper_ge);
   LOAD_EXT(jit_helper_call);
+  LOAD_EXT(jit_helper_call_awaited);
+  LOAD_EXT(jit_helper_await_park);
+  LOAD_EXT(jit_helper_await_return_direct);
   LOAD_EXT(jit_helper_native_finish);
   LOAD_EXT(jit_helper_call_method);
   LOAD_EXT(jit_helper_call_array_includes);
@@ -68,6 +71,7 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_call_stable_builtin);
   LOAD_EXT(jit_helper_load_stable_builtin);
   LOAD_EXT(jit_helper_apply);
+  LOAD_EXT(jit_helper_async_start);
   LOAD_EXT(jit_helper_call_spread);
   LOAD_EXT(jit_helper_forward_arguments);
   LOAD_EXT(jit_helper_call_call);
@@ -297,9 +301,13 @@ static void jit_osr_seed_invariant_locals(sv_func_t *func, sv_frame_t *frame) {
 }
 
 __attribute__((noinline)) ant_value_t sv_jit_try_osr(
-  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, 
-  sv_func_t *func, int bc_offset
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, sv_func_t *func, int bc_offset
 ) {
+  if (func->is_async && func->jit_code && !func->jit_await_park && jit_loop_has_await(func, bc_offset)) {
+    func->back_edge_count = 0;
+    return SV_JIT_RETRY_INTERP;
+  }
+  
   func->jit_loop_hot = true;
 
   sv_closure_t *closure;
@@ -364,23 +372,29 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
     
     func->jit_code = jit;
     sv_jit_compile_callees(js, func);
+
+    if (func->is_async && !func->jit_await_park && jit_loop_has_await(func, bc_offset)) {
+      if (synthetic_closure) gc_pop_roots(js, root_mark);
+      func->back_edge_count = 0;
+      return SV_JIT_RETRY_INTERP;
+    }
   }
 
   int nl = func->max_locals;
   ant_value_t osr_locals[nl > 0 ? nl : 1];
   for (int i = 0; i < nl; i++) osr_locals[i] = frame->lp[i];
 
-  vm->jit_osr.active = true;
-  vm->jit_osr.bc_offset = bc_offset;
-  vm->jit_osr.locals = osr_locals;
-  vm->jit_osr.n_locals = nl;
-  vm->jit_osr.lp = frame->lp;
-  vm->jit_osr.vstack = frame->lp + nl;
-  vm->jit_osr.vstack_sp = vm->sp - (int)(vm->jit_osr.vstack - vm->stack);
+  vm->jit.osr.active = SV_JIT_OSR_LOOP;
+  vm->jit.osr.bc_offset = bc_offset;
+  vm->jit.osr.locals = osr_locals;
+  vm->jit.osr.n_locals = nl;
+  vm->jit.osr.lp = frame->lp;
+  vm->jit.osr.vstack = frame->lp + nl;
+  vm->jit.osr.vstack_sp = vm->sp - (int)(vm->jit.osr.vstack - vm->stack);
 
   func->back_edge_count = 0;
-  sv_jit_osr_mark_t osr_mark = { vm->jit_osr_marks };
-  vm->jit_osr_marks = &osr_mark;
+  sv_jit_osr_mark_t osr_mark = { vm->jit.osr_marks };
+  vm->jit.osr_marks = &osr_mark;
   
   ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_INTERP, jit, vm, &(sv_call_ctx_t){
     .this_val = frame->this,
@@ -390,8 +404,8 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
     .argc = frame->argc,
   }, closure);
 
-  vm->jit_osr_marks = osr_mark.prev;
-  vm->jit_osr = (sv_jit_osr_t){0};
+  vm->jit.osr_marks = osr_mark.prev;
+  vm->jit.osr = (sv_jit_osr_t){0};
   if (synthetic_closure) gc_pop_roots(js, root_mark);
 
   if (result == SV_JIT_RETRY_INTERP && sv_jit_warn_unlikely) fprintf(
@@ -404,6 +418,49 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
     return SV_JIT_RETRY_INTERP;
   }
 
+  return result;
+}
+
+__attribute__((noinline)) ant_value_t sv_jit_await_resume(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
+  sv_func_t *func, int resume_off
+) {
+  sv_jit_await_map_t *map = sv_func_jit_await_map(func);
+  
+  int site = map ? sv_jit_await_site_index(map, (uint32_t)(resume_off - sv_op_size[OP_AWAIT])) : -1;
+  if (site < 0 || !map->sites[site].resumable || vtype(frame->callee) != kTypeFunction) return SV_JIT_RETRY_INTERP;
+
+  ant_value_t *stack_base = frame->lp + func->max_locals;
+  vm->jit.osr = (sv_jit_osr_t){
+    .active = SV_JIT_OSR_AWAIT, .bc_offset = site,
+    .lp = frame->lp, .vstack = stack_base,
+    .vstack_sp = vm->sp - (int)(stack_base - vm->stack),
+  };
+
+  sv_jit_osr_mark_t osr_mark = { vm->jit.osr_marks };
+  vm->jit.osr_marks = &osr_mark;
+  
+  ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_INTERP, func->jit_code, vm, &(sv_call_ctx_t){
+    .this_val = frame->this,
+    .new_target = frame->new_target,
+    .super_val = frame->super_val,
+    .args = frame->bp,
+    .argc = frame->argc,
+  }, js_func_closure(frame->callee));
+  
+  vm->jit.osr_marks = osr_mark.prev;
+  vm->jit.osr = (sv_jit_osr_t){0};
+
+  if (result == SV_JIT_RETRY_INTERP && sv_jit_warn_unlikely) fprintf(
+    stderr, "jit: await-resume rejected func=%s offset=%d\n",
+    func->debug->name ? func->debug->name : "<anonymous>", resume_off
+  );
+
+  if (sv_is_jit_bailout(result)) {
+    sv_jit_on_bailout(func);
+    return SV_JIT_RETRY_INTERP;
+  }
+  
   return result;
 }
 

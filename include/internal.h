@@ -88,11 +88,13 @@ static_assert(
 enum: ant_value_t {
   T_EMPTY             = ANT_SENTINEL_TAG | 0xDEADULL,
   SV_JIT_BAILOUT      = ANT_SENTINEL_TAG | 0xBA110ULL,
+  SV_JIT_AWAIT_PARKED = ANT_SENTINEL_TAG | 0xBA111ULL,
   SV_AITER_ARRAY_TAG  = ANT_SENTINEL_TAG | 0xFA1ULL,
   SV_AITER_AWAIT_MARK = ANT_SENTINEL_TAG | 0xFA2ULL,
   SV_AITER_STEP_MARK  = ANT_SENTINEL_TAG | 0xFA3ULL,
   SV_AITER_CLOSE_SKIP = ANT_SENTINEL_TAG | 0xFA4ULL,
   PROMISE_ALL_ELEMENT = ANT_SENTINEL_TAG | 0xA11ULL,
+  PROMISE_AWAIT_DEFER = ANT_SENTINEL_TAG | 0xA12ULL,
 };
 
 static inline void ant_object_invalidate_guarded_absence(ant_t *js, ant_object_t *obj) {
@@ -273,6 +275,17 @@ ant_value_t mkobj(ant_t *js, ant_offset_t parent);
 ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint32_t count);
 ant_value_t js_mkarr_dense_uninit(ant_t *js, uint32_t count, ant_value_t **out_data);
 ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src);
+
+void js_arr_set_index(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t val);
+void js_arr_set_dense_length(ant_t *js, ant_value_t arr, ant_offset_t len);
+ant_object_t *js_dense_array_obj(ant_value_t value);
+
+typedef enum { ITER_CONTINUE, ITER_BREAK, ITER_ERROR } iter_action_t;
+typedef iter_action_t (*iter_callback_t)(ant_t *js, ant_value_t value, void *ctx, ant_value_t *out);
+ant_value_t js_iter_foreach(ant_t *js, ant_value_t iterable, iter_callback_t cb, void *ctx);
+
+ant_value_t js_make_data_cfunc(ant_t *js, ant_value_t data, ant_cfunc_t fn);
+bool js_obj_extra_reserve(ant_object_t *obj, uint8_t capacity);
 ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t template);
 
 ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj);
