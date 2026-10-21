@@ -73,7 +73,7 @@ src/
 ├── highlight/  # Syntax highlighting (emit, iterators)
 ├── jit/        # Native JIT compiler for Silver
 ├── modules/    # Built-in JS modules (fs, path, shell, etc.)
-├── pkg/        # Zig-based package manager
+├── pkg/        # Package manager layer over upm (ant:internal/pkg)
 ├── silver/     # Silver bytecode compiler and VM
 │   └── ops/    # Bytecode operation definitions
 ├── tools/      # Code generation scripts (snapshot gen)

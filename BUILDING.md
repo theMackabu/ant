@@ -85,7 +85,6 @@ The following tools are required to build Ant regardless of platform:
 - **pkg-config**
 - **Node.js** >= 22 and **npm** (used to generate bundled JavaScript sources at
   build time)
-- **[Zig](https://ziglang.org/)** >= 0.16 (builds the package manager component)
 - **Git**
 
 Dependencies are vendored as Meson subprojects under `vendor/`
@@ -104,7 +103,6 @@ and are fetched automatically:
 - mimalloc 3.3.2 (default runtime allocator)
 - minicoro `HEAD`
 - MIR `HEAD`
-- nghttp2 1.68.0
 - PCRE2 10.47
 - tlsuv 0.40.13
 - temporal_capi 0.2.6 / temporal_rs 0.2.6
@@ -177,13 +175,6 @@ Installation via package manager:
     util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static
   ```
 
-You will also need Zig installed. The recommended approach:
-
-```bash
-# Zig (download from https://ziglang.org/download/)
-# Or via package manager if available
-```
-
 #### macOS prerequisites
 
 - Xcode Command Line Tools (provides Apple Clang):
@@ -196,13 +187,6 @@ You will also need Zig installed. The recommended approach:
 
   ```bash
   brew install meson ninja llvm node
-  ```
-
-- Zig:
-
-  ```bash
-  # install 0.16.0
-  brew install zig
   ```
 
 #### Building Ant
@@ -470,7 +454,6 @@ Ant on Windows is built using the MSYS2 MINGW64 toolchain.
      mingw-w64-x86_64-ninja mingw-w64-x86_64-cmake \
      mingw-w64-x86_64-lld mingw-w64-x86_64-nodejs git
    ```
-3. Install [Zig](https://ziglang.org/download/)
 
 #### Building Ant
 

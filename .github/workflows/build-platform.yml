@@ -135,14 +135,12 @@ jobs:
           DEPS=$(jq -r '.dependencies' .github/versions.json)
 
           # Tools
-          echo "zig_version=$(echo $TOOLS | jq -r '.zig')" >> $GITHUB_OUTPUT
           echo "llvm_version=$(echo $TOOLS | jq -r '.llvm')" >> $GITHUB_OUTPUT
           echo "node_version=$(echo $TOOLS | jq -r '.node')" >> $GITHUB_OUTPUT
 
           # Target config
           echo "os_type=$(echo $CONFIG | jq -r '.os_type')" >> $GITHUB_OUTPUT
           echo "arch=$(echo $CONFIG | jq -r '.arch')" >> $GITHUB_OUTPUT
-          echo "zig_target=$(echo $CONFIG | jq -r '.zig_target')" >> $GITHUB_OUTPUT
           echo "binary_name=$(echo $CONFIG | jq -r '.binary_name')" >> $GITHUB_OUTPUT
           echo "static_link=$(echo $CONFIG | jq -r '.static_link')" >> $GITHUB_OUTPUT
           echo "cmake_generator=$(echo $CONFIG | jq -r '.cmake_generator // empty')" >> $GITHUB_OUTPUT
@@ -157,12 +155,6 @@ jobs:
 
           # Dep versions
           echo "zlib_version=$(echo $DEPS | jq -r '.zlib')" >> $GITHUB_OUTPUT
-
-      # === SETUP ZIG ===
-      - name: Setup Zig
-        uses: ./.github/actions/setup-zig
-        with:
-          version: ${{ steps.config.outputs.zig_version }}
 
       # === SETUP LLVM ===
       - name: Setup LLVM

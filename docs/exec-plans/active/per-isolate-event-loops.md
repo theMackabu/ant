@@ -23,8 +23,8 @@ their isolate with `Ant_Loop_Isolate(handle->loop)` instead of a stored
   of the handle or request it was called with (`uv_req->loop`,
   `server->loop`, `conn->handle.tcp.loop`), or its state's `js->loop`.
   Spawn specs carry `.loop` from their caller.
-- The Zig package manager (`src/pkg/`) still uses the default loop. It runs
-  outside any isolate.
+- The package manager (`src/pkg/`, `ant:internal/pkg`) runs as JavaScript in
+  the main isolate and uses its loop like any other script.
 
 ## Validation
 

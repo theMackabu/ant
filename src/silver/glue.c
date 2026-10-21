@@ -508,6 +508,7 @@ void jit_helper_define_method_comp(
   } else mkprop(js, obj, key_str, fn, data_attrs);
 }
 
+// TODO: DRY (iteration.h has same code)
 static ant_value_t jit_iter_advance_from_buf(
   sv_vm_t *vm, ant_t *js, ant_value_t *iter_buf, int hint,
   ant_value_t *out_value, bool *out_done
@@ -540,11 +541,11 @@ static ant_value_t jit_iter_advance_from_buf(
   case SV_ITER_MAP: {
     map_iterator_state_t *st = get_map_iter_state(iter_buf[0]);
     if (!st) return js_mkerr(js, "Invalid Map iterator");
-    if (!st->current) {
+    map_entry_t *entry = map_iter_take(st);
+    if (!entry) {
       *out_value = js_mkundef();
       *out_done = true;
     } else {
-      map_entry_t *entry = st->current;
       ant_value_t value;
       switch (st->type) {
       case ITER_TYPE_MAP_VALUES:
@@ -563,7 +564,6 @@ static ant_value_t jit_iter_advance_from_buf(
       default:
         value = js_mkundef();
       }
-      st->current = entry->hh.next;
       *out_value = value;
       *out_done = false;
     }
@@ -574,11 +574,11 @@ static ant_value_t jit_iter_advance_from_buf(
   case SV_ITER_SET: {
     set_iterator_state_t *st = get_set_iter_state(iter_buf[0]);
     if (!st) return js_mkerr(js, "Invalid Set iterator");
-    if (!st->current) {
+    set_entry_t *entry = set_iter_take(st);
+    if (!entry) {
       *out_value = js_mkundef();
       *out_done = true;
     } else {
-      set_entry_t *entry = st->current;
       ant_value_t value;
       if (st->type == ITER_TYPE_SET_ENTRIES) {
         ant_value_t pair = js_mkarr(js);
@@ -588,7 +588,6 @@ static ant_value_t jit_iter_advance_from_buf(
       } else {
         value = entry->value;
       }
-      st->current = entry->hh.next;
       *out_value = value;
       *out_done = false;
     }

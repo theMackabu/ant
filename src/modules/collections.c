@@ -206,7 +206,7 @@ ant_value_t collections_map_create(ant_t *js, map_entry_t ***out_map) {
   ant_value_t map_proto = js->builtins.map_proto;
   if (is_special_object(map_proto)) js_set_proto_init(map_obj, map_proto);
 
-  map_entry_t **map_head = calloc(1, sizeof(map_entry_t *));
+  map_entry_t **map_head = collections_map_store_new();
   if (!map_head) return js_mkerr(js, "out of memory");
 
   js_set_native(map_obj, map_head, MAP_NATIVE_TAG);
@@ -228,6 +228,100 @@ set_entry_t **get_set_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != kTypeSet) return NULL;
   return (set_entry_t **)js_get_native(obj, SET_NATIVE_TAG);
+}
+
+map_entry_t **collections_map_store_new(void) {
+  map_store_t *store = calloc(1, sizeof(*store));
+  return store ? &store->head : NULL;
+}
+
+set_entry_t **collections_set_store_new(void) {
+  set_store_t *store = calloc(1, sizeof(*store));
+  return store ? &store->head : NULL;
+}
+
+void collections_map_store_free(map_entry_t **head) {
+  if (!head) return;
+  map_store_t *store = (map_store_t *)head;
+  for (map_iterator_state_t *it = store->iterators; it; it = it->next_iter) {
+    it->owner = NULL;
+    it->head = NULL;
+    it->last = NULL;
+    it->done = true;
+  }
+  free(store);
+}
+
+void collections_set_store_free(set_entry_t **head) {
+  if (!head) return;
+  set_store_t *store = (set_store_t *)head;
+  for (set_iterator_state_t *it = store->iterators; it; it = it->next_iter) {
+    it->owner = NULL;
+    it->head = NULL;
+    it->last = NULL;
+    it->done = true;
+  }
+  free(store);
+}
+
+void collections_map_before_delete(map_entry_t **head, map_entry_t *entry) {
+  if (!head || !entry) return;
+  for (map_iterator_state_t *it = ((map_store_t *)head)->iterators; it; it = it->next_iter)
+    if (it->last == entry) it->last = (map_entry_t *)entry->hh.prev;
+}
+
+void collections_set_before_delete(set_entry_t **head, set_entry_t *entry) {
+  if (!head || !entry) return;
+  for (set_iterator_state_t *it = ((set_store_t *)head)->iterators; it; it = it->next_iter)
+    if (it->last == entry) it->last = (set_entry_t *)entry->hh.prev;
+}
+
+void collections_map_after_clear(map_entry_t **head) {
+  if (!head) return;
+  for (map_iterator_state_t *it = ((map_store_t *)head)->iterators; it; it = it->next_iter)
+    if (it->started) it->last = NULL;
+}
+
+void collections_set_after_clear(set_entry_t **head) {
+  if (!head) return;
+  for (set_iterator_state_t *it = ((set_store_t *)head)->iterators; it; it = it->next_iter)
+    if (it->started) it->last = NULL;
+}
+
+static void map_iter_attach(map_iterator_state_t *state, map_entry_t **head) {
+  if (!head) return;
+  map_store_t *store = (map_store_t *)head;
+  state->owner = store;
+  state->next_iter = store->iterators;
+  if (store->iterators) store->iterators->prev_iter = state;
+  store->iterators = state;
+}
+
+static void set_iter_attach(set_iterator_state_t *state, set_entry_t **head) {
+  if (!head) return;
+  set_store_t *store = (set_store_t *)head;
+  state->owner = store;
+  state->next_iter = store->iterators;
+  if (store->iterators) store->iterators->prev_iter = state;
+  store->iterators = state;
+}
+
+static void map_iter_detach(map_iterator_state_t *state) {
+  if (!state->owner) return;
+  if (state->prev_iter) state->prev_iter->next_iter = state->next_iter;
+  else state->owner->iterators = state->next_iter;
+  if (state->next_iter) state->next_iter->prev_iter = state->prev_iter;
+  state->owner = NULL;
+  state->prev_iter = state->next_iter = NULL;
+}
+
+static void set_iter_detach(set_iterator_state_t *state) {
+  if (!state->owner) return;
+  if (state->prev_iter) state->prev_iter->next_iter = state->next_iter;
+  else state->owner->iterators = state->next_iter;
+  if (state->next_iter) state->next_iter->prev_iter = state->prev_iter;
+  state->owner = NULL;
+  state->prev_iter = state->next_iter = NULL;
 }
 
 static weakmap_table_t *get_weakmap_from_obj(
@@ -653,13 +747,14 @@ static ant_value_t map_delete(ant_params_t) {
   
   if (!map_ptr) return js_false;
   map_entry_t *entry = Ant_Map_Find(js, map_ptr, args[0]);
-  
+
   if (entry) {
+    collections_map_before_delete(map_ptr, entry);
     HASH_DEL(*map_ptr, entry);
     free(entry);
     return js_true;
   }
-  
+
   return js_false;
 }
 
@@ -667,14 +762,15 @@ static ant_value_t map_clear(ant_params_t) {
   ant_value_t this_val = js->this_val;
   map_entry_t **map_ptr = get_map_from_obj(this_val);
   if (!map_ptr) return js_mkundef();
-  
+
   map_entry_t *entry, *tmp;
   HASH_ITER(hh, *map_ptr, entry, tmp) {
     HASH_DEL(*map_ptr, entry);
     free(entry);
   }
-  
+
   *map_ptr = NULL;
+  collections_map_after_clear(map_ptr);
   return js_mkundef();
 }
 
@@ -711,16 +807,18 @@ static ant_value_t map_forEach(ant_params_t) {
 static void collection_iter_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
   uint32_t tag = obj->native_tag;
-  if (tag != MAP_ITER_NATIVE_TAG && tag != SET_ITER_NATIVE_TAG) return;
+  if (tag == MAP_ITER_NATIVE_TAG) map_iter_detach(js_get_native(value, tag));
+  else if (tag == SET_ITER_NATIVE_TAG) set_iter_detach(js_get_native(value, tag));
+  else return;
   free(js_get_native(value, tag));
   js_clear_native(value, tag);
 }
 
 bool advance_map(ant_t *js, iterator_t *it, ant_value_t *out) {
   map_iterator_state_t *state = get_map_iter_state(it->iterator);
-  if (!state || !state->current) return false;
+  map_entry_t *entry = state ? map_iter_take(state) : NULL;
+  if (!entry) return false;
 
-  map_entry_t *entry = state->current;
   switch (state->type) {
     case ITER_TYPE_MAP_VALUES:
       *out = entry->value;
@@ -737,8 +835,7 @@ bool advance_map(ant_t *js, iterator_t *it, ant_value_t *out) {
     }
     default: *out = js_mkundef();
   }
-  
-  state->current = entry->hh.next;
+
   return true;
 }
 
@@ -753,9 +850,9 @@ static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type
   if (!state) return js_mkerr(js, "out of memory");
   
   state->head = map_ptr;
-  state->current = map_ptr ? *map_ptr : NULL;
   state->type = type;
-  
+  map_iter_attach(state, map_ptr);
+
   ant_value_t iter = Ant_Object_CreateBare(js);
   js_set_proto_init(iter, js->builtins.map_iter_proto);
   js_set_slot_wb(js, iter, SLOT_DATA, map_obj);
@@ -782,17 +879,16 @@ static ant_value_t map_entries(ant_params_t) {
 
 bool advance_set(ant_t *js, iterator_t *it, ant_value_t *out) {
   set_iterator_state_t *state = get_set_iter_state(it->iterator);
-  if (!state || !state->current) return false;
+  set_entry_t *entry = state ? set_iter_take(state) : NULL;
+  if (!entry) return false;
 
-  set_entry_t *entry = state->current;
   if (state->type == ITER_TYPE_SET_ENTRIES) {
     ant_value_t pair = js_mkarr(js);
     js_arr_push(js, pair, entry->value);
     js_arr_push(js, pair, entry->value);
     *out = pair;
   } else *out = entry->value;
-  
-  state->current = entry->hh.next;
+
   return true;
 }
 
@@ -807,9 +903,9 @@ static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type
   if (!state) return js_mkerr(js, "out of memory");
   
   state->head = set_ptr;
-  state->current = set_ptr ? *set_ptr : NULL;
   state->type = type;
-  
+  set_iter_attach(state, set_ptr);
+
   ant_value_t iter = Ant_Object_CreateBare(js);
   js_set_proto_init(iter, js->builtins.set_iter_proto);
   js_set_slot_wb(js, iter, SLOT_DATA, set_obj);
@@ -854,13 +950,14 @@ static ant_value_t set_delete(ant_params_t) {
   
   if (!set_ptr) return js_false;
   set_entry_t *entry = Ant_Set_Find(js, set_ptr, args[0]);
-  
+
   if (entry) {
+    collections_set_before_delete(set_ptr, entry);
     HASH_DEL(*set_ptr, entry);
     free(entry);
     return js_true;
   }
-  
+
   return js_false;
 }
 
@@ -874,8 +971,9 @@ static ant_value_t set_clear(ant_params_t) {
     HASH_DEL(*set_ptr, entry);
     free(entry);
   }
-  
+
   *set_ptr = NULL;
+  collections_set_after_clear(set_ptr);
   return js_mkundef();
 }
 
@@ -926,7 +1024,7 @@ ant_value_t collections_set_create(ant_t *js, set_entry_t ***out_set) {
   ant_value_t set_proto = js->builtins.set_proto;
   if (is_special_object(set_proto)) js_set_proto_init(set_obj, set_proto);
 
-  set_entry_t **set_head = calloc(1, sizeof(set_entry_t *));
+  set_entry_t **set_head = collections_set_store_new();
   if (!set_head) return js_mkerr(js, "out of memory");
   *set_head = NULL;
   
@@ -946,6 +1044,7 @@ static bool set_result_add(ant_t *js, ant_value_t set_obj, set_entry_t **set_ptr
 static void set_result_delete(ant_t *js, set_entry_t **set_ptr, ant_value_t value) {
   set_entry_t *entry = Ant_Set_Find(js, set_ptr, value);
   if (!entry) return;
+  collections_set_before_delete(set_ptr, entry);
   HASH_DEL(*set_ptr, entry);
   free(entry);
 }
@@ -1647,7 +1746,7 @@ static ant_value_t map_groupBy(ant_params_t) {
   ant_value_t map_proto = js->builtins.map_proto;
   if (is_special_object(map_proto)) js_set_proto_init(map_obj, map_proto);
   
-  map_entry_t **map_head = calloc(1, sizeof(map_entry_t *));
+  map_entry_t **map_head = collections_map_store_new();
   if (!map_head) return js_mkerr(js, "out of memory");
   *map_head = NULL;
   js_set_native(map_obj, map_head, MAP_NATIVE_TAG);
@@ -1877,7 +1976,7 @@ static ant_value_t builtin_Map(ant_params_t) {
   
   if (is_special_object(instance_proto)) js_set_proto_init(map_obj, instance_proto);
   
-  map_entry_t **map_head = calloc(1, sizeof(map_entry_t *));
+  map_entry_t **map_head = collections_map_store_new();
   if (!map_head) return js_mkerr(js, "out of memory");
   *map_head = NULL;
   
@@ -1907,7 +2006,7 @@ static ant_value_t builtin_Set(ant_params_t) {
 
   if (is_special_object(instance_proto)) js_set_proto_init(set_obj, instance_proto);
   
-  set_entry_t **set_head = calloc(1, sizeof(set_entry_t *));
+  set_entry_t **set_head = collections_set_store_new();
   if (!set_head) return js_mkerr(js, "out of memory");
   *set_head = NULL;
   

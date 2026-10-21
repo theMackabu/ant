@@ -12,6 +12,7 @@ Store in-progress execution plans here.
 - [Per-Error Capture and Lazy Error Stacks](per-error-capture-lazy-stack.md)
 - [Per-Isolate Event Loops](per-isolate-event-loops.md)
 - [Worker Threads on In-Process Isolates](worker-threads-isolates.md)
+- [Replace libpkg with upm](drop-libpkg-for-upm.md)
 - [Compile Module Tracer](compile-module-tracer.md)
 - [Shared-Memory Threads](shared-memory-threads.md)
 - [ant:isolate](ant-isolate.md)

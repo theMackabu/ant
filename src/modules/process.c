@@ -2249,7 +2249,6 @@ void init_process_module(ant_t *js) {
   process_set_string(js, versions_obj, "node", "26.8.1");
   process_set_string(js, versions_obj, "brotli", "1.1.0");
   process_set_string(js, versions_obj, "llhttp", "9.3.1");
-  process_set_string(js, versions_obj, "nghttp2", "1.68.0");
   process_set_string(js, versions_obj, "simdjson", "0.12.0");
   process_set_string(js, versions_obj, "pcre2", "10.47");
   process_set_string(js, versions_obj, "libffi", "3.5.2");

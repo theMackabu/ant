@@ -138,5 +138,11 @@
       "src/builtins/**/*.js"
     ],
     "exclude": []
+  },
+  "builtin_deps": {
+    "patterns": [
+      "src/pkg/*.ts"
+    ],
+    "exclude": []
   }
 }

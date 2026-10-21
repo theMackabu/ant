@@ -1477,8 +1477,8 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
           next = e->hh.next;
           free(e);
         }
-        
-        free(head);
+
+        collections_map_store_free(head);
         js_clear_native(value, MAP_NATIVE_TAG);
       }
       
@@ -1497,8 +1497,8 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
           next = e->hh.next;
           free(e);
         }
-        
-        free(head);
+
+        collections_set_store_free(head);
         js_clear_native(value, SET_NATIVE_TAG);
       }
       

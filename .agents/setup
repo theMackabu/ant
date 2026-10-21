@@ -37,7 +37,6 @@ mkdir -p "$tool_bin" "$HOME/.local/bin"
 
 llvm_version="$(jq -er '.tools.llvm' .github/versions.json)"
 node_version="$(jq -er '.tools.node' .github/versions.json)"
-zig_version="$(jq -er '.tools.zig' .github/versions.json)"
 
 start_step "Install CI system packages"
 apt_packages=(
@@ -124,28 +123,6 @@ else
 fi
 finish_step
 
-start_step "Install Zig $zig_version"
-zig_dir="$tool_root/zig-$zig_version"
-if [[ ! -x "$zig_dir/zig" ]] || [[ "$($zig_dir/zig version)" != "$zig_version" ]]; then
-  case "$(uname -m)" in
-    x86_64) zig_arch=x86_64 ;;
-    aarch64) zig_arch=aarch64 ;;
-    *) echo "Unsupported Zig architecture: $(uname -m)" >&2; exit 1 ;;
-  esac
-
-  zig_archive="$(mktemp --suffix=.tar.xz)"
-  trap 'rm -f "$zig_archive"' EXIT
-  curl -fsSL "https://ziglang.org/download/$zig_version/zig-$zig_arch-linux-$zig_version.tar.xz" -o "$zig_archive"
-  rm -rf "$zig_dir"
-  mkdir -p "$zig_dir"
-  tar -xJf "$zig_archive" --strip-components=1 -C "$zig_dir"
-  rm -f "$zig_archive"
-  trap - EXIT
-else
-  echo "Zig $zig_version is already installed."
-fi
-finish_step
-
 start_step "Install Meson"
 meson_version=1.10.1
 if [[ ! -x "$HOME/.local/bin/meson" ]] \
@@ -185,7 +162,6 @@ ln -sfn "$node_dir/bin/node" "$tool_bin/node"
 ln -sfn "$node_dir/bin/npm" "$tool_bin/npm"
 ln -sfn "$node_dir/bin/npx" "$tool_bin/npx"
 ln -sfn "$node_dir/bin/corepack" "$tool_bin/corepack"
-ln -sfn "$zig_dir/zig" "$tool_bin/zig"
 ln -sfn "$(command -v "llvm-profdata-$llvm_version")" "$tool_bin/llvm-profdata"
 
 profile_marker="# Ant orb toolchain"
@@ -207,7 +183,7 @@ done
 source "$env_file"
 
 start_step "Configure the build tree and dependencies"
-toolchain_fingerprint="llvm=$llvm_version node=$node_version zig=$zig_version meson=$meson_version"
+toolchain_fingerprint="llvm=$llvm_version node=$node_version meson=$meson_version"
 if [[ -f build/.orb-toolchain ]] && [[ "$(cat build/.orb-toolchain)" != "$toolchain_fingerprint" ]]; then
   rm -rf build
 fi

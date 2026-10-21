@@ -97,7 +97,12 @@ properties, including its tag, after Symbol initialization.
 - `src/tools/gen_builtins.js` generates both the JavaScript bootstrap snapshot
   and the independently loadable builtin-module bundle.
 - `src/cli/messages.toml` stores the runtime and command-line message catalog.
-- `src/pkg/` is the Zig package manager.
+- `src/pkg/` is the package manager's Ant layer: registry config, `ants.land`
+  compatibility, lifecycle scripts, global installs, the `ant.lockb`
+  migration and the commands upm lacks. It is bundled with
+  [upm](https://github.com/unjs/upm), fetched by `vendor/upm.wrap` and patched
+  by `vendor/packagefiles/patches/upm-*.patch`, into the builtin
+  `ant:internal/pkg`. `src/main.c` runs every package command through it.
 - TypeScript stripping is provided by the Skim Meson subproject.
 - `meson/` and the root [meson.build](meson.build) describe the build graph,
   dependency setup, and custom code generation targets.

@@ -91,6 +91,59 @@ const builtinExternals = {
   }
 };
 
+async function bundleUpmWorker(workerPath) {
+  const output = await esbuild.build({
+    entryPoints: [workerPath],
+    bundle: true,
+    write: false,
+    minify: true,
+    legalComments: 'none',
+    platform: 'neutral',
+    format: 'esm',
+    target: ['es2022'],
+    plugins: [builtinExternals]
+  });
+
+  if (output.outputFiles.length !== 1) {
+    throw new Error(`Expected exactly one bundled output for ${workerPath}`);
+  }
+
+  return output.outputFiles[0].text.trim();
+}
+
+const upmSrc = process.env.ANT_UPM_SRC ? path.resolve(process.env.ANT_UPM_SRC) : undefined;
+
+const upmWorkers = {
+  name: 'upm-workers',
+  setup(build) {
+    build.onResolve({ filter: /^upm\// }, args => {
+      if (!upmSrc) throw new Error(`${args.path}: ANT_UPM_SRC is not set; the upm subproject provides it`);
+      return { path: path.join(path.dirname(upmSrc), args.path.slice('upm/'.length)) };
+    });
+
+    build.onResolve({ filter: /^\.\/workers\.ts$/ }, args => {
+      if (!upmSrc || path.dirname(args.importer) !== upmSrc) return undefined;
+      const pool = args.importer.match(/[\\/]([a-z]+)-pool\.ts$/u);
+      if (!pool) return undefined;
+      return {
+        path: path.join(path.dirname(args.importer), `${pool[1]}-worker.ts`),
+        namespace: 'upm-worker',
+        pluginData: { name: `${pool[1]}Worker` }
+      };
+    });
+
+    build.onLoad({ filter: /.*/, namespace: 'upm-worker' }, async args => {
+      const code = (await bundleUpmWorker(args.path)).replace(/[%?#\t\n\r]/g, encodeURIComponent);
+      const url = JSON.stringify(`data:text/javascript,${code}`);
+      return {
+        contents: `export const ${args.pluginData.name} = () => new URL(${url});`,
+        loader: 'js',
+        watchFiles: [args.path]
+      };
+    });
+  }
+};
+
 function wantsCompaction(entryPath) {
   const first = readFileSync(entryPath, 'utf8').split('\n', 1)[0];
   return first.includes('@ant: compact_on_build');
@@ -110,7 +163,7 @@ async function bundleBuiltin(entryPath, format) {
     platform: 'neutral',
     format: format === 'MODULE_EVAL_FORMAT_ESM' ? 'esm' : 'cjs',
     target: ['es2020'],
-    plugins: [builtinExternals]
+    plugins: [upmWorkers, builtinExternals]
   });
 
   if (output.outputFiles.length !== 1) {

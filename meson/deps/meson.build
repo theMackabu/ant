@@ -166,10 +166,6 @@ lmdb_dep = subproject('lmdb', default_options: [
   'programs=disabled'
 ]).get_variable('lmdb_dep')
 
-nghttp2_dep = subproject('nghttp2', default_options: [
-  'warning_level=0'
-]).get_variable('libnghttp2_dep')
-
 libffi_dep = subproject('libffi', default_options: [
   'warning_level=0',
   'tests=false'
@@ -204,53 +200,6 @@ endif
 if skim_version == ''
   error('could not determine Skim version')
 endif
-
-zig = find_program('zig', required: true)
-zig_version = run_command(zig, 'version', check: true).stdout().strip()
-if not zig_version.version_compare('>=0.16.0') or not zig_version.version_compare('<0.17.0')
-  error('Zig 0.16.x is required to build src/pkg; found ' + zig_version + '.')
-endif
-
-deps_info = {
-  'lmdb': {
-    'dir': 'openldap-LMDB_0.9.33',
-    'inc': 'libraries/liblmdb',
-  },
-  'yyjson': {
-    'dir': 'yyjson-0.12.0',
-    'inc': 'src',
-  },
-  'libuv': {
-    'dir': 'libuv-v1.53.0',
-    'inc': 'include',
-  },
-  'llhttp': {
-    'dir': 'llhttp-release-v9.3.1',
-    'inc': 'include',
-  },
-  'zlib-ng': {
-    'dir': 'zlib-ng-2.3.3',
-    'inc': '',
-    'build_dir': true,
-  },
-  'google-brotli': {
-    'dir': 'brotli-1.1.0',
-    'inc': 'c/include',
-  },
-}
-
-subprojects_src = src_root / 'vendor'
-subprojects_build = meson.project_build_root() / 'vendor'
-
-lmdb_include_path = subprojects_src / deps_info['lmdb']['dir'] / deps_info['lmdb']['inc']
-yyjson_include_path = subprojects_src / deps_info['yyjson']['dir'] / deps_info['yyjson']['inc']
-libuv_include_path = subprojects_src / deps_info['libuv']['dir'] / deps_info['libuv']['inc']
-llhttp_include_path = subprojects_src / deps_info['llhttp']['dir'] / deps_info['llhttp']['inc']
-zlib_include_path = subprojects_build / deps_info['zlib-ng']['dir'] / deps_info['zlib-ng']['inc']
-brotli_include_path = subprojects_src / deps_info['google-brotli']['dir'] / deps_info['google-brotli']['inc']
-
-pkg_zig_dir = src_root / 'src' / 'pkg'
-pkg_build_dir = meson.current_build_dir()
 
 allocator_deps = []
 if get_option('allocator') == 'mimalloc'

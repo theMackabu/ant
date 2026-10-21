@@ -27,9 +27,7 @@
 /packages/sandbox/.cache
 /packages/installer/dist
 
-/src/pkg/.zig-cache
 /src/strip/target
-
 /javascript-zoo
 /game-of-life
 /anteater.sh

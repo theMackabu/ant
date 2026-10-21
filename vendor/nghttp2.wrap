@@ -1,9 +1,0 @@
-[wrap-file]
-directory = nghttp2-1.68.0
-source_url = https://github.com/nghttp2/nghttp2/releases/download/v1.68.0/nghttp2-1.68.0.tar.xz
-source_filename = nghttp2-1.68.0.tar.xz
-source_hash = 5511d3128850e01b5b26ec92bf39df15381c767a63441438b25ad6235def902c
-patch_directory = nghttp2
-
-[provide]
-dependency_names = libnghttp2

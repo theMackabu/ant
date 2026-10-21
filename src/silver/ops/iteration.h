@@ -229,6 +229,7 @@ static inline void sv_iter_result_unpack(
   GC_ROOT_RESTORE(js, root_mark);
 }
 
+// TODO: DRY (glue.c has same code)
 static inline ant_value_t sv_iter_advance(
   sv_vm_t *vm, ant_t *js, int hint, ant_value_t *out_value, bool *out_done
 ) {
@@ -253,11 +254,11 @@ static inline ant_value_t sv_iter_advance(
   case SV_ITER_MAP: {
     map_iterator_state_t *st = get_map_iter_state(vm->stack[vm->sp - 3]);
     if (!st) return js_mkerr(js, "Invalid Map iterator");
-    if (!st->current) {
+    map_entry_t *entry = map_iter_take(st);
+    if (!entry) {
       *out_value = js_mkundef();
       *out_done = true;
     } else {
-      map_entry_t *entry = st->current;
       ant_value_t value;
       switch (st->type) {
       case ITER_TYPE_MAP_VALUES:
@@ -279,7 +280,6 @@ static inline ant_value_t sv_iter_advance(
       default:
         value = js_mkundef();
       }
-      st->current = entry->hh.next;
       *out_value = value;
       *out_done = false;
     }
@@ -289,11 +289,11 @@ static inline ant_value_t sv_iter_advance(
   case SV_ITER_SET: {
     set_iterator_state_t *st = get_set_iter_state(vm->stack[vm->sp - 3]);
     if (!st) return js_mkerr(js, "Invalid Set iterator");
-    if (!st->current) {
+    set_entry_t *entry = set_iter_take(st);
+    if (!entry) {
       *out_value = js_mkundef();
       *out_done = true;
     } else {
-      set_entry_t *entry = st->current;
       ant_value_t value;
       if (st->type == ITER_TYPE_SET_ENTRIES) {
         ant_value_t pair = js_mkarr(js);
@@ -306,7 +306,6 @@ static inline ant_value_t sv_iter_advance(
       } else {
         value = entry->value;
       }
-      st->current = entry->hh.next;
       *out_value = value;
       *out_done = false;
     }

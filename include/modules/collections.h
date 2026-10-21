@@ -50,17 +50,70 @@ typedef enum {
   ITER_TYPE_SET_ENTRIES
 } iter_type_t;
 
+typedef struct map_store map_store_t;
+typedef struct set_store set_store_t;
+
 typedef struct map_iterator_state {
   map_entry_t **head;
-  map_entry_t *current;
+  map_entry_t *last;
+  map_store_t *owner;
+  struct map_iterator_state *prev_iter;
+  struct map_iterator_state *next_iter;
   iter_type_t type;
+  bool started;
+  bool done;
 } map_iterator_state_t;
 
 typedef struct set_iterator_state {
   set_entry_t **head;
-  set_entry_t *current;
+  set_entry_t *last;
+  set_store_t *owner;
+  struct set_iterator_state *prev_iter;
+  struct set_iterator_state *next_iter;
   iter_type_t type;
+  bool started;
+  bool done;
 } set_iterator_state_t;
+
+struct map_store {
+  map_entry_t *head;
+  map_iterator_state_t *iterators;
+};
+
+struct set_store {
+  set_entry_t *head;
+  set_iterator_state_t *iterators;
+};
+
+static inline map_entry_t *map_iter_take(map_iterator_state_t *st) {
+  if (st->done || !st->head) return NULL;
+  map_entry_t *next = st->started && st->last ? (map_entry_t *)st->last->hh.next : *st->head;
+  
+  if (!next) {
+    st->done = true;
+    return NULL;
+  }
+  
+  st->started = true;
+  st->last = next;
+  
+  return next;
+}
+
+static inline set_entry_t *set_iter_take(set_iterator_state_t *st) {
+  if (st->done || !st->head) return NULL;
+  set_entry_t *next = st->started && st->last ? (set_entry_t *)st->last->hh.next : *st->head;
+  
+  if (!next) {
+    st->done = true;
+    return NULL;
+  }
+  
+  st->started = true;
+  st->last = next;
+  
+  return next;
+}
 
 static constexpr uint32_t MAP_NATIVE_TAG = Ant_NativeTag("MAPP");
 static constexpr uint32_t SET_NATIVE_TAG = Ant_NativeTag("SETP");
@@ -79,11 +132,21 @@ void weakmap_table_finish_prune(weakmap_table_t *table);
 map_entry_t **get_map_from_obj(ant_value_t obj);
 set_entry_t **get_set_from_obj(ant_value_t obj);
 
-map_entry_t *Ant_Map_Find(ant_t *js, map_entry_t **map_ptr, ant_value_t key);
-set_entry_t *Ant_Set_Find(ant_t *js, set_entry_t **set_ptr, ant_value_t value);
+map_entry_t **collections_map_store_new(void);
+set_entry_t **collections_set_store_new(void);
 
 map_iterator_state_t *get_map_iter_state(ant_value_t obj);
 set_iterator_state_t *get_set_iter_state(ant_value_t obj);
+
+map_entry_t *Ant_Map_Find(ant_t *js, map_entry_t **map_ptr, ant_value_t key);
+set_entry_t *Ant_Set_Find(ant_t *js, set_entry_t **set_ptr, ant_value_t value);
+
+void collections_map_store_free(map_entry_t **head);
+void collections_set_store_free(set_entry_t **head);
+void collections_map_after_clear(map_entry_t **head);
+void collections_set_after_clear(set_entry_t **head);
+void collections_map_before_delete(map_entry_t **head, map_entry_t *entry);
+void collections_set_before_delete(set_entry_t **head, set_entry_t *entry);
 
 bool advance_map(ant_t *js, iterator_t *it, ant_value_t *out);
 bool advance_set(ant_t *js, iterator_t *it, ant_value_t *out);

@@ -2570,10 +2570,37 @@ static ant_value_t builtin_fs_stream(ant_params_t) {
   return req->promise;
 }
 
+typedef struct {
+  int flags;
+  int mode;
+} fs_write_options_t;
+
+static fs_write_options_t fs_parse_write_options(ant_t *js, ant_value_t options, const char *default_flag) {
+  fs_write_options_t out = {
+    .flags = parse_open_flags(js, js_mkstr(js, default_flag, strlen(default_flag))),
+    .mode = 0666,
+  };
+  
+  if (!is_object_type(options)) return out;
+
+  ant_value_t flag = js_get(js, options, "flag");
+  ant_value_t mode = js_get(js, options, "mode");
+  
+  if (!is_undefined(flag)) out.flags = parse_open_flags(js, flag);
+
+  if (vtype(mode) == kTypeNumber) out.mode = (int)js_getnum(mode);
+  else if (vtype(mode) == kTypeString) {
+    const char *text = js_getstr(js, mode, NULL);
+    if (text) out.mode = (int)strtol(text, NULL, 8);
+  }
+
+  return out;
+}
+
 static ant_value_t fs_write_file_sync_impl(
   ant_native_params_t,
   const char *fn_name,
-  const char *mode
+  const char *default_flag
 ) {
   if (nargs < 2) return js_mkerr(js, "%s() requires path and data arguments", fn_name);
   args[0] = fs_coerce_path(js, args[0]);
@@ -2588,85 +2615,51 @@ static ant_value_t fs_write_file_sync_impl(
   ant_value_t data_result = fs_get_write_data_arg(js, args[1], fn_name, &write_data);
   if (is_err(data_result)) return data_result;
 
+  fs_write_options_t opts = fs_parse_write_options(js, nargs > 2 ? args[2] : js_mkundef(), default_flag);
+
   char *path_cstr = strndup(path, path_len);
   if (!path_cstr) return js_mkerr(js, "Out of memory");
 
-  FILE *file = fopen(path_cstr, mode);
-  if (!file) {
-    ant_value_t err = fs_mk_errno_error(js, errno, "open", path_cstr, NULL);
+  uv_fs_t req;
+  int fd = uv_fs_open(NULL, &req, path_cstr, opts.flags, opts.mode, NULL);
+  uv_fs_req_cleanup(&req);
+  
+  if (fd < 0) {
+    ant_value_t err = fs_mk_uv_error(js, fd, "open", path_cstr, NULL);
     free(path_cstr);
     return err;
   }
 
-  size_t bytes_written = fwrite(write_data.data, 1, write_data.len, file);
-  fclose(file);
-  free(path_cstr);
-
-  if (bytes_written != write_data.len) {
-    return js_mkerr(js, "Failed to write entire file");
+  size_t written = 0;
+  int rc = 0;
+  while (written < write_data.len) {
+    uv_buf_t buf = uv_buf_init(
+      (char *)write_data.data + written, 
+      (unsigned int)(write_data.len - written)
+    );
+    
+    rc = uv_fs_write(NULL, &req, fd, &buf, 1, -1, NULL);
+    uv_fs_req_cleanup(&req);
+    
+    if (rc <= 0) break;
+    written += (size_t)rc;
   }
 
+  uv_fs_close(NULL, &req, fd, NULL);
+  uv_fs_req_cleanup(&req);
+
+  if (written != write_data.len) {
+    ant_value_t err = fs_mk_uv_error(js, rc < 0 ? rc : UV_EIO, "write", path_cstr, NULL);
+    free(path_cstr);
+    return err;
+  }
+
+  free(path_cstr);
   return js_mkundef();
 }
 
 static ant_value_t builtin_fs_writeFileSync(ant_params_t) {
-  return fs_write_file_sync_impl(js, args, nargs, "writeFileSync", "wb");
-}
-
-static ant_value_t builtin_fs_copyFileSync(ant_params_t) {
-  if (nargs < 2) return js_mkerr(js, "copyFileSync() requires src and dest arguments");
-  
-  args[0] = fs_coerce_path(js, args[0]);
-  if (is_err(args[0])) return args[0];
-  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "copyFileSync() src must be a string");
-  args[1] = fs_coerce_path(js, args[1]);
-  if (is_err(args[1])) return args[1];
-  if (vtype(args[1]) != kTypeString) return js_mkerr(js, "copyFileSync() dest must be a string");
-  
-  size_t src_len, dest_len;
-  char *src = js_getstr(js, args[0], &src_len);
-  char *dest = js_getstr(js, args[1], &dest_len);
-  
-  if (!src || !dest) return js_mkerr(js, "Failed to get arguments");
-  
-  char *src_cstr = strndup(src, src_len);
-  char *dest_cstr = strndup(dest, dest_len);
-  if (!src_cstr || !dest_cstr) {
-    free(src_cstr);
-    free(dest_cstr);
-    return js_mkerr(js, "Out of memory");
-  }
-  
-  FILE *in = fopen(src_cstr, "rb");
-  if (!in) {
-    ant_value_t err = fs_mk_errno_error(js, errno, "copyfile", src_cstr, dest_cstr);
-    free(src_cstr); free(dest_cstr);
-    return err;  
-  }
-  
-  FILE *out = fopen(dest_cstr, "wb");
-  if (!out) {
-    ant_value_t err = fs_mk_errno_error(js, errno, "copyfile", src_cstr, dest_cstr);
-    fclose(in);
-    free(src_cstr); free(dest_cstr);
-    return err;
-  }
-  
-  char buf[8192];
-  size_t n;
-  
-  while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
-  if (fwrite(buf, 1, n, out) != n) {
-    ant_value_t err = fs_mk_errno_error(js, errno ? errno : EIO, "copyfile", src_cstr, dest_cstr);
-    fclose(in); fclose(out);
-    free(src_cstr); free(dest_cstr);
-    return err;
-  }}
-  
-  fclose(in); fclose(out);
-  free(src_cstr); free(dest_cstr);
-
-  return js_mkundef();
+  return fs_write_file_sync_impl(js, args, nargs, "writeFileSync", "w");
 }
 
 typedef struct {
@@ -2809,8 +2802,52 @@ static ant_value_t builtin_fs_copyFile(ant_params_t) {
 
   if (is_err(result)) js_reject_promise(js, promise, result);
   else js_resolve_promise(js, promise, js_mkundef());
-  
+
   return promise;
+}
+
+static ant_value_t builtin_fs_copyFileSync(ant_params_t) {
+  if (nargs < 2) return js_mkerr(js, "copyFileSync() requires src and dest arguments");
+
+  args[0] = fs_coerce_path(js, args[0]);
+  if (is_err(args[0])) return args[0];
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "copyFileSync() src must be a string");
+  
+  args[1] = fs_coerce_path(js, args[1]);
+  if (is_err(args[1])) return args[1];
+  if (vtype(args[1]) != kTypeString) return js_mkerr(js, "copyFileSync() dest must be a string");
+
+  size_t src_len = 0, dest_len = 0;
+  const char *src = js_getstr(js, args[0], &src_len);
+  const char *dest = js_getstr(js, args[1], &dest_len);
+  if (!src || !dest) return js_mkerr(js, "Failed to get arguments");
+
+  char *src_cstr = strndup(src, src_len);
+  char *dest_cstr = strndup(dest, dest_len);
+  
+  if (!src_cstr || !dest_cstr) {
+    free(src_cstr);
+    free(dest_cstr);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  int mode = nargs > 2 && vtype(args[2]) == kTypeNumber ? (int)js_getnum(args[2]) : 0;
+  bool exclusive = (mode & 1) != 0;
+
+  fs_cp_options_t opts = {
+    .recursive = false,
+    .force = !exclusive,
+    .error_on_exist = exclusive,
+    .dereference = false,
+    .verbatim_symlinks = false,
+    .filter = 0,
+  };
+
+  ant_value_t result = fs_copy_file_sync_impl(js, src_cstr, dest_cstr, &opts, "copyfile");
+  free(src_cstr);
+  free(dest_cstr);
+  
+  return result;
 }
 
 static ant_value_t fs_copy_symlink_sync_impl(
@@ -3220,12 +3257,12 @@ static ant_value_t builtin_fs_fsyncSync(ant_params_t) {
 }
 
 static ant_value_t builtin_fs_appendFileSync(ant_params_t) {
-  return fs_write_file_sync_impl(js, args, nargs, "appendFileSync", "ab");
+  return fs_write_file_sync_impl(js, args, nargs, "appendFileSync", "a");
 }
 
 static ant_value_t builtin_fs_appendFile(ant_params_t) {
   ant_value_t promise = js_mkpromise(js);
-  ant_value_t result = fs_write_file_sync_impl(js, args, nargs, "appendFile", "ab");
+  ant_value_t result = fs_write_file_sync_impl(js, args, nargs, "appendFile", "a");
   if (is_err(result)) js_reject_promise(js, promise, result);
   else js_resolve_promise(js, promise, js_mkundef());
   return promise;
@@ -3244,7 +3281,8 @@ static ant_value_t builtin_fs_writeFile(ant_params_t) {
   fs_write_data_t write_data;
   ant_value_t data_result = fs_get_write_data_arg(js, args[1], "writeFile", &write_data);
   if (is_err(data_result)) return data_result;
-  
+
+  fs_write_options_t opts = fs_parse_write_options(js, nargs > 2 ? args[2] : js_mkundef(), "w");
   fs_request_t *req = calloc(1, sizeof(fs_request_t));
   if (!req) return js_mkerr(js, "Out of memory");
   
@@ -3264,7 +3302,7 @@ static ant_value_t builtin_fs_writeFile(ant_params_t) {
   req->uv_req.data = req;
   
   Ant_List_Insert(&js->fs_requests, req);
-  int result = uv_fs_open(js->loop, &req->uv_req, req->path, O_WRONLY | O_CREAT | O_TRUNC, 0644, on_open_for_write);
+  int result = uv_fs_open(js->loop, &req->uv_req, req->path, opts.flags, opts.mode, on_open_for_write);
   
   if (result < 0) {
     fs_request_fail(req, result);
@@ -6701,6 +6739,9 @@ ant_value_t fs_make_constants(ant_t *js) {
   js_set(js, constants, "R_OK", js_mknum(R_OK));
   js_set(js, constants, "W_OK", js_mknum(W_OK));
   js_set(js, constants, "X_OK", js_mknum(X_OK));
+  js_set(js, constants, "COPYFILE_EXCL", js_mknum(UV_FS_COPYFILE_EXCL));
+  js_set(js, constants, "COPYFILE_FICLONE", js_mknum(UV_FS_COPYFILE_FICLONE));
+  js_set(js, constants, "COPYFILE_FICLONE_FORCE", js_mknum(UV_FS_COPYFILE_FICLONE_FORCE));
   js_set(js, constants, "O_RDONLY", js_mknum(O_RDONLY));
   js_set(js, constants, "O_WRONLY", js_mknum(O_WRONLY));
   js_set(js, constants, "O_RDWR", js_mknum(O_RDWR));

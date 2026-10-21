@@ -10,24 +10,6 @@ RUN apk add --no-cache                                  \
   nodejs npm py3-tomli                                  \
   tzdata util-linux-dev util-linux-static
 
-ARG TARGETARCH
-ARG ZIG_VERSION=0.16.0
-
-RUN <<EOF
-set -eux
-case "$TARGETARCH" in
-  amd64) zig_arch="x86_64-linux" ;;
-  arm64) zig_arch="aarch64-linux" ;;
-  *) echo "unsupported Docker target arch: $TARGETARCH" >&2; exit 1 ;;
-esac
-curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${zig_arch}-${ZIG_VERSION}.tar.xz" -o /tmp/zig.tar.xz
-mkdir -p /opt
-tar -xJf /tmp/zig.tar.xz -C /opt
-mv "/opt/zig-${zig_arch}-${ZIG_VERSION}" /opt/zig
-ln -s /opt/zig/zig /usr/local/bin/zig
-rm /tmp/zig.tar.xz
-EOF
-
 FROM toolchain AS deps
 COPY meson.build meson_options.txt ./
 

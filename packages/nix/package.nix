@@ -10,8 +10,6 @@
 , nodejs_22
 , git
 , curl
-, zig_0_16 ? null
-, zig ? null
 , importNpmLock
 , overrideCC
 , rustPlatform
@@ -26,7 +24,6 @@
 }:
 
 let
-  zigPkg = if zig_0_16 != null then zig_0_16 else zig;
   antBaseStdenv =
     if stdenv.hostPlatform.isLinux then
       overrideCC llvmPackages_21.stdenv (
@@ -127,7 +124,6 @@ antStdenv.mkDerivation (finalAttrs: {
     nodejs_22
     git
     curl
-    zigPkg
     rustPlatform.cargoSetupHook
   ] ++ lib.optionals stdenv.hostPlatform.isDarwin [
     darwin.sigtool
@@ -167,10 +163,6 @@ antStdenv.mkDerivation (finalAttrs: {
   };
 
   preConfigure = ''
-    export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
-    export ZIG_LOCAL_CACHE_DIR=$TMPDIR/zig-local-cache
-    mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
-
     ln -sfn ${toolsNodeModules}/node_modules src/tools/node_modules
   '' + lib.optionalString enablePgo ''
     echo "==> PGO profile available: meson/pgo/profiles/${pgoFileName}"

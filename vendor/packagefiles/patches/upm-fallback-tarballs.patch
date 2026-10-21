@@ -1,0 +1,54 @@
+diff --git a/src/store.ts b/src/store.ts
+--- a/src/store.ts
++++ b/src/store.ts
+@@ -67,6 +67,12 @@
+   fetch?: typeof fetch;
+   /** `.npmrc` credentials by `//host/path/`, sent with a tarball request under one. */
+   auth?: Record<string, string>;
++  /**
++   * A tarball under `from` that is not there (404) is asked for at the same path under `to`:
++   * the fallback registry, for a url the lockfile derived from the registry. Its integrity is
++   * checked as any other's.
++   */
++  mirror?: { from: string; to: string };
+   /** Ceiling on tarballs downloading at once. Default 32. */
+   concurrency?: number;
+   /**
+@@ -601,6 +607,17 @@
+       const bytes = await readLocal(tarball.path);
+       return { bytes: [bytes], size: bytes.byteLength };
+     }
++    const mirror = options.mirror;
++    if (!mirror || !tarball.startsWith(`${mirror.from}/`)) return await pullFrom(tarball, signal, open);
++    try {
++      return await pullFrom(tarball, signal, open);
++    } catch (error) {
++      if ((error as { code?: string }).code !== "E404") throw error;
++      return await pullFrom(`${mirror.to}${tarball.slice(mirror.from.length)}`, signal, open);
++    }
++  }
++
++  async function pullFrom(tarball: string, signal: Signal, open?: Open): Promise<Pulled> {
+     if (options.offline) {
+       throw Object.assign(new Error(`offline: ${tarball} is not in the store`), {
+         code: "EOFFLINE",
+diff --git a/src/api.ts b/src/api.ts
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -2017,7 +2017,7 @@
+ 
+ /** The store, downloading with the config's credentials, or never under `offline`. */
+ function openStore(ctx: Context, verify?: boolean): Store {
+-  const { auth, offline, before } = settings(ctx);
++  const { auth, offline, before, registry, fallback } = settings(ctx);
+   const { storeBackend: backend } = ctx.options;
+   const dir = storeOf(ctx);
+   const backendFailed = (error: unknown) => ctx.log(`store backend: ${describe(error)}`, "warn");
+@@ -2032,6 +2032,7 @@
+     verify,
+     rehash,
+     auth,
++    ...(fallback && { mirror: { from: registry, to: fallback } }),
+     offline,
+     backend,
+     backendFailed,

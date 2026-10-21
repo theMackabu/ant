@@ -74,58 +74,6 @@ lib_sources = files(run_command(
   check: true
 ).stdout().strip().split())
 
-pkg_sources = files(
-  'src/pkg/build.zig',
-  'src/pkg/cache.zig',
-  'src/pkg/cli.zig',
-  'src/pkg/debug.zig',
-  'src/pkg/extractor.zig',
-  'src/pkg/fetcher.zig',
-  'src/pkg/intern.zig',
-  'src/pkg/json.zig',
-  'src/pkg/linker.zig',
-  'src/pkg/lockfile.zig',
-  'src/pkg/metadata.c',
-  'src/pkg/nghttp2.zig',
-  'src/pkg/platform.zig',
-  'src/pkg/process_env.zig',
-  'src/pkg/resolver.zig',
-  'src/pkg/root.zig',
-  'src/pkg/tlsuv.zig',
-  'src/pkg/uv.zig',
-)
-
-pkg_zig_args = []
-if meson.is_cross_build() and host_machine.system() == 'darwin'
-  pkg_zig_args += ['-Dtarget=' + host_machine.cpu_family() + '-macos.15.0']
-endif
-
-pkg_lib = custom_target(
-  'pkg_zig',
-  input: pkg_sources,
-  output: 'libpkg.a',
-  command: [
-    'sh', '-c',
-    '"$ZIG" build --build-file "$PKG_ZIG_DIR/build.zig" --prefix "$PKG_BUILD_DIR" "$@" && cp "$PKG_BUILD_DIR/lib/$PKG_LIB_NAME" "@OUTPUT@"',
-    'pkg-zig',
-  ] + pkg_zig_args,
-  env: {
-    'ZIG': zig.full_path(),
-    'ANT_VERSION': ant_version,
-    'PKG_ZIG_DIR': pkg_zig_dir, 'PKG_BUILD_DIR': pkg_build_dir,
-    'LMDB_INCLUDE': lmdb_include_path, 'ZLIB_INCLUDE': zlib_include_path,
-    'LIBUV_INCLUDE': libuv_include_path, 'YYJSON_INCLUDE': yyjson_include_path,
-    'PKG_LIB_NAME': host_machine.system() == 'windows' ? 'pkg.lib' : 'libpkg.a',
-  },
-  build_by_default: true,
-)
-
-pkg_dep = declare_dependency(
-  link_with: [pkg_lib],
-  include_directories: include,
-  dependencies: [lmdb_dep, tlsuv_dep, libuv_dep, nghttp2_dep]
-)
-
 section_gc_c_args = host_machine.system() != 'darwin' ? ['-ffunction-sections', '-fdata-sections'] : []
 
 libant = static_library(
@@ -144,7 +92,7 @@ libant = static_library(
 libant_dep = declare_dependency(
   link_with: libant,
   include_directories: [include, sandbox_backend_include],
-  dependencies: ant_deps + [pkg_dep] + temporal_link_deps
+  dependencies: ant_deps + temporal_link_deps
 )
 
 link_args = []

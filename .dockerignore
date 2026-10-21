@@ -20,8 +20,6 @@
 /result
 /result-*
 /todo/*
-
-/src/pkg/.zig-cache
 /src/strip/target
 
 /test262

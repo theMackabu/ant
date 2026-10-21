@@ -18,7 +18,6 @@ interface Versions {
   node: string;
   brotli: string;
   llhttp: string;
-  nghttp2: string;
   simdjson: string;
   pcre2: string;
   libffi: string;

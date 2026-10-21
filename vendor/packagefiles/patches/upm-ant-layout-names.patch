@@ -1,0 +1,131 @@
+diff --git a/src/exec.ts b/src/exec.ts
+--- a/src/exec.ts
++++ b/src/exec.ts
+@@ -19,7 +19,7 @@
+   const tree = builtin.fs.statSync(join(root, "node_modules"), { throwIfNoEntry: false });
+   if (tree?.isDirectory() && builtin.fs.existsSync(join(root, "package.json"))) {
+     // Dotted: the sweep of `.upm` entries leaves it alone.
+-    return join(root, "node_modules", ".upm", ".exec");
++    return join(root, "node_modules", ".ant", ".exec");
+   }
+   return join(upmHome("cache"), "exec");
+ }
+diff --git a/src/gc.ts b/src/gc.ts
+--- a/src/gc.ts
++++ b/src/gc.ts
+@@ -29,7 +29,7 @@
+  * (`storeKeys()` in keys.ts). Entry files are hardlinks, so this reclaims far less than its size.
+  */
+ export async function sweepEntries(dir: string, keep: Set<string>): Promise<EntrySweep> {
+-  const storeDir = builtin.path.join(dir, "node_modules", ".upm");
++  const storeDir = builtin.path.join(dir, "node_modules", ".ant");
+   const out: EntrySweep = { removed: 0, bytes: 0 };
+   // An entry younger than the grace period may belong to an install that started after the
+   // caller read its state, and whose keys are therefore missing from `keep`.
+diff --git a/src/link.ts b/src/link.ts
+--- a/src/link.ts
++++ b/src/link.ts
+@@ -218,7 +218,7 @@
+   const { copyFileSync, linkSync, unlinkSync } = builtin.fs;
+   const up = `..${sep}`;
+   const limit = createLimiter(options.concurrency ?? 16);
+-  const storeDir = join(options.dir, "node_modules", ".upm");
++  const storeDir = join(options.dir, "node_modules", ".ant");
+   const production = options.production === true;
+   const hoist = options.hoist !== false;
+   const hash =
+@@ -1273,7 +1273,7 @@
+   }
+   let found: import("node:fs").Dirent[];
+   try {
+-    found = readdirSync(join(dir, "node_modules", ".upm"), { withFileTypes: true });
++    found = readdirSync(join(dir, "node_modules", ".ant"), { withFileTypes: true });
+   } catch {
+     return false;
+   }
+@@ -1325,7 +1325,7 @@
+       // Anchored to this project's own `.upm`: a junction is absolute, so a moved tree still
+       // leads into the `.upm` it was installed from.
+       const at = join(nm, name);
+-      const store = relative(dirname(at), join(dir, "node_modules", ".upm")) + sep;
++      const store = relative(dirname(at), join(dir, "node_modules", ".ant")) + sep;
+       if (!to.startsWith(store) || !to.endsWith(join(sep, "node_modules", name))) return undefined;
+     }
+     if (!landsOnDir(join(nm, name))) return undefined;
+diff --git a/src/lock.ts b/src/lock.ts
+--- a/src/lock.ts
++++ b/src/lock.ts
+@@ -21,7 +21,7 @@
+ import type { Spec } from "./spec.ts";
+ import { replaceFile, trace } from "./util.ts";
+ 
+-export const LOCKFILE = "upm.lock";
++export const LOCKFILE = "ant.lock";
+ 
+ /** Other managers' lockfiles, read in memory when there is no `upm.lock`; see `foreign-lock.ts`. */
+ export const FOREIGN = ["package-lock.json", "pnpm-lock.yaml", "bun.lock"] as const;
+diff --git a/src/state.ts b/src/state.ts
+--- a/src/state.ts
++++ b/src/state.ts
+@@ -9,8 +9,8 @@
+ import type { Resolution } from "./resolve.ts";
+ import type { WorkspaceProof } from "./workspaces.ts";
+ 
+-export const STATE_FILE = ".upm.json";
+-export const TREE_LOCK = ".upm.lock";
++export const STATE_FILE = ".ant.json";
++export const TREE_LOCK = ".ant.lock";
+ 
+ export interface InstallState {
+   version: 1;
+diff --git a/src/store.ts b/src/store.ts
+--- a/src/store.ts
++++ b/src/store.ts
+@@ -209,7 +209,7 @@
+   const nm = join(root, "node_modules");
+   const at = existsSync(nm) ? nm : root;
+   // Not crypto: it loads WebCrypto, a cost a no-op install would see.
+-  const name = `.upm-link-${Math.random().toString(36).slice(2, 10)}`;
++  const name = `.ant-link-${Math.random().toString(36).slice(2, 10)}`;
+   const link = (from: string, into: string): string | undefined => {
+     const to = join(into, name);
+     try {
+@@ -255,7 +255,7 @@
+     if (uid === undefined) return true;
+     try {
+       if (statSync(each).mode & 0o002) return false;
+-      const found = statSync(join(each, ".upm-store"), { throwIfNoEntry: false });
++      const found = statSync(join(each, ".ant-store"), { throwIfNoEntry: false });
+       return !found || (found.uid === uid && !(found.mode & 0o002));
+     } catch {
+       return false;
+@@ -273,7 +273,7 @@
+   }
+   // None safe, or `node_modules` alone is on its own mount: a store there would go with the tree.
+   if (top === undefined) return { dir: home };
+-  const store = join(top, ".upm-store");
++  const store = join(top, ".ant-store");
+   if (existsSync(store)) return { dir: store };
+   try {
+     mkdirSync(store);
+diff --git a/src/tree-lock.ts b/src/tree-lock.ts
+--- a/src/tree-lock.ts
++++ b/src/tree-lock.ts
+@@ -4,7 +4,7 @@
+ import { pid, sleep } from "./runtime.ts";
+ import { alive } from "./util.ts";
+ 
+-export const TREE_HELD = ".upm.linking";
++export const TREE_HELD = ".ant.linking";
+ 
+ /** How often the holder touches the file, so a waiter can tell it from a dead one. */
+ const BEAT = 2000;
+@@ -17,7 +17,7 @@
+ const ABANDONED = 60_000;
+ 
+ /** What `add` and `remove` hold beside a package.json from their check of it to their write. */
+-export const EDIT_HELD = ".upm.editing";
++export const EDIT_HELD = ".ant.editing";
+ 
+ /**
+  * Take `<nm>/.upm.linking` (or `name`), waiting while another process holds it. `waiting` is

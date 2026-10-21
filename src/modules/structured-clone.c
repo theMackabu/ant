@@ -202,7 +202,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     ant_value_t map_proto = js->builtins.map_proto;
     if (is_special_object(map_proto)) js_set_proto_init(clone, map_proto);
     
-    map_entry_t **new_head = calloc(1, sizeof(map_entry_t *));
+    map_entry_t **new_head = collections_map_store_new();
     if (!new_head) return js_mkerr(js, "out of memory");
     
     *new_head = NULL;
@@ -233,7 +233,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     ant_value_t set_proto = js->builtins.set_proto;
     if (is_special_object(set_proto)) js_set_proto_init(clone, set_proto);
     
-    set_entry_t **new_head = calloc(1, sizeof(set_entry_t *));
+    set_entry_t **new_head = collections_set_store_new();
     if (!new_head) return js_mkerr(js, "out of memory");
     *new_head = NULL;
     

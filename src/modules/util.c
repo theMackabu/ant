@@ -11,6 +11,7 @@
 
 #include "ant.h"
 #include "cfunc.h"
+#include "utils.h"
 #include "ascii.h"
 #include "errors.h"
 #include "builder.h"
@@ -1128,6 +1129,31 @@ static const util_style_entry_t *util_find_style(const char *name) {
   return NULL;
 }
 
+static bool util_style_should_colorize(ant_t *js, ant_value_t options) {
+  ant_value_t stream = js_mkundef();
+  if (is_object_type(options)) {
+    ant_value_t validate = js_get(js, options, "validateStream");
+    if (vtype(validate) == kTypeBool && !js_truthy(js, validate)) return true;
+    stream = js_get(js, options, "stream");
+  }
+
+  const char *force_color = getenv("FORCE_COLOR");
+  if (force_color) return ant_env_bool(force_color, true);
+
+  if (is_undefined(stream)) {
+    ant_value_t process_obj = js_get(js, js_glob(js), "process");
+    if (is_object_type(process_obj)) stream = js_get(js, process_obj, "stdout");
+  }
+
+  if (!is_object_type(stream) || !js_truthy(js, js_get(js, stream, "isTTY"))) return false;
+
+  ant_value_t get_depth = js_get(js, stream, "getColorDepth");
+  if (!is_callable(get_depth)) return true;
+
+  ant_value_t depth = sv_vm_call(js->vm, js, get_depth, stream, NULL, 0, NULL, js_mkundef());
+  return vtype(depth) == kTypeNumber && js_getnum(depth) > 2;
+}
+
 static ant_value_t util_style_text(ant_params_t) {
   if (nargs < 2) return js_mkstr(js, "", 0);
 
@@ -1152,7 +1178,7 @@ static ant_value_t util_style_text(ant_params_t) {
     }
   }
 
-  if (picked_n == 0) {
+  if (picked_n == 0 || !util_style_should_colorize(js, nargs > 2 ? args[2] : js_mkundef())) {
     ant_value_t out = js_mkstr(js, text_cstr.ptr, strlen(text_cstr.ptr));
     if (text_cstr.needs_free) free((void *)text_cstr.ptr);
     return out;

@@ -38,8 +38,9 @@ relevant decision or regression, not as routine startup context.
 - `src/gc/` contains heap layout, roots, strings, ropes, and collection logic.
 - `src/modules/` and `src/builtins/` implement built-in modules and host APIs.
 - `src/http/`, `src/net/`, and `src/streams/` are the transport and I/O stack.
-- `src/pkg/` is the Zig package manager; TypeScript stripping is provided by
-  the Skim Meson subproject.
+- `src/pkg/` is the package manager's Ant layer, bundled with upm (a patched
+  Meson wrap) as `ant:internal/pkg`; TypeScript stripping is provided by the
+  Skim Meson subproject.
 - `meson/` and `meson.build` define the build graph and generated headers.
 - `.github/agents/` contains the lightweight repo-harness checks and validation
   router used by local tasks and CI.

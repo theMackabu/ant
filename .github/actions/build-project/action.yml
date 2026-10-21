@@ -84,8 +84,6 @@ runs:
       with:
         path: |
           .cache/ccache
-          .cache/zig-local
-          .cache/zig-global
         key: compilation-v1-${{ inputs.platform }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/versions.json') }}-${{ github.sha }}
         restore-keys: |
           compilation-v1-${{ inputs.platform }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/versions.json') }}-
@@ -123,8 +121,6 @@ runs:
           export CCACHE_DIR="$CCACHE_BASEDIR/.cache/ccache"
           export CCACHE_COMPILERCHECK=content
           export CCACHE_MAXSIZE=1G
-          export ZIG_LOCAL_CACHE_DIR="$CCACHE_BASEDIR/.cache/zig-local"
-          export ZIG_GLOBAL_CACHE_DIR="$CCACHE_BASEDIR/.cache/zig-global"
           export CC="ccache $CC"
           export CXX="ccache ${CXX:-clang++}"
           ccache --zero-stats

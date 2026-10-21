@@ -1,0 +1,196 @@
+diff --git a/src/config.ts b/src/config.ts
+--- a/src/config.ts
++++ b/src/config.ts
+@@ -10,6 +10,11 @@
+ export interface Config {
+   /** The registry, trailing slashes off. */
+   registry: string;
++  /**
++   * `fallback-registry`: where a name the registry has no document for is read from instead.
++   * `UPM_FALLBACK_REGISTRY` sets it only while the registry is `UPM_DEFAULT_REGISTRY`'s.
++   */
++  fallback?: string;
+   /** `@scope` → the registry its packages are read from instead. */
+   scopes: Record<string, string>;
+   /**
+@@ -110,7 +115,11 @@
+   const merged: Record<string, string> = {};
+   // An empty value is no value: `registry=` does not unset a lower layer's, as with npm.
+   for (const layer of layers) for (const [k, v] of Object.entries(layer)) if (v) merged[k] = v;
+-  const base = registryBase(registry || merged.registry);
++  const env = globalThis.process?.env ?? {};
++  const defaulted = !registry && !merged.registry;
++  const base = registryBase(registry || merged.registry || env.UPM_DEFAULT_REGISTRY);
++  const fallback =
++    merged["fallback-registry"] || (defaulted ? env.UPM_FALLBACK_REGISTRY : undefined);
+   const scopes: Record<string, string> = {};
+   const fields = new Map<string, Record<string, string>>();
+   for (const [key, value] of Object.entries(merged)) {
+@@ -139,6 +148,7 @@
+   }
+   return {
+     registry: base,
++    ...(fallback && registryBase(fallback) !== base && { fallback: registryBase(fallback) }),
+     scopes,
+     auth,
+     saveExact: merged["save-exact"] === "true",
+diff --git a/src/registry.ts b/src/registry.ts
+--- a/src/registry.ts
++++ b/src/registry.ts
+@@ -45,6 +45,12 @@
+   registry?: string;
+   /** `@scope` → the registry its packages are read from instead of `registry`. */
+   scopes?: Record<string, string>;
++  /**
++   * Where a name `registry` has no document for (a 404) is read from instead, for the rest of
++   * the run. A scope sent elsewhere never falls back. Tarballs keep the url the document gave,
++   * so a lockfile writes such a name's url out in full.
++   */
++  fallback?: string;
+   /** `//host/path/` → the `authorization` header for requests under it. See `authFor`. */
+   auth?: Record<string, string>;
+   /** Injectable for tests. */
+@@ -212,6 +218,10 @@
+ export function createRegistry(options: RegistryOptions = {}): Registry {
+   const base = registryBase(options.registry);
+   const baseFor = hosts(base, options.scopes);
++  const fallback = options.fallback ? registryBase(options.fallback) : undefined;
++  /** Names `base` had no document for, read from `fallback` since. */
++  const moved = new Set<string>();
++  const readFrom = (name: string) => (moved.has(name) ? fallback! : baseFor(name));
+   const auth = options.auth ?? {};
+   const request = options.fetch ?? fetching();
+   // One gate over every request to this registry. It lives here because the retry below
+@@ -305,8 +315,28 @@
+     if (!options.fetch) await cacheLookups();
+   };
+ 
+-  /** The response body, retried and validated as `get` says. */
++  /**
++   * Whether a 404 for `url` sends `name` to the fallback: only `base`'s own document for the
++   * name, not a version route or a scope's registry. Every caller that missed asks again.
++   */
++  function moveOnMiss(name: string, url: string): boolean {
++    if (!fallback || baseFor(name) !== base) return false;
++    if (url !== `${base}/${escapeName(name)}`) return false;
++    moved.add(name);
++    return true;
++  }
++
++  /** The response body, retried and validated as `get` says; a moved name asked again. */
+   async function get(name: string, url: string, accept: string, ask = false): Promise<Body> {
++    try {
++      return await getFrom(name, url, accept, ask);
++    } catch (error) {
++      if ((error as { code?: string }).code !== "E404" || !moveOnMiss(name, url)) throw error;
++      return await getFrom(name, path(name), accept, ask);
++    }
++  }
++
++  async function getFrom(name: string, url: string, accept: string, ask = false): Promise<Body> {
+     const { doc, use } = kept(name, url, accept);
+     if (use && !ask) {
+       served.add(keyOf(url, accept));
+@@ -356,7 +386,7 @@
+     });
+   }
+ 
+-  const path = (name: string) => `${baseFor(name)}/${escapeName(name)}`;
++  const path = (name: string) => `${readFrom(name)}/${escapeName(name)}`;
+ 
+   function headers(url: string, accept: string, etag?: string): Record<string, string> {
+     const authorization = authFor(auth, url);
+@@ -392,7 +422,8 @@
+     if (use) return hit();
+     if (cache?.mode === "only") return undefined;
+     await ready();
+-    return await limit(async (signal) => {
++    let missed = false;
++    const peeked = await limit(async (signal) => {
+       let response: Response;
+       try {
+         response = await request(url, {
+@@ -406,6 +437,10 @@
+       if (response.status === 304 && doc) {
+         return hit(touched(name, keyOf(url, accept), doc, response));
+       }
++      if (response.status === 404) {
++        missed = true;
++        return undefined;
++      }
+       if (!response.ok && isThrottle(response.status)) signal.throttled();
+       if (!response.ok || !response.body) return undefined;
+       const [bytes, size] = await read(response, accept === FULL ? FULL_HUGE : HUGE);
+@@ -413,6 +448,8 @@
+       if (bytes === undefined) return undefined;
+       return viewOf(url, keep(url, accept, response, bytes));
+     });
++    if (missed && moveOnMiss(name, url)) return await peek(name, accept);
++    return peeked;
+   }
+ 
+   /**
+diff --git a/src/registry-pool.ts b/src/registry-pool.ts
+--- a/src/registry-pool.ts
++++ b/src/registry-pool.ts
+@@ -47,6 +47,7 @@
+ export interface WorkerData {
+   registry: string;
+   scopes?: Record<string, string>;
++  fallback?: string;
+   auth?: Record<string, string>;
+   concurrency: number;
+   start: number;
+@@ -174,6 +175,7 @@
+         const workerData: WorkerData = {
+           registry: local.base,
+           scopes: options.scopes,
++          fallback: options.fallback,
+           auth: options.auth,
+           concurrency: max,
+           start,
+diff --git a/src/api.ts b/src/api.ts
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -1000,14 +1000,14 @@
+ 
+ /** The inputs that are not files. */
+ function settingsIn(ctx: Context): Omit<Inputs, "lock" | "manifest" | "workspaces"> {
+-  const { registry, scopes, hoist } = settings(ctx);
++  const { registry, scopes, fallback, hoist } = settings(ctx);
+   return {
+     production: ctx.options.production === true,
+     hoist,
+     // The store the install uses, defaults included: `inputsHash` resolves it, and a default
+     // resolved from "" would be the cwd.
+     store: storeOf(ctx),
+-    hosts: [registry, scopes],
++    hosts: fallback ? [registry, scopes, fallback] : [registry, scopes],
+     platform: currentPlatform(),
+   };
+ }
+@@ -2129,7 +2129,7 @@
+     ctx.early = undefined;
+     return await early;
+   }
+-  const { registry, scopes, auth, before, releaseAgeExclude: exclude } = settings(ctx);
++  const { registry, scopes, fallback, auth, before, releaseAgeExclude: exclude } = settings(ctx);
+   const { offline, preferOffline } = settings(ctx);
+   const mode = offline ? "only" : preferOffline ? "prefer" : "revalidate";
+   const { createDocumentCache, metadataDir } = await import("./metadata.ts");
+@@ -2144,6 +2144,7 @@
+     ? loaded.createRegistryPool({
+         registry,
+         scopes,
++        fallback,
+         auth,
+         before,
+         exclude,
+@@ -2159,6 +2160,7 @@
+         ...createRegistry({
+           registry,
+           scopes,
++          fallback,
+           auth,
+           before,
+           exclude,

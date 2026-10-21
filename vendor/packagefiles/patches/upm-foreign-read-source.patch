@@ -1,0 +1,53 @@
+diff --git a/src/foreign-lock.ts b/src/foreign-lock.ts
+--- a/src/foreign-lock.ts
++++ b/src/foreign-lock.ts
+@@ -23,7 +23,7 @@
+ }
+ 
+ /** One package as the file records it, edges already exact versions. */
+-interface Node {
++export interface Node {
+   /** What it is installed as. */
+   name: string;
+   /** The registry package, when `name` is an alias for it. */
+@@ -42,7 +42,7 @@
+   libc?: string[];
+ }
+ 
+-interface Source {
++export interface Source {
+   nodes: Node[];
+   /** The ranges the file recorded for the root: what package.json is held to. */
+   specs: RootSpecs;
+@@ -103,8 +103,20 @@
+     if ((error as { code?: string }).code === "ELOCK") throw error;
+     throw fail(`${file} cannot be read: ${(error as Error).message}`);
+   }
+-  holdTo(file, source, manifest, (name) => values(undefined, name));
+-  const read = build(file, source, manifest, baseFor);
++  return readSource(file, source, manifest, baseFor, values);
++}
++
++/** `readForeign` past the parse: a `Source` read by the caller, held to package.json and mapped. */
++export function readSource(
++  file: string,
++  source: Source,
++  manifest: RootManifest,
++  baseFor: BaseFor,
++  values: TopOverrides["values"] = () => [],
++): ForeignLock {
++  const named = file as ForeignFile;
++  holdTo(named, source, manifest, (name) => values(undefined, name));
++  const read = build(named, source, manifest, baseFor);
+   // Each pin held as upm.lock's are: to the version, and the package, package.json asks for.
+   const { lock } = read;
+   const fits = (dependencies: Record<string, string>) =>
+@@ -116,7 +128,7 @@
+   if (!fits(pins)) {
+     const name = Object.keys(pins).find((name) => !fits({ [name]: pins[name]! }));
+     const what = "a version or package that package.json does not allow";
+-    throw fail(`${file} locks ${name} to ${what}: ${redo(file)}`);
++    throw fail(`${file} locks ${name} to ${what}: ${redo(named)}`);
+   }
+   return read;
+ }

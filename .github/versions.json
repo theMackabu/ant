@@ -1,6 +1,5 @@
 {
   "tools": {
-    "zig": "0.16.0",
     "llvm": "21",
     "node": "22"
   },
@@ -11,7 +10,6 @@
     "linux-glibc-x64": {
       "os_type": "linux-glibc",
       "arch": "x86_64",
-      "zig_target": "x86_64-linux-gnu",
       "artifact_name": "ant-linux-x64",
       "binary_name": "ant",
       "deps": [],
@@ -22,7 +20,6 @@
     "linux-glibc-aarch64": {
       "os_type": "linux-glibc",
       "arch": "aarch64",
-      "zig_target": "aarch64-linux-gnu",
       "artifact_name": "ant-linux-aarch64",
       "binary_name": "ant",
       "deps": [],
@@ -33,7 +30,6 @@
     "linux-musl-x64": {
       "os_type": "linux-musl",
       "arch": "x86_64",
-      "zig_target": "x86_64-linux-musl",
       "artifact_name": "ant-linux-x64-musl",
       "binary_name": "ant",
       "deps": ["zlib"],
@@ -44,7 +40,6 @@
     "linux-musl-aarch64": {
       "os_type": "linux-musl",
       "arch": "aarch64",
-      "zig_target": "aarch64-linux-musl",
       "artifact_name": "ant-linux-aarch64-musl",
       "binary_name": "ant",
       "deps": ["zlib"],
@@ -55,7 +50,6 @@
     "macos-x64": {
       "os_type": "macos",
       "arch": "x86_64",
-      "zig_target": "x86_64-macos",
       "artifact_name": "ant-darwin-x64",
       "binary_name": "ant",
       "deps": [],
@@ -66,7 +60,6 @@
     "macos-aarch64": {
       "os_type": "macos",
       "arch": "aarch64",
-      "zig_target": "aarch64-macos",
       "artifact_name": "ant-darwin-aarch64",
       "binary_name": "ant",
       "deps": [],
@@ -77,7 +70,6 @@
     "windows-x64": {
       "os_type": "windows",
       "arch": "x86_64",
-      "zig_target": "x86_64-windows-gnu",
       "artifact_name": "ant-windows-x64",
       "binary_name": "ant.exe",
       "deps": [],
