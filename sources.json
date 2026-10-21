@@ -141,7 +141,7 @@
   },
   "builtin_deps": {
     "patterns": [
-      "src/pkg/*.ts"
+      "src/pkg/**/*.ts"
     ],
     "exclude": []
   }
