@@ -1,0 +1,57 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "name": "esbuild",
+    "specs": {
+      "dependencies": {
+        "nanoid": "^5.1.6",
+        "react": "^19.2.4",
+        "rolldown": "^1.0.0-rc.6"
+      }
+    },
+    "dependencies": {
+      "nanoid": "5.1.16",
+      "react": "19.2.7",
+      "rolldown": "1.1.4"
+    }
+  },
+  "packages": {
+    "@oxc-project/types@0.138.0": {
+      "integrity": "sha512-1a7ZKmrRTCoN1XMZ4L0PyyqrMnrNlLyPuOkdSX2MZg7IiIGRUyurNhAm73ptDOraoBcIordsIGKNPKUzy3ZmfA=="
+    },
+    "@rolldown/binding-darwin-arm64@1.1.4": {
+      "integrity": "sha512-aUi+HBvmYb7j8krl1+qJgkG8C17fO79gk3c+jPw4S8glRFc1DTija9S3EyaTSQUm5GJXYKDAsugBEhFHH2vYiQ==",
+      "os": [
+        "darwin"
+      ],
+      "cpu": [
+        "arm64"
+      ]
+    },
+    "@rolldown/pluginutils@1.0.1": {
+      "integrity": "sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw=="
+    },
+    "nanoid@5.1.16": {
+      "integrity": "sha512-kVrnsrJqMR8+oLJnGEmSWw9BivK5mt7H3FZatVRjrc5wGqFYuBxX1yG7+A7Gi5AefkX6t/oCkizcQgpu0cY1dQ==",
+      "bin": {
+        "nanoid": "bin/nanoid.js"
+      }
+    },
+    "react@19.2.7": {
+      "integrity": "sha512-HNe9WslTbXmFK8o8cmwgAeJFSBvt1bPdHCVKtaaV+WlAN36mpT4hcRpwbf3fY56ar2oIXzsBpOAiIRHAdY0OlQ=="
+    },
+    "rolldown@1.1.4": {
+      "integrity": "sha512-IjZYiLxZwpnhwhdBH2ugdTGVSdhCQUmLxLoqyjiL0JxYjyRst+5a0P3xfrTxJ5F638j4Mvvw5FAX5XE6eHpXbA==",
+      "dependencies": {
+        "@oxc-project/types": "0.138.0",
+        "@rolldown/pluginutils": "1.0.1"
+      },
+      "optionalDependencies": {
+        "@rolldown/binding-darwin-arm64": "1.1.4"
+      },
+      "bin": {
+        "rolldown": "./bin/cli.mjs"
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "specs": {
+      "dependencies": {
+        "zod": "^4.5.2"
+      }
+    },
+    "dependencies": {
+      "zod": "4.5.2"
+    }
+  },
+  "packages": {
+    "zod@4.5.2": {
+      "integrity": "sha512-XkYXCol10+ba/6F/cueWV+TezUeOqXW0hdeJt5CdXjTYeAgAQg5N03RQdJ80mhfFE72+pblvYMW4wy2Qp4Qbrg=="
+    }
+  }
+}

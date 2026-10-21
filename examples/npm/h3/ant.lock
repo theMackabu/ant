@@ -1,0 +1,46 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "name": "h3",
+    "specs": {
+      "dependencies": {
+        "h3": "^2.0.1-rc.20"
+      }
+    },
+    "dependencies": {
+      "h3": "2.0.7"
+    }
+  },
+  "packages": {
+    "h3@2.0.7": {
+      "resolved": "https://registry.npmjs.org/h3/-/h3-2.0.7.tgz",
+      "integrity": "sha512-00SVloxtViij9/JBsc/Ayd9H7GLXWB0KRfkReWG0dDwuUFKUKRrNGM3Csu+KZgppi5DD8Y1KpnfjtudWaRCoiQ==",
+      "dependencies": {
+        "rou3": "1.0.0",
+        "srvx": "1.0.6"
+      },
+      "bin": {
+        "h3": "bin/h3.mjs"
+      },
+      "peerDependencies": {
+        "crossws": "^0.4.12",
+        "ocache": ">=0.3.0"
+      },
+      "peers": {
+        "crossws": "optional",
+        "ocache": "optional"
+      }
+    },
+    "rou3@1.0.0": {
+      "resolved": "https://registry.npmjs.org/rou3/-/rou3-1.0.0.tgz",
+      "integrity": "sha512-ySeaQkSrua+ut9g+65I7FHqOFBaY8tV0FmccXItoq0q21se32Q3u4YiW7/RqXSosWgYJaaKwRHXy3BST9PeCNQ=="
+    },
+    "srvx@1.0.6": {
+      "resolved": "https://registry.npmjs.org/srvx/-/srvx-1.0.6.tgz",
+      "integrity": "sha512-QeTKgAhk8OSsfeq60bl3wuVs9PmBftzmk7owBInA/F1YQne+TRw0UcPymNpURldAmx8hfmM2PNNGH/zgo3GpLA==",
+      "bin": {
+        "srvx": "bin/srvx.mjs"
+      }
+    }
+  }
+}

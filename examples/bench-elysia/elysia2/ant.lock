@@ -1,0 +1,49 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "name": "elysia",
+    "specs": {
+      "dependencies": {
+        "elysia": "2.0.0-exp.38"
+      }
+    },
+    "dependencies": {
+      "elysia": "2.0.0-exp.38"
+    }
+  },
+  "packages": {
+    "deuri@2.0.1": {
+      "integrity": "sha512-TU9kISfgYtvp+MUh7+56vonj+rL/mr9R9MkzAthjUBhppukdusZtrxpL2bwSmFA8siWmngTtjJaydy5BOOvlEg=="
+    },
+    "elysia@2.0.0-exp.38": {
+      "integrity": "sha512-68YjpwneyFzdPao6cXpDMuTJaqoNOURAzfmhtSfuACdiV96hHUG8hX3eGeDcRpaiaqoNIx9TVGj6/5bkM4g0eQ==",
+      "dependencies": {
+        "deuri": "2.0.1",
+        "exact-mirror": "1.2.2",
+        "memoirist": "1.1.0",
+        "openapi-types": "12.1.3",
+        "typebox": "1.3.4"
+      },
+      "peerDependencies": {
+        "openapi-types": ">= 12.0.0",
+        "typebox": ">= 1.3.0"
+      },
+      "peers": {
+        "openapi-types": "required",
+        "typebox": "required"
+      }
+    },
+    "exact-mirror@1.2.2": {
+      "integrity": "sha512-jUlRkZOPN3rCAy4kmZeD2HCnoXwJ6KlWNkEBJ3sEJ2rbLSU+tN60hY7XzPZkImRQOJczllvOBYTYEJTYScPh5Q=="
+    },
+    "memoirist@1.1.0": {
+      "integrity": "sha512-9KhJFSx4d/zxM++Rsb5yC3gqg+9boFHpDLcV7NkTWIYfUb3tiRPV4/EIMgw2lX7RdZz04xHMe6JTyJBpUUc/Og=="
+    },
+    "openapi-types@12.1.3": {
+      "integrity": "sha512-N4YtSYJqghVu4iek2ZUvcN/0aqH1kRDuNqzcycDxhOUpg7GdvLa2F3DgS6yBNhInhv2r/6I0Flkn7CqL8+nIcw=="
+    },
+    "typebox@1.3.4": {
+      "integrity": "sha512-j3MCKfJMIHdrr4ZQMzaJnvXrUbMNuncwssmQkny3Cv5vxrDE1o1WhZFEqGSlU884xtYS5sAa3O/XsUPbUbPWKQ=="
+    }
+  }
+}

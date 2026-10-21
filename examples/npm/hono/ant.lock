@@ -1,0 +1,32 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "specs": {
+      "dependencies": {
+        "@ant/hono": "^0.0.5",
+        "hono": "^4.12.9"
+      }
+    },
+    "dependencies": {
+      "@ant/hono": "0.0.5",
+      "hono": "4.13.7"
+    }
+  },
+  "packages": {
+    "@ant/hono@0.0.5": {
+      "integrity": "sha512-08nZiCRbSBl9dxap3odHpmrQudLYi2vfexM8l7dSZfjcCbse39T+FrImwDLzPcW6ROXKgbC2SiRRE7xDhflcRg==",
+      "dependencies": {
+        "hono": "4.13.7"
+      },
+      "peerDependencies": {
+        "hono": ">=4.6.0"
+      },
+      "peers": {
+        "hono": "required"
+      }
+    },
+    "hono@4.13.7": {
+      "integrity": "sha512-c8/gF9ac8Y78/agExVocyLevgR+JlpNB444Py0FSX8pJoPdYUfUzRcXtYEYGwt6l19qIlVZPN5Mfsw9jFShmQQ=="
+    }
+  }
+}

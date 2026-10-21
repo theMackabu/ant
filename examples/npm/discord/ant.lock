@@ -1,0 +1,282 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "name": "discord.js",
+    "specs": {
+      "dependencies": {
+        "@ai-sdk/openai": "^3.0.65",
+        "ai": "^6.0.191",
+        "discord.js": "^14.26.4"
+      }
+    },
+    "dependencies": {
+      "@ai-sdk/openai": "3.0.130",
+      "ai": "6.0.311",
+      "discord.js": "14.27.0"
+    }
+  },
+  "packages": {
+    "@ai-sdk/gateway@3.0.218": {
+      "resolved": "https://registry.npmjs.org/@ai-sdk/gateway/-/gateway-3.0.218.tgz",
+      "integrity": "sha512-EA8pGRl4BJ5c7kwexSgkUSHtPb5j9DVtJHRXVSzlVix3ClOAo1z1a4Pn1KPz+8QLJUObopsrIDJpdvQcGAR7Cg==",
+      "dependencies": {
+        "@ai-sdk/provider": "3.0.19",
+        "@ai-sdk/provider-utils": "4.0.61",
+        "@vercel/oidc": "3.2.0",
+        "zod": "4.6.7"
+      },
+      "peerDependencies": {
+        "zod": "^3.25.76 || ^4.1.8"
+      },
+      "peers": {
+        "zod": "required"
+      }
+    },
+    "@ai-sdk/openai@3.0.130": {
+      "resolved": "https://registry.npmjs.org/@ai-sdk/openai/-/openai-3.0.130.tgz",
+      "integrity": "sha512-4v0HiJBv2Y/e3HBuKKbcXVCMQHJLVcO4BUMs019+vGOIMCLSwDrugMIM3CWmMkGHwhqyHWvPUUMSdlJciSH6Eg==",
+      "dependencies": {
+        "@ai-sdk/provider": "3.0.19",
+        "@ai-sdk/provider-utils": "4.0.61",
+        "zod": "4.6.7"
+      },
+      "peerDependencies": {
+        "zod": "^3.25.76 || ^4.1.8"
+      },
+      "peers": {
+        "zod": "required"
+      }
+    },
+    "@ai-sdk/provider-utils@4.0.61": {
+      "resolved": "https://registry.npmjs.org/@ai-sdk/provider-utils/-/provider-utils-4.0.61.tgz",
+      "integrity": "sha512-spROQutwsgm9ezXdoKP5PUPuHnNqMnuFqjioihmYDMJaaJnknYiEXYctH9hL4NJjaHuQBIl4ageCNsIZrQ+yCg==",
+      "dependencies": {
+        "@ai-sdk/provider": "3.0.19",
+        "@standard-schema/spec": "1.1.0",
+        "eventsource-parser": "3.1.1",
+        "undici": "6.29.1",
+        "zod": "4.6.7"
+      },
+      "peerDependencies": {
+        "zod": "^3.25.76 || ^4.1.8"
+      },
+      "peers": {
+        "zod": "required"
+      }
+    },
+    "@ai-sdk/provider@3.0.19": {
+      "resolved": "https://registry.npmjs.org/@ai-sdk/provider/-/provider-3.0.19.tgz",
+      "integrity": "sha512-5lWq7zSfRaU5ylDESn3sDQjgGl2AI1vjZKO/6JY3aFW70ct4zcP1kN+ZUYOuTXr28fVsYbyu2YFhddLdIgQFZQ==",
+      "dependencies": {
+        "json-schema": "0.4.0"
+      }
+    },
+    "@discordjs/builders@1.14.1": {
+      "resolved": "https://registry.npmjs.org/@discordjs/builders/-/builders-1.14.1.tgz",
+      "integrity": "sha512-gSKkhXLqs96TCzk66VZuHHl8z2bQMJFGwrXC0f33ngK+FLNau4hU1PYny3DNJfNdSH+gVMzE85/d5FQ2BpcNwQ==",
+      "dependencies": {
+        "@discordjs/formatters": "0.6.2",
+        "@discordjs/util": "1.2.0",
+        "@sapphire/shapeshift": "4.0.0",
+        "discord-api-types": "0.38.57",
+        "fast-deep-equal": "3.1.3",
+        "ts-mixer": "6.0.4",
+        "tslib": "2.8.1"
+      }
+    },
+    "@discordjs/collection@1.5.3": {
+      "resolved": "https://registry.npmjs.org/@discordjs/collection/-/collection-1.5.3.tgz",
+      "integrity": "sha512-SVb428OMd3WO1paV3rm6tSjM4wC+Kecaa1EUGX7vc6/fddvw/6lg90z4QtCqm21zvVe92vMMDt9+DkIvjXImQQ=="
+    },
+    "@discordjs/collection@2.1.1": {
+      "resolved": "https://registry.npmjs.org/@discordjs/collection/-/collection-2.1.1.tgz",
+      "integrity": "sha512-LiSusze9Tc7qF03sLCujF5iZp7K+vRNEDBZ86FT9aQAv3vxMLihUvKvpsCWiQ2DJq1tVckopKm1rxomgNUc9hg=="
+    },
+    "@discordjs/formatters@0.6.2": {
+      "resolved": "https://registry.npmjs.org/@discordjs/formatters/-/formatters-0.6.2.tgz",
+      "integrity": "sha512-y4UPwWhH6vChKRkGdMB4odasUbHOUwy7KL+OVwF86PvT6QVOwElx+TiI1/6kcmcEe+g5YRXJFiXSXUdabqZOvQ==",
+      "dependencies": {
+        "discord-api-types": "0.38.57"
+      }
+    },
+    "@discordjs/rest@2.6.3": {
+      "resolved": "https://registry.npmjs.org/@discordjs/rest/-/rest-2.6.3.tgz",
+      "integrity": "sha512-wvOylxNYJkwKjctS/Mn5GP1w9r3/rzyH+ThD1JlAca6zEdlHs8QWBBUQJpU5Q+W6DoIj/Ljh1IPlZs7hTU+UAg==",
+      "dependencies": {
+        "@discordjs/collection": "2.1.1",
+        "@discordjs/util": "1.2.0",
+        "@sapphire/async-queue": "1.5.5",
+        "@sapphire/snowflake": "3.5.5",
+        "@vladfrangu/async_event_emitter": "2.4.7",
+        "discord-api-types": "0.38.57",
+        "magic-bytes.js": "1.13.1",
+        "tslib": "2.8.1",
+        "undici": "6.29.1"
+      }
+    },
+    "@discordjs/util@1.2.0": {
+      "resolved": "https://registry.npmjs.org/@discordjs/util/-/util-1.2.0.tgz",
+      "integrity": "sha512-3LKP7F2+atl9vJFhaBjn4nOaSWahZ/yWjOvA4e5pnXkt2qyXRCHLxoBQy81GFtLGCq7K9lPm9R517M1U+/90Qg==",
+      "dependencies": {
+        "discord-api-types": "0.38.57"
+      }
+    },
+    "@discordjs/ws@1.2.3": {
+      "resolved": "https://registry.npmjs.org/@discordjs/ws/-/ws-1.2.3.tgz",
+      "integrity": "sha512-wPlQDxEmlDg5IxhJPuxXr3Vy9AjYq5xCvFWGJyD7w7Np8ZGu+Mc+97LCoEc/+AYCo2IDpKioiH0/c/mj5ZR9Uw==",
+      "dependencies": {
+        "@discordjs/collection": "2.1.1",
+        "@discordjs/rest": "2.6.3",
+        "@discordjs/util": "1.2.0",
+        "@sapphire/async-queue": "1.5.5",
+        "@types/ws": "8.18.2",
+        "@vladfrangu/async_event_emitter": "2.4.7",
+        "discord-api-types": "0.38.57",
+        "tslib": "2.8.1",
+        "ws": "8.22.0"
+      }
+    },
+    "@opentelemetry/api@1.9.1": {
+      "resolved": "https://registry.npmjs.org/@opentelemetry/api/-/api-1.9.1.tgz",
+      "integrity": "sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q=="
+    },
+    "@sapphire/async-queue@1.5.5": {
+      "resolved": "https://registry.npmjs.org/@sapphire/async-queue/-/async-queue-1.5.5.tgz",
+      "integrity": "sha512-cvGzxbba6sav2zZkH8GPf2oGk9yYoD5qrNWdu9fRehifgnFZJMV+nuy2nON2roRO4yQQ+v7MK/Pktl/HgfsUXg=="
+    },
+    "@sapphire/shapeshift@4.0.0": {
+      "resolved": "https://registry.npmjs.org/@sapphire/shapeshift/-/shapeshift-4.0.0.tgz",
+      "integrity": "sha512-d9dUmWVA7MMiKobL3VpLF8P2aeanRTu6ypG2OIaEv/ZHH/SUQ2iHOVyi5wAPjQ+HmnMuL0whK9ez8I/raWbtIg==",
+      "dependencies": {
+        "fast-deep-equal": "3.1.3",
+        "lodash": "4.18.1"
+      }
+    },
+    "@sapphire/snowflake@3.5.5": {
+      "resolved": "https://registry.npmjs.org/@sapphire/snowflake/-/snowflake-3.5.5.tgz",
+      "integrity": "sha512-xzvBr1Q1c4lCe7i6sRnrofxeO1QTP/LKQ6A6qy0iB4x5yfiSfARMEQEghojzTNALDTcv8En04qYNIco9/K9eZQ=="
+    },
+    "@standard-schema/spec@1.1.0": {
+      "resolved": "https://registry.npmjs.org/@standard-schema/spec/-/spec-1.1.0.tgz",
+      "integrity": "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="
+    },
+    "@types/node@26.6.5": {
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-26.6.5.tgz",
+      "integrity": "sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg==",
+      "dependencies": {
+        "undici-types": "8.9.0"
+      }
+    },
+    "@types/ws@8.18.2": {
+      "resolved": "https://registry.npmjs.org/@types/ws/-/ws-8.18.2.tgz",
+      "integrity": "sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==",
+      "dependencies": {
+        "@types/node": "26.6.5"
+      }
+    },
+    "@vercel/oidc@3.2.0": {
+      "resolved": "https://registry.npmjs.org/@vercel/oidc/-/oidc-3.2.0.tgz",
+      "integrity": "sha512-UycprH3T6n3jH0k44NHMa7pnFHGu/N05MjojYr+Mc6I7obkoLIJujSWwin1pCvdy/eOxrI/l3uDLQsmcrOb4ug=="
+    },
+    "@vladfrangu/async_event_emitter@2.4.7": {
+      "resolved": "https://registry.npmjs.org/@vladfrangu/async_event_emitter/-/async_event_emitter-2.4.7.tgz",
+      "integrity": "sha512-Xfe6rpCTxSxfbswi/W/Pz7zp1WWSNn4A0eW4mLkQUewCrXXtMj31lCg+iQyTkh/CkusZSq9eDflu7tjEDXUY6g=="
+    },
+    "ai@6.0.311": {
+      "resolved": "https://registry.npmjs.org/ai/-/ai-6.0.311.tgz",
+      "integrity": "sha512-KAq15radG9/R85sflVG+5NqsJg2kJCyTl+qiPKMElCxdNzDobMwJoHnh9Tydj76t90f/b6IdUZcTdlRYL8bcEA==",
+      "dependencies": {
+        "@ai-sdk/gateway": "3.0.218",
+        "@ai-sdk/provider": "3.0.19",
+        "@ai-sdk/provider-utils": "4.0.61",
+        "@opentelemetry/api": "1.9.1",
+        "zod": "4.6.7"
+      },
+      "peerDependencies": {
+        "zod": "^3.25.76 || ^4.1.8"
+      },
+      "peers": {
+        "zod": "required"
+      }
+    },
+    "discord-api-types@0.38.57": {
+      "resolved": "https://registry.npmjs.org/discord-api-types/-/discord-api-types-0.38.57.tgz",
+      "integrity": "sha512-R1CTSSt4RshqCq23j2Xq2ZscvzB4LzG9OB1CYQdKUGdw8Ti/oF/72EEtK2mNpagG/Vj9NcBT7dw9lKLf+Dacfg=="
+    },
+    "discord.js@14.27.0": {
+      "resolved": "https://registry.npmjs.org/discord.js/-/discord.js-14.27.0.tgz",
+      "integrity": "sha512-qHbFlFG2N7y3LjPySYsL6A1+BnX6bkTVgo842EX0CqVPk/KTMwZkojPHEXKsQUpWZNyz5BISNHK1cPpQw0+m4A==",
+      "dependencies": {
+        "@discordjs/builders": "1.14.1",
+        "@discordjs/collection": "1.5.3",
+        "@discordjs/formatters": "0.6.2",
+        "@discordjs/rest": "2.6.3",
+        "@discordjs/util": "1.2.0",
+        "@discordjs/ws": "1.2.3",
+        "@sapphire/snowflake": "3.5.5",
+        "discord-api-types": "0.38.57",
+        "fast-deep-equal": "3.1.3",
+        "lodash.snakecase": "4.1.1",
+        "magic-bytes.js": "1.13.1",
+        "tslib": "2.8.1",
+        "undici": "6.29.1"
+      }
+    },
+    "eventsource-parser@3.1.1": {
+      "resolved": "https://registry.npmjs.org/eventsource-parser/-/eventsource-parser-3.1.1.tgz",
+      "integrity": "sha512-EKN1vKAMcZ8MlYMpaNuxN6R9yakzH6uajHcHVTqWJzvu5pWw9DyhbP35HH8MVBQ+dZjAfDxk+A8NiR9KWaXiyQ=="
+    },
+    "fast-deep-equal@3.1.3": {
+      "resolved": "https://registry.npmjs.org/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz",
+      "integrity": "sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q=="
+    },
+    "json-schema@0.4.0": {
+      "resolved": "https://registry.npmjs.org/json-schema/-/json-schema-0.4.0.tgz",
+      "integrity": "sha512-es94M3nTIfsEPisRafak+HDLfHXnKBhV3vU5eqPcS3flIWqcxJWgXHXiey3YrpaNsanY5ei1VoYEbOzijuq9BA=="
+    },
+    "lodash.snakecase@4.1.1": {
+      "resolved": "https://registry.npmjs.org/lodash.snakecase/-/lodash.snakecase-4.1.1.tgz",
+      "integrity": "sha512-QZ1d4xoBHYUeuouhEq3lk3Uq7ldgyFXGBhg04+oRLnIz8o9T65Eh+8YdroUwn846zchkA9yDsDl5CVVaV2nqYw=="
+    },
+    "lodash@4.18.1": {
+      "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.18.1.tgz",
+      "integrity": "sha512-dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q=="
+    },
+    "magic-bytes.js@1.13.1": {
+      "resolved": "https://registry.npmjs.org/magic-bytes.js/-/magic-bytes.js-1.13.1.tgz",
+      "integrity": "sha512-x5sn4UX2k5gCWlcfmoFwG4TPie8+dctESyqOBdhB5p6MsgWXdBKGmt9nXPObj/JI50TTL928lc5Yt1WntMn1bw=="
+    },
+    "ts-mixer@6.0.4": {
+      "resolved": "https://registry.npmjs.org/ts-mixer/-/ts-mixer-6.0.4.tgz",
+      "integrity": "sha512-ufKpbmrugz5Aou4wcr5Wc1UUFWOLhq+Fm6qa6P0w0K5Qw2yhaUoiWszhCVuNQyNwrlGiscHOmqYoAox1PtvgjA=="
+    },
+    "tslib@2.8.1": {
+      "resolved": "https://registry.npmjs.org/tslib/-/tslib-2.8.1.tgz",
+      "integrity": "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="
+    },
+    "undici-types@8.9.0": {
+      "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-8.9.0.tgz",
+      "integrity": "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="
+    },
+    "undici@6.29.1": {
+      "resolved": "https://registry.npmjs.org/undici/-/undici-6.29.1.tgz",
+      "integrity": "sha512-EvRlUt/QqAEvXdQeRMYUfwOQsfzpDztykrG2owGEE/rBOBoYv9uF39ZzsNDh4lTFHhTr2XOZjKkYgueD12ZmGA=="
+    },
+    "ws@8.22.0": {
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.22.0.tgz",
+      "integrity": "sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==",
+      "peerDependencies": {
+        "bufferutil": "^4.0.1",
+        "utf-8-validate": ">=5.0.2"
+      },
+      "peers": {
+        "bufferutil": "optional",
+        "utf-8-validate": "optional"
+      }
+    },
+    "zod@4.6.7": {
+      "resolved": "https://registry.npmjs.org/zod/-/zod-4.6.7.tgz",
+      "integrity": "sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg=="
+    }
+  }
+}

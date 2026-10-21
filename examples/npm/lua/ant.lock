@@ -1,0 +1,19 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "name": "lua",
+    "specs": {
+      "dependencies": {
+        "@doridian/luajs": "^1.0.8"
+      }
+    },
+    "dependencies": {
+      "@doridian/luajs": "1.0.8"
+    }
+  },
+  "packages": {
+    "@doridian/luajs@1.0.8": {
+      "integrity": "sha512-ZbKRCs9KhW72ss0x/ZJJdO9NWr3Qfa3aEWPKiBP88emgKmux3k2JcYiN22kS2zasNxGUIVe600vD7ji6qMAXuA=="
+    }
+  }
+}

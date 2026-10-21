@@ -1,0 +1,41 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "name": "better-result",
+    "specs": {
+      "dependencies": {
+        "better-result": "^3.0.1"
+      },
+      "devDependencies": {
+        "@types/node": "^24.0.0",
+        "typescript": "^5.9.0"
+      }
+    },
+    "dependencies": {
+      "@types/node": "24.13.3",
+      "better-result": "3.0.1",
+      "typescript": "5.9.3"
+    }
+  },
+  "packages": {
+    "@types/node@24.13.3": {
+      "integrity": "sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q==",
+      "dependencies": {
+        "undici-types": "7.18.2"
+      }
+    },
+    "better-result@3.0.1": {
+      "integrity": "sha512-rnCeqEXkKPHmz5MO5ZroPRDyHe4YvlNPyy7qj8cVcWs/GnvSvC3086G74/220W+wWcIWlXgzvcjskFV0A4blUQ=="
+    },
+    "typescript@5.9.3": {
+      "integrity": "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==",
+      "bin": {
+        "tsc": "bin/tsc",
+        "tsserver": "bin/tsserver"
+      }
+    },
+    "undici-types@7.18.2": {
+      "integrity": "sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w=="
+    }
+  }
+}

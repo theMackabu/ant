@@ -1,0 +1,58 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "specs": {
+      "dependencies": {
+        "react": "^19.2.8",
+        "react-dom": "^19.2.8"
+      },
+      "devDependencies": {
+        "esbuild": "^0.28.2"
+      }
+    },
+    "dependencies": {
+      "esbuild": "0.28.2",
+      "react": "19.2.8",
+      "react-dom": "19.2.8"
+    }
+  },
+  "packages": {
+    "@esbuild/darwin-arm64@0.28.2": {
+      "integrity": "sha512-n4KqkOQrraxHJcgjM1RvwbigfQKIKJVpM7xp+KsxiyUSrRdIXnt73VhrPAx0fV44hgfmIVKjxMN9J1t5jySVkw==",
+      "os": [
+        "darwin"
+      ],
+      "cpu": [
+        "arm64"
+      ]
+    },
+    "esbuild@0.28.2": {
+      "integrity": "sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA==",
+      "optionalDependencies": {
+        "@esbuild/darwin-arm64": "0.28.2"
+      },
+      "bin": {
+        "esbuild": "bin/esbuild"
+      }
+    },
+    "react-dom@19.2.8": {
+      "integrity": "sha512-rVprimfGBG3DR+Tq0IQG2DT5PxKth1WIGDmj5yPmlzr4YBe7uyE+Du4oVqTDXZSHGGGXRtTJEGSSePyQCMBglQ==",
+      "dependencies": {
+        "react": "19.2.8",
+        "scheduler": "0.27.0"
+      },
+      "peerDependencies": {
+        "react": "^19.2.8"
+      },
+      "peers": {
+        "react": "required"
+      }
+    },
+    "react@19.2.8": {
+      "integrity": "sha512-PWaYA1L/q9u2u7xYQi+Y3L3Yfnie7XyLeaJICV1MGD6LprsBxcAqGjYyr0eY3p+QdsA+x/Irkt4Qif8D63+Sbw=="
+    },
+    "scheduler@0.27.0": {
+      "integrity": "sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q=="
+    }
+  }
+}

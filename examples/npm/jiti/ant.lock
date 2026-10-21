@@ -1,0 +1,21 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "specs": {
+      "dependencies": {
+        "jiti": "^2.7.0"
+      }
+    },
+    "dependencies": {
+      "jiti": "2.7.0"
+    }
+  },
+  "packages": {
+    "jiti@2.7.0": {
+      "integrity": "sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==",
+      "bin": {
+        "jiti": "lib/jiti-cli.mjs"
+      }
+    }
+  }
+}

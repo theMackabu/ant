@@ -1,0 +1,29 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "name": "react",
+    "specs": {
+      "dependencies": {
+        "esbuild-wasm": "^0.27.3",
+        "react": "^19.2.4"
+      }
+    },
+    "dependencies": {
+      "esbuild-wasm": "0.27.7",
+      "react": "19.3.1"
+    }
+  },
+  "packages": {
+    "esbuild-wasm@0.27.7": {
+      "resolved": "https://registry.npmjs.org/esbuild-wasm/-/esbuild-wasm-0.27.7.tgz",
+      "integrity": "sha512-1k03e2/tGz+sLz3/xzoZmUsIqtaGIvJa8k4UqUeqCUry83nHmlxQYZUUES0WBFUYilSQUf7nDUGAciIIklljSg==",
+      "bin": {
+        "esbuild": "bin/esbuild"
+      }
+    },
+    "react@19.3.1": {
+      "resolved": "https://registry.npmjs.org/react/-/react-19.3.1.tgz",
+      "integrity": "sha512-QNhWdt7nrgVWWQG58QuGsAR3jv3Hbe4mb4vz7w2csnHavciZJgda1CPNaldF6eVxv90ud3jUXpKlHL69gO38yw=="
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "name": "bench-ssr",
+    "specs": {
+      "dependencies": {
+        "react": "^19.2.8",
+        "react-dom": "^19.2.8"
+      }
+    },
+    "dependencies": {
+      "react": "19.3.0",
+      "react-dom": "19.3.0"
+    }
+  },
+  "packages": {
+    "react-dom@19.3.0": {
+      "integrity": "sha512-JDk8dgif51OjFoDE70+OT9ICyYr+69HlmihNwp1+Nsfbna3t5sIiCa9ZJktDmQ4/1b/rn26hIAR2uYXDMr5r0Q==",
+      "dependencies": {
+        "react": "19.3.0",
+        "scheduler": "0.28.0"
+      },
+      "peerDependencies": {
+        "react": "^19.3.0"
+      },
+      "peers": {
+        "react": "required"
+      }
+    },
+    "react@19.3.0": {
+      "integrity": "sha512-E8LUcbtBWt20bbl2YoHfx4ZDBdxVTfOKtCZn9cDSJ4l6/nuoApcpIBcj47t2wZoVX8g2ZHuMHbiShgCR1T5Sog=="
+    },
+    "scheduler@0.28.0": {
+      "integrity": "sha512-juorfCmIkIw8tT+p5BXSm6PJjQF/ycEYmKyzURCIt/RaZIhL+PulbQ9Yu2z1HdOJDdqDTlxA1+xKBmHXJsczAw=="
+    }
+  }
+}

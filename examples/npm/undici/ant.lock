@@ -1,0 +1,20 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "name": "undici",
+    "specs": {
+      "dependencies": {
+        "undici": "^7.24.7"
+      }
+    },
+    "dependencies": {
+      "undici": "7.30.1"
+    }
+  },
+  "packages": {
+    "undici@7.30.1": {
+      "resolved": "https://registry.npmjs.org/undici/-/undici-7.30.1.tgz",
+      "integrity": "sha512-03KrMbjIFDWQR5RNPrSw3bd1r12JpyFQl9/yxjUbJtqkjmllqC5lFjZh6ujeuJCKr8EOQvRW872Oy/az+nLYxg=="
+    }
+  }
+}

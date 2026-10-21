@@ -1,0 +1,20 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "name": "ky",
+    "specs": {
+      "dependencies": {
+        "ky": "^1.14.3"
+      }
+    },
+    "dependencies": {
+      "ky": "1.14.3"
+    }
+  },
+  "packages": {
+    "ky@1.14.3": {
+      "resolved": "https://registry.npmjs.org/ky/-/ky-1.14.3.tgz",
+      "integrity": "sha512-9zy9lkjac+TR1c2tG+mkNSVlyOpInnWdSMiue4F+kq8TwJSgv6o8jhLRg8Ho6SnZ9wOYUq/yozts9qQCfk7bIw=="
+    }
+  }
+}

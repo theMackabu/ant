@@ -1,0 +1,23 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "name": "djot",
+    "specs": {
+      "dependencies": {
+        "@djot/djot": "^0.3.2"
+      }
+    },
+    "dependencies": {
+      "@djot/djot": "0.3.2"
+    }
+  },
+  "packages": {
+    "@djot/djot@0.3.2": {
+      "resolved": "https://registry.npmjs.org/@djot/djot/-/djot-0.3.2.tgz",
+      "integrity": "sha512-joMKR24B8rxueyFiJbpZAqEiypjvOyzTxzkhyr0q5mM/sUBaOD3unna/9IxtOotFugViyYlkIRaiXg3xM//zxg==",
+      "bin": {
+        "djot": "lib/cli.js"
+      }
+    }
+  }
+}

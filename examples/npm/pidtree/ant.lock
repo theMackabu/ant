@@ -1,0 +1,23 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "name": "pidtree",
+    "specs": {
+      "dependencies": {
+        "pidtree": "^0.6.0"
+      }
+    },
+    "dependencies": {
+      "pidtree": "0.6.1"
+    }
+  },
+  "packages": {
+    "pidtree@0.6.1": {
+      "resolved": "https://registry.npmjs.org/pidtree/-/pidtree-0.6.1.tgz",
+      "integrity": "sha512-e0F9AOF1JMrCfBsyJOwU9lNvQ0WtXTq0j/4jk0BQ5JSI9VAybPXmDpPRw/2FQ3e5d3ZFN1mLh7jW99m/jjaptw==",
+      "bin": {
+        "pidtree": "bin/pidtree.js"
+      }
+    }
+  }
+}

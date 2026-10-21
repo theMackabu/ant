@@ -1,0 +1,42 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "name": "esbuild",
+    "specs": {
+      "dependencies": {
+        "esbuild": "^0.27.3",
+        "nanoid": "^5.1.6"
+      }
+    },
+    "dependencies": {
+      "esbuild": "0.27.7",
+      "nanoid": "5.1.16"
+    }
+  },
+  "packages": {
+    "@esbuild/darwin-arm64@0.27.7": {
+      "integrity": "sha512-5lckdqeuBPlKUwvoCXIgI2D9/ABmPq3Rdp7IfL70393YgaASt7tbju3Ac+ePVi3KDH6N2RqePfHnXkaDtY9fkw==",
+      "os": [
+        "darwin"
+      ],
+      "cpu": [
+        "arm64"
+      ]
+    },
+    "esbuild@0.27.7": {
+      "integrity": "sha512-IxpibTjyVnmrIQo5aqNpCgoACA/dTKLTlhMHihVHhdkxKyPO1uBBthumT0rdHmcsk9uMonIWS0m4FljWzILh3w==",
+      "optionalDependencies": {
+        "@esbuild/darwin-arm64": "0.27.7"
+      },
+      "bin": {
+        "esbuild": "bin/esbuild"
+      }
+    },
+    "nanoid@5.1.16": {
+      "integrity": "sha512-kVrnsrJqMR8+oLJnGEmSWw9BivK5mt7H3FZatVRjrc5wGqFYuBxX1yG7+A7Gi5AefkX6t/oCkizcQgpu0cY1dQ==",
+      "bin": {
+        "nanoid": "bin/nanoid.js"
+      }
+    }
+  }
+}
