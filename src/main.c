@@ -57,35 +57,46 @@
 int js_result = EXIT_SUCCESS;
 typedef int (*cmd_fn)(int argc, char **argv);
 
+typedef enum {
+  COMMAND_PKG,
+  COMMAND_NATIVE,
+} command_kind_t;
+
 typedef struct {
   const char *name;
   const char *alias;
   const char *desc;
+  command_kind_t kind;
   cmd_fn fn;
 } subcommand_t;
 
+#define PKG_COMMAND(n, a, d) { .name = #n, .alias = a, .desc = d, .kind = COMMAND_PKG }
+#define NATIVE_COMMAND(n, a, d, f) { .name = #n, .alias = a, .desc = d, .kind = COMMAND_NATIVE, .fn = f }
+
 static const subcommand_t subcommands[] = {
-  {"init",    NULL,      "Create a new package.json",                    pkg_cmd_init},
-  {"install", "i",       "Install dependencies from lockfile",           pkg_cmd_install},
-  {"update",  "up",      "Re-resolve dependencies and refresh lockfile", pkg_cmd_update},
-  {"add",     "a",       "Add a package to dependencies",                pkg_cmd_add},
-  {"remove",  "rm",      "Remove a package from dependencies",           pkg_cmd_remove},
-  {"trust",   NULL,      "Run lifecycle scripts for packages",           pkg_cmd_trust},
-  {"run",     NULL,      "Run a script from package.json",               pkg_cmd_run},
-  {"exec",    "x",       "Run a command from node_modules/.bin",         pkg_cmd_exec},
-  {"login",   NULL,      "Authenticate with ants.land",                  pkg_cmd_login},
-  {"publish", NULL,      "Publish the current package to ants.land",     pkg_cmd_publish},
-  {"config",  NULL,      "Manage package manager settings",              pkg_cmd_config},
-  {"why",     "explain", "Show why a package is installed",              pkg_cmd_why},
-  {"info",    NULL,      "Show package information from registry",       pkg_cmd_info},
-  {"ls",      "list",    "List installed packages",                      pkg_cmd_ls},
-  {"cache",   NULL,      "Manage the package cache",                     pkg_cmd_cache},
-  {"create",  NULL,      "Scaffold a project from a template",           pkg_cmd_create},
-  {"sandbox", NULL,      "Run a script in the Ant sandbox",              ant_sandbox_cmd},
-  {"compile", NULL,      "Compile a script into a standalone executable", ant_cmd_compile},
-  {"upgrade", NULL,      "Upgrade Ant to the latest version",            ant_upgrade},
-  {NULL, NULL, NULL, NULL}
+  PKG_COMMAND(init,       NULL,      "Create a new package.json"),
+  PKG_COMMAND(install,    "i",       "Install dependencies from lockfile"),
+  PKG_COMMAND(update,     "up",      "Re-resolve dependencies and refresh lockfile"),
+  PKG_COMMAND(add,        "a",       "Add a package to dependencies"),
+  PKG_COMMAND(remove,     "rm",      "Remove a package from dependencies"),
+  PKG_COMMAND(trust,      NULL,      "Run lifecycle scripts for packages"),
+  PKG_COMMAND(run,        NULL,      "Run a script from package.json"),
+  PKG_COMMAND(exec,       "x",       "Run a command from node_modules/.bin"),
+  NATIVE_COMMAND(login,   NULL,      "Authenticate with ants.land", pkg_cmd_login),
+  NATIVE_COMMAND(publish, NULL,      "Publish the current package to ants.land", pkg_cmd_publish),
+  PKG_COMMAND(config,     NULL,      "Manage package manager settings"),
+  PKG_COMMAND(why,        "explain", "Show why a package is installed"),
+  PKG_COMMAND(info,       NULL,      "Show package information from registry"),
+  PKG_COMMAND(ls,         "list",    "List installed packages"),
+  PKG_COMMAND(cache,      NULL,      "Manage the package cache"),
+  PKG_COMMAND(create,     NULL,      "Scaffold a project from a template"),
+  NATIVE_COMMAND(sandbox, NULL,      "Run a script in the Ant sandbox", ant_sandbox_cmd),
+  NATIVE_COMMAND(compile, NULL,      "Compile a script into a standalone executable", ant_cmd_compile),
+  NATIVE_COMMAND(upgrade, NULL,      "Upgrade Ant to the latest version", ant_upgrade),
 };
+
+#undef PKG_COMMAND
+#undef NATIVE_COMMAND
 
 static void ant_debug_apply(const char *key, const char *val) {
   if (strcmp(key, "gc") == 0) {
@@ -148,7 +159,7 @@ static void parse_ant_debug_flags(void) {
 }
 
 static const subcommand_t *find_subcommand(const char *name) {
-  for (const subcommand_t *cmd = subcommands; cmd->name; cmd++) {
+  for (const subcommand_t *cmd = subcommands; cmd < subcommands + countof(subcommands); cmd++) {
     if (strcmp(name, cmd->name) == 0) return cmd;
     if (cmd->alias && strcmp(name, cmd->alias) == 0) return cmd;
   }
@@ -157,9 +168,8 @@ static const subcommand_t *find_subcommand(const char *name) {
 
 static void print_subcommands(void) {
   crprintf("<bold>Commands:</>\n");
-  for (const subcommand_t *cmd = subcommands; cmd->name; cmd++) {
+  for (const subcommand_t *cmd = subcommands; cmd < subcommands + countof(subcommands); cmd++)
     crprintf("  <pad=18>%s</pad> %s\n", cmd->name, cmd->desc);
-  }
   crprintf(msg.ant_command_extra);
   printf("\n");
 }
@@ -192,11 +202,6 @@ static bool is_valued_flag(const char *arg) {
     strcmp(arg, "--localstorage-file") == 0 ||
     strcmp(arg, "--cron-title") == 0 ||
     strcmp(arg, "--cron-period") == 0;
-}
-
-static bool positional_is_regular_file(const char *path) {
-  struct stat st;
-  return stat(path, &st) == 0 && S_ISREG(st.st_mode);
 }
 
 static int find_argv_token_index(int argc, char **argv, const char *token) {
@@ -543,20 +548,10 @@ int main(int argc, char *argv[]) {
   bool sandbox_daemon = false;
   ant_sandbox_request_t sandbox = { 0 };
 
-  const char *binary_name = strrchr(argv[0], '/');
-  binary_name = binary_name ? binary_name + 1 : argv[0];
+  char **antx_argv = pkg_antx_argv(&argc, argv);
+  if (antx_argv) argv = antx_argv;
+  pkg_argv_t pkg_argv = { 0, NULL };
 
-  if (strcmp(binary_name, "antx") == 0) {
-    char **exec_argv = try_oom(sizeof(char*) * (argc + 2));
-    exec_argv[0] = argv[0]; exec_argv[1] = "x";
-    
-    for (int i = 1; i < argc; i++) exec_argv[i + 1] = argv[i];
-    exec_argv[argc + 1] = NULL;
-    
-    int exitcode = pkg_cmd_exec(argc, exec_argv + 1);
-    free(exec_argv); return exitcode;
-  }
-  
   char **filtered_argv = try_oom(sizeof(char*) * argc);
   bool parse_global_args = true;
   
@@ -586,9 +581,9 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
-    if (strcmp(arg, "-V") == 0 || strcmp(arg, "--verbose") == 0) pkg_verbose = true;
-    else if (strcmp(arg, "--force") == 0) pkg_force = true;
-    else if (strcmp(arg, "--no-color") == 0) { crprintf_set_color(false); io_no_color = true; }
+    if (pkg_parse_global_flag(arg)) continue;
+    if (strcmp(arg, "--no-color") == 0) { crprintf_set_color(false); io_no_color = true; }
+    
     else if (strncmp(arg, "--stack-size=", 13) == 0) sv_user_stack_size_kb = atoi(arg + 13);
     else if (strcmp(arg, "--sandbox-daemon") == 0) sandbox_daemon = true;
     else if (strcmp(arg, "--inspect") == 0) inspector.enabled = true;
@@ -660,11 +655,13 @@ int main(int argc, char *argv[]) {
   int nerrors = arg_parse(argc, argv, argtable);
   #undef REF
   
-  #define CLEANUP_ARGS_AND_ARGV() ({ \
-    if (proc_argv.argv != argv) free(proc_argv.argv); \
-    ant_sandbox_request_free(&sandbox); \
-    arg_freetable(argtable, ARGTABLE_COUNT); \
-    free(filtered_argv); \
+  #define CLEANUP_ARGS_AND_ARGV() ({                                                     \
+    if (proc_argv.argv != argv && proc_argv.argv != pkg_argv.argv) free(proc_argv.argv); \
+    pkg_argv_free(&pkg_argv);                                                            \
+    ant_sandbox_request_free(&sandbox);                                                  \
+    arg_freetable(argtable, ARGTABLE_COUNT);                                             \
+    free(filtered_argv);                                                                 \
+    free(antx_argv);                                                                     \
   })
 
   if (help->count > 0) {
@@ -755,41 +752,30 @@ int main(int argc, char *argv[]) {
         cmd_argv = cmd_argv_full;
       }
 
-      int exitcode = cmd->fn(cmd_argc, cmd_argv);
-      free(cmd_argv_full);
-      
-      CLEANUP_ARGS_AND_ARGV();
-      return exitcode;
+      if (cmd->kind == COMMAND_PKG) {
+        pkg_argv = pkg_command_argv(argv[0], cmd->name, cmd_argc - 1, cmd_argv + 1);
+        free(cmd_argv_full);
+      } else {
+        int exitcode = cmd->fn(cmd_argc, cmd_argv);
+        free(cmd_argv_full);
+
+        CLEANUP_ARGS_AND_ARGV();
+        return exitcode;
+      }
     }
 
-    if (!positional_is_regular_file(positional) && pkg_script_exists("package.json", positional)) {
-      if (watch->count > 0) {
-        crfprintf(stderr, msg.watch_subcommand_error);
-        CLEANUP_ARGS_AND_ARGV();
-        return EXIT_FAILURE;
-      }
-
-      int run_argc = argc - first_pos_idx + 1 + script_tail.argc;
-      char **run_argv = try_oom(sizeof(*run_argv) * (size_t)(run_argc + 1));
-      
-      run_argv[0] = argv[0];
-      int copied = argc - first_pos_idx;
-      
-      memcpy(run_argv + 1, argv + first_pos_idx, sizeof(*run_argv) * (size_t)copied);
-      if (script_tail.argc > 0) {
-        memcpy(run_argv + 1 + copied, script_tail.argv, sizeof(*run_argv) * (size_t)script_tail.argc);
-      }
-      
-      run_argv[run_argc] = NULL;
-      int exitcode = pkg_cmd_run(run_argc, run_argv);
-      
-      free(run_argv);
+    else if (pkg_script_argv(
+      &pkg_argv, argv[0], positional, argc - first_pos_idx,
+      argv + first_pos_idx, script_tail.argc, script_tail.argv
+    ) && watch->count > 0) {
+      crfprintf(stderr, msg.watch_subcommand_error);
       CLEANUP_ARGS_AND_ARGV();
-      
-      return exitcode;
+      return EXIT_FAILURE;
     }
   }
-  
+
+  bool pkg_mode = pkg_argv.argv != NULL;
+
   bool has_stdin = !isatty(STDIN_FILENO);
   bool explicit_stdin = file->count == 1 && strcmp(file->filename[0], "-") == 0;
   bool repl_mode = repl->count > 0 || (file->count == 0 && eval->count == 0 && !has_stdin);
@@ -834,9 +820,10 @@ int main(int argc, char *argv[]) {
     }
   }
   
-  const char *module_file = (repl_mode || stdin_mode || file->count == 0)
-    ? NULL 
-    : file->filename[0];
+  const char *module_file = (
+    pkg_mode   || repl_mode  ||
+    stdin_mode || file->count == 0
+  ) ? NULL : file->filename[0];
 
   if (sandbox_daemon) {
     if (sandbox.cwd && chdir(sandbox.cwd) != 0) {
@@ -844,6 +831,7 @@ int main(int argc, char *argv[]) {
       CLEANUP_ARGS_AND_ARGV();
       return EXIT_FAILURE;
     }
+    
     if (!ant_sandbox_transport_install_output_frames()) {
       fprintf(stderr, "sandbox daemon: failed to install framed output transport: %s\n", strerror(errno));
       CLEANUP_ARGS_AND_ARGV();
@@ -856,9 +844,7 @@ int main(int argc, char *argv[]) {
     if (sandbox.mode == ANT_SANDBOX_REQUEST_RUN) {
       module_file = sandbox.entry;
       script_tail = (argv_split_t){ sandbox.argc, sandbox.argv };
-    } else {
-      module_file = NULL;
-    }
+    } else module_file = NULL;
   }
 
   if (watch->count > 0) {
@@ -877,6 +863,7 @@ int main(int argc, char *argv[]) {
     int res = ant_watch_run(original_argc, original_argv, module_file, no_clear_screen->count > 0);
     if (resolved_file) free(resolved_file);
     CLEANUP_ARGS_AND_ARGV();
+    
     return res;
   }
   
@@ -893,10 +880,13 @@ int main(int argc, char *argv[]) {
   js_setstacklimit(js, os_thread_stack_size() * 3 / 4);
   if (jitless->count > 0) sv_debug_enable(SV_DEBUG_JITLESS);
   
-  proc_argv = build_process_argv(argc, argv, module_file, script_tail);
-  if (sandbox_daemon) ant_sandbox_set_guest_process(true);
+  proc_argv = pkg_mode
+    ? (argv_split_t){ pkg_argv.argc, pkg_argv.argv }
+    : build_process_argv(argc, argv, module_file, script_tail);
   
+  if (sandbox_daemon) ant_sandbox_set_guest_process(true);
   ant_runtime_init(js, proc_argv.argc, proc_argv.argv, localstorage_file);
+  
   if (web_compat->count > 0) js->runtime.flags |= ANT_RUNTIME_WEB_COMPAT;
   if (location->count > 0) js->runtime.location = location->sval[0];
   
@@ -926,7 +916,7 @@ int main(int argc, char *argv[]) {
     ant_inspector_register_script_source("[eval]", script, strlen(script), false);
   }
 
-  if (inspector.enabled && eval->count == 0 && !repl_mode && !stdin_mode) for (
+  if (inspector.enabled && !pkg_mode && eval->count == 0 && !repl_mode && !stdin_mode) for (
   int fi = 0; fi < file->count; fi++) {
     char *resolved_file = resolve_js_file(file->filename[fi]);
     if (!resolved_file) continue;
@@ -936,6 +926,11 @@ int main(int argc, char *argv[]) {
   
   if (inspector.wait_for_session) ant_inspector_wait_for_session();
   if (internal_crash_report_mode) js_result = ant_crash_run_internal_report(js);
+
+  else if (pkg_mode) {
+    js_result = pkg_run(js);
+    if (js_result == EXIT_SUCCESS) js_run_event_loop(js);
+  }
 
   else if (eval->count > 0) {
     const char *script = eval->sval[0];
@@ -948,10 +943,12 @@ int main(int argc, char *argv[]) {
   
   else if (stdin_mode) {
     size_t len = 0; char *buf = read_stdin(&len);
+    
     if (!buf) { 
       crfprintf(stderr, msg.ant_allocation_fatal);
       js_result = EXIT_FAILURE; goto cleanup; 
     }
+    
     if (inspector.enabled) ant_inspector_register_script_source("[stdin]", buf, len, false);
     input_mode_t stdin_input_mode = input_type->count > 0 ? input_mode : INPUT_MODE_SCRIPT;
     eval_code(js, buf, len, "[stdin]", print->count > 0, stdin_input_mode); free(buf);

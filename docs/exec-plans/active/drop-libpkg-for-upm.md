@@ -61,12 +61,15 @@ its cache, upm hardlinks every file into `node_modules/.upm`.
   `create`) live in Ant's own `src/pkg/`.
 - Commands backed by JS start the normal runtime and evaluate an ESM entry
   that calls `main(argv)` from `ant:internal/pkg`.
-- Ant owns the command line: `src/pkg/cli.ts` calls upm's `api.ts` directly and
-  prints libpkg's output (colours, the progress line with its phase icons,
-  install summaries, per-command help and errors). upm's own CLI is only
-  reached for `--json` and commands Ant does not define. A patch adds package
-  names and download state to upm's progress events and progress and spawn
-  hooks to `exec`.
+- upm's command line is the UI: install, add, remove, update, run and exec go
+  through upm's `main`, so its progress bar, `✓` summaries and `ant:` notes are
+  what users see. A patch exports upm's `note`/`fail`/`paint` and `setUsage`;
+  Ant's own commands (trust, why, info, ls, cache, config, init, create,
+  global installs, lifecycle notices) print in the same voice, and the usage
+  page lists Ant's commands, sources, config and paths. `src/main.c` only
+  routes: argv building, the `antx` rewrite, bare-script detection and the
+  environment handed to JS live in `src/cli/pkg.c`, and the command table is
+  the X-macro list `include/cli/commands.h`.
 - Lockfile: read `ant.lockb` (v4, spec in the removed `src/pkg/lockfile.zig`)
   for frozen installs and migration; write upm's JSON format as `ant.lock`.
 - Store: `~/.cache/ant/store` (or `$XDG_CACHE_HOME/ant/store`). The old LMDB
@@ -118,15 +121,15 @@ phase 5 and the performance, reliability and platform gates are open.
   skipped.
 - Seven upm patches: Ant directories, message prefix, a foreign `readSource`
   split, layout names (`ant.lock`, `node_modules/.ant`), registry fallback,
-  a fallback mirror for tarballs, and progress hooks. The mirror retries a
+  a fallback mirror for tarballs, and CLI hooks. The mirror retries a
   404 from the land base under the npm base, because derived lockfile URLs
   drop explicit npm hosts. Every caller that misses on the base registry
   retries on the fallback; letting only the first one move a name made
   concurrent lookups fail with E404 on warm installs.
-- Output matches libpkg's `src/cli/pkg.c`, except that colours and the
-  progress line follow the stream (TTY, `NO_COLOR`, `FORCE_COLOR`,
-  `--no-color`) instead of always being written, and `cache prune` removes
-  unreferenced store content rather than taking an age in days.
+- Output follows upm's CLI rather than libpkg's; colours follow the stream
+  (TTY, `NO_COLOR`, `FORCE_COLOR`, `--no-color`).
+- `cache prune` is upm's prune (unreferenced store content), not an age in
+  days.
 - libpkg, Zig, the nghttp2 wrap and the Zig CI, nix, Docker and setup steps
   are removed; `build/ant` shrank from 10.70 MB to 10.16 MB. The Zig-era
   `src/pkg/` path now holds the TypeScript layer.
@@ -139,6 +142,5 @@ Open:
 - Warm-install gap: upm hardlinks per file, libpkg symlinked per package
   (phase 5).
 - Hyperfine and 100-install reliability gates; Linux, musl and Windows runs.
-- `setenv` in `src/main.c` needs a Windows equivalent.
 - Offer the generic patches (fallback registry, foreign `readSource`, store
-  mirror) upstream.
+  mirror, CLI hooks) upstream.

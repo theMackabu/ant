@@ -1,0 +1,68 @@
+diff --git a/src/cli.ts b/src/cli.ts
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -822,7 +822,7 @@
+ let verbose = false;
+ 
+ /** Summaries go to stderr, so `--json` keeps stdout clean. */
+-function note(message: string, level: LogLevel = "info"): void {
++export function note(message: string, level: LogLevel = "info"): void {
+   if (quiet && level === "info") return;
+   if (level === "debug") {
+     if (!verbose && !DEBUG.has(globalThis.process?.env?.UPM_DEBUG ?? "")) return;
+@@ -834,23 +834,31 @@
+   }
+ }
+ 
+-function fail(message: string): void {
++export function fail(message: string): void {
+   write("stderr", `${paint(["red", "bold"], "ant:")} ${paint("red", message)}\n`);
+ }
+ 
+-function usage(message: string): number {
++export function usage(message: string): number {
+   fail(message);
+   write("stderr", `\n${help("stderr")}\n`);
+   return 2;
+ }
+ 
++/** What `help` prints: `USAGE`, or the text an embedder gave `setUsage`. */
++let usageText = USAGE;
++
++/** Replace the usage text, for an embedder that runs `main` under its own name. */
++export function setUsage(text: string): void {
++  usageText = text;
++}
++
+ /** The usage text with its section headings in bold. */
+-function help(to: Output): string {
+-  return USAGE.replace(/^[A-Z][a-z]+$/gm, (heading) => paint("bold", heading, to));
++export function help(to: Output): string {
++  return usageText.replace(/^[A-Z][a-z]+$/gm, (heading) => paint("bold", heading, to));
+ }
+ 
+-type Style = Parameters<typeof import("node:util").styleText>[0];
+-type Output = "stdout" | "stderr";
++export type Style = Parameters<typeof import("node:util").styleText>[0];
++export type Output = "stdout" | "stderr";
+ 
+ /** The progress line on stderr, while a command draws one. */
+ let bar: Bar | undefined;
+@@ -865,7 +873,7 @@
+ }
+ 
+ /** Where there is no `process`, as in a browser, the console stands in for both streams. */
+-function write(to: Output, text: string): void {
++export function write(to: Output, text: string): void {
+   // Cleared first, so a note is not written over it; the next tick draws it under the note.
+   bar?.clear();
+   const stream = globalThis.process?.[to];
+@@ -880,7 +888,7 @@
+  * `styleText` checks the stream: plain text unless it is a terminal that takes color, and
+  * NO_COLOR or FORCE_COLOR decide over that. Without `node:util` or the stream, text stays plain.
+  */
+-function paint(style: Style, text: string, to: Output = "stderr"): string {
++export function paint(style: Style, text: string, to: Output = "stderr"): string {
+   if (styleText === null) {
+     try {
+       styleText = builtin.util.styleText;

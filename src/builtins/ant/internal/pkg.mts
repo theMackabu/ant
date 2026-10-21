@@ -1,2 +1,6 @@
 // @ant: compact_on_build
-export { main } from '../../../pkg/cli.ts';
+import { main } from '../../../pkg/cli.ts';
+
+main(process.argv.slice(2)).then(code => {
+  process.exitCode = code;
+});
