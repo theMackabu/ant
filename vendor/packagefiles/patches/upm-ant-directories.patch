@@ -1,13 +1,12 @@
 diff --git a/src/util.ts b/src/util.ts
 --- a/src/util.ts
 +++ b/src/util.ts
-@@ -341,14 +341,13 @@
+@@ -341,14 +341,12 @@
    platform = globalThis.process?.platform,
  ): string {
    const { isAbsolute, join } = builtin.path;
 -  const own = join(home, ".upm");
 +  const own = join(home, ".ant");
-+  // As Ant's own paths are found (ant_xdg_path): ~/.ant on Windows or once it exists.
 +  if (platform === "win32" || isDir(own)) return own;
    // The spec has a relative path ignored.
    const set = kind === "data" ? env.XDG_DATA_HOME : env.XDG_CACHE_HOME;

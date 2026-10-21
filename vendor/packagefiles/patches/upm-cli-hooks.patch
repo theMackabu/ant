@@ -1,7 +1,28 @@
 diff --git a/src/cli.ts b/src/cli.ts
 --- a/src/cli.ts
 +++ b/src/cli.ts
-@@ -822,7 +822,7 @@
+@@ -25,6 +25,7 @@
+   PruneResult,
+   RunOptions,
+   RunResult,
++  ScriptStart,
+ } from "./api.ts";
+ import { builtin } from "./builtin.ts";
+ import { formatLockfile, LOCKFILE } from "./lock.ts";
+@@ -681,10 +682,8 @@
+     ifPresent: cli.ifPresent,
+     log: note,
+     // What runs, on stderr, so the script's own stdout is all there is to pipe.
+-    onScript: ({ script, line, workspace }) => {
+-      if (quiet) return;
+-      const at = workspace === undefined ? "" : `${workspace}: `;
+-      write("stderr", `${paint("gray", `> ${at}${script}\n> ${line}`)}\n`);
++    onScript: (start) => {
++      if (!quiet) scriptBanner(start);
+     },
+   };
+   if (name === undefined) {
+@@ -822,7 +821,7 @@
  let verbose = false;
  
  /** Summaries go to stderr, so `--json` keeps stdout clean. */
@@ -10,7 +31,7 @@ diff --git a/src/cli.ts b/src/cli.ts
    if (quiet && level === "info") return;
    if (level === "debug") {
      if (!verbose && !DEBUG.has(globalThis.process?.env?.UPM_DEBUG ?? "")) return;
-@@ -834,23 +834,31 @@
+@@ -834,23 +833,38 @@
    }
  }
  
@@ -26,10 +47,17 @@ diff --git a/src/cli.ts b/src/cli.ts
    return 2;
  }
  
-+/** What `help` prints: `USAGE`, or the text an embedder gave `setUsage`. */
 +let usageText = USAGE;
 +
-+/** Replace the usage text, for an embedder that runs `main` under its own name. */
++let scriptBanner = ({ script, line, workspace }: ScriptStart): void => {
++  const at = workspace === undefined ? "" : `${workspace}: `;
++  write("stderr", `${paint("gray", `> ${at}${script}\n> ${line}`)}\n`);
++};
++
++export function setScriptBanner(banner: (start: ScriptStart) => void): void {
++  scriptBanner = banner;
++}
++
 +export function setUsage(text: string): void {
 +  usageText = text;
 +}
@@ -37,18 +65,20 @@ diff --git a/src/cli.ts b/src/cli.ts
  /** The usage text with its section headings in bold. */
 -function help(to: Output): string {
 -  return USAGE.replace(/^[A-Z][a-z]+$/gm, (heading) => paint("bold", heading, to));
-+export function help(to: Output): string {
-+  return usageText.replace(/^[A-Z][a-z]+$/gm, (heading) => paint("bold", heading, to));
- }
- 
+-}
+-
 -type Style = Parameters<typeof import("node:util").styleText>[0];
 -type Output = "stdout" | "stderr";
++export function help(to: Output): string {
++  return usageText.replace(/^[A-Z][a-z]+$/gm, (heading) => paint("bold", heading, to));
++}
++
 +export type Style = Parameters<typeof import("node:util").styleText>[0];
 +export type Output = "stdout" | "stderr";
  
  /** The progress line on stderr, while a command draws one. */
  let bar: Bar | undefined;
-@@ -865,7 +873,7 @@
+@@ -865,7 +879,7 @@
  }
  
  /** Where there is no `process`, as in a browser, the console stands in for both streams. */
@@ -57,7 +87,7 @@ diff --git a/src/cli.ts b/src/cli.ts
    // Cleared first, so a note is not written over it; the next tick draws it under the note.
    bar?.clear();
    const stream = globalThis.process?.[to];
-@@ -880,7 +888,7 @@
+@@ -880,7 +894,7 @@
   * `styleText` checks the stream: plain text unless it is a terminal that takes color, and
   * NO_COLOR or FORCE_COLOR decide over that. Without `node:util` or the stream, text stays plain.
   */

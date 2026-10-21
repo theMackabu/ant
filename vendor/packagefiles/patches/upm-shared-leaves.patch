@@ -1,0 +1,104 @@
+diff --git a/src/link.ts b/src/link.ts
+--- a/src/link.ts
++++ b/src/link.ts
+@@ -129,6 +129,18 @@
+ /** A pool rejects with this when a worker died mid-shard: the entry is undone, not failed. */
+ const WORKER_DIED = "EWORKERDIED";
+ 
++export type ShareFilter = (
++  pkg: ResolvedPackage,
++  manifest: Record<string, unknown>,
++  files: readonly { path: string }[],
++) => boolean;
++
++let shareFilter: ShareFilter | undefined;
++
++export function setShareFilter(filter: ShareFilter | undefined): void {
++  shareFilter = filter;
++}
++
+ /** Past this many files an entry is split across workers, by directory. */
+ const SHARD_FILES = 256;
+ 
+@@ -219,6 +231,7 @@
+   const up = `..${sep}`;
+   const limit = createLimiter(options.concurrency ?? 16);
+   const storeDir = join(options.dir, "node_modules", ".ant");
++  const sharing = new Map<string, string | undefined>();
+   const production = options.production === true;
+   const hoist = options.hoist !== false;
+   const hash =
+@@ -586,6 +599,54 @@
+     if (wrong) throw fail(`${id} cannot be installed: ${wrong}`, "EMISMATCH");
+   }
+ 
++  function sharedDir(entry: Entry): string | undefined {
++    if (sharing.has(entry.key)) return sharing.get(entry.key);
++    let dir: string | undefined;
++    const { pkg } = entry;
++    const self = pkg.local === undefined && pkg.source === undefined;
++    const alone = Object.keys(allDeps(pkg)).length === 0 && !pkg.peerDependencies;
++    const file = entry.index.files.find((f) => f.path === "package.json");
++    if (shareFilter && self && alone && file) {
++      try {
++        const manifest = JSON.parse(builtin.fs.readFileSync(store.blobPath(file), "utf8"));
++        const files = entry.index.files;
++        if (shareFilter(pkg, manifest, files)) dir = join(store.dir, "shared", entry.key);
++      } catch {}
++    }
++    sharing.set(entry.key, dir);
++    return dir;
++  }
++
++  async function ensureShared(entry: Entry, dir: string): Promise<void> {
++    if (landsOnDir(dir) && (await sized(entry, (file) => join(dir, file.path)))) return;
++    const temp = `${dir}.tmp-${pid}-${tempToken()}`;
++    const retired = `${dir}.old-${pid}-${tempToken()}`;
++    try {
++      await placeFiles(entry.index, temp);
++      await rename(dir, retired).catch(() => {});
++      await rename(temp, dir);
++    } catch (error) {
++      await rm(temp, { recursive: true, force: true });
++      if (!landsOnDir(dir)) await rename(retired, dir).catch(() => {});
++      if (!landsOnDir(dir)) throw error;
++    }
++    await rm(retired, { recursive: true, force: true });
++  }
++
++  async function linkShared(entry: Entry, at: string): Promise<boolean> {
++    const shared = sharedDir(entry);
++    if (!shared) return false;
++    try {
++      await ensureShared(entry, shared);
++      await mkdir(dirname(at), { recursive: true });
++      await symlinkAt(shared, at);
++      return true;
++    } catch {
++      sharing.set(entry.key, undefined);
++      return false;
++    }
++  }
++
+   /** Built under a temp name and renamed in, so a half-written entry is never mistaken for one. */
+   async function materialize(entry: Entry): Promise<void> {
+     const final = join(storeDir, entry.key);
+@@ -735,7 +796,7 @@
+ 
+   /** True when the pool built it: counted once the entry lands, not when a race loses it. */
+   async function build(entry: Entry, temp: string, final: string): Promise<boolean> {
+-    const on = pool;
++    const on = sharedDir(entry) ? undefined : pool;
+     if (on) {
+       const finalNm = join(final, "node_modules");
+       const bins = WIN ? binsOf(depsOf(entry.pkg), finalNm) : undefined;
+@@ -872,7 +933,8 @@
+   async function buildHere(entry: Entry, temp: string, final: string): Promise<void> {
+     const { pkg, index } = entry;
+     const tempNm = join(temp, "node_modules");
+-    await placeFiles(index, join(tempNm, pkg.name));
++    const pkgDir = join(tempNm, pkg.name);
++    if (!(await linkShared(entry, pkgDir))) await placeFiles(index, pkgDir);
+ 
+     const deps = depsOf(pkg);
+     // Scope dirs once each, before the links; the package's own scope is there from placeFiles.

@@ -11,6 +11,8 @@ import { trust } from './commands/trust.ts';
 import { update } from './commands/update.ts';
 import { why } from './commands/why.ts';
 import { openSession, upm } from './session.ts';
+import { shareSelfContained } from './share.ts';
+import { installRunBanner } from './ui/banner.ts';
 import type { Session } from './session.ts';
 import { help, out } from './ui/output.ts';
 import { installUsage } from './ui/usage.ts';
@@ -39,6 +41,8 @@ const UPM_HELP = new Set(['install', 'add', 'remove', 'run', 'exec']);
 export async function main(argv: string[]): Promise<number> {
   process.env.npm_config_user_agent = `ant/${process.versions.ant}`;
   installUsage();
+  shareSelfContained();
+  installRunBanner();
 
   const [command = '', ...args] = argv;
   const session = openSession(args);

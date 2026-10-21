@@ -1,20 +1,15 @@
 diff --git a/src/store.ts b/src/store.ts
 --- a/src/store.ts
 +++ b/src/store.ts
-@@ -67,6 +67,12 @@
+@@ -67,6 +67,7 @@
    fetch?: typeof fetch;
    /** `.npmrc` credentials by `//host/path/`, sent with a tarball request under one. */
    auth?: Record<string, string>;
-+  /**
-+   * A tarball under `from` that is not there (404) is asked for at the same path under `to`:
-+   * the fallback registry, for a url the lockfile derived from the registry. Its integrity is
-+   * checked as any other's.
-+   */
 +  mirror?: { from: string; to: string };
    /** Ceiling on tarballs downloading at once. Default 32. */
    concurrency?: number;
    /**
-@@ -601,6 +607,17 @@
+@@ -601,6 +602,17 @@
        const bytes = await readLocal(tarball.path);
        return { bytes: [bytes], size: bytes.byteLength };
      }

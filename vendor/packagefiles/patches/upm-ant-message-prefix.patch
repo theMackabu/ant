@@ -12,7 +12,7 @@ diff --git a/src/cli.ts b/src/cli.ts
 +    write("stderr", `${paint("yellow", "ant:")} ${paint("yellow", message)}\n`);
    } else {
 -    write("stderr", `${paint("gray", "upm:")} ${message}\n`);
-+    write("stderr", `${paint(["red", "bold"], "ant:")} ${message}\n`);
++    write("stderr", `${paint(["magenta"], "ant:")} ${message}\n`);
    }
  }
  

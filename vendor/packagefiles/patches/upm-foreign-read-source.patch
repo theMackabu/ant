@@ -19,7 +19,7 @@ diff --git a/src/foreign-lock.ts b/src/foreign-lock.ts
    nodes: Node[];
    /** The ranges the file recorded for the root: what package.json is held to. */
    specs: RootSpecs;
-@@ -103,8 +103,20 @@
+@@ -103,8 +103,19 @@
      if ((error as { code?: string }).code === "ELOCK") throw error;
      throw fail(`${file} cannot be read: ${(error as Error).message}`);
    }
@@ -28,7 +28,6 @@ diff --git a/src/foreign-lock.ts b/src/foreign-lock.ts
 +  return readSource(file, source, manifest, baseFor, values);
 +}
 +
-+/** `readForeign` past the parse: a `Source` read by the caller, held to package.json and mapped. */
 +export function readSource(
 +  file: string,
 +  source: Source,
@@ -42,7 +41,7 @@ diff --git a/src/foreign-lock.ts b/src/foreign-lock.ts
    // Each pin held as upm.lock's are: to the version, and the package, package.json asks for.
    const { lock } = read;
    const fits = (dependencies: Record<string, string>) =>
-@@ -116,7 +128,7 @@
+@@ -116,7 +127,7 @@
    if (!fits(pins)) {
      const name = Object.keys(pins).find((name) => !fits({ [name]: pins[name]! }));
      const what = "a version or package that package.json does not allow";

@@ -6,7 +6,10 @@ import { positionals } from '../args.ts';
 import type { Manifest } from '../project.ts';
 import { registriesFor } from '../registry.ts';
 import type { Session } from '../session.ts';
-import { color, fail, out, plural, size, usage } from '../ui/output.ts';
+import { c, formatSize } from '../ui/ansi.ts';
+import { out, usage, write } from '../ui/output.ts';
+
+const err = (text: string) => write('stderr', text);
 
 interface Packument {
   name: string;
@@ -29,12 +32,7 @@ async function fetchPackument(name: string, session: Session): Promise<Packument
   return undefined;
 }
 
-function section(title: string, rows: [string, string][]): void {
-  if (rows.length === 0) return;
-  const width = Math.max(...rows.map(([label]) => label.length));
-  out(`\n${color('bold', title)}\n`);
-  for (const [label, value] of rows) out(`  ${color('gray', label.padEnd(width))}  ${value}\n`);
-}
+const TAG_COLORS: Record<string, 'blue' | 'cyan'> = { beta: 'blue', latest: 'cyan' };
 
 export async function info(args: string[], session: Session): Promise<number> {
   const [spec] = positionals(args);
@@ -47,11 +45,11 @@ export async function info(args: string[], session: Session): Promise<number> {
   try {
     doc = await fetchPackument(name, session);
   } catch (error) {
-    fail(describe(error));
+    err(`Error: ${describe(error)}\n`);
     return 1;
   }
   if (!doc) {
-    fail(`no package named ${name} (E404)`);
+    err(`Error: package not found: ${name}\n`);
     return 1;
   }
 
@@ -59,27 +57,42 @@ export async function info(args: string[], session: Session): Promise<number> {
   const version = doc['dist-tags']?.[wanted] ?? (doc.versions?.[wanted] ? wanted : validRange(wanted) ? maxSatisfying(versions, wanted) : undefined);
   const pkg = version ? doc.versions?.[version] : undefined;
   if (!version || !pkg) {
-    fail(`no version of ${name} matches ${wanted} (ETARGET)`);
+    err(`Error: version not found: ${name}@${wanted}\n`);
     return 1;
   }
 
   const deps = Object.entries(pkg.dependencies ?? {});
-  const facts = [pkg.license, plural(deps.length, 'dep'), plural(versions.length, 'version')].filter(Boolean);
-  out(`${color('cyan', name)}@${version} ${color('gray', `· ${facts.join(' · ')}`)}\n`);
-  if (pkg.description) out(`${pkg.description}\n`);
-  if (pkg.homepage) out(`${color('gray', pkg.homepage)}\n`);
-  if (pkg.keywords?.length) out(`${color('gray', `keywords: ${pkg.keywords.join(', ')}`)}\n`);
+  out(`${c.blue}${c.ul}${name}${c.ulOff}@${c.blue}${c.bold}${c.ul}${version}${c.reset}`);
+  if (pkg.license) out(` | ${c.cyan}${pkg.license}${c.reset}`);
+  out(` | deps: ${deps.length} | versions: ${versions.length}\n`);
 
-  section('dependencies', deps);
+  if (pkg.description) out(`${pkg.description}\n`);
+  if (pkg.homepage) out(`${c.blue}${pkg.homepage}${c.reset}\n`);
+  if (pkg.keywords?.length) out(`keywords: ${pkg.keywords.join(', ')}\n`);
+
+  if (deps.length > 0) {
+    out(`\n${c.bold}dependencies${c.reset} (${deps.length}):\n`);
+    for (const [dep, range] of deps) out(`- ${c.cyan}${dep}${c.reset}: ${range}\n`);
+  }
+
   const dist = pkg.dist ?? {};
-  section('dist', [
-    ['tarball', dist.tarball ?? ''],
-    ['shasum', dist.shasum ?? ''],
-    ['integrity', dist.integrity ?? ''],
-    ['unpacked', dist.unpackedSize ? size(dist.unpackedSize) : ''],
-  ].filter(([, value]) => value) as [string, string][]);
-  section('dist-tags', Object.entries(doc['dist-tags'] ?? {}));
-  section('maintainers', (doc.maintainers ?? []).map(m => [m.name ?? '', m.email ? `<${m.email}>` : '']));
-  if (doc.time?.[version]) out(`\n${color('gray', `published ${doc.time[version]}`)}\n`);
+  out(`\n${c.bold}dist${c.reset}\n`);
+  if (dist.tarball) out(` ${c.dim}.tarball:${c.reset} ${dist.tarball}\n`);
+  if (dist.shasum) out(` ${c.dim}.shasum:${c.reset} ${c.green}${dist.shasum}${c.reset}\n`);
+  if (dist.integrity) out(` ${c.dim}.integrity:${c.reset} ${c.green}${dist.integrity}${c.reset}\n`);
+  if (dist.unpackedSize) out(` ${c.dim}.unpackedSize:${c.reset} ${c.blue}${formatSize(dist.unpackedSize)}${c.reset}\n`);
+
+  const tags = Object.entries(doc['dist-tags'] ?? {});
+  if (tags.length > 0) {
+    out(`\n${c.bold}dist-tags:${c.reset}\n`);
+    for (const [tag, v] of tags) out(`${c[TAG_COLORS[tag] ?? 'magenta']}${tag}${c.reset}: ${v}\n`);
+  }
+
+  if (doc.maintainers?.length) {
+    out(`\n${c.bold}maintainers:${c.reset}\n`);
+    for (const m of doc.maintainers) out(`- ${m.name ?? ''}${m.email ? ` <${m.email}>` : ''}\n`);
+  }
+
+  if (doc.time?.[version]) out(`\n${c.bold}Published:${c.reset} ${doc.time[version]}\n`);
   return 0;
 }

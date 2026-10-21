@@ -3,4 +3,4 @@ url = https://github.com/unjs/upm.git
 revision = v1.5.0
 depth = 1
 patch_directory = upm
-diff_files = patches/upm-ant-directories.patch, patches/upm-ant-message-prefix.patch, patches/upm-foreign-read-source.patch, patches/upm-ant-layout-names.patch, patches/upm-fallback-registry.patch, patches/upm-fallback-tarballs.patch, patches/upm-cli-hooks.patch
+diff_files = patches/upm-ant-directories.patch, patches/upm-ant-message-prefix.patch, patches/upm-foreign-read-source.patch, patches/upm-ant-layout-names.patch, patches/upm-fallback-registry.patch, patches/upm-fallback-tarballs.patch, patches/upm-cli-hooks.patch, patches/upm-shared-leaves.patch

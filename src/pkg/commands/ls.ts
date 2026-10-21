@@ -5,22 +5,33 @@ import { globalDir } from '../paths.ts';
 import { readLock, readManifest } from '../project.ts';
 import { projectRoot } from '../session.ts';
 import type { Session } from '../session.ts';
-import { color, note, out, plural } from '../ui/output.ts';
+import { c } from '../ui/ansi.ts';
+import { out } from '../ui/output.ts';
 
 export function ls(args: string[], session: Session): number {
   const global = isGlobal(args);
   const dir = global ? globalDir() : projectRoot(session);
   const manifest = readManifest(dir);
   const lock = readLock(dir);
+  out(`${c.dim}${path.join(dir, 'node_modules')}${c.reset}`);
+
   const names = Object.keys({ ...manifest?.dependencies, ...(global ? {} : manifest?.devDependencies) });
-  const installed = names.filter(name => lock?.root.dependencies[name] !== undefined);
-  if (!manifest || installed.length === 0) {
-    note(`nothing installed in ${path.join(dir, 'node_modules')}`);
+  if (!manifest || names.length === 0) {
+    out('\n  (no package.json)\n');
     return 0;
   }
 
-  const total = Object.keys(lock!.packages).length;
-  out(`${color('gray', `${path.join(dir, 'node_modules')} · ${plural(total, 'pkg')}`)}\n`);
-  for (const name of installed) out(`  ${color('cyan', name)}${color('gray', `@${lock!.root.dependencies[name]}`)}\n`);
+  const installed = names.filter(name => lock?.root.dependencies[name] !== undefined);
+  const total = lock ? Object.keys(lock.packages).length : 0;
+  if (installed.length === 0 || total === 0) {
+    out('\n  (empty)\n');
+    return 0;
+  }
+
+  out(` ${c.dim}(${total})${c.reset}\n`);
+  installed.forEach((name, i) => {
+    const prefix = i === installed.length - 1 ? '└──' : '├──';
+    out(`${c.dim}${prefix}${c.reset} ${c.bold}${name}${c.reset}@${lock!.root.dependencies[name]}\n`);
+  });
   return 0;
 }
