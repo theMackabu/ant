@@ -8,6 +8,7 @@ import { nameOfSpec, parseArgs } from '../args.ts';
 import type { Args, SourcedSpec } from '../args.ts';
 import { pinSpecs } from '../land.ts';
 import { GROUPS, readManifest } from '../project.ts';
+import { sourceOfTarball } from '../registry.ts';
 import { projectRoot, upm } from '../session.ts';
 import type { Session } from '../session.ts';
 import { afterInstall, migrate } from '../steps.ts';
@@ -57,12 +58,17 @@ export async function update(args: string[], session: Session): Promise<number> 
   for (const { spec, source } of parsed.sourced) {
     const name = nameOfSpec(spec);
     const group = GROUPS.find(g => manifest[g]?.[name] !== undefined);
+    
     if (!group) {
       fail(`${name} is not a dependency in package.json`);
       return 1;
     }
-    const wanted = spec === name ? `${name}@${manifest[group]![name]}` : spec;
-    groups.set(group, [...(groups.get(group) ?? []), { spec: wanted, source }]);
+    
+    const declared = String(manifest[group]![name]);
+    const pinned = spec === name ? sourceOfTarball(declared) : undefined;
+    const wanted = spec !== name ? spec : pinned ? name : `${name}@${declared}`;
+    
+    groups.set(group, [...(groups.get(group) ?? []), { spec: wanted, source: source ?? pinned }]);
   }
 
   for (const [group, sourced] of groups) {
