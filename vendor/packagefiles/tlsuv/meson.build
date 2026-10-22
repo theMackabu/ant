@@ -64,7 +64,7 @@ endif
 if host_machine.system() == 'windows'
   tlsuv_c_args += ['-D_WIN32_WINNT=0x0A00', '-DWINVER=0x0A00', '-DWIN32_LEAN_AND_MEAN',
                    '-D_CRT_SECURE_NO_WARNINGS', '-D_CRT_NONSTDC_NO_DEPRECATE',
-                   '-D_WINSOCK_DEPRECATED_NO_WARNINGS']
+                   '-D_WINSOCK_DEPRECATED_NO_WARNINGS', '-D_POSIX_THREAD_SAFE_FUNCTIONS']
 elif host_machine.system() == 'linux'
   tlsuv_c_args += ['-D_POSIX_C_SOURCE=200112', '-D_GNU_SOURCE']
 endif

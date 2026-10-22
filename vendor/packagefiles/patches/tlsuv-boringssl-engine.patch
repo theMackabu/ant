@@ -2,7 +2,7 @@ diff --git a/src/boringssl/engine.c b/src/boringssl/engine.c
 index da90ea2..54ad0db 100644
 --- a/src/boringssl/engine.c
 +++ b/src/boringssl/engine.c
-@@ -31,8 +31,22 @@
+@@ -31,8 +31,27 @@
  
  #include "keys.h"
  
@@ -16,6 +16,11 @@ index da90ea2..54ad0db 100644
 +#if _WIN32
 +#include <windows.h>
 +#include <wincrypt.h>
++#undef X509_NAME
++#undef X509_EXTENSIONS
++#undef PKCS7_SIGNER_INFO
++#undef OCSP_REQUEST
++#undef OCSP_RESPONSE
 +#elif !__APPLE__
 +#include <unistd.h>
 +#endif
@@ -25,7 +30,7 @@ index da90ea2..54ad0db 100644
  #endif
  
  struct openssl_ctx {
-@@ -53,6 +67,9 @@ struct openssl_ctx {
+@@ -53,6 +72,9 @@ struct openssl_ctx {
      // require_fips() was applied. Makes require_fips() idempotent and avoids re-applying the
      // compliance policy, which also resets the min/max protocol versions (see require_fips())
      bool fips_policy;
@@ -35,7 +40,7 @@ index da90ea2..54ad0db 100644
  };
  
  struct openssl_engine {
-@@ -360,40 +377,171 @@ static const char* name_str(const X509_NAME* n) {
+@@ -360,40 +382,171 @@ static const char* name_str(const X509_NAME* n) {
  }
  
  #if __APPLE__
@@ -220,7 +225,7 @@ index da90ea2..54ad0db 100644
  static int set_ca_bundle(tls_context* tls, const char* ca, size_t ca_len) {
      struct openssl_ctx* c = (struct openssl_ctx*)tls;
      SSL_CTX* ctx = c->ctx;
-@@ -411,6 +559,7 @@ static int set_ca_bundle(tls_context* tls, const char* ca, size_t ca_len) {
+@@ -411,6 +564,7 @@ static int set_ca_bundle(tls_context* tls, const char* ca, size_t ca_len) {
      // may be called more than once on the same context
      X509_STORE_free(c->ca_store);
      c->ca_store = NULL;
@@ -228,7 +233,7 @@ index da90ea2..54ad0db 100644
  
      SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
      if (custom) {
-@@ -428,7 +577,7 @@ static int set_ca_bundle(tls_context* tls, const char* ca, size_t ca_len) {
+@@ -428,7 +582,7 @@ static int set_ca_bundle(tls_context* tls, const char* ca, size_t ca_len) {
          // use native Apple trust verification
          SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, apple_ca_verify);
  #else
@@ -237,7 +242,7 @@ index da90ea2..54ad0db 100644
  #endif
      }
      return 0;
-@@ -641,8 +790,6 @@ tlsuv_engine_t new_boringssl_engine(tls_context* ctx, const char* host) {
+@@ -641,8 +795,6 @@ tlsuv_engine_t new_boringssl_engine(tls_context* ctx, const char* host) {
  
      engine->ssl = SSL_new(context->ctx);
  
@@ -246,7 +251,7 @@ index da90ea2..54ad0db 100644
      // unlike OpenSSL's SSL_set1_host(), BoringSSL's does not auto-detect an
      // IP-address-literal host and match it against iPAddress SANs - it only
      // ever checks dNSName SANs. Detect IP literals and use the IP-specific
-@@ -655,6 +802,8 @@ tlsuv_engine_t new_boringssl_engine(tls_context* ctx, const char* host) {
+@@ -655,6 +807,8 @@ tlsuv_engine_t new_boringssl_engine(tls_context* ctx, const char* host) {
              ASN1_OCTET_STRING_free(host_ip);
              X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(engine->ssl), host);
          } else {
@@ -255,7 +260,7 @@ index da90ea2..54ad0db 100644
              SSL_set1_host(engine->ssl, host);
          }
      }
-@@ -663,6 +812,12 @@ tlsuv_engine_t new_boringssl_engine(tls_context* ctx, const char* host) {
+@@ -663,6 +817,12 @@ tlsuv_engine_t new_boringssl_engine(tls_context* ctx, const char* host) {
  
      SSL_set_app_data(engine->ssl, engine);
  
