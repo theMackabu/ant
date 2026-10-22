@@ -32,7 +32,7 @@ diff --git a/src/gc.ts b/src/gc.ts
 +  for (const found of await list(shared)) {
 +    if (!found.isDirectory()) continue;
 +    const at = builtin.path.join(shared, found.name);
-+    const staged = /\.(tmp|old)-(\d+)-/.exec(found.name);
++    const staged = /\.(tmp|old)-(\d+)-[0-9a-f]{8}$/.exec(found.name);
 +    if (staged ? alive(Number(staged[2])) : await linked(at)) continue;
 +    const info = await builtin.fsp.stat(at).catch(() => undefined);
 +    if (!staged && (!info || info.mtimeMs > cutoff)) continue;
@@ -125,7 +125,7 @@ diff --git a/src/link.ts b/src/link.ts
    const production = options.production === true;
    const hoist = options.hoist !== false;
    const hash =
-@@ -586,6 +615,91 @@
+@@ -586,6 +615,92 @@
      if (wrong) throw fail(`${id} cannot be installed: ${wrong}`, "EMISMATCH");
    }
  
@@ -150,6 +150,7 @@ diff --git a/src/link.ts b/src/link.ts
 +
 +  async function sharedIntact(entry: Entry, dir: string): Promise<boolean> {
 +    if (!landsOnDir(dir)) return false;
++    if (options.verify) return (await import("./verify.ts")).placed(store, entry.index.files, dir);
 +    if (await sized(entry, (file) => join(dir, file.path))) return true;
 +    return (await import("./verify.ts")).sized(entry.index.files, dir);
 +  }
@@ -217,7 +218,7 @@ diff --git a/src/link.ts b/src/link.ts
    /** Built under a temp name and renamed in, so a half-written entry is never mistaken for one. */
    async function materialize(entry: Entry): Promise<void> {
      const final = join(storeDir, entry.key);
-@@ -611,7 +725,7 @@
+@@ -611,7 +726,7 @@
          // The key covers the subgraph, so a matching entry should already be right — but one
          // written by an older upm may name deps we no longer resolve.
          const nmDir = join(final, "node_modules");
@@ -226,7 +227,7 @@ diff --git a/src/link.ts b/src/link.ts
          await sweep(join(nmDir, ".bin"), new Set(binsOf(deps, nmDir).keys()));
          return;
        }
-@@ -735,7 +849,7 @@
+@@ -735,7 +850,7 @@
  
    /** True when the pool built it: counted once the entry lands, not when a race loses it. */
    async function build(entry: Entry, temp: string, final: string): Promise<boolean> {
@@ -235,7 +236,7 @@ diff --git a/src/link.ts b/src/link.ts
      if (on) {
        const finalNm = join(final, "node_modules");
        const bins = WIN ? binsOf(depsOf(entry.pkg), finalNm) : undefined;
-@@ -872,7 +986,8 @@
+@@ -872,7 +987,8 @@
    async function buildHere(entry: Entry, temp: string, final: string): Promise<void> {
      const { pkg, index } = entry;
      const tempNm = join(temp, "node_modules");

@@ -1254,7 +1254,15 @@ static ant_value_t process_kill(ant_params_t) {
   }
   
   int result = uv_kill(pid, sig);
-  if (result != 0) return js_mkerr(js, "Failed to send signal");
+  if (result != 0) {
+    const char *code = uv_err_name(result);
+    ant_value_t props = Ant_Object_CreateBare(js);
+    js_set(js, props, "code", js_mkstr(js, code, strlen(code)));
+    js_set(js, props, "errno", js_mknum(result));
+    js_set(js, props, "syscall", js_mkstr(js, "kill", 4));
+    return js_mkerr_props(js, JS_ERR_GENERIC, props, "kill %s", code);
+  }
+  
   return js_true;
 }
 
