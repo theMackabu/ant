@@ -211,8 +211,10 @@ static void tls_socket_sync_state(ant_tls_socket_t *socket) {
   js_set(js, socket->obj, "authorizationError", js_mknull());
   js_set(js, socket->obj, "secureConnecting", js_bool(socket->connecting));
   js_set(js, socket->obj, "connecting", js_bool(socket->connecting));
-  js_set(js, socket->obj, "destroyed", js_bool(socket->destroyed));
-  js_set(js, socket->obj, "readable", js_bool(!socket->destroyed));
+  
+  stream_set_destroyed(js, socket->obj, socket->destroyed);
+  stream_set_readable(js, socket->obj, !socket->destroyed);
+  
   js_set(js, socket->obj, "writable", js_bool(!socket->destroyed));
   js_set(js, socket->obj, "writableNeedDrain", js_false);
   js_set(js, socket->obj, "readyState", js_mkstr(js, ready_state, strlen(ready_state)));

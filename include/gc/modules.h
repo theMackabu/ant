@@ -39,6 +39,7 @@ void gc_mark_sandbox(ant_t *js, gc_mark_fn mark);
 void gc_clear_napi_weak_refs(ant_t *js, bool minor);
 void gc_mark_abort_signal_object(ant_t *js, ant_value_t signal, gc_mark_fn mark);
 void gc_mark_error_record(ant_t *js, ant_value_t value, gc_mark_fn mark);
-void gc_mark_stream_state_object(ant_t *js, ant_value_t value, gc_mark_fn mark);
+void gc_mark_stream_object(ant_t *js, ant_value_t value, gc_mark_fn mark);
+void gc_finalize_stream_object(ant_t *js, ant_value_t value);
 
 #endif

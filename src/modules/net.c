@@ -359,7 +359,8 @@ static void net_socket_sync_state(net_socket_t *socket) {
 
   if (socket->destroyed) ready_state = "closed";
   else if (socket->connecting) ready_state = "opening";
-  js_set(socket->js, obj, "destroyed", js_bool(socket->destroyed));
+  stream_set_destroyed(socket->js, obj, socket->destroyed);
+  
   js_set(socket->js, obj, "pending", js_bool(socket->connecting || (socket->conn == NULL && !socket->destroyed)));
   js_set(socket->js, obj, "connecting", js_bool(socket->connecting));
   js_set(socket->js, obj, "readyState", js_mkstr(socket->js, ready_state, strlen(ready_state)));

@@ -886,7 +886,7 @@ void init_tty_module(ant_t *js) {
     setup_writestream_proto(js, stdout_proto);
     stream_init_duplex_object(js, stdout_obj, js_mkundef());
     js_set(js, stdout_obj, "_write", Ant_Function_Create(tty_stream_write));
-    js_set(js, stdout_obj, "readable", js_false);
+    stream_set_readable(js, stdout_obj, false);
   }
 
   ant_value_t stderr_obj = js_get(js, process_obj, "stderr");
@@ -900,7 +900,7 @@ void init_tty_module(ant_t *js) {
     setup_writestream_proto(js, stderr_proto);
     stream_init_duplex_object(js, stderr_obj, js_mkundef());
     js_set(js, stderr_obj, "_write", Ant_Function_Create(tty_stream_write));
-    js_set(js, stderr_obj, "readable", js_false);
+    stream_set_readable(js, stderr_obj, false);
   }
 }
 

@@ -763,7 +763,7 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
     gc_mark_abort_signal_object(js, value, gc_mark_value);
     gc_mark_error_record(js, value, gc_mark_value);
     gc_mark_eventemitter_object(js, value, gc_mark_value);
-    gc_mark_stream_state_object(js, value, gc_mark_value);
+    gc_mark_stream_object(js, value, gc_mark_value);
   }
 }
 
@@ -1446,8 +1446,11 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   }
 
   if (obj->finalizer) obj->finalizer(js, obj);
-  if (obj->native_tag != 0 || ant_object_has_sidecar(obj)) 
+  
+  if (obj->native_tag != 0 || ant_object_has_sidecar(obj)) {
+    gc_finalize_stream_object(js, js_obj_from_ptr(obj));
     gc_finalize_events_object(js, js_obj_from_ptr(obj));
+  }
   
   obj->mark_epoch = ANT_GC_DEAD;
 

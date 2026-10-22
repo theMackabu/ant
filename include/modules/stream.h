@@ -9,18 +9,6 @@ typedef void (*stream_finalize_fn)(
   void *state
 );
 
-typedef struct {
-  bool constructing;
-  bool destroy_pending;
-  bool writing;
-  bool pending_final;
-  bool final_started;
-  bool draining;
-  bool sync;
-  void *attached_state;
-  stream_finalize_fn attached_state_finalize;
-} stream_private_state_t;
-
 void stream_init_constructors(ant_t *js);
 void stream_begin_construct(ant_t *js, ant_value_t stream_obj);
 
@@ -61,5 +49,8 @@ void stream_init_duplex_object(ant_t *js, ant_value_t obj, ant_value_t options);
 void *stream_get_attached_state(ant_value_t stream_obj);
 void stream_clear_attached_state(ant_value_t stream_obj);
 void stream_set_attached_state(ant_value_t stream_obj, void *state, stream_finalize_fn finalize);
+
+void stream_set_destroyed(ant_t *js, ant_value_t stream_obj, bool destroyed);
+void stream_set_readable(ant_t *js, ant_value_t stream_obj, bool readable);
 
 #endif
