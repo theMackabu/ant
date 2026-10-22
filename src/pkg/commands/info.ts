@@ -1,10 +1,12 @@
 import { readConfig } from 'upm/src/config.ts';
-import { hosts } from 'upm/src/registry.ts';
+import { hosts, registryBase } from 'upm/src/registry.ts';
 import { escapeName } from 'upm/src/spec.ts';
 import { maxSatisfying, validRange } from 'upm/src/semver.ts';
 import { describe } from 'upm/src/util.ts';
 
 import { nameOfSpec, parseArgs } from '../args.ts';
+import { registryOf } from '../registry.ts';
+import type { Source } from '../settings.ts';
 import type { Manifest } from '../project.ts';
 import { projectRoot } from '../session.ts';
 import type { Session } from '../session.ts';
@@ -22,14 +24,15 @@ interface Packument {
   time?: Record<string, string>;
 }
 
-function registriesFor(name: string, dir: string): string[] {
+function registriesFor(name: string, dir: string, source: Source | undefined): string[] {
+  if (source) return [registryBase(registryOf(source))];
   const { registry, scopes, fallback } = readConfig(dir);
   const base = hosts(registry, scopes)(name);
   return base === registry && fallback ? [base, fallback] : [base];
 }
 
-async function fetchPackument(name: string, dir: string): Promise<Packument | undefined> {
-  for (const registry of registriesFor(name, dir)) {
+async function fetchPackument(name: string, dir: string, source: Source | undefined): Promise<Packument | undefined> {
+  for (const registry of registriesFor(name, dir, source)) {
     const response = await fetch(`${registry}/${escapeName(name)}`, { headers: { accept: 'application/json' } });
     if (response.status === 404) continue;
     if (!response.ok) throw new Error(`GET ${response.url} - ${response.status}`);
@@ -41,14 +44,15 @@ async function fetchPackument(name: string, dir: string): Promise<Packument | un
 const TAG_COLORS: Record<string, 'blue' | 'cyan'> = { beta: 'blue', latest: 'cyan' };
 
 export async function info(args: string[], session: Session): Promise<number> {
-  const [spec] = parseArgs(args).specs;
-  if (!spec) return usage('info needs a package name');
+  const [first] = parseArgs(args).sourced;
+  if (!first) return usage('info needs a package name');
+  const { spec, source } = first;
   const name = nameOfSpec(spec);
   const wanted = spec.slice(name.length + 1) || 'latest';
 
   let doc: Packument | undefined;
   try {
-    doc = await fetchPackument(name, projectRoot(session));
+    doc = await fetchPackument(name, projectRoot(session), source);
   } catch (cause) {
     error(describe(cause));
     return 1;

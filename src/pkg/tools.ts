@@ -12,13 +12,17 @@ function toolDir(name: string): string {
 }
 
 function writeTool(dir: string, name: string, posix: string, cmd: string): void {
-  if (process.platform === 'win32') {
-    fs.writeFileSync(path.join(dir, `${name}.cmd`), cmd);
-    return;
-  }
-  const file = path.join(dir, name);
-  fs.writeFileSync(file, posix, { mode: 0o755 });
-  fs.chmodSync(file, 0o755);
+  const win = process.platform === 'win32';
+  const file = path.join(dir, win ? `${name}.cmd` : name);
+  const text = win ? cmd : posix;
+  try {
+    if (fs.readFileSync(file, 'utf8') === text) return;
+  } catch {}
+
+  const temp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, text, { mode: 0o755 });
+  if (!win) fs.chmodSync(temp, 0o755);
+  fs.renameSync(temp, file);
 }
 
 export function nodeShim(): string {

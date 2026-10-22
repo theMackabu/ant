@@ -5428,7 +5428,9 @@ static const fs_open_flag_t fs_open_flag_names[] = {
 
 static bool fs_open_flags_of(ant_t *js, ant_value_t arg, int *out) {
   if (vtype(arg) == kTypeNumber) {
-    *out = (int)js_getnum(arg);
+    double flags = js_getnum(arg);
+    if (!(flags >= INT32_MIN && flags <= INT32_MAX) || flags != (double)(int32_t)flags) return false;
+    *out = (int)flags;
     return true;
   }
   

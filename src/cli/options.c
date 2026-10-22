@@ -213,7 +213,7 @@ static int push_print(char **out, int count, int argc, char **argv, int *i) {
 }
 
 static bool filter_global_flags(ant_cli_t *cli, int argc, char **argv) {
-  char **out = cli->filtered_argv = try_oom(sizeof(char *) * (size_t)(2 * argc + 1));
+  char **out = cli->filtered_argv = try_oom(sizeof(char *) * (size_t)(3 * argc + 1));
   int count = 0;
   bool parse = true;
 
