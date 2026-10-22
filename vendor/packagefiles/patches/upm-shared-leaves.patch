@@ -58,7 +58,7 @@ diff --git a/src/gc.ts b/src/gc.ts
 diff --git a/src/link.ts b/src/link.ts
 --- a/src/link.ts
 +++ b/src/link.ts
-@@ -21,7 +21,15 @@
+@@ -21,9 +21,17 @@
  import { allDeps } from "./resolve.ts";
  import { pid } from "./runtime.ts";
  import type { ResolvedPackage, Resolution } from "./resolve.ts";
@@ -73,16 +73,20 @@ diff --git a/src/link.ts b/src/link.ts
 +  writeState,
 +} from "./state.ts";
  import type { InstallState, TopLinks } from "./state.ts";
- import type { PackageIndex, Store } from "./store.ts";
+-import type { PackageIndex, Store } from "./store.ts";
++import type { FileEntry, PackageIndex, Store } from "./store.ts";
  
-@@ -129,6 +137,25 @@
+ export interface LinkOptions {
+   dir: string;
+@@ -129,6 +137,26 @@
  /** A pool rejects with this when a worker died mid-shard: the entry is undone, not failed. */
  const WORKER_DIED = "EWORKERDIED";
  
 +export type ShareFilter = (
 +  pkg: ResolvedPackage,
 +  manifest: Record<string, unknown>,
-+  files: readonly { path: string }[],
++  files: readonly FileEntry[],
++  read: (file: FileEntry) => string,
 +) => boolean;
 +
 +let shareFilter: ShareFilter | undefined;
@@ -101,7 +105,7 @@ diff --git a/src/link.ts b/src/link.ts
  /** Past this many files an entry is split across workers, by directory. */
  const SHARD_FILES = 256;
  
-@@ -211,7 +238,7 @@
+@@ -211,7 +239,7 @@
  export async function linkTree(resolution: Resolution, options: LinkOptions): Promise<LinkResult> {
    const { store } = options;
    // Read once per install: `place` runs per file, 13,575 times for `nuxt`.
@@ -110,7 +114,7 @@ diff --git a/src/link.ts b/src/link.ts
    const normalized = new Map<string, string>();
    const heads = new Map<string, Promise<string | undefined>>();
    const { lstat, mkdir, readdir, realpath, rename, rm, rmdir, stat, utimes } = builtin.fsp;
-@@ -219,6 +246,7 @@
+@@ -219,6 +247,7 @@
    const up = `..${sep}`;
    const limit = createLimiter(options.concurrency ?? 16);
    const storeDir = join(options.dir, "node_modules", ENTRIES_DIR);
@@ -118,7 +122,7 @@ diff --git a/src/link.ts b/src/link.ts
    const production = options.production === true;
    const hoist = options.hoist !== false;
    const hash =
-@@ -586,6 +614,89 @@
+@@ -586,6 +615,90 @@
      if (wrong) throw fail(`${id} cannot be installed: ${wrong}`, "EMISMATCH");
    }
  
@@ -133,7 +137,8 @@ diff --git a/src/link.ts b/src/link.ts
 +      try {
 +        const manifest = JSON.parse(builtin.fs.readFileSync(store.blobPath(file), "utf8"));
 +        const files = entry.index.files;
-+        if (shareFilter(pkg, manifest, files)) dir = resolve(store.dir, SHARED_DIR, entry.key);
++        const read = (found: FileEntry) => builtin.fs.readFileSync(store.blobPath(found), "utf8");
++        if (shareFilter(pkg, manifest, files, read)) dir = resolve(store.dir, SHARED_DIR, entry.key);
 +      } catch {}
 +    }
 +    sharing.set(entry.key, dir);
@@ -208,7 +213,7 @@ diff --git a/src/link.ts b/src/link.ts
    /** Built under a temp name and renamed in, so a half-written entry is never mistaken for one. */
    async function materialize(entry: Entry): Promise<void> {
      const final = join(storeDir, entry.key);
-@@ -611,7 +722,7 @@
+@@ -611,7 +724,7 @@
          // The key covers the subgraph, so a matching entry should already be right — but one
          // written by an older upm may name deps we no longer resolve.
          const nmDir = join(final, "node_modules");
@@ -217,7 +222,7 @@ diff --git a/src/link.ts b/src/link.ts
          await sweep(join(nmDir, ".bin"), new Set(binsOf(deps, nmDir).keys()));
          return;
        }
-@@ -735,7 +846,7 @@
+@@ -735,7 +848,7 @@
  
    /** True when the pool built it: counted once the entry lands, not when a race loses it. */
    async function build(entry: Entry, temp: string, final: string): Promise<boolean> {
@@ -226,7 +231,7 @@ diff --git a/src/link.ts b/src/link.ts
      if (on) {
        const finalNm = join(final, "node_modules");
        const bins = WIN ? binsOf(depsOf(entry.pkg), finalNm) : undefined;
-@@ -872,7 +983,8 @@
+@@ -872,7 +985,8 @@
    async function buildHere(entry: Entry, temp: string, final: string): Promise<void> {
      const { pkg, index } = entry;
      const tempNm = join(temp, "node_modules");

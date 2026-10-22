@@ -5,10 +5,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { nameOfSpec, parseArgs } from '../args.ts';
-import type { Args } from '../args.ts';
+import type { Args, SourcedSpec } from '../args.ts';
+import { pinSpecs } from '../land.ts';
 import { GROUPS, readManifest } from '../project.ts';
-import { useSource } from '../registry.ts';
-import { upm } from '../session.ts';
+import { projectRoot, upm } from '../session.ts';
 import type { Session } from '../session.ts';
 import { afterInstall, migrate } from '../steps.ts';
 import { fail, usage } from '../ui/output.ts';
@@ -48,14 +48,13 @@ export async function update(args: string[], session: Session): Promise<number> 
   } catch (error) {
     return usage((error as Error).message);
   }
-  if (parsed.source) useSource(parsed.source);
+  
   await migrate(session);
-
   if (parsed.specs.length === 0) return await refreshAll(session.dir, parsed.flags, session);
 
   const manifest = session.dir ? readManifest(session.dir) ?? {} : {};
-  const groups = new Map<Group, string[]>();
-  for (const spec of parsed.specs) {
+  const groups = new Map<Group, SourcedSpec[]>();
+  for (const { spec, source } of parsed.sourced) {
     const name = nameOfSpec(spec);
     const group = GROUPS.find(g => manifest[g]?.[name] !== undefined);
     if (!group) {
@@ -63,10 +62,11 @@ export async function update(args: string[], session: Session): Promise<number> 
       return 1;
     }
     const wanted = spec === name ? `${name}@${manifest[group]![name]}` : spec;
-    groups.set(group, [...(groups.get(group) ?? []), wanted]);
+    groups.set(group, [...(groups.get(group) ?? []), { spec: wanted, source }]);
   }
 
-  for (const [group, specs] of groups) {
+  for (const [group, sourced] of groups) {
+    const specs = await pinSpecs(sourced, projectRoot(session));
     const code = await upm(['add', ...GROUP_FLAGS[group], ...specs, ...parsed.flags], session);
     if (code !== 0) return code;
   }

@@ -39,7 +39,7 @@ export async function exec(args: string[], session: Session): Promise<number> {
     } catch (error) {
       return usage((error as Error).message);
     }
-    if (parsed.source) useSource(parsed.source);
+    if (parsed.source) useSource(parsed.source, session.settings);
 
     const name = nameOfSpec(parsed.spec);
     const pinned = parsed.spec !== name;

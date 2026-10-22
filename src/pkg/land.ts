@@ -7,31 +7,33 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { nameOfSpec } from './args.ts';
-import { LAND_REGISTRY } from './registry.ts';
+import type { SourcedSpec } from './args.ts';
+import { registryOf } from './registry.ts';
+import type { Source } from './settings.ts';
 import { note } from './ui/output.ts';
+
+const REGISTRY_TYPES = new Set(['range', 'version', 'tag']);
+const SOURCE_NAMES: Record<Source, string> = { land: 'ants.land', npm: 'npm' };
 
 function scopeOf(name: string): string | undefined {
   return name.startsWith('@') ? name.slice(0, name.indexOf('/')) : undefined;
 }
 
-function mapScope(dir: string, scope: string): void {
-  const npmrc = path.join(dir, '.npmrc');
-  const key = `${scope}:registry`;
-  let text = '';
+function scopeRegistry(dir: string, scope: string): string | undefined {
+  return readConfig(dir).scopes[scope];
+}
 
+function mapScope(dir: string, scope: string, registry: string): void {
+  const npmrc = path.join(dir, '.npmrc');
+  let text = '';
   try {
     text = fs.readFileSync(npmrc, 'utf8');
   } catch {}
 
-  const mapped = text.split(/\r?\n/).some(line => line.trim().toLowerCase().startsWith(`${key.toLowerCase()}=`));
-  if (mapped) return;
-
   const prefix = text && !text.endsWith('\n') ? '\n' : '';
-  fs.writeFileSync(npmrc, `${text}${prefix}${key}=${LAND_REGISTRY}\n`);
-  note(`+ ${key}=${LAND_REGISTRY} in .npmrc`);
+  fs.writeFileSync(npmrc, `${text}${prefix}${scope}:registry=${registry}\n`);
+  note(`+ ${scope}:registry=${registry} in .npmrc`);
 }
-
-const REGISTRY_TYPES = new Set(['range', 'version', 'tag']);
 
 function isRegistrySpec(spec: string): boolean {
   try {
@@ -42,11 +44,11 @@ function isRegistrySpec(spec: string): boolean {
   }
 }
 
-async function onLand(spec: string, dir: string): Promise<string | undefined> {
+async function tarballOn(spec: string, dir: string, registry: string): Promise<string | undefined> {
   try {
     const [manifest] = await resolve([spec], {
       dir,
-      registry: LAND_REGISTRY,
+      registry,
       log: () => {},
       experimental: { resolvePool: 0 },
     } as Parameters<typeof resolve>[1]);
@@ -56,24 +58,34 @@ async function onLand(spec: string, dir: string): Promise<string | undefined> {
   }
 }
 
-export async function pinLandSpecs(specs: string[], dir: string): Promise<string[]> {
-  if (readConfig(dir).registry !== registryBase(LAND_REGISTRY)) return specs;
+async function pinSpec(spec: string, source: Source, explicit: boolean, dir: string): Promise<string> {
+  const registry = registryOf(source);
+  const name = nameOfSpec(spec);
+  const tarball = await tarballOn(spec, dir, registry);
+  if (!tarball) {
+    if (explicit) throw new Error(`${spec} was not found on ${SOURCE_NAMES[source]}`);
+    return spec;
+  }
+
+  const scope = scopeOf(name);
+  const mapped = scope ? scopeRegistry(dir, scope) : undefined;
+  if (scope && (!mapped || registryBase(mapped) === registryBase(registry))) {
+    if (!mapped) mapScope(dir, scope, registry);
+    return spec;
+  }
+
+  note(`saving ${name} as its ${SOURCE_NAMES[source]} tarball url, so every install takes it from there`);
+  return `${name}@${tarball}`;
+}
+
+export async function pinSpecs(specs: SourcedSpec[], dir: string): Promise<string[]> {
+  const project = readConfig(dir).registry;
+  const onLand = project === registryBase(registryOf('land'));
   const pinned: string[] = [];
-  for (const spec of specs) {
-    const name = nameOfSpec(spec);
-    const tarball = isRegistrySpec(spec) ? await onLand(spec, dir) : undefined;
-    if (!tarball) {
-      pinned.push(spec);
-      continue;
-    }
-    const scope = scopeOf(name);
-    if (scope) {
-      mapScope(dir, scope);
-      pinned.push(spec);
-      continue;
-    }
-    note(`saving ${name} as its ants.land tarball url, so other package managers can install it`);
-    pinned.push(`${name}@${tarball}`);
+  for (const { spec, source } of specs) {
+    const target = source ?? (onLand ? 'land' : undefined);
+    const needed = target && isRegistrySpec(spec) && !(target === 'npm' && project === registryBase(registryOf('npm')));
+    pinned.push(needed ? await pinSpec(spec, target, source !== undefined, dir) : spec);
   }
   return pinned;
 }

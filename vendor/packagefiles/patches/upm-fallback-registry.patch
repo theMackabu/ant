@@ -18,28 +18,51 @@ diff --git a/src/api.ts b/src/api.ts
      platform: currentPlatform(),
    };
  }
-@@ -2129,7 +2129,7 @@
+@@ -2119,6 +2119,18 @@
+  * for by count, and a `debug` log line otherwise. A pool that cannot load is the plain
+  * registry, as with 0.
+  */
++async function lockedNames(ctx: Context): Promise<string[]> {
++  const dir = ctx.root ?? globalThis.process.cwd();
++  try {
++    if (lockSource(ctx, dir).foreign) return [];
++    const text = await lockText(ctx, dir);
++    const keys = Object.keys((text && (JSON.parse(text) as { packages?: object }).packages) || {});
++    return [...new Set(keys.map((key) => key.slice(0, key.indexOf("@", 1))))];
++  } catch {
++    return [];
++  }
++}
++
+ async function openRegistry(
+   ctx: Context,
+   size = ctx.resolvePool,
+@@ -2129,8 +2141,9 @@
      ctx.early = undefined;
      return await early;
    }
 -  const { registry, scopes, auth, before, releaseAgeExclude: exclude } = settings(ctx);
 +  const { registry, scopes, fallback, auth, before, releaseAgeExclude: exclude } = settings(ctx);
    const { offline, preferOffline } = settings(ctx);
++  const locked = fallback ? await lockedNames(ctx) : undefined;
    const mode = offline ? "only" : preferOffline ? "prefer" : "revalidate";
    const { createDocumentCache, metadataDir } = await import("./metadata.ts");
-@@ -2144,6 +2144,7 @@
+   // Never the store on the project's mount (`storeOf`): documents are read, not linked, and one
+@@ -2144,6 +2157,8 @@
      ? loaded.createRegistryPool({
          registry,
          scopes,
 +        fallback,
++        locked,
          auth,
          before,
          exclude,
-@@ -2159,6 +2160,7 @@
+@@ -2159,6 +2174,8 @@
          ...createRegistry({
            registry,
            scopes,
 +          fallback,
++          locked,
            auth,
            before,
            exclude,
@@ -78,34 +101,37 @@ diff --git a/src/config.ts b/src/config.ts
 diff --git a/src/registry-pool.ts b/src/registry-pool.ts
 --- a/src/registry-pool.ts
 +++ b/src/registry-pool.ts
-@@ -47,6 +47,7 @@
+@@ -47,6 +47,8 @@
  export interface WorkerData {
    registry: string;
    scopes?: Record<string, string>;
 +  fallback?: string;
++  locked?: string[];
    auth?: Record<string, string>;
    concurrency: number;
    start: number;
-@@ -174,6 +175,7 @@
+@@ -174,6 +176,8 @@
          const workerData: WorkerData = {
            registry: local.base,
            scopes: options.scopes,
 +          fallback: options.fallback,
++          locked: options.locked,
            auth: options.auth,
            concurrency: max,
            start,
 diff --git a/src/registry.ts b/src/registry.ts
 --- a/src/registry.ts
 +++ b/src/registry.ts
-@@ -45,6 +45,7 @@
+@@ -45,6 +45,8 @@
    registry?: string;
    /** `@scope` → the registry its packages are read from instead of `registry`. */
    scopes?: Record<string, string>;
 +  fallback?: string;
++  locked?: string[];
    /** `//host/path/` → the `authorization` header for requests under it. See `authFor`. */
    auth?: Record<string, string>;
    /** Injectable for tests. */
-@@ -209,9 +210,16 @@
+@@ -209,9 +211,17 @@
    return undefined;
  }
  
@@ -116,13 +142,14 @@ diff --git a/src/registry.ts b/src/registry.ts
    const base = registryBase(options.registry);
    const baseFor = hosts(base, options.scopes);
 +  const fallback = options.fallback ? registryBase(options.fallback) : undefined;
++  const locked = new Set(options.locked);
 +  const moved = new Set<string>();
 +  const checked = new Set<string>();
 +  const readFrom = (name: string) => (movedAway(name) ? fallback! : baseFor(name));
    const auth = options.auth ?? {};
    const request = options.fetch ?? fetching();
    // One gate over every request to this registry. It lives here because the retry below
-@@ -305,8 +313,35 @@
+@@ -305,8 +315,35 @@
      if (!options.fetch) await cacheLookups();
    };
  
@@ -130,16 +157,16 @@ diff --git a/src/registry.ts b/src/registry.ts
 +    if (!fallback || baseFor(name) !== base) return false;
 +    if (url !== `${base}/${escapeName(name)}`) return false;
 +    moved.add(name);
-+    cache?.set(`miss ${url}`, MISSED, Date.now());
++    if (!locked.has(name)) cache?.set(`miss ${url}`, MISSED, Date.now());
 +    return true;
 +  }
 +
 +  function movedAway(name: string): boolean {
 +    if (moved.has(name)) return true;
-+    if (checked.has(name) || !fallback || !cache || baseFor(name) !== base) return false;
++    if (checked.has(name) || !fallback || !cache || baseFor(name) !== base || locked.has(name)) return false;
 +    checked.add(name);
 +    const miss = cache.get(`miss ${base}/${escapeName(name)}`);
-+    if (!miss || (cache.mode === "revalidate" && Date.now() - miss.at > MISS_TTL)) return false;
++    if (!miss || (cache.mode !== "only" && Date.now() - miss.at > MISS_TTL)) return false;
 +    moved.add(name);
 +    return true;
 +  }
@@ -158,7 +185,7 @@ diff --git a/src/registry.ts b/src/registry.ts
      const { doc, use } = kept(name, url, accept);
      if (use && !ask) {
        served.add(keyOf(url, accept));
-@@ -356,7 +391,7 @@
+@@ -356,7 +393,7 @@
      });
    }
  
@@ -167,7 +194,7 @@ diff --git a/src/registry.ts b/src/registry.ts
  
    function headers(url: string, accept: string, etag?: string): Record<string, string> {
      const authorization = authFor(auth, url);
-@@ -392,7 +427,8 @@
+@@ -392,7 +429,8 @@
      if (use) return hit();
      if (cache?.mode === "only") return undefined;
      await ready();
@@ -177,7 +204,7 @@ diff --git a/src/registry.ts b/src/registry.ts
        let response: Response;
        try {
          response = await request(url, {
-@@ -406,6 +442,10 @@
+@@ -406,6 +444,10 @@
        if (response.status === 304 && doc) {
          return hit(touched(name, keyOf(url, accept), doc, response));
        }
@@ -188,7 +215,7 @@ diff --git a/src/registry.ts b/src/registry.ts
        if (!response.ok && isThrottle(response.status)) signal.throttled();
        if (!response.ok || !response.body) return undefined;
        const [bytes, size] = await read(response, accept === FULL ? FULL_HUGE : HUGE);
-@@ -413,6 +453,8 @@
+@@ -413,6 +455,8 @@
        if (bytes === undefined) return undefined;
        return viewOf(url, keep(url, accept, response, bytes));
      });

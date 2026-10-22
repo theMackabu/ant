@@ -31,9 +31,9 @@ Sources
   land:<spec>          from ants.land, https://npm.ants.land
   npm:<spec>           from npm, https://registry.npmjs.org
   Unprefixed specs use install.defaultRegistry, and a name ants.land does not have
-  is read from npm while install.missingPackageFallback is npm. Scoped ants.land
-  packages get an .npmrc scope line, unscoped ones their tarball url, so other
-  package managers install them too.
+  is read from npm while install.missingPackageFallback is npm. A prefix applies
+  to that package only: a scoped one gets an .npmrc scope line, an unscoped one
+  its tarball url, and the rest of the tree keeps the default registry.
 
 Options
   -g, --global         add, remove, ls: the global packages; their bins go in
@@ -63,7 +63,10 @@ Notes
   Dependency lifecycle scripts run only for trustedDependencies; ant trust adds
   packages there and runs their scripts. ant.lockb is read once and replaced by
   ant.lock. update with no names resolves everything again; with names it moves
-  them to their newest allowed versions.
+  them to their newest allowed versions. A package with no dependencies, scripts
+  or native binaries that imports nothing undeclared is kept once in the store
+  and symlinked; set install.sharedLeaves off when a tool needs every file
+  inside the project.
 
 Config
 ${keys}

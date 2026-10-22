@@ -9,10 +9,15 @@ const DIR_FLAGS = new Set(['--dir', '-C', '--prefix']);
 const GLOBAL_FLAGS = new Set(['-g', '--global']);
 const ALL_FLAGS = new Set(['-a', '--all']);
 
+export interface SourcedSpec {
+  spec: string;
+  source?: Source;
+}
+
 export interface Args {
   specs: string[];
+  sourced: SourcedSpec[];
   flags: string[];
-  source?: Source;
   dir?: string;
   global: boolean;
   all: boolean;
@@ -29,22 +34,21 @@ export function parseSource(token: string): { spec: string; source?: Source } {
 }
 
 export function parseArgs(args: string[]): Args {
-  const parsed: Args = { specs: [], flags: [], global: false, all: false };
+  const parsed: Args = { specs: [], sourced: [], flags: [], global: false, all: false };
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === '--') {
-      parsed.specs.push(...args.slice(i + 1));
+      const rest = args.slice(i + 1);
+      parsed.specs.push(...rest);
+      parsed.sourced.push(...rest.map(spec => ({ spec })));
       break;
     }
 
     if (!arg.startsWith('-')) {
-      const { spec, source } = parseSource(arg);
-      if (source && parsed.source && source !== parsed.source) {
-        throw new Error('land: and npm: packages cannot be mixed in one command');
-      }
-      parsed.source ??= source;
-      parsed.specs.push(spec);
+      const sourced = parseSource(arg);
+      parsed.sourced.push(sourced);
+      parsed.specs.push(sourced.spec);
       continue;
     }
 

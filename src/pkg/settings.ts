@@ -9,12 +9,14 @@ export interface PkgConfig {
   defaultRegistry: Source;
   missingPackageFallback: 'none' | 'npm';
   store: 'global' | 'project';
+  sharedLeaves: 'on' | 'off';
 }
 
 export const CONFIG_KEYS = {
   'install.defaultRegistry': ['land', 'npm'],
   'install.missingPackageFallback': ['none', 'npm'],
   'install.store': ['global', 'project'],
+  'install.sharedLeaves': ['on', 'off'],
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_KEYS;
@@ -23,9 +25,10 @@ const FIELDS: Record<ConfigKey, keyof PkgConfig> = {
   'install.defaultRegistry': 'defaultRegistry',
   'install.missingPackageFallback': 'missingPackageFallback',
   'install.store': 'store',
+  'install.sharedLeaves': 'sharedLeaves',
 };
 
-const DEFAULTS: PkgConfig = { defaultRegistry: 'land', missingPackageFallback: 'npm', store: 'global' };
+const DEFAULTS: PkgConfig = { defaultRegistry: 'land', missingPackageFallback: 'npm', store: 'global', sharedLeaves: 'on' };
 
 export function isConfigKey(key: string): key is ConfigKey {
   return Object.hasOwn(CONFIG_KEYS, key);

@@ -1,8 +1,7 @@
 import { parseArgs } from '../args.ts';
 import type { Args } from '../args.ts';
 import { addGlobal, removeGlobal } from '../global/packages.ts';
-import { pinLandSpecs } from '../land.ts';
-import { useSource } from '../registry.ts';
+import { pinSpecs } from '../land.ts';
 import { projectRoot, upm } from '../session.ts';
 import type { Session } from '../session.ts';
 import { afterInstall, migrate } from '../steps.ts';
@@ -15,18 +14,16 @@ export async function install(command: string, args: string[], session: Session)
   } catch (error) {
     return usage((error as Error).message);
   }
-  if (parsed.source) useSource(parsed.source);
 
   if (parsed.global) {
     if (command === 'remove') return await removeGlobal(parsed.specs, parsed.flags, session);
     if (parsed.specs.length === 0) return usage('add -g needs at least one spec');
-    return await addGlobal(parsed.specs, parsed.flags, session);
+    return await addGlobal(parsed.sourced, parsed.flags, session);
   }
 
   await migrate(session);
   const adds = command === 'add' || (command === 'install' && parsed.specs.length > 0);
-  const land = (parsed.source ?? session.settings.defaultRegistry) === 'land';
-  const specs = adds && land ? await pinLandSpecs(parsed.specs, projectRoot(session)) : parsed.specs;
+  const specs = adds ? await pinSpecs(parsed.sourced, projectRoot(session)) : parsed.specs;
   const code = await upm([command, ...specs, ...parsed.flags], session);
   return code !== 0 ? code : await afterInstall(session, parsed.flags);
 }

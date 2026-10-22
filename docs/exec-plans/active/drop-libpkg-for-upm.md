@@ -59,7 +59,15 @@ its cache, upm hardlinks every file into `node_modules/.upm`.
   patches can be dropped release by release.
 - libpkg's behaviour is kept, without its bugs: registry fallback (with a
   24-hour miss cache), `land:` and `npm:` prefixes, `.npmrc` scope mapping and
-  Ant's directories are upm patches or hooks; commands upm does not have (trust and lifecycle
+  Ant's directories are upm patches or hooks. A prefix applies to its package
+  only: a scoped package gets an `.npmrc` scope line, an unscoped one is saved
+  as its tarball url, and the rest of the tree keeps the default registry and
+  its fallback (`src/pkg/land.ts`). A prefix used to switch the registry for
+  the whole install, so `ant add npm:foo` dropped ants.land for every package.
+  The fallback no longer remembers misses for names already in the lockfile
+  (a 404 from an expired token is asked again next run, not routed to npm for
+  a day), and a remembered miss expires after 24 hours in every mode but
+  `--offline`; locked installs stay protected by integrity checks. commands upm does not have (trust and lifecycle
   scripts, global installs, `why`, `info`, `ls`, `cache`, `config`, `init`,
   `create`) live in Ant's own `src/pkg/`.
 - Commands backed by JS start the normal runtime and evaluate an ESM entry
@@ -158,8 +166,16 @@ phase 5 and the performance, reliability and platform gates are open.
 - Shared leaves: a registry package with no dependencies, no peers and no
   lifecycle scripts is filled once under the store's `shared/` directory and
   symlinked into each project entry; `.links` files record users so
-  `cache prune` keeps live ones. Warm link-only install of 72 packages went
-  from 0.52 s to 0.20 s.
+  `cache prune` keeps live ones. Two kinds are kept in the tree instead:
+  packages bound to a platform (`os`/`cpu`, or shipping `.node` files, like
+  `@esbuild/*` and `@rollup/*`), and packages whose scripts import a package
+  they do not declare (a static scan of `require`/`import` specifiers, minus
+  Node builtins and their own devDependencies), since resolution from the
+  shared directory cannot reach the project's hoisted packages. Paths outside
+  the project are inherent; `ant config set install.sharedLeaves off` turns
+  sharing off for tools that need every file inside the project. Warm
+  link-only install of 72 packages (42 shared): 0.29 s, 0.55 s with sharing
+  off.
 - Lifecycle discovery and `why` resolve store entries through the lock
   entry's version, so `file:`, VCS and tarball dependencies with install
   scripts are found; the discovery cache is versioned so stale empty caches

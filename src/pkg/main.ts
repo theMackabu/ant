@@ -64,7 +64,6 @@ async function dispatch(argv: string[]): Promise<number> {
   setProgramName('ant', 'magenta');
   useAntHome();
   installUsage();
-  shareSelfContained();
   installRunBanner();
 
   if (!UPM_HELP.has(command) && isHelp(args)) {
@@ -75,6 +74,7 @@ async function dispatch(argv: string[]): Promise<number> {
   const run = Object.hasOwn(COMMANDS, command) ? COMMANDS[command] : undefined;
   if (!run) return usage(`unknown command "${command}"`);
   const session = await openSession(dirOption(command, args), leading.includes('--verbose'));
+  if (session.settings.sharedLeaves === 'on') shareSelfContained();
   return await run(args, session);
 }
 
