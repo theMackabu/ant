@@ -2,43 +2,44 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { cachePath } from '../paths.ts';
+import { nodeGypShim, nodeShim } from '../tools.ts';
 import { fail, write } from '../ui/output.ts';
 import { MARKER, markerText } from './discover.ts';
 import type { Pending } from './discover.ts';
 
 const OUTPUT_LIMIT = 1 << 20;
-const NODE_GYP = 'node-gyp@12.2.0';
-
-function shell(): [string, string[]] {
-  if (process.platform === 'win32') return [process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c']];
-  return [process.env.ANT_SCRIPT_SHELL || process.env.SHELL || '/bin/sh', ['-c']];
-}
-
-function nodeGypShim(): string {
-  const dir = cachePath('tools', 'node-gyp-shim');
-  const ant = process.execPath;
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-    if (process.platform === 'win32') {
-      fs.writeFileSync(path.join(dir, 'node-gyp.cmd'), `@"${ant}" x -p ${NODE_GYP} node-gyp %*\r\n`);
-    } else {
-      const file = path.join(dir, 'node-gyp');
-      fs.writeFileSync(file, `#!/bin/sh\nexec "${ant}" x -p ${NODE_GYP} node-gyp "$@"\n`, { mode: 0o755 });
-      fs.chmodSync(file, 0o755);
-    }
-  } catch {}
-  return dir;
-}
 
 interface Run {
   code: number;
   output: string;
 }
 
-function runScript(pkg: Pending, root: string, script: [string, string], gyp: string): Promise<Run> {
+function shell(): [string, string[]] {
+  if (process.platform === 'win32') return [process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c']];
+  return [process.env.ANT_SCRIPT_SHELL || '/bin/sh', ['-c']];
+}
+
+function unshare(dir: string): void {
+  const stack = [dir];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const file = path.join(current, entry.name);
+      if (entry.isDirectory()) stack.push(file);
+      if (!entry.isFile()) continue;
+      const info = fs.statSync(file);
+      if (info.nlink < 2) continue;
+      const temp = `${file}.ant-unshare`;
+      fs.copyFileSync(file, temp);
+      fs.chmodSync(temp, info.mode | 0o200);
+      fs.renameSync(temp, file);
+    }
+  }
+}
+
+function runScript(pkg: Pending, root: string, script: [string, string], tools: string[]): Promise<Run> {
   const [command, args] = shell();
-  const bins = [path.join(root, 'node_modules', '.bin'), gyp];
+  const bins = [path.join(pkg.modules, '.bin'), path.join(root, 'node_modules', '.bin'), ...tools];
   const env = {
     ...process.env,
     PATH: [...bins, process.env.PATH ?? ''].join(path.delimiter),
@@ -63,14 +64,15 @@ function runScript(pkg: Pending, root: string, script: [string, string], gyp: st
 }
 
 export async function runLifecycle(root: string, pending: Pending[], verbose: boolean): Promise<{ built: string[]; failed: number }> {
-  const gyp = nodeGypShim();
+  const tools = pending.length > 0 ? [nodeGypShim(), nodeShim()] : [];
   const built: string[] = [];
   let failed = 0;
 
   for (const pkg of pending) {
+    unshare(pkg.dir);
     let ok = true;
     for (const script of pkg.scripts) {
-      const { code, output } = await runScript(pkg, root, script, gyp);
+      const { code, output } = await runScript(pkg, root, script, tools);
       if (verbose || code !== 0) write('stderr', output);
       if (code === 0) continue;
       fail(`${pkg.name}: ${script[0]} script exited with code ${code}`);

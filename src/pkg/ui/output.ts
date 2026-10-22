@@ -15,8 +15,10 @@ export function duration(ms: number): string {
 }
 
 export function size(bytes: number): string {
-  const kb = bytes / 1000;
-  return kb < 1000 ? `${kb.toFixed(1)} kB` : `${(kb / 1000).toFixed(1)} MB`;
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(2)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(2)} KB`;
+  return `${bytes} B`;
 }
 
 export function summary(verb: string, parts: string[]): void {

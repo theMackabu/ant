@@ -9,6 +9,7 @@ import type { RootManifest } from 'upm/src/resolve.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { readManifest } from '../project.ts';
 import { LOCKB, parseLockb } from './parse.ts';
 import type { LockbPackage } from './parse.ts';
 
@@ -16,7 +17,7 @@ function installPath(pkg: LockbPackage): string {
   return pkg.parent ? `${pkg.parent}/node_modules/${pkg.name}` : pkg.name;
 }
 
-export function lockbSource(packages: LockbPackage[], manifest: RootManifest): Source {
+function lockbSource(packages: LockbPackage[], manifest: RootManifest): Source {
   const byPath = new Map<string, LockbPackage>();
   for (const pkg of packages) byPath.set(installPath(pkg), pkg);
 
@@ -67,12 +68,8 @@ export async function migrateLockb(dir: string, log: (message: string) => void):
   const lockb = path.join(dir, LOCKB);
   if (!fs.existsSync(lockb) || fs.existsSync(path.join(dir, LOCKFILE))) return false;
 
-  let manifest: RootManifest;
-  try {
-    manifest = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as RootManifest;
-  } catch {
-    return false;
-  }
+  const manifest = readManifest(dir) as RootManifest | undefined;
+  if (!manifest) return false;
 
   if ((manifest as { workspaces?: unknown }).workspaces) {
     log(`not migrating ${LOCKB}: workspaces are resolved again`);

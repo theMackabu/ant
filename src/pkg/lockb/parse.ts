@@ -39,6 +39,12 @@ function align4(offset: number): number {
   return (offset + 3) & ~3;
 }
 
+function integrityOf(digest: Uint8Array): string {
+  if (!digest.some(byte => byte !== 0)) return '';
+  if (digest.subarray(20).every(byte => byte === 0)) return `sha1-${Buffer.from(digest.subarray(0, 20)).toString('base64')}`;
+  return `sha512-${Buffer.from(digest).toString('base64')}`;
+}
+
 export function parseLockb(bytes: Uint8Array): LockbPackage[] {
   if (bytes.length < HEADER_SIZE) throw invalid('too short');
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -112,7 +118,7 @@ export function parseLockb(bytes: Uint8Array): LockbPackage[] {
     packages.push({
       name: str(at),
       version: `${major}.${minor}.${patch}${prerelease ? `-${prerelease}` : ''}`,
-      integrity: digest.some(byte => byte !== 0) ? `sha512-${Buffer.from(digest).toString('base64')}` : '',
+      integrity: integrityOf(digest),
       ...(resolved && { resolved }),
       parent: str(at + 112),
       direct: (flags & 64) !== 0,

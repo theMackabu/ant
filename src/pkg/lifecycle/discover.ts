@@ -1,12 +1,18 @@
+import { STATE_FILE } from 'upm/src/state.ts';
+
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { splitKey } from '../args.ts';
-import { readJson, readLock } from '../project.ts';
+import type { Lockfile } from 'upm/src/lock.ts';
+
+import { lockedEntry, storeEntries } from '../entries.ts';
+import { readJson, readLock, writeJson } from '../project.ts';
 import type { Manifest } from '../project.ts';
 
 export const MARKER = '.postinstall';
 const MARKER_HEADER = 'ant lifecycle v1';
+const CACHE = '.ant-lifecycle.json';
+const CACHE_VERSION = 2;
 const SCRIPTS = ['preinstall', 'install', 'postinstall'] as const;
 const SKIPPED = new Set(['esbuild']);
 
@@ -14,36 +20,21 @@ export interface Pending {
   name: string;
   version: string;
   dir: string;
+  modules: string;
   scripts: [string, string][];
 }
 
-function entryDirs(root: string): Map<string, string> {
-  const store = path.join(root, 'node_modules', '.ant');
-  const out = new Map<string, string>();
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(store);
-  } catch {
-    return out;
-  }
-  for (const entry of entries) {
-    if (entry.startsWith('.') || entry === 'node_modules') continue;
-    for (let dash = entry.indexOf('-'); dash > 0; dash = entry.indexOf('-', dash + 1)) {
-      out.set(entry.slice(0, dash), path.join(store, entry));
-    }
-  }
-  return out;
+interface Cached {
+  version: number;
+  hash: string;
+  root: string;
+  candidates: Pending[];
 }
 
-function packageDir(entries: Map<string, string>, name: string, version: string): string | undefined {
-  const entry = entries.get(`${name.replace('/', '+')}@${version}`);
-  return entry && path.join(entry, 'node_modules', name);
-}
-
-function scriptsOf(dir: string, manifest: Manifest): [string, string][] {
+export function buildScripts(manifest: Manifest, hasGyp: () => boolean): [string, string][] {
   const scripts = manifest.scripts ?? {};
   const found = SCRIPTS.filter(name => scripts[name]).map(name => [name, scripts[name]!] as [string, string]);
-  if (!scripts.install && !scripts.preinstall && fs.existsSync(path.join(dir, 'binding.gyp'))) {
+  if (!scripts.install && !scripts.preinstall && hasGyp()) {
     const at = found.findIndex(([name]) => name === 'postinstall');
     found.splice(at < 0 ? found.length : at, 0, ['install', 'node-gyp rebuild']);
   }
@@ -54,21 +45,17 @@ export function markerText(scripts: [string, string][]): string {
   return [MARKER_HEADER, ...scripts.map(([name]) => name)].join('\n') + '\n';
 }
 
-function ran(dir: string, scripts: [string, string][]): boolean {
+function ran(pkg: Pending): boolean {
   try {
-    return fs.readFileSync(path.join(dir, MARKER), 'utf8') === markerText(scripts);
+    return fs.readFileSync(path.join(pkg.dir, MARKER), 'utf8') === markerText(pkg.scripts);
   } catch {
     return false;
   }
 }
 
-export function discover(root: string): Pending[] {
-  const lock = readLock(root);
-  if (!lock) return [];
-  const entries = entryDirs(root);
+function installOrder(lock: Lockfile): string[] {
   const order: string[] = [];
   const seen = new Set<string>();
-
   const visit = (key: string) => {
     if (seen.has(key)) return;
     seen.add(key);
@@ -80,20 +67,37 @@ export function discover(root: string): Pending[] {
   };
   for (const [name, version] of Object.entries(lock.root.dependencies).sort()) visit(`${name}@${version}`);
   for (const key of Object.keys(lock.packages).sort()) visit(key);
+  return order;
+}
 
-  const pending: Pending[] = [];
-  for (const key of order) {
-    const { name, version } = splitKey(key);
+function scan(root: string): Pending[] {
+  const lock = readLock(root);
+  if (!lock) return [];
+  const entries = storeEntries(root);
+  const candidates: Pending[] = [];
+  for (const key of installOrder(lock)) {
+    const { name, version } = lockedEntry(lock, key);
     if (SKIPPED.has(name)) continue;
-    const dir = packageDir(entries, name, version);
-    if (!dir) continue;
-    const manifest = readJson<Manifest>(path.join(dir, 'package.json'));
-    if (!manifest) continue;
-    const scripts = scriptsOf(dir, manifest);
-    if (scripts.length === 0 || ran(dir, scripts)) continue;
-    pending.push({ name, version, dir, scripts });
+    for (const entry of entries.get(`${name}@${version}`) ?? []) {
+      const manifest = readJson<Manifest>(path.join(entry.dir, 'package.json'));
+      if (!manifest) continue;
+      const scripts = buildScripts(manifest, () => fs.existsSync(path.join(entry.dir, 'binding.gyp')));
+      if (scripts.length > 0) candidates.push({ name, version, dir: entry.dir, modules: entry.modules, scripts });
+    }
   }
-  return pending;
+  return candidates;
+}
+
+export function discover(root: string): Pending[] {
+  const modules = path.join(root, 'node_modules');
+  const hash = readJson<{ hash?: string }>(path.join(modules, STATE_FILE))?.hash;
+  const cached = readJson<Cached>(path.join(modules, CACHE));
+  let candidates = hash && cached?.version === CACHE_VERSION && cached.hash === hash && cached.root === root ? cached.candidates : undefined;
+  if (!candidates) {
+    candidates = scan(root);
+    if (hash) writeJson(path.join(modules, CACHE), { version: CACHE_VERSION, hash, root, candidates } satisfies Cached);
+  }
+  return candidates.filter(pkg => !ran(pkg));
 }
 
 export function scriptLine(pkg: Pending): string {

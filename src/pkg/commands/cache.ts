@@ -1,4 +1,5 @@
 import { metadataDir } from 'upm/src/metadata.ts';
+import { SHARED_DIR } from 'upm/src/state.ts';
 import { storeDir } from 'upm/src/store.ts';
 
 import fs from 'node:fs';
@@ -32,6 +33,15 @@ function walkSize(dir: string): { files: number; bytes: number } {
   return { files, bytes };
 }
 
+function sharedCount(dir: string): number {
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    return entries.filter(entry => entry.isDirectory() && !/\.(tmp|old)-/.test(entry.name)).length;
+  } catch {
+    return 0;
+  }
+}
+
 export async function cache(args: string[], session: Session): Promise<number> {
   const [op, ...rest] = args;
   if (op === 'prune') return await upm(['prune', ...rest], session);
@@ -41,6 +51,7 @@ export async function cache(args: string[], session: Session): Promise<number> {
   const rows: [string, string][] = [
     ['store', store],
     ['packages', String(walkSize(path.join(store, 'index')).files)],
+    ['shared', String(sharedCount(path.join(store, SHARED_DIR)))],
     ['files', size(walkSize(path.join(store, 'files')).bytes)],
     ['metadata', size(walkSize(metadataDir(store)).bytes)],
   ];

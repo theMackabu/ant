@@ -1,15 +1,15 @@
+import { readConfig } from 'upm/src/config.ts';
+import { hosts } from 'upm/src/registry.ts';
 import { escapeName } from 'upm/src/spec.ts';
 import { maxSatisfying, validRange } from 'upm/src/semver.ts';
 import { describe } from 'upm/src/util.ts';
 
-import { positionals } from '../args.ts';
+import { nameOfSpec, parseArgs } from '../args.ts';
 import type { Manifest } from '../project.ts';
-import { registriesFor } from '../registry.ts';
+import { projectRoot } from '../session.ts';
 import type { Session } from '../session.ts';
-import { c, formatSize } from '../ui/ansi.ts';
-import { out, usage, write } from '../ui/output.ts';
-
-const err = (text: string) => write('stderr', text);
+import { c, error } from '../ui/ansi.ts';
+import { out, size, usage } from '../ui/output.ts';
 
 interface Packument {
   name: string;
@@ -22,9 +22,15 @@ interface Packument {
   time?: Record<string, string>;
 }
 
-async function fetchPackument(name: string, session: Session): Promise<Packument | undefined> {
-  for (const registry of registriesFor(session.settings)) {
-    const response = await fetch(`${registry.replace(/\/+$/, '')}/${escapeName(name)}`, { headers: { accept: 'application/json' } });
+function registriesFor(name: string, dir: string): string[] {
+  const { registry, scopes, fallback } = readConfig(dir);
+  const base = hosts(registry, scopes)(name);
+  return base === registry && fallback ? [base, fallback] : [base];
+}
+
+async function fetchPackument(name: string, dir: string): Promise<Packument | undefined> {
+  for (const registry of registriesFor(name, dir)) {
+    const response = await fetch(`${registry}/${escapeName(name)}`, { headers: { accept: 'application/json' } });
     if (response.status === 404) continue;
     if (!response.ok) throw new Error(`GET ${response.url} - ${response.status}`);
     return (await response.json()) as Packument;
@@ -35,21 +41,20 @@ async function fetchPackument(name: string, session: Session): Promise<Packument
 const TAG_COLORS: Record<string, 'blue' | 'cyan'> = { beta: 'blue', latest: 'cyan' };
 
 export async function info(args: string[], session: Session): Promise<number> {
-  const [spec] = positionals(args);
+  const [spec] = parseArgs(args).specs;
   if (!spec) return usage('info needs a package name');
-  const at = spec.indexOf('@', spec.startsWith('@') ? 1 : 0);
-  const name = at < 0 ? spec : spec.slice(0, at);
-  const wanted = at < 0 ? 'latest' : spec.slice(at + 1);
+  const name = nameOfSpec(spec);
+  const wanted = spec.slice(name.length + 1) || 'latest';
 
   let doc: Packument | undefined;
   try {
-    doc = await fetchPackument(name, session);
-  } catch (error) {
-    err(`Error: ${describe(error)}\n`);
+    doc = await fetchPackument(name, projectRoot(session));
+  } catch (cause) {
+    error(describe(cause));
     return 1;
   }
   if (!doc) {
-    err(`Error: package not found: ${name}\n`);
+    error(`package not found: ${name}`);
     return 1;
   }
 
@@ -57,7 +62,7 @@ export async function info(args: string[], session: Session): Promise<number> {
   const version = doc['dist-tags']?.[wanted] ?? (doc.versions?.[wanted] ? wanted : validRange(wanted) ? maxSatisfying(versions, wanted) : undefined);
   const pkg = version ? doc.versions?.[version] : undefined;
   if (!version || !pkg) {
-    err(`Error: version not found: ${name}@${wanted}\n`);
+    error(`version not found: ${name}@${wanted}`);
     return 1;
   }
 
@@ -80,7 +85,7 @@ export async function info(args: string[], session: Session): Promise<number> {
   if (dist.tarball) out(` ${c.dim}.tarball:${c.reset} ${dist.tarball}\n`);
   if (dist.shasum) out(` ${c.dim}.shasum:${c.reset} ${c.green}${dist.shasum}${c.reset}\n`);
   if (dist.integrity) out(` ${c.dim}.integrity:${c.reset} ${c.green}${dist.integrity}${c.reset}\n`);
-  if (dist.unpackedSize) out(` ${c.dim}.unpackedSize:${c.reset} ${c.blue}${formatSize(dist.unpackedSize)}${c.reset}\n`);
+  if (dist.unpackedSize) out(` ${c.dim}.unpackedSize:${c.reset} ${c.blue}${size(dist.unpackedSize)}${c.reset}\n`);
 
   const tags = Object.entries(doc['dist-tags'] ?? {});
   if (tags.length > 0) {

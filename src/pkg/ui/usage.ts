@@ -1,6 +1,7 @@
 import { setUsage } from 'upm/src/cli.ts';
+import { storeDir } from 'upm/src/store.ts';
 
-import { binDir, configPath, dataPath, globalDir } from '../paths.ts';
+import { binDir, configPath, globalDir } from '../paths.ts';
 import { CONFIG_KEYS } from '../settings.ts';
 
 export function installUsage(): void {
@@ -69,6 +70,6 @@ ${keys}
   File: ${configPath()}
 
 Paths
-  store                ${dataPath('store')}
+  store                ${storeDir(process.env.UPM_STORE)}
   global               ${globalDir()}`);
 }

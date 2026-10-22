@@ -7,25 +7,30 @@ import { readManifest, writeJson } from '../project.ts';
 import { upm } from '../session.ts';
 import type { Session } from '../session.ts';
 import { fail, note } from '../ui/output.ts';
-import { binsOf, linkBin, ownsLink } from './bins.ts';
+import { binsOf, linkBin, unlinkBin } from './bins.ts';
 
-function ensureGlobal(): string {
+function openGlobal(session: Session): string {
   const dir = globalDir();
   const manifest = path.join(dir, 'package.json');
   if (!fs.existsSync(manifest)) writeJson(manifest, { dependencies: {} });
+  if (session.projectStore) delete process.env.UPM_STORE;
   return dir;
 }
 
 export async function addGlobal(specs: string[], flags: string[], session: Session): Promise<number> {
-  const dir = ensureGlobal();
+  const dir = openGlobal(session);
+  const before = readManifest(dir)?.dependencies ?? {};
   const code = await upm(['add', ...specs, ...flags, '--dir', dir], session);
   if (code !== 0) return code;
+
+  const after = readManifest(dir)?.dependencies ?? {};
+  const named = new Set(specs.map(nameOfSpec));
+  const added = Object.keys(after).filter(name => named.has(name) || before[name] !== after[name]);
 
   const bins = binDir();
   fs.mkdirSync(bins, { recursive: true });
   const linked: string[] = [];
-  for (const spec of specs) {
-    const name = nameOfSpec(spec);
+  for (const name of added) {
     const pkgDir = path.join(dir, 'node_modules', name);
     for (const [bin, file] of Object.entries(binsOf(pkgDir, name))) {
       if (linkBin(path.join(pkgDir, file), path.join(bins, bin), dir)) linked.push(bin);
@@ -36,7 +41,7 @@ export async function addGlobal(specs: string[], flags: string[], session: Sessi
 }
 
 export async function removeGlobal(names: string[], flags: string[], session: Session): Promise<number> {
-  const dir = ensureGlobal();
+  const dir = openGlobal(session);
   const deps = readManifest(dir)?.dependencies ?? {};
   const missing = names.filter(name => !Object.hasOwn(deps, name));
   if (missing.length > 0) {
@@ -49,12 +54,7 @@ export async function removeGlobal(names: string[], flags: string[], session: Se
   for (const name of names) {
     const pkgDir = path.join(dir, 'node_modules', name);
     for (const bin of Object.keys(binsOf(pkgDir, name))) {
-      const link = path.join(bins, bin);
-      if (ownsLink(link, pkgDir)) {
-        fs.unlinkSync(link);
-        unlinked.push(bin);
-      }
-      if (process.platform === 'win32' && fs.existsSync(`${link}.cmd`)) fs.unlinkSync(`${link}.cmd`);
+      if (unlinkBin(path.join(bins, bin), pkgDir)) unlinked.push(bin);
     }
   }
 

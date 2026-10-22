@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { isGlobal } from '../args.ts';
+import { parseArgs } from '../args.ts';
 import { globalDir } from '../paths.ts';
 import { readLock, readManifest } from '../project.ts';
 import { projectRoot } from '../session.ts';
@@ -9,15 +9,20 @@ import { c } from '../ui/ansi.ts';
 import { out } from '../ui/output.ts';
 
 export function ls(args: string[], session: Session): number {
-  const global = isGlobal(args);
+  const { global } = parseArgs(args);
   const dir = global ? globalDir() : projectRoot(session);
   const manifest = readManifest(dir);
   const lock = readLock(dir);
   out(`${c.dim}${path.join(dir, 'node_modules')}${c.reset}`);
 
-  const names = Object.keys({ ...manifest?.dependencies, ...(global ? {} : manifest?.devDependencies) });
-  if (!manifest || names.length === 0) {
+  if (!manifest) {
     out('\n  (no package.json)\n');
+    return 0;
+  }
+
+  const names = Object.keys({ ...manifest.dependencies, ...(global ? {} : manifest.devDependencies) });
+  if (names.length === 0) {
+    out('\n  (no dependencies)\n');
     return 0;
   }
 

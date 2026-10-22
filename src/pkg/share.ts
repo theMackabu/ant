@@ -1,11 +1,11 @@
 import { setShareFilter } from 'upm/src/link.ts';
 
-const LIFECYCLE = ['preinstall', 'install', 'postinstall'];
+import { buildScripts } from './lifecycle/discover.ts';
+import type { Manifest } from './project.ts';
 
 export function shareSelfContained(): void {
   setShareFilter((_pkg, manifest, files) => {
-    const scripts = (manifest.scripts ?? {}) as Record<string, unknown>;
-    if (LIFECYCLE.some(name => scripts[name])) return false;
-    return !files.some(file => file.path === 'binding.gyp');
+    const hasGyp = () => files.some(file => file.path === 'binding.gyp');
+    return buildScripts(manifest as Manifest, hasGyp).length === 0;
   });
 }
