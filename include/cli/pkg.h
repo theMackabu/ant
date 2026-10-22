@@ -2,7 +2,6 @@
 #define PKG_CMDS_H
 
 #include <stdbool.h>
-#include <stddef.h>
 #include "types.h"
 
 typedef struct {
@@ -10,11 +9,9 @@ typedef struct {
   char **argv;
 } pkg_argv_t;
 
-extern bool pkg_verbose;
-
 pkg_argv_t pkg_command_argv(
-  const char *argv0, const char *command, 
-  int argc, char **argv
+  const char *argv0, const char *command,
+  int argc, char **argv, int tail_argc, char **tail_argv
 );
 
 bool pkg_script_argv(

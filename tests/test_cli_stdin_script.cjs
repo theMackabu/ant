@@ -25,7 +25,11 @@ for (const args of [[], ['-']]) {
 
 const commonjsResult = run(['--input-type=commonjs', '-'], source);
 assert.equal(commonjsResult.status, 0, commonjsResult.stderr);
-assert.equal(commonjsResult.stdout.trim(), 'false');
+assert.equal(commonjsResult.stdout.trim(), 'true');
+
+const globals = run(['-'], 'console.log(typeof require, typeof module, module.exports === exports, __filename)');
+assert.equal(globals.status, 0, globals.stderr);
+assert.equal(globals.stdout.trim(), 'function object true [stdin]');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ant-cli-stdin-script-'));
 try {

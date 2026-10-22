@@ -1,155 +1,3 @@
-diff --git a/src/config.ts b/src/config.ts
---- a/src/config.ts
-+++ b/src/config.ts
-@@ -10,6 +10,7 @@
- export interface Config {
-   /** The registry, trailing slashes off. */
-   registry: string;
-+  fallback?: string;
-   /** `@scope` → the registry its packages are read from instead. */
-   scopes: Record<string, string>;
-   /**
-@@ -110,7 +111,11 @@
-   const merged: Record<string, string> = {};
-   // An empty value is no value: `registry=` does not unset a lower layer's, as with npm.
-   for (const layer of layers) for (const [k, v] of Object.entries(layer)) if (v) merged[k] = v;
--  const base = registryBase(registry || merged.registry);
-+  const env = globalThis.process?.env ?? {};
-+  const defaulted = !registry && !merged.registry;
-+  const base = registryBase(registry || merged.registry || env.UPM_DEFAULT_REGISTRY);
-+  const fallback =
-+    merged["fallback-registry"] || (defaulted ? env.UPM_FALLBACK_REGISTRY : undefined);
-   const scopes: Record<string, string> = {};
-   const fields = new Map<string, Record<string, string>>();
-   for (const [key, value] of Object.entries(merged)) {
-@@ -139,6 +144,7 @@
-   }
-   return {
-     registry: base,
-+    ...(fallback && registryBase(fallback) !== base && { fallback: registryBase(fallback) }),
-     scopes,
-     auth,
-     saveExact: merged["save-exact"] === "true",
-diff --git a/src/registry.ts b/src/registry.ts
---- a/src/registry.ts
-+++ b/src/registry.ts
-@@ -45,6 +45,7 @@
-   registry?: string;
-   /** `@scope` → the registry its packages are read from instead of `registry`. */
-   scopes?: Record<string, string>;
-+  fallback?: string;
-   /** `//host/path/` → the `authorization` header for requests under it. See `authFor`. */
-   auth?: Record<string, string>;
-   /** Injectable for tests. */
-@@ -209,9 +210,15 @@
-   return undefined;
- }
- 
-+const MISS_TTL = 24 * 60 * 60 * 1000;
-+const MISSED = new TextEncoder().encode("{}");
-+
- export function createRegistry(options: RegistryOptions = {}): Registry {
-   const base = registryBase(options.registry);
-   const baseFor = hosts(base, options.scopes);
-+  const fallback = options.fallback ? registryBase(options.fallback) : undefined;
-+  const moved = new Set<string>();
-+  const readFrom = (name: string) => (movedAway(name) ? fallback! : baseFor(name));
-   const auth = options.auth ?? {};
-   const request = options.fetch ?? fetching();
-   // One gate over every request to this registry. It lives here because the retry below
-@@ -305,8 +312,34 @@
-     if (!options.fetch) await cacheLookups();
-   };
- 
-+  function moveOnMiss(name: string, url: string): boolean {
-+    if (!fallback || baseFor(name) !== base) return false;
-+    if (url !== `${base}/${escapeName(name)}`) return false;
-+    moved.add(name);
-+    cache?.set(`miss ${url}`, MISSED, Date.now());
-+    return true;
-+  }
-+
-+  function movedAway(name: string): boolean {
-+    if (moved.has(name)) return true;
-+    if (!fallback || !cache || baseFor(name) !== base) return false;
-+    const miss = cache.get(`miss ${base}/${escapeName(name)}`);
-+    if (!miss || (cache.mode === "revalidate" && Date.now() - miss.at > MISS_TTL)) return false;
-+    moved.add(name);
-+    return true;
-+  }
-+
-   /** The response body, retried and validated as `get` says. */
-   async function get(name: string, url: string, accept: string, ask = false): Promise<Body> {
-+    try {
-+      return await getFrom(name, url, accept, ask);
-+    } catch (error) {
-+      if ((error as { code?: string }).code !== "E404" || !moveOnMiss(name, url)) throw error;
-+      return await getFrom(name, path(name), accept, ask);
-+    }
-+  }
-+
-+  async function getFrom(name: string, url: string, accept: string, ask = false): Promise<Body> {
-     const { doc, use } = kept(name, url, accept);
-     if (use && !ask) {
-       served.add(keyOf(url, accept));
-@@ -356,7 +389,7 @@
-     });
-   }
- 
--  const path = (name: string) => `${baseFor(name)}/${escapeName(name)}`;
-+  const path = (name: string) => `${readFrom(name)}/${escapeName(name)}`;
- 
-   function headers(url: string, accept: string, etag?: string): Record<string, string> {
-     const authorization = authFor(auth, url);
-@@ -392,7 +425,8 @@
-     if (use) return hit();
-     if (cache?.mode === "only") return undefined;
-     await ready();
--    return await limit(async (signal) => {
-+    let missed = false;
-+    const peeked = await limit(async (signal) => {
-       let response: Response;
-       try {
-         response = await request(url, {
-@@ -406,6 +440,10 @@
-       if (response.status === 304 && doc) {
-         return hit(touched(name, keyOf(url, accept), doc, response));
-       }
-+      if (response.status === 404) {
-+        missed = true;
-+        return undefined;
-+      }
-       if (!response.ok && isThrottle(response.status)) signal.throttled();
-       if (!response.ok || !response.body) return undefined;
-       const [bytes, size] = await read(response, accept === FULL ? FULL_HUGE : HUGE);
-@@ -413,6 +451,8 @@
-       if (bytes === undefined) return undefined;
-       return viewOf(url, keep(url, accept, response, bytes));
-     });
-+    if (missed && moveOnMiss(name, url)) return await peek(name, accept);
-+    return peeked;
-   }
- 
-   /**
-diff --git a/src/registry-pool.ts b/src/registry-pool.ts
---- a/src/registry-pool.ts
-+++ b/src/registry-pool.ts
-@@ -47,6 +47,7 @@
- export interface WorkerData {
-   registry: string;
-   scopes?: Record<string, string>;
-+  fallback?: string;
-   auth?: Record<string, string>;
-   concurrency: number;
-   start: number;
-@@ -174,6 +175,7 @@
-         const workerData: WorkerData = {
-           registry: local.base,
-           scopes: options.scopes,
-+          fallback: options.fallback,
-           auth: options.auth,
-           concurrency: max,
-           start,
 diff --git a/src/api.ts b/src/api.ts
 --- a/src/api.ts
 +++ b/src/api.ts
@@ -195,3 +43,157 @@ diff --git a/src/api.ts b/src/api.ts
            auth,
            before,
            exclude,
+diff --git a/src/config.ts b/src/config.ts
+--- a/src/config.ts
++++ b/src/config.ts
+@@ -10,6 +10,7 @@
+ export interface Config {
+   /** The registry, trailing slashes off. */
+   registry: string;
++  fallback?: string;
+   /** `@scope` → the registry its packages are read from instead. */
+   scopes: Record<string, string>;
+   /**
+@@ -110,7 +111,11 @@
+   const merged: Record<string, string> = {};
+   // An empty value is no value: `registry=` does not unset a lower layer's, as with npm.
+   for (const layer of layers) for (const [k, v] of Object.entries(layer)) if (v) merged[k] = v;
+-  const base = registryBase(registry || merged.registry);
++  const env = globalThis.process?.env ?? {};
++  const defaulted = !registry && !merged.registry;
++  const base = registryBase(registry || merged.registry || env.UPM_DEFAULT_REGISTRY);
++  const fallback =
++    merged["fallback-registry"] || (defaulted ? env.UPM_FALLBACK_REGISTRY : undefined);
+   const scopes: Record<string, string> = {};
+   const fields = new Map<string, Record<string, string>>();
+   for (const [key, value] of Object.entries(merged)) {
+@@ -139,6 +144,7 @@
+   }
+   return {
+     registry: base,
++    ...(fallback && registryBase(fallback) !== base && { fallback: registryBase(fallback) }),
+     scopes,
+     auth,
+     saveExact: merged["save-exact"] === "true",
+diff --git a/src/registry-pool.ts b/src/registry-pool.ts
+--- a/src/registry-pool.ts
++++ b/src/registry-pool.ts
+@@ -47,6 +47,7 @@
+ export interface WorkerData {
+   registry: string;
+   scopes?: Record<string, string>;
++  fallback?: string;
+   auth?: Record<string, string>;
+   concurrency: number;
+   start: number;
+@@ -174,6 +175,7 @@
+         const workerData: WorkerData = {
+           registry: local.base,
+           scopes: options.scopes,
++          fallback: options.fallback,
+           auth: options.auth,
+           concurrency: max,
+           start,
+diff --git a/src/registry.ts b/src/registry.ts
+--- a/src/registry.ts
++++ b/src/registry.ts
+@@ -45,6 +45,7 @@
+   registry?: string;
+   /** `@scope` → the registry its packages are read from instead of `registry`. */
+   scopes?: Record<string, string>;
++  fallback?: string;
+   /** `//host/path/` → the `authorization` header for requests under it. See `authFor`. */
+   auth?: Record<string, string>;
+   /** Injectable for tests. */
+@@ -209,9 +210,16 @@
+   return undefined;
+ }
+ 
++const MISS_TTL = 24 * 60 * 60 * 1000;
++const MISSED = new TextEncoder().encode("{}");
++
+ export function createRegistry(options: RegistryOptions = {}): Registry {
+   const base = registryBase(options.registry);
+   const baseFor = hosts(base, options.scopes);
++  const fallback = options.fallback ? registryBase(options.fallback) : undefined;
++  const moved = new Set<string>();
++  const checked = new Set<string>();
++  const readFrom = (name: string) => (movedAway(name) ? fallback! : baseFor(name));
+   const auth = options.auth ?? {};
+   const request = options.fetch ?? fetching();
+   // One gate over every request to this registry. It lives here because the retry below
+@@ -305,8 +313,35 @@
+     if (!options.fetch) await cacheLookups();
+   };
+ 
++  function moveOnMiss(name: string, url: string): boolean {
++    if (!fallback || baseFor(name) !== base) return false;
++    if (url !== `${base}/${escapeName(name)}`) return false;
++    moved.add(name);
++    cache?.set(`miss ${url}`, MISSED, Date.now());
++    return true;
++  }
++
++  function movedAway(name: string): boolean {
++    if (moved.has(name)) return true;
++    if (checked.has(name) || !fallback || !cache || baseFor(name) !== base) return false;
++    checked.add(name);
++    const miss = cache.get(`miss ${base}/${escapeName(name)}`);
++    if (!miss || (cache.mode === "revalidate" && Date.now() - miss.at > MISS_TTL)) return false;
++    moved.add(name);
++    return true;
++  }
++
+   /** The response body, retried and validated as `get` says. */
+   async function get(name: string, url: string, accept: string, ask = false): Promise<Body> {
++    try {
++      return await getFrom(name, url, accept, ask);
++    } catch (error) {
++      if ((error as { code?: string }).code !== "E404" || !moveOnMiss(name, url)) throw error;
++      return await getFrom(name, path(name), accept, ask);
++    }
++  }
++
++  async function getFrom(name: string, url: string, accept: string, ask = false): Promise<Body> {
+     const { doc, use } = kept(name, url, accept);
+     if (use && !ask) {
+       served.add(keyOf(url, accept));
+@@ -356,7 +391,7 @@
+     });
+   }
+ 
+-  const path = (name: string) => `${baseFor(name)}/${escapeName(name)}`;
++  const path = (name: string) => `${readFrom(name)}/${escapeName(name)}`;
+ 
+   function headers(url: string, accept: string, etag?: string): Record<string, string> {
+     const authorization = authFor(auth, url);
+@@ -392,7 +427,8 @@
+     if (use) return hit();
+     if (cache?.mode === "only") return undefined;
+     await ready();
+-    return await limit(async (signal) => {
++    let missed = false;
++    const peeked = await limit(async (signal) => {
+       let response: Response;
+       try {
+         response = await request(url, {
+@@ -406,6 +442,10 @@
+       if (response.status === 304 && doc) {
+         return hit(touched(name, keyOf(url, accept), doc, response));
+       }
++      if (response.status === 404) {
++        missed = true;
++        return undefined;
++      }
+       if (!response.ok && isThrottle(response.status)) signal.throttled();
+       if (!response.ok || !response.body) return undefined;
+       const [bytes, size] = await read(response, accept === FULL ? FULL_HUGE : HUGE);
+@@ -413,6 +453,8 @@
+       if (bytes === undefined) return undefined;
+       return viewOf(url, keep(url, accept, response, bytes));
+     });
++    if (missed && moveOnMiss(name, url)) return await peek(name, accept);
++    return peeked;
+   }
+ 
+   /**

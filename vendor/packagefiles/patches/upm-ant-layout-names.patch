@@ -1,36 +1,61 @@
 diff --git a/src/exec.ts b/src/exec.ts
 --- a/src/exec.ts
 +++ b/src/exec.ts
-@@ -19,7 +19,7 @@
+@@ -7,6 +7,7 @@
+ import { satisfies } from "./semver.ts";
+ import { parseSpec } from "./spec.ts";
+ import type { Spec } from "./spec.ts";
++import { ENTRIES_DIR } from "./state.ts";
+ import { upmHome } from "./util.ts";
+ 
+ /**
+@@ -19,7 +20,7 @@
    const tree = builtin.fs.statSync(join(root, "node_modules"), { throwIfNoEntry: false });
    if (tree?.isDirectory() && builtin.fs.existsSync(join(root, "package.json"))) {
      // Dotted: the sweep of `.upm` entries leaves it alone.
 -    return join(root, "node_modules", ".upm", ".exec");
-+    return join(root, "node_modules", ".ant", ".exec");
++    return join(root, "node_modules", ENTRIES_DIR, ".exec");
    }
    return join(upmHome("cache"), "exec");
  }
 diff --git a/src/gc.ts b/src/gc.ts
 --- a/src/gc.ts
 +++ b/src/gc.ts
-@@ -29,7 +29,7 @@
+@@ -2,6 +2,7 @@
+ // project, and the content store every project shares. Mark and sweep, never refcounts — a
+ // refcount survives neither a second upm running nor `rm -rf node_modules`.
+ import { builtin } from "./builtin.ts";
++import { ENTRIES_DIR } from "./state.ts";
+ import { createStore, isIndex } from "./store.ts";
+ import { alive, exists, list } from "./util.ts";
+ import type { PackageIndex } from "./store.ts";
+@@ -29,7 +30,7 @@
   * (`storeKeys()` in keys.ts). Entry files are hardlinks, so this reclaims far less than its size.
   */
  export async function sweepEntries(dir: string, keep: Set<string>): Promise<EntrySweep> {
 -  const storeDir = builtin.path.join(dir, "node_modules", ".upm");
-+  const storeDir = builtin.path.join(dir, "node_modules", ".ant");
++  const storeDir = builtin.path.join(dir, "node_modules", ENTRIES_DIR);
    const out: EntrySweep = { removed: 0, bytes: 0 };
    // An entry younger than the grace period may belong to an install that started after the
    // caller read its state, and whose keys are therefore missing from `keep`.
 diff --git a/src/link.ts b/src/link.ts
 --- a/src/link.ts
 +++ b/src/link.ts
+@@ -21,7 +21,7 @@
+ import { allDeps } from "./resolve.ts";
+ import { pid } from "./runtime.ts";
+ import type { ResolvedPackage, Resolution } from "./resolve.ts";
+-import { clearState, readState, stateHash, writeState } from "./state.ts";
++import { clearState, ENTRIES_DIR, readState, stateHash, writeState } from "./state.ts";
+ import type { InstallState, TopLinks } from "./state.ts";
+ import type { PackageIndex, Store } from "./store.ts";
+ 
 @@ -218,7 +218,7 @@
    const { copyFileSync, linkSync, unlinkSync } = builtin.fs;
    const up = `..${sep}`;
    const limit = createLimiter(options.concurrency ?? 16);
 -  const storeDir = join(options.dir, "node_modules", ".upm");
-+  const storeDir = join(options.dir, "node_modules", ".ant");
++  const storeDir = join(options.dir, "node_modules", ENTRIES_DIR);
    const production = options.production === true;
    const hoist = options.hoist !== false;
    const hash =
@@ -39,7 +64,7 @@ diff --git a/src/link.ts b/src/link.ts
    let found: import("node:fs").Dirent[];
    try {
 -    found = readdirSync(join(dir, "node_modules", ".upm"), { withFileTypes: true });
-+    found = readdirSync(join(dir, "node_modules", ".ant"), { withFileTypes: true });
++    found = readdirSync(join(dir, "node_modules", ENTRIES_DIR), { withFileTypes: true });
    } catch {
      return false;
    }
@@ -48,7 +73,7 @@ diff --git a/src/link.ts b/src/link.ts
        // leads into the `.upm` it was installed from.
        const at = join(nm, name);
 -      const store = relative(dirname(at), join(dir, "node_modules", ".upm")) + sep;
-+      const store = relative(dirname(at), join(dir, "node_modules", ".ant")) + sep;
++      const store = relative(dirname(at), join(dir, "node_modules", ENTRIES_DIR)) + sep;
        if (!to.startsWith(store) || !to.endsWith(join(sep, "node_modules", name))) return undefined;
      }
      if (!landsOnDir(join(nm, name))) return undefined;
@@ -67,12 +92,13 @@ diff --git a/src/lock.ts b/src/lock.ts
 diff --git a/src/state.ts b/src/state.ts
 --- a/src/state.ts
 +++ b/src/state.ts
-@@ -9,8 +9,8 @@
+@@ -9,8 +9,9 @@
  import type { Resolution } from "./resolve.ts";
  import type { WorkspaceProof } from "./workspaces.ts";
  
 -export const STATE_FILE = ".upm.json";
 -export const TREE_LOCK = ".upm.lock";
++export const ENTRIES_DIR = ".ant";
 +export const STATE_FILE = ".ant.json";
 +export const TREE_LOCK = ".ant.lock";
  

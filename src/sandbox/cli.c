@@ -1,7 +1,6 @@
 #include <compat.h> // IWYU pragma: keep
 
 #include "cli/misc.h"
-#include "cli/pkg.h"
 #include "sandbox/host.h"
 #include "sandbox/sandbox.h"
 #include "sandbox/vm.h"
@@ -411,7 +410,7 @@ int ant_sandbox_cmd(int argc, char **argv) {
     .memory_size = ANT_SANDBOX_DEFAULT_MEMORY_SIZE,
     .timeout_ms = opts.timeout_ms,
     .boot_timeout_ms = opts.boot_timeout_ms,
-    .verbose = opts.verbose || pkg_verbose,
+    .verbose = opts.verbose,
     .result = &vm_result,
   };
 

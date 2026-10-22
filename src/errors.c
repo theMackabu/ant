@@ -37,12 +37,13 @@ void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback_stack,
   
   if (!no_stack && vtype(stack) != kTypeString) stack = fallback_stack;
   if (prefix) ant_output_stream_append_cstr(out, prefix);
+  bool plain = !io_should_color_fd(fileno(stderr));
 
   if (is_real_error && vtype(stack) == kTypeString) {
-    io_print_error_stack(js, out, obj, stack);
+    io_print_error_stack(js, out, obj, stack, plain);
   } else if (is_real_error) {
-    io_print_error_header(js, out, obj);
-    io_print_error_props(js, out, obj);
+    io_print_error_header(js, out, obj, plain);
+    io_print_error_props(js, out, obj, plain);
   } else ant_output_stream_append_cstr(out, js_str(js, value));
 
   ant_output_stream_putc(out, '\n');

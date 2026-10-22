@@ -59,7 +59,7 @@ bool js_inspect_header_for(js_inspect_builder_t *builder, ant_value_t obj, const
 
 ant_value_t js_inspect_builder_result(js_inspect_builder_t *builder);
 bool js_inspect_plain_header(js_inspect_builder_t *builder, ant_value_t obj);
-bool js_inspect_map(js_inspect_builder_t *builder, ant_value_t obj, struct map_entry *head);
-bool js_inspect_set(js_inspect_builder_t *builder, ant_value_t obj, struct set_entry *head);
+bool js_inspect_map(js_inspect_builder_t *builder, ant_value_t obj, struct map_entry **map);
+bool js_inspect_set(js_inspect_builder_t *builder, ant_value_t obj, struct set_entry **set);
 
 #endif

@@ -8,27 +8,40 @@
 #include <yyjson.h>
 
 #include "ant.h"
+#include "value.h"
+#include "utils.h"
 #include "cli/pkg.h"
 #include "esm/loader.h"
-#include "internal.h"
 #include "modules/io.h"
-#include "utils.h"
 
-bool pkg_verbose = false;
+static bool pkg_verbose = false;
+static bool pkg_force = false;
+
+static const char PKG_ARGV_LABEL[] = "[ant pkg]";
+static const char PKG_ENTRY[] = "ant:internal/pkg";
 
 bool pkg_parse_global_flag(const char *arg) {
-  if (strcmp(arg, "-V") == 0 || strcmp(arg, "--verbose") == 0) return pkg_verbose = true;
-  return strcmp(arg, "--force") == 0;
+  if (strcmp(arg, "-V") == 0 || strcmp(arg, "--verbose") == 0) {
+    pkg_verbose = true;
+    return true;
+  }
+
+  if (strcmp(arg, "--force") == 0) {
+    pkg_force = true;
+    return true;
+  }
+
+  return false;
 }
 
 static bool pkg_is_antx(const char *argv0) {
   const char *name = argv0;
   for (const char *p = argv0; *p; p++) if (*p == '/' || *p == '\\') name = p + 1;
-  
+
   size_t len = strlen(name);
   if (len > 4 && strcasecmp(name + len - 4, ".exe") == 0) len -= 4;
-  
-  return len == 4 && strncmp(name, "antx", 4) == 0;
+
+  return len == 4 && strncasecmp(name, "antx", 4) == 0;
 }
 
 char **pkg_antx_argv(int *argc, char **argv) {
@@ -37,43 +50,41 @@ char **pkg_antx_argv(int *argc, char **argv) {
   char **out = try_oom(sizeof(char *) * (size_t)(*argc + 2));
   out[0] = argv[0];
   out[1] = "x";
-  
+
   for (int i = 1; i < *argc; i++) out[i + 1] = argv[i];
   out[*argc + 1] = NULL;
-
   (*argc)++;
+  
   return out;
-}
-
-static void pkg_export_env(void) {
-  if (pkg_verbose) setenv("ANT_PKG_VERBOSE", "1", 1);
-  if (!io_no_color) return;
-  setenv("NO_COLOR", "1", 1);
-  unsetenv("FORCE_COLOR");
 }
 
 static pkg_argv_t pkg_build_argv(
   const char *argv0, const char *command,
   int argc, char **argv, int tail_argc, char **tail_argv
 ) {
-  int total = 3 + argc + tail_argc;
+  int total = 3 + (pkg_verbose ? 1 : 0) + (pkg_force ? 1 : 0) + argc + tail_argc;
   char **out = try_oom(sizeof(char *) * (size_t)(total + 1));
 
-  out[0] = (char *)argv0;
-  out[1] = "[ant pkg]";
-  out[2] = (char *)command;
+  int at = 0;
+  out[at++] = (char *)argv0;
+  out[at++] = (char *)PKG_ARGV_LABEL;
   
-  for (int i = 0; i < argc; i++) out[3 + i] = argv[i];
-  for (int i = 0; i < tail_argc; i++) out[3 + argc + i] = tail_argv[i];
-  
-  out[total] = NULL;
+  if (pkg_verbose) out[at++] = "--verbose";
+  if (pkg_force) out[at++] = "--force";
+  out[at++] = (char *)command;
+
+  for (int i = 0; i < argc; i++) out[at++] = argv[i];
+  for (int i = 0; i < tail_argc; i++) out[at++] = tail_argv[i];
+  out[at] = NULL;
 
   return (pkg_argv_t){ total, out };
 }
 
-pkg_argv_t pkg_command_argv(const char *argv0, const char *command, int argc, char **argv) {
-  pkg_export_env();
-  return pkg_build_argv(argv0, command, argc, argv, 0, NULL);
+pkg_argv_t pkg_command_argv(
+  const char *argv0, const char *command,
+  int argc, char **argv, int tail_argc, char **tail_argv
+) {
+  return pkg_build_argv(argv0, command, argc, argv, tail_argc, tail_argv);
 }
 
 static bool pkg_is_regular_file(const char *path) {
@@ -99,7 +110,6 @@ bool pkg_script_argv(
 ) {
   if (pkg_is_regular_file(name) || !pkg_script_exists(name)) return false;
   *out = pkg_build_argv(argv0, "run", argc, argv, tail_argc, tail_argv);
-  pkg_export_env();
   return true;
 }
 
@@ -109,9 +119,14 @@ void pkg_argv_free(pkg_argv_t *pkg) {
 }
 
 int pkg_run(ant_t *js) {
-  static const char entry[] = "ant:internal/pkg";
-  ant_value_t ns = js_esm_import_sync_cstr(js, entry, sizeof(entry) - 1);
+  if (io_no_color) {
+    setenv("NO_COLOR", "1", 1);
+    unsetenv("FORCE_COLOR");
+  }
+
+  ant_value_t ns = js_esm_import_sync_cstr(js, PKG_ENTRY, sizeof(PKG_ENTRY) - 1);
   if (vtype(ns) != kTypeError) return EXIT_SUCCESS;
+
   fprintf(stderr, "%s\n", js_str(js, ns));
   return EXIT_FAILURE;
 }

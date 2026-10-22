@@ -29,7 +29,15 @@ try {
   fs.writeFileSync(file('append'), 'a');
   fs.writeFileSync(file('append'), 'b', { flag: 'a' });
   fs.appendFileSync(file('append'), 'c');
-  assert.strictEqual(fs.readFileSync(file('append'), 'utf8'), 'abc');
+  fs.writeFileSync(file('append'), 'd', { flag: 'as' });
+  assert.strictEqual(fs.readFileSync(file('append'), 'utf8'), 'abcd');
+
+  assert.throws(() => fs.writeFileSync(file('bad-flag'), 'x', { flag: 'nope' }), { code: 'ERR_INVALID_ARG_VALUE' });
+  await assert.rejects(fsp.writeFile(file('bad-flag'), 'x', { flag: 'nope' }), { code: 'ERR_INVALID_ARG_VALUE' });
+  assert.throws(() => fs.writeFileSync(file('bad-mode'), 'x', { mode: 'rwx' }), { code: 'ERR_INVALID_ARG_VALUE' });
+  assert.throws(() => fs.writeFileSync(file('nan-mode'), 'x', { mode: NaN }));
+  assert.throws(() => fs.writeFileSync(file('neg-mode'), 'x', { mode: -1 }));
+  for (const name of ['bad-flag', 'bad-mode', 'nan-mode', 'neg-mode']) assert.strictEqual(fs.existsSync(file(name)), false);
 
   fs.writeFileSync(file('encoding'), 'hello', 'utf8');
   assert.strictEqual(fs.readFileSync(file('encoding'), 'utf8'), 'hello');

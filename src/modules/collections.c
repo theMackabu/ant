@@ -1,3 +1,11 @@
+#include <stddef.h>
+
+static void *collection_alloc(size_t size);
+static void collection_release(void *block, size_t size);
+
+#define uthash_malloc(size) collection_alloc(size)
+#define uthash_free(block, size) collection_release(block, size)
+
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -19,6 +27,65 @@
 #include "modules/collections.h"
 #include "modules/symbol.h"
 #include "modules/iterator.h"
+
+#undef HASH_INITIAL_NUM_BUCKETS
+#undef HASH_INITIAL_NUM_BUCKETS_LOG2
+#undef HASH_BKT_CAPACITY_THRESH
+
+#define HASH_INITIAL_NUM_BUCKETS 8U
+#define HASH_INITIAL_NUM_BUCKETS_LOG2 3U
+#define HASH_BKT_CAPACITY_THRESH 6U
+
+enum {
+  COLLECTION_POOL_GRAIN = 16,
+  COLLECTION_POOL_CLASSES = 32,
+  COLLECTION_POOL_CAP = 128,
+};
+
+typedef struct collection_block {
+  struct collection_block *next;
+} collection_block_t;
+
+typedef struct {
+  collection_block_t *head[COLLECTION_POOL_CLASSES];
+  uint32_t count[COLLECTION_POOL_CLASSES];
+} collection_pool_t;
+
+static _Thread_local collection_pool_t collection_pool;
+
+static inline size_t collection_pool_class(size_t size) {
+  return size == 0 ? COLLECTION_POOL_CLASSES : (size - 1) / COLLECTION_POOL_GRAIN;
+}
+
+static void *collection_alloc(size_t size) {
+  size_t cls = collection_pool_class(size);
+  if (cls >= COLLECTION_POOL_CLASSES) return malloc(size);
+  collection_pool_t *pool = &collection_pool;
+  collection_block_t *block = pool->head[cls];
+  if (!block) return malloc((cls + 1) * COLLECTION_POOL_GRAIN);
+  pool->head[cls] = block->next;
+  pool->count[cls]--;
+  return block;
+}
+
+static void *collection_zalloc(size_t size) {
+  void *block = collection_alloc(size);
+  if (block) memset(block, 0, size);
+  return block;
+}
+
+static void collection_release(void *block, size_t size) {
+  if (!block) return;
+  size_t cls = collection_pool_class(size);
+  collection_pool_t *pool = &collection_pool;
+  if (cls >= COLLECTION_POOL_CLASSES || pool->count[cls] >= COLLECTION_POOL_CAP) {
+    free(block);
+    return;
+  }
+  ((collection_block_t *)block)->next = pool->head[cls];
+  pool->head[cls] = block;
+  pool->count[cls]++;
+}
 
 static bool can_be_held_weakly(ant_value_t value) {
   if (is_object_type(value) || vtype(value) == kTypeBuiltin) return true;
@@ -120,6 +187,350 @@ set_entry_t *Ant_Set_Find(ant_t *js, set_entry_t **set_ptr, ant_value_t value) {
   return entry;
 }
 
+static map_store_t *map_store_of(map_entry_t **head) {
+  return (map_store_t *)head;
+}
+
+static set_store_t *set_store_of(set_entry_t **head) {
+  return (set_store_t *)head;
+}
+
+map_entry_t **collections_map_store_new(void) {
+  map_store_t *store = collection_zalloc(sizeof(*store));
+  if (!store) return NULL;
+  store->cursors.flag_offset = offsetof(map_entry_t, cursored);
+  return &store->head;
+}
+
+set_entry_t **collections_set_store_new(void) {
+  set_store_t *store = collection_zalloc(sizeof(*store));
+  if (!store) return NULL;
+  store->cursors.flag_offset = offsetof(set_entry_t, cursored);
+  return &store->head;
+}
+
+static collection_cursor_t *cursor_new(collection_cursors_t *cursors) {
+  collection_cursor_t *cursor = collection_alloc(sizeof(*cursor));
+  if (cursor) *cursor = (collection_cursor_t){ .owner = cursors };
+  return cursor;
+}
+
+static uint32_t *cursor_flag(collection_cursors_t *cursors, void *entry) {
+  return (uint32_t *)((char *)entry + cursors->flag_offset);
+}
+
+static void cursor_link(collection_cursors_t *cursors, collection_cursor_t *cursor) {
+  cursor->prev = NULL;
+  cursor->next = cursors->head;
+  if (cursors->head) cursors->head->prev = cursor;
+  cursors->head = cursor;
+}
+
+static void cursor_detach(collection_cursor_t *cursor) {
+  collection_cursors_t *cursors = cursor->owner;
+  if (cursors && cursors->end == cursor) cursors->end = NULL;
+  else if (cursors && cursor->entry) {
+    if (cursor->prev) cursor->prev->next = cursor->next;
+    else cursors->head = cursor->next;
+    if (cursor->next) cursor->next->prev = cursor->prev;
+    *cursor_flag(cursors, cursor->entry) = 0;
+  }
+  cursor->entry = NULL;
+  cursor->prev = cursor->next = NULL;
+}
+
+static void cursor_park(collection_cursors_t *cursors, collection_cursor_t *cursor, void *entry) {
+  cursor->owner = cursors;
+  if (!entry) {
+    cursors->end = cursor;
+    return;
+  }
+  cursor->entry = entry;
+  *cursor_flag(cursors, entry) = 1;
+  cursor_link(cursors, cursor);
+}
+
+static void cursor_forward(collection_cursor_t *cursor, collection_cursor_t *to) {
+  cursor->forward = to;
+  cursor->owner = NULL;
+  to->refs++;
+}
+
+static collection_cursor_t *cursor_find(collection_cursors_t *cursors, const void *entry) {
+  collection_cursor_t *cursor = cursors->head;
+  while (cursor && cursor->entry != entry) cursor = cursor->next;
+  return cursor;
+}
+
+static collection_cursor_t *cursor_at(collection_cursors_t *cursors, void *entry) {
+  if (!entry) return cursors->end;
+  return *cursor_flag(cursors, entry) ? cursor_find(cursors, entry) : NULL;
+}
+
+static void cursor_idle(collection_cursor_t *cursor) {
+  collection_iter_state_t *state = (collection_iter_state_t *)((char *)cursor - offsetof(collection_iter_state_t, own));
+  if (!state->live) collection_release(state, sizeof(*state));
+}
+
+static void cursor_release(collection_cursor_t *cursor) {
+  while (cursor && --cursor->refs == 0) {
+    collection_cursor_t *forward = cursor->forward;
+    if (!forward) cursor_detach(cursor);
+    cursor->forward = NULL;
+    cursor->owner = NULL;
+    if (cursor->embedded) cursor_idle(cursor);
+    else collection_release(cursor, sizeof(*cursor));
+    cursor = forward;
+  }
+}
+
+static collection_cursor_t *cursor_resolve(collection_cursor_t **slot) {
+  collection_cursor_t *cursor = *slot;
+  while (cursor && cursor->forward) {
+    collection_cursor_t *to = cursor->forward;
+    to->refs++;
+    cursor_release(cursor);
+    cursor = to;
+  }
+  return *slot = cursor;
+}
+
+static void cursor_place(collection_cursors_t *cursors, collection_cursor_t *cursor, void *entry) {
+  collection_cursor_t *there = cursor_at(cursors, entry);
+  if (there) cursor_forward(cursor, there);
+  else cursor_park(cursors, cursor, entry);
+}
+
+static collection_cursor_t *cursor_join(collection_cursors_t *cursors, void *entry) {
+  collection_cursor_t *cursor = cursor_at(cursors, entry);
+  if (!cursor) {
+    if (!(cursor = cursor_new(cursors))) return NULL;
+    cursor_park(cursors, cursor, entry);
+  }
+  cursor->refs++;
+  return cursor;
+}
+
+static collection_cursor_t *cursor_open(collection_cursors_t *cursors, void *entry, collection_cursor_t *own) {
+  if (!own || cursor_at(cursors, entry)) return cursor_join(cursors, entry);
+  *own = (collection_cursor_t){ .refs = 1, .embedded = true };
+  cursor_park(cursors, own, entry);
+  return own;
+}
+
+static void cursors_resume(collection_cursors_t *cursors, void *entry) {
+  collection_cursor_t *cursor = cursors->end;
+  cursors->end = NULL;
+  cursor_park(cursors, cursor, entry);
+}
+
+static void cursors_rewind(collection_cursors_t *cursors) {
+  for (collection_cursor_t *cursor = cursors->head, *next; cursor; cursor = next) {
+    next = cursor->next;
+    cursor_detach(cursor);
+    if (cursors->end) cursor_forward(cursor, cursors->end);
+    else cursors->end = cursor;
+  }
+  cursors->head = NULL;
+}
+
+static void cursor_orphan(collection_cursor_t *cursor) {
+  *cursor = (collection_cursor_t){ .refs = cursor->refs, .embedded = cursor->embedded };
+}
+
+static void cursors_orphan(collection_cursors_t *cursors) {
+  for (collection_cursor_t *cursor = cursors->head, *next; cursor; cursor = next) {
+    next = cursor->next;
+    cursor_orphan(cursor);
+  }
+  if (cursors->end) cursor_orphan(cursors->end);
+  cursors->head = cursors->end = NULL;
+}
+
+static void iter_state_open(collection_iter_state_t *st, collection_cursors_t *cursors, void *first, iter_type_t type, bool owned) {
+  st->type = type;
+  st->live = owned;
+  st->own = (collection_cursor_t){ .embedded = true };
+  st->at = cursors ? cursor_open(cursors, first, owned ? &st->own : NULL) : NULL;
+}
+
+static void iter_state_dispose(collection_iter_state_t *st) {
+  collection_cursor_t *at = st->at;
+  st->at = NULL;
+  cursor_release(at);
+  st->live = false;
+  if (st->own.refs == 0) collection_release(st, sizeof(*st));
+}
+
+void collections_map_iter_open(map_iterator_state_t *st, map_entry_t **head, iter_type_t type) {
+  iter_state_open(st, head ? &map_store_of(head)->cursors : NULL, head ? *head : NULL, type, false);
+}
+
+void collections_set_iter_open(set_iterator_state_t *st, set_entry_t **head, iter_type_t type) {
+  iter_state_open(st, head ? &set_store_of(head)->cursors : NULL, head ? *head : NULL, type, false);
+}
+
+void collections_map_iter_close(map_iterator_state_t *st) {
+  cursor_release(st->at);
+  st->at = NULL;
+}
+
+void collections_set_iter_close(set_iterator_state_t *st) {
+  cursor_release(st->at);
+  st->at = NULL;
+}
+
+static bool iter_state_finish(collection_iter_state_t *st, collection_cursor_t *at) {
+  if (at->entry || at->forward || at->refs != 1) return false;
+  collection_cursors_t *cursors = at->owner;
+  if (cursors && cursors->end == at) cursors->end = NULL;
+  st->at = NULL;
+  at->refs = 0;
+  at->owner = NULL;
+  if (at->embedded) cursor_idle(at);
+  else collection_release(at, sizeof(*at));
+  return true;
+}
+
+static bool iter_state_last(collection_cursor_t *at, uint32_t *flag) {
+  collection_cursors_t *cursors = at->owner;
+  if (at->forward || at->refs != 1 || cursors->end) return false;
+  if (at->prev) at->prev->next = at->next;
+  else cursors->head = at->next;
+  if (at->next) at->next->prev = at->prev;
+  at->prev = at->next = NULL;
+  at->entry = NULL;
+  *flag = 0;
+  cursors->end = at;
+  return true;
+}
+
+static void iter_state_step(collection_iter_state_t *st, collection_cursor_t *at, void *next) {
+  if (at->refs == 1) {
+    collection_cursors_t *cursors = at->owner;
+    cursor_detach(at);
+    cursor_place(cursors, at, next);
+  } else {
+    at->refs--;
+    st->at = cursor_join(at->owner, next);
+  }
+}
+
+map_entry_t *collections_map_iter_step(map_iterator_state_t *st) {
+  collection_cursor_t *at = st->at;
+  if (!at || iter_state_finish(st, at)) return NULL;
+  map_entry_t *last = (map_entry_t *)at->entry;
+  if (last && !last->hh.next && iter_state_last(at, &last->cursored)) return last;
+
+  at = cursor_resolve(&st->at);
+  map_entry_t *entry = at ? (map_entry_t *)at->entry : NULL;
+  if (!entry) {
+    collections_map_iter_close(st);
+    return NULL;
+  }
+  iter_state_step(st, at, entry->hh.next);
+  return entry;
+}
+
+set_entry_t *collections_set_iter_step(set_iterator_state_t *st) {
+  collection_cursor_t *at = st->at;
+  if (!at || iter_state_finish(st, at)) return NULL;
+  set_entry_t *last = (set_entry_t *)at->entry;
+  if (last && !last->hh.next && iter_state_last(at, &last->cursored)) return last;
+
+  at = cursor_resolve(&st->at);
+  set_entry_t *entry = at ? (set_entry_t *)at->entry : NULL;
+  if (!entry) {
+    collections_set_iter_close(st);
+    return NULL;
+  }
+  iter_state_step(st, at, entry->hh.next);
+  return entry;
+}
+
+void collections_map_remove(map_entry_t **head, map_entry_t *entry) {
+  if (entry->cursored) {
+    map_store_t *store = map_store_of(head);
+    collection_cursor_t *cursor = cursor_find(&store->cursors, entry);
+    map_entry_t *next = (map_entry_t *)entry->hh.next;
+    if (next && !next->cursored) {
+      cursor->entry = next;
+      next->cursored = 1;
+    } else {
+      cursor_detach(cursor);
+      cursor_place(&store->cursors, cursor, next);
+    }
+  }
+  HASH_DEL(*head, entry);
+  collection_release(entry, sizeof(map_entry_t) + entry->key_len);
+}
+
+void collections_set_remove(set_entry_t **head, set_entry_t *entry) {
+  if (entry->cursored) {
+    set_store_t *store = set_store_of(head);
+    collection_cursor_t *cursor = cursor_find(&store->cursors, entry);
+    set_entry_t *next = (set_entry_t *)entry->hh.next;
+    if (next && !next->cursored) {
+      cursor->entry = next;
+      next->cursored = 1;
+    } else {
+      cursor_detach(cursor);
+      cursor_place(&store->cursors, cursor, next);
+    }
+  }
+  HASH_DEL(*head, entry);
+  collection_release(entry, sizeof(set_entry_t) + entry->key_len);
+}
+
+static void map_free_entries(map_entry_t **head) {
+  map_entry_t *entry = *head, *next;
+  HASH_CLEAR(hh, *head);
+  for (; entry; entry = next) {
+    next = (map_entry_t *)entry->hh.next;
+    collection_release(entry, sizeof(map_entry_t) + entry->key_len);
+  }
+}
+
+void collections_map_clear(map_entry_t **head) {
+  cursors_rewind(&map_store_of(head)->cursors);
+  map_free_entries(head);
+}
+
+static void set_free_entries(set_entry_t **head) {
+  set_entry_t *entry = *head, *next;
+  HASH_CLEAR(hh, *head);
+  for (; entry; entry = next) {
+    next = (set_entry_t *)entry->hh.next;
+    collection_release(entry, sizeof(set_entry_t) + entry->key_len);
+  }
+}
+
+void collections_set_clear(set_entry_t **head) {
+  cursors_rewind(&set_store_of(head)->cursors);
+  set_free_entries(head);
+}
+
+void collections_map_store_free(map_entry_t **head) {
+  if (!head) return;
+  map_store_t *store = map_store_of(head);
+  cursors_orphan(&store->cursors);
+  map_free_entries(&store->head);
+  collection_release(store, sizeof(*store));
+}
+
+void collections_set_store_free(set_entry_t **head) {
+  if (!head) return;
+  set_store_t *store = set_store_of(head);
+  cursors_orphan(&store->cursors);
+  set_free_entries(&store->head);
+  collection_release(store, sizeof(*store));
+}
+
+ant_value_t collections_entry_pair(ant_t *js, ant_value_t first, ant_value_t second) {
+  ant_value_t pair[2] = { first, second };
+  return js_mkarr_dense_literal(js, pair, 2);
+}
+
 static bool map_store_entry(
   ant_t *js,
   map_entry_t **map_ptr,
@@ -141,7 +552,7 @@ static bool map_store_entry(
     return true;
   }
 
-  entry = calloc(1, sizeof(map_entry_t) + key.len);
+  entry = collection_alloc(sizeof(map_entry_t) + key.len);
   if (!entry) {
     collection_key_free(&key);
     return false;
@@ -149,11 +560,14 @@ static bool map_store_entry(
 
   entry->key = (unsigned char *)(entry + 1);
   memcpy(entry->key, key.bytes, key.len);
-  entry->key_len = key.len;
+  entry->key_len = (uint32_t)key.len;
+  entry->cursored = 0;
   entry->key_val = key_val;
   entry->value = value;
   
   HASH_ADD_KEYPTR_BYHASHVALUE(hh, *map_ptr, entry->key, entry->key_len, key_hash, entry);
+  map_store_t *store = map_store_of(map_ptr);
+  if (store->cursors.end) cursors_resume(&store->cursors, entry);
   collection_key_free(&key);
   
   return true;
@@ -174,7 +588,7 @@ static bool set_store_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value)
     return true;
   }
 
-  entry = calloc(1, sizeof(set_entry_t) + key.len);
+  entry = collection_alloc(sizeof(set_entry_t) + key.len);
   if (!entry) {
     collection_key_free(&key);
     return false;
@@ -182,10 +596,13 @@ static bool set_store_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value)
 
   entry->key = (unsigned char *)(entry + 1);
   memcpy(entry->key, key.bytes, key.len);
-  entry->key_len = key.len;
+  entry->key_len = (uint32_t)key.len;
+  entry->cursored = 0;
   entry->value = stored_value;
   
   HASH_ADD_KEYPTR_BYHASHVALUE(hh, *set_ptr, entry->key, entry->key_len, key_hash, entry);
+  set_store_t *store = set_store_of(set_ptr);
+  if (store->cursors.end) cursors_resume(&store->cursors, entry);
   collection_key_free(&key);
   
   return true;
@@ -228,100 +645,6 @@ set_entry_t **get_set_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != kTypeSet) return NULL;
   return (set_entry_t **)js_get_native(obj, SET_NATIVE_TAG);
-}
-
-map_entry_t **collections_map_store_new(void) {
-  map_store_t *store = calloc(1, sizeof(*store));
-  return store ? &store->head : NULL;
-}
-
-set_entry_t **collections_set_store_new(void) {
-  set_store_t *store = calloc(1, sizeof(*store));
-  return store ? &store->head : NULL;
-}
-
-void collections_map_store_free(map_entry_t **head) {
-  if (!head) return;
-  map_store_t *store = (map_store_t *)head;
-  for (map_iterator_state_t *it = store->iterators; it; it = it->next_iter) {
-    it->owner = NULL;
-    it->head = NULL;
-    it->last = NULL;
-    it->done = true;
-  }
-  free(store);
-}
-
-void collections_set_store_free(set_entry_t **head) {
-  if (!head) return;
-  set_store_t *store = (set_store_t *)head;
-  for (set_iterator_state_t *it = store->iterators; it; it = it->next_iter) {
-    it->owner = NULL;
-    it->head = NULL;
-    it->last = NULL;
-    it->done = true;
-  }
-  free(store);
-}
-
-void collections_map_before_delete(map_entry_t **head, map_entry_t *entry) {
-  if (!head || !entry) return;
-  for (map_iterator_state_t *it = ((map_store_t *)head)->iterators; it; it = it->next_iter)
-    if (it->last == entry) it->last = (map_entry_t *)entry->hh.prev;
-}
-
-void collections_set_before_delete(set_entry_t **head, set_entry_t *entry) {
-  if (!head || !entry) return;
-  for (set_iterator_state_t *it = ((set_store_t *)head)->iterators; it; it = it->next_iter)
-    if (it->last == entry) it->last = (set_entry_t *)entry->hh.prev;
-}
-
-void collections_map_after_clear(map_entry_t **head) {
-  if (!head) return;
-  for (map_iterator_state_t *it = ((map_store_t *)head)->iterators; it; it = it->next_iter)
-    if (it->started) it->last = NULL;
-}
-
-void collections_set_after_clear(set_entry_t **head) {
-  if (!head) return;
-  for (set_iterator_state_t *it = ((set_store_t *)head)->iterators; it; it = it->next_iter)
-    if (it->started) it->last = NULL;
-}
-
-static void map_iter_attach(map_iterator_state_t *state, map_entry_t **head) {
-  if (!head) return;
-  map_store_t *store = (map_store_t *)head;
-  state->owner = store;
-  state->next_iter = store->iterators;
-  if (store->iterators) store->iterators->prev_iter = state;
-  store->iterators = state;
-}
-
-static void set_iter_attach(set_iterator_state_t *state, set_entry_t **head) {
-  if (!head) return;
-  set_store_t *store = (set_store_t *)head;
-  state->owner = store;
-  state->next_iter = store->iterators;
-  if (store->iterators) store->iterators->prev_iter = state;
-  store->iterators = state;
-}
-
-static void map_iter_detach(map_iterator_state_t *state) {
-  if (!state->owner) return;
-  if (state->prev_iter) state->prev_iter->next_iter = state->next_iter;
-  else state->owner->iterators = state->next_iter;
-  if (state->next_iter) state->next_iter->prev_iter = state->prev_iter;
-  state->owner = NULL;
-  state->prev_iter = state->next_iter = NULL;
-}
-
-static void set_iter_detach(set_iterator_state_t *state) {
-  if (!state->owner) return;
-  if (state->prev_iter) state->prev_iter->next_iter = state->next_iter;
-  else state->owner->iterators = state->next_iter;
-  if (state->next_iter) state->next_iter->prev_iter = state->prev_iter;
-  state->owner = NULL;
-  state->prev_iter = state->next_iter = NULL;
 }
 
 static weakmap_table_t *get_weakmap_from_obj(
@@ -749,9 +1072,7 @@ static ant_value_t map_delete(ant_params_t) {
   map_entry_t *entry = Ant_Map_Find(js, map_ptr, args[0]);
 
   if (entry) {
-    collections_map_before_delete(map_ptr, entry);
-    HASH_DEL(*map_ptr, entry);
-    free(entry);
+    collections_map_remove(map_ptr, entry);
     return js_true;
   }
 
@@ -763,14 +1084,7 @@ static ant_value_t map_clear(ant_params_t) {
   map_entry_t **map_ptr = get_map_from_obj(this_val);
   if (!map_ptr) return js_mkundef();
 
-  map_entry_t *entry, *tmp;
-  HASH_ITER(hh, *map_ptr, entry, tmp) {
-    HASH_DEL(*map_ptr, entry);
-    free(entry);
-  }
-
-  *map_ptr = NULL;
-  collections_map_after_clear(map_ptr);
+  collections_map_clear(map_ptr);
   return js_mkundef();
 }
 
@@ -786,31 +1100,30 @@ static ant_value_t map_forEach(ant_params_t) {
   ant_value_t this_val = js->this_val;
   map_entry_t **map_ptr = get_map_from_obj(this_val);
   
-  if (nargs < 1 || vtype(args[0]) != kTypeFunction)
-    return js_mkerr(js, "forEach requires a callback function");
+  if (nargs < 1 || !is_callable(args[0]))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "forEach requires a callback function");
   
-  ant_value_t callback = args[0];
-  ant_value_t this_arg = nargs > 1 ? args[1] : js_mkundef();
+  sv_callback_t cb = sv_callback_prepare(js, args[0], nargs > 1 ? args[1] : js_mkundef());
   
-  if (map_ptr && *map_ptr) {
-  map_entry_t *entry, *tmp;
-  HASH_ITER(hh, *map_ptr, entry, tmp) {
-    ant_value_t k = entry->key_val;
-    ant_value_t call_args[3] = { entry->value, k, this_val };
-    ant_value_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, js_mkundef());
-    if (is_err(result)) return result;
-  }}
+  map_iterator_state_t it;
+  collections_map_iter_open(&it, map_ptr, ITER_TYPE_MAP_ENTRIES);
+  ant_value_t result = js_mkundef();
   
-  return js_mkundef();
+  for (map_entry_t *entry; (entry = map_iter_take(&it));) {
+    ant_value_t call_args[3] = { entry->value, entry->key_val, this_val };
+    result = sv_callback_call(js->vm, js, &cb, call_args, 3);
+    if (is_err(result)) break;
+  }
+  
+  collections_map_iter_close(&it);
+  return is_err(result) ? result : js_mkundef();
 }
 
 static void collection_iter_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
   uint32_t tag = obj->native_tag;
-  if (tag == MAP_ITER_NATIVE_TAG) map_iter_detach(js_get_native(value, tag));
-  else if (tag == SET_ITER_NATIVE_TAG) set_iter_detach(js_get_native(value, tag));
-  else return;
-  free(js_get_native(value, tag));
+  if (tag != MAP_ITER_NATIVE_TAG && tag != SET_ITER_NATIVE_TAG) return;
+  iter_state_dispose(js_get_native(value, tag));
   js_clear_native(value, tag);
 }
 
@@ -818,24 +1131,7 @@ bool advance_map(ant_t *js, iterator_t *it, ant_value_t *out) {
   map_iterator_state_t *state = get_map_iter_state(it->iterator);
   map_entry_t *entry = state ? map_iter_take(state) : NULL;
   if (!entry) return false;
-
-  switch (state->type) {
-    case ITER_TYPE_MAP_VALUES:
-      *out = entry->value;
-      break;
-    case ITER_TYPE_MAP_KEYS:
-      *out = entry->key_val;
-      break;
-    case ITER_TYPE_MAP_ENTRIES: {
-      ant_value_t pair = js_mkarr(js);
-      js_arr_push(js, pair, entry->key_val);
-      js_arr_push(js, pair, entry->value);
-      *out = pair;
-      break;
-    }
-    default: *out = js_mkundef();
-  }
-
+  *out = map_iter_value(js, state, entry);
   return true;
 }
 
@@ -846,12 +1142,9 @@ static ant_value_t map_iter_next(ant_params_t) {
 static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type_t type) {
   map_entry_t **map_ptr = get_map_from_obj(map_obj);
   
-  map_iterator_state_t *state = calloc(1, sizeof(map_iterator_state_t));
+  map_iterator_state_t *state = collection_alloc(sizeof(map_iterator_state_t));
   if (!state) return js_mkerr(js, "out of memory");
-  
-  state->head = map_ptr;
-  state->type = type;
-  map_iter_attach(state, map_ptr);
+  iter_state_open(state, map_ptr ? &map_store_of(map_ptr)->cursors : NULL, map_ptr ? *map_ptr : NULL, type, true);
 
   ant_value_t iter = Ant_Object_CreateBare(js);
   js_set_proto_init(iter, js->builtins.map_iter_proto);
@@ -881,14 +1174,7 @@ bool advance_set(ant_t *js, iterator_t *it, ant_value_t *out) {
   set_iterator_state_t *state = get_set_iter_state(it->iterator);
   set_entry_t *entry = state ? set_iter_take(state) : NULL;
   if (!entry) return false;
-
-  if (state->type == ITER_TYPE_SET_ENTRIES) {
-    ant_value_t pair = js_mkarr(js);
-    js_arr_push(js, pair, entry->value);
-    js_arr_push(js, pair, entry->value);
-    *out = pair;
-  } else *out = entry->value;
-
+  *out = set_iter_value(js, state, entry);
   return true;
 }
 
@@ -899,12 +1185,9 @@ static ant_value_t set_iter_next(ant_params_t) {
 static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type_t type) {
   set_entry_t **set_ptr = get_set_from_obj(set_obj);
   
-  set_iterator_state_t *state = calloc(1, sizeof(set_iterator_state_t));
+  set_iterator_state_t *state = collection_alloc(sizeof(set_iterator_state_t));
   if (!state) return js_mkerr(js, "out of memory");
-  
-  state->head = set_ptr;
-  state->type = type;
-  set_iter_attach(state, set_ptr);
+  iter_state_open(state, set_ptr ? &set_store_of(set_ptr)->cursors : NULL, set_ptr ? *set_ptr : NULL, type, true);
 
   ant_value_t iter = Ant_Object_CreateBare(js);
   js_set_proto_init(iter, js->builtins.set_iter_proto);
@@ -952,9 +1235,7 @@ static ant_value_t set_delete(ant_params_t) {
   set_entry_t *entry = Ant_Set_Find(js, set_ptr, args[0]);
 
   if (entry) {
-    collections_set_before_delete(set_ptr, entry);
-    HASH_DEL(*set_ptr, entry);
-    free(entry);
+    collections_set_remove(set_ptr, entry);
     return js_true;
   }
 
@@ -966,14 +1247,7 @@ static ant_value_t set_clear(ant_params_t) {
   set_entry_t **set_ptr = get_set_from_obj(this_val);
   if (!set_ptr) return js_mkundef();
 
-  set_entry_t *entry, *tmp;
-  HASH_ITER(hh, *set_ptr, entry, tmp) {
-    HASH_DEL(*set_ptr, entry);
-    free(entry);
-  }
-
-  *set_ptr = NULL;
-  collections_set_after_clear(set_ptr);
+  collections_set_clear(set_ptr);
   return js_mkundef();
 }
 
@@ -997,23 +1271,23 @@ static ant_value_t set_forEach(ant_params_t) {
   ant_value_t this_val = js->this_val;
   set_entry_t **set_ptr = get_set_from_obj(this_val);
   
-  if (nargs < 1 || vtype(args[0]) != kTypeFunction)
-    return js_mkerr(js, "forEach requires a callback function");
+  if (nargs < 1 || !is_callable(args[0]))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "forEach requires a callback function");
   
-  ant_value_t callback = args[0];
-  ant_value_t this_arg = nargs > 1 ? args[1] : js_mkundef();
+  sv_callback_t cb = sv_callback_prepare(js, args[0], nargs > 1 ? args[1] : js_mkundef());
   
-  if (set_ptr && *set_ptr) {
-    set_entry_t *entry, *tmp;
-    
-    HASH_ITER(hh, *set_ptr, entry, tmp) {
-      ant_value_t call_args[3] = { entry->value, entry->value, this_val };
-      ant_value_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, js_mkundef());
-      if (is_err(result)) return result;
-    }
+  set_iterator_state_t it;
+  collections_set_iter_open(&it, set_ptr, ITER_TYPE_SET_VALUES);
+  ant_value_t result = js_mkundef();
+  
+  for (set_entry_t *entry; (entry = set_iter_take(&it));) {
+    ant_value_t call_args[3] = { entry->value, entry->value, this_val };
+    result = sv_callback_call(js->vm, js, &cb, call_args, 3);
+    if (is_err(result)) break;
   }
   
-  return js_mkundef();
+  collections_set_iter_close(&it);
+  return is_err(result) ? result : js_mkundef();
 }
 
 ant_value_t collections_set_create(ant_t *js, set_entry_t ***out_set) {
@@ -1041,12 +1315,30 @@ static bool set_result_add(ant_t *js, ant_value_t set_obj, set_entry_t **set_ptr
   return true;
 }
 
+static bool set_result_clone(ant_t *js, ant_value_t set_obj, set_entry_t **set_ptr, const set_entry_t *from) {
+  set_entry_t *entry = collection_alloc(sizeof(set_entry_t) + from->key_len);
+  if (!entry) return false;
+  entry->key = (unsigned char *)(entry + 1);
+  memcpy(entry->key, from->key, from->key_len);
+  entry->key_len = from->key_len;
+  entry->cursored = 0;
+  entry->value = from->value;
+  HASH_ADD_KEYPTR_BYHASHVALUE(hh, *set_ptr, entry->key, entry->key_len, from->hh.hashv, entry);
+  ant_object_t *obj = js_obj_ptr(set_obj);
+  if (obj) gc_write_barrier(js, obj, entry->value);
+  return true;
+}
+
+static bool set_result_copy(ant_t *js, ant_value_t set_obj, set_entry_t **set_ptr, set_entry_t **from) {
+  for (set_entry_t *each = *from; each; each = (set_entry_t *)each->hh.next) {
+    if (!set_result_clone(js, set_obj, set_ptr, each)) return false;
+  }
+  return true;
+}
+
 static void set_result_delete(ant_t *js, set_entry_t **set_ptr, ant_value_t value) {
   set_entry_t *entry = Ant_Set_Find(js, set_ptr, value);
-  if (!entry) return;
-  collections_set_before_delete(set_ptr, entry);
-  HASH_DEL(*set_ptr, entry);
-  free(entry);
+  if (entry) collections_set_remove(set_ptr, entry);
 }
 
 typedef struct {
@@ -1054,6 +1346,7 @@ typedef struct {
   ant_value_t has;
   ant_value_t keys;
   double size;
+  set_entry_t **native;
 } set_record_t;
 
 typedef enum {
@@ -1100,6 +1393,7 @@ static ant_value_t get_set_record(ant_t *js, ant_value_t value, const char *meth
   out->has = has;
   out->keys = keys;
   out->size = int_size;
+  out->native = vtype(has) == kTypeBuiltin && js_cfunc_same_entrypoint(has, set_has) ? get_set_from_obj(value) : NULL;
   
   return js_mkundef();
 }
@@ -1108,6 +1402,14 @@ static ant_value_t set_record_has(ant_t *js, set_record_t *record, ant_value_t v
   ant_value_t result = sv_vm_call(js->vm, js, record->has, record->obj, &value, 1, NULL, js_mkundef());
   if (is_err(result)) return result;
   *out = js_truthy(js, result);
+  return js_mkundef();
+}
+
+static ant_value_t set_record_has_entry(ant_t *js, set_record_t *record, const set_entry_t *entry, bool *out) {
+  if (!record->native) return set_record_has(js, record, entry->value, out);
+  set_entry_t *found = NULL;
+  HASH_FIND_BYHASHVALUE(hh, *record->native, entry->key, entry->key_len, entry->hh.hashv, found);
+  *out = found != NULL;
   return js_mkundef();
 }
 
@@ -1182,9 +1484,7 @@ static ant_value_t set_union(ant_params_t) {
   if (is_err(out)) return out;
   set_build_ctx_t build = { out, out_set };
 
-  set_entry_t *entry, *tmp;
-  HASH_ITER(hh, *this_set, entry, tmp) 
-    if (!set_result_add(js, out, out_set, entry->value)) return js_mkerr(js, "out of memory");
+  if (!set_result_copy(js, out, out_set, this_set)) return js_mkerr(js, "out of memory");
   ant_value_t result = set_record_for_each_key(js, &other, set_add_key_cb, &build);
   
   return is_err(result) ? result : out;
@@ -1220,35 +1520,28 @@ static ant_value_t set_intersection(ant_params_t) {
 
   double this_size = (double)HASH_COUNT(*this_set);
   if (this_size <= other.size) {
-    set_entry_t *entry, *tmp;
-    HASH_ITER(hh, *this_set, entry, tmp) {
+    set_iterator_state_t it;
+    collections_set_iter_open(&it, this_set, ITER_TYPE_SET_VALUES);
+    ant_value_t result = out;
+    for (set_entry_t *entry; (entry = set_iter_take(&it));) {
       bool has = false;
-      ant_value_t result = set_record_has(js, &other, entry->value, &has);
-      if (is_err(result)) return result;
-      if (has && !set_result_add(js, out, out_set, entry->value)) return js_mkerr(js, "out of memory");
+      ant_value_t value = entry->value;
+      result = set_record_has_entry(js, &other, entry, &has);
+      if (is_err(result)) break;
+      if (has && !set_result_add(js, out, out_set, value)) {
+        result = js_mkerr(js, "out of memory");
+        break;
+      }
+      result = out;
     }
-    return out;
+    collections_set_iter_close(&it);
+    return result;
   }
 
   set_compare_build_ctx_t build = { out, out_set, this_set };
   ant_value_t result = set_record_for_each_key(js, &other, set_intersection_key_cb, &build);
   
   return is_err(result) ? result : out;
-}
-
-typedef struct {
-  set_record_t *other;
-  ant_value_t out;
-  set_entry_t **out_set;
-} set_difference_ctx_t;
-
-static ant_value_t set_difference_key_cb(ant_t *js, ant_value_t value, void *ctx) {
-  set_difference_ctx_t *build = (set_difference_ctx_t *)ctx;
-  bool has = false;
-  ant_value_t result = set_record_has(js, build->other, value, &has);
-  if (is_err(result)) return result;
-  if (!has && !set_result_add(js, build->out, build->out_set, value)) return js_mkerr(js, "out of memory");
-  return js_mkundef();
 }
 
 static set_key_status_t set_delete_key_cb(ant_t *js, ant_value_t value, ant_value_t *result, void *ctx) {
@@ -1270,18 +1563,33 @@ static ant_value_t set_difference(ant_params_t) {
   ant_value_t out = collections_set_create(js, &out_set);
   if (is_err(out)) return out;
 
-  set_entry_t *entry, *tmp;
-  if ((double)HASH_COUNT(*this_set) <= other.size) {
-    set_difference_ctx_t diff = { &other, out, out_set };
-    HASH_ITER(hh, *this_set, entry, tmp) {
-      ant_value_t result = set_difference_key_cb(js, entry->value, &diff);
-      if (is_err(result)) return result;
+  bool scan = (double)HASH_COUNT(*this_set) <= other.size;
+  if (scan && other.native) {
+    for (set_entry_t *each = *this_set; each; each = (set_entry_t *)each->hh.next) {
+      bool has = false;
+      set_record_has_entry(js, &other, each, &has);
+      if (!has && !set_result_clone(js, out, out_set, each)) return js_mkerr(js, "out of memory");
     }
     return out;
   }
 
-  HASH_ITER(hh, *this_set, entry, tmp) {
-    if (!set_result_add(js, out, out_set, entry->value)) return js_mkerr(js, "out of memory");
+  if (!set_result_copy(js, out, out_set, this_set)) return js_mkerr(js, "out of memory");
+
+  if (scan) {
+    set_iterator_state_t it;
+    collections_set_iter_open(&it, this_set, ITER_TYPE_SET_VALUES);
+    ant_value_t result = out;
+    for (set_entry_t *each; (each = set_iter_take(&it));) {
+      bool has = false;
+      set_entry_t *twin = NULL;
+      HASH_FIND_BYHASHVALUE(hh, *out_set, each->key, each->key_len, each->hh.hashv, twin);
+      result = set_record_has_entry(js, &other, each, &has);
+      if (is_err(result)) break;
+      if (has && twin) collections_set_remove(out_set, twin);
+      result = out;
+    }
+    collections_set_iter_close(&it);
+    return result;
   }
 
   set_build_ctx_t build = { out, out_set };
@@ -1318,10 +1626,7 @@ static ant_value_t set_symmetricDifference(ant_params_t) {
   ant_value_t out = collections_set_create(js, &out_set);
   if (is_err(out)) return out;
 
-  set_entry_t *entry, *tmp;
-  HASH_ITER(hh, *this_set, entry, tmp) {
-    if (!set_result_add(js, out, out_set, entry->value)) return js_mkerr(js, "out of memory");
-  }
+  if (!set_result_copy(js, out, out_set, this_set)) return js_mkerr(js, "out of memory");
   set_symdiff_ctx_t build = { out, out_set, this_set };
   ant_value_t result = set_record_for_each_key(js, &other, set_symmetric_difference_key_cb, &build);
   return is_err(result) ? result : out;
@@ -1338,14 +1643,18 @@ static ant_value_t set_isSubsetOf(ant_params_t) {
   if (is_err(rec)) return rec;
   if ((double)HASH_COUNT(*this_set) > other.size) return js_false;
 
-  set_entry_t *entry, *tmp;
-  HASH_ITER(hh, *this_set, entry, tmp) {
+  set_iterator_state_t it;
+  collections_set_iter_open(&it, this_set, ITER_TYPE_SET_VALUES);
+  ant_value_t result = js_true;
+  for (set_entry_t *entry; (entry = set_iter_take(&it));) {
     bool has = false;
-    ant_value_t result = set_record_has(js, &other, entry->value, &has);
-    if (is_err(result)) return result;
-    if (!has) return js_false;
+    result = set_record_has_entry(js, &other, entry, &has);
+    if (is_err(result)) break;
+    result = js_bool(has);
+    if (!has) break;
   }
-  return js_true;
+  collections_set_iter_close(&it);
+  return result;
 }
 
 typedef struct {
@@ -1397,14 +1706,18 @@ static ant_value_t set_isDisjointFrom(ant_params_t) {
   if (is_err(rec)) return rec;
 
   if ((double)HASH_COUNT(*this_set) <= other.size) {
-    set_entry_t *entry, *tmp;
-    HASH_ITER(hh, *this_set, entry, tmp) {
+    set_iterator_state_t it;
+    collections_set_iter_open(&it, this_set, ITER_TYPE_SET_VALUES);
+    ant_value_t result = js_true;
+    for (set_entry_t *entry; (entry = set_iter_take(&it));) {
       bool has = false;
-      ant_value_t result = set_record_has(js, &other, entry->value, &has);
-      if (is_err(result)) return result;
-      if (has) return js_false;
+      result = set_record_has_entry(js, &other, entry, &has);
+      if (is_err(result)) break;
+      result = js_bool(!has);
+      if (has) break;
     }
-    return js_true;
+    collections_set_iter_close(&it);
+    return result;
   }
 
   set_predicate_ctx_t pred = { this_set, true };

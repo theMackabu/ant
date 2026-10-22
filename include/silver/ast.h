@@ -197,5 +197,6 @@ typedef struct {
 sv_ast_t *sv_ast_new(ant_t *js, sv_node_type_t type);
 sv_ast_t *sv_parse_function_parts(ant_t *js, const sv_function_parts_t *parts);
 sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, sv_parse_goal_t goal, bool strict);
+sv_ast_t *sv_parse_function_body(ant_t *js, const char *code, ant_offset_t clen, bool strict);
 
 #endif

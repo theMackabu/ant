@@ -1,6 +1,16 @@
 // @ant: compact_on_build
-import { main } from '../../../pkg/main.ts';
+import { describe } from 'upm/src/util.ts';
 
-main(process.argv.slice(2)).then(code => {
-  process.exitCode = code;
-});
+import { quickRun } from '../../../pkg/quick-run.ts';
+import { fail } from '../../../pkg/ui/output.ts';
+
+quickRun(process.argv.slice(2)).then(
+  code => {
+    if (code === undefined) return import('ant:internal/pkg_main');
+    process.exitCode = code;
+  },
+  error => {
+    fail(describe(error));
+    process.exitCode = 1;
+  }
+);

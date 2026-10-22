@@ -763,7 +763,8 @@ static bool js_inspect_more_items(js_inspect_builder_t *builder, size_t count) {
     js_inspect_appendf(builder, "... %zu more item%s", more, more == 1 ? "" : "s");
 }
 
-bool js_inspect_map(js_inspect_builder_t *builder, ant_value_t obj, map_entry_t *head) {
+bool js_inspect_map(js_inspect_builder_t *builder, ant_value_t obj, map_entry_t **map) {
+  map_entry_t *head = *map;
   size_t count = HASH_COUNT(head), shown = 0;
   bool nested = false;
   map_entry_t *entry, *tmp;
@@ -777,19 +778,24 @@ bool js_inspect_map(js_inspect_builder_t *builder, ant_value_t obj, map_entry_t 
   if (builder->closed) return true;
   js_inspect_begin_body(builder);
   
-  shown = 0;
-  HASH_ITER(hh, head, entry, tmp) {
-    if (shown++ == ANT_INSPECT_MAX_ENTRIES) break;
-    if (!js_inspect_property_prefix(builder)) return false;
-    if (!js_inspect_append_tostr(builder, entry->key_val)) return false;
-    if (!js_inspect_append(builder, " => ", 4)) return false;
-    if (!js_inspect_append_tostr(builder, entry->value)) return false;
-  }
+  map_iterator_state_t it;
+  collections_map_iter_open(&it, map, ITER_TYPE_MAP_ENTRIES);
+  bool ok = true;
+  
+  for (shown = 0; ok && shown < ANT_INSPECT_MAX_ENTRIES && (entry = map_iter_take(&it)); shown++)
+    ok = js_inspect_property_prefix(builder) &&
+      js_inspect_append_tostr(builder, entry->key_val) &&
+      js_inspect_append(builder, " => ", 4) &&
+      js_inspect_append_tostr(builder, entry->value);
+  
+  collections_map_iter_close(&it);
+  if (!ok) return false;
   
   return js_inspect_more_items(builder, count) && js_inspect_object_body(builder, obj) && js_inspect_close(builder);
 }
 
-bool js_inspect_set(js_inspect_builder_t *builder, ant_value_t obj, set_entry_t *head) {
+bool js_inspect_set(js_inspect_builder_t *builder, ant_value_t obj, set_entry_t **set) {
+  set_entry_t *head = *set;
   size_t count = HASH_COUNT(head), shown = 0;
   bool nested = false;
   set_entry_t *entry, *tmp;
@@ -803,12 +809,15 @@ bool js_inspect_set(js_inspect_builder_t *builder, ant_value_t obj, set_entry_t 
   if (builder->closed) return true;
   js_inspect_begin_body(builder);
   
-  shown = 0;
-  HASH_ITER(hh, head, entry, tmp) {
-    if (shown++ == ANT_INSPECT_MAX_ENTRIES) break;
-    if (!js_inspect_property_prefix(builder)) return false;
-    if (!js_inspect_append_tostr(builder, entry->value)) return false;
-  }
+  set_iterator_state_t it;
+  collections_set_iter_open(&it, set, ITER_TYPE_SET_VALUES);
+  bool ok = true;
+  
+  for (shown = 0; ok && shown < ANT_INSPECT_MAX_ENTRIES && (entry = set_iter_take(&it)); shown++)
+    ok = js_inspect_property_prefix(builder) && js_inspect_append_tostr(builder, entry->value);
+  
+  collections_set_iter_close(&it);
+  if (!ok) return false;
   
   return js_inspect_more_items(builder, count) && js_inspect_object_body(builder, obj) && js_inspect_close(builder);
 }

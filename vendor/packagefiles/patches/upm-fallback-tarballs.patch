@@ -1,3 +1,23 @@
+diff --git a/src/api.ts b/src/api.ts
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -2017,7 +2017,7 @@
+ 
+ /** The store, downloading with the config's credentials, or never under `offline`. */
+ function openStore(ctx: Context, verify?: boolean): Store {
+-  const { auth, offline, before } = settings(ctx);
++  const { auth, offline, before, registry, fallback } = settings(ctx);
+   const { storeBackend: backend } = ctx.options;
+   const dir = storeOf(ctx);
+   const backendFailed = (error: unknown) => ctx.log(`store backend: ${describe(error)}`, "warn");
+@@ -2032,6 +2032,7 @@
+     verify,
+     rehash,
+     auth,
++    ...(fallback && { mirror: { from: registry, to: fallback } }),
+     offline,
+     backend,
+     backendFailed,
 diff --git a/src/store.ts b/src/store.ts
 --- a/src/store.ts
 +++ b/src/store.ts
@@ -27,23 +47,3 @@ diff --git a/src/store.ts b/src/store.ts
      if (options.offline) {
        throw Object.assign(new Error(`offline: ${tarball} is not in the store`), {
          code: "EOFFLINE",
-diff --git a/src/api.ts b/src/api.ts
---- a/src/api.ts
-+++ b/src/api.ts
-@@ -2017,7 +2017,7 @@
- 
- /** The store, downloading with the config's credentials, or never under `offline`. */
- function openStore(ctx: Context, verify?: boolean): Store {
--  const { auth, offline, before } = settings(ctx);
-+  const { auth, offline, before, registry, fallback } = settings(ctx);
-   const { storeBackend: backend } = ctx.options;
-   const dir = storeOf(ctx);
-   const backendFailed = (error: unknown) => ctx.log(`store backend: ${describe(error)}`, "warn");
-@@ -2032,6 +2032,7 @@
-     verify,
-     rehash,
-     auth,
-+    ...(fallback && { mirror: { from: registry, to: fallback } }),
-     offline,
-     backend,
-     backendFailed,

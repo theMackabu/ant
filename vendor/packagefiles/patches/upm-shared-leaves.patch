@@ -1,7 +1,81 @@
+diff --git a/src/gc.ts b/src/gc.ts
+--- a/src/gc.ts
++++ b/src/gc.ts
+@@ -2,9 +2,9 @@
+ // project, and the content store every project shares. Mark and sweep, never refcounts — a
+ // refcount survives neither a second upm running nor `rm -rf node_modules`.
+ import { builtin } from "./builtin.ts";
+-import { ENTRIES_DIR } from "./state.ts";
++import { ENTRIES_DIR, SHARED_DIR, SHARED_LINKS } from "./state.ts";
+ import { createStore, isIndex } from "./store.ts";
+-import { alive, exists, list } from "./util.ts";
++import { alive, exists, list, readLink } from "./util.ts";
+ import type { PackageIndex } from "./store.ts";
+ 
+ export interface EntrySweep {
+@@ -67,6 +67,7 @@
+   const indexes = builtin.path.join(storeDir, "index");
+   // Blobs are listed first on purpose: content written after this moment is not a candidate at
+   // all, whatever the index walk below sees.
++  await pruneShared(storeDir, cutoff, out);
+   const blobs = await shards(files);
+   const live = new Set<string>();
+   for (const file of await shards(indexes)) {
+@@ -111,6 +112,33 @@
+     if (!Number.isInteger(pid) || pid <= 0 || alive(pid)) continue;
+     await drop(builtin.path.join(dir, name), cutoff, out, "blobs");
+   }
++}
++
++async function pruneShared(storeDir: string, cutoff: number, out: StorePrune): Promise<void> {
++  const shared = builtin.path.join(storeDir, SHARED_DIR);
++  for (const found of await list(shared)) {
++    if (!found.isDirectory()) continue;
++    const at = builtin.path.join(shared, found.name);
++    const staged = /\.(tmp|old)-(\d+)-/.exec(found.name);
++    if (staged ? alive(Number(staged[2])) : await linked(at)) continue;
++    const info = await builtin.fsp.stat(at).catch(() => undefined);
++    if (!staged && (!info || info.mtimeMs > cutoff)) continue;
++    out.bytes += await freedBy(at);
++    await remove(at, true);
++    await builtin.fsp.rm(`${at}${SHARED_LINKS}`, { force: true });
++  }
++}
++
++async function linked(dir: string): Promise<boolean> {
++  const file = `${dir}${SHARED_LINKS}`;
++  const text = await builtin.fsp.readFile(file, "utf8").catch(() => "");
++  const listed = text.split("\n").filter(Boolean);
++  const live: string[] = [];
++  for (const link of listed) if ((await readLink(link)) === dir) live.push(link);
++  if (live.length > 0 && live.length < listed.length) {
++    await builtin.fsp.writeFile(file, `${live.join("\n")}\n`);
++  }
++  return live.length > 0;
+ }
+ 
+ /** Remove one store file unless the grace period still covers it. */
 diff --git a/src/link.ts b/src/link.ts
 --- a/src/link.ts
 +++ b/src/link.ts
-@@ -129,6 +129,18 @@
+@@ -21,7 +21,15 @@
+ import { allDeps } from "./resolve.ts";
+ import { pid } from "./runtime.ts";
+ import type { ResolvedPackage, Resolution } from "./resolve.ts";
+-import { clearState, ENTRIES_DIR, readState, stateHash, writeState } from "./state.ts";
++import {
++  clearState,
++  ENTRIES_DIR,
++  readState,
++  SHARED_DIR,
++  SHARED_LINKS,
++  stateHash,
++  writeState,
++} from "./state.ts";
+ import type { InstallState, TopLinks } from "./state.ts";
+ import type { PackageIndex, Store } from "./store.ts";
+ 
+@@ -129,6 +137,25 @@
  /** A pool rejects with this when a worker died mid-shard: the entry is undone, not failed. */
  const WORKER_DIED = "EWORKERDIED";
  
@@ -17,18 +91,34 @@ diff --git a/src/link.ts b/src/link.ts
 +  shareFilter = filter;
 +}
 +
++async function registerLink(shared: string, link: string): Promise<void> {
++  const list = `${shared}${SHARED_LINKS}`;
++  const text = await builtin.fsp.readFile(list, "utf8").catch(() => "");
++  if (text.split("\n").includes(link)) return;
++  await builtin.fsp.appendFile(list, `${link}\n`);
++}
++
  /** Past this many files an entry is split across workers, by directory. */
  const SHARD_FILES = 256;
  
-@@ -219,6 +231,7 @@
+@@ -211,7 +238,7 @@
+ export async function linkTree(resolution: Resolution, options: LinkOptions): Promise<LinkResult> {
+   const { store } = options;
+   // Read once per install: `place` runs per file, 13,575 times for `nuxt`.
+-  const { dirname, join, normalize, relative, sep } = builtin.path;
++  const { dirname, join, normalize, relative, resolve, sep } = builtin.path;
+   const normalized = new Map<string, string>();
+   const heads = new Map<string, Promise<string | undefined>>();
+   const { lstat, mkdir, readdir, realpath, rename, rm, rmdir, stat, utimes } = builtin.fsp;
+@@ -219,6 +246,7 @@
    const up = `..${sep}`;
    const limit = createLimiter(options.concurrency ?? 16);
-   const storeDir = join(options.dir, "node_modules", ".ant");
+   const storeDir = join(options.dir, "node_modules", ENTRIES_DIR);
 +  const sharing = new Map<string, string | undefined>();
    const production = options.production === true;
    const hoist = options.hoist !== false;
    const hash =
-@@ -586,6 +599,54 @@
+@@ -586,6 +614,89 @@
      if (wrong) throw fail(`${id} cannot be installed: ${wrong}`, "EMISMATCH");
    }
  
@@ -43,36 +133,71 @@ diff --git a/src/link.ts b/src/link.ts
 +      try {
 +        const manifest = JSON.parse(builtin.fs.readFileSync(store.blobPath(file), "utf8"));
 +        const files = entry.index.files;
-+        if (shareFilter(pkg, manifest, files)) dir = join(store.dir, "shared", entry.key);
++        if (shareFilter(pkg, manifest, files)) dir = resolve(store.dir, SHARED_DIR, entry.key);
 +      } catch {}
 +    }
 +    sharing.set(entry.key, dir);
 +    return dir;
 +  }
 +
++  async function sharedIntact(entry: Entry, dir: string): Promise<boolean> {
++    if (!landsOnDir(dir)) return false;
++    if (await sized(entry, (file) => join(dir, file.path))) return true;
++    return (await import("./verify.ts")).sized(entry.index.files, dir);
++  }
++
++  async function fillShared(entry: Entry, temp: string): Promise<string> {
++    const filled = join(temp, "node_modules", entry.pkg.name);
++    const on = pool;
++    if (on && entry.index.files.length >= SHARD_FILES) {
++      const [shards] = plan(entry, temp, on.size);
++      const runs = shards.map((shard) => on.run(shard));
++      if (!runs.includes(undefined)) {
++        const settled = await Promise.allSettled(runs as Promise<ShardResult>[]);
++        const failed = settled.find((outcome) => outcome.status === "rejected");
++        if (!failed) {
++          for (const outcome of settled as PromiseFulfilledResult<ShardResult>[]) {
++            result.linked += outcome.value.linked;
++            result.copied += outcome.value.copied;
++          }
++          return filled;
++        }
++        if ((failed.reason as { code?: string }).code !== WORKER_DIED) throw failed.reason;
++        await rm(temp, { recursive: true, force: true });
++      }
++    }
++    await placeFiles(entry.index, filled);
++    return filled;
++  }
++
 +  async function ensureShared(entry: Entry, dir: string): Promise<void> {
-+    if (landsOnDir(dir) && (await sized(entry, (file) => join(dir, file.path)))) return;
++    if (await sharedIntact(entry, dir)) return;
 +    const temp = `${dir}.tmp-${pid}-${tempToken()}`;
 +    const retired = `${dir}.old-${pid}-${tempToken()}`;
 +    try {
-+      await placeFiles(entry.index, temp);
-+      await rename(dir, retired).catch(() => {});
-+      await rename(temp, dir);
-+    } catch (error) {
++      const filled = await fillShared(entry, temp);
++      if (await sharedIntact(entry, dir)) return;
++      if (landsOnDir(dir)) await rename(dir, retired);
++      try {
++        await rename(filled, dir);
++      } catch (error) {
++        if (!landsOnDir(dir)) await rename(retired, dir).catch(() => {});
++        if (!(await sharedIntact(entry, dir))) throw error;
++      }
++    } finally {
 +      await rm(temp, { recursive: true, force: true });
-+      if (!landsOnDir(dir)) await rename(retired, dir).catch(() => {});
-+      if (!landsOnDir(dir)) throw error;
++      await rm(retired, { recursive: true, force: true });
 +    }
-+    await rm(retired, { recursive: true, force: true });
 +  }
 +
-+  async function linkShared(entry: Entry, at: string): Promise<boolean> {
++  async function linkShared(entry: Entry, at: string, final: string): Promise<boolean> {
 +    const shared = sharedDir(entry);
 +    if (!shared) return false;
 +    try {
 +      await ensureShared(entry, shared);
 +      await mkdir(dirname(at), { recursive: true });
 +      await symlinkAt(shared, at);
++      await registerLink(shared, join(final, "node_modules", entry.pkg.name));
 +      return true;
 +    } catch {
 +      sharing.set(entry.key, undefined);
@@ -83,7 +208,16 @@ diff --git a/src/link.ts b/src/link.ts
    /** Built under a temp name and renamed in, so a half-written entry is never mistaken for one. */
    async function materialize(entry: Entry): Promise<void> {
      const final = join(storeDir, entry.key);
-@@ -735,7 +796,7 @@
+@@ -611,7 +722,7 @@
+         // The key covers the subgraph, so a matching entry should already be right — but one
+         // written by an older upm may name deps we no longer resolve.
+         const nmDir = join(final, "node_modules");
+-        await sweep(nmDir, new Set(deps.map(([name]) => name)));
++        await sweep(nmDir, new Set([entry.pkg.name, ...deps.map(([name]) => name)]));
+         await sweep(join(nmDir, ".bin"), new Set(binsOf(deps, nmDir).keys()));
+         return;
+       }
+@@ -735,7 +846,7 @@
  
    /** True when the pool built it: counted once the entry lands, not when a race loses it. */
    async function build(entry: Entry, temp: string, final: string): Promise<boolean> {
@@ -92,13 +226,25 @@ diff --git a/src/link.ts b/src/link.ts
      if (on) {
        const finalNm = join(final, "node_modules");
        const bins = WIN ? binsOf(depsOf(entry.pkg), finalNm) : undefined;
-@@ -872,7 +933,8 @@
+@@ -872,7 +983,8 @@
    async function buildHere(entry: Entry, temp: string, final: string): Promise<void> {
      const { pkg, index } = entry;
      const tempNm = join(temp, "node_modules");
 -    await placeFiles(index, join(tempNm, pkg.name));
 +    const pkgDir = join(tempNm, pkg.name);
-+    if (!(await linkShared(entry, pkgDir))) await placeFiles(index, pkgDir);
++    if (!(await linkShared(entry, pkgDir, final))) await placeFiles(index, pkgDir);
  
      const deps = depsOf(pkg);
      // Scope dirs once each, before the links; the package's own scope is there from placeFiles.
+diff --git a/src/state.ts b/src/state.ts
+--- a/src/state.ts
++++ b/src/state.ts
+@@ -10,6 +10,8 @@
+ import type { WorkspaceProof } from "./workspaces.ts";
+ 
+ export const ENTRIES_DIR = ".ant";
++export const SHARED_DIR = "shared";
++export const SHARED_LINKS = ".links";
+ export const STATE_FILE = ".ant.json";
+ export const TREE_LOCK = ".ant.lock";
+ 

@@ -8820,7 +8820,7 @@ sv_func_t *sv_compile_function_with_params(
 
   bool parse_strict = sv_vm_is_strict(js->vm);
   code_arena_mark_t parse_mark = parse_arena_mark(js);
-  sv_ast_t *program = sv_parse(js, body, (ant_offset_t)body_len, SV_PARSE_SCRIPT, parse_strict);
+  sv_ast_t *program = sv_parse_function_body(js, body, (ant_offset_t)body_len, parse_strict);
   
   if (!program) {
     parse_arena_rewind(js, parse_mark);

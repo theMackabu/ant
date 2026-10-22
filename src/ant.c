@@ -1413,17 +1413,17 @@ static size_t strobj_error(ant_t *js, ant_value_t obj, char *buf, size_t len, si
   return builder.n;
 }
 
-static size_t strobj_map(ant_t *js, ant_value_t obj, map_entry_t *head, char *buf, size_t len, size_t n) {
+static size_t strobj_map(ant_t *js, ant_value_t obj, map_entry_t **map, char *buf, size_t len, size_t n) {
   js_inspect_builder_t builder;
   js_inspect_builder_init_fixed(&builder, js, buf, len, n);
-  js_inspect_map(&builder, obj, head);
+  js_inspect_map(&builder, obj, map);
   return builder.n;
 }
 
-static size_t strobj_set(ant_t *js, ant_value_t obj, set_entry_t *head, char *buf, size_t len, size_t n) {
+static size_t strobj_set(ant_t *js, ant_value_t obj, set_entry_t **set, char *buf, size_t len, size_t n) {
   js_inspect_builder_t builder;
   js_inspect_builder_init_fixed(&builder, js, buf, len, n);
-  js_inspect_set(&builder, obj, head);
+  js_inspect_set(&builder, obj, set);
   return builder.n;
 }
 
@@ -1515,10 +1515,10 @@ static size_t strobj_body(ant_t *js, ant_value_t obj, char *buf, size_t len, siz
   
   bool too_deep = stringify_too_deep(js);
   map_entry_t **map = get_map_from_obj(obj);
-  if (map) return too_deep && *map ? n + cpy(buf + n, REMAIN(n, len), "[Map]", 5) : strobj_map(js, obj, *map, buf, len, n);
+  if (map) return too_deep && *map ? n + cpy(buf + n, REMAIN(n, len), "[Map]", 5) : strobj_map(js, obj, map, buf, len, n);
   
   set_entry_t **set = get_set_from_obj(obj);
-  if (set) return too_deep && *set ? n + cpy(buf + n, REMAIN(n, len), "[Set]", 5) : strobj_set(js, obj, *set, buf, len, n);
+  if (set) return too_deep && *set ? n + cpy(buf + n, REMAIN(n, len), "[Set]", 5) : strobj_set(js, obj, set, buf, len, n);
   if (too_deep && stringify_has_shown_props(obj)) return n + stringify_depth_marker(js, obj, "Object", buf + n, REMAIN(n, len));
   
   return strobj_inspect(js, obj, buf, len, n);
@@ -22365,6 +22365,10 @@ ant_value_t js_eval_bytecode_eval_in_env_with_strict(
 ant_value_t js_vm_script_compile(ant_t *js, const char *buf, size_t len) {
   code_arena_mark_t parse_mark = parse_arena_mark(js);
   sv_ast_t *program = sv_parse(js, buf, (ant_offset_t)len, SV_PARSE_SCRIPT, false);
+  if (program && (program->flags & FN_MODULE_SYNTAX)) {
+    js_mkerr_typed(js, JS_ERR_SYNTAX, "Cannot use import/export syntax outside a module");
+    program = NULL;
+  }
   
   sv_func_t *func = program
     ? js_compile_parsed_bytecode(js, program, buf, len, SV_COMPILE_REPL, js_mkundef())

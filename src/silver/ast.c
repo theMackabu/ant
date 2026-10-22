@@ -67,6 +67,7 @@ typedef struct {
   bool in_async;
   bool wants_module;
   bool tagged_template;
+  uint32_t function_depth;
   uint32_t *scope_words;
   uint32_t scope_word_count, scope_word_cap;
   ant_offset_t scope_words_len;
@@ -2192,7 +2193,9 @@ static sv_ast_t *parse_class(P) {
 static sv_ast_t *parse_block(P, bool directive_ctx) {
   expect(p, TOK_LBRACE);
   sv_ast_t *block = mk(N_BLOCK);
+  if (directive_ctx) p->function_depth++;
   sv_parse_stmt_list(p, &block->args, true, directive_ctx, false);
+  if (directive_ctx) p->function_depth--;
   if (Ant_Exception_Pending(JS)) return block;
   expect(p, TOK_RBRACE);
   block->src_end = (uint32_t)(TOFF + TLEN);
@@ -2774,6 +2777,7 @@ static sv_ast_t *parse_stmt(P) {
   }
 
   l_return: {
+    if (!p->function_depth) SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Illegal return statement");
     CONSUME();
     sv_ast_t *n = mk(N_RETURN);
     if (NEXT() != TOK_SEMICOLON && TOK != TOK_RBRACE && TOK != TOK_EOF &&
@@ -2957,11 +2961,12 @@ static sv_ast_t *parse_stmt(P) {
 
 static sv_ast_t *parse_program(
   ant_t *js, const char *code, ant_offset_t clen,
-  sv_parse_goal_t goal, bool strict, bool *wants_module
+  sv_parse_goal_t goal, bool strict, bool *wants_module, bool function_body
 ) {
   sv_parser_t parser = {
     .js = js, .goal = goal,
     .in_async = goal == SV_PARSE_MODULE || goal == SV_PARSE_REPL,
+    .function_depth = function_body ? 1 : 0,
   };
   sv_parser_t *p = &parser;
   sv_lexer_init(&p->lx, js, code, clen, strict || goal == SV_PARSE_MODULE);
@@ -2990,12 +2995,12 @@ static sv_ast_t *parse_program(
 static sv_ast_t *parse_detect(ant_t *js, const char *code, ant_offset_t clen, bool strict) {
   code_arena_mark_t mark = parse_arena_mark(js);
   bool wants_module = false;
-  sv_ast_t *program = parse_program(js, code, clen, SV_PARSE_DETECT, strict, &wants_module);
+  sv_ast_t *program = parse_program(js, code, clen, SV_PARSE_DETECT, strict, &wants_module, false);
   if (program) return program;
 
   parse_arena_rewind(js, mark);
   Ant_Exception_Clear(js);
-  program = parse_program(js, code, clen, SV_PARSE_MODULE, strict, NULL);
+  program = parse_program(js, code, clen, SV_PARSE_MODULE, strict, NULL, false);
   if (program) {
     program->flags |= FN_MODULE_SYNTAX;
     return program;
@@ -3004,7 +3009,7 @@ static sv_ast_t *parse_detect(ant_t *js, const char *code, ant_offset_t clen, bo
 
   parse_arena_rewind(js, mark);
   Ant_Exception_Clear(js);
-  return parse_program(js, code, clen, SV_PARSE_SCRIPT, strict, NULL);
+  return parse_program(js, code, clen, SV_PARSE_SCRIPT, strict, NULL, false);
 }
 
 sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, sv_parse_goal_t goal, bool strict) {
@@ -3015,7 +3020,7 @@ sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, sv_parse_goal
 
   sv_ast_t *program = goal == SV_PARSE_DETECT
     ? parse_detect(js, code, clen, strict)
-    : parse_program(js, code, clen, goal, strict, NULL);
+    : parse_program(js, code, clen, goal, strict, NULL, false);
 
   if (sv_parse_trace_unlikely) fprintf(stderr,
     "[parse] return %s body=%d\n", program ? "program" : "null",
@@ -3024,8 +3029,15 @@ sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, sv_parse_goal
   return program;
 }
 
+sv_ast_t *sv_parse_function_body(ant_t *js, const char *code, ant_offset_t clen, bool strict) {
+  return parse_program(js, code, clen, SV_PARSE_SCRIPT, strict, NULL, true);
+}
+
 sv_ast_t *sv_parse_function_parts(ant_t *js, const sv_function_parts_t *parts) {
-  sv_parser_t parser = { .js = js, .goal = SV_PARSE_SCRIPT, .in_async = parts->is_async };
+  sv_parser_t parser = {
+    .js = js, .goal = SV_PARSE_SCRIPT,
+    .in_async = parts->is_async, .function_depth = 1,
+  };
   sv_parser_t *p = &parser;
 
   sv_ast_t *fn = mk_plain(N_FUNC);

@@ -62,17 +62,25 @@ static bool io_fd_is_tty(int fd) {
 #endif
 }
 
-static bool io_should_color_fd(int fd) {
+int io_color_override(void) {
   if (g_sandbox_terminal_enabled) {
-    if (g_sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) return false;
-    if (g_sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_FORCE) return true;
+    if (g_sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) return 0;
+    if (g_sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_FORCE) return 1;
   }
-  if (io_no_color) return false;
+  
+  if (io_no_color) return 0;
   const char *force_color = getenv("FORCE_COLOR");
+  
   if (force_color) return ant_env_bool(force_color, true);
   const char *no_color = getenv("NO_COLOR");
-  if (no_color && *no_color) return false;
-  return io_fd_is_tty(fd);
+  
+  if (no_color && *no_color) return 0;
+  return -1;
+}
+
+bool io_should_color_fd(int fd) {
+  int forced = io_color_override();
+  return forced >= 0 ? forced : io_fd_is_tty(fd);
 }
 
 void io_set_sandbox_terminal(uint32_t capabilities) {
@@ -565,7 +573,7 @@ void print_repl_value(ant_t *js, ant_value_t val, FILE *stream) {
   
     if (vtype(stack) == kTypeString) {
       ant_output_stream_begin(out);
-      io_print_error_stack(js, out, val, stack);
+      io_print_error_stack(js, out, val, stack, !io_should_color_fd(fileno(stream)));
       
       ant_output_stream_putc(out, '\n');
       ant_output_stream_flush(out);
@@ -729,7 +737,7 @@ static const ant_format_sink_t console_format_sink = {
   console_format_value
 };
 
-bool io_print_error_header(ant_t *js, ant_output_stream_t *out, ant_value_t err) {
+bool io_print_error_header(ant_t *js, ant_output_stream_t *out, ant_value_t err, bool plain) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, err);
   
@@ -758,11 +766,15 @@ bool io_print_error_header(ant_t *js, ant_output_stream_t *out, ant_value_t err)
     name_text = js_getstr(js, display, &name_len);
   }
 
+  const char *red = plain ? "" : C_RED;
+  const char *bold = plain ? "" : C_BOLD;
+  const char *reset = plain ? "" : C_RESET;
+
   bool ok = true;
   if (class_differs) {
-    ok = ant_output_stream_appendf(out, "%s%.*s [%.*s]%s", C_RED, (int)class_len, class_name, (int)name_len, name_text, C_RESET);
-  } else if (name_len) ok = ant_output_stream_appendf(out, "%s%.*s%s", C_RED, (int)name_len, name_text, C_RESET);
-  if (ok && message_len) ok = ant_output_stream_appendf(out, "%s%s%.*s%s", name_len ? ": " : "", C_BOLD, (int)message_len, message_text, C_RESET);
+    ok = ant_output_stream_appendf(out, "%s%.*s [%.*s]%s", red, (int)class_len, class_name, (int)name_len, name_text, reset);
+  } else if (name_len) ok = ant_output_stream_appendf(out, "%s%.*s%s", red, (int)name_len, name_text, reset);
+  if (ok && message_len) ok = ant_output_stream_appendf(out, "%s%s%.*s%s", name_len ? ": " : "", bold, (int)message_len, message_text, reset);
 
   GC_ROOT_RESTORE(js, root_mark);
   return ok;
@@ -770,7 +782,7 @@ bool io_print_error_header(ant_t *js, ant_output_stream_t *out, ant_value_t err)
 
 bool io_print_error_stack(
   ant_t *js, ant_output_stream_t *out,
-  ant_value_t err, ant_value_t stack
+  ant_value_t err, ant_value_t stack, bool plain
 ) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, err);
@@ -781,22 +793,22 @@ bool io_print_error_stack(
   bool ok;
 
   if (pretty) {
-    ok = io_print_to_output_n(pretty, header_at, out, io_no_color);
-    if (ok) ok = io_print_error_header(js, out, err);
-    if (ok) ok = io_print_to_output_n(pretty + header_at, len - header_at, out, io_no_color);
+    ok = io_print_to_output_n(pretty, header_at, out, plain);
+    if (ok) ok = io_print_error_header(js, out, err, plain);
+    if (ok) ok = io_print_to_output_n(pretty + header_at, len - header_at, out, plain);
     free(pretty);
   } else {
     const char *text = js_getstr(js, stack, &len);
-    ok = text && io_print_to_output_n(text, len, out, io_no_color);
+    ok = text && io_print_to_output_n(text, len, out, plain);
   }
   
-  if (ok) ok = io_print_error_props(js, out, err);
+  if (ok) ok = io_print_error_props(js, out, err, plain);
   GC_ROOT_RESTORE(js, root_mark);
   
   return ok;
 }
 
-bool io_print_error_props(ant_t *js, ant_output_stream_t *out, ant_value_t err) {
+bool io_print_error_props(ant_t *js, ant_output_stream_t *out, ant_value_t err, bool plain) {
   if (vtype(err) != kTypeObject) return true;
 
   js_inspect_builder_t builder;
@@ -819,7 +831,7 @@ bool io_print_error_props(ant_t *js, ant_output_stream_t *out, ant_value_t err) 
   bool ok = js_inspect_object_body(&builder, err);
   Ant_List_Remove(&ctx);
   
-  if (ok) print_value_colored_to_output(builder.buf, out, io_no_color);
+  if (ok) print_value_colored_to_output(builder.buf, out, plain);
 
   js_inspect_builder_dispose(&builder);
   GC_ROOT_RESTORE(js, root_mark);
@@ -843,7 +855,7 @@ static bool console_write_args_to_stream(
       : js_mkundef();
 
     if (vtype(stack) == kTypeString) {
-      if (!io_print_error_stack(js, out, args[i], stack)) return false;
+      if (!io_print_error_stack(js, out, args[i], stack, io_no_color || !color_values)) return false;
       continue;
     }
 

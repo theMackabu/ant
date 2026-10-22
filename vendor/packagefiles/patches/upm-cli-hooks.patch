@@ -22,25 +22,47 @@ diff --git a/src/cli.ts b/src/cli.ts
      },
    };
    if (name === undefined) {
-@@ -822,7 +821,7 @@
+@@ -821,36 +820,59 @@
+ let quiet = false;
  let verbose = false;
  
++let program = "upm";
++let noteStyle: Style = "gray";
++
++export function setProgramName(name: string, style: Style = "gray"): void {
++  program = name;
++  noteStyle = style;
++}
++
  /** Summaries go to stderr, so `--json` keeps stdout clean. */
 -function note(message: string, level: LogLevel = "info"): void {
 +export function note(message: string, level: LogLevel = "info"): void {
    if (quiet && level === "info") return;
    if (level === "debug") {
      if (!verbose && !DEBUG.has(globalThis.process?.env?.UPM_DEBUG ?? "")) return;
-@@ -834,23 +833,38 @@
-   }
- }
- 
+-    write("stderr", `${paint("gray", `upm: ${message}`)}\n`);
++    write("stderr", `${paint("gray", `${program}: ${message}`)}\n`);
+   } else if (level === "warn") {
+-    write("stderr", `${paint("yellow", "upm:")} ${paint("yellow", message)}\n`);
++    write("stderr", `${paint("yellow", `${program}:`)} ${paint("yellow", message)}\n`);
+   } else {
+-    write("stderr", `${paint("gray", "upm:")} ${message}\n`);
+-  }
+-}
+-
 -function fail(message: string): void {
-+export function fail(message: string): void {
-   write("stderr", `${paint(["red", "bold"], "ant:")} ${paint("red", message)}\n`);
- }
- 
+-  write("stderr", `${paint(["red", "bold"], "upm:")} ${paint("red", message)}\n`);
+-}
+-
 -function usage(message: string): number {
++    write("stderr", `${paint(noteStyle, `${program}:`)} ${message}\n`);
++  }
++}
++
++export function fail(message: string): void {
++  write("stderr", `${paint(["red", "bold"], `${program}:`)} ${paint("red", message)}\n`);
++}
++
 +export function usage(message: string): number {
    fail(message);
    write("stderr", `\n${help("stderr")}\n`);
@@ -49,6 +71,10 @@ diff --git a/src/cli.ts b/src/cli.ts
  
 +let usageText = USAGE;
 +
++export function setUsage(text: string): void {
++  usageText = text;
++}
++
 +let scriptBanner = ({ script, line, workspace }: ScriptStart): void => {
 +  const at = workspace === undefined ? "" : `${workspace}: `;
 +  write("stderr", `${paint("gray", `> ${at}${script}\n> ${line}`)}\n`);
@@ -56,10 +82,6 @@ diff --git a/src/cli.ts b/src/cli.ts
 +
 +export function setScriptBanner(banner: (start: ScriptStart) => void): void {
 +  scriptBanner = banner;
-+}
-+
-+export function setUsage(text: string): void {
-+  usageText = text;
 +}
 +
  /** The usage text with its section headings in bold. */
@@ -78,7 +100,7 @@ diff --git a/src/cli.ts b/src/cli.ts
  
  /** The progress line on stderr, while a command draws one. */
  let bar: Bar | undefined;
-@@ -865,7 +879,7 @@
+@@ -865,7 +887,7 @@
  }
  
  /** Where there is no `process`, as in a browser, the console stands in for both streams. */
@@ -87,7 +109,7 @@ diff --git a/src/cli.ts b/src/cli.ts
    // Cleared first, so a note is not written over it; the next tick draws it under the note.
    bar?.clear();
    const stream = globalThis.process?.[to];
-@@ -880,7 +894,7 @@
+@@ -880,7 +902,7 @@
   * `styleText` checks the stream: plain text unless it is a terminal that takes color, and
   * NO_COLOR or FORCE_COLOR decide over that. Without `node:util` or the stream, text stays plain.
   */

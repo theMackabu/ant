@@ -11,7 +11,6 @@
 
 #include "ant.h"
 #include "cfunc.h"
-#include "utils.h"
 #include "ascii.h"
 #include "errors.h"
 #include "builder.h"
@@ -23,6 +22,7 @@
 #include "modules/buffer.h"
 #include "modules/date.h"
 #include "modules/json.h"
+#include "modules/io.h"
 #include "modules/util.h"
 #include "modules/abort.h"
 
@@ -1137,8 +1137,8 @@ static bool util_style_should_colorize(ant_t *js, ant_value_t options) {
     stream = js_get(js, options, "stream");
   }
 
-  const char *force_color = getenv("FORCE_COLOR");
-  if (force_color) return ant_env_bool(force_color, true);
+  int forced = io_color_override();
+  if (forced >= 0) return forced;
 
   if (is_undefined(stream)) {
     ant_value_t process_obj = js_get(js, js_glob(js), "process");

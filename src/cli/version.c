@@ -681,9 +681,3 @@ int ant_version_print(void) {
   printf("built for %s\n", ANT_TARGET_TRIPLE);
   return EXIT_SUCCESS;
 }
-
-int ant_version(void *argtable[]) {
-  int rc = ant_version_print();
-  arg_freetable(argtable, ARGTABLE_COUNT);
-  return rc;
-}

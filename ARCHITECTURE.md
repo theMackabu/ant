@@ -18,11 +18,17 @@ meant to answer "where should this change live?" before anyone starts editing.
 
 ### Process and startup
 
-- `src/main.c` is the CLI executable entrypoint.
+- `src/main.c` is the CLI executable entrypoint: it plans the run mode from
+  the parsed options, then runs watch mode or creates the runtime and
+  dispatches to the chosen entry.
 - `src/ant.c` and `src/runtime.c` handle runtime initialization and shared
   process setup.
-- `src/cli/` contains command-line specific behavior such as version and package
-  commands.
+- `src/cli/` contains command-line specific behavior: `startup.c` (crash
+  handler, signals, console colors, `ANT_DEBUG`), `options.c` (global flags,
+  the argtable, help and version), `commands.c` (the subcommand table and
+  routing of subcommands and bare package scripts), `entry.c` (eval, stdin,
+  module and file entrypoints), `daemon.c` (the sandbox daemon request loop),
+  and the version, compile, registry and package commands.
 
 ### JavaScript engine
 
@@ -102,7 +108,8 @@ properties, including its tag, after Symbol initialization.
   migration and the commands upm lacks. It is bundled with
   [upm](https://github.com/unjs/upm), fetched by `vendor/upm.wrap` and patched
   by `vendor/packagefiles/patches/upm-*.patch`, into the builtin
-  `ant:internal/pkg`. `src/main.c` runs every package command through it.
+  `ant:internal/pkg`. `src/cli/commands.c` routes every package command
+  through it.
 - TypeScript stripping is provided by the Skim Meson subproject.
 - `meson/` and the root [meson.build](meson.build) describe the build graph,
   dependency setup, and custom code generation targets.

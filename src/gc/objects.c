@@ -1470,14 +1470,6 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
       map_entry_t **head = (map_entry_t **)js_get_native(value, MAP_NATIVE_TAG);
       
       if (head) {
-        map_entry_t *e = *head, *next;
-        HASH_CLEAR(hh, *head);
-        
-        for (; e; e = next) {
-          next = e->hh.next;
-          free(e);
-        }
-
         collections_map_store_free(head);
         js_clear_native(value, MAP_NATIVE_TAG);
       }
@@ -1490,14 +1482,6 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
       set_entry_t **head = (set_entry_t **)js_get_native(value, SET_NATIVE_TAG);
       
       if (head) {
-        set_entry_t *e = *head, *next;
-        HASH_CLEAR(hh, *head);
-        
-        for (; e; e = next) {
-          next = e->hh.next;
-          free(e);
-        }
-
         collections_set_store_free(head);
         js_clear_native(value, SET_NATIVE_TAG);
       }
@@ -1513,6 +1497,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
         weakmap_table_free(table);
         js_clear_native(value, WEAKMAP_NATIVE_TAG);
       }
+      
       break;
     }
     

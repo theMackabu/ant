@@ -508,14 +508,29 @@ void jit_helper_define_method_comp(
   } else mkprop(js, obj, key_str, fn, data_attrs);
 }
 
-// TODO: DRY (iteration.h has same code)
 static ant_value_t jit_iter_advance_from_buf(
   sv_vm_t *vm, ant_t *js, ant_value_t *iter_buf, int hint,
   ant_value_t *out_value, bool *out_done
 ) {
-  GC_ROOT_SAVE(root_mark, js);
-
   int tag = hint ? hint : (int)js_getnum(iter_buf[2]);
+
+  if (tag == SV_ITER_MAP) {
+    map_iterator_state_t *st = collections_iter_from_slot(iter_buf[1]);
+    map_entry_t *entry = map_iter_take(st);
+    *out_done = entry == NULL;
+    *out_value = entry ? map_iter_value(js, st, entry) : js_mkundef();
+    return tov(0);
+  }
+
+  if (tag == SV_ITER_SET) {
+    set_iterator_state_t *st = collections_iter_from_slot(iter_buf[1]);
+    set_entry_t *entry = set_iter_take(st);
+    *out_done = entry == NULL;
+    *out_value = entry ? set_iter_value(js, st, entry) : js_mkundef();
+    return tov(0);
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
   switch (tag) {
   case SV_ITER_ARRAY: {
     ant_value_t arr = iter_buf[0];
@@ -533,63 +548,6 @@ static ant_value_t jit_iter_advance_from_buf(
       }
       *out_done = false;
       iter_buf[1] = tov(idx + 1);
-    }
-    GC_ROOT_RESTORE(js, root_mark);
-    return tov(0);
-  }
-
-  case SV_ITER_MAP: {
-    map_iterator_state_t *st = get_map_iter_state(iter_buf[0]);
-    if (!st) return js_mkerr(js, "Invalid Map iterator");
-    map_entry_t *entry = map_iter_take(st);
-    if (!entry) {
-      *out_value = js_mkundef();
-      *out_done = true;
-    } else {
-      ant_value_t value;
-      switch (st->type) {
-      case ITER_TYPE_MAP_VALUES:
-        value = entry->value;
-        break;
-      case ITER_TYPE_MAP_KEYS:
-        value = entry->key_val;
-        break;
-      case ITER_TYPE_MAP_ENTRIES: {
-        ant_value_t pair = js_mkarr(js);
-        js_arr_push(js, pair, entry->key_val);
-        js_arr_push(js, pair, entry->value);
-        value = pair;
-        break;
-      }
-      default:
-        value = js_mkundef();
-      }
-      *out_value = value;
-      *out_done = false;
-    }
-    GC_ROOT_RESTORE(js, root_mark);
-    return tov(0);
-  }
-
-  case SV_ITER_SET: {
-    set_iterator_state_t *st = get_set_iter_state(iter_buf[0]);
-    if (!st) return js_mkerr(js, "Invalid Set iterator");
-    set_entry_t *entry = set_iter_take(st);
-    if (!entry) {
-      *out_value = js_mkundef();
-      *out_done = true;
-    } else {
-      ant_value_t value;
-      if (st->type == ITER_TYPE_SET_ENTRIES) {
-        ant_value_t pair = js_mkarr(js);
-        js_arr_push(js, pair, entry->value);
-        js_arr_push(js, pair, entry->value);
-        value = pair;
-      } else {
-        value = entry->value;
-      }
-      *out_value = value;
-      *out_done = false;
     }
     GC_ROOT_RESTORE(js, root_mark);
     return tov(0);
@@ -716,7 +674,7 @@ ant_value_t jit_helper_for_of(
   iter_type_t map_type;
   if (sv_is_map_iter(js, iterator, &map_st, &map_type)) {
     iter_buf[0] = iterator;
-    iter_buf[1] = tov((double)map_type);
+    iter_buf[1] = collections_iter_slot(map_st);
     iter_buf[2] = tov(SV_ITER_MAP);
     GC_ROOT_RESTORE(js, root_mark);
     return tov(0);
@@ -726,7 +684,7 @@ ant_value_t jit_helper_for_of(
   iter_type_t set_type;
   if (sv_is_set_iter(js, iterator, &set_st, &set_type)) {
     iter_buf[0] = iterator;
-    iter_buf[1] = tov((double)set_type);
+    iter_buf[1] = collections_iter_slot(set_st);
     iter_buf[2] = tov(SV_ITER_SET);
     GC_ROOT_RESTORE(js, root_mark);
     return tov(0);

@@ -9,6 +9,8 @@
 #include <stdint.h>
 
 extern bool io_no_color;
+int io_color_override(void);
+bool io_should_color_fd(int fd);
 
 typedef struct {
   uintptr_t *visited;
@@ -39,9 +41,9 @@ void print_repl_value(ant_t *js, ant_value_t val, FILE *stream);
 void io_set_sandbox_terminal(uint32_t capabilities);
 
 bool print_uncaught_throw(ant_t *js);
-bool io_print_error_header(ant_t *js, ant_output_stream_t *out, ant_value_t err);
-bool io_print_error_props(ant_t *js, ant_output_stream_t *out, ant_value_t err);
-bool io_print_error_stack(ant_t *js, ant_output_stream_t *out, ant_value_t err, ant_value_t stack);
+bool io_print_error_header(ant_t *js, ant_output_stream_t *out, ant_value_t err, bool plain);
+bool io_print_error_props(ant_t *js, ant_output_stream_t *out, ant_value_t err, bool plain);
+bool io_print_error_stack(ant_t *js, ant_output_stream_t *out, ant_value_t err, ant_value_t stack, bool plain);
 
 void inspect_object(
   ant_t *js, ant_value_t obj,
