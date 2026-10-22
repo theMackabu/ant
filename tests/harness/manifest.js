@@ -272,6 +272,7 @@ export function targets() {
     'test_node_events_once_prototype_spoof.cjs',
     'test_node_http_incoming_message_readable.cjs',
     'test_node_http_server_streaming_body.cjs',
+    'test_node_http_keepalive_after_unread_body.cjs',
     'test_nul_property_keys.cjs',
     'test_numeric_coercion_errors.cjs',
     'test_numeric_literal_keys.cjs',

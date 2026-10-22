@@ -1346,6 +1346,7 @@ export class Server extends net.Server {
         if (result.complete) {
           state.incoming = null;
           req._finishBody();
+          if (!state.activeResponse) resumeSocket(state);
         }
       }
     } finally {
