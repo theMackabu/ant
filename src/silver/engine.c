@@ -628,6 +628,7 @@ static inline void sv_clear_jit_resume(sv_vm_t *vm) {
   vm->jit.resume.n_locals = 0;
   vm->jit.resume.vstack = NULL;
   vm->jit.resume.vstack_sp = 0;
+  vm->jit.resume.finally = NULL;
 }
 
 const sv_srcpos_t *sv_srcpos_at(sv_func_t *func, int bc_offset) {
@@ -1417,7 +1418,7 @@ static const sv_try_table_t *sv_func_try_table(sv_func_t *func) {
   int n = 0;
   for (int off = 0; off < func->code_len; off += sv_op_size[func->code[off]]) {
     if (sv_op_size[func->code[off]] == 0) break;
-    if (func->code[off] == OP_TRY_PUSH) n++;
+    if (func->code[off] == OP_TRY_PUSH || func->code[off] == OP_TRY_PUSH_FINALLY) n++;
   }
   
   if (n == 0) return &sv_no_try_regions;
@@ -1479,16 +1480,38 @@ static void sv_frame_push_try_chain(sv_vm_t *vm, const sv_try_table_t *table, sv
 
   for (int i = count - 1; i >= 0; i--) {
     if (!sv_vm_reserve_handlers(vm, 1)) break;
-    
+
     uint8_t *push = func->code + chain[i];
+    uint8_t *target = push + sv_op_size[*push] + sv_get_i32(push + 1);
+
+    if (*push == OP_FINALLY) {
+      sv_handler_t h = { .kind = SV_HANDLER_FINALLY, .ip = target, .completion.value = js_mkundef() };
+      sv_jit_finally_t *saved = vm->jit.resume.finally;
+      if (saved) {
+        saved += sv_func_finally_index(func, chain[i]);
+        h.completion.kind = (sv_completion_kind_t)saved->kind;
+        h.completion.value = saved->value;
+        if (saved->kind == SV_COMPLETION_JUMP) h.completion.jump_ip = func->code + saved->target;
+      }
+      vm->handler_stack[vm->handler_depth++] = h;
+      continue;
+    }
+
     int try_depth = table->depth ? table->depth[chain[i]] : -1;
-    
     vm->handler_stack[vm->handler_depth++] = (sv_handler_t){
-      .kind = SV_HANDLER_TRY,
-      .ip = push + sv_op_size[OP_TRY_PUSH] + sv_get_i32(push + 1),
+      .kind = *push == OP_TRY_PUSH_FINALLY ? SV_HANDLER_TRY_FINALLY : SV_HANDLER_TRY,
+      .ip = target,
       .saved_sp = try_depth >= 0 ? base_sp + try_depth : vm->sp,
     };
   }
+}
+
+bool sv_func_in_finally_body(sv_func_t *func, int off) {
+  const sv_try_table_t *table = sv_func_try_table(func);
+  if (!table->map || off < 0 || off >= func->code_len) return false;
+  for (int state = table->map[off]; state >= 0; state = table->map[func->code_len + state])
+    if (func->code[state] == OP_FINALLY) return true;
+  return false;
 }
 
 void sv_frame_push_try_handlers(sv_vm_t *vm, sv_frame_t *frame, sv_func_t *func, int off, int base_sp) {
@@ -3115,7 +3138,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
 
   L_UNWIND_JMP: {
     int32_t off = sv_get_i32(ip + 1);
-    uint8_t *target = ip + 5 + off;
+    uint8_t *target = ip + sv_op_size[OP_UNWIND_JMP] + off;
     int n_fin = (int)sv_get_u8(ip + 5);
     int n_pop = (int)sv_get_u8(ip + 6);
     uint8_t *finally_ip = sv_vm_unwind_for_jump(vm, target, n_fin, n_pop);
@@ -3134,6 +3157,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     if (action == SV_FINALLY_RET_RETURN) {
       vm->handler_depth = frame->handler_base;
       frame->handler_top = frame->handler_base;
+      if (vm->open_upvalues && frame->bp) sv_close_upvalues_from_slot(vm, frame->bp);
       if (__builtin_expect(sv_async_inline_at(vm, vm->fp), 0))
         completion = sv_async_inline_settle(vm, js, completion, false, false);
       if (vm->fp <= entry_fp) {

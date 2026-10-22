@@ -36,6 +36,7 @@ ant_value_t ant_wire_serialize(
   ant_value_t source_port, ant_wire_t **out
 );
 
+ant_value_t ant_wire_serialize_error(ant_t *js, ant_value_t error, ant_wire_t **out);
 ant_value_t ant_wire_mark_uncloneable(ant_t *js, ant_value_t value);
 ant_value_t ant_wire_deserialize(ant_t *js, ant_wire_t *wire, ant_value_t *ports_out);
 ant_value_t ant_wire_mark_untransferable(ant_t *js, ant_value_t value);

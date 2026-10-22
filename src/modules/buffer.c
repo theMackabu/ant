@@ -632,7 +632,7 @@ static ant_value_t create_typed_array_like(
   ant_value_t ab_obj = is_object_type(shared) ? shared : create_arraybuffer_obj(js, buffer);
   ant_value_t out = create_typed_array_with_buffer(
     js,type, buffer, byte_offset,
-    length, js->builtins.typedarray_protos[type], ab_obj
+    length, js->builtins.typedarray_protos[type], ab_obj, false
   );
   
   if (is_err(out)) return out;
@@ -1530,9 +1530,9 @@ static inline __attribute__((always_inline)) ant_value_t create_typed_array_view
 
 ant_value_t create_typed_array_with_buffer(
   ant_t *js, TypedArrayType type, ArrayBufferData *buffer,
-  size_t byte_offset, size_t length, ant_value_t proto, ant_value_t arraybuffer_obj
+  size_t byte_offset, size_t length, ant_value_t proto, ant_value_t arraybuffer_obj, bool tracking
 ) {
-  return create_typed_array_view(js, type, buffer, byte_offset, length, proto, arraybuffer_obj, false);
+  return create_typed_array_view(js, type, buffer, byte_offset, length, proto, arraybuffer_obj, tracking);
 }
 
 ant_value_t create_typed_array(
@@ -1540,19 +1540,19 @@ ant_value_t create_typed_array(
   size_t byte_offset, size_t length, ant_value_t proto
 ) {
   ant_value_t ab_obj = create_arraybuffer_obj(js, buffer);
-  ant_value_t result = create_typed_array_with_buffer(js, type, buffer, byte_offset, length, proto, ab_obj);
+  ant_value_t result = create_typed_array_with_buffer(js, type, buffer, byte_offset, length, proto, ab_obj, false);
   free_array_buffer_data(js, buffer); return result;
 }
 
 ant_value_t create_dataview_with_buffer(
   ant_t *js, ArrayBufferData *buffer,
   size_t byte_offset, size_t byte_length,
-  ant_value_t arraybuffer_obj
+  ant_value_t arraybuffer_obj, bool tracking
 ) {
   DataViewData *dv_data = ta_meta_alloc(js, sizeof(DataViewData));
   if (!dv_data) return js_mkerr(js, "Failed to allocate DataView");
 
-  dataview_view_attach(js, dv_data, buffer, byte_offset, byte_length, false);
+  dataview_view_attach(js, dv_data, buffer, byte_offset, byte_length, tracking);
 
   ant_value_t obj = Ant_Object_CreateBare(js);
   ant_value_t proto = js->builtins.dataview_proto;

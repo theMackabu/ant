@@ -80,7 +80,7 @@ static void jit_emit_resume_tramp(jit_compile_t *c, const jit_bailout_emit_t *ba
   }
   c->call_tagging.resume = true;
   MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_call_insn(c->ctx, 17,
+                  MIR_new_call_insn(c->ctx, 18,
                                     MIR_new_ref_op(c->ctx, c->resume_proto),
                                     MIR_new_ref_op(c->ctx, imp),
                                     MIR_new_reg_op(c->ctx, r_resume_res),
@@ -99,7 +99,9 @@ static void jit_emit_resume_tramp(jit_compile_t *c, const jit_bailout_emit_t *ba
                                     MIR_new_int_op(c->ctx, c->params_in_slotbuf ? c->param_count : 0),
                                     MIR_new_reg_op(c->ctx, c->r_lbuf),
                                     MIR_new_int_op(c->ctx, c->n_locals),
-                                    MIR_new_reg_op(c->ctx, c->r_bailout_off)));
+                                    MIR_new_reg_op(c->ctx, c->r_bailout_off),
+                                    c->finally_count ? MIR_new_reg_op(c->ctx, c->r_finally_area)
+                                      : MIR_new_uint_op(c->ctx, 0)));
   c->call_tagging.resume = false;
   MIR_append_insn(c->ctx, c->jit_func,
                 MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, r_resume_res)));
@@ -240,31 +242,67 @@ static void jit_sink_cold_blocks(jit_compile_t *c, MIR_insn_t body_tail) {
   }
 }
 
+static MIR_label_t jit_finally_landing(jit_compile_t *c, int push, MIR_label_t handler, MIR_reg_t value) {
+  for (int i = 0; i < c->finally_landing_count; i++)
+    if (c->finally_landings[i].push_off == push) return c->finally_landings[i].landing;
+
+  if (c->finally_landing_count == c->finally_landing_cap) {
+    int cap = c->finally_landing_cap ? c->finally_landing_cap * 2 : 4;
+    jit_finally_landing_t *grown = realloc(c->finally_landings, (size_t)cap * sizeof(*grown));
+    if (!grown) {
+      c->ok = false;
+      return handler;
+    }
+    c->finally_landings = grown;
+    c->finally_landing_cap = cap;
+  }
+
+  MIR_label_t landing = MIR_new_label(c->ctx);
+  c->finally_landings[c->finally_landing_count++] = (jit_finally_landing_t){
+    .push_off = push, .landing = landing, .handler = handler, .value = value,
+  };
+  return landing;
+}
+
 static void jit_sync_try_stack(jit_compile_t *c) {
   if (!c->try_at) return;
   int *parent = c->try_at + c->func->code_len;
   int chain[JIT_TRY_MAX];
   int n = 0;
-  
+
   for (int state = c->try_at[c->bc_off]; state >= 0; state = parent[state]) {
+    if (c->func->code[state] == OP_FINALLY) continue;
     if (n == JIT_TRY_MAX) {
       c->ok = false;
       return;
     }
     chain[n++] = state;
   }
-  
+
   for (int i = 0; i < n; i++) {
     int push = chain[n - 1 - i];
     int catch_off = push + sv_op_size[OP_TRY_PUSH] + sv_get_i32(c->func->code + push + 1);
+    MIR_label_t handler = label_for_offset(c->ctx, &c->lm, catch_off);
+    bool has_finally = c->func->code[push] == OP_TRY_PUSH_FINALLY;
     c->jit_try_stack[i] = (jit_try_entry_t){
-      .catch_label = label_for_offset(c->ctx, &c->lm, catch_off),
+      .catch_label = has_finally
+        ? jit_finally_landing(c, push, handler, c->vs.regs[c->depth[push]])
+        : handler,
+      .finally_label = has_finally ? handler : NULL,
       .catch_bc_off = catch_off,
       .saved_sp = c->depth[push],
     };
   }
-  
+
   c->jit_try_depth = n;
+}
+
+static bool jit_in_finally_body(const jit_compile_t *c) {
+  if (!c->try_at) return false;
+  const int *parent = c->try_at + c->func->code_len;
+  for (int state = c->try_at[c->bc_off]; state >= 0; state = parent[state])
+    if (c->func->code[state] == OP_FINALLY) return true;
+  return false;
 }
 
 sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure) {
@@ -366,6 +404,11 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
     
     jit_sync_try_stack(c);
     if (!c->ok) break;
+    if ((c->op == OP_AWAIT || c->op == OP_AWAIT_RETURN || c->op == OP_AWAIT_ITER_NEXT || c->op == OP_FOR_AWAIT_OF) &&
+        jit_in_finally_body(c)) {
+      c->ok = false;
+      break;
+    }
 
     int i = jit_label_at(&c->lm, c->bc_off);
     if (i >= 0) {
@@ -526,6 +569,11 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_THROW_ERROR:
       case OP_CATCH:
       case OP_NIP_CATCH:
+      case OP_TRY_PUSH_FINALLY:
+      case OP_FINALLY:
+      case OP_FINALLY_RET:
+      case OP_FINALLY_DISCARD:
+      case OP_UNWIND_JMP:
       case OP_NOP:
       case OP_HALT:
       case OP_LINE_NUM:
@@ -609,6 +657,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_SET_NAME:
         jit_emit_bindings(c);
         break;
+      case OP_FOR_IN:
       case OP_FOR_OF:
       case OP_DESTRUCTURE_INIT:
       case OP_ITER_NEXT:
@@ -670,6 +719,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   if (c->stale_site_count) jit_emit_stale_exits(c);
   jit_emit_interrupt_exit(c);
   if (c->deferred_bail_count) jit_emit_deferred_bails(c);
+  if (c->finally_landing_count) jit_emit_finally_landings(c);
   if (c->await_park_block) jit_emit_await_park_block(c);
   if (c->needs_bailout) jit_emit_resume_tramp(c, &c->bailout_ctx, c->imp_resume, "resume_res");
   if (c->needs_promote) jit_emit_resume_tramp(c, &c->promote_ctx, c->imp_promote_resume, "promote_res");
@@ -708,6 +758,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   free(c->lm.index);
   free(c->depth);
   free(c->try_at);
+  free(c->finally_landings);
 
   if (!c->ok) {
     if (sv_jit_warn_unlikely) fprintf(

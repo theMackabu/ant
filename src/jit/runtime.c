@@ -149,6 +149,7 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_define_slot);
   LOAD_EXT(jit_helper_array);
   LOAD_EXT(jit_helper_catch_value);
+  LOAD_EXT(jit_helper_for_in);
   LOAD_EXT(jit_helper_interrupt);
   LOAD_EXT(jit_helper_throw);
   LOAD_EXT(jit_helper_throw_error);
@@ -307,7 +308,12 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
     func->back_edge_count = 0;
     return SV_JIT_RETRY_INTERP;
   }
-  
+
+  if (func->has_try && sv_func_in_finally_body(func, bc_offset)) {
+    func->back_edge_count = 0;
+    return SV_JIT_RETRY_INTERP;
+  }
+
   func->jit_loop_hot = true;
 
   sv_closure_t *closure;

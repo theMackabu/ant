@@ -282,7 +282,8 @@ static void isolate_host_call_error(ant_t *js, guest_host_call_t *call, ant_valu
   guest_value_free(&call->result);
 
   ant_wire_t *wire = NULL;
-  ant_value_t r = ant_wire_serialize(js, error, js_mkundef(), js_mkundef(), &wire);
+  ant_value_t r = ant_wire_serialize_error(js, error, &wire);
+  
   if (is_err(r)) {
     js_take_thrown(js, r);
     ant_value_t text = js_tostring_val(js, error);

@@ -183,7 +183,7 @@ void worker_flush_online(ant_t *js, ant_worker_t *w) {
 
 static ant_wire_t *worker_serialize_error(ant_t *js, ant_value_t error) {
   ant_wire_t *wire = NULL;
-  ant_value_t r = ant_wire_serialize(js, error, js_mkundef(), js_mkundef(), &wire);
+  ant_value_t r = ant_wire_serialize_error(js, error, &wire);
   if (!is_err(r)) return wire;
 
   js_take_thrown(js, r);

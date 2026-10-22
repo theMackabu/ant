@@ -7,9 +7,18 @@
 #define JIT_TRY_MAX 16
 typedef struct {
   MIR_label_t catch_label;
+  MIR_label_t finally_label;
   int catch_bc_off;
   int saved_sp;
 } jit_try_entry_t;
+
+typedef struct {
+  int push_off;
+  MIR_label_t landing;
+  MIR_label_t handler;
+  MIR_reg_t value;
+} jit_finally_landing_t;
+
 typedef struct {
   int bc_off;
   int saved_sp;
@@ -210,6 +219,7 @@ typedef struct jit_compile {
   MIR_item_t imp_define_slot;
   MIR_item_t imp_array;
   MIR_item_t imp_catch_value;
+  MIR_item_t imp_for_in;
   MIR_item_t imp_interrupt;
   MIR_item_t imp_throw;
   MIR_item_t imp_throw_error;
@@ -364,6 +374,10 @@ typedef struct jit_compile {
   int *try_at;
   jit_catch_sp_t catch_sp_map[JIT_TRY_MAX];
   int catch_sp_count;
+  jit_finally_landing_t *finally_landings;
+  int finally_landing_count, finally_landing_cap;
+  int finally_count;
+  MIR_reg_t r_finally_kind, r_finally_value, r_finally_target, r_finally_area;
   MIR_reg_t *integer_locals;
   jit_integer_range_t *integer_local_ranges;
   int *local_by_reg;
@@ -405,6 +419,7 @@ jit_stale_exit_t *jit_stale_exit_for(jit_compile_t *c, jit_stale_exit_t *exit);
 bool jit_site_runs_hot(jit_compile_t *c);
 void jit_note_stale_exit(jit_compile_t *c, const jit_stale_exit_t *exit, int pre_op_sp);
 void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg);
+void jit_emit_finally_landings(jit_compile_t *c);
 
 static inline bool jit_upvalue_needs_tdz_guard(jit_compile_t *c, uint16_t index) {
   if (!jit_upvalue_may_tdz(c->func, index)) return false;

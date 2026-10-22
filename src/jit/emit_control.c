@@ -172,6 +172,215 @@ void jit_emit_awaited_call(jit_compile_t *c, int call_argc, bool method, uint8_t
   jit_emit_throw_if_error(c, r_res);
 }
 
+static const jit_try_entry_t *jit_innermost_finally(const jit_compile_t *c) {
+  for (int i = c->jit_try_depth - 1; i >= 0; i--)
+    if (c->jit_try_stack[i].finally_label) return &c->jit_try_stack[i];
+  return NULL;
+}
+
+static void jit_emit_finally_route(jit_compile_t *c, const jit_try_entry_t *h,
+                                   sv_completion_kind_t kind, MIR_op_t operand) {
+  vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
+  MIR_reg_t slot = c->vs.regs[h->saved_sp];
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_finally_kind),
+                               MIR_new_int_op(c->ctx, kind)));
+  if (kind == SV_COMPLETION_JUMP) {
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_finally_target), operand));
+    operand = MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0));
+  } else {
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_finally_value), operand));
+  }
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, slot), operand));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, h->finally_label)));
+}
+
+static void jit_emit_close_frame_upvalues(jit_compile_t *c) {
+  if (c->has_captured_slots)
+    mir_emit_close_marked_slots(c->ctx, c->jit_func,
+                                c->close_upval_proto, c->imp_close_upval,
+                                c->r_vm, c->r_slotbuf, c->r_jit_open_upvalues, c->captured_params, 0, c->param_count,
+                                mir_next_reg_site(&c->reg_site_n));
+  if (c->has_captures)
+    mir_emit_close_marked_slots(c->ctx, c->jit_func,
+                                c->close_upval_proto, c->imp_close_upval,
+                                c->r_vm, c->r_lbuf, c->r_jit_open_upvalues, c->captured_locals, 0, c->n_locals,
+                                mir_next_reg_site(&c->reg_site_n));
+}
+
+static void jit_emit_return_value(jit_compile_t *c, MIR_reg_t ret_val) {
+  const jit_try_entry_t *fin = jit_innermost_finally(c);
+  if (fin) {
+    jit_emit_finally_route(c, fin, SV_COMPLETION_RETURN, MIR_new_reg_op(c->ctx, ret_val));
+    return;
+  }
+  jit_emit_close_frame_upvalues(c);
+  if (c->func->is_derived_ctor) {
+    MIR_label_t dctor_keep = MIR_new_label(c->ctx);
+    char rn_dt[32];
+    snprintf(rn_dt, sizeof(rn_dt), "dctor%d", c->upval_n++);
+    MIR_reg_t r_dt = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_dt);
+    mir_emit_branch_if_object(c->ctx, c->jit_func, ret_val, r_dt, dctor_keep);
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_MOV,
+                                 MIR_new_reg_op(c->ctx, ret_val),
+                                 MIR_new_reg_op(c->ctx, c->r_this_curr)));
+    MIR_append_insn(c->ctx, c->jit_func, dctor_keep);
+  }
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, ret_val)));
+}
+
+static void jit_emit_throw_value(jit_compile_t *c, MIR_reg_t thrown) {
+  if (c->jit_try_depth > 0) {
+    jit_try_entry_t *h = &c->jit_try_stack[c->jit_try_depth - 1];
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_MOV,
+                                 MIR_new_reg_op(c->ctx, c->vs.regs[h->saved_sp]),
+                                 MIR_new_reg_op(c->ctx, thrown)));
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_JMP,
+                                 MIR_new_label_op(c->ctx, h->catch_label)));
+    return;
+  }
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_call_insn(c->ctx, 6,
+                                    MIR_new_ref_op(c->ctx, c->helper1_proto),
+                                    MIR_new_ref_op(c->ctx, c->imp_throw),
+                                    MIR_new_reg_op(c->ctx, c->r_err_tmp),
+                                    MIR_new_reg_op(c->ctx, c->r_vm),
+                                    MIR_new_reg_op(c->ctx, c->r_js),
+                                    MIR_new_reg_op(c->ctx, thrown)));
+  jit_emit_exit_ret(c, MIR_new_reg_op(c->ctx, c->r_err_tmp));
+}
+
+static MIR_op_t jit_finally_slot(jit_compile_t *c, int index, size_t field) {
+  return MIR_new_mem_op(c->ctx, MIR_T_I64,
+                        (MIR_disp_t)((size_t)index * sizeof(sv_jit_finally_t) + field),
+                        c->r_finally_area, 0, 1);
+}
+
+static int jit_finally_of_region(const sv_func_t *func, int push) {
+  int handler = push + sv_op_size[OP_TRY_PUSH_FINALLY] + sv_get_i32(func->code + push + 1);
+  int jmp = handler + sv_op_size[OP_POP];
+  if (handler < 0 || jmp + sv_op_size[OP_JMP] > func->code_len) return -1;
+  if (func->code[handler] != OP_POP || func->code[jmp] != OP_JMP) return -1;
+  int target = jmp + sv_op_size[OP_JMP] + sv_get_i32(func->code + jmp + 1);
+  return target >= 0 && target < func->code_len && func->code[target] == OP_FINALLY ? target : -1;
+}
+
+static void jit_emit_finally_enter(jit_compile_t *c) {
+  int index = sv_func_finally_index(c->func, c->bc_off);
+  if (index < 0 || index >= c->finally_count) {
+    c->ok = false;
+    return;
+  }
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV, jit_finally_slot(c, index, offsetof(sv_jit_finally_t, kind)),
+                               MIR_new_reg_op(c->ctx, c->r_finally_kind)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV, jit_finally_slot(c, index, offsetof(sv_jit_finally_t, value)),
+                               MIR_new_reg_op(c->ctx, c->r_finally_value)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV, jit_finally_slot(c, index, offsetof(sv_jit_finally_t, target)),
+                               MIR_new_reg_op(c->ctx, c->r_finally_target)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_finally_kind),
+                               MIR_new_int_op(c->ctx, SV_COMPLETION_NONE)));
+}
+
+static void jit_emit_finally_ret(jit_compile_t *c) {
+  int fin = c->try_at ? c->try_at[c->bc_off] : -1;
+  if (fin < 0 || c->func->code[fin] != OP_FINALLY) {
+    c->ok = false;
+    return;
+  }
+  int index = sv_func_finally_index(c->func, fin);
+  int after = fin + sv_op_size[OP_FINALLY] + sv_get_i32(c->func->code + fin + 1);
+  vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
+  if (index < 0 || index >= c->finally_count || c->depth[after] != c->vs.sp) {
+    c->ok = false;
+    return;
+  }
+
+  char name[32];
+  int site = mir_next_reg_site(&c->reg_site_n);
+  snprintf(name, sizeof(name), "finally_kind%d", site);
+  MIR_reg_t kind = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
+  snprintf(name, sizeof(name), "finally_value%d", site);
+  MIR_reg_t value = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, name);
+  MIR_label_t on_throw = MIR_new_label(c->ctx);
+  MIR_label_t on_return = MIR_new_label(c->ctx);
+
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, kind),
+                               jit_finally_slot(c, index, offsetof(sv_jit_finally_t, kind))));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, label_for_offset(c->ctx, &c->lm, after)),
+                               MIR_new_reg_op(c->ctx, kind), MIR_new_int_op(c->ctx, SV_COMPLETION_NONE)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, on_throw),
+                               MIR_new_reg_op(c->ctx, kind), MIR_new_int_op(c->ctx, SV_COMPLETION_THROW)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, on_return),
+                               MIR_new_reg_op(c->ctx, kind), MIR_new_int_op(c->ctx, SV_COMPLETION_RETURN)));
+
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, kind),
+                               jit_finally_slot(c, index, offsetof(sv_jit_finally_t, target))));
+  for (int off = 0; off < c->func->code_len; off += sv_op_size[c->func->code[off]]) {
+    if (c->func->code[off] != OP_UNWIND_JMP) continue;
+    int region = c->try_at[off];
+    if (region < 0 || jit_finally_of_region(c->func, region) != fin) continue;
+    int target = off + sv_op_size[OP_UNWIND_JMP] + sv_get_i32(c->func->code + off + 1);
+    if (target < 0 || target >= c->func->code_len || c->depth[target] != c->vs.sp) {
+      c->ok = false;
+      return;
+    }
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, label_for_offset(c->ctx, &c->lm, target)),
+                                 MIR_new_reg_op(c->ctx, kind), MIR_new_int_op(c->ctx, target)));
+  }
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, label_for_offset(c->ctx, &c->lm, after))));
+
+  MIR_append_insn(c->ctx, c->jit_func, on_throw);
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, value),
+                               jit_finally_slot(c, index, offsetof(sv_jit_finally_t, value))));
+  jit_emit_throw_value(c, value);
+
+  MIR_append_insn(c->ctx, c->jit_func, on_return);
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, value),
+                               jit_finally_slot(c, index, offsetof(sv_jit_finally_t, value))));
+  jit_emit_return_value(c, value);
+}
+
+void jit_emit_finally_landings(jit_compile_t *c) {
+  for (int i = 0; i < c->finally_landing_count; i++) {
+    const jit_finally_landing_t *landing = &c->finally_landings[i];
+    MIR_append_insn(c->ctx, c->jit_func, landing->landing);
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_call_insn(c->ctx, 6,
+                                      MIR_new_ref_op(c->ctx, c->helper1_proto),
+                                      MIR_new_ref_op(c->ctx, c->imp_catch_value),
+                                      MIR_new_reg_op(c->ctx, c->r_finally_value),
+                                      MIR_new_reg_op(c->ctx, c->r_vm),
+                                      MIR_new_reg_op(c->ctx, c->r_js),
+                                      MIR_new_reg_op(c->ctx, landing->value)));
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->r_finally_kind),
+                                 MIR_new_int_op(c->ctx, SV_COMPLETION_THROW)));
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, landing->handler)));
+  }
+}
+
 void jit_emit_control(jit_compile_t *c) {
   switch (c->op) {
     case OP_AWAIT:
@@ -254,45 +463,18 @@ void jit_emit_control(jit_compile_t *c) {
 
     case OP_RETURN: {
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
-      MIR_reg_t ret_val = vstack_pop(&c->vs);
-      if (c->has_captured_slots)
-        mir_emit_close_marked_slots(c->ctx, c->jit_func,
-                                    c->close_upval_proto, c->imp_close_upval,
-                                    c->r_vm, c->r_slotbuf, c->r_jit_open_upvalues, c->captured_params, 0, c->param_count,
-                                    mir_next_reg_site(&c->reg_site_n));
-      if (c->has_captures)
-        mir_emit_close_marked_slots(c->ctx, c->jit_func,
-                                    c->close_upval_proto, c->imp_close_upval,
-                                    c->r_vm, c->r_lbuf, c->r_jit_open_upvalues, c->captured_locals, 0, c->n_locals,
-                                    mir_next_reg_site(&c->reg_site_n));
-      if (c->func->is_derived_ctor) {
-        MIR_label_t dctor_keep = MIR_new_label(c->ctx);
-        char rn_dt[32];
-        snprintf(rn_dt, sizeof(rn_dt), "dctor%d", c->upval_n++);
-        MIR_reg_t r_dt = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_dt);
-        mir_emit_branch_if_object(c->ctx, c->jit_func, ret_val, r_dt, dctor_keep);
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV,
-                                     MIR_new_reg_op(c->ctx, ret_val),
-                                     MIR_new_reg_op(c->ctx, c->r_this_curr)));
-        MIR_append_insn(c->ctx, c->jit_func, dctor_keep);
-      }
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, ret_val)));
+      jit_emit_return_value(c, vstack_pop(&c->vs));
       break;
     }
 
     case OP_RETURN_UNDEF: {
-      if (c->has_captured_slots)
-        mir_emit_close_marked_slots(c->ctx, c->jit_func,
-                                    c->close_upval_proto, c->imp_close_upval,
-                                    c->r_vm, c->r_slotbuf, c->r_jit_open_upvalues, c->captured_params, 0, c->param_count,
-                                    mir_next_reg_site(&c->reg_site_n));
-      if (c->has_captures)
-        mir_emit_close_marked_slots(c->ctx, c->jit_func,
-                                    c->close_upval_proto, c->imp_close_upval,
-                                    c->r_vm, c->r_lbuf, c->r_jit_open_upvalues, c->captured_locals, 0, c->n_locals,
-                                    mir_next_reg_site(&c->reg_site_n));
+      const jit_try_entry_t *fin = jit_innermost_finally(c);
+      if (fin) {
+        jit_emit_finally_route(c, fin, SV_COMPLETION_RETURN,
+                               MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0)));
+        break;
+      }
+      jit_emit_close_frame_upvalues(c);
       if (c->func->is_derived_ctor) {
         // implicit ctor return: hand the (possibly super-rebound) this
         // back to the caller, which has no other channel to receive it
@@ -334,29 +516,33 @@ void jit_emit_control(jit_compile_t *c) {
       if (c->jit_try_depth > 0) c->jit_try_depth--;
       break;
 
+    case OP_TRY_PUSH_FINALLY:
+    case OP_FINALLY_DISCARD:
+      if (!c->try_at) c->ok = false;
+      break;
+
+    case OP_FINALLY:
+      jit_emit_finally_enter(c);
+      break;
+
+    case OP_FINALLY_RET:
+      jit_emit_finally_ret(c);
+      break;
+
+    case OP_UNWIND_JMP: {
+      const jit_try_entry_t *h = c->jit_try_depth > 0 ? &c->jit_try_stack[c->jit_try_depth - 1] : NULL;
+      if (!h || !h->finally_label) {
+        c->ok = false;
+        break;
+      }
+      int target = c->bc_off + c->sz + sv_get_i32(c->ip + 1);
+      jit_emit_finally_route(c, h, SV_COMPLETION_JUMP, MIR_new_int_op(c->ctx, target));
+      break;
+    }
+
     case OP_THROW: {
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
-      MIR_reg_t thrown = vstack_pop(&c->vs);
-      if (c->jit_try_depth > 0) {
-        jit_try_entry_t *h = &c->jit_try_stack[c->jit_try_depth - 1];
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV,
-                                     MIR_new_reg_op(c->ctx, c->vs.regs[h->saved_sp]),
-                                     MIR_new_reg_op(c->ctx, thrown)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_JMP,
-                                     MIR_new_label_op(c->ctx, h->catch_label)));
-      } else {
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_call_insn(c->ctx, 6,
-                                          MIR_new_ref_op(c->ctx, c->helper1_proto),
-                                          MIR_new_ref_op(c->ctx, c->imp_throw),
-                                          MIR_new_reg_op(c->ctx, c->r_err_tmp),
-                                          MIR_new_reg_op(c->ctx, c->r_vm),
-                                          MIR_new_reg_op(c->ctx, c->r_js),
-                                          MIR_new_reg_op(c->ctx, thrown)));
-        jit_emit_exit_ret(c, MIR_new_reg_op(c->ctx, c->r_err_tmp));
-      }
+      jit_emit_throw_value(c, vstack_pop(&c->vs));
       break;
     }
 

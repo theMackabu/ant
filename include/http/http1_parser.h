@@ -34,10 +34,14 @@ typedef struct {
   ant_http1_buffer_t header_value;
   ant_http1_buffer_t body;
   ant_http_header_t **header_tail;
+  const char *body_span;
+  size_t body_span_len;
   size_t header_bytes;
   size_t header_limit;
   bool header_overflow;
+  bool headers_complete;
   bool message_complete;
+  bool stream_body;
   bool target_root_candidate;
 } ant_http1_parser_ctx_t;
 
@@ -72,6 +76,13 @@ ant_http1_parse_result_t ant_http1_conn_parser_execute(
   ant_http1_conn_parser_t *cp,
   const char *data, size_t len,
   ant_http1_parsed_request_t *out,
+  size_t *consumed_out
+);
+
+ant_http1_parse_result_t ant_http1_conn_parser_feed(
+  ant_http1_conn_parser_t *cp,
+  const char *data, size_t len,
+  ant_http1_parsed_request_t *head,
   size_t *consumed_out
 );
 

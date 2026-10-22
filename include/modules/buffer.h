@@ -134,13 +134,13 @@ ant_value_t create_typed_array(
 ant_value_t create_typed_array_with_buffer(
   ant_t *js, TypedArrayType type, ArrayBufferData *buffer,
   size_t byte_offset, size_t length, 
-  ant_value_t proto, ant_value_t arraybuffer_obj
+  ant_value_t proto, ant_value_t arraybuffer_obj, bool tracking
 );
 
 ant_value_t create_dataview_with_buffer(
   ant_t *js, ArrayBufferData *buffer,
   size_t byte_offset, size_t byte_length,
-  ant_value_t arraybuffer_obj
+  ant_value_t arraybuffer_obj, bool tracking
 );
 
 static inline bool Ant_Buffer_IsLive(const ArrayBufferData *buffer) {

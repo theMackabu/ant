@@ -101,7 +101,7 @@ static ant_value_t sc_clone_typed_array(
   
   ant_value_t clone = create_typed_array_with_buffer(
     js, ta_data->type, buffer, ta_data->byte_offset, ta_data->length,
-    js->builtins.typedarray_protos[ta_data->type], ab_obj
+    js->builtins.typedarray_protos[ta_data->type], ab_obj, ta_data->length_tracking
   );
   
   if (!is_err(clone)) sc_add(seen, key, clone);
@@ -164,7 +164,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     ant_value_t ab_obj = sc_clone_view_buffer(js, val, seen, transfer, &new_buf);
     if (is_err(ab_obj)) return ab_obj;
     
-    ant_value_t clone = create_dataview_with_buffer(js, new_buf, dv->byte_offset, dv->byte_length, ab_obj);
+    ant_value_t clone = create_dataview_with_buffer(js, new_buf, dv->byte_offset, dv->byte_length, ab_obj, dv->length_tracking);
     if (is_err(clone)) return clone;
     
     sc_add(seen, val, clone);
@@ -268,6 +268,13 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     if (msg)   defhidden(js, clone, "message", 7, js_mkstr(js, msg, strlen(msg)));
     js_set_slot(clone, SLOT_ERROR_BRAND, js_true);
     js_set_slot(clone, SLOT_ERR_TYPE, js_mknum((double)type));
+
+    ant_value_t cause = js_mkundef();
+    if (js_try_get_own_data_prop(js, val, "cause", 5, &cause)) {
+      ant_value_t cause_clone = sc_clone_rec(js, cause, seen, transfer);
+      if (is_err(cause_clone)) return cause_clone;
+      defhidden(js, clone, "cause", 5, cause_clone);
+    }
 
     return clone;
   }

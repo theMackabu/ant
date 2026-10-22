@@ -21,6 +21,7 @@ ant_value_t jit_helper_get_length(ant_t *js, ant_value_t obj);
 ant_value_t jit_helper_get_length_at(ant_t *js, ant_value_t obj, sv_func_t *func, int32_t bc_off);
 ant_value_t jit_helper_get_length_inline(ant_t *js, ant_value_t obj);
 ant_value_t jit_helper_catch_value(sv_vm_t *vm, ant_t *js, ant_value_t err);
+ant_value_t jit_helper_for_in(sv_vm_t *vm, ant_t *js, ant_value_t obj);
 ant_value_t jit_helper_interrupt(sv_vm_t *vm, ant_t *js, ant_value_t unused);
 ant_value_t jit_helper_throw(sv_vm_t *vm, ant_t *js, ant_value_t val);
 ant_value_t jit_helper_native_finish(ant_t *js, ant_value_t result);
@@ -265,7 +266,7 @@ ant_value_t jit_helper_promote_resume(
   ant_value_t *vstack, int64_t vstack_sp,
   ant_value_t *params, int64_t n_params,
   ant_value_t *locals, int64_t n_locals,
-  int64_t bc_offset
+  int64_t bc_offset, sv_jit_finally_t *finally
 );
 
 ant_value_t jit_helper_bailout_resume(
@@ -275,7 +276,7 @@ ant_value_t jit_helper_bailout_resume(
   ant_value_t *vstack, int64_t vstack_sp,
   ant_value_t *params, int64_t n_params,
   ant_value_t *locals, int64_t n_locals,
-  int64_t bc_offset
+  int64_t bc_offset, sv_jit_finally_t *finally
 );
 
 void jit_helper_close_upval(

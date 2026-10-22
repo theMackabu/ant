@@ -629,6 +629,23 @@ bool jit_setup_frame(jit_compile_t *c) {
                                MIR_new_reg_op(c->ctx, c->r_d_slot),
                                MIR_new_uint_op(c->ctx, 8)));
 
+  c->finally_count = 0;
+  for (int off = 0; c->func->has_try && off < c->func->code_len; off += sv_op_size[c->func->code[off]])
+    if (c->func->code[off] == OP_FINALLY) c->finally_count++;
+  if (c->finally_count) {
+    c->r_finally_kind = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "finally_kind");
+    c->r_finally_value = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, "finally_value");
+    c->r_finally_target = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "finally_target");
+    c->r_finally_area = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "finally_area");
+    mir_load_imm(c->ctx, c->jit_func, c->r_finally_kind, SV_COMPLETION_NONE);
+    mir_load_imm(c->ctx, c->jit_func, c->r_finally_value, mkval(kTypeUndefined, 0));
+    mir_load_imm(c->ctx, c->jit_func, c->r_finally_target, 0);
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_ALLOCA,
+                                 MIR_new_reg_op(c->ctx, c->r_finally_area),
+                                 MIR_new_uint_op(c->ctx, (uint64_t)c->finally_count * sizeof(sv_jit_finally_t))));
+  }
+
   c->r_d_one = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_D, "d_one");
   if (c->feat.needs_inc_local) {
     union {
@@ -1158,7 +1175,7 @@ bool jit_setup_frame(jit_compile_t *c) {
         MIR_append_insn(c->ctx, c->jit_func, call_entry);
         MIR_reg_t entry_result = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_JSVAL, "param_entry_result");
         c->call_tagging.resume = true;
-        MIR_append_insn(c->ctx, c->jit_func, MIR_new_call_insn(c->ctx, 17,
+        MIR_append_insn(c->ctx, c->jit_func, MIR_new_call_insn(c->ctx, 18,
             MIR_new_ref_op(c->ctx, c->resume_proto), MIR_new_ref_op(c->ctx, c->imp_resume),
             MIR_new_reg_op(c->ctx, entry_result), MIR_new_reg_op(c->ctx, c->r_vm),
             MIR_new_reg_op(c->ctx, c->r_closure), MIR_new_reg_op(c->ctx, c->r_this_curr),
@@ -1166,7 +1183,8 @@ bool jit_setup_frame(jit_compile_t *c) {
             MIR_new_reg_op(c->ctx, c->r_args), MIR_new_reg_op(c->ctx, c->r_argc),
             MIR_new_uint_op(c->ctx, 0), MIR_new_int_op(c->ctx, 0),
             MIR_new_uint_op(c->ctx, 0), MIR_new_int_op(c->ctx, 0),
-            MIR_new_uint_op(c->ctx, 0), MIR_new_int_op(c->ctx, 0), MIR_new_int_op(c->ctx, 0)));
+            MIR_new_uint_op(c->ctx, 0), MIR_new_int_op(c->ctx, 0), MIR_new_int_op(c->ctx, 0),
+            MIR_new_uint_op(c->ctx, 0)));
         c->call_tagging.resume = false;
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_ret_insn(c->ctx, 1, MIR_new_reg_op(c->ctx, entry_result)));
         MIR_append_insn(c->ctx, c->jit_func, ready);

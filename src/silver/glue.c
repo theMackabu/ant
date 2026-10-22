@@ -199,15 +199,22 @@ ant_value_t jit_helper_str_flush_local(
   return js_mkundef();
 }
 
+static inline bool jit_rel_plain(ant_value_t v) {
+  uint8_t t = vtype(v);
+  return t == kTypeNumber || t == kTypeString || t == kTypeBool || t == kTypeUndefined || t == kTypeNull;
+}
+
 ant_value_t jit_helper_lt(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
   if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return js_bool(tod(l) < tod(r));
   if (vtype(l) == kTypeString && vtype(r) == kTypeString) return js_bool(sv_strcmp(js, l, r) < 0);
+  if (jit_rel_plain(l) && jit_rel_plain(r)) return js_bool(js_to_number(js, l) < js_to_number(js, r));
   return SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_le(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
   if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return js_bool(tod(l) <= tod(r));
   if (vtype(l) == kTypeString && vtype(r) == kTypeString) return js_bool(sv_strcmp(js, l, r) <= 0);
+  if (jit_rel_plain(l) && jit_rel_plain(r)) return js_bool(js_to_number(js, l) <= js_to_number(js, r));
   return SV_JIT_BAILOUT;
 }
 
@@ -1349,7 +1356,7 @@ static ant_value_t jit_resume_in_interpreter(
   ant_value_t *vstack, int64_t vstack_sp,
   ant_value_t *params, int64_t n_params,
   ant_value_t *locals, int64_t n_locals,
-  int64_t bc_offset, bool async_direct
+  int64_t bc_offset, bool async_direct, sv_jit_finally_t *finally
 ) {
   int entry_fp = async_direct ? sv_async_entry_begin(vm, 0) : -1;
   if (async_direct && entry_fp < 0) return js_mkerr(vm->js, "out of memory");
@@ -1362,6 +1369,7 @@ static ant_value_t jit_resume_in_interpreter(
   vm->jit.resume.n_locals   = (int)n_locals;
   vm->jit.resume.vstack     = vstack;
   vm->jit.resume.vstack_sp  = (int)vstack_sp;
+  vm->jit.resume.finally    = finally;
 
   ant_value_t result = sv_execute_closure_entry(
     vm, closure, mkref(kTypeFunction, closure),
@@ -1423,7 +1431,7 @@ ant_value_t jit_helper_bailout_resume(
   ant_value_t *vstack, int64_t vstack_sp,
   ant_value_t *params, int64_t n_params,
   ant_value_t *locals, int64_t n_locals,
-  int64_t bc_offset
+  int64_t bc_offset, sv_jit_finally_t *finally
 ) {
   if (!closure || !closure->func) return vm && vm->js
     ? js_mkerr_typed(vm->js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "invalid bailout closure")
@@ -1457,7 +1465,7 @@ ant_value_t jit_helper_bailout_resume(
   return jit_resume_in_interpreter(
     vm, closure, this_val, new_target, super_val,
     args, argc, vstack, vstack_sp, params, n_params,
-    locals, n_locals, bc_offset, async_direct
+    locals, n_locals, bc_offset, async_direct, finally
   );
 }
 
@@ -1468,7 +1476,7 @@ ant_value_t jit_helper_promote_resume(
   ant_value_t *vstack, int64_t vstack_sp,
   ant_value_t *params, int64_t n_params,
   ant_value_t *locals, int64_t n_locals,
-  int64_t bc_offset
+  int64_t bc_offset, sv_jit_finally_t *finally
 ) {
   if (!closure || !closure->func) return vm && vm->js
     ? js_mkerr_typed(vm->js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "invalid promotion closure")
@@ -1491,7 +1499,7 @@ ant_value_t jit_helper_promote_resume(
   return jit_resume_in_interpreter(
     vm, closure, this_val, new_target, super_val,
     args, argc, vstack, vstack_sp, params, n_params,
-    locals, n_locals, bc_offset, async_direct
+    locals, n_locals, bc_offset, async_direct, finally
   );
 }
 
@@ -1770,6 +1778,10 @@ ant_value_t jit_helper_catch_value(sv_vm_t *vm, ant_t *js, ant_value_t err) {
   return err;
 }
 
+ant_value_t jit_helper_for_in(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
+  return js_for_in_keys(js, obj);
+}
+
 ant_value_t jit_helper_throw_error(
   sv_vm_t *vm, ant_t *js, const char *str, uint32_t len, int err_type
 ) { 
@@ -1852,12 +1864,14 @@ ant_value_t jit_helper_bnot(sv_vm_t *vm, ant_t *js, ant_value_t v) {
 ant_value_t jit_helper_gt(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
   if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return js_bool(tod(l) > tod(r));
   if (vtype(l) == kTypeString && vtype(r) == kTypeString) return js_bool(sv_strcmp(js, l, r) > 0);
+  if (jit_rel_plain(l) && jit_rel_plain(r)) return js_bool(js_to_number(js, l) > js_to_number(js, r));
   return SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_ge(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
   if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return js_bool(tod(l) >= tod(r));
   if (vtype(l) == kTypeString && vtype(r) == kTypeString) return js_bool(sv_strcmp(js, l, r) >= 0);
+  if (jit_rel_plain(l) && jit_rel_plain(r)) return js_bool(js_to_number(js, l) >= js_to_number(js, r));
   return SV_JIT_BAILOUT;
 }
 

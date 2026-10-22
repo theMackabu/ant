@@ -179,14 +179,31 @@ static int parser_on_header_value_complete(llhttp_t *parser) {
 
 static int parser_on_headers_complete(llhttp_t *parser) {
   parser_ctx_t *ctx = (parser_ctx_t *)parser->data;
-  if (ctx->header_field.len > 0 || ctx->header_value.len > 0) {
+  if (ctx->header_field.len > 0 || ctx->header_value.len > 0)
     if (!parser_copy_header(ctx)) return -1;
-  }
+  ctx->headers_complete = true;
   return 0;
 }
 
 static int parser_on_body(llhttp_t *parser, const char *at, size_t length) {
   parser_ctx_t *ctx = (parser_ctx_t *)parser->data;
+  if (ctx->stream_body && ctx->body.len == 0) {
+    if (!ctx->body_span) {
+      ctx->body_span = at;
+      ctx->body_span_len = length;
+      return 0;
+    }
+    
+    if (ctx->body_span + ctx->body_span_len == at) {
+      ctx->body_span_len += length;
+      return 0;
+    }
+    
+    if (!ant_http1_buffer_append(&ctx->body, ctx->body_span, ctx->body_span_len)) return -1;
+    ctx->body_span = NULL;
+    ctx->body_span_len = 0;
+  }
+  
   return ant_http1_buffer_append(&ctx->body, at, length) ? 0 : -1;
 }
 
@@ -206,9 +223,34 @@ static llhttp_settings_t g_request_settings = {
   .on_message_complete = parser_on_message_complete,
 };
 
+static bool parser_take_head(llhttp_t *parser, parser_ctx_t *ctx, ant_http1_parsed_request_t *out) {
+  ctx->req.method = llhttp_method_name((llhttp_method_t)llhttp_get_method(parser));
+  
+  if (ctx->target_root_candidate && ctx->target.len == 1) {
+    ctx->req.target = (char *)"/";
+    ctx->req.target_borrowed = true;
+    ctx->target.len = 0;
+  } else ctx->req.target = ant_http1_buffer_take_cstr(&ctx->target);
+  
+  if (!ctx->req.method || !ctx->req.target) return false;
+
+  ctx->req.absolute_target =
+    strncmp(ctx->req.target, "http://", 7)  == 0 ||
+    strncmp(ctx->req.target, "https://", 8) == 0;
+
+  ctx->req.keep_alive = llhttp_should_keep_alive(parser) == 1;
+  ctx->req.http_major = parser->http_major;
+  ctx->req.http_minor = parser->http_minor;
+
+  *out = ctx->req;
+  memset(&ctx->req, 0, sizeof(ctx->req));
+  ctx->header_tail = &ctx->req.headers;
+  
+  return true;
+}
+
 ant_http1_parse_result_t ant_http1_parse_request(
-  const char *data,
-  size_t len,
+  const char *data, size_t len,
   size_t max_header_size,
   ant_http1_parsed_request_t *out,
   const char **error_reason,
@@ -249,35 +291,15 @@ ant_http1_parse_result_t ant_http1_parse_request(
     return ANT_HTTP1_PARSE_INCOMPLETE;
   }
 
-  if (out->consumed_len == 0) ctx.req.consumed_len = len;
-  else ctx.req.consumed_len = out->consumed_len;
-
-  ctx.req.method = llhttp_method_name((llhttp_method_t)llhttp_get_method(&parser));
-  if (ctx.target_root_candidate && ctx.target.len == 1) {
-    ctx.req.target = (char *)"/";
-    ctx.req.target_borrowed = true;
-    ctx.target.len = 0;
-  } else {
-    ctx.req.target = ant_http1_buffer_take_cstr(&ctx.target);
-  }
+  ctx.req.consumed_len = out->consumed_len ? out->consumed_len : len;
   ctx.req.body = (uint8_t *)ant_http1_buffer_take(&ctx.body, &ctx.req.body_len);
-  if (!ctx.req.method || !ctx.req.target) {
+  
+  if (!parser_take_head(&parser, &ctx, out)) {
     parser_ctx_free(&ctx);
     return ANT_HTTP1_PARSE_ERROR;
   }
 
-  ctx.req.absolute_target =
-    strncmp(ctx.req.target, "http://", 7)  == 0 ||
-    strncmp(ctx.req.target, "https://", 8) == 0;
-    
-  ctx.req.keep_alive = llhttp_should_keep_alive(&parser) == 1;
-  ctx.req.http_major = parser.http_major;
-  ctx.req.http_minor = parser.http_minor;
-
-  *out = ctx.req;
-  memset(&ctx.req, 0, sizeof(ctx.req));
   parser_ctx_free(&ctx);
-  
   return ANT_HTTP1_PARSE_OK;
 }
 
@@ -304,9 +326,8 @@ void ant_http1_conn_parser_reset(ant_http1_conn_parser_t *cp) {
 
   ant_http1_buffer_free(&cp->ctx.target);
   ant_http1_buffer_free(&cp->ctx.body);
+  ant_http1_free_parsed_request(&cp->ctx.req);
 
-  /* Header tokens are copied into combined nodes, so these scratch buffers
-   * can serve every request on the same keep-alive connection. */
   cp->ctx.header_field.len = 0;
   cp->ctx.header_field.failed = false;
   cp->ctx.header_value.len = 0;
@@ -316,7 +337,10 @@ void ant_http1_conn_parser_reset(ant_http1_conn_parser_t *cp) {
   size_t header_field_cap = cp->ctx.header_field.cap;
   char *header_value_data = cp->ctx.header_value.data;
   size_t header_value_cap = cp->ctx.header_value.cap;
+  size_t header_limit = cp->ctx.header_limit;
   memset(&cp->ctx, 0, sizeof(cp->ctx));
+  
+  cp->ctx.header_limit = header_limit;
   cp->ctx.header_field.data = header_field_data;
   cp->ctx.header_field.cap = header_field_cap;
   cp->ctx.header_value.data = header_value_data;
@@ -324,6 +348,7 @@ void ant_http1_conn_parser_reset(ant_http1_conn_parser_t *cp) {
   cp->ctx.header_tail = &cp->ctx.req.headers;
   cp->ctx.target_root_candidate = true;
   cp->fed_len = 0;
+  
   llhttp_reset(&cp->parser);
   cp->parser.data = &cp->ctx;
 }
@@ -339,11 +364,8 @@ void ant_http1_conn_parser_free(ant_http1_conn_parser_t *cp) {
 }
 
 ant_http1_parse_result_t ant_http1_conn_parser_execute(
-  ant_http1_conn_parser_t *cp,
-  const char *data,
-  size_t len,
-  ant_http1_parsed_request_t *out,
-  size_t *consumed_out
+  ant_http1_conn_parser_t *cp, const char *data, size_t len,
+  ant_http1_parsed_request_t *out, size_t *consumed_out
 ) {
   const char *new_data = NULL;
   size_t new_len = 0;
@@ -378,29 +400,30 @@ ant_http1_parse_result_t ant_http1_conn_parser_execute(
   if (consumed_out && *consumed_out == 0) *consumed_out = len;
   cp->ctx.req.consumed_len = consumed_out ? *consumed_out : len;
     
-  cp->ctx.req.method = llhttp_method_name(
-    (llhttp_method_t)llhttp_get_method(&cp->parser));
-  if (cp->ctx.target_root_candidate && cp->ctx.target.len == 1) {
-    cp->ctx.req.target = (char *)"/";
-    cp->ctx.req.target_borrowed = true;
-    cp->ctx.target.len = 0;
-  } else {
-    cp->ctx.req.target = ant_http1_buffer_take_cstr(&cp->ctx.target);
-  }
   cp->ctx.req.body = (uint8_t *)ant_http1_buffer_take(&cp->ctx.body, &cp->ctx.req.body_len);
-  
-  if (!cp->ctx.req.method || !cp->ctx.req.target)
-    return ANT_HTTP1_PARSE_ERROR;
-    
-  cp->ctx.req.absolute_target =
-    strncmp(cp->ctx.req.target, "http://", 7) == 0 ||
-    strncmp(cp->ctx.req.target, "https://", 8) == 0;
-    
-  cp->ctx.req.keep_alive = llhttp_should_keep_alive(&cp->parser) == 1;
-  cp->ctx.req.http_major = cp->parser.http_major;
-  cp->ctx.req.http_minor = cp->parser.http_minor;
+  return parser_take_head(&cp->parser, &cp->ctx, out) ? ANT_HTTP1_PARSE_OK : ANT_HTTP1_PARSE_ERROR;
+}
 
-  *out = cp->ctx.req;
-  memset(&cp->ctx.req, 0, sizeof(cp->ctx.req));
-  return ANT_HTTP1_PARSE_OK;
+ant_http1_parse_result_t ant_http1_conn_parser_feed(
+  ant_http1_conn_parser_t *cp, const char *data, size_t len,
+  ant_http1_parsed_request_t *head, size_t *consumed_out
+) {
+  memset(head, 0, sizeof(*head));
+  *consumed_out = 0;
+  if (cp->ctx.message_complete) ant_http1_conn_parser_reset(cp);
+
+  cp->ctx.stream_body = true;
+  cp->ctx.headers_complete = false;
+  cp->ctx.body_span = NULL;
+  cp->ctx.body_span_len = 0;
+  cp->ctx.body.len = 0;
+
+  llhttp_errno_t err = llhttp_execute(&cp->parser, data, len);
+  const char *errpos = llhttp_get_error_pos(&cp->parser);
+  *consumed_out = err == HPE_OK || !errpos ? len : (size_t)(errpos - data);
+
+  if (err != HPE_OK && err != HPE_PAUSED) return ANT_HTTP1_PARSE_ERROR;
+  if (cp->ctx.headers_complete && !parser_take_head(&cp->parser, &cp->ctx, head)) return ANT_HTTP1_PARSE_ERROR;
+  
+  return cp->ctx.message_complete ? ANT_HTTP1_PARSE_OK : ANT_HTTP1_PARSE_INCOMPLETE;
 }

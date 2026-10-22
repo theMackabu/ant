@@ -602,7 +602,7 @@ static bool sv_func_compute_has_try(const sv_func_t *func) {
   for (const uint8_t *ip = func->code, *end = func->code + func->code_len; ip < end;) {
     int sz = sv_op_size[*ip];
     if (sz <= 0) return false;
-    if (*ip == OP_TRY_PUSH) return true;
+    if (*ip == OP_TRY_PUSH || *ip == OP_TRY_PUSH_FINALLY) return true;
     ip += sz;
   }
   return false;
@@ -5680,10 +5680,10 @@ static void emit_iter_close_seq(sv_compiler_t *c, bool is_async) {
 static void emit_loop_exit_unwind(sv_compiler_t *c, int unwind_depth, int target_loop) {
   for (int i = c->unwind_count - 1; i >= unwind_depth; i--) {
     if (c->unwind_kinds[i] == UNW_TRY_FINALLY) {
-      int offset = emit_jump(c, OP_UNWIND_JMP);
+      emit_op(c, OP_UNWIND_JMP);
+      emit_i32(c, 0);
       emit(c, 1);
       emit(c, 1);
-      patch_jump(c, offset);
       continue;
     }
     emit_op(c, c->unwind_kinds[i] == UNW_FINALLY_BODY ? OP_FINALLY_DISCARD : OP_TRY_POP);
@@ -5699,6 +5699,7 @@ static void emit_loop_exit_jump(sv_compiler_t *c, sv_loop_t *loop, sv_patch_list
 
 static void emit_return_from_stack(sv_compiler_t *c) {
   emit_using_cleanups_to_depth(c, -1);
+  int active_unwinds = c->unwind_count;
   for (int i = 0; i < c->loop_count; i++) {
     sv_loop_t *loop = &c->loops[i];
     if (loop->iter_unwind_index < 0) continue;
@@ -5706,10 +5707,15 @@ static void emit_return_from_stack(sv_compiler_t *c) {
     emit_put_local(c, loop->iter_completion_local);
     emit_loop_exit_unwind(c, loop->iter_unwind_index, -1);
     emit_get_local(c, loop->iter_completion_local);
+    active_unwinds = loop->iter_unwind_index;
     break;
   }
 
-  emit_close_upvals(c);
+  bool runs_finally = false;
+  for (int i = 0; i < active_unwinds && !runs_finally; i++)
+    runs_finally = c->unwind_kinds[i] == UNW_TRY_FINALLY;
+
+  if (!runs_finally) emit_close_upvals(c);
   emit_op(c, OP_RETURN);
 }
 
@@ -8328,9 +8334,6 @@ static int sv_func_stack_depths(const sv_func_t *func, int *depth) {
         break;
       case OP_CATCH:
         break;
-      case OP_UNWIND_JMP:
-        VISIT(off + 5 + sv_get_i32(ip + 1), after);
-        break;
       default:
         if (sv_op_fmts[op] == SVF_label)
           VISIT(off + sz + sv_get_i32(ip + 1), after);
@@ -8431,20 +8434,35 @@ int *sv_func_try_map(const sv_func_t *func) {
     }
     
     int next = state;
+    bool in_finally = state >= 0 && code[state] == OP_FINALLY;
     switch (op) {
       case OP_TRY_PUSH:
+      case OP_TRY_PUSH_FINALLY:
         if (parent[off] != -2 && parent[off] != state) ok = false;
         parent[off] = state;
         TRY_VISIT(off + sz + sv_get_i32(code + off + 1), state);
         next = off;
         break;
       case OP_TRY_POP:
-        if (state < 0) ok = false;
+        if (state < 0 || in_finally) ok = false;
         else next = parent[state];
         break;
-      case OP_TRY_PUSH_FINALLY:
+      case OP_FINALLY:
+        if (parent[off] != -2 && parent[off] != state) ok = false;
+        parent[off] = state;
+        TRY_VISIT(off + sz + sv_get_i32(code + off + 1), state);
+        next = off;
+        break;
+      case OP_FINALLY_RET:
+        if (!in_finally) ok = false;
+        break;
+      case OP_FINALLY_DISCARD:
+        if (!in_finally) ok = false;
+        else next = parent[state];
+        break;
       case OP_UNWIND_JMP:
-        ok = false;
+        if (state < 0 || code[state] != OP_TRY_PUSH_FINALLY || code[off + 5] != 1 || code[off + 6] != 1) ok = false;
+        else TRY_VISIT(off + sz + sv_get_i32(code + off + 1), parent[state]);
         break;
       default:
         if (sv_op_fmts[op] == SVF_label) TRY_VISIT(off + sz + sv_get_i32(code + off + 1), state);
@@ -8461,8 +8479,19 @@ int *sv_func_try_map(const sv_func_t *func) {
   
   if (ok) return map;
   free(map);
-  
+
   return NULL;
+}
+
+int sv_func_finally_index(const sv_func_t *func, int finally_off) {
+  int index = 0;
+  for (int off = 0; off < finally_off;) {
+    int sz = sv_op_size[func->code[off]];
+    if (sz == 0) return -1;
+    if (func->code[off] == OP_FINALLY) index++;
+    off += sz;
+  }
+  return index;
 }
 
 void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {

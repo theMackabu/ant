@@ -388,7 +388,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
 
   MIR_type_t br_ret = MIR_JSVAL;
   c->resume_proto = MIR_new_proto(c->ctx, "resume_proto",
-                                  1, &br_ret, 14,
+                                  1, &br_ret, 15,
                                   MIR_T_I64, "vm",
                                   MIR_T_P, "closure",
                                   MIR_JSVAL, "this_val",
@@ -402,7 +402,8 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                   MIR_T_I64, "n_params",
                                   MIR_T_P, "locals",
                                   MIR_T_I64, "n_locals",
-                                  MIR_T_I64, "bc_offset");
+                                  MIR_T_I64, "bc_offset",
+                                  MIR_T_P, "finally");
 
   MIR_type_t cl_ret = MIR_JSVAL;
   c->closure_proto = MIR_new_proto(c->ctx, "closure_proto",
@@ -815,6 +816,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_define_slot = MIR_new_import(c->ctx, "jit_helper_define_slot");
   c->imp_array = MIR_new_import(c->ctx, "jit_helper_array");
   c->imp_catch_value = MIR_new_import(c->ctx, "jit_helper_catch_value");
+  c->imp_for_in = MIR_new_import(c->ctx, "jit_helper_for_in");
   c->imp_interrupt = c->js->interrupts_armed ? MIR_new_import(c->ctx, "jit_helper_interrupt") : NULL;
   c->imp_throw = MIR_new_import(c->ctx, "jit_helper_throw");
   c->imp_throw_error = MIR_new_import(c->ctx, "jit_helper_throw_error");

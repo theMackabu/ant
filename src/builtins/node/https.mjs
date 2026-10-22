@@ -108,7 +108,7 @@ function applyDefaultHttpsProtocol(input, options) {
   return [{ ...input, protocol: input.protocol ?? 'https:' }, options];
 }
 
-const HTTP_SERVER_METHODS = ['_attachSocket', '_drainSocket', 'closeAllConnections', 'closeIdleConnections', 'setTimeout'];
+const HTTP_SERVER_METHODS = ['_attachSocket', '_drainSocket', '_startRequest', 'closeAllConnections', 'closeIdleConnections', 'setTimeout'];
 
 export class Server extends tls.Server {
   constructor(options, requestListener) {

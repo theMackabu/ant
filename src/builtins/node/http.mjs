@@ -11,6 +11,7 @@ import { STATUS_CODES } from 'ant:internal/http_metadata';
 export const maxHeaderSize = 16 * 1024;
 
 const EMPTY_BUFFER = Buffer.alloc(0);
+const CONTINUE_EXPRESSION = /(?:^|\W)100-continue(?:$|\W)/i;
 
 let cachedDate = '';
 let cachedDateExpires = 0;
@@ -101,10 +102,32 @@ function makeSocketState(server, socket) {
   return {
     server,
     socket,
-    buffered: EMPTY_BUFFER,
+    parser: httpParser.createRequestParser(server.maxHeaderSize),
+    pending: [],
+    incoming: null,
     activeResponse: null,
+    draining: false,
+    paused: false,
     closed: false
   };
+}
+
+function pauseSocket(state) {
+  if (state.paused) return;
+  state.paused = true;
+  state.socket.pause();
+}
+
+function resumeSocket(state) {
+  if (!state.paused) return;
+  state.paused = false;
+  state.socket.resume();
+}
+
+function connResetError(message) {
+  const error = new Error(message);
+  error.code = 'ECONNRESET';
+  return error;
 }
 
 function closeSocket(socket) {
@@ -916,7 +939,7 @@ export class Agent extends EventEmitter {
 export const globalAgent = new Agent();
 
 export class IncomingMessage extends Readable {
-  constructor(socket, parsed) {
+  constructor(socket, parsed, socketState) {
     super();
     this.socket = socket;
     this.connection = socket;
@@ -928,64 +951,42 @@ export class IncomingMessage extends Readable {
     this.httpVersionMajor = parsed.httpVersionMajor;
     this.httpVersionMinor = parsed.httpVersionMinor;
     this._keepAlive = !!parsed.keepAlive;
+    this._socketState = socketState;
+    this._consuming = false;
+    this._dumped = false;
     this.complete = false;
     this.aborted = false;
-    this.destroyed = false;
-    this.readableEnded = false;
-    this._rawBody = bufferFrom(parsed.body);
-    this._bodyConsumed = false;
   }
 
-  _takeBody() {
-    if (this._bodyConsumed) return EMPTY_BUFFER;
-    this._bodyConsumed = true;
-    return this._rawBody;
+  _read() {
+    this._consuming = true;
+    const state = this._socketState;
+    if (state && state.incoming === this) resumeSocket(state);
   }
 
-  _deliverBody() {
-    if (this.destroyed || this.complete) return;
+  _pushBody(chunk) {
+    return this.destroyed || this.push(chunk);
+  }
 
-    const body = this._takeBody();
+  _finishBody() {
     this.complete = true;
-    if (body.length > 0) this.push(body);
-    this.push(null);
+    if (!this.destroyed) this.push(null);
   }
 
-  [Symbol.asyncIterator]() {
-    const body = this._takeBody();
-    let emitted = false;
-    let finished = false;
-
-    return {
-      next: async () => {
-        if (finished) return { done: true, value: undefined };
-        if (!emitted && body.length > 0) {
-          emitted = true;
-          return { done: false, value: body };
-        }
-        finished = true;
-        this.complete = true;
-        this.readableEnded = true;
-        return { done: true, value: undefined };
-      },
-      return: async () => {
-        finished = true;
-        this.complete = true;
-        this.readableEnded = true;
-        return { done: true, value: undefined };
-      },
-      [Symbol.asyncIterator]() {
-        return this;
-      }
-    };
+  _dump() {
+    if (this._dumped) return;
+    this._dumped = true;
+    this.removeAllListeners('data');
+    this.resume();
   }
 
-  destroy(error) {
-    if (this.destroyed) return this;
-    this.destroyed = true;
-    if (error) this.emit('error', error);
-    if (this.socket && !this.socket.destroyed) this.socket.destroy(error);
-    return this;
+  _destroy(error, callback) {
+    if (!this.readableEnded || !this.complete) {
+      this.aborted = true;
+      this.emit('aborted');
+    }
+    if (this.aborted && this.socket && !this.socket.destroyed) this.socket.destroy(error);
+    callback(error && this.listenerCount('error') > 0 ? error : null);
   }
 
   setTimeout(msecs, callback) {
@@ -1015,6 +1016,8 @@ export class ServerResponse extends EventEmitter {
     this._streaming = false;
     this._chunked = false;
     this._keepAlive = false;
+    this._expectContinue = false;
+    this._sent100 = false;
   }
 
   get _header() {
@@ -1127,7 +1130,13 @@ export class ServerResponse extends EventEmitter {
     this.writeHead(this.statusCode);
   }
 
+  writeContinue(callback) {
+    this.socket.write('HTTP/1.1 100 Continue\r\n\r\n', 'latin1', callback);
+    this._sent100 = true;
+  }
+
   _shouldKeepAlive() {
+    if (this._expectContinue && !this._sent100) return false;
     const connection = this.getHeader('connection');
     if (typeof connection === 'string') {
       if (connection.toLowerCase() === 'close') return false;
@@ -1198,12 +1207,20 @@ export class ServerResponse extends EventEmitter {
     this.emit('finish');
     this.emit('close');
 
-    keepAlive = !this._socketState.server._closing && this._keepAlive;
-    this._socketState.activeResponse = null;
+    const state = this._socketState;
+    keepAlive = !state.server._closing && this._keepAlive;
+    state.activeResponse = null;
+    const req = this.req;
+    process.nextTick(() => {
+      if (!req._consuming) req._dump();
+    });
     if (typeof callback === 'function') callback();
 
     if (!keepAlive) this.socket.end();
-    else if (this._socketState.buffered.length > 0) this._socketState.server._drainSocket(this.socket, this._socketState);
+    else {
+      if (!state.incoming) resumeSocket(state);
+      state.server._drainSocket(this.socket, state);
+    }
     return this;
   }
 
@@ -1246,7 +1263,7 @@ export class Server extends net.Server {
     }
 
     socket.on('data', chunk => {
-      state.buffered = appendSocketChunk(state.buffered, chunk);
+      state.pending.push(bufferFrom(chunk));
       this._drainSocket(socket, state);
     });
 
@@ -1255,8 +1272,13 @@ export class Server extends net.Server {
     });
 
     socket.on('close', () => {
+      const req = state.incoming;
       state.closed = true;
+      state.pending = [];
+      state.incoming = null;
       this._socketStates.delete(state);
+      httpParser.freeRequestParser(state.parser);
+      if (req && !req.complete) req.destroy(connResetError('aborted'));
     });
   }
 
@@ -1288,38 +1310,74 @@ export class Server extends net.Server {
   }
 
   _drainSocket(socket, state) {
-    while (!state.closed) {
-      let parsed = null;
+    if (state.draining) return;
+    state.draining = true;
 
-      if (state.activeResponse && !state.activeResponse.writableEnded) return;
-      if (state.buffered.length === 0) return;
+    try {
+      while (!state.closed && state.pending.length > 0) {
+        if (!state.incoming && state.activeResponse && !state.activeResponse.writableEnded) {
+          pauseSocket(state);
+          return;
+        }
 
-      try {
-        parsed = httpParser.parseRequest(state.buffered, this.maxHeaderSize);
-      } catch (error) {
-        state.closed = true;
-        handleClientError(this, socket, error);
-        return;
+        const chunk = state.pending[0];
+        let result = null;
+
+        try {
+          result = httpParser.feedRequestParser(state.parser, chunk);
+        } catch (error) {
+          state.closed = true;
+          state.pending = [];
+          handleClientError(this, socket, error);
+          return;
+        }
+
+        if (result.consumed < chunk.length) state.pending[0] = chunk.subarray(result.consumed);
+        else state.pending.shift();
+
+        if (result.head) this._startRequest(socket, state, result.head);
+
+        const req = state.incoming;
+        if (!req) continue;
+
+        const body = result.body ?? (result.bodyEnd > result.bodyStart ? chunk.subarray(result.bodyStart, result.bodyEnd) : null);
+        if (body && !req._pushBody(body)) pauseSocket(state);
+
+        if (result.complete) {
+          state.incoming = null;
+          req._finishBody();
+        }
       }
-
-      if (parsed === null) return;
-      if (!parsed.consumed || parsed.consumed < 0) {
-        state.closed = true;
-        handleClientError(this, socket, new Error('Invalid HTTP parser state'));
-        return;
-      }
-
-      state.buffered = parsed.consumed < state.buffered.length ? state.buffered.subarray(parsed.consumed) : EMPTY_BUFFER;
-      
-      const req = new IncomingMessage(socket, parsed);
-      const res = new ServerResponse(req, socket, state);
-      state.activeResponse = res;
-
-      this.emit('request', req, res);
-      req._deliverBody();
-
-      if (!res.writableEnded) return;
+    } finally {
+      state.draining = false;
     }
+  }
+
+  _startRequest(socket, state, head) {
+    const req = new IncomingMessage(socket, head, state);
+    const res = new ServerResponse(req, socket, state);
+    state.incoming = req;
+    state.activeResponse = res;
+
+    if (req.headers.expect !== undefined && req.httpVersionMajor === 1 && req.httpVersionMinor === 1) {
+      if (CONTINUE_EXPRESSION.test(req.headers.expect)) {
+        res._expectContinue = true;
+        if (this.listenerCount('checkContinue') > 0) {
+          this.emit('checkContinue', req, res);
+          return;
+        }
+        res.writeContinue();
+      } else if (this.listenerCount('checkExpectation') > 0) {
+        this.emit('checkExpectation', req, res);
+        return;
+      } else {
+        res.writeHead(417);
+        res.end();
+        return;
+      }
+    }
+
+    this.emit('request', req, res);
   }
 
   setTimeout(msecs, callback) {

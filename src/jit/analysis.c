@@ -130,7 +130,7 @@ static int jit_await_map_scan(const sv_func_t *func, const int *depth, sv_jit_aw
     sv_op_t op = (sv_op_t)func->code[off];
     int sz = sv_op_size[op];
     if (sz == 0) break;
-    if (op == OP_TRY_PUSH && open_count < SV_TRY_MAX)
+    if ((op == OP_TRY_PUSH || op == OP_TRY_PUSH_FINALLY) && open_count < SV_TRY_MAX)
       open[open_count++] = (uint32_t)(off + sz + sv_get_i32(func->code + off + 1));
     else if (op == OP_TRY_POP && open_count > 0) open_count--;
     else if ((op == OP_AWAIT || op == OP_AWAIT_RETURN || op == OP_AWAIT_ITER_NEXT) && depth[off] >= 0) {

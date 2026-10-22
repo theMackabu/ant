@@ -147,30 +147,39 @@ static void guest_apply_releases(ant_guest_t *g) {
   free(ids);
 }
 
-static ant_value_t guest_wire_out(ant_t *js, ant_value_t value, guest_value_t *out) {
+static ant_value_t guest_wire_encode(ant_t *js, ant_value_t value, bool error, guest_value_t *out) {
   if (vtype(value) == kTypeUndefined) {
     *out = (guest_value_t){ .kind = GUEST_VALUE_UNDEFINED };
     return js_mkundef();
   }
 
   ant_wire_t *wire = NULL;
-  ant_value_t r = ant_wire_serialize(js, value, js_mkundef(), js_mkundef(), &wire);
+  ant_value_t r = error
+    ? ant_wire_serialize_error(js, value, &wire)
+    : ant_wire_serialize(js, value, js_mkundef(), js_mkundef(), &wire);
+  
   if (is_err(r)) return r;
   *out = (guest_value_t){ .kind = GUEST_VALUE_WIRE, .wire = wire };
 
   return js_mkundef();
 }
 
+static ant_value_t guest_wire_out(ant_t *js, ant_value_t value, guest_value_t *out) {
+  return guest_wire_encode(js, value, false, out);
+}
+
 static ant_value_t guest_child_encode(ant_t *js, ant_guest_t *g, ant_value_t value, bool want_ref, guest_value_t *out) {
   if (!want_ref) return guest_wire_out(js, value, out);
   uint32_t id = guest_handle_put(g, value);
+  
   if (!id) return js_mkerr(js, "out of memory");
   *out = (guest_value_t){ .kind = GUEST_VALUE_REF, .id = id, .type = guest_type_of(value) };
+  
   return js_mkundef();
 }
 
 static void guest_error_out(ant_t *js, ant_value_t error, guest_value_t *out) {
-  if (!is_err(guest_wire_out(js, error, out))) return;
+  if (!is_err(guest_wire_encode(js, error, true, out))) return;
   js_take_thrown(js, js_mkundef());
 
   ant_value_t text = js_tostring_val(js, error);

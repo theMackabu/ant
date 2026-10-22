@@ -11,6 +11,7 @@
 #include "modules/generator.h"
 #include "modules/symbol.h"
 #include "modules/iterator.h"
+#include "modules/promise.h"
 #include "modules/timer.h"
 #include "sandbox/sandbox.h"
 #include "silver/call.h"
@@ -198,32 +199,36 @@ static void CheckFinallyCompletionRoots(ant_t *js) {
   js_setstackbase(js, (void *)stack_base);
 }
 
-static coroutine_t *captured_await_coro;
-
-static ant_value_t capture_await_coroutine(ant_params_t) {
-  assert(js->active_async_coro && !captured_await_coro);
-  captured_await_coro = js->active_async_coro;
-  coroutine_retain(captured_await_coro);
-  return js_mkundef();
+static coroutine_t *GateAwaitCoroutine(ant_t *js, ant_value_t gate) {
+  ant_promise_state_t *pd = js_promise_data(js, gate, false);
+  assert(pd && pd->has_inline_handler && pd->inline_handler.await_coro);
+  return pd->inline_handler.await_coro;
 }
 
 static ant_value_t StartTestAwait(ant_t *js, ant_value_t value, coroutine_t **coro) {
-  js_set(js, js->global, "__captureAwaitCoro", Ant_Function_Create(capture_await_coroutine));
+  GC_ROOT_SAVE(gate_mark, js);
+  ant_value_t gate = js_mkpromise(js);
+  GC_ROOT_PIN(js, gate);
+  js_set(js, js->global, "__awaitGate", gate);
   js_set(js, js->global, "__awaitInput", value);
   const char *source =
     "globalThis.__awaitOutput = (async function() {"
-    "__captureAwaitCoro(); const value = await __awaitInput;"
+    "await __awaitGate; const value = await __awaitInput;"
     "globalThis.__awaitResumed = true; return value; })();";
   js_set(js, js->global, "__awaitResumed", js_false);
   bool was_draining = js->microtasks_draining;
   js->microtasks_draining = true;
   ant_value_t status = js_eval_bytecode(js, source, strlen(source));
-  js->microtasks_draining = was_draining;
   assert(!is_err(status));
-  assert(captured_await_coro && captured_await_coro->await_registered);
-  assert(captured_await_coro->act && captured_await_coro->act->frame_count > 0);
-  *coro = captured_await_coro;
-  captured_await_coro = NULL;
+  coroutine_t *captured = GateAwaitCoroutine(js, gate);
+  coroutine_retain(captured);
+  Ant_Coroutine_SettleAndResume(js, captured, js_mkundef(), false);
+  js->microtasks_draining = was_draining;
+  assert(captured->await_registered && captured->awaited_promise != gate);
+  assert(captured->act && captured->act->frame_count > 0);
+  *coro = captured;
+  js_set(js, js->global, "__awaitGate", js_mkundef());
+  GC_ROOT_RESTORE(js, gate_mark);
   ant_value_t output = js_get(js, js->global, "__awaitOutput");
   assert(vtype(output) == kTypePromise);
   promise_mark_handled(output);

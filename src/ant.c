@@ -21683,32 +21683,28 @@ void js_set(ant_t *js, ant_value_t obj, const char *key, ant_value_t val) {
   val = js_expose_cfunc_for_key(js, val, key, key_len);
   if (is_err(val)) return;
   
-  if (vtype(obj) == kTypeObject) {
-    ant_prop_loc_t existing = lkp(js, obj, key, key_len);
-    if (existing.obj) {
-      if (is_const_prop(existing)) {
-        js_mkerr(js, "assignment to constant");
-        return;
-      }
-      js_prop_store(js, existing, val);
-    } else {
-      ant_value_t key_str = js_mkstr(js, key, key_len);
-      mkprop(js, obj, key_str, val, 0);
-    }
-  } else if (vtype(obj) == kTypeFunction) {
-    ant_value_t func_obj = js_func_obj(obj);
-    ant_prop_loc_t existing = lkp(js, func_obj, key, key_len);
-    if (existing.obj) {
-      if (is_const_prop(existing)) {
-        js_mkerr(js, "assignment to constant");
-        return;
-      }
-      js_prop_store(js, existing, val);
-    } else {
-      ant_value_t key_str = js_mkstr(js, key, key_len);
-      mkprop(js, func_obj, key_str, val, 0);
-    }
+  ant_value_t target = obj;
+  if (vtype(obj) == kTypeFunction) target = js_func_obj(obj);
+  else if (vtype(obj) != kTypeObject) return;
+  
+  const char *interned = intern_string(js, key, key_len);
+  if (!interned) {
+    js_mkerr(js, "oom");
+    return;
   }
+  
+  ant_prop_loc_t existing = lkp_interned(target, interned);
+  if (!existing.obj) {
+    mkprop_interned_attrs_impl(js, target, interned, key_len, val, 0, MKPROP_USE_DEFAULT_ATTRS);
+    return;
+  }
+  
+  if (is_const_prop(existing)) {
+    js_mkerr(js, "assignment to constant");
+    return;
+  }
+  
+  js_prop_store(js, existing, val);
 }
 
 void js_set_exact(ant_t *js, ant_value_t obj, const char *key, ant_value_t val) {
@@ -22011,6 +22007,7 @@ ant_value_t js_getprop_fallback_len(ant_t *js, ant_value_t obj, const char *name
 
   ant_value_t cur = obj;
   uint8_t t = vtype(cur);
+  const char *key_intern = intern_find(js, name, key_len);
   proto_walk_overflow_guard_t guard;
   proto_walk_overflow_guard_init(&guard);
 
@@ -22019,7 +22016,7 @@ ant_value_t js_getprop_fallback_len(ant_t *js, ant_value_t obj, const char *name
       ant_value_t cur_obj = js_as_obj(cur);
       if (is_proxy(cur_obj))
         return proxy_get_with_receiver(js, cur_obj, name, key_len, obj);
-      ant_prop_loc_t off = lkp(js, cur_obj, name, key_len);
+      ant_prop_loc_t off = key_intern ? lkp_interned(cur_obj, key_intern) : ANT_PROP_LOC_NONE;
       if (off.obj) return js_prop_load_from(js, obj, off);
       ant_value_t element;
       if (array_own_value(js, cur_obj, name, key_len, &element)) return element;
@@ -22027,8 +22024,8 @@ ant_value_t js_getprop_fallback_len(ant_t *js, ant_value_t obj, const char *name
       if (vtype(exotic) != kTypeUndefined) return exotic == T_EMPTY ? js_mkundef() : exotic;
     } else if (t == kTypeBuiltin) {
       ant_value_t promoted = js_cfunc_lookup_promoted(js, cur);
-      if (vtype(promoted) == kTypeFunction) {
-        ant_prop_loc_t off = lkp(js, js_func_obj(promoted), name, key_len);
+      if (key_intern && vtype(promoted) == kTypeFunction) {
+        ant_prop_loc_t off = lkp_interned(js_func_obj(promoted), key_intern);
         if (off.obj) return js_prop_load_from(js, obj, off);
       }
     }

@@ -66,6 +66,7 @@ typedef struct {
   uint32_t moving_count;
   uint32_t moving_cap;
   int depth;
+  bool error_props;
 } wire_writer_t;
 
 typedef struct {
@@ -341,9 +342,9 @@ static ant_value_t wire_write_buffer(wire_writer_t *w, ant_value_t value, ArrayB
   return wire_remember(w, value) ? js_mkundef() : wire_oom(js);
 }
 
-static ant_value_t wire_write_view(wire_writer_t *w, ant_value_t value, uint8_t kind, size_t offset, size_t length) {
+static ant_value_t wire_write_view(wire_writer_t *w, ant_value_t value, uint8_t kind, size_t offset, size_t length, bool tracking) {
   ant_value_t buffer = js_get_slot(value, SLOT_DATA);
-  if (!put_u8(w, WIRE_VIEW) || !put_u8(w, kind) || !put_varint(w, offset) || !put_varint(w, length))
+  if (!put_u8(w, WIRE_VIEW) || !put_u8(w, kind) || !put_u8(w, tracking ? 1 : 0) || !put_varint(w, offset) || !put_varint(w, length))
     return wire_oom(w->js);
   ant_value_t r = wire_write(w, buffer);
   if (is_err(r)) return r;
@@ -393,7 +394,8 @@ static ant_value_t wire_write_error(wire_writer_t *w, ant_value_t value) {
   if (!put_u8(w, has_errors ? 1 : 0)) return wire_oom(js);
   if (has_errors && is_err(r = wire_write(w, errors))) return r;
 
-  return wire_write_props(w, value, 0);
+  if (w->error_props) return wire_write_props(w, value, 0);
+  return put_u8(w, WIRE_END) ? js_mkundef() : wire_oom(js);
 }
 
 static bool wire_add_blob(ant_wire_t *wire, blob_storage_t *storage) {
@@ -428,13 +430,13 @@ static ant_value_t wire_write_object(wire_writer_t *w, ant_value_t value) {
   if (!ta && vtype(value) == kTypeTypedArray) ta = (TypedArrayData *)js_gettypedarray(value);
   if (ta) {
     if (!ta->buffer || !Ant_Buffer_ViewIsLive(ta)) return wire_clone_error(js, "An ArrayBuffer is detached and could not be cloned.");
-    return wire_write_view(w, value, (uint8_t)ta->type, ta->byte_offset, ta->length);
+    return wire_write_view(w, value, (uint8_t)ta->type, ta->byte_offset, ta->length, ta->length_tracking);
   }
 
   if (buffer_is_dataview(value)) {
     DataViewData *dv = buffer_get_dataview_data(value);
     if (!dv || !dv->buffer || !Ant_Buffer_ViewIsLive(dv)) return wire_clone_error(js, "An ArrayBuffer is detached and could not be cloned.");
-    return wire_write_view(w, value, WIRE_VIEW_DATAVIEW, dv->byte_offset, dv->byte_length);
+    return wire_write_view(w, value, WIRE_VIEW_DATAVIEW, dv->byte_offset, dv->byte_length, dv->length_tracking);
   }
 
   ArrayBufferData *abd = buffer_get_arraybuffer_data(value);
@@ -623,9 +625,9 @@ static bool wire_add_port(ant_wire_t *wire, ant_port_end_t *end) {
   return true;
 }
 
-ant_value_t ant_wire_serialize(
+static ant_value_t wire_serialize(
   ant_t *js, ant_value_t value, ant_value_t transfer_list,
-  ant_value_t source_port, ant_wire_t **out
+  ant_value_t source_port, bool error_props, ant_wire_t **out
 ) {
   *out = NULL;
   GC_ROOT_SAVE(root_mark, js);
@@ -649,7 +651,9 @@ ant_value_t ant_wire_serialize(
   wire_writer_t w = {
     .js = js, .wire = wire, .seen = js_mkarr(js),
     .transfer = transfer, .source_port = source_port,
+    .error_props = error_props,
   };
+  
   GC_ROOT_PIN(js, w.seen);
 
   r = wire_write(&w, value);
@@ -690,6 +694,17 @@ ant_value_t ant_wire_serialize(
   GC_ROOT_RESTORE(js, root_mark);
   *out = wire;
   return js_mkundef();
+}
+
+ant_value_t ant_wire_serialize(
+  ant_t *js, ant_value_t value, ant_value_t transfer_list,
+  ant_value_t source_port, ant_wire_t **out
+) {
+  return wire_serialize(js, value, transfer_list, source_port, false, out);
+}
+
+ant_value_t ant_wire_serialize_error(ant_t *js, ant_value_t error, ant_wire_t **out) {
+  return wire_serialize(js, error, js_mkundef(), js_mkundef(), true, out);
 }
 
 static bool get_u8(wire_reader_t *r, uint8_t *out) {
@@ -847,9 +862,9 @@ static ant_value_t wire_read_error(wire_reader_t *r) {
 
 static ant_value_t wire_read_view(wire_reader_t *r) {
   ant_t *js = r->js;
-  uint8_t kind;
+  uint8_t kind, tracking;
   uint64_t offset, length;
-  if (!get_u8(r, &kind) || !get_varint(r, &offset) || !get_varint(r, &length)) return wire_corrupt(js);
+  if (!get_u8(r, &kind) || !get_u8(r, &tracking) || !get_varint(r, &offset) || !get_varint(r, &length)) return wire_corrupt(js);
 
   ant_value_t buffer_obj = wire_read(r);
   if (is_err(buffer_obj)) return buffer_obj;
@@ -858,13 +873,13 @@ static ant_value_t wire_read_view(wire_reader_t *r) {
 
   if (kind == WIRE_VIEW_DATAVIEW) {
     if (offset + length > buffer->length) return wire_corrupt(js);
-    return wire_track(r, create_dataview_with_buffer(js, buffer, (size_t)offset, (size_t)length, buffer_obj));
+    return wire_track(r, create_dataview_with_buffer(js, buffer, (size_t)offset, (size_t)length, buffer_obj, tracking != 0));
   }
 
   if (kind >= TYPED_ARRAY_COUNT) return wire_corrupt(js);
   return wire_track(r, create_typed_array_with_buffer(
     js, (TypedArrayType)kind, buffer, (size_t)offset, (size_t)length,
-    js->builtins.typedarray_protos[kind], buffer_obj
+    js->builtins.typedarray_protos[kind], buffer_obj, tracking != 0
   ));
 }
 

@@ -763,6 +763,7 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
     gc_mark_abort_signal_object(js, value, gc_mark_value);
     gc_mark_error_record(js, value, gc_mark_value);
     gc_mark_eventemitter_object(js, value, gc_mark_value);
+    gc_mark_stream_state_object(js, value, gc_mark_value);
   }
 }
 

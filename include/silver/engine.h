@@ -77,6 +77,7 @@ bool sv_op_stack_effect(
 
 int *sv_func_stack_depth_map(const sv_func_t *func);
 int *sv_func_try_map(const sv_func_t *func);
+int sv_func_finally_index(const sv_func_t *func, int finally_off);
 
 static const uint8_t sv_op_size[OP__COUNT] = {
 #define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = (size),
@@ -822,6 +823,7 @@ void sv_activation_seal(ant_t *js, sv_activation_t *act);
 void sv_activation_discard(sv_vm_t *vm, int entry_fp);
 bool sv_vm_reserve_handlers(sv_vm_t *vm, int extra);
 void sv_frame_push_try_handlers(sv_vm_t *vm, sv_frame_t *frame, sv_func_t *func, int off, int base_sp);
+bool sv_func_in_finally_body(sv_func_t *func, int off);
 void sv_try_table_free(const struct sv_try_table *table);
 
 static inline void gc_upvalue_write_barrier(ant_t *js, sv_upvalue_t *uv, ant_value_t new_val) {
@@ -1079,6 +1081,12 @@ typedef struct sv_try_table {
   sv_try_region_t regions[];
 } sv_try_table_t;
 
+typedef struct {
+  int64_t kind;
+  ant_value_t value;
+  int64_t target;
+} sv_jit_finally_t;
+
 static inline int sv_jit_await_site_index(const sv_jit_await_map_t *map, uint32_t bc_off) {
   int lo = 0, hi = map->site_count - 1;
   
@@ -1132,6 +1140,7 @@ struct sv_vm {
       ant_value_t *params;
       ant_value_t *locals;
       ant_value_t *vstack;
+      sv_jit_finally_t *finally;
     } resume;
   } jit;
 

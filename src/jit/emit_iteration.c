@@ -51,6 +51,26 @@ static void jit_emit_dense_array_next(jit_compile_t *c, MIR_label_t done) {
 
 void jit_emit_iteration(jit_compile_t *c) {
   switch (c->op) {
+    case OP_FOR_IN: {
+      vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
+      MIR_reg_t obj = vstack_pop(&c->vs);
+      MIR_append_insn(c->ctx, c->jit_func,
+                      MIR_new_call_insn(c->ctx, 6,
+                                        MIR_new_ref_op(c->ctx, c->helper1_proto),
+                                        MIR_new_ref_op(c->ctx, c->imp_for_in),
+                                        MIR_new_reg_op(c->ctx, c->r_err_tmp),
+                                        MIR_new_reg_op(c->ctx, c->r_vm),
+                                        MIR_new_reg_op(c->ctx, c->r_js),
+                                        MIR_new_reg_op(c->ctx, obj)));
+      jit_emit_throw_if_error(c, c->r_err_tmp);
+      MIR_reg_t dst = vstack_push(&c->vs);
+      MIR_append_insn(c->ctx, c->jit_func,
+                      MIR_new_insn(c->ctx, MIR_MOV,
+                                   MIR_new_reg_op(c->ctx, dst),
+                                   MIR_new_reg_op(c->ctx, c->r_err_tmp)));
+      break;
+    }
+
     case OP_FOR_OF:
     case OP_DESTRUCTURE_INIT: {
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);

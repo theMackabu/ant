@@ -666,17 +666,15 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_typedarray(
   }
 
   ant_value_t out = create_typed_array_with_buffer(
-    nenv->js,
-    ta_type,
-    ab,
-    byte_offset,
-    length,
+    nenv->js, ta_type,
+    ab,byte_offset, length,
     nenv->js->builtins.typedarray_protos[ta_type],
-    (ant_value_t)arraybuffer
+    (ant_value_t)arraybuffer, false
   );
 
   if (is_err(out)) return napi_check_pending_from_result(env, out);
   *result = NAPI_RETURN(nenv, out);
+  
   return napi_set_last(env, napi_ok, NULL);
 }
 
