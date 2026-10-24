@@ -1,7 +1,7 @@
 # Technical Debt Tracker
 
 Status: active
-Last reviewed: 2026-10-22
+Last reviewed: 2026-10-24
 Owner: theMackabu
 
 Use this file to record debt that is important enough to preserve but not yet
@@ -234,3 +234,45 @@ scheduled.
   - Validation: hello-world instruction count back within noise (±0.1M) of 16f2cca5.
   - Owner: theMackabu
   - Status: backlog (2026-10-22)
+
+- Area: build with npm 12 (`src/tools/`, `meson/npm_ci.py`)
+  - Issue: `src/tools/` ships only `npm-shrinkwrap.json`, and npm 12.2.1 refuses `npm ci` without a `package-lock.json` (`EUSAGE`), so `meson/tools_npm_ci.stamp` fails.
+  - Impact: A fresh build fails for anyone on npm 12.
+  - Proposed fix: Ship a `package-lock.json` for `src/tools/`, or have `npm_ci.py` fall back when only a shrinkwrap exists. Local workaround: copy the shrinkwrap to the gitignored `src/tools/package-lock.json`.
+  - Owner: pgray
+  - Status: backlog (2026-10-24)
+
+- Area: build with GCC 16 (`include/native_tag.h`)
+  - Issue: GCC 16.2.1 rejects `Ant_NativeTag("ABUF")` as a `constexpr` initializer (`include/native_tag.h:6`, from `include/modules/buffer.h:71`), although BUILDING.md lists GCC 14+ as supported. Clang builds it.
+  - Impact: The tree does not build with GCC 16.
+  - Proposed fix: Declare the tags `static const` or as enumerators instead of `constexpr`, or give `Ant_NativeTag` four character literals instead of indexing a string literal. Otherwise narrow BUILDING.md's GCC range.
+  - Owner: pgray
+  - Status: backlog (2026-10-24)
+
+- Area: `ant install` with a `bun.lock` present
+  - Issue: `ant install` silently never writes `ant.lock`.
+  - Impact: Projects moving from bun keep no Ant lockfile and get no warning.
+  - Proposed fix: Write `ant.lock` regardless, or say why it was skipped.
+  - Owner: pgray
+  - Status: backlog (2026-10-24; found moving pgray.dev from bun to ant)
+
+- Area: `ant trust`
+  - Issue: Rewrites `package.json` with 2-space indentation.
+  - Impact: Noisy diffs in projects that use other indentation.
+  - Proposed fix: Preserve the file's detected indentation when rewriting it.
+  - Owner: pgray
+  - Status: backlog (2026-10-24; found moving pgray.dev from bun to ant)
+
+- Area: `ant run` child processes
+  - Issue: `workerd` children keep running after `ant run preview` is killed.
+  - Impact: Orphaned `workerd` processes keep running.
+  - Proposed fix: Not investigated yet.
+  - Owner: pgray
+  - Status: backlog (2026-10-24; found moving pgray.dev from bun to ant)
+
+- Area: `ant.lock`
+  - Issue: Does not record which registry each package was resolved from.
+  - Impact: A lockfile can't show or reproduce a registry switch.
+  - Proposed fix: Record the resolved registry per package.
+  - Owner: pgray
+  - Status: backlog (2026-10-24; found moving pgray.dev from bun to ant)

@@ -12,6 +12,7 @@ const templatePaths = [
   'templates/status.template.sh',
   'templates/download.template.sh',
   'templates/shell.template.sh',
+  'templates/github.template.sh',
   'templates/main.template.sh'
 ].map(relativePath => path.join(scriptDir, relativePath));
 
@@ -49,7 +50,7 @@ function patternFor(parts) {
   if (!Array.isArray(parts) || parts.length === 0) {
     throw new Error('target matchers must be non-empty arrays');
   }
-  return parts.map(part => `*${String(part).replaceAll('*', '\\*')}`).join('');
+  return parts.map(part => `*${String(part).replaceAll('*', '\\*')}`).join('') + '*';
 }
 
 function renderMatcher(target) {
@@ -62,6 +63,10 @@ function validateConfig(config) {
   for (const name of ['name', 'binary', 'installEnv', 'defaultInstallDir', 'downloadUrl']) {
     requireString(config, name);
   }
+
+  requireString(config.github ?? {}, 'repo');
+  requireString(config.github ?? {}, 'asset');
+  if (!config.github.asset.includes('{target}')) throw new Error('github.asset must contain "{target}"');
 
   if (!Array.isArray(config.targets) || config.targets.length === 0) {
     throw new Error('install.json must define at least one target');
@@ -136,6 +141,8 @@ function renderInstallScript() {
     '{{installEnv}}': config.installEnv,
     '{{defaultInstallDir}}': config.defaultInstallDir,
     '{{downloadUrl}}': config.downloadUrl,
+    '{{githubRepo}}': config.github.repo,
+    '{{githubAsset}}': config.github.asset,
     '{{targetSelection}}': renderTargetSelection(config)
   };
 

@@ -15,6 +15,13 @@ main() {
     die "HOME environment variable not set"
   fi
 
+  local install_source="${ANT_INSTALL_SOURCE:-${ANT_DOWNLOAD_URL:+manifest}}"
+  install_source="${install_source:-auto}"
+  case "$install_source" in
+    auto|manifest|github) ;;
+    *) die "ANT_INSTALL_SOURCE must be auto, manifest, or github" ;;
+  esac
+
   local target ant_uri
   target="$(get_target)"
   ant_uri="${ANT_DOWNLOAD_URL:-$download_url}"
@@ -31,17 +38,35 @@ main() {
   line
   detail "target: $target"
   detail "install: $(tildify "$exe")"
-  detail "source: $ant_uri"
+  if [[ "$install_source" == github ]]; then
+    detail "source: https://github.com/$github_repo/releases/latest"
+  else
+    detail "source: $ant_uri"
+  fi
   printf '\n'
 
   run_step "Preparing install directory" mkdir -p "$bin_dir" ||
     die "Failed to create install directory \"$bin_dir\""
 
-  run_download "Downloading Ant" "$exe" "$ant_uri" ||
-    die "Failed to download $app_name from \"$ant_uri\""
+  install_stage="$(mktemp -d "$bin_dir/.ant-install.XXXXXX")" ||
+    die "Failed to create a staging directory in \"$bin_dir\""
+  trap 'rm -rf "$install_stage"' EXIT
 
-  run_step "Setting executable permissions" chmod 755 "$exe" ||
+  if [[ "$install_source" == github ]]; then
+    install_from_github "$target" "$install_stage"
+  elif ! run_download "Downloading Ant" "$install_stage/$binary_name" "$ant_uri"; then
+    if [[ "$install_source" == manifest ]]; then
+      die "Failed to download $app_name from \"$ant_uri\""
+    fi
+    detail "manifest unreachable, falling back to GitHub releases"
+    install_from_github "$target" "$install_stage"
+  fi
+
+  run_step "Setting executable permissions" chmod 755 "$install_stage/$binary_name" ||
     die "Failed to set permissions on $app_name executable"
+
+  mv -f "$install_stage/$binary_name" "$exe" ||
+    die "Failed to install $app_name to \"$exe\""
 
   success "$app_name installed to $(tildify "$exe")"
 

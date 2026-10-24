@@ -37,6 +37,7 @@ Store in-progress execution plans here.
 - [EventEmitter Node Parity](eventemitter-node-parity.md)
 - [OSR Size-Scaled Tiering](osr-size-scaled-tiering.md)
 - [Hash Seed Randomization](hash-seed-randomization.md)
+- [Installer GitHub Releases Source](installer-github-releases.md)
 - [Large AST Workload Performance](large-ast-workload-perf.md)
 - [LLVM 21 Codegen Investigation](llvm-21-codegen-investigation.md)
 - [Async Await Performance and Settle Order](async-await-performance.md)

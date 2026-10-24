@@ -58,7 +58,9 @@ run_download() {
 
   if [[ ! -t 1 ]]; then
     status "$message"
-    curl --fail --location --silent --show-error --output "$output" "$uri"
+    curl --fail --location --silent --show-error \
+      --connect-timeout 10 --speed-limit 1 --speed-time 30 \
+      --output "$output" "$uri"
     return $?
   fi
 
@@ -70,6 +72,7 @@ run_download() {
   : >"$output" || return 1
 
   curl --fail --location --silent --show-error \
+    --connect-timeout 10 --speed-limit 1 --speed-time 30 \
     --dump-header "$headers" --output "$output" "$uri" 2>"$errors" &
   pid=$!
   total=0

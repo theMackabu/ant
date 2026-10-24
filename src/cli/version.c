@@ -4,11 +4,13 @@
 
 #include "progress.h"
 #include "utils.h"
+#include "zip.h"
 
 #include <argtable3.h>
 #include <crprintf.h>
 #include <errno.h>
 #include <limits.h>
+#include <openssl/evp.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -22,25 +24,32 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <strings.h>
+#define ANT_EXE_NAME "ant"
 #else
 #include <io.h>
 #include <process.h>
 #include <windows.h>
 #define getpid _getpid
 #define strcasecmp _stricmp
+#define ANT_EXE_NAME "ant.exe"
 #endif
 
 #define ANT_CANARY_CHANNEL "canary"
 #define ANT_VERSION_CHECK_CACHE_FILE "version-check.json"
 #define ANT_VERSION_CHECK_INTERVAL_SECONDS (72u * 60u * 60u)
 
+#define ANT_GITHUB_API_URL "https://api.github.com"
+#define ANT_GITHUB_REPO "theMackabu/ant"
+
 typedef struct {
   char target[64];
   char version[96];
   char download_url[2048];
   char release_notes_url[2048];
+  char sha256[65];
   uint64_t build_timestamp;
   uint64_t size;
+  bool github;
 } ant_latest_info_t;
 
 typedef struct {
@@ -233,6 +242,101 @@ static int ant_fetch_latest(
   return rc;
 }
 
+static const char *ant_github_api_url(void) {
+  const char *url = getenv("ANT_GITHUB_API_URL");
+  return url && url[0] ? url : ANT_GITHUB_API_URL;
+}
+
+static int ant_github_select_latest(const char *json, size_t json_len, ant_latest_info_t *latest, char *err, size_t err_len) {
+  memset(latest, 0, sizeof(*latest));
+  snprintf(latest->target, sizeof(latest->target), "%s", ant_platform_target());
+  latest->github = true;
+
+  char asset_name[96];
+  snprintf(asset_name, sizeof(asset_name), "ant-%s.zip", latest->target);
+
+  yyjson_doc *doc = yyjson_read(json, json_len, 0);
+  if (!doc) {
+    snprintf(err, err_len, "GitHub release response was not valid JSON");
+    return -EINVAL;
+  }
+
+  yyjson_val *root = yyjson_doc_get_root(doc);
+  yyjson_val *assets = root && yyjson_is_obj(root) ? yyjson_obj_get(root, "assets") : NULL;
+  yyjson_val *asset = NULL;
+  if (assets && yyjson_is_arr(assets)) {
+    size_t idx, max;
+    yyjson_val *item;
+    yyjson_arr_foreach(assets, idx, max, item) {
+      const char *name = version_json_string(item, "name");
+      if (name && strcmp(name, asset_name) == 0) {
+        asset = item;
+        break;
+      }
+    }
+  }
+
+  int rc = -EINVAL;
+  const char *tag = version_json_string(root, "tag_name");
+  const char *version = tag && tag[0] == 'v' ? tag + 1 : tag;
+  const char *download_url = version_json_string(asset, "browser_download_url");
+  const char *digest = version_json_string(asset, "digest");
+  if (digest && !digest[0]) digest = NULL;
+
+  if (!version || !ant_parse_version(version).ok)
+    snprintf(err, err_len, "GitHub release tag %s is not an Ant version", tag ? tag : "(missing)");
+  else if (!download_url) {
+    snprintf(err, err_len, "GitHub release %s has no %s asset", tag, asset_name);
+    rc = -ENOENT;
+  } else if (digest && (strlen(digest) != 71 || strncmp(digest, "sha256:", 7) != 0 || strspn(digest + 7, "0123456789abcdef") != 64))
+    snprintf(err, err_len, "GitHub release asset %s has an unsupported digest %s", asset_name, digest);
+  else {
+    snprintf(latest->version, sizeof(latest->version), "%s", version);
+    snprintf(latest->download_url, sizeof(latest->download_url), "%s", download_url);
+    const char *html_url = version_json_string(root, "html_url");
+    if (html_url) snprintf(latest->release_notes_url, sizeof(latest->release_notes_url), "%s", html_url);
+    if (digest) snprintf(latest->sha256, sizeof(latest->sha256), "%s", digest + 7);
+    latest->size = version_json_uint(asset, "size");
+    rc = 0;
+  }
+
+  yyjson_doc_free(doc);
+  return rc;
+}
+
+static int ant_github_fetch_latest(ant_latest_info_t *latest, char *err, size_t err_len) {
+  char url[2048];
+  int written = snprintf(url, sizeof(url), "%s/repos/%s/releases/latest", ant_github_api_url(), ANT_GITHUB_REPO);
+  if (written < 0 || (size_t)written >= sizeof(url)) {
+    snprintf(err, err_len, "GitHub API url is too long");
+    return -ENAMETOOLONG;
+  }
+
+  const char *token = getenv("GITHUB_TOKEN");
+  bool has_token = token && token[0];
+  char auth[4096];
+  snprintf(auth, sizeof(auth), "Bearer %s", has_token ? token : "");
+  ant_http_header_t accept = { "Accept", "application/vnd.github+json", NULL };
+  ant_http_header_t api_version = { "X-GitHub-Api-Version", "2022-11-28", &accept };
+  ant_http_header_t agent = { "User-Agent", "ant/" ANT_VERSION, &api_version };
+  ant_http_header_t authorization = { "Authorization", auth, &agent };
+  ant_download_options_t options = {.headers = has_token ? &authorization : &agent};
+
+  char *body = NULL;
+  size_t body_len = 0;
+  int rc = ant_download_request(url, &options, NULL, NULL, NULL, &body, &body_len, err, err_len);
+  if (rc != 0) {
+    int code = strstr(err, "HTTP 403") ? 403 : strstr(err, "HTTP 429") ? 429 : 0;
+    if (has_token && strstr(err, "HTTP 401")) snprintf(err, err_len, "GitHub rejected GITHUB_TOKEN (HTTP 401)");
+    else if (code) snprintf(err, err_len, "GitHub API refused the request (HTTP %d); this may be a rate limit or a block, and GITHUB_TOKEN raises the rate limit", code);
+    return rc;
+  }
+
+  rc = ant_github_select_latest(body, body_len, latest, err, err_len);
+  free(body);
+  return rc;
+}
+
 static bool ant_version_cache_paths(
   char *dir, size_t dir_len,
   char *path, size_t path_len
@@ -399,11 +503,7 @@ static int ant_install_path(char *out, size_t out_len) {
   if (ant_user_bin_path(dir, sizeof(dir)) != 0) return -EINVAL;
   int rc = ant_mkdir_p(dir);
   if (rc != 0) return -errno;
-#ifdef _WIN32
-  int written = snprintf(out, out_len, "%s/ant.exe", dir);
-#else
-  int written = snprintf(out, out_len, "%s/ant", dir);
-#endif
+  int written = snprintf(out, out_len, "%s/" ANT_EXE_NAME, dir);
   return written < 0 || (size_t)written >= out_len ? -ENAMETOOLONG : 0;
 }
 
@@ -500,6 +600,84 @@ static int ant_install_downloaded(
 #endif
 }
 
+static int ant_upgrade_fetch_github(const ant_latest_info_t *latest, const char *tmp_path, char *err, size_t err_len) {
+  ant_http_header_t agent = { "User-Agent", "ant/" ANT_VERSION, NULL };
+  ant_download_options_t options = {.headers = &agent, .max_bytes = latest->size, .follow_redirects = true};
+  char *zip = NULL;
+  size_t zip_len = 0;
+
+  progress_t progress;
+  progress_start(&progress, "Downloading Ant");
+  int rc = ant_download_request(latest->download_url, &options, NULL, "Downloading Ant", &progress, &zip, &zip_len, err, err_len);
+  progress_stop(&progress);
+  if (rc != 0) return rc;
+
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int digest_len = 0;
+  char actual[65] = {0};
+  if (EVP_Digest(zip, zip_len, digest, &digest_len, EVP_sha256(), NULL) == 1 && digest_len == 32) hex_encode(digest, digest_len, actual);
+
+  FILE *out = NULL;
+  if (!latest->sha256[0]) crfprintf(stderr, "{warn}: GitHub release lists no digest for ant-%s.zip, skipping checksum\n", latest->target);
+  else if (strcmp(actual, latest->sha256) != 0) {
+    snprintf(err, err_len, "checksum mismatch for ant-%s.zip: expected %s, got %s", latest->target, latest->sha256, actual);
+    rc = -EINVAL;
+  }
+  if (rc == 0 && !(out = fopen(tmp_path, "wb"))) {
+    snprintf(err, err_len, "failed to open %s: %s", tmp_path, strerror(errno));
+    rc = -EIO;
+  }
+  if (out) {
+    rc = ant_zip_extract_single((const uint8_t *)zip, zip_len, ANT_EXE_NAME, out, err, err_len);
+    if (fclose(out) != 0 && rc == 0) {
+      snprintf(err, err_len, "failed to close %s: %s", tmp_path, strerror(errno));
+      rc = -EIO;
+    }
+    if (rc != 0) remove(tmp_path);
+  }
+  free(zip);
+  return rc;
+}
+
+static int ant_upgrade_fetch_manifest(
+  const ant_latest_info_t *latest, const char *tmp_path,
+  bool *download_failed, char *err, size_t err_len
+) {
+  FILE *file = fopen(tmp_path, "wb");
+  if (!file) {
+    snprintf(err, err_len, "failed to open %s: %s", tmp_path, strerror(errno));
+    return -EIO;
+  }
+
+  int rc = ant_http_download_file(latest->download_url, file, "Downloading Ant", err, err_len);
+  int close_rc = fclose(file);
+  if (rc != 0 || close_rc != 0) {
+    if (close_rc != 0 && rc == 0) snprintf(err, err_len, "failed to close %s: %s", tmp_path, strerror(errno));
+    *download_failed = rc != 0;
+    remove(tmp_path);
+    return rc != 0 ? rc : -EIO;
+  }
+  return 0;
+}
+
+static int ant_upgrade_github_latest(
+  ant_latest_info_t *latest, const char *reason,
+  bool from_canary, char *err, size_t err_len
+) {
+  fflush(stdout);
+  if (reason && reason[0]) fprintf(stderr, "ant upgrade: %s\n", reason);
+  if (reason) fprintf(stderr, "ant upgrade: falling back to GitHub releases\n");
+  if (from_canary) fprintf(stderr, "ant upgrade: canary builds are only published to manifest.antjs.org, comparing against the latest stable release\n");
+
+  crprintf("<dim>Looking up stable version on GitHub releases</>\n\n");
+  return ant_github_fetch_latest(latest, err, err_len);
+}
+
+static int ant_upgrade_apply(
+  const ant_latest_info_t *latest, bool use_canary, bool pinned,
+  bool fallback, bool *download_failed, char *err, size_t err_len
+);
+
 int ant_upgrade(int argc, char **argv) {
   struct arg_lit *canary = arg_lit0(NULL, "canary", "install the latest canary build instead of the stable release");
   struct arg_lit *stable = arg_lit0(NULL, "stable", "install the latest stable release, downgrading from canary if needed");
@@ -517,6 +695,7 @@ int ant_upgrade(int argc, char **argv) {
     crprintf("<bold>Usage:</> ant upgrade [flags]\n\n");
     crprintf("Upgrade Ant to the latest version.\n\n");
     crprintf("Canary builds stay on canary unless a newer stable release is available.\n\n");
+    crprintf("ANT_INSTALL_SOURCE=auto|manifest|github picks the release source; auto falls back to GitHub.\n\n");
     crprintf("<bold>Flags:</>\n");
     print_flags_help(stdout, argtable);
 
@@ -532,22 +711,43 @@ int ant_upgrade(int argc, char **argv) {
   
   arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
   const char *channel = use_canary ? ANT_CANARY_CHANNEL : NULL;
+  const char *source = getenv("ANT_INSTALL_SOURCE");
+  const char *manifest_override = getenv("ANT_MANIFEST_URL");
+  if (!source || !source[0]) source = manifest_override && manifest_override[0] ? "manifest" : "auto";
+  bool github_only = strcmp(source, "github") == 0;
+  bool can_fall_back = !use_canary && strcmp(source, "auto") == 0;
+
+  if (!github_only && strcmp(source, "auto") != 0 && strcmp(source, "manifest") != 0) {
+    fprintf(stderr, "ant upgrade: ANT_INSTALL_SOURCE must be auto, manifest, or github\n");
+    return EXIT_FAILURE;
+  }
+  if (use_canary && github_only) {
+    fprintf(stderr, "ant upgrade: canary builds are only published to manifest.antjs.org\n");
+    return EXIT_FAILURE;
+  }
   
   char err[512] = {0};
   ant_latest_info_t latest;
-  progress_t progress;
+  int rc = 0;
 
   crprintf("<bold>Current Ant version:</> <bright_green>%s</>\n", ANT_VERSION);
-  crprintf("<dim>Looking up %s version</>\n\n", use_canary ? "canary" : "stable");
+  if (github_only) rc = ant_upgrade_github_latest(&latest, NULL, follow_canary, err, sizeof(err));
+  else {
+    crprintf("<dim>Looking up %s version</>\n\n", use_canary ? "canary" : "stable");
+    rc = ant_fetch_latest(&latest, NULL, channel, err, sizeof(err));
+    if (rc == 0 && !use_canary) ant_version_cache_store_latest(&latest);
+    
+    if (follow_canary && (rc != 0 || !ant_latest_is_newer(&latest, false))) {
+      use_canary = true;
+      crprintf("<dim>Looking up canary version</>\n\n");
+      err[0] = '\0';
+      rc = ant_fetch_latest(&latest, NULL, ANT_CANARY_CHANNEL, err, sizeof(err));
+    }
 
-  int rc = ant_fetch_latest(&latest, NULL, channel, err, sizeof(err));
-  if (rc == 0 && !use_canary) ant_version_cache_store_latest(&latest);
-  
-  if (follow_canary && (rc != 0 || !ant_latest_is_newer(&latest, false))) {
-    use_canary = true;
-    crprintf("<dim>Looking up canary version</>\n\n");
-    err[0] = '\0';
-    rc = ant_fetch_latest(&latest, NULL, ANT_CANARY_CHANNEL, err, sizeof(err));
+    if (rc != 0 && can_fall_back) {
+      rc = ant_upgrade_github_latest(&latest, err, use_canary, err, sizeof(err));
+      use_canary = false;
+    }
   }
   
   if (rc != 0) {
@@ -555,25 +755,44 @@ int ant_upgrade(int argc, char **argv) {
     if (use_canary && strstr(err, "HTTP 404")) fprintf(stderr, "ant upgrade: no canary build has been published yet\n");
     return EXIT_FAILURE;
   }
-  
+
+  bool download_failed = false;
+  int status = ant_upgrade_apply(&latest, use_canary, pinned, false, &download_failed, err, sizeof(err));
+  if (status == EXIT_SUCCESS || !download_failed || !can_fall_back) return status;
+
+  if (ant_upgrade_github_latest(&latest, "", use_canary, err, sizeof(err)) != 0) {
+    fprintf(stderr, "ant upgrade: %s\n", err);
+    return EXIT_FAILURE;
+  }
+  return ant_upgrade_apply(&latest, false, pinned, true, &download_failed, err, sizeof(err));
+}
+
+static int ant_upgrade_apply(
+  const ant_latest_info_t *latest, bool use_canary, bool pinned,
+  bool fallback, bool *download_failed, char *err, size_t err_len
+) {
   const char *channel_label = use_canary ? "canary" : "stable";
   const char *channel_note = use_canary ? ", canary" : ", stable";
   
-  if (pinned ? ant_latest_is_current_build(&latest, use_canary) : !ant_latest_is_newer(&latest, use_canary)) {
+  if (pinned ? ant_latest_is_current_build(latest, use_canary) : !ant_latest_is_newer(latest, use_canary)) {
+    if (fallback) {
+      fprintf(stderr, "ant upgrade: GitHub has no release newer than %s (latest is %s)\n", ANT_VERSION, latest->version);
+      return EXIT_FAILURE;
+    }
     crprintf("<bright_green>Ant is already up to date.</> <dim>(%s for %s%s)</>\n",
-      ANT_VERSION, latest.target, channel_note);
+      ANT_VERSION, latest->target, channel_note);
     return EXIT_SUCCESS;
   }
 
-  bool downgrade = ant_latest_is_older(&latest, use_canary);
-  crprintf("Found %s version <green>%s</>\n\n", channel_label, latest.version);
-  crprintf("Downloading <bright_green>%s</>\n", latest.download_url);
+  bool downgrade = ant_latest_is_older(latest, use_canary);
+  crprintf("Found %s version <green>%s</>\n\n", channel_label, latest->version);
+  crprintf("Downloading <bright_green>%s</>\n", latest->download_url);
   crprintf("Ant is %s to %sversion <green>%s</>\n\n",
-    downgrade ? "downgrading" : "upgrading", use_canary ? "canary " : "", latest.version);
+    downgrade ? "downgrading" : "upgrading", use_canary ? "canary " : "", latest->version);
   fflush(stdout);
 
   char install_path[4096];
-  rc = ant_install_path(install_path, sizeof(install_path));
+  int rc = ant_install_path(install_path, sizeof(install_path));
   if (rc != 0) {
     fprintf(stderr, "ant upgrade: failed to resolve install path\n");
     return EXIT_FAILURE;
@@ -586,20 +805,10 @@ int ant_upgrade(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  FILE *file = fopen(tmp_path, "wb");
-  if (!file) {
-    fprintf(stderr, "ant upgrade: failed to open %s: %s\n", tmp_path, strerror(errno));
-    return EXIT_FAILURE;
-  }
-
-  progress_start(&progress, "Downloading Ant");
-  rc = ant_download_get(latest.download_url, file, "Downloading Ant", &progress, NULL, NULL, err, sizeof(err));
-  progress_stop(&progress);
-  
-  int close_rc = fclose(file);
-  if (rc != 0 || close_rc != 0) {
-    if (close_rc != 0 && rc == 0) snprintf(err, sizeof(err), "failed to close %s: %s", tmp_path, strerror(errno));
-    remove(tmp_path);
+  rc = latest->github
+    ? ant_upgrade_fetch_github(latest, tmp_path, err, err_len)
+    : ant_upgrade_fetch_manifest(latest, tmp_path, download_failed, err, err_len);
+  if (rc != 0) {
     fprintf(stderr, "ant upgrade: %s\n", err[0] ? err : "download failed");
     return EXIT_FAILURE;
   }
@@ -612,18 +821,18 @@ int ant_upgrade(int argc, char **argv) {
   }
 #endif
 
-  if (ant_install_downloaded(tmp_path, install_path, err, sizeof(err)) != 0) {
+  if (ant_install_downloaded(tmp_path, install_path, err, err_len) != 0) {
     fprintf(stderr, "ant upgrade: failed to install %s: %s\n", install_path, err);
     return EXIT_FAILURE;
   }
 
   crprintf("<bright_green>%s successfully to Ant %s%s</>\n",
-    downgrade ? "Downgraded" : "Upgraded", latest.version, use_canary ? " (canary)" : "");
+    downgrade ? "Downgraded" : "Upgraded", latest->version, use_canary ? " (canary)" : "");
   crprintf("<dim>Installed at %s</>\n", install_path);
 
-  if (latest.release_notes_url[0]) {
+  if (latest->release_notes_url[0]) {
     crprintf("\n<bold>Release notes:</>\n\n");
-    crprintf("  <green>%s</>\n\n", latest.release_notes_url);
+    crprintf("  <green>%s</>\n\n", latest->release_notes_url);
   }
   
   return EXIT_SUCCESS;
