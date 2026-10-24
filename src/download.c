@@ -2,6 +2,7 @@
 
 #include "download.h"
 #include "modules/http.h"
+#include "modules/url.h"
 #include "utils.h"
 
 #include <dirent.h>
@@ -19,6 +20,8 @@
 #endif
 
 #define ANT_MANIFEST_URL "https://manifest.antjs.org/v1/latest"
+#define DOWNLOAD_MAX_REDIRECTS 5
+#define DOWNLOAD_IDLE_TIMEOUT_MS 30000
 
 typedef struct {
   char *data;
@@ -32,7 +35,12 @@ typedef struct {
   const char *label;
   progress_t *progress;
   ant_http_request_t *request;
-  bool completed;
+  const char *url;
+  char *location;
+  uint64_t max_bytes;
+  uv_timer_t idle;
+  bool follow_redirects;
+  bool redirecting;
   char error[256];
 } download_ctx_t;
 
@@ -102,10 +110,45 @@ static void download_update_progress(download_ctx_t *ctx) {
   progress_update(ctx->progress, msg);
 }
 
+static void download_idle_cb(uv_timer_t *timer) {
+  download_fail(timer->data, -ETIMEDOUT, "timed out waiting for the server");
+}
+
+static void download_touch(download_ctx_t *ctx) {
+  uv_timer_start(&ctx->idle, download_idle_cb, DOWNLOAD_IDLE_TIMEOUT_MS, 0);
+}
+
+static bool download_is_redirect(int status) {
+  return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+}
+
+static char *download_redirect_url(const char *base, const char *location) {
+  url_state_t next = {0};
+  char *href = NULL;
+  bool secure = strncasecmp(base, "https://", 8) == 0;
+  if (parse_url_to_state(location, base, &next) == 0 && (
+    strcmp(next.protocol, "https:") == 0 || (!secure && strcmp(next.protocol, "http:") == 0)
+  )) href = strndup(next.href, strcspn(next.href, "#"));
+  url_state_clear(&next);
+  return href;
+}
+
 static void download_response_cb(ant_http_request_t *req, const ant_http_response_t *resp, void *user_data) {
   (void)req;
   download_ctx_t *ctx = user_data;
+  download_touch(ctx);
   ctx->status = resp ? resp->status : 0;
+  if (ctx->follow_redirects && download_is_redirect(ctx->status)) {
+    const char *location = download_header(resp->headers, "location");
+    char message[sizeof(ctx->error)];
+    ctx->redirecting = true;
+    if (!location) download_fail(ctx, -EIO, "redirect without a Location header");
+    else if (!(ctx->location = download_redirect_url(ctx->url, location))) {
+      snprintf(message, sizeof(message), "refusing to follow redirect to %s", location);
+      download_fail(ctx, -EPROTONOSUPPORT, message);
+    }
+    return;
+  }
   const char *len = resp ? download_header(resp->headers, "content-length") : NULL;
   uint64_t content_length = download_parse_u64(len);
   if (content_length > 0) ctx->content_length = content_length;
@@ -115,7 +158,12 @@ static void download_response_cb(ant_http_request_t *req, const ant_http_respons
 static void download_body_cb(ant_http_request_t *req, const uint8_t *chunk, size_t len, void *user_data) {
   (void)req;
   download_ctx_t *ctx = user_data;
-  if (ctx->rc != 0 || len == 0) return;
+  download_touch(ctx);
+  if (ctx->rc != 0 || ctx->redirecting || len == 0) return;
+  if (ctx->max_bytes && ctx->received + len > ctx->max_bytes) {
+    download_fail(ctx, -EFBIG, "response is larger than the expected size");
+    return;
+  }
 
   if (ctx->file) {
     if (fwrite(chunk, 1, len, ctx->file) != len) {
@@ -159,38 +207,70 @@ static void download_complete_cb(
 ) {
   (void)req;
   download_ctx_t *ctx = user_data;
-  ctx->completed = true;
+  uv_timer_stop(&ctx->idle);
   if (ctx->rc == 0 && result != ANT_HTTP_RESULT_OK) {
     ctx->rc = error_code < 0 ? error_code : -EIO;
     snprintf(ctx->error, sizeof(ctx->error), "%s", error_message ? error_message : "network error");
   }
-  if (ctx->rc == 0 && (ctx->status < 200 || ctx->status >= 300)) {
+  if (ctx->rc == 0 && !ctx->redirecting && (ctx->status < 200 || ctx->status >= 300)) {
     ctx->rc = -EIO;
     snprintf(ctx->error, sizeof(ctx->error), "HTTP %d", ctx->status);
   }
 }
 
-int ant_download_get(
-  const char *url, FILE *file, const char *label, 
-  progress_t *progress, char **body_out, 
-  size_t *body_len_out, char *err, size_t err_len
+int ant_download_request(
+  const char *url, const ant_download_options_t *options,
+  FILE *file, const char *label, progress_t *progress,
+  char **body_out, size_t *body_len_out, char *err, size_t err_len
 ) {
   uv_loop_t loop;
-  download_ctx_t ctx = {.file = file, .label = label, .progress = progress};
-  ant_http_request_options_t options = {.method = "GET", .url = url};
-  ant_http_request_t *req = NULL;
-  int rc = uv_loop_init(&loop);
+  download_ctx_t ctx = {.file = file, .label = label, .progress = progress, .url = url};
+  const ant_http_header_t *headers = options ? options->headers : NULL;
+  char *hop_url = NULL;
+  if (options) {
+    ctx.follow_redirects = options->follow_redirects;
+    ctx.max_bytes = options->max_bytes;
+  }
   if (body_out) *body_out = NULL;
   if (body_len_out) *body_len_out = 0;
+  if (ctx.follow_redirects && download_header(headers, "authorization")) {
+    snprintf(err, err_len, "refusing to send Authorization across redirects");
+    return -EINVAL;
+  }
+
+  int rc = uv_loop_init(&loop);
   if (rc != 0) {
     snprintf(err, err_len, "failed to initialize network loop: %s", uv_strerror(rc));
     return rc;
   }
+  uv_timer_init(&loop, &ctx.idle);
+  ctx.idle.data = &ctx;
 
-  rc = ant_http_request_start(&loop, &options, download_response_cb, download_body_cb, download_complete_cb, &ctx, &req);
-  ctx.request = req;
-  if (rc == 0) uv_run(&loop, UV_RUN_DEFAULT);
+  for (int hop = 0;; hop++) {
+    ant_http_request_options_t req_options = {.method = "GET", .url = ctx.url, .headers = headers};
+    ant_http_request_t *req = NULL;
+    ctx.redirecting = false;
+    rc = ant_http_request_start(&loop, &req_options, download_response_cb, download_body_cb, download_complete_cb, &ctx, &req);
+    ctx.request = req;
+    if (rc == 0) {
+      download_touch(&ctx);
+      uv_run(&loop, UV_RUN_DEFAULT);
+    }
+    ctx.request = NULL;
+    if (rc != 0 || ctx.rc != 0 || !ctx.redirecting) break;
+    if (hop >= DOWNLOAD_MAX_REDIRECTS) {
+      download_fail(&ctx, -ELOOP, "too many redirects");
+      break;
+    }
+    free(hop_url);
+    ctx.url = hop_url = ctx.location;
+    ctx.location = NULL;
+  }
+  uv_close((uv_handle_t *)&ctx.idle, NULL);
+  uv_run(&loop, UV_RUN_DEFAULT);
   (void)uv_loop_close(&loop);
+  free(hop_url);
+  free(ctx.location);
 
   if (rc != 0) {
     free(ctx.data);
@@ -208,6 +288,14 @@ int ant_download_get(
     if (body_len_out) *body_len_out = ctx.len;
   } else free(ctx.data);
   return 0;
+}
+
+int ant_download_get(
+  const char *url, FILE *file, const char *label, 
+  progress_t *progress, char **body_out, 
+  size_t *body_len_out, char *err, size_t err_len
+) {
+  return ant_download_request(url, NULL, file, label, progress, body_out, body_len_out, err, err_len);
 }
 
 const char *ant_manifest_url(void) {

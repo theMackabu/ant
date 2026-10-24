@@ -4,11 +4,30 @@
 #include <stdio.h>
 #include <stddef.h>
 #include "progress.h"
+#include "modules/http.h"
 
 #define ANT_UNPUBLISHED_BUILD_HINT \
   "this build is no longer published; run 'ant upgrade --canary' or 'ant upgrade --stable'"
 
+typedef struct {
+  const ant_http_header_t *headers;
+  uint64_t max_bytes;
+  bool follow_redirects;
+} ant_download_options_t;
+
 const char *ant_manifest_url(void);
+
+int ant_download_request(
+  const char *url,
+  const ant_download_options_t *options,
+  FILE *file,
+  const char *label,
+  progress_t *progress,
+  char **body_out,
+  size_t *body_len_out,
+  char *err,
+  size_t err_len
+);
 
 int ant_download_get(
   const char *url,
