@@ -220,7 +220,10 @@ static ant_value_t get_string_iterator_prototype(ant_t *js) {
   ant_value_t iterator_proto = get_iterator_prototype(js);
   js->sym.string_iterator_proto = Ant_Object_CreateBare(js);
   
+  bool iteration_intact = ant_protector_intact(js, ANT_PROTECTOR_STRING_ITERATION);
   defmethod(js, js->sym.string_iterator_proto, "next", 4, Ant_Function_Create(str_iter_next));
+  
+  if (iteration_intact) ant_protector_rearm(js, ANT_PROTECTOR_STRING_ITERATION);
   mkprop(js, js->sym.string_iterator_proto, js->sym.toStringTag_sym, ANT_STRING("String Iterator"), ANT_PROP_ATTR_CONFIGURABLE);
   
   js_set_proto_init(js->sym.string_iterator_proto, iterator_proto);
@@ -1830,7 +1833,9 @@ void init_iterator_module(ant_t *js) {
   js_iter_register_advance(js, get_array_iterator_prototype(js), advance_array);
   js_iter_register_advance(js, get_string_iterator_prototype(js), advance_string);
   
+  bool string_iteration_intact = ant_protector_intact(js, ANT_PROTECTOR_STRING_ITERATION);
   defmethod_sym(js, js->sym.string_proto, js->sym.iterator_sym, Ant_Function_Create(string_iterator));
+  if (string_iteration_intact) ant_protector_rearm(js, ANT_PROTECTOR_STRING_ITERATION);
   
   js->builtins.wrap_iter_proto = Ant_Object_CreateBare(js);
   js_set_proto_init(js->builtins.wrap_iter_proto, iter_proto);
