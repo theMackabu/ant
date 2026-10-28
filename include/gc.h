@@ -90,6 +90,7 @@ static inline bool gc_value_ref_is_young(ant_value_t v) {
 
 static inline void gc_write_barrier(ant_t *js, ant_object_t *writer_obj, ant_value_t new_val) {
   if (writer_obj->flags.generation != 1) return;
+  if (writer_obj->flags.in_remember_set && writer_obj->type_tag != kTypeArray) return;
   if (gc_value_is_heap_ref(new_val) && gc_value_ref_is_young(new_val)) gc_remember_add(js, writer_obj);
 }
 

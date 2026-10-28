@@ -1397,8 +1397,18 @@ static inline __attribute__((always_inline)) bool eventemitter_dispatch(
   bool invoked = false;
 
   if (!evt || utarray_len(evt->listeners) == 0) return false;
-
   count = utarray_len(evt->listeners);
+  
+  if (count == 1) {
+    EventListenerEntry *entry = (EventListenerEntry *)utarray_eltptr(evt->listeners, 0);
+    ant_value_t cb = entry->callback;
+    
+    if (entry->meta == 0 && entry->dead_gen == 0 && (vtype(cb) == kTypeFunction || vtype(cb) == kTypeBuiltin)) {
+      eventemitter_call_listener_inline(js, cb, target, args, nargs);
+      return true;
+    }
+  }
+
   gen = ++evt->generation;
   evt->emitting++;
 
@@ -1477,7 +1487,9 @@ bool eventemitter_emit_args_counted(
 }
 
 static EventType *evt_ref_resolve(ant_value_t target, eventemitter_ref_t *ref) {
-  ant_event_list_t *list = is_object_type(target) ? find_emitter_events(target) : NULL;
+  ant_event_list_t *list = (ant_event_list_t *)ref->list;
+  
+  if (!list) list = is_object_type(target) ? find_emitter_events(target) : NULL;
   if (!list) return NULL;
   if (ref->list == list && ref->gen == list->types_gen) return (EventType *)ref->evt;
 
