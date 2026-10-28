@@ -115,8 +115,7 @@ bool jit_loop_has_await(const sv_func_t *func, int head) {
   for (int i = 0; i < loop_count && !found; i++) {
     if (loops[i][0] != head) continue;
     for (int off = loops[i][0]; off <= loops[i][1] && !found; off += sv_op_size[func->code[off]]) {
-      sv_op_t op = (sv_op_t)func->code[off];
-      found = op == OP_AWAIT || op == OP_AWAIT_RETURN || op == OP_AWAIT_ITER_NEXT || op == OP_FOR_AWAIT_OF;
+      found = jit_op_exits_to_interpreter((sv_op_t)func->code[off]);
     }
   }
   free(loops);
@@ -572,7 +571,7 @@ bool jit_mark_self_binding_guards(
 }
 
 bool jit_is_eligible(sv_func_t *func) {
-  if (func->is_generator || func->is_tla) return false;
+  if (func->is_generator) return false;
   
   if (func->code_len > SV_JIT_MAX_CODE_BYTES) {
     if (sv_jit_warn_unlikely) fprintf(

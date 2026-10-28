@@ -253,26 +253,20 @@ export function stringify(obj, sep, eq, options) {
 
   if (obj === null || typeof obj !== 'object') return '';
 
-  let fields = '';
+  const fields = [];
   for (const key of Object.keys(obj)) {
     const value = obj[key];
     const prefix = convert(key, encoder) + eq;
 
     if (Array.isArray(value)) {
-      if (value.length === 0) continue;
-      if (fields) fields += sep;
-      for (let j = 0; j < value.length; ++j) {
-        if (j) fields += sep;
-        fields += prefix + convert(value[j], encoder);
-      }
+      for (let j = 0; j < value.length; ++j) fields.push(prefix + convert(value[j], encoder));
       continue;
     }
 
-    if (fields) fields += sep;
-    fields += prefix + convert(value, encoder);
+    fields.push(prefix + convert(value, encoder));
   }
 
-  return fields;
+  return fields.join(sep);
 }
 
 export const encode = stringify;

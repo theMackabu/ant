@@ -441,6 +441,18 @@ void jit_emit_control(jit_compile_t *c) {
     case OP_AWAIT_ITER_NEXT:
       jit_emit_await_exit(c, 3, 5);
       break;
+    case OP_FOR_AWAIT_OF:
+      jit_emit_await_exit(c, 1, 3);
+      break;
+    case OP_ITER_CLOSE_ASYNC:
+      jit_emit_await_exit(c, 3, 1);
+      break;
+    case OP_ITER_CLOSE_CHECK:
+      jit_emit_await_exit(c, 1, 0);
+      break;
+    case OP_IMPORT_SYNC:
+      jit_emit_await_exit(c, 1, 1);
+      break;
     case OP_JMP:
     case OP_JMP8: {
       vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);

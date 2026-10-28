@@ -452,8 +452,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
     
     jit_sync_try_stack(c);
     if (!c->ok) break;
-    if ((c->op == OP_AWAIT || c->op == OP_AWAIT_RETURN || c->op == OP_AWAIT_ITER_NEXT || c->op == OP_FOR_AWAIT_OF) &&
-        jit_in_finally_body(c)) {
+    if (jit_op_exits_to_interpreter(c->op) && jit_in_finally_body(c)) {
       c->ok = false;
       break;
     }
@@ -611,6 +610,10 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_AWAIT:
       case OP_AWAIT_RETURN:
       case OP_AWAIT_ITER_NEXT:
+      case OP_FOR_AWAIT_OF:
+      case OP_ITER_CLOSE_ASYNC:
+      case OP_ITER_CLOSE_CHECK:
+      case OP_IMPORT_SYNC:
       case OP_TRY_PUSH:
       case OP_TRY_POP:
       case OP_THROW:

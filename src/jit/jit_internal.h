@@ -655,6 +655,13 @@ bool *scan_captured_params(sv_func_t *func);
 bool jit_inlineable(sv_func_t *f);
 bool jit_can_forward_arguments(sv_func_t *func);
 bool jit_loop_has_await(const sv_func_t *func, int head);
+
+static inline bool jit_op_exits_to_interpreter(sv_op_t op) {
+  return
+    op == OP_AWAIT || op == OP_AWAIT_RETURN || op == OP_AWAIT_ITER_NEXT || op == OP_FOR_AWAIT_OF ||
+    op == OP_ITER_CLOSE_ASYNC || op == OP_ITER_CLOSE_CHECK || op == OP_IMPORT_SYNC;
+}
+
 sv_jit_await_map_t *jit_await_map_build(const sv_func_t *func, const int *depth);
 bool jit_numeric_param_use(sv_func_t *func, uint8_t *ip, uint8_t *end);
 bool jit_has_immediate_numeric_local_init(sv_func_t *func, uint8_t *ip, uint8_t *end, uint16_t local_idx);
