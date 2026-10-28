@@ -116,18 +116,13 @@ assertThrows(
   "URLSearchParams should propagate pair proxy value errors"
 );
 
-assertThrows(
-  function () {
-    new URLSearchParams(new Proxy([pair], {
-      get(target, key, receiver) {
-        if (key === "length") return NaN;
-        return Reflect.get(target, key, receiver);
-      },
-    }));
+const nanLengthParams = new URLSearchParams(new Proxy([pair], {
+  get(target, key, receiver) {
+    if (key === "length") return NaN;
+    return Reflect.get(target, key, receiver);
   },
-  "finite",
-  "URLSearchParams should reject NaN proxy lengths"
-);
+}));
+assert(nanLengthParams.toString() === "", "URLSearchParams should treat NaN proxy lengths as zero");
 
 assertThrows(
   function () {

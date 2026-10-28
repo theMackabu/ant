@@ -82,112 +82,68 @@ static ant_value_t escape_arg_string(ant_native_params_t) {
   return coerce_to_str(js, value);
 }
 
-// encodeURIComponent()
-ant_value_t js_encodeURIComponent(ant_params_t) {
-  ant_value_t result;
-  char *out = NULL;
-  
-  ant_value_t value = escape_arg_string(js, args, nargs);
-  if (is_err(value)) return value;
-  
+static ant_value_t uri_encode(ant_t *js, ant_value_t value, bool keep_reserved) {
   size_t len = 0;
+  
   const char *str = js_getstr(js, value, &len);
   if (!str) return js_mkstr(js, "", 0);
-  
-  size_t out_cap = len * 12 + 1;
-  out = malloc(out_cap);
-  if (!out) return Ant_Error_CreateOutOfMemory(js);
-  
+
   size_t out_len = 0;
-  size_t i = 0;
-  
-  while (i < len) {
+  for (size_t i = 0; i < len;) {
     unsigned char c = (unsigned char)str[i];
-    
-    if (is_uri_unreserved(c)) {
-      out[out_len++] = (char)c;
+    if (is_uri_unreserved(c) || (keep_reserved && is_uri_reserved(c))) {
+      out_len++;
       i++;
       continue;
     }
-    
+
     int seq_len = utf8_sequence_length(c);
-    if (seq_len < 0) goto malformed;
-    if (i + seq_len > len) goto malformed;
-    
-    for (int j = 1; j < seq_len; j++) {
+    if (seq_len < 0 || i + (size_t)seq_len > len) goto malformed;
+    for (int j = 1; j < seq_len; j++)
       if (!is_valid_continuation((unsigned char)str[i + j])) goto malformed;
-    }
-    
-    if (is_lone_surrogate((unsigned char *)&str[i], seq_len)) goto malformed;
-    
-    for (int j = 0; j < seq_len; j++) {
-      out_len += (size_t)snprintf(out + out_len, out_cap - out_len, "%%%02X", (unsigned char)str[i + j]);
-    }
-    i += seq_len;
+    if (is_lone_surrogate((const unsigned char *)&str[i], seq_len)) goto malformed;
+
+    out_len += 3 * (size_t)seq_len;
+    i += (size_t)seq_len;
   }
+
+  if (out_len == len) return value;
+  static const char hex[] = "0123456789ABCDEF";
   
-  out[out_len] = '\0';
-  result = js_mkstr(js, out, out_len);
-  free(out);
+  char stack[512];
+  char *out = out_len <= sizeof(stack) ? stack : malloc(out_len);
+  if (!out) return Ant_Error_CreateOutOfMemory(js);
+
+  size_t pos = 0;
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)str[i];
+    if (is_uri_unreserved(c) || (keep_reserved && is_uri_reserved(c))) {
+      out[pos++] = (char)c;
+      continue;
+    }
+    out[pos++] = '%';
+    out[pos++] = hex[c >> 4];
+    out[pos++] = hex[c & 15];
+  }
+
+  ant_value_t result = js_mkstr_ascii(js, out, out_len);
+  if (out != stack) free(out);
   return result;
 
 malformed:
-  free(out);
   return js_mkerr_typed(js, JS_ERR_URI, "URI malformed");
+}
+
+// encodeURIComponent()
+ant_value_t js_encodeURIComponent(ant_params_t) {
+  ant_value_t value = escape_arg_string(js, args, nargs);
+  return is_err(value) ? value : uri_encode(js, value, false);
 }
 
 // encodeURI()
 ant_value_t js_encodeURI(ant_params_t) {
-  ant_value_t result;
-  char *out = NULL;
-  
   ant_value_t value = escape_arg_string(js, args, nargs);
-  if (is_err(value)) return value;
-  
-  size_t len = 0;
-  const char *str = js_getstr(js, value, &len);
-  if (!str) return js_mkstr(js, "", 0);
-  
-  size_t out_cap = len * 12 + 1;
-  out = malloc(out_cap);
-  if (!out) return Ant_Error_CreateOutOfMemory(js);
-  
-  size_t out_len = 0;
-  size_t i = 0;
-  
-  while (i < len) {
-    unsigned char c = (unsigned char)str[i];
-    
-    if (is_uri_unreserved(c) || is_uri_reserved(c)) {
-      out[out_len++] = (char)c;
-      i++;
-      continue;
-    }
-    
-    int seq_len = utf8_sequence_length(c);
-    if (seq_len < 0) goto malformed;
-    if (i + seq_len > len) goto malformed;
-    
-    for (int j = 1; j < seq_len; j++) {
-      if (!is_valid_continuation((unsigned char)str[i + j])) goto malformed;
-    }
-    
-    if (is_lone_surrogate((unsigned char *)&str[i], seq_len)) goto malformed;
-    
-    for (int j = 0; j < seq_len; j++) {
-      out_len += (size_t)snprintf(out + out_len, out_cap - out_len, "%%%02X", (unsigned char)str[i + j]);
-    }
-    i += seq_len;
-  }
-  
-  out[out_len] = '\0';
-  result = js_mkstr(js, out, out_len);
-  free(out);
-  return result;
-
-malformed:
-  free(out);
-  return js_mkerr_typed(js, JS_ERR_URI, "URI malformed");
+  return is_err(value) ? value : uri_encode(js, value, true);
 }
 
 // decodeURIComponent()

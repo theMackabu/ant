@@ -793,7 +793,44 @@ static inline void sv_gf_ic_note_miss(sv_ic_entry_t *ic) {
     sv_gf_ic_pack_aux(warmup, miss, active);
 }
 
+static inline bool sv_getprop_interned_plain(ant_t *js, ant_value_t obj, ant_value_t key, ant_value_t *out) {
+  if (vtype(key) != kTypeString || vtype(obj) != kTypeObject || str_is_heap_rope(key) || str_is_heap_builder(key)) return false;
+
+  ant_offset_t len = 0;
+  const char *bytes = (const char *)(uintptr_t)vstr(js, key, &len);
+  const char *interned = intern_find_flat(js, bytes, (size_t)len);
+  if (!interned) return false;
+
+  ant_value_t cur = obj;
+  for (int depth = 0; depth < 8; depth++) {
+    ant_object_t *ptr = js_obj_ptr(cur);
+    if (!ptr || !ptr->shape || ptr->flags.is_exotic || ptr->exotic_ops || is_proxy(cur)) return false;
+
+    int32_t slot = ant_shape_lookup_interned(ptr->shape, interned);
+    if (slot >= 0) {
+      if ((uint32_t)slot >= ptr->prop_count) return false;
+      const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
+      if (!prop || prop->has_getter || prop->has_setter) return false;
+      *out = ant_object_prop_get_unchecked(ptr, (uint32_t)slot);
+      return true;
+    }
+
+    if (ptr->extra_slots && vtype(js_string_wrapper_value(cur)) == kTypeString) return false;
+    cur = ptr->proto;
+    if (vtype(cur) == kTypeNull) {
+      *out = js_mkundef();
+      return true;
+    }
+    if (vtype(cur) != kTypeObject) return false;
+  }
+
+  return false;
+}
+
 static inline ant_value_t sv_getprop_by_key(ant_t *js, ant_value_t obj, ant_value_t key) {
+  ant_value_t own;
+  if (sv_getprop_interned_plain(js, obj, key, &own)) return own;
+
   ant_value_t prop_key = sv_key_to_property_key(js, key);
   if (is_err(prop_key)) return prop_key;
   if (vtype(prop_key) == kTypeSymbol) return js_get_sym(js, obj, prop_key);
