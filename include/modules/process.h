@@ -26,7 +26,7 @@ void process_refresh_sandbox_argv(ant_t *js);
 void process_set_sandbox_terminal(ant_t *js, uint32_t capabilities, uint16_t rows, uint16_t cols);
 
 void process_enable_keypress_events(ant_t *js);
-void emit_process_event(ant_t *js, const char *event_type, ant_value_t *args, int nargs);
+void emit_process_event(ant_t *js, const char *event_type, ant_args_t);
 
 bool has_active_stdin(ant_t *js);
 bool process_report_uncaught_exception(ant_t *js);

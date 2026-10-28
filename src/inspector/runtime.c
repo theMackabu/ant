@@ -890,7 +890,7 @@ oom:
   inspector_send_error(client, id, -32000, "Out of memory");
 }
 
-void ant_inspector_console_api_called(ant_t *js, const char *level, ant_value_t *args, int nargs) {
+void ant_inspector_console_api_called(ant_t *js, const char *level, ant_args_t) {
   if (!g_inspector.started) return;
   sbuf_t b = {0};
   if (!sbuf_append(&b, "{\"method\":\"Runtime.consoleAPICalled\",\"params\":{\"type\":")) goto done;

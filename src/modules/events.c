@@ -558,8 +558,8 @@ static int eventemitter_get_max_listeners_impl(ant_value_t target) {
   return EVENTS_DEFAULT_MAX_LISTENERS;
 }
 
-static inline __attribute__((always_inline)) ant_value_t eventemitter_call_listener_inline(
-  ant_t *js, ant_value_t listener, ant_value_t this_val, ant_value_t *args, int nargs
+static inline __attribute__((always_inline)) ant_value_t eventemitter_call_listener(
+  ant_t *js, ant_value_t listener, ant_value_t this_val, ant_args_t
 ) {
   if (!is_callable(listener)) return js_mkundef();
   if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
@@ -569,23 +569,14 @@ static inline __attribute__((always_inline)) ant_value_t eventemitter_call_liste
     if (sv_closure_fast_callable(closure)) return sv_call_closure_fast(js, listener, closure, this_val, args, nargs);
   }
 
-  const ant_cfunc_meta_t *meta = sv_native_closure_meta(listener);
-  if (meta && sv_native_direct_allowed(js))
-    return Ant_Silver_FinishNativeCall(js, sv_call_native_closure(js, listener, meta, this_val, args, nargs));
+  ant_value_t cfunc = sv_native_closure_cfunc(listener);
+  if (cfunc && sv_native_direct_allowed(js))
+    return sv_call_native_closure(js, listener, cfunc, this_val, args, nargs, js_mkundef());
 
   return sv_vm_call_mode(
     js->vm, js, listener, this_val, args, nargs,
     NULL, SV_CALL_MODE_NORMAL, js_mkundef()
   );
-}
-
-static ant_value_t eventemitter_call_listener(
-  ant_t *js,
-  ant_value_t listener,
-  ant_value_t this_val,
-  ant_value_t *args, int nargs
-) {
-  return eventemitter_call_listener_inline(js, listener, this_val, args, nargs);
 }
 
 static ant_value_t js_eventemitter_once_wrapper(ant_params_t) {
@@ -676,11 +667,12 @@ static void event_set_value(ant_t *js, ant_value_t event, ant_value_t *slot, ant
 }
 
 static ant_value_t event_construct(
-  ant_t *js, ant_value_t *args, int nargs, ant_value_t new_target,
+  ant_native_params_t, ant_value_t new_target,
   ant_event_kind_t kind, const char *name, ant_value_t *init_out
 ) {
   if (vtype(new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "%s constructor requires 'new'", name);
+  
   if (nargs < 1 || vtype(args[0]) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "%s constructor: type argument is required", name);
 
@@ -689,11 +681,14 @@ static ant_value_t event_construct(
 
   ant_value_t init = nargs >= 2 && vtype(args[1]) == kTypeObject ? args[1] : js_mkundef();
   bool bubbles = false, cancelable = false;
+  
   if (is_object_type(init)) {
     ant_value_t b = js_get(js, init, "bubbles");
     if (is_err(b)) return b;
+    
     ant_value_t c = js_get(js, init, "cancelable");
     if (is_err(c)) return c;
+    
     bubbles = js_truthy(js, b);
     cancelable = js_truthy(js, c);
   }
@@ -711,11 +706,14 @@ static ant_value_t event_init_field(
   const char *key, unsigned int index, ant_value_t fallback, bool to_string
 ) {
   ant_value_t value = is_object_type(init) ? js_get(js, init, key) : js_mkundef();
+  
   if (is_err(value)) return value;
   if (vtype(value) == kTypeUndefined) value = fallback;
   else if (to_string) value = js_tostring_val(js, value);
+  
   if (is_err(value)) return value;
   Ant_Event_SetField(js, event, index, value);
+  
   return js_mkundef();
 }
 
@@ -728,23 +726,28 @@ static ant_value_t js_event_ctor(ant_params_t) {
 static ant_value_t js_customevent_ctor(ant_params_t) {
   ant_value_t init;
   ant_value_t event = event_construct(js, args, nargs, call_new_target, ANT_EVENT_CUSTOM, "CustomEvent", &init);
+  
   if (is_err(event)) return event;
   ant_value_t r = event_init_field(js, event, init, "detail", ANT_EVENT_FIELD_CUSTOM_detail, js_mknull(), false);
+  
   return is_err(r) ? r : js_mkundef();
 }
 
 static ant_value_t js_errorevent_ctor(ant_params_t) {
   ant_value_t init;
+  
   ant_value_t event = event_construct(js, args, nargs, call_new_target, ANT_EVENT_ERROR, "ErrorEvent", &init);
   if (is_err(event)) return event;
   
   ant_value_t empty = js_mkstr(js, "", 0);
   ant_value_t r;
-  if (is_err(r = event_init_field(js, event, init, "message",  ANT_EVENT_FIELD_ERROR_message,  empty, true)))  return r;
-  if (is_err(r = event_init_field(js, event, init, "filename", ANT_EVENT_FIELD_ERROR_filename, empty, true)))  return r;
-  if (is_err(r = event_init_field(js, event, init, "lineno",   ANT_EVENT_FIELD_ERROR_lineno,   js_mknum(0), false))) return r;
-  if (is_err(r = event_init_field(js, event, init, "colno",    ANT_EVENT_FIELD_ERROR_colno,    js_mknum(0), false))) return r;
-  if (is_err(r = event_init_field(js, event, init, "error",    ANT_EVENT_FIELD_ERROR_error,    js_mkundef(), false))) return r;
+  
+  if (is_err(r = event_init_field(js, event, init, "message", ANT_EVENT_FIELD_ERROR_message,  empty, true))) return r;
+  if (is_err(r = event_init_field(js, event, init, "filename", ANT_EVENT_FIELD_ERROR_filename, empty, true))) return r;
+  if (is_err(r = event_init_field(js, event, init, "lineno", ANT_EVENT_FIELD_ERROR_lineno, js_mknum(0), false))) return r;
+  if (is_err(r = event_init_field(js, event, init, "colno", ANT_EVENT_FIELD_ERROR_colno, js_mknum(0), false))) return r;
+  if (is_err(r = event_init_field(js, event, init, "error", ANT_EVENT_FIELD_ERROR_error, js_mkundef(), false))) return r;
+  
   return js_mkundef();
 }
 
@@ -756,15 +759,16 @@ static ant_value_t js_promiserejectionevent_ctor(ant_params_t) {
   ant_value_t r;
   if (is_err(r = event_init_field(js, event, init, "promise", ANT_EVENT_FIELD_PROMISE_REJECTION_promise, js_mkundef(), false))) return r;
   if (is_err(r = event_init_field(js, event, init, "reason",  ANT_EVENT_FIELD_PROMISE_REJECTION_reason,  js_mkundef(), false))) return r;
+  
   return js_mkundef();
 }
 
-#define EVENT_VALUE_GETTER(field) \
-  static ant_value_t event_get_##field(ant_params_t) { \
-    event_data_t *data = get_event_data(js_getthis(js)); \
-    return data ? data->field : event_this_error(js); \
-  } \
-  static const ant_native_getter_t event_##field##_getter = { \
+#define EVENT_VALUE_GETTER(field)                                                                \
+  static ant_value_t event_get_##field(ant_params_t) {                                           \
+    event_data_t *data = get_event_data(js_getthis(js));                                         \
+    return data ? data->field : event_this_error(js);                                            \
+  }                                                                                              \
+  static const ant_native_getter_t event_##field##_getter = {                                    \
     .meta = { event_get_##field, NULL, 0, CFUNC_NATIVE_GETTER }, .native_tag = EVENT_NATIVE_TAG, \
     .kind = ANT_NATIVE_GETTER_FIELD, .field_offset = offsetof(event_data_t, field) };
 
@@ -774,10 +778,10 @@ EVENT_VALUE_GETTER(current_target)
 EVENT_VALUE_GETTER(phase)
 EVENT_VALUE_GETTER(time_stamp)
 
-#define EVENT_FLAG_GETTER(name, expr) \
-  static ant_value_t event_get_##name(ant_params_t) { \
+#define EVENT_FLAG_GETTER(name, expr)                    \
+  static ant_value_t event_get_##name(ant_params_t) {    \
     event_data_t *data = get_event_data(js_getthis(js)); \
-    return data ? js_bool(expr) : event_this_error(js); \
+    return data ? js_bool(expr) : event_this_error(js);  \
   }
 
 EVENT_FLAG_GETTER(bubbles, data->bubbles)
@@ -1284,9 +1288,8 @@ void js_dispatch_global_event(ant_t *js, ant_value_t event_obj) {
   dispatch_event_to(js, event_obj, evt, js_glob(js));
 }
 
-static bool eventemitter_add_listener_impl(
-  ant_t *js,
-  ant_value_t target, ant_value_t key,
+bool eventemitter_add_listener_val(
+  ant_t *js, ant_value_t target, ant_value_t key,
   ant_value_t listener, bool once, bool prepend
 ) {
   EventType *evt = NULL;
@@ -1387,11 +1390,8 @@ static ant_value_t js_eventemitter_off(ant_params_t) {
   return this_obj;
 }
 
-static inline __attribute__((always_inline)) bool eventemitter_dispatch(
-  ant_t *js,
-  ant_value_t target, EventType *evt,
-  ant_value_t *args, int nargs
-) {
+static inline __attribute__((always_inline)) 
+bool eventemitter_dispatch(ant_t *js, ant_value_t target, EventType *evt, ant_args_t) {
   unsigned int count = 0;
   uint32_t gen = 0;
   bool invoked = false;
@@ -1404,7 +1404,7 @@ static inline __attribute__((always_inline)) bool eventemitter_dispatch(
     ant_value_t cb = entry->callback;
     
     if (entry->meta == 0 && entry->dead_gen == 0 && (vtype(cb) == kTypeFunction || vtype(cb) == kTypeBuiltin)) {
-      eventemitter_call_listener_inline(js, cb, target, args, nargs);
+      eventemitter_call_listener(js, cb, target, args, nargs);
       return true;
     }
   }
@@ -1430,7 +1430,7 @@ static inline __attribute__((always_inline)) bool eventemitter_dispatch(
     }
 
     if (vtype(cb) != kTypeFunction && vtype(cb) != kTypeBuiltin) continue;
-    ant_value_t result = eventemitter_call_listener_inline(js, cb, target, args, nargs);
+    ant_value_t result = eventemitter_call_listener(js, cb, target, args, nargs);
     invoked = true;
 
     if (is_err(result) || Ant_Exception_Pending(js)) break;
@@ -1462,28 +1462,9 @@ static ant_value_t js_eventemitter_emit(ant_params_t) {
   return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : js_bool(invoked);
 }
 
-bool eventemitter_emit_args(
-  ant_t *js,
-  ant_value_t target, const char *event_type,
-  ant_value_t *args, int nargs
-) {
+bool eventemitter_emit_args(ant_t *js, ant_value_t target, const char *event_type, ant_args_t) {
   if (!is_object_type(target) || !event_type) return false;
-  return eventemitter_dispatch(
-    js, target,
-    find_emitter_event_type_cstr_cached(target, event_type),
-    args, nargs
-  );
-}
-
-bool eventemitter_emit_args_counted(
-  ant_t *js, ant_value_t target, const char *event_type,
-  ant_value_t *args, int nargs, ant_offset_t *before, ant_offset_t *after
-) {
-  EventType *evt = is_object_type(target) && event_type ? find_emitter_event_type_cstr_cached(target, event_type) : NULL;
-  *before = (ant_offset_t)evt_live_count(evt);
-  bool invoked = evt ? eventemitter_dispatch(js, target, evt, args, nargs) : false;
-  *after = (ant_offset_t)evt_live_count(evt);
-  return invoked;
+  return eventemitter_dispatch(js, target, find_emitter_event_type_cstr_cached(target, event_type), args, nargs);
 }
 
 static EventType *evt_ref_resolve(ant_value_t target, eventemitter_ref_t *ref) {
@@ -1501,19 +1482,19 @@ static EventType *evt_ref_resolve(ant_value_t target, eventemitter_ref_t *ref) {
   return evt;
 }
 
-bool eventemitter_emit_ref(ant_t *js, ant_value_t target, eventemitter_ref_t *ref, ant_value_t *args, int nargs) {
+bool eventemitter_emit_ref(ant_t *js, ant_value_t target, eventemitter_ref_t *ref, ant_args_t) {
   EventType *evt = evt_ref_resolve(target, ref);
   return evt ? eventemitter_dispatch(js, target, evt, args, nargs) : false;
 }
 
 bool eventemitter_emit_ref_counted(
   ant_t *js, ant_value_t target, eventemitter_ref_t *ref,
-  ant_value_t *args, int nargs, ant_offset_t *before, ant_offset_t *after
+  ant_args_t, ant_offset_t *before, ant_offset_t *after
 ) {
   EventType *evt = evt_ref_resolve(target, ref);
   *before = (ant_offset_t)evt_live_count(evt);
   bool invoked = evt ? eventemitter_dispatch(js, target, evt, args, nargs) : false;
-  *after = (ant_offset_t)evt_live_count(evt);
+  *after = (ant_offset_t)evt_live_count(evt_ref_resolve(target, ref));
   return invoked;
 }
 
@@ -1529,49 +1510,33 @@ ant_offset_t eventemitter_listener_count_ref(ant_value_t target, eventemitter_re
   return (ant_offset_t)evt_live_count(evt_ref_resolve(target, ref));
 }
 
-bool eventemitter_add_listener_val(
-  ant_t *js,
-  ant_value_t target, ant_value_t key,
-  ant_value_t listener, bool once
-) {
-  return eventemitter_add_listener_impl(js, target, key, listener, once, false);
-}
-
 bool eventemitter_set_listener_change_hook(
-  ant_t *js,
-  ant_value_t target,
-  eventemitter_listener_change_fn hook,
-  void *context
+  ant_t *js, ant_value_t target,
+  eventemitter_listener_change_fn hook, void *context
 ) {
   ant_event_list_t *events = NULL;
   if (!is_object_type(target)) return false;
+  
   events = get_or_create_emitter_events(js, target);
   if (!events) return false;
+  
   events->listener_change_hook = hook;
   events->listener_change_context = context;
+  
   return true;
 }
 
-bool eventemitter_add_listener(
-  ant_t *js,
-  ant_value_t target, const char *event_type,
-  ant_value_t listener, bool once
-) {
-  return eventemitter_add_listener_val(js, target, js_mkstr(js, event_type, strlen(event_type)), listener, once);
+bool eventemitter_add_listener(ant_t *js, ant_value_t target, const char *event_type, ant_value_t listener, bool once) {
+  return eventemitter_add_listener_val(js, target, js_mkstr(js, event_type, strlen(event_type)), listener, once, false);
 }
 
-bool eventemitter_remove_listener_val(
-  ant_t *js,
-  ant_value_t target, ant_value_t key,
-  ant_value_t listener
-) {
+bool eventemitter_remove_listener_val(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t listener) {
   return eventemitter_remove_listener_impl(js, target, key, listener);
 }
 
 bool eventemitter_remove_listener(
-  ant_t *js,
-  ant_value_t target, const char *event_type,
-  ant_value_t listener
+  ant_t *js, ant_value_t target, 
+  const char *event_type, ant_value_t listener
 ) {
   ant_event_list_t *events = NULL;
   EventType *evt = NULL;
@@ -1623,7 +1588,7 @@ static ant_value_t js_eventemitter_add(ant_native_params_t, bool once, bool prep
   ant_value_t key = evt_key_from_arg(args[0]);
   
   if (!key) return js_mkerr(js, "event must be a string or Symbol");
-  if (!eventemitter_add_listener_impl(js, js_getthis(js), key, args[1], once, prepend))
+  if (!eventemitter_add_listener_val(js, js_getthis(js), key, args[1], once, prepend))
     return js_mkerr(js, "listener must be a function");
     
   return js_getthis(js);
@@ -2193,7 +2158,9 @@ static ant_value_t js_events_on(ant_params_t) {
         return registered;
       }
     }
-  } else if (is_eventtarget_instance(target)) eventemitter_add_listener_val(js, target, key, listener, false);
+  } 
+  
+  else if (is_eventtarget_instance(target)) eventemitter_add_listener_val(js, target, key, listener, false, false);
   else return js_mkerr_typed(js, JS_ERR_TYPE, "target is not an EventEmitter or EventTarget");
 
   if (abort_signal_is_signal(signal)) {

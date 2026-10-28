@@ -113,7 +113,7 @@ static timer_entry_t *find_timer_entry_by_id(ant_t *js, int timer_id) {
   return NULL;
 }
 
-static int timer_copy_args(timer_entry_t *entry, ant_value_t *args, int nargs) {
+static int timer_copy_args(timer_entry_t *entry, ant_args_t) {
   entry->nargs = nargs > 2 ? nargs - 2 : 0;
   if (entry->nargs > 0) {
     entry->args = calloc(1, sizeof(ant_value_t) * entry->nargs);
@@ -1012,7 +1012,7 @@ void queue_microtask(ant_t *js, ant_value_t callback) {
   queue_job(js, entry);
 }
 
-void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_value_t *args, int nargs) {
+void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_args_t) {
   if (nargs <= 0) { queue_microtask(js, callback); return; }
   
   microtask_entry_t *entry = microtask_entry_new(js, nargs);
@@ -1108,7 +1108,7 @@ void queue_next_tick(ant_t *js, ant_value_t callback) {
   queue_microtask_entry(&js->timers.next_ticks, &js->timers.next_ticks_tail, entry);
 }
 
-void queue_next_tick_with_args(ant_t *js, ant_value_t callback, ant_value_t *args, int nargs) {
+void queue_next_tick_with_args(ant_t *js, ant_value_t callback, ant_args_t) {
   if (nargs <= 0) { queue_next_tick(js, callback); return; }
 
   microtask_entry_t *entry = microtask_entry_new(js, nargs);

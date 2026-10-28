@@ -130,13 +130,14 @@ static ant_value_t dns_resolver_option(ant_t *js, ant_value_t options, const cha
   return js_mkundef();
 }
 
-static ant_value_t dns_resolver_construct(ant_t *js, ant_value_t *args, int nargs, ant_value_t new_target, ant_value_t fallback_proto) {
+static ant_value_t dns_resolver_construct(ant_native_params_t, ant_value_t new_target, ant_value_t fallback_proto) {
   if (!is_object_type(new_target))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Class constructor Resolver cannot be invoked without 'new'");
 
   ant_value_t options = nargs > 0 ? args[0] : js_mkundef();
   int timeout = -1, tries = 4;
   ant_value_t r = dns_resolver_option(js, options, "timeout", -1, -1, &timeout);
+  
   if (is_err(r)) return r;
   if (is_err(r = dns_resolver_option(js, options, "tries", 1, 4, &tries))) return r;
 
@@ -150,11 +151,12 @@ static ant_value_t dns_resolver_construct(ant_t *js, ant_value_t *args, int narg
   }
 
   (*cell)->owner_ref = cell;
-
   ant_value_t obj = Ant_Object_CreateBare(js);
+  
   js_set_proto_init(obj, js_instance_proto_from_new_target(js, fallback_proto, new_target));
   js_set_native(obj, cell, DNS_RESOLVER_NATIVE_TAG);
   js_set_finalizer(obj, dns_resolver_finalize);
+  
   return obj;
 }
 

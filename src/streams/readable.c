@@ -629,12 +629,7 @@ static ant_value_t js_rs_reader_cancel(ant_params_t) {
   return readable_stream_cancel(js, stream_obj, reason);
 }
 
-ant_value_t js_rs_reader_ctor(ant_params_t) {
-  if (vtype(call_new_target) == kTypeUndefined)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStreamDefaultReader constructor requires 'new'");
-  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStreamDefaultReader requires a stream argument");
-
-  ant_value_t stream_obj = args[0];
+ant_value_t rs_reader_create(ant_t *js, ant_value_t stream_obj, ant_value_t new_target) {
   if (!rs_is_stream(stream_obj))
     return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStreamDefaultReader argument must be a ReadableStream");
     
@@ -646,7 +641,7 @@ ant_value_t js_rs_reader_ctor(ant_params_t) {
   promise_mark_handled(closed);
   
   ant_value_t obj = Ant_Object_CreateBare(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.reader_proto, call_new_target);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.reader_proto, new_target);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM_READER));
@@ -661,6 +656,13 @@ ant_value_t js_rs_reader_ctor(ant_params_t) {
     js_reject_promise(js, closed, rs_stream_error(stream_obj));
 
   return obj;
+}
+
+ant_value_t js_rs_reader_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStreamDefaultReader constructor requires 'new'");
+  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStreamDefaultReader requires a stream argument");
+  return rs_reader_create(js, args[0], call_new_target);
 }
 
 static ant_value_t js_rs_get_locked(ant_params_t) {
@@ -701,8 +703,7 @@ static ant_value_t js_rs_get_reader(ant_params_t) {
     }
   }
 
-  ant_value_t reader_args[1] = { js->this_val };
-  return js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
+  return rs_reader_create(js, js->this_val, js_mkundef());
 }
 
 static ant_value_t js_rs_async_iter_next(ant_params_t) {

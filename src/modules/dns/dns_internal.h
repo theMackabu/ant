@@ -99,10 +99,10 @@ ant_value_t dns_error(ant_t *js, const char *syscall, const char *code, int errn
 ant_value_t dns_ares_error(ant_t *js, int status, const char *syscall, const char *hostname);
 ant_value_t dns_uv_error(ant_t *js, int status, const char *syscall, const char *hostname);
 ant_value_t dns_parse_result_order(ant_t *js, ant_value_t value, dns_order_t *out);
-ant_value_t dns_lookup_impl(ant_t *js, ant_value_t *args, int nargs, bool promises);
-ant_value_t dns_lookup_service_impl(ant_t *js, ant_value_t *args, int nargs, bool promises);
-ant_value_t dns_resolve_impl(ant_t *js, ant_value_t *args, int nargs, int rr, bool promises);
-ant_value_t dns_reverse_impl(ant_t *js, ant_value_t *args, int nargs, bool promises);
+ant_value_t dns_lookup_impl(ant_native_params_t, bool promises);
+ant_value_t dns_lookup_service_impl(ant_native_params_t, bool promises);
+ant_value_t dns_resolve_impl(ant_native_params_t, int rr, bool promises);
+ant_value_t dns_reverse_impl(ant_native_params_t, bool promises);
 ant_value_t dns_channel_get_servers(ant_t *js, dns_channel_t *channel);
 ant_value_t dns_channel_set_servers(ant_t *js, dns_channel_t *channel, ant_value_t servers);
 

@@ -16,8 +16,7 @@ ant_value_t js_symbol_description_value(ant_t *js, ant_value_t symbol);
 
 ant_value_t maybe_call_symbol_method(
   ant_t *js, ant_value_t target, ant_value_t sym,
-  ant_value_t this_arg, ant_value_t *args,
-  int nargs, bool *called
+  ant_value_t this_arg, ant_args_t, bool *called
 );
 
 static inline ant_value_t sym_this_cb(ant_params_t) {

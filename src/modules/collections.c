@@ -833,7 +833,7 @@ static ant_value_t collection_receiver_error(ant_t *js, const char *method) {
   return js_mkerr_typed(js, JS_ERR_TYPE, "Method %s called on incompatible receiver", method);
 }
 
-static inline ant_value_t collection_arg(ant_value_t *args, int nargs, int i) {
+static inline ant_value_t collection_arg(ant_args_t, int i) {
   return i < nargs ? args[i] : js_mkundef();
 }
 

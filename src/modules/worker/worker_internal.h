@@ -137,9 +137,11 @@ void worker_flush_online(ant_t *js, ant_worker_t *w);
 char *worker_resolve_entry(ant_t *js, ant_value_t spec, worker_entry_mode_t mode, ant_value_t *error);
 ant_value_t worker_read_options(ant_t *js, ant_worker_t *w, ant_value_t options);
 ant_value_t worker_limits_object(ant_t *js, const double limits[WORKER_LIMIT_COUNT], double unset);
+
 ant_value_t worker_environment_map(ant_t *js);
-ant_value_t worker_transfer_arg(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t worker_transfer_arg(ant_native_params_t);
 ant_value_t worker_start(ant_t *js, ant_worker_t *w);
+ant_value_t worker_post_message_to_thread(ant_native_params_t);
 
 ant_value_t worker_parent_port(ant_t *js);
 ant_value_t worker_error_value(ant_t *js, worker_event_t *e);
@@ -151,7 +153,6 @@ void worker_stdio_parent_init(ant_t *js, ant_worker_t *w);
 void worker_stdio_forward(ant_t *js, ant_worker_t *w, worker_event_t *e);
 void worker_stdio_end(ant_t *js, ant_worker_t *w);
 
-ant_value_t worker_post_message_to_thread(ant_t *js, ant_value_t *args, int nargs);
 void worker_messaging_close(ant_t *js);
 void worker_messaging_gc_mark(ant_t *js, gc_mark_fn mark);
 

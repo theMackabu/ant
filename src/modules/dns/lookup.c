@@ -198,9 +198,10 @@ static void dns_getaddrinfo_cb(uv_getaddrinfo_t *uvreq, int status, struct addri
   GC_ROOT_RESTORE(js, mark);
 }
 
-ant_value_t dns_lookup_impl(ant_t *js, ant_value_t *args, int nargs, bool promises) {
+ant_value_t dns_lookup_impl(ant_native_params_t, bool promises) {
   ant_value_t hostname = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t options = nargs > 1 ? args[1] : js_mkundef();
+  
   ant_value_t callback = promises ? js_mkundef() : nargs > 2 ? args[2] : js_mkundef();
   dns_lookup_options_t opts = { .order = (dns_order_t)js->dns_result_order };
   ant_value_t r;
@@ -311,10 +312,10 @@ static void dns_getnameinfo_cb(uv_getnameinfo_t *uvreq, int status, const char *
   GC_ROOT_RESTORE(js, mark);
 }
 
-ant_value_t dns_lookup_service_impl(ant_t *js, ant_value_t *args, int nargs, bool promises) {
+ant_value_t dns_lookup_service_impl(ant_native_params_t, bool promises) {
   if (nargs < (promises ? 2 : 3)) return js_mkerr_code(
-    js, JS_ERR_TYPE, "ERR_MISSING_ARGS",
-    promises ? "The \"address\" and \"port\" arguments must be specified"
+    js, JS_ERR_TYPE, "ERR_MISSING_ARGS", promises 
+      ? "The \"address\" and \"port\" arguments must be specified"
       : "The \"address\", \"port\", and \"callback\" arguments must be specified"
   );
 

@@ -12,10 +12,8 @@
 
 static constexpr int SV_CALL_INLINE_ARGS_CAP = 4;
 
-ant_value_t Ant_Silver_InvokeNativeScoped(
-  ant_t *js, ant_cfunc_t fn, ant_value_t *args,
-  int nargs, ant_value_t new_target
-);
+ant_value_t Ant_Silver_InvokeNativeScoped(ant_t *js, ant_cfunc_t fn, ant_call_params_t);
+ant_value_t sv_invoke_builtin_in_realm(ant_t *js, const ant_cfunc_meta_t *meta, ant_call_params_t);
 
 static inline ant_value_t Ant_Silver_FinishNativeCall(ant_t *js, ant_value_t result) {
   if (is_err(result)) Ant_Exception_Set(js, result);
@@ -27,10 +25,7 @@ static inline bool sv_check_c_stack_overflow(ant_t *js) {
   return (uintptr_t)__builtin_frame_address(0) < (uintptr_t)js->cstk.floor;
 }
 
-static inline ant_value_t sv_invoke_native(
-  ant_t *js, ant_cfunc_t fn, ant_value_t *args,
-  int nargs, ant_value_t new_target
-) {
+static inline ant_value_t sv_invoke_native(ant_t *js, ant_cfunc_t fn, ant_call_params_t) {
   if (__builtin_expect(sv_check_c_stack_overflow(js), 0))
     return Ant_Error_CreateStackOverflow(js);
 
@@ -52,15 +47,7 @@ static inline ant_value_t sv_invoke_native(
   return Ant_Silver_FinishNativeCall(js, result);
 }
 
-ant_value_t sv_invoke_builtin_in_realm(
-  ant_t *js, const ant_cfunc_meta_t *meta, ant_value_t *args,
-  int nargs, ant_value_t new_target
-);
-
-static inline ant_value_t sv_invoke_builtin(
-  ant_t *js, ant_value_t builtin, ant_value_t *args,
-  int nargs, ant_value_t new_target
-) {
+static inline ant_value_t sv_invoke_builtin(ant_t *js, ant_value_t builtin, ant_call_params_t) {
   const ant_cfunc_meta_t *meta = js_as_cfunc_meta(builtin);
   if (__builtin_expect(ant_cfunc_meta_realm(meta) != js->builtin_realm, 0))
     return sv_invoke_builtin_in_realm(js, meta, args, nargs, new_target);
@@ -299,8 +286,7 @@ ant_value_t sv_vm_call_explicit_this(
 );
 
 static inline ant_value_t sv_call_native_this(
-  ant_t *js, ant_cfunc_t fn, ant_value_t this_val,
-  ant_value_t *args, int nargs
+  ant_t *js, ant_cfunc_t fn, ant_value_t this_val, ant_args_t
 ) {
   ant_value_t saved_this = js->this_val;
   js->this_val = this_val;
@@ -313,7 +299,7 @@ static inline ant_value_t sv_call_native_this(
 
 static inline ant_value_t sv_call_builtin_this(
   ant_t *js, ant_value_t builtin, ant_value_t this_val,
-  ant_value_t *args, int nargs, ant_value_t new_target
+  ant_call_params_t
 ) {
   ant_value_t saved_this = js->this_val;
   js->this_val = this_val;
@@ -324,13 +310,14 @@ static inline ant_value_t sv_call_builtin_this(
   return result;
 }
 
-static inline const ant_cfunc_meta_t *sv_native_closure_meta(ant_value_t func) {
-  if (vtype(func) != kTypeFunction) return NULL;
+static inline ant_value_t sv_native_closure_cfunc(ant_value_t func) {
+  if (vtype(func) != kTypeFunction) return 0;
+  
   sv_closure_t *closure = js_func_closure(func);
-  if (closure->func || closure->call_flags) return NULL;
+  if (closure->func || closure->call_flags) return 0;
 
   ant_extra_slot_t *slot = ant_object_extra_slot((ant_object_t *)vptr(js_func_obj(func)), SLOT_CFUNC);
-  return slot && vtype(slot->value) == kTypeBuiltin ? js_as_cfunc_meta(slot->value) : NULL;
+  return slot && vtype(slot->value) == kTypeBuiltin ? slot->value : 0;
 }
 
 static inline bool sv_native_direct_allowed(const ant_t *js) {
@@ -338,25 +325,23 @@ static inline bool sv_native_direct_allowed(const ant_t *js) {
 }
 
 static inline ant_value_t sv_call_native_closure(
-  ant_t *js, ant_value_t func, const ant_cfunc_meta_t *meta,
-  ant_value_t this_val, ant_value_t *args, int nargs
+  ant_t *js, ant_value_t func, ant_value_t cfunc, 
+  ant_value_t this_val, ant_call_params_t
 ) {
+  // TODO: frame?
   ant_value_t saved_func = js->current_func;
   ant_value_t saved_this = js->this_val;
   js->current_func = func;
   js->this_val = this_val;
 
-  ant_value_t result = meta->fn(js, args, nargs, js_mkundef());
+  ant_value_t result = sv_invoke_builtin(js, cfunc, args, nargs, new_target);
   js->current_func = saved_func;
   js->this_val = saved_this;
 
   return result;
 }
 
-static inline ant_value_t sv_call_value(
-  ant_t *js, ant_value_t fn, ant_value_t this_val,
-  ant_value_t *args, int nargs
-) {
+static inline ant_value_t sv_call_value(ant_t *js, ant_value_t fn, ant_value_t this_val, ant_args_t) {
   if (vtype(fn) == kTypeBuiltin) return sv_call_builtin_this(js, fn, this_val, args, nargs, js_mkundef());
   return sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, js_mkundef());
 }
@@ -531,7 +516,7 @@ static inline bool sv_closure_fast_callable(const sv_closure_t *closure) {
 
 static inline ant_value_t sv_call_closure_fast(
   ant_t *js, ant_value_t func, sv_closure_t *closure,
-  ant_value_t this_val, ant_value_t *args, int nargs
+  ant_value_t this_val, ant_args_t
 ) {
   sv_call_ctx_t ctx = {
     .this_val = (closure->call_flags & SV_CALL_IS_ARROW) ? closure->bound_this : this_val,

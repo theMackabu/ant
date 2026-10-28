@@ -160,14 +160,12 @@ static child_stream_ctx_t *get_child_stream_ctx(ant_value_t obj) {
   return (child_stream_ctx_t *)js_get_native(obj, CHILD_STREAM_NATIVE_TAG);
 }
 
-static void child_stream_call_callback(
-  ant_t *js,
-  ant_value_t callback,
-  ant_value_t *args,
-  int nargs
-);
+static inline void child_stream_call_callback(ant_t *js, ant_value_t callback, ant_args_t) {
+  if (!is_callable(callback)) return;
+  sv_vm_call(js->vm, js, callback, js_mkundef(), args, nargs, NULL, js_mkundef());
+}
 
-static void emit_event(child_process_t *cp, const char *name, ant_value_t *args, int nargs) {
+static inline void emit_event(child_process_t *cp, const char *name, ant_args_t) {
   if (vtype(cp->child_obj) != kTypeObject) return;
   eventemitter_emit_args(cp->js, cp->child_obj, name, args, nargs);
 }
@@ -764,11 +762,6 @@ static ant_value_t child_stream_unref(ant_params_t) {
   return this_obj;
 }
 
-static void child_stream_call_callback(ant_t *js, ant_value_t callback, ant_value_t *args, int nargs) {
-  if (!is_callable(callback)) return;
-  sv_vm_call(js->vm, js, callback, js_mkundef(), args, nargs, NULL, js_mkundef());
-}
-
 static void child_stream_close(child_stream_ctx_t *ctx) {
   child_process_t *cp = ctx->cp;
   uv_handle_t *h = NULL;
@@ -1046,7 +1039,7 @@ static void free_args_array(char **args, int count) {
   free(args);
 }
 
-static ant_value_t child_process_options_arg(ant_value_t *args, int nargs) {
+static ant_value_t child_process_options_arg(ant_args_t) {
   if (nargs >= 3 && is_special_object(args[2])) return args[2];
   if (nargs >= 2 && !js_is_array(args[1]) && is_special_object(args[1])) return args[1];
   return js_mkundef();

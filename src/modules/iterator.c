@@ -901,7 +901,7 @@ static inline ant_value_t promise_from_call_result(ant_t *js, ant_value_t result
 
 static ant_value_t async_iter_call_method(
   ant_t *js, ant_value_t receiver,
-  const char *name, ant_value_t *args, int nargs, bool *missing
+  const char *name, ant_args_t, bool *missing
 ) {
   ant_value_t fn = js_getprop_fallback(js, receiver, name);
   if (is_err(fn)) {

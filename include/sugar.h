@@ -75,7 +75,7 @@ void coroutine_unhold(coroutine_t *coro, uint8_t hold);
 
 ant_value_t start_async_in_coroutine(
   ant_t *js, const char *code, size_t code_len,
-  ant_value_t closure_scope, ant_value_t *args, int nargs
+  ant_value_t closure_scope, ant_args_t
 );
 
 void Ant_Coroutine_ResumeAwaitJob(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error);

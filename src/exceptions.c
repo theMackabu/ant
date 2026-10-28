@@ -98,10 +98,7 @@ ant_value_t Ant_Error_ConsumeMarker(ant_t *js, ant_value_t value) {
   return is_err(value) ? js_take_thrown(js, value) : value;
 }
 
-ant_value_t Ant_Error_CallCallback(
-  ant_t *js, ant_value_t callback, ant_value_t this_value,
-  ant_value_t *args, int nargs
-) {
+ant_value_t Ant_Error_CallCallback(ant_t *js, ant_value_t callback, ant_value_t this_value, ant_args_t) {
   if (nargs < 1 || !is_err(args[0]))
     return sv_vm_call(js->vm, js, callback, this_value, args, nargs, NULL, js_mkundef());
 

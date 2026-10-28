@@ -279,7 +279,7 @@ static ant_thread_mailbox_t *mailbox_find(uint64_t thread_id) {
   return mb;
 }
 
-ant_value_t worker_post_message_to_thread(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t worker_post_message_to_thread(ant_native_params_t) {
   ant_value_t id = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t value = nargs > 1 ? args[1] : js_mkundef();
   ant_value_t transfer = nargs > 2 ? args[2] : js_mkundef();

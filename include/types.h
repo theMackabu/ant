@@ -90,7 +90,10 @@ typedef struct {
   uint32_t slot;
 } ant_prop_loc_t;
 
-#define ant_native_params_t ant_t *js, ant_value_t *args, int nargs
+#define ant_args_t ant_value_t *args, int nargs
+#define ant_native_params_t ant_t *js, ant_args_t
+
+#define ant_call_params_t ant_args_t, ant_value_t new_target
 #define ant_params_t ant_native_params_t, ant_value_t call_new_target
 
 typedef ant_value_t

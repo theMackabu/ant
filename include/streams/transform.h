@@ -20,4 +20,9 @@ ant_value_t ts_stream_controller(ant_value_t ts_obj);
 ant_value_t ts_ctrl_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk);
 ant_value_t js_ts_ctor(ant_params_t);
 
+ant_value_t ts_create(
+  ant_t *js, ant_value_t transformer, ant_value_t writable_strategy, 
+  ant_value_t readable_strategy, ant_value_t new_target
+);
+
 #endif

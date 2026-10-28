@@ -598,7 +598,7 @@ static ant_value_t js_message_port_has_ref(ant_params_t) {
   return js_bool(binding && binding->refed && !binding->closed);
 }
 
-static ant_value_t node_target_add(ant_t *js, ant_value_t *args, int nargs, bool once, bool prepend) {
+static ant_value_t node_target_add(ant_native_params_t, bool once, bool prepend) {
   ant_value_t this_obj = js_getthis(js);
   if (nargs < 2 || !is_callable(args[1]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "The \"listener\" argument must be of type function");

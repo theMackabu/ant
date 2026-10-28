@@ -249,7 +249,7 @@ static int dns_rr_from_name(ant_t *js, ant_value_t value) {
   return -1;
 }
 
-ant_value_t dns_resolve_impl(ant_t *js, ant_value_t *args, int nargs, int rr, bool promises) {
+ant_value_t dns_resolve_impl(ant_native_params_t, int rr, bool promises) {
   ant_value_t hostname = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t second = nargs > 1 ? args[1] : js_mkundef();
   ant_value_t callback = promises ? js_mkundef() : nargs > 2 ? args[2] : js_mkundef();
@@ -274,7 +274,7 @@ ant_value_t dns_resolve_impl(ant_t *js, ant_value_t *args, int nargs, int rr, bo
   return dns_query_issue(js, channel, DNS_REQ_QUERY, (dns_rr_t)rr, hostname, js_getstr(js, hostname, NULL), callback, ttl);
 }
 
-ant_value_t dns_reverse_impl(ant_t *js, ant_value_t *args, int nargs, bool promises) {
+ant_value_t dns_reverse_impl(ant_native_params_t, bool promises) {
   ant_value_t ip = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t callback = promises ? js_mkundef() : nargs > 1 ? args[1] : js_mkundef();
   if (vtype(ip) != kTypeString) return Ant_Error_CreateInvalidArgType(js, "ip", "of type string", ip);

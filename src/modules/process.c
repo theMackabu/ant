@@ -346,7 +346,7 @@ static void stop_signal_watch(ant_t *js, int signum) {
 }
 
 
-void emit_process_event(ant_t *js, const char *event_type, ant_value_t *args, int nargs) {
+void emit_process_event(ant_t *js, const char *event_type, ant_args_t) {
   ant_process_state_t *ps = js->process_state;
   if (!ps || !is_object_type(ps->process_obj)) return;
   eventemitter_emit_args(js, ps->process_obj, event_type, args, nargs);

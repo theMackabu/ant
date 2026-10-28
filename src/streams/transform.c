@@ -806,14 +806,11 @@ static ant_value_t ts_start_reject(ant_params_t) {
   return js_mkundef();
 }
 
-ant_value_t js_ts_ctor(ant_params_t) {
-  if (vtype(call_new_target) == kTypeUndefined)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "TransformStream constructor requires 'new'");
-
-  ant_value_t transformer = js_mkundef();
-  if (nargs > 0 && !is_undefined(args[0]))
-    transformer = args[0];
-
+// TODO: cleanup internals
+ant_value_t ts_create(
+  ant_t *js, ant_value_t transformer, ant_value_t writable_strategy, 
+  ant_value_t readable_strategy, ant_value_t new_target
+) {
   if (is_object_type(transformer)) {
     ant_value_t rt_val = js_getprop_fallback(js, transformer, "readableType");
     if (!is_undefined(rt_val))
@@ -823,16 +820,9 @@ ant_value_t js_ts_ctor(ant_params_t) {
       return js_mkerr_typed(js, JS_ERR_RANGE, "writableType is not supported");
   }
 
-  ant_value_t writable_strategy = js_mkundef();
-  if (nargs > 1 && !is_undefined(args[1]) && !is_null(args[1]))
-    writable_strategy = args[1];
-
-  ant_value_t readable_strategy = js_mkundef();
-  if (nargs > 2 && !is_undefined(args[2]) && !is_null(args[2]))
-    readable_strategy = args[2];
-
   double writable_hwm = 1;
   ant_value_t writable_size_fn = js_mkundef();
+  
   if (is_object_type(writable_strategy)) {
     ant_value_t hwm_val = js_getprop_fallback(js, writable_strategy, "highWaterMark");
     if (is_err(hwm_val)) return hwm_val;
@@ -900,7 +890,7 @@ ant_value_t js_ts_ctor(ant_params_t) {
   }
 
   ant_value_t ts_obj = Ant_Object_CreateBare(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.ts_proto, call_new_target);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.ts_proto, new_target);
   if (is_object_type(proto)) js_set_proto_init(ts_obj, proto);
   js_set_slot(ts_obj, SLOT_BRAND, js_mknum(BRAND_TRANSFORM_STREAM));
   js_set_slot(ts_obj, SLOT_DATA, js_mknum(0));
@@ -1021,6 +1011,16 @@ ant_value_t js_ts_ctor(ant_params_t) {
   }
 
   return ts_obj;
+}
+
+ant_value_t js_ts_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "TransformStream constructor requires 'new'");
+
+  ant_value_t transformer = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t writable_strategy = nargs > 1 && !is_null(args[1]) ? args[1] : js_mkundef();
+  ant_value_t readable_strategy = nargs > 2 && !is_null(args[2]) ? args[2] : js_mkundef();
+  return ts_create(js, transformer, writable_strategy, readable_strategy, call_new_target);
 }
 
 static ant_value_t js_ts_ctrl_ctor(ant_params_t) {

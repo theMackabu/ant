@@ -7,12 +7,10 @@
 #include "cfunc.h"
 #include "internal.h"
 #include "silver/call.h"
-
-#include "descriptors.h"
 #include "modules/async_hooks.h"
 
 static ant_value_t async_hooks_call_with_tail_args(
-  ant_t *js, ant_value_t fn, ant_value_t this_arg, ant_value_t *args, int nargs, int start_idx
+  ant_t *js, ant_value_t fn, ant_value_t this_arg, ant_args_t, int start_idx
 ) {
   int call_nargs = nargs - start_idx;
   if (call_nargs <= 0) return sv_vm_call(js->vm, js, fn, this_arg, NULL, 0, NULL, js_mkundef());

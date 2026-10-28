@@ -267,7 +267,7 @@ ANT_EVENT_HANDLER_ACCESSORS(js_websocket, message, websocket_invalid_this)
 ANT_EVENT_HANDLER_ACCESSORS(js_websocket, close, websocket_invalid_this)
 ANT_EVENT_HANDLER_ACCESSORS(js_websocket, error, websocket_invalid_this)
 
-static ant_value_t websocket_on_impl(ant_t *js, ant_value_t *args, int nargs, bool once, bool remove) {
+static ant_value_t websocket_on_impl(ant_native_params_t, bool once, bool remove) {
   ant_value_t self = js_getthis(js);
   if (!websocket_data(self)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WebSocket");
   if (nargs < 2 || !is_callable(args[1])) return js_mkerr_typed(js, JS_ERR_TYPE, "listener must be a function");
@@ -275,7 +275,7 @@ static ant_value_t websocket_on_impl(ant_t *js, ant_value_t *args, int nargs, bo
   ant_value_t key = js_tostring_val(js, args[0]);
   if (is_err(key)) return key;
   if (remove) eventemitter_remove_listener_val(js, self, key, args[1]);
-  else eventemitter_add_listener_val(js, self, key, args[1], once);
+  else eventemitter_add_listener_val(js, self, key, args[1], once, false);
   
   return self;
 }
@@ -664,7 +664,7 @@ static ant_value_t js_websocket_close(ant_params_t) {
 }
 
 static ant_value_t websocket_event_ctor_init(
-  ant_t *js, ant_value_t *args, int nargs, ant_value_t new_target,
+  ant_native_params_t, ant_value_t new_target,
   ant_value_t fallback_proto, ant_event_kind_t kind, const char *default_type
 ) {
   ant_value_t type = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, default_type, strlen(default_type));

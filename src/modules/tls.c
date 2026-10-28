@@ -171,14 +171,6 @@ static void tls_add_active_socket(ant_tls_socket_t *socket) {
   if (socket) Ant_List_Insert(&socket->js->tls_sockets, socket);
 }
 
-static void tls_remove_active_socket(ant_tls_socket_t *socket) {
-  Ant_List_Remove(socket);
-}
-
-static bool tls_emit(ant_t *js, ant_value_t target, const char *event, ant_value_t *args, int nargs) {
-  return eventemitter_emit_args(js, target, event, args, nargs);
-}
-
 static ant_tls_socket_t *tls_require_socket(ant_t *js, ant_value_t this_val) {
   ant_tls_socket_t *socket = tls_socket_data(this_val);
   if (!socket) {
@@ -253,7 +245,7 @@ static void tls_server_maybe_release(ant_tls_server_t *server) {
 
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, server->obj);
-  tls_emit(js, server->obj, "close", NULL, 0);
+  eventemitter_emit_args(js, server->obj, "close", NULL, 0);
   GC_ROOT_RESTORE(js, root_mark);
 }
 
@@ -265,7 +257,7 @@ static void tls_server_socket_closed(ant_tls_server_t *server) {
 static void tls_socket_release(ant_tls_socket_t *socket) {
   ant_tls_server_t *server = socket->server;
 
-  tls_remove_active_socket(socket);
+  Ant_List_Remove(socket);
   tls_free_alpn(&socket->alpn_protocols, &socket->alpn_count);
 
   if (socket->ctx_wrap) tls_context_release(socket->ctx_wrap);
@@ -313,7 +305,7 @@ static void tls_socket_close_cb(uv_handle_t *handle) {
   tls_socket_sync_state(socket);
   had_error = js_bool(socket->had_error);
   
-  tls_emit(js, socket->obj, "close", &had_error, 1);
+  eventemitter_emit_args(js, socket->obj, "close", &had_error, 1);
   tls_socket_release(socket);
 }
 
@@ -473,7 +465,7 @@ static void tls_socket_write_cb(uv_write_t *req, int status) {
   if (status < 0) {
     ant_value_t err = tls_stream_error(socket, status, "TLS write failed");
     socket->had_error = true;
-    tls_emit(js, socket->obj, "error", &err, 1);
+    eventemitter_emit_args(js, socket->obj, "error", &err, 1);
     tls_socket_close(socket);
   } else {
     socket->bytes_written += write->len;
@@ -515,7 +507,7 @@ static void tls_socket_on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_
     if (is_err(chunk)) {
       chunk = js_take_thrown(js, chunk);
       socket->had_error = true;
-      tls_emit(js, socket->obj, "error", &chunk, 1);
+      eventemitter_emit_args(js, socket->obj, "error", &chunk, 1);
       tls_socket_close(socket);
     }
   } else if (nread == UV_EOF && !socket->read_eof) {
@@ -524,7 +516,7 @@ static void tls_socket_on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_
   } else if (nread < 0 && nread != UV_EOF) {
     ant_value_t err = tls_stream_error(socket, (int)nread, "TLS read failed");
     socket->had_error = true;
-    tls_emit(js, socket->obj, "error", &err, 1);
+    eventemitter_emit_args(js, socket->obj, "error", &err, 1);
     tls_socket_close(socket);
   }
 
@@ -550,7 +542,7 @@ static void tls_socket_on_connect(uv_connect_t *req, int status) {
     ant_value_t err = tls_stream_error(socket, status, "TLS connect failed");
     socket->had_error = true;
     tls_socket_sync_state(socket);
-    tls_emit(js, socket->obj, "error", &err, 1);
+    eventemitter_emit_args(js, socket->obj, "error", &err, 1);
     tls_socket_close(socket);
     return;
   }
@@ -562,8 +554,8 @@ static void tls_socket_on_connect(uv_connect_t *req, int status) {
 
   tlsuv_stream_read_start(&socket->stream, tls_alloc_cb, tls_socket_on_read);
   tls_socket_sync_state(socket);
-  tls_emit(js, socket->obj, "secureConnect", NULL, 0);
-  tls_emit(js, socket->obj, "connect", NULL, 0);
+  eventemitter_emit_args(js, socket->obj, "secureConnect", NULL, 0);
+  eventemitter_emit_args(js, socket->obj, "connect", NULL, 0);
 }
 
 static ant_value_t js_tls_socket_write(ant_params_t) {
@@ -641,7 +633,7 @@ static ant_value_t js_tls_socket_destroy(ant_params_t) {
   if (nargs > 0 && vtype(args[0]) != kTypeUndefined && vtype(args[0]) != kTypeNull) {
     ant_value_t err = args[0];
     socket->had_error = true;
-    tls_emit(js, socket->obj, "error", &err, 1);
+    eventemitter_emit_args(js, socket->obj, "error", &err, 1);
   }
 
   tls_socket_close(socket);
@@ -1196,7 +1188,7 @@ static ant_value_t js_tls_connect_options(ant_t *js, ant_value_t options, ant_va
     socket->connecting = false;
     socket->had_error = true;
     tls_socket_sync_state(socket);
-    tls_emit(js, socket->obj, "error", &err, 1);
+    eventemitter_emit_args(js, socket->obj, "error", &err, 1);
     tls_socket_close(socket);
   }
 
@@ -1251,7 +1243,7 @@ static tlsuv_stream_t *tls_server_on_accept(tlsuv_listener_t *l, const struct so
   if (status != 0) {
     if (status != UV_EMFILE && status != UV_ENFILE) {
       ant_value_t err = Ant_Error_Create(js, JS_ERR_TYPE, uv_strerror(status));
-      tls_emit(js, server->obj, "error", &err, 1);
+      eventemitter_emit_args(js, server->obj, "error", &err, 1);
     }
     
     return NULL;
@@ -1301,7 +1293,7 @@ static void tls_server_on_handshake(tlsuv_stream_t *clt, int status) {
     ant_value_t argv[2] = { tls_stream_error(socket, status, "TLS handshake failed"), socket->obj };
     socket->had_error = true;
     tls_socket_sync_state(socket);
-    if (server) tls_emit(js, server->obj, "tlsClientError", argv, 2);
+    if (server) eventemitter_emit_args(js, server->obj, "tlsClientError", argv, 2);
     tls_socket_close(socket);
     return;
   }
@@ -1312,8 +1304,8 @@ static void tls_server_on_handshake(tlsuv_stream_t *clt, int status) {
 
   tlsuv_stream_read_start(&socket->stream, tls_alloc_cb, tls_socket_on_read);
   tls_socket_sync_state(socket);
-  tls_emit(js, socket->obj, "secure", NULL, 0);
-  if (server) tls_emit(js, server->obj, "secureConnection", &socket->obj, 1);
+  eventemitter_emit_args(js, socket->obj, "secure", NULL, 0);
+  if (server) eventemitter_emit_args(js, server->obj, "secureConnection", &socket->obj, 1);
 }
 
 static ant_value_t tls_server_create_context(ant_t *js, ant_value_t options, bool *request_cert) {
@@ -1440,7 +1432,7 @@ static int tls_server_bind(ant_tls_server_t *server, const char *host, int port)
 static ant_value_t tls_server_emit_listening(ant_params_t) {
   ant_value_t obj = js_get_slot(js->current_func, SLOT_DATA);
   ant_tls_server_t *server = tls_server_data(obj);
-  if (server && server->listening) tls_emit(js, obj, "listening", NULL, 0);
+  if (server && server->listening) eventemitter_emit_args(js, obj, "listening", NULL, 0);
   return js_mkundef();
 }
 

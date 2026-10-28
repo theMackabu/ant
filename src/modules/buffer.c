@@ -726,18 +726,14 @@ static ant_value_t js_arraybuffer_slice(ant_params_t) {
   return new_obj;
 }
 
-static ant_value_t arraybuffer_transfer(ant_t *js, ant_value_t *args, int nargs, bool preserve) {
+static ant_value_t arraybuffer_transfer(ant_native_params_t, bool preserve) {
   ant_value_t this_val = js_getthis(js);
+  
   ArrayBufferData *data = buffer_get_arraybuffer_data(this_val);
   if (!data) return js_mkerr(js, "Invalid ArrayBuffer");
   
-  if (data->is_detached) {
-    return js_mkerr(js, "Cannot transfer a detached ArrayBuffer");
-  }
-  
-  if (data->is_shared) {
-    return js_mkerr(js, "Cannot transfer a SharedArrayBuffer");
-  }
+  if (data->is_detached) return js_mkerr(js, "Cannot transfer a detached ArrayBuffer");
+  if (data->is_shared) return js_mkerr(js, "Cannot transfer a SharedArrayBuffer");
   
   size_t new_length = data->length;
   if (nargs > 0 && vtype(args[0]) != kTypeUndefined) {
@@ -747,6 +743,7 @@ static ant_value_t arraybuffer_transfer(ant_t *js, ant_value_t *args, int nargs,
   
   if (data->is_detached)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot transfer a detached ArrayBuffer");
+  
   if (!buffer_can_transfer(data))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot transfer this ArrayBuffer");
 
@@ -2583,7 +2580,7 @@ static ant_value_t base64_options(
   return js_mkundef();
 }
 
-static ant_value_t base64_source_arg(ant_t *js, ant_value_t *args, int nargs, const char **str, size_t *len) {
+static ant_value_t base64_source_arg(ant_native_params_t, const char **str, size_t *len) {
   if (nargs < 1 || vtype(args[0]) != kTypeString) return js_mkerr_typed(js, JS_ERR_TYPE, "input argument must be a string");
   *str = js_getstr(js, args[0], len);
   return js_mkundef();
@@ -3097,7 +3094,7 @@ static ant_value_t buffer_fill_range(
   return js_mkundef();
 }
 
-static ant_value_t buffer_size_arg(ant_t *js, ant_value_t *args, int nargs, size_t *out) {
+static ant_value_t buffer_size_arg(ant_native_params_t, size_t *out) {
   ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
   if (vtype(value) != kTypeNumber) return Ant_Error_CreateInvalidArgType(js, "size", "of type number", value);
 
@@ -3374,9 +3371,7 @@ static int64_t typedarray_search_data(
 #undef TA_INT_MIN
 #undef TA_INT_MAX
 
-static ant_value_t typedarray_search(
-  ant_t *js, ant_value_t *args, int nargs, typedarray_search_kind_t kind
-) {
+static ant_value_t typedarray_search(ant_native_params_t, typedarray_search_kind_t kind) {
   ant_value_t this_val = js_getthis(js);
   TypedArrayData *ta_data = typedarray_live(this_val);
   if (!ta_data) return typedarray_this_error(js, this_val);
@@ -3702,9 +3697,10 @@ static int64_t buffer_last_index_offset(int64_t len, double offset, int64_t need
   return len - 1;
 }
 
-static ant_value_t buffer_index_of(ant_t *js, ant_value_t *args, int nargs, bool forward) {
+static ant_value_t buffer_index_of(ant_native_params_t, bool forward) {
   ant_value_t this_val = js_getthis(js);
   TypedArrayData *ta_data = buffer_get_typedarray_data(this_val);
+  
   if (!ta_data) return typedarray_this_error(js, this_val);
   if (nargs < 1) return js_mknum(-1);
 

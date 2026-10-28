@@ -368,7 +368,7 @@ static inline __attribute__((always_inline)) ant_value_t atomics_dispatch(
   }
 }
 
-static ant_value_t atomics_validate(ant_t *js, ant_value_t *args, int nargs, TypedArrayData **out, size_t *index) {
+static ant_value_t atomics_validate(ant_native_params_t, TypedArrayData **out, size_t *index) {
   TypedArrayData *ta = buffer_get_typedarray_data(nargs > 0 ? args[0] : js_mkundef());
   
   if (!ta) return js_mkerr_typed(js, JS_ERR_TYPE, "Argument is not a typed array");
@@ -416,11 +416,11 @@ static ant_value_t atomics_bytes(ant_t *js, const TypedArrayData *ta, size_t ind
   return js_mkundef();
 }
 
-static __attribute__((noinline, cold)) ant_value_t atomics_run_slow(
-  ant_t *js, ant_value_t *args, int nargs, atomics_op_t op, int arity
-) {
+static __attribute__((noinline, cold)) 
+ant_value_t atomics_run_slow(ant_native_params_t, atomics_op_t op, int arity) {
   TypedArrayData *ta;
   size_t index;
+  
   uint64_t operand = 0, swap = 0;
   uint8_t *ptr;
 
@@ -444,9 +444,8 @@ static __attribute__((noinline, cold)) ant_value_t atomics_run_slow(
   return op == ATOMICS_STORE ? value : result;
 }
 
-static inline __attribute__((always_inline)) ant_value_t atomics_run(
-  ant_t *js, ant_value_t *args, int nargs, atomics_op_t op, int arity
-) {
+static inline __attribute__((always_inline)) 
+ant_value_t atomics_run(ant_native_params_t, atomics_op_t op, int arity) {
   if (__builtin_expect(nargs < arity, 0)) goto slow;
   for (int i = 1; i < arity; i++) if (__builtin_expect(is_tagged(args[i]), 0)) goto slow;
 

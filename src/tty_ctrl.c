@@ -72,7 +72,7 @@ int tty_ctrl_normalize_coord(int value) {
   return value < 0 ? 0 : value;
 }
 
-bool tty_ctrl_parse_clear_line_dir(ant_value_t *args, int nargs, int dir_index, int *dir_out) {
+bool tty_ctrl_parse_clear_line_dir(ant_args_t, int dir_index, int *dir_out) {
   int dir = 0;
   if (nargs > dir_index && vtype(args[dir_index]) != kTypeUndefined) {
     if (!tty_ctrl_parse_int_value(args[dir_index], &dir)) return false;
@@ -82,8 +82,7 @@ bool tty_ctrl_parse_clear_line_dir(ant_value_t *args, int nargs, int dir_index, 
 }
 
 bool tty_ctrl_parse_cursor_to_args(
-  ant_value_t *args,
-  int nargs,
+  ant_args_t,
   int x_index,
   int y_index,
   tty_ctrl_cursor_to_args_t *out
@@ -106,14 +105,7 @@ bool tty_ctrl_parse_cursor_to_args(
   return true;
 }
 
-bool tty_ctrl_parse_move_cursor_args(
-  ant_value_t *args,
-  int nargs,
-  int dx_index,
-  int dy_index,
-  int *dx,
-  int *dy
-) {
+bool tty_ctrl_parse_move_cursor_args(ant_args_t, int dx_index, int dy_index, int *dx, int *dy) {
   if (!dx || !dy) return false;
   if (nargs <= dy_index) return false;
   if (!tty_ctrl_parse_int_value(args[dx_index], dx)) return false;

@@ -363,13 +363,11 @@ ant_value_t readable_stream_pipe_to(
   if (!is_undefined(signal) && !abort_signal_is_signal(signal))
     return pipe_create_rejected(js, Ant_Error_Create(js, JS_ERR_TYPE, "pipeTo option 'signal' must be an AbortSignal"));
 
-  ant_value_t reader_args[1] = { source };
-  ant_value_t reader = js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
-  
+  ant_value_t reader = rs_reader_create(js, source, js_mkundef());
   if (is_err(reader)) return pipe_create_rejected(js, js_take_thrown(js, reader));
   rs->disturbed = true;
 
-  ant_value_t writer = ws_acquire_writer(js, dest);
+  ant_value_t writer = ws_writer_create(js, dest, js_mkundef());
   if (is_err(writer)) {
     GC_ROOT_SAVE(root_mark, js);
     ant_value_t error = js_take_thrown(js, writer);
@@ -385,6 +383,7 @@ ant_value_t readable_stream_pipe_to(
 
   pipe_state_t *pst = calloc(1, sizeof(pipe_state_t));
   if (!pst) return Ant_Error_CreateOutOfMemory(js);
+  
   pst->prevent_close = prevent_close;
   pst->prevent_abort = prevent_abort;
   pst->prevent_cancel = prevent_cancel;
@@ -728,8 +727,7 @@ static ant_value_t js_rs_tee(ant_params_t) {
   if (rs_is_reader(rs_stream_reader(js->this_val)))
     return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStream is already locked");
 
-  ant_value_t reader_args[1] = { js->this_val };
-  ant_value_t reader = js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
+  ant_value_t reader = rs_reader_create(js, js->this_val, js_mkundef());
   if (is_err(reader)) return reader;
 
   tee_state_t *st = calloc(1, sizeof(tee_state_t));

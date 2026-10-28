@@ -870,7 +870,7 @@ bool io_print_error_props(ant_t *js, ant_output_stream_t *out, ant_value_t err, 
 
 static bool console_write_args_to_stream(
   ant_t *js, ant_output_stream_t *out,
-  ant_value_t *args, int nargs, bool color_values
+  ant_args_t, bool color_values
 ) {
   console_format_ctx_t ctx = { js, out, color_values, true };
   int start = ant_format_walk(js, args, nargs, 0, &console_format_sink, &ctx);
@@ -896,7 +896,7 @@ static bool console_write_args_to_stream(
 
 static ant_value_t console_emit_to_output(
   ant_t *js, ant_value_t this_obj,
-  const char *prefix, ant_value_t *args, int nargs,
+  const char *prefix, ant_args_t,
   ant_output_stream_t *out, bool use_stderr
 ) {
   bool color_values = io_should_color_fd(use_stderr ? STDERR_FILENO : STDOUT_FILENO);
@@ -916,10 +916,8 @@ static ant_value_t console_emit_to_output(
 }
 
 static inline ant_value_t console_emit_with_this(
-  ant_t *js,
-  ant_value_t this_obj,
-  bool use_stderr, const char *prefix,
-  ant_value_t *args, int nargs
+  ant_t *js, ant_value_t this_obj,
+  bool use_stderr, const char *prefix, ant_args_t
 ) {
   this_obj = console_get_effective_this(js, this_obj);
   ant_output_stream_t out = {0};
@@ -939,19 +937,11 @@ static inline ant_value_t console_emit_with_this(
   return result;
 }
 
-ant_value_t console_emit(
-  ant_t *js,
-  bool use_stderr, const char *prefix,
-  ant_value_t *args, int nargs
-) {
+ant_value_t console_emit(ant_t *js, bool use_stderr, const char *prefix, ant_args_t) {
   return console_emit_with_this(js, js_mkundef(), use_stderr, prefix, args, nargs);
 }
 
-ant_value_t console_emit_current(
-  ant_t *js,
-  bool use_stderr, const char *prefix,
-  ant_value_t *args, int nargs
-) {
+ant_value_t console_emit_current(ant_t *js, bool use_stderr, const char *prefix, ant_args_t) {
   return console_emit_with_this(js, js_getthis(js), use_stderr, prefix, args, nargs);
 }
 

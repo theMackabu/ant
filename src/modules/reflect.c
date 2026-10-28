@@ -9,7 +9,7 @@
 
 #include "modules/reflect.h"
 
-static ant_value_t reflect_target(ant_t *js, ant_value_t *args, int nargs, const char *method) {
+static ant_value_t reflect_target(ant_native_params_t, const char *method) {
   ant_value_t target = nargs > 0 ? args[0] : js_mkundef();
   if (vtype(target) == kTypeBuiltin) target = js_cfunc_promote(js, target);
   if (is_err(target) || is_object_type(target)) return target;

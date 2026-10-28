@@ -74,7 +74,7 @@ static int decode_escape_sequence(const char *str, size_t len, size_t *pos, unsi
   return 0;
 }
 
-static ant_value_t escape_arg_string(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t escape_arg_string(ant_native_params_t) {
   ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
   if (vtype(value) == kTypeString) return value;
   if (vtype(value) == kTypeSymbol)

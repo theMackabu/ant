@@ -187,7 +187,7 @@ bool guest_child_boot(ant_guest_t *g, ant_t *child);
 void guest_child_execute(ant_guest_t *g, guest_call_t *call);
 void guest_child_teardown(ant_guest_t *g);
 void guest_child_mark(ant_t *js, gc_mark_fn mark);
-ant_value_t guest_child_host_call(ant_t *js, ant_guest_t *g, uint32_t callback, ant_value_t *args, int nargs);
+ant_value_t guest_child_host_call(ant_t *js, ant_guest_t *g, uint32_t callback, ant_args_t);
 
 ant_value_t guest_encode(ant_t *js, ant_guest_t *g, ant_value_t value, guest_value_t *out);
 ant_value_t guest_decode_host(ant_t *js, ant_guest_t *g, guest_value_t *v);

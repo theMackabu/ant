@@ -57,6 +57,7 @@ ant_value_t rs_reader_closed(ant_value_t reader_obj);
 
 ant_value_t rs_cancel_reject(ant_params_t);
 ant_value_t js_rs_reader_ctor(ant_params_t);
+ant_value_t rs_reader_create(ant_t *js, ant_value_t stream_obj, ant_value_t new_target);
 ant_value_t rs_cancel_resolve(ant_params_t);
 
 ant_value_t rs_stream_controller(ant_t *js, ant_value_t stream_obj);

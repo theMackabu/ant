@@ -92,7 +92,7 @@ double ant_math_js_pow(double base, double exponent) {
   static double ant_math_double_##name(double a, double b) { (void)b; return expr; }
 #include "modules/math_doubles.h"
 
-static ant_value_t math_double_call(ant_t *js, ant_value_t *args, int nargs, ant_math_double_t id) {
+static ant_value_t math_double_call(ant_native_params_t, ant_math_double_t id) {
   const ant_math_double_info_t *info = &ant_math_doubles[id];
   double a = nargs < 1 ? JS_NAN : math_to_number(js, args[0]);
   double b = info->argc < 2 ? 0.0 : nargs < 2 ? JS_NAN : math_to_number(js, args[1]);
@@ -188,7 +188,7 @@ static ant_value_t builtin_Math_imul(ant_params_t) {
   return tov(ant_math_imul(a, b));
 }
 
-static ant_value_t math_min_max(ant_t *js, ant_value_t *args, int nargs, bool max) {
+static ant_value_t math_min_max(ant_native_params_t, bool max) {
   double result = max ? JS_NEG_INF : JS_INF;
   
   for (int i = 0; i < nargs; i++) {

@@ -223,14 +223,14 @@ static ant_value_t js_cs_ctor(ant_params_t) {
   js_set(js, transformer, "transform", transform_fn);
   js_set(js, transformer, "flush", flush_fn);
 
-  ant_value_t ctor_args[1] = { transformer };
-  ant_value_t ts_obj = js_construct_native(js, js_ts_ctor, ctor_args, 1);
+  ant_value_t ts_obj = ts_create(js, transformer, js_mkundef(), js_mkundef(), js_mkundef());
 
   if (is_err(ts_obj)) {
     if (fmt == ZFMT_BROTLI) brotli_stream_state_destroy(brotli);
     else { deflateEnd(&st->strm); free(st); }
     return ts_obj;
   }
+  
   js_set_slot(obj, SLOT_ENTRIES, ts_obj);
   js_set_slot_wb(js, transform_fn, SLOT_ENTRIES, obj);
   js_set_slot_wb(js, flush_fn, SLOT_ENTRIES, obj);
@@ -344,8 +344,7 @@ static ant_value_t js_ds_ctor(ant_params_t) {
   js_set(js, transformer, "transform", transform_fn);
   js_set(js, transformer, "flush", flush_fn);
 
-  ant_value_t ctor_args[1] = { transformer };
-  ant_value_t ts_obj = js_construct_native(js, js_ts_ctor, ctor_args, 1);
+  ant_value_t ts_obj = ts_create(js, transformer, js_mkundef(), js_mkundef(), js_mkundef());
 
   if (is_err(ts_obj)) {
     if (fmt == ZFMT_BROTLI) brotli_stream_state_destroy(brotli);

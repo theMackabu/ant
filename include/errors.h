@@ -93,6 +93,7 @@ ant_value_t Ant_Error_Create(ant_t *js, js_err_type_t err_type, const char *mess
 ant_value_t Ant_Error_CreateWithProps(ant_t *js, js_err_type_t err_type, ant_value_t props, const char *message);
 ant_value_t Ant_Error_CreateConstructor(ant_t *js, const char *name, ant_value_t *out_proto);
 ant_value_t Ant_Error_CreateConstructorEx(ant_t *js, const char *name, ant_value_t cfunc, ant_value_t *out_proto);
+ant_value_t Ant_Error_CallCallback(ant_t *js, ant_value_t callback, ant_value_t this_value, ant_args_t);
 
 __attribute__((format(printf, 3, 4)))
 ant_value_t Ant_Error_CreateFormatted(ant_t *js, js_err_type_t err_type, const char *fmt, ...);
@@ -114,11 +115,6 @@ ant_value_t Ant_Exception_Stack(ant_t *js, ant_value_t completion);
 ant_value_t Ant_Exception_Raise(ant_t *js, ant_value_t value, ant_value_t stack);
 ant_value_t Ant_Exception_CreateRecord(ant_t *js, ant_value_t value, ant_value_t stack);
 ant_value_t Ant_Error_ConsumeMarker(ant_t *js, ant_value_t value);
-
-ant_value_t Ant_Error_CallCallback(
-  ant_t *js, ant_value_t callback, ant_value_t this_value,
-  ant_value_t *args, int nargs
-);
 
 #define js_mkerr(js, ...) js_create_error(js, JS_ERR_TYPE, js_mkundef(), __VA_ARGS__)
 #define js_mkerr_typed(js, err_type, ...) js_create_error(js, err_type, js_mkundef(), __VA_ARGS__)

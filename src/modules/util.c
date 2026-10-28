@@ -579,8 +579,9 @@ static ant_value_t util_format_with_options(ant_params_t) {
   return util_format_impl(js, args, nargs, 1);
 }
 
-static int util_inspect_depth(ant_t *js, ant_value_t *args, int nargs) {
+static int util_inspect_depth(ant_native_params_t) {
   ant_value_t depth = js_mkundef();
+  
   if (nargs > 1 && is_object_type(args[1])) depth = js_get(js, args[1], "depth");
   else if (nargs > 2) depth = args[2];
 
@@ -593,7 +594,7 @@ static int util_inspect_depth(ant_t *js, ant_value_t *args, int nargs) {
   return d >= MAX_STRINGIFY_DEPTH ? MAX_STRINGIFY_DEPTH : (int)d;
 }
 
-static uint8_t util_inspect_flags(ant_t *js, ant_value_t *args, int nargs) {
+static uint8_t util_inspect_flags(ant_native_params_t) {
   if (nargs < 2) return 0;
   if (!is_object_type(args[1])) return vtype(args[1]) == kTypeBool && js_truthy(js, args[1]) ? ANT_INSPECT_SHOW_HIDDEN : 0;
 

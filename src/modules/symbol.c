@@ -88,10 +88,8 @@ bool js_is_symbol_description_getter(ant_value_t getter) {
 }
 
 ant_value_t maybe_call_symbol_method(
-  ant_t *js, ant_value_t target,
-  ant_value_t sym,
-  ant_value_t this_arg, ant_value_t *args,
-  int nargs, bool *called
+  ant_t *js, ant_value_t target, ant_value_t sym,
+  ant_value_t this_arg, ant_args_t, bool *called
 ) {
   *called = false;
   if (vtype(sym) != kTypeSymbol || !is_object_type(target)) return js_mkundef();

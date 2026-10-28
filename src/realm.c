@@ -252,7 +252,7 @@ bool ant_realm_foreign_array_ctor(ant_t *js, ant_value_t ctor) {
 }
 
 __attribute__((noinline, cold))
-static bool realm_free_call(const ant_cfunc_meta_t *meta, ant_value_t *args, int nargs) {
+static bool realm_free_call(const ant_cfunc_meta_t *meta, ant_args_t) {
   if (!(meta->flags & CFUNC_REALM_FREE)) return false;
   
   for (int i = 0; i < nargs; i++) {
@@ -263,10 +263,7 @@ static bool realm_free_call(const ant_cfunc_meta_t *meta, ant_value_t *args, int
   return true;
 }
 
-ant_value_t sv_invoke_builtin_in_realm(
-  ant_t *js, const ant_cfunc_meta_t *meta, ant_value_t *args,
-  int nargs, ant_value_t new_target
-) {
+ant_value_t sv_invoke_builtin_in_realm(ant_t *js, const ant_cfunc_meta_t *meta, ant_call_params_t) {
   ant_realm_t *realm = ant_cfunc_meta_realm(meta);
   if (!realm) realm = ant_realm_main(js);
   

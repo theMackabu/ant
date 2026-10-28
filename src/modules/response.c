@@ -436,19 +436,23 @@ static void resolve_body_promise(
 static bool response_chunk_is_uint8_array(ant_value_t chunk, TypedArrayData **out_ta) {
   if (!is_object_type(chunk)) return false;
   TypedArrayData *ta = buffer_get_typedarray_data(chunk);
+  
   if (!Ant_Buffer_ViewIsLive(ta)) return false;
   if (ta->type != TYPED_ARRAY_UINT8) return false;
   *out_ta = ta;
+  
   return true;
 }
 
-static uint8_t *concat_uint8_chunks(
+uint8_t *body_concat_uint8_chunks(
   ant_t *js, ant_value_t chunks,
   size_t *out_size, ant_value_t *err_out
 ) {
   ant_offset_t n = js_arr_len(js, chunks);
+  
   size_t total = 0;
   size_t pos = 0;
+  
   uint8_t *buf = NULL;
   TypedArrayData *ta = NULL;
 
@@ -458,7 +462,7 @@ static uint8_t *concat_uint8_chunks(
   for (ant_offset_t i = 0; i < n; i++) {
     ant_value_t chunk = js_arr_get(js, chunks, i);
     if (!response_chunk_is_uint8_array(chunk, &ta)) {
-      *err_out = js_mkerr_typed(js, JS_ERR_TYPE, "Response body stream chunk must be a Uint8Array");
+      *err_out = js_mkerr_typed(js, JS_ERR_TYPE, "Body stream chunk must be a Uint8Array");
       return NULL;
     }
     total += ta->byte_length;
@@ -474,11 +478,13 @@ static uint8_t *concat_uint8_chunks(
     ant_value_t chunk = js_arr_get(js, chunks, i);
     if (!response_chunk_is_uint8_array(chunk, &ta)) {
       free(buf);
-      *err_out = js_mkerr_typed(js, JS_ERR_TYPE, "Response body stream chunk must be a Uint8Array");
+      *err_out = js_mkerr_typed(js, JS_ERR_TYPE, "Body stream chunk must be a Uint8Array");
       return NULL;
     }
+    
     uint8_t *bytes; size_t size;
     if (!Ant_Buffer_GetViewBytes(ta, &bytes, &size) || size == 0) continue;
+    
     memcpy(buf + pos, bytes, size);
     pos += size;
   }
@@ -488,6 +494,7 @@ static uint8_t *concat_uint8_chunks(
 }
 
 static ant_value_t stream_body_read(ant_params_t);
+
 static ant_value_t stream_body_rejected(ant_params_t) {
   ant_value_t state = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t promise = js_get(js, state, "promise");
@@ -506,6 +513,7 @@ static void stream_schedule_next_read(ant_t *js, ant_value_t state, ant_value_t 
 static ant_value_t stream_body_read(ant_params_t) {
   ant_value_t state = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t result = (nargs > 0) ? args[0] : js_mkundef();
+  
   ant_value_t promise = js_get(js, state, "promise");
   ant_value_t reader = js_get(js, state, "reader");
   ant_value_t chunks = js_get(js, state, "chunks");
@@ -517,15 +525,18 @@ static ant_value_t stream_body_read(ant_params_t) {
   if (vtype(done_val) == kTypeBool && done_val == js_true) {
     size_t size = 0;
     ant_value_t chunk_err = js_mkundef();
-    uint8_t *data = concat_uint8_chunks(js, chunks, &size, &chunk_err);
+    uint8_t *data = body_concat_uint8_chunks(js, chunks, &size, &chunk_err);
+    
     if (is_err(chunk_err)) {
       js_reject_promise(js, promise, chunk_err);
       return js_mkundef();
     }
+    
     ant_value_t type_v = js_get(js, state, "type");
     const char *body_type = (vtype(type_v) == kTypeString) ? js_getstr(js, type_v, NULL) : NULL;
     resolve_body_promise(js, promise, data, size, body_type, mode, true);
     free(data);
+    
     return js_mkundef();
   }
 
@@ -535,12 +546,9 @@ static ant_value_t stream_body_read(ant_params_t) {
 }
 
 static ant_value_t consume_body_from_stream(
-  ant_t *js, ant_value_t stream,
-  ant_value_t promise, int mode,
-  const char *body_type
+  ant_t *js, ant_value_t stream, ant_value_t promise, int mode, const char *body_type
 ) {
-  ant_value_t reader_args[1] = { stream };
-  ant_value_t reader = js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
+  ant_value_t reader = rs_reader_create(js, stream, js_mkundef());
 
   if (is_err(reader)) {
     js_reject_promise(js, promise, reader);

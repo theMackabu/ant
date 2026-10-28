@@ -883,21 +883,16 @@ static ant_value_t js_ws_writer_write(ant_params_t) {
   return ws_writer_write(js, js->this_val, chunk);
 }
 
-ant_value_t js_ws_writer_ctor(ant_params_t) {
-  if (vtype(call_new_target) == kTypeUndefined)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStreamDefaultWriter constructor requires 'new'");
-  if (nargs < 1)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStreamDefaultWriter requires a stream argument");
-
-  ant_value_t stream_obj = args[0];
+ant_value_t ws_writer_create(ant_t *js, ant_value_t stream_obj, ant_value_t new_target) {
   if (!ws_is_stream(stream_obj))
     return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStreamDefaultWriter argument must be a WritableStream");
+  
   ws_stream_t *stream = ws_get_stream(stream_obj);
   if (ws_is_writer(ws_stream_writer(stream_obj)))
     return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStream is already locked to a writer");
 
   ant_value_t obj = Ant_Object_CreateBare(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.ws_writer_proto, call_new_target);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.ws_writer_proto, new_target);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_WRITABLE_STREAM_WRITER));
@@ -930,9 +925,12 @@ ant_value_t js_ws_writer_ctor(ant_params_t) {
   return obj;
 }
 
-ant_value_t ws_acquire_writer(ant_t *js, ant_value_t stream_obj) {
-  ant_value_t writer_args[1] = { stream_obj };
-  return js_construct_native(js, js_ws_writer_ctor, writer_args, 1);
+ant_value_t js_ws_writer_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStreamDefaultWriter constructor requires 'new'");
+  if (nargs < 1)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStreamDefaultWriter requires a stream argument");
+  return ws_writer_create(js, args[0], call_new_target);
 }
 
 static ant_value_t js_ws_get_locked(ant_params_t) {
@@ -944,11 +942,13 @@ static ant_value_t js_ws_get_locked(ant_params_t) {
 static ant_value_t js_ws_abort(ant_params_t) {
   ws_stream_t *stream = ws_get_stream(js->this_val);
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WritableStream");
+  
   if (ws_is_writer(ws_stream_writer(js->this_val))) {
     ant_value_t p = js_mkpromise(js);
     js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot abort a locked WritableStream"));
     return p;
   }
+  
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
   return writable_stream_abort(js, js->this_val, reason);
 }
@@ -956,25 +956,26 @@ static ant_value_t js_ws_abort(ant_params_t) {
 static ant_value_t js_ws_close(ant_params_t) {
   ws_stream_t *stream = ws_get_stream(js->this_val);
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WritableStream");
+  
   if (ws_is_writer(ws_stream_writer(js->this_val))) {
     ant_value_t p = js_mkpromise(js);
     js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot close a locked WritableStream"));
     return p;
   }
+  
   if (writable_stream_close_queued_or_in_flight(js->this_val)) {
     ant_value_t p = js_mkpromise(js);
     js_reject_promise(js, p, Ant_Error_Create(js, JS_ERR_TYPE, "Cannot close an already-closing stream"));
     return p;
   }
+  
   return writable_stream_close(js, js->this_val);
 }
 
 static ant_value_t js_ws_get_writer(ant_params_t) {
   ws_stream_t *stream = ws_get_stream(js->this_val);
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WritableStream");
-
-  ant_value_t writer_args[1] = { js->this_val };
-  return js_construct_native(js, js_ws_writer_ctor, writer_args, 1);
+  return ws_writer_create(js, js->this_val, js_mkundef());
 }
 
 static ant_value_t setup_ws_default_controller(

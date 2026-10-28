@@ -1296,7 +1296,7 @@ static bool json_set_replacer(ant_t *js, json_cycle_ctx *ctx, ant_value_t replac
   return false;
 }
 
-static bool json_set_indent(ant_t *js, json_cycle_ctx *ctx, ant_value_t *args, int nargs) {
+static bool json_set_indent(ant_t *js, json_cycle_ctx *ctx, ant_args_t) {
   ctx->indent_len = 0;
   if (nargs < 3) return true;
   ant_value_t space = args[2];

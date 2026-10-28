@@ -2,7 +2,6 @@
 #include <math.h>
 #include <stdlib.h>
 
-#include "utf8.h"
 #include "silver/call.h"
 #include "silver/feedback.h"
 #include "internal.h"
@@ -30,10 +29,8 @@
 #include "ops/private.h"
 #include "ops/objects.h"
 
-__attribute__((noinline)) ant_value_t Ant_Silver_InvokeNativeScoped(
-  ant_t *js, ant_cfunc_t fn, ant_value_t *args,
-  int nargs, ant_value_t new_target
-) {
+__attribute__((noinline)) 
+ant_value_t Ant_Silver_InvokeNativeScoped(ant_t *js, ant_cfunc_t fn, ant_call_params_t) {
   ant_value_t previous = Ant_Exception_Peek(js);
   size_t exception_mark = 0;
 

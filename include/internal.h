@@ -270,7 +270,6 @@ ant_value_t js_template_to_string(ant_t *js, ant_value_t v);
 ant_value_t js_to_numeric(ant_t *js, ant_value_t arg);
 ant_value_t js_define_own_prop(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t v);
 ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto, ant_value_t new_target);
-ant_value_t js_construct_native(ant_t *js, ant_cfunc_t ctor, ant_value_t *args, int nargs);
 
 ant_value_t js_get_module_import_binding(ant_t *js);
 ant_value_t js_builtin_import(ant_params_t);
@@ -408,8 +407,8 @@ ant_value_t js_execute_compiled_bytecode(ant_t *js, sv_func_t *func, coroutine_t
 ant_value_t js_execute_compiled_module(ant_t *js, sv_func_t *func);
 ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, ant_value_t *args, int argc);
 ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, int argc, ant_value_t new_target);
-ant_value_t sv_call_native(ant_t *js, ant_value_t func, ant_value_t this_val, ant_value_t *args, int nargs, ant_value_t new_target);
-ant_value_t js_array_includes_call(ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs);
+ant_value_t sv_call_native(ant_t *js, ant_value_t func, ant_value_t this_val, ant_call_params_t);
+ant_value_t js_array_includes_call(ant_t *js, ant_value_t this_val, ant_args_t);
 
 const char *typestr(ant_value_type_t t);
 ant_value_t unwrap_primitive(ant_t *js, ant_value_t val);
@@ -450,7 +449,7 @@ void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx);
 
 ant_value_t js_string_intrinsic_call(
   ant_t *js, ant_string_intrinsic_kind_t kind,
-  ant_value_t this_val, ant_value_t *args, int nargs
+  ant_value_t this_val, ant_args_t
 );
 
 bool js_try_get_own_data_prop(

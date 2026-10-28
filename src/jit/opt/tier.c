@@ -823,12 +823,9 @@ ant_value_t opt_rt_call(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, a
     return result;
   }
   
-  const ant_cfunc_meta_t *meta = sv_native_closure_meta(callee);
-  if (meta && sv_native_direct_allowed(js)) {
-    ant_value_t result = sv_call_native_closure(js, callee, meta, this_val, args, (int)argc);
-    if (is_err(result) || vtype(js->exception) != kTypeUndefined) result = jit_helper_native_finish(js, result);
-    return result;
-  }
+  ant_value_t cfunc = sv_native_closure_cfunc(callee);
+  if (cfunc && sv_native_direct_allowed(js))
+    return sv_call_native_closure(js, callee, cfunc, this_val, args, (int)argc, js_mkundef());
   
   return sv_vm_call(vm, js, callee, this_val, args, (int)argc, NULL, js_mkundef());
 }

@@ -14,30 +14,23 @@ typedef struct {
   int port;
 } ant_inspector_options_t;
 
+uint64_t ant_inspector_websocket_created(const char *url);
+
 bool ant_inspector_network_active(void);
 bool ant_inspector_start(ant_t *js, const ant_inspector_options_t *options);
 
 void ant_inspector_stop(void);
 void ant_inspector_wait_for_session(void);
 
-uint64_t ant_inspector_websocket_created(const char *url);
 void ant_inspector_websocket_closed(uint64_t request_id);
+void ant_inspector_console_api_called(ant_t *js, const char *level, ant_args_t);
+void ant_inspector_register_script_file(const char *path, bool is_module);
 
 void ant_inspector_register_script_source(
   const char *path,
   const char *source,
   size_t len,
   bool is_module
-);
-
-void ant_inspector_register_script_file(
-  const char *path,
-  bool is_module
-);
-
-void ant_inspector_console_api_called(
-  ant_t *js, const char *level,
-  ant_value_t *args, int nargs
 );
 
 uint64_t ant_inspector_network_request(

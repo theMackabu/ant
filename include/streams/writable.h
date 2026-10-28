@@ -45,7 +45,7 @@ ws_controller_t *ws_get_controller(ant_value_t obj);
 ant_value_t ws_writer_ready(ant_value_t writer_obj);
 ant_value_t ws_stream_writer(ant_value_t stream_obj);
 ant_value_t ws_stream_controller(ant_value_t stream_obj);
-ant_value_t ws_acquire_writer(ant_t *js, ant_value_t stream_obj);
+ant_value_t ws_writer_create(ant_t *js, ant_value_t stream_obj, ant_value_t new_target);
 ant_value_t ws_writer_write(ant_t *js, ant_value_t writer_obj, ant_value_t chunk);
 
 ant_value_t writable_stream_close(ant_t *js, ant_value_t stream_obj);

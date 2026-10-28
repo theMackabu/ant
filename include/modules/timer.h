@@ -38,10 +38,10 @@ void queue_promise_trigger(ant_t *js, ant_value_t promise);
 void ant_realm_run_microtasks(ant_t *js, ant_realm_t *realm);
 
 void queue_microtask(ant_t *js, ant_value_t callback);
-void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_value_t *args, int nargs);
+void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_args_t);
 
 void queue_next_tick(ant_t *js, ant_value_t callback);
-void queue_next_tick_with_args(ant_t *js, ant_value_t callback, ant_value_t *args, int nargs);
+void queue_next_tick_with_args(ant_t *js, ant_value_t callback, ant_args_t);
 
 bool js_maybe_drain_microtasks(ant_t *js);
 bool js_maybe_drain_microtasks_after_async_settle(ant_t *js);

@@ -426,7 +426,7 @@ static void handle_escape_sequence(rl_interface_t *iface, const char *seq, int l
   }}
 }
 
-static void emit_event(ant_t *js, rl_interface_t *iface, const char *event_type, ant_value_t *args, int nargs) {
+static void emit_event(ant_t *js, rl_interface_t *iface, const char *event_type, ant_args_t) {
   if (!iface || vtype(iface->js_obj) == kTypeUndefined) return;
   eventemitter_emit_args(js, iface->js_obj, event_type, args, nargs);
 }

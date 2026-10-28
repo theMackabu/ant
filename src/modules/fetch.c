@@ -752,10 +752,8 @@ static void fetch_start_upload(fetch_request_t *req) {
   ant_t *js = req->js;
 
   ant_value_t stream = js_get_slot(req->request_obj, SLOT_REQUEST_BODY_STREAM);
-  ant_value_t reader_args[1] = { stream };
-
   if (!rs_is_stream(stream)) return;
-  ant_value_t reader = js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
+  ant_value_t reader = rs_reader_create(js, stream, js_mkundef());
 
   if (is_err(reader)) {
     GC_ROOT_SAVE(root_mark, js);

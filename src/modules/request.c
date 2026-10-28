@@ -21,6 +21,7 @@
 #include "modules/headers.h"
 #include "modules/multipart.h"
 #include "modules/request.h"
+#include "modules/response.h"
 #include "modules/url.h"
 #include "modules/json.h"
 #include "streams/pipes.h"
@@ -549,33 +550,6 @@ static void resolve_body_promise(
   }}
 }
 
-static bool chunk_bytes(ant_t *js, ant_value_t chunk, uint8_t **bytes, size_t *len) {
-  if (vtype(chunk) != kTypeTypedArray) return false;
-  return Ant_Buffer_GetViewBytes((TypedArrayData *)js_gettypedarray(chunk), bytes, len);
-}
-
-static uint8_t *concat_chunks(ant_t *js, ant_value_t chunks, size_t *out_size) {
-  ant_offset_t n = js_arr_len(js, chunks);
-  uint8_t *bytes;
-  size_t len, total = 0;
-
-  for (ant_offset_t i = 0; i < n; i++)
-    if (chunk_bytes(js, js_arr_get(js, chunks, i), &bytes, &len)) total += len;
-
-  uint8_t *buf = total > 0 ? malloc(total) : NULL;
-  if (total > 0 && !buf) return NULL;
-
-  size_t pos = 0;
-  for (ant_offset_t i = 0; i < n; i++) {
-    if (!chunk_bytes(js, js_arr_get(js, chunks, i), &bytes, &len) || len == 0) continue;
-    memcpy(buf + pos, bytes, len);
-    pos += len;
-  }
-
-  *out_size = pos;
-  return buf;
-}
-
 static ant_value_t stream_body_read(ant_params_t);
 
 static ant_value_t stream_body_rejected(ant_params_t) {
@@ -606,11 +580,19 @@ static ant_value_t stream_body_read(ant_params_t) {
 
   if (vtype(done_val) == kTypeBool && done_val == js_true) {
     size_t size = 0;
-    uint8_t *data = concat_chunks(js, chunks, &size);
+    ant_value_t chunk_err = js_mkundef();
+    uint8_t *data = body_concat_uint8_chunks(js, chunks, &size, &chunk_err);
+    
+    if (is_err(chunk_err)) {
+      js_reject_promise(js, promise, chunk_err);
+      return js_mkundef();
+    }
+    
     ant_value_t type_v = js_get(js, state, "type");
     const char *body_type = (vtype(type_v) == kTypeString) ? js_getstr(js, type_v, NULL) : NULL;
     resolve_body_promise(js, promise, data, size, body_type, mode, true);
     free(data);
+    
     return js_mkundef();
   }
 
@@ -626,8 +608,7 @@ static ant_value_t consume_body_from_stream(
   ant_value_t promise, int mode,
   const char *body_type
 ) {
-  ant_value_t reader_args[1] = { stream };
-  ant_value_t reader = js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
+  ant_value_t reader = rs_reader_create(js, stream, js_mkundef());
 
   if (is_err(reader)) {
     js_reject_promise(js, promise, reader);

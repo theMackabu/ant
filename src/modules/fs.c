@@ -170,7 +170,7 @@ static void fs_io_args_from_options(ant_t *js, ant_value_t options, fs_io_args_t
   if (vtype(position) == kTypeNumber) io->position = (int64_t)js_getnum(position);
 }
 
-static void fs_io_args_from_list(ant_value_t *args, int nargs, int first, fs_io_args_t *io) {
+static void fs_io_args_from_list(ant_args_t, int first, fs_io_args_t *io) {
   if (nargs > first) io->offset = fs_number_or_nan(args[first]);
   if (nargs > first + 1) io->length = fs_number_or_nan(args[first + 1]);
   if (nargs > first + 2 && vtype(args[first + 2]) == kTypeNumber) io->position = (int64_t)js_getnum(args[first + 2]);
@@ -282,10 +282,7 @@ static void fs_add_active_watcher(fs_watcher_t *watcher) {
   if (watcher) Ant_List_Insert(&fs_watcher_isolate(watcher)->fs_watchers, watcher);
 }
 
-static ant_value_t fs_call_callback(
-  ant_t *js, ant_value_t fn,
-  ant_value_t *args, int nargs
-) {
+static ant_value_t fs_call_callback(ant_t *js, ant_value_t fn, ant_args_t) {
   ant_value_t result = Ant_Error_CallCallback(js, fn, js_mkundef(), args, nargs);
   process_report_uncaught_exception_if_pending(js);
   return result;
@@ -6976,7 +6973,7 @@ typedef struct {
 } fs_opendir_options_t;
 
 static ant_value_t fs_parse_opendir_args(
-  ant_t *js, ant_value_t *args, int nargs,
+  ant_native_params_t,
   const char *fn_name, fs_opendir_options_t *out
 ) {
   memset(out, 0, sizeof(*out));

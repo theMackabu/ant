@@ -123,30 +123,8 @@ static void net_add_active_server(net_server_t *server) {
   Ant_List_Insert(&server->js->net_servers, server);
 }
 
-static void net_remove_active_server(net_server_t *server) {
-  Ant_List_Remove(server);
-}
-
 static void net_add_active_socket(net_socket_t *socket) {
   if (socket) Ant_List_Insert(&socket->js->net_sockets, socket);
-}
-
-static void net_remove_active_socket(net_socket_t *socket) {
-  Ant_List_Remove(socket);
-}
-
-static bool net_emit(ant_t *js, ant_value_t target, const char *event, ant_value_t *args, int nargs) {
-  return eventemitter_emit_args(js, target, event, args, nargs);
-}
-
-static bool net_add_listener(
-  ant_t *js,
-  ant_value_t target,
-  const char *event,
-  ant_value_t listener,
-  bool once
-) {
-  return eventemitter_add_listener(js, target, event, listener, once);
 }
 
 static net_server_t *net_require_server(ant_t *js, ant_value_t this_val) {
@@ -455,9 +433,10 @@ static void net_server_maybe_finish_close(net_server_t *server) {
 
   server->closing = false;
   server->listening = false;
+  
   net_server_sync_state(server);
-  net_emit(server->js, server->obj, "close", NULL, 0);
-  net_remove_active_server(server);
+  eventemitter_emit_args(server->js, server->obj, "close", NULL, 0);
+  Ant_List_Remove(server);
 }
 
 static void net_socket_unlink(net_socket_t *socket) {
@@ -473,7 +452,7 @@ static void net_socket_unlink(net_socket_t *socket) {
     socket->server = NULL;
   }
 
-  net_remove_active_socket(socket);
+  Ant_List_Remove(socket);
   net_server_maybe_finish_close(server);
 }
 
@@ -516,8 +495,9 @@ static ant_value_t net_socket_emit_connect_error(ant_params_t) {
   socket->connecting = false;
   socket->had_error = true;
   net_socket_sync_state(socket);
+  
   err = Ant_Error_Create(js, JS_ERR_TYPE, uv_strerror(status));
-  net_emit(js, socket->obj, "error", &err, 1);
+  eventemitter_emit_args(js, socket->obj, "error", &err, 1);
   if (socket->conn) ant_conn_close(socket->conn);
 
   return js_mkundef();
@@ -684,7 +664,7 @@ static void net_socket_on_read(ant_conn_t *conn, ssize_t nread, void *user_data)
   GC_ROOT_PIN(socket->js, chunk);
   socket->had_error = true;
 
-  net_emit(socket->js, socket->obj, "error", &chunk, 1);
+  eventemitter_emit_args(socket->js, socket->obj, "error", &chunk, 1);
   GC_ROOT_RESTORE(socket->js, root_mark);
   ant_conn_close(conn);
 }
@@ -700,14 +680,14 @@ static void net_socket_on_error(ant_conn_t *conn, int status, void *user_data) {
   if (!socket) return;
   socket->had_error = true; {
     ant_value_t err = Ant_Error_Create(socket->js, JS_ERR_TYPE, uv_strerror(status));
-    net_emit(socket->js, socket->obj, "error", &err, 1);
+    eventemitter_emit_args(socket->js, socket->obj, "error", &err, 1);
   }
 }
 
 static void net_socket_on_timeout(ant_conn_t *conn, void *user_data) {
   net_socket_t *socket = (net_socket_t *)ant_conn_get_user_data(conn);
   if (!socket) return;
-  net_emit(socket->js, socket->obj, "timeout", NULL, 0);
+  eventemitter_emit_args(socket->js, socket->obj, "timeout", NULL, 0);
 }
 
 static void net_server_on_conn_close(ant_conn_t *conn, void *user_data) {
@@ -720,7 +700,7 @@ static void net_server_on_conn_close(ant_conn_t *conn, void *user_data) {
   socket->destroyed = true;
   
   net_socket_sync_state(socket);
-  net_emit(socket->js, socket->obj, "close", &arg, 1);
+  eventemitter_emit_args(socket->js, socket->obj, "close", &arg, 1);
   ant_conn_set_user_data(conn, NULL);
   net_socket_unlink(socket);
 }
@@ -741,7 +721,7 @@ static void net_socket_on_connect(ant_conn_t *conn, int status, void *user_data)
 
   net_socket_attach_conn(socket, conn);
   ant_conn_start(conn);
-  net_emit(socket->js, socket->obj, "connect", NULL, 0);
+  eventemitter_emit_args(socket->js, socket->obj, "connect", NULL, 0);
 }
 
 static void net_server_on_listener_close(ant_listener_t *listener, void *user_data) {
@@ -778,7 +758,7 @@ static void net_server_on_accept(ant_listener_t *listener, ant_conn_t *conn, voi
   if (server->pause_on_connect) ant_conn_pause_read(conn);
 
   arg = socket->obj;
-  net_emit(server->js, server->obj, "connection", &arg, 1);
+  eventemitter_emit_args(server->js, server->obj, "connection", &arg, 1);
 }
 
 static bool net_server_parse_host(const char *input, const char **out) {
@@ -848,7 +828,7 @@ static ant_value_t js_net_socket_setTimeout(ant_params_t) {
   net_socket_sync_state(socket);
 
   if (nargs > 1 && is_callable(args[1]))
-    net_add_listener(js, socket->obj, "timeout", args[1], true);
+    eventemitter_add_listener(js, socket->obj, "timeout", args[1], true);
 
   return js_getthis(js);
 }
@@ -942,7 +922,7 @@ static ant_value_t js_net_socket_destroy(ant_params_t) {
   if (nargs > 0 && vtype(args[0]) != kTypeUndefined && vtype(args[0]) != kTypeNull) {
     ant_value_t err = args[0];
     socket->had_error = true;
-    net_emit(js, socket->obj, "error", &err, 1);
+    eventemitter_emit_args(js, socket->obj, "error", &err, 1);
   }
 
   socket->destroyed = true;
@@ -986,7 +966,7 @@ static ant_value_t net_socket_connect_parsed(ant_t *js, net_socket_t *socket, co
   net_socket_sync_state(socket);
 
   if (is_callable(parsed->callback))
-    net_add_listener(js, socket->obj, "connect", parsed->callback, true);
+    eventemitter_add_listener(js, socket->obj, "connect", parsed->callback, true);
 
   if (parsed->no_delay) ant_conn_set_no_delay(conn, true);
   if (parsed->keep_alive)
@@ -1021,8 +1001,8 @@ static ant_value_t js_net_server_ctor(ant_params_t) {
 
   if (!server) return Ant_Error_CreateOutOfMemory(js);
   if (nargs > 0 && vtype(args[0]) == kTypeObject) net_server_apply_options(js, server, args[0]);
-  if (nargs > 0 && is_callable(args[0])) net_add_listener(js, server->obj, "connection", args[0], false);
-  else if (nargs > 1 && is_callable(args[1])) net_add_listener(js, server->obj, "connection", args[1], false);
+  if (nargs > 0 && is_callable(args[0])) eventemitter_add_listener(js, server->obj, "connection", args[0], false);
+  else if (nargs > 1 && is_callable(args[1])) eventemitter_add_listener(js, server->obj, "connection", args[1], false);
 
   return server->obj;
 }
@@ -1081,7 +1061,7 @@ static void net_server_take_over(ant_t *js, net_server_t *server, const net_list
 static ant_value_t net_server_emit_listening(ant_params_t) {
   ant_value_t obj = js_get_slot(js->current_func, SLOT_DATA);
   net_server_t *server = net_server_data(obj);
-  if (server && server->listening) net_emit(js, obj, "listening", NULL, 0);
+  if (server && server->listening) eventemitter_emit_args(js, obj, "listening", NULL, 0);
   return js_mkundef();
 }
 
@@ -1136,7 +1116,7 @@ static ant_value_t js_net_server_listen(ant_params_t) {
   net_server_sync_state(server);
   net_add_active_server(server);
 
-  if (is_callable(parsed.callback)) net_add_listener(js, server->obj, "listening", parsed.callback, true);
+  if (is_callable(parsed.callback)) eventemitter_add_listener(js, server->obj, "listening", parsed.callback, true);
   ant_value_t emit = js_make_data_cfunc(js, server->obj, net_server_emit_listening);
   if (!is_err(emit)) queue_next_tick(js, emit);
   GC_ROOT_RESTORE(js, root_mark);
@@ -1148,7 +1128,7 @@ static ant_value_t js_net_server_close(ant_params_t) {
   net_server_t *server = net_require_server(js, js_getthis(js));
 
   if (!server) return Ant_Exception_Current(js);
-  if (nargs > 0 && is_callable(args[0])) net_add_listener(js, server->obj, "close", args[0], true);
+  if (nargs > 0 && is_callable(args[0])) eventemitter_add_listener(js, server->obj, "close", args[0], true);
 
   if (!server->listening && !server->closing) {
     if (nargs > 0 && is_callable(args[0])) {

@@ -510,7 +510,7 @@ static ant_value_t isolate_simple(ant_t *js, ant_guest_t *g, guest_op_t op, bool
   return call ? isolate_submit(js, g, call, sync) : Ant_Error_CreateOutOfMemory(js);
 }
 
-static ant_value_t isolate_compile(ant_t *js, ant_value_t *args, int nargs, bool sync) {
+static ant_value_t isolate_compile(ant_native_params_t, bool sync) {
   ant_guest_t *g = isolate_this(js);
   if (!g) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
 
@@ -549,7 +549,7 @@ static ant_value_t isolate_run(ant_t *js, guest_op_t op, isolate_handle_t *targe
   return isolate_submit(js, target->g, call, sync);
 }
 
-static ant_value_t isolate_property(ant_t *js, guest_op_t op, ant_value_t *args, int nargs, bool sync) {
+static ant_value_t isolate_property(ant_t *js, guest_op_t op, ant_args_t, bool sync) {
   isolate_handle_t *ref = isolate_handle(js_getthis(js), HANDLE_REFERENCE);
   if (!ref) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
 
@@ -567,7 +567,7 @@ static ant_value_t isolate_property(ant_t *js, guest_op_t op, ant_value_t *args,
   return is_err(r) ? isolate_fail(call, r) : isolate_submit(js, ref->g, call, sync);
 }
 
-static ant_value_t isolate_apply(ant_t *js, ant_value_t *args, int nargs, bool sync) {
+static ant_value_t isolate_apply(ant_native_params_t, bool sync) {
   isolate_handle_t *ref = isolate_handle(js_getthis(js), HANDLE_REFERENCE);
   if (!ref) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
 
