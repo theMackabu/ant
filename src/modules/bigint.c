@@ -9,7 +9,7 @@
 #include "internal.h"
 #include "errors.h"
 #include "gc/roots.h"
-#include "silver/lexer.h"
+#include "numbers.h"
 
 static constexpr size_t BIGINT_LIMB_SIZE = 32;
 static constexpr size_t BIGINT_DOUBLE_PRECISION = DBL_MANT_DIG;
@@ -1596,54 +1596,77 @@ size_t strbigint(ant_t *js, ant_value_t value, char *buf, size_t len) {
   return total;
 }
 
+ant_value_t bigint_from_string_literal(ant_t *js, ant_value_t value) {
+  ant_offset_t slen;
+  const char *str = (const char *)(uintptr_t)vstr(js, value, &slen);
+  size_t start = 0, end = (size_t)slen, n;
+
+  while (start < end && (n = ant_js_trim_prefix_len(str + start, end - start))) start += n;
+  while (end > start && (n = ant_js_trim_suffix_len(str + start, end - start))) end -= n;
+  if (start == end) return bigint_from_uint64(js, 0);
+
+  bool neg = false, sign = str[start] == '-' || str[start] == '+';
+  if (sign) neg = str[start++] == '-';
+
+  uint32_t base = 10;
+  size_t digits = start;
+  if (!sign && end - start > 2 && str[start] == '0') {
+    char p = (char)(str[start + 1] | 0x20);
+    base = p == 'x' ? 16 : p == 'o' ? 8 : p == 'b' ? 2 : 10;
+    if (base != 10) digits += 2;
+  }
+
+  if (digits == end) return js_mkundef();
+  for (size_t i = digits; i < end; i++) {
+    int digit = ant_ascii_hex_value((unsigned char)str[i]);
+    if (digit < 0 || (uint32_t)digit >= base) return js_mkundef();
+  }
+
+  return bigint_from_string_digits(js, str + start, end - start, neg, false, false);
+}
+
+static ant_value_t bigint_string_syntax_error(ant_t *js, ant_value_t value) {
+  ant_offset_t len;
+  const char *str = (const char *)(uintptr_t)vstr(js, value, &len);
+  return js_mkerr_typed(js, JS_ERR_SYNTAX, "Cannot convert %.*s to a BigInt", (int)len, str);
+}
+
+static ant_value_t bigint_from_primitive(ant_t *js, ant_value_t value) {
+  switch (vtype(value)) {
+    case kTypeBigInt: return value;
+    case kTypeBool: return bigint_from_uint64(js, vdata(value) ? 1 : 0);
+    case kTypeString: {
+      ant_value_t parsed = bigint_from_string_literal(js, value);
+      return vtype(parsed) == kTypeUndefined ? bigint_string_syntax_error(js, value) : parsed;
+    }
+    case kTypeNumber: return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Number to a BigInt");
+    case kTypeSymbol: return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a BigInt");
+    default: return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert %s to a BigInt", typestr(vtype(value)));
+  }
+}
+
+static ant_value_t bigint_to_primitive(ant_t *js, ant_value_t value) {
+  if (!is_object_type(value) && vtype(value) != kTypeBuiltin) return value;
+  return js_to_primitive(js, value, 2);
+}
+
+ant_value_t bigint_to_bigint(ant_t *js, ant_value_t value) {
+  if (vtype(value) == kTypeBigInt) return value;
+  ant_value_t prim = bigint_to_primitive(js, value);
+  if (is_err(prim)) return prim;
+  return bigint_from_primitive(js, prim);
+}
+
 ant_value_t bigint_from_value(ant_t *js, ant_value_t arg) {
   if (vtype(arg) == kTypeBigInt) return arg;
+  ant_value_t prim = bigint_to_primitive(js, arg);
+  if (is_err(prim)) return prim;
+  if (vtype(prim) != kTypeNumber) return bigint_from_primitive(js, prim);
 
-  if (vtype(arg) == kTypeNumber) {
-    double d = tod(arg);
-    if (!isfinite(d)) return js_mkerr(js, "Cannot convert Infinity or NaN to BigInt");
-    if (d != trunc(d)) return js_mkerr(js, "Cannot convert non-integer to BigInt");
-
-    bool neg = d < 0;
-    if (neg) d = -d;
-
-    int need = snprintf(NULL, 0, "%.0f", d);
-    if (need < 0) return js_mkerr(js, "Cannot convert to BigInt");
-
-    char *buf = (char *)malloc((size_t)need + 1);
-    if (!buf) return js_mkerr(js, "oom");
-
-    snprintf(buf, (size_t)need + 1, "%.0f", d);
-    ant_value_t out = js_mkbigint(js, buf, (size_t)need, neg);
-    free(buf);
-    return out;
-  }
-
-  if (vtype(arg) == kTypeString) {
-    ant_offset_t slen;
-    ant_offset_t off = vstr(js, arg, &slen);
-    const char *str = (const char *)(uintptr_t)(off);
-
-    size_t start = 0;
-    size_t end = slen;
-    
-    while (start < end && is_space((unsigned char)str[start])) start++;
-    while (end > start && is_space((unsigned char)str[end - 1])) end--;
-    if (start >= end) return js_mkbigint(js, "0", 1, false);
-
-    bool neg = false;
-    if (str[start] == '-') {
-      neg = true;
-      start++;
-    } else if (str[start] == '+') start++;
-
-    if (start >= end) return js_mkerr(js, "Cannot convert string to BigInt");
-    return bigint_from_string_digits(js, str + start, end - start, neg, false, false);
-  }
-
-  if (vtype(arg) == kTypeBool) return js_mkbigint(js, vdata(arg) ? "1" : "0", 1, false);
-
-  return js_mkerr(js, "Cannot convert to BigInt");
+  double d = tod(prim);
+  if (!isfinite(d) || d != trunc(d))
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Cannot convert a non-integer Number to a BigInt");
+  return bigint_from_integral_double(js, d);
 }
 
 static ant_value_t builtin_BigInt(ant_params_t) {
@@ -1683,13 +1706,14 @@ static ant_value_t builtin_BigInt_asIntN(ant_params_t) {
   ant_value_t err = bigint_asint_bits(js, args[0], &bits);
   if (is_err(err)) return err;
 
-  if (vtype(args[1]) != kTypeBigInt) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert to BigInt");
+  ant_value_t value = bigint_to_bigint(js, args[1]);
+  if (is_err(value)) return value;
   if (bits == 0) return js_mkbigint(js, "0", 1, false);
 
   ant_value_t mod = bigint_pow2(js, bits);
   if (is_err(mod)) return mod;
 
-  ant_value_t res = bigint_mod(js, args[1], mod);
+  ant_value_t res = bigint_mod(js, value, mod);
   if (is_err(res)) return res;
 
   if (bigint_is_negative(js, res)) {
@@ -1717,13 +1741,14 @@ static ant_value_t builtin_BigInt_asUintN(ant_params_t) {
   ant_value_t err = bigint_asint_bits(js, args[0], &bits);
   if (is_err(err)) return err;
 
-  if (vtype(args[1]) != kTypeBigInt) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert to BigInt");
+  ant_value_t value = bigint_to_bigint(js, args[1]);
+  if (is_err(value)) return value;
   if (bits == 0) return js_mkbigint(js, "0", 1, false);
 
   ant_value_t mod = bigint_pow2(js, bits);
   if (is_err(mod)) return mod;
 
-  ant_value_t res = bigint_mod(js, args[1], mod);
+  ant_value_t res = bigint_mod(js, value, mod);
   if (is_err(res)) return res;
 
   if (bigint_is_negative(js, res)) {
@@ -1735,60 +1760,88 @@ static ant_value_t builtin_BigInt_asUintN(ant_params_t) {
   return res;
 }
 
-static ant_value_t builtin_bigint_toString(ant_params_t) {
+static ant_value_t bigint_this_value(ant_t *js, const char *method) {
   ant_value_t val = js->this_val;
-  if (vtype(val) != kTypeBigInt) {
-    val = unwrap_primitive(js, val);
-    if (vtype(val) != kTypeBigInt) return js_mkerr(js, "toString called on non-BigInt");
+  if (vtype(val) != kTypeBigInt) val = unwrap_primitive(js, val);
+  if (vtype(val) == kTypeBigInt) return val;
+  return js_mkerr_typed(js, JS_ERR_TYPE, "BigInt.prototype.%s requires that 'this' be a BigInt", method);
+}
+
+static ant_value_t bigint_radix_arg(ant_t *js, ant_value_t value, uint32_t *out) {
+  if (vtype(value) == kTypeUndefined) {
+    *out = 10;
+    return js_mkundef();
   }
 
-  int radix = 10;
-  if (nargs >= 1 && vtype(args[0]) == kTypeNumber) {
-    radix = (int)tod(args[0]);
-    if (radix < 2 || radix > 36) return js_mkerr(js, "radix must be between 2 and 36");
+  if (is_object_type(value) || vtype(value) == kTypeBuiltin) {
+    value = js_to_primitive(js, value, 2);
+    if (is_err(value)) return value;
   }
 
+  if (vtype(value) == kTypeSymbol || vtype(value) == kTypeBigInt)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert value to a number");
+
+  double radix = js_to_number(js, value);
+  radix = isnan(radix) ? 0 : trunc(radix);
+  if (radix < 2 || radix > 36)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "toString() radix must be between 2 and 36");
+
+  *out = (uint32_t)radix;
+  return js_mkundef();
+}
+
+static ant_value_t bigint_to_radix_string(ant_t *js, ant_value_t val, uint32_t radix, bool grouped) {
   bool neg = bigint_is_negative(js, val);
   size_t count = 0;
   const uint32_t *limbs = bigint_limbs(js, val, &count);
 
   size_t dlen = 0;
-  char *digits = NULL;
-
-  if (radix == 10) digits = bigint_abs_to_decimal_string(limbs, count, &dlen);
-  else digits = bigint_abs_to_radix_string(limbs, count, (uint32_t)radix, &dlen);
-
+  char *digits = radix == 10
+    ? bigint_abs_to_decimal_string(limbs, count, &dlen)
+    : bigint_abs_to_radix_string(limbs, count, radix, &dlen);
   if (!digits) return js_mkerr(js, "oom");
 
-  if (!neg) {
-    ant_value_t out = js_mkstr(js, digits, dlen);
-    free(digits);
-    return out;
-  }
-
-  char *full = (char *)malloc(dlen + 2);
+  size_t separators = grouped && dlen > 3 ? (dlen - 1) / 3 : 0;
+  size_t out_len = (neg ? 1 : 0) + dlen + separators;
+  char *full = (char *)malloc(out_len + 1);
   if (!full) {
     free(digits);
     return js_mkerr(js, "oom");
   }
 
-  full[0] = '-';
-  memcpy(full + 1, digits, dlen);
-  full[dlen + 1] = '\0';
+  size_t pos = 0;
+  if (neg) full[pos++] = '-';
+  for (size_t i = 0; i < dlen; i++) {
+    if (separators && i > 0 && (dlen - i) % 3 == 0) full[pos++] = ',';
+    full[pos++] = digits[i];
+  }
+  full[pos] = '\0';
 
-  ant_value_t out = js_mkstr(js, full, dlen + 1);
+  ant_value_t out = js_mkstr(js, full, out_len);
   free(digits);
   free(full);
   return out;
 }
 
+static ant_value_t builtin_bigint_toString(ant_params_t) {
+  ant_value_t val = bigint_this_value(js, "toString");
+  if (is_err(val)) return val;
+
+  uint32_t radix = 10;
+  ant_value_t status = bigint_radix_arg(js, nargs > 0 ? args[0] : js_mkundef(), &radix);
+  if (is_err(status)) return status;
+
+  return bigint_to_radix_string(js, val, radix, false);
+}
+
+static ant_value_t builtin_bigint_toLocaleString(ant_params_t) {
+  ant_value_t val = bigint_this_value(js, "toLocaleString");
+  if (is_err(val)) return val;
+  return bigint_to_radix_string(js, val, 10, true);
+}
+
 static ant_value_t builtin_bigint_valueOf(ant_params_t) {
-  ant_value_t val = js->this_val;
-  if (vtype(val) != kTypeBigInt) {
-    val = unwrap_primitive(js, val);
-    if (vtype(val) != kTypeBigInt) return js_mkerr(js, "valueOf called on non-BigInt");
-  }
-  return val;
+  return bigint_this_value(js, "valueOf");
 }
 
 void init_bigint_module(ant_t *js) {
@@ -1798,6 +1851,7 @@ void init_bigint_module(ant_t *js) {
   js->sym.bigint_proto = bigint_proto;
   js_set_proto_init(bigint_proto, object_proto);
   
+  defmethod(js, bigint_proto, "toLocaleString", 14, Ant_Function_Create(builtin_bigint_toLocaleString));
   defmethod(js, bigint_proto, "toString", 8, Ant_Function_Create(builtin_bigint_toString));
   defmethod(js, bigint_proto, "valueOf", 7, Ant_Function_Create(builtin_bigint_valueOf));
   js_set_tostringtag(js, bigint_proto, ANT_STRING("BigInt"));

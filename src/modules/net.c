@@ -103,6 +103,22 @@ static net_socket_t *net_socket_data(ant_value_t value) {
   return (net_socket_t *)js_get_native(value, NET_SOCKET_NATIVE_TAG);
 }
 
+int net_socket_fileno(ant_value_t value) {
+#ifdef _WIN32
+  (void)value;
+  return -1;
+#else
+  net_socket_t *socket = net_socket_data(value);
+  uv_os_fd_t fd;
+
+  if (!socket || !socket->conn) return -1;
+  uv_handle_t *handle = (uv_handle_t *)ant_conn_stream(socket->conn);
+  if (!handle || uv_is_closing(handle) || uv_fileno(handle, &fd) != 0) return -1;
+
+  return (int)fd;
+#endif
+}
+
 static void net_add_active_server(net_server_t *server) {
   Ant_List_Insert(&server->js->net_servers, server);
 }
@@ -658,7 +674,7 @@ static void net_socket_on_read(ant_conn_t *conn, ssize_t nread, void *user_data)
   ant_conn_consume(conn, total);
   net_socket_sync_state(socket);
   
-  if (!is_err(chunk)) chunk = stream_readable_push_source(socket->js, socket->obj, chunk);
+  if (!is_err(chunk)) chunk = stream_readable_push(socket->js, socket->obj, chunk, js_mkundef());
   if (chunk == js_false && socket->conn) ant_conn_pause_read(socket->conn);
   if (!is_err(chunk)) return;
 

@@ -8,8 +8,8 @@
 #include "shapes.h"
 #include "pool.h"
 #include "runtime.h"
-#include "descriptors.h"
 #include "primordials.h"
+#include "descriptors.h"
 #include "gc/objects.h"
 #include "silver/code_unit.h"
 
@@ -41,6 +41,12 @@ typedef struct {
   uint32_t own_valueof_data_slot;
   uint32_t ic_epoch;
 } ant_to_primitive_cache_t;
+
+typedef struct {
+  ant_shape_t *shape;
+  ant_value_t proto;
+  uint32_t ic_epoch;
+} ant_absent_key_cache_t;
 
 typedef struct {
   const char *name;
@@ -214,6 +220,10 @@ struct ant_isolate_t {
 
   struct {
     ant_shape_t *roots[ANT_INOBJ_MAX_SLOTS + 1];
+    ant_shape_roots_t *proto_roots;
+    ant_shape_roots_t null_roots;
+    ant_value_t cached_protos[8];
+    ant_shape_t *cached_roots[8];
     ant_shape_heap_t heap;
     uint16_t gc_epoch;
   } shapes;
@@ -300,6 +310,7 @@ struct ant_isolate_t {
     const char *arguments;
     const char *callee;
     const char *next;
+    const char *ret;
     const char *define_property;
     const char *get_own_property_descriptor;
     const char *module_cache;
@@ -412,6 +423,7 @@ struct ant_isolate_t {
     uint64_t alloc_since_major;
     size_t arrays_at_collect;
     size_t alloc_limit;
+    size_t pool_limit;
     size_t array_limit;
     size_t array_major_limit;
     size_t idle_retry_at;
@@ -433,6 +445,8 @@ struct ant_isolate_t {
     uint8_t obj_epoch;
     
     bool minor;
+    bool skip_minors;
+    bool skip_probe;
     bool realm_reach;
     
     ant_object_t **mark_stack;
@@ -575,6 +589,7 @@ struct ant_isolate_t {
   struct {
     ant_with_unscopables_cache_t with_unscopables_absent;
     ant_to_primitive_cache_t to_primitive_absent;
+    ant_absent_key_cache_t then_absent[8];
   } runtime_cache;
 
   struct {
@@ -605,6 +620,12 @@ struct ant_isolate_t {
     uint32_t mark_epoch;
     bool minor_marking;
     bool conservative_marking;
+    bool untrusted_marking;
+
+    uint32_t young_blocks_major;
+    uint32_t young_blocks_minor;
+    uint32_t young_keep_major;
+    uint32_t young_keep_minor;
 
     ant_string_builder_t **remembered_builders;
     size_t remembered_builder_len;

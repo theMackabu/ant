@@ -1,580 +1,547 @@
 #include <compat.h> // IWYU pragma: keep
 #include <ada_c.h>
-#include <ctype.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
 
 #include "ant.h"
+#include "ascii.h"
+#include "cfunc.h"
 #include "internal.h"
-#include "modules/url.h"
+#include "utf8.h"
+#include "silver/call.h"
 #include "url_internal.h"
+
+enum {
+  LP_PROTOCOL,
+  LP_SLASHES,
+  LP_AUTH,
+  LP_HOST,
+  LP_PORT,
+  LP_HOSTNAME,
+  LP_HASH,
+  LP_SEARCH,
+  LP_QUERY,
+  LP_PATHNAME,
+  LP_PATH,
+  LP_HREF,
+  LP_FIELD_COUNT,
+};
+
+enum {
+  LP_FLAG_SIMPLE = 1 << 12,
+  LP_FLAG_PARSE_QUERY = 1 << 13,
+  LP_FLAG_HOST_BRANCH = 1 << 14,
+  LP_FLAG_IPV6 = 1 << 15,
+  LP_STATUS_SHIFT = 16,
+  LP_STATUS_INVALID_PORT = 1,
+  LP_STATUS_INVALID_URL = 2,
+};
 
 typedef struct {
   const char *ptr;
   size_t len;
-} url_slice_t;
+} lp_slice_t;
 
 typedef struct {
-  url_slice_t protocol, auth, host, port, hostname;
-  url_slice_t hash, search, query, pathname, path, href;
-  bool slashes;
-} legacy_url_t;
+  ant_t *js;
+  ant_value_t target;
+  ant_value_t values[LP_FIELD_COUNT];
+  uint32_t assigned;
+  uint32_t flags;
+  int hostname_truthy;
+  url_fmt_buf_t bufs[6];
+} lp_state_t;
 
-static url_slice_t url_slice(const char *ptr, size_t len) {
-  return (url_slice_t){ ptr, len };
+static lp_slice_t lp_slice(const char *ptr, size_t len) {
+  return (lp_slice_t){ ptr, len };
 }
 
-static url_slice_t url_slice_buf(const url_fmt_buf_t *b) {
-  return b->len ? url_slice(b->buf, b->len) : (url_slice_t){0};
+static lp_slice_t lp_sub(lp_slice_t s, size_t from, size_t to) {
+  return lp_slice(s.ptr + from, to - from);
 }
 
-static void legacy_url_set(ant_t *js, ant_value_t obj, const char *name, url_slice_t s) {
-  js_set(js, obj, name, s.ptr ? js_mkstr(js, s.ptr, s.len) : js_mknull());
+static ssize_t lp_find(lp_slice_t s, char c) {
+  const char *hit = s.len ? memchr(s.ptr, c, s.len) : NULL;
+  return hit ? hit - s.ptr : -1;
 }
 
-static ant_value_t legacy_url_object(ant_t *js, const legacy_url_t *u) {
-  ant_value_t obj = Ant_Object_Create(js);
-
-  legacy_url_set(js, obj, "protocol", u->protocol);
-  js_set(js, obj, "slashes", u->slashes ? js_true : js_mknull());
-  legacy_url_set(js, obj, "auth", u->auth);
-  legacy_url_set(js, obj, "host", u->host);
-  legacy_url_set(js, obj, "port", u->port);
-  legacy_url_set(js, obj, "hostname", u->hostname);
-  legacy_url_set(js, obj, "hash", u->hash);
-  legacy_url_set(js, obj, "search", u->search);
-  legacy_url_set(js, obj, "query", u->query);
-  legacy_url_set(js, obj, "pathname", u->pathname);
-  legacy_url_set(js, obj, "path", u->path);
-  legacy_url_set(js, obj, "href", u->href);
-
-  return obj;
+static ssize_t lp_find_last(lp_slice_t s, char c) {
+  for (size_t i = s.len; i > 0; i--) if (s.ptr[i - 1] == c) return (ssize_t)(i - 1);
+  return -1;
 }
 
-static bool legacy_proto_is(const char *proto, size_t len, const char *name) {
-  size_t name_len = strlen(name);
-  if (len && proto[len - 1] == ':') len--;
-  return len == name_len && strncmp(proto, name, name_len) == 0;
+static bool lp_eq(lp_slice_t s, const char *lit) {
+  size_t n = strlen(lit);
+  return s.len == n && memcmp(s.ptr, lit, n) == 0;
 }
 
-static bool legacy_proto_is_slashed(const char *proto, size_t len) {
-  return
-    legacy_proto_is(proto, len, "http")  || legacy_proto_is(proto, len, "https") ||
-    legacy_proto_is(proto, len, "ftp")   || legacy_proto_is(proto, len, "gopher") ||
-    legacy_proto_is(proto, len, "file")  || legacy_proto_is(proto, len, "ws") ||
-    legacy_proto_is(proto, len, "wss");
+static lp_slice_t lp_build(url_fmt_buf_t *b, lp_slice_t first, lp_slice_t second, lp_slice_t third) {
+  b->len = 0;
+  url_fmt_append_n(b, first.ptr, first.len);
+  url_fmt_append_n(b, second.ptr, second.len);
+  url_fmt_append_n(b, third.ptr, third.len);
+  return lp_slice(b->buf ? b->buf : "", b->len);
 }
 
-static bool legacy_proto_is_hostless(const char *proto, size_t len) {
-  return legacy_proto_is(proto, len, "javascript");
+static size_t lp_ws_prefix(const uint8_t *p, size_t n) {
+  if (p[0] < 33) return 1;
+  if (n >= 2 && p[0] == 0xc2 && p[1] == 0xa0) return 2;
+  if (n >= 3 && p[0] == 0xef && p[1] == 0xbb && p[2] == 0xbf) return 3;
+  return 0;
 }
 
-static const char *legacy_auto_escape(unsigned char c) {
+static size_t lp_ws_suffix(const uint8_t *p, size_t n) {
+  if (p[n - 1] < 33) return 1;
+  if (n >= 2 && p[n - 2] == 0xc2 && p[n - 1] == 0xa0) return 2;
+  if (n >= 3 && p[n - 3] == 0xef && p[n - 2] == 0xbb && p[n - 1] == 0xbf) return 3;
+  return 0;
+}
+
+static bool lp_js_space_at(const uint8_t *p, size_t n) {
+  uint8_t c = p[0];
+  if (c < 0x80) return c == ' ' || (c >= '\t' && c <= '\r');
+  if (c == 0xc2) return n >= 2 && p[1] == 0xa0;
+  if (n < 3) return false;
+  if (c == 0xe1) return p[1] == 0x9a && p[2] == 0x80;
+  if (c == 0xe2 && p[1] == 0x80) return p[2] <= 0x8a || p[2] == 0xa8 || p[2] == 0xa9 || p[2] == 0xaf;
+  if (c == 0xe2) return p[1] == 0x81 && p[2] == 0x9f;
+  if (c == 0xe3) return p[1] == 0x80 && p[2] == 0x80;
+  if (c == 0xef) return p[1] == 0xbb && p[2] == 0xbf;
+  return false;
+}
+
+static bool lp_has_js_space(lp_slice_t s, size_t from, size_t to) {
+  for (size_t i = from; i < to; i++) if (lp_js_space_at((const uint8_t *)s.ptr + i, to - i)) return true;
+  return false;
+}
+
+static bool lp_is_slashed(lp_slice_t proto) {
+  static const char *const names[] = { "http:", "https:", "ftp:", "gopher:", "file:", "ws:", "wss:" };
+  if (!proto.ptr) return false;
+  for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) if (lp_eq(proto, names[i])) return true;
+  return false;
+}
+
+static bool lp_is_hostless(lp_slice_t proto) {
+  return proto.ptr && lp_eq(proto, "javascript:");
+}
+
+static bool lp_is_host_ending(uint8_t c) {
+  return c == '#' || c == '/' || c == '?';
+}
+
+static bool lp_is_non_host(uint8_t c) {
+  switch (c) {
+    case ' ': case '"': case '%': case '\'': case ';': case '<': case '>':
+    case '\\': case '^': case '`': case '{': case '|': case '}':
+      return true;
+    default:
+      return false;
+  }
+}
+
+static bool lp_is_forbidden_host(uint8_t c, bool ipv6) {
+  switch (c) {
+    case 0: case '\t': case '\n': case '\r': case ' ': case '#': case '%': case '/':
+    case '<': case '>': case '?': case '@': case '\\': case '^': case '|':
+      return true;
+    case ':': case '[': case ']':
+      return !ipv6;
+    default:
+      return false;
+  }
+}
+
+static const char *lp_auto_escape(uint8_t c) {
   switch (c) {
     case '\t': return "%09";
     case '\n': return "%0A";
     case '\r': return "%0D";
-    case ' ':  return "%20";
-    case '"':  return "%22";
+    case ' ': return "%20";
+    case '"': return "%22";
     case '\'': return "%27";
-    case '<':  return "%3C";
-    case '>':  return "%3E";
+    case '<': return "%3C";
+    case '>': return "%3E";
     case '\\': return "%5C";
-    case '^':  return "%5E";
-    case '`':  return "%60";
-    case '{':  return "%7B";
-    case '|':  return "%7C";
-    case '}':  return "%7D";
-    default:   return NULL;
+    case '^': return "%5E";
+    case '`': return "%60";
+    case '{': return "%7B";
+    case '|': return "%7C";
+    case '}': return "%7D";
+    default: return NULL;
   }
 }
 
-static bool legacy_auth_is_safe(unsigned char c) {
-  return isalnum(c) || (c && strchr("!'()*-._~:", (char)c) != NULL);
-}
-
-static bool legacy_host_char_is_stripped(unsigned char c) {
-  return c == '\t' || c == '\n' || c == '\r';
-}
-
-static bool legacy_host_char_is_invalid(unsigned char c) {
-  switch (c) {
-    case ' ': case '"': case '%': case '\'':
-    case ';': case '<': case '>': case '\\': case '^': case '`':
-    case '{': case '|': case '}': return true;
-    default: return false;
-  }
-}
-
-static size_t legacy_scheme_len(const char *value, size_t len) {
-  size_t i = 0;
-  for (; i < len; i++) {
-    unsigned char c = (unsigned char)value[i];
-    if (isalnum(c) || c == '.' || c == '+' || c == '-') continue;
-    return c == ':' && i > 0 ? i + 1 : 0;
-  }
-  return 0;
-}
-
-static bool legacy_has_auth_authority(const char *rest, size_t len) {
+static bool lp_host_pattern(lp_slice_t s) {
+  if (s.len < 2 || s.ptr[0] != '/' || s.ptr[1] != '/') return false;
   size_t i = 2;
-  size_t user_len = 0;
-
-  if (len < 2 || rest[0] != '/' || rest[1] != '/') return false;
-  for (; i < len && rest[i] != '@' && rest[i] != '/'; i++) user_len++;
-  if (!user_len || i >= len || rest[i] != '@') return false;
-
-  return i + 1 < len && rest[i + 1] != '@' && rest[i + 1] != '/';
+  while (i < s.len && s.ptr[i] != '@' && s.ptr[i] != '/') i++;
+  if (i == 2 || i >= s.len || s.ptr[i] != '@') return false;
+  return i + 1 < s.len && s.ptr[i + 1] != '@' && s.ptr[i + 1] != '/';
 }
 
-static bool legacy_is_ws(unsigned char c) {
-  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
-}
-
-static bool legacy_simple_path(const char *s, size_t len, size_t *path_len, bool *has_search) {
-  size_t i = 1;
-
-  if (!len || s[0] != '/') return false;
-  if (i < len && s[i] == '/') {
-    if (i + 1 < len && s[i + 1] == '/') return false;
-    i++;
+static size_t lp_utf16_len(lp_slice_t s) {
+  size_t units = 0;
+  for (size_t i = 0; i < s.len; i++) {
+    uint8_t c = (uint8_t)s.ptr[i];
+    if ((c & 0xc0) != 0x80) units += c >= 0xf0 ? 2 : 1;
   }
+  return units;
+}
 
-  while (i < len && s[i] != '?' && !legacy_is_ws((unsigned char)s[i])) i++;
-  if (i < len && legacy_is_ws((unsigned char)s[i])) return false;
-
-  *path_len = i;
-  *has_search = i < len;
-  if (i == len) return true;
-
-  for (size_t j = i + 1; j < len; j++)
-    if (legacy_is_ws((unsigned char)s[j])) return false;
-
+static bool lp_is_ascii(lp_slice_t s) {
+  for (size_t i = 0; i < s.len; i++) if ((uint8_t)s.ptr[i] >= 0x80) return false;
   return true;
 }
 
-static void legacy_query_add(
-  ant_t *js, ant_value_t obj, const char *k, size_t k_len, const char *v, size_t v_len
-) {
-  // TODO: k_len is unused for now: js_get/js_set take NUL-terminated keys, and property keys
-  // with an embedded NUL are truncated by the intern layer regardless of what this site
-  // does (docs/exec-plans/active/nul-keys-and-array-includes.md, part 1). The decoder
-  // already produces the length, so it is threaded through to make this site correct the
-  // moment length-carrying key lookups exist.
-  (void)k_len;
-  ant_value_t existing = js_get(js, obj, k);
-  ant_value_t value = js_mkstr(js, v, v_len);
-
-  if (is_undefined(existing)) {
-    js_set(js, obj, k, value);
-    return;
-  }
-
-  if (vtype(existing) == kTypeArray) {
-    js_arr_push(js, existing, value);
-    return;
-  }
-
-  ant_value_t arr = js_mkarr(js);
-  js_arr_push(js, arr, existing);
-  js_arr_push(js, arr, value);
-  js_set(js, obj, k, arr);
+static void lp_assign(lp_state_t *st, int field, ant_value_t value) {
+  st->values[field] = value;
+  st->assigned |= 1u << field;
 }
 
-static ant_value_t legacy_query_object(ant_t *js, const char *query, size_t len) {
+static void lp_assign_slice(lp_state_t *st, int field, lp_slice_t s) {
+  lp_assign(st, field, js_mkstr(st->js, s.ptr ? s.ptr : "", s.len));
+}
+
+static ant_value_t lp_current(lp_state_t *st, int field, const char *name) {
+  if (st->assigned & (1u << field)) return st->values[field];
+  if (!is_object_type(st->target)) return js_mkundef();
+  return js_get(st->js, st->target, name);
+}
+
+static ant_value_t lp_result(lp_state_t *st, uint32_t flags) {
+  ant_value_t items[LP_FIELD_COUNT + 1];
+  items[0] = js_mknum((double)(flags | st->flags | st->assigned));
+  for (int i = 0; i < LP_FIELD_COUNT; i++) items[i + 1] = st->values[i];
+  return js_mkarr_dense_literal(st->js, items, LP_FIELD_COUNT + 1);
+}
+
+static ant_value_t lp_fail(lp_state_t *st, int status) {
+  return lp_result(st, (uint32_t)status << LP_STATUS_SHIFT);
+}
+
+static ant_value_t lp_oom(lp_state_t *st) {
+  return js_mkerr(st->js, "out of memory");
+}
+
+static lp_slice_t lp_string_slice(ant_t *js, ant_value_t value) {
+  size_t len = 0;
+  const char *ptr = js_getstr(js, value, &len);
+  return ptr ? lp_slice(ptr, len) : lp_slice("", 0);
+}
+
+static ant_value_t lp_null_proto_object(ant_t *js) {
   ant_value_t obj = Ant_Object_CreateBare(js);
-  size_t start = 0;
-
-  for (size_t i = 0; i <= len; i++) {
-    if (i != len && query[i] != '&') continue;
-    if (i > start) {
-      size_t pair_len = i - start;
-      const char *pair = query + start;
-      const char *eq = memchr(pair, '=', pair_len);
-      char *raw_k = strndup(pair, eq ? (size_t)(eq - pair) : pair_len);
-      char *raw_v = eq ? strndup(eq + 1, pair_len - (size_t)(eq - pair) - 1) : strdup("");
-
-      if (raw_k && raw_v) {
-        size_t k_len = 0, v_len = 0;
-        char *k = form_urldecode_len(raw_k, &k_len);
-        char *v = form_urldecode_len(raw_v, &v_len);
-        if (k && v) legacy_query_add(js, obj, k, k_len, v, v_len);
-        free(k); free(v);
-      }
-
-      free(raw_k); free(raw_v);
-    }
-    start = i + 1;
-  }
-
+  js_set_proto_init(obj, js_mknull());
   return obj;
 }
 
-typedef struct {
-  url_fmt_buf_t protocol;
-  url_fmt_buf_t hostname;
-  url_fmt_buf_t host;
-  url_fmt_buf_t path;
-  url_fmt_buf_t tail;
-  url_fmt_buf_t input;
-  char *auth;
-  char *idna;
-} legacy_parse_scratch_t;
-
-static void legacy_parse_scratch_free(legacy_parse_scratch_t *s) {
-  free(s->protocol.buf);
-  free(s->hostname.buf);
-  free(s->host.buf);
-  free(s->path.buf);
-  free(s->tail.buf);
-  free(s->input.buf);
-  free(s->auth);
-  free(s->idna);
+static ant_value_t lp_to_lower(lp_state_t *st, ant_value_t hostname, lp_slice_t s) {
+  if (lp_is_ascii(s)) {
+    url_fmt_buf_t *b = &st->bufs[4];
+    b->len = 0;
+    if (!url_fmt_reserve(b, s.len)) return lp_oom(st);
+    for (size_t i = 0; i < s.len; i++) b->buf[i] = (char)ant_ascii_to_lower((unsigned char)s.ptr[i]);
+    b->len = s.len;
+    return js_mkstr(st->js, b->buf, b->len);
+  }
+  ant_value_t fn = js_get(st->js, st->js->sym.string_proto, "toLowerCase");
+  if (is_err(fn)) return fn;
+  return sv_vm_call_explicit_this(st->js->vm, st->js, fn, hostname, NULL, 0);
 }
 
-ant_value_t legacy_url_parse_impl(
-  ant_t *js,
-  const char *input,
-  size_t input_len,
-  bool parse_query,
-  bool slashes_denote_host
-) {
-  legacy_parse_scratch_t scratch = {0};
-  legacy_url_t url = {0};
-  ant_value_t obj = 0;
+static ant_value_t lp_to_ascii(ant_t *js, lp_slice_t s) {
+  size_t len = s.len;
+  char *utf8 = wtf8_to_utf8_dup(s.ptr, &len);
+  ada_owned_string ascii = ada_idna_to_ascii(utf8 ? utf8 : s.ptr, len);
+  free(utf8);
+  ant_value_t out = js_mkstr(js, ascii.data ? ascii.data : "", ascii.data ? ascii.length : 0);
+  ada_free_owned_string(ascii);
+  return out;
+}
 
-  const char *rest = input;
-  size_t rest_len = input_len;
+static bool lp_match_simple(lp_slice_t rest, size_t *pathname_end) {
+  if (!rest.len || rest.ptr[0] != '/') return false;
 
-  url_slice_t proto = {0}, hostname = {0}, port = {0};
+  size_t i = 1;
+  if (rest.len > 1 && rest.ptr[1] == '/') {
+    if (rest.len > 2 && rest.ptr[2] == '/') return false;
+    i = 2;
+  }
+
+  for (; i < rest.len && rest.ptr[i] != '?'; i++)
+    if (lp_js_space_at((const uint8_t *)rest.ptr + i, rest.len - i)) return false;
+  if (i < rest.len && lp_has_js_space(rest, i, rest.len)) return false;
+
+  *pathname_end = i;
+  return true;
+}
+
+static ant_value_t lp_parse_simple(lp_state_t *st, lp_slice_t rest, size_t pathname_end, bool parse_query) {
+  ant_value_t whole = js_mkstr(st->js, rest.ptr, rest.len);
+  lp_assign(st, LP_PATH, whole);
+  lp_assign(st, LP_HREF, whole);
+  lp_assign_slice(st, LP_PATHNAME, lp_sub(rest, 0, pathname_end));
+
+  uint32_t flags = LP_FLAG_SIMPLE;
+  if (pathname_end < rest.len) {
+    lp_assign_slice(st, LP_SEARCH, lp_sub(rest, pathname_end, rest.len));
+    lp_assign_slice(st, LP_QUERY, lp_sub(rest, pathname_end + 1, rest.len));
+    if (parse_query) flags |= LP_FLAG_PARSE_QUERY;
+  } else if (parse_query) {
+    lp_assign(st, LP_SEARCH, js_mknull());
+    lp_assign(st, LP_QUERY, lp_null_proto_object(st->js));
+  }
+
+  return lp_result(st, flags);
+}
+
+static ant_value_t lp_parse_host(lp_state_t *st, lp_slice_t *rest_io) {
+  ant_t *js = st->js;
+  lp_slice_t rest = *rest_io;
+  ssize_t at_sign = -1, non_host = -1;
+  size_t removed_at = rest.len;
+
+  for (size_t i = 0; i < rest.len; i++) {
+    uint8_t c = (uint8_t)rest.ptr[i];
+    if (c == '\t' || c == '\n' || c == '\r') { removed_at = i; break; }
+    if (lp_is_host_ending(c)) { if (non_host == -1) non_host = (ssize_t)i; break; }
+    if (c == '@') { at_sign = (ssize_t)i; non_host = -1; }
+    else if (lp_is_non_host(c) && non_host == -1) non_host = (ssize_t)i;
+  }
+
+  if (removed_at < rest.len) {
+    url_fmt_buf_t *b = &st->bufs[2];
+    b->len = 0;
+    if (!url_fmt_reserve(b, rest.len)) return lp_oom(st);
+    at_sign = -1;
+    non_host = -1;
+    size_t i = 0;
+    for (; i < rest.len; i++) {
+      uint8_t c = (uint8_t)rest.ptr[i];
+      if (c == '\t' || c == '\n' || c == '\r') continue;
+      ssize_t w = (ssize_t)b->len;
+      b->buf[b->len++] = (char)c;
+      if (lp_is_host_ending(c)) { if (non_host == -1) non_host = w; i++; break; }
+      if (c == '@') { at_sign = w; non_host = -1; }
+      else if (lp_is_non_host(c) && non_host == -1) non_host = w;
+    }
+    memcpy(b->buf + b->len, rest.ptr + i, rest.len - i);
+    b->len += rest.len - i;
+    rest = lp_slice(b->buf, b->len);
+  }
+
+  size_t host_start = 0;
+  if (at_sign != -1) {
+    lp_assign_slice(st, LP_AUTH, lp_sub(rest, 0, (size_t)at_sign));
+    host_start = (size_t)at_sign + 1;
+  }
+
+  lp_slice_t host;
+  if (non_host == -1) {
+    host = lp_sub(rest, host_start, rest.len);
+    rest = lp_slice("", 0);
+  } else {
+    host = lp_sub(rest, host_start, (size_t)non_host);
+    rest = lp_sub(rest, (size_t)non_host, rest.len);
+  }
+  lp_assign_slice(st, LP_HOST, host);
+
+  ssize_t colon = lp_find_last(host, ':');
+  if (colon != -1) {
+    bool digits = true;
+    for (size_t i = (size_t)colon + 1; i < host.len && digits; i++) digits = ant_ascii_is_digit((unsigned char)host.ptr[i]);
+    if (digits) {
+      if ((size_t)colon + 1 < host.len) lp_assign_slice(st, LP_PORT, lp_sub(host, (size_t)colon + 1, host.len));
+      host = lp_sub(host, 0, (size_t)colon);
+    }
+  }
+  if (host.len) lp_assign_slice(st, LP_HOSTNAME, host);
+
+  ant_value_t hostname = lp_current(st, LP_HOSTNAME, "hostname");
+  if (is_err(hostname)) return hostname;
+  if (vtype(hostname) != kTypeString) {
+    hostname = js_mkstr(js, "", 0);
+    lp_assign(st, LP_HOSTNAME, hostname);
+  }
+
+  lp_slice_t name = lp_string_slice(js, hostname);
+  bool ipv6 = name.len > 0 && name.ptr[0] == '[' && name.ptr[name.len - 1] == ']';
+
+  if (!ipv6) {
+    for (size_t i = 0; i < name.len; i++) {
+      uint8_t c = (uint8_t)name.ptr[i];
+      if (c != '/' && c != '\\' && c != '#' && c != '?' && c != ':') continue;
+      if (c == ':') return lp_fail(st, LP_STATUS_INVALID_PORT);
+      rest = lp_build(&st->bufs[3], lp_slice("/", 1), lp_sub(name, i, name.len), rest);
+      hostname = js_mkstr(js, name.ptr, i);
+      lp_assign(st, LP_HOSTNAME, hostname);
+      name = lp_string_slice(js, hostname);
+      break;
+    }
+  }
+
+  if (name.len > 255 && lp_utf16_len(name) > 255) hostname = js_mkstr(js, "", 0);
+  else hostname = lp_to_lower(st, hostname, name);
+  if (is_err(hostname)) return hostname;
+  lp_assign(st, LP_HOSTNAME, hostname);
+  name = lp_string_slice(js, hostname);
+
+  if (name.len) {
+    if (!ipv6) {
+      hostname = lp_to_ascii(js, name);
+      lp_assign(st, LP_HOSTNAME, hostname);
+      name = lp_string_slice(js, hostname);
+      if (!name.len) return lp_fail(st, LP_STATUS_INVALID_URL);
+    }
+    for (size_t i = 0; i < name.len; i++)
+      if (lp_is_forbidden_host((uint8_t)name.ptr[i], ipv6)) return lp_fail(st, LP_STATUS_INVALID_URL);
+  }
+
+  st->flags |= LP_FLAG_HOST_BRANCH;
+  st->hostname_truthy = name.len > (ipv6 ? 2u : 0u);
+  if (ipv6) {
+    st->flags |= LP_FLAG_IPV6;
+    if (!rest.len || rest.ptr[0] != '/') rest = lp_build(&st->bufs[3], lp_slice("/", 1), rest, lp_slice("", 0));
+  }
+
+  *rest_io = rest;
+  return js_mkundef();
+}
+
+static ant_value_t lp_parse(lp_state_t *st, ant_value_t input, bool parse_query, bool slashes_denote_host) {
+  ant_t *js = st->js;
+  lp_slice_t full = lp_string_slice(js, input);
+
+  size_t start = 0, end = full.len, n;
+  while (start < end && (n = lp_ws_prefix((const uint8_t *)full.ptr + start, end - start))) start += n;
+  while (end > start && (n = lp_ws_suffix((const uint8_t *)full.ptr + start, end - start))) end -= n;
+
+  lp_slice_t rest = lp_sub(full, start, end);
+  ssize_t hash_at = lp_find(rest, '#');
+  ssize_t question_at = lp_find(rest, '?');
+  ssize_t split_at = hash_at == -1 ? question_at : (question_at == -1 || hash_at < question_at) ? hash_at : question_at;
+  size_t head = split_at == -1 ? rest.len : (size_t)split_at;
+  bool has_hash = hash_at != -1;
+  bool has_at = lp_find(lp_sub(rest, 0, head), '@') != -1;
+
+  if (lp_find(lp_sub(rest, 0, head), '\\') != -1) {
+    url_fmt_buf_t *b = &st->bufs[0];
+    if (!url_fmt_reserve(b, rest.len)) return lp_oom(st);
+    for (size_t i = 0; i < rest.len; i++) b->buf[i] = i < head && rest.ptr[i] == '\\' ? '/' : rest.ptr[i];
+    b->len = rest.len;
+    rest = lp_slice(b->buf, b->len);
+  }
+
+  size_t pathname_end = 0;
+  if (!slashes_denote_host && !has_hash && !has_at && lp_match_simple(rest, &pathname_end))
+    return lp_parse_simple(st, rest, pathname_end, parse_query);
+
+  lp_slice_t proto = {0};
+  lp_slice_t lower_proto = {0};
+  size_t scheme = 0;
+  while (scheme < rest.len) {
+    unsigned char c = (unsigned char)rest.ptr[scheme];
+    if (!ant_ascii_is_alnum(c) && c != '.' && c != '+' && c != '-') break;
+    scheme++;
+  }
+  if (scheme > 0 && scheme < rest.len && rest.ptr[scheme] == ':') {
+    proto = lp_sub(rest, 0, scheme + 1);
+    url_fmt_buf_t *b = &st->bufs[1];
+    if (!url_fmt_reserve(b, proto.len)) return lp_oom(st);
+    for (size_t i = 0; i < proto.len; i++) b->buf[i] = (char)ant_ascii_to_lower((unsigned char)proto.ptr[i]);
+    b->len = proto.len;
+    lower_proto = lp_slice(b->buf, b->len);
+    lp_assign_slice(st, LP_PROTOCOL, lower_proto);
+    rest = lp_sub(rest, proto.len, rest.len);
+  }
+
   bool slashes = false;
-  bool has_query_object = false;
-  bool host_parsed = false;
-  bool ipv6_hostname = false;
-  bool has_hash = false;
-  bool has_at = false;
-  bool strip_tail_ws = false;
-
-  while (rest_len && (unsigned char)rest[0] <= ' ') { rest++; rest_len--; }
-  while (rest_len && (unsigned char)rest[rest_len - 1] <= ' ') rest_len--;
-
-  bool has_backslash = false;
-  size_t head = 0;
-
-  for (; head < rest_len; head++) {
-    char c = rest[head];
-    if (c == '?' || c == '#') break;
-    if (c == '@') has_at = true;
-    else if (c == '\\') has_backslash = true;
-  }
-
-  has_hash = (head < rest_len && rest[head] == '#') ||
-    memchr(rest + head, '#', rest_len - head) != NULL;
-
-  if (has_backslash) {
-    for (size_t i = 0; i < rest_len; i++) if (
-      !url_fmt_append_c(&scratch.input, i < head && rest[i] == '\\' ? '/' : rest[i])
-    ) goto oom;
-
-    rest = scratch.input.buf;
-    rest_len = scratch.input.len;
-  }
-
-  if (!slashes_denote_host && !has_hash && !has_at) {
-    size_t path_len = 0;
-    bool has_search = false;
-
-    if (legacy_simple_path(rest, rest_len, &path_len, &has_search)) {
-      url.pathname = url_slice(rest, path_len);
-      url.path = url_slice(rest, rest_len);
-      url.href = url.path;
-      
-      if (has_search) url.search = url_slice(rest + path_len, rest_len - path_len);
-      obj = legacy_url_object(js, &url);
-
-      if (has_search && parse_query)
-        js_set(js, obj, "query", legacy_query_object(js, url.search.ptr + 1, url.search.len - 1));
-      else if (has_search)
-        js_set(js, obj, "query", js_mkstr(js, url.search.ptr + 1, url.search.len - 1));
-      else if (parse_query)
-        js_set(js, obj, "query", Ant_Object_CreateBare(js));
-
-      legacy_parse_scratch_free(&scratch);
-      return obj;
+  if (slashes_denote_host || proto.ptr || lp_host_pattern(rest)) {
+    slashes = rest.len >= 2 && rest.ptr[0] == '/' && rest.ptr[1] == '/';
+    if (slashes && !lp_is_hostless(lower_proto)) {
+      rest = lp_sub(rest, 2, rest.len);
+      lp_assign(st, LP_SLASHES, js_true);
     }
   }
 
-  {
-    size_t scheme_len = legacy_scheme_len(rest, rest_len);
-    if (scheme_len) {
-      for (size_t i = 0; i < scheme_len; i++)
-        if (!url_fmt_append_c(&scratch.protocol, (char)tolower((unsigned char)rest[i]))) goto oom;
-      proto = url_slice(scratch.protocol.buf, scratch.protocol.len);
-      rest += scheme_len;
-      rest_len -= scheme_len;
-    }
+  if (!lp_is_hostless(lower_proto) && (slashes || (proto.ptr && !lp_is_slashed(proto)))) {
+    ant_value_t res = lp_parse_host(st, &rest);
+    if (is_err(res) || !is_undefined(res)) return res;
   }
 
-  if (slashes_denote_host || proto.ptr || legacy_has_auth_authority(rest, rest_len)) {
-    bool leading = rest_len >= 2 && rest[0] == '/' && rest[1] == '/';
-    if (leading && !(proto.ptr && legacy_proto_is_hostless(proto.ptr, proto.len))) {
-      rest += 2;
-      rest_len -= 2;
-      slashes = true;
-    }
-  }
-
-  if (
-    !(proto.ptr && legacy_proto_is_hostless(proto.ptr, proto.len)) &&
-    (slashes || (proto.ptr && !legacy_proto_is_slashed(proto.ptr, proto.len)))
-  ) {
-    ssize_t at_sign = -1, host_end = -1, non_host = -1;
-    size_t start = 0;
-    size_t host_len = 0;
-    const char *host = NULL;
-
-    host_parsed = true;
-
-    for (size_t i = 0; i < rest_len; i++) {
-      unsigned char c = (unsigned char)rest[i];
-
-      if (c == '@') { at_sign = (ssize_t)i; non_host = -1; continue; }
-      if (c == '#' || c == '/' || c == '?') {
-        if (non_host == -1) non_host = (ssize_t)i;
-        host_end = (ssize_t)i;
-        break;
+  if (!lp_is_hostless(lower_proto)) {
+    size_t i = 0;
+    while (i < rest.len && !lp_auto_escape((uint8_t)rest.ptr[i])) i++;
+    if (i < rest.len) {
+      url_fmt_buf_t *b = &st->bufs[5];
+      b->len = 0;
+      if (!url_fmt_append_n(b, rest.ptr, i)) return lp_oom(st);
+      for (; i < rest.len; i++) {
+        const char *escaped = lp_auto_escape((uint8_t)rest.ptr[i]);
+        if (!(escaped ? url_fmt_append_n(b, escaped, 3) : url_fmt_append_c(b, rest.ptr[i]))) return lp_oom(st);
       }
-      if (legacy_host_char_is_invalid(c) && non_host == -1) non_host = (ssize_t)i;
+      rest = lp_slice(b->buf, b->len);
     }
-
-    if (at_sign != -1) {
-      char *raw = NULL;
-
-      for (ssize_t i = 0; i < at_sign; i++) {
-        if (rest[i] != '%') continue;
-        if (
-          i + 2 < at_sign &&
-          isxdigit((unsigned char)rest[i + 1]) &&
-          isxdigit((unsigned char)rest[i + 2])
-        ) { i += 2; continue; }
-
-        legacy_parse_scratch_free(&scratch);
-        return js_mkerr_typed(js, JS_ERR_URI, "URI malformed");
-      }
-
-      raw = strndup(rest, (size_t)at_sign);
-      if (!raw) goto oom;
-      size_t auth_len = 0;
-      scratch.auth = url_decode_component_len(raw, &auth_len);
-      free(raw);
-      if (!scratch.auth) goto oom;
-
-      url.auth = url_slice(scratch.auth, auth_len);
-      start = (size_t)at_sign + 1;
-    }
-
-    strip_tail_ws = non_host != -1 && (host_end == -1 || non_host < host_end);
-
-    if (non_host == -1) {
-      host = rest + start;
-      host_len = rest_len - start;
-      rest += rest_len;
-      rest_len = 0;
-    } else {
-      host = rest + start;
-      host_len = (size_t)non_host - start;
-      rest += (size_t)non_host;
-      rest_len -= (size_t)non_host;
-    }
-
-    for (size_t i = 0; i < host_len; i++) {
-      unsigned char c = (unsigned char)host[i];
-      if (legacy_host_char_is_stripped(c)) continue;
-      if (!url_fmt_append_c(&scratch.hostname, (char)tolower(c))) goto oom;
-    }
-
-    hostname = url_slice(scratch.hostname.buf ? scratch.hostname.buf : "", scratch.hostname.len);
-
-    size_t scan_from = 0;
-    size_t colon = hostname.len;
-
-    if (hostname.len && hostname.ptr[0] == '[') {
-      const char *close = memchr(hostname.ptr, ']', hostname.len);
-      if (close) scan_from = (size_t)(close - hostname.ptr) + 1;
-    }
-
-    for (size_t i = hostname.len; i > scan_from; i--)
-      if (hostname.ptr[i - 1] == ':') { colon = i - 1; break; }
-
-    if (colon < hostname.len) {
-      size_t port_len = hostname.len - colon - 1;
-
-      for (size_t i = 0; i < port_len; i++)
-        if (!isdigit((unsigned char)hostname.ptr[colon + 1 + i])) {
-          legacy_parse_scratch_free(&scratch);
-          return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid port in url");
-        }
-
-      if (port_len) port = url_slice(hostname.ptr + colon + 1, port_len);
-      hostname = url_slice(hostname.ptr, colon);
-    }
-
-    if (hostname.len >= 2 && hostname.ptr[0] == '[' && hostname.ptr[hostname.len - 1] == ']') {
-      url.hostname = url_slice(hostname.ptr + 1, hostname.len - 2);
-      ipv6_hostname = true;
-    } else {
-      bool non_ascii = false;
-      for (size_t i = 0; i < hostname.len; i++)
-        if ((unsigned char)hostname.ptr[i] >= 0x80) { non_ascii = true; break; }
-
-      if (non_ascii) {
-        ada_owned_string ascii = ada_idna_to_ascii(hostname.ptr, hostname.len);
-        if (!ascii.data || !ascii.length) {
-          ada_free_owned_string(ascii);
-          legacy_parse_scratch_free(&scratch);
-          ant_value_t props = Ant_Object_CreateBare(js);
-          js_set(js, props, "code", js_mkstr(js, "ERR_INVALID_URL", 15));
-          js_set(js, props, "input", js_mkstr(js, input, input_len));
-          return js_mkerr_props(js, JS_ERR_TYPE, props, "Invalid URL");
-        }
-        scratch.idna = strndup(ascii.data, ascii.length);
-        ada_free_owned_string(ascii);
-        if (!scratch.idna) goto oom;
-        hostname = url_slice(scratch.idna, strlen(scratch.idna));
-      }
-
-      url.hostname = hostname;
-    }
-
-    if (!ipv6_hostname) {
-    for (size_t i = 0; i < hostname.len; i++) {
-      char c = hostname.ptr[i];
-      if (c != ':' && c != '[' && c != ']') continue;
-      legacy_parse_scratch_free(&scratch);
-      return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid port in url");
-    }}
-
-    url.port = port;
   }
 
-  if (!(proto.ptr && legacy_proto_is_hostless(proto.ptr, proto.len))) {
-    if (ipv6_hostname && (!rest_len || rest[0] != '/')) if (!url_fmt_append_c(&scratch.tail, '/')) goto oom;
+  ssize_t hash_idx = lp_find(rest, '#');
+  ssize_t question_idx = lp_find(rest, '?');
+  if (hash_idx != -1) {
+    lp_assign_slice(st, LP_HASH, lp_sub(rest, (size_t)hash_idx, rest.len));
+    if (question_idx > hash_idx) question_idx = -1;
+  }
 
-    for (size_t i = 0; i < rest_len; i++) {
-      const char *escaped = NULL;
-      bool ok = true;
+  uint32_t flags = 0;
+  if (question_idx != -1) {
+    size_t search_end = hash_idx == -1 ? rest.len : (size_t)hash_idx;
+    lp_assign_slice(st, LP_SEARCH, lp_sub(rest, (size_t)question_idx, search_end));
+    lp_assign_slice(st, LP_QUERY, lp_sub(rest, (size_t)question_idx + 1, search_end));
+    if (parse_query) flags |= LP_FLAG_PARSE_QUERY;
+  } else if (parse_query) {
+    lp_assign(st, LP_SEARCH, js_mknull());
+    lp_assign(st, LP_QUERY, lp_null_proto_object(js));
+  }
 
-      if (strip_tail_ws && legacy_host_char_is_stripped((unsigned char)rest[i])) continue;
-      escaped = legacy_auto_escape((unsigned char)rest[i]);
-      
-      ok = escaped
-        ? url_fmt_append(&scratch.tail, escaped)
-        : url_fmt_append_c(&scratch.tail, rest[i]);
-      if (!ok) goto oom;
+  ssize_t first_idx = question_idx != -1 ? question_idx : hash_idx;
+  if (first_idx == -1) {
+    if (rest.len) lp_assign_slice(st, LP_PATHNAME, rest);
+  } else if (first_idx > 0) {
+    lp_assign_slice(st, LP_PATHNAME, lp_sub(rest, 0, (size_t)first_idx));
+  }
+
+  if (lp_is_slashed(lower_proto)) {
+    bool hostname_truthy = st->hostname_truthy > 0;
+    if (st->hostname_truthy < 0) {
+      ant_value_t hostname = lp_current(st, LP_HOSTNAME, "hostname");
+      if (is_err(hostname)) return hostname;
+      hostname_truthy = js_truthy(js, hostname);
     }
-
-    rest = scratch.tail.buf ? scratch.tail.buf : "";
-    rest_len = scratch.tail.len;
-  }
-
-  const char *hash = memchr(rest, '#', rest_len);
-  if (hash) {
-    url.hash = url_slice(hash, rest_len - (size_t)(hash - rest));
-    rest_len = (size_t)(hash - rest);
-  }
-
-  const char *qm = memchr(rest, '?', rest_len);
-  if (qm) {
-    size_t search_len = rest_len - (size_t)(qm - rest);
-    url.search = url_slice(qm, search_len);
-    url.query = url_slice(qm + 1, search_len - 1);
-    rest_len = (size_t)(qm - rest);
-    has_query_object = parse_query;
-  } else if (parse_query) has_query_object = true;
-
-  if (rest_len) url.pathname = url_slice(rest, rest_len);
-  
-  if (
-    proto.ptr && legacy_proto_is_slashed(proto.ptr, proto.len) &&
-    hostname.len && !url.pathname.ptr
-  ) url.pathname = url_slice("/", 1);
-
-  if (url.pathname.ptr || url.search.ptr) {
-    if (!url_fmt_append_n(&scratch.path, url.pathname.ptr, url.pathname.len)) goto oom;
-    if (!url_fmt_append_n(&scratch.path, url.search.ptr, url.search.len)) goto oom;
-    url.path = url_slice_buf(&scratch.path);
-  }
-
-  url.protocol = proto;
-  url.slashes = slashes;
-
-  if (host_parsed) {
-    if (
-      !url_fmt_append_n(&scratch.host, hostname.ptr, hostname.len) ||
-      (port.len && (!url_fmt_append_c(&scratch.host, ':') ||
-                    !url_fmt_append_n(&scratch.host, port.ptr, port.len)))
-    ) goto oom;
-
-    url.host = url_slice(scratch.host.buf ? scratch.host.buf : "", scratch.host.len);
-  }
-
-  {
-    url_fmt_buf_t out = {0};
-    bool slashed_proto = proto.ptr && legacy_proto_is_slashed(proto.ptr, proto.len);
-    bool authority = slashes || (slashed_proto && url.host.len);
-    bool file_authority =
-      !authority && slashed_proto && legacy_proto_is(proto.ptr, proto.len, "file");
-    bool want_slashes = authority || file_authority;
-    bool root_pathname =
-      authority && url.pathname.len && url.pathname.ptr[0] != '/';
-
-    if (
-      !url_fmt_append_n(&out, proto.ptr, proto.len) ||
-      (want_slashes && !url_fmt_append_n(&out, "//", 2))
-    ) { free(out.buf); goto oom; }
-
-    for (size_t i = 0; url.host.len && i < url.auth.len; i++) {
-      unsigned char c = (unsigned char)url.auth.ptr[i];
-      char hex[4];
-
-      if (legacy_auth_is_safe(c)) {
-        if (!url_fmt_append_c(&out, (char)c)) { free(out.buf); goto oom; }
-        continue;
-      }
-
-      snprintf(hex, sizeof(hex), "%%%02X", c);
-      if (!url_fmt_append_n(&out, hex, 3)) { free(out.buf); goto oom; }
+    if (hostname_truthy) {
+      ant_value_t pathname = lp_current(st, LP_PATHNAME, "pathname");
+      if (is_err(pathname)) return pathname;
+      if (!js_truthy(js, pathname)) lp_assign_slice(st, LP_PATHNAME, lp_slice("/", 1));
     }
-
-    if (
-      (url.host.len && url.auth.len && !url_fmt_append_c(&out, '@')) ||
-      !url_fmt_append_n(&out, url.host.ptr, url.host.len) ||
-      (root_pathname && !url_fmt_append_c(&out, '/')) ||
-      !url_fmt_append_n(&out, url.pathname.ptr, url.pathname.len) ||
-      !url_fmt_append_n(&out, url.search.ptr, url.search.len) ||
-      !url_fmt_append_n(&out, url.hash.ptr, url.hash.len)
-    ) { free(out.buf); goto oom; }
-
-    url.href = url_slice(out.buf ? out.buf : "", out.len);
-    obj = legacy_url_object(js, &url);
-    free(out.buf);
   }
 
-  if (has_query_object) {
-  if (url.search.ptr) js_set(js, obj, "query", legacy_query_object(js, url.query.ptr, url.query.len));
-  else {
-    js_set(js, obj, "search", js_mknull());
-    js_set(js, obj, "query", Ant_Object_CreateBare(js));
-  }}
+  return lp_result(st, flags);
+}
 
-  legacy_parse_scratch_free(&scratch);
-  return obj;
+static ant_value_t builtin_legacy_url_parse(ant_params_t) {
+  ant_value_t input = nargs > 1 ? args[1] : js_mkundef();
+  if (vtype(input) != kTypeString) return js_mkerr_typed(js, JS_ERR_TYPE, "url must be a string");
 
-oom:
-  legacy_parse_scratch_free(&scratch);
-  return js_mkerr(js, "allocation failure");
+  lp_state_t st = { .js = js, .target = nargs > 0 ? args[0] : js_mkundef(), .hostname_truthy = -1 };
+  for (int i = 0; i < LP_FIELD_COUNT; i++) st.values[i] = js_mkundef();
+
+  ant_value_t result = lp_parse(&st, input, nargs > 2 && js_truthy(js, args[2]), nargs > 3 && js_truthy(js, args[3]));
+  for (size_t i = 0; i < sizeof(st.bufs) / sizeof(st.bufs[0]); i++) free(st.bufs[i].buf);
+  return result;
+}
+
+void legacy_url_register(ant_t *js, ant_value_t lib) {
+  js_set(js, lib, "legacyParse", Ant_Function_CreateWithArity(builtin_legacy_url_parse, 4));
 }

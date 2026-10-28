@@ -21,7 +21,7 @@ for (const count of [255, 256, 257]) {
       }`;
     const child = spawnSync(process.execPath, ['-e', source], {
       encoding: 'utf8',
-      env: { ...process.env, ANT_DEBUG: 'dump/vm:jit' },
+      env: { ...process.env, ANT_DEBUG: 'dump/vm:jit opt:off' },
       maxBuffer: 32 * 1024 * 1024,
       timeout: 10000,
     });

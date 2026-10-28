@@ -72,6 +72,7 @@ module.exports = {
   CHAR_BACKWARD_SLASH: 92,
   CHAR_COLON: 58,
   CHAR_QUESTION_MARK: 63,
+  receivedType,
   validateString,
   validateObject,
   getLazy,

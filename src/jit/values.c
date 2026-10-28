@@ -296,7 +296,7 @@ void jit_entry_integer_ranges(
       break;
     }
 
-    uint16_t flags = sv_op_flags[op];
+    uint32_t flags = sv_op_flags[op];
     if (flags & (SV_OPF_JIT_BRANCH32 | SV_OPF_JIT_BRANCH8))
       before_branch = false;
 
@@ -413,7 +413,7 @@ void jit_induction_locals(sv_func_t *func, uint8_t *kinds, int n_locals, int par
     sv_op_t op = (sv_op_t)*ip;
     int size = sv_op_size[op];
     if (!size || ip + size > end) goto none;
-    uint16_t flags = sv_op_flags[op];
+    uint32_t flags = sv_op_flags[op];
     int64_t to = -1;
     if (flags & SV_OPF_JIT_BRANCH32) to = (ip - func->code) + size + sv_get_i32(ip + 1);
     else if (flags & SV_OPF_JIT_BRANCH8) to = (ip - func->code) + size + sv_get_i8(ip + 1);
@@ -523,7 +523,7 @@ uint8_t jit_induction_params(sv_func_t *func, int param_count) {
     sv_op_t op = (sv_op_t)*ip;
     int size = sv_op_size[op];
     if (!size || ip + size > end) goto none;
-    uint16_t flags = sv_op_flags[op];
+    uint32_t flags = sv_op_flags[op];
     int64_t to = -1;
     if (flags & SV_OPF_JIT_BRANCH32) to = (ip - func->code) + size + sv_get_i32(ip + 1);
     else if (flags & SV_OPF_JIT_BRANCH8) to = (ip - func->code) + size + sv_get_i8(ip + 1);
@@ -1111,6 +1111,30 @@ MIR_reg_t mir_emit_exact_integer_guard(
 
 void mir_emit_primitive_type_test(
     MIR_context_t ctx, MIR_item_t fn, MIR_reg_t value, MIR_reg_t scratch, uint8_t type) {
+  if (type == kTypeObject || type == kTypeFunction) {
+    static const uint8_t object_tags[] = {kTypeNull, kTypeArray, kTypePromise, kTypeGenerator};
+    static const uint8_t function_tags[] = {kTypeFunction, kTypeBuiltin};
+    bool object = type == kTypeObject;
+    const uint8_t *tags = object ? object_tags : function_tags;
+    size_t tag_count = object ? sizeof object_tags : sizeof function_tags;
+    MIR_label_t yes = MIR_new_label(ctx), no = MIR_new_label(ctx), done = MIR_new_label(ctx);
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBLE, MIR_new_label_op(ctx, no), MIR_new_reg_op(ctx, value), MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_URSH, MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, value), MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
+    for (size_t i = 0; i < tag_count; i++)
+      MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, yes), MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | tags[i])));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, no), MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypeObject)));
+    mir_emit_decode_ref(ctx, fn, scratch, value);
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, scratch), MIR_new_mem_op(ctx, MIR_T_U16, offsetof(ant_object_t, flags), scratch, 0, 1)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_CALLABLE)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, object ? MIR_BNE : MIR_BEQ, MIR_new_label_op(ctx, no), MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, 0)));
+    MIR_append_insn(ctx, fn, yes);
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, value), MIR_new_uint_op(ctx, js_true)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+    MIR_append_insn(ctx, fn, no);
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, value), MIR_new_uint_op(ctx, js_false)));
+    MIR_append_insn(ctx, fn, done);
+    return;
+  }
   if (type == kTypeNumber) {
     MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_ULE, MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, value), MIR_new_uint_op(ctx, NANBOX_PREFIX)));
   } else {
@@ -1322,7 +1346,8 @@ MIR_reg_t mir_emit_dense_element_guard(
                                MIR_new_reg_op(ctx, flags),
                                MIR_new_uint_op(ctx,
                                                ANT_OBJECT_FLAG_EXOTIC | ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS |
-                                                   (writable ? ANT_OBJECT_FLAG_FROZEN : 0))));
+                                                   (writable ? ANT_OBJECT_FLAG_FROZEN : 0) |
+                                                   (access == JIT_ELEMENT_ITERATE ? ANT_OBJECT_FLAG_ARGUMENTS : 0))));
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_BNE,
                                MIR_new_label_op(ctx, slow),
@@ -1355,7 +1380,7 @@ MIR_reg_t mir_emit_dense_element_guard(
                                MIR_new_mem_op(ctx, MIR_JSVAL, 0, data, index, sizeof(ant_value_t))));
   if (access == JIT_ELEMENT_NUMERIC_READ) {
     mir_emit_is_num_guard(ctx, fn, 0, value, slow);
-  } else if (access == JIT_ELEMENT_READ) {
+  } else if (access == JIT_ELEMENT_READ || access == JIT_ELEMENT_ITERATE) {
     MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBGE,
         MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, value),
         MIR_new_uint_op(ctx, ANT_SENTINEL_TAG)));

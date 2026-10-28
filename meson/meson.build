@@ -35,6 +35,7 @@ endif
 if host_machine.system() == 'linux'
   add_project_arguments('-fno-pie', language: ['c', 'cpp'])
   add_project_link_arguments('-no-pie', language: ['c', 'cpp'])
+  add_project_arguments('-fno-omit-frame-pointer', language: ['c', 'cpp'])
   if host_machine.cpu_family() == 'aarch64'
     add_project_arguments('-moutline-atomics', language: ['c', 'cpp'])
   endif

@@ -43,7 +43,7 @@ let expected = 0;
 for (let i = 0; i < 300; i++) expected += n + wide + expectedDeep(i) + n + n + n + 2;
 
 const result = spawnSync(process.execPath, ['-e', source], {
-  env: { ...process.env, ANT_DEBUG: 'dump/vm:op-warn' },
+  env: { ...process.env, ANT_DEBUG: 'dump/vm:op-warn opt:off' },
   encoding: 'utf8',
 });
 if (result.error) throw result.error;

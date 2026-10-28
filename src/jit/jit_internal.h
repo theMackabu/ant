@@ -2,6 +2,7 @@
 #define ANT_JIT_INTERNAL_H
 
 #include "realm.h"
+#include "proto_watch.h"
 #include "heap.h"
 #include "silver/jit.h"
 #include "silver/stack_trace.h"
@@ -41,14 +42,32 @@ typedef struct {
   MIR_context_t ctx_hot;
   MIR_heap_t mir_heap;
   struct jit_code_registry *code_registry;
+  struct opt_state *opt;
+  ant_proto_watch_t **pinned_watches;
+  uint32_t pinned_watch_count;
+  uint32_t pinned_watch_cap;
   bool externals_loaded;
 } sv_jit_ctx_t;
+
+void opt_tier_destroy(sv_jit_ctx_t *jc);
+void opt_tier_gc_mark_roots(ant_t *js);
+bool opt_tier_has_catch_entry(ant_t *js, sv_func_t *func, uint32_t catch_off);
+struct jit_call_site_info;
+
+void jit_code_register(
+  sv_jit_ctx_t *jc, sv_func_t *func, const void *code, size_t code_len, uint32_t fp_cfa_off,
+  const struct jit_call_site_info *infos, const uint32_t *ret_offs, uint32_t n_sites,
+  const uint32_t *resume_offs, uint32_t n_resume
+);
 
 void jit_code_info(
   void *data, MIR_item_t func_item, void *code, size_t code_len,
   uint32_t fp_cfa_off, const MIR_call_site_t *sites, size_t n_sites
 );
+
+void jit_code_unregister(sv_jit_ctx_t *jc, const void *code);
 void jit_code_registry_destroy(sv_jit_ctx_t *jc);
+void jit_code_mark_stack(sv_jit_ctx_t *jc, ant_t *js, uintptr_t from, uintptr_t to);
 void jit_drop_all_code(sv_jit_ctx_t *jc);
 
 typedef struct {
@@ -56,7 +75,7 @@ typedef struct {
   sv_jit_frame_t frames[SV_JIT_INLINE_FRAMES_MAX];
 } jit_inline_stack_t;
 
-typedef struct {
+typedef struct jit_call_site_info {
   int bc_off;
   bool resume;
   jit_inline_stack_t inl;
@@ -480,6 +499,7 @@ MIR_reg_t mir_emit_known_array_index_guard(
 typedef enum {
   JIT_ELEMENT_NUMERIC_READ,
   JIT_ELEMENT_READ,
+  JIT_ELEMENT_ITERATE,
   JIT_ELEMENT_WRITE,
 } jit_element_access_t;
 typedef struct {
@@ -630,6 +650,7 @@ int jit_back_edges(const sv_func_t *func, int (**out)[2]);
 bool func_writes_params(sv_func_t *func);
 jit_child_kind_t classify_child_closure_kind(sv_func_t *parent, sv_func_t *child);
 bool *scan_captured_locals(sv_func_t *func, int n_locals);
+bool *scan_tdz_captured_locals(sv_func_t *func, int n_locals);
 bool *scan_captured_params(sv_func_t *func);
 bool jit_inlineable(sv_func_t *f);
 bool jit_can_forward_arguments(sv_func_t *func);
@@ -658,5 +679,6 @@ bool jit_mark_self_binding_guards(
     ant_t *js, sv_func_t *func, sv_closure_t *hint_closure,
     uint8_t *guard_sites);
 bool jit_is_eligible(sv_func_t *func);
+bool jit_snapshot_shape(ant_t *js, ant_shape_t *shape);
 
 #endif

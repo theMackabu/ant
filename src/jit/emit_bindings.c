@@ -125,6 +125,14 @@ void jit_emit_bindings(jit_compile_t *c) {
       break;
     }
 
+    case OP_GET_UPVAL_VAL: {
+      uint16_t idx = sv_get_u16(c->ip + 1);
+      MIR_reg_t cell = jit_upvalue_cell(c, idx, c->upval_n++);
+      MIR_reg_t dst = vstack_push(&c->vs);
+      MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, dst), MIR_new_reg_op(c->ctx, cell)));
+      break;
+    }
+
     case OP_PUT_UPVAL: {
       uint16_t idx = sv_get_u16(c->ip + 1);
       int un = c->upval_n++;

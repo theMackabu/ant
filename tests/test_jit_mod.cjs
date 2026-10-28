@@ -37,8 +37,15 @@ if (frac(100000) !== Math.round(e3 * 1000) / 1000) throw new Error('fractional l
 console.log('done');
 `;
 
+const plain = spawnSync(process.execPath, ['-e', source], {
+  env: { ...process.env, ANT_DEBUG: '' },
+  encoding: 'utf8',
+});
+if (plain.error) throw plain.error;
+if (plain.status !== 0 || plain.stdout.trim() !== 'done') throw new Error(`default child failed:\n${plain.stderr}\n${plain.stdout}`);
+
 const result = spawnSync(process.execPath, ['-e', source], {
-  env: { ...process.env, ANT_DEBUG: 'dump/vm:op-warn' },
+  env: { ...process.env, ANT_DEBUG: 'dump/vm:op-warn opt:off' },
   encoding: 'utf8',
 });
 if (result.error) throw result.error;

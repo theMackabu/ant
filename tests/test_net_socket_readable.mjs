@@ -87,4 +87,19 @@ await withServer((s) => {
   assert.deepStrictEqual(events, ['end', 'close']);
 });
 
+await withServer((s) => s.end('abcdefghijklmnopqrstuvwxyz'), async (port) => {
+  const sock = net.connect(port, '127.0.0.1');
+  const got = [];
+  await once(sock, 'readable');
+  await tick();
+  const head = sock.read(5);
+  assert.strictEqual(String(head), 'abcde');
+  assert.strictEqual(sock.readableLength, 21);
+  sock.unshift(head);
+  assert.strictEqual(sock.readableLength, 26);
+  sock.on('data', (d) => got.push(String(d)));
+  await once(sock, 'close');
+  assert.strictEqual(got.join(''), 'abcdefghijklmnopqrstuvwxyz');
+});
+
 console.log('net socket readable: ok');

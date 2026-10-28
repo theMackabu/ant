@@ -36,7 +36,7 @@ void jit_emit_compare(jit_compile_t *c) {
     case OP_LT: {
       if (jit_emit_integer_compare(c, MIR_LT)) break;
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
-      bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~SV_TFB_NUM));
+      bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~(SV_TFB_NUM | SV_TFB_DOUBLE)));
       bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
       bool l_is_num = vstack_prepare_num(
@@ -154,7 +154,7 @@ void jit_emit_compare(jit_compile_t *c) {
     case OP_LE: {
       if (jit_emit_integer_compare(c, MIR_LE)) break;
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
-      bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~SV_TFB_NUM));
+      bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~(SV_TFB_NUM | SV_TFB_DOUBLE)));
       bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
       bool l_is_num = vstack_prepare_num(
@@ -327,6 +327,7 @@ void jit_emit_compare(jit_compile_t *c) {
         mir_call_helper2(c->ctx, c->jit_func, dst,
                          c->helper2_proto, helper,
                          c->r_vm, c->r_js, rl, rr);
+        if (!strict) jit_emit_throw_if_error(c, dst);
         MIR_append_insn(c->ctx, c->jit_func, done);
         break;
       }
@@ -417,6 +418,7 @@ void jit_emit_compare(jit_compile_t *c) {
         mir_call_helper2(c->ctx, c->jit_func, dst,
                          c->helper2_proto, helper,
                          c->r_vm, c->r_js, rl, rr);
+        if (!strict) jit_emit_throw_if_error(c, dst);
       }
       break;
     }
@@ -424,7 +426,7 @@ void jit_emit_compare(jit_compile_t *c) {
     case OP_GT: {
       if (jit_emit_integer_compare(c, MIR_GT)) break;
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
-      bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~SV_TFB_NUM));
+      bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~(SV_TFB_NUM | SV_TFB_DOUBLE)));
       bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
       bool l_is_num = vstack_prepare_num(
@@ -521,7 +523,7 @@ void jit_emit_compare(jit_compile_t *c) {
     case OP_GE: {
       if (jit_emit_integer_compare(c, MIR_GE)) break;
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
-      bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~SV_TFB_NUM));
+      bool fb_num_only = jit_speculate_unseen_numeric(c, fb) || (fb && !(fb & ~(SV_TFB_NUM | SV_TFB_DOUBLE)));
       bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
       bool l_is_num = vstack_prepare_num(

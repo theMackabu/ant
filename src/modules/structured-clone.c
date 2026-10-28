@@ -8,6 +8,7 @@
 #include "errors.h"
 #include "internal.h"
 #include "descriptors.h"
+#include "silver/call.h"
 
 #include "modules/date.h"
 #include "modules/regex.h"
@@ -130,11 +131,9 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
 
   if (t == kTypeUndefined || t == kTypeNull || t == kTypeBool || t == kTypeNumber || t == kTypeBigInt || t == kTypeString) return val;
   if (t == kTypeSymbol) return js_throw(js, make_dom_exception(js, "Symbol cannot be serialized", "DataCloneError"));
+  if (sv_check_c_stack_overflow(js)) return js_mkerr_typed(js, JS_ERR_RANGE, "Maximum call stack size exceeded");
 
-  if (is_object_type(val)) {
-    ta_data = buffer_get_typedarray_data(val);
-  }
-
+  if (is_object_type(val)) ta_data = buffer_get_typedarray_data(val);
   if (ta_data) return sc_clone_typed_array(js, val, ta_data, seen, transfer);
   if (t == kTypeTypedArray) return sc_clone_typed_array(js, val, (TypedArrayData *)js_gettypedarray(val), seen, transfer);
 
@@ -292,7 +291,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
   }
 
   if (obj_ptr->flags.regexp_brand) {
-    ant_value_t clone = regexp_create_literal(js, js_get_slot(val, SLOT_DATA), js_get_slot(val, SLOT_REGEXP_FLAGS_STRING));
+    ant_value_t clone = regexp_create_literal(js, js_get_slot(val, SLOT_DATA), regexp_flags_value(js, val));
     if (is_err(clone)) return clone;
     sc_add(seen, val, clone);
     return clone;
@@ -302,7 +301,6 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
   if (bd) {
     ant_value_t clone = blob_create(js, bd->data, bd->size, bd->type);
     if (is_err(clone)) return clone;
-    
     sc_add(seen, val, clone);
     
     if (bd->name) {

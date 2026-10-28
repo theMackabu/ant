@@ -74,17 +74,26 @@ static int decode_escape_sequence(const char *str, size_t len, size_t *pos, unsi
   return 0;
 }
 
+static ant_value_t escape_arg_string(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
+  if (vtype(value) == kTypeString) return value;
+  if (vtype(value) == kTypeSymbol)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a string");
+  return coerce_to_str(js, value);
+}
+
 // encodeURIComponent()
 ant_value_t js_encodeURIComponent(ant_params_t) {
   ant_value_t result;
   char *out = NULL;
   
-  if (nargs < 1) return js_mkstr(js, "undefined", 9);
+  ant_value_t value = escape_arg_string(js, args, nargs);
+  if (is_err(value)) return value;
   
-  char *str = js_getstr(js, args[0], NULL);
+  size_t len = 0;
+  const char *str = js_getstr(js, value, &len);
   if (!str) return js_mkstr(js, "", 0);
   
-  size_t len = strlen(str);
   size_t out_cap = len * 12 + 1;
   out = malloc(out_cap);
   if (!out) return Ant_Error_CreateOutOfMemory(js);
@@ -132,12 +141,13 @@ ant_value_t js_encodeURI(ant_params_t) {
   ant_value_t result;
   char *out = NULL;
   
-  if (nargs < 1) return js_mkstr(js, "undefined", 9);
+  ant_value_t value = escape_arg_string(js, args, nargs);
+  if (is_err(value)) return value;
   
-  char *str = js_getstr(js, args[0], NULL);
+  size_t len = 0;
+  const char *str = js_getstr(js, value, &len);
   if (!str) return js_mkstr(js, "", 0);
   
-  size_t len = strlen(str);
   size_t out_cap = len * 12 + 1;
   out = malloc(out_cap);
   if (!out) return Ant_Error_CreateOutOfMemory(js);
@@ -185,12 +195,13 @@ ant_value_t js_decodeURIComponent(ant_params_t) {
   ant_value_t result;
   char *out = NULL;
   
-  if (nargs < 1) return js_mkstr(js, "undefined", 9);
+  ant_value_t value = escape_arg_string(js, args, nargs);
+  if (is_err(value)) return value;
   
-  char *str = js_getstr(js, args[0], NULL);
+  size_t len = 0;
+  const char *str = js_getstr(js, value, &len);
   if (!str) return js_mkstr(js, "", 0);
   
-  size_t len = strlen(str);
   out = malloc(len + 1);
   if (!out) return Ant_Error_CreateOutOfMemory(js);
   
@@ -217,6 +228,8 @@ ant_value_t js_decodeURIComponent(ant_params_t) {
       if (!is_valid_continuation(cont_byte)) goto malformed;
       out[out_len++] = (char)cont_byte;
     }
+    
+    if (utf8_valid_prefix(out + out_len - seq_len, (size_t)seq_len, NULL) != (size_t)seq_len) goto malformed;
   }
   
   out[out_len] = '\0';
@@ -234,12 +247,13 @@ ant_value_t js_decodeURI(ant_params_t) {
   ant_value_t result;
   char *out = NULL;
   
-  if (nargs < 1) return js_mkstr(js, "undefined", 9);
+  ant_value_t value = escape_arg_string(js, args, nargs);
+  if (is_err(value)) return value;
   
-  char *str = js_getstr(js, args[0], NULL);
+  size_t len = 0;
+  const char *str = js_getstr(js, value, &len);
   if (!str) return js_mkstr(js, "", 0);
   
-  size_t len = strlen(str);
   out = malloc(len + 1);
   if (!out) return Ant_Error_CreateOutOfMemory(js);
   
@@ -280,6 +294,8 @@ ant_value_t js_decodeURI(ant_params_t) {
       if (!is_valid_continuation(cont_byte)) goto malformed;
       out[out_len++] = (char)cont_byte;
     }
+    
+    if (utf8_valid_prefix(out + out_len - seq_len, (size_t)seq_len, NULL) != (size_t)seq_len) goto malformed;
   }
   
   out[out_len] = '\0';
@@ -301,61 +317,101 @@ static int is_escape_unreserved(unsigned char c) {
 }
 
 static ant_value_t js_escape(ant_params_t) {
-  if (nargs < 1) return js_mkstr(js, "undefined", 9);
-  
-  char *str = js_getstr(js, args[0], NULL);
-  if (!str) return js_mkstr(js, "undefined", 9);
-  
-  size_t len = strlen(str);
-  size_t out_cap = len * 6 + 1;
-  char *out = malloc(out_cap);
+  static const char hex[] = "0123456789ABCDEF";
+  ant_value_t value = escape_arg_string(js, args, nargs);
+  if (is_err(value)) return value;
+
+  size_t len = 0;
+  const char *str = js_getstr(js, value, &len);
+  if (!str || len == 0) return js_mkstr(js, "", 0);
+
+  char *out = malloc(len * 6 + 1);
   if (!out) return Ant_Error_CreateOutOfMemory(js);
-  
+
   size_t out_len = 0;
-  
-  for (size_t i = 0; i < len; i++) {
-    unsigned char c = (unsigned char)str[i];
-    
-    if (is_escape_unreserved(c)) {
-      out[out_len++] = (char)c;
-    } else out_len += (size_t)snprintf(out + out_len, out_cap - out_len, "%%%02X", c);
+  utf16_iterator_t it = utf16_iterator(str, len);
+  uint16_t unit;
+
+  while (utf16_next_code_unit(&it, &unit)) {
+    if (unit < 0x80 && is_escape_unreserved((unsigned char)unit)) {
+      out[out_len++] = (char)unit;
+    } else if (unit < 0x100) {
+      out[out_len++] = '%';
+      out[out_len++] = hex[unit >> 4];
+      out[out_len++] = hex[unit & 0xf];
+    } else {
+      out[out_len++] = '%';
+      out[out_len++] = 'u';
+      out[out_len++] = hex[(unit >> 12) & 0xf];
+      out[out_len++] = hex[(unit >> 8) & 0xf];
+      out[out_len++] = hex[(unit >> 4) & 0xf];
+      out[out_len++] = hex[unit & 0xf];
+    }
   }
-  
-  out[out_len] = '\0';
-  ant_value_t result = js_mkstr(js, out, out_len);
+
+  ant_value_t result = js_mkstr_ascii(js, out, out_len);
   free(out);
   return result;
 }
 
-static ant_value_t js_unescape(ant_params_t) {
-  if (nargs < 1) return js_mkstr(js, "undefined", 9);
+static inline int32_t unescape_hex(const char *str, int digits) {
+  int32_t value = 0;
   
-  char *str = js_getstr(js, args[0], NULL);
-  if (!str) return js_mkstr(js, "undefined", 9);
-  
-  size_t len = strlen(str);
-  char *out = malloc(len + 1);
-  if (!out) return Ant_Error_CreateOutOfMemory(js);
-  
-  size_t out_len = 0;
-  size_t i = 0;
-  
-  while (i < len) {
-    if (str[i] == '%' && i + 2 < len) {
-      int high = ant_ascii_hex_value((unsigned char)str[i + 1]);
-      int low = ant_ascii_hex_value((unsigned char)str[i + 2]);
-      if (high >= 0 && low >= 0) {
-        out[out_len++] = (char)((high << 4) | low);
-        i += 3;
-        continue;
-      }
-    }
-    out[out_len++] = str[i++];
+  for (int k = 0; k < digits; k++) {
+    int d = ant_ascii_hex_value((unsigned char)str[k]);
+    if (d < 0) return -1;
+    value = (value << 4) | d;
   }
   
-  out[out_len] = '\0';
+  return value;
+}
+
+static inline size_t unescape_sequence(const char *str, size_t avail, uint32_t *unit) {
+  int32_t value;
+  
+  if (avail >= 6 && str[1] == 'u' && (value = unescape_hex(str + 2, 4)) >= 0) {
+    *unit = (uint32_t)value;
+    return 6;
+  }
+  
+  if (avail >= 3 && (value = unescape_hex(str + 1, 2)) >= 0) {
+    *unit = (uint32_t)value;
+    return 3;
+  }
+  
+  return 0;
+}
+
+static ant_value_t js_unescape(ant_params_t) {
+  ant_value_t value = escape_arg_string(js, args, nargs);
+  if (is_err(value)) return value;
+
+  size_t len = 0;
+  const char *str = js_getstr(js, value, &len);
+  if (!str || len == 0) return js_mkstr(js, "", 0);
+
+  char *out = malloc(len + 1);
+  if (!out) return Ant_Error_CreateOutOfMemory(js);
+
+  size_t out_len = 0;
+  size_t i = 0;
+
+  while (i < len) {
+    uint32_t unit;
+    size_t step = str[i] == '%' ? unescape_sequence(str + i, len - i, &unit) : 0;
+    
+    if (!step) {
+      out[out_len++] = str[i++];
+      continue;
+    }
+    
+    out_len += (size_t)utf8_encode(unit, out + out_len);
+    i += step;
+  }
+
   ant_value_t result = js_mkstr(js, out, out_len);
   free(out);
+  
   return result;
 }
 

@@ -51,10 +51,6 @@ static inline bool url_fmt_append_c(url_fmt_buf_t *b, char c) {
   return true;
 }
 
-ant_value_t legacy_url_parse_impl(
-  ant_t *js,
-  const char *input, size_t input_len,
-  bool parse_query, bool slashes_denote_host
-);
+void legacy_url_register(ant_t *js, ant_value_t lib);
 
 #endif

@@ -11,6 +11,7 @@
 #include "modules/symbol.h"
 #include "modules/iterator.h"
 #include "shapes.h"
+#include "debug.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -22,6 +23,7 @@ static void run(ant_t *js, const char *source) {
 
 int main(void) {
   char stack_base;
+  sv_debug_enable(SV_DEBUG_OPT_OFF);
   ant_t *js = ant_create(nullptr);
   assert(js);
   js_setstackbase(js, &stack_base);

@@ -6,7 +6,7 @@
 const assert = require('node:assert');
 const { spawnSync } = require('node:child_process');
 
-const child = spawnSync(process.execPath, ['-e', `
+const source = `
 function Thing(v) { this.v = v; }
 Thing.prototype.get = function () { return this.v; };
 const things = [new Thing(1), new Thing(2)];
@@ -31,8 +31,14 @@ let total = 0;
 for (let r = 0; r < 400; r++) { total += churn(2000); Churn.prototype['m' + r] = function () {}; }
 out.push(total);
 console.log(JSON.stringify(out));
-`], { encoding: 'utf8', env: { ...process.env, ANT_DEBUG: 'dump/vm:op-warn', NO_COLOR: '1' }, timeout: 60000 });
+`;
+const run = (debug) => spawnSync(process.execPath, ['-e', source], { encoding: 'utf8', env: { ...process.env, ANT_DEBUG: debug, NO_COLOR: '1' }, timeout: 60000 });
 
+const plain = run('');
+assert.strictEqual(plain.status, 0, plain.stderr);
+assert.strictEqual(plain.stdout.trim(), JSON.stringify([3000, 6000, 150, 40, 1200000]));
+
+const child = run('dump/vm:op-warn opt:off');
 assert.strictEqual(child.status, 0, child.stderr);
 const compiles = name => (child.stderr.match(new RegExp(`^jit: compiled func=${name} `, 'gm')) || []).length;
 

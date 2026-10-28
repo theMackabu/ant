@@ -25,6 +25,7 @@
 #include "vfs_bundle.h"
 #include "gc/roots.h"
 #include "utils.h"
+#include "utf8.h"
 #include "watch.h"
 
 #include <ctype.h>
@@ -1708,7 +1709,7 @@ static ant_value_t esm_load_json(ant_t *js, const char *path) {
   ant_value_t err = esm_read_file(js, path, "JSON file", &file);
   if (is_err(err)) return err;
 
-  ant_value_t json_str = js_mkstr(js, file.data, file.size);
+  ant_value_t json_str = js_mkstr_utf8(js, file.data, file.size);
   free(file.data);
   return json_parse_value(js, json_str);
 }
@@ -1718,7 +1719,7 @@ static ant_value_t esm_load_text(ant_t *js, const char *path) {
   ant_value_t err = esm_read_file(js, path, "text file", &file);
   if (is_err(err)) return err;
 
-  ant_value_t result = js_mkstr(js, file.data, file.size);
+  ant_value_t result = js_mkstr_utf8(js, file.data, file.size);
   free(file.data);
   return result;
 }
@@ -2122,6 +2123,22 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t req
     size = file.size;
   }
   content[size] = '\0';
+
+  size_t valid = utf8_valid_prefix(content, size, NULL);
+  if (valid < size) {
+    size_t clean_len = 0;
+    char *clean = utf8_replace_invalid(content, size, valid, &clean_len);
+    
+    if (!clean) {
+      free(content);
+      mod->is_loading = false;
+      return js_mkerr(js, "OOM loading module");
+    }
+    
+    free(content);
+    content = clean;
+    size = clean_len;
+  }
 
   size_t js_len = size;
   const char *strip_detail = NULL;

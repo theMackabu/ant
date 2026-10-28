@@ -25,7 +25,11 @@ const run = (debug) => spawnSync(process.execPath, ['-e', source], {
   timeout: 30000,
 });
 
-const warn = run('dump/vm:op-warn');
+const plain = run('');
+assert.strictEqual(plain.status, 0, String(plain.error || plain.stderr));
+assert.match(plain.stdout, /total 15000/);
+
+const warn = run('dump/vm:op-warn opt:off');
 assert.strictEqual(warn.status, 0, String(warn.error || warn.stderr));
 assert.match(warn.stdout, /total 15000/);
 assert.match(warn.stderr, /jit: compiled func=count/);
@@ -33,7 +37,7 @@ assert.match(warn.stderr, /jit: compiled func=pick/);
 assert.match(warn.stderr, /jit: compiled func=walk/);
 assert.doesNotMatch(warn.stderr, /jit: bailout [^\n]*func=(count|pick|walk)\b/, 'no bailouts for numbers or non-numeric uses');
 
-const dump = run('dump/vm:jit');
+const dump = run('dump/vm:jit opt:off');
 assert.strictEqual(dump.status, 0, String(dump.error || dump.stderr));
 const fn = dump.stderr.match(/jit_count_[^\n]*:\s*func[\s\S]*?endfunc/);
 assert.ok(fn, 'missing compilation for count');

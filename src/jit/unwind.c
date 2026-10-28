@@ -2,12 +2,15 @@
 #define _GNU_SOURCE
 #endif
 
+#include "gc/objects.h"
 #include "jit_internal.h"
 #include "silver/engine.h"
+#include "silver/code_unit.h"
 #include "silver/feedback.h"
 
 #include <pthread.h>
 #include <unwind.h>
+#include <uv.h>
 
 #if defined(_WIN32) || !(defined(__x86_64__) || defined(__aarch64__))
 #define JIT_UNWIND_SUPPORTED 0
@@ -379,6 +382,27 @@ static uint8_t *jit_encode_sites(
   return block;
 }
 
+static FILE *jit_perf_map;
+static pthread_once_t jit_perf_map_once = PTHREAD_ONCE_INIT;
+
+static void jit_perf_map_open(void) {
+  char path[64];
+  snprintf(path, sizeof(path), "/tmp/perf-%d.map", (int)uv_os_getpid());
+  jit_perf_map = fopen(path, "w");
+}
+
+static void jit_perf_map_note(sv_func_t *func, bool opt, const void *code, size_t code_len) {
+  pthread_once(&jit_perf_map_once, jit_perf_map_open);
+  if (!jit_perf_map) return;
+  
+  uint32_t line = 0, col = 0;
+  (void)sv_lookup_srcpos(func, 0, &line, &col);
+  
+  const char *name = func->debug && func->debug->name ? func->debug->name : "<anonymous>";
+  fprintf(jit_perf_map, "%lx %zx %s:%s@%u\n", (unsigned long)(uintptr_t)code, code_len, opt ? "opt" : "jit", name, line);
+  fflush(jit_perf_map);
+}
+
 void jit_code_info(
   void *data, MIR_item_t func_item, void *code, size_t code_len,
   uint32_t fp_cfa_off, const MIR_call_site_t *sites, size_t n_sites
@@ -394,6 +418,10 @@ void jit_code_info(
 
   const jit_code_info_ctx_t *info = &jit_code_info_ctx;
   bool body = info->item && func_item == info->item;
+  
+  if (body && info->func && sv_debug_unlikely(SV_DEBUG_PERF_MAP))
+    jit_perf_map_note(info->func, func_item == (MIR_item_t)(uintptr_t)1, code, code_len);
+  
   if (!body && !JIT_UNWIND_REGISTER) return;
 
   if (reg->len == reg->cap) {
@@ -426,10 +454,59 @@ void jit_code_info(
   size_t at = reg->len;
   while (at > 0 && reg->ranges[at - 1].start > r.start) at--;
   memmove(&reg->ranges[at + 1], &reg->ranges[at], (reg->len - at) * sizeof(*reg->ranges));
+  
   reg->ranges[at] = r;
   reg->len++;
+  
   if (!reg->lo || r.start < reg->lo) reg->lo = r.start;
   if (r.end > reg->hi) reg->hi = r.end;
+}
+
+void jit_code_register(
+  sv_jit_ctx_t *jc, sv_func_t *func, const void *code, size_t code_len, uint32_t fp_cfa_off,
+  const jit_call_site_info_t *infos, const uint32_t *ret_offs, uint32_t n_sites,
+  const uint32_t *resume_offs, uint32_t n_resume
+) {
+  MIR_call_site_t *sites = n_sites ? malloc(n_sites * sizeof *sites) : NULL;
+  if (n_sites && !sites) return;
+  for (uint32_t i = 0; i < n_sites; i++) sites[i] = (MIR_call_site_t){.tag = i + 1, .ret_off = ret_offs[i]};
+  
+  jit_call_tagging_t tagging = {.sites = (jit_call_site_info_t *)infos, .n_sites = n_sites, .cap_sites = n_sites};
+  jit_code_info_ctx_t saved = jit_code_info_ctx;
+  
+  jit_code_info_ctx = (jit_code_info_ctx_t){.item = (MIR_item_t)(uintptr_t)1, .func = func, .tagging = &tagging};
+  size_t before = jc->code_registry ? jc->code_registry->len : 0;
+  
+  jit_code_info(jc, (MIR_item_t)(uintptr_t)1, (void *)code, code_len, fp_cfa_off, sites, n_sites);
+  jit_code_info_ctx = saved;
+  free(sites);
+  
+  struct jit_code_registry *reg = jc->code_registry;
+  if (!reg || reg->len == before) return;
+  
+  for (size_t i = 0; i < reg->len; i++) {
+    jit_code_range_t *r = &reg->ranges[i];
+    if (r->start != (uintptr_t)code) continue;
+    for (uint32_t j = 0; j < n_resume && r->n_resume < JIT_RESUME_CALLS_MAX; j++) 
+      r->resume_ret[r->n_resume++] = resume_offs[j];
+    break;
+  }
+}
+
+void jit_code_unregister(sv_jit_ctx_t *jc, const void *code) {
+  struct jit_code_registry *reg = jc ? jc->code_registry : NULL;
+  jit_code_range_t *r = reg ? jit_code_range_find(reg, (uintptr_t)code) : NULL;
+  if (!r || r->start != (uintptr_t)code) return;
+  
+  #if JIT_UNWIND_REGISTER
+  jit_deregister_unwind(r);
+  #endif
+  
+  free(r->sites);
+  size_t at = (size_t)(r - reg->ranges);
+  
+  memmove(&reg->ranges[at], &reg->ranges[at + 1], (reg->len - at - 1) * sizeof(*reg->ranges));
+  reg->len--;
 }
 
 void jit_drop_all_code(sv_jit_ctx_t *jc) {
@@ -467,6 +544,45 @@ static jit_code_range_t *jit_code_range_at(struct jit_code_registry *reg, uintpt
   return r && r->func ? r : NULL;
 }
 
+void sv_jit_forget_dying(ant_t *js, uint64_t epoch) {
+  sv_jit_ctx_t *jc = js->jit_ctx;
+  struct jit_code_registry *reg = jc ? jc->code_registry : NULL;
+  
+  if (!reg) return;
+  size_t kept = 0;
+  
+  for (size_t i = 0; i < reg->len; i++) {
+    jit_code_range_t *r = &reg->ranges[i];
+    
+    if (r->func && sv_code_unit_dying(r->func->unit, epoch)) {
+      #if JIT_UNWIND_REGISTER
+      jit_deregister_unwind(r);
+      #endif
+      free(r->sites);
+      continue;
+    }
+    
+    if (kept != i) reg->ranges[kept] = *r;
+    kept++;
+  }
+  
+  reg->len = kept;
+}
+
+__attribute__((no_sanitize("address")))
+void jit_code_mark_stack(sv_jit_ctx_t *jc, ant_t *js, uintptr_t from, uintptr_t to) {
+  struct jit_code_registry *reg = jc ? jc->code_registry : NULL;
+  if (!reg || !reg->len) return;
+  
+  uintptr_t lo = from < to ? from : to, hi = from < to ? to : from;
+  for (uintptr_t at = (lo + 7) & ~(uintptr_t)7; at + sizeof(uintptr_t) <= hi; at += sizeof(uintptr_t)) {
+    uintptr_t word = *(const uintptr_t *)at;
+    
+    jit_code_range_t *r = jit_code_range_at(reg, word);
+    if (r) gc_mark_func_ref(js, r->func);
+  }
+}
+
 int sv_jit_frames_at(ant_t *js, uintptr_t pc, sv_jit_frame_t *out, int cap) {
   sv_jit_ctx_t *jc = js ? js->jit_ctx : NULL;
   jit_code_range_t *r = jit_code_range_at(jc ? jc->code_registry : NULL, pc);
@@ -502,6 +618,7 @@ typedef struct {
   int seg_start;
   uint32_t runs, jit_entries;
   bool in_run;
+  bool host_pending;
 } jit_walk_t;
 
 static bool jit_walk_push(jit_walk_t *w, sv_jit_activation_t a) {
@@ -533,9 +650,11 @@ static void jit_walk_pass_marks(jit_walk_t *w, uintptr_t frame_addr) {
       if (w->n > w->seg_start) (*w->out)[w->n - 1].osr_host = true;
       w->osr = w->osr->prev;
     } else {
-      w->vm_fp = w->seg->entry_vm_fp - 1;
+      w->host_pending = w->seg->jit_depth == UINT32_MAX;
+      w->vm_fp = w->seg->entry_vm_fp - (w->host_pending ? 0 : 1);
       w->seg = w->seg->prev;
     }
+    
     w->seg_start = w->n;
   }
 }
@@ -545,11 +664,17 @@ static bool jit_walk_visit(jit_walk_t *w, uintptr_t pc, uintptr_t frame_addr) {
   jit_walk_pass_marks(w, frame_addr);
 
   jit_code_range_t *r = jit_code_range_at(w->reg, pc);
+  if (!r && w->host_pending) {
+    w->host_pending = false;
+    w->vm_fp--;
+  }
+  
   if (!r) {
     if (w->in_run && w->runs >= w->jit_entries) {
       jit_walk_pass_marks(w, w->seg ? (uintptr_t)w->seg : UINTPTR_MAX);
       return false;
     }
+    
     w->in_run = false;
     return true;
   }
@@ -560,7 +685,17 @@ static bool jit_walk_visit(jit_walk_t *w, uintptr_t pc, uintptr_t frame_addr) {
   bool resumed = false;
   for (int i = 0; i < r->n_resume; i++) resumed |= pc - r->start == r->resume_ret[i];
   
-  sv_jit_activation_t a = { .func = resumed ? NULL : r->func, .pc = pc, .vm_fp = w->vm_fp };
+  sv_jit_activation_t a = { 
+    .func = resumed ? NULL : r->func, 
+    .pc = pc, .vm_fp = w->vm_fp, 
+    .osr_host = w->host_pending 
+  };
+  
+  if (w->host_pending) {
+    w->host_pending = false;
+    w->vm_fp--;
+  }
+  
   return jit_walk_push(w, a) && (w->limit < 0 || w->funcs < w->limit);
 }
 

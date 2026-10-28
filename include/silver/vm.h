@@ -3,9 +3,8 @@
 
 #include "types.h"
 
-typedef struct sv_vm sv_vm_t;
-typedef struct sv_func sv_func_t;
 size_t os_thread_stack_size(void);
+int os_run_main(int (*fn)(int, char **), int argc, char **argv);
 
 extern int sv_user_stack_size_kb;
 
@@ -16,16 +15,7 @@ void sv_vm_destroy(sv_vm_t *vm);
 void sv_vm_limits(int *out_stack_size, int *out_max_frames);
 void sv_disasm(ant_t *js, sv_func_t *func, const char *label);
 
-ant_value_t sv_execute_frame(
-  sv_vm_t *vm, sv_func_t *func,
-  ant_value_t this_val, ant_value_t super_val,
-  ant_value_t *args, int argc
-);
-
-ant_value_t sv_execute_entry(
-  sv_vm_t *vm, sv_func_t *func,
-  ant_value_t this_val,
-  ant_value_t *args, int argc
-);
+ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this_val, ant_value_t super_val, ant_value_t *args, int argc);
+ant_value_t sv_execute_entry(sv_vm_t *vm, sv_func_t *func, ant_value_t this_val, ant_value_t *args, int argc);
 
 #endif

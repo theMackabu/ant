@@ -15,6 +15,8 @@
 #include "interrupt.h"
 
 #include "gc/modules.h"
+#include "index.h"
+#include "modules/bigint.h"
 #include "modules/buffer.h"
 #include "modules/atomics.h"
 #include "modules/timer.h"
@@ -278,46 +280,45 @@ typedef enum {
 #include "atomics/ops.h"
 } atomics_op_t;
 
-#define ATOMICS_APPLY_INT(name, ctype)                                                                       \
-  static inline double atomics_apply_##name(                                                                 \
-    uint8_t *ptr, size_t index, atomics_op_t op, int32_t value, int32_t replacement                          \
-  ) {                                                                                                        \
-    _Atomic ctype *slot = (_Atomic ctype *)ptr + index;                                                      \
-    ctype expected = (ctype)value;                                                                           \
-    switch (op) {                                                                                            \
-      case ATOMICS_ADD:      return (double)atomic_fetch_add(slot, (ctype)value);                            \
-      case ATOMICS_AND:      return (double)atomic_fetch_and(slot, (ctype)value);                            \
-      case ATOMICS_EXCHANGE: return (double)atomic_exchange(slot, (ctype)value);                             \
-      case ATOMICS_LOAD:     return (double)atomic_load(slot);                                               \
-      case ATOMICS_OR:       return (double)atomic_fetch_or(slot, (ctype)value);                             \
-      case ATOMICS_STORE:    atomic_store(slot, (ctype)value); return 0;                                     \
-      case ATOMICS_SUB:      return (double)atomic_fetch_sub(slot, (ctype)value);                            \
-      case ATOMICS_XOR:      return (double)atomic_fetch_xor(slot, (ctype)value);                            \
-      case ATOMICS_COMPARE_EXCHANGE:                                                                         \
-        atomic_compare_exchange_strong(slot, &expected, (ctype)replacement);                                 \
-        return (double)expected;                                                                             \
-    }                                                                                                        \
-    return 0;                                                                                                \
+typedef enum {
+  ATOMICS_KIND_NONE = 0,
+  ATOMICS_KIND_INT,
+  ATOMICS_KIND_BIGINT,
+} atomics_kind_t;
+
+#define ATOMICS_APPLY(name, ctype, result_t)                                                \
+  static inline result_t atomics_apply_##name(                                              \
+    uint8_t *ptr, size_t index, atomics_op_t op, uint64_t value, uint64_t replacement       \
+  ) {                                                                                       \
+    _Atomic ctype *slot = (_Atomic ctype *)ptr + index;                                     \
+    ctype expected = (ctype)value;                                                          \
+    switch (op) {                                                                           \
+      case ATOMICS_ADD:      return (result_t)atomic_fetch_add(slot, (ctype)value);         \
+      case ATOMICS_AND:      return (result_t)atomic_fetch_and(slot, (ctype)value);         \
+      case ATOMICS_EXCHANGE: return (result_t)atomic_exchange(slot, (ctype)value);          \
+      case ATOMICS_LOAD:     return (result_t)atomic_load(slot);                            \
+      case ATOMICS_OR:       return (result_t)atomic_fetch_or(slot, (ctype)value);          \
+      case ATOMICS_STORE:    atomic_store(slot, (ctype)value); return 0;                    \
+      case ATOMICS_SUB:      return (result_t)atomic_fetch_sub(slot, (ctype)value);         \
+      case ATOMICS_XOR:      return (result_t)atomic_fetch_xor(slot, (ctype)value);         \
+      case ATOMICS_COMPARE_EXCHANGE:                                                        \
+        atomic_compare_exchange_strong(slot, &expected, (ctype)replacement);                \
+        return (result_t)expected;                                                          \
+    }                                                                                       \
+    return 0;                                                                               \
   }
 
+#define ATOMICS_APPLY_INT(name, ctype)    ATOMICS_APPLY(name, ctype, double)
 #define ATOMICS_APPLY_FLOAT(name, ctype)
-#define ATOMICS_APPLY_BIGINT(name, ctype)
+#define ATOMICS_APPLY_BIGINT(name, ctype) ATOMICS_APPLY(name, ctype, ctype)
 #define BUFFER_TYPED_ARRAY(name, ctor, ctype, kind, load, store) ATOMICS_APPLY_##kind(name, ctype)
 
 #include "buffer/typed_arrays.h"
 
+#undef ATOMICS_APPLY
 #undef ATOMICS_APPLY_INT
 #undef ATOMICS_APPLY_FLOAT
 #undef ATOMICS_APPLY_BIGINT
-
-static inline double atomics_number(ant_t *js, ant_value_t value) {
-  return is_tagged(value) ? js_to_number(js, value) : tod(value);
-}
-
-static inline size_t atomics_index(double value) {
-  if (isnan(value)) return 0;
-  return value > -1 && value < 0x1p53 ? (size_t)value : SIZE_MAX;
-}
 
 static inline int32_t atomics_int32(double value) {
 #ifdef __ARM_FEATURE_JCVT
@@ -331,64 +332,120 @@ static inline double atomics_integer(double value) {
   return isnan(value) ? 0 : trunc(value) + 0.0;
 }
 
-static inline bool atomics_type_supported(TypedArrayType type) {
-  static const bool supported[] = {
-    #define ATOMICS_SUPPORTED_INT    true
-    #define ATOMICS_SUPPORTED_FLOAT  false
-    #define ATOMICS_SUPPORTED_BIGINT false
-    #define BUFFER_TYPED_ARRAY(name, ctor, ctype, kind, ...) ATOMICS_SUPPORTED_##kind,
+static inline atomics_kind_t atomics_kind(TypedArrayType type) {
+  static const uint8_t kinds[] = {
+    #define ATOMICS_KIND_OF_INT    ATOMICS_KIND_INT
+    #define ATOMICS_KIND_OF_FLOAT  ATOMICS_KIND_NONE
+    #define ATOMICS_KIND_OF_BIGINT ATOMICS_KIND_BIGINT
+    #define BUFFER_TYPED_ARRAY(name, ctor, ctype, kind, ...) ATOMICS_KIND_OF_##kind,
     #include "buffer/typed_arrays.h"
-    #undef ATOMICS_SUPPORTED_INT
-    #undef ATOMICS_SUPPORTED_FLOAT
-    #undef ATOMICS_SUPPORTED_BIGINT
+    #undef ATOMICS_KIND_OF_INT
+    #undef ATOMICS_KIND_OF_FLOAT
+    #undef ATOMICS_KIND_OF_BIGINT
   };
 
-  return type < TYPED_ARRAY_COUNT && type != TYPED_ARRAY_UINT8_CLAMPED && supported[type];
+  if (type >= TYPED_ARRAY_COUNT || type == TYPED_ARRAY_UINT8_CLAMPED) return ATOMICS_KIND_NONE;
+  return (atomics_kind_t)kinds[type];
 }
 
-static inline __attribute__((always_inline)) bool atomics_dispatch(
-  TypedArrayType type, uint8_t *ptr, size_t index, atomics_op_t op, int32_t operand, int32_t swap, double *result
+static inline __attribute__((always_inline)) ant_value_t atomics_dispatch(
+  ant_t *js, TypedArrayType type, uint8_t *ptr, size_t index, atomics_op_t op, uint64_t operand, uint64_t swap
 ) {
   switch (type) {
-    #define ATOMICS_CASE_INT(name) case TYPED_ARRAY_##name:          \
-      *result = atomics_apply_##name(ptr, index, op, operand, swap); \
-      return true;
-    #define ATOMICS_CASE_FLOAT(name)
-    #define ATOMICS_CASE_BIGINT(name)
-    #define BUFFER_TYPED_ARRAY(name, ctor, ctype, kind, ...) ATOMICS_CASE_##kind(name)
+    #define ATOMICS_CASE_INT(name, ctype, load) case TYPED_ARRAY_##name: \
+      return js_mknum(atomics_apply_##name(ptr, index, op, operand, swap));
+    #define ATOMICS_CASE_FLOAT(name, ctype, load)
+    #define ATOMICS_CASE_BIGINT(name, ctype, load) case TYPED_ARRAY_##name: { \
+      ctype result = atomics_apply_##name(ptr, index, op, operand, swap);    \
+      return op == ATOMICS_STORE ? js_mkundef() : load(js, result);          \
+    }
+    #define BUFFER_TYPED_ARRAY(name, ctor, ctype, kind, load, store) ATOMICS_CASE_##kind(name, ctype, load)
     #include "buffer/typed_arrays.h"
     #undef ATOMICS_CASE_INT
     #undef ATOMICS_CASE_FLOAT
     #undef ATOMICS_CASE_BIGINT
-    default: return false;
+    default: return js_mkundef();
   }
 }
 
+static ant_value_t atomics_validate(ant_t *js, ant_value_t *args, int nargs, TypedArrayData **out, size_t *index) {
+  TypedArrayData *ta = buffer_get_typedarray_data(nargs > 0 ? args[0] : js_mkundef());
+  
+  if (!ta) return js_mkerr_typed(js, JS_ERR_TYPE, "Argument is not a typed array");
+  if (!atomics_kind(ta->type)) return js_mkerr_typed(js, JS_ERR_TYPE, "Atomics operations require an integer typed array");
+  if (!Ant_Buffer_ViewIsLive(ta)) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot perform Atomics operation on a detached ArrayBuffer");
+
+  ant_value_t result = js_to_index_fast(js, nargs > 1 ? args[1] : js_mkundef(), index);
+  if (is_err(result)) return result;
+  if (*index >= ta->length) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid atomic access index");
+
+  *out = ta;
+  return js_mkundef();
+}
+
+static ant_value_t atomics_coerce(ant_t *js, const TypedArrayData *ta, ant_value_t value, uint64_t *bits) {
+  if (atomics_kind(ta->type) == ATOMICS_KIND_BIGINT) {
+    value = bigint_to_bigint(js, value);
+    if (is_err(value)) return value;
+    if (!bigint_to_uint64_wrapping(js, value, bits)) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert to BigInt");
+    return value;
+  }
+
+  if (is_object_type(value) || vtype(value) == kTypeBuiltin) {
+    value = js_to_primitive(js, value, 2);
+    if (is_err(value)) return value;
+  }
+  
+  if (vtype(value) == kTypeBigInt) 
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a BigInt value to a number");
+
+  double number = vtype(value) == kTypeNumber ? tod(value) : js_to_number(js, value);
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+  
+  number = atomics_integer(number);
+  *bits = (uint32_t)atomics_int32(number);
+  
+  return tov(number);
+}
+
+static ant_value_t atomics_bytes(ant_t *js, const TypedArrayData *ta, size_t index, uint8_t **out) {
+  size_t byte_length;
+  if (!Ant_Buffer_GetViewBytes(ta, out, &byte_length))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot perform Atomics operation on a detached ArrayBuffer");
+  if (index >= ta->length) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid atomic access index");
+  return js_mkundef();
+}
+
 static __attribute__((noinline, cold)) ant_value_t atomics_run_slow(
-  ant_t *js, ant_value_t *args, int nargs, atomics_op_t op, const char *name, int arity
+  ant_t *js, ant_value_t *args, int nargs, atomics_op_t op, int arity
 ) {
-  if (nargs < arity) return js_mkerr(js, "Atomics.%s requires %d arguments", name, arity);
-
-  size_t index = atomics_index(atomics_number(js, args[1]));
-  double value = arity > 2 ? atomics_number(js, args[2]) : 0;
-  int32_t swap = arity > 3 ? atomics_int32(atomics_number(js, args[3])) : 0;
-
-  TypedArrayData *ta_data;
+  TypedArrayData *ta;
+  size_t index;
+  uint64_t operand = 0, swap = 0;
   uint8_t *ptr;
-  if (!get_atomic_array_data(js, args[0], &ta_data, &ptr))
-    return js_mkerr(js, "First argument must be a TypedArray");
 
-  if (!atomics_type_supported(ta_data->type))
-    return js_mkerr(js, "TypedArray type not supported for atomic operations");
-  if (index >= ta_data->length) return js_mkerr_typed(js, JS_ERR_RANGE, "Index out of bounds");
+  ant_value_t value = atomics_validate(js, args, nargs, &ta, &index);
+  if (is_err(value)) return value;
 
-  double result = 0;
-  atomics_dispatch(ta_data->type, ptr, index, op, atomics_int32(value), swap, &result);
-  return js_mknum(op == ATOMICS_STORE ? atomics_integer(value) : result);
+  if (arity > 2) {
+    value = atomics_coerce(js, ta, nargs > 2 ? args[2] : js_mkundef(), &operand);
+    if (is_err(value)) return value;
+  }
+
+  if (arity > 3) {
+    ant_value_t replacement = atomics_coerce(js, ta, nargs > 3 ? args[3] : js_mkundef(), &swap);
+    if (is_err(replacement)) return replacement;
+  }
+
+  ant_value_t result = atomics_bytes(js, ta, index, &ptr);
+  if (is_err(result)) return result;
+
+  result = atomics_dispatch(js, ta->type, ptr, index, op, operand, swap);
+  return op == ATOMICS_STORE ? value : result;
 }
 
 static inline __attribute__((always_inline)) ant_value_t atomics_run(
-  ant_t *js, ant_value_t *args, int nargs, atomics_op_t op, const char *name, int arity
+  ant_t *js, ant_value_t *args, int nargs, atomics_op_t op, int arity
 ) {
   if (__builtin_expect(nargs < arity, 0)) goto slow;
   for (int i = 1; i < arity; i++) if (__builtin_expect(is_tagged(args[i]), 0)) goto slow;
@@ -399,23 +456,22 @@ static inline __attribute__((always_inline)) ant_value_t atomics_run(
 
   double index = tod(args[1]);
   if (__builtin_expect(!(index > -1 && index < (double)ta_data->length), 0)) goto slow;
-  if (__builtin_expect(ta_data->type == TYPED_ARRAY_UINT8_CLAMPED, 0)) goto slow;
+  if (__builtin_expect(atomics_kind(ta_data->type) != ATOMICS_KIND_INT, 0)) goto slow;
 
   double value = arity > 2 ? tod(args[2]) : 0;
-  int32_t swap = arity > 3 ? atomics_int32(tod(args[3])) : 0;
-  double result;
+  uint32_t operand = arity > 2 ? (uint32_t)atomics_int32(value) : 0;
+  uint32_t swap = arity > 3 ? (uint32_t)atomics_int32(tod(args[3])) : 0;
 
-  if (__builtin_expect(!atomics_dispatch(ta_data->type, ptr, (size_t)index, op, atomics_int32(value), swap, &result), 0))
-    goto slow;
-  return js_mknum(op == ATOMICS_STORE ? atomics_integer(value) : result);
+  ant_value_t result = atomics_dispatch(js, ta_data->type, ptr, (size_t)index, op, operand, swap);
+  return op == ATOMICS_STORE ? js_mknum(atomics_integer(value)) : result;
 
 slow:
-  return atomics_run_slow(js, args, nargs, op, name, arity);
+  return atomics_run_slow(js, args, nargs, op, arity);
 }
 
-#define ATOMICS_OP(name, op, arity)                                  \
-  static ant_value_t js_atomics_##name(ant_params_t) {               \
-    return atomics_run(js, args, nargs, ATOMICS_##op, #name, arity); \
+#define ATOMICS_OP(name, op, arity)                           \
+  static ant_value_t js_atomics_##name(ant_params_t) {        \
+    return atomics_run(js, args, nargs, ATOMICS_##op, arity); \
   }
 #include "atomics/ops.h"
 

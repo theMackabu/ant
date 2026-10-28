@@ -1,5 +1,7 @@
 #include "silver/code_unit.h"
 #include "silver/engine.h"
+#include "silver/jit.h"
+#include "silver/feedback.h"
 
 #include "cage.h"
 #include "runtime.h"
@@ -220,8 +222,49 @@ bool sv_code_unit_retain_template(ant_t *js, sv_func_t *func, ant_value_t value)
   return true;
 }
 
-void sv_code_unit_make_immortal(sv_func_t *func) {
-  if (func && func->unit) func->unit->immortal = true;
+bool sv_code_retain_value(ant_t *js, ant_value_t value) {
+  sv_code_units_t *u = &js->code_units;
+  ant_value_t *young = vec_grow(u->young_values, &u->young_cap, u->young_len + 1, sizeof(*young), 64);
+  if (!young) return false;
+  
+  u->young_values = young;
+  u->young_values[u->young_len++] = value;
+  
+  return true;
+}
+
+bool sv_code_depend(ant_t *js, sv_func_t *owner, sv_func_t *target) {
+  if (!target || !target->unit || !owner || owner == target) return true;
+  if (owner->unit == target->unit) return true;
+  
+  if (!owner->unit) {
+    sv_code_units_t *u = &js->code_units;
+    for (size_t i = 0; i < u->code_root_len; i++) if (u->code_roots[i] == target) return true;
+    
+    sv_func_t **roots = vec_grow(u->code_roots, &u->code_root_cap, u->code_root_len + 1, sizeof(*roots), 16);
+    if (!roots) return false;
+    
+    u->code_roots = roots;
+    u->code_roots[u->code_root_len++] = target;
+    
+    return true;
+  }
+  
+  sv_func_sidecar_t *sidecar = sv_func_ensure_sidecar(owner);
+  if (!sidecar) return false;
+  for (uint32_t i = 0; i < sidecar->code_dep_count; i++) if (sidecar->code_deps[i] == target) return true;
+  
+  if (sidecar->code_dep_count == sidecar->code_dep_cap) {
+    uint32_t cap = sidecar->code_dep_cap ? sidecar->code_dep_cap * 2 : 4;
+    sv_func_t **deps = realloc(sidecar->code_deps, cap * sizeof(*deps));
+    if (!deps) return false;
+    
+    sidecar->code_deps = deps;
+    sidecar->code_dep_cap = cap;
+  }
+  
+  sidecar->code_deps[sidecar->code_dep_count++] = target;
+  return true;
 }
 
 bool sv_code_units_watch_feedback(sv_func_t *func, sv_func_t *callee) {
@@ -242,12 +285,16 @@ bool sv_code_units_watch_feedback(sv_func_t *func, sv_func_t *callee) {
   return true;
 }
 
-static void func_free_sidecar(sv_func_t *func) {
+static void func_free_sidecar(ant_t *js, sv_func_t *func) {
   uintptr_t raw = (uintptr_t)func->type_feedback;
   
   if (!(raw & ant_sidecar)) return;
   sv_func_sidecar_t *sidecar = (sv_func_sidecar_t *)(raw & ~ant_sidecar);
   
+  if (sidecar->opt_state) opt_tier_func_free(js, func);
+  sv_jit_release_modules(js, func);
+  
+  free(sidecar->code_deps);
   free(sidecar->type_feedback);
   free(sidecar->elem_types);
   free(sidecar->jit_await_map);
@@ -311,7 +358,7 @@ static void unit_free(ant_t *js, sv_code_unit_t *unit) {
   
   for (sv_func_t *func = unit->funcs; func; func = func->unit_next) {
     func_release(js, func);
-    func_free_sidecar(func);
+    func_free_sidecar(js, func);
   }
   
   u->held_bytes -= SV_CODE_UNIT_OVERHEAD;
@@ -344,6 +391,7 @@ void sv_code_units_sweep(ant_t *js, uint64_t epoch) {
     dying = unit;
   }
 
+  if (dying) sv_jit_forget_dying(js, epoch);
   for (sv_code_unit_t *unit = dying, *next; unit; unit = next) {
     next = unit->next;
     unit_free(js, unit);
@@ -353,8 +401,7 @@ void sv_code_units_sweep(ant_t *js, uint64_t epoch) {
 static void units_check_pins(ant_t *js) {
 #ifndef NDEBUG
   if (js->vm_exec_depth) return;
-  for (sv_code_unit_t *unit = js->code_units.pinned; unit; unit = unit->pinned_next)
-    ANT_ASSERT(unit->immortal, "code unit still pinned at teardown (missing sv_code_unit_unpin)");
+  ANT_ASSERT(!js->code_units.pinned, "code unit still pinned at teardown (missing sv_code_unit_unpin)");
 #endif
 }
 
@@ -364,7 +411,7 @@ void sv_code_units_destroy(ant_t *js) {
 
   for (sv_func_t *func = u->unowned_funcs; func; func = func->unit_next) {
     func_release(js, func);
-    func_free_sidecar(func);
+    func_free_sidecar(js, func);
   }
   
   u->unowned_funcs = NULL;
@@ -392,6 +439,10 @@ void sv_code_units_destroy(ant_t *js) {
   free(u->young_values);
   u->young_values = NULL;
   u->young_len = u->young_cap = 0;
+
+  free(u->code_roots);
+  u->code_roots = NULL;
+  u->code_root_len = u->code_root_cap = 0;
 
   free(u->fb_watch);
   u->fb_watch = NULL;

@@ -16,7 +16,7 @@ class Explicit extends EventEmitter {
     super();
     this.n = n;
     if (n & 1) return; // implicit undefined return path
-    return 42; // non-object return path: must still yield `this`
+    return 42;
   }
 }
 
@@ -32,8 +32,10 @@ for (let i = 0; i < 300; i++) {
   const m = new Msg({ id: i }, { method: 'GET', rawHeaders: ['host', 'x'] });
   check('props survive at iter ' + i, m.method === 'GET' && m.headers.length === 2 && m._bodyConsumed === false);
   check('stream identity at iter ' + i, typeof m.pipe === 'function' && typeof m.unpipe === 'function');
-  const e = new Explicit(i);
-  check('explicit-return ctor yields this at iter ' + i, e.n === i && e instanceof EventEmitter);
+  let e = null, threw = null;
+  try { e = new Explicit(i); } catch (err) { threw = err; }
+  if (i & 1) check('explicit-return ctor yields this at iter ' + i, e && e.n === i && e instanceof EventEmitter);
+  else check('primitive-return ctor throws at iter ' + i, threw instanceof TypeError);
   if (failures > 5) break;
 }
 

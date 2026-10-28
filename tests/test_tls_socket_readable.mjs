@@ -1,4 +1,5 @@
 import assert from 'node:assert';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import tls from 'node:tls';
 
@@ -66,6 +67,41 @@ await withServer(() => {}, async (port) => {
   const sock = connect(String(port));
   await once(sock, 'secureConnect');
   sock.destroy();
+});
+
+const big = Buffer.alloc(3 * 1024 * 1024);
+for (let i = 0; i < big.length; i++) big[i] = (i * 31) & 255;
+const digest = (data) => crypto.createHash('sha1').update(data).digest('hex');
+
+await withServer((s) => s.end(big), async (port) => {
+  const sock = connect(port);
+  const chunks = [];
+  const events = [];
+  sock.on('data', (d) => chunks.push(d));
+  sock.on('end', () => events.push('end'));
+  await once(sock, 'close');
+  assert.strictEqual(digest(Buffer.concat(chunks)), digest(big));
+  assert.deepStrictEqual(events, ['end']);
+});
+
+await withServer((s) => s.end(big), async (port) => {
+  const sock = connect(port);
+  const chunks = [];
+  sock.on('readable', () => {
+    let chunk;
+    while ((chunk = sock.read(1000)) !== null) chunks.push(chunk);
+  });
+  await once(sock, 'end');
+  assert.ok(chunks.slice(0, -1).every((chunk) => chunk.length === 1000));
+  assert.strictEqual(digest(Buffer.concat(chunks)), digest(big));
+  sock.destroy();
+});
+
+await withServer((s) => s.end(big), async (port) => {
+  const sock = connect(port);
+  const chunks = [];
+  for await (const chunk of sock) chunks.push(chunk);
+  assert.strictEqual(digest(Buffer.concat(chunks)), digest(big));
 });
 
 console.log('tls socket readable: ok');

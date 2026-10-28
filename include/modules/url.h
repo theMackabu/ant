@@ -22,7 +22,7 @@ void url_state_clear(url_state_t *s);
 void url_free_state(url_state_t *s);
 bool usp_is_urlsearchparams(ant_t *js, ant_value_t obj);
 
-ant_value_t url_library(ant_t *js);
+ant_value_t internal_url_library(ant_t *js);
 url_state_t *url_get_state(ant_value_t obj);
 ant_value_t make_url_obj(ant_t *js, url_state_t *s);
 ant_value_t url_resolve_object_url(ant_t *js, const char *url);
@@ -42,5 +42,7 @@ int parse_url_to_state(
 
 int Ant_URL_ParseDocumentRelative(ant_t *js, const char *url_str, url_state_t *s);
 int Ant_URL_ParseLocation(const char *href, url_state_t *s);
+int Ant_URL_IsURLLike(ant_t *js, ant_value_t value, ant_value_t *err);
+ant_value_t Ant_URL_FileURLToPath(ant_t *js, ant_value_t input);
 
 #endif

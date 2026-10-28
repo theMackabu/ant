@@ -8,6 +8,7 @@
 #include "gc/roots.h"
 #include "silver/feedback.h"
 #include "modules/bigint.h"
+#include "modules/math.h"
 
 static inline ant_value_t sv_add_to_primitive(ant_t *js, ant_value_t value) {
   return is_object_type(value) 
@@ -128,7 +129,7 @@ static inline ant_value_t sv_arith_values(ant_t *js, sv_op_t op, ant_value_t l, 
     case OP_MUL: res = tov(tod(ln) * tod(rn)); break;
     case OP_DIV: res = tov(tod(ln) / tod(rn)); break;
     case OP_MOD: res = tov(fmod(tod(ln), tod(rn))); break;
-    default:     res = tov(pow(tod(ln), tod(rn))); break;
+    default:     res = tov(ant_math_js_pow(tod(ln), tod(rn))); break;
   }
   
   GC_ROOT_RESTORE(js, mark);
@@ -160,7 +161,7 @@ SV_ARITH_OP(sub, OP_SUB, a - b)
 SV_ARITH_OP(mul, OP_MUL, a * b)
 SV_ARITH_OP(div, OP_DIV, a / b)
 SV_ARITH_OP(mod, OP_MOD, fmod(a, b))
-SV_ARITH_OP(exp, OP_EXP, pow(a, b))
+SV_ARITH_OP(exp, OP_EXP, ant_math_js_pow(a, b))
 #undef SV_ARITH_OP
 
 static inline ant_value_t sv_op_neg(sv_vm_t *vm, ant_t *js) {
@@ -181,14 +182,6 @@ static inline ant_value_t sv_op_uplus(sv_vm_t *vm, ant_t *js) {
     return js_mkerr(js, "Cannot convert a BigInt value to a number");
   vm->stack[vm->sp++] = n;
   return tov(0);
-}
-
-static inline void sv_op_inc(sv_vm_t *vm) {
-  vm->stack[vm->sp - 1] = tov(tod(vm->stack[vm->sp - 1]) + 1.0);
-}
-
-static inline void sv_op_dec(sv_vm_t *vm) {
-  vm->stack[vm->sp - 1] = tov(tod(vm->stack[vm->sp - 1]) - 1.0);
 }
 
 static __attribute__((noinline)) ant_value_t sv_op_post_update_slow(sv_vm_t *vm, ant_t *js, bool increment) {

@@ -358,6 +358,69 @@ bool js_obj_ensure_prop_capacity(ant_t *js, ant_object_t *obj, uint32_t needed) 
   return true;
 }
 
+static ant_shape_t *object_proto_root(ant_t *js, ant_value_t proto, uint8_t inobj_limit) {
+  if (vtype(proto) == kTypeUndefined) return ant_shape_new_with_inobj_limit(js, inobj_limit);
+  if (!is_object_type(proto)) return ant_shape_root(js, &js->shapes.null_roots, proto, inobj_limit);
+  
+  ant_object_sidecar_t *sidecar = ant_object_ensure_sidecar(js_obj_ptr(js_as_obj(proto)));
+  if (!sidecar) return NULL;
+  if (!sidecar->shape_roots && !(sidecar->shape_roots = calloc(1, sizeof(*sidecar->shape_roots)))) return NULL;
+  
+  return ant_shape_root(js, sidecar->shape_roots, proto, inobj_limit);
+}
+
+static ant_shape_t *object_proto_root_cached(ant_t *js, ant_value_t proto) {
+  uint32_t line = (uint32_t)(proto >> 6) & 7;
+  if (js->shapes.cached_protos[line] == proto) return js->shapes.cached_roots[line];
+  
+  ant_object_sidecar_t *sidecar = ant_object_sidecar(js_obj_ptr(js_as_obj(proto)));
+  ant_shape_t *root = sidecar && sidecar->shape_roots ? sidecar->shape_roots->roots[ANT_INOBJ_MAX_SLOTS] : NULL;
+  if (!root && (root = object_proto_root(js, proto, (uint8_t)ANT_INOBJ_MAX_SLOTS))) ant_shape_release(root);
+  
+  if (root) {
+    js->shapes.cached_protos[line] = proto;
+    js->shapes.cached_roots[line] = root;
+  }
+  
+  return root;
+}
+
+static ant_object_t *obj_alloc_with_proto(ant_t *js, uint8_t type_tag, ant_value_t proto) {
+  if (!is_object_type(proto)) return obj_alloc(js, type_tag, (uint8_t)ANT_INOBJ_MAX_SLOTS);
+  ant_shape_t *root = object_proto_root_cached(js, proto);
+  if (!root) return NULL;
+  
+  ant_shape_retain(root);
+  ant_object_t *obj = obj_alloc_shaped(js, type_tag, root);
+  if (obj) obj->proto = proto;
+  
+  return obj;
+}
+
+ant_shape_t *ant_object_proto_root(ant_t *js, ant_value_t proto, uint8_t inobj_limit) {
+  return object_proto_root(js, proto, inobj_limit);
+}
+
+void ant_object_set_proto(ant_t *js, ant_object_t *obj, ant_value_t proto) {
+  obj->proto = proto;
+  ant_shape_t *shape = obj->shape;
+  
+  if (!shape || ant_shape_proto(shape) == proto) return;
+  ant_shape_t *next = NULL;
+  
+  if (ant_shape_is_empty(shape)) {
+    if (obj->inobj_limit == ANT_INOBJ_MAX_SLOTS && is_object_type(proto)) next = object_proto_root_cached(js, proto);
+    else if ((next = object_proto_root(js, proto, obj->inobj_limit))) ant_shape_release(next);
+    if (next) ant_shape_retain(next);
+  }
+  
+  if (!next) next = ant_shape_with_proto(shape, proto);
+  ANT_ASSERT(next, "out of memory changing a prototype");
+  
+  ant_shape_release(shape);
+  obj->shape = next;
+}
+
 bool js_obj_ensure_unique_shape(ant_object_t *obj) {
   if (!obj || !obj->shape) return false;
   if (!ant_shape_is_shared(obj->shape)) return true;
@@ -416,14 +479,22 @@ static ant_exotic_ops_t *obj_ensure_exotic_ops(ant_object_t *obj) {
   return ops;
 }
 
-static ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit) {
+ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit) {
+  ant_shape_t *shape = ant_shape_new_with_inobj_limit(js, inobj_limit);
+  return shape ? obj_alloc_shaped(js, type_tag, shape) : NULL;
+}
+
+ant_object_t *obj_alloc_shaped(ant_t *js, uint8_t type_tag, ant_shape_t *shape) {
   gc_alloc_check(js);
   ant_object_t *obj = (ant_object_t *)fixed_arena_alloc_uninit(&js->obj_arena);
   
   if (!obj && gc_reclaim_arena(js, &js->obj_arena)) 
     obj = (ant_object_t *)fixed_arena_alloc_uninit(&js->obj_arena);
   
-  if (!obj) return NULL;
+  if (!obj) {
+    ant_shape_release(shape);
+    return NULL;
+  }
 
   obj->ic_identity = 0;
   obj->type_tag = type_tag;
@@ -435,13 +506,8 @@ static ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit)
   obj->u.array.len = 0;
   obj->u.array.cap = 0;
   
-  obj->shape = ant_shape_new_with_inobj_limit(js, inobj_limit);
-  if (!obj->shape) {
-    obj->mark_epoch = ANT_GC_DEAD;
-    fixed_arena_free_elem(&js->obj_arena, obj);
-    return NULL;
-  }
-  obj->inobj_limit = ant_shape_get_inobj_limit(obj->shape);
+  obj->shape = shape;
+  obj->inobj_limit = ant_shape_get_inobj_limit(shape);
   
   obj->overflow_prop = NULL;
   obj->overflow_cap = 0;
@@ -512,7 +578,7 @@ static void js_native_ctor_prepare(ant_t *js, ant_value_t obj, uint8_t flags) {
   if (!ptr) return;
 
   if (vtype(ptr->proto) == kTypeUndefined && is_object_type(js->sym.function_proto))
-    ptr->proto = js->sym.function_proto;
+    ant_object_set_proto(js, ptr, js->sym.function_proto);
 
   if (flags & SV_CALL_IS_DEFAULT_CTOR) {
     ptr->flags.is_constructor = 1;
@@ -623,6 +689,7 @@ static ant_value_t proxy_delete_index(ant_t *js, ant_value_t obj, ant_offset_t i
 static ant_value_t array_method_has_index(ant_t *js, ant_value_t arr, ant_offset_t idx);
 static ant_value_t array_method_get_index(ant_t *js, ant_value_t arr, ant_offset_t idx);
 static ant_value_t string_to_integer_or_infinity(ant_t *js, ant_value_t value, double *out);
+static inline double string_number_to_integer(double number);
 static inline bool array_method_dense_element(ant_value_t arr, ant_offset_t idx, ant_value_t *out);
 
 static inline ant_object_t *array_method_elements(ant_value_t arr);
@@ -644,6 +711,7 @@ static ant_offset_t dense_capacity(ant_offset_t doff);
 static inline ant_value_t dense_get(ant_offset_t doff, ant_offset_t idx);
 static ant_offset_t get_array_length(ant_t *js, ant_value_t arr);
 static ant_value_t arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx);
+static inline bool array_proto_chain_plain(ant_t *js, ant_object_t *arr);
 
 static bool arr_has(ant_t *js, ant_value_t arr, ant_offset_t idx);
 static bool try_accessor_getter(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t *out);
@@ -1486,7 +1554,7 @@ static size_t strobj_inspect(ant_t *js, ant_value_t obj, char *buf, size_t len, 
 
 static size_t strregexp(ant_t *js, ant_value_t obj, char *buf, size_t len) {
   ant_value_t source = regexp_source_value(js, obj);
-  ant_value_t flags = get_slot(obj, SLOT_REGEXP_FLAGS_STRING);
+  ant_value_t flags = regexp_flags_value(js, obj);
 
   size_t source_len = 0, flags_len = 0;
   const char *source_str = vtype(source) == kTypeString ? js_getstr(js, source, &source_len) : "(?:)";
@@ -2148,6 +2216,9 @@ static size_t strcfunc_inspect(ant_t *js, ant_value_t value, char *buf, size_t l
 }
 
 size_t tostr(ant_t *js, ant_value_t value, char *buf, size_t len) {
+  if (is_object_type(value) && sv_check_c_stack_overflow(js))
+    return ANT_COPY(buf, len, "[Object: Inspection interrupted prematurely. Maximum call stack size exceeded.]");
+  
   switch (vtype(value)) {
     case kTypeUndefined:   return ANT_COPY(buf, len, "undefined");
     case kTypeNull:    return ANT_COPY(buf, len, "null");
@@ -2459,6 +2530,8 @@ static ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) 
   ant_offset_t new_cap = old_cap ? old_cap : MAX_DENSE_INITIAL_CAP;
 
   while (new_cap < needed) new_cap *= 2;
+  ant_offset_t len = obj->u.array.len;
+  if (len > new_cap && len / 8 <= new_cap) new_cap = len;
   if (new_cap > UINT32_MAX) new_cap = UINT32_MAX;
   if ((size_t)new_cap > SIZE_MAX / sizeof(ant_value_t)) return 0;
 
@@ -2476,6 +2549,8 @@ static ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) 
   return (ant_offset_t)(uintptr_t)obj;
 }
 
+static constexpr ant_offset_t ARRAY_DENSE_GAP = 1024;
+
 // TODO: make get and set dry
 static inline ant_value_t arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx) {
   ant_object_t *fast = array_obj_ptr(arr);
@@ -2490,22 +2565,28 @@ static inline ant_value_t arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx) 
   }
 
   ant_offset_t semantic_len = get_array_length(js, arr);
+  ant_value_t cur = arr;
   
-  if (idx >= semantic_len) return js_mkundef();
-  ant_offset_t doff = get_dense_buf(arr);
-  
-  if (doff) {
-    ant_offset_t len = dense_iterable_length(js, arr);
-    if (idx < len) {
-      ant_value_t v = dense_get(doff, idx);
-      if (!is_empty_slot(v)) return v;
+  if (idx >= semantic_len) {
+    if (!fast || !fast->flags.arguments_object) {
+      if (fast && array_proto_chain_plain(js, fast)) return js_mkundef();
+      cur = get_proto(js, arr);
+    }
+  } else {
+    // TODO: reduce nesting
+    ant_offset_t doff = get_dense_buf(arr);
+    if (doff) {
+      ant_offset_t len = dense_iterable_length(js, arr);
+      if (idx < len) {
+        ant_value_t v = dense_get(doff, idx);
+        if (!is_empty_slot(v)) return v;
+      }
     }
   }
   
   char idxstr[16];
   size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
 
-  ant_value_t cur = arr;
   for (int depth = 0; is_object_type(cur) && depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
     ant_value_t cur_obj = js_as_obj(cur);
     if (!array_obj_ptr(cur_obj)) goto shape_lookup;
@@ -2551,19 +2632,22 @@ static inline void arr_set(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_val
       return;
     }
     
-    ant_offset_t density_limit = len > 0 ? len * 4 : 64;
+    ant_offset_t density_limit = len * 4 > ARRAY_DENSE_GAP ? len * 4 : ARRAY_DENSE_GAP;
     if (idx >= density_limit) goto sparse;
     
     ant_offset_t cap = dense_capacity(doff);
+    ant_offset_t stale_end = idx < cap ? idx : cap;
+    
     if (idx >= cap) {
       doff = dense_grow(js, arr, idx + 1);
       if (doff == 0) goto sparse;
     }
     
-    if (idx > len) array_mark_may_have_holes(arr);
-    for (ant_offset_t i = len; i < idx; i++) {
-      ant_value_t v = dense_get(doff, i);
-      if (!is_empty_slot(v) && vtype(v) == kTypeUndefined) dense_set(js, doff, i, T_EMPTY);
+    if (idx > len) {
+      array_mark_may_have_holes(arr);
+      ant_value_t *data = dense_data(doff);
+      for (ant_offset_t i = len; i < stale_end; i++)
+        if (vtype(data[i]) == kTypeUndefined) data[i] = T_EMPTY;
     }
     
     dense_set(js, doff, idx, val);
@@ -2852,12 +2936,10 @@ static ant_value_t alloc_array_with_proto_capacity(
   ant_t *js, ant_value_t proto, uint32_t minimum_capacity,
   uint32_t overwritten_prefix, bool exact_capacity
 ) {
-  ant_object_t *obj = obj_alloc(js, kTypeArray, (uint8_t)ANT_INOBJ_MAX_SLOTS);
+  ant_object_t *obj = obj_alloc_with_proto(js, kTypeArray, proto);
   if (!obj) return js_mkerr(js, "oom");
   
   ant_value_t arr = mkref(kTypeArray, obj);
-  if (is_object_type(proto)) js_set_proto_init(arr, proto);
-
   uint32_t capacity = exact_capacity
     ? (minimum_capacity ? minimum_capacity : 1u) 
     : MAX_DENSE_INITIAL_CAP;
@@ -2979,6 +3061,7 @@ static ant_value_t arguments_template(ant_t *js, bool is_strict, bool has_iterat
   
   if (is_err(seed)) return seed;
   GC_ROOT_PIN(js, seed);
+  if (is_object_type(js->sym.object_proto)) js_set_proto_init(seed, js->sym.object_proto);
   
   setprop_cstr(js, seed, "length", 6, tov(0));
   js_set_descriptor(js, seed, "length", 6, JS_DESC_W | JS_DESC_C);
@@ -3054,6 +3137,7 @@ ant_value_t js_create_arguments_object(
   target->shape = source->shape;
   target->inobj_limit = source->inobj_limit;
   target->prop_count = source->prop_count;
+  ant_object_set_proto(js, target, target->proto);
   target->inobj[ANT_ARGUMENTS_SLOT_LENGTH] = tov((double)count);
   target->inobj[ANT_ARGUMENTS_SLOT_CALLEE] = is_strict ? source->inobj[ANT_ARGUMENTS_SLOT_CALLEE] : callee;
   gc_write_barrier(js, target, target->inobj[ANT_ARGUMENTS_SLOT_CALLEE]);
@@ -3198,6 +3282,91 @@ ant_value_t js_mkstr_ascii(ant_t *js, const void *ptr, size_t len) {
   return mkstr_with_ascii(js, ptr, len, true);
 }
 
+static ant_value_t mkstr_utf8_finish(ant_value_t str, bool ascii) {
+  ant_flat_string_t *flat = ant_str_flat_ptr(str);
+  str_flat_init_meta(flat, ascii ? STR_ASCII_YES : STR_ASCII_NO);
+  if (!ascii) str_flat_set_utf_valid_state(flat, STR_UTF_VALID);
+  return str;
+}
+
+ant_value_t js_mkstr_utf8_reserve(ant_t *js, size_t len, char **out_bytes) {
+  ant_value_t str = mkstr_with_ascii(js, NULL, len, false);
+  *out_bytes = is_err(str) ? NULL : ant_str_flat_ptr(str)->bytes;
+  return str;
+}
+
+ant_value_t js_mkstr_utf8_valid(ant_t *js, const void *ptr, size_t len, bool ascii) {
+  if (len == 0) return js_empty_string(js);
+
+  char *bytes;
+  ant_value_t str = js_mkstr_utf8_reserve(js, len, &bytes);
+  if (is_err(str)) return str;
+  
+  memcpy(bytes, ptr, len);
+  return mkstr_utf8_finish(str, ascii);
+}
+
+static ant_value_t mkstr_utf8_replaced(ant_t *js, const char *ptr, size_t len, size_t valid) {
+  size_t out_len;
+  char *out = utf8_replace_invalid(ptr, len, valid, &out_len);
+  if (!out) return js_mkerr(js, "oom");
+
+  ant_value_t result = js_mkstr_utf8_valid(js, out, out_len, false);
+  free(out);
+
+  return result;
+}
+
+ant_value_t js_mkstr_utf8_try(ant_t *js, const void *ptr, size_t len, size_t *out_valid) {
+  *out_valid = len;
+  if (len == 0) return js_empty_string(js);
+
+  char *bytes;
+  ant_value_t str = js_mkstr_utf8_reserve(js, len, &bytes);
+  if (is_err(str)) return str;
+
+  bool ascii;
+  *out_valid = utf8_copy_valid_prefix(bytes, (const char *)ptr, len, &ascii);
+  return *out_valid == len ? mkstr_utf8_finish(str, ascii) : js_mkundef();
+}
+
+ant_value_t js_mkstr_utf8(ant_t *js, const void *ptr, size_t len) {
+  size_t valid;
+  ant_value_t str = js_mkstr_utf8_try(js, ptr, len, &valid);
+  if (vtype(str) != kTypeUndefined) return str;
+  return mkstr_utf8_replaced(js, (const char *)ptr, len, valid);
+}
+
+ant_value_t js_mkstr_utf8_commit(ant_t *js, ant_value_t str) {
+  ant_flat_string_t *flat = ant_str_flat_ptr(str);
+  size_t len = (size_t)flat->len;
+  if (len == 0) return js_empty_string(js);
+
+  bool ascii;
+  size_t valid = utf8_valid_prefix(flat->bytes, len, &ascii);
+  if (valid < len) return mkstr_utf8_replaced(js, flat->bytes, len, valid);
+  return mkstr_utf8_finish(str, ascii);
+}
+
+ant_value_t js_mkstr_wtf8_lossy(ant_t *js, const void *ptr, size_t len) {
+  size_t clean_len = 0;
+  char *clean = wtf8_replace_invalid((const char *)ptr, len, &clean_len);
+  if (!clean) return js_mkstr(js, ptr, len);
+
+  ant_value_t result = js_mkstr(js, clean, clean_len);
+  free(clean);
+  return result;
+}
+
+ant_value_t js_mkstr_utf8_strip_bom(ant_t *js, const void *ptr, size_t len) {
+  const uint8_t *bytes = (const uint8_t *)ptr;
+  if (len >= 3 && bytes[0] == 0xef && bytes[1] == 0xbb && bytes[2] == 0xbf) {
+    bytes += 3;
+    len -= 3;
+  }
+  return js_mkstr_utf8(js, bytes, len);
+}
+
 static ant_value_t js_mkstr_int32(ant_t *js, int32_t value) {
   size_t len = ant_int32_chars_len(value);
   ant_value_t str = mkstr_with_ascii(js, NULL, len, true);
@@ -3271,6 +3440,23 @@ static ant_value_t mkobj_with_inobj_limit(ant_t *js, ant_offset_t parent, uint8_
 
 ant_value_t mkobj(ant_t *js, ant_offset_t parent) {
   return mkobj_with_inobj_limit(js, parent, (uint8_t)ANT_INOBJ_MAX_SLOTS);
+}
+
+ant_value_t js_mkobj_with_proto(ant_t *js, ant_value_t proto) {
+  if (!is_object_type(proto)) {
+    ant_value_t obj = mkobj(js, 0);
+    if (vtype(proto) != kTypeUndefined && vtype(obj) == kTypeObject) ant_object_set_proto(js, js_obj_ptr(obj), proto);
+    return obj;
+  }
+  
+  ant_object_t *obj = obj_alloc_with_proto(js, kTypeObject, proto);
+  if (!obj) {
+    ant_value_t failure = is_err(js->exception_oom) ? js->exception_oom : mkval(kTypeError, 0);
+    Ant_Exception_Set(js, failure);
+    return failure;
+  }
+  
+  return mkref(kTypeObject, obj);
 }
 
 ant_value_t Ant_Exception_CreateRecord(ant_t *js, ant_value_t value, ant_value_t stack) {
@@ -3451,6 +3637,7 @@ static void js_init_intern_cache(ant_t *js) {
   js->intern.arguments = intern_string(js, "arguments", 9);
   js->intern.callee = intern_string(js, "callee", 6);
   js->intern.next = intern_string(js, "next", 4);
+  js->intern.ret = intern_string(js, "return", 6);
   js->intern.define_property = intern_string(js, "defineProperty", 14);
   js->intern.get_own_property_descriptor = intern_string(js, "getOwnPropertyDescriptor", 24);
   js->intern.module_cache = intern_string(js, "_cache", 6);
@@ -3680,7 +3867,8 @@ static void set_slot_wb(ant_t *js, ant_value_t obj, internal_slot_t slot, ant_va
   if (!ptr || slot < 0 || slot > SLOT_MAX) return;
   
   if (slot == SLOT_PROTO) {
-    ptr->proto = val;
+    ant_proto_watch_note_change(ptr);
+    ant_object_set_proto(js, ptr, val);
     gc_write_barrier(js, ptr, val);
     ant_ic_epoch_bump(js);
     return;
@@ -4285,6 +4473,11 @@ static inline bool array_proto_chain_plain(ant_t *js, ant_object_t *arr) {
   return js->array_chain_plain_epoch == js->ic.epoch || array_chain_revalidate(js);
 }
 
+bool js_array_proto_chain_plain(ant_t *js, ant_value_t arr) {
+  ant_object_t *ptr = vtype(arr) == kTypeArray ? js_obj_ptr(arr) : NULL;
+  return ptr && array_proto_chain_plain(js, ptr);
+}
+
 static inline bool arguments_proto_chain_plain(ant_t *js, ant_object_t *args) {
   if (args->proto != js->sym.object_proto) return false;
   ant_object_t *object_proto = (ant_object_t *)vptr(js->sym.object_proto);
@@ -4344,7 +4537,7 @@ static ant_value_t js_setprop_array_fast(
       return v;
     }
 
-    ant_offset_t density_limit = dense_len > 0 ? dense_len * 4 : 64;
+    ant_offset_t density_limit = dense_len * 4 > ARRAY_DENSE_GAP ? dense_len * 4 : ARRAY_DENSE_GAP;
     if (idx >= density_limit) goto sparse;
     if (array_store_reaches_proto(js, obj, ptr, idx)) return JS_SETPROP_ARRAY_NOT_HANDLED;
     
@@ -4626,6 +4819,7 @@ static bool array_own_value(ant_t *js, ant_value_t obj, const char *key, size_t 
   return true;
 }
 
+// TODO: break up function
 static ant_value_t setprop_impl(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, bool keyed, bool *declined) {
   uint8_t ot = vtype(obj);
 
@@ -4634,20 +4828,37 @@ static ant_value_t setprop_impl(ant_t *js, ant_value_t obj, ant_value_t k, ant_v
     return setprop_impl(js, promoted, k, v, keyed, declined);
   }
 
-  if (ot == kTypeString || ot == kTypeNumber || ot == kTypeBool) {
+  // TODO: reduce nesting
+  if ((ot == kTypeString || ot == kTypeNumber || ot == kTypeBool || ot == kTypeSymbol || ot == kTypeBigInt) && vtype(k) == kTypeSymbol) {
+    proto_overflow_guard_t guard;
+    proto_overflow_guard_init(&guard);
+    for (ant_value_t cur = js_primitive_prototype(js, ot); is_object_type(cur);) {
+      prop_meta_t meta;
+      if (lookup_symbol_prop_meta(js, cur, (ant_offset_t)vdata(k), &meta)) {
+        if (meta.has_setter && (vtype(meta.setter) == kTypeFunction || vtype(meta.setter) == kTypeBuiltin))
+          return call_proto_accessor(js, obj, meta.setter, true, &v, 1, true);
+        break;
+      }
+      cur = get_proto(js, cur);
+      if (proto_overflow_guard_hit_cycle(js, &guard, cur)) break;
+    }
+    if (sv_is_strict_context(js)) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot create property on %s", typestr(ot));
+    return v;
+  }
+
+  if (ot == kTypeString || ot == kTypeNumber || ot == kTypeBool || ot == kTypeSymbol || ot == kTypeBigInt) {
     ant_offset_t klen; ant_offset_t koff = vstr(js, k, &klen);
     const char *key = (char *)(uintptr_t)(koff);
     
     ant_value_t proto = js_primitive_prototype(js, ot);
     if (is_object_type(proto)) {
-    ant_value_t setter = js_mkundef();
-    bool has_setter = false;
-    
-    lkp_with_setter(js, proto, key, klen, &setter, &has_setter);
-    if (has_setter && (vtype(setter) == kTypeFunction || vtype(setter) == kTypeBuiltin)) {
-      call_proto_accessor(js, obj, setter, true, &v, 1, true);
-      return v;
-    }}
+      ant_value_t setter = js_mkundef();
+      bool has_setter = false;
+      
+      lkp_with_setter(js, proto, key, klen, &setter, &has_setter);
+      if (has_setter && (vtype(setter) == kTypeFunction || vtype(setter) == kTypeBuiltin))
+        return call_proto_accessor(js, obj, setter, true, &v, 1, true);
+    }
     
     if (sv_is_strict_context(js)) return js_mkerr_typed(js, JS_ERR_TYPE,
       "Cannot create property '%.*s' on %s",
@@ -5055,7 +5266,7 @@ static ant_value_t setprop_index_impl(ant_t *js, ant_value_t obj, uint32_t idx, 
         return value;
       }
 
-      uint64_t density_limit = dense_len > 0 ? (uint64_t)dense_len * 4u : 64u;
+      uint64_t density_limit = (uint64_t)dense_len * 4u > ARRAY_DENSE_GAP ? (uint64_t)dense_len * 4u : ARRAY_DENSE_GAP;
       if ((uint64_t)idx < density_limit) {
         ant_value_t extensibility_error = check_object_extensibility(js, obj);
         if (is_err(extensibility_error)) return extensibility_error;
@@ -5099,7 +5310,7 @@ keyed:;
   }
   
   if (!key_len) key_len = uint_to_str(key, sizeof(key), idx);
-  ant_value_t property = js_mkstr(js, key, key_len);
+  ant_value_t property = js_mkstr_ascii(js, key, key_len);
   if (is_err(property)) return property;
   
   return setprop_impl(js, obj, property, value, true, declined);
@@ -5571,15 +5782,23 @@ void js_set_proto(ant_t *js, ant_value_t obj, ant_value_t proto) {
   ant_object_t *ptr = js_obj_ptr(as_obj);
   if (!ptr) return;
 
-  ptr->proto = proto;
+  ant_proto_watch_note_change(ptr);
+  ant_object_set_proto(js, ptr, proto);
   ant_ic_epoch_bump(js);
 }
 
 void js_set_proto_init(ant_value_t obj, ant_value_t proto) {
   if (!is_object_type(obj)) return;
+  
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
   if (!ptr) return;
-  ptr->proto = proto;
+  
+  if (!ptr->shape) {
+    ptr->proto = proto;
+    return;
+  }
+  
+  ant_object_set_proto(ant_shape_isolate(ptr->shape), ptr, proto);
 }
 
 static void set_proto(ant_t *js, ant_value_t obj, ant_value_t proto) {
@@ -5595,6 +5814,15 @@ static void set_proto(ant_t *js, ant_value_t obj, ant_value_t proto) {
 
 void js_set_proto_wb(ant_t *js, ant_value_t obj, ant_value_t proto) {
   set_proto(js, obj, proto);
+}
+
+void js_set_literal_proto(ant_t *js, ant_value_t obj, ant_value_t proto) {
+  if (!js_literal_proto_ok(proto) || !is_object_type(obj)) return;
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+  if (!ptr) return;
+  ant_object_invalidate_guarded_absence(js, ptr);
+  ant_object_set_proto(js, ptr, proto);
+  gc_write_barrier(js, ptr, proto);
 }
 
 ant_value_t js_primitive_prototype(ant_t *js, uint8_t type) {
@@ -6099,14 +6327,9 @@ ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r) {
       memcmp((const void *)(uintptr_t)off1, (const void *)(uintptr_t)off2, n1) == 0;
     return mkval(kTypeBool, eq ? 0 : 1);
   } else if (op == TOK_LT || op == TOK_LE || op == TOK_GT || op == TOK_GE) {
-    ant_offset_t min_len = n1 < n2 ? n1 : n2;
-    int cmp = memcmp((const void *)(uintptr_t)off1, (const void *)(uintptr_t)off2, min_len);
-    
-    if (cmp == 0) {
-      if (n1 == n2) {
-        return mkval(kTypeBool, (op == TOK_LE || op == TOK_GE) ? 1 : 0);
-      } else cmp = (n1 < n2) ? -1 : 1;
-    }
+    int cmp = str_compare_utf16(
+      (const char *)(uintptr_t)off1, (size_t)n1,
+      (const char *)(uintptr_t)off2, (size_t)n2);
     
     switch (op) {
       case TOK_LT: return mkval(kTypeBool, cmp < 0 ? 1 : 0);
@@ -6274,6 +6497,100 @@ static bool js_guard_to_primitive_absence(ant_t *js, ant_value_t value) {
   }
 
   return true;
+}
+
+static bool js_guard_proto_chain_absence(ant_t *js, ant_object_t *obj) {
+  ant_value_t cur = obj->proto;
+  for (int depth = 0; is_object_type(cur); depth++) {
+    if (depth >= MAX_PROTO_CHAIN_DEPTH || is_proxy(cur)) return false;
+    ant_object_t *proto = js_obj_ptr(js_as_obj(cur));
+    if (!proto || proto->flags.is_exotic) return false;
+    ant_object_guard_absence(proto);
+    cur = proto->proto;
+  }
+  return vtype(cur) == kTypeNull;
+}
+
+ant_value_t js_get_cached(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_get_cache_t *cache) {
+  ant_object_t *ptr = vtype(obj) == kTypeObject ? js_obj_ptr(obj) : NULL;
+  
+  if (
+    ptr && ptr->shape && cache->shape == ptr->shape &&
+    cache->proto == ptr->proto && cache->ic_epoch == js->ic.epoch
+  ) {
+    ant_object_t *src = cache->holder ? cache->holder : ptr;
+    const ant_shape_prop_t *prop = src->shape && cache->slot < src->prop_count
+      ? ant_shape_prop_at(src->shape, cache->slot) : NULL;
+    if (
+      prop && prop->type == ANT_SHAPE_KEY_STRING && prop->key.interned == cache->key &&
+      !prop->has_getter && !prop->has_setter
+    ) return ant_object_prop_get_unchecked(src, cache->slot);
+  }
+
+  ant_value_t value = js_getprop_fallback_len(js, obj, key, key_len);
+  if (!ptr || !ptr->shape || ptr->flags.is_exotic || is_err(value)) return value;
+
+  const char *interned = intern_find(js, key, key_len);
+  if (!interned) return value;
+
+  ant_object_t *holder = ptr;
+  ant_prop_loc_t loc = lkp_interned(obj, interned);
+  
+  for (int depth = 0; !loc.obj; depth++) {
+    ant_value_t next = holder->proto;
+    if (depth >= MAX_PROTO_CHAIN_DEPTH || !is_object_type(next) || is_proxy(next)) return value;
+    holder = js_obj_ptr(js_as_obj(next));
+    if (!holder || holder->flags.is_exotic || !holder->shape) return value;
+    loc = lkp_interned(js_as_obj(next), interned);
+  }
+
+  const ant_shape_prop_t *meta = loc.obj == holder ? prop_shape_meta(loc) : NULL;
+  if (!meta || meta->has_getter || meta->has_setter) return value;
+
+  ant_shape_retain(ptr->shape);
+  if (cache->shape) ant_shape_release(cache->shape);
+  
+  cache->shape = ptr->shape;
+  cache->proto = ptr->proto;
+  cache->holder = holder == ptr ? NULL : holder;
+  cache->key = interned;
+  cache->slot = loc.slot;
+  cache->ic_epoch = js->ic.epoch;
+
+  return value;
+}
+
+void js_get_cache_release(ant_get_cache_t *cache) {
+  if (cache->shape) ant_shape_release(cache->shape);
+  *cache = (ant_get_cache_t){0};
+}
+
+ant_value_t js_get_then_property(ant_t *js, ant_value_t value) {
+  uint8_t type = vtype(value);
+  ant_object_t *obj = type == kTypeObject || type == kTypeArray ? js_obj_ptr(js_as_obj(value)) : NULL;
+  if (!obj || obj->flags.is_exotic) return js_getprop_fallback(js, value, "then");
+  
+  if (type == kTypeObject && obj->shape && obj->proto == js->sym.object_proto && ant_protector_intact(js, ANT_PROTECTOR_OBJECT_THEN)) {
+    ant_object_t *object_proto = js_obj_ptr(js->sym.object_proto);
+    if (object_proto && !is_object_type(object_proto->proto) && ant_shape_lookup_interned(obj->shape, js->intern.then) < 0)
+      return js_mkundef();
+  }
+  
+  ant_absent_key_cache_t *cache = &js->runtime_cache.then_absent[((uintptr_t)obj->shape >> 6) & 7];
+  if (cache->ic_epoch == js->ic.epoch && cache->shape == obj->shape && cache->proto == obj->proto && obj->shape)
+    return js_mkundef();
+  
+  ant_value_t then = js_getprop_fallback(js, value, "then");
+  if (!is_undefined(then) || !obj->shape || lkp_proto(js, value, "then", 4).obj) return then;
+  if (!js_guard_proto_chain_absence(js, obj)) return then;
+  
+  ant_shape_retain(obj->shape);
+  if (cache->shape) ant_shape_release(cache->shape);
+  cache->shape = obj->shape;
+  cache->proto = obj->proto;
+  cache->ic_epoch = js->ic.epoch;
+  
+  return then;
 }
 
 ant_value_t js_to_primitive(ant_t *js, ant_value_t value, int hint) {
@@ -6541,6 +6858,13 @@ static ant_value_t check_frozen_sealed(ant_t *js, ant_value_t obj, const char *a
 }
 
 ant_value_t js_delete_prop_ordinary(ant_t *js, ant_value_t obj, const char *key, size_t len) {
+  if (vtype(obj) == kTypeString) {
+    unsigned long idx = 0;
+    return js_bool(!is_length_key(key, len) && !parse_array_index(key, len, str_utf16_len(js, obj), &idx));
+  }
+  
+  if (vtype(obj) == kTypeSymbol || vtype(obj) == kTypeBigInt) return js_true;
+  
   if (vtype(obj) == kTypeBuiltin) {
     ant_value_t promoted = js_cfunc_promote(js, obj);
     if (is_err(promoted)) return promoted;
@@ -6614,6 +6938,7 @@ ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t l
 }
 
 ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym) {
+  if (vtype(obj) == kTypeString || vtype(obj) == kTypeSymbol || vtype(obj) == kTypeBigInt) return js_true;
   if (vtype(obj) == kTypeBuiltin) {
     ant_value_t promoted = js_cfunc_promote(js, obj);
     if (is_err(promoted)) return promoted;
@@ -6650,68 +6975,49 @@ ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym) {
   return js_true;
 }
 
-static ant_value_t iter_call_noargs_with_this(ant_t *js, ant_value_t this_val, ant_value_t method) {
-  ant_value_t result = sv_vm_call(js->vm, js, method, this_val, NULL, 0, NULL, js_mkundef());
-  return result;
-}
-
-static ant_value_t iter_close_iterator(ant_t *js, ant_value_t iterator) {
-  ant_prop_loc_t return_off = lkp_proto(js, iterator, "return", 6);
-  if (!return_off.obj) return js_mkundef();
-  ant_value_t return_method = js_prop_load(return_off);
-  if (!is_callable(return_method))
-    return js_mkerr(js, "iterator.return is not a function");
-  return iter_call_noargs_with_this(js, iterator, return_method);
-}
-
 static ant_value_t iter_foreach_method(
   ant_t *js, ant_value_t iterable, ant_value_t iter_method, iter_callback_t cb, void *ctx
 ) {
   if (!is_callable(iter_method)) return js_mkerr_typed(js, JS_ERR_TYPE, "not iterable");
   
-  ant_value_t iterator = iter_call_noargs_with_this(js, iterable, iter_method);
-  if (is_err(iterator)) return iterator;
+  GC_ROOT_SAVE(root_mark, js);
+  iterator_t it;
   
-  ant_value_t out = js_mkundef();
-  
-  while (true) {
-    ant_prop_loc_t next_off = lkp_proto(js, iterator, "next", 4);
-    if (!next_off.obj) { return js_mkerr(js, "iterator.next is not a function"); }
-    
-    ant_value_t next_method = js_prop_load(next_off);
-    if (!is_callable(next_method)) {
-      return js_mkerr(js, "iterator.next is not a function");
-    }
-    
-    ant_value_t result = iter_call_noargs_with_this(js, iterator, next_method);
-    if (is_err(result)) { return result; }
-    
-    ant_prop_loc_t done_off = lkp(js, result, "done", 4);
-    ant_value_t done_val = done_off.obj ? js_prop_load(done_off) : js_mkundef();
-    if (js_truthy(js, done_val)) break;
-    
-    ant_prop_loc_t value_off = lkp(js, result, "value", 5);
-    ant_value_t value = value_off.obj ? js_prop_load(value_off) : js_mkundef();
-    
-    iter_action_t action = cb(js, value, ctx, &out);
-    if (action == ITER_BREAK) {
-      ant_value_t close_result = iter_close_iterator(js, iterator);
-      if (is_err(close_result)) { return close_result; }
-      break;
-    }
-    if (action == ITER_ERROR) {
-      ant_value_t close_result = iter_close_iterator(js, iterator);
-      if (is_err(close_result)) return close_result;
-      return out;
-    }
+  if (!js_iter_open_method(js, iterable, iter_method, &it)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return Ant_Exception_Current(js);
   }
   
+  GC_ROOT_PIN(js, it.iterator);
+  GC_ROOT_PIN(js, it.next_fn);
+  ant_value_t out = js_mkundef();
+  GC_ROOT_PIN(js, out);
+  
+  for (;;) {
+    ant_value_t value = js_mkundef();
+    if (!js_iter_next(js, &it, &value)) {
+      if (Ant_Exception_Pending(js)) out = Ant_Exception_Current(js);
+      break;
+    }
+    
+    iter_action_t action = cb(js, value, ctx, &out);
+    if (action == ITER_CONTINUE) continue;
+    if (action == ITER_ERROR && is_err(out) && !Ant_Exception_Pending(js)) Ant_Exception_Set(js, out);
+    
+    js_iter_close(js, &it);
+    if (Ant_Exception_Pending(js)) out = Ant_Exception_Current(js);
+    break;
+  }
+  
+  GC_ROOT_RESTORE(js, root_mark);
   return out;
 }
 
 static ant_value_t iter_foreach(ant_t *js, ant_value_t iterable, iter_callback_t cb, void *ctx) {
   if (vtype(js->sym.iterator_sym) != kTypeSymbol) return js_mkerr_typed(js, JS_ERR_TYPE, "not iterable");
-  ant_value_t iter_method = js_get_sym(js, iterable, js->sym.iterator_sym);
+  ant_value_t iter_method = vtype(iterable) == kTypeArray && js_array_iteration_default(js, iterable)
+    ? js->sym.array_values_fn
+    : js_get_sym(js, iterable, js->sym.iterator_sym);
   if (is_err(iter_method)) return iter_method;
   return iter_foreach_method(js, iterable, iter_method, cb, ctx);
 }
@@ -6875,10 +7181,19 @@ ant_value_t js_normalize_sloppy_this(ant_t *js, ant_value_t value) {
   return wrapper;
 }
 
+static bool is_object_constructor(ant_value_t value) {
+  if (vtype(value) != kTypeFunction) return false;
+  ant_value_t builtin = get_slot(js_func_obj(value), SLOT_BUILTIN);
+  return vtype(builtin) == kTypeNumber && tod(builtin) == (double)BUILTIN_OBJECT;
+}
+
 static ant_value_t builtin_Object(ant_params_t) {
+  bool constructing = vtype(call_new_target) != kTypeUndefined;
+  if (constructing && !is_object_constructor(call_new_target) && is_object_type(js->this_val)) return js->this_val;
+
   if (nargs == 0 || vtype(args[0]) == kTypeNull || vtype(args[0]) == kTypeUndefined) {
     ant_value_t obj_proto = js->sym.object_proto;
-    if (is_unboxed_obj(js, js->this_val, obj_proto)) return js->this_val;
+    if (constructing && is_unboxed_obj(js, js->this_val, obj_proto)) return js->this_val;
     return Ant_Object_Create(js);
   }
   
@@ -7264,8 +7579,10 @@ ant_value_t builtin_function_apply(ant_params_t) {
   ant_value_t this_arg = (nargs > 0) ? args[0] : js_mkundef();
   ant_value_t arg_array = (nargs > 1) ? args[1] : js_mkundef();
   
-  if (vtype(arg_array) != kTypeArray && vtype(arg_array) != kTypeObject)
+  if (vtype(arg_array) == kTypeUndefined || vtype(arg_array) == kTypeNull)
     return sv_vm_call_explicit_this(js->vm, js, func, this_arg, NULL, 0);
+  if (!is_object_type(arg_array) && vtype(arg_array) != kTypeBuiltin)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "CreateListFromArrayLike called on non-object");
 
   ant_arg_list_t list;
   ant_value_t err = Ant_ArgList_FromArrayLike(js, arg_array, &list);
@@ -7275,6 +7592,12 @@ ant_value_t builtin_function_apply(ant_params_t) {
   Ant_ArgList_Release(&list);
   
   return result;
+}
+
+bool js_is_function_call_builtin(ant_value_t func) {
+  return 
+    vtype(func) == kTypeBuiltin && 
+    js_as_cfunc(func) == builtin_function_call;
 }
 
 bool js_is_function_apply_builtin(ant_value_t func) {
@@ -7523,6 +7846,7 @@ static ant_value_t builtin_function_bind(ant_params_t) {
   if (!bound_closure) return js_mkerr(js, "oom");
   
   bound_closure->func = orig->func;
+  if (orig->func) sv_func_note_bound_closure(orig->func);
   bound_closure->call_flags = orig->call_flags;
   bound_closure->upvalues = NULL;
   
@@ -9869,6 +10193,14 @@ static ant_value_t legacy_lookup_accessor_from_descriptor(ant_t *js, ant_value_t
   return js_prop_load(off);
 }
 
+static constexpr uint32_t PROXY_PROTO_HOP_LIMIT = 100 * 1024;
+
+static ant_value_t proxy_proto_hop(ant_t *js, ant_value_t proxy, uint32_t *hops) {
+  if (++*hops > PROXY_PROTO_HOP_LIMIT)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Maximum call stack size exceeded");
+  return proxy_get_prototype_of(js, proxy);
+}
+
 static ant_value_t legacy_lookup_accessor(ant_t *js, ant_value_t this_val, ant_value_t key, bool want_getter) {
   ant_value_t obj = legacy_accessor_this_obj(js, this_val);
   if (is_err(obj)) return obj;
@@ -9882,12 +10214,13 @@ static ant_value_t legacy_lookup_accessor(ant_t *js, ant_value_t this_val, ant_v
     return key_val;
   }
 
+  uint32_t proxy_hops = 0;
   for (ant_value_t cur = obj; is_object_type(cur); ) {
     if (is_proxy(cur)) {
       ant_value_t desc = proxy_get_own_property_descriptor(js, cur, key_val);
       if (is_err(desc)) return desc;
       if (vtype(desc) == kTypeObject) return legacy_lookup_accessor_from_descriptor(js, desc, want_getter);
-      cur = proxy_get_prototype_of(js, cur);
+      cur = proxy_proto_hop(js, cur, &proxy_hops);
       if (is_err(cur)) return cur;
       continue;
     }
@@ -10348,10 +10681,7 @@ static void array_materialize_dense_for_define(ant_t *js, ant_value_t obj, const
   if (!parse_array_index(key, klen, ((ant_offset_t)UINT32_MAX), &idx)) return;
 
   ant_offset_t doff = get_dense_buf(obj);
-  if (!doff) return;
-
-  ant_offset_t cap = dense_capacity(doff);
-  bool moved = false;
+  ant_offset_t cap = doff ? dense_capacity(doff) : 0;
 
   for (ant_offset_t i = 0; i < cap; i++) {
     ant_value_t existing = dense_get(doff, i);
@@ -10365,10 +10695,7 @@ static void array_materialize_dense_for_define(ant_t *js, ant_value_t obj, const
       js, obj, js_mkstr(js, idxstr, idxlen), existing,
       ANT_PROP_ATTR_ENUMERABLE | ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE
     );
-    moved = true;
   }
-
-  if (!moved) return;
 
   ant_object_t *ptr = array_obj_ptr(obj);
   if (ptr) ptr->flags.fast_array = 0;
@@ -11572,7 +11899,8 @@ static bool copy_adopt_shape(ant_t *js, ant_value_t dst, ant_object_t *src, bool
   
   if (
     count == 0 || count > src->prop_count || ant_shape_may_have_index_keys(shape) ||
-    !dst_ptr || !dst_ptr->shape || ant_shape_count(dst_ptr->shape) != 0 || dst_ptr->prop_count != 0 ||
+    (src->protector_holder & ANT_PROTECTOR_HOLDER_WATCHED) || !dst_ptr ||
+    ant_shape_proto(shape) != dst_ptr->proto || !dst_ptr->shape || ant_shape_count(dst_ptr->shape) != 0 || dst_ptr->prop_count != 0 ||
     dst_ptr->flags.is_exotic || !dst_ptr->flags.extensible || dst_ptr->type_tag != kTypeObject ||
     ant_object_inobj_limit(dst_ptr) != ant_shape_get_inobj_limit(shape) ||
     (via_set && vtype(js_string_wrapper_value(dst)) == kTypeString)
@@ -12606,9 +12934,27 @@ bool js_is_prototype_of(ant_t *js, ant_value_t proto_obj, ant_value_t obj) {
   return proto_chain_contains_cycle_safe(js, current, proto_obj);
 }
 
+static ant_value_t walk_prototype_chain_ex(
+  ant_t *js, ant_value_t l, ant_value_t ctor_proto, bool *saw_proxy
+);
+
+ant_value_t js_object_is_prototype_of(ant_t *js, ant_value_t self, ant_value_t value, bool *cacheable) {
+  if (cacheable) *cacheable = false;
+  if (!is_object_type(value) && vtype(value) != kTypeBuiltin) return js_false;
+
+  if (vtype(self) == kTypeUndefined || vtype(self) == kTypeNull)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
+  if (!is_object_type(self) && vtype(self) != kTypeBuiltin) return js_false;
+
+  bool saw_proxy = false;
+  ant_value_t result = walk_prototype_chain_ex(js, value, self, &saw_proxy);
+  if (cacheable) *cacheable = !saw_proxy && !is_err(result);
+  
+  return result;
+}
+
 ant_value_t builtin_object_isPrototypeOf(ant_params_t) {
-  if (nargs < 1) return mkval(kTypeBool, 0);
-  return mkval(kTypeBool, js_is_prototype_of(js, js->this_val, args[0]) ? 1 : 0);
+  return js_object_is_prototype_of(js, js->this_val, nargs > 0 ? args[0] : js_mkundef(), NULL);
 }
 
 static ant_value_t object_property_is_enumerable_key(
@@ -12676,7 +13022,12 @@ ant_value_t Ant_Object_PropertyIsEnumerable(ant_t *js, ant_value_t obj, ant_valu
   );
   
   ant_value_t result = error;
-  if (!is_err(error)) result = object_property_is_enumerable_key(js, obj, &key);
+  if (!is_err(error) && (vtype(obj) == kTypeUndefined || vtype(obj) == kTypeNull))
+    result = js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
+  else if (!is_err(error) && vtype(obj) == kTypeString && !key.is_symbol) {
+    unsigned long idx = 0;
+    result = js_bool(parse_array_index(key.bytes, key.length, str_utf16_len(js, obj), &idx));
+  } else if (!is_err(error)) result = object_property_is_enumerable_key(js, obj, &key);
 
   property_key_view_dispose(&key);
   return result;
@@ -12813,6 +13164,9 @@ static ant_value_t builtin_object_toString(ant_params_t) {
 }
 
 static ant_value_t builtin_object_valueOf(ant_params_t) {
+  if (vtype(js->this_val) == kTypeUndefined || vtype(js->this_val) == kTypeNull)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
+  if (is_boxable_primitive_type(vtype(js->this_val))) return js_normalize_sloppy_this(js, js->this_val);
   return js->this_val;
 }
 
@@ -13311,6 +13665,14 @@ static ant_value_t builtin_array_pop(ant_params_t) {
   return array_pop_generic(js, arr);
 }
 
+bool js_is_array_push_builtin(ant_value_t func) {
+  return vtype(func) == kTypeBuiltin && js_as_cfunc(func) == builtin_array_push;
+}
+
+bool js_is_array_pop_builtin(ant_value_t func) {
+  return vtype(func) == kTypeBuiltin && js_as_cfunc(func) == builtin_array_pop;
+}
+
 static ant_value_t builtin_array_slice(ant_params_t) {
   ant_value_t arr = js->this_val;
   ant_value_t string_val = unwrap_primitive(js, arr);
@@ -13335,14 +13697,24 @@ static ant_value_t builtin_array_slice(ant_params_t) {
   
   ant_offset_t start = 0, end = len;
   double dlen = D(len);
-  if (nargs >= 1 && vtype(args[0]) == kTypeNumber) {
-    double d = tod(args[0]);
+  if (nargs >= 1) {
+    double d;
+    if (vtype(args[0]) == kTypeNumber) d = string_number_to_integer(tod(args[0]));
+    else {
+      ant_value_t status = string_to_integer_or_infinity(js, args[0], &d);
+      if (is_err(status)) return status;
+    }
     if (d < 0) start = (ant_offset_t) (d + dlen < 0 ? 0 : d + dlen);
     else start = (ant_offset_t) (d > dlen ? dlen : d);
   }
   
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    double d = tod(args[1]);
+  if (nargs >= 2 && vtype(args[1]) != kTypeUndefined) {
+    double d;
+    if (vtype(args[1]) == kTypeNumber) d = string_number_to_integer(tod(args[1]));
+    else {
+      ant_value_t status = string_to_integer_or_infinity(js, args[1], &d);
+      if (is_err(status)) return status;
+    }
     if (d < 0) end = (ant_offset_t) (d + dlen < 0 ? 0 : d + dlen);
     else end = (ant_offset_t) (d > dlen ? dlen : d);
   }
@@ -13405,6 +13777,7 @@ static ant_value_t builtin_array_slice(ant_params_t) {
 }
 
 static ant_value_t array_join_body(ant_params_t) {
+  if (sv_check_c_stack_overflow(js)) return js_mkerr_typed(js, JS_ERR_RANGE, "Maximum call stack size exceeded");
   ant_value_t arr = js->this_val;
   arr = array_method_receiver(js, arr, "join");
   if (is_err(arr)) return arr;
@@ -14279,7 +14652,9 @@ static ant_value_t builtin_array_concat(ant_params_t) {
     ant_value_t arg = (a < 0) ? arr : args[a];
     bool spreadable = false;
     
-    if (vtype(arg) == kTypeArray || vtype(arg) == kTypeObject) {
+    ant_object_t *plain_array = real_array_obj_ptr(arg);
+    if (plain_array && plain_array->proto == js->sym.array_proto && ant_protector_intact(js, ANT_PROTECTOR_CONCAT_SPREADABLE)) spreadable = true;
+    else if (vtype(arg) == kTypeArray || vtype(arg) == kTypeObject) {
       bool array_default_spreadable = real_array_obj_ptr(arg) != NULL;
       if (!array_default_spreadable && is_proxy(arg)) {
         ant_value_t target = proxy_read_target(js, arg);
@@ -14829,9 +15204,7 @@ static inline int sort_string_cmp(ant_t *js, ant_value_t a, ant_value_t b) {
   ant_offset_t len_a, len_b;
   const char *sa = (const char *)(uintptr_t)vstr(js, a, &len_a);
   const char *sb = (const char *)(uintptr_t)vstr(js, b, &len_b);
-  int cmp = memcmp(sa, sb, len_a < len_b ? len_a : len_b);
-  if (cmp) return cmp;
-  return (len_a > len_b) - (len_a < len_b);
+  return str_compare_utf16(sa, (size_t)len_a, sb, (size_t)len_b);
 }
 
 static inline bool array_sort_writes_dense(ant_value_t arr, ant_offset_t len) {
@@ -15806,8 +16179,9 @@ static ant_value_t builtin_Array_from(ant_params_t) {
   bool result_is_proxy = is_proxy(result);
   ant_value_t write_target = result_is_proxy ? proxy_read_target(js, result) : result;
   ant_value_t iter_sym = js->sym.iterator_sym;
+  bool unclosable = ant_protector_intact(js, ANT_PROTECTOR_ITERATOR_RETURN);
 
-  if (vtype(src) == kTypeString) {
+  if (vtype(src) == kTypeString && ant_protector_intact(js, ANT_PROTECTOR_STRING_ITERATION) && unclosable) {
     if (str_is_heap_rope(src) || str_is_heap_builder(src)) {
       src = str_materialize(js, src);
       if (is_err(src)) return src;
@@ -15829,7 +16203,7 @@ static ant_value_t builtin_Array_from(ant_params_t) {
     }
     if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, tov((double)ctx.index));
   } else if (vtype(src) == kTypeArray) {
-    bool default_iter = js_array_iteration_default(js, src);
+    bool default_iter = unclosable && js_array_iteration_default(js, src);
 
     if (default_iter && !is_callable(mapFn) && real_array_obj_ptr(result) && get_array_length(js, result) == 0) {
       ant_value_t copied = js_arr_spread_into(js, result, src);
@@ -16236,7 +16610,7 @@ static inline double string_number_to_integer(double number) {
   return isnan(number) || number == 0.0 ? 0.0 : trunc(number);
 }
 
-static ant_value_t string_to_integer_or_infinity(
+static ant_value_t string_to_number_arg(
   ant_t *js, ant_value_t value, double *out
 ) {
   GC_ROOT_SAVE(root_mark, js);
@@ -16258,56 +16632,149 @@ static ant_value_t string_to_integer_or_infinity(
     return err;
   }
 
-  *out = string_number_to_integer(js_to_number(js, value));
+  *out = js_to_number(js, value);
   GC_ROOT_RESTORE(js, root_mark);
   
   return js_mkundef();
 }
 
+static ant_value_t string_to_integer_or_infinity(
+  ant_t *js, ant_value_t value, double *out
+) {
+  ant_value_t status = string_to_number_arg(js, value, out);
+  if (!is_err(status)) *out = string_number_to_integer(*out);
+  return status;
+}
+
+static __attribute__((always_inline)) inline const char *string_bytes_find(
+  const char *hay, size_t hay_len, const char *needle, size_t needle_len
+) {
+  if (needle_len > hay_len) return NULL;
+  const char *p = hay, *last = hay + hay_len - needle_len;
+  while (p <= last) {
+    p = memchr(p, (unsigned char)needle[0], (size_t)(last - p) + 1);
+    if (!p) return NULL;
+    if (needle_len == 1 || memcmp(p + 1, needle + 1, needle_len - 1) == 0) return p;
+    p++;
+  }
+  return NULL;
+}
+
+static __attribute__((always_inline)) inline const char *string_bytes_find_last(
+  const char *hay, size_t hay_len, const char *needle, size_t needle_len, size_t max_start
+) {
+  if (needle_len > hay_len) return NULL;
+  if (max_start > hay_len - needle_len) max_start = hay_len - needle_len;
+  char first = needle[0];
+  for (size_t i = max_start + 1; i > 0; i--) {
+    if (hay[i - 1] == first && memcmp(hay + i - 1, needle, needle_len) == 0)
+      return hay + i - 1;
+  }
+  return NULL;
+}
+
+static size_t string_split_view_byte(const char *bytes, size_t len, size_t units) {
+  size_t byte = 0;
+  for (size_t u = 0; u < units && byte < len; u++)
+    byte += utf8_char_len_at(bytes, len, byte);
+  return byte;
+}
+
+enum { STRING_FIND_NONE = -1, STRING_FIND_OOM = -2 };
+
+static ptrdiff_t string_find_split_pairs(
+  const char *hay, size_t hay_len, const char *needle, size_t needle_len,
+  size_t position, bool backward
+) {
+  size_t view_len, view_needle_len;
+  char *view = wtf8_split_pairs_dup(hay, hay_len, &view_len);
+  char *view_needle = view ? wtf8_split_pairs_dup(needle, needle_len, &view_needle_len) : NULL;
+  if (!view_needle) {
+    free(view);
+    return STRING_FIND_OOM;
+  }
+
+  size_t byte = string_split_view_byte(view, view_len, position);
+  const char *match = backward
+    ? string_bytes_find_last(view, view_len, view_needle, view_needle_len, byte)
+    : string_bytes_find(view + byte, view_len - byte, view_needle, view_needle_len);
+
+  ptrdiff_t result = match ? (ptrdiff_t)utf16_strlen(view, (size_t)(match - view)) : STRING_FIND_NONE;
+  free(view);
+  free(view_needle);
+  return result;
+}
+
+static constexpr size_t STRING_FIND_DIRECT_UNITS_MAX = 256;
+
+static __attribute__((noinline)) ptrdiff_t string_find_utf16_wide(
+  const char *hay, size_t hay_len, const char *needle, size_t needle_len,
+  size_t position, bool backward
+) {
+  if (wtf8_needle_splits_pairs(needle, needle_len) && wtf8_has_supplementary(hay, hay_len))
+    return string_find_split_pairs(hay, hay_len, needle, needle_len, position, backward);
+
+  ant_offset_t known_units = str_flat_cached_utf16_len(str_flat_from_bytes(hay));
+  bool seek = backward
+    ? position < hay_len && (known_units == STR_UTF16_LEN_UNKNOWN || position < (size_t)known_units)
+    : position > 0;
+
+  utf16_pos_t pos;
+  size_t byte = backward ? hay_len : 0;
+  if (seek) {
+    utf16_pos_init(&pos, hay, hay_len);
+    byte = utf16_pos_seek(&pos, position);
+    if (!backward && pos.units < position && byte < hay_len) byte += utf8_char_len_at(hay, hay_len, byte);
+  }
+
+  const char *match = backward
+    ? string_bytes_find_last(hay, hay_len, needle, needle_len, byte)
+    : string_bytes_find(hay + byte, hay_len - byte, needle, needle_len);
+
+  ptrdiff_t result = STRING_FIND_NONE;
+  if (match) {
+    size_t offset = (size_t)(match - hay);
+    if (seek) result = (ptrdiff_t)utf16_pos_units(&pos, offset);
+    else if (offset <= STRING_FIND_DIRECT_UNITS_MAX) result = (ptrdiff_t)utf16_strlen(hay, offset);
+    else result = (ptrdiff_t)byte_offset_to_utf16(hay, offset);
+  }
+  if (seek) utf16_pos_save(&pos);
+  return result;
+}
+
+static __attribute__((always_inline)) inline ptrdiff_t string_find_utf16(
+  const char *hay, size_t hay_len, const char *needle, size_t needle_len,
+  size_t position, bool backward
+) {
+  if (!str_is_ascii(hay))
+    return string_find_utf16_wide(hay, hay_len, needle, needle_len, position, backward);
+  if (needle_len > hay_len || !str_is_ascii(needle)) return STRING_FIND_NONE;
+  if (!backward && position > hay_len) return STRING_FIND_NONE;
+  const char *match = backward
+    ? string_bytes_find_last(hay, hay_len, needle, needle_len, position)
+    : string_bytes_find(hay + position, hay_len - position, needle, needle_len);
+  return match ? match - hay : STRING_FIND_NONE;
+}
+
 static ant_value_t string_index_of_strings(
   ant_t *js, ant_value_t str, ant_value_t search, double position
 ) {
-  size_t str_utf16 = (size_t)str_utf16_len(js, str);
-  size_t search_utf16 = (size_t)str_utf16_len(js, search);
-  
-  size_t start = position <= 0.0
-    ? 0 : position >= (double)str_utf16
-    ? str_utf16 : (size_t)position;
-
-  if (search_utf16 == 0) return tov((double)start);
-  if (search_utf16 > str_utf16 - start) return tov(-1);
-
   ant_offset_t str_len, search_len;
-  (void)vstr(js, str, &str_len);
-  
   ant_offset_t search_off = vstr(js, search, &search_len);
   ant_offset_t str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (const char *)(uintptr_t)str_off;
-  const char *search_ptr = (const char *)(uintptr_t)search_off;
 
-  if (str_is_ascii(str_ptr) && str_is_ascii(search_ptr)) {
-    const char *p = str_ptr + start;
-    const char *last = str_ptr + str_len - search_len;
-    while (p <= last) {
-      p = memchr(p, search_ptr[0], (size_t)(last - p) + 1);
-      if (!p) break;
-      if (search_len == 1 ||
-          memcmp(p + 1, search_ptr + 1, (size_t)search_len - 1) == 0)
-        return tov((double)(p - str_ptr));
-      p++;
-    }
-  } else {
-    size_t last = str_utf16 - search_utf16;
-    uint32_t first = utf16_code_unit_at(search_ptr, (size_t)search_len, 0);
-    for (size_t i = start; i <= last; i++) if (
-      utf16_code_unit_at(str_ptr, (size_t)str_len, i) == first && 
-      utf16_range_equals_bytes(
-        str_ptr, (size_t)str_len, i, i + 
-        search_utf16,search_ptr, (size_t)search_len)
-    ) return tov((double)i);
+  size_t start = 0;
+  if (position > 0.0) {
+    size_t str_utf16 = (size_t)str_utf16_len(js, str);
+    start = position >= (double)str_utf16 ? str_utf16 : (size_t)position;
   }
+  if (search_len == 0) return tov((double)start);
 
-  return tov(-1);
+  ptrdiff_t found = string_find_utf16(
+    (const char *)(uintptr_t)str_off, (size_t)str_len,
+    (const char *)(uintptr_t)search_off, (size_t)search_len, start, false);
+  if (found == STRING_FIND_OOM) return js_mkerr(js, "oom");
+  return tov((double)found);
 }
 
 static ant_value_t string_index_of_impl(
@@ -16649,13 +17116,9 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *ar
 
   if (is_err(arr)) return arr;
 
-  uint32_t limit = UINT32_MAX;
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    double d = tod(args[1]);
-    if (d >= 0 && d <= UINT32_MAX) {
-      limit = (uint32_t)d;
-    }
-  }
+  uint32_t limit;
+  ant_value_t limit_status = regexp_split_limit(js, nargs >= 2 ? args[1] : js_mkundef(), &limit);
+  if (is_err(limit_status)) return limit_status;
   if (limit == 0) {
     return mkval(kTypeArray, vdata(arr));
   }
@@ -16691,11 +17154,11 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *ar
     char pcre2_pattern_stack[512];
     js_cstr_t pcre2_pattern = js_to_pcre2_pattern_cstr(
       pattern_ptr, plen, pcre2_pattern_stack,
-      sizeof(pcre2_pattern_stack), false
+      sizeof(pcre2_pattern_stack), 0
     );
     
     if (!pcre2_pattern.ptr) goto return_whole;
-    uint32_t options = PCRE2_UTF | PCRE2_UCP | PCRE2_MATCH_UNSET_BACKREF;
+    uint32_t options = PCRE2_UTF | PCRE2_MATCH_UNSET_BACKREF | PCRE2_DOLLAR_ENDONLY;
     int errcode;
     
     PCRE2_SIZE erroffset;
@@ -16810,20 +17273,43 @@ split_string_separator:;
   if (sep_len == 0)
     return string_split_code_units(js, str, arr, limit);
 
-  for (ant_offset_t i = 0; i + sep_len <= str_len && idx < limit; i++) {
-    if (memcmp(str_ptr + i, sep_ptr, sep_len) != 0) continue;
-    ant_value_t part = js_mkstr_byte_range(js, str_ptr, start, i - start);
-    arr_set(js, arr, idx, part);
-    idx++;
-    start = i + sep_len;
-    i += sep_len - 1;
-  }
-  if (idx < limit && start <= str_len) {
-    ant_value_t part = js_mkstr_byte_range(js, str_ptr, start, str_len - start);
-    arr_set(js, arr, idx, part);
-    idx++;
+  char *view = NULL, *view_sep = NULL;
+  if (
+    !str_is_ascii(str_ptr) && wtf8_needle_splits_pairs(sep_ptr, (size_t)sep_len) &&
+    wtf8_has_supplementary(str_ptr, (size_t)str_len)
+  ) {
+    size_t view_len, view_sep_len;
+    view = wtf8_split_pairs_dup(str_ptr, (size_t)str_len, &view_len);
+    view_sep = view ? wtf8_split_pairs_dup(sep_ptr, (size_t)sep_len, &view_sep_len) : NULL;
+    if (!view_sep) {
+      free(view);
+      return js_mkerr(js, "oom");
+    }
+    str_ptr = view;
+    str_len = (ant_offset_t)view_len;
+    sep_ptr = view_sep;
+    sep_len = (ant_offset_t)view_sep_len;
   }
 
+  for (bool last = false; idx < limit && !last; idx++) {
+    const char *match = string_bytes_find(
+      str_ptr + start, (size_t)(str_len - start), sep_ptr, (size_t)sep_len);
+    last = match == NULL;
+    ant_offset_t end = last ? str_len : (ant_offset_t)(match - str_ptr);
+    ant_value_t part = view
+      ? js_mkstr(js, str_ptr + start, (size_t)(end - start))
+      : js_mkstr_byte_range(js, str_ptr, (size_t)start, (size_t)(end - start));
+    if (is_err(part)) {
+      free(view);
+      free(view_sep);
+      return part;
+    }
+    arr_set(js, arr, idx, part);
+    start = end + sep_len;
+  }
+
+  free(view);
+  free(view_sep);
   return mkval(kTypeArray, vdata(arr));
 
 return_whole:
@@ -16838,6 +17324,8 @@ static ant_value_t builtin_string_split(ant_params_t) {
   if (is_err(str)) return str;
 
   if (nargs > 0 && is_object_type(args[0])) {
+    ant_value_t fast_result;
+    if (regexp_split_try_fast(js, args[0], str, nargs >= 2 ? args[1] : js_mkundef(), &fast_result)) return fast_result;
     bool called = false;
     ant_value_t call_args[2];
     int call_nargs = 1;
@@ -16892,29 +17380,34 @@ static ant_value_t builtin_string_slice(ant_params_t) {
 
   ant_value_t str = Ant_String_CoerceThis(js, "slice");
   if (is_err(str)) return str;
-  
-  ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
-  const char *str_ptr = (char *)(uintptr_t)(str_off);
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, str);
   size_t utf16_len = (size_t)str_utf16_len(js, str);
   ant_offset_t start = 0, end = (ant_offset_t)utf16_len;
   double dstr_len = D(utf16_len);
-  
-  if (nargs >= 1 && vtype(args[0]) == kTypeNumber) {
-    double d = tod(args[0]);
-    if (d < 0) {
-      start = (ant_offset_t) (d + dstr_len < 0 ? 0 : d + dstr_len);
-    } else start = (ant_offset_t) (d > dstr_len ? dstr_len : d);
+
+  if (nargs >= 1) {
+    double d;
+    ant_value_t status = string_to_integer_or_infinity(js, args[0], &d);
+    if (is_err(status)) { GC_ROOT_RESTORE(js, root_mark); return status; }
+    if (d < 0) start = (ant_offset_t) (d + dstr_len < 0 ? 0 : d + dstr_len);
+    else start = (ant_offset_t) (d > dstr_len ? dstr_len : d);
   }
-  
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    double d = tod(args[1]);
-    if (d < 0) {
-      end = (ant_offset_t) (d + dstr_len < 0 ? 0 : d + dstr_len);
-    } else end = (ant_offset_t) (d > dstr_len ? dstr_len : d);
+
+  if (nargs >= 2 && vtype(args[1]) != kTypeUndefined) {
+    double d;
+    ant_value_t status = string_to_integer_or_infinity(js, args[1], &d);
+    if (is_err(status)) { GC_ROOT_RESTORE(js, root_mark); return status; }
+    if (d < 0) end = (ant_offset_t) (d + dstr_len < 0 ? 0 : d + dstr_len);
+    else end = (ant_offset_t) (d > dstr_len ? dstr_len : d);
   }
-  
+
   if (start > end) start = end;
-  return js_mkstr_utf16_range(js, str_ptr, byte_len, start, end);
+  ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
+  ant_value_t result = js_mkstr_utf16_range(js, (char *)(uintptr_t)str_off, byte_len, start, end);
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
 }
 
 ant_value_t js_string_slice(ant_t *js, ant_value_t str, double start, double end) {
@@ -16923,11 +17416,9 @@ ant_value_t js_string_slice(ant_t *js, ant_value_t str, double start, double end
 }
 
 static ant_value_t builtin_string_includes(ant_params_t) {
-  if (vtype(js->this_val) == kTypeNull || vtype(js->this_val) == kTypeUndefined)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "String.prototype.includes called on null or undefined");
-
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (is_err(str)) return str;
+  ant_value_t str = Ant_String_CoerceThis(js, "includes");
+  if (vtype(str) != kTypeString) return str;
+  ant_value_t search = nargs > 0 ? args[0] : js_mkundef();
   
   if (vtype(str) != kTypeString) 
     return js_mkerr(js, "includes called on non-string");
@@ -16939,12 +17430,37 @@ static ant_value_t builtin_string_includes(ant_params_t) {
 
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, str);
-  
-  ant_value_t index = js_string_intrinsic_call(js, ANT_STRING_INTRINSIC_INDEX_OF, str, args, nargs);
+  ant_value_t result;
+
+  search = js_tostring_val(js, search);
+  GC_ROOT_PIN(js, search);
+  if (is_err(search)) { result = search; goto done; }
+
+  double position = 0.0;
+  if (nargs >= 2) {
+    ant_value_t status = string_to_integer_or_infinity(js, args[1], &position);
+    if (is_err(status)) { result = status; goto done; }
+  }
+
+  ant_offset_t str_len, search_len;
+  ant_offset_t search_off = vstr(js, search, &search_len);
+  ant_offset_t str_off = vstr(js, str, &str_len);
+  if (search_len == 0) { result = js_true; goto done; }
+
+  size_t start = 0;
+  if (position > 0.0) {
+    size_t str_units = (size_t)str_utf16_len(js, str);
+    start = position >= (double)str_units ? str_units : (size_t)position;
+  }
+
+  ptrdiff_t found = string_find_utf16(
+    (const char *)(uintptr_t)str_off, (size_t)str_len,
+    (const char *)(uintptr_t)search_off, (size_t)search_len, start, false);
+  result = found == STRING_FIND_OOM ? js_mkerr(js, "oom") : js_bool(found >= 0);
+
+done:
   GC_ROOT_RESTORE(js, root_mark);
-  
-  if (is_err(index)) return index;
-  return js_bool(vtype(index) == kTypeNumber && js_getnum(index) >= 0);
+  return result;
 }
 
 static inline ant_offset_t string_clamped_position(ant_t *js, ant_value_t value, ant_offset_t len) {
@@ -17042,10 +17558,8 @@ static ant_value_t builtin_string_endsWith(ant_params_t) {
 }
 
 static ant_value_t builtin_string_template(ant_params_t) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  
-  if (is_err(str)) return str;
-  if (vtype(str) != kTypeString) return js_mkerr(js, "template called on non-string");
+  ant_value_t str = Ant_String_CoerceThis(js, "template");
+  if (vtype(str) != kTypeString) return str;
   if (nargs < 1 || vtype(args[0]) != kTypeObject) return str;
   
   ant_value_t data = args[0];
@@ -17257,13 +17771,33 @@ static ant_value_t builtin_string_codePointAt(ant_params_t) {
   return tov((double) cp);
 }
 
-static ant_value_t string_toLowerCase_impl(ant_t *js, ant_value_t *args, int nargs, const char *name) {
-  ant_value_t str = Ant_String_CoerceThis(js, name);
-  if (is_err(str)) return str;
-  
+static ant_value_t string_case_map(ant_t *js, ant_value_t str, bool upper) {
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   if (str_len == 0) return js_mkstr(js, "", 0);
+
+  if (str_is_ascii(str_ptr)) {
+    unsigned char lo = upper ? 'a' : 'A';
+    ant_offset_t first = 0;
+    while (first < str_len && (unsigned char)(str_ptr[first] - lo) > 'z' - 'a') first++;
+    if (first == str_len) return str;
+    
+    GC_ROOT_SAVE(ascii_mark, js);
+    GC_ROOT_PIN(js, str);
+    ant_value_t result = js_mkstr(js, NULL, str_len);
+    GC_ROOT_RESTORE(js, ascii_mark);
+    if (is_err(result)) return result;
+    str_ptr = (const char *)(uintptr_t)vstr(js, str, NULL);
+    ant_offset_t result_len, result_off = vstr(js, result, &result_len);
+    char *out = (char *)(uintptr_t)(result_off);
+    memcpy(out, str_ptr, (size_t)first);
+    for (ant_offset_t i = first; i < str_len; i++) {
+      char c = str_ptr[i];
+      out[i] = (unsigned char)(c - lo) <= 'z' - 'a' ? (char)(c ^ 0x20) : c;
+    }
+    str_set_ascii_state(out, STR_ASCII_YES);
+    return result;
+  }
 
   const utf8proc_uint8_t *src = (const utf8proc_uint8_t *)str_ptr;
   utf8proc_ssize_t src_len = (utf8proc_ssize_t)str_len;
@@ -17275,12 +17809,18 @@ static ant_value_t string_toLowerCase_impl(ant_t *js, ant_value_t *args, int nar
     utf8proc_int32_t cp;
     utf8proc_ssize_t n = utf8_next(src + pos, src_len - pos, &cp);
     if (cp < 0) { out_len++; pos++; continue; }
+    if (cp < 0x80) { out_len++; pos += n; continue; }
+    utf8proc_int32_t mapped[3];
+    int count = utf8_full_case_map(src, src_len, pos, n, cp, upper, mapped);
     utf8proc_uint8_t tmp[4];
-    out_len += (ant_offset_t)utf8proc_encode_char(utf8proc_tolower(cp), tmp);
+    for (int k = 0; k < count; k++) out_len += (ant_offset_t)utf8proc_encode_char(mapped[k], tmp);
     pos += n;
   }
 
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, str);
   ant_value_t result = js_mkstr(js, NULL, out_len);
+  GC_ROOT_RESTORE(js, root_mark);
   if (is_err(result)) return result;
   
   ant_offset_t result_len, result_off = vstr(js, result, &result_len);
@@ -17301,86 +17841,57 @@ static ant_value_t string_toLowerCase_impl(ant_t *js, ant_value_t *args, int nar
       pos++; continue;
     }
     
-    utf8proc_int32_t mapped = utf8proc_tolower(cp);
-    if (mapped >= 0x80) ascii_state = STR_ASCII_NO;
-    
-    wpos += (ant_offset_t)utf8proc_encode_char(mapped, (utf8proc_uint8_t *)(result_ptr + wpos));
+    if (cp < 0x80) {
+      char lo = upper ? 'a' : 'A', hi = upper ? 'z' : 'Z';
+      result_ptr[wpos++] = (cp >= lo && cp <= hi) ? (char)(cp ^ 0x20) : (char)cp;
+      pos += n;
+      continue;
+    }
+    utf8proc_int32_t mapped[3];
+    int count = utf8_full_case_map(src, src_len, pos, n, cp, upper, mapped);
+    for (int k = 0; k < count; k++) {
+      if (mapped[k] >= 0x80) ascii_state = STR_ASCII_NO;
+      wpos += (ant_offset_t)utf8proc_encode_char(mapped[k], (utf8proc_uint8_t *)(result_ptr + wpos));
+    }
     pos += n;
   }
   
   str_set_ascii_state(result_ptr, ascii_state);
   return result;
+}
+
+static ant_value_t string_case_map_this(ant_t *js, const char *name, bool upper) {
+  ant_value_t str = Ant_String_CoerceThis(js, name);
+  if (vtype(str) != kTypeString) return str;
+  return string_case_map(js, str, upper);
 }
 
 static ant_value_t builtin_string_toLowerCase(ant_params_t) {
-  return string_toLowerCase_impl(js, args, nargs, "toLowerCase");
+  return string_case_map_this(js, "toLowerCase", false);
 }
 
 static ant_value_t builtin_string_toLocaleLowerCase(ant_params_t) {
-  return string_toLowerCase_impl(js, args, nargs, "toLocaleLowerCase");
-}
-
-static ant_value_t string_toUpperCase_impl(ant_t *js, ant_value_t *args, int nargs, const char *name) {
-  ant_value_t str = Ant_String_CoerceThis(js, name);
-  if (is_err(str)) return str;
-  
-  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *)(uintptr_t)(str_off);
-  if (str_len == 0) return js_mkstr(js, "", 0);
-
-  const utf8proc_uint8_t *src = (const utf8proc_uint8_t *)str_ptr;
-  utf8proc_ssize_t src_len = (utf8proc_ssize_t)str_len;
-
-  ant_offset_t out_len = 0;
-  utf8proc_ssize_t pos = 0;
-  
-  while (pos < src_len) {
-    utf8proc_int32_t cp;
-    utf8proc_ssize_t n = utf8_next(src + pos, src_len - pos, &cp);
-    if (cp < 0) { out_len++; pos++; continue; }
-    utf8proc_uint8_t tmp[4];
-    out_len += (ant_offset_t)utf8proc_encode_char(utf8proc_toupper(cp), tmp);
-    pos += n;
-  }
-
-  ant_value_t result = js_mkstr(js, NULL, out_len);
-  if (is_err(result)) return result;
-  
-  ant_offset_t result_len, result_off = vstr(js, result, &result_len);
-  char *result_ptr = (char *)(uintptr_t)(result_off);
-  uint8_t ascii_state = STR_ASCII_YES;
-
-  pos = 0;
-  ant_offset_t wpos = 0;
-  
-  while (pos < src_len) {
-    utf8proc_int32_t cp;
-    utf8proc_ssize_t n = utf8_next(src + pos, src_len - pos, &cp);
-    
-    if (cp < 0) {
-      unsigned char byte = src[pos];
-      if (byte >= 0x80) ascii_state = STR_ASCII_NO;
-      result_ptr[wpos++] = (char)byte;
-      pos++; continue;
-    }
-    
-    utf8proc_int32_t mapped = utf8proc_toupper(cp);
-    if (mapped >= 0x80) ascii_state = STR_ASCII_NO;
-    
-    wpos += (ant_offset_t)utf8proc_encode_char(mapped, (utf8proc_uint8_t *)(result_ptr + wpos));
-    pos += n;
-  }
-  
-  str_set_ascii_state(result_ptr, ascii_state);
-  return result;
+  return string_case_map_this(js, "toLocaleLowerCase", false);
 }
 
 static ant_value_t builtin_string_toUpperCase(ant_params_t) {
-  return string_toUpperCase_impl(js, args, nargs, "toUpperCase");
+  return string_case_map_this(js, "toUpperCase", true);
 }
 
 static ant_value_t builtin_string_toLocaleUpperCase(ant_params_t) {
-  return string_toUpperCase_impl(js, args, nargs, "toLocaleUpperCase");
+  return string_case_map_this(js, "toLocaleUpperCase", true);
+}
+
+static inline size_t string_trim_prefix_len(const char *p, size_t len) {
+  unsigned char c = (unsigned char)p[0];
+  if (c < 0x80) return (c == ' ' || (c >= '\t' && c <= '\r')) ? 1 : 0;
+  return ant_js_trim_prefix_len(p, len);
+}
+
+static inline size_t string_trim_suffix_len(const char *p, size_t len) {
+  unsigned char c = (unsigned char)p[len - 1];
+  if (c < 0x80) return (c == ' ' || (c >= '\t' && c <= '\r')) ? 1 : 0;
+  return ant_js_trim_suffix_len(p, len);
 }
 
 static ant_value_t builtin_string_trim(ant_params_t) {
@@ -17391,8 +17902,9 @@ static ant_value_t builtin_string_trim(ant_params_t) {
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   
   ant_offset_t start = 0, end = str_len;
-  while (start < end && is_space(str_ptr[start])) start++;
-  while (end > start && is_space(str_ptr[end - 1])) end--;
+  size_t n;
+  while (start < end && (n = string_trim_prefix_len(str_ptr + start, (size_t)(end - start)))) start += n;
+  while (end > start && (n = string_trim_suffix_len(str_ptr + start, (size_t)(end - start)))) end -= n;
   
   return js_mkstr_byte_range(js, str_ptr, start, end - start);
 }
@@ -17405,7 +17917,8 @@ static ant_value_t builtin_string_trimStart(ant_params_t) {
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   
   ant_offset_t start = 0;
-  while (start < str_len && is_space(str_ptr[start])) start++;
+  size_t n;
+  while (start < str_len && (n = string_trim_prefix_len(str_ptr + start, (size_t)(str_len - start)))) start += n;
   
   return js_mkstr_byte_range(js, str_ptr, start, str_len - start);
 }
@@ -17418,7 +17931,8 @@ static ant_value_t builtin_string_trimEnd(ant_params_t) {
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   
   ant_offset_t end = str_len;
-  while (end > 0 && is_space(str_ptr[end - 1])) end--;
+  size_t n;
+  while (end > 0 && (n = string_trim_suffix_len(str_ptr, (size_t)end))) end -= n;
   
   return js_mkstr_byte_range(js, str_ptr, 0, end);
 }
@@ -17463,140 +17977,89 @@ static ant_value_t builtin_string_repeat(ant_params_t) {
   return result;
 }
 
-static ant_value_t builtin_string_padStart(ant_params_t) {
-  ant_value_t str = Ant_String_CoerceThis(js, "padStart");
-  if (is_err(str)) return str;
-  
-  double target_d = 0;
-  if (nargs > 0) {
-    ant_value_t status = string_to_integer_or_infinity(js, args[0], &target_d);
-    if (is_err(status)) return status;
-  }
-  
-  size_t str_units_len = (size_t)str_utf16_len(js, str);
-  if (target_d <= (double)str_units_len) return str;
-  
-  ant_value_t pad_val = js_mkstr(js, " ", 1);
-  if (nargs >= 2 && vtype(args[1]) != kTypeUndefined) {
-    pad_val = coerce_to_str(js, args[1]);
-    if (is_err(pad_val)) return pad_val;
-  }
-  
-  ant_offset_t pad_len, pad_off = vstr(js, pad_val, &pad_len);
-  const char *pad_str = (char *)(uintptr_t)(pad_off);
-  size_t pad_utf16_len = (size_t)str_utf16_len(js, pad_val);
-  
-  if (pad_utf16_len == 0) return str;
-  if (target_d > ANT_STRING_MAX_LENGTH) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid string length");
-  
-  ant_offset_t target_len = (ant_offset_t)target_d;
-  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *)(uintptr_t)(str_off);
-  
-  size_t fill_utf16_len = (size_t)target_len - str_units_len;
-  size_t full_repeats = fill_utf16_len / pad_utf16_len;
-  size_t rem_utf16 = fill_utf16_len % pad_utf16_len;
-  size_t rem_bytes = 0;
-  if (rem_utf16 > 0) {
-    int off = utf16_index_to_byte_offset(pad_str, (size_t)pad_len, rem_utf16, NULL);
-    if (off < 0) return str;
-    rem_bytes = (size_t)off;
-  }
-  size_t fill_bytes = full_repeats * (size_t)pad_len + rem_bytes;
-  size_t total_bytes = fill_bytes + (size_t)str_len;
+static ant_value_t string_pad_impl(ant_t *js, ant_value_t *args, int nargs, bool at_start) {
+  const char *name = at_start ? "padStart" : "padEnd";
+  ant_value_t str = Ant_String_CoerceThis(js, name);
+  if (vtype(str) != kTypeString) return str;
 
-  ant_value_t result = js_mkstr(js, NULL, (ant_offset_t)total_bytes);
-  if (is_err(result)) return result;
-  
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, str);
+  ant_value_t result = str;
+
+  double max_length = 0.0;
+  if (nargs >= 1) {
+    ant_value_t status = string_to_integer_or_infinity(js, args[0], &max_length);
+    if (is_err(status)) { result = status; goto done; }
+  }
+
+  size_t str_units = (size_t)str_utf16_len(js, str);
+  if (max_length <= (double)str_units) goto done;
+
+  ant_value_t pad_val = nargs >= 2 && vtype(args[1]) != kTypeUndefined
+    ? coerce_to_str(js, args[1]) : js_mkstr(js, " ", 1);
+  if (is_err(pad_val)) { result = pad_val; goto done; }
+  GC_ROOT_PIN(js, pad_val);
+
+  size_t pad_units = (size_t)str_utf16_len(js, pad_val);
+  if (pad_units == 0) goto done;
+  if (max_length > ANT_STRING_MAX_LENGTH) {
+    result = js_mkerr_typed(js, JS_ERR_RANGE, "Invalid string length");
+    goto done;
+  }
+
+  ant_offset_t pad_len, pad_off = vstr(js, pad_val, &pad_len);
+  const char *pad_str = (const char *)(uintptr_t)pad_off;
+
+  size_t fill_units = (size_t)max_length - str_units;
+  size_t full_repeats = fill_units / pad_units;
+  size_t rem_units = fill_units % pad_units;
+  size_t rem_start = 0, rem_bytes = 0;
+  utf16_range_splits_t splits = {0};
+  if (rem_units > 0) splits = utf16_range_to_byte_range(
+    pad_str, (size_t)pad_len, 0, rem_units, &rem_start, &rem_bytes);
+
+  char suffix[4];
+  size_t suffix_len = splits.suffix_surrogate
+    ? utf16_code_unit_to_wtf8(splits.suffix_surrogate, suffix) : 0;
+  size_t fill_bytes = full_repeats * (size_t)pad_len + rem_bytes + suffix_len;
+
+  ant_offset_t str_len = 0;
+  vstr(js, str, &str_len);
+  result = js_mkstr(js, NULL, (ant_offset_t)(fill_bytes + (size_t)str_len));
+  if (is_err(result)) goto done;
+
   ant_offset_t result_len, result_off = vstr(js, result, &result_len);
-  char *result_ptr = (char *)(uintptr_t)(result_off);
-  
-  size_t pos = 0;
+  char *result_ptr = (char *)(uintptr_t)result_off;
+  ant_offset_t str_off = vstr(js, str, &str_len);
+  pad_off = vstr(js, pad_val, &pad_len);
+  const char *str_ptr = (const char *)(uintptr_t)str_off;
+  pad_str = (const char *)(uintptr_t)pad_off;
+
+  char *fill = at_start ? result_ptr : result_ptr + str_len;
+  memcpy(at_start ? result_ptr + fill_bytes : result_ptr, str_ptr, (size_t)str_len);
   for (size_t i = 0; i < full_repeats; i++) {
-    memcpy(result_ptr + pos, pad_str, (size_t)pad_len);
-    pos += (size_t)pad_len;
+    memcpy(fill, pad_str, (size_t)pad_len);
+    fill += pad_len;
   }
-  
-  if (rem_bytes > 0) {
-    memcpy(result_ptr + pos, pad_str, rem_bytes);
-    pos += rem_bytes;
-  }
-  
-  memcpy(result_ptr + pos, str_ptr, (size_t)str_len);
+  memcpy(fill, pad_str, rem_bytes);
+  memcpy(fill + rem_bytes, suffix, suffix_len);
+
   str_flat_finish(
     str_flat_from_bytes(result_ptr),
     (str_is_ascii(pad_str) && str_is_ascii(str_ptr)) ? STR_ASCII_YES : STR_ASCII_NO
   );
-  
+
+done:
+  GC_ROOT_RESTORE(js, root_mark);
   return result;
 }
 
-static ant_value_t builtin_string_padEnd(ant_params_t) {
-  ant_value_t str = Ant_String_CoerceThis(js, "padEnd");
-  if (is_err(str)) return str;
-  
-  double target_d = 0;
-  if (nargs > 0) {
-    ant_value_t status = string_to_integer_or_infinity(js, args[0], &target_d);
-    if (is_err(status)) return status;
-  }
-  
-  size_t str_units_len = (size_t)str_utf16_len(js, str);
-  if (target_d <= (double)str_units_len) return str;
-  
-  ant_value_t pad_val = js_mkstr(js, " ", 1);
-  if (nargs >= 2 && vtype(args[1]) != kTypeUndefined) {
-    pad_val = coerce_to_str(js, args[1]);
-    if (is_err(pad_val)) return pad_val;
-  }
-  
-  ant_offset_t pad_len, pad_off = vstr(js, pad_val, &pad_len);
-  const char *pad_str = (char *)(uintptr_t)(pad_off);
-  size_t pad_utf16_len = (size_t)str_utf16_len(js, pad_val);
-  
-  if (pad_utf16_len == 0) return str;
-  if (target_d > ANT_STRING_MAX_LENGTH) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid string length");
-  
-  ant_offset_t target_len = (ant_offset_t)target_d;
-  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *)(uintptr_t)(str_off);
-  
-  size_t fill_utf16_len = (size_t)target_len - str_units_len;
-  size_t full_repeats = fill_utf16_len / pad_utf16_len;
-  size_t rem_utf16 = fill_utf16_len % pad_utf16_len;
-  size_t rem_bytes = 0;
-  if (rem_utf16 > 0) {
-    int off = utf16_index_to_byte_offset(pad_str, (size_t)pad_len, rem_utf16, NULL);
-    if (off < 0) return str;
-    rem_bytes = (size_t)off;
-  }
-  size_t fill_bytes = full_repeats * (size_t)pad_len + rem_bytes;
-  size_t total_bytes = (size_t)str_len + fill_bytes;
+static ant_value_t builtin_string_padStart(ant_params_t) {
+  return string_pad_impl(js, args, nargs, true);
+}
 
-  ant_value_t result = js_mkstr(js, NULL, (ant_offset_t)total_bytes);
-  if (is_err(result)) return result;
-  
-  ant_offset_t result_len, result_off = vstr(js, result, &result_len);
-  char *result_ptr = (char *)(uintptr_t)(result_off);
-  
-  memcpy(result_ptr, str_ptr, (size_t)str_len);
-  size_t pos = (size_t)str_len;
-  for (size_t i = 0; i < full_repeats; i++) {
-    memcpy(result_ptr + pos, pad_str, (size_t)pad_len);
-    pos += (size_t)pad_len;
-  }
-  
-  if (rem_bytes > 0) {
-    memcpy(result_ptr + pos, pad_str, rem_bytes);
-    pos += rem_bytes;
-  }
-  
-  str_flat_finish(
-    str_flat_from_bytes(result_ptr),
-    (str_is_ascii(str_ptr) && str_is_ascii(pad_str)) ? STR_ASCII_YES : STR_ASCII_NO
-  );
-  
-  return result;
+static ant_value_t builtin_string_padEnd(ant_params_t) {
+  return string_pad_impl(js, args, nargs, false);
 }
 
 static ant_value_t builtin_string_charAt(ant_params_t) {
@@ -17624,16 +18087,22 @@ static ant_value_t builtin_string_at(ant_params_t) {
   ant_value_t str = Ant_String_CoerceThis(js, "at");
   if (is_err(str)) return str;
   
-  double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
-  if (isnan(idx_d) || isinf(idx_d)) return js_mkundef();
+  double idx_d = 0.0;
+  if (nargs >= 1) {
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, str);
+    ant_value_t status = string_to_integer_or_infinity(js, args[0], &idx_d);
+    GC_ROOT_RESTORE(js, root_mark);
+    if (is_err(status)) return status;
+  }
 
   ant_offset_t byte_len; ant_offset_t str_off = vstr(js, str, &byte_len);
   const char *str_data = (const char *)(uintptr_t)(str_off);
   size_t utf16_len = (size_t)str_utf16_len(js, str);
   
-  long idx = (long) idx_d;
-  if (idx < 0) idx += (long) utf16_len;
-  if (idx < 0 || idx >= (long) utf16_len) return js_mkundef();
+  if (idx_d < 0) idx_d += (double)utf16_len;
+  if (idx_d < 0 || idx_d >= (double)utf16_len) return js_mkundef();
+  size_t idx = (size_t)idx_d;
   
   uint32_t code_unit = utf16_code_unit_at(str_data, byte_len, idx);
   if (code_unit == 0xFFFFFFFF) return js_mkundef();
@@ -17664,78 +18133,84 @@ static ant_value_t builtin_string_localeCompare(ant_params_t) {
   return tov(0);
 }
 
+static __attribute__((noinline)) ant_value_t string_last_index_of_strings(
+  ant_t *js, ant_value_t str, const char *hay, ant_offset_t str_len,
+  ant_value_t search, double position
+) {
+  ant_offset_t search_len;
+  const char *needle = (const char *)(uintptr_t)vstr(js, search, &search_len);
+
+  size_t start = SIZE_MAX;
+  if (isnan(position)) position = JS_INF;
+  if (position < 1.0) start = 0;
+  else if (search_len == 0 || position < (double)str_len) {
+    size_t str_units = (size_t)str_utf16_len(js, str);
+    start = position >= (double)str_units ? str_units : (size_t)position;
+  }
+  if (search_len == 0) return tov((double)start);
+
+  ptrdiff_t found = string_find_utf16(hay, (size_t)str_len, needle, (size_t)search_len, start, true);
+  return found == STRING_FIND_OOM ? js_mkerr(js, "oom") : tov((double)found);
+}
+
+static __attribute__((noinline)) ant_value_t string_last_index_of_slow(
+  ant_t *js, ant_value_t str, ant_value_t *args, int nargs
+) {
+  ant_value_t search = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t position_arg = nargs > 1 ? args[1] : js_mkundef();
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, str);
+  GC_ROOT_PIN(js, position_arg);
+  ant_value_t result;
+
+  if (vtype(search) != kTypeString) search = coerce_to_str(js, search);
+  GC_ROOT_PIN(js, search);
+  if (is_err(search)) { result = search; goto done; }
+
+  double position = JS_NAN;
+  if (vtype(position_arg) != kTypeUndefined) {
+    ant_value_t status = string_to_number_arg(js, position_arg, &position);
+    if (is_err(status)) { result = status; goto done; }
+  }
+  ant_offset_t str_len;
+  const char *hay = (const char *)(uintptr_t)vstr(js, str, &str_len);
+  result = string_last_index_of_strings(js, str, hay, str_len, search, position);
+
+done:
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
+}
+
 static ant_value_t builtin_string_lastIndexOf(ant_params_t) {
   ant_value_t str = Ant_String_CoerceThis(js, "lastIndexOf");
-  if (is_err(str)) return str;
-  if (nargs == 0) return tov(-1);
+  if (vtype(str) != kTypeString) return str;
+  bool has_position = nargs >= 2 && vtype(args[1]) != kTypeUndefined;
+  if (nargs < 1 || vtype(args[0]) != kTypeString || (has_position && vtype(args[1]) != kTypeNumber))
+    return string_last_index_of_slow(js, str, args, nargs);
 
-  ant_value_t search = args[0];
-  if (vtype(search) != kTypeString) return tov(-1);
+  ant_offset_t str_len, search_len;
+  const char *hay = (const char *)(uintptr_t)vstr(js, str, &str_len);
+  if (!str_is_ascii(hay))
+    return string_last_index_of_strings(js, str, hay, str_len, args[0], has_position ? tod(args[1]) : JS_NAN);
 
-  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
-  ant_offset_t search_len, search_off = vstr(js, search, &search_len);
-
-  const char *str_ptr = (char *)(uintptr_t)(str_off);
-  const char *search_ptr = (char *)(uintptr_t)(search_off);
-
-  if (str_is_ascii(str_ptr)) {
-    size_t max_start = (size_t)str_len;
-    if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-      double pos = tod(args[1]);
-      if (isnan(pos)) pos = D(str_len);
-      if (pos < 0) pos = 0;
-      if (pos > D(str_len)) pos = D(str_len);
-      max_start = (size_t) pos;
-    }
-
-    if (search_len == 0) return tov(D(max_start));
-    if (search_len > str_len || !str_is_ascii(search_ptr)) return tov(-1);
-
-    size_t byte_limit = max_start;
-    if (byte_limit > (size_t)str_len - search_len)
-      byte_limit = (size_t)str_len - search_len;
-
-    char first = search_ptr[0];
-    for (size_t i = byte_limit + 1; i > 0; i--) {
-      if (str_ptr[i - 1] == first &&
-          memcmp(str_ptr + i - 1, search_ptr, search_len) == 0)
-        return tov(D(i - 1));
-    }
-    return tov(-1);
+  size_t max_start = (size_t)str_len;
+  if (has_position) {
+    double position = tod(args[1]);
+    if (position < 0) max_start = 0;
+    else if (position < (double)str_len) max_start = (size_t)position;
   }
 
-  size_t utf16_len = (size_t)str_utf16_len(js, str);
-  size_t max_start = utf16_len;
-  
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    double pos = tod(args[1]);
-    if (isnan(pos)) pos = D(utf16_len);
-    if (pos < 0) pos = 0;
-    if (pos > D(utf16_len)) pos = D(utf16_len);
-    max_start = (size_t) pos;
-  }
-
-  if (search_len == 0) return tov(D(max_start));
-  if (search_len > str_len) return tov(-1);
-
-  size_t byte_limit;
-  if (max_start >= utf16_len) byte_limit = (size_t)str_len;
-  else byte_limit = utf16_index_to_byte_offset_floor(str_ptr, str_len, max_start);
-
-  if (byte_limit > (size_t)str_len - search_len)
-    byte_limit = (size_t)str_len - search_len;
-
-  char first = search_ptr[0];
-  for (size_t i = byte_limit + 1; i > 0; i--) {
-    if (str_ptr[i - 1] == first &&
-        memcmp(str_ptr + i - 1, search_ptr, search_len) == 0)
-      return tov(D(byte_offset_to_utf16(str_ptr, i - 1)));
-  }
-  
-  return tov(-1);
+  const char *needle = (const char *)(uintptr_t)vstr(js, args[0], &search_len);
+  if (search_len == 0) return tov((double)max_start);
+  if (search_len > str_len || !str_is_ascii(needle)) return tov(-1);
+  const char *match = string_bytes_find_last(hay, (size_t)str_len, needle, (size_t)search_len, max_start);
+  return tov(match ? (double)(match - hay) : -1.0);
 }
 
 static ant_value_t builtin_string_concat(ant_params_t) {
+  if (vtype(js->this_val) == kTypeUndefined || vtype(js->this_val) == kTypeNull)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "String.prototype.concat called on null or undefined");
   GC_ROOT_SAVE(root_mark, js);
   
   ant_value_t str = Ant_String_CoerceThis(js, "concat");
@@ -17827,36 +18302,24 @@ static ant_value_t builtin_string_concat(ant_params_t) {
   return ret;
 }
 
-static bool string_is_well_formed(const char *ptr, size_t len) {
-  return str_is_valid_utf8(ptr) || wtf8_is_well_formed(ptr, len);
-}
-
 static ant_value_t builtin_string_isWellFormed(ant_params_t) {
   ant_value_t str = Ant_String_CoerceThis(js, "isWellFormed");
-  if (is_err(str)) return str;
-  
-  ant_offset_t len, off = vstr(js, str, &len);
-  return js_bool(string_is_well_formed((const char *)(uintptr_t)off, (size_t)len));
+  if (vtype(str) != kTypeString) return str;
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  return js_bool(str_is_well_formed((const char *)(uintptr_t)str_off, (size_t)str_len));
 }
 
 static ant_value_t builtin_string_toWellFormed(ant_params_t) {
   ant_value_t str = Ant_String_CoerceThis(js, "toWellFormed");
-  if (is_err(str)) return str;
-  
-  ant_offset_t len, off = vstr(js, str, &len);
-  if (string_is_well_formed((const char *)(uintptr_t)off, (size_t)len)) return str;
-  
-  size_t out_len = utf8_export_length((const char *)(uintptr_t)off, (size_t)len);
-  ant_value_t result = js_mkstr(js, NULL, (ant_offset_t)out_len);
-  if (is_err(result)) return result;
-  
-  off = vstr(js, str, &len);
-  ant_offset_t result_len, result_off = vstr(js, result, &result_len);
-  char *result_ptr = (char *)(uintptr_t)result_off;
-  
-  utf8_export_into((const char *)(uintptr_t)off, (size_t)len, (uint8_t *)result_ptr, out_len, NULL);
-  str_flat_finish(str_flat_from_bytes(result_ptr), STR_ASCII_NO);
-  
+  if (vtype(str) != kTypeString) return str;
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (const char *)(uintptr_t)str_off;
+  if (str_is_well_formed(str_ptr, (size_t)str_len)) return str;
+  size_t len = (size_t)str_len;
+  char *utf8 = wtf8_to_utf8_dup(str_ptr, &len);
+  if (!utf8) return js_mkerr(js, "oom");
+  ant_value_t result = js_mkstr(js, utf8, len);
+  free(utf8);
   return result;
 }
 
@@ -18508,6 +18971,8 @@ static bool instanceof_via_has_instance(ant_t *js, ant_value_t l, ant_value_t r,
   return true;
 }
 
+static ant_value_t walk_prototype_chain(ant_t *js, ant_value_t l, ant_value_t ctor_proto);
+
 static ant_value_t proxy_ordinary_has_instance(ant_t *js, ant_value_t l, ant_value_t r, uint8_t ltype) {
   if (ltype != kTypeObject && ltype != kTypeArray && ltype != kTypeFunction && ltype != kTypePromise && ltype != kTypeGenerator)
     return js_false;
@@ -18519,8 +18984,7 @@ static ant_value_t proxy_ordinary_has_instance(ant_t *js, ant_value_t l, ant_val
   if (pt != kTypeObject && pt != kTypeArray && pt != kTypeFunction)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Function has non-object prototype in instanceof check");
   
-  ant_value_t current = get_proto(js, l);
-  return mkval(kTypeBool, proto_chain_contains_cycle_safe(js, current, proto_val) ? 1 : 0);
+  return walk_prototype_chain(js, l, proto_val);
 }
 
 static ant_value_t handle_proxy_instanceof(ant_t *js, ant_value_t l, ant_value_t r, uint8_t ltype) {
@@ -18586,10 +19050,28 @@ bool js_instance_of_proto(ant_t *js, ant_value_t obj, ant_value_t ctor_proto) {
   return proto_chain_contains_cycle_safe(js, get_proto(js, obj), ctor_proto);
 }
 
+static ant_value_t walk_prototype_chain_ex(
+  ant_t *js, ant_value_t l, ant_value_t ctor_proto, bool *saw_proxy
+) {
+  ant_value_t current = l;
+  proto_overflow_guard_t guard;
+  proto_overflow_guard_init(&guard);
+  uint32_t proxy_hops = 0;
+  for (;;) {
+    if (vtype(current) == kTypeBuiltin) current = js->sym.function_proto;
+    else if (is_proxy(current)) {
+      if (saw_proxy) *saw_proxy = true;
+      current = proxy_proto_hop(js, current, &proxy_hops);
+      if (is_err(current)) return current;
+    } else current = get_proto(js, current);
+    if (!is_object_type(current)) return js_false;
+    if (same_object_identity(current, ctor_proto)) return js_true;
+    if (proto_overflow_guard_hit_cycle(js, &guard, current)) return js_false;
+  }
+}
+
 static ant_value_t walk_prototype_chain(ant_t *js, ant_value_t l, ant_value_t ctor_proto) {
-  ant_value_t current = is_proxy(l) ? proxy_get_prototype_of(js, l) : get_proto(js, l);
-  if (is_err(current)) return current;
-  return mkval(kTypeBool, proto_chain_contains_cycle_safe(js, current, ctor_proto) ? 1 : 0);
+  return walk_prototype_chain_ex(js, l, ctor_proto, NULL);
 }
 
 static ant_value_t ordinary_has_instance(ant_t *js, ant_value_t l, ant_value_t r) {
@@ -19353,6 +19835,22 @@ static ant_value_t array_method_has_index(ant_t *js, ant_value_t arr, ant_offset
   return js_bool(arr_has(js, arr, idx));
 }
 
+static bool array_like_index_absent(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
+  if (intern_find(js, key, key_len)) return false;
+
+  ant_value_t cur = obj;
+  for (int depth = 0; depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
+    if (vtype(cur) != kTypeObject || is_proxy(cur) || array_obj_ptr(cur)) return false;
+    ant_object_t *ptr = js_obj_ptr(cur);
+    if (!ptr || ptr->flags.is_exotic || ptr->exotic_ops) return false;
+    if (vtype(js_string_wrapper_value(cur)) == kTypeString) return false;
+    cur = ptr->proto;
+    if (vtype(cur) == kTypeNull) return true;
+  }
+
+  return false;
+}
+
 static ant_value_t array_method_get_index(ant_t *js, ant_value_t arr, ant_offset_t idx) {
   ant_value_t dense;
   if (array_method_dense_element(arr, idx, &dense)) return dense;
@@ -19370,6 +19868,7 @@ static ant_value_t array_method_get_index(ant_t *js, ant_value_t arr, ant_offset
     if (!ta) {
       char idxstr[16];
       size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)idx);
+      if (array_like_index_absent(js, arr, idxstr, idxlen)) return js_mkundef();
       return js_getprop_fallback_len(js, arr, idxstr, idxlen);
     }
   }
@@ -19838,17 +20337,26 @@ static ant_value_t proxy_get_val(ant_t *js, ant_value_t proxy, ant_value_t key_v
 }
 
 static ant_value_t proxy_get_prototype_of(ant_t *js, ant_value_t proxy) {
-  ant_proxy_state_t *data = get_proxy_data(proxy);
-  if (!data) return js_mknull();
-  
-  if (data->revoked)
-    return proxy_revoked_error(js, "getPrototypeOf");
+  for (uint32_t hops = 0;; hops++) {
+    ant_proxy_state_t *data = get_proxy_data(proxy);
+    if (!data) return js_mknull();
+    
+    if (data->revoked)
+      return proxy_revoked_error(js, "getPrototypeOf");
 
-  ant_value_t target = data->target;
-  ant_value_t handler = data->handler;
-  ant_value_t trap = proxy_get_method(js, handler, "getPrototypeOf");
-  if (is_err(trap)) return trap;
-  if (vtype(trap) != kTypeUndefined) {
+    ant_value_t target = data->target;
+    ant_value_t handler = data->handler;
+    ant_value_t trap = proxy_get_method(js, handler, "getPrototypeOf");
+    if (is_err(trap)) return trap;
+    
+    if (vtype(trap) == kTypeUndefined) {
+      if (!is_proxy(target)) return get_proto(js, target);
+      if (hops >= PROXY_PROTO_HOP_LIMIT)
+        return js_mkerr_typed(js, JS_ERR_RANGE, "Maximum call stack size exceeded");
+      proxy = target;
+      continue;
+    }
+    
     ant_value_t args[1] = { target };
     ant_value_t result = sv_vm_call(js->vm, js, trap, js_mkundef(), args, 1, NULL, js_mkundef());
     if (is_err(result)) return result;
@@ -19861,8 +20369,6 @@ static ant_value_t proxy_get_prototype_of(ant_t *js, ant_value_t proxy) {
     }
     return result;
   }
-
-  return get_proto(js, target);
 }
 
 static ant_value_t proxy_set_prototype_of(ant_t *js, ant_value_t proxy, ant_value_t proto) {
@@ -20731,6 +21237,8 @@ static void realm_init_core(ant_t *js) {
   defmethod(js, string_proto, "template", 8, Ant_Function_Create(builtin_string_template));
   defmethod(js, string_proto, "charCodeAt", 10, Ant_Function_CreateWithArity(builtin_string_charCodeAt, 1));
   defmethod(js, string_proto, "codePointAt", 11, Ant_Function_CreateWithArity(builtin_string_codePointAt, 1));
+  defmethod(js, string_proto, "isWellFormed", 12, Ant_Function_Create(builtin_string_isWellFormed));
+  defmethod(js, string_proto, "toWellFormed", 12, Ant_Function_Create(builtin_string_toWellFormed));
   defmethod(js, string_proto, "toLowerCase", 11, Ant_Function_Create(builtin_string_toLowerCase));
   defmethod(js, string_proto, "toUpperCase", 11, Ant_Function_Create(builtin_string_toUpperCase));
   defmethod(js, string_proto, "toLocaleLowerCase", 17, Ant_Function_Create(builtin_string_toLocaleLowerCase));
@@ -20749,8 +21257,6 @@ static void realm_init_core(ant_t *js) {
   defmethod(js, string_proto, "concat", 6, Ant_Function_CreateWithArity(builtin_string_concat, 1));
   defmethod(js, string_proto, "localeCompare", 13, Ant_Function_CreateWithArity(builtin_string_localeCompare, 1));
   defmethod(js, string_proto, "normalize", 9, Ant_Function_Create(builtin_string_normalize));
-  defmethod(js, string_proto, "isWellFormed", 12, Ant_Function_Create(builtin_string_isWellFormed));
-  defmethod(js, string_proto, "toWellFormed", 12, Ant_Function_Create(builtin_string_toWellFormed));
   defmethod(js, string_proto, "valueOf", 7, Ant_Function_Create(builtin_string_valueOf));
   defmethod(js, string_proto, "toString", 8, Ant_Function_Create(builtin_string_toString));
   #define STRING_HTML_METHOD(name, tag, attr, arity) \
@@ -21062,6 +21568,8 @@ static void realm_init_core(ant_t *js) {
   ant_protector_holder_mark(js->sym.array_ctor);
   ant_protector_holder_mark(p_ctor_func);
   ant_protector_holder_mark(promise_proto);
+  ant_protector_holder_mark(string_proto);
+  ant_iterator_protector_holder_mark(object_proto);
 }
 
 static ant_t *isolate_init(void *buf, size_t len, const ant_isolate_options_t *options) {
@@ -21094,7 +21602,7 @@ static ant_t *isolate_init(void *buf, size_t len, const ant_isolate_options_t *o
   js->ic.obj_epoch = 1;
   gc_state_init(js);
   
-  js->defaults.stream_high_water_mark = 16384.0;
+  js->defaults.stream_high_water_mark = 65536.0;
   js->defaults.stream_object_high_water_mark = 16.0;
   js->defaults.net_auto_select_family_timeout = 250.0;
   js->defaults.net_auto_select_family = true;
@@ -21184,7 +21692,9 @@ void init_intrinsic_symbols(ant_t *js) {
   
   ant_protector_rearm(js,
     ANT_PROTECTOR_PROMISE_SPECIES | ANT_PROTECTOR_ARRAY_SPECIES | 
-    ANT_PROTECTOR_ARRAY_ITERATION | ANT_PROTECTOR_ARRAY_ASYNC_ITERATION | ANT_PROTECTOR_OBJECT_THEN);
+    ANT_PROTECTOR_ARRAY_ITERATION | ANT_PROTECTOR_ARRAY_ASYNC_ITERATION | ANT_PROTECTOR_OBJECT_THEN |
+    ANT_PROTECTOR_STRING_ITERATION | ANT_PROTECTOR_COLLECTION_ITERATION |
+    ANT_PROTECTOR_ITERATOR_RETURN | ANT_PROTECTOR_CONCAT_SPREADABLE);
 }
 
 bool js_realm_finish_intrinsics(ant_t *js) {
@@ -21746,7 +22256,7 @@ static ant_value_t js_cfunc_promote_in_realm(ant_t *js, ant_value_t cfunc) {
   ant_value_t proto = js_primitive_prototype(js, kTypeBuiltin);
   if (is_object_type(proto)) {
     ant_object_t *obj_ptr = js_obj_ptr(js_as_obj(fn_obj));
-    if (obj_ptr) obj_ptr->proto = proto;
+    if (obj_ptr) ant_object_set_proto(js, obj_ptr, proto);
   }
 
   ant_value_t length_result = js_define_function_length(js, fn_obj, (int)js_cfunc_length(cfunc));
@@ -22735,6 +23245,7 @@ void js_set_getter(ant_value_t obj, js_getter_fn getter) {
   if (vtype(obj) != kTypeObject) obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr) return;
+  ant_proto_watch_note_change(ptr);
   ptr->flags.is_exotic = 1;
   ant_exotic_ops_t *ops = obj_ensure_exotic_ops(ptr);
   if (!ops) return;
@@ -22749,6 +23260,7 @@ void js_set_exotic_ops(ant_value_t obj, const ant_exotic_ops_t *ops) {
     free(sidecar->owned_exotic_ops);
     sidecar->owned_exotic_ops = NULL;
   }
+  ant_proto_watch_note_change(ptr);
   ptr->flags.is_exotic = 1;
   ptr->exotic_ops = ops;
 }
@@ -22758,6 +23270,7 @@ void js_set_definer(ant_value_t obj, js_definer_fn definer) {
   if (vtype(obj) != kTypeObject) obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr) return;
+  ant_proto_watch_note_change(ptr);
   ptr->flags.is_exotic = 1;
   ant_exotic_ops_t *ops = obj_ensure_exotic_ops(ptr);
   if (!ops) return;
@@ -22769,6 +23282,7 @@ void js_set_setter(ant_value_t obj, js_setter_fn setter) {
   if (vtype(obj) != kTypeObject) obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr) return;
+  ant_proto_watch_note_change(ptr);
   ptr->flags.is_exotic = 1;
   ant_exotic_ops_t *ops = obj_ensure_exotic_ops(ptr);
   if (!ops) return;
@@ -22780,6 +23294,7 @@ void js_set_deleter(ant_value_t obj, js_deleter_fn deleter) {
   if (vtype(obj) != kTypeObject) obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr) return;
+  ant_proto_watch_note_change(ptr);
   ptr->flags.is_exotic = 1;
   ant_exotic_ops_t *ops = obj_ensure_exotic_ops(ptr);
   if (!ops) return;

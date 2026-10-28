@@ -900,6 +900,20 @@ static void mir_emit_snapshot_stale(
   mir_emit_drop_owner_code_once(ctx, fn, js, "snapshot_stale", bc_off, NULL, 0, true);
 }
 
+bool jit_snapshot_shape(ant_t *js, ant_shape_t *shape) {
+  ant_shape_t **root = code_arena_bump(js, sizeof(*root));
+  if (!root) return false;
+  *root = NULL;
+  
+  if (!sv_ic_shape_ref_register(js, root)) return false;
+  ant_shape_retain(shape);
+  
+  ant_shape_mark_jit_snapshot(shape);
+  *root = shape;
+  
+  return true;
+}
+
 static bool mir_emit_get_field_shape_snapshot(
     MIR_context_t ctx, MIR_item_t fn, ant_t *js, sv_ic_entry_t *ic,
     sv_atom_t *atom, int bc_off, uint16_t ic_idx, MIR_reg_t obj,
@@ -916,13 +930,7 @@ static bool mir_emit_get_field_shape_snapshot(
   // Retention also makes the shape shared, so any later metadata change gives
   // the object a new shape, and the shape compare below is the whole metadata
   // check; the mark makes an in-place edit fail loudly instead.
-  ant_shape_t **root = code_arena_bump(js, sizeof(*root));
-  if (!root) return false;
-  *root = NULL;
-  if (!sv_ic_shape_ref_register(js, root)) return false;
-  ant_shape_retain(shape);
-  ant_shape_mark_jit_snapshot(shape);
-  *root = shape;
+  if (!jit_snapshot_shape(js, shape)) return false;
 
   MIR_reg_t ptr = mir_new_ic_reg(ctx, fn, "gf_snapshot", "obj", bc_off, ic_idx);
   MIR_reg_t tmp = mir_new_ic_reg(ctx, fn, "gf_snapshot", "tmp", bc_off, ic_idx);
@@ -940,14 +948,21 @@ static bool mir_emit_get_field_shape_snapshot(
   return true;
 }
 
-static bool mir_snapshot_shape(ant_t *js, ant_shape_t *shape) {
-  ant_shape_t **root = code_arena_bump(js, sizeof(*root));
-  if (!root) return false;
-  *root = NULL;
-  if (!sv_ic_shape_ref_register(js, root)) return false;
-  ant_shape_retain(shape);
-  ant_shape_mark_jit_snapshot(shape);
-  *root = shape;
+static bool jit_pin_watch(ant_t *js, ant_proto_watch_t *watch) {
+  sv_jit_ctx_t *jc = js->jit_ctx;
+  if (!jc || !watch) return false;
+  
+  if (jc->pinned_watch_count == jc->pinned_watch_cap) {
+    uint32_t cap = jc->pinned_watch_cap ? jc->pinned_watch_cap * 2 : 16;
+    ant_proto_watch_t **grown = realloc(jc->pinned_watches, cap * sizeof(*grown));
+    if (!grown) return false;
+    
+    jc->pinned_watches = grown;
+    jc->pinned_watch_cap = cap;
+  }
+  
+  if (ant_proto_watch_pin(watch)) jc->pinned_watches[jc->pinned_watch_count++] = watch;
+  
   return true;
 }
 
@@ -960,6 +975,7 @@ static bool mir_emit_get_field_proto_snapshot(
   ant_value_t proto = ic->guard.receiver_proto;
   if (!js || !shape || !holder || vtype(proto) != kTypeObject ||
       js_obj_ptr(js_as_obj(proto)) != holder || holder->flags.is_exotic || !holder->shape) return false;
+  ant_proto_watch_t *watch = ant_proto_watch(holder);
   ant_shape_t *holder_shape = holder->shape;
   uint32_t index = ic->cached_index;
   const ant_shape_prop_t *prop = ant_shape_prop_at(holder_shape, index);
@@ -967,7 +983,7 @@ static bool mir_emit_get_field_proto_snapshot(
       !prop || prop->type != ANT_SHAPE_KEY_STRING || prop->key.interned != atom->str ||
       prop->has_getter || prop->has_setter || index >= holder->prop_count) return false;
   if (!jit_snapshots_allowed()) return false;
-  if (!mir_snapshot_shape(js, shape) || !mir_snapshot_shape(js, holder_shape)) return false;
+  if (!jit_snapshot_shape(js, shape) || !jit_snapshot_shape(js, holder_shape)) return false;
 
   MIR_reg_t ptr = mir_new_ic_reg(ctx, fn, "gf_proto_snapshot", "obj", bc_off, ic_idx);
   MIR_reg_t tmp = mir_new_ic_reg(ctx, fn, "gf_proto_snapshot", "tmp", bc_off, ic_idx);
@@ -982,12 +998,29 @@ static bool mir_emit_get_field_proto_snapshot(
       MIR_new_reg_op(ctx, reg), MIR_new_reg_op(ctx, expect))); \
 } while (0)
 
+  ant_value_t value = ant_object_prop_get_unchecked(holder, index);
+  if (!is_object_type(value) && vtype(value) != kTypeBuiltin) watch = NULL;
+  if (watch && !jit_pin_watch(js, watch)) watch = NULL;
+
   mir_emit_value_to_objptr_or_jmp(ctx, fn, obj, ptr, tmp, miss);
   LOAD(tmp, MIR_T_P, offsetof(ant_object_t, shape), ptr);
   MISS_UNLESS_EQ(tmp, (uintptr_t)shape, miss);
   mir_emit_receiver_exotic_guard(ctx, fn, ptr, tmp, miss);
-  LOAD(tmp, MIR_T_I64, offsetof(ant_object_t, proto), ptr);
-  MISS_UNLESS_EQ(tmp, proto, miss);
+  
+  if (ant_shape_proto(shape) != proto) {
+    LOAD(tmp, MIR_T_I64, offsetof(ant_object_t, proto), ptr);
+    MISS_UNLESS_EQ(tmp, proto, miss);
+  }
+  
+  if (watch) {
+    mir_load_imm(ctx, fn, holder_ptr, (uint64_t)(uintptr_t)watch);
+    LOAD(tmp, MIR_T_P, ANT_PROTO_WATCH_OBJECT_OFFSET, holder_ptr);
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BEQ,
+        MIR_new_label_op(ctx, stale), MIR_new_reg_op(ctx, tmp), MIR_new_int_op(ctx, 0)));
+    mir_load_imm(ctx, fn, dst, value);
+    return true;
+  }
+  
   mir_load_imm(ctx, fn, holder_ptr, (uint64_t)(uintptr_t)holder);
   LOAD(tmp, MIR_T_U16, offsetof(ant_object_t, flags), holder_ptr);
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND,
@@ -1015,8 +1048,12 @@ static bool mir_emit_get_field_native_getter(
   
   const ant_shape_prop_t *prop = ant_shape_prop_at(holder->shape, ic->cached_index);
   if (!prop || !prop->has_getter || vtype(prop->getter) != kTypeBuiltin) return false;
+  
   const ant_native_getter_t *g = ant_native_getter_of(js_as_cfunc_meta(prop->getter));
-  if (!g || !jit_snapshots_allowed() || !mir_snapshot_shape(js, holder->shape)) return false;
+  if (!g || !jit_snapshots_allowed()) return false;
+  
+  ant_proto_watch(holder);
+  if (!jit_snapshot_shape(js, holder->shape)) return false;
   
   MIR_reg_t r_ic = mir_new_ic_reg(ctx, fn, "gf_native", "ic", bc_off, ic_idx);
   MIR_reg_t ptr = mir_new_ic_reg(ctx, fn, "gf_native", "obj", bc_off, ic_idx);
@@ -1030,7 +1067,7 @@ static bool mir_emit_get_field_native_getter(
   
   ant_value_t proto = ic->guard.receiver_proto;
   bool direct = vtype(proto) == kTypeObject && js_obj_ptr(js_as_obj(proto)) == holder;
-  if (direct && mir_snapshot_shape(js, ic->cached_shape)) {
+  if (direct && jit_snapshot_shape(js, ic->cached_shape)) {
     mir_emit_value_to_objptr_or_jmp(ctx, fn, obj, ptr, tmp, slow);
     INSN(MIR_MOV, REG(tmp), MEM(MIR_T_P, offsetof(ant_object_t, shape), ptr));
     mir_load_imm(ctx, fn, tmp2, (uint64_t)(uintptr_t)ic->cached_shape);
@@ -1421,7 +1458,7 @@ static bool mir_emit_get_global_snapshot(
   const ant_shape_prop_t *prop = ant_shape_prop_at(shape, index);
   if (!prop || prop->type != ANT_SHAPE_KEY_STRING || prop->key.interned != atom->str ||
       prop->has_getter || prop->has_setter) return false;
-  if (!jit_snapshots_allowed() || !mir_snapshot_shape(js, shape)) return false;
+  if (!jit_snapshots_allowed() || !jit_snapshot_shape(js, shape)) return false;
 
   bool hoisted = hoist && hoist->global == global;
   MIR_reg_t ptr = hoisted ? hoist->r_global : mir_new_ic_reg(ctx, fn, "gg_snapshot", "global", bc_off, -1);

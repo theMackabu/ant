@@ -32,9 +32,10 @@ for (const reason of [undefined, null, new Error('URL coercion')]) {
 const format = require('node:url').format;
 for (const reason of [undefined, null, new Error('URL format')]) {
   for (const property of ['protocol', 'auth', 'host', 'hostname', 'port', 'pathname', 'search', 'hash', 'slashes', 'query']) {
-    const value = new Proxy({}, {
+    const value = new Proxy(property === 'port' ? { hostname: 'h' } : {}, {
       get(target, key) {
         if (key === property) throw reason;
+        return target[key];
       },
     });
     let caught = false;

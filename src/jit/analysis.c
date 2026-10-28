@@ -10,7 +10,7 @@ int jit_back_edges(const sv_func_t *func, int (**out)[2]) {
     if (op >= OP__COUNT) goto fail;
     int size = sv_op_size[op];
     if (!size || size > func->code_len - off) goto fail;
-    uint16_t flags = sv_op_flags[op];
+    uint32_t flags = sv_op_flags[op];
     int64_t target = -1;
     if (flags & SV_OPF_JIT_BRANCH32)
       target = (int64_t)off + size + sv_get_i32(func->code + off + 1);
@@ -191,7 +191,7 @@ static void jit_live_apply(const sv_func_t *func, int off, uint64_t *live, int w
 }
 
 static int64_t jit_live_branch_target(const sv_func_t *func, int off, sv_op_t op, int sz) {
-  uint16_t flags = sv_op_flags[op];
+  uint32_t flags = sv_op_flags[op];
   if (flags & SV_OPF_JIT_BRANCH32) return (int64_t)off + sz + sv_get_i32(func->code + off + 1);
   if (flags & SV_OPF_JIT_BRANCH8) return (int64_t)off + sz + sv_get_i8(func->code + off + 1);
   if (op == OP_TRY_PUSH || op == OP_TRY_PUSH_FINALLY || op == OP_CATCH || op == OP_UNWIND_JMP)
@@ -430,7 +430,7 @@ bool scan_branch_targets(sv_func_t *func, jit_label_map_t *lm, MIR_context_t ctx
     sv_op_t op = (sv_op_t)*ip;
     int sz = sv_op_size[op];
     if (sz == 0) break;
-    uint16_t flags = sv_op_flags[op];
+    uint32_t flags = sv_op_flags[op];
     if ((flags & SV_OPF_JIT_BRANCH32) != 0) {
       int off = (int)(ip - func->code) + sv_get_i32(ip + 1) + sz;
       if (!label_for_offset(ctx, lm, off)) return false;
@@ -480,7 +480,7 @@ jit_features_t jit_prescan_features(sv_func_t *func, int n_slots, const sv_closu
       const sv_atom_t *atom = &func->atoms[sv_get_u32(ip + 1)];
       if (atom->len == 5 && memcmp(atom->str, "super", 5) == 0) f.needs_super = true;
     }
-    uint16_t flags = sv_op_flags[op];
+    uint32_t flags = sv_op_flags[op];
     if ((flags & SV_OPF_JIT_NEEDS_BAILOUT) != 0) f.needs_bailout = true;
     if ((flags & SV_OPF_JIT_NEEDS_INC_LOCAL) != 0) f.needs_inc_local = true;
     if ((flags & SV_OPF_JIT_NEEDS_ARGS_BUF) != 0) f.needs_args_buf = true;
@@ -534,6 +534,7 @@ bool jit_mark_self_binding_guards(
     ant_t *js, sv_func_t *func, sv_closure_t *hint_closure,
     uint8_t *guard_sites) {
   if (!js || !func || !hint_closure || !guard_sites) return false;
+  if (func->has_bound_closure) return false;
 
   bool found = false;
   uint8_t *ip = func->code;
@@ -590,9 +591,7 @@ bool jit_is_eligible(sv_func_t *func) {
     int sz = sv_op_size[op];
     if (sz == 0) return false;
     if ((sv_op_flags[op] & SV_OPF_JIT_ELIGIBLE) == 0) {
-      if (op != OP_RE_LITERAL_EXEC &&
-          op != OP_STR_RE_LITERAL_REPLACE &&
-          op != OP_RE_EXEC_TRUTHY) {
+      if ((sv_op_flags[op] & SV_OPF_JIT_QUIET_INELIGIBLE) == 0) {
         if (sv_jit_warn_unlikely)
           fprintf(stderr, "jit: ineligible op %s in %s\n",
                   (op < OP__COUNT && sv_op_names[op]) ? sv_op_names[op] : "???",

@@ -21,6 +21,16 @@ typedef struct gc_string_block_mark {
   gc_bitmap_t bitmap;
 } gc_block_mark_t;
 
+typedef struct {
+  uintptr_t page;
+  uint32_t index;
+} gc_string_page_t;
+
+static constexpr size_t GC_STRING_PAGE_SHIFT = 12;
+static constexpr size_t GC_STRING_PAGE_CACHE = 256;
+
+static _Thread_local gc_string_page_t gc_string_pages[GC_STRING_PAGE_CACHE];
+
 typedef struct gc_large_string_mark {
   uintptr_t ptr;
   ant_large_string_alloc_t *alloc;
@@ -171,8 +181,10 @@ static size_t large_string_reusable_budget(const ant_large_string_space_t *space
   size_t budget = live_capacity / 4u;
   size_t min_budget = 4u * 1024u * 1024u;
   size_t max_budget = 64u * 1024u * 1024u;
+  size_t taken = space->cycle_taken > space->cycle_taken_prev ? space->cycle_taken : space->cycle_taken_prev;
 
   if (budget < min_budget) budget = min_budget;
+  if (budget < 2u * taken) budget = 2u * taken;
   if (budget > max_budget) budget = max_budget;
   
   return budget;
@@ -199,6 +211,8 @@ static void large_string_trim_reusable(ant_large_string_space_t *space) {
 }
 
 void gc_strings_begin(ant_t *js) {
+  memset(gc_string_pages, 0, sizeof(gc_string_pages));
+  
   js->gc.string_mark_len = 0;
   js->gc.large_string_mark_len = 0;
 
@@ -218,9 +232,13 @@ void gc_strings_begin(ant_t *js) {
     (size_t)js->gc.string_mark_len, sizeof(gc_block_mark_t), pooled_mark_cmp
   );
   
-  if (js->gc.large_string_mark_len > 1) qsort(js->gc.large_string_marks, 
-    (size_t)js->gc.large_string_mark_len, sizeof(gc_large_string_mark_t), large_mark_cmp
-  );
+  if (js->gc.large_string_mark_len > 1) 
+    qsort(js->gc.large_string_marks, (size_t)js->gc.large_string_mark_len, sizeof(gc_large_string_mark_t), large_mark_cmp);
+}
+
+static inline void gc_string_mark_slot(gc_block_mark_t *m, uintptr_t p) {
+  size_t offset = p - m->base;
+  if (offset % m->stride == 0) bitmap_set(&m->bitmap, offset / m->stride);
 }
 
 void gc_strings_mark(ant_t *js, const void *ptr) {
@@ -228,6 +246,14 @@ void gc_strings_mark(ant_t *js, const void *ptr) {
   uintptr_t p = (uintptr_t)ptr;
 
   if (js->gc.string_mark_len > 0) {
+    uintptr_t page = p >> GC_STRING_PAGE_SHIFT;
+    gc_string_page_t *slot = &gc_string_pages[page % GC_STRING_PAGE_CACHE];
+    
+    if (slot->page == page && slot->index < js->gc.string_mark_len) {
+      gc_block_mark_t *m = &js->gc.string_marks[slot->index];
+      if (p >= m->base && p < m->end) { gc_string_mark_slot(m, p); return; }
+    }
+    
     int lo = 0;
     int hi = (int)js->gc.string_mark_len - 1;
     
@@ -238,8 +264,9 @@ void gc_strings_mark(ant_t *js, const void *ptr) {
     if (p < m->base) hi = mid - 1;
     else if (p >= m->end) lo = mid + 1;
     else {
-      size_t offset = p - m->base;
-      if (offset % m->stride == 0) bitmap_set(&m->bitmap, offset / m->stride);
+      slot->page = page;
+      slot->index = (uint32_t)mid;
+      gc_string_mark_slot(m, p);
       return;
     }}
   }
@@ -308,6 +335,8 @@ void gc_strings_sweep(ant_t *js) {
   }
 
   large_string_trim_reusable(space);
+  space->cycle_taken_prev = space->cycle_taken;
+  space->cycle_taken = 0;
 
   size_t keep_budget = gc_pool_major_threshold(js);
   for (int i = 0; i < ANT_POOL_SIZE_CLASS_COUNT; i++) {

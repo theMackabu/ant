@@ -43,8 +43,11 @@ const run = (args, env = {}) => spawnSync(process.execPath, [...args, '-e', sour
 });
 
 const interpreted = run(['--jitless']);
-const compiled = run([], { ANT_DEBUG: 'dump/vm:op-warn' });
+const plain = run([], { ANT_DEBUG: '' });
+const compiled = run([], { ANT_DEBUG: 'dump/vm:op-warn opt:off' });
 assert.strictEqual(interpreted.status, 0, interpreted.stderr);
+assert.strictEqual(plain.status, 0, plain.stderr);
+assert.strictEqual(plain.stdout, interpreted.stdout);
 assert.strictEqual(compiled.status, 0, compiled.stderr);
 assert.strictEqual(compiled.stdout, interpreted.stdout);
 

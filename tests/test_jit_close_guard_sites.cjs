@@ -22,7 +22,7 @@ console.log('closures ok');
 `;
 const child = spawnSync(process.execPath, ['-e', source], {
   encoding: 'utf8',
-  env: { ...process.env, ANT_DEBUG: 'dump/vm:jit' },
+  env: { ...process.env, ANT_DEBUG: 'dump/vm:jit opt:off' },
   maxBuffer: 8 * 1024 * 1024,
   timeout: 10000,
 });

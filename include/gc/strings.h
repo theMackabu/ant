@@ -34,9 +34,13 @@ static constexpr uint64_t STR_META_ASCII_SHIFT = 56;
 static constexpr uint64_t STR_META_VALID_SHIFT = 58;
 static constexpr uint64_t STR_META_FIELD_MASK  = 0x3;
 
-static constexpr uint64_t STR_META_PERMANENT  = UINT64_C(1) << 60;
-static constexpr uint64_t STR_META_UTF16_MASK = (UINT64_C(1) << STR_META_ASCII_SHIFT) - 1;
+static constexpr uint64_t STR_META_PERMANENT      = UINT64_C(1) << 60;
+static constexpr uint64_t STR_META_WELL_FORMED    = UINT64_C(1) << 61;
+static constexpr uint64_t STR_META_WTF8_CHECKED   = UINT64_C(1) << 62;
+static constexpr uint64_t STR_META_WTF8_VALID     = UINT64_C(1) << 63;
+static constexpr uint64_t STR_META_LONE_SURROGATE = UINT64_C(1) << 55;
 
+static constexpr uint64_t STR_META_UTF16_MASK   = STR_META_LONE_SURROGATE - 1;
 static constexpr uint64_t STR_META_ASCII_MASK   = STR_META_FIELD_MASK << STR_META_ASCII_SHIFT;
 static constexpr uint64_t STR_META_VALID_MASK   = STR_META_FIELD_MASK << STR_META_VALID_SHIFT;
 static constexpr uint64_t STR_META_STATE_MASK   = ~STR_META_UTF16_MASK;
@@ -93,14 +97,33 @@ typedef struct {
   bool needs_free;
 } js_cstr_t;
 
+typedef struct utf16_pos_slot utf16_pos_slot_t;
+
+typedef struct {
+  const char *str;
+  size_t len;
+  size_t byte;
+  size_t units;
+  utf16_pos_slot_t *slot;
+  bool ascii;
+  bool truncated_tail;
+} utf16_pos_t;
+
 typedef struct {
   size_t count;
   size_t bytes;
 } js_intern_stats_t;
 
 bool utf8_validate_bytes(const char *str, size_t byte_len);
+bool wtf8_validate_bytes(const char *str, size_t byte_len);
 size_t utf8_export_length_slow(const char *str, size_t str_len);
 size_t wtf8_join_surrogate_pairs(char *bytes, size_t len);
+int wtf8_compare_utf16_slow(const char *a, size_t na, const char *b, size_t nb);
+
+void utf16_pos_init_slow(utf16_pos_t *pos, const char *str, size_t len);
+void utf16_pos_save_slow(utf16_pos_t *pos);
+size_t utf16_pos_seek_slow(utf16_pos_t *pos, size_t units);
+size_t utf16_pos_units_slow(utf16_pos_t *pos, size_t byte);
 
 static inline bool str_is_heap_rope(ant_value_t value) {
   return vtype(value) == kTypeString && ((vdata(value) & STR_HEAP_TAG_MASK) == STR_HEAP_TAG_ROPE);
@@ -285,6 +308,54 @@ static inline bool str_is_ascii(const char *str) {
   return state == STR_ASCII_YES;
 }
 
+static inline void utf16_pos_init(utf16_pos_t *pos, const char *str, size_t len) {
+  if (!str_is_ascii(str)) {
+    utf16_pos_init_slow(pos, str, len);
+    return;
+  }
+  *pos = (utf16_pos_t){ .str = str, .len = len, .ascii = true };
+}
+
+static inline size_t utf16_pos_seek(utf16_pos_t *pos, size_t units) {
+  if (!pos->ascii) return utf16_pos_seek_slow(pos, units);
+  pos->byte = units < pos->len ? units : pos->len;
+  pos->units = pos->byte;
+  return pos->byte;
+}
+
+static inline size_t utf16_pos_units(utf16_pos_t *pos, size_t byte) {
+  return pos->ascii ? byte : utf16_pos_units_slow(pos, byte);
+}
+
+static inline void utf16_pos_save(utf16_pos_t *pos) {
+  if (!pos->ascii && pos->str) utf16_pos_save_slow(pos);
+}
+
+static inline int str_compare_utf16(const char *a, size_t na, const char *b, size_t nb) {
+  size_t n = na < nb ? na : nb, i = 0;
+  
+  for (; i + sizeof(uint64_t) <= n; i += sizeof(uint64_t)) {
+    uint64_t x, y;
+    
+    memcpy(&x, a + i, sizeof(x));
+    memcpy(&y, b + i, sizeof(y));
+    
+    if (x != y) {
+      #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+      i += (size_t)__builtin_ctzll(x ^ y) >> 3;
+      #endif
+      break;
+    }
+  }
+  
+  while (i < n && a[i] == b[i]) i++;
+  if (i == n) return (na > nb) - (na < nb);
+
+  unsigned char x = (unsigned char)a[i], y = (unsigned char)b[i];
+  if (x < 0xED || y < 0xED || (x >= 0xF0) == (y >= 0xF0)) return x < y ? -1 : 1;
+  return wtf8_compare_utf16_slow(a + i, na - i, b + i, nb - i);
+}
+
 static inline bool str_is_valid_utf8(const char *str) {
   if (str_is_ascii(str)) return true;
 
@@ -298,6 +369,38 @@ static inline bool str_is_valid_utf8(const char *str) {
   }
   
   return state == STR_UTF_VALID;
+}
+
+static inline bool str_is_valid_wtf8(const char *str) {
+  if (str_is_valid_utf8(str)) return true;
+
+  ant_flat_string_t *flat = str_flat_from_bytes(str);
+  if (!(flat->meta & STR_META_WTF8_CHECKED)) flat->meta |= STR_META_WTF8_CHECKED | (
+    wtf8_validate_bytes(flat->bytes, (size_t)flat->len) ? STR_META_WTF8_VALID : 0);
+
+  return (flat->meta & STR_META_WTF8_VALID) != 0;
+}
+
+bool wtf8_has_lone_surrogate(const char *str, size_t byte_len);
+bool wtf8_has_surrogate(const char *str, size_t byte_len);
+
+static inline bool str_is_well_formed(const char *str, size_t len) {
+  if (str_is_ascii(str)) return true;
+
+  ant_flat_string_t *flat = str_flat_from_bytes(str);
+  if (flat->meta & STR_META_WELL_FORMED) return true;
+  if (flat->meta & STR_META_LONE_SURROGATE) return false;
+  if (str_is_valid_utf8(str)) return true;
+
+  if (!wtf8_has_surrogate(str, len)) {
+    flat->meta |= STR_META_WELL_FORMED;
+    return true;
+  }
+
+  if (!wtf8_has_lone_surrogate(str, len)) return true;
+  flat->meta |= STR_META_LONE_SURROGATE;
+  
+  return false;
 }
 
 static inline size_t utf8_export_length(const char *str, size_t str_len) {

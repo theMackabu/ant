@@ -22,6 +22,7 @@ static void collection_release(void *block, size_t size);
 #include "gc/weak.h"
 #include "silver/call.h"
 #include "descriptors.h"
+#include "protectors.h"
 
 #include "modules/bigint.h"
 #include "modules/collections.h"
@@ -828,34 +829,43 @@ set_iterator_state_t *get_set_iter_state(ant_value_t obj) {
   return (set_iterator_state_t *)js_get_native(obj, SET_ITER_NATIVE_TAG);
 }
 
+static ant_value_t collection_receiver_error(ant_t *js, const char *method) {
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Method %s called on incompatible receiver", method);
+}
+
+static inline ant_value_t collection_arg(ant_value_t *args, int nargs, int i) {
+  return i < nargs ? args[i] : js_mkundef();
+}
+
 static ant_value_t map_set(ant_params_t) {
-  if (nargs < 2) return js_mkerr(js, "Map.set() requires 2 arguments");
-  
   ant_value_t this_val = js->this_val;
-  map_entry_t **map_ptr = get_map_from_obj(this_val);
-  if (!map_ptr) return js_mkerr(js, "Invalid Map object");
   
-  ant_value_t key_val = normalize_map_key(args[0]);
-  if (!map_store_entry(js, map_ptr, args[0], key_val, args[1]))
+  map_entry_t **map_ptr = get_map_from_obj(this_val);
+  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.set");
+
+  ant_value_t key = collection_arg(args, nargs, 0);
+  ant_value_t value = collection_arg(args, nargs, 1);
+  ant_value_t key_val = normalize_map_key(key);
+  
+  if (!map_store_entry(js, map_ptr, key, key_val, value))
     return Ant_Error_CreateOutOfMemory(js);
 
   ant_object_t *map_obj = js_obj_ptr(this_val);
   if (map_obj) {
     gc_write_barrier(js, map_obj, key_val);
-    gc_write_barrier(js, map_obj, args[1]);
+    gc_write_barrier(js, map_obj, value);
   }
 
   return this_val;
 }
 
 static ant_value_t map_get(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "Map.get() requires 1 argument");
-  
   ant_value_t this_val = js->this_val;
   map_entry_t **map_ptr = get_map_from_obj(this_val);
-  if (!map_ptr) return js_mkundef();
-
-  map_entry_t *entry = Ant_Map_Find(js, map_ptr, args[0]);
+  
+  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.get");
+  map_entry_t *entry = Ant_Map_Find(js, map_ptr, collection_arg(args, nargs, 0));
+  
   return entry ? entry->value : js_mkundef();
 }
 
@@ -882,7 +892,7 @@ __attribute__((aligned(64))) ant_value_t collections_map_get_numeric_pair(
   const char *separator, size_t separator_len, ant_value_t right
 ) {
   map_entry_t **map_ptr = get_map_from_obj(map);
-  if (!map_ptr) return js_mkundef();
+  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.get");
 
   unsigned char inline_key[128];
   char right_buf[32];
@@ -920,20 +930,17 @@ __attribute__((aligned(64))) ant_value_t collections_map_get_numeric_pair(
 }
 
 static ant_value_t map_has(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "Map.has() requires 1 argument");
-  
   ant_value_t this_val = js->this_val;
   map_entry_t **map_ptr = get_map_from_obj(this_val);
+
+  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.has");
+  map_entry_t *entry = Ant_Map_Find(js, map_ptr, collection_arg(args, nargs, 0));
   
-  if (!map_ptr) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Map object");
-  map_entry_t *entry = Ant_Map_Find(js, map_ptr, args[0]);
   return js_bool(entry != NULL);
 }
 
 bool collections_is_map_has_builtin(ant_value_t func) {
-  return 
-    vtype(func) == kTypeBuiltin && 
-    js_cfunc_same_entrypoint(func, map_has);
+  return vtype(func) == kTypeBuiltin && js_cfunc_same_entrypoint(func, map_has);
 }
 
 static ant_value_t map_numeric_template_general(
@@ -956,8 +963,7 @@ static ant_value_t map_numeric_template_general(
     key_len += desc->segments[i].len + number_lens[i];
   }
   
-  if (desc->segments[substitution_count].len > SIZE_MAX - key_len)
-    return Ant_Error_CreateOutOfMemory(js);
+  if (desc->segments[substitution_count].len > SIZE_MAX - key_len) return Ant_Error_CreateOutOfMemory(js);
   key_len += desc->segments[substitution_count].len;
 
   unsigned char inline_key[64];
@@ -1014,43 +1020,42 @@ ant_value_t collections_map_numeric_template(
       desc->segments[1].str, desc->segments[1].len, substitutions[1]);
 
   map_entry_t **map_ptr = get_map_from_obj(map);
-  if (!map_ptr) return return_presence
-    ? js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Map object")
-    : js_mkundef();
+  if (!map_ptr) return collection_receiver_error(js, return_presence ? "Map.prototype.has" : "Map.prototype.get");
   
   return map_numeric_template_general(
     js, map_ptr, return_presence, substitutions, desc);
 }
 
 static ant_value_t map_upsert(ant_params_t) {
-  if (nargs < 3) return js_mkerr(js, "Map.upsert() requires 3 arguments");
-
   ant_value_t this_val = js->this_val;
   map_entry_t **map_ptr = get_map_from_obj(this_val);
-  if (!map_ptr) return js_mkerr(js, "Invalid Map object");
+  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.upsert");
 
-  ant_value_t update_fn = args[1];
-  ant_value_t insert_fn = args[2];
+  ant_value_t key = collection_arg(args, nargs, 0);
+  ant_value_t update_fn = collection_arg(args, nargs, 1);
+  ant_value_t insert_fn = collection_arg(args, nargs, 2);
+  
   if (!is_callable(update_fn))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Map.upsert update callback must be callable");
+  
   if (!is_callable(insert_fn))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Map.upsert insert callback must be callable");
 
-  map_entry_t *entry = Ant_Map_Find(js, map_ptr, args[0]);
+  map_entry_t *entry = Ant_Map_Find(js, map_ptr, key);
   ant_value_t value;
 
   if (entry) {
-    ant_value_t call_args[3] = { entry->value, args[0], this_val };
+    ant_value_t call_args[3] = { entry->value, key, this_val };
     value = sv_vm_call(js->vm, js, update_fn, js_mkundef(), call_args, 3, NULL, js_mkundef());
   } else {
-    ant_value_t call_args[2] = { args[0], this_val };
+    ant_value_t call_args[2] = { key, this_val };
     value = sv_vm_call(js->vm, js, insert_fn, js_mkundef(), call_args, 2, NULL, js_mkundef());
   }
 
   if (is_err(value)) return value;
 
-  ant_value_t key_val = normalize_map_key(args[0]);
-  if (!map_store_entry(js, map_ptr, args[0], key_val, value))
+  ant_value_t key_val = normalize_map_key(key);
+  if (!map_store_entry(js, map_ptr, key, key_val, value))
     return Ant_Error_CreateOutOfMemory(js);
 
   ant_object_t *map_obj = js_obj_ptr(this_val);
@@ -1063,13 +1068,11 @@ static ant_value_t map_upsert(ant_params_t) {
 }
 
 static ant_value_t map_delete(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "Map.delete() requires 1 argument");
-  
   ant_value_t this_val = js->this_val;
   map_entry_t **map_ptr = get_map_from_obj(this_val);
-  
-  if (!map_ptr) return js_false;
-  map_entry_t *entry = Ant_Map_Find(js, map_ptr, args[0]);
+
+  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.delete");
+  map_entry_t *entry = Ant_Map_Find(js, map_ptr, collection_arg(args, nargs, 0));
 
   if (entry) {
     collections_map_remove(map_ptr, entry);
@@ -1082,16 +1085,17 @@ static ant_value_t map_delete(ant_params_t) {
 static ant_value_t map_clear(ant_params_t) {
   ant_value_t this_val = js->this_val;
   map_entry_t **map_ptr = get_map_from_obj(this_val);
-  if (!map_ptr) return js_mkundef();
-
+  
+  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.clear");
   collections_map_clear(map_ptr);
+  
   return js_mkundef();
 }
 
 static ant_value_t map_size(ant_params_t) {
   ant_value_t this_val = js->this_val;
   map_entry_t **map_ptr = get_map_from_obj(this_val);
-  if (!map_ptr) return js_mknum(0);
+  if (!map_ptr) return collection_receiver_error(js, "get Map.prototype.size");
   
   return js_mknum((double)HASH_COUNT(*map_ptr));
 }
@@ -1099,7 +1103,8 @@ static ant_value_t map_size(ant_params_t) {
 static ant_value_t map_forEach(ant_params_t) {
   ant_value_t this_val = js->this_val;
   map_entry_t **map_ptr = get_map_from_obj(this_val);
-  
+  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.forEach");
+
   if (nargs < 1 || !is_callable(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "forEach requires a callback function");
   
@@ -1136,15 +1141,17 @@ bool advance_map(ant_t *js, iterator_t *it, ant_value_t *out) {
 }
 
 static ant_value_t map_iter_next(ant_params_t) {
+  if (!js_check_native_tag(js->this_val, MAP_ITER_NATIVE_TAG)) return collection_receiver_error(js, "Map Iterator.prototype.next");
   return js_iter_next_result(js, advance_map);
 }
 
-static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type_t type) {
+static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type_t type, const char *method) {
   map_entry_t **map_ptr = get_map_from_obj(map_obj);
-  
+  if (!map_ptr) return collection_receiver_error(js, method);
+
   map_iterator_state_t *state = collection_alloc(sizeof(map_iterator_state_t));
   if (!state) return Ant_Error_CreateOutOfMemory(js);
-  iter_state_open(state, map_ptr ? &map_store_of(map_ptr)->cursors : NULL, map_ptr ? *map_ptr : NULL, type, true);
+  iter_state_open(state, &map_store_of(map_ptr)->cursors, *map_ptr, type, true);
 
   ant_value_t iter = Ant_Object_CreateBare(js);
   js_set_proto_init(iter, js->builtins.map_iter_proto);
@@ -1156,18 +1163,15 @@ static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type
 }
 
 static ant_value_t map_values(ant_params_t) {
-  (void)args; (void)nargs;
-  return create_map_iterator(js, js->this_val, ITER_TYPE_MAP_VALUES);
+  return create_map_iterator(js, js->this_val, ITER_TYPE_MAP_VALUES, "Map.prototype.values");
 }
 
 static ant_value_t map_keys(ant_params_t) {
-  (void)args; (void)nargs;
-  return create_map_iterator(js, js->this_val, ITER_TYPE_MAP_KEYS);
+  return create_map_iterator(js, js->this_val, ITER_TYPE_MAP_KEYS, "Map.prototype.keys");
 }
 
 static ant_value_t map_entries(ant_params_t) {
-  (void)args; (void)nargs;
-  return create_map_iterator(js, js->this_val, ITER_TYPE_MAP_ENTRIES);
+  return create_map_iterator(js, js->this_val, ITER_TYPE_MAP_ENTRIES, "Map.prototype.entries");
 }
 
 bool advance_set(ant_t *js, iterator_t *it, ant_value_t *out) {
@@ -1179,15 +1183,17 @@ bool advance_set(ant_t *js, iterator_t *it, ant_value_t *out) {
 }
 
 static ant_value_t set_iter_next(ant_params_t) {
+  if (!js_check_native_tag(js->this_val, SET_ITER_NATIVE_TAG)) return collection_receiver_error(js, "Set Iterator.prototype.next");
   return js_iter_next_result(js, advance_set);
 }
 
-static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type_t type) {
+static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type_t type, const char *method) {
   set_entry_t **set_ptr = get_set_from_obj(set_obj);
-  
+  if (!set_ptr) return collection_receiver_error(js, method);
+
   set_iterator_state_t *state = collection_alloc(sizeof(set_iterator_state_t));
   if (!state) return Ant_Error_CreateOutOfMemory(js);
-  iter_state_open(state, set_ptr ? &set_store_of(set_ptr)->cursors : NULL, set_ptr ? *set_ptr : NULL, type, true);
+  iter_state_open(state, &set_store_of(set_ptr)->cursors, *set_ptr, type, true);
 
   ant_value_t iter = Ant_Object_CreateBare(js);
   js_set_proto_init(iter, js->builtins.set_iter_proto);
@@ -1199,41 +1205,36 @@ static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type
 }
 
 static ant_value_t set_add(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "Set.add() requires 1 argument");
-  
   ant_value_t this_val = js->this_val;
   set_entry_t **set_ptr = get_set_from_obj(this_val);
-  if (!set_ptr) return js_mkerr(js, "Invalid Set object");
-  
-  if (!set_store_entry(js, set_ptr, args[0]))
+  if (!set_ptr) return collection_receiver_error(js, "Set.prototype.add");
+
+  ant_value_t value = collection_arg(args, nargs, 0);
+  if (!set_store_entry(js, set_ptr, value))
     return Ant_Error_CreateOutOfMemory(js);
 
   ant_object_t *set_obj = js_obj_ptr(this_val);
-  if (set_obj) gc_write_barrier(js, set_obj, args[0]);
+  if (set_obj) gc_write_barrier(js, set_obj, value);
 
   return this_val;
 }
 
 static ant_value_t set_has(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "Set.has() requires 1 argument");
-  
   ant_value_t this_val = js->this_val;
   set_entry_t **set_ptr = get_set_from_obj(this_val);
-  if (!set_ptr) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
+  if (!set_ptr) return collection_receiver_error(js, "Set.prototype.has");
 
-  set_entry_t *entry = Ant_Set_Find(js, set_ptr, args[0]);
+  set_entry_t *entry = Ant_Set_Find(js, set_ptr, collection_arg(args, nargs, 0));
   return js_bool(entry != NULL);
 }
 
 static ant_value_t set_delete(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "Set.delete() requires 1 argument");
-  
   ant_value_t this_val = js->this_val;
   set_entry_t **set_ptr = get_set_from_obj(this_val);
-  
-  if (!set_ptr) return js_false;
-  set_entry_t *entry = Ant_Set_Find(js, set_ptr, args[0]);
+  if (!set_ptr) return collection_receiver_error(js, "Set.prototype.delete");
 
+  set_entry_t *entry = Ant_Set_Find(js, set_ptr, collection_arg(args, nargs, 0));
+  
   if (entry) {
     collections_set_remove(set_ptr, entry);
     return js_true;
@@ -1245,7 +1246,7 @@ static ant_value_t set_delete(ant_params_t) {
 static ant_value_t set_clear(ant_params_t) {
   ant_value_t this_val = js->this_val;
   set_entry_t **set_ptr = get_set_from_obj(this_val);
-  if (!set_ptr) return js_mkundef();
+  if (!set_ptr) return collection_receiver_error(js, "Set.prototype.clear");
 
   collections_set_clear(set_ptr);
   return js_mkundef();
@@ -1254,23 +1255,24 @@ static ant_value_t set_clear(ant_params_t) {
 static ant_value_t set_size(ant_params_t) {
   ant_value_t this_val = js->this_val;
   set_entry_t **set_ptr = get_set_from_obj(this_val);
-  if (!set_ptr) return js_mknum(0);
+  if (!set_ptr) return collection_receiver_error(js, "get Set.prototype.size");
   
   return js_mknum((double)HASH_COUNT(*set_ptr));
 }
 
 static ant_value_t set_values(ant_params_t) {
-  return create_set_iterator(js, js->this_val, ITER_TYPE_SET_VALUES);
+  return create_set_iterator(js, js->this_val, ITER_TYPE_SET_VALUES, "Set.prototype.values");
 }
 
 static ant_value_t set_entries(ant_params_t) {
-  return create_set_iterator(js, js->this_val, ITER_TYPE_SET_ENTRIES);
+  return create_set_iterator(js, js->this_val, ITER_TYPE_SET_ENTRIES, "Set.prototype.entries");
 }
 
 static ant_value_t set_forEach(ant_params_t) {
   ant_value_t this_val = js->this_val;
   set_entry_t **set_ptr = get_set_from_obj(this_val);
-  
+  if (!set_ptr) return collection_receiver_error(js, "Set.prototype.forEach");
+
   if (nargs < 1 || !is_callable(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "forEach requires a callback function");
   
@@ -1472,11 +1474,10 @@ static set_key_status_t set_add_key_cb(ant_t *js, ant_value_t value, ant_value_t
 
 static ant_value_t set_union(ant_params_t) {
   set_entry_t **this_set = get_set_from_obj(js->this_val);
-  if (!this_set) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
-  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Set.union() requires a set-like object");
+  if (!this_set) return collection_receiver_error(js, "Set.prototype.union");
   
   set_record_t other;
-  ant_value_t rec = get_set_record(js, args[0], "union", &other);
+  ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "union", &other);
   if (is_err(rec)) return rec;
 
   set_entry_t **out_set = NULL;
@@ -1507,11 +1508,10 @@ static set_key_status_t set_intersection_key_cb(ant_t *js, ant_value_t value, an
 
 static ant_value_t set_intersection(ant_params_t) {
   set_entry_t **this_set = get_set_from_obj(js->this_val);
-  if (!this_set) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
-  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Set.intersection() requires a set-like object");
+  if (!this_set) return collection_receiver_error(js, "Set.prototype.intersection");
   
   set_record_t other;
-  ant_value_t rec = get_set_record(js, args[0], "intersection", &other);
+  ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "intersection", &other);
   if (is_err(rec)) return rec;
 
   set_entry_t **out_set = NULL;
@@ -1552,11 +1552,10 @@ static set_key_status_t set_delete_key_cb(ant_t *js, ant_value_t value, ant_valu
 
 static ant_value_t set_difference(ant_params_t) {
   set_entry_t **this_set = get_set_from_obj(js->this_val);
-  if (!this_set) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
-  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Set.difference() requires a set-like object");
+  if (!this_set) return collection_receiver_error(js, "Set.prototype.difference");
   
   set_record_t other;
-  ant_value_t rec = get_set_record(js, args[0], "difference", &other);
+  ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "difference", &other);
   if (is_err(rec)) return rec;
 
   set_entry_t **out_set = NULL;
@@ -1615,11 +1614,10 @@ static set_key_status_t set_symmetric_difference_key_cb(ant_t *js, ant_value_t v
 
 static ant_value_t set_symmetricDifference(ant_params_t) {
   set_entry_t **this_set = get_set_from_obj(js->this_val);
-  if (!this_set) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
-  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Set.symmetricDifference() requires a set-like object");
+  if (!this_set) return collection_receiver_error(js, "Set.prototype.symmetricDifference");
   
   set_record_t other;
-  ant_value_t rec = get_set_record(js, args[0], "symmetricDifference", &other);
+  ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "symmetricDifference", &other);
   if (is_err(rec)) return rec;
 
   set_entry_t **out_set = NULL;
@@ -1634,11 +1632,10 @@ static ant_value_t set_symmetricDifference(ant_params_t) {
 
 static ant_value_t set_isSubsetOf(ant_params_t) {
   set_entry_t **this_set = get_set_from_obj(js->this_val);
-  if (!this_set) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
-  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Set.isSubsetOf() requires a set-like object");
+  if (!this_set) return collection_receiver_error(js, "Set.prototype.isSubsetOf");
   
   set_record_t other;
-  ant_value_t rec = get_set_record(js, args[0], "isSubsetOf", &other);
+  ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "isSubsetOf", &other);
   
   if (is_err(rec)) return rec;
   if ((double)HASH_COUNT(*this_set) > other.size) return js_false;
@@ -1673,11 +1670,10 @@ static set_key_status_t set_superset_key_cb(ant_t *js, ant_value_t value, ant_va
 
 static ant_value_t set_isSupersetOf(ant_params_t) {
   set_entry_t **this_set = get_set_from_obj(js->this_val);
-  if (!this_set) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
-  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Set.isSupersetOf() requires a set-like object");
+  if (!this_set) return collection_receiver_error(js, "Set.prototype.isSupersetOf");
   
   set_record_t other;
-  ant_value_t rec = get_set_record(js, args[0], "isSupersetOf", &other);
+  ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "isSupersetOf", &other);
   if (is_err(rec)) return rec;
   if ((double)HASH_COUNT(*this_set) < other.size) return js_false;
 
@@ -1698,11 +1694,10 @@ static set_key_status_t set_disjoint_key_cb(ant_t *js, ant_value_t value, ant_va
 
 static ant_value_t set_isDisjointFrom(ant_params_t) {
   set_entry_t **this_set = get_set_from_obj(js->this_val);
-  if (!this_set) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
-  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Set.isDisjointFrom() requires a set-like object");
+  if (!this_set) return collection_receiver_error(js, "Set.prototype.isDisjointFrom");
   
   set_record_t other;
-  ant_value_t rec = get_set_record(js, args[0], "isDisjointFrom", &other);
+  ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "isDisjointFrom", &other);
   if (is_err(rec)) return rec;
 
   if ((double)HASH_COUNT(*this_set) <= other.size) {
@@ -1728,64 +1723,62 @@ static ant_value_t set_isDisjointFrom(ant_params_t) {
 }
 
 static ant_value_t weakmap_set(ant_params_t) {
-  if (nargs < 2) return js_mkerr(js, "WeakMap.set() requires 2 arguments");
-  
   ant_value_t this_val = js->this_val;
   ant_object_t *object = NULL;
   weakmap_table_t *table = get_weakmap_from_obj(this_val, &object);
-  if (!table) return js_mkerr(js, "Invalid WeakMap object");
-  
-  if (!can_be_held_weakly(args[0]))
-    return js_mkerr(js, "WeakMap key must be an object");
+  if (!table) return collection_receiver_error(js, "WeakMap.prototype.set");
 
-  if (!weakmap_store_entry(js, object, table, args[0], args[1]))
+  ant_value_t key = collection_arg(args, nargs, 0);
+  if (!can_be_held_weakly(key))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid value used as weak map key");
+
+  if (!weakmap_store_entry(js, object, table, key, collection_arg(args, nargs, 1)))
     return Ant_Error_CreateOutOfMemory(js);
   
   return this_val;
 }
 
 static ant_value_t weakmap_get(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "WeakMap.get() requires 1 argument");
-  
   ant_value_t this_val = js->this_val;
   weakmap_table_t *table = get_weakmap_from_obj(this_val, NULL);
-  if (!table) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WeakMap object");
-  if (!can_be_held_weakly(args[0])) return js_mkundef();
+  if (!table) return collection_receiver_error(js, "WeakMap.prototype.get");
+
+  ant_value_t key = collection_arg(args, nargs, 0);
+  if (!can_be_held_weakly(key)) return js_mkundef();
   
-  weakmap_entry_t *entry = weakmap_table_find(table, args[0]);
+  weakmap_entry_t *entry = weakmap_table_find(table, key);
   return entry ? entry->value : js_mkundef();
 }
 
 static ant_value_t weakmap_has(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "WeakMap.has() requires 1 argument");
-  
   ant_value_t this_val = js->this_val;
   weakmap_table_t *table = get_weakmap_from_obj(this_val, NULL);
-  if (!table) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WeakMap object");
-  if (!can_be_held_weakly(args[0])) return js_false;
+  if (!table) return collection_receiver_error(js, "WeakMap.prototype.has");
+
+  ant_value_t key = collection_arg(args, nargs, 0);
+  if (!can_be_held_weakly(key)) return js_false;
   
-  return js_bool(weakmap_table_find(table, args[0]) != NULL);
+  return js_bool(weakmap_table_find(table, key) != NULL);
 }
 
 static ant_value_t weakmap_upsert(ant_params_t) {
-  if (nargs < 3) return js_mkerr(js, "WeakMap.upsert() requires 3 arguments");
-
   ant_value_t this_val = js->this_val;
   ant_object_t *object = NULL;
   weakmap_table_t *table = get_weakmap_from_obj(this_val, &object);
-  if (!table) return js_mkerr(js, "Invalid WeakMap object");
+  if (!table) return collection_receiver_error(js, "WeakMap.prototype.upsert");
 
-  if (!can_be_held_weakly(args[0]))
-    return js_mkerr(js, "WeakMap key must be an object");
+  ant_value_t key_obj = collection_arg(args, nargs, 0);
+  if (!can_be_held_weakly(key_obj))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid value used as weak map key");
 
-  ant_value_t update_fn = args[1];
-  ant_value_t insert_fn = args[2];
+  ant_value_t update_fn = collection_arg(args, nargs, 1);
+  ant_value_t insert_fn = collection_arg(args, nargs, 2);
+  
   if (!is_callable(update_fn))
     return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap.upsert update callback must be callable");
   if (!is_callable(insert_fn))
     return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap.upsert insert callback must be callable");
 
-  ant_value_t key_obj = args[0];
   weakmap_entry_t *entry = weakmap_table_find(table, key_obj);
 
   ant_value_t value;
@@ -1806,27 +1799,24 @@ static ant_value_t weakmap_upsert(ant_params_t) {
 }
 
 static ant_value_t weakmap_delete(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "WeakMap.delete() requires 1 argument");
-  
   ant_value_t this_val = js->this_val;
   weakmap_table_t *table = get_weakmap_from_obj(this_val, NULL);
-  if (!table) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WeakMap object");
-  if (!can_be_held_weakly(args[0])) return js_false;
+  if (!table) return collection_receiver_error(js, "WeakMap.prototype.delete");
+
+  ant_value_t key = collection_arg(args, nargs, 0);
+  if (!can_be_held_weakly(key)) return js_false;
   
-  return js_bool(weakmap_table_delete(table, args[0]));
+  return js_bool(weakmap_table_delete(table, key));
 }
 
 static ant_value_t weakset_add(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "WeakSet.add() requires 1 argument");
-  
   ant_value_t this_val = js->this_val;
   weakset_entry_t **ws_ptr = get_weakset_from_obj(this_val);
-  if (!ws_ptr) return js_mkerr(js, "Invalid WeakSet object");
-  
-  if (!can_be_held_weakly(args[0]))
-    return js_mkerr(js, "WeakSet value must be an object");
-  
-  ant_value_t value_obj = args[0];
+  if (!ws_ptr) return collection_receiver_error(js, "WeakSet.prototype.add");
+
+  ant_value_t value_obj = collection_arg(args, nargs, 0);
+  if (!can_be_held_weakly(value_obj))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid value used in weak set");
   
   weakset_entry_t *entry;
   HASH_FIND(hh, *ws_ptr, &value_obj, sizeof(ant_value_t), entry);
@@ -1848,28 +1838,24 @@ static ant_value_t weakset_add(ant_params_t) {
 }
 
 static ant_value_t weakset_has(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "WeakSet.has() requires 1 argument");
-  
   ant_value_t this_val = js->this_val;
   weakset_entry_t **ws_ptr = get_weakset_from_obj(this_val);
-  if (!ws_ptr) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WeakSet object");
-  if (!can_be_held_weakly(args[0])) return js_false;
-  
-  ant_value_t value_obj = args[0];
+  if (!ws_ptr) return collection_receiver_error(js, "WeakSet.prototype.has");
+
+  ant_value_t value_obj = collection_arg(args, nargs, 0);
+  if (!can_be_held_weakly(value_obj)) return js_false;
   weakset_entry_t *entry;
   HASH_FIND(hh, *ws_ptr, &value_obj, sizeof(ant_value_t), entry);
   return js_bool(entry != NULL);
 }
 
 static ant_value_t weakset_delete(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "WeakSet.delete() requires 1 argument");
-  
   ant_value_t this_val = js->this_val;
   weakset_entry_t **ws_ptr = get_weakset_from_obj(this_val);
-  if (!ws_ptr) return js_false;
-  if (!can_be_held_weakly(args[0])) return js_false;
-  
-  ant_value_t value_obj = args[0];
+  if (!ws_ptr) return collection_receiver_error(js, "WeakSet.prototype.delete");
+
+  ant_value_t value_obj = collection_arg(args, nargs, 0);
+  if (!can_be_held_weakly(value_obj)) return js_false;
   weakset_entry_t *entry;
   HASH_FIND(hh, *ws_ptr, &value_obj, sizeof(ant_value_t), entry);
   
@@ -2406,12 +2392,14 @@ void init_collections_module(ant_t *js) {
   defmethod(js, js->builtins.map_iter_proto, "next", 4, Ant_Function_Create(map_iter_next));
   js_set_tostringtag(js, js->builtins.map_iter_proto, js_mkstr(js, "Map Iterator", 12));
   js_iter_register_advance(js, js->builtins.map_iter_proto, advance_map);
+  ant_iterator_protector_holder_mark(js->builtins.map_iter_proto);
   
   js->builtins.set_iter_proto = Ant_Object_CreateBare(js);
   js_set_proto_init(js->builtins.set_iter_proto, js->sym.iterator_proto);
   defmethod(js, js->builtins.set_iter_proto, "next", 4, Ant_Function_Create(set_iter_next));
   js_set_tostringtag(js, js->builtins.set_iter_proto, js_mkstr(js, "Set Iterator", 12));
   js_iter_register_advance(js, js->builtins.set_iter_proto, advance_set);
+  ant_iterator_protector_holder_mark(js->builtins.set_iter_proto);
   
   ant_value_t map_proto = Ant_Object_CreateBare(js);
   js_set_proto_init(map_proto, object_proto);

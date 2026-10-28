@@ -35,9 +35,11 @@ assert(
   'large regexp split delimiter was truncated'
 );
 
+let invalidSetOperand = null;
+try { new RegExp('[^&&b]', 'v'); } catch (e) { invalidSetOperand = e; }
 assert(
-  new RegExp('[^&&b]', 'v').test('b'),
-  'bare ^ v-set operand no longer matches the legacy translation'
+  invalidSetOperand instanceof SyntaxError,
+  'bare ^ v-set operand must be a SyntaxError'
 );
 
 console.log('large regexp pattern tests passed');

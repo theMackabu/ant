@@ -334,7 +334,7 @@ static ant_value_t esm_run_load_chain(ant_t *js, const esm_chain_t *chain, int l
   ant_value_t out = Ant_Object_CreateBare(js);
   GC_ROOT_PIN(js, out);
 
-  js_set(js, out, "source", js_mkstr(js, file.data, file.size));
+  js_set(js, out, "source", js_mkstr_utf8(js, file.data, file.size));
   if (esm_is_json(path)) js_set(js, out, "format", js_mkstr(js, "json", 4));
   else {
     ant_module_format_t fmt = esm_decide_module_format(js, path);

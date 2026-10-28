@@ -8,6 +8,7 @@
 #include <crprintf.h>
 
 #include "gc.h"
+#include "gc/trace.h"
 #include "crash.h"
 #include "debug.h"
 #include "messages.h"
@@ -23,6 +24,7 @@
 static void ant_debug_apply(const char *key, const char *val) {
   if (strcmp(key, "gc") == 0) {
     if (strcmp(val, "disable") == 0) gc_disabled = true;
+    if (strcmp(val, "trace") == 0) gc_trace_enabled = true;
   }
 
   else if (strcmp(key, "dump/parse") == 0) {
@@ -43,6 +45,25 @@ static void ant_debug_apply(const char *key, const char *val) {
     if (strcmp(val, "bytecode") == 0 || strcmp(val, "all") == 0) sv_debug_enable(SV_DEBUG_DUMP_BC);
     if (strcmp(val, "jit") == 0      || strcmp(val, "all") == 0) sv_debug_enable(SV_DEBUG_DUMP_JIT);
     if (strcmp(val, "op-warn") == 0  || strcmp(val, "all") == 0) sv_debug_enable(SV_DEBUG_JIT_WARN);
+  }
+
+  else if (strcmp(key, "dump/opt") == 0) {
+    if (strcmp(val, "graph") == 0 || strcmp(val, "all") == 0) sv_debug_enable(SV_DEBUG_DUMP_OPT_GRAPH);
+    if (strcmp(val, "stats") == 0 || strcmp(val, "all") == 0) sv_debug_enable(SV_DEBUG_DUMP_OPT_STATS);
+  }
+
+  else if (strcmp(key, "jit") == 0) {
+    if (strcmp(val, "perf-map") == 0) sv_debug_enable(SV_DEBUG_PERF_MAP);
+  }
+
+  else if (strcmp(key, "shape") == 0) {
+    if (strcmp(val, "verify") == 0) sv_debug_enable(SV_DEBUG_SHAPE_VERIFY);
+  }
+
+  else if (strcmp(key, "opt") == 0) {
+    if (strcmp(val, "off") == 0) sv_debug_enable(SV_DEBUG_OPT_OFF);
+    if (strcmp(val, "force") == 0) sv_debug_enable(SV_DEBUG_OPT_FORCE);
+    if (strcmp(val, "verify") == 0) sv_debug_enable(SV_DEBUG_OPT_VERIFY);
   }
 
   else if (strcmp(key, "sandbox") == 0) {

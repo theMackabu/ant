@@ -352,16 +352,11 @@ static bool js_to_mdb_val(ant_t *js, ant_value_t input, MDB_val *out) {
 }
 
 static ant_value_t mdb_val_to_js(ant_t *js, MDB_val *val, bool as_string) {
-  if (as_string) {
-    return js_mkstr(js, val->mv_data, val->mv_size);
-  }
+  if (as_string) return js_mkstr_utf8(js, val->mv_data, val->mv_size);
 
   ArrayBufferData *ab = create_array_buffer_data(js, val->mv_size);
   if (!ab) return js_mkerr(js, "Failed to allocate LMDB read buffer");
-
-  if (val->mv_size > 0 && val->mv_data) {
-    memcpy(ab->data, val->mv_data, val->mv_size);
-  }
+  if (val->mv_size > 0 && val->mv_data) memcpy(ab->data, val->mv_data, val->mv_size);
 
   return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, ab->length, js->builtins.typedarray_protos[TYPED_ARRAY_UINT8]);
 }

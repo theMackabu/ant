@@ -54,7 +54,7 @@ console.log('done');
 
 function run(source) {
   const result = spawnSync(process.execPath, ['-e', source], {
-    env: { ...process.env, ANT_DEBUG: 'dump/vm:op-warn' },
+    env: { ...process.env, ANT_DEBUG: 'dump/vm:op-warn opt:off' },
     encoding: 'utf8',
   });
   if (result.error) throw result.error;

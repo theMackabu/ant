@@ -335,6 +335,7 @@ typedef struct jit_compile {
   bool writes_params;
   bool *captured_params;
   bool *captured_locals;
+  bool *tdz_captured_locals;
   bool *builder_target_slots;
   bool has_captured_params;
   bool has_captures;
@@ -418,6 +419,7 @@ void jit_emit_awaited_call(jit_compile_t *c, int call_argc, bool method, uint8_t
 jit_stale_exit_t *jit_stale_exit_for(jit_compile_t *c, jit_stale_exit_t *exit);
 bool jit_site_runs_hot(jit_compile_t *c);
 void jit_note_stale_exit(jit_compile_t *c, const jit_stale_exit_t *exit, int pre_op_sp);
+void jit_emit_throw(jit_compile_t *c, MIR_reg_t value_reg);
 void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg);
 void jit_emit_finally_landings(jit_compile_t *c);
 

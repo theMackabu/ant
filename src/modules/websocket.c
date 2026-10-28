@@ -292,7 +292,7 @@ static void websocket_emit_message(ant_t *js, websocket_state_t *ws, const uint8
   GC_ROOT_PIN(js, event);
 
   ant_value_t data_val;
-  if (!binary) data_val = js_mkstr(js, data, len);
+  if (!binary) data_val = js_mkstr_utf8(js, data, len);
   else if (ws->binary_type_blob) data_val = blob_create(js, data, len, "");
   else data_val = create_arraybuffer_copy(js, data, len);
 

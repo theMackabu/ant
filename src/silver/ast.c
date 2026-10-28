@@ -3,12 +3,14 @@
 #include "silver/ast.h"
 #include "silver/lexer.h"
 #include "silver/directives.h"
+#include "silver/call.h"
 
 #include "escape.h"
 #include "debug.h"
 #include "errors.h"
 #include "value.h"
 #include "tokens.h"
+#include "modules/regex.h"
 #include "internal.h"
 
 #include <runtime.h>
@@ -1084,23 +1086,35 @@ static sv_ast_t *parse_primary(P) {
 
     ant_offset_t pattern_end = POS++;
     ant_offset_t flags_start = POS;
-    
-    while (POS < CLEN) {
-      char c = CODE[POS];
-      if (
-        c == 'd' || c == 'g' || c == 'i' || c == 'm' ||
-        c == 's' || c == 'u' || c == 'v' || c == 'y') POS++;
-      else break;
-    }
+    while (POS < CLEN && (is_ident_continue((unsigned char)CODE[POS]))) POS++;
     
     ant_offset_t flags_end = POS;
-    sv_ast_t *n = mk(N_REGEXP);
+    if (!regexp_flags_valid(&CODE[flags_start], flags_end - flags_start)) {
+      SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Invalid regular expression flags");
+      return mk(N_EMPTY);
+    }
     
+    const char *pattern_error = regexp_literal_syntax_error(
+      &CODE[pattern_start], pattern_end - pattern_start,
+      &CODE[flags_start], flags_end - flags_start
+    );
+    
+    if (pattern_error) {
+      SV_MKERR_TYPED(
+        JS, JS_ERR_SYNTAX, "Invalid regular expression: /%.*s/%.*s: %s",
+        (int)(pattern_end - pattern_start), &CODE[pattern_start],
+        (int)(flags_end - flags_start), &CODE[flags_start], pattern_error
+      );
+      return mk(N_EMPTY);
+    }
+    
+    sv_ast_t *n = mk(N_REGEXP);
     n->str = &CODE[pattern_start];
     n->len = (uint32_t)(pattern_end - pattern_start);
     n->aux = &CODE[flags_start];
     n->aux_len = (uint32_t)(flags_end - flags_start);
     n->src_end = (uint32_t)flags_end;
+    
     CONSUMED = 1;
     return n;
   }
@@ -1316,10 +1330,8 @@ static sv_ast_t *parse_object(P) {
     if (NEXT() == TOK_COLON) {
       CONSUME();
       prop->flags |= FN_COLON;
-      if (prop->left && prop->left->type == N_IDENT &&
-          prop->left->len == sizeof("__proto__") - 1 &&
-          memcmp(prop->left->str, "__proto__", sizeof("__proto__") - 1) == 0) {
-        if (proto_set) { SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Duplicate __proto__ fields are not allowed in object literals"); return n; }
+      if (!(prop->flags & FN_COMPUTED) && sv_ast_is_proto_key(prop->left)) {
+        if (proto_set) n->flags |= FN_PATTERN_ONLY;
         proto_set = true;
       }
       prop->right = parse_assign(p);
@@ -1331,6 +1343,7 @@ static sv_ast_t *parse_object(P) {
       prop->right = mk_ident(p, prop->left->str, prop->left->len);
       if (NEXT() == TOK_ASSIGN) {
         CONSUME();
+        n->flags |= FN_PATTERN_ONLY;
         sv_ast_t *def = mk(N_ASSIGN);
         def->op = TOK_ASSIGN;
         def->left = prop->right;
@@ -1452,7 +1465,14 @@ static sv_ast_t *parse_postfix(P) {
   return n;
 }
 
+static bool sv_parse_stack_overflow(P) {
+  if (!sv_check_c_stack_overflow(JS)) return false;
+  SV_MKERR_TYPED(JS, JS_ERR_RANGE, "Maximum call stack size exceeded");
+  return true;
+}
+
 static sv_ast_t *parse_unary(P) {
+  if (sv_parse_stack_overflow(p)) return mk(N_EMPTY);
   uint8_t la = NEXT();
   if (la == TOK_NOT || la == TOK_TILDA ||
       la == TOK_UPLUS || la == TOK_UMINUS ||
@@ -2597,6 +2617,7 @@ static sv_ast_t *parse_export_stmt(P) {
 }
 
 static sv_ast_t *parse_stmt(P) {
+  if (sv_parse_stack_overflow(p)) return mk(N_EMPTY);
   bool module_item = p->module_item;
   p->module_item = false;
   NEXT();

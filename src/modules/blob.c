@@ -235,18 +235,18 @@ static ant_value_t file_get_last_modified(ant_params_t) {
 }
 
 static ant_value_t js_blob_text(ant_params_t) {
-  (void)args; (void)nargs;
   blob_data_t *bd = blob_get_data(js->this_val);
   ant_value_t promise = js_mkpromise(js);
+  
   ant_value_t str = (!bd || bd->size == 0)
     ? js_mkstr(js, "", 0)
-    : js_mkstr(js, (const char *)bd->data, bd->size);
+    : js_mkstr_utf8_strip_bom(js, bd->data, bd->size);
+  
   js_resolve_promise(js, promise, str);
   return promise;
 }
 
 static ant_value_t js_blob_array_buffer(ant_params_t) {
-  (void)args; (void)nargs;
   blob_data_t *bd = blob_get_data(js->this_val);
   ant_value_t promise = js_mkpromise(js);
 

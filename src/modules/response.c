@@ -381,7 +381,7 @@ static void resolve_body_promise(
 ) {
   switch (mode) {
   case BODY_TEXT: {
-    ant_value_t str = (data && size > 0) ? js_mkstr(js, (const char *)data, size) : js_mkstr(js, "", 0);
+    ant_value_t str = (data && size > 0) ? js_mkstr_utf8_strip_bom(js, data, size) : js_mkstr(js, "", 0);
     js_resolve_promise(js, promise, str);
     break;
   }
@@ -391,7 +391,7 @@ static void resolve_body_promise(
     strip_utf8_bom(&json_data, &json_size);
     
     ant_value_t str = (json_data && json_size > 0)
-      ? js_mkstr(js, (const char *)json_data, json_size)
+      ? js_mkstr_utf8(js, json_data, json_size)
       : js_mkstr(js, "", 0);
       
     ant_value_t parsed = json_parse_value(js, str);

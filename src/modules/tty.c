@@ -41,6 +41,7 @@
 #include "modules/buffer.h"
 #include "modules/events.h"
 #include "modules/tty.h"
+#include "utf8.h"
 
 static uint16_t g_sandbox_tty_rows = 24;
 static uint16_t g_sandbox_tty_cols = 80;
@@ -529,8 +530,9 @@ static ant_value_t tty_stream_write(ant_params_t) {
   const char *data = NULL;
   const uint8_t *bytes = NULL;
 
+  char *utf8 = NULL;
   if (buffer_source_get_bytes(js, args[0], &bytes, &len)) data = (const char *)bytes;
-  else data = js_getstr(js, args[0], &len);
+  else if ((data = js_getstr(js, args[0], &len)) && (utf8 = wtf8_str_to_utf8_dup(data, &len))) data = utf8;
 
   if (!data) return js_false;
 
@@ -545,7 +547,10 @@ static ant_value_t tty_stream_write(ant_params_t) {
     ant_output_stream_t *out = ant_output_stream(fd == ANT_STDERR_FD ? stderr : stdout);
     ant_output_stream_begin(out);
     ok = ant_output_stream_append(out, data, len) && ant_output_stream_flush(out);
-  } else ok = tty_ctrl_write_fd(fd, data, len);
+  } 
+  
+  else ok = tty_ctrl_write_fd(fd, data, len);
+  free(utf8);
 
   if (is_callable(cb)) {
     ant_value_t err = ok ? js_mknull() : make_stream_error(js, "write", fd, 0);

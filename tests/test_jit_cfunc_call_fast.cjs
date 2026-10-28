@@ -14,7 +14,9 @@ const objectValueOf = Object.prototype.valueOf;
 function detachedNativeThis() {
   return objectValueOf();
 }
-assert(detachedNativeThis() === globalThis, "detached native call normalizes this");
+let detachedError = null;
+try { detachedNativeThis(); } catch (e) { detachedError = e; }
+assert(detachedError instanceof TypeError, "detached native call gets an undefined this");
 
 function pushValue(array, value) {
   return array.push(value);

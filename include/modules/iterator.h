@@ -41,14 +41,18 @@ void init_iterator_module(ant_t *js);
 void cleanup_iterator_module(ant_t *js);
 void js_iter_close(ant_t *js, iterator_t *it);
 void js_iter_register_advance(ant_t *js, ant_value_t proto, js_iter_advance_fn fn);
+js_iter_advance_fn js_iter_find_advance(ant_t *js, ant_value_t iterator, ant_value_t next_fn);
 
 bool js_iter_open(ant_t *js, ant_value_t iterable, iterator_t *it);
+bool js_iter_open_method(ant_t *js, ant_value_t iterable, ant_value_t iter_fn, iterator_t *it);
 bool js_iter_next(ant_t *js, iterator_t *it, ant_value_t *out);
 bool js_iter_is_array_values(ant_value_t iterator, ant_value_t next, ant_value_t source);
 
 ant_value_t js_iter_result(ant_t *js, bool has_value, ant_value_t value);
 ant_value_t Ant_Iterator_CreateResult(ant_t *js, ant_value_t value, bool done);
 ant_value_t make_array_iterator(ant_t *js, ant_value_t array, array_iter_kind_t kind);
+ant_value_t js_array_iterator_at(ant_t *js, ant_value_t array, uint32_t index);
+ant_value_t js_string_iterator_at(ant_t *js, ant_value_t str, uint32_t offset);
 ant_value_t Ant_Iterator_ToList(ant_t *js, ant_value_t iterable, const char *not_iterable);
 
 static inline ant_value_t js_iter_next_result(ant_t *js, js_iter_advance_fn advance) {

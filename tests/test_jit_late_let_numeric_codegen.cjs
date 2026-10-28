@@ -11,7 +11,7 @@ async function afterAwait(n) { await null; let s = 0; for (let k = 0; k < n; k++
   console.log('total ' + t);
 })();
 `;
-const env = { ...process.env, ANT_DEBUG: 'dump/vm:jit' };
+const env = { ...process.env, ANT_DEBUG: 'dump/vm:jit opt:off' };
 delete env.FORCE_COLOR;
 const dump = spawnSync(process.execPath, ['-e', source], {
   encoding: 'utf8', env, maxBuffer: 64 * 1024 * 1024, timeout: 30000,

@@ -25,10 +25,9 @@ struct sv_code_unit {
   uint64_t gc_epoch;
   size_t block_count, block_cap;
   size_t compile_root_count, compile_root_cap;
+  
   uint32_t pins;
-
   bool compiling;
-  bool immortal;
 };
 
 typedef struct {
@@ -45,6 +44,10 @@ typedef struct {
   ant_value_t *young_values;
   size_t young_len;
   size_t young_cap;
+
+  sv_func_t **code_roots;
+  size_t code_root_len;
+  size_t code_root_cap;
 
   sv_code_unit_t *active;
   sv_func_t *unowned_funcs;
@@ -65,14 +68,15 @@ void sv_code_unit_add_func(ant_t *js, sv_func_t *func);
 
 bool sv_code_unit_root(ant_t *js, ant_value_t value);
 bool sv_code_unit_retain_template(ant_t *js, sv_func_t *func, ant_value_t value);
+bool sv_code_retain_value(ant_t *js, ant_value_t value);
+bool sv_code_depend(ant_t *js, sv_func_t *owner, sv_func_t *target);
 bool sv_code_units_watch_feedback(sv_func_t *func, sv_func_t *callee);
 
-void sv_code_unit_make_immortal(sv_func_t *func);
 void sv_code_unit_pin(sv_code_unit_t *unit);
 void sv_code_unit_unpin(sv_code_unit_t *unit);
 
 static inline bool sv_code_unit_dying(const sv_code_unit_t *unit, uint64_t epoch) {
-  return unit && !unit->compiling && !unit->pins && !unit->immortal && unit->gc_epoch != epoch;
+  return unit && !unit->compiling && !unit->pins && unit->gc_epoch != epoch;
 }
 
 void sv_code_units_sweep(ant_t *js, uint64_t epoch);

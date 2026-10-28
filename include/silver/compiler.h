@@ -196,6 +196,10 @@ typedef struct sv_compiler {
   int *computed_key_locals;
   int param_count;
 
+  const sv_ast_t *value_params_node;
+  uint64_t value_params;
+  bool value_params_known;
+
   bool is_arrow;
   bool is_async;
   bool is_async_generator;
@@ -235,6 +239,7 @@ typedef struct sv_compiler {
   int strict_args_local;
   int new_target_local;
   int super_local;
+  bool super_referenced;
   int using_stack_local;
   int using_cleanup_count;
   int using_cleanup_cap;

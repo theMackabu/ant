@@ -179,9 +179,12 @@ static ant_flat_string_t *string_large_space_alloc(ant_t *js, size_t flat_size) 
   alloc->quarantine_epoch = 0;
   alloc->marked = 0;
   alloc->len = 0;
+  
   str_flat_init_meta(large_string_flat_ptr(alloc), STR_ASCII_UNKNOWN);
   alloc->bytes[0] = '\0';
+  
   large_string_push_front(&space->live, alloc);
+  space->cycle_taken += alloc->alloc_size;
 
   return large_string_flat_ptr(alloc);
 }

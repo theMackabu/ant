@@ -3,7 +3,7 @@ const { spawnSync } = require('node:child_process');
 const { join } = require('node:path');
 const child = spawnSync(process.execPath, [join(__dirname, 'test_jit_fractional_bitwise.cjs')], {
   encoding: 'utf8',
-  env: { ...process.env, ANT_DEBUG: 'dump/vm:jit' },
+  env: { ...process.env, ANT_DEBUG: 'dump/vm:jit opt:off' },
   maxBuffer: 32 * 1024 * 1024,
   timeout: 30000,
 });

@@ -10,8 +10,10 @@
 #include "protectors.h"
 
 #include "modules/regex.h"
+#include "modules/buffer.h"
 #include "modules/symbol.h"
 #include "silver/engine.h"
+#include "silver/feedback.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -1355,12 +1357,47 @@ static inline bool sv_add_proto_matches(const ant_object_t *receiver, uintptr_t 
   return proto && proto->ic_identity == (uint32_t)(key >> 1);
 }
 
+static inline bool sv_add_chain_admits(const ant_object_t *receiver, const char *interned) {
+  ant_value_t cur = receiver->proto;
+  
+  sv_proto_guard_t guard;
+  sv_proto_guard_init(&guard);
+  
+  while (is_object_type(cur)) {
+    ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
+    if (!ptr || ptr->flags.is_exotic || sv_array_proto_owns_key(ptr, interned)) return false;
+    
+    int32_t slot = ptr->shape ? ant_shape_lookup_interned(ptr->shape, interned) : -1;
+    if (slot >= 0) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
+      return prop && !prop->has_getter && !prop->has_setter && (prop->attrs & ANT_PROP_ATTR_WRITABLE) != 0;
+    }
+    
+    ant_object_guard_absence(ptr);
+    ant_value_t next = ptr->proto;
+    
+    if (!is_object_type(next) && vtype(next) != kTypeNull && vtype(cur) != kTypeObject) return false;
+    cur = next;
+    if (sv_proto_guard_hit_cycle(&guard, cur)) return false;
+  }
+  
+  return true;
+}
+
 static __attribute__((noinline, cold)) void sv_pf_poly_keep(
   ant_t *js, sv_ic_entry_t *ic, ant_shape_t *shape, ant_shape_t *to_shape,
   uint32_t index, uint32_t epoch, uintptr_t proto, bool add
 ) {
   if (ic->shape_ref_mask & SV_IC_POLY_MEGA) return;
   sv_pf_poly_t *poly = ic->put_poly;
+  
+  for (unsigned i = 0; poly && i < SV_GF_POLY_WAYS; i++) {
+    const sv_pf_poly_entry_t *e = &poly->entries[i];
+    if (
+      e->shape == shape && e->add == add && e->epoch == epoch && 
+      e->index == index && (!add || (e->to_shape == to_shape && e->proto == proto))
+    ) return;
+  }
   
   if (poly && poly->kept_epoch != js->ic.epoch) {
     poly->kept = 0;
@@ -1519,22 +1556,55 @@ static inline bool sv_put_field_try_cached(
   return false;
 }
 
+static inline void sv_put_field_miss_cache(
+  ant_t *js, sv_ic_entry_t *ic, ant_object_t *ptr, const sv_atom_t *a,
+  ant_shape_t *old_shape, bool keep_existing, bool keep_add
+) {
+  int32_t slot = ant_shape_lookup_interned(ptr->shape, a->str);
+  if (slot < 0) return;
+
+  uint32_t prop_idx = (uint32_t)slot;
+  if (prop_idx >= ptr->prop_count) return;
+
+  const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, prop_idx);
+  if (!prop || prop->type != ANT_SHAPE_KEY_STRING || prop->key.interned != a->str) return;
+  if (prop->has_getter || prop->has_setter) return;
+  if ((prop->attrs & ANT_PROP_ATTR_WRITABLE) == 0) return;
+
+  bool adding = old_shape && old_shape != ptr->shape;
+  if (keep_existing && !adding && ic->cached_shape != ptr->shape)
+    sv_pf_poly_keep(js, ic, ic->cached_shape, NULL, ic->cached_index, ic->epoch, 0, false);
+
+  sv_ic_set_cached_shape(js, ic, ptr->shape);
+  ic->cached_index = prop_idx;
+  ic->epoch = js->ic.epoch;
+  if (!adding) return;
+
+  uintptr_t proto = sv_add_proto_key(js, ptr);
+  if (keep_add && (ic->guard.add.from_shape != old_shape || ic->add_proto != proto))
+    sv_pf_poly_keep(js, ic, ic->guard.add.from_shape, ic->guard.add.to_shape, ic->guard.add.slot, ic->guard.add.epoch, ic->add_proto, true);
+
+  if (proto == 0 || sv_is_proto_atom(a)) return;
+  if (ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible) return;
+  if (ptr->type_tag == kTypeArray || prop->attrs != ANT_PROP_ATTR_DEFAULT) return;
+  if (!sv_add_chain_admits(ptr, a->str)) return;
+
+  sv_ic_set_add_transition(js, ic, old_shape, ptr->shape, prop_idx, js->ic.epoch, proto);
+}
+
 static inline ant_value_t sv_put_field_miss(
-  ant_t *js, ant_value_t obj, ant_value_t val,
-  const sv_atom_t *a, sv_ic_entry_t *ic
+  ant_t *js, ant_value_t obj, ant_value_t val, const sv_atom_t *a, sv_ic_entry_t *ic
 ) {
   ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
+  bool live = ic && ptr;
 
-  bool keep_existing = ic && ptr && ic->cached_shape && ic->epoch == js->ic.epoch &&
-    ic->cached_shape != ptr->shape;
-  bool keep_add = ic && ptr && ic->guard.add.from_shape && ic->guard.add.to_shape &&
-    ic->guard.add.epoch == js->ic.epoch && ic->guard.add.from_shape != ptr->shape;
+  bool keep_existing = live && ic->cached_shape && ic->epoch == js->ic.epoch && ic->cached_shape != ptr->shape;
+  bool keep_add = live && ic->guard.add.from_shape && ic->guard.add.to_shape && ic->guard.add.epoch == js->ic.epoch;
 
   uint32_t fast_idx = 0;
   if (sv_try_put_field_fast(js, obj, a, val, &fast_idx)) {
     if (ic && ptr && ptr->shape) {
-      if (keep_existing)
-        sv_pf_poly_keep(js, ic, ic->cached_shape, NULL, ic->cached_index, ic->epoch, 0, false);
+      if (keep_existing) sv_pf_poly_keep(js, ic, ic->cached_shape, NULL, ic->cached_index, ic->epoch, 0, false);
       sv_ic_set_cached_shape(js, ic, ptr->shape);
       ic->cached_index = fast_idx;
       ic->epoch = js->ic.epoch;
@@ -1554,45 +1624,8 @@ static inline ant_value_t sv_put_field_miss(
     return out;
   }
 
-  if (ic && ptr && !ptr->flags.is_exotic && ptr->shape) {
-    int32_t slot = ant_shape_lookup_interned(ptr->shape, a->str);
-    if (slot >= 0) {
-      uint32_t prop_idx = (uint32_t)slot;
-      const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, prop_idx);
-      if (prop &&
-          prop->type == ANT_SHAPE_KEY_STRING &&
-          prop->key.interned == a->str &&
-          !prop->has_getter &&
-          !prop->has_setter &&
-          (prop->attrs & ANT_PROP_ATTR_WRITABLE) != 0 &&
-          prop_idx < ptr->prop_count) {
-        bool adding = old_shape && old_shape != ptr->shape;
-        if (keep_existing && !adding && ic->cached_shape != ptr->shape)
-          sv_pf_poly_keep(js, ic, ic->cached_shape, NULL, ic->cached_index, ic->epoch, 0, false);
-        sv_ic_set_cached_shape(js, ic, ptr->shape);
-        ic->cached_index = prop_idx;
-        ic->epoch = js->ic.epoch;
-        uintptr_t proto = adding ? sv_add_proto_key(js, ptr) : 0;
-        if (keep_add && adding &&
-            (ic->guard.add.from_shape != old_shape || ic->add_proto != proto))
-          sv_pf_poly_keep(js, ic, ic->guard.add.from_shape, ic->guard.add.to_shape,
-                          ic->guard.add.slot, ic->guard.add.epoch, ic->add_proto, true);
-        if (old_shape &&
-            old_shape != ptr->shape &&
-            !sv_is_proto_atom(a) &&
-            !ptr->flags.frozen &&
-            !ptr->flags.sealed &&
-            ptr->flags.extensible &&
-            ptr->type_tag != kTypeArray &&
-            prop->attrs == ANT_PROP_ATTR_DEFAULT &&
-            proto != 0) {
-          sv_ic_set_add_transition(
-            js, ic, old_shape, ptr->shape, prop_idx, js->ic.epoch, proto
-          );
-        }
-      }
-    }
-  }
+  if (ic && ptr && !ptr->flags.is_exotic && ptr->shape)
+    sv_put_field_miss_cache(js, ic, ptr, a, old_shape, keep_existing, keep_add);
 
   if (old_shape) ant_shape_release(old_shape);
 
@@ -1703,9 +1736,9 @@ static inline ant_value_t sv_op_put_elem(sv_vm_t *vm, ant_t *js) {
   ant_value_t key = vm->stack[vm->sp - 2];
   ant_value_t obj = vm->stack[vm->sp - 3];
   
-  uint32_t idx;
-  if (sv_number_key_index(key, &idx)) {
-    ant_value_t res = js_setprop_index(js, obj, idx, val);
+  uint32_t index;
+  if (sv_number_key_index(key, &index)) {
+    ant_value_t res = js_setprop_index(js, obj, index, val);
     vm->sp -= 3;
     return res;
   }
@@ -1798,8 +1831,12 @@ static inline void sv_op_define_slot(
 
 static ant_value_t sv_get_length_numeric_exotic(ant_t *js, ant_value_t obj, ant_object_t *ptr) {
   ant_value_t out = js_mkundef(), getter = js_mkundef();
-  if (sv_gf_mega_find(js, ptr, js->intern.length, &out, &getter))
-    return vtype(getter) == kTypeUndefined ? out : js_call_getter(js, obj, getter);
+  if (sv_gf_mega_find(js, ptr, js->intern.length, &out, &getter)) {
+    double length = 0;
+    if (vtype(getter) == kTypeUndefined) return out;
+    if (buffer_fast_length_getter(getter, obj, &length)) return tov(length);
+    return js_call_getter(js, obj, getter);
+  }
   
   sv_probe_hit_t probe;
   if (!sv_ic_probe_get_chain(obj, js->intern.length, SV_PROBE_ADMIT_RECEIVER | SV_PROBE_ACCESSORS, &probe))
@@ -1842,6 +1879,7 @@ static inline ant_value_t sv_get_length_at(ant_t *js, ant_value_t obj, sv_func_t
 }
 
 static inline ant_value_t sv_op_get_length(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip) {
+  sv_tfb_record_length(func, ip, vm->stack[vm->sp - 1]);
   ant_value_t res = sv_get_length_at(js, vm->stack[vm->sp - 1], func, ip);
   
   if (is_err(res)) return res;

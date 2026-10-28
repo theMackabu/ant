@@ -29,6 +29,16 @@ This guide keeps validation proportional to the change while still protecting ru
 - Rebuild with `maid build`.
 - Run focused regression tests first.
 - Run `./build/ant examples/spec/run.js --all` before landing behavior changes.
+- JIT changes: run `tests/test_jit_*` and `tests/test_opt_*` in the default
+  mode and with `ANT_DEBUG=opt:off`. The `ANT_DEBUG` key `opt` takes `off`
+  (template JIT only), `force` (compile functions the optimizing tier would
+  leave to the template JIT) and `verify` (IR and register allocation
+  verifiers); `dump/opt` takes `graph` (bytecode, graphs, allocation) and
+  `stats` (generic steps and slow paths by site, compile totals). The values
+  reach child processes through the environment. Tests that assert template
+  JIT output (`dump/vm:jit`, `jit: compiled` lines) pin `opt:off`. The
+  opt-tier assertions in `tests/test_opt_*` run on arm64 and x86-64 macOS and
+  Linux.
 
 ### Build or toolchain changes
 

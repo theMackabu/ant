@@ -20,7 +20,7 @@ let t = 0;
 for (let r = 0; r < 3; r++) t += parse(200000);
 console.log('total ' + t);
 `;
-const env = { ...process.env, ANT_DEBUG: 'dump/vm:op-warn' };
+const env = { ...process.env, ANT_DEBUG: 'dump/vm:op-warn opt:off' };
 delete env.FORCE_COLOR;
 const run = spawnSync(process.execPath, ['-e', source], { encoding: 'utf8', env, timeout: 30000 });
 assert.strictEqual(run.status, 0, String(run.error || run.stderr));

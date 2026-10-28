@@ -57,7 +57,7 @@ function read() { return G; }
 let s = 0;
 for (let i = 0; i < 20000; i++) s += read();
 console.log('total ' + s);
-`], { encoding: 'utf8', env: { ...process.env, ANT_DEBUG: 'dump/vm:jit' }, maxBuffer: 64 * 1024 * 1024, timeout: 30000 });
+`], { encoding: 'utf8', env: { ...process.env, ANT_DEBUG: 'dump/vm:jit opt:off' }, maxBuffer: 64 * 1024 * 1024, timeout: 30000 });
 assert.strictEqual(child.status, 0, String(child.error || child.stderr));
 const fn = child.stderr.match(/jit_read_[^\n]*:\s*func[\s\S]*?endfunc/);
 assert.ok(fn, 'missing compilation for read');

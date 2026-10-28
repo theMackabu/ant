@@ -6,6 +6,7 @@
 
 ant_value_t net_library(ant_t *js);
 void cleanup_net_module(ant_t *js);
+int net_socket_fileno(ant_value_t value);
 
 typedef struct net_listen_args_s {
   const char *host;

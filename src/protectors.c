@@ -11,6 +11,10 @@ typedef struct {
   ant_value_t array_ctor;
   ant_value_t array_proto;
   ant_value_t array_iterator_proto;
+  ant_value_t string_proto;
+  ant_value_t string_iterator_proto;
+  ant_value_t map_iter_proto;
+  ant_value_t set_iter_proto;
   uint32_t *invalid;
 } protector_view_t;
 
@@ -22,6 +26,10 @@ typedef struct {
   .array_ctor = (src)->sym.array_ctor,                                        \
   .array_proto = (src)->sym.array_proto,                                      \
   .array_iterator_proto = (src)->sym.array_iterator_proto,                    \
+  .string_proto = (src)->sym.string_proto,                                    \
+  .string_iterator_proto = (src)->sym.string_iterator_proto,                  \
+  .map_iter_proto = (src)->builtins.map_iter_proto,                           \
+  .set_iter_proto = (src)->builtins.set_iter_proto,                           \
   .invalid = &(src)->protectors_invalid,                                      \
 })
 
@@ -42,6 +50,14 @@ static void protectors_apply_key(ant_t *js, const protector_view_t *v, ant_objec
 
   if (key == js->intern.next) {
     if (protector_holder_is(holder, v->array_iterator_proto)) *v->invalid |= ANT_PROTECTOR_ARRAY_ITERATION;
+    if (protector_holder_is(holder, v->string_iterator_proto)) *v->invalid |= ANT_PROTECTOR_STRING_ITERATION;
+    if (protector_holder_is(holder, v->map_iter_proto) || protector_holder_is(holder, v->set_iter_proto))
+      *v->invalid |= ANT_PROTECTOR_COLLECTION_ITERATION;
+    return;
+  }
+
+  if (key == js->intern.ret) {
+    if (holder->protector_holder & ANT_PROTECTOR_HOLDER_ITERATOR) *v->invalid |= ANT_PROTECTOR_ITERATOR_RETURN;
     return;
   }
 
@@ -69,6 +85,16 @@ static void protectors_apply_symbol(ant_t *js, const protector_view_t *v, ant_ob
   if (sym_off == (ant_offset_t)vdata(js->sym.iterator_sym)) {
     if (holder->type_tag == kTypeArray || protector_holder_is(holder, v->array_proto))
       *v->invalid |= ANT_PROTECTOR_ARRAY_ITERATION;
+    if (protector_holder_is(holder, v->string_proto)) *v->invalid |= ANT_PROTECTOR_STRING_ITERATION;
+    return;
+  }
+
+  if (sym_off == (ant_offset_t)vdata(js->sym.isConcatSpreadable_sym)) {
+    if (
+      holder->type_tag == kTypeArray || 
+      protector_holder_is(holder, v->array_proto) || 
+      protector_holder_is(holder, v->object_proto)
+    ) *v->invalid |= ANT_PROTECTOR_CONCAT_SPREADABLE;
     return;
   }
 
@@ -107,4 +133,16 @@ void ant_symbol_protectors_invalidate(ant_t *js, ant_object_t *holder, ant_offse
     view = PROTECTOR_VIEW(realm);
     protectors_apply_symbol(js, &view, holder, sym_off);
   }
+}
+
+static void regexp_protector_apply(ant_regexp_realm_t *regexp, ant_object_t *holder, bool species) {
+  if (holder == regexp->proto_ptr || (species && holder == regexp->ctor_ptr)) regexp->protector_invalid = true;
+}
+
+void ant_regexp_protectors_invalidate(ant_t *js, ant_object_t *holder, bool species) {
+  regexp_protector_apply(&js->regexp, holder, species);
+  if (!ant_realm_multiple(js) || js->realm->initializing) return;
+
+  for (ant_realm_t *realm = js->realms; realm; realm = realm->next)
+    if (realm != js->realm) regexp_protector_apply(&realm->regexp, holder, species);
 }

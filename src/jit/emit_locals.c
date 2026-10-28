@@ -132,7 +132,7 @@ void jit_emit_locals(jit_compile_t *c) {
       uint8_t fb = sv_func_type_feedback(c->func)
                        ? sv_func_type_feedback(c->func)[c->bc_off]
                        : 0;
-      bool fb_num_only = fb && !(fb & ~SV_TFB_NUM);
+      bool fb_num_only = fb && !(fb & ~(SV_TFB_NUM | SV_TFB_DOUBLE));
       bool loc_is_num = c->known_type_locals && c->local_d_regs &&
                         c->known_type_locals[idx] == SV_TI_NUM &&
                         (!c->captured_locals || !c->captured_locals[idx]);
@@ -759,12 +759,20 @@ void jit_emit_locals(jit_compile_t *c) {
         c->known_type_locals[idx] = immediate_num_init ? SV_TI_NUM : SV_TI_UNKNOWN;
       }
       if (c->has_captures && c->captured_locals && c->captured_locals[idx]) {
-        mir_load_imm(c->ctx, c->jit_func, c->local_regs[idx], SV_TDZ);
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV,
-                                     MIR_new_mem_op(c->ctx, MIR_T_I64,
-                                                    (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), c->r_lbuf, 0, 1),
-                                     MIR_new_reg_op(c->ctx, c->local_regs[idx])));
+        if (!c->tdz_captured_locals) c->tdz_captured_locals = scan_tdz_captured_locals(c->func, c->n_locals);
+        if (!c->tdz_captured_locals) {
+          c->ok = false;
+          break;
+        }
+        if (c->tdz_captured_locals[idx]) {
+          if (c->known_func_locals) c->known_func_locals[idx] = NULL;
+          mir_load_imm(c->ctx, c->jit_func, c->local_regs[idx], SV_TDZ);
+          MIR_append_insn(c->ctx, c->jit_func,
+                          MIR_new_insn(c->ctx, MIR_MOV,
+                                       MIR_new_mem_op(c->ctx, MIR_T_I64,
+                                                      (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), c->r_lbuf, 0, 1),
+                                       MIR_new_reg_op(c->ctx, c->local_regs[idx])));
+        }
       }
       break;
     }

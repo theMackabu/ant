@@ -6,6 +6,7 @@
 #include "silver/ast.h"
 #include "silver/eval_env.h"
 #include "tokens.h"
+#include "modules/math.h"
 
 #include <ctype.h>
 #include <math.h>
@@ -257,7 +258,7 @@ static bool inspector_safe_binary_numeric(
     case TOK_MUL: *out = tov(l * r); return true;
     case TOK_DIV: *out = tov(l / r); return true;
     case TOK_REM: *out = tov(fmod(l, r)); return true;
-    case TOK_EXP: *out = tov(pow(l, r)); return true;
+    case TOK_EXP: *out = tov(ant_math_js_pow(l, r)); return true;
     case TOK_LT: *out = js_bool(l < r); return true;
     case TOK_LE: *out = js_bool(l <= r); return true;
     case TOK_GT: *out = js_bool(l > r); return true;

@@ -36,6 +36,37 @@ void gc_verify_poison_object(ant_object_t *obj) {
   obj->prop_count = 0x7fffffff;
 }
 
+static constexpr size_t GC_VERIFY_CLOSURE_QUARANTINE_MAX = 32768;
+static _Thread_local size_t gc_verify_quarantined_closures;
+
+void gc_verify_quarantine_reset(void) {
+  gc_verify_quarantined_closures = 0;
+}
+
+bool gc_verify_quarantine_closure(sv_closure_t *c) {
+  ant_value_t bad = mkval(kTypeObject, UINT64_C(0x7FFFFFFFF000));
+  if (c->module_ctx == bad) return false;
+
+  c->call_flags = 0;
+  c->bound_argc = 0;
+  c->func = NULL;
+  c->upvalues = NULL;
+  memset(c->inline_upvals, 0xdb, sizeof(c->inline_upvals));
+
+  c->bound_this = bad;
+  c->super_val = bad;
+  c->func_obj = bad;
+  c->module_ctx = bad;
+
+  c->u.bound.argv = NULL;
+  c->u.bound.args_arr = bad;
+
+  if (gc_verify_quarantined_closures >= GC_VERIFY_CLOSURE_QUARANTINE_MAX) return false;
+  gc_verify_quarantined_closures++;
+  
+  return true;
+}
+
 static bool gc_verify_ref_is_young(ant_t *js, ant_value_t v) {
   if (!gc_value_is_heap_ref(v)) return false;
   if (vtype(v) != kTypeFunction) return gc_value_ref_is_young(v);

@@ -53,7 +53,7 @@ void jit_emit_arithmetic(jit_compile_t *c) {
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
       bool force_num_only = (c->op == OP_ADD_NUM);
       bool fb_num_only = force_num_only || jit_speculate_unseen_numeric(c, fb) ||
-                         (fb && !(fb & ~SV_TFB_NUM));
+                         (fb && !(fb & ~(SV_TFB_NUM | SV_TFB_DOUBLE)));
       bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
       bool fb_str_only = !force_num_only && fb && !(fb & ~SV_TFB_STR) && jit_site_runs_hot(c);
 
@@ -210,7 +210,7 @@ void jit_emit_arithmetic(jit_compile_t *c) {
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
       bool force_num_only = (c->op == OP_SUB_NUM);
       bool fb_num_only = force_num_only || jit_speculate_unseen_numeric(c, fb) ||
-                         (fb && !(fb & ~SV_TFB_NUM));
+                         (fb && !(fb & ~(SV_TFB_NUM | SV_TFB_DOUBLE)));
       bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
       bool l_is_num = vstack_prepare_num(
@@ -347,7 +347,7 @@ void jit_emit_arithmetic(jit_compile_t *c) {
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
       bool force_num_only = (c->op == OP_MUL_NUM);
       bool fb_num_only = force_num_only || jit_speculate_unseen_numeric(c, fb) ||
-                         (fb && !(fb & ~SV_TFB_NUM));
+                         (fb && !(fb & ~(SV_TFB_NUM | SV_TFB_DOUBLE)));
       bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
       bool l_is_num = vstack_prepare_num(
@@ -483,7 +483,7 @@ void jit_emit_arithmetic(jit_compile_t *c) {
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
       bool force_num_only = (c->op == OP_DIV_NUM);
       bool fb_num_only = force_num_only || jit_speculate_unseen_numeric(c, fb) ||
-                         (fb && !(fb & ~SV_TFB_NUM));
+                         (fb && !(fb & ~(SV_TFB_NUM | SV_TFB_DOUBLE)));
       bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
       bool l_is_num = vstack_prepare_num(
@@ -617,7 +617,7 @@ void jit_emit_arithmetic(jit_compile_t *c) {
     case OP_MOD: {
       if (jit_emit_integer_arithmetic(c->ctx, c->jit_func, &c->vs, c->op)) break;
       uint8_t fb = sv_func_type_feedback(c->func) ? sv_func_type_feedback(c->func)[c->bc_off] : 0;
-      bool fb_num_only = fb && !(fb & ~SV_TFB_NUM);
+      bool fb_num_only = fb && !(fb & ~(SV_TFB_NUM | SV_TFB_DOUBLE));
       bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
       bool l_is_num = vstack_prepare_num(

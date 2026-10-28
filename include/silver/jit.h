@@ -26,11 +26,14 @@ void sv_jit_destroy(ant_t *js);
 void sv_jit_drop_all_code(ant_t *js);
 void sv_jit_drop_func_code(sv_func_t *func);
 
-static inline void sv_func_note_multi_closure(sv_func_t *func) {
-  if (func->multi_closure) return;
-  func->multi_closure = true;
-  if (func->jit_tdz_specialized) sv_jit_drop_func_code(func);
-}
+void opt_tier_func_free(ant_t *js, sv_func_t *func);
+void opt_tier_func_trace(ant_t *js, sv_func_t *func);
+void opt_tier_gc_doom(ant_t *js);
+void opt_tier_gc_weak(ant_t *js);
+
+void sv_jit_gc_mark_roots(ant_t *js);
+void sv_jit_forget_dying(ant_t *js, uint64_t epoch);
+void sv_jit_release_modules(ant_t *js, sv_func_t *func);
 
 sv_jit_func_t sv_jit_tier_up(
   ant_t *js, sv_func_t *func, 
@@ -58,12 +61,34 @@ ant_value_t sv_jit_await_resume(
   sv_func_t *func, int resume_off
 );
 
+ant_value_t sv_jit_try_catch_entry(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
+  sv_func_t *func, int catch_off
+);
+
+static inline void sv_func_note_multi_closure(sv_func_t *func) {
+  if (func->multi_closure) return;
+  func->multi_closure = true;
+  if (func->jit_tdz_specialized) sv_jit_drop_func_code(func);
+}
+
+static inline void sv_func_note_bound_closure(sv_func_t *func) {
+  if (func->has_bound_closure) return;
+  func->has_bound_closure = true;
+  if (func->jit_self_guarded) sv_jit_drop_func_code(func);
+}
+
 static inline bool sv_jit_promote_pending(const sv_func_t *func) {
   return func->jit_code_cold && func->jit_code == NULL;
 }
 
 static inline void sv_jit_prime_osr(sv_func_t *func) {
   func->back_edge_count = func->jit_osr_threshold > 0 ? func->jit_osr_threshold - 1 : 0;
+}
+
+static inline __attribute__((noinline)) void sv_jit_scrub_stack(void) {
+  volatile uint64_t words[512];
+  for (size_t i = 0; i < sizeof(words) / sizeof(*words); i++) words[i] = 0;
 }
 
 static inline uint32_t sv_jit_osr_threshold_for(int code_len) {

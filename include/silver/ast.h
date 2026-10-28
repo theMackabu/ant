@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 #include "types.h"
 
 #ifdef N_NULL
@@ -114,6 +115,8 @@ enum {
   FN_SCOPE_FACTS      = 1 << 22,
   FN_DIRECT_EVAL      = 1 << 23,
   FN_OWN_YIELD        = 1 << 24,
+  FN_USES_SUPER       = 1 << 25,
+  FN_PATTERN_ONLY     = 1 << 26,
 };
 
 enum {
@@ -198,5 +201,16 @@ sv_ast_t *sv_ast_new(ant_t *js, sv_node_type_t type);
 sv_ast_t *sv_parse_function_parts(ant_t *js, const sv_function_parts_t *parts);
 sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, sv_parse_goal_t goal, bool strict);
 sv_ast_t *sv_parse_function_body(ant_t *js, const char *code, ant_offset_t clen, bool strict);
+
+static inline bool sv_ast_is_proto_key(const sv_ast_t *k) {
+  static const char name[] = "__proto__";
+  const uint32_t len = sizeof(name) - 1;
+  
+  if (!k || !k->str || (k->type != N_STRING && k->type != N_IDENT)) return false;
+  if (k->len == len) return memcmp(k->str, name, len) == 0;
+  
+  return k->type == N_IDENT && k->len == len + 2 && (k->str[0] == '\'' || k->str[0] == '"') &&
+    k->str[len + 1] == k->str[0] && memcmp(k->str + 1, name, len) == 0;
+}
 
 #endif

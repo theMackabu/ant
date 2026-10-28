@@ -5,13 +5,16 @@
 #include <string.h>
 #include <ctype.h>
 #include <ada_c.h>
+#include <uv.h>
 
 #include "ant.h"
+#include "utf8.h"
 #include "cfunc.h"
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
 #include "descriptors.h"
+#include "gc/roots.h"
 
 #include "modules/blob.h"
 #include "modules/crypto.h"
@@ -19,6 +22,7 @@
 #include "modules/url.h"
 #include "modules/symbol.h"
 #include "modules/iterator.h"
+#include "modules/uri.h"
 #include "url/url_internal.h"
 
 static constexpr uint32_t URL_NATIVE_TAG = Ant_NativeTag("URLS");
@@ -35,34 +39,6 @@ url_state_t *url_get_state(ant_value_t obj) {
 
 bool usp_is_urlsearchparams(ant_t *js, ant_value_t obj) {
   return js_check_brand(obj, BRAND_URLSEARCHPARAMS);
-}
-
-static ant_value_t usp_array_len(ant_t *js, ant_value_t arr, ant_offset_t *out) {
-  *out = 0;
-  if (!is_proxy(arr)) {
-    *out = js_arr_len(js, arr);
-    return js_mkundef();
-  }
-
-  ant_value_t length = js_get(js, arr, "length");
-  if (is_err(length)) return length;
-  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
-  
-  double len_num = js_to_number(js, length);
-  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
-  
-  if (isnan(len_num) || !isfinite(len_num))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "URLSearchParams sequence length must be finite");
-  
-  *out = (ant_offset_t)js_to_uint32(len_num);
-  return js_mkundef();
-}
-
-static ant_value_t usp_array_get(ant_t *js, ant_value_t arr, ant_offset_t idx) {
-  ant_value_t value = js_arr_get(js, arr, idx);
-  if (is_err(value)) return value;
-  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
-  return value;
 }
 
 void url_state_clear(url_state_t *s) {
@@ -124,6 +100,18 @@ char *form_urlencode_n(const char *str, size_t len) {
   return out;
 }
 
+static char *url_decoded_utf8(char *out, size_t len, size_t *out_len) {
+  size_t valid = utf8_valid_prefix(out, len, NULL);
+  if (valid < len) {
+    char *clean = utf8_replace_invalid(out, len, valid, &len);
+    free(out);
+    if (!clean) return strdup("");
+    out = clean;
+  }
+  if (out_len) *out_len = len;
+  return out;
+}
+
 char *form_urldecode_len(const char *str, size_t *out_len) {
   if (out_len) *out_len = 0;
   if (!str) return strdup("");
@@ -148,8 +136,7 @@ char *form_urldecode_len(const char *str, size_t *out_len) {
   }
   
   out[j] = '\0';
-  if (out_len) *out_len = j;
-  return out;
+  return url_decoded_utf8(out, j, out_len);
 }
 
 char *url_decode_component_len(const char *str, size_t *out_len) {
@@ -175,8 +162,7 @@ char *url_decode_component_len(const char *str, size_t *out_len) {
   }
 
   out[j] = '\0';
-  if (out_len) *out_len = j;
-  return out;
+  return url_decoded_utf8(out, j, out_len);
 }
 
 char *form_urldecode(const char *str) {
@@ -231,9 +217,16 @@ static int parse_url_to_state_n(
   if (!url_str || !s) return -1;
   memset(s, 0, sizeof(*s));
 
+  char *url_utf8 = wtf8_to_utf8_dup(url_str, &url_len);
+  char *base_utf8 = base_str ? wtf8_to_utf8_dup(base_str, &base_len) : NULL;
+  if (url_utf8) url_str = url_utf8;
+  if (base_utf8) base_str = base_utf8;
+
   ada_url url = base_str
     ? ada_parse_with_base(url_str, url_len, base_str, base_len)
     : ada_parse(url_str, url_len);
+  free(url_utf8);
+  free(base_utf8);
   if (!url || !ada_is_valid(url)) {
     if (url) ada_free(url);
     return -1;
@@ -322,17 +315,20 @@ char *build_href(const url_state_t *s) {
   return href;
 }
 
-static const char *coerce_to_string(ant_t *js, ant_value_t val, size_t *len) {
-  if (vtype(val) == kTypeString) return js_getstr(js, val, len);
-  if (is_object_type(val)) {
-    ant_value_t href = js_getprop_fallback(js, val, "href");
-    if (vtype(href) == kTypeString) return js_getstr(js, href, len);
-  }
-  return NULL;
+static ant_value_t url_string_value(ant_t *js, ant_value_t value) {
+  return vtype(value) == kTypeString ? value : js_template_to_string(js, value);
 }
 
-static ant_value_t url_string_value(ant_t *js, ant_value_t value) {
-  return vtype(value) == kTypeString ? value : js_tostring_val(js, value);
+static ant_value_t url_invalid_url_error(ant_t *js, ant_value_t input, ant_value_t base) {
+  ant_value_t props = Ant_Object_CreateBare(js);
+  js_set(js, props, "code", js_mkstr(js, "ERR_INVALID_URL", 15));
+  js_set(js, props, "input", input);
+  if (!is_undefined(base)) js_set(js, props, "base", base);
+  return js_mkerr_props(js, JS_ERR_TYPE, props, "Invalid URL");
+}
+
+static ant_value_t url_missing_args_error(ant_t *js, const char *message) {
+  return js_mkerr_code(js, JS_ERR_TYPE, "ERR_MISSING_ARGS", message);
 }
 
 typedef bool (*ada_url_setter_t)(ada_url, const char *, size_t);
@@ -368,7 +364,10 @@ static ant_value_t url_apply_setter(
     return js_mkundef();
   }
 
-  setter(url, value_str, value_len);
+  char *value_utf8 = wtf8_to_utf8_dup(value_str, &value_len);
+  setter(url, value_utf8 ? value_utf8 : value_str, value_len);
+  free(value_utf8);
+  
   if (ada_is_valid(url)) {
     url_state_t next = {0};
     if (ada_url_to_state(url, &next) == 0) {
@@ -376,6 +375,7 @@ static ant_value_t url_apply_setter(
       *state = next;
     }
   }
+  
   ada_free(url);
   return js_mkundef();
 }
@@ -592,11 +592,11 @@ static ant_value_t url_set_href(ant_params_t) {
   if (is_err(value)) return value;
   size_t value_len = 0;
   const char *val = js_getstr(js, value, &value_len);
-  if (!val) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid URL");
+  if (!val) return url_invalid_url_error(js, value, js_mkundef());
   
   url_state_t tmp;
   if (parse_url_to_state_n(val, value_len, NULL, 0, &tmp) != 0)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid URL");
+    return url_invalid_url_error(js, value, js_mkundef());
     
   url_state_clear(s);
   *s = tmp;
@@ -677,17 +677,13 @@ static ant_value_t url_toString(ant_params_t) {
 
 static ant_value_t js_URL(ant_params_t) {
   if (is_undefined(call_new_target))
-    return js_mkerr_typed(js, JS_ERR_TYPE,
-      "Failed to construct 'URL': Please use the 'new' operator.");
-  if (nargs < 1)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'URL': 1 argument required.");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Class constructor URL cannot be invoked without 'new'");
+  if (nargs < 1) return url_missing_args_error(js, "The \"url\" argument must be specified");
 
   ant_value_t url_sv = url_string_value(js, args[0]);
   if (is_err(url_sv)) return url_sv;
   size_t url_len = 0;
   const char *url_str = js_getstr(js, url_sv, &url_len);
-  if (!url_str)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'URL': Invalid URL.");
 
   const char *base_str = NULL;
   size_t base_len = 0;
@@ -701,9 +697,9 @@ static ant_value_t js_URL(ant_params_t) {
   url_state_t *s = calloc(1, sizeof(url_state_t));
   if (!s) return Ant_Error_CreateOutOfMemory(js);
 
-  if (parse_url_to_state_n(url_str, url_len, base_str, base_len, s) != 0) {
+  if (!url_str || parse_url_to_state_n(url_str, url_len, base_str, base_len, s) != 0) {
     free(s);
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'URL': Invalid URL.");
+    return url_invalid_url_error(js, url_sv, base_sv);
   }
 
   ant_value_t obj = Ant_Object_CreateBare(js);
@@ -731,8 +727,7 @@ ant_value_t make_url_obj(ant_t *js, url_state_t *s) {
 }
 
 static ant_value_t url_canParse(ant_params_t) {
-  if (nargs < 1)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "URL.canParse requires at least 1 argument");
+  if (nargs < 1) return url_missing_args_error(js, "The \"url\" argument must be specified");
   ant_value_t url_sv = url_string_value(js, args[0]);
   if (is_err(url_sv)) return url_sv;
   size_t url_len = 0;
@@ -753,8 +748,7 @@ static ant_value_t url_canParse(ant_params_t) {
 }
 
 static ant_value_t url_parse(ant_params_t) {
-  if (nargs < 1)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "URL.parse requires at least 1 argument");
+  if (nargs < 1) return url_missing_args_error(js, "The \"url\" argument must be specified");
   ant_value_t url_sv = url_string_value(js, args[0]);
   if (is_err(url_sv)) return url_sv;
   size_t url_len = 0;
@@ -858,8 +852,8 @@ static ant_value_t url_revoke_object_url(ant_params_t) {
 }
 
 static ant_value_t usp_get(ant_params_t) {
-  if (nargs < 1) return js_mknull();
-  ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
+  if (nargs < 1) return url_missing_args_error(js, "The \"name\" argument must be specified");
+  ant_value_t key_sv = url_string_value(js, args[0]);
   if (is_err(key_sv)) return key_sv;
   const char *key = js_getstr(js, key_sv, NULL);
   if (!key) return js_mknull();
@@ -875,9 +869,9 @@ static ant_value_t usp_get(ant_params_t) {
 }
 
 static ant_value_t usp_getAll(ant_params_t) {
+  if (nargs < 1) return url_missing_args_error(js, "The \"name\" argument must be specified");
   ant_value_t result = js_mkarr(js);
-  if (nargs < 1) return result;
-  ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
+  ant_value_t key_sv = url_string_value(js, args[0]);
   if (is_err(key_sv)) return key_sv;
   const char *key = js_getstr(js, key_sv, NULL);
   if (!key) return result;
@@ -894,14 +888,14 @@ static ant_value_t usp_getAll(ant_params_t) {
 }
 
 static ant_value_t usp_has(ant_params_t) {
-  if (nargs < 1) return js_false;
-  ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
+  if (nargs < 1) return url_missing_args_error(js, "The \"name\" argument must be specified");
+  ant_value_t key_sv = url_string_value(js, args[0]);
   if (is_err(key_sv)) return key_sv;
   const char *key = js_getstr(js, key_sv, NULL);
   if (!key) return js_false;
   const char *match_val = NULL;
   if (nargs >= 2 && !is_undefined(args[1])) {
-    ant_value_t mv_sv = (vtype(args[1]) == kTypeString) ? args[1] : js_tostring_val(js, args[1]);
+    ant_value_t mv_sv = url_string_value(js, args[1]);
     if (is_err(mv_sv)) return mv_sv;
     match_val = js_getstr(js, mv_sv, NULL);
   }
@@ -920,11 +914,11 @@ static ant_value_t usp_has(ant_params_t) {
 }
 
 static ant_value_t usp_set(ant_params_t) {
-  if (nargs < 2) return js_mkundef();
-  ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
+  if (nargs < 2) return url_missing_args_error(js, "The \"name\" and \"value\" arguments must be specified");
+  ant_value_t key_sv = url_string_value(js, args[0]);
   
   if (is_err(key_sv)) return key_sv;
-  ant_value_t val_sv = (vtype(args[1]) == kTypeString) ? args[1] : js_tostring_val(js, args[1]);
+  ant_value_t val_sv = url_string_value(js, args[1]);
   
   if (is_err(val_sv)) return val_sv;
   const char *key = js_getstr(js, key_sv, NULL);
@@ -963,11 +957,11 @@ static ant_value_t usp_set(ant_params_t) {
 }
 
 static ant_value_t usp_append(ant_params_t) {
-  if (nargs < 2) return js_mkundef();
-  ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
+  if (nargs < 2) return url_missing_args_error(js, "The \"name\" and \"value\" arguments must be specified");
+  ant_value_t key_sv = url_string_value(js, args[0]);
   
   if (is_err(key_sv)) return key_sv;
-  ant_value_t val_sv = (vtype(args[1]) == kTypeString) ? args[1] : js_tostring_val(js, args[1]);
+  ant_value_t val_sv = url_string_value(js, args[1]);
   
   if (is_err(val_sv)) return val_sv;
   ant_value_t entries = js_get_slot(js->this_val, SLOT_ENTRIES);
@@ -984,8 +978,8 @@ static ant_value_t usp_append(ant_params_t) {
 }
 
 static ant_value_t usp_delete(ant_params_t) {
-  if (nargs < 1) return js_mkundef();
-  ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
+  if (nargs < 1) return url_missing_args_error(js, "The \"name\" argument must be specified");
+  ant_value_t key_sv = url_string_value(js, args[0]);
   
   if (is_err(key_sv)) return key_sv;
   const char *key = js_getstr(js, key_sv, NULL);
@@ -994,7 +988,7 @@ static ant_value_t usp_delete(ant_params_t) {
   const char *match_val = NULL;
   
   if (nargs >= 2 && !is_undefined(args[1])) {
-    ant_value_t mv_sv = (vtype(args[1]) == kTypeString) ? args[1] : js_tostring_val(js, args[1]);
+    ant_value_t mv_sv = url_string_value(js, args[1]);
     if (is_err(mv_sv)) return mv_sv;
     match_val = js_getstr(js, mv_sv, NULL);
   }
@@ -1028,7 +1022,12 @@ static ant_value_t usp_toString(ant_params_t) {
 }
 
 static ant_value_t usp_forEach(ant_params_t) {
-  if (nargs < 1 || !is_callable(args[0])) return js_mkundef();
+  if (nargs < 1 || !is_callable(args[0])) {
+    char received[160], message[256];
+    js_describe_received(js, nargs > 0 ? args[0] : js_mkundef(), received, sizeof(received));
+    snprintf(message, sizeof(message), "The \"callback\" argument must be of type function. %s", received);
+    return js_mkerr_code(js, JS_ERR_TYPE, "ERR_INVALID_ARG_TYPE", message);
+  }
   
   ant_value_t cb = args[0];
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
@@ -1144,10 +1143,58 @@ static ant_value_t usp_values_fn(ant_params_t) {
   return make_usp_iter(js, js->this_val, USP_ITER_VALUES);
 }
 
+static ant_value_t usp_invalid_tuple(ant_t *js) {
+  return js_mkerr_code(js, JS_ERR_TYPE, "ERR_INVALID_TUPLE", "Each query pair must be an iterable [name, value] tuple");
+}
+
+static ant_value_t usp_add_pair(ant_t *js, ant_value_t entries, ant_value_t pair) {
+  if (!is_object_type(pair) && !is_callable(pair)) return usp_invalid_tuple(js);
+
+  ant_value_t items[2] = { js_mkundef(), js_mkundef() };
+  size_t count = 0;
+
+  if (vtype(pair) == kTypeArray && !is_proxy(pair)) {
+    count = (size_t)js_arr_len(js, pair);
+    if (count != 2) return usp_invalid_tuple(js);
+    items[0] = js_arr_get(js, pair, 0);
+    items[1] = js_arr_get(js, pair, 1);
+  } else {
+    iterator_t it;
+    if (!js_iter_open(js, pair, &it)) {
+      if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+      return usp_invalid_tuple(js);
+    }
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, it.iterator);
+    GC_ROOT_PIN(js, it.next_fn);
+    ant_value_t value = js_mkundef();
+    while (js_iter_next(js, &it, &value)) {
+      if (count < 2) {
+        items[count] = value;
+        GC_ROOT_PIN(js, items[count]);
+      }
+      count++;
+    }
+    GC_ROOT_RESTORE(js, root_mark);
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+    if (count != 2) return usp_invalid_tuple(js);
+  }
+
+  ant_value_t ksv = url_string_value(js, items[0]);
+  if (is_err(ksv)) return ksv;
+  ant_value_t vsv = url_string_value(js, items[1]);
+  if (is_err(vsv)) return vsv;
+
+  ant_value_t entry = js_mkarr(js);
+  js_arr_push(js, entry, ksv);
+  js_arr_push(js, entry, vsv);
+  js_arr_push(js, entries, entry);
+  return js_mkundef();
+}
+
 static ant_value_t js_URLSearchParams(ant_params_t) {
   if (is_undefined(call_new_target))
-    return js_mkerr_typed(js, JS_ERR_TYPE,
-    "Failed to construct 'URLSearchParams': Please use the 'new' operator.");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Class constructor URLSearchParams cannot be invoked without 'new'");
 
   ant_value_t obj = Ant_Object_CreateBare(js);
   js_set_proto_init(obj, js->builtins.usp_proto);
@@ -1171,95 +1218,86 @@ static ant_value_t js_URLSearchParams(ant_params_t) {
     return obj;
   }
 
-  bool init_is_array = t == kTypeArray;
-  if (!init_is_array && t == kTypeObject) {
-    ant_value_t is_array_res = js_is_array_value_checked(js, init, &init_is_array);
-    if (is_err(is_array_res)) return is_array_res;
-    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
-  }
-
-  if (init_is_array) {
-    ant_offset_t len = 0;
-    ant_value_t len_res = usp_array_len(js, init, &len);
-    
-    if (is_err(len_res)) return len_res;
-    for (ant_offset_t i = 0; i < len; i++) {
-      ant_value_t pair = usp_array_get(js, init, i);
-      if (is_err(pair)) return pair;
-      
-      bool pair_is_array = vtype(pair) == kTypeArray;
-      if (!pair_is_array && vtype(pair) == kTypeObject) {
-        ant_value_t is_array_res = js_is_array_value_checked(js, pair, &pair_is_array);
-        if (is_err(is_array_res)) return is_array_res;
-        if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
-      }
-      
-      if (!pair_is_array)
-        return js_mkerr_typed(js, JS_ERR_TYPE,
-        "Failed to construct 'URLSearchParams': Each element must be an array.");
-      
-      ant_offset_t plen = 0;
-      ant_value_t plen_res = usp_array_len(js, pair, &plen);
-      
-      if (is_err(plen_res)) return plen_res;
-      if (plen != 2)
-        return js_mkerr_typed(js, JS_ERR_TYPE,
-        "Failed to construct 'URLSearchParams': Each pair must have exactly 2 elements.");
-        
-      ant_value_t pk = usp_array_get(js, pair, 0);
-      if (is_err(pk)) return pk;
-      
-      ant_value_t pv = usp_array_get(js, pair, 1);
-      if (is_err(pv)) return pv;
-      
-      ant_value_t ksv = (vtype(pk) == kTypeString) ? pk : js_tostring_val(js, pk);
-      if (is_err(ksv)) return ksv;
-      
-      ant_value_t vsv = (vtype(pv) == kTypeString) ? pv : js_tostring_val(js, pv);
-      if (is_err(vsv)) return vsv;
-      
-      ant_value_t entry = js_mkarr(js);
-      js_arr_push(js, entry, ksv);
-      js_arr_push(js, entry, vsv);
-      js_arr_push(js, entries, entry);
-    }
-    
+  if (!is_object_type(init) && !is_callable(init)) {
+    ant_value_t init_sv = url_string_value(js, init);
+    if (is_err(init_sv)) return init_sv;
+    const char *s = js_getstr(js, init_sv, NULL);
+    if (s) js_set_slot(obj, SLOT_ENTRIES, parse_query_to_arr(js, s[0] == '?' ? s + 1 : s));
     return obj;
   }
 
-  if (is_special_object(init)) {
+  if (usp_is_urlsearchparams(js, init)) {
     ant_value_t src = js_get_slot(init, SLOT_ENTRIES);
-    if (vtype(src) == kTypeArray) {
-      ant_offset_t len = js_arr_len(js, src);
-      for (ant_offset_t i = 0; i < len; i++) {
-        ant_value_t entry = js_arr_get(js, src, i);
-        ant_value_t ne = js_mkarr(js);
-        
-        js_arr_push(js, ne, js_arr_get(js, entry, 0));
-        js_arr_push(js, ne, js_arr_get(js, entry, 1));
-        js_arr_push(js, entries, ne);
-      }
-      
-      return obj;
+    ant_offset_t len = vtype(src) == kTypeArray ? js_arr_len(js, src) : 0;
+    for (ant_offset_t i = 0; i < len; i++) {
+      ant_value_t entry = js_arr_get(js, src, i);
+      ant_value_t ne = js_mkarr(js);
+      js_arr_push(js, ne, js_arr_get(js, entry, 0));
+      js_arr_push(js, ne, js_arr_get(js, entry, 1));
+      js_arr_push(js, entries, ne);
     }
-    
-    ant_iter_t it = js_prop_iter_begin(js, init);
-    const char *key;
-    size_t key_len;
-    ant_value_t val;
-    
-    while (js_prop_iter_next(&it, &key, &key_len, &val)) {
-      ant_value_t sv = (vtype(val) == kTypeString) ? val : js_tostring_val(js, val);
-      if (is_err(sv)) { js_prop_iter_end(&it); return sv; }
-      ant_value_t entry = js_mkarr(js);
-      js_arr_push(js, entry, js_mkstr(js, key, key_len));
-      js_arr_push(js, entry, sv);
-      js_arr_push(js, entries, entry);
-    }
-    
-    js_prop_iter_end(&it);
+    return obj;
   }
 
+  ant_value_t iter_fn = js_get_sym(js, init, js->sym.iterator_sym);
+  if (is_err(iter_fn)) return iter_fn;
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+
+  if (!is_undefined(iter_fn) && !is_null(iter_fn)) {
+    if (!is_callable(iter_fn))
+      return js_mkerr_code(js, JS_ERR_TYPE, "ERR_ARG_NOT_ITERABLE", "Query pairs must be iterable");
+
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, obj);
+    GC_ROOT_PIN(js, entries);
+    ant_value_t result = obj;
+
+    if (vtype(init) == kTypeArray && !is_proxy(init)) {
+      ant_offset_t len = js_arr_len(js, init);
+      for (ant_offset_t i = 0; i < len; i++) {
+        result = usp_add_pair(js, entries, js_arr_get(js, init, i));
+        if (is_err(result)) break;
+        result = obj;
+      }
+    } else {
+      iterator_t it;
+      if (!js_iter_open(js, init, &it)) result = Ant_Exception_Pending(js)
+        ? Ant_Exception_Current(js)
+        : js_mkerr_code(js, JS_ERR_TYPE, "ERR_ARG_NOT_ITERABLE", "Query pairs must be iterable");
+      else {
+        GC_ROOT_PIN(js, it.iterator);
+        GC_ROOT_PIN(js, it.next_fn);
+        ant_value_t pair = js_mkundef();
+        while (js_iter_next(js, &it, &pair)) {
+          result = usp_add_pair(js, entries, pair);
+          if (is_err(result)) { js_iter_close(js, &it); break; }
+          result = obj;
+        }
+        if (!is_err(result) && Ant_Exception_Pending(js)) result = Ant_Exception_Current(js);
+      }
+    }
+
+    GC_ROOT_RESTORE(js, root_mark);
+    return result;
+  }
+
+  ant_iter_t it = js_prop_iter_begin(js, init);
+  const char *key;
+  size_t key_len;
+  ant_value_t val;
+
+  while (js_prop_iter_next(&it, &key, &key_len, &val)) {
+    val = js_getprop_fallback_len(js, init, key, key_len);
+    if (is_err(val)) { js_prop_iter_end(&it); return val; }
+    ant_value_t sv = url_string_value(js, val);
+    if (is_err(sv)) { js_prop_iter_end(&it); return sv; }
+    ant_value_t entry = js_mkarr(js);
+    js_arr_push(js, entry, js_mkstr(js, key, key_len));
+    js_arr_push(js, entry, sv);
+    js_arr_push(js, entries, entry);
+  }
+
+  js_prop_iter_end(&it);
   return obj;
 }
 
@@ -1321,159 +1359,205 @@ void init_url_module(ant_t *js) {
   js_set_global_builtin(js, "URL", js->builtins.url_ctor);
 }
 
-static ant_value_t builtin_fileURLToPath(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "fileURLToPath requires a string or URL argument");
-  
-  size_t len;
-  const char *str = coerce_to_string(js, args[0], &len);
-  if (!str) return js_mkerr(js, "fileURLToPath requires a string or URL argument");
+#if defined(__APPLE__)
+static const char url_platform_name[] = "darwin";
+#elif defined(__linux__)
+static const char url_platform_name[] = "linux";
+#elif defined(__FreeBSD__)
+static const char url_platform_name[] = "freebsd";
+#else
+static const char url_platform_name[] = "unknown";
+#endif
 
-  url_state_t s;
-  if (parse_url_to_state(str, NULL, &s) != 0)
-    return js_mkerr(js, "Invalid URL");
-  if (strcmp(s.protocol, "file:") != 0) {
-    url_state_clear(&s);
-    return js_mkerr(js, "fileURLToPath requires a file: URL");
+static ant_value_t url_invalid_arg_type(ant_t *js, const char *expected, ant_value_t value) {
+  char received[160], message[288];
+  js_describe_received(js, value, received, sizeof(received));
+  snprintf(message, sizeof(message), "The \"path\" argument must be of type %s. %s", expected, received);
+  return js_mkerr_code(js, JS_ERR_TYPE, "ERR_INVALID_ARG_TYPE", message);
+}
+
+static bool url_prop_truthy(ant_t *js, ant_value_t obj, const char *name, ant_value_t *err) {
+  ant_value_t value = js_get(js, obj, name);
+  if (is_err(value)) { *err = value; return false; }
+  return js_truthy(js, value);
+}
+
+static bool url_prop_undefined(ant_t *js, ant_value_t obj, const char *name, ant_value_t *err) {
+  ant_value_t value = js_get(js, obj, name);
+  if (is_err(value)) { *err = value; return false; }
+  return is_undefined(value);
+}
+
+int Ant_URL_IsURLLike(ant_t *js, ant_value_t value, ant_value_t *err) {
+  if (!is_object_type(value)) return 0;
+  *err = js_mkundef();
+  bool ok =
+    url_prop_truthy(js, value, "href", err) &&
+    url_prop_truthy(js, value, "protocol", err) &&
+    url_prop_undefined(js, value, "auth", err) &&
+    url_prop_undefined(js, value, "path", err);
+  if (is_err(*err)) return -1;
+  return ok ? 1 : 0;
+}
+
+static bool url_prop_equals(ant_t *js, ant_value_t obj, const char *name, const char *expected, ant_value_t *err) {
+  ant_value_t value = js_get(js, obj, name);
+  if (is_err(value)) { *err = value; return false; }
+  if (vtype(value) != kTypeString) return false;
+  size_t len = 0;
+  const char *str = js_getstr(js, value, &len);
+  return str && len == strlen(expected) && memcmp(str, expected, len) == 0;
+}
+
+ant_value_t Ant_URL_FileURLToPath(ant_t *js, ant_value_t input) {
+  ant_value_t url = input;
+  ant_value_t err = js_mkundef();
+
+  if (vtype(input) == kTypeString) {
+    size_t len = 0;
+    const char *str = js_getstr(js, input, &len);
+    url_state_t *s = calloc(1, sizeof(url_state_t));
+    if (!s) return js_mkerr(js, "out of memory");
+    if (!str || parse_url_to_state_n(str, len, NULL, 0, s) != 0) {
+      free(s);
+      return url_invalid_url_error(js, input, js_mkundef());
+    }
+    url = make_url_obj(js, s);
+  } else {
+    int like = Ant_URL_IsURLLike(js, input, &err);
+    if (like < 0) return err;
+    if (!like) return url_invalid_arg_type(js, "string or an instance of URL", input);
   }
-  
-  char *decoded = url_decode_component(s.pathname);
-  url_state_clear(&s);
-  if (!decoded) return js_mkerr(js, "allocation failure");
-  ant_value_t ret = js_mkstr(js, decoded, strlen(decoded));
-  
-  free(decoded);
-  return ret;
+
+  if (!url_prop_equals(js, url, "protocol", "file:", &err)) {
+    if (is_err(err)) return err;
+    return js_mkerr_code(js, JS_ERR_TYPE, "ERR_INVALID_URL_SCHEME", "The URL must be of scheme file");
+  }
+
+  if (!url_prop_equals(js, url, "hostname", "", &err)) {
+    if (is_err(err)) return err;
+    char message[96];
+    snprintf(message, sizeof(message), "File URL host must be \"localhost\" or empty on %s", url_platform_name);
+    return js_mkerr_code(js, JS_ERR_TYPE, "ERR_INVALID_FILE_URL_HOST", message);
+  }
+
+  ant_value_t pathname = js_get(js, url, "pathname");
+  if (is_err(pathname)) return pathname;
+  if (is_undefined(pathname) || is_null(pathname))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot read properties of %s (reading 'length')", is_null(pathname) ? "null" : "undefined");
+
+  bool is_string = vtype(pathname) == kTypeString;
+  ant_value_t text = is_string ? pathname : js_tostring_val(js, pathname);
+  if (is_err(text)) return text;
+
+  size_t len = 0;
+  const char *path = js_getstr(js, text, &len);
+  if (!path || !memchr(path, '%', len)) return pathname;
+
+  for (size_t i = 0; is_string && i + 2 < len; i++) {
+    if (path[i] == '%' && path[i + 1] == '2' && (path[i + 2] | 0x20) == 'f')
+      return js_mkerr_code(js, JS_ERR_TYPE, "ERR_INVALID_FILE_URL_PATH", "File URL path must not include encoded / characters");
+  }
+
+  return js_decodeURIComponent(js, &text, 1, js_mkundef());
+}
+
+static ant_value_t builtin_fileURLToPath(ant_params_t) {
+  return Ant_URL_FileURLToPath(js, nargs > 0 ? args[0] : js_mkundef());
+}
+
+static bool url_path_needs_escape(unsigned char c) {
+  if (c <= 0x20 || c >= 0x7f) return true;
+  switch (c) {
+    case '"': case '#': case '%': case '<': case '>': case '?': case '[': case '\\':
+    case ']': case '^': case '`': case '{': case '|': case '}': case '~':
+      return true;
+    default:
+      return false;
+  }
+}
+
+static bool url_resolve_posix_path(url_fmt_buf_t *out, const char *path, size_t len) {
+  url_fmt_buf_t joined = {0};
+  bool ok = true;
+
+  if (len == 0 || path[0] != '/') {
+    char cwd[4096];
+    size_t cwd_len = sizeof(cwd);
+    if (uv_cwd(cwd, &cwd_len) != 0) return false;
+    ok = url_fmt_append_n(&joined, cwd, cwd_len) && url_fmt_append_c(&joined, '/');
+  }
+  ok = ok && url_fmt_append_n(&joined, path, len);
+  if (!ok) { free(joined.buf); return false; }
+
+  const char *p = joined.buf ? joined.buf : "";
+  size_t n = joined.len;
+  size_t i = 0;
+
+  while (i < n && ok) {
+    while (i < n && p[i] == '/') i++;
+    size_t start = i;
+    while (i < n && p[i] != '/') i++;
+    size_t seg = i - start;
+    if (seg == 0 || (seg == 1 && p[start] == '.')) continue;
+    if (seg == 2 && p[start] == '.' && p[start + 1] == '.') {
+      while (out->len > 0 && out->buf[out->len - 1] != '/') out->len--;
+      if (out->len > 0) out->len--;
+      continue;
+    }
+    ok = url_fmt_append_c(out, '/') && url_fmt_append_n(out, p + start, seg);
+  }
+
+  free(joined.buf);
+  if (ok && out->len == 0) ok = url_fmt_append_c(out, '/');
+  if (ok) out->buf[out->len] = '\0';
+  return ok;
 }
 
 static ant_value_t builtin_pathToFileURL(ant_params_t) {
-  if (nargs < 1 || vtype(args[0]) != kTypeString)
-    return js_mkerr(js, "pathToFileURL requires a string argument");
-    
-  size_t len;
-  const char *path = js_getstr(js, args[0], &len);
-  size_t total = 7 + len;
-  char *buf = malloc(total + 1);
-  if (!buf) return js_mkerr(js, "allocation failure");
-  
-  memcpy(buf, "file://", 7);
-  memcpy(buf + 7, path, len);
-  buf[total] = '\0';
-  
-  url_state_t *s = calloc(1, sizeof(url_state_t));
-  if (!s) { free(buf); return js_mkerr(js, "allocation failure"); }
-  if (parse_url_to_state(buf, NULL, s) != 0) {
-    free(buf); free(s);
-    return js_mkerr(js, "Invalid file URL");
-  }
-  
-  free(buf);
-  return make_url_obj(js, s);
-}
-
-static bool url_fmt_get_string_prop(
-  ant_t *js,
-  ant_value_t obj,
-  const char *name,
-  ant_value_t *out,
-  const char **str,
-  size_t *len
-) {
-  *out = js_get(js, obj, name);
-  if (is_err(*out)) return false;
-  if (is_undefined(*out) || is_null(*out)) return true;
-
-  ant_value_t str_val = vtype(*out) == kTypeString ? *out : js_tostring_val(js, *out);
-  if (is_err(str_val)) return false;
-
-  *out = str_val;
-  *str = js_getstr(js, str_val, len);
-  return *str != NULL;
-}
-
-static bool url_fmt_is_query_unescaped(unsigned char c) {
-  return isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~';
-}
-
-static bool url_fmt_append_query_component(url_fmt_buf_t *b, const char *s, size_t len) {
-  static const char hex[] = "0123456789ABCDEF";
-
-  for (size_t i = 0; i < len; i++) {
-  unsigned char c = (unsigned char)s[i];
-  if (url_fmt_is_query_unescaped(c)) {
-    if (!url_fmt_append_c(b, (char)c)) return false;
-  } else {
-    char esc[3] = { '%', hex[c >> 4], hex[c & 0x0f] };
-    if (!url_fmt_append_n(b, esc, sizeof(esc))) return false;
-  }}
-  return true;
-}
-
-static bool url_fmt_append_query_value(ant_t *js, url_fmt_buf_t *b, ant_value_t value) {
-  uint8_t type = vtype(value);
-  if (type == kTypeNumber && !isfinite(js_getnum(value))) return true;
-  if (type != kTypeString && type != kTypeNumber &&
-      type != kTypeBool && type != kTypeBigInt) return true;
-
-  ant_value_t str_val = type == kTypeString ? value : js_tostring_val(js, value);
-  if (is_err(str_val)) return false;
+  ant_value_t input = nargs > 0 ? args[0] : js_mkundef();
+  if (vtype(input) != kTypeString) return url_invalid_arg_type(js, "string", input);
 
   size_t len = 0;
-  const char *str = js_getstr(js, str_val, &len);
-  return str && url_fmt_append_query_component(b, str, len);
-}
+  const char *path = js_getstr(js, input, &len);
+  char *utf8 = wtf8_str_to_utf8_dup(path, &len);
+  if (utf8) path = utf8;
 
-static bool url_fmt_append_query_object(ant_t *js, url_fmt_buf_t *b, ant_value_t query) {
-  if (!is_special_object(query)) return true;
+  url_fmt_buf_t resolved = {0};
+  url_fmt_buf_t href = {0};
+  bool ok = url_resolve_posix_path(&resolved, path, len);
+  if (ok && len > 0 && path[len - 1] == '/' && resolved.buf[resolved.len - 1] != '/')
+    ok = url_fmt_append_c(&resolved, '/');
+  free(utf8);
 
-  ant_iter_t it = js_prop_iter_begin(js, query);
+  ok = ok && url_fmt_append_n(&href, "file://", 7);
+  for (size_t i = 0; ok && i < resolved.len; i++) {
+    static const char hex[] = "0123456789ABCDEF";
+    unsigned char c = (unsigned char)resolved.buf[i];
+    if (!url_path_needs_escape(c)) ok = url_fmt_append_c(&href, (char)c);
+    else ok = url_fmt_append_c(&href, '%') && url_fmt_append_c(&href, hex[c >> 4]) && url_fmt_append_c(&href, hex[c & 15]);
+  }
   
-  const char *key;
-  size_t key_len;
-  ant_value_t val;
+  free(resolved.buf);
+  if (!ok) { free(href.buf); return js_mkerr(js, "out of memory"); }
 
-  while (js_prop_iter_next(&it, &key, &key_len, &val)) {
-    val = js_getprop_fallback_len(js, query, key, key_len);
-    if (is_err(val)) goto fail;
-
-    bool is_array = false;
-    if (is_err(js_is_array_value_checked(js, val, &is_array))) goto fail;
-    ant_offset_t count = is_array ? js_arr_len(js, val) : 1;
-    if (Ant_Exception_Pending(js)) goto fail;
-
-    for (ant_offset_t i = 0; i < count; i++) {
-      ant_value_t item = is_array ? js_arr_get(js, val, i) : val;
-      if (is_err(item) || Ant_Exception_Pending(js)) goto fail;
-      if (b->len && !url_fmt_append_c(b, '&')) goto fail;
-      if (!url_fmt_append_query_component(b, key, key_len) ||
-          !url_fmt_append_c(b, '=') ||
-          !url_fmt_append_query_value(js, b, item)) goto fail;
-    }
+  url_state_t *s = calloc(1, sizeof(url_state_t));
+  if (!s) { free(href.buf); return js_mkerr(js, "out of memory"); }
+  
+  if (parse_url_to_state_n(href.buf, href.len, NULL, 0, s) != 0) {
+    ant_value_t href_val = js_mkstr(js, href.buf, href.len);
+    free(href.buf);
+    free(s);
+    return url_invalid_url_error(js, href_val, js_mkundef());
   }
 
-  js_prop_iter_end(&it);
-  return true;
-
-fail:
-  js_prop_iter_end(&it);
-  return false;
-}
-
-static bool url_fmt_protocol_needs_slashes(const char *protocol, size_t len) {
-  if (len > 0 && protocol[len - 1] == ':') len--;
-  return
-    (len == 4 && memcmp(protocol, "http", 4) == 0) ||
-    (len == 5 && memcmp(protocol, "https", 5) == 0) ||
-    (len == 3 && memcmp(protocol, "ftp", 3) == 0) ||
-    (len == 4 && memcmp(protocol, "file", 4) == 0) ||
-    (len == 2 && memcmp(protocol, "ws", 2) == 0) ||
-    (len == 3 && memcmp(protocol, "wss", 3) == 0);
+  free(href.buf);
+  return make_url_obj(js, s);
 }
 
 static ant_value_t builtin_domainToASCII(ant_params_t) {
   if (nargs < 1) {
-    ant_value_t props = Ant_Object_CreateBare(js);
-    js_set(js, props, "code", js_mkstr(js, "ERR_MISSING_ARGS", 16));
-    return js_mkerr_props(js, JS_ERR_TYPE, props, "The \"domain\" argument must be specified");
+    return url_missing_args_error(js, "The \"domain\" argument must be specified");
   }
 
   ant_value_t domain = js_template_to_string(js, args[0]);
@@ -1497,152 +1581,105 @@ static ant_value_t builtin_domainToASCII(ant_params_t) {
   return result;
 }
 
-static ant_value_t builtin_url_parse(ant_params_t) {
-  size_t len = 0;
-  const char *value = NULL;
+static ant_value_t builtin_domainToUnicode(ant_params_t) {
+  if (nargs < 1) return url_missing_args_error(js, "The \"domain\" argument must be specified");
 
-  if (nargs < 1 || vtype(args[0]) != kTypeString)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "The \"url\" argument must be of type string");
-
-  value = js_getstr(js, args[0], &len);
-  if (!value) return js_mkerr_typed(js, JS_ERR_TYPE, "The \"url\" argument must be of type string");
-
-  return legacy_url_parse_impl(
-    js, value, len,
-    nargs > 1 && js_truthy(js, args[1]),
-    nargs > 2 && js_truthy(js, args[2])
-  );
-}
-
-static ant_value_t builtin_url_format(ant_params_t) {
-  if (nargs < 1 || !is_object_type(args[0]))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "url.format() requires a URL or object argument");
-
-  url_state_t *state = url_get_state(args[0]);
-  if (state) {
-    char *href = build_href(state);
-    if (!href) return js_mkstr(js, "", 0);
-    ant_value_t ret = js_mkstr(js, href, strlen(href));
-    free(href);
-    return ret;
-  }
-
-  ant_value_t obj = args[0];
-  ant_value_t tmp;
-  
-  const char *protocol = NULL, *auth = NULL, *host = NULL, *hostname = NULL;
-  const char *port = NULL, *pathname = NULL, *search = NULL, *hash = NULL;
-  
-  size_t protocol_len = 0, auth_len = 0, host_len = 0, hostname_len = 0;
-  size_t port_len = 0, pathname_len = 0, search_len = 0, hash_len = 0;
-
-  if (!url_fmt_get_string_prop(js, obj, "protocol", &tmp, &protocol, &protocol_len) ||
-      !url_fmt_get_string_prop(js, obj, "auth",     &tmp, &auth,     &auth_len) ||
-      !url_fmt_get_string_prop(js, obj, "host",     &tmp, &host,     &host_len) ||
-      !url_fmt_get_string_prop(js, obj, "hostname", &tmp, &hostname, &hostname_len) ||
-      !url_fmt_get_string_prop(js, obj, "port",     &tmp, &port,     &port_len) ||
-      !url_fmt_get_string_prop(js, obj, "pathname", &tmp, &pathname, &pathname_len) ||
-      !url_fmt_get_string_prop(js, obj, "search",   &tmp, &search,   &search_len) ||
-      !url_fmt_get_string_prop(js, obj, "hash",     &tmp, &hash,     &hash_len))
-    return Ant_Exception_Current(js);
-
-  url_fmt_buf_t b = {0};
-
-  if (protocol && protocol_len > 0) {
-    if (!url_fmt_append_n(&b, protocol, protocol_len)) goto oom;
-    if (protocol[protocol_len - 1] != ':' && !url_fmt_append_c(&b, ':')) goto oom;
-  }
-
-  bool has_host = (host && host_len > 0) || (hostname && hostname_len > 0);
-  ant_value_t slashes_val = js_get(js, obj, "slashes");
-  if (is_err(slashes_val)) goto oom;
-  
-  bool needs_slashes =
-    js_truthy(js, slashes_val) ||
-    (protocol && url_fmt_protocol_needs_slashes(protocol, protocol_len));
-    
-  if (needs_slashes && (has_host || (protocol && protocol_len >= 4 && memcmp(protocol, "file", 4) == 0))) {
-    if (!url_fmt_append(&b, "//")) goto oom;
-  }
-
-  if (auth && auth_len > 0) {
-    if (!url_fmt_append_n(&b, auth, auth_len)) goto oom;
-    if (!url_fmt_append_c(&b, '@')) goto oom;
-  }
-
-  if (host && host_len > 0) {
-    if (!url_fmt_append_n(&b, host, host_len)) goto oom;
-  } else if (hostname && hostname_len > 0) {
-  if (!url_fmt_append_n(&b, hostname, hostname_len)) goto oom;
-  if (port && port_len > 0) {
-    if (!url_fmt_append_c(&b, ':')) goto oom;
-    if (!url_fmt_append_n(&b, port, port_len)) goto oom;
-  }}
-
-  if (pathname && pathname_len > 0) {
-    if (has_host && pathname[0] != '/' && !url_fmt_append_c(&b, '/')) goto oom;
-    if (!url_fmt_append_n(&b, pathname, pathname_len)) goto oom;
-  }
-
-  if (search && search_len > 0) {
-    if (search[0] != '?' && !url_fmt_append_c(&b, '?')) goto oom;
-    if (!url_fmt_append_n(&b, search, search_len)) goto oom;
-  } else {
-    ant_value_t query = js_get(js, obj, "query");
-    if (is_err(query)) goto oom;
-    if (vtype(query) == kTypeString) {
-      size_t qlen = 0;
-      const char *q = js_getstr(js, query, &qlen);
-      if (q && qlen > 0) {
-        if (!url_fmt_append_c(&b, '?')) goto oom;
-        if (!url_fmt_append_n(&b, q, qlen)) goto oom;
-      }
-    } else if (is_special_object(query)) {
-      url_fmt_buf_t qb = {0};
-      if (!url_fmt_append_query_object(js, &qb, query)) {
-        free(qb.buf);
-        goto oom;
-      }
-      if (qb.len > 0) {
-      if (!url_fmt_append_c(&b, '?')) {
-        free(qb.buf);
-        goto oom;
-      }
-      if (!url_fmt_append_n(&b, qb.buf, qb.len)) {
-        free(qb.buf);
-        goto oom;
-      }}
-      free(qb.buf);
-    }
-  }
-
-  if (hash && hash_len > 0) {
-    if (hash[0] != '#' && !url_fmt_append_c(&b, '#')) goto oom;
-    if (!url_fmt_append_n(&b, hash, hash_len)) goto oom;
-  }
-
-  ant_value_t ret = js_mkstr(js, b.buf ? b.buf : "", b.len);
-  free(b.buf);
-  return ret;
-
-oom:
-  free(b.buf);
+  ant_value_t domain = js_template_to_string(js, args[0]);
+  if (is_err(domain)) return domain;
   if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
-  return js_mkerr(js, "allocation failure");
+
+  size_t len = 0;
+  const char *value = js_getstr(js, domain, &len);
+  if (!value || len == 0) return js_mkstr(js, "", 0);
+
+  ada_url url = ada_parse("ws://x", 6);
+  if (!ada_set_hostname(url, value, len)) {
+    ada_free(url);
+    return js_mkstr(js, "", 0);
+  }
+
+  ada_string hostname = ada_get_hostname(url);
+  ada_owned_string uni = ada_idna_to_unicode(hostname.data, hostname.length);
+  ant_value_t result = js_mkstr(js, uni.data ? uni.data : "", uni.data ? uni.length : 0);
+  ada_free_owned_string(uni);
+  ada_free(url);
+
+  return result;
 }
 
-ant_value_t url_library(ant_t *js) {
+static ant_value_t builtin_url_format_href(ant_params_t) {
+  if (nargs < 1 || vtype(args[0]) != kTypeString) return js_mkstr(js, "", 0);
+
+  bool fragment = nargs > 1 && js_truthy(js, args[1]);
+  bool unicode = nargs > 2 && js_truthy(js, args[2]);
+  bool search = nargs > 3 && js_truthy(js, args[3]);
+  bool auth = nargs > 4 && js_truthy(js, args[4]);
+
+  size_t href_len = 0;
+  const char *href = js_getstr(js, args[0], &href_len);
+  if (!href) return js_mkstr(js, "", 0);
+
+  ada_url url = ada_parse(href, href_len);
+  if (!url || !ada_is_valid(url)) {
+    if (url) ada_free(url);
+    return js_mkstr(js, "", 0);
+  }
+
+  if (!fragment) ada_clear_hash(url);
+  if (!search) ada_clear_search(url);
+  
+  if (!auth) {
+    ada_set_username(url, "", 0);
+    ada_set_password(url, "", 0);
+  }
+
+  ada_string out = ada_get_href(url);
+  ant_value_t ret = js_mkstr(js, out.data, out.length);
+
+  if (unicode && ada_has_hostname(url)) {
+    ada_string hostname = ada_get_hostname(url);
+    ada_owned_string uni = ada_idna_to_unicode(hostname.data, hostname.length);
+    const char *dslash = out.length > 2 ? strstr(out.data, "//") : NULL;
+    size_t at = dslash ? (size_t)(dslash - out.data) + 2 : out.length;
+
+    if (dslash && ada_has_credentials(url)) {
+      const char *sep = memchr(out.data + at, '@', out.length - at);
+      at = sep ? (size_t)(sep - out.data) + 1 : out.length;
+    }
+
+    if (
+      uni.data && at + hostname.length <= out.length &&
+      memcmp(out.data + at, hostname.data, hostname.length) == 0
+    ) {
+      url_fmt_buf_t b = {0};
+      bool ok =
+        url_fmt_append_n(&b, out.data, at) &&
+        url_fmt_append_n(&b, uni.data, uni.length) &&
+        url_fmt_append_n(&b, out.data + at + hostname.length, out.length - at - hostname.length);
+      if (ok) ret = js_mkstr(js, b.buf ? b.buf : "", b.len);
+      free(b.buf);
+    }
+    ada_free_owned_string(uni);
+  }
+
+  ada_free(url);
+  return ret;
+}
+
+ant_value_t internal_url_library(ant_t *js) {
   ant_value_t lib = Ant_Object_CreateBare(js);
   ant_value_t glob = js_glob(js);
-  
+
   js_set(js, lib, "URL", js_get(js, glob, "URL"));
   js_set(js, lib, "URLSearchParams", js_get(js, glob, "URLSearchParams"));
   js_set(js, lib, "fileURLToPath", Ant_Function_CreateWithArity(builtin_fileURLToPath, 1));
   js_set(js, lib, "pathToFileURL", Ant_Function_CreateWithArity(builtin_pathToFileURL, 2));
   js_set(js, lib, "domainToASCII", Ant_Function_CreateWithArity(builtin_domainToASCII, 1));
-  js_set(js, lib, "parse", Ant_Function_CreateWithArity(builtin_url_parse, 3));
-  js_set(js, lib, "format", Ant_Function_CreateWithArity(builtin_url_format, 2));
-  js_set(js, lib, "default", lib);
+  js_set(js, lib, "domainToUnicode", Ant_Function_CreateWithArity(builtin_domainToUnicode, 1));
+  js_set(js, lib, "formatHref", Ant_Function_CreateWithArity(builtin_url_format_href, 5));
   
+  legacy_url_register(js, lib);
+  js_set(js, lib, "default", lib);
+
   return lib;
 }

@@ -1,6 +1,9 @@
 // meson test -C build rope-mark
 #include "internal.h"
 #include "gc/ropes.h"
+#include "gc/objects.h"
+#include "gc/strings.h"
+#include "cage.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,6 +77,25 @@ int main(void) {
   assert(js.rope_gc.old.head == young && js.rope_gc.young.head == NULL);
   assert(gc_ropes_begin(&js, true) == GC_ROPES_BEGIN_NORMAL);
   assert(gc_ropes_mark(&js, young->data, size, align) == GC_ROPE_MARK_INVALID);
+
+  ant_pool_block_t *stale = ant_cage_alloc(sizeof(*stale) + size, 4096);
+  void *released = ant_cage_reserve(4096, 4096, 0);
+  assert(stale && released);
+  stale->used = stale->cap = size;
+  stale->next = stale->prev = NULL;
+  ant_rope_heap_t *dead = (ant_rope_heap_t *)stale->data;
+  *dead = (ant_rope_heap_t){
+    .len = 2, .depth = 1,
+    .left = mkref(kTypeString, released),
+    .right = mkref(kTypeString, released),
+    .cached = js_mkundef(),
+  };
+  js.rope_gc.old.head = stale;
+  assert(gc_ropes_begin(&js, false) == GC_ROPES_BEGIN_NORMAL);
+  ant_value_t stale_word = ant_mkrope_value(dead);
+  gc_mark_conservative_range(&js, &stale_word, sizeof(stale_word));
+  assert(dead->mark_epoch == js.rope_gc.mark_epoch);
+  js.rope_gc.old.head = young;
 
   // A separate isolate has no ownership of the first isolate's pool blocks.
   ant_t other = {0};

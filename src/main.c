@@ -277,9 +277,7 @@ static int run_cli(const ant_cli_t *cli, bool crash_report) {
   return code;
 }
 
-int main(int argc, char *argv[]) {
-  if (ant_sandbox_vm_helper_is_process(argv[0])) return ant_sandbox_vm_helper_process_main();
-
+static int ant_main(int argc, char *argv[]) {
   bool crash_report = ant_crash_is_internal_report(argc, argv);
   if (crash_report) argc = 1;
   ant_cli_process_init(argc, argv, crash_report);
@@ -292,4 +290,9 @@ int main(int argc, char *argv[]) {
 
   ant_cli_free(&cli);
   return code;
+}
+
+int main(int argc, char *argv[]) {
+  if (ant_sandbox_vm_helper_is_process(argv[0])) return ant_sandbox_vm_helper_process_main();
+  return os_run_main(ant_main, argc, argv);
 }

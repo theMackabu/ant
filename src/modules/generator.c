@@ -40,7 +40,7 @@ typedef struct generator_data {
 } generator_data_t;
 
 static ant_value_t generator_resume_kind(
-  ant_t *js, ant_value_t gen, 
+  ant_t *js, ant_value_t gen,
   ant_value_t resume_value, sv_resume_kind_t resume_kind
 );
 
@@ -51,6 +51,25 @@ static ant_value_t generator_result(ant_t *js, bool done, ant_value_t value) {
 static inline ant_value_t generator_out(ant_t *js, bool *raw_done, bool done, ant_value_t value) {
   if (!raw_done) return generator_result(js, done, value);
   *raw_done = done;
+  return value;
+}
+
+static ant_value_t generator_out_raw(ant_t *js, bool *raw_done, ant_value_t result) {
+  if (!raw_done) return result;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, result);
+  ant_value_t done = js_getprop_fallback(js, result, "done");
+
+  if (is_err(done)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return done;
+  }
+
+  *raw_done = js_truthy(js, done);
+  ant_value_t value = js_getprop_fallback(js, result, "value");
+  GC_ROOT_RESTORE(js, root_mark);
+
   return value;
 }
 
@@ -114,7 +133,7 @@ static ant_value_t generator_enqueue_request(
   ant_t *js, ant_value_t gen, sv_resume_kind_t kind, ant_value_t value
 ) {
   generator_data_t *data = generator_data(gen);
-  if (!data || !data->is_async) return js_mkerr_typed(js, JS_ERR_TYPE, "Generator is already executing");
+  if (!data || !data->is_async) return js_mkerr_typed(js, JS_ERR_TYPE, "Generator is already running");
 
   ant_value_t promise = js_mkpromise(js);
   if (is_err(promise)) return promise;
@@ -320,9 +339,17 @@ static ant_value_t generator_resume_kind_inner(
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, gen);
   GC_ROOT_PIN(js, resume_value);
+  
   coroutine_t *coro = generator_coro(gen);
+  generator_state_t state = generator_state(gen);
+  
+  if (coro && state == GEN_EXECUTING) {
+    ant_value_t queued = generator_enqueue_request(js, gen, resume_kind, resume_value);
+    GC_ROOT_RESTORE(js, root_mark);
+    return queued;
+  }
 
-  if (!coro || (!coro->act && generator_state(gen) != GEN_SUSPENDED_START)) {
+  if (!coro || (!coro->act && state != GEN_SUSPENDED_START)) {
     generator_set_state(gen, GEN_COMPLETED);
     if (resume_kind == SV_RESUME_THROW) {
       GC_ROOT_RESTORE(js, root_mark);
@@ -338,13 +365,6 @@ static ant_value_t generator_resume_kind_inner(
     return out;
   }
 
-  generator_state_t state = generator_state(gen);
-  if (state == GEN_EXECUTING) {
-    ant_value_t queued = generator_enqueue_request(js, gen, resume_kind, resume_value);
-    GC_ROOT_RESTORE(js, root_mark);
-    return queued;
-  }
-    
   if (state == GEN_COMPLETED) {
     if (resume_kind == SV_RESUME_THROW) {
       GC_ROOT_RESTORE(js, root_mark);
@@ -389,7 +409,8 @@ static ant_value_t generator_resume_kind_inner(
 
   sv_vm_t *exec_vm = js->vm;
   ant_value_t result;
-  
+  coro->yield_raw = false;
+
   if (state == GEN_SUSPENDED_START) {
     sv_closure_t *closure = (vtype(coro->async_func) == kTypeFunction) ? js_func_closure(coro->async_func) : NULL;
     if (!closure || !closure->func) result = js_mkerr(js, "invalid generator function");
@@ -454,9 +475,14 @@ static ant_value_t generator_resume_kind_inner(
     }
     
     generator_set_state(gen, GEN_SUSPENDED_YIELD);
-    ant_value_t out = generator_out(js, raw_done, false, result);
-    GC_ROOT_RESTORE(js, root_mark);
+    bool raw = coro->yield_raw;
+    coro->yield_raw = false;
     
+    ant_value_t out = raw
+      ? generator_out_raw(js, raw_done, result)
+      : generator_out(js, raw_done, false, result);
+    
+    GC_ROOT_RESTORE(js, root_mark);
     return out;
   }
 
@@ -478,7 +504,7 @@ static ant_value_t generator_resume_kind_raw(
   
   ant_value_t result = generator_resume_kind_inner(js, gen, resume_value, resume_kind, raw_done);
   if (coro) coroutine_release(coro);
-  
+
   return result;
 }
 
@@ -498,7 +524,7 @@ static ant_value_t generator_next(ant_params_t) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Generator.prototype.next called on incompatible receiver");
 
   if (generator_state(gen) == GEN_EXECUTING && !generator_is_async(gen))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Generator is already executing");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Generator is already running");
     
   ant_value_t resume_value = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t result = generator_resume(js, gen, resume_value);
@@ -514,7 +540,7 @@ static ant_value_t generator_return(ant_params_t) {
 
   generator_state_t state = generator_state(gen);
   if (state == GEN_EXECUTING && !generator_is_async(gen))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Generator is already executing");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Generator is already running");
     
   ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t result = generator_resume_kind(js, gen, value, SV_RESUME_RETURN);
@@ -530,7 +556,7 @@ static ant_value_t generator_throw(ant_params_t) {
     
   generator_state_t state = generator_state(gen);
   if (state == GEN_EXECUTING && !generator_is_async(gen))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Generator is already executing");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Generator is already running");
     
   ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t result = generator_resume_kind(js, gen, value, SV_RESUME_THROW);
@@ -561,6 +587,20 @@ ant_value_t js_generator_resume_sync(
   if (js_interrupt_pending(js)) return js_interrupt_raise(js);
   if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   return Ant_Silver_FinishNativeCall(js, generator_resume_kind_raw(js, gen, value, kind, out_done));
+}
+
+static bool generator_iter_advance(ant_t *js, iterator_t *it, ant_value_t *out) {
+  bool done = true;
+  ant_value_t value = js_generator_resume_sync(js, it->iterator, js_mkundef(), SV_RESUME_NEXT, &done);
+  
+  if (is_err(value) || done) return false;
+  *out = value;
+  
+  return true;
+}
+
+js_iter_advance_fn Ant_Generator_IterAdvance(ant_value_t iterator, ant_value_t next_method) {
+  return js_generator_can_resume_sync(iterator, next_method, SV_RESUME_NEXT) ? generator_iter_advance : NULL;
 }
 
 void init_generator_module(ant_t *js) {  

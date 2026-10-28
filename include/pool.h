@@ -84,6 +84,8 @@ typedef struct {
   ant_large_string_alloc_t *live;
   ant_large_string_alloc_t *reusable;
   ant_large_string_alloc_t *quarantine;
+  size_t cycle_taken;
+  size_t cycle_taken_prev;
   uint32_t gc_epoch;
 } ant_large_string_space_t;
 

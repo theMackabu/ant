@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -298,6 +299,102 @@ static utf8proc_ssize_t utf16_decode(td_state_t *st, const uint8_t *src, size_t 
 #undef U16_IS_LOW
 #undef U16_PAIR
 
+static ant_value_t td_invalid_data_error(ant_t *js, td_state_t *st) {
+  char message[64];
+  snprintf(message, sizeof(message), "The encoded data was not valid for encoding %s", encoding_name(st->encoding));
+  return js_mkerr_code(js, JS_ERR_TYPE, "ERR_ENCODING_INVALID_ENCODED_DATA", message);
+}
+
+static ant_value_t td_decode_utf8(ant_t *js, td_state_t *st, const uint8_t *input, size_t input_len, bool stream_mode) {
+  utf8_dec_t dec = { .ignore_bom = st->ignore_bom, .bom_seen = st->bom_seen };
+  const uint8_t *p = input;
+  
+  size_t n = input_len;
+  char head[24];
+  size_t head_len = 0;
+
+  if (st->pending_len > 0) {
+    uint8_t joined[8];
+    size_t pend = (size_t)st->pending_len;
+    size_t take = n < 3 ? n : 3;
+    bool more = take < n;
+    
+    memcpy(joined, st->pending, pend);
+    if (take) memcpy(joined + pend, p, take);
+    st->pending_len = 0;
+    
+    utf8proc_ssize_t r = utf8_whatwg_decode(&dec, joined, pend + take, head, st->fatal, more || stream_mode);
+    if (r < 0) return td_invalid_data_error(js, st);
+    head_len = (size_t)r;
+    
+    if (more) {
+      take -= (size_t)dec.pend_pos;
+      dec.pend_pos = 0;
+    }
+    
+    p += take;
+    n -= take;
+  }
+
+  if (
+    !dec.bom_seen && !dec.ignore_bom && n >= 3 &&
+    p[0] == 0xef && p[1] == 0xbb && p[2] == 0xbf
+  ) {
+    p += 3;
+    n -= 3;
+    dec.bom_seen = true;
+  }
+
+  ant_value_t result;
+  size_t valid = 0;
+
+  if (head_len == 0) {
+    size_t tail = stream_mode ? utf8_truncated_tail((const char *)p, n) : 0;
+    result = js_mkstr_utf8_try(js, p, n - tail, &valid);
+    if (is_err(result)) return result;
+    
+    if (vtype(result) != kTypeUndefined) {
+      if (tail > 0) {
+        st->pending_len = (int)tail;
+        memcpy(st->pending, p + n - tail, tail);
+      } else {
+        st->pending_len = dec.pend_pos;
+        memcpy(st->pending, dec.pend_buf, (size_t)dec.pend_pos);
+      }
+      
+      st->bom_seen = stream_mode && (dec.bom_seen || n > tail);
+      return result;
+    }
+  }
+
+  if (valid > 0) dec.bom_seen = true;
+  char *out = malloc(head_len + valid + (n - valid) * 3 + 1);
+  if (!out) return js_mkerr(js, "out of memory");
+
+  memcpy(out, head, head_len);
+  memcpy(out + head_len, p, valid);
+
+  utf8proc_ssize_t r = utf8_whatwg_decode(
+    &dec, p + valid, n - valid,
+    out + head_len + valid, st->fatal, stream_mode
+  );
+
+  if (r < 0) {
+    free(out);
+    return td_invalid_data_error(js, st);
+  }
+
+  size_t out_len = head_len + valid + (size_t)r;
+  result = out_len == valid ? js_mkstr_utf8(js, out, out_len) : js_mkstr_utf8_valid(js, out, out_len, false);
+  free(out);
+
+  st->pending_len = dec.pend_pos;
+  memcpy(st->pending, dec.pend_buf, (size_t)dec.pend_pos);
+  st->bom_seen = stream_mode ? dec.bom_seen : false;
+  
+  return result;
+}
+
 ant_value_t td_decode(ant_t *js, td_state_t *st, const uint8_t *input, size_t input_len, bool stream_mode) {
   size_t total = (size_t)st->pending_len + input_len;
   if (total == 0) {
@@ -305,15 +402,21 @@ ant_value_t td_decode(ant_t *js, td_state_t *st, const uint8_t *input, size_t in
     return js_mkstr(js, "", 0);
   }
 
+  if (st->encoding == TD_ENC_UTF8)
+    return td_decode_utf8(js, st, input, input_len, stream_mode);
+
   uint8_t *work = NULL;
   const uint8_t *src;
+  
   if (st->pending_len > 0) {
     work = malloc(total);
     if (!work) return Ant_Error_CreateOutOfMemory(js);
+    
     memcpy(work, st->pending, (size_t)st->pending_len);
     if (input && input_len > 0) memcpy(work + st->pending_len, input, input_len);
     src = work;
   } else src = input;
+  
   st->pending_len = 0;
 
   char *out = malloc(total * 3 + 1);
@@ -322,26 +425,18 @@ ant_value_t td_decode(ant_t *js, td_state_t *st, const uint8_t *input, size_t in
   utf8proc_ssize_t n;
   if (st->encoding == TD_ENC_UTF16LE || st->encoding == TD_ENC_UTF16BE) {
     n = utf16_decode(st, src, total, out, stream_mode);
-  } else if (st->encoding == TD_ENC_WINDOWS_1252 || st->encoding == TD_ENC_ISO_8859_2) {
+  } else {
     n = decode_single_byte(st, src, total, out);
     st->pending_len = 0;
     st->bom_seen = false;
-  } else {
-    utf8_dec_t dec = { .ignore_bom = st->ignore_bom, .bom_seen = st->bom_seen };
-    n = utf8_whatwg_decode(&dec, src, total, out, st->fatal, stream_mode);
-    st->pending_len = dec.pend_pos;
-    memcpy(st->pending, dec.pend_buf, (size_t)dec.pend_pos);
-    st->bom_seen = stream_mode ? dec.bom_seen : false;
   }
 
   if (n < 0) {
     free(work); free(out);
-    return js_mkerr_typed(js, JS_ERR_TYPE, "The encoded data was not valid.");
+    return td_invalid_data_error(js, st);
   }
 
-  if (st->encoding != TD_ENC_UTF8) {
-    if (!stream_mode) st->bom_seen = false;
-  }
+  if (!stream_mode) st->bom_seen = false;
 
   ant_value_t result = js_mkstr(js, out, (size_t)n);
   free(work);

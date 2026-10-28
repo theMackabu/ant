@@ -56,18 +56,35 @@ void utf8_thread_cleanup(void);
 size_t utf16_strlen(const char *str, size_t byte_len);
 size_t byte_offset_to_utf16(const char *str, size_t byte_off);
 size_t utf8_char_len_at(const char *str, size_t byte_len, size_t pos);
+size_t wtf8_to_utf8(const char *str, size_t byte_len, char *dst);
+size_t utf8_valid_prefix(const char *str, size_t byte_len, bool *out_ascii);
+size_t utf8_copy_valid_prefix(char *dst, const char *src, size_t byte_len, bool *out_ascii);
+size_t utf8_truncated_tail(const char *str, size_t byte_len);
 
 char *utf8_json_quote(const char *str, size_t byte_len, size_t *out_len);
 char *latin1_to_utf8(const uint8_t *src, size_t len, size_t *out_len);
+char *wtf8_to_utf8_dup(const char *str, size_t *byte_len);
+char *wtf8_str_to_utf8_dup(const char *str, size_t *byte_len);
+char *wtf8_split_pairs_dup(const char *str, size_t byte_len, size_t *out_len);
+char *utf8_replace_invalid(const char *str, size_t byte_len, size_t valid, size_t *out_len);
+char *wtf8_replace_invalid(const char *str, size_t byte_len, size_t *out_len);
 
 bool utf16_next_code_unit(utf16_iterator_t *iterator, uint16_t *unit);
 bool utf8_validate_bytes(const char *str, size_t byte_len);
 bool wtf8_validate_bytes(const char *str, size_t byte_len);
-bool wtf8_is_well_formed(const char *str, size_t byte_len);
-uint8_t *utf8_to_latin1(const char *src, size_t len, size_t *out_len, bool *is_latin1);
+bool wtf8_has_surrogate(const char *str, size_t byte_len);
+bool wtf8_has_lone_surrogate(const char *str, size_t byte_len);
+bool wtf8_needle_splits_pairs(const char *needle, size_t byte_len);
+bool wtf8_has_supplementary(const char *str, size_t byte_len);
 
+uint8_t *utf8_to_latin1(const char *src, size_t len, size_t *out_len, bool *is_latin1);
 uint32_t utf16_code_unit_at(const char *str, size_t byte_len, size_t utf16_idx);
 uint32_t utf16_codepoint_at(const char *str, size_t byte_len, size_t utf16_idx);
+
+int utf8_full_case_map(
+  const utf8proc_uint8_t *src, utf8proc_ssize_t len, utf8proc_ssize_t pos,
+  utf8proc_ssize_t n, utf8proc_int32_t cp, bool upper, utf8proc_int32_t out[3]
+);
 
 static inline uint32_t utf16_units_for_utf8_byte(unsigned char c) {
   if ((c & 0xC0) == 0x80) return 0;
@@ -83,9 +100,7 @@ static inline int utf8_sequence_length(unsigned char first_byte) {
 }
 
 static inline int utf8_encode(uint32_t cp, char *out) {
-  return (int)
-    utf8proc_encode_char((utf8proc_int32_t)cp, 
-    (utf8proc_uint8_t *)out);
+  return (int)utf8proc_encode_char((utf8proc_int32_t)cp, (utf8proc_uint8_t *)out);
 }
 
 static inline utf16_iterator_t utf16_iterator(const char *str, size_t byte_len) {
@@ -94,8 +109,7 @@ static inline utf16_iterator_t utf16_iterator(const char *str, size_t byte_len) 
 }
 
 static inline utf8proc_ssize_t utf8_next(
-  const utf8proc_uint8_t *p,
-  utf8proc_ssize_t len, utf8proc_int32_t *cp
+  const utf8proc_uint8_t *p, utf8proc_ssize_t len, utf8proc_int32_t *cp
 ) {
   utf8proc_ssize_t n = utf8proc_iterate(p, len, cp);
   return n > 0 ? n : 1;

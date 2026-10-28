@@ -482,10 +482,9 @@ function createAgentState() {
 
 export class OutgoingMessage extends EventEmitter {}
 
-class FetchIncomingMessage extends EventEmitter {
+class FetchIncomingMessage extends Readable {
   constructor(response) {
     super();
-
     const { headers, rawHeaders } = buildHeadersFromFetch(response);
 
     this.socket = null;
@@ -499,98 +498,43 @@ class FetchIncomingMessage extends EventEmitter {
     this.httpVersionMinor = 1;
     this.complete = false;
     this.aborted = false;
-    this.destroyed = false;
-    this.readableEnded = false;
+    
     this.url = response.url;
     this._reader = response.body && typeof response.body.getReader === 'function' ? response.body.getReader() : null;
-    this._encoding = null;
-    this._decoder = null;
-    this._pumpStarted = false;
-    this._closeEmitted = false;
   }
 
-  _emitClose() {
-    if (this._closeEmitted) return;
-    this._closeEmitted = true;
-    this.emit('close');
-  }
-
-  async _pumpBody() {
-    if (this._pumpStarted) return;
-    this._pumpStarted = true;
-
-    if (!this._reader) {
+  _read() {
+    const reader = this._reader;
+    if (!reader) {
       this.complete = true;
-      this.readableEnded = true;
-      this.emit('end');
-      this._emitClose();
+      this.push(null);
       return;
     }
 
-    try {
-      for (;;) {
-        const { done, value } = await this._reader.read();
-        if (done) break;
-        if (!value || value.byteLength === 0) continue;
-
-        const chunk = Buffer.from(value);
-        if (this._decoder) {
-          const text = this._decoder.decode(chunk, { stream: true });
-          if (text.length > 0) this.emit('data', text);
-        } else if (this._encoding) {
-          this.emit('data', chunk.toString(this._encoding));
-        } else {
-          this.emit('data', chunk);
-        }
-      }
-
-      if (this._decoder) {
-        const finalChunk = this._decoder.decode();
-        if (finalChunk.length > 0) this.emit('data', finalChunk);
-      }
-
-      this.complete = true;
-      this.readableEnded = true;
-      this.emit('end');
-      this._emitClose();
-    } catch (error) {
+    reader.read().then(({ done, value }) => {
       if (this.destroyed) return;
-      this.destroyed = true;
+      if (done) {
+        this.complete = true;
+        this.push(null);
+        return;
+      }
+      if (value && value.byteLength > 0) this.push(Buffer.from(value));
+      else this._read();
+    }, error => {
+      if (this.destroyed) return;
       this.aborted = true;
-      this.emit('error', error);
-      this._emitClose();
-    }
+      this.destroy(error);
+    });
   }
 
-  setEncoding(encoding) {
-    this._encoding = encoding || 'utf8';
-    if (typeof TextDecoder === 'function') {
-      try {
-        this._decoder = new TextDecoder(this._encoding === 'utf8' ? 'utf-8' : this._encoding);
-      } catch {
-        this._decoder = null;
+  _destroy(error, callback) {
+    if (!this.complete) {
+      this.aborted = true;
+      if (this._reader && typeof this._reader.cancel === 'function') {
+        Promise.resolve(this._reader.cancel(error)).catch(() => {});
       }
     }
-    return this;
-  }
-
-  resume() {
-    queueMicrotask(() => {
-      this._pumpBody();
-    });
-    return this;
-  }
-
-  destroy(error) {
-    if (this.destroyed) return this;
-    this.destroyed = true;
-    this.aborted = true;
-    if (this._reader && typeof this._reader.cancel === 'function') {
-      Promise.resolve(this._reader.cancel(error)).catch(() => {});
-    }
-    if (error) this.emit('error', error);
-    this._emitClose();
-    return this;
+    callback(error);
   }
 }
 
@@ -694,9 +638,6 @@ export class ClientRequest extends OutgoingMessage {
         });
 
         this.emit('response', incoming);
-        queueMicrotask(() => {
-          incoming._pumpBody();
-        });
       })
       .catch(error => {
         this._clearTimeoutTimer();
@@ -821,7 +762,6 @@ export class ClientRequest extends OutgoingMessage {
         incoming.httpVersionMajor = response.httpVersionMajor;
         incoming.httpVersionMinor = response.httpVersionMinor;
         this.emit('response', incoming);
-        incoming._pumpBody();
       }
     };
 

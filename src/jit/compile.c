@@ -1,6 +1,7 @@
 #include "realm.h"
 #include "compile.h"
 #include "debug.h"
+#include "opt/tier.h"
 #include <time.h>
 
 static void jit_emit_deferred_bails(jit_compile_t *c) {
@@ -330,6 +331,19 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
   return code;
 }
 
+static void jit_note_module(sv_func_t *func, MIR_context_t ctx, MIR_module_t mod) {
+  sv_func_sidecar_t *sidecar = func->unit ? sv_func_ensure_sidecar(func) : NULL;
+  if (!sidecar) return;
+  if (sidecar->jit_module_count == sidecar->jit_module_cap) {
+    uint32_t cap = sidecar->jit_module_cap ? sidecar->jit_module_cap * 2 : 2;
+    sv_jit_module_t *modules = realloc(sidecar->jit_modules, cap * sizeof(*modules));
+    if (!modules) return;
+    sidecar->jit_modules = modules;
+    sidecar->jit_module_cap = cap;
+  }
+  sidecar->jit_modules[sidecar->jit_module_count++] = (sv_jit_module_t){ctx, mod};
+}
+
 static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure, sv_jit_tier_t tier) {
   if (sv_jitless_unlikely) {
     func->jit_compile_failed = true;
@@ -355,13 +369,19 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
     return NULL;
   }
 
-  if (!jit_is_eligible(c->func)) {
+  bool eligible = jit_is_eligible(c->func);
+  
+  bool opt_only = 
+    !eligible && opt_tier_enabled() && 
+    !c->func->is_generator && !c->func->is_tla && 
+    c->func->code_len <= SV_JIT_MAX_CODE_BYTES;
+  
+  if (!eligible && !opt_only) {
     c->func->jit_compile_failed = true;
     return NULL;
   }
 
   c->func->jit_compiling = true;
-  sv_code_unit_make_immortal(c->func);
   c->jc = c->js->jit_ctx;
 
   if (!c->jc) {
@@ -375,6 +395,28 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   }
 
   jit_load_externals_once(c->jc);
+  
+  if (opt_tier_enabled() && !ant_realm_multiple(c->js) && !c->js->interrupts_armed) {
+    sv_jit_func_t opt = opt_tier_compile(c->js, c->func, c->hint_closure, opt_only);
+    if (opt) {
+      c->func->jit_compiling = false;
+      c->func->jit_code_cold = false;
+      c->func->jit_code_retier = false;
+      return opt;
+    }
+    
+    if (tier == SV_JIT_TIER_COLD) {
+      tier = SV_JIT_TIER_HOT;
+      c->cold_tier = false;
+    }
+  }
+  
+  if (opt_only) {
+    c->func->jit_compiling = false;
+    c->func->jit_compile_failed = true;
+    return NULL;
+  }
+
   bool jit_compile_hot =
     tier == SV_JIT_TIER_HOT ||
     (tier == SV_JIT_TIER_AUTO &&
@@ -646,6 +688,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
         jit_emit_properties(c);
         break;
       case OP_GET_UPVAL:
+      case OP_GET_UPVAL_VAL:
       case OP_PUT_UPVAL:
       case OP_SET_UPVAL:
       case OP_CLOSE_UPVAL:
@@ -754,6 +797,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   free(c->self_binding_guards);
   free(c->captured_params);
   free(c->captured_locals);
+  free(c->tdz_captured_locals);
   free(c->feat.builder_target_slots);
   free(c->promote_sites);
   free(c->osr_loop_body);
@@ -818,6 +862,8 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
     c->func->jit_compile_failed = true;
     return NULL;
   }
+  
+  jit_note_module(c->func, c->ctx, c->mod);
 
   c->func->jit_compiled_tfb_ver = c->func->tfb_version;
   c->func->jit_code_cold = tier == SV_JIT_TIER_COLD;

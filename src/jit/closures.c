@@ -230,7 +230,7 @@ void scan_osr_entries(sv_func_t *func, osr_entry_map_t *osr) {
     if (sz == 0) break;
     int src = (int)(ip - func->code);
     int target = -1;
-    uint16_t flags = sv_op_flags[op];
+    uint32_t flags = sv_op_flags[op];
     if ((flags & SV_OPF_JIT_OSR_BACKEDGE) != 0) {
       if ((flags & SV_OPF_JIT_BRANCH32) != 0)
         target = src + sz + sv_get_i32(ip + 1);
@@ -308,7 +308,7 @@ jit_child_kind_t classify_child_closure_kind(sv_func_t *parent, sv_func_t *child
   return JIT_CHILD_MIXED;
 }
 
-bool *scan_captured_locals(sv_func_t *func, int n_locals) {
+static bool *scan_local_captures(sv_func_t *func, int n_locals, bool tdz_only) {
   if (n_locals <= 0) return NULL;
   bool *captured = calloc((size_t)n_locals, sizeof(bool));
   if (!captured) return NULL;
@@ -326,7 +326,7 @@ bool *scan_captured_locals(sv_func_t *func, int n_locals) {
 
     for (int i = 0; i < child->upvalue_count; i++) {
       sv_upval_desc_t *desc = &child->upval_descs[i];
-      if (!desc->is_local) continue;
+      if (!desc->is_local || (tdz_only && !desc->may_tdz)) continue;
 
       int li = (int)desc->index - func->param_count;
       if (li < 0 || li >= n_locals) continue;
@@ -335,6 +335,14 @@ bool *scan_captured_locals(sv_func_t *func, int n_locals) {
     ip += sz;
   }
   return captured;
+}
+
+bool *scan_captured_locals(sv_func_t *func, int n_locals) {
+  return scan_local_captures(func, n_locals, false);
+}
+
+bool *scan_tdz_captured_locals(sv_func_t *func, int n_locals) {
+  return scan_local_captures(func, n_locals, true);
 }
 
 bool *scan_captured_params(sv_func_t *func) {

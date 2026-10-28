@@ -2,6 +2,7 @@
 #include <time.h>
 
 #include "gc/roots.h"
+#include "gc/objects.h"
 #include "interrupt.h"
 #include "jit_internal.h"
 #include "modules/regex.h"
@@ -212,6 +213,31 @@ void jit_release_gen_scratch(sv_jit_ctx_t *jc, MIR_context_t ctx) {
   jit_heap_release(jc->mir_heap);
 }
 
+void sv_jit_gc_mark_roots(ant_t *js) {
+  sv_jit_ctx_t *jc = js->jit_ctx;
+  if (!jc) return;
+  
+  if (js->cstk.base) 
+    jit_code_mark_stack(jc, js, gc_native_sp(), (uintptr_t)js->cstk.base);
+  
+  if (js->cstk.main_base && js->cstk.main_lo)
+    jit_code_mark_stack(jc, js, (uintptr_t)js->cstk.main_lo, (uintptr_t)js->cstk.main_base);
+  
+  opt_tier_gc_mark_roots(js);
+}
+
+void sv_jit_release_modules(ant_t *js, sv_func_t *func) {
+  sv_func_sidecar_t *sidecar = sv_func_sidecar(func);
+  if (!sidecar || !sidecar->jit_modules) return;
+  
+  if (js->jit_ctx) for (uint32_t i = 0; i < sidecar->jit_module_count; i++)
+    MIR_remove_module(sidecar->jit_modules[i].ctx, sidecar->jit_modules[i].module);
+  
+  free(sidecar->jit_modules);
+  sidecar->jit_modules = NULL;
+  sidecar->jit_module_count = sidecar->jit_module_cap = 0;
+}
+
 void sv_jit_destroy(ant_t *js) {
   sv_jit_ctx_t *jc = js->jit_ctx;
   if (!jc) return;
@@ -220,10 +246,17 @@ void sv_jit_destroy(ant_t *js) {
   MIR_finish(jc->ctx);
   MIR_gen_finish(jc->ctx_hot);
   MIR_finish(jc->ctx_hot);
+  
   jit_code_registry_destroy(jc);
+  opt_tier_destroy(jc);
   jit_heap_destroy(jc->mir_heap);
-
+  
+  for (uint32_t i = 0; i < jc->pinned_watch_count; i++) 
+    ant_proto_watch_unpin(jc->pinned_watches[i]);
+    
+  free(jc->pinned_watches);
   free(jc);
+  
   js->jit_ctx = NULL;
 }
 
@@ -395,6 +428,17 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
   ant_value_t osr_locals[nl > 0 ? nl : 1];
   for (int i = 0; i < nl; i++) osr_locals[i] = frame->lp[i];
 
+  gc_vm_seg_t *interp_seg = js->vm_segs;
+  uintptr_t interp_seg_lo = interp_seg ? interp_seg->lo : 0;
+  uintptr_t osr_sp = gc_native_sp();
+  
+  bool cover_osr_frame =
+    interp_seg && interp_seg->fp == *(const uintptr_t *)__builtin_frame_address(0) &&
+    osr_sp < interp_seg->lo && interp_seg->lo < interp_seg->hi;
+  
+  if (cover_osr_frame) interp_seg->lo = osr_sp;
+  sv_jit_scrub_stack();
+  
   vm->jit.osr.active = SV_JIT_OSR_LOOP;
   vm->jit.osr.bc_offset = bc_offset;
   vm->jit.osr.locals = osr_locals;
@@ -415,8 +459,10 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
     .argc = frame->argc,
   }, closure);
 
+  if (cover_osr_frame) interp_seg->lo = interp_seg_lo;
   vm->jit.osr_marks = osr_mark.prev;
   vm->jit.osr = (sv_jit_osr_t){0};
+  
   if (synthetic_closure) gc_pop_roots(js, root_mark);
 
   if (result == SV_JIT_RETRY_INTERP && sv_jit_warn_unlikely) fprintf(
@@ -429,6 +475,57 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
     return SV_JIT_RETRY_INTERP;
   }
 
+  return jit_osr_finish(vm, frame, result);
+}
+
+__attribute__((noinline)) ant_value_t sv_jit_try_catch_entry(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, sv_func_t *func, int catch_off
+) {
+  if (func->is_async || vtype(frame->callee) != kTypeFunction) return SV_JIT_RETRY_INTERP;
+  if (!opt_tier_has_catch_entry(js, func, (uint32_t)catch_off)) return SV_JIT_RETRY_INTERP;
+
+  int nl = func->max_locals;
+  ant_value_t osr_locals[nl > 0 ? nl : 1];
+  for (int i = 0; i < nl; i++) osr_locals[i] = frame->lp[i];
+
+  gc_vm_seg_t *interp_seg = js->vm_segs;
+  uintptr_t interp_seg_lo = interp_seg ? interp_seg->lo : 0;
+  uintptr_t osr_sp = gc_native_sp();
+  
+  bool cover_osr_frame =
+    interp_seg && interp_seg->fp == *(const uintptr_t *)__builtin_frame_address(0) &&
+    osr_sp < interp_seg->lo && interp_seg->lo < interp_seg->hi;
+  
+  if (cover_osr_frame) interp_seg->lo = osr_sp;
+
+  vm->jit.osr.active = SV_JIT_OSR_LOOP;
+  vm->jit.osr.bc_offset = catch_off + sv_op_size[OP_CATCH];
+  vm->jit.osr.locals = osr_locals;
+  vm->jit.osr.n_locals = nl;
+  vm->jit.osr.lp = frame->lp;
+  vm->jit.osr.vstack = frame->lp + nl;
+  vm->jit.osr.vstack_sp = vm->sp - (int)(vm->jit.osr.vstack - vm->stack);
+
+  sv_jit_osr_mark_t osr_mark = { vm->jit.osr_marks };
+  vm->jit.osr_marks = &osr_mark;
+
+  ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_INTERP, func->jit_code, vm, &(sv_call_ctx_t){
+    .this_val = frame->this,
+    .new_target = frame->new_target,
+    .super_val = frame->super_val,
+    .args = frame->bp,
+    .argc = frame->argc,
+  }, js_func_closure(frame->callee));
+
+  if (cover_osr_frame) interp_seg->lo = interp_seg_lo;
+  vm->jit.osr_marks = osr_mark.prev;
+  vm->jit.osr = (sv_jit_osr_t){0};
+
+  if (sv_is_jit_bailout(result)) {
+    sv_jit_on_bailout(func);
+    return SV_JIT_RETRY_INTERP;
+  }
+  
   return jit_osr_finish(vm, frame, result);
 }
 
@@ -479,6 +576,7 @@ void sv_jit_drop_func_code(sv_func_t *func) {
   func->jit_code = NULL;
   func->jit_code_cold = false;
   func->jit_tdz_specialized = false;
+  func->jit_self_guarded = false;
   func->back_edge_count = 0;
   func->jit_compiled_tfb_ver = 0;
   func->call_count = SV_JIT_THRESHOLD - SV_JIT_RECOMPILE_DELAY;

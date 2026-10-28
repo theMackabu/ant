@@ -71,12 +71,13 @@ static void CheckCleanup(ant_t *js, int failure, int close_kind) {
   ant_value_t args[] = { iterator, Ant_Function_Create(ThrowingMapper) };
   ant_value_t result = js_typedarray_from(js, args, failure == MAPPER ? 2 : 1, TYPED_ARRAY_UINT8, "Uint8Array");
   assert(js->temp_roots == previous_roots);
-  assert(close_calls == (failure == INITIAL_ROOT ? 0 : 1));
+  bool closes = failure == MAPPER || failure == GROW || failure == ITEM_ROOT;
+  assert(close_calls == (closes ? 1 : 0));
   assert(!fail_realloc);
   if (fail_root_at) assert(root_calls >= fail_root_at);
   fail_root_at = 0;
 
-  if (failure == NORMAL && !fail_close) {
+  if (failure == NORMAL) {
     assert(!is_err(result) && !Ant_Exception_Pending(js));
     TypedArrayData *data = buffer_get_typedarray_data(result);
     assert(data && data->length == 2 && data->buffer->data[0] == 0 && data->buffer->data[1] == 1);
@@ -84,7 +85,6 @@ static void CheckCleanup(ant_t *js, int failure, int close_kind) {
     assert(is_err(result) && Ant_Exception_Peek(js) == result);
     ant_value_t reason = js_take_thrown(js, result);
     if (failure == MAPPER || failure == NEXT) assert(reason == original_reason);
-    else if (failure == NORMAL) assert(reason == close_reason);
     else {
       ant_value_t message = js_get(js, reason, "message");
       assert(vtype(message) == kTypeString && strcmp(js_getstr(js, message, NULL), "oom") == 0);
@@ -111,14 +111,11 @@ int main(void) {
   js_setstackbase(js, NULL);
 
   for (int close_kind = 0; close_kind < 3; close_kind++) {
-    for (int failure = MAPPER; failure <= NORMAL; failure++) {
-      // The result-root failure happens after the normal close succeeds.
-      if (failure == RESULT_ROOT && close_kind != 0) continue;
+    for (int failure = MAPPER; failure <= NORMAL; failure++)
       CheckCleanup(js, failure, close_kind);
-    }
   }
 
   GC_ROOT_RESTORE(js, mark);
   js_destroy(js);
-  puts("PASS TypedArray.from closes once and preserves abrupt completions");
+  puts("PASS TypedArray.from closes only on abrupt completions and preserves them");
 }

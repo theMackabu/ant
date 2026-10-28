@@ -262,8 +262,7 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   GC_ROOT_PIN(js, proto);
   GC_ROOT_PIN(js, obj);
   
-  obj = Ant_Object_CreateBare(js);
-  if (is_object_type(proto)) js_set_proto_init(obj, proto);
+  obj = js_mkobj_with_proto(js, is_object_type(proto) ? proto : js_mkundef());
   
   ant_value_t ctor_this = obj;
   ant_value_t result = sv_vm_call(vm, js, func, obj, args, argc, &ctor_this, effective_new_target);
@@ -417,8 +416,7 @@ static inline __attribute__((noinline)) ant_value_t sv_op_new_apply(sv_vm_t *vm,
   GC_ROOT_PIN(js, proto);
   GC_ROOT_PIN(js, obj);
   
-  obj = Ant_Object_CreateBare(js);
-  if (is_object_type(proto)) js_set_proto_init(obj, proto);
+  obj = js_mkobj_with_proto(js, is_object_type(proto) ? proto : js_mkundef());
   
   ant_value_t ctor_this = obj;
   ant_value_t result = sv_vm_call(vm, js, func, obj, call.args, call.argc, &ctor_this, effective_new_target);
@@ -566,7 +564,9 @@ static inline bool sv_op_call_call_fused(
 
       for (int i = 0; i < f2->upvalue_count; i++) {
         sv_upval_desc_t *d = &f2->upval_descs[i];
-        fake.inline_upvals[i] = d->is_local ? &cell : c1->upvalues[d->index];
+        if (!d->is_local) fake.inline_upvals[i] = c1->upvalues[d->index];
+        else if (d->by_value) fake.inline_upvals[i] = (sv_upvalue_t *)(uintptr_t)args1[0];
+        else fake.inline_upvals[i] = &cell;
       }
 
       ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_INTERP, f2->jit_code, vm, &(sv_call_ctx_t){

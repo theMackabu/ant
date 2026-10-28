@@ -17,7 +17,8 @@ static constexpr uint8_t SV_TFB_SPEC_COUNT_SHIFT = 4;
 static constexpr uint8_t SV_TFB_SPEC_MIN_SAMPLES = 7;
 
 static constexpr uint8_t SV_TFB_SPEC_COUNT_MASK = 7u << SV_TFB_SPEC_COUNT_SHIFT;
-static constexpr uint8_t SV_TFB_SPEC_MISMATCH   = 1u << 7;
+static constexpr uint8_t SV_TFB_SPEC_MISMATCH = 1u << 7;
+static constexpr uint8_t SV_TFB_DOUBLE = 1u << 4;
 
 static constexpr int SV_CALL_FB_MAX_SLOTS = 32;
 static constexpr uint8_t SV_JIT_BAILOUT_LIMIT = 5;
@@ -162,6 +163,19 @@ static inline sv_tfb_class_t sv_tfb_classify(ant_value_t v) {
   return SV_TFB_OTHER;
 }
 
+// TODO: cleanup
+static constexpr uint8_t SV_TFB_LENGTH_ARRAY = SV_TFB_OTHER;
+static constexpr uint8_t SV_TFB_LENGTH_STRING = SV_TFB_STR;
+static constexpr uint8_t SV_TFB_LENGTH_OTHER = SV_TFB_NUM;
+
+static inline uint8_t sv_tfb_length_class(ant_value_t object) {
+  switch (vtype(object)) {
+    case kTypeArray: return SV_TFB_LENGTH_ARRAY;
+    case kTypeString: return SV_TFB_LENGTH_STRING;
+    default: return SV_TFB_LENGTH_OTHER;
+  }
+}
+
 static inline bool sv_func_has_sidecar(const sv_func_t *func) {
   return func && (((uintptr_t)func->type_feedback & ant_sidecar) != 0);
 }
@@ -201,6 +215,13 @@ static inline sv_func_sidecar_t *sv_func_ensure_sidecar(sv_func_t *func) {
   return sidecar;
 }
 
+static inline bool sv_tfb_is_double(ant_value_t v) {
+  if (vtype(v) != kTypeNumber) return false;
+  double d = tod(v);
+  if (!(d >= (double)INT32_MIN && d <= (double)INT32_MAX)) return true;
+  return (double)(int32_t)d != d || (d == 0 && signbit(d));
+}
+
 static inline uint8_t *sv_tfb_site(sv_func_t *func, uint8_t *ip) {
   uint8_t *type_feedback = sv_func_type_feedback(func);
   return type_feedback ? &type_feedback[(int)(ip - func->code)] : NULL;
@@ -212,12 +233,36 @@ static inline void sv_tfb_site_update(sv_func_t *func, uint8_t *site, uint8_t ol
 
 static inline void sv_tfb_record2(sv_func_t *func, uint8_t *ip, ant_value_t l, ant_value_t r) {
   uint8_t *site = sv_tfb_site(func, ip);
-  if (site) sv_tfb_site_update(func, site, *site, *site | sv_tfb_classify(l) | sv_tfb_classify(r));
+  if (!site) return;
+  
+  uint8_t old = *site;
+  uint8_t neu = old | sv_tfb_classify(l) | sv_tfb_classify(r);
+  
+  if (!(old & SV_TFB_DOUBLE) && (sv_tfb_is_double(l) || sv_tfb_is_double(r))) neu |= SV_TFB_DOUBLE;
+  sv_tfb_site_update(func, site, old, neu);
+}
+
+static inline void sv_tfb_record_iteration(sv_func_t *func, uint8_t *ip, ant_value_t tag) {
+  uint8_t *site = sv_tfb_site(func, ip);
+  if (!site || vtype(tag) != kTypeNumber) return;
+  uint8_t old = *site;
+  sv_tfb_site_update(func, site, old, old | (uint8_t)(1u << ((uint32_t)tod(tag) & 7)));
 }
 
 static inline void sv_tfb_record1(sv_func_t *func, uint8_t *ip, ant_value_t v) {
   uint8_t *site = sv_tfb_site(func, ip);
-  if (site) sv_tfb_site_update(func, site, *site, *site | sv_tfb_classify(v));
+  if (!site) return;
+  
+  uint8_t old = *site;
+  uint8_t neu = old | sv_tfb_classify(v);
+  
+  if (!(old & SV_TFB_DOUBLE) && sv_tfb_is_double(v)) neu |= SV_TFB_DOUBLE;
+  sv_tfb_site_update(func, site, old, neu);
+}
+
+static inline void sv_tfb_record_length(sv_func_t *func, uint8_t *ip, ant_value_t object) {
+  uint8_t *site = sv_tfb_site(func, ip);
+  if (site) sv_tfb_site_update(func, site, *site, *site | sv_tfb_length_class(object));
 }
 
 static inline uint8_t sv_tfb_add_specialization_sample(
@@ -292,32 +337,38 @@ static inline void sv_tfb_record1_word32_spec(
   sv_tfb_site_update(func, site, old, neu);
 }
 
-static inline bool sv_tfb_dense_numeric_element(
+static inline bool sv_tfb_dense_element(
   ant_value_t object, ant_value_t key, ant_value_t *slot
 ) {
   if (vtype(object) != kTypeArray || vtype(key) != kTypeNumber) return false;
 
   double number = tod(key);
-  if (!isfinite(number) || number < 0 ||
-      number >= (double)UINT32_MAX || trunc(number) != number)
-    return false;
+  if (!isfinite(number) || number < 0 || number >= (double)UINT32_MAX || trunc(number) != number) return false;
 
   ant_object_t *ptr = js_obj_ptr(js_as_obj(object));
-  if (!ptr || ptr->flags.is_exotic || !ptr->flags.fast_array ||
-      !ptr->u.array.data)
-    return false;
+  if (!ptr || ptr->flags.is_exotic || !ptr->flags.fast_array || !ptr->u.array.data) return false;
 
   uint32_t index = (uint32_t)number;
   if (index >= ptr->u.array.len || index >= ptr->u.array.cap) return false;
 
   ant_value_t *candidate = &ptr->u.array.data[index];
-  if (vtype(*candidate) != kTypeNumber) return false;
+  if (vtype(*candidate) == kTypeSentinel) return false;
   if (slot) *slot = *candidate;
 
   return true;
 }
 
+static inline bool sv_tfb_dense_numeric_element(ant_value_t object, ant_value_t key, ant_value_t *slot) {
+  ant_value_t element;
+  if (!sv_tfb_dense_element(object, key, &element) || vtype(element) != kTypeNumber) return false;
+  if (slot) *slot = element;
+  return true;
+}
+
+// TODO: cleanup
 static constexpr uint8_t SV_TFB_ELEM_TYPED_ARRAY = SV_TFB_NUM;
+static constexpr uint8_t SV_TFB_ELEMENT_DENSE = SV_TFB_BOOL;
+static constexpr uint8_t SV_TFB_ELEMENT_OTHER = SV_TFB_OTHER;
 static constexpr uint8_t SV_TFB_ELEM_TYPE_MIXED = UINT8_MAX;
 
 static inline bool sv_tfb_elem_saw_typed_array(uint8_t feedback) {
@@ -357,7 +408,16 @@ static inline __attribute__((noinline)) void sv_tfb_record_typed_array_get(
 ) {
   TypedArrayType type;
   buffer_ta_access_t access = buffer_typedarray_inline_get(object, key, &type);
-  if (access != BUFFER_TA_ACCESS_NONE) sv_tfb_record_elem_type(func, site, type);
+  
+  if (access == BUFFER_TA_ACCESS_NONE) {
+    uint8_t neu = (uint8_t)(old | SV_TFB_ELEMENT_OTHER);
+    if (sv_tfb_still_sampling(old)) neu = sv_tfb_add_specialization_sample(old, neu, false);
+    sv_tfb_site_update(func, site, old, neu);
+    return;
+  }
+  
+  if (!sv_tfb_still_sampling(old)) return;
+  sv_tfb_record_elem_type(func, site, type);
   sv_tfb_record_typed_array_access(func, site, old, access);
 }
 
@@ -370,15 +430,26 @@ static inline __attribute__((noinline)) void sv_tfb_record_typed_array_put(
   sv_tfb_record_typed_array_access(func, site, old, access);
 }
 
-static inline void sv_tfb_record_dense_numeric_get(
-  sv_func_t *func, uint8_t *ip, ant_value_t object, ant_value_t key
-) {
-  uint8_t old;
-  uint8_t *site = sv_tfb_specialization_site(func, ip, &old);
+static inline void sv_tfb_record_get_elem(sv_func_t *func, uint8_t *ip, ant_value_t object, ant_value_t key) {
+  uint8_t *site = sv_tfb_site(func, ip);
   if (!site) return;
   
-  if (vtype(object) != kTypeArray) sv_tfb_record_typed_array_get(func, site, old, object, key);
-  else sv_tfb_record_specialization_at(func, site, old, sv_tfb_dense_numeric_element(object, key, NULL));
+  uint8_t old = *site;
+  if (vtype(object) != kTypeArray) {
+    if (!(old & SV_TFB_ELEMENT_OTHER) || sv_tfb_still_sampling(old))
+      sv_tfb_record_typed_array_get(func, site, old, object, key);
+    return;
+  }
+  
+  uint8_t seen = SV_TFB_ELEMENT_DENSE | SV_TFB_ELEMENT_OTHER;
+  if ((old & seen) == seen && !sv_tfb_still_sampling(old)) return;
+  
+  ant_value_t element = 0;
+  bool dense = sv_tfb_dense_element(object, key, &element);
+  uint8_t neu = old | (dense ? SV_TFB_ELEMENT_DENSE : SV_TFB_ELEMENT_OTHER);
+  
+  if (sv_tfb_still_sampling(old)) neu = sv_tfb_add_specialization_sample(old, neu, dense && vtype(element) == kTypeNumber);
+  sv_tfb_site_update(func, site, old, neu);
 }
 
 static inline bool sv_tfb_dense_numeric_put(

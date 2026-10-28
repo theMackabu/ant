@@ -73,6 +73,12 @@ static constexpr uint32_t T_OBJECT_MASK =
 
 static constexpr uint32_t T_NON_NUMERIC_MASK =
   T_MASK(kTypeString, kTypeArray, kTypeFunction, kTypeBuiltin, kTypeObject, kTypeGenerator);
+  
+static constexpr uint32_t T_TYPEOF_OBJECT_MASK =
+  T_MASK(kTypeNull, kTypeObject, kTypeArray, kTypePromise, kTypeGenerator);
+  
+static constexpr uint32_t T_LITERAL_PROTO_MASK =
+  T_MASK(kTypeNull, kTypeObject, kTypeArray, kTypeFunction);
 
 static_assert(
   T_NON_NUMERIC_MASK == (
@@ -98,7 +104,11 @@ enum: ant_value_t {
 };
 
 static inline void ant_object_invalidate_guarded_absence(ant_t *js, ant_object_t *obj) {
-  if (!obj || !obj->flags.guards_absence) return;
+  if (!obj) return;
+  
+  ant_proto_watch_note_change(obj);
+  if (!obj->flags.guards_absence) return;
+  
   obj->flags.guards_absence = 0;
   ant_ic_epoch_bump(js);
 }
@@ -153,6 +163,17 @@ static inline bool is_callable(ant_value_t v) {
   return obj && obj->flags.is_callable;
 }
 
+static inline bool js_typeof_is(ant_value_t v, uint8_t type) {
+  uint8_t t = vtype(v);
+  if (__builtin_expect(type != kTypeObject && type != kTypeFunction, 1)) return t == type;
+  if (type == kTypeFunction) return is_callable(v);
+  return ((1u << t) & T_TYPEOF_OBJECT_MASK) && !(t == kTypeObject && is_callable(v));
+}
+
+static inline bool js_literal_proto_ok(ant_value_t proto) {
+  return ((1u << vtype(proto)) & T_LITERAL_PROTO_MASK) != 0;
+}
+
 static inline const ant_cfunc_meta_t *js_as_cfunc_meta(ant_value_t fn_val) {
   return (const ant_cfunc_meta_t *)ant_cage_decode(vdata(fn_val));
 }
@@ -192,6 +213,9 @@ typedef ant_value_t (*js_group_add_fn)(
 void Ant_ArgList_Release(ant_arg_list_t *list);
 const ant_value_t *Ant_Array_DenseView(ant_value_t arr, int *len_out);
 
+ant_object_t *obj_alloc_shaped(ant_t *js, uint8_t type_tag, ant_shape_t *shape);
+ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit);
+
 ant_value_t Ant_String_CoerceThis(ant_t *js, const char *name);
 ant_value_t Ant_ArgList_FromArrayLike(ant_t *js, ant_value_t array_like, ant_arg_list_t *list);
 
@@ -209,6 +233,7 @@ bool js_obj_ensure_unique_shape(ant_object_t *obj);
 bool js_get_plain_index(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t *out);
 bool js_string_past_end_is_undefined(ant_t *js, ant_value_t str);
 bool js_try_get_own_data_prop_interned(ant_t *js, ant_value_t obj, const char *interned, ant_value_t *out);
+bool js_try_host_proxy_get(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t *out);
 
 ant_value_t js_string_from_utf16_code_unit(ant_t *js, uint32_t code_unit);
 ant_value_t js_get_index_fast(ant_t *js, ant_value_t obj, ant_value_t key);
@@ -229,6 +254,8 @@ ant_value_t js_proxy_set_sym(ant_t *js, ant_value_t proxy, ant_value_t sym, ant_
 ant_value_t js_set_reporting(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value);
 ant_value_t js_set_with_receiver(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value, ant_value_t receiver);
 
+ant_value_t js_mkobj_with_proto(ant_t *js, ant_value_t proto);
+ant_shape_t *ant_object_proto_root(ant_t *js, ant_value_t proto, uint8_t inobj_limit);
 ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs);
 ant_value_t mkprop_exact_attrs(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs);
 ant_value_t mkprop_interned(ant_t *js, ant_value_t obj, const char *interned_key, ant_value_t v, uint8_t attrs);
@@ -255,6 +282,7 @@ void js_arguments_detach(ant_t *js, ant_value_t obj);
 void js_arguments_sync_slot(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t value);
 void js_arguments_rebind_frame(ant_t *js, ant_value_t obj, int frame_index);
 void js_arguments_bind_direct(ant_t *js, ant_value_t obj, struct sv_frame *frame);
+void ant_object_set_proto(ant_t *js, ant_object_t *obj, ant_value_t proto);
 
 ant_value_t coerce_to_str(ant_t *js, ant_value_t v);
 ant_value_t coerce_to_str_concat(ant_t *js, ant_value_t v);
@@ -263,6 +291,7 @@ ant_value_t get_ctor_species_value(ant_t *js, ant_value_t ctor);
 bool proto_chain_contains(ant_t *js, ant_value_t obj, ant_value_t proto_target);
 bool same_ctor_identity(ant_t *js, ant_value_t a, ant_value_t b);
 bool js_array_iteration_default(ant_t *js, ant_value_t arr);
+bool js_array_proto_chain_plain(ant_t *js, ant_value_t arr);
 
 ant_value_t lkp_interned_val(ant_t *js, ant_value_t obj, const char *search_intern);
 ant_prop_loc_t lkp_interned(ant_value_t obj, const char *search_intern);
@@ -291,13 +320,14 @@ bool js_obj_extra_reserve(ant_object_t *obj, uint8_t capacity);
 ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t template);
 
 ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj);
-ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbols, bool enumerable_only);
 ant_value_t Ant_Object_ToStringTag(ant_t *js, ant_value_t obj);
 ant_value_t Ant_Object_PropertyIsEnumerable(ant_t *js, ant_value_t obj, ant_value_t key);
 ant_value_t Ant_Object_HasOwn(ant_t *js, ant_value_t obj, ant_value_t key);
 ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t len);
 ant_value_t js_delete_prop_ordinary(ant_t *js, ant_value_t obj, const char *key, size_t len);
 ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym);
+ant_value_t js_object_is_prototype_of(ant_t *js, ant_value_t self, ant_value_t value, bool *cacheable);
+ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbols, bool enumerable_only);
 
 ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc);
 ant_value_t js_cfunc_expose_named(ant_t *js, ant_value_t cfunc, const char *name, size_t name_len);
@@ -352,10 +382,12 @@ ant_value_t js_eval_bytecode_eval_in_env_with_strict(
 
 bool is_proxy(ant_value_t obj);
 bool js_proxy_is_host(ant_value_t obj);
-bool js_try_host_proxy_get(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t *out);
 bool is_array_value(ant_value_t value);
 bool js_is_array_includes_builtin(ant_value_t func);
+bool js_is_function_call_builtin(ant_value_t func);
 bool js_is_function_apply_builtin(ant_value_t func);
+bool js_is_array_push_builtin(ant_value_t func);
+bool js_is_array_pop_builtin(ant_value_t func);
 bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r);
 bool same_value_values(ant_t *js, ant_value_t l, ant_value_t r);
 bool js_string_intrinsic_builtin_matches(ant_value_t func, ant_string_intrinsic_kind_t kind);
@@ -385,6 +417,19 @@ ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r);
 ant_value_t js_string_slice(ant_t *js, ant_value_t str, double start, double end);
 ant_value_t do_string_num_concat(ant_t *js, ant_value_t str, ant_value_t num, bool num_first);
 ant_value_t js_to_primitive(ant_t *js, ant_value_t value, int hint);
+ant_value_t js_get_then_property(ant_t *js, ant_value_t value);
+
+typedef struct {
+  ant_shape_t *shape;
+  ant_value_t proto;
+  ant_object_t *holder;
+  const char *key;
+  uint32_t slot;
+  uint32_t ic_epoch;
+} ant_get_cache_t;
+
+void js_get_cache_release(ant_get_cache_t *cache);
+ant_value_t js_get_cached(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_get_cache_t *cache);
 ant_value_t js_is_array_value_checked(ant_t *js, ant_value_t value, bool *out);
 
 ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r);

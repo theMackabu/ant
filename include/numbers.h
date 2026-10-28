@@ -22,6 +22,9 @@ bool ant_number_parse(
   double *out, size_t *processed
 );
 
+size_t ant_js_trim_prefix_len(const char *str, size_t len);
+size_t ant_js_trim_suffix_len(const char *str, size_t len);
+
 size_t ant_number_to_shortest(double value, char *buf, size_t len);
 size_t ant_number_to_fixed(double value, int digits, char *buf, size_t len);
 size_t ant_number_to_precision(double value, int precision, char *buf, size_t len);

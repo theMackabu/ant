@@ -4,6 +4,7 @@
 #include <stdarg.h>
 
 #include "errors.h"
+#include "utf8.h"
 #include "cfunc.h"
 #include "realm.h"
 #include "error_render.h"
@@ -340,8 +341,12 @@ static ant_value_t CreateFormattedErrorValue(
     }
   }
 
-  ant_value_t value = make_error_value(js, site, err_type, props, message);
+  char *clean = wtf8_replace_invalid(message, (size_t)length, NULL);
+  ant_value_t value = make_error_value(js, site, err_type, props, clean ? clean : message);
+  
+  free(clean);
   if (message != local) free(message);
+  
   return value;
 
 format_failed:

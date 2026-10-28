@@ -103,18 +103,7 @@ void jit_note_stale_exit(jit_compile_t *c, const jit_stale_exit_t *exit, int pre
   c->stale_types_len += pre_op_sp;
 }
 
-void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg) {
-  MIR_label_t no_error = MIR_new_label(c->ctx);
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_URSH,
-                               MIR_new_reg_op(c->ctx, c->r_bool),
-                               MIR_new_reg_op(c->ctx, value_reg),
-                               MIR_new_int_op(c->ctx, NANBOX_TYPE_SHIFT)));
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_BNE,
-                               MIR_new_label_op(c->ctx, no_error),
-                               MIR_new_reg_op(c->ctx, c->r_bool),
-                               MIR_new_uint_op(c->ctx, JIT_ERR_TAG)));
+void jit_emit_throw(jit_compile_t *c, MIR_reg_t value_reg) {
   if (c->jit_try_depth > 0) {
     jit_try_entry_t *handler = &c->jit_try_stack[c->jit_try_depth - 1];
     MIR_append_insn(c->ctx, c->jit_func,
@@ -127,6 +116,21 @@ void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg) {
   } else {
     jit_emit_exit_ret(c, MIR_new_reg_op(c->ctx, value_reg));
   }
+}
+
+void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg) {
+  MIR_label_t no_error = MIR_new_label(c->ctx);
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_URSH,
+                               MIR_new_reg_op(c->ctx, c->r_bool),
+                               MIR_new_reg_op(c->ctx, value_reg),
+                               MIR_new_int_op(c->ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_BNE,
+                               MIR_new_label_op(c->ctx, no_error),
+                               MIR_new_reg_op(c->ctx, c->r_bool),
+                               MIR_new_uint_op(c->ctx, JIT_ERR_TAG)));
+  jit_emit_throw(c, value_reg);
   MIR_append_insn(c->ctx, c->jit_func, no_error);
 }
 
@@ -267,7 +271,7 @@ void mir_emit_builtin_call_fast(
   MIR_append_insn(ctx, fn, this_global);
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
     MIR_new_reg_op(ctx, r_this),
-    MIR_new_mem_op(ctx, MIR_JSVAL, offsetof(ant_t, global), r_js, 0, 1)));
+    MIR_new_uint_op(ctx, js_mkundef())));
   MIR_append_insn(ctx, fn, this_ok);
 
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,

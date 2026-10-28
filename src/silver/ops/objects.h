@@ -3,10 +3,9 @@
 
 #include "utf8.h"
 #include "property.h"
+#include "iteration.h"
 #include "descriptors.h"
 #include "gc/roots.h"
-
-#include "silver/call.h"
 
 static inline void sv_define_method(
   ant_t *js, sv_func_t *func, uint8_t *ip,
@@ -154,8 +153,7 @@ static inline void sv_op_set_proto(sv_vm_t *vm, ant_t *js) {
   ant_value_t proto = vm->stack[--vm->sp];
   ant_value_t obj = vm->stack[vm->sp - 1];
   
-  uint8_t pt = vtype(proto);
-  if (pt == kTypeObject || pt == kTypeNull || pt == kTypeFunction || pt == kTypeArray) js_set_proto_wb(js, obj, proto);
+  js_set_literal_proto(js, obj, proto);
 }
 
 static inline void sv_op_set_home_obj(sv_vm_t *vm, ant_t *js) {
@@ -193,77 +191,25 @@ static inline ant_value_t sv_spread_into(sv_vm_t *vm, ant_t *js, ant_value_t arr
   }
 
   GC_ROOT_SAVE(root_mark, js);
-
-  if (vtype(iterable) == kTypeString) {
-    if (str_is_heap_rope(iterable) || str_is_heap_builder(iterable)) {
-      iterable = str_materialize(js, iterable);
-      if (is_err(iterable)) { GC_ROOT_RESTORE(js, root_mark); return iterable; }
-      GC_ROOT_PIN(js, iterable);
-    }
-    
-    ant_offset_t slen = str_len_fast(js, iterable);
-    for (ant_offset_t i = 0; i < slen; ) {
-      ant_offset_t off = vstr(js, iterable, NULL);
-      ant_offset_t cb_len = (ant_offset_t)utf8_char_len_at((const char *)(uintptr_t)off, (size_t)slen, (size_t)i);
-      js_arr_push(js, arr, js_mkstr(js, (const void *)(uintptr_t)(off + i), cb_len));
-      i += cb_len;
-    }
-    
-    GC_ROOT_RESTORE(js, root_mark);
-    return tov(0);
-  }
-
-  ant_value_t iter_fn = js_get_sym(js, iterable, js->sym.iterator_sym);
-  uint8_t ft = vtype(iter_fn);
-  if (ft != kTypeFunction && ft != kTypeBuiltin) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return js_mkerr(js, "not iterable");
-  }
-
-  ant_value_t iterator = sv_vm_call(vm, js, iter_fn, iterable, NULL, 0, NULL, js_mkundef());
-  if (is_err(iterator)) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return iterator;
-  }
+  ant_value_t state[3] = { js_mkundef(), js_mkundef(), js_mkundef() };
   
-  if (!is_object_type(iterator)) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return js_mkerr(js, "not iterable");
-  }
-
-  ant_value_t status = tov(0);
-  ant_value_t result = js_mkundef();
-  GC_ROOT_PIN(js, iterator);
-  GC_ROOT_PIN(js, result);
-
-  for (;;) {
-    ant_value_t next_method = js_getprop_fallback(js, iterator, "next");
-    ft = vtype(next_method);
-    if (ft != kTypeFunction && ft != kTypeBuiltin) {
-      status = js_mkerr(js, "iterator.next is not a function");
-      break;
-    }
-
-    result = sv_vm_call(vm, js, next_method, iterator, NULL, 0, NULL, js_mkundef());
-    if (is_err(result)) {
-      status = result;
-      break;
-    }
-    if (!is_object_type(result)) {
-      status = js_mkerr_typed(js, JS_ERR_TYPE, "Iterator result is not an object");
-      break;
-    }
-
-    ant_value_t done = js_getprop_fallback(js, result, "done");
-    if (js_truthy(js, done))
-      break;
-
-    ant_value_t value = js_getprop_fallback(js, result, "value");
+  GC_ROOT_PIN(js, state[0]);
+  GC_ROOT_PIN(js, state[1]);
+  
+  ant_value_t status = sv_for_of_open(vm, js, iterable, state);
+  while (!is_err(status)) {
+    ant_value_t value = js_mkundef();
+    bool done = true;
+    
+    status = sv_iter_advance_values(vm, js, state, &value, &done);
+    if (is_err(status) || done) break;
+    state[1] = status;
+    
     js_arr_push(js, arr, value);
   }
 
   GC_ROOT_RESTORE(js, root_mark);
-  return status;
+  return is_err(status) ? status : tov(0);
 }
 
 static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {

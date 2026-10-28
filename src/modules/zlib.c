@@ -598,7 +598,7 @@ static ant_value_t js_zlib_flush(ant_params_t) {
 
   if (is_callable(cb)) {
     ant_value_t null_val = js_mknull();
-    queue_microtask_with_args(js, cb, &null_val, 1);
+    queue_next_tick_with_args(js, cb, &null_val, 1);
   }
   
   return self;

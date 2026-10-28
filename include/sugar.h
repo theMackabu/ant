@@ -40,6 +40,7 @@ typedef struct coroutine {
   bool await_registered: 1;
   bool yield_tick: 1;
   bool tail_await: 1;
+  bool yield_raw: 1;
 
   uint64_t gc_epoch;
   uint32_t refcount;

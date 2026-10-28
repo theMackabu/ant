@@ -13,6 +13,7 @@
 #include "modules/iterator.h"
 #include "modules/promise.h"
 #include "modules/timer.h"
+#include "modules/promise.h"
 #include "sandbox/sandbox.h"
 #include "silver/call.h"
 #include <assert.h>

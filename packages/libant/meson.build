@@ -68,6 +68,14 @@ messages_h = custom_target('messages_h',
   capture: true,
 )
 
+generic_step_h = custom_target('generic_step_h',
+  input: '../../src/silver/engine.c',
+  output: 'generic_step_cases.h',
+  command: [python, files('../../meson/generic_step.py'), '@INPUT@'],
+  depend_files: files('../../meson/generic_step.py'),
+  capture: true,
+)
+
 theme_h = custom_target('theme_h',
   input: '../../src/highlight/theme.toml',
   output: 'theme.h',
@@ -82,7 +90,7 @@ lib_sources = files(run_command(
 
 libant_core = static_library(
   'ant_core',
-  lib_sources + sandbox_backend_sources + [builtins_h, messages_h, theme_h],
+  lib_sources + sandbox_backend_sources + [builtins_h, generic_step_h, messages_h, theme_h],
   include_directories: [include, sandbox_backend_include],
   dependencies: ant_deps + temporal_link_deps,
 )
@@ -90,7 +98,7 @@ libant_core = static_library(
 if use_lto
   libant_core_lto = static_library(
     'ant_core_lto',
-    lib_sources + sandbox_backend_sources + [builtins_h, messages_h, theme_h],
+    lib_sources + sandbox_backend_sources + [builtins_h, generic_step_h, messages_h, theme_h],
     include_directories: [include, sandbox_backend_include],
     dependencies: ant_deps + temporal_link_deps,
     override_options: ['b_lto=true'],

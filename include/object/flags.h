@@ -1,0 +1,19 @@
+#ifdef ANT_OBJECT_FLAG
+ANT_OBJECT_FLAG(EXTENSIBLE,              extensible)
+ANT_OBJECT_FLAG(FROZEN,                  frozen)
+ANT_OBJECT_FLAG(SEALED,                  sealed)
+ANT_OBJECT_FLAG(EXOTIC,                  is_exotic)
+ANT_OBJECT_FLAG(CONSTRUCTOR,             is_constructor)
+ANT_OBJECT_FLAG(CALLABLE,                is_callable)
+ANT_OBJECT_FLAG(FAST_ARRAY,              fast_array)
+ANT_OBJECT_FLAG(MAY_HAVE_HOLES,          may_have_holes)
+ANT_OBJECT_FLAG(MAY_HAVE_DENSE_ELEMENTS, may_have_dense_elements)
+ANT_OBJECT_FLAG(GC_PERMANENT,            gc_permanent)
+ANT_OBJECT_FLAG(GENERATION,              generation)
+ANT_OBJECT_FLAG(REMEMBERED,              in_remember_set)
+ANT_OBJECT_FLAG(GUARDS_ABSENCE,          guards_absence)
+ANT_OBJECT_FLAG(DENSE_LENGTH_FITS,       dense_length_fits)
+ANT_OBJECT_FLAG(ARGUMENTS,               arguments_object)
+ANT_OBJECT_FLAG(REGEXP_BRAND,            regexp_brand)
+#undef ANT_OBJECT_FLAG
+#endif

@@ -210,7 +210,7 @@ static inline __attribute__((always_inline)) sd_state_t *sd_state_new(int enc) {
 
   if (enc == SD_ENC_UTF8 || enc == SD_ENC_UTF16LE || enc == SD_ENC_UTF16BE) {
     td_encoding_t td_enc = (enc == SD_ENC_UTF16LE) ? TD_ENC_UTF16LE : (enc == SD_ENC_UTF16BE) ? TD_ENC_UTF16BE : TD_ENC_UTF8;
-    st->td = td_state_new(td_enc, false, false);
+    st->td = td_state_new(td_enc, false, true);
     if (!st->td) { free(st); return NULL; }
   }
 
@@ -255,7 +255,16 @@ ant_value_t string_decoder_decode_value(
   return sd_do_write(js, st, src, len, flush);
 }
 
-// StringDecoder.call(this, enc) without new initializes `this` in place
+ant_value_t string_decoder_decode_bytes(
+  ant_t *js, ant_value_t decoder,
+  const uint8_t *src, size_t len, bool flush
+) {
+  sd_state_t *st = sd_get_state(decoder);
+  if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid StringDecoder");
+  return sd_do_write(js, st, src, len, flush);
+}
+
+// StringDecoder.call(this, enc)
 static __attribute__((noinline)) ant_value_t sd_init_this(ant_t *js, ant_value_t self, ant_value_t encoding) {
   if (sd_get_state(self)) return self;
 

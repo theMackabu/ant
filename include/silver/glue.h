@@ -6,11 +6,13 @@
 int64_t jit_helper_stack_overflow(ant_t *js);
 int64_t jit_helper_is_truthy(ant_t *js, ant_value_t v);
 
+void jit_helper_close_frame_upvalues(sv_vm_t *vm, uint32_t slot_idx);
 void jit_helper_disable_param_counters(sv_func_t *func, uint64_t params);
 void jit_helper_shape_transition(ant_t *js, ant_object_t *obj, ant_shape_t *to_shape);
 void jit_helper_protector_store(ant_t *js, ant_object_t *holder, const char *key);
 
 ant_value_t jit_helper_add(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
+ant_value_t jit_helper_concat(ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_sub(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_mul(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_div(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
@@ -54,6 +56,11 @@ ant_value_t jit_helper_new_this(ant_t *js, ant_value_t func, ant_value_t new_tar
 ant_value_t jit_helper_spread(sv_vm_t *vm, ant_t *js, ant_value_t arr, ant_value_t iterable);
 ant_value_t jit_helper_await_park(sv_vm_t *vm, sv_func_t *fn, int64_t site_index, int64_t vstack_sp);
 ant_value_t jit_helper_await_return_direct(sv_vm_t *vm, ant_t *js, ant_value_t value, int64_t next_op);
+
+ant_value_t jit_helper_slow_get_field(ant_t *js, ant_value_t obj, sv_func_t *func, uint8_t *ip);
+ant_value_t jit_helper_slow_put_field(ant_t *js, ant_value_t obj, ant_value_t val, sv_func_t *func, uint8_t *ip);
+ant_value_t jit_helper_slow_get_elem(ant_t *js, ant_value_t obj, ant_value_t key, sv_func_t *func, uint8_t *ip);
+ant_value_t jit_helper_slow_put_elem(ant_t *js, ant_value_t obj, ant_value_t key, ant_value_t val, sv_func_t *func, uint8_t *ip);
 
 ant_value_t jit_helper_strict_arguments(sv_vm_t *vm, ant_t *js, ant_value_t *args, int argc);
 ant_value_t jit_helper_delete(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key);
@@ -259,6 +266,27 @@ ant_value_t jit_helper_closure(
   sv_upvalue_t **open_upvalues
 );
 
+ant_value_t jit_helper_closure_inherited(
+  ant_t *js, sv_func_t *func, sv_closure_t *parent_closure,
+  ant_value_t this_val, uint32_t const_idx, const char *name, uint32_t name_len
+);
+
+ant_value_t jit_helper_closure_boxes(
+  ant_t *js, sv_func_t *func, sv_closure_t *parent_closure, ant_value_t this_val, 
+  uint32_t const_idx, const char *name, uint32_t name_len, sv_upvalue_t *const *boxes
+);
+
+typedef struct {
+  ant_shape_t *from, *to;
+  uintptr_t proto;
+  uint32_t *cell;
+} jit_add_cell_t;
+
+ant_value_t jit_helper_slow_put_field_adding(
+  ant_t *js, ant_value_t obj, ant_value_t val, 
+  sv_func_t *func, uint8_t *ip, const jit_add_cell_t *adds, uint32_t count
+);
+
 ant_value_t jit_helper_promote_resume(
   sv_vm_t *vm, sv_closure_t *closure,
   ant_value_t this_val, ant_value_t new_target, ant_value_t super_val,
@@ -267,6 +295,16 @@ ant_value_t jit_helper_promote_resume(
   ant_value_t *params, int64_t n_params,
   ant_value_t *locals, int64_t n_locals,
   int64_t bc_offset, sv_jit_finally_t *finally
+);
+
+ant_value_t jit_resume_in_interpreter(
+  sv_vm_t *vm, sv_closure_t *closure,
+  ant_value_t this_val, ant_value_t new_target, ant_value_t super_val,
+  ant_value_t *args, int argc,
+  ant_value_t *vstack, int64_t vstack_sp,
+  ant_value_t *params, int64_t n_params,
+  ant_value_t *locals, int64_t n_locals,
+  int64_t bc_offset, bool async_direct, sv_jit_finally_t *finally
 );
 
 ant_value_t jit_helper_bailout_resume(
@@ -405,6 +443,11 @@ ant_value_t jit_helper_destructure_close(
 );
 
 ant_value_t jit_helper_destructure_next(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t *iter_buf
+);
+
+ant_value_t jit_helper_destructure_rest(
   sv_vm_t *vm, ant_t *js,
   ant_value_t *iter_buf
 );

@@ -222,6 +222,35 @@ atom passes that prefilter. Static ops tables are shared and immutable; public h
 setters copy them to a heap table first. See the
 [exotic accessor IC plan](../exec-plans/active/exotic-accessor-read-ic.md).
 
+## Watched Prototypes
+
+Compiled code may take a value found in a prototype as a constant while the
+prototype is watched ([proto_watch.h](../../include/proto_watch.h)). A watched
+object has `ANT_PROTECTOR_HOLDER_WATCHED` and a shape no other object has; any
+change to its slots, layout, prototype or exotic hooks must reach
+`ant_proto_watch_note_change` before it happens. `ant_object_prop_set_unchecked`,
+`ant_property_mutation_invalidate`, `ant_object_invalidate_guarded_absence`,
+`js_set_proto` and the exotic-hook setters already do; a new writer that skips
+all of them must call it. Never give another object a watched object's shape
+(see `copy_adopt_shape`). Watch a holder before snapshotting its shape, or the
+clone the watch makes stales the snapshot. Breaking a watch invalidates opt
+code: running frames exit at their next `AssumeValid`, and template code checks
+the cell at each use. See the
+[watched prototype](../../tests/test_opt_watched_prototype.cjs) regression.
+
+## Shapes Carry The Prototype
+
+For every live object, `obj->proto == ant_shape_proto(obj->shape)`, so compiled code
+takes a checked shape as proof of the prototype. Change a prototype only through
+`ant_object_set_proto` (or the `js_set_proto*` helpers that call it); allocate with a
+known prototype through `js_mkobj_with_proto`. Never apply a cached or copied shape to
+an object whose prototype differs from the shape's (`copy_adopt_shape`, literal sites,
+the JSON and regex shape caches check this). Set a fresh object's prototype before
+adding properties, or every such object gets a prototype transition. Run with
+`ANT_DEBUG=shape:verify` to check the invariant at every collection; see
+[prototype-in-shape](../exec-plans/active/prototype-in-shape.md) and the
+[shape proto identity](../../tests/test_shape_proto_identity.cjs) regression.
+
 ## Closure And Upvalue Reachability
 
 Lazy function-object materialization and writes into listener sidecars can

@@ -104,7 +104,7 @@ static inline void sv_obj_site_apply(
     }
   }
 
-  if (site->shared_shape) {
+  if (site->shared_shape && ant_shape_proto(site->shared_shape) == ptr->proto) {
     if (site->shared_shape != ptr->shape) {
       ant_shape_retain(site->shared_shape);
       ant_shape_release(ptr->shape);
@@ -112,7 +112,7 @@ static inline void sv_obj_site_apply(
     }
     uint32_t count = ant_shape_count(ptr->shape);
     if (count > ptr->prop_count) (void)js_obj_ensure_prop_capacity(js, ptr, count);
-  } else if (!site->key_atoms) {
+  } else if (!site->shared_shape && !site->key_atoms) {
     site->shared_shape = ptr->shape;
     ant_shape_retain(site->shared_shape);
   }
@@ -123,11 +123,11 @@ static inline ant_value_t sv_op_object(sv_vm_t *vm, ant_t *js, sv_func_t *func, 
   if (__builtin_expect(is_err(obj), 0)) return obj;
   
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-  sv_obj_site_cache_t *site = sv_obj_site_for_ip(func, ip);
-  sv_obj_site_apply(js, func, site, ptr);
-
   ant_value_t proto = js->sym.object_proto;
   if (vtype(proto) == kTypeObject) js_set_proto_init(obj, proto);
+
+  sv_obj_site_cache_t *site = sv_obj_site_for_ip(func, ip);
+  sv_obj_site_apply(js, func, site, ptr);
   vm->stack[vm->sp++] = obj;
   
   return tov(0);

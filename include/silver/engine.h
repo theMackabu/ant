@@ -47,6 +47,17 @@ typedef enum {
   SV_OPF_BUILDER_TARGET             = 1u << 13,
   SV_OPF_JIT_INLINE_ARGC            = 1u << 14,
   SV_OPF_TERMINAL                   = 1u << 15,
+  SV_OPF_SLOT_READ                  = 1u << 16,
+  SV_OPF_SLOT_WRITE                 = 1u << 17,
+  SV_OPF_SLOT_FRAME                 = 1u << 18,
+  SV_OPF_MARKER                     = 1u << 19,
+  SV_OPF_JIT_QUIET_INELIGIBLE       = 1u << 20,
+  SV_OPF_OPT_NATIVE                 = 1u << 21,
+  SV_OPF_OPT_NO_GENERIC             = 1u << 22,
+  SV_OPF_LABEL_NOT_EDGE             = 1u << 23,
+  SV_OPF_OPT_HANDLER                = 1u << 24,
+  SV_OPF_OPT_ROOT_ONLY              = 1u << 25,
+  SV_OPF_OPT_INLINE_IN_TRY          = 1u << 26,
 } sv_opcode_flags_t;
 
 typedef enum {
@@ -83,19 +94,19 @@ static const uint8_t sv_op_size[OP__COUNT] = {
 #include "silver/opcode.h"
 };
 
-enum {
+static const uint32_t sv_op_flags[OP__COUNT] = {
+#define OP_FLAG(name, flags) [OP_##name] = (flags),
+#include "silver/opcode.h"
+};
+
+typedef enum {
 #define OP_FMT(name) SVF_##name,
 #include "silver/opcode.h"
   SVF__COUNT,
-};
+} sv_op_fmt_t;
 
 static const uint8_t sv_op_fmts[OP__COUNT] = {
 #define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = SVF_##f,
-#include "silver/opcode.h"
-};
-
-static const uint16_t sv_op_flags[OP__COUNT] = {
-#define OP_FLAG(name, flags) [OP_##name] = (flags),
 #include "silver/opcode.h"
 };
 
@@ -174,6 +185,7 @@ typedef struct {
   bool is_local: 1;
   bool is_const: 1;
   bool may_tdz: 1;
+  bool by_value: 1;
 } sv_upval_desc_t;
 
 static_assert(
@@ -390,6 +402,7 @@ static_assert(
 
 bool sv_ic_shape_ref_register(ant_t *js, ant_shape_t **slot);
 bool sv_ic_shape_ref_reserve(ant_t *js, size_t count);
+void sv_ic_shape_refs_mark(ant_t *js);
 void sv_ic_shape_refs_cleanup(ant_t *js);
 
 typedef struct {
@@ -458,11 +471,26 @@ typedef struct {
 } sv_call_target_fb_t;
 
 typedef struct {
+  void *ctx;
+  void *module;
+} sv_jit_module_t;
+
+typedef struct {
   uint8_t *type_feedback;
   uint8_t *elem_types;
   
   ant_shape_t *ctor_proto_shape;
+  struct opt_func_state *opt_state;
+  struct sv_func **code_deps;
+  
+  uint32_t code_dep_count;
+  uint32_t code_dep_cap;
+  sv_jit_module_t *jit_modules;
+  
+  uint32_t jit_module_count;
+  uint32_t jit_module_cap;
   uint32_t ctor_proto_slot;
+  
   bool ctor_proto_shape_registered;
   uint8_t poly_recompiles;
   
@@ -645,6 +673,8 @@ struct sv_func {
   bool jit_inline_reuse_empty: 1;
   bool fb_unit_watched: 1;
   bool fb_unit_target: 1;
+  bool has_bound_closure: 1;
+  bool jit_self_guarded: 1;
 
   sv_code_unit_t *unit;
   struct sv_func *unit_next;
@@ -836,6 +866,7 @@ void sv_activation_seal(ant_t *js, sv_activation_t *act);
 void sv_activation_discard(sv_vm_t *vm, int entry_fp);
 bool sv_vm_reserve_handlers(sv_vm_t *vm, int extra);
 void sv_frame_push_try_handlers(sv_vm_t *vm, sv_frame_t *frame, sv_func_t *func, int off, int base_sp);
+bool sv_func_catch_at(sv_func_t *func, uint32_t off, uint32_t *resume_off, uint32_t *depth, bool *finally);
 bool sv_func_in_finally_body(sv_func_t *func, int off);
 void sv_try_table_free(const struct sv_try_table *table);
 
@@ -895,7 +926,10 @@ static inline sv_upvalue_t *js_upvalue_alloc(ant_t *js) {
 static constexpr char SV_CLASS_CTOR_CALL_ERROR[] =
   "Class constructor cannot be invoked without 'new'";
 
-#define SV_CLOSURE_INLINE_UPVALS 4
+static constexpr char SV_DERIVED_CTOR_RETURN_ERROR[] =
+  "Derived constructors may only return object or undefined";
+
+#define SV_CLOSURE_INLINE_UPVALS 8
 
 typedef struct sv_closure {
   uint32_t call_flags;
@@ -996,9 +1030,12 @@ static inline ant_value_t js_func_obj(ant_value_t func) {
   return c->func_obj;
 }
 
+static inline ant_value_t sv_closure_heap_value(ant_t *js, sv_closure_t *closure) {
+  return fixed_arena_owns(&js->closure_arena, closure) ? mkref(kTypeFunction, closure) : js_mkundef();
+}
+
 static inline ant_value_t sv_closure_eval_env(const sv_closure_t *closure) {
-  if (!closure || !(closure->call_flags & SV_CALL_HAS_EVAL_ENV) ||
-      !is_object_type(closure->func_obj)) return js_mkundef();
+  if (!closure || !(closure->call_flags & SV_CALL_HAS_EVAL_ENV) || !is_object_type(closure->func_obj)) return js_mkundef();
   ant_value_t env = js_get_slot(closure->func_obj, SLOT_EVAL_ENV);
   return is_object_type(env) ? env : js_mkundef();
 }
@@ -1009,6 +1046,13 @@ static inline ant_value_t js_as_obj(ant_value_t v) {
   if (t == kTypeFunction) return js_func_obj(v);
   return mkval(kTypeObject, vdata(v));
 }
+
+bool sv_vm_reserve(sv_vm_t *vm, int slots);
+
+ant_value_t sv_vm_stage_frame(
+  sv_vm_t *vm, sv_func_t *func, ant_value_t *args, int argc,
+  ant_value_t **out_bp, ant_value_t **out_lp
+);
 
 ant_value_t sv_execute_closure_entry(
   sv_vm_t *vm,sv_closure_t *closure,
@@ -1153,6 +1197,8 @@ struct sv_vm {
       ant_value_t *params;
       ant_value_t *locals;
       ant_value_t *vstack;
+      ant_value_t arguments_obj;
+      bool throwing;
       sv_jit_finally_t *finally;
     } resume;
   } jit;
@@ -1201,6 +1247,22 @@ static inline uint32_t sv_get_u32(const uint8_t *ip) {
 
 static inline int32_t sv_get_i32(const uint8_t *ip) {
   int32_t v; memcpy(&v, ip, 4); return v;
+}
+
+static inline uint32_t sv_op_slot_operand(const uint8_t *ip) {
+  return sv_op_fmts[*ip] == SVF_loc8 ? sv_get_u8(ip + 1) : sv_get_u16(ip + 1);
+}
+
+static inline int32_t sv_op_frame_slot(const uint8_t *ip, uint32_t param_count, bool *reads, bool *writes) {
+  uint32_t flags = sv_op_flags[*ip];
+  *reads = (flags & SV_OPF_SLOT_READ) != 0;
+  *writes = (flags & SV_OPF_SLOT_WRITE) != 0;
+  
+  if (!(flags & (SV_OPF_SLOT_READ | SV_OPF_SLOT_WRITE))) return -1;
+  uint32_t index = sv_op_slot_operand(ip);
+  
+  if (sv_op_fmts[*ip] == SVF_arg || (flags & SV_OPF_SLOT_FRAME)) return (int32_t)index;
+  return (int32_t)(param_count + index);
 }
 
 static inline bool sv_frame_is_strict(const sv_frame_t *frame) {
@@ -1304,6 +1366,16 @@ static inline ant_value_t *sv_frame_slot_ptr(sv_frame_t *frame, uint16_t slot_id
 ant_value_t sv_string_builder_flush_slot(
   sv_vm_t *vm, ant_t *js, 
   sv_frame_t *frame, uint16_t slot_idx
+);
+
+ant_value_t sv_string_builder_append_at(
+  sv_vm_t *vm, ant_t *js, ant_value_t *slot, sv_frame_t *frame,
+  sv_func_t *func, uint16_t slot_idx, ant_value_t rhs
+);
+
+ant_value_t sv_string_builder_append_snapshot_at(
+  sv_vm_t *vm, ant_t *js, ant_value_t *slot, sv_frame_t *frame,
+  sv_func_t *func, uint16_t slot_idx, ant_value_t lhs, ant_value_t rhs
 );
 
 ant_value_t sv_string_builder_append_slot(

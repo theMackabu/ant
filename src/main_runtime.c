@@ -70,7 +70,7 @@ static int run_env_preloads(ant_t *js) {
   return code;
 }
 
-int main(int argc, char *argv[]) {
+static int ant_runtime_main(int argc, char *argv[]) {
   bool internal_crash_report_mode = ant_crash_is_internal_report(argc, argv);
 
   if (internal_crash_report_mode) argc = 1;
@@ -211,4 +211,8 @@ int main(int argc, char *argv[]) {
   free(proc_argv);
 
   return js_result;
+}
+
+int main(int argc, char *argv[]) {
+  return os_run_main(ant_runtime_main, argc, argv);
 }

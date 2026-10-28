@@ -509,7 +509,7 @@ static void tls_socket_on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_
     tls_socket_sync_state(socket);
     
     ant_value_t chunk = tls_make_buffer_chunk(js, buf->base, (size_t)nread);
-    if (!is_err(chunk)) chunk = stream_readable_push_source(js, socket->obj, chunk);
+    if (!is_err(chunk)) chunk = stream_readable_push(js, socket->obj, chunk, js_mkundef());
     if (chunk == js_false) tls_socket_pause_read(socket);
     
     if (is_err(chunk)) {

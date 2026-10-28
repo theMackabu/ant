@@ -17,6 +17,7 @@
 
 #include "modules/assert.h"
 #include "modules/iterator.h"
+#include "modules/generator.h"
 #include "modules/symbol.h"
 
 static constexpr uint32_t STRING_ITERATOR_NATIVE_TAG = Ant_NativeTag("STRI");
@@ -68,6 +69,7 @@ static ant_value_t get_iterator_prototype(ant_t *js) {
   js_set_proto_init(js->sym.iterator_proto, js->sym.object_proto);
   
   defmethod_sym(js, js->sym.iterator_proto, js->sym.iterator_sym, Ant_Function_Create(sym_this_cb));
+  ant_iterator_protector_holder_mark(js->sym.iterator_proto);
 
   return js->sym.iterator_proto;
 }
@@ -177,7 +179,7 @@ static ant_value_t get_array_iterator_prototype(ant_t *js) {
   js->sym.array_iterator_next = defmethod(js, js->sym.array_iterator_proto, "next", 4, Ant_Function_Create(arr_iter_next));
   
   if (iteration_intact) ant_protector_rearm(js, ANT_PROTECTOR_ARRAY_ITERATION);
-  ant_protector_holder_mark(js->sym.array_iterator_proto);
+  ant_iterator_protector_holder_mark(js->sym.array_iterator_proto);
   
   mkprop(js, js->sym.array_iterator_proto, js->sym.toStringTag_sym, ANT_STRING("Array Iterator"), ANT_PROP_ATTR_CONFIGURABLE);
   js_set_proto_init(js->sym.array_iterator_proto, iterator_proto);
@@ -191,6 +193,17 @@ ant_value_t make_array_iterator(ant_t *js, ant_value_t array, array_iter_kind_t 
   js_set_slot_wb(js, iter, SLOT_DATA, array);
   js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)iter_state_pack(kind, 0)));
   js_set_proto_init(iter, get_array_iterator_prototype(js));
+  
+  return iter;
+}
+
+ant_value_t js_array_iterator_at(ant_t *js, ant_value_t array, uint32_t index) {
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, array);
+  
+  ant_value_t iter = make_array_iterator(js, array, ARR_ITER_VALUES);
+  if (!is_err(iter)) js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)iter_state_pack(ARR_ITER_VALUES, index)));
+  GC_ROOT_RESTORE(js, mark);
   
   return iter;
 }
@@ -209,7 +222,9 @@ static ant_value_t get_string_iterator_prototype(ant_t *js) {
   
   defmethod(js, js->sym.string_iterator_proto, "next", 4, Ant_Function_Create(str_iter_next));
   mkprop(js, js->sym.string_iterator_proto, js->sym.toStringTag_sym, ANT_STRING("String Iterator"), ANT_PROP_ATTR_CONFIGURABLE);
+  
   js_set_proto_init(js->sym.string_iterator_proto, iterator_proto);
+  ant_iterator_protector_holder_mark(js->sym.string_iterator_proto);
 
   return js->sym.string_iterator_proto;
 }
@@ -232,6 +247,21 @@ static ant_value_t string_iterator(ant_params_t) {
   js_set_proto_init(iter, get_string_iterator_prototype(js));
   GC_ROOT_RESTORE(js, mark);
 
+  return iter;
+}
+
+ant_value_t js_string_iterator_at(ant_t *js, ant_value_t str, uint32_t offset) {
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, str);
+  ant_value_t iter = Ant_Object_CreateBare(js);
+  
+  if (!is_err(iter)) {
+    js_set_slot_wb(js, iter, SLOT_DATA, str);
+    js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)offset));
+    js_set_proto_init(iter, get_string_iterator_prototype(js));
+  }
+  
+  GC_ROOT_RESTORE(js, mark);
   return iter;
 }
 
@@ -310,14 +340,26 @@ static inline ant_value_t iterator_get_method(
 bool js_iter_open(ant_t *js, ant_value_t iterable, iterator_t *it) {
   memset(it, 0, sizeof(*it));
 
-  ant_value_t iter_fn = js_get_sym(js, iterable, js->sym.iterator_sym);
+  ant_value_t iter_fn = vtype(iterable) == kTypeArray && js_array_iteration_default(js, iterable)
+    ? js->sym.array_values_fn
+    : js_get_sym(js, iterable, js->sym.iterator_sym);
+  
   if (!is_callable(iter_fn)) {
     if (!is_err(iter_fn) && !is_undefined(iter_fn) && !is_null(iter_fn))
       js_mkerr_typed(js, JS_ERR_TYPE, "iterator method is not callable");
     return false;
   }
 
-  ant_value_t iterator = sv_vm_call(js->vm, js, iter_fn, iterable, NULL, 0, NULL, js_mkundef());
+  return js_iter_open_method(js, iterable, iter_fn, it);
+}
+
+bool js_iter_open_method(ant_t *js, ant_value_t iterable, ant_value_t iter_fn, iterator_t *it) {
+  memset(it, 0, sizeof(*it));
+
+  ant_value_t iterator = iter_fn == js->sym.array_values_fn && vtype(iterable) == kTypeArray
+    ? make_array_iterator(js, iterable, ARR_ITER_VALUES)
+    : sv_vm_call(js->vm, js, iter_fn, iterable, NULL, 0, NULL, js_mkundef());
+  
   if (is_err(iterator)) return false;
   
   if (!is_object_type(iterator) && vtype(iterator) != kTypeBuiltin) {
@@ -329,18 +371,22 @@ bool js_iter_open(ant_t *js, ant_value_t iterable, iterator_t *it) {
   it->next_fn = iterator_get_method(js, iterator, "next", 4);
   
   if (is_err(it->next_fn)) return false;
-  it->advance = NULL;
+  it->advance = js_iter_find_advance(js, iterator, it->next_fn);
+
+  return true;
+}
+
+js_iter_advance_fn js_iter_find_advance(ant_t *js, ant_value_t iterator, ant_value_t next_fn) {
+  js_iter_advance_fn advance = Ant_Generator_IterAdvance(iterator, next_fn);
+  if (advance) return advance;
 
   ant_value_t proto = (vtype(iterator) == kTypeObject) ? js_get_proto(js, iterator) : js_mkundef();
   for (size_t i = 0; i < js->iterators.len; i++) {
     const ant_iterator_entry_t *entry = &js->iterators.entries[i];
-    if (proto == entry->proto && it->next_fn == entry->next) {
-      it->advance = entry->advance;
-      break;
-    }
+    if (proto == entry->proto && next_fn == entry->next) return entry->advance;
   }
 
-  return true;
+  return NULL;
 }
 
 ant_value_t Ant_Iterator_ToList(ant_t *js, ant_value_t iterable, const char *not_iterable) {

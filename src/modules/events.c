@@ -111,6 +111,8 @@ struct ant_event_list {
   ant_value_t target;
   eventemitter_listener_change_fn listener_change_hook;
   void *listener_change_context;
+  const char *cstr_name;
+  EventType *cstr_evt;
 };
 
 static void emitter_write_barrier(ant_t *js, ant_value_t owner, ant_value_t stored) {
@@ -295,6 +297,11 @@ static void evt_release_if_empty(EventType *evt) {
     break;
   }
 
+  if (list->cstr_evt == evt) {
+    list->cstr_evt = NULL;
+    list->cstr_name = NULL;
+  }
+
   utarray_free(evt->listeners);
   free(evt);
 }
@@ -401,6 +408,25 @@ static EventType *evt_list_find_cstr(ant_event_list_t *list, const char *name, s
   return NULL;
 }
 
+static inline bool evt_cstr_matches(const EventType *evt, const char *name) {
+  const char *key = evt->key_bytes;
+  if (!key) return false;
+  for (size_t i = 0; i < evt->key_len; i++) if (key[i] != name[i]) return false;
+  return name[evt->key_len] == '\0';
+}
+
+static EventType *evt_list_find_cstr_cached(ant_event_list_t *list, const char *name) {
+  EventType *cached = list->cstr_evt;
+  if (name == list->cstr_name && cached && evt_cstr_matches(cached, name)) return cached;
+
+  EventType *evt = evt_list_find_cstr(list, name, strlen(name));
+  if (evt) {
+    list->cstr_name = name;
+    list->cstr_evt = evt;
+  }
+  return evt;
+}
+
 static __attribute__((noinline, cold)) void evt_cache_key(
   ant_t *js, ant_event_list_t *list, EventType *evt, ant_value_t js_key, const char *bytes
 ) {
@@ -488,6 +514,12 @@ static EventType *find_emitter_event_type_cstr(ant_t *js, ant_value_t this_obj, 
   ant_event_list_t *events = find_emitter_events(this_obj);
   if (!events) return NULL;
   return evt_list_find_cstr(events, name, len);
+}
+
+static EventType *find_emitter_event_type_cstr_cached(ant_value_t this_obj, const char *name) {
+  ant_event_list_t *events = find_emitter_events(this_obj);
+  if (!events) return NULL;
+  return evt_list_find_cstr_cached(events, name);
 }
 
 static EventType *find_emitter_event_type(ant_t *js, ant_value_t this_obj, ant_value_t js_key) {
@@ -1435,7 +1467,7 @@ bool eventemitter_emit_args(
   if (!is_object_type(target) || !event_type) return false;
   return eventemitter_dispatch(
     js, target,
-    find_emitter_event_type_cstr(js, target, event_type, strlen(event_type)),
+    find_emitter_event_type_cstr_cached(target, event_type),
     args, nargs
   );
 }
@@ -1508,6 +1540,14 @@ bool eventemitter_remove_listener(
   return false;
 }
 
+ant_value_t eventemitter_sole_listener(ant_value_t target, const char *event_type) {
+  EventType *evt = is_object_type(target) && event_type ? find_emitter_event_type_cstr_cached(target, event_type) : NULL;
+  if (!evt || utarray_len(evt->listeners) != 1) return 0;
+
+  EventListenerEntry *entry = (EventListenerEntry *)utarray_eltptr(evt->listeners, 0);
+  return entry->meta == 0 && entry->dead_gen == 0 ? entry->callback : 0;
+}
+
 ant_offset_t eventemitter_listener_count(
   ant_t *js,
   ant_value_t target, const char *event_type
@@ -1518,7 +1558,7 @@ ant_offset_t eventemitter_listener_count(
   events = find_emitter_events(target);
   if (!events) return 0;
 
-  return (ant_offset_t)evt_live_count(evt_list_find_cstr(events, event_type, strlen(event_type)));
+  return (ant_offset_t)evt_live_count(evt_list_find_cstr_cached(events, event_type));
 }
 
 static ant_value_t js_eventemitter_add(ant_native_params_t, bool once, bool prepend) {

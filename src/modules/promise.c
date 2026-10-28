@@ -217,18 +217,7 @@ static inline ant_value_t js_get_thenable_then(ant_t *js, ant_value_t value) {
     js_get_slot(value, SLOT_PROTO) == js->sym.promise_proto
   ) return js->sym.promise_then;
 
-  if (vtype(value) == kTypeObject && ant_protector_intact(js, ANT_PROTECTOR_OBJECT_THEN)) {
-    ant_object_t *obj = js_obj_ptr(value);
-    ant_object_t *object_proto = js_obj_ptr(js->sym.object_proto);
-    
-    if (
-      obj->proto == js->sym.object_proto && !obj->flags.is_exotic && obj->shape &&
-      object_proto && !is_object_type(object_proto->proto) &&
-      ant_shape_lookup_interned(obj->shape, js->intern.then) < 0
-    ) return js_mkundef();
-  }
-
-  return js_getprop_fallback(js, value, "then");
+  return js_get_then_property(js, value);
 }
 
 ant_value_t js_promise_assimilate_awaitable(ant_t *js, ant_value_t value) {

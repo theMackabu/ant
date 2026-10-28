@@ -77,7 +77,7 @@ static constexpr JsTrimToken kJsStringTrimTokens[] = {
 };
 #undef JS_TRIM_TOKEN
 
-static size_t js_string_trim_prefix_len(const char *str, size_t len) {
+extern "C" size_t ant_js_trim_prefix_len(const char *str, size_t len) {
   if (len == 0) return 0;
   
   unsigned char first = (unsigned char)str[0];
@@ -88,7 +88,7 @@ static size_t js_string_trim_prefix_len(const char *str, size_t len) {
   return 0;
 }
 
-static size_t js_string_trim_suffix_len(const char *str, size_t len) {
+extern "C" size_t ant_js_trim_suffix_len(const char *str, size_t len) {
   if (len == 0) return 0;
   
   unsigned char last = (unsigned char)str[len - 1];
@@ -103,13 +103,13 @@ static void trim_js_string_whitespace(const char **str, size_t *len, bool trim_t
   size_t lead = 0;
   
   while (*len > 0) {
-    size_t n = js_string_trim_prefix_len(*str, *len);
+    size_t n = ant_js_trim_prefix_len(*str, *len);
     if (n == 0) break;
     *str += n; *len -= n; lead += n;
   }
 
   while (trim_trailing && *len > 0) {
-    size_t n = js_string_trim_suffix_len(*str, *len);
+    size_t n = ant_js_trim_suffix_len(*str, *len);
     if (n == 0) break;
     *len -= n;
   }

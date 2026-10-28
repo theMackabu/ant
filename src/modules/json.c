@@ -301,7 +301,7 @@ static bool json_prepare_object(
   ant_shape_t *expected, bool *duplicates
 ) {
   *duplicates = false;
-  if (json_shape_matches(expected, val)) {
+  if (ant_shape_proto(expected) == obj->proto && json_shape_matches(expected, val)) {
     ant_shape_transition_existing(&obj->shape, expected);
     return js_obj_ensure_prop_capacity(js, obj, ant_shape_count(expected));
   }
@@ -314,7 +314,7 @@ static bool json_prepare_object(
   if (bulk) {
     hash = json_layout_hash(val, &key_bytes);
     ant_shape_t *cached = json_layout_cache_find(js, val, hash);
-    if (cached) {
+    if (cached && ant_shape_proto(cached) == obj->proto) {
       ant_shape_transition_existing(&obj->shape, cached);
       return js_obj_ensure_prop_capacity(js, obj, ant_shape_count(cached));
     }
@@ -1200,14 +1200,19 @@ static ant_value_t apply_reviver(
 }
 
 ant_value_t js_json_parse(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "JSON.parse() requires at least 1 argument");
-  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "JSON.parse() argument must be a string");
+  ant_value_t text = nargs > 0 ? args[0] : js_mkundef();
+  if (vtype(text) != kTypeString) {
+    if (vtype(text) == kTypeSymbol)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a string");
+    text = coerce_to_str(js, text);
+    if (is_err(text)) return text;
+  }
   
   gc_temp_root_scope_t temp_roots;
   gc_temp_root_scope_begin(js, &temp_roots);
   
   size_t len;
-  char *json_str = js_getstr(js, args[0], &len);
+  char *json_str = js_getstr(js, text, &len);
   yyjson_doc *doc = json_read_doc(json_str, len);
 
   if (!doc) {

@@ -1,6 +1,7 @@
 #include "internal.h"
 #include "gc/objects.h"
 #include "gc/ropes.h"
+#include "gc.h"
 #include "pool.h"
 
 #include <stdbool.h>
@@ -201,7 +202,6 @@ static void unlink_rope_block(ant_pool_t *pool, ant_pool_block_t *block) {
 static void recycle_rope_block(ant_pool_t *pool, ant_pool_block_t *block) {
   block->used = 0;
   pool_free_set_next(block, pool->free_head);
-  pool_block_madvise_free(block);
   pool->free_head = block;
 }
 
@@ -218,17 +218,26 @@ static void promote_rope_block(ant_t *js, ant_pool_block_t *block) {
   old->head = block;
 }
 
-static void trim_rope_free_blocks(ant_pool_t *pool, int keep) {
+static void trim_rope_free_blocks(ant_pool_t *pool, size_t keep, size_t budget, bool release) {
   ant_pool_block_t *f = pool->free_head;
   ant_pool_block_t *last = NULL;
-  int kept = 0;
+  
+  size_t kept = 0;
   while (f && kept < keep) {
+    size_t bytes = sizeof(ant_pool_block_t) + f->cap;
+    if (bytes > budget) break;
+    
+    budget -= bytes;
+    if (release) pool_block_madvise_free(f);
+    
     last = f;
     f = pool_free_next(f);
     kept++;
   }
+  
   if (last) pool_free_set_next(last, NULL);
   else pool->free_head = NULL;
+  
   while (f) {
     ant_pool_block_t *next = pool_free_next(f);
     pool_block_free(f);
@@ -236,12 +245,31 @@ static void trim_rope_free_blocks(ant_pool_t *pool, int keep) {
   }
 }
 
+static size_t rope_young_keep(ant_t *js, bool minor, uint32_t young_blocks) {
+  uint32_t *prev = minor ? &js->rope_gc.young_blocks_minor : &js->rope_gc.young_blocks_major;
+  uint32_t *keep = minor ? &js->rope_gc.young_keep_minor : &js->rope_gc.young_keep_major;
+  
+  *keep = young_blocks < *prev ? young_blocks : *prev;
+  *prev = young_blocks;
+  
+  uint32_t both = 
+    js->rope_gc.young_keep_major > js->rope_gc.young_keep_minor
+    ? js->rope_gc.young_keep_major : js->rope_gc.young_keep_minor;
+  
+  return both > 2 ? both : 2;
+}
+
 void gc_ropes_sweep(ant_t *js, bool minor) {
+  uint32_t young_blocks = 0;
+  
   if (js->rope_gc.conservative_marking) {
     ANT_ASSERT(!minor, "conservative rope sweep must be a major");
+    
     for (ant_pool_block_t *b = js->rope_gc.young.head; b;) {
       ant_pool_block_t *next = b->next;
+      young_blocks++;
       unlink_rope_block(&js->rope_gc.young, b);
+      
       if (b->used) promote_rope_block(js, b);
       else recycle_rope_block(&js->rope_gc.young, b);
       b = next;
@@ -255,6 +283,7 @@ void gc_ropes_sweep(ant_t *js, bool minor) {
     if (minor && m->kind != GC_ROPE_POOL_YOUNG) continue;
 
     if (m->kind == GC_ROPE_POOL_YOUNG) {
+      young_blocks++;
       unlink_rope_block(m->pool, m->block);
       if (m->has_live) promote_rope_block(js, m->block);
       else recycle_rope_block(&js->rope_gc.young, m->block);
@@ -269,8 +298,12 @@ void gc_ropes_sweep(ant_t *js, bool minor) {
     }
   }
 
-  trim_rope_free_blocks(&js->pool.rope, 2);
-  trim_rope_free_blocks(&js->rope_gc.young, 2);
+  trim_rope_free_blocks(&js->pool.rope, 2, SIZE_MAX, true);
+  
+  trim_rope_free_blocks(
+    &js->rope_gc.young, rope_young_keep(js, minor, young_blocks),
+    gc_pool_major_threshold(js), false
+  );
   
   js->rope_gc.young_alloc = 0;
   js->rope_gc.mark_count = 0;

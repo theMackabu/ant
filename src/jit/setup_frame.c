@@ -238,19 +238,6 @@ typedef struct {
   bool handler;
 } jit_dnum_block_t;
 
-static int jit_dnum_local_access(sv_op_t op, const uint8_t *ip, int param_count, bool *writes) {
-  *writes = false;
-  switch (op) {
-    case OP_GET_LOCAL: case OP_GET_LOCAL_CHK: return sv_get_u16(ip + 1);
-    case OP_GET_LOCAL8: return sv_get_u8(ip + 1);
-    case OP_INC_LOCAL: case OP_DEC_LOCAL: case OP_ADD_LOCAL: return sv_get_u8(ip + 1);
-    case OP_GET_SLOT_RAW: case OP_CALL_CALL_SLOT: return (int)sv_get_u16(ip + 1) - param_count;
-    case OP_PUT_LOCAL: case OP_SET_LOCAL: case OP_PUT_LOCAL_CHK: *writes = true; return sv_get_u16(ip + 1);
-    case OP_PUT_LOCAL8: case OP_SET_LOCAL8: *writes = true; return sv_get_u8(ip + 1);
-    default: return -1;
-  }
-}
-
 static int jit_dnum_block_of(const jit_dnum_block_t *blocks, int count, uint32_t off) {
   int lo = 0, hi = count - 1;
   while (lo <= hi) {
@@ -277,7 +264,7 @@ static void jit_clear_maybe_unassigned_dnum(
     sv_op_t op = (sv_op_t)func->code[off];
     int sz = sv_op_size[op];
     if (sz == 0) break;
-    uint16_t flags = sv_op_flags[op];
+    uint32_t flags = sv_op_flags[op];
     int64_t target = -1;
     if (flags & SV_OPF_JIT_BRANCH32) target = (int64_t)off + sz + sv_get_i32(func->code + off + 1);
     else if (flags & SV_OPF_JIT_BRANCH8) target = (int64_t)off + sz + sv_get_i8(func->code + off + 1);
@@ -324,19 +311,20 @@ static void jit_clear_maybe_unassigned_dnum(
         sv_op_t op = (sv_op_t)func->code[off];
         int sz = sv_op_size[op];
         if (sz == 0) { falls = false; break; }
-        bool writes = false;
-        int local = jit_dnum_local_access(op, func->code + off, param_count, &writes);
+        bool reads, writes;
+        int32_t slot = sv_op_frame_slot(func->code + off, (uint32_t)param_count, &reads, &writes);
+        int local = slot < 0 ? -1 : slot - param_count;
         if (local >= 0 && local < n_locals && cand[local] >= 0) {
           int ci = cand[local];
           uint64_t bit = 1ull << (ci & 63);
-          if (!writes && (state[ci >> 6] & bit)) bad[ci] = true;
-          if (op == OP_INC_LOCAL || op == OP_DEC_LOCAL || op == OP_ADD_LOCAL || writes) state[ci >> 6] &= ~bit;
+          if (reads && (state[ci >> 6] & bit)) bad[ci] = true;
+          if (writes) state[ci >> 6] &= ~bit;
         }
         if (op == OP_SET_LOCAL_UNDEF) {
           uint16_t li = sv_get_u16(func->code + off + 1);
           if (li < n_locals && cand[li] >= 0) state[cand[li] >> 6] |= 1ull << (cand[li] & 63);
         }
-        uint16_t flags = sv_op_flags[op];
+        uint32_t flags = sv_op_flags[op];
         if (flags & SV_OPF_JIT_BRANCH32) target = (int64_t)off + sz + sv_get_i32(func->code + off + 1);
         else if (flags & SV_OPF_JIT_BRANCH8) target = (int64_t)off + sz + sv_get_i8(func->code + off + 1);
         if (flags & SV_OPF_TERMINAL) falls = false;
@@ -619,6 +607,7 @@ bool jit_setup_frame(jit_compile_t *c) {
       c->func, c->func->param_count + c->n_locals, c->hint_closure);
   if (jit_mark_self_binding_guards(
           c->js, c->func, c->hint_closure, c->self_binding_guards)) {
+    c->func->jit_self_guarded = true;
     c->feat.needs_bailout = true;
     c->feat.needs_args_buf = true;
   }

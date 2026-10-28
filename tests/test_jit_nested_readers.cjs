@@ -84,7 +84,7 @@ if (process.argv[2] === 'child' || typeof Ant === 'undefined') {
 } else {
   const { spawnSync } = require('node:child_process');
   const child = spawnSync(process.execPath, [__filename, 'child'], {
-    encoding: 'utf8', env: { ...process.env, ANT_DEBUG: 'dump/vm:jit' },
+    encoding: 'utf8', env: { ...process.env, ANT_DEBUG: 'dump/vm:jit opt:off' },
     timeout: 60000, maxBuffer: 32 * 1024 * 1024,
   });
   assert.strictEqual(child.status, 0, String(child.error || child.stderr));

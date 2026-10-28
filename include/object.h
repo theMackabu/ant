@@ -12,6 +12,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+typedef struct ant_proto_watch ant_proto_watch_t;
+void ant_proto_watch_break(ant_object_t *obj);
+
 typedef enum: uint8_t {
   ANT_EXOTIC_KEYS_ANY,
   ANT_EXOTIC_KEYS_NUMERIC,
@@ -109,6 +112,8 @@ typedef struct {
   sv_eval_env_state_t *eval_env_state;
   gc_card_table_t *gc_cards;
   ant_exotic_ops_t *owned_exotic_ops;
+  ant_proto_watch_t *proto_watch;
+  ant_shape_roots_t *shape_roots;
   
   uint8_t native_count;
   uint8_t native_cap;
@@ -124,96 +129,43 @@ static_assert(
 
 typedef union ant_object_flags {
   struct {
-    uint8_t extensible: 1;
-    uint8_t frozen: 1;
-    uint8_t sealed: 1;
-    uint8_t is_exotic: 1;
-    uint8_t is_constructor: 1;
-    uint8_t is_callable: 1;
-    uint8_t fast_array: 1;
-    uint8_t may_have_holes: 1;
-    uint8_t may_have_dense_elements: 1;
-    uint8_t gc_permanent: 1;
-    uint8_t generation: 1;
-    uint8_t in_remember_set: 1;
-    uint8_t guards_absence: 1;
-    uint8_t dense_length_fits: 1;
-    uint8_t arguments_object: 1;
-    uint8_t regexp_brand: 1;
+  #define ANT_OBJECT_FLAG(name, field) uint8_t field: 1;
+  #include "object/flags.h"
   };
   uint16_t raw;
   uint8_t bytes[2];
 } ant_object_flags_t;
 
+typedef enum: uint8_t {
+  #define ANT_OBJECT_FLAG(name, field) ANT_OBJECT_FLAG_BIT_##name,
+  #include "object/flags.h"
+  ANT_OBJECT_FLAG_COUNT
+} ant_object_flag_bit_t;
+
 typedef enum: uint16_t {
-  ANT_OBJECT_FLAG_EXTENSIBLE =
-    1u << 0,
-  ANT_OBJECT_FLAG_FROZEN =
-    1u << 1,
-  ANT_OBJECT_FLAG_SEALED =
-    1u << 2,
-  ANT_OBJECT_FLAG_EXOTIC =
-    1u << 3,
-  ANT_OBJECT_FLAG_FAST_ARRAY =
-    1u << 6,
-  ANT_OBJECT_FLAG_MAY_HAVE_DENSE_ELEMENTS =
-    1u << 8,
-  ANT_OBJECT_FLAG_GENERATION =
-    1u << 10,
-  ANT_OBJECT_FLAG_REMEMBERED =
-    1u << 11,
-  ANT_OBJECT_FLAG_GUARDS_ABSENCE =
-    1u << 12,
-  ANT_OBJECT_FLAG_DENSE_LENGTH_FITS =
-    1u << 13,
-  ANT_OBJECT_FLAG_ARGUMENTS =
-    1u << 14,
-  ANT_OBJECT_FLAG_REGEXP_BRAND =
-    1u << 15,
+  #define ANT_OBJECT_FLAG(name, field) ANT_OBJECT_FLAG_##name = 1u << ANT_OBJECT_FLAG_BIT_##name,
+  #include "object/flags.h"
 } ant_object_flag_mask_t;
 
 static_assert(
-  sizeof(ant_object_flags_t) == 2,
+  sizeof(ant_object_flags_t) == 2 && ANT_OBJECT_FLAG_COUNT == 16,
   "ant_object_flags_t must cover the packed object bitfields"
 );
 
 static inline bool ant_object_flag_masks_match_layout(void) {
-  ant_object_flags_t flags = {.extensible = 1};
-  if (flags.raw != ANT_OBJECT_FLAG_EXTENSIBLE) return false;
-
-  flags = (ant_object_flags_t){.frozen = 1};
-  if (flags.raw != ANT_OBJECT_FLAG_FROZEN) return false;
-
-  flags = (ant_object_flags_t){.sealed = 1};
-  if (flags.raw != ANT_OBJECT_FLAG_SEALED) return false;
-
-  flags = (ant_object_flags_t){.is_exotic = 1};
-  if (flags.raw != ANT_OBJECT_FLAG_EXOTIC) return false;
-
-  flags = (ant_object_flags_t){.fast_array = 1};
-  if (flags.raw != ANT_OBJECT_FLAG_FAST_ARRAY) return false;
-
-  flags = (ant_object_flags_t){.may_have_dense_elements = 1};
-  if (flags.raw != ANT_OBJECT_FLAG_MAY_HAVE_DENSE_ELEMENTS) return false;
-
-  flags = (ant_object_flags_t){.generation = 1};
-  if (flags.raw != ANT_OBJECT_FLAG_GENERATION) return false;
-
-  flags = (ant_object_flags_t){.in_remember_set = 1};
-  if (flags.raw != ANT_OBJECT_FLAG_REMEMBERED) return false;
-
-  flags = (ant_object_flags_t){.guards_absence = 1};
-  if (flags.raw != ANT_OBJECT_FLAG_GUARDS_ABSENCE) return false;
-
-  flags = (ant_object_flags_t){.dense_length_fits = 1};
-  if (flags.raw != ANT_OBJECT_FLAG_DENSE_LENGTH_FITS) return false;
-
-  flags = (ant_object_flags_t){.arguments_object = 1};
-  if (flags.raw != ANT_OBJECT_FLAG_ARGUMENTS) return false;
-
-  flags = (ant_object_flags_t){.regexp_brand = 1};
-  return flags.raw == ANT_OBJECT_FLAG_REGEXP_BRAND;
+  #define ANT_OBJECT_FLAG(name, field) \
+  if (((ant_object_flags_t){.field = 1}).raw != ANT_OBJECT_FLAG_##name) return false;
+  #include "object/flags.h"
+  return true;
 }
+
+typedef enum: uint8_t {
+  ANT_PROTECTOR_HOLDER             = 1u << 0,
+  ANT_PROTECTOR_HOLDER_REGEXP      = 1u << 1,
+  ANT_PROTECTOR_HOLDER_ITERATOR    = 1u << 2,
+  ANT_PROTECTOR_HOLDER_WATCHED     = 1u << 3,
+  ANT_PROTECTOR_HOLDER_UNWATCHABLE = 1u << 4,
+} ant_protector_holder_t;
 
 typedef struct ant_object {
   struct ant_object *next;
@@ -444,7 +396,12 @@ static inline ant_value_t ant_object_prop_get_unchecked(const ant_object_t *obj,
     : obj->overflow_prop[slot - inobj_limit];
 }
 
+static inline void ant_proto_watch_note_change(ant_object_t *obj) {
+  if (__builtin_expect(obj->protector_holder & ANT_PROTECTOR_HOLDER_WATCHED, 0)) ant_proto_watch_break(obj);
+}
+
 static inline void ant_object_prop_set_unchecked(ant_object_t *obj, uint32_t slot, ant_value_t value) {
+  ant_proto_watch_note_change(obj);
   uint32_t inobj_limit = ant_object_inobj_limit(obj);
   if (slot < inobj_limit) obj->inobj[slot] = value;
   else obj->overflow_prop[slot - inobj_limit] = value;

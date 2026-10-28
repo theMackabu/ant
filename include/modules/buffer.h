@@ -105,6 +105,8 @@ ArrayBufferData *buffer_storage_holder_new(void);
 bool buffer_is_dataview(ant_value_t obj);
 bool buffer_is_binary_source(ant_value_t value);
 bool buffer_can_transfer(const ArrayBufferData *data);
+bool buffer_fast_length_getter(ant_value_t getter, ant_value_t obj, double *out);
+ant_value_t Ant_Buffer_FromString(ant_t *js, ant_value_t value, ant_value_t encoding);
 
 bool buffer_source_get_bytes(ant_t *js, ant_value_t value, const uint8_t **out, size_t *len);
 bool buffer_typedarray_data_read_index(ant_t *js, const TypedArrayData *ta_data, size_t index, ant_value_t *out);

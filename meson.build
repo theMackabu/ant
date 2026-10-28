@@ -62,6 +62,14 @@ messages_h = custom_target('messages_h',
   capture: true,
 )
 
+generic_step_h = custom_target('generic_step_h',
+  input: 'src/silver/engine.c',
+  output: 'generic_step_cases.h',
+  command: [python, files('meson/generic_step.py'), '@INPUT@'],
+  depend_files: files('meson/generic_step.py'),
+  capture: true,
+)
+
 theme_h = custom_target('theme_h',
   input: 'src/highlight/theme.toml',
   output: 'theme.h',
@@ -80,6 +88,7 @@ libant = static_library(
   'ant',
   lib_sources + sandbox_backend_sources + [
     builtins_h,
+    generic_step_h,
     messages_h,
     theme_h
   ],
@@ -197,6 +206,7 @@ if not runtime_binary.disabled()
     'ant-runtime-core',
     runtime_sources + [
       builtins_h,
+      generic_step_h,
       messages_h,
       theme_h
     ],
@@ -279,6 +289,109 @@ shape_oom_test = executable(
   build_by_default: false
 )
 test('shape-descriptor-oom', shape_oom_test)
+
+opt_ir_sources = files(
+  'src/jit/opt/arena.c',
+  'src/jit/opt/bitset.c',
+  'src/jit/opt/code.c',
+  'src/jit/opt/exits.c',
+  'src/jit/opt/hash.c',
+  'src/jit/opt/ir/ir.c',
+  'src/jit/opt/ir/ir_dump.c',
+  'src/jit/opt/ir/ir_value.c',
+)
+
+opt_passes_sources = files(
+  'src/jit/opt/passes/pass_bounds_check_elimination.c',
+  'src/jit/opt/passes/pass_boxed_arithmetic.c',
+  'src/jit/opt/passes/pass_branch_fusion.c',
+  'src/jit/opt/passes/pass_check_elimination.c',
+  'src/jit/opt/passes/pass_dce.c',
+  'src/jit/opt/passes/pass_dominators.c',
+  'src/jit/opt/passes/pass_edit.c',
+  'src/jit/opt/passes/pass_escape_analysis.c',
+  'src/jit/opt/passes/pass_facts.c',
+  'src/jit/opt/passes/pass_frame_initialization.c',
+  'src/jit/opt/passes/pass_gvn.c',
+  'src/jit/opt/passes/pass_licm.c',
+  'src/jit/opt/passes/pass_optimize.c',
+  'src/jit/opt/passes/pass_representation.c',
+  'src/jit/opt/passes/pass_simplify.c',
+  'src/jit/opt/passes/pass_truncation.c',
+  'src/jit/opt/passes/pass_verify.c',
+)
+
+opt_ir_test = executable(
+  'test-opt-ir',
+  files('tests/test_opt_ir.c') + opt_ir_sources,
+  include_directories: include,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('opt-ir', opt_ir_test)
+
+opt_passes_test = executable(
+  'test-opt-passes',
+  files('tests/test_opt_passes.c') + opt_ir_sources + opt_passes_sources,
+  include_directories: include,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('opt-passes', opt_passes_test)
+
+opt_regalloc_test = executable(
+  'test-opt-regalloc',
+  files(
+    'tests/test_opt_regalloc.c',
+    'src/jit/opt/target.c',
+    'src/jit/opt/regalloc/ra_allocate.c',
+    'src/jit/opt/regalloc/ra_coalescing.c',
+    'src/jit/opt/regalloc/ra_liveness.c',
+    'src/jit/opt/regalloc/ra_moves.c',
+    'src/jit/opt/regalloc/ra_verify.c',
+  ) + opt_ir_sources + opt_passes_sources,
+  include_directories: include,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+
+test('opt-regalloc', opt_regalloc_test, timeout: 300)
+opt_asm_include = include_directories('src/jit/opt/asm')
+
+opt_asm_encode_test = executable(
+  'test-opt-asm-encode',
+  files(
+    'tests/test_opt_asm_encode.c',
+    'src/jit/opt/asm/buffer.c',
+    'src/jit/opt/asm/x64.c',
+    'src/jit/opt/asm/masm_x64.c',
+    'src/jit/opt/asm/a64.c',
+    'src/jit/opt/asm/masm_a64.c',
+    'src/jit/opt/asm/disasm.c',
+  ),
+  include_directories: [include, opt_asm_include],
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('opt-asm-encode', opt_asm_encode_test)
+
+opt_asm_exec_test = executable(
+  'test-opt-asm-exec',
+  files(
+    'tests/test_opt_asm_exec.c',
+    'src/jit/opt/asm/buffer.c',
+    'src/jit/opt/asm/x64.c',
+    'src/jit/opt/asm/masm_x64.c',
+    'src/jit/opt/asm/a64.c',
+    'src/jit/opt/asm/masm_a64.c',
+    'src/jit/opt/asm/executable.c',
+  ),
+  include_directories: [include, opt_asm_include],
+  dependencies: cc.find_library('m', required: false),
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('opt-asm-exec', opt_asm_exec_test)
 
 keyed_store_test = executable(
   'test-keyed-store-policy',

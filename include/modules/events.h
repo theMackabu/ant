@@ -18,6 +18,7 @@ typedef void (*eventemitter_listener_change_fn)(
 ant_value_t events_library(ant_t *js);
 ant_value_t eventemitter_prototype(ant_t *js);
 ant_offset_t eventemitter_listener_count(ant_t *js, ant_value_t target, const char *event_type);
+ant_value_t eventemitter_sole_listener(ant_value_t target, const char *event_type);
 
 void init_events_module(ant_t *js);
 void cleanup_events_module(ant_t *js);

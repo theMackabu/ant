@@ -55,7 +55,7 @@ if (process.env.ANT_JIT_PRIVATE_DEFINE_CHILD) {
 } else {
   const child = spawnSync(process.execPath, [__filename], {
     encoding: 'utf8',
-    env: { ...process.env, ANT_JIT_PRIVATE_DEFINE_CHILD: '1', ANT_DEBUG: 'dump/vm:jit' },
+    env: { ...process.env, ANT_JIT_PRIVATE_DEFINE_CHILD: '1', ANT_DEBUG: 'dump/vm:jit opt:off' },
     maxBuffer: 64 * 1024 * 1024,
     timeout: 30000,
   });

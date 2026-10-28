@@ -81,6 +81,7 @@ struct rl_interface_s {
   int escape_state;
   char escape_buf[16];
   int escape_len;
+  bool last_was_cr;
   int last_render_rows;
   UT_hash_handle hh;
 #ifndef _WIN32
@@ -540,8 +541,14 @@ static void process_byte(ant_t *js, rl_interface_t *iface, char c) {
   if (iface->escape_state > 0) { feed_escape(iface, c); return; }
   if (c == 27) { iface->escape_state = 1; iface->escape_len = 0; return; }
 
+  bool after_cr = iface->last_was_cr;
+  iface->last_was_cr = c == '\r';
+
   switch (c) {
-    case '\r': case '\n':
+    case '\n':
+      if (after_cr) break;
+      [[fallthrough]];
+    case '\r':
       if (iface->should_echo) { putchar('\n'); fflush(stdout); }
       process_line(js, iface);
       break;
@@ -555,7 +562,7 @@ static void process_byte(ant_t *js, rl_interface_t *iface, char c) {
     case 11: iface->line_buffer[iface->line_pos] = '\0'; iface->line_len = iface->line_pos; refresh_line(iface); break;
     case 21: iface->line_buffer[0] = '\0'; iface->line_pos = 0; iface->line_len = 0; refresh_line(iface); break;
     case 12: if (iface->should_echo) printf("\033[2J\033[H"); refresh_line(iface); break;
-    default: if (c >= 32 && c < 127) handle_char_input(iface, c); break;
+    default: if ((unsigned char)c >= 32) handle_char_input(iface, c); break;
   }
 }
 

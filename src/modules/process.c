@@ -29,6 +29,7 @@
 #endif
 
 #include "ant.h"
+#include "utf8.h"
 #include "cfunc.h"
 #include "errors.h"
 #include "output.h"
@@ -717,10 +718,10 @@ void process_refresh_sandbox_argv(ant_t *js) {
 
   ant_value_t argv_arr = js_mkarr(js);
   for (int i = 0; i < js->runtime.argc; i++)
-    js_arr_push(js, argv_arr, js_mkstr(js, js->runtime.argv[i], strlen(js->runtime.argv[i])));
+    js_arr_push(js, argv_arr, js_mkstr_wtf8_lossy(js, js->runtime.argv[i], strlen(js->runtime.argv[i])));
 
   js_set(js, process_obj, "argv", argv_arr);
-  js_set(js, process_obj, "argv0", js->runtime.argc > 0 ? js_mkstr(js, js->runtime.argv[0], strlen(js->runtime.argv[0])) : js_mkstr(js, "ant", 3));
+  js_set(js, process_obj, "argv0", js->runtime.argc > 0 ? js_mkstr_wtf8_lossy(js, js->runtime.argv[0], strlen(js->runtime.argv[0])) : js_mkstr(js, "ant", 3));
   js_set(js, process_obj, "execPath", process_exec_path(js));
 }
 
@@ -1126,6 +1127,20 @@ static ant_value_t js_stdin__destroy(ant_params_t) {
   return js_mkundef();
 }
 
+static ant_value_t stdin_onpause_tick(ant_params_t) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps || js_get(js, ps->stdin_obj, "readableFlowing") != js_false) return js_mkundef();
+
+  ant_value_t state = js_get(js, ps->stdin_obj, "_readableState");
+  if (is_object_type(state)) js_set(js, state, "reading", js_false);
+
+  ps->stdin_state.paused = true;
+  ps->stdin_state.read_requested = false;
+  stdin_update_reading(js);
+
+  return js_mkundef();
+}
+
 static ant_value_t stdin_set_paused(ant_t *js, bool paused) {
   ant_process_state_t *ps = process_state(js);
   if (!ps) return Ant_Error_CreateOutOfMemory(js);
@@ -1134,8 +1149,11 @@ static ant_value_t stdin_set_paused(ant_t *js, bool paused) {
   else stream_readable_resume(js, ps->stdin_obj);
 
   ps->stdin_state.paused = paused;
-  if (paused) ps->stdin_state.read_requested = false;
+  ps->stdin_state.read_requested = !paused && ps->stdin_state.started;
+  
   stdin_update_reading(js);
+  if (paused) queue_next_tick(js, js_mkfun_dyn(stdin_onpause_tick));
+  
   return ps->stdin_obj;
 }
 
@@ -1171,18 +1189,22 @@ static ant_value_t process_write_stream(ant_native_params_t, FILE *stream, int f
   const uint8_t *bytes = NULL;
   ant_output_stream_t *out = NULL;
 
+  char *utf8 = NULL;
   if (buffer_source_get_bytes(js, args[0], &bytes, &len)) data = (const char *)bytes;
-  else data = js_getstr(js, args[0], &len);
+  else if ((data = js_getstr(js, args[0], &len)) && (utf8 = wtf8_str_to_utf8_dup(data, &len))) data = utf8;
 
   if (!data) return js_false;
-  if (!ant_output_has_writer() && uv_guess_handle(fd) == UV_TTY)
-    return js_bool(tty_ctrl_write_fd(fd, data, len));
-
-  out = ant_output_stream(stream);
-  ant_output_stream_begin(out);
-
-  if (!ant_output_stream_append(out, data, len)) return js_false;
-  return ant_output_stream_flush(out) ? js_true : js_false;
+  bool ok;
+  
+  if (!ant_output_has_writer() && uv_guess_handle(fd) == UV_TTY) ok = tty_ctrl_write_fd(fd, data, len);
+  else {
+    out = ant_output_stream(stream);
+    ant_output_stream_begin(out);
+    ok = ant_output_stream_append(out, data, len) && ant_output_stream_flush(out);
+  }
+  
+  free(utf8);
+  return js_bool(ok);
 }
 
 static ant_value_t js_stdout_write(ant_params_t) {
@@ -1709,7 +1731,7 @@ static ant_value_t env_get(ant_t *js, ant_value_t target, const char *key, size_
   if (table) {
     env_entry_t *entry = NULL;
     HASH_FIND(hh, *table, key, key_len, entry);
-    return entry ? js_mkstr(js, entry->value, strlen(entry->value)) : js_mkundef();
+    return entry ? js_mkstr_wtf8_lossy(js, entry->value, strlen(entry->value)) : js_mkundef();
   }
   
   CSTR_BUF(buf, 256);
@@ -1718,7 +1740,8 @@ static ant_value_t env_get(ant_t *js, ant_value_t target, const char *key, size_
   
   ant_mutex_lock(&env_lock);
   char *value = getenv(key_str);
-  ant_value_t result = value ? js_mkstr(js, value, strlen(value)) : js_mkundef();
+  ant_value_t result = value ? js_mkstr_wtf8_lossy(js, value, strlen(value)) : js_mkundef();
+  
   ant_mutex_unlock(&env_lock);
   cstr_free(&buf);
   
@@ -1971,7 +1994,7 @@ static void env_to_object_cb(ant_t *js, const char *key, size_t key_len, const c
   CSTR_BUF(buf, 256);
   char *key_str = CSTR_INIT(buf, key, key_len);
   if (!key_str) return;
-  js_set(js, obj, key_str, js_mkstr(js, value, val_len));
+  js_set(js, obj, key_str, js_mkstr_wtf8_lossy(js, value, val_len));
   cstr_free(&buf);
 }
 
@@ -2016,7 +2039,7 @@ static ant_value_t env_toString(ant_params_t) {
 static void env_keys_cb(
   ant_t *js, const char *key, size_t key_len, const char *value, size_t val_len, void *ctx
 ) {
-  js_arr_push(js, *(ant_value_t *)ctx, js_mkstr(js, key, key_len));
+  js_arr_push(js, *(ant_value_t *)ctx, js_mkstr_wtf8_lossy(js, key, key_len));
 }
 
 static ant_value_t env_keys(ant_t *js, ant_value_t target) {
@@ -2034,8 +2057,8 @@ static void env_entries_cb(
   ant_t *js, const char *key, size_t key_len, const char *value, size_t val_len, void *ctx
 ) {
   ant_value_t pairs = *(ant_value_t *)ctx;
-  js_arr_push(js, pairs, js_mkstr(js, key, key_len));
-  js_arr_push(js, pairs, js_mkstr(js, value, val_len));
+  js_arr_push(js, pairs, js_mkstr_wtf8_lossy(js, key, key_len));
+  js_arr_push(js, pairs, js_mkstr_wtf8_lossy(js, value, val_len));
 }
 
 static ant_value_t env_entries(ant_t *js, ant_value_t target) {
@@ -2361,14 +2384,14 @@ void init_process_module(ant_t *js) {
   ant_value_t argv_arr = js_mkarr(js);
   for (int i = 0; i < js->runtime.argc; i++) js_arr_push(
     js, argv_arr, 
-    js_mkstr(js, js->runtime.argv[i], strlen(js->runtime.argv[i]))
+    js_mkstr_wtf8_lossy(js, js->runtime.argv[i], strlen(js->runtime.argv[i]))
   );
 
   js_set(js, process_obj, "argv", argv_arr);
   js_set(js, process_obj, "execArgv", js_mkarr(js));
   
   js_set(js, process_obj, "argv0", js->runtime.argc > 0 
-    ? js_mkstr(js, js->runtime.argv[0], strlen(js->runtime.argv[0])) 
+    ? js_mkstr_wtf8_lossy(js, js->runtime.argv[0], strlen(js->runtime.argv[0])) 
     : js_mkstr(js, "ant", 3)
   );
   

@@ -40,6 +40,7 @@
 #include "modules/io.h"
 #include "modules/util.h"
 #include "sandbox/sandbox.h"
+#include "utf8.h"
 
 #ifdef ANT_WASM_EMBED
 bool io_no_color = true;
@@ -166,7 +167,7 @@ static size_t io_binary_type_len(const char *p) {
   return 0;
 }
 
-static bool io_print_to_output_n(const char *str, size_t len, ant_output_stream_t *out, bool no_color) {
+static bool io_print_utf8_to_output_n(const char *str, size_t len, ant_output_stream_t *out, bool no_color) {
   if (!no_color) return ant_output_stream_append(out, str, len);
 
   static void *states[] = {&&normal, &&esc, &&csi, &&done};
@@ -205,8 +206,31 @@ static bool io_print_to_output_n(const char *str, size_t len, ant_output_stream_
   done: return true;
 }
 
+static bool io_print_to_output_n(const char *str, size_t len, ant_output_stream_t *out, bool no_color) {
+  size_t utf8_len = len;
+  char *utf8 = wtf8_to_utf8_dup(str, &utf8_len);
+  if (!utf8) return io_print_utf8_to_output_n(str, len, out, no_color);
+  bool ok = io_print_utf8_to_output_n(utf8, utf8_len, out, no_color);
+  free(utf8);
+  return ok;
+}
+
 static bool io_print_to_output(const char *str, ant_output_stream_t *out, bool no_color) {
   return io_print_to_output_n(str, strlen(str), out, no_color);
+}
+
+static bool io_print_string_to_output(ant_t *js, ant_value_t value, ant_output_stream_t *out, bool no_color) {
+  size_t len = 0;
+  const char *str = js_getstr(js, value, &len);
+  
+  size_t utf8_len = len;
+  char *utf8 = wtf8_str_to_utf8_dup(str, &utf8_len);
+  
+  if (!utf8) return io_print_utf8_to_output_n(str, len, out, no_color);
+  bool ok = io_print_utf8_to_output_n(utf8, utf8_len, out, no_color);
+  free(utf8);
+  
+  return ok;
 }
 
 enum char_class {
@@ -696,6 +720,11 @@ typedef struct {
 } console_format_ctx_t;
 
 static bool console_emit_value(console_format_ctx_t *c, ant_value_t value, bool plain) {
+  if (plain && vtype(value) == kTypeString) {
+    c->ok = io_print_string_to_output(c->js, value, c->out, io_no_color);
+    return c->ok;
+  }
+
   char cbuf[512];
   js_cstr_t cstr = js_to_cstr(c->js, value, cbuf, sizeof(cbuf));
 

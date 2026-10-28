@@ -220,11 +220,60 @@ static void jit_emit_return_value(jit_compile_t *c, MIR_reg_t ret_val) {
   }
   jit_emit_close_frame_upvalues(c);
   if (c->func->is_derived_ctor) {
+    MIR_label_t dctor_replace = MIR_new_label(c->ctx);
     MIR_label_t dctor_keep = MIR_new_label(c->ctx);
     char rn_dt[32];
     snprintf(rn_dt, sizeof(rn_dt), "dctor%d", c->upval_n++);
     MIR_reg_t r_dt = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_dt);
-    mir_emit_branch_if_object(c->ctx, c->jit_func, ret_val, r_dt, dctor_keep);
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_UBLE,
+                                 MIR_new_label_op(c->ctx, dctor_replace),
+                                 MIR_new_reg_op(c->ctx, ret_val),
+                                 MIR_new_uint_op(c->ctx, NANBOX_PREFIX)));
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_URSH,
+                                 MIR_new_reg_op(c->ctx, r_dt),
+                                 MIR_new_reg_op(c->ctx, ret_val),
+                                 MIR_new_int_op(c->ctx, NANBOX_TYPE_SHIFT)));
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_AND,
+                                 MIR_new_reg_op(c->ctx, r_dt),
+                                 MIR_new_reg_op(c->ctx, r_dt),
+                                 MIR_new_int_op(c->ctx, NANBOX_TYPE_MASK)));
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_LSH,
+                                 MIR_new_reg_op(c->ctx, r_dt),
+                                 MIR_new_int_op(c->ctx, 1),
+                                 MIR_new_reg_op(c->ctx, r_dt)));
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_AND,
+                                 MIR_new_reg_op(c->ctx, r_dt),
+                                 MIR_new_reg_op(c->ctx, r_dt),
+                                 MIR_new_int_op(c->ctx, (int64_t)(T_OBJECT_MASK | (1u << kTypeBuiltin)))));
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_BT,
+                                 MIR_new_label_op(c->ctx, dctor_keep),
+                                 MIR_new_reg_op(c->ctx, r_dt)));
+    MIR_label_t dctor_undef = MIR_new_label(c->ctx);
+    MIR_append_insn(c->ctx, c->jit_func, dctor_replace);
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_BEQ,
+                                 MIR_new_label_op(c->ctx, dctor_undef),
+                                 MIR_new_reg_op(c->ctx, ret_val),
+                                 MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0))));
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_call_insn(c->ctx, 8,
+                                      MIR_new_ref_op(c->ctx, c->throw_error_proto),
+                                      MIR_new_ref_op(c->ctx, c->imp_throw_error),
+                                      MIR_new_reg_op(c->ctx, ret_val),
+                                      MIR_new_reg_op(c->ctx, c->r_vm),
+                                      MIR_new_reg_op(c->ctx, c->r_js),
+                                      MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)SV_DERIVED_CTOR_RETURN_ERROR),
+                                      MIR_new_uint_op(c->ctx, (uint64_t)(sizeof(SV_DERIVED_CTOR_RETURN_ERROR) - 1)),
+                                      MIR_new_int_op(c->ctx, (int64_t)JS_ERR_TYPE)));
+    MIR_append_insn(c->ctx, c->jit_func,
+                    MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, dctor_keep)));
+    MIR_append_insn(c->ctx, c->jit_func, dctor_undef);
     MIR_append_insn(c->ctx, c->jit_func,
                     MIR_new_insn(c->ctx, MIR_MOV,
                                  MIR_new_reg_op(c->ctx, ret_val),

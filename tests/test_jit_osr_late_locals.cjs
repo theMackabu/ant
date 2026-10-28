@@ -22,8 +22,17 @@ console.log('done');
 }
 
 function run(source, label) {
-  const result = spawnSync(process.execPath, ['-e', source], {
+  const plain = spawnSync(process.execPath, ['-e', source], {
     env: { ...process.env, ANT_DEBUG: 'dump/vm:op-warn' },
+    encoding: 'utf8',
+  });
+  if (plain.error) throw plain.error;
+  if (plain.status !== 0) throw new Error(`${label}: default child failed:\n${plain.stderr}\n${plain.stdout}`);
+  if (plain.stderr.split('\n').some(line => line.startsWith('jit: osr entry-rejected func=late')))
+    throw new Error(`${label}: OSR entry rejected the late locals:\n${plain.stderr}`);
+
+  const result = spawnSync(process.execPath, ['-e', source], {
+    env: { ...process.env, ANT_DEBUG: 'dump/vm:op-warn opt:off' },
     encoding: 'utf8',
   });
   if (result.error) throw result.error;

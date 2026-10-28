@@ -111,11 +111,12 @@ struct ant_shape {
   ant_shape_t *descriptor_prev;
   ant_shape_t *descriptor_next;
   ant_shape_heap_t *heap;
+  ant_value_t proto;
 };
 
 #if UINTPTR_MAX == UINT64_MAX
 static_assert(
-  sizeof(ant_shape_t) == 112 && offsetof(ant_shape_t, first_child_key) == 48,
+  sizeof(ant_shape_t) == 120 && offsetof(ant_shape_t, first_child_key) == 48,
   "the JIT invalidation word must occupy existing shape padding"
 );
 #endif
@@ -506,6 +507,7 @@ static ant_shape_t *shape_copy_for_transition(const ant_shape_t *shape) {
   copy->count = shape->count;
   copy->inobj_limit = shape->inobj_limit;
   copy->may_have_index_keys = shape->may_have_index_keys;
+  copy->proto = shape->proto;
   
   shape->descriptors->ref_count++;
   shape_link_descriptors(copy, shape->descriptors);
@@ -642,9 +644,8 @@ bool ant_shape_add_symbol_keyed_tr(ant_t *js, ant_shape_t **shape_pp, ant_offset
   return shape_add_tr(js, shape_pp, ANT_SHAPE_KEY_SYMBOL, NULL, sym_off, attrs, NULL, out_slot, SHAPE_KEYED_TRANSITION_MAX_PROPS);
 }
 
-ant_shape_t *ant_shape_new_with_inobj_limit(ant_t *js, uint8_t inobj_limit) {
+static ant_shape_t *shape_root_in(ant_t *js, ant_shape_t **roots, ant_value_t proto, uint8_t inobj_limit) {
   uint8_t clamped = shape_clamp_inobj_limit(inobj_limit);
-  ant_shape_t **roots = js->shapes.roots;
 
   if (!roots[clamped]) {
     ant_shape_t *s = calloc(1, sizeof(*s));
@@ -659,6 +660,7 @@ ant_shape_t *ant_shape_new_with_inobj_limit(ant_t *js, uint8_t inobj_limit) {
     
     s->inobj_limit = clamped;
     s->ref_count = 1;
+    s->proto = proto;
     
     roots[clamped] = s;
   }
@@ -667,11 +669,76 @@ ant_shape_t *ant_shape_new_with_inobj_limit(ant_t *js, uint8_t inobj_limit) {
   return roots[clamped];
 }
 
+ant_shape_t *ant_shape_new_with_inobj_limit(ant_t *js, uint8_t inobj_limit) {
+  return shape_root_in(js, js->shapes.roots, js_mkundef(), inobj_limit);
+}
+
+ant_shape_t *ant_shape_root(ant_t *js, ant_shape_roots_t *owner, ant_value_t proto, uint8_t inobj_limit) {
+  if (!owner->prev && js->shapes.proto_roots != owner) {
+    owner->next = js->shapes.proto_roots;
+    if (owner->next) owner->next->prev = owner;
+    js->shapes.proto_roots = owner;
+  }
+  
+  return shape_root_in(js, owner->roots, proto, inobj_limit);
+}
+
+void ant_shape_roots_release(ant_t *js, ant_shape_roots_t *owner) {
+  memset(js->shapes.cached_protos, 0, sizeof(js->shapes.cached_protos));
+  memset(js->shapes.cached_roots, 0, sizeof(js->shapes.cached_roots));
+  
+  if (owner->prev) owner->prev->next = owner->next;
+  else if (js->shapes.proto_roots == owner) js->shapes.proto_roots = owner->next;
+  
+  if (owner->next) owner->next->prev = owner->prev;
+  owner->prev = owner->next = NULL;
+  
+  for (int i = 0; i <= (int)ANT_INOBJ_MAX_SLOTS; i++) {
+    ant_shape_release(owner->roots[i]);
+    owner->roots[i] = NULL;
+  }
+}
+
+ant_shape_t *ant_shape_with_proto(ant_shape_t *shape, ant_value_t proto) {
+  if (!shape_is_in_tree(shape) && !shape->jit_snapshot && !shape_has_children(shape)) {
+    shape->proto = proto;
+    ant_shape_retain(shape);
+    return shape;
+  }
+
+  uint64_t ckey = shape_child_key((uint64_t)proto, 0x40);
+  ant_shape_t *child = shape_find_child(shape, ckey);
+  
+  if (child && child->proto == proto && child->count == shape->count) {
+    ant_shape_retain(child);
+    return child;
+  }
+
+  ant_shape_t *copy = shape->bulk_layout ? shape_clone_reserve(shape, 0) : shape_copy_for_transition(shape);
+  if (!copy) return NULL;
+  
+  copy->proto = proto;
+  if (!shape->bulk_layout && !child) shape_record_child(shape, ckey, copy);
+  
+  return copy;
+}
+
+ant_t *ant_shape_isolate(const ant_shape_t *shape) {
+  return (ant_t *)((char *)shape->heap - offsetof(ant_t, shapes.heap));
+}
+
+static_assert(
+  offsetof(struct ant_shape, proto) == ANT_SHAPE_PROTO_OFFSET &&
+  offsetof(struct ant_shape, count) == ANT_SHAPE_COUNT_OFFSET,
+  "inline shape accessors read these offsets"
+);
+
 ant_shape_t *ant_shape_new(ant_t *js) {
   return ant_shape_new_with_inobj_limit(js, (uint8_t)ANT_INOBJ_MAX_SLOTS);
 }
 
 void ant_shapes_destroy(ant_t *js) {
+  while (js->shapes.proto_roots) ant_shape_roots_release(js, js->shapes.proto_roots);
   for (int i = 0; i <= (int)ANT_INOBJ_MAX_SLOTS; i++) {
     ant_shape_release(js->shapes.roots[i]);
     js->shapes.roots[i] = NULL;
@@ -698,6 +765,7 @@ ant_shape_t *shape_clone_reserve(const ant_shape_t *shape, uint32_t extra) {
   copy->inobj_limit = shape_clamp_inobj_limit(shape->inobj_limit);
   copy->bulk_layout = shape->bulk_layout;
   copy->may_have_index_keys = shape->may_have_index_keys;
+  copy->proto = shape->proto;
 
   return copy;
 }
@@ -716,7 +784,7 @@ ant_shape_t *ant_shape_index_layout(ant_t *js, ant_shape_t **cache, const ant_sh
   if (count < SHAPE_TRANSITION_MAX_PROPS) return NULL;
   
   ant_shape_t *cached = *cache;
-  if (cached && cached->count == count && cached->inobj_limit == base->inobj_limit) return cached;
+  if (cached && cached->count == count && cached->inobj_limit == base->inobj_limit && cached->proto == base->proto) return cached;
 
   ant_shape_t *shape = ant_shape_clone_bulk(base, count);
   if (!shape) return NULL;
@@ -875,6 +943,10 @@ bool ant_gc_shapes_sweep(ant_t *js) {
     ant_shape_t *root = js->shapes.roots[i];
     if (root && shape_prune_dead_children(root, epoch)) freed_any = true;
   }
+  
+  for (ant_shape_roots_t *owner = js->shapes.proto_roots; owner; owner = owner->next)
+    for (int i = 0; i <= (int)ANT_INOBJ_MAX_SLOTS; i++)
+      if (owner->roots[i] && shape_prune_dead_children(owner->roots[i], epoch)) freed_any = true;
   
   shape_entry_pool_trim(&js->shapes.heap, js->shapes.heap.pool_len / 2);
 

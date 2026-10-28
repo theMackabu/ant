@@ -5,7 +5,7 @@ const { join } = require('node:path');
 function compile(fixture) {
   const child = spawnSync(process.execPath, [join(__dirname, fixture)], {
     encoding: 'utf8',
-    env: { ...process.env, ANT_DEBUG: 'dump/vm:jit' },
+    env: { ...process.env, ANT_DEBUG: 'dump/vm:jit opt:off' },
     maxBuffer: 32 * 1024 * 1024,
     timeout: 30000,
   });

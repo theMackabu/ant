@@ -10,6 +10,7 @@
 #include "gc/bigints.h"
 #include "gc/strings.h"
 #include "gc/ropes.h"
+#include "gc/trace.h"
 #include "silver/engine.h"
 
 #ifdef ANT_WASM_EMBED
@@ -17,7 +18,6 @@
 #endif
 
 bool gc_disabled = false;
-
 void gc_state_init(ant_t *js) {
   js->gc.nursery_threshold = GC_NURSERY_THRESHOLD;
   js->gc.major_every_n = GC_MAJOR_EVERY_N_MINOR;
@@ -25,6 +25,7 @@ void gc_state_init(ant_t *js) {
   js->gc.major_pool_growth_x256 = 384;
   js->gc.minor_surv_ewma = 128;
   js->gc.major_recl_ewma = 26;
+  js->gc.pool_limit = gc_pool_major_threshold(js);
 }
 
 static size_t gc_young_alloc_bytes(ant_t *js) {
@@ -102,8 +103,14 @@ static size_t gc_offheap_major_threshold(ant_t *js) {
 
 static void gc_adapt_nursery(ant_t *js, size_t young_before, size_t survivors) {
   if (young_before == 0) return;
+  
   uint32_t rate = (uint32_t)((survivors * 256) / young_before);
   js->gc.minor_surv_ewma = (js->gc.minor_surv_ewma * 3 + rate) >> 2;
+  
+  js->gc.skip_minors = 
+    young_before >= GC_NURSERY_THRESHOLD / 4 && 
+    rate >= GC_SKIP_MINOR_SURVIVAL && js->gc.minor_surv_ewma >= GC_SKIP_MINOR_SURVIVAL;
+  
   if (js->gc.minor_surv_ewma < 64 && js->gc.nursery_threshold > GC_NURSERY_THRESHOLD / 2)
     js->gc.nursery_threshold -= js->gc.nursery_threshold / 4;
   else if (js->gc.nursery_threshold < GC_NURSERY_THRESHOLD)
@@ -183,9 +190,10 @@ static void gc_adapt_major_interval(
     if (js->gc.major_live_growth_x256 > 320) js->gc.major_live_growth_x256 -= 32;
     if (js->gc.major_pool_growth_x256 > 320) js->gc.major_pool_growth_x256 -= 32;
   } else {
-    if (js->gc.major_live_growth_x256 > 384) js->gc.major_live_growth_x256 -= 16;
+    bool majors_busy = js->gc.major_time_share_ewma > GC_MAJOR_TIME_SHARE_HIGH;
+    if (js->gc.major_live_growth_x256 > 384) { if (!majors_busy) js->gc.major_live_growth_x256 -= 16; }
     else if (js->gc.major_live_growth_x256 < 384) js->gc.major_live_growth_x256 += 16;
-    if (js->gc.major_pool_growth_x256 > 384) js->gc.major_pool_growth_x256 -= 16;
+    if (js->gc.major_pool_growth_x256 > 384) { if (!majors_busy) js->gc.major_pool_growth_x256 -= 16; }
     else if (js->gc.major_pool_growth_x256 < 384) js->gc.major_pool_growth_x256 += 16;
   }
 }
@@ -252,8 +260,8 @@ void gc_mark_str(ant_t *js, ant_value_t root) {
 
   l_flat:
     if (
-      data && !js->rope_gc.minor_marking &&
-      !str_flat_is_permanent((const ant_flat_string_t *)data)
+      data && !js->rope_gc.minor_marking && (js->rope_gc.untrusted_marking ||
+      !str_flat_is_permanent((const ant_flat_string_t *)data))
     ) gc_strings_mark(js, (const void *)data);
   l_pop:
     if (sp > 0) {
@@ -307,8 +315,10 @@ void gc_run(ant_t *js) {
   gc_bigints_begin(js);
   gc_strings_begin(js);
   
+  gc_trace_major_t trace = gc_trace_major_begin(js, start_ns);
   bool conservative = rope_begin == GC_ROPES_BEGIN_CONSERVATIVE_MAJOR;
   uint64_t mark_ns = gc_objects_run(js, conservative ? gc_ropes_mark_conservative_roots : NULL);
+  gc_trace_lap(&trace, &trace.objects_ns);
   
   gc_clear_remembered_builders(js);
   ant_ic_epoch_bump(js);
@@ -317,13 +327,18 @@ void gc_run(ant_t *js) {
   sv_ic_polys_release_shapes(js);
 
   gc_bigints_sweep(js);
+  gc_trace_lap_start(&trace);
   gc_strings_sweep(js);
+  gc_trace_lap(&trace, &trace.strings_ns);
   gc_ropes_sweep(js, false);
+  gc_trace_lap(&trace, &trace.ropes_ns);
   gc_array_storage_trim(js);
+  gc_trace_lap(&trace, &trace.trim_ns);
 
   js->gc.last_live = js->obj_arena.live_count;
   js->old_live_count = js->obj_arena.live_count;
   js->minor_gc_count = 0;
+  js->gc.skip_probe = true;
 
   js->gc.pool_last_live = gc_pool_live_bytes(js);
   js->gc.pool_alloc = 0;
@@ -357,6 +372,8 @@ void gc_run(ant_t *js) {
   );
   
   gc_refresh_alloc_limit(js);
+  gc_trace_major_end(js, &trace, mark_ns, end_ns);
+  
   js->gc_running = false;
 }
 
@@ -398,12 +415,14 @@ void gc_run_minor(ant_t *js) {
   js->gc.offheap_alloc = 0;
   
   gc_adapt_nursery(js, young_before, survivors);
+  js->gc.skip_probe = false;
   
   js->gc.arrays_at_collect = js->alloc_bytes.arrays;
   js->gc.idle_retry_at = 0;
   js->gc.minor_cost_ns = gc_now_ns() - start_ns;
   
   gc_refresh_alloc_limit(js);
+  gc_trace_minor_end(js, start_ns, young_before, survivors);
   js->gc_running = false;
 }
 
@@ -413,6 +432,40 @@ void gc_pressure(ant_t *js) {
   gc_safepoint(js);
 }
 
+static size_t gc_young_count(ant_t *js) {
+  size_t live = js->obj_arena.live_count;
+  return live > js->old_live_count ? live - js->old_live_count : 0;
+}
+
+static bool gc_major_due(ant_t *js) {
+  return js->obj_arena.live_count >= gc_live_major_threshold(js)
+    || js->gc.pool_alloc >= gc_pool_major_threshold(js)
+    || js->gc.code_alloc >= gc_code_major_threshold(js)
+    || fixed_arena_extent(&js->closure_arena) - js->gc.closure_wm_at_major >= GC_CLOSURE_MAJOR_GROWTH
+    || js->alloc_bytes.arrays + gc_array_storage_cached_bytes(js) >= js->gc.array_major_limit;
+}
+
+static void gc_decide_skipping_minors(ant_t *js) {
+  js->gc.tick = 0;
+  
+  if (gc_major_due(js)) {
+    js->minor_gc_count = 0;
+    gc_run(js);
+    return;
+  }
+  
+  if (js->gc.skip_probe && gc_young_count(js) >= GC_SKIP_PROBE_NURSERY) {
+    gc_run_minor(js);
+    return;
+  }
+  
+  js->rope_gc.young_alloc = 0;
+  if (js->young_closure_len >= js->young_closure_trigger)
+    js->young_closure_trigger = js->young_closure_len * 2;
+  
+  gc_refresh_alloc_limit(js);
+}
+
 static void gc_decide(ant_t *js) {
   size_t live = js->obj_arena.live_count;
   size_t young_count = live > js->old_live_count ? live - js->old_live_count : 0;
@@ -420,6 +473,13 @@ static void gc_decide(ant_t *js) {
   size_t closure_young = 
     js->gc.closure_alloc > js->gc.closure_at_minor ? 
     js->gc.closure_alloc - js->gc.closure_at_minor : 0;
+
+  if (
+    js->gc.skip_minors &&
+    closure_young < GC_CLOSURE_NURSERY_THRESHOLD &&
+    js->gc.offheap_alloc < GC_OFFHEAP_NURSERY_THRESHOLD
+  ) 
+  { gc_decide_skipping_minors(js); return; }
 
   if (
     young_count >= js->gc.nursery_threshold              ||
@@ -497,9 +557,22 @@ static void gc_decide(ant_t *js) {
 void gc_refresh_alloc_limit(ant_t *js) {
   size_t nursery = js->old_live_count + js->gc.nursery_threshold;
   size_t major = gc_live_major_threshold(js);
+  
   js->gc.alloc_limit = nursery < major ? nursery : major;
-  js->gc.array_limit = js->gc.arrays_at_collect + 
-    gc_array_growth(gc_heap_bytes(js, js->gc.pool_last_live));
+  js->gc.pool_limit = gc_pool_major_threshold(js);
+  
+  size_t collected = 
+    js->old_live_count * js->obj_arena.elem_size + 
+    js->gc.arrays_at_collect + js->gc.pool_last_live;
+  
+  js->gc.array_limit = js->gc.arrays_at_collect + gc_array_growth(collected);
+  
+  if (js->gc.skip_minors) {
+    js->gc.alloc_limit = major;
+    js->gc.array_limit = js->gc.array_major_limit;
+    if (js->gc.skip_probe && js->old_live_count + GC_SKIP_PROBE_NURSERY < major)
+      js->gc.alloc_limit = js->old_live_count + GC_SKIP_PROBE_NURSERY;
+  }
 }
 
 void gc_array_limits_init(ant_t *js) {
@@ -553,11 +626,6 @@ static bool gc_idle_major_due(ant_t *js) {
   return js->obj_arena.live_count >= last + (threshold - last) / 2
     || js->gc.pool_alloc >= gc_pool_major_threshold(js) / 2
     || js->gc.code_alloc >= gc_code_major_threshold(js) / 2;
-}
-
-static size_t gc_young_count(ant_t *js) {
-  size_t live = js->obj_arena.live_count;
-  return live > js->old_live_count ? live - js->old_live_count : 0;
 }
 
 bool gc_idle_wanted(ant_t *js) {

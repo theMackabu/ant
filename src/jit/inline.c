@@ -122,7 +122,7 @@ static bool jit_inline_note_instruction(const sv_func_t *f, int off, int size, u
   boundaries[off] |= 1;
   const uint8_t *ip = f->code + off;
   
-  uint16_t flags = sv_op_flags[*ip];
+  uint32_t flags = sv_op_flags[*ip];
   if (!(flags & (SV_OPF_JIT_BRANCH32 | SV_OPF_JIT_BRANCH8))) return true;
 
   int delta = (flags & SV_OPF_JIT_BRANCH32) ? sv_get_i32(ip + 1) : sv_get_i8(ip + 1);
@@ -160,7 +160,7 @@ bool jit_inlineable(sv_func_t *f) {
     int sz = sv_op_size[op];
     if (sz == 0 || sz > end - ip) return false;
 
-    uint16_t flags = sv_op_flags[op];
+    uint32_t flags = sv_op_flags[op];
     if ((flags & SV_OPF_JIT_INLINEABLE) == 0) return false;
     if (!jit_inline_note_instruction(f, (int)(ip - f->code), sz, boundaries)) return false;
 
@@ -331,6 +331,7 @@ static bool jit_analyze_empty_object_reuse(sv_func_t *f) {
       case OP_FALSE:
       case OP_THIS:
       case OP_GET_UPVAL:
+      case OP_GET_UPVAL_VAL:
       case OP_GET_GLOBAL:
         stack[sp] = 0;
         break;
@@ -342,7 +343,7 @@ static bool jit_analyze_empty_object_reuse(sv_func_t *f) {
     int next = off + size;
     int successors[2] = {next, -1};
     
-    uint16_t flags = sv_op_flags[op];
+    uint32_t flags = sv_op_flags[op];
     if (flags & (SV_OPF_JIT_BRANCH32 | SV_OPF_JIT_BRANCH8)) {
       int target = next + ((flags & SV_OPF_JIT_BRANCH32) ? sv_get_i32(ip + 1) : sv_get_i8(ip + 1));
       if (target <= off || target >= f->code_len || !(boundaries[target] & 1)) return false;
@@ -403,6 +404,33 @@ static void mir_emit_inline_read_guard(
                                MIR_new_reg_op(ctx, value)));
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, join)));
+}
+
+static void mir_emit_inline_error_exit(
+    MIR_context_t ctx,
+    MIR_item_t fn,
+    MIR_reg_t value,
+    MIR_reg_t result,
+    MIR_reg_t scratch,
+    MIR_label_t join) {
+  MIR_label_t ok = MIR_new_label(ctx);
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_URSH,
+                               MIR_new_reg_op(ctx, scratch),
+                               MIR_new_reg_op(ctx, value),
+                               MIR_new_int_op(ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_BNE,
+                               MIR_new_label_op(ctx, ok),
+                               MIR_new_reg_op(ctx, scratch),
+                               MIR_new_uint_op(ctx, JIT_ERR_TAG)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV,
+                               MIR_new_reg_op(ctx, result),
+                               MIR_new_reg_op(ctx, value)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, join)));
+  MIR_append_insn(ctx, fn, ok);
 }
 
 static MIR_label_t inl_label_for_offset(MIR_context_t ctx,
@@ -479,7 +507,7 @@ static bool jit_inline_reader_leaf(sv_func_t *func) {
       func->gc_const_slot_count || func->obj_site_count) return false;
   for (const uint8_t *ip = func->code, *end = ip + func->code_len; ip < end; ip += sv_op_size[*ip]) {
     switch (*ip) {
-      case OP_THIS: case OP_GET_ARG: case OP_GET_UPVAL:
+      case OP_THIS: case OP_GET_ARG: case OP_GET_UPVAL: case OP_GET_UPVAL_VAL:
       case OP_GET_LOCAL: case OP_GET_LOCAL8:
       case OP_PUT_LOCAL: case OP_PUT_LOCAL8: case OP_SET_LOCAL: case OP_SET_LOCAL8:
       case OP_GET_FIELD: case OP_GET_FIELD2: case OP_GET_FIELD_OPT:
@@ -524,7 +552,7 @@ void jit_emit_inline_body(
     MIR_item_t special_obj_proto, MIR_item_t imp_special_obj,
     const jit_inline_ext_t *ext
   ) {
-  sv_code_unit_make_immortal(callee);
+  sv_code_depend(js, jit_compile_owner, callee);
   if (!callee->is_strict && !callee->is_arrow) {
     bool uses_this = false;
     for (uint8_t *ip = callee->code; ip < callee->code + callee->code_len; ip += sv_op_size[*ip])
@@ -892,6 +920,30 @@ void jit_emit_inline_body(
                         MIR_new_insn(ctx, MIR_MOV,
                                      MIR_new_reg_op(ctx, inl_locals[idx]),
                                      MIR_new_reg_op(ctx, inl_vs[isp - 1])));
+        break;
+      }
+
+      case OP_GET_UPVAL_VAL: {
+        ANT_ASSERT(r_inl_closure != 0,
+                   "inline upvalue access requires a closure");
+        uint16_t idx = sv_get_u16(ip + 1);
+        int un = inl_upval_n++;
+        char rn_uvs[32];
+        snprintf(rn_uvs, sizeof(rn_uvs), "inl%d_uvs%d", id, un);
+        MIR_reg_t r_uvs = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, rn_uvs);
+        MIR_reg_t dst = inl_vs[isp++];
+        MIR_append_insn(ctx, jit_func,
+                        MIR_new_insn(ctx, MIR_MOV,
+                                     MIR_new_reg_op(ctx, r_uvs),
+                                     MIR_new_mem_op(ctx, MIR_T_P,
+                                                    (MIR_disp_t)offsetof(sv_closure_t, upvalues),
+                                                    r_inl_closure, 0, 1)));
+        MIR_append_insn(ctx, jit_func,
+                        MIR_new_insn(ctx, MIR_MOV,
+                                     MIR_new_reg_op(ctx, dst),
+                                     MIR_new_mem_op(ctx, MIR_JSVAL,
+                                                    (MIR_disp_t)((int)idx * (int)sizeof(sv_upvalue_t *)),
+                                                    r_uvs, 0, 1)));
         break;
       }
 
@@ -1364,6 +1416,8 @@ void jit_emit_inline_body(
           mir_call_helper2(ctx, jit_func, rd,
                            helper2_proto, helper,
                            r_vm, r_js, rl, rr);
+          if (op == OP_EQ || op == OP_NE)
+            mir_emit_inline_error_exit(ctx, jit_func, rd, result, r_bool, join);
           }
           MIR_append_insn(ctx, jit_func, eq_done);
           inl_num[isp - 1] = 0;
@@ -1393,6 +1447,7 @@ void jit_emit_inline_body(
             mir_call_helper2(ctx, jit_func, rd,
                              helper2_proto, helper,
                              r_vm, r_js, rl, rr);
+            mir_emit_inline_error_exit(ctx, jit_func, rd, result, r_bool, join);
           }
         }
         break;
@@ -2080,7 +2135,7 @@ void jit_emit_inline_body(
                                      nc_this, r_bool, r_dv_bound);
           sv_func_t *reader = sv_tfb_get_call_target(callee, dv_off);
           if (ext->next_inline_id && jit_inline_reader_leaf(reader) && reader->code_len <= reader_budget) {
-            sv_code_unit_make_immortal(reader);
+            sv_code_depend(js, jit_compile_owner, reader);
             reader_budget -= reader->code_len;
             MIR_label_t dispatch = MIR_new_label(ctx);
             MIR_append_insn(ctx, jit_func, MIR_new_insn(ctx, MIR_BNE,

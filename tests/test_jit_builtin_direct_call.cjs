@@ -71,7 +71,7 @@ assert(mixedSum === 50018890, 'call sites switching between JS functions and bui
 // a site compiled JS-only records the first builtin that reaches it and
 // recompiles once, so it ends up on the direct path
 const { spawnSync } = require('node:child_process');
-const lateEnv = { ...process.env, ANT_DEBUG: 'dump/vm:op-warn', NO_COLOR: '1' };
+const lateEnv = { ...process.env, ANT_DEBUG: 'dump/vm:op-warn opt:off', NO_COLOR: '1' };
 delete lateEnv.FORCE_COLOR;
 const lateSite = spawnSync(process.execPath, ['-e', `
 function site(f, x) { return f(x); }

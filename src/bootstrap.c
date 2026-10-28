@@ -193,6 +193,7 @@ void ant_bootstrap_modules(ant_t *js) {
   ant_register_library(internal_http_parser_library, "ant:internal/http_parser");
   ant_register_library(internal_http_writer_library, "ant:internal/http_writer");
   ant_register_library(internal_http_metadata_library, "ant:internal/http_metadata");
+  ant_register_library(internal_url_library, "ant:internal/url");
 
   ant_standard_library("util", util_library);
   ant_standard_library("util/types", util_types_library);
@@ -206,7 +207,6 @@ void ant_bootstrap_modules(ant_t *js) {
   ant_standard_library("fs", fs_library);
   ant_standard_library("constants", fs_constants_library);
   ant_standard_library("os", os_library);
-  ant_standard_library("url", url_library);
   ant_standard_library("perf_hooks", perf_hooks_library);
   ant_standard_library("process", process_library);
   ant_standard_library("crypto", crypto_library);

@@ -41,15 +41,18 @@ static inline ant_value_t sv_abstract_eq(ant_t *js, ant_value_t l, ant_value_t r
   if ((lt == kTypeBigInt && rty == kTypeNumber) || (lt == kTypeNumber && rty == kTypeBigInt)) {
     double num_val = lt == kTypeNumber ? tod(l) : tod(r);
     ant_value_t bigint_val = lt == kTypeBigInt ? l : r;
+    
     if (isfinite(num_val) && num_val == trunc(num_val)) {
-      bool neg = num_val < 0;
-      if (neg) num_val = -num_val;
-      char buf[64];
-      snprintf(buf, sizeof(buf), "%.0f", num_val);
-      return mkval(
-        kTypeBool, bigint_compare(js, bigint_val,
-        js_mkbigint(js, buf, strlen(buf), neg)) == 0);
+      GC_ROOT_SAVE(root_mark, js);
+      GC_ROOT_PIN(js, bigint_val);
+      
+      ant_value_t number_bigint = bigint_from_integral_double(js, num_val);
+      bool equal = !is_err(number_bigint) && bigint_compare(js, bigint_val, number_bigint) == 0;
+      
+      GC_ROOT_RESTORE(js, root_mark);
+      return is_err(number_bigint) ? number_bigint : mkval(kTypeBool, equal);
     }
+    
     return mkval(kTypeBool, 0);
   }
 
@@ -59,60 +62,60 @@ static inline ant_value_t sv_abstract_eq(ant_t *js, ant_value_t l, ant_value_t r
   if ((lt == kTypeNumber && rty == kTypeString) || (lt == kTypeString && rty == kTypeNumber))
     return mkval(kTypeBool, js_to_number(js, l) == js_to_number(js, r));
 
-  if (is_object_type(l)) {
-    ant_value_t lp = js_to_primitive(js, l, 0);
+  if ((lt == kTypeBigInt && rty == kTypeString) || (lt == kTypeString && rty == kTypeBigInt)) {
+    ant_value_t bigint_val = lt == kTypeBigInt ? l : r;
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, bigint_val);
     
-    if (!is_err(lp)) {
-      GC_ROOT_SAVE(root_mark, js);
-      GC_ROOT_PIN(js, lp);
-      
-      ant_value_t res = sv_abstract_eq(js, lp, r);
-      GC_ROOT_RESTORE(js, root_mark);
-      
-      return res;
-    }
-  }
-  
-  if (is_object_type(r)) {
-    ant_value_t rp = js_to_primitive(js, r, 0);
+    ant_value_t parsed = bigint_from_string_literal(js, lt == kTypeString ? l : r);
+    bool equal = vtype(parsed) == kTypeBigInt && bigint_compare(js, bigint_val, parsed) == 0;
     
-    if (!is_err(rp)) {
-      GC_ROOT_SAVE(root_mark, js);
-      GC_ROOT_PIN(js, rp);
-      
-      ant_value_t res = sv_abstract_eq(js, l, rp);
-      GC_ROOT_RESTORE(js, root_mark);
-      
-      return res;
-    }
+    GC_ROOT_RESTORE(js, root_mark);
+    return is_err(parsed) ? parsed : mkval(kTypeBool, equal);
   }
+
+  bool l_obj = is_object_type(l) || lt == kTypeBuiltin;
+  bool r_obj = is_object_type(r) || rty == kTypeBuiltin;
+  if (l_obj == r_obj) return mkval(kTypeBool, 0);
+
+  ant_value_t prim = js_to_primitive(js, l_obj ? l : r, 0);
+  if (is_err(prim)) return prim;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, prim);
   
-  return mkval(kTypeBool, 0);
+  ant_value_t res = l_obj ? sv_abstract_eq(js, prim, r) : sv_abstract_eq(js, l, prim);
+  GC_ROOT_RESTORE(js, root_mark);
+
+  return res;
 }
 
-static inline void sv_op_eq(sv_vm_t *vm, ant_t *js) {
+static inline ant_value_t sv_op_eq(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[vm->sp - 1];
   ant_value_t l = vm->stack[vm->sp - 2];
   ant_value_t eq = sv_abstract_eq(js, l, r);
+  if (is_err(eq)) return eq;
   vm->sp -= 2;
   vm->stack[vm->sp++] = eq;
+  return eq;
 }
 
-static inline void sv_op_ne(sv_vm_t *vm, ant_t *js) {
+static inline ant_value_t sv_op_ne(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[vm->sp - 1];
   ant_value_t l = vm->stack[vm->sp - 2];
   ant_value_t eq = sv_abstract_eq(js, l, r);
+  if (is_err(eq)) return eq;
   vm->sp -= 2;
   vm->stack[vm->sp++] = mkval(kTypeBool, !vdata(eq));
+  return eq;
 }
 
 static inline int sv_strcmp(ant_t *js, ant_value_t l, ant_value_t r) {
   ant_offset_t n1, off1 = vstr(js, l, &n1);
   ant_offset_t n2, off2 = vstr(js, r, &n2);
-  ant_offset_t min_len = n1 < n2 ? n1 : n2;
-  int cmp = memcmp((const void *)(uintptr_t)off1, (const void *)(uintptr_t)off2, min_len);
-  if (cmp == 0) return (n1 < n2) ? -1 : (n1 > n2) ? 1 : 0;
-  return cmp < 0 ? -1 : 1;
+  return str_compare_utf16(
+    (const char *)(uintptr_t)off1, (size_t)n1,
+    (const char *)(uintptr_t)off2, (size_t)n2);
 }
 
 static inline bool sv_coerce_relational(ant_t *js, ant_value_t *l, ant_value_t *r) {
@@ -203,20 +206,36 @@ static inline ant_value_t sv_push_bigint_relational(
     result = ordered && sv_rel_from_bigint_cmp(cmp, left_is_bigint, op);
   } 
   
-  else if (lt == kTypeBigInt || rty == kTypeBigInt) {
+  else if ((lt == kTypeBigInt && rty == kTypeString) || (lt == kTypeString && rty == kTypeBigInt)) {
     bool left_is_bigint = lt == kTypeBigInt;
-    ant_value_t other_bigint = bigint_from_value(js, left_is_bigint ? r : l);
+    ant_value_t other_bigint = bigint_from_string_literal(js, left_is_bigint ? r : l);
     if (is_err(other_bigint)) { vm->sp -= 2; return other_bigint; }
     
-    cmp = left_is_bigint
-      ? bigint_compare(js, l, other_bigint)
-      : bigint_compare(js, r, other_bigint);
+    if (vtype(other_bigint) == kTypeBigInt) {
+      cmp = left_is_bigint
+        ? bigint_compare(js, l, other_bigint)
+        : bigint_compare(js, r, other_bigint);
+      result = sv_rel_from_bigint_cmp(cmp, left_is_bigint, op);
+    }
+  }
+  
+  else if (lt == kTypeBigInt || rty == kTypeBigInt) {
+    bool left_is_bigint = lt == kTypeBigInt;
+    ant_value_t other = left_is_bigint ? r : l;
+    if (vtype(other) == kTypeSymbol) {
+      vm->sp -= 2;
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a number");
+    }
     
-    result = sv_rel_from_bigint_cmp(cmp, left_is_bigint, op);
+    bool ordered = false;
+    ant_value_t status = sv_bigint_compare_number(js, left_is_bigint ? l : r, js_to_number(js, other), &ordered, &cmp);
+    if (is_err(status)) { vm->sp -= 2; return status; }
+    result = ordered && sv_rel_from_bigint_cmp(cmp, left_is_bigint, op);
   }
 
   vm->sp -= 2;
   vm->stack[vm->sp++] = mkval(kTypeBool, result);
+  
   return tov(0);
 }
 
@@ -354,11 +373,20 @@ static inline bool sv_instanceof_lhs_cache_key(
 
   ant_value_t proto = obj->proto;
   ant_object_t *proto_obj = is_object_type(proto) ? js_obj_ptr(js_as_obj(proto)) : NULL;
-  if (!proto_obj) return false;
+  if (!proto_obj || (proto_obj->flags.is_exotic && is_proxy(proto))) return false;
 
   if (out_obj) *out_obj = obj;
   if (out_proto) *out_proto = proto;
   if (out_proto_obj) *out_proto_obj = proto_obj;
+  return true;
+}
+
+static inline bool sv_instanceof_chain_has_no_proxy(ant_value_t proto) {
+  for (int depth = 0; is_object_type(proto); depth++) {
+    ant_object_t *ptr = js_obj_ptr(js_as_obj(proto));
+    if (!ptr || depth >= MAX_PROTO_CHAIN_DEPTH || (ptr->flags.is_exotic && is_proxy(proto))) return false;
+    proto = ptr->proto;
+  }
   return true;
 }
 
@@ -402,6 +430,7 @@ static inline __attribute__((noinline)) ant_value_t sv_instanceof_ic_miss(
   
   ant_value_t ctor_proto = js_mkundef();
   bool rhs_cacheable = ic && (lhs_cacheable || primitive) && sv_instanceof_rhs_ordinary_proto(js, r, &ctor_proto);
+  if (rhs_cacheable && lhs_cacheable && !sv_instanceof_chain_has_no_proxy(lhs_proto)) rhs_cacheable = false;
   
   if (rhs_cacheable && primitive) {
     ic->cached_shape = NULL;
@@ -498,15 +527,17 @@ static inline ant_value_t sv_isproto_ic_eval(
     return js_bool(ic->cached_index != 0);
   }
 
-  bool found = js_is_prototype_of(js, proto_obj, obj);
-  if (ic && proto_ptr && obj_ptr) {
+  bool cacheable = false;
+  ant_value_t result = js_object_is_prototype_of(js, proto_obj, obj, &cacheable);
+  
+  if (ic && proto_ptr && obj_ptr && cacheable) {
     ic->cached_holder = proto_ptr;
     ic->cached_shape = (ant_shape_t *)(uintptr_t)obj_ptr;
-    ic->cached_index = found ? 1u : 0u;
+    ic->cached_index = result == js_true ? 1u : 0u;
     ic->epoch = js->ic.epoch;
     ic->guard.comparison.object_epoch = js->ic.obj_epoch;
   }
-  return js_bool(found);
+  return result;
 }
 
 static inline ant_value_t sv_op_in(sv_vm_t *vm, ant_t *js) {

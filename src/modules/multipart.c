@@ -332,10 +332,9 @@ static ant_value_t multipart_append_part(
     );
   }
 
-  return formdata_append_string(
-    js, fd,
+  return formdata_append_string(js, fd,
     js_mkstr(js, info->name, strlen(info->name)),
-    js_mkstr(js, data, size)
+    js_mkstr_utf8(js, data, size)
   );
 }
 

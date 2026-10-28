@@ -448,7 +448,8 @@ static void mir_emit_short_string_concat(
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, count), MIR_new_mem_op(ctx, MIR_T_U64, offsetof(ant_t, gc.pool_alloc), r_js, 0, 1)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, count), MIR_new_reg_op(ctx, count), MIR_new_reg_op(ctx, len)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, count), MIR_new_reg_op(ctx, count), MIR_new_uint_op(ctx, sizeof(ant_flat_string_t) + 1)));
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBGE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, count), MIR_new_uint_op(ctx, GC_POOL_PRESSURE_FLOOR)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, tmp), MIR_new_mem_op(ctx, MIR_T_U64, offsetof(ant_t, gc.pool_limit), r_js, 0, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBGE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, count), MIR_new_reg_op(ctx, tmp)));
 
   for (size_t max_len = 1; max_len < STR_SHORT_CONS_THRESHOLD; max_len++) {
     size_t overhead = sizeof(ant_flat_string_t) + _Alignof(ant_flat_string_t);

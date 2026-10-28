@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -16,12 +17,13 @@
 #endif
 
 #if defined(__linux__) && !defined(ANT_WASM_EMBED)
+#include <signal.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #endif
 
-#define SV_DEFAULT_STACK_KB  984
-#define SV_BYTES_PER_SLOT    ((int)sizeof(uint64_t))
+static constexpr int SV_DEFAULT_STACK_KB = 984;
+static constexpr int SV_BYTES_PER_SLOT = (int)sizeof(uint64_t);
 
 int sv_user_stack_size_kb = 0;
 
@@ -72,4 +74,55 @@ void sv_vm_limits(int *out_stack_size, int *out_max_frames) {
 
   *out_stack_size = slots;
   *out_max_frames = frames;
+}
+
+#if defined(__linux__) && !defined(ANT_WASM_EMBED)
+static constexpr size_t OS_MAIN_STACK_SIZE = (size_t)32 * 1024 * 1024;
+
+typedef struct {
+  int (*fn)(int, char **);
+  int argc;
+  char **argv;
+  sigset_t mask;
+} os_main_call_t;
+
+static void *os_main_thread(void *data) {
+  os_main_call_t *call = data;
+  pthread_sigmask(SIG_SETMASK, &call->mask, NULL);
+  exit(call->fn(call->argc, call->argv));
+}
+#endif
+
+int os_run_main(int (*fn)(int, char **), int argc, char **argv) {
+#if defined(__linux__) && !defined(ANT_WASM_EMBED)
+  struct rlimit rl;
+  if (
+    getrlimit(RLIMIT_STACK, &rl) == 0 &&
+    rl.rlim_cur != RLIM_INFINITY &&
+    rl.rlim_cur >= OS_MAIN_STACK_SIZE
+  ) return fn(argc, argv);
+
+  os_main_call_t call = { .fn = fn, .argc = argc, .argv = argv };
+  pthread_attr_t attr;
+  pthread_t thread;
+  sigset_t all;
+
+  if (pthread_attr_init(&attr) != 0) return fn(argc, argv);
+  sigfillset(&all);
+
+  if (
+    pthread_attr_setstacksize(&attr, OS_MAIN_STACK_SIZE) == 0 &&
+    pthread_sigmask(SIG_BLOCK, &all, &call.mask) == 0
+  ) {
+    if (pthread_create(&thread, &attr, os_main_thread, &call) == 0) {
+      pthread_attr_destroy(&attr);
+      pthread_join(thread, NULL);
+      return EXIT_FAILURE;
+    }
+    pthread_sigmask(SIG_SETMASK, &call.mask, NULL);
+  }
+
+  pthread_attr_destroy(&attr);
+#endif
+  return fn(argc, argv);
 }

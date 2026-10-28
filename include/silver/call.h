@@ -68,7 +68,7 @@ static inline ant_value_t sv_invoke_builtin(
 }
 
 static inline void sv_vm_maybe_checkpoint_microtasks(ant_t *js) {
-  if (!js || js->microtasks_draining || js->vm_exec_depth != 0 || Ant_Exception_Pending(js)) return;
+  if (!js || js->microtasks_draining || js->vm_exec_depth != 0 || js->jit_active_depth != 0 || Ant_Exception_Pending(js)) return;
   js_maybe_drain_microtasks(js);
 }
 
@@ -122,7 +122,7 @@ static inline bool sv_call_mode_is_construct(sv_call_mode_t mode) {
 }
 
 static inline ant_value_t sv_call_normalize_this(ant_t *js, ant_value_t this_val, sv_call_mode_t mode) {
-  if (mode == SV_CALL_MODE_NORMAL && sv_is_nullish_this(this_val)) return js->global;
+  if (mode == SV_CALL_MODE_NORMAL && sv_is_nullish_this(this_val)) return js_mkundef();
   return this_val;
 }
 

@@ -9,6 +9,7 @@
 
 #include "ant.h"
 #include "utils.h"
+#include "utf8.h"
 #include "reactor.h"
 #include "internal.h"
 #include "messages.h"
@@ -152,7 +153,14 @@ static char *read_stdin(size_t *len) {
   }
 
   buf[*len] = '\0';
-  return buf;
+  
+  size_t valid = utf8_valid_prefix(buf, *len, NULL);
+  if (valid == *len) return buf;
+  
+  char *clean = utf8_replace_invalid(buf, *len, valid, len);
+  free(buf);
+  
+  return clean;
 }
 
 int ant_entry_stdin(ant_t *js, bool print, ant_input_mode_t mode, bool inspect) {

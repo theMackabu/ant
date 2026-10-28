@@ -113,6 +113,7 @@ ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t recei
 ant_offset_t js_arr_len(ant_t *js, ant_value_t arr);
 ant_value_t js_arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx);
 
+// todo: make this cleaner
 bool js_iter(
   ant_t *js, 
   ant_value_t iterable,
@@ -139,6 +140,13 @@ ant_value_t js_mkarr(ant_t *);
 
 ant_value_t js_mkstr(ant_t *, const void *, size_t);
 ant_value_t js_mkstr_permanent(ant_t *, const void *, size_t);
+ant_value_t js_mkstr_utf8(ant_t *, const void *, size_t);
+ant_value_t js_mkstr_utf8_strip_bom(ant_t *, const void *, size_t);
+ant_value_t js_mkstr_wtf8_lossy(ant_t *, const void *, size_t);
+ant_value_t js_mkstr_utf8_valid(ant_t *, const void *, size_t, bool ascii);
+ant_value_t js_mkstr_utf8_try(ant_t *, const void *, size_t, size_t *out_valid);
+ant_value_t js_mkstr_utf8_reserve(ant_t *, size_t len, char **out_bytes);
+ant_value_t js_mkstr_utf8_commit(ant_t *, ant_value_t str);
 ant_value_t js_mkbigint(ant_t *, const char *digits, size_t len, bool negative);
 ant_value_t js_mkbigint_permanent(ant_t *, const char *digits, size_t len, bool negative);
 
@@ -157,6 +165,7 @@ void js_arr_push(ant_t *, ant_value_t arr, ant_value_t val);
 void js_arr_reserve(ant_t *, ant_value_t arr, uint32_t n);
 void js_set_proto(ant_t *, ant_value_t obj, ant_value_t proto);
 void js_set_proto_wb(ant_t *, ant_value_t obj, ant_value_t proto);
+void js_set_literal_proto(ant_t *, ant_value_t obj, ant_value_t proto);
 void js_set_proto_init(ant_value_t obj, ant_value_t proto);
 void *js_permanent_alloc(ant_t *, size_t size, size_t align);
 

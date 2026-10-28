@@ -100,8 +100,10 @@ const shellChildDoneP = childClosedP.then(
   () =>
     new Promise(resolve => {
       const shellChild = spawn('echo $HOME', [], { shell: true });
+      let shellOutput = '';
+      shellChild.stdout.on('data', data => shellOutput += data);
       shellChild.on('close', () => {
-        test('spawn with shell option', shellChild.stdout.length > 0, true);
+        test('spawn with shell option', shellOutput.length > 0, true);
         resolve();
       });
     })

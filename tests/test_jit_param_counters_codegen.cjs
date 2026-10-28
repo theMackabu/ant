@@ -22,13 +22,17 @@ const run = (debug) => spawnSync(process.execPath, ['-e', source], {
   timeout: 30000,
 });
 
-const warn = run('dump/vm:op-warn');
+const plain = run('');
+assert.strictEqual(plain.status, 0, String(plain.error || plain.stderr));
+assert.match(plain.stdout, /total \d+/);
+
+const warn = run('dump/vm:op-warn opt:off');
 assert.strictEqual(warn.status, 0, String(warn.error || warn.stderr));
 const bailouts = warn.stderr.match(/jit: bailout [^\n]*func=walk\b/g) || [];
 assert.ok(bailouts.length <= 2, 'one bailout per compile at most, got ' + bailouts.length);
 assert.doesNotMatch(warn.stderr, /jit: disabling walk/);
 
-const dump = run('dump/vm:jit');
+const dump = run('dump/vm:jit opt:off');
 assert.strictEqual(dump.status, 0, String(dump.error || dump.stderr));
 const compiles = dump.stderr.match(/jit_walk_[^\n]*:\s*func[\s\S]*?endfunc/g) || [];
 assert.ok(compiles.length >= 2, 'recompiled after the non-integer argument');

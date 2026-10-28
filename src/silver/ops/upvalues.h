@@ -145,6 +145,11 @@ static inline ant_value_t sv_op_get_upval(
   return js_mkundef();
 }
 
+static inline void sv_op_get_upval_val(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) {
+  uint16_t idx = sv_get_u16(ip + 1);
+  vm->stack[vm->sp++] = (ant_value_t)(uintptr_t)frame->upvalues[idx];
+}
+
 static inline ant_value_t sv_op_put_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) {
   uint16_t idx = sv_get_u16(ip + 1);
   sv_upvalue_t *uv = frame->upvalues[idx];
@@ -242,7 +247,10 @@ static inline ant_value_t sv_op_closure(
 
   for (int i = 0; i < child->upvalue_count; i++) {
     sv_upval_desc_t *desc = &child->upval_descs[i];
-    if (desc->is_local) {
+    if (desc->is_local && desc->by_value) {
+      ant_value_t *slot = sv_frame_slot_ptr(frame, desc->index);
+      closure->upvalues[i] = (sv_upvalue_t *)(uintptr_t)(slot ? *slot : js_mkundef());
+    } else if (desc->is_local) {
       ant_value_t *slot = sv_frame_slot_ptr(frame, desc->index);
       if (!slot) slot = frame->bp;
       closure->upvalues[i] = sv_capture_upvalue(vm, slot);
@@ -251,19 +259,22 @@ static inline ant_value_t sv_op_closure(
 
   ant_value_t func_val = mkref(kTypeFunction, closure);
   vm->stack[vm->sp++] = func_val;
+  
   ant_value_t eval_env = sv_frame_eval_env(js, frame);
   if (*ip == OP_CLOSURE_EVAL) {
     eval_env = sv_eval_capture_env(vm, js, frame, sv_get_u32(ip + 5));
     if (is_err(eval_env)) return eval_env;
   }
+  
   GC_ROOT_SAVE(mark, js);
   if (*ip == OP_CLOSURE_EVAL) GC_ROOT_PIN(js, eval_env);
+  
   sv_closure_finish_init(
     js, closure, func_val, frame->callee, NULL, 0,
     eval_env, eval_env != js->global
   );
+  
   GC_ROOT_RESTORE(js, mark);
-
   return js_mkundef();
 }
 
@@ -276,7 +287,8 @@ static inline ant_value_t sv_op_closure_args(
 
   sv_closure_t *closure = js_func_closure(vm->stack[vm->sp - 1]);
   for (int i = 0; i < closure->func->upvalue_count; i++)
-    if (closure->func->upval_descs[i].is_local) js_arguments_link_upvalue(js, frame, closure->upvalues[i]);
+    if (closure->func->upval_descs[i].is_local && !closure->func->upval_descs[i].by_value)
+      js_arguments_link_upvalue(js, frame, closure->upvalues[i]);
   return result;
 }
 
