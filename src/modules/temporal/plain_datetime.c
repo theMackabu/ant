@@ -97,12 +97,12 @@ static bool temporal_partial_datetime(
 }
 
 static bool temporal_plain_datetime_from_value(ant_t *js, ant_value_t value, PlainDateTime **out, ant_value_t *err) {
-  PlainDateTime *datetime = is_object_type(value) ? js_get_native(value, TEMPORAL_PLAIN_DATETIME_TAG) : NULL;
+  PlainDateTime *datetime = js_get_native(value, TEMPORAL_PLAIN_DATETIME_TAG);
   if (datetime) {
     *out = temporal_rs_PlainDateTime_clone(datetime);
     return true;
   }
-  PlainDate *date = is_object_type(value) ? js_get_native(value, TEMPORAL_PLAIN_DATE_TAG) : NULL;
+  PlainDate *date = js_get_native(value, TEMPORAL_PLAIN_DATE_TAG);
   if (date) {
     temporal_rs_PlainDate_to_plain_date_time_result result = temporal_rs_PlainDate_to_plain_date_time(date, NULL);
     if (!result.is_ok) {
@@ -112,7 +112,7 @@ static bool temporal_plain_datetime_from_value(ant_t *js, ant_value_t value, Pla
     *out = result.ok;
     return true;
   }
-  ZonedDateTime *zdt = is_object_type(value) ? js_get_native(value, TEMPORAL_ZONED_DATETIME_TAG) : NULL;
+  ZonedDateTime *zdt = js_get_native(value, TEMPORAL_ZONED_DATETIME_TAG);
   if (zdt) {
     PlainDate *zdt_date = temporal_rs_ZonedDateTime_to_plain_date(zdt);
     PlainTime *zdt_time = temporal_rs_ZonedDateTime_to_plain_time(zdt);

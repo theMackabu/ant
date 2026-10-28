@@ -7,7 +7,7 @@
 static bool temporal_instant_from_value(
   ant_t *js, ant_value_t value, Instant **out, ant_value_t *err
 ) {
-  Instant *instant = is_object_type(value) ? js_get_native(value, TEMPORAL_INSTANT_TAG) : NULL;
+  Instant *instant = js_get_native(value, TEMPORAL_INSTANT_TAG);
   if (instant) {
     *out = temporal_rs_Instant_clone(instant);
     return true;

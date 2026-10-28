@@ -165,8 +165,8 @@ static ant_value_t timer_make_args_array(ant_native_params_t) {
 static constexpr uint32_t TIMER_NATIVE_TAG = Ant_NativeTag("TIMR");
 static constexpr uint32_t IMMEDIATE_NATIVE_TAG = Ant_NativeTag("IMMD");
 
-static timer_entry_t *timer_entry_of(ant_value_t handle) {
-  return is_object_type(handle) ? js_get_native(handle, TIMER_NATIVE_TAG) : NULL;
+static inline timer_entry_t *timer_entry_of(ant_value_t handle) {
+  return js_get_native(handle, TIMER_NATIVE_TAG);
 }
 
 static timer_entry_t *timer_open_entry_of(ant_value_t handle) {
@@ -179,8 +179,8 @@ static ant_value_t timer_to_primitive(ant_params_t) {
   return entry ? js_mknum((double)entry->timer_id) : js_mkundef();
 }
 
-static immediate_entry_t *immediate_entry_of(ant_value_t handle) {
-  return is_object_type(handle) ? js_get_native(handle, IMMEDIATE_NATIVE_TAG) : NULL;
+static inline immediate_entry_t *immediate_entry_of(ant_value_t handle) {
+  return js_get_native(handle, IMMEDIATE_NATIVE_TAG);
 }
 
 static ant_value_t timer_inspect(ant_params_t) {

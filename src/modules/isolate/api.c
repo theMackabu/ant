@@ -59,11 +59,11 @@ void guest_release(ant_guest_t *g) {
 
 static ant_guest_t *isolate_this(ant_t *js) {
   ant_value_t self = js_getthis(js);
-  return is_object_type(self) ? js_get_native(self, ISOLATE_NATIVE_TAG) : NULL;
+  return js_get_native(self, ISOLATE_NATIVE_TAG);
 }
 
 static isolate_handle_t *isolate_handle(ant_value_t obj, isolate_handle_kind_t kind) {
-  isolate_handle_t *h = is_object_type(obj) ? js_get_native(obj, ISOLATE_HANDLE_TAG) : NULL;
+  isolate_handle_t *h = js_get_native(obj, ISOLATE_HANDLE_TAG);
   return h && h->kind == kind ? h : NULL;
 }
 
@@ -769,7 +769,7 @@ static ant_value_t js_isolate_ctor(ant_params_t) {
 
 static ant_value_t js_handle_release(ant_params_t) {
   ant_value_t self = js_getthis(js);
-  isolate_handle_t *h = is_object_type(self) ? js_get_native(self, ISOLATE_HANDLE_TAG) : NULL;
+  isolate_handle_t *h = js_get_native(self, ISOLATE_HANDLE_TAG);
   if (h && !h->released) {
     h->released = true;
     isolate_queue_release(h->g, h->kind, h->id);
@@ -830,7 +830,7 @@ static ant_value_t js_copy_fn(ant_params_t) {
 
 static ant_wire_t *isolate_copy_this(ant_t *js) {
   ant_value_t self = js_getthis(js);
-  return is_object_type(self) ? js_get_native(self, ISOLATE_COPY_TAG) : NULL;
+  return js_get_native(self, ISOLATE_COPY_TAG);
 }
 
 static ant_value_t js_copy_copy(ant_params_t) {

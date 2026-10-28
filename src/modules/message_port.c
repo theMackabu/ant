@@ -227,8 +227,8 @@ ant_value_t ant_port_end_post(ant_t *js, ant_port_end_t *end, ant_value_t value,
   return js_mkundef();
 }
 
-static ant_port_binding_t *port_binding(ant_value_t value) {
-  return is_object_type(value) ? (ant_port_binding_t *)js_get_native(value, MESSAGE_PORT_NATIVE_TAG) : NULL;
+static inline ant_port_binding_t *port_binding(ant_value_t value) {
+  return js_get_native(value, MESSAGE_PORT_NATIVE_TAG);
 }
 
 bool ant_message_port_is(ant_value_t value) {
@@ -732,8 +732,8 @@ static ant_value_t js_message_channel_ctor(ant_params_t) {
   return this_obj;
 }
 
-static broadcast_member_t *broadcast_member(ant_value_t value) {
-  return is_object_type(value) ? (broadcast_member_t *)js_get_native(value, BROADCAST_NATIVE_TAG) : NULL;
+static inline broadcast_member_t *broadcast_member(ant_value_t value) {
+  return js_get_native(value, BROADCAST_NATIVE_TAG);
 }
 
 static void broadcast_update_ref(broadcast_member_t *m) {

@@ -5,7 +5,7 @@
 #  include "temporal_internal.h"
 
 static bool temporal_plain_yearmonth_from_value(ant_t *js, ant_value_t value, PlainYearMonth **out, ant_value_t *err) {
-  PlainYearMonth *yearmonth = is_object_type(value) ? js_get_native(value, TEMPORAL_PLAIN_YEARMONTH_TAG) : NULL;
+  PlainYearMonth *yearmonth = js_get_native(value, TEMPORAL_PLAIN_YEARMONTH_TAG);
   if (yearmonth) {
     *out = temporal_rs_PlainYearMonth_clone(yearmonth);
     return true;

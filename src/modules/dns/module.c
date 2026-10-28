@@ -27,11 +27,11 @@ static const char *const dns_order_names[] = {
 
 dns_channel_t *dns_this_channel(ant_t *js) {
   ant_value_t self = js_getthis(js);
-  dns_channel_t **cell = is_object_type(self) ? js_get_native(self, DNS_RESOLVER_NATIVE_TAG) : NULL;
+  dns_channel_t **cell = js_get_native(self, DNS_RESOLVER_NATIVE_TAG);
   return cell ? *cell : dns_default_channel(js);
 }
 
-#define DNS_RECORD_TYPE(name, method, syscall, ares)                                                   \
+#define DNS_RECORD_TYPE(name, method, syscall, ares)                                                                   \
   static ant_value_t dns_cb_##method(ant_params_t) { return dns_resolve_impl(js, args, nargs, DNS_RR_##name, false); } \
   static ant_value_t dns_promise_##method(ant_params_t) { return dns_resolve_impl(js, args, nargs, DNS_RR_##name, true); }
 #include "dns/record_types.h"

@@ -284,8 +284,8 @@ static bool stream_is_instance(ant_value_t value) {
   return is_object_type(value) && js_check_native_tag(value, STREAM_NATIVE_TAG);
 }
 
-static stream_private_state_t *stream_private_state(ant_value_t value) {
-  return is_object_type(value) ? js_get_native(value, STREAM_NATIVE_TAG) : NULL;
+static inline stream_private_state_t *stream_private_state(ant_value_t value) {
+  return js_get_native(value, STREAM_NATIVE_TAG);
 }
 
 static stream_private_state_t *stream_readable_of(ant_value_t value) {
@@ -550,8 +550,8 @@ static const stream_field_t *stream_current_field(ant_t *js) {
   return &stream_fields[(size_t)js_getnum(index)];
 }
 
-static stream_private_state_t *stream_field_owner(ant_value_t receiver, const stream_field_t *field) {
-  return is_object_type(receiver) ? js_get_native(receiver, stream_field_tag(field->target)) : NULL;
+static inline stream_private_state_t *stream_field_owner(ant_value_t receiver, const stream_field_t *field) {
+  return js_get_native(receiver, stream_field_tag(field->target));
 }
 
 static inline stream_chunk_t *stream_chunk_at(stream_readable_state_t *rs, uint32_t i) {

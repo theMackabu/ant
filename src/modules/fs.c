@@ -6552,7 +6552,7 @@ static ant_value_t fs_dir_closed_error(ant_t *js) {
 }
 
 static fs_dir_t *fs_dir_data(ant_t *js, ant_value_t obj, ant_value_t *err) {
-  fs_dir_t *d = is_object_type(obj) ? (fs_dir_t *)js_get_native(obj, FS_DIR_NATIVE_TAG) : NULL;
+  fs_dir_t *d = js_get_native(obj, FS_DIR_NATIVE_TAG);
   if (!d) *err = js_mkerr_typed(js, JS_ERR_TYPE, "Value of \"this\" must be of type Dir");
   return d;
 }

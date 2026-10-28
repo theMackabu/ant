@@ -132,7 +132,7 @@ static bool temporal_zdt_from_value_options(
   ZonedDateTime **out,
   ant_value_t *err
 ) {
-  ZonedDateTime *zdt = is_object_type(value) ? js_get_native(value, TEMPORAL_ZONED_DATETIME_TAG) : NULL;
+  ZonedDateTime *zdt = js_get_native(value, TEMPORAL_ZONED_DATETIME_TAG);
   if (zdt) {
     *out = temporal_rs_ZonedDateTime_clone(zdt);
     return true;

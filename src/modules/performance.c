@@ -198,8 +198,8 @@ static uint64_t hist_percentile(const perf_histogram_t *h, double percentile) {
   return h->max;
 }
 
-static perf_eld_monitor_t *eld_monitor(ant_value_t value) {
-  return is_object_type(value) ? (perf_eld_monitor_t *)js_get_native(value, ELD_NATIVE_TAG) : NULL;
+static inline perf_eld_monitor_t *eld_monitor(ant_value_t value) {
+  return js_get_native(value, ELD_NATIVE_TAG);
 }
 
 static void eld_timer_closed(uv_handle_t *handle) {

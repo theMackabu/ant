@@ -70,7 +70,7 @@ ant_worker_t *worker_new(ant_t *js, ant_value_t obj, const worker_ops_t *ops) {
 }
 
 ant_worker_t *worker_data(ant_value_t obj) {
-  return is_object_type(obj) ? (ant_worker_t *)js_get_native(obj, WORKER_NATIVE_TAG) : NULL;
+  return js_get_native(obj, WORKER_NATIVE_TAG);
 }
 
 static void worker_free_events(worker_event_t *e) {

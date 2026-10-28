@@ -44,7 +44,7 @@ static constexpr uint32_t ABORT_SIGNAL_NATIVE_TAG = Ant_NativeTag("ASIG");
 static constexpr uint32_t ABORT_CONTROLLER_NATIVE_TAG = Ant_NativeTag("ACTR");
 
 static inline abort_signal_data_t *get_signal_data(ant_value_t obj) {
-  return is_object_type(obj) ? (abort_signal_data_t *)js_get_native(obj, ABORT_SIGNAL_NATIVE_TAG) : NULL;
+  return js_get_native(obj, ABORT_SIGNAL_NATIVE_TAG);
 }
 
 static inline bool signal_aborted(const abort_signal_data_t *data) {
@@ -288,7 +288,8 @@ static ant_value_t abort_controller_get_signal(ant_params_t) {
 // controller.abort(reason?)
 static ant_value_t abort_controller_abort(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
-  abort_signal_data_t *data = is_object_type(this_obj) ? js_get_native(this_obj, ABORT_CONTROLLER_NATIVE_TAG) : NULL;
+  abort_signal_data_t *data = js_get_native(this_obj, ABORT_CONTROLLER_NATIVE_TAG);
+  
   if (!data) return abort_this_error(js, "AbortController");
   if (signal_aborted(data)) return js_mkundef();
 
@@ -302,14 +303,14 @@ static ant_value_t abort_controller_abort(ant_params_t) {
 
 static ant_value_t abort_controller_inspect(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
-  abort_signal_data_t *data = is_object_type(this_obj) ? js_get_native(this_obj, ABORT_CONTROLLER_NATIVE_TAG) : NULL;
+  abort_signal_data_t *data = js_get_native(this_obj, ABORT_CONTROLLER_NATIVE_TAG);
   return data && signal_aborted(data)
     ? ANT_STRING("AbortController { signal: AbortSignal { aborted: true } }")
     : ANT_STRING("AbortController { signal: AbortSignal { aborted: false } }");
 }
 
-#define ABORT_FIELD_GETTER(name, fn, field) \
-  static const ant_native_getter_t name = { \
+#define ABORT_FIELD_GETTER(name, fn, field)                                              \
+  static const ant_native_getter_t name = {                                              \
     .meta = { fn, NULL, 0, CFUNC_NATIVE_GETTER }, .native_tag = ABORT_SIGNAL_NATIVE_TAG, \
     .kind = ANT_NATIVE_GETTER_FIELD, .field_offset = offsetof(abort_signal_data_t, field) }
 

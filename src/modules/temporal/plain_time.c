@@ -7,7 +7,7 @@
 bool temporal_plain_time_from_value(
   ant_t *js, ant_value_t value, PlainTime **out, ant_value_t *err
 ) {
-  PlainTime *time = is_object_type(value) ? js_get_native(value, TEMPORAL_PLAIN_TIME_TAG) : NULL;
+  PlainTime *time = js_get_native(value, TEMPORAL_PLAIN_TIME_TAG);
   if (time) { *out = temporal_rs_PlainTime_clone(time); return true; }
   PlainDateTime *datetime = is_object_type(value)
     ? js_get_native(value, TEMPORAL_PLAIN_DATETIME_TAG) : NULL;
