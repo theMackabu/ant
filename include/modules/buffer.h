@@ -92,6 +92,8 @@ ant_value_t buffer_clone_arraybuffer(ant_t *js, const ArrayBufferData *data);
 ant_value_t create_shared_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer);
 ant_value_t buffer_byte_subarray(ant_t *js, ant_value_t value, size_t begin, size_t end);
 ant_value_t Ant_Buffer_FromString(ant_t *js, ant_value_t value, ant_value_t encoding);
+ant_value_t Ant_Buffer_FromView(ant_t *js, ant_value_t value);
+ant_value_t Ant_Buffer_UnknownEncodingError(ant_t *js, ant_value_t encoding);
 
 const void *buffer_typedarray_exotic_ops(void);
 const char *buffer_typedarray_type_name(TypedArrayType type);
@@ -106,6 +108,7 @@ ArrayBufferData *buffer_storage_holder_new(void);
 bool buffer_is_dataview(ant_value_t obj);
 bool buffer_is_binary_source(ant_value_t value);
 bool buffer_can_transfer(const ArrayBufferData *data);
+bool Ant_Buffer_IsEncoding(ant_t *js, ant_value_t value);
 bool buffer_fast_length_getter(ant_value_t getter, ant_value_t obj, double *out);
 bool buffer_typedarray_length_fast(ant_t *js, ant_object_t *ptr, double *out);
 bool buffer_source_get_bytes(ant_t *js, ant_value_t value, const uint8_t **out, size_t *len);

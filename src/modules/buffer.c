@@ -1916,6 +1916,22 @@ ant_value_t buffer_byte_subarray(ant_t *js, ant_value_t value, size_t begin, siz
   );
 }
 
+ant_value_t Ant_Buffer_FromView(ant_t *js, ant_value_t value) {
+  if (buffer_get_typedarray_data(value)) return buffer_byte_subarray(js, value, 0, SIZE_MAX);
+
+  DataViewData *dv = buffer_get_dataview_data(value);
+  if (!dv || !Ant_Buffer_IsLive(dv->backing))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot perform this operation on a detached ArrayBuffer");
+
+  ant_value_t shared = dv->buffer == dv->backing ? js_get_slot(value, SLOT_DATA) : js_mkundef();
+  ant_value_t ab_obj = is_object_type(shared) ? shared : create_arraybuffer_obj(js, dv->backing);
+
+  return create_typed_array_with_buffer(
+    js, TYPED_ARRAY_UINT8, dv->backing, dv->byte_offset,
+    dv->byte_length, js->builtins.buffer_proto, ab_obj, false
+  );
+}
+
 // TypedArray.prototype.fill(value, start, end)
 static ant_value_t js_typedarray_fill(ant_params_t) {
   ant_value_t this_val = js_getthis(js);
@@ -2769,6 +2785,17 @@ static ant_value_t buffer_unknown_encoding_error(ant_t *js, ant_value_t encoding
   
   GC_ROOT_RESTORE(js, root_mark);
   return err;
+}
+
+bool Ant_Buffer_IsEncoding(ant_t *js, ant_value_t value) {
+  if (vtype(value) != kTypeString) return false;
+  size_t len = 0;
+  const char *enc = js_getstr(js, value, &len);
+  return enc && parse_encoding(enc, len) != ENC_UNKNOWN;
+}
+
+ant_value_t Ant_Buffer_UnknownEncodingError(ant_t *js, ant_value_t encoding) {
+  return buffer_unknown_encoding_error(js, encoding);
 }
 
 static ant_value_t buffer_require_encoding(ant_t *js, ant_value_t value, BufferEncoding *out) {
@@ -4315,27 +4342,7 @@ static ant_value_t js_buffer_isBuffer(ant_params_t) {
 
 // Buffer.isEncoding(encoding)
 static ant_value_t js_buffer_isEncoding(ant_params_t) {
-  if (nargs < 1 || vtype(args[0]) != kTypeString) return js_false;
-  
-  size_t len;
-  char *enc = js_getstr(js, args[0], &len);
-  
-  if ((len == 4 && strncasecmp(enc, "utf8", 4) == 0) ||
-      (len == 5 && strncasecmp(enc, "utf-8", 5) == 0) ||
-      (len == 3 && strncasecmp(enc, "hex", 3) == 0) ||
-      (len == 6 && strncasecmp(enc, "base64", 6) == 0) ||
-      (len == 9 && strncasecmp(enc, "base64url", 9) == 0) ||
-      (len == 5 && strncasecmp(enc, "ascii", 5) == 0) ||
-      (len == 6 && strncasecmp(enc, "latin1", 6) == 0) ||
-      (len == 6 && strncasecmp(enc, "binary", 6) == 0) ||
-      (len == 4 && strncasecmp(enc, "ucs2", 4) == 0) ||
-      (len == 5 && strncasecmp(enc, "ucs-2", 5) == 0) ||
-      (len == 7 && strncasecmp(enc, "utf16le", 7) == 0) ||
-      (len == 8 && strncasecmp(enc, "utf-16le", 8) == 0)) {
-    return js_true;
-  }
-  
-  return js_false;
+  return js_bool(nargs > 0 && Ant_Buffer_IsEncoding(js, args[0]));
 }
 
 // Buffer.byteLength(string, encoding)

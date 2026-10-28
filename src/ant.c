@@ -6101,7 +6101,9 @@ static ant_offset_t flat_utf16_len(ant_flat_string_t *flat) {
   ant_offset_t cached = str_flat_cached_utf16_len(flat);
   
   if (cached == STR_UTF16_LEN_UNKNOWN) {
-    cached = (ant_offset_t)utf16_strlen(flat->bytes, (size_t)flat->len);
+    cached = (ant_offset_t)(str_flat_utf_valid_state(flat) == STR_UTF_VALID
+      ? utf16_strlen_valid_utf8(flat->bytes, (size_t)flat->len)
+      : utf16_strlen(flat->bytes, (size_t)flat->len));
     str_flat_set_utf16_len(flat, cached);
   }
   

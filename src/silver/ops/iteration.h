@@ -347,10 +347,19 @@ static inline ant_value_t sv_iter_advance_values(
     if (idx >= (int)slen) return tov(0);
 
     ant_offset_t off = vstr(js, source, NULL);
+    unsigned char lead = *(const unsigned char *)(uintptr_t)(off + idx);
+    if (lead < 0x80) {
+      *out_value = js_string_from_utf16_code_unit(js, lead);
+      *out_done = false;
+      return tov(idx + 1);
+    }
+
     ant_offset_t cb_len = (ant_offset_t)utf8_char_len_at(
       (const char *)(uintptr_t)off, (size_t)slen, (size_t)idx);
+    
     *out_value = js_mkstr(js, (const void *)(uintptr_t)(off + idx), cb_len);
     *out_done = false;
+    
     return tov(idx + (int)cb_len);
   }
 

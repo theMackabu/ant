@@ -74,21 +74,16 @@ static inline void utf16_scan_decode(
   *units_out = 1;
 }
 
-static const uint8_t utf16_lead_info[32] = {
-  9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
-  9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 11, 11, 20, 9,
-};
-
 static inline size_t utf16_lead_len(unsigned char c) {
-  return utf16_lead_info[c >> 3] & 7;
+  return 1 + (size_t)(c >= 0xC0) + (size_t)(c >= 0xE0) + (size_t)(c >= 0xF0) - 3 * (size_t)(c >= 0xF8);
 }
 
 static inline size_t utf16_lead_units(unsigned char c) {
-  return utf16_lead_info[c >> 3] >> 3;
+  return 1 + (size_t)((c >> 3) == 0x1E);
 }
 
 static constexpr size_t UTF16_POS_WAYS = 8;
-static constexpr size_t UTF16_INDEX_CHUNK = 64;
+static constexpr size_t UTF16_INDEX_CHUNK = 32;
 static constexpr size_t UTF16_INDEX_MIN_BYTES = 256;
 
 typedef struct {
@@ -241,6 +236,21 @@ bool utf16_index_build(utf16_pos_slot_t *slot) {
   points[point_count++] = (utf16_index_point_t){0, 0};
 
   while (p < end) {
+    if (end - p >= 8) {
+      uint64_t word;
+      memcpy(&word, p, sizeof(word));
+      if ((word & 0x8080808080808080ull) == 0) {
+        size_t boundary = point_count * UTF16_INDEX_CHUNK;
+        if (utf16_pos + 8 > boundary) points[point_count++] = (utf16_index_point_t){
+          .byte_off = (uint32_t)(p - start + (boundary - utf16_pos)),
+          .utf16_pos = (uint32_t)boundary,
+        };
+        utf16_pos += 8;
+        p += 8;
+        continue;
+      }
+    }
+
     size_t slen = utf16_lead_len(*p), units = utf16_lead_units(*p);
 
     if (
@@ -273,6 +283,10 @@ static const utf16_pos_slot_t *utf16_pos_index(utf16_pos_slot_t *slot, const cha
   return utf16_index_build(slot) ? slot : NULL;
 }
 
+static inline const utf16_pos_slot_t *utf16_pos_index_built(const utf16_pos_slot_t *slot, const char *str) {
+  return slot && slot->str == str && slot->points ? slot : NULL;
+}
+
 static inline utf16_pos_mark_t utf16_pos_jump(
   utf16_pos_mark_t mark, const utf16_index_point_t *point, size_t len
 ) {
@@ -289,6 +303,7 @@ static __attribute__((noinline)) utf16_pos_mark_t utf16_pos_reposition(
   if (target < units) {
     bool walk = units - target <= target && utf16_pos_backward_safe(str);
     if (walk && units - target > UTF16_INDEX_CHUNK && utf16_pos_index(slot, str)) walk = false;
+    else if (!walk) utf16_pos_index(slot, str);
     if (walk) {
       while (units > target && byte > 0) {
         byte--;
@@ -311,7 +326,7 @@ static __attribute__((noinline)) utf16_pos_mark_t utf16_pos_reposition(
       return (utf16_pos_mark_t){ .byte = len, .units = (size_t)known };
   }
 
-  const utf16_pos_slot_t *index = utf16_pos_index(slot, str);
+  const utf16_pos_slot_t *index = utf16_pos_index_built(slot, str);
   if (!index) return mark;
 
   size_t point = target / UTF16_INDEX_CHUNK;
@@ -330,6 +345,7 @@ static __attribute__((noinline)) utf16_pos_mark_t utf16_pos_reposition_byte(
   if (target < byte) {
     bool walk = byte - target <= target && utf16_pos_backward_safe(str);
     if (walk && byte - target > UTF16_INDEX_CHUNK * 4 && utf16_pos_index(slot, str)) walk = false;
+    else if (!walk) utf16_pos_index(slot, str);
     if (walk) {
       *done = true;
       return (utf16_pos_mark_t){
@@ -344,7 +360,7 @@ static __attribute__((noinline)) utf16_pos_mark_t utf16_pos_reposition_byte(
   utf16_pos_mark_t mark = { .byte = byte, .units = units };
   if (target - byte <= UTF16_INDEX_CHUNK * 4) return mark;
 
-  const utf16_pos_slot_t *index = utf16_pos_index(slot, str);
+  const utf16_pos_slot_t *index = utf16_pos_index_built(slot, str);
   if (!index) return mark;
 
   size_t lo = 0, hi = index->point_count;
@@ -400,11 +416,33 @@ static __attribute__((always_inline)) inline size_t utf16_pos_seek_to(
     return mark.byte;
   }
 
+  if (target - units >= 16 && utf16_pos_backward_safe(pos->str)) {
+    while (len - byte >= 8) {
+      uint64_t word;
+      memcpy(&word, s + byte, sizeof(word));
+      uint64_t high = word & 0x8080808080808080ull;
+      size_t word_units = 8 - (size_t)__builtin_popcountll(high & ~(word << 1))
+        + (size_t)__builtin_popcountll(high & (word << 1) & (word << 2) & (word << 3));
+      if (units + word_units > target) break;
+      byte += 8;
+      units += word_units;
+    }
+    while (byte < len && (s[byte] & 0xC0) == 0x80) byte++;
+  }
+
   while (byte < len && units < target) {
     unsigned char c = s[byte];
     if (c < 0x80) {
-      byte++;
-      units++;
+      size_t step = 1;
+      if (len - byte >= 8) {
+        uint64_t word;
+        memcpy(&word, s + byte, sizeof(word));
+        uint64_t high = word & 0x8080808080808080ull;
+        step = high ? (size_t)__builtin_ctzll(high) >> 3 : 8;
+        if (step > target - units) step = target - units;
+      }
+      byte += step;
+      units += step;
       continue;
     }
     size_t width = utf16_lead_units(c);
@@ -434,11 +472,27 @@ static __attribute__((always_inline)) inline size_t utf16_pos_units_to(utf16_pos
 
   const unsigned char *s = (const unsigned char *)pos->str;
 
+  if (
+    target - byte >= 32 && (target == len || (s[target] & 0xC0) != 0x80) &&
+    utf16_pos_backward_safe(pos->str)
+  ) {
+    units += utf16_strlen_valid_utf8(pos->str + byte, target - byte);
+    byte = target;
+  }
+
   while (byte < target) {
     unsigned char c = s[byte];
     if (c < 0x80) {
-      byte++;
-      units++;
+      size_t step = 1;
+      if (len - byte >= 8) {
+        uint64_t word;
+        memcpy(&word, s + byte, sizeof(word));
+        uint64_t high = word & 0x8080808080808080ull;
+        step = high ? (size_t)__builtin_ctzll(high) >> 3 : 8;
+        if (step > target - byte) step = target - byte;
+      }
+      byte += step;
+      units += step;
       continue;
     }
     size_t slen = utf16_lead_len(c), width = utf16_lead_units(c);
@@ -673,6 +727,29 @@ uint8_t *utf8_to_latin1(const char *src, size_t len, size_t *out_len, bool *is_l
 
   if (out_len) *out_len = o;
   return out;
+}
+
+size_t utf16_strlen_valid_utf8(const char *str, size_t byte_len) {
+  const unsigned char *p = (const unsigned char *)str;
+  size_t units = byte_len, i = 0;
+
+  for (; i + 8 <= byte_len; i += 8) {
+    uint64_t word;
+    memcpy(&word, p + i, sizeof(word));
+    uint64_t high = word & 0x8080808080808080ull;
+    if (!high) continue;
+    uint64_t cont = high & ~(word << 1);
+    uint64_t four = high & (word << 1) & (word << 2) & (word << 3);
+    units -= (size_t)__builtin_popcountll(cont);
+    units += (size_t)__builtin_popcountll(four);
+  }
+
+  for (; i < byte_len; i++) {
+    if ((p[i] & 0xC0) == 0x80) units--;
+    else if (p[i] >= 0xF0) units++;
+  }
+
+  return units;
 }
 
 size_t utf16_strlen(const char *str, size_t byte_len) {

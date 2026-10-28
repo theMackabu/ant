@@ -144,10 +144,12 @@ static bool string_iter_step(ant_t *js, iterator_t *it, ant_value_t *out) {
   char *s = js_getstr(js, obj->u.data.value, &slen);
   if (idx >= slen) return false;
 
-  size_t char_bytes = utf8_char_len_at(s, slen, idx);
-  *out = js_mkstr(js, s + idx, (ant_offset_t)char_bytes);
-  js_set_native(iter, (void *)(uintptr_t)(idx + char_bytes), STRING_ITERATOR_NATIVE_TAG);
+  size_t char_bytes = (unsigned char)s[idx] < 0x80 ? 1 : utf8_char_len_at(s, slen, idx);
+  *out = char_bytes == 1 && (unsigned char)s[idx] < 0x80
+    ? js_string_from_utf16_code_unit(js, (unsigned char)s[idx])
+    : js_mkstr(js, s + idx, (ant_offset_t)char_bytes);
   
+  js_set_native(iter, (void *)(uintptr_t)(idx + char_bytes), STRING_ITERATOR_NATIVE_TAG);
   return true;
 }
 
@@ -259,8 +261,8 @@ ant_value_t js_string_iterator_at(ant_t *js, ant_value_t str, uint32_t offset) {
   ant_value_t iter = Ant_Object_CreateBare(js);
   
   if (!is_err(iter)) {
+    js_set_native(iter, (void *)(uintptr_t)offset, STRING_ITERATOR_NATIVE_TAG);
     js_set_slot_wb(js, iter, SLOT_DATA, str);
-    js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)offset));
     js_set_proto_init(iter, get_string_iterator_prototype(js));
   }
   

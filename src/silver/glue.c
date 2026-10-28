@@ -530,16 +530,10 @@ static ant_value_t jit_iter_advance_from_buf(
   sv_vm_t *vm, ant_t *js, ant_value_t *iter_buf,
   ant_value_t *out_value, bool *out_done
 ) {
-  GC_ROOT_SAVE(root_mark, js);
   ant_value_t state[3] = { iter_buf[0], iter_buf[1], iter_buf[2] };
-  GC_ROOT_PIN(js, state[0]);
-  GC_ROOT_PIN(js, state[1]);
-  
   ant_value_t cursor = sv_iter_advance_values(vm, js, state, out_value, out_done);
   if (is_err(cursor) || *out_done) iter_buf[2] = tov(SV_ITER_DONE);
   else iter_buf[1] = cursor;
-  
-  GC_ROOT_RESTORE(js, root_mark);
   return is_err(cursor) ? cursor : tov(0);
 }
 
