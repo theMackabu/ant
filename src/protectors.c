@@ -123,6 +123,11 @@ void ant_protectors_invalidate(ant_t *js, ant_object_t *holder, const char *key)
   }
 }
 
+void ant_protector_break_all_realms(ant_t *js, uint32_t protectors) {
+  js->protectors_invalid |= protectors;
+  for (ant_realm_t *realm = js->realms; realm; realm = realm->next) realm->protectors_invalid |= protectors;
+}
+
 void ant_symbol_protectors_invalidate(ant_t *js, ant_object_t *holder, ant_offset_t sym_off) {
   protector_view_t view = PROTECTOR_VIEW(js);
   protectors_apply_symbol(js, &view, holder, sym_off);

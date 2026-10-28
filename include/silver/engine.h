@@ -1030,6 +1030,11 @@ static inline ant_value_t js_func_obj(ant_value_t func) {
   return c->func_obj;
 }
 
+static inline ant_value_t js_func_data(ant_value_t func) {
+  if (vtype(func) != kTypeFunction) return js_get_slot(func, SLOT_DATA);
+  return ((ant_object_t *)vptr(js_func_obj(func)))->u.data.value;
+}
+
 static inline ant_value_t sv_closure_heap_value(ant_t *js, sv_closure_t *closure) {
   return fixed_arena_owns(&js->closure_arena, closure) ? mkref(kTypeFunction, closure) : js_mkundef();
 }

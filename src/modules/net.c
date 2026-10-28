@@ -503,7 +503,7 @@ static void net_socket_finalize(ant_t *js, ant_object_t *obj) {
 }
 
 static ant_value_t net_socket_emit_connect_error(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t socket_obj = is_object_type(state) ? js_get(js, state, "socket") : js_mkundef();
   ant_value_t status_val = is_object_type(state) ? js_get(js, state, "status") : js_mknum(UV_EIO);
   
@@ -1165,7 +1165,7 @@ static ant_value_t js_net_server_close(ant_params_t) {
 }
 
 static ant_value_t net_server_async_dispose_done(ant_params_t) {
-  ant_value_t promise = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t promise = js_func_data(js->current_func);
   if (nargs > 0 && is_object_type(args[0])) js_reject_promise(js, promise, args[0]);
   else js_resolve_promise(js, promise, js_mkundef());
   return js_mkundef();

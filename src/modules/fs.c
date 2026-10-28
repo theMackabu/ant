@@ -6251,7 +6251,7 @@ void init_fs_module(ant_t *js) {
 }
 
 static ant_value_t fs_callback_success_handler(ant_params_t) {
-  ant_value_t ctx = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t ctx = js_func_data(js->current_func);
   ant_value_t callback = js_get_slot(ctx, SLOT_DATA);
 
   if (!is_callable(callback)) return js_mkundef();
@@ -6268,7 +6268,7 @@ static ant_value_t fs_callback_success_handler(ant_params_t) {
 }
 
 static ant_value_t fs_callback_error_handler(ant_params_t) {
-  ant_value_t ctx = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t ctx = js_func_data(js->current_func);
   ant_value_t callback = js_get_slot(ctx, SLOT_DATA);
   ant_value_t cb_args[1];
 
@@ -6907,7 +6907,7 @@ static ant_value_t builtin_fs_dir_asyncDispose(ant_params_t) {
 }
 
 static ant_value_t fs_dir_iter_next(ant_params_t) {
-  ant_value_t dir_obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t dir_obj = js_func_data(js->current_func);
   ant_value_t err = js_mkundef();
 
   fs_dir_t *d = fs_dir_data(js, dir_obj, &err);
@@ -6918,7 +6918,7 @@ static ant_value_t fs_dir_iter_next(ant_params_t) {
 }
 
 static ant_value_t fs_dir_iter_return(ant_params_t) {
-  ant_value_t dir_obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t dir_obj = js_func_data(js->current_func);
   ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
 
   fs_dir_t *d = (fs_dir_t *)js_get_native(dir_obj, FS_DIR_NATIVE_TAG);

@@ -165,6 +165,7 @@ typedef enum: uint8_t {
   ANT_PROTECTOR_HOLDER_ITERATOR    = 1u << 2,
   ANT_PROTECTOR_HOLDER_WATCHED     = 1u << 3,
   ANT_PROTECTOR_HOLDER_UNWATCHABLE = 1u << 4,
+  ANT_PROTECTOR_HOLDER_TYPED_ARRAY = 1u << 5,
 } ant_protector_holder_t;
 
 typedef struct ant_object {

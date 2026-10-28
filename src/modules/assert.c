@@ -1182,7 +1182,7 @@ static ant_value_t assert_rejection_settle(
 }
 
 static ant_value_t assert_rejection_on_settled(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   return assert_rejection_settle(
     js, js_get(js, state, "promise"), js_get(js, state, "result"), nargs > 0 ? args[0] : js_mkundef(),
     js_get(js, state, "expected"), js_get(js, state, "message"),

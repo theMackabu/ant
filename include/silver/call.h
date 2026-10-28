@@ -324,6 +324,35 @@ static inline ant_value_t sv_call_builtin_this(
   return result;
 }
 
+static inline const ant_cfunc_meta_t *sv_native_closure_meta(ant_value_t func) {
+  if (vtype(func) != kTypeFunction) return NULL;
+  sv_closure_t *closure = js_func_closure(func);
+  if (closure->func || closure->call_flags) return NULL;
+
+  ant_extra_slot_t *slot = ant_object_extra_slot((ant_object_t *)vptr(js_func_obj(func)), SLOT_CFUNC);
+  return slot && vtype(slot->value) == kTypeBuiltin ? js_as_cfunc_meta(slot->value) : NULL;
+}
+
+static inline bool sv_native_direct_allowed(const ant_t *js) {
+  return vtype(js->exception) == kTypeUndefined && !ant_realm_multiple(js);
+}
+
+static inline ant_value_t sv_call_native_closure(
+  ant_t *js, ant_value_t func, const ant_cfunc_meta_t *meta,
+  ant_value_t this_val, ant_value_t *args, int nargs
+) {
+  ant_value_t saved_func = js->current_func;
+  ant_value_t saved_this = js->this_val;
+  js->current_func = func;
+  js->this_val = this_val;
+
+  ant_value_t result = meta->fn(js, args, nargs, js_mkundef());
+  js->current_func = saved_func;
+  js->this_val = saved_this;
+
+  return result;
+}
+
 static inline ant_value_t sv_call_value(
   ant_t *js, ant_value_t fn, ant_value_t this_val,
   ant_value_t *args, int nargs
@@ -492,6 +521,35 @@ static inline ant_value_t sv_call_closure_after_jit(
   }
 
   return sv_call_closure(vm, js, closure, callee_func, ctx, out_this);
+}
+
+static inline bool sv_closure_fast_callable(const sv_closure_t *closure) {
+  return
+    closure && closure->func && !closure->func->is_async && !closure->func->is_generator &&
+    (closure->call_flags & ~(SV_CALL_IS_ARROW | SV_CALL_HAS_SUPER)) == 0;
+}
+
+static inline ant_value_t sv_call_closure_fast(
+  ant_t *js, ant_value_t func, sv_closure_t *closure,
+  ant_value_t this_val, ant_value_t *args, int nargs
+) {
+  sv_call_ctx_t ctx = {
+    .this_val = (closure->call_flags & SV_CALL_IS_ARROW) ? closure->bound_this : this_val,
+    .super_val = (closure->call_flags & SV_CALL_HAS_SUPER) ? closure->super_val : js_mkundef(),
+    .new_target = js_mkundef(),
+    .args = args,
+    .argc = nargs,
+    .alloc = NULL,
+  };
+
+  sv_func_t *fn = closure->func;
+  if (fn->jit_code) {
+    ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_C, fn->jit_code, js->vm, &ctx, closure);
+    if (!sv_is_jit_bailout(result)) return result;
+    sv_jit_on_bailout(fn);
+  }
+
+  return sv_call_closure_after_jit(js->vm, js, closure, func, &ctx, NULL);
 }
 
 #endif

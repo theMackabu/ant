@@ -211,12 +211,12 @@ static inline ant_value_t sv_async_dispose_continue(
 );
 
 static inline ant_value_t sv_async_dispose_on_fulfilled(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   return sv_async_dispose_continue(js, state, false, js_mkundef());
 }
 
 static inline ant_value_t sv_async_dispose_on_rejected(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   return sv_async_dispose_continue(js, state, true, nargs > 0 ? args[0] : js_mkundef());
 }
 

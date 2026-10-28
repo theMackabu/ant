@@ -948,7 +948,7 @@ static ant_value_t async_wrap_handle_callback_result(
 );
 
 static ant_value_t async_wrap_on_step(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t iter = js_get(js, state, "iter");
   ant_value_t promise = js_get(js, state, "promise");
   ant_value_t step = nargs > 0 ? args[0] : js_mkundef();
@@ -956,14 +956,14 @@ static ant_value_t async_wrap_on_step(ant_params_t) {
 }
 
 static ant_value_t async_wrap_on_reject(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t promise = js_get(js, state, "promise");
   async_iter_reject(js, promise, nargs > 0 ? args[0] : js_mkundef());
   return js_mkundef();
 }
 
 static ant_value_t async_wrap_on_callback(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t iter = js_get(js, state, "iter");
   ant_value_t promise = js_get(js, state, "promise");
   uint32_t kind = (uint32_t)js_getnum(js_get(js, state, "kind"));
@@ -973,7 +973,7 @@ static ant_value_t async_wrap_on_callback(ant_params_t) {
 }
 
 static ant_value_t async_wrap_on_sync_value(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t promise = js_get(js, state, "promise");
   bool done = js_truthy(js, js_get(js, state, "done"));
   ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
@@ -1033,7 +1033,7 @@ static ant_value_t async_wrap_handle_inner_step(
 }
 
 static ant_value_t async_wrap_on_inner_step(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t iter = js_get(js, state, "iter");
   ant_value_t promise = js_get(js, state, "promise");
   ant_value_t step = nargs > 0 ? args[0] : js_mkundef();
@@ -1411,33 +1411,33 @@ static inline bool async_terminal_has_acc(ant_value_t state) {
 }
 
 static ant_value_t async_terminal_on_reject(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t promise = js_get_slot(state, SLOT_CTOR);
   async_iter_reject(js, promise, nargs > 0 ? args[0] : js_mkundef());
   return js_mkundef();
 }
 
 static ant_value_t async_terminal_on_callback_reject(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   async_terminal_close_and_reject(js, state, nargs > 0 ? args[0] : js_mkundef());
   return js_mkundef();
 }
 
 static ant_value_t async_terminal_on_callback(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t result = nargs > 0 ? args[0] : js_mkundef();
   return async_terminal_finish_callback(js, state, result);
 }
 
 static ant_value_t async_terminal_on_close(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t promise = js_get_slot(state, SLOT_CTOR);
   js_resolve_promise(js, promise, js_get_slot(state, SLOT_AUX));
   return js_mkundef();
 }
 
 static ant_value_t async_terminal_on_close_reject(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t promise = js_get_slot(state, SLOT_CTOR);
   async_iter_reject(js, promise, js_get_slot(state, SLOT_AUX));
   return js_mkundef();
@@ -1639,7 +1639,7 @@ static bool async_terminal_handle_step(ant_t *js, ant_value_t state, ant_value_t
 }
 
 static ant_value_t async_terminal_on_step(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t step = nargs > 0 ? args[0] : js_mkundef();
   if (async_terminal_handle_step(js, state, step)) return async_terminal_advance(js, state);
   return js_mkundef();

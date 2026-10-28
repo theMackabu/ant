@@ -17,6 +17,7 @@
 #include "errors.h"
 #include "base64.h"
 #include "internal.h"
+#include "protectors.h"
 #include "numbers.h"
 #include "gc/roots.h"
 #include "descriptors.h"
@@ -887,6 +888,19 @@ static ant_value_t js_typedarray_length_getter(ant_params_t) {
   return js_mknum(typedarray_view_live(data) ? (double)data->length : 0);
 }
 
+bool buffer_typedarray_length_fast(ant_t *js, ant_object_t *ptr, double *out) {
+  if (ptr->native_tag != BUFFER_TYPEDARRAY_NATIVE_TAG || !ant_protector_intact(js, ANT_PROTECTOR_TYPED_ARRAY_LENGTH)) return false;
+
+  TypedArrayData *ta = (TypedArrayData *)ptr->native_ptr;
+  if (!ta || (unsigned)ta->type >= TYPED_ARRAY_COUNT) return false;
+
+  ant_value_t proto = ptr->proto;
+  if (proto != js->builtins.typedarray_protos[ta->type] && !(ta->type == TYPED_ARRAY_UINT8 && proto == js->builtins.buffer_proto)) return false;
+
+  *out = typedarray_view_live(ta) ? (double)ta->length : 0;
+  return true;
+}
+
 bool buffer_fast_length_getter(ant_value_t getter, ant_value_t obj, double *out) {
   if (vtype(getter) != kTypeBuiltin || js_as_cfunc(getter) != js_typedarray_length_getter) return false;
   TypedArrayData *data = buffer_get_typedarray_data(obj);
@@ -1504,6 +1518,7 @@ static inline __attribute__((always_inline)) ant_value_t create_typed_array_view
   
   js_set_native(obj, ta_data, BUFFER_TYPEDARRAY_NATIVE_TAG);
   js_set_slot_wb(js, obj, SLOT_DATA, arraybuffer_obj);
+  ant_typed_array_protector_holder_mark(obj);
   
   js_set_exotic_ops(obj, &typedarray_exotic_ops);
   js_set_finalizer(obj, typedarray_finalize);
@@ -4720,6 +4735,12 @@ void init_buffer_module(ant_t *js) {
   ant_value_t buffer_ctor = js_obj_to_func(js, buffer_ctor_obj);
   defmethod(js, buffer_proto, "constructor", 11, buffer_ctor);
   js_set_global_builtin(js, "Buffer", buffer_ctor);
+
+  ant_typed_array_protector_holder_mark(typedarray_proto);
+  ant_typed_array_protector_holder_mark(buffer_proto);
+  
+  for (int type = 0; type < TYPED_ARRAY_COUNT; type++)
+    ant_typed_array_protector_holder_mark(js->builtins.typedarray_protos[type]);
 }
 
 void cleanup_buffer_module(ant_t *js) {

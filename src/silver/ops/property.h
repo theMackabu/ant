@@ -1861,6 +1861,9 @@ static inline ant_value_t sv_get_length_value(ant_t *js, ant_value_t obj) {
   );
   
   ant_object_t *ptr = vtype(obj) == kTypeObject ? js_obj_ptr(obj) : NULL;
+  double ta_length = 0;
+  
+  if (ptr && buffer_typedarray_length_fast(js, ptr, &ta_length)) return tov(ta_length);
   if (ptr && ptr->shape && ptr->type_tag == kTypeObject && sv_ic_numeric_exotic(ptr))
     return sv_get_length_numeric_exotic(js, obj, ptr);
   
@@ -1873,6 +1876,9 @@ static inline ant_value_t sv_get_length_at(ant_t *js, ant_value_t obj, sv_func_t
     default: return sv_get_length_value(js, obj);
   }
   
+  double ta_length = 0;
+  if (vtype(obj) == kTypeObject && buffer_typedarray_length_fast(js, js_obj_ptr(obj), &ta_length)) return tov(ta_length);
+
   sv_atom_t length = sv_length_atom(js);
   sv_ic_entry_t *ic = sv_ic_slot_at(func, sv_get_u16(ip + 1));
   return sv_prop_get_field_ic_entry(js, obj, &length, ic, func, ip);

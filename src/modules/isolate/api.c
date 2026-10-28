@@ -322,13 +322,15 @@ static void isolate_awaiting_remove(ant_guest_t *g, guest_host_call_t *call) {
 }
 
 static ant_value_t isolate_host_settled(ant_t *js, guest_host_call_t *call, ant_value_t value, bool fulfilled) {
-  ant_guest_t *g = js_get_native(js_get_slot(js_getcurrentfunc(js), SLOT_DATA), ISOLATE_NATIVE_TAG);
+  ant_guest_t *g = js_get_native(js_func_data(js->current_func), ISOLATE_NATIVE_TAG);
   if (fulfilled) isolate_host_call_value(js, call, value);
   else isolate_host_call_error(js, call, value);
+  
   if (g) {
     isolate_awaiting_remove(g, call);
     isolate_host_call_done(js, g, call);
   } else guest_host_call_free(call);
+  
   return js_mkundef();
 }
 

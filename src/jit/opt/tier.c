@@ -810,15 +810,26 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
 
 ant_value_t opt_rt_call(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc) {
   ant_t *js = vm->js;
-  if (vtype(callee) == kTypeBuiltin && js->vm_exec_depth && vtype(js->exception) == kTypeUndefined && !ant_realm_multiple(js)) {
+  
+  if (vtype(callee) == kTypeBuiltin && sv_native_direct_allowed(js)) {
     ant_cfunc_t fn = ((const ant_cfunc_meta_t *)vptr(callee))->fn;
     ant_value_t saved = js->this_val;
+    
     js->this_val = vtype(this_val) == kTypeNull ? js_mkundef() : this_val;
     ant_value_t result = fn(js, args, (int)argc, js_mkundef());
     js->this_val = saved;
+    
     if (is_err(result) || vtype(js->exception) != kTypeUndefined) result = jit_helper_native_finish(js, result);
     return result;
   }
+  
+  const ant_cfunc_meta_t *meta = sv_native_closure_meta(callee);
+  if (meta && sv_native_direct_allowed(js)) {
+    ant_value_t result = sv_call_native_closure(js, callee, meta, this_val, args, (int)argc);
+    if (is_err(result) || vtype(js->exception) != kTypeUndefined) result = jit_helper_native_finish(js, result);
+    return result;
+  }
+  
   return sv_vm_call(vm, js, callee, this_val, args, (int)argc, NULL, js_mkundef());
 }
 

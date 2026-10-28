@@ -19,6 +19,22 @@ ant_value_t events_library(ant_t *js);
 ant_value_t eventemitter_prototype(ant_t *js);
 ant_offset_t eventemitter_listener_count(ant_t *js, ant_value_t target, const char *event_type);
 ant_value_t eventemitter_sole_listener(ant_value_t target, const char *event_type);
+bool eventemitter_emit_args_counted(
+  ant_t *js, ant_value_t target, const char *event_type,
+  ant_value_t *args, int nargs, ant_offset_t *before, ant_offset_t *after
+);
+
+typedef struct {
+  const void *list;
+  void *evt;
+  const char *name;
+  uint32_t gen;
+} eventemitter_ref_t;
+
+bool eventemitter_emit_ref(ant_t *js, ant_value_t target, eventemitter_ref_t *ref, ant_value_t *args, int nargs);
+bool eventemitter_emit_ref_counted(ant_t *js, ant_value_t target, eventemitter_ref_t *ref, ant_value_t *args, int nargs, ant_offset_t *before, ant_offset_t *after);
+ant_value_t eventemitter_sole_listener_ref(ant_value_t target, eventemitter_ref_t *ref);
+ant_offset_t eventemitter_listener_count_ref(ant_value_t target, eventemitter_ref_t *ref);
 
 void init_events_module(ant_t *js);
 void cleanup_events_module(ant_t *js);

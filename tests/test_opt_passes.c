@@ -778,8 +778,6 @@ static void phi_entering_check_exits_are_per_slot(void) {
   assert(!phi_unboxed_with_exit_site(0, true));
 }
 
-// Ant step 6b: the passes and folds ported from LibJS after d0b49a57af.
-
 static ir_op_t int32_binary(ir_opcode_t code, ir_binary_op_t binary) {
   ir_op_t op = ir_op(code);
   op.binary = binary;

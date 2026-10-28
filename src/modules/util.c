@@ -1279,7 +1279,7 @@ static ant_value_t util_promisified_call(ant_params_t) {
 }
 
 static ant_value_t util_callbackify_success(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   if (!is_object_type(state)) return js_mkundef();
 
   ant_value_t callback = js_get_slot(state, SLOT_DATA);
@@ -1294,7 +1294,7 @@ static ant_value_t util_callbackify_success(ant_params_t) {
 }
 
 static ant_value_t util_callbackify_error(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   if (!is_object_type(state)) return js_mkundef();
 
   ant_value_t callback = js_get_slot(state, SLOT_DATA);
@@ -1403,7 +1403,7 @@ static ant_value_t util_callbackify(ant_params_t) {
 }
 
 static ant_value_t util_aborted_listener(ant_params_t) {
-  ant_value_t promise = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t promise = js_func_data(js->current_func);
   if (vtype(promise) == kTypePromise) js_resolve_promise(js, promise, js_mkundef());
   return js_mkundef();
 }

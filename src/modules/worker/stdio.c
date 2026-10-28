@@ -111,7 +111,7 @@ static void worker_stdin_enqueue(ant_worker_t *w, worker_event_t *e) {
 }
 
 static ant_value_t worker_stdin_write(ant_params_t) {
-  ant_worker_t *w = worker_data(js_get_slot(js_getcurrentfunc(js), SLOT_DATA));
+  ant_worker_t *w = worker_data(js_func_data(js->current_func));
   ant_value_t chunk = nargs > 0 ? args[0] : js_mkundef();
   const uint8_t *bytes = NULL;
   size_t len = 0;
@@ -133,7 +133,7 @@ static ant_value_t worker_stdin_write(ant_params_t) {
 }
 
 static ant_value_t worker_stdin_final(ant_params_t) {
-  ant_worker_t *w = worker_data(js_get_slot(js_getcurrentfunc(js), SLOT_DATA));
+  ant_worker_t *w = worker_data(js_func_data(js->current_func));
   if (w) worker_stdin_enqueue(w, NULL);
   worker_stdin_call(js, nargs > 0 ? args[0] : js_mkundef());
   return js_mkundef();

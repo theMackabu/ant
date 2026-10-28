@@ -111,8 +111,14 @@ struct ant_event_list {
   ant_value_t target;
   eventemitter_listener_change_fn listener_change_hook;
   void *listener_change_context;
-  const char *cstr_name;
-  EventType *cstr_evt;
+  struct {
+    EventType *evt;
+    uint32_t gen;
+    uint8_t len;
+    char key[23];
+  } cstr_cache[4];
+  uint32_t cstr_next;
+  uint32_t types_gen;
 };
 
 static void emitter_write_barrier(ant_t *js, ant_value_t owner, ant_value_t stored) {
@@ -297,11 +303,7 @@ static void evt_release_if_empty(EventType *evt) {
     break;
   }
 
-  if (list->cstr_evt == evt) {
-    list->cstr_evt = NULL;
-    list->cstr_name = NULL;
-  }
-
+  list->types_gen++;
   utarray_free(evt->listeners);
   free(evt);
 }
@@ -408,21 +410,25 @@ static EventType *evt_list_find_cstr(ant_event_list_t *list, const char *name, s
   return NULL;
 }
 
-static inline bool evt_cstr_matches(const EventType *evt, const char *name) {
-  const char *key = evt->key_bytes;
-  if (!key) return false;
-  for (size_t i = 0; i < evt->key_len; i++) if (key[i] != name[i]) return false;
-  return name[evt->key_len] == '\0';
-}
-
 static EventType *evt_list_find_cstr_cached(ant_event_list_t *list, const char *name) {
-  EventType *cached = list->cstr_evt;
-  if (name == list->cstr_name && cached && evt_cstr_matches(cached, name)) return cached;
+  for (unsigned int i = 0; i < 4; i++) {
+    uint8_t len = list->cstr_cache[i].len;
+    if (!len || list->cstr_cache[i].gen != list->types_gen) continue;
 
-  EventType *evt = evt_list_find_cstr(list, name, strlen(name));
-  if (evt) {
-    list->cstr_name = name;
-    list->cstr_evt = evt;
+    const char *key = list->cstr_cache[i].key;
+    unsigned int j = 0;
+    while (j < len && key[j] == name[j]) j++;
+    if (j == len && name[len] == '\0') return list->cstr_cache[i].evt;
+  }
+
+  size_t len = strlen(name);
+  EventType *evt = evt_list_find_cstr(list, name, len);
+  if (len > 0 && len < sizeof(list->cstr_cache[0].key)) {
+    unsigned int slot = list->cstr_next++ & 3;
+    list->cstr_cache[slot].evt = evt;
+    list->cstr_cache[slot].gen = list->types_gen;
+    list->cstr_cache[slot].len = (uint8_t)len;
+    memcpy(list->cstr_cache[slot].key, name, len);
   }
   return evt;
 }
@@ -472,6 +478,8 @@ static EventType *evt_list_find_or_create(ant_t *js, ant_event_list_t *list, ant
 
   evt->owner = list;
   list->types[list->count++] = evt;
+  list->types_gen++;
+  
   return evt;
 }
 
@@ -558,27 +566,12 @@ static inline __attribute__((always_inline)) ant_value_t eventemitter_call_liste
 
   if (vtype(listener) == kTypeFunction) {
     sv_closure_t *closure = js_func_closure(listener);
-    
-    if (sv_closure_is_plain_sync(closure)) {
-      sv_call_ctx_t ctx = {
-        .this_val = this_val,
-        .super_val = js_mkundef(),
-        .new_target = js_mkundef(),
-        .args = args,
-        .argc = nargs,
-        .alloc = NULL,
-      };
-      
-      sv_func_t *fn = closure->func;
-      if (fn->jit_code) {
-        ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_C, fn->jit_code, js->vm, &ctx, closure);
-        if (!sv_is_jit_bailout(result)) return result;
-        sv_jit_on_bailout(fn);
-      }
-      
-      return sv_call_closure_after_jit(js->vm, js, closure, listener, &ctx, NULL);
-    }
+    if (sv_closure_fast_callable(closure)) return sv_call_closure_fast(js, listener, closure, this_val, args, nargs);
   }
+
+  const ant_cfunc_meta_t *meta = sv_native_closure_meta(listener);
+  if (meta && sv_native_direct_allowed(js))
+    return Ant_Silver_FinishNativeCall(js, sv_call_native_closure(js, listener, meta, this_val, args, nargs));
 
   return sv_vm_call_mode(
     js->vm, js, listener, this_val, args, nargs,
@@ -596,7 +589,7 @@ static ant_value_t eventemitter_call_listener(
 }
 
 static ant_value_t js_eventemitter_once_wrapper(ant_params_t) {
-  ant_value_t listener = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t listener = js_func_data(js->current_func);
   if (!is_callable(listener)) return js_mkundef();
   return eventemitter_call_listener(js, listener, js->this_val, args, nargs);
 }
@@ -1144,7 +1137,7 @@ static ant_value_t remove_listener_from(ant_native_params_t, EventType *evt) {
 }
 
 static ant_value_t eventtarget_rethrow(ant_params_t) {
-  return js_throw(js, js_get_slot(js_getcurrentfunc(js), SLOT_DATA));
+  return js_throw(js, js_func_data(js->current_func));
 }
 
 static void eventtarget_report_error(ant_t *js, ant_value_t result) {
@@ -1472,6 +1465,58 @@ bool eventemitter_emit_args(
   );
 }
 
+bool eventemitter_emit_args_counted(
+  ant_t *js, ant_value_t target, const char *event_type,
+  ant_value_t *args, int nargs, ant_offset_t *before, ant_offset_t *after
+) {
+  EventType *evt = is_object_type(target) && event_type ? find_emitter_event_type_cstr_cached(target, event_type) : NULL;
+  *before = (ant_offset_t)evt_live_count(evt);
+  bool invoked = evt ? eventemitter_dispatch(js, target, evt, args, nargs) : false;
+  *after = (ant_offset_t)evt_live_count(evt);
+  return invoked;
+}
+
+static EventType *evt_ref_resolve(ant_value_t target, eventemitter_ref_t *ref) {
+  ant_event_list_t *list = is_object_type(target) ? find_emitter_events(target) : NULL;
+  if (!list) return NULL;
+  if (ref->list == list && ref->gen == list->types_gen) return (EventType *)ref->evt;
+
+  EventType *evt = evt_list_find_cstr_cached(list, ref->name);
+  ref->list = list;
+  ref->gen = list->types_gen;
+  ref->evt = evt;
+  
+  return evt;
+}
+
+bool eventemitter_emit_ref(ant_t *js, ant_value_t target, eventemitter_ref_t *ref, ant_value_t *args, int nargs) {
+  EventType *evt = evt_ref_resolve(target, ref);
+  return evt ? eventemitter_dispatch(js, target, evt, args, nargs) : false;
+}
+
+bool eventemitter_emit_ref_counted(
+  ant_t *js, ant_value_t target, eventemitter_ref_t *ref,
+  ant_value_t *args, int nargs, ant_offset_t *before, ant_offset_t *after
+) {
+  EventType *evt = evt_ref_resolve(target, ref);
+  *before = (ant_offset_t)evt_live_count(evt);
+  bool invoked = evt ? eventemitter_dispatch(js, target, evt, args, nargs) : false;
+  *after = (ant_offset_t)evt_live_count(evt);
+  return invoked;
+}
+
+ant_value_t eventemitter_sole_listener_ref(ant_value_t target, eventemitter_ref_t *ref) {
+  EventType *evt = evt_ref_resolve(target, ref);
+  if (!evt || utarray_len(evt->listeners) != 1) return 0;
+
+  EventListenerEntry *entry = (EventListenerEntry *)utarray_eltptr(evt->listeners, 0);
+  return entry->meta == 0 && entry->dead_gen == 0 ? entry->callback : 0;
+}
+
+ant_offset_t eventemitter_listener_count_ref(ant_value_t target, eventemitter_ref_t *ref) {
+  return (ant_offset_t)evt_live_count(evt_ref_resolve(target, ref));
+}
+
 bool eventemitter_add_listener_val(
   ant_t *js,
   ant_value_t target, ant_value_t key,
@@ -1687,7 +1732,7 @@ static ant_value_t Ant_Events_SettleOnce(ant_t *js, ant_value_t state) {
 }
 
 static ant_value_t js_events_once_listener(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t promise = Ant_Events_SettleOnce(js, state);
   if (vtype(promise) != kTypePromise) return js_mkundef();
 
@@ -1713,13 +1758,13 @@ static void js_events_once_remove_listener_from_target(ant_t *js, ant_value_t st
 }
 
 static ant_value_t js_events_once_abort_listener(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t promise = Ant_Events_SettleOnce(js, state);
   if (vtype(promise) != kTypePromise) return js_mkundef();
 
   ant_value_t signal = js_get(js, state, "signal");
   js_events_once_remove_listener_from_target(js, state);
-    
+  
   ant_value_t reason = abort_signal_get_reason(signal);
   if (vtype(reason) == kTypeUndefined) reason = js_mkerr(js, "The operation was aborted");
   js_reject_promise(js, promise, reason);
@@ -1829,7 +1874,7 @@ static ant_value_t js_events_once(ant_params_t) {
 }
 
 static ant_value_t js_events_disposable_dispose(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   if (!is_object_type(state)) return js_mkundef();
 
   ant_value_t disposed = js_get_slot(state, SLOT_SETTLED);
@@ -2004,7 +2049,7 @@ static void events_on_fail(ant_t *js, ant_value_t state, ant_value_t reason) {
 }
 
 static ant_value_t js_events_on_event_cb(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   if (!is_object_type(state)) return js_mkundef();
 
   ant_value_t values = js_mkarr(js);
@@ -2019,21 +2064,21 @@ static ant_value_t js_events_on_event_cb(ant_params_t) {
 }
 
 static ant_value_t js_events_on_error_cb(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   if (!is_object_type(state)) return js_mkundef();
   events_on_fail(js, state, nargs > 0 ? args[0] : js_mkundef());
   return js_mkundef();
 }
 
 static ant_value_t js_events_on_abort_cb(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   if (!is_object_type(state)) return js_mkundef();
   events_on_fail(js, state, abort_signal_make_error(js, js_get(js, state, "signal")));
   return js_mkundef();
 }
 
 static ant_value_t js_events_on_next(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t promise = js_mkpromise(js);
   if (!is_object_type(state)) return promise;
 
@@ -2061,7 +2106,7 @@ static ant_value_t js_events_on_next(ant_params_t) {
 }
 
 static ant_value_t js_events_on_return(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t promise = js_mkpromise(js);
 
   if (is_object_type(state)) {

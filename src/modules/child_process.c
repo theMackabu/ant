@@ -331,7 +331,7 @@ static ant_value_t child_spawnargs_value(ant_t *js, char *const *argv) {
 }
 
 static ant_value_t child_spawn_failure_cb(ant_params_t) {
-  ant_value_t child = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t child = js_func_data(js->current_func);
   child_process_t *cp = get_child_process(child);
   if (!cp) return js_mkundef();
 
@@ -1572,7 +1572,7 @@ static ant_value_t builtin_exec(ant_params_t) {
 }
 
 static ant_value_t exec_spawn_error_capture(ant_params_t) {
-  child_process_t *cp = get_child_process(js_get_slot(js_getcurrentfunc(js), SLOT_DATA));
+  child_process_t *cp = get_child_process(js_func_data(js->current_func));
   if (cp && nargs > 0) cp->exec_spawn_error = args[0];
   return js_mkundef();
 }
@@ -1601,7 +1601,7 @@ static ant_value_t exec_command_error(
 }
 
 static ant_value_t exec_file_close_callback(ant_params_t) {
-  child_process_t *cp = get_child_process(js_get_slot(js_getcurrentfunc(js), SLOT_DATA));
+  child_process_t *cp = get_child_process(js_func_data(js->current_func));
   if (!cp || !is_callable(cp->exec_callback)) return js_mkundef();
 
   ant_value_t exit_code_val = nargs > 0 ? args[0] : js_mknull();
@@ -1625,7 +1625,7 @@ static ant_value_t exec_file_close_callback(ant_params_t) {
 }
 
 static ant_value_t exec_file_promisify_callback(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   if (!is_object_type(state)) return js_mkundef();
 
   ant_value_t settled = js_get_slot(state, SLOT_SETTLED);
@@ -1656,7 +1656,7 @@ static ant_value_t exec_file_promisify_callback(ant_params_t) {
 }
 
 static ant_value_t exec_callback_promisified_call(ant_params_t) {
-  ant_value_t original = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t original = js_func_data(js->current_func);
   if (!is_callable(original)) return js_mkerr(js, "exec promisify target is not callable");
 
   ant_value_t promise = js_mkpromise(js);

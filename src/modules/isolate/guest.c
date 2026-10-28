@@ -240,7 +240,7 @@ static ant_value_t guest_child_callback_fn(ant_params_t) {
     return Ant_Error_CreateOutOfMemory(js);
   }
 
-  call->callback = (uint32_t)js_getnum(js_get_slot(js_getcurrentfunc(js), SLOT_DATA));
+  call->callback = (uint32_t)js_getnum(js_func_data(js->current_func));
   call->args = encoded;
   call->argc = (uint32_t)nargs;
   call->promise = js_mkundef();

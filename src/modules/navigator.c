@@ -335,7 +335,7 @@ static void lock_finish(ant_t *js, lock_request_t *req) {
 }
 
 static void lock_settle_handler(ant_t *js, ant_value_t value, bool fulfilled) {
-  ant_value_t data = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t data = js_func_data(js->current_func);
   ant_value_t outer_promise = js_get(js, data, "outerPromise");
   navigator_locks_t *client = js->navigator_locks;
 
@@ -460,7 +460,7 @@ static void locks_drain(ant_t *js, navigator_locks_t *client) {
 
 static ant_value_t lock_abort_handler(ant_params_t) {
   navigator_locks_t *client = js->navigator_locks;
-  lock_request_t *req = lock_find(client, js_get_slot(js_getcurrentfunc(js), SLOT_DATA));
+  lock_request_t *req = lock_find(client, js_func_data(js->current_func));
   if (!req) return js_mkundef();
 
   ant_mutex_lock(&lock_registry);

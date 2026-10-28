@@ -501,38 +501,49 @@ static ant_value_t esm_make_namespace_object(ant_t *js) {
 }
 
 static ant_value_t esm_require_export_getter(ant_params_t) {
-  ant_value_t data = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t data = js_func_data(js->current_func);
   return js_get(js, js_arr_get(js, data, 0), js_getstr(js, js_arr_get(js, data, 1), NULL));
 }
 
 static ant_value_t esm_require_esm_exports(ant_t *js, ant_value_t ns) {
   ant_value_t special;
   if (js_try_get_own_data_prop(js, ns, "module.exports", 14, &special)) return special;
+  
   ant_value_t def;
-  if (!js_try_get_own_data_prop(js, ns, "default", 7, &def) ||
-      js_try_get_own_data_prop(js, ns, "__esModule", 10, &special)) return ns;
+  if (
+    !js_try_get_own_data_prop(js, ns, "default", 7, &def) || 
+    js_try_get_own_data_prop(js, ns, "__esModule", 10, &special)
+  ) return ns;
+  
   GC_ROOT_SAVE(mark, js);
   GC_ROOT_PIN(js, ns);
   ant_value_t wrapper = esm_make_namespace_object(js);
+  
   GC_ROOT_PIN(js, wrapper);
   js_set_proto_init(wrapper, js_mknull());
   ant_value_t keys = js_own_property_keys(js, ns, false, true);
+  
   GC_ROOT_PIN(js, keys);
   ant_value_t data = js_mkundef();
+  
   GC_ROOT_PIN(js, data);
   for (ant_offset_t i = 0; i < js_arr_len(js, keys); i++) {
     ant_value_t key = js_arr_get(js, keys, i);
     if (vtype(key) != kTypeString) continue;
+    
     data = js_mkarr(js);
     js_arr_push(js, data, ns);
     js_arr_push(js, data, key);
+    
     size_t len;
     const char *name = js_getstr(js, key, &len);
     js_set_getter_desc(js, wrapper, name, len, js_heavy_mkfun(js, esm_require_export_getter, data), JS_DESC_E);
   }
+  
   js_set(js, wrapper, "__esModule", js_true);
   js_set_slot(wrapper, SLOT_MODULE_LOADING, js_mkundef());
   GC_ROOT_RESTORE(js, mark);
+  
   return wrapper;
 }
 
@@ -579,6 +590,7 @@ static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_v
   ant_value_t ns = esm_value_namespace(js, value, value);
   GC_ROOT_PIN(js, ns);
 
+  // TODO: reduce nesting
   if (mod->kind == ESM_MODULE_KIND_JSON && !is_object_type(require_module)) {
     ant_value_t entry = esm_require_cache_lookup(js, mod->resolved_path);
     if (vtype(entry) == kTypeUndefined) {

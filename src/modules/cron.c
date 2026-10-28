@@ -861,20 +861,24 @@ static cron_job_t *cron_job_from_this(ant_t *js, const char *member, ant_value_t
 }
 
 static ant_value_t cron_handler_fulfilled(ant_params_t) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t object = js_get_slot(state, SLOT_DATA);
+  
   cron_job_t *job = js_get_native(object, CRON_JOB_NATIVE_TAG);
   if (!job || job->stopped || job->closing) return js_mkundef();
+  
   job->busy = false;
   ant_value_t error = js_mkundef();
   if (!cron_schedule_job(job, &error) && is_err(error)) return error;
+  
   return js_mkundef();
 }
 
 static ant_value_t cron_handler_rejected(ant_params_t) {
   ant_value_t reason = nargs > 0 ? args[0] : js_mkundef();
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = js_func_data(js->current_func);
   ant_value_t promise = js_get_slot(state, SLOT_AUX);
+  
   if (process_has_event_listeners(js, "unhandledRejection")) {
     ant_value_t event_args[2] = {reason, promise};
     emit_process_event(js, "unhandledRejection", event_args, 2);
@@ -883,6 +887,7 @@ static ant_value_t cron_handler_rejected(ant_params_t) {
     js_reject_promise(js, report, reason);
     js->fatal_error = true;
   }
+  
   return cron_handler_fulfilled(js, NULL, 0, js_mkundef());
 }
 
