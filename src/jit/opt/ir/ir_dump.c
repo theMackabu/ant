@@ -116,6 +116,7 @@ static void ir_condition_text(ir_condition_t condition, opt_text_t *out) {
     case IR_COND_EXTENSIBLE: opt_text_append(out, "Extensible"); break;
     case IR_COND_ARRAY_ITERATOR: opt_text_append(out, "ArrayIterator"); break;
     case IR_COND_ITERABLE_ARRAY: opt_text_append(out, "IterableArray"); break;
+    case IR_COND_TYPED_ARRAY_LENGTH: opt_text_append(out, "TypedArrayLength"); break;
     case IR_COND_ITERATOR_RETURN_INTACT: opt_text_append(out, "IteratorReturnIntact"); break;
     case IR_COND_SHAPE:
       opt_text_append(out, "Shape ");

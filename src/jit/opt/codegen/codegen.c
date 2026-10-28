@@ -930,6 +930,40 @@ static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condit
       opt_cg_jump_to(cg, if_true);
       return;
     }
+    case IR_COND_TYPED_ARRAY_LENGTH: {
+      asm_gpr_t value = opt_cg_input(cg, node, 0), scratch = cg->pinned.scratch;
+      asm_gpr_t ptr = opt_cg_temp(cg, node, 0), data = opt_cg_temp(cg, node, 1), js = opt_cg_temp(cg, node, 2);
+      asm_label_t no = opt_cg_label(cg, if_false), proto_ok = masm_new_label(m);
+      masm_shr64_imm(m, scratch, value, NANBOX_TYPE_SHIFT);
+      masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)OPT_OBJECT_TAG, no);
+      masm_and64_imm(m, ptr, value, NANBOX_DATA_MASK);
+      masm_add64_imm(m, ptr, ptr, (int64_t)ant_cage_base());
+      masm_load32(m, scratch, asm_addr(ptr, (int32_t)offsetof(ant_object_t, native_tag)));
+      masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, (int32_t)BUFFER_TYPEDARRAY_NATIVE_TAG, no);
+      masm_load64(m, js, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
+      masm_load32(m, scratch, asm_addr(js, (int32_t)offsetof(ant_t, protectors_invalid)));
+      masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, (int32_t)ANT_PROTECTOR_TYPED_ARRAY_LENGTH, no);
+      masm_load64(m, data, asm_addr(ptr, (int32_t)offsetof(ant_object_t, native_ptr)));
+      masm_load32(m, scratch, asm_addr(data, (int32_t)offsetof(TypedArrayData, type)));
+      masm_branch32_imm(m, ASM_COND_ABOVE_OR_EQUAL, scratch, (int32_t)TYPED_ARRAY_COUNT, no);
+      masm_load64(m, scratch, asm_addr_indexed(js, scratch, ASM_SCALE_8, (int32_t)offsetof(ant_t, builtins.typedarray_protos)));
+      masm_load64(m, ptr, asm_addr(ptr, (int32_t)offsetof(ant_object_t, proto)));
+      masm_branch64(m, ASM_COND_EQUAL, ptr, scratch, proto_ok);
+      masm_load64(m, scratch, asm_addr(js, (int32_t)offsetof(ant_t, builtins.buffer_proto)));
+      masm_branch64(m, ASM_COND_NOT_EQUAL, ptr, scratch, no);
+      masm_load32(m, scratch, asm_addr(data, (int32_t)offsetof(TypedArrayData, type)));
+      masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, (int32_t)TYPED_ARRAY_UINT8, no);
+      masm_bind(m, proto_ok);
+      masm_load64(m, scratch, asm_addr(data, (int32_t)offsetof(TypedArrayData, buffer)));
+      masm_branch64_imm(m, ASM_COND_EQUAL, scratch, 0, no);
+      masm_load8(m, scratch, asm_addr(scratch, (int32_t)offsetof(ArrayBufferData, views_slow)));
+      masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, 0, no);
+      masm_load64(m, scratch, asm_addr(data, (int32_t)offsetof(TypedArrayData, length)));
+      masm_move_imm64(m, data, (uint64_t)INT32_MAX);
+      masm_branch64(m, ASM_COND_ABOVE, scratch, data, no);
+      opt_cg_jump_to(cg, if_true);
+      return;
+    }
     case IR_COND_ITERATOR_RETURN_INTACT: {
       asm_gpr_t scratch = cg->pinned.scratch;
       masm_load64(m, scratch, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
@@ -3070,6 +3104,12 @@ static bool opt_cg_element_code(opt_cg_t *cg, ir_node_id_t node_id, const ir_nod
     case IR_OP_LOAD_ELEMENTS_CAPACITY:
       masm_load32(m, opt_cg_output(cg, node_id), asm_addr(opt_cg_input(cg, node_id, 0), (int32_t)offsetof(ant_object_t, u.array.cap)));
       break;
+    case IR_OP_LOAD_TYPED_ARRAY_LENGTH: {
+      asm_gpr_t out = opt_cg_output(cg, node_id);
+      masm_load64(m, out, asm_addr(opt_cg_input(cg, node_id, 0), (int32_t)offsetof(ant_object_t, native_ptr)));
+      masm_load32(m, out, asm_addr(out, (int32_t)offsetof(TypedArrayData, length)));
+      break;
+    }
     case IR_OP_CHECK_BOUNDS: opt_cg_check_bounds(cg, node_id); break;
     case IR_OP_LOAD_ELEMENT_AT: opt_cg_load_element(cg, node_id); break;
     case IR_OP_STORE_ELEMENT_AT: opt_cg_store_element(cg, node_id); break;

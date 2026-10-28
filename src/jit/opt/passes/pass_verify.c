@@ -156,6 +156,7 @@ static uint32_t pass_branch_input_reprs(ir_condition_t condition, opt_repr_t *re
     case IR_COND_STRING:
     case IR_COND_ELEMENTS_KIND:
     case IR_COND_ITERABLE_ARRAY:
+    case IR_COND_TYPED_ARRAY_LENGTH:
     case IR_COND_ITERATOR_RETURN_INTACT:
     case IR_COND_BUILTIN: reprs[0] = OPT_REPR_TAGGED; return 1;
     case IR_COND_RESOLVED_STRING:

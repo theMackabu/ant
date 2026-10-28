@@ -151,7 +151,8 @@ static ra_constraints_t ra_constraints(const ir_node_t *node, const opt_register
         case IR_COND_TAGGED_EQUALS: inputs[1].kind = RA_INPUT_REGISTER_OR_CONSTANT; break;
         case IR_COND_ELEMENTS_KIND:
         case IR_COND_ITERABLE_ARRAY: constraints.temps = 1; break;
-        case IR_COND_PROPERTY_ITERATOR_CACHE_VALID: constraints.temps = 3; break;
+        case IR_COND_PROPERTY_ITERATOR_CACHE_VALID:
+        case IR_COND_TYPED_ARRAY_LENGTH: constraints.temps = 3; break;
         case IR_COND_BINDING_MUTABLE:
         case IR_COND_NEXT_BINDING_OF_SHAPE: constraints.temps = 2; break;
         case IR_COND_BUILTIN: constraints.temps = 1; break;

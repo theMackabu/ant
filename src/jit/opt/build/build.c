@@ -2254,9 +2254,9 @@ static opt_flow_t opt_build_length(opt_builder_t *b) {
   opt_branch_off(b, elements, &value, 1, false, &not_array);
   ir_node_id_t array = opt_refine(b, elements, &value, 1);
   ir_node_id_t address = opt_emit1(b, IR_OP_CELL_ADDRESS, array, OPT_REPR_POINTER);
-  ir_node_id_t lengths[3];
+  ir_node_id_t lengths[4];
   lengths[0] = opt_tagged(b, opt_emit1(b, IR_OP_LOAD_ELEMENTS_LENGTH, address, OPT_REPR_INT32));
-  ir_block_id_t ends[3] = {b->block};
+  ir_block_id_t ends[4] = {b->block};
   b->block = not_array;
   opt_branch_off(b, ir_cond(IR_COND_STRING), &value, 1, false, &not_string);
   opt_string_length(b, opt_refine(b, ir_cond(IR_COND_STRING), &value, 1), lengths + 1, ends + 1);
@@ -2264,10 +2264,17 @@ static opt_flow_t opt_build_length(opt_builder_t *b) {
     b->block = ends[i];
     lengths[i] = opt_tagged(b, lengths[i]);
   }
-  slow[0] = not_string;
-  opt_join_blocks(b, ends, 3);
+  b->block = not_string;
+  ir_block_id_t not_typed;
+  opt_branch_off(b, ir_cond(IR_COND_TYPED_ARRAY_LENGTH), &value, 1, false, &not_typed);
+  ir_node_id_t typed = opt_refine(b, ir_cond(IR_COND_TYPED_ARRAY_LENGTH), &value, 1);
+  ir_node_id_t typed_address = opt_emit1(b, IR_OP_CELL_ADDRESS, typed, OPT_REPR_POINTER);
+  lengths[3] = opt_tagged(b, opt_emit1(b, IR_OP_LOAD_TYPED_ARRAY_LENGTH, typed_address, OPT_REPR_INT32));
+  ends[3] = b->block;
+  slow[0] = not_typed;
+  opt_join_blocks(b, ends, 4);
   opt_drop(b, 1);
-  opt_push(b, opt_value_phi(b, b->frame.sp, lengths, 3));
+  opt_push(b, opt_value_phi(b, b->frame.sp, lengths, 4));
   ir_block_id_t fast_end = b->block;
   opt_frame_t fast = b->frame;
   ir_block_id_t slow_end = opt_build_slow_path_or_exit(b, slow, 1, &before);

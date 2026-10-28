@@ -200,6 +200,7 @@ typedef enum : uint8_t {
   IR_COND_BINDING_MUTABLE,
   IR_COND_NEXT_BINDING_OF_SHAPE,
   IR_COND_PROPERTY_ITERATOR_CACHE_VALID,
+  IR_COND_TYPED_ARRAY_LENGTH,
 } ir_condition_kind_t;
 
 typedef struct {
