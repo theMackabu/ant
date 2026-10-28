@@ -2653,10 +2653,15 @@ static ant_value_t stream_writable_write_impl(
     return js_false;
   }
 
-  ant_value_t normalized = stream_normalize_chunk(js, chunk, ws->object_mode, encoding);
-  if (is_err(normalized)) return normalized;
+  ant_value_t normalized = chunk;
+  double chunk_size = ws->object_mode ? 1 : stream_plain_buffer_size(js, chunk);
 
-  double chunk_size = stream_chunk_size(js, normalized, ws->object_mode);
+  if (chunk_size <= 0) {
+    normalized = stream_normalize_chunk(js, chunk, false, encoding);
+    if (is_err(normalized)) return normalized;
+    chunk_size = stream_chunk_size(js, normalized, false);
+  }
+
   double length = ws->length + chunk_size;
   bool accepted = length < ws->high_water_mark;
   
