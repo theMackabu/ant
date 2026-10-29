@@ -25,6 +25,7 @@
 #include "modules/events.h"
 #include "modules/stream.h"
 #include "modules/iterator.h"
+#include "protectors.h"
 #include "modules/string_decoder.h"
 #include "modules/symbol.h"
 #include "streams/readable.h"
@@ -56,6 +57,7 @@ typedef enum {
   STREAM_FROM_VALUE,
   STREAM_FROM_ASYNC,
   STREAM_FROM_SYNC,
+  STREAM_FROM_ARRAY,
   STREAM_FROM_READER,
 } stream_from_mode_t;
 
@@ -72,6 +74,7 @@ typedef struct {
   ant_get_cache_t resume_cache;
   js_iter_advance_fn from_advance;
   stream_from_mode_t from_mode;
+  uint32_t from_index;
   bool called;
   bool pipe_end_dest;
   bool pipe_cleaned;
@@ -183,6 +186,7 @@ typedef struct {
   ant_value_t transform_done;
   ant_value_t transform_callback;
   ant_value_t from_read;
+  ant_value_t from_state;
   void *attached_state;
   stream_finalize_fn attached_state_finalize;
   stream_end_fn end_hook;
@@ -408,6 +412,7 @@ static stream_private_state_t *stream_attach(ant_t *js, ant_value_t obj) {
   priv->transform_done = js_mkundef();
   priv->transform_callback = js_mkundef();
   priv->from_read = js_mkundef();
+  priv->from_state = js_mkundef();
   priv->data_event = (eventemitter_ref_t){ .name = "data" };
   priv->readable_event = (eventemitter_ref_t){ .name = "readable" };
   priv->readable.decoder = js_mkundef();
@@ -445,6 +450,7 @@ void gc_mark_stream_object(ant_t *js, ant_value_t value, gc_mark_fn mark) {
   mark(js, priv->transform_done);
   mark(js, priv->transform_callback);
   mark(js, priv->from_read);
+  mark(js, priv->from_state);
   stream_readable_state_t *rs = &priv->readable;
   for (uint32_t i = 0; i < rs->chunk_count; i++)
     mark(js, rs->chunks[(rs->chunk_head + i) & (rs->chunk_cap - 1)].value);
@@ -1865,7 +1871,7 @@ static ant_value_t stream_rs_read(ant_t *js, stream_private_state_t *priv, doubl
 
     rs->in_read = true;
     ant_value_t result = is_err(read_fn) ? read_fn
-      : read_fn == priv->from_read ? stream_readable_from_read_state(js, js_get_slot(read_fn, SLOT_DATA))
+      : read_fn == priv->from_read ? stream_readable_from_read_state(js, priv->from_state)
       : stream_call(js, read_fn, stream_obj, read_args, 1);
     
     rs->in_read = prev_in_read;
@@ -3487,6 +3493,43 @@ static void stream_readable_from_step(ant_t *js, ant_value_t state) {
       return;
     }
 
+    if (op->from_mode == STREAM_FROM_ARRAY) {
+      if (!ant_protector_intact(js, ANT_PROTECTOR_ARRAY_ITERATION)) {
+        ant_value_t iterator = js_array_iterator_at(js, op->from.source, op->from_index);
+        if (is_err(iterator)) {
+          stream_readable_from_fail(js, op, iterator);
+          return;
+        }
+        stream_op_store(js, op, &op->from.iterator, iterator);
+        ant_value_t next_fn = js_get(js, iterator, "next");
+        if (is_err(next_fn)) {
+          stream_readable_from_fail(js, op, next_fn);
+          return;
+        }
+        stream_op_store(js, op, &op->from.next, next_fn);
+        op->from_advance = js_iter_find_advance(js, iterator, next_fn);
+        op->from_mode = STREAM_FROM_SYNC;
+        continue;
+      }
+
+      ant_value_t source = op->from.source;
+      if (op->from_index >= (uint32_t)js_arr_len(js, source)) {
+        stream_readable_from_push(js, op, true, js_mkundef());
+        return;
+      }
+
+      ant_value_t value = js_arr_get(js, source, op->from_index++);
+      if (Ant_Exception_Pending(js)) {
+        stream_readable_from_fail(js, op, Ant_Exception_Current(js));
+        return;
+      }
+
+      int awaited = stream_readable_from_await(js, state, value, stream_readable_from_on_value);
+      if (awaited != 0) return;
+      if (!stream_readable_from_push(js, op, false, value)) return;
+      continue;
+    }
+
     if (op->from_mode == STREAM_FROM_SYNC && op->from_advance) {
       iterator_t it = { op->from.iterator, op->from.next, op->from_advance };
       ant_value_t value = js_mkundef();
@@ -3646,7 +3689,11 @@ static ant_value_t stream_readable_from_source(ant_t *js, ant_value_t source, an
   op = stream_op_new(js, &state);
   if (!op) { result = Ant_Error_CreateOutOfMemory(js); goto done; }
 
-  op->from_mode = mode;
+  op->from_mode = mode == STREAM_FROM_SYNC && vtype(source) == kTypeArray &&
+    js_iter_is_array_values(iterator, next_fn, source) &&
+    ant_protector_intact(js, ANT_PROTECTOR_ARRAY_ITERATION)
+    ? STREAM_FROM_ARRAY : mode;
+  
   op->from.readable = readable;
   op->from.source = source;
   op->from.iterator = iterator;
@@ -3657,7 +3704,12 @@ static ant_value_t stream_readable_from_source(ant_t *js, ant_value_t source, an
 
   ant_value_t read_fn = js_heavy_mkfun(js, stream_readable_from_read, state);
   stream_private_state_t *readable_priv = stream_private_state(readable);
-  if (readable_priv) stream_store(js, readable_priv, &readable_priv->from_read, read_fn);
+  
+  if (readable_priv) {
+    stream_store(js, readable_priv, &readable_priv->from_read, read_fn);
+    stream_store(js, readable_priv, &readable_priv->from_state, state);
+  }
+  
   js_set(js, readable, "_read", read_fn);
   js_set(js, readable, "_destroy", js_heavy_mkfun(js, stream_readable_from_destroy, state));
   result = readable;
