@@ -135,6 +135,7 @@ static_assert(sizeof(double) == sizeof(uint64_t), "double and uint64_t must have
 
 typedef struct interned_string {
   uint64_t hash;
+  ant_value_t value;
   char *str;
   size_t len;
 } interned_string_t;
@@ -2036,6 +2037,7 @@ const char *intern_string(ant_t *js, const char *str, size_t len) {
   e->str[len] = '\0';
   e->len = len;
   e->hash = h;
+  e->value = 0;
   intern_table_place(t, e);
 
   t->count++;
@@ -2056,6 +2058,14 @@ const char *intern_find_flat(ant_t *js, const char *bytes, size_t len) {
 
 size_t intern_length(const char *interned) {
   return ((const interned_string_t *)(const void *)interned)[-1].len;
+}
+
+static ant_value_t intern_value(ant_t *js, const char *interned) {
+  interned_string_t *entry = &((interned_string_t *)(void *)interned)[-1];
+  if (entry->value) return entry->value;
+  ant_value_t value = js_mkstr_permanent(js, interned, entry->len);
+  if (!is_err(value)) entry->value = value;
+  return value;
 }
 
 js_intern_stats_t js_intern_stats(ant_t *js) {
@@ -8826,6 +8836,12 @@ static inline ant_value_t object_enum_item(ant_t *js, enum obj_enum_mode mode, c
   return mode == OBJ_ENUM_KEYS ? key_val : map_to_entry(js, key_val, val);
 }
 
+static inline ant_value_t object_enum_interned_item(ant_t *js, enum obj_enum_mode mode, const char *key, ant_value_t val) {
+  if (mode == OBJ_ENUM_VALUES) return val;
+  ant_value_t key_val = intern_value(js, key);
+  return mode == OBJ_ENUM_KEYS ? key_val : map_to_entry(js, key_val, val);
+}
+
 static constexpr uint32_t OBJECT_ENUM_SINK_STACK = 32;
 
 typedef struct {
@@ -9060,7 +9076,7 @@ ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbol
         break;
       }
       
-      arr_set(js, arr, out_idx++, js_mkstr(js, key, key_len));
+      arr_set(js, arr, out_idx++, intern_value(js, key));
     }
 
     if (!has_index_key) {
@@ -11601,7 +11617,7 @@ static ant_value_t copy_set(ant_t *js, ant_value_t dst, copy_key_t key, ant_valu
 }
 
 static __attribute__((noinline)) ant_value_t copy_collect(ant_t *js, const copy_ctx_t *cx, ant_value_t arr, copy_key_t key, ant_value_t val) {
-  if (!copy_key_is_sym(key)) js_arr_push(js, arr, object_enum_item(js, cx->mode, key.interned, intern_length(key.interned), val));
+  if (!copy_key_is_sym(key)) js_arr_push(js, arr, object_enum_interned_item(js, cx->mode, key.interned, val));
   return js_mkundef();
 }
 
@@ -12107,7 +12123,7 @@ static ant_value_t object_enum_visit(
       : prop->has_getter ? js_call_getter(js, obj, prop->getter) : js_mkundef();
     
     if (is_err(val)) return val;
-    object_enum_emit(js, sink, object_enum_item(js, mode, ck.interned, intern_length(ck.interned), val));
+    object_enum_emit(js, sink, object_enum_interned_item(js, mode, ck.interned, val));
   }
   
   return js_mkundef();
@@ -12173,7 +12189,7 @@ static ant_value_t object_enum_props_ordered(ant_t *js, ant_value_t obj, ant_obj
   for (uint32_t k = 0; k < indices.count; k++) {
     uint32_t slot = indices.items[k].slot;
     const char *key = ant_shape_prop_at(shape, slot)->key.interned;
-    object_enum_emit(js, sink, object_enum_item(js, mode, key, intern_length(key), ant_object_prop_get_unchecked(ptr, slot)));
+    object_enum_emit(js, sink, object_enum_interned_item(js, mode, key, ant_object_prop_get_unchecked(ptr, slot)));
   }
   own_index_list_free(&indices);
   
@@ -12183,7 +12199,7 @@ static ant_value_t object_enum_props_ordered(ant_t *js, ant_value_t obj, ant_obj
     
     const char *key = prop->key.interned;
     if (own_key_is_array_index(key, intern_length(key), NULL)) continue;
-    object_enum_emit(js, sink, object_enum_item(js, mode, key, intern_length(key), ant_object_prop_get_unchecked(ptr, i)));
+    object_enum_emit(js, sink, object_enum_interned_item(js, mode, key, ant_object_prop_get_unchecked(ptr, i)));
   }
   
   return js_mkundef();
@@ -12206,7 +12222,7 @@ static ant_value_t object_enum_props(ant_t *js, ant_value_t obj, ant_object_t *p
     }
     
     const char *key = prop->key.interned;
-    ant_value_t item = object_enum_item(js, mode, key, intern_length(key), ant_object_prop_get_unchecked(ptr, i));
+    ant_value_t item = object_enum_interned_item(js, mode, key, ant_object_prop_get_unchecked(ptr, i));
     if (!sink->spilled && n < OBJECT_ENUM_SINK_STACK) { sink->items[n++] = item; continue; }
     
     sink->count = n;
@@ -19864,6 +19880,21 @@ static ant_value_t array_method_has_index(ant_t *js, ant_value_t arr, ant_offset
   return js_bool(arr_has(js, arr, idx));
 }
 
+static bool array_like_index_keys_absent(ant_value_t obj) {
+  ant_value_t cur = obj;
+  for (int depth = 0; depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
+    if (vtype(cur) != kTypeObject || is_proxy(cur) || array_obj_ptr(cur)) return false;
+    ant_object_t *ptr = js_obj_ptr(cur);
+    if (!ptr || !ptr->shape || ptr->flags.is_exotic || ptr->exotic_ops) return false;
+    if (ant_shape_may_have_index_keys(ptr->shape)) return false;
+    if (vtype(js_string_wrapper_value(cur)) == kTypeString) return false;
+    cur = ptr->proto;
+    if (vtype(cur) == kTypeNull) return true;
+  }
+
+  return false;
+}
+
 static bool array_like_index_absent(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
   if (intern_find(js, key, key_len)) return false;
 
@@ -19895,6 +19926,7 @@ static ant_value_t array_method_get_index(ant_t *js, ant_value_t arr, ant_offset
     ant_value_t item = js_mkundef();
     if (ta && buffer_typedarray_data_read_index(js, ta, (size_t)idx, &item)) return item;
     if (!ta) {
+      if (array_like_index_keys_absent(arr)) return js_mkundef();
       char idxstr[16];
       size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)idx);
       if (array_like_index_absent(js, arr, idxstr, idxlen)) return js_mkundef();
