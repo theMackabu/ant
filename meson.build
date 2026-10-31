@@ -63,12 +63,20 @@ messages_h = custom_target('messages_h',
 )
 
 generic_step_h = custom_target('generic_step_h',
-  input: ['src/silver/engine.c', 'meson/generic_step.ops'],
+  input: ['src/silver/engine.c', 'src/silver/ops/handlers.h', 'meson/generic_step.ops'],
   output: 'generic_step_cases.h',
-  command: [python, files('meson/generic_step.py'), '@INPUT0@', '@INPUT1@'],
+  command: [python, files('meson/generic_step.py'), '@INPUT0@', '@INPUT1@', '@INPUT2@'],
   depend_files: files('meson/generic_step.py'),
   capture: true,
 )
+
+defgen = generator(python,
+  arguments: [src_root / 'meson/defgen.py', '@INPUT@', '@OUTPUT@', '@DEPFILE@'],
+  output: '@BASENAME@',
+  depfile: '@BASENAME@.d',
+)
+
+silver_macros_h = defgen.process('src/silver/ops/macros.h.in', preserve_path_from: src_root / 'src')
 
 theme_h = custom_target('theme_h',
   input: 'src/highlight/theme.toml',
@@ -96,6 +104,7 @@ libant = static_library(
     builtins_h,
     generic_step_h,
     messages_h,
+    silver_macros_h,
     theme_h,
     unicode_data_h,
   ],
@@ -215,6 +224,7 @@ if not runtime_binary.disabled()
       builtins_h,
       generic_step_h,
       messages_h,
+      silver_macros_h,
       theme_h,
       unicode_data_h,
     ],

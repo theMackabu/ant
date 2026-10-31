@@ -52,6 +52,14 @@ unicode_data_h = custom_target('unicode_data_h',
   depend_files: unicode_tables,
 )
 
+defgen = generator(python,
+  arguments: [root / 'meson/defgen.py', '@INPUT@', '@OUTPUT@', '@DEPFILE@'],
+  output: '@BASENAME@',
+  depfile: '@BASENAME@.d',
+)
+
+silver_macros_h = defgen.process(root / 'src/silver/ops/macros.h.in', preserve_path_from: root / 'src')
+
 core_sources = files(run_command(
   python, root / 'meson/sources.py', root / 'sources.json', 'wasm', root, '../..',
   check: true,
@@ -81,7 +89,7 @@ add_project_arguments(
   language: 'c',
 )
 
-executable('ant', core_sources, unicode_data_h,
+executable('ant', core_sources, silver_macros_h, unicode_data_h,
   include_directories: inc,
   dependencies: [
     base64_dep,

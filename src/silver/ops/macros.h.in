@@ -1,0 +1,111 @@
+#define VM_THROW(value) do { sv_err = (value); goto sv_throw; } while (0)
+#define VM_LEAVE(value) do { vm_result = (value); goto sv_leave; } while (0)
+
+#def VM_RELOAD_FRAME()
+do {
+  frame = &vm->frames[vm->fp];
+  func = frame->func;
+  lp = frame->lp;
+} while (0)
+#enddef
+
+#def VM_CHECK(expr)
+({
+  frame->ip = ip;
+  sv_err = (expr);
+  if (is_err(sv_err)) goto sv_throw;
+})
+#enddef
+
+#ifdef ANT_WASM_EMBED
+#def DISPATCH()
+do {
+  if (js->wasm_interrupt_enabled &&
+      (++js->wasm_interrupt_ticks & 1023u) == 0 &&
+      ant_wasm_should_interrupt(js))
+    VM_LEAVE(js_mkerr_typed(js, JS_ERR_RANGE, "Execution timed out"));
+  goto *dispatch[*ip];
+} while (0)
+#enddef
+#else
+#define DISPATCH() goto *dispatch[*ip]
+#endif
+
+#define NEXT(op) ({ ip += sv_op_size[(op)]; DISPATCH(); })
+
+#def COMPLETE_FRAME(value)
+do {
+  ant_value_t done_value_ = (value);
+  if (vm->fp <= entry_fp) VM_LEAVE(done_value_);
+  done_value_ = sv_frame_return_value(frame, done_value_);
+  sv_drop_frame_runtime_state_keep(js, frame, done_value_);
+  vm->sp = frame->prev_sp;
+  vm->fp--;
+  VM_RELOAD_FRAME();
+  ip = frame->ip;
+  vm->stack[vm->sp++] = done_value_;
+  DISPATCH();
+} while (0)
+#enddef
+
+#def SUSPEND_YIELD(resume_ip, value)
+do {
+  vm->suspend.active = true;
+  vm->suspend.entry_fp = entry_fp;
+  vm->suspend.saved_fp = entry_fp - 1;
+  frame->ip = (resume_ip);
+  VM_LEAVE(value);
+} while (0)
+#enddef
+
+#def RETURN_VALUE(value)
+do {
+  ant_value_t ret_value_ = (value);
+  if (__builtin_expect(vm->handler_depth != frame->handler_base, 0)) {
+    uint8_t *finally_ip = sv_vm_unwind_for_return(vm, ret_value_);
+    if (finally_ip) {
+      VM_RELOAD_FRAME();
+      ip = finally_ip;
+      DISPATCH();
+    }
+    sv_frame_reset_handlers(vm, frame);
+  }
+  if (__builtin_expect(sv_async_inline_at(vm, vm->fp), 0)) {
+    if (sv_async_inline_elides_promise(vm, ret_value_))
+      vm->async_inline.len--;
+    else ret_value_ = sv_async_inline_settle(
+      vm, js, ret_value_, false, false);
+  }
+  COMPLETE_FRAME(ret_value_);
+} while (0)
+#enddef
+
+#def JIT_OSR_FINISH(osr_r)
+do {
+  if (osr_r == SV_JIT_AWAIT_PARKED) {
+    ip = frame->ip;
+    DISPATCH();
+  }
+  if (osr_r != SV_JIT_RETRY_INTERP) {
+    if (is_err(osr_r)) VM_THROW(osr_r);
+    if (sv_async_inline_at(vm, vm->fp))
+      osr_r = sv_async_inline_settle(
+        vm, js, osr_r, false, sv_async_inline_top_pending(vm));
+    COMPLETE_FRAME(osr_r);
+  }
+} while (0)
+#enddef
+
+#def JIT_OSR_BACK_EDGE()
+do {
+  if (!func->jit_compile_failed) {
+    if (!sv_func_type_feedback(func)) sv_tfb_ensure(func);
+    if (++func->back_edge_count >= func->jit_osr_threshold) {
+      ant_value_t osr_r = __builtin_expect(func->is_async, 0)
+        ? sv_async_osr_enter(vm, js, frame, func, (int)(ip - func->code))
+        : sv_jit_try_osr(vm, js, frame, func, (int)(ip - func->code));
+      JIT_OSR_FINISH(osr_r);
+    }
+  }
+} while (0)
+#enddef

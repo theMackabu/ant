@@ -69,12 +69,20 @@ messages_h = custom_target('messages_h',
 )
 
 generic_step_h = custom_target('generic_step_h',
-  input: '../../src/silver/engine.c',
+  input: ['../../src/silver/engine.c', '../../src/silver/ops/handlers.h', '../../meson/generic_step.ops'],
   output: 'generic_step_cases.h',
-  command: [python, files('../../meson/generic_step.py'), '@INPUT@'],
+  command: [python, files('../../meson/generic_step.py'), '@INPUT0@', '@INPUT1@', '@INPUT2@'],
   depend_files: files('../../meson/generic_step.py'),
   capture: true,
 )
+
+defgen = generator(python,
+  arguments: [src_root / 'meson/defgen.py', '@INPUT@', '@OUTPUT@', '@DEPFILE@'],
+  output: '@BASENAME@',
+  depfile: '@BASENAME@.d',
+)
+
+silver_macros_h = defgen.process('../../src/silver/ops/macros.h.in', preserve_path_from: src_root / 'src')
 
 theme_h = custom_target('theme_h',
   input: '../../src/highlight/theme.toml',
@@ -90,7 +98,7 @@ lib_sources = files(run_command(
 
 libant_core = static_library(
   'ant_core',
-  lib_sources + sandbox_backend_sources + [builtins_h, generic_step_h, messages_h, theme_h],
+  lib_sources + sandbox_backend_sources + [builtins_h, generic_step_h, messages_h, silver_macros_h, theme_h],
   include_directories: [include, sandbox_backend_include],
   dependencies: ant_deps + temporal_link_deps,
 )
@@ -98,7 +106,7 @@ libant_core = static_library(
 if use_lto
   libant_core_lto = static_library(
     'ant_core_lto',
-    lib_sources + sandbox_backend_sources + [builtins_h, generic_step_h, messages_h, theme_h],
+    lib_sources + sandbox_backend_sources + [builtins_h, generic_step_h, messages_h, silver_macros_h, theme_h],
     include_directories: [include, sandbox_backend_include],
     dependencies: ant_deps + temporal_link_deps,
     override_options: ['b_lto=true'],

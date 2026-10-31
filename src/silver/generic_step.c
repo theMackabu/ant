@@ -55,7 +55,8 @@ ant_value_t sv_generic_step(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip, uint32_
     sv_err = (expr);                   \
     if (is_err(sv_err)) goto sv_throw; \
   })
-  #define VM_CHECK_ALLOC(expr) VM_CHECK(expr)
+  
+  #define VM_THROW(value) do { sv_err = (value); goto sv_throw; } while (0)
   #define NEXT(op) goto sv_next
 
   switch ((sv_op_t)*ip) {
@@ -72,6 +73,6 @@ ant_value_t sv_generic_step(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip, uint32_
   return is_err(sv_err) ? sv_err : js_throw(js, sv_err);
 
   #undef VM_CHECK
-  #undef VM_CHECK_ALLOC
+  #undef VM_THROW
   #undef NEXT
 }

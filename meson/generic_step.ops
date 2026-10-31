@@ -130,18 +130,18 @@ JMP8 skip: no NEXT
 JMP_FALSE8 skip: no NEXT
 JMP_TRUE8 skip: no NEXT
 CALL skip: token DISPATCH
-CALL_CALL skip: token sv_sync_frame_locals
-CALL_CALL_SLOT skip: token sv_sync_frame_locals
+CALL_CALL skip: token VM_RELOAD_FRAME
+CALL_CALL_SLOT skip: token VM_RELOAD_FRAME
 CALL_METHOD skip: token DISPATCH
 CALL_SUPER
-CALL_CHAR_CODE_AT skip: token sv_sync_frame_locals
-CALL_ARRAY_INCLUDES skip: token sv_sync_frame_locals
-CALL_STRING_INTRINSIC skip: token sv_sync_frame_locals
-CALL_MAP_TEMPLATE skip: token sv_sync_frame_locals
-CALL_STABLE_BUILTIN skip: token sv_sync_frame_locals
-CALL_IS_PROTO skip: token sv_sync_frame_locals
-RE_EXEC_TRUTHY skip: token sv_sync_frame_locals
-RE_EXEC_DISCARD skip: token sv_sync_frame_locals
+CALL_CHAR_CODE_AT skip: token VM_RELOAD_FRAME
+CALL_ARRAY_INCLUDES skip: token VM_RELOAD_FRAME
+CALL_STRING_INTRINSIC skip: token VM_RELOAD_FRAME
+CALL_MAP_TEMPLATE skip: token VM_RELOAD_FRAME
+CALL_STABLE_BUILTIN skip: token VM_RELOAD_FRAME
+CALL_IS_PROTO skip: token VM_RELOAD_FRAME
+RE_EXEC_TRUTHY skip: token VM_RELOAD_FRAME
+RE_EXEC_DISCARD skip: token VM_RELOAD_FRAME
 RE_LITERAL_EXEC
 STR_RE_LITERAL_REPLACE
 TAIL_CALL skip: token L_RETURN
@@ -194,7 +194,7 @@ DESTRUCTURE_NEXT
 DESTRUCTURE_REST
 DESTRUCTURE_CLOSE
 AWAIT skip: token DISPATCH
-AWAIT_RETURN skip: token vm_result
+AWAIT_RETURN skip: token VM_LEAVE
 ASYNC_YIELD skip: no NEXT
 YIELD skip: token SUSPEND_YIELD
 YIELD_STAR_INIT

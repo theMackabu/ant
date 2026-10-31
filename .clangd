@@ -11,3 +11,8 @@ CompileFlags:
   Add:
     - -I../include
     - -I../vendor/uthash-2.3.0/src
+---
+If:
+  PathMatch: [.*\.in, src/silver/ops/handlers\.h]
+Diagnostics:
+  Suppress: "*"
