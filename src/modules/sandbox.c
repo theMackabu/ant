@@ -1123,6 +1123,38 @@ static void sandbox_async_cb(uv_async_t *handle) {
     uv_close((uv_handle_t *)&state->async, sandbox_async_closed);
 }
 
+static ant_value_t sandbox_collect_argv(ant_t *js, ant_value_t *args, int nargs, char ***argv_out, int *argc_out) {
+  *argv_out = NULL;
+  *argc_out = 0;
+  if (nargs < 2 || vtype(args[1]) == kTypeUndefined || vtype(args[1]) == kTypeNull) return Ant_Value_Undefined;
+
+  bool from_array = js_is_array(args[1]);
+  ant_offset_t len = from_array ? js_arr_len(js, args[1]) : (ant_offset_t)(nargs - 1);
+  if (len > INT32_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "argv is too large");
+
+  char **argv = calloc((size_t)len + 1, sizeof(*argv));
+  if (!argv) return Ant_Error_CreateOutOfMemory(js);
+
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t item = from_array ? js_arr_get(js, args[1], i) : args[i + 1];
+    if (vtype(item) != kTypeString) {
+      free(argv);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "argv entries must be strings");
+    }
+    
+    argv[i] = js_getstr(js, item, NULL);
+    if (!argv[i]) {
+      free(argv);
+      return Ant_Error_CreateOutOfMemory(js);
+    }
+  }
+
+  *argv_out = argv;
+  *argc_out = (int)len;
+  
+  return Ant_Value_Undefined;
+}
+
 static ant_value_t sandbox_run(ant_params_t) {
   ant_value_t state_error = Ant_Value_Undefined;
   sandbox_state_t *state = sandbox_require_open_state(js, call_this, &state_error);
@@ -1137,45 +1169,10 @@ static ant_value_t sandbox_run(ant_params_t) {
 
   char *entry = js_getstr(js, args[0], NULL);
   if (!entry) return sandbox_rejected(js, Ant_Error_CreateOutOfMemory(js));
+  
   char **argv = NULL; int argc = 0;
-
-  // TODO: reduce nesting split into helpers
-  if (nargs >= 2 && vtype(args[1]) != kTypeUndefined && vtype(args[1]) != kTypeNull) {
-    if (js_is_array(args[1])) {
-      ant_offset_t len = js_arr_len(js, args[1]);
-      if (len > INT32_MAX) return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_RANGE, "argv is too large"));
-      argv = calloc((size_t)len + 1, sizeof(*argv));
-      if (!argv) return sandbox_rejected(js, Ant_Error_CreateOutOfMemory(js));
-      argc = (int)len;
-      for (ant_offset_t i = 0; i < len; i++) {
-        ant_value_t item = js_arr_get(js, args[1], i);
-        if (vtype(item) != kTypeString) {
-          free(argv);
-          return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "argv entries must be strings"));
-        }
-        argv[i] = js_getstr(js, item, NULL);
-        if (!argv[i]) {
-          free(argv);
-          return sandbox_rejected(js, Ant_Error_CreateOutOfMemory(js));
-        }
-      }
-    } else {
-      argc = nargs - 1;
-      argv = calloc((size_t)argc + 1, sizeof(*argv));
-      if (!argv) return sandbox_rejected(js, Ant_Error_CreateOutOfMemory(js));
-      for (int i = 0; i < argc; i++) {
-        if (vtype(args[i + 1]) != kTypeString) {
-          free(argv);
-          return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "argv entries must be strings"));
-        }
-        argv[i] = js_getstr(js, args[i + 1], NULL);
-        if (!argv[i]) {
-          free(argv);
-          return sandbox_rejected(js, Ant_Error_CreateOutOfMemory(js));
-        }
-      }
-    }
-  }
+  ant_value_t argv_error = sandbox_collect_argv(js, args, nargs, &argv, &argc);
+  if (is_err(argv_error)) return sandbox_rejected(js, argv_error);
 
   uint16_t forward_ports[ANT_SANDBOX_MAX_FORWARDS];
   for (size_t i = 0; i < state->launch.forward_count; i++)

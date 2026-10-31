@@ -66,7 +66,54 @@ static const char *js_get_execution_module_filename(ant_t *js) {
   return js->filename;
 }
 
-// TODO: reduce nesting
+static ant_value_t js_import_check_attribute_values(ant_t *js, ant_value_t attrs) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, attrs);
+  
+  ant_value_t keys = is_proxy(attrs)
+    ? proxy_enum(js, attrs, OBJ_ENUM_KEYS)
+    : js_own_property_keys(js, attrs, false, true);
+  
+  GC_ROOT_PIN(js, keys);
+  if (is_err(keys)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return keys;
+  }
+
+  ant_value_t key = Ant_Value_Undefined;
+  GC_ROOT_PIN(js, key);
+
+  ant_offset_t key_count = js_arr_len(js, keys);
+  for (ant_offset_t i = 0; i < key_count; i++) {
+    key = js_arr_get(js, keys, i);
+    if (vtype(key) != kTypeString) continue;
+
+    ant_value_t val = js_get(js, attrs, js_getstr(js, key, NULL));
+    if (!is_err(val) && vtype(val) != kTypeString)
+      val = js_mkerr_typed(js, JS_ERR_TYPE, "Import attribute values must be strings");
+    if (is_err(val)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return val;
+    }
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t js_import_attributes(ant_t *js, ant_value_t options) {
+  if (vtype(options) == kTypeUndefined) return Ant_Value_Undefined;
+  if (!is_object_type(options))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "The second argument to import() must be an object");
+
+  ant_value_t attrs = js_get(js, options, "with");
+  if (is_err(attrs) || vtype(attrs) == kTypeUndefined) return attrs;
+  if (!is_object_type(attrs)) return js_mkerr_typed(js, JS_ERR_TYPE, "The 'with' option must be an object");
+
+  ant_value_t checked = js_import_check_attribute_values(js, attrs);
+  return is_err(checked) ? checked : attrs;
+}
+
 ant_value_t js_builtin_import(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "import() requires a string specifier");
 
@@ -76,60 +123,8 @@ ant_value_t js_builtin_import(ant_params_t) {
   if (!js_has_module_filename(base_path))
     base_path = js_get_execution_module_filename(js);
 
-  ant_value_t attrs = Ant_Value_Undefined;
-  if (nargs >= 2 && vtype(args[1]) != kTypeUndefined) {
-    if (!is_object_type(args[1])) {
-      ant_value_t err = js_take_thrown(js, js_mkerr_typed(js, JS_ERR_TYPE, "The second argument to import() must be an object"));
-      return js_promise_reject_with_ctor(js, js->sym.promise_ctor, err);
-    }
-
-    attrs = js_get(js, args[1], "with");
-    if (is_err(attrs)) {
-      ant_value_t reject_val = js_take_thrown(js, attrs);
-      return js_promise_reject_with_ctor(js, js->sym.promise_ctor, reject_val);
-    }
-
-    if (vtype(attrs) != kTypeUndefined && !is_object_type(attrs)) {
-      ant_value_t err = js_take_thrown(js, js_mkerr_typed(js, JS_ERR_TYPE, "The 'with' option must be an object"));
-      return js_promise_reject_with_ctor(js, js->sym.promise_ctor, err);
-    }
-
-    if (is_object_type(attrs)) {
-      GC_ROOT_SAVE(root_mark, js);
-      GC_ROOT_PIN(js, attrs);
-      ant_value_t keys = is_proxy(attrs)
-        ? proxy_enum(js, attrs, OBJ_ENUM_KEYS)
-        : js_own_property_keys(js, attrs, false, true);
-      GC_ROOT_PIN(js, keys);
-      if (is_err(keys)) {
-        ant_value_t reason = js_take_thrown(js, keys);
-        GC_ROOT_RESTORE(js, root_mark);
-        return js_promise_reject_with_ctor(js, js->sym.promise_ctor, reason);
-      }
-
-      ant_value_t key = Ant_Value_Undefined;
-      GC_ROOT_PIN(js, key);
-
-      ant_offset_t key_count = js_arr_len(js, keys);
-      for (ant_offset_t i = 0; i < key_count; i++) {
-        key = js_arr_get(js, keys, i);
-        if (vtype(key) != kTypeString) continue;
-
-        ant_value_t val = js_get(js, attrs, js_getstr(js, key, NULL));
-        if (is_err(val)) {
-          ant_value_t reject_val = js_take_thrown(js, val);
-          GC_ROOT_RESTORE(js, root_mark);
-          return js_promise_reject_with_ctor(js, js->sym.promise_ctor, reject_val);
-        }
-        if (vtype(val) != kTypeString) {
-          ant_value_t err = js_take_thrown(js, js_mkerr_typed(js, JS_ERR_TYPE, "Import attribute values must be strings"));
-          GC_ROOT_RESTORE(js, root_mark);
-          return js_promise_reject_with_ctor(js, js->sym.promise_ctor, err);
-        }
-      }
-      GC_ROOT_RESTORE(js, root_mark);
-    }
-  }
+  ant_value_t attrs = js_import_attributes(js, nargs >= 2 ? args[1] : Ant_Value_Undefined);
+  if (is_err(attrs)) return js_promise_reject_with_ctor(js, js->sym.promise_ctor, js_take_thrown(js, attrs));
 
   ant_value_t tla_promise = Ant_Value_Undefined;
   ant_value_t ns = js_esm_import_dynamic_ex(js, args[0], base_path, attrs, &tla_promise);

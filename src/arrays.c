@@ -248,21 +248,13 @@ ant_value_t arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx) {
   ant_offset_t semantic_len = get_array_length(js, arr);
   ant_value_t cur = arr;
   
-  if (idx >= semantic_len) {
-    if (!fast || !fast->flags.arguments_object) {
-      if (fast && array_proto_chain_plain(js, fast)) return Ant_Value_Undefined;
-      cur = get_proto(js, arr);
-    }
-  } else {
-    // TODO: reduce nesting
+  if (idx < semantic_len) {
     ant_offset_t doff = get_dense_buf(arr);
-    if (doff) {
-      ant_offset_t len = dense_iterable_length(js, arr);
-      if (idx < len) {
-        ant_value_t v = dense_get(doff, idx);
-        if (!is_empty_slot(v)) return v;
-      }
-    }
+    ant_value_t v = doff && idx < dense_iterable_length(js, arr) ? dense_get(doff, idx) : T_EMPTY;
+    if (!is_empty_slot(v)) return v;
+  } else if (!fast || !fast->flags.arguments_object) {
+    if (fast && array_proto_chain_plain(js, fast)) return Ant_Value_Undefined;
+    cur = get_proto(js, arr);
   }
   
   char idxstr[16];

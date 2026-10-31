@@ -152,6 +152,100 @@ static bool sh_path_is_absolute(const char *path, size_t len) {
 #endif
 }
 
+#ifdef _WIN32
+static ant_value_t sh_windows_home(ant_t *js) {
+  const char *drive = getenv("HOMEDRIVE");
+  const char *path = getenv("HOMEPATH");
+  if (!drive || !drive[0] || !path || !path[0]) return Ant_Value_Undefined;
+
+  sh_bytes_t home = {0};
+  if (!sh_bytes_append(&home, drive, strlen(drive)) || !sh_bytes_append(&home, path, strlen(path))) {
+    free(home.data);
+    return Ant_Error_CreateOutOfMemory(js);
+  }
+
+  ant_value_t result = js_mkstr(js, home.data, home.len);
+  free(home.data);
+  return result;
+}
+#endif
+
+static ant_value_t sh_home_dir(ant_t *js) {
+  const char *home = getenv("HOME");
+#ifdef _WIN32
+  if (!home || !home[0]) home = getenv("USERPROFILE");
+  if (!home || !home[0]) return sh_windows_home(js);
+#endif
+  if (!home || !home[0]) return Ant_Value_Undefined;
+  return js_mkstr(js, home, strlen(home));
+}
+
+static ant_value_t sh_cd_error(ant_t *js, const char *target, size_t target_len, int rc) {
+  const char *reason = uv_strerror(rc);
+  sh_bytes_t error = {0};
+  
+  sh_bytes_append(&error, "cd: ", 4);
+  sh_bytes_append(&error, target, target_len);
+  sh_bytes_append(&error, ": ", 2);
+  sh_bytes_append(&error, reason, strlen(reason));
+  sh_bytes_append(&error, "\n", 1);
+  
+  ant_value_t result = sh_result(js, "", 0, error.data, error.len, 1);
+  free(error.data);
+  
+  return result;
+}
+
+static ant_value_t sh_builtin_cd(ant_t *js, ant_value_t context, ant_value_t argv, ant_offset_t argc) {
+  ant_value_t target_value = argc > 1 ? js_arr_get(js, argv, 1) : sh_home_dir(js);
+  if (is_err(target_value)) return target_value;
+  
+  if (argc <= 1 && vtype(target_value) == kTypeUndefined)
+    return sh_result(js, "", 0, "cd: HOME not set\n", sizeof("cd: HOME not set\n") - 1, 1);
+
+  size_t target_len = 0;
+  char *target = js_getstr(js, target_value, &target_len);
+  ant_value_t cwd_value = js_get(js, context, "cwd");
+  
+  size_t cwd_len = 0;
+  char *cwd = js_getstr(js, cwd_value, &cwd_len);
+  if (!target || !cwd) return sh_result(js, "", 0, "cd: invalid path\n", sizeof("cd: invalid path\n") - 1, 1);
+
+  sh_bytes_t path = {0};
+  bool absolute = sh_path_is_absolute(target, target_len);
+  if ((!absolute && (!sh_bytes_append(&path, cwd, cwd_len) ||
+      !sh_bytes_append(&path, "/", 1))) || !sh_bytes_append(&path, target, target_len)) {
+    free(path.data);
+    return sh_result(js, "", 0, "cd: out of memory\n", sizeof("cd: out of memory\n") - 1, 1);
+  }
+
+  uv_fs_t request;
+  int rc = uv_fs_realpath(js->loop, &request, path.data, NULL);
+  free(path.data);
+  
+  if (rc < 0) {
+    uv_fs_req_cleanup(&request);
+    return sh_cd_error(js, target, target_len, rc);
+  }
+  
+  const char *resolved = request.ptr;
+  uv_fs_t stat_request;
+  
+  int stat_rc = uv_fs_stat(js->loop, &stat_request, resolved, NULL);
+  bool is_directory = stat_rc >= 0 && S_ISDIR(stat_request.statbuf.st_mode);
+  uv_fs_req_cleanup(&stat_request);
+  
+  if (!is_directory) {
+    uv_fs_req_cleanup(&request);
+    return sh_cd_error(js, target, target_len, stat_rc < 0 ? stat_rc : UV_ENOTDIR);
+  }
+  
+  js_set(js, context, "cwd", js_mkstr(js, resolved, strlen(resolved)));
+  uv_fs_req_cleanup(&request);
+  
+  return sh_result(js, "", 0, "", 0, 0);
+}
+
 static ant_value_t sh_run_builtin_result(
   ant_t *js,
   ant_value_t context,
@@ -224,93 +318,7 @@ echo_oom:
     return result;
   }
 
-  // TODO: reduce nesting
-  if (name_len == 2 && memcmp(name, "cd", 2) == 0) {
-    ant_value_t target_value;
-    if (argc > 1) target_value = js_arr_get(js, argv, 1);
-    else {
-      const char *home = getenv("HOME");
-#ifdef _WIN32
-      sh_bytes_t windows_home = {0};
-      if (!home || !home[0]) home = getenv("USERPROFILE");
-      if (!home || !home[0]) {
-        const char *drive = getenv("HOMEDRIVE");
-        const char *path = getenv("HOMEPATH");
-        if (drive && drive[0] && path && path[0]) {
-          if (!sh_bytes_append(&windows_home, drive, strlen(drive)) ||
-              !sh_bytes_append(&windows_home, path, strlen(path))) {
-            free(windows_home.data);
-            return Ant_Error_CreateOutOfMemory(js);
-          }
-          home = windows_home.data;
-        }
-      }
-#endif
-      if (!home || !home[0]) {
-#ifdef _WIN32
-        free(windows_home.data);
-#endif
-        return sh_result(js, "", 0, "cd: HOME not set\n", sizeof("cd: HOME not set\n") - 1, 1);
-      }
-      target_value = js_mkstr(js, home, strlen(home));
-#ifdef _WIN32
-      free(windows_home.data);
-#endif
-    }
-    size_t target_len = 0;
-    char *target = js_getstr(js, target_value, &target_len);
-    ant_value_t cwd_value = js_get(js, context, "cwd");
-    size_t cwd_len = 0;
-    char *cwd = js_getstr(js, cwd_value, &cwd_len);
-    if (!target || !cwd) return sh_result(js, "", 0, "cd: invalid path\n", sizeof("cd: invalid path\n") - 1, 1);
-
-    sh_bytes_t path = {0};
-    bool absolute = sh_path_is_absolute(target, target_len);
-    if ((!absolute && (!sh_bytes_append(&path, cwd, cwd_len) ||
-        !sh_bytes_append(&path, "/", 1))) || !sh_bytes_append(&path, target, target_len)) {
-      free(path.data);
-      return sh_result(js, "", 0, "cd: out of memory\n", sizeof("cd: out of memory\n") - 1, 1);
-    }
-
-    uv_fs_t request;
-    int rc = uv_fs_realpath(js->loop, &request, path.data, NULL);
-    free(path.data);
-    if (rc < 0) {
-      const char *reason = uv_strerror(rc);
-      sh_bytes_t error = {0};
-      sh_bytes_append(&error, "cd: ", 4);
-      sh_bytes_append(&error, target, target_len);
-      sh_bytes_append(&error, ": ", 2);
-      sh_bytes_append(&error, reason, strlen(reason));
-      sh_bytes_append(&error, "\n", 1);
-      ant_value_t result = sh_result(js, "", 0, error.data, error.len, 1);
-      free(error.data);
-      uv_fs_req_cleanup(&request);
-      return result;
-    }
-    const char *resolved = request.ptr;
-    uv_fs_t stat_request;
-    int stat_rc = uv_fs_stat(js->loop, &stat_request, resolved, NULL);
-    bool is_directory = stat_rc >= 0 && S_ISDIR(stat_request.statbuf.st_mode);
-    uv_fs_req_cleanup(&stat_request);
-    if (!is_directory) {
-      const char *reason = uv_strerror(stat_rc < 0 ? stat_rc : UV_ENOTDIR);
-      sh_bytes_t error = {0};
-      sh_bytes_append(&error, "cd: ", 4);
-      sh_bytes_append(&error, target, target_len);
-      sh_bytes_append(&error, ": ", 2);
-      sh_bytes_append(&error, reason, strlen(reason));
-      sh_bytes_append(&error, "\n", 1);
-      ant_value_t result = sh_result(js, "", 0, error.data, error.len, 1);
-      free(error.data);
-      uv_fs_req_cleanup(&request);
-      return result;
-    }
-    js_set(js, context, "cwd", js_mkstr(js, resolved, strlen(resolved)));
-    uv_fs_req_cleanup(&request);
-    return sh_result(js, "", 0, "", 0, 0);
-  }
-
+  if (name_len == 2 && memcmp(name, "cd", 2) == 0) return sh_builtin_cd(js, context, argv, argc);
   return Ant_Value_Undefined;
 }
 

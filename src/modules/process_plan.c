@@ -651,20 +651,25 @@ static void process_spawn(ant_process_run_t *run) {
   process_run_try_finish(run);
 }
 
+static void process_fail_redirect(ant_process_run_t *run, const char *what, int error) {
+  process_append_error(run, what, error);
+  run->final_exit_code = 1;
+  run->spawned = true;
+  process_close_pipeline_fds(run);
+  process_run_try_finish(run);
+}
+
 static void process_redirect_open_done(uv_fs_t *request) {
   ant_process_run_t *run = request->data;
-  ant_process_plan_redirect_t *redirect =
-    &run->plan.redirects[run->redirect_index];
+  ant_process_plan_redirect_t *redirect = &run->plan.redirects[run->redirect_index];
   int fd = (int)request->result;
+  
   uv_fs_req_cleanup(request);
   if (fd < 0) {
-    process_append_error(run, redirect->path, fd);
-    run->final_exit_code = 1;
-    run->spawned = true;
-    process_close_pipeline_fds(run);
-    process_run_try_finish(run);
+    process_fail_redirect(run, redirect->path, fd);
     return;
   }
+  
   if (redirect->kind == ANT_PROCESS_REDIRECT_STDIN) {
     process_close_fd(&run->stdin_fd);
     run->stdin_fd = fd;
@@ -672,34 +677,38 @@ static void process_redirect_open_done(uv_fs_t *request) {
     process_close_fd(&run->stdout_fd);
     run->stdout_fd = fd;
   }
+  
   run->redirect_index++;
   process_prepare_next_redirect(run);
 }
 
-// TODO: reduce nesting
+static bool process_redirect_stderr_to_stdout(ant_process_run_t *run) {
+  process_close_fd(&run->stderr_fd);
+  if (run->stdout_fd < 0) {
+    run->plan.stderr_mode = ANT_PROCESS_STDERR_TO_STDOUT;
+    return true;
+  }
+
+#ifdef _WIN32
+  run->stderr_fd = _dup(run->stdout_fd);
+#else
+  run->stderr_fd = dup(run->stdout_fd);
+#endif
+  if (run->stderr_fd < 0) {
+    process_fail_redirect(run, "stderr redirection", uv_translate_sys_error(errno));
+    return false;
+  }
+
+  run->plan.stderr_mode = ANT_PROCESS_STDERR_CAPTURE;
+  return true;
+}
+
 static void process_prepare_next_redirect(ant_process_run_t *run) {
   while (run->redirect_index < run->plan.redirect_count) {
     ant_process_plan_redirect_t *redirect =
       &run->plan.redirects[run->redirect_index];
     if (redirect->kind == ANT_PROCESS_REDIRECT_STDERR_TO_STDOUT) {
-      process_close_fd(&run->stderr_fd);
-      if (run->stdout_fd >= 0) {
-      #ifdef _WIN32
-        run->stderr_fd = _dup(run->stdout_fd);
-      #else
-        run->stderr_fd = dup(run->stdout_fd);
-      #endif
-        if (run->stderr_fd < 0) {
-          int error = uv_translate_sys_error(errno);
-          process_append_error(run, "stderr redirection", error);
-          run->final_exit_code = 1;
-          run->spawned = true;
-          process_close_pipeline_fds(run);
-          process_run_try_finish(run);
-          return;
-        }
-        run->plan.stderr_mode = ANT_PROCESS_STDERR_CAPTURE;
-      } else run->plan.stderr_mode = ANT_PROCESS_STDERR_TO_STDOUT;
+      if (!process_redirect_stderr_to_stdout(run)) return;
       run->redirect_index++;
       continue;
     }
@@ -717,11 +726,7 @@ static void process_prepare_next_redirect(ant_process_run_t *run) {
     );
     if (rc >= 0) return;
     uv_fs_req_cleanup(&run->redirect_open);
-    process_append_error(run, redirect->path, rc);
-    run->final_exit_code = 1;
-    run->spawned = true;
-    process_close_pipeline_fds(run);
-    process_run_try_finish(run);
+    process_fail_redirect(run, redirect->path, rc);
     return;
   }
   process_spawn(run);

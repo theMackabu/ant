@@ -578,6 +578,25 @@ ant_value_t esm_value_namespace(ant_t *js, ant_value_t value, ant_value_t defaul
   return ns;
 }
 
+static ant_value_t esm_cache_json_require(ant_t *js, esm_module_t *mod, ant_value_t value) {
+  ant_value_t entry = esm_require_cache_lookup(js, mod->resolved_path);
+  if (vtype(entry) != kTypeUndefined) return entry;
+
+  entry = esm_create_cjs_module(js, mod->resolved_path, js->modules.cjs.parent);
+  if (is_err(entry)) return entry;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, entry);
+  js_set(js, entry, "exports", value);
+  js_set(js, entry, "loaded", Ant_Value_True);
+
+  ant_value_t stored = esm_require_cache_store(js, mod->resolved_path, entry);
+  if (is_err(stored)) esm_cjs_update_children(js, js->modules.cjs.parent, entry, true);
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return is_err(stored) ? stored : entry;
+}
+
 static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_value_t value, ant_value_t require_module) {
   if (is_err(value)) {
     mod->is_loading = false;
@@ -590,36 +609,23 @@ static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_v
   ant_value_t ns = esm_value_namespace(js, value, value);
   GC_ROOT_PIN(js, ns);
 
-  // TODO: reduce nesting
-  if (mod->kind == ESM_MODULE_KIND_JSON && !is_object_type(require_module)) {
-    ant_value_t entry = esm_require_cache_lookup(js, mod->resolved_path);
-    if (vtype(entry) == kTypeUndefined) {
-      entry = esm_create_cjs_module(js, mod->resolved_path, js->modules.cjs.parent);
-      GC_ROOT_PIN(js, entry);
-      if (!is_err(entry)) {
-        js_set(js, entry, "exports", value);
-        js_set(js, entry, "loaded", Ant_Value_True);
-        ant_value_t stored = esm_require_cache_store(js, mod->resolved_path, entry);
-        if (is_err(stored)) {
-          esm_cjs_update_children(js, js->modules.cjs.parent, entry, true);
-          entry = stored;
-        }
-      }
-    }
-    if (is_err(entry)) {
-      mod->is_loading = false;
-      GC_ROOT_RESTORE(js, root_mark);
-      return entry;
-    }
+  bool json_require = mod->kind == ESM_MODULE_KIND_JSON && !is_object_type(require_module);
+  ant_value_t entry = json_require ? esm_cache_json_require(js, mod, value) : Ant_Value_Undefined;
+  
+  if (is_err(entry)) {
+    mod->is_loading = false;
+    GC_ROOT_RESTORE(js, root_mark);
+    return entry;
   }
 
   mod->namespace_obj = ns;
   mod->default_export = value;
   mod->is_loaded = true;
   mod->is_loading = false;
+  
   js_set_slot(ns, SLOT_MODULE_LOADING, Ant_Value_Undefined);
-
   GC_ROOT_RESTORE(js, root_mark);
+  
   return ns;
 }
 
@@ -633,13 +639,8 @@ static ant_value_t esm_complete_namespace_module(ant_t *js, esm_module_t *mod, a
 }
 
 static ant_value_t esm_prepare_eval_ctx(
-  ant_t *js,
-  const char *resolved_path,
-  ant_value_t ns,
-  ant_module_format_t format,
-  bool is_main,
-  const char *fallback_parent_path,
-  ant_module_t *out_ctx
+  ant_t *js, const char *resolved_path, ant_value_t ns, ant_module_format_t format,
+  bool is_main, const char *fallback_parent_path, ant_module_t *out_ctx
 ) {
   ant_value_t module_ctx = js_create_module_context(js, resolved_path, is_main);
   
