@@ -333,41 +333,25 @@ static bool js_inspect_append_key_interned(js_inspect_builder_t *builder, const 
   }
 }
 
+static bool js_inspect_open_body(js_inspect_builder_t *builder, bool spaced, bool empty, bool inline_mode) {
+  builder->inline_mode = !empty && inline_mode;
+  builder->first = true;
+  builder->closed = empty;
+  builder->did_indent = false;
+  
+  if (spaced && !js_inspect_append(builder, " ", 1)) return false;
+  return js_inspect_append(builder, empty ? "{}" : inline_mode ? "{ " : "{\n", 2);
+}
+
 static bool __attribute__((format(printf, 3, 0)))
 js_inspect_vheader_for(js_inspect_builder_t *builder, ant_value_t obj, const char *fmt, va_list args) {
-  bool ok = js_inspect_vappendf(builder, fmt, args);
-  if (!ok) return false;
+  if (!js_inspect_vappendf(builder, fmt, args)) return false;
+  if (!is_object_type(obj)) return js_inspect_open_body(builder, true, false, false);
 
-  if (is_object_type(obj)) {
   int prop_count = 0;
   bool inline_mode = is_small_object(builder->js, obj, &prop_count);
   
-  if (prop_count == 0) {
-    if (!js_inspect_append(builder, " {}", 3)) return false;
-    builder->inline_mode = false;
-    builder->first = true;
-    builder->closed = true;
-    builder->did_indent = false;
-    return true;
-  }
-  
-  if (inline_mode) {
-    if (!js_inspect_append(builder, " { ", 3)) return false;
-    builder->inline_mode = true;
-    builder->first = true;
-    builder->closed = false;
-    builder->did_indent = false;
-    return true;
-  }}
-
-  if (!js_inspect_append(builder, " {\n", 3)) return false;
-
-  builder->inline_mode = false;
-  builder->first = true;
-  builder->closed = false;
-  builder->did_indent = false;
-
-  return true;
+  return js_inspect_open_body(builder, true, prop_count == 0, inline_mode);
 }
 
 bool js_inspect_header_for(js_inspect_builder_t *builder, ant_value_t obj, const char *fmt, ...) {
@@ -399,80 +383,51 @@ bool js_inspect_tagged_header(js_inspect_builder_t *builder, ant_value_t obj, co
   if (!js_inspect_append(builder, class_name, (size_t)class_len)) return false;
   if (!js_inspect_append(builder, " [", 2)) return false;
   if (!js_inspect_append(builder, tag, tag_len)) return false;
+  if (!js_inspect_append(builder, "]", 1)) return false;
 
-  if (prop_count == 0) {
-    if (!js_inspect_append(builder, "] {}", 4)) return false;
-    builder->closed = true;
-    return true;
-  }
-
-  if (!js_inspect_append(builder, inline_mode ? "] { " : "] {\n", 4)) return false;
-  builder->inline_mode = inline_mode;
-  builder->first = true;
-  builder->closed = false;
-  builder->did_indent = false;
-  
-  return true;
+  return js_inspect_open_body(builder, true, prop_count == 0, inline_mode);
 }
 
-// TODO: modularize
-bool js_inspect_plain_header(js_inspect_builder_t *builder, ant_value_t obj) {
+static bool js_inspect_plain_prefix(js_inspect_builder_t *builder, ant_value_t obj, bool *wrote) {
   ant_t *js = builder->js;
-  int prop_count = 0;
-  bool inline_mode = is_small_object(js, obj, &prop_count);
-
-  ant_value_t proto_val = js_get_proto(js, obj);
-  bool is_null_proto = (vtype(proto_val) == kTypeNull);
-  bool proto_is_null_proto = false;
-  const char *class_name = NULL;
-  ant_offset_t class_name_len = 0;
-
-  do {
-    if (is_null_proto) break;
-    uint8_t pt = vtype(proto_val);
-    if (pt != kTypeObject && pt != kTypeFunction) break;
-    
-    ant_value_t proto_proto = js_get_proto(js, proto_val);
-    ant_value_t object_proto = js->sym.object_proto;
-    proto_is_null_proto = (vtype(proto_proto) == kTypeNull) && (vdata(proto_val) != vdata(object_proto));
-    
-    class_name = get_class_name(js, obj, &class_name_len, "Object");
-  } while (0);
-
-  if (prop_count == 0) {
-    if (is_null_proto) {
-      if (!js_inspect_append(builder, "[Object: null prototype] {}", 27)) return false;
-    } else if (class_name && class_name_len > 0) {
-      if (!js_inspect_append(builder, class_name, class_name_len)) return false;
-      if (proto_is_null_proto) {
-        if (!js_inspect_append(builder, " <[Object: null prototype] {}> {}", 33)) return false;
-      } else if (!js_inspect_append(builder, " {}", 3)) return false;
-    } else if (proto_is_null_proto) {
-      if (!js_inspect_append(builder, "<[Object: null prototype] {}> {}", 32)) return false;
-    } else if (!js_inspect_append(builder, "{}", 2)) return false;
-
-    builder->closed = true;
-    return true;
-  }
-
-  if (is_null_proto) {
-    if (!js_inspect_append(builder, "[Object: null prototype] ", 25)) return false;
-  } else if (class_name && class_name_len > 0) {
-    if (!js_inspect_append(builder, class_name, class_name_len)) return false;
-    if (proto_is_null_proto) {
-      if (!js_inspect_append(builder, " <[Object: null prototype] {}> ", 31)) return false;
-    } else if (!js_inspect_append(builder, " ", 1)) return false;
-  } else if (proto_is_null_proto) {
-    if (!js_inspect_append(builder, "<[Object: null prototype] {}> ", 30)) return false;
-  }
-
-  if (!js_inspect_append(builder, inline_mode ? "{ " : "{\n", 2)) return false;
-  builder->inline_mode = inline_mode;
-  builder->first = true;
-  builder->closed = false;
-  builder->did_indent = false;
   
-  return true;
+  ant_value_t proto = js_get_proto(js, obj);
+  uint8_t pt = vtype(proto);
+  *wrote = false;
+
+  if (pt == kTypeNull) {
+    *wrote = true;
+    return js_inspect_append(builder, "[Object: null prototype]", 24);
+  }
+  
+  if (pt != kTypeObject && pt != kTypeFunction) return true;
+
+  bool proto_is_null_proto =
+    vtype(js_get_proto(js, proto)) == kTypeNull &&
+    vdata(proto) != vdata(js->sym.object_proto);
+
+  ant_offset_t class_len = 0;
+  const char *class_name = get_class_name(js, obj, &class_len, "Object");
+  
+  if (class_name && class_len > 0) {
+    if (!js_inspect_append(builder, class_name, (size_t)class_len)) return false;
+    *wrote = true;
+  }
+
+  if (!proto_is_null_proto) return true;
+  if (*wrote && !js_inspect_append(builder, " ", 1)) return false;
+  *wrote = true;
+  
+  return js_inspect_append(builder, "<[Object: null prototype] {}>", 29);
+}
+
+bool js_inspect_plain_header(js_inspect_builder_t *builder, ant_value_t obj) {
+  int prop_count = 0;
+  bool inline_mode = is_small_object(builder->js, obj, &prop_count);
+
+  bool wrote = false;
+  if (!js_inspect_plain_prefix(builder, obj, &wrote)) return false;
+  return js_inspect_open_body(builder, wrote, prop_count == 0, inline_mode);
 }
 
 static bool js_inspect_property_prefix(js_inspect_builder_t *builder) {
@@ -745,18 +700,9 @@ static bool js_inspect_collection_header(
   
   int prop_count = 0;
   bool small = is_small_object(builder->js, obj, &prop_count);
-  builder->first = true;
-  builder->did_indent = false;
+  bool inline_mode = small && !nested && count + (size_t)prop_count <= 4;
   
-  if (count == 0 && prop_count == 0) {
-    builder->inline_mode = false;
-    builder->closed = true;
-    return js_inspect_append(builder, " {}", 3);
-  }
-  
-  builder->inline_mode = small && !nested && count + (size_t)prop_count <= 4;
-  builder->closed = false;
-  return js_inspect_append(builder, builder->inline_mode ? " { " : " {\n", 3);
+  return js_inspect_open_body(builder, true, count == 0 && prop_count == 0, inline_mode);
 }
 
 static bool js_inspect_more_items(js_inspect_builder_t *builder, size_t count) {
