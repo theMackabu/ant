@@ -3,7 +3,6 @@
 #include "errors.h"
 #include "internal.h"
 #include "gc/modules.h"
-#include "gc/objects.h"
 #include "modules/napi.h"
 #include "napi_internal.h"
 
@@ -365,9 +364,10 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_run_script(
   const char *src = js_getstr(nenv->js, (ant_value_t)script, &len);
   if (!src) return napi_set_last(env, napi_string_expected, "script must be string");
 
-  ant_value_t out = js_eval_bytecode_eval(nenv->js, src, len);
+  ant_value_t out = js_eval_bytecode_eval(nenv->js, src, len, false);
   if (is_err(out) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, out);
   *result = NAPI_RETURN(nenv, out);
+  
   return napi_set_last(env, napi_ok, NULL);
 }
 

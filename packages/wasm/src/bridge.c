@@ -578,7 +578,7 @@ static ant_value_t host_function_call(ant_params_t) {
   if (!runtime || runtime->js != js)
     return js_mkerr_typed(js, JS_ERR_INTERNAL, "Host bridge is unavailable");
 
-  ant_value_t current = js->current_func;
+  ant_value_t current = call_func;
   ant_value_t data = js_get_slot(js_as_obj(current), SLOT_DATA);
   if (vtype(data) != kTypeNumber)
     return js_mkerr_typed(js, JS_ERR_INTERNAL, "Invalid host function");
@@ -790,7 +790,7 @@ const uint8_t *ant_wasm_eval(
   runtime->deadline_ms = js->wasm_interrupt_enabled
     ? ant_wasm_now_ms() + (double)timeout_ms : 0.0;
 
-  ant_value_t result = js_eval_bytecode_eval(js, source, source_length);
+  ant_value_t result = js_eval_bytecode_eval(js, source, source_length, false);
   if (!runtime->timed_out) js_maybe_drain_microtasks(js);
 
   const uint8_t *response = NULL;

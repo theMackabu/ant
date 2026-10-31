@@ -32,11 +32,9 @@ typedef struct {
   js_eval_completion_kind_t kind;
 } js_eval_result_t;
 
-// TODO: improve naming
 ant_value_t js_eval_bytecode(ant_t *, const char *, size_t);
 ant_value_t js_eval_bytecode_module(ant_t *, const char *, size_t);
-ant_value_t js_eval_bytecode_eval(ant_t *, const char *, size_t);
-ant_value_t js_eval_bytecode_eval_with_strict(ant_t *, const char *, size_t, bool);
+ant_value_t js_eval_bytecode_eval(ant_t *, const char *, size_t, bool strict);
 js_eval_result_t js_eval_bytecode_repl(ant_t *, const char *, size_t);
 
 bool js_chkargs(ant_value_t *, int, const char *);

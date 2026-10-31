@@ -3,6 +3,7 @@
 
 #include <limits.h>
 #include "silver/call.h"
+#include "silver/compiler.h"
 #include "protectors.h"
 #include "silver/jit.h"
 #include "silver/feedback.h"
@@ -442,13 +443,14 @@ static inline __attribute__((noinline)) ant_value_t sv_op_new_apply(sv_vm_t *vm,
   return result;
 }
 
+__attribute__((noinline)) 
 static inline ant_value_t sv_eval_in_frame(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame, const char *source,
   ant_offset_t source_len, uint32_t scope_index, ant_value_t new_target
 ) {
   sv_func_t *caller = frame ? frame->func : NULL;
   
-  if (!caller) return js_eval_bytecode_eval_with_strict(js, source, source_len, false);
+  if (!caller) return js_eval_bytecode_eval(js, source, source_len, false);
   GC_ROOT_SAVE(root_mark, js);
   
   ant_value_t env = sv_eval_capture_env(vm, js, frame, scope_index);
@@ -458,10 +460,15 @@ static inline ant_value_t sv_eval_in_frame(
   }
   
   GC_ROOT_PIN(js, env);
-  ant_value_t result = js_eval_bytecode_eval_in_env_with_strict(
-    js, source, source_len, sv_frame_is_strict(frame), 
-    frame->this, env, new_target, caller->allows_new_target
-  );
+  js_eval_scope_t scope = { 
+    .this_val = frame->this, 
+    .env = env, .new_target = new_target 
+  };
+  
+  ant_value_t result = js_eval_source(
+    js, source, source_len,
+    caller->allows_new_target ? SV_COMPILE_EVAL_FUNCTION : SV_COMPILE_EVAL,
+    sv_frame_is_strict(frame), scope).value;
   
   GC_ROOT_RESTORE(js, root_mark);
   return result;

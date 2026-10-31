@@ -50,7 +50,7 @@ static ant_value_t builtin_eval(ant_params_t) {
   ant_offset_t code_off = vstr(js, code, &code_len);
   const char *code_str = (const char *)(uintptr_t)(code_off);
   
-  return js_eval_bytecode_eval_with_strict(js, code_str, (size_t)code_len, false);
+  return js_eval_bytecode_eval(js, code_str, (size_t)code_len, false);
 }
 
 ant_value_t js_builtin_eval(ant_t *js) {
@@ -416,36 +416,32 @@ static ant_value_t js_execute_compiled_repl_bytecode(
   return result;
 }
 
-static ant_value_t js_execute_compiled_eval_bytecode(
-  ant_t *js, sv_func_t *func,
-  ant_value_t this_val, ant_value_t eval_env, ant_value_t new_target
-) {
+static ant_value_t js_execute_compiled_eval_bytecode(ant_t *js, sv_func_t *func, js_eval_scope_t scope) {
   if (sv_debug_unlikely(SV_DEBUG_DUMP_BC)) sv_disasm(js, func, js->filename);
   GC_ROOT_SAVE(mark, js);
 
   ant_value_t compiled = mkref(kTypeFunctionInfo, func);
   GC_ROOT_PIN(js, compiled);
 
-  ant_value_t result = sv_eval_declare_vars(js, func, eval_env, true);
-  if (!is_err(result))
-    result = sv_execute_eval_entry(js->vm, func, this_val, eval_env, new_target);
+  ant_value_t result = sv_eval_declare_vars(js, func, scope.env, true);
+  if (!is_err(result)) result = sv_execute_eval_entry(js->vm, func, scope.this_val, scope.env, scope.new_target);
 
   GC_ROOT_RESTORE(js, mark);
   return result;
 }
 
-static inline js_eval_result_t js_eval_bytecode_mode_result(
-  ant_t *js, const char *buf, size_t len, 
-  sv_compile_mode_t mode, bool parse_strict,
-  ant_value_t eval_this, ant_value_t eval_env, ant_value_t new_target
+js_eval_result_t js_eval_source(
+  ant_t *js, const char *buf, size_t len,
+  sv_compile_mode_t mode, bool strict, js_eval_scope_t scope
 ) {
   if (len == (size_t)~0U) len = strlen(buf);
-
   code_arena_mark_t parse_mark = parse_arena_mark(js);
+  
   sv_parse_goal_t goal =
     mode == SV_COMPILE_MODULE ? SV_PARSE_MODULE :
     mode == SV_COMPILE_REPL ? SV_PARSE_REPL : SV_PARSE_SCRIPT;
-  sv_ast_t *program = sv_parse(js, buf, (ant_offset_t)len, goal, parse_strict);
+  
+  sv_ast_t *program = sv_parse(js, buf, (ant_offset_t)len, goal, strict);
 
   if (!program) {
     parse_arena_rewind(js, parse_mark);
@@ -453,14 +449,10 @@ static inline js_eval_result_t js_eval_bytecode_mode_result(
       ? Ant_Exception_Current(js)
       : js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected parse error");
     
-    return (js_eval_result_t){
-      .value = value,
-      .async_coro = NULL,
-      .kind = JS_EVAL_COMPLETE,
-    };
+    return (js_eval_result_t){ .value = value, .async_coro = NULL, .kind = JS_EVAL_COMPLETE };
   }
 
-  sv_func_t *func = js_compile_parsed_bytecode(js, program, buf, len, mode, eval_env);
+  sv_func_t *func = js_compile_parsed_bytecode(js, program, buf, len, mode, scope.env);
   parse_arena_rewind(js, parse_mark);
 
   if (!func) {
@@ -468,11 +460,7 @@ static inline js_eval_result_t js_eval_bytecode_mode_result(
       ? Ant_Exception_Current(js)
       : js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
     
-    return (js_eval_result_t){
-      .value = value,
-      .async_coro = NULL,
-      .kind = JS_EVAL_COMPLETE,
-    };
+    return (js_eval_result_t){ .value = value, .async_coro = NULL, .kind = JS_EVAL_COMPLETE, };
   }
 
   coroutine_t *async_coro = NULL;
@@ -481,7 +469,7 @@ static inline js_eval_result_t js_eval_bytecode_mode_result(
   switch (mode) {
     case SV_COMPILE_EVAL:
     case SV_COMPILE_EVAL_FUNCTION:
-      value = js_execute_compiled_eval_bytecode(js, func, eval_this, eval_env, new_target);
+      value = js_execute_compiled_eval_bytecode(js, func, scope);
       break;
     case SV_COMPILE_REPL:
       value = js_execute_compiled_repl_bytecode(js, func, &async_coro);
@@ -498,55 +486,34 @@ static inline js_eval_result_t js_eval_bytecode_mode_result(
   sv_code_unit_unpin(func->unit);
   
   return (js_eval_result_t){
-    .value = value,
-    .async_coro = async_coro,
+    .value = value, .async_coro = async_coro,
     .kind = async_coro ? JS_EVAL_ASYNC_ENTRY : JS_EVAL_COMPLETE,
   };
 }
 
-// TODO: cleanup
-static inline ant_value_t js_eval_bytecode_mode(
-  ant_t *js, const char *buf, size_t len,
-  sv_compile_mode_t mode, bool parse_strict,
-  ant_value_t eval_this, ant_value_t eval_env, ant_value_t new_target
-) {
-  return js_eval_bytecode_mode_result(
-    js, buf, len, mode, 
-    parse_strict, eval_this, eval_env, new_target
-  ).value;
-}
-
-// TODO: cleanup
-ant_value_t js_eval_bytecode_eval_in_env_with_strict(
-  ant_t *js, const char *buf, size_t len, bool inherit_strict, 
-  ant_value_t this_val, ant_value_t eval_env,
-  ant_value_t new_target, bool allows_new_target
-) {
-  return js_eval_bytecode_mode(
-    js, buf, len, allows_new_target ? SV_COMPILE_EVAL_FUNCTION : SV_COMPILE_EVAL,
-    inherit_strict, this_val, eval_env, new_target
-  );
-}
+static const js_eval_scope_t js_eval_no_scope = {
+  .this_val = Ant_Value_Undefined,
+  .env = Ant_Value_Undefined,
+  .new_target = Ant_Value_Undefined,
+};
 
 ant_value_t js_eval_bytecode(ant_t *js, const char *buf, size_t len) {
-  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_SCRIPT, false, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
+  return js_eval_source(js, buf, len, SV_COMPILE_SCRIPT, false, js_eval_no_scope).value;
 }
 
 ant_value_t js_eval_bytecode_module(ant_t *js, const char *buf, size_t len) {
-  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_MODULE, false, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
+  return js_eval_source(js, buf, len, SV_COMPILE_MODULE, false, js_eval_no_scope).value;
 }
 
-ant_value_t js_eval_bytecode_eval(ant_t *js, const char *buf, size_t len) {
-  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_EVAL, false, js->global, js->global, Ant_Value_Undefined);
-}
-
-ant_value_t js_eval_bytecode_eval_with_strict(ant_t *js, const char *buf, size_t len, bool inherit_strict) {
-  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_EVAL, inherit_strict, js->global, js->global, Ant_Value_Undefined);
+ant_value_t js_eval_bytecode_eval(ant_t *js, const char *buf, size_t len, bool strict) {
+  js_eval_scope_t scope = { .this_val = js->global, .env = js->global, .new_target = Ant_Value_Undefined };
+  return js_eval_source(js, buf, len, SV_COMPILE_EVAL, strict, scope).value;
 }
 
 ant_value_t js_vm_script_compile(ant_t *js, const char *buf, size_t len) {
   code_arena_mark_t parse_mark = parse_arena_mark(js);
   sv_ast_t *program = sv_parse(js, buf, (ant_offset_t)len, SV_PARSE_SCRIPT, false);
+  
   if (program && (program->flags & FN_MODULE_SYNTAX)) {
     js_mkerr_typed(js, JS_ERR_SYNTAX, "Cannot use import/export syntax outside a module");
     program = NULL;
@@ -579,7 +546,7 @@ ant_value_t js_function_from_source(ant_t *js, ant_value_t *params_and_body, int
 }
 
 js_eval_result_t js_eval_bytecode_repl(ant_t *js, const char *buf, size_t len) {
-  return js_eval_bytecode_mode_result(js, buf, len, SV_COMPILE_REPL, false, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
+  return js_eval_source(js, buf, len, SV_COMPILE_REPL, false, js_eval_no_scope);
 }
 
 ant_value_t sv_call_native(ant_t *js, ant_value_t func, ant_value_t this_val, ant_call_params_t) {
