@@ -20,6 +20,11 @@ const cases = [
   ['^(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\\11$', '', 'abcdefghij\t', true],
   ['^(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\\100$', '', 'abcdefghij@', true],
   ['^(a)[\\10]$', '', 'a\b', true],
+  // including forward references, which PCRE2 alone would read as octal
+  ['^\\10(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)$', '', 'abcdefghij', true],
+  ['^\\10(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)$', '', '\babcdefghij', false],
+  ['^\\10(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)$', 'u', 'abcdefghij', true],
+  ['^(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\\10$', 'i', 'abcdefghijJ', true],
   // a surrogate pair escape is one code point
   ['\\uD83D\\uDE00', '', '\u{1F600}', true],
   ['\\uD83D\\uDE00', 'u', '\u{1F600}', true],

@@ -850,6 +850,21 @@ static void js_to_pcre2_pattern_append(
       }
     }
 
+    // a backreference by now; PCRE2 reads \10 and up as octal unless that
+    // many groups come before it, so multi-digit ones (forward references
+    // included) are spelled \g{n}
+    if (charclass_depth == 0 && next >= '1' && next <= '9' && si + 2 < src_len && src[si + 2] >= '0' && src[si + 2] <= '9') {
+      unsigned group = 0;
+      size_t used = 0;
+      while (si + 1 + used < src_len && src[si + 1 + used] >= '0' && src[si + 1 + used] <= '9' && group <= 65535)
+        group = group * 10 + (unsigned)(src[si + 1 + used++] - '0');
+      char ref[16];
+      int ref_len = snprintf(ref, sizeof(ref), "\\g{%u}", group);
+      for (int k = 0; k < ref_len; k++) OUT(ref[k]);
+      si += used;
+      continue;
+    }
+
     if (is_pcre2_passthrough_escape(next)) {
       OUT('\\'); OUT(next);
       si++;

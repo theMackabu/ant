@@ -1,7 +1,7 @@
 // Text codecs: string escapes (src/escape.c), UTF-8/WTF-8 helpers
 // (src/utf8.c), and URL form encoding (src/modules/url/state.c).
 //
-// Input: a control byte (bits 0-1 the quote, bit 2 TextDecoder fatal mode,
+// Input: a control byte (bits 0-1 the quote, bit 2 TextDecoder ignoreBOM,
 // bits 3-7 the escape error context), then text.
 // Properties:
 //   - decoding escapes the way the lexer does stays inside the literal and
