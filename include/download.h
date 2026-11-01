@@ -9,6 +9,7 @@
   "this build is no longer published; run 'ant upgrade --canary' or 'ant upgrade --stable'"
 
 const char *ant_manifest_url(void);
+const char *ant_release_mirror_url(void);
 
 int ant_download_get(
   const char *url,

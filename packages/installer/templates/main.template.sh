@@ -15,10 +15,16 @@ main() {
     die "HOME environment variable not set"
   fi
 
-  local target ant_uri
+  local target ant_uri mirror_uri=""
   target="$(get_target)"
   ant_uri="${ANT_DOWNLOAD_URL:-$download_url}"
   ant_uri="${ant_uri//\{target\}/$target}"
+  if [[ -z "${ANT_DOWNLOAD_URL:-}" ]]; then
+    mirror_uri="${mirror_url//\{target\}/$target}"
+    if [[ "$target" == windows-* ]]; then
+      mirror_uri="$mirror_uri.exe"
+    fi
+  fi
 
   local install_dir bin_dir exe
   install_dir="${!install_env:-$HOME/$default_install_dir}"
@@ -37,8 +43,14 @@ main() {
   run_step "Preparing install directory" mkdir -p "$bin_dir" ||
     die "Failed to create install directory \"$bin_dir\""
 
-  run_download "Downloading Ant" "$exe" "$ant_uri" ||
-    die "Failed to download $app_name from \"$ant_uri\""
+  if ! run_download "Downloading Ant" "$exe" "$ant_uri"; then
+    if [[ -z "$mirror_uri" ]]; then
+      die "Failed to download $app_name from \"$ant_uri\""
+    fi
+    detail "falling back to $mirror_uri"
+    run_download "Downloading Ant from GitHub" "$exe" "$mirror_uri" ||
+      die "Failed to download $app_name from \"$ant_uri\" or \"$mirror_uri\""
+  fi
 
   run_step "Setting executable permissions" chmod 755 "$exe" ||
     die "Failed to set permissions on $app_name executable"

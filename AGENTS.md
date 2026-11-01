@@ -8,16 +8,12 @@ This file is the table of contents for agent work in Ant. Start here, then
 open the smallest linked document that matches the task instead of loading the
 entire repository into context.
 
-Completed execution plans are historical references; open one only for a
-relevant decision or regression, not as routine startup context.
-
 ## Start Here
 
 - Repository map: [ARCHITECTURE.md](ARCHITECTURE.md)
 - Knowledge index: [docs/repo/index.md](docs/repo/index.md)
 - Build setup: [BUILDING.md](BUILDING.md)
 - Contribution rules: [CONTRIBUTING.md](CONTRIBUTING.md)
-- Durable execution plans: [docs/exec-plans/index.md](docs/exec-plans/index.md)
 
 ## Fast Path
 
@@ -60,8 +56,8 @@ guidance.
   `docs/`. Treat `todo/` as scratch space, not the source of truth.
 - Add or update tests when behavior changes.
 - When touching build or runtime invariants across multiple steps, document
-  the reasoning in an individual plan under
-  [docs/exec-plans/](docs/exec-plans/index.md). Keep the index for navigation.
+  the reasoning in a local plan under `docs/exec-plans/`. That directory is
+  gitignored; never link to it from tracked docs.
 - Builds and broad validation runs (for example `maid build` or
   spec runs with `--all`) may need broader system access; pause and get
   explicit user approval before proceeding when sandbox escalation is required.
@@ -79,8 +75,6 @@ guidance.
   [ARCHITECTURE.md](ARCHITECTURE.md)
 - Test selection or validation scope:
   [docs/repo/testing.md](docs/repo/testing.md)
-- Long-running or multi-step task:
-  [docs/exec-plans/index.md](docs/exec-plans/index.md)
 
 ## Keep This File Small
 

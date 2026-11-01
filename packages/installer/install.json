@@ -4,6 +4,7 @@
   "installEnv": "ANT_INSTALL",
   "defaultInstallDir": ".ant",
   "downloadUrl": "https://manifest.antjs.org/v1/download/ant/{target}",
+  "mirrorUrl": "https://github.com/theMackabu/ant/releases/latest/download/ant-{target}",
   "targets": [
     {
       "name": "darwin-x64",

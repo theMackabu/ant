@@ -8,48 +8,24 @@ const docs = new Map([
   [
     'AGENTS.md',
     {
-      requiredLinks: new Set(['ARCHITECTURE.md', 'docs/repo/index.md', 'docs/repo/testing.md', 'docs/exec-plans/index.md']),
+      requiredLinks: new Set(['ARCHITECTURE.md', 'docs/repo/index.md', 'docs/repo/testing.md']),
       maxLines: 90
     }
   ],
   [
     'ARCHITECTURE.md',
     {
-      requiredLinks: new Set(['docs/repo/testing.md', 'docs/exec-plans/index.md', 'meson.build'])
+      requiredLinks: new Set(['docs/repo/testing.md', 'meson.build'])
     }
   ],
   [
     'docs/repo/index.md',
     {
-      requiredLinks: new Set(['AGENTS.md', 'ARCHITECTURE.md', 'BUILDING.md', 'CONTRIBUTING.md', 'docs/repo/testing.md', 'docs/exec-plans/index.md'])
+      requiredLinks: new Set(['AGENTS.md', 'ARCHITECTURE.md', 'BUILDING.md', 'CONTRIBUTING.md', 'docs/repo/testing.md'])
     }
   ],
   [
     'docs/repo/testing.md',
-    {
-      requiredLinks: new Set(['docs/exec-plans/index.md'])
-    }
-  ],
-  [
-    'docs/exec-plans/index.md',
-    {
-      requiredLinks: new Set(['docs/exec-plans/active/README.md', 'docs/exec-plans/completed/README.md', 'docs/exec-plans/tech-debt.md'])
-    }
-  ],
-  [
-    'docs/exec-plans/active/README.md',
-    {
-      requiredLinks: new Set()
-    }
-  ],
-  [
-    'docs/exec-plans/completed/README.md',
-    {
-      requiredLinks: new Set()
-    }
-  ],
-  [
-    'docs/exec-plans/tech-debt.md',
     {
       requiredLinks: new Set()
     }

@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Build All Platforms run id to release'
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  draft:
+    name: Draft release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_ID: ${{ inputs.run_id }}
+    steps:
+      - name: Download build
+        run: gh run download "$RUN_ID" -p 'ant-*' -p version-ant-linux-x64 -D artifacts
+
+      - name: Collect assets
+        run: |
+          set -euo pipefail
+          mkdir dist
+          for dir in artifacts/ant-*; do
+            name=${dir##*/}
+            [[ $name == ant-runtime-* ]] && continue
+            for file in "$dir"/*; do
+              case ${file##*/} in
+                ant | ant.exe) cp "$file" "dist/$name${file##*/ant}" ;;
+                *.img) cp "$file" dist/ ;;
+              esac
+            done
+          done
+          ls -l dist
+
+      - name: Create draft
+        run: |
+          set -euo pipefail
+          tag="v$(cat artifacts/version-ant-linux-x64/version.txt)"
+          sha=$(gh run view "$RUN_ID" --json headSha -q .headSha)
+          gh release create "$tag" dist/* --draft --target "$sha" --title "$tag" --notes ""

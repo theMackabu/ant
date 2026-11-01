@@ -87,11 +87,11 @@ function main() {
     }
 
     if (/^todo\/.+\.md$/u.test(filePath)) {
-      errors.push(`${filePath}: durable markdown should live under docs/repo/ or docs/exec-plans/, not todo/`);
+      errors.push(`${filePath}: durable markdown should live under docs/repo/, not todo/`);
     }
 
     if (filePath.startsWith('vendor/')) {
-      notes.push(`${filePath}: vendored dependency change detected; keep it isolated and document the reason in an execution plan`);
+      notes.push(`${filePath}: vendored dependency change detected; keep it isolated and document the reason in the change description`);
     }
   }
 

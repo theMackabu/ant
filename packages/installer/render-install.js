@@ -59,7 +59,7 @@ function renderMatcher(target) {
 }
 
 function validateConfig(config) {
-  for (const name of ['name', 'binary', 'installEnv', 'defaultInstallDir', 'downloadUrl']) {
+  for (const name of ['name', 'binary', 'installEnv', 'defaultInstallDir', 'downloadUrl', 'mirrorUrl']) {
     requireString(config, name);
   }
 
@@ -136,6 +136,7 @@ function renderInstallScript() {
     '{{installEnv}}': config.installEnv,
     '{{defaultInstallDir}}': config.defaultInstallDir,
     '{{downloadUrl}}': config.downloadUrl,
+    '{{mirrorUrl}}': config.mirrorUrl,
     '{{targetSelection}}': renderTargetSelection(config)
   };
 

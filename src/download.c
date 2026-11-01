@@ -2,6 +2,7 @@
 
 #include "download.h"
 #include "modules/http.h"
+#include "modules/url.h"
 #include "utils.h"
 
 #include <dirent.h>
@@ -19,6 +20,8 @@
 #endif
 
 #define ANT_MANIFEST_URL "https://manifest.antjs.org/v1/latest"
+#define ANT_RELEASE_MIRROR_URL "https://github.com/theMackabu/ant/releases/latest/download/latest.json"
+#define DOWNLOAD_MAX_REDIRECTS 5
 
 typedef struct {
   char *data;
@@ -32,6 +35,8 @@ typedef struct {
   const char *label;
   progress_t *progress;
   ant_http_request_t *request;
+  const char *url;
+  char *redirect;
   bool completed;
   char error[256];
 } download_ctx_t;
@@ -102,10 +107,31 @@ static void download_update_progress(download_ctx_t *ctx) {
   progress_update(ctx->progress, msg);
 }
 
+static bool download_is_redirect(int status) {
+  return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+}
+
+static char *download_resolve_redirect(const char *base, const char *location) {
+  url_state_t next;
+  char *href = NULL;
+  if (parse_url_to_state(location, base, &next) == 0 && next.protocol && (
+    strcmp(next.protocol, "https:") == 0 ||
+    (strcmp(next.protocol, "http:") == 0 && strncmp(base, "http:", 5) == 0)
+  )) href = strdup(next.href);
+  url_state_clear(&next);
+  return href;
+}
+
 static void download_response_cb(ant_http_request_t *req, const ant_http_response_t *resp, void *user_data) {
   (void)req;
   download_ctx_t *ctx = user_data;
   ctx->status = resp ? resp->status : 0;
+  if (resp && download_is_redirect(ctx->status)) {
+    const char *location = download_header(resp->headers, "location");
+    ctx->redirect = location ? download_resolve_redirect(ctx->url, location) : NULL;
+    if (!ctx->redirect) download_fail(ctx, -EPROTO, "invalid redirect");
+    return;
+  }
   const char *len = resp ? download_header(resp->headers, "content-length") : NULL;
   uint64_t content_length = download_parse_u64(len);
   if (content_length > 0) ctx->content_length = content_length;
@@ -115,7 +141,7 @@ static void download_response_cb(ant_http_request_t *req, const ant_http_respons
 static void download_body_cb(ant_http_request_t *req, const uint8_t *chunk, size_t len, void *user_data) {
   (void)req;
   download_ctx_t *ctx = user_data;
-  if (ctx->rc != 0 || len == 0) return;
+  if (ctx->rc != 0 || ctx->redirect || len == 0) return;
 
   if (ctx->file) {
     if (fwrite(chunk, 1, len, ctx->file) != len) {
@@ -160,6 +186,7 @@ static void download_complete_cb(
   (void)req;
   download_ctx_t *ctx = user_data;
   ctx->completed = true;
+  if (ctx->redirect) return;
   if (ctx->rc == 0 && result != ANT_HTTP_RESULT_OK) {
     ctx->rc = error_code < 0 ? error_code : -EIO;
     snprintf(ctx->error, sizeof(ctx->error), "%s", error_message ? error_message : "network error");
@@ -177,8 +204,7 @@ int ant_download_get(
 ) {
   uv_loop_t loop;
   download_ctx_t ctx = {.file = file, .label = label, .progress = progress};
-  ant_http_request_options_t options = {.method = "GET", .url = url};
-  ant_http_request_t *req = NULL;
+  char *owned_url = NULL;
   int rc = uv_loop_init(&loop);
   if (body_out) *body_out = NULL;
   if (body_len_out) *body_len_out = 0;
@@ -187,21 +213,46 @@ int ant_download_get(
     return rc;
   }
 
-  rc = ant_http_request_start(&loop, &options, download_response_cb, download_body_cb, download_complete_cb, &ctx, &req);
-  ctx.request = req;
-  if (rc == 0) uv_run(&loop, UV_RUN_DEFAULT);
+  for (int hops = 0;; hops++) {
+    ant_http_request_options_t options = {.method = "GET", .url = url};
+    ant_http_request_t *req = NULL;
+    ctx.url = url;
+    
+    rc = ant_http_request_start(&loop, &options, download_response_cb, download_body_cb, download_complete_cb, &ctx, &req);
+    ctx.request = req;
+    
+    if (rc == 0) uv_run(&loop, UV_RUN_DEFAULT);
+    ctx.request = NULL;
+    
+    if (rc != 0 || !ctx.redirect) break;
+    if (hops == DOWNLOAD_MAX_REDIRECTS) {
+      download_fail(&ctx, -ELOOP, "too many redirects");
+      break;
+    }
+    
+    free(owned_url);
+    url = owned_url = ctx.redirect;
+    ctx.redirect = NULL;
+    ctx.status = 0;
+    ctx.content_length = 0;
+  }
+  
   (void)uv_loop_close(&loop);
+  free(ctx.redirect);
 
   if (rc != 0) {
     free(ctx.data);
     snprintf(err, err_len, "failed to request %s: %s", url, uv_strerror(rc));
+    free(owned_url);
     return rc;
   }
   if (ctx.rc != 0) {
     free(ctx.data);
     snprintf(err, err_len, "failed to download %s: %s", url, ctx.error[0] ? ctx.error : "network error");
+    free(owned_url);
     return ctx.rc;
   }
+  free(owned_url);
 
   if (body_out) {
     *body_out = ctx.data;
@@ -213,6 +264,13 @@ int ant_download_get(
 const char *ant_manifest_url(void) {
   const char *url = getenv("ANT_MANIFEST_URL");
   return url && url[0] ? url : ANT_MANIFEST_URL;
+}
+
+const char *ant_release_mirror_url(void) {
+  const char *url = getenv("ANT_RELEASE_MIRROR_URL");
+  if (url) return url[0] ? url : NULL;
+  const char *manifest = getenv("ANT_MANIFEST_URL");
+  return manifest && manifest[0] ? NULL : ANT_RELEASE_MIRROR_URL;
 }
 
 int ant_manifest_channel_url(const char *channel, char *out, size_t out_len) {

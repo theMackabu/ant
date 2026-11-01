@@ -12,7 +12,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.release.tag_name || inputs.version || github.ref_name }}
@@ -39,3 +39,18 @@ jobs:
           curl -fsS -X POST -G https://manifest.antjs.org/v1/refresh-release-notes \
             "${args[@]}" \
             -H "Authorization: Bearer ${MANIFEST_REFRESH_TOKEN}"
+
+      - name: Mirror manifest to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.version }}
+        run: |
+          set -euo pipefail
+          tag=${RELEASE_TAG:-$(gh release view --json tagName -q .tagName)}
+          if ! gh release view "$tag" --json assets -q '.assets[].name' | grep -qx ant-linux-x64; then
+            echo "$tag has no raw binaries, skipping"
+            exit 0
+          fi
+          curl -fsS "https://manifest.antjs.org/v1/version/$tag" -o latest.json
+          gh release upload "$tag" latest.json --clobber

@@ -5,8 +5,7 @@ Last reviewed: 2026-09-10
 Owner: theMackabu
 
 Read the section relevant to a JIT, cache, or heap-lifetime change. These rules
-were checked against current source when extracted from the
-[fable landing history](../exec-plans/completed/fable-perf-fixes-landing.md).
+were checked against current source.
 Use [ARCHITECTURE.md](../../ARCHITECTURE.md) for subsystem placement and
 [testing.md](testing.md) for validation scope.
 
@@ -90,14 +89,13 @@ before other cleanup, consume it explicitly with `js_take_thrown`. Do not clear
 exceptions afterward: the callback may throw a new one, even the same value.
 Once consumed, root the error across allocation, cleanup, or user property
 access until another object owns it. Keep successful operations outside this
-cleanup. See the [boundary fixes](../exec-plans/completed/async-error-boundaries.md).
+cleanup.
 
 Use `Ant_Exception_Pending` to distinguish a throw from its value in scalar
 helper paths; interpreted and JIT catches unwrap their returned record without
 depending on current state. Iterator cleanup preserves an
 existing exception over a new cleanup failure; a cleanup failure during normal
-completion must still propagate. The [module audit](../exec-plans/completed/module-error-boundaries.md)
-records the per-file coverage and regression tests for these boundaries.
+completion must still propagate.
 
 Disposal must also track completion presence separately from its payload.
 Synchronous iterator-close opcodes explicitly distinguish normal cleanup from
@@ -105,9 +103,7 @@ cleanup while preserving an existing throw. A failed Promise continuation
 setup must reach its owner's rejection and cleanup path before any result is
 marked handled. `Ant_Promise_Observe` provides this for internal continuations
 with an owner rejection callback, queued on setup failure. Public `.then()`
-semantics remain unchanged. See the [exception model](../exec-plans/completed/exception-completion-model.md),
-the [earlier handoff refactor](../exec-plans/completed/central-error-handoffs.md),
-and [whole-codebase follow-up](../exec-plans/completed/whole-codebase-error-boundaries.md).
+semantics remain unchanged.
 
 Stream size validation relies on `js_to_number` returning NaN when conversion
 throws. Preserve that contract: the existing invalid-size branch consumes the
@@ -190,8 +186,7 @@ means cold code handed a loop back for promotion
 (`sv_jit_promote_pending()`, set by `jit_helper_promote_resume`): the next
 OSR compile must be `SV_JIT_TIER_HOT`, and that compile is exempt from the
 "no new feedback" refusal in `sv_jit_compile_tier`. See the
-[OSR size-scaled tiering plan](../exec-plans/active/osr-size-scaled-tiering.md)
-and [its regression](../../tests/test_jit_osr_large_function.cjs).
+[regression test](../../tests/test_jit_osr_large_function.cjs).
 
 ## Inline-Cache Ownership And Invalidation
 
@@ -219,8 +214,7 @@ JIT helpers must receive the function's atom, never a rebuilt one. The
 C admission check runs per hit; JIT snapshot, poly and mega paths reject
 exotic receivers, and the generic and own-slot paths guard them whenever the
 atom passes that prefilter. Static ops tables are shared and immutable; public hook
-setters copy them to a heap table first. See the
-[exotic accessor IC plan](../exec-plans/active/exotic-accessor-read-ic.md).
+setters copy them to a heap table first.
 
 ## Watched Prototypes
 
@@ -247,8 +241,7 @@ known prototype through `js_mkobj_with_proto`. Never apply a cached or copied sh
 an object whose prototype differs from the shape's (`copy_adopt_shape`, literal sites,
 the JSON and regex shape caches check this). Set a fresh object's prototype before
 adding properties, or every such object gets a prototype transition. Run with
-`ANT_DEBUG=shape:verify` to check the invariant at every collection; see
-[prototype-in-shape](../exec-plans/active/prototype-in-shape.md) and the
+`ANT_DEBUG=shape:verify` to check the invariant at every collection; see the
 [shape proto identity](../../tests/test_shape_proto_identity.cjs) regression.
 
 ## Closure And Upvalue Reachability

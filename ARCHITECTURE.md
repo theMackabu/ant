@@ -58,8 +58,7 @@ Silver's headers separate data definitions from execution helpers:
 
 Consumers include the header for the operations they use. Keep `engine.h`
 independent of call, feedback, and opcode implementation headers so consumers
-of VM definitions do not create an include cycle. See the completed
-[header boundary plan](docs/exec-plans/completed/silver-header-boundaries.md).
+of VM definitions do not create an include cycle.
 
 Constructor context belongs to an invocation. JS frames and JIT invocation
 arguments carry `new.target`; native callbacks receive it explicitly through
@@ -72,9 +71,7 @@ helpers use `ant_native_params_t` for the shared `js`, `args`, and `nargs`
 parameters, followed by any helper-specific parameters. Include an explicit
 constructor target only when the implementation needs it. `ant_params_t`
 extends that shared prefix with `call_new_target` for the callback ABI.
-There is no ambient `ant_t::new_target` field. The
-[constructor-context plan](docs/exec-plans/completed/net-connection-websocket-arg-regression.md)
-records the regression, implementation, and validation.
+There is no ambient `ant_t::new_target` field.
 
 For JIT fallback, inline-cache lifetime, and GC ownership rules, read the
 focused [runtime invariants](docs/repo/runtime-invariants.md) reference.
@@ -160,7 +157,6 @@ properties, including its tag, after Symbol initialization.
 - Do not hand-edit third-party code in `vendor/` unless the task is explicitly a
   vendored dependency change.
 - Do not check durable architecture knowledge into `todo/`; use
-  [docs/exec-plans/index.md](docs/exec-plans/index.md) for multi-step work and
   `docs/repo/` for stable reference docs.
 - Keep generated outputs reproducible. If a generated file changes, update or
   document the generator path in the same change.

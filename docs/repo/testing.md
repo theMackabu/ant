@@ -81,8 +81,8 @@ This guide keeps validation proportional to the change while still protecting ru
   in the `fetch` spec because outbound network access is blocked. Treat that as
   an expected sandbox limitation, and prefer targeted spec files when the
   change does not need networked coverage.
-- If the right validation is expensive or unavailable, document the gap in the
-  associated [execution plan](../exec-plans/index.md).
+- If the right validation is expensive or unavailable, say so in the change
+  description.
 
 ## Verifying operand-stack depth
 

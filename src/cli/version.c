@@ -208,16 +208,10 @@ static int ant_manifest_select_latest(const char *json, size_t json_len, ant_lat
   return rc;
 }
 
-static int ant_fetch_latest(
-  ant_latest_info_t *latest, progress_t *progress,
-  const char *channel, char *err, size_t err_len
+static int ant_fetch_latest_from(
+  const char *url, ant_latest_info_t *latest,
+  progress_t *progress, char *err, size_t err_len
 ) {
-  char url[2048];
-  if (ant_manifest_channel_url(channel, url, sizeof(url)) != 0) {
-    snprintf(err, err_len, "manifest url is too long");
-    return -ENAMETOOLONG;
-  }
-
   char *manifest = NULL;
   size_t manifest_len = 0;
   
@@ -230,6 +224,28 @@ static int ant_fetch_latest(
   rc = ant_manifest_select_latest(manifest, manifest_len, latest, err, err_len);
   free(manifest);
   
+  return rc;
+}
+
+static int ant_fetch_latest(
+  ant_latest_info_t *latest, progress_t *progress,
+  const char *channel, char *err, size_t err_len
+) {
+  char url[2048];
+  if (ant_manifest_channel_url(channel, url, sizeof(url)) != 0) {
+    snprintf(err, err_len, "manifest url is too long");
+    return -ENAMETOOLONG;
+  }
+
+  int rc = ant_fetch_latest_from(url, latest, progress, err, err_len);
+  const char *mirror = channel ? NULL : ant_release_mirror_url();
+  if (rc == 0 || !mirror) return rc;
+
+  char mirror_err[512] = {0};
+  if (ant_fetch_latest_from(mirror, latest, progress, mirror_err, sizeof(mirror_err)) == 0) return 0;
+  
+  size_t len = strlen(err);
+  snprintf(err + len, err_len - len, " (GitHub fallback: %s)", mirror_err);
   return rc;
 }
 

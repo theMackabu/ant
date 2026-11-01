@@ -115,7 +115,7 @@ function main() {
   }
 
   for (const filePath of changedFiles) {
-    if (filePath === 'AGENTS.md' || filePath === 'ARCHITECTURE.md' || filePath.startsWith('docs/repo/') || filePath.startsWith('docs/exec-plans/')) {
+    if (filePath === 'AGENTS.md' || filePath === 'ARCHITECTURE.md' || filePath.startsWith('docs/repo/')) {
       addRecommendation(recommendations, 'maid knowledge', 'repo knowledge docs changed');
     }
 

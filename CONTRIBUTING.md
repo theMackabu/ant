@@ -28,7 +28,6 @@ changes do not depend on chat history or tribal knowledge.
 - Start with [AGENTS.md](AGENTS.md) for the quick repository map
 - Use [ARCHITECTURE.md](ARCHITECTURE.md) for subsystem boundaries
 - Use [docs/repo/index.md](docs/repo/index.md) for durable workflow docs
-- Use [docs/exec-plans/index.md](docs/exec-plans/index.md) for multi-step work
 - Run `maid knowledge` after updating these docs
 - Run `maid structure` to catch generated-path and scratch-doc violations
 - Run `maid validate_changes` to see the recommended validation set for the current diff
