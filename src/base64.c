@@ -5,6 +5,7 @@
 #include "utf8.h"
 #include "cfunc.h"
 #include "base64.h"
+#include "modules/domexception.h"
 
 char *ant_base64_encode(const uint8_t *data, size_t len, size_t *out_len) {
   size_t encoded_len = 4 * ((len + 2) / 3);
@@ -229,7 +230,7 @@ static ant_value_t builtin_btoa(ant_params_t) {
   
   if (!bytes) return is_latin1
     ? Ant_Error_CreateOutOfMemory(js)
-    : js_mkerr(js, "btoa: string contains characters outside Latin1 range");
+    : js_throw(js, make_dom_exception(js, "Invalid character", "InvalidCharacterError"));
 
   size_t out_len;
   char *out = ant_base64_encode(bytes, bytes_len, &out_len);
@@ -242,7 +243,6 @@ static ant_value_t builtin_btoa(ant_params_t) {
   return result;
 }
 
-#include "modules/domexception.h"
 static ant_value_t builtin_atob(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "atob requires 1 argument");
   

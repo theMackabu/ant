@@ -304,6 +304,8 @@ ant_value_t js_mkarr_dense_uninit(ant_t *js, uint32_t count, ant_value_t **out_d
 ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src);
 
 void js_arr_set_index(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t val);
+// false for holes and indices past the length
+bool js_arr_has(ant_t *js, ant_value_t arr, ant_offset_t idx);
 void js_arr_set_dense_length(ant_t *js, ant_value_t arr, ant_offset_t len);
 ant_object_t *js_dense_array_obj(ant_value_t value);
 

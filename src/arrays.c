@@ -1238,6 +1238,10 @@ void js_arr_set_index(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t 
   arr_set(js, arr, idx, val);
 }
 
+bool js_arr_has(ant_t *js, ant_value_t arr, ant_offset_t idx) {
+  return arr_has(js, arr, idx);
+}
+
 void js_arr_set_dense_length(ant_t *js, ant_value_t arr, ant_offset_t len) {
   ant_offset_t doff = get_dense_buf(arr);
   if (!doff) return;

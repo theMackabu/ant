@@ -125,6 +125,59 @@ static ant_value_t sc_clone_arraybuffer(
   return clone;
 }
 
+static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, sc_entry_t **transfer);
+
+static bool sc_is_array_index(const char *key, size_t len) {
+  if (len == 0 || len > 10 || (len > 1 && key[0] == '0')) return false;
+  uint64_t n = 0;
+  for (size_t i = 0; i < len; i++) {
+    if (key[i] < '0' || key[i] > '9') return false;
+    n = n * 10 + (uint64_t)(key[i] - '0');
+  }
+  return n < UINT32_MAX;
+}
+
+// Copies own enumerable string-keyed properties, keeping keys at their full
+// length (they may contain NUL). Arrays copy their elements separately.
+static ant_value_t sc_clone_props(
+  ant_t *js, ant_value_t val, ant_object_t *obj_ptr, ant_value_t clone,
+  bool skip_indices, sc_entry_t **seen, sc_entry_t **transfer
+) {
+  ant_iter_t iter = js_prop_iter_begin(js, val);
+  ant_iter_key_t key;
+  ant_value_t pval;
+
+  while (js_prop_iter_next_key(&iter, &key, &pval)) {
+    if (key.is_symbol || !js_is_own_enumerable_prop(js, val, obj_ptr, &key)) continue;
+    if (skip_indices && sc_is_array_index(key.str, key.key_len)) continue;
+    const ant_shape_prop_t *meta = ant_shape_prop_at(obj_ptr->shape, key.slot);
+    
+    if (obj_ptr->flags.is_exotic || !meta || meta->has_getter || meta->has_setter) {
+      pval = js_getprop_fallback_len(js, val, key.str, key.key_len);
+      if (is_err(pval)) { js_prop_iter_end(&iter); return pval; }
+    }
+    
+    GC_ROOT_SAVE(mark, js);
+    GC_ROOT_PIN(js, pval);
+    
+    ant_value_t pc = sc_clone_rec(js, pval, seen, transfer);
+    if (is_err(pc)) {
+      GC_ROOT_RESTORE(js, mark);
+      js_prop_iter_end(&iter); 
+      return pc;
+    }
+    
+    GC_ROOT_PIN(js, pc);
+    ant_value_t name = js_mkstr(js, key.str, key.key_len);
+    if (!is_err(name)) js_setprop(js, clone, name, pc);
+    GC_ROOT_RESTORE(js, mark);
+    if (is_err(name)) { js_prop_iter_end(&iter); return name; }
+  }
+
+  js_prop_iter_end(&iter);
+  return clone;
+}
+
 static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, sc_entry_t **transfer) {
   uint8_t t = vtype(val);
   TypedArrayData *ta_data = NULL;
@@ -177,14 +230,22 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     ant_value_t clone = js_mkarr(js);
     sc_add(seen, val, clone);
     
+    // holes stay holes, and named properties travel with the elements
     ant_offset_t len = js_arr_len(js, val);
     for (ant_offset_t i = 0; i < len; i++) {
+      if (!js_arr_has(js, val, i)) continue;
       ant_value_t ic = sc_clone_rec(js, js_arr_get(js, val, i), seen, transfer);
       if (is_err(ic)) return ic;
-      js_arr_push(js, clone, ic);
+      js_arr_set_index(js, clone, i, ic);
+    }
+    if (js_arr_len(js, clone) != len) {
+      ant_value_t length_key = js_mkstr(js, "length", 6);
+      if (is_err(length_key)) return length_key;
+      js_setprop(js, clone, length_key, Ant_Value_FromNumber((double)len));
     }
     
-    return clone;
+    ant_object_t *arr_ptr = js_obj_ptr(val);
+    return arr_ptr ? sc_clone_props(js, val, arr_ptr, clone, true, seen, transfer) : clone;
   }
 
   ant_object_t *obj_ptr = js_obj_ptr(val);
@@ -316,6 +377,18 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     return clone;
   }
 
+  // Boolean, Number, String and BigInt objects carry only their primitive
+  ant_value_t prim = js_get_slot(val, SLOT_PRIMITIVE);
+  uint8_t prim_type = vtype(prim);
+  if (prim_type == kTypeSymbol)
+    return js_throw(js, make_dom_exception(js, "Symbol cannot be serialized", "DataCloneError"));
+  if (prim_type == kTypeNumber || prim_type == kTypeString || prim_type == kTypeBool || prim_type == kTypeBigInt) {
+    ant_value_t wrapper = js_normalize_sloppy_this(js, prim);
+    if (is_err(wrapper)) return wrapper;
+    sc_add(seen, val, wrapper);
+    return wrapper;
+  }
+
   ant_value_t clone = Ant_Object_Create(js);
   sc_add(seen, val, clone);
 
@@ -324,35 +397,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     return is_err(copied) ? copied : clone;
   }
 
-  ant_iter_t iter = js_prop_iter_begin(js, val);
-  ant_iter_key_t key;
-  ant_value_t pval;
-
-  while (js_prop_iter_next_key(&iter, &key, &pval)) {
-    if (key.is_symbol || !js_is_own_enumerable_prop(js, val, obj_ptr, &key)) continue;
-    const ant_shape_prop_t *meta = ant_shape_prop_at(obj_ptr->shape, key.slot);
-    
-    if (obj_ptr->flags.is_exotic || !meta || meta->has_getter || meta->has_setter) {
-      pval = js_get(js, val, key.str);
-      if (is_err(pval)) { js_prop_iter_end(&iter); return pval; }
-    }
-    
-    GC_ROOT_SAVE(mark, js);
-    GC_ROOT_PIN(js, pval);
-    
-    ant_value_t pc = sc_clone_rec(js, pval, seen, transfer);
-    GC_ROOT_RESTORE(js, mark);
-    
-    if (is_err(pc)) { 
-      js_prop_iter_end(&iter); 
-      return pc;
-    }
-    
-    js_set(js, clone, key.str, pc);
-  }
-
-  js_prop_iter_end(&iter);
-  return clone;
+  return sc_clone_props(js, val, obj_ptr, clone, false, seen, transfer);
 }
 
 static ant_value_t sc_clone_error(ant_t *js, const char *message) {

@@ -103,3 +103,13 @@ $ tools/check_stack_depth.sh /path/ant  # or another binary
 Run it after touching `include/silver/opcode.h`, an interpreter handler in
 `src/silver/ops/`, or the loop/try emitters in `src/silver/compiler/loop.c`
 and `src/silver/compiler/stmt.c`.
+
+## Property tests
+
+- `node tests/differential/runner.ts --family <name> --cases N --minimize`
+  (after `npm install`) compares fast-check generated JavaScript probes
+  against Node and shrinks mismatches to minimal repros. The `jit` family also
+  runs each probe under the interpreter and every `ANT_DEBUG=opt:` mode, so
+  use it after JIT or optimizing-tier changes. A mismatch is a finding to
+  classify, not automatically a bug. See
+  [tests/differential](../../tests/differential/README.md).

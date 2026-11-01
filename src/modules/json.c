@@ -453,7 +453,8 @@ typedef struct {
   ant_t *js;
   ant_value_t *stack;
   ant_value_t replacer_func;
-  ant_value_t replacer_arr;
+  // the replacer array's PropertyList: unique key strings, in order
+  ant_value_t replacer_keys;
   ant_value_t error;
   ant_value_t holder;
   ant_value_t cycle_start;
@@ -464,7 +465,6 @@ typedef struct {
   
   int stack_size;
   int stack_cap;
-  int replacer_arr_len;
   int has_cycle;
   bool has_error;
   char cycle_key[128];
@@ -648,40 +648,9 @@ static inline void json_cycle_pop(json_cycle_ctx *ctx) {
   if (ctx->stack_size > 0) ctx->stack_size--;
 }
 
-static inline int key_matches(const char *a, size_t a_len, const char *b, size_t b_len) {
-  return a_len == b_len && memcmp(a, b, a_len) == 0;
-}
-
 static inline ant_value_t json_snapshot_keys(ant_t *js, ant_value_t value) {
   if (!is_special_object(value)) return js_mkarr(js);
   return js_for_in_keys(js, value);
-}
-
-static int is_key_in_replacer_arr(ant_t *js, json_cycle_ctx *ctx, const char *key, size_t key_len) {
-  if (!is_special_object(ctx->replacer_arr)) return 1;
-  
-  for (int i = 0; i < ctx->replacer_arr_len; i++) {
-  char idxstr[32];
-  snprintf(idxstr, sizeof(idxstr), "%d", i);
-  
-  ant_value_t item = js_get(js, ctx->replacer_arr, idxstr);
-  if (is_err(item)) {
-    json_capture_error(ctx, item);
-    return 0;
-  }
-  
-  int type = vtype(item);
-  if (type == kTypeString) {
-    size_t item_len;
-    char *item_str = js_getstr(js, item, &item_len);
-    if (key_matches(item_str, item_len, key, key_len)) return 1;
-  } else if (type == kTypeNumber) {
-    char numstr[32];
-    snprintf(numstr, sizeof(numstr), "%.0f", Ant_Value_AsNumberUnchecked(item));
-    if (key_matches(numstr, strlen(numstr), key, key_len)) return 1;
-  }}
-  
-  return 0;
 }
 
 typedef enum { 
@@ -691,19 +660,19 @@ typedef enum {
 } json_write_t;
 
 static json_write_t json_write_with_key(
-  json_cycle_ctx *ctx, json_out_t *out, const char *key,
+  json_cycle_ctx *ctx, json_out_t *out, const char *key, size_t key_len,
   ant_value_t val, int in_array, int depth
 );
   
 static ant_value_t apply_reviver(
   ant_t *js, ant_value_t holder,
-  const char *key, ant_value_t reviver,
+  const char *key, size_t key_len, ant_value_t reviver,
   gc_temp_root_scope_t *roots
 );
 
 static ant_value_t json_apply_tojson(
   ant_t *js,
-  const char *key,
+  const char *key, size_t key_len,
   ant_value_t val,
   json_cycle_ctx *ctx
 ) {
@@ -749,7 +718,7 @@ static ant_value_t json_apply_tojson(
   }
 
   if (!is_callable(toJSON)) return val;
-  ant_value_t key_arg = js_mkstr(js, key, strlen(key));
+  ant_value_t key_arg = js_mkstr(js, key, key_len);
   if (is_err(key_arg)) {
     json_capture_error(ctx, key_arg);
     return Ant_Value_Undefined;
@@ -775,12 +744,12 @@ static ant_value_t json_apply_tojson(
 
 static ant_value_t json_apply_replacer(
   ant_t *js,
-  const char *key,
+  const char *key, size_t key_len,
   ant_value_t val,
   json_cycle_ctx *ctx
 ) {
   if (!is_callable(ctx->replacer_func)) return val;
-  ant_value_t key_arg = js_mkstr(js, key, strlen(key));
+  ant_value_t key_arg = js_mkstr(js, key, key_len);
   if (is_err(key_arg)) {
     json_capture_error(ctx, key_arg);
     return Ant_Value_Undefined;
@@ -832,6 +801,7 @@ static json_write_t json_write_array(
 
   for (ant_offset_t i = 0; i < length; i++) {
     char idxstr[32];
+    size_t idx_len = 0;
 
     if (i && !json_out_char(out, ',')) goto abort;
     if (!json_write_indent(ctx, out, depth + 1)) goto abort;
@@ -842,10 +812,10 @@ static json_write_t json_write_array(
       goto abort;
     }
 
-    if (has_replacer || is_special_object(elem) || vtype(elem) == kTypeBigInt) uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
+    if (has_replacer || is_special_object(elem) || vtype(elem) == kTypeBigInt) idx_len = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
     else idxstr[0] = '\0';
 
-    json_write_t w = json_write_with_key(ctx, out, idxstr, elem, 1, depth + 1);
+    json_write_t w = json_write_with_key(ctx, out, idxstr, idx_len, elem, 1, depth + 1);
     if (w == JSON_W_ABORT) goto abort;
     if (w == JSON_W_SKIP && !json_out_write(out, "null", 4)) goto abort;
   }
@@ -918,10 +888,6 @@ static json_write_t json_write_object_fast(
     const char *key = keys[i];
     size_t key_len = intern_length(key);
 
-    bool included = is_key_in_replacer_arr(js, ctx, key, key_len);
-    if (json_has_abort(ctx)) goto abort;
-    if (!included) continue;
-
     ant_prop_loc_t loc = lkp_interned(val, key);
     if (!loc.obj) continue;
 
@@ -945,7 +911,7 @@ static json_write_t json_write_object_fast(
     if (!json_out_char(out, ':')) goto abort;
     if (ctx->indent_len && !json_out_char(out, ' ')) goto abort;
 
-    json_write_t w = json_write_with_key(ctx, out, key, prop, 0, depth + 1);
+    json_write_t w = json_write_with_key(ctx, out, key, key_len, prop, 0, depth + 1);
     if (w == JSON_W_ABORT) goto abort;
     if (w == JSON_W_SKIP) { out->len = mark; continue; }
 
@@ -972,13 +938,15 @@ static json_write_t json_write_object(
   const char **fast_keys = NULL;
   size_t fast_count = 0;
 
-  if (json_collect_own_keys(js, val, &fast_keys, &fast_count, inline_keys, 24)) {
+  bool listed = vtype(ctx->replacer_keys) == kTypeArray;
+  if (!listed && json_collect_own_keys(js, val, &fast_keys, &fast_count, inline_keys, 24)) {
     json_write_t w = json_write_object_fast(ctx, out, val, depth, fast_keys, fast_count);
     if (fast_keys != inline_keys) free((void *)fast_keys);
     return w;
   }
 
-  ant_value_t keys = json_snapshot_keys(js, val);
+  // a replacer array lists the keys to Get, own or inherited, in its order
+  ant_value_t keys = listed ? ctx->replacer_keys : json_snapshot_keys(js, val);
   ant_value_t saved_holder = ctx->holder;
   bool wrote_any = false;
 
@@ -998,11 +966,8 @@ static json_write_t json_write_object(
     char *key = js_getstr(js, key_val, &key_len);
 
     if (!key) continue;
-    bool included = is_key_in_replacer_arr(js, ctx, key, key_len);
-    if (json_has_abort(ctx)) goto abort;
-    if (!included) continue;
 
-    ant_value_t prop = js_get(js, val, key);
+    ant_value_t prop = js_getprop_fallback_len(js, val, key, key_len);
     if (is_err(prop)) {
       json_capture_error(ctx, prop);
       goto abort;
@@ -1017,7 +982,7 @@ static json_write_t json_write_object(
     if (!json_out_char(out, ':')) goto abort;
     if (ctx->indent_len && !json_out_char(out, ' ')) goto abort;
 
-    json_write_t w = json_write_with_key(ctx, out, key, prop, 0, depth + 1);
+    json_write_t w = json_write_with_key(ctx, out, key, key_len, prop, 0, depth + 1);
     if (w == JSON_W_ABORT) goto abort;
     if (w == JSON_W_SKIP) { out->len = mark; continue; }
 
@@ -1097,27 +1062,27 @@ static json_write_t json_write_impl(
 }
 
 static json_write_t json_write_with_key(
-  json_cycle_ctx *ctx, json_out_t *out, const char *key,
+  json_cycle_ctx *ctx, json_out_t *out, const char *key, size_t key_len,
   ant_value_t val, int in_array, int depth
 ) {
-  val = json_apply_tojson(ctx->js, key, val, ctx);
+  val = json_apply_tojson(ctx->js, key, key_len, val, ctx);
   if (json_has_abort(ctx)) return JSON_W_ABORT;
 
-  val = json_apply_replacer(ctx->js, key, val, ctx);
+  val = json_apply_replacer(ctx->js, key, key_len, val, ctx);
   if (json_has_abort(ctx)) return JSON_W_ABORT;
 
   return json_write_impl(ctx, out, key, val, in_array, depth);
 }
 
 static ant_value_t apply_reviver_call(
-  ant_t *js, ant_value_t holder, const char *key, 
+  ant_t *js, ant_value_t holder, const char *key, size_t key_len,
   ant_value_t reviver, gc_temp_root_scope_t *roots
 ) {
-  ant_value_t key_str = js_mkstr(js, key, strlen(key));
+  ant_value_t key_str = js_mkstr(js, key, key_len);
   if (is_err(key_str)) return key_str;
   
   if (!json_temp_pin(roots, key_str)) return json_parse_oom(js);
-  ant_value_t current_value = js_get(js, holder, key);
+  ant_value_t current_value = js_getprop_fallback_len(js, holder, key, key_len);
   ant_value_t call_args[2] = { key_str, current_value };
   
   ant_value_t result = sv_vm_call(
@@ -1139,7 +1104,7 @@ static ant_value_t apply_reviver_to_array(
     char idxstr[32];
     size_t idx_len = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
     
-    ant_value_t new_elem = apply_reviver(js, value, idxstr, reviver, roots);
+    ant_value_t new_elem = apply_reviver(js, value, idxstr, idx_len, reviver, roots);
     if (is_err(new_elem)) return new_elem;
     
     if (vtype(new_elem) == kTypeUndefined) {
@@ -1174,21 +1139,21 @@ static ant_value_t apply_reviver_to_object(
     char *key = js_getstr(js, key_val, &key_len);
     if (!key) continue;
     
-    ant_value_t new_val = apply_reviver(js, value, key, reviver, roots);
+    ant_value_t new_val = apply_reviver(js, value, key, key_len, reviver, roots);
     if (is_err(new_val)) return new_val;
     
     if (vtype(new_val) == kTypeUndefined) js_delete_prop(js, value, key, key_len);
-    else js_set(js, value, key, new_val);
+    else js_setprop(js, value, key_val, new_val);
   }
   
   return Ant_Value_Undefined;
 }
 
 static ant_value_t apply_reviver(
-  ant_t *js, ant_value_t holder, const char *key, ant_value_t reviver, gc_temp_root_scope_t *roots
+  ant_t *js, ant_value_t holder, const char *key, size_t key_len, ant_value_t reviver, gc_temp_root_scope_t *roots
 ) {
   if (__builtin_expect(sv_check_c_stack_overflow(js), 0)) return Ant_Error_CreateStackOverflow(js);
-  ant_value_t val = js_get(js, holder, key);
+  ant_value_t val = js_getprop_fallback_len(js, holder, key, key_len);
   if (is_err(val)) return val;
 
   ant_value_t walked = Ant_Value_Undefined;
@@ -1196,7 +1161,7 @@ static ant_value_t apply_reviver(
   else if (vtype(val) == kTypeObject) walked = apply_reviver_to_object(js, val, reviver, roots);
   if (is_err(walked)) return walked;
 
-  return apply_reviver_call(js, holder, key, reviver, roots);
+  return apply_reviver_call(js, holder, key, key_len, reviver, roots);
 }
 
 ant_value_t js_json_parse(ant_params_t) {
@@ -1246,7 +1211,7 @@ ant_value_t js_json_parse(ant_params_t) {
     }
     
     js_set(js, root, "", result);
-    result = apply_reviver(js, root, "", reviver, &temp_roots);
+    result = apply_reviver(js, root, "", 0, reviver, &temp_roots);
   }
   
   gc_temp_root_scope_end(&temp_roots);
@@ -1287,13 +1252,47 @@ static bool json_set_replacer(ant_t *js, json_cycle_ctx *ctx, ant_value_t replac
   
   if (vtype(len_val) != kTypeNumber) return true;
 
-  ctx->replacer_arr = replacer;
-  ctx->replacer_arr_len = (int)Ant_Value_AsNumberUnchecked(len_val);
-  
-  if (json_ctx_pin_value(ctx, replacer)) return true;
-  *error_out = ctx->error;
-  
-  return false;
+  ant_value_t keys = js_mkarr(js);
+  if (is_err(keys) || !json_ctx_pin_value(ctx, keys)) {
+    *error_out = is_err(keys) ? keys : ctx->error;
+    return false;
+  }
+
+  double len = Ant_Value_AsNumberUnchecked(len_val);
+  for (double i = 0; i < len; i++) {
+    char idxstr[32];
+    uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
+    ant_value_t item = js_get(js, replacer, idxstr);
+    if (is_err(item)) {
+      *error_out = item;
+      return false;
+    }
+
+    // strings, numbers, and String or Number objects name keys
+    if (vtype(item) == kTypeObject) {
+      ant_value_t prim = js_get_slot(item, SLOT_PRIMITIVE);
+      if (vtype(prim) == kTypeString || vtype(prim) == kTypeNumber) item = prim;
+    }
+    if (vtype(item) == kTypeNumber) item = js_tostring_val(js, item);
+    if (vtype(item) != kTypeString) continue;
+    if (!json_ctx_pin_value(ctx, item)) {
+      *error_out = ctx->error;
+      return false;
+    }
+
+    size_t item_len = 0;
+    const char *item_str = js_getstr(js, item, &item_len);
+    bool seen = false;
+    for (ant_offset_t k = 0, n = js_arr_len(js, keys); k < n && !seen; k++) {
+      size_t seen_len = 0;
+      const char *seen_str = js_getstr(js, js_arr_get(js, keys, k), &seen_len);
+      seen = seen_len == item_len && memcmp(seen_str, item_str, item_len) == 0;
+    }
+    if (!seen) js_arr_push(js, keys, item);
+  }
+
+  ctx->replacer_keys = keys;
+  return true;
 }
 
 static bool json_set_indent(ant_t *js, json_cycle_ctx *ctx, ant_args_t) {
@@ -1354,7 +1353,7 @@ ant_value_t js_json_stringify(ant_params_t) {
   json_cycle_ctx ctx = {
     .js = js,
     .replacer_func = Ant_Value_Undefined,
-    .replacer_arr = Ant_Value_Undefined,
+    .replacer_keys = Ant_Value_Undefined,
     .error = Ant_Value_Undefined,
     .holder = Ant_Value_Undefined,
   };
@@ -1415,7 +1414,7 @@ ant_value_t js_json_stringify(ant_params_t) {
   }
   
   json_set_holder(&ctx, root_holder);
-  json_write_t root = json_write_with_key(&ctx, &out, "", args[0], 0, 0);
+  json_write_t root = json_write_with_key(&ctx, &out, "", 0, args[0], 0, 0);
   
   if (ctx.has_error) {
     ant_value_t error = ctx.error;

@@ -97,9 +97,12 @@ static char *url_decoded_utf8(char *out, size_t len, size_t *out_len) {
 }
 
 char *form_urldecode_len(const char *str, size_t *out_len) {
+  return form_urldecode_n(str, str ? strlen(str) : 0, out_len);
+}
+
+char *form_urldecode_n(const char *str, size_t len, size_t *out_len) {
   if (out_len) *out_len = 0;
   if (!str) return strdup("");
-  size_t len = strlen(str);
   char *out = malloc(len + 1);
 
   if (!out) return strdup("");
@@ -320,8 +323,20 @@ char *build_href(const url_state_t *s) {
   return href;
 }
 
+// WebIDL USVString: each lone surrogate becomes U+FFFD
 ant_value_t url_string_value(ant_t *js, ant_value_t value) {
-  return vtype(value) == kTypeString ? value : js_template_to_string(js, value);
+  ant_value_t str = vtype(value) == kTypeString ? value : js_template_to_string(js, value);
+  if (vtype(str) != kTypeString) return str;
+
+  size_t len = 0;
+  const char *bytes = js_getstr(js, str, &len);
+  if (!bytes || !wtf8_has_surrogate(bytes, len)) return str;
+
+  char *usv = wtf8_to_utf8_dup(bytes, &len);
+  if (!usv) return Ant_Error_CreateOutOfMemory(js);
+  ant_value_t result = js_mkstr(js, usv, len);
+  free(usv);
+  return result;
 }
 
 ant_value_t url_invalid_url_error(ant_t *js, ant_value_t input, ant_value_t base) {

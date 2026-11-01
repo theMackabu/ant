@@ -76,42 +76,39 @@ static ant_value_t usp_optional_value(ant_t *js, ant_value_t *args, int nargs, c
   return Ant_Value_Undefined;
 }
 
+// Query text may hold NULs (a USVString can), so pairs carry lengths.
 static void usp_push_decoded_pair(ant_t *js, ant_value_t arr, const char *start, size_t len) {
-  char *pair = strndup(start, len);
-  if (!pair) return;
+  const char *eq = memchr(start, '=', len);
+  size_t name_len = eq ? (size_t)(eq - start) : len;
+  const char *raw_value = eq ? eq + 1 : start + len;
+  size_t raw_value_len = eq ? len - name_len - 1 : 0;
 
-  char *eq = strchr(pair, '=');
-  char *raw_value = "";
-  if (eq) {
-    *eq = '\0';
-    raw_value = eq + 1;
-  }
+  size_t key_len = 0, value_len = 0;
+  char *key = form_urldecode_n(start, name_len, &key_len);
+  char *value = form_urldecode_n(raw_value, raw_value_len, &value_len);
+  js_arr_push(js, arr, usp_make_entry(js, js_mkstr(js, key, key_len), js_mkstr(js, value, value_len)));
 
-  char *key = form_urldecode(pair);
-  char *value = form_urldecode(raw_value);
-  js_arr_push(js, arr, usp_make_entry(js, js_mkstr(js, key, strlen(key)), js_mkstr(js, value, strlen(value))));
-
-  free(pair);
   free(key);
   free(value);
 }
 
-static ant_value_t parse_query_to_arr(ant_t *js, const char *query) {
+static ant_value_t parse_query_to_arr(ant_t *js, const char *query, size_t query_len) {
   ant_value_t arr = js_mkarr(js);
   if (!query) return arr;
 
-  for (const char *p = query; *p;) {
-    const char *amp = strchr(p, '&');
-    size_t len = amp ? (size_t)(amp - p) : strlen(p);
+  for (const char *p = query, *end = query + query_len; p < end;) {
+    const char *amp = memchr(p, '&', (size_t)(end - p));
+    size_t len = amp ? (size_t)(amp - p) : (size_t)(end - p);
     if (len > 0) usp_push_decoded_pair(js, arr, p, len);
-    p = amp ? amp + 1 : p + (len > 0 ? len : 1);
+    p = amp ? amp + 1 : end;
   }
 
   return arr;
 }
 
-static ant_value_t parse_query_string_init(ant_t *js, const char *query) {
-  return parse_query_to_arr(js, query && query[0] == '?' ? query + 1 : query);
+static ant_value_t parse_query_string_init(ant_t *js, const char *query, size_t len) {
+  if (query && len > 0 && query[0] == '?') return parse_query_to_arr(js, query + 1, len - 1);
+  return parse_query_to_arr(js, query, len);
 }
 
 char *usp_serialize(ant_t *js, ant_value_t usp) {
@@ -191,7 +188,7 @@ static void usp_replace_entries(ant_t *js, ant_value_t usp, ant_value_t entries)
 void url_sync_usp(ant_t *js, ant_value_t url_obj, const char *query) {
   ant_value_t usp = js_get_slot(url_obj, SLOT_ENTRIES);
   if (!is_special_object(usp)) return;
-  js_set_slot_wb(js, usp, SLOT_ENTRIES, parse_query_to_arr(js, query));
+  js_set_slot_wb(js, usp, SLOT_ENTRIES, parse_query_to_arr(js, query, query ? strlen(query) : 0));
 }
 
 static ant_value_t usp_new(ant_t *js, ant_value_t url_obj, ant_value_t entries) {
@@ -204,7 +201,7 @@ static ant_value_t usp_new(ant_t *js, ant_value_t url_obj, ant_value_t entries) 
 }
 
 ant_value_t make_usp_for_url(ant_t *js, ant_value_t url_obj, const char *query) {
-  return usp_new(js, url_obj, parse_query_to_arr(js, query));
+  return usp_new(js, url_obj, parse_query_to_arr(js, query, query ? strlen(query) : 0));
 }
 
 static ant_value_t usp_get(ant_params_t) {
@@ -522,8 +519,9 @@ static ant_value_t usp_init_from_primitive(ant_t *js, ant_value_t obj, ant_value
   ant_value_t init_sv = url_string_value(js, init);
   if (is_err(init_sv)) return init_sv;
 
-  const char *s = js_getstr(js, init_sv, NULL);
-  if (s) js_set_slot(obj, SLOT_ENTRIES, parse_query_string_init(js, s));
+  size_t len = 0;
+  const char *s = js_getstr(js, init_sv, &len);
+  if (s) js_set_slot(obj, SLOT_ENTRIES, parse_query_string_init(js, s, len));
   return obj;
 }
 
@@ -604,7 +602,13 @@ static ant_value_t usp_init_from_record(ant_t *js, ant_value_t obj, ant_value_t 
       break;
     }
 
-    js_arr_push(js, entries, usp_make_entry(js, js_mkstr(js, key, key_len), value));
+    ant_value_t name = url_string_value(js, js_mkstr(js, key, key_len));
+    if (is_err(name)) {
+      result = name;
+      break;
+    }
+
+    js_arr_push(js, entries, usp_make_entry(js, name, value));
   }
 
   js_prop_iter_end(&it);
@@ -620,11 +624,7 @@ static ant_value_t js_URLSearchParams(ant_params_t) {
   if (nargs < 1 || is_undefined(args[0]) || is_null(args[0])) return obj;
 
   ant_value_t init = args[0];
-  if (vtype(init) == kTypeString) {
-    const char *s = js_getstr(js, init, NULL);
-    if (s) js_set_slot(obj, SLOT_ENTRIES, parse_query_string_init(js, s));
-    return obj;
-  }
+  if (vtype(init) == kTypeString) return usp_init_from_primitive(js, obj, init);
 
   if (!is_object_type(init) && !is_callable(init)) return usp_init_from_primitive(js, obj, init);
   if (usp_is_urlsearchparams(js, init)) return usp_init_from_usp(js, obj, entries, init);
