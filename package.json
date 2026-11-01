@@ -11,6 +11,7 @@
     "test:network": "./build/ant tests/harness/run.js network",
     "test:oha": "./build/ant tests/harness/run.js oha"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "devDependencies": {
+    "fast-check": "4.10.2"
+  }
 }

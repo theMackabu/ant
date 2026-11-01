@@ -1,15 +1,13 @@
 #!/usr/bin/env node
 
-import childProcess from 'node:child_process';
+import fc from 'fast-check';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { familyNames, generateCases } from './probes.mjs';
-
-const toolDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(toolDir, '../..');
+import { defaultVariants, differingLabels, repoRoot, runEngine, sameVariantResult } from './engine.mjs';
+import { familyNamed, familyNames } from './families/index.mjs';
 
 function usage() {
   return `Usage: node tests/differential/runner.mjs [options]
@@ -20,12 +18,12 @@ Options:
   --ant PATH          Ant executable (default: ./build/ant)
   --node PATH         Node executable (default: current Node)
   --family NAME       Probe family; repeatable (default: all)
-  --cases N           Cases per family (default: 1)
+  --cases N           Generated cases per family (default: 1)
   --seed N            Deterministic generator seed (default: 1)
   --timeout MS        Per-engine timeout (default: 5000)
-  --minimize          Minimize each mismatch and save a standalone repro
+  --minimize          Shrink each mismatch and save a standalone repro
   --output DIR        Repro directory (default: differential-output)
-  --json              Emit newline-delimited JSON records
+  --json              Emit one JSON record per family
   --list-families     Print available families
   --help              Show this help
 `;
@@ -47,18 +45,18 @@ export function parseArgs(argv) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    const take = name => {
+    const take = () => {
       const value = argv[++index];
-      if (value === undefined) throw new Error(`${name} requires a value`);
+      if (value === undefined) throw new Error(`${argument} requires a value`);
       return value;
     };
-    if (argument === '--ant') options.ant = path.resolve(take(argument));
-    else if (argument === '--node') options.node = path.resolve(take(argument));
-    else if (argument === '--family') options.families.push(take(argument));
-    else if (argument === '--cases') options.casesPerFamily = Number(take(argument));
-    else if (argument === '--seed') options.seed = Number(take(argument));
-    else if (argument === '--timeout') options.timeout = Number(take(argument));
-    else if (argument === '--output') options.output = path.resolve(take(argument));
+    if (argument === '--ant') options.ant = path.resolve(take());
+    else if (argument === '--node') options.node = path.resolve(take());
+    else if (argument === '--family') options.families.push(take());
+    else if (argument === '--cases') options.casesPerFamily = Number(take());
+    else if (argument === '--seed') options.seed = Number(take());
+    else if (argument === '--timeout') options.timeout = Number(take());
+    else if (argument === '--output') options.output = path.resolve(take());
     else if (argument === '--minimize') options.minimize = true;
     else if (argument === '--json') options.json = true;
     else if (argument === '--list-families') options.listFamilies = true;
@@ -67,76 +65,25 @@ export function parseArgs(argv) {
   }
   if (options.families.length === 0) options.families = [...familyNames];
   for (const family of options.families) if (!familyNames.includes(family)) throw new Error(`unknown family: ${family}`);
-  for (const [name, value] of [
-    ['cases', options.casesPerFamily],
-    ['seed', options.seed],
-    ['timeout', options.timeout]
-  ]) {
+  for (const [name, value] of [['cases', options.casesPerFamily], ['seed', options.seed], ['timeout', options.timeout]]) {
     if (!Number.isSafeInteger(value) || value < (name === 'seed' ? 0 : 1)) throw new Error(`--${name} must be a valid integer`);
   }
   return options;
 }
 
-const normalizeNewlines = value => String(value || '').replace(/\r\n/g, '\n');
+let probeCounter = 0;
 
-export function runEngine(executable, sourceFile, timeout) {
-  const result = childProcess.spawnSync(executable, [sourceFile], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    timeout,
-    maxBuffer: 4 * 1024 * 1024,
-    env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' }
-  });
-  return {
-    status: result.status,
-    signal: result.signal,
-    timedOut: result.error?.code === 'ETIMEDOUT',
-    stdout: normalizeNewlines(result.stdout),
-    stderr: normalizeNewlines(result.stderr),
-    spawnError: result.error && result.error.code !== 'ETIMEDOUT' ? `${result.error.code}: ${result.error.message}` : null
-  };
-}
-
-export function sameResult(left, right) {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function compareCase(testCase, params, options, tempDir) {
-  const source = testCase.build(params);
-  const sourceFile = path.join(tempDir, `${testCase.id}.cjs`);
+function compare(family, params, options, tempDir) {
+  const source = family.build(params);
+  const sourceFile = path.join(tempDir, `${family.name}-${probeCounter++}.cjs`);
   fs.writeFileSync(sourceFile, source);
   const node = runEngine(options.node, sourceFile, options.timeout);
-  const ant = runEngine(options.ant, sourceFile, options.timeout);
-  return { mismatch: !sameResult(node, ant), source, node, ant };
-}
-
-export function minimizeArrays(testCase, initialParams, mismatchFor) {
-  let params = structuredClone(initialParams);
-  for (const key of testCase.shrinkKeys || []) {
-    let values = params[key];
-    if (!Array.isArray(values) || values.length < 2) continue;
-    let granularity = 2;
-    while (values.length >= 2) {
-      const chunkSize = Math.ceil(values.length / granularity);
-      let reduced = false;
-      for (let start = 0; start < values.length; start += chunkSize) {
-        const candidateValues = values.slice(0, start).concat(values.slice(start + chunkSize));
-        if (candidateValues.length === 0) continue;
-        const candidate = { ...params, [key]: candidateValues };
-        if (mismatchFor(candidate)) {
-          params = candidate;
-          values = candidateValues;
-          granularity = Math.max(2, granularity - 1);
-          reduced = true;
-          break;
-        }
-      }
-      if (reduced) continue;
-      if (granularity >= values.length) break;
-      granularity = Math.min(values.length, granularity * 2);
-    }
-  }
-  return params;
+  const variants = family.variants || defaultVariants;
+  const results = variants.map(variant => runEngine(options.ant, sourceFile, options.timeout, variant));
+  fs.rmSync(sourceFile, { force: true });
+  const failing = variants.filter((variant, i) => !sameVariantResult(node, results[i], variant)).map(variant => variant.name);
+  const shown = variants.findIndex(variant => failing.includes(variant.name));
+  return { mismatch: failing.length > 0, source, node, ant: results[shown < 0 ? 0 : shown], failing };
 }
 
 const compactResult = result => ({
@@ -148,14 +95,50 @@ const compactResult = result => ({
   spawnError: result.spawnError
 });
 
-function printRecord(record, json) {
-  if (json) return console.log(JSON.stringify(record));
-  console.log(`${record.match ? 'PASS' : 'MISMATCH'} ${record.family}/${record.id}`);
-  if (!record.match) {
-    console.log(`  node: ${JSON.stringify(record.node)}`);
-    console.log(`  ant:  ${JSON.stringify(record.ant)}`);
-    if (record.repro) console.log(`  repro: ${path.relative(repoRoot, record.repro)}`);
+function runFamily(family, options, tempDir) {
+  const details = fc.check(
+    fc.property(family.arbitrary, params => !compare(family, params, options, tempDir).mismatch),
+    { seed: options.seed, numRuns: options.casesPerFamily, endOnFailure: !options.minimize }
+  );
+  const record = {
+    family: family.name,
+    seed: options.seed,
+    runs: details.numRuns,
+    shrinks: details.numShrinks,
+    match: !details.failed,
+    variants: [],
+    labels: [],
+    repro: null
+  };
+  if (!details.failed) return record;
+  if (!details.counterexample) {
+    record.error = String(details.errorInstance);
+    return record;
   }
+
+  const comparison = compare(family, details.counterexample[0], options, tempDir);
+  record.variants = comparison.failing;
+  record.labels = differingLabels(comparison.node, comparison.ant);
+  record.node = compactResult(comparison.node);
+  record.ant = compactResult(comparison.ant);
+  if (options.minimize) {
+    fs.mkdirSync(options.output, { recursive: true });
+    record.repro = path.join(options.output, `${family.name}-seed${options.seed}.cjs`);
+    fs.writeFileSync(record.repro, comparison.source);
+  }
+  return record;
+}
+
+function printRecord(record, json) {
+  if (json) return void console.log(JSON.stringify(record));
+  if (record.match) return void console.log(`PASS ${record.family} (${record.runs} cases)`);
+  console.log(`MISMATCH ${record.family} after ${record.runs} cases${record.shrinks ? `, ${record.shrinks} shrinks` : ''}`);
+  if (record.error) return void console.log(`  error: ${record.error}`);
+  console.log(`  ant variants: ${record.variants.join(', ')}`);
+  if (record.labels.length) console.log(`  labels: ${record.labels.join(', ')}`);
+  console.log(`  node: ${JSON.stringify(record.node)}`);
+  console.log(`  ant:  ${JSON.stringify(record.ant)}`);
+  if (record.repro) console.log(`  repro: ${path.relative(process.cwd(), record.repro)}`);
 }
 
 export function main(argv = process.argv.slice(2)) {
@@ -175,10 +158,7 @@ export function main(argv = process.argv.slice(2)) {
     console.log(familyNames.join('\n'));
     return 0;
   }
-  for (const [label, executable] of [
-    ['Node', options.node],
-    ['Ant', options.ant]
-  ]) {
+  for (const [label, executable] of [['Node', options.node], ['Ant', options.ant]]) {
     if (!fs.existsSync(executable)) {
       console.error(`${label} executable not found: ${executable}`);
       return 2;
@@ -186,39 +166,19 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ant-differential-'));
-  const cases = generateCases(options);
   let mismatches = 0;
+  let cases = 0;
   try {
-    for (const testCase of cases) {
-      let comparison = compareCase(testCase, testCase.params, options, tempDir);
-      let repro = null;
-      if (comparison.mismatch) {
-        mismatches += 1;
-        if (options.minimize) {
-          const minimized = minimizeArrays(testCase, testCase.params, candidate => compareCase(testCase, candidate, options, tempDir).mismatch);
-          comparison = compareCase(testCase, minimized, options, tempDir);
-          fs.mkdirSync(options.output, { recursive: true });
-          repro = path.join(options.output, `${testCase.id}.cjs`);
-          fs.writeFileSync(repro, comparison.source);
-        }
-      }
-      printRecord(
-        {
-          family: testCase.family,
-          id: testCase.id,
-          seed: options.seed,
-          match: !comparison.mismatch,
-          node: compactResult(comparison.node),
-          ant: compactResult(comparison.ant),
-          repro
-        },
-        options.json
-      );
+    for (const name of options.families) {
+      const record = runFamily(familyNamed(name), options, tempDir);
+      cases += record.runs;
+      if (!record.match) mismatches += 1;
+      printRecord(record, options.json);
     }
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
-  if (!options.json) console.log(`\n${cases.length} probes, ${mismatches} mismatches`);
+  if (!options.json) console.log(`\n${options.families.length} families, ${cases} cases, ${mismatches} with mismatches`);
   return mismatches === 0 ? 0 : 1;
 }
 
