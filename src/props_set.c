@@ -79,7 +79,7 @@ static __attribute__((noinline)) bool setprop_sym_reaches_proxy(
   if (is_err(result)) *done = result;
   else if (result == Ant_Value_False) *done = proxy_set_rejected_sym(js, sym, v, declined);
   else if (result == Ant_Value_True) *done = v;
-  else if (same_object_identity(proxy, obj)) *done = setprop_impl(js, target, sym, v, keyed, declined);
+  else if (same_object_identity(proxy, obj)) *done = setprop_impl_receiver(js, target, proxy, sym, v, keyed, declined);
   
   else {
     *next = target;
@@ -194,17 +194,17 @@ static ant_value_t setprop_call_setter(ant_t *js, ant_value_t obj, ant_value_t s
 }
 
 static bool setprop_desc_blocks(
-  ant_t *js, ant_value_t obj, ant_value_t receiver, ant_value_t key,
+  ant_t *js, ant_value_t obj, ant_value_t receiver, ant_value_t holder, ant_value_t key,
   const prop_meta_t *meta, ant_value_t v, bool *declined, ant_value_t *done
 ) {
   if (meta->has_setter && is_callable(meta->setter)) {
-    *done = setprop_call_setter(js, obj, meta->setter, v);
+    *done = setprop_call_setter(js, receiver, meta->setter, v);
     return true;
   }
 
   if (meta->has_getter && !meta->has_setter) {
     *done = sv_is_strict_context(js)
-      ? Ant_Error_CreateGetterOnlyProperty(js, receiver, key)
+      ? Ant_Error_CreateGetterOnlyProperty(js, holder, key)
       : set_declined(declined, v);
     return true;
   }
@@ -254,7 +254,7 @@ static bool setprop_symbol_walk(
     }
     
     else found = lookup_symbol_prop_meta(js, cur_obj, sym_off, &meta);
-    if (found) return setprop_desc_blocks(js, obj, receiver, k, &meta, v, declined, done);
+    if (found) return setprop_desc_blocks(js, obj, receiver, on_receiver ? receiver : cur_obj, k, &meta, v, declined, done);
 
     ant_value_t proto = is_object_type(cur_ptr->proto) ? cur_ptr->proto : get_proto(js, cur_obj);
     if (!is_object_type(proto)) break;
@@ -417,9 +417,24 @@ static setprop_desc_t setprop_own_desc(
   return SETPROP_DESC_HIT;
 }
 
+static ant_value_t setprop_through_proxy(
+  ant_t *js, ant_value_t proxy, ant_value_t receiver,
+  const char *key, ant_offset_t klen, ant_value_t v, bool *declined
+) {
+  bool trapless = false;
+  ant_value_t result = proxy_set_with_receiver_reason(js, proxy, key, klen, v, receiver, &trapless);
+  
+  if (is_err(result)) return result;
+  if (result != Ant_Value_False) return v;
+  if (!sv_is_strict_context(js)) return set_declined(declined, v);
+
+  ant_value_t reason = trapless ? proxy_receiver_set_error(js, proxy, receiver, key, (size_t)klen) : Ant_Value_False;
+  return is_err(reason) ? reason : proxy_set_rejected(js, key, klen, v, declined);
+}
+
 static setprop_desc_t setprop_find_desc(
   ant_t *js, ant_value_t obj, const char *key, ant_offset_t klen, ant_value_t v,
-  bool *declined, prop_meta_t *meta, bool *on_receiver, ant_value_t *done
+  bool *declined, prop_meta_t *meta, bool *on_receiver, ant_value_t *holder, ant_value_t *done
 ) {
   const char *interned_key = intern_string(js, key, (size_t)klen);
   ant_value_t cur = obj;
@@ -431,9 +446,7 @@ static setprop_desc_t setprop_find_desc(
   while (is_object_type(cur)) {
     ant_value_t cur_obj = js_as_obj(cur);
     if (!*on_receiver && is_proxy(cur_obj)) {
-      ant_value_t result = proxy_set_with_receiver(js, cur_obj, key, klen, v, obj);
-      *done = is_err(result) ? result
-        : result == Ant_Value_False ? proxy_set_rejected(js, key, klen, v, declined) : v;
+      *done = setprop_through_proxy(js, cur_obj, obj, key, klen, v, declined);
       return SETPROP_DESC_DONE;
     }
 
@@ -441,6 +454,7 @@ static setprop_desc_t setprop_find_desc(
     if (!cur_ptr) break;
 
     setprop_desc_t found = setprop_own_desc(js, cur_obj, cur_ptr, key, klen, interned_key, *on_receiver, meta);
+    if (found == SETPROP_DESC_HIT) *holder = cur_obj;
     if (found == SETPROP_DESC_DONE) *done = v;
     if (found != SETPROP_DESC_MISS) return found;
 
@@ -466,12 +480,15 @@ static ant_value_t setprop_string(ant_t *js, ant_value_t obj, ant_value_t receiv
   prop_meta_t meta;
   
   bool on_receiver = true;
-  setprop_desc_t found = setprop_find_desc(js, obj, key, klen, v, declined, &meta, &on_receiver, &done);
+  ant_value_t holder = obj;
+  
+  setprop_desc_t found = setprop_find_desc(js, obj, key, klen, v, declined, &meta, &on_receiver, &holder, &done);
   if (found == SETPROP_DESC_DONE) return done;
 
   if (found == SETPROP_DESC_HIT) {
     bool inherited_data = !on_receiver && !meta.has_setter && !meta.has_getter && meta.writable;
-    if (!inherited_data && setprop_desc_blocks(js, obj, receiver, k, &meta, v, declined, &done)) return done;
+    if (on_receiver) holder = receiver;
+    if (!inherited_data && setprop_desc_blocks(js, obj, receiver, holder, k, &meta, v, declined, &done)) return done;
   }
 
   if (existing.obj) {
@@ -496,16 +513,25 @@ static ant_value_t setprop_string(ant_t *js, ant_value_t obj, ant_value_t receiv
   return v;
 }
 
-ant_value_t setprop_impl(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, bool keyed, bool *declined) {
+ant_value_t setprop_impl_receiver(
+  ant_t *js, ant_value_t obj, ant_value_t receiver, ant_value_t k, ant_value_t v, bool keyed, bool *declined
+) {
   uint8_t ot = vtype(obj);
-  if (ot == kTypeBuiltin) return setprop_impl(js, js_cfunc_promote(js, obj), k, v, keyed, declined);
+  if (ot == kTypeBuiltin) {
+    ant_value_t promoted = js_cfunc_promote(js, obj);
+    return setprop_impl_receiver(js, promoted, receiver, k, v, keyed, declined);
+  }
+  
   if (is_boxable_primitive_type(ot)) return setprop_primitive(js, obj, ot, k, v);
-  ant_value_t receiver = obj;
   if (ot == kTypeFunction) obj = js_func_obj(obj);
 
   return vtype(k) == kTypeSymbol
     ? setprop_symbol(js, obj, receiver, k, v, keyed, declined)
     : setprop_string(js, obj, receiver, k, v, keyed, declined);
+}
+
+ant_value_t setprop_impl(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, bool keyed, bool *declined) {
+  return setprop_impl_receiver(js, obj, obj, k, v, keyed, declined);
 }
 
 ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v) {

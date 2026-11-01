@@ -1,3 +1,6 @@
+// Manual GC stress run, not part of tests/harness. It drives the examples/tui
+// screen code and runs for minutes at full CPU, so automated test sweeps and
+// agents should skip it; a long run here is expected, not a hang to debug.
 import { Screen, colors, codes, pad, truncate } from '../examples/tui/tuey.js';
 
 const __gcPerfNow = () => (

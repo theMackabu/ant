@@ -74,6 +74,7 @@ bool array_own_value(ant_t *js, ant_value_t obj, const char *key, size_t len, an
 
 ant_value_t exotic_own_get(ant_t *js, ant_value_t obj, const ant_object_t *ptr, const char *key, size_t len);
 ant_value_t setprop_impl(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, bool keyed, bool *declined);
+ant_value_t setprop_impl_receiver(ant_t *js, ant_value_t obj, ant_value_t receiver, ant_value_t k, ant_value_t v, bool keyed, bool *declined);
 
 const char *index_key_find(ant_t *js, uint32_t idx, char *buf, size_t *len);
 const char *index_key_intern(ant_t *js, uint32_t idx, char *buf, size_t *len);
