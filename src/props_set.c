@@ -35,7 +35,7 @@ static ant_value_t js_setprop_array_fast(
         return sv_is_strict_context(js) ? js_mkerr(js, "assignment to read-only array element") : set_declined(declined, v);
       if (is_empty_slot(dense_get(doff, (ant_offset_t)idx))) {
         if (array_store_reaches_proto(js, obj, ptr, idx)) return JS_SETPROP_ARRAY_NOT_HANDLED;
-        ant_value_t extensibility_error = check_object_extensibility(js, obj);
+        ant_value_t extensibility_error = check_object_extensibility_index(js, obj, idx);
         if (is_err(extensibility_error)) return extensibility_error;
         if (extensibility_error == Ant_Value_False) return set_declined(declined, v);
       }
@@ -47,7 +47,7 @@ static ant_value_t js_setprop_array_fast(
     if (idx >= density_limit) goto sparse;
     if (array_store_reaches_proto(js, obj, ptr, idx)) return JS_SETPROP_ARRAY_NOT_HANDLED;
     
-    ant_value_t extensibility_error = check_object_extensibility(js, obj);
+    ant_value_t extensibility_error = check_object_extensibility_index(js, obj, idx);
     if (is_err(extensibility_error)) return extensibility_error;
     if (extensibility_error == Ant_Value_False) return set_declined(declined, v);
     
@@ -58,7 +58,7 @@ static ant_value_t js_setprop_array_fast(
   sparse:;
   if (idx < cur_len || (ptr && array_store_reaches_proto(js, obj, ptr, idx))) return JS_SETPROP_ARRAY_NOT_HANDLED;
   
-  ant_value_t extensibility_error = check_object_extensibility(js, obj);
+  ant_value_t extensibility_error = check_object_extensibility_index(js, obj, idx);
   if (is_err(extensibility_error)) return extensibility_error;
   if (extensibility_error == Ant_Value_False) return set_declined(declined, v);
   
@@ -212,8 +212,7 @@ static bool setprop_desc_blocks(ant_t *js, ant_value_t obj, const prop_meta_t *m
   return false;
 }
 
-static bool setprop_refuse_new(ant_t *js, ant_value_t obj, ant_value_t v, bool *declined, ant_value_t *done) {
-  ant_value_t extensibility = check_object_extensibility(js, obj);
+static bool setprop_refuse_new(ant_value_t extensibility, ant_value_t v, bool *declined, ant_value_t *done) {
   if (is_err(extensibility)) *done = extensibility;
   else if (extensibility == Ant_Value_False) *done = set_declined(declined, v);
   else return false;
@@ -275,7 +274,7 @@ static ant_value_t setprop_symbol(ant_t *js, ant_value_t obj, ant_value_t k, ant
     return v;
   }
 
-  if (setprop_refuse_new(js, obj, v, declined, &done)) return done;
+  if (setprop_refuse_new(check_object_extensibility_symbol(js, obj, k), v, declined, &done)) return done;
   return mkprop_symbol_attrs_impl(
     js, obj, k, v, 0,
     MKPROP_USE_DEFAULT_ATTRS | (keyed ? MKPROP_KEYED_STORE : 0)
@@ -455,7 +454,7 @@ static ant_value_t setprop_string(ant_t *js, ant_value_t obj, ant_value_t k, ant
     return v;
   }
 
-  if (setprop_refuse_new(js, obj, v, declined, &done)) return done;
+  if (setprop_refuse_new(check_object_extensibility(js, obj, key, (size_t)klen), v, declined, &done)) return done;
 
   const char *interned_key = intern_string(js, key, (size_t)klen);
   if (!interned_key) return js_mkerr(js, "oom");
@@ -513,7 +512,7 @@ static ant_value_t setprop_index_impl(ant_t *js, ant_value_t obj, uint32_t idx, 
         if (ptr->flags.frozen) 
           return sv_is_strict_context(js) ? js_mkerr(js, "assignment to read-only array element") : set_declined(declined, value);
         if (missing) {
-          ant_value_t extensibility_error = check_object_extensibility(js, obj);
+          ant_value_t extensibility_error = check_object_extensibility_index(js, obj, idx);
           if (is_err(extensibility_error)) return extensibility_error;
           if (extensibility_error == Ant_Value_False) return set_declined(declined, value);
         }
@@ -523,7 +522,7 @@ static ant_value_t setprop_index_impl(ant_t *js, ant_value_t obj, uint32_t idx, 
 
       uint64_t density_limit = (uint64_t)dense_len * 4u > ARRAY_DENSE_GAP ? (uint64_t)dense_len * 4u : ARRAY_DENSE_GAP;
       if ((uint64_t)idx < density_limit) {
-        ant_value_t extensibility_error = check_object_extensibility(js, obj);
+        ant_value_t extensibility_error = check_object_extensibility_index(js, obj, idx);
         if (is_err(extensibility_error)) return extensibility_error;
         if (extensibility_error == Ant_Value_False) return set_declined(declined, value);
         arr_set(js, obj, (ant_offset_t)idx, value);

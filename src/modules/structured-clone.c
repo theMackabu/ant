@@ -9,6 +9,7 @@
 #include "internal.h"
 #include "descriptors.h"
 #include "silver/call.h"
+#include "arrays.h"
 
 #include "modules/date.h"
 #include "modules/regex.h"
@@ -125,6 +126,78 @@ static ant_value_t sc_clone_arraybuffer(
   return clone;
 }
 
+static ant_value_t sc_clone_wrapper(ant_t *js, ant_value_t val, ant_value_t prim, sc_entry_t **seen) {
+  if (vtype(prim) == kTypeSymbol)
+    return js_throw(js, make_dom_exception(js, "[object Symbol] could not be cloned.", "DataCloneError"));
+
+  ant_value_t clone = js_normalize_sloppy_this(js, prim);
+  if (!is_err(clone)) sc_add(seen, val, clone);
+  return clone;
+}
+
+static bool sc_array_is_plain_packed(ant_value_t arr, ant_offset_t len) {
+  ant_object_t *ptr = js_obj_ptr(arr);
+  return ptr && !ptr->flags.may_have_holes && array_dense_covers(ptr, len) && ant_shape_count(ptr->shape) == 0;
+}
+
+static ant_value_t sc_clone_array_keys(ant_t *js, ant_value_t val, ant_value_t clone, sc_entry_t **seen, sc_entry_t **transfer) {
+  ant_value_t keys = js_own_property_keys(js, val, false, true);
+  if (is_err(keys)) return keys;
+
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, keys);
+  ant_value_t result = Ant_Value_Undefined;
+  ant_offset_t count = js_arr_len(js, keys);
+
+  for (ant_offset_t i = 0; i < count && !is_err(result); i++) {
+    size_t key_len = 0;
+    const char *key = js_getstr(js, js_arr_get(js, keys, i), &key_len);
+    if (!key) continue;
+
+    ant_value_t item = js_getprop_fallback_len(js, val, key, key_len);
+    if (is_err(item)) { result = item; break; }
+
+    GC_ROOT_PIN(js, item);
+    ant_value_t item_clone = sc_clone_rec(js, item, seen, transfer);
+    if (is_err(item_clone)) { result = item_clone; break; }
+
+    key = js_getstr(js, js_arr_get(js, keys, i), &key_len);
+    unsigned long index = 0;
+    if (own_key_is_array_index(key, key_len, &index)) js_arr_set_index(js, clone, (ant_offset_t)index, item_clone);
+    else result = js_mkprop_fast(js, clone, key, key_len, item_clone);
+  }
+
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
+static ant_value_t sc_clone_array(ant_t *js, ant_value_t val, sc_entry_t **seen, sc_entry_t **transfer) {
+  ant_value_t clone = Ant_Array_Create(js);
+  if (is_err(clone)) return clone;
+  sc_add(seen, val, clone);
+
+  ant_offset_t len = js_arr_len(js, val);
+  if (sc_array_is_plain_packed(val, len)) {
+    for (ant_offset_t i = 0; i < len; i++) {
+      ant_value_t item = Ant_Value_Undefined;
+      if (!array_dense_read(js_obj_ptr(val), i, &item)) item = js_arr_get(js, val, i);
+      ant_value_t item_clone = sc_clone_rec(js, item, seen, transfer);
+      if (is_err(item_clone)) return item_clone;
+      js_arr_push(js, clone, item_clone);
+    }
+    return clone;
+  }
+
+  ant_value_t status = sc_clone_array_keys(js, val, clone, seen, transfer);
+  if (is_err(status)) return status;
+
+  if (js_arr_len(js, clone) < len) {
+    ant_value_t set = js_setprop(js, clone, js->length_str, Ant_Value_FromNumber((double)len));
+    if (is_err(set)) return set;
+  }
+  return clone;
+}
+
 static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, sc_entry_t **transfer) {
   uint8_t t = vtype(val);
   TypedArrayData *ta_data = NULL;
@@ -173,19 +246,14 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
   if (js_is_arguments(val))
     return js_throw(js, make_dom_exception(js, "#<Object> could not be cloned.", "DataCloneError"));
 
-  if (t == kTypeArray) {
-    ant_value_t clone = Ant_Array_Create(js);
-    sc_add(seen, val, clone);
-    
-    ant_offset_t len = js_arr_len(js, val);
-    for (ant_offset_t i = 0; i < len; i++) {
-      ant_value_t ic = sc_clone_rec(js, js_arr_get(js, val, i), seen, transfer);
-      if (is_err(ic)) return ic;
-      js_arr_push(js, clone, ic);
-    }
-    
-    return clone;
-  }
+  if (t == kTypeArray) return sc_clone_array(js, val, seen, transfer);
+  ant_value_t prim = js_get_slot(val, SLOT_PRIMITIVE);
+  
+  uint8_t prim_type = vtype(prim);
+  if (
+    prim_type == kTypeNumber || prim_type == kTypeString || prim_type == kTypeBool ||
+    prim_type == kTypeBigInt || prim_type == kTypeSymbol
+  ) return sc_clone_wrapper(js, val, prim, seen);
 
   ant_object_t *obj_ptr = js_obj_ptr(val);
   if (!obj_ptr)
@@ -333,7 +401,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     const ant_shape_prop_t *meta = ant_shape_prop_at(obj_ptr->shape, key.slot);
     
     if (obj_ptr->flags.is_exotic || !meta || meta->has_getter || meta->has_setter) {
-      pval = js_get(js, val, key.str);
+      pval = js_getprop_fallback_len(js, val, key.str, key.key_len);
       if (is_err(pval)) { js_prop_iter_end(&iter); return pval; }
     }
     
@@ -348,7 +416,11 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
       return pc;
     }
     
-    js_set(js, clone, key.str, pc);
+    ant_value_t defined = js_mkprop_fast(js, clone, key.str, key.key_len, pc);
+    if (is_err(defined)) {
+      js_prop_iter_end(&iter);
+      return defined;
+    }
   }
 
   js_prop_iter_end(&iter);

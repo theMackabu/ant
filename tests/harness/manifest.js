@@ -61,6 +61,7 @@ export function targets() {
     'test_abort_signal_eventtarget.cjs',
     'test_builtin_constructor_shapes.cjs',
     'test_buffer_encodings.cjs',
+    'test_builtin_integrity.cjs',
     'test_builtin_lengths.cjs',
     'test_builtin_missing_named_export.mjs',
     'test_intrinsic_protos.cjs',

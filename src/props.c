@@ -507,11 +507,9 @@ ant_value_t js_define_own_prop(ant_t *js, ant_value_t obj, const char *key, size
     return v;
   }
 
-  {
-    ant_value_t extensibility_error = check_object_extensibility(js, obj);
-    if (is_err(extensibility_error)) return extensibility_error;
-    if (extensibility_error == Ant_Value_False) return v;
-  }
+  ant_value_t extensibility_error = check_object_extensibility(js, obj, key, klen);
+  if (is_err(extensibility_error)) return extensibility_error;
+  if (extensibility_error == Ant_Value_False) return v;
 
   const char *interned_key = intern_string(js, key, klen);
   if (!interned_key) return js_mkerr(js, "oom");

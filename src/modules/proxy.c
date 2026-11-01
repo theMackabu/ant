@@ -767,7 +767,7 @@ ant_value_t proxy_set_with_receiver(ant_t *js, ant_value_t proxy, const char *ke
         return Ant_Value_True;
       }
 
-      ant_value_t extensible = check_object_extensibility(js, receiver);
+      ant_value_t extensible = check_object_extensibility(js, receiver, key, key_len);
       if (is_err(extensible)) {
         GC_ROOT_RESTORE(js, root_mark);
         return extensible;

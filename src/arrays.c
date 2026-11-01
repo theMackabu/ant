@@ -729,30 +729,41 @@ ant_value_t validate_array_length(ant_t *js, ant_value_t v) {
   return Ant_Value_Undefined;
 }
 
-ant_value_t check_object_extensibility(ant_t *js, ant_value_t obj) {
-  obj = js_as_obj(obj);
-  ant_object_t *ptr = js_obj_ptr(obj);
-  if (!ptr) return Ant_Value_Undefined;
+static inline bool object_refuses_new_props(ant_value_t obj) {
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+  return ptr && (ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible);
+}
 
-  if (ptr->flags.frozen) {
-    return sv_is_strict_context(js)
-      ? js_mkerr(js, "cannot add property to frozen object")
-      : Ant_Value_False;
-  }
+static __attribute__((noinline, cold)) ant_value_t not_extensible_error(ant_t *js, const char *key, size_t len) {
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot add property %.*s, object is not extensible", (int)len, key);
+}
 
-  if (ptr->flags.sealed) {
-    return sv_is_strict_context(js)
-      ? js_mkerr(js, "cannot add property to sealed object")
-      : Ant_Value_False;
-  }
+ant_value_t check_object_extensibility(ant_t *js, ant_value_t obj, const char *key, size_t len) {
+  if (!object_refuses_new_props(obj)) return Ant_Value_Undefined;
+  return sv_is_strict_context(js) ? not_extensible_error(js, key, len) : Ant_Value_False;
+}
 
-  if (!ptr->flags.extensible) {
-    return sv_is_strict_context(js)
-      ? js_mkerr(js, "cannot add property to non-extensible object")
-      : Ant_Value_False;
-  }
+ant_value_t check_object_extensibility_index(ant_t *js, ant_value_t obj, uint64_t idx) {
+  if (!object_refuses_new_props(obj)) return Ant_Value_Undefined;
+  if (!sv_is_strict_context(js)) return Ant_Value_False;
+  
+  char buf[24];
+  size_t len = uint_to_str(buf, sizeof(buf), idx);
+  
+  return not_extensible_error(js, buf, len);
+}
 
-  return Ant_Value_Undefined;
+ant_value_t check_object_extensibility_symbol(ant_t *js, ant_value_t obj, ant_value_t sym) {
+  if (!object_refuses_new_props(obj)) return Ant_Value_Undefined;
+  if (!sv_is_strict_context(js)) return Ant_Value_False;
+  
+  ant_value_t text = js_symbol_to_string(js, sym);
+  if (is_err(text)) return text;
+  
+  size_t len = 0;
+  const char *bytes = js_getstr(js, text, &len);
+  
+  return not_extensible_error(js, bytes, len);
 }
 
 void array_len_set(ant_t *js, ant_value_t obj, ant_offset_t new_len) {
