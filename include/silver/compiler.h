@@ -321,6 +321,9 @@ sv_func_t *sv_compile_function_with_params(
 );
 
 sv_func_t *sv_compile_function(ant_t *js, const sv_function_parts_t *parts);
+
+// operand depth from OP_DEF n_pop/n_push; -1 when the analysis rejects the code
+int sv_func_compute_max_stack(const sv_func_t *func);
 sv_func_t *compile_function_body(sv_compiler_t *enclosing, sv_ast_t *node, sv_compile_mode_t mode);
 
 void compile_array(sv_compiler_t *c, sv_ast_t *node);

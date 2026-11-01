@@ -1,0 +1,1 @@
+const f = (a, { b } = {}, [c] = []) => async () => (a + b) * c; new.target; (() => this)();

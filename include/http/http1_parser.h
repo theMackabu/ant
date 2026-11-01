@@ -43,6 +43,7 @@ typedef struct {
   bool header_overflow;
   bool body_overflow;
   bool headers_complete;
+  bool in_trailers;
   bool message_complete;
   bool stream_body;
   bool target_root_candidate;

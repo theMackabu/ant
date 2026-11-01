@@ -20,6 +20,7 @@ static void *hash_malloc(size_t size) { return malloc(size); }
 #undef malloc
 #undef calloc
 #undef realloc
+#include "shape_test_intern.h"
 
 // shape edits only bump the isolate's IC epochs
 static ant_t test_isolate;

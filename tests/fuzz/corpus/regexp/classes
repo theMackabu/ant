@@ -1,0 +1,1 @@
+[\p{L}\d_-]+\P{Script=Greek}

@@ -14,3 +14,4 @@ option('build_timestamp', type: 'string', value: '', description: 'build timesta
 option('build_git_hash', type: 'string', value: '', description: 'git hash for version metadata (defaults to git rev-parse if empty)')
 option('deps_prefix_cmake', type: 'string', value: '', description: 'prefix path for finding dependencies in cmake subprojects')
 option('llvm_nm', type: 'string', value: 'llvm-nm', description: 'LLVM nm executable used to inspect Darwin LTO archives')
+option('fuzz', type: 'feature', value: 'disabled', description: 'link the tests/fuzz targets against libFuzzer (clang only); otherwise they build with the replay driver')

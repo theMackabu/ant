@@ -1,0 +1,1 @@
+import d, { a as b } from "m"; export const x = await import("y"); export default class {} export * as ns from "z";

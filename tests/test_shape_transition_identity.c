@@ -3,6 +3,7 @@
 #include "isolate.h"
 #include <assert.h>
 #include <stdio.h>
+#include "shape_test_intern.h"
 
 // shape edits only bump the isolate's IC epochs
 static ant_t test_isolate;

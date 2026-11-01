@@ -1,0 +1,1 @@
+var v = 1; function f() { return typeof arguments; } with (o) { v }

@@ -172,6 +172,9 @@ ant_ws_frame_result_t ant_ws_parse_frame(
   if (require_mask && !masked) return ANT_WS_FRAME_PROTOCOL_ERROR;
   if (opcode >= 0x8 && ((data[0] & 0x80u) == 0 || payload_len > 125)) return ANT_WS_FRAME_PROTOCOL_ERROR;
   if (opcode >= 0x8 && (data[0] & 0x40u) != 0) return ANT_WS_FRAME_PROTOCOL_ERROR;
+  // RFC 6455 section 5.2: an unknown opcode fails the connection
+  if ((opcode > ANT_WS_OPCODE_BINARY && opcode < ANT_WS_OPCODE_CLOSE) || opcode > ANT_WS_OPCODE_PONG)
+    return ANT_WS_FRAME_PROTOCOL_ERROR;
 
   if (payload_len == 126) {
     if (len < pos + 2) return ANT_WS_FRAME_INCOMPLETE;

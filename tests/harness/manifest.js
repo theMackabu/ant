@@ -385,6 +385,7 @@ export function targets() {
     'test_realm_protectors.cjs',
     'test_readable_read_size.cjs',
     'test_reflect_set_result.cjs',
+    'test_regexp_annex_b_escapes.cjs',
     'test_regexp_cache_admission.cjs',
     'test_regexp_exec_discard.cjs',
     'test_regexp_exec_position_hints.cjs',

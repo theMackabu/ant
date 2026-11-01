@@ -13,6 +13,14 @@ if get_option('buildtype') != 'release'
   warning('Building in non-release mode. For best performance, use --buildtype=release')
 endif
 
+# coverage instrumentation for libFuzzer; the fuzz targets link the runtime
+if get_option('fuzz').enabled()
+  if cc.get_id() != 'clang'
+    error('-Dfuzz=enabled needs clang (libFuzzer)')
+  endif
+  add_project_arguments('-fsanitize=fuzzer-no-link', language: ['c', 'cpp'])
+endif
+
 add_project_arguments(
   '-DNO_EXECUTE_PERMISSION',
   '-Wshadow',

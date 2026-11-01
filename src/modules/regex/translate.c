@@ -1,4 +1,5 @@
 #include "regex_internal.h"
+#include <limits.h>
 
 static inline bool is_pcre2_passthrough_escape(char c) {
 switch (c) {
@@ -309,6 +310,34 @@ static bool regexp_source_has_group_names(const char *src, size_t src_len) {
   return false;
 }
 
+static bool regexp_is_brace_quantifier(const char *src, size_t src_len, size_t at) {
+  size_t i = at + 1;
+  size_t digits = 0;
+  while (i < src_len && src[i] >= '0' && src[i] <= '9') { i++; digits++; }
+  if (digits == 0 || i >= src_len) return false;
+  if (src[i] == '}') return true;
+  if (src[i++] != ',') return false;
+  while (i < src_len && src[i] >= '0' && src[i] <= '9') i++;
+  return i < src_len && src[i] == '}';
+}
+
+// Capturing groups in a non-v pattern, for telling backreferences from
+// Annex B legacy octal escapes.
+static unsigned regexp_count_capture_groups(const char *src, size_t src_len) {
+  unsigned count = 0;
+  bool in_class = false;
+  for (size_t i = 0; i < src_len; i++) {
+    char c = src[i];
+    if (c == '\\') { i++; continue; }
+    if (in_class) { if (c == ']') in_class = false; continue; }
+    if (c == '[') { in_class = true; continue; }
+    if (c != '(') continue;
+    if (i + 1 >= src_len || src[i + 1] != '?') count++;
+    else if (i + 3 < src_len && src[i + 2] == '<' && src[i + 3] != '=' && src[i + 3] != '!') count++;
+  }
+  return count;
+}
+
 static void js_to_pcre2_pattern_append(
   const char *src,
   size_t src_len,
@@ -319,6 +348,8 @@ static void js_to_pcre2_pattern_append(
 ) {
   bool unicode_ignore_case = (flags & REGEXP_FLAG_IGNORE_CASE) && (flags & (REGEXP_FLAG_UNICODE | REGEXP_FLAG_UNICODE_SET));
   bool legacy_ignore_case = (flags & REGEXP_FLAG_IGNORE_CASE) && !(flags & (REGEXP_FLAG_UNICODE | REGEXP_FLAG_UNICODE_SET));
+  bool unicode = (flags & (REGEXP_FLAG_UNICODE | REGEXP_FLAG_UNICODE_SET)) != 0;
+  unsigned capture_groups = UINT_MAX;
   size_t legacy_class_close = 0;
   int charclass_depth = initial_charclass_depth;
   char *output = builder->data;
@@ -342,6 +373,13 @@ static void js_to_pcre2_pattern_append(
       size_t name_end = regexp_group_name_end(src, src_len, si + 3);
       for (; si < name_end; si++) OUT(src[si]);
       if (si < src_len) OUT(src[si]);
+      continue;
+    }
+
+    // classes only nest with v; elsewhere [ is literal, and escaped so PCRE2
+    // does not read [:name:] as a POSIX class
+    if (src[si] == '[' && charclass_depth > 0 && !(flags & REGEXP_FLAG_UNICODE_SET)) {
+      OUT('\\'); OUT('[');
       continue;
     }
 
@@ -397,6 +435,11 @@ static void js_to_pcre2_pattern_append(
       }
       charclass_depth++;
       OUT('[');
+      // PCRE2 reads [: [. [= as POSIX class syntax, JS as literal characters
+      if (si + 1 < src_len && (src[si + 1] == ':' || src[si + 1] == '.' || src[si + 1] == '=')) {
+        OUT('\\'); OUT(src[si + 1]);
+        si++;
+      }
       continue;
     }
     if (src[si] == ']' && charclass_depth > 0) {
@@ -444,6 +487,13 @@ static void js_to_pcre2_pattern_append(
       continue;
     }
 
+    // a { that does not open {n}, {n,} or {n,m} is literal in JS, while
+    // PCRE2 also reads {,m} as a quantifier
+    if (charclass_depth == 0 && src[si] == '{' && !regexp_is_brace_quantifier(src, src_len, si)) {
+      OUT('\\'); OUT('{');
+      continue;
+    }
+
     if (src[si] != '\\' || si + 1 >= src_len) {
       OUT(src[si]);
       continue;
@@ -451,13 +501,21 @@ static void js_to_pcre2_pattern_append(
 
     char next = src[si + 1];
 
+    // \B is an identity escape in a class; PCRE2 rejects it there
+    if (next == 'B' && charclass_depth > 0) {
+      OUT('B');
+      si++;
+      continue;
+    }
+
     if (next == 'v') {
       OUT('\\'); OUT('x'); OUT('{'); OUT('0'); OUT('b'); OUT('}');
       si++;
       continue;
     }
 
-    if (next == 'u' && si + 2 < src_len && src[si + 2] == '{') {
+    // \u{...} is a code point only with u or v; otherwise u{n} quantifies u
+    if (unicode && next == 'u' && si + 2 < src_len && src[si + 2] == '{') {
       size_t brace_start = si + 3;
       size_t brace_end = brace_start;
       while (brace_end < src_len && src[brace_end] != '}' && ant_ascii_is_xdigit(src[brace_end])) brace_end++;
@@ -473,6 +531,23 @@ static void js_to_pcre2_pattern_append(
     if (next == 'u' && si + 5 < src_len &&
         ant_ascii_is_xdigit(src[si+2]) && ant_ascii_is_xdigit(src[si+3]) &&
         ant_ascii_is_xdigit(src[si+4]) && ant_ascii_is_xdigit(src[si+5])) {
+      // PCRE2's UTF mode has no surrogates, so a \uHHHH\uHHHH pair becomes
+      // its code point; in a non-unicode class each unit stays separate
+      uint32_t hi = 0, lo = 0;
+      size_t after = 0;
+      if (
+        (unicode || charclass_depth == 0) &&
+        regexp_hex_value(src, src_len, si + 2, 4, &hi) && hi >= 0xD800 && hi <= 0xDBFF &&
+        si + 11 < src_len && src[si + 6] == '\\' && src[si + 7] == 'u' &&
+        regexp_hex_value(src, src_len, si + 8, 4, &lo) && lo >= 0xDC00 && lo <= 0xDFFF
+      ) after = si + 11;
+      if (after) {
+        char escaped[12];
+        int escaped_len = snprintf(escaped, sizeof(escaped), "\\x{%x}", 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00));
+        for (int k = 0; k < escaped_len; k++) OUT(escaped[k]);
+        si = after;
+        continue;
+      }
       OUT('\\'); OUT('x'); OUT('{');
       OUT(src[si+2]); OUT(src[si+3]); OUT(src[si+4]); OUT(src[si+5]);
       OUT('}');
@@ -539,7 +614,8 @@ static void js_to_pcre2_pattern_append(
       continue;
     }
 
-    if ((next == 'p' || next == 'P') && si + 2 < src_len && src[si + 2] == '{') {
+    // without u or v, \p is an identity escape and {...} is literal
+    if (unicode && (next == 'p' || next == 'P') && si + 2 < src_len && src[si + 2] == '{') {
       size_t brace_start = si + 3;
       size_t brace_end = brace_start;
       while (brace_end < src_len && src[brace_end] != '}') brace_end++;
@@ -732,6 +808,34 @@ static void js_to_pcre2_pattern_append(
       }
     }
 
+    // Annex B: \N past the last group is a legacy octal escape, and \8 or
+    // \9 the digit itself; PCRE2 reads \1-\9 as backreferences regardless
+    if (!unicode && charclass_depth == 0 && next >= '1' && next <= '9') {
+      if (capture_groups == UINT_MAX) capture_groups = regexp_count_capture_groups(src, src_len);
+      unsigned value = 0;
+      for (size_t k = si + 1; k < src_len && src[k] >= '0' && src[k] <= '9' && value <= capture_groups; k++)
+        value = value * 10 + (unsigned)(src[k] - '0');
+      if (value > capture_groups) {
+        if (next >= '8') {
+          si++;
+          OUT(next);
+          continue;
+        }
+        unsigned octal = (unsigned)(next - '0');
+        size_t used = 1;
+        while (
+          used < 3 && si + 1 + used < src_len &&
+          src[si + 1 + used] >= '0' && src[si + 1 + used] <= '7' &&
+          octal * 8 + (unsigned)(src[si + 1 + used] - '0') <= 0377
+        ) octal = octal * 8 + (unsigned)(src[si + 1 + used++] - '0');
+        char escaped[10];
+        int escaped_len = snprintf(escaped, sizeof(escaped), "\\x{%x}", octal);
+        for (int k = 0; k < escaped_len; k++) OUT(escaped[k]);
+        si += used;
+        continue;
+      }
+    }
+
     if (legacy_ignore_case && charclass_depth == 0 && next >= '1' && next <= '9') {
       unsigned group = 0;
       for (size_t k = si + 1; k < src_len && src[k] >= '0' && src[k] <= '9' && group <= 255; k++)
@@ -750,6 +854,9 @@ static void js_to_pcre2_pattern_append(
     }
 
     si++;
+    // an identity escape of punctuation keeps its backslash, which PCRE2
+    // also reads as literal (and so never sees [: as POSIX syntax)
+    if ((unsigned char)next < 0x80 && !ant_ascii_is_alnum(next)) OUT('\\');
     OUT(next);
     next_char:;
   }

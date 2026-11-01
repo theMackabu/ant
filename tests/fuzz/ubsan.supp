@@ -1,0 +1,3 @@
+# UBSan runtime suppressions for third-party code (UBSAN_OPTIONS=suppressions=...)
+# libbase64 CPU feature detection shifts 1 into the sign bit
+shift-base:codec_choose.c

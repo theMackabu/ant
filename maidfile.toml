@@ -34,6 +34,27 @@ script = ['meson subprojects download', 'meson setup build --wipe']
 [tasks.asan]
 script = ['meson subprojects download', 'meson setup build --wipe -Db_sanitize=address -Doptimization=0 -Db_lto=false -Dstrip=false -Db_lundef=false']
 
+[tasks.fuzz_setup]
+script = ['meson subprojects download', 'CC=clang CXX=clang++ meson setup build-fuzz --wipe -Dfuzz=enabled -Db_sanitize=address,undefined -Db_lundef=false -Db_lto=false -Doptimization=1 -Ddebug=true -Dstrip=false -Dpgo=disabled']
+
+[tasks.fuzz]
+script = ['''
+#!/usr/bin/env bash
+set -euo pipefail
+target="%{arg.1}"
+seconds="%{arg.2}"
+[[ "$seconds" =~ ^[0-9]+$ ]] || seconds=60
+# the GC heap is invisible to LeakSanitizer, and its stack scan needs real
+# frames (see tests/fuzz/fuzz_js.c)
+asan="detect_leaks=1"
+[ "$target" = js ] && asan="detect_leaks=0:detect_stack_use_after_return=0"
+meson compile -C build-fuzz "fuzz-$target"
+mkdir -p "build-fuzz/corpus/$target"
+UBSAN_OPTIONS="suppressions=tests/fuzz/ubsan.supp:print_stacktrace=1" \
+ASAN_OPTIONS="$asan" \
+  ./build-fuzz/meson/tests/fuzz/fuzz-$target -max_total_time="$seconds" "build-fuzz/corpus/$target" "tests/fuzz/corpus/$target"
+''']
+
 [tasks.debug]
 script = [
   'meson subprojects download',

@@ -84,6 +84,17 @@ This guide keeps validation proportional to the change while still protecting ru
 - If the right validation is expensive or unavailable, say so in the change
   description.
 
+## Fuzz tests
+
+- Parsers and codecs have libFuzzer targets in `tests/fuzz/` that check
+  properties (split-invariance, round-trips, oracle agreement), not just
+  crashes. `meson test -C build --suite fuzz` replays their corpora with a
+  fixed set of mutations under any compiler; run it after touching
+  `src/http/`, `src/numbers.cc`, `src/base64.c`, `src/escape.c`,
+  `src/utf8.c`, `src/modules/url/`, the RegExp translator, or the Silver
+  parser and compiler. `maid fuzz_setup` and `maid fuzz <target> [seconds]`
+  fuzz with clang, ASan and UBSan. See [tests/fuzz](../../tests/fuzz/README.md).
+
 ## Verifying operand-stack depth
 
 The bytecode compiler computes each function's maximum operand depth from

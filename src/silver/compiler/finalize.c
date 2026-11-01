@@ -10,8 +10,6 @@ static bool sv_func_compute_has_try(const sv_func_t *func) {
   return false;
 }
 
-static int sv_func_compute_max_stack(const sv_func_t *func);
-
 void sv_func_init_code_and_map_templates(
   const sv_compiler_t *c, sv_func_t *func
 ) {
@@ -350,7 +348,7 @@ static int sv_func_stack_depths(const sv_func_t *func, int *depth) {
   return ok ? max : -1;
 }
 
-static int sv_func_compute_max_stack(const sv_func_t *func) {
+int sv_func_compute_max_stack(const sv_func_t *func) {
   if (func->code_len <= 0) return 0;
   int depth_small[STACK_DEPTH_SCRATCH];
   bool small = func->code_len <= STACK_DEPTH_SCRATCH;

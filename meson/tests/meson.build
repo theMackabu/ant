@@ -256,3 +256,7 @@ foreach name : sandbox_tests
     build_by_default: false
   )
 endforeach
+
+if host_machine.system() != 'windows'
+  subdir('fuzz')
+endif
