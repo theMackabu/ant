@@ -124,7 +124,7 @@ static ant_value_t timer_make_args_array(ant_native_params_t) {
   int arg_count = nargs > 2 ? nargs - 2 : 0;
 
   if (arg_count <= 0) return arr;
-  arr = js_mkarr(js);
+  arr = Ant_Array_Create(js);
   for (int i = 0; i < arg_count; i++) js_arr_push(js, arr, args[i + 2]);
   return arr;
 }
@@ -723,7 +723,7 @@ static ant_value_t timers_interval_shift_parked(ant_t *js, ant_value_t state) {
 
   ant_value_t promise = js_arr_get(js, parked, head);
   if (head + 1 == len) {
-    js_set(js, state, "parked", js_mkarr(js));
+    js_set(js, state, "parked", Ant_Array_Create(js));
     js_set(js, state, "parkedHead", Ant_Value_FromNumber(0));
   } else js_set(js, state, "parkedHead", Ant_Value_FromNumber((double)(head + 1)));
 
@@ -887,7 +887,7 @@ static ant_value_t js_timers_promises_setInterval(ant_params_t) {
   js_set(js, state, "abortListener", Ant_Value_Undefined);
   js_set(js, state, "handle", Ant_Value_Undefined);
   js_set(js, state, "notYielded", Ant_Value_FromNumber(0));
-  js_set(js, state, "parked", js_mkarr(js));
+  js_set(js, state, "parked", Ant_Array_Create(js));
   js_set(js, state, "parkedHead", Ant_Value_FromNumber(0));
   js_set(js, state, "started", Ant_Value_False);
   js_set(js, state, "finished", Ant_Value_FromBool(!is_undefined(error)));

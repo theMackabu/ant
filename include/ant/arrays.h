@@ -3,7 +3,8 @@
 
 #include "ant/base.h"
 
-ant_value_t js_mkarr(ant_t *);
+ant_value_t Ant_Array_Create(ant_t *);
+
 ant_offset_t js_arr_len(ant_t *js, ant_value_t arr);
 ant_value_t js_arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx);
 

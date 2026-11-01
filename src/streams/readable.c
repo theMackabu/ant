@@ -646,7 +646,7 @@ ant_value_t rs_reader_create(ant_t *js, ant_value_t stream_obj, ant_value_t new_
   js_set_slot(obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_READABLE_STREAM_READER));
   js_set_slot(obj, SLOT_ENTRIES, stream_obj);
   js_set_slot(obj, SLOT_RS_CLOSED, closed);
-  js_set_slot(obj, SLOT_AUX, js_mkarr(js));
+  js_set_slot(obj, SLOT_AUX, Ant_Array_Create(js));
   js_set_slot(stream_obj, SLOT_CTOR, obj);
 
   if (stream->state == RS_STATE_CLOSED)
@@ -791,7 +791,7 @@ static ant_value_t setup_default_controller(
   js_set_slot(ctrl_obj, SLOT_RS_PULL, pull_fn);
   js_set_slot(ctrl_obj, SLOT_RS_CANCEL, cancel_fn);
   js_set_slot(ctrl_obj, SLOT_RS_SIZE, size_fn);
-  js_set_slot(ctrl_obj, SLOT_AUX, js_mkarr(js));
+  js_set_slot(ctrl_obj, SLOT_AUX, Ant_Array_Create(js));
   js_set_finalizer(ctrl_obj, rs_controller_finalize);
 
   js_set_slot(stream_obj, SLOT_ENTRIES, ctrl_obj);

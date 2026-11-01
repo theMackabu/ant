@@ -1,7 +1,7 @@
 #include "regex_internal.h"
 
 static ant_value_t regexp_split_fast(ant_t *js, const regexp_fast_t *fast, ant_value_t str, uint32_t limit) {
-  ant_value_t result = js_mkarr(js);
+  ant_value_t result = Ant_Array_Create(js);
   if (is_err(result) || limit == 0) return result;
 
   ant_offset_t str_len, str_off = regexp_vstr(js, str, &str_len);
@@ -142,7 +142,7 @@ ant_value_t builtin_regexp_symbol_split(ant_params_t) {
   ant_value_t splitter = regexp_species_construct(js, call_this, C, ctor_args, 2);
   if (is_err(splitter)) return splitter;
 
-  ant_value_t A = js_mkarr(js);
+  ant_value_t A = Ant_Array_Create(js);
   if (is_err(A)) return A;
   ant_offset_t lengthA = 0;
 

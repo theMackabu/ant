@@ -39,7 +39,7 @@ static ant_offset_t usp_entry_count(ant_t *js, ant_value_t entries) {
 }
 
 static ant_value_t usp_make_entry(ant_t *js, ant_value_t key, ant_value_t value) {
-  ant_value_t entry = js_mkarr(js);
+  ant_value_t entry = Ant_Array_Create(js);
   js_arr_push(js, entry, key);
   js_arr_push(js, entry, value);
   return entry;
@@ -97,7 +97,7 @@ static void usp_push_decoded_pair(ant_t *js, ant_value_t arr, const char *start,
 }
 
 static ant_value_t parse_query_to_arr(ant_t *js, const char *query) {
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   if (!query) return arr;
 
   for (const char *p = query; *p;) {
@@ -229,7 +229,7 @@ static ant_value_t usp_get(ant_params_t) {
 static ant_value_t usp_getAll(ant_params_t) {
   if (nargs < 1) return url_missing_args_error(js, USP_NAME_REQUIRED);
 
-  ant_value_t result = js_mkarr(js);
+  ant_value_t result = Ant_Array_Create(js);
   ant_value_t key_sv = url_string_value(js, args[0]);
   if (is_err(key_sv)) return key_sv;
 
@@ -281,7 +281,7 @@ static ant_value_t usp_set(ant_params_t) {
 
   ant_value_t entries = usp_entries(call_this);
   ant_offset_t len = usp_entry_count(js, entries);
-  ant_value_t next = js_mkarr(js);
+  ant_value_t next = Ant_Array_Create(js);
   bool found = false;
 
   for (ant_offset_t i = 0; i < len; i++) {
@@ -334,7 +334,7 @@ static ant_value_t usp_delete(ant_params_t) {
 
   ant_value_t entries = usp_entries(call_this);
   ant_offset_t len = usp_entry_count(js, entries);
-  ant_value_t next = js_mkarr(js);
+  ant_value_t next = Ant_Array_Create(js);
 
   for (ant_offset_t i = 0; i < len; i++) {
     ant_value_t entry = js_arr_get(js, entries, i);
@@ -409,7 +409,7 @@ static ant_value_t usp_sort(ant_params_t) {
   for (ant_offset_t i = 0; i < len; i++) items[i] = js_arr_get(js, entries, i);
   usp_sort_entries(js, items, len);
 
-  ant_value_t next = js_mkarr(js);
+  ant_value_t next = Ant_Array_Create(js);
   for (ant_offset_t i = 0; i < len; i++) js_arr_push(js, next, items[i]);
   free(items);
 
@@ -615,7 +615,7 @@ static ant_value_t js_URLSearchParams(ant_params_t) {
   if (is_undefined(call_new_target))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Class constructor URLSearchParams cannot be invoked without 'new'");
 
-  ant_value_t entries = js_mkarr(js);
+  ant_value_t entries = Ant_Array_Create(js);
   ant_value_t obj = usp_new(js, Ant_Value_Undefined, entries);
   if (nargs < 1 || is_undefined(args[0]) || is_null(args[0])) return obj;
 

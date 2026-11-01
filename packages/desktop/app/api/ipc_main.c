@@ -61,7 +61,7 @@ ant_value_t DesktopIpcMainOn(ant_params_t) {
   }
   ant_value_t listeners = js_get(js, state->ipc_listeners, channel);
   if (!is_array_value(listeners)) {
-    listeners = js_mkarr(js);
+    listeners = Ant_Array_Create(js);
     js_set(js, state->ipc_listeners, channel, listeners);
   }
   js_arr_push(js, listeners, args[1]);

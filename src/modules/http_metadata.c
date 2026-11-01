@@ -81,7 +81,7 @@ static const http_status_entry_t http_status_codes[] = {
 };
 
 static ant_value_t http_metadata_make_methods(ant_t *js) {
-  ant_value_t methods = js_mkarr(js);
+  ant_value_t methods = Ant_Array_Create(js);
   size_t count = sizeof(http_methods) / sizeof(http_methods[0]);
 
   for (size_t i = 0; i < count; i++) {

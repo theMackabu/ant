@@ -115,7 +115,7 @@ static ant_value_t intl_canonical_locale_list(ant_t *js, ant_value_t locales) {
   if (vtype(locales) == kTypeNull)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
 
-  ant_value_t out = js_mkarr(js);
+  ant_value_t out = Ant_Array_Create(js);
   if (is_err(out) || vtype(locales) == kTypeUndefined) return out;
 
   GC_ROOT_SAVE(mark, js);
@@ -347,7 +347,7 @@ static ant_value_t intl_dtf_format_to_parts(ant_params_t) {
   snprintf(minute, sizeof(minute), "%02d", fields.minute);
   snprintf(second, sizeof(second), "%02d", fields.second);
 
-  ant_value_t parts = js_mkarr(js);
+  ant_value_t parts = Ant_Array_Create(js);
   js_arr_push(js, parts, intl_dtf_make_part(js, "hour", hour));
   js_arr_push(js, parts, intl_dtf_make_part(js, "literal", ":"));
   js_arr_push(js, parts, intl_dtf_make_part(js, "minute", minute));
@@ -400,7 +400,7 @@ static ant_value_t intl_segmenter_segment(ant_params_t) {
 
   size_t input_len = 0;
   char *input_str = js_getstr(js, input, &input_len);
-  ant_value_t segments = js_mkarr(js);
+  ant_value_t segments = Ant_Array_Create(js);
 
   size_t granularity_len = 0;
   const char *granularity = intl_segmenter_granularity(js, call_this, &granularity_len);

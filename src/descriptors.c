@@ -1473,7 +1473,7 @@ ant_value_t object_define_properties(ant_t *js, ant_value_t obj, ant_value_t pro
   ant_value_t keys = proxied ? proxy_enum(js, source, OBJ_ENUM_KEYS) : js_own_property_keys(js, props, true, true);
   GC_ROOT_PIN(js, keys);
   
-  ant_value_t descriptors = is_err(keys) ? keys : mkarr(js);
+  ant_value_t descriptors = is_err(keys) ? keys : Ant_Array_Create(js);
   GC_ROOT_PIN(js, descriptors);
   
   if (is_err(descriptors)) {

@@ -31,7 +31,7 @@ ant_value_t DesktopMenuInsert(ant_params_t) {
   ant_offset_t count = js_arr_len(js, template_value);
   ant_offset_t position = (ant_offset_t)MAX(0, Ant_Value_AsNumberUnchecked(args[0]));
   if (position > count) position = count;
-  ant_value_t replacement = js_mkarr(js);
+  ant_value_t replacement = Ant_Array_Create(js);
   for (ant_offset_t index = 0; index < count; index++) {
     if (index == position) js_arr_push(js, replacement, args[1]);
     js_arr_push(js, replacement, js_arr_get(js, template_value, index));

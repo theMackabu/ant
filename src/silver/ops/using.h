@@ -115,7 +115,7 @@ static inline ant_value_t sv_using_push(
     return js_mkerr_typed(js, JS_ERR_TYPE, "resource is not disposable");
   }
 
-  ant_value_t record = js_mkarr(js);
+  ant_value_t record = Ant_Array_Create(js);
   GC_ROOT_PIN(js, record);
   if (is_err(record)) {
     GC_ROOT_RESTORE(js, root_mark);
@@ -177,7 +177,7 @@ static inline ant_value_t sv_using_dispose_sync(
   GC_ROOT_PIN(js, completion);
 
   ant_offset_t len = js_arr_len(js, entries);
-  ant_value_t work = js_mkarr(js);
+  ant_value_t work = Ant_Array_Create(js);
   GC_ROOT_PIN(js, work);
   
   if (is_err(work)) {
@@ -335,7 +335,7 @@ static inline ant_value_t sv_using_dispose_async(
   GC_ROOT_PIN(js, entries);
 
   ant_offset_t len = js_arr_len(js, entries);
-  ant_value_t work = js_mkarr(js);
+  ant_value_t work = Ant_Array_Create(js);
   GC_ROOT_PIN(js, work);
   if (is_err(work)) {
     GC_ROOT_RESTORE(js, root_mark);

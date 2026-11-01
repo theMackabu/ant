@@ -110,7 +110,7 @@ char *ant_renderer_runtime_describe(const char *specifier) {
   ant_value_t keys = js_own_property_keys(renderer_runtime, module, false, true);
   if (is_err(keys)) return CopyJson(Response(false, keys));
 
-  ant_value_t exports = js_mkarr(renderer_runtime);
+  ant_value_t exports = Ant_Array_Create(renderer_runtime);
   ant_offset_t count = js_arr_len(renderer_runtime, keys);
   for (ant_offset_t index = 0; index < count; index++) {
     ant_value_t key = js_arr_get(renderer_runtime, keys, index);

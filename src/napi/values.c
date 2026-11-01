@@ -236,7 +236,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_object(napi_env env, napi_value *
 NAPI_EXTERN napi_status NAPI_CDECL napi_create_array(napi_env env, napi_value *result) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = NAPI_RETURN(nenv, js_mkarr(nenv->js));
+  *result = NAPI_RETURN(nenv, Ant_Array_Create(nenv->js));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -247,7 +247,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_array_with_length(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  ant_value_t arr = js_mkarr(nenv->js);
+  ant_value_t arr = Ant_Array_Create(nenv->js);
   ant_value_t r = js_setprop(
     nenv->js, arr,
     js_mkstr(nenv->js, "length", 6),

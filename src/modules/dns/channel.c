@@ -183,7 +183,7 @@ void dns_channel_destroy(dns_channel_t *channel) {
 }
 
 ant_value_t dns_channel_get_servers(ant_t *js, dns_channel_t *channel) {
-  ant_value_t list = js_mkarr(js);
+  ant_value_t list = Ant_Array_Create(js);
   if (!channel || !channel->ares) return list;
 
   char *csv = ares_get_servers_csv(channel->ares);

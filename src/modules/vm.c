@@ -755,7 +755,7 @@ static ant_value_t vm_function_with_extensions(
   }
   GC_ROOT_PIN(js, wrapper);
 
-  ant_value_t scopes = js_mkarr(js);
+  ant_value_t scopes = Ant_Array_Create(js);
   GC_ROOT_PIN(js, scopes);
   for (ant_offset_t i = 0; i < count; i++) js_arr_push(js, scopes, js_arr_get(js, extensions, i));
 
@@ -890,7 +890,7 @@ static ant_value_t vm_measure_memory(ant_params_t) {
     js->alloc_bytes.closures + js->alloc_bytes.upvalues;
   
   ant_value_t estimate = Ant_Value_FromNumber((double)used);
-  ant_value_t range = js_mkarr(js);
+  ant_value_t range = Ant_Array_Create(js);
   js_arr_push(js, range, estimate);
   js_arr_push(js, range, estimate);
 

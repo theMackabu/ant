@@ -65,7 +65,7 @@ static ant_value_t syntax_obj(syntax_export_ctx_t *ctx) {
 }
 
 static ant_value_t syntax_arr(syntax_export_ctx_t *ctx) {
-  return syntax_pin(ctx, js_mkarr(ctx->js));
+  return syntax_pin(ctx, Ant_Array_Create(ctx->js));
 }
 
 static ant_value_t syntax_strn(syntax_export_ctx_t *ctx, const char *str, size_t len) {

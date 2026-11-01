@@ -11,7 +11,7 @@ int main(void) {
   js_setstackbase(js, &stack_base);
   assert(ant_object_flag_masks_match_layout());
   GC_ROOT_SAVE(roots, js);
-  ant_value_t array = js_mkarr(js);
+  ant_value_t array = Ant_Array_Create(js);
   GC_ROOT_PIN(js, array);
   ant_value_t length = js_mkstr(js, "length", 6);
   GC_ROOT_PIN(js, length);

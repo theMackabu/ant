@@ -60,9 +60,6 @@ bool array_length_readonly(ant_t *js, ant_value_t arr);
 bool array_result_extensible(ant_value_t result);
 
 ant_value_t array_result_set(ant_t *js, ant_value_t result, bool fresh, ant_offset_t idx, ant_value_t val);
-ant_value_t alloc_array_with_proto(ant_t *js, ant_value_t proto);
-
-ant_value_t mkarr(ant_t *js);
 ant_value_t mkarr_dense_literal_capacity(ant_t *js, const ant_value_t *elements, uint32_t count, bool exact_capacity);
 
 void arr_del(ant_t *js, ant_value_t arr, ant_offset_t idx);

@@ -35,7 +35,7 @@ static ant_value_t http_parser_make_error(
 }
 
 static ant_value_t http_parser_raw_headers_array(ant_t *js, const ant_http1_parsed_request_t *parsed) {
-  ant_value_t raw_headers = js_mkarr(js);
+  ant_value_t raw_headers = Ant_Array_Create(js);
   const ant_http_header_t *hdr = NULL;
 
   for (hdr = parsed->headers; hdr; hdr = hdr->next) {

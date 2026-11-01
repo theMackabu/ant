@@ -558,7 +558,7 @@ static ant_value_t consume_body_from_stream(
   ant_value_t state = Ant_Object_CreateBare(js);
   js_set(js, state, "promise", promise);
   js_set(js, state, "reader", reader);
-  js_set(js, state, "chunks", js_mkarr(js));
+  js_set(js, state, "chunks", Ant_Array_Create(js));
   js_set(js, state, "mode", Ant_Value_FromNumber(mode));
   js_set(js, state, "type", body_type ? js_mkstr(js, body_type, strlen(body_type)) : Ant_Value_Undefined);
 

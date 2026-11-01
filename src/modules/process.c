@@ -747,7 +747,7 @@ void process_refresh_sandbox_argv(ant_t *js) {
   ant_value_t process_obj = js_get(js, js_glob(js), "process");
   if (!is_special_object(process_obj)) return;
 
-  ant_value_t argv_arr = js_mkarr(js);
+  ant_value_t argv_arr = Ant_Array_Create(js);
   for (int i = 0; i < js->runtime.argc; i++)
     js_arr_push(js, argv_arr, js_mkstr_wtf8_lossy(js, js->runtime.argv[i], strlen(js->runtime.argv[i])));
 
@@ -1246,7 +1246,7 @@ static ant_value_t js_stdout_get_window_size(ant_params_t) {
   (void)args; (void)nargs;
   int rows = 0, cols = 0;
   get_tty_size(js, STDOUT_FILENO, &rows, &cols);
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   js_arr_push(js, arr, Ant_Value_FromNumber(cols));
   js_arr_push(js, arr, Ant_Value_FromNumber(rows));
   return arr;
@@ -1308,7 +1308,7 @@ static ant_value_t process_hrtime(ant_params_t) {
     }
   }
   
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   
   uint64_t secs = now / 1000000000ULL;
   uint64_t nsecs = now % 1000000000ULL;
@@ -1515,13 +1515,13 @@ static ant_value_t process_getegid(ant_params_t) {
 static ant_value_t process_getgroups(ant_params_t) {
   (void)args; (void)nargs;
   int ngroups = getgroups(0, NULL);
-  if (ngroups < 0) return js_mkarr(js);
+  if (ngroups < 0) return Ant_Array_Create(js);
   
   gid_t *groups = malloc(sizeof(gid_t) * (size_t)ngroups);
-  if (!groups) return js_mkarr(js);
+  if (!groups) return Ant_Array_Create(js);
   
   ngroups = getgroups(ngroups, groups);
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   for (int i = 0; i < ngroups; i++) {
     js_arr_push(js, arr, Ant_Value_FromNumber((double)groups[i]));
   }
@@ -2075,7 +2075,7 @@ static void env_keys_cb(
 
 static ant_value_t env_keys(ant_t *js, ant_value_t target) {
   GC_ROOT_SAVE(root_mark, js);
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   GC_ROOT_PIN(js, arr);
   
   env_foreach(js, env_keys_cb, &arr);
@@ -2094,7 +2094,7 @@ static void env_entries_cb(
 
 static ant_value_t env_entries(ant_t *js, ant_value_t target) {
   GC_ROOT_SAVE(root_mark, js);
-  ant_value_t pairs = js_mkarr(js);
+  ant_value_t pairs = Ant_Array_Create(js);
   GC_ROOT_PIN(js, pairs);
   
   env_foreach(js, env_entries_cb, &pairs);
@@ -2412,14 +2412,14 @@ void init_process_module(ant_t *js) {
   js_set(js, process_obj, "env", env_proxy);
   process_update_sandbox_env(js);
   
-  ant_value_t argv_arr = js_mkarr(js);
+  ant_value_t argv_arr = Ant_Array_Create(js);
   for (int i = 0; i < js->runtime.argc; i++) js_arr_push(
     js, argv_arr, 
     js_mkstr_wtf8_lossy(js, js->runtime.argv[i], strlen(js->runtime.argv[i]))
   );
 
   js_set(js, process_obj, "argv", argv_arr);
-  js_set(js, process_obj, "execArgv", js_mkarr(js));
+  js_set(js, process_obj, "execArgv", Ant_Array_Create(js));
   
   js_set(js, process_obj, "argv0", js->runtime.argc > 0 
     ? js_mkstr_wtf8_lossy(js, js->runtime.argv[0], strlen(js->runtime.argv[0])) 

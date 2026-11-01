@@ -600,7 +600,7 @@ static ant_value_t entry_once_wrapper(ant_t *js, EventType *evt, EventListenerEn
 }
 
 static ant_value_t event_type_get_listeners_array(ant_t *js, EventType *evt, bool raw) {
-  if (!evt || utarray_len(evt->listeners) == 0) return js_mkarr(js);
+  if (!evt || utarray_len(evt->listeners) == 0) return Ant_Array_Create(js);
 
   unsigned int len = utarray_len(evt->listeners);
   if (raw) for (unsigned int i = 0; i < len; i++) {
@@ -624,7 +624,7 @@ static ant_value_t event_type_get_listeners_array(ant_t *js, EventType *evt, boo
 }
 
 static ant_value_t eventemitter_get_listeners_array(ant_t *js, ant_value_t target, ant_value_t key, bool raw) {
-  if (!is_object_type(target) || !key) return js_mkarr(js);
+  if (!is_object_type(target) || !key) return Ant_Array_Create(js);
   return event_type_get_listeners_array(js, find_emitter_event_type(js, target, key), raw);
 }
 
@@ -833,7 +833,7 @@ static ant_value_t js_event_stopImmediatePropagation(ant_params_t) {
 static ant_value_t js_event_composedPath(ant_params_t) {
   event_data_t *data = get_event_data(call_this);
   if (!data) return event_this_error(js);
-  ant_value_t result = js_mkarr(js);
+  ant_value_t result = Ant_Array_Create(js);
   if (data->dispatching && is_object_type(data->current_target)) js_arr_push(js, result, data->current_target);
   return result;
 }
@@ -1650,21 +1650,21 @@ static ant_value_t js_eventemitter_getMaxListeners(ant_params_t) {
 }
 
 static ant_value_t js_eventemitter_rawListeners(ant_params_t) {
-  if (nargs < 1) return js_mkarr(js);
+  if (nargs < 1) return Ant_Array_Create(js);
   ant_value_t key = evt_key_from_arg(args[0]);
-  if (!key) return js_mkarr(js);
+  if (!key) return Ant_Array_Create(js);
   return eventemitter_get_listeners_array(js, call_this, key, true);
 }
 
 static ant_value_t js_eventemitter_listeners(ant_params_t) {
-  if (nargs < 1) return js_mkarr(js);
+  if (nargs < 1) return Ant_Array_Create(js);
   ant_value_t key = evt_key_from_arg(args[0]);
-  if (!key) return js_mkarr(js);
+  if (!key) return Ant_Array_Create(js);
   return eventemitter_get_listeners_array(js, call_this, key, false);
 }
 
 static ant_value_t js_eventemitter_eventNames(ant_params_t) {
-  ant_value_t result = js_mkarr(js);
+  ant_value_t result = Ant_Array_Create(js);
   
   ant_event_list_t *events = find_emitter_events(call_this);
   if (events) {
@@ -1699,7 +1699,7 @@ static ant_value_t js_events_once_listener(ant_params_t) {
   ant_value_t promise = Ant_Events_SettleOnce(js, state);
   if (vtype(promise) != kTypePromise) return Ant_Value_Undefined;
 
-  ant_value_t values = js_mkarr(js);
+  ant_value_t values = Ant_Array_Create(js);
   for (int i = 0; i < nargs; i++) js_arr_push(js, values, args[i]);
   js_resolve_promise(js, promise, values);
   
@@ -1906,7 +1906,7 @@ static ant_value_t js_events_get_event_listeners(ant_params_t) {
   ant_value_t target = args[0];
   if (is_eventemitter_instance(target) || is_eventtarget_instance(target)) {
     ant_value_t key = nargs >= 2 ? evt_key_from_arg(args[1]) : 0;
-    if (!key) return js_mkarr(js);
+    if (!key) return Ant_Array_Create(js);
     return event_type_get_listeners_array(js, find_emitter_event_type(js, target, key), false);
   }
 
@@ -1929,7 +1929,7 @@ static void events_on_queue_compact(ant_t *js, ant_value_t state, const char *ar
   if (vtype(arr) != kTypeArray || head == 0) return;
   if (head < len && (head < 32 || head * 2 < len)) return;
 
-  compact = js_mkarr(js);
+  compact = Ant_Array_Create(js);
   for (ant_offset_t i = head; i < len; i++)
     js_arr_push(js, compact, js_arr_get(js, arr, i));
 
@@ -2015,7 +2015,7 @@ static ant_value_t js_events_on_event_cb(ant_params_t) {
   ant_value_t state = js_func_data(call_func);
   if (!is_object_type(state)) return Ant_Value_Undefined;
 
-  ant_value_t values = js_mkarr(js);
+  ant_value_t values = Ant_Array_Create(js);
   for (int i = 0; i < nargs; i++) js_arr_push(js, values, args[i]);
 
   ant_value_t parked = events_on_queue_shift(js, state, "parked", "parkedHead");
@@ -2110,9 +2110,9 @@ static ant_value_t js_events_on(ant_params_t) {
   js_set(js, state, "errorListener", error_listener);
   js_set(js, state, "signal", Ant_Value_Undefined);
   js_set(js, state, "abortListener", Ant_Value_Undefined);
-  js_set(js, state, "buffer", js_mkarr(js));
+  js_set(js, state, "buffer", Ant_Array_Create(js));
   js_set(js, state, "bufferHead", Ant_Value_FromNumber(0));
-  js_set(js, state, "parked", js_mkarr(js));
+  js_set(js, state, "parked", Ant_Array_Create(js));
   js_set(js, state, "parkedHead", Ant_Value_FromNumber(0));
   js_set(js, state, "finished", Ant_Value_False);
   js_set(js, state, "storedError", Ant_Value_Undefined);

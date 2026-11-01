@@ -257,7 +257,7 @@ static ant_value_t des_val(ant_t *js, dec_t *d) {
     case 'A': {
       uint32_t n;
       if (!dec_u32(d, &n)) return Ant_Value_Undefined;
-      ant_value_t arr = js_mkarr(js);
+      ant_value_t arr = Ant_Array_Create(js);
       for (uint32_t i = 0; i < n; i++) {
         ant_value_t elem = des_val(js, d);
         if (is_err(elem)) return elem;
@@ -364,7 +364,7 @@ static ant_value_t v8_get_heap_space_statistics(ant_params_t) {
   js_set(js, oldspace, "space_available_size", Ant_Value_FromNumber(old_size));
   js_set(js, oldspace, "physical_space_size",  Ant_Value_FromNumber((double)arena_committed / 2));
 
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   js_arr_push(js, arr, nursery);
   js_arr_push(js, arr, oldspace);
   

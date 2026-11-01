@@ -9,7 +9,7 @@ static ant_value_t disposable_stack_init(ant_t *js, ant_value_t obj, int brand, 
   if (is_err(obj)) return obj;
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
-  ant_value_t entries = js_mkarr(js);
+  ant_value_t entries = Ant_Array_Create(js);
   if (is_err(entries)) return entries;
   set_slot(obj, SLOT_BRAND, Ant_Value_FromNumber((double)brand));
   set_slot(obj, SLOT_ENTRIES, entries);
@@ -71,7 +71,7 @@ static ant_value_t disposable_stack_push_record(
     return entries;
   }
 
-  ant_value_t record = js_mkarr(js);
+  ant_value_t record = Ant_Array_Create(js);
   GC_ROOT_PIN(js, record);
   if (is_err(record)) {
     GC_ROOT_RESTORE(js, root_mark);
@@ -186,7 +186,7 @@ static ant_value_t disposable_stack_move(ant_t *js, ant_value_t call_this, int b
   }
 
   set_slot(moved, SLOT_ENTRIES, entries);
-  set_slot(js_as_obj(call_this), SLOT_ENTRIES, js_mkarr(js));
+  set_slot(js_as_obj(call_this), SLOT_ENTRIES, Ant_Array_Create(js));
   set_slot(js_as_obj(call_this), SLOT_SETTLED, Ant_Value_True);
 
   GC_ROOT_RESTORE(js, root_mark);
@@ -228,7 +228,7 @@ static ant_value_t builtin_DisposableStack_dispose(ant_params_t) {
     return completion;
   }
 
-  set_slot(js_as_obj(call_this), SLOT_ENTRIES, js_mkarr(js));
+  set_slot(js_as_obj(call_this), SLOT_ENTRIES, Ant_Array_Create(js));
   if (has_completion) {
     ant_value_t thrown = js_throw(js, completion);
     GC_ROOT_RESTORE(js, root_mark);
@@ -275,7 +275,7 @@ static ant_value_t builtin_AsyncDisposableStack_disposeAsync(ant_params_t) {
   set_slot(state, SLOT_DATA, result_promise);
   set_slot(state, SLOT_AUX, Ant_Value_Undefined);
   set_slot(state, SLOT_ITER_STATE, Ant_Value_FromNumber((double)(vtype(entries) == kTypeArray ? js_arr_len(js, entries) : 0)));
-  set_slot(js_as_obj(call_this), SLOT_ENTRIES, js_mkarr(js));
+  set_slot(js_as_obj(call_this), SLOT_ENTRIES, Ant_Array_Create(js));
 
   ant_value_t result = sv_async_dispose_continue(js, state, false, Ant_Value_Undefined);
   GC_ROOT_RESTORE(js, root_mark);

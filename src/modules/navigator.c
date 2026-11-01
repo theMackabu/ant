@@ -612,10 +612,10 @@ static ant_value_t locks_query(ant_params_t) {
   navigator_locks_t *client = js->navigator_locks;
   GC_ROOT_SAVE(root_mark, js);
 
-  ant_value_t held = js_mkarr(js);
+  ant_value_t held = Ant_Array_Create(js);
   GC_ROOT_PIN(js, held);
 
-  ant_value_t pending = js_mkarr(js);
+  ant_value_t pending = Ant_Array_Create(js);
   GC_ROOT_PIN(js, pending);
 
   for (lock_request_t *req = client ? client->requests : NULL; req; req = req->next) {
@@ -681,7 +681,7 @@ void init_navigator_module(ant_t *js) {
   js_set(js, navigator_obj, "hardwareConcurrency", Ant_Value_FromNumber((double)get_hardware_concurrency()));
   js_set(js, navigator_obj, "language", js_mkstr(js, "en-US", 5));
   
-  ant_value_t languages_arr = js_mkarr(js);
+  ant_value_t languages_arr = Ant_Array_Create(js);
   js_arr_push(js, languages_arr, js_mkstr(js, "en-US", 5));
   js_set(js, navigator_obj, "languages", languages_arr);
   

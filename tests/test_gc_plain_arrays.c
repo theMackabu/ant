@@ -18,7 +18,7 @@ int main(void) {
   js_setstackbase(js, &stack_base);
 
   for (unsigned variant = 0; variant < 4; variant++) {
-    ant_value_t array = js_mkarr(js);
+    ant_value_t array = Ant_Array_Create(js);
     for (unsigned i = 0; i < 10; i++) js_arr_push(js, array, Ant_Value_FromNumber(i));
     if (variant == 1) js_set_finalizer(array, test_finalizer);
     if (variant == 2) js_set_slot(array, SLOT_CTOR, Ant_Value_FromNumber(42));

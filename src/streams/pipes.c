@@ -707,7 +707,7 @@ static ant_value_t tee_branch_cancel(ant_params_t) {
   }
 
   if (st->canceled1 && st->canceled2) {
-    ant_value_t reasons = js_mkarr(js);
+    ant_value_t reasons = Ant_Array_Create(js);
     js_arr_push(js, reasons, js_get_slot(state, SLOT_RS_PULL));
     js_arr_push(js, reasons, js_get_slot(state, SLOT_RS_CANCEL));
     
@@ -765,7 +765,7 @@ static ant_value_t js_rs_tee(ant_params_t) {
   js_set_slot(state, SLOT_CTOR, branch1);
   js_set_slot(state, SLOT_DEFAULT, branch2);
 
-  ant_value_t result = js_mkarr(js);
+  ant_value_t result = Ant_Array_Create(js);
   js_arr_push(js, result, branch1);
   js_arr_push(js, result, branch2);
   

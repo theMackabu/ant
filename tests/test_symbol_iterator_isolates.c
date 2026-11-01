@@ -45,7 +45,7 @@ static bool Advance(ant_t *js, iterator_t *it, ant_value_t *out) {
 
 static void CheckArray(ant_t *js) {
   GC_ROOT_SAVE(mark, js);
-  ant_value_t array = js_mkarr(js);
+  ant_value_t array = Ant_Array_Create(js);
   GC_ROOT_PIN(js, array);
   js_arr_push(js, array, Ant_Value_FromNumber(42));
   iterator_t it;

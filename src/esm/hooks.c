@@ -378,7 +378,7 @@ ant_value_t esm_import_via_hooks(
     free(abs);
   }
 
-  ant_value_t conditions = js_mkarr(js);
+  ant_value_t conditions = Ant_Array_Create(js);
   GC_ROOT_PIN(js, conditions);
   
   if (is_require) js_arr_push(js, conditions, js_mkstr(js, "require", 7));

@@ -581,7 +581,7 @@ static ant_value_t fs_readstream_queue(ant_t *js, ant_value_t stream_obj) {
   ant_value_t queue = js_get_slot(stream_obj, SLOT_AUX);
   if (vtype(queue) == kTypeArray) return queue;
 
-  queue = js_mkarr(js);
+  queue = Ant_Array_Create(js);
   js_set_slot_wb(js, stream_obj, SLOT_AUX, queue);
   return queue;
 }
@@ -599,7 +599,7 @@ static size_t fs_readstream_buffered(ant_t *js, ant_value_t queue) {
 }
 
 static void fs_readstream_queue_shift(ant_t *js, ant_value_t stream_obj, fs_readstream_state_t *st, ant_value_t queue) {
-  ant_value_t next = js_mkarr(js);
+  ant_value_t next = Ant_Array_Create(js);
   ant_offset_t len = js_arr_len(js, queue);
 
   GC_ROOT_SAVE(mark, js);
@@ -2799,7 +2799,7 @@ static void on_readdir_complete(uv_fs_t *uv_req) {
     : js_mkstr(js, req->path, strlen(req->path));
   GC_ROOT_PIN(js, parent);
   
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   GC_ROOT_PIN(js, arr);
   uv_dirent_t dirent;
   
@@ -5137,7 +5137,7 @@ static ant_value_t fs_walk_result(
   }
 
   GC_ROOT_SAVE(root_mark, js);
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   GC_ROOT_PIN(js, arr);
   ant_value_t result = arr;
 
@@ -5273,7 +5273,7 @@ static ant_value_t builtin_fs_readdirSync(ant_params_t) {
   ant_value_t parent = fs_parent_path_value(original_path, args[0]);
   GC_ROOT_PIN(js, parent);
   
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   GC_ROOT_PIN(js, arr);
   uv_dirent_t dirent;
   

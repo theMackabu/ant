@@ -63,11 +63,11 @@ static ant_value_t builtin_object_keys(ant_params_t) {
 
   if (vtype(obj) == kTypeBuiltin) {
     ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
-    if (vtype(promoted) != kTypeFunction) return mkarr(js);
+    if (vtype(promoted) != kTypeFunction) return Ant_Array_Create(js);
     obj = promoted;
   }
 
-  if (vtype(obj) != kTypeObject && vtype(obj) != kTypeArray && vtype(obj) != kTypeFunction) return mkarr(js);
+  if (vtype(obj) != kTypeObject && vtype(obj) != kTypeArray && vtype(obj) != kTypeFunction) return Ant_Array_Create(js);
   if (is_proxy(obj)) return proxy_enum(js, obj, OBJ_ENUM_KEYS);
 
   return js_own_property_keys(js, obj, false, true);
@@ -79,11 +79,11 @@ static ant_value_t builtin_object_values(ant_params_t) {
   ant_value_t obj = js_object_view(args[0]);
   if (vtype(obj) == kTypeBuiltin) {
     ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
-    if (vtype(promoted) != kTypeFunction) return mkarr(js);
+    if (vtype(promoted) != kTypeFunction) return Ant_Array_Create(js);
     obj = promoted;
   }
   if (vtype(obj) == kTypeString) return object_enum_collect(js, obj, OBJ_ENUM_VALUES);
-  if (vtype(obj) != kTypeObject && vtype(obj) != kTypeArray && vtype(obj) != kTypeFunction) return mkarr(js);
+  if (vtype(obj) != kTypeObject && vtype(obj) != kTypeArray && vtype(obj) != kTypeFunction) return Ant_Array_Create(js);
   if (is_proxy(obj)) return proxy_enum(js, obj, OBJ_ENUM_VALUES);
   return object_enum(js, obj, OBJ_ENUM_VALUES);
 }
@@ -94,11 +94,11 @@ static ant_value_t builtin_object_entries(ant_params_t) {
   ant_value_t obj = js_object_view(args[0]);
   if (vtype(obj) == kTypeBuiltin) {
     ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
-    if (vtype(promoted) != kTypeFunction) return mkarr(js);
+    if (vtype(promoted) != kTypeFunction) return Ant_Array_Create(js);
     obj = promoted;
   }
   if (vtype(obj) == kTypeString) return object_enum_collect(js, obj, OBJ_ENUM_ENTRIES);
-  if (vtype(obj) != kTypeObject && vtype(obj) != kTypeArray && vtype(obj) != kTypeFunction) return mkarr(js);
+  if (vtype(obj) != kTypeObject && vtype(obj) != kTypeArray && vtype(obj) != kTypeFunction) return Ant_Array_Create(js);
   if (is_proxy(obj)) return proxy_enum(js, obj, OBJ_ENUM_ENTRIES);
   return object_enum(js, obj, OBJ_ENUM_ENTRIES);
 }
@@ -510,7 +510,7 @@ static ant_value_t object_group_add(ant_t *js, void *ctx, ant_value_t key, ant_v
   if (vtype(key) == kTypeSymbol) {
     ant_value_t group = js_get_sym(js, result, key);
     if (vtype(group) != kTypeArray) {
-      group = mkarr(js);
+      group = Ant_Array_Create(js);
       js_set_sym(js, result, key, group);
     }
     
@@ -528,7 +528,7 @@ static ant_value_t object_group_add(ant_t *js, void *ctx, ant_value_t key, ant_v
   
   if (grp_off.obj) group = js_prop_load(grp_off);
   else {
-    group = mkarr(js);
+    group = Ant_Array_Create(js);
     js_setprop(js, result, key_str, group);
   }
   
@@ -956,11 +956,11 @@ static inline bool own_prop_names_is_dense_shadow(
 }
 
 static ant_value_t builtin_object_getOwnPropertyNames(ant_params_t) {
-  if (nargs == 0) return mkarr(js);
+  if (nargs == 0) return Ant_Array_Create(js);
   ant_value_t obj = js_object_view(args[0]);
 
   if (vtype(obj) == kTypeString) {
-    ant_value_t arr = mkarr(js);
+    ant_value_t arr = Ant_Array_Create(js);
     ant_offset_t idx = 0;
     ant_offset_t slen = str_utf16_len(js, obj);
     
@@ -980,7 +980,7 @@ static ant_value_t builtin_object_getOwnPropertyNames(ant_params_t) {
   }
 
   if (vtype(obj) == kTypeBuiltin) {
-    ant_value_t arr = mkarr(js);
+    ant_value_t arr = Ant_Array_Create(js);
     ant_offset_t idx = 0;
     arr_set(js, arr, idx++, js->length_str);
     
@@ -990,15 +990,15 @@ static ant_value_t builtin_object_getOwnPropertyNames(ant_params_t) {
     return mkval(kTypeArray, vdata(arr));
   }
   
-  if (vtype(obj) != kTypeObject && vtype(obj) != kTypeArray && vtype(obj) != kTypeFunction) return mkarr(js);
+  if (vtype(obj) != kTypeObject && vtype(obj) != kTypeArray && vtype(obj) != kTypeFunction) return Ant_Array_Create(js);
   if (vtype(obj) == kTypeFunction) obj = js_func_obj(obj);
   
   ant_object_t *ptr = js_obj_ptr(obj);
-  if (!ptr || !ptr->shape) return mkarr(js);
+  if (!ptr || !ptr->shape) return Ant_Array_Create(js);
   if (vtype(obj) != kTypeArray) return js_own_property_keys(js, obj, false, false);
   bool is_arr_obj = (vtype(obj) == kTypeArray);
   
-  ant_value_t arr = mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   ant_offset_t idx = 0;
   
   if (is_arr_obj) {
@@ -1037,7 +1037,7 @@ static ant_value_t proxy_own_symbols(ant_t *js, ant_value_t proxy) {
   
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, keys);
-  ant_value_t arr = mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   GC_ROOT_PIN(js, arr);
   
   ant_offset_t key_count = get_array_length(js, keys);
@@ -1051,7 +1051,7 @@ static ant_value_t proxy_own_symbols(ant_t *js, ant_value_t proxy) {
 }
 
 static ant_value_t builtin_object_getOwnPropertySymbols(ant_params_t) {
-  if (nargs == 0) return mkarr(js);
+  if (nargs == 0) return Ant_Array_Create(js);
   ant_value_t obj = args[0];
 
   if (vtype(obj) == kTypeBuiltin) {
@@ -1060,12 +1060,12 @@ static ant_value_t builtin_object_getOwnPropertySymbols(ant_params_t) {
   }
   
   uint8_t t = vtype(obj);
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return mkarr(js);
+  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return Ant_Array_Create(js);
   if (t == kTypeFunction) obj = js_func_obj(obj);
   if (is_proxy(obj)) return proxy_own_symbols(js, obj);
 
   ant_object_t *ptr = js_obj_ptr(obj);
-  ant_value_t arr = mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   ant_offset_t idx = 0;
   if (!ptr || !ptr->shape) return mkval(kTypeArray, vdata(arr));
 

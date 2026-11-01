@@ -424,7 +424,7 @@ static ant_value_t push_cpu_entry(ant_t *js, ant_value_t arr, const char *model,
 
 #ifdef __APPLE__
 static ant_value_t os_cpus_darwin(ant_t *js) {
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   
   natural_t ncpu;
   processor_info_array_t cpu_info;
@@ -478,7 +478,7 @@ static char *parse_colon_value(char *line) {
 }
 
 static ant_value_t os_cpus_linux(ant_t *js) {
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   char model[256] = "Unknown";
   double speed = 0;
   int ncpu = 0;
@@ -538,13 +538,13 @@ static ant_value_t os_cpus(ant_params_t) {
 #elif defined(__linux__)
   return os_cpus_linux(js);
 #else
-  return js_mkarr(js);
+  return Ant_Array_Create(js);
 #endif
 }
 
 static ant_value_t os_loadavg(ant_params_t) {
   (void)args; (void)nargs;
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   
 #if defined(__APPLE__) || defined(__linux__)
   double loadavg[3];
@@ -596,7 +596,7 @@ static ant_value_t os_networkInterfaces(ant_params_t) {
   for (pCurrAddresses = pAddresses; pCurrAddresses; pCurrAddresses = pCurrAddresses->Next) {
     ant_value_t iface_arr = js_get(js, result, pCurrAddresses->AdapterName);
     if (!is_special_object(iface_arr)) {
-      iface_arr = js_mkarr(js);
+      iface_arr = Ant_Array_Create(js);
       js_set(js, result, pCurrAddresses->AdapterName, iface_arr);
     }
     
@@ -803,7 +803,7 @@ static ant_value_t os_networkInterfaces(ant_params_t) {
     
     ant_value_t iface_arr = js_get(js, result, ifa->ifa_name);
     if (!is_special_object(iface_arr)) {
-      iface_arr = js_mkarr(js);
+      iface_arr = Ant_Array_Create(js);
       js_set(js, result, ifa->ifa_name, iface_arr);
     }
     

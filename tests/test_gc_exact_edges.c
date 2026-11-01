@@ -20,7 +20,7 @@ int main(void) {
   GC_ROOT_SAVE(roots, js);
   ant_value_t root = Ant_Object_CreateBare(js);
   GC_ROOT_PIN(js, root);
-  ant_value_t array = js_mkarr(js);
+  ant_value_t array = Ant_Array_Create(js);
   js_set(js, root, "children", array);
   ant_value_t children[32];
   for (unsigned i = 0; i < 32; i++) {

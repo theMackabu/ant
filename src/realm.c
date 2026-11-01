@@ -427,8 +427,7 @@ void realm_init_core(ant_t *js) {
   js_define_function_length(js, function_proto_obj, 0);
   js_set_function_name(js, function_proto, "", 0);
   
-  ant_value_t array_proto = alloc_array_with_proto(js, object_proto);
-  
+  ant_value_t array_proto = alloc_array_with_proto_capacity(js, object_proto, MAX_DENSE_INITIAL_CAP, 0, false);
   js_array_init_prototype(js, array_proto);
   
   ant_value_t string_proto = Ant_Object_CreateBare(js);

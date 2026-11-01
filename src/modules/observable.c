@@ -350,7 +350,7 @@ static ant_value_t js_of_subscriber(ant_params_t) {
 }
 
 static ant_value_t js_observable_of(ant_params_t) {
-  ant_value_t items = js_mkarr(js);
+  ant_value_t items = Ant_Array_Create(js);
   for (int i = 0; i < nargs; i++) js_arr_push(js, items, args[i]);
   
   ant_value_t subscriber_func = js_heavy_mkfun(js, js_of_subscriber, items);

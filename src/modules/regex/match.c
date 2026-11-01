@@ -1,7 +1,7 @@
 #include "regex_internal.h"
 
 static ant_value_t regexp_match_fast_global(ant_t *js, const regexp_fast_t *fast, ant_value_t str) {
-  ant_value_t matches = js_mkarr(js);
+  ant_value_t matches = Ant_Array_Create(js);
   if (is_err(matches)) return matches;
 
   regexp_fast_scan_t scan;
@@ -45,7 +45,7 @@ static ant_value_t regexp_symbol_match_impl(ant_t *js, ant_value_t rx, ant_value
 
   js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), Ant_Value_FromNumber(0));
 
-  ant_value_t A = js_mkarr(js);
+  ant_value_t A = Ant_Array_Create(js);
   if (is_err(A)) return A;
   ant_offset_t n = 0;
 

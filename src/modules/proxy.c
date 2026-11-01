@@ -151,7 +151,7 @@ ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
   ant_proxy_state_t *data = get_proxy_data(obj);
   if (!data) {
     GC_ROOT_RESTORE(js, root_mark);
-    return mkarr(js);
+    return Ant_Array_Create(js);
   }
   
   if (data->revoked) {
@@ -164,7 +164,7 @@ ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
     return proxy_host_own_keys(js, data, true, false);
   }
 
-  ant_value_t keys = mkarr(js);
+  ant_value_t keys = Ant_Array_Create(js);
   GC_ROOT_PIN(js, keys);
 
   ant_value_t trap = proxy_get_method(js, data->handler, "ownKeys");
@@ -271,7 +271,7 @@ ant_value_t proxy_own_keys_filtered(ant_t *js, ant_value_t obj, bool include_sym
   GC_ROOT_PIN(js, obj);
   GC_ROOT_PIN(js, keys);
   
-  ant_value_t out = mkarr(js);
+  ant_value_t out = Ant_Array_Create(js);
   GC_ROOT_PIN(js, out);
   
   ant_offset_t key_count = get_array_length(js, keys);
@@ -397,7 +397,7 @@ static ant_value_t proxy_enum_host_pairs(ant_t *js, ant_proxy_state_t *data, enu
   
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, pairs);
-  ant_value_t out = mkarr(js);
+  ant_value_t out = Ant_Array_Create(js);
   GC_ROOT_PIN(js, out);
   
   ant_offset_t len = get_array_length(js, pairs);
@@ -426,7 +426,7 @@ ant_value_t proxy_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mode) {
   ant_value_t keys = proxy_own_keys_raw(js, obj);
   GC_ROOT_PIN(js, keys);
   
-  ant_value_t out = is_err(keys) ? keys : mkarr(js);
+  ant_value_t out = is_err(keys) ? keys : Ant_Array_Create(js);
   GC_ROOT_PIN(js, out);
 
   ant_offset_t key_count = is_err(keys) ? 0 : get_array_length(js, keys);
@@ -1334,7 +1334,7 @@ ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, a
   ant_value_t trap = proxy_get_method(js, handler, "apply");
   if (is_err(trap)) return trap;
   if (vtype(trap) != kTypeUndefined) {
-      ant_value_t args_arr = mkarr(js);
+      ant_value_t args_arr = Ant_Array_Create(js);
       for (int i = 0; i < argc; i++)
         js_arr_push(js, args_arr, args[i]);
       ant_value_t trap_args[3] = { target, this_arg, args_arr };
@@ -1360,7 +1360,7 @@ ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, 
   if (is_err(trap)) return trap;
   
   if (vtype(trap) != kTypeUndefined) {
-      ant_value_t args_arr = mkarr(js);
+      ant_value_t args_arr = Ant_Array_Create(js);
       for (int i = 0; i < argc; i++)
         js_arr_push(js, args_arr, args[i]);
       ant_value_t trap_args[3] = { target, args_arr, new_target };

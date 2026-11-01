@@ -552,7 +552,7 @@ static ant_value_t wire_check_transfer(ant_t *js, ant_value_t list, ant_value_t 
     ? Ant_Exception_Current(js)
     : js_mkerr_code(js, JS_ERR_TYPE, "ERR_INVALID_ARG_TYPE", "Optional transferList argument must be an iterable");
 
-  ant_value_t items = js_mkarr(js);
+  ant_value_t items = Ant_Array_Create(js);
   ant_value_t item;
   while (js_iter_next(js, &it, &item)) {
     ArrayBufferData *data = is_object_type(item) ? buffer_get_arraybuffer_data(item) : NULL;
@@ -649,7 +649,7 @@ static ant_value_t wire_serialize(
   atomic_init(&wire->refs, 1);
 
   wire_writer_t w = {
-    .js = js, .wire = wire, .seen = js_mkarr(js),
+    .js = js, .wire = wire, .seen = Ant_Array_Create(js),
     .transfer = transfer, .source_port = source_port,
     .error_props = error_props,
   };
@@ -901,7 +901,7 @@ static ant_value_t wire_read_object(wire_reader_t *r, uint8_t tag) {
     case WIRE_ARRAY: {
       uint64_t len;
       if (!get_varint(r, &len)) return wire_corrupt(js);
-      ant_value_t arr = wire_track(r, js_mkarr(js));
+      ant_value_t arr = wire_track(r, Ant_Array_Create(js));
       if (is_err(arr)) return arr;
       for (uint64_t i = 0; i < len; i++) {
         ant_value_t item = wire_read(r);
@@ -1067,7 +1067,7 @@ ant_value_t ant_wire_deserialize(ant_t *js, ant_wire_t *wire, ant_value_t *ports
   wire_reader_t r = {
     .js = js, .wire = wire,
     .p = wire->data, .end = wire->data + wire->len,
-    .refs = js_mkarr(js), .ports = js_mkarr(js),
+    .refs = Ant_Array_Create(js), .ports = Ant_Array_Create(js),
   };
   GC_ROOT_PIN(js, r.refs);
   GC_ROOT_PIN(js, r.ports);

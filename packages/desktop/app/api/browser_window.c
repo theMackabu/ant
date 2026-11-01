@@ -19,7 +19,7 @@ ant_value_t DesktopBrowserWindowOn(ant_params_t) {
   ant_value_t listeners = js_get(js, events, name);
 
   if (!is_array_value(listeners)) {
-    listeners = js_mkarr(js);
+    listeners = Ant_Array_Create(js);
     js_set(js, events, name, listeners);
   }
 

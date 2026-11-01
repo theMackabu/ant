@@ -435,7 +435,7 @@ static ant_value_t zlib_process_chunk_sync(
   const uint8_t *input, size_t input_len,
   int flush_flag
 ) {
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
 
   if (st->brotli) {
     brotli_collect_ctx_t ctx = { js, arr, false };
@@ -490,7 +490,7 @@ static ant_value_t js_zlib_process_chunk(ant_params_t) {
   zlib_stream_t *st = zlib_stream_ptr(call_this);
   
   if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid zlib stream");
-  if (st->ended) return js_mkarr(js);
+  if (st->ended) return Ant_Array_Create(js);
   
   ant_value_t ready = zlib_stream_ready(js, st);
   if (is_err(ready)) return ready;

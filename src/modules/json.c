@@ -371,7 +371,7 @@ static ant_value_t yyjson_to_jsval(
   }
   
   case YYJSON_TYPE_ARR: {
-    ant_value_t arr = js_mkarr(js);
+    ant_value_t arr = Ant_Array_Create(js);
     if (is_err(arr)) return arr;
     if (!json_temp_pin(roots, arr)) return json_parse_oom(js);
 
@@ -653,7 +653,7 @@ static inline int key_matches(const char *a, size_t a_len, const char *b, size_t
 }
 
 static inline ant_value_t json_snapshot_keys(ant_t *js, ant_value_t value) {
-  if (!is_special_object(value)) return js_mkarr(js);
+  if (!is_special_object(value)) return Ant_Array_Create(js);
   return js_for_in_keys(js, value);
 }
 

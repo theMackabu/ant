@@ -342,7 +342,7 @@ static bool wire_decode_value(
         return false;
 
       GC_ROOT_SAVE(root_mark, js);
-      ant_value_t array = js_mkarr(js);
+      ant_value_t array = Ant_Array_Create(js);
       ant_value_t item = Ant_Value_Undefined;
       GC_ROOT_PIN(js, array);
       GC_ROOT_PIN(js, item);

@@ -150,7 +150,7 @@ ant_value_t esm_init_cjs_module(ant_t *js, ant_value_t obj, const char *id, ant_
   js_set_proto_init(exports, js->sym.object_proto);
   js_set(js, obj, "exports", exports);
   js_set(js, obj, "loaded", Ant_Value_False);
-  js_set(js, obj, "children", js_mkarr(js));
+  js_set(js, obj, "children", Ant_Array_Create(js));
   js_set(js, obj, "parent", parent);
   
   esm_cjs_update_children(js, parent, obj, false);
@@ -333,7 +333,7 @@ static ant_value_t esm_cjs_require_paths(ant_params_t) {
 #endif
   if (!relative) return esm_node_module_paths(js, path);
   
-  ant_value_t paths = js_mkarr(js);
+  ant_value_t paths = Ant_Array_Create(js);
   js_arr_push(js, paths, directory);
   
   return paths;

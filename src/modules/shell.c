@@ -497,7 +497,7 @@ static ant_value_t sh_process_builder_add_builtin(
     js_set(js, stage_context, "cwd", js_get(js, context, "cwd"));
   }
 
-  ant_value_t argv = js_mkarr(js);
+  ant_value_t argv = Ant_Array_Create(js);
   if (is_err(argv)) {
     GC_ROOT_RESTORE(js, root_mark);
     return argv;

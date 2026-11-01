@@ -453,22 +453,11 @@ ant_value_t alloc_array_with_proto_capacity(
   return arr;
 }
 
-ant_value_t alloc_array_with_proto(ant_t *js, ant_value_t proto) {
-  return alloc_array_with_proto_capacity(js, proto, MAX_DENSE_INITIAL_CAP, 0, false);
+ant_value_t Ant_Array_Create(ant_t *js) {
+  return alloc_array_with_proto_capacity(js, js->sym.array_proto, MAX_DENSE_INITIAL_CAP, 0, false);
 }
 
-// TODO: flatten
-ant_value_t mkarr(ant_t *js) {
-  return alloc_array_with_proto(js, js->sym.array_proto);
-}
-
-ant_value_t js_mkarr(ant_t *js) { 
-  return mkarr(js); 
-}
-
-ant_value_t mkarr_dense_literal_capacity(
-  ant_t *js, const ant_value_t *elements, uint32_t count, bool exact_capacity
-) {
+ant_value_t mkarr_dense_literal_capacity(ant_t *js, const ant_value_t *elements, uint32_t count, bool exact_capacity) {
   uint32_t capacity = exact_capacity ? gc_array_storage_fit(count) : count;
   ant_value_t arr = alloc_array_with_proto_capacity(js, js->sym.array_proto, capacity, count, exact_capacity);
   if (is_err(arr)) return arr;
@@ -507,7 +496,7 @@ ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint3
 
 ant_value_t js_mkarr_dense_uninit(ant_t *js, uint32_t count, ant_value_t **out_data) {
   *out_data = NULL;
-  if (count == 0) return mkarr(js);
+  if (count == 0) return Ant_Array_Create(js);
   
   ant_value_t arr = alloc_array_with_proto_capacity(js, js->sym.array_proto, gc_array_storage_fit(count), count, true);
   if (is_err(arr)) return arr;
@@ -653,7 +642,7 @@ static ant_value_t array_constructor_from_receiver(ant_t *js, ant_value_t receiv
 static constexpr ant_offset_t ARRAY_RESULT_PREALLOC_MAX = 1024;
 
 ant_value_t array_alloc_intrinsic(ant_t *js, ant_value_t source, ant_offset_t length_hint) {
-  if (length_hint == 0) return mkarr(js);
+  if (length_hint == 0) return Ant_Array_Create(js);
   
   ant_object_t *src = array_obj_ptr(source);
   bool exact = length_hint <= ARRAY_RESULT_PREALLOC_MAX ||
@@ -661,7 +650,7 @@ ant_value_t array_alloc_intrinsic(ant_t *js, ant_value_t source, ant_offset_t le
   
   ant_value_t arr = exact && length_hint <= UINT32_MAX
     ? alloc_array_with_proto_capacity(js, js->sym.array_proto, (uint32_t)length_hint, 0, false)
-    : mkarr(js);
+    : Ant_Array_Create(js);
   
   if (is_err(arr)) return arr;
   array_len_set(js, arr, length_hint);
@@ -688,7 +677,7 @@ static ant_value_t array_construct_from_ctor(ant_t *js, ant_value_t ctor, ant_of
 }
 
 ant_value_t array_alloc_from_ctor_with_length(ant_t *js, ant_value_t ctor, ant_offset_t length_hint) {
-  if (vtype(ctor) != kTypeFunction && vtype(ctor) != kTypeBuiltin) return mkarr(js);
+  if (vtype(ctor) != kTypeFunction && vtype(ctor) != kTypeBuiltin) return Ant_Array_Create(js);
   if (same_ctor_identity(js, ctor, js->sym.array_ctor)) return array_alloc_intrinsic(js, Ant_Value_Undefined, length_hint);
   return array_construct_from_ctor(js, ctor, length_hint);
 }

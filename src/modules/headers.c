@@ -619,7 +619,7 @@ bool advance_headers(ant_t *js, iterator_t *it, ant_value_t *out) {
     *out = header_value_to_js(js, e->value, strlen(e->value));
     break;
   default: {
-    *out = js_mkarr(js);
+    *out = Ant_Array_Create(js);
     js_arr_push(js, *out, js_mkstr(js, e->name,  strlen(e->name)));
     js_arr_push(js, *out, header_value_to_js(js, e->value, strlen(e->value)));
     break;
@@ -844,7 +844,7 @@ static ant_value_t js_headers_delete(ant_params_t) {
 
 static ant_value_t js_headers_get_set_cookie(ant_params_t) {
   hdr_list_t *l = headers_get_data(call_this);
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   if (!l) return arr;
   for (hdr_entry_t *e = l->head; e; e = e->next) {
     if (strcmp(e->name, "set-cookie") == 0)

@@ -322,7 +322,7 @@ static ant_value_t child_syscall_error(ant_t *js, int uv_code, const char *sysca
 }
 
 static ant_value_t child_spawnargs_value(ant_t *js, char *const *argv) {
-  ant_value_t spawnargs = js_mkarr(js);
+  ant_value_t spawnargs = Ant_Array_Create(js);
   for (int i = 0; argv[i]; i++) js_arr_push(js, spawnargs, js_mkstr(js, argv[i], strlen(argv[i])));
   return spawnargs;
 }
@@ -338,7 +338,7 @@ static ant_value_t child_spawn_failure_cb(ant_params_t) {
   snprintf(syscall, sizeof(syscall), "spawn %s", file);
   ant_value_t error = child_syscall_error(js, cp->spawn_error, syscall, file);
   if (is_object_type(error) && is_object_type(cp->spawnargs)) {
-    ant_value_t spawnargs = js_mkarr(js);
+    ant_value_t spawnargs = Ant_Array_Create(js);
     ant_offset_t len = js_arr_len(js, cp->spawnargs);
     for (ant_offset_t i = 1; i < len; i++) js_arr_push(js, spawnargs, js_arr_get(js, cp->spawnargs, i));
     js_set(js, error, "spawnargs", spawnargs);
@@ -890,7 +890,7 @@ static void abort_child_object_creation(child_process_t *cp) {
 }
 
 static void child_set_stdio_array(ant_t *js, child_process_t *cp, int count) {
-  ant_value_t stdio = js_mkarr(js);
+  ant_value_t stdio = Ant_Array_Create(js);
   js_arr_push(js, stdio, cp->stdin_obj);
   js_arr_push(js, stdio, cp->stdout_obj);
   js_arr_push(js, stdio, cp->stderr_obj);
@@ -1824,7 +1824,7 @@ static ant_value_t sync_finish_outputs(
 ) {
   o->stdout_val = stdout_val;
   o->stderr_val = stderr_val;
-  o->output = js_mkarr(js);
+  o->output = Ant_Array_Create(js);
   js_arr_push(js, o->output, Ant_Value_Null);
   js_arr_push(js, o->output, stdout_val);
   js_arr_push(js, o->output, stderr_val);
@@ -2523,7 +2523,7 @@ static ant_value_t sync_build_spawn_error(
 
   ant_value_t error = child_syscall_error(js, uv_translate_sys_error(child_errno), syscall, res->argv[0]);
   if (is_object_type(error)) {
-    ant_value_t spawnargs = js_mkarr(js);
+    ant_value_t spawnargs = Ant_Array_Create(js);
     for (int i = 1; res->argv[i]; i++) js_arr_push(js, spawnargs, js_mkstr(js, res->argv[i], strlen(res->argv[i])));
     js_set(js, error, "spawnargs", spawnargs);
   }
@@ -2815,7 +2815,7 @@ static ant_value_t builtin_fork(ant_params_t) {
   ant_value_t spawn_args[3];
   spawn_args[0] = js_mkstr(js, exe_path, strlen(exe_path));
 
-  ant_value_t args_arr = js_mkarr(js);
+  ant_value_t args_arr = Ant_Array_Create(js);
   if (!bundled) js_arr_push(js, args_arr, js_mkstr(js, path_str, path_len));
   
   if (nargs >= 2 && is_special_object(args[1])) {

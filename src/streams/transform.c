@@ -900,7 +900,7 @@ static ant_value_t ts_create_readable(ant_t *js, ant_value_t ts_obj, double hwm,
   js_set_slot(rs_ctrl_obj, SLOT_RS_PULL, js_heavy_mkfun(js, ts_source_pull, ts_obj));
   js_set_slot(rs_ctrl_obj, SLOT_RS_CANCEL, js_heavy_mkfun(js, ts_source_cancel, ts_obj));
   js_set_slot(rs_ctrl_obj, SLOT_RS_SIZE, size_fn);
-  js_set_slot(rs_ctrl_obj, SLOT_AUX, js_mkarr(js));
+  js_set_slot(rs_ctrl_obj, SLOT_AUX, Ant_Array_Create(js));
   js_set_slot(rs_obj, SLOT_ENTRIES, rs_ctrl_obj);
   
   return rs_obj;
@@ -924,7 +924,7 @@ static ant_value_t ts_create_writable(ant_t *js, ant_value_t ts_obj, double hwm,
   js_set_slot(ws_obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_WRITABLE_STREAM));
   js_set_native(ws_obj, wst, WS_STREAM_NATIVE_TAG);
   js_set_finalizer(ws_obj, ts_ws_finalize);
-  js_set_slot(ws_obj, SLOT_SETTLED, js_mkarr(js));
+  js_set_slot(ws_obj, SLOT_SETTLED, Ant_Array_Create(js));
 
   ant_value_t ws_ctrl_obj = Ant_Object_CreateBare(js);
   js_set_proto_init(ws_ctrl_obj, js->builtins.ws_controller_proto);
@@ -937,7 +937,7 @@ static ant_value_t ts_create_writable(ant_t *js, ant_value_t ts_obj, double hwm,
   js_set_slot(ws_ctrl_obj, SLOT_WS_ABORT, js_heavy_mkfun(js, ts_sink_abort, ts_obj));
   js_set_slot(ws_ctrl_obj, SLOT_RS_SIZE, size_fn);
   js_set_slot(ws_ctrl_obj, SLOT_CTOR, Ant_Value_Undefined);
-  js_set_slot(ws_ctrl_obj, SLOT_AUX, js_mkarr(js));
+  js_set_slot(ws_ctrl_obj, SLOT_AUX, Ant_Array_Create(js));
   js_set_slot(ws_obj, SLOT_ENTRIES, ws_ctrl_obj);
   
   return ws_obj;

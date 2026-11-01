@@ -154,7 +154,7 @@ double regexp_advance_string_index(
 static ant_value_t regexp_build_indices_pair(ant_t *js, utf16_pos_t *pos, PCRE2_SIZE start, PCRE2_SIZE end) {
   if (start == PCRE2_UNSET) return Ant_Value_Undefined;
 
-  ant_value_t pair = js_mkarr(js);
+  ant_value_t pair = Ant_Array_Create(js);
   if (is_err(pair)) return pair;
   js_arr_push(js, pair, Ant_Value_FromNumber((double)utf16_pos_units(pos, start)));
   js_arr_push(js, pair, Ant_Value_FromNumber((double)utf16_pos_units(pos, end)));
@@ -196,7 +196,7 @@ static ant_value_t regexp_build_indices_result(
   const PCRE2_SIZE *ovector,
   uint32_t ovcount
 ) {
-  ant_value_t indices_arr = js_mkarr(js);
+  ant_value_t indices_arr = Ant_Array_Create(js);
   if (is_err(indices_arr)) return indices_arr;
 
   for (uint32_t i = 0; i < ovcount; i++) {
@@ -283,7 +283,7 @@ ant_value_t regexp_exec_result(
     ? js_get_slot(regexp, SLOT_REGEXP_NAMED_GROUPS)
     : regexp_build_named_groups_meta(js, compiled);
   if (is_err(groups_meta)) return groups_meta;
-  ant_value_t result_arr = js_mkarr(js);
+  ant_value_t result_arr = Ant_Array_Create(js);
   if (is_err(result_arr)) return result_arr;
   for (uint32_t i = 0; i < ovcount; i++) {
     PCRE2_SIZE start = ovector[2*i];

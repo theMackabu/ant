@@ -172,7 +172,7 @@ static void dns_getaddrinfo_cb(uv_getaddrinfo_t *uvreq, int status, struct addri
   }
 
   GC_ROOT_SAVE(mark, js);
-  ant_value_t list = js_mkarr(js);
+  ant_value_t list = Ant_Array_Create(js);
   GC_ROOT_PIN(js, list);
 
   char first[INET6_ADDRSTRLEN] = "";
@@ -237,7 +237,7 @@ ant_value_t dns_lookup_impl(ant_native_params_t, bool promises) {
   int literal = dns_ip_family(host);
 
   if (!host || literal) {
-    ant_value_t list = js_mkarr(js);
+    ant_value_t list = Ant_Array_Create(js);
     GC_ROOT_PIN(js, list);
     int family = host ? literal : opts.family == 6 ? 6 : 4;
     if (host && opts.all) js_arr_push(js, list, dns_address_object(js, host, family));

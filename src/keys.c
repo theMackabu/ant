@@ -162,7 +162,7 @@ static ant_value_t object_enum_props(ant_t *js, ant_value_t obj, ant_object_t *p
 ant_value_t object_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mode) {
   if (vtype(obj) == kTypeBuiltin) {
     ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
-    if (vtype(promoted) != kTypeFunction) return mkarr(js);
+    if (vtype(promoted) != kTypeFunction) return Ant_Array_Create(js);
     obj = promoted;
   }
   
@@ -170,7 +170,7 @@ ant_value_t object_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mode) {
   if (vtype(obj) == kTypeFunction) obj = js_func_obj(obj);
 
   ant_object_t *ptr = js_obj_ptr(obj);
-  if (!ptr || !ptr->shape) return mkarr(js);
+  if (!ptr || !ptr->shape) return Ant_Array_Create(js);
   
   TypedArrayData *typed = ptr->flags.is_exotic ? buffer_get_typedarray_data(obj) : NULL;
   bool wrapper = !is_arr && !typed && vtype(js_string_wrapper_value(obj)) == kTypeString;
@@ -285,7 +285,7 @@ ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbol
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, obj);
 
-  ant_value_t arr = mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   GC_ROOT_PIN(js, arr);
   ant_offset_t out_idx = 0;
 
@@ -355,7 +355,7 @@ ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbol
       goto done;
     }
 
-    arr = mkarr(js);
+    arr = Ant_Array_Create(js);
     GC_ROOT_PIN(js, arr);
     out_idx = 0;
     if (has_string_exotic) own_keys_push_string_indexes(js, arr, &out_idx, string_exotic_len);
@@ -691,7 +691,7 @@ static inline ant_value_t for_in_keys_collect_chain(
 ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj) {
   GC_ROOT_SAVE(root_mark, js);
   uint8_t t = vtype(obj);
-  ant_value_t out = mkarr(js);
+  ant_value_t out = Ant_Array_Create(js);
   ant_value_t result = out;
   
   GC_ROOT_PIN(js, obj);
@@ -1382,7 +1382,7 @@ ant_value_t copy_data_props(ant_t *js, ant_value_t dst, ant_value_t src, const c
 }
 
 ant_value_t object_enum_collect(ant_t *js, ant_value_t obj, enum obj_enum_mode mode) {
-  ant_value_t arr = mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, arr);

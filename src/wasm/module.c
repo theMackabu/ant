@@ -114,7 +114,7 @@ static ant_value_t wasm_module_type_descriptors(ant_t *js, ant_value_t module_ob
   wasm_module_handle_t *handle = wasm_module_handle(module_obj);
   if (!handle) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected a WebAssembly.Module");
 
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   if (imports) {
     wasm_importtype_vec_t vec = WASM_EMPTY_VEC;
     wasm_module_imports(handle->module, &vec);
@@ -193,7 +193,7 @@ ant_value_t js_wasm_module_custom_sections(ant_params_t) {
   name_val = js_tostring_val(js, args[1]);
   if (is_err(name_val)) return name_val;
   wanted = js_getstr(js, name_val, &wanted_len);
-  result = js_mkarr(js);
+  result = Ant_Array_Create(js);
 
   if (!handle->bytes || handle->bytes_len < 8) return result;
   while (offset < handle->bytes_len) {

@@ -305,7 +305,7 @@ static int rpc_write_js_value(ant_t *js, wirecall_writer *writer, ant_value_t va
 
 static ant_value_t rpc_values_to_js_array(ant_t *js, const wirecall_value *values, size_t count) {
   GC_ROOT_SAVE(root_mark, js);
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   GC_ROOT_PIN(js, arr);
 
   for (size_t i = 0; i < count; i++) {

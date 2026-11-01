@@ -143,7 +143,7 @@ static void example_objects_arrays(void) {
   js_set(js, config, "name", js_mkstr(js, "MyApp", 5));
   js_set(js, global, "config", config);
 
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   js_arr_push(js, arr, Ant_Value_FromNumber(10));
   js_arr_push(js, arr, Ant_Value_FromNumber(20));
   js_arr_push(js, arr, Ant_Value_FromNumber(30));

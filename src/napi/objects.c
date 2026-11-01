@@ -264,7 +264,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_property_names(
     return napi_set_last(env, napi_invalid_arg, "invalid argument");
   }
 
-  ant_value_t out = js_mkarr(nenv->js);
+  ant_value_t out = Ant_Array_Create(nenv->js);
   ant_iter_t iter = js_prop_iter_begin(nenv->js, (ant_value_t)object);
   const char *key = NULL;
   size_t key_len = 0;
@@ -292,7 +292,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_all_property_names(
   }
 
   ant_t *js = nenv->js;
-  ant_value_t out = js_mkarr(js);
+  ant_value_t out = Ant_Array_Create(js);
   ant_value_t seen = Ant_Object_CreateBare(js);
   ant_value_t current = (ant_value_t)object;
 

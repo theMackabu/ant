@@ -139,7 +139,7 @@ ant_value_t esm_node_module_paths(ant_t *js, const char *directory) {
   }
 
   GC_ROOT_SAVE(mark, js);
-  ant_value_t paths = js_mkarr(js);
+  ant_value_t paths = Ant_Array_Create(js);
   GC_ROOT_PIN(js, paths);
   do {
     const char *base = esm_path_last_sep_const(current);
@@ -531,7 +531,7 @@ static ant_value_t esm_require_esm_exports(ant_t *js, ant_value_t ns) {
     ant_value_t key = js_arr_get(js, keys, i);
     if (vtype(key) != kTypeString) continue;
     
-    data = js_mkarr(js);
+    data = Ant_Array_Create(js);
     js_arr_push(js, data, ns);
     js_arr_push(js, data, key);
     
@@ -1739,7 +1739,7 @@ static ant_value_t esm_load_text(ant_t *js, const char *path) {
 
 static ant_value_t esm_image_value(ant_t *js, const unsigned char *content, size_t size, const char *path) {
   ant_value_t obj = Ant_Object_CreateBare(js);
-  ant_value_t data_arr = js_mkarr(js);
+  ant_value_t data_arr = Ant_Array_Create(js);
 
   for (size_t i = 0; i < size; i++) {
     js_arr_push(js, data_arr, Ant_Value_FromNumber((double)content[i]));

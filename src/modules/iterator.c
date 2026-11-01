@@ -114,7 +114,7 @@ static bool advance_array(ant_t *js, iterator_t *it, ant_value_t *out) {
       if (Ant_Exception_Pending(js)) return false;
       GC_ROOT_SAVE(mark, js);
       GC_ROOT_PIN(js, elem);
-      ant_value_t pair = js_mkarr(js);
+      ant_value_t pair = Ant_Array_Create(js);
       js_arr_push(js, pair, Ant_Value_FromNumber((double)idx));
       js_arr_push(js, pair, elem);
       GC_ROOT_RESTORE(js, mark);
@@ -393,7 +393,7 @@ js_iter_advance_fn js_iter_find_advance(ant_t *js, ant_value_t iterator, ant_val
 }
 
 ant_value_t Ant_Iterator_ToList(ant_t *js, ant_value_t iterable, const char *not_iterable) {
-  ant_value_t list = js_mkarr(js);
+  ant_value_t list = Ant_Array_Create(js);
   if (is_err(list)) return list;
   
   GC_ROOT_SAVE(mark, js);
@@ -827,7 +827,7 @@ static ant_value_t iter_toArray(ant_params_t) {
     return Ant_Exception_Pending(js) ? Ant_Exception_Current(js)
       : js_mkerr_typed(js, JS_ERR_TYPE, "object is not iterable");
 
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   ant_value_t value;
   while (js_iter_next(js, &it, &value))
     js_arr_push(js, arr, value);
@@ -1718,7 +1718,7 @@ static ant_value_t async_iter_terminal(ant_native_params_t, ant_value_t call_thi
   js_set_slot_wb(js, state, SLOT_DATA, iter);
   js_set_slot_wb(js, state, SLOT_CTOR, promise);
   js_set_slot_wb(js, state, SLOT_MAP, mode == ASYNC_TERM_TOARRAY ? Ant_Value_Undefined : args[0]);
-  js_set_slot_wb(js, state, SLOT_ENTRIES, js_mkarr(js));
+  js_set_slot_wb(js, state, SLOT_ENTRIES, Ant_Array_Create(js));
   js_set_slot_wb(js, state, SLOT_SET, (mode == ASYNC_TERM_REDUCE && nargs > 1) ? args[1] : Ant_Value_Undefined);
   js_set_slot(state, SLOT_AUX, Ant_Value_Undefined);
 

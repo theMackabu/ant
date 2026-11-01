@@ -762,7 +762,7 @@ static ant_value_t crypto_make_filtered_name_array(
   size_t count,
   crypto_name_kind_t kind
 ) {
-  ant_value_t result = js_mkarr(js);
+  ant_value_t result = Ant_Array_Create(js);
   if (is_err(result)) return result;
 
   GC_ROOT_SAVE(root_mark, js);

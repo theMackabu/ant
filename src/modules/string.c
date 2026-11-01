@@ -603,7 +603,7 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_args_t) {
     if (sep_len == 1 && (unsigned char)sep < 0x80) return string_split_ascii_byte(js, str_ptr, (size_t)str_len, sep);
   }
   
-  ant_value_t arr = mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   if (is_err(arr)) return arr;
 
   uint32_t limit;

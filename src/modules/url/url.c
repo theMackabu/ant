@@ -377,11 +377,11 @@ static ant_value_t url_create_object_url(ant_params_t) {
 
   ant_value_t store = js_get_slot(js->builtins.url_ctor, SLOT_DATA);
   if (vtype(store) != kTypeArray) {
-    store = js_mkarr(js);
+    store = Ant_Array_Create(js);
     js_set_slot_wb(js, js->builtins.url_ctor, SLOT_DATA, store);
   }
 
-  ant_value_t entry = js_mkarr(js);
+  ant_value_t entry = Ant_Array_Create(js);
   js_arr_push(js, entry, url_value);
   js_arr_push(js, entry, args[0]);
   js_arr_push(js, store, entry);
@@ -402,7 +402,7 @@ static ant_value_t url_revoke_object_url(ant_params_t) {
   ant_value_t store = js_get_slot(js->builtins.url_ctor, SLOT_DATA);
   if (vtype(store) != kTypeArray) return Ant_Value_Undefined;
 
-  ant_value_t next = js_mkarr(js);
+  ant_value_t next = Ant_Array_Create(js);
   ant_offset_t len = js_arr_len(js, store);
   
   for (ant_offset_t i = 0; i < len; i++) {
@@ -442,7 +442,7 @@ void init_url_module(ant_t *js) {
   js_set_tostringtag(js, js->builtins.url_proto, js_mkstr(js, "URL", 3));
 
   js->builtins.url_ctor = Ant_Function_CreateIntrinsicConstructor(js, js_URL, js->builtins.url_proto, "URL", 1);
-  js_set_slot(js->builtins.url_ctor, SLOT_DATA, js_mkarr(js));
+  js_set_slot(js->builtins.url_ctor, SLOT_DATA, Ant_Array_Create(js));
   
   js_set(js, js->builtins.url_ctor, "canParse",        Ant_Function_CreateWithArity(url_canParse, 1));
   js_set(js, js->builtins.url_ctor, "createObjectURL", Ant_Function_CreateWithArity(url_create_object_url, 1));

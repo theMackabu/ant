@@ -431,7 +431,7 @@ static void emit_event(ant_t *js, rl_interface_t *iface, const char *event_type,
 }
 
 static ant_value_t get_history_array(ant_t *js, rl_interface_t *iface) {
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   for (int i = 0; i < iface->history.count; i++) js_arr_push(
     js, arr, js_mkstr(js, iface->history.lines[i], strlen(iface->history.lines[i]))
   );
@@ -1046,14 +1046,14 @@ static void rl_async_iter_compact_queue(ant_t *js, ant_value_t state, const char
   if (vtype(queue) != kTypeArray || head == 0) return;
 
   if (head >= len) {
-    js_set(js, state, queue_key, js_mkarr(js));
+    js_set(js, state, queue_key, Ant_Array_Create(js));
     js_set(js, state, head_key, Ant_Value_FromNumber(0));
     return;
   }
 
   if (head <= 32 && head * 2 < len) return;
 
-  compact = js_mkarr(js);
+  compact = Ant_Array_Create(js);
   for (ant_offset_t i = head; i < len; i++) js_arr_push(js, compact, js_arr_get(js, queue, i));
   js_set(js, state, queue_key, compact);
   js_set(js, state, head_key, Ant_Value_FromNumber(0));
@@ -1197,9 +1197,9 @@ static ant_value_t rl_interface_async_iterator(ant_params_t) {
   js_set_slot_wb(js, iterator, SLOT_DATA, state);
 
   js_set(js, state, "iface", call_this);
-  js_set(js, state, "buffer", js_mkarr(js));
+  js_set(js, state, "buffer", Ant_Array_Create(js));
   js_set(js, state, "bufferHead", Ant_Value_FromNumber(0));
-  js_set(js, state, "pending", js_mkarr(js));
+  js_set(js, state, "pending", Ant_Array_Create(js));
   js_set(js, state, "pendingHead", Ant_Value_FromNumber(0));
   js_set(js, state, "done", Ant_Value_FromBool(iface->closed));
 

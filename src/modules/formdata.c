@@ -136,7 +136,7 @@ ant_value_t formdata_create_empty(ant_t *js) {
   js_set_slot(obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_FORMDATA));
   js_set_native(obj, d, FORMDATA_NATIVE_TAG);
   
-  ant_value_t vals = js_mkarr(js);
+  ant_value_t vals = Ant_Array_Create(js);
   js_set_slot_wb(js, obj, SLOT_ENTRIES, vals);
   js_set_finalizer(obj, formdata_finalize);
   
@@ -298,7 +298,7 @@ static ant_value_t js_formdata_get(ant_params_t) {
 }
 
 static ant_value_t js_formdata_get_all(ant_params_t) {
-  ant_value_t result = js_mkarr(js);
+  ant_value_t result = Ant_Array_Create(js);
   if (nargs < 1) return result;
   fd_data_t *d = get_fd_data(call_this);
   if (!d) return result;
@@ -390,7 +390,7 @@ static ant_value_t formdata_iter_next(ant_params_t) {
     default: {
       ant_value_t v = entry_to_js_value(js, values_arr, e);
       if (is_err(v)) return v;
-      out = js_mkarr(js);
+      out = Ant_Array_Create(js);
       js_arr_push(js, out, js_mkstr(js, e->name, strlen(e->name)));
       js_arr_push(js, out, v);
       break;
@@ -449,7 +449,7 @@ static ant_value_t js_formdata_ctor(ant_params_t) {
   js_set_slot(obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_FORMDATA));
   js_set_native(obj, d, FORMDATA_NATIVE_TAG);
   
-  ant_value_t vals = js_mkarr(js);
+  ant_value_t vals = Ant_Array_Create(js);
   js_set_slot_wb(js, obj, SLOT_ENTRIES, vals);
   js_set_finalizer(obj, formdata_finalize);
   

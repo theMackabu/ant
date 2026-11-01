@@ -274,7 +274,7 @@ static ant_value_t message_event_fill(ant_t *js, ant_value_t event, ant_value_t 
   Ant_Event_SetField(js, event, ANT_EVENT_FIELD_MESSAGE_origin, empty);
   Ant_Event_SetField(js, event, ANT_EVENT_FIELD_MESSAGE_lastEventId, empty);
   Ant_Event_SetField(js, event, ANT_EVENT_FIELD_MESSAGE_source, Ant_Value_Null);
-  Ant_Event_SetField(js, event, ANT_EVENT_FIELD_MESSAGE_ports, vtype(ports) == kTypeArray ? ports : js_mkarr(js));
+  Ant_Event_SetField(js, event, ANT_EVENT_FIELD_MESSAGE_ports, vtype(ports) == kTypeArray ? ports : Ant_Array_Create(js));
   
   return event;
 }

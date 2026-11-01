@@ -195,7 +195,7 @@ static inline ant_value_t sv_spread_call_args(sv_vm_t *vm, ant_t *js, sv_call_ar
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, iterable);
   
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   GC_ROOT_PIN(js, arr);
 
   ant_value_t status = is_err(arr) ? arr : sv_spread_into(vm, js, arr, iterable);

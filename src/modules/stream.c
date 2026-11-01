@@ -612,7 +612,7 @@ static void stream_chunks_clear(stream_readable_state_t *rs) {
 
 static ant_value_t stream_readable_buffer_array(ant_t *js, stream_private_state_t *priv) {
   stream_readable_state_t *rs = &priv->readable;
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
 
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, arr);
@@ -1350,7 +1350,7 @@ static ant_value_t js_stream_is_paused(ant_params_t) {
 static void stream_pipe_remove_state(ant_t *js, stream_private_state_t *priv, ant_value_t state) {
   ant_value_t pipes = priv->pipes;
   ant_offset_t len = vtype(pipes) == kTypeArray ? js_arr_len(js, pipes) : 0;
-  ant_value_t next = js_mkarr(js);
+  ant_value_t next = Ant_Array_Create(js);
 
   for (ant_offset_t i = 0; i < len; i++) {
     ant_value_t item = js_arr_get(js, pipes, i);
@@ -1519,7 +1519,7 @@ static ant_value_t js_stream_pipe(ant_params_t) {
   stream_op_barrier(js, op);
   stream_private_state_t *priv = stream_private_state(source);
   
-  if (vtype(priv->pipes) != kTypeArray) stream_store(js, priv, &priv->pipes, js_mkarr(js));
+  if (vtype(priv->pipes) != kTypeArray) stream_store(js, priv, &priv->pipes, Ant_Array_Create(js));
   js_arr_push(js, priv->pipes, state);
 
   stream_add_listener(js, source, "data", on_data, false);
@@ -1542,7 +1542,7 @@ static ant_value_t js_stream_unpipe(ant_params_t) {
   ant_value_t pipes = stream_private_state(source)->pipes;
   if (vtype(pipes) != kTypeArray) return source;
 
-  ant_value_t matches = js_mkarr(js);
+  ant_value_t matches = Ant_Array_Create(js);
   ant_offset_t len = js_arr_len(js, pipes);
 
   for (ant_offset_t i = 0; i < len; i++) {
@@ -2413,7 +2413,7 @@ static ant_value_t js_writable__write(ant_params_t) {
   js_set(js, item, "chunk", nargs > 0 ? args[0] : Ant_Value_Undefined);
   js_set(js, item, "encoding", nargs > 1 ? args[1] : Ant_Value_Undefined);
 
-  ant_value_t chunks = js_mkarr(js);
+  ant_value_t chunks = Ant_Array_Create(js);
   GC_ROOT_PIN(js, chunks);
   js_arr_push(js, chunks, item);
 
@@ -2649,8 +2649,8 @@ static ant_value_t stream_writev_done(ant_params_t) {
 static stream_write_status_t stream_writable_start_writev(ant_t *js, stream_private_state_t *priv, ant_value_t writev_fn) {
   stream_writable_state_t *ws = &priv->writable;
   ant_value_t stream_obj = priv->self;
-  ant_value_t chunks = js_mkarr(js);
-  ant_value_t callbacks = js_mkarr(js);
+  ant_value_t chunks = Ant_Array_Create(js);
+  ant_value_t callbacks = Ant_Array_Create(js);
 
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, chunks);
@@ -3954,7 +3954,7 @@ static ant_value_t js_readable_async_iterator(ant_params_t) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, state);
 
-  ant_value_t queue = js_mkarr(js);
+  ant_value_t queue = Ant_Array_Create(js);
   ant_value_t on_data = js_heavy_mkfun(js, stream_iter_on_data, state);
   ant_value_t on_end = js_heavy_mkfun(js, stream_iter_on_end, state);
   ant_value_t on_error = js_heavy_mkfun(js, stream_iter_on_error, state);

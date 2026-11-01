@@ -545,7 +545,7 @@ static inline ant_value_t sv_op_destructure_next(sv_vm_t *vm, ant_t *js) {
 }
 
 static inline ant_value_t sv_op_destructure_rest(sv_vm_t *vm, ant_t *js) {
-  ant_value_t rest = js_mkarr(js);
+  ant_value_t rest = Ant_Array_Create(js);
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, rest);
   

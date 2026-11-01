@@ -146,7 +146,7 @@ static bool util_set_named_value(
   if (is_err(existing)) return false;
 
   if (vtype(existing) == kTypeUndefined) {
-    ant_value_t arr = js_mkarr(js);
+    ant_value_t arr = Ant_Array_Create(js);
     js_arr_push(js, arr, value);
     js_set(js, values, name, arr);
     return !Ant_Exception_Pending(js);
@@ -157,7 +157,7 @@ static bool util_set_named_value(
     return !Ant_Exception_Pending(js);
   }
 
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   js_arr_push(js, arr, existing);
   js_arr_push(js, arr, value);
   js_set(js, values, name, arr);
@@ -291,7 +291,7 @@ option_error:
   }
 
   ant_value_t values = Ant_Object_CreateBare(js);
-  ant_value_t positionals = js_mkarr(js);
+  ant_value_t positionals = Ant_Array_Create(js);
   ant_value_t out = Ant_Object_Create(js);
 
   ant_offset_t arg_len = js_arr_len(js, args_list);
@@ -1225,7 +1225,7 @@ static ant_value_t util_promisify_callback(ant_params_t) {
     return Ant_Value_Undefined;
   }
 
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   for (int i = 1; i < nargs; i++) js_arr_push(js, arr, args[i]);
   js_resolve_promise(js, promise, arr);
   return Ant_Value_Undefined;

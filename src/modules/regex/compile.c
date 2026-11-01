@@ -27,7 +27,7 @@ static regexp_group_name_t *regexp_collect_group_names(pcre2_code *code, uint32_
 ant_value_t regexp_build_named_groups_meta(ant_t *js, const compiled_regex_cache_entry_t *compiled) {
   if (compiled->namecount == 0 || !compiled->group_names) return Ant_Value_Undefined;
 
-  ant_value_t meta = js_mkarr(js);
+  ant_value_t meta = Ant_Array_Create(js);
   if (is_err(meta)) return meta;
 
   for (uint32_t i = 0; i < compiled->namecount; i++) {

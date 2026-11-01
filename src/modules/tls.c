@@ -1913,7 +1913,7 @@ static ant_value_t js_tls_get_ciphers(ant_params_t) {
   size_t total = count + sizeof(tls13_suites) / sizeof(tls13_suites[0]);
   
   char **names = calloc(total, sizeof(char *));
-  ant_value_t out = js_mkarr(js);
+  ant_value_t out = Ant_Array_Create(js);
   size_t n = 0;
 
   for (size_t i = 0; names && i < count; i++)
@@ -2039,7 +2039,7 @@ static ant_value_t js_tls_root_certificates(ant_params_t) {
 
   if (vtype(cached) == kTypeArray) return cached;
 
-  out = js_mkarr(js);
+  out = Ant_Array_Create(js);
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, out);
   

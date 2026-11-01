@@ -285,7 +285,7 @@ static bool advance_typedarray(ant_t *js, iterator_t *it, ant_value_t *out) {
     *out = Ant_Value_FromNumber((double)idx);
     break;
   case ARR_ITER_ENTRIES: {
-    ant_value_t pair = js_mkarr(js);
+    ant_value_t pair = Ant_Array_Create(js);
     js_arr_push(js, pair, Ant_Value_FromNumber((double)idx));
     js_arr_push(js, pair, value);
     *out = pair;
@@ -3620,7 +3620,7 @@ static ant_value_t js_buffer_toJSON(ant_params_t) {
   const uint8_t *bytes = len ? ta_data->buffer->data + ta_data->byte_offset : NULL;
 
   GC_ROOT_SAVE(root_mark, js);
-  ant_value_t data = js_mkarr(js);
+  ant_value_t data = Ant_Array_Create(js);
   GC_ROOT_PIN(js, data);
   for (size_t i = 0; i < len; i++) js_arr_push(js, data, Ant_Value_FromNumber(bytes[i]));
 

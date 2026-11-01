@@ -115,7 +115,7 @@ static void check_dense_read_guard(void) {
   MIR_load_module(ctx, module); MIR_link(ctx, MIR_set_gen_interface, NULL);
   ant_value_t (*read)(ant_value_t, uint64_t) =
       (ant_value_t (*)(ant_value_t, uint64_t))MIR_gen(ctx, function);
-  ant_value_t boxed = js_mkarr(js);
+  ant_value_t boxed = Ant_Array_Create(js);
   assert(!is_err(boxed));
   ant_object_t *array = js_obj_ptr(boxed);
   assert(array && array->flags.fast_array && array->u.array.data);

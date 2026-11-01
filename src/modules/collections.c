@@ -1936,7 +1936,7 @@ static ant_value_t builtin_FinalizationRegistry(ant_params_t) {
   ant_value_t fr_proto = js->builtins.finreg_proto;
   if (is_special_object(fr_proto)) js_set_proto_init(fr_obj, fr_proto);
   
-  js_set_slot(fr_obj, SLOT_MAP, js_mkarr(js));
+  js_set_slot(fr_obj, SLOT_MAP, Ant_Array_Create(js));
   js_set_slot(fr_obj, SLOT_DATA, args[0]);
   
   return fr_obj;
@@ -1961,7 +1961,7 @@ static ant_value_t finreg_register(ant_params_t) {
   ant_value_t registrations = js_get_slot(call_this, SLOT_MAP);
   if (vtype(registrations) != kTypeArray) return Ant_Value_Undefined;
   
-  ant_value_t entry = js_mkarr(js);
+  ant_value_t entry = Ant_Array_Create(js);
   ant_offset_t len = js_arr_len(js, registrations);
   
   char idx[16];
@@ -2016,7 +2016,7 @@ static ant_value_t map_group_add(ant_t *js, void *ctx, ant_value_t key, ant_valu
   ant_value_t group;
 
   if (entry) group = entry->value; else {
-    group = js_mkarr(js);
+    group = Ant_Array_Create(js);
     if (!map_store_entry(js, map_head, key, key, group)) return Ant_Error_CreateOutOfMemory(js);
   }
   

@@ -584,7 +584,7 @@ static ant_value_t tty_write_stream_get_window_size(ant_params_t) {
   int cols = 0;
   get_tty_size(fd, &rows, &cols);
 
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   js_arr_push(js, arr, Ant_Value_FromNumber((double)cols));
   js_arr_push(js, arr, Ant_Value_FromNumber((double)rows));
   return arr;

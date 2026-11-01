@@ -34,7 +34,7 @@ static ant_value_t dns_rr_address(ant_t *js, const ares_dns_rr_t *rr, ares_dns_r
 }
 
 static ant_value_t dns_rr_txt(ant_t *js, const ares_dns_rr_t *rr) {
-  ant_value_t chunks = js_mkarr(js);
+  ant_value_t chunks = Ant_Array_Create(js);
   size_t count = ares_dns_rr_get_abin_cnt(rr, ARES_RR_TXT_DATA);
 
   for (size_t i = 0; i < count; i++) {
@@ -162,7 +162,7 @@ static void dns_collect(ant_t *js, ant_value_t list, const ares_dns_record_t *re
 static ant_value_t dns_records(ant_t *js, const ares_dns_record_t *rec, dns_rr_t kind, dns_shape_t shape) {
   size_t count = rec ? ares_dns_record_rr_cnt(rec, ARES_SECTION_ANSWER) : 0;
   GC_ROOT_SAVE(mark, js);
-  ant_value_t list = js_mkarr(js);
+  ant_value_t list = Ant_Array_Create(js);
   GC_ROOT_PIN(js, list);
 
   if (kind == DNS_RR_ANY) {

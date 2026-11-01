@@ -1676,7 +1676,7 @@ static ant_value_t builtin_Promise_all(ant_params_t) {
 
   ant_value_t tracker = mkobj(js, 0);
   GC_ROOT_PIN(js, tracker);
-  ant_value_t results = js_mkarr(js);
+  ant_value_t results = Ant_Array_Create(js);
   GC_ROOT_PIN(js, results);
 
   js_set_slot_wb(js, tracker, SLOT_DATA, result_resolve);
@@ -1762,7 +1762,7 @@ static ant_value_t builtin_Promise_allSettled(ant_params_t) {
 
   ant_value_t tracker = mkobj(js, 0);
   GC_ROOT_PIN(js, tracker);
-  ant_value_t results = js_mkarr(js);
+  ant_value_t results = Ant_Array_Create(js);
   GC_ROOT_PIN(js, results);
 
   js_set_slot_wb(js, tracker, SLOT_DATA, result_resolve);
@@ -2075,7 +2075,7 @@ static ant_value_t builtin_Promise_any(ant_params_t) {
 
   ant_value_t tracker = mkobj(js, 0);
   GC_ROOT_PIN(js, tracker);
-  ant_value_t errors = js_mkarr(js);
+  ant_value_t errors = Ant_Array_Create(js);
   GC_ROOT_PIN(js, errors);
 
   js_set_slot_wb(js, tracker, SLOT_DATA, result_resolve);

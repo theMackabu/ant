@@ -392,7 +392,7 @@ ant_value_t regexp_symbol_replace_impl(
     ((fast.flags & REGEXP_FLAG_GLOBAL) != 0) == global
   ) return regexp_replace_fast(js, &fast, str, func_replace ? replace_value : replace_str, func_replace);
 
-  ant_value_t results = js_mkarr(js);
+  ant_value_t results = Ant_Array_Create(js);
   if (is_err(results)) return results;
   ant_offset_t nresults = 0;
 

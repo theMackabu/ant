@@ -997,7 +997,7 @@ static ant_value_t setup_ws_default_controller(
   js_set_slot(ctrl_obj, SLOT_WS_ABORT, abort_fn);
   js_set_slot(ctrl_obj, SLOT_RS_SIZE, size_fn);
   js_set_slot(ctrl_obj, SLOT_CTOR, underlying_sink);
-  js_set_slot(ctrl_obj, SLOT_AUX, js_mkarr(js));
+  js_set_slot(ctrl_obj, SLOT_AUX, Ant_Array_Create(js));
   js_set_finalizer(ctrl_obj, ws_controller_finalize);
 
   ant_value_t ac_ctor = js_get(js, js_glob(js), "AbortController");
@@ -1070,7 +1070,7 @@ static ant_value_t js_ws_ctor(ant_params_t) {
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_slot(obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_WRITABLE_STREAM));
   js_set_native(obj, st, WS_STREAM_NATIVE_TAG);
-  js_set_slot(obj, SLOT_SETTLED, js_mkarr(js));
+  js_set_slot(obj, SLOT_SETTLED, Ant_Array_Create(js));
   js_set_finalizer(obj, ws_stream_finalize);
 
   ant_value_t write_fn = Ant_Value_Undefined;

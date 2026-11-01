@@ -81,7 +81,7 @@ static ant_value_t builtin_module_deregisterHooks(ant_params_t) {
   if (vtype(hook) == kTypeUndefined || vtype(js->modules.hooks) != kTypeArray) return Ant_Value_Undefined;
 
   GC_ROOT_SAVE(root_mark, js);
-  ant_value_t remaining = js_mkarr(js);
+  ant_value_t remaining = Ant_Array_Create(js);
   GC_ROOT_PIN(js, remaining);
 
   ant_offset_t len = js_arr_len(js, js->modules.hooks);
@@ -121,7 +121,7 @@ static ant_value_t builtin_module_registerHooks(ant_params_t) {
   if (hook_member_invalid(load_fn))
     return js_mkerr_typed(js, JS_ERR_TYPE, "The 'load' hook must be a function");
 
-  if (vtype(js->modules.hooks) != kTypeArray) js->modules.hooks = js_mkarr(js);
+  if (vtype(js->modules.hooks) != kTypeArray) js->modules.hooks = Ant_Array_Create(js);
   js_arr_push(js, js->modules.hooks, args[0]);
 
   GC_ROOT_SAVE(root_mark, js);
@@ -222,7 +222,7 @@ ant_value_t module_library(ant_t *js) {
   js_set(js, lib, "flushCompileCache", Ant_Function_CreateWithArity(js_cfunc_noop, 0));
   js_set(js, lib, "constants", module_constants(js));
 
-  ant_value_t modules_arr = js_mkarr(js);
+  ant_value_t modules_arr = Ant_Array_Create(js);
   builtin_iter_ctx_t ctx = { js, modules_arr };
   ant_library_foreach(push_builtin_name, &ctx);
   esm_builtin_bundle_foreach(push_builtin_name, &ctx);

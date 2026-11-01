@@ -751,7 +751,7 @@ static ant_value_t callsite_proto(ant_t *js) {
 ant_value_t js_build_callsite_array(ant_t *js, ant_value_t call_func, ant_value_t above) {
   GC_ROOT_SAVE(root_mark, js);
   ant_value_t proto = callsite_proto(js);
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   GC_ROOT_PIN(js, arr);
 
   error_frame_t local[ERROR_FRAMES_INLINE], *frames;
@@ -764,7 +764,7 @@ ant_value_t js_build_callsite_array(ant_t *js, ant_value_t call_func, ant_value_
 
   for (int i = 0; i < count; i++) {
     error_frame_view_t view = error_frame_view(js, &frames[i], file);
-    data = js_mkarr(js);
+    data = Ant_Array_Create(js);
     js_arr_push(js, data, js_mkstr(js, view.file, strlen(view.file)));
     js_arr_push(js, data, Ant_Value_FromNumber((double)view.line));
     js_arr_push(js, data, Ant_Value_FromNumber((double)view.col));

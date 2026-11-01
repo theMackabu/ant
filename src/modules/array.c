@@ -19,7 +19,7 @@
 #include "modules/iterator.h"
 
 ant_value_t builtin_Array(ant_params_t) {
-  ant_value_t arr = mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   if (is_err(arr)) return arr;
   
   if (nargs == 1 && vtype(args[0]) == kTypeNumber) {
@@ -75,7 +75,7 @@ static ant_value_t array_copy_spliced(
   ant_offset_t out_len = len - skip + item_count;
   
   if (out_len > UINT32_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
-  if (out_len == 0) return mkarr(js);
+  if (out_len == 0) return Ant_Array_Create(js);
   
   ant_value_t result = alloc_array_with_proto_capacity(
     js, js->sym.array_proto, 
@@ -2986,14 +2986,14 @@ static iter_action_t array_from_iter_cb(ant_t *js, ant_value_t value, void *ctx,
 
 // TODO: modularize
 static ant_value_t builtin_Array_from(ant_params_t) {
-  if (nargs == 0) return mkarr(js);
+  if (nargs == 0) return Ant_Array_Create(js);
 
   ant_value_t src = args[0];
   ant_value_t mapFn = (nargs >= 2 && is_callable(args[1])) ? args[1] : Ant_Value_Undefined;
   ant_value_t mapThis = (nargs >= 3) ? args[2] : Ant_Value_Undefined;
 
   bool use_ctor = (vtype(call_this) == kTypeFunction || vtype(call_this) == kTypeBuiltin);
-  ant_value_t result = use_ctor ? array_alloc_from_ctor_with_length(js, call_this, 0) : mkarr(js);
+  ant_value_t result = use_ctor ? array_alloc_from_ctor_with_length(js, call_this, 0) : Ant_Array_Create(js);
   if (is_err(result)) return result;
 
   bool result_is_proxy = is_proxy(result);
@@ -3092,7 +3092,7 @@ static ant_value_t builtin_Array_from(ant_params_t) {
 
 static ant_value_t builtin_Array_of(ant_params_t) {
   bool use_ctor = (vtype(call_this) == kTypeFunction || vtype(call_this) == kTypeBuiltin);
-  ant_value_t arr = use_ctor ? array_alloc_from_ctor_with_length(js, call_this, (ant_offset_t)nargs) : mkarr(js);
+  ant_value_t arr = use_ctor ? array_alloc_from_ctor_with_length(js, call_this, (ant_offset_t)nargs) : Ant_Array_Create(js);
   if (is_err(arr)) return arr;
 
   bool arr_is_proxy = is_proxy(arr);
@@ -3377,7 +3377,7 @@ static ant_value_t from_async_start(
     target = is_err(source) ? source : from_async_construct(js, ctor, false, 0);
   }
 
-  ant_value_t state = is_err(target) ? target : mkarr(js);
+  ant_value_t state = is_err(target) ? target : Ant_Array_Create(js);
   GC_ROOT_PIN(js, state);
   
   if (!is_err(state)) {

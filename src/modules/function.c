@@ -650,7 +650,7 @@ static ant_value_t builtin_function_bind(ant_params_t) {
   set_slot(bound_func, SLOT_TARGET_FUNC, call_target);
   
   if (bound_argc > 0 || orig_bound_argc > 0) {
-    ant_value_t bound_arr = mkarr(js);
+    ant_value_t bound_arr = Ant_Array_Create(js);
     for (int i = 0; i < orig_bound_argc; i++)
       arr_set(js, bound_arr, (ant_offset_t)i, orig->u.bound.argv[i]);
     for (int i = 0; i < bound_argc; i++)

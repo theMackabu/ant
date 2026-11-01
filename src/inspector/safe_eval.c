@@ -462,7 +462,7 @@ static bool inspector_safe_eval_ast(ant_t *js, sv_ast_t *node, ant_value_t *out)
       return inspector_safe_get_prop(js, obj, key, key_len, out);
     }
     case N_ARRAY: {
-      ant_value_t arr = js_mkarr(js);
+      ant_value_t arr = Ant_Array_Create(js);
       if (is_err(arr)) return false;
 
       for (int i = 0; i < node->args.count; i++) {

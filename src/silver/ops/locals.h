@@ -167,7 +167,7 @@ static inline void sv_op_rest(
   ant_t *js, uint8_t *ip
 ) {
   uint16_t start = sv_get_u16(ip + 1);
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, arr);

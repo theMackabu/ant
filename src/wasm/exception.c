@@ -37,7 +37,7 @@ ant_value_t js_wasm_tag_ctor(ant_params_t) {
   GC_ROOT_PIN(js, list);
   if (is_err(list)) { GC_ROOT_RESTORE(js, mark); return list; }
 
-  ant_value_t kinds = js_mkarr(js);
+  ant_value_t kinds = Ant_Array_Create(js);
   GC_ROOT_PIN(js, kinds);
   
   ant_offset_t count = js_arr_len(js, list);
@@ -109,7 +109,7 @@ ant_value_t js_wasm_exception_ctor(ant_params_t) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Exception(): Number of exception values does not match signature length");
   }
 
-  ant_value_t payload = js_mkarr(js);
+  ant_value_t payload = Ant_Array_Create(js);
   GC_ROOT_PIN(js, payload);
   for (ant_offset_t i = 0; i < count; i++) {
     wasm_valkind_t kind = (wasm_valkind_t)Ant_Value_AsNumberUnchecked(js_arr_get(js, kinds, i));

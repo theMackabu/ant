@@ -233,7 +233,7 @@ ant_value_t wasm_js_from_result_vec(ant_t *js, wasm_val_vec_t *results) {
   if (!results || results->size == 0) return Ant_Value_Undefined;
   if (results->size == 1) return wasm_value_to_js(js, &results->data[0]);
 
-  ant_value_t arr = js_mkarr(js);
+  ant_value_t arr = Ant_Array_Create(js);
   for (size_t i = 0; i < results->size; i++) {
     js_arr_push(js, arr, wasm_value_to_js(js, &results->data[i]));
   }
