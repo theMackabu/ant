@@ -69,10 +69,24 @@ static bool usp_str_eq(usp_str_t a, usp_str_t b) {
   return a.ptr && b.ptr && a.len == b.len && memcmp(a.ptr, b.ptr, a.len) == 0;
 }
 
+// sort() orders names by UTF-16 code units. UTF-8 byte order agrees except
+// that U+E000-U+FFFF (lead bytes EE, EF) sorts before supplementary
+// characters (F0-F4), which UTF-16 spells as surrogate pairs and so puts
+// first; moving EE and EF past F4 restores the UTF-16 order.
+static int usp_utf16_lead_key(uint8_t byte) {
+  return byte == 0xEE || byte == 0xEF ? byte + 0x10 : byte;
+}
+
 static int usp_str_cmp(usp_str_t a, usp_str_t b) {
   size_t n = a.len < b.len ? a.len : b.len;
-  int c = n ? memcmp(a.ptr, b.ptr, n) : 0;
-  return c ? c : (a.len > b.len) - (a.len < b.len);
+  for (size_t i = 0; i < n; i++) {
+    uint8_t x = (uint8_t)a.ptr[i], y = (uint8_t)b.ptr[i];
+    if (x == y) continue;
+    // after an equal prefix, both are lead bytes or both continuation bytes
+    if ((x & 0xC0) != 0x80) return usp_utf16_lead_key(x) - usp_utf16_lead_key(y);
+    return x - y;
+  }
+  return (a.len > b.len) - (a.len < b.len);
 }
 
 static bool usp_entry_has_key(ant_t *js, ant_value_t entry, usp_str_t key) {

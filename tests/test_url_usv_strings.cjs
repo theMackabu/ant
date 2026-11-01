@@ -32,6 +32,10 @@ same(values.toString(), 'k=v%00a', 'delete by a value past a NUL');
 const order = new URLSearchParams('a%00b=1&a=2&a%00a=3');
 order.sort();
 same(order.toString(), 'a=2&a%00a=3&a%00b=1', 'sort past a NUL');
+// sort compares UTF-16 code units: a surrogate pair sorts before U+E000
+const units = new URLSearchParams([['\uE000', '1'], ['\u{10000}', '2'], ['\uD7FF', '3'], ['a', '4'], ['a\0\uE000', '5'], ['a\0\u{10000}', '6']]);
+units.sort();
+same(units.toString(), 'a=4&a%00%F0%90%80%80=6&a%00%EE%80%80=5&%ED%9F%BF=3&%F0%90%80%80=2&%EE%80%80=1', 'sort by UTF-16 code units');
 
 same(new URL('http://h/\uD800?q=\uDC00#\uD800').href,'http://h/%EF%BF%BD?q=%EF%BF%BD#%EF%BF%BD', 'URL input');
 
