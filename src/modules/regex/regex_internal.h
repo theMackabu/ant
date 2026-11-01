@@ -16,6 +16,7 @@
 #include <pcre2.h>
 
 static constexpr size_t REGEXP_REQUIRED_LITERAL_MAX = 32;
+static constexpr size_t REGEXP_JIT_EAGER_SUBJECT = 1024;
 
 typedef struct {
   const char *name;
@@ -36,6 +37,8 @@ typedef struct compiled_regex_cache_entry {
   uint32_t namecount;
   regexp_group_name_t *group_names;
   bool jit_ready;
+  bool jit_pending;
+  uint8_t interpreted_matches;
   bool line_jit_ready;
   bool legacy_backrefs;
   uint8_t line_state;
@@ -68,6 +71,7 @@ typedef struct {
   bool borrowed;
   bool line_checked;
   bool line_code;
+  bool interpreted;
 } regex_match_scope_t;
 
 typedef struct {
@@ -221,6 +225,21 @@ js_cstr_t regexp_translate_cstr(
   char *stack_buf, size_t stack_size,
   uint8_t flags, bool plain_line_anchors, bool *line_anchors
 );
+typedef struct {
+  size_t start, end;
+  uint64_t hash;
+  bool escaped;
+} regexp_name_span_t;
+
+typedef struct {
+  regexp_name_span_t *items;
+  uint32_t count, capacity;
+  regexp_name_span_t inline_items[16];
+} regexp_name_spans_t;
+
+void regexp_name_spans_init(regexp_name_spans_t *spans, const char *src, size_t src_len, bool v_flag);
+void regexp_name_spans_free(regexp_name_spans_t *spans);
+size_t regexp_name_span_decode(const char *src, const regexp_name_span_t *span, char *out);
 void regexp_init_flags(ant_t *js, ant_value_t obj, ant_value_t flags, bool is_new);
 ant_value_t regexp_species_ctor(ant_t *js, ant_value_t rx, const char *method);
 ant_value_t regexp_species_construct(ant_t *js, ant_value_t rx, ant_value_t ctor, ant_value_t *ctor_args, int nargs);
@@ -231,6 +250,7 @@ void compiled_regex_table_clear(
 );
 void compiled_regex_cache_rotate(ant_regex_state_t *state);
 __attribute__((noinline)) bool regexp_line_code_prepare(compiled_regex_cache_entry_t *entry);
+__attribute__((noinline, cold)) bool regexp_jit_tier_up(compiled_regex_cache_entry_t *entry, size_t subject_len);
 compiled_regex_cache_entry_t *compiled_regex_cache_acquire(
   ant_t *js,
   const char *pattern,
@@ -510,12 +530,17 @@ static __attribute__((always_inline)) inline int regexp_match_code(
     }
   }
   int rc;
-  if (__builtin_expect(jit_ready && !sticky, 1)) {
+  if (
+    __builtin_expect(jit_ready && !sticky, 1) ||
+    (compiled->jit_pending && !sticky && code == compiled->code && regexp_jit_tier_up(compiled, (size_t)str_len))
+  ) {
     rc = pcre2_jit_match(
       code, (PCRE2_SPTR)str_ptr, str_len, start_offset,
       match_options, scope->match_data, match_ctx
     );
   } else {
+    if (compiled->interpreted_matches < UINT8_MAX) compiled->interpreted_matches++;
+    scope->interpreted = true;
     if (str_is_valid_wtf8(str_ptr)) match_options |= PCRE2_NO_UTF_CHECK;
     rc = pcre2_match(
       code, (PCRE2_SPTR)str_ptr, str_len, start_offset,
@@ -624,6 +649,7 @@ static __attribute__((always_inline)) inline void regexp_fast_scan_begin(
   scan->offset = 0;
   scan->scope.match_data = NULL;
   scan->scope.line_checked = false;
+  scan->scope.interpreted = false;
   scan->global = (fast->flags & REGEXP_FLAG_GLOBAL) != 0;
   scan->sticky = (fast->flags & REGEXP_FLAG_STICKY) != 0;
   scan->done = false;

@@ -41,16 +41,6 @@ static const char regexp_folded_non_boundary[] =
   "(?:(?<=[\\w\\x{17f}\\x{212a}])(?=[\\w\\x{17f}\\x{212a}])"
   "|(?<![\\w\\x{17f}\\x{212a}])(?![\\w\\x{17f}\\x{212a}]))";
 
-static size_t v_close_bracket(const char *src, size_t src_len, size_t open) {
-  int depth = 0;
-  for (size_t i = open; i < src_len; i++) {
-    if (src[i] == '\\' && i + 1 < src_len) { i++; continue; }
-    if (src[i] == '[') depth++;
-    else if (src[i] == ']') { if (--depth == 0) return i; }
-  }
-  return src_len;
-}
-
 typedef struct {
   char *data;
   size_t capacity;
@@ -58,88 +48,6 @@ typedef struct {
   bool plain_line_anchors;
   bool line_anchors;
 } regexp_pattern_builder_t;
-
-static inline void regexp_pattern_builder_puts(
-  regexp_pattern_builder_t *builder,
-  const char *value,
-  size_t length
-) {
-  size_t offset = builder->length;
-  size_t available = offset < builder->capacity
-    ? builder->capacity - offset
-    : 0;
-  size_t copy_length = length < available ? length : available;
-  if (copy_length) memcpy(builder->data + offset, value, copy_length);
-  builder->length += length;
-}
-
-static inline void regexp_pattern_builder_put_any_char(
-  regexp_pattern_builder_t *builder
-) {
-  static const char any_char[] = "[\\s\\S]";
-  regexp_pattern_builder_puts(builder, any_char, sizeof(any_char) - 1);
-}
-
-static void js_to_pcre2_pattern_append(
-  const char *src,
-  size_t src_len,
-  regexp_pattern_builder_t *builder,
-  bool v_flag,
-  uint8_t flags,
-  int initial_charclass_depth
-);
-
-static void v_translate_part_append(
-  const char *part,
-  size_t length,
-  regexp_pattern_builder_t *builder,
-  uint8_t flags
-) {
-  if (length && part[0] == '[') {
-    js_to_pcre2_pattern_append(part, length, builder, false, flags, 0);
-    return;
-  }
-
-  if (length == 1 && part[0] == '^') {
-    regexp_pattern_builder_put_any_char(builder);
-    return;
-  }
-
-  if (length >= 2 && part[0] == '^' && part[1] == ']') {
-    regexp_pattern_builder_put_any_char(builder);
-    js_to_pcre2_pattern_append(part + 2, length - 2, builder, false, flags, 0);
-    regexp_pattern_builder_puts(builder, "]", 1);
-    return;
-  }
-
-  regexp_pattern_builder_puts(builder, "[", 1);
-  js_to_pcre2_pattern_append(part, length, builder, false, flags, 1);
-  regexp_pattern_builder_puts(builder, "]", 1);
-}
-
-static int v_set_op(const char *src, size_t start, size_t end, size_t *op_pos) {
-  int depth = 0;
-  for (size_t i = start; i < end; ) {
-    if (src[i] == '\\' && i + 1 < end) {
-      char n = src[i + 1];
-      if ((n == 'p' || n == 'P') && i + 2 < end && src[i + 2] == '{') {
-        i += 3; while (i < end && src[i] != '}') i++; if (i < end) i++; continue;
-      }
-      if ((n == 'u' || n == 'x') && i + 2 < end && src[i + 2] == '{') {
-        i += 3; while (i < end && src[i] != '}') i++; if (i < end) i++; continue;
-      }
-      i += 2; continue;
-    }
-    if (src[i] == '[') { depth++; i++; continue; }
-    if (src[i] == ']') { if (depth > 0) { depth--; i++; continue; } break; }
-    if (!depth && i + 1 < end) {
-      if (src[i] == '&' && src[i+1] == '&') { *op_pos = i; return 1; }
-      if (src[i] == '-' && src[i+1] == '-') { *op_pos = i; return 2; }
-    }
-    i++;
-  }
-  return 0;
-}
 
 static const struct {
   uint32_t cp;
@@ -301,12 +209,133 @@ static size_t regexp_group_name_end(const char *src, size_t src_len, size_t open
   return end;
 }
 
-static bool regexp_source_has_group_names(const char *src, size_t src_len) {
-  for (size_t i = 0; i + 3 < src_len; i++) {
+static size_t regexp_class_end(const char *src, size_t src_len, size_t open, bool v_flag) {
+  int depth = 0;
+  for (size_t i = open; i < src_len; i++) {
+    if (src[i] == '\\') i++;
+    else if (src[i] == '[' && (v_flag || depth == 0)) depth++;
+    else if (src[i] == ']' && --depth == 0) return i;
+  }
+  return src_len;
+}
+
+static bool regexp_next_group_name(
+  const char *src, size_t src_len, bool v_flag,
+  size_t *at, size_t *start, size_t *end
+) {
+  for (size_t i = *at; i + 3 < src_len; i++) {
     if (src[i] == '\\') { i++; continue; }
-    if (src[i] == '(' && src[i + 1] == '?' && src[i + 2] == '<' && src[i + 3] != '=' && src[i + 3] != '!') return true;
+    if (src[i] == '[') { i = regexp_class_end(src, src_len, i, v_flag); continue; }
+    if (src[i] != '(' || src[i + 1] != '?' || src[i + 2] != '<' || src[i + 3] == '=' || src[i + 3] == '!') continue;
+    *start = i + 3;
+    *end = regexp_group_name_end(src, src_len, i + 3);
+    *at = *end;
+    return *end < src_len;
   }
   return false;
+}
+
+static uint32_t regexp_name_next_cp(const char *src, size_t end, size_t *at) {
+  size_t i = *at;
+  uint32_t cp, low;
+  if (src[i] == '\\' && i + 2 < end && src[i + 1] == 'u') {
+    if (src[i + 2] == '{') {
+      for (cp = 0, i += 3; i < end && src[i] != '}'; i++)
+        cp = cp * 16 + (uint32_t)(src[i] <= '9' ? src[i] - '0' : (src[i] | 0x20) - 'a' + 10);
+      *at = i + 1;
+      return cp;
+    }
+    if (regexp_hex_value(src, end, i + 2, 4, &cp)) {
+      i += 6;
+      if (
+        cp >= 0xD800 && cp <= 0xDBFF && i + 1 < end && src[i] == '\\' && src[i + 1] == 'u' &&
+        regexp_hex_value(src, end, i + 2, 4, &low) && low >= 0xDC00 && low <= 0xDFFF
+      ) {
+        cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+        i += 6;
+      }
+      *at = i;
+      return cp;
+    }
+  }
+  utf8proc_int32_t decoded;
+  *at = i + (size_t)utf8_next((const utf8proc_uint8_t *)src + i, (utf8proc_ssize_t)(end - i), &decoded);
+  return decoded < 0 ? (unsigned char)src[i] : (uint32_t)decoded;
+}
+
+static regexp_name_span_t regexp_name_span(const char *src, size_t start, size_t end) {
+  regexp_name_span_t span = { .start = start, .end = end, .hash = 0xcbf29ce484222325ull };
+  span.escaped = memchr(src + start, '\\', end - start) != NULL;
+  for (size_t at = start; at < end; ) {
+    char utf8[4];
+    const char *bytes = src + at;
+    int width = 1;
+    if (span.escaped) {
+      width = utf8_encode(regexp_name_next_cp(src, end, &at), utf8);
+      bytes = utf8;
+    } else at++;
+    for (int i = 0; i < width; i++) span.hash = (span.hash ^ (unsigned char)bytes[i]) * 0x100000001b3ull;
+  }
+  return span;
+}
+
+void regexp_name_spans_init(regexp_name_spans_t *spans, const char *src, size_t src_len, bool v_flag) {
+  *spans = (regexp_name_spans_t){ .capacity = 16 };
+  spans->items = spans->inline_items;
+  size_t at = 0, start, end;
+  while (regexp_next_group_name(src, src_len, v_flag, &at, &start, &end)) {
+    if (spans->count == spans->capacity) {
+      uint32_t capacity = spans->capacity * 2;
+      regexp_name_span_t *items = spans->items == spans->inline_items
+        ? malloc(sizeof(*items) * capacity)
+        : realloc(spans->items, sizeof(*items) * capacity);
+      if (!items) return;
+      if (spans->items == spans->inline_items) memcpy(items, spans->inline_items, sizeof(spans->inline_items));
+      spans->items = items;
+      spans->capacity = capacity;
+    }
+    spans->items[spans->count++] = regexp_name_span(src, start, end);
+  }
+}
+
+void regexp_name_spans_free(regexp_name_spans_t *spans) {
+  if (spans->items != spans->inline_items) free(spans->items);
+}
+
+static bool regexp_name_spans_equal(const char *src, const regexp_name_span_t *a, const regexp_name_span_t *b) {
+  size_t a_at = a->start, b_at = b->start;
+  if (a->hash != b->hash) return false;
+  if (!a->escaped && !b->escaped)
+    return a->end - a_at == b->end - b_at && memcmp(src + a_at, src + b_at, a->end - a_at) == 0;
+  while (a_at < a->end && b_at < b->end)
+    if (regexp_name_next_cp(src, a->end, &a_at) != regexp_name_next_cp(src, b->end, &b_at)) return false;
+  return a_at == a->end && b_at == b->end;
+}
+
+static int regexp_name_spans_ordinal(const char *src, const regexp_name_spans_t *spans, size_t start, size_t end) {
+  regexp_name_span_t name = regexp_name_span(src, start, end);
+  for (uint32_t i = 0; i < spans->count; i++)
+    if (regexp_name_spans_equal(src, &spans->items[i], &name)) return (int)i;
+  return -1;
+}
+
+static size_t regexp_name_ordinal_digits(char *out, uint32_t ordinal) {
+  char digits[10];
+  size_t count = 0;
+  do digits[count++] = (char)('0' + ordinal % 10); while ((ordinal /= 10));
+  for (size_t i = 0; i < count; i++) out[i] = digits[count - 1 - i];
+  return count;
+}
+
+size_t regexp_name_span_decode(const char *src, const regexp_name_span_t *span, char *out) {
+  if (!span->escaped) {
+    memcpy(out, src + span->start, span->end - span->start);
+    return span->end - span->start;
+  }
+  size_t length = 0;
+  for (size_t at = span->start; at < span->end; )
+    length += (size_t)utf8_encode(regexp_name_next_cp(src, span->end, &at), out + length);
+  return length;
 }
 
 static void js_to_pcre2_pattern_append(
@@ -314,16 +343,17 @@ static void js_to_pcre2_pattern_append(
   size_t src_len,
   regexp_pattern_builder_t *builder,
   bool v_flag,
-  uint8_t flags,
-  int initial_charclass_depth
+  uint8_t flags
 ) {
   bool unicode_ignore_case = (flags & REGEXP_FLAG_IGNORE_CASE) && (flags & (REGEXP_FLAG_UNICODE | REGEXP_FLAG_UNICODE_SET));
   bool legacy_ignore_case = (flags & REGEXP_FLAG_IGNORE_CASE) && !(flags & (REGEXP_FLAG_UNICODE | REGEXP_FLAG_UNICODE_SET));
   size_t legacy_class_close = 0;
-  int charclass_depth = initial_charclass_depth;
+  int charclass_depth = 0;
   char *output = builder->data;
   size_t output_capacity = builder->capacity;
   size_t output_length = builder->length;
+  regexp_name_spans_t names;
+  bool names_ready = false;
 
 #define OUT(ch) do { \
   size_t output_offset = output_length++; \
@@ -340,49 +370,37 @@ static void js_to_pcre2_pattern_append(
       src[si + 2] == '<' && src[si + 3] != '=' && src[si + 3] != '!'
     ) {
       size_t name_end = regexp_group_name_end(src, src_len, si + 3);
-      for (; si < name_end; si++) OUT(src[si]);
-      if (si < src_len) OUT(src[si]);
-      continue;
+      if (!names_ready) { regexp_name_spans_init(&names, src, src_len, v_flag); names_ready = true; }
+      int ordinal = name_end < src_len ? regexp_name_spans_ordinal(src, &names, si + 3, name_end) : -1;
+      if (ordinal >= 0) {
+        char name[16];
+        size_t name_len = regexp_name_ordinal_digits(name, (uint32_t)ordinal);
+        OUTS("(?<_");
+        for (size_t k = 0; k < name_len; k++) OUT(name[k]);
+        OUT('>');
+        si = name_end;
+        continue;
+      }
     }
 
     if (src[si] == '[') {
+      if (charclass_depth > 0 && !v_flag) {
+        OUT('\\'); OUT('[');
+        continue;
+      }
+
       if (si + 2 < src_len && src[si + 1] == '^' && src[si + 2] == ']') {
-        OUT('['); OUT('\\'); OUT('s'); OUT('\\'); OUT('S'); OUT(']');
+        OUTS("[\\s\\S]");
         si += 2;
         continue;
       }
 
-      if (charclass_depth == 0 && si + 1 < src_len && src[si + 1] == ']') {
+      if (si + 1 < src_len && src[si + 1] == ']') {
         OUTS("[^\\s\\S]");
         si++;
         continue;
       }
 
-      if (v_flag && charclass_depth == 0) {
-        size_t close = v_close_bracket(src, src_len, si);
-        size_t op_pos;
-        int op_type = v_set_op(src, si + 1, close, &op_pos);
-        if (op_type && close < src_len) {
-          const char *left = &src[si + 1];
-          size_t left_len = op_pos - si - 1;
-          const char *right = &src[op_pos + 2];
-          size_t right_len = close - op_pos - 2;
-          const char *lookahead = op_type == 1 ? left : right;
-          size_t lookahead_len = op_type == 1 ? left_len : right_len;
-          const char *match = op_type == 1 ? right : left;
-          size_t match_len = op_type == 1 ? right_len : left_len;
-          OUT('('); OUT('?'); OUT(op_type == 1 ? '=' : '!');
-          builder->length = output_length;
-          v_translate_part_append(lookahead, lookahead_len, builder, flags);
-          output_length = builder->length;
-          OUT(')');
-          builder->length = output_length;
-          v_translate_part_append(match, match_len, builder, flags);
-          output_length = builder->length;
-          si = close;
-          continue;
-        }
-      }
       if (legacy_ignore_case && charclass_depth == 0) {
         size_t close;
         uint8_t extras = regexp_legacy_class_extras(src, src_len, si, &close);
@@ -397,6 +415,9 @@ static void js_to_pcre2_pattern_append(
       }
       charclass_depth++;
       OUT('[');
+      if (si + 1 < src_len && (src[si + 1] == ':' || src[si + 1] == '.' || src[si + 1] == '=')) {
+        OUT('\\'); OUT(src[++si]);
+      }
       continue;
     }
     if (src[si] == ']' && charclass_depth > 0) {
@@ -409,7 +430,7 @@ static void js_to_pcre2_pattern_append(
       continue;
     }
 
-    if (charclass_depth > 0 && src[si] == '-' && si > 0 && src[si - 1] != '[' &&
+    if (!v_flag && charclass_depth > 0 && src[si] == '-' && si > 0 && src[si - 1] != '[' &&
         si + 1 < src_len && src[si + 1] != ']') {
       bool prev_is_shorthand = (si >= 2 && src[si - 2] == '\\' && is_class_shorthand(src[si - 1]));
       bool next_is_shorthand = (si + 2 < src_len && src[si + 1] == '\\' && is_class_shorthand(src[si + 2]));
@@ -715,18 +736,25 @@ static void js_to_pcre2_pattern_append(
       continue;
     }
 
-    if (
-      next == 'k' && charclass_depth == 0 && si + 2 < src_len && src[si + 2] == '<' &&
-      regexp_source_has_group_names(src, src_len)
-    ) {
+    if (next == 'k' && charclass_depth == 0 && si + 2 < src_len && src[si + 2] == '<') {
       size_t name_end = regexp_group_name_end(src, src_len, si + 3);
-      if (name_end < src_len) {
+      if (!names_ready) { regexp_name_spans_init(&names, src, src_len, v_flag); names_ready = true; }
+      int ordinal = name_end < src_len ? regexp_name_spans_ordinal(src, &names, si + 3, name_end) : -1;
+      if (ordinal >= 0) {
         if (legacy_ignore_case) {
           OUTS("(?C\"");
-          for (size_t k = si + 3; k < name_end; k++) OUT(src[k]);
+          for (size_t k = si + 3; k < name_end; ) {
+            char utf8[4];
+            int width = utf8_encode(regexp_name_next_cp(src, name_end, &k), utf8);
+            for (int w = 0; w < width; w++) OUT(utf8[w]);
+          }
           OUTS("\")");
         }
-        for (; si <= name_end; si++) OUT(src[si]);
+        char name[16];
+        size_t name_len = regexp_name_ordinal_digits(name, (uint32_t)ordinal);
+        OUTS("\\k<_");
+        for (size_t k = 0; k < name_len; k++) OUT(name[k]);
+        OUT('>');
         si = name_end;
         continue;
       }
@@ -743,7 +771,7 @@ static void js_to_pcre2_pattern_append(
       }
     }
 
-    if (is_pcre2_passthrough_escape(next)) {
+    if (is_pcre2_passthrough_escape(next) || (v_flag && charclass_depth > 0 && next > 0x20 && next < 0x7f && !ant_ascii_is_alnum(next))) {
       OUT('\\'); OUT(next);
       si++;
       continue;
@@ -756,6 +784,7 @@ static void js_to_pcre2_pattern_append(
 
 #undef OUTS
 #undef OUT
+  if (names_ready) regexp_name_spans_free(&names);
   builder->length = output_length;
 }
 
@@ -769,7 +798,7 @@ static size_t regexp_translate(
     .capacity = dst_size ? dst_size - 1 : 0,
     .plain_line_anchors = plain_line_anchors,
   };
-  js_to_pcre2_pattern_append(src, src_len, &builder, (flags & REGEXP_FLAG_UNICODE_SET) != 0, flags, 0);
+  js_to_pcre2_pattern_append(src, src_len, &builder, (flags & REGEXP_FLAG_UNICODE_SET) != 0, flags);
   if (dst_size) {
     size_t terminator = builder.length < dst_size
       ? builder.length
@@ -823,11 +852,7 @@ js_cstr_t regexp_translate_cstr(
 }
 
 js_cstr_t js_to_pcre2_pattern_cstr(
-  const char *src,
-  size_t src_len,
-  char *stack_buf,
-  size_t stack_size,
-  uint8_t flags
+  const char *src, size_t src_len, char *stack_buf, size_t stack_size, uint8_t flags
 ) {
   return regexp_translate_cstr(src, src_len, stack_buf, stack_size, flags, false, NULL);
 }

@@ -5,22 +5,37 @@ static int regexp_group_name_cmp(const void *a, const void *b) {
   return (x->group > y->group) - (x->group < y->group);
 }
 
-static regexp_group_name_t *regexp_collect_group_names(pcre2_code *code, uint32_t namecount) {
-  uint32_t nameentrysize = 0;
+static regexp_group_name_t *regexp_collect_group_names(const compiled_regex_cache_entry_t *compiled) {
+  uint32_t nameentrysize = 0, namecount = compiled->namecount;
   PCRE2_SPTR nametable = NULL;
-  pcre2_pattern_info(code, PCRE2_INFO_NAMEENTRYSIZE, &nameentrysize);
-  pcre2_pattern_info(code, PCRE2_INFO_NAMETABLE, (void *)&nametable);
+  
+  pcre2_pattern_info(compiled->code, PCRE2_INFO_NAMEENTRYSIZE, &nameentrysize);
+  pcre2_pattern_info(compiled->code, PCRE2_INFO_NAMETABLE, (void *)&nametable);
 
-  regexp_group_name_t *names = malloc(sizeof(*names) * namecount);
+  regexp_group_name_t *names = malloc(sizeof(*names) * namecount + compiled->pattern_len);
   if (!names) return NULL;
+  
+  char *chars = (char *)(names + namecount);
+  regexp_name_spans_t spans;
+  regexp_name_spans_init(&spans, compiled->pattern, compiled->pattern_len, (compiled->flags_mask & REGEXP_FLAG_UNICODE_SET) != 0);
+  
   for (uint32_t i = 0; i < namecount; i++) {
     PCRE2_SPTR entry = nametable + (size_t)i * nameentrysize;
-    const char *name = (const char *)(entry + 2);
+    uint32_t ordinal = 0;
+    
+    for (PCRE2_SPTR digit = entry + 3; *digit >= '0' && *digit <= '9'; digit++) ordinal = ordinal * 10 + (uint32_t)(*digit - '0');
+    size_t length = ordinal < spans.count ? regexp_name_span_decode(compiled->pattern, &spans.items[ordinal], chars) : 0;
+    
     names[i] = (regexp_group_name_t){
-      .name = name, .length = (uint32_t)strlen(name), .group = (uint32_t)((entry[0] << 8) | entry[1]),
+      .name = chars, .length = (uint32_t)length, 
+      .group = (uint32_t)((entry[0] << 8) | entry[1]),
     };
+    chars += length;
   }
+  
+  regexp_name_spans_free(&spans);
   qsort(names, namecount, sizeof(*names), regexp_group_name_cmp);
+  
   return names;
 }
 
@@ -346,6 +361,7 @@ static pcre2_code *regexp_compile_code(
   if (flags_mask & REGEXP_FLAG_IGNORE_CASE) options |= PCRE2_CASELESS;
   if (flags_mask & REGEXP_FLAG_MULTILINE) options |= PCRE2_MULTILINE | PCRE2_ALT_CIRCUMFLEX;
   if (flags_mask & REGEXP_FLAG_DOTALL) options |= PCRE2_DOTALL;
+  if (flags_mask & REGEXP_FLAG_UNICODE_SET) options |= PCRE2_ALT_EXTENDED_CLASS;
 
   int errcode;
   PCRE2_SIZE erroffset;
@@ -364,21 +380,32 @@ static pcre2_code *regexp_compile_code(
   return re;
 }
 
+__attribute__((noinline, cold)) bool regexp_jit_tier_up(compiled_regex_cache_entry_t *entry, size_t subject_len) {
+  if (entry->interpreted_matches == 0 && subject_len < REGEXP_JIT_EAGER_SUBJECT) return false;
+  entry->jit_pending = false;
+  entry->jit_ready = pcre2_jit_compile(entry->code, PCRE2_JIT_COMPLETE) == 0;
+  return entry->jit_ready;
+}
+
 __attribute__((noinline)) bool regexp_line_code_prepare(compiled_regex_cache_entry_t *entry) {
   if (entry->line_state == REGEXP_LINE_READY) return true;
   if (entry->line_state != REGEXP_LINE_PENDING) return false;
+  
   uint32_t captures = 0, line_captures = 0;
   pcre2_code *code = regexp_compile_code(entry->pattern, entry->pattern_len, entry->flags_mask, true, NULL);
   pcre2_pattern_info(entry->code, PCRE2_INFO_CAPTURECOUNT, &captures);
+  
   if (code) pcre2_pattern_info(code, PCRE2_INFO_CAPTURECOUNT, &line_captures);
   if (!code || captures != line_captures) {
     pcre2_code_free(code);
     entry->line_state = REGEXP_LINE_FAILED;
     return false;
   }
+  
   entry->line_code = code;
   entry->line_jit_ready = pcre2_jit_compile(code, PCRE2_JIT_COMPLETE) == 0;
   entry->line_state = REGEXP_LINE_READY;
+  
   return true;
 }
 
@@ -425,19 +452,24 @@ static compiled_regex_cache_entry_t *compiled_regex_cache_get_or_compile(
   entry->pattern_len = pattern_len;
   entry->key_hash = key_hash;
   entry->flags_mask = flags_mask;
+  
   entry->plain_literal =
     !(flags_mask & REGEXP_PLAIN_LITERAL_EXCLUDED_FLAGS) &&
     regex_source_is_plain_literal(pattern, pattern_len);
+  
   entry->code = re;
   entry->line_state = line_anchors ? REGEXP_LINE_PENDING : REGEXP_LINE_NONE;
+  
   pcre2_pattern_info(re, PCRE2_INFO_NAMECOUNT, &entry->namecount);
-  if (entry->namecount) entry->group_names = regexp_collect_group_names(re, entry->namecount);
+  if (entry->namecount) entry->group_names = regexp_collect_group_names(entry);
+  
   if ((flags_mask & REGEXP_FLAG_IGNORE_CASE) && !(flags_mask & (REGEXP_FLAG_UNICODE | REGEXP_FLAG_UNICODE_SET)))
     pcre2_callout_enumerate(re, regexp_callout_found, &entry->legacy_backrefs);
-  entry->jit_ready = pcre2_jit_compile(re, PCRE2_JIT_COMPLETE) == 0;
+  
+  entry->jit_pending = true;
   regexp_find_required_literal(entry);
-
   compiled_regex_cache_admit_new(state, entry);
+  
   return entry;
 }
 
@@ -483,11 +515,16 @@ __attribute__((noinline)) bool regex_match_scope_begin_slow(
 
 void regex_match_scope_end(regex_match_scope_t *scope) {
   if (!scope || !scope->match_data) return;
+  
   if (scope->borrowed) {
-    scope->compiled->scratch_in_use = false;
-  } else {
-    pcre2_match_data_free(scope->match_data);
-  }
+    compiled_regex_cache_entry_t *entry = scope->compiled;
+    entry->scratch_in_use = false;
+    if (scope->interpreted && entry->interpreted_matches == 1) {
+      pcre2_match_data_free(entry->scratch_match_data);
+      entry->scratch_match_data = NULL;
+    }
+  } else pcre2_match_data_free(scope->match_data);
+  
   scope->match_data = NULL;
 }
 
