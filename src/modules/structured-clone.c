@@ -230,10 +230,11 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     ant_value_t clone = js_mkarr(js);
     sc_add(seen, val, clone);
     
-    // holes stay holes, and named properties travel with the elements
+    // holes stay holes (even over inherited elements), and named properties
+    // travel with the elements
     ant_offset_t len = js_arr_len(js, val);
     for (ant_offset_t i = 0; i < len; i++) {
-      if (!js_arr_has(js, val, i)) continue;
+      if (!js_arr_has_own(js, val, i)) continue;
       ant_value_t ic = sc_clone_rec(js, js_arr_get(js, val, i), seen, transfer);
       if (is_err(ic)) return ic;
       js_arr_set_index(js, clone, i, ic);

@@ -1238,8 +1238,20 @@ void js_arr_set_index(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t 
   arr_set(js, arr, idx, val);
 }
 
-bool js_arr_has(ant_t *js, ant_value_t arr, ant_offset_t idx) {
-  return arr_has(js, arr, idx);
+bool js_arr_has_own(ant_t *js, ant_value_t arr, ant_offset_t idx) {
+  if (idx >= get_array_length(js, arr)) return false;
+  ant_offset_t doff = get_dense_buf(arr);
+  if (doff && idx < dense_iterable_length(js, arr) && !is_empty_slot(dense_get(doff, idx))) return true;
+
+  char idxstr[16];
+  size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
+  ant_prop_loc_t loc = lkp(js, arr, idxstr, idxlen);
+  if (!loc.obj) return false;
+  if (loc.obj->flags.is_exotic) {
+    descriptor_entry_t *desc = lookup_descriptor(js, js_as_obj(arr), idxstr, idxlen);
+    return !desc || desc->enumerable;
+  }
+  return (ant_shape_get_attrs(loc.obj->shape, loc.slot) & ANT_PROP_ATTR_ENUMERABLE) != 0;
 }
 
 void js_arr_set_dense_length(ant_t *js, ant_value_t arr, ant_offset_t len) {

@@ -45,34 +45,54 @@ static ant_value_t usp_make_entry(ant_t *js, ant_value_t key, ant_value_t value)
   return entry;
 }
 
-static const char *usp_entry_key(ant_t *js, ant_value_t entry) {
-  return js_getstr(js, js_arr_get(js, entry, 0), NULL);
+// Names and values may hold NULs once decoded, so they compare by length.
+typedef struct {
+  const char *ptr;
+  size_t len;
+} usp_str_t;
+
+static usp_str_t usp_str(ant_t *js, ant_value_t value) {
+  usp_str_t str = { NULL, 0 };
+  str.ptr = js_getstr(js, value, &str.len);
+  return str;
 }
 
-static const char *usp_entry_value(ant_t *js, ant_value_t entry) {
-  return js_getstr(js, js_arr_get(js, entry, 1), NULL);
+static usp_str_t usp_entry_key(ant_t *js, ant_value_t entry) {
+  return usp_str(js, js_arr_get(js, entry, 0));
 }
 
-static bool usp_entry_has_key(ant_t *js, ant_value_t entry, const char *key) {
-  const char *entry_key = usp_entry_key(js, entry);
-  return entry_key && strcmp(entry_key, key) == 0;
+static usp_str_t usp_entry_value(ant_t *js, ant_value_t entry) {
+  return usp_str(js, js_arr_get(js, entry, 1));
 }
 
-static bool usp_entry_matches(ant_t *js, ant_value_t entry, const char *key, const char *value) {
+static bool usp_str_eq(usp_str_t a, usp_str_t b) {
+  return a.ptr && b.ptr && a.len == b.len && memcmp(a.ptr, b.ptr, a.len) == 0;
+}
+
+static int usp_str_cmp(usp_str_t a, usp_str_t b) {
+  size_t n = a.len < b.len ? a.len : b.len;
+  int c = n ? memcmp(a.ptr, b.ptr, n) : 0;
+  return c ? c : (a.len > b.len) - (a.len < b.len);
+}
+
+static bool usp_entry_has_key(ant_t *js, ant_value_t entry, usp_str_t key) {
+  return usp_str_eq(usp_entry_key(js, entry), key);
+}
+
+static bool usp_entry_matches(ant_t *js, ant_value_t entry, usp_str_t key, usp_str_t value) {
   if (!usp_entry_has_key(js, entry, key)) return false;
-  if (!value) return true;
-  const char *entry_value = usp_entry_value(js, entry);
-  return entry_value && strcmp(entry_value, value) == 0;
+  return !value.ptr || usp_str_eq(usp_entry_value(js, entry), value);
 }
 
-static ant_value_t usp_optional_value(ant_t *js, ant_value_t *args, int nargs, const char **out) {
-  *out = NULL;
+// value.ptr stays NULL when the optional value argument is absent
+static ant_value_t usp_optional_value(ant_t *js, ant_value_t *args, int nargs, usp_str_t *out) {
+  *out = (usp_str_t){ NULL, 0 };
   if (nargs < 2 || is_undefined(args[1])) return Ant_Value_Undefined;
 
   ant_value_t value = url_string_value(js, args[1]);
   if (is_err(value)) return value;
 
-  *out = js_getstr(js, value, NULL);
+  *out = usp_str(js, value);
   return Ant_Value_Undefined;
 }
 
@@ -210,9 +230,9 @@ static ant_value_t usp_get(ant_params_t) {
   ant_value_t key_sv = url_string_value(js, args[0]);
   if (is_err(key_sv)) return key_sv;
 
-  const char *key = js_getstr(js, key_sv, NULL);
+  usp_str_t key = usp_str(js, key_sv);
   ant_value_t entries = usp_entries(call_this);
-  if (!key || !entries) return Ant_Value_Null;
+  if (!key.ptr || !entries) return Ant_Value_Null;
 
   ant_offset_t len = js_arr_len(js, entries);
   for (ant_offset_t i = 0; i < len; i++) {
@@ -230,9 +250,9 @@ static ant_value_t usp_getAll(ant_params_t) {
   ant_value_t key_sv = url_string_value(js, args[0]);
   if (is_err(key_sv)) return key_sv;
 
-  const char *key = js_getstr(js, key_sv, NULL);
+  usp_str_t key = usp_str(js, key_sv);
   ant_value_t entries = usp_entries(call_this);
-  if (!key || !entries) return result;
+  if (!key.ptr || !entries) return result;
 
   ant_offset_t len = js_arr_len(js, entries);
   for (ant_offset_t i = 0; i < len; i++) {
@@ -249,10 +269,10 @@ static ant_value_t usp_has(ant_params_t) {
   ant_value_t key_sv = url_string_value(js, args[0]);
   if (is_err(key_sv)) return key_sv;
 
-  const char *key = js_getstr(js, key_sv, NULL);
-  if (!key) return Ant_Value_False;
+  usp_str_t key = usp_str(js, key_sv);
+  if (!key.ptr) return Ant_Value_False;
 
-  const char *value = NULL;
+  usp_str_t value;
   ant_value_t converted = usp_optional_value(js, args, nargs, &value);
   if (is_err(converted)) return converted;
 
@@ -273,8 +293,8 @@ static ant_value_t usp_set(ant_params_t) {
   ant_value_t value_sv = url_string_value(js, args[1]);
   if (is_err(value_sv)) return value_sv;
 
-  const char *key = js_getstr(js, key_sv, NULL);
-  if (!key) return Ant_Value_Undefined;
+  usp_str_t key = usp_str(js, key_sv);
+  if (!key.ptr) return Ant_Value_Undefined;
 
   ant_value_t entries = usp_entries(call_this);
   ant_offset_t len = usp_entry_count(js, entries);
@@ -322,10 +342,10 @@ static ant_value_t usp_delete(ant_params_t) {
   ant_value_t key_sv = url_string_value(js, args[0]);
   if (is_err(key_sv)) return key_sv;
 
-  const char *key = js_getstr(js, key_sv, NULL);
-  if (!key) return Ant_Value_Undefined;
+  usp_str_t key = usp_str(js, key_sv);
+  if (!key.ptr) return Ant_Value_Undefined;
 
-  const char *value = NULL;
+  usp_str_t value;
   ant_value_t converted = usp_optional_value(js, args, nargs, &value);
   if (is_err(converted)) return converted;
 
@@ -381,12 +401,12 @@ static ant_value_t usp_size_get(ant_params_t) {
 static void usp_sort_entries(ant_t *js, ant_value_t *items, ant_offset_t len) {
   for (ant_offset_t i = 1; i < len; i++) {
     ant_value_t cur = items[i];
-    const char *cur_key = usp_entry_key(js, cur);
+    usp_str_t cur_key = usp_entry_key(js, cur);
     ant_offset_t j = i;
 
     while (j > 0) {
-      const char *prev_key = usp_entry_key(js, items[j - 1]);
-      if (strcmp(prev_key ? prev_key : "", cur_key ? cur_key : "") <= 0) break;
+      usp_str_t prev_key = usp_entry_key(js, items[j - 1]);
+      if (usp_str_cmp(prev_key, cur_key) <= 0) break;
       items[j] = items[j - 1];
       j--;
     }

@@ -25,4 +25,18 @@ same(copy.length, 4, 'length');
 same(structuredClone(new Array(3)).length, 3, 'trailing holes');
 same(JSON.stringify(structuredClone([1, [2, 3], { a: [4] }])), '[1,[2,3],{"a":[4]}]', 'dense arrays');
 
+// only own enumerable elements are copied: a hole stays a hole even when the
+// prototype has an element there, and a non-enumerable element is skipped
+Array.prototype[1] = 'inherited';
+try {
+  const holey = structuredClone([0, , 2]);
+  same(Object.hasOwn(holey, 1), false, 'hole over an inherited element');
+  same(holey.length, 3, 'length over an inherited element');
+} finally {
+  delete Array.prototype[1];
+}
+const hidden = [0, 1];
+Object.defineProperty(hidden, 1, { value: 1, enumerable: false });
+same(Object.hasOwn(structuredClone(hidden), 1), false, 'non-enumerable element');
+
 console.log('structured clone shapes ok');
