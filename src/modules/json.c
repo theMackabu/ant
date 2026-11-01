@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
@@ -66,7 +67,9 @@ static inline bool json_read_hex4(const char *p, uint32_t *out) {
  * Valid input never takes this path.
  */
 #define JSON_MARK "\xEF\xBF\xBF"
-#define JSON_MARK_LEN 3
+
+static constexpr uint8_t JSON_MARK_LEN = 3;
+static constexpr uint8_t JSON_PLAN_SLOTS = 16;
 
 static inline bool json_is_mark(const char *p) {
   return (unsigned char)p[0] == 0xEF && (unsigned char)p[1] == 0xBF && (unsigned char)p[2] == 0xBF;
@@ -366,7 +369,10 @@ static ant_value_t yyjson_to_jsval(
   }
   
   case YYJSON_TYPE_NUM: {
-    if (yyjson_is_sint(val)) return Ant_Value_FromNumber((double)yyjson_get_sint(val));
+    if (yyjson_is_sint(val)) {
+      int64_t number = yyjson_get_sint(val);
+      return Ant_Value_FromNumber(number == 0 ? -0.0 : (double)number);
+    }
     if (yyjson_is_uint(val)) return Ant_Value_FromNumber((double)yyjson_get_uint(val));
     return Ant_Value_FromNumber(yyjson_get_real(val));
   }
@@ -468,9 +474,6 @@ typedef struct {
   int stack_cap;
   int has_cycle;
   bool has_error;
-  char cycle_key[128];
-
-  char indent[64];
   size_t indent_len;
   const char *tojson_key;
   
@@ -483,6 +486,12 @@ typedef struct {
   uint8_t tojson_count;
   uint8_t tojson_next;
 
+  const void *plan_seen[16];
+  struct json_plan_slot *plans;
+  struct json_plan *plans_retired;
+
+  char cycle_key[128];
+  char indent[64];
   ant_value_t stack_inline[32];
 } json_cycle_ctx;
 
@@ -990,6 +999,212 @@ abort:
   return JSON_W_ABORT;
 }
 
+typedef struct {
+  const char *key;
+  uint32_t key_len;
+  uint32_t slot;
+  uint32_t quoted_off;
+  uint32_t quoted_len;
+} json_plan_key_t;
+
+typedef struct json_plan {
+  ant_shape_t *shape;
+  struct json_plan *next_retired;
+  uint32_t count;
+  uint32_t epoch;
+  uint32_t key_count;
+  uint32_t in_use;
+  bool usable;
+  char *quoted;
+  json_plan_key_t keys[];
+} json_plan_t;
+
+typedef struct json_plan_slot {
+  ant_shape_t *shape;
+  json_plan_t *plan;
+} json_plan_slot_t;
+
+static inline uint32_t json_plan_count(const ant_object_t *ptr) {
+  uint32_t count = ant_shape_count(ptr->shape);
+  return count > ptr->prop_count ? ptr->prop_count : count;
+}
+
+static json_plan_t *json_plan_build(ant_t *js, ant_value_t val, ant_object_t *ptr) {
+  json_slot_key_t inline_keys[24];
+  json_slot_key_t *keys = NULL;
+  size_t key_count = 0;
+  if (!json_collect_own_keys(js, val, &keys, &key_count, inline_keys, 24)) return NULL;
+
+  json_plan_t *plan = calloc(1, sizeof(*plan) + key_count * sizeof(json_plan_key_t));
+  if (!plan) goto done;
+
+  plan->shape = ptr->shape;
+  ant_shape_retain(plan->shape);
+  plan->count = json_plan_count(ptr);
+  plan->epoch = js->ic.epoch;
+  plan->key_count = (uint32_t)key_count;
+  plan->usable = true;
+
+  size_t quoted_cap = 0;
+  for (size_t i = 0; i < key_count; i++) {
+    const ant_shape_prop_t *meta = ant_shape_prop_at(ptr->shape, keys[i].slot);
+    if (!meta || meta->has_getter || meta->has_setter) plan->usable = false;
+    quoted_cap += (size_t)intern_length(keys[i].key) * 6 + 3;
+  }
+  if (!plan->usable) goto done;
+
+  plan->quoted = malloc(quoted_cap ? quoted_cap : 1);
+  if (!plan->quoted) { plan->usable = false; goto done; }
+
+  size_t pos = 0;
+  for (size_t i = 0; i < key_count; i++) {
+    size_t key_len = intern_length(keys[i].key);
+    size_t quoted_len = utf8_json_quote_into(plan->quoted + pos, keys[i].key, key_len);
+    plan->quoted[pos + quoted_len++] = ':';
+    plan->keys[i] = (json_plan_key_t){
+      keys[i].key, (uint32_t)key_len, keys[i].slot, (uint32_t)pos, (uint32_t)quoted_len
+    };
+    pos += quoted_len;
+  }
+
+done:
+  if (keys != inline_keys) free(keys);
+  return plan;
+}
+
+static void json_plan_free(json_plan_t *plan) {
+  if (!plan) return;
+  ant_shape_release(plan->shape);
+  free(plan->quoted);
+  free(plan);
+}
+
+static void json_plan_drop(json_cycle_ctx *ctx, json_plan_t *plan) {
+  if (!plan) return;
+  if (!plan->in_use) {
+    json_plan_free(plan);
+    return;
+  }
+  plan->next_retired = ctx->plans_retired;
+  ctx->plans_retired = plan;
+}
+
+static void json_plans_free(json_cycle_ctx *ctx) {
+  for (json_plan_t *plan = ctx->plans_retired, *next; plan; plan = next) {
+    next = plan->next_retired;
+    json_plan_free(plan);
+  }
+  if (!ctx->plans) return;
+  for (int i = 0; i < JSON_PLAN_SLOTS; i++) json_plan_free(ctx->plans[i].plan);
+  free(ctx->plans);
+}
+
+static json_plan_t *json_plan_for(json_cycle_ctx *ctx, ant_value_t val) {
+  if (vtype(val) != kTypeObject || is_proxy(val)) return NULL;
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(val));
+  if (!ptr || !ptr->shape || ptr->flags.is_exotic) return NULL;
+
+  ant_shape_t *shape = ptr->shape;
+  size_t index = ((uintptr_t)shape >> 4) & (JSON_PLAN_SLOTS - 1);
+  json_plan_slot_t *entry = ctx->plans ? &ctx->plans[index] : NULL;
+
+  if (entry && entry->shape == shape) {
+    json_plan_t *plan = entry->plan;
+    if (plan->epoch == ctx->js->ic.epoch && plan->count == json_plan_count(ptr))
+      return plan->usable ? plan : NULL;
+  } else if (ctx->plan_seen[index] != shape) {
+    ctx->plan_seen[index] = shape;
+    return NULL;
+  }
+
+  json_plan_t *plan = json_plan_build(ctx->js, val, ptr);
+  if (!plan) return NULL;
+
+  if (!entry) {
+    ctx->plans = calloc(JSON_PLAN_SLOTS, sizeof(*ctx->plans));
+    if (!ctx->plans) {
+      json_plan_free(plan);
+      return NULL;
+    }
+    entry = &ctx->plans[index];
+  }
+
+  json_plan_drop(ctx, entry->plan);
+  entry->shape = shape;
+  entry->plan = plan;
+  return plan->usable ? plan : NULL;
+}
+
+static bool json_plan_load_moved(
+  json_cycle_ctx *ctx, ant_value_t val, ant_object_t *ptr, const json_plan_key_t *entry, ant_value_t *out
+) {
+  ant_prop_loc_t loc = { ptr, entry->slot };
+  const ant_shape_prop_t *meta = ant_shape_prop_at(ptr->shape, loc.slot);
+
+  if (!meta || meta->type != ANT_SHAPE_KEY_STRING || meta->key.interned != entry->key) {
+    loc = lkp_interned(val, entry->key);
+    if (!loc.obj) return false;
+    meta = ant_shape_prop_at(loc.obj->shape, loc.slot);
+  }
+
+  if (!meta || (!meta->has_getter && !meta->has_setter)) {
+    *out = js_prop_load(loc);
+    return true;
+  }
+
+  *out = js_getprop_fallback_len(ctx->js, val, entry->key, entry->key_len);
+  if (is_err(*out)) json_capture_error(ctx, *out);
+  return true;
+}
+
+static json_write_t json_write_object_plan(
+  json_cycle_ctx *ctx, json_out_t *out, ant_value_t val, int depth, json_plan_t *plan
+) {
+  ant_t *js = ctx->js;
+  ant_value_t saved_holder = ctx->holder;
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(val));
+  bool wrote_any = false;
+
+  if (!json_out_char(out, '{')) return JSON_W_ABORT;
+  json_set_holder(ctx, val);
+  plan->in_use++;
+
+  for (uint32_t i = 0; i < plan->key_count; i++) {
+    const json_plan_key_t *entry = &plan->keys[i];
+    ant_value_t prop;
+
+    if (ptr->shape == plan->shape && js->ic.epoch == plan->epoch) prop = js_prop_load((ant_prop_loc_t){ ptr, entry->slot });
+    else if (!json_plan_load_moved(ctx, val, ptr, entry, &prop)) continue;
+    else if (json_has_abort(ctx)) goto abort;
+
+    if (!json_ctx_pin_value(ctx, prop)) goto abort;
+    size_t mark = out->len;
+
+    if (wrote_any && !json_out_char(out, ',')) goto abort;
+    if (!json_write_indent(ctx, out, depth + 1)) goto abort;
+    if (!json_out_write(out, plan->quoted + entry->quoted_off, entry->quoted_len)) goto abort;
+    if (ctx->indent_len && !json_out_char(out, ' ')) goto abort;
+
+    json_write_t w = json_write_with_key(ctx, out, entry->key, entry->key_len, prop, 0, depth + 1);
+    if (w == JSON_W_ABORT) goto abort;
+    if (w == JSON_W_SKIP) { out->len = mark; continue; }
+
+    wrote_any = true;
+  }
+
+  if (wrote_any && !json_write_indent(ctx, out, depth)) goto abort;
+  if (!json_out_char(out, '}')) goto abort;
+
+  plan->in_use--;
+  json_set_holder(ctx, saved_holder);
+  return JSON_W_OK;
+
+abort:
+  plan->in_use--;
+  json_set_holder(ctx, saved_holder);
+  return JSON_W_ABORT;
+}
+
 static json_write_t json_write_object_keys(
   json_cycle_ctx *ctx, json_out_t *out, ant_value_t val, int depth, ant_value_t keys
 ) {
@@ -1046,6 +1261,9 @@ static json_write_t json_write_object(
   ant_t *js = ctx->js;
   if (vtype(ctx->property_list) != kTypeUndefined)
     return json_write_object_keys(ctx, out, val, depth, ctx->property_list);
+
+  json_plan_t *plan = json_plan_for(ctx, val);
+  if (plan) return json_write_object_plan(ctx, out, val, depth, plan);
 
   json_slot_key_t inline_keys[24];
   json_slot_key_t *fast_keys = NULL;
@@ -1437,19 +1655,22 @@ static bool json_set_indent(ant_t *js, json_cycle_ctx *ctx, ant_args_t) {
 ant_value_t js_json_stringify(ant_params_t) {
   ant_value_t result;
   json_out_t out;
+  
   out.buf = out.inline_buf;
   out.len = 0;
   out.cap = sizeof(out.inline_buf);
   out.oom = false;
   
-  json_cycle_ctx ctx = {
-    .js = js,
-    .replacer_func = Ant_Value_Undefined,
-    .property_list = Ant_Value_Undefined,
-    .error = Ant_Value_Undefined,
-    .holder = Ant_Value_Undefined,
-    .stack_cap = 32,
-  };
+  json_cycle_ctx ctx;
+  memset(&ctx, 0, offsetof(json_cycle_ctx, cycle_key));
+  
+  ctx.js = js;
+  ctx.replacer_func = Ant_Value_Undefined;
+  ctx.property_list = Ant_Value_Undefined;
+  ctx.error = Ant_Value_Undefined;
+  ctx.holder = Ant_Value_Undefined;
+  ctx.cycle_start = Ant_Value_Undefined;
+  ctx.stack_cap = 32;
   ctx.stack = ctx.stack_inline;
   
   ant_value_t value = nargs > 0 ? args[0] : Ant_Value_Undefined;
@@ -1513,6 +1734,7 @@ ant_value_t js_json_stringify(ant_params_t) {
   result = js_mkstr(js, out.buf, out.len);
 
 cleanup:
+  json_plans_free(&ctx);
   if (out.buf != out.inline_buf) free(out.buf);
   if (ctx.stack != ctx.stack_inline) free(ctx.stack);
   gc_temp_root_scope_end(&ctx.temp_roots);

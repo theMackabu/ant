@@ -111,4 +111,9 @@ for (let i = 0; i < 128; i++) {
 }
 const nestedText = JSON.stringify(nested);
 for (let i = 0; i < 2; i++) assert.deepStrictEqual(JSON.parse(nestedText), nested);
+assert.ok(Object.is(JSON.parse('-0'), -0));
+assert.ok(Object.is(JSON.parse('[-0]')[0], -0));
+assert.ok(Object.is(JSON.parse('{"z":-0}').z, -0));
+assert.ok(Object.is(JSON.parse('0'), 0));
+assert.strictEqual(JSON.parse('-9223372036854775808'), -9223372036854775808);
 console.log('PASS cached bulk JSON layouts preserve mutation and recursive parsing semantics');
