@@ -7,6 +7,7 @@ bool js_truthy(ant_t *, ant_value_t);
 
 void *js_permanent_alloc(ant_t *, size_t size, size_t align);
 char *js_getstr(ant_t *js, ant_value_t val, size_t *len);
+ant_value_t Ant_Value_Describe(ant_t *js, ant_value_t value);
 
 uint32_t js_to_uint32(double d);
 int32_t js_to_int32(double d);

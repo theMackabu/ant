@@ -5,6 +5,7 @@
 
 ant_value_t builtin_Function(ant_params_t);
 ant_value_t builtin_function_call(ant_params_t);
+ant_value_t Ant_Function_ToString(ant_t *js, ant_value_t fn);
 ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_target, bool is_async, bool is_generator);
 
 void js_function_init_prototype(ant_t *js, ant_value_t function_proto_obj);

@@ -863,21 +863,6 @@ ant_value_t property_key_view_materialize(ant_t *js, property_key_view_t *key) {
   return string;
 }
 
-static ant_value_t check_frozen_sealed(ant_t *js, ant_value_t obj, const char *action) {
-  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-  if (!ptr) return Ant_Value_Undefined;
-
-  if (ptr->flags.frozen) {
-    if (sv_is_strict_context(js)) return js_mkerr(js, "cannot %s property of frozen object", action);
-    return Ant_Value_False;
-  }
-  if (ptr->flags.sealed) {
-    if (sv_is_strict_context(js)) return js_mkerr(js, "cannot %s property of sealed object", action);
-    return Ant_Value_False;
-  }
-  return Ant_Value_Undefined;
-}
-
 ant_value_t js_delete_prop_ordinary(ant_t *js, ant_value_t obj, const char *key, size_t len) {
   if (vtype(obj) == kTypeString) {
     unsigned long idx = 0;
@@ -951,49 +936,129 @@ ant_value_t js_delete_prop_ordinary(ant_t *js, ant_value_t obj, const char *key,
   return Ant_Value_True;
 }
 
+static __attribute__((noinline, cold)) ant_value_t delete_strict_error(
+  ant_t *js, ant_value_t obj, const char *key, size_t len
+) {
+  ant_value_t text = Ant_Value_Describe(js, obj);
+  if (is_err(text)) return text;
+  
+  size_t text_len = 0;
+  const char *bytes = js_getstr(js, text, &text_len);
+  
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot delete property '%.*s' of %.*s", (int)len, key, (int)text_len, bytes);
+}
+
 ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t len) {
   ant_value_t result = js_delete_prop_ordinary(js, obj, key, len);
-  if (result == Ant_Value_False && sv_is_strict_context(js))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot delete property '%.*s' of object", (int)len, key);
+  if (result == Ant_Value_False && sv_is_strict_context(js)) return delete_strict_error(js, obj, key, len);
   return result;
 }
 
-ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym) {
+ant_value_t js_delete_sym_prop_ordinary(ant_t *js, ant_value_t obj, ant_value_t sym) {
   if (vtype(obj) == kTypeString || vtype(obj) == kTypeSymbol || vtype(obj) == kTypeBigInt) return Ant_Value_True;
+  
   if (vtype(obj) == kTypeBuiltin) {
     ant_value_t promoted = js_cfunc_promote(js, obj);
     if (is_err(promoted)) return promoted;
     obj = promoted;
   }
+  
   obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr) return Ant_Value_True;
+  
   if (is_proxy(obj)) {
     ant_value_t result = proxy_delete_sym(js, obj, sym);
     return is_err(result) ? result : Ant_Value_FromBool(js_truthy(js, result));
   }
 
-  ant_value_t err = check_frozen_sealed(js, obj, "delete");
-  if (vtype(err) != kTypeUndefined) return err;
-
   ant_offset_t sym_off = (ant_offset_t)vdata(sym);
   int32_t shape_slot = ant_shape_lookup_symbol(ptr->shape, sym_off);
   if (shape_slot < 0) return Ant_Value_True;
+  if (ptr->flags.frozen || ptr->flags.sealed) return Ant_Value_False;
 
   uint8_t attrs = ant_shape_get_attrs(ptr->shape, (uint32_t)shape_slot);
-  if ((attrs & ANT_PROP_ATTR_CONFIGURABLE) == 0) {
-    if (sv_is_strict_context(js)) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
-    return Ant_Value_False;
-  }
+  if ((attrs & ANT_PROP_ATTR_CONFIGURABLE) == 0) return Ant_Value_False;
 
   uint32_t slot = (uint32_t)shape_slot;
   if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
   if (!ant_shape_prop_at(ptr->shape, slot)) return Ant_Value_True;
   if (!ant_shape_remove_slot(js, ptr->shape, slot)) return js_mkerr(js, "oom");
+  
   ant_symbol_property_mutation_invalidate(js, ptr, sym_off);
   obj_delete_prop_slot(ptr, slot);
   
   return Ant_Value_True;
+}
+
+static __attribute__((noinline, cold)) ant_value_t delete_strict_sym_error(ant_t *js, ant_value_t obj, ant_value_t sym) {
+  ant_value_t text = js_symbol_to_string(js, sym);
+  if (is_err(text)) return text;
+  size_t len = 0;
+  const char *bytes = js_getstr(js, text, &len);
+  return delete_strict_error(js, obj, bytes, len);
+}
+
+ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym) {
+  ant_value_t result = js_delete_sym_prop_ordinary(js, obj, sym);
+  if (result == Ant_Value_False && sv_is_strict_context(js)) return delete_strict_sym_error(js, obj, sym);
+  return result;
+}
+
+__attribute__((noinline)) 
+static ant_value_t delete_converted_key(ant_t *js, ant_value_t obj, ant_value_t raw_key, bool strict_check) {
+  char key_stack[128];
+  property_key_view_t key;
+  ant_value_t error = property_key_view_init(js, raw_key, &key, key_stack, sizeof(key_stack));
+
+  if (is_err(error)) {
+    property_key_view_dispose(&key);
+    return error;
+  }
+
+  bool root_key = property_key_view_requires_pin(&key, false);
+  size_t root_mark = root_key ? gc_root_scope(js) : 0;
+  if (root_key) GC_ROOT_PIN(js, key.js_key);
+
+  ant_value_t result;
+  if (key.is_symbol) result = strict_check
+    ? js_delete_sym_prop(js, obj, key.js_key)
+    : js_delete_sym_prop_ordinary(js, obj, key.js_key);
+  else result = strict_check
+    ? js_delete_prop(js, obj, key.bytes, key.length)
+    : js_delete_prop_ordinary(js, obj, key.bytes, key.length);
+
+  property_key_view_dispose(&key);
+  if (root_key) GC_ROOT_RESTORE(js, root_mark);
+  
+  return result;
+}
+
+static inline ant_value_t delete_property_key(ant_t *js, ant_value_t obj, ant_value_t key, bool strict_check) {
+  uint8_t kt = vtype(key);
+  if (kt == kTypeSymbol) return strict_check
+    ? js_delete_sym_prop(js, obj, key)
+    : js_delete_sym_prop_ordinary(js, obj, key);
+  
+  if (kt != kTypeString) return delete_converted_key(js, obj, key, strict_check);
+
+  ant_offset_t len = 0;
+  const char *bytes = (const char *)(uintptr_t)vstr(js, key, &len);
+  
+  return strict_check
+    ? js_delete_prop(js, obj, bytes, len)
+    : js_delete_prop_ordinary(js, obj, bytes, len);
+}
+
+ant_value_t Ant_Object_DeleteProperty(ant_t *js, ant_value_t obj, ant_value_t key) {
+  return delete_property_key(js, obj, key, false);
+}
+
+ant_value_t Ant_Delete(ant_t *js, ant_value_t obj, ant_value_t key) {
+  uint8_t t = vtype(obj);
+  if (t == kTypeNull || t == kTypeUndefined)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
+  return delete_property_key(js, obj, key, true);
 }
 
 static bool typed_array_has_index(ant_value_t obj, const char *key, size_t key_len) {

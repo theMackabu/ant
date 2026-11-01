@@ -312,6 +312,10 @@ static ant_value_t builtin_function_toString(ant_params_t) {
   return result;
 }
 
+ant_value_t Ant_Function_ToString(ant_t *js, ant_value_t fn) {
+  return builtin_function_toString(js, NULL, 0, Ant_Value_Undefined, fn, Ant_Value_Undefined);
+}
+
 ant_value_t builtin_function_apply(ant_params_t) {
   if (vtype(call_this) != kTypeFunction && vtype(call_this) != kTypeBuiltin)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Function.prototype.apply requires that 'this' be a Function");

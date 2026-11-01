@@ -1316,7 +1316,7 @@ ant_value_t proxy_delete_sym(ant_t *js, ant_value_t proxy, ant_value_t sym) {
     return proxy_check_delete(js, target, proxy_key_sym(sym), result);
   }
   
-  return js_delete_sym_prop(js, target, sym);
+  return js_delete_sym_prop_ordinary(js, target, sym);
 }
 
 ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, ant_value_t *args, int argc) {

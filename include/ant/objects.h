@@ -17,6 +17,8 @@ ant_value_t js_get_symbol(ant_t *, ant_value_t obj, const char *key);
 ant_value_t js_get_sym_with_receiver(ant_t *, ant_value_t obj, ant_value_t sym, ant_value_t receiver);
 
 ant_value_t Ant_Object_Create(ant_t *);
+ant_value_t Ant_Object_DeleteProperty(ant_t *js, ant_value_t obj, ant_value_t key);
+ant_value_t Ant_Delete(ant_t *js, ant_value_t obj, ant_value_t key);
 ant_value_t js_mkprop_fast(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 
 void js_set(ant_t *, ant_value_t, const char *, ant_value_t);

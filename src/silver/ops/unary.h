@@ -24,42 +24,15 @@ static inline void sv_op_void(sv_vm_t *vm) {
 }
 
 static inline ant_value_t sv_op_delete(sv_vm_t *vm, ant_t *js) {
-  ant_value_t key = vm->stack[vm->sp - 1];
-  ant_value_t obj = vm->stack[vm->sp - 2];
-  ant_value_t key_str = Ant_Value_Undefined;
-
-  if (vtype(key) == kTypeSymbol) {
-    ant_value_t result = js_delete_sym_prop(js, obj, key);
-    vm->sp -= 2;
-    
-    if (is_err(result)) return result;
-    vm->stack[vm->sp++] = result;
-    
-    return Ant_Value_Undefined;
-  } else key_str = coerce_to_str(js, key);
-
-  if (!is_err(key_str) && vtype(key_str) == kTypeString) {
-    vm->stack[vm->sp - 1] = key_str;
-    ant_offset_t klen = 0;
-    ant_offset_t koff = vstr(js, key_str, &klen);
-    
-    const char *kptr = (const char *)(uintptr_t)(koff);
-    ant_value_t result = js_delete_prop(js, obj, kptr, klen);
-    
-    vm->sp -= 2;
-    if (is_err(result)) return result;
-    vm->stack[vm->sp++] = result;
-  } else {
-    vm->sp -= 2;
-    vm->stack[vm->sp++] = mkval(kTypeBool, 0);
-  }
-
+  ant_value_t result = Ant_Delete(js, vm->stack[vm->sp - 2], vm->stack[vm->sp - 1]);
+  vm->sp -= 2;
+  if (is_err(result)) return result;
+  vm->stack[vm->sp++] = result;
   return Ant_Value_Undefined;
 }
 
 static inline void sv_op_delete_var(
-  sv_vm_t *vm, ant_t *js,
-  sv_func_t *func, uint8_t *ip
+  sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip
 ) {
   sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
   ant_value_t result = sv_global_delete(js, a->str, a->len);

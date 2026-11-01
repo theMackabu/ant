@@ -1858,32 +1858,16 @@ ant_value_t jit_helper_ge(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) 
   return SV_JIT_BAILOUT;
 }
 
-static ant_value_t jit_delete(ant_t *js, ant_value_t obj, ant_value_t key) {
-  ant_value_t key_str = Ant_Value_Undefined;
-
-  if (vtype(key) == kTypeSymbol)
-    return js_delete_sym_prop(js, obj, key);
-  else key_str = coerce_to_str(js, key);
-
-  if (!is_err(key_str) && vtype(key_str) == kTypeString) {
-    ant_offset_t klen = 0;
-    ant_offset_t koff = vstr(js, key_str, &klen);
-    const char *kptr = (const char *)(uintptr_t)(koff);
-    return js_delete_prop(js, obj, kptr, klen);
-  }
-  return mkval(kTypeBool, 0);
-}
-
 ant_value_t jit_helper_delete(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key) {
   jit_mode_t saved = jit_mode_enter(js, false);
-  ant_value_t result = jit_delete(js, obj, key);
+  ant_value_t result = Ant_Delete(js, obj, key);
   jit_mode_leave(js, saved);
   return result;
 }
 
 ant_value_t jit_helper_delete_strict(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key) {
   jit_mode_t saved = jit_mode_enter(js, true);
-  ant_value_t result = jit_delete(js, obj, key);
+  ant_value_t result = Ant_Delete(js, obj, key);
   jit_mode_leave(js, saved);
   return result;
 }

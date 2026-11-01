@@ -84,14 +84,7 @@ static ant_value_t reflect_delete_property(ant_params_t) {
   ant_value_t target = reflect_target(js, args, nargs, "deleteProperty");
   if (is_err(target)) return target;
   
-  ant_value_t key = nargs > 1 ? args[1] : Ant_Value_Undefined;
-  if (vtype(key) != kTypeString) return Ant_Value_False;
-  
-  char *key_str = js_getstr(js, key, NULL);
-  if (!key_str) return Ant_Value_False;
-  
-  ant_value_t del_result = js_delete_prop_ordinary(js, target, key_str, strlen(key_str));
-  return is_err(del_result) ? del_result : Ant_Value_FromBool(js_truthy(js, del_result));
+  return Ant_Object_DeleteProperty(js, target, nargs > 1 ? args[1] : Ant_Value_Undefined);
 }
 
 static ant_value_t reflect_own_keys(ant_params_t) {

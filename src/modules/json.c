@@ -16,24 +16,6 @@
 #include "silver/call.h"
 #include "modules/json.h"
 
-static json_write_t json_write_with_key(
-  json_cycle_ctx *ctx, 
-  json_out_t *out, 
-  const char *key, 
-  size_t key_len,
-  ant_value_t val, 
-  int in_array, int depth
-);
-  
-static ant_value_t apply_reviver(
-  ant_t *js, 
-  ant_value_t holder,
-  const char *key, 
-  size_t key_len, 
-  ant_value_t reviver,
-  gc_temp_root_scope_t *roots
-);
-
 static inline bool json_value_needs_temp_root(ant_value_t value) {
   if (!is_tagged(value)) return false;
   
@@ -690,8 +672,12 @@ static inline ant_value_t json_snapshot_keys(ant_t *js, ant_value_t value) {
 typedef enum { 
   JSON_W_OK,
   JSON_W_SKIP,
-  JSON_W_ABORT 
+  JSON_W_ABORT
 } json_write_t;
+
+// circular dependencies
+static json_write_t json_write_with_key(json_cycle_ctx *ctx, json_out_t *out, const char *key, size_t key_len, ant_value_t val, int in_array, int depth);
+static ant_value_t apply_reviver(ant_t *js, ant_value_t holder, const char *key, size_t key_len, ant_value_t reviver, gc_temp_root_scope_t *roots);
 
 static ant_prop_loc_t json_tojson_find_proto(ant_t *js, json_cycle_ctx *ctx, ant_value_t proto, bool *cacheable) {
   ant_value_t cur = proto;

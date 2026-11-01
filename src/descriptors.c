@@ -17,6 +17,7 @@
 #include "silver/engine.h"
 #include "modules/proxy.h"
 #include "modules/object.h"
+#include "modules/function.h"
 
 static descriptor_entry_t arr_length_desc = {
   .key = 0,
@@ -711,28 +712,77 @@ static const struct { const char *name; size_t len; } define_desc_field_names[DE
   { "set", 3 },
 };
 
-static void describe_value_text(ant_t *js, ant_value_t value, char *buf, size_t cap) {
+static ant_value_t describe_join_omitted(ant_t *js, ant_value_t head, ant_value_t tail) {
+  static const char omitted[] = "...<omitted>...";
+  size_t head_len = 0, tail_len = 0;
+  
+  const char *head_bytes = js_getstr(js, head, &head_len);
+  const char *tail_bytes = js_getstr(js, tail, &tail_len);
+  size_t total = head_len + sizeof(omitted) - 1 + tail_len;
+
+  char *buf = malloc(total);
+  if (!buf) return js_mkerr(js, "oom");
+  memcpy(buf, head_bytes, head_len);
+  memcpy(buf + head_len, omitted, sizeof(omitted) - 1);
+  memcpy(buf + head_len + sizeof(omitted) - 1, tail_bytes, tail_len);
+
+  ant_value_t result = js_mkstr(js, buf, total);
+  free(buf);
+  
+  return result;
+}
+
+static ant_value_t describe_function(ant_t *js, ant_value_t fn) {
+  ant_value_t source = Ant_Function_ToString(js, fn);
+  if (is_err(source)) return source;
+
+  double units = (double)str_utf16_len(js, source);
+  if (units <= 128) return source;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, source);
+  
+  ant_value_t head = js_string_slice(js, source, 0, 111);
+  GC_ROOT_PIN(js, head);
+  
+  ant_value_t tail = is_err(head) ? head : js_string_slice(js, source, units - 2, units);
+  ant_value_t result = is_err(tail) ? tail : describe_join_omitted(js, head, tail);
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  return result;
+}
+
+ant_value_t Ant_Value_Describe(ant_t *js, ant_value_t value) {
   uint8_t t = vtype(value);
-  if (t == kTypeArray) {
-    snprintf(buf, cap, "%s", js_is_arguments(value) ? "[object Arguments]" : "[object Array]");
-    return;
-  }
-  if (is_object_type(value) && t != kTypeFunction) {
+  if (t == kTypeFunction || t == kTypeBuiltin) return describe_function(js, value);
+  
+  if (t == kTypeArray) return js_is_arguments(value)
+    ? Ant_String_FromLiteral(js, "[object Arguments]")
+    : Ant_String_FromLiteral(js, "[object Array]");
+  
+  if (is_object_type(value)) {
+    char buf[128];
     ant_offset_t len = 0;
     const char *name = get_class_name(js, value, &len, NULL);
-    snprintf(buf, cap, "#<%.*s>", name ? (int)len : 6, name ? name : "Object");
-    return;
+    int n = snprintf(buf, sizeof(buf), "#<%.*s>", name ? (int)len : 6, name ? name : "Object");
+    return js_mkstr(js, buf, n < (int)sizeof(buf) ? (size_t)n : sizeof(buf) - 1);
   }
+  
   char stack_buf[96];
   js_cstr_t text = js_to_cstr(js, value, stack_buf, sizeof(stack_buf));
-  snprintf(buf, cap, "%.*s", (int)text.len, text.ptr ? text.ptr : "");
+  
+  ant_value_t result = js_mkstr(js, text.ptr ? text.ptr : "", text.ptr ? text.len : 0);
   if (text.needs_free) free((void *)text.ptr);
+  
+  return result;
 }
 
 static __attribute__((noinline, cold)) ant_value_t descriptor_value_error(ant_t *js, const char *prefix, ant_value_t value) {
-  char text[128];
-  describe_value_text(js, value, text, sizeof(text));
-  return js_mkerr(js, "%s%s", prefix, text);
+  ant_value_t text = Ant_Value_Describe(js, value);
+  if (is_err(text)) return text;
+  size_t len = 0;
+  const char *bytes = js_getstr(js, text, &len);
+  return js_mkerr(js, "%s%.*s", prefix, (int)len, bytes);
 }
 
 static ant_value_t define_desc_check(ant_t *js, ant_value_t descriptor, const define_desc_raw_t *raw) {
