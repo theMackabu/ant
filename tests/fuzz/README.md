@@ -55,7 +55,7 @@ In that build, `meson test -C build-fuzz --suite fuzz` replays the corpus once.
 - Add a minimized input for every fixed failure (`-minimize_crash=1` or a
   hand-reduced file) so the replay test guards the regression.
 - Merge coverage-increasing inputs back occasionally:
-  `fuzz-<name> -merge=1 tests/fuzz/corpus/<name> build-fuzz/corpus/<name>`.
+  `./build-fuzz/meson/tests/fuzz/fuzz-<name> -merge=1 tests/fuzz/corpus/<name> build-fuzz/corpus/<name>`.
   Keep files small; the replay test runs on every `meson test`.
 
 ## Adding a target

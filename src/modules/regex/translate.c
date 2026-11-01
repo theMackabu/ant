@@ -580,7 +580,10 @@ static void js_to_pcre2_pattern_append(
       continue;
     }
 
-    if (next >= '0' && next <= '7') {
+    // \0 starts an octal escape anywhere, and \1-\7 do inside a class;
+    // outside one, the capture-group count below tells a backreference
+    // (\10 with ten groups) from a legacy octal escape
+    if (next >= '0' && next <= '7' && (next == '0' || charclass_depth > 0)) {
       unsigned int octal = next - '0';
       size_t advance = 1;
       if (si + 2 < src_len && src[si+2] >= '0' && src[si+2] <= '7') {

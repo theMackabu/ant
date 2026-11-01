@@ -12,6 +12,14 @@ const cases = [
   ['\\8\\9', '', '89', true],
   ['\\1(a)', '', 'a', true],
   ['\\377\\400', '', '\xff\x200', true],
+  // with enough groups, multi-digit escapes are backreferences
+  ['^(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\\10$', '', 'abcdefghijj', true],
+  ['^(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\\10$', '', 'abcdefghij\b', false],
+  ['^(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\\10$', 'u', 'abcdefghijj', true],
+  ['^(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)\\12$', '', 'abcdefghijkll', true],
+  ['^(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\\11$', '', 'abcdefghij\t', true],
+  ['^(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\\100$', '', 'abcdefghij@', true],
+  ['^(a)[\\10]$', '', 'a\b', true],
   // a surrogate pair escape is one code point
   ['\\uD83D\\uDE00', '', '\u{1F600}', true],
   ['\\uD83D\\uDE00', 'u', '\u{1F600}', true],

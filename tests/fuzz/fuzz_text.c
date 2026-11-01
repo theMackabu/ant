@@ -1,7 +1,8 @@
 // Text codecs: string escapes (src/escape.c), UTF-8/WTF-8 helpers
 // (src/utf8.c), and URL form encoding (src/modules/url/state.c).
 //
-// Input: a control byte, then text.
+// Input: a control byte (bits 0-1 the quote, bit 2 TextDecoder fatal mode,
+// bits 3-7 the escape error context), then text.
 // Properties:
 //   - decoding escapes the way the lexer does stays inside the literal and
 //     never writes more bytes than it reads;
@@ -16,7 +17,7 @@
 #include "utf8.h"
 #include "modules/url.h"
 
-static void check_escapes(const uint8_t *in, size_t len, uint8_t quote) {
+static void check_escapes(const uint8_t *in, size_t len, uint8_t quote, escape_context_t context) {
   uint8_t *out = malloc(len ? len : 1);
   if (!out) abort();
   size_t di = 0, i = 0;
@@ -35,7 +36,7 @@ static void check_escapes(const uint8_t *in, size_t len, uint8_t quote) {
   }
 
   FUZZ_CHECK(di <= len);
-  escape_error_message(flags, len ? in[len - 1] : 0, (escape_context_t)(quote % 3));
+  escape_error_message(flags, len ? in[len - 1] : 0, context);
   free(out);
 }
 
@@ -232,7 +233,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
   uint8_t *bytes = fuzz_dup(in.data, in.size);
   const char *text = (const char *)bytes;
-  check_escapes(bytes, in.size, quotes[control & 3]);
+  check_escapes(bytes, in.size, quotes[control & 3], (escape_context_t)((control >> 3) % 3));
   check_repair(text, in.size);
   check_text_decoder(bytes, in.size, control & 4);
   check_latin1(bytes, in.size);
