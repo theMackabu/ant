@@ -266,6 +266,26 @@ static bool setprop_symbol_walk(
   return false;
 }
 
+bool js_setprop_symbol_own(ant_t *js, ant_value_t obj, ant_value_t sym, ant_value_t v) {
+  uint8_t t = vtype(obj);
+  if (t != kTypeObject && t != kTypeArray) return false;
+
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+  if (!ptr || !ptr->shape || ptr->flags.is_exotic) return false;
+
+  ant_offset_t sym_off = (ant_offset_t)vdata(sym);
+  int32_t slot = ant_shape_lookup_symbol(ptr->shape, sym_off);
+  if (slot < 0 || (uint32_t)slot >= ptr->prop_count) return false;
+
+  const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
+  if (!prop || prop->has_getter || prop->has_setter || !(prop->attrs & ANT_PROP_ATTR_WRITABLE)) return false;
+
+  ant_object_prop_set_unchecked(ptr, (uint32_t)slot, v);
+  gc_write_barrier(js, ptr, v);
+  ant_symbol_property_mutation_invalidate(js, ptr, sym_off);
+  return true;
+}
+
 static ant_value_t setprop_symbol(ant_t *js, ant_value_t obj, ant_value_t receiver, ant_value_t k, ant_value_t v, bool keyed, bool *declined) {
   ant_offset_t sym_off = (ant_offset_t)vdata(k);
   bool receiver_missed = false;

@@ -1596,7 +1596,7 @@ ant_value_t jit_helper_put_global(
 }
 
 static ant_value_t jit_put_elem(ant_t *js, ant_value_t obj, ant_value_t key, ant_value_t val) {
-  if (vtype(key) == kTypeSymbol) return js_setprop_keyed(js, obj, key, val);
+  if (vtype(key) == kTypeSymbol) return js_setprop_symbol_own(js, obj, key, val) ? val : js_setprop_keyed(js, obj, key, val);
   uint32_t index;
   
   if (sv_number_key_index(key, &index)) return js_setprop_index(js, obj, index, val);

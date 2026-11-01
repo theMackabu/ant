@@ -173,12 +173,9 @@ static inline sv_ic_entry_t *sv_ic_slot_for_ip(sv_func_t *func, uint8_t *ip) {
 }
 
 static inline void sv_ic_set_shape_ref(
-  ant_t *js,
-  sv_ic_entry_t *ic,
-  ant_shape_t **slot,
-  sv_ic_flags_t mask,
-  ant_shape_t *shape
+  ant_t *js, sv_ic_entry_t *ic, ant_shape_t **slot, sv_ic_flags_t mask, ant_shape_t *shape
 ) {
+  if (shape && ant_shape_is_dictionary(shape)) shape = NULL;
   if (!ic || !slot || *slot == shape) return;
   
   if ((ic->shape_ref_mask & mask) == 0) {
@@ -453,6 +450,7 @@ static __attribute__((noinline, cold)) void sv_gf_poly_keep(
   ant_t *js, sv_ic_entry_t *ic, const sv_gf_poly_entry_t *keep
 ) {
   if (ic->shape_ref_mask & SV_IC_POLY_MEGA) return;
+  if (ant_shape_is_dictionary(keep->shape)) return;
   sv_gf_poly_t *poly = ic->guard.get.poly;
   
   if (poly && poly->kept_epoch != js->ic.epoch) {
@@ -1441,6 +1439,7 @@ static __attribute__((noinline, cold)) void sv_pf_poly_keep(
   uint32_t index, uint32_t epoch, uintptr_t proto, bool add
 ) {
   if (ic->shape_ref_mask & SV_IC_POLY_MEGA) return;
+  if (ant_shape_is_dictionary(shape) || (add && ant_shape_is_dictionary(to_shape))) return;
   sv_pf_poly_t *poly = ic->put_poly;
   
   for (unsigned i = 0; poly && i < SV_GF_POLY_WAYS; i++) {
@@ -1665,7 +1664,7 @@ static inline ant_value_t sv_put_field_miss(
   }
 
   ant_shape_t *old_shape = NULL;
-  if (ptr && ptr->shape) {
+  if (ptr && ptr->shape && !ant_shape_is_dictionary(ptr->shape)) {
     old_shape = ptr->shape;
     ant_shape_retain(old_shape);
   }
@@ -1847,6 +1846,11 @@ static inline ant_value_t sv_op_put_elem(sv_vm_t *vm, ant_t *js) {
   ant_value_t val = vm->stack[vm->sp - 1];
   ant_value_t key = vm->stack[vm->sp - 2];
   ant_value_t obj = vm->stack[vm->sp - 3];
+  
+  if (vtype(key) == kTypeSymbol && js_setprop_symbol_own(js, obj, key, val)) {
+    vm->sp -= 3;
+    return val;
+  }
   
   uint32_t index;
   if (sv_number_key_index(key, &index)) {

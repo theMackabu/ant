@@ -144,15 +144,12 @@ double HandlePowerOfTwoCase(const char* current, const char* end, int radix) {
   }
 }
 
-double HandleBaseTenCase(const char* current, const char* end) {
+__attribute__((noinline)) double HandleBaseTenCase(const char* current, const char* end) {
   constexpr size_t kMaxSignificantDigits = 309;
   constexpr size_t kBufferSize = kMaxSignificantDigits + 2;
-  constexpr size_t kMaxExactDigits = 15;
   char buffer[kBufferSize];
   size_t buffer_pos = 0;
-  uint64_t exact = 0;
   while (*current >= '0' && *current <= '9') {
-    if (buffer_pos < kMaxExactDigits) exact = exact * 10 + static_cast<uint64_t>(*current - '0');
     if (buffer_pos <= kMaxSignificantDigits) {
       buffer[buffer_pos++] = static_cast<char>(*current);
     }
@@ -160,7 +157,6 @@ double HandleBaseTenCase(const char* current, const char* end) {
     if (current == end) break;
   }
 
-  if (buffer_pos <= kMaxExactDigits) return static_cast<double>(exact);
   buffer[buffer_pos] = '\0';
   return double_conversion::Strtod(
     double_conversion::Vector<const char>(buffer, static_cast<int>(buffer_pos)), 0);
@@ -204,6 +200,33 @@ double HandleGenericCase(const char* current, const char* end, int radix) {
   } while (!done);
 
   return result;
+}
+
+constexpr uint8_t kExactDigits[37] = {
+  0, 0, 53, 33, 26, 22, 20, 18, 17, 16, 15, 15, 14, 14, 13, 13, 13, 12, 12,
+  12, 12, 12, 11, 11, 11, 11, 11, 11, 11, 10, 10, 10, 10, 10, 10, 10, 10,
+};
+
+constexpr auto kDigitValues = [] {
+  struct { uint8_t value[256]; } table = {};
+  for (int c = 0; c < 256; c++) table.value[c] = 0xFF;
+  for (int c = '0'; c <= '9'; c++) table.value[c] = static_cast<uint8_t>(c - '0');
+  for (int c = 'a'; c <= 'z'; c++) table.value[c] = static_cast<uint8_t>(c - 'a' + 10);
+  for (int c = 'A'; c <= 'Z'; c++) table.value[c] = static_cast<uint8_t>(c - 'A' + 10);
+  return table;
+}();
+
+bool ParseExactInteger(const char* current, const char* end, int radix, double* out) {
+  uint64_t value = 0;
+  int digits = 0;
+  for (; current < end; ++current) {
+    unsigned digit = kDigitValues.value[static_cast<unsigned char>(*current)];
+    if (digit >= static_cast<unsigned>(radix)) break;
+    if (++digits > kExactDigits[radix]) return false;
+    value = value * static_cast<unsigned>(radix) + digit;
+  }
+  *out = static_cast<double>(value);
+  return true;
 }
 
 }  // namespace
@@ -265,6 +288,7 @@ extern "C" double ant_number_parse_int(const char* current, size_t length, int r
   if (!leading_zero && !isDigit(*current, radix)) return JunkStringValue();
 
   double result;
+  if (ParseExactInteger(current, end, radix, &result)) return negative ? -result : result;
   if (radix == 10) result = HandleBaseTenCase(current, end);
   else if ((radix & (radix - 1)) == 0) result = HandlePowerOfTwoCase(current, end, radix);
   else result = HandleGenericCase(current, end, radix);

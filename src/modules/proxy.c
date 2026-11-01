@@ -1,17 +1,14 @@
 #include <compat.h> // IWYU pragma: keep
-
 #include <stdlib.h>
 #include <string.h>
 
-#include "cfunc.h"
-
-#include "silver/call.h"
-
-#include "arrays.h"
 #include "keys.h"
-#include "modules/proxy.h"
+#include "cfunc.h"
+#include "arrays.h"
 #include "props.h"
 #include "proto.h"
+#include "silver/call.h"
+#include "modules/proxy.h"
 
 static bool proxy_key_same(ant_t *js, ant_value_t a, ant_value_t b) {
   if (vtype(a) != vtype(b)) return false;
@@ -675,11 +672,6 @@ ant_value_t proxy_get(ant_t *js, ant_value_t proxy, const char *key, size_t key_
   return proxy_get_with_receiver(js, proxy, key, key_len, proxy);
 }
 
-static inline bool proxy_target_refuses_add(ant_value_t target) {
-  ant_object_t *ptr = js_obj_ptr(js_as_obj(target));
-  return ptr && (ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible);
-}
-
 static __attribute__((noinline)) ant_value_t proxy_set_define_refused(
   ant_t *js, ant_value_t proxy, ant_value_t target, ant_value_t key, const ant_value_t *receiver_desc
 ) {
@@ -713,6 +705,30 @@ static __attribute__((noinline, cold)) ant_value_t proxy_define_not_extensible(a
   return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot define property %.*s, object is not extensible", (int)len, bytes);
 }
 
+static inline bool proxy_target_refuses_add(ant_value_t target) {
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(target));
+  return ptr && (ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible);
+}
+
+static bool proxy_handler_plain_for_set(ant_t *js, ant_proxy_state_t *data) {
+  if (data->plain_set_epoch == js->ic.epoch + 1) return true;
+  if (!is_object_type(data->handler)) return false;
+
+  if (
+    !chain_lacks_plain_keys(data->handler, js->intern.set, js->intern.define_property) ||
+    !chain_lacks_plain_keys(data->handler, js->intern.get_own_property_descriptor, NULL)
+  ) return false;
+
+  for (ant_value_t cur = data->handler; is_object_type(cur);) {
+    ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
+    ant_object_guard_absence(ptr);
+    cur = ptr->proto;
+  }
+
+  data->plain_set_epoch = js->ic.epoch + 1;
+  return true;
+}
+
 ant_value_t proxy_set_with_receiver(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t value, ant_value_t receiver) {
   ant_proxy_state_t *data = get_proxy_data(proxy);
   
@@ -721,6 +737,21 @@ ant_value_t proxy_set_with_receiver(ant_t *js, ant_value_t proxy, const char *ke
   
   if (data->host && same_object_identity(receiver, proxy))
     return data->host->set(js, data->target, key, key_len, value);
+
+  if (
+    !data->host && same_object_identity(receiver, proxy) &&
+    !proxy_target_refuses_add(data->target) && proxy_handler_plain_for_set(js, data)
+  ) {
+    const char *interned = intern_string(js, key, key_len);
+    ant_value_t key_value = interned ? intern_value(js, interned) : js_mkerr(js, "oom");
+    if (is_err(key_value)) return key_value;
+
+    bool declined = false;
+    ant_value_t stored = setprop_impl(js, data->target, key_value, value, false, &declined);
+    if (is_err(stored)) return stored;
+    
+    return Ant_Value_FromBool(!declined);
+  }
   
   ant_value_t target = data->target;
   ant_value_t handler = data->handler;

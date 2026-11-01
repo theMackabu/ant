@@ -95,22 +95,30 @@ struct ant_shape {
   uint32_t count;
   uint32_t deleted_count;
   uint8_t inobj_limit;
+  
   bool bulk_layout;
   uint16_t gc_mark;
+  
   shape_descriptors_t *descriptors;
   ant_shape_prop_t *props;
   shape_index_entry_t *index;
   uint32_t index_mask;
+  
   bool jit_snapshot;
   bool may_have_index_keys;
   bool superseded;
+  bool dictionary;
+  
   uint64_t first_child_key;
   ant_shape_t *first_child;
   shape_child_entry_t *children;
+  
   ant_shape_t *parent;
   uint64_t parent_key;
+  
   ant_shape_t *descriptor_prev;
   ant_shape_t *descriptor_next;
+  
   ant_shape_heap_t *heap;
   ant_value_t proto;
 };
@@ -594,6 +602,7 @@ static bool shape_add_tr(
   if (shape->bulk_layout || shape->count >= max_tree_props) {
     ant_shape_t *copy = shape_clone_reserve(shape, 1);
     if (!copy) return false;
+    if (shape->count >= max_tree_props) copy->dictionary = true;
     
     if (!shape_add_any_key(js, copy, type, interned, sym_off, attrs, accessor, out_slot)) {
       ant_shape_release(copy);
@@ -765,6 +774,7 @@ ant_shape_t *shape_clone_reserve(const ant_shape_t *shape, uint32_t extra) {
   copy->deleted_count = shape->deleted_count;
   copy->inobj_limit = shape_clamp_inobj_limit(shape->inobj_limit);
   copy->bulk_layout = shape->bulk_layout;
+  copy->dictionary = shape->dictionary;
   copy->may_have_index_keys = shape->may_have_index_keys;
   copy->proto = shape->proto;
 
@@ -832,6 +842,14 @@ void ant_shape_mark_superseded(ant_shape_t *shape) {
 
 bool ant_shape_is_superseded(const ant_shape_t *shape) {
   return shape->superseded;
+}
+
+void ant_shape_mark_dictionary(ant_shape_t *shape) {
+  shape->dictionary = true;
+}
+
+bool ant_shape_is_dictionary(const ant_shape_t *shape) {
+  return shape && shape->dictionary;
 }
 
 bool ant_shape_is_shared(const ant_shape_t *shape) {

@@ -64,23 +64,44 @@ static bool url_has_opaque_path(const url_state_t *s) {
   return !s->pathname || s->pathname[0] != '/';
 }
 
+static const uint8_t form_unreserved[256] = {
+  ['*'] = 1, ['-'] = 1, ['.'] = 1, ['_'] = 1,
+  ['0'] = 1, ['1'] = 1, ['2'] = 1, ['3'] = 1, ['4'] = 1, ['5'] = 1, ['6'] = 1, ['7'] = 1, ['8'] = 1, ['9'] = 1,
+  ['A'] = 1, ['B'] = 1, ['C'] = 1, ['D'] = 1, ['E'] = 1, ['F'] = 1, ['G'] = 1, ['H'] = 1, ['I'] = 1, ['J'] = 1,
+  ['K'] = 1, ['L'] = 1, ['M'] = 1, ['N'] = 1, ['O'] = 1, ['P'] = 1, ['Q'] = 1, ['R'] = 1, ['S'] = 1, ['T'] = 1,
+  ['U'] = 1, ['V'] = 1, ['W'] = 1, ['X'] = 1, ['Y'] = 1, ['Z'] = 1,
+  ['a'] = 1, ['b'] = 1, ['c'] = 1, ['d'] = 1, ['e'] = 1, ['f'] = 1, ['g'] = 1, ['h'] = 1, ['i'] = 1, ['j'] = 1,
+  ['k'] = 1, ['l'] = 1, ['m'] = 1, ['n'] = 1, ['o'] = 1, ['p'] = 1, ['q'] = 1, ['r'] = 1, ['s'] = 1, ['t'] = 1,
+  ['u'] = 1, ['v'] = 1, ['w'] = 1, ['x'] = 1, ['y'] = 1, ['z'] = 1,
+};
+
+static inline int url_hex_value(unsigned char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  c |= 0x20;
+  return c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+}
+
+size_t form_urlencode_into(char *out, const char *str, size_t len) {
+  static const char hex[] = "0123456789ABCDEF";
+  size_t j = 0;
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)str[i];
+    if (form_unreserved[c]) out[j++] = (char)c;
+    else if (c == ' ') out[j++] = '+';
+    else {
+      out[j++] = '%';
+      out[j++] = hex[c >> 4];
+      out[j++] = hex[c & 15];
+    }
+  }
+  return j;
+}
+
 char *form_urlencode_n(const char *str, size_t len) {
   if (!str) return strdup("");
   char *out = malloc(len * 3 + 1);
-  
   if (!out) return strdup("");
-  size_t j = 0;
-  
-  for (size_t i = 0; i < len; i++) {
-  unsigned char c = (unsigned char)str[i];
-  if (isalnum(c) || c == '*' || c == '-' || c == '.' || c == '_') out[j++] = (char)c;
-  else if (c == ' ') out[j++] = '+';
-  else {
-    snprintf(out + j, 4, "%%%02X", c);
-    j += 3;
-  }}
-
-  out[j] = '\0';
+  out[form_urlencode_into(out, str, len)] = '\0';
   return out;
 }
 
@@ -96,28 +117,30 @@ static char *url_decoded_utf8(char *out, size_t len, size_t *out_len) {
   return out;
 }
 
-char *form_urldecode_n(const char *str, size_t len, size_t *out_len) {
-  if (out_len) *out_len = 0;
-  if (!str) return strdup("");
-  char *out = malloc(len + 1);
-
-  if (!out) return strdup("");
+size_t form_urldecode_into(char *out, const char *str, size_t len) {
   size_t j = 0;
-
   for (size_t i = 0; i < len; i++) {
+    int hi, lo;
     if (str[i] == '+') out[j++] = ' ';
     else if (
       str[i] == '%' && i + 2 < len &&
-      isxdigit((unsigned char)str[i+1]) &&
-      isxdigit((unsigned char)str[i+2])
+      (hi = url_hex_value((unsigned char)str[i + 1])) >= 0 &&
+      (lo = url_hex_value((unsigned char)str[i + 2])) >= 0
     ) {
-      int hi = isdigit((unsigned char)str[i+1]) ? str[i+1]-'0' : tolower((unsigned char)str[i+1])-'a'+10;
-      int lo = isdigit((unsigned char)str[i+2]) ? str[i+2]-'0' : tolower((unsigned char)str[i+2])-'a'+10;
       out[j++] = (char)((hi << 4) | lo);
       i += 2;
     } else out[j++] = str[i];
   }
-  
+  return j;
+}
+
+char *form_urldecode_n(const char *str, size_t len, size_t *out_len) {
+  if (out_len) *out_len = 0;
+  if (!str) return strdup("");
+  char *out = malloc(len + 1);
+  if (!out) return strdup("");
+
+  size_t j = form_urldecode_into(out, str, len);
   out[j] = '\0';
   return url_decoded_utf8(out, j, out_len);
 }

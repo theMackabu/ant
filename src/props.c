@@ -928,6 +928,7 @@ ant_value_t js_delete_prop_ordinary(ant_t *js, ant_value_t obj, const char *key,
   uint32_t slot = (uint32_t)shape_slot;
   if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
   if (!ant_shape_prop_at(ptr->shape, slot)) return Ant_Value_True;
+  ant_shape_mark_dictionary(ptr->shape);
   if (!ant_shape_remove_slot(js, ptr->shape, slot)) return js_mkerr(js, "oom");
   
   ant_property_mutation_invalidate(js, ptr, interned);
@@ -983,6 +984,7 @@ ant_value_t js_delete_sym_prop_ordinary(ant_t *js, ant_value_t obj, ant_value_t 
   uint32_t slot = (uint32_t)shape_slot;
   if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
   if (!ant_shape_prop_at(ptr->shape, slot)) return Ant_Value_True;
+  ant_shape_mark_dictionary(ptr->shape);
   if (!ant_shape_remove_slot(js, ptr->shape, slot)) return js_mkerr(js, "oom");
   
   ant_symbol_property_mutation_invalidate(js, ptr, sym_off);

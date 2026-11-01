@@ -8,6 +8,7 @@
 #include "cfunc.h"
 #include "errors.h"
 #include "internal.h"
+#include "utf8.h"
 #include "descriptors.h"
 #include "gc/roots.h"
 
@@ -85,10 +86,29 @@ static ant_value_t usp_optional_value(ant_t *js, ant_value_t *args, int nargs, u
 }
 
 static ant_value_t usp_decoded_string(ant_t *js, const char *start, size_t len) {
-  size_t decoded_len = 0;
-  char *decoded = form_urldecode_n(start, len, &decoded_len);
-  ant_value_t str = js_mkstr(js, decoded, decoded_len);
-  free(decoded);
+  char stack_buf[256];
+  if (len > sizeof(stack_buf)) {
+    size_t decoded_len = 0;
+    char *decoded = form_urldecode_n(start, len, &decoded_len);
+    
+    ant_value_t str = js_mkstr(js, decoded, decoded_len);
+    free(decoded);
+    
+    return str;
+  }
+
+  size_t decoded_len = form_urldecode_into(stack_buf, start, len);
+  bool ascii = false;
+  if (utf8_valid_prefix(stack_buf, decoded_len, &ascii) == decoded_len)
+    return js_mkstr_utf8_valid(js, stack_buf, decoded_len, ascii);
+
+  size_t clean_len = 0;
+  char *clean = utf8_replace_invalid(stack_buf, decoded_len, utf8_valid_prefix(stack_buf, decoded_len, NULL), &clean_len);
+  if (!clean) return js_mkerr(js, "oom");
+  
+  ant_value_t str = js_mkstr(js, clean, clean_len);
+  free(clean);
+  
   return str;
 }
 
@@ -135,37 +155,25 @@ char *usp_serialize(ant_t *js, ant_value_t usp) {
   ant_value_t entries = usp_entries(usp);
   ant_offset_t len = usp_entry_count(js, entries);
 
-  size_t cap = 256;
+  size_t cap = 1;
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t entry = js_arr_get(js, entries, i);
+    cap += usp_text(js, js_arr_get(js, entry, 0)).len * 3 + usp_text(js, js_arr_get(js, entry, 1)).len * 3 + 2;
+  }
+
   char *buf = malloc(cap);
   if (!buf) return strdup("");
   size_t pos = 0;
 
   for (ant_offset_t i = 0; i < len; i++) {
     ant_value_t entry = js_arr_get(js, entries, i);
-    size_t key_len = 0, value_len = 0;
-
-    char *key = js_getstr(js, js_arr_get(js, entry, 0), &key_len);
-    char *value = js_getstr(js, js_arr_get(js, entry, 1), &value_len);
-    char *encoded_key = key ? form_urlencode_n(key, key_len) : strdup("");
-    char *encoded_value = value ? form_urlencode_n(value, value_len) : strdup("");
-
-    size_t needed = strlen(encoded_key) + strlen(encoded_value) + 3;
-    if (pos + needed >= cap) {
-      cap = cap * 2 + needed;
-      char *grown = realloc(buf, cap);
-      if (!grown) {
-        free(buf);
-        free(encoded_key);
-        free(encoded_value);
-        return strdup("");
-      }
-      buf = grown;
-    }
+    usp_text_t key = usp_text(js, js_arr_get(js, entry, 0));
+    usp_text_t value = usp_text(js, js_arr_get(js, entry, 1));
 
     if (pos > 0) buf[pos++] = '&';
-    pos += (size_t)sprintf(buf + pos, "%s=%s", encoded_key, encoded_value);
-    free(encoded_key);
-    free(encoded_value);
+    if (key.ptr) pos += form_urlencode_into(buf + pos, key.ptr, key.len);
+    buf[pos++] = '=';
+    if (value.ptr) pos += form_urlencode_into(buf + pos, value.ptr, value.len);
   }
 
   buf[pos] = '\0';

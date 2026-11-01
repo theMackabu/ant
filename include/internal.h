@@ -342,6 +342,7 @@ typedef enum {
 
 void js_set_func_source(ant_t *js, ant_value_t fn, const char *code, size_t len, js_func_source_t source);
 ant_value_t js_setprop_index(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t value);
+bool js_setprop_symbol_own(ant_t *js, ant_value_t obj, ant_value_t sym, ant_value_t v);
 
 ant_value_t js_set_function_name_prefixed(
   ant_t *js, ant_value_t fn,
