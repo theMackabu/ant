@@ -15,6 +15,9 @@ same(JSON.stringify([1, { x: 1, y: 2 }], ['y']), '[1,{"y":2}]', 'arrays keep eve
 same(JSON.stringify({ a: 1, b: 2 }, ['b', 'a'], 1), '{\n "b": 2,\n "a": 1\n}', 'with indent');
 
 same(JSON.stringify({ 'a\0b': 5, 1: 1 }), '{"1":1,"a\\u0000b":5}', 'NUL key next to an index key');
+same(JSON.stringify({ get 'a\0b'() { return 7; } }), '{"a\\u0000b":7}', 'NUL key with a getter');
+same(JSON.stringify(Object.assign(Object.create({ a: 1 }), { 1: 2, b: 3 })), '{"1":2,"b":3}', 'inherited keys are skipped');
+same(JSON.stringify(JSON.parse('{"1":{"x":1}}', function (k, v) { return v; }), null), '{"1":{"x":1}}', 'reviver keeps own keys');
 let threw = false;
 try { JSON.stringify({ 'a\0b': 10n, 1: 1 }); } catch (e) { threw = e instanceof TypeError; }
 same(threw, true, 'BigInt under a NUL key still throws');

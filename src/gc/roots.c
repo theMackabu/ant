@@ -5,6 +5,7 @@
 
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 
 size_t gc_root_scope(ant_t *js) {
   return js ? js->c_root_count : 0;
@@ -56,14 +57,19 @@ void gc_pop_roots(ant_t *js, size_t mark) {
   js->c_root_count = (mark <= js->c_root_count) ? mark : 0;
 }
 
-void gc_temp_root_scope_begin(ant_t *js, gc_temp_root_scope_t *scope) {
+void gc_temp_root_scope_begin_with(ant_t *js, gc_temp_root_scope_t *scope, ant_value_t *storage, size_t cap) {
   if (!scope) return;
   scope->js = js;
-  scope->items = NULL;
+  scope->items = storage;
+  scope->storage = storage;
   scope->len = 0;
-  scope->cap = 0;
+  scope->cap = storage ? cap : 0;
   scope->prev = js ? js->temp_roots : NULL;
   if (js) js->temp_roots = scope;
+}
+
+void gc_temp_root_scope_begin(ant_t *js, gc_temp_root_scope_t *scope) {
+  gc_temp_root_scope_begin_with(js, scope, NULL, 0);
 }
 
 void gc_temp_root_scope_end(gc_temp_root_scope_t *scope) {
@@ -76,8 +82,9 @@ void gc_temp_root_scope_end(gc_temp_root_scope_t *scope) {
     break;
   }
 
-  free(scope->items);
+  if (scope->items != scope->storage) free(scope->items);
   scope->items = NULL;
+  scope->storage = NULL;
   scope->len = 0;
   scope->cap = 0;
   scope->prev = NULL;
@@ -92,8 +99,11 @@ static bool gc_temp_root_grow(gc_temp_root_scope_t *scope, size_t extra) {
   size_t new_cap = scope->cap ? scope->cap : 16;
   while (new_cap < needed) new_cap = new_cap > SIZE_MAX / 2 / sizeof(ant_value_t) ? needed : new_cap * 2;
   
-  ant_value_t *next = realloc(scope->items, new_cap * sizeof(*next));
+  bool spill = scope->storage && scope->items == scope->storage;
+  ant_value_t *next = spill ? malloc(new_cap * sizeof(*next)) : realloc(scope->items, new_cap * sizeof(*next));
+  
   if (!next) return false;
+  if (spill) memcpy(next, scope->items, scope->len * sizeof(*next));
 
   scope->items = next;
   scope->cap = new_cap;

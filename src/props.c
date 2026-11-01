@@ -40,6 +40,7 @@ void js_init_intern_cache(ant_t *js) {
   js->intern.promise = intern_string(js, "Promise", 7);
   js->intern.resolve = intern_string(js, "resolve", 7);
   js->intern.then = intern_string(js, "then", 4);
+  js->intern.to_json = intern_string(js, "toJSON", 6);
   js->intern.name = intern_string(js, "name", 4);
   js->intern.message = intern_string(js, "message", 7);
   js->intern.stack_trace_limit = intern_string(js, "stackTraceLimit", 15);

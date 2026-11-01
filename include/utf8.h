@@ -61,8 +61,8 @@ size_t wtf8_to_utf8(const char *str, size_t byte_len, char *dst);
 size_t utf8_valid_prefix(const char *str, size_t byte_len, bool *out_ascii);
 size_t utf8_copy_valid_prefix(char *dst, const char *src, size_t byte_len, bool *out_ascii);
 size_t utf8_truncated_tail(const char *str, size_t byte_len);
+size_t utf8_json_quote_into(char *dst, const char *str, size_t byte_len);
 
-char *utf8_json_quote(const char *str, size_t byte_len, size_t *out_len);
 char *latin1_to_utf8(const uint8_t *src, size_t len, size_t *out_len);
 char *wtf8_to_utf8_dup(const char *str, size_t *byte_len);
 char *wtf8_str_to_utf8_dup(const char *str, size_t *byte_len);

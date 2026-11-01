@@ -301,6 +301,7 @@ struct ant_isolate_t {
     const char *promise;
     const char *resolve;
     const char *then;
+    const char *to_json;
     const char *name;
     const char *message;
     const char *stack_trace_limit;
