@@ -451,6 +451,7 @@ ant_value_t js_define_own_prop(ant_t *js, ant_value_t obj, const char *key, size
     return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : v;
   ant_prop_loc_t existing = lkp(js, obj, key, klen);
 
+  // TODO: reduce nesting
   {
     bool has_desc = false;
     bool desc_writable = true;
@@ -485,9 +486,10 @@ ant_value_t js_define_own_prop(ant_t *js, ant_value_t obj, const char *key, size
 
     if (has_desc) {
       if (!desc_writable && !desc_has_setter) {
-        if (sv_is_strict_context(js)) return js_mkerr(js, "assignment to read-only property");
+        if (sv_is_strict_context(js)) return Ant_Error_CreateReadOnlyProperty(js, obj, js_mkstr(js, key, klen));
         return v;
       }
+      
       if (desc_has_setter) {
         ant_value_t setter = desc_setter;
         uint8_t setter_type = vtype(setter);

@@ -369,6 +369,7 @@ export function targets() {
     'test_process_exit_code.cjs',
     'test_process_get_builtin_module.cjs',
     'test_process_stdin_sources.cjs',
+    'test_property_error_messages.cjs',
     'test_module_node_module_paths.cjs',
     'test_promise.cjs',
     'test_promise_all_fast_path.cjs',

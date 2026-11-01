@@ -6,6 +6,7 @@
 #include "gc.h"
 #include "hash.h"
 #include "shapes.h"
+#include "stringify.h"
 #include "arguments.h"
 #include "arrays.h"
 #include "keys.h"
@@ -18,6 +19,8 @@
 #include "modules/proxy.h"
 #include "modules/object.h"
 #include "modules/function.h"
+#include "modules/buffer.h"
+#include "modules/date.h"
 
 static descriptor_entry_t arr_length_desc = {
   .key = 0,
@@ -752,21 +755,106 @@ static ant_value_t describe_function(ant_t *js, ant_value_t fn) {
   return result;
 }
 
+static ant_value_t describe_data_prop(ant_t *js, ant_value_t obj, const char *interned, ant_value_t sym) {
+  ant_value_t cur = obj;
+  for (int depth = 0; is_object_type(cur) && depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
+    ant_value_t as_obj = js_as_obj(cur);
+    if (is_proxy(as_obj)) return Ant_Value_Undefined;
+
+    ant_prop_loc_t loc = vtype(sym) == kTypeSymbol
+      ? lkp_sym(as_obj, (ant_offset_t)vdata(sym))
+      : lkp_interned(as_obj, interned);
+
+    if (loc.obj) {
+      const ant_shape_prop_t *meta = ant_shape_prop_at(loc.obj->shape, loc.slot);
+      return meta && (meta->has_getter || meta->has_setter) ? Ant_Value_Undefined : js_prop_load(loc);
+    }
+    cur = js_get_proto(js, cur);
+  }
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t describe_text(ant_t *js, const char *a, size_t a_len, const char *b, size_t b_len, const char *c, size_t c_len) {
+  size_t total = a_len + b_len + c_len;
+  char stack_buf[160];
+  char *buf = total <= sizeof(stack_buf) ? stack_buf : malloc(total);
+  if (!buf) return js_mkerr(js, "oom");
+  memcpy(buf, a, a_len);
+  memcpy(buf + a_len, b, b_len);
+  memcpy(buf + a_len + b_len, c, c_len);
+  ant_value_t result = js_mkstr(js, buf, total);
+  if (buf != stack_buf) free(buf);
+  return result;
+}
+
+static ant_value_t describe_error(ant_t *js, ant_value_t value) {
+  ant_value_t name = describe_data_prop(js, value, js->intern.name, Ant_Value_Undefined);
+  ant_value_t message = describe_data_prop(js, value, js->intern.message, Ant_Value_Undefined);
+
+  size_t name_len = 5, message_len = 0;
+  const char *name_bytes = vtype(name) == kTypeString ? js_getstr(js, name, &name_len) : "Error";
+  const char *message_bytes = vtype(message) == kTypeString ? js_getstr(js, message, &message_len) : "";
+
+  if (name_len == 0) return describe_text(js, message_bytes, message_len, "", 0, "", 0);
+  if (message_len == 0) return describe_text(js, name_bytes, name_len, "", 0, "", 0);
+  return describe_text(js, name_bytes, name_len, ": ", 2, message_bytes, message_len);
+}
+
+static const char *describe_class_name(ant_value_t value) {
+  TypedArrayData *typed = buffer_get_typedarray_data(value);
+  if (typed) return buffer_typedarray_type_name(typed->type);
+  if (vtype(value) == kTypeArray) return js_is_arguments(value) ? "Arguments" : "Array";
+
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(value));
+  if (ptr && ptr->flags.regexp_brand) return "RegExp";
+  if (is_date_instance(value)) return "Date";
+
+  switch (vtype(js_get_slot(value, SLOT_PRIMITIVE))) {
+    case kTypeNumber: return "Number";
+    case kTypeString: return "String";
+    case kTypeBool: return "Boolean";
+    case kTypeBigInt: return "BigInt";
+    case kTypeSymbol: return "Symbol";
+    default: return "Object";
+  }
+}
+
+static bool describe_is_object_to_string(ant_value_t fn) {
+  return vtype(fn) == kTypeBuiltin && js_as_cfunc_meta(fn)->fn == builtin_object_toString;
+}
+
+static ant_value_t describe_object(ant_t *js, ant_value_t value) {
+  if (js_get_slot(value, SLOT_ERROR_BRAND) == Ant_Value_True) return describe_error(js, value);
+
+  ant_value_t to_string = describe_data_prop(js, value, intern_string(js, "toString", 8), Ant_Value_Undefined);
+  if (describe_is_object_to_string(to_string)) {
+    ant_value_t ctor = describe_data_prop(js, value, js->intern.constructor, Ant_Value_Undefined);
+    ant_offset_t name_len = 0;
+    const char *name = is_callable(ctor) ? get_func_name(js, ctor, &name_len) : NULL;
+    if (name && name_len > 0) return describe_text(js, "#<", 2, name, (size_t)name_len, ">", 1);
+  }
+
+  ant_value_t tag = describe_data_prop(js, value, NULL, js->sym.toStringTag_sym);
+  size_t tag_len = 0;
+  const char *tag_bytes = vtype(tag) == kTypeString ? js_getstr(js, tag, &tag_len) : NULL;
+  if (!tag_bytes) {
+    tag_bytes = describe_class_name(value);
+    tag_len = strlen(tag_bytes);
+  }
+
+  return describe_text(js, "[object ", 8, tag_bytes, tag_len, "]", 1);
+}
+
 ant_value_t Ant_Value_Describe(ant_t *js, ant_value_t value) {
+  for (int depth = 0; depth < MAX_PROTO_CHAIN_DEPTH && is_object_type(value) && is_proxy(js_as_obj(value)); depth++) {
+    ant_proxy_state_t *data = get_proxy_data(js_as_obj(value));
+    if (!data || data->revoked || !is_object_type(data->target)) break;
+    value = data->target;
+  }
+
   uint8_t t = vtype(value);
   if (t == kTypeFunction || t == kTypeBuiltin) return describe_function(js, value);
-  
-  if (t == kTypeArray) return js_is_arguments(value)
-    ? Ant_String_FromLiteral(js, "[object Arguments]")
-    : Ant_String_FromLiteral(js, "[object Array]");
-  
-  if (is_object_type(value)) {
-    char buf[128];
-    ant_offset_t len = 0;
-    const char *name = get_class_name(js, value, &len, NULL);
-    int n = snprintf(buf, sizeof(buf), "#<%.*s>", name ? (int)len : 6, name ? name : "Object");
-    return js_mkstr(js, buf, n < (int)sizeof(buf) ? (size_t)n : sizeof(buf) - 1);
-  }
+  if (is_object_type(value)) return describe_object(js, value);
   
   char stack_buf[96];
   js_cstr_t text = js_to_cstr(js, value, stack_buf, sizeof(stack_buf));

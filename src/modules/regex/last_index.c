@@ -83,17 +83,11 @@ ant_value_t regexp_set_lastindex(
 
   ant_object_t *receiver = js_obj_ptr(regexp);
   if (!is_proxy(regexp)) {
-    const ant_shape_prop_t *prop = regexp_lastindex_lookup_own_property(
-      js, receiver, NULL
-    );
+    const ant_shape_prop_t *prop = regexp_lastindex_lookup_own_property(js, receiver, NULL);
     if (
       prop && !prop->has_getter && !prop->has_setter &&
       !(prop->attrs & ANT_PROP_ATTR_WRITABLE)
-    ) {
-      return js_mkerr_typed(
-        js, JS_ERR_TYPE, "Cannot assign to read only property 'lastIndex'"
-      );
-    }
+    ) return Ant_Error_CreateReadOnlyProperty(js, regexp, js_mkstr(js, "lastIndex", 9));
   }
   return setprop_cstr(js, regexp, "lastIndex", 9, value);
 }

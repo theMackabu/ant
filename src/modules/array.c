@@ -138,15 +138,32 @@ static ant_value_t arguments_set_length(ant_t *js, ant_value_t obj, ant_offset_t
   return Ant_Value_FromNumber((double)len);
 }
 
-static ant_value_t arguments_check_mutable(ant_t *js, ant_value_t obj, bool adds) {
+static bool array_refuses_add(ant_value_t arr, int nargs) {
+  if (nargs <= 0 || is_proxy(arr)) return false;
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(arr));
+  return ptr && (ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible);
+}
+
+static __attribute__((noinline, cold)) ant_value_t array_add_refused_error(ant_t *js, ant_offset_t idx) {
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot add property %llu, object is not extensible", (unsigned long long)idx);
+}
+
+static bool arguments_refuses_add(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
-  if (ptr->flags.frozen)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot assign to read only property of frozen object");
-  
-  if (ptr->flags.sealed || (adds && !ptr->flags.extensible))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot add or delete property, object is not extensible");
-  
-  return Ant_Value_Undefined;
+  return ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible;
+}
+
+static bool arguments_refuses_delete(ant_value_t obj) {
+  ant_object_t *ptr = js_obj_ptr(obj);
+  return ptr->flags.frozen || ptr->flags.sealed;
+}
+
+static __attribute__((noinline, cold)) ant_value_t array_delete_refused(ant_t *js, ant_value_t obj, ant_offset_t idx) {
+  ant_value_t described = Ant_Value_Describe(js, obj);
+  if (is_err(described)) return described;
+  size_t len = 0;
+  const char *bytes = js_getstr(js, described, &len);
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot delete property '%llu' of %.*s", (unsigned long long)idx, (int)len, bytes);
 }
 
 static ant_value_t arguments_push(ant_t *js, ant_value_t obj, ant_args_t) {
@@ -154,7 +171,7 @@ static ant_value_t arguments_push(ant_t *js, ant_value_t obj, ant_args_t) {
   ant_value_t result = array_like_length_checked(js, obj, &len);
   if (is_err(result)) return result;
   
-  if (nargs > 0 && is_err(result = arguments_check_mutable(js, obj, true))) return result;
+  if (nargs > 0 && arguments_refuses_add(obj)) return array_add_refused_error(js, len);
   for (int i = 0; i < nargs; i++, len++) {
     result = js_setprop_index(js, obj, (uint32_t)len, args[i]);
     if (is_err(result)) return result;
@@ -173,7 +190,7 @@ static ant_value_t arguments_pop(ant_t *js, ant_value_t obj) {
     return is_err(result) ? result : Ant_Value_Undefined;
   }
   
-  if (is_err(result = arguments_check_mutable(js, obj, false))) return result;
+  if (arguments_refuses_delete(obj)) return array_delete_refused(js, obj, len - 1);
   ant_value_t value = arguments_get_index(js, obj, len - 1);
   if (is_err(value)) return value;
   
@@ -191,11 +208,12 @@ static ant_value_t arguments_shift(ant_t *js, ant_value_t obj) {
     result = arguments_set_length(js, obj, 0);
     return is_err(result) ? result : Ant_Value_Undefined;
   }
-  if (is_err(result = arguments_check_mutable(js, obj, false))) return result;
+  if (js_obj_ptr(obj)->flags.frozen && len > 1) return Ant_Error_CreateReadOnlyProperty(js, obj, Ant_Value_FromNumber(0));
   ant_value_t first = arguments_get_index(js, obj, 0);
   if (is_err(first)) return first;
   for (ant_offset_t k = 1; k < len; k++)
     if (is_err(result = arguments_move_index(js, obj, k, k - 1))) return result;
+  if (arguments_refuses_delete(obj)) return array_delete_refused(js, obj, len - 1);
   if (is_err(result = arguments_delete_index(js, obj, len - 1))) return result;
   if (is_err(result = arguments_set_length(js, obj, len - 1))) return result;
   return first;
@@ -207,7 +225,7 @@ static ant_value_t arguments_unshift(ant_t *js, ant_value_t obj, ant_args_t) {
   if (is_err(result)) return result;
   
   if (nargs > 0) {
-    if (is_err(result = arguments_check_mutable(js, obj, true))) return result;
+    if (arguments_refuses_add(obj)) return array_add_refused_error(js, len ? len - 1 + (ant_offset_t)nargs : 0);
     for (ant_offset_t k = len; k > 0; k--)
       if (is_err(result = arguments_move_index(js, obj, k - 1, k - 1 + (ant_offset_t)nargs))) return result;
     for (int i = 0; i < nargs; i++)
@@ -262,10 +280,9 @@ static ant_value_t builtin_array_push(ant_params_t) {
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
 
   ant_object_t *target = js_obj_ptr(js_as_obj(arr));
+  if (array_refuses_add(arr, nargs)) return array_add_refused_error(js, len);
   if (target && (target->flags.frozen || array_length_readonly(js, arr)))
     return array_length_readonly_error(js);
-  if (target && nargs > 0 && (target->flags.sealed || !target->flags.extensible))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot add property %u, object is not extensible", (unsigned)len);
   
   ant_offset_t doff = get_dense_buf(arr);
   if (doff) {
@@ -317,7 +334,7 @@ static ant_value_t array_delete_index_throw(ant_t *js, ant_value_t obj, ant_offs
   size_t klen = uint_to_str(key, sizeof(key), (uint64_t)idx);
   ant_value_t deleted = js_delete_prop_ordinary(js, obj, key, klen);
   if (is_err(deleted)) return deleted;
-  if (deleted == Ant_Value_False) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot delete property '%s' of [object Array]", key);
+  if (deleted == Ant_Value_False) return array_delete_refused(js, obj, idx);
   return Ant_Value_Undefined;
 }
 
@@ -1185,7 +1202,7 @@ static ant_value_t builtin_array_reverse(ant_params_t) {
     ant_value_t len_result = array_like_length_checked(js, arr, &frozen_len);
     
     if (is_err(len_result)) return len_result;
-    if (frozen_len > 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot assign to read only property '0' of object");
+    if (frozen_len > 1) return Ant_Error_CreateReadOnlyProperty(js, arr, Ant_Value_FromNumber(0));
   }
 
   if (is_proxy(arr)) {
@@ -1911,10 +1928,11 @@ static ant_value_t builtin_array_unshift(ant_params_t) {
   if (is_err(arr)) return arr;
   ant_offset_t string_len;
   if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "length");
-  if (array_length_readonly(js, arr)) return array_length_readonly_error(js);
+  if (array_length_readonly(js, arr) && !array_refuses_add(arr, nargs)) return array_length_readonly_error(js);
   if (js_is_arguments(arr)) return arguments_unshift(js, arr, args, nargs);
 
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+  if (array_refuses_add(arr, nargs)) return array_add_refused_error(js, len ? len - 1 + (ant_offset_t)nargs : 0);
 
   if (is_proxy(arr)) {
     ant_value_t read_from = proxy_read_target(js, arr);
@@ -2081,7 +2099,7 @@ static ant_value_t builtin_array_sort(ant_params_t) {
   
   ant_object_t *target = is_proxy(arr) ? NULL : js_obj_ptr(js_as_obj(arr));
   if (target && target->flags.frozen && len > 1) { 
-    result = js_mkerr_typed(js, JS_ERR_TYPE, "Cannot assign to read only property of frozen object"); 
+    result = Ant_Error_CreateReadOnlyProperty(js, arr, Ant_Value_FromNumber(0)); 
     goto done; 
   }
   
@@ -2423,7 +2441,7 @@ static ant_value_t builtin_array_copyWithin(ant_params_t) {
   if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "0");
   ant_object_t *frozen = is_proxy(arr) ? NULL : js_obj_ptr(js_as_obj(arr));
   if (frozen && frozen->flags.frozen)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot assign to read only property '%d' of object", target);
+    return Ant_Error_CreateReadOnlyProperty(js, arr, Ant_Value_FromNumber((double)target));
 
   ant_offset_t doff = get_dense_buf(arr);
   if (doff && !is_proxy(arr)) {

@@ -32,7 +32,7 @@ static ant_value_t js_setprop_array_fast(
     ant_offset_t dense_len = dense_iterable_length(js, obj);
     if (idx < dense_len) {
       if (ptr && ptr->flags.frozen) 
-        return sv_is_strict_context(js) ? js_mkerr(js, "assignment to read-only array element") : set_declined(declined, v);
+        return sv_is_strict_context(js) ? Ant_Error_CreateReadOnlyProperty(js, obj, Ant_Value_FromNumber((double)idx)) : set_declined(declined, v);
       if (is_empty_slot(dense_get(doff, (ant_offset_t)idx))) {
         if (array_store_reaches_proto(js, obj, ptr, idx)) return JS_SETPROP_ARRAY_NOT_HANDLED;
         ant_value_t extensibility_error = check_object_extensibility_index(js, obj, idx);
@@ -154,7 +154,7 @@ static ant_value_t setprop_primitive(ant_t *js, ant_value_t obj, uint8_t ot, ant
   if (vtype(k) == kTypeSymbol) {
     ant_value_t setter = setprop_primitive_symbol_setter(js, ot, (ant_offset_t)vdata(k));
     if (is_callable(setter)) return call_proto_accessor(js, obj, setter, true, &v, 1, true);
-    if (sv_is_strict_context(js)) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot create property on %s", typestr(ot));
+    if (sv_is_strict_context(js)) return Ant_Error_CreatePropertyOnPrimitive(js, obj, k);
     return v;
   }
 
@@ -170,12 +170,16 @@ static ant_value_t setprop_primitive(ant_t *js, ant_value_t obj, uint8_t ot, ant
   if (has_setter && is_callable(setter))
     return call_proto_accessor(js, obj, setter, true, &v, 1, true);
 
-  if (sv_is_strict_context(js)) return js_mkerr_typed(js, JS_ERR_TYPE,
-    "Cannot create property '%.*s' on %s",
-    (int)klen, key, typestr(ot)
-  );
+  if (!sv_is_strict_context(js)) return v;
 
-  return v;
+  unsigned long idx = 0;
+  bool read_only = ot == kTypeString && (
+    is_length_key(key, klen) || parse_array_index(key, (size_t)klen, str_utf16_len(js, obj), &idx)
+  );
+  
+  return read_only
+    ? Ant_Error_CreateReadOnlyProperty(js, obj, k)
+    : Ant_Error_CreatePropertyOnPrimitive(js, obj, k);
 }
 
 typedef enum {
@@ -189,7 +193,10 @@ static ant_value_t setprop_call_setter(ant_t *js, ant_value_t obj, ant_value_t s
   return is_err(result) ? result : v;
 }
 
-static bool setprop_desc_blocks(ant_t *js, ant_value_t obj, const prop_meta_t *meta, ant_value_t v, bool *declined, ant_value_t *done) {
+static bool setprop_desc_blocks(
+  ant_t *js, ant_value_t obj, ant_value_t receiver, ant_value_t key,
+  const prop_meta_t *meta, ant_value_t v, bool *declined, ant_value_t *done
+) {
   if (meta->has_setter && is_callable(meta->setter)) {
     *done = setprop_call_setter(js, obj, meta->setter, v);
     return true;
@@ -197,14 +204,14 @@ static bool setprop_desc_blocks(ant_t *js, ant_value_t obj, const prop_meta_t *m
 
   if (meta->has_getter && !meta->has_setter) {
     *done = sv_is_strict_context(js)
-      ? js_mkerr_typed(js, JS_ERR_TYPE, "Cannot set property which has only a getter")
+      ? Ant_Error_CreateGetterOnlyProperty(js, receiver, key)
       : set_declined(declined, v);
     return true;
   }
 
   if (!meta->writable) {
     *done = sv_is_strict_context(js)
-      ? js_mkerr(js, "assignment to read-only property")
+      ? Ant_Error_CreateReadOnlyProperty(js, receiver, key)
       : set_declined(declined, v);
     return true;
   }
@@ -220,7 +227,7 @@ static bool setprop_refuse_new(ant_value_t extensibility, ant_value_t v, bool *d
 }
 
 static bool setprop_symbol_walk(
-  ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, bool keyed,
+  ant_t *js, ant_value_t obj, ant_value_t receiver, ant_value_t k, ant_value_t v, bool keyed,
   bool *declined, bool *receiver_missed, ant_value_t *done
 ) {
   ant_offset_t sym_off = (ant_offset_t)vdata(k);
@@ -247,7 +254,7 @@ static bool setprop_symbol_walk(
     }
     
     else found = lookup_symbol_prop_meta(js, cur_obj, sym_off, &meta);
-    if (found) return setprop_desc_blocks(js, obj, &meta, v, declined, done);
+    if (found) return setprop_desc_blocks(js, obj, receiver, k, &meta, v, declined, done);
 
     ant_value_t proto = is_object_type(cur_ptr->proto) ? cur_ptr->proto : get_proto(js, cur_obj);
     if (!is_object_type(proto)) break;
@@ -259,12 +266,12 @@ static bool setprop_symbol_walk(
   return false;
 }
 
-static ant_value_t setprop_symbol(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, bool keyed, bool *declined) {
+static ant_value_t setprop_symbol(ant_t *js, ant_value_t obj, ant_value_t receiver, ant_value_t k, ant_value_t v, bool keyed, bool *declined) {
   ant_offset_t sym_off = (ant_offset_t)vdata(k);
   bool receiver_missed = false;
   
   ant_value_t done;
-  if (setprop_symbol_walk(js, obj, k, v, keyed, declined, &receiver_missed, &done)) return done;
+  if (setprop_symbol_walk(js, obj, receiver, k, v, keyed, declined, &receiver_missed, &done)) return done;
 
   ant_prop_loc_t existing = receiver_missed ? ANT_PROP_LOC_NONE : lkp_sym(obj, sym_off);
   if (existing.obj) {
@@ -428,7 +435,7 @@ static setprop_desc_t setprop_find_desc(
   return SETPROP_DESC_MISS;
 }
 
-static ant_value_t setprop_string(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, bool keyed, bool *declined) {
+static ant_value_t setprop_string(ant_t *js, ant_value_t obj, ant_value_t receiver, ant_value_t k, ant_value_t v, bool keyed, bool *declined) {
   ant_offset_t klen; ant_offset_t koff = vstr(js, k, &klen);
   const char *key = (char *)(uintptr_t)(koff);
 
@@ -444,7 +451,7 @@ static ant_value_t setprop_string(ant_t *js, ant_value_t obj, ant_value_t k, ant
 
   if (found == SETPROP_DESC_HIT) {
     bool inherited_data = !on_receiver && !meta.has_setter && !meta.has_getter && meta.writable;
-    if (!inherited_data && setprop_desc_blocks(js, obj, &meta, v, declined, &done)) return done;
+    if (!inherited_data && setprop_desc_blocks(js, obj, receiver, k, &meta, v, declined, &done)) return done;
   }
 
   if (existing.obj) {
@@ -473,11 +480,12 @@ ant_value_t setprop_impl(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t 
   uint8_t ot = vtype(obj);
   if (ot == kTypeBuiltin) return setprop_impl(js, js_cfunc_promote(js, obj), k, v, keyed, declined);
   if (is_boxable_primitive_type(ot)) return setprop_primitive(js, obj, ot, k, v);
+  ant_value_t receiver = obj;
   if (ot == kTypeFunction) obj = js_func_obj(obj);
 
   return vtype(k) == kTypeSymbol
-    ? setprop_symbol(js, obj, k, v, keyed, declined)
-    : setprop_string(js, obj, k, v, keyed, declined);
+    ? setprop_symbol(js, obj, receiver, k, v, keyed, declined)
+    : setprop_string(js, obj, receiver, k, v, keyed, declined);
 }
 
 ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v) {
@@ -510,7 +518,7 @@ static ant_value_t setprop_index_impl(ant_t *js, ant_value_t obj, uint32_t idx, 
       
       if ((ant_offset_t)idx < dense_len) {
         if (ptr->flags.frozen) 
-          return sv_is_strict_context(js) ? js_mkerr(js, "assignment to read-only array element") : set_declined(declined, value);
+          return sv_is_strict_context(js) ? Ant_Error_CreateReadOnlyProperty(js, obj, Ant_Value_FromNumber((double)idx)) : set_declined(declined, value);
         if (missing) {
           ant_value_t extensibility_error = check_object_extensibility_index(js, obj, idx);
           if (is_err(extensibility_error)) return extensibility_error;

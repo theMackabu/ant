@@ -859,3 +859,79 @@ void js_errors_init(ant_t *js, ant_value_t object_proto, ant_value_t function_pr
   defhidden(js, suppressed_proto, "constructor", 11, suppressed_ctor_func);
   js_set_global_builtin(js, "SuppressedError", suppressed_ctor_func);
 }
+
+typedef enum {
+  PROPERTY_ERROR_READ_ONLY,
+  PROPERTY_ERROR_GETTER_ONLY,
+  PROPERTY_ERROR_PRIMITIVE,
+} property_error_kind_t;
+
+static const char *property_error_receiver_kind(ant_value_t receiver) {
+  if (is_callable(receiver)) return "function";
+  switch (vtype(receiver)) {
+    case kTypeString: return "string";
+    case kTypeNumber: return "number";
+    case kTypeBool: return "boolean";
+    case kTypeSymbol: return "symbol";
+    case kTypeBigInt: return "bigint";
+    default: return "object";
+  }
+}
+
+static ant_value_t property_error_key_text(ant_t *js, ant_value_t key) {
+  if (vtype(key) == kTypeSymbol) return js_symbol_to_string(js, key);
+  if (vtype(key) == kTypeString) return key;
+  return js_tostring_val(js, key);
+}
+
+static __attribute__((noinline, cold)) ant_value_t property_error(
+  ant_t *js, property_error_kind_t kind, ant_value_t receiver, ant_value_t key
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, receiver);
+  GC_ROOT_PIN(js, key);
+
+  ant_value_t key_text = property_error_key_text(js, key);
+  GC_ROOT_PIN(js, key_text);
+  ant_value_t described = is_err(key_text) ? key_text : Ant_Value_Describe(js, receiver);
+  GC_ROOT_PIN(js, described);
+
+  if (is_err(described)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return described;
+  }
+
+  size_t key_len = 0, described_len = 0;
+  const char *key_bytes = js_getstr(js, key_text, &key_len);
+  const char *described_bytes = js_getstr(js, described, &described_len);
+  const char *receiver_kind = property_error_receiver_kind(receiver);
+
+  ant_value_t error;
+  if (kind == PROPERTY_ERROR_READ_ONLY) error = js_mkerr_typed(
+    js, JS_ERR_TYPE, "Cannot assign to read only property '%.*s' of %s '%.*s'",
+    (int)key_len, key_bytes, receiver_kind, (int)described_len, described_bytes
+  );
+  else if (kind == PROPERTY_ERROR_GETTER_ONLY) error = js_mkerr_typed(
+    js, JS_ERR_TYPE, "Cannot set property %.*s of %.*s which has only a getter",
+    (int)key_len, key_bytes, (int)described_len, described_bytes
+  );
+  else error = js_mkerr_typed(
+    js, JS_ERR_TYPE, "Cannot create property '%.*s' on %s '%.*s'",
+    (int)key_len, key_bytes, receiver_kind, (int)described_len, described_bytes
+  );
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return error;
+}
+
+ant_value_t Ant_Error_CreateReadOnlyProperty(ant_t *js, ant_value_t receiver, ant_value_t key) {
+  return property_error(js, PROPERTY_ERROR_READ_ONLY, receiver, key);
+}
+
+ant_value_t Ant_Error_CreateGetterOnlyProperty(ant_t *js, ant_value_t receiver, ant_value_t key) {
+  return property_error(js, PROPERTY_ERROR_GETTER_ONLY, receiver, key);
+}
+
+ant_value_t Ant_Error_CreatePropertyOnPrimitive(ant_t *js, ant_value_t receiver, ant_value_t key) {
+  return property_error(js, PROPERTY_ERROR_PRIMITIVE, receiver, key);
+}
