@@ -8,6 +8,7 @@
 #include "numbers.h"
 #include "silver/lexer.h"
 #include "modules/number.h"
+#include "modules/string.h"
 
 size_t format_number_to_locale_string(ant_value_t num, char *buf, size_t capacity) {
   char raw[64];
@@ -106,65 +107,36 @@ static ant_value_t builtin_number_toString(ant_params_t) {
   ant_value_t num = unwrap_primitive(js, call_this);
   if (vtype(num) != kTypeNumber) return js_mkerr(js, "toString called on non-number");
   
-  int radix = 10;
-  if (nargs >= 1 && vtype(args[0]) == kTypeNumber) {
-    radix = (int)Ant_Value_AsNumberUnchecked(args[0]);
-    if (radix < 2 || radix > 36) {
-      return js_mkerr(js, "radix must be between 2 and 36");
-    }
+  double radix = 10;
+  if (nargs >= 1 && vtype(args[0]) == kTypeNumber) radix = string_number_to_integer(Ant_Value_AsNumberUnchecked(args[0]));
+  else if (nargs >= 1 && vtype(args[0]) != kTypeUndefined) {
+    ant_value_t status = string_to_integer_or_infinity(js, args[0], &radix);
+    if (is_err(status)) return status;
   }
   
+  if (radix < 2 || radix > 36) return js_mkerr_typed(js, JS_ERR_RANGE, "toString() radix argument must be between 2 and 36");
   if (radix == 10) return js_tostring_val(js, num);
-  double val = Ant_Value_AsNumberUnchecked(num);
   
+  double val = Ant_Value_AsNumberUnchecked(num);
   if (isnan(val)) return js_mkstr(js, "NaN", 3);
   if (isinf(val)) return val > 0 ? js_mkstr(js, "Infinity", 8) : js_mkstr(js, "-Infinity", 9);
+  if (val == 0) return js_mkstr(js, "0", 1);
   
-  char buf[128];
-  char *p = buf + sizeof(buf) - 1;
-  *p = '\0';
-  
-  bool negative = val < 0;
-  if (negative) val = -val;
-  
-  long long int_part = (long long)val;
-  double frac_part = val - (double)int_part;
-  
-  if (int_part == 0) {
-    *--p = '0';
-  } else {
-    while (int_part > 0 && p > buf) {
-      int digit = int_part % radix;
-      *--p = (char)(digit < 10 ? '0' + digit : 'a' + (digit - 10));
-      int_part /= radix;
-    }
+  if (fabs(val) <= 9007199254740992.0 && val == trunc(val)) {
+    static const char chars[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+    char digits[66];
+    char *p = digits + sizeof(digits);
+    uint64_t u = (uint64_t)fabs(val);
+    do { *--p = chars[u % (unsigned)radix]; u /= (unsigned)radix; } while (u);
+    if (val < 0) *--p = '-';
+    return js_mkstr_ascii(js, p, (size_t)(digits + sizeof(digits) - p));
   }
   
-  if (negative && p > buf) {
-    *--p = '-';
-  }
+  char buffer[ANT_NUMBER_RADIX_BUFFER_SIZE];
+  const char *start = NULL;
+  size_t len = ant_number_to_radix(val, (int)radix, buffer, sizeof(buffer), &start);
   
-  size_t int_len = strlen(p);
-  
-  if (frac_part > 0.0000001) {
-    char frac_buf[64];
-    int frac_pos = 0;
-    frac_buf[frac_pos++] = '.';
-    
-    for (int i = 0; i < 16 && frac_part > 0.0000001 && frac_pos < 63; i++) {
-      frac_part *= radix;
-      int digit = (int)frac_part;
-      frac_buf[frac_pos++] = (char)(digit < 10 ? '0' + digit : 'a' + (digit - 10));
-      frac_part -= digit;
-    }
-    frac_buf[frac_pos] = '\0';
-    
-    char result[192];
-    snprintf(result, sizeof(result), "%s%s", p, frac_buf);
-    return js_mkstr(js, result, strlen(result));
-  }
-  
-  return js_mkstr(js, p, int_len);
+  return js_mkstr_ascii(js, start, len);
 }
 
 static ant_value_t builtin_number_toFixed(ant_params_t) {
@@ -263,68 +235,28 @@ ant_value_t builtin_number_toLocaleString(ant_params_t) {
 }
 
 static ant_value_t builtin_parseInt(ant_params_t) {
-  if (nargs < 1) return Ant_Value_FromNumber(ANT_NAN);
+  ant_value_t str_val = coerce_to_str(js, nargs > 0 ? args[0] : Ant_Value_Undefined);
+  if (is_err(str_val)) return str_val;
   
-  ant_value_t str_val = args[0];
-  if (vtype(str_val) != kTypeString) {
-    const char *str = js_str(js, str_val);
-    str_val = js_mkstr(js, str, strlen(str));
-  }
-  
-  ant_offset_t str_len, str_off = vstr(js, str_val, &str_len);
-  const char *str = (char *)(uintptr_t)(str_off);
-  
-  int radix = 0;
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    radix = (int) Ant_Value_AsNumberUnchecked(args[1]);
-    if (radix != 0 && (radix < 2 || radix > 36)) return Ant_Value_FromNumber(ANT_NAN);
-  }
-  
-  ant_offset_t i = 0;
-  while (i < str_len && is_space(str[i])) i++;
-  
-  if (i >= str_len) return Ant_Value_FromNumber(ANT_NAN);
-  
-  int sign = 1;
-  if (str[i] == '-') {
-    sign = -1;
-    i++;
-  } else if (str[i] == '+') {
-    i++;
-  }
-  
-  if ((radix == 0 || radix == 16) && i + 1 < str_len && str[i] == '0' && (str[i + 1] == 'x' || str[i + 1] == 'X')) {
-    radix = 16;
-    i += 2;
-  }
-  
-  if (radix == 0) radix = 10;
-  
-  double result = 0;
-  bool found_digit = false;
-  
-  while (i < str_len) {
-    char ch = str[i];
-    int digit = -1;
+  int32_t radix = 0;
+  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) radix = js_to_int32(Ant_Value_AsNumberUnchecked(args[1]));
+  else if (nargs >= 2 && vtype(args[1]) != kTypeUndefined) {
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, str_val);
     
-    if (ch >= '0' && ch <= '9') {
-      digit = ch - '0';
-    } else if (ch >= 'a' && ch <= 'z') {
-      digit = ch - 'a' + 10;
-    } else if (ch >= 'A' && ch <= 'Z') {
-      digit = ch - 'A' + 10;
-    }
+    double number = 0;
+    ant_value_t status = string_to_integer_or_infinity(js, args[1], &number);
     
-    if (digit < 0 || digit >= radix) break;
-    
-    result = result * radix + digit;
-    found_digit = true;
-    i++;
+    GC_ROOT_RESTORE(js, root_mark);
+    if (is_err(status)) return status;
+    radix = js_to_int32(number);
   }
   
-  if (!found_digit) return Ant_Value_FromNumber(ANT_NAN);
+  if (radix != 0 && (radix < 2 || radix > 36)) return Ant_Value_FromNumber(ANT_NAN);
   
-  return Ant_Value_FromNumber(sign * result);
+  ant_offset_t str_len = 0;
+  const char *str = (const char *)(uintptr_t)vstr(js, str_val, &str_len);
+  return Ant_Value_FromNumber(ant_number_parse_int(str, (size_t)str_len, radix));
 }
 
 static ant_value_t builtin_parseFloat(ant_params_t) {

@@ -96,10 +96,9 @@ static char *url_decoded_utf8(char *out, size_t len, size_t *out_len) {
   return out;
 }
 
-char *form_urldecode_len(const char *str, size_t *out_len) {
+char *form_urldecode_n(const char *str, size_t len, size_t *out_len) {
   if (out_len) *out_len = 0;
   if (!str) return strdup("");
-  size_t len = strlen(str);
   char *out = malloc(len + 1);
 
   if (!out) return strdup("");
@@ -147,6 +146,10 @@ char *url_decode_component_len(const char *str, size_t *out_len) {
 
   out[j] = '\0';
   return url_decoded_utf8(out, j, out_len);
+}
+
+char *form_urldecode_len(const char *str, size_t *out_len) {
+  return form_urldecode_n(str, str ? strlen(str) : 0, out_len);
 }
 
 char *form_urldecode(const char *str) {
@@ -320,8 +323,23 @@ char *build_href(const url_state_t *s) {
   return href;
 }
 
+ant_value_t url_usv_string(ant_t *js, ant_value_t str) {
+  ant_offset_t len = 0;
+  const char *bytes = (const char *)(uintptr_t)vstr(js, str, &len);
+  if (str_is_well_formed(bytes, (size_t)len)) return str;
+
+  size_t utf8_len = (size_t)len;
+  char *utf8 = wtf8_to_utf8_dup(bytes, &utf8_len);
+  if (!utf8) return js_mkerr(js, "oom");
+
+  ant_value_t result = js_mkstr(js, utf8, utf8_len);
+  free(utf8);
+  return result;
+}
+
 ant_value_t url_string_value(ant_t *js, ant_value_t value) {
-  return vtype(value) == kTypeString ? value : js_template_to_string(js, value);
+  ant_value_t str = vtype(value) == kTypeString ? value : js_template_to_string(js, value);
+  return is_err(str) ? str : url_usv_string(js, str);
 }
 
 ant_value_t url_invalid_url_error(ant_t *js, ant_value_t input, ant_value_t base) {

@@ -1,5 +1,7 @@
 #include "numbers.h"
+#include "dragonbox/dragonbox.h"
 
+#include <cmath>
 #include <cstring>
 #include <limits>
 
@@ -235,6 +237,81 @@ static size_t ant_format_number(
   return copy_truncated_number_result(buf, len, scratch, (size_t)pos);
 }
 
+static inline int shortest_digit_count(uint64_t v) {
+  int n = 1;
+  while (v >= 10000) { v /= 10000; n += 4; }
+  if (v >= 1000) return n + 3;
+  if (v >= 100) return n + 2;
+  if (v >= 10) return n + 1;
+  return n;
+}
+
+static inline void shortest_write_digits(char *end, uint64_t v) {
+  static const char pairs[] =
+    "0001020304050607080910111213141516171819"
+    "2021222324252627282930313233343536373839"
+    "4041424344454647484950515253545556575859"
+    "6061626364656667686970717273747576777879"
+    "8081828384858687888990919293949596979899";
+
+  while (v >= 100) {
+    end -= 2;
+    std::memcpy(end, pairs + (v % 100) * 2, 2);
+    v /= 100;
+  }
+
+  if (v >= 10) {
+    end -= 2;
+    std::memcpy(end, pairs + v * 2, 2);
+  } else *--end = (char)('0' + v);
+}
+
+static size_t shortest_write(double value, char *buf) {
+  if (value == 0) { buf[0] = '0'; return 1; }
+  if (std::isnan(value)) { std::memcpy(buf, "NaN", 3); return 3; }
+  if (std::isinf(value)) {
+    if (value > 0) { std::memcpy(buf, "Infinity", 8); return 8; }
+    std::memcpy(buf, "-Infinity", 9); return 9;
+  }
+
+  auto decimal = jkj::dragonbox::to_decimal(value);
+  char digits[20];
+  int k = shortest_digit_count(decimal.significand);
+  shortest_write_digits(digits + k, decimal.significand);
+
+  char *p = buf;
+  if (decimal.is_negative) *p++ = '-';
+  int n = k + decimal.exponent;
+
+  if (k <= n && n <= 21) {
+    std::memcpy(p, digits, (size_t)k); p += k;
+    std::memset(p, '0', (size_t)(n - k)); p += n - k;
+  } else if (0 < n && n <= 21) {
+    std::memcpy(p, digits, (size_t)n); p += n;
+    *p++ = '.';
+    std::memcpy(p, digits + n, (size_t)(k - n)); p += k - n;
+  } else if (-6 < n && n <= 0) {
+    *p++ = '0';
+    *p++ = '.';
+    std::memset(p, '0', (size_t)-n); p += -n;
+    std::memcpy(p, digits, (size_t)k); p += k;
+  } else {
+    *p++ = digits[0];
+    if (k > 1) {
+      *p++ = '.';
+      std::memcpy(p, digits + 1, (size_t)(k - 1)); p += k - 1;
+    }
+    int e = n - 1;
+    *p++ = 'e';
+    *p++ = e < 0 ? '-' : '+';
+    unsigned ue = (unsigned)(e < 0 ? -e : e);
+    int ek = shortest_digit_count(ue);
+    shortest_write_digits(p + ek, ue); p += ek;
+  }
+
+  return (size_t)(p - buf);
+}
+
 extern "C" size_t ant_number_to_shortest(double value, char *buf, size_t len) {
   int32_t iv;
   
@@ -252,9 +329,12 @@ extern "C" size_t ant_number_to_shortest(double value, char *buf, size_t len) {
   }
 
   char scratch[kShortestBufferSize];
-  return ant_format_number(buf, len, scratch, sizeof(scratch), [value](StringBuilder *builder) {
-    return DoubleToStringConverter::EcmaScriptConverter().ToShortest(value, builder);
-  });
+  char *out = buf && len >= sizeof(scratch) ? buf : scratch;
+  size_t n = shortest_write(value, out);
+  out[n] = '\0';
+
+  if (out == buf) return n;
+  return copy_truncated_number_result(buf, len, scratch, n);
 }
 
 extern "C" size_t ant_number_to_fixed(double value, int digits, char *buf, size_t len) {

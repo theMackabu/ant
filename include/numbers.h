@@ -30,6 +30,10 @@ size_t ant_number_to_fixed(double value, int digits, char *buf, size_t len);
 size_t ant_number_to_precision(double value, int precision, char *buf, size_t len);
 size_t ant_number_to_exponential(double value, int digits, char *buf, size_t len);
 
+static constexpr size_t ANT_NUMBER_RADIX_BUFFER_SIZE = 2200;
+size_t ant_number_to_radix(double value, int radix, char *buffer, size_t size, const char **out_start);
+double ant_number_parse_int(const char *str, size_t len, int radix);
+
 static inline bool ant_number_as_int32(double value, int32_t *out) {
   if (!(value >= -2147483648.0 && value <= 2147483647.0)) return false;
   int32_t iv = (int32_t)value;

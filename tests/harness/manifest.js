@@ -297,6 +297,7 @@ export function targets() {
     'test_native_completion_errors.cjs',
     'test_native_numeric_array_paths.cjs',
     'test_number_radix_parseint.cjs',
+    'test_number_shortest.cjs',
     'test_net_port_validation.cjs',
     'test_net_socket_readable.mjs',
     'test_new_prototype_cache.cjs',

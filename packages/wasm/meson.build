@@ -42,6 +42,7 @@ utf8proc_dep = subproject('utf8proc', default_options: [
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
 crprintf_dep = subproject('crprintf').get_variable('crprintf_dep')
 double_conversion_dep = subproject('double-conversion').get_variable('double_conversion_dep')
+dragonbox_dep = subproject('dragonbox').get_variable('dragonbox_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 
 python = find_program('python3')
@@ -98,6 +99,7 @@ executable('ant', core_sources, silver_macros_h, unicode_data_h,
     uthash_dep,
     crprintf_dep,
     double_conversion_dep,
+    dragonbox_dep,
     yyjson_dep,
   ],
   link_args: [

@@ -224,6 +224,7 @@ await Promise.all([
   cp(new URL('../../../vendor/uthash-2.3.0/LICENSE', import.meta.url), new URL('../dist/licenses/uthash.txt', import.meta.url)),
   cp(new URL('../../../vendor/crprintf/LICENSE.txt', import.meta.url), new URL('../dist/licenses/crprintf.txt', import.meta.url)),
   cp(new URL('../../../vendor/double-conversion-3.4.0/LICENSE', import.meta.url), new URL('../dist/licenses/double-conversion.txt', import.meta.url)),
+  cp(new URL('../../../vendor/dragonbox-1.1.3/LICENSE-Boost', import.meta.url), new URL('../dist/licenses/dragonbox.txt', import.meta.url)),
   cp(new URL('../../../vendor/yyjson-0.12.0/LICENSE', import.meta.url), new URL('../dist/licenses/yyjson.txt', import.meta.url)),
   cp(new URL('../licenses/wasi-libc.txt', import.meta.url), new URL('../dist/licenses/wasi-libc.txt', import.meta.url))
 ]);

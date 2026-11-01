@@ -148,6 +148,7 @@ crprintf_dep = subproject('crprintf').get_variable('crprintf_dep')
 ada_dep = subproject('ada').get_variable('ada_dep')
 wamr_dep = subproject('wasm-micro-runtime').get_variable('wamr_dep')
 double_conversion_dep = subproject('double-conversion').get_variable('double_conversion_dep')
+dragonbox_dep = subproject('dragonbox').get_variable('dragonbox_dep')
 yyjson_dep = subproject('yyjson', default_options: ['non-standard-json=disabled',]).get_variable('yyjson_dep')
 
 wirecall = dependency('wirecall', default_options: [
@@ -231,7 +232,7 @@ ant_format_deps = [
 
 ant_runtime_deps = [
   ssl_dep, crypto_dep, uthash_dep, lmdb_dep, wamr_dep,
-  double_conversion_dep, wirecall, skim_dep,
+  double_conversion_dep, dragonbox_dep, wirecall, skim_dep,
 ]
 
 ant_deps = allocator_deps + ant_core_deps + ant_format_deps + ant_runtime_deps + win_deps + mir_dep

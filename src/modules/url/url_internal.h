@@ -22,6 +22,7 @@ typedef bool (*ada_url_setter_t)(ada_url, const char *, size_t);
 ant_value_t url_invalid_url_error(ant_t *js, ant_value_t input, ant_value_t base);
 ant_value_t url_missing_args_error(ant_t *js, const char *message);
 ant_value_t url_string_value(ant_t *js, ant_value_t value);
+ant_value_t url_usv_string(ant_t *js, ant_value_t str);
 ant_value_t make_usp_for_url(ant_t *js, ant_value_t url_obj, const char *query);
 
 static inline bool url_fmt_reserve(url_fmt_buf_t *b, size_t extra) {
