@@ -1,9 +1,9 @@
-#include "internal.h"
 #include "sugar.h"
-
-#include "modules/generator.h"
+#include "internal.h"
+#include "silver/vm.h"
 #include "silver/engine.h"
 #include "modules/promise.h"
+#include "modules/generator.h"
 
 static constexpr uint32_t CORO_FREE_MAX = 256;
 static constexpr size_t CORO_POOLED_ACT_MAX = 4096;

@@ -1,12 +1,10 @@
 #ifndef SILVER_ENGINE_H
 #define SILVER_ENGINE_H
 
-#include "silver/vm.h"
-#include "internal.h"
-#include "runtime.h"
-
 #include "gc.h"
 #include "gc/objects.h"
+#include "internal.h"
+#include "runtime.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -59,6 +57,9 @@ typedef enum {
   SV_OPF_OPT_HANDLER                = 1u << 24,
   SV_OPF_OPT_ROOT_ONLY              = 1u << 25,
   SV_OPF_OPT_INLINE_IN_TRY          = 1u << 26,
+  SV_OPF_JIT_INLINE_SIDE_EFFECT     = 1u << 27,
+  SV_OPF_JIT_INLINE_GUARD_RESTART   = 1u << 28,
+  SV_OPF_JIT_INLINE_AFTER_EFFECT    = 1u << 29,
 } sv_opcode_flags_t;
 
 typedef enum {

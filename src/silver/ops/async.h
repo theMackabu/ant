@@ -1,10 +1,11 @@
 #ifndef SV_ASYNC_H
 #define SV_ASYNC_H
 
-#include "sugar.h"
 #include "gc.h"
 #include "gc/roots.h"
+#include "sugar.h"
 #include "interrupt.h"
+#include "silver/vm.h"
 #include "silver/engine.h"
 #include "modules/promise.h"
 

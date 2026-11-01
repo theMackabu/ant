@@ -1,87 +1,6 @@
 #include "jit_internal.h"
 #include "silver/feedback.h"
 
-// TODO: opcode.h
-static bool jit_op_inline_side_effect(sv_op_t op) {
-  switch (op) {
-    case OP_PUT_FIELD:
-    case OP_LOAD_STABLE_BUILTIN:
-    case OP_CALL:
-    case OP_CALL_METHOD:
-    case OP_CALL_STABLE_BUILTIN:
-    case OP_TAIL_CALL:
-    case OP_TAIL_CALL_METHOD:
-      return true;
-    default:
-      return false;
-  }
-}
-
-// TODO: opcode.h
-static bool jit_op_inline_restarts_callee_on_guard_failure(sv_op_t op) {
-  switch (op) {
-    case OP_CHECK_CTOR:
-    case OP_GET_GLOBAL:
-    case OP_GET_ELEM:
-    case OP_BAND:
-    case OP_BOR:
-    case OP_BXOR:
-    case OP_SHL:
-    case OP_SHR:
-    case OP_USHR:
-      return true;
-    default:
-      return false;
-  }
-}
-
-// TODO: opcode.h
-static bool jit_op_inline_after_effect(sv_op_t op) {
-  switch (op) {
-    case OP_RETURN:
-    case OP_RETURN_UNDEF:
-    case OP_POP:
-    case OP_DUP:
-    case OP_DUP2:
-    case OP_NIP:
-    case OP_INSERT2:
-    case OP_INSERT3:
-    case OP_GET_LOCAL:
-    case OP_GET_LOCAL8:
-    case OP_PUT_LOCAL:
-    case OP_PUT_LOCAL8:
-    case OP_SET_LOCAL:
-    case OP_SET_LOCAL8:
-    case OP_GET_ARG:
-    case OP_PUT_ARG:
-    case OP_SET_ARG:
-    case OP_GET_FIELD:
-    case OP_GET_FIELD2:
-    case OP_GET_FIELD_OPT:
-    case OP_GET_LENGTH:
-    case OP_CONST:
-    case OP_CONST8:
-    case OP_CONST_I8:
-    case OP_UNDEF:
-    case OP_NULL:
-    case OP_TRUE:
-    case OP_FALSE:
-    case OP_THIS:
-    case OP_IS_UNDEF:
-    case OP_IS_NULL:
-    case OP_IS_UNDEF_OR_NULL:
-    case OP_SEQ:
-    case OP_SNE:
-    case OP_NOP:
-    case OP_LINE_NUM:
-    case OP_COL_NUM:
-    case OP_LABEL:
-      return true;
-    default:
-      return false;
-  }
-}
-
 static bool jit_inline_receiver_is_this(const sv_func_t *f, int off) {
   uint8_t marks[JIT_INLINE_MAX_BYTECODE + 1];
   int sp = 0;
@@ -180,12 +99,12 @@ bool jit_inlineable(sv_func_t *f) {
     // These guards branch to the shared slow path, which invokes the whole
     // callee. Never emit them after an operation that may already have had an
     // observable effect.
-    if (seen_effect && jit_op_inline_restarts_callee_on_guard_failure(op)) return false;
+    if (seen_effect && (flags & SV_OPF_JIT_INLINE_GUARD_RESTART)) return false;
 
     if (seen_effect)
-      if (op != OP_JMP && !jit_op_inline_after_effect(op) && !jit_op_inline_side_effect(op)) return false;
+      if (op != OP_JMP && !(flags & (SV_OPF_JIT_INLINE_AFTER_EFFECT | SV_OPF_JIT_INLINE_SIDE_EFFECT))) return false;
 
-    if (jit_op_inline_side_effect(op)) seen_effect = true;
+    if (flags & SV_OPF_JIT_INLINE_SIDE_EFFECT) seen_effect = true;
     ip += sz;
   }
 
@@ -214,7 +133,7 @@ static bool jit_analyze_empty_object_reuse(sv_func_t *f) {
     if (op >= OP__COUNT) return false;
     int size = sv_op_size[op];
     if (!size || off + size > f->code_len
-      || jit_op_inline_side_effect(op)) return false;
+      || (sv_op_flags[op] & SV_OPF_JIT_INLINE_SIDE_EFFECT)) return false;
     if (!jit_inline_note_instruction(f, off, size, boundaries)) return false;
     off += size;
   }
@@ -2318,7 +2237,7 @@ void jit_emit_inline_body(
       default:
         Ant_Assert(false, "inlineable opcode has no emitter");
     }
-    if (jit_op_inline_side_effect(op)) seen_effect = true;
+    if (sv_op_flags[op] & SV_OPF_JIT_INLINE_SIDE_EFFECT) seen_effect = true;
     ip += sz;
   }
   
