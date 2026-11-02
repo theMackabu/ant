@@ -3,7 +3,7 @@ import { finish, literal } from '../prelude.mjs';
 
 const WARM_CALLS = 3000;
 
-const stderrFailures = 'operand depth analysis failed|codegen-failed|verif(y|ier)[^\\n]*(fail|error)';
+export const stderrFailures = 'operand depth analysis failed|codegen-failed|verif(y|ier)[^\\n]*(fail|error)';
 export const tierVariants = [
   { name: 'default', env: { ANT_DEBUG: 'dump/vm:op-warn' }, stderrFailures },
   { name: 'jitless', args: ['--jitless'], env: { ANT_DEBUG: 'dump/vm:op-warn' }, stderrFailures },
