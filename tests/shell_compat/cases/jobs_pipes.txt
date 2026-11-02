@@ -1,0 +1,78 @@
+while :; do echo y; done | head -3
+---
+while true; do echo line; done | head -n 2; echo "st=${PIPESTATUS[*]}"
+---
+f() { while :; do echo f; done; }; f | head -1
+---
+yes | while read l; do echo $l; done | head -2
+---
+seq 5 | while read n; do echo $((n*2)); done | tail -2
+---
+sleep 10 & pid=$!; kill $pid; wait $pid; echo "status $?"
+---
+sleep 10 & kill %1; wait %1; echo $?
+---
+sleep 0.2 & sleep 0.1 & wait -n; echo first; wait; echo all
+---
+( sleep 0.1; exit 3 ) & wait $!; echo $?
+---
+sleep 5 & jobs | sed 's/  */ /g'; kill %%; wait
+---
+kill -0 $$ && echo alive; kill -l 9; kill -l KILL
+---
+trap 'echo got usr1' USR1; kill -USR1 $$; sleep 0.1; echo after
+---
+trap 'echo term trapped; exit 7' TERM; kill $$; sleep 1; echo not-reached
+---
+trap '' INT; kill -INT $$; echo ignored
+---
+trap 'echo debug $BASH_COMMAND' DEBUG 2>/dev/null; trap - DEBUG; echo x
+---
+f() { trap 'echo returned' RETURN; echo in-f; }; f; echo done
+---
+coproc { read line; echo "got $line"; }; echo hello >&${COPROC[1]}; read -u ${COPROC[0]} reply; echo "$reply"
+---
+coproc UP { tr a-z A-Z; }; echo shout >&${UP[1]}; exec {UP[1]}>&-; read -u ${UP[0]} r; echo $r
+---
+exec {fd}>/tmp/ant_fdvar_test; echo via-fdvar >&$fd; exec {fd}>&-; cat /tmp/ant_fdvar_test; rm -f /tmp/ant_fdvar_test
+---
+exec 12>/tmp/ant_fd12; echo twelve >&12; exec 12>&-; cat /tmp/ant_fd12; rm /tmp/ant_fd12
+---
+printf '2\n' | { PS3='> '; select x in a b c; do echo "chose $x ($REPLY)"; break; done; } 2>/dev/null
+---
+printf '\n1\n' | { select x in one two; do echo $x; break; done; } 2>&1
+---
+shopt -s expand_aliases; alias greet='echo hello'
+greet world; unalias greet; greet 2>/dev/null || echo gone
+---
+alias ll='ls -l'; alias ll; alias | grep -c ll
+---
+read -t 0.1 x < <(sleep 1); echo "st=$?"
+---
+read -t 0 x <<< "data"; echo $?
+---
+printf '%(%Y)T\n' 0 | grep -c 1970; printf '%(%H:%M)T\n' 3600 | grep -q : && echo hm
+---
+set -o posix; x=5; readonly x; x=6; echo not-reached
+---
+set -o posix; shift 3; echo not-reached
+---
+umask 022; (umask 077; umask); umask; f=/tmp/ant_umask_t; rm -f $f; (umask 077; > $f); ls -l $f | cut -c1-10; rm -f $f
+---
+f() { echo hi "$1" >&2; if [ -n "$x" ]; then echo a; elif true; then :; else echo b; fi; for i in 1 2; do echo $i; done; while false; do :; done; case $x in a|b) echo ab;; *) ;; esac; x=$(ls | wc -l); a=(1 2); [[ -n $x && $y == z* ]] && echo ok; (( x++ )); { echo g; } > /dev/null; ( echo sub ); local v=1; }; declare -f f
+---
+g() { true; }; type g
+---
+h() { echo one; echo two & }; declare -f h
+---
+echo a b c; echo $_
+---
+x=$(echo a | (read y; echo $y) ); echo $x
+---
+{ echo out; echo err >&2; } |& tr a-z A-Z | sort
+---
+printf 'a\nb\nc\n' | { read first; while read rest; do echo "$first:$rest"; done; }
+---
+cat /dev/null | { echo nothing-read; } | cat
+---
+yes | head -c 5 | od -c | head -1 | tr -s ' '

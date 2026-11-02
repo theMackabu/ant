@@ -1,0 +1,45 @@
+ulimit -n 256; ulimit; ulimit -n; ulimit -a | grep -- '-n)'
+---
+ulimit -n 256; ulimit -n; (ulimit -n 128; ulimit -n); ulimit -n
+---
+declare -A m=([foo]=1 [bar]=2); echo $(( m[foo] + m[bar] )); (( m[foo] += 5 )); echo ${m[foo]}; k=bar; echo $(( m[$k] * 3 ))
+---
+a=(1 2 3); i=1; echo $(( a[i] + a[i+1] )); (( a[2]++ )); echo ${a[2]}
+---
+set -n; echo should-not-run
+---
+set -v; echo verbose-line 2>/dev/null; set +v
+---
+f() { local -; set -e; echo "in:$-"; }; f; echo "out:$-"
+---
+echo $BASH_VERSINFO ${#BASH_VERSINFO[@]}
+---
+set -e; echo "$SHELLOPTS"; set +e; shopt -s nullglob; echo "$BASHOPTS"
+---
+x='\u'; echo "${x@P}" | grep -c .
+---
+OPTERR=0; getopts a opt -z; echo "$opt"
+---
+g() { caller 0 | cut -d' ' -f2; }; h() { g; }; h
+---
+f() { echo "${BASH_LINENO[0]}"; }; f
+---
+echo -e '☺ \U0001F600' | od -An -tx1 | tr -s ' '
+---
+d=$(mktemp -d); cd $d; touch a.c b.c .x.c; GLOBIGNORE='b*'; echo *.c; cd /; rm -rf $d
+---
+enable -n echo; type -t echo; enable echo; type -t echo; enable -n echo; echo external | cat; enable echo
+---
+history; echo h=$?; logout 2>/dev/null; echo l=$?
+---
+help cd | head -1 | grep -c cd
+---
+f() { :; }; type -t f; type -t echo; type -t if
+---
+ulimit -n 200; sh -c 'ulimit -n'; (ulimit -n 100; sh -c 'ulimit -n'); sh -c 'ulimit -n'
+---
+echo $-; set -eu; echo $-
+---
+declare -A m=([b]=1 [a]=2 [c]=3 [zz]=4 [hello]=5 [k1]=6 [k2]=7); echo ${!m[@]}; echo ${m[@]}; declare -p m
+---
+declare -A n; for k in one two three four five; do n[$k]=x; done; unset 'n[two]'; n[two]=y; for k in "${!n[@]}"; do echo "$k=${n[$k]}"; done

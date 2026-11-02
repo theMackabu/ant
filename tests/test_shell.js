@@ -145,36 +145,86 @@ try {
   assert.strictEqual(await $`seq 1 10000 | wc -l`.text(), '10000\n');
   assert.strictEqual(await $`yes | head -1`.text(), 'y\n');
 
-  await expectShellRejection(() => $`${''}`, /executable cannot be empty/, TypeError);
-  for (const [invoke, pattern] of [
-    [() => $`while true; do echo bad; done`, /compound command.*while/i],
-    [() => $`whi\
-le true`, /compound command.*while/i],
-    [() => $`name=value echo bad`, /variable assignment/i],
-    [() => $`NA\
-ME=value echo bad`, /variable assignment/i],
-    [() => $`echo "$HOME"`, /parameter expansion/i],
-    [() => $`echo $((1 + 2))`, /arithmetic expansion/i],
-    [() => $`echo $(pwd)`, /command substitution/i]
-  ]) {
-    await expectShellRejection(invoke, pattern, SyntaxError);
-  }
+  const emptyCommand = await $`${''}`.nothrow();
+  assert.strictEqual(emptyCommand.exitCode, 127);
+  assert.match(decode(emptyCommand.stderr), /command not found/);
+  assert.strictEqual(await $`i=0; while [ $i -lt 3 ]; do echo $i; i=$((i + 1)); done`.text(), '0\n1\n2\n');
+  assert.strictEqual(await $`whi\
+le false; do :; done; echo after`.text(), 'after\n');
+  assert.strictEqual(await $`name=value sh -c 'echo $name'`.text(), 'value\n');
+  assert.strictEqual(await $`NA\
+ME=joined; echo $NAME`.text(), 'joined\n');
+  assert.strictEqual(await $`echo "$HOME"`.text(), `${process.env.HOME}\n`);
+  assert.strictEqual(await $`echo $((1 + 2))`.text(), '3\n');
+  assert.strictEqual(await $`cd ${tmpDir}; echo $(pwd)`.text(), `${tmpDir}\n`);
   assert.strictEqual(await $`echo '$HOME'`.text(), '$HOME\n');
   assert.strictEqual(await $`echo \$HOME`.text(), '$HOME\n');
   assert.strictEqual(await $`echo name=value`.text(), 'name=value\n');
+  assert.strictEqual(await $`x=outer; f() { local x=inner; echo \${x}; }; f; echo \${x:-unset}`.text(), 'inner\nouter\n');
 
-  const unsupportedCompoundPath = path.join(tmpDir, 'unsupported-compound.txt');
-  await expectShellRejection(
-    () => $`echo must-not-run > ${unsupportedCompoundPath}; while true; do echo bad; done`,
-    /compound command.*while/i,
-    SyntaxError
+  assert.strictEqual(await $`x=1; echo \${x:-unset} \${y:-default}`.text(), '1 default\n');
+  assert.strictEqual(await $`for f in ${['a b', 'c']}; do echo "[$f]"; done`.text(), '[a b]\n[c]\n');
+  assert.strictEqual(await $`echo ${'*'} ${'a  b'}`.text(), '* a  b\n');
+  assert.strictEqual(await $`x=${'a b'}; echo "$x" \${#x}`.text(), 'a b 3\n');
+  assert.strictEqual(await $`case foo in ${'f*'}) echo glob;; foo) echo literal;; esac`.text(), 'literal\n');
+  assert.strictEqual(await $`echo $((${5} + 1))`.text(), '6\n');
+  assert.strictEqual(await $`echo \`echo backquoted\``.text(), 'backquoted\n');
+  assert.strictEqual(
+    await $`cat <<EOF
+value=${'interpolated'} \${HOME:+home}
+EOF`.text(),
+    'value=interpolated home\n'
   );
-  assert.strictEqual(fs.existsSync(unsupportedCompoundPath), false);
+  assert.strictEqual(await $`printf '%s\n' c b a | sort | head -n 1`.text(), 'a\n');
+  assert.strictEqual(await $`f() { echo "fn:$1"; }; ${'f'} ${'arg'}`.text(), 'fn:arg\n');
+  const loopPath = path.join(tmpDir, 'loop.txt');
+  await $`for i in 1 2 3; do echo $i; done > ${loopPath}`;
+  assert.strictEqual(fs.readFileSync(loopPath, 'utf8'), '1\n2\n3\n');
+  assert.strictEqual(await $`while read -r line; do echo "<$line>"; done < ${loopPath}`.text(), '<1>\n<2>\n<3>\n');
+  const errexit = await $`set -e; false; echo unreachable`.nothrow();
+  assert.strictEqual(errexit.exitCode, 1);
+  assert.strictEqual(errexit.text(), '');
+  const arithError = await $`echo $((1 / 0)); echo same-line
+echo next-line`.nothrow();
+  assert.strictEqual(arithError.text(), 'next-line\n');
+  assert.match(decode(arithError.stderr), /division by 0/);
 
-  const cwdResult = await $`pwd; cd ${tmpDir}; pwd`;
+  assert.strictEqual(await $`yes | while read -r line; do echo $line; break; done`.text(), 'y\n');
+  assert.strictEqual(await $`printf 'header\na\nb\n' | { read -r first; cat; }`.text(), 'a\nb\n');
+  assert.strictEqual(await $`(echo one; sleep 0.05; echo two) | while read -r l; do echo "got $l"; done`.text(), 'got one\ngot two\n');
+  assert.strictEqual(await $`seq 3 | while read -r n; do echo $n; done | sort -r`.text(), '3\n2\n1\n');
+  assert.strictEqual(await $`shopt -s lastpipe; echo kept | read -r v; echo $v`.text(), 'kept\n');
+  assert.strictEqual(await $`echo tee-me | tee >(tr a-z A-Z) >/dev/null`.text(), 'TEE-ME\n');
+  assert.strictEqual(await $`diff <(printf 'a\n') <(printf 'a\n') && echo same`.text(), 'same\n');
+
+  assert.strictEqual(await $`seq 20000 | cat | while read -r l; do echo $l; done | while read -r l; do echo $l; done | while read -r l; do echo $l; done | while read -r l; do echo $l; done | while read -r l; do echo $l; done | while read -r l; do echo $l; done | tail -n 1`.text(), '20000\n');
+  assert.strictEqual(await $`n=0; while :; do echo $((n++)); done | head -n 2`.text(), '0\n1\n');
+  const realPid = await $`sleep 5 & echo $!; kill $!; wait`.nothrow();
+  const pid = Number(realPid.text().trim());
+  assert.ok(pid > 0 && pid < 1 << 30, `expected a real pid, got ${realPid.text()}`);
+  assert.throws(() => process.kill(pid, 0));
+  for (let i = 0; i < 3; i++) {
+    assert.strictEqual(await $`read -t 0.05 x < <(sleep 1); echo st=$?; echo fresh | (read -r y; echo $y)`.text(), 'st=142\nfresh\n');
+  }
+  const umaskBefore = process.umask();
+  await $`umask 077; ulimit -n 64; true`;
+  assert.strictEqual(process.umask(), umaskBefore);
+  const umaskFile = path.join(tmpDir, 'umask-file');
+  await $`(umask 077; : > ${umaskFile}); ulimit -n 100; sh -c 'ulimit -n' > ${umaskFile}.limit`;
+  assert.strictEqual(fs.statSync(umaskFile).mode & 0o777, 0o600);
+  assert.strictEqual(fs.readFileSync(`${umaskFile}.limit`, 'utf8'), '100\n');
+  assert.strictEqual(await $`coproc { read -r line; echo "got:$line"; }; echo ping >&\${COPROC[1]}; read -r -u \${COPROC[0]} reply; echo $reply`.text(), 'got:ping\n');
+  assert.strictEqual(await $`trap 'echo trapped' USR1; kill -USR1 $$; sleep 0.05; echo after`.text(), 'trapped\nafter\n');
+
+  const syntaxErrorPath = path.join(tmpDir, 'syntax-error.txt');
+  await expectShellRejection(() => $`echo must-not-run > ${syntaxErrorPath}; while true; do echo bad`, /expected 'done'/, SyntaxError);
+  assert.strictEqual(fs.existsSync(syntaxErrorPath), false);
+
+  const cwdResult = await $`pwd; cd ${tmpDir}; pwd; pwd -P`;
   const cwdLines = cwdResult.text().trim().split('\n');
-  assert.strictEqual(cwdLines.length, 2);
-  assert.strictEqual(cwdLines[1], fs.realpathSync(tmpDir));
+  assert.strictEqual(cwdLines.length, 3);
+  assert.strictEqual(cwdLines[1], tmpDir);
+  assert.strictEqual(cwdLines[2], fs.realpathSync(tmpDir));
 
   if (process.platform === 'win32') {
     const originalHome = process.env.HOME;
@@ -245,11 +295,14 @@ ME=value echo bad`, /variable assignment/i],
   assert.strictEqual(failedBuiltinRedirect.exitCode, 1);
   assert.match(decode(failedBuiltinRedirect.stderr), /no such file or directory/i);
 
-  const unsupportedFdPath = path.join(tmpDir, 'unsupported-fd.txt');
-  await expectShellRejection(() => $`printf must-not-run 2>${unsupportedFdPath}`, /numeric file descriptor/, SyntaxError);
-  await expectShellRejection(() => $`printf must-not-run 2>&10`, /numeric file descriptor/, SyntaxError);
-  await expectShellRejection(() => $`printf must-not-run 2>&1foo`, /numeric file descriptor/, SyntaxError);
-  assert.strictEqual(fs.existsSync(unsupportedFdPath), false);
+  const stderrPath = path.join(tmpDir, 'stderr.txt');
+  const stderrRedirect = await $`ls ${path.join(tmpDir, 'missing-fd')} 2>${stderrPath}`.nothrow();
+  assert.notStrictEqual(stderrRedirect.exitCode, 0);
+  assert.strictEqual(stderrRedirect.stderr.length, 0);
+  assert.ok(fs.readFileSync(stderrPath, 'utf8').length > 0);
+  const badFd = await $`printf x 2>&7`.nothrow();
+  assert.strictEqual(badFd.exitCode, 1);
+  assert.match(decode(badFd.stderr), /bad file descriptor/i);
 
   const merged = await $`ls ${path.join(tmpDir, 'missing')} 2>&1`.nothrow();
   assert.notStrictEqual(merged.exitCode, 0);
@@ -293,13 +346,16 @@ ME=value echo bad`, /variable assignment/i],
   assert.strictEqual(exitedEarly.text(), 'before');
   const missingCommand = await $`ant-shell-command-that-does-not-exist`.nothrow();
   assert.strictEqual(missingCommand.exitCode, 127);
-  assert.ok(decode(missingCommand.stderr).includes('ENOENT'));
+  assert.match(decode(missingCommand.stderr), /ant-shell-command-that-does-not-exist: command not found/);
   const missingInPipeline = await $`ant-shell-command-that-does-not-exist | cat`.nothrow();
   assert.strictEqual(missingInPipeline.exitCode, 0);
-  assert.ok(decode(missingInPipeline.stderr).includes('ENOENT'));
+  assert.match(decode(missingInPipeline.stderr), /command not found/);
   const missingAtPipelineEnd = await $`printf input | ant-shell-command-that-does-not-exist`.nothrow();
   assert.strictEqual(missingAtPipelineEnd.exitCode, 127);
-  assert.ok(decode(missingAtPipelineEnd.stderr).includes('ENOENT'));
+  assert.match(decode(missingAtPipelineEnd.stderr), /command not found/);
+  const silencedMissing = await $`ant-shell-command-that-does-not-exist 2>/dev/null`.nothrow();
+  assert.strictEqual(silencedMissing.exitCode, 127);
+  assert.strictEqual(silencedMissing.stderr.length, 0);
   let thrown;
   try {
     await $`exit 8`;
@@ -341,7 +397,7 @@ ME=value echo bad`, /variable assignment/i],
 
   const invalidSeparatorPath = path.join(tmpDir, 'invalid-separator.txt');
   for (const invoke of [() => $`; echo unexpected > ${invalidSeparatorPath}`, () => $`echo one;; echo unexpected > ${invalidSeparatorPath}`]) {
-    await expectShellRejection(invoke, /expected a command|unexpected separator/i, SyntaxError);
+    await expectShellRejection(invoke, /expected a command|unexpected (separator|token)/i, SyntaxError);
   }
   assert.strictEqual(fs.existsSync(invalidSeparatorPath), false);
   assert.strictEqual(

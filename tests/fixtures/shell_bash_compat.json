@@ -1,0 +1,3190 @@
+[
+ {
+  "src": "x=1; declare -n r=x; echo $r; r=2; echo $x; declare -p r",
+  "out": "1\n2\ndeclare -n r=\"x\"\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { local -n out=$1; out=assigned; }; f v; echo $v",
+  "out": "assigned\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=(1 2 3); declare -n ra=a; echo ${ra[1]} ${#ra[@]}; ra+=(4); echo ${a[@]}",
+  "out": "2 3\n1 2 3 4\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=t; declare -n r=x; echo ${!r}; unset r; echo \"[${x-unset}]\"",
+  "out": "x\n[unset]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -e; trap 'echo err-trapped' ERR; false; echo never",
+  "out": "err-trapped\n",
+  "code": 1,
+  "err": false
+ },
+ {
+  "src": "trap 'echo \"err $?\"' ERR; false; echo after; true; echo ok",
+  "out": "err 1\nafter\nok\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "shopt -s lastpipe; echo hi | read x; echo \"[$x]\"",
+  "out": "[hi]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "shopt -s lastpipe; printf '1\\n2\\n' | while read n; do total=$((total+n)); done; echo $total",
+  "out": "3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo a b c; echo $_",
+  "out": "a b c\nc\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo hello | tee >(tr a-z A-Z) >/dev/null; wait",
+  "out": "HELLO\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=$(echo abc | tee >(wc -c) >/dev/null); echo \"[$x]\"",
+  "out": "[4]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { local x; x=$1; echo ${x^}; }; f word",
+  "out": "Word\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "declare -n undefined_ref; undefined_ref=target_var; echo ${!undefined_ref}",
+  "out": "target_var\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "v1=a v2=b; for n in v1 v2; do declare -n cur=$n; echo $cur; done",
+  "out": "a\nb\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo \"$_\"; }; true last-arg; f arg1 arg2; echo \"$_\"",
+  "out": "last-arg\narg2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "trap 'echo trap-err' ERR; if false; then :; fi; false || true; echo fine",
+  "out": "fine\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "ulimit -n 256; ulimit; ulimit -n; ulimit -a | grep -- '-n)'",
+  "out": "unlimited\n256\nopen files                          (-n) 256\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "ulimit -n 256; ulimit -n; (ulimit -n 128; ulimit -n); ulimit -n",
+  "out": "256\n128\n256\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "declare -A m=([foo]=1 [bar]=2); echo $(( m[foo] + m[bar] )); (( m[foo] += 5 )); echo ${m[foo]}; k=bar; echo $(( m[$k] * 3 ))",
+  "out": "3\n6\n6\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=(1 2 3); i=1; echo $(( a[i] + a[i+1] )); (( a[2]++ )); echo ${a[2]}",
+  "out": "5\n4\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -n; echo should-not-run",
+  "out": "",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -v; echo verbose-line 2>/dev/null; set +v",
+  "out": "verbose-line\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { local -; set -e; echo \"in:$-\"; }; f; echo \"out:$-\"",
+  "out": "in:ehBc\nout:hBc\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $BASH_VERSINFO ${#BASH_VERSINFO[@]}",
+  "out": "5 6\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -e; echo \"$SHELLOPTS\"; set +e; shopt -s nullglob; echo \"$BASHOPTS\"",
+  "out": "braceexpand:errexit:hashall:interactive-comments\ncheckwinsize:cmdhist:complete_fullquote:extquote:force_fignore:globasciiranges:globskipdots:hostcomplete:interactive_comments:nullglob:patsub_replacement:progcomp:promptvars:sourcepath\n",
+  "code": 0,
+  "err": false,
+  "posix": {
+   "out": "braceexpand:errexit:hashall:interactive-comments:posix\ncheckwinsize:cmdhist:complete_fullquote:expand_aliases:extquote:force_fignore:globasciiranges:globskipdots:hostcomplete:inherit_errexit:interactive_comments:nullglob:patsub_replacement:progcomp:promptvars:shift_verbose:sourcepath\n",
+   "code": 0,
+   "err": false
+  }
+ },
+ {
+  "src": "x='\\u'; echo \"${x@P}\" | grep -c .",
+  "out": "1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "OPTERR=0; getopts a opt -z; echo \"$opt\"",
+  "out": "?\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "g() { caller 0 | cut -d' ' -f2; }; h() { g; }; h",
+  "out": "h\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo \"${BASH_LINENO[0]}\"; }; f",
+  "out": "1\n",
+  "code": 0,
+  "err": false,
+  "posix": {
+   "out": "2\n",
+   "code": 0,
+   "err": false
+  }
+ },
+ {
+  "src": "echo -e '☺ \\U0001F600' | od -An -tx1 | tr -s ' '",
+  "out": " e2 98 ba 20 5c 55 30 30 30 31 46 36 30 30 0a\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "d=$(mktemp -d); cd $d; touch a.c b.c .x.c; GLOBIGNORE='b*'; echo *.c; cd /; rm -rf $d",
+  "out": ".x.c a.c\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "enable -n echo; type -t echo; enable echo; type -t echo; enable -n echo; echo external | cat; enable echo",
+  "out": "file\nbuiltin\nexternal\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "history; echo h=$?; logout 2>/dev/null; echo l=$?",
+  "out": "h=0\nl=1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "help cd | head -1 | grep -c cd",
+  "out": "1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { :; }; type -t f; type -t echo; type -t if",
+  "out": "function\nbuiltin\nkeyword\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "ulimit -n 200; sh -c 'ulimit -n'; (ulimit -n 100; sh -c 'ulimit -n'); sh -c 'ulimit -n'",
+  "out": "200\n100\n200\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $-; set -eu; echo $-",
+  "out": "hBc\nehuBc\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "declare -A m=([b]=1 [a]=2 [c]=3 [zz]=4 [hello]=5 [k1]=6 [k2]=7); echo ${!m[@]}; echo ${m[@]}; declare -p m",
+  "out": "hello c b a zz k1 k2\n5 3 1 2 4 6 7\ndeclare -A m=([hello]=\"5\" [c]=\"3\" [b]=\"1\" [a]=\"2\" [zz]=\"4\" [k1]=\"6\" [k2]=\"7\" )\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "declare -A n; for k in one two three four five; do n[$k]=x; done; unset 'n[two]'; n[two]=y; for k in \"${!n[@]}\"; do echo \"$k=${n[$k]}\"; done",
+  "out": "four=x\ntwo=y\nthree=x\none=x\nfive=x\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo hello",
+  "out": "hello\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=1; y=$x; echo \"$x$y\"",
+  "out": "11\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=1 b=$a sh -c 'echo $a $b'",
+  "out": "1 1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -- a \"b c\" d; echo $#; for x in \"$@\"; do echo \"[$x]\"; done",
+  "out": "3\n[a]\n[b c]\n[d]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -- a \"b c\" d; for x in $@; do echo \"[$x]\"; done",
+  "out": "[a]\n[b]\n[c]\n[d]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -- a \"b c\" d; echo \"$*\"; IFS=,; echo \"$*\"",
+  "out": "a b c d\na,b c,d\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=\"a  b   c\"; echo $x; echo \"$x\"",
+  "out": "a b c\na  b   c\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "IFS=:; x=\"a:b::c\"; set -- $x; echo $#; printf '<%s>' \"$@\"; echo",
+  "out": "4\n<a><b><><c>\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=\" lead trail \"; set -- $x; echo $#",
+  "out": "2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo ${x:-default} ${x-dash}; x=; echo \"[${x:-d}] [${x-d}] [${x:+p}] [${x+p}]\"",
+  "out": "default dash\n[d] [] [] [p]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "unset y; echo ${y:=assigned}; echo $y",
+  "out": "assigned\nassigned\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=hello.tar.gz; echo ${x%.*} ${x%%.*} ${x#*.} ${x##*.}",
+  "out": "hello.tar hello tar.gz gz\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=abcabc; echo ${x/b/X} ${x//b/X} ${x/#a/S} ${x/%c/E} ${#x}",
+  "out": "aXcabc aXcaXc Sbcabc abcabE 6\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=Hello; echo ${x^^} ${x,,} ${x^} ${x,}",
+  "out": "HELLO hello Hello hello\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=abcdef; echo ${x:2} ${x:1:3} ${x: -2} ${x:(-3):2}",
+  "out": "cdef bcd ef de\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $((1+2*3)) $((10/3)) $((10%3)) $((2**10)) $((1<<4)) $((7&3)) $((5|2)) $((5^1)) $((!0)) $((~0))",
+  "out": "7 3 1 1024 16 3 7 4 1 -1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "i=5; echo $((i++)) $i $((++i)) $((i+=10)) $((i*=2)) $i",
+  "out": "5 6 7 17 34 34\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $((0x10)) $((010)) $((2#101)) $((36#z))",
+  "out": "16 8 5 35\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(( 3 > 2 ? 10 : 20 )) $(( (1+2)*3 )) $(( -5 / 2 )) $(( -5 % 3 ))",
+  "out": "10 9 -2 -2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=3; y=x; echo $((y+1)); z=\"x*2\"; echo $((z))",
+  "out": "4\n6\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(echo a $(echo b)) `echo c`",
+  "out": "a b c\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=$(printf 'a\\n\\n\\n'); echo \"[$x]\"",
+  "out": "[a]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "for i in 1 2 3; do if [ $i = 2 ]; then continue; fi; echo $i; done",
+  "out": "1\n3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "for i in 1 2 3; do for j in a b; do [ $j = b ] && break 2; echo $i$j; done; done",
+  "out": "1a\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "i=0; until [ $i -ge 3 ]; do echo $i; i=$((i+1)); done",
+  "out": "0\n1\n2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "i=0; while :; do i=$((i+1)); [ $i -gt 4 ] && break; done; echo $i",
+  "out": "5\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "for ((i=0; i<3; i++)); do echo c$i; done",
+  "out": "c0\nc1\nc2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "for ((i=0, j=10; i<3; i++, j--)); do echo $i $j; done",
+  "out": "0 10\n1 9\n2 8\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "case abc in a*c) echo one;; *) echo two;; esac",
+  "out": "one\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "case x in a|x) echo alt;; esac; case foo in [fg]oo) echo br;; esac",
+  "out": "alt\nbr\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "case b in a) echo a;& b) echo b;& c) echo c;; d) echo d;; esac",
+  "out": "b\nc\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "case \"a.txt\" in *.txt) echo txt;;& *.*) echo dot;; esac",
+  "out": "txt\ndot\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "if false; then echo 1; elif true; then echo 2; else echo 3; fi",
+  "out": "2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "if ! false; then echo neg; fi; ! true; echo $?",
+  "out": "neg\n1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "true && echo a || echo b; false && echo c || echo d",
+  "out": "a\nd\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { local x=inner; echo $x; }; x=outer; f; echo $x",
+  "out": "inner\nouter\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { x=changed; }; x=orig; f; echo $x",
+  "out": "changed\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo $1-$2-$#; shift; echo $1; }; f p q r",
+  "out": "p-q-3\nq\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { return 7; }; f; echo $?",
+  "out": "7\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "g() { echo \"in g\"; }; h() { g; echo after; }; h",
+  "out": "in g\nafter\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "fib() { if [ $1 -le 1 ]; then echo $1; else echo $(( $(fib $(($1-1))) + $(fib $(($1-2))) )); fi; }; fib 10",
+  "out": "55\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "( x=sub; echo $x ); echo \"[$x]\"",
+  "out": "sub\n[]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "{ echo a; echo b; } | wc -l | tr -d ' '",
+  "out": "2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo a; (exit 3); echo $?",
+  "out": "a\n3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=1; { x=2; }; echo $x",
+  "out": "2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"a b\" | { read p q; echo \"$q-$p\"; }",
+  "out": "b-a\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf 'x y z\\n' | { read a rest; echo \"$rest\"; }",
+  "out": "y z\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf 'one\\ntwo\\n' | while read line; do echo \"got $line\"; done",
+  "out": "got one\ngot two\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf 'a:b:c\\n' | { IFS=: read x y z; echo $z$y$x; }",
+  "out": "cba\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf 'a\\\\tb\\n' | { read x; echo \"$x\"; }; printf 'a\\\\tb\\n' | { read -r x; echo \"$x\"; }",
+  "out": "atb\na\\tb\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=(1 2 3); a+=(4 5); echo ${a[@]} ${#a[@]} ${a[-1]} ${!a[@]}",
+  "out": "1 2 3 4 5 5 5 0 1 2 3 4\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=(); a[5]=x; a[2]=y; echo ${#a[@]} ${!a[@]} \"${a[@]}\"",
+  "out": "2 2 5 y x\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=(x y z); unset 'a[1]'; echo ${#a[@]} ${a[@]}",
+  "out": "2 x z\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "declare -A m; m[foo]=1; m[bar]=2; echo ${m[foo]} ${m[bar]} ${#m[@]}",
+  "out": "1 2 2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=(a b c d e); echo ${a[@]:1:2} ${a[@]: -2}",
+  "out": "b c d e\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=(\"x y\" z); for e in \"${a[@]}\"; do echo \"<$e>\"; done; echo \"${#a[0]}\"",
+  "out": "<x y>\n<z>\n3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo {a,b}{1,2} {1..10..3} {c..a} {01..03} x{,y}",
+  "out": "a1 a2 b1 b2 1 4 7 10 c b a 01 02 03 x xy\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo ~ | grep -q / && echo tilde",
+  "out": "tilde\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo '$HOME' \"\\$HOME\" \\$HOME",
+  "out": "$HOME $HOME $HOME\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"a\\\"b\" 'c\\d' \"e\\\\f\" \"g\\$h\"",
+  "out": "a\"b c\\d e\\f g$h\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $'tab\\there' $'nl\\\\n'",
+  "out": "tab\there nl\\n\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%5s|%-5s|%05d|%x|%o|%e|%.2f|%c\\n' ab cd 42 255 8 1234.5 3.14159 xyz",
+  "out": "   ab|cd   |00042|ff|10|1.234500e+03|3.14|x\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%s,' a b c; echo; printf '%d\\n' 1 2 3",
+  "out": "a,b,c,\n1\n2\n3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%b\\n' 'a\\tb'; printf '%q\\n' \"a b'c\"",
+  "out": "a\tb\na\\ b\\'c\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%s\\n' \"$(printf '%03d' 7)\"",
+  "out": "007\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo -n no-newline; echo; echo -e 'a\\tb'; echo -E 'a\\tb'",
+  "out": "no-newline\na\tb\na\\tb\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "test 1 -eq 1 && echo eq; [ \"a\" = \"b\" ] || echo ne; [ -z \"\" ] && echo empty; [ -n x ] && echo nonempty",
+  "out": "eq\nne\nempty\nnonempty\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[ 3 -gt 2 -a 1 -lt 2 ] && echo and; [ ! -e /nonexistent ] && echo noexist; [ -d / ] && echo dir",
+  "out": "and\nnoexist\ndir\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[[ abc == a* ]] && echo glob; [[ abc =~ ^a(b)c$ ]] && echo \"re ${BASH_REMATCH[1]}\"",
+  "out": "glob\nre b\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[[ -n x && ( 1 -eq 2 || 2 -eq 2 ) ]] && echo complex; [[ ! a > b ]] && echo lt",
+  "out": "complex\nlt\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=\"a b\"; [[ $x == \"a b\" ]] && echo nosplit",
+  "out": "nosplit\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "(( 5 > 3 )) && echo arith; (( 0 )) || echo zero",
+  "out": "arith\nzero\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "let x=3+4; echo $x; let \"y = x * 2\"; echo $y",
+  "out": "7\n14\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "cat <<EOF\nline $((1+1))\n  indented \\$literal\nEOF",
+  "out": "line 2\n  indented $literal\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "cat <<'EOF'\nno $expansion here\nEOF",
+  "out": "no $expansion here\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "cat <<-EOF\n\ttab stripped\n\tEOF",
+  "out": "tab stripped\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "cat <<<\"here string\"",
+  "out": "here string\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo hi > /tmp/ant_shell_t1; cat /tmp/ant_shell_t1; echo more >> /tmp/ant_shell_t1; cat < /tmp/ant_shell_t1; rm -f /tmp/ant_shell_t1",
+  "out": "hi\nhi\nmore\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "{ echo out; echo err >&2; } 2>&1 | sort",
+  "out": "err\nout\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "ls /nonexistent_ant 2>/dev/null; echo st=$?",
+  "out": "st=2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo to-stderr 1>&2 2>/dev/null",
+  "out": "",
+  "code": 0,
+  "err": true
+ },
+ {
+  "src": "x=$(echo err >&2; echo out); echo \"$x\"",
+  "out": "out\n",
+  "code": 0,
+  "err": true
+ },
+ {
+  "src": "echo a | tee /dev/null | cat",
+  "out": "a\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "exec 3>/tmp/ant_shell_t2; echo three >&3; exec 3>&-; cat /tmp/ant_shell_t2; rm -f /tmp/ant_shell_t2",
+  "out": "three\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo \"fn out\"; } ; f > /tmp/ant_shell_t3; cat /tmp/ant_shell_t3; rm /tmp/ant_shell_t3",
+  "out": "fn out\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "while read l; do echo \"[$l]\"; done <<EOF\na\nb\nEOF",
+  "out": "[a]\n[b]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "d=$(mktemp -d); touch $d/passwd $d/pass.txt $d/other; for f in $d/pass*; do echo ${f#$d/}; done; rm -rf $d",
+  "out": "pass.txt\npasswd\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo /nonexistent-dir/x*; shopt -s nullglob; echo /nonexistent-dir/x*; echo end",
+  "out": "/nonexistent-dir/x*\n\nend\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -e; false || true; echo survived; (false); echo notreached",
+  "out": "survived\n",
+  "code": 1,
+  "err": false
+ },
+ {
+  "src": "set -u; echo ${undefined_var:-ok}; echo $undefined_var; echo after",
+  "out": "ok\n",
+  "code": 127,
+  "err": true
+ },
+ {
+  "src": "x=5; readonly x; x=6; echo after",
+  "out": "",
+  "code": 1,
+  "err": true,
+  "posix": {
+   "out": "",
+   "code": 127,
+   "err": true
+  }
+ },
+ {
+  "src": "f() { echo $FUNCNAME; }; f",
+  "out": "f\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=abc; echo ${!x:-indirect-unset}; y=x; echo ${!y}",
+  "out": "indirect-unset\nabc\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=\"it's\"; echo ${x@Q}",
+  "out": "'it'\\''s'\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "eval 'a=1; b=2'; echo $a$b; cmd='echo evaled'; eval $cmd",
+  "out": "12\nevaled\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "type echo; command -v ls >/dev/null && echo has-ls",
+  "out": "echo is a shell builtin\nhas-ls\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "getopts ab: opt -a; echo $opt",
+  "out": "a\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "while getopts \"ab:c\" o -a -b val -c; do echo \"$o ${OPTARG-}\"; done",
+  "out": "a \nb val\nc \n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -- -x -y foo; while getopts xy o; do echo $o; done; shift $((OPTIND-1)); echo \"$@\"",
+  "out": "x\ny\nfoo\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "trap 'echo bye' EXIT; echo body",
+  "out": "body\nbye\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=1; export x; sh -c 'echo $x'; unset x; sh -c 'echo \"[$x]\"'",
+  "out": "1\n[]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "FOO=bar env | grep ^FOO=",
+  "out": "FOO=bar\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo $XX; }; XX=tmp f; echo \"[$XX]\"",
+  "out": "tmp\n[]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(( $(echo 3) + 4 ))",
+  "out": "7\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "n=0; for x in a b c; do n=$((n+1)); done; echo $n",
+  "out": "3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "mapfile -t arr <<EOF\nl1\nl2\nEOF\necho ${#arr[@]} ${arr[1]}",
+  "out": "2 l2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%s\\n' c b a | sort | head -2 | tail -1",
+  "out": "b\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(( 9223372036854775807 + 1 ))",
+  "out": "-9223372036854775808\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=$'a\\nb'; echo \"$x\" | wc -l | tr -d ' '",
+  "out": "2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"$(echo \"nested \\\"quotes\\\"\")\"",
+  "out": "nested \"quotes\"\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "v=$(cat <<EOF\nheredoc in subst\nEOF\n); echo \"$v\"",
+  "out": "heredoc in subst\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $((1/0)); echo sameline\necho nextline",
+  "out": "nextline\n",
+  "code": 0,
+  "err": true,
+  "posix": {
+   "out": "",
+   "code": 127,
+   "err": true
+  }
+ },
+ {
+  "src": "echo a; echo b >&2; echo c",
+  "out": "a\nc\n",
+  "code": 0,
+  "err": true
+ },
+ {
+  "src": "set -o pipefail; false | true; echo $?; set +o pipefail; false | true; echo $?",
+  "out": "1\n0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "true | false; echo ${PIPESTATUS[@]}",
+  "out": "0 1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=10; f() { local x; x=20; g; }; g() { echo $x; }; f; echo $x",
+  "out": "20\n10\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "i=0; while [ $i -lt 1000 ]; do i=$((i+1)); done; echo $i",
+  "out": "1000\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "s=\"\"; for i in {1..5}; do s=\"$s$i\"; done; echo $s",
+  "out": "12345\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo ${#}; set -- 1 2 3 4 5 6 7 8 9 10 11; echo ${10} ${11} $10",
+  "out": "0\n10 11 10\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -- 1 2 3 4 5; echo \"${@:2:3}\"; echo \"${*: -2}\"",
+  "out": "2 3 4\n4 5\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=aXbXc; IFS=X read -ra parts <<< \"$x\"; echo ${parts[1]} ${#parts[@]}",
+  "out": "b 3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "cd /tmp && pwd; cd - >/dev/null; echo back",
+  "out": "/tmp\nback\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "pushd /tmp >/dev/null; popd >/dev/null; echo ok",
+  "out": "ok\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(( 2 ** 62 * 2 ))",
+  "out": "-9223372036854775808\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x='*'; echo \"$x\"",
+  "out": "*\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "shopt -s extglob; case foo.txt in @(*.txt|*.md)) echo ext;; esac; [[ abc == +(a|b|c) ]] && echo plus",
+  "out": "",
+  "code": 2,
+  "err": true
+ },
+ {
+  "src": "shopt -s extglob\ncase foo.txt in @(*.txt|*.md)) echo ext;; esac; [[ abc == +(a|b|c) ]] && echo plus; p='@(x|y)'; case y in $p) echo var-pattern;; esac",
+  "out": "ext\nplus\nvar-pattern\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[[ abc == +(a|b|c) ]] && echo cond-always; p='@(a|b)'; case a in $p) echo on;; *) echo literal;; esac",
+  "out": "cond-always\nliteral\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "shopt -s extglob\nx=aabbcc; echo ${x//+(b)/X} ${x##+(a)}; d=$(mktemp -d); touch $d/a $d/b $d/zz; cd $d; echo !(zz); cd /; rm -rf $d",
+  "out": "aaXcc bbcc\na b\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "str=\"hello world\"; echo ${str// /_}; echo ${str/#hello/bye}; arr=(one two); echo ${arr[@]/o/0}",
+  "out": "hello_world\nbye world\n0ne tw0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "declare -i n=5; n+=3; echo $n; declare -l lo=ABC; echo $lo; declare -u up=abc; echo $up",
+  "out": "8\nabc\nABC\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=5; declare -p x; a=(1 2); declare -p a",
+  "out": "declare -- x=\"5\"\ndeclare -a a=([0]=\"1\" [1]=\"2\")\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo \"$@\"; }; f \"a b\" c",
+  "out": "a b c\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $((RANDOM >= 0))",
+  "out": "1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"${x:-$(echo lazy)}\"",
+  "out": "lazy\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "unset z; echo \"${z:-a b}\" | wc -w | tr -d ' '; set -- ${z:-a b}; echo $#; set -- ${z:-\"a b\"}; echo $#",
+  "out": "2\n2\n1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=$( (echo a; echo b) | tr '\\n' ,); echo $x",
+  "out": "a,b,\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "true; echo $?; false; echo $?; ! false; echo $?",
+  "out": "0\n1\n0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": ": ${unsetvar:=foo}; echo $unsetvar",
+  "out": "foo\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=x; case $a in (x) echo paren;; esac",
+  "out": "paren\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo `echo \\`echo nested\\``",
+  "out": "nested\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { cat; }; echo piped | f",
+  "out": "piped\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo start; return; echo never; }; f",
+  "out": "start\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "for i in 1 2; do (( i == 1 )) && continue; echo $i; done",
+  "out": "2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $((  010 + 0x10 + 2#11 ))",
+  "out": "27\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"$((1, 2, 3))\"",
+  "out": "3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=7; (( x -= 2, x *= 3 )); echo $x",
+  "out": "15\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(( (5 > 3) && (2 > 1) )) $(( 0 || 0 ))",
+  "out": "1 0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { local -a arr=(1 2 3); echo ${#arr[@]}; }; f",
+  "out": "3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "exit 3",
+  "out": "",
+  "code": 3,
+  "err": false
+ },
+ {
+  "src": "false",
+  "out": "",
+  "code": 1,
+  "err": false
+ },
+ {
+  "src": "echo before; exit 4; echo after",
+  "out": "before\n",
+  "code": 4,
+  "err": false
+ },
+ {
+  "src": "f() { exit 5; }; f; echo no",
+  "out": "",
+  "code": 5,
+  "err": false
+ },
+ {
+  "src": "(exit 6); echo $?",
+  "out": "6\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=$(exit 7); echo $?",
+  "out": "7\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "nonexistent_command_xyz; echo $?",
+  "out": "127\n",
+  "code": 0,
+  "err": true
+ },
+ {
+  "src": "nonexistent_command_xyz 2>/dev/null; echo $?",
+  "out": "127\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"a\" > /dev/null; echo done",
+  "out": "done\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "read x <<< \"from herestring\"; echo $x",
+  "out": "from herestring\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "while IFS= read -r line; do echo \"($line)\"; done <<'EOF'\n  spaced  line  \nback\\slash\nEOF",
+  "out": "(  spaced  line  )\n(back\\slash)\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "cnt=0; while read -r l; do cnt=$((cnt+1)); done < /etc/hosts; [ $cnt -gt 0 ] && echo counted",
+  "out": "counted\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(( 5 - -3 )) $(( - - 4 ))",
+  "out": "8 4\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=5; b=a; echo $(( b + 1 ))",
+  "out": "6\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo ${#nonexistent}",
+  "out": "0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=abc; echo ${x:5} \"[${x:1:0}]\"",
+  "out": "[]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "IFS=; x=\"a b c\"; set -- $x; echo $#",
+  "out": "1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "unset IFS; x=\"a\tb\nc\"; set -- $x; echo $#",
+  "out": "3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"$(( 1 + 1 ))\" \"$[ 2 + 2 ]\"",
+  "out": "2 4\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo a\\\nb",
+  "out": "ab\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"line1\nline2\"",
+  "out": "line1\nline2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=1; f() { echo $x; local x=2; echo $x; }; f; echo $x",
+  "out": "1\n2\n1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo -- -n; echo -n -- x; echo",
+  "out": "-- -n\n-- x\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%-3s|%3d|%+d|% d\\n' a 5 5 5",
+  "out": "a  |  5|+5| 5\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%.3s\\n' abcdef; printf '%5.1f\\n' 3.14159; printf '%g %g %g\\n' 0.0001 100000 1e10",
+  "out": "abc\n  3.1\n0.0001 100000 1e+10\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf 'no newline'",
+  "out": "no newline",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%d%%\\n' 50",
+  "out": "50%\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%s\\n'",
+  "out": "\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(printf '%s' 'a b')",
+  "out": "a b\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "d=$(mktemp -d); touch $d/passwd; cd $d; set -f; echo pass*; set +f; echo pass*; cd /; rm -rf $d",
+  "out": "pass*\npasswd\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x='a*'; case abc in $x) echo unquoted-pat;; esac; case abc in \"$x\") echo quoted;; *) echo literal;; esac",
+  "out": "unquoted-pat\nliteral\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=abc; [[ $x == \"a\"* ]] && echo mixed; [[ $x == 'a*' ]] || echo literal-quoted",
+  "out": "mixed\nliteral-quoted\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[[ 10 -lt 9 ]] || echo numeric; [[ 10 < 9 ]] && echo string",
+  "out": "numeric\nstring\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[[ -z \"\" && -n a ]] && echo both",
+  "out": "both\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[ \"$x\" ] || echo empty-test",
+  "out": "empty-test\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[ -f /etc/hosts ] && echo file; [ -r /etc/hosts ] && echo readable; [ -x /bin/sh ] && echo exec",
+  "out": "file\nreadable\nexec\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo \"${FUNCNAME[0]} ${#FUNCNAME[@]}\"; }; g() { f; }; g",
+  "out": "f 2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(( 1 ? 2 : 3 )) $(( 0 ? 2 : 3 ))",
+  "out": "2 3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=( $(echo a b c) ); echo ${#x[@]}",
+  "out": "3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "declare -A h=([one]=1 [two]=2); echo ${h[two]}; for k in \"${!h[@]}\"; do echo $k; done | sort",
+  "out": "2\none\ntwo\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "words=\"one two three\"; for w in $words; do echo $w; done",
+  "out": "one\ntwo\nthree\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(( 7 / 2 * 2 )) $(( 2 ** 3 ** 2 ))",
+  "out": "6 512\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=1; a+=2; echo $a; b=(x); b+=y; echo ${b[@]}",
+  "out": "12\nxy\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo ${PWD:+set}",
+  "out": "set\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $((10#08 + 1))",
+  "out": "9\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=$(echo); echo \"[$x]\"",
+  "out": "[]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"$(echo a; exit 3)\" $?",
+  "out": "a 3\n",
+  "code": 0,
+  "err": false,
+  "posix": {
+   "out": "a 0\n",
+   "code": 0,
+   "err": false
+  }
+ },
+ {
+  "src": "v=1; (v=2; echo $v); echo $v",
+  "out": "2\n1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "v=1; echo $(v=2; echo $v) $v",
+  "out": "2 1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo hello | read x; echo \"[$x]\"",
+  "out": "[]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "i=0; f() { i=$((i+1)); [ $i -lt 5 ] && f; }; f; echo $i",
+  "out": "5\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "case \"\" in \"\") echo empty-case;; esac",
+  "out": "empty-case\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "case x in *) ;; esac; echo $?",
+  "out": "0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "for x in; do echo never; done; echo $?",
+  "out": "0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -- a b; for x; do echo $x; done",
+  "out": "a\nb\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=\"a'b\"; echo \"$x\" '$x'",
+  "out": "a'b $x\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"${undefined-}\" end",
+  "out": " end\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "t=\"a:b:c\"; echo ${t//:/ }; echo ${t%%:*}; echo ${t#*:}",
+  "out": "a b c\na\nb:c\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "p=/usr/local/bin/tool; echo ${p##*/} ${p%/*}",
+  "out": "tool /usr/local/bin\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "s=\"Hello World\"; echo ${s,,} ${s^^}; echo ${s:0:1}${s: -1}",
+  "out": "hello world HELLO WORLD\nHd\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "n=3; echo $(( n * (n + 1) / 2 ))",
+  "out": "6\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "d=$(mktemp -d); cd $d; touch a.txt b.txt c.md .hidden; echo *; echo *.txt; echo ?.md; echo [ab]*; echo [!a]*; echo .*; cd /; rm -rf $d",
+  "out": "a.txt b.txt c.md\na.txt b.txt\nc.md\na.txt b.txt\nb.txt c.md\n.hidden\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "d=$(mktemp -d); cd $d; mkdir -p x/y z; touch x/1 x/y/2 z/3; echo */; echo */*; shopt -s globstar; echo **/2; cd /; rm -rf $d",
+  "out": "x/ z/\nx/1 x/y z/3\nx/y/2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "d=$(mktemp -d); cd $d; touch 'a b' c; for f in *; do echo \"[$f]\"; done; x=\"*\"; echo $x; echo \"$x\"; cd /; rm -rf $d",
+  "out": "[a b]\n[c]\na b c\n*\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "d=$(mktemp -d); cd $d; touch A b; shopt -s nocaseglob; echo [a]*; shopt -s dotglob; touch .z; echo *; cd /; rm -rf $d",
+  "out": "A\n.z A b\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"$(echo 'single in double')\" '\"double in single\"'",
+  "out": "single in double \"double in single\"\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo a'b'\"c\"\\d",
+  "out": "abcd\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x='a\"b'; echo \"$x\" \"${x}\" '${x}'",
+  "out": "a\"b a\"b ${x}\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"\\a\\b\\$\\`\\\\\\\"\"",
+  "out": "\\a\\b$`\\\"\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo '\\n' \"\\n\" \\n",
+  "out": "\\n \\n n\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x='$y'; y=val; echo $x \"$x\" $(eval echo $x)",
+  "out": "$y $y val\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=\"1 2\"; y=($x); echo ${#y[@]}; z=(\"$x\"); echo ${#z[@]}",
+  "out": "2\n1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -- \"\" a \"\"; echo $#; for x in \"$@\"; do echo \"[$x]\"; done; for x in $@; do echo \"<$x>\"; done",
+  "out": "3\n[]\n[a]\n[]\n<a>\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -- a b; echo \"${@}\" \"${*}\" \"${#@}\"",
+  "out": "a b a b 2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=\"\"; set -- $x; echo $#; set -- \"$x\"; echo $#; set -- ${x}\"\" ; echo $#",
+  "out": "0\n1\n1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "IFS=x; v=axbxc; echo $v; echo \"$v\"; set -- $v; echo $#",
+  "out": "a b c\naxbxc\n3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "IFS=' :'; v='a : b:c'; set -- $v; echo $#; printf '[%s]' \"$@\"; echo",
+  "out": "3\n[a][b][c]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "v=$'a\\tb  c'; set -- $v; echo $#",
+  "out": "3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(( 1 + $(echo 2) * 3 ))",
+  "out": "7\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=3; echo $(( a ** 2 )) $(( a<<2 )) $(( a > 2 && a < 4 ))",
+  "out": "9 12 1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(( 5 == 5 )) $(( 5 != 5 )) $(( 4 <= 4 )) $(( 3 >= 4 ))",
+  "out": "1 0 1 0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=010; echo $(( x + 1 )); y=0x1f; echo $(( y ))",
+  "out": "9\n31\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(( -9223372036854775807 - 1 )) $(( 9223372036854775807 * 3 ))",
+  "out": "-9223372036854775808 9223372036854775805\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(( 1 << 63 )) $(( -1 >> 1 )) $(( 7 / -2 )) $(( 7 % -2 ))",
+  "out": "-9223372036854775808 -1 -3 1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "v=5; (( v++ )); echo $v; (( v-- )); echo $v; ((v=v*v)); echo $v",
+  "out": "6\n5\n25\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(( 2 > 1 ? 2 > 3 ? 1 : 2 : 3 ))",
+  "out": "2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=(1 2 3); echo $(( a[1] + a[2] )); (( a[0] += 10 )); echo ${a[0]}",
+  "out": "5\n11\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=abc; echo ${x/b*/Z} ${x//[ac]/-} ${x/?/Q}",
+  "out": "aZ -b- Qbc\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=aaa; echo ${x/a/b} ${x//a/b} ${x/#a/b} ${x/%a/b} ${x//a}",
+  "out": "baa bbb baa aab\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=/a/b/c/; echo ${x%/} ${x%%/*} ${x#/} ${x##*/}x",
+  "out": "/a/b/c a/b/c/ x\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=filename.tar.gz; echo ${x%.tar.gz} ${x%.*.*} ${x#*.*.}",
+  "out": "filename filename gz\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=\"hello world\"; echo ${x% *} ${x#* } ${#x}",
+  "out": "hello world 11\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "arr=(apple banana cherry); echo ${arr[@]#?} ${arr[@]%a*} ${arr[*]/an/AN}",
+  "out": "pple anana herry banan cherry apple bANana cherry\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=héllo; echo ${#x} ${x:1:2} ${x^^}",
+  "out": "6 é HéLLO\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "unset v; echo ${v-unset} ${v:-null} ; v=; echo ${v-unset} ${v:-null}; echo \"${v:+alt}\"x",
+  "out": "unset null\nnull\nx\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo \"${1:?need arg}\"; }; (f) 2>/dev/null; echo st=$?",
+  "out": "st=1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo ${#PATH} | grep -q '^[0-9]' && echo numeric",
+  "out": "numeric\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=5; y='$x'; eval \"z=$y\"; echo $z",
+  "out": "5\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "eval \"f() { echo from-eval \\$1; }\"; f arg",
+  "out": "from-eval arg\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "eval 'for i in 1 2; do echo $i; done'",
+  "out": "1\n2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -- one two; eval echo \\$$#",
+  "out": "two\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=1; b=2; eval \"c=\\$((a+b))\"; echo $c",
+  "out": "3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "{ echo one; echo two >&2; } > /dev/null 2>&1; echo quiet",
+  "out": "quiet\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo stdout; echo stderr >&2 | cat",
+  "out": "stdout\n",
+  "code": 0,
+  "err": true
+ },
+ {
+  "src": "{ echo a; echo b >&2; } 2>&1 >/dev/null | cat",
+  "out": "b\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "exec 4>&1; echo via4 >&4; exec 4>&-",
+  "out": "via4\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f=$(mktemp); echo one > $f; echo two >> $f; while read -r l; do echo \"r:$l\"; done < $f; rm $f",
+  "out": "r:one\nr:two\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f=$(mktemp); { echo x; echo y; } > $f; cat $f; rm $f",
+  "out": "x\ny\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f=$(mktemp); echo data > $f; exec 5<$f; read -u 5 line; echo \"$line\"; exec 5<&-; rm $f",
+  "out": "data\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f=$(mktemp); set -C; echo first > $f; echo second > $f 2>/dev/null || echo clobber-blocked; echo forced >| $f; cat $f; rm $f",
+  "out": "clobber-blocked\nforced\n",
+  "code": 0,
+  "err": true
+ },
+ {
+  "src": "cat <<EOF | tr a-z A-Z\nlower $((2+2))\nEOF",
+  "out": "LOWER 4\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=world; cat <<EOF\nhello ${x} $(echo cmd) \\$x `echo bt`\nEOF",
+  "out": "hello world cmd $x bt\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "cat <<\"END\"\n$quoted ${x} `bt`\nEND",
+  "out": "$quoted ${x} `bt`\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "cat <<A; cat <<B\nfirst\nA\nsecond\nB",
+  "out": "first\nsecond\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { cat <<EOF\nin function $1\nEOF\n}; f arg",
+  "out": "in function arg\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "read a b <<< \"1 2 3\"; echo \"$a|$b\"",
+  "out": "1|2 3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "read -a arr <<< \"x y z\"; echo ${arr[2]} ${#arr[@]}",
+  "out": "z 3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "read -n 3 x <<< \"abcdef\"; echo $x",
+  "out": "abc\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "read -d , x <<< \"a,b\"; echo $x",
+  "out": "a\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "IFS=, read -r a b c <<< \"1,2,3,4\"; echo \"$a $b $c\"",
+  "out": "1 2 3,4\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "IFS=, read -r a b <<< \"1,,3\"; echo \"[$a] [$b]\"",
+  "out": "[1] [,3]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "read x <<< \"  padded  \"; echo \"[$x]\"; IFS= read x <<< \"  padded  \"; echo \"[$x]\"",
+  "out": "[padded]\n[  padded  ]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf 'a b\\n' | read x y; echo \"[$x]\"",
+  "out": "[]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"line\" | { read; echo \"REPLY=$REPLY\"; }",
+  "out": "REPLY=line\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "read x < /dev/null; echo $?",
+  "out": "1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -e; f() { false; echo in-f; }; f || echo caught; echo end",
+  "out": "in-f\nend\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -e; if false; then :; fi; echo after-if; false && true; echo after-and",
+  "out": "after-if\nafter-and\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -e; ! true; echo after-bang; x=$(false) ; echo notreached",
+  "out": "after-bang\n",
+  "code": 1,
+  "err": false
+ },
+ {
+  "src": "set -e; (exit 2) || true; echo ok; until true; do :; done; echo done",
+  "out": "ok\ndone\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -e; trap 'echo trapped' EXIT; false; echo never",
+  "out": "trapped\n",
+  "code": 1,
+  "err": false
+ },
+ {
+  "src": "trap 'echo exit-trap $?' EXIT; exit 3",
+  "out": "exit-trap 3\n",
+  "code": 3,
+  "err": false
+ },
+ {
+  "src": "(trap 'echo sub-exit' EXIT; echo in-sub); echo after",
+  "out": "in-sub\nsub-exit\nafter\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "trap 'echo one' EXIT; trap 'echo two' EXIT; echo body",
+  "out": "body\ntwo\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "trap 'echo x' EXIT; trap - EXIT; echo nothing",
+  "out": "nothing\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { trap 'echo in-trap' EXIT; }; f; echo after-f",
+  "out": "after-f\nin-trap\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=1; (x=2; (x=3; echo $x); echo $x); echo $x",
+  "out": "3\n2\n1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=$(x=inner; echo $x); echo $x",
+  "out": "inner\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo sub; exit 1; }; (f); echo survived $?",
+  "out": "sub\nsurvived 1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "cd /tmp; (cd /; pwd); pwd",
+  "out": "/\n/tmp\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "umask 022; (umask 077; umask); umask",
+  "out": "0077\n0022\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=1; f() { a=2; }; f | cat; echo $a",
+  "out": "1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo x | (read y; echo \"got $y\")",
+  "out": "got x\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "true | (exit 5); echo $?",
+  "out": "5\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { local i; for i in 1 2; do echo $i; done; }; i=out; f; echo $i",
+  "out": "1\n2\nout\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { local x=1; g; echo \"f:$x\"; }; g() { x=2; }; f",
+  "out": "f:2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { local v; v=local; }; v=global; f; echo $v",
+  "out": "global\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { declare d=decl; }; f; echo \"[$d]\"",
+  "out": "[]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { declare -g gv=global; }; f; echo $gv",
+  "out": "global\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo \"$#:$*\"; }; f; f ''; f a ''",
+  "out": "0:\n1:\n2:a \n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo \"${@:2}\"; }; f a b c",
+  "out": "b c\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { shift 2; echo \"$@\"; }; f 1 2 3 4",
+  "out": "3 4\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { return; }; false; f; echo $?",
+  "out": "1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { (( $1 > 0 )) && { echo $1; f $(($1-1)); }; }; f 3",
+  "out": "3\n2\n1\n",
+  "code": 1,
+  "err": false
+ },
+ {
+  "src": "f () { echo spaced; }; f; function g { echo kw; }; g; function h() { echo both; }; h",
+  "out": "spaced\nkw\nboth\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo \"$0\"; }; f | grep -c . ",
+  "out": "1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo redirected; } > /dev/null; f; echo after",
+  "out": "after\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo body; }; type f | head -1",
+  "out": "f is a function\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "unset -f f; f() { echo defined; }; unset -f f; f 2>/dev/null || echo gone",
+  "out": "gone\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "alias ll='ls -l' 2>/dev/null; echo ok",
+  "out": "ok\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "declare -A m=([a]=1 [b]=2); m[c]=3; unset 'm[a]'; echo ${#m[@]}; [[ -v m[b] ]] && echo has-b",
+  "out": "2\nhas-b\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "declare -a a=(z y x); echo ${a[0]}; a[1]+=y; echo ${a[1]}",
+  "out": "z\nyy\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=(1 2 3); b=(\"${a[@]}\"); b[0]=9; echo ${a[0]} ${b[0]}",
+  "out": "1 9\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=(x y z); echo \"${a[*]}\"; IFS=-; echo \"${a[*]}\"",
+  "out": "x y z\nx-y-z\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=(1 2 3); for i in \"${!a[@]}\"; do echo \"$i=${a[i]}\"; done",
+  "out": "0=1\n1=2\n2=3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=([3]=c [1]=a); echo ${a[@]} ${!a[@]}",
+  "out": "a c 1 3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=(one two three); echo ${a[@]:1} ${#a[1]}",
+  "out": "two three 3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=(); echo ${#a[@]} \"[${a[@]}]\"",
+  "out": "0 []\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "s=abc; echo ${s[0]} ${s[1]-none} ${#s[@]}",
+  "out": "abc none 1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=(a b c); a=(\"${a[@]:0:1}\" X \"${a[@]:1}\"); echo ${a[@]}",
+  "out": "a X b c\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=(1 2); x=3; echo ${x[@]}",
+  "out": "3 2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[[ a < b ]] && echo lt; [[ b > a ]] && echo gt; [[ 2 -lt 10 ]] && echo num",
+  "out": "lt\ngt\nnum\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[[ \"foo bar\" =~ (o+)\\ (b) ]] && echo \"${BASH_REMATCH[0]}|${BASH_REMATCH[1]}|${BASH_REMATCH[2]}\"",
+  "out": "oo b|oo|b\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "re='^[0-9]+$'; [[ 123 =~ $re ]] && echo digits; [[ abc =~ $re ]] || echo nondigit",
+  "out": "digits\nnondigit\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[[ abc =~ \"a.c\" ]] || echo literal-dot",
+  "out": "literal-dot\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[[ -e /etc/hosts && ! -d /etc/hosts ]] && echo hosts",
+  "out": "hosts\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=; [[ -z $x ]] && echo empty; [[ $x ]] || echo falsy",
+  "out": "empty\nfalsy\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[[ abc == *b* ]] && echo contains; [[ abc != *z* ]] && echo notcontains",
+  "out": "contains\nnotcontains\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[ a = a -o b = c ] && echo or; [ \\( a = a \\) ] && echo paren",
+  "out": "or\nparen\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "test -n \"\" ; echo $?; test ; echo $?; test x; echo $?",
+  "out": "1\n1\n0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[ 1 -eq a ] 2>/dev/null; echo $?",
+  "out": "2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "[ \"$undefined\" = \"\" ] && echo unset-empty",
+  "out": "unset-empty\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=5; case $x in [0-9]) echo digit;; esac; case 10 in [0-9]) echo one;; [0-9][0-9]) echo two;; esac",
+  "out": "digit\ntwo\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "case \"a b\" in \"a b\") echo spaced;; esac; v=\"a*\"; case abc in $v) echo pat;; esac",
+  "out": "spaced\npat\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "case x in a) echo a;; esac; echo \"status $?\"",
+  "out": "status 0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "for w in a b c; do case $w in b) continue;; esac; echo $w; done",
+  "out": "a\nc\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "while read -r a b; do echo \"$b $a\"; done <<EOF\n1 one\n2 two\nEOF",
+  "out": "one 1\ntwo 2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "for i in 1 2 3; do echo $i; done | tac 2>/dev/null || for i in 1 2 3; do echo $i; done | tail -r",
+  "out": "3\n2\n1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "i=0; while [ $i -lt 3 ]; do i=$((i+1)); echo $i; done > /dev/null; echo $i",
+  "out": "3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "for ((;;)); do break; done; echo out",
+  "out": "out\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "for x in a b; do for y in 1 2; do continue 2; echo no; done; done; echo done",
+  "out": "done\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "n=0; while true; do while true; do n=$((n+1)); break 2; done; done; echo $n",
+  "out": "1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "until false; do echo once; break; done",
+  "out": "once\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "seq 3 | while read n; do echo \"n=$n\"; done",
+  "out": "n=1\nn=2\nn=3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(seq 1 3)",
+  "out": "1 2 3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=$(seq 3 | tail -1); echo $x",
+  "out": "3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"$(printf 'a\\nb')\" | wc -l | tr -d ' '",
+  "out": "2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=`echo a b`; echo \"$x\"",
+  "out": "a b\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(( $(seq 5 | wc -l) * 2 ))",
+  "out": "10\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "basename /a/b/c.txt .txt; dirname /a/b/c.txt",
+  "out": "c\n/a/b\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "ls /etc/hosts /nonexistent 2>&1 >/dev/null | grep -c nonexistent",
+  "out": "1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%s %s\\n' a b c d",
+  "out": "a b\nc d\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%5.2f|%-8s|%08.3f\\n' 3.14159 left 2.5",
+  "out": " 3.14|left    |0002.500\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%x %X %#x %#o\\n' 255 255 255 8",
+  "out": "ff FF 0xff 010\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '[%*d] [%-*d]\\n' 5 42 5 42",
+  "out": "[   42] [42   ]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%i %d\\n' 0x10 010",
+  "out": "16 8\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%s\\n' \"a\\tb\"; printf \"a\\tb\\n\"",
+  "out": "a\\tb\na\tb\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%c%c\\n' hello world",
+  "out": "hw\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%e %E\\n' 12345.678 0.000123",
+  "out": "1.234568e+04 1.230000E-04\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%g %g %g %g\\n' 1 1.5 1234567 0.00001234",
+  "out": "1 1.5 1.23457e+06 1.234e-05\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%d\\n' \"'A\"",
+  "out": "65\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%s' ''; printf 'x\\n'",
+  "out": "x\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%5s|%.1s|\\n' héllo héllo",
+  "out": "héllo|h|\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf -v out '%s-%s' a b; echo $out",
+  "out": "a-b\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '\\x41\\101é\\n'",
+  "out": "AAé\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo -e '\\x41\\0101\\c'; echo",
+  "out": "AA\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo -n; echo -n \"\"; echo end",
+  "out": "end\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=$(printf 'no-trailing'); echo \"[$x]\"",
+  "out": "[no-trailing]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"${HOME:+home-set}\"",
+  "out": "home-set\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "cd; pwd | grep -q \"$HOME\" && echo home",
+  "out": "",
+  "code": 1,
+  "err": true
+ },
+ {
+  "src": "cd /tmp; cd ..; pwd; cd -; pwd",
+  "out": "/\n/tmp\n/tmp\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "cd /nonexistent_xyz 2>/dev/null || echo cd-failed",
+  "out": "cd-failed\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "OLDPWD=; cd /tmp; cd /; echo $OLDPWD",
+  "out": "/tmp\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "export A_TEST=1; env | grep -c '^A_TEST=1$'; export -n A_TEST; env | grep -c '^A_TEST=' ",
+  "out": "1\n0\n",
+  "code": 1,
+  "err": false
+ },
+ {
+  "src": "B_TEST=x; sh -c 'echo \"[$B_TEST]\"'; export B_TEST; sh -c 'echo \"[$B_TEST]\"'",
+  "out": "[]\n[x]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "export C_TEST=a; C_TEST=b sh -c 'echo $C_TEST'; echo $C_TEST",
+  "out": "b\na\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "unset PATH; ls 2>/dev/null; echo $?",
+  "out": "127\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "PATH=/nonexistent; ls 2>/dev/null; echo $?",
+  "out": "127\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "readonly R=1; unset R 2>/dev/null; echo $R",
+  "out": "1\n",
+  "code": 0,
+  "err": false,
+  "posix": {
+   "out": "",
+   "code": 1,
+   "err": false
+  }
+ },
+ {
+  "src": "declare -r RO=1; RO=2 2>/dev/null; echo $RO",
+  "out": "",
+  "code": 1,
+  "err": true,
+  "posix": {
+   "out": "",
+   "code": 127,
+   "err": true
+  }
+ },
+ {
+  "src": "set -- a b c; shift; echo $@; shift 5; echo $?; echo $@",
+  "out": "b c\n1\nb c\n",
+  "code": 0,
+  "err": false,
+  "posix": {
+   "out": "b c\n1\nb c\n",
+   "code": 0,
+   "err": true
+  }
+ },
+ {
+  "src": "set -- 1 2 3; set --; echo $#",
+  "out": "0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -a; AUTO=1; sh -c 'echo $AUTO'",
+  "out": "1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -x; echo traced 2>/dev/null; set +x",
+  "out": "traced\n",
+  "code": 0,
+  "err": true
+ },
+ {
+  "src": "d=$(mktemp -d); touch $d/hosts; cd $d; set -o noglob; echo host*; set +o noglob; echo host*; cd /; rm -rf $d",
+  "out": "host*\nhosts\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $- | grep -q h && echo has-h",
+  "out": "has-h\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=1; x+=2; x+=(3); declare -p x",
+  "out": "declare -a x=([0]=\"12\" [1]=\"3\")\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "declare -i i=2; i=i*5; echo $i; i=\"3+4\"; echo $i",
+  "out": "10\n7\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "v=abc; echo ${v@U} ${v@Q} ${v@u}",
+  "out": "ABC 'abc' Abc\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { :; }; declare -F f; declare -f f | head -1",
+  "out": "f\nf () \n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "let a=5 b=a*2; echo $a $b; let 0; echo $?",
+  "out": "5 10\n1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "true; false; echo $? $?",
+  "out": "1 1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "(exit 300); echo $?",
+  "out": "44\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "exit -1",
+  "out": "",
+  "code": 255,
+  "err": false
+ },
+ {
+  "src": "sh -c 'exit 7'; echo $?",
+  "out": "7\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "kill -0 $$ && echo self-alive",
+  "out": "self-alive\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "sleep 0.01 & wait; echo waited",
+  "out": "waited\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "(sleep 0.01; echo bg) & wait; echo fg",
+  "out": "bg\nfg\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=1; { x=2; echo $x; } & wait; echo $x",
+  "out": "2\n1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "false & wait $!; echo $?",
+  "out": "1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $((  )) 2>/dev/null; echo st=$?",
+  "out": "0\nst=0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": ": $((n=5)); echo $n",
+  "out": "5\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo ${x:=1} ${x:=2}",
+  "out": "1 1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo {a,b,c}.txt {x,y}{1,2}",
+  "out": "a.txt b.txt c.txt x1 x2 y1 y2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo {1..3}{a..b} {3..1} {a..c..2}",
+  "out": "1a 1b 2a 2b 3a 3b 3 2 1 a c\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo pre{}post {a} {a,} \"{a,b}\" \\{a,b\\}",
+  "out": "pre{}post {a} a {a,b} {a,b}\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=a; echo {$x,b}",
+  "out": "a b\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo ~/x ~root 2>/dev/null | wc -w | tr -d ' '",
+  "out": "2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "v=~; [ \"$v\" = \"$HOME\" ] && echo tilde-assign; p=x:~:y; echo ${p#x:} | grep -q \"^$HOME\" && echo tilde-colon",
+  "out": "tilde-assign\ntilde-colon\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"~\" '~' ~nonexistentuser",
+  "out": "~ ~ ~nonexistentuser\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $((0)); echo $((-0)); echo $((007))",
+  "out": "0\n0\n7\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo ${FUNCNAME[@]}; }; g() { f; }; g",
+  "out": "f g\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"${BASH_SOURCE-}\" end",
+  "out": " end\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=$'line1\\nline2'; while read -r l; do echo \"<$l>\"; done <<< \"$x\"",
+  "out": "<line1>\n<line2>\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "mapfile -t lines < <(printf 'a\\nb\\nc\\n'); echo ${#lines[@]} ${lines[2]}",
+  "out": "3 c\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "diff <(echo a) <(echo a) && echo same",
+  "out": "same\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "while read l; do echo \"[$l]\"; done < <(echo x; echo y)",
+  "out": "[x]\n[y]\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "cat <(echo procsub)",
+  "out": "procsub\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=$(cat <<'EOF'\nliteral $x\nEOF\n); echo \"$x\"",
+  "out": "literal $x\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo 'it'\\''s'",
+  "out": "it's\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"a\"'b'c\"d\"",
+  "out": "abcd\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \\\"\\'\\\\",
+  "out": "\"'\\\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"*\" '*' \\* | cat",
+  "out": "* * *\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo 'multi\nline' | wc -l | tr -d ' '",
+  "out": "2\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "a=\"x\"; b=\"${a}y${a}\"; echo $b",
+  "out": "xyx\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "n=10; s=0; for ((i=1; i<=n; i++)); do ((s+=i)); done; echo $s",
+  "out": "55\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { local n=$1; ((n<=1)) && { echo 1; return; }; echo $(( n * $(f $((n-1))) )); }; f 10",
+  "out": "3628800\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "s=; for w in one two three; do s+=\"${w:0:1}\"; done; echo $s",
+  "out": "ott\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "str=\"a,b,c\"; IFS=, read -ra parts <<< \"$str\"; for p in \"${parts[@]}\"; do echo $p; done",
+  "out": "a\nb\nc\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "str=\"key=value\"; k=${str%%=*}; v=${str#*=}; echo \"$k -> $v\"",
+  "out": "key -> value\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "d=$(mktemp -d); touch $d/a $d/b $d/c $d/e; count=0; for f in $d/*; do count=$((count+1)); done; [ $count -gt 3 ] && echo many; rm -rf $d",
+  "out": "many\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=3; while (( x-- > 0 )); do echo $x; done",
+  "out": "2\n1\n0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo $(( 10 > 5 )) && echo $(( 10 < 5 ))",
+  "out": "1\n0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo a && echo b || echo c && echo d",
+  "out": "a\nb\nd\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "false || false || echo third; true && false && echo no; echo $?",
+  "out": "third\n1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "! { false; }; echo $?",
+  "out": "0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=$(false); echo $?; x=$(true) $(false); echo $?",
+  "out": "1\n0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo \"$( (exit 4) ; echo $? )\"",
+  "out": "4\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "{ false; }; echo $?; ( true ); echo $?",
+  "out": "1\n0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "if (exit 3); then echo t; else echo f $?; fi",
+  "out": "f 3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "while false; do :; done; echo $?",
+  "out": "0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "if true; then false; fi; echo $?",
+  "out": "1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "for x in a; do false; done; echo $?",
+  "out": "1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "case a in a) false;; esac; echo $?",
+  "out": "1\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { false; }; if f; then echo t; else echo f; fi",
+  "out": "f\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "expr='6*7'; echo $(( expr )); e2='2**10 + 1'; echo $((e2)); n=08; echo $((n)) 2>/dev/null; echo st=$?",
+  "out": "42\n1025\n",
+  "code": 1,
+  "err": true,
+  "posix": {
+   "out": "42\n1025\n",
+   "code": 127,
+   "err": true
+  }
+ },
+ {
+  "src": "coproc CALC { while read -r expr; do echo $(( expr )); done; }\nfor e in '6*7' '2**16' '100/3'; do echo \"$e\" >&${CALC[1]}; read -r answer <&${CALC[0]}; echo \"$e = $answer\"; done",
+  "out": "6*7 = 42\n2**16 = 65536\n100/3 = 33\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "while :; do echo y; done | head -3",
+  "out": "y\ny\ny\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "while true; do echo line; done | head -n 2; echo \"st=${PIPESTATUS[*]}\"",
+  "out": "line\nline\nst=141 0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { while :; do echo f; done; }; f | head -1",
+  "out": "f\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "yes | while read l; do echo $l; done | head -2",
+  "out": "y\ny\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "seq 5 | while read n; do echo $((n*2)); done | tail -2",
+  "out": "8\n10\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "sleep 10 & pid=$!; kill $pid; wait $pid; echo \"status $?\"",
+  "out": "status 143\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "sleep 10 & kill %1; wait %1; echo $?",
+  "out": "143\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "sleep 0.2 & sleep 0.1 & wait -n; echo first; wait; echo all",
+  "out": "first\nall\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "( sleep 0.1; exit 3 ) & wait $!; echo $?",
+  "out": "3\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "sleep 5 & jobs | sed 's/  */ /g'; kill %%; wait",
+  "out": "[1]+ Running sleep 5 &\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "kill -0 $$ && echo alive; kill -l 9; kill -l KILL",
+  "out": "alive\nKILL\n9\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "trap 'echo got usr1' USR1; kill -USR1 $$; sleep 0.1; echo after",
+  "out": "got usr1\nafter\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "trap 'echo term trapped; exit 7' TERM; kill $$; sleep 1; echo not-reached",
+  "out": "term trapped\n",
+  "code": 7,
+  "err": false
+ },
+ {
+  "src": "trap '' INT; kill -INT $$; echo ignored",
+  "out": "ignored\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "trap 'echo debug $BASH_COMMAND' DEBUG 2>/dev/null; trap - DEBUG; echo x",
+  "out": "debug trap - DEBUG\nx\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { trap 'echo returned' RETURN; echo in-f; }; f; echo done",
+  "out": "in-f\nreturned\ndone\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "coproc { read line; echo \"got $line\"; }; echo hello >&${COPROC[1]}; read -u ${COPROC[0]} reply; echo \"$reply\"",
+  "out": "got hello\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "coproc UP { tr a-z A-Z; }; echo shout >&${UP[1]}; exec {UP[1]}>&-; read -u ${UP[0]} r; echo $r",
+  "out": "SHOUT\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "exec {fd}>/tmp/ant_fdvar_test; echo via-fdvar >&$fd; exec {fd}>&-; cat /tmp/ant_fdvar_test; rm -f /tmp/ant_fdvar_test",
+  "out": "via-fdvar\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "exec 12>/tmp/ant_fd12; echo twelve >&12; exec 12>&-; cat /tmp/ant_fd12; rm /tmp/ant_fd12",
+  "out": "twelve\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '2\\n' | { PS3='> '; select x in a b c; do echo \"chose $x ($REPLY)\"; break; done; } 2>/dev/null",
+  "out": "chose b (2)\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '\\n1\\n' | { select x in one two; do echo $x; break; done; } 2>&1",
+  "out": "1) one\n2) two\n#? 1) one\n2) two\n#? one\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "shopt -s expand_aliases; alias greet='echo hello'\ngreet world; unalias greet; greet 2>/dev/null || echo gone",
+  "out": "hello world\nhello\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "alias ll='ls -l'; alias ll; alias | grep -c ll",
+  "out": "alias ll='ls -l'\n1\n",
+  "code": 0,
+  "err": false,
+  "posix": {
+   "out": "ll='ls -l'\n1\n",
+   "code": 0,
+   "err": false
+  }
+ },
+ {
+  "src": "read -t 0.1 x < <(sleep 1); echo \"st=$?\"",
+  "out": "st=142\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "read -t 0 x <<< \"data\"; echo $?",
+  "out": "0\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf '%(%Y)T\\n' 0 | grep -c 1970; printf '%(%H:%M)T\\n' 3600 | grep -q : && echo hm",
+  "out": "0\nhm\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "set -o posix; x=5; readonly x; x=6; echo not-reached",
+  "out": "",
+  "code": 127,
+  "err": true
+ },
+ {
+  "src": "set -o posix; shift 3; echo not-reached",
+  "out": "not-reached\n",
+  "code": 0,
+  "err": true
+ },
+ {
+  "src": "umask 022; (umask 077; umask); umask; f=/tmp/ant_umask_t; rm -f $f; (umask 077; > $f); ls -l $f | cut -c1-10; rm -f $f",
+  "out": "0077\n0022\n-rw-------\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "f() { echo hi \"$1\" >&2; if [ -n \"$x\" ]; then echo a; elif true; then :; else echo b; fi; for i in 1 2; do echo $i; done; while false; do :; done; case $x in a|b) echo ab;; *) ;; esac; x=$(ls | wc -l); a=(1 2); [[ -n $x && $y == z* ]] && echo ok; (( x++ )); { echo g; } > /dev/null; ( echo sub ); local v=1; }; declare -f f",
+  "out": "f () \n{ \n    echo hi \"$1\" 1>&2;\n    if [ -n \"$x\" ]; then\n        echo a;\n    else\n        if true; then\n            :;\n        else\n            echo b;\n        fi;\n    fi;\n    for i in 1 2;\n    do\n        echo $i;\n    done;\n    while false; do\n        :;\n    done;\n    case $x in \n        a | b)\n            echo ab\n        ;;\n        *)\n\n        ;;\n    esac;\n    x=$(ls | wc -l);\n    a=(1 2);\n    [[ -n $x && $y == z* ]] && echo ok;\n    (( x++ ));\n    { \n        echo g\n    } > /dev/null;\n    ( echo sub );\n    local v=1\n}\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "g() { true; }; type g",
+  "out": "g is a function\ng () \n{ \n    true\n}\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "h() { echo one; echo two & }; declare -f h",
+  "out": "h () \n{ \n    echo one;\n    echo two &\n}\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "echo a b c; echo $_",
+  "out": "a b c\nc\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "x=$(echo a | (read y; echo $y) ); echo $x",
+  "out": "a\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "{ echo out; echo err >&2; } |& tr a-z A-Z | sort",
+  "out": "ERR\nOUT\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "printf 'a\\nb\\nc\\n' | { read first; while read rest; do echo \"$first:$rest\"; done; }",
+  "out": "a:b\na:c\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "cat /dev/null | { echo nothing-read; } | cat",
+  "out": "nothing-read\n",
+  "code": 0,
+  "err": false
+ },
+ {
+  "src": "yes | head -c 5 | od -c | head -1 | tr -s ' '",
+  "out": "0000000 y \\n y \\n y\n",
+  "code": 0,
+  "err": false
+ }
+]

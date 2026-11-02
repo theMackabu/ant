@@ -1,0 +1,445 @@
+echo hello
+---
+x=1; y=$x; echo "$x$y"
+---
+a=1 b=$a sh -c 'echo $a $b'
+---
+set -- a "b c" d; echo $#; for x in "$@"; do echo "[$x]"; done
+---
+set -- a "b c" d; for x in $@; do echo "[$x]"; done
+---
+set -- a "b c" d; echo "$*"; IFS=,; echo "$*"
+---
+x="a  b   c"; echo $x; echo "$x"
+---
+IFS=:; x="a:b::c"; set -- $x; echo $#; printf '<%s>' "$@"; echo
+---
+x=" lead trail "; set -- $x; echo $#
+---
+echo ${x:-default} ${x-dash}; x=; echo "[${x:-d}] [${x-d}] [${x:+p}] [${x+p}]"
+---
+unset y; echo ${y:=assigned}; echo $y
+---
+x=hello.tar.gz; echo ${x%.*} ${x%%.*} ${x#*.} ${x##*.}
+---
+x=abcabc; echo ${x/b/X} ${x//b/X} ${x/#a/S} ${x/%c/E} ${#x}
+---
+x=Hello; echo ${x^^} ${x,,} ${x^} ${x,}
+---
+x=abcdef; echo ${x:2} ${x:1:3} ${x: -2} ${x:(-3):2}
+---
+echo $((1+2*3)) $((10/3)) $((10%3)) $((2**10)) $((1<<4)) $((7&3)) $((5|2)) $((5^1)) $((!0)) $((~0))
+---
+i=5; echo $((i++)) $i $((++i)) $((i+=10)) $((i*=2)) $i
+---
+echo $((0x10)) $((010)) $((2#101)) $((36#z))
+---
+echo $(( 3 > 2 ? 10 : 20 )) $(( (1+2)*3 )) $(( -5 / 2 )) $(( -5 % 3 ))
+---
+x=3; y=x; echo $((y+1)); z="x*2"; echo $((z))
+---
+echo $(echo a $(echo b)) `echo c`
+---
+x=$(printf 'a\n\n\n'); echo "[$x]"
+---
+for i in 1 2 3; do if [ $i = 2 ]; then continue; fi; echo $i; done
+---
+for i in 1 2 3; do for j in a b; do [ $j = b ] && break 2; echo $i$j; done; done
+---
+i=0; until [ $i -ge 3 ]; do echo $i; i=$((i+1)); done
+---
+i=0; while :; do i=$((i+1)); [ $i -gt 4 ] && break; done; echo $i
+---
+for ((i=0; i<3; i++)); do echo c$i; done
+---
+for ((i=0, j=10; i<3; i++, j--)); do echo $i $j; done
+---
+case abc in a*c) echo one;; *) echo two;; esac
+---
+case x in a|x) echo alt;; esac; case foo in [fg]oo) echo br;; esac
+---
+case b in a) echo a;& b) echo b;& c) echo c;; d) echo d;; esac
+---
+case "a.txt" in *.txt) echo txt;;& *.*) echo dot;; esac
+---
+if false; then echo 1; elif true; then echo 2; else echo 3; fi
+---
+if ! false; then echo neg; fi; ! true; echo $?
+---
+true && echo a || echo b; false && echo c || echo d
+---
+f() { local x=inner; echo $x; }; x=outer; f; echo $x
+---
+f() { x=changed; }; x=orig; f; echo $x
+---
+f() { echo $1-$2-$#; shift; echo $1; }; f p q r
+---
+f() { return 7; }; f; echo $?
+---
+g() { echo "in g"; }; h() { g; echo after; }; h
+---
+fib() { if [ $1 -le 1 ]; then echo $1; else echo $(( $(fib $(($1-1))) + $(fib $(($1-2))) )); fi; }; fib 10
+---
+( x=sub; echo $x ); echo "[$x]"
+---
+{ echo a; echo b; } | wc -l | tr -d ' '
+---
+echo a; (exit 3); echo $?
+---
+x=1; { x=2; }; echo $x
+---
+echo "a b" | { read p q; echo "$q-$p"; }
+---
+printf 'x y z\n' | { read a rest; echo "$rest"; }
+---
+printf 'one\ntwo\n' | while read line; do echo "got $line"; done
+---
+printf 'a:b:c\n' | { IFS=: read x y z; echo $z$y$x; }
+---
+printf 'a\\tb\n' | { read x; echo "$x"; }; printf 'a\\tb\n' | { read -r x; echo "$x"; }
+---
+a=(1 2 3); a+=(4 5); echo ${a[@]} ${#a[@]} ${a[-1]} ${!a[@]}
+---
+a=(); a[5]=x; a[2]=y; echo ${#a[@]} ${!a[@]} "${a[@]}"
+---
+a=(x y z); unset 'a[1]'; echo ${#a[@]} ${a[@]}
+---
+declare -A m; m[foo]=1; m[bar]=2; echo ${m[foo]} ${m[bar]} ${#m[@]}
+---
+a=(a b c d e); echo ${a[@]:1:2} ${a[@]: -2}
+---
+a=("x y" z); for e in "${a[@]}"; do echo "<$e>"; done; echo "${#a[0]}"
+---
+echo {a,b}{1,2} {1..10..3} {c..a} {01..03} x{,y}
+---
+echo ~ | grep -q / && echo tilde
+---
+echo '$HOME' "\$HOME" \$HOME
+---
+echo "a\"b" 'c\d' "e\\f" "g\$h"
+---
+echo $'tab\there' $'nl\\n'
+---
+printf '%5s|%-5s|%05d|%x|%o|%e|%.2f|%c\n' ab cd 42 255 8 1234.5 3.14159 xyz
+---
+printf '%s,' a b c; echo; printf '%d\n' 1 2 3
+---
+printf '%b\n' 'a\tb'; printf '%q\n' "a b'c"
+---
+printf '%s\n' "$(printf '%03d' 7)"
+---
+echo -n no-newline; echo; echo -e 'a\tb'; echo -E 'a\tb'
+---
+test 1 -eq 1 && echo eq; [ "a" = "b" ] || echo ne; [ -z "" ] && echo empty; [ -n x ] && echo nonempty
+---
+[ 3 -gt 2 -a 1 -lt 2 ] && echo and; [ ! -e /nonexistent ] && echo noexist; [ -d / ] && echo dir
+---
+[[ abc == a* ]] && echo glob; [[ abc =~ ^a(b)c$ ]] && echo "re ${BASH_REMATCH[1]}"
+---
+[[ -n x && ( 1 -eq 2 || 2 -eq 2 ) ]] && echo complex; [[ ! a > b ]] && echo lt
+---
+x="a b"; [[ $x == "a b" ]] && echo nosplit
+---
+(( 5 > 3 )) && echo arith; (( 0 )) || echo zero
+---
+let x=3+4; echo $x; let "y = x * 2"; echo $y
+---
+cat <<EOF
+line $((1+1))
+  indented \$literal
+EOF
+---
+cat <<'EOF'
+no $expansion here
+EOF
+---
+cat <<-EOF
+	tab stripped
+	EOF
+---
+cat <<<"here string"
+---
+echo hi > /tmp/ant_shell_t1; cat /tmp/ant_shell_t1; echo more >> /tmp/ant_shell_t1; cat < /tmp/ant_shell_t1; rm -f /tmp/ant_shell_t1
+---
+{ echo out; echo err >&2; } 2>&1 | sort
+---
+ls /nonexistent_ant 2>/dev/null; echo st=$?
+---
+echo to-stderr 1>&2 2>/dev/null
+---
+x=$(echo err >&2; echo out); echo "$x"
+---
+echo a | tee /dev/null | cat
+---
+exec 3>/tmp/ant_shell_t2; echo three >&3; exec 3>&-; cat /tmp/ant_shell_t2; rm -f /tmp/ant_shell_t2
+---
+f() { echo "fn out"; } ; f > /tmp/ant_shell_t3; cat /tmp/ant_shell_t3; rm /tmp/ant_shell_t3
+---
+while read l; do echo "[$l]"; done <<EOF
+a
+b
+EOF
+---
+d=$(mktemp -d); touch $d/passwd $d/pass.txt $d/other; for f in $d/pass*; do echo ${f#$d/}; done; rm -rf $d
+---
+echo /nonexistent-dir/x*; shopt -s nullglob; echo /nonexistent-dir/x*; echo end
+---
+set -e; false || true; echo survived; (false); echo notreached
+---
+set -u; echo ${undefined_var:-ok}; echo $undefined_var; echo after
+---
+x=5; readonly x; x=6; echo after
+---
+f() { echo $FUNCNAME; }; f
+---
+x=abc; echo ${!x:-indirect-unset}; y=x; echo ${!y}
+---
+x="it's"; echo ${x@Q}
+---
+eval 'a=1; b=2'; echo $a$b; cmd='echo evaled'; eval $cmd
+---
+type echo; command -v ls >/dev/null && echo has-ls
+---
+getopts ab: opt -a; echo $opt
+---
+while getopts "ab:c" o -a -b val -c; do echo "$o ${OPTARG-}"; done
+---
+set -- -x -y foo; while getopts xy o; do echo $o; done; shift $((OPTIND-1)); echo "$@"
+---
+trap 'echo bye' EXIT; echo body
+---
+x=1; export x; sh -c 'echo $x'; unset x; sh -c 'echo "[$x]"'
+---
+FOO=bar env | grep ^FOO=
+---
+f() { echo $XX; }; XX=tmp f; echo "[$XX]"
+---
+echo $(( $(echo 3) + 4 ))
+---
+n=0; for x in a b c; do n=$((n+1)); done; echo $n
+---
+mapfile -t arr <<EOF
+l1
+l2
+EOF
+echo ${#arr[@]} ${arr[1]}
+---
+printf '%s\n' c b a | sort | head -2 | tail -1
+---
+echo $(( 9223372036854775807 + 1 ))
+---
+x=$'a\nb'; echo "$x" | wc -l | tr -d ' '
+---
+echo "$(echo "nested \"quotes\"")"
+---
+v=$(cat <<EOF
+heredoc in subst
+EOF
+); echo "$v"
+---
+echo $((1/0)); echo sameline
+echo nextline
+---
+echo a; echo b >&2; echo c
+---
+set -o pipefail; false | true; echo $?; set +o pipefail; false | true; echo $?
+---
+true | false; echo ${PIPESTATUS[@]}
+---
+x=10; f() { local x; x=20; g; }; g() { echo $x; }; f; echo $x
+---
+i=0; while [ $i -lt 1000 ]; do i=$((i+1)); done; echo $i
+---
+s=""; for i in {1..5}; do s="$s$i"; done; echo $s
+---
+echo ${#}; set -- 1 2 3 4 5 6 7 8 9 10 11; echo ${10} ${11} $10
+---
+set -- 1 2 3 4 5; echo "${@:2:3}"; echo "${*: -2}"
+---
+x=aXbXc; IFS=X read -ra parts <<< "$x"; echo ${parts[1]} ${#parts[@]}
+---
+cd /tmp && pwd; cd - >/dev/null; echo back
+---
+pushd /tmp >/dev/null; popd >/dev/null; echo ok
+---
+echo $(( 2 ** 62 * 2 ))
+---
+x='*'; echo "$x"
+---
+shopt -s extglob; case foo.txt in @(*.txt|*.md)) echo ext;; esac; [[ abc == +(a|b|c) ]] && echo plus
+---
+shopt -s extglob
+case foo.txt in @(*.txt|*.md)) echo ext;; esac; [[ abc == +(a|b|c) ]] && echo plus; p='@(x|y)'; case y in $p) echo var-pattern;; esac
+---
+[[ abc == +(a|b|c) ]] && echo cond-always; p='@(a|b)'; case a in $p) echo on;; *) echo literal;; esac
+---
+shopt -s extglob
+x=aabbcc; echo ${x//+(b)/X} ${x##+(a)}; d=$(mktemp -d); touch $d/a $d/b $d/zz; cd $d; echo !(zz); cd /; rm -rf $d
+---
+str="hello world"; echo ${str// /_}; echo ${str/#hello/bye}; arr=(one two); echo ${arr[@]/o/0}
+---
+declare -i n=5; n+=3; echo $n; declare -l lo=ABC; echo $lo; declare -u up=abc; echo $up
+---
+x=5; declare -p x; a=(1 2); declare -p a
+---
+f() { echo "$@"; }; f "a b" c
+---
+echo $((RANDOM >= 0))
+---
+echo "${x:-$(echo lazy)}"
+---
+unset z; echo "${z:-a b}" | wc -w | tr -d ' '; set -- ${z:-a b}; echo $#; set -- ${z:-"a b"}; echo $#
+---
+x=$( (echo a; echo b) | tr '\n' ,); echo $x
+---
+true; echo $?; false; echo $?; ! false; echo $?
+---
+: ${unsetvar:=foo}; echo $unsetvar
+---
+a=x; case $a in (x) echo paren;; esac
+---
+echo `echo \`echo nested\``
+---
+f() { cat; }; echo piped | f
+---
+f() { echo start; return; echo never; }; f
+---
+for i in 1 2; do (( i == 1 )) && continue; echo $i; done
+---
+echo $((  010 + 0x10 + 2#11 ))
+---
+echo "$((1, 2, 3))"
+---
+x=7; (( x -= 2, x *= 3 )); echo $x
+---
+echo $(( (5 > 3) && (2 > 1) )) $(( 0 || 0 ))
+---
+f() { local -a arr=(1 2 3); echo ${#arr[@]}; }; f
+---
+exit 3
+---
+false
+---
+echo before; exit 4; echo after
+---
+f() { exit 5; }; f; echo no
+---
+(exit 6); echo $?
+---
+x=$(exit 7); echo $?
+---
+nonexistent_command_xyz; echo $?
+---
+nonexistent_command_xyz 2>/dev/null; echo $?
+---
+echo "a" > /dev/null; echo done
+---
+read x <<< "from herestring"; echo $x
+---
+while IFS= read -r line; do echo "($line)"; done <<'EOF'
+  spaced  line  
+back\slash
+EOF
+---
+cnt=0; while read -r l; do cnt=$((cnt+1)); done < /etc/hosts; [ $cnt -gt 0 ] && echo counted
+---
+echo $(( 5 - -3 )) $(( - - 4 ))
+---
+a=5; b=a; echo $(( b + 1 ))
+---
+echo ${#nonexistent}
+---
+x=abc; echo ${x:5} "[${x:1:0}]"
+---
+IFS=; x="a b c"; set -- $x; echo $#
+---
+unset IFS; x="a	b
+c"; set -- $x; echo $#
+---
+echo "$(( 1 + 1 ))" "$[ 2 + 2 ]"
+---
+echo a\
+b
+---
+echo "line1
+line2"
+---
+x=1; f() { echo $x; local x=2; echo $x; }; f; echo $x
+---
+echo -- -n; echo -n -- x; echo
+---
+printf '%-3s|%3d|%+d|% d\n' a 5 5 5
+---
+printf '%.3s\n' abcdef; printf '%5.1f\n' 3.14159; printf '%g %g %g\n' 0.0001 100000 1e10
+---
+printf 'no newline'
+---
+printf '%d%%\n' 50
+---
+printf '%s\n'
+---
+echo $(printf '%s' 'a b')
+---
+d=$(mktemp -d); touch $d/passwd; cd $d; set -f; echo pass*; set +f; echo pass*; cd /; rm -rf $d
+---
+x='a*'; case abc in $x) echo unquoted-pat;; esac; case abc in "$x") echo quoted;; *) echo literal;; esac
+---
+x=abc; [[ $x == "a"* ]] && echo mixed; [[ $x == 'a*' ]] || echo literal-quoted
+---
+[[ 10 -lt 9 ]] || echo numeric; [[ 10 < 9 ]] && echo string
+---
+[[ -z "" && -n a ]] && echo both
+---
+[ "$x" ] || echo empty-test
+---
+[ -f /etc/hosts ] && echo file; [ -r /etc/hosts ] && echo readable; [ -x /bin/sh ] && echo exec
+---
+f() { echo "${FUNCNAME[0]} ${#FUNCNAME[@]}"; }; g() { f; }; g
+---
+echo $(( 1 ? 2 : 3 )) $(( 0 ? 2 : 3 ))
+---
+x=( $(echo a b c) ); echo ${#x[@]}
+---
+declare -A h=([one]=1 [two]=2); echo ${h[two]}; for k in "${!h[@]}"; do echo $k; done | sort
+---
+words="one two three"; for w in $words; do echo $w; done
+---
+echo $(( 7 / 2 * 2 )) $(( 2 ** 3 ** 2 ))
+---
+a=1; a+=2; echo $a; b=(x); b+=y; echo ${b[@]}
+---
+echo ${PWD:+set}
+---
+echo $((10#08 + 1))
+---
+x=$(echo); echo "[$x]"
+---
+echo "$(echo a; exit 3)" $?
+---
+v=1; (v=2; echo $v); echo $v
+---
+v=1; echo $(v=2; echo $v) $v
+---
+echo hello | read x; echo "[$x]"
+---
+i=0; f() { i=$((i+1)); [ $i -lt 5 ] && f; }; f; echo $i
+---
+case "" in "") echo empty-case;; esac
+---
+case x in *) ;; esac; echo $?
+---
+for x in; do echo never; done; echo $?
+---
+set -- a b; for x; do echo $x; done
+---
+x="a'b"; echo "$x" '$x'
+---
+echo "${undefined-}" end
+---
+t="a:b:c"; echo ${t//:/ }; echo ${t%%:*}; echo ${t#*:}
+---
+p=/usr/local/bin/tool; echo ${p##*/} ${p%/*}
+---
+s="Hello World"; echo ${s,,} ${s^^}; echo ${s:0:1}${s: -1}
+---
+n=3; echo $(( n * (n + 1) / 2 ))

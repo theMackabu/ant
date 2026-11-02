@@ -1,0 +1,31 @@
+x=1; declare -n r=x; echo $r; r=2; echo $x; declare -p r
+---
+f() { local -n out=$1; out=assigned; }; f v; echo $v
+---
+a=(1 2 3); declare -n ra=a; echo ${ra[1]} ${#ra[@]}; ra+=(4); echo ${a[@]}
+---
+x=t; declare -n r=x; echo ${!r}; unset r; echo "[${x-unset}]"
+---
+set -e; trap 'echo err-trapped' ERR; false; echo never
+---
+trap 'echo "err $?"' ERR; false; echo after; true; echo ok
+---
+shopt -s lastpipe; echo hi | read x; echo "[$x]"
+---
+shopt -s lastpipe; printf '1\n2\n' | while read n; do total=$((total+n)); done; echo $total
+---
+echo a b c; echo $_
+---
+echo hello | tee >(tr a-z A-Z) >/dev/null; wait
+---
+x=$(echo abc | tee >(wc -c) >/dev/null); echo "[$x]"
+---
+f() { local x; x=$1; echo ${x^}; }; f word
+---
+declare -n undefined_ref; undefined_ref=target_var; echo ${!undefined_ref}
+---
+v1=a v2=b; for n in v1 v2; do declare -n cur=$n; echo $cur; done
+---
+f() { echo "$_"; }; true last-arg; f arg1 arg2; echo "$_"
+---
+trap 'echo trap-err' ERR; if false; then :; fi; false || true; echo fine

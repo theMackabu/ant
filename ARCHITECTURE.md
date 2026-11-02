@@ -86,7 +86,11 @@ focused [runtime invariants](docs/repo/runtime-invariants.md) reference.
   `src/modules/microtasks.c` and is shared by native and wasm builds; timers
   and immediates stay in `src/modules/timer.c`.
 - `src/builtins/` holds the JavaScript bootstrap, bundled shims, and
-  Node-compatible modules.
+  Node-compatible modules. `ant:shell` is `src/builtins/ant/shell.mjs` plus
+  the parser, compiler, runtime, and built-ins in
+  `src/builtins/ant/internal/shell/`; it lowers shell control flow to async
+  JavaScript and submits process graphs through `src/modules/shell.c` and
+  `src/modules/process_plan.c`.
 - `src/http/`, `src/net/`, and `src/streams/` provide protocol, networking, and
   streaming support.
 - `src/esm/` handles module loading, export wiring, and built-in bundle access.
