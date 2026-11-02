@@ -8,6 +8,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs-node.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -15,7 +16,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
+  outputs = { self, nixpkgs, nixpkgs-node, flake-utils, rust-overlay }:
   flake-utils.lib.eachDefaultSystem (system:
     let
       pkgs = import nixpkgs {
@@ -39,6 +40,7 @@
       
       devShells.default = import ./packages/nix/shell.nix {
         inherit pkgs toolchain;
+        nodejs = nixpkgs-node.legacyPackages.${system}.nodejs_26;
       };
     });
 }

@@ -1,4 +1,4 @@
-{ pkgs, toolchain }:
+{ pkgs, toolchain, nodejs }:
 
 let
   lib = pkgs.lib;
@@ -22,17 +22,11 @@ let
   optArgs = lib.concatStringsSep " " optFlags;
 in
 pkgs.mkShellNoCC ({
-  packages = [
-    pkgs.nodejs_22
-  ] ++ (if isDarwin then [
-    darwinClang
-  ] else [
+  packages = [ nodejs ] ++ (if isDarwin then [ darwinClang ] else [
     toolchain.bintools
     toolchain.clang
     toolchain.compilerRt
-  ]) ++ [
-    toolchain.llvm
-  ];
+  ]) ++ [ toolchain.llvm ];
 
   CFLAGS = optArgs;
   CXXFLAGS = optArgs;
