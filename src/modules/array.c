@@ -1509,7 +1509,7 @@ static ant_value_t builtin_array_concat(ant_params_t) {
     bool spreadable = false;
     
     ant_object_t *plain_array = real_array_obj_ptr(arg);
-    if (plain_array && plain_array->proto == js->sym.array_proto && ant_protector_intact(js, ANT_PROTECTOR_CONCAT_SPREADABLE)) spreadable = true;
+    if (plain_array && ant_object_proto(plain_array) == js->sym.array_proto && ant_protector_intact(js, ANT_PROTECTOR_CONCAT_SPREADABLE)) spreadable = true;
     else if (vtype(arg) == kTypeArray || vtype(arg) == kTypeObject) {
       bool array_default_spreadable = real_array_obj_ptr(arg) != NULL;
       if (!array_default_spreadable && is_proxy(arg)) {
@@ -2645,7 +2645,7 @@ static bool array_locale_uses_default_string_methods(ant_t *js) {
   ant_object_t *object_ptr = js_obj_ptr(js_as_obj(object_proto));
 
   if (!string_ptr || !object_ptr || string_ptr->flags.is_exotic || object_ptr->flags.is_exotic) return false;
-  if (!same_object_identity(string_ptr->proto, object_proto)) return false;
+  if (!same_object_identity(ant_object_proto(string_ptr), object_proto)) return false;
   if (lkp(js, string_proto, "toLocaleString", 14).obj) return false;
 
   ant_prop_loc_t locale_off = lkp(js, object_proto, "toLocaleString", 14);

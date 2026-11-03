@@ -148,7 +148,7 @@ bool js_chain_may_override_has_instance(ant_t *js, ant_value_t obj, bool guard_a
     if (!ptr || !ptr->shape || is_proxy(o) || ant_shape_lookup_symbol(ptr->shape, sym_off) >= 0) return true;
     if (ptr->flags.is_exotic && lookup_sym_descriptor(js, o, sym_off)) return true;
     if (guard_absence) ant_object_guard_absence(ptr);
-    obj = ptr->proto;
+    obj = ant_object_proto(ptr);
   }
   
   return is_object_type(obj);

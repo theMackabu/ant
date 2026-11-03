@@ -210,7 +210,11 @@ static MIR_reg_t mir_emit_put_field_add_guard(
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, type_tag),
                                MIR_new_mem_op(ctx, MIR_JSVAL,
-                                              (MIR_disp_t)offsetof(ant_object_t, proto), optr, 0, 1)));
+                                              (MIR_disp_t)offsetof(ant_object_t, shape), optr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, type_tag),
+                               MIR_new_mem_op(ctx, MIR_JSVAL,
+                                              (MIR_disp_t)ANT_SHAPE_PROTO_OFFSET, type_tag, 0, 1)));
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
                                MIR_new_reg_op(ctx, type_tag), MIR_new_reg_op(ctx, scratch)));
@@ -835,7 +839,10 @@ static bool mir_emit_get_field_missing_fastpath(
       MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tmp), MIR_new_reg_op(ctx, expect)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, proto),
-      MIR_new_mem_op(ctx, MIR_T_I64, offsetof(ant_object_t, proto), ptr, 0, 1)));
+      MIR_new_mem_op(ctx, MIR_T_I64, offsetof(ant_object_t, shape), ptr, 0, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, proto),
+      MIR_new_mem_op(ctx, MIR_T_I64, ANT_SHAPE_PROTO_OFFSET, proto, 0, 1)));
   // Specialize the prototype value just as the positive prototype handler
   // does. Decode only the receiver's live prototype; its identity must still
   // match the current IC, including after GC or cache replacement.
@@ -1008,7 +1015,8 @@ static bool mir_emit_get_field_proto_snapshot(
   mir_emit_receiver_exotic_guard(ctx, fn, ptr, tmp, miss);
   
   if (ant_shape_proto(shape) != proto) {
-    LOAD(tmp, MIR_T_I64, offsetof(ant_object_t, proto), ptr);
+    LOAD(tmp, MIR_T_I64, offsetof(ant_object_t, shape), ptr);
+    LOAD(tmp, MIR_T_I64, ANT_SHAPE_PROTO_OFFSET, tmp);
     MISS_UNLESS_EQ(tmp, proto, miss);
   }
   
@@ -1073,7 +1081,8 @@ static bool mir_emit_get_field_native_getter(
     mir_load_imm(ctx, fn, tmp2, (uint64_t)(uintptr_t)ic->cached_shape);
     INSN(MIR_BNE, LBL(slow), REG(tmp), REG(tmp2));
     mir_emit_receiver_exotic_guard(ctx, fn, ptr, tmp, slow);
-    INSN(MIR_MOV, REG(tmp), MEM(MIR_T_I64, offsetof(ant_object_t, proto), ptr));
+    INSN(MIR_MOV, REG(tmp), MEM(MIR_T_I64, offsetof(ant_object_t, shape), ptr));
+    INSN(MIR_MOV, REG(tmp), MEM(MIR_T_I64, ANT_SHAPE_PROTO_OFFSET, tmp));
     mir_load_imm(ctx, fn, tmp2, proto);
     INSN(MIR_BNE, LBL(slow), REG(tmp), REG(tmp2));
     mir_load_imm(ctx, fn, r_ic, (uint64_t)(uintptr_t)holder);
@@ -1086,7 +1095,8 @@ static bool mir_emit_get_field_native_getter(
     INSN(MIR_MOV, REG(tmp), MEM(MIR_T_P, offsetof(ant_object_t, shape), ptr));
     INSN(MIR_MOV, REG(tmp2), MEM(MIR_T_P, offsetof(sv_ic_entry_t, cached_shape), r_ic));
     INSN(MIR_BNE, LBL(slow), REG(tmp), REG(tmp2));
-    INSN(MIR_MOV, REG(tmp), MEM(MIR_T_I64, offsetof(ant_object_t, proto), ptr));
+    INSN(MIR_MOV, REG(tmp), MEM(MIR_T_I64, offsetof(ant_object_t, shape), ptr));
+    INSN(MIR_MOV, REG(tmp), MEM(MIR_T_I64, ANT_SHAPE_PROTO_OFFSET, tmp));
     INSN(MIR_MOV, REG(tmp2), MEM(MIR_T_I64, offsetof(sv_ic_entry_t, guard.receiver_proto), r_ic));
     INSN(MIR_BNE, LBL(slow), REG(tmp), REG(tmp2));
     INSN(MIR_URSH, REG(tmp2), REG(tmp), MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT));
@@ -1314,7 +1324,12 @@ bool mir_emit_get_field_ic_fastpath(
                   MIR_new_insn(ctx, MIR_MOV,
                                MIR_new_reg_op(ctx, r_obj_proto),
                                MIR_new_mem_op(ctx, MIR_T_I64,
-                                              (MIR_disp_t)offsetof(ant_object_t, proto), r_obj_ptr, 0, 1)));
+                                              (MIR_disp_t)offsetof(ant_object_t, shape), r_obj_ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV,
+                               MIR_new_reg_op(ctx, r_obj_proto),
+                               MIR_new_mem_op(ctx, MIR_T_I64,
+                                              (MIR_disp_t)ANT_SHAPE_PROTO_OFFSET, r_obj_proto, 0, 1)));
   // The cache can learn a new receiver prototype without recompiling this
   // function. Follow its current guard, rather than pinning the first one.
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
@@ -1408,7 +1423,9 @@ bool mir_emit_get_field_ic_fastpath(
     MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,
         MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, r_proto_id), MIR_new_int_op(ctx, 0)));
     MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
-        MIR_new_reg_op(ctx, r_obj_proto), MIR_new_mem_op(ctx, MIR_JSVAL, offsetof(ant_object_t, proto), r_obj_ptr, 0, 1)));
+        MIR_new_reg_op(ctx, r_obj_proto), MIR_new_mem_op(ctx, MIR_JSVAL, offsetof(ant_object_t, shape), r_obj_ptr, 0, 1)));
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, r_obj_proto), MIR_new_mem_op(ctx, MIR_JSVAL, ANT_SHAPE_PROTO_OFFSET, r_obj_proto, 0, 1)));
     MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
         MIR_new_reg_op(ctx, r_ic_proto), MIR_new_mem_op(ctx, MIR_JSVAL, offsetof(sv_ic_entry_t, guard.receiver_proto), r_ic, 0, 1)));
     MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BNE,

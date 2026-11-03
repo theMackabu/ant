@@ -6,8 +6,8 @@ static bool regexp_result_shape_init(
   bool with_indices
 ) {
   if (!array || !array->shape) return false;
-  if (cache->shape && ant_shape_proto(cache->shape) == array->proto) return true;
-  if (ant_shape_proto(array->shape) != array->proto) return false;
+  if (cache->shape && ant_shape_proto(cache->shape) == ant_object_proto(array)) return true;
+  if (ant_shape_proto(array->shape) != ant_object_proto(array)) return false;
 
   const char *index_key = intern_string(js, "index", 5);
   const char *input_key = intern_string(js, "input", 5);

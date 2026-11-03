@@ -333,7 +333,7 @@ static inline ant_value_t iterator_get_method(
       return ant_object_prop_get_unchecked(obj, (uint32_t)slot);
     }
 
-    current = obj->proto;
+    current = ant_object_proto(obj);
     if (is_null(current) || is_undefined(current)) return Ant_Value_Undefined;
   }
 

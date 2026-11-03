@@ -38,10 +38,10 @@ const char *index_key_get_or_intern(ant_t *js, uint32_t idx) {
 }
 
 bool index_keys_absent_from_protos(const ant_object_t *ptr) {
-  for (ant_value_t proto = ptr->proto; is_object_type(proto);) {
+  for (ant_value_t proto = ant_object_proto(ptr); is_object_type(proto);) {
     const ant_object_t *p = js_obj_ptr(proto);
     if (!p || p->flags.is_exotic || p->type_tag == kTypeArray || ant_shape_may_have_index_keys(p->shape)) return false;
-    proto = p->proto;
+    proto = ant_object_proto(p);
   }
   return true;
 }
@@ -201,14 +201,14 @@ static ant_value_t try_dynamic_getter(ant_t *js, ant_value_t obj, const char *ke
 bool try_dynamic_setter(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t value) {
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
   if (!ptr || !ptr->flags.is_exotic) return false;
-  if (!ptr->exotic_ops || !ptr->exotic_ops->setter) return false;
-  return ptr->exotic_ops->setter(js, obj, key, key_len, value);
+  if (!ant_object_exotic_ops(ptr) || !ant_object_exotic_ops(ptr)->setter) return false;
+  return ant_object_exotic_ops(ptr)->setter(js, obj, key, key_len, value);
 }
 
 bool exotic_delete_allowed(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-  if (!ptr || !ptr->flags.is_exotic || !ptr->exotic_ops || !ptr->exotic_ops->deleter) return true;
-  return ptr->exotic_ops->deleter(js, obj, key, key_len);
+  if (!ptr || !ptr->flags.is_exotic || !ant_object_exotic_ops(ptr) || !ant_object_exotic_ops(ptr)->deleter) return true;
+  return ant_object_exotic_ops(ptr)->deleter(js, obj, key, key_len);
 }
 
 bool try_accessor_getter(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t *out) {
@@ -237,7 +237,7 @@ static __attribute__((noinline)) ant_value_t js_get_cached_miss(
   ant_prop_loc_t loc = lkp_interned(obj, interned);
   
   for (int depth = 0; !loc.obj; depth++) {
-    ant_value_t next = holder->proto;
+    ant_value_t next = ant_object_proto(holder);
     if (depth >= MAX_PROTO_CHAIN_DEPTH || !is_object_type(next) || is_proxy(next)) return value;
     holder = js_obj_ptr(js_as_obj(next));
     if (!holder || holder->flags.is_exotic || !holder->shape) return value;
@@ -251,7 +251,7 @@ static __attribute__((noinline)) ant_value_t js_get_cached_miss(
   if (cache->shape) ant_shape_release(cache->shape);
   
   cache->shape = ptr->shape;
-  cache->proto = ptr->proto;
+  cache->proto = ant_object_proto(ptr);
   cache->holder = holder == ptr ? NULL : holder;
   cache->key = interned;
   cache->slot = loc.slot;
@@ -267,7 +267,7 @@ ant_value_t js_get_cached(
   
   if (
     ptr && ptr->shape && cache->shape == ptr->shape &&
-    cache->proto == ptr->proto && cache->ic_epoch == js->ic.epoch
+    cache->proto == ant_object_proto(ptr) && cache->ic_epoch == js->ic.epoch
   ) {
     ant_object_t *src = cache->holder ? cache->holder : ptr;
     const ant_shape_prop_t *prop = src->shape && cache->slot < src->prop_count
@@ -291,14 +291,14 @@ ant_value_t js_get_then_property(ant_t *js, ant_value_t value) {
   ant_object_t *obj = type == kTypeObject || type == kTypeArray ? js_obj_ptr(js_as_obj(value)) : NULL;
   if (!obj || obj->flags.is_exotic) return js_getprop_fallback(js, value, "then");
   
-  if (type == kTypeObject && obj->shape && obj->proto == js->sym.object_proto && ant_protector_intact(js, ANT_PROTECTOR_OBJECT_THEN)) {
+  if (type == kTypeObject && obj->shape && ant_object_proto(obj) == js->sym.object_proto && ant_protector_intact(js, ANT_PROTECTOR_OBJECT_THEN)) {
     ant_object_t *object_proto = js_obj_ptr(js->sym.object_proto);
-    if (object_proto && !is_object_type(object_proto->proto) && ant_shape_lookup_interned(obj->shape, js->intern.then) < 0)
+    if (object_proto && !is_object_type(ant_object_proto(object_proto)) && ant_shape_lookup_interned(obj->shape, js->intern.then) < 0)
       return Ant_Value_Undefined;
   }
   
   ant_absent_key_cache_t *cache = &js->runtime_cache.then_absent[((uintptr_t)obj->shape >> 6) & 7];
-  if (cache->ic_epoch == js->ic.epoch && cache->shape == obj->shape && cache->proto == obj->proto && obj->shape)
+  if (cache->ic_epoch == js->ic.epoch && cache->shape == obj->shape && cache->proto == ant_object_proto(obj) && obj->shape)
     return Ant_Value_Undefined;
   
   ant_value_t then = js_getprop_fallback(js, value, "then");
@@ -308,7 +308,7 @@ ant_value_t js_get_then_property(ant_t *js, ant_value_t value) {
   ant_shape_retain(obj->shape);
   if (cache->shape) ant_shape_release(cache->shape);
   cache->shape = obj->shape;
-  cache->proto = obj->proto;
+  cache->proto = ant_object_proto(obj);
   cache->ic_epoch = js->ic.epoch;
   
   return then;

@@ -774,7 +774,12 @@ void jit_emit_compare(jit_compile_t *c) {
                         MIR_new_insn(c->ctx, MIR_MOV,
                                      MIR_new_reg_op(c->ctx, r_lhs_proto),
                                      MIR_new_mem_op(c->ctx, MIR_JSVAL,
-                                                    (MIR_disp_t)offsetof(ant_object_t, proto), r_lhs_obj, 0, 1)));
+                                                    (MIR_disp_t)offsetof(ant_object_t, shape), r_lhs_obj, 0, 1)));
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_MOV,
+                                     MIR_new_reg_op(c->ctx, r_lhs_proto),
+                                     MIR_new_mem_op(c->ctx, MIR_JSVAL,
+                                                    (MIR_disp_t)ANT_SHAPE_PROTO_OFFSET, r_lhs_proto, 0, 1)));
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_MOV,
                                      MIR_new_reg_op(c->ctx, r_ic_direct_proto),

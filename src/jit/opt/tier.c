@@ -983,7 +983,6 @@ ant_value_t opt_rt_allocate_object(sv_vm_t *vm, ant_shape_t *shape, ant_value_t 
   ant_object_t *ptr = obj_alloc_shaped(vm->js, kTypeObject, shape);
   if (!ptr) return js_mkerr(vm->js, "oom");
   ptr->prop_count = (uint32_t)property_count;
-  ptr->proto = proto;
   return js_obj_from_ptr(ptr);
 }
 
@@ -996,7 +995,6 @@ ant_value_t opt_rt_materialize_object(sv_vm_t *vm, ant_shape_t *shape) {
   ant_shape_retain(shape);
   ant_object_t *ptr = obj_alloc_shaped(js, kTypeObject, shape);
   if (!ptr || !js_obj_ensure_prop_capacity(js, ptr, ant_shape_count(shape))) return Ant_Error_CreateOutOfMemory(js);
-  ptr->proto = ant_shape_proto(shape);
   return js_obj_from_ptr(ptr);
 }
 

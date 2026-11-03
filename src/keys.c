@@ -831,7 +831,7 @@ bool chain_lacks_plain_keys(ant_value_t start, const char *first, const char *se
     if (!ptr || ptr->flags.is_exotic) return false;
     if (ptr->shape && ant_shape_lookup_interned(ptr->shape, first) >= 0) return false;
     if (second && ptr->shape && ant_shape_lookup_interned(ptr->shape, second) >= 0) return false;
-    start = ptr->proto;
+    start = ant_object_proto(ptr);
   }
   
   return false;
@@ -871,7 +871,7 @@ static ant_value_t copy_set(ant_t *js, ant_value_t dst, copy_key_t key, ant_valu
     return val;
   }
   
-  if (plain && slot < 0 && ptr->flags.extensible && chain_lacks_plain_key(ptr->proto, key.interned))
+  if (plain && slot < 0 && ptr->flags.extensible && chain_lacks_plain_key(ant_object_proto(ptr), key.interned))
     return mkprop_interned_exact(js, dst, key.interned, val, 0);
   
   GC_ROOT_SAVE(root_mark, js);
@@ -1201,7 +1201,7 @@ static bool copy_adopt_shape(ant_t *js, ant_value_t dst, ant_object_t *src, bool
   if (
     count == 0 || count > src->prop_count || ant_shape_may_have_index_keys(shape) ||
     (src->protector_holder & ANT_PROTECTOR_HOLDER_WATCHED) || !dst_ptr ||
-    ant_shape_proto(shape) != dst_ptr->proto || !dst_ptr->shape || ant_shape_count(dst_ptr->shape) != 0 || dst_ptr->prop_count != 0 ||
+    ant_shape_proto(shape) != ant_object_proto(dst_ptr) || !dst_ptr->shape || ant_shape_count(dst_ptr->shape) != 0 || dst_ptr->prop_count != 0 ||
     dst_ptr->flags.is_exotic || !dst_ptr->flags.extensible || dst_ptr->type_tag != kTypeObject ||
     ant_object_inobj_limit(dst_ptr) != ant_shape_get_inobj_limit(shape) ||
     (via_set && vtype(js_string_wrapper_value(dst)) == kTypeString)
@@ -1214,7 +1214,7 @@ static bool copy_adopt_shape(ant_t *js, ant_value_t dst, ant_object_t *src, bool
   }
   
   for (uint32_t i = 0; via_set && i < count; i++)
-    if (!chain_lacks_plain_key(dst_ptr->proto, ant_shape_prop_at(shape, i)->key.interned)) return false;
+    if (!chain_lacks_plain_key(ant_object_proto(dst_ptr), ant_shape_prop_at(shape, i)->key.interned)) return false;
   
   if (!js_obj_ensure_prop_capacity(js, dst_ptr, count)) return false;
   ant_shape_retain(shape);

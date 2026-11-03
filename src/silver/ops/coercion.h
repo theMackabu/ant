@@ -289,7 +289,7 @@ static inline ant_value_t sv_op_export_all(sv_vm_t *vm, ant_t *js) {
 }
 
 static inline ant_object_t *sv_with_proto_ptr(ant_object_t *base_ptr) {
-  return (base_ptr && is_object_type(base_ptr->proto)) ? js_obj_ptr(js_as_obj(base_ptr->proto)) : NULL;
+  return (base_ptr && is_object_type(ant_object_proto(base_ptr))) ? js_obj_ptr(js_as_obj(ant_object_proto(base_ptr))) : NULL;
 }
 
 static inline bool sv_with_unscopables_cached_absent(ant_t *js, ant_object_t *base_ptr) {
@@ -306,7 +306,7 @@ static inline bool sv_with_unscopables_cached_absent(ant_t *js, ant_object_t *ba
 
 static inline void sv_with_unscopables_remember_absent(ant_t *js, ant_object_t *base_ptr) {
   ant_object_t *proto_ptr = sv_with_proto_ptr(base_ptr);
-  if (proto_ptr && is_object_type(proto_ptr->proto)) return;
+  if (proto_ptr && is_object_type(ant_object_proto(proto_ptr))) return;
 
   ant_with_unscopables_cache_t *cache = &js->runtime_cache.with_unscopables_absent;
   cache->base = base_ptr;

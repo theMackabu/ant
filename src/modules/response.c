@@ -720,7 +720,7 @@ static bool response_init_direct_headers(
   const ant_shape_prop_t *prop = ptr && ptr->shape && ptr->prop_count == 1
     ? ant_shape_prop_at(ptr->shape, 0)
     : NULL;
-  if (!ptr || ptr->flags.is_exotic || ptr->proto != js->sym.object_proto ||
+  if (!ptr || ptr->flags.is_exotic || ant_object_proto(ptr) != js->sym.object_proto ||
       !prop || prop->type != ANT_SHAPE_KEY_STRING ||
       prop->has_getter || prop->has_setter ||
       intern_length(prop->key.interned) != 7 ||
@@ -740,9 +740,9 @@ static bool response_init_later_fields_absent(
   ant_object_t *ptr = js_obj_ptr(init);
   ant_object_t *object_proto = js_obj_ptr(js->sym.object_proto);
   if (!ptr || ptr->flags.is_exotic || ptr->shape != original_shape ||
-      ptr->proto != js->sym.object_proto || !object_proto ||
+      ant_object_proto(ptr) != js->sym.object_proto || !object_proto ||
       object_proto->flags.is_exotic ||
-      vtype(object_proto->proto) != kTypeNull)
+      vtype(ant_object_proto(object_proto)) != kTypeNull)
     return false;
 
   const char *status = intern_find(js, "status", 6);

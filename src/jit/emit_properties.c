@@ -102,7 +102,8 @@ static void jit_emit_in_field_fast(
     sv_asm_i64_bne_imm(a, slow, r_t, kTypeObject);
   }
   
-  sv_asm_load(a, MIR_T_I64, r_proto, r_ptr, offsetof(ant_object_t, proto));
+  sv_asm_load(a, MIR_T_I64, r_proto, r_ptr, offsetof(ant_object_t, shape));
+  sv_asm_load(a, MIR_T_I64, r_proto, r_proto, ANT_SHAPE_PROTO_OFFSET);
   sv_asm_load(a, MIR_T_I64, r_t, r_ic, offsetof(sv_ic_entry_t, guard.receiver_proto));
   sv_asm_i64_bne(a, slow, r_proto, r_t);
   if (kind == SV_GF_IC_MISSING)
@@ -155,7 +156,8 @@ static void jit_emit_get_field_poly_loop(
   sv_asm_i64_beq_imm(a, own, c->r_gfp_t, SV_GF_IC_OWN);
   sv_asm_i64_bne_imm(a, next, c->r_gfp_t, SV_GF_IC_PROTOTYPE);
 
-  sv_asm_load(a, MIR_JSVAL, c->r_gfp_t, c->r_gfp_ptr, offsetof(ant_object_t, proto));
+  sv_asm_load(a, MIR_JSVAL, c->r_gfp_t, c->r_gfp_ptr, offsetof(ant_object_t, shape));
+  sv_asm_load(a, MIR_JSVAL, c->r_gfp_t, c->r_gfp_t, ANT_SHAPE_PROTO_OFFSET);
   sv_asm_load(a, MIR_JSVAL, c->r_gfp_t2, c->r_gfp_e, offsetof(sv_gf_poly_entry_t, receiver_proto));
   sv_asm_i64_bne(a, next, c->r_gfp_t, c->r_gfp_t2);
   sv_asm_i64_ursh_imm(a, c->r_gfp_t2, c->r_gfp_t, NANBOX_TYPE_SHIFT);
@@ -208,7 +210,7 @@ static void jit_emit_get_field_mega_probe(
   jit_emit_gfp_exotic_guard(c, c->r_gfp_ptr, full);
   sv_asm_load(a, MIR_T_P, c->r_gfp_shape, c->r_gfp_ptr, offsetof(ant_object_t, shape));
   sv_asm_i64_beq_imm(a, full, c->r_gfp_shape, 0);
-  sv_asm_load(a, MIR_JSVAL, c->r_gfp_t2, c->r_gfp_ptr, offsetof(ant_object_t, proto));
+  sv_asm_load(a, MIR_JSVAL, c->r_gfp_t2, c->r_gfp_shape, ANT_SHAPE_PROTO_OFFSET);
 
   sv_asm_i64_ursh_imm(a, c->r_gfp_e, c->r_gfp_shape, SV_GF_MEGA_SHAPE_SHIFT);
   sv_asm_i64_xor_imm(a, c->r_gfp_e, c->r_gfp_e, (uint64_t)(uintptr_t)key >> SV_GF_MEGA_KEY_SHIFT);

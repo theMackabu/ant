@@ -66,7 +66,7 @@ static bool inspector_safe_get_prop(
     if (lookup_string_prop_meta(js, current, key, key_len, &meta))
       return false;
 
-    if (ptr && ptr->exotic_ops && ptr->exotic_ops->getter) return false;
+    if (ptr && ant_object_exotic_ops(ptr) && ant_object_exotic_ops(ptr)->getter) return false;
     obj = js_get_proto(js, current);
   }
 

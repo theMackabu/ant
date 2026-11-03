@@ -1427,7 +1427,8 @@ static jit_typed_array_t mir_emit_typed_array_guard(
   mir_emit_decode_ref(ctx, fn, ptr, object);
   TA_INSN(MIR_MOV, TA_REG(t), TA_MEM(MIR_T_U32, offsetof(ant_object_t, native_tag), ptr));
   TA_INSN(MIR_BNE, TA_LBL(slow), TA_REG(t), MIR_new_uint_op(ctx, BUFFER_TYPEDARRAY_NATIVE_TAG));
-  TA_INSN(MIR_MOV, TA_REG(t), TA_MEM(MIR_T_P, offsetof(ant_object_t, exotic_ops), ptr));
+  TA_INSN(MIR_MOV, TA_REG(t), TA_MEM(MIR_T_P, offsetof(ant_object_t, shape), ptr));
+  TA_INSN(MIR_MOV, TA_REG(t), TA_MEM(MIR_T_P, ANT_SHAPE_EXOTIC_OPS_OFFSET, t));
   TA_INSN(MIR_BNE, TA_LBL(slow), TA_REG(t), MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)buffer_typedarray_exotic_ops()));
   TA_INSN(MIR_MOV, TA_REG(ptr), TA_MEM(MIR_T_P, offsetof(ant_object_t, native_ptr), ptr));
   TA_INSN(MIR_MOV, TA_REG(t), TA_MEM(MIR_T_U64, offsetof(TypedArrayData, length), ptr));
@@ -1710,7 +1711,8 @@ void mir_emit_array_add_guard(
       MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_EXOTIC)));
   BRANCH(MIR_BNE, MIR_new_reg_op(ctx, t), MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_EXTENSIBLE));
 
-  LOAD(t, MIR_JSVAL, offsetof(ant_object_t, proto), ptr);
+  LOAD(t, MIR_JSVAL, offsetof(ant_object_t, shape), ptr);
+  LOAD(t, MIR_JSVAL, ANT_SHAPE_PROTO_OFFSET, t);
   LOAD(ap, MIR_JSVAL, offsetof(ant_t, sym.array_proto), r_js);
   BRANCH(MIR_BNE, MIR_new_reg_op(ctx, t), MIR_new_reg_op(ctx, ap));
   

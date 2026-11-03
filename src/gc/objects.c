@@ -2,7 +2,6 @@
 #include "realm.h"
 #include "sugar.h"
 #include "shapes.h"
-#include "debug.h"
 #include "proto_watch.h"
 #include "utils.h"
 #include "handles.h"
@@ -96,23 +95,6 @@ gc_func_mark_profile_t gc_func_mark_profile_get(ant_t *js) {
 
 bool gc_obj_is_marked(ant_t *js, const ant_object_t *obj) {
   return obj && obj->mark_epoch == js->gc.obj_epoch;
-}
-
-static void gc_verify_shape_protos_in(ant_object_t *list) {
-  for (ant_object_t *o = list; o; o = o->next) {
-    if (o->mark_epoch == ANT_GC_DEAD || !o->shape || ant_shape_proto(o->shape) == o->proto) continue;
-    fprintf(stderr, "shape:verify object %p type=%u proto=%#llx shape=%p shape proto=%#llx props=%u\n",
-    (void *)o, o->type_tag, (unsigned long long)o->proto, (void *)o->shape,
-    (unsigned long long)ant_shape_proto(o->shape), ant_shape_count(o->shape));
-    abort();
-  }
-}
-
-static void gc_verify_shape_protos(ant_t *js) {
-  if (!sv_debug_unlikely(SV_DEBUG_SHAPE_VERIFY)) return;
-  gc_verify_shape_protos_in(js->objects);
-  gc_verify_shape_protos_in(js->objects_old);
-  gc_verify_shape_protos_in(js->permanent_objects);
 }
 
 static void gc_obj_epoch_wrapped(ant_t *js) {
@@ -770,7 +752,7 @@ static inline bool gc_scan_plain_obj(ant_t *js, ant_object_t *obj) {
   if (obj->extra_slots || obj->native_tag || ant_shape_may_have_gc_refs(shape)) return false;
 
   ant_gc_shapes_mark(js, shape);
-  gc_mark_value_fast(js, obj->proto);
+  gc_mark_value_fast(js, ant_object_proto(obj));
   if (type == kTypeObject) gc_mark_value_fast(js, obj->u.data.value);
 
   uint32_t count = ant_shape_count(shape);
@@ -787,7 +769,7 @@ static inline bool gc_scan_plain_obj(ant_t *js, ant_object_t *obj) {
 static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   if (gc_scan_plain_obj(js, obj)) return;
   ant_gc_shapes_mark(js, obj->shape);
-  gc_mark_value_fast(js, obj->proto);
+  gc_mark_value_fast(js, ant_object_proto(obj));
 
   if (obj->type_tag == kTypeError) {
     gc_mark_value_fast(js, obj->u.exception.value);
@@ -933,7 +915,7 @@ static inline __attribute__((always_inline)) bool gc_marker_scan_plain(ant_t *js
   if (type == kTypeArray && m->minor && obj->u.array.cap >= GC_CARD_MIN_CAP) return false;
 
   ant_gc_shapes_mark(js, shape);
-  gc_marker_value(js, m, obj->proto);
+  gc_marker_value(js, m, ant_object_proto(obj));
   if (type == kTypeObject) gc_marker_value(js, m, obj->u.data.value);
 
   uint32_t count = ant_shape_count(shape);
@@ -1632,7 +1614,7 @@ static inline __attribute__((always_inline)) void gc_shape_release(ant_shape_t *
 static inline __attribute__((always_inline)) bool gc_object_release_plain(ant_t *js, ant_object_t *obj) {
   uintptr_t attached =
     (uintptr_t)obj->finalizer | (uintptr_t)obj->extra_slots |
-    (uintptr_t)obj->overflow_prop | (uintptr_t)obj->exotic_ops | obj->native_tag;
+    (uintptr_t)obj->overflow_prop | obj->native_tag;
   
   if (attached != 0 || ((1u << obj->type_tag) & GC_FREE_SLOW_TYPE_MASK)) return false;
   obj->mark_epoch = ANT_GC_DEAD;
@@ -1761,7 +1743,6 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   
   free(obj->overflow_prop);
   obj->overflow_prop = NULL;
-  obj->exotic_ops = NULL;
   
   GC_VERIFY_POISON_OBJECT(obj);
   ant_object_cell_free(js, obj);
@@ -1937,7 +1918,6 @@ void gc_pin_existing_objects(ant_t *js) {
 
 uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
   if (!js) return 0;
-  gc_verify_shape_protos(js);
   uint64_t mark_start_ns = gc_now_ns();
   
   js->gc_objects_running = true;
@@ -2075,7 +2055,6 @@ uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
 
 void gc_objects_run_minor(ant_t *js) {
   if (!js) return;
-  gc_verify_shape_protos(js);
   
   js->gc_objects_running = true;
   js->gc.epoch++;

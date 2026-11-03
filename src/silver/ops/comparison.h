@@ -371,7 +371,7 @@ static inline bool sv_instanceof_lhs_cache_key(
   ant_object_t *obj = is_object_type(l) ? js_obj_ptr(js_as_obj(l)) : NULL;
   if (!obj || obj->flags.is_exotic) return false;
 
-  ant_value_t proto = obj->proto;
+  ant_value_t proto = ant_object_proto(obj);
   ant_object_t *proto_obj = is_object_type(proto) ? js_obj_ptr(js_as_obj(proto)) : NULL;
   if (!proto_obj || (proto_obj->flags.is_exotic && is_proxy(proto))) return false;
 
@@ -385,7 +385,7 @@ static inline bool sv_instanceof_chain_has_no_proxy(ant_value_t proto) {
   for (int depth = 0; is_object_type(proto); depth++) {
     ant_object_t *ptr = js_obj_ptr(js_as_obj(proto));
     if (!ptr || depth >= MAX_PROTO_CHAIN_DEPTH || (ptr->flags.is_exotic && is_proxy(proto))) return false;
-    proto = ptr->proto;
+    proto = ant_object_proto(ptr);
   }
   return true;
 }

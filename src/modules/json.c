@@ -305,7 +305,7 @@ static bool json_prepare_object(
   ant_shape_t *expected, bool *duplicates
 ) {
   *duplicates = false;
-  if (ant_shape_proto(expected) == obj->proto && json_shape_matches(expected, val)) {
+  if (ant_shape_proto(expected) == ant_object_proto(obj) && json_shape_matches(expected, val)) {
     ant_shape_transition_existing(&obj->shape, expected);
     return js_obj_ensure_prop_capacity(js, obj, ant_shape_count(expected));
   }
@@ -318,7 +318,7 @@ static bool json_prepare_object(
   if (bulk) {
     hash = json_layout_hash(val, &key_bytes);
     ant_shape_t *cached = json_layout_cache_find(js, val, hash);
-    if (cached && ant_shape_proto(cached) == obj->proto) {
+    if (cached && ant_shape_proto(cached) == ant_object_proto(obj)) {
       ant_shape_transition_existing(&obj->shape, cached);
       return js_obj_ensure_prop_capacity(js, obj, ant_shape_count(cached));
     }
@@ -702,7 +702,7 @@ static ant_prop_loc_t json_tojson_find_proto(ant_t *js, json_cycle_ctx *ctx, ant
     if (slot >= 0) return (ant_prop_loc_t){ obj, (uint32_t)slot };
 
     ant_object_guard_absence(obj);
-    cur = obj->proto;
+    cur = ant_object_proto(obj);
   }
   
   return ANT_PROP_LOC_NONE;

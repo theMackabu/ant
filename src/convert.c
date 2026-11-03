@@ -155,7 +155,7 @@ static inline bool js_to_primitive_cache_hit(ant_t *js, ant_value_t value) {
   
   return !obj->flags.is_exotic &&
     cache->shape == obj->shape &&
-    cache->proto == obj->proto;
+    cache->proto == ant_object_proto(obj);
 }
 
 static ant_value_t try_ordinary_to_primitive_number(ant_t *js, ant_value_t value) {
@@ -353,13 +353,13 @@ static bool js_guard_to_primitive_absence(ant_t *js, ant_value_t value) {
 }
 
 bool js_guard_proto_chain_absence(ant_t *js, ant_object_t *obj) {
-  ant_value_t cur = obj->proto;
+  ant_value_t cur = ant_object_proto(obj);
   for (int depth = 0; is_object_type(cur); depth++) {
     if (depth >= MAX_PROTO_CHAIN_DEPTH || is_proxy(cur)) return false;
     ant_object_t *proto = js_obj_ptr(js_as_obj(cur));
     if (!proto || proto->flags.is_exotic) return false;
     ant_object_guard_absence(proto);
-    cur = proto->proto;
+    cur = ant_object_proto(proto);
   }
   return vtype(cur) == kTypeNull;
 }
@@ -383,7 +383,7 @@ ant_value_t js_to_primitive(ant_t *js, ant_value_t value, int hint) {
     ant_to_primitive_cache_t *cache = &js->runtime_cache.to_primitive_absent;
     cache->object = cache_obj;
     cache->shape = cache_obj->shape;
-    cache->proto = cache_obj->proto;
+    cache->proto = ant_object_proto(cache_obj);
     cache->own_valueof_data_slot = UINT32_MAX;
 
     ant_prop_loc_t valueof = lkp(js, value, "valueOf", 7);

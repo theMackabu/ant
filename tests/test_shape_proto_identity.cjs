@@ -94,14 +94,14 @@ if (process.argv[2] === 'child') {
     env: { ...base, ...env, NO_COLOR: '1' },
     timeout: 120000, maxBuffer: 256 * 1024 * 1024,
   });
-  const interp = run({ ANT_DEBUG: 'shape:verify' }, ['--jitless']);
+  const interp = run({}, ['--jitless']);
   assert.strictEqual(interp.status, 0, interp.stdout + interp.stderr);
   assert.match(interp.stdout, /null prototype A1\n$/);
   const modes = [
-    ['default', 'shape:verify'],
-    ['verify', 'shape:verify opt:verify'],
-    ['force', 'shape:verify opt:force,verify'],
-    ['off', 'shape:verify opt:off'],
+    ['default', ''],
+    ['verify', 'opt:verify'],
+    ['force', 'opt:force,verify'],
+    ['off', 'opt:off'],
   ];
   for (const [name, debug] of modes) {
     const child = run({ ANT_DEBUG: debug });

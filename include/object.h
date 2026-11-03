@@ -173,11 +173,9 @@ typedef enum: uint8_t {
 typedef struct ant_object {
   struct ant_object *next;
   
-  ant_value_t proto;
   ant_shape_t *shape;
   ant_value_t *overflow_prop;
   
-  const ant_exotic_ops_t *exotic_ops;
   ant_extra_slot_t *extra_slots;
   void (*finalizer)(ant_t *, struct ant_object *);
 
@@ -212,7 +210,7 @@ static constexpr size_t ANT_OBJECT_LARGE_SIZE = sizeof(ant_object_t) + ANT_INOBJ
 static constexpr size_t ANT_OBJECT_FLAGS_HIGH_BYTE = offsetof(ant_object_t, flags) + 1;
 
 static_assert(
-  sizeof(void *) != 8 || ANT_INOBJ_BASE_SLOTS != 4 || ANT_OBJECT_SIZE == 136,
+  sizeof(void *) != 8 || ANT_INOBJ_BASE_SLOTS != 4 || ANT_OBJECT_SIZE == 120,
   "ordinary 64-bit object layout changed"
 );
 
@@ -267,6 +265,14 @@ static inline bool js_is_arguments(ant_value_t v) {
 
 static inline void ant_object_guard_absence(ant_object_t *obj) {
   if (obj) obj->flags.guards_absence = 1;
+}
+
+static inline ant_value_t ant_object_proto(const ant_object_t *obj) {
+  return obj->shape ? ant_shape_proto(obj->shape) : Ant_Value_Undefined;
+}
+
+static inline const ant_exotic_ops_t *ant_object_exotic_ops(const ant_object_t *obj) {
+  return obj->flags.is_exotic ? (const ant_exotic_ops_t *)ant_shape_exotic_ops(obj->shape) : NULL;
 }
 
 static inline bool ant_object_has_sidecar(const ant_object_t *obj) {
@@ -357,7 +363,7 @@ static inline ant_object_sidecar_t *ant_object_ensure_sidecar(ant_object_t *obj)
 
 static inline ant_exotic_ops_t *ant_object_owned_exotic_ops(const ant_object_t *obj) {
   ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
-  return sidecar && sidecar->owned_exotic_ops == obj->exotic_ops ? sidecar->owned_exotic_ops : NULL;
+  return sidecar && sidecar->owned_exotic_ops == ant_object_exotic_ops(obj) ? sidecar->owned_exotic_ops : NULL;
 }
 
 static inline ant_proxy_state_t *ant_object_proxy_state(const ant_object_t *obj) {

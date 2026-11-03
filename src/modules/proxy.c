@@ -772,7 +772,7 @@ static bool proxy_handler_plain_for_set(ant_t *js, ant_proxy_state_t *data) {
   for (ant_value_t cur = data->handler; is_object_type(cur);) {
     ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
     ant_object_guard_absence(ptr);
-    cur = ptr->proto;
+    cur = ant_object_proto(ptr);
   }
 
   data->plain_set_epoch = js->ic.epoch + 1;

@@ -104,7 +104,7 @@ static inline void sv_obj_site_apply(
     }
   }
 
-  if (site->shared_shape && ant_shape_proto(site->shared_shape) == ptr->proto) {
+  if (site->shared_shape && ant_shape_proto(site->shared_shape) == ant_object_proto(ptr)) {
     if (site->shared_shape != ptr->shape) {
       ant_shape_retain(site->shared_shape);
       ant_shape_release(ptr->shape);

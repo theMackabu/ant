@@ -77,7 +77,12 @@ void mir_emit_call_stable_builtin(
                   MIR_new_insn(ctx, MIR_MOV,
                                MIR_new_reg_op(ctx, proto),
                                MIR_new_mem_op(ctx, MIR_JSVAL,
-                                              (MIR_disp_t)offsetof(ant_object_t, proto), ptr, 0, 1)));
+                                              (MIR_disp_t)offsetof(ant_object_t, shape), ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV,
+                               MIR_new_reg_op(ctx, proto),
+                               MIR_new_mem_op(ctx, MIR_JSVAL,
+                                              (MIR_disp_t)ANT_SHAPE_PROTO_OFFSET, proto, 0, 1)));
   mir_load_const_slot(ctx, fn, guard, &js->sym.promise_proto);
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),

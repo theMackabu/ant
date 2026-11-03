@@ -1974,7 +1974,7 @@ static bool opt_prototype_case(ant_t *js, ant_shape_t *shape, ant_object_t *hold
     out->depth = depth + 1;
     if (object == holder) return index < holder->prop_count && opt_field_slot_ok(js, holder->shape, index, atom, false, &out->getter);
     if (ant_shape_lookup_interned(object->shape, atom->str) >= 0) return false;
-    value = object->proto;
+    value = ant_object_proto(object);
   }
   return false;
 }
@@ -3531,7 +3531,7 @@ static opt_flow_t opt_build_instanceof(opt_builder_t *b) {
   ant_object_t *function_proto = js_obj_ptr(js_as_obj(js->sym.function_proto));
   ant_offset_t has_instance = (ant_offset_t)vdata(js->sym.hasInstance_sym);
   if (func_obj->flags.is_exotic || function_proto->flags.is_exotic || !func_obj->shape || !function_proto->shape
-    || ant_shape_lookup_symbol(func_obj->shape, has_instance) >= 0 || vdata(func_obj->proto) != vdata(js->sym.function_proto))
+    || ant_shape_lookup_symbol(func_obj->shape, has_instance) >= 0 || vdata(ant_object_proto(func_obj)) != vdata(js->sym.function_proto))
     return OPT_FLOW_GENERIC;
   int32_t slot = ant_shape_lookup_interned(func_obj->shape, js->intern.prototype);
   if (slot < 0 || (uint32_t)slot >= func_obj->prop_count || slot > 0xffff) return OPT_FLOW_GENERIC;
@@ -4862,9 +4862,18 @@ static opt_flow_t opt_build_set_proto(opt_builder_t *b) {
       return OPT_FLOW_CONTINUE;
     }
     if (node->op.code == IR_OP_ALLOCATE_OBJECT && node->inputs.len == 1 && opt_is_literal(b, object)) {
-      ir_set_inputs(b->graph, object, &proto, 1);
-      opt_drop(b, 1);
-      return OPT_FLOW_CONTINUE;
+      ant_shape_t *shape = (ant_shape_t *)(uintptr_t)node->op.allocate_object.shape;
+      ant_shape_t *with = ant_shape_with_proto(shape, (ant_value_t)bits);
+      bool held = with && ant_shape_count(with) == ant_shape_count(shape) && jit_snapshot_shape(b->js, with);
+      if (with) ant_shape_release(with);
+      if (held) {
+        node->op.allocate_object.shape = (ir_cell_t)(uintptr_t)with;
+        for (uint32_t i = b->ctx->literal_nodes.len; i-- > 0;)
+          if (b->ctx->literal_nodes.items[i] == object) b->ctx->literal_shapes.items[i] = with;
+        ir_set_inputs(b->graph, object, &proto, 1);
+        opt_drop(b, 1);
+        return OPT_FLOW_CONTINUE;
+      }
     }
   }
   opt_runtime_call(b, (uintptr_t)opt_rt_set_proto, 0, (ir_node_id_t[]){object, proto}, 2, false, false);

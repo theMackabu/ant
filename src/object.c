@@ -179,10 +179,7 @@ ant_object_t *obj_alloc_with_proto(ant_t *js, uint8_t type_tag, ant_value_t prot
   if (!root) return NULL;
   
   ant_shape_retain(root);
-  ant_object_t *obj = obj_alloc_shaped(js, type_tag, root);
-  if (obj) obj->proto = proto;
-  
-  return obj;
+  return obj_alloc_shaped(js, type_tag, root);
 }
 
 ant_shape_t *ant_object_proto_root(ant_t *js, ant_value_t proto, uint8_t inobj_limit) {
@@ -190,7 +187,6 @@ ant_shape_t *ant_object_proto_root(ant_t *js, ant_value_t proto, uint8_t inobj_l
 }
 
 void ant_object_set_proto(ant_t *js, ant_object_t *obj, ant_value_t proto) {
-  obj->proto = proto;
   ant_shape_t *shape = obj->shape;
   
   if (!shape || ant_shape_proto(shape) == proto) return;
@@ -209,16 +205,20 @@ void ant_object_set_proto(ant_t *js, ant_object_t *obj, ant_value_t proto) {
   obj->shape = next;
 }
 
-void js_obj_mark_exotic(ant_object_t *obj) {
+void js_obj_set_exotic(ant_object_t *obj, const ant_exotic_ops_t *ops) {
   obj->flags.is_exotic = 1;
   ant_shape_t *shape = obj->shape;
-  if (!shape || ant_shape_is_exotic(shape)) return;
+  if (!shape || (ant_shape_is_exotic(shape) && ant_shape_exotic_ops(shape) == ops)) return;
 
-  ant_shape_t *next = ant_shape_with_exotic(shape);
+  ant_shape_t *next = ant_shape_with_exotic(shape, ops);
   Ant_Assert(next, "out of memory marking an exotic object");
 
   ant_shape_release(shape);
   obj->shape = next;
+}
+
+void js_obj_mark_exotic(ant_object_t *obj) {
+  js_obj_set_exotic(obj, ant_object_exotic_ops(obj));
 }
 
 bool js_obj_ensure_unique_shape(ant_object_t *obj) {
@@ -268,13 +268,12 @@ static ant_exotic_ops_t *obj_ensure_exotic_ops(ant_object_t *obj) {
   ant_exotic_ops_t *ops = realloc(sidecar->owned_exotic_ops, sizeof(*ops));
   if (!ops) return NULL;
   
-  *ops = obj->exotic_ops 
-    ? *obj->exotic_ops 
-    : (ant_exotic_ops_t){0};
+  const ant_exotic_ops_t *current = ant_object_exotic_ops(obj);
+  *ops = current ? *current : (ant_exotic_ops_t){0};
   
   ops->keys = ANT_EXOTIC_KEYS_ANY;
   sidecar->owned_exotic_ops = ops;
-  obj->exotic_ops = ops;
+  js_obj_set_exotic(obj, ops);
   
   return ops;
 }
@@ -300,7 +299,6 @@ ant_object_t *obj_alloc_shaped(ant_t *js, uint8_t type_tag, ant_shape_t *shape) 
 
   obj->ic_identity = 0;
   obj->type_tag = type_tag;
-  obj->proto = Ant_Value_Undefined;
   
   obj->u.array.len = 0;
   obj->u.array.cap = 0;
@@ -326,7 +324,6 @@ ant_object_t *obj_alloc_shaped(ant_t *js, uint8_t type_tag, ant_shape_t *shape) 
   for (uint32_t i = ANT_INOBJ_BASE_SLOTS; i < obj->inobj_limit; i++)
     obj->inobj[i] = undef;
   
-  obj->exotic_ops = NULL;
   obj->extra_slots = NULL;
   obj->extra_count = 0;
   obj->extra_cap = 0;
@@ -349,7 +346,7 @@ static void js_native_ctor_prepare(ant_t *js, ant_value_t obj, uint8_t flags) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr) return;
 
-  if (vtype(ptr->proto) == kTypeUndefined && is_object_type(js->sym.function_proto))
+  if (vtype(ant_object_proto(ptr)) == kTypeUndefined && is_object_type(js->sym.function_proto))
     ant_object_set_proto(js, ptr, js->sym.function_proto);
 
   if (flags & SV_CALL_IS_DEFAULT_CTOR) {
@@ -448,7 +445,7 @@ ant_value_t js_mkobj_with_proto_slots(ant_t *js, ant_value_t proto, uint8_t inob
     ant_shape_t *root = object_proto_root_wide(js, proto, inobj_limit);
     if (root) {
       ant_shape_retain(root);
-      if ((obj = obj_alloc_shaped(js, kTypeObject, root))) obj->proto = proto;
+      obj = obj_alloc_shaped(js, kTypeObject, root);
     }
   }
   if (!obj) {
@@ -576,7 +573,7 @@ ant_value_t get_slot(ant_value_t obj, internal_slot_t slot) {
   ant_object_t *ptr = js_obj_ptr(obj);
   
   if (!ptr || slot < 0 || slot > SLOT_MAX) return Ant_Value_Undefined;
-  if (slot == SLOT_PROTO) return ptr->proto;
+  if (slot == SLOT_PROTO) return ant_object_proto(ptr);
   if (slot == SLOT_DATA) return ptr->u.data.value;
   if (slot == SLOT_ARGUMENTS_OBJECT && ptr->flags.arguments_object) return Ant_Value_True;
   
@@ -597,7 +594,7 @@ ant_value_t js_get_proto(ant_t *js, ant_value_t obj) {
   
   ant_value_t as_obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(as_obj);
-  ant_value_t proto = ptr ? ptr->proto : Ant_Value_Undefined;
+  ant_value_t proto = ptr ? ant_object_proto(ptr) : Ant_Value_Undefined;
   
   if (is_object_type(proto) || vtype(proto) == kTypeNull) return proto;
   if (t != kTypeObject) return js_primitive_prototype(js, t);
@@ -632,10 +629,7 @@ void js_set_proto_init(ant_value_t obj, ant_value_t proto) {
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
   if (!ptr) return;
   
-  if (!ptr->shape) {
-    ptr->proto = proto;
-    return;
-  }
+  if (!ptr->shape) return;
   
   ant_object_set_proto(ant_shape_isolate(ptr->shape), ptr, proto);
 }
@@ -748,8 +742,7 @@ void js_set_exotic_ops(ant_value_t obj, const ant_exotic_ops_t *ops) {
   }
   
   ant_proto_watch_note_change(ptr);
-  js_obj_mark_exotic(ptr);
-  ptr->exotic_ops = ops;
+  js_obj_set_exotic(ptr, ops);
 }
 
 void js_set_definer(ant_value_t obj, js_definer_fn definer) {

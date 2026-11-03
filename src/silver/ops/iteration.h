@@ -174,7 +174,7 @@ static inline bool sv_array_lacks_async_iterator(ant_t *js, ant_value_t arr) {
   if (!ant_protector_intact(js, ANT_PROTECTOR_ARRAY_ASYNC_ITERATION) || vtype(arr) != kTypeArray) return false;
   ant_object_t *ptr = js_obj_ptr(arr);
   ant_object_t *array_proto = js_obj_ptr(js->sym.array_proto);
-  return ptr && array_proto && ptr->proto == js->sym.array_proto && array_proto->proto == js->sym.object_proto;
+  return ptr && array_proto && ant_object_proto(ptr) == js->sym.array_proto && ant_object_proto(array_proto) == js->sym.object_proto;
 }
 
 static inline bool sv_array_iter_pristine(ant_t *js, ant_value_t arr) {

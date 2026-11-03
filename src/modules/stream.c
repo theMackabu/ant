@@ -2018,7 +2018,7 @@ static bool stream_encoding_matches(ant_t *js, ant_value_t a, ant_value_t b) {
 }
 
 static ant_value_t stream_view_to_buffer(ant_t *js, ant_value_t chunk) {
-  if (vtype(chunk) == kTypeObject && js_obj_ptr(chunk)->proto == js->builtins.buffer_proto) return chunk;
+  if (vtype(chunk) == kTypeObject && ant_object_proto(js_obj_ptr(chunk)) == js->builtins.buffer_proto) return chunk;
   if (buffer_get_typedarray_data(chunk)) return buffer_byte_subarray(js, chunk, 0, SIZE_MAX);
   return stream_make_buffer(js, chunk, Ant_Value_Undefined);
 }
@@ -2126,7 +2126,7 @@ done:
 }
 
 static inline double stream_plain_buffer_size(ant_t *js, ant_value_t chunk) {
-  if (vtype(chunk) != kTypeObject || js_obj_ptr(chunk)->proto != js->builtins.buffer_proto) return 0;
+  if (vtype(chunk) != kTypeObject || ant_object_proto(js_obj_ptr(chunk)) != js->builtins.buffer_proto) return 0;
   TypedArrayData *ta = buffer_get_typedarray_data(chunk);
   return Ant_Buffer_ViewIsLive(ta) ? (double)ta->byte_length : 0;
 }
@@ -2731,7 +2731,7 @@ static ant_value_t stream_errored_write_cb_tick(ant_params_t) {
 
 static bool stream_is_buffer_instance(ant_t *js, ant_value_t chunk) {
   if (vtype(chunk) != kTypeObject || !buffer_get_typedarray_data(chunk)) return false;
-  return js_obj_ptr(chunk)->proto == js->builtins.buffer_proto || js_instance_of_proto(js, chunk, js->builtins.buffer_proto);
+  return ant_object_proto(js_obj_ptr(chunk)) == js->builtins.buffer_proto || js_instance_of_proto(js, chunk, js->builtins.buffer_proto);
 }
 
 static __attribute__((noinline)) ant_value_t stream_writable_prepare_slow(

@@ -234,22 +234,24 @@ the cell at each use. See the
 
 ## Shapes Carry The Prototype
 
-For every live object, `obj->proto == ant_shape_proto(obj->shape)`, so compiled code
-takes a checked shape as proof of the prototype. Change a prototype only through
-`ant_object_set_proto` (or the `js_set_proto*` helpers that call it); allocate with a
-known prototype through `js_mkobj_with_proto`. Never apply a cached or copied shape to
-an object whose prototype differs from the shape's (`copy_adopt_shape`, literal sites,
-the JSON and regex shape caches check this). Set a fresh object's prototype before
-adding properties, or every such object gets a prototype transition. Run with
-`ANT_DEBUG=shape:verify` to check the invariant at every collection; see the
-[shape proto identity](../../tests/test_shape_proto_identity.cjs) regression.
+Objects have no prototype field: `ant_object_proto(obj)` reads the shape's prototype,
+so a checked shape is proof of the prototype. Change a prototype only through
+`ant_object_set_proto` (or the `js_set_proto*` helpers that call it), which moves the
+object to a shape for the new prototype; allocate with a known prototype through
+`js_mkobj_with_proto`. Compiled allocations must use a shape whose prototype is the
+object's prototype (`opt_build_set_proto` switches literal allocations to the
+`ant_shape_with_proto` shape). Set a fresh object's prototype before adding
+properties, or every such object gets a prototype transition. See the
+[shape proto identity](../../tests/test_shape_proto_identity.cjs) and
+[proto literal shape](../../tests/test_opt_proto_literal_shape.cjs) regressions.
 
 ## Exotic Objects Have Exotic Shapes
 
 Every object with `is_exotic` set has a shape whose exotic bit is set, so a shape
 check against an ordinary shape never matches an exotic object and compiled code
-skips the per-access flags load. Mark objects exotic only through
-`js_obj_mark_exotic`, and copy the bit in any new shape-copy path. The
+skips the per-access flags load. The shape also holds the object's exotic ops
+(`ant_object_exotic_ops`). Mark objects exotic only through `js_obj_set_exotic` or
+`js_obj_mark_exotic`, and copy the bit and ops in any new shape-copy path. The
 [exotic shapes](../../tests/test_opt_exotic_shapes.cjs) regression covers the
 common cases but cannot catch a missed site, so review new ones.
 

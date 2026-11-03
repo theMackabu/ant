@@ -690,12 +690,12 @@ static bool define_desc_read_plain(ant_t *js, ant_value_t descriptor, define_des
   }
 
   int depth = 0;
-  for (ant_value_t proto = ptr->proto; missing && is_object_type(proto);) {
+  for (ant_value_t proto = ant_object_proto(ptr); missing && is_object_type(proto);) {
     const ant_object_t *p = js_obj_ptr(proto);
     if (!p || p->flags.is_exotic || !p->shape || ++depth > MAX_PROTO_CHAIN_DEPTH) return false;
     for (int f = 0; f < DESC_FIELD_COUNT; f++)
       if (!raw->has[f] && ant_shape_lookup_interned(p->shape, names[f]) >= 0) return false;
-    proto = p->proto;
+    proto = ant_object_proto(p);
   }
   
   return true;
@@ -1098,13 +1098,13 @@ static bool define_exotic(
   define_desc_fields_t *fields, ant_value_t *result
 ) {
   const ant_object_t *ptr = js_obj_ptr(t->as_obj);
-  if (t->sym_key || !ptr || !ptr->flags.is_exotic || !ptr->exotic_ops || !ptr->exotic_ops->definer) return false;
+  if (t->sym_key || !ptr || !ptr->flags.is_exotic || !ant_object_exotic_ops(ptr) || !ant_object_exotic_ops(ptr)->definer) return false;
   
   bool plain_data =
     !d->has_get && !d->has_set && !(d->has_configurable && !d->configurable) &&
     !(d->has_enumerable && !d->enumerable) && !(d->has_writable && !d->writable);
     
-  ant_value_t defined = ptr->exotic_ops->definer(
+  ant_value_t defined = ant_object_exotic_ops(ptr)->definer(
     js, t->as_obj, t->str, (size_t)t->len, 
     d->value, d->has_value, plain_data
   );

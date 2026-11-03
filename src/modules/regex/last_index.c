@@ -137,7 +137,7 @@ bool regexp_fast_get(ant_t *js, ant_value_t rx, regexp_fast_tier_t tier, regexp_
   if (
     js->regexp.protector_invalid ||
     obj->shape != state->instance_shape.shape ||
-    obj->proto != js->builtins.regexp_proto ||
+    ant_object_proto(obj) != js->builtins.regexp_proto ||
     !obj->flags.regexp_brand || obj->flags.is_exotic
   ) return tier == REGEXP_FAST_BUILTIN_EXEC && regexp_fast_get_builtin_exec(js, rx, obj, fast);
 

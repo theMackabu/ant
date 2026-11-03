@@ -120,7 +120,6 @@ if (process.argv[2] === 'child') {
     ['verify', 'opt:verify'],
     ['force', 'opt:force,verify'],
     ['off', 'opt:off'],
-    ['shape-verify', 'shape:verify'],
   ];
   for (const [name, debug] of modes) {
     const child = run({ ANT_DEBUG: debug });

@@ -1004,7 +1004,8 @@ static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condit
       masm_load64(m, temp, asm_addr(scratch, (int32_t)offsetof(ant_t, sym.array_proto)));
       masm_and64_imm(m, scratch, value, NANBOX_DATA_MASK);
       opt_cg_add_cage(cg, scratch, scratch);
-      masm_load64(m, scratch, asm_addr(scratch, (int32_t)offsetof(ant_object_t, proto)));
+      masm_load64(m, scratch, asm_addr(scratch, (int32_t)offsetof(ant_object_t, shape)));
+      masm_load64(m, scratch, asm_addr(scratch, (int32_t)ANT_SHAPE_PROTO_OFFSET));
       masm_branch64(m, ASM_COND_NOT_EQUAL, scratch, temp, no);
       opt_cg_jump_to(cg, if_true);
       return;
@@ -1026,7 +1027,8 @@ static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condit
       masm_load32(m, scratch, asm_addr(data, (int32_t)offsetof(TypedArrayData, type)));
       masm_branch32_imm(m, ASM_COND_ABOVE_OR_EQUAL, scratch, (int32_t)TYPED_ARRAY_COUNT, no);
       masm_load64(m, scratch, asm_addr_indexed(js, scratch, ASM_SCALE_8, (int32_t)offsetof(ant_t, builtins.typedarray_protos)));
-      masm_load64(m, ptr, asm_addr(ptr, (int32_t)offsetof(ant_object_t, proto)));
+      masm_load64(m, ptr, asm_addr(ptr, (int32_t)offsetof(ant_object_t, shape)));
+      masm_load64(m, ptr, asm_addr(ptr, (int32_t)ANT_SHAPE_PROTO_OFFSET));
       masm_branch64(m, ASM_COND_EQUAL, ptr, scratch, proto_ok);
       masm_load64(m, scratch, asm_addr(js, (int32_t)offsetof(ant_t, builtins.buffer_proto)));
       masm_branch64(m, ASM_COND_NOT_EQUAL, ptr, scratch, no);
@@ -1543,7 +1545,8 @@ static void opt_cg_has_in_prototype_chain(opt_cg_t *cg, ir_node_id_t node) {
   opt_cg_add_cage(cg, current, current);
   masm_load16(m, scratch, asm_addr(current, (int32_t)offsetof(ant_object_t, flags)));
   masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, ANT_OBJECT_FLAG_EXOTIC, exit);
-  masm_load64(m, current, asm_addr(current, (int32_t)offsetof(ant_object_t, proto)));
+  masm_load64(m, current, asm_addr(current, (int32_t)offsetof(ant_object_t, shape)));
+  masm_load64(m, current, asm_addr(current, (int32_t)ANT_SHAPE_PROTO_OFFSET));
   masm_move_imm64(m, scratch, proto);
   masm_branch64(m, ASM_COND_EQUAL, current, scratch, yes);
   masm_shr64_imm(m, scratch, current, NANBOX_TYPE_SHIFT);
@@ -1757,7 +1760,8 @@ static void opt_cg_can_add_element(opt_cg_t *cg, ir_node_id_t node) {
   masm_branch32(m, ASM_COND_NOT_EQUAL, output, scratch, fail);
   masm_load64(m, output, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
   masm_load64(m, output, asm_addr(output, (int32_t)offsetof(ant_t, sym.array_proto)));
-  masm_load64(m, scratch, asm_addr(array, (int32_t)offsetof(ant_object_t, proto)));
+  masm_load64(m, scratch, asm_addr(array, (int32_t)offsetof(ant_object_t, shape)));
+  masm_load64(m, scratch, asm_addr(scratch, (int32_t)ANT_SHAPE_PROTO_OFFSET));
   masm_branch64(m, ASM_COND_NOT_EQUAL, output, scratch, fail);
   masm_and64_imm(m, output, output, NANBOX_DATA_MASK);
   opt_cg_add_cage(cg, output, output);
@@ -1856,7 +1860,8 @@ static void opt_cg_can_add_named(opt_cg_t *cg, ir_node_id_t node) {
     masm_load8(m, scratch, asm_addr(object, (int32_t)offsetof(ant_object_t, overflow_cap)));
     masm_branch32_imm(m, ASM_COND_BELOW, scratch, slot - limit < 4 ? 2 : 32 - __builtin_clz(slot - limit), fail);
   }
-  masm_load64(m, scratch, asm_addr(object, (int32_t)offsetof(ant_object_t, proto)));
+  masm_load64(m, scratch, asm_addr(object, (int32_t)offsetof(ant_object_t, shape)));
+  masm_load64(m, scratch, asm_addr(scratch, (int32_t)ANT_SHAPE_PROTO_OFFSET));
   if (op->add_named.proto & 1u) {
     masm_shr64_imm(m, temp, scratch, NANBOX_TYPE_SHIFT);
     masm_branch64_imm(m, ASM_COND_NOT_EQUAL, temp, (int64_t)OPT_OBJECT_TAG, fail);
@@ -1961,12 +1966,9 @@ static void opt_cg_allocate_object(opt_cg_t *cg, ir_node_id_t node) {
   ant_shape_t *shape = (ant_shape_t *)(uintptr_t)op->allocate_object.shape;
   opt_cg_take_object(cg, out, count, temp, js, allocation.label, ant_shape_get_inobj_limit(shape));
 
-  uint64_t proto;
-  bool constant_proto = opt_cg_input_constant(cg, node, 0, &proto);
   alignas(ant_object_t) unsigned char bytes[ANT_OBJECT_LARGE_SIZE] = {0};
   ant_object_t *image = (ant_object_t *)bytes;
   image->shape = shape;
-  image->proto = constant_proto ? proto : 0;
   image->inobj_limit = ant_shape_get_inobj_limit(shape);
   for (uint32_t i = 0; i < image->inobj_limit; i++) image->inobj[i] = IR_VALUE_UNDEFINED;
   image->u.data.value = IR_VALUE_UNDEFINED;
@@ -1983,10 +1985,6 @@ static void opt_cg_allocate_object(opt_cg_t *cg, ir_node_id_t node) {
   masm_move_imm64(m, temp, (uint64_t)(uintptr_t)shape);
   masm_store64(m, asm_addr(out, (int32_t)offsetof(ant_object_t, shape)), temp);
   masm_add32_to_memory_imm(m, asm_addr(temp, (int32_t)ANT_SHAPE_REF_COUNT_OFFSET), 1);
-  if (!constant_proto) {
-    stored[offsetof(ant_object_t, proto) / 8] = true;
-    masm_store64(m, asm_addr(out, (int32_t)offsetof(ant_object_t, proto)), opt_cg_input(cg, node, 0));
-  }
   for (uint32_t w = 0; w < word_count; w++) {
     if (stored[w]) continue;
     masm_move_imm64(m, temp, words[w]);
@@ -2606,11 +2604,8 @@ static void opt_cg_allocate_array(opt_cg_t *cg, ir_node_id_t node) {
   bool stored[ANT_OBJECT_SIZE / 8] = {0};
   stored[offsetof(ant_object_t, next) / 8] = true;
   stored[offsetof(ant_object_t, shape) / 8] = true;
-  stored[offsetof(ant_object_t, proto) / 8] = true;
   stored[offsetof(ant_object_t, u.array.data) / 8] = true;
   masm_store64(m, asm_addr(out, (int32_t)offsetof(ant_object_t, u.array.data)), data);
-  masm_load64(m, temp, asm_addr(js, (int32_t)offsetof(ant_t, sym.array_proto)));
-  masm_store64(m, asm_addr(out, (int32_t)offsetof(ant_object_t, proto)), temp);
   masm_move_imm64(m, temp, (uint64_t)(uintptr_t)shape);
   masm_store64(m, asm_addr(out, (int32_t)offsetof(ant_object_t, shape)), temp);
   masm_add32_to_memory_imm(m, asm_addr(temp, (int32_t)ANT_SHAPE_REF_COUNT_OFFSET), 1);
@@ -3289,7 +3284,8 @@ static bool opt_cg_object_code(opt_cg_t *cg, ir_node_id_t node_id, const ir_node
     case IR_OP_ALLOCATE_OBJECT: opt_cg_allocate_object(cg, node_id); break;
     case IR_OP_INITIALIZE_NAMED: opt_cg_initialize_named(cg, node_id); break;
     case IR_OP_LOAD_PROTOTYPE:
-      masm_load64(m, opt_cg_output(cg, node_id), asm_addr(opt_cg_input(cg, node_id, 0), (int32_t)offsetof(ant_object_t, proto)));
+      masm_load64(m, opt_cg_output(cg, node_id), asm_addr(opt_cg_input(cg, node_id, 0), (int32_t)offsetof(ant_object_t, shape)));
+      masm_load64(m, opt_cg_output(cg, node_id), asm_addr(opt_cg_output(cg, node_id), (int32_t)ANT_SHAPE_PROTO_OFFSET));
       break;
     case IR_OP_HAS_IN_PROTOTYPE_CHAIN: opt_cg_has_in_prototype_chain(cg, node_id); break;
     case IR_OP_PROBE_PROPERTY_CACHE: opt_cg_probe_property(cg, node_id); break;

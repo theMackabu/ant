@@ -536,7 +536,7 @@ bool js_array_iteration_default(ant_t *js, ant_value_t arr) {
   
   if (
     ant_protector_intact(js, ANT_PROTECTOR_ARRAY_ITERATION) && 
-    (ptr->flags.arguments_object || ptr->proto == js->sym.array_proto)
+    (ptr->flags.arguments_object || ant_object_proto(ptr) == js->sym.array_proto)
   ) return true;
   
   ant_prop_loc_t loc = lkp_sym_proto(js, arr, (ant_offset_t)vdata(js->sym.iterator_sym));
@@ -607,7 +607,7 @@ static ant_value_t array_constructor_from_receiver(ant_t *js, ant_value_t receiv
   ant_object_t *plain = real_array_obj_ptr(receiver);
   
   if (
-    plain && plain->proto == js->sym.array_proto && 
+    plain && ant_object_proto(plain) == js->sym.array_proto && 
     ant_protector_intact(js, ANT_PROTECTOR_ARRAY_SPECIES)
   ) return js->sym.array_ctor;
   
@@ -841,7 +841,7 @@ __attribute__((noinline)) bool array_store_reaches_proto_slow(ant_t *js, ant_val
       proto_index_property_t found = proto_index_property(js, cur, idx);
       if (found != PROTO_INDEX_ABSENT) return found == PROTO_INDEX_INTERCEPTS;
     }
-    ant_value_t next = ptr->proto;
+    ant_value_t next = ant_object_proto(ptr);
     cur = is_object_type(next) || vtype(next) == kTypeNull ? next : get_proto(js, cur);
   }
 
@@ -852,7 +852,7 @@ static __attribute__((noinline)) bool array_chain_revalidate(ant_t *js) {
   ant_object_t *array_proto = (ant_object_t *)vptr(js->sym.array_proto);
   ant_object_t *object_proto = (ant_object_t *)vptr(js->sym.object_proto);
   bool plain =
-    array_proto->proto == js->sym.object_proto && object_proto->proto == mkval(kTypeNull, 0) &&
+    ant_object_proto(array_proto) == js->sym.object_proto && ant_object_proto(object_proto) == mkval(kTypeNull, 0) &&
     !((array_proto->flags.raw | object_proto->flags.raw) & ANT_OBJECT_FLAG_EXOTIC) &&
     !ant_shape_may_have_index_keys(array_proto->shape) &&
     !ant_shape_may_have_index_keys(object_proto->shape);
@@ -867,7 +867,7 @@ static __attribute__((noinline)) bool array_chain_revalidate(ant_t *js) {
 }
 
 bool array_proto_chain_plain(ant_t *js, ant_object_t *arr) {
-  if (arr->proto != js->sym.array_proto) return false;
+  if (ant_object_proto(arr) != js->sym.array_proto) return false;
   if (((ant_object_t *)vptr(js->sym.array_proto))->u.array.len != 0) return false;
   return js->array_chain_plain_epoch == js->ic.epoch || array_chain_revalidate(js);
 }
@@ -878,10 +878,10 @@ bool js_array_proto_chain_plain(ant_t *js, ant_value_t arr) {
 }
 
 static inline bool arguments_proto_chain_plain(ant_t *js, ant_object_t *args) {
-  if (args->proto != js->sym.object_proto) return false;
+  if (ant_object_proto(args) != js->sym.object_proto) return false;
   ant_object_t *object_proto = (ant_object_t *)vptr(js->sym.object_proto);
   return
-    object_proto->proto == mkval(kTypeNull, 0) && !object_proto->flags.is_exotic &&
+    ant_object_proto(object_proto) == mkval(kTypeNull, 0) && !object_proto->flags.is_exotic &&
     !ant_shape_may_have_index_keys(object_proto->shape);
 }
 
@@ -1355,10 +1355,10 @@ static bool array_like_index_keys_absent(ant_value_t obj) {
   for (int depth = 0; depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
     if (vtype(cur) != kTypeObject || is_proxy(cur) || array_obj_ptr(cur)) return false;
     ant_object_t *ptr = js_obj_ptr(cur);
-    if (!ptr || !ptr->shape || ptr->flags.is_exotic || ptr->exotic_ops) return false;
+    if (!ptr || !ptr->shape || ptr->flags.is_exotic || ant_object_exotic_ops(ptr)) return false;
     if (ant_shape_may_have_index_keys(ptr->shape)) return false;
     if (vtype(js_string_wrapper_value(cur)) == kTypeString) return false;
-    cur = ptr->proto;
+    cur = ant_object_proto(ptr);
     if (vtype(cur) == kTypeNull) return true;
   }
 
@@ -1372,9 +1372,9 @@ static bool array_like_index_absent(ant_t *js, ant_value_t obj, const char *key,
   for (int depth = 0; depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
     if (vtype(cur) != kTypeObject || is_proxy(cur) || array_obj_ptr(cur)) return false;
     ant_object_t *ptr = js_obj_ptr(cur);
-    if (!ptr || ptr->flags.is_exotic || ptr->exotic_ops) return false;
+    if (!ptr || ptr->flags.is_exotic || ant_object_exotic_ops(ptr)) return false;
     if (vtype(js_string_wrapper_value(cur)) == kTypeString) return false;
-    cur = ptr->proto;
+    cur = ant_object_proto(ptr);
     if (vtype(cur) == kTypeNull) return true;
   }
 

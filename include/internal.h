@@ -225,6 +225,7 @@ double js_parse_float_value(ant_t *js, ant_value_t arg);
 bool js_obj_ensure_prop_capacity(ant_t *js, ant_object_t *obj, uint32_t needed);
 bool js_obj_ensure_unique_shape(ant_object_t *obj);
 void js_obj_mark_exotic(ant_object_t *obj);
+void js_obj_set_exotic(ant_object_t *obj, const ant_exotic_ops_t *ops);
 
 bool js_get_plain_index(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t *out);
 bool js_string_past_end_is_undefined(ant_t *js, ant_value_t str);

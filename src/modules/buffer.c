@@ -886,7 +886,7 @@ bool buffer_typedarray_length_fast(ant_t *js, ant_object_t *ptr, double *out) {
   TypedArrayData *ta = (TypedArrayData *)ptr->native_ptr;
   if (!ta || (unsigned)ta->type >= TYPED_ARRAY_COUNT) return false;
 
-  ant_value_t proto = ptr->proto;
+  ant_value_t proto = ant_object_proto(ptr);
   if (proto != js->builtins.typedarray_protos[ta->type] && !(ta->type == TYPED_ARRAY_UINT8 && proto == js->builtins.buffer_proto)) return false;
 
   *out = typedarray_view_live(ta) ? (double)ta->length : 0;
@@ -1406,7 +1406,7 @@ const void *buffer_typedarray_exotic_ops(void) {
 
 static inline TypedArrayData *typedarray_fast_data(ant_value_t obj) {
   ant_object_t *ptr = vtype(obj) == kTypeObject ? js_obj_ptr(obj) : NULL;
-  if (!ptr || ptr->exotic_ops != &typedarray_exotic_ops || ptr->native_tag != BUFFER_TYPEDARRAY_NATIVE_TAG) return NULL;
+  if (!ptr || ant_object_exotic_ops(ptr) != &typedarray_exotic_ops || ptr->native_tag != BUFFER_TYPEDARRAY_NATIVE_TAG) return NULL;
   return ptr->native_ptr;
 }
 

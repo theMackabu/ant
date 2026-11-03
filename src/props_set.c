@@ -111,11 +111,11 @@ static ant_value_t string_wrapper_write_refused(ant_t *js, const char *key, size
 }
 
 static inline bool exotic_has_getter(const ant_object_t *ptr) {
-  return ptr->flags.is_exotic && ptr->exotic_ops && ptr->exotic_ops->getter;
+  return ptr->flags.is_exotic && ant_object_exotic_ops(ptr) && ant_object_exotic_ops(ptr)->getter;
 }
 
 ant_value_t exotic_own_get(ant_t *js, ant_value_t obj, const ant_object_t *ptr, const char *key, size_t len) {
-  return exotic_has_getter(ptr) ? ptr->exotic_ops->getter(js, obj, key, len) : Ant_Value_Undefined;
+  return exotic_has_getter(ptr) ? ant_object_exotic_ops(ptr)->getter(js, obj, key, len) : Ant_Value_Undefined;
 }
 
 bool array_own_value(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t *out) {
@@ -256,7 +256,7 @@ static bool setprop_symbol_walk(
     else found = lookup_symbol_prop_meta(js, cur_obj, sym_off, &meta);
     if (found) return setprop_desc_blocks(js, obj, receiver, on_receiver ? receiver : cur_obj, k, &meta, v, declined, done);
 
-    ant_value_t proto = is_object_type(cur_ptr->proto) ? cur_ptr->proto : get_proto(js, cur_obj);
+    ant_value_t proto = is_object_type(ant_object_proto(cur_ptr)) ? ant_object_proto(cur_ptr) : get_proto(js, cur_obj);
     if (!is_object_type(proto)) break;
     
     cur = proto;
@@ -710,7 +710,7 @@ static ant_value_t set_receiver_own_target(ant_t *js, ant_value_t receiver) {
       for (ant_value_t cur = data->handler; is_object_type(cur);) {
         ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
         ant_object_guard_absence(ptr);
-        cur = ptr->proto;
+        cur = ant_object_proto(ptr);
       }
       
       data->plain_handler_epoch = js->ic.epoch;
@@ -741,8 +741,8 @@ static ant_value_t set_with_receiver_fast(ant_t *js, ant_value_t target, ant_val
     
     slot = interned ? ant_shape_lookup_interned(ptr->shape, interned) : -1;
     if (slot >= 0) holder = ptr;
-    else if (vtype(ptr->proto) == kTypeNull) chain_end = true;
-    else if (is_object_type(ptr->proto)) cur = ptr->proto;
+    else if (vtype(ant_object_proto(ptr)) == kTypeNull) chain_end = true;
+    else if (is_object_type(ant_object_proto(ptr))) cur = ant_object_proto(ptr);
     else return T_EMPTY;
   }
   

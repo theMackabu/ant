@@ -123,7 +123,7 @@ static inline __attribute__((always_inline)) bool gc_par_scan_plain(ant_t *js, g
   if (obj->extra_slots || obj->native_tag || ant_shape_may_have_gc_refs(shape)) return false;
 
   ant_gc_shapes_mark_shared(js, shape);
-  gc_par_value(js, w, obj->proto);
+  gc_par_value(js, w, ant_object_proto(obj));
   if (type == kTypeObject) gc_par_value(js, w, obj->u.data.value);
 
   uint32_t count = ant_shape_count(shape);

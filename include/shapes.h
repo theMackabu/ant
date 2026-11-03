@@ -59,8 +59,10 @@ static constexpr size_t ANT_SHAPE_INDEX_KEYS_OFFSET = 21 + 3 * sizeof(void *);
 static constexpr size_t ANT_SHAPE_COUNT_OFFSET = 4;
 #if UINTPTR_MAX == UINT64_MAX
 static constexpr size_t ANT_SHAPE_PROTO_OFFSET = 112;
+static constexpr size_t ANT_SHAPE_EXOTIC_OPS_OFFSET = 120;
 #elif UINTPTR_MAX == UINT32_MAX
 static constexpr size_t ANT_SHAPE_PROTO_OFFSET = 88;
+static constexpr size_t ANT_SHAPE_EXOTIC_OPS_OFFSET = 96;
 #endif
 
 static inline bool ant_shape_may_have_index_keys(const ant_shape_t *shape) {
@@ -69,6 +71,10 @@ static inline bool ant_shape_may_have_index_keys(const ant_shape_t *shape) {
 
 static inline ant_value_t ant_shape_proto(const ant_shape_t *shape) {
   return shape ? *(const ant_value_t *)((const char *)shape + ANT_SHAPE_PROTO_OFFSET) : (ant_value_t)0;
+}
+
+static inline const void *ant_shape_exotic_ops(const ant_shape_t *shape) {
+  return shape ? *(const void *const *)((const char *)shape + ANT_SHAPE_EXOTIC_OPS_OFFSET) : NULL;
 }
 
 static inline bool ant_shape_is_empty(const ant_shape_t *shape) {
@@ -87,7 +93,7 @@ void ant_shape_roots_release(ant_t *js, ant_shape_roots_t *owner);
 ant_shape_t *ant_shape_new(ant_t *js);
 ant_shape_t *ant_shape_root(ant_t *js, ant_shape_roots_t *owner, ant_value_t proto, uint8_t inobj_limit);
 ant_shape_t *ant_shape_with_proto(ant_shape_t *shape, ant_value_t proto);
-ant_shape_t *ant_shape_with_exotic(ant_shape_t *shape);
+ant_shape_t *ant_shape_with_exotic(ant_shape_t *shape, const void *ops);
 bool ant_shape_is_exotic(const ant_shape_t *shape);
 
 ant_shape_t *ant_shape_new_with_inobj_limit(ant_t *js, uint8_t inobj_limit);

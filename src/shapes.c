@@ -122,11 +122,12 @@ struct ant_shape {
   
   ant_shape_heap_t *heap;
   ant_value_t proto;
+  const void *exotic_ops;
 };
 
 #if UINTPTR_MAX == UINT64_MAX
 static_assert(
-  sizeof(ant_shape_t) == 120 && offsetof(ant_shape_t, first_child_key) == 48,
+  sizeof(ant_shape_t) == 128 && offsetof(ant_shape_t, first_child_key) == 48,
   "the JIT invalidation word must occupy existing shape padding"
 );
 #endif
@@ -517,6 +518,7 @@ static ant_shape_t *shape_copy_for_transition(const ant_shape_t *shape) {
   copy->count = shape->count;
   copy->inobj_limit = shape->inobj_limit;
   copy->exotic = shape->exotic;
+  copy->exotic_ops = shape->exotic_ops;
   copy->may_have_index_keys = shape->may_have_index_keys;
   copy->proto = shape->proto;
   
@@ -735,22 +737,25 @@ ant_shape_t *ant_shape_with_proto(ant_shape_t *shape, ant_value_t proto) {
   return copy;
 }
 
-ant_shape_t *ant_shape_with_exotic(ant_shape_t *shape) {
-  if (shape->exotic) {
+ant_shape_t *ant_shape_with_exotic(ant_shape_t *shape, const void *ops) {
+  if (shape->exotic && shape->exotic_ops == ops) {
     ant_shape_retain(shape);
     return shape;
   }
 
   if (!shape_is_in_tree(shape) || shape->bulk_layout) {
     ant_shape_t *copy = shape_clone_reserve(shape, 0);
-    if (copy) copy->exotic = true;
+    if (copy) {
+      copy->exotic = true;
+      copy->exotic_ops = ops;
+    }
     return copy;
   }
 
-  uint64_t ckey = shape_child_key(0, 0x20);
+  uint64_t ckey = shape_child_key((uint64_t)(uintptr_t)ops, 0x20);
   ant_shape_t *child = shape_find_child(shape, ckey);
   
-  if (child && child->exotic && child->proto == shape->proto && child->count == shape->count) {
+  if (child && child->exotic && child->exotic_ops == ops && child->proto == shape->proto && child->count == shape->count) {
     ant_shape_retain(child);
     return child;
   }
@@ -759,6 +764,7 @@ ant_shape_t *ant_shape_with_exotic(ant_shape_t *shape) {
   if (!copy) return NULL;
 
   copy->exotic = true;
+  copy->exotic_ops = ops;
   if (!child) shape_record_child(shape, ckey, copy);
   return copy;
 }
@@ -773,6 +779,7 @@ ant_t *ant_shape_isolate(const ant_shape_t *shape) {
 
 static_assert(
   offsetof(struct ant_shape, proto) == ANT_SHAPE_PROTO_OFFSET &&
+  offsetof(struct ant_shape, exotic_ops) == ANT_SHAPE_EXOTIC_OPS_OFFSET &&
   offsetof(struct ant_shape, count) == ANT_SHAPE_COUNT_OFFSET,
   "inline shape accessors read these offsets"
 );
@@ -810,6 +817,7 @@ ant_shape_t *shape_clone_reserve(const ant_shape_t *shape, uint32_t extra) {
   copy->bulk_layout = shape->bulk_layout;
   copy->dictionary = shape->dictionary;
   copy->exotic = shape->exotic;
+  copy->exotic_ops = shape->exotic_ops;
   copy->may_have_index_keys = shape->may_have_index_keys;
   copy->proto = shape->proto;
 

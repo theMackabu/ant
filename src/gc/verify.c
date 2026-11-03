@@ -26,7 +26,6 @@ void gc_verify_stress(ant_t *js) {
 void gc_verify_poison_object(ant_object_t *obj) {
   ant_value_t bad = mkval(kTypeObject, UINT64_C(0x7FFFFFFFF000));
   
-  obj->proto = bad;
   obj->shape = NULL;
   obj->overflow_prop = (ant_value_t *)(uintptr_t)0xdead0001;
   

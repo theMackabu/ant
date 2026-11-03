@@ -274,7 +274,7 @@ ant_value_t js_create_arguments_object(
   target->inobj_limit = source->inobj_limit;
   target->prop_count = source->prop_count;
   
-  ant_object_set_proto(js, target, target->proto);
+  ant_object_set_proto(js, target, ant_object_proto(target));
   
   target->inobj[ANT_ARGUMENTS_SLOT_LENGTH] = Ant_Value_FromNumber((double)count);
   target->inobj[ANT_ARGUMENTS_SLOT_CALLEE] = is_strict ? source->inobj[ANT_ARGUMENTS_SLOT_CALLEE] : callee;
@@ -302,8 +302,7 @@ ant_value_t js_create_arguments_object(
     js_set_native(arr, state, ANT_ARGUMENTS_NATIVE_TAG);
     target->finalizer = js_arguments_finalizer;
     
-    js_obj_mark_exotic(target);
-    target->exotic_ops = &js_arguments_exotic_ops;
+    js_obj_set_exotic(target, &js_arguments_exotic_ops);
 
     for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next) {
       if (uv->location < frame->bp) break;
