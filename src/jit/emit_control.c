@@ -432,26 +432,9 @@ void jit_emit_finally_landings(jit_compile_t *c) {
 
 void jit_emit_control(jit_compile_t *c) {
   switch (c->op) {
-    case OP_AWAIT:
-      jit_emit_await_exit(c, 1, 1);
-      break;
-    case OP_AWAIT_RETURN:
-      jit_emit_await_exit(c, 1, 0);
-      break;
-    case OP_AWAIT_ITER_NEXT:
-      jit_emit_await_exit(c, 3, 5);
-      break;
-    case OP_FOR_AWAIT_OF:
-      jit_emit_await_exit(c, 1, 3);
-      break;
-    case OP_ITER_CLOSE_ASYNC:
-      jit_emit_await_exit(c, 3, 1);
-      break;
-    case OP_ITER_CLOSE_CHECK:
-      jit_emit_await_exit(c, 1, 0);
-      break;
-    case OP_IMPORT_SYNC:
-      jit_emit_await_exit(c, 1, 1);
+#define JIT_EXIT_OP(name) case OP_##name:
+#include "jit/exit_ops.h"
+      jit_emit_await_exit(c, sv_op_npop[c->op], sv_op_npush[c->op]);
       break;
     case OP_JMP:
     case OP_JMP8: {

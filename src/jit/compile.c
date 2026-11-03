@@ -607,13 +607,8 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_JMP_TRUE8:
       case OP_RETURN:
       case OP_RETURN_UNDEF:
-      case OP_AWAIT:
-      case OP_AWAIT_RETURN:
-      case OP_AWAIT_ITER_NEXT:
-      case OP_FOR_AWAIT_OF:
-      case OP_ITER_CLOSE_ASYNC:
-      case OP_ITER_CLOSE_CHECK:
-      case OP_IMPORT_SYNC:
+#define JIT_EXIT_OP(name) case OP_##name:
+#include "jit/exit_ops.h"
       case OP_TRY_PUSH:
       case OP_TRY_POP:
       case OP_THROW:

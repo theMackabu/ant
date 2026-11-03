@@ -216,16 +216,6 @@ const char *const sv_op_names[OP__COUNT] = {
 #include "silver/opcode.h"
 };
 
-static const uint8_t sv_op_npop[OP__COUNT] = {
-#define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = (n_pop),
-#include "silver/opcode.h"
-};
-
-static const uint8_t sv_op_npush[OP__COUNT] = {
-#define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = (n_push),
-#include "silver/opcode.h"
-};
-
 bool sv_op_stack_effect(const sv_func_t *func, const uint8_t *ip, int *pops, int *pushes) {
   uint8_t op = *ip;
   if (op >= OP__COUNT || sv_op_size[op] == 0) return false;

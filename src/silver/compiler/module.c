@@ -43,12 +43,17 @@ bool should_emit_module_static_declarations(sv_compiler_t *c, sv_ast_t *body) {
     body && body->type == N_BLOCK;
 }
 
+static void emit_import_sync(sv_compiler_t *c, sv_ast_t *node) {
+  if (node->aux) emit_atom_op(c, OP_IMPORT_SYNC_TYPE, node->aux, node->aux_len);
+  else emit_op(c, OP_IMPORT_SYNC);
+}
+
 void compile_import_decl(sv_compiler_t *c, sv_ast_t *node) {
   if (!node->right) return;
   bool repl_top = is_repl_top_level(c);
 
   compile_expr(c, node->right);
-  emit_op(c, OP_IMPORT_SYNC);
+  emit_import_sync(c, node);
 
   if (node->args.count == 0) {
     emit_op(c, OP_POP);
@@ -218,7 +223,7 @@ void compile_export_decl(sv_compiler_t *c, sv_ast_t *node) {
 
   if ((node->flags & EX_STAR) && (node->flags & EX_FROM) && node->right) {
     compile_expr(c, node->right);
-    emit_op(c, OP_IMPORT_SYNC);
+    emit_import_sync(c, node);
 
     if (node->flags & EX_NAMESPACE) {
       if (node->args.count > 0) {
@@ -243,7 +248,7 @@ void compile_export_decl(sv_compiler_t *c, sv_ast_t *node) {
   if (node->flags & EX_FROM) {
     if (!node->right) return;
     compile_expr(c, node->right);
-    emit_op(c, OP_IMPORT_SYNC);
+    emit_import_sync(c, node);
     ns_local = add_local(c, "", 0, false, c->scope_depth);
     emit_put_local(c, ns_local);
   }

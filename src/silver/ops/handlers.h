@@ -1926,6 +1926,11 @@ L_IMPORT_SYNC: {
   NEXT(OP_IMPORT_SYNC);
 }
 
+L_IMPORT_SYNC_TYPE: {
+  VM_CHECK(sv_op_import_sync_type(vm, js, func, ip));
+  NEXT(OP_IMPORT_SYNC_TYPE);
+}
+
 L_IMPORT_DEFAULT: {
   sv_op_import_default(vm, js);
   NEXT(OP_IMPORT_DEFAULT);

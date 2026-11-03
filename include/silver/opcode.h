@@ -277,6 +277,7 @@ OP_DEF(  IS_NULL,           1,   1,   1, none)      /* TOS === null */
 
 OP_DEF(  IMPORT,            1,   2,   1, none)      /* dynamic import(specifier) */
 OP_DEF(  IMPORT_SYNC,       1,   1,   1, none)      /* sync module load for static import */
+OP_DEF(  IMPORT_SYNC_TYPE,  5,   1,   1, atom)
 OP_DEF(  IMPORT_DEFAULT,    1,   1,   1, none)      /* ns -> default (SLOT_DEFAULT or ns) */
 OP_DEF(  IMPORT_NAMED,      5,   1,   1, atom)      /* ns -> named export (throw if missing) */
 OP_DEF(  EXPORT,            5,   1,   0, atom)      /* value -> (module namespace[name] = value) */
@@ -531,6 +532,7 @@ OP_FLAG(ITER_CLOSE_ASYNC      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_BAILOUT |
 OP_FLAG(ITER_CLOSE_CHECK      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_BAILOUT | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(IMPORT                , SV_OPF_OPT_NO_GENERIC)
 OP_FLAG(IMPORT_SYNC           , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_BAILOUT | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_OPT_NO_GENERIC)
+OP_FLAG(IMPORT_SYNC_TYPE      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_BAILOUT | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_OPT_NO_GENERIC)
 OP_FLAG(EXPORT_ALL            , SV_OPF_OPT_NO_GENERIC)
 OP_FLAG(WITH_TRY_GET          , SV_OPF_OPT_NO_GENERIC)
 OP_FLAG(WITH_TRY_CALL         , SV_OPF_OPT_NO_GENERIC)

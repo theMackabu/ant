@@ -7,9 +7,7 @@
 #include "modules/vm.h"
 
 static inline ant_value_t sv_module_export_to_ns(
-  ant_t *js, ant_value_t module_ns,
-  const char *name, size_t len,
-  ant_value_t value
+  ant_t *js, ant_value_t module_ns, const char *name, size_t len, ant_value_t value
 ) {
   if (vtype(module_ns) != kTypeObject)
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "export used outside module");
@@ -24,9 +22,7 @@ static inline ant_value_t sv_module_export_to_ns(
 }
 
 static inline ant_value_t sv_module_export_cstr(
-  ant_t *js,
-  const char *name, size_t len,
-  ant_value_t value
+  ant_t *js, const char *name, size_t len, ant_value_t value
 ) {
   return sv_module_export_to_ns(js, js_module_eval_active_ns(js), name, len, value);
 }
@@ -144,6 +140,14 @@ static inline ant_value_t sv_op_import_sync(sv_vm_t *vm, ant_t *js) {
   return result;
 }
 
+static inline ant_value_t sv_op_import_sync_type(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip) {
+  sv_atom_t *type = &func->atoms[sv_get_u32(ip + 1)];
+  ant_value_t specifier = vm->stack[--vm->sp];
+  ant_value_t result = js_esm_import_sync_typed(js, specifier, type->str, type->len);
+  if (!is_err(result)) vm->stack[vm->sp++] = result;
+  return result;
+}
+
 static inline ant_value_t sv_import_default_value(ant_value_t ns) {
   if (vtype(ns) == kTypeObject) {
     ant_value_t slot_val = js_get_slot(ns, SLOT_DEFAULT);
@@ -188,10 +192,7 @@ static inline const char *sv_module_namespace_display_name(ant_t *js, ant_value_
 }
 
 static inline ant_value_t sv_missing_named_export_error(
-  ant_t *js,
-  ant_value_t ns,
-  const char *name,
-  size_t len
+  ant_t *js, ant_value_t ns, const char *name, size_t len
 ) {
   const char *display_name = sv_module_namespace_display_name(js, ns);
   if (!display_name) display_name = "<unknown>";
@@ -203,10 +204,7 @@ static inline ant_value_t sv_missing_named_export_error(
 }
 
 static inline ant_value_t sv_import_named_value(
-  ant_t *js,
-  ant_value_t ns,
-  const char *name,
-  uint32_t len
+  ant_t *js, ant_value_t ns, const char *name, uint32_t len
 ) {
   if (vtype(ns) == kTypeObject && !is_proxy(js_as_obj(ns))) {
     ant_value_t value = js_get(js, ns, name);
@@ -227,10 +225,7 @@ static inline ant_value_t sv_import_named_value(
 }
 
 static inline ant_value_t sv_op_import_named(
-  sv_vm_t *vm,
-  ant_t *js,
-  sv_func_t *func,
-  uint8_t *ip
+  sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip
 ) {
   uint32_t atom_idx = sv_get_u32(ip + 1);
   if (atom_idx >= (uint32_t)func->atom_count)

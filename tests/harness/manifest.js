@@ -760,10 +760,10 @@ export function targets() {
   });
 
   list.push(
-    { group: 'oha', type: 'oha', name: 'hono rps', entry: 'examples/npm/hono/src/index.ts', refRps: 30000, minRps: 27500 },
-    { group: 'oha', type: 'oha', name: 'express rps', entry: 'examples/npm/express/index.cjs', refRps: 18000, minRps: 16000 },
-    { group: 'oha', type: 'oha', name: 'h3 rps', entry: 'examples/npm/h3', refRps: 21000, minRps: 18000 },
-    { group: 'oha', type: 'oha', name: 'elysia rps', entry: 'examples/npm/elysia', refRps: 66000, minRps: 58000 }
+    { group: 'oha', type: 'oha', name: 'hono rps', entry: 'examples/npm/hono/src/index.ts', refRps: 51000, minRps: 40000 },
+    { group: 'oha', type: 'oha', name: 'express rps', entry: 'examples/npm/express/index.cjs', refRps: 49000, minRps: 39000 },
+    { group: 'oha', type: 'oha', name: 'h3 rps', entry: 'examples/npm/h3', refRps: 45000, minRps: 36000 },
+    { group: 'oha', type: 'oha', name: 'elysia rps', entry: 'examples/npm/elysia', refRps: 103000, minRps: 82000 }
   );
 
   list.push({

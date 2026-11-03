@@ -1,9 +1,65 @@
+#include <string.h>
+
 #include "parser_internal.h"
 
 static sv_ast_t *skip_import_stmt(sv_parser_t *p) {
   while (sv_lexer_next(&p->lx) != TOK_SEMICOLON && p->lx.st.tok != TOK_EOF) p->lx.st.consumed = 1;
   if (p->lx.st.tok == TOK_SEMICOLON) p->lx.st.consumed = 1;
   return mk(N_EMPTY);
+}
+
+static void parse_import_attributes(sv_parser_t *p, sv_ast_t *decl) {
+  if (sv_lexer_next(&p->lx) != TOK_WITH) return;
+  p->lx.st.consumed = 1;
+  expect(p, TOK_LBRACE);
+
+  bool has_type = false;
+  while (sv_lexer_next(&p->lx) != TOK_RBRACE && p->lx.st.tok != TOK_EOF) {
+    const char *key;
+    uint32_t key_len;
+
+    if (p->lx.st.tok == TOK_STRING) {
+      sv_lex_string_t s = sv_lexer_str_literal(&p->lx);
+      key = s.str;
+      key_len = s.len;
+    } else if (is_ident_like_tok(p->lx.st.tok)) {
+      key = tok_ident_str(p, &key_len);
+    } else {
+      sv_parse_unexpected_token(p);
+      return;
+    }
+    p->lx.st.consumed = 1;
+    expect(p, TOK_COLON);
+
+    if (sv_lexer_next(&p->lx) != TOK_STRING) {
+      sv_parse_unexpected_token(p);
+      return;
+    }
+    sv_lex_string_t value = sv_lexer_str_literal(&p->lx);
+    p->lx.st.consumed = 1;
+
+    bool is_type = key_len == 4 && memcmp(key, "type", 4) == 0;
+    if (is_type && has_type) {
+      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Import attribute has duplicate key 'type'");
+      return;
+    }
+    
+    if (!is_type) {
+      SV_MKERR_TYPED(
+        p->js, JS_ERR_SYNTAX, "Import attribute \"%.*s\" with value \"%.*s\" is not supported",
+        (int)key_len, key, (int)value.len, value.str
+      );
+      return;
+    }
+
+    has_type = true;
+    decl->aux = value.str;
+    decl->aux_len = value.len;
+
+    if (sv_lexer_next(&p->lx) != TOK_COMMA) break;
+    p->lx.st.consumed = 1;
+  }
+  expect(p, TOK_RBRACE);
 }
 
 enum {
@@ -34,8 +90,9 @@ sv_ast_t *parse_import_stmt(sv_parser_t *p) {
     sv_ast_set_string(spec, sv_lexer_str_literal(&p->lx));
     spec->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
     p->lx.st.consumed = 1;
-    consume_semicolon(p);
     decl->right = spec;
+    parse_import_attributes(p, decl);
+    consume_semicolon(p);
     return decl;
   }
 
@@ -122,6 +179,7 @@ parse_from:
   spec->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
   p->lx.st.consumed = 1;
   decl->right = spec;
+  parse_import_attributes(p, decl);
 
   consume_semicolon(p);
   return decl;
@@ -270,6 +328,7 @@ sv_ast_t *parse_export_stmt(sv_parser_t *p) {
       decl->right = spec;
       decl->flags |= EX_FROM;
       p->lx.st.consumed = 1;
+      parse_import_attributes(p, decl);
     }
 
     consume_semicolon(p);
@@ -303,6 +362,7 @@ sv_ast_t *parse_export_stmt(sv_parser_t *p) {
     decl->right = spec;
     decl->flags |= EX_FROM;
     p->lx.st.consumed = 1;
+    parse_import_attributes(p, decl);
 
     consume_semicolon(p);
     return decl;

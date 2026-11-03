@@ -26,6 +26,7 @@ void js_esm_invalidate_files(ant_t *js);
 ant_value_t js_esm_make_file_url(ant_t *js, const char *path);
 const char *esm_platform_condition(ant_t *js);
 ant_value_t js_esm_import_sync(ant_t *js, ant_value_t specifier);
+ant_value_t js_esm_import_sync_typed(ant_t *js, ant_value_t specifier, const char *type, size_t type_len);
 
 ant_value_t js_esm_import_sync_cstr(ant_t *js, const char *specifier, size_t spec_len);
 ant_value_t js_esm_import_sync_from(ant_t *js, ant_value_t specifier, const char *base_path);
