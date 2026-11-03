@@ -57,7 +57,7 @@ static void protectors_apply_key(ant_t *js, const protector_view_t *v, ant_objec
   }
 
   if (key == js->intern.ret) {
-    if (holder->protector_holder & ANT_PROTECTOR_HOLDER_ITERATOR) *v->invalid |= ANT_PROTECTOR_ITERATOR_RETURN;
+    if (ant_object_protector_holder(holder) & ANT_PROTECTOR_HOLDER_ITERATOR) *v->invalid |= ANT_PROTECTOR_ITERATOR_RETURN;
     return;
   }
 

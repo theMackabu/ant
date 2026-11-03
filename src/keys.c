@@ -1200,7 +1200,7 @@ static bool copy_adopt_shape(ant_t *js, ant_value_t dst, ant_object_t *src, bool
   
   if (
     count == 0 || count > src->prop_count || ant_shape_may_have_index_keys(shape) ||
-    (src->protector_holder & ANT_PROTECTOR_HOLDER_WATCHED) || !dst_ptr ||
+    (ant_object_protector_holder(src) & ANT_PROTECTOR_HOLDER_WATCHED) || !dst_ptr ||
     ant_shape_proto(shape) != ant_object_proto(dst_ptr) || !dst_ptr->shape || ant_shape_count(dst_ptr->shape) != 0 || dst_ptr->prop_count != 0 ||
     dst_ptr->flags.is_exotic || !dst_ptr->flags.extensible || dst_ptr->type_tag != kTypeObject ||
     ant_object_inobj_limit(dst_ptr) != ant_shape_get_inobj_limit(shape) ||

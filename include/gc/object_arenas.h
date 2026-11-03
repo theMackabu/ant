@@ -3,10 +3,6 @@
 
 #include "isolate.h"
 
-static inline bool ant_object_is_wide(const ant_object_t *obj) {
-  return obj->inobj_limit > ANT_INOBJ_BASE_SLOTS;
-}
-
 static inline ant_fixed_arena_t *ant_object_arena_for(ant_t *js, uint32_t inobj_limit) {
   if (inobj_limit <= ANT_INOBJ_BASE_SLOTS) return &js->obj_arena;
   return inobj_limit <= ANT_INOBJ_WIDE_SLOTS ? &js->obj_wide_arena : &js->obj_large_arena;
@@ -19,13 +15,24 @@ static inline ant_object_t *ant_object_cell_alloc(ant_t *js, uint32_t inobj_limi
   return obj;
 }
 
+static inline ant_fixed_arena_t *ant_object_arena_of(ant_t *js, const ant_object_t *obj) {
+  size_t chunk = ((uintptr_t)obj - ant_cage_base()) >> ANT_ARENA_CHUNK_SHIFT;
+  uint32_t owner = atomic_load_explicit(&js->obj_arena.owners[chunk], memory_order_relaxed) & ~ANT_ARENA_PARTIAL_CHUNK;
+  
+  if (owner == js->obj_wide_arena.id) return &js->obj_wide_arena;
+  if (owner == js->obj_large_arena.id) return &js->obj_large_arena;
+  
+  return &js->obj_arena;
+}
+
 static inline void ant_object_cell_free(ant_t *js, ant_object_t *obj) {
-  if (!ant_object_is_wide(obj)) {
+  ant_fixed_arena_t *arena = ant_object_arena_of(js, obj);
+  if (arena == &js->obj_arena) {
     fixed_arena_free_elem(&js->obj_arena, obj);
     return;
   }
 
-  fixed_arena_free_elem(ant_object_arena_for(js, obj->inobj_limit), obj);
+  fixed_arena_free_elem(arena, obj);
   if (js->obj_arena.live_count > 0) js->obj_arena.live_count--;
 }
 

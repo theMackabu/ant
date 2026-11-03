@@ -34,20 +34,16 @@ ant_value_t obj_extra_get(ant_object_t *obj, internal_slot_t slot) {
 bool obj_extra_reserve(ant_object_t *obj, uint8_t capacity) {
   if (!obj) return false;
   ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
-  uint8_t current_capacity = sidecar ? sidecar->extra_cap : obj->extra_cap;
-  ant_extra_slot_t *entries = ant_object_extra_slots_ptr(obj);
+  ant_extra_slots_t *block = ant_object_extra_block(obj);
 
-  if (capacity <= current_capacity) return true;
-  ant_extra_slot_t *next = realloc(entries, sizeof(*next) * capacity);
+  if (block && capacity <= block->cap) return true;
+  ant_extra_slots_t *next = realloc(block, sizeof(*next) + sizeof(next->entries[0]) * capacity);
   if (!next) return false;
 
-  if (sidecar) {
-    sidecar->extra_slots = next;
-    sidecar->extra_cap = capacity;
-  } else {
-    obj->extra_slots = next;
-    obj->extra_cap = capacity;
-  }
+  if (!block) next->count = 0;
+  next->cap = capacity;
+  if (sidecar) sidecar->extra_slots = next;
+  else obj->extra_slots = next;
   
   return true;
 }
@@ -61,24 +57,14 @@ static bool obj_extra_set(ant_object_t *obj, internal_slot_t slot, ant_value_t v
     return true;
   }
 
-  uint8_t count = 0;
-  ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
-  ant_extra_slot_t *entries = ant_object_extra_slots(obj, &count);
-  uint8_t capacity = sidecar ? sidecar->extra_cap : obj->extra_cap;
-  
+  uint8_t count = ant_object_extra_count(obj);
   if (count == UINT8_MAX) return false;
-  uint8_t next_count = (uint8_t)(count + 1);
+  if ((uint8_t)(count + 1) > ant_object_extra_capacity(obj) && !obj_extra_reserve(obj, (uint8_t)(count + 1))) return false;
 
-  if (next_count > capacity) {
-    if (!obj_extra_reserve(obj, next_count)) return false;
-    entries = ant_object_extra_slots_ptr(obj);
-  }
-
-  entries[count].slot = (uint8_t)slot;
-  entries[count].value = value;
-  
-  if (sidecar) sidecar->extra_count = next_count;
-  else obj->extra_count = next_count;
+  ant_extra_slots_t *block = ant_object_extra_block(obj);
+  block->entries[count].slot = (uint8_t)slot;
+  block->entries[count].value = value;
+  block->count = (uint8_t)(count + 1);
   
   return true;
 }
@@ -98,42 +84,38 @@ bool js_prop_store(ant_t *js, ant_prop_loc_t loc, ant_value_t value) {
   return true;
 }
 
-bool js_obj_ensure_prop_capacity(ant_t *js, ant_object_t *obj, uint32_t needed) {
+bool js_obj_grow_prop_capacity(ant_t *js, ant_object_t *obj, uint32_t needed) {
   if (!obj) return false;
+  
   uint32_t inobj_limit = ant_object_inobj_limit(obj);
   uint32_t old_count = obj->prop_count;
-  if (needed <= obj->prop_count) return true;
+  if (needed <= old_count) return true;
 
   if (needed > inobj_limit) {
     uint32_t overflow_needed = needed - inobj_limit;
-    if (overflow_needed > ant_object_overflow_cap(obj)) {
-      uint8_t shift = obj->overflow_cap ? (uint8_t)(obj->overflow_cap + 1) : 2;
-      if (shift > 31) return false;
-
-      while (shift < 31 && ((uint32_t)1 << shift) < overflow_needed) shift++;
-      if (((uint32_t)1 << shift) < overflow_needed) return false;
-
-      size_t slots = (size_t)1 << shift;
+    size_t old_slots = obj->overflow_prop && old_count > inobj_limit ? ant_object_overflow_cap_for(old_count - inobj_limit) : 0;
+    if (overflow_needed > old_slots) {
+      if (overflow_needed > (1u << 31)) return false;
+      size_t slots = ant_object_overflow_cap_for(overflow_needed);
       if (slots > SIZE_MAX / sizeof(ant_value_t)) return false;
 
-      size_t old_slots = ant_object_overflow_cap(obj);
       ant_value_t *next = realloc(obj->overflow_prop, sizeof(*next) * slots);
       if (!next) return false;
       
       gc_note_overflow_alloc(js, sizeof(*next) * (slots - old_slots));
       obj->overflow_prop = next;
-      obj->overflow_cap = shift;
     }
   } else if (obj->overflow_prop) {
     gc_note_overflow_free(js, ant_object_overflow_cap(obj) * sizeof(*obj->overflow_prop));
-    free(obj->overflow_prop);
-    obj->overflow_prop = NULL;
-    obj->overflow_cap = 0;
+    ant_object_overflow_free(obj);
   }
 
   obj->prop_count = needed;
+  ant_proto_watch_note_change(obj);
+  
   for (uint32_t i = old_count; i < needed; i++) {
-    ant_object_prop_set_unchecked(obj, i, Ant_Value_Undefined);
+    if (i < inobj_limit) obj->inobj[i] = Ant_Value_Undefined;
+    else obj->overflow_prop[i - inobj_limit] = Ant_Value_Undefined;
   }
 
   return true;
@@ -193,8 +175,9 @@ void ant_object_set_proto(ant_t *js, ant_object_t *obj, ant_value_t proto) {
   ant_shape_t *next = NULL;
   
   if (ant_shape_is_empty(shape) && !ant_shape_is_exotic(shape)) {
-    if (obj->inobj_limit == ANT_INOBJ_BASE_SLOTS && is_object_type(proto)) next = object_proto_root_cached(js, proto);
-    else if ((next = object_proto_root(js, proto, obj->inobj_limit))) ant_shape_release(next);
+    uint8_t limit = ant_shape_get_inobj_limit(shape);
+    if (limit == ANT_INOBJ_BASE_SLOTS && is_object_type(proto)) next = object_proto_root_cached(js, proto);
+    else if ((next = object_proto_root(js, proto, limit))) ant_shape_release(next);
     if (next) ant_shape_retain(next);
   }
   
@@ -233,13 +216,34 @@ bool js_obj_ensure_unique_shape(ant_object_t *obj) {
   return true;
 }
 
+static void obj_overflow_fit(ant_object_t *obj, uint32_t old_count) {
+  if (!obj->overflow_prop || obj->prop_count >= old_count) return;
+  
+  uint32_t limit = ant_object_inobj_limit(obj);
+  uint32_t old_cap = old_count > limit ? ant_object_overflow_cap_for(old_count - limit) : 0;
+  
+  uint32_t new_cap = ant_object_overflow_cap(obj);
+  if (new_cap == old_cap) return;
+
+  gc_note_overflow_free(ant_shape_isolate(obj->shape), (old_cap - new_cap) * sizeof(*obj->overflow_prop));
+  if (!new_cap) {
+    ant_object_overflow_free(obj);
+    return;
+  }
+
+  ant_value_t *next = realloc(obj->overflow_prop, new_cap * sizeof(*next));
+  if (next) obj->overflow_prop = next;
+}
+
 void obj_delete_prop_slot(ant_object_t *obj, uint32_t slot) {
   if (!obj || slot >= obj->prop_count) return;
+  uint32_t old_count = obj->prop_count;
   ant_object_prop_set_unchecked(obj, slot, Ant_Value_Undefined);
 
   uint32_t shape_count = ant_shape_count(obj->shape);
   if (!ant_shape_should_compact(obj->shape)) {
     obj->prop_count = shape_count;
+    obj_overflow_fit(obj, old_count);
     return;
   }
 
@@ -254,6 +258,7 @@ void obj_delete_prop_slot(ant_object_t *obj, uint32_t slot) {
   for (uint32_t i = dst; i < obj->prop_count; i++)
     ant_object_prop_set_unchecked(obj, i, Ant_Value_Undefined);
   obj->prop_count = ant_shape_compact(obj->shape);
+  obj_overflow_fit(obj, old_count);
 }
 
 static ant_exotic_ops_t *obj_ensure_exotic_ops(ant_object_t *obj) {
@@ -307,10 +312,7 @@ ant_object_t *obj_alloc_shaped(ant_t *js, uint8_t type_tag, ant_shape_t *shape) 
   else obj->u.data.value = Ant_Value_Undefined;
   
   obj->shape = shape;
-  obj->inobj_limit = inobj_limit;
-  
   obj->overflow_prop = NULL;
-  obj->overflow_cap = 0;
   obj->prop_count = 0;
   
   static_assert(ANT_INOBJ_BASE_SLOTS == 4, "obj_alloc_shaped unrolls the base slots");
@@ -321,17 +323,13 @@ ant_object_t *obj_alloc_shaped(ant_t *js, uint8_t type_tag, ant_shape_t *shape) 
   obj->inobj[2] = undef;
   obj->inobj[3] = undef;
   
-  for (uint32_t i = ANT_INOBJ_BASE_SLOTS; i < obj->inobj_limit; i++)
+  for (uint32_t i = ANT_INOBJ_BASE_SLOTS; i < inobj_limit; i++)
     obj->inobj[i] = undef;
   
   obj->extra_slots = NULL;
-  obj->extra_count = 0;
-  obj->extra_cap = 0;
-  
   obj->finalizer = NULL;
   obj->native_ptr = NULL;
   obj->native_tag = 0;
-  obj->protector_holder = 0;
   
   obj->mark_epoch = 0;
   obj->flags = (ant_object_flags_t){.extensible = 1};
@@ -485,16 +483,15 @@ ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t template) {
     memcpy(overflow, source->overflow_prop, overflow_bytes);
   }
   
-  ant_object_t *target = ant_object_cell_alloc(js, source->inobj_limit);
+  ant_object_t *target = ant_object_cell_alloc(js, ant_object_inobj_limit(source));
   if (!target) { free(overflow); return js_mkerr(js, "oom"); }
   if (overflow_bytes) gc_note_overflow_alloc(js, overflow_bytes);
   
-  memcpy(target, source, ant_object_cell_size(source->inobj_limit));
+  memcpy(target, source, ant_object_cell_size(ant_object_inobj_limit(source)));
   target->overflow_prop = overflow;
   ant_shape_retain(target->shape);
   target->mark_epoch = 0;
   target->ic_identity = 0;
-  target->protector_holder = 0;
   target->flags.generation = 0;
   target->flags.in_remember_set = 0;
   target->flags.gc_permanent = 0;

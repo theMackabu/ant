@@ -263,14 +263,15 @@ static inline bool sv_ic_try_get_hit(
   if (ic->epoch != js->ic.epoch) return false;
   if (ic->cached_shape != receiver->shape) return false;
 
+  ant_value_t receiver_proto = ant_object_proto(receiver);
   if (ic->get_kind == SV_GF_IC_MISSING) {
     if (vtype(obj) != kTypeObject || receiver->type_tag != kTypeObject || receiver->flags.is_exotic ||
-      !receiver->shape || ant_object_proto(receiver) != ic->guard.receiver_proto) return false;
+      !receiver->shape || receiver_proto != ic->guard.receiver_proto) return false;
     
-    if (is_object_type(ant_object_proto(receiver))) {
-      ant_object_t *proto = js_obj_ptr(js_as_obj(ant_object_proto(receiver)));
+    if (is_object_type(receiver_proto)) {
+      ant_object_t *proto = js_obj_ptr(js_as_obj(receiver_proto));
       if (!proto || proto->ic_identity != sv_gf_ic_proto_id(ic)) return false;
-    } else if (vtype(ant_object_proto(receiver)) != kTypeNull) return false;
+    } else if (vtype(receiver_proto) != kTypeNull) return false;
     
     *out = Ant_Value_Undefined;
     return true;
@@ -280,10 +281,10 @@ static inline bool sv_ic_try_get_hit(
   
   if (sv_gf_kind_is_own(ic->get_kind)) source = receiver;
   else if (sv_gf_kind_is_proto(ic->get_kind)) {
-    if (ant_object_proto(receiver) != ic->guard.receiver_proto) return false;
-    if (!is_object_type(ant_object_proto(receiver))) return false;
+    if (receiver_proto != ic->guard.receiver_proto) return false;
+    if (!is_object_type(receiver_proto)) return false;
     
-    ant_object_t *proto = js_obj_ptr(js_as_obj(ant_object_proto(receiver)));
+    ant_object_t *proto = js_obj_ptr(js_as_obj(receiver_proto));
     if (!proto || proto->ic_identity != sv_gf_ic_proto_id(ic)) return false;
     
     source = ic->cached_holder;
@@ -307,8 +308,9 @@ static inline int sv_gf_poly_find(
 
     ant_object_t *source = receiver;
     if (sv_gf_kind_is_proto(e->kind)) {
-      if (ant_object_proto(receiver) != e->receiver_proto || !is_object_type(ant_object_proto(receiver))) continue;
-      ant_object_t *proto = js_obj_ptr(js_as_obj(ant_object_proto(receiver)));
+      ant_value_t receiver_proto = ant_object_proto(receiver);
+      if (receiver_proto != e->receiver_proto || !is_object_type(receiver_proto)) continue;
+      ant_object_t *proto = js_obj_ptr(js_as_obj(receiver_proto));
       if (!proto || proto->ic_identity != e->proto_id) continue;
       source = e->holder;
       if (!source || source->flags.is_exotic || !source->shape) continue;
@@ -359,24 +361,26 @@ static inline sv_get_field_ic_kind_t sv_gf_kind_for(const ant_object_t *receiver
 }
 
 static inline uint32_t sv_gf_proto_id_for(ant_t *js, const ant_object_t *receiver, sv_get_field_ic_kind_t kind) {
-  return sv_gf_kind_is_own(kind) || !is_object_type(ant_object_proto(receiver))
-    ? 0 : sv_ic_object_identity(js, js_obj_ptr(js_as_obj(ant_object_proto(receiver))));
+  ant_value_t receiver_proto = ant_object_proto(receiver);
+  return sv_gf_kind_is_own(kind) || !is_object_type(receiver_proto)
+    ? 0 : sv_ic_object_identity(js, js_obj_ptr(js_as_obj(receiver_proto)));
 }
 
 static inline int sv_gf_mega_entry_kind(
   ant_t *js, const sv_gf_mega_entry_t *e, ant_object_t *receiver, const char *key
 ) {
+  ant_value_t receiver_proto = ant_object_proto(receiver);
   if (
     e->shape != receiver->shape || e->key != key || 
-    e->epoch != js->ic.epoch || e->receiver_proto != ant_object_proto(receiver)
+    e->epoch != js->ic.epoch || e->receiver_proto != receiver_proto
   ) return -1;
   
   if (sv_gf_kind_is_own(e->kind)) return e->kind;
   if (!sv_gf_kind_is_proto(e->kind) && e->kind != SV_GF_IC_MISSING) return -1;
-  if (vtype(ant_object_proto(receiver)) == kTypeNull) return e->kind == SV_GF_IC_MISSING ? SV_GF_IC_MISSING : -1;
-  if (!is_object_type(ant_object_proto(receiver))) return -1;
+  if (vtype(receiver_proto) == kTypeNull) return e->kind == SV_GF_IC_MISSING ? SV_GF_IC_MISSING : -1;
+  if (!is_object_type(receiver_proto)) return -1;
   
-  ant_object_t *proto = js_obj_ptr(js_as_obj(ant_object_proto(receiver)));
+  ant_object_t *proto = js_obj_ptr(js_as_obj(receiver_proto));
   if (!proto || proto->ic_identity != e->proto_id) return -1;
   if (e->kind == SV_GF_IC_MISSING) return SV_GF_IC_MISSING;
   
@@ -386,9 +390,10 @@ static inline int sv_gf_mega_entry_kind(
 static inline const sv_gf_mega_entry_t *sv_gf_mega_lookup(
   ant_t *js, const sv_gf_mega_cache_t *cache, ant_object_t *receiver, const char *key, int *kind
 ) {
-  const sv_gf_mega_entry_t *e = &cache->primary[sv_gf_mega_primary_hash(receiver->shape, ant_object_proto(receiver), key)];
+  ant_value_t receiver_proto = ant_object_proto(receiver);
+  const sv_gf_mega_entry_t *e = &cache->primary[sv_gf_mega_primary_hash(receiver->shape, receiver_proto, key)];
   if ((*kind = sv_gf_mega_entry_kind(js, e, receiver, key)) >= 0) return e;
-  e = &cache->secondary[sv_gf_mega_secondary_hash(receiver->shape, ant_object_proto(receiver), key)];
+  e = &cache->secondary[sv_gf_mega_secondary_hash(receiver->shape, receiver_proto, key)];
   return (*kind = sv_gf_mega_entry_kind(js, e, receiver, key)) >= 0 ? e : NULL;
 }
 
@@ -415,8 +420,9 @@ static __attribute__((noinline)) void sv_gf_mega_store_in(
   sv_get_field_ic_kind_t kind = sv_gf_kind_for(receiver, holder, accessor);
   uint32_t proto_id = sv_gf_proto_id_for(js, receiver, kind);
 
-  sv_gf_mega_entry_t *p = &cache->primary[sv_gf_mega_primary_hash(receiver->shape, ant_object_proto(receiver), key)];
-  if (p->shape == receiver->shape && p->key == key && p->receiver_proto == ant_object_proto(receiver)) {
+  ant_value_t receiver_proto = ant_object_proto(receiver);
+  sv_gf_mega_entry_t *p = &cache->primary[sv_gf_mega_primary_hash(receiver->shape, receiver_proto, key)];
+  if (p->shape == receiver->shape && p->key == key && p->receiver_proto == receiver_proto) {
     p->holder = holder; p->index = index; p->proto_id = proto_id; p->kind = kind;
     p->epoch = js->ic.epoch;
     return;
@@ -431,7 +437,7 @@ static __attribute__((noinline)) void sv_gf_mega_store_in(
   ant_shape_retain(receiver->shape);
   
   *p = (sv_gf_mega_entry_t){
-    .shape = receiver->shape, .receiver_proto = ant_object_proto(receiver), .key = key,
+    .shape = receiver->shape, .receiver_proto = receiver_proto, .key = key,
     .holder = holder, .index = index, .proto_id = proto_id,
     .epoch = js->ic.epoch, .kind = kind,
   };

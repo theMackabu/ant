@@ -31,10 +31,10 @@ static void proto_watch_release(ant_proto_watch_t *watch) {
 
 ant_proto_watch_t *ant_proto_watch(ant_object_t *obj) {
   if (!obj) return NULL;
-  if (obj->protector_holder & ANT_PROTECTOR_HOLDER_WATCHED) return ant_object_sidecar(obj)->proto_watch;
+  if (ant_object_protector_holder(obj) & ANT_PROTECTOR_HOLDER_WATCHED) return ant_object_sidecar(obj)->proto_watch;
   
   if (
-    (obj->protector_holder & ANT_PROTECTOR_HOLDER_UNWATCHABLE) ||
+    (ant_object_protector_holder(obj) & ANT_PROTECTOR_HOLDER_UNWATCHABLE) ||
     obj->type_tag != kTypeObject || obj->flags.is_exotic || !obj->shape
   ) return NULL;
 
@@ -54,7 +54,7 @@ ant_proto_watch_t *ant_proto_watch(ant_object_t *obj) {
   watch->object = obj;
   watch->refs = 1;
   sidecar->proto_watch = watch;
-  obj->protector_holder |= ANT_PROTECTOR_HOLDER_WATCHED;
+  sidecar->protector_holder |= ANT_PROTECTOR_HOLDER_WATCHED;
   
   return watch;
 }
@@ -103,7 +103,7 @@ static ant_proto_watch_t *proto_watch_unlink(ant_object_t *obj) {
   ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
   ant_proto_watch_t *watch = sidecar->proto_watch;
   
-  obj->protector_holder = (uint8_t)((obj->protector_holder & ~ANT_PROTECTOR_HOLDER_WATCHED) | ANT_PROTECTOR_HOLDER_UNWATCHABLE);
+  sidecar->protector_holder = (uint8_t)((sidecar->protector_holder & ~ANT_PROTECTOR_HOLDER_WATCHED) | ANT_PROTECTOR_HOLDER_UNWATCHABLE);
   sidecar->proto_watch = NULL;
   watch->object = NULL;
   

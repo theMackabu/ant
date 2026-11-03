@@ -1612,12 +1612,15 @@ static inline __attribute__((always_inline)) void gc_shape_release(ant_shape_t *
 }
 
 static inline __attribute__((always_inline)) bool gc_object_release_plain(ant_t *js, ant_object_t *obj) {
-  uintptr_t attached =
-    (uintptr_t)obj->finalizer | (uintptr_t)obj->extra_slots |
-    (uintptr_t)obj->overflow_prop | obj->native_tag;
+  uintptr_t attached = (uintptr_t)obj->finalizer | (uintptr_t)obj->extra_slots | obj->native_tag;
   
   if (attached != 0 || ((1u << obj->type_tag) & GC_FREE_SLOW_TYPE_MASK)) return false;
   obj->mark_epoch = ANT_GC_DEAD;
+  
+  if (obj->overflow_prop) {
+    gc_note_overflow_free(js, ant_object_overflow_cap(obj) * sizeof(*obj->overflow_prop));
+    ant_object_overflow_free(obj);
+  }
   
   if (obj->shape) {
     gc_shape_release(obj->shape);
@@ -1644,6 +1647,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     gc_finalize_host_natives(js, js_obj_from_ptr(obj));
   
   obj->mark_epoch = ANT_GC_DEAD;
+  size_t overflow_bytes = ant_object_overflow_cap(obj) * sizeof(*obj->overflow_prop);
 
   if (obj->shape) {
     ant_shape_release(obj->shape);
@@ -1738,11 +1742,8 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     obj->extra_slots = NULL;
   }
 
-  if (obj->overflow_prop)
-    gc_note_overflow_free(js, ant_object_overflow_cap(obj) * sizeof(*obj->overflow_prop));
-  
-  free(obj->overflow_prop);
-  obj->overflow_prop = NULL;
+  if (overflow_bytes) gc_note_overflow_free(js, overflow_bytes);
+  ant_object_overflow_free(obj);
   
   GC_VERIFY_POISON_OBJECT(obj);
   ant_object_cell_free(js, obj);
@@ -1768,8 +1769,8 @@ static void gc_sweep_young_and_promote(ant_t *js) {
       obj->next = js->objects_old;
       js->objects_old = obj;
     } else if (gc_object_release_plain(js, obj)) {
-      if (__builtin_expect(any_wide && ant_object_is_wide(obj), 0)) {
-        ant_fixed_arena_t *wa = ant_object_arena_for(js, obj->inobj_limit);
+      ant_fixed_arena_t *wa = any_wide ? ant_object_arena_of(js, obj) : oa;
+      if (__builtin_expect(wa != oa, 0)) {
         *(void **)obj = wa->free_list;
         wa->free_list = obj;
         if (wa->live_count > 0) wa->live_count--;

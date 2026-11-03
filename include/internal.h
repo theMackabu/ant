@@ -222,7 +222,7 @@ double js_to_number(ant_t *js, ant_value_t arg);
 double js_parse_int_value(ant_t *js, ant_value_t arg);
 double js_parse_float_value(ant_t *js, ant_value_t arg);
 
-bool js_obj_ensure_prop_capacity(ant_t *js, ant_object_t *obj, uint32_t needed);
+bool js_obj_grow_prop_capacity(ant_t *js, ant_object_t *obj, uint32_t needed);
 bool js_obj_ensure_unique_shape(ant_object_t *obj);
 void js_obj_mark_exotic(ant_object_t *obj);
 void js_obj_set_exotic(ant_object_t *obj, const ant_exotic_ops_t *ops);
@@ -614,6 +614,32 @@ static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t
   js_set(js, lib, "default", ctor_fn);
   js_set(js, ctor_fn, "default", ctor_fn);
   js_set_slot_wb(js, lib, SLOT_DEFAULT, ctor_fn);
+}
+
+static inline bool js_obj_ensure_prop_capacity(ant_t *js, ant_object_t *obj, uint32_t needed) {
+  if (!obj) return false;
+  uint32_t count = obj->prop_count;
+  
+  if (needed <= count) return true;
+  if (needed != count + 1 || !obj->shape) return js_obj_grow_prop_capacity(js, obj, needed);
+
+  uint32_t limit = ant_shape_get_inobj_limit(obj->shape);
+  ant_value_t *slot;
+  
+  if (needed <= limit) {
+    if (obj->overflow_prop) return js_obj_grow_prop_capacity(js, obj, needed);
+    slot = &obj->inobj[count];
+  } else {
+    uint32_t used = count - limit;
+    if (!used || used >= ant_object_overflow_cap_for(used)) return js_obj_grow_prop_capacity(js, obj, needed);
+    slot = &obj->overflow_prop[used];
+  }
+
+  ant_proto_watch_note_change(obj);
+  *slot = Ant_Value_Undefined;
+  obj->prop_count = needed;
+  
+  return true;
 }
 
 #endif

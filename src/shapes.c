@@ -182,6 +182,7 @@ static void shape_refresh_descriptor_pointers(shape_descriptors_t *descriptors) 
 }
 
 static inline uint8_t shape_clamp_inobj_limit(uint8_t limit) {
+  if (limit < ANT_INOBJ_BASE_SLOTS) return (uint8_t)ANT_INOBJ_BASE_SLOTS;
   return (limit > ANT_INOBJ_MAX_SLOTS) ? (uint8_t)ANT_INOBJ_MAX_SLOTS : limit;
 }
 
@@ -779,6 +780,7 @@ ant_t *ant_shape_isolate(const ant_shape_t *shape) {
 
 static_assert(
   offsetof(struct ant_shape, proto) == ANT_SHAPE_PROTO_OFFSET &&
+  offsetof(struct ant_shape, inobj_limit) == ANT_SHAPE_INOBJ_LIMIT_OFFSET &&
   offsetof(struct ant_shape, exotic_ops) == ANT_SHAPE_EXOTIC_OPS_OFFSET &&
   offsetof(struct ant_shape, count) == ANT_SHAPE_COUNT_OFFSET,
   "inline shape accessors read these offsets"
@@ -1028,11 +1030,6 @@ bool ant_gc_shapes_sweep(ant_t *js) {
   shape_entry_pool_trim(&js->shapes.heap, js->shapes.heap.pool_len / 2);
 
   return freed_any;
-}
-
-uint8_t ant_shape_get_inobj_limit(const ant_shape_t *shape) {
-  if (!shape) return (uint8_t)ANT_INOBJ_BASE_SLOTS;
-  return shape_clamp_inobj_limit(shape->inobj_limit);
 }
 
 int32_t ant_shape_lookup_interned(const ant_shape_t *shape, const char *interned) {

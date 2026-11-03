@@ -186,7 +186,8 @@ static void jit_emit_get_field_poly_loop(
   sv_asm_load(a, MIR_T_U32, c->r_gfp_idx, c->r_gfp_e, offsetof(sv_gf_poly_entry_t, index));
   sv_asm_load(a, MIR_T_U32, c->r_gfp_t, c->r_gfp_src, offsetof(ant_object_t, prop_count));
   sv_asm_u64_bge(a, full, c->r_gfp_idx, c->r_gfp_t);
-  sv_asm_load(a, MIR_T_U8, c->r_gfp_lim, c->r_gfp_src, offsetof(ant_object_t, inobj_limit));
+  sv_asm_load(a, MIR_T_P, c->r_gfp_lim, c->r_gfp_src, offsetof(ant_object_t, shape));
+  sv_asm_load(a, MIR_T_U8, c->r_gfp_lim, c->r_gfp_lim, ANT_SHAPE_INOBJ_LIMIT_OFFSET);
   sv_asm_u64_bge(a, load_overflow, c->r_gfp_idx, c->r_gfp_lim);
   sv_asm_load_index(a, MIR_T_I64, dst, c->r_gfp_src, offsetof(ant_object_t, inobj), c->r_gfp_idx, 8);
   sv_asm_jump(a, hit);
@@ -255,7 +256,8 @@ static void jit_emit_get_field_mega_probe(
   sv_asm_load(a, MIR_T_U32, c->r_gfp_idx, c->r_gfp_e, offsetof(sv_gf_mega_entry_t, index));
   sv_asm_load(a, MIR_T_U32, c->r_gfp_t, c->r_gfp_src, offsetof(ant_object_t, prop_count));
   sv_asm_u64_bge(a, full, c->r_gfp_idx, c->r_gfp_t);
-  sv_asm_load(a, MIR_T_U8, c->r_gfp_lim, c->r_gfp_src, offsetof(ant_object_t, inobj_limit));
+  sv_asm_load(a, MIR_T_P, c->r_gfp_lim, c->r_gfp_src, offsetof(ant_object_t, shape));
+  sv_asm_load(a, MIR_T_U8, c->r_gfp_lim, c->r_gfp_lim, ANT_SHAPE_INOBJ_LIMIT_OFFSET);
   sv_asm_u64_bge(a, load_overflow, c->r_gfp_idx, c->r_gfp_lim);
   sv_asm_load_index(a, MIR_T_I64, dst, c->r_gfp_src, offsetof(ant_object_t, inobj), c->r_gfp_idx, 8);
   sv_asm_jump(a, hit);
@@ -321,7 +323,8 @@ static void jit_emit_define_slot_inline(
   sv_asm_i64_bne_imm(a, helper, t, 0);
   sv_asm_load(a, MIR_T_U32, t, ptr, offsetof(ant_object_t, prop_count));
   sv_asm_u64_ble_imm(a, helper, t, slot);
-  sv_asm_load(a, MIR_T_U8, lim, ptr, offsetof(ant_object_t, inobj_limit));
+  sv_asm_load(a, MIR_T_P, lim, ptr, offsetof(ant_object_t, shape));
+  sv_asm_load(a, MIR_T_U8, lim, lim, ANT_SHAPE_INOBJ_LIMIT_OFFSET);
   sv_asm_u64_ble_imm(a, overflow, lim, slot);
   sv_asm_store(a, MIR_JSVAL, ptr, (MIR_disp_t)(offsetof(ant_object_t, inobj) + slot * sizeof(ant_value_t)), val);
   sv_asm_jump(a, done);

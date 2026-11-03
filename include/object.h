@@ -85,6 +85,12 @@ typedef struct {
 } ant_extra_slot_t;
 
 typedef struct {
+  uint8_t count;
+  uint8_t cap;
+  ant_extra_slot_t entries[];
+} ant_extra_slots_t;
+
+typedef struct {
   ant_value_t token;
   ant_value_t value;
   ant_value_t getter;
@@ -107,7 +113,7 @@ typedef struct {
 } ant_native_entry_t;
 
 typedef struct {
-  ant_extra_slot_t *extra_slots;
+  ant_extra_slots_t *extra_slots;
   ant_native_entry_t *native_entries;
   ant_private_table_t private_table;
   ant_proxy_state_t *proxy_state;
@@ -119,9 +125,8 @@ typedef struct {
   
   uint8_t native_count;
   uint8_t native_cap;
-  uint8_t extra_count;
-  uint8_t extra_cap;
   uint8_t flags;
+  uint8_t protector_holder;
 } ant_object_sidecar_t;
 
 static_assert(
@@ -175,13 +180,10 @@ typedef struct ant_object {
   
   ant_shape_t *shape;
   ant_value_t *overflow_prop;
+  ant_extra_slots_t *extra_slots;
   
-  ant_extra_slot_t *extra_slots;
   void (*finalizer)(ant_t *, struct ant_object *);
-
   void *native_ptr;
-  uint32_t native_tag;
-  uint8_t protector_holder;
 
   union {
     struct { ant_value_t *data; uint32_t len; uint32_t cap; } array;
@@ -194,13 +196,10 @@ typedef struct ant_object {
   uint32_t prop_count;
   uint8_t mark_epoch;
   uint8_t type_tag;
-  uint8_t inobj_limit;
-  uint8_t extra_count;
-  uint8_t extra_cap;
-  uint8_t overflow_cap;
   
   ant_object_flags_t flags;
   uint32_t ic_identity;
+  uint32_t native_tag;
   ant_value_t inobj[];
 } ant_object_t;
 
@@ -210,7 +209,7 @@ static constexpr size_t ANT_OBJECT_LARGE_SIZE = sizeof(ant_object_t) + ANT_INOBJ
 static constexpr size_t ANT_OBJECT_FLAGS_HIGH_BYTE = offsetof(ant_object_t, flags) + 1;
 
 static_assert(
-  sizeof(void *) != 8 || ANT_INOBJ_BASE_SLOTS != 4 || ANT_OBJECT_SIZE == 120,
+  sizeof(void *) != 8 || ANT_INOBJ_BASE_SLOTS != 4 || ANT_OBJECT_SIZE == 112,
   "ordinary 64-bit object layout changed"
 );
 
@@ -284,60 +283,39 @@ static inline ant_object_sidecar_t *ant_object_sidecar(const ant_object_t *obj) 
   return (ant_object_sidecar_t *)((uintptr_t)obj->extra_slots & ~ant_sidecar);
 }
 
-static inline ant_extra_slot_t *ant_object_extra_slots_ptr(const ant_object_t *obj) {
+static inline ant_extra_slots_t *ant_object_extra_block(const ant_object_t *obj) {
   if (!obj) return NULL;
   uintptr_t raw = (uintptr_t)obj->extra_slots;
   if ((raw & ant_sidecar) == 0) return obj->extra_slots;
   return ((ant_object_sidecar_t *)(raw & ~ant_sidecar))->extra_slots;
 }
 
+static inline ant_extra_slot_t *ant_object_extra_slots_ptr(const ant_object_t *obj) {
+  ant_extra_slots_t *block = ant_object_extra_block(obj);
+  return block ? block->entries : NULL;
+}
+
 static inline uint8_t ant_object_extra_count(const ant_object_t *obj) {
-  if (!obj) return 0;
-  uintptr_t raw = (uintptr_t)obj->extra_slots;
-  if ((raw & ant_sidecar) == 0) return obj->extra_count;
-  return ((ant_object_sidecar_t *)(raw & ~ant_sidecar))->extra_count;
+  ant_extra_slots_t *block = ant_object_extra_block(obj);
+  return block ? block->count : 0;
 }
 
 static inline uint8_t ant_object_extra_capacity(const ant_object_t *obj) {
-  if (!obj) return 0;
-  uintptr_t raw = (uintptr_t)obj->extra_slots;
-  if ((raw & ant_sidecar) == 0) return obj->extra_cap;
-  return ((ant_object_sidecar_t *)(raw & ~ant_sidecar))->extra_cap;
+  ant_extra_slots_t *block = ant_object_extra_block(obj);
+  return block ? block->cap : 0;
 }
 
 static inline ant_extra_slot_t *ant_object_extra_slots(const ant_object_t *obj, uint8_t *count) {
-  if (!obj) {
-    if (count) *count = 0;
-    return NULL;
-  }
-
-  uintptr_t raw = (uintptr_t)obj->extra_slots;
-  if ((raw & ant_sidecar) == 0) {
-    if (count) *count = obj->extra_count;
-    return obj->extra_slots;
-  }
-  
-  ant_object_sidecar_t *sidecar = (ant_object_sidecar_t *)(raw & ~ant_sidecar);
-  if (count) *count = sidecar->extra_count;
-  return sidecar->extra_slots;
+  ant_extra_slots_t *block = ant_object_extra_block(obj);
+  if (count) *count = block ? block->count : 0;
+  return block ? block->entries : NULL;
 }
 
 static inline ant_extra_slot_t *ant_object_extra_slot(const ant_object_t *obj, uint8_t slot) {
-  if (!obj) return NULL;
-
-  uint8_t count = obj->extra_count;
-  ant_extra_slot_t *entries = obj->extra_slots;
-
-  uintptr_t raw = (uintptr_t)obj->extra_slots;
-  if ((raw & ant_sidecar) != 0) {
-    ant_object_sidecar_t *sidecar = (ant_object_sidecar_t *)(raw & ~ant_sidecar);
-    count = sidecar->extra_count;
-    entries = sidecar->extra_slots;
-  }
-  
-  for (uint8_t i = 0; i < count; i++) 
-    if (entries[i].slot == slot) return &entries[i];
-  
+  ant_extra_slots_t *block = ant_object_extra_block(obj);
+  if (!block) return NULL;
+  for (uint8_t i = 0; i < block->count; i++)
+    if (block->entries[i].slot == slot) return &block->entries[i];
   return NULL;
 }
 
@@ -351,12 +329,7 @@ static inline ant_object_sidecar_t *ant_object_ensure_sidecar(ant_object_t *obj)
   if (!sidecar) return NULL;
   
   sidecar->extra_slots = obj->extra_slots;
-  sidecar->extra_count = obj->extra_count;
-  sidecar->extra_cap = obj->extra_cap;
-  
-  obj->extra_slots = (ant_extra_slot_t *)((uintptr_t)sidecar | ant_sidecar);
-  obj->extra_count = 0;
-  obj->extra_cap = 0;
+  obj->extra_slots = (ant_extra_slots_t *)((uintptr_t)sidecar | ant_sidecar);
   
   return sidecar;
 }
@@ -390,8 +363,19 @@ static inline void ant_object_make_promise(ant_object_t *obj, ant_promise_state_
   obj->u.promise.state = state;
 }
 
+static inline uint32_t ant_object_overflow_cap_for(uint32_t used) {
+  if (!used) return 0;
+  return used <= 4 ? 4u : 1u << (32 - __builtin_clz(used - 1));
+}
+
 static inline uint32_t ant_object_overflow_cap(const ant_object_t *obj) {
-  return obj->overflow_cap ? (1u << obj->overflow_cap) : 0;
+  uint32_t limit = ant_shape_get_inobj_limit(obj->shape);
+  return obj->overflow_prop && obj->prop_count > limit ? ant_object_overflow_cap_for(obj->prop_count - limit) : 0;
+}
+
+static inline void ant_object_overflow_free(ant_object_t *obj) {
+  free(obj->overflow_prop);
+  obj->overflow_prop = NULL;
 }
 
 static inline size_t ant_object_cell_size(uint32_t inobj_limit) {
@@ -400,27 +384,41 @@ static inline size_t ant_object_cell_size(uint32_t inobj_limit) {
 }
 
 static inline uint32_t ant_object_inobj_limit(const ant_object_t *obj) {
-  if (!obj) return ANT_INOBJ_BASE_SLOTS;
-  uint32_t limit = obj->inobj_limit;
-  return (limit > ANT_INOBJ_MAX_SLOTS) ? ANT_INOBJ_MAX_SLOTS : limit;
+  return obj ? ant_shape_get_inobj_limit(obj->shape) : ANT_INOBJ_BASE_SLOTS;
 }
 
 static inline ant_value_t ant_object_prop_get_unchecked(const ant_object_t *obj, uint32_t slot) {
+  if (slot < ANT_INOBJ_BASE_SLOTS) return obj->inobj[slot];
   uint32_t inobj_limit = ant_object_inobj_limit(obj);
+  
   return (slot < inobj_limit)
     ? obj->inobj[slot]
     : obj->overflow_prop[slot - inobj_limit];
 }
 
+static inline uint8_t ant_object_protector_holder(const ant_object_t *obj) {
+  const ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
+  return sidecar ? sidecar->protector_holder : 0;
+}
+
+static inline void ant_object_protector_holder_add(ant_object_t *obj, uint8_t bits) {
+  ant_object_sidecar_t *sidecar = ant_object_ensure_sidecar(obj);
+  if (sidecar) sidecar->protector_holder |= bits;
+}
+
 static inline void ant_proto_watch_note_change(ant_object_t *obj) {
-  if (__builtin_expect(obj->protector_holder & ANT_PROTECTOR_HOLDER_WATCHED, 0)) ant_proto_watch_break(obj);
+  if (__builtin_expect(ant_object_protector_holder(obj) & ANT_PROTECTOR_HOLDER_WATCHED, 0)) ant_proto_watch_break(obj);
 }
 
 static inline void ant_object_prop_set_unchecked(ant_object_t *obj, uint32_t slot, ant_value_t value) {
+  ant_value_t *dst = obj->inobj + slot;
+  if (slot >= ANT_INOBJ_BASE_SLOTS) {
+    uint32_t inobj_limit = ant_object_inobj_limit(obj);
+    if (slot >= inobj_limit) dst = obj->overflow_prop + (slot - inobj_limit);
+  }
+  
   ant_proto_watch_note_change(obj);
-  uint32_t inobj_limit = ant_object_inobj_limit(obj);
-  if (slot < inobj_limit) obj->inobj[slot] = value;
-  else obj->overflow_prop[slot - inobj_limit] = value;
+  *dst = value;
 }
 
 ant_value_t get_slot(ant_value_t obj, internal_slot_t slot);

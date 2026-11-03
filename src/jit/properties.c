@@ -233,9 +233,9 @@ static MIR_reg_t mir_emit_put_field_add_guard(
                   MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
                                MIR_new_reg_op(ctx, idx), MIR_new_reg_op(ctx, prop_count)));
   MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, limit),
-                               MIR_new_mem_op(ctx, MIR_T_U8,
-                                              (MIR_disp_t)offsetof(ant_object_t, inobj_limit), optr, 0, 1)));
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, limit), MIR_new_mem_op(ctx, MIR_T_P, (MIR_disp_t)offsetof(ant_object_t, shape), optr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, limit), MIR_new_mem_op(ctx, MIR_T_U8, (MIR_disp_t)ANT_SHAPE_INOBJ_LIMIT_OFFSET, limit, 0, 1)));
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_UBGE, MIR_new_label_op(ctx, slow),
                                MIR_new_reg_op(ctx, idx), MIR_new_reg_op(ctx, limit)));
@@ -490,9 +490,9 @@ bool mir_emit_put_field_ic_fastpath(
         ctx, fn, val, optr, flags, vtag, vptr, rope_flags,
         need_barrier, slow, existing_store);
     MIR_append_insn(ctx, fn,
-                    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, limit),
-                                 MIR_new_mem_op(ctx, MIR_T_U8,
-                                                (MIR_disp_t)offsetof(ant_object_t, inobj_limit), optr, 0, 1)));
+                    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, limit), MIR_new_mem_op(ctx, MIR_T_P, (MIR_disp_t)offsetof(ant_object_t, shape), optr, 0, 1)));
+    MIR_append_insn(ctx, fn,
+                    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, limit), MIR_new_mem_op(ctx, MIR_T_U8, (MIR_disp_t)ANT_SHAPE_INOBJ_LIMIT_OFFSET, limit, 0, 1)));
     MIR_append_insn(ctx, fn,
                     MIR_new_insn(ctx, MIR_UBGE, MIR_new_label_op(ctx, load_overflow),
                                  MIR_new_reg_op(ctx, idx), MIR_new_reg_op(ctx, limit)));
@@ -682,8 +682,9 @@ static bool mir_emit_get_field_own_slot_fastpath(
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBLE,
       MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tmp), MIR_new_uint_op(ctx, index)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
-      MIR_new_reg_op(ctx, tmp),
-      MIR_new_mem_op(ctx, MIR_T_U8, offsetof(ant_object_t, inobj_limit), ptr, 0, 1)));
+      MIR_new_reg_op(ctx, tmp), MIR_new_mem_op(ctx, MIR_T_P, offsetof(ant_object_t, shape), ptr, 0, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, tmp), MIR_new_mem_op(ctx, MIR_T_U8, ANT_SHAPE_INOBJ_LIMIT_OFFSET, tmp, 0, 1)));
   if (index < inobj_limit) {
     MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBLE,
         MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, tmp), MIR_new_uint_op(ctx, index)));
@@ -719,7 +720,9 @@ static void mir_emit_ic_slot_read(
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBGE,
       MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, index), MIR_new_reg_op(ctx, tmp)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
-      MIR_new_reg_op(ctx, limit), MIR_new_mem_op(ctx, MIR_T_U8, offsetof(ant_object_t, inobj_limit), source, 0, 1)));
+      MIR_new_reg_op(ctx, limit), MIR_new_mem_op(ctx, MIR_T_P, offsetof(ant_object_t, shape), source, 0, 1)));
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, limit), MIR_new_mem_op(ctx, MIR_T_U8, ANT_SHAPE_INOBJ_LIMIT_OFFSET, limit, 0, 1)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBGE,
       MIR_new_label_op(ctx, overflow), MIR_new_reg_op(ctx, index), MIR_new_reg_op(ctx, limit)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,

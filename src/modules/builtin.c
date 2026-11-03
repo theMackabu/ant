@@ -221,7 +221,7 @@ static ant_value_t js_stats_fn(ant_params_t) {
     
     for (ant_object_t *obj = head; obj; obj = obj->next) {
       obj_count++;
-      obj_bytes += ant_object_cell_size(obj->inobj_limit);
+      obj_bytes += ant_object_cell_size(ant_object_inobj_limit(obj));
       
       uint32_t inobj_limit = ant_object_inobj_limit(obj);
       

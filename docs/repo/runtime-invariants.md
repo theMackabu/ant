@@ -234,8 +234,10 @@ the cell at each use. See the
 
 ## Shapes Carry The Prototype
 
-Objects have no prototype field: `ant_object_proto(obj)` reads the shape's prototype,
-so a checked shape is proof of the prototype. Change a prototype only through
+Objects have no prototype or in-object limit field: `ant_object_proto(obj)` and
+`ant_object_inobj_limit(obj)` read the shape, so a checked shape is proof of both.
+Free object cells through `ant_object_cell_free`, which finds the arena from the
+cell's chunk, because the shape is gone by then. Change a prototype only through
 `ant_object_set_proto` (or the `js_set_proto*` helpers that call it), which moves the
 object to a shape for the new prototype; allocate with a known prototype through
 `js_mkobj_with_proto`. Compiled allocations must use a shape whose prototype is the
@@ -244,6 +246,14 @@ object's prototype (`opt_build_set_proto` switches literal allocations to the
 properties, or every such object gets a prototype transition. See the
 [shape proto identity](../../tests/test_shape_proto_identity.cjs) and
 [proto literal shape](../../tests/test_opt_proto_literal_shape.cjs) regressions.
+
+Overflow storage has no capacity field either: its size is
+`ant_object_overflow_cap_for(prop_count - limit)`, so anything that lowers
+`prop_count` must shrink it (`obj_overflow_fit`), and free paths must read the
+capacity before releasing the shape. Compiled add paths rely on the same rule to
+decide at compile time which slots grow the array. Shape swaps must keep the
+in-object limit. See the
+[overflow capacity](../../tests/test_object_overflow_capacity.cjs) regression.
 
 ## Exotic Objects Have Exotic Shapes
 

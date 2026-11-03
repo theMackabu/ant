@@ -271,7 +271,6 @@ ant_value_t js_create_arguments_object(
   ant_shape_release(target->shape);
   
   target->shape = source->shape;
-  target->inobj_limit = source->inobj_limit;
   target->prop_count = source->prop_count;
   
   ant_object_set_proto(js, target, ant_object_proto(target));

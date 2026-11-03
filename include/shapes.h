@@ -57,6 +57,7 @@ static constexpr size_t ANT_SHAPE_REF_COUNT_OFFSET = 0;
 static constexpr size_t ANT_SHAPE_INDEX_KEYS_OFFSET = 21 + 3 * sizeof(void *);
 
 static constexpr size_t ANT_SHAPE_COUNT_OFFSET = 4;
+static constexpr size_t ANT_SHAPE_INOBJ_LIMIT_OFFSET = 12;
 #if UINTPTR_MAX == UINT64_MAX
 static constexpr size_t ANT_SHAPE_PROTO_OFFSET = 112;
 static constexpr size_t ANT_SHAPE_EXOTIC_OPS_OFFSET = 120;
@@ -75,6 +76,10 @@ static inline ant_value_t ant_shape_proto(const ant_shape_t *shape) {
 
 static inline const void *ant_shape_exotic_ops(const ant_shape_t *shape) {
   return shape ? *(const void *const *)((const char *)shape + ANT_SHAPE_EXOTIC_OPS_OFFSET) : NULL;
+}
+
+static inline uint8_t ant_shape_get_inobj_limit(const ant_shape_t *shape) {
+  return shape ? *((const uint8_t *)shape + ANT_SHAPE_INOBJ_LIMIT_OFFSET) : (uint8_t)ANT_INOBJ_BASE_SLOTS;
 }
 
 static inline bool ant_shape_is_empty(const ant_shape_t *shape) {
@@ -109,7 +114,6 @@ void ant_shape_mark_jit_snapshot(ant_shape_t *shape);
 void ant_shape_mark_superseded(ant_shape_t *shape);
 void ant_shape_transition_existing(ant_shape_t **shape_pp, ant_shape_t *to_shape);
 
-uint8_t ant_shape_get_inobj_limit(const ant_shape_t *shape);
 int32_t ant_shape_lookup_interned(const ant_shape_t *shape, const char *interned);
 int32_t ant_shape_lookup_symbol(const ant_shape_t *shape, ant_offset_t sym_off);
 

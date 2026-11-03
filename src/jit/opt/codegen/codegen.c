@@ -1853,15 +1853,15 @@ static void opt_cg_can_add_named(opt_cg_t *cg, ir_node_id_t node) {
   masm_branch32_imm(m, ASM_COND_EQUAL, scratch, kTypeArray, fail);
   masm_branch32_memory_imm(m, ASM_COND_NOT_EQUAL, asm_addr(object, (int32_t)offsetof(ant_object_t, prop_count)), (int32_t)slot, fail);
   uint32_t limit = opt_named_inobj_limit(op->add_named.offset);
-  masm_load8(m, scratch, asm_addr(object, (int32_t)offsetof(ant_object_t, inobj_limit)));
+  masm_load64(m, temp, asm_addr(object, (int32_t)offsetof(ant_object_t, shape)));
+  masm_load8(m, scratch, asm_addr(temp, (int32_t)ANT_SHAPE_INOBJ_LIMIT_OFFSET));
   if (slot < limit) masm_branch32_imm(m, ASM_COND_BELOW_OR_EQUAL, scratch, (int32_t)slot, fail);
   else {
     masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, (int32_t)limit, fail);
-    masm_load8(m, scratch, asm_addr(object, (int32_t)offsetof(ant_object_t, overflow_cap)));
-    masm_branch32_imm(m, ASM_COND_BELOW, scratch, slot - limit < 4 ? 2 : 32 - __builtin_clz(slot - limit), fail);
+    uint32_t used = slot - limit;
+    if (used == 0 || (used >= 4 && (used & (used - 1)) == 0)) masm_jump(m, fail);
   }
-  masm_load64(m, scratch, asm_addr(object, (int32_t)offsetof(ant_object_t, shape)));
-  masm_load64(m, scratch, asm_addr(scratch, (int32_t)ANT_SHAPE_PROTO_OFFSET));
+  masm_load64(m, scratch, asm_addr(temp, (int32_t)ANT_SHAPE_PROTO_OFFSET));
   if (op->add_named.proto & 1u) {
     masm_shr64_imm(m, temp, scratch, NANBOX_TYPE_SHIFT);
     masm_branch64_imm(m, ASM_COND_NOT_EQUAL, temp, (int64_t)OPT_OBJECT_TAG, fail);
@@ -1969,15 +1969,15 @@ static void opt_cg_allocate_object(opt_cg_t *cg, ir_node_id_t node) {
   alignas(ant_object_t) unsigned char bytes[ANT_OBJECT_LARGE_SIZE] = {0};
   ant_object_t *image = (ant_object_t *)bytes;
   image->shape = shape;
-  image->inobj_limit = ant_shape_get_inobj_limit(shape);
-  for (uint32_t i = 0; i < image->inobj_limit; i++) image->inobj[i] = IR_VALUE_UNDEFINED;
+  uint32_t inobj_limit = ant_shape_get_inobj_limit(shape);
+  for (uint32_t i = 0; i < inobj_limit; i++) image->inobj[i] = IR_VALUE_UNDEFINED;
   image->u.data.value = IR_VALUE_UNDEFINED;
   image->u.array.len = image->u.array.cap = 0;
   image->prop_count = op->allocate_object.property_count;
   image->type_tag = kTypeObject;
   image->flags.raw = ANT_OBJECT_FLAG_EXTENSIBLE;
   uint64_t words[ANT_OBJECT_LARGE_SIZE / 8];
-  uint32_t word_count = (uint32_t)(ant_object_cell_size(image->inobj_limit) / 8);
+  uint32_t word_count = (uint32_t)(ant_object_cell_size(inobj_limit) / 8);
   memcpy(words, bytes, sizeof words);
   bool stored[ANT_OBJECT_LARGE_SIZE / 8] = {0};
   stored[offsetof(ant_object_t, next) / 8] = true;
@@ -2597,7 +2597,6 @@ static void opt_cg_allocate_array(opt_cg_t *cg, ir_node_id_t node) {
   image->u.array.len = count_elements;
   image->u.array.cap = capacity;
   image->type_tag = kTypeArray;
-  image->inobj_limit = ant_shape_get_inobj_limit(shape);
   image->flags = (ant_object_flags_t){.extensible = 1, .fast_array = 1, .dense_length_fits = 1, .may_have_dense_elements = 1};
   uint64_t words[ANT_OBJECT_SIZE / 8];
   memcpy(words, bytes, sizeof words);
@@ -2930,7 +2929,8 @@ static void opt_cg_probe_property(opt_cg_t *cg, ir_node_id_t node) {
   masm_load32(m, a, asm_addr(entry, (int32_t)offsetof(sv_ic_entry_t, cached_index)));
   masm_load32(m, limit, asm_addr(object, (int32_t)offsetof(ant_object_t, prop_count)));
   masm_branch32(m, ASM_COND_ABOVE_OR_EQUAL, a, limit, miss);
-  masm_load8(m, limit, asm_addr(object, (int32_t)offsetof(ant_object_t, inobj_limit)));
+  masm_load64(m, limit, asm_addr(object, (int32_t)offsetof(ant_object_t, shape)));
+  masm_load8(m, limit, asm_addr(limit, (int32_t)ANT_SHAPE_INOBJ_LIMIT_OFFSET));
   masm_branch32(m, ASM_COND_ABOVE_OR_EQUAL, a, limit, overflow);
   masm_load64(m, output, asm_addr_indexed(object, a, ASM_SCALE_8, (int32_t)offsetof(ant_object_t, inobj)));
   masm_jump(m, done);
