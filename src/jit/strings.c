@@ -390,6 +390,7 @@ static void mir_emit_small_copy(
   MIR_label_t at_least4 = MIR_new_label(ctx);
   MIR_label_t at_least8 = MIR_new_label(ctx);
   MIR_label_t at_least16 = MIR_new_label(ctx);
+  MIR_label_t at_least32 = MIR_new_label(ctx);
 
   // 1..3
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBGE, MIR_new_label_op(ctx, at_least4), MIR_new_reg_op(ctx, len), MIR_new_int_op(ctx, 4)));
@@ -418,11 +419,18 @@ static void mir_emit_small_copy(
 
   // 16..31
   MIR_append_insn(ctx, fn, at_least16);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBGE, MIR_new_label_op(ctx, at_least32), MIR_new_reg_op(ctx, len), MIR_new_int_op(ctx, 32)));
   mir_emit_move(ctx, fn, MIR_T_U64, dst, 0, src, so, 0, tmp);
   mir_emit_move(ctx, fn, MIR_T_U64, dst, 8, src, so + 8, 0, tmp);
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_SUB, MIR_new_reg_op(ctx, index), MIR_new_reg_op(ctx, len), MIR_new_int_op(ctx, 16)));
   mir_emit_move(ctx, fn, MIR_T_U64, dst, 0, src, so, index, tmp);
   mir_emit_move(ctx, fn, MIR_T_U64, dst, 8, src, so + 8, index, tmp);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+
+  MIR_append_insn(ctx, fn, at_least32);
+  for (MIR_disp_t off = 0; off < 32; off += 8) mir_emit_move(ctx, fn, MIR_T_U64, dst, off, src, so + off, 0, tmp);
+  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_SUB, MIR_new_reg_op(ctx, index), MIR_new_reg_op(ctx, len), MIR_new_int_op(ctx, 32)));
+  for (MIR_disp_t off = 0; off < 32; off += 8) mir_emit_move(ctx, fn, MIR_T_U64, dst, off, src, so + off, index, tmp);
   MIR_append_insn(ctx, fn, done);
 }
 

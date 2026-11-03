@@ -188,7 +188,7 @@ static ant_value_t vm_context_create(ant_t *js, ant_value_t sandbox, const vm_co
   }
 
   js_set_slot(global, SLOT_VM_SANDBOX, sandbox);
-  js_obj_ptr(global)->flags.is_exotic = 1;
+  js_obj_mark_exotic(js_obj_ptr(global));
   ant_ic_epoch_bump(js);
 
   ant_value_t handler = Ant_Object_CreateBare(js);

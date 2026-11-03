@@ -49,21 +49,28 @@ static opt_target_description_t opt_describe_target(opt_target_t target) {
 
 void opt_target_registers(opt_target_t target, opt_register_set_t *set, opt_pinned_registers_t *pinned) {
   opt_target_description_t description = opt_describe_target(target);
-  uint8_t reserved[3];
+  uint32_t wanted = target == OPT_TARGET_AARCH64 ? 4 : 3;
+  
+  uint8_t reserved[4] = {OPT_NO_PINNED, OPT_NO_PINNED, OPT_NO_PINNED, OPT_NO_PINNED};
   uint32_t count = 0;
+  
   opt_register_mask_t callee_saved = description.callee_saved_gprs & description.allocatable_gprs;
-  for (uint8_t reg = 0; reg < 32 && count < 3; reg++)
+  for (uint8_t reg = 0; reg < 32 && count < wanted; reg++)
     if (opt_mask_contains(callee_saved, reg)) reserved[count++] = reg;
-  if (pinned) *pinned = (opt_pinned_registers_t){.vm = reserved[0], .frame = reserved[1], .scratch = reserved[2]};
+  
+  if (pinned) *pinned = (opt_pinned_registers_t){.vm = reserved[0], .frame = reserved[1], .scratch = reserved[2], .cage = reserved[3]};
   opt_register_mask_t allocatable = description.allocatable_gprs;
-  for (uint32_t i = 0; i < 3; i++) allocatable &= ~(UINT64_C(1) << reserved[i]);
+  
+  for (uint32_t i = 0; i < count; i++) allocatable &= ~(UINT64_C(1) << reserved[i]);
   opt_register_mask_t fprs = 0;
+  
   uint32_t skipped = 0;
   for (uint8_t reg = 0; reg < 32; reg++) {
     if (!opt_mask_contains(description.allocatable_fprs, reg)) continue;
     if (skipped++ < OPT_LOWERING_FPRS) continue;
     fprs = opt_mask_with(fprs, reg);
   }
+  
   *set = (opt_register_set_t){
     .allocatable_gprs = allocatable,
     .allocatable_fprs = fprs,

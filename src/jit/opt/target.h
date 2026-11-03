@@ -44,10 +44,13 @@ typedef struct {
   uint8_t scratch_gpr;
 } opt_register_set_t;
 
+static constexpr uint8_t OPT_NO_PINNED = 0xFF;
+
 typedef struct {
   uint8_t vm;
   uint8_t frame;
   uint8_t scratch;
+  uint8_t cage;
 } opt_pinned_registers_t;
 
 typedef enum : uint8_t {

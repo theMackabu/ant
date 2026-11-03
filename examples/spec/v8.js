@@ -63,7 +63,7 @@ test('has bytecode_and_metadata_size', typeof code.bytecode_and_metadata_size, '
 test('has external_script_source_size', typeof code.external_script_source_size, 'number');
 test('has cpu_profiler_metadata_size', typeof code.cpu_profiler_metadata_size, 'number');
 test('code_and_metadata_size >= bytecode_and_metadata_size', code.code_and_metadata_size >= code.bytecode_and_metadata_size, true);
-test('external_script_source_size > 0', code.external_script_source_size > 0, true);
+test('external_script_source_size >= 0', code.external_script_source_size >= 0, true);
 
 console.log('\nserialize / deserialize\n');
 

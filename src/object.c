@@ -196,7 +196,7 @@ void ant_object_set_proto(ant_t *js, ant_object_t *obj, ant_value_t proto) {
   if (!shape || ant_shape_proto(shape) == proto) return;
   ant_shape_t *next = NULL;
   
-  if (ant_shape_is_empty(shape)) {
+  if (ant_shape_is_empty(shape) && !ant_shape_is_exotic(shape)) {
     if (obj->inobj_limit == ANT_INOBJ_BASE_SLOTS && is_object_type(proto)) next = object_proto_root_cached(js, proto);
     else if ((next = object_proto_root(js, proto, obj->inobj_limit))) ant_shape_release(next);
     if (next) ant_shape_retain(next);
@@ -205,6 +205,18 @@ void ant_object_set_proto(ant_t *js, ant_object_t *obj, ant_value_t proto) {
   if (!next) next = ant_shape_with_proto(shape, proto);
   Ant_Assert(next, "out of memory changing a prototype");
   
+  ant_shape_release(shape);
+  obj->shape = next;
+}
+
+void js_obj_mark_exotic(ant_object_t *obj) {
+  obj->flags.is_exotic = 1;
+  ant_shape_t *shape = obj->shape;
+  if (!shape || ant_shape_is_exotic(shape)) return;
+
+  ant_shape_t *next = ant_shape_with_exotic(shape);
+  Ant_Assert(next, "out of memory marking an exotic object");
+
   ant_shape_release(shape);
   obj->shape = next;
 }
@@ -718,7 +730,7 @@ void js_set_getter(ant_value_t obj, js_getter_fn getter) {
   if (!ptr) return;
   
   ant_proto_watch_note_change(ptr);
-  ptr->flags.is_exotic = 1;
+  js_obj_mark_exotic(ptr);
   ant_exotic_ops_t *ops = obj_ensure_exotic_ops(ptr);
   if (!ops) return;
   
@@ -736,7 +748,7 @@ void js_set_exotic_ops(ant_value_t obj, const ant_exotic_ops_t *ops) {
   }
   
   ant_proto_watch_note_change(ptr);
-  ptr->flags.is_exotic = 1;
+  js_obj_mark_exotic(ptr);
   ptr->exotic_ops = ops;
 }
 
@@ -748,7 +760,7 @@ void js_set_definer(ant_value_t obj, js_definer_fn definer) {
   if (!ptr) return;
   
   ant_proto_watch_note_change(ptr);
-  ptr->flags.is_exotic = 1;
+  js_obj_mark_exotic(ptr);
   ant_exotic_ops_t *ops = obj_ensure_exotic_ops(ptr);
   if (!ops) return;
   
@@ -763,7 +775,7 @@ void js_set_setter(ant_value_t obj, js_setter_fn setter) {
   if (!ptr) return;
   
   ant_proto_watch_note_change(ptr);
-  ptr->flags.is_exotic = 1;
+  js_obj_mark_exotic(ptr);
   ant_exotic_ops_t *ops = obj_ensure_exotic_ops(ptr);
   if (!ops) return;
   
@@ -778,7 +790,7 @@ void js_set_deleter(ant_value_t obj, js_deleter_fn deleter) {
   if (!ptr) return;
   
   ant_proto_watch_note_change(ptr);
-  ptr->flags.is_exotic = 1;
+  js_obj_mark_exotic(ptr);
   ant_exotic_ops_t *ops = obj_ensure_exotic_ops(ptr);
   if (!ops) return;
   

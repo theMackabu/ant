@@ -96,7 +96,8 @@ struct ant_shape {
   uint32_t deleted_count;
   uint8_t inobj_limit;
   
-  bool bulk_layout;
+  bool bulk_layout: 1;
+  bool exotic: 1;
   uint16_t gc_mark;
   
   shape_descriptors_t *descriptors;
@@ -515,6 +516,7 @@ static ant_shape_t *shape_copy_for_transition(const ant_shape_t *shape) {
   copy->ref_count = 1;
   copy->count = shape->count;
   copy->inobj_limit = shape->inobj_limit;
+  copy->exotic = shape->exotic;
   copy->may_have_index_keys = shape->may_have_index_keys;
   copy->proto = shape->proto;
   
@@ -733,6 +735,38 @@ ant_shape_t *ant_shape_with_proto(ant_shape_t *shape, ant_value_t proto) {
   return copy;
 }
 
+ant_shape_t *ant_shape_with_exotic(ant_shape_t *shape) {
+  if (shape->exotic) {
+    ant_shape_retain(shape);
+    return shape;
+  }
+
+  if (!shape_is_in_tree(shape) || shape->bulk_layout) {
+    ant_shape_t *copy = shape_clone_reserve(shape, 0);
+    if (copy) copy->exotic = true;
+    return copy;
+  }
+
+  uint64_t ckey = shape_child_key(0, 0x20);
+  ant_shape_t *child = shape_find_child(shape, ckey);
+  
+  if (child && child->exotic && child->proto == shape->proto && child->count == shape->count) {
+    ant_shape_retain(child);
+    return child;
+  }
+
+  ant_shape_t *copy = shape_copy_for_transition(shape);
+  if (!copy) return NULL;
+
+  copy->exotic = true;
+  if (!child) shape_record_child(shape, ckey, copy);
+  return copy;
+}
+
+bool ant_shape_is_exotic(const ant_shape_t *shape) {
+  return shape && shape->exotic;
+}
+
 ant_t *ant_shape_isolate(const ant_shape_t *shape) {
   return (ant_t *)((char *)shape->heap - offsetof(ant_t, shapes.heap));
 }
@@ -775,6 +809,7 @@ ant_shape_t *shape_clone_reserve(const ant_shape_t *shape, uint32_t extra) {
   copy->inobj_limit = shape_clamp_inobj_limit(shape->inobj_limit);
   copy->bulk_layout = shape->bulk_layout;
   copy->dictionary = shape->dictionary;
+  copy->exotic = shape->exotic;
   copy->may_have_index_keys = shape->may_have_index_keys;
   copy->proto = shape->proto;
 

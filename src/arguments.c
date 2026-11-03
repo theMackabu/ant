@@ -301,7 +301,8 @@ ant_value_t js_create_arguments_object(
     
     js_set_native(arr, state, ANT_ARGUMENTS_NATIVE_TAG);
     target->finalizer = js_arguments_finalizer;
-    target->flags.is_exotic = 1;
+    
+    js_obj_mark_exotic(target);
     target->exotic_ops = &js_arguments_exotic_ops;
 
     for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next) {

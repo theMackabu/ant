@@ -6,7 +6,9 @@
 #include <stdbool.h>
 #include <string.h>
 
-static constexpr int STR_SHORT_CONS_THRESHOLD = 32;
+static constexpr uint8_t STR_SHORT_CONS_THRESHOLD = 64;
+static constexpr uint8_t STR_SHORT_CONS_NON_ASCII_THRESHOLD = 32;
+
 static constexpr size_t STR_BUILDER_TAIL_CAP = 256;
 static constexpr double ANT_STRING_MAX_LENGTH = 536870888.0;
 
@@ -268,6 +270,12 @@ static inline void str_copy_small(char *dst, const char *src, size_t n) {
   if (n) dst[0] = src[0];
 }
 
+static inline bool wtf8_seam_joins_pair(const char *a, size_t na, const char *b, size_t nb) {
+  if (na < 3 || nb < 3) return false;
+  const unsigned char *tail = (const unsigned char *)a + na - 3, *head = (const unsigned char *)b;
+  return tail[0] == 0xED && (tail[1] & 0xF0) == 0xA0 && head[0] == 0xED && (head[1] & 0xF0) == 0xB0;
+}
+
 static inline void str_flat_fill_concat(
   ant_flat_string_t *out,
   const char *a, size_t na, uint8_t a_ascii,
@@ -280,7 +288,9 @@ static inline void str_flat_fill_concat(
   uint8_t ascii = str_concat_ascii_state(a_ascii, b_ascii);
   
   if (ascii == STR_ASCII_UNKNOWN) ascii = str_detect_ascii_bytes(out->bytes, na + nb);
-  str_flat_finish(out, ascii);
+  if (ascii != STR_ASCII_YES && wtf8_seam_joins_pair(a, na, b, nb)) str_flat_finish(out, ascii);
+  
+  else str_flat_init_meta(out, ascii);
 }
 
 static inline void str_flat_set_utf16_len(ant_flat_string_t *flat, ant_offset_t len) {
@@ -306,6 +316,11 @@ static inline bool str_is_ascii(const char *str) {
   }
   
   return state == STR_ASCII_YES;
+}
+
+static inline bool str_concat_stays_flat(size_t total, const char *left, const char *right) {
+  if (total < STR_SHORT_CONS_NON_ASCII_THRESHOLD) return true;
+  return total < STR_SHORT_CONS_THRESHOLD && (!left || str_is_ascii(left)) && (!right || str_is_ascii(right));
 }
 
 static inline void utf16_pos_init(utf16_pos_t *pos, const char *str, size_t len) {

@@ -1531,7 +1531,7 @@ static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {
   data->handler = handler;
   data->revoked = false;
 
-  proxy_ptr->flags.is_exotic = 1;
+  js_obj_mark_exotic(proxy_ptr);
   proxy_ptr->flags.is_callable = is_callable(target) ? 1u : 0u;
   js_mark_constructor(proxy_obj, js_is_constructor(target));
   

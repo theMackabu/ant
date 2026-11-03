@@ -177,6 +177,21 @@ typedef struct {
   OPT_VEC(opt_patch_t) patches;
 } opt_cg_t;
 
+static void opt_cg_add_cage(opt_cg_t *cg, asm_gpr_t dst, asm_gpr_t src) {
+  if (cg->pinned.cage != OPT_NO_PINNED) masm_add64(&cg->masm, dst, src, (asm_gpr_t)cg->pinned.cage);
+  else masm_add64_imm(&cg->masm, dst, src, (int64_t)ant_cage_base());
+}
+
+static void opt_cg_sub_cage(opt_cg_t *cg, asm_gpr_t dst, asm_gpr_t src) {
+  if (cg->pinned.cage != OPT_NO_PINNED) masm_sub64(&cg->masm, dst, src, (asm_gpr_t)cg->pinned.cage);
+  else masm_sub64_imm(&cg->masm, dst, src, (int64_t)ant_cage_base());
+}
+
+static void opt_cg_move_cage(opt_cg_t *cg, asm_gpr_t dst) {
+  if (cg->pinned.cage != OPT_NO_PINNED) masm_move64(&cg->masm, dst, (asm_gpr_t)cg->pinned.cage);
+  else masm_move_imm64(&cg->masm, dst, ant_cage_base());
+}
+
 static void opt_cg_fail(opt_cg_t *cg, const char *reason) {
   if (!cg->failed) cg->failure = reason;
   cg->failed = true;
@@ -291,6 +306,7 @@ static void opt_cg_lay_out_frame(opt_cg_t *cg) {
   cg->saved_gprs = gprs & ~MASM_SCRATCH_GPRS & ~asm_regset_with(0, MASM_STACK_POINTER);
   cg->saved_fprs = fprs & ~MASM_SCRATCH_FPRS;
   gprs = asm_regset_with(asm_regset_with(asm_regset_with(gprs, cg->pinned.vm), cg->pinned.frame), cg->pinned.scratch);
+  if (cg->pinned.cage != OPT_NO_PINNED) gprs = asm_regset_with(gprs, cg->pinned.cage);
   cg->frame = masm_frame(gprs & MASM_CALLEE_SAVED_GPRS, fprs & MASM_CALLEE_SAVED_FPRS, size);
 }
 
@@ -739,13 +755,13 @@ static void opt_cg_object_barrier(opt_cg_t *cg, asm_gpr_t object, asm_gpr_t valu
   masm_and32_imm(m, scratch, value, (int32_t)STR_HEAP_TAG_MASK);
   masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, (int32_t)STR_HEAP_TAG_ROPE, resume);
   masm_and64_imm(m, scratch, value, NANBOX_DATA_MASK);
-  masm_add64_imm(m, scratch, scratch, (int64_t)ant_cage_base());
+  opt_cg_add_cage(cg, scratch, scratch);
   masm_load16(m, scratch, asm_addr(scratch, (int32_t)offsetof(ant_rope_heap_t, flags) - (int32_t)STR_HEAP_TAG_ROPE));
   masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, ANT_ROPE_FLAG_YOUNG, call);
   masm_jump(m, resume);
   masm_bind(m, decode);
   masm_and64_imm(m, scratch, value, NANBOX_DATA_MASK);
-  masm_add64_imm(m, scratch, scratch, (int64_t)ant_cage_base());
+  opt_cg_add_cage(cg, scratch, scratch);
   masm_load16(m, scratch, asm_addr(scratch, (int32_t)offsetof(ant_object_t, flags)));
   masm_branch_test32(m, ASM_COND_ZERO, scratch, ANT_OBJECT_FLAG_GENERATION, call);
   masm_bind(m, resume);
@@ -951,7 +967,7 @@ static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condit
       masm_load64(m, scratch, asm_addr(string, (int32_t)offsetof(ant_flat_string_t, meta)));
       masm_and64_imm(m, scratch, scratch, (int64_t)STR_META_ASCII_MASK);
       masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)((uint64_t)STR_ASCII_YES << STR_META_ASCII_SHIFT), no);
-      opt_cg_jump_to(cg, if_true);
+      masm_jump(m, opt_cg_label(cg, if_true));
       masm_bind(m, rope);
       masm_and64_imm(m, scratch, string, (int64_t)STR_HEAP_TAG_MASK);
       masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)STR_HEAP_TAG_ROPE, no);
@@ -987,7 +1003,7 @@ static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condit
       masm_branch_test32(m, ASM_COND_NON_ZERO, temp, (int32_t)ANT_PROTECTOR_ARRAY_ITERATION, no);
       masm_load64(m, temp, asm_addr(scratch, (int32_t)offsetof(ant_t, sym.array_proto)));
       masm_and64_imm(m, scratch, value, NANBOX_DATA_MASK);
-      masm_add64_imm(m, scratch, scratch, (int64_t)ant_cage_base());
+      opt_cg_add_cage(cg, scratch, scratch);
       masm_load64(m, scratch, asm_addr(scratch, (int32_t)offsetof(ant_object_t, proto)));
       masm_branch64(m, ASM_COND_NOT_EQUAL, scratch, temp, no);
       opt_cg_jump_to(cg, if_true);
@@ -1000,7 +1016,7 @@ static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condit
       masm_shr64_imm(m, scratch, value, NANBOX_TYPE_SHIFT);
       masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)OPT_OBJECT_TAG, no);
       masm_and64_imm(m, ptr, value, NANBOX_DATA_MASK);
-      masm_add64_imm(m, ptr, ptr, (int64_t)ant_cage_base());
+      opt_cg_add_cage(cg, ptr, ptr);
       masm_load32(m, scratch, asm_addr(ptr, (int32_t)offsetof(ant_object_t, native_tag)));
       masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, (int32_t)BUFFER_TYPEDARRAY_NATIVE_TAG, no);
       masm_load64(m, js, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
@@ -1081,7 +1097,7 @@ static void opt_cg_branch_truthy(opt_cg_t *cg, ir_node_id_t node, ir_block_id_t 
   masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, kTypeString, not_string);
   static_assert(offsetof(ant_flat_string_t, len) == 0 && offsetof(ant_rope_heap_t, len) == 0 && offsetof(ant_string_builder_t, len) == 0);
   masm_and64_imm(m, scratch, input, NANBOX_DATA_MASK);
-  masm_add64_imm(m, scratch, scratch, (int64_t)ant_cage_base());
+  opt_cg_add_cage(cg, scratch, scratch);
   masm_and64_imm(m, scratch, scratch, ~(int64_t)STR_HEAP_TAG_MASK);
   masm_load64(m, scratch, asm_addr(scratch, 0));
   masm_branch64_imm(m, ASM_COND_EQUAL, scratch, 0, no);
@@ -1269,7 +1285,7 @@ static void opt_cg_frame_push(opt_cg_t *cg, const opt_cg_frame_regs_t *r) {
   masm_mul32_imm(m, r->s, r->fp, (uint32_t)sizeof(sv_frame_t));
   masm_add64(m, r->frame, r->frame, r->s);
   masm_store64(m, asm_addr(r->frame, (int32_t)offsetof(sv_frame_t, this)), r->value);
-  masm_move_imm64(m, r->s, ant_cage_base());
+  opt_cg_move_cage(cg, r->s);
   masm_sub64(m, r->value, r->closure, r->s);
   masm_move_imm64(m, r->s, NANBOX_TAG(kTypeFunction));
   masm_or64(m, r->value, r->value, r->s);
@@ -1524,7 +1540,7 @@ static void opt_cg_has_in_prototype_chain(opt_cg_t *cg, ir_node_id_t node) {
   masm_move64(m, current, value);
   masm_bind(m, step);
   masm_and64_imm(m, current, current, NANBOX_DATA_MASK);
-  masm_add64_imm(m, current, current, (int64_t)ant_cage_base());
+  opt_cg_add_cage(cg, current, current);
   masm_load16(m, scratch, asm_addr(current, (int32_t)offsetof(ant_object_t, flags)));
   masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, ANT_OBJECT_FLAG_EXOTIC, exit);
   masm_load64(m, current, asm_addr(current, (int32_t)offsetof(ant_object_t, proto)));
@@ -1559,7 +1575,7 @@ static void opt_cg_typeof_is_object(opt_cg_t *cg, asm_gpr_t input, asm_gpr_t out
     masm_branch64_imm(m, ASM_COND_EQUAL, scratch, (int64_t)((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | tags[i]), yes);
   masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)OPT_OBJECT_TAG, no);
   masm_and64_imm(m, scratch, input, NANBOX_DATA_MASK);
-  masm_add64_imm(m, scratch, scratch, (int64_t)ant_cage_base());
+  opt_cg_add_cage(cg, scratch, scratch);
   masm_load16(m, scratch, asm_addr(scratch, (int32_t)offsetof(ant_object_t, flags)));
   masm_branch_test32(m, object ? ASM_COND_NON_ZERO : ASM_COND_ZERO, scratch, ANT_OBJECT_FLAG_CALLABLE, no);
   masm_bind(m, yes);
@@ -1622,7 +1638,7 @@ static void opt_cg_load_upvalue_cell(opt_cg_t *cg, ir_node_id_t node, uint32_t i
   else if (opt_cg_input_constant(cg, node, 0, &bits)) masm_move_imm64(m, output, (uint64_t)(uintptr_t)js_func_closure(bits));
   else {
     masm_and64_imm(m, output, opt_cg_input(cg, node, 0), NANBOX_DATA_MASK);
-    masm_add64_imm(m, output, output, (int64_t)ant_cage_base());
+    opt_cg_add_cage(cg, output, output);
   }
   masm_load64(m, output, asm_addr(output, (int32_t)offsetof(sv_closure_t, upvalues)));
   masm_load64(m, output, asm_addr(output, (int32_t)(index * sizeof(sv_upvalue_t *))));
@@ -1680,7 +1696,7 @@ static void opt_cg_elements_kind(opt_cg_t *cg, ir_node_id_t node, ir_elements_ki
   masm_shr64_imm(m, scratch, value, NANBOX_TYPE_SHIFT);
   masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)OPT_ARRAY_TAG, exit);
   masm_and64_imm(m, address, value, NANBOX_DATA_MASK);
-  masm_add64_imm(m, address, address, (int64_t)ant_cage_base());
+  opt_cg_add_cage(cg, address, address);
   masm_load16(m, scratch, asm_addr(address, (int32_t)offsetof(ant_object_t, flags)));
   masm_and32_imm(m, scratch, scratch, mask);
   masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS, exit);
@@ -1744,7 +1760,7 @@ static void opt_cg_can_add_element(opt_cg_t *cg, ir_node_id_t node) {
   masm_load64(m, scratch, asm_addr(array, (int32_t)offsetof(ant_object_t, proto)));
   masm_branch64(m, ASM_COND_NOT_EQUAL, output, scratch, fail);
   masm_and64_imm(m, output, output, NANBOX_DATA_MASK);
-  masm_add64_imm(m, output, output, (int64_t)ant_cage_base());
+  opt_cg_add_cage(cg, output, output);
   masm_branch32_memory_imm(m, ASM_COND_NOT_EQUAL, asm_addr(output, (int32_t)offsetof(ant_object_t, u.array.len)), 0, fail);
   masm_move_imm32(m, output, 1);
   masm_jump(m, done);
@@ -1845,7 +1861,7 @@ static void opt_cg_can_add_named(opt_cg_t *cg, ir_node_id_t node) {
     masm_shr64_imm(m, temp, scratch, NANBOX_TYPE_SHIFT);
     masm_branch64_imm(m, ASM_COND_NOT_EQUAL, temp, (int64_t)OPT_OBJECT_TAG, fail);
     masm_and64_imm(m, scratch, scratch, NANBOX_DATA_MASK);
-    masm_add64_imm(m, scratch, scratch, (int64_t)ant_cage_base());
+    opt_cg_add_cage(cg, scratch, scratch);
     masm_branch32_memory_imm(m, ASM_COND_NOT_EQUAL, asm_addr(scratch, (int32_t)offsetof(ant_object_t, ic_identity)), (int32_t)(uint32_t)(op->add_named.proto >> 1), fail);
   } else {
     masm_move_imm64(m, temp, op->add_named.proto);
@@ -1980,7 +1996,7 @@ static void opt_cg_allocate_object(opt_cg_t *cg, ir_node_id_t node) {
       stored[v] = true;
     }
   }
-  masm_move_imm64(m, temp, ant_cage_base());
+  opt_cg_move_cage(cg, temp);
   masm_sub64(m, out, out, temp);
   masm_move_imm64(m, temp, NANBOX_TAG(kTypeObject));
   masm_or64(m, out, out, temp);
@@ -2021,7 +2037,7 @@ static bool opt_cg_concat_ascii(const opt_cg_concat_side_t *side) {
 
 static void opt_cg_string_pointer(opt_cg_t *cg, asm_gpr_t dst, asm_gpr_t value) {
   masm_and64_imm(&cg->masm, dst, value, NANBOX_DATA_MASK);
-  masm_add64_imm(&cg->masm, dst, dst, (int64_t)ant_cage_base());
+  opt_cg_add_cage(cg, dst, dst);
 }
 
 static void opt_cg_branch_not_ascii(opt_cg_t *cg, asm_gpr_t pointer, asm_label_t slow) {
@@ -2090,7 +2106,8 @@ static void opt_cg_allocate_flat(opt_cg_t *cg, asm_gpr_t out, asm_gpr_t total, a
 static void opt_cg_copy_short(opt_cg_t *cg, asm_gpr_t dst, asm_gpr_t src, asm_gpr_t len, asm_gpr_t index) {
   masm_t *m = &cg->masm;
   asm_gpr_t tmp = cg->pinned.scratch;
-  asm_label_t four = masm_new_label(m), eight = masm_new_label(m), sixteen = masm_new_label(m), done = masm_new_label(m);
+  asm_label_t four = masm_new_label(m), eight = masm_new_label(m), sixteen = masm_new_label(m), thirty_two = masm_new_label(m);
+  asm_label_t done = masm_new_label(m);
   masm_add64_imm(m, src, src, OPT_FLAT_BYTES);
   masm_branch64_imm(m, ASM_COND_ABOVE_OR_EQUAL, len, 4, four);
   masm_load8(m, tmp, asm_addr(src, 0));
@@ -2119,6 +2136,7 @@ static void opt_cg_copy_short(opt_cg_t *cg, asm_gpr_t dst, asm_gpr_t src, asm_gp
   masm_store64(m, asm_addr_indexed(dst, index, ASM_SCALE_1, 0), tmp);
   masm_jump(m, done);
   masm_bind(m, sixteen);
+  masm_branch64_imm(m, ASM_COND_ABOVE_OR_EQUAL, len, 32, thirty_two);
   masm_load64(m, tmp, asm_addr(src, 0));
   masm_store64(m, asm_addr(dst, 0), tmp);
   masm_load64(m, tmp, asm_addr(src, 8));
@@ -2129,6 +2147,17 @@ static void opt_cg_copy_short(opt_cg_t *cg, asm_gpr_t dst, asm_gpr_t src, asm_gp
   masm_add64_imm(m, index, index, 8);
   masm_load64(m, tmp, asm_addr_indexed(src, index, ASM_SCALE_1, 0));
   masm_store64(m, asm_addr_indexed(dst, index, ASM_SCALE_1, 0), tmp);
+  masm_jump(m, done);
+  masm_bind(m, thirty_two);
+  for (int32_t off = 0; off < 32; off += 8) {
+    masm_load64(m, tmp, asm_addr(src, off));
+    masm_store64(m, asm_addr(dst, off), tmp);
+  }
+  masm_sub64_imm(m, index, len, 32);
+  for (int32_t off = 0; off < 32; off += 8) {
+    masm_load64(m, tmp, asm_addr_indexed(src, index, ASM_SCALE_1, off));
+    masm_store64(m, asm_addr_indexed(dst, index, ASM_SCALE_1, off), tmp);
+  }
   masm_bind(m, done);
 }
 
@@ -2361,15 +2390,16 @@ static void opt_cg_concat_strings(opt_cg_t *cg, const opt_cg_concat_t *c, const 
   if (!rhs->constant || !rhs->constant->len) masm_branch64_imm(m, ASM_COND_EQUAL, right_len, 0, take_left);
   masm_add64(m, total, left_len, right_len);
   masm_branch64_imm(m, ASM_COND_ABOVE_OR_EQUAL, total, STR_SHORT_CONS_THRESHOLD, rope);
-  if (!opt_cg_concat_ascii(lhs) || !opt_cg_concat_ascii(rhs)) masm_jump(m, slow);
+  asm_label_t mixed = masm_new_label(m);
+  if (!opt_cg_concat_ascii(lhs) || !opt_cg_concat_ascii(rhs)) masm_jump(m, mixed);
   else {
     if (!lhs->constant && !rhs->constant) {
       masm_or64(m, scratch, left, right);
-      masm_branch_test64(m, ASM_COND_NON_ZERO, scratch, (int64_t)STR_HEAP_TAG_MASK, slow);
+      masm_branch_test64(m, ASM_COND_NON_ZERO, scratch, (int64_t)STR_HEAP_TAG_MASK, rope);
     } else if (!lhs->constant || !rhs->constant)
-      masm_branch_test64(m, ASM_COND_NON_ZERO, lhs->constant ? right : left, (int64_t)STR_HEAP_TAG_MASK, slow);
-    if (!lhs->constant) opt_cg_branch_not_ascii(cg, left, slow);
-    if (!rhs->constant) opt_cg_branch_not_ascii(cg, right, slow);
+      masm_branch_test64(m, ASM_COND_NON_ZERO, lhs->constant ? right : left, (int64_t)STR_HEAP_TAG_MASK, rope);
+    if (!lhs->constant) opt_cg_branch_not_ascii(cg, left, mixed);
+    if (!rhs->constant) opt_cg_branch_not_ascii(cg, right, mixed);
     opt_cg_allocate_flat(cg, out, total, left_len, right_len, slow);
     masm_add64_imm(m, total, out, OPT_FLAT_BYTES);
     opt_cg_concat_copy(cg, lhs, total, left, left_len, right_len);
@@ -2379,6 +2409,8 @@ static void opt_cg_concat_strings(opt_cg_t *cg, const opt_cg_concat_t *c, const 
     opt_cg_tag_string(cg, out, total, STR_HEAP_TAG_FLAT);
     masm_jump(m, c->done);
   }
+  masm_bind(m, mixed);
+  masm_branch64_imm(m, ASM_COND_BELOW, total, STR_SHORT_CONS_NON_ASCII_THRESHOLD, slow);
 
   masm_bind(m, rope);
   asm_label_t deeper = masm_new_label(m), saturated = masm_new_label(m);
@@ -2591,7 +2623,7 @@ static void opt_cg_allocate_array(opt_cg_t *cg, ir_node_id_t node) {
       stored[v] = true;
     }
   }
-  masm_move_imm64(m, temp, ant_cage_base());
+  opt_cg_move_cage(cg, temp);
   masm_sub64(m, out, out, temp);
   masm_move_imm64(m, temp, NANBOX_TAG(kTypeArray));
   masm_or64(m, out, out, temp);
@@ -2603,7 +2635,7 @@ static void opt_cg_initialize_element(opt_cg_t *cg, ir_node_id_t node) {
   uint32_t index = ir_node(cg->graph, node)->op.index;
   asm_gpr_t array = opt_cg_input(cg, node, 0), address = opt_cg_temp(cg, node, 0), scratch = cg->pinned.scratch;
   masm_and64_imm(m, address, array, NANBOX_DATA_MASK);
-  masm_add64_imm(m, address, address, (int64_t)ant_cage_base());
+  opt_cg_add_cage(cg, address, address);
   masm_load64(m, scratch, asm_addr(address, (int32_t)offsetof(ant_object_t, u.array.data)));
   uint64_t bits;
   if (opt_cg_input_constant(cg, node, 1, &bits)) {
@@ -2656,7 +2688,7 @@ static void opt_cg_initialize_named(opt_cg_t *cg, ir_node_id_t node) {
   uint32_t offset = ir_node(cg->graph, node)->op.offset, index = opt_named_index(offset), limit = opt_named_inobj_limit(offset);
   asm_gpr_t object = opt_cg_input(cg, node, 0), value = opt_cg_input(cg, node, 1), address = opt_cg_temp(cg, node, 0);
   masm_and64_imm(m, address, object, NANBOX_DATA_MASK);
-  masm_add64_imm(m, address, address, (int64_t)ant_cage_base());
+  opt_cg_add_cage(cg, address, address);
   if (index < limit) masm_store64(m, asm_addr(address, (int32_t)(offsetof(ant_object_t, inobj) + 8 * index)), value);
   else {
     masm_load64(m, cg->pinned.scratch, asm_addr(address, (int32_t)offsetof(ant_object_t, overflow_prop)));
@@ -2733,7 +2765,7 @@ static void opt_cg_call_known(opt_cg_t *cg, ir_node_id_t node_id) {
   masm_sar64_imm(m, scratch, callee, NANBOX_TYPE_SHIFT);
   masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, OPT_FUNCTION_TAG_SIGNED, slow);
   masm_and64_imm(m, closure, callee, NANBOX_DATA_MASK);
-  masm_add64_imm(m, closure, closure, (int64_t)ant_cage_base());
+  opt_cg_add_cage(cg, closure, closure);
   masm_load32(m, flags, asm_addr(closure, (int32_t)offsetof(sv_closure_t, call_flags)));
   masm_branch_test32(m, ASM_COND_NON_ZERO, flags, SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_BOUND_THIS, slow);
   masm_load64(m, func, asm_addr(closure, (int32_t)offsetof(sv_closure_t, func)));
@@ -2848,7 +2880,7 @@ static void opt_cg_call(opt_cg_t *cg, ir_node_id_t node_id) {
     masm_sar64_imm(m, scratch, a[0], NANBOX_TYPE_SHIFT);
     masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, OPT_FUNCTION_TAG_SIGNED, slow);
     masm_and64_imm(m, a[0], a[0], NANBOX_DATA_MASK);
-    masm_add64_imm(m, a[0], a[0], (int64_t)ant_cage_base());
+    opt_cg_add_cage(cg, a[0], a[0]);
     masm_load32(m, a[1], asm_addr(a[0], (int32_t)offsetof(sv_closure_t, call_flags)));
     masm_branch_test32(m, ASM_COND_NON_ZERO, a[1], SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_BOUND_THIS, slow);
     masm_load64(m, a[2], asm_addr(a[0], (int32_t)offsetof(sv_closure_t, func)));
@@ -2925,7 +2957,7 @@ static void opt_cg_check_closure(opt_cg_t *cg, ir_node_id_t node) {
   masm_shr64_imm(m, scratch, value, NANBOX_TYPE_SHIFT);
   masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)OPT_FUNCTION_TAG, exit);
   masm_and64_imm(m, closure, value, NANBOX_DATA_MASK);
-  masm_add64_imm(m, closure, closure, (int64_t)ant_cage_base());
+  opt_cg_add_cage(cg, closure, closure);
   masm_load32(m, scratch, asm_addr(closure, (int32_t)offsetof(sv_closure_t, call_flags)));
   masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, ~(uint32_t)(SV_CALL_IS_ARROW | SV_CALL_HAS_SUPER), exit);
   masm_load64(m, closure, asm_addr(closure, (int32_t)offsetof(sv_closure_t, func)));
@@ -2949,7 +2981,7 @@ static bool opt_cg_frame_code(opt_cg_t *cg, ir_node_id_t node_id, const ir_node_
       if (node->op.field == IR_FIELD_CALLEE) {
         asm_gpr_t output = opt_cg_output(cg, node_id);
         masm_load64(m, output, opt_cg_entry_field(cg, offsetof(opt_entry_t, closure)));
-        masm_sub64_imm(m, output, output, (int64_t)ant_cage_base());
+        opt_cg_sub_cage(cg, output, output);
         masm_and64_imm(m, output, output, NANBOX_DATA_MASK);
         masm_or64_imm(m, output, output, (int64_t)NANBOX_TAG(kTypeFunction));
         break;
@@ -2966,7 +2998,7 @@ static bool opt_cg_frame_code(opt_cg_t *cg, ir_node_id_t node_id, const ir_node_
       else {
         asm_gpr_t output = opt_cg_output(cg, node_id);
         masm_and64_imm(m, output, opt_cg_input(cg, node_id, 0), NANBOX_DATA_MASK);
-        masm_add64_imm(m, output, output, (int64_t)ant_cage_base());
+        opt_cg_add_cage(cg, output, output);
         masm_load64(m, output, asm_addr(output, (int32_t)offsetof(sv_closure_t, super_val)));
       }
       break;
@@ -3206,7 +3238,7 @@ static bool opt_cg_object_code(opt_cg_t *cg, ir_node_id_t node_id, const ir_node
       opt_cg_object_kinds_t kinds = {.label = masm_new_label(m), .done = masm_new_label(m), .exit = opt_cg_exit_site(cg, node_id), .output = output};
       masm_shr64_imm(m, scratch, input, NANBOX_TYPE_SHIFT);
       masm_and64_imm(m, output, input, NANBOX_DATA_MASK);
-      masm_add64_imm(m, output, output, (int64_t)ant_cage_base());
+      opt_cg_add_cage(cg, output, output);
       masm_xor64_imm(m, scratch, scratch, OPT_OBJECT_TAG);
       masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, 0, kinds.label);
       masm_bind(m, kinds.done);
@@ -3216,7 +3248,7 @@ static bool opt_cg_object_code(opt_cg_t *cg, ir_node_id_t node_id, const ir_node
     case IR_OP_CELL_ADDRESS: {
       asm_gpr_t output = opt_cg_output(cg, node_id);
       masm_and64_imm(m, output, opt_cg_input(cg, node_id, 0), NANBOX_DATA_MASK);
-      masm_add64_imm(m, output, output, (int64_t)ant_cage_base());
+      opt_cg_add_cage(cg, output, output);
       break;
     }
     case IR_OP_CHECK_SHAPE: {
@@ -3228,6 +3260,7 @@ static bool opt_cg_object_code(opt_cg_t *cg, ir_node_id_t node_id, const ir_node
       asm_gpr_t object = opt_cg_input(cg, node_id, 1);
       masm_load64(m, scratch, asm_addr(object, (int32_t)offsetof(ant_object_t, shape)));
       masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)node->op.shapes.items[0].shape, exit);
+      if (!ant_shape_is_exotic((const ant_shape_t *)(uintptr_t)node->op.shapes.items[0].shape)) break;
       masm_load16(m, scratch, asm_addr(object, (int32_t)offsetof(ant_object_t, flags)));
       masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, ANT_OBJECT_FLAG_EXOTIC, exit);
       break;
@@ -3275,7 +3308,7 @@ static bool opt_cg_string_code(opt_cg_t *cg, ir_node_id_t node_id, const ir_node
       asm_gpr_t output = opt_cg_output(cg, node_id), cached = opt_cg_temp(cg, node_id, 0);
       asm_label_t done = masm_new_label(m);
       masm_and64_imm(m, output, opt_cg_input(cg, node_id, 0), NANBOX_DATA_MASK);
-      masm_add64_imm(m, output, output, (int64_t)ant_cage_base());
+      opt_cg_add_cage(cg, output, output);
       masm_and64_imm(m, scratch, output, (int64_t)STR_HEAP_TAG_MASK);
       masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)STR_HEAP_TAG_ROPE, done);
       masm_load64(m, cached, asm_addr(output, (int32_t)(offsetof(ant_rope_heap_t, cached) - STR_HEAP_TAG_ROPE)));
@@ -3283,7 +3316,7 @@ static bool opt_cg_string_code(opt_cg_t *cg, ir_node_id_t node_id, const ir_node
       masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypeString), done);
       masm_branch_test64(m, ASM_COND_NON_ZERO, cached, (int64_t)STR_HEAP_TAG_MASK, done);
       masm_and64_imm(m, output, cached, NANBOX_DATA_MASK);
-      masm_add64_imm(m, output, output, (int64_t)ant_cage_base());
+      opt_cg_add_cage(cg, output, output);
       masm_bind(m, done);
       break;
     }
@@ -3353,9 +3386,13 @@ static void opt_cg_shape_switch(opt_cg_t *cg, ir_node_id_t node_id, const ir_nod
   asm_label_t exit = opt_cg_exit_site(cg, node_id);
   asm_gpr_t object = opt_cg_input(cg, node_id, 1);
   const ir_shape_case_t *last = &node->op.cases.items[node->op.cases.len - 1];
-  asm_label_t other = last->check.shape ? exit : opt_cg_label(cg, last->block);
-  masm_load16(m, scratch, asm_addr(object, (int32_t)offsetof(ant_object_t, flags)));
-  masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, ANT_OBJECT_FLAG_EXOTIC, other);
+  bool exotic = false;
+  for (uint32_t i = 0; i < node->op.cases.len; i++)
+    exotic |= ant_shape_is_exotic((const ant_shape_t *)(uintptr_t)node->op.cases.items[i].check.shape);
+  if (exotic) {
+    masm_load16(m, scratch, asm_addr(object, (int32_t)offsetof(ant_object_t, flags)));
+    masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, ANT_OBJECT_FLAG_EXOTIC, last->check.shape ? exit : opt_cg_label(cg, last->block));
+  }
   masm_load64(m, scratch, asm_addr(object, (int32_t)offsetof(ant_object_t, shape)));
   for (uint32_t i = 0; i < node->op.cases.len; i++) {
     const ir_shape_case_t *shape_case = &node->op.cases.items[i];
@@ -3450,6 +3487,7 @@ static void opt_cg_prologue(opt_cg_t *cg) {
   sv_func_t *func = cg->graph->func;
   masm_emit_prologue(m, &cg->frame);
   masm_move64(m, cg->pinned.vm, args[0]);
+  if (cg->pinned.cage != OPT_NO_PINNED) masm_move_imm64(m, (asm_gpr_t)cg->pinned.cage, ant_cage_base());
   masm_load64(m, scratch, asm_addr(args[0], (int32_t)offsetof(sv_vm_t, js)));
   masm_branch_if_stack_pointer_below(m, asm_addr(scratch, (int32_t)offsetof(ant_t, cstk.floor)), cg->overflow);
   masm_store64(m, opt_cg_entry_field(cg, offsetof(opt_entry_t, this_val)), args[1]);
@@ -3973,7 +4011,7 @@ static void opt_cg_tails(opt_cg_t *cg, asm_label_t retry) {
     masm_load64(m, kinds->output, asm_addr(kinds->output, (int32_t)offsetof(sv_closure_t, func_obj)));
     masm_branch64_imm(m, ASM_COND_EQUAL, kinds->output, 0, kinds->exit);
     masm_and64_imm(m, kinds->output, kinds->output, NANBOX_DATA_MASK);
-    masm_add64_imm(m, kinds->output, kinds->output, (int64_t)ant_cage_base());
+    opt_cg_add_cage(cg, kinds->output, kinds->output);
     masm_jump(m, kinds->done);
   }
   for (uint32_t i = 0; i < cg->element_int32s.len; i++) {

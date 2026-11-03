@@ -602,7 +602,7 @@ bool js_array_make_length_readonly(ant_t *js, ant_value_t arr) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != kTypeArray) return false;
   
-  ptr->flags.is_exotic = 1;
+  js_obj_mark_exotic(ptr);
   descriptor_entry_t *entry = get_or_create_desc(js, obj, "length", 6);
   if (!entry) return false;
   

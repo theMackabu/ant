@@ -193,12 +193,12 @@ static void target_register_sets_follow_libjs(void) {
   opt_register_set_t set;
   opt_pinned_registers_t pinned;
   opt_target_registers(OPT_TARGET_AARCH64, &set, &pinned);
-  assert(pinned.vm == 19 && pinned.frame == 20 && pinned.scratch == 21);
-  assert(set.allocatable_gprs == 0x1fc0ffff && set.scratch_gpr == 21 && set.return_gpr == 0);
+  assert(pinned.vm == 19 && pinned.frame == 20 && pinned.scratch == 21 && pinned.cage == 22);
+  assert(set.allocatable_gprs == 0x1f80ffff && set.scratch_gpr == 21 && set.return_gpr == 0);
   assert(set.allocatable_fprs == 0x7ffffff8 && set.argument_count == 8);
   opt_target_registers(OPT_TARGET_X86_64, &set, &pinned);
   // rbx, r12 and r13 are pinned; rax, rcx, rdx, rsi, rdi, r8, r9, r14 and r15 get values.
-  assert(pinned.vm == 3 && pinned.frame == 12 && pinned.scratch == 13);
+  assert(pinned.vm == 3 && pinned.frame == 12 && pinned.scratch == 13 && pinned.cage == OPT_NO_PINNED);
   assert(set.allocatable_gprs == 0xc3c7 && set.allocatable_fprs == 0x7ff8);
   assert(set.argument_count == 6 && set.argument_gprs[0] == 7 && set.argument_gprs[1] == 6 && set.return_gpr == 0);
   opt_register_set_t test = opt_test_registers();

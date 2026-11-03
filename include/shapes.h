@@ -87,6 +87,8 @@ void ant_shape_roots_release(ant_t *js, ant_shape_roots_t *owner);
 ant_shape_t *ant_shape_new(ant_t *js);
 ant_shape_t *ant_shape_root(ant_t *js, ant_shape_roots_t *owner, ant_value_t proto, uint8_t inobj_limit);
 ant_shape_t *ant_shape_with_proto(ant_shape_t *shape, ant_value_t proto);
+ant_shape_t *ant_shape_with_exotic(ant_shape_t *shape);
+bool ant_shape_is_exotic(const ant_shape_t *shape);
 
 ant_shape_t *ant_shape_new_with_inobj_limit(ant_t *js, uint8_t inobj_limit);
 ant_shape_t *ant_shape_clone(const ant_shape_t *shape);

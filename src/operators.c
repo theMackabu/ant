@@ -39,7 +39,7 @@ ant_value_t do_string_num_concat(ant_t *js, ant_value_t str, ant_value_t num, bo
     return mkstr_with_ascii(js, digits, num_len, true);
   }
 
-  if (flat_str && num_len > 0 && str_len + num_len < STR_SHORT_CONS_THRESHOLD) {
+  if (flat_str && num_len > 0 && str_concat_stays_flat(str_len + num_len, ant_str_flat_ptr(str)->bytes, NULL)) {
     size_t total_len = str_len + num_len;
     result = js_mkstr(js, NULL, total_len);
     
@@ -82,8 +82,8 @@ ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r) {
     if (n1 == 0) return r;
 
     if (
-      total_len < STR_SHORT_CONS_THRESHOLD &&
-      !str_is_heap_rope(l) && !str_is_heap_rope(r)
+      !str_is_heap_rope(l) && !str_is_heap_rope(r) &&
+      str_concat_stays_flat((size_t)total_len, ant_str_flat_ptr(l)->bytes, ant_str_flat_ptr(r)->bytes)
     ) {
       GC_ROOT_SAVE(root_mark, js);
       GC_ROOT_PIN(js, l);
