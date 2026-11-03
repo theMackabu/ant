@@ -254,13 +254,8 @@ static ant_value_t tds_flush(ant_params_t) {
 static ant_value_t js_tds_get_encoding(ant_params_t) {
   td_state_t *st = (td_state_t *)js_get_native(call_this, TDS_NATIVE_TAG);
   if (!st) return js_mkstr(js, "utf-8", 5);
-  switch (st->encoding) {
-    case TD_ENC_UTF16LE: return js_mkstr(js, "utf-16le", 8);
-    case TD_ENC_UTF16BE: return js_mkstr(js, "utf-16be", 8);
-    case TD_ENC_WINDOWS_1252: return js_mkstr(js, "windows-1252", 12);
-    case TD_ENC_ISO_8859_2: return js_mkstr(js, "iso-8859-2", 10);
-    default: return js_mkstr(js, "utf-8", 5);
-  }
+  const char *name = td_encoding_name(st->encoding);
+  return js_mkstr(js, name, strlen(name));
 }
 
 static ant_value_t js_tds_get_fatal(ant_params_t) {
@@ -285,54 +280,14 @@ static ant_value_t js_tds_get_writable(ant_params_t) {
   return ts_stream_writable(ts_obj);
 }
 
-static const char *tds_trim_label(const char *s, size_t len, size_t *out_len) {
-  while (len > 0 && (unsigned char)*s <= 0x20) { s++; len--; }
-  while (len > 0 && (unsigned char)s[len - 1] <= 0x20) { len--; }
-  *out_len = len;
-  return s;
-}
-
-static int tds_resolve_encoding(const char *s, size_t len) {
-  static const struct { const char *label; uint8_t label_len; td_encoding_t enc; } map[] = {
-    {"unicode-1-1-utf-8", 17, TD_ENC_UTF8},    {"unicode11utf8", 13, TD_ENC_UTF8},
-    {"unicode20utf8",     13, TD_ENC_UTF8},    {"utf-8",          5, TD_ENC_UTF8},
-    {"utf8",               4, TD_ENC_UTF8},    {"x-unicode20utf8",17, TD_ENC_UTF8},
-    {"windows-1252",      12, TD_ENC_WINDOWS_1252}, {"ascii",           5, TD_ENC_WINDOWS_1252},
-    {"unicodefffe",       11, TD_ENC_UTF16BE}, {"utf-16be",        8, TD_ENC_UTF16BE},
-    {"csunicode",          9, TD_ENC_UTF16LE}, {"iso-10646-ucs-2",16, TD_ENC_UTF16LE},
-    {"ucs-2",              5, TD_ENC_UTF16LE}, {"unicode",         7, TD_ENC_UTF16LE},
-    {"unicodefeff",       11, TD_ENC_UTF16LE}, {"utf-16",          6, TD_ENC_UTF16LE},
-    {"utf-16le",           8, TD_ENC_UTF16LE},
-    {"iso-8859-2",        10, TD_ENC_ISO_8859_2},
-    {NULL, 0, 0}
-  };
-  for (int i = 0; map[i].label; i++) {
-    if (len == map[i].label_len && strncasecmp(s, map[i].label, len) == 0) return (int)map[i].enc;
-  }
-  return -1;
-}
-
 static ant_value_t js_tds_ctor(ant_params_t) {
   if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "TextDecoderStream constructor requires 'new'");
 
   td_encoding_t enc = TD_ENC_UTF8;
   if (nargs > 0 && !is_undefined(args[0])) {
-    ant_value_t label = (vtype(args[0]) == kTypeString) ? args[0] : coerce_to_str(js, args[0]);
-    if (is_err(label)) return label;
-    
-    size_t llen;
-    const char *raw = js_getstr(js, label, &llen);
-    if (raw) {
-      size_t tlen;
-      const char *trimmed = tds_trim_label(raw, llen, &tlen);
-      int resolved = tds_resolve_encoding(trimmed, tlen);
-      if (resolved < 0) return js_mkerr_typed(
-        js, JS_ERR_RANGE, "Failed to construct 'TextDecoderStream': The encoding label provided ('%.*s') is invalid.",
-        (int)tlen, trimmed
-      );
-      enc = (td_encoding_t)resolved;
-    }
+    ant_value_t err = td_encoding_from_label(js, args[0], "TextDecoderStream", &enc);
+    if (is_err(err)) return err;
   }
 
   bool fatal = false;
