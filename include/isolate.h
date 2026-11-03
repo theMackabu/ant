@@ -453,6 +453,8 @@ struct ant_isolate_t {
     bool skip_minors;
     bool skip_probe;
     bool realm_reach;
+    bool parallel_mark;
+    uint64_t parallel_cpu_ns;
     
     ant_object_t **mark_stack;
     size_t mark_sp;

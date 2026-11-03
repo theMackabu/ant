@@ -10,6 +10,7 @@ CLI_FLAG(WEB_COMPAT,        LIT,  NULL, "web-compat",        NULL,         "brow
 CLI_FLAG(LOCATION,          STR,  NULL, "location",          "<href>",     "set globalThis.location and the base URL for relative fetches")
 CLI_FLAG(NO_CLEAR_SCREEN,   LIT,  NULL, "no-clear-screen",   NULL,         "keep output when restarting in watch or hot mode")
 CLI_FLAG(JITLESS,           LIT,  NULL, "jitless",           NULL,         "run everything in the interpreter, without compiling to native code")
+CLI_FLAG(GC_THREADS,        INT,  NULL, "gc-threads",        "<count>",    "helper threads for major GC marking (0 marks on the main thread only)")
 CLI_FLAG(LOCALSTORAGE_FILE, FILE, NULL, "localstorage-file", "<path>",     "file path for localStorage persistence")
 CLI_FLAG(CRON_TITLE,        STR,  NULL, "cron-title",        "<title>",    NULL)
 CLI_FLAG(CRON_PERIOD,       STR,  NULL, "cron-period",       "<schedule>", NULL)

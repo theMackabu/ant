@@ -244,6 +244,27 @@ adding properties, or every such object gets a prototype transition. Run with
 `ANT_DEBUG=shape:verify` to check the invariant at every collection; see the
 [shape proto identity](../../tests/test_shape_proto_identity.cjs) regression.
 
+## Exotic Objects Have Exotic Shapes
+
+Every object with `is_exotic` set has a shape whose exotic bit is set, so a shape
+check against an ordinary shape never matches an exotic object and compiled code
+skips the per-access flags load. Mark objects exotic only through
+`js_obj_mark_exotic`, and copy the bit in any new shape-copy path. The
+[exotic shapes](../../tests/test_opt_exotic_shapes.cjs) regression covers the
+common cases but cannot catch a missed site, so review new ones.
+
+## Parallel Marking
+
+Major collections with at least 65536 live objects drain the mark stack on
+helper threads (`src/gc/parallel.c`, `--gc-threads <count>` overrides the count).
+Helpers only scan plain objects and arrays, claim objects with an atomic
+`mark_epoch` exchange, and mark flat strings and shapes through the
+`_shared` variants. Everything else is handed back to the main thread between
+rounds. Keep new marking work for other kinds main-thread-only unless it is
+made safe for concurrent callers, and keep heap sizing driven by total marking
+CPU (`parallel_cpu_ns`), not wall time, or the policy shrinks the heap. See
+the [parallel marking](../../tests/test_gc_parallel_mark.cjs) regression.
+
 ## Closure And Upvalue Reachability
 
 Lazy function-object materialization and writes into listener sidecars can

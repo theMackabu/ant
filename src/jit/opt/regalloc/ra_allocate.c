@@ -113,6 +113,7 @@ static ra_constraints_t ra_constraints(const ir_node_t *node, const opt_register
     case IR_OP_UINT32_SHIFT_RIGHT: inputs[1].kind = RA_INPUT_REGISTER_OR_CONSTANT; break;
     case IR_OP_CONCATENATE_STRINGS: constraints.temps = 5; break;
     case IR_OP_STRINGS_EQUAL: constraints.temps = 1; break;
+    case IR_OP_CHECK_SHAPE: if (op->shapes.len > 1) constraints.temps = 2; break;
     case IR_OP_STRING_ADDRESS: constraints.temps = 1; break;
     case IR_OP_INITIALIZE_FRAME:
     case IR_OP_ENSURE_FRAME_INITIALIZED: constraints.temps = 2; break;

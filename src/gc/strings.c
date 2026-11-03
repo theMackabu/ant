@@ -55,6 +55,13 @@ static inline void bitmap_set(gc_bitmap_t *bm, size_t idx) {
   if (idx < bm->n_slots && bm->bits) bm->bits[idx / 8u] |= (uint8_t)(1u << (idx % 8u));
 }
 
+static inline void bitmap_set_shared(gc_bitmap_t *bm, size_t idx) {
+  if (idx >= bm->n_slots || !bm->bits) return;
+  uint8_t bit = (uint8_t)(1u << (idx % 8u));
+  if (!(__atomic_load_n(&bm->bits[idx / 8u], __ATOMIC_RELAXED) & bit))
+    __atomic_fetch_or(&bm->bits[idx / 8u], bit, __ATOMIC_RELAXED);
+}
+
 static inline bool bitmap_get(const gc_bitmap_t *bm, size_t idx) {
   if (idx >= bm->n_slots || !bm->bits) return false;
   return ((bm->bits[idx / 8u] >> (idx % 8u)) & 1u) != 0;
@@ -239,12 +246,14 @@ void gc_strings_begin(ant_t *js) {
     qsort(js->gc.large_string_marks, (size_t)js->gc.large_string_mark_len, sizeof(gc_large_string_mark_t), large_mark_cmp);
 }
 
-static inline void gc_string_mark_slot(gc_block_mark_t *m, uintptr_t p) {
+static inline void gc_string_mark_slot(gc_block_mark_t *m, uintptr_t p, bool shared) {
   size_t offset = p - m->base;
-  if (offset % m->stride == 0) bitmap_set(&m->bitmap, offset / m->stride);
+  if (offset % m->stride) return;
+  if (shared) bitmap_set_shared(&m->bitmap, offset / m->stride);
+  else bitmap_set(&m->bitmap, offset / m->stride);
 }
 
-void gc_strings_mark(ant_t *js, const void *ptr) {
+static inline __attribute__((always_inline)) void gc_strings_mark_impl(ant_t *js, const void *ptr, bool shared) {
   if (!ptr) return;
   uintptr_t p = (uintptr_t)ptr;
 
@@ -254,7 +263,7 @@ void gc_strings_mark(ant_t *js, const void *ptr) {
     
     if (slot->page == page && slot->index < js->gc.string_mark_len) {
       gc_block_mark_t *m = &js->gc.string_marks[slot->index];
-      if (p >= m->base && p < m->end) { gc_string_mark_slot(m, p); return; }
+      if (p >= m->base && p < m->end) { gc_string_mark_slot(m, p, shared); return; }
     }
     
     int lo = 0;
@@ -269,7 +278,7 @@ void gc_strings_mark(ant_t *js, const void *ptr) {
     else {
       slot->page = page;
       slot->index = (uint32_t)mid;
-      gc_string_mark_slot(m, p);
+      gc_string_mark_slot(m, p, shared);
       return;
     }}
   }
@@ -284,9 +293,18 @@ void gc_strings_mark(ant_t *js, const void *ptr) {
   if (p < m->ptr) hi = mid - 1;
   else if (p > m->ptr) lo = mid + 1;
   else {
-    m->alloc->marked = 1;
+    if (shared) __atomic_store_n(&m->alloc->marked, 1, __ATOMIC_RELAXED);
+    else m->alloc->marked = 1;
     return;
   }}
+}
+
+void gc_strings_mark(ant_t *js, const void *ptr) {
+  gc_strings_mark_impl(js, ptr, false);
+}
+
+void gc_strings_mark_shared(ant_t *js, const void *ptr) {
+  gc_strings_mark_impl(js, ptr, true);
 }
 
 void gc_strings_sweep(ant_t *js) {

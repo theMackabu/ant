@@ -962,6 +962,13 @@ void ant_gc_shapes_mark(ant_t *js, ant_shape_t *shape) {
   }
 }
 
+void ant_gc_shapes_mark_shared(ant_t *js, ant_shape_t *shape) {
+  for (uint16_t epoch = js->shapes.gc_epoch; shape; shape = shape->parent) {
+    if (__atomic_load_n(&shape->gc_mark, __ATOMIC_RELAXED) == epoch) break;
+    __atomic_store_n(&shape->gc_mark, epoch, __ATOMIC_RELAXED);
+  }
+}
+
 static inline bool shape_child_is_dead(const ant_shape_t *child, uint16_t epoch) {
   return child->gc_mark != epoch && !shape_has_children(child);
 }

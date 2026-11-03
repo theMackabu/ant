@@ -148,6 +148,7 @@ bool ant_shape_clear_accessor_slot(ant_t *js, ant_shape_t *shape, uint32_t slot)
 
 void ant_gc_shapes_begin(ant_t *js);
 void ant_gc_shapes_mark(ant_t *js, ant_shape_t *shape);
+void ant_gc_shapes_mark_shared(ant_t *js, ant_shape_t *shape);
 bool ant_gc_shapes_sweep(ant_t *js);
 void ant_shapes_destroy(ant_t *js);
 

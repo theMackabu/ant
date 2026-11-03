@@ -26,6 +26,7 @@
 #include "modules/host.h"
 #include "modules/microtasks.h"
 #include "gc/object_arenas.h"
+#include "gc/parallel.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -952,6 +953,9 @@ static inline __attribute__((always_inline)) bool gc_marker_scan_plain(ant_t *js
   return true;
 }
 
+static constexpr size_t GC_PARALLEL_MIN_LIVE = 65536;
+static constexpr size_t GC_PARALLEL_MIN_ROUND = 256;
+
 static void gc_drain_mark_stack(ant_t *js) {
   gc_marker_t m = {
     .js = js,
@@ -959,6 +963,9 @@ static void gc_drain_mark_stack(ant_t *js) {
     .epoch = js->gc.obj_epoch,
     .minor = js->gc.minor,
   };
+
+  if (js->gc.parallel_mark && js->gc.mark_sp && gc_parallel_drain(js, m.other_refs, gc_scan_obj))
+    while (js->gc.mark_sp >= GC_PARALLEL_MIN_ROUND && gc_parallel_drain(js, m.other_refs, gc_scan_obj));
 
   gc_marker_load(js, &m);
   while (m.sp > 0) {
@@ -1964,10 +1971,15 @@ uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
     if (ns) { js->remember_set = ns; js->remember_set_cap = 256; }
   }
 
+  js->gc.parallel_cpu_ns = 0;
+  js->gc.parallel_mark = js->obj_arena.live_count + js->obj_wide_arena.live_count >= GC_PARALLEL_MIN_LIVE;
+  
   if (extra_roots) extra_roots(js);
   gc_mark_roots(js);
+  
   opt_tier_gc_doom(js);
   gc_drain_mark_stack(js);
+  js->gc.parallel_mark = false;
   
   gc_weak_process(
     js, false, gc_mark_value, gc_drain_mark_stack_weak,

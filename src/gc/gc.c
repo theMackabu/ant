@@ -369,7 +369,7 @@ void gc_run(ant_t *js) {
   gc_adapt_major_interval(
     js, bytes_before, 
     gc_heap_bytes(js, js->gc.pool_last_live), 
-    mark_ns, end_ns
+    mark_ns + js->gc.parallel_cpu_ns, end_ns
   );
   
   gc_refresh_alloc_limit(js);

@@ -1924,6 +1924,7 @@ static void opt_add_fields(opt_builder_t *b, ir_node_id_t object, ir_node_id_t a
 }
 
 static constexpr uint32_t OPT_MAX_FIELD_SHAPES = 1 + SV_GF_POLY_WAYS;
+static constexpr uint32_t OPT_SHAPE_SET_MAX = 4;
 
 static constexpr uint32_t OPT_MAX_PROTOTYPE_DEPTH = 4;
 
@@ -2393,6 +2394,33 @@ static opt_flow_t opt_build_monomorphic_field(opt_builder_t *b, const opt_field_
   return OPT_FLOW_CONTINUE;
 }
 
+static bool opt_field_cases_share_slot(const opt_field_plan_t *plan) {
+  if (plan->add_count || plan->count < 2 || plan->count > OPT_SHAPE_SET_MAX) return false;
+  for (uint32_t i = 0; i < plan->count; i++) {
+    const opt_field_case_t *access = &plan->cases[i];
+    if (access->depth || access->getter || access->index >= ant_shape_get_inobj_limit(access->shape)) return false;
+    if (access->index != plan->cases[0].index) return false;
+  }
+  return true;
+}
+
+static opt_flow_t opt_build_shared_slot_field(opt_builder_t *b, const opt_field_plan_t *plan, ir_node_id_t object, ir_node_id_t address, ir_node_id_t value) {
+  ir_shape_check_t checks[OPT_SHAPE_SET_MAX];
+  for (uint32_t i = 0; i < plan->count; i++) checks[i] = (ir_shape_check_t){.shape = (ir_cell_t)(uintptr_t)plan->cases[i].shape};
+  ir_op_t op = ir_op(IR_OP_CHECK_SHAPE);
+  op.shapes.items = ir_dup_shapes(b->graph, checks, plan->count);
+  op.shapes.len = plan->count;
+  object = opt_emit_checked(b, op, (ir_node_id_t[]){object, address}, 2, OPT_REPR_TAGGED);
+  ir_node_id_t loaded = opt_named_access(b, object, address, value, &plan->cases[0], NULL, NULL);
+  if (plan->store) {
+    opt_drop(b, 2);
+    return OPT_FLOW_CONTINUE;
+  }
+  if (plan->opcode == OP_GET_FIELD) opt_drop(b, 1);
+  opt_push(b, loaded);
+  return OPT_FLOW_CONTINUE;
+}
+
 static ir_block_id_t opt_field_shape_switch(opt_builder_t *b, const opt_field_plan_t *plan, ir_node_id_t object, ir_node_id_t address, bool fallback,
   ir_shape_case_t *switch_cases, ir_block_id_t *runtime, ir_block_id_t *slow, uint32_t *slow_count) {
   ir_block_id_t source = b->block;
@@ -2553,6 +2581,7 @@ static opt_flow_t opt_build_field(opt_builder_t *b, const uint8_t *ip, sv_op_t o
   bool fallback = plan.add_count || !opt_may_speculate(b, OPT_EXIT_BAD_SHAPE);
   if (!fallback) opt_vec_push(&b->graph->arena, &b->ctx->object_like, object);
   if (plan.count == 1 && !fallback) return opt_build_monomorphic_field(b, &plan, object, address, value);
+  if (!fallback && opt_field_cases_share_slot(&plan)) return opt_build_shared_slot_field(b, &plan, object, address, value);
   return opt_build_polymorphic_field(b, &plan, object, address, value, fallback);
 }
 

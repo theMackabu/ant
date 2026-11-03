@@ -19,6 +19,7 @@
 #include "inspector.h"
 #include "esm/remote.h"
 #include "silver/vm.h"
+#include "gc/parallel.h"
 #include "messages.h"
 #include "cli/commands.h"
 #include "cli/daemon.h"
@@ -209,7 +210,9 @@ static int run_runtime(const ant_cli_t *cli, run_plan_t *plan, bool crash_report
 
   js_setstackbase(js, (void *)&stack_base);
   js_setstacklimit(js, os_thread_stack_size() * 3 / 4);
+  
   if (cli->jitless) sv_debug_enable(SV_DEBUG_JITLESS);
+  if (cli->gc_threads >= 0) gc_parallel_set_helpers(cli->gc_threads);
 
   ant_argv_t proc = process_argv(cli, plan);
   if (plan->mode == RUN_PKG) plan->pkg = (pkg_argv_t){ 0, NULL };

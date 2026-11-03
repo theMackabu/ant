@@ -3252,15 +3252,23 @@ static bool opt_cg_object_code(opt_cg_t *cg, ir_node_id_t node_id, const ir_node
       break;
     }
     case IR_OP_CHECK_SHAPE: {
-      if (node->op.shapes.len != 1) {
-        opt_cg_fail(cg, "shapes");
-        break;
-      }
       asm_label_t exit = opt_cg_exit_site(cg, node_id);
       asm_gpr_t object = opt_cg_input(cg, node_id, 1);
       masm_load64(m, scratch, asm_addr(object, (int32_t)offsetof(ant_object_t, shape)));
-      masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)node->op.shapes.items[0].shape, exit);
-      if (!ant_shape_is_exotic((const ant_shape_t *)(uintptr_t)node->op.shapes.items[0].shape)) break;
+      bool exotic = false;
+      for (uint32_t i = 0; i < node->op.shapes.len; i++)
+        exotic |= ant_shape_is_exotic((const ant_shape_t *)(uintptr_t)node->op.shapes.items[i].shape);
+      if (node->op.shapes.len == 1) masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)node->op.shapes.items[0].shape, exit);
+      else {
+        asm_gpr_t hit = opt_cg_temp(cg, node_id, 0), next = opt_cg_temp(cg, node_id, 1);
+        masm_compare64_imm_set(m, ASM_COND_EQUAL, hit, scratch, (int64_t)node->op.shapes.items[0].shape);
+        for (uint32_t i = 1; i < node->op.shapes.len; i++) {
+          masm_compare64_imm_set(m, ASM_COND_EQUAL, next, scratch, (int64_t)node->op.shapes.items[i].shape);
+          masm_or32(m, hit, hit, next);
+        }
+        masm_branch32_imm(m, ASM_COND_EQUAL, hit, 0, exit);
+      }
+      if (!exotic) break;
       masm_load16(m, scratch, asm_addr(object, (int32_t)offsetof(ant_object_t, flags)));
       masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, ANT_OBJECT_FLAG_EXOTIC, exit);
       break;

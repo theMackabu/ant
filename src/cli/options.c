@@ -26,6 +26,7 @@ typedef enum {
   OPT_KIND_STRS,
   OPT_KIND_LIT,
   OPT_KIND_FILE,
+  OPT_KIND_INT,
 } opt_kind_t;
 
 typedef struct {
@@ -59,6 +60,7 @@ static void *opt_new(const opt_spec_t *spec, int max_values) {
     case OPT_KIND_STRS: return arg_strn(spec->shortopts, spec->longopts, spec->datatype, 0, max_values, spec->glossary);
     case OPT_KIND_LIT: return arg_lit0(spec->shortopts, spec->longopts, spec->glossary);
     case OPT_KIND_FILE: return arg_file0(spec->shortopts, spec->longopts, spec->datatype, spec->glossary);
+    case OPT_KIND_INT: return arg_int0(spec->shortopts, spec->longopts, spec->datatype, spec->glossary);
   }
   return NULL;
 }
@@ -77,6 +79,7 @@ static bool opt_set(const ant_cli_args_t *args, opt_id_t id) {
     case OPT_KIND_STRS: return ((struct arg_str *)args->table[id])->count > 0;
     case OPT_KIND_LIT: return ((struct arg_lit *)args->table[id])->count > 0;
     case OPT_KIND_FILE: return ((struct arg_file *)args->table[id])->count > 0;
+    case OPT_KIND_INT: return ((struct arg_int *)args->table[id])->count > 0;
   }
   return false;
 }
@@ -91,17 +94,17 @@ static struct arg_file *opt_files(const ant_cli_args_t *args) {
 }
 
 static bool is_valued_flag(const char *arg) {
-  return
-    strcmp(arg, "-e") == 0 ||
-    strcmp(arg, "--eval") == 0 ||
-    strcmp(arg, "--repl") == 0 ||
-    strcmp(arg, "--input-type") == 0 ||
-    strcmp(arg, "-r") == 0 ||
-    strcmp(arg, "--preload") == 0 ||
-    strcmp(arg, "--location") == 0 ||
-    strcmp(arg, "--localstorage-file") == 0 ||
-    strcmp(arg, "--cron-title") == 0 ||
-    strcmp(arg, "--cron-period") == 0;
+  if (arg[0] != '-' || arg[1] == '\0') return false;
+  bool is_long = arg[1] == '-';
+  
+  for (int i = 0; i < OPT_FILES; i++) {
+    const opt_spec_t *spec = &opt_specs[i];
+    if (spec->kind == OPT_KIND_LIT) continue;
+    if (is_long && spec->longopts && strcmp(arg + 2, spec->longopts) == 0) return true;
+    if (!is_long && spec->shortopts && arg[2] == '\0' && strchr(spec->shortopts, arg[1])) return true;
+  }
+  
+  return false;
 }
 
 static bool is_positional(const char *arg) {
@@ -376,6 +379,7 @@ static void export_args(ant_cli_t *cli, ant_cli_args_t *args) {
   cli->web_compat = opt_set(args, OPT_WEB_COMPAT);
   cli->no_clear_screen = opt_set(args, OPT_NO_CLEAR_SCREEN);
   cli->jitless = opt_set(args, OPT_JITLESS);
+  cli->gc_threads = opt_set(args, OPT_GC_THREADS) ? ((struct arg_int *)args->table[OPT_GC_THREADS])->ival[0] : -1;
 }
 
 bool ant_cli_parse(ant_cli_t *cli, int argc, char **argv, const char *env_options, int *exit_code) {
