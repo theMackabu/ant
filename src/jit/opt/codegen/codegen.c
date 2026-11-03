@@ -1521,25 +1521,35 @@ static void opt_cg_is_nullish(opt_cg_t *cg, ir_node_id_t node, bool equal) {
   masm_compare64_imm_set(&cg->masm, cond, opt_cg_output(cg, node), cg->pinned.scratch, 1);
 }
 
+static void opt_cg_branch_prototype_holder(masm_t *m, asm_gpr_t tag, asm_label_t object, asm_label_t function) {
+  const int64_t base = (int64_t)(NANBOX_PREFIX >> NANBOX_TYPE_SHIFT);
+  masm_branch64_imm(m, ASM_COND_EQUAL, tag, (int64_t)OPT_OBJECT_TAG, object);
+  masm_branch64_imm(m, ASM_COND_EQUAL, tag, (int64_t)OPT_ARRAY_TAG, object);
+  masm_branch64_imm(m, ASM_COND_EQUAL, tag, (int64_t)OPT_FUNCTION_TAG, function);
+  masm_branch64_imm(m, ASM_COND_EQUAL, tag, base | kTypePromise, object);
+  masm_branch64_imm(m, ASM_COND_EQUAL, tag, base | kTypeGenerator, object);
+}
+
 static void opt_cg_has_in_prototype_chain(opt_cg_t *cg, ir_node_id_t node) {
   masm_t *m = &cg->masm;
   uint64_t proto = ir_node(cg->graph, node)->op.bits;
   asm_gpr_t value = opt_cg_input(cg, node, 0), output = opt_cg_output(cg, node), current = opt_cg_temp(cg, node, 0);
   asm_gpr_t scratch = cg->pinned.scratch;
-  asm_label_t exit = opt_cg_exit_site(cg, node), walk = masm_new_label(m), step = masm_new_label(m);
+  asm_label_t exit = opt_cg_exit_site(cg, node), step = masm_new_label(m), function = masm_new_label(m);
   asm_label_t yes = masm_new_label(m), no = masm_new_label(m), done = masm_new_label(m);
   masm_move_imm64(m, scratch, NANBOX_PREFIX);
   masm_branch64(m, ASM_COND_BELOW_OR_EQUAL, value, scratch, no);
-  masm_shr64_imm(m, scratch, value, NANBOX_TYPE_SHIFT);
-  masm_branch64_imm(m, ASM_COND_EQUAL, scratch, (int64_t)OPT_OBJECT_TAG, walk);
-  masm_branch64_imm(m, ASM_COND_EQUAL, scratch, (int64_t)OPT_ARRAY_TAG, walk);
-  masm_branch64_imm(m, ASM_COND_EQUAL, scratch, (int64_t)OPT_FUNCTION_TAG, exit);
-  masm_branch64_imm(m, ASM_COND_EQUAL, scratch, (int64_t)((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypePromise), exit);
-  masm_branch64_imm(m, ASM_COND_EQUAL, scratch, (int64_t)((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypeGenerator), exit);
-  masm_jump(m, no);
-  masm_bind(m, walk);
   masm_move_imm32(m, output, 32);
   masm_move64(m, current, value);
+  masm_shr64_imm(m, scratch, value, NANBOX_TYPE_SHIFT);
+  opt_cg_branch_prototype_holder(m, scratch, step, function);
+  masm_branch64_imm(m, ASM_COND_EQUAL, scratch, (int64_t)((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypeBuiltin), exit);
+  masm_jump(m, no);
+  masm_bind(m, function);
+  masm_and64_imm(m, current, current, NANBOX_DATA_MASK);
+  opt_cg_add_cage(cg, current, current);
+  masm_load64(m, current, asm_addr(current, (int32_t)offsetof(sv_closure_t, func_obj)));
+  masm_branch64_imm(m, ASM_COND_EQUAL, current, 0, exit);
   masm_bind(m, step);
   masm_and64_imm(m, current, current, NANBOX_DATA_MASK);
   opt_cg_add_cage(cg, current, current);
@@ -1551,9 +1561,9 @@ static void opt_cg_has_in_prototype_chain(opt_cg_t *cg, ir_node_id_t node) {
   masm_branch64(m, ASM_COND_EQUAL, current, scratch, yes);
   masm_shr64_imm(m, scratch, current, NANBOX_TYPE_SHIFT);
   masm_branch64_imm(m, ASM_COND_EQUAL, scratch, (int64_t)OPT_NULL_TAG, no);
-  masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)OPT_OBJECT_TAG, exit);
   masm_sub32_imm(m, output, output, 1);
-  masm_branch32_imm(m, ASM_COND_NOT_EQUAL, output, 0, step);
+  masm_branch32_imm(m, ASM_COND_EQUAL, output, 0, exit);
+  opt_cg_branch_prototype_holder(m, scratch, step, function);
   masm_jump(m, exit);
   masm_bind(m, yes);
   masm_move_imm32(m, output, 1);

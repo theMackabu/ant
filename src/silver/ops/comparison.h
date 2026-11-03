@@ -387,7 +387,21 @@ static inline bool sv_instanceof_chain_has_no_proxy(ant_value_t proto) {
     if (!ptr || depth >= MAX_PROTO_CHAIN_DEPTH || (ptr->flags.is_exotic && is_proxy(proto))) return false;
     proto = ant_object_proto(ptr);
   }
+  
   return true;
+}
+
+static inline int sv_instanceof_plain_walk(ant_value_t proto, ant_value_t target) {
+  ant_object_t *target_ptr = js_obj_ptr(js_as_obj(target));
+  
+  for (int depth = 0; is_object_type(proto); depth++) {
+    ant_object_t *ptr = js_obj_ptr(js_as_obj(proto));
+    if (!ptr || depth >= MAX_PROTO_CHAIN_DEPTH || (ptr->flags.is_exotic && is_proxy(proto))) return -1;
+    if (ptr == target_ptr) return 1;
+    proto = ant_object_proto(ptr);
+  }
+  
+  return 0;
 }
 
 static inline bool sv_instanceof_rhs_ordinary_proto(
@@ -490,6 +504,15 @@ static inline ant_value_t sv_instanceof_ic_eval(
     lhs_ptr->shape == ic->cached_shape && lhs_proto_ptr == ic->cached_holder &&
     ic->guard.comparison.object_epoch == js->ic.obj_epoch
   ) return Ant_Value_FromBool(ic->cached_index != 0);
+
+  int found = sv_instanceof_plain_walk(lhs_proto, ic->guard.comparison.receiver_proto);
+  if (found >= 0) {
+    ic->cached_shape = lhs_ptr->shape;
+    ic->cached_holder = lhs_proto_ptr;
+    ic->cached_index = (uint32_t)found;
+    ic->guard.comparison.object_epoch = js->ic.obj_epoch;
+    return Ant_Value_FromBool(found);
+  }
 
 miss:
   return sv_instanceof_ic_miss(js, l, r, ic);
