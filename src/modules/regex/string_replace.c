@@ -108,6 +108,12 @@ out:
 }
 
 static ant_value_t string_replace_impl(ant_native_params_t, ant_value_t call_this, bool replace_all) {
+  regexp_fast_t direct;
+  if (
+    nargs > 1 && vtype(call_this) == kTypeString && vtype(args[1]) == kTypeString &&
+    regexp_fast_get_pristine(js, args[0], &direct) && (!replace_all || (direct.flags & REGEXP_FLAG_GLOBAL))
+  ) return regexp_replace_fast_string(js, &direct, call_this, args[1]);
+
   ant_value_t str = Ant_String_CoerceThis(js, call_this, replace_all ? "replaceAll" : "replace");
   
   if (is_err(str)) return str;

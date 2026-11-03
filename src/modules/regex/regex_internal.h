@@ -16,6 +16,7 @@
 #include <pcre2.h>
 
 static constexpr size_t REGEXP_REQUIRED_LITERAL_MAX = 32;
+static constexpr ant_offset_t REGEXP_PLAIN_LITERAL_MAX = 32;
 static constexpr size_t REGEXP_JIT_EAGER_SUBJECT = 1024;
 
 typedef struct {
@@ -44,6 +45,9 @@ typedef struct compiled_regex_cache_entry {
   uint8_t line_state;
   bool scratch_in_use;
   bool plain_literal;
+  bool anchored_literal;
+  uint8_t literal_len;
+  char literal[REGEXP_PLAIN_LITERAL_MAX];
   size_t object_refs;
   size_t active_refs;
   uint8_t cache_refs;
@@ -107,8 +111,6 @@ static constexpr uint8_t REGEXP_PLAIN_LITERAL_EXCLUDED_FLAGS =
 
 static constexpr int REGEXP_INLINE_CAPTURES = 32;
 
-static constexpr ant_offset_t REGEXP_PLAIN_LITERAL_MAX = 32;
-
 enum {
 #define REGEXP_STATIC(id, name, alias) REGEXP_STATIC_INDEX_##id,
 #include "modules/regex_statics.h"
@@ -155,6 +157,7 @@ struct ant_regex_state {
   char *out_buf;
   size_t out_cap;
   bool out_busy;
+  uint32_t string_replace_slot;
 };
 
 static constexpr uint32_t REGEXP_NATIVE_TAG = Ant_NativeTag("REGX");
@@ -306,6 +309,24 @@ ant_value_t regexp_set_lastindex(
   ant_value_t value
 );
 bool regexp_fast_get(ant_t *js, ant_value_t rx, regexp_fast_tier_t tier, regexp_fast_t *fast);
+
+static __attribute__((always_inline)) inline bool regexp_fast_get_pristine(ant_t *js, ant_value_t rx, regexp_fast_t *fast) {
+  ant_regex_state_t *state = js->regex_state;
+  if (!state || vtype(rx) != kTypeObject || js->regexp.protector_invalid) return false;
+  ant_object_t *obj = js_obj_ptr(rx);
+  if (
+    obj->shape != state->instance_shape.shape || obj->native_tag != REGEXP_NATIVE_TAG ||
+    !obj->flags.regexp_brand || obj->flags.is_exotic ||
+    ant_object_proto(obj) != js->builtins.regexp_proto ||
+    vtype(ant_object_prop_get_unchecked(obj, REGEXP_LAST_INDEX_SLOT)) != kTypeNumber
+  ) return false;
+  compiled_regex_cache_entry_t *compiled = obj->native_ptr;
+  *fast = (regexp_fast_t){
+    .obj = obj, .compiled = compiled,
+    .li_slot = REGEXP_LAST_INDEX_SLOT, .flags = compiled->flags_mask,
+  };
+  return true;
+}
 __attribute__((noinline)) ant_value_t regexp_read_lastindex_slow(
   ant_t *js, compiled_regex_cache_entry_t *compiled_hint, ant_value_t regexp, ant_value_t str_arg, double *out
 );
@@ -481,15 +502,41 @@ static __attribute__((always_inline)) inline int regexp_match_literal(
   if (start_offset > (PCRE2_SIZE)str_len) return PCRE2_ERROR_NOMATCH;
   const char *match = find_bytes(
     str_ptr + start_offset, str_len - (ant_offset_t)start_offset,
-    compiled->pattern, (ant_offset_t)compiled->pattern_len
+    compiled->literal, (ant_offset_t)compiled->literal_len
   );
   if (!match) return PCRE2_ERROR_NOMATCH;
   scope->literal[0] = (PCRE2_SIZE)(match - str_ptr);
-  scope->literal[1] = scope->literal[0] + compiled->pattern_len;
+  scope->literal[1] = scope->literal[0] + compiled->literal_len;
   *ovector = scope->literal;
   *ovcount = 1;
   return 1;
 }
+
+static __attribute__((always_inline)) inline int regexp_match_anchored_literal(
+  const compiled_regex_cache_entry_t *compiled,
+  const char *str_ptr,
+  ant_offset_t str_len,
+  PCRE2_SIZE start_offset,
+  regex_match_scope_t *scope,
+  PCRE2_SIZE **ovector,
+  uint32_t *ovcount
+) {
+  size_t len = compiled->literal_len;
+  if (start_offset != 0 || (size_t)str_len < len) return PCRE2_ERROR_NOMATCH;
+  const char *literal = compiled->literal;
+  for (size_t i = 0; i < len; i++)
+    if (str_ptr[i] != literal[i]) return PCRE2_ERROR_NOMATCH;
+  scope->literal[0] = 0;
+  scope->literal[1] = len;
+  *ovector = scope->literal;
+  *ovcount = 1;
+  return 1;
+}
+
+int pcre2_jit_match_lean(
+  const pcre2_code *code, PCRE2_SPTR subject, PCRE2_SIZE length, PCRE2_SIZE start_offset,
+  pcre2_match_data *match_data, pcre2_match_context *mcontext, PCRE2_SIZE **ovector, uint32_t *ovcount
+);
 
 static __attribute__((always_inline)) inline int regexp_match_code(
   ant_t *js,
@@ -534,6 +581,9 @@ static __attribute__((always_inline)) inline int regexp_match_code(
     __builtin_expect(jit_ready && !sticky, 1) ||
     (compiled->jit_pending && !sticky && code == compiled->code && regexp_jit_tier_up(compiled, (size_t)str_len))
   ) {
+    if (__builtin_expect(match_ctx != NULL && match_options == 0, 1)) return pcre2_jit_match_lean(
+      code, (PCRE2_SPTR)str_ptr, str_len, start_offset, scope->match_data, match_ctx, ovector, ovcount
+    );
     rc = pcre2_jit_match(
       code, (PCRE2_SPTR)str_ptr, str_len, start_offset,
       match_options, scope->match_data, match_ctx
@@ -562,6 +612,8 @@ static __attribute__((always_inline)) inline int regexp_match(
 ) {
   if (compiled->plain_literal && !sticky)
     return regexp_match_literal(compiled, str_ptr, str_len, start_offset, scope, ovector, ovcount);
+  if (compiled->anchored_literal && !sticky)
+    return regexp_match_anchored_literal(compiled, str_ptr, str_len, start_offset, scope, ovector, ovcount);
   return regexp_match_code(js, compiled, str_ptr, str_len, start_offset, sticky, scope, ovector, ovcount);
 }
 

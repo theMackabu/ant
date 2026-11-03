@@ -1,3 +1,5 @@
+#include <ctype.h>
+
 #include "regex_internal.h"
 
 static int regexp_group_name_cmp(const void *a, const void *b) {
@@ -259,17 +261,39 @@ static void regexp_keep_required_literal(
   entry->required_literal_len = (uint8_t)length;
 }
 
-static bool regex_source_is_plain_literal(const char *source, ant_offset_t len) {
-  if (len == 0 || len > REGEXP_PLAIN_LITERAL_MAX) return false;
-  for (ant_offset_t i = 0; i < len; i++) {
-    switch (source[i]) {
-      case '\\': case '^': case '$': case '.': case '*': case '+': case '?':
+static bool regex_source_literal(const char *source, size_t len, char *out, uint8_t *out_len) {
+  size_t n = 0;
+  
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)source[i];
+    switch (c) {
+      case '^': case '$': case '.': case '*': case '+': case '?':
       case '(': case ')': case '[': case ']': case '{': case '}': case '|':
         return false;
+      case '\\':
+        if (++i == len) return false;
+        c = (unsigned char)source[i];
+        switch (c) {
+          case 't': c = '\t'; break;
+          case 'n': c = '\n'; break;
+          case 'r': c = '\r'; break;
+          case 'v': c = '\v'; break;
+          case 'f': c = '\f'; break;
+          default:
+            if (c >= 0x80 || !ispunct(c)) return false;
+        }
+        break;
       default:
         break;
     }
+    
+    if (n == REGEXP_PLAIN_LITERAL_MAX) return false;
+    out[n++] = (char)c;
   }
+  
+  if (n == 0) return false;
+  *out_len = (uint8_t)n;
+  
   return true;
 }
 
@@ -453,9 +477,12 @@ static compiled_regex_cache_entry_t *compiled_regex_cache_get_or_compile(
   entry->key_hash = key_hash;
   entry->flags_mask = flags_mask;
   
-  entry->plain_literal =
-    !(flags_mask & REGEXP_PLAIN_LITERAL_EXCLUDED_FLAGS) &&
-    regex_source_is_plain_literal(pattern, pattern_len);
+  if (!(flags_mask & REGEXP_PLAIN_LITERAL_EXCLUDED_FLAGS)) {
+    if (pattern_len > 1 && pattern[0] == '^')
+      entry->anchored_literal = !(flags_mask & REGEXP_FLAG_MULTILINE) &&
+        regex_source_literal(pattern + 1, pattern_len - 1, entry->literal, &entry->literal_len);
+    else entry->plain_literal = regex_source_literal(pattern, pattern_len, entry->literal, &entry->literal_len);
+  }
   
   entry->code = re;
   entry->line_state = line_anchors ? REGEXP_LINE_PENDING : REGEXP_LINE_NONE;

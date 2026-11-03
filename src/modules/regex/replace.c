@@ -224,7 +224,7 @@ static __attribute__((always_inline)) inline ant_value_t regexp_replace_fast_str
 ant_value_t regexp_replace_fast_string(
   ant_t *js, const regexp_fast_t *fast, ant_value_t str, ant_value_t replace_str
 ) {
-  ant_offset_t repl_len, repl_off = vstr(js, replace_str, &repl_len);
+  ant_offset_t repl_len, repl_off = regexp_vstr(js, replace_str, &repl_len);
   const char *repl_ptr = (const char *)(uintptr_t)repl_off;
   bool literal = repl_len == 0 || !memchr(repl_ptr, '$', (size_t)repl_len);
   return literal && fast->compiled->plain_literal

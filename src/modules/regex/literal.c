@@ -128,6 +128,27 @@ ant_value_t regexp_literal_exec_call(
   return regexp_exec_abstract(js, regexp_obj, arg);
 }
 
+static bool regexp_string_replace_slot_is_builtin(ant_t *js, ant_object_t *proto, uint32_t slot) {
+  if (slot >= proto->prop_count) return false;
+  const ant_shape_prop_t *prop = ant_shape_prop_at(proto->shape, slot);
+  return
+    prop && prop->type == ANT_SHAPE_KEY_STRING && prop->key.interned == js->intern.replace &&
+    !prop->has_getter && !prop->has_setter &&
+    js_cfunc_same_entrypoint(ant_object_prop_get_unchecked(proto, slot), builtin_string_replace);
+}
+
+static bool regexp_string_replace_is_builtin(ant_t *js, ant_regex_state_t *state) {
+  if (!is_object_type(js->sym.string_proto)) return false;
+  ant_object_t *proto = js_obj_ptr(js->sym.string_proto);
+  if (!proto->shape) return false;
+  if (regexp_string_replace_slot_is_builtin(js, proto, state->string_replace_slot)) return true;
+
+  int32_t slot = ant_shape_lookup_interned(proto->shape, js->intern.replace);
+  if (slot < 0) return false;
+  state->string_replace_slot = (uint32_t)slot;
+  return regexp_string_replace_slot_is_builtin(js, proto, (uint32_t)slot);
+}
+
 static bool regexp_literal_replace_builtin_guard(ant_t *js) {
   ant_regex_state_t *state = js->regex_state;
   if (
@@ -138,18 +159,11 @@ static bool regexp_literal_replace_builtin_guard(ant_t *js) {
     !regexp_shape_flags_pristine(js, state->instance_shape.shape)
   ) return false;
 
-  ant_value_t replace_fn;
-  return
-    js_try_get_own_data_prop(js, js->sym.string_proto, "replace", 7, &replace_fn) &&
-    js_cfunc_same_entrypoint(replace_fn, builtin_string_replace);
+  return regexp_string_replace_is_builtin(js, state);
 }
 
 ant_value_t regexp_literal_replace_call(
-  ant_t *js,
-  ant_value_t str,
-  ant_value_t pattern,
-  ant_value_t flags,
-  ant_value_t replacement
+  ant_t *js, ant_value_t str, ant_value_t pattern, ant_value_t flags, ant_value_t replacement
 ) {
   bool direct = vtype(str) == kTypeString && regexp_literal_replace_builtin_guard(js);
   bool func_replace = vtype(replacement) == kTypeFunction || vtype(replacement) == kTypeBuiltin;

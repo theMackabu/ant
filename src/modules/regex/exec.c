@@ -347,11 +347,14 @@ ant_value_t regexp_exec_general(ant_t *js, ant_value_t regexp, ant_value_t str_a
 
 __attribute__((aligned(16)))
 ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value_t str_arg, bool truthy_only) {
-  ant_object_t *obj = js_obj_ptr(regexp);
   ant_regex_state_t *state = js->regex_state;
-  if (!state || obj->shape != state->instance_shape.shape || obj->flags.is_exotic)
+  if (!state || vtype(regexp) != kTypeObject) return regexp_exec_general(js, regexp, str_arg, truthy_only);
+  ant_object_t *obj = (ant_object_t *)vptr(regexp);
+  if (obj->shape != state->instance_shape.shape || obj->flags.is_exotic)
     return regexp_exec_general(js, regexp, str_arg, truthy_only);
-  compiled_regex_cache_entry_t *compiled = js_get_native(regexp, REGEXP_NATIVE_TAG);
+  compiled_regex_cache_entry_t *compiled = obj->native_tag == REGEXP_NATIVE_TAG
+    ? obj->native_ptr
+    : js_get_native(regexp, REGEXP_NATIVE_TAG);
   if (!compiled) compiled = regex_get_or_compile(js, regexp, regexp_flags_mask(js, regexp, NULL), NULL);
   if (!compiled) return regexp_exec_general(js, regexp, str_arg, truthy_only);
   ant_value_t li_val = ant_object_prop_get_unchecked(obj, REGEXP_LAST_INDEX_SLOT);
