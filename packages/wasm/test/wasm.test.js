@@ -10,9 +10,9 @@ test('ships the reviewed reactor import and export contract', async () => {
     { module: 'env', name: 'memory', kind: 'memory' },
     { module: 'ant', name: 'now_ms', kind: 'function' },
     { module: 'ant', name: 'host_call', kind: 'function' },
-    { module: 'ant', name: 'random_fill', kind: 'function' },
     { module: 'wasi_snapshot_preview1', name: 'environ_get', kind: 'function' },
     { module: 'wasi_snapshot_preview1', name: 'environ_sizes_get', kind: 'function' },
+    { module: 'wasi_snapshot_preview1', name: 'clock_time_get', kind: 'function' },
     { module: 'wasi_snapshot_preview1', name: 'fd_close', kind: 'function' },
     { module: 'wasi_snapshot_preview1', name: 'fd_fdstat_get', kind: 'function' },
     { module: 'wasi_snapshot_preview1', name: 'fd_prestat_get', kind: 'function' },
@@ -302,6 +302,42 @@ test('drains Promise reactions and resolved await continuations', async () => {
     `);
     assert.equal(await ant.eval('awaitValue'), 7);
     await assert.rejects(ant.eval('Promise.resolve(1)'), /cannot be transferred/);
+  } finally {
+    ant.dispose();
+  }
+});
+
+test('provides the standard library and web platform APIs', async () => {
+  const ant = await Ant.create();
+  try {
+    assert.deepEqual(await ant.eval(`[
+      Date, ArrayBuffer, DataView, Uint8Array, BigInt64Array, Buffer, Atomics, Reflect, Intl, Temporal,
+      structuredClone, DOMException, TextEncoder, TextDecoder, TextEncoderStream, TextDecoderStream,
+      ReadableStream, WritableStream, TransformStream, CompressionStream, DecompressionStream,
+      URL, URLSearchParams, EventTarget, Event, AbortController, Headers, Blob, FormData, Request, Response,
+      performance, crypto, console, queueMicrotask, navigator,
+    ].filter(value => value === undefined).length`), 0);
+
+    assert.equal(await ant.eval(`new Date(Date.UTC(2020, 1, 3)).toISOString()`), '2020-02-03T00:00:00.000Z');
+    assert.equal(await ant.eval(`Math.abs(Date.now() - ${Date.now()}) < 60000`), true);
+    assert.equal(await ant.eval(`Temporal.ZonedDateTime.from('2024-03-10T01:30[America/New_York]').add({ hours: 1 }).toString()`), '2024-03-10T03:30:00-04:00[America/New_York]');
+    assert.equal(await ant.eval(`new TextDecoder('shift_jis').decode(new Uint8Array([0x82, 0xa0]))`), '\u3042');
+    assert.equal(await ant.eval(`new URL('https://例え.jp/a/../b').href`), 'https://xn--r8jz45g.jp/b');
+    assert.equal(await ant.eval(`crypto.randomUUID().length`), 36);
+    await assert.rejects(ant.eval(`Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 0)`), /cannot be called/);
+
+    await ant.eval(`
+      globalThis.asyncResults = null;
+      (async () => {
+        const gzip = new Blob(['hello hello']).stream()
+          .pipeThrough(new CompressionStream('gzip'))
+          .pipeThrough(new DecompressionStream('gzip'));
+        const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('abc')));
+        return [await new Response(gzip).text(), digest[0], await new Blob(['b', 'lob']).text()];
+      })().then(value => { asyncResults = value; });
+      0;
+    `);
+    assert.deepEqual(await ant.eval('asyncResults'), ['hello hello', 0xba, 'blob']);
   } finally {
     ant.dispose();
   }

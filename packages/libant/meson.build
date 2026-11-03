@@ -100,7 +100,7 @@ libant_core = static_library(
   'ant_core',
   lib_sources + sandbox_backend_sources + [builtins_h, generic_step_h, messages_h, silver_macros_h, theme_h],
   include_directories: [include, sandbox_backend_include],
-  dependencies: ant_deps + temporal_link_deps,
+  dependencies: ant_deps + rust_link_deps,
 )
 
 if use_lto
@@ -108,7 +108,7 @@ if use_lto
     'ant_core_lto',
     lib_sources + sandbox_backend_sources + [builtins_h, generic_step_h, messages_h, silver_macros_h, theme_h],
     include_directories: [include, sandbox_backend_include],
-    dependencies: ant_deps + temporal_link_deps,
+    dependencies: ant_deps + rust_link_deps,
     override_options: ['b_lto=true'],
   )
 endif

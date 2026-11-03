@@ -27,7 +27,7 @@
 typedef struct {
   int encoding;
   td_state_t *td;
-  uint8_t pending[2];
+  uint8_t pending[4];
   int pending_len;
 } sd_state_t;
 
@@ -40,7 +40,7 @@ static sd_state_t *sd_get_state(ant_value_t obj) {
 static void sd_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
   sd_state_t *st = (sd_state_t *)js_get_native(value, STRING_DECODER_NATIVE_TAG);
-  if (st) { free(st->td); free(st); }
+  if (st) { td_state_free(st->td); free(st); }
   js_clear_native(value, STRING_DECODER_NATIVE_TAG);
 }
 
@@ -133,12 +133,47 @@ static ant_value_t sd_base64_write(ant_t *js, sd_state_t *st, const uint8_t *src
   return result;
 }
 
+static ant_value_t sd_utf16_write(ant_t *js, sd_state_t *st, const uint8_t *src, size_t len, bool flush) {
+  size_t total = (size_t)st->pending_len + len;
+  uint8_t *work = malloc(total ? total : 1);
+  if (!work) return Ant_Error_CreateOutOfMemory(js);
+
+  memcpy(work, st->pending, (size_t)st->pending_len);
+  if (len) memcpy(work + st->pending_len, src, len);
+
+  bool be = st->encoding == SD_ENC_UTF16BE;
+  size_t complete = total & ~(size_t)1;
+  
+  if (!flush && complete == total && complete >= 2) {
+    uint16_t last = be
+      ? (uint16_t)((work[complete - 2] << 8) | work[complete - 1])
+      : (uint16_t)(work[complete - 2] | (work[complete - 1] << 8));
+    if (last >= 0xD800 && last <= 0xDBFF) complete -= 2;
+  }
+
+  st->pending_len = flush ? 0 : (int)(total - complete);
+  if (st->pending_len) memcpy(st->pending, work + complete, (size_t)st->pending_len);
+
+  if (be) for (size_t i = 0; i + 1 < complete; i += 2) {
+    uint8_t hi = work[i];
+    work[i] = work[i + 1];
+    work[i + 1] = hi;
+  }
+
+  ant_value_t result;
+  if (!buffer_bytes_to_string(js, work, complete, "utf16le", 7, &result)) result = js_mkstr(js, "", 0);
+  free(work);
+  
+  return result;
+}
+
 static ant_value_t sd_do_write(ant_t *js, sd_state_t *st, const uint8_t *src, size_t len, bool flush) {
 switch (st->encoding) {
   case SD_ENC_UTF8:
+    return td_decode(js, st->td, src, len, !flush);
   case SD_ENC_UTF16LE:
   case SD_ENC_UTF16BE:
-    return td_decode(js, st->td, src, len, !flush);
+    return sd_utf16_write(js, st, src, len, flush);
   case SD_ENC_LATIN1:
     if (!src || len == 0) return js_mkstr(js, "", 0);
     return sd_latin1_to_str(js, src, len);
@@ -208,9 +243,8 @@ static inline __attribute__((always_inline)) sd_state_t *sd_state_new(int enc) {
   if (!st) return NULL;
   st->encoding = enc;
 
-  if (enc == SD_ENC_UTF8 || enc == SD_ENC_UTF16LE || enc == SD_ENC_UTF16BE) {
-    td_encoding_t td_enc = (enc == SD_ENC_UTF16LE) ? TD_ENC_UTF16LE : (enc == SD_ENC_UTF16BE) ? TD_ENC_UTF16BE : TD_ENC_UTF8;
-    st->td = td_state_new(td_enc, false, true);
+  if (enc == SD_ENC_UTF8) {
+    st->td = td_state_new(TD_ENC_UTF8, false, true);
     if (!st->td) { free(st); return NULL; }
   }
 

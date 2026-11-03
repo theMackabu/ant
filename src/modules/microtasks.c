@@ -122,6 +122,12 @@ void queue_microtask(ant_t *js, ant_value_t callback) {
   queue_job(js, entry);
 }
 
+ant_value_t js_queue_microtask(ant_params_t) {
+  if (nargs < 1) return js_mkerr(js, "queueMicrotask requires 1 argument (callback)");
+  queue_microtask(js, args[0]);
+  return Ant_Value_Undefined;
+}
+
 void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_args_t) {
   if (nargs <= 0) { queue_microtask(js, callback); return; }
   

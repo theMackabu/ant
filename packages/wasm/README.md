@@ -57,6 +57,15 @@ must return synchronously. Guest module imports, native APIs, subprocesses,
 networking, the package manager, and JIT compilation are not part of this
 interpreter-only build.
 
+The guest has the full standard library (`Date`, typed arrays and `Buffer`,
+`Atomics`, `Reflect`, `Intl`, and `Temporal` with an embedded time zone
+database) and the platform APIs that need no I/O: `TextEncoder` and
+`TextDecoder` with every WHATWG encoding, web streams including compression
+streams, `URL`, events and `AbortController`, `structuredClone`, `Headers`,
+`Blob`, `FormData`, `Request`, `Response`, `performance`, `crypto` including
+`crypto.subtle`, `console`, and `queueMicrotask`. `Atomics.wait` throws because
+the guest cannot block, as on a browser main thread.
+
 Promise reactions and resolved `await` continuations run at the evaluation
 checkpoint. Promise objects themselves cannot cross the host boundary, and
 this package does not provide timers or external asynchronous I/O inside the

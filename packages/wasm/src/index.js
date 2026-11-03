@@ -455,6 +455,19 @@ function fillRandom(crypto, memory, pointer, length) {
 
 function wasiImports(memory, crypto) {
   return {
+    clock_time_get: (id, precision, pointer) => {
+      const now = globalThis.performance?.now?.();
+      const ms = id === 0
+        ? (now === undefined ? Date.now() : (globalThis.performance.timeOrigin ?? Date.now() - now) + now)
+        : (now ?? Date.now());
+      try {
+        pointer = checkedRange(memory, pointer, 8);
+        new DataView(memory.buffer).setBigUint64(pointer, BigInt(Math.round(ms * 1e6)), true);
+        return 0;
+      } catch {
+        return WASI_ERRNO_FAULT;
+      }
+    },
     environ_get: () => 0,
     environ_sizes_get: (count, size) => {
       writeU32(memory, count, 0);
@@ -636,8 +649,7 @@ export class Ant {
         writeU32(memory, responseLengthPointer, response.length);
         return pointer;
       },
-      now_ms: () => globalThis.performance?.now?.() ?? Date.now(),
-      random_fill: (pointer, length) => fillRandom(crypto, memory, pointer, length)
+      now_ms: () => globalThis.performance?.now?.() ?? Date.now()
     };
 
     const instance = await WebAssembly.instantiate(module, {

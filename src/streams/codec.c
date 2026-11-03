@@ -37,7 +37,7 @@ static void tes_state_finalize(ant_t *js, ant_object_t *obj) {
 
 static void tds_state_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
-  free(js_get_native(value, TDS_NATIVE_TAG));
+  td_state_free(js_get_native(value, TDS_NATIVE_TAG));
   js_clear_native(value, TDS_NATIVE_TAG);
 }
 
@@ -318,9 +318,10 @@ static ant_value_t js_tds_ctor(ant_params_t) {
   js_set(js, transformer, "flush", flush_fn);
 
   ant_value_t ts_obj = ts_create(js, transformer, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
-  if (is_err(ts_obj)) { 
-    free(st); 
-    return ts_obj; 
+  if (is_err(ts_obj)) {
+    js_clear_native(obj, TDS_NATIVE_TAG);
+    td_state_free(st);
+    return ts_obj;
   }
   
   js_set_slot(obj, SLOT_ENTRIES, ts_obj);

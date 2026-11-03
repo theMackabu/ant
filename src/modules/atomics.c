@@ -507,6 +507,10 @@ static ant_value_t js_atomics_wait(ant_params_t) {
   if (nargs < 3) {
     return js_mkerr(js, "Atomics.wait requires at least 3 arguments");
   }
+
+#ifdef ANT_WASM_EMBED
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Atomics.wait cannot be called in this context");
+#endif
   
   pthread_once(&wait_queue_init_once, init_wait_queue);
   

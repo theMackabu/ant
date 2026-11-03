@@ -23,6 +23,7 @@ maximum_memory = run_command(
 ).stdout().strip()
 inc = include_directories(
   '.cache/generated',
+  'src/uv',
   '../../include',
 )
 
@@ -44,8 +45,73 @@ crprintf_dep = subproject('crprintf').get_variable('crprintf_dep')
 double_conversion_dep = subproject('double-conversion').get_variable('double_conversion_dep')
 dragonbox_dep = subproject('dragonbox').get_variable('dragonbox_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
+zlib_dep = subproject('zlib-ng', default_options: [
+  'b_lto=false',
+  'warning_level=0',
+  'zlib-compat=true',
+]).get_variable('zlib_ng_dep')
+brotli_sub = subproject('google-brotli', default_options: [
+  'default_library=static',
+  'b_lto=false',
+  'warning_level=0',
+  'optimization=s',
+])
+brotli_deps = [
+  brotli_sub.get_variable('brotli_common_dep'),
+  brotli_sub.get_variable('brotli_decoder_dep'),
+  brotli_sub.get_variable('brotli_encoder_dep'),
+]
+ada_dep = subproject('ada').get_variable('ada_dep')
+uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
+
+cmake = import('cmake')
+boringssl_opts = cmake.subproject_options()
+boringssl_opts.add_cmake_defines({
+  'BUILD_SHARED_LIBS': 'OFF',
+  'BUILD_TESTING': 'OFF',
+  'INSTALL_ENABLED': '0',
+  'OPENSSL_NO_ASM': 'ON',
+  'CMAKE_SYSTEM_PROCESSOR': 'wasm32',
+})
+foreach lang : ['c', 'cpp']
+  boringssl_opts.append_compile_args(lang, '-w', '-g0', '-DOPENSSL_SMALL', '-DOPENSSL_NO_ASM', '-DOPENSSL_NO_SOCK', '-D_WASI_EMULATED_GETPID',
+    '-DOPENSSL_NO_THREADS_CORRUPT_MEMORY_AND_LEAK_SECRETS_IF_THREADED')
+endforeach
+boringssl_opts.set_override_option('warning_level', '0')
+crypto_dep = cmake.subproject('boringssl', options: boringssl_opts).dependency('crypto')
 
 python = find_program('python3')
+
+fs = import('fs')
+ant_version_parts = {}
+foreach line : fs.read(root / 'meson/ant.version').strip().split('\n')
+  pair = line.strip().split('=')
+  ant_version_parts += {pair[0].strip(): pair[1].strip()}
+endforeach
+ant_git_hash = run_command('git', '-C', root, 'rev-parse', '--short', 'HEAD', check: false).stdout().strip()
+ant_version = ant_version_parts['major'] + '.' + ant_version_parts['minor'] + '.' + (ant_git_hash == '' ? 'unknown' : ant_git_hash) + '.' + ant_version_parts['patch']
+
+temporal_capi_project = subproject('temporal_capi')
+temporal_capi_source = temporal_capi_project.get_variable('temporal_capi_source_dir')
+rust_lib = custom_target('rust_staticlib',
+  input: files(
+    root / 'src/rust/Cargo.toml',
+    root / 'src/rust/Cargo.lock',
+    root / 'src/rust/src/lib.rs',
+    root / 'src/rust/rust-toolchain.toml',
+  ) + temporal_capi_project.get_variable('temporal_capi_build_inputs'),
+  output: 'libant_rust.a',
+  build_by_default: true,
+  command: [
+    python, files(root / 'meson/rust.py'),
+    '--crate', root / 'src/rust',
+    '--temporal-capi', temporal_capi_source,
+    '--cache', root / '.cache/rust',
+    '--target', 'wasm32-wasip1',
+    '--out', '@OUTPUT@',
+    '--features', 'tzdb-embedded,encoding',
+  ],
+)
 unicode_tables = files('../../meson/unicode_tables.py')
 unicode_data_h = custom_target('unicode_data_h',
   output: 'unicode_data.h',
@@ -75,6 +141,11 @@ core_sources = files(run_command(
 
 add_project_arguments(
   '-DANT_WASM_EMBED=1',
+  '-D_WASI_EMULATED_GETPID',
+  '-DANT_VERSION="' + ant_version + '"',
+  '-DANT_HAVE_TEMPORAL=1',
+  '-DANT_TEMPORAL_EMBEDDED_TZDB=1',
+  '-DANT_HAVE_ENCODING_RS=1',
   '-DNO_EXECUTE_PERMISSION',
   '-DPCRE2_STATIC',
   '-DUTF8PROC_STATIC',
@@ -92,6 +163,8 @@ add_project_arguments(
 
 executable('ant', core_sources, silver_macros_h, unicode_data_h,
   include_directories: inc,
+  c_args: ['-I' + temporal_capi_source / 'bindings/c'],
+  link_with: rust_lib,
   dependencies: [
     base64_dep,
     pcre2_dep,
@@ -101,6 +174,11 @@ executable('ant', core_sources, silver_macros_h, unicode_data_h,
     double_conversion_dep,
     dragonbox_dep,
     yyjson_dep,
+    zlib_dep,
+    brotli_deps,
+    ada_dep,
+    uuidv7_dep,
+    crypto_dep,
   ],
   link_args: [
     '-mexec-model=reactor',
@@ -112,6 +190,7 @@ executable('ant', core_sources, silver_macros_h, unicode_data_h,
     '-Wl,--fatal-warnings',
     '-Wl,--allow-undefined-file=' + meson.current_source_dir() / 'src/imports.txt',
     '-Wl,--error-limit=0',
+    '-lwasi-emulated-getpid',
   ],
   name_suffix: 'wasm',
   install: false,

@@ -25,10 +25,6 @@ uint32_t ant_wasm_host_call(
 
 ANT_WASM_IMPORT("ant", "now_ms")
 double ant_wasm_now_ms(void);
-
-ANT_WASM_IMPORT("ant", "random_fill")
-int32_t ant_wasm_random_fill(void *buffer, uint32_t length);
-
 bool ant_wasm_should_interrupt(ant_t *js);
 
 #endif

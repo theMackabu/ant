@@ -1,9 +1,6 @@
 #include <stdint.h>
 #include <string.h>
-
 #include "highlight.h"
-#include "modules/crypto.h"
-#include "wasm_embed.h"
 
 int highlight_js_line_clipped(
   const char *line, size_t line_len, size_t max_cols,
@@ -18,7 +15,3 @@ int highlight_js_line_clipped(
   return (int)len;
 }
 
-int crypto_fill_random(void *buf, size_t len) {
-  if (len > UINT32_MAX) return -1;
-  return ant_wasm_random_fill(buf, (uint32_t)len);
-}

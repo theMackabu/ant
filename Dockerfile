@@ -36,7 +36,7 @@ ARG BUILD_GIT_HASH
 
 ENV CC=clang CXX=clang++ CC_LD=lld AR=llvm-ar RANLIB=llvm-ranlib CMAKE_AR=llvm-ar CMAKE_RANLIB=llvm-ranlib
 RUN --mount=type=cache,id=ant-musl-build-${TARGETARCH},target=/work/build,sharing=locked \
-    --mount=type=cache,id=ant-musl-temporal-${TARGETARCH},target=/work/.cache/temporal-rust,sharing=locked <<EOF
+    --mount=type=cache,id=ant-musl-rust-${TARGETARCH},target=/work/.cache/rust,sharing=locked <<EOF
 set -eux
 meson setup build                          \
   -Db_lto=true                             \

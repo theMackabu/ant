@@ -31,8 +31,8 @@ const executableSuffix = process.platform === 'win32' ? '.exe' : '';
 const EXPECTED_IMPORTS = [
   'ant.host_call:function',
   'ant.now_ms:function',
-  'ant.random_fill:function',
   'env.memory:memory',
+  'wasi_snapshot_preview1.clock_time_get:function',
   'wasi_snapshot_preview1.environ_get:function',
   'wasi_snapshot_preview1.environ_sizes_get:function',
   'wasi_snapshot_preview1.fd_close:function',
@@ -141,10 +141,20 @@ function mesonString(value) {
   return `'${value.replaceAll('\\', '/').replaceAll("'", "\\'")}'`;
 }
 
+async function findOnPath(name) {
+  for (const directory of (process.env.PATH ?? '').split(process.platform === 'win32' ? ';' : ':')) {
+    if (!directory) continue;
+    const candidate = `${directory}/${name}${executableSuffix}`;
+    if (await exists(candidate)) return candidate;
+  }
+  return null;
+}
+
 async function writeCrossFile(sdk) {
   const binary = name => `${sdk}/bin/${name}${executableSuffix}`;
   const sysroot = `${sdk}/share/wasi-sysroot`;
   const crossFile = `${cacheDirectory}/wasi-sdk.ini`;
+  const cmake = process.env.CMAKE ?? (await findOnPath('cmake'));
   const clangWrapper = fileURLToPath(new URL('./clang.mjs', import.meta.url));
   const compiler = name =>
     `[${mesonString(process.execPath)}, ${mesonString(clangWrapper)}, ${mesonString(binary(name))}, ${mesonString('--target=wasm32-wasip1')}, ${mesonString(`--sysroot=${sysroot}`)}]`;
@@ -155,14 +165,29 @@ async function writeCrossFile(sdk) {
       `c = ${compiler('clang')}\n` +
       `cpp = ${compiler('clang++')}\n` +
       `ar = ${mesonString(binary('llvm-ar'))}\n` +
-      `strip = ${mesonString(binary('llvm-strip'))}\n\n` +
+      `strip = ${mesonString(binary('llvm-strip'))}\n` +
+      (cmake ? `cmake = ${mesonString(cmake)}\n` : '') +
+      `\n` +
       `[host_machine]\n` +
       `system = 'wasi'\n` +
       `cpu_family = 'wasm32'\n` +
       `cpu = 'wasm32'\n` +
       `endian = 'little'\n\n` +
+      `[built-in options]\n` +
+      `cpp_args = ['-fno-exceptions']\n` +
+      `b_staticpic = false\n\n` +
       `[properties]\n` +
-      `needs_exe_wrapper = true\n`
+      `needs_exe_wrapper = true\n\n` +
+      `[cmake]\n` +
+      `CMAKE_SYSTEM_NAME = 'WASI'\n` +
+      `CMAKE_SYSTEM_PROCESSOR = 'wasm32'\n` +
+      `CMAKE_C_COMPILER = ${mesonString(binary('clang'))}\n` +
+      `CMAKE_CXX_COMPILER = ${mesonString(binary('clang++'))}\n` +
+      `CMAKE_C_COMPILER_TARGET = 'wasm32-wasip1'\n` +
+      `CMAKE_CXX_COMPILER_TARGET = 'wasm32-wasip1'\n` +
+      `CMAKE_SYSROOT = ${mesonString(sysroot)}\n` +
+      `CMAKE_C_COMPILER_LAUNCHER = ''\n` +
+      `CMAKE_CXX_COMPILER_LAUNCHER = ''\n`
   );
   return crossFile;
 }

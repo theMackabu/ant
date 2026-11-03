@@ -1047,7 +1047,7 @@ void init_temporal_module(ant_t *js) {
   js_set_proto_init(temporal, js->sym.object_proto);
   js->builtins.temporal_namespace = temporal;
 
-#ifdef _WIN32
+#ifdef ANT_TEMPORAL_EMBEDDED_TZDB
   Provider *provider = temporal_rs_Provider_new_compiled();
 #else
   Provider *provider = temporal_rs_Provider_new_fs();

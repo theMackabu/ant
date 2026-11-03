@@ -1,5 +1,5 @@
 [package]
-name = "ant-temporal"
+name = "ant-rust"
 version = "0.1.0"
 edition = "2021"
 publish = false
@@ -8,13 +8,16 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-temporal_capi = "=0.2.6"
+temporal_capi = { version = "=0.2.6", optional = true }
+encoding_c = { version = "=0.9.8", optional = true }
 
 [features]
-fs-tzdb = ["temporal_capi/fs_tzdb"]
+temporal = ["dep:temporal_capi"]
+fs-tzdb = ["temporal", "temporal_capi/fs_tzdb"]
 # Windows has no /usr/share/zoneinfo, so the IANA tzdb gets embedded there;
 # unix builds resolve zones at runtime via FsTzdbProvider instead
-tzdb-embedded = ["temporal_capi/compiled_data"]
+tzdb-embedded = ["temporal", "temporal_capi/compiled_data"]
+encoding = ["dep:encoding_c"]
 
 [profile.release]
 opt-level = "z"

@@ -243,4 +243,4 @@ endif
 
 ant_slim_deps = ant_deps
 
-subdir('temporal')
+subdir('rust')

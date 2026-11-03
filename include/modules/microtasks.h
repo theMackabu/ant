@@ -11,6 +11,7 @@ void ant_realm_run_microtasks(ant_t *js, ant_realm_t *realm);
 void ant_microtasks_discard(ant_t *js);
 void gc_mark_microtasks(ant_t *js, gc_mark_fn mark);
 
+ant_value_t js_queue_microtask(ant_params_t);
 void queue_microtask(ant_t *js, ant_value_t callback);
 void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_args_t);
 

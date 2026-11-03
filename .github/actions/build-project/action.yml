@@ -70,13 +70,13 @@ runs:
           build/vendor
         key: vendor-${{ inputs.platform }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/*.wrap', 'vendor/packagefiles/**', 'meson/deps/meson.build', 'meson/cross/**') }}
 
-    - name: Cache Temporal Rust toolchain and crates
+    - name: Cache Rust toolchain and crates
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
       with:
-        path: .cache/temporal-rust
-        key: temporal-rust-${{ inputs.platform }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/temporal/Cargo.toml', 'src/temporal/Cargo.lock', 'src/temporal/rust-toolchain.toml', 'vendor/temporal_capi.wrap', 'vendor/packagefiles/temporal_capi/**', 'vendor/packagefiles/patches/temporal-capi-fs-provider.patch', 'meson/temporal.py') }}
+        path: .cache/rust
+        key: rust-${{ inputs.platform }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/rust/Cargo.toml', 'src/rust/Cargo.lock', 'src/rust/rust-toolchain.toml', 'vendor/temporal_capi.wrap', 'vendor/packagefiles/temporal_capi/**', 'vendor/packagefiles/patches/temporal-capi-fs-provider.patch', 'meson/rust.py') }}
         restore-keys: |
-          temporal-rust-${{ inputs.platform }}-${{ runner.os }}-${{ runner.arch }}-
+          rust-${{ inputs.platform }}-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Cache Windows compilation
       if: runner.os == 'Windows'

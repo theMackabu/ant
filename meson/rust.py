@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -10,17 +11,34 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--crate", required=True)
 parser.add_argument("--temporal-capi", required=True)
 parser.add_argument("--cache", required=True)
-parser.add_argument("--rustup-host", required=True)
+parser.add_argument("--rustup-host", default="")
 parser.add_argument("--target", required=True)
 parser.add_argument("--out", required=True)
 parser.add_argument("--features", default="")
 args = parser.parse_args()
 
+def detect_rustup_host():
+  machine = platform.machine().lower()
+  cpu = {"arm64": "aarch64", "aarch64": "aarch64", "x86_64": "x86_64", "amd64": "x86_64"}.get(machine)
+  if not cpu:
+    raise SystemExit(f"rust.py: unsupported build CPU {machine}")
+  system = platform.system()
+  if system == "Darwin":
+    return f"{cpu}-apple-darwin"
+  if system == "Windows":
+    return f"{cpu}-pc-windows-msvc"
+  if system == "Linux":
+    return f"{cpu}-unknown-linux-" + ("gnu" if platform.libc_ver()[0] == "glibc" else "musl")
+  raise SystemExit(f"rust.py: unsupported build system {system}")
+
+if not args.rustup_host:
+  args.rustup_host = detect_rustup_host()
+
 cache = os.path.join(os.path.abspath(args.cache), args.rustup_host)
 rustup_home = os.path.join(cache, "rustup")
 cargo_home = os.path.join(cache, "cargo")
 exe = ".exe" if "windows" in args.rustup_host else ""
-provided_cargo = os.environ.get("ANT_TEMPORAL_CARGO")
+provided_cargo = os.environ.get("ANT_RUST_CARGO")
 cargo = provided_cargo or os.path.join(cargo_home, "bin", "cargo" + exe)
 
 env = os.environ.copy()
@@ -29,7 +47,7 @@ env["RUSTFLAGS"] = "-Zunstable-options -Cpanic=immediate-abort"
 
 if provided_cargo:
   if not os.path.isfile(cargo) or not os.access(cargo, os.X_OK):
-    raise SystemExit(f"temporal.py: ANT_TEMPORAL_CARGO is not executable: {cargo}")
+    raise SystemExit(f"rust.py: ANT_RUST_CARGO is not executable: {cargo}")
 else:
   env["RUSTUP_HOME"] = rustup_home
   env["CARGO_HOME"] = cargo_home
@@ -39,7 +57,7 @@ if not provided_cargo and not os.path.exists(cargo):
   os.makedirs(cache, exist_ok=True)
   rustup_init = os.path.join(cache, "rustup-init" + exe)
   url = f"https://static.rust-lang.org/rustup/dist/{args.rustup_host}/rustup-init{exe}"
-  print(f"temporal.py: fetching {url}", file=sys.stderr)
+  print(f"rust.py: fetching {url}", file=sys.stderr)
   urllib.request.urlretrieve(url, rustup_init)
   os.chmod(rustup_init, 0o755)
   subprocess.run(
@@ -65,6 +83,6 @@ if args.features:
   build += ["--features", args.features]
 subprocess.run(build, cwd=args.crate, env=env, check=True)
 
-lib_name = "ant_temporal.lib" if args.target.endswith("-windows-msvc") else "libant_temporal.a"
+lib_name = "ant_rust.lib" if args.target.endswith("-windows-msvc") else "libant_rust.a"
 built = os.path.join(env["CARGO_TARGET_DIR"], args.target, "release", lib_name)
 shutil.copy2(built, args.out)

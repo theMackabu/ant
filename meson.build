@@ -117,7 +117,7 @@ libant = static_library(
 libant_dep = declare_dependency(
   link_with: libant,
   include_directories: [include, sandbox_backend_include],
-  dependencies: ant_deps + temporal_link_deps
+  dependencies: ant_deps + rust_link_deps
 )
 
 link_args = []
@@ -260,7 +260,7 @@ if not runtime_binary.disabled()
     dependencies: declare_dependency(
       link_with: libant_runtime,
       include_directories: [include],
-      dependencies: ant_slim_deps + temporal_link_deps
+      dependencies: ant_slim_deps + rust_link_deps
     ),
     link_args: ant_runtime_link_args,
     link_depends: ant_runtime_link_depends,

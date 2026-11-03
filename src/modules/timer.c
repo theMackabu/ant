@@ -20,6 +20,7 @@
 
 #include "modules/abort.h"
 #include "modules/timer.h"
+#include "modules/microtasks.h"
 #include "modules/process.h"
 #include "modules/iterator.h"
 
@@ -524,20 +525,6 @@ static ant_value_t js_clear_immediate(ant_params_t) {
   return Ant_Value_Undefined;
 }
 
-// queueMicrotask(callback)
-static ant_value_t js_queue_microtask(ant_params_t) {
-  if (nargs < 1) {
-    return js_mkerr(js, "queueMicrotask requires 1 argument (callback)");
-  }
-  
-  queue_microtask(js, args[0]);
-  return Ant_Value_Undefined;
-}
-
-static ant_value_t timers_promises_get_state(ant_t *js, ant_value_t call_func) {
-  return js_get_slot(call_func, SLOT_DATA);
-}
-
 static void timers_promises_remove_abort_listener(ant_t *js, ant_value_t state) {
   ant_value_t signal = 0;
   ant_value_t listener = 0;
@@ -572,7 +559,7 @@ static void timers_promises_settle(ant_t *js, ant_value_t state, bool reject, an
 }
 
 static ant_value_t timers_promises_resolve(ant_params_t) {
-  ant_value_t state = timers_promises_get_state(js, call_func);
+  ant_value_t state = js_get_slot(call_func, SLOT_DATA);
   ant_value_t value = Ant_Value_Undefined;
   if (!is_object_type(state)) return Ant_Value_Undefined;
   value = js_get(js, state, "value");
@@ -581,7 +568,7 @@ static ant_value_t timers_promises_resolve(ant_params_t) {
 }
 
 static ant_value_t timers_promises_on_abort(ant_params_t) {
-  ant_value_t state = timers_promises_get_state(js, call_func);
+  ant_value_t state = js_get_slot(call_func, SLOT_DATA);
   ant_value_t signal = 0;
   ant_value_t handle = 0;
   ant_value_t is_immediate = 0;
@@ -747,7 +734,7 @@ static void timers_interval_finish_parked(ant_t *js, ant_value_t state) {
 }
 
 static ant_value_t timers_interval_tick(ant_params_t) {
-  ant_value_t state = timers_promises_get_state(js, call_func);
+  ant_value_t state = js_get_slot(call_func, SLOT_DATA);
   if (!is_object_type(state) || js_truthy(js, js_get(js, state, "finished"))) return Ant_Value_Undefined;
 
   ant_value_t parked = timers_interval_shift_parked(js, state);
@@ -759,7 +746,7 @@ static ant_value_t timers_interval_tick(ant_params_t) {
 }
 
 static ant_value_t timers_interval_on_abort(ant_params_t) {
-  ant_value_t state = timers_promises_get_state(js, call_func);
+  ant_value_t state = js_get_slot(call_func, SLOT_DATA);
   if (!is_object_type(state) || js_truthy(js, js_get(js, state, "finished"))) return Ant_Value_Undefined;
 
   ant_value_t reason = abort_signal_make_error(js, js_get(js, state, "signal"));
@@ -808,7 +795,7 @@ static ant_value_t timers_interval_start(ant_t *js, ant_value_t state) {
 }
 
 static ant_value_t timers_interval_next(ant_params_t) {
-  ant_value_t state = timers_promises_get_state(js, call_func);
+  ant_value_t state = js_get_slot(call_func, SLOT_DATA);
   ant_value_t promise = js_mkpromise(js);
   if (!is_object_type(state)) return promise;
 
@@ -857,14 +844,14 @@ static ant_value_t timers_interval_finish(ant_t *js, ant_value_t state) {
 
 static ant_value_t timers_interval_return(ant_params_t) {
   ant_value_t promise = js_mkpromise(js);
-  timers_interval_finish(js, timers_promises_get_state(js, call_func));
+  timers_interval_finish(js, js_get_slot(call_func, SLOT_DATA));
   js_resolve_promise(js, promise, Ant_Iterator_CreateResult(js, nargs > 0 ? args[0] : Ant_Value_Undefined, true));
   return promise;
 }
 
 static ant_value_t timers_interval_throw(ant_params_t) {
   ant_value_t promise = js_mkpromise(js);
-  timers_interval_finish(js, timers_promises_get_state(js, call_func));
+  timers_interval_finish(js, js_get_slot(call_func, SLOT_DATA));
   js_reject_promise(js, promise, nargs > 0 ? args[0] : Ant_Value_Undefined);
   return promise;
 }

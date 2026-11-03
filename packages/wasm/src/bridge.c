@@ -10,7 +10,37 @@
 #include "internal.h"
 #include "wasm_embed.h"
 #include "wasm_abi.h"
+#include "modules/abort.h"
+#include "modules/atomics.h"
+#include "modules/blob.h"
+#include "modules/crypto.h"
+#include "modules/domexception.h"
+#include "modules/events.h"
+#include "modules/formdata.h"
+#include "modules/globals.h"
+#include "modules/headers.h"
+#include "modules/navigator.h"
+#include "modules/observable.h"
+#include "modules/performance.h"
+#include "modules/request.h"
+#include "modules/response.h"
+#include "modules/structured-clone.h"
+#include "modules/url.h"
+#include "streams/codec.h"
+#include "streams/compression.h"
+#include "streams/queuing.h"
+#include "streams/readable.h"
+#include "streams/transform.h"
+#include "streams/writable.h"
 #include "modules/bigint.h"
+#include "modules/buffer.h"
+#include "modules/date.h"
+#include "modules/intl.h"
+#include "modules/io.h"
+#include "modules/reflect.h"
+#include "modules/temporal.h"
+#include "modules/textcodec.h"
+#include "modules/uri.h"
 #include "modules/collections.h"
 #include "modules/generator.h"
 #include "modules/json.h"
@@ -685,15 +715,47 @@ ant_wasm_runtime_t *ant_wasm_create(void) {
   ant_microtasks_discard(js);
   ant_runtime_init(js, 0, NULL, NULL);
   init_symbol_module(js);
+  js_init_function_has_instance(js);
   init_intrinsic_symbols(js);
   js_set_sym(js, js->Ant, js->sym.toStringTag_sym, Ant_String_FromLiteral(js, "Ant"));
   init_iterator_module(js);
   init_generator_module(js);
+  init_domexception_module(js);
+  init_globals_module(js);
+  init_intl_module(js);
+  init_buffer_module(js);
+  init_structured_clone_module(js);
+  init_headers_module(js);
+  init_blob_module(js);
+  init_formdata_module(js);
   init_math_module(js);
   init_bigint_module(js);
+  init_date_module(js);
+  init_temporal_module(js);
   init_regex_module(js);
   init_collections_module(js);
+  init_queuing_strategies_module(js);
+  init_readable_stream_module(js);
+  init_writable_stream_module(js);
+  init_transform_stream_module(js);
+  init_codec_stream_module(js);
+  init_compression_stream_module(js);
+  init_atomics_module(js);
+  init_crypto_module(js);
+  init_request_module(js);
+  init_response_module(js);
+  init_console_module(js);
   init_json_module(js);
+  init_events_module(js);
+  init_abort_module(js);
+  init_performance_module(js);
+  init_uri_module(js);
+  init_url_module(js);
+  init_reflect_module(js);
+  init_textcodec_module(js);
+  init_navigator_module(js);
+  init_observable_module(js);
+  js_set(js, js_glob(js), "queueMicrotask", Ant_Function_CreateWithArity(js_queue_microtask, 1));
   return runtime;
 }
 

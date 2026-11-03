@@ -28,7 +28,7 @@
 /packages/sandbox/.cache
 /packages/installer/dist
 
-/src/strip/target
+/src/rust/target
 /javascript-zoo
 /game-of-life
 /anteater.sh

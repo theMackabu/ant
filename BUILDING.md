@@ -15,7 +15,7 @@ If you can reproduce a test failure, search for it in the <br>
   - [Official binary platforms and toolchains](#official-binary-platforms-and-toolchains)
 - [Building Ant on supported platforms](#building-ant-on-supported-platforms)
   - [Prerequisites](#prerequisites)
-  - [Temporal toolchain](#temporal-toolchain)
+  - [Rust toolchain](#rust-toolchain)
   - [Unix and macOS](#unix-and-macos)
     - [Unix prerequisites](#unix-prerequisites)
     - [macOS prerequisites](#macos-prerequisites)
@@ -113,14 +113,17 @@ and are fetched automatically:
 - yyjson 0.12.0
 - zlib-ng 2.3.3
 
-### Temporal toolchain
+### Rust toolchain
 
-Temporal support is enabled by default, but Rust is not a local build
-prerequisite. On the first Temporal build, `meson/temporal.py` installs the
-pinned `nightly-2026-08-12` toolchain and its `rust-src` component into
-`.cache/temporal-rust/`, then builds the locked `temporal_capi` 0.2.6 and
-`temporal_rs` 0.2.6 dependency graph. The cache is outside the Meson build
-directory, so it survives a clean build-directory setup.
+Ant's Rust dependencies build into one static library, `src/rust` (crate
+`ant-rust`), so they share a single size-optimized standard library. It carries
+the Temporal API (`temporal_capi` 0.2.6 and `temporal_rs` 0.2.6) and the legacy
+`TextDecoder` encodings (`encoding_c` and `encoding_rs`). Both are enabled by
+default, but Rust is not a local build prerequisite. On the first build,
+`meson/rust.py` installs the pinned `nightly-2026-08-12` toolchain and its
+`rust-src` component into `.cache/rust/`, then builds the locked dependency
+graph. The cache is outside the Meson build directory, so it survives a clean
+build-directory setup.
 
 The Rust static library is built with a size-optimized standard library. Unix
 builds read the host IANA time-zone database through the filesystem provider;
@@ -131,18 +134,19 @@ The Rust bootstrap and compilation target follow the configured C compiler's
 ABI. Alpine builds use the matching musl toolchain, and MSYS2/MinGW builds use
 the Windows GNU toolchain. CI preserves the ABI-specific Rustup, Cargo, and
 build caches between runs; local builds reuse the same data from
-`.cache/temporal-rust/`.
+`.cache/rust/`.
 
 The first build therefore needs network access to download the pinned
-toolchain and Cargo dependencies. To build without Temporal or the Rust
-bootstrap, configure Meson with:
+toolchain and Cargo dependencies. Without `encoding_rs`, `TextDecoder` supports
+UTF-8, UTF-16, windows-1252, and ISO-8859-2 only. To build without Rust at all,
+configure Meson with:
 
 ```bash
-meson setup build -Dtemporal=disabled
+meson setup build -Dtemporal=disabled -Dencoding_rs=disabled
 ```
 
 Nix builds provide the same pinned toolchain and Cargo dependency set as
-fixed Nix inputs. They invoke the Temporal build in offline mode, so the Ant
+fixed Nix inputs. They invoke the Rust build in offline mode, so the Ant
 derivation does not need network access. After changing vendor wraps or patches,
 stage new files with `git add` and run `./packages/nix/update-vendor-hashes.js`
 

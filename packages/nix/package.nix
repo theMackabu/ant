@@ -56,12 +56,12 @@ let
 
   antVersion = import ./version.nix { inherit lib gitRev; };
   antVendor = callPackage ./vendor.nix {};
-  cargoRoot = "src/temporal";
-  temporalCargoDeps = rustPlatform.fetchCargoVendor {
+  cargoRoot = "src/rust";
+  rustCargoDeps = rustPlatform.fetchCargoVendor {
     src = ../..;
     inherit cargoRoot;
-    name = "ant-temporal-cargo-deps";
-    hash = "sha256-7Ny7Y3VdOB5GFS2SoUUhqIzTJsVRdjsPTon9ndKm5RA=";
+    name = "ant-rust-cargo-deps";
+    hash = "sha256-XBQHBJ9yHRAkyfuY08TpBp0ymyZdgCvma7PlxEyGBgE=";
   };
   rustStdCargoDeps = rustPlatform.fetchCargoVendor {
     src = rustToolchain;
@@ -69,11 +69,11 @@ let
     name = "ant-rust-std-cargo-deps";
     hash = "sha256-kUUC6D6xrFap7+gn+lq1i3lBawfzbnUmDfB5QIvLnYA=";
   };
-  temporalBuildCargoDeps = runCommand "ant-temporal-build-cargo-deps" {} ''
+  rustBuildCargoDeps = runCommand "ant-rust-build-cargo-deps" {} ''
     mkdir -p "$out"
     cp -R ${rustStdCargoDeps}/. "$out/"
     chmod -R u+w "$out"
-    cp -R ${temporalCargoDeps}/. "$out/"
+    cp -R ${rustCargoDeps}/. "$out/"
   '';
 
   mesonNativeFile = writeText "ant-meson-native.ini" ''
@@ -130,7 +130,7 @@ antStdenv.mkDerivation (finalAttrs: {
     llvmPackages_21.llvm
   ];
 
-  cargoDeps = temporalBuildCargoDeps;
+  cargoDeps = rustBuildCargoDeps;
 
   inherit cargoRoot;
 
@@ -152,7 +152,7 @@ antStdenv.mkDerivation (finalAttrs: {
   ] ++ pgoFlags;
 
   env = {
-    ANT_TEMPORAL_CARGO = lib.getExe' rustToolchain "cargo";
+    ANT_RUST_CARGO = lib.getExe' rustToolchain "cargo";
     RUSTC = lib.getExe' rustToolchain "rustc";
     "CARGO_TARGET_${cargoEnvTarget}_LINKER" = "${antStdenv.cc}/bin/clang";
     "CC_${cargoEnvTarget}" = "${antStdenv.cc}/bin/clang";
