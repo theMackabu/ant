@@ -374,7 +374,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
   bool opt_only = 
     !eligible && opt_tier_enabled() && 
     !c->func->is_generator && !c->func->is_tla && 
-    c->func->code_len <= SV_JIT_MAX_CODE_BYTES;
+    c->func->code_len <= SV_OPT_MAX_CODE_BYTES;
   
   if (!eligible && !opt_only) {
     c->func->jit_compile_failed = true;

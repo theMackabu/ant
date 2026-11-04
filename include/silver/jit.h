@@ -4,12 +4,17 @@
 #include "silver/engine.h"
 
 static constexpr int SV_JIT_MAX_CODE_BYTES = 64 * 1024;
+static constexpr int SV_OPT_MAX_CODE_BYTES = 512 * 1024;
+
 static constexpr uint32_t SV_JIT_OSR_THRESHOLD = 500;
 static constexpr uint32_t SV_JIT_OSR_THRESHOLD_SCALE_BYTES = 512;
+
 static constexpr int32_t JIT_GFP_MAX_CODE_LEN = 512;
 static constexpr int32_t JIT_NEW_DIRECT_MAX_CODE_LEN = 1024;
+
 static constexpr uint8_t JIT_POLY_RECOMPILES = 2;
 static constexpr uint16_t JIT_POLY_RECOMPILE_SLOW_HITS = 256;
+
 static constexpr int64_t SV_JIT_RESUME_STALE = (int64_t)1 << 32;
 static constexpr int64_t SV_JIT_RESUME_AWAIT = (int64_t)1 << 33;
 static constexpr int64_t SV_JIT_RESUME_DIRECT = (int64_t)1 << 34;

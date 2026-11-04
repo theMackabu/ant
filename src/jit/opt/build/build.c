@@ -3109,6 +3109,7 @@ static ir_binary_op_t opt_binary_of(sv_op_t op) {
 }
 
 static constexpr uint32_t OPT_MAX_CALL_ARGS = SV_JIT_ARGS_BUF_CAP;
+static constexpr uint32_t OPT_MAX_GRAPH_NODES = 16384;
 static constexpr uint32_t OPT_INLINE_MAX_DEPTH = SV_JIT_INLINE_FRAMES_MAX;
 static constexpr uint32_t OPT_INLINE_MAX_RECURSION = 2;
 static constexpr uint32_t OPT_INLINE_MAX_INSTRUCTIONS = 50;
@@ -5789,6 +5790,7 @@ static bool opt_build_bytecode_block(opt_builder_t *b, uint32_t bi) {
     opt_flow_t flow = opt_build_instruction(b);
     if (flow == OPT_FLOW_GENERIC) flow = opt_build_generic(b);
     if (flow == OPT_FLOW_FAILED) return false;
+    if (ir_node_count(b->graph) > OPT_MAX_GRAPH_NODES) return opt_fail(b, "graph-budget");
     if (flow == OPT_FLOW_ENDED) return true;
   }
   return opt_end_with_jump(b, bblock->succ[bblock->succ_count - 1]);
