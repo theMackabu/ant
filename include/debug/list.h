@@ -1,6 +1,7 @@
 #ifdef SV_DEBUG
 SV_DEBUG(GC_DISABLE,              "gc",            "disable",         false)
 SV_DEBUG(GC_TRACE,                "gc",            "trace",           false)
+SV_DEBUG(GC_SLOW_HELPERS,         "gc",            "slow-helpers",    false)
 SV_DEBUG(PARSE,                   "dump/parse",    "trace",           false)
 SV_DEBUG(COMPILE,                 "dump/compile",  "trace",           false)
 SV_DEBUG(DUMP_SHELL,              "dump/compile",  "shell",           false)

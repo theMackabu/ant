@@ -1,13 +1,15 @@
-#include "internal.h"
+#include <stdlib.h>
+#include <string.h>
+
 #include "shapes.h"
+#include "debug.h"
+#include "internal.h"
+
 #include "gc.h"
 #include "gc/objects.h"
 #include "gc/object_arenas.h"
 #include "gc/parallel.h"
 #include "gc/strings.h"
-
-#include <stdlib.h>
-#include <string.h>
 
 #if defined(ANT_WASM_EMBED)
 void gc_parallel_set_helpers(int) {}
@@ -16,6 +18,9 @@ bool gc_parallel_drain(ant_t *, uint32_t, gc_parallel_scan_fn) { return false; }
 
 #else
 #include <uv.h>
+#if defined(__APPLE__)
+#include <pthread.h>
+#endif
 
 static constexpr uint32_t GC_PAR_MAX_HELPERS = 15;
 static constexpr uint32_t GC_PAR_DEFAULT_HELPERS = 3;
@@ -42,25 +47,29 @@ typedef struct {
 } gc_par_worker_t;
 
 typedef struct {
-  uv_once_t once;
+  ant_t *js;
+  uint32_t other_refs;
+  uint8_t epoch;
+
+  uint32_t idle_hint;
   uv_mutex_t lock;
+  gc_par_chunk_t *queue;
+  
+  uint64_t job;
+  uint32_t active;
+  uint32_t idle;
+  uint32_t joined;
+  uint32_t exited;
+  bool finished;
+
   uv_mutex_t busy;
   uv_cond_t wake;
   uv_cond_t more;
   uv_cond_t done;
+  uv_once_t once;
   uint32_t helpers;
-  gc_par_worker_t workers[GC_PAR_MAX_HELPERS + 1];
 
-  ant_t *js;
-  uint32_t other_refs;
-  uint8_t epoch;
-  uint64_t job;
-  uint32_t active;
-  uint32_t idle;
-  uint32_t exited;
-  bool finished;
-  gc_par_chunk_t *queue;
-  uint32_t idle_hint;
+  gc_par_worker_t workers[GC_PAR_MAX_HELPERS + 1];
 } gc_par_pool_t;
 
 static gc_par_pool_t gc_par = {.once = UV_ONCE_INIT};
@@ -207,14 +216,29 @@ static void gc_par_work(gc_par_worker_t *w) {
 static void gc_par_helper(void *arg) {
   gc_par_worker_t *w = arg;
   uint64_t seen = 0;
+#if defined(__APPLE__)
+  pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
+#endif
   uv_mutex_lock(&gc_par.lock);
   for (;;) {
     while (gc_par.job == seen) uv_cond_wait(&gc_par.wake, &gc_par.lock);
     seen = gc_par.job;
+    
+    if (sv_debug_unlikely(SV_DEBUG_GC_SLOW_HELPERS)) {
+      uv_mutex_unlock(&gc_par.lock);
+      uv_sleep(50);
+      uv_mutex_lock(&gc_par.lock);
+    }
+    
+    if (gc_par.finished || gc_par.job != seen) continue;
+    gc_par.active++;
+    gc_par.joined++;
+    
     uv_mutex_unlock(&gc_par.lock);
     gc_par_work(w);
     uv_mutex_lock(&gc_par.lock);
-    if (++gc_par.exited == gc_par.helpers) uv_cond_signal(&gc_par.done);
+    
+    if (++gc_par.exited == gc_par.joined) uv_cond_signal(&gc_par.done);
   }
 }
 
@@ -256,22 +280,28 @@ bool gc_parallel_drain(ant_t *js, uint32_t other_refs, gc_parallel_scan_fn scan)
   gc_par.js = js;
   gc_par.other_refs = other_refs;
   gc_par.epoch = js->gc.obj_epoch;
-  gc_par.active = gc_par.helpers + 1;
+  gc_par.active = 1;
   gc_par.idle = 0;
   gc_par.idle_hint = 0;
+  gc_par.joined = 0;
   gc_par.exited = 0;
+  
+  for (uint32_t i = 1; i <= gc_par.helpers; i++) gc_par.workers[i].busy_ns = 0;
   gc_par.finished = false;
   gc_par.job++;
+  
   uv_cond_broadcast(&gc_par.wake);
   uv_mutex_unlock(&gc_par.lock);
 
   gc_par_work(main);
-
   uv_mutex_lock(&gc_par.lock);
-  while (gc_par.exited < gc_par.helpers) uv_cond_wait(&gc_par.done, &gc_par.lock);
+  
+  while (gc_par.exited < gc_par.joined) uv_cond_wait(&gc_par.done, &gc_par.lock);
   uv_mutex_unlock(&gc_par.lock);
 
-  for (uint32_t i = 1; i <= gc_par.helpers; i++) js->gc.parallel_cpu_ns += gc_par.workers[i].busy_ns;
+  for (uint32_t i = 1; i <= gc_par.helpers; i++) 
+    js->gc.parallel_cpu_ns += gc_par.workers[i].busy_ns;
+  
   for (uint32_t i = 0; i <= gc_par.helpers; i++) {
     gc_par_worker_t *w = &gc_par.workers[i];
     for (size_t j = 0; j < w->objects_len; j++) scan(js, w->objects[j]);
