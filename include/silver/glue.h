@@ -27,6 +27,7 @@ ant_value_t jit_helper_sub(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r)
 ant_value_t jit_helper_mul(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_div(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_mod(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
+ant_value_t jit_helper_exp(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 
 ant_value_t jit_helper_import_default(ant_t *js, ant_value_t ns);
 ant_value_t jit_helper_get_length(ant_t *js, ant_value_t obj);
@@ -55,6 +56,7 @@ ant_value_t jit_helper_band(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r
 ant_value_t jit_helper_bor(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_bxor(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_bnot(sv_vm_t *vm, ant_t *js, ant_value_t v);
+ant_value_t jit_helper_uplus(sv_vm_t *vm, ant_t *js, ant_value_t v);
 ant_value_t jit_helper_shl(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_shr(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_ushr(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);

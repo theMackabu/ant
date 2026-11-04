@@ -257,7 +257,7 @@ ir_node_properties_t ir_op_properties(const ir_op_t *op) {
     case IR_OP_TAGGED_EQUALS:
     case IR_OP_CELL_ADDRESS: return IR_PURE;
     case IR_OP_CHECK_ELEMENTS: return ir_elements_is_typed(op->elements) ? IR_PURE : ir_reads(IR_LOC_ELEMENT_COUNTS);
-    case IR_OP_CHECK_TYPED_ARRAY: return IR_PURE;
+    case IR_OP_CHECK_TYPED_ARRAY: return ir_reads(IR_LOC_SHAPES | IR_LOC_ELEMENT_COUNTS);
     case IR_OP_LOAD_TYPED_ARRAY_LENGTH:
     case IR_OP_LOAD_TYPED_ARRAY_DATA_OFFSET: return ir_reads(IR_LOC_ELEMENT_COUNTS);
     case IR_OP_LOAD_ELEMENT_AT: return ir_reads(IR_LOC_ELEMENTS);

@@ -301,6 +301,7 @@ typedef struct {
       bool needs_frame;
       bool slow_path;
       bool builtin;
+      bool native_closure;
     } call;
     struct {
       sv_func_t *func;

@@ -707,6 +707,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_mul = MIR_new_import(c->ctx, "jit_helper_mul");
   c->imp_div = MIR_new_import(c->ctx, "jit_helper_div");
   c->imp_mod = MIR_new_import(c->ctx, "jit_helper_mod");
+  c->imp_exp = MIR_new_import(c->ctx, "jit_helper_exp");
   c->imp_fmod = MIR_new_import(c->ctx, "fmod");
   c->imp_str_read_value =
       MIR_new_import(c->ctx, "jit_helper_str_read_value");
@@ -830,6 +831,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_bor = MIR_new_import(c->ctx, "jit_helper_bor");
   c->imp_bxor = MIR_new_import(c->ctx, "jit_helper_bxor");
   c->imp_bnot = MIR_new_import(c->ctx, "jit_helper_bnot");
+  c->imp_uplus = MIR_new_import(c->ctx, "jit_helper_uplus");
   c->imp_shl = MIR_new_import(c->ctx, "jit_helper_shl");
   c->imp_shr = MIR_new_import(c->ctx, "jit_helper_shr");
   c->imp_ushr = MIR_new_import(c->ctx, "jit_helper_ushr");

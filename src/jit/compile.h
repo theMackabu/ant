@@ -124,6 +124,7 @@ typedef struct jit_compile {
   MIR_item_t imp_mul;
   MIR_item_t imp_div;
   MIR_item_t imp_mod;
+  MIR_item_t imp_exp;
   MIR_item_t fmod_proto, imp_fmod;
   MIR_item_t imp_str_read_value;
   MIR_item_t imp_str_append_local;
@@ -231,6 +232,7 @@ typedef struct jit_compile {
   MIR_item_t imp_bor;
   MIR_item_t imp_bxor;
   MIR_item_t imp_bnot;
+  MIR_item_t imp_uplus;
   MIR_item_t imp_shl;
   MIR_item_t imp_shr;
   MIR_item_t imp_ushr;

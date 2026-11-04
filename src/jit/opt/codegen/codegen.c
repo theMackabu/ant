@@ -918,6 +918,41 @@ static void opt_cg_landing_blocks(opt_cg_t *cg) {
 
 static void opt_cg_elements_kind(opt_cg_t *cg, ir_node_id_t node, ir_elements_kind_t kind, asm_label_t exit);
 
+static void opt_cg_typed_array_length_guard(opt_cg_t *cg, ir_node_id_t node, asm_label_t no) {
+  masm_t *m = &cg->masm;
+  asm_gpr_t value = opt_cg_input(cg, node, 0), scratch = cg->pinned.scratch;
+  asm_gpr_t ptr = opt_cg_temp(cg, node, 0), data = opt_cg_temp(cg, node, 1), js = opt_cg_temp(cg, node, 2);
+  asm_label_t proto_ok = masm_new_label(m);
+  masm_shr64_imm(m, scratch, value, NANBOX_TYPE_SHIFT);
+  masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)OPT_OBJECT_TAG, no);
+  masm_and64_imm(m, ptr, value, NANBOX_DATA_MASK);
+  opt_cg_add_cage(cg, ptr, ptr);
+  masm_load32(m, scratch, asm_addr(ptr, (int32_t)offsetof(ant_object_t, native_tag)));
+  masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, (int32_t)BUFFER_TYPEDARRAY_NATIVE_TAG, no);
+  masm_load64(m, js, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
+  masm_load32(m, scratch, asm_addr(js, (int32_t)offsetof(ant_t, protectors_invalid)));
+  masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, (int32_t)ANT_PROTECTOR_TYPED_ARRAY_LENGTH, no);
+  masm_load64(m, data, asm_addr(ptr, (int32_t)offsetof(ant_object_t, native_ptr)));
+  masm_load32(m, scratch, asm_addr(data, (int32_t)offsetof(TypedArrayData, type)));
+  masm_branch32_imm(m, ASM_COND_ABOVE_OR_EQUAL, scratch, (int32_t)TYPED_ARRAY_COUNT, no);
+  masm_load64(m, scratch, asm_addr_indexed(js, scratch, ASM_SCALE_8, (int32_t)offsetof(ant_t, builtins.typedarray_protos)));
+  masm_load64(m, ptr, asm_addr(ptr, (int32_t)offsetof(ant_object_t, shape)));
+  masm_load64(m, ptr, asm_addr(ptr, (int32_t)ANT_SHAPE_PROTO_OFFSET));
+  masm_branch64(m, ASM_COND_EQUAL, ptr, scratch, proto_ok);
+  masm_load64(m, scratch, asm_addr(js, (int32_t)offsetof(ant_t, builtins.buffer_proto)));
+  masm_branch64(m, ASM_COND_NOT_EQUAL, ptr, scratch, no);
+  masm_load32(m, scratch, asm_addr(data, (int32_t)offsetof(TypedArrayData, type)));
+  masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, (int32_t)TYPED_ARRAY_UINT8, no);
+  masm_bind(m, proto_ok);
+  masm_load64(m, scratch, asm_addr(data, (int32_t)offsetof(TypedArrayData, buffer)));
+  masm_branch64_imm(m, ASM_COND_EQUAL, scratch, 0, no);
+  masm_load8(m, scratch, asm_addr(scratch, (int32_t)offsetof(ArrayBufferData, views_slow)));
+  masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, 0, no);
+  masm_load64(m, scratch, asm_addr(data, (int32_t)offsetof(TypedArrayData, length)));
+  masm_move_imm64(m, data, (uint64_t)INT32_MAX);
+  masm_branch64(m, ASM_COND_ABOVE, scratch, data, no);
+}
+
 static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condition, ir_block_id_t if_true, ir_block_id_t if_false) {
   masm_t *m = &cg->masm;
   bool invert = opt_cg_next_block(cg) == cg->landing[if_true] && cg->landing[if_false] != cg->landing[if_true];
@@ -1010,41 +1045,10 @@ static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condit
       opt_cg_jump_to(cg, if_true);
       return;
     }
-    case IR_COND_TYPED_ARRAY_LENGTH: {
-      asm_gpr_t value = opt_cg_input(cg, node, 0), scratch = cg->pinned.scratch;
-      asm_gpr_t ptr = opt_cg_temp(cg, node, 0), data = opt_cg_temp(cg, node, 1), js = opt_cg_temp(cg, node, 2);
-      asm_label_t no = opt_cg_label(cg, if_false), proto_ok = masm_new_label(m);
-      masm_shr64_imm(m, scratch, value, NANBOX_TYPE_SHIFT);
-      masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)OPT_OBJECT_TAG, no);
-      masm_and64_imm(m, ptr, value, NANBOX_DATA_MASK);
-      opt_cg_add_cage(cg, ptr, ptr);
-      masm_load32(m, scratch, asm_addr(ptr, (int32_t)offsetof(ant_object_t, native_tag)));
-      masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, (int32_t)BUFFER_TYPEDARRAY_NATIVE_TAG, no);
-      masm_load64(m, js, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
-      masm_load32(m, scratch, asm_addr(js, (int32_t)offsetof(ant_t, protectors_invalid)));
-      masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, (int32_t)ANT_PROTECTOR_TYPED_ARRAY_LENGTH, no);
-      masm_load64(m, data, asm_addr(ptr, (int32_t)offsetof(ant_object_t, native_ptr)));
-      masm_load32(m, scratch, asm_addr(data, (int32_t)offsetof(TypedArrayData, type)));
-      masm_branch32_imm(m, ASM_COND_ABOVE_OR_EQUAL, scratch, (int32_t)TYPED_ARRAY_COUNT, no);
-      masm_load64(m, scratch, asm_addr_indexed(js, scratch, ASM_SCALE_8, (int32_t)offsetof(ant_t, builtins.typedarray_protos)));
-      masm_load64(m, ptr, asm_addr(ptr, (int32_t)offsetof(ant_object_t, shape)));
-      masm_load64(m, ptr, asm_addr(ptr, (int32_t)ANT_SHAPE_PROTO_OFFSET));
-      masm_branch64(m, ASM_COND_EQUAL, ptr, scratch, proto_ok);
-      masm_load64(m, scratch, asm_addr(js, (int32_t)offsetof(ant_t, builtins.buffer_proto)));
-      masm_branch64(m, ASM_COND_NOT_EQUAL, ptr, scratch, no);
-      masm_load32(m, scratch, asm_addr(data, (int32_t)offsetof(TypedArrayData, type)));
-      masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, (int32_t)TYPED_ARRAY_UINT8, no);
-      masm_bind(m, proto_ok);
-      masm_load64(m, scratch, asm_addr(data, (int32_t)offsetof(TypedArrayData, buffer)));
-      masm_branch64_imm(m, ASM_COND_EQUAL, scratch, 0, no);
-      masm_load8(m, scratch, asm_addr(scratch, (int32_t)offsetof(ArrayBufferData, views_slow)));
-      masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, 0, no);
-      masm_load64(m, scratch, asm_addr(data, (int32_t)offsetof(TypedArrayData, length)));
-      masm_move_imm64(m, data, (uint64_t)INT32_MAX);
-      masm_branch64(m, ASM_COND_ABOVE, scratch, data, no);
+    case IR_COND_TYPED_ARRAY_LENGTH:
+      opt_cg_typed_array_length_guard(cg, node, opt_cg_label(cg, if_false));
       opt_cg_jump_to(cg, if_true);
       return;
-    }
     case IR_COND_ITERATOR_RETURN_INTACT: {
       asm_gpr_t scratch = cg->pinned.scratch;
       masm_load64(m, scratch, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
@@ -1697,11 +1701,43 @@ static void opt_cg_check_global_lexicals(opt_cg_t *cg, ir_node_id_t node, uint32
   masm_branch32_memory_imm(m, ASM_COND_NOT_EQUAL, asm_addr(cg->pinned.scratch, (int32_t)offsetof(ant_t, global_lexical_count)), (int32_t)count, exit);
 }
 
+static TypedArrayType opt_cg_typed_array_type(ir_typed_array_element_t element) {
+  switch (element) {
+    case IR_TYPED_UINT8: return TYPED_ARRAY_UINT8;
+    case IR_TYPED_UINT8_CLAMPED: return TYPED_ARRAY_UINT8_CLAMPED;
+    case IR_TYPED_INT8: return TYPED_ARRAY_INT8;
+    case IR_TYPED_UINT16: return TYPED_ARRAY_UINT16;
+    case IR_TYPED_INT16: return TYPED_ARRAY_INT16;
+    case IR_TYPED_INT32: return TYPED_ARRAY_INT32;
+    case IR_TYPED_UINT32: return TYPED_ARRAY_UINT32;
+    case IR_TYPED_FLOAT32: return TYPED_ARRAY_FLOAT32;
+    case IR_TYPED_FLOAT64: return TYPED_ARRAY_FLOAT64;
+  }
+  return TYPED_ARRAY_COUNT;
+}
+
+static asm_scale_t opt_cg_typed_array_scale(ir_typed_array_element_t element) {
+  switch (element) {
+    case IR_TYPED_UINT16: case IR_TYPED_INT16: return ASM_SCALE_2;
+    case IR_TYPED_INT32: case IR_TYPED_UINT32: case IR_TYPED_FLOAT32: return ASM_SCALE_4;
+    case IR_TYPED_FLOAT64: return ASM_SCALE_8;
+    default: return ASM_SCALE_1;
+  }
+}
+
 static void opt_cg_elements_kind(opt_cg_t *cg, ir_node_id_t node, ir_elements_kind_t kind, asm_label_t exit) {
   masm_t *m = &cg->masm;
   asm_gpr_t value = opt_cg_input(cg, node, 0), address = opt_cg_temp(cg, node, 0), scratch = cg->pinned.scratch;
   if (ir_elements_is_typed(kind)) {
-    opt_cg_fail(cg, "typed-elements");
+    masm_shr64_imm(m, scratch, value, NANBOX_TYPE_SHIFT);
+    masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)OPT_OBJECT_TAG, exit);
+    masm_and64_imm(m, address, value, NANBOX_DATA_MASK);
+    opt_cg_add_cage(cg, address, address);
+    masm_load32(m, scratch, asm_addr(address, (int32_t)offsetof(ant_object_t, native_tag)));
+    masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, (int32_t)BUFFER_TYPEDARRAY_NATIVE_TAG, exit);
+    masm_load64(m, address, asm_addr(address, (int32_t)offsetof(ant_object_t, native_ptr)));
+    masm_load32(m, scratch, asm_addr(address, (int32_t)offsetof(TypedArrayData, type)));
+    masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, (int32_t)opt_cg_typed_array_type(ir_elements_element(kind)), exit);
     return;
   }
   uint32_t mask = ANT_OBJECT_FLAG_EXOTIC | ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS | ANT_OBJECT_FLAG_ARGUMENTS;
@@ -1734,8 +1770,71 @@ static asm_address_t opt_cg_element(const opt_cg_t *cg, ir_node_id_t node, asm_g
   return asm_addr_indexed(data, opt_cg_input(cg, node, 1), ASM_SCALE_8, 0);
 }
 
+static asm_address_t opt_cg_typed_element(opt_cg_t *cg, ir_node_id_t node, ir_typed_array_element_t element) {
+  asm_scale_t scale = opt_cg_typed_array_scale(element);
+  uint64_t bits;
+  if (!opt_cg_input_constant(cg, node, 1, &bits)) return asm_addr_indexed(opt_cg_input(cg, node, 0), opt_cg_input(cg, node, 1), scale, 0);
+  uint64_t offset = (uint64_t)(uint32_t)bits << scale;
+  if (offset <= INT32_MAX) return asm_addr(opt_cg_input(cg, node, 0), (int32_t)offset);
+  masm_move_imm64(&cg->masm, cg->pinned.scratch, (uint32_t)bits);
+  return asm_addr_indexed(opt_cg_input(cg, node, 0), cg->pinned.scratch, scale, 0);
+}
+
+static void opt_cg_load_typed_element(opt_cg_t *cg, ir_node_id_t node, ir_typed_array_element_t element) {
+  masm_t *m = &cg->masm;
+  asm_address_t at = opt_cg_typed_element(cg, node, element);
+  switch (element) {
+    case IR_TYPED_UINT8: case IR_TYPED_UINT8_CLAMPED: masm_load8(m, opt_cg_output(cg, node), at); break;
+    case IR_TYPED_INT8: masm_load8_sign_extend(m, opt_cg_output(cg, node), at); break;
+    case IR_TYPED_UINT16: masm_load16(m, opt_cg_output(cg, node), at); break;
+    case IR_TYPED_INT16: masm_load16_sign_extend(m, opt_cg_output(cg, node), at); break;
+    case IR_TYPED_INT32: masm_load32(m, opt_cg_output(cg, node), at); break;
+    case IR_TYPED_UINT32:
+      masm_load32(m, cg->pinned.scratch, at);
+      masm_convert_int64_to_double(m, opt_cg_float_output(cg, node), cg->pinned.scratch);
+      break;
+    case IR_TYPED_FLOAT32: masm_load_float_as_double(m, opt_cg_float_output(cg, node), at); break;
+    case IR_TYPED_FLOAT64: masm_load_double(m, opt_cg_float_output(cg, node), at); break;
+  }
+}
+
+static void opt_cg_store_typed_element(opt_cg_t *cg, ir_node_id_t node, ir_typed_array_element_t element) {
+  masm_t *m = &cg->masm;
+  asm_address_t at = opt_cg_typed_element(cg, node, element);
+  switch (element) {
+    case IR_TYPED_UINT8: case IR_TYPED_UINT8_CLAMPED: case IR_TYPED_INT8: masm_store8(m, at, opt_cg_input(cg, node, 2)); break;
+    case IR_TYPED_UINT16: case IR_TYPED_INT16: masm_store16(m, at, opt_cg_input(cg, node, 2)); break;
+    case IR_TYPED_INT32: case IR_TYPED_UINT32: masm_store32(m, at, opt_cg_input(cg, node, 2)); break;
+    case IR_TYPED_FLOAT32: masm_store_double_as_float(m, at, opt_cg_float_input(cg, node, 2)); break;
+    case IR_TYPED_FLOAT64: masm_store_double(m, at, opt_cg_float_input(cg, node, 2)); break;
+  }
+}
+
+static void opt_cg_load_typed_array_data(opt_cg_t *cg, ir_node_id_t node) {
+  masm_t *m = &cg->masm;
+  asm_gpr_t out = opt_cg_output(cg, node), buffer = opt_cg_temp(cg, node, 0), scratch = cg->pinned.scratch;
+  asm_label_t dead = masm_new_label(m), done = masm_new_label(m);
+  masm_load64(m, out, asm_addr(opt_cg_input(cg, node, 0), (int32_t)offsetof(ant_object_t, native_ptr)));
+  masm_load64(m, buffer, asm_addr(out, (int32_t)offsetof(TypedArrayData, buffer)));
+  masm_branch64_imm(m, ASM_COND_EQUAL, buffer, 0, dead);
+  masm_load8(m, scratch, asm_addr(buffer, (int32_t)offsetof(ArrayBufferData, views_slow)));
+  masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, 0, dead);
+  masm_load64(m, scratch, asm_addr(out, (int32_t)offsetof(TypedArrayData, byte_offset)));
+  masm_load64(m, out, asm_addr(buffer, (int32_t)offsetof(ArrayBufferData, data)));
+  masm_add64(m, out, out, scratch);
+  masm_jump(m, done);
+  masm_bind(m, dead);
+  masm_move_imm64(m, out, 0);
+  masm_bind(m, done);
+}
+
 static void opt_cg_load_element(opt_cg_t *cg, ir_node_id_t node) {
   masm_t *m = &cg->masm;
+  ir_elements_kind_t kind = ir_node(cg->graph, node)->op.elements;
+  if (ir_elements_is_typed(kind)) {
+    opt_cg_load_typed_element(cg, node, ir_elements_element(kind));
+    return;
+  }
   asm_gpr_t data = opt_cg_temp(cg, node, 0);
   masm_load64(m, data, asm_addr(opt_cg_input(cg, node, 0), (int32_t)offsetof(ant_object_t, u.array.data)));
   masm_load64(m, opt_cg_output(cg, node), opt_cg_element(cg, node, data));
@@ -1743,6 +1842,11 @@ static void opt_cg_load_element(opt_cg_t *cg, ir_node_id_t node) {
 
 static void opt_cg_store_element(opt_cg_t *cg, ir_node_id_t node) {
   masm_t *m = &cg->masm;
+  ir_elements_kind_t kind = ir_node(cg->graph, node)->op.elements;
+  if (ir_elements_is_typed(kind)) {
+    opt_cg_store_typed_element(cg, node, ir_elements_element(kind));
+    return;
+  }
   asm_gpr_t object = opt_cg_input(cg, node, 0), value = opt_cg_input(cg, node, 2), data = opt_cg_temp(cg, node, 0);
   masm_load64(m, data, asm_addr(object, (int32_t)offsetof(ant_object_t, u.array.data)));
   masm_store64(m, opt_cg_element(cg, node, data), value);
@@ -2860,6 +2964,47 @@ static void opt_cg_call_builtin(opt_cg_t *cg, ir_node_id_t node_id) {
   opt_cg_branch_error(cg, node_id);
 }
 
+static void opt_cg_call_native_closure(opt_cg_t *cg, ir_node_id_t node_id, asm_label_t native, asm_label_t slow, asm_label_t done) {
+  masm_t *m = &cg->masm;
+  const ir_node_t *node = ir_node(cg->graph, node_id);
+  const asm_gpr_t *a = MASM_ARGUMENT_GPRS;
+  asm_gpr_t scratch = cg->pinned.scratch, result = MASM_RETURN_GPRS[0];
+  asm_label_t single = masm_new_label(m), finish = masm_new_label(m);
+  masm_bind(m, native);
+  masm_branch32_imm(m, ASM_COND_NOT_EQUAL, a[1], 0, slow);
+  masm_load64(m, a[2], asm_addr(a[0], (int32_t)offsetof(sv_closure_t, native.fn)));
+  masm_branch64_imm(m, ASM_COND_EQUAL, a[2], 0, slow);
+  masm_load64(m, a[0], asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
+  masm_load64(m, scratch, asm_addr(a[0], (int32_t)offsetof(ant_t, realms)));
+  masm_branch64_imm(m, ASM_COND_EQUAL, scratch, 0, single);
+  masm_load64(m, scratch, asm_addr(scratch, (int32_t)offsetof(ant_realm_t, next)));
+  masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, 0, slow);
+  masm_bind(m, single);
+  masm_load64(m, scratch, asm_addr(a[0], (int32_t)offsetof(ant_t, exception)));
+  masm_sar64_imm(m, scratch, scratch, NANBOX_TYPE_SHIFT);
+  masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, OPT_UNDEFINED_TAG_SIGNED, slow);
+  masm_move64(m, scratch, a[2]);
+  masm_load64(m, a[5], opt_cg_call_slot(cg, 0));
+  masm_load64(m, a[4], opt_cg_call_slot(cg, 1));
+  masm_load_effective_address(m, a[1], opt_cg_call_slot(cg, 2));
+  masm_move_imm32(m, a[2], node->op.call.argc);
+  masm_move_imm64(m, a[3], IR_VALUE_UNDEFINED);
+  masm_call_register(m, scratch);
+  opt_cg_record_call(cg, node->frame_state, -1);
+  masm_load64(m, scratch, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
+  masm_sar64_imm(m, a[1], result, NANBOX_TYPE_SHIFT);
+  masm_branch64_imm(m, ASM_COND_EQUAL, a[1], OPT_ERROR_TAG_SIGNED, finish);
+  masm_load64(m, a[1], asm_addr(scratch, (int32_t)offsetof(ant_t, exception)));
+  masm_sar64_imm(m, a[1], a[1], NANBOX_TYPE_SHIFT);
+  masm_branch64_imm(m, ASM_COND_EQUAL, a[1], OPT_UNDEFINED_TAG_SIGNED, done);
+  masm_bind(m, finish);
+  masm_move64(m, a[1], result);
+  masm_move64(m, a[0], scratch);
+  masm_call_absolute(m, (uint64_t)(uintptr_t)jit_helper_native_finish);
+  opt_cg_record_call(cg, node->frame_state, -1);
+  masm_jump(m, done);
+}
+
 static void opt_cg_call(opt_cg_t *cg, ir_node_id_t node_id) {
   masm_t *m = &cg->masm;
   const ir_node_t *node = ir_node(cg->graph, node_id);
@@ -2879,7 +3024,7 @@ static void opt_cg_call(opt_cg_t *cg, ir_node_id_t node_id) {
   if (op->code == IR_OP_CALL_CONSTRUCT) opt_cg_call_runtime(cg, node_id, (uint64_t)(uintptr_t)opt_rt_construct);
   else if (op->code == IR_OP_CALL_NATIVE) opt_cg_call_runtime(cg, node_id, op->call.helper);
   else {
-    asm_label_t slow = masm_new_label(m), done = masm_new_label(m);
+    asm_label_t slow = masm_new_label(m), done = masm_new_label(m), native = masm_new_label(m);
     masm_load64(m, a[0], opt_cg_call_slot(cg, 0));
     masm_sar64_imm(m, scratch, a[0], NANBOX_TYPE_SHIFT);
     masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, OPT_FUNCTION_TAG_SIGNED, slow);
@@ -2888,7 +3033,7 @@ static void opt_cg_call(opt_cg_t *cg, ir_node_id_t node_id) {
     masm_load32(m, a[1], asm_addr(a[0], (int32_t)offsetof(sv_closure_t, call_flags)));
     masm_branch_test32(m, ASM_COND_NON_ZERO, a[1], SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_BOUND_THIS, slow);
     masm_load64(m, a[2], asm_addr(a[0], (int32_t)offsetof(sv_closure_t, func)));
-    masm_branch64_imm(m, ASM_COND_EQUAL, a[2], 0, slow);
+    masm_branch64_imm(m, ASM_COND_EQUAL, a[2], 0, op->call.native_closure ? native : slow);
     masm_load64(m, scratch, asm_addr(a[2], (int32_t)offsetof(sv_func_t, jit_code)));
     masm_branch64_imm(m, ASM_COND_EQUAL, scratch, 0, slow);
     asm_label_t lexical = masm_new_label(m), bound = masm_new_label(m);
@@ -2911,6 +3056,7 @@ static void opt_cg_call(opt_cg_t *cg, ir_node_id_t node_id) {
     masm_call_register(m, scratch);
     opt_cg_record_call(cg, node->frame_state, -1);
     masm_jump(m, done);
+    if (op->call.native_closure) opt_cg_call_native_closure(cg, node_id, native, slow, done);
     masm_bind(m, slow);
     opt_cg_call_runtime(cg, node_id, (uint64_t)(uintptr_t)opt_rt_call);
     masm_bind(m, done);
@@ -3352,11 +3498,21 @@ static bool opt_cg_element_code(opt_cg_t *cg, ir_node_id_t node_id, const ir_nod
       masm_load32(m, opt_cg_output(cg, node_id), asm_addr(opt_cg_input(cg, node_id, 0), (int32_t)offsetof(ant_object_t, u.array.cap)));
       break;
     case IR_OP_LOAD_TYPED_ARRAY_LENGTH: {
-      asm_gpr_t out = opt_cg_output(cg, node_id);
+      asm_gpr_t out = opt_cg_output(cg, node_id), scratch = cg->pinned.scratch;
+      asm_label_t fits = masm_new_label(m);
       masm_load64(m, out, asm_addr(opt_cg_input(cg, node_id, 0), (int32_t)offsetof(ant_object_t, native_ptr)));
-      masm_load32(m, out, asm_addr(out, (int32_t)offsetof(TypedArrayData, length)));
+      masm_load64(m, out, asm_addr(out, (int32_t)offsetof(TypedArrayData, length)));
+      masm_move_imm64(m, scratch, (uint64_t)INT32_MAX);
+      masm_branch64(m, ASM_COND_BELOW_OR_EQUAL, out, scratch, fits);
+      masm_move64(m, out, scratch);
+      masm_bind(m, fits);
       break;
     }
+    case IR_OP_CHECK_TYPED_ARRAY: opt_cg_typed_array_length_guard(cg, node_id, opt_cg_exit_site(cg, node_id)); break;
+    case IR_OP_LOAD_TYPED_ARRAY_DATA_OFFSET: opt_cg_load_typed_array_data(cg, node_id); break;
+    case IR_OP_CHECK_TYPED_ARRAY_STORAGE:
+      masm_branch64_imm(m, ASM_COND_EQUAL, opt_cg_input(cg, node_id, 0), 0, opt_cg_exit_site(cg, node_id));
+      break;
     case IR_OP_CHECK_BOUNDS: opt_cg_check_bounds(cg, node_id); break;
     case IR_OP_LOAD_ELEMENT_AT: opt_cg_load_element(cg, node_id); break;
     case IR_OP_STORE_ELEMENT_AT: opt_cg_store_element(cg, node_id); break;

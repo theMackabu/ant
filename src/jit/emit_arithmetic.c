@@ -566,6 +566,39 @@ void jit_emit_arithmetic(jit_compile_t *c) {
       break;
     }
 
+    case OP_UPLUS: {
+      int top_idx = c->vs.sp - 1;
+      uint8_t input_type = c->vs.slot_type ? c->vs.slot_type[top_idx] : SLOT_BOXED;
+      if (input_type == SLOT_NUM || input_type == SLOT_I32) break;
+
+      vstack_ensure_boxed(&c->vs, top_idx, c->ctx, c->jit_func, c->r_d_slot);
+      vstack_clear_value_info(&c->vs, top_idx);
+      MIR_reg_t rs = vstack_top(&c->vs);
+      sv_asm_label_t slow = sv_asm_new_label(a);
+      sv_asm_label_t done = sv_asm_new_label(a);
+      mir_emit_is_num_guard(c->ctx, c->jit_func, c->r_bool, rs, slow);
+      sv_asm_jump(a, done);
+      sv_asm_bind(a, slow);
+      sv_asm_mov(a, c->r_bailout_val, rs);
+      sv_asm_append(a, MIR_new_call_insn(c->ctx, 6, MIR_new_ref_op(c->ctx, c->helper1_proto), MIR_new_ref_op(c->ctx, c->imp_uplus), MIR_new_reg_op(c->ctx, rs), MIR_new_reg_op(c->ctx, c->r_vm), MIR_new_reg_op(c->ctx, c->r_js), MIR_new_reg_op(c->ctx, rs)));
+      mir_emit_bailout_check(c->ctx, c->jit_func, rs, c->r_bailout_val, c->bc_off, c->vs.sp, &c->bailout_ctx);
+      sv_asm_bind(a, done);
+      break;
+    }
+
+    case OP_EXP: {
+      vstack_ensure_boxed(&c->vs, c->vs.sp - 2, c->ctx, c->jit_func, c->r_d_slot);
+      vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
+      MIR_reg_t rr = vstack_pop(&c->vs);
+      MIR_reg_t rl = vstack_pop(&c->vs);
+      MIR_reg_t rd = vstack_push(&c->vs);
+      sv_asm_mov(a, c->r_bailout_val, rl);
+      mir_call_helper2(c->ctx, c->jit_func, rd, c->helper2_proto, c->imp_exp, c->r_vm, c->r_js, rl, rr);
+      mir_emit_bailout_check(c->ctx, c->jit_func, rd, c->r_bailout_val, c->bc_off, c->vs.sp + 1, &c->bailout_ctx);
+      jit_emit_throw_if_error(c, rd);
+      break;
+    }
+
     case OP_INC:
     case OP_DEC: {
       int top_idx = c->vs.sp - 1;

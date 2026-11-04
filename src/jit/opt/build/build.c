@@ -2261,9 +2261,19 @@ static opt_flow_t opt_build_string_length(opt_builder_t *b, ir_node_id_t value) 
   return OPT_FLOW_CONTINUE;
 }
 
+static opt_flow_t opt_build_typed_array_length(opt_builder_t *b, ir_node_id_t value) {
+  ir_node_id_t typed = opt_emit_checked(b, ir_op(IR_OP_CHECK_TYPED_ARRAY), &value, 1, OPT_REPR_NONE);
+  ir_node_id_t address = opt_emit1(b, IR_OP_CELL_ADDRESS, typed, OPT_REPR_POINTER);
+  ir_node_id_t length = opt_emit1(b, IR_OP_LOAD_TYPED_ARRAY_LENGTH, address, OPT_REPR_INT32);
+  opt_drop(b, 1);
+  opt_push(b, opt_tagged(b, length));
+  return OPT_FLOW_CONTINUE;
+}
+
 static opt_flow_t opt_build_length(opt_builder_t *b) {
   ir_node_id_t value = opt_tagged(b, opt_peek(b, 0));
   uint8_t seen = opt_length_feedback(b);
+  if (seen == SV_TFB_LENGTH_TYPED && opt_may_speculate(b, OPT_EXIT_BAD_ELEMENTS)) return opt_build_typed_array_length(b, value);
   if (seen == SV_TFB_LENGTH_ARRAY && opt_may_speculate(b, OPT_EXIT_BAD_ELEMENTS)) return opt_build_array_length(b, value);
   if (seen == SV_TFB_LENGTH_STRING && opt_may_speculate(b, OPT_EXIT_BAD_TYPE)) return opt_build_string_length(b, value);
   opt_frame_t before = opt_frame_clone(b, &b->frame);
@@ -2880,6 +2890,115 @@ static void opt_build_speculated_element(opt_builder_t *b, sv_op_t op, ir_node_i
   opt_emit(b, store, (ir_node_id_t[]){address, index, value}, 3, OPT_REPR_NONE);
 }
 
+static constexpr uint32_t OPT_MAX_TYPED_KINDS = 4;
+
+static bool opt_typed_element_of(int type, ir_typed_array_element_t *out) {
+  switch (type) {
+    case TYPED_ARRAY_INT8: *out = IR_TYPED_INT8; return true;
+    case TYPED_ARRAY_UINT8: *out = IR_TYPED_UINT8; return true;
+    case TYPED_ARRAY_UINT8_CLAMPED: *out = IR_TYPED_UINT8_CLAMPED; return true;
+    case TYPED_ARRAY_INT16: *out = IR_TYPED_INT16; return true;
+    case TYPED_ARRAY_UINT16: *out = IR_TYPED_UINT16; return true;
+    case TYPED_ARRAY_INT32: *out = IR_TYPED_INT32; return true;
+    case TYPED_ARRAY_UINT32: *out = IR_TYPED_UINT32; return true;
+    case TYPED_ARRAY_FLOAT32: *out = IR_TYPED_FLOAT32; return true;
+    case TYPED_ARRAY_FLOAT64: *out = IR_TYPED_FLOAT64; return true;
+    default: return false;
+  }
+}
+
+static uint32_t opt_typed_elements_kinds(opt_builder_t *b, sv_op_t op, uint8_t feedback, ir_elements_kind_t *kinds) {
+  if (!sv_tfb_elem_saw_typed_array(feedback) || (feedback & SV_TFB_ELEM_DENSE)) return 0;
+  if (op == OP_GET_ELEM && (feedback & SV_TFB_ELEM_OTHER)) return 0;
+  uint16_t mask = sv_tfb_elem_type_mask(b->func, (int)b->pc);
+  uint32_t count = 0;
+  for (int type = 0; type < TYPED_ARRAY_COUNT; type++) {
+    if (!(mask & 1u << type)) continue;
+    ir_typed_array_element_t element;
+    if (!opt_typed_element_of(type, &element) || count == OPT_MAX_TYPED_KINDS) return 0;
+    kinds[count++] = ir_elements_typed(element);
+  }
+  if (!count || (op == OP_PUT_ELEM && count != 1)) return 0;
+  if (!opt_may_speculate(b, OPT_EXIT_BAD_ELEMENTS) || !opt_may_speculate(b, OPT_EXIT_OUT_OF_BOUNDS)) return 0;
+  return count;
+}
+
+static ir_node_id_t opt_typed_store_value(opt_builder_t *b, ir_elements_kind_t kind, ir_node_id_t value) {
+  const ir_node_t *node = ir_node(b->graph, value);
+  bool int32 = node->repr == OPT_REPR_INT32 || node->op.code == IR_OP_BOX_INT32;
+  bool number = int32 || node->repr == OPT_REPR_FLOAT64 || node->op.code == IR_OP_BOX_FLOAT64;
+  if (!number && (!opt_may_be_number(b, value) || !opt_may_speculate(b, OPT_EXIT_BAD_TYPE))) return IR_NONE;
+  if (ir_elements_stored_repr(kind) == OPT_REPR_FLOAT64) return opt_number(b, value);
+  if (ir_elements_element(kind) == IR_TYPED_UINT8_CLAMPED) {
+    if (!int32 && (!opt_may_be_int32(b, value) || !opt_may_speculate(b, OPT_EXIT_NOT_INT32))) return IR_NONE;
+    ir_node_id_t clamped = opt_emit(b, ir_op(IR_OP_INT32_MIN), (ir_node_id_t[]){opt_int32(b, value), opt_int32_constant(b, UINT8_MAX)}, 2, OPT_REPR_INT32);
+    return opt_emit(b, ir_op(IR_OP_INT32_MAX), (ir_node_id_t[]){clamped, opt_int32_constant(b, 0)}, 2, OPT_REPR_INT32);
+  }
+  if (int32) return opt_int32(b, value);
+  return opt_emit1(b, IR_OP_FLOAT64_TO_INT32, opt_number(b, value), OPT_REPR_INT32);
+}
+
+static ir_node_id_t opt_typed_storage(opt_builder_t *b, ir_node_id_t object, ir_node_id_t *index) {
+  ir_node_id_t address = opt_emit1(b, IR_OP_CELL_ADDRESS, object, OPT_REPR_POINTER);
+  ir_node_id_t length = opt_emit1(b, IR_OP_LOAD_TYPED_ARRAY_LENGTH, address, OPT_REPR_INT32);
+  ir_node_id_t offset = opt_emit1(b, IR_OP_LOAD_TYPED_ARRAY_DATA_OFFSET, address, OPT_REPR_POINTER);
+  ir_node_id_t storage = opt_emit_checked(b, ir_op(IR_OP_CHECK_TYPED_ARRAY_STORAGE), &offset, 1, OPT_REPR_POINTER);
+  *index = opt_emit_checked(b, ir_op(IR_OP_CHECK_BOUNDS), (ir_node_id_t[]){*index, length}, 2, OPT_REPR_INT32);
+  return storage;
+}
+
+static ir_node_id_t opt_typed_load(opt_builder_t *b, ir_node_id_t object, ir_node_id_t index, ir_elements_kind_t kind) {
+  ir_node_id_t storage = opt_typed_storage(b, object, &index);
+  ir_op_t load = ir_op(IR_OP_LOAD_ELEMENT_AT);
+  load.elements = kind;
+  opt_repr_t repr = ir_elements_loaded_repr(kind);
+  ir_node_id_t element = opt_emit(b, load, (ir_node_id_t[]){storage, index}, 2, repr);
+  return repr == OPT_REPR_FLOAT64 ? opt_emit1(b, IR_OP_BOX_FLOAT64, element, OPT_REPR_TAGGED) : opt_tagged(b, element);
+}
+
+static opt_flow_t opt_build_typed_element(opt_builder_t *b, sv_op_t op, ir_node_id_t array, ir_node_id_t index, const ir_elements_kind_t *kinds, uint32_t count) {
+  if (count > 1) {
+    ir_frame_state_id_t state = opt_eager_frame_state(b);
+    ir_node_id_t results[OPT_MAX_TYPED_KINDS];
+    ir_block_id_t ends[OPT_MAX_TYPED_KINDS];
+    for (uint32_t k = 0; k < count; k++) {
+      ir_condition_t is_kind = ir_cond(IR_COND_ELEMENTS_KIND);
+      is_kind.elements = kinds[k];
+      ir_block_id_t hit, miss;
+      opt_branch_both_ways(b, is_kind, &array, 1, &hit, &miss);
+      b->block = hit;
+      results[k] = opt_typed_load(b, opt_refine(b, is_kind, &array, 1), index, kinds[k]);
+      ends[k] = b->block;
+      b->block = miss;
+    }
+    ir_block(b->graph, b->block)->is_cold = true;
+    ir_op_t exit = ir_op(IR_OP_EXIT);
+    exit.exit_kind = OPT_EXIT_BAD_ELEMENTS;
+    ir_node(b->graph, opt_set_control(b, exit, NULL, 0))->frame_state = state;
+    opt_join_blocks(b, ends, count);
+    opt_drop(b, 2);
+    opt_push(b, opt_value_phi(b, b->frame.sp, results, count));
+    return OPT_FLOW_CONTINUE;
+  }
+  ir_node_id_t value = IR_NONE;
+  if (op == OP_PUT_ELEM && (value = opt_typed_store_value(b, kinds[0], opt_peek(b, 0))) == IR_NONE) return OPT_FLOW_GENERIC;
+  ir_op_t check = ir_op(IR_OP_CHECK_ELEMENTS);
+  check.elements = kinds[0];
+  ir_node_id_t object = opt_emit_checked(b, check, &array, 1, OPT_REPR_NONE);
+  if (op == OP_GET_ELEM) {
+    ir_node_id_t element = opt_typed_load(b, object, index, kinds[0]);
+    opt_drop(b, 2);
+    opt_push(b, element);
+    return OPT_FLOW_CONTINUE;
+  }
+  ir_node_id_t storage = opt_typed_storage(b, object, &index);
+  ir_op_t store = ir_op(IR_OP_STORE_ELEMENT_AT);
+  store.elements = kinds[0];
+  opt_emit(b, store, (ir_node_id_t[]){storage, index, value}, 3, OPT_REPR_NONE);
+  opt_drop(b, 3);
+  return OPT_FLOW_CONTINUE;
+}
+
 static opt_flow_t opt_build_element(opt_builder_t *b, sv_op_t op) {
   uint8_t *feedback = sv_func_type_feedback(b->func);
   if (op != OP_GET_LENGTH && (!feedback || !feedback[b->pc])) return opt_end_with_exit(b, OPT_EXIT_NO_FEEDBACK);
@@ -2889,6 +3008,12 @@ static opt_flow_t opt_build_element(opt_builder_t *b, sv_op_t op) {
   ir_node_id_t array = opt_tagged(b, opt_peek(b, operands - 1)), index = IR_NONE;
   if (op != OP_GET_LENGTH && (feedback[b->pc] & SV_TFB_SPEC_MISMATCH) && opt_element_key_exited(b)) return opt_build_access_call(b, false);
   if (op != OP_GET_LENGTH && (index = opt_element_index(b, opt_peek(b, operands - 2))) == IR_NONE) return opt_build_access_call(b, false);
+  ir_elements_kind_t typed[OPT_MAX_TYPED_KINDS];
+  uint32_t typed_count = op != OP_GET_LENGTH ? opt_typed_elements_kinds(b, op, feedback[b->pc], typed) : 0;
+  if (typed_count) {
+    opt_flow_t flow = opt_build_typed_element(b, op, array, index, typed, typed_count);
+    if (flow != OPT_FLOW_GENERIC) return flow;
+  }
   ir_node_id_t value = op == OP_PUT_ELEM ? opt_tagged(b, opt_peek(b, 0)) : IR_NONE;
   bool slow_hot = !opt_may_speculate(b, OPT_EXIT_SLOW_PATH);
   bool dense = op != OP_GET_LENGTH && !sv_tfb_elem_saw_typed_array(feedback[b->pc]) && (sv_tfb_specialization_ready(feedback[b->pc])
@@ -3833,7 +3958,7 @@ static opt_flow_t opt_emit_call(opt_builder_t *b, bool construct, sv_func_t *tar
   if (target && !construct && target->code[0] != OP_CHECK_CTOR) {
     call.call.target = target;
     opt_retain_func(b, target);
-  }
+  } else if (!construct) call.call.native_closure = sv_tfb_call_site_called_native_closure(b->func, (int)b->pc);
   ir_node_id_t result = opt_emit(b, call, inputs, 2 + argc, OPT_REPR_TAGGED);
   ir_node(b->graph, result)->frame_state = opt_call_position(b);
   opt_mark_catch(b, result);
@@ -4583,7 +4708,14 @@ static opt_flow_t opt_build_arithmetic(opt_builder_t *b, sv_op_t op) {
 static opt_flow_t opt_build_exponentiation(opt_builder_t *b) {
   ir_node_id_t args[2] = {opt_peek(b, 1), opt_peek(b, 0)};
   if (!opt_may_speculate(b, OPT_EXIT_BAD_TYPE) || !opt_may_be_number(b, args[0]) || !opt_may_be_number(b, args[1])) return OPT_FLOW_GENERIC;
-  ir_node_id_t result = opt_call_float64_function(b, ANT_MATH_DOUBLE_POW, args);
+  int32_t exponent;
+  ir_node_id_t result;
+  if (opt_int32_constant_of(b, args[1], &exponent) && exponent == 2) {
+    ir_node_id_t base = opt_number(b, args[0]);
+    ir_op_t square = ir_op(IR_OP_FLOAT64_BINARY);
+    square.binary = IR_BINARY_MUL;
+    result = opt_emit1(b, IR_OP_BOX_FLOAT64, opt_emit(b, square, (ir_node_id_t[]){base, base}, 2, OPT_REPR_FLOAT64), OPT_REPR_TAGGED);
+  } else result = opt_call_float64_function(b, ANT_MATH_DOUBLE_POW, args);
   opt_drop(b, 2);
   opt_push(b, result);
   return OPT_FLOW_CONTINUE;
@@ -4620,6 +4752,19 @@ static opt_flow_t opt_build_negate(opt_builder_t *b) {
     default: return OPT_FLOW_GENERIC;
   }
   opt_poke(b, 0, result);
+  return OPT_FLOW_CONTINUE;
+}
+
+static opt_flow_t opt_build_unary_plus(opt_builder_t *b) {
+  ir_node_id_t value = opt_peek(b, 0);
+  const ir_node_t *node = ir_node(b->graph, value);
+  uint64_t bits;
+  if (node->repr == OPT_REPR_INT32 || node->repr == OPT_REPR_FLOAT64) return OPT_FLOW_CONTINUE;
+  if (node->op.code == IR_OP_BOX_INT32 || node->op.code == IR_OP_BOX_FLOAT64) return OPT_FLOW_CONTINUE;
+  if (ir_constant_value(b->graph, value, &bits) && node->repr == OPT_REPR_TAGGED && ir_value_is_number(bits)) return OPT_FLOW_CONTINUE;
+  ir_node_id_t inputs[2] = {opt_tagged(b, value), opt_constant(b, IR_VALUE_UNDEFINED)};
+  opt_poke(b, 0, opt_runtime_call(b, (uintptr_t)opt_rt_unary_plus, 0, inputs, 2, false, false));
+  opt_forget_memory(b);
   return OPT_FLOW_CONTINUE;
 }
 
@@ -5441,6 +5586,10 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
       return opt_build_remainder(b);
     case OP_EXP:
       return opt_build_exponentiation(b);
+    case OP_UPLUS:
+      return opt_build_unary_plus(b);
+    case OP_IMPORT_SYNC: case OP_IMPORT_SYNC_TYPE:
+      return opt_end_with_exit(b, OPT_EXIT_SLOW_PATH);
     case OP_BAND: case OP_BOR: case OP_BXOR: case OP_SHL: case OP_SHR: case OP_USHR: case OP_BNOT:
       return opt_build_bitwise(b, op);
 

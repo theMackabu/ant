@@ -560,7 +560,9 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_DIV:
       case OP_DIV_NUM:
       case OP_MOD:
+      case OP_EXP:
       case OP_NEG:
+      case OP_UPLUS:
       case OP_INC:
       case OP_DEC:
       case OP_POST_INC:

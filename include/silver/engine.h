@@ -504,7 +504,7 @@ typedef struct {
 
 typedef struct {
   uint8_t *type_feedback;
-  uint8_t *elem_types;
+  uint16_t *elem_types;
   
   ant_shape_t *ctor_proto_shape;
   struct opt_func_state *opt_state;
@@ -972,7 +972,14 @@ typedef struct sv_closure {
   
   sv_func_t *func;
   sv_upvalue_t **upvalues;
-  sv_upvalue_t *inline_upvals[SV_CLOSURE_INLINE_UPVALS];
+  
+  union {
+    sv_upvalue_t *inline_upvals[SV_CLOSURE_INLINE_UPVALS];
+    struct {
+      ant_value_t cfunc;
+      ant_cfunc_t fn;
+    } native;
+  };
   
   ant_value_t bound_this;
   ant_value_t super_val;

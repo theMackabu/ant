@@ -28,7 +28,7 @@ bool ra_saves_only_gprs(const ir_op_t *op) {
 }
 
 static bool ra_reuses_first_input(const ir_op_t *op) {
-  return op->code == IR_OP_INT32_WRAPPING_BINARY || op->code == IR_OP_INT32_BINARY || op->code == IR_OP_BOOL_TO_INT32;
+  return op->code == IR_OP_INT32_WRAPPING_BINARY || op->code == IR_OP_INT32_BINARY || op->code == IR_OP_BOOL_TO_INT32 || op->code == IR_OP_FLOAT64_BINARY;
 }
 
 typedef enum : uint8_t {
@@ -176,8 +176,8 @@ static ra_constraints_t ra_constraints(const ir_node_t *node, const opt_register
     case IR_OP_LOAD_ELEMENTS_CAPACITY:
     case IR_OP_APPEND_ELEMENT:
     case IR_OP_POP_ELEMENT: constraints.temps = 1; break;
+    case IR_OP_CHECK_TYPED_ARRAY: constraints.temps = 3; break;
     case IR_OP_CHECK_ELEMENTS:
-    case IR_OP_CHECK_TYPED_ARRAY:
     case IR_OP_CHECK_IDENTITY_COMPARABLE:
     case IR_OP_CHECK_CLOSURE:
     case IR_OP_CHECK_UPVALUE_INITIALIZED: constraints.temps = 1; break;
@@ -187,6 +187,7 @@ static ra_constraints_t ra_constraints(const ir_node_t *node, const opt_register
       constraints.temps = 1;
       break;
     case IR_OP_CHECK_BOUNDS: inputs[0].kind = RA_INPUT_REGISTER_OR_CONSTANT; break;
+    case IR_OP_LOAD_TYPED_ARRAY_DATA_OFFSET: constraints.temps = 1; break;
     case IR_OP_ALLOCATE_OBJECT:
       if (count) inputs[0].kind = RA_INPUT_REGISTER_OR_CONSTANT;
       constraints.temps = 2;

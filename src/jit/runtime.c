@@ -46,6 +46,7 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_mul);
   LOAD_EXT(jit_helper_div);
   LOAD_EXT(jit_helper_mod);
+  LOAD_EXT(jit_helper_exp);
   LOAD_EXT(fmod);
   LOAD_EXT(jit_helper_str_read_value);
   LOAD_EXT(jit_helper_str_append_local);
@@ -160,6 +161,7 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_bor);
   LOAD_EXT(jit_helper_bxor);
   LOAD_EXT(jit_helper_bnot);
+  LOAD_EXT(jit_helper_uplus);
   LOAD_EXT(jit_helper_shl);
   LOAD_EXT(jit_helper_shr);
   LOAD_EXT(jit_helper_ushr);

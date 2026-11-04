@@ -166,11 +166,12 @@ static inline sv_tfb_class_t sv_tfb_classify(ant_value_t v) {
 typedef enum sv_tfb_length_class: uint8_t {
   SV_TFB_LENGTH_OTHER  = 1u << 0,
   SV_TFB_LENGTH_STRING = 1u << 1,
+  SV_TFB_LENGTH_TYPED  = 1u << 2,
   SV_TFB_LENGTH_ARRAY  = 1u << 3,
 } sv_tfb_length_class_t;
 
 static_assert(
-  ((SV_TFB_LENGTH_ARRAY | SV_TFB_LENGTH_STRING | SV_TFB_LENGTH_OTHER) & ~SV_TFB_CLASS_MASK) == 0,
+  ((SV_TFB_LENGTH_ARRAY | SV_TFB_LENGTH_STRING | SV_TFB_LENGTH_TYPED | SV_TFB_LENGTH_OTHER) & ~SV_TFB_CLASS_MASK) == 0,
   "length feedback classes must fit in the class bits"
 );
 
@@ -178,6 +179,7 @@ static inline sv_tfb_length_class_t sv_tfb_length_class(ant_value_t object) {
   switch (vtype(object)) {
     case kTypeArray: return SV_TFB_LENGTH_ARRAY;
     case kTypeString: return SV_TFB_LENGTH_STRING;
+    case kTypeObject: return ((ant_object_t *)vptr(object))->native_tag == BUFFER_TYPEDARRAY_NATIVE_TAG ? SV_TFB_LENGTH_TYPED : SV_TFB_LENGTH_OTHER;
     default: return SV_TFB_LENGTH_OTHER;
   }
 }
@@ -384,17 +386,20 @@ static_assert(
   "element feedback classes must fit in the class bits"
 );
 
-static constexpr uint8_t SV_TFB_ELEM_TYPE_MIXED = UINT8_MAX;
-
 static inline bool sv_tfb_elem_saw_typed_array(uint8_t feedback) {
   return (feedback & SV_TFB_ELEM_TYPED_ARRAY) != 0;
 }
 
-static inline int sv_tfb_elem_type(const sv_func_t *func, int bc_off) {
+static_assert(TYPED_ARRAY_COUNT <= 16, "typed array kinds fit the element type mask");
+
+static inline uint16_t sv_tfb_elem_type_mask(const sv_func_t *func, int bc_off) {
   sv_func_sidecar_t *sidecar = sv_func_sidecar(func);
-  uint8_t seen = sidecar && sidecar->elem_types && bc_off >= 0 && bc_off < func->code_len
-    ? sidecar->elem_types[bc_off] : 0;
-  return seen && seen != SV_TFB_ELEM_TYPE_MIXED ? seen - 1 : -1;
+  return sidecar && sidecar->elem_types && bc_off >= 0 && bc_off < func->code_len ? sidecar->elem_types[bc_off] : 0;
+}
+
+static inline int sv_tfb_elem_type(const sv_func_t *func, int bc_off) {
+  uint16_t seen = sv_tfb_elem_type_mask(func, bc_off);
+  return seen && !(seen & (seen - 1)) ? __builtin_ctz(seen) : -1;
 }
 
 static inline void sv_tfb_record_elem_type(sv_func_t *func, uint8_t *site, TypedArrayType type) {
@@ -402,11 +407,10 @@ static inline void sv_tfb_record_elem_type(sv_func_t *func, uint8_t *site, Typed
   sv_func_sidecar_t *sidecar = sv_func_ensure_sidecar(func);
   
   if (!sidecar) return;
-  if (!sidecar->elem_types && !(sidecar->elem_types = calloc((size_t)func->code_len, 1))) return;
+  if (!sidecar->elem_types && !(sidecar->elem_types = calloc((size_t)func->code_len, sizeof(*sidecar->elem_types)))) return;
   
-  uint8_t *slot = &sidecar->elem_types[bc_off];
-  uint8_t seen = (uint8_t)(type + 1);
-  uint8_t next = *slot == 0 || *slot == seen ? seen : SV_TFB_ELEM_TYPE_MIXED;
+  uint16_t *slot = &sidecar->elem_types[bc_off];
+  uint16_t next = (uint16_t)(*slot | 1u << type);
   
   if (next != *slot) { *slot = next; func->tfb_version++; }
 }
@@ -582,16 +586,28 @@ static inline void sv_tfb_record_call_target(sv_func_t *func, int bc_off, sv_fun
 }
 
 static constexpr uint8_t SV_TFB_CALLED_BUILTIN = 1u << 0;
+static constexpr uint8_t SV_TFB_CALLED_NATIVE_CLOSURE = 1u << 1;
 
-static inline void sv_tfb_record_builtin_call(sv_func_t *func, uint8_t *ip) {
+static inline void sv_tfb_record_native_call(sv_func_t *func, uint8_t *ip, ant_value_t callee) {
+  uint8_t bit;
+  
+  if (vtype(callee) == kTypeBuiltin) bit = SV_TFB_CALLED_BUILTIN;
+  else if (vtype(callee) == kTypeFunction && !js_func_closure(callee)->func) bit = SV_TFB_CALLED_NATIVE_CLOSURE;
+  else return;
+  
   uint8_t *type_feedback = sv_func_type_feedback(func);
   if (!type_feedback) return;
   
   uint8_t *site = &type_feedback[ip - func->code];
-  if (*site & SV_TFB_CALLED_BUILTIN) return;
+  if (*site & bit) return;
   
-  *site |= SV_TFB_CALLED_BUILTIN;
+  *site |= bit;
   func->tfb_version++;
+}
+
+static inline bool sv_tfb_call_site_called_native_closure(sv_func_t *func, int bc_off) {
+  uint8_t *type_feedback = sv_func_type_feedback(func);
+  return type_feedback && (type_feedback[bc_off] & SV_TFB_CALLED_NATIVE_CLOSURE);
 }
 
 static inline bool sv_tfb_call_site_may_call_builtin(sv_func_t *func, int bc_off) {

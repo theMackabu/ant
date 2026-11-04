@@ -179,7 +179,7 @@ static inline ant_value_t sv_op_uplus(sv_vm_t *vm, ant_t *js) {
   vm->sp--;
   if (is_err(n)) return n;
   if (vtype(n) == kTypeBigInt)
-    return js_mkerr(js, "Cannot convert a BigInt value to a number");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a BigInt value to a number");
   vm->stack[vm->sp++] = n;
   return Ant_Value_FromNumber(0);
 }

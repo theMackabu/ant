@@ -2594,6 +2594,7 @@ static ant_value_t stream_writable_after_write(ant_t *js, stream_private_state_t
   }
 
   if (is_callable(callback)) stream_call_callback(js, callback, NULL, 0);
+  if (!stream_writable_has_buffered(ws) && !ws->need_drain && !ws->pending_final) return Ant_Value_Undefined;
 
   if (priv->destroyed && stream_writable_has_buffered(ws)) {
     stream_writable_fail_buffered(js, priv, stream_write_state_error(js, false));
@@ -2842,20 +2843,23 @@ static ant_value_t stream_writable_write_impl(
 }
 
 static ant_value_t js_writable_write(ant_params_t) {
-  ant_value_t stream_obj = stream_require_this(js, call_this, "Writable");
   ant_value_t encoding = nargs > 1 ? args[1] : Ant_Value_Undefined;
   ant_value_t callback = nargs > 2 ? args[2] : Ant_Value_Undefined;
 
-  if (is_err(stream_obj)) return stream_obj;
-  stream_private_state_t *priv = stream_writable_of(stream_obj);
-  if (!priv) return Ant_Value_False;
-
+  stream_private_state_t *priv = stream_private_state(call_this);
+  if (!priv) {
+    ant_value_t stream_obj = stream_require_this(js, call_this, "Writable");
+    return is_err(stream_obj) ? stream_obj : Ant_Value_False;
+  }
+  
+  if (!priv->has_writable) return Ant_Value_False;
+  
   if (is_callable(encoding)) {
     callback = encoding;
     encoding = Ant_Value_Null;
   }
+  
   if (!is_callable(callback)) callback = Ant_Value_Undefined;
-
   return stream_writable_write_impl(js, priv, nargs > 0 ? args[0] : Ant_Value_Undefined, encoding, callback, false);
 }
 

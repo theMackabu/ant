@@ -167,6 +167,23 @@ extern "C" bool ant_number_parse(
   if (processed) *processed = 0;
   if (!str || !out) return false;
 
+  if (len - 1 < 15) {
+    uint64_t digits = 0;
+    size_t i = 0;
+    
+    for (; i < len; i++) {
+      unsigned d = (unsigned char)str[i] - '0';
+      if (d > 9) break;
+      digits = digits * 10 + d;
+    }
+    
+    if (i == len) {
+      *out = (double)digits;
+      if (processed) *processed = len;
+      return true;
+    }
+  }
+
   size_t leading = 0;
   if (mode == ANT_NUMBER_PARSE_JS_NUMBER || mode == ANT_NUMBER_PARSE_FLOAT_PREFIX) {
   trim_js_string_whitespace(&str, &len, mode == ANT_NUMBER_PARSE_JS_NUMBER, &leading);

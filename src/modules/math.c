@@ -85,6 +85,7 @@ double ant_math_min(double a, double b) {
 double ant_math_js_pow(double base, double exponent) {
   if (isnan(exponent)) return ANT_NAN;
   if (isinf(exponent) && fabs(base) == 1.0) return ANT_NAN;
+  if (exponent == 2.0) return base * base;
   return pow(base, exponent);
 }
 

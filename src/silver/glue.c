@@ -129,7 +129,7 @@ static inline bool jit_numeric_operand(ant_value_t v) {
   }
 }
 
-#define JIT_ARITH_HELPERS(X) X(sub, OP_SUB) X(mul, OP_MUL) X(div, OP_DIV) X(mod, OP_MOD)
+#define JIT_ARITH_HELPERS(X) X(sub, OP_SUB) X(mul, OP_MUL) X(div, OP_DIV) X(mod, OP_MOD) X(exp, OP_EXP)
 #define X(name, op)                                                                     \
   ant_value_t jit_helper_##name(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) { \
     if (!jit_numeric_operand(l) || !jit_numeric_operand(r)) return SV_JIT_BAILOUT;      \
@@ -1838,6 +1838,12 @@ ant_value_t jit_helper_set_proto(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_va
   }
 JIT_BITWISE_HELPERS(X)
 #undef X
+
+ant_value_t jit_helper_uplus(sv_vm_t *vm, ant_t *js, ant_value_t v) {
+  if (vtype(v) == kTypeNumber) return v;
+  if (!jit_rel_plain(v)) return SV_JIT_BAILOUT;
+  return Ant_Value_FromNumber(js_to_number(js, v));
+}
 
 ant_value_t jit_helper_bnot(sv_vm_t *vm, ant_t *js, ant_value_t v) {
   if (!jit_numeric_operand(v)) return SV_JIT_BAILOUT;

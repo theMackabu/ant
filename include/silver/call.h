@@ -303,9 +303,16 @@ static inline ant_value_t sv_native_closure_cfunc(ant_value_t func) {
   
   sv_closure_t *closure = js_func_closure(func);
   if (closure->func || closure->call_flags) return 0;
+  if (closure->native.cfunc) return closure->native.cfunc;
 
   ant_extra_slot_t *slot = ant_object_extra_slot((ant_object_t *)vptr(js_func_obj(func)), SLOT_CFUNC);
-  return slot && vtype(slot->value) == kTypeBuiltin ? slot->value : 0;
+  const ant_cfunc_meta_t *meta = slot && vtype(slot->value) == kTypeBuiltin ? js_as_cfunc_meta(slot->value) : NULL;
+  if (!meta || !meta->fn) return 0;
+  
+  closure->native.cfunc = slot->value;
+  closure->native.fn = meta->fn;
+  
+  return slot->value;
 }
 
 static inline bool sv_native_direct_allowed(const ant_t *js) {

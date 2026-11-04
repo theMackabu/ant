@@ -843,7 +843,7 @@ L_CALL: {
   }
   call_fallback:;
   frame->ip = ip;
-  if (vtype(call_func) == kTypeBuiltin) sv_tfb_record_builtin_call(func, ip);
+  sv_tfb_record_native_call(func, ip, call_func);
   ant_value_t super_this_c = call_this;
   ant_value_t call_result = sv_vm_call(
     vm, js, call_func, call_this, call_args, call_argc,
@@ -970,7 +970,7 @@ L_CALL_METHOD: {
   }
   call_method_fallback:;
   frame->ip = ip;
-  if (vtype(call_func) == kTypeBuiltin) sv_tfb_record_builtin_call(func, ip);
+  sv_tfb_record_native_call(func, ip, call_func);
   ant_value_t super_this_cm = call_this;
   ant_value_t call_result = sv_vm_call(
     vm, js, call_func, call_this, call_args, call_argc,
@@ -1185,7 +1185,7 @@ L_TAIL_CALL: {
       }
     }
   }
-  if (vtype(call_func) == kTypeBuiltin) sv_tfb_record_builtin_call(func, ip);
+  sv_tfb_record_native_call(func, ip, call_func);
   ant_value_t *call_args = &vm->stack[vm->sp - tc_argc];
   frame->ip = ip;
   ant_value_t call_result = sv_vm_call(
@@ -1252,7 +1252,7 @@ tail_call_method_dispatch: {
         sv_tfb_record_call_target(func, (int)(ip - func->code), closure->func);
     }
   }
-  if (vtype(call_func) == kTypeBuiltin) sv_tfb_record_builtin_call(func, ip);
+  sv_tfb_record_native_call(func, ip, call_func);
   ant_value_t *call_args = &vm->stack[vm->sp - tc_argc];
   frame->ip = ip;
   ant_value_t call_result = sv_vm_call(

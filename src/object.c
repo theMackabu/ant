@@ -379,6 +379,8 @@ ant_value_t js_obj_to_func_ex(ant_t *js, ant_value_t obj, uint8_t flags) {
   
   closure->func = NULL;
   closure->upvalues = NULL;
+  closure->native.cfunc = 0;
+  closure->native.fn = NULL;
   closure->func_obj = func_obj;
   closure->bound_this = Ant_Value_Undefined;
   closure->bound_argc = 0;

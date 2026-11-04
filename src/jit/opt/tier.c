@@ -913,6 +913,12 @@ ant_value_t opt_rt_typeof(sv_vm_t *vm, ant_value_t value, ant_value_t unused, an
   return jit_helper_typeof(vm, vm->js, value);
 }
 
+ant_value_t opt_rt_unary_plus(sv_vm_t *vm, ant_value_t value, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind) {
+  ant_value_t number = js_to_numeric(vm->js, value);
+  if (is_err(number) || vtype(number) == kTypeNumber) return number;
+  return js_mkerr_typed(vm->js, JS_ERR_TYPE, "Cannot convert a BigInt value to a number");
+}
+
 ant_value_t opt_rt_in(sv_vm_t *vm, ant_value_t key, ant_value_t object, ant_value_t *args, int64_t argc, int64_t kind) {
   return jit_helper_in(vm, vm->js, key, object);
 }

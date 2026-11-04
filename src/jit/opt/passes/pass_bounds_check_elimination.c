@@ -131,7 +131,8 @@ static bool pass_range_compute(pass_ranges_t *ranges, ir_node_id_t value, pass_r
       }
     }
     case IR_OP_LOAD_ELEMENTS_LENGTH:
-    case IR_OP_LOAD_ELEMENTS_CAPACITY: return pass_range(0, INT32_MAX, out);
+    case IR_OP_LOAD_ELEMENTS_CAPACITY:
+    case IR_OP_LOAD_TYPED_ARRAY_LENGTH: return pass_range(0, INT32_MAX, out);
     default: return false;
   }
 }
