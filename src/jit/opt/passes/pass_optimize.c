@@ -21,6 +21,7 @@ static const pass_t pass_list[] = {
   {"bounds check elimination", pass_bounds_check_elimination},
   {"dead code elimination", pass_dce},
   {"escape analysis", pass_escape_analysis},
+  {"allocation sinking", pass_allocation_sinking},
   {"dead code elimination", pass_dce},
   {"branch fusion", pass_branch_fusion},
 };

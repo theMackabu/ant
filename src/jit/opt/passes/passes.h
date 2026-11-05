@@ -18,6 +18,7 @@ void pass_gvn(ir_graph_t *graph);
 void pass_licm(ir_graph_t *graph);
 void pass_dce(ir_graph_t *graph);
 void pass_escape_analysis(ir_graph_t *graph);
+void pass_allocation_sinking(ir_graph_t *graph);
 void pass_branch_fusion(ir_graph_t *graph);
 void pass_frame_initialization(ir_graph_t *graph, const ir_frame_layout_t *layout);
 

@@ -96,6 +96,7 @@ opt_ir_sources = files(
 )
 
 opt_passes_sources = files(
+  opt_root / 'passes/pass_allocation_sinking.c',
   opt_root / 'passes/pass_bounds_check_elimination.c',
   opt_root / 'passes/pass_boxed_arithmetic.c',
   opt_root / 'passes/pass_branch_fusion.c',

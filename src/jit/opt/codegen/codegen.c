@@ -153,6 +153,8 @@ typedef struct {
   bool gpr_saves;
   bool has_frame;
   ir_block_id_t block;
+  ir_node_id_t fresh_object;
+  bool epoch_loaded;
   OPT_VEC(opt_cg_exit_stub_t) exit_stubs;
   OPT_VEC(opt_cg_barrier_t) barriers;
   OPT_VEC(opt_cg_generic_t) generics;
@@ -736,7 +738,39 @@ static asm_label_t opt_cg_out_of_line(opt_cg_t *cg, asm_label_t resume, uint64_t
   return call.label;
 }
 
-static void opt_cg_object_barrier(opt_cg_t *cg, asm_gpr_t object, asm_gpr_t value, uint64_t helper, const opt_cg_arg_t *index) {
+static void opt_cg_remembered_card(opt_cg_t *cg, asm_gpr_t array, const opt_cg_arg_t *index, const asm_gpr_t *temps, asm_label_t resume, asm_label_t miss) {
+  masm_t *m = &cg->masm;
+  asm_gpr_t scratch = cg->pinned.scratch, cards = temps[0], word = temps[1];
+  masm_branch_test32(m, ASM_COND_ZERO, scratch, ANT_OBJECT_FLAG_REMEMBERED, miss);
+  masm_branch32_memory_imm(m, ASM_COND_BELOW, asm_addr(array, (int32_t)offsetof(ant_object_t, u.array.cap)), (int32_t)GC_CARD_MIN_CAP, resume);
+  masm_load64(m, cards, asm_addr(array, (int32_t)offsetof(ant_object_t, extra_slots)));
+  masm_branch_test64(m, ASM_COND_ZERO, cards, ant_sidecar, miss);
+  masm_load64(m, cards, asm_addr(cards, (int32_t)offsetof(ant_object_sidecar_t, gc_cards) - (int32_t)ant_sidecar));
+  masm_branch64_imm(m, ASM_COND_EQUAL, cards, 0, miss);
+  if (index->constant) {
+    uint32_t card = (uint32_t)index->bits >> GC_CARD_SHIFT;
+    masm_branch32_memory_imm(m, ASM_COND_BELOW_OR_EQUAL, asm_addr(cards, (int32_t)offsetof(gc_card_table_t, ncards)), (int32_t)card, miss);
+    masm_load64(m, word, asm_addr(cards, (int32_t)(offsetof(gc_card_table_t, bits) + 8u * (card / 64u))));
+    masm_branch_test64(m, ASM_COND_NON_ZERO, word, UINT64_C(1) << (card % 64u), resume);
+    masm_jump(m, miss);
+    return;
+  }
+  masm_shr32_imm(m, scratch, index->reg, GC_CARD_SHIFT);
+  masm_load32(m, word, asm_addr(cards, (int32_t)offsetof(gc_card_table_t, ncards)));
+  masm_branch32(m, ASM_COND_BELOW_OR_EQUAL, word, scratch, miss);
+  masm_shr32_imm(m, word, scratch, 6);
+  masm_load64(m, word, asm_addr_indexed(cards, word, ASM_SCALE_8, (int32_t)offsetof(gc_card_table_t, bits)));
+  masm_shr64(m, word, word, scratch);
+  masm_branch_test64(m, ASM_COND_NON_ZERO, word, 1, resume);
+  masm_jump(m, miss);
+}
+
+static bool opt_cg_is_allocation(const opt_cg_t *cg, ir_node_id_t value) {
+  ir_opcode_t code = ir_node(cg->graph, ir_unrefined(cg->graph, value))->op.code;
+  return code == IR_OP_ALLOCATE_OBJECT || code == IR_OP_ALLOCATE_ARRAY;
+}
+
+static void opt_cg_object_barrier(opt_cg_t *cg, asm_gpr_t object, asm_gpr_t value, ir_node_id_t value_node, uint64_t helper, const opt_cg_arg_t *index, const asm_gpr_t *temps) {
   masm_t *m = &cg->masm;
   asm_gpr_t scratch = cg->pinned.scratch;
   asm_label_t resume = masm_new_label(m), decode = masm_new_label(m);
@@ -745,6 +779,12 @@ static void opt_cg_object_barrier(opt_cg_t *cg, asm_gpr_t object, asm_gpr_t valu
   masm_load16(m, scratch, asm_addr(object, (int32_t)offsetof(ant_object_t, flags)));
   masm_branch_test32(m, ASM_COND_ZERO, scratch, ANT_OBJECT_FLAG_GENERATION, resume);
   if (!index) masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, ANT_OBJECT_FLAG_REMEMBERED, resume);
+  if (temps) {
+    asm_label_t values = masm_new_label(m);
+    opt_cg_remembered_card(cg, object, index, temps, resume, values);
+    masm_bind(m, values);
+  }
+  if (opt_cg_is_allocation(cg, value_node)) masm_jump(m, decode);
   masm_move_imm64(m, scratch, NANBOX_PREFIX);
   masm_branch64(m, ASM_COND_BELOW_OR_EQUAL, value, scratch, resume);
   masm_shr64_imm(m, scratch, value, NANBOX_TYPE_SHIFT);
@@ -772,8 +812,9 @@ static void opt_cg_store_named(opt_cg_t *cg, ir_node_id_t node, uint32_t offset)
   asm_gpr_t value = opt_cg_input(cg, node, 1), object = opt_cg_input(cg, node, 2);
   asm_gpr_t base = ir_node(cg->graph, node)->inputs.len > 3 ? opt_cg_input(cg, node, 3) : object;
   masm_store64(m, opt_cg_named_slot(base, offset), value);
-  if (!opt_cg_needs_barrier(cg, ir_node(cg->graph, node)->inputs.items[1])) return;
-  opt_cg_object_barrier(cg, object, value, (uint64_t)(uintptr_t)opt_rt_write_barrier, NULL);
+  ir_node_id_t stored = ir_node(cg->graph, node)->inputs.items[1];
+  if (!opt_cg_needs_barrier(cg, stored)) return;
+  opt_cg_object_barrier(cg, object, value, stored, (uint64_t)(uintptr_t)opt_rt_write_barrier, NULL, NULL);
 }
 
 static constexpr uint32_t OPT_DUMP_BYTES = 8 * (OPT_DUMP_GPRS + OPT_DUMP_FPRS);
@@ -1850,9 +1891,11 @@ static void opt_cg_store_element(opt_cg_t *cg, ir_node_id_t node) {
   asm_gpr_t object = opt_cg_input(cg, node, 0), value = opt_cg_input(cg, node, 2), data = opt_cg_temp(cg, node, 0);
   masm_load64(m, data, asm_addr(object, (int32_t)offsetof(ant_object_t, u.array.data)));
   masm_store64(m, opt_cg_element(cg, node, data), value);
-  if (!opt_cg_needs_barrier(cg, ir_node(cg->graph, node)->inputs.items[2])) return;
+  ir_node_id_t stored = ir_node(cg->graph, node)->inputs.items[2];
+  if (!opt_cg_needs_barrier(cg, stored)) return;
   opt_cg_arg_t index = opt_cg_input_arg(cg, node, 1);
-  opt_cg_object_barrier(cg, object, value, (uint64_t)(uintptr_t)opt_rt_element_barrier, &index);
+  asm_gpr_t temps[2] = {data, opt_cg_temp(cg, node, 1)};
+  opt_cg_object_barrier(cg, object, value, stored, (uint64_t)(uintptr_t)opt_rt_element_barrier, &index, temps);
 }
 
 static void opt_cg_can_add_element(opt_cg_t *cg, ir_node_id_t node) {
@@ -1912,9 +1955,11 @@ static void opt_cg_append_element(opt_cg_t *cg, ir_node_id_t node) {
   masm_load16(m, scratch, asm_addr(array, (int32_t)offsetof(ant_object_t, flags)));
   masm_or32_imm(m, scratch, scratch, ANT_OBJECT_FLAG_MAY_HAVE_DENSE_ELEMENTS);
   masm_store16(m, asm_addr(array, (int32_t)offsetof(ant_object_t, flags)), scratch);
-  if (!opt_cg_needs_barrier(cg, ir_node(cg->graph, node)->inputs.items[2])) return;
+  ir_node_id_t stored = ir_node(cg->graph, node)->inputs.items[2];
+  if (!opt_cg_needs_barrier(cg, stored)) return;
   opt_cg_arg_t at = opt_cg_reg_arg(index);
-  opt_cg_object_barrier(cg, array, value, (uint64_t)(uintptr_t)opt_rt_element_barrier, &at);
+  asm_gpr_t temps[2] = {data, opt_cg_temp(cg, node, 1)};
+  opt_cg_object_barrier(cg, array, value, stored, (uint64_t)(uintptr_t)opt_rt_element_barrier, &at, temps);
 }
 
 static void opt_cg_check_not_hole(opt_cg_t *cg, ir_node_id_t node) {
@@ -1927,8 +1972,10 @@ static void opt_cg_check_add_epoch(opt_cg_t *cg, ir_node_id_t node) {
   const ir_op_t *op = &ir_node(cg->graph, node)->op;
   asm_gpr_t temp = opt_cg_temp(cg, node, 0), scratch = cg->pinned.scratch;
   opt_cg_epoch_check_t check = {.label = masm_new_label(m), .resume = masm_new_label(m), .exit = opt_cg_exit_site(cg, node), .site = op->add_named.site};
-  masm_load64(m, scratch, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
-  masm_load32(m, scratch, asm_addr(scratch, (int32_t)offsetof(ant_t, ic.epoch)));
+  if (!cg->epoch_loaded || opt_cg_node(cg, node)->moves_before.len) {
+    masm_load64(m, scratch, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
+    masm_load32(m, scratch, asm_addr(scratch, (int32_t)offsetof(ant_t, ic.epoch)));
+  }
   masm_move_imm64(m, temp, op->add_named.cell);
   masm_load32(m, temp, asm_addr(temp, 0));
   masm_branch32(m, ASM_COND_NOT_EQUAL, scratch, temp, check.label);
@@ -1949,6 +1996,8 @@ static void opt_cg_emit_epoch_checks(opt_cg_t *cg) {
     masm_move64(m, cg->pinned.scratch, MASM_RETURN_GPRS[0]);
     opt_cg_restore_caller_saved_gprs(cg);
     masm_branch64_imm(m, ASM_COND_EQUAL, cg->pinned.scratch, 0, check->exit);
+    masm_load64(m, cg->pinned.scratch, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
+    masm_load32(m, cg->pinned.scratch, asm_addr(cg->pinned.scratch, (int32_t)offsetof(ant_t, ic.epoch)));
     masm_jump(m, check->resume);
   }
 }
@@ -2028,8 +2077,9 @@ static void opt_cg_add_named(opt_cg_t *cg, ir_node_id_t node) {
     masm_load64(m, scratch, asm_addr(object, (int32_t)offsetof(ant_object_t, overflow_prop)));
     masm_store64(m, asm_addr(scratch, (int32_t)(8 * (slot - limit))), value);
   }
-  if (opt_cg_needs_barrier(cg, ir_node(cg->graph, node)->inputs.items[1]))
-    opt_cg_object_barrier(cg, object, value, (uint64_t)(uintptr_t)opt_rt_write_barrier, NULL);
+  ir_node_id_t stored = ir_node(cg->graph, node)->inputs.items[1];
+  if (opt_cg_needs_barrier(cg, stored))
+    opt_cg_object_barrier(cg, object, value, stored, (uint64_t)(uintptr_t)opt_rt_write_barrier, NULL, NULL);
 }
 
 static void opt_cg_take_object(opt_cg_t *cg, asm_gpr_t out, asm_gpr_t count, asm_gpr_t temp, asm_gpr_t js, asm_label_t slow, uint32_t inobj_limit) {
@@ -2063,6 +2113,35 @@ static void opt_cg_take_object(opt_cg_t *cg, asm_gpr_t out, asm_gpr_t count, asm
   masm_load64(m, temp, asm_addr(js, (int32_t)offsetof(ant_t, objects)));
   masm_store64(m, asm_addr(out, (int32_t)offsetof(ant_object_t, next)), temp);
   masm_store64(m, asm_addr(js, (int32_t)offsetof(ant_t, objects)), out);
+}
+
+static bool opt_cg_store_image_pairs(opt_cg_t *cg, asm_gpr_t out, const uint64_t *words, const bool *stored, uint32_t word_count, asm_gpr_t undefined, asm_gpr_t other) {
+#if defined(__aarch64__)
+  uint64_t other_bits = 0;
+  bool has_other = false, has_undefined = false;
+  for (uint32_t w = 0; w < word_count; w++) {
+    if (stored[w] || words[w] == 0) continue;
+    if (words[w] == IR_VALUE_UNDEFINED) has_undefined = true;
+    else if (!has_other) {
+      other_bits = words[w];
+      has_other = true;
+    } else if (words[w] != other_bits) return false;
+  }
+  for (uint32_t w = 0; w < word_count; w += 2)
+    if (w + 1 >= word_count || stored[w] != stored[w + 1]) return false;
+  masm_t *m = &cg->masm;
+  if (has_undefined) masm_move_imm64(m, undefined, IR_VALUE_UNDEFINED);
+  if (has_other) masm_move_imm64(m, other, other_bits);
+  for (uint32_t w = 0; w < word_count; w += 2) {
+    if (stored[w]) continue;
+    asm_gpr_t pair[2];
+    for (uint32_t k = 0; k < 2; k++) pair[k] = !words[w + k] ? A64_XZR : words[w + k] == IR_VALUE_UNDEFINED ? undefined : other;
+    a64_stp(&m->a, pair[0], pair[1], a64_pair_offset(out, (int32_t)(8 * w)));
+  }
+  return true;
+#else
+  return false;
+#endif
 }
 
 static void opt_cg_allocate_object(opt_cg_t *cg, ir_node_id_t node) {
@@ -2099,19 +2178,19 @@ static void opt_cg_allocate_object(opt_cg_t *cg, ir_node_id_t node) {
   masm_move_imm64(m, temp, (uint64_t)(uintptr_t)shape);
   masm_store64(m, asm_addr(out, (int32_t)offsetof(ant_object_t, shape)), temp);
   masm_add32_to_memory_imm(m, asm_addr(temp, (int32_t)ANT_SHAPE_REF_COUNT_OFFSET), 1);
-  for (uint32_t w = 0; w < word_count; w++) {
-    if (stored[w]) continue;
-    masm_move_imm64(m, temp, words[w]);
-    for (uint32_t v = w; v < word_count; v++) {
-      if (stored[v] || words[v] != words[w]) continue;
-      masm_store64(m, asm_addr(out, (int32_t)(8 * v)), temp);
-      stored[v] = true;
+  if (!opt_cg_store_image_pairs(cg, out, words, stored, word_count, temp, count)) {
+    for (uint32_t w = 0; w < word_count; w++) {
+      if (stored[w]) continue;
+      masm_move_imm64(m, temp, words[w]);
+      for (uint32_t v = w; v < word_count; v++) {
+        if (stored[v] || words[v] != words[w]) continue;
+        masm_store64(m, asm_addr(out, (int32_t)(8 * v)), temp);
+        stored[v] = true;
+      }
     }
   }
-  opt_cg_move_cage(cg, temp);
-  masm_sub64(m, out, out, temp);
-  masm_move_imm64(m, temp, NANBOX_TAG(kTypeObject));
-  masm_or64(m, out, out, temp);
+  opt_cg_sub_cage(cg, out, out);
+  masm_or64_imm(m, out, out, NANBOX_TAG(kTypeObject));
   masm_bind(m, allocation.resume);
 }
 
@@ -2752,9 +2831,10 @@ static void opt_cg_initialize_element(opt_cg_t *cg, ir_node_id_t node) {
   }
   asm_gpr_t value = opt_cg_input(cg, node, 1);
   masm_store64(m, asm_addr(scratch, (int32_t)(8 * index)), value);
-  if (!opt_cg_needs_barrier(cg, ir_node(cg->graph, node)->inputs.items[1])) return;
+  ir_node_id_t stored = ir_node(cg->graph, node)->inputs.items[1];
+  if (!opt_cg_needs_barrier(cg, stored)) return;
   opt_cg_arg_t at = {.constant = true, .bits = index};
-  opt_cg_object_barrier(cg, address, value, (uint64_t)(uintptr_t)opt_rt_element_barrier, &at);
+  opt_cg_object_barrier(cg, address, value, stored, (uint64_t)(uintptr_t)opt_rt_element_barrier, &at, NULL);
 }
 
 static void opt_cg_emit_allocations(opt_cg_t *cg) {
@@ -2794,16 +2874,22 @@ static void opt_cg_emit_allocations(opt_cg_t *cg) {
 static void opt_cg_initialize_named(opt_cg_t *cg, ir_node_id_t node) {
   masm_t *m = &cg->masm;
   uint32_t offset = ir_node(cg->graph, node)->op.offset, index = opt_named_index(offset), limit = opt_named_inobj_limit(offset);
-  asm_gpr_t object = opt_cg_input(cg, node, 0), value = opt_cg_input(cg, node, 1), address = opt_cg_temp(cg, node, 0);
-  masm_and64_imm(m, address, object, NANBOX_DATA_MASK);
-  opt_cg_add_cage(cg, address, address);
+  const ir_node_t *data = ir_node(cg->graph, node);
+  asm_gpr_t value = opt_cg_input(cg, node, 1), address;
+  if (data->inputs.len > 2) address = opt_cg_input(cg, node, 2);
+  else {
+    address = opt_cg_temp(cg, node, 0);
+    masm_and64_imm(m, address, opt_cg_input(cg, node, 0), NANBOX_DATA_MASK);
+    opt_cg_add_cage(cg, address, address);
+  }
   if (index < limit) masm_store64(m, asm_addr(address, (int32_t)(offsetof(ant_object_t, inobj) + 8 * index)), value);
   else {
     masm_load64(m, cg->pinned.scratch, asm_addr(address, (int32_t)offsetof(ant_object_t, overflow_prop)));
     masm_store64(m, asm_addr(cg->pinned.scratch, (int32_t)(8 * (index - limit))), value);
   }
-  if (opt_cg_needs_barrier(cg, ir_node(cg->graph, node)->inputs.items[1]))
-    opt_cg_object_barrier(cg, address, value, (uint64_t)(uintptr_t)opt_rt_write_barrier, NULL);
+  ir_node_id_t stored = data->inputs.items[1];
+  if (data->inputs.items[0] != cg->fresh_object && opt_cg_needs_barrier(cg, stored))
+    opt_cg_object_barrier(cg, address, value, stored, (uint64_t)(uintptr_t)opt_rt_write_barrier, NULL, NULL);
 }
 
 static inline asm_address_t opt_cg_call_slot(const opt_cg_t *cg, uint32_t index) {
@@ -3598,6 +3684,10 @@ static void opt_cg_node_code(opt_cg_t *cg, ir_node_id_t node_id) {
     opt_cg_element_code(cg, node_id, node) || opt_cg_call_code(cg, node_id, node) ||
     opt_cg_control_code(cg, node_id, node);
   if (!handled) opt_cg_fail(cg, ir_op_name(node->op.code));
+  cg->epoch_loaded = node->op.code == IR_OP_CHECK_ADD_EPOCH;
+  if (node->op.code == IR_OP_ALLOCATE_OBJECT) cg->fresh_object = node_id;
+  else if ((node->op.code != IR_OP_INITIALIZE_NAMED && node->op.code != IR_OP_CELL_ADDRESS) || node->inputs.items[0] != cg->fresh_object)
+    cg->fresh_object = IR_NONE;
 
   if (allocation->has_output && allocation->output.kind == RA_LOC_REGISTER && allocation->spill_slot != IR_NONE)
     opt_cg_move(cg, (ra_move_t){.from = allocation->output, .to = ra_stack(allocation->spill_slot)});
@@ -3628,6 +3718,8 @@ static bool opt_cg_hole_then_int32(opt_cg_t *cg, ir_node_id_t hole, ir_node_id_t
 static void opt_cg_block(opt_cg_t *cg, ir_block_id_t block) {
   const ir_block_t *data = ir_block(cg->graph, block);
   cg->block = block;
+  cg->fresh_object = IR_NONE;
+  cg->epoch_loaded = false;
   masm_bind(&cg->masm, cg->labels[block]);
   for (uint32_t i = 0; i < data->phis.len; i++) {
     uint32_t slot = ra_phi_spill_store(cg->graph, cg->alloc, data->phis.items[i]);
@@ -3635,8 +3727,11 @@ static void opt_cg_block(opt_cg_t *cg, ir_block_id_t block) {
   }
   for (uint32_t i = 0; i < data->body.len; i++) {
     if (cg->marks_wanted) opt_vec_push(&cg->arena, &cg->marks, ((opt_cg_mark_t){(uint32_t)masm_offset(&cg->masm), data->body.items[i]}));
-    if (i + 1 < data->body.len && opt_cg_hole_then_int32(cg, data->body.items[i], data->body.items[i + 1])) i++;
-    else opt_cg_node_code(cg, data->body.items[i]);
+    if (i + 1 < data->body.len && opt_cg_hole_then_int32(cg, data->body.items[i], data->body.items[i + 1])) {
+      i++;
+      cg->fresh_object = IR_NONE;
+      cg->epoch_loaded = false;
+    } else opt_cg_node_code(cg, data->body.items[i]);
   }
   const ra_moves_t *moves = &cg->alloc->block_end_moves[block];
   for (uint32_t i = 0; i < moves->len; i++) opt_cg_move(cg, moves->items[i]);

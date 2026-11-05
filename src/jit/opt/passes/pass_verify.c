@@ -250,6 +250,9 @@ static uint32_t pass_expected_input_reprs(const ir_node_t *node, opt_repr_t *rep
       if (node->inputs.len == 4) return pass_reprs(reprs, 4, T, T, P, P);
       return pass_reprs(reprs, 3, T, T, P);
     case IR_OP_ADD_NAMED: return pass_reprs(reprs, 3, T, T, P);
+    case IR_OP_INITIALIZE_NAMED:
+      if (node->inputs.len == 3) return pass_reprs(reprs, 3, T, T, P);
+      return pass_reprs(reprs, 2, T, T);
     case IR_OP_LOAD_ELEMENT_AT: return pass_reprs(reprs, 2, P, I);
     case IR_OP_STORE_ELEMENT_AT: return pass_reprs(reprs, 3, P, I, ir_elements_stored_repr(node->op.elements));
     case IR_OP_CHECK_BOUNDS: return pass_reprs(reprs, 2, I, I);

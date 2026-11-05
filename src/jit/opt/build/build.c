@@ -3172,7 +3172,7 @@ static const char *opt_inline_unsupported_op(const sv_func_t *func, bool constru
   return NULL;
 }
 
-static const char *opt_not_inlineable(const opt_builder_t *b, sv_func_t *target, bool construct, uint32_t *count) {
+static const char *opt_not_inlineable(const opt_builder_t *b, sv_func_t *target, bool construct, bool initializer, uint32_t *count) {
   if (!target) return "no-target";
   if (target->is_async || target->is_generator || target->is_derived_ctor || target->has_dynamic_eval ||
       target->is_eval || target->is_tla || target->code_len <= 0) return "function-kind";
@@ -3187,7 +3187,7 @@ static const char *opt_not_inlineable(const opt_builder_t *b, sv_func_t *target,
   for (uint32_t i = 0; i < b->ctx->no_inline.len; i++)
     if (b->ctx->no_inline.items[i] == target) return "failed-before";
   *count = opt_instruction_count(target);
-  bool exempt = *count <= OPT_INLINE_ALWAYS_INSTRUCTIONS || (construct && *count <= OPT_INLINE_MAX_CONSTRUCT_INSTRUCTIONS);
+  bool exempt = *count <= OPT_INLINE_ALWAYS_INSTRUCTIONS || ((construct || initializer) && *count <= OPT_INLINE_MAX_CONSTRUCT_INSTRUCTIONS);
   if (!exempt && *count > OPT_INLINE_MAX_INSTRUCTIONS) return "size";
   if (!exempt && b->ctx->inlined_instructions + *count > OPT_INLINE_BUDGET) return "budget";
   const char *op = opt_inline_unsupported_op(target, construct);
@@ -3428,7 +3428,8 @@ static bool opt_try_inline(opt_builder_t *b, sv_op_t op, uint32_t argc, uint32_t
   bool construct = op == OP_NEW, tail = op == OP_TAIL_CALL || op == OP_TAIL_CALL_METHOD;
   bool method = op == OP_CALL_METHOD || op == OP_TAIL_CALL_METHOD;
   uint32_t count;
-  const char *refused = opt_not_inlineable(b, target, construct, &count);
+  bool initializer = method && b->inline_call && b->inline_call->construct && second == b->inline_call->receiver;
+  const char *refused = opt_not_inlineable(b, target, construct, initializer, &count);
   for (uint32_t i = 0; i < argc && !refused; i++)
     if (opt_is_any_virtual_arguments(b, args[i]) || opt_is_any_virtual_arguments(b, second)) refused = "arguments";
   if (!refused && construct && (callee != second || !opt_may_speculate(b, OPT_EXIT_OUT_OF_BOUNDS))) refused = "construct";

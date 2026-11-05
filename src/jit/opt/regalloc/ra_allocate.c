@@ -173,8 +173,8 @@ static ra_constraints_t ra_constraints(const ir_node_t *node, const opt_register
       inputs[1].kind = RA_INPUT_REGISTER_OR_CONSTANT;
       constraints.temps = 4;
       break;
+    case IR_OP_APPEND_ELEMENT: constraints.temps = 2; break;
     case IR_OP_LOAD_ELEMENTS_CAPACITY:
-    case IR_OP_APPEND_ELEMENT:
     case IR_OP_POP_ELEMENT: constraints.temps = 1; break;
     case IR_OP_CHECK_TYPED_ARRAY: constraints.temps = 3; break;
     case IR_OP_CHECK_ELEMENTS:
@@ -184,7 +184,7 @@ static ra_constraints_t ra_constraints(const ir_node_t *node, const opt_register
     case IR_OP_LOAD_ELEMENT_AT:
     case IR_OP_STORE_ELEMENT_AT:
       inputs[1].kind = RA_INPUT_REGISTER_OR_CONSTANT;
-      constraints.temps = 1;
+      constraints.temps = op->code == IR_OP_STORE_ELEMENT_AT && !ir_elements_is_typed(op->elements) ? 2 : 1;
       break;
     case IR_OP_CHECK_BOUNDS: inputs[0].kind = RA_INPUT_REGISTER_OR_CONSTANT; break;
     case IR_OP_LOAD_TYPED_ARRAY_DATA_OFFSET: constraints.temps = 1; break;
@@ -192,7 +192,7 @@ static ra_constraints_t ra_constraints(const ir_node_t *node, const opt_register
       if (count) inputs[0].kind = RA_INPUT_REGISTER_OR_CONSTANT;
       constraints.temps = 2;
       break;
-    case IR_OP_INITIALIZE_NAMED: constraints.temps = 1; break;
+    case IR_OP_INITIALIZE_NAMED: constraints.temps = count > 2 ? 0 : 1; break;
     case IR_OP_ALLOCATE_ARRAY: constraints.temps = 3; break;
     case IR_OP_ALLOCATE_FUNCTION:
     case IR_OP_ALLOCATE_ENVIRONMENT: constraints.temps = 2; break;
