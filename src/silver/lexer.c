@@ -503,32 +503,14 @@ static int parse_unicode_escape(const char *buf, ant_offset_t len, ant_offset_t 
   return 6;
 }
 
-static bool is_unicode_id_start(utf8proc_int32_t cp) {
-  if (cp == 0x2E2F) return false;
-  utf8proc_category_t cat = unicode_category(cp);
-  return 
-    cat == UTF8PROC_CATEGORY_LU || cat == UTF8PROC_CATEGORY_LL ||
-    cat == UTF8PROC_CATEGORY_LT || cat == UTF8PROC_CATEGORY_LM ||
-    cat == UTF8PROC_CATEGORY_LO || cat == UTF8PROC_CATEGORY_NL;
-}
-
-static bool is_unicode_id_continue(utf8proc_int32_t cp) {
-  if (is_unicode_id_start(cp)) return true;
-  utf8proc_category_t cat = unicode_category(cp);
-  return 
-    cat == UTF8PROC_CATEGORY_MN || cat == UTF8PROC_CATEGORY_MC ||
-    cat == UTF8PROC_CATEGORY_ND || cat == UTF8PROC_CATEGORY_PC ||
-    cp == 0x200C || cp == 0x200D;
-}
-
 static bool is_unicode_ident_begin(uint32_t cp) {
   if (cp < 128) return (char_type[(uint8_t)cp] & CHAR_IDENT1) != 0;
-  return is_unicode_id_start((utf8proc_int32_t)cp);
+  return unicode_is_id_start(cp);
 }
 
 static bool is_unicode_ident_continue(uint32_t cp) {
   if (cp < 128) return (char_type[(uint8_t)cp] & (CHAR_IDENT | CHAR_IDENT1)) != 0;
-  return is_unicode_id_continue((utf8proc_int32_t)cp);
+  return unicode_is_id_continue(cp);
 }
 
 static size_t decode_ident_escapes(const char *src, size_t srclen, char *dst, size_t dstlen) {
@@ -574,7 +556,7 @@ static uint8_t parseident(const char *buf, ant_offset_t len, ant_offset_t *tlen)
   if (c >= 128) {
     utf8proc_int32_t cp;
     utf8proc_ssize_t n = utf8_next((const utf8proc_uint8_t *)buf, (utf8proc_ssize_t)len, &cp);
-    if (cp < 0 || !is_unicode_id_start(cp)) return TOK_ERR;
+    if (cp < 0 || !unicode_is_id_start((uint32_t)cp)) return TOK_ERR;
     i = (ant_offset_t)n;
     *tlen = i;
     goto slow_path_loop;
@@ -606,7 +588,7 @@ slow_path_loop:;
         (const utf8proc_uint8_t *)&buf[*tlen],
         (utf8proc_ssize_t)(len - *tlen), &cp
       );
-      if (cp < 0 || !is_unicode_id_continue(cp)) break;
+      if (cp < 0 || !unicode_is_id_continue((uint32_t)cp)) break;
       *tlen += (ant_offset_t)n;
     }
   }

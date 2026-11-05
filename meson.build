@@ -91,6 +91,13 @@ unicode_data_h = custom_target('unicode_data_h',
   depend_files: files('meson/unicode_tables.py'),
 )
 
+unicode_id_h = custom_target('unicode_id_h',
+  input: ucd_derived_core_properties,
+  output: 'unicode_id.h',
+  command: [python, files('meson/unicode_id.py'), '@INPUT@', '@OUTPUT@'],
+  depend_files: files('meson/unicode_id.py'),
+)
+
 lib_sources = files(run_command(
   python, files('meson/sources.py'), files('sources.json'), 'engine',
   check: true
@@ -107,6 +114,7 @@ libant = static_library(
     silver_macros_h,
     theme_h,
     unicode_data_h,
+    unicode_id_h,
   ],
   install: true,
   include_directories: [include, sandbox_backend_include],
@@ -227,6 +235,7 @@ if not runtime_binary.disabled()
       silver_macros_h,
       theme_h,
       unicode_data_h,
+      unicode_id_h,
     ],
     include_directories: [include],
     c_args: runtime_c_args,

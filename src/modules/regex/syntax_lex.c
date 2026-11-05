@@ -49,68 +49,6 @@ static inline bool rx_is_class_set_reserved_punctuator(uint32_t c) {
   return rx_in_set(c, "&-!#%,:;<=>@`~");
 }
 
-static const uint32_t rx_id_start_extra[][2] = {
-  { 0x88F, 0x88F }, { 0xC5C, 0xC5C }, { 0xCDC, 0xCDC }, { 0xA7CE, 0xA7CF },
-  { 0xA7D2, 0xA7D2 }, { 0xA7D4, 0xA7D4 }, { 0xA7F1, 0xA7F1 }, { 0x10940, 0x10959 },
-  { 0x10EC5, 0x10EC7 }, { 0x11DB0, 0x11DDB }, { 0x16EA0, 0x16EB8 }, { 0x16EBB, 0x16ED3 },
-  { 0x16FF2, 0x16FF6 }, { 0x187F8, 0x187FF }, { 0x18D09, 0x18D1E }, { 0x18D80, 0x18DF2 },
-  { 0x1E6C0, 0x1E6DE }, { 0x1E6E0, 0x1E6E2 }, { 0x1E6E4, 0x1E6E5 }, { 0x1E6E7, 0x1E6ED },
-  { 0x1E6F0, 0x1E6F4 }, { 0x1E6FE, 0x1E6FF }, { 0x2B73A, 0x2B73F }, { 0x2CEA2, 0x2CEAD },
-  { 0x323B0, 0x33479 },
-};
-
-static const uint32_t rx_id_part_extra[][2] = {
-  { 0x1ACF, 0x1ADD }, { 0x1AE0, 0x1AEB }, { 0x10EFA, 0x10EFB }, { 0x11B60, 0x11B67 },
-  { 0x11DE0, 0x11DE9 }, { 0x1E6E3, 0x1E6E3 }, { 0x1E6E6, 0x1E6E6 }, { 0x1E6EE, 0x1E6EF },
-  { 0x1E6F5, 0x1E6F5 },
-};
-
-static bool rx_in_ranges(uint32_t c, const uint32_t (*ranges)[2], size_t count) {
-  size_t lo = 0, hi = count;
-  while (lo < hi) {
-    size_t mid = (lo + hi) / 2;
-    if (c < ranges[mid][0]) hi = mid;
-    else if (c > ranges[mid][1]) lo = mid + 1;
-    else return true;
-  }
-  return false;
-}
-
-static bool rx_id_start(uint32_t c) {
-  if (c < 0x80) return c == '$' || c == '_' || ((c | 0x20) >= 'a' && (c | 0x20) <= 'z');
-  if (c > 0x10FFFF) return false;
-  switch (c) {
-    case 0x1885: case 0x1886: case 0x2118: case 0x212E: case 0x309B: case 0x309C: return true;
-    case 0x2E2F: return false;
-  }
-  if (rx_in_ranges(c, rx_id_start_extra, sizeof(rx_id_start_extra) / sizeof(rx_id_start_extra[0]))) return true;
-  switch (unicode_category((utf8proc_int32_t)c)) {
-    case UTF8PROC_CATEGORY_LU: case UTF8PROC_CATEGORY_LL: case UTF8PROC_CATEGORY_LT:
-    case UTF8PROC_CATEGORY_LM: case UTF8PROC_CATEGORY_LO: case UTF8PROC_CATEGORY_NL:
-      return true;
-    default:
-      return false;
-  }
-}
-
-static bool rx_id_part(uint32_t c) {
-  if (c < 0x80) return rx_id_start(c) || rx_is_digit(c);
-  if (rx_id_start(c)) return true;
-  if (c > 0x10FFFF) return false;
-  switch (c) {
-    case 0x00B7: case 0x0387: case 0x19DA: case 0x200C: case 0x200D: case 0x30FB: case 0xFF65: return true;
-  }
-  if (c >= 0x1369 && c <= 0x1371) return true;
-  if (rx_in_ranges(c, rx_id_part_extra, sizeof(rx_id_part_extra) / sizeof(rx_id_part_extra[0]))) return true;
-  switch (unicode_category((utf8proc_int32_t)c)) {
-    case UTF8PROC_CATEGORY_MN: case UTF8PROC_CATEGORY_MC:
-    case UTF8PROC_CATEGORY_ND: case UTF8PROC_CATEGORY_PC:
-      return true;
-    default:
-      return false;
-  }
-}
-
 bool rx_pool_push(rx_t *p, uint32_t value) {
   if (!rx_reserve(p, (void **)&p->pool, &p->pool_cap, p->pool_len + 1, sizeof(*p->pool))) return false;
   p->pool[p->pool_len++] = value;
@@ -367,26 +305,34 @@ bool rx_parse_group_name(rx_t *p, uint32_t *name, uint32_t *name_len) {
   *name = (uint32_t)p->pool_len;
   *name_len = 0;
   bool at_start = true;
+  
   for (;;) {
     uint32_t c = rx_cur(p);
     rx_advance(p);
+    
     if (!p->unicode && rx_is_lead(c) && rx_is_trail(rx_cur(p))) {
       c = rx_combine(c, rx_cur(p));
       rx_advance(p);
     }
+    
     if (c == '\\' && rx_cur(p) == 'u') {
       rx_advance(p);
       if (!rx_parse_unicode_escape(p, &c, true)) return rx_fail(p, RX_ERR_INVALID_UNICODE_ESCAPE);
     }
+    
     if (c == '\\') return rx_fail(p, RX_ERR_INVALID_CAPTURE_GROUP_NAME);
+    
     if (at_start) {
-      if (!rx_id_start(c)) return rx_fail(p, RX_ERR_INVALID_CAPTURE_GROUP_NAME);
+      if (!unicode_is_id_start(c)) return rx_fail(p, RX_ERR_INVALID_CAPTURE_GROUP_NAME);
       at_start = false;
     } else if (c == '>') break;
-    else if (!rx_id_part(c)) return rx_fail(p, RX_ERR_INVALID_CAPTURE_GROUP_NAME);
+    
+    else if (!unicode_is_id_continue(c)) return rx_fail(p, RX_ERR_INVALID_CAPTURE_GROUP_NAME);
     if (!rx_pool_push(p, c)) return false;
+    
     (*name_len)++;
   }
+  
   return true;
 }
 

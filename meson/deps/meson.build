@@ -158,6 +158,8 @@ wirecall = dependency('wirecall', default_options: [
   'tests=disabled',
 ])
 
+ucd_derived_core_properties = subproject('ucd').get_variable('derived_core_properties')
+
 utf8proc_base_dep = subproject('utf8proc', default_options: [
   'tests=disabled',
 ]).get_variable('utf8proc_dep')

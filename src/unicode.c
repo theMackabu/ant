@@ -31,6 +31,37 @@ utf8proc_category_t unicode_category(int32_t cp) {
   return (utf8proc_category_t)unicode_record(cp)->category;
 }
 
+static const uint32_t id_start_ranges[][2] = {
+#define UNICODE_ID_START(lo, hi) { lo, hi },
+#include "unicode_id.h"
+};
+
+static const uint32_t id_continue_ranges[][2] = {
+#define UNICODE_ID_CONTINUE(lo, hi) { lo, hi },
+#include "unicode_id.h"
+};
+
+static bool unicode_in_ranges(uint32_t c, const uint32_t (*ranges)[2], size_t count) {
+  size_t lo = 0, hi = count;
+  while (lo < hi) {
+    size_t mid = (lo + hi) / 2;
+    if (c < ranges[mid][0]) hi = mid;
+    else if (c > ranges[mid][1]) lo = mid + 1;
+    else return true;
+  }
+  return false;
+}
+
+bool unicode_is_id_start(uint32_t c) {
+  if (c == '$' || c == '_') return true;
+  return unicode_in_ranges(c, id_start_ranges, sizeof(id_start_ranges) / sizeof(id_start_ranges[0]));
+}
+
+bool unicode_is_id_continue(uint32_t c) {
+  if (c == '$' || c == 0x200C || c == 0x200D) return true;
+  return unicode_in_ranges(c, id_continue_ranges, sizeof(id_continue_ranges) / sizeof(id_continue_ranges[0]));
+}
+
 int unicode_width(int32_t cp) {
   return (uint32_t)cp >= 0x110000 ? 1 : unicode_record(cp)->width;
 }
