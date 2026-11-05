@@ -986,10 +986,7 @@ typedef struct sv_closure {
   ant_value_t func_obj;
 
   union {
-    struct {
-      ant_value_t *argv;
-      ant_value_t args_arr;
-    } bound;
+    ant_value_t *bound_argv;
     struct {
       const char *name;
       uint32_t len;

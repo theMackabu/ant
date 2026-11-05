@@ -336,8 +336,8 @@ static inline void gc_release_closure_payload(sv_closure_t *c) {
   c->func = NULL;
   if (!(c->call_flags & SV_CALL_BORROWED_UPVALS) && c->upvalues != c->inline_upvals) free(c->upvalues);
   c->upvalues = NULL;
-  if (c->call_flags & SV_CALL_HAS_BOUND_ARGS) free(c->u.bound.argv);
-  c->u.bound.argv = NULL;
+  if (c->call_flags & SV_CALL_HAS_BOUND_ARGS) free(c->u.bound_argv);
+  c->u.bound_argv = NULL;
 }
 
 void gc_closures_destroy(ant_t *js) {
@@ -655,10 +655,8 @@ void gc_mark_closure(ant_t *js, sv_closure_t *c) {
     }
   }
   
-  if (c->call_flags & SV_CALL_HAS_BOUND_ARGS) {
-    gc_mark_value(js, c->u.bound.args_arr);
-    if (c->u.bound.argv) for (int i = 0; i < c->bound_argc; i++) gc_mark_value(js, c->u.bound.argv[i]);
-  }
+  if (c->call_flags & SV_CALL_HAS_BOUND_ARGS) if (c->u.bound_argv) 
+    for (int i = 0; i < c->bound_argc; i++) gc_mark_value(js, c->u.bound_argv[i]);
 }
 
 void gc_mark_value(ant_t *js, ant_value_t v) {

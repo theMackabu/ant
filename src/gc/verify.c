@@ -57,9 +57,7 @@ bool gc_verify_quarantine_closure(sv_closure_t *c) {
   c->super_val = bad;
   c->func_obj = bad;
   c->module_ctx = bad;
-
-  c->u.bound.argv = NULL;
-  c->u.bound.args_arr = bad;
+  c->u.bound_argv = NULL;
 
   if (gc_verify_quarantined_closures >= GC_VERIFY_CLOSURE_QUARANTINE_MAX) return false;
   gc_verify_quarantined_closures++;

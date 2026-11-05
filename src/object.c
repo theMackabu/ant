@@ -387,10 +387,9 @@ ant_value_t js_obj_to_func_ex(ant_t *js, ant_value_t obj, uint8_t flags) {
   closure->super_val = Ant_Value_Undefined;
   closure->call_flags = flags;
 
-  if (flags & SV_CALL_HAS_BOUND_ARGS) {
-    closure->u.bound.argv = NULL;
-    closure->u.bound.args_arr = Ant_Value_Undefined;
-  } else {
+  if (flags & SV_CALL_HAS_BOUND_ARGS)
+    closure->u.bound_argv = NULL;
+  else {
     closure->u.pending.name = NULL;
     closure->u.pending.len = 0;
   }
@@ -647,10 +646,11 @@ void js_set_proto_init(ant_value_t obj, ant_value_t proto) {
   
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
   if (!ptr) return;
-  
   if (!ptr->shape) return;
   
-  ant_object_set_proto(ant_shape_isolate(ptr->shape), ptr, proto);
+  ant_t *js = ant_shape_isolate(ptr->shape);
+  ant_object_set_proto(js, ptr, proto);
+  gc_write_barrier(js, ptr, proto);
 }
 
 void set_proto(ant_t *js, ant_value_t obj, ant_value_t proto) {

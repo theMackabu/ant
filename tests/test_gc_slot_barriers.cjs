@@ -43,7 +43,24 @@ function stringWrapperKeepsValueProducedDuringCoercion() {
   for (let i = 0; i < 12; i++) assert.strictEqual(wrappers[i].toString(), base + String(1000000 + i));
 }
 
+function boundArgumentsSurviveCollection() {
+  function sum(a, b, c) {
+    return this.base + a.v + b.v + c;
+  }
+
+  const bound = [];
+  for (let i = 0; i < 20000; i++) {
+    const first = sum.bind({ base: i }, { v: 1 });
+    bound.push(first.bind(null, { v: 2 }));
+  }
+  churn();
+  for (let i = 0; i < 20000; i++) assert.strictEqual(bound[i](3), i + 6);
+  churn();
+  for (let i = 0; i < 20000; i++) assert.strictEqual(bound[i](4), i + 7);
+}
+
 cachedGroupsSurviveOnOldMatch();
 compiledSourceSurvivesOnOldRegExp();
 stringWrapperKeepsValueProducedDuringCoercion();
+boundArgumentsSurviveCollection();
 console.log('gc-slot-barriers:ok');

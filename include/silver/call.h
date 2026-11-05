@@ -96,16 +96,19 @@ ant_value_t sv_jit_try_compile_and_call(sv_vm_t *vm, ant_t *js,
 );
 
 static inline ant_value_t *sv_prepend_bound_args(
-  sv_closure_t *closure, ant_value_t *args, int argc, int *out_total,
-  ant_value_t *inline_args
+  sv_closure_t *closure, ant_value_t *args, int argc, int *out_total, ant_value_t *inline_args
 ) {
   int total = closure->bound_argc + argc;
   ant_value_t *combined = total <= SV_CALL_INLINE_ARGS_CAP
     ? inline_args
     : malloc(sizeof(ant_value_t) * (size_t)total);
 
-  if (!combined) { *out_total = argc; return NULL; }
-  memcpy(combined, closure->u.bound.argv, sizeof(ant_value_t) * (size_t)closure->bound_argc);
+  if (!combined) { 
+    *out_total = argc; 
+    return NULL; 
+  }
+  
+  memcpy(combined, closure->u.bound_argv, sizeof(ant_value_t) * (size_t)closure->bound_argc);
   memcpy(combined + closure->bound_argc, args, sizeof(ant_value_t) * (size_t)argc);
 
   *out_total = total;

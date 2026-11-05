@@ -3,7 +3,6 @@
 #include <string.h>
 
 #include "cfunc.h"
-#include "arrays.h"
 #include "stringify.h"
 #include "silver/compiler.h"
 #include "silver/call.h"
@@ -427,20 +426,25 @@ static inline bool bound_argv_copy(
   const ant_value_t *suffix, int suffix_count
 ) {
   int total = prefix_count + suffix_count;
+  
   if (total == 0) {
-    closure->u.bound.argv = NULL;
+    closure->u.bound_argv = NULL;
     closure->bound_argc = 0;
     return true;
   }
 
   ant_value_t *argv = malloc(sizeof(*argv) * (size_t)total);
   if (!argv) return false;
+  
   if (prefix_count > 0)
     memcpy(argv, prefix, sizeof(*argv) * (size_t)prefix_count);
+  
   if (suffix_count > 0)
     memcpy(argv + prefix_count, suffix, sizeof(*argv) * (size_t)suffix_count);
-  closure->u.bound.argv = argv;
+  
+  closure->u.bound_argv = argv;
   closure->bound_argc = total;
+  
   return true;
 }
 
@@ -600,10 +604,9 @@ static ant_value_t builtin_function_bind(ant_params_t) {
   bound_closure->super_val = orig->super_val;
   bound_closure->func_obj = bound_func;
   
-  if (bound_closure->call_flags & SV_CALL_HAS_BOUND_ARGS) {
-    bound_closure->u.bound.argv = NULL;
-    bound_closure->u.bound.args_arr = Ant_Value_Undefined;
-  } else {
+  if (bound_closure->call_flags & SV_CALL_HAS_BOUND_ARGS)
+    bound_closure->u.bound_argv = NULL;
+  else {
     bound_closure->u.pending.name = NULL;
     bound_closure->u.pending.len = 0;
   }
@@ -620,8 +623,7 @@ static ant_value_t builtin_function_bind(ant_params_t) {
   int orig_bound_argc = (orig->call_flags & SV_CALL_HAS_BOUND_ARGS) ? orig->bound_argc : 0;
   if (bound_argc > 0 || orig_bound_argc > 0) {
     bound_closure->call_flags |= SV_CALL_HAS_BOUND_ARGS;
-    bound_closure->u.bound.argv = NULL;
-    bound_closure->u.bound.args_arr = Ant_Value_Undefined;
+    bound_closure->u.bound_argv = NULL;
   }
 
   ant_value_t async_slot = get_slot(func_obj, SLOT_ASYNC);
@@ -653,24 +655,13 @@ static ant_value_t builtin_function_bind(ant_params_t) {
   ant_value_t call_target = js_resolve_bound_target(call_this);
   set_slot(bound_func, SLOT_TARGET_FUNC, call_target);
   
-  if (bound_argc > 0 || orig_bound_argc > 0) {
-    ant_value_t bound_arr = Ant_Array_Create(js);
-    for (int i = 0; i < orig_bound_argc; i++)
-      arr_set(js, bound_arr, (ant_offset_t)i, orig->u.bound.argv[i]);
-    for (int i = 0; i < bound_argc; i++)
-      arr_set(js, bound_arr, (ant_offset_t)(orig_bound_argc + i), bound_args[i]);
-    bound_closure->u.bound.args_arr = bound_arr;
-    if (!bound_argv_copy(
-      bound_closure,
-      orig_bound_argc > 0 ? orig->u.bound.argv : NULL, orig_bound_argc,
-      bound_args, bound_argc
-    )) return js_mkerr(js, "oom");
-  }
+  if (bound_argc > 0 || orig_bound_argc > 0) if (!bound_argv_copy(
+    bound_closure, orig_bound_argc > 0 
+      ? orig->u.bound_argv 
+      : NULL, orig_bound_argc, bound_args, bound_argc)
+  ) return js_mkerr(js, "oom");
 
-  if (vtype(cfunc_slot) == kTypeBuiltin) {
-    set_slot(bound_func, SLOT_CFUNC, cfunc_slot);
-  }
-  
+  if (vtype(cfunc_slot) == kTypeBuiltin) set_slot(bound_func, SLOT_CFUNC, cfunc_slot);
   ant_value_t length_result = js_define_function_length(js, bound_func, bound_length);
   if (is_err(length_result)) return length_result;
   
