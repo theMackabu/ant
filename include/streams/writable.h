@@ -17,6 +17,8 @@ typedef struct {
   double *queue_sizes;
   uint32_t queue_sizes_len;
   uint32_t queue_sizes_cap;
+  uint32_t queue_sizes_head;
+  uint32_t queue_head;
   double queue_total_size;
   double strategy_hwm;
   bool close_requested;
@@ -24,6 +26,7 @@ typedef struct {
 } ws_controller_t;
 
 typedef struct {
+  uint32_t write_reqs_head;
   ws_state_t state;
   bool backpressure;
   bool has_pending_abort;

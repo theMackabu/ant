@@ -11,6 +11,7 @@
 #include "silver/call.h"
 #include "modules/iterator.h"
 #include "modules/assert.h"
+#include "streams/queue.h"
 #include "streams/readable.h"
 #include "streams/pipes.h"
 
@@ -105,9 +106,14 @@ ant_value_t rs_reader_reqs(ant_value_t reader_obj) {
   return js_get_slot(reader_obj, SLOT_AUX);
 }
 
+static uint32_t *rs_reader_reqs_head(ant_value_t reader_obj) {
+  rs_stream_t *stream = rs_get_stream(rs_reader_stream(reader_obj));
+  return stream ? &stream->read_reqs_head : NULL;
+}
+
 bool rs_reader_has_reqs(ant_t *js, ant_value_t reader_obj) {
-  ant_value_t arr = rs_reader_reqs(reader_obj);
-  return vtype(arr) == kTypeArray && js_arr_len(js, arr) > 0;
+  uint32_t *head = rs_reader_reqs_head(reader_obj);
+  return head && Stream_Queue_Len(rs_reader_reqs(reader_obj), *head) > 0;
 }
 
 void rs_ctrl_queue_push(ant_t *js, ant_value_t ctrl_obj, ant_value_t value) {
@@ -115,43 +121,14 @@ void rs_ctrl_queue_push(ant_t *js, ant_value_t ctrl_obj, ant_value_t value) {
   if (vtype(arr) == kTypeArray) js_arr_push(js, arr, value);
 }
 
-static ant_value_t rs_ctrl_queue_shift(ant_t *js, ant_value_t ctrl_obj) {
-  ant_value_t arr = rs_ctrl_queue(js, ctrl_obj);
-  if (vtype(arr) != kTypeArray) return Ant_Value_Undefined;
-  ant_object_t *aobj = js_obj_ptr(arr);
-  if (aobj->u.array.len == 0) return Ant_Value_Undefined;
-  ant_value_t val = aobj->u.array.data[0];
-  uint32_t new_len = aobj->u.array.len - 1;
-  for (uint32_t i = 0; i < new_len; i++)
-    aobj->u.array.data[i] = aobj->u.array.data[i + 1];
-  gc_elements_moved(aobj);
-  aobj->u.array.len = new_len;
-  return val;
-}
-
 ant_offset_t rs_ctrl_queue_len(ant_t *js, ant_value_t ctrl_obj) {
-  ant_value_t arr = rs_ctrl_queue(js, ctrl_obj);
-  if (vtype(arr) != kTypeArray) return 0;
-  return js_arr_len(js, arr);
+  rs_controller_t *ctrl = rs_get_controller(ctrl_obj);
+  return ctrl ? Stream_Queue_Len(rs_ctrl_queue(js, ctrl_obj), ctrl->queue_head) : 0;
 }
 
 static void rs_reader_reqs_push(ant_t *js, ant_value_t reader_obj, ant_value_t promise) {
   ant_value_t arr = rs_reader_reqs(reader_obj);
   if (vtype(arr) == kTypeArray) js_arr_push(js, arr, promise);
-}
-
-static ant_value_t rs_reader_reqs_shift(ant_t *js, ant_value_t reader_obj) {
-  ant_value_t arr = rs_reader_reqs(reader_obj);
-  if (vtype(arr) != kTypeArray) return Ant_Value_Undefined;
-  ant_object_t *aobj = js_obj_ptr(arr);
-  if (aobj->u.array.len == 0) return Ant_Value_Undefined;
-  ant_value_t val = aobj->u.array.data[0];
-  uint32_t new_len = aobj->u.array.len - 1;
-  for (uint32_t i = 0; i < new_len; i++)
-    aobj->u.array.data[i] = aobj->u.array.data[i + 1];
-  gc_elements_moved(aobj);
-  aobj->u.array.len = new_len;
-  return val;
 }
 
 void rs_default_controller_call_pull_if_needed(ant_t *js, ant_value_t controller_obj);
@@ -192,20 +169,27 @@ bool rs_default_controller_can_close_or_enqueue(rs_controller_t *ctrl, rs_stream
 void rs_fulfill_read_request(ant_t *js, ant_value_t stream_obj, ant_value_t chunk, bool done) {
   ant_value_t reader_obj = rs_stream_reader(stream_obj);
   if (!rs_is_reader(reader_obj)) return;
-  ant_value_t promise = rs_reader_reqs_shift(js, reader_obj);
+  
+  uint32_t *head = rs_reader_reqs_head(reader_obj);
+  if (!head) return;
+  
+  ant_value_t promise = Stream_Queue_Shift(rs_reader_reqs(reader_obj), head);
   if (vtype(promise) == kTypeUndefined) return;
+  
   ant_value_t result = js_iter_result(js, !done, chunk);
   js_resolve_promise(js, promise, result);
 }
 
 void rs_default_reader_error_read_requests(ant_t *js, ant_value_t reader_obj, ant_value_t e) {
   ant_value_t arr = rs_reader_reqs(reader_obj);
-  if (vtype(arr) != kTypeArray) return;
-  ant_offset_t len = js_arr_len(js, arr);
-  for (ant_offset_t i = 0; i < len; i++)
-    js_reject_promise(js, js_arr_get(js, arr, i), e);
-  ant_object_t *aobj = js_obj_ptr(arr);
-  aobj->u.array.len = 0;
+  uint32_t *head = rs_reader_reqs_head(reader_obj);
+  if (!head) return;
+  
+  uint32_t len = Stream_Queue_Len(arr, *head);
+  for (uint32_t i = 0; i < len; i++)
+    js_reject_promise(js, Stream_Queue_At(arr, *head, i), e);
+  
+  Stream_Queue_Clear(arr, head);
 }
 
 void readable_stream_close(ant_t *js, ant_value_t stream_obj) {
@@ -216,15 +200,14 @@ void readable_stream_close(ant_t *js, ant_value_t stream_obj) {
   ant_value_t reader_obj = rs_stream_reader(stream_obj);
   if (rs_is_reader(reader_obj)) {
     ant_value_t arr = rs_reader_reqs(reader_obj);
-    if (vtype(arr) == kTypeArray) {
-      ant_offset_t len = js_arr_len(js, arr);
-      for (ant_offset_t i = 0; i < len; i++) {
-        ant_value_t result = js_iter_result(js, false, Ant_Value_Undefined);
-        js_resolve_promise(js, js_arr_get(js, arr, i), result);
-      }
-      ant_object_t *aobj = js_obj_ptr(arr);
-      aobj->u.array.len = 0;
+    uint32_t len = Stream_Queue_Len(arr, stream->read_reqs_head);
+    
+    for (uint32_t i = 0; i < len; i++) {
+      ant_value_t result = js_iter_result(js, false, Ant_Value_Undefined);
+      js_resolve_promise(js, Stream_Queue_At(arr, stream->read_reqs_head, i), result);
     }
+    
+    Stream_Queue_Clear(arr, &stream->read_reqs_head);
     js_resolve_promise(js, rs_reader_closed(reader_obj), Ant_Value_Undefined);
   }
 }
@@ -232,8 +215,9 @@ void readable_stream_close(ant_t *js, ant_value_t stream_obj) {
 void readable_stream_error(ant_t *js, ant_value_t stream_obj, ant_value_t e) {
   rs_stream_t *stream = rs_get_stream(stream_obj);
   if (!stream || stream->state != RS_STATE_READABLE) return;
+  
   stream->state = RS_STATE_ERRORED;
-  js_set_slot(stream_obj, SLOT_AUX, e);
+  js_set_slot_wb(js, stream_obj, SLOT_AUX, e);
 
   ant_value_t reader_obj = rs_stream_reader(stream_obj);
   if (rs_is_reader(reader_obj)) {
@@ -372,19 +356,19 @@ ant_value_t rs_default_reader_read(ant_t *js, ant_value_t reader_obj) {
 
   ant_value_t ctrl_obj = rs_stream_controller(js, stream_obj);
   rs_controller_t *ctrl = rs_get_controller(ctrl_obj);
+  
   if (ctrl && rs_ctrl_queue_len(js, ctrl_obj) > 0) {
-    ant_value_t chunk = rs_ctrl_queue_shift(js, ctrl_obj);
+    ant_value_t chunk = Stream_Queue_Shift(rs_ctrl_queue(js, ctrl_obj), &ctrl->queue_head);
     double chunk_size = 1;
-    if (ctrl->queue_sizes_len > 0) {
-      chunk_size = ctrl->queue_sizes[0];
-      ctrl->queue_sizes_len--;
-      memmove(ctrl->queue_sizes, ctrl->queue_sizes + 1, ctrl->queue_sizes_len * sizeof(double));
-    }
+    
+    Stream_Sizes_Shift(ctrl->queue_sizes, &ctrl->queue_sizes_len, &ctrl->queue_sizes_head, &chunk_size);
     ctrl->queue_total_size -= chunk_size;
+    
     if (ctrl->queue_total_size < 0) ctrl->queue_total_size = 0;
     bool should_close = ctrl->close_requested && rs_ctrl_queue_len(js, ctrl_obj) == 0;
     ant_value_t p = js_mkpromise(js);
     js_resolve_promise(js, p, js_iter_result(js, true, chunk));
+    
     if (should_close) {
       rs_default_controller_clear_algorithms(ctrl_obj);
       readable_stream_close(js, stream_obj);
@@ -396,6 +380,7 @@ ant_value_t rs_default_reader_read(ant_t *js, ant_value_t reader_obj) {
   ant_value_t p = js_mkpromise(js);
   rs_reader_reqs_push(js, reader_obj, p);
   rs_default_controller_call_pull_if_needed(js, ctrl_obj);
+  
   return p;
 }
 
@@ -496,6 +481,8 @@ static ant_value_t js_rs_controller_error(ant_params_t) {
   ant_value_t e = (nargs > 0) ? args[0] : Ant_Value_Undefined;
   ctrl->queue_total_size = 0;
   ctrl->queue_sizes_len = 0;
+  ctrl->queue_sizes_head = 0;
+  
   rs_default_controller_clear_algorithms(call_this);
   readable_stream_error(js, stream_obj, e);
   
@@ -605,7 +592,7 @@ static ant_value_t rs_release_reader_lock(ant_t *js, ant_value_t reader_obj) {
 
   js_reject_promise(js, new_closed, release_err);
   promise_mark_handled(new_closed);
-  js_set_slot(reader_obj, SLOT_RS_CLOSED, new_closed);
+  js_set_slot_wb(js, reader_obj, SLOT_RS_CLOSED, new_closed);
 
   js_set_slot(stream_obj, SLOT_CTOR, Ant_Value_Undefined);
   js_set_slot(reader_obj, SLOT_ENTRIES, Ant_Value_Undefined);
@@ -644,10 +631,10 @@ ant_value_t rs_reader_create(ant_t *js, ant_value_t stream_obj, ant_value_t new_
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_slot(obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_READABLE_STREAM_READER));
-  js_set_slot(obj, SLOT_ENTRIES, stream_obj);
-  js_set_slot(obj, SLOT_RS_CLOSED, closed);
-  js_set_slot(obj, SLOT_AUX, Ant_Array_Create(js));
-  js_set_slot(stream_obj, SLOT_CTOR, obj);
+  js_set_slot_wb(js, obj, SLOT_ENTRIES, stream_obj);
+  js_set_slot_wb(js, obj, SLOT_RS_CLOSED, closed);
+  js_set_slot_wb(js, obj, SLOT_AUX, Ant_Array_Create(js));
+  js_set_slot_wb(js, stream_obj, SLOT_CTOR, obj);
 
   if (stream->state == RS_STATE_CLOSED)
     js_resolve_promise(js, closed, Ant_Value_Undefined);
@@ -740,7 +727,7 @@ static ant_value_t js_rs_values(ant_params_t) {
 
   ant_value_t iterator = Ant_Object_CreateBare(js);
   js_set_proto_init(iterator, js->builtins.rs_async_iter_proto);
-  js_set_slot(iterator, SLOT_DATA, reader);
+  js_set_slot_wb(js, iterator, SLOT_DATA, reader);
   
   return iterator;
 }
@@ -787,14 +774,15 @@ static ant_value_t setup_default_controller(
   js_set_proto_init(ctrl_obj, js->builtins.controller_proto);
   js_set_slot(ctrl_obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_READABLE_STREAM_CONTROLLER));
   js_set_native(ctrl_obj, ctrl, RS_CONTROLLER_NATIVE_TAG);
-  js_set_slot(ctrl_obj, SLOT_ENTRIES, stream_obj);
-  js_set_slot(ctrl_obj, SLOT_RS_PULL, pull_fn);
-  js_set_slot(ctrl_obj, SLOT_RS_CANCEL, cancel_fn);
-  js_set_slot(ctrl_obj, SLOT_RS_SIZE, size_fn);
-  js_set_slot(ctrl_obj, SLOT_AUX, Ant_Array_Create(js));
+  
+  js_set_slot_wb(js, ctrl_obj, SLOT_ENTRIES, stream_obj);
+  js_set_slot_wb(js, ctrl_obj, SLOT_RS_PULL, pull_fn);
+  js_set_slot_wb(js, ctrl_obj, SLOT_RS_CANCEL, cancel_fn);
+  js_set_slot_wb(js, ctrl_obj, SLOT_RS_SIZE, size_fn);
+  js_set_slot_wb(js, ctrl_obj, SLOT_AUX, Ant_Array_Create(js));
   js_set_finalizer(ctrl_obj, rs_controller_finalize);
-
-  js_set_slot(stream_obj, SLOT_ENTRIES, ctrl_obj);
+  js_set_slot_wb(js, stream_obj, SLOT_ENTRIES, ctrl_obj);
+  
   return ctrl_obj;
 }
 

@@ -23,10 +23,34 @@ async function main() {
   for (;;) {
     const result = await reader.read();
     if (result.done) break;
+    assert.strictEqual(Object.getPrototypeOf(result.value), Uint8Array.prototype);
+    assert.strictEqual(Buffer.isBuffer(result.value), false);
     chunks.push(Buffer.from(result.value));
   }
 
   assert.strictEqual(Buffer.concat(chunks).toString(), 'hello world');
+
+  const objectChunk = Buffer.from('obj');
+  const objectReader = Readable.toWeb(Readable.from([objectChunk], { objectMode: true })).getReader();
+  assert.strictEqual((await objectReader.read()).value, objectChunk);
+
+  let controller;
+  const deep = new ReadableStream({ start(c) { controller = c; } }, { highWaterMark: 0 });
+  const deepReader = deep.getReader();
+  let next = 0;
+  let expected = 0;
+  for (let round = 0; round < 50; round++) {
+    for (let i = 0; i < 200; i++) controller.enqueue(next++);
+    for (let i = 0; i < 150; i++) assert.strictEqual((await deepReader.read()).value, expected++);
+  }
+  controller.close();
+  for (;;) {
+    const result = await deepReader.read();
+    if (result.done) break;
+    assert.strictEqual(result.value, expected++);
+  }
+  assert.strictEqual(expected, next);
+
   console.log('stream-readable-to-web:ok');
 }
 

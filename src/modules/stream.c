@@ -3738,10 +3738,26 @@ static bool stream_to_web_close(ant_t *js, stream_op_t *op) {
   return true;
 }
 
+static ant_value_t stream_to_web_chunk(ant_t *js, ant_value_t source, ant_value_t chunk) {
+  stream_private_state_t *priv = stream_readable_of(source);
+  if (priv && priv->readable.object_mode) return chunk;
+  if (!stream_is_buffer_instance(js, chunk)) return chunk;
+
+  TypedArrayData *ta = buffer_get_typedarray_data(chunk);
+  return create_typed_array_with_buffer(
+    js, TYPED_ARRAY_UINT8, ta->buffer, ta->byte_offset, ta->length,
+    js->builtins.typedarray_protos[TYPED_ARRAY_UINT8], js_get_slot(chunk, SLOT_DATA), ta->length_tracking
+  );
+}
+
 static ant_value_t stream_to_web_on_data(ant_params_t) {
   stream_op_t *op = stream_op_current(js, call_func);
   if (op->web_closed) return Ant_Value_Undefined;
-  return rs_controller_enqueue(js, op->web.controller, nargs > 0 ? args[0] : Ant_Value_Undefined);
+
+  ant_value_t chunk = stream_to_web_chunk(js, op->web.source, nargs > 0 ? args[0] : Ant_Value_Undefined);
+  if (is_err(chunk)) return chunk;
+  
+  return rs_controller_enqueue(js, op->web.controller, chunk);
 }
 
 static ant_value_t stream_to_web_on_end(ant_params_t) {

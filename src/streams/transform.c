@@ -210,6 +210,7 @@ static void ts_error(ant_t *js, ant_value_t ts_obj, ant_value_t e) {
   if (rc) {
     rc->queue_total_size = 0;
     rc->queue_sizes_len = 0;
+    rc->queue_sizes_head = 0;
     rs_default_controller_clear_algorithms(rs_ctrl);
   }
   readable_stream_error(js, readable, e);
@@ -328,8 +329,8 @@ static ant_value_t ts_ctrl_perform_transform(ant_t *js, ant_value_t ctrl_obj, an
 
     ant_value_t res_fn = js_heavy_mkfun(js, ts_transform_resolve, p);
     ant_value_t wrapper = Ant_Object_CreateBare(js);
-    js_set_slot(wrapper, SLOT_DATA, p);
-    js_set_slot(wrapper, SLOT_ENTRIES, ts_obj);
+    js_set_slot_wb(js, wrapper, SLOT_DATA, p);
+    js_set_slot_wb(js, wrapper, SLOT_ENTRIES, ts_obj);
     
     ant_value_t rej_fn = js_heavy_mkfun(js, ts_transform_reject, wrapper);
     ts_chain_promise(js, result, res_fn, rej_fn);
@@ -388,8 +389,8 @@ static ant_value_t ts_run_cancel_algorithm(ant_t *js, ant_value_t ts_obj, ant_va
   }
 
   ant_value_t wrapper = Ant_Object_CreateBare(js);
-  js_set_slot(wrapper, SLOT_DATA, p);
-  js_set_slot(wrapper, SLOT_ENTRIES, ts_obj);
+  js_set_slot_wb(js, wrapper, SLOT_DATA, p);
+  js_set_slot_wb(js, wrapper, SLOT_ENTRIES, ts_obj);
   
   ant_value_t res_fn = js_heavy_mkfun(js, ts_cancel_base_resolve, wrapper);
   ant_value_t rej_fn = js_heavy_mkfun(js, ts_cancel_base_reject, wrapper);
@@ -516,8 +517,8 @@ static ant_value_t ts_sink_write_bp_resolve(ant_params_t) {
   if (vtype(fp) == kTypePromise) {
     ant_value_t resolve_fn = js_heavy_mkfun(js, ts_transform_resolve, fp);
     ant_value_t rej_wrapper = Ant_Object_CreateBare(js);
-    js_set_slot(rej_wrapper, SLOT_DATA, fp);
-    js_set_slot(rej_wrapper, SLOT_ENTRIES, ts_obj);
+    js_set_slot_wb(js, rej_wrapper, SLOT_DATA, fp);
+    js_set_slot_wb(js, rej_wrapper, SLOT_ENTRIES, ts_obj);
     ant_value_t reject_fn = js_heavy_mkfun(js, ts_transform_reject, rej_wrapper);
     ts_chain_promise(js, transform_p, resolve_fn, reject_fn);
   }
@@ -535,13 +536,13 @@ static ant_value_t ts_sink_write(ant_params_t) {
 
   if (ts_get_backpressure(ts_obj)) {
     ant_value_t wrapper = Ant_Object_CreateBare(js);
-    js_set_slot(wrapper, SLOT_DATA, ctrl_obj);
-    js_set_slot(wrapper, SLOT_ENTRIES, chunk);
-    js_set_slot(wrapper, SLOT_CTOR, ts_obj);
+    js_set_slot_wb(js, wrapper, SLOT_DATA, ctrl_obj);
+    js_set_slot_wb(js, wrapper, SLOT_ENTRIES, chunk);
+    js_set_slot_wb(js, wrapper, SLOT_CTOR, ts_obj);
     ant_value_t res_fn = js_heavy_mkfun(js, ts_sink_write_bp_resolve, wrapper);
     ant_value_t rej_wrapper = Ant_Object_CreateBare(js);
-    js_set_slot(rej_wrapper, SLOT_DATA, finish_p);
-    js_set_slot(rej_wrapper, SLOT_ENTRIES, ts_obj);
+    js_set_slot_wb(js, rej_wrapper, SLOT_DATA, finish_p);
+    js_set_slot_wb(js, rej_wrapper, SLOT_ENTRIES, ts_obj);
     ant_value_t rej_fn = js_heavy_mkfun(js, ts_transform_reject, rej_wrapper);
     ant_value_t bp = ts_bp_promise(ts_obj);
     ts_chain_promise(js, bp, res_fn, rej_fn);
@@ -549,8 +550,8 @@ static ant_value_t ts_sink_write(ant_params_t) {
     ant_value_t transform_p = ts_ctrl_perform_transform(js, ctrl_obj, chunk);
     ant_value_t resolve_fn = js_heavy_mkfun(js, ts_transform_resolve, finish_p);
     ant_value_t rej_wrapper = Ant_Object_CreateBare(js);
-    js_set_slot(rej_wrapper, SLOT_DATA, finish_p);
-    js_set_slot(rej_wrapper, SLOT_ENTRIES, ts_obj);
+    js_set_slot_wb(js, rej_wrapper, SLOT_DATA, finish_p);
+    js_set_slot_wb(js, rej_wrapper, SLOT_ENTRIES, ts_obj);
     ant_value_t reject_fn = js_heavy_mkfun(js, ts_transform_reject, rej_wrapper);
     ts_chain_promise(js, transform_p, resolve_fn, reject_fn);
   }
@@ -571,9 +572,9 @@ static ant_value_t ts_sink_abort(ant_params_t) {
   ant_value_t p = js_mkpromise(js);
   ant_value_t base = ts_run_cancel_algorithm(js, ts_obj, cancel_fn, reason, true);
   ant_value_t wrapper = Ant_Object_CreateBare(js);
-  js_set_slot(wrapper, SLOT_DATA, p);
-  js_set_slot(wrapper, SLOT_ENTRIES, ts_obj);
-  js_set_slot(wrapper, SLOT_AUX, reason);
+  js_set_slot_wb(js, wrapper, SLOT_DATA, p);
+  js_set_slot_wb(js, wrapper, SLOT_ENTRIES, ts_obj);
+  js_set_slot_wb(js, wrapper, SLOT_AUX, reason);
   js_set_slot(wrapper, SLOT_CTOR, ts_cancel_started_by_abort(ts_obj) ? Ant_Value_True : Ant_Value_False);
   
   ant_value_t res_fn = js_heavy_mkfun(js, ts_abort_cancel_resolve, wrapper);
@@ -630,8 +631,8 @@ static ant_value_t ts_sink_close(ant_params_t) {
   ant_value_t cancel_p = ts_cancel_promise(ts_obj);
   if (vtype(cancel_p) == kTypePromise) {
     ant_value_t wrapper = Ant_Object_CreateBare(js);
-    js_set_slot(wrapper, SLOT_DATA, p);
-    js_set_slot(wrapper, SLOT_ENTRIES, ts_obj);
+    js_set_slot_wb(js, wrapper, SLOT_DATA, p);
+    js_set_slot_wb(js, wrapper, SLOT_ENTRIES, ts_obj);
     ant_value_t res_fn = js_heavy_mkfun(js, ts_close_cancel_resolve, wrapper);
     ant_value_t rej_fn = js_heavy_mkfun(js, ts_close_cancel_reject, wrapper);
     ts_chain_promise(js, cancel_p, res_fn, rej_fn);
@@ -654,8 +655,8 @@ static ant_value_t ts_sink_close(ant_params_t) {
     }
 
     ant_value_t wrapper = Ant_Object_CreateBare(js);
-    js_set_slot(wrapper, SLOT_DATA, p);
-    js_set_slot(wrapper, SLOT_ENTRIES, ts_obj);
+    js_set_slot_wb(js, wrapper, SLOT_DATA, p);
+    js_set_slot_wb(js, wrapper, SLOT_ENTRIES, ts_obj);
     ant_value_t res_fn = js_heavy_mkfun(js, ts_sink_close_resolve, wrapper);
     ant_value_t rej_fn = js_heavy_mkfun(js, ts_sink_close_reject, wrapper);
 
@@ -706,13 +707,16 @@ static ant_value_t ts_source_cancel(ant_params_t) {
   ant_value_t p = js_mkpromise(js);
   ant_value_t base = ts_run_cancel_algorithm(js, ts_obj, cancel_fn, reason, false);
   ant_value_t wrapper = Ant_Object_CreateBare(js);
-  js_set_slot(wrapper, SLOT_DATA, p);
-  js_set_slot(wrapper, SLOT_ENTRIES, ts_obj);
-  js_set_slot(wrapper, SLOT_AUX, reason);
+  
+  js_set_slot_wb(js, wrapper, SLOT_DATA, p);
+  js_set_slot_wb(js, wrapper, SLOT_ENTRIES, ts_obj);
+  js_set_slot_wb(js, wrapper, SLOT_AUX, reason);
   js_set_slot(wrapper, SLOT_CTOR, ts_cancel_started_by_abort(ts_obj) ? Ant_Value_True : Ant_Value_False);
+  
   ant_value_t res_fn = js_heavy_mkfun(js, ts_source_cancel_resolve, wrapper);
   ant_value_t rej_fn = js_heavy_mkfun(js, ts_source_cancel_reject, wrapper);
   ts_chain_promise(js, base, res_fn, rej_fn);
+  
   return p;
 }
 
@@ -862,13 +866,15 @@ static ant_value_t ts_create_controller(
 ) {
   ant_value_t ctrl_obj = Ant_Object_CreateBare(js);
   js_set_proto_init(ctrl_obj, js->builtins.ts_ctrl_proto);
-  js_set_slot(ctrl_obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_TRANSFORM_STREAM_CONTROLLER));
-  js_set_slot(ctrl_obj, SLOT_DATA, ts_obj);
-  js_set_slot(ctrl_obj, SLOT_ENTRIES, fns->transform);
-  js_set_slot(ctrl_obj, SLOT_CTOR, fns->flush);
-  js_set_slot(ctrl_obj, SLOT_AUX, fns->cancel);
-  js_set_slot(ctrl_obj, SLOT_SETTLED, transformer);
+  js_set_slot(ctrl_obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_TRANSFORM_STREAM_CONTROLLER));\
+  
+  js_set_slot_wb(js, ctrl_obj, SLOT_DATA, ts_obj);
+  js_set_slot_wb(js, ctrl_obj, SLOT_ENTRIES, fns->transform);
+  js_set_slot_wb(js, ctrl_obj, SLOT_CTOR, fns->flush);
+  js_set_slot_wb(js, ctrl_obj, SLOT_AUX, fns->cancel);
+  js_set_slot_wb(js, ctrl_obj, SLOT_SETTLED, transformer);
   js_set_slot(ctrl_obj, SLOT_RS_PULL, Ant_Value_Undefined);
+  
   return ctrl_obj;
 }
 
@@ -896,12 +902,13 @@ static ant_value_t ts_create_readable(ant_t *js, ant_value_t ts_obj, double hwm,
   js_set_slot(rs_ctrl_obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_READABLE_STREAM_CONTROLLER));
   js_set_native(rs_ctrl_obj, rcc, RS_CONTROLLER_NATIVE_TAG);
   js_set_finalizer(rs_ctrl_obj, ts_rs_ctrl_finalize);
-  js_set_slot(rs_ctrl_obj, SLOT_ENTRIES, rs_obj);
-  js_set_slot(rs_ctrl_obj, SLOT_RS_PULL, js_heavy_mkfun(js, ts_source_pull, ts_obj));
-  js_set_slot(rs_ctrl_obj, SLOT_RS_CANCEL, js_heavy_mkfun(js, ts_source_cancel, ts_obj));
-  js_set_slot(rs_ctrl_obj, SLOT_RS_SIZE, size_fn);
-  js_set_slot(rs_ctrl_obj, SLOT_AUX, Ant_Array_Create(js));
-  js_set_slot(rs_obj, SLOT_ENTRIES, rs_ctrl_obj);
+  
+  js_set_slot_wb(js, rs_ctrl_obj, SLOT_ENTRIES, rs_obj);
+  js_set_slot_wb(js, rs_ctrl_obj, SLOT_RS_PULL, js_heavy_mkfun(js, ts_source_pull, ts_obj));
+  js_set_slot_wb(js, rs_ctrl_obj, SLOT_RS_CANCEL, js_heavy_mkfun(js, ts_source_cancel, ts_obj));
+  js_set_slot_wb(js, rs_ctrl_obj, SLOT_RS_SIZE, size_fn);
+  js_set_slot_wb(js, rs_ctrl_obj, SLOT_AUX, Ant_Array_Create(js));
+  js_set_slot_wb(js, rs_obj, SLOT_ENTRIES, rs_ctrl_obj);
   
   return rs_obj;
 }
@@ -924,21 +931,21 @@ static ant_value_t ts_create_writable(ant_t *js, ant_value_t ts_obj, double hwm,
   js_set_slot(ws_obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_WRITABLE_STREAM));
   js_set_native(ws_obj, wst, WS_STREAM_NATIVE_TAG);
   js_set_finalizer(ws_obj, ts_ws_finalize);
-  js_set_slot(ws_obj, SLOT_SETTLED, Ant_Array_Create(js));
+  js_set_slot_wb(js, ws_obj, SLOT_SETTLED, Ant_Array_Create(js));
 
   ant_value_t ws_ctrl_obj = Ant_Object_CreateBare(js);
   js_set_proto_init(ws_ctrl_obj, js->builtins.ws_controller_proto);
   js_set_slot(ws_ctrl_obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_WRITABLE_STREAM_CONTROLLER));
   js_set_native(ws_ctrl_obj, wc, WS_CONTROLLER_NATIVE_TAG);
   js_set_finalizer(ws_ctrl_obj, ts_ws_ctrl_finalize);
-  js_set_slot(ws_ctrl_obj, SLOT_ENTRIES, ws_obj);
-  js_set_slot(ws_ctrl_obj, SLOT_WS_WRITE, js_heavy_mkfun(js, ts_sink_write, ts_obj));
-  js_set_slot(ws_ctrl_obj, SLOT_WS_CLOSE, js_heavy_mkfun(js, ts_sink_close, ts_obj));
-  js_set_slot(ws_ctrl_obj, SLOT_WS_ABORT, js_heavy_mkfun(js, ts_sink_abort, ts_obj));
-  js_set_slot(ws_ctrl_obj, SLOT_RS_SIZE, size_fn);
+  js_set_slot_wb(js, ws_ctrl_obj, SLOT_ENTRIES, ws_obj);
+  js_set_slot_wb(js, ws_ctrl_obj, SLOT_WS_WRITE, js_heavy_mkfun(js, ts_sink_write, ts_obj));
+  js_set_slot_wb(js, ws_ctrl_obj, SLOT_WS_CLOSE, js_heavy_mkfun(js, ts_sink_close, ts_obj));
+  js_set_slot_wb(js, ws_ctrl_obj, SLOT_WS_ABORT, js_heavy_mkfun(js, ts_sink_abort, ts_obj));
+  js_set_slot_wb(js, ws_ctrl_obj, SLOT_RS_SIZE, size_fn);
   js_set_slot(ws_ctrl_obj, SLOT_CTOR, Ant_Value_Undefined);
-  js_set_slot(ws_ctrl_obj, SLOT_AUX, Ant_Array_Create(js));
-  js_set_slot(ws_obj, SLOT_ENTRIES, ws_ctrl_obj);
+  js_set_slot_wb(js, ws_ctrl_obj, SLOT_AUX, Ant_Array_Create(js));
+  js_set_slot_wb(js, ws_obj, SLOT_ENTRIES, ws_ctrl_obj);
   
   return ws_obj;
 }
@@ -995,15 +1002,15 @@ ant_value_t ts_create(
   js_set_slot(ts_obj, SLOT_WS_SIGNAL, Ant_Value_False);
 
   ant_value_t ctrl_obj = ts_create_controller(js, ts_obj, transformer, &fns);
-  js_set_slot(ts_obj, SLOT_DEFAULT, ctrl_obj);
+  js_set_slot_wb(js, ts_obj, SLOT_DEFAULT, ctrl_obj);
 
   ant_value_t rs_obj = ts_create_readable(js, ts_obj, readable_hwm, readable_size_fn);
   if (is_err(rs_obj)) return rs_obj;
-  js_set_slot(ts_obj, SLOT_ENTRIES, rs_obj);
+  js_set_slot_wb(js, ts_obj, SLOT_ENTRIES, rs_obj);
 
   ant_value_t ws_obj = ts_create_writable(js, ts_obj, writable_hwm, writable_size_fn);
   if (is_err(ws_obj)) return ws_obj;
-  js_set_slot(ts_obj, SLOT_CTOR, ws_obj);
+  js_set_slot_wb(js, ts_obj, SLOT_CTOR, ws_obj);
 
   ts_set_backpressure(js, ts_obj, true);
   return ts_run_start(js, ts_obj, ctrl_obj, transformer, fns.start);

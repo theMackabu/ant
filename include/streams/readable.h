@@ -16,6 +16,8 @@ typedef struct {
   double *queue_sizes;
   uint32_t queue_sizes_len;
   uint32_t queue_sizes_cap;
+  uint32_t queue_sizes_head;
+  uint32_t queue_head;
   double queue_total_size;
   double strategy_hwm;
   
@@ -28,6 +30,7 @@ typedef struct {
 } rs_controller_t;
 
 typedef struct {
+  uint32_t read_reqs_head;
   rs_state_t state;
   bool disturbed;
 } rs_stream_t;

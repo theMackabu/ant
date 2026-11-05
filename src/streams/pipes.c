@@ -390,14 +390,15 @@ ant_value_t readable_stream_pipe_to(
 
   ant_value_t promise = js_mkpromise(js);
   ant_value_t state = Ant_Object_CreateBare(js);
+  
   js_set_native(state, pst, PIPE_STATE_NATIVE_TAG);
-  js_set_slot(state, SLOT_ENTRIES, source);
-  js_set_slot(state, SLOT_CTOR, dest);
-  js_set_slot(state, SLOT_AUX, reader);
-  js_set_slot(state, SLOT_DEFAULT, writer);
-  js_set_slot(state, SLOT_RS_PULL, promise);
+  js_set_slot_wb(js, state, SLOT_ENTRIES, source);
+  js_set_slot_wb(js, state, SLOT_CTOR, dest);
+  js_set_slot_wb(js, state, SLOT_AUX, reader);
+  js_set_slot_wb(js, state, SLOT_DEFAULT, writer);
+  js_set_slot_wb(js, state, SLOT_RS_PULL, promise);
   js_set_finalizer(state, pipe_state_finalize);
-  js_set_slot(state, SLOT_RS_CANCEL, signal);
+  js_set_slot_wb(js, state, SLOT_RS_CANCEL, signal);
 
   promise_mark_handled(rs_reader_closed(reader));
   promise_mark_handled(js_get_slot(writer, SLOT_RS_CLOSED));
@@ -416,7 +417,7 @@ ant_value_t readable_stream_pipe_to(
 
   if (abort_signal_is_signal(signal)) {
     ant_value_t listener = js_heavy_mkfun(js, pipe_abort_listener, state);
-    js_set_slot(state, SLOT_PIPE_ABORT_LISTENER, listener);
+    js_set_slot_wb(js, state, SLOT_PIPE_ABORT_LISTENER, listener);
     abort_signal_add_listener(js, signal, listener);
   }
 
@@ -734,8 +735,8 @@ static ant_value_t js_rs_tee(ant_params_t) {
 
   ant_value_t state = Ant_Object_CreateBare(js);
   js_set_native(state, st, TEE_STATE_NATIVE_TAG);
-  js_set_slot(state, SLOT_ENTRIES, call_this);
-  js_set_slot(state, SLOT_AUX, reader);
+  js_set_slot_wb(js, state, SLOT_ENTRIES, call_this);
+  js_set_slot_wb(js, state, SLOT_AUX, reader);
   js_set_slot(state, SLOT_RS_PULL, Ant_Value_Undefined);
   js_set_slot(state, SLOT_RS_CANCEL, Ant_Value_Undefined);
   js_set_slot(state, SLOT_RS_CLOSED, Ant_Value_Undefined);
@@ -746,12 +747,12 @@ static ant_value_t js_rs_tee(ant_params_t) {
   ant_value_t pull2 = js_heavy_mkfun(js, tee_branch_pull, state);
 
   ant_value_t cancel1_wrap = Ant_Object_CreateBare(js);
-  js_set_slot(cancel1_wrap, SLOT_DATA, state);
+  js_set_slot_wb(js, cancel1_wrap, SLOT_DATA, state);
   js_set_slot(cancel1_wrap, SLOT_ENTRIES, Ant_Value_FromNumber(1));
   ant_value_t cancel1 = js_heavy_mkfun(js, tee_branch_cancel, cancel1_wrap);
 
   ant_value_t cancel2_wrap = Ant_Object_CreateBare(js);
-  js_set_slot(cancel2_wrap, SLOT_DATA, state);
+  js_set_slot_wb(js, cancel2_wrap, SLOT_DATA, state);
   js_set_slot(cancel2_wrap, SLOT_ENTRIES, Ant_Value_FromNumber(2));
   ant_value_t cancel2 = js_heavy_mkfun(js, tee_branch_cancel, cancel2_wrap);
 
@@ -762,8 +763,8 @@ static ant_value_t js_rs_tee(ant_params_t) {
     return is_err(branch1) ? branch1 : branch2;
   }
 
-  js_set_slot(state, SLOT_CTOR, branch1);
-  js_set_slot(state, SLOT_DEFAULT, branch2);
+  js_set_slot_wb(js, state, SLOT_CTOR, branch1);
+  js_set_slot_wb(js, state, SLOT_DEFAULT, branch2);
 
   ant_value_t result = Ant_Array_Create(js);
   js_arr_push(js, result, branch1);
