@@ -40,6 +40,34 @@ strict.throws(() => decode("+/", { alphabet: "base64url" }), SyntaxError);
 strict.throws(() => decode("Y"), SyntaxError);
 strict.throws(() => decode("YQ", { alphabet: "nope" }), TypeError);
 strict.throws(() => Uint8Array.fromBase64(123), TypeError);
+strict.throws(() => Uint8Array.fromHex(12), TypeError);
+strict.throws(() => Uint8Array.fromHex({ toString() { return "ff"; } }), TypeError);
+strict.throws(() => Uint8Array.fromHex(), TypeError);
+strict.throws(() => new Uint8Array(2).setFromHex(12), TypeError);
+strict.throws(() => new Uint8Array(2).setFromHex(new String("ff")), TypeError);
+
+const hexPartial = new Uint8Array(1);
+strict.deepStrictEqual({ ...hexPartial.setFromHex("aabb") }, { read: 2, written: 1 });
+strict.deepStrictEqual(Array.from(hexPartial), [0xaa]);
+
+const hexInvalid = new Uint8Array(4);
+strict.throws(() => hexInvalid.setFromHex("aabbzz"), SyntaxError);
+strict.deepStrictEqual(Array.from(hexInvalid), [0xaa, 0xbb, 0, 0]);
+
+const hexOdd = new Uint8Array(4);
+strict.throws(() => hexOdd.setFromHex("aabbc"), SyntaxError);
+strict.deepStrictEqual(Array.from(hexOdd), [0, 0, 0, 0]);
+
+const hexWide = new Uint8Array(4);
+strict.throws(() => hexWide.setFromHex("aa\u00e9"), SyntaxError);
+strict.deepStrictEqual(Array.from(hexWide), [0, 0, 0, 0]);
+strict.throws(() => hexWide.setFromHex("aa\u00e9b"), SyntaxError);
+strict.deepStrictEqual(Array.from(hexWide), [0xaa, 0, 0, 0]);
+
+strict.throws(() => Uint8Array.fromHex("abc"), SyntaxError);
+strict.throws(() => Uint8Array.fromHex("\u00e9"), SyntaxError);
+strict.deepStrictEqual(Array.from(Uint8Array.fromHex("")), []);
+strict.deepStrictEqual({ ...new Uint8Array(0).setFromHex("aa") }, { read: 0, written: 0 });
 
 const partialTarget = new Uint8Array(4);
 strict.deepStrictEqual({ ...partialTarget.setFromBase64("YWJjZGVm") }, { read: 4, written: 3 });

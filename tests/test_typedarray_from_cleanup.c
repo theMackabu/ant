@@ -22,7 +22,7 @@ static gc_temp_root_handle_t FailingTempRootAdd(gc_temp_root_scope_t *scope, ant
 // Inject failures only in this module's calls, without runtime test hooks.
 #define realloc FailingRealloc
 #define gc_temp_root_add FailingTempRootAdd
-#include "../src/modules/buffer.c"
+#include "../src/modules/buffer/typedarray.c"
 #undef gc_temp_root_add
 #undef realloc
 
