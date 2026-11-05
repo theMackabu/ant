@@ -21,7 +21,6 @@
 #define ANT_VIRTIO_VSOCK_OP_RW 5u
 #define ANT_VIRTIO_VSOCK_OP_CREDIT_UPDATE 6u
 #define ANT_VIRTIO_VSOCK_OP_CREDIT_REQUEST 7u
-#define ANT_VIRTIO_VSOCK_EVENT_TRANSPORT_RESET 0u
 #define ANT_HVF_VSOCK_GUEST_CID 3ull
 #define ANT_HVF_VSOCK_HOST_CID ANT_SANDBOX_TRANSPORT_VSOCK_HOST_CID
 #define ANT_HVF_VSOCK_HOST_PORT ANT_SANDBOX_TRANSPORT_VSOCK_PORT
@@ -63,7 +62,6 @@ typedef struct {
   uint32_t peer_fwd_cnt;
   uint32_t tx_cnt;
   uint32_t fwd_cnt;
-  bool event_transport_reset_pending;
   bool exit_received;
   int exit_code;
   uint32_t capabilities;

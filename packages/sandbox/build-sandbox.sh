@@ -41,7 +41,7 @@ arch=native
 docker_no_cache=()
 skip_docker=false
 nanos_src="$nanos_cache_dir/nanos"
-nanos_ref=${NANOS_REF:-125520f4d2db172e5fbf384bd1afc7a2d1171570}
+nanos_ref=${NANOS_REF:-ab823eb4bbcaf0874dc5e15568938bc02346d3d3}
 nanos_url=${NANOS_URL:-https://github.com/nanovms/nanos.git}
 
 while (($#)); do
@@ -298,7 +298,8 @@ elif [[ -f "$nanos_kernel" && ! -f "$nanos_kernel_stamp" ]]; then
   echo "==> reusing existing patched Nanos kernel for $nanos_platform/$nanos_arch"
   printf '%s\n' "$kernel_signature" > "$nanos_kernel_stamp"
 else
-  make -C "$nanos_src" PLATFORM="$nanos_platform" ARCH="$nanos_arch" CC="$nanos_cc" CROSS_COMPILE="$nanos_cross_compile" kernel
+  env -u CFLAGS -u CPPFLAGS -u CXXFLAGS -u LDFLAGS \
+    make -C "$nanos_src" PLATFORM="$nanos_platform" ARCH="$nanos_arch" CC="$nanos_cc" CROSS_COMPILE="$nanos_cross_compile" kernel
   printf '%s\n' "$kernel_signature" > "$nanos_kernel_stamp"
 fi
 

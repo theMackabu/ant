@@ -1,56 +1,102 @@
 # docker does not read .gitignore automatically. keep this aligned with the
 # repo ignore rules, plus Docker-specific large local outputs.
+# exception patterns (!) must not contain globs except a trailing /* or /**:
+# one such pattern makes BuildKit walk every ignored directory.
 
-.env
-.nova
-.maid
-.cache
-.superset
+**/.env
+**/.nova
+**/.maid
+**/.cache
+**/.direnv
+**/.superset
 .git
 
-.claude
+**/.claude
 .github/artifacts
+/.amp/portals/*
 
-*.so
-*.dylib
-*.dll
+**/*.so
+**/*.dylib
+**/*.dll
 
 /build
 /traces
 /result
 /result-*
 /todo/*
-/src/strip/target
+/docs/private
+/docs/exec-plans
 
-/test262
+/differential-output
+/node-compat-output
+
+/packages/sandbox/out
+/packages/sandbox/.cache
+/packages/installer/dist
+
+/src/rust/target
 /javascript-zoo
 /game-of-life
+/anteater.sh
 
 node_modules
 **/node_modules
 !/tests/node_modules
+!/tests/fixtures/compile-app/node_modules
 
 /wpt
-/tools
+/tools/*
 /zoo.sh
+/test262.sh
 
-/vendor/*
+!/tools/arm64-bench
+!/tools/arm64-bench/**
+!/tools/check_stack_depth.sh
+
+/vendor/*/**
 /vendor/.wraplock
-!/vendor/*.wrap
 !/vendor/packagefiles
 !/vendor/packagefiles/**
+!/vendor/node-compat
+!/vendor/node-compat/**
 
-*.todo
-*.trace
-
-bun.lock
-pnpm-lock.yaml
-package-lock.json
-
-docs/reports/.wrangler
-docs/reports/node_modules
-packages/sandbox/build-sandbox.sh
-packages/sandbox/out
-packages/sandbox/.cache
-ant-sandbox.img
+**/*.todo
+**/*.trace
 **/.DS_Store
+
+**/bun.lock
+**/pnpm-lock.yaml
+**/package-lock.json
+
+/build-*
+
+/packages/wasm/.build-probe
+/packages/wasm/.cache
+/packages/wasm/build
+/packages/wasm/dist
+/packages/wasm/vendor
+
+/packages/libant/.cache
+/packages/libant/build
+/packages/libant/vendor
+/packages/libant/dist
+
+/packages/desktop/.cache
+/packages/desktop/build
+/packages/desktop/runtime
+/packages/desktop/coverage
+/packages/desktop/packaging/npm/*/artifacts
+/packages/desktop/packaging/npm/*/vendor
+
+/packages/antland/dist
+/packages/colony/dist
+/docs/api/dist
+/docs/api/.wrangler
+/docs/reports/dist
+/docs/reports/.wrangler
+/examples/ant-desktop/dist
+/examples/ant-desktop/dist-ssr
+
+/test262
+/packages/sandbox/build-sandbox.sh
+/ant-sandbox.img

@@ -31,14 +31,12 @@ index 266a5b71..2dd8d448 100755
 +    if (xfer_len > U16_MAX)
 +        return -EMSGSIZE;
      err_t err = ERR_OK;
-
+ 
      /* XXX check how much we can queue, maybe make udp bh */
 @@ -893,8 +906,6 @@ static sysreturn socket_write_udp(netsock s, void *source, struct iovec *iov, u6
-     if (!dest_addr && !udp_is_flag_set(s->info.udp.lw, UDP_FLAGS_CONNECTED)) {
-         netsock_unlock(s);
          return -EDESTADDRREQ;
      }
-
+ 
 -    if (source)
 -        xfer_len = length;
      struct pbuf *pbuf = pbuf_alloc(PBUF_TRANSPORT, xfer_len, PBUF_RAM);

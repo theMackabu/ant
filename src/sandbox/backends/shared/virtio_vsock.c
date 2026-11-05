@@ -257,48 +257,6 @@ static int ant_hvf_vsock_send_credit_update(ant_hvf_vm_t *vm) {
   return rc == -EAGAIN ? 0 : rc;
 }
 
-static int ant_hvf_vsock_send_event(ant_hvf_vm_t *vm, uint32_t id) {
-  ant_hvf_vsock_device_t *dev = &vm->vsock;
-  ant_hvf_virtio_queue_t *q = &dev->virtio.queues[2];
-  if (!q->enabled || !q->desc || !q->avail || !q->used) return -EAGAIN;
-
-  uint64_t desc_base = q->desc;
-  uint64_t avail_base = q->avail;
-  uint64_t used_base = q->used;
-
-  unsigned char idx_raw[ANT_HVF_BYTES_U16];
-  int rc = ant_hvf_guest_read(vm, avail_base + 2, idx_raw, sizeof(idx_raw));
-  if (rc != 0) return rc;
-  uint16_t avail_idx = ant_hvf_load16(idx_raw);
-  if (q->last_avail == avail_idx) return -EAGAIN;
-
-  uint16_t ring_slot = q->last_avail % q->size;
-  unsigned char head_raw[ANT_HVF_BYTES_U16];
-  rc = ant_hvf_guest_read(vm, avail_base + 4u + (uint64_t)ring_slot * 2u,
-                          head_raw, sizeof(head_raw));
-  if (rc != 0) return rc;
-  uint16_t head = ant_hvf_load16(head_raw);
-
-  unsigned char raw[ANT_HVF_BYTES_U32];
-  ant_hvf_store32(raw, id);
-  uint32_t used_len = 0;
-  rc = ant_hvf_vsock_write_iov(vm, desc_base, head, raw, sizeof(raw), &used_len);
-  if (rc != 0) return rc;
-  rc = ant_hvf_vring_add_used(vm, used_base, q->size, head, used_len);
-  if (rc != 0) return rc;
-
-  q->last_avail++;
-  return ant_hvf_virtio_interrupt(vm, &dev->virtio, 2);
-}
-
-static int ant_hvf_vsock_maybe_send_event(ant_hvf_vm_t *vm) {
-  ant_hvf_vsock_device_t *dev = &vm->vsock;
-  if (!dev->event_transport_reset_pending) return 0;
-  int rc = ant_hvf_vsock_send_event(vm, ANT_VIRTIO_VSOCK_EVENT_TRANSPORT_RESET);
-  if (rc == 0) dev->event_transport_reset_pending = false;
-  return rc == -EAGAIN ? 0 : rc;
-}
-
 int ant_hvf_vsock_read_tx_packet(ant_hvf_vm_t *vm,
                                         uint64_t desc_base,
                                         uint16_t head,
@@ -514,7 +472,7 @@ int ant_hvf_virtio_vsock_notify(ant_hvf_vm_t *vm, unsigned queue) {
     if (rc != 0) return rc;
     return ant_hvf_vsock_maybe_send_request(vm);
   }
-  if (queue == 2) return ant_hvf_vsock_maybe_send_event(vm);
+  if (queue == 2) return 0;
 
   uint64_t desc_base = q->desc;
   uint64_t avail_base = q->avail;

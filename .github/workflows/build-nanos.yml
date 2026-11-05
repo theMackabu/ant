@@ -35,7 +35,7 @@ on:
       nanos_ref:
         description: 'Nanos git ref to patch/build'
         required: false
-        default: '125520f4d2db172e5fbf384bd1afc7a2d1171570'
+        default: 'ab823eb4bbcaf0874dc5e15568938bc02346d3d3'
         type: string
   workflow_dispatch:
     inputs:
@@ -70,7 +70,7 @@ on:
       nanos_ref:
         description: 'Nanos git ref to patch/build'
         required: false
-        default: '125520f4d2db172e5fbf384bd1afc7a2d1171570'
+        default: 'ab823eb4bbcaf0874dc5e15568938bc02346d3d3'
         type: string
 
 permissions:

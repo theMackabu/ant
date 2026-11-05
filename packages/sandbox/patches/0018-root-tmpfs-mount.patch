@@ -1,8 +1,8 @@
 diff --git a/klib/tmpfs.c b/klib/tmpfs.c
-index 6d0b7cf0..7531c345 100644
+index 4d15102f..4c14ff5f 100644
 --- a/klib/tmpfs.c
 +++ b/klib/tmpfs.c
-@@ -246,7 +246,9 @@ filesystem tmpfs_new(void)
+@@ -307,7 +307,9 @@ filesystem tmpfs_new(void)
      return INVALID_ADDRESS;
  }
  
@@ -53,7 +53,7 @@ index fc870390..40c7a023 100644
  	-I$(CURDIR) \
  	-I$(SRCDIR)/devicetree \
 diff --git a/src/kernel/storage.c b/src/kernel/storage.c
-index 1493a45f..60691ce1 100644
+index 654abc3a..3358e1ac 100644
 --- a/src/kernel/storage.c
 +++ b/src/kernel/storage.c
 @@ -2,6 +2,8 @@
@@ -65,7 +65,7 @@ index 1493a45f..60691ce1 100644
  
  int filesystem_mkdirpath(filesystem fs, tuple cwd, sstring fp,
          boolean persistent);
-@@ -36,6 +37,7 @@ static struct {
+@@ -36,6 +38,7 @@ static struct {
      struct spinlock lock;
      u64 mount_generation;
      vector mounts_watchers;
@@ -73,7 +73,7 @@ index 1493a45f..60691ce1 100644
  } storage;
  
  #define storage_lock()      u64 _irqflags = spin_lock_irq(&storage.lock)
-@@ -43,6 +45,7 @@ static struct {
+@@ -43,6 +46,7 @@ static struct {
  
  static void notify_mount_change_locked(void);
  static void storage_apply_mountpoints_locked(void);
@@ -81,7 +81,7 @@ index 1493a45f..60691ce1 100644
  
  /* Called with mutex locked. */
  static volume storage_get_volume(tuple root)
-@@ -285,12 +288,14 @@ void init_volumes(heap h)
+@@ -285,12 +289,14 @@ void init_volumes(heap h)
      storage.mount_generation = 0;
      storage.mounts_watchers = allocate_vector(h, 1);
      assert(storage.mounts_watchers != INVALID_ADDRESS);
@@ -96,7 +96,7 @@ index 1493a45f..60691ce1 100644
      storage_lock();
      storage_apply_mountpoints_locked();
      storage_unlock();
-@@ -298,6 +303,71 @@ void storage_set_root_fs(filesystem root_fs)
+@@ -298,6 +304,71 @@ void storage_set_root_fs(filesystem root_fs)
          storage_check_if_ready();
  }
  

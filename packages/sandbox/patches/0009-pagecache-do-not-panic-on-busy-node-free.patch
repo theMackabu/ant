@@ -1,8 +1,8 @@
 diff --git a/src/kernel/pagecache.c b/src/kernel/pagecache.c
-index 9e3606c7..a4673135 100644
+index cf495525..b3204945 100644
 --- a/src/kernel/pagecache.c
 +++ b/src/kernel/pagecache.c
-@@ -2104,8 +2104,16 @@ closure_function(1, 1, boolean, pagecache_page_release,
+@@ -2488,8 +2488,16 @@ closure_function(1, 1, boolean, pagecache_page_release,
      pagecache_lock_state(pc);
      if (!pp->evicted)
          pagecache_page_release_locked(pc, pp, false);

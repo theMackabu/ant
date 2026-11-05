@@ -136,7 +136,6 @@ int ant_hvf_build_dtb(ant_hvf_vm_t *vm) {
   if ((rc = ant_fdt_prop_u32(&fdt, "#address-cells", 2)) != 0) goto out;
   if ((rc = ant_fdt_prop_u32(&fdt, "#size-cells", 2)) != 0) goto out;
   if ((rc = ant_fdt_prop_u32(&fdt, "interrupt-parent", 1)) != 0) goto out;
-  if ((rc = ant_fdt_prop_null(&fdt, "ant,hvf-prohibit-dc-zva")) != 0) goto out;
 
   if ((rc = ant_fdt_begin(&fdt, "cpus")) != 0) goto out;
   if ((rc = ant_fdt_prop_u32(&fdt, "#address-cells", 2)) != 0) goto out;

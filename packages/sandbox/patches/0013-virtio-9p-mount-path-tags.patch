@@ -1,5 +1,5 @@
 diff --git a/src/kernel/storage.c b/src/kernel/storage.c
-index 72b6a054..9e3ed956 100644
+index 6b759a9b..654abc3a 100644
 --- a/src/kernel/storage.c
 +++ b/src/kernel/storage.c
 @@ -3,6 +3,9 @@
@@ -109,13 +109,17 @@ index 72b6a054..9e3ed956 100644
      return true;
  }
  
+-void storage_set_mountpoints(tuple mounts)
 +static void storage_apply_mountpoints_locked(void)
-+{
+ {
+-    storage_lock();
+-    storage.mounts = mounts;
 +    if (!storage.mounts)
 +        return;
-+    storage.mounting = true;
+     storage.mounting = true;
+-    iterate(mounts, stack_closure_func(binding_handler, storage_set_mountpoints_each));
 +    iterate(storage.mounts, stack_closure_func(binding_handler, storage_set_mountpoints_each));
-+    storage.mounting = false;
+     storage.mounting = false;
 +}
 +
 +closure_func_basic(binding_handler, boolean, storage_merge_mountpoints_each,
@@ -127,13 +131,9 @@ index 72b6a054..9e3ed956 100644
 +    return true;
 +}
 +
- void storage_set_mountpoints(tuple mounts)
- {
-     storage_lock();
--    storage.mounts = mounts;
--    storage.mounting = true;
--    iterate(mounts, stack_closure_func(binding_handler, storage_set_mountpoints_each));
--    storage.mounting = false;
++void storage_set_mountpoints(tuple mounts)
++{
++    storage_lock();
 +    if (storage.mounts && storage.mounts != mounts) {
 +        iterate(mounts, stack_closure_func(binding_handler, storage_merge_mountpoints_each));
 +    } else {
@@ -144,19 +144,19 @@ index 72b6a054..9e3ed956 100644
      storage_check_if_ready();
  }
 diff --git a/src/runtime/storage.h b/src/runtime/storage.h
-index 05822b1f..c92fb92a 100644
+index fd0984a2..31566f6e 100644
 --- a/src/runtime/storage.h
 +++ b/src/runtime/storage.h
-@@ -99,6 +99,7 @@ void init_volumes(heap h);
- void storage_set_root_fs(struct filesystem *root_fs);
+@@ -100,6 +100,7 @@ void storage_set_root_fs(struct filesystem *root_fs);
  void storage_set_mountpoints(tuple mounts);
+ boolean storage_add_mountpoint(symbol volume, string path);
  boolean volume_add(u8 *uuid, char *label, void *priv, fs_init_handler init_handler, int attach_id);
 +boolean storage_mount_attach_id(int attach_id, buffer path);
  void storage_when_ready(status_handler complete);
  void storage_sync(status_handler sh);
  
 diff --git a/src/virtio/virtio_9p.c b/src/virtio/virtio_9p.c
-index e2e91466..d1ac12d1 100644
+index 811953d8..2105b477 100644
 --- a/src/virtio/virtio_9p.c
 +++ b/src/virtio/virtio_9p.c
 @@ -84,6 +84,7 @@ static boolean v9p_dev_attach(heap general, backed_heap backed, vtdev dev)

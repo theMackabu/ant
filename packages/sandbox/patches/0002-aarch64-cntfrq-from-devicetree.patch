@@ -1,5 +1,5 @@
 diff --git a/src/aarch64/clock.c b/src/aarch64/clock.c
-index 8fa4e05..f238ebf 100644
+index 8fa4e059..a55b186b 100644
 --- a/src/aarch64/clock.c
 +++ b/src/aarch64/clock.c
 @@ -1,14 +1,34 @@
