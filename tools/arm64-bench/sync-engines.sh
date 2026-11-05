@@ -25,6 +25,7 @@ cleanup() {
 trap cleanup EXIT
 
 curl_args=(--fail --location --retry 3 --silent --show-error)
+compiled=false
 
 fetch() {
   curl "${curl_args[@]}" "$@"
@@ -160,6 +161,7 @@ if [[ ! -x "$libjs_install/js" ]]; then
   fi
   git -C "$libjs_source" fetch --depth 1 origin "$libjs_revision"
   git -C "$libjs_source" checkout --detach "$libjs_revision"
+  compiled=true
   (
     cd "$libjs_source"
     if command -v brew >/dev/null && brew --prefix rustup >/dev/null 2>&1; then
@@ -185,6 +187,7 @@ if [[ ! -x "$duktape_install/duk" ]]; then
   fetch --output "$work_dir/duktape.tar.xz" \
     "https://github.com/svaarala/duktape/releases/download/v$duktape_version/duktape-$duktape_version.tar.xz"
   tar -xJf "$work_dir/duktape.tar.xz" --strip-components=1 -C "$duktape_stage"
+  compiled=true
   make -C "$duktape_stage" -f Makefile.cmdline
   mkdir -p "$duktape_install"
   cp "$duktape_stage/duk" "$duktape_install/duk"
@@ -200,6 +203,7 @@ if [[ ! -x "$quickjs_install/qjs" ]]; then
   fetch --output "$work_dir/quickjs.tar.xz" \
     "https://bellard.org/quickjs/quickjs-$quickjs_version.tar.xz"
   tar -xJf "$work_dir/quickjs.tar.xz" --strip-components=1 -C "$quickjs_stage"
+  compiled=true
   make -C "$quickjs_stage" -j"$(sysctl -n hw.ncpu)" qjs
   mkdir -p "$quickjs_install"
   cp "$quickjs_stage/qjs" "$quickjs_install/qjs"
@@ -238,3 +242,8 @@ jq -s \
   "${metadata_files[@]}" > "$ENGINE_ROOT/engine-state.json"
 
 node "$SCRIPT_DIR/verify-engines.mjs" --engine-root "$ENGINE_ROOT" --external-only
+
+echo "engines compiled: $compiled"
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+  echo "compiled=$compiled" >> "$GITHUB_OUTPUT"
+fi

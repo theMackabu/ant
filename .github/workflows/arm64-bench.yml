@@ -82,6 +82,7 @@ jobs:
             > "$dir/arm64-bench-build.json"
 
       - name: Synchronize current comparison engines
+        id: sync
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: caffeinate -dimsu tools/arm64-bench/sync-engines.sh
@@ -89,7 +90,8 @@ jobs:
       - name: Verify resolved comparison engines
         run: node tools/arm64-bench/verify-engines.mjs --engine-root "$ANT_BENCH_ENGINE_ROOT"
 
-      - name: Cool down host for 5 minutes
+      - name: Cool down host for 5 minutes after compiling engines
+        if: steps.sync.outputs.compiled == 'true'
         run: |
           caffeinate -dimsu sleep 300
           pmset -g therm || true
