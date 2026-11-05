@@ -640,7 +640,7 @@ static ant_value_t js_isolate_main_context(ant_params_t) {
   ant_value_t cached = js_get_slot(call_this, SLOT_DATA);
   if (is_object_type(cached)) return cached;
   ant_value_t ctx = isolate_simple(js, isolate_this(js, call_this), GUEST_OP_MAIN_CONTEXT, true);
-  if (!is_err(ctx)) js_set_slot(call_this, SLOT_DATA, ctx);
+  if (!is_err(ctx)) js_set_slot_wb(js, call_this, SLOT_DATA, ctx);
   return ctx;
 }
 

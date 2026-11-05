@@ -1,29 +1,24 @@
 #include <compat.h> // IWYU pragma: keep
-
-#include "utf8.h"
-#include "unicode.h"
-#include "cfunc.h"
-#include "builder.h"
-#include "numbers.h"
-
-#include "silver/call.h"
-
 #include <pcre2.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 
-#include "modules/symbol.h"
-
-#define D(x) ((double)(x))
-
+#include "utf8.h"
+#include "unicode.h"
+#include "cfunc.h"
+#include "builder.h"
+#include "numbers.h"
 #include "arrays.h"
 #include "convert.h"
-#include "modules/function.h"
-#include "modules/string.h"
 #include "props.h"
 #include "proto.h"
+#include "silver/call.h"
+
+#include "modules/symbol.h"
+#include "modules/function.h"
+#include "modules/string.h"
 
 static ant_value_t to_string_val(ant_t *js, ant_value_t val) {
   uint8_t t = vtype(val);
@@ -58,7 +53,7 @@ static ant_value_t builtin_String(ant_params_t) {
   }
   
   if (is_wrapper_ctor_target(js, call_this, call_new_target)) {
-    set_slot(call_this, SLOT_PRIMITIVE, sval);
+    js_set_slot_wb(js, call_this, SLOT_PRIMITIVE, sval);
     ant_value_t length = mkprop_exact_attrs(js, call_this, js->length_str, Ant_Value_FromNumber((double)str_utf16_len(js, sval)), 0);
     if (is_err(length)) return length;
   }
@@ -879,7 +874,7 @@ static ant_value_t builtin_string_slice(ant_params_t) {
   GC_ROOT_PIN(js, str);
   size_t utf16_len = (size_t)str_utf16_len(js, str);
   ant_offset_t start = 0, end = (ant_offset_t)utf16_len;
-  double dstr_len = D(utf16_len);
+  double dstr_len = (double)utf16_len;
 
   if (nargs >= 1) {
     double d;
@@ -960,7 +955,7 @@ done:
 static inline ant_offset_t string_clamped_position(ant_t *js, ant_value_t value, ant_offset_t len) {
   double pos = js_to_number(js, value);
   if (isnan(pos) || pos < 0) return 0;
-  if (pos > D(len)) return len;
+  if (pos > (double)len) return len;
   return (ant_offset_t)pos;
 }
 
@@ -1178,8 +1173,8 @@ static ant_value_t builtin_string_html(ant_native_params_t, ant_value_t call_thi
   
   return out;
 }
-#define STRING_HTML_METHOD(name, tag, attr, arity) \
-  static ant_value_t builtin_string_##name(ant_params_t) { \
+#define STRING_HTML_METHOD(name, tag, attr, arity)                            \
+  static ant_value_t builtin_string_##name(ant_params_t) {                    \
     return builtin_string_html(js, args, nargs, call_this, #name, tag, attr); \
   }
 #include "string/html_methods.h"

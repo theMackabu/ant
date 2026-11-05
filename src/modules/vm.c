@@ -561,7 +561,7 @@ static ant_value_t vm_script_init(ant_t *js, ant_value_t script, ant_value_t cod
   js_set_native(script, st, VM_SCRIPT_NATIVE_TAG);
   js_set_finalizer(script, vm_script_finalize);
 
-  js_set_slot(script, SLOT_DATA, code);
+  js_set_slot_wb(js, script, SLOT_DATA, code);
   js_set_slot(script, SLOT_VM_IMPORT, Ant_Value_Null);
 
   if (is_object_type(options)) {
@@ -577,7 +577,7 @@ static ant_value_t vm_script_init(ant_t *js, ant_value_t script, ant_value_t cod
     ant_value_t result = vm_import_option(js, options, &import_handler);
     
     if (is_err(result)) return result;
-    js_set_slot(script, SLOT_VM_IMPORT, import_handler);
+    js_set_slot_wb(js, script, SLOT_VM_IMPORT, import_handler);
 
     result = vm_option_int32(js, options, "lineOffset", &st->line_offset);
     if (is_err(result)) return result;

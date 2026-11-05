@@ -1936,7 +1936,7 @@ static ant_value_t builtin_FinalizationRegistry(ant_params_t) {
   ant_value_t fr_proto = js->builtins.finreg_proto;
   if (is_special_object(fr_proto)) js_set_proto_init(fr_obj, fr_proto);
   
-  js_set_slot(fr_obj, SLOT_MAP, Ant_Array_Create(js));
+  js_set_slot_wb(js, fr_obj, SLOT_MAP, Ant_Array_Create(js));
   js_set_slot(fr_obj, SLOT_DATA, args[0]);
   
   return fr_obj;

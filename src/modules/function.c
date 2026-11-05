@@ -703,7 +703,7 @@ static void init_function_kind(
   set_proto(js, kind_proto, function_proto);
   
   if (is_async) set_slot(kind_proto, SLOT_ASYNC, Ant_Value_True);
-  set_slot(js_glob(js), slot, kind_proto);
+  js_set_slot_wb(js, js_glob(js), slot, kind_proto);
   
   ant_value_t ctor_obj = mkobj(js, 0);
   set_proto(js, ctor_obj, function_ctor);

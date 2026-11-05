@@ -161,7 +161,7 @@ ant_value_t napi_load_native_module(ant_t *js, const char *module_path, ant_valu
   if (!is_object_type(ns)) goto cleanup;
 
   setprop_cstr(js, ns, "default", 7, exports_val);
-  js_set_slot(ns, SLOT_DEFAULT, exports_val);
+  js_set_slot_wb(js, ns, SLOT_DEFAULT, exports_val);
 
   if (!is_object_type(exports_val)) goto cleanup;
   ant_iter_t iter = js_prop_iter_begin(js, exports_val);

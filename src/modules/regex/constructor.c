@@ -50,7 +50,7 @@ void regexp_init_flags(ant_t *js, ant_value_t obj, ant_value_t flags, bool is_ne
     if (count <= UINT8_MAX - 3) (void)js_reserve_slots(obj, (uint8_t)(count + 3));
   }
   js_set_slot(obj, SLOT_REGEXP_FLAGS_MASK, Ant_Value_FromNumber((double)mask));
-  js_set_slot(obj, SLOT_REGEXP_FLAGS_STRING, flags_value);
+  js_set_slot_wb(js, obj, SLOT_REGEXP_FLAGS_STRING, flags_value);
   js_set_slot(obj, SLOT_REGEXP_NAMED_GROUPS, Ant_Value_Undefined);
 }
 
@@ -280,10 +280,11 @@ ant_value_t builtin_RegExp(ant_params_t) {
 
   ant_value_t flags_error = regexp_check_flags(js, flags);
   if (is_err(flags_error)) return flags_error;
+
   ant_value_t pattern_error = regexp_check_pattern(js, pattern, flags);
   if (is_err(pattern_error)) return pattern_error;
   
-  js_set_slot(regexp_obj, SLOT_DATA, pattern);
+  js_set_slot_wb(js, regexp_obj, SLOT_DATA, pattern);
   regexp_init_flags(js, regexp_obj, flags, true);
 
   return regexp_obj;
@@ -386,11 +387,11 @@ ant_value_t builtin_regexp_compile(ant_params_t) {
 
   ant_value_t flags_error = regexp_check_flags(js, flags);
   if (is_err(flags_error)) return flags_error;
+  
   ant_value_t pattern_error = regexp_check_pattern(js, pattern, flags);
   if (is_err(pattern_error)) return pattern_error;
   
-  js_set_slot(call_this, SLOT_DATA, pattern);
-  
+  js_set_slot_wb(js, call_this, SLOT_DATA, pattern);  
   regexp_init_flags(js, call_this, flags, false);
   regexp_object_compiled_detach(js, call_this);
 

@@ -423,7 +423,7 @@ void realm_init_core(ant_t *js) {
   js_function_init_prototype(js, function_proto_obj);
   
   ant_value_t function_proto = js_obj_to_func(js, function_proto_obj);
-  set_slot(glob, SLOT_FUNC_PROTO, function_proto);
+  js_set_slot_wb(js, glob, SLOT_FUNC_PROTO, function_proto);
   js_define_function_length(js, function_proto_obj, 0);
   js_set_function_name(js, function_proto, "", 0);
   
@@ -441,9 +441,7 @@ void realm_init_core(ant_t *js) {
   ant_value_t boolean_proto = Ant_Object_CreateBare(js);
   set_proto(js, boolean_proto, object_proto);
   js_boolean_init_prototype(js, boolean_proto);
-  
   js_errors_init(js, object_proto, function_proto);
-
   js_disposable_stack_init(js, object_proto, function_proto);
   
   ant_value_t promise_proto = Ant_Object_CreateBare(js);

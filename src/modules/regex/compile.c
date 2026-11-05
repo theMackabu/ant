@@ -612,21 +612,19 @@ compiled_regex_cache_entry_t *regexp_site_lookup(ant_t *js, ant_value_t source, 
 
   ant_offset_t plen;
   const char *pattern_ptr = (const char *)(uintptr_t)vstr(js, source, &plen);
-  compiled_regex_cache_entry_t *compiled = compiled_regex_cache_get_or_compile(
-    state, pattern_ptr, plen, flags_mask, NULL
-  );
+  
+  compiled_regex_cache_entry_t *compiled = compiled_regex_cache_get_or_compile(state, pattern_ptr, plen, flags_mask, NULL);
   if (!compiled) return NULL;
+  
   compiled->cache_refs++;
   regexp_site_release(site);
   *site = (regexp_site_entry_t){ .pattern = source, .flags = flags, .epoch = epoch, .entry = compiled };
+  
   return compiled;
 }
 
 static bool regexp_compile_shared_from_object(
-  ant_t *js,
-  ant_value_t regexp_obj,
-  uint8_t flags_mask,
-  compiled_regex_cache_entry_t **out
+  ant_t *js, ant_value_t regexp_obj, int8_t flags_mask, compiled_regex_cache_entry_t **out
 ) {
   compiled_regex_cache_entry_t *compiled = regexp_site_lookup(js, js_get_slot(regexp_obj, SLOT_DATA), 0, flags_mask);
   if (!compiled) return false;
@@ -639,6 +637,7 @@ compiled_regex_cache_entry_t *regexp_attach_compiled(
 ) {
   ant_object_t *obj_ptr = js_obj_ptr(regexp_obj);
   compiled->object_refs++;
+  
   ant_value_t groups_meta = regexp_build_named_groups_meta(js, compiled);
   if (is_err(groups_meta)) {
     compiled->object_refs--;
@@ -658,33 +657,27 @@ compiled_regex_cache_entry_t *regexp_attach_compiled(
     compiled_regex_entry_maybe_free(compiled);
     return NULL;
   }
+  
   js_set_finalizer(regexp_obj, regexp_object_finalize);
   js->regex_state->live_object_data++;
+  
   if (groups_meta != js_get_slot(regexp_obj, SLOT_REGEXP_NAMED_GROUPS))
-    js_set_slot(regexp_obj, SLOT_REGEXP_NAMED_GROUPS, groups_meta);
+    js_set_slot_wb(js, regexp_obj, SLOT_REGEXP_NAMED_GROUPS, groups_meta);
+  
   return compiled;
 }
 
 compiled_regex_cache_entry_t *regex_get_or_compile(
-  ant_t *js,
-  ant_value_t regexp_obj,
-  uint8_t flags_mask,
+  ant_t *js, ant_value_t regexp_obj, uint8_t flags_mask,
   compiled_regex_cache_entry_t *compiled
 ) {
   ant_regex_state_t *state = js->regex_state;
   if (!state) return NULL;
 
-  if (!compiled) {
-    compiled = js_get_native(regexp_obj, REGEXP_NATIVE_TAG);
-  }
-  if (compiled && compiled->flags_mask == flags_mask) {
-    return compiled;
-  }
+  if (!compiled) compiled = js_get_native(regexp_obj, REGEXP_NATIVE_TAG);
+  if (compiled && compiled->flags_mask == flags_mask) return compiled;
   if (compiled) regexp_object_compiled_release(js, regexp_obj, compiled);
-
-  if (!regexp_compile_shared_from_object(
-    js, regexp_obj, flags_mask, &compiled
-  )) return NULL;
+  if (!regexp_compile_shared_from_object(js, regexp_obj, flags_mask, &compiled)) return NULL;
 
   return regexp_attach_compiled(js, regexp_obj, compiled);
 }

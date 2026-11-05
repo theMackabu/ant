@@ -442,7 +442,7 @@ void init_url_module(ant_t *js) {
   js_set_tostringtag(js, js->builtins.url_proto, js_mkstr(js, "URL", 3));
 
   js->builtins.url_ctor = Ant_Function_CreateIntrinsicConstructor(js, js_URL, js->builtins.url_proto, "URL", 1);
-  js_set_slot(js->builtins.url_ctor, SLOT_DATA, Ant_Array_Create(js));
+  js_set_slot_wb(js, js->builtins.url_ctor, SLOT_DATA, Ant_Array_Create(js));
   
   js_set(js, js->builtins.url_ctor, "canParse",        Ant_Function_CreateWithArity(url_canParse, 1));
   js_set(js, js->builtins.url_ctor, "createObjectURL", Ant_Function_CreateWithArity(url_create_object_url, 1));

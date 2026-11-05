@@ -119,7 +119,7 @@ static ant_value_t builtin_regexp_groups_getter(ant_params_t) {
     if (is_err(status)) return status;
   }
 
-  js_set_slot(call_this, SLOT_REGEXP_GROUPS_CACHE, groups);
+  js_set_slot_wb(js, call_this, SLOT_REGEXP_GROUPS_CACHE, groups);
   return groups;
 }
 

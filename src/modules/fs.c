@@ -7260,9 +7260,8 @@ ant_value_t fs_make_constants(ant_t *js) {
 static ant_value_t builtin_fs_promises_getter(ant_params_t) {
   ant_value_t cached = js_get_slot(call_func, SLOT_DATA);
   if (is_object_type(cached)) return cached;
-
   ant_value_t promises = fs_promises_library(js);
-  js_set_slot(call_func, SLOT_DATA, promises);
+  js_set_slot_wb(js, call_func, SLOT_DATA, promises);
   return promises;
 }
 

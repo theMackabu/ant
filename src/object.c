@@ -515,7 +515,7 @@ void set_slot(ant_value_t obj, internal_slot_t slot, ant_value_t val) {
   
   Ant_Assert(
     slot != SLOT_PROTO,
-    "prototype written without its isolate (use set_slot_wb)"
+    "prototype written without its isolate (use js_set_slot_wb)"
   );
   
   if (slot == SLOT_DATA) {
@@ -529,39 +529,59 @@ void set_slot(ant_value_t obj, internal_slot_t slot, ant_value_t val) {
   }
 }
 
-// TODO: dry
-static void set_slot_wb(ant_t *js, ant_value_t obj, internal_slot_t slot, ant_value_t val) {
-  ant_object_t *ptr = js_obj_ptr(obj);
-  if (!ptr || slot < 0 || slot > SLOT_MAX) return;
-  
-  if (slot == SLOT_PROTO) {
-    ant_proto_watch_note_change(ptr);
-    ant_object_set_proto(js, ptr, val);
-    gc_write_barrier(js, ptr, val);
-    ant_ic_epoch_bump(js);
-    return;
-  }
-  
-  if (slot == SLOT_DATA) {
-    ptr->u.data.value = val;
-    gc_write_barrier(js, ptr, val);
-    return;
-  }
-  
-  if (obj_extra_set(ptr, slot, val)) {
-    if (slot == SLOT_ARGUMENTS_OBJECT) ptr->flags.arguments_object = 0;
-    if (slot == SLOT_REGEXP_FLAGS_STRING) ptr->flags.regexp_brand = vtype(val) == kTypeString;
-  }
-  
+__attribute__((noinline, cold)) 
+static void js_set_slot_proto_wb(ant_t *js, ant_object_t *ptr, ant_value_t val) {
+  ant_proto_watch_note_change(ptr);
+  ant_object_set_proto(js, ptr, val);
   gc_write_barrier(js, ptr, val);
+  ant_ic_epoch_bump(js);
 }
 
+__attribute__((noinline, cold)) 
+static ant_object_t *js_set_slot_function_holder(ant_value_t func) {
+  ant_value_t obj = js_func_obj(func);
+  return is_object_type(obj) && vdata(obj) ? (ant_object_t *)vptr(obj) : NULL;
+}
+
+__attribute__((always_inline)) 
+static inline ant_object_t *js_set_slot_holder(ant_value_t obj) {
+  if (__builtin_expect(vtype(obj) == kTypeFunction, 0)) return js_set_slot_function_holder(obj);
+  return vdata(obj) ? (ant_object_t *)vptr(obj) : NULL;
+}
+
+__attribute__((always_inline)) 
+static inline bool js_set_slot_store(ant_object_t *ptr, internal_slot_t slot, ant_value_t value) {
+  if (slot == SLOT_DATA) {
+    ptr->u.data.value = value;
+    return true;
+  }
+
+  if (!obj_extra_set(ptr, slot, value)) return false;
+  if (slot == SLOT_ARGUMENTS_OBJECT) ptr->flags.arguments_object = 0;
+  if (slot == SLOT_REGEXP_FLAGS_STRING) ptr->flags.regexp_brand = vtype(value) == kTypeString;
+  
+  return true;
+}
+
+__attribute__((always_inline)) 
 void js_set_slot(ant_value_t obj, internal_slot_t slot, ant_value_t value) {
-  set_slot(js_as_obj(obj), slot, value);
+  ant_object_t *ptr = js_set_slot_holder(obj);
+  if (!ptr) return;
+  Ant_Assert(slot != SLOT_PROTO, "prototype written without its isolate (use js_set_slot_wb)");
+  js_set_slot_store(ptr, slot, value);
 }
 
+__attribute__((always_inline)) 
 void js_set_slot_wb(ant_t *js, ant_value_t obj, internal_slot_t slot, ant_value_t value) {
-  set_slot_wb(js, js_as_obj(obj), slot, value);
+  ant_object_t *ptr = js_set_slot_holder(obj);
+  if (!ptr) return;
+
+  if (slot == SLOT_PROTO) {
+    js_set_slot_proto_wb(js, ptr, value);
+    return;
+  }
+
+  if (js_set_slot_store(ptr, slot, value)) gc_write_barrier(js, ptr, value);
 }
 
 bool js_reserve_slots(ant_value_t obj, uint8_t capacity) {

@@ -672,7 +672,8 @@ static ant_value_t array_construct_from_ctor(ant_t *js, ant_value_t ctor, ant_of
   if (is_err(constructed)) return constructed;
 
   ant_value_t result = is_object_type(constructed) ? constructed : seed;
-  set_slot(js_as_obj(result), SLOT_CTOR, ctor);
+  js_set_slot_wb(js, js_as_obj(result), SLOT_CTOR, ctor);
+  
   return result;
 }
 
