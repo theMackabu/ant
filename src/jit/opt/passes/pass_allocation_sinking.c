@@ -272,7 +272,7 @@ static bool pass_sink(pass_sinking_t *sink, ir_block_id_t block, uint32_t index,
       continue;
     }
     if (!pass_observe(sink, node)) break;
-    if (node_data->op.code == IR_OP_CHECK_ADD_EPOCH) {
+    if (ir_node(graph, node)->op.code == IR_OP_CHECK_ADD_EPOCH) {
       opt_vec_push(sink->arena, &sink->epochs, node);
       opt_vec_push(sink->arena, &sink->epoch_blocks, block);
     }

@@ -61,6 +61,12 @@ function child() {
   for (let i = 0; i < 40; i++) useHolders(holderSrc, 5000);
   out.push('holder ' + useHolders([0, 1, 2, 3].map(k => ({ x: 1, k })), 100) + ' ' + describe(pairs[5]));
 
+  function Guarded(a, flag) { this.a = a; try { if (flag) this.b = a.toFixed(1); else this.b = a; } catch (e) { this.b = 'caught'; } this.c = 1; }
+  function makeGuarded(n, bad) { let s = '', last; for (let i = 0; i < n; i++) { last = new Guarded(bad && i === n - 1 ? null : i, i & 1); globalSink = last; s = last.b; } return [s, last]; }
+  for (let i = 0; i < 40; i++) makeGuarded(3000, false);
+  const [gs, glast] = makeGuarded(10, true);
+  out.push('guarded ' + gs + ' ' + describe(glast));
+
   function literal(n) { const all = []; for (let i = 0; i < n; i++) { const o = {}; o.p = i; o.q = String(i); all.push(o); } return all; }
   for (let i = 0; i < 40; i++) literal(2000);
   const lits = literal(5);
