@@ -242,9 +242,9 @@ export async function buildMetadata(repo, engineRoot = path.join(repo, '.cache',
 
   const profilePath = path.join(repo, 'meson', 'pgo', 'profiles', 'ant-darwin-aarch64.profdata');
   return {
-    type: process.env.ANT_BENCH_BUILD_TYPE || 'nix-develop-release-pgo-lto',
+    type: process.env.ANT_BENCH_BUILD_TYPE || 'github-actions-release-pgo-lto',
     compiler: compilerVersion,
-    tuning: process.env.ANT_BENCH_TUNING || 'native-arm64',
+    tuning: process.env.ANT_BENCH_TUNING || 'generic-arm64',
     pgoProfileSha256: fs.existsSync(profilePath) ? crypto.createHash('sha256').update(fs.readFileSync(profilePath)).digest('hex') : null
   };
 }

@@ -18,6 +18,7 @@ on:
         type: boolean
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -25,7 +26,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  prepare:
+    if: github.repository == 'theMackabu/ant'
+    runs-on: ubuntu-latest
+    outputs:
+      timestamp: ${{ steps.timestamp.outputs.value }}
+    steps:
+      - id: timestamp
+        run: echo "value=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    uses: ./.github/workflows/build-platform.yml
+    with:
+      platform: macos-aarch64
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
   bench-v8:
+    needs: build
     if: github.repository == 'theMackabu/ant'
     runs-on: [self-hosted, macOS, ARM64, arm64-bench]
     timeout-minutes: 720
@@ -38,18 +56,30 @@ jobs:
       - name: Checkout Ant
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          clean: false
           fetch-depth: 1
 
-      - name: Reset workspace while preserving generated dependencies
-        run: |
-          git reset --hard "$GITHUB_SHA"
-          git clean -ffdx \
-            -e /vendor/   \
-            -e /src/tools/node_modules/
+      - name: Clear previous Ant build
+        run: rm -rf "$ANT_BENCH_ENGINE_ROOT/ant-bench-build"
 
-      - name: Build cached Nix/PGO/LTO Ant
-        run: caffeinate -dimsu tools/arm64-bench/build-ant.sh
+      - name: Download GitHub-built Ant
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ant-darwin-aarch64
+          path: ${{ env.ANT_BENCH_ENGINE_ROOT }}/ant-bench-build
+
+      - name: Record Ant build manifest
+        run: |
+          dir="$ANT_BENCH_ENGINE_ROOT/ant-bench-build"
+          chmod +x "$dir/ant"
+          xattr -c "$dir/ant" || true
+          "$dir/ant" --version-raw
+          jq -n \
+            --arg type github-actions-release-pgo-lto \
+            --arg compiler "clang $(jq -r '.tools.llvm' .github/versions.json)" \
+            --arg tuning generic-arm64 \
+            --arg pgoProfileSha256 "$(shasum -a 256 meson/pgo/profiles/ant-darwin-aarch64.profdata | awk '{print $1}')" \
+            '{type: $type, compiler: $compiler, tuning: $tuning, pgoProfileSha256: $pgoProfileSha256}' \
+            > "$dir/arm64-bench-build.json"
 
       - name: Synchronize current comparison engines
         env:
