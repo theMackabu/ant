@@ -2447,7 +2447,7 @@ void init_process_module(ant_t *js) {
   process_set_string(js, features_obj, "tls", "BoringSSL");
   process_set_string(js, features_obj, "typescript", "transform");
   js_set(js, process_obj, "features", features_obj);
-  process_set_string(js, process_obj, "version", "v26.8.1");
+  process_set_string(js, process_obj, "version", "v26.13.0");
   
   ant_value_t versions_obj = Ant_Object_Create(js);
   process_set_string(js, versions_obj, "ant", ANT_VERSION);
@@ -2463,14 +2463,15 @@ void init_process_module(ant_t *js) {
   process_set_string(js, versions_obj, "zlib", ANT_DEP_ZLIB_VERSION);
   process_set_string(js, versions_obj, "wamr", ANT_DEP_WAMR_VERSION);
   process_set_string(js, versions_obj, "boringssl", ANT_DEP_BORINGSSL_VERSION);
+  process_set_string(js, versions_obj, "yyjson", ANT_DEP_YYJSON_VERSION);
 
   // compatibility versions
-  process_set_string(js, versions_obj, "node", "26.8.1");
-  process_set_string(js, versions_obj, "simdjson", "0.12.0");
-  process_set_string(js, versions_obj, "v8", "14.6.202.34-node.28");
+  process_set_string(js, versions_obj, "node", "26.13.0");
+  process_set_string(js, versions_obj, "v8", "14.6.202.34-node.40");
   process_set_string(js, versions_obj, "modules", "147");
   process_set_string(js, versions_obj, "napi", "10");
-  process_set_string(js, versions_obj, "openssl", "1.1.1");
+  process_set_string(js, versions_obj, "unicode", "17");
+  process_set_string(js, versions_obj, "openssl", "3.5.9");
   
   js_set(js, process_obj, "versions", versions_obj);
   ant_value_t release_obj = Ant_Object_Create(js);

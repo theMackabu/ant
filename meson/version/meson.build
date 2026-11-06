@@ -74,6 +74,7 @@ dep_versions = {
   'UV': libuv_dep.version(),
   'BROTLI': brotli_common_dep.version(),
   'LLHTTP': llhttp.version(),
+  'YYJSON': yyjson_dep.version(),
   'PCRE2': pcre2_dep.version(),
   'LIBFFI': libffi_dep.version(),
   'LMDB': lmdb_dep.version(),
