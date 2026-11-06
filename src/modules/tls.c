@@ -48,6 +48,7 @@
 
 #include "gc/modules.h"
 #include "sandbox/policy.h"
+#include "modules/microtasks.h"
 #include "modules/tls.h"
 #include "modules/buffer.h"
 #include "modules/events.h"
@@ -87,6 +88,8 @@ struct ant_tls_socket_s {
   char **alpn_protocols;
   int alpn_count;
   tls_write_req_t *writes;
+  tls_write_req_t *pending_writes;
+  tls_write_req_t *pending_writes_tail;
   ant_tls_server_t *server;
   const char *family;
   ant_tls_socket_t *next;
@@ -308,8 +311,31 @@ static void tls_socket_close_cb(uv_handle_t *handle) {
   tls_socket_release(socket);
 }
 
+static void tls_socket_fail_pending_writes(ant_tls_socket_t *socket, ant_value_t err) {
+  ant_t *js = socket->js;
+  tls_write_req_t *write = socket->pending_writes;
+  socket->pending_writes = NULL;
+  socket->pending_writes_tail = NULL;
+
+  while (write) {
+    tls_write_req_t *next = write->next;
+    if (is_callable(write->callback)) queue_next_tick_with_args(js, write->callback, &err, 1);
+    free(write->data);
+    free(write);
+    write = next;
+  }
+}
+
 static void tls_socket_close(ant_tls_socket_t *socket) {
   if (!socket || socket->closing || socket->destroyed) return;
+  
+  if (socket->pending_writes) {
+    const char *code = "ERR_SOCKET_CLOSED_BEFORE_CONNECTION";
+    ant_value_t err = Ant_Error_Create(socket->js, JS_ERR_GENERIC, "Socket closed before the connection was established");
+    js_set(socket->js, err, "code", js_mkstr(socket->js, code, strlen(code)));
+    tls_socket_fail_pending_writes(socket, err);
+  }
+  
   socket->closing = true;
   tlsuv_stream_close(&socket->stream, tls_socket_close_cb);
 }
@@ -435,7 +461,7 @@ static void tls_write_remove(ant_tls_socket_t *socket, tls_write_req_t *write) {
 }
 
 static void tls_socket_finish_writes(ant_tls_socket_t *socket) {
-  if (!socket || !socket->write_ended || socket->writes) return;
+  if (!socket || !socket->write_ended || socket->writes || socket->pending_writes || socket->connecting) return;
   
   if (!socket->shutting_down) {
     socket->shutting_down = true;
@@ -529,6 +555,41 @@ static void tls_socket_resume_read(ant_tls_socket_t *socket) {
   tlsuv_stream_read_start(&socket->stream, tls_alloc_cb, tls_socket_on_read);
 }
 
+static int tls_socket_start_write(ant_tls_socket_t *socket, tls_write_req_t *write) {
+  uv_buf_t buf = uv_buf_init(write->data, (unsigned int)write->len);
+  write->next = socket->writes;
+  socket->writes = write;
+
+  int rc = tlsuv_stream_write(&write->req, &socket->stream, &buf, tls_socket_write_cb);
+  if (rc != 0) {
+    tls_write_remove(socket, write);
+    free(write->data);
+    free(write);
+  }
+
+  return rc;
+}
+
+static void tls_socket_flush_pending_writes(ant_tls_socket_t *socket) {
+  while (socket->pending_writes && !socket->closing && !socket->destroyed) {
+    tls_write_req_t *write = socket->pending_writes;
+    socket->pending_writes = write->next;
+    if (!socket->pending_writes) socket->pending_writes_tail = NULL;
+    write->next = NULL;
+
+    int rc = tls_socket_start_write(socket, write);
+    if (rc != 0) {
+      ant_value_t err = tls_stream_error(socket, rc, "TLS write failed");
+      socket->had_error = true;
+      eventemitter_emit_args(socket->js, socket->obj, "error", &err, 1);
+      tls_socket_close(socket);
+      return;
+    }
+  }
+
+  if (!socket->closing && !socket->destroyed) tls_socket_finish_writes(socket);
+}
+
 static void tls_socket_on_connect(uv_connect_t *req, int status) {
   ant_tls_socket_t *socket = req ? (ant_tls_socket_t *)req->data : NULL;
   ant_t *js = socket ? socket->js : NULL;
@@ -538,9 +599,11 @@ static void tls_socket_on_connect(uv_connect_t *req, int status) {
   socket->connecting = false;
 
   if (status < 0) {
+    if (socket->closing || socket->destroyed) return;
     ant_value_t err = tls_stream_error(socket, status, "TLS connect failed");
     socket->had_error = true;
     tls_socket_sync_state(socket);
+    tls_socket_fail_pending_writes(socket, err);
     eventemitter_emit_args(js, socket->obj, "error", &err, 1);
     tls_socket_close(socket);
     return;
@@ -555,6 +618,7 @@ static void tls_socket_on_connect(uv_connect_t *req, int status) {
   tls_socket_sync_state(socket);
   eventemitter_emit_args(js, socket->obj, "secureConnect", NULL, 0);
   eventemitter_emit_args(js, socket->obj, "connect", NULL, 0);
+  tls_socket_flush_pending_writes(socket);
 }
 
 static ant_value_t js_tls_socket_write(ant_params_t) {
@@ -566,8 +630,6 @@ static ant_value_t js_tls_socket_write(ant_params_t) {
   ant_value_t err = Ant_Value_Undefined;
   
   tls_write_req_t *write = NULL;
-  uv_buf_t buf;
-  int rc = 0;
 
   if (!socket) return Ant_Exception_Current(js);
   if (socket->destroyed || socket->closing) return Ant_Value_False;
@@ -591,20 +653,15 @@ static ant_value_t js_tls_socket_write(ant_params_t) {
   write->socket = socket;
   write->callback = callback;
   write->len = len;
-  write->next = socket->writes;
-  socket->writes = write;
 
-  buf = uv_buf_init(write->data, (unsigned int)len);
-  rc = tlsuv_stream_write(&write->req, &socket->stream, &buf, tls_socket_write_cb);
-  
-  if (rc != 0) {
-    tls_write_remove(socket, write);
-    free(write->data);
-    free(write);
-    return Ant_Value_False;
+  if (socket->connecting || socket->pending_writes) {
+    if (socket->pending_writes_tail) socket->pending_writes_tail->next = write;
+    else socket->pending_writes = write;
+    socket->pending_writes_tail = write;
+    return Ant_Value_True;
   }
 
-  return Ant_Value_True;
+  return Ant_Value_FromBool(tls_socket_start_write(socket, write) == 0);
 }
 
 static ant_value_t js_tls_socket_end(ant_params_t) {
@@ -1292,6 +1349,7 @@ static void tls_server_on_handshake(tlsuv_stream_t *clt, int status) {
     ant_value_t argv[2] = { tls_stream_error(socket, status, "TLS handshake failed"), socket->obj };
     socket->had_error = true;
     tls_socket_sync_state(socket);
+    tls_socket_fail_pending_writes(socket, argv[0]);
     if (server) eventemitter_emit_args(js, server->obj, "tlsClientError", argv, 2);
     tls_socket_close(socket);
     return;
@@ -1305,6 +1363,7 @@ static void tls_server_on_handshake(tlsuv_stream_t *clt, int status) {
   tls_socket_sync_state(socket);
   eventemitter_emit_args(js, socket->obj, "secure", NULL, 0);
   if (server) eventemitter_emit_args(js, server->obj, "secureConnection", &socket->obj, 1);
+  tls_socket_flush_pending_writes(socket);
 }
 
 static ant_value_t tls_server_create_context(ant_t *js, ant_value_t options, bool *request_cert) {
@@ -2111,6 +2170,8 @@ void gc_mark_tls(ant_t *js, gc_mark_fn mark) {
     mark(js, socket->obj);
     if (vtype(socket->secure_context) != kTypeUndefined) mark(js, socket->secure_context);
     for (tls_write_req_t *write = socket->writes; write; write = write->next) 
+      if (vtype(write->callback) != kTypeUndefined) mark(js, write->callback);
+    for (tls_write_req_t *write = socket->pending_writes; write; write = write->next) 
       if (vtype(write->callback) != kTypeUndefined) mark(js, write->callback);
   }
 }

@@ -69,3 +69,31 @@ add_project_arguments(
   '-DSKIM_VERSION="' + skim_version + '"',
   language: 'c'
 )
+
+dep_versions = {
+  'UV': libuv_dep.version(),
+  'BROTLI': brotli_common_dep.version(),
+  'LLHTTP': llhttp.version(),
+  'PCRE2': pcre2_dep.version(),
+  'LIBFFI': libffi_dep.version(),
+  'LMDB': lmdb_dep.version(),
+  'UTF8PROC': utf8proc_base_dep.version(),
+  'ZLIB': zlib_dep.version(),
+}
+
+foreach define, wrap : {'WAMR': 'wasm-micro-runtime', 'BORINGSSL': 'boringssl'}
+  revision = ''
+  foreach line : fs.read(meson.project_source_root() / 'vendor' / wrap + '.wrap').split('\n')
+    if line.startswith('revision')
+      revision = line.split('=')[1].strip()
+    endif
+  endforeach
+  dep_versions += {define: revision}
+endforeach
+
+foreach define, version : dep_versions
+  if version in ['', 'undefined', 'unknown']
+    error('could not determine ' + define + ' version')
+  endif
+  add_project_arguments('-DANT_DEP_' + define + '_VERSION="' + version + '"', language: 'c')
+endforeach

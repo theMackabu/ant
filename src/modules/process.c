@@ -2453,31 +2453,26 @@ void init_process_module(ant_t *js) {
   process_set_string(js, versions_obj, "ant", ANT_VERSION);
   process_set_string(js, versions_obj, "silver", ANT_VERSION);
   process_set_string(js, versions_obj, "skim", SKIM_VERSION);
-  
-  char uv_ver[32];
-  snprintf(uv_ver, sizeof(uv_ver), "%d.%d.%d", UV_VERSION_MAJOR, UV_VERSION_MINOR, UV_VERSION_PATCH);
-  
-  // TODO: determine at build time
-  process_set_string(js, versions_obj, "uv", uv_ver);
+  process_set_string(js, versions_obj, "uv", ANT_DEP_UV_VERSION);
+  process_set_string(js, versions_obj, "brotli", ANT_DEP_BROTLI_VERSION);
+  process_set_string(js, versions_obj, "llhttp", ANT_DEP_LLHTTP_VERSION);
+  process_set_string(js, versions_obj, "pcre2", ANT_DEP_PCRE2_VERSION);
+  process_set_string(js, versions_obj, "libffi", ANT_DEP_LIBFFI_VERSION);
+  process_set_string(js, versions_obj, "lmdb", ANT_DEP_LMDB_VERSION);
+  process_set_string(js, versions_obj, "utf8proc", ANT_DEP_UTF8PROC_VERSION);
+  process_set_string(js, versions_obj, "zlib", ANT_DEP_ZLIB_VERSION);
+  process_set_string(js, versions_obj, "wamr", ANT_DEP_WAMR_VERSION);
+  process_set_string(js, versions_obj, "boringssl", ANT_DEP_BORINGSSL_VERSION);
+
+  // compatibility versions
   process_set_string(js, versions_obj, "node", "26.8.1");
-  process_set_string(js, versions_obj, "brotli", "1.1.0");
-  process_set_string(js, versions_obj, "llhttp", "9.3.1");
   process_set_string(js, versions_obj, "simdjson", "0.12.0");
-  process_set_string(js, versions_obj, "pcre2", "10.47");
-  process_set_string(js, versions_obj, "libffi", "3.5.2");
-  process_set_string(js, versions_obj, "lmdb", "0.9.33");
-  process_set_string(js, versions_obj, "utf8proc", "2.10.0");
-  process_set_string(js, versions_obj, "zlib", "2.3.3");
   process_set_string(js, versions_obj, "v8", "14.6.202.34-node.28");
   process_set_string(js, versions_obj, "modules", "147");
   process_set_string(js, versions_obj, "napi", "10");
-  process_set_string(js, versions_obj, "wamr", "26756a5c5846c262c9e5c89f3fc8e1e693ee2539");
-  process_set_string(js, versions_obj, "boringssl", "297b11798a0ed6bc7736aa57328909a4afbbf67a");
-  
-  // compat version
   process_set_string(js, versions_obj, "openssl", "1.1.1");
-  js_set(js, process_obj, "versions", versions_obj);
   
+  js_set(js, process_obj, "versions", versions_obj);
   ant_value_t release_obj = Ant_Object_Create(js);
   js_set(js, release_obj, "name", js_mkstr(js, "ant", 3));
   js_set(js, process_obj, "release", release_obj);
