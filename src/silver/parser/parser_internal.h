@@ -1,13 +1,12 @@
 #ifndef ANT_SILVER_PARSER_PARSER_INTERNAL_H
 #define ANT_SILVER_PARSER_PARSER_INTERNAL_H
 
-#include "silver/ast.h"
-#include "silver/lexer.h"
-#include "silver/directives.h"
-#include "silver/call.h"
-
 #include "escape.h"
 #include "tokens.h"
+#include "silver/ast.h"
+#include "silver/lexer.h"
+#include "silver/call.h"
+#include "silver/directives.h"
 
 typedef struct {
   ant_t *js;
@@ -19,9 +18,6 @@ typedef struct {
   bool wants_module;
   bool tagged_template;
   uint32_t function_depth;
-  uint32_t *scope_words;
-  uint32_t scope_word_count, scope_word_cap;
-  ant_offset_t scope_words_len;
 } sv_parser_t;
 
 #define SV_RAISE(mkerr) ({                                  \
@@ -50,35 +46,22 @@ typedef struct {
   bool valid_cooked;
 } sv_tpl_cooked_t;
 
-bool lookahead_crosses_line_terminator(sv_parser_t *p);
+void finish_func(sv_ast_t *fn);
 void sv_parse_stop(sv_parser_t *p);
-bool using_declaration_here(sv_parser_t *p, bool for_head);
-const char *bigint_key_decimal(ant_t *js, const char *lit, uint32_t len, uint32_t *out_len);
 void consume_semicolon(sv_parser_t *p);
 
+bool sv_parse_stack_overflow(sv_parser_t *p);
+bool lookahead_crosses_line_terminator(sv_parser_t *p);
+bool using_declaration_here(sv_parser_t *p, bool for_head);
+bool validate_accessor_params(sv_parser_t *p, sv_ast_t *fn, uint32_t flags);
+
+sv_ast_t *parse_object(sv_parser_t *p);
 sv_ast_t *parse_member_suffix(sv_parser_t *p, sv_ast_t *left, uint8_t la);
 sv_ast_t *parse_arrow_body(sv_parser_t *p, bool is_async);
-void sv_parse_stmt_list(sv_parser_t *p, sv_ast_list_t *out, bool stop_at_rbrace, bool directive_ctx, bool module_items);
 sv_ast_t *parse_binding_pattern(sv_parser_t *p);
-void push_arrow_params_from_expr(sv_parser_t *p, sv_ast_t *fn, sv_ast_t *expr);
-
 sv_ast_t *try_parse_async_arrow(sv_parser_t *p);
 sv_ast_t *parse_primary(sv_parser_t *p);
 sv_ast_t *parse_array(sv_parser_t *p);
-bool validate_accessor_params(sv_parser_t *p, sv_ast_t *fn, uint32_t flags);
-sv_ast_t *parse_object(sv_parser_t *p);
-bool sv_parse_stack_overflow(sv_parser_t *p);
-
-sv_ast_t *parse_unary(sv_parser_t *p);
-sv_ast_t *parse_assign(sv_parser_t *p);
-sv_ast_t *parse_expr(sv_parser_t *p);
-sv_ast_t *parse_paren_list(sv_parser_t *p, bool trailing_comma);
-sv_ast_t *parse_paren_expr(sv_parser_t *p);
-
-void parse_formal_params(sv_parser_t *p, sv_ast_t *fn, uint8_t close);
-void finish_func(sv_parser_t *p, sv_ast_t *fn);
-unsigned scope_facts_eval_yield(sv_parser_t *p, const sv_ast_list_t *list, const sv_ast_t *body, uint32_t from, uint32_t to);
-
 sv_ast_t *finish_arrow(sv_parser_t *p, sv_ast_t *fn);
 sv_ast_t *parse_func(sv_parser_t *p, bool is_async);
 sv_ast_t *parse_class(sv_parser_t *p);
@@ -86,6 +69,18 @@ sv_ast_t *parse_block(sv_parser_t *p, bool directive_ctx);
 sv_ast_t *parse_var_decl(sv_parser_t *p, sv_var_kind_t kind, bool allow_uninit_const);
 sv_ast_t *parse_import_stmt(sv_parser_t *p);
 sv_ast_t *parse_export_stmt(sv_parser_t *p);
+sv_ast_t *parse_unary(sv_parser_t *p);
+sv_ast_t *parse_assign(sv_parser_t *p);
+sv_ast_t *parse_expr(sv_parser_t *p);
+sv_ast_t *parse_paren_list(sv_parser_t *p, bool trailing_comma);
+sv_ast_t *parse_paren_expr(sv_parser_t *p);
+
+void parse_formal_params(sv_parser_t *p, sv_ast_t *fn, uint8_t close);
+void push_arrow_params_from_expr(sv_parser_t *p, sv_ast_t *fn, sv_ast_t *expr);
+void sv_parse_stmt_list(sv_parser_t *p, sv_ast_list_t *out, bool stop_at_rbrace, bool directive_ctx, bool module_items);
+
+unsigned scope_facts_eval_yield(const sv_ast_list_t *list, const sv_ast_t *body);
+const char *bigint_key_decimal(ant_t *js, const char *lit, uint32_t len, uint32_t *out_len);
 
 static inline bool regex_line_terminator_at(const char *code, ant_offset_t len, ant_offset_t pos) {
   unsigned char c = (unsigned char)code[pos];

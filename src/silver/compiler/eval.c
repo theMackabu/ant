@@ -286,18 +286,9 @@ static bool inline_eval_can_compile_without_early_errors(ant_t *js, sv_ast_t *no
     strict = strict || has_own_use_strict || (node->flags & FN_CLASS_BODY);
   }
 
-  if (!inline_eval_can_compile_without_early_errors(js, node->left, strict)) return false;
-  if (!inline_eval_can_compile_without_early_errors(js, node->right, strict)) return false;
-  if (!inline_eval_can_compile_without_early_errors(js, node->cond, strict)) return false;
-  if (!inline_eval_can_compile_without_early_errors(js, node->body, strict)) return false;
-  if (!inline_eval_can_compile_without_early_errors(js, node->catch_body, strict)) return false;
-  if (!inline_eval_can_compile_without_early_errors(js, node->finally_body, strict)) return false;
-  if (!inline_eval_can_compile_without_early_errors(js, node->catch_param, strict)) return false;
-  if (!inline_eval_can_compile_without_early_errors(js, node->init, strict)) return false;
-  if (!inline_eval_can_compile_without_early_errors(js, node->update, strict)) return false;
-
-  for (int i = 0; i < node->args.count; i++)
-    if (!inline_eval_can_compile_without_early_errors(js, node->args.items[i], strict)) return false;
+  sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (!inline_eval_can_compile_without_early_errors(js, child, strict)) return false;
 
   return true;
 }
@@ -378,30 +369,84 @@ static bool eval_arg_is_definitely_non_string(const sv_ast_t *node) {
   }
 }
 
+static void emit_eval_of_first_arg(sv_compiler_t *c, uint32_t eval_scope) {
+  emit_number(c, 0);
+  emit_op(c, OP_GET_ELEM);
+  emit_lexical_new_target(c);
+  emit_op(c, OP_EVAL);
+  emit_u32(c, eval_scope);
+}
+
+static void compile_direct_eval_spread(sv_compiler_t *c, sv_ast_t *node) {
+  uint32_t eval_scope;
+  if (!capture_dynamic_eval_scope(c, &eval_scope)) return;
+
+  if (!c->inherits_eval_env) {
+    compile_call_args_array(c, node);
+    emit_eval_of_first_arg(c, eval_scope);
+    return;
+  }
+
+  emit_atom_op(c, OP_GET_EVAL_GLOBAL, "eval", 4);
+  emit_op(c, OP_DUP);
+  emit_constant(c, js_builtin_eval(c->js));
+  
+  emit_op(c, OP_SEQ);
+  emit_op(c, OP_UNDEF);
+  emit_op(c, OP_SWAP);
+  compile_call_args_array(c, node);
+  emit_op(c, OP_SWAP);
+  
+  int direct_jump = emit_jump(c, OP_JMP_TRUE);
+  emit_srcpos(c, node);
+  emit_op(c, OP_APPLY);
+  emit_u16(c, 1);
+  
+  int end_jump = emit_jump(c, OP_JMP);
+  patch_jump(c, direct_jump);
+  emit_eval_of_first_arg(c, eval_scope);
+  
+  emit_op(c, OP_NIP);
+  emit_op(c, OP_NIP);
+  patch_jump(c, end_jump);
+}
+
 bool compile_direct_eval_call(
   sv_compiler_t *c, sv_ast_t *node, bool has_spread
 ) {
   sv_ast_t *callee = node->left;
-  if (has_spread || !is_ident_name(callee, "eval") ||
-      resolve_local(c, "eval", 4) != -1 ||
-      resolve_upvalue_raw(c, "eval", 4) != -1) return false;
+  if (
+    !is_ident_name(callee, "eval") ||
+    resolve_local(c, "eval", 4) != -1 ||
+    resolve_upvalue_raw(c, "eval", 4) != -1
+  ) return false;
+
+  if (has_spread) {
+    compile_direct_eval_spread(c, node);
+    return true;
+  }
 
   if (c->inherits_eval_env) {
     uint32_t eval_scope;
     if (!capture_dynamic_eval_scope(c, &eval_scope)) return true;
+    
     emit_atom_op(c, OP_GET_EVAL_GLOBAL, "eval", 4);
     emit_op(c, OP_DUP);
     emit_constant(c, js_builtin_eval(c->js));
     emit_op(c, OP_SEQ);
+    
     for (int i = 0; i < node->args.count; i++) {
       compile_expr(c, node->args.items[i]);
       emit_op(c, OP_SWAP);
     }
+    
     int direct_jump = emit_jump(c, OP_JMP_TRUE);
     emit_op(c, OP_CALL);
     emit_u16(c, (uint16_t)node->args.count);
+    
     int end_jump = emit_jump(c, OP_JMP);
     patch_jump(c, direct_jump);
+    
     if (node->args.count == 0) {
       emit_op(c, OP_POP);
       emit_op(c, OP_UNDEF);
@@ -412,6 +457,7 @@ bool compile_direct_eval_call(
       emit_op(c, OP_EVAL);
       emit_u32(c, eval_scope);
     }
+    
     patch_jump(c, end_jump);
     return true;
   }
@@ -463,68 +509,86 @@ static bool ast_decl_binds_eval(const sv_ast_t *node) {
 
 bool ast_has_eval_var(const sv_ast_t *node) {
   if (!node || node->type == N_FUNC || node->type == N_CLASS) return false;
-  if (node->type == N_VAR && node->var_kind == SV_VAR_VAR)
-    return ast_decl_binds_eval(node);
-  const sv_ast_t *children[] = {node->left, node->right, node->body,
-    node->catch_body, node->finally_body, node->init};
-  for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++)
-    if (ast_has_eval_var(children[i])) return true;
-  for (int i = 0; i < node->args.count; i++)
-    if (ast_has_eval_var(node->args.items[i])) return true;
+  if (node->type == N_VAR && node->var_kind == SV_VAR_VAR) return ast_decl_binds_eval(node);
+
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (ast_has_eval_var(child)) return true;
+  
   return false;
+}
+
+static bool stmts_bind_eval(const sv_ast_list_t *stmts) {
+  for (int i = 0; i < stmts->count; i++)
+    if (ast_decl_binds_eval(stmts->items[i])) return true;
+  return false;
+}
+
+static bool scope_binds_eval(const sv_ast_t *node) {
+  switch (node->type) {
+    case N_BLOCK: return stmts_bind_eval(&node->args);
+    case N_SWITCH:
+      for (int i = 0; i < node->args.count; i++)
+        if (node->args.items[i] && stmts_bind_eval(&node->args.items[i]->args)) return true;
+      return false;
+    case N_FOR: return ast_decl_binds_eval(node->init);
+    case N_FOR_IN: case N_FOR_OF: case N_FOR_AWAIT_OF: return ast_decl_binds_eval(node->left);
+    default: return false;
+  }
+}
+
+static bool eval_program_needs_env(sv_compiler_t *c, const sv_ast_t *program) {
+  if (!program) return true;
+  if (program->args.count == 0) return false;
+  if (program->args.count != 1) return true;
+  sv_ast_t *expr = program->args.items[0];
+  return
+    !is_inline_literal_eval_expr(expr) ||
+    !inline_eval_can_compile_without_early_errors(c->js, expr, c->is_strict) ||
+    ast_contains_direct_suspend(expr, NULL) ||
+    ast_has_own_eval(c, expr);
+}
+
+static bool eval_source_needs_env(sv_compiler_t *c, const sv_ast_t *source) {
+  GC_ROOT_SAVE(exception_mark, c->js);
+  ant_value_t saved_exception = Ant_Exception_Peek(c->js);
+  GC_ROOT_PIN(c->js, saved_exception);
+  code_arena_mark_t mark = parse_arena_mark(c->js);
+  
+  sv_ast_t *program = sv_parse(c->js, source->str ? source->str : "", source->len, SV_PARSE_SCRIPT, c->is_strict);
+  bool needs_env = eval_program_needs_env(c, program);
+  
+  parse_arena_rewind(c->js, mark);
+  Ant_Exception_Set(c->js, saved_exception);
+  GC_ROOT_RESTORE(c->js, exception_mark);
+  
+  return needs_env;
+}
+
+static bool eval_call_needs_env(sv_compiler_t *c, const sv_ast_t *node) {
+  if (node->type != N_CALL || !is_ident_name(node->left, "eval") || node->args.count == 0) return false;
+  if (resolve_local(c, "eval", 4) != -1 || resolve_upvalue_raw(c, "eval", 4) != -1) return false;
+  if (call_has_spread_arg(node)) return true;
+  const sv_ast_t *arg = node->args.items[0];
+  if (eval_arg_is_definitely_non_string(arg)) return false;
+  
+  return !arg || arg->type != N_STRING || eval_source_needs_env(c, arg);
 }
 
 bool ast_has_own_eval(sv_compiler_t *c, const sv_ast_t *node) {
   if (!node || node->type == N_FUNC || node->type == N_CLASS) return false;
   if (node->type == N_SWITCH && ast_has_own_eval(c, node->cond)) return true;
-  if (node->type == N_BLOCK || node->type == N_SWITCH) {
-    for (int i = 0; i < node->args.count; i++) {
-      const sv_ast_t *stmt = node->args.items[i];
-      if (node->type == N_BLOCK) {
-        if (ast_decl_binds_eval(stmt)) return false;
-      } else if (stmt) {
-        for (int j = 0; j < stmt->args.count; j++)
-          if (ast_decl_binds_eval(stmt->args.items[j])) return false;
-      }
-    }
-  }
-  if ((node->type == N_FOR && ast_decl_binds_eval(node->init)) ||
-      ((node->type == N_FOR_IN || node->type == N_FOR_OF || node->type == N_FOR_AWAIT_OF) &&
-       ast_decl_binds_eval(node->left))) return false;
-  if (node->type == N_TRY) {
-    return ast_has_own_eval(c, node->body) ||
-      (!ast_pattern_binds(node->catch_param, "eval") && ast_has_own_eval(c, node->catch_body)) ||
-      ast_has_own_eval(c, node->finally_body);
-  }
-  if (node->type == N_CALL && !call_has_spread_arg(node) &&
-      is_ident_name(node->left, "eval") && node->args.count > 0 &&
-      resolve_local(c, "eval", 4) == -1 &&
-      resolve_upvalue_raw(c, "eval", 4) == -1) {
-    sv_ast_t *arg = node->args.items[0];
-    if (!eval_arg_is_definitely_non_string(arg)) {
-      if (!arg || arg->type != N_STRING) return true;
-      GC_ROOT_SAVE(exception_mark, c->js);
-      ant_value_t saved_exception = Ant_Exception_Peek(c->js);
-      GC_ROOT_PIN(c->js, saved_exception);
-      code_arena_mark_t mark = parse_arena_mark(c->js);
-      sv_ast_t *program = sv_parse(c->js, arg->str ? arg->str : "", arg->len, SV_PARSE_SCRIPT, c->is_strict);
-      bool needs_env = !program || (program->args.count != 0 &&
-        (program->args.count != 1 ||
-         !is_inline_literal_eval_expr(program->args.items[0]) ||
-         !inline_eval_can_compile_without_early_errors(c->js, program->args.items[0], c->is_strict) ||
-         ast_contains_direct_suspend(program->args.items[0], NULL) ||
-         ast_has_own_eval(c, program->args.items[0])));
-      parse_arena_rewind(c->js, mark);
-      Ant_Exception_Set(c->js, saved_exception);
-      GC_ROOT_RESTORE(c->js, exception_mark);
-      if (needs_env) return true;
-    }
-  }
-  const sv_ast_t *children[] = {node->left, node->right, node->cond, node->body,
-    node->catch_body, node->finally_body, node->catch_param, node->init, node->update};
-  for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++)
-    if (ast_has_own_eval(c, children[i])) return true;
-  for (int i = 0; i < node->args.count; i++)
-    if (ast_has_own_eval(c, node->args.items[i])) return true;
+  if (scope_binds_eval(node)) return false;
+
+  if (node->type == N_TRY) return
+    ast_has_own_eval(c, node->body) ||
+    (!ast_pattern_binds(node->catch_param, "eval") && ast_has_own_eval(c, node->catch_body)) ||
+    ast_has_own_eval(c, node->finally_body);
+  
+  if (eval_call_needs_env(c, node)) return true;
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (ast_has_own_eval(c, child)) return true;
+    
   return false;
 }

@@ -62,29 +62,6 @@ bool ast_pattern_binds(const sv_ast_t *node, const char *name) {
   }
 }
 
-// TODO: move into a ast_contains
-bool ast_references_arguments(const sv_ast_t *node) {
-  if (!node) return false;
-  if (node->type == N_IDENT && node->len == 9 && memcmp(node->str, "arguments", 9) == 0)
-    return true;
-    
-  if (node->type == N_FUNC && !(node->flags & FN_ARROW)) {
-    for (int i = 0; i < node->args.count; i++)
-      if (ast_references_arguments(node->args.items[i])) return true;
-    return false;
-  }
-  
-  if (ast_references_arguments(node->left))            return true;
-  if (ast_references_arguments(node->right))           return true;
-  if (ast_references_arguments(node->body))            return true;
-  if (ast_references_arguments(node->catch_body))      return true;
-  if (ast_references_arguments(node->finally_body))    return true;
-  for (int i = 0; i < node->args.count; i++)
-    if (ast_references_arguments(node->args.items[i])) return true;
-    
-  return false;
-}
-
 bool ast_is_arguments_length(const sv_ast_t *node) {
   return
     node && node->type == N_MEMBER && !(node->flags & 1) &&
@@ -141,15 +118,9 @@ bool ast_arguments_length_only(const sv_ast_t *node, bool write, bool arrow) {
     default: break;
   }
 
-  const sv_ast_t *children[] = {
-    node->left, node->right, node->cond, node->body, node->catch_param,
-    node->catch_body, node->finally_body, node->init, node->update
-  };
-  
-  for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++)
-    if (!ast_arguments_length_only(children[i], write, arrow)) return false;
-  for (int i = 0; i < node->args.count; i++)
-    if (!ast_arguments_length_only(node->args.items[i], write, arrow)) return false;
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (!ast_arguments_length_only(child, write, arrow)) return false;
 
   return true;
 }
@@ -167,18 +138,9 @@ bool ast_contains_direct_suspend(const sv_ast_t *node, const sv_ast_t **out_offe
     if (!plain_arrow) return false;
   }
 
-  if (ast_contains_direct_suspend(node->left, out_offender))         return true;
-  if (ast_contains_direct_suspend(node->right, out_offender))        return true;
-  if (ast_contains_direct_suspend(node->cond, out_offender))         return true;
-  if (ast_contains_direct_suspend(node->body, out_offender))         return true;
-  if (ast_contains_direct_suspend(node->catch_param, out_offender))  return true;
-  if (ast_contains_direct_suspend(node->catch_body, out_offender))   return true;
-  if (ast_contains_direct_suspend(node->finally_body, out_offender)) return true;
-  if (ast_contains_direct_suspend(node->init, out_offender))         return true;
-  if (ast_contains_direct_suspend(node->update, out_offender))       return true;
-
-  for (int i = 0; i < node->args.count; i++)
-    if (ast_contains_direct_suspend(node->args.items[i], out_offender)) return true;
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (ast_contains_direct_suspend(child, out_offender)) return true;
 
   return false;
 }
@@ -191,19 +153,10 @@ bool ast_contains_own_yield(const sv_ast_t *node, const sv_ast_t **out_offender)
     return true;
   }
 
-  if (node->type == N_FUNC || node->type == N_ARROW)            return false;
-  if (ast_contains_own_yield(node->left, out_offender))         return true;
-  if (ast_contains_own_yield(node->right, out_offender))        return true;
-  if (ast_contains_own_yield(node->cond, out_offender))         return true;
-  if (ast_contains_own_yield(node->body, out_offender))         return true;
-  if (ast_contains_own_yield(node->catch_param, out_offender))  return true;
-  if (ast_contains_own_yield(node->catch_body, out_offender))   return true;
-  if (ast_contains_own_yield(node->finally_body, out_offender)) return true;
-  if (ast_contains_own_yield(node->init, out_offender))         return true;
-  if (ast_contains_own_yield(node->update, out_offender))       return true;
-
-  for (int i = 0; i < node->args.count; i++)
-    if (ast_contains_own_yield(node->args.items[i], out_offender)) return true;
+  if (node->type == N_FUNC || node->type == N_ARROW) return false;
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (ast_contains_own_yield(child, out_offender)) return true;
 
   return false;
 }
@@ -212,6 +165,7 @@ bool ast_contains_lexical_new_target(const sv_ast_t *node) {
   if (!node) return false;
   if (node->type == N_NEW_TARGET) return true;
   if (node->type == N_FUNC && !(node->flags & FN_ARROW)) return false;
+  
   if (node->type == N_CLASS) {
     if (ast_contains_lexical_new_target(node->left)) return true;
     for (int i = 0; i < node->args.count; i++) {
@@ -221,17 +175,11 @@ bool ast_contains_lexical_new_target(const sv_ast_t *node) {
     }
     return false;
   }
-  if (ast_contains_lexical_new_target(node->left) ||
-      ast_contains_lexical_new_target(node->right) ||
-      ast_contains_lexical_new_target(node->cond) ||
-      ast_contains_lexical_new_target(node->body) ||
-      ast_contains_lexical_new_target(node->catch_body) ||
-      ast_contains_lexical_new_target(node->finally_body) ||
-      ast_contains_lexical_new_target(node->catch_param) ||
-      ast_contains_lexical_new_target(node->init) ||
-      ast_contains_lexical_new_target(node->update)) return true;
-  for (int i = 0; i < node->args.count; i++)
-    if (ast_contains_lexical_new_target(node->args.items[i])) return true;
+  
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (ast_contains_lexical_new_target(child)) return true;
+  
   return false;
 }
 
@@ -242,15 +190,9 @@ bool ast_contains_direct_eval(const sv_ast_t *node) {
     node->left->len == 4 && memcmp(node->left->str, "eval", 4) == 0
   ) return true;
 
-  const sv_ast_t *children[] = {
-    node->left, node->right, node->cond, node->body, node->catch_body,
-    node->finally_body, node->catch_param, node->init, node->update
-  };
-  
-  for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++)
-    if (ast_contains_direct_eval(children[i])) return true;
-  for (int i = 0; i < node->args.count; i++)
-    if (ast_contains_direct_eval(node->args.items[i])) return true;
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (ast_contains_direct_eval(child)) return true;
   
   return false;
 }
@@ -273,15 +215,9 @@ static bool ast_closure_captures_name_impl(
     node->left->len == 4 && memcmp(node->left->str, "eval", 4) == 0
   ) return true;
 
-  const sv_ast_t *children[] = {
-    node->left, node->right, node->cond, node->body, node->catch_body,
-    node->finally_body, node->catch_param, node->init, node->update
-  };
-
-  for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++)
-    if (ast_closure_captures_name_impl(children[i], name, len, in_closure)) return true;
-  for (int i = 0; i < node->args.count; i++)
-    if (ast_closure_captures_name_impl(node->args.items[i], name, len, in_closure)) return true;
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (ast_closure_captures_name_impl(child, name, len, in_closure)) return true;
 
   return false;
 }
@@ -307,18 +243,9 @@ static bool ast_references_new_target_impl(const sv_ast_t *node, bool in_arrow) 
     node->left->len == 5 && memcmp(node->left->str, "super", 5) == 0
   ) return true;
 
-  if (ast_references_new_target_impl(node->left, lexical_arrow))         return true;
-  if (ast_references_new_target_impl(node->right, lexical_arrow))        return true;
-  if (ast_references_new_target_impl(node->cond, lexical_arrow))         return true;
-  if (ast_references_new_target_impl(node->body, lexical_arrow))         return true;
-  if (ast_references_new_target_impl(node->catch_body, lexical_arrow))   return true;
-  if (ast_references_new_target_impl(node->finally_body, lexical_arrow)) return true;
-  if (ast_references_new_target_impl(node->catch_param, lexical_arrow))  return true;
-  if (ast_references_new_target_impl(node->init, lexical_arrow))         return true;
-  if (ast_references_new_target_impl(node->update, lexical_arrow))       return true;
-  
-  for (int i = 0; i < node->args.count; i++)
-    if (ast_references_new_target_impl(node->args.items[i], lexical_arrow)) return true;
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (ast_references_new_target_impl(child, lexical_arrow)) return true;
     
   return false;
 }

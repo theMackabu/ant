@@ -46,7 +46,7 @@ void compile_concat_spread_to_array(sv_compiler_t *c, sv_ast_t *spread_arg) {
   emit_op(c, OP_SPREAD);
 }
 
-static void compile_call_args_array(sv_compiler_t *c, sv_ast_t *call_node) {
+void compile_call_args_array(sv_compiler_t *c, sv_ast_t *call_node) {
   emit_op(c, OP_ARRAY);
   emit_u16(c, 0);
   for (int i = 0; i < call_node->args.count; i++) {

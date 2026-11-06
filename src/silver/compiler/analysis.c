@@ -13,17 +13,14 @@ struct sv_write_scan {
 
 static void write_scan_mark_pattern(sv_write_scan_t *scan, const sv_ast_t *node) {
   if (!node) return;
+  
   if (node->type == N_IDENT) {
     scan->mark(scan, node->str, node->len);
     return;
   }
-  const sv_ast_t *children[] = {
-    node->left, node->right, node->cond, node->body, node->init, node->update
-  };
-  for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++)
-    write_scan_mark_pattern(scan, children[i]);
-  for (int i = 0; i < node->args.count; i++)
-    write_scan_mark_pattern(scan, node->args.items[i]);
+  
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child) write_scan_mark_pattern(scan, child);
 }
 
 static void write_scan_mark_target(sv_write_scan_t *scan, const sv_ast_t *node) {
@@ -75,17 +72,13 @@ static void write_scan(sv_write_scan_t *scan, const sv_ast_t *node) {
       break;
     default: break;
   }
-  const sv_ast_t *children[] = {
-    node->left, node->right, node->cond, node->body, node->catch_param,
-    node->catch_body, node->finally_body, node->init, node->update
-  };
-  for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++) {
-    scan->repeated = repeated || write_scan_repeats(node, children[i]);
-    write_scan(scan, children[i]);
+  
+  sv_ast_children_t it = sv_ast_children(node);
+  for (const sv_ast_t *child; (child = sv_ast_next_child(&it));) {
+    scan->repeated = repeated || write_scan_repeats(node, sv_ast_child_is_arg(&it) ? NULL : child);
+    write_scan(scan, child);
   }
-  scan->repeated = repeated || write_scan_repeats(node, NULL);
-  for (int i = 0; i < node->args.count; i++)
-    write_scan(scan, node->args.items[i]);
+  
   scan->repeated = repeated;
 }
 
@@ -154,49 +147,22 @@ bool local_written_once(sv_compiler_t *c, int local) {
   if (!c->write_scan_node || local < c->param_locals || local >= c->local_count) return false;
   const sv_local_t *loc = &c->locals[local];
   if (!loc->name || !loc->name_len || loc->binding.import_kind || loc->binding.exports) return false;
+  
   if (!c->write_counts_known) {
     c->write_counts_known = true;
     sv_write_scan_t scan = {.mark = write_counts_mark, .data = c};
     write_scan(&scan, c->write_scan_node->body);
-    if (scan.poisoned) {
-      c->write_scan_node = NULL;
-      return false;
-    }
+    if (scan.poisoned) { c->write_scan_node = NULL; return false; }
   }
+  
   if (!c->write_count_cap) return false;
   const sv_write_count_t *entry = write_count_slot(c->write_counts, c->write_count_cap, loc->name, loc->name_len);
+  
   return entry->name && entry->writes == 1;
-}
-
-static void count_this_props(const sv_ast_t *node, const sv_ast_t **names, uint32_t *count) {
-  if (!node || *count > ANT_INOBJ_LARGE_SLOTS) return;
-  if ((node->type == N_FUNC && !(node->flags & FN_ARROW)) || node->type == N_CLASS) return;
-  
-  const sv_ast_t *target = node->type == N_ASSIGN ? node->left : NULL;
-  if (
-    target && target->type == N_MEMBER && !(target->flags & 1) && target->left && target->left->type == N_THIS &&
-    target->right && target->right->len && !is_private_name_node(target->right)
-  ) {
-    const sv_ast_t *key = target->right;
-    bool seen = false;
-    for (uint32_t i = 0; i < *count && !seen; i++) seen = names[i]->len == key->len && memcmp(names[i]->str, key->str, key->len) == 0;
-    if (!seen) names[(*count)++] = key;
-  }
-  
-  const sv_ast_t *children[] = {
-    node->left, node->right, node->cond, node->body, node->catch_param,
-    node->catch_body, node->finally_body, node->init, node->update
-  };
-  
-  for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++) count_this_props(children[i], names, count);
-  for (int i = 0; i < node->args.count; i++) count_this_props(node->args.items[i], names, count);
 }
 
 uint8_t ctor_slot_class(const sv_ast_t *node) {
   if (!node || (node->flags & (FN_ARROW | FN_GENERATOR | FN_ASYNC))) return 0;
-  const sv_ast_t *names[ANT_INOBJ_LARGE_SLOTS + 1];
-  uint32_t count = 0;
-  count_this_props(node->body, names, &count);
-  if (count <= ANT_INOBJ_BASE_SLOTS) return 0;
-  return count <= ANT_INOBJ_WIDE_SLOTS ? 1 : 2;
+  if (node->this_props <= ANT_INOBJ_BASE_SLOTS) return 0;
+  return node->this_props <= ANT_INOBJ_WIDE_SLOTS ? 1 : 2;
 }

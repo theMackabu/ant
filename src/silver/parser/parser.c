@@ -94,11 +94,13 @@ static sv_ast_t *parse_program(
     .in_async = goal == SV_PARSE_MODULE || goal == SV_PARSE_REPL,
     .function_depth = function_body ? 1 : 0,
   };
+  
   sv_parser_t *p = &parser;
   sv_lexer_init(&p->lx, js, code, clen, strict || goal == SV_PARSE_MODULE);
 
   sv_ast_t *program = mk(N_PROGRAM);
   sv_parse_stmt_list(p, &program->args, false, true, true);
+  
   if (sv_debug_unlikely(SV_DEBUG_PARSE)) fprintf(
     stderr, "[parse] after-stmt-list thrown=%d strict=%d body=%d\n",
     Ant_Exception_Pending(js) ? 1 : 0,
@@ -112,29 +114,30 @@ static sv_ast_t *parse_program(
   if (p->lx.strict) program->flags |= FN_PARSE_STRICT;
   if (program_has_module_syntax(program)) program->flags |= FN_MODULE_SYNTAX;
 
-  bool scanned = p->scope_words_len >= p->lx.clen;
-  program->flags |= scope_facts_eval_yield(scanned ? p : NULL, &program->args, NULL, 0, (uint32_t)p->lx.clen);
-  
+  program->flags |= scope_facts_eval_yield(&program->args, NULL);  
   return program;
 }
 
 static sv_ast_t *parse_detect(ant_t *js, const char *code, ant_offset_t clen, bool strict) {
   code_arena_mark_t mark = parse_arena_mark(js);
   bool wants_module = false;
+  
   sv_ast_t *program = parse_program(js, code, clen, SV_PARSE_DETECT, strict, &wants_module, false);
   if (program) return program;
 
   parse_arena_rewind(js, mark);
   Ant_Exception_Clear(js);
+  
   program = parse_program(js, code, clen, SV_PARSE_MODULE, strict, NULL, false);
   if (program) {
     program->flags |= FN_MODULE_SYNTAX;
     return program;
   }
+  
   if (wants_module) return NULL;
-
   parse_arena_rewind(js, mark);
   Ant_Exception_Clear(js);
+  
   return parse_program(js, code, clen, SV_PARSE_SCRIPT, strict, NULL, false);
 }
 
@@ -185,6 +188,6 @@ sv_ast_t *sv_parse_function_parts(ant_t *js, const sv_function_parts_t *parts) {
   sv_parse_stmt_list(p, &fn->body->args, false, true, false);
   if (Ant_Exception_Pending(js)) return NULL;
 
-  finish_func(NULL, fn);
+  finish_func(fn);
   return fn;
 }

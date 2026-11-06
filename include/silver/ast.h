@@ -10,6 +10,23 @@
 #undef N_NULL
 #endif
 
+static constexpr uint32_t SV_AST_KIDS = 7;
+
+typedef enum: uint8_t {
+  SV_PARSE_SCRIPT,
+  SV_PARSE_MODULE,
+  SV_PARSE_REPL,
+  SV_PARSE_DETECT,
+} sv_parse_goal_t;
+
+typedef enum: uint8_t {
+  SV_VAR_VAR,
+  SV_VAR_LET,
+  SV_VAR_CONST,
+  SV_VAR_USING,
+  SV_VAR_AWAIT_USING,
+} sv_var_kind_t;
+
 typedef enum: uint8_t {
   N_NUMBER,
   N_STRING,
@@ -81,14 +98,6 @@ typedef enum: uint8_t {
   N__COUNT
 } sv_node_type_t;
 
-typedef enum: uint8_t {
-  SV_VAR_VAR,
-  SV_VAR_LET,
-  SV_VAR_CONST,
-  SV_VAR_USING,
-  SV_VAR_AWAIT_USING,
-} sv_var_kind_t;
-
 enum {
   FN_ASYNC            = 1 << 0,
   FN_GENERATOR        = 1 << 1,
@@ -134,56 +143,11 @@ typedef struct {
   int cap;
 } sv_ast_list_t;
 
-struct sv_ast {
-  sv_node_type_t type;
-  uint8_t op;
-  
-  sv_var_kind_t var_kind;
-  uint32_t flags;
-  uint32_t len;
-  uint32_t aux_len;
-  uint32_t src_off;
-  uint32_t src_end;
-
-  const char *str;
-  sv_ast_t *left;
-  sv_ast_t *right;
-  sv_ast_t *body;
-  double num;
-
-  sv_ast_t *cond;
-  sv_ast_t *init;
-  sv_ast_t *update;
-  const char *aux;
-  sv_ast_list_t args;
-
-  sv_ast_t *catch_param;
-  sv_ast_t *catch_body;
-  sv_ast_t *finally_body;
-};
-
-bool sv_ast_can_be_expression_statement(const sv_ast_t *node);
-bool sv_ast_list_push(ant_t *js, sv_ast_list_t *list, sv_ast_t *node);
-
-bool ast_is_arguments_length(const sv_ast_t *node);
-bool ast_contains_direct_eval(const sv_ast_t *node);
-bool ast_references_arguments(const sv_ast_t *node);
-bool ast_references_new_target(const sv_ast_t *node);
-
-bool ast_contains_lexical_new_target(const sv_ast_t *node);
-bool ast_pattern_binds(const sv_ast_t *node, const char *name);
-bool ast_arguments_length_only(const sv_ast_t *node, bool write, bool arrow);
-bool ast_mentions_name(const sv_ast_t *node, const char *name, uint32_t len);
-bool ast_contains_own_yield(const sv_ast_t *node, const sv_ast_t **out_offender);
-bool ast_closure_captures_name(const sv_ast_t *node, const char *name, uint32_t len);
-bool ast_contains_direct_suspend(const sv_ast_t *node, const sv_ast_t **out_offender);
-
-typedef enum {
-  SV_PARSE_SCRIPT,
-  SV_PARSE_MODULE,
-  SV_PARSE_REPL,
-  SV_PARSE_DETECT,
-} sv_parse_goal_t;
+typedef struct {
+  const sv_ast_t *node;
+  uint32_t slot;
+  int arg;
+} sv_ast_children_t;
 
 typedef struct {
   const char *text;
@@ -194,10 +158,88 @@ typedef struct {
   bool is_generator;
 } sv_function_parts_t;
 
+struct sv_ast {
+  sv_node_type_t type;
+  uint8_t op;
+  
+  sv_var_kind_t var_kind;
+  uint8_t this_props;
+  
+  uint32_t flags;
+  uint32_t len;
+  uint32_t aux_len;
+  uint32_t src_off;
+  uint32_t src_end;
+
+  const char *str;
+  union {
+    sv_ast_t *kids[SV_AST_KIDS];
+    struct {
+      sv_ast_t *left;
+      sv_ast_t *right;
+      sv_ast_t *cond;
+      sv_ast_t *body;
+      union { sv_ast_t *init; sv_ast_t *catch_param; };
+      union { sv_ast_t *update; sv_ast_t *catch_body; };
+      sv_ast_t *finally_body;
+    };
+  };
+
+  double num;
+  const char *aux;
+  sv_ast_list_t args;
+};
+
 sv_ast_t *sv_ast_new(ant_t *js, sv_node_type_t type);
 sv_ast_t *sv_parse_function_parts(ant_t *js, const sv_function_parts_t *parts);
 sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, sv_parse_goal_t goal, bool strict);
 sv_ast_t *sv_parse_function_body(ant_t *js, const char *code, ant_offset_t clen, bool strict);
+
+bool sv_ast_can_be_expression_statement(const sv_ast_t *node);
+bool sv_ast_list_push(ant_t *js, sv_ast_list_t *list, sv_ast_t *node);
+
+bool ast_is_arguments_length(const sv_ast_t *node);
+bool ast_contains_direct_eval(const sv_ast_t *node);
+bool ast_references_new_target(const sv_ast_t *node);
+
+bool ast_contains_lexical_new_target(const sv_ast_t *node);
+bool ast_pattern_binds(const sv_ast_t *node, const char *name);
+bool ast_arguments_length_only(const sv_ast_t *node, bool write, bool arrow);
+bool ast_mentions_name(const sv_ast_t *node, const char *name, uint32_t len);
+bool ast_contains_own_yield(const sv_ast_t *node, const sv_ast_t **out_offender);
+bool ast_closure_captures_name(const sv_ast_t *node, const char *name, uint32_t len);
+bool ast_contains_direct_suspend(const sv_ast_t *node, const sv_ast_t **out_offender);
+
+static inline sv_ast_children_t sv_ast_children(const sv_ast_t *node) {
+  return (sv_ast_children_t){.node = node};
+}
+
+static inline sv_ast_t *sv_ast_next_child(sv_ast_children_t *it) {
+  const sv_ast_t *node = it->node;
+  
+  while (it->slot < SV_AST_KIDS) {
+    sv_ast_t *child = node->kids[it->slot++];
+    if (child) return child;
+  }
+  
+  while (it->arg < node->args.count) {
+    sv_ast_t *child = node->args.items[it->arg++];
+    if (child) return child;
+  }
+  
+  return NULL;
+}
+
+static inline bool sv_ast_child_is_arg(const sv_ast_children_t *it) {
+  return it->arg > 0;
+}
+
+#define SV_AST_FOR_EACH_CHILD(node, child) \
+  for (sv_ast_children_t child##_it = sv_ast_children(node); ((child) = sv_ast_next_child(&child##_it));)
+
+static inline bool is_private_name_node(const sv_ast_t *node) {
+  return node && node->type == N_IDENT && node->str && node->len > 0 && node->str[0] == '#';
+}
 
 static inline bool ast_is_ident(const sv_ast_t *node, const char *name, uint32_t len) {
   return 

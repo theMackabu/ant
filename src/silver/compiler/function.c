@@ -6,18 +6,9 @@ static bool ast_contains_await_expr(const sv_ast_t *node) {
   if (node->type == N_AWAIT) return true;
   if (node->type == N_FUNC) return false;
 
-  if (ast_contains_await_expr(node->left))         return true;
-  if (ast_contains_await_expr(node->right))        return true;
-  if (ast_contains_await_expr(node->cond))         return true;
-  if (ast_contains_await_expr(node->body))         return true;
-  if (ast_contains_await_expr(node->catch_body))   return true;
-  if (ast_contains_await_expr(node->finally_body)) return true;
-  if (ast_contains_await_expr(node->catch_param))  return true;
-  if (ast_contains_await_expr(node->init))         return true;
-  if (ast_contains_await_expr(node->update))       return true;
-
-  for (int i = 0; i < node->args.count; i++)
-    if (ast_contains_await_expr(node->args.items[i])) return true;
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (ast_contains_await_expr(child)) return true;
 
   return false;
 }
