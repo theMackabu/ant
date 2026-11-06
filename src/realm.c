@@ -524,7 +524,7 @@ void realm_init_core(ant_t *js) {
   ant_value_t import_obj = mkobj(js, 0);
   set_proto(js, import_obj, function_proto);
   
-  set_slot(import_obj, SLOT_CFUNC, Ant_Function_Create(js_builtin_import));
+  js_set_slot(import_obj, SLOT_CFUNC, Ant_Function_Create(js_builtin_import));
   js_set_global_builtin(js, "import", js_obj_to_func(js, import_obj));
   
   defhidden(js, object_proto, "constructor", 11, obj_func);

@@ -45,9 +45,7 @@ bool ant_http1_buffer_append_cstr(ant_http1_buffer_t *buf, const char *str) {
   return ant_http1_buffer_append(buf, str, strlen(str));
 }
 
-static bool ant_http1_buffer_append_uint(
-  ant_http1_buffer_t *buf, size_t value
-) {
+bool ant_http1_buffer_append_uint(ant_http1_buffer_t *buf, size_t value) {
   char digits[3 * sizeof(size_t)];
   char *end = digits + sizeof(digits);
   char *start = end;
@@ -56,6 +54,7 @@ static bool ant_http1_buffer_append_uint(
     *--start = (char)('0' + value % 10);
     value /= 10;
   } while (value != 0);
+  
   return ant_http1_buffer_append(buf, start, (size_t)(end - start));
 }
 
@@ -68,6 +67,40 @@ static bool ant_http1_buffer_append_int(
     magnitude = 0u - magnitude;
   }
   return ant_http1_buffer_append_uint(buf, (size_t)magnitude);
+}
+
+static bool ant_http1_buffer_append_hex(ant_http1_buffer_t *buf, size_t value) {
+  char digits[2 * sizeof(size_t)];
+  char *end = digits + sizeof(digits);
+  char *start = end;
+
+  do {
+    *--start = "0123456789abcdef"[value & 0xf];
+    value >>= 4;
+  } while (value != 0);
+  
+  return ant_http1_buffer_append(buf, start, (size_t)(end - start));
+}
+
+bool ant_http1_buffer_append_status_line(ant_http1_buffer_t *buf, int status, const char *status_text) {
+  ant_http1_buffer_append(buf, "HTTP/1.1 ", 9);
+  ant_http1_buffer_append_int(buf, status);
+  ant_http1_buffer_append(buf, " ", 1);
+  ant_http1_buffer_append_cstr(buf, status_text ? status_text : ant_http1_default_status_text(status));
+  return ant_http1_buffer_append(buf, "\r\n", 2);
+}
+
+bool ant_http1_buffer_append_header(ant_http1_buffer_t *buf, const char *name, const char *value) {
+  ant_http1_buffer_append_cstr(buf, name);
+  ant_http1_buffer_append(buf, ": ", 2);
+  ant_http1_buffer_append_cstr(buf, value);
+  return ant_http1_buffer_append(buf, "\r\n", 2);
+}
+
+bool ant_http1_buffer_append_content_length(ant_http1_buffer_t *buf, size_t length) {
+  ant_http1_buffer_append(buf, "Content-Length: ", 16);
+  ant_http1_buffer_append_uint(buf, length);
+  return ant_http1_buffer_append(buf, "\r\n", 2);
 }
 
 #pragma GCC diagnostic push
@@ -186,67 +219,44 @@ static void ant_http1_append_response_header(const char *name, const char *value
 }
 
 bool ant_http1_write_basic_response(
-  ant_http1_buffer_t *buf,
-  int status,
-  const char *status_text,
-  const char *content_type,
-  const uint8_t *body,
-  size_t body_len,
-  bool keep_alive
+  ant_http1_buffer_t *buf, int status, const char *status_text, 
+  const char *content_type, const uint8_t *body, size_t body_len, bool keep_alive
 ) {
-  ant_http1_buffer_appendf(buf, "HTTP/1.1 %d %s\r\n", status, status_text 
-    ? status_text 
-    : ant_http1_default_status_text(status)
-  );
-  
-  ant_http1_buffer_appendf(buf, "Content-Type: %s\r\n", content_type 
-    ? content_type 
-    : "text/plain;charset=UTF-8"
-  );
-  
-  ant_http1_buffer_appendf(buf, "Content-Length: %zu\r\n", body_len);
-  ant_http1_buffer_append_cstr(buf, keep_alive 
-    ? "Connection: keep-alive\r\n\r\n" 
-    : "Connection: close\r\n\r\n"
-  );
+  ant_http1_buffer_append_status_line(buf, status, status_text);
+  ant_http1_buffer_append_header(buf, "Content-Type", content_type ? content_type : "text/plain;charset=UTF-8");
+  ant_http1_buffer_append_content_length(buf, body_len);
+  ant_http1_buffer_append_cstr(buf, keep_alive ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n");
   
   if (body_len > 0) ant_http1_buffer_append(buf, body, body_len);
   return !buf->failed;
 }
 
 bool ant_http1_write_response_head(
-  ant_http1_buffer_t *buf,
-  int status,
-  const char *status_text,
-  const headers_data_t *headers,
-  bool body_is_stream,
-  size_t body_size,
-  bool keep_alive
+  ant_http1_buffer_t *buf, int status,
+  const char *status_text, const headers_data_t *headers,
+  bool body_is_stream, size_t body_size, bool keep_alive
 ) {
   response_header_ctx_t ctx = { .buf = buf };
 
-  ant_http1_buffer_append(buf, "HTTP/1.1 ", 9);
-  ant_http1_buffer_append_int(buf, status);
-  ant_http1_buffer_append(buf, " ", 1);
-  ant_http1_buffer_append_cstr(
-    buf, status_text ? status_text : ant_http1_default_status_text(status));
-  ant_http1_buffer_append(buf, "\r\n", 2);
-  
+  ant_http1_buffer_append_status_line(buf, status, status_text);
   headers_data_for_each(headers, ant_http1_append_response_header, &ctx);
+  
   if (body_is_stream) ant_http1_buffer_append_cstr(buf, "Transfer-Encoding: chunked\r\n");
-  else {
-    ant_http1_buffer_append(buf, "Content-Length: ", 16);
-    ant_http1_buffer_append_uint(buf, body_size);
-    ant_http1_buffer_append(buf, "\r\n", 2);
-  }
-  ant_http1_buffer_append_cstr(buf, keep_alive ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n");
+  else ant_http1_buffer_append_content_length(buf, body_size);
+  
+  ant_http1_buffer_append_cstr(
+    buf, keep_alive 
+    ? "Connection: keep-alive\r\n\r\n" 
+    : "Connection: close\r\n\r\n");
   
   return !buf->failed;
 }
 
 bool ant_http1_write_chunk(ant_http1_buffer_t *buf, const uint8_t *chunk, size_t len) {
-  ant_http1_buffer_appendf(buf, "%zx\r\n", len);
-  if (len > 0) ant_http1_buffer_append(buf, chunk, len);
+  if (len == 0) return !buf->failed;
+  ant_http1_buffer_append_hex(buf, len);
+  ant_http1_buffer_append(buf, "\r\n", 2);
+  ant_http1_buffer_append(buf, chunk, len);
   ant_http1_buffer_append_cstr(buf, "\r\n");
   return !buf->failed;
 }

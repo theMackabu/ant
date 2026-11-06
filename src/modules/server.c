@@ -75,7 +75,9 @@ struct server_request_s {
   ant_value_t response_promise;
   ant_value_t response_reader;
   ant_value_t response_read_promise;
+  
   ant_http_header_t *raw_headers;
+  ant_http1_buffer_t pending;
   
   struct server_request_s *next;
   size_t consumed_len;
@@ -86,6 +88,7 @@ struct server_request_s {
   
   bool keep_alive;
   bool response_started;
+  bool response_finishing;
   bool network_finished;
 };
 
@@ -103,6 +106,7 @@ struct server_conn_state_s {
   bool request_started;
   bool drain_timer_closed;
   bool drain_scheduled;
+  bool peer_ended;
 };
 
 struct server_runtime_s {
@@ -266,6 +270,7 @@ static void server_request_reset(server_request_t *req) {
   server = req->server;
   conn_state = req->conn_state;
   ant_http_headers_free(req->raw_headers);
+  ant_http1_buffer_free(&req->pending);
   
   *req = (server_request_t){
     .server = server,
@@ -903,6 +908,7 @@ static void server_cancel_response_body(server_request_t *req, const char *messa
 }
 
 static void server_start_stream_read(server_request_t *req);
+static bool server_request_ensure_reader(server_request_t *req);
 static void server_on_read(ant_conn_t *conn, ssize_t nread, void *user_data);
 static void server_write_cb(ant_conn_t *conn, int status, void *user_data);
 
@@ -937,6 +943,9 @@ static void server_schedule_drain(server_conn_state_t *cs) {
     cs->drain_scheduled = false;
 }
 
+static constexpr size_t SERVER_PIPELINE_BUFFER_MAX = 64 * 1024;
+static constexpr size_t SERVER_STREAM_COALESCE_MAX = 64 * 1024;
+
 static bool server_queue_write(ant_conn_t *conn, server_request_t *req, char *data, size_t len, server_write_action_t action) {
   server_write_req_t *wr = calloc(1, sizeof(*wr));
   int rc = 0;
@@ -958,35 +967,51 @@ static bool server_queue_write(ant_conn_t *conn, server_request_t *req, char *da
   
   if (req) server_request_retain(req);
   if (req) req->network_encoded_length += len;
+  if (req && (action == SERVER_WRITE_KEEP_ALIVE || action == SERVER_WRITE_CLOSE_CLIENT)) req->response_finishing = true;
 
   rc = ant_conn_write(conn, data, len, server_write_cb, wr);
   if (rc != 0) {
     if (req) server_network_fail(req, uv_strerror(rc));
     if (req) server_request_release(req);
+    
     free(wr);
     ant_conn_close(conn);
+    
     return false;
   }
 
   return true;
 }
 
-static bool server_queue_final_chunk(server_request_t *req, server_write_action_t action) {
-  ant_http1_buffer_t buf;
+static bool server_flush_pending(server_request_t *req, server_write_action_t action) {
   char *out = NULL;
   size_t out_len = 0;
 
   if (!req || !req->conn || ant_conn_is_closing(req->conn)) return false;
 
-  ant_http1_buffer_init(&buf);
-  if (!ant_http1_write_final_chunk(&buf)) {
-    ant_http1_buffer_free(&buf);
+  out = ant_http1_buffer_take(&req->pending, &out_len);
+  return server_queue_write(req->conn, req, out, out_len, action);
+}
+
+static bool server_queue_final_chunk(server_request_t *req, server_write_action_t action) {
+  if (!req || !req->conn || ant_conn_is_closing(req->conn)) return false;
+
+  if (!ant_http1_write_final_chunk(&req->pending)) {
     ant_conn_close(req->conn);
     return false;
   }
 
-  out = ant_http1_buffer_take(&buf, &out_len);
-  return server_queue_write(req->conn, req, out, out_len, action);
+  return server_flush_pending(req, action);
+}
+
+static bool server_stream_chunk_ready(server_request_t *req) {
+  ant_t *js = req->server->js;
+  ant_value_t stream = js_get_slot(req->response_obj, SLOT_RESPONSE_BODY_STREAM);
+  rs_stream_t *state = rs_get_stream(stream);
+
+  if (!state) return false;
+  if (state->state != RS_STATE_READABLE) return true;
+  return rs_ctrl_queue_len(js, rs_stream_controller(js, stream)) > 0;
 }
 
 typedef struct {
@@ -998,7 +1023,7 @@ static void server_append_upgrade_header(const char *name, const char *value, vo
   if (!state || !state->buf || !name || !value) return;
   if (strcasecmp(name, "content-length") == 0) return;
   if (strcasecmp(name, "transfer-encoding") == 0) return;
-  ant_http1_buffer_appendf(state->buf, "%s: %s\r\n", name, value);
+  ant_http1_buffer_append_header(state->buf, name, value);
 }
 
 static bool server_finish_websocket_upgrade(server_request_t *req, ant_value_t response_obj, ant_value_t websocket_obj) {
@@ -1019,7 +1044,7 @@ static bool server_finish_websocket_upgrade(server_request_t *req, ant_value_t r
   status_text = (resp->status_text && resp->status_text[0]) ? resp->status_text : "Switching Protocols";
 
   ant_http1_buffer_init(&buf);
-  ant_http1_buffer_appendf(&buf, "HTTP/1.1 %d %s\r\n", resp->status, status_text);
+  ant_http1_buffer_append_status_line(&buf, resp->status, status_text);
   ctx.buf = &buf;
   
   headers_data_for_each(headers, server_append_upgrade_header, &ctx);
@@ -1125,7 +1150,8 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
 
   if (!req->conn || ant_conn_is_closing(req->conn)) return;
   if (!resp) {
-    server_send_request_internal_error(req, "Invalid Response");
+    fprintf(stderr, "fetch handler must return a Response\n");
+    server_send_request_internal_error(req, NULL);
     return;
   }
 
@@ -1143,22 +1169,25 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
   status_text = (resp->status_text && resp->status_text[0]) ? resp->status_text : ant_http1_default_status_text(resp->status);
   
   if (req->network_request_id != 0) {
-    if (!server_capture_response_headers(
-          headers, body_is_stream && !head_only,
-          resp->body_size, req->keep_alive, &network_headers)) {
+    if (
+      !server_capture_response_headers(
+      headers, body_is_stream && !head_only,
+      resp->body_size, req->keep_alive, &network_headers)
+    ) {
       server_network_fail(req, "out of memory while serializing response headers");
       ant_conn_close(req->conn);
       return;
     }
-    server_network_response(
-      req, resp->status, status_text, resp->body_type, network_headers);
+    
+    server_network_response(req, resp->status, status_text, resp->body_type, network_headers);
     ant_http_headers_free(network_headers);
   }
   
-  if (req->network_request_id != 0 &&
-      !body_is_stream && !head_only &&
-      resp->body_data && resp->body_size > 0)
-    ant_inspector_network_append_response_body(req->network_request_id, resp->body_data, resp->body_size);
+  if (
+    req->network_request_id != 0 &&
+    !body_is_stream && !head_only &&
+    resp->body_data && resp->body_size > 0
+  ) ant_inspector_network_append_response_body(req->network_request_id, resp->body_data, resp->body_size);
 
   ant_http1_buffer_init(&buf);
   if (!ant_http1_write_response_head(&buf, resp->status, status_text, headers, body_is_stream, resp->body_size, req->keep_alive)) {
@@ -1176,9 +1205,15 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
     return;
   }
 
-  out = ant_http1_buffer_take(&buf, &out_len);
   ant_conn_set_timeout_ms(req->conn, req->server->idle_timeout_ms);
-  
+
+  if (body_is_stream && !head_only && server_request_ensure_reader(req) && server_stream_chunk_ready(req)) {
+    req->pending = buf;
+    server_start_stream_read(req);
+    return;
+  }
+
+  out = ant_http1_buffer_take(&buf, &out_len);
   if (body_is_stream && head_only) server_cancel_response_body(
     req, "The response body was canceled for a HEAD request"
   );
@@ -1195,15 +1230,12 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
 static ant_value_t server_on_response_reject(ant_params_t) {
   server_request_t *req = server_current_request(js, call_func);
   ant_value_t reason = (nargs > 0) ? args[0] : Ant_Value_Undefined;
-  const char *msg = NULL;
 
   if (!req) return Ant_Value_Undefined;
   req->response_promise = Ant_Value_Undefined;
 
-  if (req->conn && !ant_conn_is_closing(req->conn)) {
-    msg = js_str(js, reason);
-    server_send_request_internal_error(req, msg);
-  }
+  print_error_value(js, reason, Ant_Value_Undefined, NULL);
+  server_send_request_internal_error(req, NULL);
 
   server_request_release(req);
   return Ant_Value_Undefined;
@@ -1217,8 +1249,8 @@ static ant_value_t server_on_response_fulfill(ant_params_t) {
   req->response_promise = Ant_Value_Undefined;
 
   if (!response_get_data(value)) {
-    if (req->conn && !ant_conn_is_closing(req->conn))
-      server_send_request_internal_error(req, "fetch handler must return a Response");
+    fprintf(stderr, "fetch handler must return a Response\n");
+    server_send_request_internal_error(req, NULL);
   } else if (req->conn && !ant_conn_is_closing(req->conn)) server_finish_with_response(req, value);
 
   server_request_release(req);
@@ -1230,8 +1262,8 @@ static void server_handle_fetch_result(server_request_t *req, ant_value_t result
 
   if (is_err(result)) {
     ant_value_t reason = Ant_Error_ConsumeMarker(js, result);
-    const char *msg = js_str(js, reason);
-    server_send_request_internal_error(req, msg);
+    print_error_value(js, reason, Ant_Value_Undefined, NULL);
+    server_send_request_internal_error(req, NULL);
     return;
   }
 
@@ -1247,7 +1279,8 @@ static void server_handle_fetch_result(server_request_t *req, ant_value_t result
   }
 
   if (!response_get_data(result)) {
-    server_send_request_internal_error(req, "fetch handler must return a Response");
+    fprintf(stderr, "fetch handler must return a Response\n");
+    server_send_request_internal_error(req, NULL);
     return;
   }
 
@@ -1275,10 +1308,6 @@ static ant_value_t server_stream_read_fulfill(ant_params_t) {
   const uint8_t *chunk = NULL;
   size_t chunk_len = 0;
   
-  ant_http1_buffer_t buf;
-  char *out = NULL;
-  size_t out_len = 0;
-
   if (!req) return Ant_Value_Undefined;
   req->response_read_promise = Ant_Value_Undefined;
 
@@ -1308,22 +1337,19 @@ static ant_value_t server_stream_read_fulfill(ant_params_t) {
     server_request_release(req);
     return Ant_Value_Undefined;
   }
+  
   ant_inspector_network_append_response_body(req->network_request_id, chunk, chunk_len);
-
-  ant_http1_buffer_init(&buf);
-  if (!ant_http1_write_chunk(&buf, chunk, chunk_len)) {
-    ant_http1_buffer_free(&buf);
+  if (!ant_http1_write_chunk(&req->pending, chunk, chunk_len)) {
     ant_conn_close(req->conn);
     server_request_release(req);
     return Ant_Value_Undefined;
   }
 
-  out = ant_http1_buffer_take(&buf, &out_len);
   ant_conn_set_timeout_ms(req->conn, req->server->idle_timeout_ms);
-  
-  server_queue_write(req->conn, req, out, out_len, SERVER_WRITE_STREAM_READ);
+  if (req->pending.len == 0 || (req->pending.len < SERVER_STREAM_COALESCE_MAX && server_stream_chunk_ready(req))) server_start_stream_read(req);
+  else server_flush_pending(req, SERVER_WRITE_STREAM_READ);
+
   server_request_release(req);
-  
   return Ant_Value_Undefined;
 }
 
@@ -1385,7 +1411,7 @@ static void server_write_cb(ant_conn_t *conn, int status, void *user_data) {
   case SERVER_WRITE_KEEP_ALIVE:
     if (req) server_network_finish(req);
     
-    if (cs && cs->server->stopping) {
+    if (cs && (cs->server->stopping || cs->peer_ended)) {
       ant_conn_close(conn);
       break;
     }
@@ -1591,8 +1617,8 @@ static void server_process_client_request(
   req->next = server->requests;
   server->requests = req;
   cs->active_req = req;
+  
   server_network_start(req);
-  ant_conn_pause_read(conn);
   ant_conn_set_timeout_ms(conn, server->request_timeout_ms);
 
   result = server_call_fetch(server, request_obj);
@@ -1612,7 +1638,11 @@ static void server_on_read(ant_conn_t *conn, ssize_t nread, void *user_data) {
     return;
   }
   
-  if (cs->active_req) return;
+  if (cs->active_req) {
+    if (ant_conn_buffer_len(conn) - cs->active_req->consumed_len >= SERVER_PIPELINE_BUFFER_MAX) ant_conn_pause_read(conn);
+    return;
+  }
+
   if (ant_conn_buffer_len(conn) == 0) return;
 
   uint64_t now = uv_now(cs->server->loop);
@@ -1648,6 +1678,12 @@ static void server_on_read(ant_conn_t *conn, ssize_t nread, void *user_data) {
 }
 
 static void server_on_end(ant_conn_t *conn, void *user_data) {
+  server_conn_state_t *cs = conn ? (server_conn_state_t *)ant_conn_get_user_data(conn) : NULL;
+  if (cs && cs->active_req && cs->active_req->response_finishing) {
+    cs->peer_ended = true;
+    return;
+  }
+
   if (conn) ant_conn_close(conn);
 }
 

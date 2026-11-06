@@ -122,7 +122,7 @@ static bool http_writer_append_raw_headers(
     if (strcasecmp(name, "connection") == 0) continue;
     if (strcasecmp(name, "content-length") == 0) continue;
     if (strcasecmp(name, "transfer-encoding") == 0) continue;
-    if (!ant_http1_buffer_appendf(buf, "%s: %s\r\n", name, value)) break;
+    if (!ant_http1_buffer_append_header(buf, name, value)) break;
   }
 
   if (buf->failed && error_out && vtype(*error_out) == kTypeUndefined)
@@ -131,11 +131,7 @@ static bool http_writer_append_raw_headers(
 }
 
 static bool http_writer_parse_bytes(
-  ant_t *js,
-  ant_value_t value,
-  const uint8_t **bytes_out,
-  size_t *len_out,
-  ant_value_t *error_out
+  ant_t *js, ant_value_t value, const uint8_t **bytes_out, size_t *len_out, ant_value_t *error_out
 ) {
   ant_value_t str_value = 0;
   const char *str = NULL;
@@ -162,6 +158,7 @@ static bool http_writer_parse_bytes(
 
   if (bytes_out) *bytes_out = (const uint8_t *)str;
   if (len_out) *len_out = len;
+  
   return true;
 }
 
@@ -266,7 +263,7 @@ static ant_value_t js_http_writer_write_head(ant_params_t) {
   if (nargs > index) keep_alive = js_truthy(js, args[index++]);
 
   ant_http1_buffer_init(&buf);
-  if (!ant_http1_buffer_appendf(&buf, "HTTP/1.1 %d %s\r\n", status, status_text ? status_text : ant_http1_default_status_text(status))) {
+  if (!ant_http1_buffer_append_status_line(&buf, status, status_text)) {
     ant_http1_buffer_free(&buf);
     return Ant_Error_CreateOutOfMemory(js);
   }
@@ -277,7 +274,7 @@ static ant_value_t js_http_writer_write_head(ant_params_t) {
   }
 
   if (body_is_stream) ant_http1_buffer_append_cstr(&buf, "Transfer-Encoding: chunked\r\n");
-  else ant_http1_buffer_appendf(&buf, "Content-Length: %zu\r\n", body_size);
+  else ant_http1_buffer_append_content_length(&buf, body_size);
   ant_http1_buffer_append_cstr(&buf, keep_alive ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n");
 
   if (buf.failed) {

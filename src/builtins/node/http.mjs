@@ -955,6 +955,7 @@ export class IncomingMessage extends Readable {
   }
 
   _pushBody(chunk) {
+    this._bodyPushed = true;
     return this.destroyed || this.push(chunk);
   }
 
@@ -971,17 +972,45 @@ export class IncomingMessage extends Readable {
   }
 
   _destroy(error, callback) {
+    const res = this._responseToClose;
+    this._responseToClose = false;
     if (!this.readableEnded || !this.complete) {
       this.aborted = true;
       this.emit('aborted');
     }
     if (this.aborted && this.socket && !this.socket.destroyed) this.socket.destroy(error);
+    if (res) res._emitClose();
     callback(error && this.listenerCount('error') > 0 ? error : null);
   }
 
   setTimeout(msecs, callback) {
     if (this.socket && this.socket.setTimeout) this.socket.setTimeout(msecs, callback);
     return this;
+  }
+}
+
+IncomingMessage.prototype._responseToClose = null;
+IncomingMessage.prototype._bodyPushed = false;
+
+function emitResponseClose(res) {
+  res._emitClose();
+}
+
+function finishResponse(res, req, state, keepAlive, callback) {
+  if (typeof callback === 'function') callback();
+  res.writableFinished = true;
+  res.emit('finish');
+
+  const drained = !req._consuming;
+  if (drained) req._dump();
+
+  if (drained && req.complete && req._responseToClose === null && (!req._bodyPushed || req.readableLength === 0)) {
+    req._responseToClose = res;
+  } else process.nextTick(emitResponseClose, res);
+
+  if (keepAlive && !state.closed) {
+    if (!state.incoming) resumeSocket(state);
+    state.server._drainSocket(res.socket, state);
   }
 }
 
@@ -1008,6 +1037,19 @@ export class ServerResponse extends EventEmitter {
     this._keepAlive = false;
     this._expectContinue = false;
     this._sent100 = false;
+  }
+
+  _emitClose() {
+    if (this.closed) return;
+    this.closed = true;
+    this.emit('close');
+  }
+
+  destroy(error) {
+    if (this.destroyed) return this;
+    this.destroyed = true;
+    if (this.socket && !this.socket.destroyed) this.socket.destroy(error);
+    return this;
   }
 
   get _header() {
@@ -1153,6 +1195,12 @@ export class ServerResponse extends EventEmitter {
   }
 
   write(chunk, encoding, callback) {
+    if (this.destroyed) {
+      const done = typeof encoding === 'function' ? encoding : callback;
+      if (typeof done === 'function') process.nextTick(done, httpError(Error, 'ERR_STREAM_DESTROYED', 'Cannot call write after a stream was destroyed'));
+      return false;
+    }
+
     const body = hasResponseBody(this.req && this.req.method, this.statusCode)
       ? bufferFrom(chunk, typeof encoding === 'string' ? encoding : undefined)
       : EMPTY_BUFFER;
@@ -1182,6 +1230,12 @@ export class ServerResponse extends EventEmitter {
       encoding = undefined;
     }
 
+    if (this.destroyed || this.socket.readyState === 'closed') {
+      this.writableEnded = true;
+      this.finished = true;
+      return this;
+    }
+
     if (hasResponseBody(this.req && this.req.method, this.statusCode)) {
       body = bufferFrom(chunk, typeof encoding === 'string' ? encoding : undefined);
     }
@@ -1194,25 +1248,15 @@ export class ServerResponse extends EventEmitter {
     } else if (body.length > 0) this.socket.write(body);
 
     this.writableEnded = true;
-    this.writableFinished = true;
     this.finished = true;
-    this.emit('finish');
-    this.emit('close');
 
     const state = this._socketState;
     keepAlive = !state.server._closing && this._keepAlive;
     state.activeResponse = null;
     const req = this.req;
-    process.nextTick(() => {
-      if (!req._consuming) req._dump();
-    });
-    if (typeof callback === 'function') callback();
-
     if (!keepAlive) this.socket.end();
-    else {
-      if (!state.incoming) resumeSocket(state);
-      state.server._drainSocket(this.socket, state);
-    }
+
+    process.nextTick(finishResponse, this, req, state, keepAlive, callback);
     return this;
   }
 
@@ -1221,6 +1265,9 @@ export class ServerResponse extends EventEmitter {
     return this;
   }
 }
+
+ServerResponse.prototype.destroyed = false;
+ServerResponse.prototype.closed = false;
 
 export class Server extends net.Server {
   constructor(options, requestListener) {
@@ -1264,13 +1311,18 @@ export class Server extends net.Server {
     });
 
     socket.on('close', () => {
-      const req = state.incoming;
+      const res = state.activeResponse;
       state.closed = true;
       state.pending = [];
       state.incoming = null;
+      state.activeResponse = null;
       this._socketStates.delete(state);
       httpParser.freeRequestParser(state.parser);
-      if (req && !req.complete) req.destroy(connResetError('aborted'));
+      if (res) {
+        if (!res.req.destroyed) res.req.destroy(connResetError('aborted'));
+        res.destroyed = true;
+        res._emitClose();
+      }
     });
   }
 

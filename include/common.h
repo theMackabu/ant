@@ -24,6 +24,7 @@
   X(SLOT_AUX)                     \
   X(SLOT_TARGET_FUNC)             \
   X(SLOT_MODULE_CTX)              \
+  X(SLOT_IMPORT_META)             \
   X(SLOT_MODULE_LOADING)          \
   X(SLOT_MAP)                     \
   X(SLOT_SET)                     \

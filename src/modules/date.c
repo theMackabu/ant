@@ -85,7 +85,7 @@ ant_value_t js_mkdate(ant_t *js, double ms) {
 
 bool is_date_instance(ant_value_t value) {
   if (!is_object_type(value)) return false;
-  ant_value_t brand = js_get_slot(js_as_obj(value), SLOT_BRAND);
+  ant_value_t brand = js_get_slot(value, SLOT_BRAND);
   return vtype(brand) == kTypeNumber && (int)Ant_Value_AsNumberUnchecked(brand) == BRAND_DATE;
 }
 
@@ -95,7 +95,7 @@ static bool date_this_time_value(ant_t *js, ant_value_t this_val, double *out, a
     return false;
   }
   
-  ant_value_t t = js_get_slot(js_as_obj(this_val), SLOT_DATA);
+  ant_value_t t = js_get_slot(this_val, SLOT_DATA);
   *out = (vtype(t) == kTypeNumber) ? Ant_Value_AsNumberUnchecked(t) : ANT_NAN;
   return true;
 }
@@ -105,7 +105,7 @@ static ant_value_t date_set_this_time_value(ant_t *js, ant_value_t this_val, dou
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a Date object");
   }
   
-  js_set_slot(js_as_obj(this_val), SLOT_DATA, Ant_Value_FromNumber(v));
+  js_set_slot(this_val, SLOT_DATA, Ant_Value_FromNumber(v));
   return Ant_Value_FromNumber(v);
 }
 
@@ -822,7 +822,7 @@ static ant_value_t builtin_Date(ant_params_t) {
     ant_value_t input = args[0];
     
     if (is_object_type(input) && is_date_instance(input)) {
-      ant_value_t tv = js_get_slot(js_as_obj(input), SLOT_DATA);
+      ant_value_t tv = js_get_slot(input, SLOT_DATA);
       val = (vtype(tv) == kTypeNumber) ? Ant_Value_AsNumberUnchecked(tv) : ANT_NAN;
       val = date_timeclip(val);
     } else {
@@ -851,8 +851,8 @@ static ant_value_t builtin_Date(ant_params_t) {
     val = (i == n) ? date_make_fields(&fields, 1) : ANT_NAN;
   }
 
-  js_set_slot(js_as_obj(call_this), SLOT_DATA, Ant_Value_FromNumber(val));
-  js_set_slot(js_as_obj(call_this), SLOT_BRAND, Ant_Value_FromNumber(BRAND_DATE));
+  js_set_slot(call_this, SLOT_DATA, Ant_Value_FromNumber(val));
+  js_set_slot(call_this, SLOT_BRAND, Ant_Value_FromNumber(BRAND_DATE));
   
   return call_this;
 }

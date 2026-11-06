@@ -601,7 +601,7 @@ static ant_value_t builtin_error_isError(ant_params_t) {
   if (nargs < 1) return Ant_Value_False;
   ant_value_t val = args[0];
   if (!is_object_type(val)) return Ant_Value_False;
-  return get_slot(val, SLOT_ERROR_BRAND) == Ant_Value_True ? Ant_Value_True : Ant_Value_False;
+  return js_get_slot(val, SLOT_ERROR_BRAND) == Ant_Value_True ? Ant_Value_True : Ant_Value_False;
 }
 
 static ant_value_t error_install_message_cause(ant_t *js, ant_value_t err, ant_value_t message, ant_value_t options) {
@@ -640,7 +640,7 @@ static ant_value_t builtin_Error(ant_params_t) {
     nargs > 1 ? args[1] : Ant_Value_Undefined
   );
   
-  set_slot(this_val, SLOT_ERROR_BRAND, Ant_Value_True);
+  js_set_slot(this_val, SLOT_ERROR_BRAND, Ant_Value_True);
   GC_ROOT_RESTORE(js, mark);
   
   return is_err(installed) ? installed : this_val;
@@ -662,7 +662,7 @@ ant_value_t Ant_Error_CreateConstructorEx(ant_t *js, const char *name, ant_value
   GC_ROOT_PIN(js, ctor);
   
   set_proto(js, ctor, error_ctor);
-  set_slot(ctor, SLOT_CFUNC, cfunc);
+  js_set_slot(ctor, SLOT_CFUNC, cfunc);
   js_setprop_readonly_nonconfigurable(js, ctor, "prototype", 9, proto);
   js_set_function_name(js, ctor, name, name_len);
   
@@ -752,7 +752,7 @@ static ant_value_t builtin_AggregateError(ant_params_t) {
   }
   
   mkprop_bytes(js, this_val, "errors", 6, errors, JS_DESC_W | JS_DESC_C);
-  set_slot(this_val, SLOT_ERROR_BRAND, Ant_Value_True);
+  js_set_slot(this_val, SLOT_ERROR_BRAND, Ant_Value_True);
   
   js_capture_stack_above(js, call_func, this_val, call_new_target);
   GC_ROOT_RESTORE(js, mark);
@@ -785,7 +785,7 @@ static ant_value_t builtin_SuppressedError(ant_params_t) {
   mkprop_bytes(js, this_val, "error", 5, error, JS_DESC_W | JS_DESC_C);
   mkprop_bytes(js, this_val, "suppressed", 10, suppressed, JS_DESC_W | JS_DESC_C);
 
-  set_slot(this_val, SLOT_ERROR_BRAND, Ant_Value_True);
+  js_set_slot(this_val, SLOT_ERROR_BRAND, Ant_Value_True);
   js_capture_stack_above(js, call_func, this_val, call_new_target);
 
   return this_val;
@@ -802,7 +802,7 @@ void js_errors_init(ant_t *js, ant_value_t object_proto, ant_value_t function_pr
   
   ant_value_t err_ctor_obj = mkobj(js, 0);
   set_proto(js, err_ctor_obj, function_proto);
-  set_slot(err_ctor_obj, SLOT_CFUNC, Ant_Function_CreateWithArity(builtin_Error, 1));
+  js_set_slot(err_ctor_obj, SLOT_CFUNC, Ant_Function_CreateWithArity(builtin_Error, 1));
   js_setprop_readonly_nonconfigurable(js, err_ctor_obj, "prototype", 9, error_proto);
   js_set_function_name(js, err_ctor_obj, "Error", sizeof("Error") - 1);
   
@@ -836,7 +836,7 @@ void js_errors_init(ant_t *js, ant_value_t object_proto, ant_value_t function_pr
   
   ant_value_t aggregate_ctor = mkobj(js, 0);
   set_proto(js, aggregate_ctor, err_ctor_func);
-  set_slot(aggregate_ctor, SLOT_CFUNC, Ant_Function_CreateWithArity(builtin_AggregateError, 2));
+  js_set_slot(aggregate_ctor, SLOT_CFUNC, Ant_Function_CreateWithArity(builtin_AggregateError, 2));
   js_setprop_readonly_nonconfigurable(js, aggregate_ctor, "prototype", 9, aggregate_proto);
   js_set_function_name(js, aggregate_ctor, "AggregateError", sizeof("AggregateError") - 1);
   
@@ -851,7 +851,7 @@ void js_errors_init(ant_t *js, ant_value_t object_proto, ant_value_t function_pr
   
   ant_value_t suppressed_ctor = mkobj(js, 0);
   set_proto(js, suppressed_ctor, err_ctor_func);
-  set_slot(suppressed_ctor, SLOT_CFUNC, Ant_Function_CreateWithArity(builtin_SuppressedError, 3));
+  js_set_slot(suppressed_ctor, SLOT_CFUNC, Ant_Function_CreateWithArity(builtin_SuppressedError, 3));
   js_setprop_readonly_nonconfigurable(js, suppressed_ctor, "prototype", 9, suppressed_proto);
   js_set_function_name(js, suppressed_ctor, "SuppressedError", sizeof("SuppressedError") - 1);
   

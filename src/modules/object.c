@@ -21,7 +21,7 @@
 
 static bool is_object_constructor(ant_value_t value) {
   if (vtype(value) != kTypeFunction) return false;
-  ant_value_t builtin = get_slot(js_func_obj(value), SLOT_BUILTIN);
+  ant_value_t builtin = js_get_slot(js_func_obj(value), SLOT_BUILTIN);
   return vtype(builtin) == kTypeNumber && Ant_Value_AsNumberUnchecked(builtin) == (double)BUILTIN_OBJECT;
 }
 
@@ -439,9 +439,8 @@ static ant_value_t builtin_object_create(ant_params_t) {
   if (pt != kTypeObject && pt != kTypeArray && pt != kTypeFunction && pt != kTypeNull)
     return js_mkerr(js, "Object.create: prototype must be an object or null");
 
-  ant_value_t obj = Ant_Object_CreateBare(js);
-  if (pt == kTypeNull) js_set_proto_init(obj, Ant_Value_Null);
-  else js_set_proto_init(obj, proto);
+  ant_value_t obj = js_mkobj_with_proto(js, proto);
+  if (is_err(obj)) return obj;
 
   if (nargs >= 2 && vtype(args[1]) != kTypeUndefined) {
     ant_value_t result = object_define_properties(js, obj, args[1]);
@@ -1322,9 +1321,9 @@ static object_tag_t object_object_tag(ant_t *js, ant_value_t obj, ant_object_t *
   if (is_callable(obj)) return OBJECT_TAG_FUNCTION;
   if (ptr->flags.regexp_brand) return OBJECT_TAG_REGEXP;
   if (ant_object_extra_count(ptr) == 0) return OBJECT_TAG_OBJECT;
-  if (get_slot(obj, SLOT_ERROR_BRAND) == Ant_Value_True) return OBJECT_TAG_ERROR;
+  if (js_get_slot(obj, SLOT_ERROR_BRAND) == Ant_Value_True) return OBJECT_TAG_ERROR;
   
-  switch (vtype(get_slot(obj, SLOT_PRIMITIVE))) {
+  switch (vtype(js_get_slot(obj, SLOT_PRIMITIVE))) {
     case kTypeBool:   return OBJECT_TAG_BOOLEAN;
     case kTypeNumber: return OBJECT_TAG_NUMBER;
     case kTypeString: return OBJECT_TAG_STRING;
@@ -1417,7 +1416,7 @@ void js_object_init_prototype(ant_t *js, ant_value_t object_proto) {
 }
 
 void js_object_init_constructor(ant_t *js, ant_value_t obj_func_obj, ant_value_t object_proto) {
-  set_slot(obj_func_obj, SLOT_BUILTIN, Ant_Value_FromNumber(BUILTIN_OBJECT));
+  js_set_slot(obj_func_obj, SLOT_BUILTIN, Ant_Value_FromNumber(BUILTIN_OBJECT));
   js_mark_constructor(obj_func_obj, true);
   
   defmethod(js, obj_func_obj, "keys", 4, Ant_Function_CreateWithArity(builtin_object_keys, 1));

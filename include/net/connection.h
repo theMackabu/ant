@@ -32,6 +32,8 @@ struct ant_conn_s {
   size_t buffer_offset;
   
   uint64_t timeout_ms;
+  uint64_t timeout_deadline;
+  uint64_t timer_fires_at;
   uint64_t bytes_read;
   uint64_t bytes_written;
   

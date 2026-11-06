@@ -425,8 +425,9 @@ static inline __attribute__((always_inline)) ant_value_t create_typed_array_view
   ta_data->type = type;
   typedarray_view_attach(js, ta_data, buffer, byte_offset, length, tracking);
   
-  ant_value_t obj = Ant_Object_CreateBare(js);
-  if (is_special_object(proto)) js_set_proto_init(obj, proto);
+  ant_value_t obj = is_special_object(proto) 
+    ? js_mkobj_with_proto(js, proto) 
+    : Ant_Object_CreateBare(js);
   
   js_set_native(obj, ta_data, BUFFER_TYPEDARRAY_NATIVE_TAG);
   js_set_slot_wb(js, obj, SLOT_DATA, arraybuffer_obj);

@@ -421,14 +421,12 @@ static inline void ant_object_prop_set_unchecked(ant_object_t *obj, uint32_t slo
   *dst = value;
 }
 
-ant_value_t get_slot(ant_value_t obj, internal_slot_t slot);
 ant_value_t get_proto(ant_t *js, ant_value_t obj);
 ant_value_t obj_extra_get(ant_object_t *obj, internal_slot_t slot);
 ant_object_t *obj_alloc_with_proto(ant_t *js, uint8_t type_tag, ant_value_t proto);
 
 bool obj_extra_reserve(ant_object_t *obj, uint8_t capacity);
 void obj_delete_prop_slot(ant_object_t *obj, uint32_t slot);
-void set_slot(ant_value_t obj, internal_slot_t slot, ant_value_t val);
 void set_proto(ant_t *js, ant_value_t obj, ant_value_t proto);
 
 #endif

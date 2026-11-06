@@ -22,6 +22,10 @@ bool ant_http1_buffer_appendf(ant_http1_buffer_t *buf, const char *fmt, ...);
 bool ant_http1_buffer_reserve(ant_http1_buffer_t *buf, size_t extra);
 bool ant_http1_buffer_append(ant_http1_buffer_t *buf, const void *data, size_t len);
 bool ant_http1_buffer_append_cstr(ant_http1_buffer_t *buf, const char *str);
+bool ant_http1_buffer_append_uint(ant_http1_buffer_t *buf, size_t value);
+bool ant_http1_buffer_append_status_line(ant_http1_buffer_t *buf, int status, const char *status_text);
+bool ant_http1_buffer_append_header(ant_http1_buffer_t *buf, const char *name, const char *value);
+bool ant_http1_buffer_append_content_length(ant_http1_buffer_t *buf, size_t length);
 bool ant_http1_buffer_appendfv(ant_http1_buffer_t *buf, const char *fmt, va_list ap);
 
 const char *ant_http1_default_status_text(int status);

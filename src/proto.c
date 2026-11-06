@@ -47,7 +47,7 @@ bool proto_walk_next(ant_t *js, ant_value_t *cur, uint8_t *t, proto_walk_flags_t
 
   if (T_FLAG_FIND(ct) & T_OBJECT_MASK) {
     ant_value_t as_obj = js_as_obj(*cur);
-    ant_value_t proto = get_slot(as_obj, SLOT_PROTO);
+    ant_value_t proto = js_get_slot(as_obj, SLOT_PROTO);
     
     uint8_t pt = vtype(proto);
     if (pt == kTypeObject || pt == kTypeArray || pt == kTypeFunction) {
@@ -144,7 +144,7 @@ bool proto_chain_contains(ant_t *js, ant_value_t obj, ant_value_t proto_target) 
 bool is_wrapper_ctor_target(ant_t *js, ant_value_t this_val, ant_value_t new_target) {
   if (vtype(new_target) == kTypeUndefined) return false;
   if (vtype(this_val) != kTypeObject) return false;
-  if (vtype(get_slot(this_val, SLOT_PRIMITIVE)) != kTypeUndefined) return false;
+  if (vtype(js_get_slot(this_val, SLOT_PRIMITIVE)) != kTypeUndefined) return false;
   return true;
 }
 
@@ -157,18 +157,18 @@ bool same_ctor_identity(ant_t *js, ant_value_t a, ant_value_t b) {
   if (vtype(a) == vtype(b) && vdata(a) == vdata(b)) return true;
   
   if (vtype(a) == kTypeFunction && vtype(b) == kTypeBuiltin) {
-    ant_value_t c = get_slot(a, SLOT_CFUNC);
+    ant_value_t c = js_get_slot(a, SLOT_CFUNC);
     return vtype(c) == kTypeBuiltin && vdata(c) == vdata(b);
   }
   
   if (vtype(a) == kTypeBuiltin && vtype(b) == kTypeFunction) {
-    ant_value_t c = get_slot(b, SLOT_CFUNC);
+    ant_value_t c = js_get_slot(b, SLOT_CFUNC);
     return vtype(c) == kTypeBuiltin && vdata(c) == vdata(a);
   }
   
   if (vtype(a) == kTypeFunction && vtype(b) == kTypeFunction) {
-    ant_value_t ca = get_slot(a, SLOT_CFUNC);
-    ant_value_t cb = get_slot(b, SLOT_CFUNC);
+    ant_value_t ca = js_get_slot(a, SLOT_CFUNC);
+    ant_value_t cb = js_get_slot(b, SLOT_CFUNC);
     if (vtype(ca) == kTypeBuiltin && vtype(cb) == kTypeBuiltin && vdata(ca) == vdata(cb)) return true;
   }
   

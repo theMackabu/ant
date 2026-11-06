@@ -11,9 +11,9 @@ static ant_value_t disposable_stack_init(ant_t *js, ant_value_t obj, int brand, 
 
   ant_value_t entries = Ant_Array_Create(js);
   if (is_err(entries)) return entries;
-  set_slot(obj, SLOT_BRAND, Ant_Value_FromNumber((double)brand));
+  js_set_slot(obj, SLOT_BRAND, Ant_Value_FromNumber((double)brand));
   js_set_slot_wb(js, obj, SLOT_ENTRIES, entries);
-  set_slot(obj, SLOT_SETTLED, Ant_Value_False);
+  js_set_slot(obj, SLOT_SETTLED, Ant_Value_False);
   
   return obj;
 }
@@ -36,7 +36,7 @@ static ant_value_t builtin_AsyncDisposableStack(ant_params_t) {
 
 static bool disposable_stack_has_brand(ant_value_t obj, int brand) {
   if (!is_object_type(obj)) return false;
-  ant_value_t actual = get_slot(js_as_obj(obj), SLOT_BRAND);
+  ant_value_t actual = js_get_slot(obj, SLOT_BRAND);
   return vtype(actual) == kTypeNumber && (int)Ant_Value_AsNumberUnchecked(actual) == brand;
 }
 
@@ -44,10 +44,10 @@ static ant_value_t disposable_stack_entries_checked(ant_t *js, ant_value_t stack
   if (!disposable_stack_has_brand(stack, brand))
     return js_mkerr_typed(js, JS_ERR_TYPE, "%s method called on incompatible receiver", name);
 
-  if (get_slot(js_as_obj(stack), SLOT_SETTLED) == Ant_Value_True)
+  if (js_get_slot(stack, SLOT_SETTLED) == Ant_Value_True)
     return js_mkerr_typed(js, JS_ERR_TYPE, "%s is already disposed", name);
 
-  ant_value_t entries = get_slot(js_as_obj(stack), SLOT_ENTRIES);
+  ant_value_t entries = js_get_slot(stack, SLOT_ENTRIES);
   if (vtype(entries) != kTypeArray) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid %s", name);
   return entries;
 }
@@ -185,9 +185,9 @@ static ant_value_t disposable_stack_move(ant_t *js, ant_value_t call_this, int b
     return moved;
   }
 
-  set_slot(moved, SLOT_ENTRIES, entries);
-  js_set_slot_wb(js, js_as_obj(call_this), SLOT_ENTRIES, Ant_Array_Create(js));
-  set_slot(js_as_obj(call_this), SLOT_SETTLED, Ant_Value_True);
+  js_set_slot(moved, SLOT_ENTRIES, entries);
+  js_set_slot_wb(js, call_this, SLOT_ENTRIES, Ant_Array_Create(js));
+  js_set_slot(call_this, SLOT_SETTLED, Ant_Value_True);
 
   GC_ROOT_RESTORE(js, root_mark);
   return moved;
@@ -207,17 +207,17 @@ static ant_value_t builtin_DisposableStack_dispose(ant_params_t) {
   if (!disposable_stack_has_brand(call_this, BRAND_DISPOSABLE_STACK)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "DisposableStack method called on incompatible receiver");
   }
-  if (get_slot(js_as_obj(call_this), SLOT_SETTLED) == Ant_Value_True) return Ant_Value_Undefined;
+  if (js_get_slot(call_this, SLOT_SETTLED) == Ant_Value_True) return Ant_Value_Undefined;
 
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, call_this);
-  ant_value_t entries = get_slot(js_as_obj(call_this), SLOT_ENTRIES);
+  ant_value_t entries = js_get_slot(call_this, SLOT_ENTRIES);
   
   GC_ROOT_PIN(js, entries);
   ant_value_t completion = Ant_Value_Undefined;
   
   GC_ROOT_PIN(js, completion);
-  set_slot(js_as_obj(call_this), SLOT_SETTLED, Ant_Value_True);
+  js_set_slot(call_this, SLOT_SETTLED, Ant_Value_True);
 
   ant_offset_t len = vtype(entries) == kTypeArray ? js_arr_len(js, entries) : 0;
   bool has_completion = false;
@@ -228,7 +228,7 @@ static ant_value_t builtin_DisposableStack_dispose(ant_params_t) {
     return completion;
   }
 
-  js_set_slot_wb(js, js_as_obj(call_this), SLOT_ENTRIES, Ant_Array_Create(js));
+  js_set_slot_wb(js, call_this, SLOT_ENTRIES, Ant_Array_Create(js));
   if (has_completion) {
     ant_value_t thrown = js_throw(js, completion);
     GC_ROOT_RESTORE(js, root_mark);
@@ -251,7 +251,7 @@ static ant_value_t builtin_AsyncDisposableStack_disposeAsync(ant_params_t) {
     return result_promise;
   }
   
-  if (get_slot(js_as_obj(call_this), SLOT_SETTLED) == Ant_Value_True) {
+  if (js_get_slot(call_this, SLOT_SETTLED) == Ant_Value_True) {
     js_resolve_promise(js, result_promise, Ant_Value_Undefined);
     return result_promise;
   }
@@ -260,9 +260,9 @@ static ant_value_t builtin_AsyncDisposableStack_disposeAsync(ant_params_t) {
   GC_ROOT_PIN(js, call_this);
   GC_ROOT_PIN(js, result_promise);
 
-  ant_value_t entries = get_slot(js_as_obj(call_this), SLOT_ENTRIES);
+  ant_value_t entries = js_get_slot(call_this, SLOT_ENTRIES);
   GC_ROOT_PIN(js, entries);
-  set_slot(js_as_obj(call_this), SLOT_SETTLED, Ant_Value_True);
+  js_set_slot(call_this, SLOT_SETTLED, Ant_Value_True);
 
   ant_value_t state = Ant_Object_CreateBare(js);
   GC_ROOT_PIN(js, state);
@@ -271,11 +271,11 @@ static ant_value_t builtin_AsyncDisposableStack_disposeAsync(ant_params_t) {
     return state;
   }
   
-  set_slot(state, SLOT_ENTRIES, entries);
-  set_slot(state, SLOT_DATA, result_promise);
-  set_slot(state, SLOT_AUX, Ant_Value_Undefined);
-  set_slot(state, SLOT_ITER_STATE, Ant_Value_FromNumber((double)(vtype(entries) == kTypeArray ? js_arr_len(js, entries) : 0)));
-  js_set_slot_wb(js, js_as_obj(call_this), SLOT_ENTRIES, Ant_Array_Create(js));
+  js_set_slot(state, SLOT_ENTRIES, entries);
+  js_set_slot(state, SLOT_DATA, result_promise);
+  js_set_slot(state, SLOT_AUX, Ant_Value_Undefined);
+  js_set_slot(state, SLOT_ITER_STATE, Ant_Value_FromNumber((double)(vtype(entries) == kTypeArray ? js_arr_len(js, entries) : 0)));
+  js_set_slot_wb(js, call_this, SLOT_ENTRIES, Ant_Array_Create(js));
 
   ant_value_t result = sv_async_dispose_continue(js, state, false, Ant_Value_Undefined);
   GC_ROOT_RESTORE(js, root_mark);
@@ -295,7 +295,7 @@ void js_disposable_stack_init(ant_t *js, ant_value_t object_proto, ant_value_t f
 
   ant_value_t disposable_stack_ctor = mkobj(js, 0);
   set_proto(js, disposable_stack_ctor, function_proto);
-  set_slot(disposable_stack_ctor, SLOT_CFUNC, Ant_Function_Create(builtin_DisposableStack));
+  js_set_slot(disposable_stack_ctor, SLOT_CFUNC, Ant_Function_Create(builtin_DisposableStack));
   js_setprop_readonly_nonconfigurable(js, disposable_stack_ctor, "prototype", 9, disposable_stack_proto);
   js_set_function_name(js, disposable_stack_ctor, "DisposableStack", sizeof("DisposableStack") - 1);
   
@@ -314,7 +314,7 @@ void js_disposable_stack_init(ant_t *js, ant_value_t object_proto, ant_value_t f
 
   ant_value_t async_disposable_stack_ctor = mkobj(js, 0);
   set_proto(js, async_disposable_stack_ctor, function_proto);
-  set_slot(async_disposable_stack_ctor, SLOT_CFUNC, Ant_Function_Create(builtin_AsyncDisposableStack));
+  js_set_slot(async_disposable_stack_ctor, SLOT_CFUNC, Ant_Function_Create(builtin_AsyncDisposableStack));
   js_setprop_readonly_nonconfigurable(js, async_disposable_stack_ctor, "prototype", 9, async_disposable_stack_proto);
   js_set_function_name(js, async_disposable_stack_ctor, "AsyncDisposableStack", sizeof("AsyncDisposableStack") - 1);
   

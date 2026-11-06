@@ -3548,7 +3548,7 @@ static ant_value_t builtin_fs_rename(ant_params_t) {
 
 static double fs_time_arg_to_seconds(ant_t *js, ant_value_t v) {
   if (is_date_instance(v)) {
-    ant_value_t t = js_get_slot(js_as_obj(v), SLOT_DATA);
+    ant_value_t t = js_get_slot(v, SLOT_DATA);
     return (vtype(t) == kTypeNumber) ? Ant_Value_AsNumberUnchecked(t) / 1000.0 : 0.0;
   }
   return js_to_number(js, v);

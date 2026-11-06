@@ -1593,7 +1593,7 @@ static ant_value_t builtin_Proxy(ant_params_t) {
 
 static ant_value_t proxy_revoke_fn(ant_params_t) {
   (void)args; (void)nargs;
-  ant_value_t ref_slot = get_slot(call_func, SLOT_PROXY_REF);
+  ant_value_t ref_slot = js_get_slot(call_func, SLOT_PROXY_REF);
   
   if (vtype(ref_slot) != kTypeUndefined && vdata(ref_slot) != 0) {
     ant_proxy_state_t *data = get_proxy_data(ref_slot);
@@ -1608,8 +1608,8 @@ static ant_value_t builtin_Proxy_revocable(ant_params_t) {
   if (is_err(proxy)) return proxy;
   
   ant_value_t revoke_obj = mkobj(js, 0);
-  set_slot(revoke_obj, SLOT_CFUNC, Ant_Function_Create(proxy_revoke_fn));
-  set_slot(revoke_obj, SLOT_PROXY_REF, proxy);
+  js_set_slot(revoke_obj, SLOT_CFUNC, Ant_Function_Create(proxy_revoke_fn));
+  js_set_slot(revoke_obj, SLOT_PROXY_REF, proxy);
   
   ant_value_t revoke_func = js_obj_to_func(js, revoke_obj);
   ant_value_t result = Ant_Object_Create(js);
@@ -1621,7 +1621,7 @@ static ant_value_t builtin_Proxy_revocable(ant_params_t) {
 }
 
 void js_proxy_init_constructor(ant_t *js, ant_value_t proxy_ctor_obj) {
-  set_slot(proxy_ctor_obj, SLOT_CFUNC, Ant_Function_Create(builtin_Proxy));
+  js_set_slot(proxy_ctor_obj, SLOT_CFUNC, Ant_Function_Create(builtin_Proxy));
   js_define_function_length(js, proxy_ctor_obj, 2);
   js_mark_constructor(proxy_ctor_obj, true);
   defmethod(js, proxy_ctor_obj, "revocable", 9, Ant_Function_CreateWithArity(builtin_Proxy_revocable, 2));

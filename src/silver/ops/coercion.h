@@ -176,31 +176,10 @@ static inline bool sv_module_namespace_has_export(
   return lookup_string_prop_meta(js, as_obj, name, len, &meta);
 }
 
-static inline const char *sv_module_namespace_display_name(ant_t *js, ant_value_t ns) {
-  if (!is_object_type(ns)) return NULL;
-
-  ant_value_t module_ctx = js_get_slot(ns, SLOT_MODULE_CTX);
-  if (!is_object_type(module_ctx)) return NULL;
-
-  ant_value_t display_name = js_get(js, module_ctx, "displayName");
-  if (vtype(display_name) == kTypeString) return js_getstr(js, display_name, NULL);
-
-  ant_value_t filename = js_get(js, module_ctx, "filename");
-  if (vtype(filename) != kTypeString) return NULL;
-  
-  return js_getstr(js, filename, NULL);
-}
-
-static inline ant_value_t sv_missing_named_export_error(
-  ant_t *js, ant_value_t ns, const char *name, size_t len
-) {
-  const char *display_name = sv_module_namespace_display_name(js, ns);
+static inline ant_value_t sv_missing_named_export_error(ant_t *js, ant_value_t ns, const char *name, size_t len) {
+  const char *display_name = js_module_ctx_filename(js_get_slot(ns, SLOT_MODULE_CTX));
   if (!display_name) display_name = "<unknown>";
-  return js_mkerr_typed(
-    js, JS_ERR_SYNTAX,
-    "The requested module '%s' does not provide an export named '%.*s'",
-    display_name, (int)len, name
-  );
+  return js_mkerr_typed(js, JS_ERR_SYNTAX, "The requested module '%s' does not provide an export named '%.*s'", display_name, (int)len, name);
 }
 
 static inline ant_value_t sv_import_named_value(

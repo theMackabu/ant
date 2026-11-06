@@ -44,8 +44,8 @@ static inline bool ordinary_primitive_result(ant_value_t result) {
 
 bool is_unboxed_obj(ant_t *js, ant_value_t val, ant_value_t expected_proto) {
   if (vtype(val) != kTypeObject) return false;
-  if (vtype(get_slot(val, SLOT_PRIMITIVE)) != kTypeUndefined) return false;
-  ant_value_t proto = get_slot(val, SLOT_PROTO);
+  if (vtype(js_get_slot(val, SLOT_PRIMITIVE)) != kTypeUndefined) return false;
+  ant_value_t proto = js_get_slot(val, SLOT_PROTO);
   return vdata(proto) == vdata(expected_proto);
 }
 
@@ -69,7 +69,7 @@ int32_t js_to_int32(double d) {
 
 ant_value_t unwrap_primitive(ant_t *js, ant_value_t val) {
   if (__builtin_expect(vtype(val) != kTypeObject, 1)) return val;
-  ant_value_t prim = get_slot(val, SLOT_PRIMITIVE);
+  ant_value_t prim = js_get_slot(val, SLOT_PRIMITIVE);
   if (__builtin_expect(vtype(prim) == kTypeUndefined, 1)) return val;
   return prim;
 }

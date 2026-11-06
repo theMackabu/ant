@@ -425,6 +425,12 @@ static bool fetch_get_upload_chunk(ant_value_t value, const uint8_t **out, size_
   return true;
 }
 
+static ant_value_t fetch_response_body_cancel(ant_params_t) {
+  fetch_request_t *req = (fetch_request_t *)js_get_native(call_func, FETCH_REQUEST_NATIVE_TAG);
+  if (req && req->http_req) ant_http_request_cancel(req->http_req);
+  return Ant_Value_Undefined;
+}
+
 static void fetch_http_on_response(ant_http_request_t *http_req, const ant_http_response_t *resp, void *user_data) {
   fetch_request_t *req = (fetch_request_t *)user_data;
   
@@ -487,7 +493,11 @@ static void fetch_http_on_response(ant_http_request_t *http_req, const ant_http_
     return;
   }
 
-  stream = rs_create_stream(js, Ant_Value_Undefined, Ant_Value_Undefined, 1.0);
+  stream = rs_create_stream(
+    js, Ant_Value_Undefined, 
+    js_heavy_mkfun_native(js, fetch_response_body_cancel, req, FETCH_REQUEST_NATIVE_TAG), 1.0
+  );
+  
   if (is_err(stream)) {
     fetch_reject(req, stream);
     ant_http_request_cancel(http_req);

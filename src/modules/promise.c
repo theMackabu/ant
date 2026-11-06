@@ -148,15 +148,13 @@ void js_mark_promise_trigger_dequeued(ant_t *js, ant_value_t promise) {
 }
 
 ant_value_t js_mkpromise(ant_t *js) {
-  ant_value_t obj = mkobj(js, 0);
+  ant_value_t promise_proto = js->sym.promise_proto;
+  ant_value_t obj = is_object_type(promise_proto) ? js_mkobj_with_proto(js, promise_proto) : mkobj(js, 0);
 
   if (is_err(obj)) return obj;
   if (!js_promise_data(js, mkval(kTypePromise, vdata(obj)), true))
     return Ant_Error_CreateOutOfMemory(js);
 
-  ant_value_t promise_proto = js->sym.promise_proto;
-  if (is_object_type(promise_proto)) js_set_proto_init(obj, promise_proto);
-  
   return mkval(kTypePromise, vdata(obj));
 }
 

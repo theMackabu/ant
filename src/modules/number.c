@@ -99,7 +99,7 @@ static ant_value_t builtin_Number_isSafeInteger(ant_params_t) {
 static ant_value_t builtin_Number(ant_params_t) {
   ant_value_t nval = Ant_Value_FromNumber(nargs > 0 ? js_to_number(js, args[0]) : 0.0);
   if (is_wrapper_ctor_target(js, call_this, call_new_target))
-    set_slot(call_this, SLOT_PRIMITIVE, nval);
+    js_set_slot(call_this, SLOT_PRIMITIVE, nval);
   return nval;
 }
 
@@ -300,7 +300,7 @@ double js_parse_float_value(ant_t *js, ant_value_t arg) {
 }
 
 void js_number_init_prototype(ant_t *js, ant_value_t number_proto) {
-  set_slot(number_proto, SLOT_PRIMITIVE, Ant_Value_FromNumber(0.0));
+  js_set_slot(number_proto, SLOT_PRIMITIVE, Ant_Value_FromNumber(0.0));
   
   js->sym.number_to_string_fn = defmethod(js, number_proto, "toString", 8, Ant_Function_CreateWithArity(builtin_number_toString, 1));
   defmethod(js, number_proto, "toFixed", 7, Ant_Function_CreateWithArity(builtin_number_toFixed, 1));
@@ -311,7 +311,7 @@ void js_number_init_prototype(ant_t *js, ant_value_t number_proto) {
 }
 
 void js_number_init_constructor(ant_t *js, ant_value_t number_ctor_obj, ant_value_t number_proto, ant_value_t *parse_int, ant_value_t *parse_float) {
-  set_slot(number_ctor_obj, SLOT_CFUNC, Ant_Function_CreateWithArity(builtin_Number, 1));
+  js_set_slot(number_ctor_obj, SLOT_CFUNC, Ant_Function_CreateWithArity(builtin_Number, 1));
   defmethod(js, number_ctor_obj, "isNaN", 5, Ant_Function_CreateEx(builtin_Number_isNaN, 1, CFUNC_REALM_FREE));
   defmethod(js, number_ctor_obj, "isFinite", 8, Ant_Function_CreateEx(builtin_Number_isFinite, 1, CFUNC_REALM_FREE));
   defmethod(js, number_ctor_obj, "isInteger", 9, Ant_Function_CreateEx(builtin_Number_isInteger, 1, CFUNC_REALM_FREE));

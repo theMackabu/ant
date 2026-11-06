@@ -106,29 +106,28 @@ ant_value_t rs_reader_reqs(ant_value_t reader_obj) {
   return js_get_slot(reader_obj, SLOT_AUX);
 }
 
-static uint32_t *rs_reader_reqs_head(ant_value_t reader_obj) {
-  rs_stream_t *stream = rs_get_stream(rs_reader_stream(reader_obj));
-  return stream ? &stream->read_reqs_head : NULL;
-}
-
 bool rs_reader_has_reqs(ant_t *js, ant_value_t reader_obj) {
-  uint32_t *head = rs_reader_reqs_head(reader_obj);
-  return head && Stream_Queue_Len(rs_reader_reqs(reader_obj), *head) > 0;
+  rs_stream_t *stream = rs_get_stream(rs_reader_stream(reader_obj));
+  return stream && stream->pending_reads > 0;
 }
 
-void rs_ctrl_queue_push(ant_t *js, ant_value_t ctrl_obj, ant_value_t value) {
+void rs_ctrl_queue_push(ant_t *js, ant_value_t ctrl_obj, rs_controller_t *ctrl, ant_value_t value) {
   ant_value_t arr = rs_ctrl_queue(js, ctrl_obj);
-  if (vtype(arr) == kTypeArray) js_arr_push(js, arr, value);
+  if (vtype(arr) != kTypeArray) return;
+  js_arr_push(js, arr, value);
+  ctrl->queue_count++;
 }
 
 ant_offset_t rs_ctrl_queue_len(ant_t *js, ant_value_t ctrl_obj) {
   rs_controller_t *ctrl = rs_get_controller(ctrl_obj);
-  return ctrl ? Stream_Queue_Len(rs_ctrl_queue(js, ctrl_obj), ctrl->queue_head) : 0;
+  return ctrl ? ctrl->queue_count : 0;
 }
 
-static void rs_reader_reqs_push(ant_t *js, ant_value_t reader_obj, ant_value_t promise) {
+static void rs_reader_reqs_push(ant_t *js, rs_stream_t *stream, ant_value_t reader_obj, ant_value_t promise) {
   ant_value_t arr = rs_reader_reqs(reader_obj);
-  if (vtype(arr) == kTypeArray) js_arr_push(js, arr, promise);
+  if (vtype(arr) != kTypeArray) return;
+  js_arr_push(js, arr, promise);
+  stream->pending_reads++;
 }
 
 void rs_default_controller_call_pull_if_needed(ant_t *js, ant_value_t controller_obj);
@@ -150,11 +149,7 @@ static double rs_default_controller_get_desired_size(rs_controller_t *ctrl, rs_s
 static bool rs_default_controller_should_call_pull(ant_t *js, rs_controller_t *ctrl, rs_stream_t *stream, ant_value_t ctrl_obj) {
   if (!rs_default_controller_can_close_or_enqueue(ctrl, stream)) return false;
   if (!ctrl->started) return false;
-
-  ant_value_t stream_obj = rs_ctrl_stream(ctrl_obj);
-  ant_value_t reader_obj = rs_stream_reader(stream_obj);
-  if (rs_is_reader(reader_obj) && rs_reader_has_reqs(js, reader_obj)) return true;
-
+  if (stream->pending_reads > 0) return true;
   double desired = rs_default_controller_get_desired_size(ctrl, stream);
   return desired > 0;
 }
@@ -167,29 +162,31 @@ bool rs_default_controller_can_close_or_enqueue(rs_controller_t *ctrl, rs_stream
 }
 
 void rs_fulfill_read_request(ant_t *js, ant_value_t stream_obj, ant_value_t chunk, bool done) {
+  rs_stream_t *stream = rs_get_stream(stream_obj);
+  if (!stream || stream->pending_reads == 0) return;
+
   ant_value_t reader_obj = rs_stream_reader(stream_obj);
   if (!rs_is_reader(reader_obj)) return;
   
-  uint32_t *head = rs_reader_reqs_head(reader_obj);
-  if (!head) return;
-  
-  ant_value_t promise = Stream_Queue_Shift(rs_reader_reqs(reader_obj), head);
+  ant_value_t promise = Stream_Queue_Shift(rs_reader_reqs(reader_obj), &stream->read_reqs_head);
   if (vtype(promise) == kTypeUndefined) return;
+  stream->pending_reads--;
   
   ant_value_t result = js_iter_result(js, !done, chunk);
   js_resolve_promise(js, promise, result);
 }
 
 void rs_default_reader_error_read_requests(ant_t *js, ant_value_t reader_obj, ant_value_t e) {
+  rs_stream_t *stream = rs_get_stream(rs_reader_stream(reader_obj));
+  if (!stream) return;
+
   ant_value_t arr = rs_reader_reqs(reader_obj);
-  uint32_t *head = rs_reader_reqs_head(reader_obj);
-  if (!head) return;
-  
-  uint32_t len = Stream_Queue_Len(arr, *head);
+  uint32_t len = Stream_Queue_Len(arr, stream->read_reqs_head);
   for (uint32_t i = 0; i < len; i++)
-    js_reject_promise(js, Stream_Queue_At(arr, *head, i), e);
-  
-  Stream_Queue_Clear(arr, head);
+    js_reject_promise(js, Stream_Queue_At(arr, stream->read_reqs_head, i), e);
+
+  Stream_Queue_Clear(arr, &stream->read_reqs_head);
+  stream->pending_reads = 0;
 }
 
 void readable_stream_close(ant_t *js, ant_value_t stream_obj) {
@@ -208,6 +205,7 @@ void readable_stream_close(ant_t *js, ant_value_t stream_obj) {
     }
     
     Stream_Queue_Clear(arr, &stream->read_reqs_head);
+    stream->pending_reads = 0;
     js_resolve_promise(js, rs_reader_closed(reader_obj), Ant_Value_Undefined);
   }
 }
@@ -357,15 +355,16 @@ ant_value_t rs_default_reader_read(ant_t *js, ant_value_t reader_obj) {
   ant_value_t ctrl_obj = rs_stream_controller(js, stream_obj);
   rs_controller_t *ctrl = rs_get_controller(ctrl_obj);
   
-  if (ctrl && rs_ctrl_queue_len(js, ctrl_obj) > 0) {
+  if (ctrl && ctrl->queue_count > 0) {
     ant_value_t chunk = Stream_Queue_Shift(rs_ctrl_queue(js, ctrl_obj), &ctrl->queue_head);
+    ctrl->queue_count--;
     double chunk_size = 1;
     
     Stream_Sizes_Shift(ctrl->queue_sizes, &ctrl->queue_sizes_len, &ctrl->queue_sizes_head, &chunk_size);
     ctrl->queue_total_size -= chunk_size;
     
     if (ctrl->queue_total_size < 0) ctrl->queue_total_size = 0;
-    bool should_close = ctrl->close_requested && rs_ctrl_queue_len(js, ctrl_obj) == 0;
+    bool should_close = ctrl->close_requested && ctrl->queue_count == 0;
     ant_value_t p = js_mkpromise(js);
     js_resolve_promise(js, p, js_iter_result(js, true, chunk));
     
@@ -378,7 +377,7 @@ ant_value_t rs_default_reader_read(ant_t *js, ant_value_t reader_obj) {
   }
 
   ant_value_t p = js_mkpromise(js);
-  rs_reader_reqs_push(js, reader_obj, p);
+  rs_reader_reqs_push(js, stream, reader_obj, p);
   rs_default_controller_call_pull_if_needed(js, ctrl_obj);
   
   return p;
@@ -401,7 +400,7 @@ static ant_value_t js_rs_controller_close(ant_params_t) {
   if (!rs_default_controller_can_close_or_enqueue(ctrl, stream))
     return js_mkerr_typed(js, JS_ERR_TYPE, "The stream is not in a state that permits close");
   ctrl->close_requested = true;
-  if (rs_ctrl_queue_len(js, call_this) == 0 && !(ctrl->in_enqueue && ctrl->defer_close)) {
+  if (ctrl->queue_count == 0 && !(ctrl->in_enqueue && ctrl->defer_close)) {
     rs_default_controller_clear_algorithms(call_this);
     readable_stream_close(js, stream_obj);
   }
@@ -424,8 +423,7 @@ static ant_value_t js_rs_controller_enqueue(ant_params_t) {
 
   ant_value_t chunk = (nargs > 0) ? args[0] : Ant_Value_Undefined;
 
-  ant_value_t reader_obj = rs_stream_reader(stream_obj);
-  if (rs_is_reader(reader_obj) && rs_reader_has_reqs(js, reader_obj)) {
+  if (stream->pending_reads > 0) {
     rs_fulfill_read_request(js, stream_obj, chunk, false);
     rs_default_controller_call_pull_if_needed(js, call_this);
     return Ant_Value_Undefined;
@@ -458,7 +456,7 @@ static ant_value_t js_rs_controller_enqueue(ant_params_t) {
     return js_throw(js, err);
   }
 
-  rs_ctrl_queue_push(js, call_this, chunk);
+  rs_ctrl_queue_push(js, call_this, ctrl, chunk);
   if (ctrl->queue_sizes_len >= ctrl->queue_sizes_cap) {
     uint32_t new_cap = ctrl->queue_sizes_cap ? ctrl->queue_sizes_cap * 2 : 8;
     double *ns = realloc(ctrl->queue_sizes, new_cap * sizeof(double));
@@ -498,8 +496,7 @@ ant_value_t rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t c
   if (!rs_default_controller_can_close_or_enqueue(ctrl, stream))
     return js_mkerr_typed(js, JS_ERR_TYPE, "The stream is not in a state that permits enqueue");
 
-  ant_value_t reader_obj = rs_stream_reader(stream_obj);
-  if (rs_is_reader(reader_obj) && rs_reader_has_reqs(js, reader_obj)) {
+  if (stream->pending_reads > 0) {
     rs_fulfill_read_request(js, stream_obj, chunk, false);
     rs_default_controller_call_pull_if_needed(js, ctrl_obj);
     return Ant_Value_Undefined;
@@ -531,7 +528,7 @@ ant_value_t rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t c
     return js_throw(js, err);
   }
 
-  rs_ctrl_queue_push(js, ctrl_obj, chunk);
+  rs_ctrl_queue_push(js, ctrl_obj, ctrl, chunk);
   if (ctrl->queue_sizes_len >= ctrl->queue_sizes_cap) {
     uint32_t new_cap = ctrl->queue_sizes_cap ? ctrl->queue_sizes_cap * 2 : 4;
     double *new_sizes = realloc(ctrl->queue_sizes, new_cap * sizeof(double));
@@ -554,7 +551,7 @@ void rs_controller_close(ant_t *js, ant_value_t ctrl_obj) {
   if (!rs_default_controller_can_close_or_enqueue(ctrl, stream)) return;
   ctrl->close_requested = true;
   
-  if (rs_ctrl_queue_len(js, ctrl_obj) == 0 && !(ctrl->in_enqueue && ctrl->defer_close)) {
+  if (ctrl->queue_count == 0 && !(ctrl->in_enqueue && ctrl->defer_close)) {
     rs_default_controller_clear_algorithms(ctrl_obj);
     readable_stream_close(js, stream_obj);
   }
@@ -629,7 +626,9 @@ ant_value_t rs_reader_create(ant_t *js, ant_value_t stream_obj, ant_value_t new_
   ant_value_t obj = Ant_Object_CreateBare(js);
   ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.reader_proto, new_target);
   
+  js_reserve_slots(obj, 4);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
+  
   js_set_slot(obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_READABLE_STREAM_READER));
   js_set_slot_wb(js, obj, SLOT_ENTRIES, stream_obj);
   js_set_slot_wb(js, obj, SLOT_RS_CLOSED, closed);
@@ -762,15 +761,16 @@ static ant_value_t rs_start_reject_handler(ant_params_t) {
 }
 
 static ant_value_t setup_default_controller(
-  ant_t *js, ant_value_t stream_obj,
-  ant_value_t pull_fn, ant_value_t cancel_fn, ant_value_t size_fn,
-  double hwm
+  ant_t *js, ant_value_t stream_obj, ant_value_t pull_fn, 
+  ant_value_t cancel_fn, ant_value_t size_fn, double hwm
 ) {
   rs_controller_t *ctrl = calloc(1, sizeof(rs_controller_t));
   if (!ctrl) return Ant_Error_CreateOutOfMemory(js);
   ctrl->strategy_hwm = hwm;
 
   ant_value_t ctrl_obj = Ant_Object_CreateBare(js);
+  js_reserve_slots(ctrl_obj, 6);
+  
   js_set_proto_init(ctrl_obj, js->builtins.controller_proto);
   js_set_slot(ctrl_obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_READABLE_STREAM_CONTROLLER));
   js_set_native(ctrl_obj, ctrl, RS_CONTROLLER_NATIVE_TAG);
@@ -844,9 +844,11 @@ static ant_value_t js_rs_ctor(ant_params_t) {
   st->state = RS_STATE_READABLE;
 
   ant_value_t obj = Ant_Object_CreateBare(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.rs_proto, call_new_target);
+  js_reserve_slots(obj, 3);
   
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.rs_proto, call_new_target);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
+  
   js_set_slot(obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_READABLE_STREAM));
   js_set_native(obj, st, RS_STREAM_NATIVE_TAG);
   js_set_finalizer(obj, rs_stream_finalize);
@@ -917,6 +919,8 @@ ant_value_t rs_create_stream(ant_t *js, ant_value_t pull_fn, ant_value_t cancel_
   st->state = RS_STATE_READABLE;
 
   ant_value_t obj = Ant_Object_CreateBare(js);
+  js_reserve_slots(obj, 3);
+  
   js_set_proto_init(obj, js->builtins.rs_proto);
   js_set_slot(obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_READABLE_STREAM));
   js_set_native(obj, st, RS_STREAM_NATIVE_TAG);

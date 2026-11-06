@@ -43,8 +43,16 @@ void gc_verify_quarantine_reset(void) {
   gc_verify_quarantined_closures = 0;
 }
 
+static inline ant_value_t gc_verify_closure_poison(void) {
+  return mkval(kTypeObject, UINT64_C(0x7FFFFFFFF000));
+}
+
+bool gc_verify_closure_quarantined(const sv_closure_t *c) {
+  return c->module_ctx == gc_verify_closure_poison();
+}
+
 bool gc_verify_quarantine_closure(sv_closure_t *c) {
-  ant_value_t bad = mkval(kTypeObject, UINT64_C(0x7FFFFFFFF000));
+  ant_value_t bad = gc_verify_closure_poison();
   if (c->module_ctx == bad) return false;
 
   c->call_flags = 0;

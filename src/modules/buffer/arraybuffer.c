@@ -510,9 +510,8 @@ static ant_value_t js_arraybuffer_isView(ant_params_t) {
 }
 
 ant_value_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer) {
-  ant_value_t ab_obj = Ant_Object_CreateBare(js);
   ant_value_t ab_proto = js->builtins.arraybuffer_proto;
-  if (is_special_object(ab_proto)) js_set_proto_init(ab_obj, ab_proto);
+  ant_value_t ab_obj = is_special_object(ab_proto) ? js_mkobj_with_proto(js, ab_proto) : Ant_Object_CreateBare(js);
   
   js_set_native(ab_obj, buffer, BUFFER_ARRAYBUFFER_NATIVE_TAG);
   js_set_finalizer(ab_obj, arraybuffer_finalize);

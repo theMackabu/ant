@@ -1089,15 +1089,20 @@ static void gc_scan_activation(ant_t *js, sv_activation_t *act) {
 static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
   for (uintptr_t addr = lo; addr < hi; addr += sizeof(uint64_t)) {
     if (!gc_stack_word_readable(addr)) continue;
+    
     uint64_t w;
     memcpy(&w, (void *)addr, sizeof(w));
     
     bool in_cage = ant_cage_contains((const void *)(uintptr_t)w);
     ant_object_t *raw_obj = (ant_object_t *)(uintptr_t)w;
+    
     if (in_cage && ant_object_arena_contains(js, raw_obj)) gc_grey_obj(js, raw_obj);
-      
     sv_closure_t *raw_closure = (sv_closure_t *)(uintptr_t)w;
-    if (in_cage && fixed_arena_contains(&js->closure_arena, raw_closure)) gc_mark_closure(js, raw_closure);
+    
+    if (
+      in_cage && fixed_arena_contains(&js->closure_arena, raw_closure) && 
+      !GC_VERIFY_CLOSURE_QUARANTINED(raw_closure)
+    ) gc_mark_closure(js, raw_closure);
 
     sv_upvalue_t *raw_uv = (sv_upvalue_t *)(uintptr_t)w;
     if (in_cage && fixed_arena_contains(&js->upvalue_arena, raw_uv)) {
@@ -1121,7 +1126,7 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
     
     if (type == kTypeFunction) {
       sv_closure_t *c = (sv_closure_t *)vptr(w);
-      if (c && fixed_arena_contains(&js->closure_arena, c)) gc_mark_closure(js, c);
+      if (c && fixed_arena_contains(&js->closure_arena, c) && !GC_VERIFY_CLOSURE_QUARANTINED(c)) gc_mark_closure(js, c);
     }
     
     if (type == kTypeString) gc_mark_string_conservative(js, w);

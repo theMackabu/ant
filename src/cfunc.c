@@ -39,8 +39,8 @@ ant_value_t js_make_data_cfunc(ant_t *js, ant_value_t data, ant_cfunc_t fn) {
 
   GC_ROOT_PIN(js, obj);
   obj_extra_reserve(js_obj_ptr(obj), 3);
-  set_slot(obj, SLOT_DATA, data);
-  set_slot(obj, SLOT_CFUNC, js_mkfun_dyn(fn));
+  js_set_slot(obj, SLOT_DATA, data);
+  js_set_slot(obj, SLOT_CFUNC, js_mkfun_dyn(fn));
 
   ant_value_t func = js_obj_to_func(js, obj);
   GC_ROOT_RESTORE(js, root_mark);
@@ -355,7 +355,7 @@ static ant_value_t js_cfunc_promote_in_realm(ant_t *js, ant_value_t cfunc) {
   const ant_cfunc_meta_t *meta = js_as_cfunc_meta(cfunc);
 
   ant_value_t fn_obj = mkobj(js, 0);
-  set_slot(fn_obj, SLOT_CFUNC, cfunc);
+  js_set_slot(fn_obj, SLOT_CFUNC, cfunc);
 
   ant_value_t proto = js_primitive_prototype(js, kTypeBuiltin);
   if (is_object_type(proto)) {
@@ -404,8 +404,8 @@ ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc) {
 static ant_value_t js_heavy_function(ant_t *js, ant_value_t cfunc, ant_value_t data) {
   ant_value_t fn_obj = mkobj(js, 0);
   
-  set_slot(fn_obj, SLOT_CFUNC, cfunc);
-  set_slot(fn_obj, SLOT_DATA, data);
+  js_set_slot(fn_obj, SLOT_CFUNC, cfunc);
+  js_set_slot(fn_obj, SLOT_DATA, data);
   
   return js_obj_to_func(js, fn_obj);
 }
@@ -450,7 +450,7 @@ ant_value_t js_heavy_mkfun_native(ant_t *js, ant_value_t (*fn)(ant_params_t), vo
   ant_value_t cfunc = js_mkfun_dyn(fn);
   ant_value_t fn_obj = mkobj(js, 0);
   
-  set_slot(fn_obj, SLOT_CFUNC, cfunc);
+  js_set_slot(fn_obj, SLOT_CFUNC, cfunc);
   js_set_native(fn_obj, ptr, tag);
   
   return js_obj_to_func(js, fn_obj);

@@ -122,24 +122,24 @@ ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_target, 
   if (is_err(name_result)) return name_result;
   
   if (is_async && is_generator) {
-    set_slot(func_obj, SLOT_ASYNC, Ant_Value_True);
-    ant_value_t async_generator_proto = get_slot(js_glob(js), SLOT_ASYNC_GENERATOR_PROTO);
+    js_set_slot(func_obj, SLOT_ASYNC, Ant_Value_True);
+    ant_value_t async_generator_proto = js_get_slot(js_glob(js), SLOT_ASYNC_GENERATOR_PROTO);
     if (is_object_type(async_generator_proto)) js_set_proto_init(func_obj, async_generator_proto);
   }
   
   else if (is_async) {
-    set_slot(func_obj, SLOT_ASYNC, Ant_Value_True);
-    ant_value_t async_proto = get_slot(js_glob(js), SLOT_ASYNC_PROTO);
+    js_set_slot(func_obj, SLOT_ASYNC, Ant_Value_True);
+    ant_value_t async_proto = js_get_slot(js_glob(js), SLOT_ASYNC_PROTO);
     if (is_object_type(async_proto)) js_set_proto_init(func_obj, async_proto);
   }
   
   else if (is_generator) {
-    ant_value_t generator_proto = get_slot(js_glob(js), SLOT_GENERATOR_PROTO);
+    ant_value_t generator_proto = js_get_slot(js_glob(js), SLOT_GENERATOR_PROTO);
     if (is_object_type(generator_proto)) js_set_proto_init(func_obj, generator_proto);
   }
   
   else {
-    ant_value_t func_proto = get_slot(js_glob(js), SLOT_FUNC_PROTO);
+    ant_value_t func_proto = js_get_slot(js_glob(js), SLOT_FUNC_PROTO);
     ant_value_t instance_proto = js_instance_proto_from_new_target(js, func_proto, new_target);
     if (is_object_type(instance_proto)) js_set_proto_init(func_obj, instance_proto);
   }
@@ -229,11 +229,11 @@ static ant_value_t builtin_function_toString(ant_params_t) {
     return Ant_String_FromLiteral(js, "function () { [native code] }");
 
   ant_value_t func_obj = js_func_obj(call_this);
-  ant_value_t cfunc_slot = get_slot(func_obj, SLOT_CFUNC);
+  ant_value_t cfunc_slot = js_get_slot(func_obj, SLOT_CFUNC);
   
   // TODO: make dry
   // native, unless it carries source text (a body-less dynamic function)
-  if (vtype(cfunc_slot) == kTypeBuiltin && !func_has_code(get_slot(func_obj, SLOT_CODE))) {
+  if (vtype(cfunc_slot) == kTypeBuiltin && !func_has_code(js_get_slot(func_obj, SLOT_CODE))) {
     ant_offset_t name_len = 0;
     const char *name = get_func_name(js, call_this, &name_len);
     if (name && name_len > 0) {
@@ -250,15 +250,15 @@ static ant_value_t builtin_function_toString(ant_params_t) {
     return Ant_String_FromLiteral(js, "function() { [native code] }");
   }
   
-  ant_value_t code_val = get_slot(func_obj, SLOT_CODE);
-  ant_value_t len_val = get_slot(func_obj, SLOT_CODE_LEN);
+  ant_value_t code_val = js_get_slot(func_obj, SLOT_CODE);
+  ant_value_t len_val = js_get_slot(func_obj, SLOT_CODE_LEN);
   
   const char *code = func_code_text(js, code_val);
   if (code && vtype(len_val) == kTypeNumber) {
     size_t code_len = (size_t)Ant_Value_AsNumberUnchecked(len_val);
     
     if (code && code_len > 0) {
-      ant_value_t async_slot = get_slot(func_obj, SLOT_ASYNC);
+      ant_value_t async_slot = js_get_slot(func_obj, SLOT_ASYNC);
       sv_closure_t *closure = js_func_closure(call_this);
       
       bool is_async = (async_slot == Ant_Value_True);
@@ -371,7 +371,7 @@ bool js_bound_target_next(ant_value_t value, ant_value_t *next) {
     !(closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))
   ) return false;
 
-  ant_value_t target = get_slot(js_func_obj(value), SLOT_TARGET_FUNC);
+  ant_value_t target = js_get_slot(js_func_obj(value), SLOT_TARGET_FUNC);
   if (vtype(target) == kTypeUndefined) return false;
   *next = target;
   return true;
@@ -398,7 +398,7 @@ ant_value_t js_resolve_bound_target_slow(ant_value_t value) {
 }
 
 ant_value_t js_resolve_bound_target_known_bound(ant_value_t value) {
-  ant_value_t target = get_slot(js_func_obj(value), SLOT_TARGET_FUNC);
+  ant_value_t target = js_get_slot(js_func_obj(value), SLOT_TARGET_FUNC);
   if (vtype(target) == kTypeUndefined) return value;
 
   sv_closure_t *closure =
@@ -512,10 +512,10 @@ static ant_value_t builtin_function_bind(ant_params_t) {
     ant_value_t bound_func = mkobj(js, 0);
     if (is_err(bound_func)) return bound_func;
 
-    set_slot(bound_func, SLOT_CFUNC, Ant_Function_Create(builtin_bound_proxy_call));
-    set_slot(bound_func, SLOT_TARGET_FUNC, call_this);
+    js_set_slot(bound_func, SLOT_CFUNC, Ant_Function_Create(builtin_bound_proxy_call));
+    js_set_slot(bound_func, SLOT_TARGET_FUNC, call_this);
 
-    ant_value_t func_proto = get_slot(js_glob(js), SLOT_FUNC_PROTO);
+    ant_value_t func_proto = js_get_slot(js_glob(js), SLOT_FUNC_PROTO);
     if (vtype(func_proto) == kTypeFunction) js_set_proto_init(bound_func, func_proto);
 
     uint8_t bind_flags = SV_CALL_HAS_BOUND_THIS;
@@ -548,10 +548,10 @@ static ant_value_t builtin_function_bind(ant_params_t) {
     ant_value_t bound_func = mkobj(js, 0);
     if (is_err(bound_func)) return bound_func;
     
-    set_slot(bound_func, SLOT_CFUNC, call_this);
-    set_slot(bound_func, SLOT_TARGET_FUNC, call_this);
+    js_set_slot(bound_func, SLOT_CFUNC, call_this);
+    js_set_slot(bound_func, SLOT_TARGET_FUNC, call_this);
     
-    ant_value_t func_proto = get_slot(js_glob(js), SLOT_FUNC_PROTO);
+    ant_value_t func_proto = js_get_slot(js_glob(js), SLOT_FUNC_PROTO);
     if (vtype(func_proto) == kTypeFunction) js_set_proto_init(bound_func, func_proto);
 
     uint8_t bind_flags = SV_CALL_HAS_BOUND_THIS;
@@ -626,34 +626,34 @@ static ant_value_t builtin_function_bind(ant_params_t) {
     bound_closure->u.bound_argv = NULL;
   }
 
-  ant_value_t async_slot = get_slot(func_obj, SLOT_ASYNC);
+  ant_value_t async_slot = js_get_slot(func_obj, SLOT_ASYNC);
   if (vtype(async_slot) == kTypeBool && vdata(async_slot) == 1) {
-    set_slot(bound_func, SLOT_ASYNC, Ant_Value_True);
+    js_set_slot(bound_func, SLOT_ASYNC, Ant_Value_True);
   }
 
   ant_value_t target_proto = get_proto(js, call_this);
   if (is_object_type(target_proto) || vtype(target_proto) == kTypeNull) {
     js_set_proto_init(bound_func, target_proto);
   } else if (vtype(async_slot) == kTypeBool && vdata(async_slot) == 1) {
-    ant_value_t async_proto = get_slot(js_glob(js), SLOT_ASYNC_PROTO);
+    ant_value_t async_proto = js_get_slot(js_glob(js), SLOT_ASYNC_PROTO);
     if (is_object_type(async_proto)) js_set_proto_init(bound_func, async_proto);
   } else {
-    ant_value_t func_proto = get_slot(js_glob(js), SLOT_FUNC_PROTO);
+    ant_value_t func_proto = js_get_slot(js_glob(js), SLOT_FUNC_PROTO);
     if (vtype(func_proto) == kTypeFunction) js_set_proto_init(bound_func, func_proto);
   }
 
-  ant_value_t data_slot = get_slot(func_obj, SLOT_DATA);
+  ant_value_t data_slot = js_get_slot(func_obj, SLOT_DATA);
   if (vtype(data_slot) != kTypeUndefined) {
-    set_slot(bound_func, SLOT_DATA, data_slot);
+    js_set_slot(bound_func, SLOT_DATA, data_slot);
   }
 
-  ant_value_t eval_env = get_slot(func_obj, SLOT_EVAL_ENV);
+  ant_value_t eval_env = js_get_slot(func_obj, SLOT_EVAL_ENV);
   if (is_object_type(eval_env))
     js_set_slot_wb(js, bound_func, SLOT_EVAL_ENV, eval_env);
 
-  ant_value_t cfunc_slot = get_slot(func_obj, SLOT_CFUNC);
+  ant_value_t cfunc_slot = js_get_slot(func_obj, SLOT_CFUNC);
   ant_value_t call_target = js_resolve_bound_target(call_this);
-  set_slot(bound_func, SLOT_TARGET_FUNC, call_target);
+  js_set_slot(bound_func, SLOT_TARGET_FUNC, call_target);
   
   if (bound_argc > 0 || orig_bound_argc > 0) if (!bound_argv_copy(
     bound_closure, orig_bound_argc > 0 
@@ -661,7 +661,7 @@ static ant_value_t builtin_function_bind(ant_params_t) {
       : NULL, orig_bound_argc, bound_args, bound_argc)
   ) return js_mkerr(js, "oom");
 
-  if (vtype(cfunc_slot) == kTypeBuiltin) set_slot(bound_func, SLOT_CFUNC, cfunc_slot);
+  if (vtype(cfunc_slot) == kTypeBuiltin) js_set_slot(bound_func, SLOT_CFUNC, cfunc_slot);
   ant_value_t length_result = js_define_function_length(js, bound_func, bound_length);
   if (is_err(length_result)) return length_result;
   
@@ -693,12 +693,12 @@ static void init_function_kind(
   ant_value_t kind_proto = Ant_Object_CreateBare(js);
   set_proto(js, kind_proto, function_proto);
   
-  if (is_async) set_slot(kind_proto, SLOT_ASYNC, Ant_Value_True);
+  if (is_async) js_set_slot(kind_proto, SLOT_ASYNC, Ant_Value_True);
   js_set_slot_wb(js, js_glob(js), slot, kind_proto);
   
   ant_value_t ctor_obj = mkobj(js, 0);
   set_proto(js, ctor_obj, function_ctor);
-  set_slot(ctor_obj, SLOT_CFUNC, cfunc);
+  js_set_slot(ctor_obj, SLOT_CFUNC, cfunc);
   
   mkprop(js, ctor_obj, js->length_str, Ant_Value_FromNumber(1.0), ANT_PROP_ATTR_CONFIGURABLE);
   mkprop(js, ctor_obj, Ant_String_FromLiteral(js, "name"), name, ANT_PROP_ATTR_CONFIGURABLE);
@@ -713,7 +713,7 @@ static void init_function_kind(
 }
 
 void js_function_init_prototype(ant_t *js, ant_value_t function_proto_obj) {
-  set_slot(function_proto_obj, SLOT_CFUNC, Ant_Function_Create(builtin_function_empty));
+  js_set_slot(function_proto_obj, SLOT_CFUNC, Ant_Function_Create(builtin_function_empty));
   
   defmethod(js, function_proto_obj, "call", 4, Ant_Function_CreateWithArity(builtin_function_call, 1));
   defmethod(js, function_proto_obj, "apply", 5, Ant_Function_CreateWithArity(builtin_function_apply, 2));
@@ -722,7 +722,7 @@ void js_function_init_prototype(ant_t *js, ant_value_t function_proto_obj) {
 }
 
 void js_function_init_constructor(ant_t *js, ant_value_t func_ctor_obj, ant_value_t function_proto) {
-  set_slot(func_ctor_obj, SLOT_CFUNC, Ant_Function_CreateWithArity(builtin_Function, 1));
+  js_set_slot(func_ctor_obj, SLOT_CFUNC, Ant_Function_CreateWithArity(builtin_Function, 1));
   js_setprop_readonly_nonconfigurable(js, func_ctor_obj, "prototype", 9, function_proto);
   js_set_function_name(js, func_ctor_obj, "Function", sizeof("Function") - 1);
 }

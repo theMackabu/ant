@@ -108,8 +108,9 @@ static inline ant_value_t *sv_prepend_bound_args(
     return NULL; 
   }
   
-  memcpy(combined, closure->u.bound_argv, sizeof(ant_value_t) * (size_t)closure->bound_argc);
-  memcpy(combined + closure->bound_argc, args, sizeof(ant_value_t) * (size_t)argc);
+  ant_value_t *out = combined;
+  for (int i = 0; i < closure->bound_argc; i++) *out++ = closure->u.bound_argv[i];
+  for (int i = 0; i < argc; i++) *out++ = args[i];
 
   *out_total = total;
   return combined;

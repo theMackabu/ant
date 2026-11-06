@@ -47,10 +47,8 @@ static ant_value_t http_parser_raw_headers_array(ant_t *js, const ant_http1_pars
 }
 
 static ant_value_t http_parser_head_object(ant_t *js, const ant_http1_parsed_request_t *parsed) {
-  char version_buf[8] = {0};
-  
+  const char version[3] = {(char)('0' + parsed->http_major), '.', (char)('0' + parsed->http_minor)};
   ant_value_t out = Ant_Object_CreateBare(js);
-  snprintf(version_buf, sizeof(version_buf), "%u.%u", parsed->http_major, parsed->http_minor);
 
   js_set(js, out, "method", js_mkstr(js, parsed->method, strlen(parsed->method)));
   js_set(js, out, "target", js_mkstr(js, parsed->target, strlen(parsed->target)));
@@ -62,7 +60,7 @@ static ant_value_t http_parser_head_object(ant_t *js, const ant_http1_parsed_req
   js_set(js, out, "keepAlive", Ant_Value_FromBool(parsed->keep_alive));
   js_set(js, out, "httpVersionMajor", Ant_Value_FromNumber((double)parsed->http_major));
   js_set(js, out, "httpVersionMinor", Ant_Value_FromNumber((double)parsed->http_minor));
-  js_set(js, out, "httpVersion", js_mkstr(js, version_buf, strlen(version_buf)));
+  js_set(js, out, "httpVersion", js_mkstr(js, version, sizeof(version)));
 
   return out;
 }

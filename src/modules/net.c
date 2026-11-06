@@ -48,6 +48,12 @@ struct net_socket_s {
   bool connecting;
   bool had_error;
   bool need_drain;
+  bool synced_pending;
+  bool synced_connecting;
+  const char *synced_ready_state;
+  double synced_bytes_read;
+  double synced_bytes_written;
+  double synced_timeout;
 };
 
 struct net_server_s {
@@ -392,23 +398,53 @@ static ant_value_t net_make_buffer_chunk(ant_t *js, const char *data, size_t len
 }
 
 static void net_socket_sync_state(net_socket_t *socket) {
-  ant_value_t obj = 0;
-  const char *ready_state = "open";
-
   if (!socket) return;
-  obj = socket->obj;
+
+  ant_t *js = socket->js;
+  ant_value_t obj = socket->obj;
   if (!is_object_type(obj)) return;
 
+  const char *ready_state = "open";
   if (socket->destroyed) ready_state = "closed";
   else if (socket->connecting) ready_state = "opening";
-  stream_set_destroyed(socket->js, obj, socket->destroyed);
+  stream_set_destroyed(js, obj, socket->destroyed);
+
+  bool first_sync = socket->synced_ready_state == NULL;
+  bool pending = socket->connecting || (socket->conn == NULL && !socket->destroyed);
   
-  js_set(socket->js, obj, "pending", Ant_Value_FromBool(socket->connecting || (socket->conn == NULL && !socket->destroyed)));
-  js_set(socket->js, obj, "connecting", Ant_Value_FromBool(socket->connecting));
-  js_set(socket->js, obj, "readyState", js_mkstr(socket->js, ready_state, strlen(ready_state)));
-  js_set(socket->js, obj, "bytesRead", Ant_Value_FromNumber((double)(socket->conn ? ant_conn_bytes_read(socket->conn) : 0)));
-  js_set(socket->js, obj, "bytesWritten", Ant_Value_FromNumber((double)(socket->conn ? ant_conn_bytes_written(socket->conn) : 0)));
-  js_set(socket->js, obj, "timeout", Ant_Value_FromNumber((double)(socket->conn ? ant_conn_timeout_ms(socket->conn) : 0)));
+  double bytes_read = (double)(socket->conn ? ant_conn_bytes_read(socket->conn) : 0);
+  double bytes_written = (double)(socket->conn ? ant_conn_bytes_written(socket->conn) : 0);
+  double timeout = (double)(socket->conn ? ant_conn_timeout_ms(socket->conn) : 0);
+
+  if (first_sync || pending != socket->synced_pending) {
+    socket->synced_pending = pending;
+    js_set(js, obj, "pending", Ant_Value_FromBool(pending));
+  }
+
+  if (first_sync || socket->connecting != socket->synced_connecting) {
+    socket->synced_connecting = socket->connecting;
+    js_set(js, obj, "connecting", Ant_Value_FromBool(socket->connecting));
+  }
+
+  if (ready_state != socket->synced_ready_state) {
+    socket->synced_ready_state = ready_state;
+    js_set(js, obj, "readyState", js_mkstr(js, ready_state, strlen(ready_state)));
+  }
+
+  if (first_sync || bytes_read != socket->synced_bytes_read) {
+    socket->synced_bytes_read = bytes_read;
+    js_set(js, obj, "bytesRead", Ant_Value_FromNumber(bytes_read));
+  }
+
+  if (first_sync || bytes_written != socket->synced_bytes_written) {
+    socket->synced_bytes_written = bytes_written;
+    js_set(js, obj, "bytesWritten", Ant_Value_FromNumber(bytes_written));
+  }
+
+  if (first_sync || timeout != socket->synced_timeout) {
+    socket->synced_timeout = timeout;
+    js_set(js, obj, "timeout", Ant_Value_FromNumber(timeout));
+  }
 }
 
 static void net_server_sync_state(net_server_t *server) {

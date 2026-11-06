@@ -660,7 +660,7 @@ static bool deep_props_equal(ant_t *js, ant_value_t a, ant_value_t b, const char
 }
 
 static bool deep_is_error(ant_t *js, ant_value_t value) {
-  return js_get_slot(js_as_obj(value), SLOT_ERROR_BRAND) == Ant_Value_True || assert_is_error_instance(js, value);
+  return js_get_slot(value, SLOT_ERROR_BRAND) == Ant_Value_True || assert_is_error_instance(js, value);
 }
 
 static bool deep_view_bytes(ant_value_t value, const uint8_t **bytes, size_t *len) {
@@ -846,8 +846,8 @@ static bool deep_key_check(deep_equal_t *ctx, ant_value_t a, ant_value_t b, deep
 }
 
 static bool deep_boxed_equal(ant_t *js, ant_value_t a, ant_value_t b) {
-  ant_value_t x = js_get_slot(js_as_obj(a), SLOT_PRIMITIVE);
-  ant_value_t y = js_get_slot(js_as_obj(b), SLOT_PRIMITIVE);
+  ant_value_t x = js_get_slot(a, SLOT_PRIMITIVE);
+  ant_value_t y = js_get_slot(b, SLOT_PRIMITIVE);
   return vtype(x) == vtype(y) && same_value_values(js, x, y);
 }
 
@@ -856,7 +856,7 @@ static bool deep_is_special(ant_t *js, ant_value_t value) {
   const uint8_t *bytes; size_t len;
   return is_array_value(value) || deep_view_bytes(value, &bytes, &len) || buffer_get_arraybuffer_data(value) ||
     get_set_from_obj(js_as_obj(value)) || get_map_from_obj(js_as_obj(value)) || is_date_instance(value) ||
-    (ptr && ptr->flags.regexp_brand) || vtype(js_get_slot(js_as_obj(value), SLOT_PRIMITIVE)) != kTypeUndefined ||
+    (ptr && ptr->flags.regexp_brand) || vtype(js_get_slot(value, SLOT_PRIMITIVE)) != kTypeUndefined ||
     deep_is_error(js, value);
 }
 
@@ -884,7 +884,7 @@ static bool deep_objects_equal(deep_equal_t *ctx, ant_value_t a, ant_value_t b) 
 
   if (is_date_instance(a)) {
     if (!is_date_instance(b)) return false;
-    ant_value_t ta = js_get_slot(js_as_obj(a), SLOT_DATA), tb = js_get_slot(js_as_obj(b), SLOT_DATA);
+    ant_value_t ta = js_get_slot(a, SLOT_DATA), tb = js_get_slot(b, SLOT_DATA);
     if (vtype(ta) != kTypeNumber || vtype(tb) != kTypeNumber || Ant_Value_AsNumberUnchecked(ta) != Ant_Value_AsNumberUnchecked(tb)) return false;
   } else if (pa && pa->flags.regexp_brand) {
     static const char *const names[] = { "source", "flags", "lastIndex" };
@@ -914,7 +914,7 @@ static bool deep_objects_equal(deep_equal_t *ctx, ant_value_t a, ant_value_t b) 
       !deep_enumerable_or_identical(ctx, a, b, "errors") ||
       deep_has_own(js, a, "cause") != deep_has_own(js, b, "cause")
     ) return false;
-  } else if (vtype(js_get_slot(js_as_obj(a), SLOT_PRIMITIVE)) != kTypeUndefined) {
+  } else if (vtype(js_get_slot(a, SLOT_PRIMITIVE)) != kTypeUndefined) {
     if (!deep_boxed_equal(js, a, b)) return false;
   } else if (deep_is_special(js, b)) return false;
 

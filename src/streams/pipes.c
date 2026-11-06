@@ -542,7 +542,7 @@ static void tee_close_branch(ant_t *js, ant_value_t branch_stream) {
   rs_controller_t *c = rs_get_controller(ctrl);
   if (!c || c->close_requested) return;
   c->close_requested = true;
-  if (rs_ctrl_queue_len(js, ctrl) == 0) {
+  if (c->queue_count == 0) {
     rs_default_controller_clear_algorithms(ctrl);
     readable_stream_close(js, branch_stream);
   }
@@ -554,8 +554,7 @@ static void tee_enqueue_branch(ant_t *js, ant_value_t branch_stream, ant_value_t
   if (!c || !rs_default_controller_can_close_or_enqueue(c, rs_get_stream(branch_stream)))
     return;
 
-  ant_value_t r = rs_stream_reader(branch_stream);
-  if (rs_is_reader(r) && rs_reader_has_reqs(js, r)) {
+  if (rs_get_stream(branch_stream)->pending_reads > 0) {
     rs_fulfill_read_request(js, branch_stream, value, false);
     rs_default_controller_call_pull_if_needed(js, ctrl);
     return;
@@ -570,7 +569,7 @@ static void tee_enqueue_branch(ant_t *js, ant_value_t branch_stream, ant_value_t
       chunk_size = vtype(sr) == kTypeNumber ? Ant_Value_AsNumberUnchecked(sr) : js_to_number(js, sr);
   }
 
-  rs_ctrl_queue_push(js, ctrl, value);
+  rs_ctrl_queue_push(js, ctrl, c, value);
   if (c->queue_sizes_len >= c->queue_sizes_cap) {
     uint32_t nc = c->queue_sizes_cap ? c->queue_sizes_cap * 2 : 8;
     double *ns = realloc(c->queue_sizes, nc * sizeof(double));

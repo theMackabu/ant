@@ -24,7 +24,7 @@ static ant_value_t to_string_val(ant_t *js, ant_value_t val) {
   uint8_t t = vtype(val);
   if (t == kTypeString) return val;
   if (t == kTypeObject) {
-    ant_value_t prim = get_slot(val, SLOT_PRIMITIVE);
+    ant_value_t prim = js_get_slot(val, SLOT_PRIMITIVE);
     if (vtype(prim) == kTypeString) return prim;
   }
   return coerce_to_str_hint(js, val, 1);
@@ -1210,7 +1210,7 @@ bool js_try_char_code_at(
   if (vtype(func) == kTypeFunction) {
     sv_closure_t *closure = js_func_closure(func);
     if (closure->func || (closure->call_flags & SV_CALL_HAS_BOUND_ARGS)) return false;
-    func = get_slot(closure->func_obj, SLOT_CFUNC);
+    func = js_get_slot(closure->func_obj, SLOT_CFUNC);
     
     if (closure->call_flags & SV_CALL_HAS_BOUND_THIS) receiver = closure->bound_this;
     if (vtype(func) == kTypeBuiltin && js_as_cfunc(func) == builtin_function_call) {
@@ -1999,7 +1999,7 @@ ant_value_t builtin_string_toString(ant_params_t) {
 }
 
 void js_string_init_prototype(ant_t *js, ant_value_t string_proto) {
-  set_slot(string_proto, SLOT_PRIMITIVE, js_mkstr(js, "", 0));
+  js_set_slot(string_proto, SLOT_PRIMITIVE, js_mkstr(js, "", 0));
   
   defmethod(js, string_proto, "indexOf", 7, Ant_Function_CreateWithArity(builtin_string_indexOf, 1));
   defmethod(js, string_proto, "substring", 9, Ant_Function_CreateWithArity(builtin_string_substring, 2));
@@ -2040,7 +2040,7 @@ void js_string_init_prototype(ant_t *js, ant_value_t string_proto) {
 }
 
 void js_string_init_constructor(ant_t *js, ant_value_t str_ctor_obj, ant_value_t string_proto) {
-  set_slot(str_ctor_obj, SLOT_CFUNC, Ant_Function_CreateWithArity(builtin_String, 1));
+  js_set_slot(str_ctor_obj, SLOT_CFUNC, Ant_Function_CreateWithArity(builtin_String, 1));
   js_setprop_readonly_nonconfigurable(js, str_ctor_obj, "prototype", 9, string_proto);
   defmethod(js, str_ctor_obj, "fromCharCode", 12, Ant_Function_CreateWithArity(builtin_string_fromCharCode, 1));
   defmethod(js, str_ctor_obj, "fromCodePoint", 13, Ant_Function_CreateWithArity(builtin_string_fromCodePoint, 1));

@@ -451,7 +451,7 @@ bool js_maybe_drain_microtasks(ant_t *js) {
   if (js->vm_exec_depth != 0 || js->jit_active_depth != 0) return false;
   
   if (!has_pending_microtasks(js)) return false;
-  process_microtasks_internal(js, true);
+  process_microtasks_internal(js, false);
   
   return true;
 }

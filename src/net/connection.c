@@ -112,7 +112,16 @@ static void ant_conn_timeout_cb(uv_timer_t *handle) {
   ant_conn_t *conn = (ant_conn_t *)handle->data;
   ant_listener_t *listener = conn ? conn->listener : NULL;
 
-  if (!conn) return;
+  if (!conn || conn->timeout_deadline == 0) return;
+
+  uint64_t now = uv_now(handle->loop);
+  if (conn->timeout_deadline > now) {
+    conn->timer_fires_at = conn->timeout_deadline;
+    uv_timer_start(handle, ant_conn_timeout_cb, conn->timeout_deadline - now, 0);
+    return;
+  }
+
+  conn->timeout_deadline = 0;
   if (listener && listener->callbacks.on_timeout) {
     listener->callbacks.on_timeout(conn, listener->user_data);
     return;
@@ -123,7 +132,15 @@ static void ant_conn_timeout_cb(uv_timer_t *handle) {
 
 static void ant_conn_restart_timer(ant_conn_t *conn) {
   if (!conn || conn->closing) return;
-  if (conn->timeout_ms == 0) { uv_timer_stop(&conn->timer); return; }
+  if (conn->timeout_ms == 0) {
+    conn->timeout_deadline = 0;
+    return;
+  }
+
+  conn->timeout_deadline = uv_now(conn->timer.loop) + conn->timeout_ms;
+  if (uv_is_active((uv_handle_t *)&conn->timer) && conn->timer_fires_at <= conn->timeout_deadline) return;
+
+  conn->timer_fires_at = conn->timeout_deadline;
   uv_timer_start(&conn->timer, ant_conn_timeout_cb, conn->timeout_ms, 0);
 }
 

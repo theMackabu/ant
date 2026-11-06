@@ -643,7 +643,7 @@ static ant_value_t for_in_keys_add_exotic_indices(
   ant_t *js, ant_value_t out, ant_value_t seen, ant_value_t obj, ant_object_t *ptr
 ) {
   if (vtype(obj) != kTypeObject) return Ant_Value_Undefined;
-  ant_value_t prim = get_slot(obj, SLOT_PRIMITIVE);
+  ant_value_t prim = js_get_slot(obj, SLOT_PRIMITIVE);
   if (vtype(prim) == kTypeString) return for_in_keys_add_indices(js, out, seen, str_utf16_len(js, prim));
   TypedArrayData *typed = ptr->flags.is_exotic ? buffer_get_typedarray_data(obj) : NULL;
   if (Ant_Buffer_ViewIsLive(typed))

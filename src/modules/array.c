@@ -38,7 +38,7 @@ ant_value_t builtin_Array(ant_params_t) {
   
   if (is_object_type(instance_proto)) js_set_proto_init(arr, instance_proto);
   if (vtype(call_new_target) == kTypeFunction || vtype(call_new_target) == kTypeBuiltin) {
-    set_slot(arr, SLOT_CTOR, call_new_target);
+    js_set_slot(arr, SLOT_CTOR, call_new_target);
   }
   
   return arr;
@@ -3172,11 +3172,11 @@ static ant_value_t from_async_fail(ant_t *js, ant_value_t state, ant_value_t err
 }
 
 static ant_value_t from_async_on_rejected(ant_params_t) {
-  return from_async_reject(js, get_slot(call_func, SLOT_DATA), nargs > 0 ? args[0] : Ant_Value_Undefined);
+  return from_async_reject(js, js_get_slot(call_func, SLOT_DATA), nargs > 0 ? args[0] : Ant_Value_Undefined);
 }
 
 static ant_value_t from_async_on_closed(ant_params_t) {
-  ant_value_t state = get_slot(call_func, SLOT_DATA);
+  ant_value_t state = js_get_slot(call_func, SLOT_DATA);
   return from_async_reject(js, state, from_async_field(js, state, FROM_ASYNC_REASON));
 }
 
@@ -3228,7 +3228,7 @@ static ant_value_t from_async_close_and_reject(ant_t *js, ant_value_t state, ant
 }
 
 static ant_value_t from_async_on_close_rejected(ant_params_t) {
-  return from_async_close_and_reject(js, get_slot(call_func, SLOT_DATA), nargs > 0 ? args[0] : Ant_Value_Undefined);
+  return from_async_close_and_reject(js, js_get_slot(call_func, SLOT_DATA), nargs > 0 ? args[0] : Ant_Value_Undefined);
 }
 
 static ant_value_t from_async_step(ant_t *js, ant_value_t state);
@@ -3250,7 +3250,7 @@ static ant_value_t from_async_mapped(ant_t *js, ant_value_t state, ant_value_t v
 }
 
 static ant_value_t from_async_on_mapped(ant_params_t) {
-  return from_async_mapped(js, get_slot(call_func, SLOT_DATA), nargs > 0 ? args[0] : Ant_Value_Undefined);
+  return from_async_mapped(js, js_get_slot(call_func, SLOT_DATA), nargs > 0 ? args[0] : Ant_Value_Undefined);
 }
 
 static ant_value_t from_async_value(ant_t *js, ant_value_t state, ant_value_t value) {
@@ -3266,7 +3266,7 @@ static ant_value_t from_async_value(ant_t *js, ant_value_t state, ant_value_t va
 }
 
 static ant_value_t from_async_on_value(ant_params_t) {
-  return from_async_value(js, get_slot(call_func, SLOT_DATA), nargs > 0 ? args[0] : Ant_Value_Undefined);
+  return from_async_value(js, js_get_slot(call_func, SLOT_DATA), nargs > 0 ? args[0] : Ant_Value_Undefined);
 }
 
 static ant_value_t from_async_finish(ant_t *js, ant_value_t state) {
@@ -3296,7 +3296,7 @@ static ant_value_t from_async_next_result(ant_t *js, ant_value_t state, ant_valu
 }
 
 static ant_value_t from_async_on_next_result(ant_params_t) {
-  return from_async_next_result(js, get_slot(call_func, SLOT_DATA), nargs > 0 ? args[0] : Ant_Value_Undefined);
+  return from_async_next_result(js, js_get_slot(call_func, SLOT_DATA), nargs > 0 ? args[0] : Ant_Value_Undefined);
 }
 
 static ant_value_t from_async_step(ant_t *js, ant_value_t state) {
@@ -3475,7 +3475,7 @@ void js_array_init_prototype(ant_t *js, ant_value_t array_proto) {
 }
 
 void js_array_init_constructor(ant_t *js, ant_value_t arr_ctor_obj, ant_value_t array_proto) {
-  set_slot(arr_ctor_obj, SLOT_CFUNC, Ant_Function_CreateWithArity(builtin_Array, 1));
+  js_set_slot(arr_ctor_obj, SLOT_CFUNC, Ant_Function_CreateWithArity(builtin_Array, 1));
   js_setprop_readonly_nonconfigurable(js, arr_ctor_obj, "prototype", 9, array_proto);
   defmethod(js, arr_ctor_obj, "isArray", 7, Ant_Function_CreateWithArity(builtin_Array_isArray, 1));
   defmethod(js, arr_ctor_obj, "isTemplateObject", 16, Ant_Function_Create(builtin_Array_isTemplateObject));

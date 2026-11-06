@@ -14,23 +14,26 @@ typedef enum {
 
 typedef struct {
   double *queue_sizes;
+  double queue_total_size;
+  double strategy_hwm;
+
   uint32_t queue_sizes_len;
   uint32_t queue_sizes_cap;
   uint32_t queue_sizes_head;
   uint32_t queue_head;
-  double queue_total_size;
-  double strategy_hwm;
-  
-  bool close_requested;
-  bool defer_close;
-  bool in_enqueue;
-  bool pull_again;
-  bool pulling;
-  bool started;
+  uint32_t queue_count;
+
+  bool close_requested: 1;
+  bool defer_close: 1;
+  bool in_enqueue: 1;
+  bool pull_again: 1;
+  bool pulling: 1;
+  bool started: 1;
 } rs_controller_t;
 
 typedef struct {
   uint32_t read_reqs_head;
+  uint32_t pending_reads;
   rs_state_t state;
   bool disturbed;
 } rs_stream_t;
@@ -71,7 +74,7 @@ ant_value_t rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t c
 
 void rs_controller_close(ant_t *js, ant_value_t ctrl_obj);
 void rs_default_controller_clear_algorithms(ant_value_t ctrl_obj);
-void rs_ctrl_queue_push(ant_t *js, ant_value_t ctrl_obj, ant_value_t value);
+void rs_ctrl_queue_push(ant_t *js, ant_value_t ctrl_obj, rs_controller_t *ctrl, ant_value_t value);
 void rs_default_controller_call_pull_if_needed(ant_t *js, ant_value_t controller_obj);
 void rs_default_reader_error_read_requests(ant_t *js, ant_value_t reader_obj, ant_value_t e);
 void rs_fulfill_read_request(ant_t *js, ant_value_t stream_obj, ant_value_t chunk, bool done);

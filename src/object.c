@@ -410,10 +410,6 @@ void *js_gettypedarray(ant_value_t val) {
   return ant_external_handle_get(vdata(val));
 }
 
-ant_value_t js_get_slot(ant_value_t obj, internal_slot_t slot) { 
-  return get_slot(js_as_obj(obj), slot); 
-}
-
 static ant_value_t mkobj_with_inobj_limit(ant_t *js, ant_offset_t parent, uint8_t inobj_limit) {
   ant_object_t *obj = obj_alloc(js, kTypeObject, inobj_limit);
 
@@ -508,26 +504,6 @@ ant_value_t Ant_Object_Create(ant_t *js) {
   return obj;
 }
 
-void set_slot(ant_value_t obj, internal_slot_t slot, ant_value_t val) {
-  ant_object_t *ptr = js_obj_ptr(obj);
-  if (!ptr || slot < 0 || slot > SLOT_MAX) return;
-  
-  Ant_Assert(
-    slot != SLOT_PROTO,
-    "prototype written without its isolate (use js_set_slot_wb)"
-  );
-  
-  if (slot == SLOT_DATA) {
-    ptr->u.data.value = val;
-    return;
-  }
-  
-  if (obj_extra_set(ptr, slot, val)) {
-    if (slot == SLOT_ARGUMENTS_OBJECT) ptr->flags.arguments_object = 0;
-    if (slot == SLOT_REGEXP_FLAGS_STRING) ptr->flags.regexp_brand = vtype(val) == kTypeString;
-  }
-}
-
 __attribute__((noinline, cold)) 
 static void js_set_slot_proto_wb(ant_t *js, ant_object_t *ptr, ant_value_t val) {
   ant_proto_watch_note_change(ptr);
@@ -537,15 +513,26 @@ static void js_set_slot_proto_wb(ant_t *js, ant_object_t *ptr, ant_value_t val) 
 }
 
 __attribute__((noinline, cold)) 
-static ant_object_t *js_set_slot_function_holder(ant_value_t func) {
+static ant_object_t *js_slot_function_holder(ant_value_t func) {
   ant_value_t obj = js_func_obj(func);
   return is_object_type(obj) && vdata(obj) ? (ant_object_t *)vptr(obj) : NULL;
 }
 
 __attribute__((always_inline)) 
-static inline ant_object_t *js_set_slot_holder(ant_value_t obj) {
-  if (__builtin_expect(vtype(obj) == kTypeFunction, 0)) return js_set_slot_function_holder(obj);
-  return vdata(obj) ? (ant_object_t *)vptr(obj) : NULL;
+static inline ant_object_t *js_slot_holder(ant_value_t obj) {
+  if (__builtin_expect(vtype(obj) == kTypeFunction, 0)) return js_slot_function_holder(obj);
+  return is_object_type(obj) && vdata(obj) ? (ant_object_t *)vptr(obj) : NULL;
+}
+
+ant_value_t js_get_slot(ant_value_t obj, internal_slot_t slot) {
+  ant_object_t *ptr = js_slot_holder(obj);
+  
+  if (!ptr) return Ant_Value_Undefined;
+  if (slot == SLOT_DATA) return ptr->u.data.value;
+  if (slot == SLOT_PROTO) return ant_object_proto(ptr);
+  if (slot == SLOT_ARGUMENTS_OBJECT && ptr->flags.arguments_object) return Ant_Value_True;
+  
+  return obj_extra_get(ptr, slot);
 }
 
 __attribute__((always_inline)) 
@@ -564,7 +551,7 @@ static inline bool js_set_slot_store(ant_object_t *ptr, internal_slot_t slot, an
 
 __attribute__((always_inline)) 
 void js_set_slot(ant_value_t obj, internal_slot_t slot, ant_value_t value) {
-  ant_object_t *ptr = js_set_slot_holder(obj);
+  ant_object_t *ptr = js_slot_holder(obj);
   if (!ptr) return;
   Ant_Assert(slot != SLOT_PROTO, "prototype written without its isolate (use js_set_slot_wb)");
   js_set_slot_store(ptr, slot, value);
@@ -572,7 +559,7 @@ void js_set_slot(ant_value_t obj, internal_slot_t slot, ant_value_t value) {
 
 __attribute__((always_inline)) 
 void js_set_slot_wb(ant_t *js, ant_value_t obj, internal_slot_t slot, ant_value_t value) {
-  ant_object_t *ptr = js_set_slot_holder(obj);
+  ant_object_t *ptr = js_slot_holder(obj);
   if (!ptr) return;
 
   if (slot == SLOT_PROTO) {
@@ -585,17 +572,6 @@ void js_set_slot_wb(ant_t *js, ant_value_t obj, internal_slot_t slot, ant_value_
 
 bool js_reserve_slots(ant_value_t obj, uint8_t capacity) {
   return obj_extra_reserve(js_obj_ptr(js_as_obj(obj)), capacity);
-}
-
-ant_value_t get_slot(ant_value_t obj, internal_slot_t slot) {
-  ant_object_t *ptr = js_obj_ptr(obj);
-  
-  if (!ptr || slot < 0 || slot > SLOT_MAX) return Ant_Value_Undefined;
-  if (slot == SLOT_PROTO) return ant_object_proto(ptr);
-  if (slot == SLOT_DATA) return ptr->u.data.value;
-  if (slot == SLOT_ARGUMENTS_OBJECT && ptr->flags.arguments_object) return Ant_Value_True;
-  
-  return obj_extra_get(ptr, slot);
 }
 
 static __attribute__((noinline)) ant_value_t js_get_builtin_proto(ant_t *js, ant_value_t obj) {

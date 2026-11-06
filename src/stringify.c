@@ -229,9 +229,9 @@ const char *get_str_prop(ant_t *js, ant_value_t obj, const char *key, ant_offset
 }
 
 static ant_value_t get_obj_ctor(ant_t *js, ant_value_t obj) {
-  ant_value_t ctor = get_slot(obj, SLOT_CTOR);
+  ant_value_t ctor = js_get_slot(obj, SLOT_CTOR);
   if (vtype(ctor) == kTypeFunction) return ctor;
-  ant_value_t proto = get_slot(obj, SLOT_PROTO);
+  ant_value_t proto = js_get_slot(obj, SLOT_PROTO);
   if (vtype(proto) != kTypeObject) return Ant_Value_Undefined;
   return lkp_interned_val(js, proto, js->intern.constructor);
 }
@@ -253,7 +253,7 @@ const char *get_func_name(ant_t *js, ant_value_t func, ant_offset_t *out_len) {
     return (const char *)(uintptr_t)(str_off);
   }
 
-  ant_value_t cfunc_slot = get_slot(func_obj, SLOT_CFUNC);
+  ant_value_t cfunc_slot = js_get_slot(func_obj, SLOT_CFUNC);
   if (vtype(cfunc_slot) == kTypeBuiltin) return get_func_name(js, cfunc_slot, out_len);
   
   return NULL;
@@ -674,7 +674,7 @@ static size_t strregexp(ant_t *js, ant_value_t obj, char *buf, size_t len) {
 }
 
 static size_t strobj_body(ant_t *js, ant_value_t obj, char *buf, size_t len, size_t n) {
-  if (get_slot(obj, SLOT_ERROR_BRAND) == Ant_Value_True || vtype(get_slot(obj, SLOT_ERR_TYPE)) == kTypeNumber)
+  if (js_get_slot(obj, SLOT_ERROR_BRAND) == Ant_Value_True || vtype(js_get_slot(obj, SLOT_ERR_TYPE)) == kTypeNumber)
     return strobj_error(js, obj, buf, len, n);
   if (is_date_instance(obj)) return strobj_trailing_props(js, obj, buf, len, n + strdate(js, obj, buf + n, Ant_Remaining(n, len)));
   if (js_obj_ptr(obj)->flags.regexp_brand) return strobj_trailing_props(js, obj, buf, len, n + strregexp(js, obj, buf + n, Ant_Remaining(n, len)));
@@ -889,9 +889,9 @@ static size_t strfunc(ant_t *js, ant_value_t value, char *buf, size_t len) {
   const char *name = get_func_name(js, value, &name_len);
   
   ant_value_t func_obj = js_func_obj(value);
-  ant_value_t code_slot = get_slot(func_obj, SLOT_CODE);
-  ant_value_t builtin_slot = get_slot(func_obj, SLOT_BUILTIN);
-  ant_value_t async_slot = get_slot(func_obj, SLOT_ASYNC);
+  ant_value_t code_slot = js_get_slot(func_obj, SLOT_CODE);
+  ant_value_t builtin_slot = js_get_slot(func_obj, SLOT_BUILTIN);
+  ant_value_t async_slot = js_get_slot(func_obj, SLOT_ASYNC);
   sv_closure_t *closure = js_func_closure(value);
   
   if (
@@ -916,7 +916,7 @@ static size_t strfunc(ant_t *js, ant_value_t value, char *buf, size_t len) {
   }
   
   if (!has_code) {
-    ant_value_t cfunc_slot = get_slot(func_obj, SLOT_CFUNC);
+    ant_value_t cfunc_slot = js_get_slot(func_obj, SLOT_CFUNC);
     bool is_native = (vtype(cfunc_slot) == kTypeBuiltin);
     size_t n;
     
@@ -930,7 +930,7 @@ static size_t strfunc(ant_t *js, ant_value_t value, char *buf, size_t len) {
     
     if (!is_native) return n;
     
-    ant_value_t proto = get_slot(func_obj, SLOT_PROTO);
+    ant_value_t proto = js_get_slot(func_obj, SLOT_PROTO);
     uint8_t pt = vtype(proto);
     if (pt != kTypeObject && pt != kTypeFunction) return n;
     

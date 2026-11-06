@@ -167,7 +167,7 @@ static ant_large_string_alloc_t *large_string_reuse_candidate(ant_large_string_s
   return NULL;
 }
 
-static ant_flat_string_t *string_large_space_alloc(ant_t *js, size_t flat_size) {
+static __attribute__((noinline)) ant_flat_string_t *string_large_space_alloc(ant_t *js, size_t flat_size) {
   ant_large_string_space_t *space = &js->pool.string.large;
   ant_large_string_alloc_t *alloc = large_string_reuse_candidate(space, flat_size);
 
@@ -189,79 +189,113 @@ static ant_flat_string_t *string_large_space_alloc(ant_t *js, size_t flat_size) 
   return large_string_flat_ptr(alloc);
 }
 
-static void *pool_bucket_alloc_fast(ant_pool_bucket_t *bucket, size_t class_size, size_t align) {
-  if (!bucket) return NULL;
-  const size_t cache_align = _Alignof(max_align_t);
-  
-  if (align > cache_align) return NULL;
-  if (bucket->slot_stride == 0) bucket->slot_stride = align_up_size(class_size, cache_align);
-
-  if (bucket->slot_free) {
-    void *ptr = bucket->slot_free;
-    void *next;
-    memcpy(&next, ptr, sizeof(void *));
-    bucket->slot_free = next;
-    return ptr;
-  }
-
-  if (!bucket->current || !bucket->cursor || bucket->cursor + bucket->slot_stride > bucket->end) {
+__attribute__((noinline)) 
+static bool pool_bucket_refill(ant_pool_bucket_t *bucket) {
   bucket->blocks_taken++;
+  
   if (bucket->free_head) {
     ant_pool_block_t *reuse = bucket->free_head;
     bucket->free_head = pool_free_next(reuse);
+    
     reuse->used = 0;
     reuse->prev = NULL;
     reuse->next = bucket->head;
+    
     if (bucket->head) bucket->head->prev = reuse;
     bucket->head = reuse;
     bucket->current = reuse;
     bucket->cursor = reuse->data;
     bucket->end = reuse->data + reuse->cap;
-  } else {
-    size_t cap = bucket->block_size;
-    if (cap < bucket->slot_stride) cap = bucket->slot_stride;
-    ant_pool_block_t *block = pool_block_alloc(cap);
-    if (!block) return NULL;
-    block->next = bucket->head;
-    if (bucket->head) bucket->head->prev = block;
-    bucket->head = block;
-    bucket->current = block;
-    bucket->cursor = block->data;
-    bucket->end = block->data + cap;
-  }}
-
-  uint8_t *ptr = bucket->cursor;
-  bucket->cursor += bucket->slot_stride;
-  
-  if (bucket->current) 
-    bucket->current->used = (size_t)(bucket->cursor - bucket->current->data);
     
-  return ptr;
+    return true;
+  }
+  
+  size_t cap = bucket->block_size;
+  if (cap < bucket->slot_stride) cap = bucket->slot_stride;
+  
+  ant_pool_block_t *block = pool_block_alloc(cap);
+  if (!block) return false;
+  
+  block->next = bucket->head;
+  if (bucket->head) bucket->head->prev = block;
+  
+  bucket->head = block;
+  bucket->current = block;
+  bucket->cursor = block->data;
+  bucket->end = block->data + cap;
+  
+  return true;
 }
 
-static void *string_pool_alloc(ant_t *js, size_t size, size_t align) {
-  ant_string_pool_t *pool = &js->pool.string;
-  if (pool->block_size == 0) pool->block_size = pool_default_block_size(ANT_ALLOC_STRING);
+__attribute__((noinline))
+static void *pool_bucket_alloc_slow(
+  ant_pool_bucket_t *bucket, size_t *pool_block_size, ant_alloc_kind_t kind,
+  int class_idx, size_t size, size_t align
+) {
+  size_t class_size = g_size_classes[class_idx];
+  if (*pool_block_size == 0) *pool_block_size = pool_default_block_size(kind);
 
-  size_t needed = size + (align - 1u);
-  int class_idx = pool_size_class_index(needed);
-  
-  if (class_idx >= 0) {
-    size_t class_size = g_size_classes[class_idx];
-    ant_pool_bucket_t *bucket = &pool->classes[class_idx];
-    
-    if (bucket->block_size == 0) {
-      size_t bucket_block_size = pool->block_size;
-      size_t min_block = class_size * pool_class_block_items(class_size);
-      if (bucket_block_size < min_block) bucket_block_size = min_block;
-      bucket->block_size = bucket_block_size;
-    }
-    
-    void *fast = pool_bucket_alloc_fast(bucket, class_size, align);
-    if (fast) return fast;
-    return pool_alloc_chain(&bucket->head, &bucket->free_head, bucket->block_size, size, align);
+  if (bucket->block_size == 0) {
+    size_t bucket_block_size = *pool_block_size;
+    size_t min_block = class_size * pool_class_block_items(class_size);
+    if (bucket_block_size < min_block) bucket_block_size = min_block;
+    bucket->block_size = bucket_block_size;
   }
 
+  if (align <= _Alignof(max_align_t)) {
+    if (bucket->slot_stride == 0) 
+      bucket->slot_stride = align_up_size(class_size, _Alignof(max_align_t));
+
+    if (pool_bucket_refill(bucket)) {
+      uint8_t *ptr = bucket->cursor;
+      bucket->cursor += bucket->slot_stride;
+      bucket->current->used = (size_t)(bucket->cursor - bucket->current->data);
+      return ptr;
+    }
+  }
+
+  return pool_alloc_chain(&bucket->head, &bucket->free_head, bucket->block_size, size, align);
+}
+
+__attribute__((always_inline))
+static inline void *pool_bucket_alloc(
+  ant_pool_bucket_t *classes, size_t *pool_block_size, 
+  ant_alloc_kind_t kind, int class_idx, size_t size, size_t align
+) {
+  ant_pool_bucket_t *bucket = &classes[class_idx];
+
+  if (__builtin_expect(align <= _Alignof(max_align_t), 1)) {
+    void *slot = bucket->slot_free;
+
+    if (slot) {
+      void *next;
+      memcpy(&next, slot, sizeof(void *));
+      bucket->slot_free = next;
+      return slot;
+    }
+
+    ant_pool_block_t *current = bucket->current;
+    uint8_t *ptr = bucket->cursor;
+
+    if (__builtin_expect(current && ptr + bucket->slot_stride <= bucket->end, 1)) {
+      uint8_t *cursor = ptr + bucket->slot_stride;
+      bucket->cursor = cursor;
+      current->used = (size_t)(cursor - current->data);
+      return ptr;
+    }
+  }
+
+  return pool_bucket_alloc_slow(bucket, pool_block_size, kind, class_idx, size, align);
+}
+
+static inline void *string_pool_alloc(ant_t *js, size_t size, size_t align) {
+  ant_string_pool_t *pool = &js->pool.string;
+  int class_idx = pool_size_class_index(size + (align - 1u));
+
+  if (__builtin_expect(class_idx >= 0, 1))
+    return pool_bucket_alloc(pool->classes, &pool->block_size, ANT_ALLOC_STRING, class_idx, size, align);
+
+  if (pool->block_size == 0) pool->block_size = pool_default_block_size(ANT_ALLOC_STRING);
   return string_large_space_alloc(js, size);
 }
 
@@ -321,30 +355,17 @@ void *js_type_alloc(ant_t *js, ant_alloc_kind_t kind, size_t size, size_t align)
   js->gc.pool_alloc += size;
   size_t pool_threshold = gc_pool_major_threshold(js);
   
-  if (js->gc.pool_alloc >= pool_threshold) gc_run(js);
-  if (kind == ANT_ALLOC_STRING) return string_pool_alloc(js, size, align);
+  if (__builtin_expect(js->gc.pool_alloc >= pool_threshold, 0)) gc_run(js);
+  if (__builtin_expect(kind == ANT_ALLOC_STRING, 1)) return string_pool_alloc(js, size, align);
 
   ant_pool_t *pool = pool_for_kind(js, kind);
   if (pool->block_size == 0) pool->block_size = pool_default_block_size(kind);
   ant_class_pool_t *class_pool = class_pool_for_kind(js, kind);
   
   if (class_pool) {
-  size_t needed = size + (align - 1u);
-  int class_idx = pool_size_class_index(needed);
-  
-  if (class_idx >= 0) {
-    size_t class_size = g_size_classes[class_idx];
-    ant_pool_bucket_t *bucket = &class_pool->classes[class_idx];
-    if (bucket->block_size == 0) {
-      size_t bucket_block_size = pool->block_size;
-      size_t min_block = class_size * pool_class_block_items(class_size);
-      if (bucket_block_size < min_block) bucket_block_size = min_block;
-      bucket->block_size = bucket_block_size;
-    }
-    void *fast = pool_bucket_alloc_fast(bucket, class_size, align);
-    if (fast) return fast;
-    return pool_alloc_chain(&bucket->head, &bucket->free_head, bucket->block_size, size, align);
-  }}
+    int class_idx = pool_size_class_index(size + (align - 1u));
+    if (class_idx >= 0) return pool_bucket_alloc(class_pool->classes, &pool->block_size, kind, class_idx, size, align);
+  }
 
   return pool_alloc_chain(&pool->head, &pool->free_head, pool->block_size, size, align);
 }
