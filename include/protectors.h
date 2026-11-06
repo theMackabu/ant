@@ -97,7 +97,7 @@ static inline void ant_property_mutation_invalidate(ant_t *js, ant_object_t *hol
     ant_protector_break_all_realms(js, ANT_PROTECTOR_TYPED_ARRAY_LENGTH);
 
   if (!ant_object_protector_holder(holder) && holder->type_tag != kTypeArray && !ant_object_promise_state(holder)) return;
-  if (!ant_property_key_is_protector(js, key) && key != js->intern.next && key != js->intern.ret) return;
+  if (!ant_property_key_is_protector(js, key) && key != js->intern.next && key != js->intern.ret && key != js->intern.eval) return;
   
   ant_protectors_invalidate(js, holder, key);
 }

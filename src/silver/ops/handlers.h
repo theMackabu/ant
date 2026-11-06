@@ -1437,6 +1437,11 @@ L_EVAL: {
   NEXT(OP_EVAL);
 }
 
+L_EVAL_INTACT: {
+  vm->stack[vm->sp++] = Ant_Value_FromBool(ant_protector_intact(js, ANT_PROTECTOR_GLOBAL_EVAL));
+  NEXT(OP_EVAL_INTACT);
+}
+
 L_GET_EVAL_GLOBAL: {
   VM_CHECK(sv_op_get_eval_global(vm, js, frame, func, ip));
   NEXT(OP_GET_EVAL_GLOBAL);

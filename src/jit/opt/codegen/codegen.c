@@ -1105,6 +1105,14 @@ static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condit
       opt_cg_jump_to(cg, if_true);
       return;
     }
+    case IR_COND_GLOBAL_EVAL_INTACT: {
+      asm_gpr_t scratch = cg->pinned.scratch;
+      masm_load64(m, scratch, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
+      masm_load32(m, scratch, asm_addr(scratch, (int32_t)offsetof(ant_t, protectors_invalid)));
+      masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, (int32_t)ANT_PROTECTOR_GLOBAL_EVAL, opt_cg_label(cg, if_false));
+      opt_cg_jump_to(cg, if_true);
+      return;
+    }
     case IR_COND_INDEX_IN_BOUNDS: {
       asm_cond_t cond = invert ? ASM_COND_ABOVE_OR_EQUAL : ASM_COND_BELOW;
       if (opt_cg_input_constant(cg, node, 0, &bits)) {

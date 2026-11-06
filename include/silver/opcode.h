@@ -201,6 +201,7 @@ OP_DEF(  NEW_APPLY,         3,   2,   1, npop)      /* func new.target args... -
 OP_DEF(  CALL_SPREAD,       3,   2,   1, npop)      /* func this args... iterable -> result */
 OP_DEF(  SUPER_FORWARD,     1,   3,   1, none)      /* this super new.target -> this (frame arguments) */
 OP_DEF(  EVAL,              5,   2,   1, u32)       /* source new.target -> result (scope:u32) */
+OP_DEF(  EVAL_INTACT,       1,   0,   1, none)      /* push true while global eval is the builtin */
 OP_DEF(  RETURN,            1,   1,   0, none)
 OP_DEF(  RETURN_UNDEF,      1,   0,   0, none)
 OP_DEF(  CHECK_CTOR,        1,   0,   0, none)      /* verify called with new */
@@ -523,6 +524,7 @@ OP_FLAG(RE_LITERAL_EXEC       , SV_OPF_JIT_QUIET_INELIGIBLE)
 OP_FLAG(STR_RE_LITERAL_REPLACE, SV_OPF_JIT_QUIET_INELIGIBLE)
 OP_FLAG(SUPER_APPLY           , SV_OPF_OPT_NO_GENERIC)
 OP_FLAG(EVAL                  , SV_OPF_OPT_NO_GENERIC)
+OP_FLAG(EVAL_INTACT           , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY)
 OP_FLAG(USING_PUSH            , SV_OPF_OPT_NO_GENERIC)
 OP_FLAG(USING_PUSH_ASYNC      , SV_OPF_OPT_NO_GENERIC)
 OP_FLAG(DISPOSE_RESOURCE      , SV_OPF_OPT_NO_GENERIC)

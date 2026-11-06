@@ -18,19 +18,19 @@ typedef struct {
   uint32_t *invalid;
 } protector_view_t;
 
-#define PROTECTOR_VIEW(src) ((protector_view_t){                              \
-  .global = (src)->global,                                                    \
-  .object_proto = (src)->sym.object_proto,                                    \
-  .promise_ctor = (src)->sym.promise_ctor,                                    \
-  .promise_proto = (src)->sym.promise_proto,                                  \
-  .array_ctor = (src)->sym.array_ctor,                                        \
-  .array_proto = (src)->sym.array_proto,                                      \
-  .array_iterator_proto = (src)->sym.array_iterator_proto,                    \
-  .string_proto = (src)->sym.string_proto,                                    \
-  .string_iterator_proto = (src)->sym.string_iterator_proto,                  \
-  .map_iter_proto = (src)->builtins.map_iter_proto,                           \
-  .set_iter_proto = (src)->builtins.set_iter_proto,                           \
-  .invalid = &(src)->protectors_invalid,                                      \
+#define PROTECTOR_VIEW(src) ((protector_view_t){             \
+  .global = (src)->global,                                   \
+  .object_proto = (src)->sym.object_proto,                   \
+  .promise_ctor = (src)->sym.promise_ctor,                   \
+  .promise_proto = (src)->sym.promise_proto,                 \
+  .array_ctor = (src)->sym.array_ctor,                       \
+  .array_proto = (src)->sym.array_proto,                     \
+  .array_iterator_proto = (src)->sym.array_iterator_proto,   \
+  .string_proto = (src)->sym.string_proto,                   \
+  .string_iterator_proto = (src)->sym.string_iterator_proto, \
+  .map_iter_proto = (src)->builtins.map_iter_proto,          \
+  .set_iter_proto = (src)->builtins.set_iter_proto,          \
+  .invalid = &(src)->protectors_invalid,                     \
 })
 
 static inline bool protector_holder_is(const ant_object_t *holder, ant_value_t value) {
@@ -40,6 +40,11 @@ static inline bool protector_holder_is(const ant_object_t *holder, ant_value_t v
 static void protectors_apply_key(ant_t *js, const protector_view_t *v, ant_object_t *holder, const char *key) {
   if (key == js->intern.promise) {
     if (protector_holder_is(holder, v->global)) *v->invalid |= ANT_PROTECTOR_PROMISE_RESOLVE_LOOKUP;
+    return;
+  }
+
+  if (key == js->intern.eval) {
+    if (protector_holder_is(holder, v->global)) *v->invalid |= ANT_PROTECTOR_GLOBAL_EVAL;
     return;
   }
 

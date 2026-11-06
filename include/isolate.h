@@ -300,6 +300,7 @@ struct ant_isolate_t {
     const char *replace;
     const char *constructor;
     const char *promise;
+    const char *eval;
     const char *resolve;
     const char *then;
     const char *to_json;

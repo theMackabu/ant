@@ -5246,6 +5246,13 @@ static void opt_exit_unless(opt_builder_t *b, ir_condition_t condition, const ir
   b->block = keep;
 }
 
+static opt_flow_t opt_build_eval_intact(opt_builder_t *b) {
+  if (!ant_protector_intact(b->js, ANT_PROTECTOR_GLOBAL_EVAL) || !opt_may_speculate(b, OPT_EXIT_SLOW_PATH)) return OPT_FLOW_GENERIC;
+  opt_exit_unless(b, ir_cond(IR_COND_GLOBAL_EVAL_INTACT), NULL, 0, OPT_EXIT_SLOW_PATH);
+  opt_push(b, opt_constant(b, IR_VALUE_TRUE));
+  return OPT_FLOW_CONTINUE;
+}
+
 static opt_flow_t opt_build_iteration_init(opt_builder_t *b) {
   ir_node_id_t iterable = opt_tagged(b, opt_peek(b, 0));
   uint8_t seen = opt_iteration_seen(b, b->pc);
@@ -5655,6 +5662,8 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
       return opt_build_constant_op(b, ip, op);
     case OP_THIS:
       return opt_build_this(b);
+    case OP_EVAL_INTACT:
+      return opt_build_eval_intact(b);
     case OP_POP: case OP_DUP: case OP_DUP2: case OP_SWAP: case OP_NIP: case OP_INSERT2: case OP_INSERT3:
     case OP_SWAP_UNDER: case OP_ROT3L: case OP_ROT3R: case OP_ROT4_UNDER:
       return opt_build_stack_shuffle(b, op);

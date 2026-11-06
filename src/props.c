@@ -38,6 +38,7 @@ void js_init_intern_cache(ant_t *js) {
   js->intern.replace = intern_string(js, "replace", 7);
   js->intern.constructor = intern_string(js, "constructor", 11);
   js->intern.promise = intern_string(js, "Promise", 7);
+  js->intern.eval = intern_string(js, "eval", 4);
   js->intern.resolve = intern_string(js, "resolve", 7);
   js->intern.then = intern_string(js, "then", 4);
   js->intern.to_json = intern_string(js, "toJSON", 6);

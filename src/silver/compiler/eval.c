@@ -377,15 +377,9 @@ static void emit_eval_of_first_arg(sv_compiler_t *c, uint32_t eval_scope) {
   emit_u32(c, eval_scope);
 }
 
-static void compile_direct_eval_spread(sv_compiler_t *c, sv_ast_t *node) {
+static void compile_inherited_direct_eval_spread(sv_compiler_t *c, sv_ast_t *node) {
   uint32_t eval_scope;
   if (!capture_dynamic_eval_scope(c, &eval_scope)) return;
-
-  if (!c->inherits_eval_env) {
-    compile_call_args_array(c, node);
-    emit_eval_of_first_arg(c, eval_scope);
-    return;
-  }
 
   emit_atom_op(c, OP_GET_EVAL_GLOBAL, "eval", 4);
   emit_op(c, OP_DUP);
@@ -411,64 +405,54 @@ static void compile_direct_eval_spread(sv_compiler_t *c, sv_ast_t *node) {
   patch_jump(c, end_jump);
 }
 
-bool compile_direct_eval_call(
-  sv_compiler_t *c, sv_ast_t *node, bool has_spread
-) {
-  sv_ast_t *callee = node->left;
-  if (
-    !is_ident_name(callee, "eval") ||
-    resolve_local(c, "eval", 4) != -1 ||
-    resolve_upvalue_raw(c, "eval", 4) != -1
-  ) return false;
-
+static int emit_replaced_eval_call(sv_compiler_t *c, sv_ast_t *node, bool has_spread) {
+  emit_op(c, OP_EVAL_INTACT);
+  int intact_jump = emit_jump(c, OP_JMP_TRUE);
+  
+  compile_expr(c, node->left);
+  emit_op(c, OP_DUP);
+  emit_constant(c, js_builtin_eval(c->js));
+  emit_op(c, OP_SEQ);
+  int builtin_jump = emit_jump(c, OP_JMP_TRUE);
+  
   if (has_spread) {
-    compile_direct_eval_spread(c, node);
-    return true;
-  }
-
-  if (c->inherits_eval_env) {
-    uint32_t eval_scope;
-    if (!capture_dynamic_eval_scope(c, &eval_scope)) return true;
-    
-    emit_atom_op(c, OP_GET_EVAL_GLOBAL, "eval", 4);
-    emit_op(c, OP_DUP);
-    emit_constant(c, js_builtin_eval(c->js));
-    emit_op(c, OP_SEQ);
-    
-    for (int i = 0; i < node->args.count; i++) {
-      compile_expr(c, node->args.items[i]);
-      emit_op(c, OP_SWAP);
-    }
-    
-    int direct_jump = emit_jump(c, OP_JMP_TRUE);
+    emit_op(c, OP_UNDEF);
+    compile_call_args_array(c, node);
+    emit_srcpos(c, node);
+    emit_op(c, OP_APPLY);
+    emit_u16(c, 1);
+  } else {
+    for (int i = 0; i < node->args.count; i++) compile_expr(c, node->args.items[i]);
+    emit_srcpos(c, node);
     emit_op(c, OP_CALL);
     emit_u16(c, (uint16_t)node->args.count);
-    
-    int end_jump = emit_jump(c, OP_JMP);
-    patch_jump(c, direct_jump);
-    
-    if (node->args.count == 0) {
-      emit_op(c, OP_POP);
-      emit_op(c, OP_UNDEF);
-    } else {
-      for (int i = 1; i < node->args.count; i++) emit_op(c, OP_POP);
-      emit_op(c, OP_NIP);
-      emit_lexical_new_target(c);
-      emit_op(c, OP_EVAL);
-      emit_u32(c, eval_scope);
-    }
-    
-    patch_jump(c, end_jump);
-    return true;
   }
+  
+  int end_jump = emit_jump(c, OP_JMP);
+  patch_jump(c, builtin_jump);
+  emit_op(c, OP_POP);
+  patch_jump(c, intact_jump);
+  
+  return end_jump;
+}
 
+static void compile_own_direct_eval(sv_compiler_t *c, sv_ast_t *node, bool has_spread) {
+  uint32_t eval_scope;
+  
+  if (has_spread) {
+    if (!capture_dynamic_eval_scope(c, &eval_scope)) return;
+    compile_call_args_array(c, node);
+    emit_eval_of_first_arg(c, eval_scope);
+    return;
+  }
+  
   if (node->args.count == 0) {
     emit_op(c, OP_UNDEF);
-    return true;
+    return;
   }
 
   bool may_inline = !(c->js->codegen_blocked & ANT_CODEGEN_NO_STRINGS);
-  if (may_inline && compile_inline_literal_eval(c, node)) return true;
+  if (may_inline && compile_inline_literal_eval(c, node)) return;
 
   if (eval_arg_is_definitely_non_string(node->args.items[0])) {
     compile_expr(c, node->args.items[0]);
@@ -476,11 +460,10 @@ bool compile_direct_eval_call(
       compile_expr(c, node->args.items[i]);
       emit_op(c, OP_POP);
     }
-    return true;
+    return;
   }
 
-  uint32_t eval_scope;
-  if (!capture_dynamic_eval_scope(c, &eval_scope)) return true;
+  if (!capture_dynamic_eval_scope(c, &eval_scope)) return;
 
   compile_expr(c, node->args.items[0]);
   for (int i = 1; i < node->args.count; i++) {
@@ -491,6 +474,63 @@ bool compile_direct_eval_call(
   emit_lexical_new_target(c);
   emit_op(c, OP_EVAL);
   emit_u32(c, eval_scope);
+}
+
+static void compile_inherited_direct_eval(sv_compiler_t *c, sv_ast_t *node) {
+  uint32_t eval_scope;
+  if (!capture_dynamic_eval_scope(c, &eval_scope)) return;
+  
+  emit_atom_op(c, OP_GET_EVAL_GLOBAL, "eval", 4);
+  emit_op(c, OP_DUP);
+  emit_constant(c, js_builtin_eval(c->js));
+  emit_op(c, OP_SEQ);
+  
+  for (int i = 0; i < node->args.count; i++) {
+    compile_expr(c, node->args.items[i]);
+    emit_op(c, OP_SWAP);
+  }
+  
+  int direct_jump = emit_jump(c, OP_JMP_TRUE);
+  emit_op(c, OP_CALL);
+  emit_u16(c, (uint16_t)node->args.count);
+  
+  int end_jump = emit_jump(c, OP_JMP);
+  patch_jump(c, direct_jump);
+  
+  if (node->args.count == 0) {
+    emit_op(c, OP_POP);
+    emit_op(c, OP_UNDEF);
+  } else {
+    for (int i = 1; i < node->args.count; i++) emit_op(c, OP_POP);
+    emit_op(c, OP_NIP);
+    emit_lexical_new_target(c);
+    emit_op(c, OP_EVAL);
+    emit_u32(c, eval_scope);
+  }
+  
+  patch_jump(c, end_jump);
+}
+
+bool compile_direct_eval_call(
+  sv_compiler_t *c, sv_ast_t *node, bool has_spread
+) {
+  sv_ast_t *callee = node->left;
+  if (
+    !is_ident_name(callee, "eval") ||
+    resolve_local(c, "eval", 4) != -1 ||
+    resolve_upvalue_raw(c, "eval", 4) != -1
+  ) return false;
+
+  if (c->inherits_eval_env) {
+    if (has_spread) compile_inherited_direct_eval_spread(c, node);
+    else compile_inherited_direct_eval(c, node);
+    return true;
+  }
+
+  int end_jump = emit_replaced_eval_call(c, node, has_spread);
+  compile_own_direct_eval(c, node, has_spread);
+  patch_jump(c, end_jump);
+  
   return true;
 }
 

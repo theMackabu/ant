@@ -515,6 +515,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_FALSE:
       case OP_THIS:
       case OP_GLOBAL:
+      case OP_EVAL_INTACT:
       case OP_SPECIAL_OBJ:
       case OP_OBJECT:
       case OP_ARRAY:

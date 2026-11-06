@@ -1,4 +1,5 @@
 #include "compile.h"
+#include "protectors.h"
 
 void jit_emit_literals(jit_compile_t *c) {
   switch (c->op) {
@@ -98,6 +99,30 @@ void jit_emit_literals(jit_compile_t *c) {
                       MIR_new_insn(c->ctx, MIR_MOV,
                                    MIR_new_reg_op(c->ctx, dst),
                                    MIR_new_reg_op(c->ctx, c->r_this_curr)));
+      break;
+    }
+
+    case OP_EVAL_INTACT: {
+      const sv_asm_t *a = &c->as;
+      MIR_reg_t dst = vstack_push(&c->vs);
+      sv_asm_label_t broken = sv_asm_new_label(a);
+      sv_asm_label_t done = sv_asm_new_label(a);
+      MIR_append_insn(c->ctx, c->jit_func,
+                      MIR_new_insn(c->ctx, MIR_MOV,
+                                   MIR_new_reg_op(c->ctx, dst),
+                                   MIR_new_mem_op(c->ctx, MIR_T_U32, (MIR_disp_t)offsetof(ant_t, protectors_invalid), c->r_js, 0, 1)));
+      MIR_append_insn(c->ctx, c->jit_func,
+                      MIR_new_insn(c->ctx, MIR_AND, MIR_new_reg_op(c->ctx, dst),
+                                   MIR_new_reg_op(c->ctx, dst), MIR_new_uint_op(c->ctx, ANT_PROTECTOR_GLOBAL_EVAL)));
+      MIR_append_insn(c->ctx, c->jit_func,
+                      MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, broken),
+                                   MIR_new_reg_op(c->ctx, dst), MIR_new_int_op(c->ctx, 0)));
+      mir_load_imm(c->ctx, c->jit_func, dst, Ant_Value_True);
+      sv_asm_jump(a, done);
+      sv_asm_bind(a, broken);
+      mir_load_imm(c->ctx, c->jit_func, dst, Ant_Value_False);
+      sv_asm_bind(a, done);
+      if (c->vs.known_bool) c->vs.known_bool[c->vs.sp - 1] = 1;
       break;
     }
 

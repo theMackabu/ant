@@ -5,6 +5,7 @@
 #include "shapes.h"
 #include "gc/roots.h"
 #include "descriptors.h"
+#include "protectors.h"
 #include "silver/engine.h"
 #include "silver/eval_env.h"
 
@@ -470,6 +471,7 @@ static inline ant_value_t sv_global_declare(ant_t *js, sv_func_t *func) {
       .is_const = decl->is_const, .value = T_EMPTY,
     };
     sv_global_lexical_index_insert(js, js->global_lexical_count - 1);
+    if (decl->len == 4 && memcmp(decl->str, "eval", 4) == 0) ant_protector_break(js, ANT_PROTECTOR_GLOBAL_EVAL);
   }
 
   ant_ic_epoch_bump(js);
