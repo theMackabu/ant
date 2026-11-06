@@ -92,6 +92,9 @@ bool ir_op_equal(const ir_op_t *a, const ir_op_t *b) {
     case IR_OP_INITIALIZE_NAMED:
     case IR_OP_LOAD_NAMED:
     case IR_OP_STORE_NAMED: return a->offset == b->offset;
+    case IR_OP_LOAD_PRIVATE:
+    case IR_OP_STORE_PRIVATE: return a->hash == b->hash;
+    case IR_OP_COLLECTION_ITERATOR_STEP: return a->index == b->index;
     case IR_OP_LOAD_ARGUMENT: return a->arguments_base == b->arguments_base;
     case IR_OP_ALLOCATE_ARRAY:
     case IR_OP_CONCATENATE_STRINGS:
@@ -292,6 +295,8 @@ ir_node_properties_t ir_op_properties(const ir_op_t *op) {
     case IR_OP_LOAD_GLOBAL_BINDING: return ir_reads(IR_LOC_GLOBAL_BINDINGS);
     case IR_OP_STORE_GLOBAL_BINDING: return ir_reads_writes(IR_LOC_GLOBAL_BINDINGS);
     case IR_OP_STORE_NAMED: return ir_reads_writes(IR_LOC_NAMED_SLOTS);
+    case IR_OP_LOAD_PRIVATE: return ir_reads(IR_LOC_NAMED_SLOTS);
+    case IR_OP_STORE_PRIVATE: return ir_reads_writes(IR_LOC_NAMED_SLOTS);
     case IR_OP_ADD_NAMED: return ir_reads_writes(IR_LOC_NAMED);
     case IR_OP_ARGUMENT_COUNT:
     case IR_OP_LOAD_FRAME_FIELD:
@@ -367,6 +372,7 @@ ir_node_properties_t ir_op_properties(const ir_op_t *op) {
     case IR_OP_LOAD_ARRAY_ITERATOR_INDEX: return ir_reads(IR_LOC_ITERATORS);
     case IR_OP_STORE_ARRAY_ITERATOR_INDEX:
     case IR_OP_FINISH_ARRAY_ITERATOR: return ir_writes(IR_LOC_ITERATORS);
+    case IR_OP_COLLECTION_ITERATOR_STEP: return ir_reads_writes(IR_LOC_ITERATORS);
     case IR_OP_LOAD_UPVALUE_CELL:
     case IR_OP_CHECK_UPVALUE_INITIALIZED:
     case IR_OP_IS_NULLISH:

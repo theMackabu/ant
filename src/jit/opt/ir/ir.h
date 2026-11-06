@@ -259,6 +259,7 @@ typedef struct {
     uint32_t slot;
     uint32_t index;
     uint32_t offset;
+    uint32_t hash;
     uint32_t arguments_base;
     uint32_t count;
     uint32_t shared_function_data_index;

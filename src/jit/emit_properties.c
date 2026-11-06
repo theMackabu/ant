@@ -1005,14 +1005,18 @@ void jit_emit_properties(jit_compile_t *c) {
       break;
     }
 
-    case OP_GET_PRIVATE: {
+    case OP_GET_PRIVATE:
+    case OP_GET_PRIVATE_OPT:
+    case OP_HAS_PRIVATE: {
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
       vstack_ensure_boxed(&c->vs, c->vs.sp - 2, c->ctx, c->jit_func, c->r_d_slot);
       MIR_reg_t token = vstack_pop(&c->vs);
       MIR_reg_t obj = vstack_pop(&c->vs);
       MIR_reg_t dst = vstack_push(&c->vs);
+      MIR_item_t helper = c->op == OP_GET_PRIVATE ? c->imp_get_private
+        : c->op == OP_GET_PRIVATE_OPT ? c->imp_get_private_opt : c->imp_has_private;
       mir_call_helper2(c->ctx, c->jit_func, dst,
-                       c->helper2_proto, c->imp_get_private,
+                       c->helper2_proto, helper,
                        c->r_vm, c->r_js, obj, token);
       jit_emit_throw_if_error(c, dst);
       break;

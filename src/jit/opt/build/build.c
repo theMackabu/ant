@@ -4971,6 +4971,83 @@ static opt_flow_t opt_build_in_field(opt_builder_t *b) {
   return OPT_FLOW_CONTINUE;
 }
 
+static bool opt_private_hash(const opt_builder_t *b, ir_node_id_t token, uint32_t *hash) {
+  uint64_t bits;
+  if (!ir_constant_value(b->graph, token, &bits) || !is_object_type((ant_value_t)bits)) return false;
+  ant_value_t cached = js_get_slot((ant_value_t)bits, SLOT_DATA);
+  if (vtype(cached) != kTypeNumber) return false;
+  *hash = (uint32_t)Ant_Value_AsNumberUnchecked(cached);
+  return true;
+}
+
+static opt_flow_t opt_build_private(opt_builder_t *b, sv_op_t op) {
+  bool store = op == OP_PUT_PRIVATE;
+  uint32_t operands = store ? 3 : 2;
+  ir_node_id_t inputs[3];
+  for (uint32_t i = 0; i < operands; i++) inputs[i] = opt_tagged(b, opt_peek(b, operands - 1 - i));
+  uintptr_t helper = store ? (uintptr_t)opt_rt_put_private
+    : op == OP_GET_PRIVATE_OPT ? (uintptr_t)opt_rt_get_private_opt
+    : op == OP_HAS_PRIVATE ? (uintptr_t)opt_rt_has_private : (uintptr_t)opt_rt_get_private;
+  uint32_t hash;
+  if (op == OP_HAS_PRIVATE || !opt_private_hash(b, inputs[operands - 1], &hash)) {
+    ir_node_id_t result = opt_runtime_call(b, helper, 0, inputs, operands, false, false);
+    opt_drop(b, operands);
+    opt_push(b, result);
+    opt_forget_memory(b);
+    return OPT_FLOW_CONTINUE;
+  }
+  opt_frame_t before = opt_frame_clone(b, &b->frame);
+  ir_op_t access = ir_op(store ? IR_OP_STORE_PRIVATE : IR_OP_LOAD_PRIVATE);
+  access.hash = hash;
+  ir_node_id_t fast = opt_emit(b, access, inputs, operands, store ? OPT_REPR_BOOL : OPT_REPR_TAGGED);
+  ir_block_id_t slow;
+  if (store) opt_branch_off(b, ir_cond(IR_COND_BOOL), &fast, 1, false, &slow);
+  else {
+    ir_condition_t empty = ir_cond(IR_COND_TAGGED_EQUALS);
+    empty.equal = true;
+    opt_branch_off(b, empty, (ir_node_id_t[]){fast, opt_constant(b, IR_VALUE_EMPTY)}, 2, true, &slow);
+  }
+  opt_drop(b, operands);
+  opt_push(b, store ? inputs[1] : fast);
+  ir_block_id_t fast_end = b->block;
+  opt_frame_t fast_frame = b->frame;
+  ir_block(b->graph, slow)->is_cold = true;
+  b->block = slow;
+  b->frame = opt_frame_clone(b, &before);
+  ir_node_id_t result = opt_runtime_call(b, helper, 0, inputs, operands, false, false);
+  opt_forget_memory(b);
+  opt_drop(b, operands);
+  opt_push(b, result);
+  ir_block_id_t slow_end = b->block;
+  opt_frame_t slow_frame = b->frame;
+  b->frame = fast_frame;
+  opt_join_slow_path(b, fast_end, slow_end, &slow_frame, 1);
+  return OPT_FLOW_CONTINUE;
+}
+
+static opt_flow_t opt_build_define_private(opt_builder_t *b, const uint8_t *ip) {
+  ir_node_id_t inputs[3];
+  for (uint32_t i = 0; i < 3; i++) inputs[i] = opt_tagged(b, opt_peek(b, 2 - i));
+  opt_runtime_call(b, (uintptr_t)opt_rt_def_private, sv_get_u8(ip + 1), inputs, 3, false, false);
+  opt_drop(b, 2);
+  opt_forget_memory(b);
+  return OPT_FLOW_CONTINUE;
+}
+
+static opt_flow_t opt_build_map_template(opt_builder_t *b, const uint8_t *ip, bool tail) {
+  const sv_map_template_desc_t *desc = sv_map_template_desc_at(b->func, sv_get_u32(ip + 1));
+  if (!desc) return OPT_FLOW_GENERIC;
+  uint32_t operands = desc->substitution_count + 2u;
+  ir_node_id_t inputs[2 + SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS];
+  for (uint32_t i = 0; i < operands; i++) inputs[i] = opt_tagged(b, opt_peek(b, operands - 1 - i));
+  ir_node_id_t result = opt_runtime_call(b, (uintptr_t)opt_rt_map_template, (uintptr_t)desc, inputs, operands, false, false);
+  opt_drop(b, operands);
+  opt_forget_memory(b);
+  if (tail) return opt_build_return(b, result);
+  opt_push(b, result);
+  return OPT_FLOW_CONTINUE;
+}
+
 static opt_flow_t opt_build_in(opt_builder_t *b) {
   ir_node_id_t inputs[2] = {opt_tagged(b, opt_peek(b, 1)), opt_tagged(b, opt_peek(b, 0))};
   ir_node_id_t result = opt_runtime_call(b, (uintptr_t)opt_rt_in, 0, inputs, 2, false, false);
@@ -5270,6 +5347,21 @@ static void opt_iteration_generic(opt_builder_t *b, sv_op_t op, ir_node_id_t ite
   opt_iteration_path(b, paths, after, value, op == OP_ITER_NEXT ? opt_call_output(b, call, 4) : IR_NONE, opt_call_output(b, call, 2));
 }
 
+static void opt_iteration_collection(opt_builder_t *b, sv_op_t op, uint8_t kind, ir_node_id_t iter, ir_node_id_t next, ir_node_id_t tag, uintptr_t helper, uintptr_t extra, const opt_frame_t *base, opt_iteration_paths_t *paths) {
+  ir_op_t step = ir_op(IR_OP_COLLECTION_ITERATOR_STEP);
+  step.index = kind == SV_ITER_SET;
+  ir_node_id_t cursor = opt_tagged(b, next);
+  ir_node_id_t value = opt_emit(b, step, &cursor, 1, OPT_REPR_TAGGED);
+  ir_condition_t empty = ir_cond(IR_COND_TAGGED_EQUALS);
+  empty.equal = true;
+  ir_block_id_t slow;
+  opt_branch_off(b, empty, (ir_node_id_t[]){value, opt_constant(b, IR_VALUE_EMPTY)}, 2, true, &slow);
+  opt_iteration_path(b, paths, cursor, value, opt_constant(b, IR_VALUE_FALSE), tag);
+  b->block = slow;
+  b->frame = opt_frame_clone(b, base);
+  opt_iteration_generic(b, op, iter, cursor, tag, helper, extra, paths);
+}
+
 static ir_node_id_t opt_iteration_phi(opt_builder_t *b, uint32_t stack_index, const opt_iteration_path_t *items, uint32_t count, size_t field) {
   ir_node_id_t *inputs = opt_arena_new(&b->arena, ir_node_id_t, count + 1);
   bool same = true, int32 = true;
@@ -5382,7 +5474,17 @@ static opt_flow_t opt_build_iteration_step(opt_builder_t *b, const uint8_t *ip, 
     b->block = on_array;
     b->frame = opt_frame_clone(b, &base);
   }
-  if (array) opt_iteration_array(b, op, iter, next, tag, helper, hint, &paths);
+  uint8_t collection = seen == 1u << SV_ITER_MAP ? SV_ITER_MAP : seen == 1u << SV_ITER_SET ? SV_ITER_SET : 0;
+  if (collection && (hint == SV_ITER_GENERIC || hint == collection) && op == OP_ITER_NEXT && !array && !known && opt_may_speculate(b, OPT_EXIT_BAD_TYPE)) {
+    ir_op_t check = ir_op(IR_OP_CHECK_VALUE);
+    check.check_value.expected = opt_iteration_tag(collection);
+    check.check_value.kind = OPT_EXIT_BAD_TYPE;
+    opt_emit_checked(b, check, &tag, 1, OPT_REPR_NONE);
+    tag = opt_constant(b, opt_iteration_tag(collection));
+    opt_poke(b, 0, tag);
+    base = opt_frame_clone(b, &b->frame);
+    opt_iteration_collection(b, op, collection, iter, next, tag, helper, hint, &base, &paths);
+  } else if (array) opt_iteration_array(b, op, iter, next, tag, helper, hint, &paths);
   else opt_iteration_generic(b, op, iter, next, tag, helper, hint, &paths);
   if (fused) {
     uint32_t if_done = bblock->succ[0], if_more = bblock->succ[1];
@@ -5612,6 +5714,16 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
       return opt_build_typeof(b);
     case OP_IN:
       return opt_build_in(b);
+    case OP_GET_PRIVATE:
+    case OP_GET_PRIVATE_OPT:
+    case OP_HAS_PRIVATE:
+    case OP_PUT_PRIVATE:
+      return opt_build_private(b, op);
+    case OP_DEF_PRIVATE:
+      return opt_build_define_private(b, ip);
+    case OP_CALL_MAP_TEMPLATE:
+    case OP_TAIL_MAP_TEMPLATE:
+      return opt_build_map_template(b, ip, op == OP_TAIL_MAP_TEMPLATE);
     case OP_IN_FIELD:
       return opt_build_in_field(b);
     case OP_FOR_IN:

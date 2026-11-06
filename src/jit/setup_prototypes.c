@@ -808,6 +808,8 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_get_index_fast = MIR_new_import(c->ctx, "js_get_index_fast");
   c->imp_put_elem = MIR_new_import(c->ctx, c->func->is_strict ? "jit_helper_put_elem_strict" : "jit_helper_put_elem");
   c->imp_get_private = MIR_new_import(c->ctx, "jit_helper_get_private");
+  c->imp_get_private_opt = MIR_new_import(c->ctx, "jit_helper_get_private_opt");
+  c->imp_has_private = MIR_new_import(c->ctx, "jit_helper_has_private");
   c->imp_put_private = MIR_new_import(c->ctx, "jit_helper_put_private");
   c->imp_def_private = MIR_new_import(c->ctx, "jit_helper_def_private");
   c->imp_spread = MIR_new_import(c->ctx, "jit_helper_spread");

@@ -139,6 +139,7 @@ int add_upvalue_binding(
   const sv_binding_meta_t *binding
 );
 int add_upvalue_tdz(sv_compiler_t *c, uint16_t index, bool is_local, bool may_tdz);
+void compile_method_function(sv_compiler_t *c, sv_ast_t *m);
 bool param_captured_by_value(sv_compiler_t *c, int local);
 bool local_written_once(sv_compiler_t *c, int local);
 uint8_t ctor_slot_class(const sv_ast_t *node);

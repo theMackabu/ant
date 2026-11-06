@@ -241,6 +241,12 @@ typedef struct {
 
 ant_value_t opt_rt_typeof(sv_vm_t *vm, ant_value_t value, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_in(sv_vm_t *vm, ant_value_t key, ant_value_t object, ant_value_t *args, int64_t argc, int64_t kind);
+ant_value_t opt_rt_map_template(sv_vm_t *vm, ant_value_t call_this, ant_value_t call_func, ant_value_t *args, int64_t argc, const sv_map_template_desc_t *desc);
+ant_value_t opt_rt_get_private(sv_vm_t *vm, ant_value_t object, ant_value_t token, ant_value_t *args, int64_t argc, int64_t unused);
+ant_value_t opt_rt_get_private_opt(sv_vm_t *vm, ant_value_t object, ant_value_t token, ant_value_t *args, int64_t argc, int64_t unused);
+ant_value_t opt_rt_has_private(sv_vm_t *vm, ant_value_t object, ant_value_t token, ant_value_t *args, int64_t argc, int64_t unused);
+ant_value_t opt_rt_put_private(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, int64_t unused);
+ant_value_t opt_rt_def_private(sv_vm_t *vm, ant_value_t object, ant_value_t token, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_unary_plus(sv_vm_t *vm, ant_value_t value, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_for_in(sv_vm_t *vm, ant_value_t object, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_set_proto(sv_vm_t *vm, ant_value_t object, ant_value_t proto, ant_value_t *args, int64_t argc, int64_t kind);

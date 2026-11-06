@@ -124,7 +124,7 @@ void emit_field_inits(
     if (is_private_name_node(m->left)) {
       emit_op(c, OP_THIS);
       emit_private_token(c, m->left);
-      if (is_fn) compile_func_expr(c, m->right);
+      if (is_fn) compile_method_function(c, m);
       else if (m->right) compile_expr(c, m->right);
       else emit_op(c, OP_UNDEF);
       emit_op(c, OP_DEF_PRIVATE);

@@ -193,6 +193,9 @@ static ra_constraints_t ra_constraints(const ir_node_t *node, const opt_register
       constraints.temps = 2;
       break;
     case IR_OP_INITIALIZE_NAMED: constraints.temps = count > 2 ? 0 : 1; break;
+    case IR_OP_LOAD_PRIVATE: constraints.temps = 1; break;
+    case IR_OP_COLLECTION_ITERATOR_STEP: constraints.temps = 2; break;
+    case IR_OP_STORE_PRIVATE: constraints.temps = 2; break;
     case IR_OP_ALLOCATE_ARRAY: constraints.temps = 3; break;
     case IR_OP_ALLOCATE_FUNCTION:
     case IR_OP_ALLOCATE_ENVIRONMENT: constraints.temps = 2; break;

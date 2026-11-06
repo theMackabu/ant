@@ -255,6 +255,9 @@ static void ir_op_text(const ir_graph_t *graph, const ir_frame_layout_t *layout,
     case IR_OP_LOAD_NAMED: opt_text_appendf(&head, "LoadNamed +%u", op->offset); break;
     case IR_OP_LOAD_NAMED_STORAGE: opt_text_appendf(&head, "LoadNamedStorage %u", op->count); break;
     case IR_OP_STORE_NAMED: opt_text_appendf(&head, "StoreNamed +%u", op->offset); break;
+    case IR_OP_LOAD_PRIVATE: opt_text_appendf(&head, "LoadPrivate #%08x", op->hash); break;
+    case IR_OP_COLLECTION_ITERATOR_STEP: opt_text_appendf(&head, "CollectionIteratorStep %s", op->index ? "Set" : "Map"); break;
+    case IR_OP_STORE_PRIVATE: opt_text_appendf(&head, "StorePrivate #%08x", op->hash); break;
     case IR_OP_ADD_NAMED: opt_text_appendf(&head, "AddNamed +%u to 0x%" PRIx64, op->add_named.offset, op->add_named.shape); break;
     case IR_OP_CHECK_ADD_EPOCH: opt_text_appendf(&head, "CheckAddEpoch 0x%" PRIx64, op->add_named.cell); break;
     case IR_OP_CALL_SLOW_PATH:

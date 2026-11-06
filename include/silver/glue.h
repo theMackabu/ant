@@ -80,6 +80,10 @@ ant_value_t jit_helper_delete_strict(sv_vm_t *vm, ant_t *js, ant_value_t obj, an
 ant_value_t jit_helper_typeof(sv_vm_t *vm, ant_t *js, ant_value_t v);
 ant_value_t jit_helper_special_obj(sv_vm_t *vm, ant_t *js, uint32_t which);
 
+ant_value_t jit_helper_get_private(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t token);
+ant_value_t jit_helper_get_private_opt(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t token);
+ant_value_t jit_helper_has_private(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t token);
+
 ant_value_t jit_helper_get_global(
   ant_t *js, const char *str,
   sv_func_t *func, int32_t bc_off
@@ -388,10 +392,6 @@ ant_value_t jit_helper_get_elem(
   sv_vm_t *vm, ant_t *js,
   ant_value_t obj, ant_value_t key, sv_func_t *func, 
   int32_t bc_off, sv_ic_entry_t *ic
-);
-
-ant_value_t jit_helper_get_private(
-  sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t token
 );
 
 ant_value_t jit_helper_put_private(

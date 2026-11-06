@@ -209,6 +209,8 @@ typedef struct jit_compile {
   MIR_item_t imp_get_index_fast;
   MIR_item_t imp_put_elem;
   MIR_item_t imp_get_private;
+  MIR_item_t imp_get_private_opt;
+  MIR_item_t imp_has_private;
   MIR_item_t imp_put_private;
   MIR_item_t imp_def_private;
   MIR_item_t imp_spread;

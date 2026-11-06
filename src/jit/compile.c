@@ -677,6 +677,8 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_GET_ELEM2:
       case OP_PUT_ELEM:
       case OP_GET_PRIVATE:
+      case OP_GET_PRIVATE_OPT:
+      case OP_HAS_PRIVATE:
       case OP_PUT_PRIVATE:
       case OP_DEF_PRIVATE:
       case OP_GET_LENGTH:

@@ -139,6 +139,8 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_put_elem);
   LOAD_EXT(jit_helper_put_elem_strict);
   LOAD_EXT(jit_helper_get_private);
+  LOAD_EXT(jit_helper_get_private_opt);
+  LOAD_EXT(jit_helper_has_private);
   LOAD_EXT(jit_helper_put_private);
   LOAD_EXT(jit_helper_def_private);
   LOAD_EXT(jit_helper_spread);

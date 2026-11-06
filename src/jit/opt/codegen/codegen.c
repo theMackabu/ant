@@ -20,7 +20,9 @@
 #include "silver/feedback.h"
 #include "protectors.h"
 #include "silver/glue.h"
+#include "../../../silver/ops/private.h"
 #include "modules/math.h"
+#include "modules/collections.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -791,6 +793,11 @@ static void opt_cg_object_barrier(opt_cg_t *cg, asm_gpr_t object, asm_gpr_t valu
   masm_branch64_imm(m, ASM_COND_EQUAL, scratch, (int64_t)OPT_OBJECT_TAG, decode);
   masm_branch64_imm(m, ASM_COND_EQUAL, scratch, (int64_t)OPT_ARRAY_TAG, decode);
   masm_branch64_imm(m, ASM_COND_EQUAL, scratch, (int64_t)((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypePromise), decode);
+  asm_label_t heap = masm_new_label(m);
+  static_assert(kTypeNull == kTypeUndefined + 1 && kTypeBool == kTypeNull + 1, "immediate tags are contiguous");
+  masm_branch64_imm(m, ASM_COND_BELOW, scratch, (int64_t)((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypeUndefined), heap);
+  masm_branch64_imm(m, ASM_COND_BELOW_OR_EQUAL, scratch, (int64_t)((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypeBool), resume);
+  masm_bind(m, heap);
   masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypeString), call);
   masm_and32_imm(m, scratch, value, (int32_t)STR_HEAP_TAG_MASK);
   masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, (int32_t)STR_HEAP_TAG_ROPE, resume);
@@ -2871,6 +2878,108 @@ static void opt_cg_emit_allocations(opt_cg_t *cg) {
   }
 }
 
+static void opt_cg_private_entry(opt_cg_t *cg, ir_node_id_t node, asm_gpr_t object, asm_gpr_t entries, asm_gpr_t index, bool arrays, asm_label_t miss) {
+  masm_t *m = &cg->masm;
+  asm_gpr_t scratch = cg->pinned.scratch, value = opt_cg_input(cg, node, 0), token = opt_cg_input(cg, node, (uint32_t)ir_node(cg->graph, node)->inputs.len - 1);
+  const int32_t table = (int32_t)offsetof(ant_object_sidecar_t, private_table) - (int32_t)ant_sidecar;
+  masm_shr64_imm(m, scratch, value, NANBOX_TYPE_SHIFT);
+  if (arrays) {
+    asm_label_t tagged = masm_new_label(m);
+    masm_branch64_imm(m, ASM_COND_EQUAL, scratch, (int64_t)OPT_OBJECT_TAG, tagged);
+    masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)OPT_ARRAY_TAG, miss);
+    masm_bind(m, tagged);
+  } else masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)OPT_OBJECT_TAG, miss);
+  masm_and64_imm(m, object, value, NANBOX_DATA_MASK);
+  opt_cg_add_cage(cg, object, object);
+  masm_load64(m, entries, asm_addr(object, (int32_t)offsetof(ant_object_t, extra_slots)));
+  masm_branch_test64(m, ASM_COND_ZERO, entries, ant_sidecar, miss);
+  masm_load32(m, index, asm_addr(entries, table + (int32_t)offsetof(ant_private_table_t, cap)));
+  masm_branch32_imm(m, ASM_COND_EQUAL, index, 0, miss);
+  masm_add32_imm(m, index, index, -1);
+  masm_and32_imm(m, index, index, ir_node(cg->graph, node)->op.hash);
+  masm_shl32_imm(m, scratch, index, 2);
+  masm_add32(m, index, index, scratch);
+  masm_load64(m, entries, asm_addr(entries, table + (int32_t)offsetof(ant_private_table_t, entries)));
+  masm_load64(m, scratch, asm_addr_indexed(entries, index, ASM_SCALE_8, (int32_t)offsetof(ant_private_entry_t, token)));
+  masm_branch64(m, ASM_COND_NOT_EQUAL, scratch, token, miss);
+  masm_load8(m, scratch, asm_addr_indexed(entries, index, ASM_SCALE_8, (int32_t)offsetof(ant_private_entry_t, kind)));
+}
+
+static void opt_cg_load_private(opt_cg_t *cg, ir_node_id_t node) {
+  masm_t *m = &cg->masm;
+  asm_gpr_t output = opt_cg_output(cg, node), entries = opt_cg_temp(cg, node, 0), scratch = cg->pinned.scratch;
+  asm_label_t miss = masm_new_label(m), done = masm_new_label(m);
+  opt_cg_private_entry(cg, node, entries, entries, output, true, miss);
+  masm_branch32_imm(m, ASM_COND_EQUAL, scratch, SV_PRIVATE_ACCESSOR, miss);
+  masm_load64(m, output, asm_addr_indexed(entries, output, ASM_SCALE_8, (int32_t)offsetof(ant_private_entry_t, value)));
+  masm_jump(m, done);
+  masm_bind(m, miss);
+  masm_move_imm64(m, output, IR_VALUE_EMPTY);
+  masm_bind(m, done);
+}
+
+static void opt_cg_store_private(opt_cg_t *cg, ir_node_id_t node) {
+  masm_t *m = &cg->masm;
+  asm_gpr_t output = opt_cg_output(cg, node), object = opt_cg_temp(cg, node, 0), entries = opt_cg_temp(cg, node, 1);
+  asm_gpr_t value = opt_cg_input(cg, node, 1), scratch = cg->pinned.scratch;
+  asm_label_t miss = masm_new_label(m), done = masm_new_label(m);
+  opt_cg_private_entry(cg, node, object, entries, output, false, miss);
+  masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, SV_PRIVATE_FIELD, miss);
+  masm_store64(m, asm_addr_indexed(entries, output, ASM_SCALE_8, (int32_t)offsetof(ant_private_entry_t, value)), value);
+  masm_move_imm32(m, output, 1);
+  ir_node_id_t stored = ir_node(cg->graph, node)->inputs.items[1];
+  if (opt_cg_needs_barrier(cg, stored))
+    opt_cg_object_barrier(cg, object, value, stored, (uint64_t)(uintptr_t)opt_rt_write_barrier, NULL, NULL);
+  masm_jump(m, done);
+  masm_bind(m, miss);
+  masm_move_imm32(m, output, 0);
+  masm_bind(m, done);
+}
+
+static void opt_cg_collection_iterator_step(opt_cg_t *cg, ir_node_id_t node) {
+  masm_t *m = &cg->masm;
+  bool set = ir_node(cg->graph, node)->op.index != 0;
+  asm_gpr_t cursor = opt_cg_input(cg, node, 0), output = opt_cg_output(cg, node), scratch = cg->pinned.scratch;
+  asm_gpr_t state = opt_cg_temp(cg, node, 0), at = opt_cg_temp(cg, node, 1);
+  asm_label_t miss = masm_new_label(m), done = masm_new_label(m), take = masm_new_label(m);
+  const int32_t next_off = set ? (int32_t)(offsetof(set_entry_t, hh) + offsetof(UT_hash_handle, next)) : (int32_t)(offsetof(map_entry_t, hh) + offsetof(UT_hash_handle, next));
+  const int32_t cursored_off = set ? (int32_t)offsetof(set_entry_t, cursored) : (int32_t)offsetof(map_entry_t, cursored);
+  masm_shr64_imm(m, output, cursor, 52);
+  masm_branch32_imm(m, ASM_COND_LESS_THAN, output, 1023, miss);
+  masm_branch32_imm(m, ASM_COND_GREATER_THAN, output, 1075, miss);
+  masm_move_imm32(m, scratch, 1075);
+  masm_sub32(m, scratch, scratch, output);
+  masm_and64_imm(m, state, cursor, (UINT64_C(1) << 52) - 1);
+  masm_or64_imm(m, state, state, UINT64_C(1) << 52);
+  masm_shr64(m, state, state, scratch);
+  masm_load64(m, at, asm_addr(state, (int32_t)offsetof(collection_iter_state_t, at)));
+  masm_branch64_imm(m, ASM_COND_EQUAL, at, 0, miss);
+  masm_load32(m, scratch, asm_addr(state, (int32_t)offsetof(collection_iter_state_t, type)));
+  if (set) masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, ITER_TYPE_SET_VALUES, miss);
+  else masm_branch32_imm(m, ASM_COND_ABOVE, scratch, ITER_TYPE_MAP_KEYS, miss);
+  masm_branch32_memory_imm(m, ASM_COND_NOT_EQUAL, asm_addr(at, (int32_t)offsetof(collection_cursor_t, refs)), 1, miss);
+  masm_load64(m, output, asm_addr(at, (int32_t)offsetof(collection_cursor_t, entry)));
+  masm_branch64_imm(m, ASM_COND_EQUAL, output, 0, miss);
+  masm_load64(m, state, asm_addr(output, next_off));
+  masm_branch64_imm(m, ASM_COND_EQUAL, state, 0, miss);
+  masm_branch32_memory_imm(m, ASM_COND_NOT_EQUAL, asm_addr(state, cursored_off), 0, miss);
+  masm_store_imm32(m, asm_addr(output, cursored_off), 0);
+  masm_store_imm32(m, asm_addr(state, cursored_off), 1);
+  masm_store64(m, asm_addr(at, (int32_t)offsetof(collection_cursor_t, entry)), state);
+  if (set) masm_load64(m, output, asm_addr(output, (int32_t)offsetof(set_entry_t, value)));
+  else {
+    masm_branch32_imm(m, ASM_COND_EQUAL, scratch, ITER_TYPE_MAP_VALUES, take);
+    masm_load64(m, output, asm_addr(output, (int32_t)offsetof(map_entry_t, key_val)));
+    masm_jump(m, done);
+    masm_bind(m, take);
+    masm_load64(m, output, asm_addr(output, (int32_t)offsetof(map_entry_t, value)));
+  }
+  masm_jump(m, done);
+  masm_bind(m, miss);
+  masm_move_imm64(m, output, IR_VALUE_EMPTY);
+  masm_bind(m, done);
+}
+
 static void opt_cg_initialize_named(opt_cg_t *cg, ir_node_id_t node) {
   masm_t *m = &cg->masm;
   uint32_t offset = ir_node(cg->graph, node)->op.offset, index = opt_named_index(offset), limit = opt_named_inobj_limit(offset);
@@ -3520,6 +3629,9 @@ static bool opt_cg_object_code(opt_cg_t *cg, ir_node_id_t node_id, const ir_node
       break;
     }
     case IR_OP_STORE_NAMED: opt_cg_store_named(cg, node_id, node->op.offset); break;
+    case IR_OP_LOAD_PRIVATE: opt_cg_load_private(cg, node_id); break;
+    case IR_OP_COLLECTION_ITERATOR_STEP: opt_cg_collection_iterator_step(cg, node_id); break;
+    case IR_OP_STORE_PRIVATE: opt_cg_store_private(cg, node_id); break;
     case IR_OP_ADD_NAMED: opt_cg_add_named(cg, node_id); break;
     case IR_OP_CAN_ADD_NAMED: opt_cg_can_add_named(cg, node_id); break;
     case IR_OP_CHECK_ADD_EPOCH: opt_cg_check_add_epoch(cg, node_id); break;

@@ -1559,10 +1559,12 @@ ant_value_t jit_helper_get_elem(
   return jit_get_elem_value(js, obj, key, func, bc_off);
 }
 
-ant_value_t jit_helper_get_private(
-  sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t token
+// TODO: x-macro?
+ant_value_t jit_helper_put_global(
+  sv_vm_t *vm, ant_t *js, ant_value_t val,
+  const char *str, uint32_t len, int is_strict
 ) {
-  return sv_private_get_value(vm, js, obj, token, false);
+  return sv_global_put(js, str, len, val, is_strict != 0);
 }
 
 ant_value_t jit_helper_put_private(
@@ -1572,15 +1574,6 @@ ant_value_t jit_helper_put_private(
   return sv_private_put_value(vm, js, obj, val, token);
 }
 
-ant_value_t jit_helper_spread(sv_vm_t *vm, ant_t *js, ant_value_t arr, ant_value_t iterable) {
-  GC_ROOT_SAVE(root_mark, js);
-  GC_ROOT_PIN(js, arr);
-  GC_ROOT_PIN(js, iterable);
-  ant_value_t status = sv_spread_into(vm, js, arr, iterable);
-  GC_ROOT_RESTORE(js, root_mark);
-  return status;
-}
-
 ant_value_t jit_helper_def_private(
   sv_vm_t *vm, ant_t *js,
   ant_value_t obj, ant_value_t token, ant_value_t val, int32_t kind
@@ -1588,11 +1581,36 @@ ant_value_t jit_helper_def_private(
   return sv_private_define(js, obj, token, val, (uint8_t)kind);
 }
 
-ant_value_t jit_helper_put_global(
-  sv_vm_t *vm, ant_t *js, ant_value_t val,
-  const char *str, uint32_t len, int is_strict
+ant_value_t jit_helper_get_private(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t token
 ) {
-  return sv_global_put(js, str, len, val, is_strict != 0);
+  return sv_private_get_value(vm, js, obj, token, false);
+}
+
+ant_value_t jit_helper_get_private_opt(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t token
+) {
+  return sv_private_get_value(vm, js, obj, token, true);
+}
+
+ant_value_t jit_helper_has_private(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t token
+) {
+  if (!is_object_type(obj))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Right operand of private brand check must be an object");
+  return Ant_Value_FromBool(sv_private_find_entry(obj, token) != NULL);
+}
+// END TODO
+
+ant_value_t jit_helper_spread(sv_vm_t *vm, ant_t *js, ant_value_t arr, ant_value_t iterable) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, arr);
+  GC_ROOT_PIN(js, iterable);
+  
+  ant_value_t status = sv_spread_into(vm, js, arr, iterable);
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  return status;
 }
 
 static ant_value_t jit_put_elem(ant_t *js, ant_value_t obj, ant_value_t key, ant_value_t val) {

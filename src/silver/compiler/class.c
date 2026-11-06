@@ -85,13 +85,17 @@ static int resolve_private_upvalue(sv_compiler_t *c, sv_private_name_t *p) {
   if (c->enclosing == p->owner) {
     p->owner->locals[p->local].captured = true;
     uint16_t slot = (uint16_t)local_to_frame_slot(p->owner, p->local);
-    return add_upvalue_tdz(c, slot, true, p->owner->locals[p->local].is_tdz);
+    sv_binding_meta_t binding = {.may_tdz = p->owner->locals[p->local].is_tdz};
+    return add_upvalue_binding(c, slot, true, false, false, true, &binding);
   }
 
   int upvalue = resolve_private_upvalue(c->enclosing, p);
   if (upvalue == -1) return -1;
   
-  return add_upvalue_tdz(c, (uint16_t)upvalue, false, c->enclosing->upval_descs[upvalue].may_tdz);
+  const sv_upval_desc_t *outer = &c->enclosing->upval_descs[upvalue];
+  sv_binding_meta_t binding = {.may_tdz = outer->may_tdz};
+  
+  return add_upvalue_binding(c, (uint16_t)upvalue, false, false, false, outer->write_once, &binding);
 }
 
 bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
@@ -123,6 +127,24 @@ bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
 
 static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, int ctor_local);
 
+void compile_method_function(sv_compiler_t *c, sv_ast_t *m) {
+  const char *saved_name = c->inferred_name;
+  uint32_t saved_len = c->inferred_name_len;
+  
+  bool named = 
+    !(m->flags & (FN_COMPUTED | FN_GETTER | FN_SETTER)) 
+    && m->left && m->left->str && m->left->len;
+  
+  if (named) {
+    c->inferred_name = m->left->str;
+    c->inferred_name_len = m->left->len;
+  }
+  
+  compile_func_expr(c, m->right);
+  c->inferred_name = saved_name;
+  c->inferred_name_len = saved_len;
+}
+
 static void compile_class_method(
   sv_compiler_t *c, sv_ast_t *m,
   int ctor_local, int proto_local,
@@ -134,7 +156,7 @@ static void compile_class_method(
 
   if (is_fn) {
     if (is_static) m->right->flags |= FN_STATIC;
-    compile_func_expr(c, m->right);   
+    compile_method_function(c, m);
     emit_get_local(c, home_local);    
     emit_op(c, OP_SET_HOME_OBJ);      
     emit_op(c, OP_SWAP);              
@@ -168,7 +190,7 @@ static void compile_private_static_element(sv_compiler_t *c, sv_ast_t *m, int ct
   emit_private_token(c, m->left);
   if (is_fn) {
     if (m->flags & FN_STATIC) m->right->flags |= FN_STATIC;
-    compile_func_expr(c, m->right);
+    compile_method_function(c, m);
   } else if ((m->flags & FN_STATIC)) compile_static_initializer_value(c, m->right, ctor_local);
   else if (m->right) compile_expr(c, m->right);
   else emit_op(c, OP_UNDEF);
@@ -425,7 +447,15 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     c->field_inits = field_inits;
     c->field_init_count = field_count;
     c->computed_key_locals = computed_key_locals;
+    const char *saved_name = c->inferred_name;
+    uint32_t saved_len = c->inferred_name_len;
+    if (node->str && node->len) {
+      c->inferred_name = node->str;
+      c->inferred_name_len = node->len;
+    }
     compile_func_expr(c, ctor_method->right);
+    c->inferred_name = saved_name;
+    c->inferred_name_len = saved_len;
     c->field_inits = NULL;
     c->field_init_count = 0;
     c->computed_key_locals = NULL;
