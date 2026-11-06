@@ -26,6 +26,9 @@ Tests enter through `bootstrap.cjs`. It supplies the minimal `process.config`
 shape expected by Node's shared harness when the runtime does not expose that
 Node build artifact, then restores the target test as `process.argv[1]`. Keep
 this compatibility layer runtime-neutral; behavior under test belongs in Ant.
+It also sets `NODE_SKIP_FLAG_CHECK`, because the runner already applies each
+test's flags and the shared harness would otherwise re-spawn the test without
+this bootstrap.
 
 ## Expectations
 

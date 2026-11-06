@@ -1,5 +1,5 @@
 #include <compat.h> // IWYU pragma: keep
-
+#include <uv.h>
 #include <string.h>
 #include <time.h>
 #include <limits.h>
@@ -18,18 +18,49 @@
 
 #include "ant.h"
 #include "cfunc.h"
+#include "internal.h"
+#include "list.h"
 #include "ascii.h"
 #include "ptr.h"
 #include "gc.h"
 #include "utf8.h"
 #include "base64.h"
 #include "errors.h"
+#include "gc/modules.h"
 #include "gc/roots.h"
+#include "gc/uv.h"
+#include "silver/call.h"
 #include "sync.h"
 #include "gc/strings.h"
 #include "modules/crypto.h"
 #include "modules/buffer.h"
 #include "modules/domexception.h"
+#include "modules/microtasks.h"
+#include "modules/process.h"
+
+static constexpr double CRYPTO_MAX_SAFE_INTEGER = 9007199254740991.0;
+static constexpr double CRYPTO_RANDOM_FILL_MAX_LENGTH = 2147483647.0;
+static constexpr double CRYPTO_RANDOM_INT_MAX_RANGE = 281474976710655.0;
+static constexpr uint64_t CRYPTO_RANDOM_INT_MASK = 281474976710655ULL;
+static constexpr size_t CRYPTO_RANDOM_INT_CACHE_WORDS = 64;
+
+struct crypto_random_job_s {
+  crypto_random_job_t *next;
+  crypto_random_job_t **pprev;
+  uv_work_t work;
+  ant_t *js;
+  ant_value_t target;
+  ant_value_t callback;
+  ArrayBufferData *storage;
+  uint8_t *bytes;
+  size_t size;
+  bool failed;
+};
+
+static _Thread_local struct {
+  uint64_t words[CRYPTO_RANDOM_INT_CACHE_WORDS];
+  size_t remaining;
+} crypto_random_int_cache;
 
 typedef enum {
   CRYPTO_TEXT_UTF8 = 0,
@@ -343,16 +374,31 @@ static ant_value_t crypto_make_buffer(ant_t *js, const uint8_t *data, size_t len
   return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, len, js->builtins.buffer_proto);
 }
 
-static bool crypto_get_mutable_bytes(ant_value_t value, uint8_t **out, size_t *len) {
+static bool crypto_get_mutable_bytes(
+  ant_value_t value, uint8_t **out, size_t *len, 
+  size_t *element_size, ArrayBufferData **storage
+) {
+  *element_size = 1;
+
   TypedArrayData *ta = buffer_get_typedarray_data(value);
   if (ta) {
+    *element_size = get_element_size(ta->type);
+    *storage = ta->buffer;
     Ant_Buffer_GetViewBytes(ta, out, len);
+    return true;
+  }
+
+  DataViewData *dv = buffer_get_dataview_data(value);
+  if (dv) {
+    *storage = dv->buffer;
+    Ant_Buffer_GetViewBytes(dv, out, len);
     return true;
   }
 
   ArrayBufferData *ab = buffer_get_arraybuffer_data(value);
   if (!ab) return false;
   
+  *storage = ab;
   bool live = Ant_Buffer_IsLive(ab);
   *out = live ? ab->data : NULL;
   *len = live ? ab->length : 0;
@@ -663,33 +709,6 @@ static ant_value_t js_crypto_random(ant_params_t) {
   return Ant_Value_FromNumber((double)value);
 }
 
-// crypto.randomBytes(length)
-static ant_value_t js_crypto_random_bytes(ant_params_t) {
-  if (nargs < 1) {
-    return js_mkerr(js, "randomBytes requires a length argument");
-  }
-
-  int length = (int)Ant_Value_AsNumberUnchecked(args[0]);
-  if (length <= 0 || length > 65536) {
-    return js_mkerr(js, "invalid length");
-  }
-  
-  unsigned char *random_bytes = malloc(length);
-  if (random_bytes == NULL) {
-    return js_mkerr(js, "memory allocation failed");
-  }
-  
-  if (crypto_fill_random(random_bytes, (size_t)length) < 0) {
-    free(random_bytes);
-    return crypto_random_error(js);
-  }
-  
-  ant_value_t array = crypto_make_buffer(js, random_bytes, (size_t)length);
-  free(random_bytes);
-  
-  return array;
-}
-
 // crypto.randomUUID()
 static ant_value_t js_crypto_random_uuid(ant_params_t) {
   char uuid[37];
@@ -725,42 +744,325 @@ static ant_value_t js_crypto_get_random_values(ant_params_t) {
   return args[0];
 }
 
+static inline bool crypto_is_callback(ant_value_t value) {
+  uint8_t type = vtype(value);
+  return type == kTypeFunction || type == kTypeBuiltin;
+}
+
+static inline ant_value_t crypto_invalid_random_target(ant_t *js, ant_value_t value) {
+  return Ant_Error_CreateInvalidArgType(js, "buf", "an instance of ArrayBuffer or ArrayBufferView", value);
+}
+
+static inline ant_value_t crypto_invalid_callback(ant_t *js, ant_value_t value) {
+  return Ant_Error_CreateInvalidArgType(js, "callback", "of type function", value);
+}
+
+static ant_value_t crypto_random_parse_size(ant_t *js, ant_value_t size_val, size_t element_size, double *out_size) {
+  if (vtype(size_val) != kTypeNumber) return Ant_Error_CreateInvalidArgType(js, "size", "of type number", size_val);
+  double size = Ant_Value_AsNumberUnchecked(size_val) * (double)element_size;
+  
+  if (isnan(size) || size < 0 || size > CRYPTO_RANDOM_FILL_MAX_LENGTH) {
+    char range[64];
+    snprintf(range, sizeof(range), ">= 0 && <= %.0f", CRYPTO_RANDOM_FILL_MAX_LENGTH);
+    return Ant_Error_CreateOutOfRange(js, "size", range, Ant_Value_FromNumber(size));
+  }
+
+  *out_size = size;
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t crypto_random_fill_range(
+  ant_t *js, ant_value_t offset_val, ant_value_t size_val,
+  size_t length, size_t element_size, size_t *out_offset, size_t *out_size
+) {
+  char range[64];
+
+  if (vtype(offset_val) != kTypeNumber)
+    return Ant_Error_CreateInvalidArgType(js, "offset", "of type number", offset_val);
+
+  double offset = Ant_Value_AsNumberUnchecked(offset_val) * (double)element_size;
+  double max_offset = fmin((double)length, CRYPTO_RANDOM_FILL_MAX_LENGTH);
+  
+  if (isnan(offset) || offset < 0 || offset > max_offset) {
+    snprintf(range, sizeof(range), ">= 0 && <= %.0f", max_offset);
+    return Ant_Error_CreateOutOfRange(js, "offset", range, Ant_Value_FromNumber(offset));
+  }
+
+  *out_offset = (size_t)offset;
+  *out_size = length - *out_offset;
+  if (vtype(size_val) == kTypeUndefined) return Ant_Value_Undefined;
+
+  double size = 0;
+  ant_value_t parsed = crypto_random_parse_size(js, size_val, element_size, &size);
+  if (is_err(parsed)) return parsed;
+
+  double end = size + (double)*out_offset;
+  if (end > (double)length) {
+    snprintf(range, sizeof(range), "<= %zu", length);
+    return Ant_Error_CreateOutOfRange(js, "size + offset", range, Ant_Value_FromNumber(end));
+  }
+
+  *out_size = (size_t)size;
+  return Ant_Value_Undefined;
+}
+
+static void crypto_random_work(uv_work_t *work) {
+  crypto_random_job_t *job = (crypto_random_job_t *)work->data;
+  job->failed = crypto_fill_random(job->bytes, job->size) < 0;
+}
+
+static void crypto_random_after_work(uv_work_t *work, int status) {
+  GC_UV_CALLBACK();
+  crypto_random_job_t *job = (crypto_random_job_t *)work->data;
+  
+  ant_t *js = job->js;
+  ant_value_t target = job->target;
+  ant_value_t callback = job->callback;
+  bool failed = job->failed || status < 0;
+
+  Ant_List_Remove(job);
+  free_array_buffer_data(js, job->storage);
+  free(job);
+  if (js->destroying) return;
+
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, target);
+  GC_ROOT_PIN(js, callback);
+
+  ant_value_t error = failed ? js_take_thrown(js, crypto_random_error(js)) : Ant_Value_Null;
+  GC_ROOT_PIN(js, error);
+
+  ant_value_t cb_args[2] = { error, failed ? Ant_Value_Undefined : target };
+  sv_vm_call(js->vm, js, callback, Ant_Value_Undefined, cb_args, 2, NULL, Ant_Value_Undefined);
+  process_report_uncaught_exception_if_pending(js);
+  process_microtasks(js);
+
+  GC_ROOT_RESTORE(js, mark);
+}
+
+static ant_value_t crypto_random_fill_async(
+  ant_t *js, ant_value_t target, ArrayBufferData *storage, 
+  uint8_t *bytes, size_t size, ant_value_t callback
+) {
+  if (size == 0) {
+    ant_value_t cb_args[2] = { Ant_Value_Null, target };
+    ant_value_t cb_result = Ant_Error_CallCallback(js, callback, Ant_Value_Undefined, cb_args, 2);
+    return is_err(cb_result) ? cb_result : Ant_Value_Undefined;
+  }
+
+  crypto_random_job_t *job = calloc(1, sizeof(*job));
+  if (!job) return Ant_Error_CreateOutOfMemory(js);
+
+  ArrayBufferData *root = storage->owner ? storage->owner : storage;
+  root->ref_count++;
+
+  job->js = js;
+  job->target = target;
+  job->callback = callback;
+  job->storage = root;
+  job->bytes = bytes;
+  job->size = size;
+  job->work.data = job;
+  Ant_List_Insert(&js->crypto_random_jobs, job);
+
+  int rc = uv_queue_work(js->loop, &job->work, crypto_random_work, crypto_random_after_work);
+  if (rc < 0) {
+    Ant_List_Remove(job);
+    free_array_buffer_data(js, root);
+    free(job);
+    return js_mkerr(js, "%s", uv_strerror(rc));
+  }
+
+  return Ant_Value_Undefined;
+}
+
+void gc_mark_crypto(ant_t *js, gc_mark_fn mark) {
+  for (crypto_random_job_t *job = js->crypto_random_jobs; job; job = job->next) {
+    mark(js, job->target);
+    mark(js, job->callback);
+  }
+}
+
+static ant_value_t js_crypto_random_bytes(ant_params_t) {
+  ant_value_t size_val = nargs > 0 ? args[0] : Ant_Value_Undefined;
+  ant_value_t callback = nargs > 1 ? args[1] : Ant_Value_Undefined;
+
+  double requested = 0;
+  ant_value_t parsed = crypto_random_parse_size(js, size_val, 1, &requested);
+  if (is_err(parsed)) return parsed;
+
+  bool is_sync = vtype(callback) == kTypeUndefined;
+  if (!is_sync && !crypto_is_callback(callback)) return crypto_invalid_callback(js, callback);
+
+  size_t size = (size_t)requested;
+  ArrayBufferData *buffer = create_array_buffer_data(js, size);
+  if (!buffer) return Ant_Error_CreateOutOfMemory(js);
+
+  ant_value_t result = create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, size, js->builtins.buffer_proto);
+  if (is_err(result)) return result;
+
+  if (!is_sync) return crypto_random_fill_async(js, result, buffer, buffer->data, size, callback);
+  if (crypto_fill_random(buffer->data, size) < 0) return crypto_random_error(js);
+  return result;
+}
+
+static ant_value_t crypto_warn_random_alias(ant_t *js, const char *message) {
+  static atomic_bool warned;
+  if (atomic_exchange(&warned, true)) return Ant_Value_Undefined;
+
+  ant_value_t process = js_get(js, js_glob(js), "process");
+  ant_value_t emit = is_object_type(process) ? js_get(js, process, "emitWarning") : Ant_Value_Undefined;
+  if (!crypto_is_callback(emit)) return Ant_Value_Undefined;
+
+  ant_value_t warning_args[3] = {
+    js_mkstr(js, message, strlen(message)),
+    js_mkstr(js, "DeprecationWarning", 18),
+    js_mkstr(js, "DEP0115", 7),
+  };
+
+  return sv_vm_call(js->vm, js, emit, process, warning_args, 3, NULL, Ant_Value_Undefined);
+}
+
+#define CRYPTO_DEPRECATED_RANDOM_ALIAS(fn, name)                                           \
+  static ant_value_t fn(ant_params_t) {                                                    \
+    ant_value_t warned = crypto_warn_random_alias(js, "crypto." name " is deprecated.");   \
+    if (is_err(warned)) return warned;                                                     \
+    return js_crypto_random_bytes(js, args, nargs, call_new_target, call_this, call_func); \
+  }
+
+CRYPTO_DEPRECATED_RANDOM_ALIAS(js_crypto_deprecated_prng, "prng")
+CRYPTO_DEPRECATED_RANDOM_ALIAS(js_crypto_deprecated_pseudo_random_bytes, "pseudoRandomBytes")
+CRYPTO_DEPRECATED_RANDOM_ALIAS(js_crypto_deprecated_rng, "rng")
+
+static void crypto_define_random_aliases(ant_t *js, ant_value_t lib) {
+  if (process_pending_deprecation()) {
+    defmethod(js, lib, "prng", 4, Ant_Function_CreateWithArity(js_crypto_deprecated_prng, 2));
+    defmethod(js, lib, "pseudoRandomBytes", 17, Ant_Function_CreateWithArity(js_crypto_deprecated_pseudo_random_bytes, 2));
+    defmethod(js, lib, "rng", 3, Ant_Function_CreateWithArity(js_crypto_deprecated_rng, 2));
+    return;
+  }
+
+  defalias_of(js, lib, "prng", "randomBytes");
+  defalias_of(js, lib, "pseudoRandomBytes", "randomBytes");
+  defalias_of(js, lib, "rng", "randomBytes");
+}
+
 static ant_value_t js_crypto_random_fill_sync(ant_params_t) {
-  if (nargs < 1) return js_mkerr(js, "randomFillSync requires a target");
+  ant_value_t target = nargs > 0 ? args[0] : Ant_Value_Undefined;
+  ant_value_t offset_val = nargs > 1 ? args[1] : Ant_Value_Undefined;
+  ant_value_t size_val = nargs > 2 ? args[2] : Ant_Value_Undefined;
 
   uint8_t *bytes = NULL;
-  size_t len = 0;
-  if (!crypto_get_mutable_bytes(args[0], &bytes, &len)) {
-    return js_mkerr(js, "randomFillSync target must be a Buffer, TypedArray, or ArrayBuffer");
-  }
+  ArrayBufferData *storage = NULL;
+  
+  size_t len = 0, element_size = 1, offset = 0, size = 0;
+  if (!crypto_get_mutable_bytes(target, &bytes, &len, &element_size, &storage))
+    return crypto_invalid_random_target(js, target);
 
-  size_t offset = 0;
-  if (nargs >= 2 && vtype(args[1]) != kTypeUndefined) {
-    double num = js_to_number(js, args[1]);
-    if (num < 0) return js_mkerr(js, "randomFillSync offset must be non-negative");
-    offset = (size_t)num;
-  }
-
-  size_t size = len - offset;
-  if (nargs >= 3 && vtype(args[2]) != kTypeUndefined) {
-    double num = js_to_number(js, args[2]);
-    if (num < 0) return js_mkerr(js, "randomFillSync size must be non-negative");
-    size = (size_t)num;
-  }
-
-  if (offset > len || size > len - offset) {
-    return js_mkerr(js, "randomFillSync range is out of bounds");
-  }
+  if (vtype(offset_val) == kTypeUndefined) offset_val = Ant_Value_FromNumber(0);
+  ant_value_t range = crypto_random_fill_range(js, offset_val, size_val, len, element_size, &offset, &size);
+  if (is_err(range)) return range;
 
   if (crypto_fill_random(bytes + offset, size) < 0) return crypto_random_error(js);
-  return args[0];
+  return target;
+}
+
+static ant_value_t js_crypto_random_fill(ant_params_t) {
+  ant_value_t target = nargs > 0 ? args[0] : Ant_Value_Undefined;
+  ant_value_t offset_val = nargs > 1 ? args[1] : Ant_Value_Undefined;
+  ant_value_t size_val = nargs > 2 ? args[2] : Ant_Value_Undefined;
+  ant_value_t callback = nargs > 3 ? args[3] : Ant_Value_Undefined;
+
+  uint8_t *bytes = NULL;
+  ArrayBufferData *storage = NULL;
+  
+  size_t len = 0, element_size = 1, offset = 0, size = 0;
+  if (!crypto_get_mutable_bytes(target, &bytes, &len, &element_size, &storage))
+    return crypto_invalid_random_target(js, target);
+
+  if (crypto_is_callback(offset_val)) {
+    callback = offset_val;
+    offset_val = Ant_Value_FromNumber(0);
+    size_val = Ant_Value_Undefined;
+  } else if (crypto_is_callback(size_val)) {
+    callback = size_val;
+    size_val = Ant_Value_Undefined;
+  } else if (!crypto_is_callback(callback))
+    return crypto_invalid_callback(js, callback);
+
+  ant_value_t range = crypto_random_fill_range(js, offset_val, size_val, len, element_size, &offset, &size);
+  if (is_err(range)) return range;
+
+  return crypto_random_fill_async(js, target, storage, bytes + offset, size, callback);
+}
+
+static inline bool crypto_is_safe_integer(ant_value_t value) {
+  if (vtype(value) != kTypeNumber) return false;
+  double number = Ant_Value_AsNumberUnchecked(value);
+  return isfinite(number) && number == trunc(number) && fabs(number) <= CRYPTO_MAX_SAFE_INTEGER;
+}
+
+static inline bool crypto_random_int_sample(uint64_t *out) {
+  if (crypto_random_int_cache.remaining == 0) {
+    if (crypto_fill_random(crypto_random_int_cache.words, sizeof(crypto_random_int_cache.words)) < 0) return false;
+    crypto_random_int_cache.remaining = CRYPTO_RANDOM_INT_CACHE_WORDS;
+  }
+
+  *out = crypto_random_int_cache.words[--crypto_random_int_cache.remaining] & CRYPTO_RANDOM_INT_MASK;
+  return true;
+}
+
+static ant_value_t js_crypto_random_int(ant_params_t) {
+  ant_value_t min_val = nargs > 0 ? args[0] : Ant_Value_Undefined;
+  ant_value_t max_val = nargs > 1 ? args[1] : Ant_Value_Undefined;
+  ant_value_t callback = nargs > 2 ? args[2] : Ant_Value_Undefined;
+
+  bool min_omitted = vtype(max_val) == kTypeUndefined || crypto_is_callback(max_val);
+  if (min_omitted) {
+    callback = max_val;
+    max_val = min_val;
+    min_val = Ant_Value_FromNumber(0);
+  }
+
+  bool is_sync = vtype(callback) == kTypeUndefined;
+  if (!is_sync && !crypto_is_callback(callback)) return crypto_invalid_callback(js, callback);
+
+  if (!crypto_is_safe_integer(min_val)) return Ant_Error_CreateInvalidArgType(js, "min", "a safe integer", min_val);
+  if (!crypto_is_safe_integer(max_val)) return Ant_Error_CreateInvalidArgType(js, "max", "a safe integer", max_val);
+
+  double min = Ant_Value_AsNumberUnchecked(min_val);
+  double max = Ant_Value_AsNumberUnchecked(max_val);
+  char range_text[64];
+
+  if (max <= min) {
+    snprintf(range_text, sizeof(range_text), "greater than the value of \"min\" (%.0f)", min == 0 ? 0.0 : min);
+    return Ant_Error_CreateOutOfRange(js, "max", range_text, max_val);
+  }
+
+  double range_size = max - min;
+  if (range_size > CRYPTO_RANDOM_INT_MAX_RANGE) {
+    snprintf(range_text, sizeof(range_text), "<= %.0f", CRYPTO_RANDOM_INT_MAX_RANGE);
+    return Ant_Error_CreateOutOfRange(js, min_omitted ? "max" : "max - min", range_text, Ant_Value_FromNumber(range_size));
+  }
+
+  uint64_t range = (uint64_t)range_size;
+  uint64_t limit = CRYPTO_RANDOM_INT_MASK - (CRYPTO_RANDOM_INT_MASK % range);
+  uint64_t sample = 0;
+
+  do {
+    if (!crypto_random_int_sample(&sample)) return crypto_random_error(js);
+  } while (sample >= limit);
+
+  ant_value_t result = Ant_Value_FromNumber((double)(sample % range) + min);
+  if (is_sync) return result;
+
+  ant_value_t cb_args[2] = { Ant_Value_Undefined, result };
+  queue_next_tick_with_args(js, callback, cb_args, 2);
+  return Ant_Value_Undefined;
 }
 
 static ant_value_t crypto_make_filtered_name_array(
-  ant_t *js,
-  const char *const *names,
-  size_t count,
-  crypto_name_kind_t kind
+  ant_t *js, const char *const *names, size_t count, crypto_name_kind_t kind
 ) {
   ant_value_t result = Ant_Array_Create(js);
   if (is_err(result)) return result;
@@ -2285,7 +2587,10 @@ ant_value_t crypto_library(ant_t *js) {
   js_set(js, lib, "scrypt", Ant_Function_CreateWithArity(js_crypto_scrypt, 4));
   js_set(js, lib, "scryptSync", Ant_Function_CreateWithArity(js_crypto_scrypt_sync, 3));
   js_set(js, lib, "randomBytes", Ant_Function_CreateWithArity(js_crypto_random_bytes, 2));
+  crypto_define_random_aliases(js, lib);
+  js_set(js, lib, "randomFill", Ant_Function_CreateWithArity(js_crypto_random_fill, 4));
   js_set(js, lib, "randomFillSync", Ant_Function_CreateWithArity(js_crypto_random_fill_sync, 1));
+  js_set(js, lib, "randomInt", Ant_Function_CreateWithArity(js_crypto_random_int, 3));
   js_set(js, lib, "randomUUID", Ant_Function_CreateWithArity(js_crypto_random_uuid, 1));
   js_set(js, lib, "getRandomValues", Ant_Function_Create(js_crypto_get_random_values));
   js_set(js, lib, "getCiphers", Ant_Function_Create(js_crypto_get_ciphers));

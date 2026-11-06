@@ -2189,6 +2189,18 @@ static ant_value_t process_make_warning_object(
   return warning_obj;
 }
 
+static atomic_bool process_pending_deprecation_enabled;
+
+void process_set_pending_deprecation(bool enabled) {
+  atomic_store(&process_pending_deprecation_enabled, enabled);
+}
+
+bool process_pending_deprecation(void) {
+  if (atomic_load(&process_pending_deprecation_enabled)) return true;
+  const char *env = getenv("NODE_PENDING_DEPRECATION");
+  return env && env[0] == '1';
+}
+
 static ant_value_t process_emit_warning(ant_params_t) {
   if (nargs < 1) return Ant_Value_Undefined;
 
@@ -2444,6 +2456,8 @@ void init_process_module(ant_t *js) {
   
   char uv_ver[32];
   snprintf(uv_ver, sizeof(uv_ver), "%d.%d.%d", UV_VERSION_MAJOR, UV_VERSION_MINOR, UV_VERSION_PATCH);
+  
+  // TODO: determine at build time
   process_set_string(js, versions_obj, "uv", uv_ver);
   process_set_string(js, versions_obj, "node", "26.8.1");
   process_set_string(js, versions_obj, "brotli", "1.1.0");
@@ -2459,6 +2473,9 @@ void init_process_module(ant_t *js) {
   process_set_string(js, versions_obj, "napi", "10");
   process_set_string(js, versions_obj, "wamr", "26756a5c5846c262c9e5c89f3fc8e1e693ee2539");
   process_set_string(js, versions_obj, "boringssl", "297b11798a0ed6bc7736aa57328909a4afbbf67a");
+  
+  // compat version
+  process_set_string(js, versions_obj, "openssl", "1.1.1");
   js_set(js, process_obj, "versions", versions_obj);
   
   ant_value_t release_obj = Ant_Object_Create(js);

@@ -40,6 +40,15 @@ typedef enum {
   TYPED_ARRAY_COUNT
 } TypedArrayType;
 
+static inline size_t get_element_size(TypedArrayType type) {
+  static const uint8_t sizes[] = {
+    #define BUFFER_TYPED_ARRAY(name, ctor, ctype, ...) sizeof(ctype),
+    #include "buffer/typed_arrays.h"
+  };
+
+  return type < TYPED_ARRAY_COUNT ? sizes[type] : 1;
+}
+
 typedef struct {
   ArrayBufferData *buffer;
   TypedArrayType type;

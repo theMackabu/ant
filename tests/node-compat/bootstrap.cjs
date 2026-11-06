@@ -23,5 +23,6 @@ if (!process.config) {
   });
 }
 
+process.env.NODE_SKIP_FLAG_CHECK ??= '1';
 process.argv.splice(1, 1);
 require(target);

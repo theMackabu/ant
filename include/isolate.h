@@ -177,6 +177,7 @@ struct ant_isolate_t {
   bool wasm_pending_import_throw;
   fetch_request_t *fetch_requests;
   fs_request_t *fs_requests;
+  crypto_random_job_t *crypto_random_jobs;
   fs_watcher_t *fs_watchers;
   rl_interface_t *rl_interfaces;
   uint64_t rl_next_interface_id;

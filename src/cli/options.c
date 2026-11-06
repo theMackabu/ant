@@ -379,6 +379,7 @@ static void export_args(ant_cli_t *cli, ant_cli_args_t *args) {
   cli->web_compat = opt_set(args, OPT_WEB_COMPAT);
   cli->no_clear_screen = opt_set(args, OPT_NO_CLEAR_SCREEN);
   cli->jitless = opt_set(args, OPT_JITLESS);
+  cli->pending_deprecation = opt_set(args, OPT_PENDING_DEPRECATION);
   cli->gc_threads = opt_set(args, OPT_GC_THREADS) ? ((struct arg_int *)args->table[OPT_GC_THREADS])->ival[0] : -1;
 }
 

@@ -14,6 +14,7 @@ void cleanup_process_module(ant_t *js);
 void free_process_module(ant_t *js);
 void process_set_private_env(ant_t *js, char **entries);
 void stdin_update_reading(ant_t *js);
+void process_set_pending_deprecation(bool enabled);
 
 char **process_env_snapshot(ant_t *js);
 char **process_private_env_snapshot(ant_t *js);
@@ -29,6 +30,7 @@ void process_enable_keypress_events(ant_t *js);
 void emit_process_event(ant_t *js, const char *event_type, ant_args_t);
 
 bool has_active_stdin(ant_t *js);
+bool process_pending_deprecation(void);
 bool process_report_uncaught_exception(ant_t *js);
 bool process_report_unhandled_rejection(ant_t *js, ant_value_t promise, ant_value_t reason);
 bool process_has_event_listeners(ant_t *js, const char *event_type);

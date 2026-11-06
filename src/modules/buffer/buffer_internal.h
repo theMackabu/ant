@@ -104,15 +104,6 @@ static inline ssize_t normalize_index(ssize_t idx, ssize_t len) {
   return idx;
 }
 
-static inline size_t get_element_size(TypedArrayType type) {
-  static const uint8_t sizes[] = {
-    #define BUFFER_TYPED_ARRAY(name, ctor, ctype, ...) sizeof(ctype),
-    #include "buffer/typed_arrays.h"
-  };
-
-  return type < TYPED_ARRAY_COUNT ? sizes[type] : 1;
-}
-
 static inline bool typedarray_type_is_bigint(TypedArrayType type) {
   static const bool bigint[] = {
     #define BUFFER_TA_IS_BIGINT_INT    false

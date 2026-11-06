@@ -9,7 +9,8 @@ declare module 'crypto' {
 
   interface WebCrypto {
     random(): number;
-    randomBytes(length: number): number[];
+    randomBytes(size: number): Buffer;
+    randomBytes(size: number, callback: (err: Error | null, buf: Buffer) => void): void;
     randomUUID(): string;
     randomUUIDv7(): string;
     getRandomValues<T extends ArrayBufferView>(array: T): T;
@@ -23,7 +24,21 @@ declare module 'crypto' {
     digest(encoding?: string): string | Uint8Array;
   };
   
-  function randomBytes(length: number): number[];
+  type RandomFillCallback<T> = (err: Error | null, buf: T) => void;
+
+  function randomBytes(size: number): Buffer;
+  function randomBytes(size: number, callback: (err: Error | null, buf: Buffer) => void): void;
+  const pseudoRandomBytes: typeof randomBytes;
+  const prng: typeof randomBytes;
+  const rng: typeof randomBytes;
+  function randomFill<T extends BufferSource | SharedArrayBuffer>(buf: T, callback: RandomFillCallback<T>): void;
+  function randomFill<T extends BufferSource | SharedArrayBuffer>(buf: T, offset: number, callback: RandomFillCallback<T>): void;
+  function randomFill<T extends BufferSource | SharedArrayBuffer>(buf: T, offset: number, size: number, callback: RandomFillCallback<T>): void;
+  function randomFillSync<T extends BufferSource | SharedArrayBuffer>(buf: T, offset?: number, size?: number): T;
+  function randomInt(max: number): number;
+  function randomInt(min: number, max: number): number;
+  function randomInt(max: number, callback: (err: undefined, value: number) => void): void;
+  function randomInt(min: number, max: number, callback: (err: undefined, value: number) => void): void;
   function randomUUID(): string;
   function getRandomValues<T extends ArrayBufferView>(array: T): T;
   function getCurves(): string[];

@@ -85,6 +85,7 @@ void gc_mark_host_modules(ant_t *js, gc_mark_fn mark) {
   gc_mark_atomics(js, mark);
   gc_mark_fetch(js, mark);
   gc_mark_fs(js, mark);
+  gc_mark_crypto(js, mark);
   gc_mark_child_process(js, mark);
   gc_mark_dns(js, mark);
   gc_mark_readline(js, mark);

@@ -42,6 +42,7 @@ typedef struct {
   bool web_compat;
   bool no_clear_screen;
   bool jitless;
+  bool pending_deprecation;
   int gc_threads;
 
   char **antx_argv;

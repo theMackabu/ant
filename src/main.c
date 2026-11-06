@@ -212,6 +212,7 @@ static int run_runtime(const ant_cli_t *cli, run_plan_t *plan, bool crash_report
   js_setstacklimit(js, os_thread_stack_size() * 3 / 4);
   
   if (cli->jitless) sv_debug_enable(SV_DEBUG_JITLESS);
+  if (cli->pending_deprecation) process_set_pending_deprecation(true);
   if (cli->gc_threads >= 0) gc_parallel_set_helpers(cli->gc_threads);
 
   ant_argv_t proc = process_argv(cli, plan);
