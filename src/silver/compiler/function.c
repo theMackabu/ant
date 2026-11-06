@@ -651,7 +651,7 @@ sv_func_t *compile_function_body(
   func->is_static = !!(node->flags & FN_STATIC);
   func->is_tla = comp.is_tla;
   func->debug->filename = enclosing->filename ? enclosing->filename : enclosing->js->filename;
-  func->debug->source_line = (int)node->line;
+  func->debug->source_line = (int)source_line_of(enclosing, node);
   
   if (node->str && node->len > 0) {
     char *name = sv_code_bump(comp.js, node->len + 1);

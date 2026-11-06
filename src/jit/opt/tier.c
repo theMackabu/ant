@@ -160,10 +160,8 @@ static const char *opt_func_name(const sv_func_t *func) {
   return func->debug && func->debug->name ? func->debug->name : "<anonymous>";
 }
 
-static uint32_t opt_func_line(sv_func_t *func) {
-  uint32_t line = 0, col = 0;
-  (void)sv_lookup_srcpos(func, 0, &line, &col);
-  return line;
+static uint32_t opt_func_line(const sv_func_t *func) {
+  return func->debug->source_line > 0 ? (uint32_t)func->debug->source_line : 0;
 }
 
 typedef struct {
@@ -175,17 +173,21 @@ typedef struct {
 
 static opt_generic_counts_t opt_generic_counts(const ir_graph_t *graph) {
   opt_generic_counts_t counts = {.first = OP__COUNT};
+  
   for (ir_block_id_t block = 0; block < ir_block_count(graph); block++) {
     const ir_block_t *data = ir_block(graph, block);
+    
     for (uint32_t i = 0; i < data->body.len; i++) {
       const ir_op_t *op = &ir_node(graph, data->body.items[i])->op;
       if (op->code != IR_OP_GENERIC) continue;
       counts.total++;
+      
       if (data->is_cold) continue;
       if (!counts.primary++) counts.first = op->slow.opcode;
       if (op->slow.in_loop && !counts.in_loops++) counts.first = op->slow.opcode;
     }
   }
+  
   return counts;
 }
 
@@ -921,6 +923,30 @@ ant_value_t opt_rt_unary_plus(sv_vm_t *vm, ant_value_t value, ant_value_t unused
 
 ant_value_t opt_rt_in(sv_vm_t *vm, ant_value_t key, ant_value_t object, ant_value_t *args, int64_t argc, int64_t kind) {
   return jit_helper_in(vm, vm->js, key, object);
+}
+
+ant_value_t opt_rt_map_template(sv_vm_t *vm, ant_value_t call_this, ant_value_t call_func, ant_value_t *args, int64_t argc, const sv_map_template_desc_t *desc) {
+  return sv_op_call_map_template(vm, vm->js, call_func, call_this, args, desc);
+}
+
+ant_value_t opt_rt_get_private(sv_vm_t *vm, ant_value_t object, ant_value_t token, ant_value_t *args, int64_t argc, int64_t unused) {
+  return jit_helper_get_private(vm, vm->js, object, token);
+}
+
+ant_value_t opt_rt_get_private_opt(sv_vm_t *vm, ant_value_t object, ant_value_t token, ant_value_t *args, int64_t argc, int64_t unused) {
+  return jit_helper_get_private_opt(vm, vm->js, object, token);
+}
+
+ant_value_t opt_rt_has_private(sv_vm_t *vm, ant_value_t object, ant_value_t token, ant_value_t *args, int64_t argc, int64_t unused) {
+  return jit_helper_has_private(vm, vm->js, object, token);
+}
+
+ant_value_t opt_rt_put_private(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, int64_t unused) {
+  return jit_helper_put_private(vm, vm->js, object, value, args[0]);
+}
+
+ant_value_t opt_rt_def_private(sv_vm_t *vm, ant_value_t object, ant_value_t token, ant_value_t *args, int64_t argc, int64_t kind) {
+  return jit_helper_def_private(vm, vm->js, object, token, args[0], (int32_t)kind);
 }
 
 ant_value_t opt_rt_for_in(sv_vm_t *vm, ant_value_t object, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind) {

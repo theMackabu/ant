@@ -722,7 +722,6 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
     
     arrow->flags = FN_ARROW;
     arrow->body = obj;
-    arrow->line = obj->line; arrow->col = obj->col;
     arrow->src_off = obj->src_off; arrow->src_end = obj->src_end;
     
     sv_ast_list_push(c->js, &arrow->args, param);

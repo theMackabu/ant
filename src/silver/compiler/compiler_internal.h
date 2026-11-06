@@ -77,6 +77,7 @@ void emit_u32(sv_compiler_t *c, uint32_t val);
 void emit_i32(sv_compiler_t *c, int32_t val);
 void emit_op(sv_compiler_t *c, sv_op_t op);
 void emit_srcpos(sv_compiler_t *c, sv_ast_t *node);
+uint32_t source_line_of(const sv_compiler_t *c, const sv_ast_t *node);
 int add_constant(sv_compiler_t *c, ant_value_t val);
 bool build_gc_const_tables(ant_t *js, sv_func_t *func);
 sv_ic_entry_t *alloc_ic_slots(ant_t *js, uint16_t count);

@@ -10,7 +10,7 @@
 #undef N_NULL
 #endif
 
-typedef enum {
+typedef enum: uint8_t {
   N_NUMBER,
   N_STRING,
   N_BIGINT,
@@ -81,7 +81,7 @@ typedef enum {
   N__COUNT
 } sv_node_type_t;
 
-typedef enum {
+typedef enum: uint8_t {
   SV_VAR_VAR,
   SV_VAR_LET,
   SV_VAR_CONST,
@@ -128,59 +128,55 @@ enum {
   EX_NAMESPACE = 1 << 5,
 };
 
-typedef struct 
-  sv_ast sv_ast_t;
-
 typedef struct {
   sv_ast_t **items;
-  int        count;
-  int        cap;
+  int count;
+  int cap;
 } sv_ast_list_t;
 
 struct sv_ast {
-  sv_node_type_t  type;
-  uint8_t         op;
-  uint32_t        flags;
-  sv_var_kind_t   var_kind;
+  sv_node_type_t type;
+  uint8_t op;
+  
+  sv_var_kind_t var_kind;
+  uint32_t flags;
+  uint32_t len;
+  uint32_t aux_len;
+  uint32_t src_off;
+  uint32_t src_end;
 
-  const char     *str;
-  uint32_t        len;
-  const char     *aux;
-  uint32_t        aux_len;
-  double          num;
+  const char *str;
+  sv_ast_t *left;
+  sv_ast_t *right;
+  sv_ast_t *body;
+  double num;
 
-  sv_ast_t       *left;
-  sv_ast_t       *right;
-  sv_ast_t       *cond;
-  sv_ast_t       *body;
-  sv_ast_list_t   args;
+  sv_ast_t *cond;
+  sv_ast_t *init;
+  sv_ast_t *update;
+  const char *aux;
+  sv_ast_list_t args;
 
-  sv_ast_t       *catch_param;
-  sv_ast_t       *catch_body;
-  sv_ast_t       *finally_body;
-
-  sv_ast_t       *init;
-  sv_ast_t       *update;
-
-  uint32_t        line;
-  uint32_t        col;
-  uint32_t        src_off;
-  uint32_t        src_end;
+  sv_ast_t *catch_param;
+  sv_ast_t *catch_body;
+  sv_ast_t *finally_body;
 };
 
-bool sv_ast_list_push(ant_t *js, sv_ast_list_t *list, sv_ast_t *node);
 bool sv_ast_can_be_expression_statement(const sv_ast_t *node);
-bool ast_references_arguments(const sv_ast_t *node);
+bool sv_ast_list_push(ant_t *js, sv_ast_list_t *list, sv_ast_t *node);
+
 bool ast_is_arguments_length(const sv_ast_t *node);
-bool ast_arguments_length_only(const sv_ast_t *node, bool write, bool arrow);
-bool ast_references_new_target(const sv_ast_t *node);
 bool ast_contains_direct_eval(const sv_ast_t *node);
-bool ast_closure_captures_name(const sv_ast_t *node, const char *name, uint32_t len);
-bool ast_mentions_name(const sv_ast_t *node, const char *name, uint32_t len);
+bool ast_references_arguments(const sv_ast_t *node);
+bool ast_references_new_target(const sv_ast_t *node);
+
 bool ast_contains_lexical_new_target(const sv_ast_t *node);
-bool ast_contains_direct_suspend(const sv_ast_t *node, const sv_ast_t **out_offender);
-bool ast_contains_own_yield(const sv_ast_t *node, const sv_ast_t **out_offender);
 bool ast_pattern_binds(const sv_ast_t *node, const char *name);
+bool ast_arguments_length_only(const sv_ast_t *node, bool write, bool arrow);
+bool ast_mentions_name(const sv_ast_t *node, const char *name, uint32_t len);
+bool ast_contains_own_yield(const sv_ast_t *node, const sv_ast_t **out_offender);
+bool ast_closure_captures_name(const sv_ast_t *node, const char *name, uint32_t len);
+bool ast_contains_direct_suspend(const sv_ast_t *node, const sv_ast_t **out_offender);
 
 typedef enum {
   SV_PARSE_SCRIPT,

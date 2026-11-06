@@ -37,6 +37,14 @@ void emit_op(sv_compiler_t *c, sv_op_t op) {
   emit(c, (uint8_t)op);
 }
 
+uint32_t source_line_of(const sv_compiler_t *c, const sv_ast_t *node) {
+  if (!node || !c->line_table || c->source_len <= 0) return 0;
+  uint32_t off = node->src_off < (uint32_t)c->source_len ? node->src_off : (uint32_t)c->source_len;
+  uint32_t line, col;
+  sv_compile_ctx_line_table_lookup(c->line_table, off, &line, &col);
+  return line;
+}
+
 void emit_srcpos(sv_compiler_t *c, sv_ast_t *node) {
   if (!node) return;
   const char *code = c->source;

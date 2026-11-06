@@ -286,7 +286,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
   fn->is_strict = true;
   fn->is_static = true;
   fn->debug->filename = c->filename ? c->filename : c->js->filename;
-  fn->debug->source_line = node ? (int)node->line : 0;
+  fn->debug->source_line = (int)source_line_of(c, node);
 
   sv_compile_ctx_cleanup(&comp);
 
@@ -511,7 +511,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     fn->is_strict = comp.is_strict;
     fn->allows_new_target = comp.allows_new_target;
     fn->debug->filename = c->js->filename;
-    fn->debug->source_line = (int)node->line;
+    fn->debug->source_line = (int)source_line_of(c, node);
     
     if (node->str && node->len > 0) {
       char *name = sv_code_bump(c->js, node->len + 1);

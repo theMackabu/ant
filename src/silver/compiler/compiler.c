@@ -49,7 +49,6 @@ sv_func_t *sv_compile(
   memset(&top_fn, 0, sizeof(top_fn));
   
   top_fn.type = N_FUNC;
-  top_fn.line = 1;
   top_fn.str = top_name;
   top_fn.len = (uint32_t)strlen(top_name);
   top_fn.src_off = 0;
@@ -190,7 +189,6 @@ sv_func_t *sv_compile_function_with_params(
   memset(&top_fn, 0, sizeof(top_fn));
 
   top_fn.type = N_FUNC;
-  top_fn.line = 1;
   top_fn.str = top_name;
   top_fn.len = (uint32_t)strlen(top_name);
   top_fn.src_off = 0;
@@ -212,8 +210,6 @@ sv_func_t *sv_compile_function_with_params(
 
     ident->str = name;
     ident->len = (uint32_t)name_len;
-    ident->line = 1;
-    ident->col = 1;
     sv_ast_list_push(js, &top_fn.args, ident);
   }
 
