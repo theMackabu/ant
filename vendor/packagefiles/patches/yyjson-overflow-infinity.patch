@@ -1,0 +1,22 @@
+--- a/src/yyjson.c
++++ b/src/yyjson.c
+@@ -3847,8 +3847,7 @@
+ 
+ #define return_inf() do { \
+     if (has_flg(BIGNUM_AS_RAW)) return_raw(); \
+-    if (has_allow(INF_AND_NAN)) return_f64_bin(F64_BITS_INF); \
+-    else return_err(hdr, "number is infinity when parsed as double"); \
++    return_f64_bin(F64_BITS_INF); \
+ } while (false)
+ 
+ #define return_raw() do { \
+@@ -4481,8 +4480,7 @@
+ 
+ #define return_inf() do { \
+     if (has_flg(BIGNUM_AS_RAW)) return_raw(); \
+-    if (has_allow(INF_AND_NAN)) return_f64_bin(F64_BITS_INF); \
+-    else return_err(hdr, "number is infinity when parsed as double"); \
++    return_f64_bin(F64_BITS_INF); \
+ } while (false)
+ 
+ #define return_raw() do { \
