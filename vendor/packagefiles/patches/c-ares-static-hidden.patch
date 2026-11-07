@@ -1,30 +1,27 @@
 --- a/include/ares.h
 +++ b/include/ares.h
-@@ -104,16 +104,14 @@ extern "C" {
+@@ -105,15 +105,13 @@ extern "C" {
  ** c-ares external API function linkage decorations.
  */
  
 -#if defined(_WIN32) || defined(__CYGWIN__) || defined(__SYMBIAN32__)
 -#  ifdef CARES_STATICLIB
 -#    define CARES_EXTERN
--#  else
--#    ifdef CARES_BUILDING_LIBRARY
--#      define CARES_EXTERN __declspec(dllexport)
--#    else
--#      define CARES_EXTERN __declspec(dllimport)
--#    endif
--#  endif
 +#if defined(CARES_STATICLIB)
 +#  define CARES_EXTERN
 +#elif defined(_WIN32) || defined(__CYGWIN__) || defined(__SYMBIAN32__)
 +#  ifdef CARES_BUILDING_LIBRARY
 +#    define CARES_EXTERN __declspec(dllexport)
-+#  else
+ #  else
+-#    ifdef CARES_BUILDING_LIBRARY
+-#      define CARES_EXTERN __declspec(dllexport)
+-#    else
+-#      define CARES_EXTERN __declspec(dllimport)
+-#    endif
 +#    define CARES_EXTERN __declspec(dllimport)
-+#  endif
+ #  endif
  #else
  #  if defined(__GNUC__) && __GNUC__ >= 4
- #    define CARES_EXTERN __attribute__((visibility("default")))
 --- a/meson.build
 +++ b/meson.build
 @@ -327,6 +327,7 @@ libcares_kwargs = {

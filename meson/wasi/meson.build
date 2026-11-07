@@ -36,10 +36,9 @@ base64_dep = declare_dependency(
   compile_args: ['-DBASE64_STATIC_DEFINE'],
 )
 
-utf8proc_base_dep = subproject('utf8proc', default_options: [
-  'tests=disabled',
-]).get_variable('utf8proc_dep')
-utf8proc_srcdir = src_root / 'vendor' / 'utf8proc-2.10.0'
+utf8proc_base_dep = subproject('utf8proc', default_options: ['tests=disabled',]).get_variable('utf8proc_dep')
+utf8proc_srcdir = src_root / 'vendor' / ('utf8proc-' + utf8proc_base_dep.version())
+
 utf8proc_dep = declare_dependency(
   dependencies: [utf8proc_base_dep],
   compile_args: ['-DUTF8PROC_STATIC'],

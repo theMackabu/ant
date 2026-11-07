@@ -66,41 +66,6 @@ else
   win_deps = []
 endif
 
-deps_info = {
-  'lmdb': {
-    'dir': 'openldap-LMDB_0.9.33',
-    'inc': 'libraries/liblmdb',
-  },
-  'yyjson': {
-    'dir': 'yyjson-0.12.0',
-    'inc': 'src',
-  },
-  'libuv': {
-    'dir': 'libuv-v1.53.0',
-    'inc': 'include',
-  },
-  'llhttp': {
-    'dir': 'llhttp-release-v9.3.1',
-    'inc': 'include',
-  },
-  'zlib-ng': {
-    'dir': 'zlib-ng-2.3.3',
-    'inc': '',
-    'build_dir': true,
-  },
-  'google-brotli': {
-    'dir': 'brotli-1.2.1',
-    'inc': 'c/include',
-  },
-  'utf8proc': {
-    'dir': 'utf8proc-2.10.0',
-    'inc': '',
-  },
-}
-
-subprojects_src = src_root / 'vendor'
-subprojects_build = meson.project_build_root() / 'vendor'
-
 llhttp = subproject('llhttp').get_variable('llhttp_dep')
 libuv_dep = subproject('libuv').get_variable('libuv_dep')
 libuv_lib = subproject('libuv').get_variable('libuv')
@@ -111,8 +76,6 @@ zlib_ng_sub = subproject('zlib-ng', default_options: [
   'zlib-compat=true'
 ])
 zlib_dep = zlib_ng_sub.get_variable('zlib_ng_dep')
-zlib_ng_srcdir = subprojects_src / deps_info['zlib-ng']['dir']
-zlib_ng_builddir = subprojects_build / deps_info['zlib-ng']['dir']
 
 brotli_sub = subproject('google-brotli', default_options: [
   'default_library=static',
@@ -159,12 +122,9 @@ wirecall = dependency('wirecall', default_options: [
 ])
 
 ucd_derived_core_properties = subproject('ucd').get_variable('derived_core_properties')
+utf8proc_base_dep = subproject('utf8proc', default_options: ['tests=disabled',]).get_variable('utf8proc_dep')
+utf8proc_srcdir = src_root / 'vendor' / ('utf8proc-' + utf8proc_base_dep.version())
 
-utf8proc_base_dep = subproject('utf8proc', default_options: [
-  'tests=disabled',
-]).get_variable('utf8proc_dep')
-
-utf8proc_srcdir = subprojects_src / deps_info['utf8proc']['dir']
 utf8proc_dep = declare_dependency(
   dependencies: [utf8proc_base_dep],
   compile_args: get_option('default_library') == 'static' ? ['-DUTF8PROC_STATIC'] : [],

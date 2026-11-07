@@ -97,21 +97,21 @@ and are fetched automatically:
 - BoringSSL `297b11798a0ed6bc7736aa57328909a4afbbf67a`
 - crprintf `HEAD`
 - google-brotli 1.2.1
-- libffi 3.5.2
+- libffi 3.8.0
 - libuv 1.53.0
 - llhttp 9.3.1
 - LMDB (OpenLDAP LMDB 0.9.33)
 - mimalloc 3.3.2 (default runtime allocator)
 - minicoro `HEAD`
 - MIR `HEAD`
-- PCRE2 10.47
+- PCRE2 10.49
 - tlsuv 0.40.13
 - temporal_capi 0.2.6 / temporal_rs 0.2.6
 - utf8proc 2.10.0
-- uthash 2.3.0
+- uthash 2.4.0
 - uuidv7-h `HEAD`
 - wasm-micro-runtime `92f40918bbfad35546a1512b10bd25eaa31add4d`
-- yyjson 0.12.0
+- yyjson 0.13.0
 - zlib-ng 2.3.3
 
 ### Rust toolchain

@@ -1,0 +1,47 @@
+option(
+    'reader',
+    type: 'feature',
+    description: 'Enable JSON reader',
+)
+
+option(
+    'writer',
+    type: 'feature',
+    description: 'Enable JSON writer',
+)
+
+option(
+    'incr-reader',
+    type: 'feature',
+    description: 'Enable incremental reader',
+)
+
+option(
+    'utils',
+    type: 'feature',
+    description: 'Enable JSON pointer, JSON patch, JSON merge patch',
+)
+
+option(
+    'fast-fp-conv',
+    type: 'feature',
+    description: 'Enable custom floating-point number conversion',
+)
+
+option(
+    'non-standard-json',
+    type: 'feature',
+    description: 'Enable non-standard JSON support',
+)
+
+option(
+    'utf8-validation',
+    type: 'feature',
+    description: 'Enable UTF-8 validation',
+)
+
+option(
+    'unaligned-memory-access',
+    type: 'feature',
+    description: 'Enable explicit unaligned memory access',
+)

@@ -1,6 +1,6 @@
 --- a/src/yyjson.c
 +++ b/src/yyjson.c
-@@ -3847,8 +3847,7 @@
+@@ -3886,8 +3886,7 @@ static_inline bool read_num(u8 **ptr, u8 **pre, yyjson_read_flag flg,
  
  #define return_inf() do { \
      if (has_flg(BIGNUM_AS_RAW)) return_raw(); \
@@ -10,7 +10,7 @@
  } while (false)
  
  #define return_raw() do { \
-@@ -4481,8 +4480,7 @@
+@@ -4521,8 +4520,7 @@ static_inline bool read_num(u8 **ptr, u8 **pre, yyjson_read_flag flg,
  
  #define return_inf() do { \
      if (has_flg(BIGNUM_AS_RAW)) return_raw(); \

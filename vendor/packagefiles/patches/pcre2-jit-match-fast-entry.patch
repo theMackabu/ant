@@ -1,6 +1,6 @@
 --- a/meson.build
 +++ b/meson.build
-@@ -233,7 +233,7 @@
+@@ -249,7 +249,7 @@ pcre2_8_jit_lib = static_library(
    jit_source,
    dependencies: jit_deps,
    include_directories: includes,
@@ -9,7 +9,7 @@
    override_options: ['optimization=s'],
    pic: true,
    install: false,
-@@ -241,7 +241,7 @@
+@@ -257,7 +257,7 @@ pcre2_8_jit_lib = static_library(
  
  pcre2_8_lib = library(
    'pcre2-8',
@@ -20,7 +20,7 @@
    include_directories: includes,
 --- a/src/pcre2_jit_compile.c
 +++ b/src/pcre2_jit_compile.c
-@@ -233,6 +233,8 @@
+@@ -233,6 +233,8 @@ enum  early_fail_types {
  
  typedef int (SLJIT_FUNC *jit_function)(jit_arguments *args);
  
@@ -29,17 +29,19 @@
  /* The following structure is the key data type for the recursive
  code generator. It is allocated by compile_matchingpath, and contains
  the arguments for compile_backtrackingpath. Must be the first member
-@@ -14153,6 +14155,9 @@
+@@ -14280,8 +14282,11 @@ functions->executable_sizes[mode] = executable_size;
+ return 0;
  }
  
- #endif
 +#endif
-+
-+#ifndef PCRE2_JIT_MATCH_ONLY
+ #endif
  
++#ifndef PCRE2_JIT_MATCH_ONLY
++
  /*************************************************
  *        JIT compile a Regular Expression        *
-@@ -14303,12 +14308,18 @@
+ *************************************************/
+@@ -14431,12 +14436,18 @@ return 0;
  #endif  /* SUPPORT_JIT */
  }
  
@@ -58,9 +60,14 @@
 +#endif
  
  /* End of pcre2_jit_compile.c */
+--- a/src/pcre2_jit_match.c
++++ b/src/pcre2_jit_match.c
+@@ -0,0 +1,2 @@
++#define PCRE2_JIT_MATCH_ONLY
++#include "pcre2_jit_compile.c"
 --- a/src/pcre2_jit_match_inc.h
 +++ b/src/pcre2_jit_match_inc.h
-@@ -200,3 +200,62 @@
+@@ -211,3 +211,62 @@ return match_data->rc;
  }
  
  /* End of pcre2_jit_match_inc.h */
@@ -123,8 +130,3 @@
 +#endif
 +}
 +#endif
---- a/src/pcre2_jit_match.c
-+++ b/src/pcre2_jit_match.c
-@@ -0,0 +1,2 @@
-+#define PCRE2_JIT_MATCH_ONLY
-+#include "pcre2_jit_compile.c"

@@ -10,7 +10,7 @@ If:
 CompileFlags:
   Add:
     - -I../include
-    - -I../vendor/uthash-2.3.0/src
+    - -I../vendor/uthash-2.4.0/src
 ---
 If:
   PathMatch: examples/embed/.*\.c

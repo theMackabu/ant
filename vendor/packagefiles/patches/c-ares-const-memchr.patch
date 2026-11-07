@@ -1,6 +1,6 @@
 --- a/src/lib/str/ares_str.c
 +++ b/src/lib/str/ares_str.c
-@@ -246,7 +246,7 @@
+@@ -300,7 +300,7 @@ unsigned char *ares_memmem(const unsigned char *big, size_t big_len,
    return ptr;
  #else
    while (1) {
