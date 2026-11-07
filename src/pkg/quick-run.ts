@@ -5,7 +5,7 @@ import { LOCKFILE } from 'upm/src/lock.ts';
 import { parseManifest } from 'upm/src/package-json.ts';
 import { currentPlatform } from 'upm/src/resolve.ts';
 import { readScripts, runScript, shellLine } from 'upm/src/run.ts';
-import { readState, sameStamp, settingsOf, stampOf } from 'upm/src/state.ts';
+import { readState, sameStamp, settingsOf, SHARED_DIR, stampOf } from 'upm/src/state.ts';
 import type { InstallState, Stamp, TarballStamp } from 'upm/src/state.ts';
 import { findRoot, workspacesOf } from 'upm/src/workspaces.ts';
 import type { Root } from 'upm/src/workspaces.ts';
@@ -40,7 +40,7 @@ function declares(manifest: NonNullable<Root['manifest']>): boolean {
   return groups.some(group => group && Object.keys(group).length > 0);
 }
 
-async function installed(root: Root): Promise<boolean> {
+async function installed(root: Root, sharing: boolean): Promise<boolean> {
   const { dir, manifest } = root;
   if (!manifest || fs.existsSync(path.join(dir, PNPM_WORKSPACE))) return false;
 
@@ -55,7 +55,8 @@ async function installed(root: Root): Promise<boolean> {
   const { registry, scopes, fallback, hoist } = readConfig(dir);
   const hosts = fallback ? [registry, scopes, fallback] : [registry, scopes];
   const production = state.production === true;
-  if (settingsOf({ production, store: state.store, hoist, hosts, platform: currentPlatform() }) !== stamps.settings) return false;
+  const shared = sharing ? SHARED_DIR : undefined;
+  if (settingsOf({ production, store: state.store, hoist, hosts, platform: currentPlatform(), shared }) !== stamps.settings) return false;
 
   const listed = root.listed ?? (await workspacesOf(dir, manifest, true));
   if (!listed.proven || listed.learned || !state.summary) return false;
@@ -83,13 +84,16 @@ export async function quickRun(argv: string[]): Promise<number | undefined> {
   process.env.npm_config_user_agent = `ant/${process.versions.ant}`;
   setProgramName('ant', 'magenta');
   useAntHome();
-  useDefaultRegistry(loadConfig());
+  
+  const config = loadConfig();
+  useDefaultRegistry(config);
 
   const root = await findRoot(dir).catch(() => undefined);
-  if (!root || !(await installed(root).catch(() => false))) return undefined;
+  if (!root || !(await installed(root, config.sharedLeaves === 'on').catch(() => false))) return undefined;
 
   const command = scripts[name]!;
   const scriptArgs = rest[0] === '--' ? rest.slice(1) : rest;
+  
   printBanner({ script: name, line: shellLine(command, scriptArgs), workspace: undefined });
   return await runScript({ dir, file, name, command, args: scriptArgs, pkg: manifest });
 }

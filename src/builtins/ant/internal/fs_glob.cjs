@@ -1,0 +1,1370 @@
+// Copyright Joyent, Inc. and other Node contributors.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+'use strict';
+
+// Adapted from Node.js v26.13.0 lib/internal/fs/glob.js; keep the algorithms in sync upstream.
+
+const { lstatSync, readdirSync, realpathSync, statSync, Dirent } = require('node:fs');
+const { lstat, readdir, realpath, stat } = require('node:fs/promises');
+const { join, resolve, relative, basename, isAbsolute, dirname, parse, sep } = require('node:path');
+const { validateObject, validateString, isWindows } = require('ant:internal/path_helpers');
+
+const realpathSyncNative = realpathSync.native;
+const isMacOS = process.platform === 'darwin';
+const kEmptyObject = Object.freeze({ __proto__: null });
+
+const uncurryThis = (fn) => Function.prototype.call.bind(fn);
+const ArrayFrom = Array.from;
+const ArrayIsArray = Array.isArray;
+const ArrayPrototypeAt = uncurryThis(Array.prototype.at);
+const ArrayPrototypeFlatMap = uncurryThis(Array.prototype.flatMap);
+const ArrayPrototypeJoin = uncurryThis(Array.prototype.join);
+const ArrayPrototypeMap = uncurryThis(Array.prototype.map);
+const ArrayPrototypePop = uncurryThis(Array.prototype.pop);
+const ArrayPrototypePush = uncurryThis(Array.prototype.push);
+const ArrayPrototypeSome = uncurryThis(Array.prototype.some);
+const PromisePrototypeThen = uncurryThis(Promise.prototype.then);
+const StringPrototypeEndsWith = uncurryThis(String.prototype.endsWith);
+const StringPrototypeSlice = uncurryThis(String.prototype.slice);
+const StringPrototypeSplit = uncurryThis(String.prototype.split);
+const StringPrototypeStartsWith = uncurryThis(String.prototype.startsWith);
+const StringPrototypeToLowerCase = uncurryThis(String.prototype.toLowerCase);
+const SafeMap = Map;
+const SafeSet = Set;
+
+const hideStackFrames = (fn) => fn;
+
+function describeReceived(value) {
+  if (value == null) return ` Received ${value}`;
+  if (typeof value === 'function') return ` Received function ${value.name}`;
+  if (typeof value === 'object') {
+    if (value.constructor?.name) return ` Received an instance of ${value.constructor.name}`;
+    return ` Received ${require('node:util').inspect(value, { depth: -1 })}`;
+  }
+  let shown = require('node:util').inspect(value, { colors: false });
+  if (shown.length > 28) shown = `${shown.slice(0, 25)}...`;
+  return ` Received type ${typeof value} (${shown})`;
+}
+
+class ERR_INVALID_ARG_TYPE extends TypeError {
+  constructor(name, expected, actual) {
+    const types = ArrayIsArray(expected) ? expected.join(' or ') : expected;
+    const kind = name.includes('.') ? 'property' : 'argument';
+    super(`The "${name}" ${kind} must be of type ${types}.${describeReceived(actual)}`);
+    this.code = 'ERR_INVALID_ARG_TYPE';
+  }
+}
+
+class ERR_OUT_OF_RANGE extends RangeError {
+  constructor(name, range, actual) {
+    super(`The value of "${name}" is out of range. It must be ${range}. Received ${actual}`);
+    this.code = 'ERR_OUT_OF_RANGE';
+  }
+}
+
+function validateBoolean(value, name) {
+  if (typeof value !== 'boolean') throw new ERR_INVALID_ARG_TYPE(name, 'boolean', value);
+}
+
+function validateInteger(value, name, min = Number.MIN_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER) {
+  if (typeof value !== 'number') throw new ERR_INVALID_ARG_TYPE(name, 'number', value);
+  if (!Number.isInteger(value)) throw new ERR_OUT_OF_RANGE(name, 'an integer', value);
+  if (value < min || value > max) throw new ERR_OUT_OF_RANGE(name, `>= ${min} && <= ${max}`, value);
+}
+
+function validateStringArray(value, name) {
+  if (!ArrayIsArray(value)) throw new ERR_INVALID_ARG_TYPE(name, 'Array', value);
+  for (let i = 0; i < value.length; i++) validateString(value[i], `${name}[${i}]`);
+}
+
+function assert(value) {
+  if (!value) throw new Error('Assertion failed');
+}
+
+function toPathIfFileURL(value) {
+  if (value == null || typeof value.href !== 'string' || typeof value.protocol !== 'string') return value;
+  return require('node:url').fileURLToPath(value);
+}
+
+const kStats = Symbol('stats');
+
+class DirentFromStats extends Dirent {
+  constructor(name, stats, path) {
+    super(name, null, path);
+    this[kStats] = stats;
+  }
+}
+
+for (const name of Reflect.ownKeys(Dirent.prototype)) {
+  if (name === 'constructor' || typeof Reflect.getOwnPropertyDescriptor(Dirent.prototype, name).value !== 'function') continue;
+  DirentFromStats.prototype[name] = function () {
+    return this[kStats][name]();
+  };
+}
+
+let minimatch;
+function lazyMinimatch() {
+  minimatch ??= require('minimatch');
+  return minimatch;
+}
+
+/**
+ * @param {string} path
+ * @returns {Promise<DirentFromStats|null>}
+ */
+async function getDirent(path) {
+  let stat;
+  try {
+    stat = await lstat(path);
+  } catch {
+    return null;
+  }
+  return new DirentFromStats(basename(path), stat, dirname(path));
+}
+
+/**
+ * @param {string} path
+ * @returns {DirentFromStats|null}
+ */
+function getDirentSync(path) {
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch {
+    return null;
+  }
+  return new DirentFromStats(basename(path), stat, dirname(path));
+}
+
+/**
+ * @callback validateStringArrayOrFunction
+ * @param {*} value
+ * @param {string} name
+ */
+const validateStringArrayOrFunction = hideStackFrames((value, name) => {
+  if (ArrayIsArray(value)) {
+    for (let i = 0; i < value.length; ++i) {
+      if (typeof value[i] !== 'string') {
+        throw new ERR_INVALID_ARG_TYPE(`${name}[${i}]`, 'string', value[i]);
+      }
+    }
+    return;
+  }
+  if (typeof value !== 'function') {
+    throw new ERR_INVALID_ARG_TYPE(name, ['string[]', 'function'], value);
+  }
+});
+
+/**
+ * @param {string} pattern
+ * @param {options} options
+ * @returns {Minimatch}
+ */
+function createMatcher(pattern, options = kEmptyObject) {
+  const opts = {
+    __proto__: null,
+    nocase: isWindows || isMacOS,
+    windowsPathsNoEscape: true,
+    nonegate: true,
+    nocomment: true,
+    optimizationLevel: 2,
+    platform: process.platform,
+    nocaseMagicOnly: true,
+    ...options,
+  };
+  return new (lazyMinimatch().Minimatch)(pattern, opts);
+}
+
+function cloneSet(values) {
+  const cloned = new SafeSet();
+  for (const value of values) {
+    cloned.add(value);
+  }
+  return cloned;
+}
+
+function isOutsidePath(path) {
+  return isAbsolute(path) ||
+    path === '..' ||
+    StringPrototypeStartsWith(path, `..${sep}`);
+}
+
+function isStrictDescendant(path) {
+  return path !== '' && !isOutsidePath(path);
+}
+
+function pathDepth(path) {
+  if (path === '') {
+    return 0;
+  }
+  if (isAbsolute(path)) {
+    return Infinity;
+  }
+  return StringPrototypeSplit(path, sep).length;
+}
+
+function ancestorAtDepth(path, relativePath) {
+  let ancestor = path;
+  if (relativePath !== '') {
+    const depth = pathDepth(relativePath);
+    for (let i = 0; i < depth; i++) {
+      ancestor = dirname(ancestor);
+    }
+  }
+  return ancestor;
+}
+
+function caseSensitiveRelative(path, otherPath) {
+  const pathRoot = parse(path).root;
+  const otherPathRoot = parse(otherPath).root;
+  if (StringPrototypeToLowerCase(pathRoot) !==
+      StringPrototypeToLowerCase(otherPathRoot)) {
+    return otherPath;
+  }
+  const pathTail = StringPrototypeSlice(path, pathRoot.length);
+  const otherPathTail = StringPrototypeSlice(otherPath, otherPathRoot.length);
+  const pathParts = pathTail === '' ? [] : StringPrototypeSplit(pathTail, sep);
+  const otherPathParts = otherPathTail === '' ?
+    [] : StringPrototypeSplit(otherPathTail, sep);
+  let common = 0;
+  while (common < pathParts.length &&
+         common < otherPathParts.length &&
+         pathParts[common] === otherPathParts[common]) {
+    common++;
+  }
+  const parts = [];
+  for (let i = common; i < pathParts.length; i++) {
+    ArrayPrototypePush(parts, '..');
+  }
+  for (let i = common; i < otherPathParts.length; i++) {
+    ArrayPrototypePush(parts, otherPathParts[i]);
+  }
+  return ArrayPrototypeJoin(parts, sep);
+}
+
+class Cache {
+  #cache = new SafeMap();
+  #statsCache = new SafeMap();
+  #followStatsCache = new SafeMap();
+  #identityCache = new SafeMap();
+  #identityRealpathCache = new SafeMap();
+  #readdirCache = new SafeMap();
+  #realpathCache = new SafeMap();
+
+  stat(path) {
+    const cached = this.#statsCache.get(path);
+    if (cached) {
+      return cached;
+    }
+    const promise = getDirent(path);
+    this.#statsCache.set(path, promise);
+    return promise;
+  }
+  statSync(path) {
+    const cached = this.#statsCache.get(path);
+    // Do not return a promise from a sync function.
+    if (cached && !(cached instanceof Promise)) {
+      return cached;
+    }
+    const val = getDirentSync(path);
+    this.#statsCache.set(path, val);
+    return val;
+  }
+  followStat(path) {
+    const cached = this.#followStatsCache.get(path);
+    if (cached) {
+      return cached;
+    }
+    const promise = PromisePrototypeThen(stat(path), null, () => null);
+    this.#followStatsCache.set(path, promise);
+    return promise;
+  }
+  followStatSync(path) {
+    const cached = this.#followStatsCache.get(path);
+    if (cached && !(cached instanceof Promise)) {
+      return cached;
+    }
+    let val;
+    try {
+      val = statSync(path);
+    } catch {
+      val = null;
+    }
+    this.#followStatsCache.set(path, val);
+    return val;
+  }
+  identity(path) {
+    const cached = this.#identityCache.get(path);
+    if (cached) {
+      return cached;
+    }
+    const promise = PromisePrototypeThen(
+      lstat(path),
+      ({ dev, ino }) => `${dev}:${ino}`,
+      () => null,
+    );
+    this.#identityCache.set(path, promise);
+    return promise;
+  }
+  identitySync(path) {
+    const cached = this.#identityCache.get(path);
+    if (cached && !(cached instanceof Promise)) {
+      return cached;
+    }
+    let val;
+    try {
+      const { dev, ino } = lstatSync(path);
+      val = `${dev}:${ino}`;
+    } catch {
+      val = null;
+    }
+    this.#identityCache.set(path, val);
+    return val;
+  }
+  identityRealpath(path) {
+    const cached = this.#identityRealpathCache.get(path);
+    if (cached) {
+      return cached;
+    }
+    const promise = PromisePrototypeThen(realpath(path), null, () => null);
+    this.#identityRealpathCache.set(path, promise);
+    return promise;
+  }
+  identityRealpathSync(path) {
+    const cached = this.#identityRealpathCache.get(path);
+    if (cached && !(cached instanceof Promise)) {
+      return cached;
+    }
+    let val;
+    try {
+      val = realpathSyncNative(path);
+    } catch {
+      val = null;
+    }
+    this.#identityRealpathCache.set(path, val);
+    return val;
+  }
+  realpath(path) {
+    const cached = this.#realpathCache.get(path);
+    if (cached) {
+      return cached;
+    }
+    const promise = PromisePrototypeThen(realpath(path), null, () => null);
+    this.#realpathCache.set(path, promise);
+    return promise;
+  }
+  realpathSync(path) {
+    const cached = this.#realpathCache.get(path);
+    if (cached && !(cached instanceof Promise)) {
+      return cached;
+    }
+    let val;
+    try {
+      val = realpathSync(path);
+    } catch {
+      val = null;
+    }
+    this.#realpathCache.set(path, val);
+    return val;
+  }
+  addToStatCache(path, val) {
+    this.#statsCache.set(path, val);
+  }
+  async readdir(path) {
+    const cached = this.#readdirCache.get(path);
+    if (cached) {
+      return cached;
+    }
+    const promise = PromisePrototypeThen(readdir(path, { __proto__: null, withFileTypes: true }), null, () => []);
+    this.#readdirCache.set(path, promise);
+    return promise;
+  }
+  readdirSync(path) {
+    const cached = this.#readdirCache.get(path);
+    if (cached) {
+      return cached;
+    }
+    let val;
+    try {
+      val = readdirSync(path, { __proto__: null, withFileTypes: true });
+    } catch {
+      val = [];
+    }
+    this.#readdirCache.set(path, val);
+    return val;
+  }
+  add(path, pattern) {
+    let cache = this.#cache.get(path);
+    if (!cache) {
+      cache = new SafeSet();
+      this.#cache.set(path, cache);
+    }
+    const originalSize = cache.size;
+    pattern.indexes.forEach((index) => cache.add(pattern.cacheKey(index)));
+    return cache.size !== originalSize + pattern.indexes.size;
+  }
+  seen(path, pattern, index) {
+    return this.#cache.get(path)?.has(pattern.cacheKey(index));
+  }
+}
+
+class DepthLimiter {
+  #root;
+  #maxDepth;
+  #cache;
+  #relativeCache = new SafeMap();
+
+  constructor(root, maxDepth, cache) {
+    this.#root = resolve(root);
+    this.#maxDepth = maxDepth;
+    this.#cache = cache;
+  }
+
+  #relativeCandidate(path) {
+    const fullpath = resolve(this.#root, path);
+    const pathFromRoot = relative(this.#root, fullpath);
+    if (isWindows && !isOutsidePath(pathFromRoot)) {
+      return {
+        __proto__: null,
+        pathFromRoot,
+        caseVariantRoot: ancestorAtDepth(fullpath, pathFromRoot),
+        differentPath: caseSensitiveRelative(this.#root, fullpath),
+      };
+    }
+    if (isMacOS && !isAbsolute(pathFromRoot) && isOutsidePath(pathFromRoot)) {
+      const foldedPathFromRoot = relative(
+        StringPrototypeToLowerCase(this.#root),
+        StringPrototypeToLowerCase(fullpath),
+      );
+      if (!isOutsidePath(foldedPathFromRoot)) {
+        return {
+          __proto__: null,
+          pathFromRoot: foldedPathFromRoot,
+          caseVariantRoot: ancestorAtDepth(fullpath, foldedPathFromRoot),
+          differentPath: pathFromRoot,
+        };
+      }
+    }
+    return { __proto__: null, pathFromRoot };
+  }
+
+  #isSamePath(path, otherPath) {
+    if (path === otherPath) {
+      return true;
+    }
+    if (isWindows) {
+      const realPath = this.#cache.identityRealpathSync(path);
+      return realPath !== null &&
+        realPath === this.#cache.identityRealpathSync(otherPath);
+    }
+    const identity = this.#cache.identitySync(path);
+    return identity !== null &&
+      identity === this.#cache.identitySync(otherPath);
+  }
+
+  async #isSamePathAsync(path, otherPath) {
+    if (path === otherPath) {
+      return true;
+    }
+    if (isWindows) {
+      const realPath = await this.#cache.identityRealpath(path);
+      return realPath !== null &&
+        realPath === await this.#cache.identityRealpath(otherPath);
+    }
+    const identity = await this.#cache.identity(path);
+    return identity !== null &&
+      identity === await this.#cache.identity(otherPath);
+  }
+
+  #relativeFromRoot(path) {
+    const cached = this.#relativeCache.get(path);
+    if (cached !== undefined && !(cached instanceof Promise)) {
+      return cached;
+    }
+    const candidate = this.#relativeCandidate(path);
+    const relativePath = candidate.caseVariantRoot === undefined ||
+        this.#isSamePath(this.#root, candidate.caseVariantRoot) ?
+      candidate.pathFromRoot :
+      candidate.differentPath;
+    this.#relativeCache.set(path, relativePath);
+    return relativePath;
+  }
+
+  #relativeFromRootAsync(path) {
+    const cached = this.#relativeCache.get(path);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const candidate = this.#relativeCandidate(path);
+    if (candidate.caseVariantRoot === undefined) {
+      this.#relativeCache.set(path, candidate.pathFromRoot);
+      return candidate.pathFromRoot;
+    }
+    const promise = PromisePrototypeThen(
+      this.#isSamePathAsync(this.#root, candidate.caseVariantRoot),
+      (isSamePath) => (isSamePath ?
+        candidate.pathFromRoot :
+        candidate.differentPath),
+    );
+    this.#relativeCache.set(path, promise);
+    return promise;
+  }
+
+  #ancestorCandidate(path) {
+    const fullpath = resolve(this.#root, path);
+    const rootFromPath = relative(fullpath, this.#root);
+    if (isStrictDescendant(rootFromPath)) {
+      return { __proto__: null, fullpath, needsIdentity: isWindows };
+    }
+    if (isMacOS) {
+      const foldedRootFromPath = relative(
+        StringPrototypeToLowerCase(fullpath),
+        StringPrototypeToLowerCase(this.#root),
+      );
+      if (isStrictDescendant(foldedRootFromPath)) {
+        return { __proto__: null, fullpath, needsIdentity: true };
+      }
+    }
+    return null;
+  }
+
+  #isAncestorOfRoot(path) {
+    const candidate = this.#ancestorCandidate(path);
+    if (candidate === null) {
+      return false;
+    }
+    if (!candidate.needsIdentity) {
+      return true;
+    }
+    const realRoot = this.#cache.identityRealpathSync(this.#root);
+    const realFullpath = this.#cache.identityRealpathSync(candidate.fullpath);
+    if (realRoot === null || realFullpath === null) {
+      return false;
+    }
+    const realRootFromPath = isWindows ?
+      caseSensitiveRelative(realFullpath, realRoot) :
+      relative(realFullpath, realRoot);
+    return isStrictDescendant(realRootFromPath);
+  }
+
+  async #isAncestorOfRootAsync(path) {
+    const candidate = this.#ancestorCandidate(path);
+    if (candidate === null) {
+      return false;
+    }
+    if (!candidate.needsIdentity) {
+      return true;
+    }
+    const realRoot = await this.#cache.identityRealpath(this.#root);
+    const realFullpath =
+      await this.#cache.identityRealpath(candidate.fullpath);
+    if (realRoot === null || realFullpath === null) {
+      return false;
+    }
+    const realRootFromPath = isWindows ?
+      caseSensitiveRelative(realFullpath, realRoot) :
+      relative(realFullpath, realRoot);
+    return isStrictDescendant(realRootFromPath);
+  }
+
+  includes(path) {
+    return pathDepth(this.#relativeFromRoot(path)) <= this.#maxDepth;
+  }
+
+  async includesAsync(path) {
+    return pathDepth(await this.#relativeFromRootAsync(path)) <= this.#maxDepth;
+  }
+
+  canTraverse(path, isAbsolutePattern) {
+    return (isAbsolutePattern && this.#isAncestorOfRoot(path)) ||
+      pathDepth(this.#relativeFromRoot(path)) < this.#maxDepth;
+  }
+
+  async canTraverseAsync(path, isAbsolutePattern) {
+    return (isAbsolutePattern && await this.#isAncestorOfRootAsync(path)) ||
+      pathDepth(await this.#relativeFromRootAsync(path)) < this.#maxDepth;
+  }
+}
+
+function createDepthLimiter(root, maxDepth, cache) {
+  if (maxDepth == null || maxDepth === Infinity) {
+    return null;
+  }
+  validateInteger(maxDepth, 'options.maxDepth', 0);
+  return new DepthLimiter(root, maxDepth, cache);
+}
+
+class Pattern {
+  #pattern;
+  #globStrings;
+  indexes;
+  symlinks;
+  realpaths;
+  last;
+  isAbsolute;
+
+  constructor(pattern, globStrings, indexes, symlinks, isAbsolute, realpaths = new SafeSet()) {
+    this.#pattern = pattern;
+    this.#globStrings = globStrings;
+    this.indexes = indexes;
+    this.symlinks = symlinks;
+    this.isAbsolute = isAbsolute;
+    this.realpaths = realpaths;
+    this.last = pattern.length - 1;
+  }
+
+  isLast(isDirectory) {
+    return this.indexes.has(this.last) ||
+      (this.at(-1) === '' && isDirectory &&
+      this.indexes.has(this.last - 1) && this.at(-2) === lazyMinimatch().GLOBSTAR);
+  }
+  isFirst() {
+    return this.indexes.has(0);
+  }
+  get hasSeenSymlinks() {
+    return ArrayPrototypeSome(ArrayFrom(this.indexes), (i) => !this.symlinks.has(i));
+  }
+  at(index) {
+    return ArrayPrototypeAt(this.#pattern, index);
+  }
+  child(indexes, symlinks = new SafeSet(), realpaths = this.realpaths) {
+    return new Pattern(this.#pattern, this.#globStrings, indexes, symlinks, this.isAbsolute, realpaths);
+  }
+  test(index, path) {
+    if (index > this.#pattern.length) {
+      return false;
+    }
+    const pattern = this.#pattern[index];
+    if (pattern === lazyMinimatch().GLOBSTAR) {
+      return true;
+    }
+    if (typeof pattern === 'string') {
+      return pattern === path;
+    }
+    if (typeof pattern?.test === 'function') {
+      return pattern.test(path);
+    }
+    return false;
+  }
+
+  cacheKey(index) {
+    let key = '';
+    for (let i = index; i < this.#globStrings.length; i++) {
+      key += this.#globStrings[i];
+      if (i !== this.#globStrings.length - 1) {
+        key += '/';
+      }
+    }
+    return key;
+  }
+}
+
+class ResultSet extends SafeSet {
+  #root = '.';
+  #isExcluded = () => false;
+
+  setup(root, isExcludedFn) {
+    this.#root = root;
+    this.#isExcluded = isExcludedFn;
+  }
+
+  add(value) {
+    if (this.#isExcluded(resolve(this.#root, value))) {
+      return false;
+    }
+    super.add(value);
+    return true;
+  }
+}
+
+class Glob {
+  #root;
+  #exclude;
+  #cache = new Cache();
+  #results = new ResultSet();
+  #queue = [];
+  #subpatterns = new SafeMap();
+  #patterns;
+  #withFileTypes;
+  #followSymlinks = false;
+  #depthLimiter;
+  #isExcluded = () => false;
+  constructor(pattern, options = kEmptyObject) {
+    validateObject(options, 'options');
+    const { exclude, cwd, followSymlinks, maxDepth, withFileTypes } = options;
+    this.#root = toPathIfFileURL(cwd) ?? '.';
+    if (followSymlinks != null) {
+      validateBoolean(followSymlinks, 'options.followSymlinks');
+      this.#followSymlinks = followSymlinks;
+    }
+    this.#depthLimiter =
+      createDepthLimiter(this.#root, maxDepth, this.#cache);
+    this.#withFileTypes = !!withFileTypes;
+    if (exclude != null) {
+      validateStringArrayOrFunction(exclude, 'options.exclude');
+      if (ArrayIsArray(exclude)) {
+        assert(typeof this.#root === 'string');
+        // Convert the path part of exclude patterns to absolute paths for
+        // consistent comparison before instantiating matchers.
+        const matchers = exclude
+          .map((pattern) => resolve(this.#root, pattern))
+          // Exclude matching is a pure string comparison with no filesystem
+          // lookups, so unlike include patterns, literal patterns must also
+          // match case-insensitively on case-insensitive platforms.
+          .map((pattern) => createMatcher(pattern, { nocaseMagicOnly: false }));
+        this.#isExcluded = (value) =>
+          matchers.some((matcher) => matcher.match(value));
+        this.#results.setup(this.#root, this.#isExcluded);
+      } else {
+        this.#exclude = exclude;
+      }
+    }
+    let patterns;
+    if (typeof pattern === 'object') {
+      validateStringArray(pattern, 'patterns');
+      patterns = pattern;
+    } else {
+      validateString(pattern, 'patterns');
+      patterns = [pattern];
+    }
+    this.matchers = ArrayPrototypeMap(patterns, (pattern) => createMatcher(pattern));
+    this.#patterns = ArrayPrototypeFlatMap(this.matchers, (matcher) =>
+      ArrayPrototypeMap(matcher.set, (pattern, i) => new Pattern(
+        pattern,
+        matcher.globParts[i],
+        new SafeSet().add(0),
+        new SafeSet(),
+        isAbsolute(ArrayPrototypeJoin(matcher.globParts[i], sep)),
+      )));
+  }
+
+  #addResult(path) {
+    return (this.#depthLimiter === null ||
+      this.#depthLimiter.includes(path)) &&
+      this.#results.add(path);
+  }
+
+  async #addResultAsync(path) {
+    return await this.#depthLimiter.includesAsync(path) &&
+      this.#results.add(path);
+  }
+
+  #canTraverse(path, pattern) {
+    return this.#depthLimiter === null ||
+      this.#depthLimiter.canTraverse(path, pattern.isAbsolute);
+  }
+
+  async #canTraverseAsync(path, pattern) {
+    return this.#depthLimiter.canTraverseAsync(path, pattern.isAbsolute);
+  }
+
+  globSync() {
+    ArrayPrototypePush(this.#queue, { __proto__: null, path: '.', patterns: this.#patterns });
+    while (this.#queue.length > 0) {
+      const item = ArrayPrototypePop(this.#queue);
+      for (let i = 0; i < item.patterns.length; i++) {
+        this.#addSubpatterns(item.path, item.patterns[i]);
+      }
+      this.#subpatterns
+        .forEach((patterns, path) => ArrayPrototypePush(this.#queue, { __proto__: null, path, patterns }));
+      this.#subpatterns.clear();
+    }
+    return ArrayFrom(
+      this.#results,
+      this.#withFileTypes ? (path) => this.#cache.statSync(
+        isAbsolute(path) ?
+          path :
+          join(this.#root, path),
+      ) : undefined,
+    );
+  }
+  #isDirectorySync(path, stat, pattern) {
+    if (stat?.isDirectory()) {
+      return true;
+    }
+    if (!stat?.isSymbolicLink()) {
+      return false;
+    }
+    if (this.#followSymlinks) {
+      return !!this.#cache.followStatSync(path)?.isDirectory();
+    }
+    return pattern.hasSeenSymlinks;
+  }
+  async #isDirectory(path, stat, pattern) {
+    if (stat?.isDirectory()) {
+      return true;
+    }
+    if (!stat?.isSymbolicLink()) {
+      return false;
+    }
+    if (this.#followSymlinks) {
+      return !!(await this.#cache.followStat(path))?.isDirectory();
+    }
+    return pattern.hasSeenSymlinks;
+  }
+  #nextRealpathsSync(path, isDirectory, pattern) {
+    if (!this.#followSymlinks || !isDirectory) {
+      return pattern.realpaths;
+    }
+    const real = this.#cache.realpathSync(path);
+    if (real === null) {
+      return pattern.realpaths;
+    }
+    const realpaths = cloneSet(pattern.realpaths);
+    realpaths.add(real);
+    return realpaths;
+  }
+  async #nextRealpaths(path, isDirectory, pattern) {
+    if (!this.#followSymlinks || !isDirectory) {
+      return pattern.realpaths;
+    }
+    const real = await this.#cache.realpath(path);
+    if (real === null) {
+      return pattern.realpaths;
+    }
+    const realpaths = cloneSet(pattern.realpaths);
+    realpaths.add(real);
+    return realpaths;
+  }
+  async #isCyclic(path, isDirectory, pattern) {
+    if (!this.#followSymlinks || !isDirectory) {
+      return false;
+    }
+    const real = await this.#cache.realpath(path);
+    return real !== null && pattern.realpaths.has(real);
+  }
+  #isCyclicSync(path, isDirectory, pattern) {
+    if (!this.#followSymlinks || !isDirectory) {
+      return false;
+    }
+    const real = this.#cache.realpathSync(path);
+    return real !== null && pattern.realpaths.has(real);
+  }
+  #addSubpattern(path, pattern) {
+    if (this.#isExcluded(path)) {
+      return;
+    }
+    const fullpath = resolve(this.#root, path);
+
+    // If path is a directory, add trailing slash and test patterns again.
+    if (this.#isExcluded(`${fullpath}/`) && this.#cache.statSync(fullpath).isDirectory()) {
+      return;
+    }
+
+    if (this.#exclude) {
+      if (this.#withFileTypes) {
+        const stat = this.#cache.statSync(path);
+        if (stat !== null) {
+          if (this.#exclude(stat)) {
+            return;
+          }
+        }
+      } else if (this.#exclude(path)) {
+        return;
+      }
+    }
+    if (!this.#subpatterns.has(path)) {
+      this.#subpatterns.set(path, [pattern]);
+    } else {
+      ArrayPrototypePush(this.#subpatterns.get(path), pattern);
+    }
+  }
+  #addSubpatterns(path, pattern) {
+    const seen = this.#cache.add(path, pattern);
+    if (seen) {
+      return;
+    }
+    const fullpath = resolve(this.#root, path);
+    const stat = this.#cache.statSync(fullpath);
+    const last = pattern.last;
+    const isDirectory = this.#isDirectorySync(fullpath, stat, pattern);
+    const isLast = pattern.isLast(isDirectory);
+    const isFirst = pattern.isFirst();
+
+    if (this.#isExcluded(fullpath)) {
+      return;
+    }
+    if (isFirst && isWindows && typeof pattern.at(0) === 'string' && StringPrototypeEndsWith(pattern.at(0), ':')) {
+      // Absolute path, go to root
+      this.#addSubpattern(`${pattern.at(0)}\\`, pattern.child(new SafeSet().add(1)));
+      return;
+    }
+    if (isFirst && pattern.at(0) === '') {
+      // Absolute path, go to root
+      this.#addSubpattern('/', pattern.child(new SafeSet().add(1)));
+      return;
+    }
+    if (isFirst && pattern.at(0) === '..') {
+      // Start with .., go to parent
+      this.#addSubpattern('../', pattern.child(new SafeSet().add(1)));
+      return;
+    }
+    if (isFirst && pattern.at(0) === '.') {
+      // Start with ., proceed
+      this.#addSubpattern('.', pattern.child(new SafeSet().add(1)));
+      return;
+    }
+
+    if (isLast && typeof pattern.at(-1) === 'string') {
+      // Add result if it exists
+      const p = pattern.at(-1);
+      const stat = this.#cache.statSync(join(fullpath, p));
+      if (stat && (p || isDirectory)) {
+        this.#addResult(join(path, p));
+      }
+      if (pattern.indexes.size === 1 && pattern.indexes.has(last)) {
+        return;
+      }
+    } else if (isLast && pattern.at(-1) === lazyMinimatch().GLOBSTAR &&
+     (path !== '.' || pattern.at(0) === '.' || (last === 0 && stat))) {
+      // If pattern ends with **, add to results
+      // if path is ".", add it only if pattern starts with "." or pattern is exactly "**"
+      this.#addResult(path);
+    }
+
+    if (!isDirectory ||
+        !this.#canTraverse(path, pattern) ||
+        this.#isCyclicSync(fullpath, isDirectory, pattern)) {
+      return;
+    }
+
+    const nextRealpaths = this.#nextRealpathsSync(fullpath, isDirectory, pattern);
+
+    let children;
+    const firstPattern = pattern.indexes.size === 1 && pattern.at(pattern.indexes.values().next().value);
+    if (typeof firstPattern === 'string') {
+      const stat = this.#cache.statSync(join(fullpath, firstPattern));
+      if (stat) {
+        stat.name = firstPattern;
+        children = [stat];
+      } else {
+        return;
+      }
+    } else {
+      children = this.#cache.readdirSync(fullpath);
+    }
+
+    for (let i = 0; i < children.length; i++) {
+      const entry = children[i];
+      const entryPath = join(path, entry.name);
+      const entryFullpath = join(fullpath, entry.name);
+      this.#cache.addToStatCache(entryFullpath, entry);
+      const entryIsDirectory = entry.isDirectory() ||
+        (this.#followSymlinks && entry.isSymbolicLink() && !!this.#cache.followStatSync(entryFullpath)?.isDirectory());
+
+      const subPatterns = new SafeSet();
+      const nSymlinks = new SafeSet();
+      for (const index of pattern.indexes) {
+        // For each child, check potential patterns
+        const current = pattern.at(index);
+        const nextIndex = index + 1;
+        const next = pattern.at(nextIndex);
+        const fromSymlink = !this.#followSymlinks && pattern.symlinks.has(index);
+
+        if (current === lazyMinimatch().GLOBSTAR) {
+          const isDot = entry.name[0] === '.';
+          const nextMatches = pattern.test(nextIndex, entry.name);
+
+          let nextNonGlobIndex = nextIndex;
+          while (pattern.at(nextNonGlobIndex) === lazyMinimatch().GLOBSTAR) {
+            nextNonGlobIndex++;
+          }
+
+          const matchesDot = isDot && pattern.test(nextNonGlobIndex, entry.name);
+
+          if ((isDot && !matchesDot) ||
+              (this.#exclude && this.#exclude(this.#withFileTypes ? entry : entry.name))) {
+            continue;
+          }
+          if (!fromSymlink && entryIsDirectory) {
+            // If directory, add ** to its potential patterns
+            subPatterns.add(index);
+          } else if (!fromSymlink && index === last) {
+            // If ** is last, add to results
+            this.#addResult(entryPath);
+          }
+
+          // Any pattern after ** is also a potential pattern
+          // so we can already test it here
+          if (nextMatches && nextIndex === last && !isLast) {
+            // If next pattern is the last one, add to results
+            this.#addResult(entryPath);
+          } else if (nextMatches && entryIsDirectory) {
+            // Pattern matched, meaning two patterns forward
+            // are also potential patterns
+            // e.g **/b/c when entry is a/b - add c to potential patterns
+            subPatterns.add(index + 2);
+          }
+          if ((nextMatches || pattern.at(0) === '.') &&
+           entryIsDirectory && !fromSymlink) {
+            // If pattern after ** matches, or pattern starts with "."
+            // and entry is a directory, add to potential patterns
+            subPatterns.add(nextIndex);
+          }
+
+          if (!this.#followSymlinks && entry.isSymbolicLink()) {
+            nSymlinks.add(index);
+          }
+
+          if (next === '..' && entryIsDirectory) {
+            // In case pattern is "**/..",
+            // both parent and current directory should be added to the queue
+            // if this is the last pattern, add to results instead
+            const parent = join(path, '..');
+            if (nextIndex < last) {
+              if (!this.#subpatterns.has(path) && !this.#cache.seen(path, pattern, nextIndex + 1)) {
+                this.#subpatterns.set(path, [pattern.child(new SafeSet().add(nextIndex + 1))]);
+              }
+              if (!this.#subpatterns.has(parent) && !this.#cache.seen(parent, pattern, nextIndex + 1)) {
+                this.#subpatterns.set(parent, [pattern.child(new SafeSet().add(nextIndex + 1))]);
+              }
+            } else {
+              if (!this.#cache.seen(path, pattern, nextIndex)) {
+                this.#cache.add(path, pattern.child(new SafeSet().add(nextIndex)));
+                this.#addResult(path);
+              }
+              if (!this.#cache.seen(path, pattern, nextIndex) || !this.#cache.seen(parent, pattern, nextIndex)) {
+                this.#cache.add(parent, pattern.child(new SafeSet().add(nextIndex)));
+                this.#addResult(parent);
+              }
+            }
+          }
+        }
+        if (typeof current === 'string') {
+          if (pattern.test(index, entry.name) && index !== last) {
+            // If current pattern matches entry name
+            // the next pattern is a potential pattern
+            subPatterns.add(nextIndex);
+          } else if (current === '.' && pattern.test(nextIndex, entry.name)) {
+            // If current pattern is ".", proceed to test next pattern
+            if (nextIndex === last) {
+              this.#addResult(entryPath);
+            } else {
+              subPatterns.add(nextIndex + 1);
+            }
+          }
+        }
+        if (typeof current === 'object' && pattern.test(index, entry.name)) {
+          // If current pattern is a regex that matches entry name (e.g *.js)
+          // add next pattern to potential patterns, or to results if it's the last pattern
+          if (index === last) {
+            this.#addResult(entryPath);
+          } else if (entryIsDirectory) {
+            subPatterns.add(nextIndex);
+          }
+        }
+      }
+      if (subPatterns.size > 0) {
+        // If there are potential patterns, add to queue
+        this.#addSubpattern(entryPath, pattern.child(subPatterns, nSymlinks, nextRealpaths));
+      }
+    }
+  }
+
+
+  async* glob() {
+    ArrayPrototypePush(this.#queue, { __proto__: null, path: '.', patterns: this.#patterns });
+    while (this.#queue.length > 0) {
+      const item = ArrayPrototypePop(this.#queue);
+      for (let i = 0; i < item.patterns.length; i++) {
+        yield* this.#iterateSubpatterns(item.path, item.patterns[i]);
+      }
+      this.#subpatterns
+        .forEach((patterns, path) => ArrayPrototypePush(this.#queue, { __proto__: null, path, patterns }));
+      this.#subpatterns.clear();
+    }
+  }
+  async* #iterateSubpatterns(path, pattern) {
+    const seen = this.#cache.add(path, pattern);
+    if (seen) {
+      return;
+    }
+    const fullpath = resolve(this.#root, path);
+    const stat = await this.#cache.stat(fullpath);
+    const last = pattern.last;
+    const isDirectory = await this.#isDirectory(fullpath, stat, pattern);
+    const isLast = pattern.isLast(isDirectory);
+    const isFirst = pattern.isFirst();
+    const finiteDepth = this.#depthLimiter !== null;
+
+    if (this.#isExcluded(fullpath)) {
+      return;
+    }
+    if (isFirst && isWindows && typeof pattern.at(0) === 'string' && StringPrototypeEndsWith(pattern.at(0), ':')) {
+      // Absolute path, go to root
+      this.#addSubpattern(`${pattern.at(0)}\\`, pattern.child(new SafeSet().add(1)));
+      return;
+    }
+    if (isFirst && pattern.at(0) === '') {
+      // Absolute path, go to root
+      this.#addSubpattern('/', pattern.child(new SafeSet().add(1)));
+      return;
+    }
+    if (isFirst && pattern.at(0) === '..') {
+      // Start with .., go to parent
+      this.#addSubpattern('../', pattern.child(new SafeSet().add(1)));
+      return;
+    }
+    if (isFirst && pattern.at(0) === '.') {
+      // Start with ., proceed
+      this.#addSubpattern('.', pattern.child(new SafeSet().add(1)));
+      return;
+    }
+
+    if (isLast && typeof pattern.at(-1) === 'string') {
+      // Add result if it exists
+      const p = pattern.at(-1);
+      const stat = await this.#cache.stat(join(fullpath, p));
+      if (stat && (p || isDirectory)) {
+        const result = join(path, p);
+        if (!this.#results.has(result)) {
+          if (!finiteDepth ?
+            this.#results.add(result) :
+            await this.#addResultAsync(result)) {
+            yield this.#withFileTypes ? stat : result;
+          }
+        }
+      }
+      if (pattern.indexes.size === 1 && pattern.indexes.has(last)) {
+        return;
+      }
+    } else if (isLast && pattern.at(-1) === lazyMinimatch().GLOBSTAR &&
+     (path !== '.' || pattern.at(0) === '.' || (last === 0 && stat))) {
+      // If pattern ends with **, add to results
+      // if path is ".", add it only if pattern starts with "." or pattern is exactly "**"
+      if (!this.#results.has(path)) {
+        if (!finiteDepth ?
+          this.#results.add(path) :
+          await this.#addResultAsync(path)) {
+          yield this.#withFileTypes ? stat : path;
+        }
+      }
+    }
+
+    let canTraverse = true;
+    if (isDirectory && finiteDepth) {
+      canTraverse = await this.#canTraverseAsync(path, pattern);
+    }
+    if (!isDirectory ||
+        !canTraverse ||
+        await this.#isCyclic(fullpath, isDirectory, pattern)) {
+      return;
+    }
+
+    const nextRealpaths = await this.#nextRealpaths(fullpath, isDirectory, pattern);
+
+    let children;
+    const firstPattern = pattern.indexes.size === 1 && pattern.at(pattern.indexes.values().next().value);
+    if (typeof firstPattern === 'string') {
+      const stat = await this.#cache.stat(join(fullpath, firstPattern));
+      if (stat) {
+        stat.name = firstPattern;
+        children = [stat];
+      } else {
+        return;
+      }
+    } else {
+      children = await this.#cache.readdir(fullpath);
+    }
+
+    for (let i = 0; i < children.length; i++) {
+      const entry = children[i];
+      const entryPath = join(path, entry.name);
+      const entryFullpath = join(fullpath, entry.name);
+      this.#cache.addToStatCache(entryFullpath, entry);
+      const entryIsDirectory = entry.isDirectory() ||
+        (this.#followSymlinks &&
+         entry.isSymbolicLink() &&
+         !!(await this.#cache.followStat(entryFullpath))?.isDirectory());
+
+      const subPatterns = new SafeSet();
+      const nSymlinks = new SafeSet();
+      for (const index of pattern.indexes) {
+        // For each child, check potential patterns
+        const current = pattern.at(index);
+        const nextIndex = index + 1;
+        const next = pattern.at(nextIndex);
+        const fromSymlink = !this.#followSymlinks && pattern.symlinks.has(index);
+
+        if (current === lazyMinimatch().GLOBSTAR) {
+          const isDot = entry.name[0] === '.';
+          const nextMatches = pattern.test(nextIndex, entry.name);
+
+          let nextNonGlobIndex = nextIndex;
+          while (pattern.at(nextNonGlobIndex) === lazyMinimatch().GLOBSTAR) {
+            nextNonGlobIndex++;
+          }
+
+          const matchesDot = isDot && pattern.test(nextNonGlobIndex, entry.name);
+
+          if ((isDot && !matchesDot) ||
+              (this.#exclude && this.#exclude(this.#withFileTypes ? entry : entry.name))) {
+            continue;
+          }
+          if (!fromSymlink && entryIsDirectory) {
+            // If directory, add ** to its potential patterns
+            subPatterns.add(index);
+          } else if (!fromSymlink && index === last) {
+            // If ** is last, add to results
+            if (!this.#results.has(entryPath) &&
+                (!finiteDepth ?
+                  this.#results.add(entryPath) :
+                  await this.#addResultAsync(entryPath))) {
+              yield this.#withFileTypes ? entry : entryPath;
+            }
+          }
+
+          // Any pattern after ** is also a potential pattern
+          // so we can already test it here
+          if (nextMatches && nextIndex === last && !isLast) {
+            // If next pattern is the last one, add to results
+            if (!this.#results.has(entryPath) &&
+                (!finiteDepth ?
+                  this.#results.add(entryPath) :
+                  await this.#addResultAsync(entryPath))) {
+              yield this.#withFileTypes ? entry : entryPath;
+            }
+          } else if (nextMatches && entryIsDirectory) {
+            // Pattern matched, meaning two patterns forward
+            // are also potential patterns
+            // e.g **/b/c when entry is a/b - add c to potential patterns
+            subPatterns.add(index + 2);
+          }
+          if ((nextMatches || pattern.at(0) === '.') &&
+           entryIsDirectory && !fromSymlink) {
+            // If pattern after ** matches, or pattern starts with "."
+            // and entry is a directory, add to potential patterns
+            subPatterns.add(nextIndex);
+          }
+
+          if (!this.#followSymlinks && entry.isSymbolicLink()) {
+            nSymlinks.add(index);
+          }
+
+          if (next === '..' && entryIsDirectory) {
+            // In case pattern is "**/..",
+            // both parent and current directory should be added to the queue
+            // if this is the last pattern, add to results instead
+            const parent = join(path, '..');
+            if (nextIndex < last) {
+              if (!this.#subpatterns.has(path) && !this.#cache.seen(path, pattern, nextIndex + 1)) {
+                this.#subpatterns.set(path, [pattern.child(new SafeSet().add(nextIndex + 1))]);
+              }
+              if (!this.#subpatterns.has(parent) && !this.#cache.seen(parent, pattern, nextIndex + 1)) {
+                this.#subpatterns.set(parent, [pattern.child(new SafeSet().add(nextIndex + 1))]);
+              }
+            } else {
+              if (!this.#cache.seen(path, pattern, nextIndex)) {
+                this.#cache.add(path, pattern.child(new SafeSet().add(nextIndex)));
+                if (!this.#results.has(path)) {
+                  if (!finiteDepth ?
+                    this.#results.add(path) :
+                    await this.#addResultAsync(path)) {
+                    yield this.#withFileTypes ? this.#cache.statSync(fullpath) : path;
+                  }
+                }
+              }
+              if (!this.#cache.seen(path, pattern, nextIndex) || !this.#cache.seen(parent, pattern, nextIndex)) {
+                this.#cache.add(parent, pattern.child(new SafeSet().add(nextIndex)));
+                if (!this.#results.has(parent)) {
+                  if (!finiteDepth ?
+                    this.#results.add(parent) :
+                    await this.#addResultAsync(parent)) {
+                    yield this.#withFileTypes ? this.#cache.statSync(join(this.#root, parent)) : parent;
+                  }
+                }
+              }
+            }
+          }
+        }
+        if (typeof current === 'string') {
+          if (pattern.test(index, entry.name) && index !== last) {
+            // If current pattern matches entry name
+            // the next pattern is a potential pattern
+            subPatterns.add(nextIndex);
+          } else if (current === '.' && pattern.test(nextIndex, entry.name)) {
+            // If current pattern is ".", proceed to test next pattern
+            if (nextIndex === last) {
+              if (!this.#results.has(entryPath)) {
+                if (!finiteDepth ?
+                  this.#results.add(entryPath) :
+                  await this.#addResultAsync(entryPath)) {
+                  yield this.#withFileTypes ? entry : entryPath;
+                }
+              }
+            } else {
+              subPatterns.add(nextIndex + 1);
+            }
+          }
+        }
+        if (typeof current === 'object' && pattern.test(index, entry.name)) {
+          // If current pattern is a regex that matches entry name (e.g *.js)
+          // add next pattern to potential patterns, or to results if it's the last pattern
+          if (index === last) {
+            if (!this.#results.has(entryPath)) {
+              if (!finiteDepth ?
+                this.#results.add(entryPath) :
+                await this.#addResultAsync(entryPath)) {
+                yield this.#withFileTypes ? entry : entryPath;
+              }
+            }
+          } else if (entryIsDirectory) {
+            subPatterns.add(nextIndex);
+          }
+        }
+      }
+      if (subPatterns.size > 0) {
+        // If there are potential patterns, add to queue
+        this.#addSubpattern(entryPath, pattern.child(subPatterns, nSymlinks, nextRealpaths));
+      }
+    }
+  }
+}
+
+function glob(pattern, options, callback) {
+  if (typeof options === 'function') {
+    callback = options;
+    options = undefined;
+  }
+  if (typeof callback !== 'function') throw new ERR_INVALID_ARG_TYPE('cb', 'function', callback);
+  PromisePrototypeThen(
+    Array.fromAsync(new Glob(pattern, options).glob()),
+    (res) => callback(null, res),
+    callback,
+  );
+}
+
+function globSync(pattern, options) {
+  return new Glob(pattern, options).globSync();
+}
+
+async function* globAsync(pattern, options) {
+  yield* new Glob(pattern, options).glob();
+}
+
+module.exports = {
+  __proto__: null,
+  Glob,
+  glob,
+  globSync,
+  globAsync,
+};

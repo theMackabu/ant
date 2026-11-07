@@ -18,37 +18,36 @@ diff --git a/src/api.ts b/src/api.ts
      platform: currentPlatform(),
    };
  }
-@@ -2119,6 +2119,18 @@
-  * for by count, and a `debug` log line otherwise. A pool that cannot load is the plain
-  * registry, as with 0.
-  */
-+async function lockedNames(ctx: Context): Promise<string[]> {
+@@ -2112,6 +2112,17 @@
+   close(): void;
+ }
+ 
++function lockedNames(ctx: Context): string[] {
 +  const dir = ctx.root ?? globalThis.process.cwd();
 +  try {
-+    if (lockSource(ctx, dir).foreign) return [];
-+    const text = await lockText(ctx, dir);
-+    const keys = Object.keys((text && (JSON.parse(text) as { packages?: object }).packages) || {});
++    const text = builtin.fs.readFileSync(builtin.path.join(dir, LOCKFILE), "utf8");
++    const keys = Object.keys((JSON.parse(text) as { packages?: object }).packages ?? {});
 +    return [...new Set(keys.map((key) => key.slice(0, key.indexOf("@", 1))))];
 +  } catch {
 +    return [];
 +  }
 +}
 +
- async function openRegistry(
-   ctx: Context,
-   size = ctx.resolvePool,
-@@ -2129,8 +2141,9 @@
+ /**
+  * The registry, read on worker threads unless `resolvePool` says how many or 0. Loaded here
+  * and not at the top so that an install with nothing to resolve never has it; its threads
+@@ -2129,8 +2140,9 @@
      ctx.early = undefined;
      return await early;
    }
 -  const { registry, scopes, auth, before, releaseAgeExclude: exclude } = settings(ctx);
 +  const { registry, scopes, fallback, auth, before, releaseAgeExclude: exclude } = settings(ctx);
    const { offline, preferOffline } = settings(ctx);
-+  const locked = fallback ? await lockedNames(ctx) : undefined;
++  const locked = fallback ? lockedNames(ctx) : undefined;
    const mode = offline ? "only" : preferOffline ? "prefer" : "revalidate";
    const { createDocumentCache, metadataDir } = await import("./metadata.ts");
    // Never the store on the project's mount (`storeOf`): documents are read, not linked, and one
-@@ -2144,6 +2157,8 @@
+@@ -2144,6 +2156,8 @@
      ? loaded.createRegistryPool({
          registry,
          scopes,
@@ -57,7 +56,7 @@ diff --git a/src/api.ts b/src/api.ts
          auth,
          before,
          exclude,
-@@ -2159,6 +2174,8 @@
+@@ -2159,6 +2173,8 @@
          ...createRegistry({
            registry,
            scopes,

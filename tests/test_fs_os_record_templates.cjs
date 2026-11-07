@@ -30,7 +30,7 @@ function checkStats(stat, size) {
   for (const key of statKeys.slice(0, 14)) assert.strictEqual(typeof stat[key], 'number', key);
   for (const key of dateKeys) {
     assert(stat[key] instanceof Date);
-    assert.strictEqual(stat[key].getTime(), stat[`${key}Ms`]);
+    assert.strictEqual(stat[key].getTime(), Math.round(stat[`${key}Ms`]));
   }
   assert.notStrictEqual(stat.atime, stat.mtime);
 }

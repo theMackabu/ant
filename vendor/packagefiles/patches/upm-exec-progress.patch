@@ -10,7 +10,7 @@ diff --git a/src/api.ts b/src/api.ts
    experimental?: Experimental;
  }
  
-@@ -1396,9 +1398,12 @@
+@@ -1398,9 +1400,12 @@
    if (call && args.length > 0) throw fail("exec takes a call line or args, not both", "EOPTION");
    const log = options.log ?? (() => {});
    const cwd = builtin.path.resolve(options.dir ?? globalThis.process.cwd());

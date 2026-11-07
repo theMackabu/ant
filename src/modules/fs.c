@@ -123,6 +123,7 @@ struct fs_request_s {
   int error_code;
   int with_file_types;
   bool buffer_encoding;
+  bool bigint;
   bool retried;
   bool stream_destroy_pending;
   ant_value_t stream_fd;
@@ -265,9 +266,14 @@ typedef struct {
 } fs_watchfile_options_t;
 
 typedef struct {
+  int64_t sec;
+  int64_t nsec;
+} fs_stat_time_t;
+
+typedef struct {
   mode_t mode;
-  double dev, ino, nlink, uid, gid, rdev, size, blksize, blocks;
-  double atime_ms, mtime_ms, ctime_ms, birthtime_ms;
+  uint64_t dev, ino, nlink, uid, gid, rdev, size, blksize, blocks;
+  fs_stat_time_t atime, mtime, ctime, birthtime;
 } fs_stat_fields_t;
 
 static constexpr uint32_t FS_WATCHER_NATIVE_TAG = Ant_NativeTag("FSWT");
@@ -1136,13 +1142,20 @@ typedef enum {
   FS_STATS_MTIME,
   FS_STATS_CTIME,
   FS_STATS_BIRTHTIME,
+  FS_STATS_ATIME_NS,
+  FS_STATS_MTIME_NS,
+  FS_STATS_CTIME_NS,
+  FS_STATS_BIRTHTIME_NS,
 } fs_stats_slot_t;
 
 enum { FS_IO_BYTES, FS_IO_BUFFER };
 
-static ant_value_t fs_new_stats_record(ant_t *js) {
-  ant_value_t seed = js->mutable_roots.fs_stats_template;
-  
+static ant_value_t fs_new_stats_record(ant_t *js, bool bigint) {
+  ant_value_t *cache = bigint
+    ? &js->mutable_roots.fs_bigint_stats_template
+    : &js->mutable_roots.fs_stats_template;
+  ant_value_t seed = *cache;
+
   if (vtype(seed) != kTypeObject) {
     seed = Ant_Object_CreateBare(js);
     if (is_err(seed)) return seed;
@@ -1168,10 +1181,16 @@ static ant_value_t fs_new_stats_record(ant_t *js) {
     js_mkprop_fast(js, seed, "mtime", 5, Ant_Value_Undefined);
     js_mkprop_fast(js, seed, "ctime", 5, Ant_Value_Undefined);
     js_mkprop_fast(js, seed, "birthtime", 9, Ant_Value_Undefined);
+    if (bigint) {
+      js_mkprop_fast(js, seed, "atimeNs", 7, Ant_Value_Undefined);
+      js_mkprop_fast(js, seed, "mtimeNs", 7, Ant_Value_Undefined);
+      js_mkprop_fast(js, seed, "ctimeNs", 7, Ant_Value_Undefined);
+      js_mkprop_fast(js, seed, "birthtimeNs", 11, Ant_Value_Undefined);
+    }
     GC_ROOT_RESTORE(js, mark);
-    
+
     if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
-    js->mutable_roots.fs_stats_template = seed;
+    *cache = seed;
   }
   
   return js_mkobj_from_template(js, seed);
@@ -1222,8 +1241,54 @@ static bool fs_stats_set_date(ant_t *js, ant_value_t record, fs_stats_slot_t slo
   return true;
 }
 
-static ant_value_t fs_stats_object_new(ant_t *js, const fs_stat_fields_t *f) {
-  ant_value_t stat_obj = fs_new_stats_record(js);
+static double fs_stat_time_ms(fs_stat_time_t t) {
+  return (double)t.sec * 1000.0 + (double)t.nsec / 1e6;
+}
+
+static ant_value_t fs_bigint_from_u64(ant_t *js, uint64_t value) {
+  char digits[24];
+  int len = snprintf(digits, sizeof(digits), "%llu", (unsigned long long)value);
+  return js_mkbigint(js, digits, (size_t)len, false);
+}
+
+static ant_value_t fs_bigint_from_i64(ant_t *js, int64_t value) {
+  uint64_t magnitude = value < 0 ? (uint64_t)0 - (uint64_t)value : (uint64_t)value;
+  char digits[24];
+  int len = snprintf(digits, sizeof(digits), "%llu", (unsigned long long)magnitude);
+  return js_mkbigint(js, digits, (size_t)len, value < 0);
+}
+
+static bool fs_stats_set_bigint(ant_t *js, ant_value_t record, uint32_t slot, ant_value_t value) {
+  if (is_err(value)) return false;
+  ant_object_t *obj = js_obj_ptr(record);
+  ant_object_prop_set_unchecked(obj, slot, value);
+  gc_write_barrier(js, obj, value);
+  return true;
+}
+
+static bool fs_stats_fill_bigint(ant_t *js, ant_value_t record, const fs_stat_fields_t *f) {
+  const uint64_t ints[] = {
+    f->dev, f->ino, f->size, (uint64_t)f->mode, f->nlink,
+    f->uid, f->gid, f->rdev, f->blksize, f->blocks,
+  };
+  const fs_stat_time_t *times[] = { &f->atime, &f->mtime, &f->ctime, &f->birthtime };
+
+  for (uint32_t i = 0; i < countof(ints); i++)
+    if (!fs_stats_set_bigint(js, record, FS_STATS_DEV + i, fs_bigint_from_u64(js, ints[i]))) return false;
+
+  for (uint32_t i = 0; i < countof(times); i++) {
+    const fs_stat_time_t *t = times[i];
+    int64_t ms = t->sec * 1000 + t->nsec / 1000000;
+    int64_t ns = t->sec * 1000000000 + t->nsec;
+    if (!fs_stats_set_bigint(js, record, FS_STATS_ATIME_MS + i, fs_bigint_from_i64(js, ms))) return false;
+    if (!fs_stats_set_bigint(js, record, FS_STATS_ATIME_NS + i, fs_bigint_from_i64(js, ns))) return false;
+  }
+
+  return true;
+}
+
+static ant_value_t fs_stats_object_new(ant_t *js, const fs_stat_fields_t *f, bool bigint) {
+  ant_value_t stat_obj = fs_new_stats_record(js, bigint);
   if (is_err(stat_obj)) return stat_obj;
   
   GC_ROOT_SAVE(mark, js);
@@ -1234,26 +1299,33 @@ static ant_value_t fs_stats_object_new(ant_t *js, const fs_stat_fields_t *f) {
   js_set_slot(stat_obj, SLOT_DATA, Ant_Value_FromNumber((double)f->mode));
   ant_object_t *obj = js_obj_ptr(stat_obj);
   
-  ant_object_prop_set_unchecked(obj, FS_STATS_DEV, Ant_Value_FromNumber(f->dev));
-  ant_object_prop_set_unchecked(obj, FS_STATS_INO, Ant_Value_FromNumber(f->ino));
-  ant_object_prop_set_unchecked(obj, FS_STATS_SIZE, Ant_Value_FromNumber(f->size));
+  double atime_ms = fs_stat_time_ms(f->atime);
+  double mtime_ms = fs_stat_time_ms(f->mtime);
+  double ctime_ms = fs_stat_time_ms(f->ctime);
+  double birthtime_ms = fs_stat_time_ms(f->birthtime);
+  
+  ant_object_prop_set_unchecked(obj, FS_STATS_DEV, Ant_Value_FromNumber((double)f->dev));
+  ant_object_prop_set_unchecked(obj, FS_STATS_INO, Ant_Value_FromNumber((double)f->ino));
+  ant_object_prop_set_unchecked(obj, FS_STATS_SIZE, Ant_Value_FromNumber((double)f->size));
   ant_object_prop_set_unchecked(obj, FS_STATS_MODE, Ant_Value_FromNumber((double)f->mode));
-  ant_object_prop_set_unchecked(obj, FS_STATS_NLINK, Ant_Value_FromNumber(f->nlink));
-  ant_object_prop_set_unchecked(obj, FS_STATS_UID, Ant_Value_FromNumber(f->uid));
-  ant_object_prop_set_unchecked(obj, FS_STATS_GID, Ant_Value_FromNumber(f->gid));
-  ant_object_prop_set_unchecked(obj, FS_STATS_RDEV, Ant_Value_FromNumber(f->rdev));
-  ant_object_prop_set_unchecked(obj, FS_STATS_BLKSIZE, Ant_Value_FromNumber(f->blksize));
-  ant_object_prop_set_unchecked(obj, FS_STATS_BLOCKS, Ant_Value_FromNumber(f->blocks));
-  ant_object_prop_set_unchecked(obj, FS_STATS_ATIME_MS, Ant_Value_FromNumber(f->atime_ms));
-  ant_object_prop_set_unchecked(obj, FS_STATS_MTIME_MS, Ant_Value_FromNumber(f->mtime_ms));
-  ant_object_prop_set_unchecked(obj, FS_STATS_CTIME_MS, Ant_Value_FromNumber(f->ctime_ms));
-  ant_object_prop_set_unchecked(obj, FS_STATS_BIRTHTIME_MS, Ant_Value_FromNumber(f->birthtime_ms));
+  ant_object_prop_set_unchecked(obj, FS_STATS_NLINK, Ant_Value_FromNumber((double)f->nlink));
+  ant_object_prop_set_unchecked(obj, FS_STATS_UID, Ant_Value_FromNumber((double)f->uid));
+  ant_object_prop_set_unchecked(obj, FS_STATS_GID, Ant_Value_FromNumber((double)f->gid));
+  ant_object_prop_set_unchecked(obj, FS_STATS_RDEV, Ant_Value_FromNumber((double)f->rdev));
+  ant_object_prop_set_unchecked(obj, FS_STATS_BLKSIZE, Ant_Value_FromNumber((double)f->blksize));
+  ant_object_prop_set_unchecked(obj, FS_STATS_BLOCKS, Ant_Value_FromNumber((double)f->blocks));
+  ant_object_prop_set_unchecked(obj, FS_STATS_ATIME_MS, Ant_Value_FromNumber(atime_ms));
+  ant_object_prop_set_unchecked(obj, FS_STATS_MTIME_MS, Ant_Value_FromNumber(mtime_ms));
+  ant_object_prop_set_unchecked(obj, FS_STATS_CTIME_MS, Ant_Value_FromNumber(ctime_ms));
+  ant_object_prop_set_unchecked(obj, FS_STATS_BIRTHTIME_MS, Ant_Value_FromNumber(birthtime_ms));
 
+  double (*date_ms)(double) = bigint ? trunc : round;
   if (
-    !fs_stats_set_date(js, stat_obj, FS_STATS_ATIME, f->atime_ms) ||
-    !fs_stats_set_date(js, stat_obj, FS_STATS_MTIME, f->mtime_ms) ||
-    !fs_stats_set_date(js, stat_obj, FS_STATS_CTIME, f->ctime_ms) ||
-    !fs_stats_set_date(js, stat_obj, FS_STATS_BIRTHTIME, f->birthtime_ms)
+    !fs_stats_set_date(js, stat_obj, FS_STATS_ATIME, date_ms(atime_ms)) ||
+    !fs_stats_set_date(js, stat_obj, FS_STATS_MTIME, date_ms(mtime_ms)) ||
+    !fs_stats_set_date(js, stat_obj, FS_STATS_CTIME, date_ms(ctime_ms)) ||
+    !fs_stats_set_date(js, stat_obj, FS_STATS_BIRTHTIME, date_ms(birthtime_ms)) ||
+    (bigint && !fs_stats_fill_bigint(js, stat_obj, f))
   ) {
     GC_ROOT_RESTORE(js, mark);
     return Ant_Exception_Current(js);
@@ -1263,81 +1335,81 @@ static ant_value_t fs_stats_object_new(ant_t *js, const fs_stat_fields_t *f) {
   return stat_obj;
 }
 
-static double uv_ts_to_ms(uv_timespec_t ts) {
-  return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
-}
-
-static double posix_ts_to_ms(struct timespec ts) {
-  return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+static fs_stat_time_t uv_ts_to_stat_time(uv_timespec_t ts) {
+  return (fs_stat_time_t){ (int64_t)ts.tv_sec, (int64_t)ts.tv_nsec };
 }
 
 #ifdef _WIN32
-  #define POSIX_ATIME_MS(st) ((double)(st)->st_atime * 1000.0)
-  #define POSIX_MTIME_MS(st) ((double)(st)->st_mtime * 1000.0)
-  #define POSIX_CTIME_MS(st) ((double)(st)->st_ctime * 1000.0)
-  #define POSIX_BIRTH_MS(st) 0.0
-#elif defined(__APPLE__)
-  #define POSIX_ATIME_MS(st) posix_ts_to_ms((st)->st_atimespec)
-  #define POSIX_MTIME_MS(st) posix_ts_to_ms((st)->st_mtimespec)
-  #define POSIX_CTIME_MS(st) posix_ts_to_ms((st)->st_ctimespec)
-  #define POSIX_BIRTH_MS(st) posix_ts_to_ms((st)->st_birthtimespec)
-#elif defined(__linux__)
-  #define POSIX_ATIME_MS(st) posix_ts_to_ms((st)->st_atim)
-  #define POSIX_MTIME_MS(st) posix_ts_to_ms((st)->st_mtim)
-  #define POSIX_CTIME_MS(st) posix_ts_to_ms((st)->st_ctim)
-  #define POSIX_BIRTH_MS(st) 0.0
+  #define POSIX_TIME(st, field) ((fs_stat_time_t){ (int64_t)(st)->st_##field, 0 })
+  #define POSIX_ATIME(st) POSIX_TIME(st, atime)
+  #define POSIX_MTIME(st) POSIX_TIME(st, mtime)
+  #define POSIX_CTIME(st) POSIX_TIME(st, ctime)
+  #define POSIX_BIRTH(st) ((fs_stat_time_t){ 0, 0 })
 #else
-  #define POSIX_ATIME_MS(st) posix_ts_to_ms((st)->st_atim)
-  #define POSIX_MTIME_MS(st) posix_ts_to_ms((st)->st_mtim)
-  #define POSIX_CTIME_MS(st) posix_ts_to_ms((st)->st_ctim)
-  #define POSIX_BIRTH_MS(st) 0.0
+  #define POSIX_TIMESPEC(ts) ((fs_stat_time_t){ (int64_t)(ts).tv_sec, (int64_t)(ts).tv_nsec })
+  #if defined(__APPLE__)
+    #define POSIX_ATIME(st) POSIX_TIMESPEC((st)->st_atimespec)
+    #define POSIX_MTIME(st) POSIX_TIMESPEC((st)->st_mtimespec)
+    #define POSIX_CTIME(st) POSIX_TIMESPEC((st)->st_ctimespec)
+    #define POSIX_BIRTH(st) POSIX_TIMESPEC((st)->st_birthtimespec)
+  #else
+    #define POSIX_ATIME(st) POSIX_TIMESPEC((st)->st_atim)
+    #define POSIX_MTIME(st) POSIX_TIMESPEC((st)->st_mtim)
+    #define POSIX_CTIME(st) POSIX_TIMESPEC((st)->st_ctim)
+    #define POSIX_BIRTH(st) ((fs_stat_time_t){ 0, 0 })
+  #endif
 #endif
 
 static const fs_stat_fields_t fs_stat_fields_zero = {0};
 
-static ant_value_t fs_stats_object_from_uv(ant_t *js, const uv_stat_t *st) {
-  if (!st) return fs_stats_object_new(js, &fs_stat_fields_zero);
+static ant_value_t fs_stats_object_from_uv(ant_t *js, const uv_stat_t *st, bool bigint) {
+  if (!st) return fs_stats_object_new(js, &fs_stat_fields_zero, bigint);
   return fs_stats_object_new(js, &(fs_stat_fields_t){
-    .dev          = (double)st->st_dev,
-    .ino          = (double)st->st_ino,
-    .mode         = (mode_t)st->st_mode,
-    .nlink        = (double)st->st_nlink,
-    .size         = (double)st->st_size,
-    .uid          = (double)st->st_uid,
-    .gid          = (double)st->st_gid,
-    .rdev         = (double)st->st_rdev,
-    .blksize      = (double)st->st_blksize,
-    .blocks       = (double)st->st_blocks,
-    .atime_ms     = uv_ts_to_ms(st->st_atim),
-    .mtime_ms     = uv_ts_to_ms(st->st_mtim),
-    .ctime_ms     = uv_ts_to_ms(st->st_ctim),
-    .birthtime_ms = uv_ts_to_ms(st->st_birthtim),
-  });
+    .dev       = st->st_dev,
+    .ino       = st->st_ino,
+    .mode      = (mode_t)st->st_mode,
+    .nlink     = st->st_nlink,
+    .size      = st->st_size,
+    .uid       = st->st_uid,
+    .gid       = st->st_gid,
+    .rdev      = st->st_rdev,
+    .blksize   = st->st_blksize,
+    .blocks    = st->st_blocks,
+    .atime     = uv_ts_to_stat_time(st->st_atim),
+    .mtime     = uv_ts_to_stat_time(st->st_mtim),
+    .ctime     = uv_ts_to_stat_time(st->st_ctim),
+    .birthtime = uv_ts_to_stat_time(st->st_birthtim),
+  }, bigint);
 }
 
-static ant_value_t fs_stats_object_from_posix(ant_t *js, const struct stat *st) {
-  if (!st) return fs_stats_object_new(js, &fs_stat_fields_zero);
+static ant_value_t fs_stats_object_from_posix(ant_t *js, const struct stat *st, bool bigint) {
+  if (!st) return fs_stats_object_new(js, &fs_stat_fields_zero, bigint);
   return fs_stats_object_new(js, &(fs_stat_fields_t){
-    .dev          = (double)st->st_dev,
-    .ino          = (double)st->st_ino,
-    .mode         = st->st_mode,
-    .nlink        = (double)st->st_nlink,
-    .size         = (double)st->st_size,
-    .uid          = (double)st->st_uid,
-    .gid          = (double)st->st_gid,
-    .rdev         = (double)st->st_rdev,
+    .dev       = (uint64_t)st->st_dev,
+    .ino       = (uint64_t)st->st_ino,
+    .mode      = st->st_mode,
+    .nlink     = (uint64_t)st->st_nlink,
+    .size      = (uint64_t)st->st_size,
+    .uid       = (uint64_t)st->st_uid,
+    .gid       = (uint64_t)st->st_gid,
+    .rdev      = (uint64_t)st->st_rdev,
 #if defined(_WIN32)
-    .blksize      = 0.0,
-    .blocks       = 0.0,
+    .blksize   = 0,
+    .blocks    = 0,
 #else
-    .blksize      = (double)st->st_blksize,
-    .blocks       = (double)st->st_blocks,
+    .blksize   = (uint64_t)st->st_blksize,
+    .blocks    = (uint64_t)st->st_blocks,
 #endif
-    .atime_ms     = POSIX_ATIME_MS(st),
-    .mtime_ms     = POSIX_MTIME_MS(st),
-    .ctime_ms     = POSIX_CTIME_MS(st),
-    .birthtime_ms = POSIX_BIRTH_MS(st),
-  });
+    .atime     = POSIX_ATIME(st),
+    .mtime     = POSIX_MTIME(st),
+    .ctime     = POSIX_CTIME(st),
+    .birthtime = POSIX_BIRTH(st),
+  }, bigint);
+}
+
+static bool fs_stat_bigint_option(ant_t *js, ant_value_t options) {
+  if (!is_object_type(options) || is_callable(options)) return false;
+  return js_truthy(js, js_get(js, options, "bigint"));
 }
 
 static bool fs_stat_path_sync(const char *path, uv_stat_t *out) {
@@ -1471,8 +1543,8 @@ static void fs_watcher_invoke_watchfile_stats(
   watcher->last_stat = curr_stat;
   watcher->last_stat_valid = curr != NULL;
 
-  args[0] = fs_stats_object_from_uv(fs_watcher_isolate(watcher), &curr_stat);
-  args[1] = fs_stats_object_from_uv(fs_watcher_isolate(watcher), &prev_stat);
+  args[0] = fs_stats_object_from_uv(fs_watcher_isolate(watcher), &curr_stat, false);
+  args[1] = fs_stats_object_from_uv(fs_watcher_isolate(watcher), &prev_stat, false);
   fs_call_callback(fs_watcher_isolate(watcher), watcher->callback, args, 2);
 }
 
@@ -2083,7 +2155,7 @@ static ant_value_t builtin_fs_filehandle_stat(ant_params_t) {
     return fs_rejected_promise(js, err);
   }
 
-  ant_value_t stat_obj = fs_stats_object_from_uv(js, &req.statbuf);
+  ant_value_t stat_obj = fs_stats_object_from_uv(js, &req.statbuf, fs_stat_bigint_option(js, nargs > 0 ? args[0] : Ant_Value_Undefined));
   uv_fs_req_cleanup(&req);
   return fs_resolved_promise(js, stat_obj);
 }
@@ -2626,7 +2698,7 @@ static void on_stat_complete(uv_fs_t *uv_req) {
     return;
   }
   
-  ant_value_t stat_obj = fs_stats_object_from_uv(fs_req_isolate(req), &uv_req->statbuf);
+  ant_value_t stat_obj = fs_stats_object_from_uv(fs_req_isolate(req), &uv_req->statbuf, req->bigint);
   
   req->completed = 1;
   js_resolve_promise(fs_req_isolate(req), req->promise, stat_obj);
@@ -2657,6 +2729,35 @@ static void on_realpath_complete(uv_fs_t *uv_req) {
   req->data_len = strlen(req->data);
   req->completed = 1;
   complete_request(req);
+}
+
+static ant_value_t fs_glob_dispatch(ant_t *js, const char *name, ant_value_t this_val, ant_value_t *args, int nargs) {
+  static const char module[] = "ant:internal/fs_glob";
+  ant_value_t ns = js_esm_import_sync_cstr(js, module, sizeof(module) - 1);
+  if (is_err(ns)) return ns;
+
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t mod = esm_require_unwrap(js, ns);
+  GC_ROOT_PIN(js, mod);
+
+  ant_value_t fn = js_get(js, mod, name);
+  GC_ROOT_PIN(js, fn);
+
+  ant_value_t result = sv_call_value(js, fn, this_val, args, nargs);
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
+}
+
+static ant_value_t builtin_fs_glob(ant_params_t) {
+  return fs_glob_dispatch(js, "glob", call_this, args, nargs);
+}
+
+static ant_value_t builtin_fs_globSync(ant_params_t) {
+  return fs_glob_dispatch(js, "globSync", call_this, args, nargs);
+}
+
+static ant_value_t builtin_fs_promises_glob(ant_params_t) {
+  return fs_glob_dispatch(js, "globAsync", call_this, args, nargs);
 }
 
 static ant_value_t fs_path_join(ant_t *js, const char *a, const char *b) {
@@ -4113,10 +4214,6 @@ static ant_value_t dirent_ctor(ant_params_t) {
   return obj;
 }
 
-static ant_value_t create_stats_object(ant_t *js, struct stat *st) {
-  return fs_stats_object_from_posix(js, st);
-}
-
 static const char *errno_to_code(int err_num) {
 switch (err_num) {
   case ENOENT: return "ENOENT";
@@ -4232,7 +4329,7 @@ static ant_value_t builtin_fs_statSync(ant_params_t) {
   }
   
   free(path_cstr);
-  return create_stats_object(js, &st);
+  return fs_stats_object_from_posix(js, &st, fs_stat_bigint_option(js, nargs > 1 ? args[1] : Ant_Value_Undefined));
 }
 
 static ant_value_t builtin_fs_stat(ant_params_t) {
@@ -4251,6 +4348,7 @@ static ant_value_t builtin_fs_stat(ant_params_t) {
   
   req->uv_req.loop = js->loop;
   req->op_type = FS_OP_STAT;
+  req->bigint = fs_stat_bigint_option(js, nargs > 1 ? args[1] : Ant_Value_Undefined);
   req->promise = js_mkpromise(js);
   req->path = strndup(path, path_len);
   req->uv_req.data = req;
@@ -4300,7 +4398,7 @@ static ant_value_t builtin_fs_lstatSync(ant_params_t) {
     return err;
   }
 
-  ant_value_t stat_obj = fs_stats_object_from_uv(js, &req.statbuf);
+  ant_value_t stat_obj = fs_stats_object_from_uv(js, &req.statbuf, fs_stat_bigint_option(js, nargs > 1 ? args[1] : Ant_Value_Undefined));
   uv_fs_req_cleanup(&req);
   free(path_cstr);
   
@@ -4323,6 +4421,7 @@ static ant_value_t builtin_fs_lstat(ant_params_t) {
   
   req->uv_req.loop = js->loop;
   req->op_type = FS_OP_STAT;
+  req->bigint = fs_stat_bigint_option(js, nargs > 1 ? args[1] : Ant_Value_Undefined);
   req->promise = js_mkpromise(js);
   req->path = strndup(path, path_len);
   req->uv_req.data = req;
@@ -4353,7 +4452,7 @@ static ant_value_t builtin_fs_fstatSync(ant_params_t) {
     return err;
   }
 
-  ant_value_t stat_obj = fs_stats_object_from_uv(js, &req.statbuf);
+  ant_value_t stat_obj = fs_stats_object_from_uv(js, &req.statbuf, fs_stat_bigint_option(js, nargs > 1 ? args[1] : Ant_Value_Undefined));
   uv_fs_req_cleanup(&req);
   return stat_obj;
 }
@@ -4367,6 +4466,7 @@ static ant_value_t builtin_fs_fstat(ant_params_t) {
 
   req->uv_req.loop = js->loop;
   req->op_type = FS_OP_STAT;
+  req->bigint = fs_stat_bigint_option(js, nargs > 1 ? args[1] : Ant_Value_Undefined);
   req->promise = js_mkpromise(js);
   req->fd = (uv_file)(int)Ant_Value_AsNumberUnchecked(args[0]);
   req->uv_req.data = req;
@@ -7311,6 +7411,8 @@ ant_value_t fs_library(ant_t *js) {
   js_set(js, lib, "symlinkSync", Ant_Function_CreateWithArity(builtin_fs_symlinkSync, 3));
   js_set(js, lib, "linkSync", Ant_Function_CreateWithArity(builtin_fs_linkSync, 2));
   js_set(js, lib, "opendirSync", Ant_Function_CreateWithArity(builtin_fs_opendirSync, 2));
+  js_set(js, lib, "glob", Ant_Function_CreateWithArity(builtin_fs_glob, 3));
+  js_set(js, lib, "globSync", Ant_Function_CreateWithArity(builtin_fs_globSync, 2));
   js_set(js, lib, "watch", Ant_Function_CreateWithArity(builtin_fs_watch, 3));
   js_set(js, lib, "watchFile", Ant_Function_CreateWithArity(builtin_fs_watchFile, 3));
   js_set(js, lib, "unwatchFile", Ant_Function_CreateWithArity(builtin_fs_unwatchFile, 2));
@@ -7338,6 +7440,7 @@ ant_value_t fs_promises_library(ant_t *js) {
   ant_value_t lib = Ant_Object_CreateBare(js);
 
   fs_set_promise_methods(js, lib);
+  js_set(js, lib, "glob", Ant_Function_CreateWithArity(builtin_fs_promises_glob, 2));
   js_set(js, lib, "constants", fs_make_constants(js));
 
   js_set_tostringtag(js, lib, js_mkstr(js, "fs/promises", 11));

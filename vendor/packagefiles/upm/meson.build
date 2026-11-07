@@ -1,4 +1,4 @@
-project('upm', version: '1.5.0')
+project('upm', version: '1.5.1')
 
 python = find_program('python3', 'python')
 

@@ -229,6 +229,7 @@ ANT_BUILTIN_ARR(zlib_protos, 9)
 #endif
 ANT_MUTABLE_ROOT(iterator_result_template)
 ANT_MUTABLE_ROOT(fs_stats_template)
+ANT_MUTABLE_ROOT(fs_bigint_stats_template)
 ANT_MUTABLE_ROOT(fs_read_result_template)
 ANT_MUTABLE_ROOT(fs_write_result_template)
 ANT_MUTABLE_ROOT(os_cpu_template)
