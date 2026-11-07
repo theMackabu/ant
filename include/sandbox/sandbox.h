@@ -85,6 +85,8 @@ uint8_t *ant_sandbox_build_eval_request_frame(
   uint32_t capabilities,
   uint16_t tty_rows,
   uint16_t tty_cols,
+  const uint16_t *forward_ports,
+  uint32_t forward_count,
   size_t *len_out
 );
 

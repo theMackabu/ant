@@ -384,6 +384,8 @@ int ant_sandbox_cmd(int argc, char **argv) {
     capabilities,
     tty_rows,
     tty_cols,
+    forward_ports,
+    (uint32_t)opts.launch.forward_count,
     &request_len
   );
   else {

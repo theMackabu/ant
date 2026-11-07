@@ -151,6 +151,18 @@ uint8_t *ant_sandbox_build_frame(
   return frame;
 }
 
+static bool sandbox_forwards_payload_size(size_t *total, uint32_t forward_count) {
+  if (forward_count == 0) return true;
+  return sandbox_frame_add_size(total, 4 + (size_t)forward_count * 2u);
+}
+
+static uint8_t *sandbox_write_forwards(uint8_t *p, const uint16_t *forward_ports, uint32_t forward_count) {
+  if (forward_count == 0) return p;
+  p = sandbox_write_u32(p, forward_count);
+  for (uint32_t i = 0; i < forward_count; i++) p = sandbox_write_u16(p, forward_ports[i]);
+  return p;
+}
+
 uint8_t *ant_sandbox_build_run_request_frame(
   const char *cwd,
   const char *entry,
@@ -175,10 +187,7 @@ uint8_t *ant_sandbox_build_run_request_frame(
   for (int i = 0; i < argc; i++) {
     if (!argv[i] || !sandbox_string_payload_size(&payload_len, argv[i])) return NULL;
   }
-  if (forward_count > 0 &&
-      !sandbox_frame_add_size(&payload_len, 4 + (size_t)forward_count * 2u)) {
-    return NULL;
-  }
+  if (!sandbox_forwards_payload_size(&payload_len, forward_count)) return NULL;
 
   size_t frame_len = ANT_SANDBOX_FRAME_HEADER_SIZE + payload_len;
   if (payload_len > UINT32_MAX || frame_len > ANT_SANDBOX_FRAME_MAX_SIZE) return NULL;
@@ -195,10 +204,7 @@ uint8_t *ant_sandbox_build_run_request_frame(
   sandbox_store32(p, (uint32_t)argc);
   p += 4;
   for (int i = 0; i < argc; i++) p = sandbox_write_string(p, argv[i]);
-  if (forward_count > 0) {
-    p = sandbox_write_u32(p, forward_count);
-    for (uint32_t i = 0; i < forward_count; i++) p = sandbox_write_u16(p, forward_ports[i]);
-  }
+  sandbox_write_forwards(p, forward_ports, forward_count);
 
   return frame;
 }
@@ -209,14 +215,18 @@ uint8_t *ant_sandbox_build_eval_request_frame(
   uint32_t capabilities,
   uint16_t tty_rows,
   uint16_t tty_cols,
+  const uint16_t *forward_ports,
+  uint32_t forward_count,
   size_t *len_out
 ) {
   if (!cwd || !source || !len_out) return NULL;
+  if (forward_count > 0 && !forward_ports) return NULL;
 
   size_t payload_len = 0;
   if (!sandbox_frame_add_size(&payload_len, 8)) return NULL;
   if (!sandbox_string_payload_size(&payload_len, cwd)) return NULL;
   if (!sandbox_string_payload_size(&payload_len, source)) return NULL;
+  if (!sandbox_forwards_payload_size(&payload_len, forward_count)) return NULL;
 
   size_t frame_len = ANT_SANDBOX_FRAME_HEADER_SIZE + payload_len;
   if (payload_len > UINT32_MAX || frame_len > ANT_SANDBOX_FRAME_MAX_SIZE) return NULL;
@@ -230,6 +240,7 @@ uint8_t *ant_sandbox_build_eval_request_frame(
   p = sandbox_write_u16(p, tty_cols);
   p = sandbox_write_string(p, cwd);
   p = sandbox_write_string(p, source);
+  sandbox_write_forwards(p, forward_ports, forward_count);
 
   return frame;
 }
@@ -283,6 +294,21 @@ static bool sandbox_read_u64(sandbox_frame_reader_t *r, uint64_t *out) {
   return true;
 }
 
+static bool sandbox_read_forwards(sandbox_frame_reader_t *r, ant_sandbox_request_t *out) {
+  if (r->p == r->end) return true;
+  uint32_t forward_count = 0;
+  if (!sandbox_read_u32(r, &forward_count)) return false;
+  if ((size_t)(r->end - r->p) < (size_t)forward_count * 2u) return false;
+  out->forward_count = forward_count;
+  if (forward_count > 0) {
+    out->forward_ports = try_oom(sizeof(*out->forward_ports) * (size_t)forward_count);
+    for (uint32_t i = 0; i < forward_count; i++) {
+      if (!sandbox_read_u16(r, &out->forward_ports[i])) return false;
+    }
+  }
+  return true;
+}
+
 static bool sandbox_parse_run_payload(const uint8_t *payload, size_t payload_len, ant_sandbox_request_t *out) {
   sandbox_frame_reader_t r = { payload, payload + payload_len };
   uint32_t argc;
@@ -306,18 +332,7 @@ static bool sandbox_parse_run_payload(const uint8_t *payload, size_t payload_len
   }
 
   out->argv[argc] = NULL;
-  if (r.p < r.end) {
-    uint32_t forward_count = 0;
-    if (!sandbox_read_u32(&r, &forward_count)) return false;
-    if ((size_t)(r.end - r.p) < (size_t)forward_count * 2u) return false;
-    out->forward_count = forward_count;
-    if (forward_count > 0) {
-      out->forward_ports = try_oom(sizeof(*out->forward_ports) * (size_t)forward_count);
-      for (uint32_t i = 0; i < forward_count; i++) {
-        if (!sandbox_read_u16(&r, &out->forward_ports[i])) return false;
-      }
-    }
-  }
+  if (!sandbox_read_forwards(&r, out)) return false;
   return r.p == r.end;
 }
 
@@ -330,6 +345,7 @@ static bool sandbox_parse_eval_payload(const uint8_t *payload, size_t payload_le
   if (!sandbox_read_u16(&r, &out->tty_cols)) return false;
   if (!sandbox_read_string(&r, &out->cwd)) return false;
   if (!sandbox_read_string(&r, &out->source)) return false;
+  if (!sandbox_read_forwards(&r, out)) return false;
   return r.p == r.end;
 }
 

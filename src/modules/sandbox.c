@@ -1236,10 +1236,15 @@ static ant_value_t sandbox_eval(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox.eval(source) requires a source string"));
 
+  uint16_t forward_ports[ANT_SANDBOX_MAX_FORWARDS];
+  for (size_t i = 0; i < state->launch.forward_count; i++)
+    forward_ports[i] = state->launch.forwards[i].guest_port;
+
   size_t request_len = 0;
   uint8_t *request = ant_sandbox_build_eval_request_frame(
     state->launch.guest_cwd, js_getstr(js, args[0], NULL),
-    state->capabilities, state->tty_rows, state->tty_cols, &request_len
+    state->capabilities, state->tty_rows, state->tty_cols,
+    forward_ports, (uint32_t)state->launch.forward_count, &request_len
   );
   
   return sandbox_execute_request(js, state, request, request_len, true);
