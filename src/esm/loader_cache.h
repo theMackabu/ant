@@ -15,6 +15,8 @@ struct ant_esm_state {
   struct esm_package_dir_cache_entry  *package_dir_cache;
   struct esm_package_json_cache_entry *package_json_cache;
   struct esm_path_resolve_cache_entry *path_resolve_cache;
+  struct esm_tsconfig_entry           *tsconfig_cache;
+  struct esm_tsconfig_dir_entry       *tsconfig_dir_cache;
 
   struct esm_module *modules;
   struct esm_module *last_tla_module;

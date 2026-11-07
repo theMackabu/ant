@@ -1,5 +1,6 @@
 #include <compat.h> // IWYU pragma: keep
 #include "loader_cache.h"
+#include "tsconfig.h"
 
 #include "internal.h"
 
@@ -312,6 +313,7 @@ void esm_loader_cache_cleanup(ant_t *js) {
     free(dir_current);
   }
 
+  esm_tsconfig_cache_cleanup(st);
   free(st);
   js->modules.state = NULL;
 }

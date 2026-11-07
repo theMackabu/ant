@@ -1,0 +1,1 @@
+{ "extends": "./tsconfig.loop.json", "compilerOptions": { "paths": { "loop/*": ["./*"] } } }

@@ -1,0 +1,15 @@
+// root config, parsed as JSONC
+{
+  /* block comment with "quotes" and // inside */
+  "compilerOptions": {
+    "strict": true, // trailing line comment
+    "paths": {
+      "~/*": ["./missing/*", "./src/*"],
+      "@exact": ["./src/exact.ts",],
+      "@lib/*": ["./src/lib/*"],
+      "@lib/deep/*": ["./src/deep/*"],
+      "odd": ["./src/odd//name.ts"],
+      "cond-exports": ["./missing/cond.ts"],
+    },
+  },
+}

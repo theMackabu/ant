@@ -8,6 +8,7 @@
 #include "esm/builtin_bundle.h"
 #include "loader_cache.h"
 #include "loader_internal.h"
+#include "tsconfig.h"
 
 #include "modules/json.h"
 #include "modules/napi.h"
@@ -1293,6 +1294,30 @@ static char *esm_resolve_relative_path(ant_t *js, const char *specifier, const c
   }
 }
 
+static char *esm_probe_tsconfig_target(ant_t *js, const char *candidate, void *ctx) {
+  char *resolved = esm_resolve_absolute(js, candidate);
+  if (resolved || !esm_has_extension(candidate)) return resolved;
+
+  const char *base_path = ctx;
+  if (!base_path || !is_typescript_file(base_path)) return NULL;
+
+  char *ts_candidate = resolve_typescript_source_fallback(candidate);
+  if (!ts_candidate) return NULL;
+
+  resolved = esm_try_resolve(js, "", ts_candidate, "");
+  free(ts_candidate);
+  return resolved;
+}
+
+static char *esm_resolve_tsconfig_paths(ant_t *js, const char *specifier, const char *base_path) {
+  char *start_dir = esm_get_base_dir(js, base_path);
+  if (!start_dir) return NULL;
+
+  char *resolved = esm_tsconfig_resolve(js, specifier, start_dir, esm_probe_tsconfig_target, (void *)base_path);
+  free(start_dir);
+  return resolved;
+}
+
 static char *esm_resolve_path_cond_unmapped(ant_t *js, const char *specifier, const char *base_path, bool prefer_require) {
   if (!specifier || !specifier[0]) return NULL;
 
@@ -1315,6 +1340,9 @@ static char *esm_resolve_path_cond_unmapped(ant_t *js, const char *specifier, co
   if (specifier[0] == '#') {
     return esm_resolve_package_imports(js, specifier, base_path, prefer_require);
   }
+
+  char *mapped = esm_resolve_tsconfig_paths(js, specifier, base_path);
+  if (mapped) return mapped;
 
   return esm_resolve_node_module_cond(js, specifier, base_path, prefer_require);
 }
