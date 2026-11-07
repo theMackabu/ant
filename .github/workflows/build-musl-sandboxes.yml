@@ -42,7 +42,6 @@ jobs:
       arch: x64
       artifact: ant-linux-x64-musl
       runner: ubuntu-latest
-      image: ant-sandbox-x64
       source_run_id: ${{ github.run_id }}
       source_revision: ${{ github.sha }}
 
@@ -54,7 +53,6 @@ jobs:
       arch: aarch64
       artifact: ant-linux-aarch64-musl
       runner: ubuntu-24.04-arm
-      image: ant-sandbox-aarch64
       source_run_id: ${{ github.run_id }}
       source_revision: ${{ github.sha }}
 

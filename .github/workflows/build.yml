@@ -56,7 +56,6 @@ jobs:
       arch: x64
       artifact: ant-linux-x64-musl
       runner: ubuntu-latest
-      image: ant-sandbox-x64
       source_revision: ${{ github.sha }}
 
   nanos-aarch64:
@@ -67,7 +66,6 @@ jobs:
       arch: aarch64
       artifact: ant-linux-aarch64-musl
       runner: ubuntu-24.04-arm
-      image: ant-sandbox-aarch64
       source_revision: ${{ github.sha }}
 
   summary:

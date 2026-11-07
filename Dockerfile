@@ -53,6 +53,7 @@ EOF
 
 FROM scratch AS export
 COPY --from=build /out/ant /ant
+COPY --from=toolchain /etc/ssl/certs/ca-certificates.crt /ca-certificates.crt
 
 FROM toolchain AS runtime-files
 RUN <<EOF
