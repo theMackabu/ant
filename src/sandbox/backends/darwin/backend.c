@@ -603,7 +603,7 @@ static int ant_hvf_session_create(const ant_sandbox_vm_config_t *config, void **
   if (rc != 0) goto fail;
   ant_hvf_verbosef(vm, "loaded sandbox kernel (%lld bytes)", (long long)kernel_size);
 
-  rc = ant_hvf_build_dtb(vm);
+  rc = ant_hvf_build_dtb(vm, 3);
   if (rc != 0) goto fail;
   ant_hvf_verbose(vm, "built boot device tree");
 

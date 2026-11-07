@@ -1,46 +1,19 @@
 #pragma once
 
 #include <compat.h> // IWYU pragma: keep
+#include "sandbox_backend/aarch64_board.h" // IWYU pragma: keep
 
 #include <Hypervisor/Hypervisor.h>
 #include <stdint.h>
 
 #if defined(__aarch64__)
 
-#define ANT_HVF_GUEST_BASE 0x40000000ull
-#define ANT_HVF_DTB_BASE 0x40000000ull
-#define ANT_HVF_KERNEL_BASE 0x40400000ull
 #define ANT_HVF_NANOS_KAS_OFFSET_SYMBOL 0x4052c1c0ull
-#define ANT_HVF_UART_BASE 0x09000000ull
-#define ANT_HVF_RTC_BASE 0x09010000ull
-#define ANT_HVF_PCIE_MMIO_BASE 0x10000000ull
-#define ANT_HVF_PCIE_PIO_BASE 0x3eff0000ull
-#define ANT_HVF_PCIE_ECAM_BASE 0x3f000000ull
-#define ANT_HVF_PCIE_ECAM_SIZE 0x01000000ull
-#define ANT_HVF_VIRTIO_BLK_BAR 0x10041000ull
-#define ANT_HVF_VIRTIO_BLK_SLOT 1u
-#define ANT_HVF_VIRTIO_NET_BAR 0x10042000ull
-#define ANT_HVF_VIRTIO_NET_SLOT 2u
-#define ANT_HVF_VIRTIO_9P_BAR_BASE 0x10043000ull
-#define ANT_HVF_VIRTIO_9P_SLOT_BASE 3u
 #define ANT_HVF_VIRTIO_9P_MAX 8u
-#define ANT_HVF_VIRTIO_VSOCK_BAR 0x1004b000ull
-#define ANT_HVF_VIRTIO_VSOCK_SLOT 11u
-#define ANT_HVF_VIRTIO_RNG_BAR 0x1004c000ull
-#define ANT_HVF_VIRTIO_RNG_SLOT 12u
-#define ANT_HVF_GIC_DIST_BASE 0x08000000ull
-#define ANT_HVF_GIC_REDIST_BASE 0x080a0000ull
-#define ANT_HVF_GIC_MSI_BASE 0x08020000ull
-#define ANT_HVF_GIC_MSI_SIZE 0x1000ull
-#define ANT_HVF_GIC_MSI_VECTOR_BASE 48u
-#define ANT_HVF_GIC_MSI_VECTOR_COUNT 64u
 #define ANT_HVF_PAGE_SIZE 0x1000ull
 
 #define ANT_HVF_GICR_ISPENDR0 66048u
 #define ANT_HVF_GIC_EL1_VIRTUAL_TIMER 27u
-#define ANT_HVF_GICM_TYPER 0x0008u
-#define ANT_HVF_GICM_SET_SPI_NSR 0x0040u
-#define ANT_HVF_GICM_IIDR 0x0fccu
 
 #define ANT_HVF_GUEST_SHUTDOWN 1
 

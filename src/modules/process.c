@@ -2452,7 +2452,7 @@ void init_process_module(ant_t *js) {
   ant_value_t versions_obj = Ant_Object_Create(js);
   process_set_string(js, versions_obj, "ant", ANT_VERSION);
   process_set_string(js, versions_obj, "silver", ANT_VERSION);
-  process_set_string(js, versions_obj, "skim", SKIM_VERSION);
+  process_set_string(js, versions_obj, "skim", ANT_DEP_SKIM_VERSION);
   process_set_string(js, versions_obj, "uv", ANT_DEP_UV_VERSION);
   process_set_string(js, versions_obj, "brotli", ANT_DEP_BROTLI_VERSION);
   process_set_string(js, versions_obj, "llhttp", ANT_DEP_LLHTTP_VERSION);

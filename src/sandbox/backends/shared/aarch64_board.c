@@ -1,6 +1,12 @@
-#include "backend.h"
+#include "sandbox_backend/backend.h" // IWYU pragma: keep
 
 #if defined(__aarch64__)
+
+uint64_t ant_hvf_host_cntfrq(void) {
+  uint64_t cntfrq = 0;
+  __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(cntfrq));
+  return cntfrq;
+}
 
 int ant_fdt_init(ant_fdt_t *fdt) {
   if (!fdt) return -EINVAL;
@@ -125,7 +131,7 @@ int ant_fdt_prop_reg64(ant_fdt_t *fdt, const char *name, const uint64_t *cells, 
   return ant_fdt_prop(fdt, name, be, count * sizeof(be[0]));
 }
 
-int ant_hvf_build_dtb(ant_hvf_vm_t *vm) {
+int ant_hvf_build_dtb(ant_hvf_vm_t *vm, int gic_version) {
   ant_fdt_t fdt;
   int rc = ant_fdt_init(&fdt);
   if (rc != 0) goto out;
@@ -175,11 +181,15 @@ int ant_hvf_build_dtb(ant_hvf_vm_t *vm) {
   if ((rc = ant_fdt_end(&fdt)) != 0) goto out;
 
   if ((rc = ant_fdt_begin(&fdt, "intc")) != 0) goto out;
-  if ((rc = ant_fdt_prop_string(&fdt, "compatible", "arm,gic-v3")) != 0) goto out;
+  if ((rc = ant_fdt_prop_string(&fdt, "compatible", gic_version == 2 ? "arm,cortex-a15-gic" : "arm,gic-v3")) != 0) goto out;
   if ((rc = ant_fdt_prop_null(&fdt, "interrupt-controller")) != 0) goto out;
   if ((rc = ant_fdt_prop_u32(&fdt, "#interrupt-cells", 3)) != 0) goto out;
   if ((rc = ant_fdt_prop_u32(&fdt, "phandle", 1)) != 0) goto out;
-  uint64_t gic_reg[] = { ANT_HVF_GIC_DIST_BASE, 0x10000, ANT_HVF_GIC_REDIST_BASE, 0x200000 };
+  uint64_t gic_reg[] = {
+    ANT_HVF_GIC_DIST_BASE, gic_version == 2 ? ANT_HVF_GIC_V2_DIST_SIZE : ANT_HVF_GIC_DIST_SIZE,
+    gic_version == 2 ? ANT_HVF_GIC_CPU_BASE : ANT_HVF_GIC_REDIST_BASE,
+    gic_version == 2 ? ANT_HVF_GIC_CPU_SIZE : ANT_HVF_GIC_REDIST_SIZE,
+  };
   if ((rc = ant_fdt_prop_reg64(&fdt, "reg", gic_reg, 4)) != 0) goto out;
   if ((rc = ant_fdt_end(&fdt)) != 0) goto out;
 
@@ -211,7 +221,7 @@ int ant_hvf_build_dtb(ant_hvf_vm_t *vm) {
   size_t total = off_strings + fdt.strings_len;
   if (total > ANT_HVF_DTB_MAX) { rc = -ENOSPC; goto out; }
 
-  unsigned char *dtb = ant_hvf_guest_ptr(vm, ANT_HVF_DTB_BASE, total);
+  unsigned char *dtb = ant_hvf_guest_ptr(vm, ANT_HVF_DTB_BASE, ANT_HVF_DTB_MAX);
   if (!dtb) { rc = -EINVAL; goto out; }
   memset(dtb, 0, ANT_HVF_DTB_MAX);
 
@@ -234,6 +244,235 @@ int ant_hvf_build_dtb(ant_hvf_vm_t *vm) {
 out:
   ant_fdt_free(&fdt);
   return rc;
+}
+
+bool ant_hvf_gic_msi_read(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t *value) {
+  uint64_t off = addr - ANT_HVF_GIC_MSI_BASE;
+  uint32_t word = 0;
+
+  switch (off & ~3ull) {
+    case ANT_HVF_GICM_TYPER:
+      if (vm->gic_msi_enabled) {
+        word = ((vm->gic_msi_base & 0x7ffu) << 16) | (vm->gic_msi_count & 0x7ffu);
+      }
+      break;
+    case ANT_HVF_GICM_IIDR:
+      word = 0x43b;
+      break;
+    default:
+      word = 0;
+      break;
+  }
+
+  *value = ant_hvf_select_width(word, (unsigned)(off & 3u), size);
+  return true;
+}
+
+bool ant_hvf_gic_msi_write(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t value) {
+  (void)size;
+  uint64_t off = addr - ANT_HVF_GIC_MSI_BASE;
+  if ((off & ~3ull) != ANT_HVF_GICM_SET_SPI_NSR) return true;
+  if (!vm->gic_msi_enabled) return true;
+
+  uint32_t intid = (uint32_t)value;
+  if (intid < vm->gic_msi_base || intid >= vm->gic_msi_base + vm->gic_msi_count) return true;
+
+  return ant_hvf_send_msi(vm, ANT_HVF_GIC_MSI_BASE + ANT_HVF_GICM_SET_SPI_NSR, intid) == 0;
+}
+
+enum {
+  ANT_HVF_RTC_DR = 0x000,
+  ANT_HVF_RTC_MR = 0x004,
+  ANT_HVF_RTC_LR = 0x008,
+  ANT_HVF_RTC_CR = 0x00c,
+  ANT_HVF_RTC_IMSC = 0x010,
+  ANT_HVF_RTC_RIS = 0x014,
+  ANT_HVF_RTC_MIS = 0x018,
+  ANT_HVF_RTC_ICR = 0x01c,
+  ANT_HVF_RTC_PERIPH_ID0 = 0xfe0,
+  ANT_HVF_RTC_PERIPH_ID1 = 0xfe4,
+  ANT_HVF_RTC_PERIPH_ID2 = 0xfe8,
+  ANT_HVF_RTC_PERIPH_ID3 = 0xfec,
+  ANT_HVF_RTC_PCELL_ID0 = 0xff0,
+  ANT_HVF_RTC_PCELL_ID1 = 0xff4,
+  ANT_HVF_RTC_PCELL_ID2 = 0xff8,
+  ANT_HVF_RTC_PCELL_ID3 = 0xffc,
+};
+
+static bool ant_hvf_mmio_unsupported(
+  ant_hvf_vm_t *vm,
+  const char *region,
+  bool write,
+  uint64_t addr,
+  unsigned size,
+  uint64_t value
+) {
+  if (write) fprintf(
+    stderr,
+    "sandbox vm: unsupported %s MMIO write addr=0x%llx size=%u value=0x%llx\n",
+    region,
+    (unsigned long long)addr,
+    size,
+    (unsigned long long)value
+  );
+  else fprintf(stderr,
+    "sandbox vm: unsupported %s MMIO read addr=0x%llx size=%u\n",
+    region,
+    (unsigned long long)addr,
+    size
+  );
+  return false;
+}
+
+static uint32_t ant_hvf_rtc_counter(ant_hvf_vm_t *vm) {
+  time_t now = time(NULL);
+  if (vm->rtc_load_host == 0) {
+    vm->rtc_load_host = now;
+    vm->rtc_load_value = (uint32_t)now;
+    vm->rtc_enabled = true;
+  }
+  if (!vm->rtc_enabled) return vm->rtc_load_value;
+  time_t elapsed = now - vm->rtc_load_host;
+  if (elapsed <= 0) return vm->rtc_load_value;
+  return vm->rtc_load_value + (uint32_t)elapsed;
+}
+
+static uint32_t ant_hvf_rtc_raw_interrupt(ant_hvf_vm_t *vm) {
+  uint32_t counter = ant_hvf_rtc_counter(vm);
+  return (vm->rtc_match != 0 && counter >= vm->rtc_match) ? 1u : 0u;
+}
+
+static bool ant_hvf_rtc_read(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t *value) {
+  uint64_t off = addr - ANT_HVF_RTC_BASE;
+  uint32_t word = 0;
+
+  switch (off & ~3ull) {
+    case ANT_HVF_RTC_DR:
+      word = ant_hvf_rtc_counter(vm);
+      break;
+    case ANT_HVF_RTC_MR:
+      word = vm->rtc_match;
+      break;
+    case ANT_HVF_RTC_LR:
+      word = vm->rtc_load_value;
+      break;
+    case ANT_HVF_RTC_CR:
+      word = vm->rtc_enabled ? 1u : 0u;
+      break;
+    case ANT_HVF_RTC_IMSC:
+      word = vm->rtc_imsc & 1u;
+      break;
+    case ANT_HVF_RTC_RIS:
+      word = ant_hvf_rtc_raw_interrupt(vm);
+      break;
+    case ANT_HVF_RTC_MIS:
+      word = ant_hvf_rtc_raw_interrupt(vm) & vm->rtc_imsc;
+      break;
+    case ANT_HVF_RTC_ICR:
+      word = vm->rtc_icr & 1u;
+      break;
+    case ANT_HVF_RTC_PERIPH_ID0:
+      word = 0x31;
+      break;
+    case ANT_HVF_RTC_PERIPH_ID1:
+      word = 0x10;
+      break;
+    case ANT_HVF_RTC_PERIPH_ID2:
+      word = 0x04;
+      break;
+    case ANT_HVF_RTC_PERIPH_ID3:
+      word = 0x00;
+      break;
+    case ANT_HVF_RTC_PCELL_ID0:
+      word = 0x0d;
+      break;
+    case ANT_HVF_RTC_PCELL_ID1:
+      word = 0xf0;
+      break;
+    case ANT_HVF_RTC_PCELL_ID2:
+      word = 0x05;
+      break;
+    case ANT_HVF_RTC_PCELL_ID3:
+      word = 0xb1;
+      break;
+    default:
+      return ant_hvf_mmio_unsupported(vm, "RTC", false, addr, size, 0);
+  }
+
+  *value = ant_hvf_select_width(word, (unsigned)(off & 3u), size);
+  return true;
+}
+
+static bool ant_hvf_rtc_write(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t value) {
+  uint64_t off = addr - ANT_HVF_RTC_BASE;
+  if (size != 4 || (off & 3u) != 0) {
+    return ant_hvf_mmio_unsupported(vm, "RTC", true, addr, size, value);
+  }
+
+  switch (off) {
+    case ANT_HVF_RTC_MR:
+      vm->rtc_match = (uint32_t)value;
+      return true;
+    case ANT_HVF_RTC_LR:
+      vm->rtc_load_value = (uint32_t)value;
+      vm->rtc_load_host = time(NULL);
+      return true;
+    case ANT_HVF_RTC_CR: {
+      bool enable = (value & 1u) != 0;
+      if (enable != vm->rtc_enabled) {
+        vm->rtc_load_value = ant_hvf_rtc_counter(vm);
+        vm->rtc_load_host = time(NULL);
+        vm->rtc_enabled = enable;
+      }
+      return true;
+    }
+    case ANT_HVF_RTC_IMSC:
+      vm->rtc_imsc = (uint32_t)value & 1u;
+      return true;
+    case ANT_HVF_RTC_ICR:
+      vm->rtc_icr = (uint32_t)value & 1u;
+      return true;
+    default:
+      return ant_hvf_mmio_unsupported(vm, "RTC", true, addr, size, value);
+  }
+}
+
+bool ant_hvf_mmio_read(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t *value) {
+  if (addr == ANT_HVF_UART_BASE + 0x18) {
+    *value = 0;
+    return true;
+  }
+  if (addr >= ANT_HVF_GIC_MSI_BASE && addr < ANT_HVF_GIC_MSI_BASE + ANT_HVF_GIC_MSI_SIZE)
+    return ant_hvf_gic_msi_read(vm, addr, size, value);
+  if (addr >= ANT_HVF_RTC_BASE && addr < ANT_HVF_RTC_BASE + 0x1000)
+    return ant_hvf_rtc_read(vm, addr, size, value);
+  if (addr >= ANT_HVF_PCIE_ECAM_BASE && addr < ANT_HVF_PCIE_ECAM_BASE + ANT_HVF_PCIE_ECAM_SIZE)
+    return ant_hvf_pci_mmio_read(vm, addr, size, value);
+  ant_hvf_virtio_device_t *virtio = ant_hvf_virtio_for_bar(vm, addr);
+  if (virtio)
+    return ant_hvf_virtio_common_read(vm, virtio, addr - virtio->bar0, size, value);
+  if (addr >= ANT_HVF_PCIE_PIO_BASE && addr < ANT_HVF_PCIE_PIO_BASE + 0x10000)
+    return ant_hvf_mmio_unsupported(vm, "PCI PIO", false, addr, size, 0);
+  return ant_hvf_mmio_unsupported(vm, "unknown", false, addr, size, 0);
+}
+
+bool ant_hvf_mmio_write(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t value) {
+  if (addr == ANT_HVF_UART_BASE) {
+    ant_hvf_uart_put(vm, (uint8_t)(value & 0xff));
+    return true;
+  }
+  if (addr >= ANT_HVF_GIC_MSI_BASE && addr < ANT_HVF_GIC_MSI_BASE + ANT_HVF_GIC_MSI_SIZE)
+    return ant_hvf_gic_msi_write(vm, addr, size, value);
+  if (addr >= ANT_HVF_RTC_BASE && addr < ANT_HVF_RTC_BASE + 0x1000)
+    return ant_hvf_rtc_write(vm, addr, size, value);
+  if (addr >= ANT_HVF_PCIE_ECAM_BASE && addr < ANT_HVF_PCIE_ECAM_BASE + ANT_HVF_PCIE_ECAM_SIZE)
+    return ant_hvf_pci_mmio_write(vm, addr, size, value);
+  ant_hvf_virtio_device_t *virtio = ant_hvf_virtio_for_bar(vm, addr);
+  if (virtio)
+    return ant_hvf_virtio_common_write(vm, virtio, addr - virtio->bar0, size, value);
+  if (addr >= ANT_HVF_PCIE_PIO_BASE && addr < ANT_HVF_PCIE_PIO_BASE + 0x10000)
+    return ant_hvf_mmio_unsupported(vm, "PCI PIO", true, addr, size, value);
+  return ant_hvf_mmio_unsupported(vm, "unknown", true, addr, size, value);
 }
 
 #endif

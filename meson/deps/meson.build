@@ -199,17 +199,6 @@ skim_sub = subproject('skim', default_options: [
   'default_library=static',
 ])
 skim_dep = skim_sub.get_variable('skim_dep')
-skim_version = skim_dep.version()
-if skim_version == 'unknown'
-  skim_version = run_command(
-    'git', '-C', src_root / 'vendor' / 'skim',
-    'describe', '--tags', '--always', '--dirty',
-    check: false
-  ).stdout().strip()
-endif
-if skim_version == ''
-  error('could not determine Skim version')
-endif
 
 allocator_deps = []
 if get_option('allocator') == 'mimalloc'

@@ -200,6 +200,7 @@
     "sections": {
       "shared": {
         "files": [
+          "src/sandbox/backends/shared/aarch64_board.c",
           "src/sandbox/backends/shared/common.c",
           "src/sandbox/backends/shared/nat.c",
           "src/sandbox/backends/shared/net_packets.c",
@@ -219,7 +220,6 @@
       },
       "darwin_hvf": {
         "files": [
-          "src/sandbox/backends/darwin/fdt.c",
           "src/sandbox/backends/darwin/gic.c",
           "src/sandbox/backends/darwin/hypervisor.c",
           "src/sandbox/backends/darwin/mmio.c",

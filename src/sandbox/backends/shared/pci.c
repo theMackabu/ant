@@ -214,3 +214,18 @@ void ant_hvf_pci_config_write(ant_hvf_vm_t *vm,
     ant_hvf_pci_write_msix_control(dev, reg, size, value);
   }
 }
+
+bool ant_hvf_pci_mmio_read(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t *value) {
+  unsigned bus, slot, fn, reg;
+  if (!ant_hvf_pci_addr(addr, &bus, &slot, &fn, &reg)) return false;
+  uint32_t word = ant_hvf_pci_config_read32(vm, bus, slot, fn, reg);
+  *value = ant_hvf_select_width(word, reg & 3u, size);
+  return true;
+}
+
+bool ant_hvf_pci_mmio_write(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t value) {
+  unsigned bus, slot, fn, reg;
+  if (!ant_hvf_pci_addr(addr, &bus, &slot, &fn, &reg)) return false;
+  ant_hvf_pci_config_write(vm, bus, slot, fn, reg, size, value);
+  return true;
+}

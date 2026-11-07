@@ -5,7 +5,6 @@
 
 #if defined(__aarch64__)
 
-#include "fdt.h" // IWYU pragma: keep
 #include "gic.h" // IWYU pragma: keep
 #include "hvf.h"
 #include "sandbox_backend/pci.h" // IWYU pragma: keep
@@ -42,9 +41,6 @@
 #include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
-
-#define ANT_HVF_ELF_MACHINE 183u
-#define ANT_HVF_ELF_MACHINE_NAME "aarch64"
 
 typedef struct {
   uint8_t *data;
@@ -184,7 +180,6 @@ int ant_read_all(int fd, void *buf, size_t len, off_t off);
 int ant_hvf_load_kernel(ant_hvf_vm_t *vm, const char *path);
 int ant_hvf_set_reg(hv_vcpu_t vcpu, hv_reg_t reg, uint64_t value, const char *name);
 
-uint64_t ant_hvf_host_cntfrq(void);
 int ant_hvf_guest_cntvct(ant_hvf_vm_t *vm, uint64_t *out);
 
 int ant_hvf_init_vcpu(ant_hvf_vm_t *vm);
@@ -196,9 +191,6 @@ uint64_t ant_hvf_select_width(uint64_t value, unsigned offset, unsigned size);
 void ant_hvf_assign_width(uint32_t *target, unsigned offset, unsigned size, uint64_t value);
 void ant_hvf_assign_width16(uint16_t *target, unsigned offset, unsigned size, uint64_t value);
 void ant_hvf_assign_width64(uint64_t *target, unsigned offset, unsigned size, uint64_t value);
-
-bool ant_hvf_mmio_read(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t *value);
-bool ant_hvf_mmio_write(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t value);
 
 int ant_hvf_advance_pc(hv_vcpu_t vcpu);
 int ant_hvf_handle_mmio(ant_hvf_vm_t *vm, hv_vcpu_exit_exception_t *ex);

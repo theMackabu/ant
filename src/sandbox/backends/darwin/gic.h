@@ -36,7 +36,4 @@ extern ant_hvf_gic_api_t ant_hvf_gic;
 int ant_hvf_load_gic_api(void);
 int ant_hvf_create_gic(ant_hvf_vm_t *vm);
 
-bool ant_hvf_gic_msi_read(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t *value);
-bool ant_hvf_gic_msi_write(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t value);
-
 #endif

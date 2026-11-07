@@ -87,12 +87,6 @@ int ant_hvf_set_reg(hv_vcpu_t vcpu, hv_reg_t reg, uint64_t value, const char *na
   return rc;
 }
 
-uint64_t ant_hvf_host_cntfrq(void) {
-  uint64_t cntfrq = 0;
-  __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(cntfrq));
-  return cntfrq;
-}
-
 int ant_hvf_guest_cntvct(ant_hvf_vm_t *vm, uint64_t *out) {
   uint64_t offset = 0;
   int rc = ant_hvf_check(

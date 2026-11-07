@@ -238,7 +238,11 @@ void ant_hvf_uart_put(ant_hvf_vm_t *vm, uint8_t byte) {
 }
 
 int ant_kvm_ioctl(int fd, unsigned long req, void *arg, const char *op) {
+#if defined(__GLIBC__)
   if (ioctl(fd, req, arg) == 0) return 0;
+#else
+  if (ioctl(fd, (int)req, arg) == 0) return 0;
+#endif
   int rc = -errno;
   fprintf(stderr, "sandbox vm: %s failed: %s\n", op, strerror(errno));
   return rc;
