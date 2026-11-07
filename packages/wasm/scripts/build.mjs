@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
-import { access, cp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { readAbi, renderAbiHeader, renderAbiModule } from './abi.mjs';
+import { access, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 
 const WASI_SDK_RELEASE = '34';
 const WASI_SDK_VERSION = '34.0';
@@ -23,9 +23,10 @@ const packageDirectory = fileURLToPath(new URL('..', import.meta.url));
 const buildDirectory = fileURLToPath(new URL('../build', import.meta.url));
 const cacheDirectory = fileURLToPath(new URL('../.cache', import.meta.url));
 const distDirectory = fileURLToPath(new URL('../dist', import.meta.url));
-const packageVendorDirectory = fileURLToPath(new URL('../vendor', import.meta.url));
-const repositoryVendorDirectory = fileURLToPath(new URL('../../../vendor', import.meta.url));
+const repositoryDirectory = fileURLToPath(new URL('../../..', import.meta.url));
+const wasmOutput = `${buildDirectory}/packages/wasm/ant.wasm`;
 const generatedDirectory = fileURLToPath(new URL('../.cache/generated', import.meta.url));
+const clangdDirectory = fileURLToPath(new URL('../.cache/clangd', import.meta.url));
 const executableSuffix = process.platform === 'win32' ? '.exe' : '';
 
 const EXPECTED_IMPORTS = [
@@ -57,10 +58,14 @@ const EXPECTED_EXPORTS = [
   'ant_set_global:function'
 ].sort();
 
+const HOST_FLAG_VARIABLES = ['CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS'];
+const crossEnvironment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !HOST_FLAG_VARIABLES.includes(name)));
+
 function run(command, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: packageDirectory,
+      env: crossEnvironment,
       stdio: 'inherit'
     });
     child.on('error', reject);
@@ -84,11 +89,6 @@ async function sha256(path) {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest('hex');
-}
-
-async function ensureVendorDirectory() {
-  if (await exists(packageVendorDirectory)) return;
-  await symlink(repositoryVendorDirectory, packageVendorDirectory, process.platform === 'win32' ? 'junction' : 'dir');
 }
 
 async function findExtractedSdk(assetName) {
@@ -192,6 +192,24 @@ async function writeCrossFile(sdk) {
   return crossFile;
 }
 
+function shellQuote(value) {
+  return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+async function writeClangdDatabase() {
+  const clangWrapper = fileURLToPath(new URL('./clang.mjs', import.meta.url));
+  const wrapper = ` ${shellQuote(clangWrapper)} `;
+  const entries = JSON.parse(await readFile(`${buildDirectory}/compile_commands.json`, 'utf8')).map(entry => {
+    const wrapperIndex = entry.arguments?.indexOf(clangWrapper) ?? -1;
+    if (wrapperIndex >= 0) return { ...entry, arguments: entry.arguments.slice(wrapperIndex + 1) };
+    const commandIndex = entry.command?.indexOf(wrapper) ?? -1;
+    if (commandIndex >= 0) return { ...entry, command: entry.command.slice(commandIndex + wrapper.length) };
+    return entry;
+  });
+  await mkdir(clangdDirectory, { recursive: true });
+  await writeFile(`${clangdDirectory}/compile_commands.json`, JSON.stringify(entries, null, 2));
+}
+
 async function verifyModuleContract(path) {
   const module = await WebAssembly.compile(await readFile(path));
   const imports = WebAssembly.Module.imports(module)
@@ -211,12 +229,11 @@ async function verifyModuleContract(path) {
 const abi = await readAbi();
 await mkdir(generatedDirectory, { recursive: true });
 await writeFile(`${generatedDirectory}/wasm_abi.h`, renderAbiHeader(abi));
-await ensureVendorDirectory();
 
 const sdk = await resolveWasiSdk();
 const crossFile = await writeCrossFile(sdk);
 const configurationStamp = `${buildDirectory}/.ant-wasi-toolchain`;
-const configuration = JSON.stringify({ abi, node: process.execPath, sdk, target: 'wasm32-wasip1' });
+const configuration = JSON.stringify({ abi, node: process.execPath, sdk, source: repositoryDirectory, target: 'wasm32-wasip1' });
 
 let configured = false;
 try {
@@ -227,11 +244,13 @@ try {
 }
 
 if (!configured) await rm(buildDirectory, { recursive: true, force: true });
-await run('meson', ['setup', ...(configured ? ['--reconfigure'] : []), buildDirectory, '--cross-file', crossFile]);
+await run('meson', ['setup', ...(configured ? ['--reconfigure'] : []), buildDirectory, repositoryDirectory, '--cross-file', crossFile]);
 await writeFile(configurationStamp, configuration);
+await writeClangdDatabase();
+
 await run('meson', ['compile', '-C', buildDirectory]);
-await run(`${sdk}/bin/llvm-strip${executableSuffix}`, [`${buildDirectory}/ant.wasm`]);
-await verifyModuleContract(`${buildDirectory}/ant.wasm`);
+await run(`${sdk}/bin/llvm-strip${executableSuffix}`, [wasmOutput]);
+await verifyModuleContract(wasmOutput);
 
 await rm(distDirectory, { recursive: true, force: true });
 await mkdir(distDirectory, { recursive: true });
@@ -239,9 +258,8 @@ await mkdir(`${distDirectory}/licenses`, { recursive: true });
 await writeFile(`${distDirectory}/abi.js`, renderAbiModule(abi));
 
 await Promise.all([
-  cp(new URL('../src/index.js', import.meta.url), new URL('../dist/index.js', import.meta.url)),
-  cp(new URL('../src/index.d.ts', import.meta.url), new URL('../dist/index.d.ts', import.meta.url)),
-  cp(new URL('../build/ant.wasm', import.meta.url), new URL('../dist/ant.wasm', import.meta.url)),
+  cp(new URL('../src/js', import.meta.url), new URL('../dist', import.meta.url), { recursive: true }),
+  cp(wasmOutput, new URL('../dist/ant.wasm', import.meta.url)),
   cp(new URL('../licenses/themackabu.txt', import.meta.url), new URL('../dist/licenses/themackabu.txt', import.meta.url)),
   cp(new URL('../../../vendor/base64-0.5.2/LICENSE', import.meta.url), new URL('../dist/licenses/base64.txt', import.meta.url)),
   cp(new URL('../../../vendor/pcre2-10.47/COPYING', import.meta.url), new URL('../dist/licenses/pcre2.txt', import.meta.url)),

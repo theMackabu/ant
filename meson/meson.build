@@ -127,8 +127,13 @@ else
   message('  pgo: no profile for ' + pgo_platform + '-' + host_machine.cpu_family())
 endif
 
-subdir('deps')
+subdir(is_wasi ? 'wasi' : 'deps')
+subdir('deps/rust')
 subdir('version')
+
+if is_wasi
+  subdir_done()
+endif
 
 npm = find_program('npm', required: true)
 tools_npm_ci = custom_target(

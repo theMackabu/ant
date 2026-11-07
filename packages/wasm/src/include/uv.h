@@ -4,19 +4,26 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include <time.h>
+
+static constexpr int UV_ENOSYS =-52;
 
 typedef struct uv_loop_s { void *data; } uv_loop_t;
 typedef enum { UV_METRICS_IDLE_TIME = 1 } uv_loop_option;
 typedef struct { bool done; } uv_once_t;
 #define UV_ONCE_INIT { false }
+
 typedef struct uv_handle_s uv_handle_t;
 typedef struct uv_timer_s uv_timer_t;
 typedef struct uv_async_s uv_async_t;
+typedef struct uv_work_s uv_work_t;
 
 typedef void (*uv_close_cb)(uv_handle_t *handle);
 typedef void (*uv_timer_cb)(uv_timer_t *handle);
 typedef void (*uv_async_cb)(uv_async_t *handle);
+typedef void (*uv_work_cb)(uv_work_t *req);
+typedef void (*uv_after_work_cb)(uv_work_t *req, int status);
 
 #define UV_HANDLE_FIELDS \
   void *data;            \
@@ -26,6 +33,22 @@ typedef void (*uv_async_cb)(uv_async_t *handle);
 struct uv_handle_s { UV_HANDLE_FIELDS };
 struct uv_timer_s { UV_HANDLE_FIELDS uv_timer_cb cb; uint64_t timeout; bool active; };
 struct uv_async_s { UV_HANDLE_FIELDS uv_async_cb cb; };
+struct uv_work_s { void *data; uv_loop_t *loop; };
+
+static inline const char *uv_strerror(int err) {
+  return strerror(-err);
+}
+
+static inline int uv_queue_work(
+  uv_loop_t *loop, uv_work_t *req, 
+  uv_work_cb work_cb, uv_after_work_cb after_work_cb
+) {
+  (void)loop;
+  (void)req;
+  (void)work_cb;
+  (void)after_work_cb;
+  return UV_ENOSYS;
+}
 
 static inline uint64_t uv_hrtime(void) {
   struct timespec ts;

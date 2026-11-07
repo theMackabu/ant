@@ -3,9 +3,8 @@ import { readFile } from 'node:fs/promises';
 export async function readAbi(path = new URL('../abi.json', import.meta.url)) {
   const abi = JSON.parse(await readFile(path, 'utf8'));
   for (const [name, value] of Object.entries(abi)) {
-    if (!/^[A-Z][A-Z0-9_]*$/.test(name) || !Number.isSafeInteger(value) || value < 0 || value > 0xffffffff) {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(name) || !Number.isSafeInteger(value) || value < 0 || value > 0xffffffff)
       throw new TypeError(`Invalid WebAssembly ABI constant ${name}`);
-    }
   }
   return abi;
 }
@@ -18,9 +17,7 @@ export function renderAbiHeader(abi) {
 }
 
 export function renderAbiModule(abi) {
-  return (
-    Object.entries(abi)
-      .map(([name, value]) => `export const ${name} = ${value};`)
-      .join('\n') + '\n'
-  );
+  return Object.entries(abi)
+    .map(([name, value]) => `export const ${name} = ${value};`)
+    .join('\n') + '\n';
 }

@@ -12,11 +12,11 @@ if rust_want_temporal or rust_want_encoding
     rust_cpu = host_machine.cpu_family()
     rust_cc_syntax = cc.get_argument_syntax()
 
-    if rust_cpu != 'aarch64' and rust_cpu != 'x86_64'
+    if host_machine.system() == 'wasi'
+      rust_target = 'wasm32-wasip1'
+    elif rust_cpu != 'aarch64' and rust_cpu != 'x86_64'
       error('Rust does not support CPU family ' + rust_cpu)
-    endif
-
-    if host_machine.system() == 'darwin'
+    elif host_machine.system() == 'darwin'
       rust_target = rust_cpu + '-apple-darwin'
     elif host_machine.system() == 'windows'
       if rust_cc_syntax == 'msvc'
@@ -78,7 +78,7 @@ if rust_want_temporal or rust_want_encoding
     temporal_include = temporal_capi_source / 'bindings/c'
     rust_features = []
     if rust_want_temporal
-      rust_features += host_machine.system() == 'windows' ? 'tzdb-embedded' : 'fs-tzdb'
+      rust_features += ['windows', 'wasi'].contains(host_machine.system()) ? 'tzdb-embedded' : 'fs-tzdb'
     endif
     if rust_want_encoding
       rust_features += 'encoding'
@@ -114,7 +114,7 @@ if rust_want_temporal or rust_want_encoding
 
     if rust_want_temporal
       temporal_args = ['-DANT_HAVE_TEMPORAL=1', '-I' + temporal_include]
-      if host_machine.system() == 'windows'
+      if ['windows', 'wasi'].contains(host_machine.system())
         temporal_args += '-DANT_TEMPORAL_EMBEDDED_TZDB=1'
       endif
       ant_deps += [declare_dependency(compile_args: temporal_args)]

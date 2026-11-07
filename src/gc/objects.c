@@ -1145,6 +1145,13 @@ void gc_mark_conservative_range(ant_t *js, const void *ptr, size_t size) {
 _Thread_local gc_uv_seg_t *gc_uv_segs = NULL;
 _Thread_local uintptr_t gc_uv_run_sp = 0;
 
+#if (defined(__aarch64__) || defined(__x86_64__)) && !defined(_WIN32) && !defined(ANT_WASM_EMBED)
+#define GC_SCAN_SEGMENTED 1
+#else
+#define GC_SCAN_SEGMENTED 0
+#endif
+
+#if GC_SCAN_SEGMENTED
 typedef struct {
   uintptr_t fp;
   uintptr_t lo, hi;
@@ -1229,6 +1236,7 @@ static void gc_scan_segmented(ant_t *js, uintptr_t lo, uintptr_t hi) {
   
   if (cur < hi) gc_scan_range(js, cur, hi);
 }
+#endif
 
 __attribute__((noinline))
 static void gc_scan_current_stack(ant_t *js) {
@@ -1238,7 +1246,7 @@ static void gc_scan_current_stack(ant_t *js) {
 #endif
   uintptr_t lo, hi;
   if (!gc_get_stack_bounds((uintptr_t)js->cstk.base, gc_native_sp(), &lo, &hi)) return;
-#if (defined(__aarch64__) || defined(__x86_64__)) && !defined(_WIN32) && !defined(ANT_WASM_EMBED)
+#if GC_SCAN_SEGMENTED
   if (js->vm_segs || gc_uv_segs) {
     gc_scan_segmented(js, lo, hi);
     return;

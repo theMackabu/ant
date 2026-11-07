@@ -69,6 +69,10 @@ add_project_arguments(
   language: 'c'
 )
 
+if is_wasi
+  subdir_done()
+endif
+
 dep_versions = {
   'SKIM': skim_dep.version(),
   'UV': libuv_dep.version(),

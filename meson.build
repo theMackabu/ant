@@ -13,6 +13,7 @@ project('ant', ['c', 'cpp'], default_options: [
 python = find_program('python3')
 fs = import('fs')
 is_static = get_option('static_link')
+is_wasi = host_machine.system() == 'wasi'
 
 src_root = meson.project_source_root()
 include = include_directories('include')
@@ -97,6 +98,11 @@ unicode_id_h = custom_target('unicode_id_h',
   command: [python, files('meson/unicode_id.py'), '@INPUT@', '@OUTPUT@'],
   depend_files: files('meson/unicode_id.py'),
 )
+
+if is_wasi
+  subdir('packages/wasm')
+  subdir_done()
+endif
 
 lib_sources = files(run_command(
   python, files('meson/sources.py'), files('sources.json'), 'engine',

@@ -74,7 +74,6 @@ node_modules
 /packages/wasm/.cache
 /packages/wasm/build
 /packages/wasm/dist
-/packages/wasm/vendor
 
 /packages/desktop/.cache
 /packages/desktop/build

@@ -233,5 +233,3 @@ if get_option('unsafe_c').enabled()
 endif
 
 ant_slim_deps = ant_deps
-
-subdir('rust')

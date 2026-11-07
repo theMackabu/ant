@@ -4,6 +4,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+bool ant_env_bool(const char *value, bool default_value) {
+  if (!value || !*value) return default_value;
+#define IS(literal) (strcmp(value, literal) == 0)
+  bool falsy = IS("0") || IS("false") || IS("FALSE") ||
+    IS("off") || IS("OFF") || IS("no") || IS("NO");
+#undef IS
+  return !falsy;
+}
+
 char hex_char(int v) {
   return "0123456789abcdef"[v & 0x0f];
 }
