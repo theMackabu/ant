@@ -254,7 +254,7 @@ foreach name : sandbox_tests
   executable(
     'test-sandbox-' + name,
     files(tests_root / 'test_sandbox_' + name.replace('-', '_') + '.c'),
-    dependencies: libant_dep,
+    dependencies: name == '9p' ? libant_dep : sandbox_vm_dep,
     build_by_default: false
   )
 endforeach

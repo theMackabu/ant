@@ -33,7 +33,10 @@
     "exclude": [
       "src/main.c",
       "src/main_runtime.c",
-      "src/modules/sandbox_stub.c"
+      "src/modules/sandbox_stub.c",
+      "src/sandbox/payload.c",
+      "src/sandbox/vm.c",
+      "src/sandbox/vm_helper.c"
     ]
   },
   "library": {
@@ -73,7 +76,10 @@
     "exclude": [
       "src/main.c",
       "src/main_runtime.c",
-      "src/modules/sandbox_stub.c"
+      "src/modules/sandbox_stub.c",
+      "src/sandbox/payload.c",
+      "src/sandbox/vm.c",
+      "src/sandbox/vm_helper.c"
     ]
   },
   "runtime": {
@@ -194,6 +200,13 @@
       "src/gc/verify.c",
       "src/silver/ast_export.c",
       "src/silver/generic_step.c"
+    ]
+  },
+  "sandbox_vm": {
+    "files": [
+      "src/sandbox/payload.c",
+      "src/sandbox/vm.c",
+      "src/sandbox/vm_helper.c"
     ]
   },
   "sandbox_backend": {

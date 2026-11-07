@@ -105,9 +105,28 @@ lib_sources = files(run_command(
 
 section_gc_c_args = host_machine.system() != 'darwin' ? ['-ffunction-sections', '-fdata-sections'] : []
 
+sandbox_vm_sources = files(run_command(
+  python, files('meson/sources.py'), files('sources.json'), 'sandbox_vm',
+  check: true
+).stdout().strip().split())
+
+libsandbox_vm = static_library(
+  'sandbox_vm',
+  sandbox_vm_sources + sandbox_backend_sources,
+  include_directories: [include, sandbox_backend_include],
+  c_args: section_gc_c_args,
+  dependencies: dependency('threads'),
+)
+
+sandbox_vm_dep = declare_dependency(
+  link_with: libsandbox_vm,
+  include_directories: [include, sandbox_backend_include],
+  dependencies: dependency('threads'),
+)
+
 libant = static_library(
   'ant',
-  lib_sources + sandbox_backend_sources + [
+  lib_sources + [
     builtins_h,
     generic_step_h,
     messages_h,
@@ -119,6 +138,7 @@ libant = static_library(
   install: true,
   include_directories: [include, sandbox_backend_include],
   c_args: section_gc_c_args,
+  link_whole: libsandbox_vm,
   dependencies: ant_deps
 )
 

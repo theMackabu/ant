@@ -2,6 +2,7 @@
 
 #include "sandbox/sandbox.h"
 #include "sandbox/transport.h"
+#include "frame_reader.h"
 
 #include "ant.h"
 #include "errors.h"
@@ -61,17 +62,6 @@ static uint8_t *sandbox_write_u32(uint8_t *out, uint32_t value) {
   return out + 4;
 }
 
-static uint16_t sandbox_load16(const uint8_t *in) {
-  return (uint16_t)((uint16_t)in[0] | ((uint16_t)in[1] << 8));
-}
-
-static uint32_t sandbox_load32(const uint8_t *in) {
-  return (uint32_t)in[0] |
-         ((uint32_t)in[1] << 8) |
-         ((uint32_t)in[2] << 16) |
-         ((uint32_t)in[3] << 24);
-}
-
 static bool sandbox_frame_add_size(size_t *total, size_t add) {
   if (add > SIZE_MAX - *total) return false;
   *total += add;
@@ -95,12 +85,6 @@ static uint8_t *sandbox_write_string(uint8_t *out, const char *str) {
 static uint8_t *sandbox_write_u64(uint8_t *out, uint64_t value) {
   for (int i = 0; i < 8; i++) out[i] = (uint8_t)(value >> (i * 8));
   return out + 8;
-}
-
-static uint64_t sandbox_load64(const uint8_t *in) {
-  uint64_t value = 0;
-  for (int i = 0; i < 8; i++) value |= ((uint64_t)in[i]) << (i * 8);
-  return value;
 }
 
 static bool sandbox_payload_string_size(size_t *total, const char *str, size_t len) {
@@ -249,25 +233,6 @@ uint8_t *ant_sandbox_build_close_request_frame(size_t *len_out) {
   return sandbox_alloc_frame(ANT_SANDBOX_FRAME_CLOSE, 0, len_out);
 }
 
-typedef struct {
-  const uint8_t *p;
-  const uint8_t *end;
-} sandbox_frame_reader_t;
-
-static bool sandbox_read_u32(sandbox_frame_reader_t *r, uint32_t *out) {
-  if ((size_t)(r->end - r->p) < 4) return false;
-  *out = sandbox_load32(r->p);
-  r->p += 4;
-  return true;
-}
-
-static bool sandbox_read_u16(sandbox_frame_reader_t *r, uint16_t *out) {
-  if ((size_t)(r->end - r->p) < 2) return false;
-  *out = sandbox_load16(r->p);
-  r->p += 2;
-  return true;
-}
-
 static bool sandbox_read_string(sandbox_frame_reader_t *r, char **out) {
   uint32_t len;
   if (!sandbox_read_u32(r, &len)) return false;
@@ -277,35 +242,20 @@ static bool sandbox_read_string(sandbox_frame_reader_t *r, char **out) {
   return true;
 }
 
-static bool sandbox_read_string_view(sandbox_frame_reader_t *r, const char **out, size_t *len_out) {
-  uint32_t len;
-  if (!sandbox_read_u32(r, &len)) return false;
-  if ((size_t)(r->end - r->p) < len) return false;
-  *out = (const char *)r->p;
-  *len_out = len;
-  r->p += len;
-  return true;
-}
-
-static bool sandbox_read_u64(sandbox_frame_reader_t *r, uint64_t *out) {
-  if ((size_t)(r->end - r->p) < 8) return false;
-  *out = sandbox_load64(r->p);
-  r->p += 8;
-  return true;
-}
-
 static bool sandbox_read_forwards(sandbox_frame_reader_t *r, ant_sandbox_request_t *out) {
   if (r->p == r->end) return true;
   uint32_t forward_count = 0;
+  
   if (!sandbox_read_u32(r, &forward_count)) return false;
   if ((size_t)(r->end - r->p) < (size_t)forward_count * 2u) return false;
   out->forward_count = forward_count;
+  
   if (forward_count > 0) {
     out->forward_ports = try_oom(sizeof(*out->forward_ports) * (size_t)forward_count);
-    for (uint32_t i = 0; i < forward_count; i++) {
+    for (uint32_t i = 0; i < forward_count; i++)
       if (!sandbox_read_u16(r, &out->forward_ports[i])) return false;
-    }
   }
+  
   return true;
 }
 
@@ -625,39 +575,6 @@ ant_value_t ant_sandbox_decode_error_value(ant_t *js, const void *payload, size_
 
   GC_ROOT_RESTORE(js, root_mark);
   return err;
-}
-
-bool ant_sandbox_result_payload_display(const void *payload, size_t payload_len, const char **out, size_t *out_len) {
-  if (!payload || !out || !out_len || payload_len < 1) return false;
-  sandbox_frame_reader_t r = { payload, (const uint8_t *)payload + payload_len };
-  uint8_t type = *r.p++;
-  if (type == ANT_SANDBOX_VALUE_BOOL) {
-    if (r.p >= r.end) return false;
-    r.p++;
-  } else if (type == ANT_SANDBOX_VALUE_NUMBER) {
-    uint64_t bits;
-    if (!sandbox_read_u64(&r, &bits)) return false;
-  } else if (type == ANT_SANDBOX_VALUE_STRING) {
-    const char *str;
-    size_t len;
-    if (!sandbox_read_string_view(&r, &str, &len)) return false;
-  } else if (type != ANT_SANDBOX_VALUE_UNDEFINED &&
-             type != ANT_SANDBOX_VALUE_NULL &&
-             type != ANT_SANDBOX_VALUE_DISPLAY) {
-    return false;
-  }
-  return sandbox_read_string_view(&r, out, out_len) && r.p == r.end;
-}
-
-bool ant_sandbox_error_payload_display(const void *payload, size_t payload_len, const char **out, size_t *out_len) {
-  if (!payload || !out || !out_len) return false;
-  sandbox_frame_reader_t r = { payload, (const uint8_t *)payload + payload_len };
-  const char *unused = NULL;
-  size_t unused_len = 0;
-  if (!sandbox_read_string_view(&r, &unused, &unused_len)) return false;
-  if (!sandbox_read_string_view(&r, &unused, &unused_len)) return false;
-  if (!sandbox_read_string_view(&r, &unused, &unused_len)) return false;
-  return sandbox_read_string_view(&r, out, out_len) && r.p == r.end;
 }
 
 static bool sandbox_send_result_frame(ant_t *js, ant_value_t value) {
