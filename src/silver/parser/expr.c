@@ -241,25 +241,30 @@ static bool is_assign_op(uint8_t tok) {
 sv_ast_t *parse_assign(sv_parser_t *p) {
   sv_ast_t *left = parse_ternary(p);
   uint8_t op = sv_lexer_next(&p->lx);
+  
   if (op == TOK_ARROW) {
     if (p->lx.st.had_newline) {
       SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Line terminator not allowed before arrow");
       return mk(N_EMPTY);
     }
+    
     p->lx.st.consumed = 1;
     sv_ast_t *fn = mk(N_FUNC);
     fn->flags = FN_ARROW;
     fn->src_off = left->src_off;
-    if (left->type == N_IDENT) {
-      sv_ast_list_push(p->js, &fn->args, left);
+    
+    if (arrow_param_is_name(left) && !(left->flags & FN_PAREN)) {
+      push_arrow_params_from_expr(p, fn, left);
     } else if (left->flags & FN_PAREN) {
-      if (left->type != N_UNDEF) push_arrow_params_from_expr(p, fn, left);
+      if (left->type != N_UNDEF || left->str) push_arrow_params_from_expr(p, fn, left);
     } else {
       SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Malformed arrow function parameter list");
       return mk(N_EMPTY);
     }
+    
     fn->body = parse_arrow_body(p, false);
     fn->src_end = node_src_end(p, fn->body);
+    
     return finish_arrow(p, fn);
   }
   

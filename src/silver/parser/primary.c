@@ -135,12 +135,53 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     return n;
   }
 
-  l_true:  { p->lx.st.consumed = 1; sv_ast_t *n = mk(N_BOOL); n->num = 1; n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen); return n; }
-  l_false: { p->lx.st.consumed = 1; sv_ast_t *n = mk(N_BOOL); n->num = 0; n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen); return n; }
-  l_null:  { p->lx.st.consumed = 1; sv_ast_t *n = mk(N_NULL); n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen); return n; }
-  l_undef: { p->lx.st.consumed = 1; sv_ast_t *n = mk(N_UNDEF); n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen); return n; }
-  l_this:  { p->lx.st.consumed = 1; sv_ast_t *n = mk(N_THIS); n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen); return n; }
-  l_globalthis: { p->lx.st.consumed = 1; sv_ast_t *n = mk(N_GLOBAL_THIS); n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen); return n; }
+  l_true: {
+    p->lx.st.consumed = 1;
+    sv_ast_t *n = mk(N_BOOL);
+    n->num = 1;
+    n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
+    return n;
+  }
+
+  l_false: {
+    p->lx.st.consumed = 1;
+    sv_ast_t *n = mk(N_BOOL);
+    n->num = 0;
+    n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
+    return n;
+  }
+
+  l_null: {
+    p->lx.st.consumed = 1;
+    sv_ast_t *n = mk(N_NULL);
+    n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
+    return n;
+  }
+
+  l_undef: {
+    p->lx.st.consumed = 1;
+    sv_ast_t *n = mk(N_UNDEF);
+    n->str = tok_str(p);
+    n->len = (uint32_t)p->lx.st.tlen;
+    n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
+    return n;
+  }
+
+  l_this: {
+    p->lx.st.consumed = 1;
+    sv_ast_t *n = mk(N_THIS);
+    n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
+    return n;
+  }
+
+  l_globalthis: {
+    p->lx.st.consumed = 1;
+    sv_ast_t *n = mk(N_GLOBAL_THIS);
+    n->str = tok_str(p);
+    n->len = (uint32_t)p->lx.st.tlen;
+    n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
+    return n;
+  }
 
   l_ident: {
     p->lx.st.consumed = 1;

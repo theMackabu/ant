@@ -51,6 +51,7 @@ void sv_parse_stop(sv_parser_t *p);
 void consume_semicolon(sv_parser_t *p);
 
 bool sv_parse_stack_overflow(sv_parser_t *p);
+bool arrow_param_is_name(const sv_ast_t *node);
 bool lookahead_crosses_line_terminator(sv_parser_t *p);
 bool using_declaration_here(sv_parser_t *p, bool for_head);
 bool validate_accessor_params(sv_parser_t *p, sv_ast_t *fn, uint32_t flags);

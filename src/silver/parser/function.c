@@ -12,13 +12,47 @@ sv_ast_t *parse_arrow_body(sv_parser_t *p, bool is_async) {
   return body;
 }
 
+static void arrow_param_bind_names(sv_ast_t *node) {
+  if (!node) return;
+  switch (node->type) {
+    case N_UNDEF:
+    case N_GLOBAL_THIS:
+      if (node->str) node->type = N_IDENT;
+      return;
+    case N_ASSIGN:
+    case N_ASSIGN_PAT:
+      arrow_param_bind_names(node->left);
+      return;
+    case N_SPREAD:
+    case N_REST:
+    case N_PROPERTY:
+      arrow_param_bind_names(node->right);
+      return;
+    case N_ARRAY:
+    case N_ARRAY_PAT:
+    case N_OBJECT:
+    case N_OBJECT_PAT:
+      for (int i = 0; i < node->args.count; i++) arrow_param_bind_names(node->args.items[i]);
+      return;
+    default:
+      return;
+  }
+}
+
+bool arrow_param_is_name(const sv_ast_t *node) {
+  return node && (node->type == N_IDENT || ((node->type == N_UNDEF || node->type == N_GLOBAL_THIS) && node->str));
+}
+
 void push_arrow_params_from_expr(sv_parser_t *p, sv_ast_t *fn, sv_ast_t *expr) {
   if (!fn || !expr) return;
+  arrow_param_bind_names(expr);
+  
   if (expr->type == N_SEQUENCE) {
     push_arrow_params_from_expr(p, fn, expr->left);
     push_arrow_params_from_expr(p, fn, expr->right);
     return;
   }
+  
   if (expr->type == N_ASSIGN && expr->op == TOK_ASSIGN) {
     sv_ast_t *def = mk_plain(N_ASSIGN_PAT);
     def->left = expr->left;
@@ -27,6 +61,7 @@ void push_arrow_params_from_expr(sv_parser_t *p, sv_ast_t *fn, sv_ast_t *expr) {
     sv_ast_list_push(p->js, &fn->args, def);
     return;
   }
+  
   if (expr->type == N_SPREAD) {
     sv_ast_t *rest = mk_plain(N_REST);
     rest->right = expr->right;
@@ -34,6 +69,7 @@ void push_arrow_params_from_expr(sv_parser_t *p, sv_ast_t *fn, sv_ast_t *expr) {
     sv_ast_list_push(p->js, &fn->args, rest);
     return;
   }
+  
   sv_ast_list_push(p->js, &fn->args, expr);
 }
 
@@ -80,7 +116,7 @@ sv_ast_t *try_parse_async_arrow(sv_parser_t *p) {
     return NULL;
   }
 
-  if (la == TOK_IDENTIFIER) {
+  if (la == TOK_IDENTIFIER || la == TOK_UNDEF || la == TOK_GLOBAL_THIS) {
     sv_lexer_state_t saved;
     sv_lexer_save_state(&p->lx, &saved);
     sv_lexer_next(&p->lx); p->lx.st.consumed = 1;
