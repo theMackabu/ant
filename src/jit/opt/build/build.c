@@ -4383,6 +4383,15 @@ static opt_flow_t opt_build_array(opt_builder_t *b, const uint8_t *ip) {
   return OPT_FLOW_CONTINUE;
 }
 
+static opt_flow_t opt_build_array_const(opt_builder_t *b) {
+  opt_rt_site_t *at = code_arena_bump(b->js, sizeof *at);
+  if (!at) return OPT_FLOW_GENERIC;
+  *at = (opt_rt_site_t){.func = b->func, .bc_off = b->pc};
+  ir_node_id_t undefined = opt_constant(b, IR_VALUE_UNDEFINED);
+  opt_push(b, opt_runtime_call(b, (uintptr_t)opt_rt_array_const, (uintptr_t)at, (ir_node_id_t[]){undefined, undefined}, 2, true, false));
+  return OPT_FLOW_CONTINUE;
+}
+
 static opt_flow_t opt_build_closure(opt_builder_t *b, const uint8_t *ip) {
   sv_func_t *func = b->func;
   uint32_t index = sv_get_u32(ip + 1);
@@ -5814,6 +5823,8 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
       return opt_build_set_proto(b);
     case OP_ARRAY:
       return opt_build_array(b, ip);
+    case OP_ARRAY_CONST:
+      return opt_build_array_const(b);
     case OP_CLOSURE:
       return opt_build_closure(b, ip);
     case OP_SET_NAME:

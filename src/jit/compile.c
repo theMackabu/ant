@@ -519,6 +519,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_SPECIAL_OBJ:
       case OP_OBJECT:
       case OP_ARRAY:
+      case OP_ARRAY_CONST:
       case OP_EMPTY:
       case OP_REGEXP:
         jit_emit_literals(c);

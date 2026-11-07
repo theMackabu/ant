@@ -53,6 +53,11 @@ L_ARRAY: {
   NEXT(OP_ARRAY);
 }
 
+L_ARRAY_CONST: {
+  VM_CHECK(sv_op_array_const(vm, js, func, ip));
+  NEXT(OP_ARRAY_CONST);
+}
+
 L_SET_BRAND: {
   sv_op_set_brand(vm, ip);
   NEXT(OP_SET_BRAND);

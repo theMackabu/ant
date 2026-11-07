@@ -2,16 +2,17 @@
 #define ANT_SILVER_COMPILER_COMPILER_INTERNAL_H
 
 #include "utf8.h"
-#include "hash.h"
-#include "numbers.h"
-#include "tokens.h"
+#include "hash.h"    // IWYU pragma: export
+#include "numbers.h" // IWYU pragma: export
+#include "tokens.h"  // IWYU pragma: export
 
-#include "silver/jit.h"
-#include "silver/compile_ctx.h"
-#include "silver/compiler.h"
-#include "silver/directives.h"
-#include "silver/eval_env.h"
-#include "silver/call.h"
+#include "silver/jit.h"  // IWYU pragma: export
+#include "silver/call.h" // IWYU pragma: export
+
+#include "silver/compile_ctx.h" // IWYU pragma: export
+#include "silver/compiler.h"    // IWYU pragma: export
+#include "silver/directives.h"  // IWYU pragma: export
+#include "silver/eval_env.h"    // IWYU pragma: export
 
 static constexpr size_t SV_LITERAL_NUM_KEY_BUF_SIZE = 32;
 
@@ -79,6 +80,7 @@ void emit_op(sv_compiler_t *c, sv_op_t op);
 void emit_srcpos(sv_compiler_t *c, sv_ast_t *node);
 uint32_t source_line_of(const sv_compiler_t *c, const sv_ast_t *node);
 int add_constant(sv_compiler_t *c, ant_value_t val);
+int add_constant_run(sv_compiler_t *c, const ant_value_t *vals, int count);
 bool build_gc_const_tables(ant_t *js, sv_func_t *func);
 sv_ic_entry_t *alloc_ic_slots(ant_t *js, uint16_t count);
 void emit_constant(sv_compiler_t *c, ant_value_t val);

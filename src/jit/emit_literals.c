@@ -233,6 +233,21 @@ void jit_emit_literals(jit_compile_t *c) {
       break;
     }
 
+    case OP_ARRAY_CONST: {
+      MIR_reg_t dst = vstack_push(&c->vs);
+      MIR_append_insn(c->ctx, c->jit_func,
+                      MIR_new_call_insn(c->ctx, 7,
+                                        MIR_new_ref_op(c->ctx, c->array_proto),
+                                        MIR_new_ref_op(c->ctx, c->imp_array),
+                                        MIR_new_reg_op(c->ctx, dst),
+                                        MIR_new_reg_op(c->ctx, c->r_vm),
+                                        MIR_new_reg_op(c->ctx, c->r_js),
+                                        MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)(c->func->constants + sv_get_u32(c->ip + 1))),
+                                        MIR_new_int_op(c->ctx, (int64_t)sv_get_u32(c->ip + 5))));
+      jit_emit_throw_if_error(c, dst);
+      break;
+    }
+
     case OP_REGEXP: {
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
       vstack_ensure_boxed(&c->vs, c->vs.sp - 2, c->ctx, c->jit_func, c->r_d_slot);

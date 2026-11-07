@@ -307,6 +307,7 @@ OP_DEF(  PUT_EVAL_FUNCTION, 5,   1,   0, atom)
 OP_DEF(  INIT_GLOBAL_LEX,   5,   1,   0, atom)
 OP_DEF(  CLOSURE_ARGS,      5,   0,   1, const)     /* closure in a function with mapped arguments: link captured params */
 OP_DEF(  GET_UPVAL_VAL,     3,   0,   1, var_ref)
+OP_DEF(  ARRAY_CONST,       9,   0,   1, u32)       /* push array copied from constant pool run (u32 start, u32 count) */
 #undef OP_DEF
 #undef op_def
 #endif
@@ -323,6 +324,7 @@ OP_FLAG(THIS                  , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV
 OP_FLAG(GLOBAL                , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(OBJECT                , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(ARRAY                 , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_OPT_NATIVE)
+OP_FLAG(ARRAY_CONST           , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(EMPTY                 , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(REGEXP                , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(CLOSURE               , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_CLOSE_UPVAL | SV_OPF_OPT_NATIVE)

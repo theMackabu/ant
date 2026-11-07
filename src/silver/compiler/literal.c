@@ -7,28 +7,75 @@ size_t literal_num_key(double num, char *buf, size_t cap) {
 }
 
 static constexpr int SV_SHAPED_LITERAL_MAX_KEYS = 32;
+static constexpr int SV_CONST_ARRAY_INLINE_MAX = 32;
+
+static bool array_elem_is_constant(const sv_ast_t *elem) {
+  if (!elem) return false;
+  switch (elem->type) {
+    case N_NUMBER: case N_STRING: case N_BOOL: case N_NULL: case N_EMPTY: return true;
+    case N_UNARY: return elem->op == TOK_UMINUS && elem->right && elem->right->type == N_NUMBER;
+    default: return false;
+  }
+}
+
+static ant_value_t array_elem_constant(sv_compiler_t *c, const sv_ast_t *elem) {
+  switch (elem->type) {
+    case N_NUMBER: return Ant_Value_FromNumber(elem->num);
+    case N_STRING: return ast_string_const(c, elem);
+    case N_BOOL:   return Ant_Value_FromBool(elem->num != 0.0);
+    case N_NULL:   return Ant_Value_Null;
+    case N_EMPTY:  return T_EMPTY;
+    default:       return Ant_Value_FromNumber(-elem->right->num);
+  }
+}
+
+static bool compile_constant_array(sv_compiler_t *c, sv_ast_t *node) {
+  int count = node->args.count;
+  ant_value_t *vals = malloc((size_t)count * sizeof(ant_value_t));
+  if (!vals) return false;
+
+  for (int i = 0; i < count; i++) {
+    vals[i] = array_elem_constant(c, node->args.items[i]);
+    if (is_err(vals[i])) { free(vals); return false; }
+  }
+
+  int start = add_constant_run(c, vals, count);
+  free(vals);
+  if (start < 0) return false;
+
+  emit_op(c, OP_ARRAY_CONST);
+  emit_u32(c, (uint32_t)start);
+  emit_u32(c, (uint32_t)count);
+  
+  return true;
+}
 
 void compile_array(sv_compiler_t *c, sv_ast_t *node) {
   int count = node->args.count;
   bool has_spread = false;
+  bool all_constant = true;
+  
   for (int i = 0; i < count; i++) {
     sv_ast_t *elem = node->args.items[i];
     if (elem && elem->type == N_SPREAD) {
       has_spread = true;
       break;
     }
+    if (all_constant && !array_elem_is_constant(elem)) all_constant = false;
   }
 
-  if (!has_spread) {
+  if (!has_spread && all_constant && count > SV_CONST_ARRAY_INLINE_MAX && compile_constant_array(c, node)) return;
+
+  if (!has_spread && count <= UINT16_MAX) {
     for (int i = 0; i < count; i++) {
       sv_ast_t *elem = node->args.items[i];
-      if (elem && elem->type == N_EMPTY)
-        emit_op(c, OP_EMPTY);
-      else
-        compile_expr(c, elem);
+      if (elem && elem->type == N_EMPTY) emit_op(c, OP_EMPTY);
+      else compile_expr(c, elem);
     }
+    
     emit_op(c, OP_ARRAY);
     emit_u16(c, (uint16_t)count);
+    
     return;
   }
 

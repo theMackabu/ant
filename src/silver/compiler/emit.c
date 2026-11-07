@@ -135,6 +135,25 @@ int add_constant(sv_compiler_t *c, ant_value_t val) {
   return c->const_count++;
 }
 
+int add_constant_run(sv_compiler_t *c, const ant_value_t *vals, int count) {
+  if (c->const_count + count > c->const_cap) {
+    int cap = c->const_cap ? c->const_cap : 16;
+    while (cap < c->const_count + count) cap *= 2;
+    
+    ant_value_t *grown = realloc(c->constants, (size_t)cap * sizeof(ant_value_t));
+    if (!grown) return -1;
+    
+    c->constants = grown;
+    c->const_cap = cap;
+  }
+  
+  int start = c->const_count;
+  memcpy(c->constants + start, vals, (size_t)count * sizeof(ant_value_t));
+  c->const_count += count;
+  
+  return start;
+}
+
 bool build_gc_const_tables(ant_t *js, sv_func_t *func) {
   if (!func || func->const_count <= 0 || !func->constants) return true;
 

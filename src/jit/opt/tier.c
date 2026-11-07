@@ -1052,6 +1052,11 @@ ant_value_t opt_rt_array(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, a
   return js_mkarr_dense_literal(vm->js, args, (uint32_t)argc);
 }
 
+ant_value_t opt_rt_array_const(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
+  const uint8_t *ip = site->func->code + site->bc_off;
+  return js_mkarr_dense_literal(vm->js, site->func->constants + sv_get_u32(ip + 1), sv_get_u32(ip + 5));
+}
+
 ant_value_t opt_rt_closure(sv_vm_t *vm, sv_closure_t *parent, ant_value_t this_val, ant_value_t *args, int64_t argc, const opt_rt_closure_site_t *site) {
   return jit_helper_closure_inherited(vm->js, site->func, parent, this_val, site->index, site->name, site->name_len);
 }
