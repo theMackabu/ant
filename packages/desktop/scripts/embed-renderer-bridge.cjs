@@ -4,15 +4,15 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { libantVersion } = require('./lib/libant.cjs');
 const { readRuntimeLock } = require('./lib/runtime-lock.cjs');
 
 const desktopRoot = path.resolve(__dirname, '..');
 const repositoryRoot = path.resolve(desktopRoot, '../..');
 
 function antVersion() {
-  const header = path.join(repositoryRoot, 'packages', 'libant', 'dist', 'ant.h');
-  const match = fs.existsSync(header) && fs.readFileSync(header, 'utf8').match(/^#define ANT_VERSION "([^"]+)"$/m);
-  if (match) return match[1];
+  const version = libantVersion();
+  if (version) return version;
 
   const executable = path.join(repositoryRoot, 'build', 'ant');
   const result = spawnSync(executable, ['--version-raw'], {

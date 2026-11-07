@@ -2,7 +2,6 @@ option('allocator', type: 'combo', choices: ['mimalloc', 'system'], value: 'syst
 option('static_link', type: 'boolean', value: false, description: 'statically link the binary')
 option('linker_map', type: 'boolean', value: false, description: 'emit a linker map for the ant binary')
 option('codesign', type: 'boolean', value: true, description: 'codesign the Ant binary on Darwin')
-option('embed_example', type: 'feature', value: 'auto', description: 'configure to build the libant embed example')
 option('runtime_binary', type: 'feature', value: 'auto', description: 'build the tooling-free ant-runtime binary used by ant compile')
 option('temporal', type: 'feature', value: 'enabled', description: 'build the Temporal API from temporal_capi')
 option('encoding_rs', type: 'feature', value: 'enabled', description: 'decode legacy TextDecoder encodings with encoding_rs')

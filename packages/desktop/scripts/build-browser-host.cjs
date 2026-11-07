@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { execute } = require('./lib/command.cjs');
+const { ensureLibant } = require('./lib/libant.cjs');
 const {
   assertHostMatches,
   readRuntimeLock
@@ -12,8 +13,6 @@ const {
 const { fetchBrowserRuntime } = require('./fetch-browser-runtime.cjs');
 
 const desktopRoot = path.resolve(__dirname, '..');
-const repositoryRoot = path.resolve(desktopRoot, '../..');
-const libant = path.join(repositoryRoot, 'packages', 'libant', 'dist');
 
 function findExecutable(name) {
   for (const directory of (process.env.PATH || '').split(path.delimiter)) {
@@ -25,10 +24,7 @@ function findExecutable(name) {
 }
 
 async function buildBrowserHost() {
-  if (!fs.existsSync(path.join(libant, 'libant.a')) ||
-      !fs.existsSync(path.join(libant, 'ant.h'))) {
-    execute(path.join(repositoryRoot, 'packages', 'libant', 'build.sh'), []);
-  }
+  const libant = ensureLibant();
   const lock = readRuntimeLock();
   const target = assertHostMatches(lock);
   const cefRoot = await fetchBrowserRuntime();

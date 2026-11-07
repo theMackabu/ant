@@ -9,8 +9,8 @@ project(ant_desktop_runtime)
 if(NOT CEF_ROOT)
   message(FATAL_ERROR "Pass -DCEF_ROOT=/path/to/cef_binary_*")
 endif()
-if(NOT LIBANT_ROOT OR NOT EXISTS "${LIBANT_ROOT}/libant.a")
-  message(FATAL_ERROR "Pass -DLIBANT_ROOT=/path/to/libant/dist")
+if(NOT LIBANT_ROOT OR NOT EXISTS "${LIBANT_ROOT}/lib/libant.a")
+  message(FATAL_ERROR "Pass -DLIBANT_ROOT=/path/to/build-embed/libant")
 endif()
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CEF_ROOT}/cmake")
@@ -106,9 +106,9 @@ foreach(_suffix_list ${CEF_HELPER_APP_SUFFIXES})
     ${CEF_STANDARD_LIBS})
   if(_target_suffix STREQUAL "_renderer")
     target_compile_definitions(${_helper_target} PRIVATE ANT_DESKTOP_RUNTIME_INTEGRATION=1)
-    target_include_directories(${_helper_target} PRIVATE "${LIBANT_ROOT}")
+    target_include_directories(${_helper_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../../include")
     target_link_libraries(${_helper_target}
-      "${LIBANT_ROOT}/libant.a"
+      "${LIBANT_ROOT}/lib/libant.a"
       "-framework Security"
       "-framework CoreFoundation"
       "-framework Hypervisor"

@@ -5,12 +5,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { execute } = require('./lib/command.cjs');
+const libant = require('./lib/libant.cjs');
 const { embedRendererBridge } = require('./embed-renderer-bridge.cjs');
 const { readRuntimeLock } = require('./lib/runtime-lock.cjs');
 
 const desktopRoot = path.resolve(__dirname, '..');
 const repositoryRoot = path.resolve(desktopRoot, '../..');
-const libant = path.join(repositoryRoot, 'packages', 'libant', 'dist');
 const sources = [
   'app/archive/archive.c',
   'app/api/app.c',
@@ -51,9 +51,7 @@ function buildApp() {
     'libcef_dll_wrapper.a'
   );
   if (!fs.existsSync(cefWrapper)) execute(process.execPath, [path.join(__dirname, 'build-browser-host.cjs')]);
-  if (!fs.existsSync(path.join(libant, 'libant.a')) || !fs.existsSync(path.join(libant, 'ant.h'))) {
-    execute(path.join(repositoryRoot, 'packages', 'libant', 'build.sh'), []);
-  }
+  libant.ensureLibant();
 
   const build = path.join(desktopRoot, 'build');
   const objectRoot = path.join(build, 'obj');
@@ -95,7 +93,6 @@ function buildApp() {
         '-mmacosx-version-min=15.0',
         '-isysroot',
         sdk,
-        `-I${libant}`,
         `-I${path.join(repositoryRoot, 'include')}`,
         `-I${generated}`,
         `-I${cefRoot}`,
@@ -120,7 +117,7 @@ function buildApp() {
       '-isysroot',
       sdk,
       ...objects,
-      path.join(libant, 'libant.a'),
+      libant.archive,
       cefWrapper,
       '-framework',
       'AppKit',

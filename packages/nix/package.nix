@@ -144,7 +144,6 @@ antStdenv.mkDerivation (finalAttrs: {
     "--native-file=${mesonNativeFile}"
     "-Dbuild_git_hash=${gitRev}"
     "-Db_lto_mode=default"
-    "-Dembed_example=disabled"
   ] ++ lib.optionals stdenv.hostPlatform.isDarwin [
     "-Dllvm_nm=${lib.getExe' llvmPackages_21.llvm "llvm-nm"}"
   ] ++ lib.optionals enableNativeTuning [

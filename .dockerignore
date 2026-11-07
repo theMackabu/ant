@@ -76,11 +76,6 @@ node_modules
 /packages/wasm/dist
 /packages/wasm/vendor
 
-/packages/libant/.cache
-/packages/libant/build
-/packages/libant/vendor
-/packages/libant/dist
-
 /packages/desktop/.cache
 /packages/desktop/build
 /packages/desktop/runtime

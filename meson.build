@@ -318,19 +318,60 @@ endif
 
 subdir('meson/tests')
 
-embed_example = get_option('embed_example')
-embed_example_dist = 'packages/libant/dist'
+if host_machine.system() == 'darwin'
+  embed_archiver = find_program('llvm-libtool-darwin', 'libtool', required: false)
+  embed_archiver_style = 'libtool'
+elif cc.get_argument_syntax() == 'msvc'
+  embed_archiver = find_program('llvm-lib', 'lib', required: false)
+  embed_archiver_style = 'lib'
+else
+  embed_archiver = find_program('llvm-ar', 'ar', required: false)
+  embed_archiver_style = 'mri'
+endif
 
-if not embed_example.disabled()
-  if fs.is_dir(meson.project_source_root() / embed_example_dist)
-    executable(
-      'embed-example',
-      files('examples/embed/embed.c'),
-      include_directories: include_directories(embed_example_dist),
-      dependencies: libant_dep,
-      build_by_default: false
-    )
-  elif embed_example.enabled()
-    error('embed_example requires ' + embed_example_dist + '; run packages/libant/build.sh first')
+embed_nm = find_program(get_option('llvm_nm'), 'nm', required: false)
+
+if embed_archiver.found() and embed_nm.found()
+  embed_dist = custom_target('embed_dist',
+    output: 'libant',
+    command: [
+      python, files('meson/embed.py'), 'bundle',
+      '--build-root', meson.project_build_root(),
+      '--source-root', meson.project_source_root(),
+      '--exe', ant_exe,
+      '--lib', libant,
+      '--nm', embed_nm,
+      '--archiver', embed_archiver,
+      '--archiver-style', embed_archiver_style,
+      '--version', ant_version,
+      '--out', '@OUTPUT@',
+    ],
+    build_always_stale: true,
+    build_by_default: false,
+  )
+
+  embed_example_args = []
+  foreach arg : cc.cmd_array()
+    embed_example_args += ['--cc', arg]
+  endforeach
+  foreach arg : cpp.cmd_array()
+    embed_example_args += ['--cxx', arg]
+  endforeach
+  if host_machine.system() == 'darwin'
+    embed_example_args += ['--extra=' + deployment_flag]
   endif
+
+  embed_example = custom_target('embed_example',
+    input: files('examples/embed/embed.c'),
+    output: 'embed-example',
+    command: [
+      python, files('meson/embed.py'), 'example',
+      '--dist', embed_dist,
+      '--source', '@INPUT@',
+      '--out', '@OUTPUT@',
+    ] + embed_example_args,
+    build_by_default: false,
+  )
+
+  alias_target('embed', embed_dist, embed_example)
 endif

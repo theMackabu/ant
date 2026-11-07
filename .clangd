@@ -13,6 +13,14 @@ CompileFlags:
     - -I../vendor/uthash-2.3.0/src
 ---
 If:
+  PathMatch: examples/embed/.*\.c
+CompileFlags:
+  Remove: [-I*]
+  Add:
+    - -std=gnu23
+    - -I../build/libant/include
+---
+If:
   PathMatch: [.*\.in, src/silver/ops/handlers\.h]
 Diagnostics:
   Suppress: "*"

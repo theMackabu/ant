@@ -25,6 +25,7 @@ If you can reproduce a test failure, search for it in the <br>
     - [Building a debug build](#building-a-debug-build)
     - [Building an ASan build](#building-an-asan-build)
     - [Speeding up frequent rebuilds when developing](#speeding-up-frequent-rebuilds-when-developing)
+    - [Embedding Ant as a library](#embedding-ant-as-a-library)
     - [Troubleshooting Unix and macOS builds](#troubleshooting-unix-and-macos-builds)
   - [Windows](#windows)
     - [Windows prerequisites](#windows-prerequisites)
@@ -408,15 +409,31 @@ Use `-Dpgo_profile=/path/to/profile.profdata` with `-Dpgo=enabled` to consume
 a separate profile without replacing the platform profile. Relative paths
 resolve from the source root.
 
-The standalone libant package accepts the same profile selector:
+#### Embedding Ant as a library
+
+The `embed` target packages the engine for C and C++ hosts from any
+configured build tree. Use a separate tree with LTO off, so the archive holds
+native objects instead of LLVM bitcode:
 
 ```bash
-./packages/libant/build.sh -Dpgo=enabled -Dpgo_profile=/path/to/profile.profdata
+meson setup build-embed -Db_lto=false
+meson compile -C build-embed embed
+./build-embed/embed-example
 ```
 
-libant defaults to `-Dpgo=disabled`. With PGO enabled, an empty selector uses
-the repository's platform profile; relative paths resolve from the repository
-root. The profile applies to both `libant.a` and `libant-lto.a` when built.
+`build-embed/libant` then contains:
+
+- `lib/libant.a`: the engine plus every vendored dependency and the Rust
+  staticlib, merged into one archive.
+- `include/ant.h` and `include/ant/...`: the headers, namespaced. Include
+  `<ant.h>`, plus `<ant/modules/timer.h>` and similar for anything beyond it.
+- `lib/pkgconfig/libant.pc`: the include path, required defines and system
+  libraries. Point `PKG_CONFIG_PATH` at `build-embed/libant/lib/pkgconfig`.
+
+Link with a C++ driver (`clang++`), since parts of the engine are C++. The
+archive list and headers come from the build itself, so new dependencies and
+headers need no packaging changes. `examples/embed/embed.c` is the reference
+host, and `embed-example` is built from the packaged files alone.
 
 #### Troubleshooting Unix and macOS builds
 

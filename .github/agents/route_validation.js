@@ -160,8 +160,7 @@ function main() {
       filePath.startsWith('meson/') ||
       filePath === 'maidfile.toml' ||
       filePath.startsWith('.github/workflows/') ||
-      filePath.startsWith('.github/actions/') ||
-      filePath.startsWith('packages/libant/')
+      filePath.startsWith('.github/actions/')
     ) {
       addRecommendation(recommendations, 'meson setup build --reconfigure', 'build graph or automation changed');
       addRecommendation(recommendations, 'meson compile -C build', 'build configuration changes should still produce a binary');
