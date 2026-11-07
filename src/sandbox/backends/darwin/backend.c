@@ -7,6 +7,8 @@
 
 #if defined(__aarch64__)
 
+static constexpr uint64_t ANT_HVF_TIMEOUT_MIN_WAIT_NS = 1000000ull;
+
 int ant_hvf_check(hv_return_t ret, const char *op) {
   if (ret == HV_SUCCESS) return 0;
 
@@ -118,30 +120,50 @@ static uint64_t ant_hvf_elapsed_ns(const struct timespec *start, const struct ti
 
 void *ant_hvf_timeout_thread(void *arg) {
   ant_hvf_timeout_t *timeout = arg;
-  const struct timespec tick = { .tv_sec = 0, .tv_nsec = 1000000 };
-  while (!atomic_load_explicit(&timeout->stop, memory_order_acquire)) {
-    if (timeout->vm->cpu_time_ms > 0 &&
-        ant_hvf_process_cpu_time_ns() >= (uint64_t)timeout->vm->cpu_time_ms * 1000000ull) {
-      atomic_store_explicit(&timeout->vm->cpu_timed_out, true, memory_order_release);
-      ant_hvf_wake_vcpu(timeout->vm);
-      return NULL;
+  ant_hvf_vm_t *vm = timeout->vm;
+  long online = sysconf(_SC_NPROCESSORS_ONLN);
+  uint64_t cpu_rate = online > 0 ? (uint64_t)online : 1;
+  atomic_bool *fired = NULL;
+
+  pthread_mutex_lock(&timeout->lock);
+  while (!timeout->stop) {
+    uint64_t wait_ns = UINT64_MAX;
+    if (vm->cpu_time_ms > 0) {
+      uint64_t limit = (uint64_t)vm->cpu_time_ms * 1000000ull;
+      uint64_t used = ant_hvf_process_cpu_time_ns();
+      if (used >= limit) { fired = &vm->cpu_timed_out; break; }
+      wait_ns = (limit - used) / cpu_rate;
     }
     bool wall_disarmed = timeout->until_request_sent &&
-      atomic_load_explicit(&timeout->vm->vsock.request_sent, memory_order_acquire);
+      atomic_load_explicit(&vm->vsock.request_sent, memory_order_acquire);
     if (timeout->timeout_ms > 0 && !wall_disarmed) {
       struct timespec now;
-      if (clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
-          ant_hvf_elapsed_ns(&timeout->started_at, &now) >=
-            (uint64_t)timeout->timeout_ms * 1000000ull) {
-        atomic_store_explicit(&timeout->vm->timed_out, true, memory_order_release);
-        ant_hvf_wake_vcpu(timeout->vm);
-        return NULL;
-      }
+      clock_gettime(CLOCK_MONOTONIC, &now);
+      uint64_t limit = (uint64_t)timeout->timeout_ms * 1000000ull;
+      uint64_t elapsed = ant_hvf_elapsed_ns(&timeout->started_at, &now);
+      if (elapsed >= limit) { fired = &vm->timed_out; break; }
+      if (limit - elapsed < wait_ns) wait_ns = limit - elapsed;
     }
-    nanosleep(&tick, NULL);
+    if (wait_ns == UINT64_MAX) {
+      pthread_cond_wait(&timeout->cond, &timeout->lock);
+      continue;
+    }
+    if (wait_ns < ANT_HVF_TIMEOUT_MIN_WAIT_NS) wait_ns = ANT_HVF_TIMEOUT_MIN_WAIT_NS;
+    struct timespec ts = {
+      .tv_sec = (time_t)(wait_ns / 1000000000ull),
+      .tv_nsec = (long)(wait_ns % 1000000000ull),
+    };
+    pthread_cond_timedwait_relative_np(&timeout->cond, &timeout->lock, &ts);
+  }
+  pthread_mutex_unlock(&timeout->lock);
+
+  if (fired) {
+    atomic_store_explicit(fired, true, memory_order_release);
+    ant_hvf_wake_vcpu(vm);
   }
   return NULL;
 }
+
 int ant_hvf_run(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool timeout_until_request_sent) {
   pthread_t timeout_thread;
   ant_hvf_timeout_t timeout;
@@ -156,8 +178,14 @@ int ant_hvf_run(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool timeout_until_re
       .until_request_sent = timeout_until_request_sent,
     };
     clock_gettime(CLOCK_MONOTONIC, &timeout.started_at);
+    pthread_mutex_init(&timeout.lock, NULL);
+    pthread_cond_init(&timeout.cond, NULL);
     int prc = pthread_create(&timeout_thread, NULL, ant_hvf_timeout_thread, &timeout);
     if (prc == 0) timeout_thread_started = true;
+    else {
+      pthread_cond_destroy(&timeout.cond);
+      pthread_mutex_destroy(&timeout.lock);
+    }
   }
 
   for (;;) {
@@ -255,8 +283,13 @@ int ant_hvf_run(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool timeout_until_re
 
 done:
   if (timeout_thread_started) {
-    atomic_store_explicit(&timeout.stop, true, memory_order_release);
+    pthread_mutex_lock(&timeout.lock);
+    timeout.stop = true;
+    pthread_cond_signal(&timeout.cond);
+    pthread_mutex_unlock(&timeout.lock);
     pthread_join(timeout_thread, NULL);
+    pthread_cond_destroy(&timeout.cond);
+    pthread_mutex_destroy(&timeout.lock);
   }
   return rc;
 }

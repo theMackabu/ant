@@ -140,7 +140,9 @@ typedef struct {
   ant_hvf_vm_t *vm;
   unsigned int timeout_ms;
   bool until_request_sent;
-  atomic_bool stop;
+  bool stop;
+  pthread_mutex_t lock;
+  pthread_cond_t cond;
   struct timespec started_at;
 } ant_hvf_timeout_t;
 

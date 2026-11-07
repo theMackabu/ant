@@ -377,6 +377,12 @@ static int ant_kvm_run_guest(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool tim
   atomic_store_explicit(&vm->cpu_run_start_ns, cpu_start_ns, memory_order_release);
   atomic_store_explicit(&vm->cpu_run_active, true, memory_order_release);
 
+  rc = ant_kvm_deadline_init(&deadline);
+  if (rc != 0) {
+    atomic_store_explicit(&vm->cpu_run_active, false, memory_order_release);
+    atomic_store_explicit(&vm->vcpu_thread_valid, false, memory_order_release);
+    return rc;
+  }
   if ((have_deadline || vm->cpu_time_ms > 0) &&
       pthread_create(&deadline_thread, NULL, ant_kvm_deadline_thread, &deadline) == 0) {
     deadline_thread_started = true;
@@ -479,8 +485,7 @@ static int ant_kvm_run_guest(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool tim
   }
 
 done:
-  atomic_store_explicit(&deadline.stop, true, memory_order_release);
-  if (deadline_thread_started) pthread_join(deadline_thread, NULL);
+  ant_kvm_deadline_finish(&deadline, deadline_thread, deadline_thread_started);
   struct timespec cpu_finished;
   if (clock_gettime(vm->vcpu_clock_id, &cpu_finished) == 0) {
     uint64_t end_ns = (uint64_t)cpu_finished.tv_sec * 1000000000ull + (uint64_t)cpu_finished.tv_nsec;

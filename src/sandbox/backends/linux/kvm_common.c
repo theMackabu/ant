@@ -1,6 +1,8 @@
 #include "kvm_internal.h" // IWYU pragma: keep
 #if defined(__linux__)
 
+static constexpr uint64_t ANT_KVM_DEADLINE_MIN_WAIT_NS = 1000000ull;
+
 static void ant_kvm_noop_signal(int sig) {
   (void)sig;
 }
@@ -40,36 +42,75 @@ int ant_kvm_session_send(void *opaque, const void *data, size_t len) {
   return ant_hvf_vsock_queue_frame(&session->vm, data, len);
 }
 
+int ant_kvm_deadline_init(ant_kvm_deadline_t *deadline) {
+  pthread_condattr_t attr;
+  int rc = pthread_condattr_init(&attr);
+  if (rc != 0) return -rc;
+  rc = pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+  if (rc == 0) rc = pthread_cond_init(&deadline->cond, &attr);
+  pthread_condattr_destroy(&attr);
+  if (rc != 0) return -rc;
+  rc = pthread_mutex_init(&deadline->lock, NULL);
+  if (rc != 0) {
+    pthread_cond_destroy(&deadline->cond);
+    return -rc;
+  }
+  return 0;
+}
+
+void ant_kvm_deadline_finish(ant_kvm_deadline_t *deadline, pthread_t thread, bool started) {
+  pthread_mutex_lock(&deadline->lock);
+  deadline->stop = true;
+  pthread_cond_signal(&deadline->cond);
+  pthread_mutex_unlock(&deadline->lock);
+  if (started) pthread_join(thread, NULL);
+  pthread_cond_destroy(&deadline->cond);
+  pthread_mutex_destroy(&deadline->lock);
+}
+
 void *ant_kvm_deadline_thread(void *opaque) {
   ant_kvm_deadline_t *deadline = opaque;
-  const struct timespec tick = { .tv_sec = 0, .tv_nsec = 1000000 };
-  for (;;) {
-    if (atomic_load_explicit(&deadline->stop, memory_order_acquire) || !deadline->vm ||
-        atomic_load_explicit(&deadline->vm->canceled, memory_order_acquire)) {
-      return NULL;
+  ant_hvf_vm_t *vm = deadline->vm;
+  atomic_bool *fired = NULL;
+
+  pthread_mutex_lock(&deadline->lock);
+  while (!deadline->stop && !atomic_load_explicit(&vm->canceled, memory_order_acquire)) {
+    uint64_t wait_ns = UINT64_MAX;
+    if (vm->cpu_time_ms > 0) {
+      uint64_t limit = (uint64_t)vm->cpu_time_ms * 1000000ull;
+      uint64_t used = ant_kvm_cpu_time_ns(vm);
+      if (used >= limit) { fired = &vm->cpu_timed_out; break; }
+      wait_ns = limit - used;
     }
     bool wall_disarmed = deadline->timeout_until_request_sent &&
-      atomic_load_explicit(&deadline->vm->timeout_disarmed, memory_order_acquire);
-    if (wall_disarmed) {
-      if (deadline->vm->cpu_time_ms == 0) return NULL;
-    }
-    if (deadline->vm->cpu_time_ms > 0 &&
-        ant_kvm_cpu_time_ns(deadline->vm) >=
-          (uint64_t)deadline->vm->cpu_time_ms * 1000000ull) {
-      atomic_store_explicit(&deadline->vm->cpu_timed_out, true, memory_order_release);
-      ant_hvf_wake_vcpu(deadline->vm);
-      return NULL;
-    }
+      atomic_load_explicit(&vm->timeout_disarmed, memory_order_acquire);
     struct timespec now;
-    if (!wall_disarmed && deadline->timeout_ms > 0 &&
-        clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
-        ant_kvm_elapsed_ms(&deadline->start, &now) >= deadline->timeout_ms) {
-      atomic_store_explicit(&deadline->vm->timed_out, true, memory_order_release);
-      ant_hvf_wake_vcpu(deadline->vm);
-      return NULL;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (deadline->timeout_ms > 0 && !wall_disarmed) {
+      uint64_t elapsed_ms = ant_kvm_elapsed_ms(&deadline->start, &now);
+      if (elapsed_ms >= deadline->timeout_ms) { fired = &vm->timed_out; break; }
+      uint64_t remaining = ((uint64_t)deadline->timeout_ms - elapsed_ms) * 1000000ull;
+      if (remaining < wait_ns) wait_ns = remaining;
     }
-    nanosleep(&tick, NULL);
+    if (wait_ns == UINT64_MAX) {
+      pthread_cond_wait(&deadline->cond, &deadline->lock);
+      continue;
+    }
+    if (wait_ns < ANT_KVM_DEADLINE_MIN_WAIT_NS) wait_ns = ANT_KVM_DEADLINE_MIN_WAIT_NS;
+    uint64_t at = (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec + wait_ns;
+    struct timespec until = {
+      .tv_sec = (time_t)(at / 1000000000ull),
+      .tv_nsec = (long)(at % 1000000000ull),
+    };
+    pthread_cond_timedwait(&deadline->cond, &deadline->lock, &until);
   }
+  pthread_mutex_unlock(&deadline->lock);
+
+  if (fired) {
+    atomic_store_explicit(fired, true, memory_order_release);
+    ant_hvf_wake_vcpu(vm);
+  }
+  return NULL;
 }
 
 void ant_kvm_set_result(

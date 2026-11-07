@@ -1,6 +1,10 @@
 #include "kvm_internal.h" // IWYU pragma: keep
 #if defined(__linux__) && defined(__x86_64__)
 
+static constexpr uint32_t ANT_KVM_ELF_PT_NOTE = 4u;
+static constexpr uint32_t ANT_KVM_XEN_ELFNOTE_PHYS32_ENTRY = 18u;
+static constexpr uint64_t ANT_KVM_ELF_NOTE_MAX = 64ull * 1024ull;
+
 static int ant_kvm_write_pvh_start(ant_hvf_vm_t *vm) {
   ant_kvm_hvm_start_info_t start = {
     .magic = ANT_KVM_HVM_START_MAGIC,
@@ -175,6 +179,54 @@ static int ant_kvm_handle_mmio(ant_hvf_vm_t *vm) {
   return 0;
 }
 
+static int ant_kvm_find_pvh_entry(const char *path, uint64_t *entry_out) {
+  int fd = open(path, O_RDONLY);
+  if (fd < 0) return -errno;
+  ant_elf64_ehdr_t eh;
+  int rc = ant_read_all(fd, &eh, sizeof(eh), 0);
+  if (rc != 0) goto done;
+  rc = -ENOENT;
+  if (eh.phoff == 0 || eh.phentsize < sizeof(ant_elf64_phdr_t)) goto done;
+
+  for (uint16_t i = 0; i < eh.phnum; i++) {
+    ant_elf64_phdr_t ph;
+    rc = ant_read_all(fd, &ph, sizeof(ph), (off_t)(eh.phoff + (uint64_t)i * eh.phentsize));
+    if (rc != 0) goto done;
+    rc = -ENOENT;
+    if (ph.type != ANT_KVM_ELF_PT_NOTE || ph.filesz == 0 || ph.filesz > ANT_KVM_ELF_NOTE_MAX) continue;
+
+    unsigned char *notes = malloc((size_t)ph.filesz);
+    if (!notes) { rc = -ENOMEM; goto done; }
+    rc = ant_read_all(fd, notes, (size_t)ph.filesz, (off_t)ph.offset);
+    if (rc != 0) { free(notes); goto done; }
+
+    rc = -ENOENT;
+    uint64_t off = 0;
+    while (ph.filesz - off >= 12u) {
+      uint32_t namesz = ant_hvf_load32(notes + off);
+      uint32_t descsz = ant_hvf_load32(notes + off + 4u);
+      uint32_t type = ant_hvf_load32(notes + off + 8u);
+      uint64_t name_off = off + 12u;
+      uint64_t desc_off = name_off + ant_align4(namesz);
+      uint64_t next = desc_off + ant_align4(descsz);
+      if (next > ph.filesz || next <= off) break;
+      if (type == ANT_KVM_XEN_ELFNOTE_PHYS32_ENTRY && namesz == 4u &&
+          memcmp(notes + name_off, "Xen", 4) == 0 && (descsz == 4u || descsz == 8u)) {
+        *entry_out = descsz == 4u ? ant_hvf_load32(notes + desc_off) : ant_hvf_load64(notes + desc_off);
+        rc = 0;
+        break;
+      }
+      off = next;
+    }
+    free(notes);
+    if (rc == 0) goto done;
+  }
+
+done:
+  close(fd);
+  return rc;
+}
+
 static int ant_kvm_run_guest(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool timeout_until_request_sent) {
   int rc = 0;
   pthread_t deadline_thread;
@@ -204,6 +256,12 @@ static int ant_kvm_run_guest(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool tim
   atomic_store_explicit(&vm->cpu_run_start_ns, cpu_start_ns, memory_order_release);
   atomic_store_explicit(&vm->cpu_run_active, true, memory_order_release);
 
+  rc = ant_kvm_deadline_init(&deadline);
+  if (rc != 0) {
+    atomic_store_explicit(&vm->cpu_run_active, false, memory_order_release);
+    atomic_store_explicit(&vm->vcpu_thread_valid, false, memory_order_release);
+    return rc;
+  }
   if ((have_deadline || vm->cpu_time_ms > 0) &&
       pthread_create(&deadline_thread, NULL, ant_kvm_deadline_thread, &deadline) == 0) {
     deadline_thread_started = true;
@@ -312,8 +370,7 @@ static int ant_kvm_run_guest(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool tim
   }
 
 done:
-  atomic_store_explicit(&deadline.stop, true, memory_order_release);
-  if (deadline_thread_started) pthread_join(deadline_thread, NULL);
+  ant_kvm_deadline_finish(&deadline, deadline_thread, deadline_thread_started);
   struct timespec cpu_finished;
   if (clock_gettime(vm->vcpu_clock_id, &cpu_finished) == 0) {
     uint64_t end_ns = (uint64_t)cpu_finished.tv_sec * 1000000000ull + (uint64_t)cpu_finished.tv_nsec;
@@ -609,9 +666,9 @@ static int ant_kvm_session_create(const ant_sandbox_vm_config_t *config, void **
 
   rc = ant_hvf_load_kernel(vm, config->kernel_path);
   if (rc != 0) goto fail;
-  rc = ant_kvm_find_symbol(config->kernel_path, "pvh_start32", &vm->pvh_entry32);
+  rc = ant_kvm_find_pvh_entry(config->kernel_path, &vm->pvh_entry32);
   if (rc != 0) {
-    fprintf(stderr, "sandbox vm: failed to find pvh_start32 in sandbox kernel\n");
+    fprintf(stderr, "sandbox vm: sandbox kernel has no PVH entry note\n");
     goto fail;
   }
   rc = ant_kvm_write_pvh_start(vm);

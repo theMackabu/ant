@@ -645,7 +645,7 @@ static void *ant_nat_thread(void *arg) {
     }
     pthread_mutex_unlock(&nat->lock);
 
-    int prc = poll(fds, n, 25);
+    int prc = poll(fds, n, -1);
     if (prc < 0 && errno == EINTR) continue;
     if (prc <= 0) continue;
     if (fds[0].revents & POLLIN) ant_nat_drain_wake(nat);
@@ -771,9 +771,8 @@ void ant_nat_handle_udp(ant_hvf_nat_t *nat,
   }
 
   ssize_t wn = send(u->fd, payload, payload_len, 0);
-  if (wn < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-    ant_nat_close_udp(u);
-  } else ant_nat_wake(nat);
+  if (wn < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) ant_nat_close_udp(u);
+  ant_nat_wake(nat);
 
 done:
   pthread_mutex_unlock(&nat->lock);
@@ -853,6 +852,7 @@ void ant_nat_handle_tcp(
 
   if (tcp->flags & ANT_TCP_RST) {
     ant_nat_close_tcp(c);
+    ant_nat_wake(nat);
     goto done;
   }
 
@@ -901,8 +901,10 @@ void ant_nat_handle_tcp(
     ant_net_send_tcp(vm, c->guest_mac, c->peer_ip, c->guest_ip, c->peer_port, c->guest_port,
                      c->nat_next, c->guest_next, ANT_TCP_ACK, NULL, 0);
     if (c->host_fin_sent && c->guest_ack >= c->nat_next) ant_nat_close_tcp(c);
+    ant_nat_wake(nat);
   } else if (c->host_fin_sent && c->guest_fin_seen && c->guest_ack >= c->nat_next) {
     ant_nat_close_tcp(c);
+    ant_nat_wake(nat);
   }
 
 done:

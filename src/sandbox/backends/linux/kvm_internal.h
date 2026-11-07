@@ -46,10 +46,14 @@ typedef struct {
   struct timespec start;
   unsigned int timeout_ms;
   bool timeout_until_request_sent;
-  atomic_bool stop;
+  bool stop;
+  pthread_mutex_t lock;
+  pthread_cond_t cond;
 } ant_kvm_deadline_t;
 
 void ant_kvm_install_wakeup_signal(void);
+int ant_kvm_deadline_init(ant_kvm_deadline_t *deadline);
+void ant_kvm_deadline_finish(ant_kvm_deadline_t *deadline, pthread_t thread, bool started);
 void *ant_kvm_deadline_thread(void *opaque);
 void ant_kvm_set_result(ant_sandbox_vm_result_t *result, ant_sandbox_vm_result_kind_t kind, int code);
 void ant_kvm_classify_result(ant_hvf_vm_t *vm, ant_sandbox_vm_result_t *result, int rc);
