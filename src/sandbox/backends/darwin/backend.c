@@ -30,7 +30,13 @@ int ant_hvf_send_msi(ant_hvf_vm_t *vm, uint64_t addr, uint32_t data) {
 }
 
 void ant_hvf_wake_vcpu(ant_hvf_vm_t *vm) {
-  if (vm && vm->vcpu) ant_hvf_api.vcpus_exit(&vm->vcpu, 1);
+  if (!vm) return;
+  if (vm->vcpu_exit) ant_hvf_api.vcpus_exit(&vm->vcpu, 1);
+  if (!vm->idle_sync_init) return;
+  pthread_mutex_lock(&vm->idle_lock);
+  vm->idle_kicked = true;
+  pthread_cond_signal(&vm->idle_cond);
+  pthread_mutex_unlock(&vm->idle_lock);
 }
 
 static int ant_hvf_create_vcpu(ant_hvf_vm_t *vm) {
@@ -117,7 +123,7 @@ void *ant_hvf_timeout_thread(void *arg) {
     if (timeout->vm->cpu_time_ms > 0 &&
         ant_hvf_process_cpu_time_ns() >= (uint64_t)timeout->vm->cpu_time_ms * 1000000ull) {
       atomic_store_explicit(&timeout->vm->cpu_timed_out, true, memory_order_release);
-      ant_hvf_api.vcpus_exit(&timeout->vm->vcpu, 1);
+      ant_hvf_wake_vcpu(timeout->vm);
       return NULL;
     }
     bool wall_disarmed = timeout->until_request_sent &&
@@ -128,7 +134,7 @@ void *ant_hvf_timeout_thread(void *arg) {
           ant_hvf_elapsed_ns(&timeout->started_at, &now) >=
             (uint64_t)timeout->timeout_ms * 1000000ull) {
         atomic_store_explicit(&timeout->vm->timed_out, true, memory_order_release);
-        ant_hvf_api.vcpus_exit(&timeout->vm->vcpu, 1);
+        ant_hvf_wake_vcpu(timeout->vm);
         return NULL;
       }
     }
@@ -287,6 +293,8 @@ static void ant_hvf_classify_result(ant_hvf_vm_t *vm, ant_sandbox_vm_result_t *r
                        rc ? rc : ANT_SANDBOX_CPU_TIME_LIMIT_CODE);
   else if (rc == -ETIMEDOUT)
     ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_TIMEOUT, rc);
+  else if (rc == -ECANCELED || (vm && atomic_load_explicit(&vm->canceled, memory_order_acquire)))
+    ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_CANCELED, rc ? rc : -ECANCELED);
   else if (vm && vm->vsock.protocol_error)
     ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_PROTOCOL_ERROR, rc);
   else if (vm && vm->vsock.transport_error)
@@ -339,6 +347,11 @@ static void ant_hvf_session_cleanup(ant_hvf_session_t *session, int *rc_inout) {
   if (vm->virtio_lock_init) pthread_mutex_destroy(&vm->virtio_lock);
   ant_hvf_vsock_clear_frames(vm);
   if (vm->vsock_lock_init) pthread_mutex_destroy(&vm->vsock_lock);
+  if (vm->idle_sync_init) {
+    pthread_cond_destroy(&vm->idle_cond);
+    pthread_mutex_destroy(&vm->idle_lock);
+    vm->idle_sync_init = false;
+  }
   if (rc_inout) *rc_inout = rc;
 }
 
@@ -528,6 +541,15 @@ static int ant_hvf_session_create(const ant_sandbox_vm_config_t *config, void **
   int vsock_lock_rc = pthread_mutex_init(&vm->vsock_lock, NULL);
   if (vsock_lock_rc == 0) vm->vsock_lock_init = true;
   else { rc = -vsock_lock_rc; goto fail; }
+  int idle_lock_rc = pthread_mutex_init(&vm->idle_lock, NULL);
+  if (idle_lock_rc != 0) { rc = -idle_lock_rc; goto fail; }
+  int idle_cond_rc = pthread_cond_init(&vm->idle_cond, NULL);
+  if (idle_cond_rc != 0) {
+    pthread_mutex_destroy(&vm->idle_lock);
+    rc = -idle_cond_rc;
+    goto fail;
+  }
+  vm->idle_sync_init = true;
 
   if (vm->net_enabled) {
     ant_hvf_verbose(vm, "starting network backend");

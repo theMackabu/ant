@@ -74,10 +74,14 @@ struct ant_hvf_vm {
   pthread_mutex_t net_lock;
   pthread_mutex_t virtio_lock;
   pthread_mutex_t vsock_lock;
-  
+  pthread_mutex_t idle_lock;
+  pthread_cond_t idle_cond;
+
   bool net_lock_init;
   bool virtio_lock_init;
   bool vsock_lock_init;
+  bool idle_sync_init;
+  bool idle_kicked;
   bool net_rx_wake;
   
   uint8_t net_mac[ANT_HVF_MAC_BYTES];
@@ -181,7 +185,7 @@ int ant_hvf_load_kernel(ant_hvf_vm_t *vm, const char *path);
 int ant_hvf_set_reg(hv_vcpu_t vcpu, hv_reg_t reg, uint64_t value, const char *name);
 
 uint64_t ant_hvf_host_cntfrq(void);
-uint64_t ant_hvf_host_cntvct(void);
+int ant_hvf_guest_cntvct(ant_hvf_vm_t *vm, uint64_t *out);
 
 int ant_hvf_init_vcpu(ant_hvf_vm_t *vm);
 int ant_hvf_handle_wfx(ant_hvf_vm_t *vm);

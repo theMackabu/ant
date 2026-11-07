@@ -46,6 +46,7 @@
 
 #define ESR_EC_SHIFT 26
 #define ESR_EC_WFX_TRAP 0x01u
+#define ESR_WFX_TI_WFE 0x1u
 #define ESR_EC_HVC64 0x16u
 #define ESR_EC_DATA_ABORT 0x24u
 #define ESR_EC_HLT 0x34u
@@ -77,6 +78,7 @@ typedef struct {
   hv_return_t (*vcpu_set_reg)(hv_vcpu_t, hv_reg_t, uint64_t);
   hv_return_t (*vcpu_set_sys_reg)(hv_vcpu_t, hv_sys_reg_t, uint64_t);
   hv_return_t (*vcpu_set_vtimer_mask)(hv_vcpu_t, bool);
+  hv_return_t (*vcpu_get_vtimer_offset)(hv_vcpu_t, uint64_t *);
   hv_return_t (*vcpu_set_pending_interrupt)(hv_vcpu_t, hv_interrupt_type_t, bool);
   hv_vm_config_t (*vm_config_create)(void);
   hv_return_t (*vm_create)(hv_vm_config_t);

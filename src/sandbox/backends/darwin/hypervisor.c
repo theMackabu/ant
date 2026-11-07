@@ -23,12 +23,12 @@ static void ant_hvf_load_api_once(void) {
     return;
   }
 
-#define ANT_HVF_LOAD(field, symbol) do { \
-  ant_hvf_api.field = (__typeof__(ant_hvf_api.field))dlsym(ant_hvf_framework, symbol); \
-  if (!ant_hvf_api.field) { \
+#define ANT_HVF_LOAD(field, symbol) do {                                                    \
+  ant_hvf_api.field = (__typeof__(ant_hvf_api.field))dlsym(ant_hvf_framework, symbol);      \
+  if (!ant_hvf_api.field) {                                                                 \
     fprintf(stderr, "sandbox vm: Hypervisor.framework symbol %s is unavailable\n", symbol); \
-    return; \
-  } \
+    return;                                                                                 \
+  }                                                                                         \
 } while (0)
 
   ANT_HVF_LOAD(vcpus_exit, "hv_vcpus_exit");
@@ -42,6 +42,7 @@ static void ant_hvf_load_api_once(void) {
   ANT_HVF_LOAD(vcpu_set_reg, "hv_vcpu_set_reg");
   ANT_HVF_LOAD(vcpu_set_sys_reg, "hv_vcpu_set_sys_reg");
   ANT_HVF_LOAD(vcpu_set_vtimer_mask, "hv_vcpu_set_vtimer_mask");
+  ANT_HVF_LOAD(vcpu_get_vtimer_offset, "hv_vcpu_get_vtimer_offset");
   ANT_HVF_LOAD(vcpu_set_pending_interrupt, "hv_vcpu_set_pending_interrupt");
   ANT_HVF_LOAD(vm_config_create, "hv_vm_config_create");
   ANT_HVF_LOAD(vm_create, "hv_vm_create");
