@@ -1,3 +1,5 @@
+// TODO: cleanup and split
+
 #ifndef SV_PROPERTY_H
 #define SV_PROPERTY_H
 
@@ -1521,10 +1523,9 @@ static inline int sv_pf_poly_try_store(
     }
 
     if (
-      ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible ||
+      ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible   ||
       ptr->type_tag == kTypeArray || sv_is_proto_atom(a) || !e->to_shape ||
-      !sv_add_proto_matches(ptr, e->proto) ||
-      ant_shape_lookup_interned(ptr->shape, a->str) >= 0
+      !sv_add_proto_matches(ptr, e->proto)
     ) continue;
     
     uint32_t slot = e->index;
@@ -1581,27 +1582,25 @@ static inline bool sv_put_field_try_cached(
       ic->guard.add.from_shape == ptr->shape &&
       ic->guard.add.to_shape &&
       sv_add_proto_matches(ptr, ic->add_proto)) {
-    if (ant_shape_lookup_interned(ptr->shape, a->str) < 0) {
-      ant_shape_t *old_shape = ptr->shape;
-      ant_shape_retain(ic->guard.add.to_shape);
-      ptr->shape = ic->guard.add.to_shape;
-      ant_shape_release(old_shape);
-      ant_object_invalidate_guarded_absence(js, ptr);
-      ant_property_mutation_invalidate(js, ptr, a->str);
-      if (ic->guard.add.slot >= ptr->prop_count &&
-          !js_obj_ensure_prop_capacity(js, ptr, ic->guard.add.slot + 1)) {
-        *out = js_mkerr(js, "oom");
-        return true;
-      }
-      ant_object_prop_set_unchecked(ptr, ic->guard.add.slot, val);
-      gc_write_barrier_prop(js, ptr, val);
-      sv_ic_set_cached_shape(js, ic, ptr->shape);
-      ic->cached_index = ic->guard.add.slot;
-      ic->epoch = js->ic.epoch;
-      if ((ic->add_proto & 1u) && js_obj_ptr(js_as_obj(ant_object_proto(ptr)))->flags.generation == 1)
-        ic->add_proto = (uintptr_t)ant_object_proto(ptr);
+    ant_shape_t *old_shape = ptr->shape;
+    ant_shape_retain(ic->guard.add.to_shape);
+    ptr->shape = ic->guard.add.to_shape;
+    ant_shape_release(old_shape);
+    ant_object_invalidate_guarded_absence(js, ptr);
+    ant_property_mutation_invalidate(js, ptr, a->str);
+    if (ic->guard.add.slot >= ptr->prop_count &&
+        !js_obj_ensure_prop_capacity(js, ptr, ic->guard.add.slot + 1)) {
+      *out = js_mkerr(js, "oom");
       return true;
     }
+    ant_object_prop_set_unchecked(ptr, ic->guard.add.slot, val);
+    gc_write_barrier_prop(js, ptr, val);
+    sv_ic_set_cached_shape(js, ic, ptr->shape);
+    ic->cached_index = ic->guard.add.slot;
+    ic->epoch = js->ic.epoch;
+    if ((ic->add_proto & 1u) && js_obj_ptr(js_as_obj(ant_object_proto(ptr)))->flags.generation == 1)
+      ic->add_proto = (uintptr_t)ant_object_proto(ptr);
+    return true;
   }
 
   if (ic && ic->put_poly && ptr && !ptr->flags.is_exotic && ptr->shape) {

@@ -127,12 +127,52 @@ static void pass_merge_shapes(opt_arena_t *arena, const pass_object_shapes_t *co
   }
 }
 
+static void pass_frame_state_values(const ir_graph_t *graph, ir_frame_state_id_t frame_state, opt_arena_t *arena, ir_node_vec_t *values) {
+  values->len = 0;
+  if (frame_state == IR_NONE) return;
+  ir_node_vec_t chain = {0};
+  ir_frame_state_chain(graph, frame_state, arena, &chain);
+  for (uint32_t i = 0; i < chain.len; i++) {
+    const ir_frame_state_t *state = ir_frame_state(graph, chain.items[i]);
+    for (uint32_t j = 0; j < state->values.len; j++) opt_vec_push(arena, values, state->values.items[j].value);
+  }
+}
+
+static void pass_record_shape_use(
+  const pass_analysis_t *analysis, const pass_object_shapes_t *shapes, opt_arena_t *arena,
+  opt_map_t *before, pass_shape_uses_t *uses, ir_node_id_t node, ir_node_id_t value
+) {
+  ir_node_id_t root = pass_root(analysis, value);
+  if (root == IR_NONE) return;
+  const pass_object_shape_t *shape = pass_shape_get(shapes, root);
+  if (!shape) return;
+  
+  pass_shape_use_t use = {.node = node, .root = root, .shape = shape->shape, .count = shape->count};
+  bool inserted;
+  uint64_t *slot = opt_map_entry(before, (uint64_t[]){node, root}, &inserted);
+  if (!inserted) {
+    uses->items[*slot] = use;
+    return;
+  }
+  *slot = uses->len;
+  opt_vec_push(arena, uses, use);
+}
+
+static void pass_escape_unshaped_references(const ir_graph_t *graph, pass_analysis_t *analysis, opt_map_t *before, opt_arena_t *arena, ir_node_vec_t *referred, ir_node_id_t node) {
+  pass_frame_state_values(graph, ir_node(graph, node)->frame_state, arena, referred);
+  for (uint32_t i = 0; i < referred->len; i++) {
+    ir_node_id_t root = pass_root(analysis, referred->items[i]);
+    if (root != IR_NONE && !opt_map_get2(before, node, root)) opt_bitset_insert(&analysis->escaped, root);
+  }
+}
+
 static void pass_shapes_before_uses(const ir_graph_t *graph, const pass_analysis_t *analysis, const opt_bitset_t *candidates, opt_bitset_t *escaped, opt_arena_t *arena, opt_map_t *before, pass_shape_uses_t *uses) {
   uint32_t block_count = ir_block_count(graph);
   pass_object_shapes_t *entries = opt_arena_new(arena, pass_object_shapes_t, block_count + 1);
   pass_object_shapes_t *exits = opt_arena_new(arena, pass_object_shapes_t, block_count + 1);
   bool *has_exit = opt_arena_new(arena, bool, block_count + 1);
   OPT_VEC(const pass_object_shapes_t *) forward = {0};
+  ir_node_vec_t referred = {0};
   for (ir_block_id_t index = 0; index < block_count; index++) {
     const ir_block_t *block = ir_block(graph, index);
     forward.len = 0;
@@ -146,21 +186,11 @@ static void pass_shapes_before_uses(const ir_graph_t *graph, const pass_analysis
     for (uint32_t n = 0, count = ir_block_node_count(block); n < count; n++) {
       ir_node_id_t node = ir_block_node_at(block, n);
       const ir_node_t *data = ir_node(graph, node);
-      for (uint32_t i = 0; i < data->inputs.len; i++) {
-        ir_node_id_t root = pass_root(analysis, data->inputs.items[i]);
-        if (root == IR_NONE) continue;
-        const pass_object_shape_t *shape = pass_shape_get(&shapes, root);
-        if (!shape) continue;
-        pass_shape_use_t use = {.node = node, .root = root, .shape = shape->shape, .count = shape->count};
-        bool inserted;
-        uint64_t *slot = opt_map_entry(before, (uint64_t[]){node, root}, &inserted);
-        if (inserted) {
-          *slot = uses->len;
-          opt_vec_push(arena, uses, use);
-        } else {
-          uses->items[*slot] = use;
-        }
-      }
+      for (uint32_t i = 0; i < data->inputs.len; i++)
+        pass_record_shape_use(analysis, &shapes, arena, before, uses, node, data->inputs.items[i]);
+      pass_frame_state_values(graph, data->frame_state, arena, &referred);
+      for (uint32_t i = 0; i < referred.len; i++)
+        pass_record_shape_use(analysis, &shapes, arena, before, uses, node, referred.items[i]);
       if (data->op.code == IR_OP_ALLOCATE_OBJECT && opt_bitset_has(candidates, node)) {
         pass_shape_set(arena, &shapes, node, data->op.allocate_object.shape, data->op.allocate_object.property_count);
       } else if (data->op.code == IR_OP_ADD_NAMED) {
@@ -227,9 +257,11 @@ static void pass_analyze(const ir_graph_t *graph, const ir_node_vec_t *placed, c
   pass_shapes_before_uses(graph, analysis, &candidates, &analysis->escaped, arena, &before, &uses);
 
   OPT_VEC(pass_store_t) stored_into = {0};
+  ir_node_vec_t referred = {0};
   for (uint32_t p = 0; p < placed->len; p++) {
     ir_node_id_t node = placed->items[p];
     const ir_node_t *data = ir_node(graph, node);
+    pass_escape_unshaped_references(graph, analysis, &before, arena, &referred, node);
     for (uint32_t index = 0; index < data->inputs.len; index++) {
       ir_node_id_t root = pass_root(analysis, data->inputs.items[index]);
       if (root == IR_NONE) continue;
