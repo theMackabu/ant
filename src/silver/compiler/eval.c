@@ -278,7 +278,8 @@ static bool is_inline_literal_eval_expr(sv_ast_t *node) {
 static bool inline_eval_can_compile_without_early_errors(ant_t *js, sv_ast_t *node, bool strict) {
   if (!node) return true;
   if (node->type == N_CLASS) return false;
-  
+  if (node->type == N_OBJECT && (node->flags & FN_PATTERN_ONLY)) return false;
+
   if (node->type == N_FUNC) {
     bool has_own_use_strict = false;
     if (!(node->flags & (FN_ARROW | FN_PAREN))) return false;

@@ -138,6 +138,7 @@ void compile_object(sv_compiler_t *c, sv_ast_t *node) {
     js_mkerr_typed(c->js, JS_ERR_SYNTAX, shorthand_init
       ? "Invalid shorthand property initializer"
       : "Duplicate __proto__ fields are not allowed in object literals");
+    emit_op(c, OP_UNDEF);
     return;
   }
   const char *skeys[SV_SHAPED_LITERAL_MAX_KEYS];
