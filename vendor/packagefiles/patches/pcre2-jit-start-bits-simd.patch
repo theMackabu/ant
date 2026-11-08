@@ -1,0 +1,130 @@
+--- a/src/pcre2_jit_compile.c
++++ b/src/pcre2_jit_compile.c
+@@ -7008,6 +7008,15 @@ if (common->match_end_ptr != 0)
+   SELECT(SLJIT_GREATER, STR_END, TMP1, 0, STR_END);
+   }
+ 
++#if defined JIT_HAS_FAST_FORWARD_START_BITS_SIMD && JIT_HAS_FAST_FORWARD_START_BITS_SIMD
++if (common->mode == PCRE2_JIT_COMPLETE && common->match_end_ptr == 0)
++  {
++  add_jump(compiler, &common->failed_match, CMP(SLJIT_GREATER_EQUAL, STR_PTR, 0, STR_END, 0));
++  fast_forward_start_bits_simd(common, start_bits);
++  return;
++  }
++#endif
++
+ start = LABEL();
+ 
+ partial_quit = CMP(SLJIT_GREATER_EQUAL, STR_PTR, 0, STR_END, 0);
+--- a/src/pcre2_jit_simd_inc.h
++++ b/src/pcre2_jit_simd_inc.h
+@@ -1257,6 +1257,109 @@ if (common->match_end_ptr != 0)
+   OP1(SLJIT_MOV, STR_END, 0, TMP3, 0);
+ }
+ 
++#if PCRE2_CODE_UNIT_WIDTH == 8
++
++#define JIT_HAS_FAST_FORWARD_START_BITS_SIMD 1
++
++static void start_bits_simd_classify(struct sljit_compiler *compiler, sljit_u32 data_ind, sljit_u32 tmp1_ind,
++  sljit_u32 tmp2_ind, sljit_u32 tmp3_ind, sljit_u32 lo_ind, sljit_u32 hi_ind, sljit_u32 bit_ind, sljit_u32 mask_ind)
++{
++sljit_u32 instruction;
++
++instruction = 0x4e201c00 | (mask_ind << 16) | (data_ind << 5) | tmp1_ind;
++sljit_emit_op_custom(compiler, &instruction, sizeof(sljit_u32));
++instruction = 0x6f0c0400 | (data_ind << 5) | tmp2_ind;
++sljit_emit_op_custom(compiler, &instruction, sizeof(sljit_u32));
++instruction = 0x4e000000 | (tmp1_ind << 16) | (lo_ind << 5) | tmp3_ind;
++sljit_emit_op_custom(compiler, &instruction, sizeof(sljit_u32));
++instruction = 0x4e000000 | (tmp1_ind << 16) | (hi_ind << 5) | tmp1_ind;
++sljit_emit_op_custom(compiler, &instruction, sizeof(sljit_u32));
++instruction = 0x4e20a800 | (data_ind << 5) | data_ind;
++sljit_emit_op_custom(compiler, &instruction, sizeof(sljit_u32));
++instruction = 0x6e601c00 | (tmp3_ind << 16) | (tmp1_ind << 5) | data_ind;
++sljit_emit_op_custom(compiler, &instruction, sizeof(sljit_u32));
++instruction = 0x4e000000 | (tmp2_ind << 16) | (bit_ind << 5) | tmp2_ind;
++sljit_emit_op_custom(compiler, &instruction, sizeof(sljit_u32));
++instruction = 0x4e208c00 | (tmp2_ind << 16) | (data_ind << 5) | data_ind;
++sljit_emit_op_custom(compiler, &instruction, sizeof(sljit_u32));
++instruction = 0x0f0c8400 | (data_ind << 5) | data_ind;
++sljit_emit_op_custom(compiler, &instruction, sizeof(sljit_u32));
++}
++
++static void fast_forward_start_bits_simd(compiler_common *common, const sljit_u8 *start_bits)
++{
++DEFINE_COMPILER;
++sljit_u32 instruction;
++struct sljit_label *start;
++struct sljit_jump *quit;
++sljit_u8 *tables;
++sljit_u32 data_ind = (sljit_u32)sljit_get_register_index(SLJIT_SIMD_REG_128, SLJIT_VR0);
++sljit_u32 tmp1_ind = (sljit_u32)sljit_get_register_index(SLJIT_SIMD_REG_128, SLJIT_VR1);
++sljit_u32 tmp2_ind = (sljit_u32)sljit_get_register_index(SLJIT_SIMD_REG_128, SLJIT_VR2);
++sljit_u32 tmp3_ind = (sljit_u32)sljit_get_register_index(SLJIT_SIMD_REG_128, SLJIT_VR3);
++sljit_u32 lo_ind = (sljit_u32)sljit_get_register_index(SLJIT_SIMD_REG_128, SLJIT_VR4);
++sljit_u32 hi_ind = (sljit_u32)sljit_get_register_index(SLJIT_SIMD_REG_128, SLJIT_VR5);
++sljit_u32 bit_ind = (sljit_u32)sljit_get_register_index(SLJIT_SIMD_REG_128, SLJIT_VR6);
++sljit_u32 mask_ind = (sljit_u32)sljit_get_register_index(SLJIT_SIMD_REG_128, SLJIT_VR7);
++int i;
++
++tables = (sljit_u8 *)allocate_read_only_data(common, 48);
++if (tables == NULL)
++  return;
++
++for (i = 0; i < 16; i++)
++  {
++  tables[i] = 0;
++  tables[16 + i] = 0;
++  tables[32 + i] = (sljit_u8)(1 << (i & 0x7));
++  }
++
++for (i = 0; i < 256; i++)
++  if (start_bits[i >> 3] & (1 << (i & 0x7)))
++    tables[(i < 128 ? 0 : 16) + (i & 0xf)] |= (sljit_u8)(1 << ((i >> 4) & 0x7));
++
++OP1(SLJIT_MOV, TMP1, 0, SLJIT_IMM, (sljit_sw)tables);
++sljit_emit_simd_mov(compiler, SLJIT_SIMD_LOAD | SLJIT_SIMD_REG_128 | SLJIT_SIMD_ELEM_8, SLJIT_VR4, SLJIT_MEM1(TMP1), 0);
++sljit_emit_simd_mov(compiler, SLJIT_SIMD_LOAD | SLJIT_SIMD_REG_128 | SLJIT_SIMD_ELEM_8, SLJIT_VR5, SLJIT_MEM1(TMP1), 16);
++sljit_emit_simd_mov(compiler, SLJIT_SIMD_LOAD | SLJIT_SIMD_REG_128 | SLJIT_SIMD_ELEM_8, SLJIT_VR6, SLJIT_MEM1(TMP1), 32);
++instruction = 0x4f00e5e0 | mask_ind;
++sljit_emit_op_custom(compiler, &instruction, sizeof(sljit_u32));
++
++OP1(SLJIT_MOV, TMP2, 0, STR_PTR, 0);
++OP2(SLJIT_AND, STR_PTR, 0, STR_PTR, 0, SLJIT_IMM, ~(sljit_sw)0xf);
++OP2(SLJIT_AND, TMP2, 0, TMP2, 0, SLJIT_IMM, 0xf);
++
++sljit_emit_simd_mov(compiler, SLJIT_SIMD_REG_128 | SLJIT_SIMD_MEM_ALIGNED_128, SLJIT_VR0, SLJIT_MEM1(STR_PTR), 0);
++start_bits_simd_classify(compiler, data_ind, tmp1_ind, tmp2_ind, tmp3_ind, lo_ind, hi_ind, bit_ind, mask_ind);
++sljit_emit_simd_lane_mov(compiler, SLJIT_SIMD_STORE | SLJIT_SIMD_REG_128 | SLJIT_SIMD_ELEM_64, SLJIT_VR0, 0, TMP1, 0);
++
++OP2(SLJIT_SHL, TMP2, 0, TMP2, 0, SLJIT_IMM, 2);
++OP2(SLJIT_LSHR, TMP1, 0, TMP1, 0, TMP2, 0);
++OP2(SLJIT_SHL, TMP1, 0, TMP1, 0, TMP2, 0);
++
++quit = CMP(SLJIT_NOT_ZERO, TMP1, 0, SLJIT_IMM, 0);
++
++start = LABEL();
++
++OP2(SLJIT_ADD, STR_PTR, 0, STR_PTR, 0, SLJIT_IMM, 16);
++add_jump(compiler, &common->failed_match, CMP(SLJIT_GREATER_EQUAL, STR_PTR, 0, STR_END, 0));
++
++sljit_emit_simd_mov(compiler, SLJIT_SIMD_REG_128 | SLJIT_SIMD_MEM_ALIGNED_128, SLJIT_VR0, SLJIT_MEM1(STR_PTR), 0);
++start_bits_simd_classify(compiler, data_ind, tmp1_ind, tmp2_ind, tmp3_ind, lo_ind, hi_ind, bit_ind, mask_ind);
++sljit_emit_simd_lane_mov(compiler, SLJIT_SIMD_STORE | SLJIT_SIMD_REG_128 | SLJIT_SIMD_ELEM_64, SLJIT_VR0, 0, TMP1, 0);
++CMPTO(SLJIT_ZERO, TMP1, 0, SLJIT_IMM, 0, start);
++
++JUMPHERE(quit);
++
++sljit_emit_op1(compiler, SLJIT_CTZ, TMP1, 0, TMP1, 0);
++OP2(SLJIT_LSHR, TMP1, 0, TMP1, 0, SLJIT_IMM, 2);
++OP2(SLJIT_ADD, STR_PTR, 0, STR_PTR, 0, TMP1, 0);
++
++add_jump(compiler, &common->failed_match, CMP(SLJIT_GREATER_EQUAL, STR_PTR, 0, STR_END, 0));
++}
++
++#endif
++
+ #undef PCRE2_REPLICATE_TYPE
+ 
+ #endif /* SLJIT_CONFIG_ARM_64 && SLJIT_CONFIG_ARM_64 */
