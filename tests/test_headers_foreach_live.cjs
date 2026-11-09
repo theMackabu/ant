@@ -76,4 +76,44 @@ const headers = new Headers({ a: '1', b: '2' });
 assert.throws(() => headers.forEach(() => { throw new RangeError('stop'); }), RangeError);
 assert.deepStrictEqual([...headers], [['a', '1'], ['b', '2']]);
 
+function sortAndCombine(pairs) {
+  const out = [];
+  for (const name of [...new Set(pairs.map(([n]) => n))].sort()) {
+    const values = pairs.filter(([n]) => n === name).map(([, v]) => v);
+    if (name === 'set-cookie') for (const v of values) out.push([name, v]);
+    else out.push([name, values.join(', ')]);
+  }
+  return out;
+}
+
+let seed = 7;
+const next = (n) => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) % n;
+const names = ['accept', 'set-cookie', 'vary', 'x-a', 'x-b', 'x-c'];
+const mutated = new Headers();
+let model = [];
+
+for (let step = 0; step < 4000; step++) {
+  const name = names[next(names.length)];
+  const value = `v${step}`;
+  const op = next(4);
+  if (op <= 1) {
+    mutated.append(name, value);
+    model.push([name, value]);
+  } else if (op === 2) {
+    mutated.set(name, value);
+    model = model.filter(([n]) => n !== name);
+    model.push([name, value]);
+  } else {
+    mutated.delete(name);
+    model = model.filter(([n]) => n !== name);
+  }
+
+  const want = sortAndCombine(model);
+  assert.deepStrictEqual([...mutated], want, `step ${step}`);
+  assert.deepStrictEqual([...mutated.keys()], want.map(([n]) => n), `keys at step ${step}`);
+  const seen = [];
+  mutated.forEach((v, n) => seen.push([n, v]));
+  assert.deepStrictEqual(seen, want, `forEach at step ${step}`);
+}
+
 console.log('headers forEach live ok');
