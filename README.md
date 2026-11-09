@@ -113,7 +113,7 @@ Both images run as `nonroot` (uid 65532). To write into a mounted directory, pas
 You can also build the container from source:
 
 ```bash
-docker build -t ant .
+docker build -f Dockerfile.musl -t ant .
 docker run --rm ant --version
 docker run --rm -v "$PWD:/app" ant index.js
 ```
