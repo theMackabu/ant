@@ -8,7 +8,7 @@ patch_filename = pcre2_10.49-1_patch.zip
 patch_url = https://wrapdb.mesonbuild.com/v2/pcre2_10.49-1/get_patch
 patch_fallback_url = https://github.com/mesonbuild/wrapdb/releases/download/pcre2_10.49-1/pcre2_10.49-1_patch.zip
 patch_hash = 436fe063c68a9e53449c510a82292358a5c689c864fcc3cc32f6b19fffad5a7a
-diff_files = patches/pcre2-size-optimize-jit-compiler.patch, patches/pcre2-jit-match-fast-entry.patch
+diff_files = patches/pcre2-size-optimize-jit-compiler.patch, patches/pcre2-jit-match-fast-entry.patch, patches/pcre2-jit-ovector-pairs.patch, patches/pcre2-jit-start-bits-simd.patch
 wrapdb_version = 10.49-1
 
 [provide]

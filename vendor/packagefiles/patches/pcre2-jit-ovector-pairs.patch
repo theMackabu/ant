@@ -1,0 +1,94 @@
+--- a/src/pcre2_jit_compile.c
++++ b/src/pcre2_jit_compile.c
+@@ -632,6 +632,7 @@ group contains the start / end character
+ the start pointers when the end of the capturing group has not yet reached. */
+ #define OVECTOR_START    (common->ovector_start)
+ #define OVECTOR(i)       (OVECTOR_START + (i) * SSIZE_OF(sw))
++#define OVECTOR_UNROLL_MAX 32
+ #define OVECTOR_PRIV(i)  (common->cbra_ptr + (i) * SSIZE_OF(sw))
+ #define PRIVATE_DATA(cc) (common->private_data_ptrs[(cc) - common->start])
+ 
+@@ -3587,7 +3588,16 @@ sljit_s32 i;
+ SLJIT_ASSERT(length > 1);
+ /* TMP1 returns with begin - 1. */
+ OP2(SLJIT_SUB, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_S0), SLJIT_OFFSETOF(jit_arguments, begin), SLJIT_IMM, IN_UCHARS(1));
+-if (length < 8)
++if (length >= 8 && length <= OVECTOR_UNROLL_MAX)
++  {
++  OP1(SLJIT_MOV, SLJIT_MEM1(SLJIT_SP), OVECTOR(1), SLJIT_R0, 0);
++  OP1(SLJIT_MOV, SLJIT_R2, 0, SLJIT_R0, 0);
++  for (i = 2; i + 1 < length; i += 2)
++    sljit_emit_mem(compiler, SLJIT_MOV | SLJIT_MEM_STORE, SLJIT_REG_PAIR(SLJIT_R0, SLJIT_R2), SLJIT_MEM1(SLJIT_SP), OVECTOR(i));
++  if (i < length)
++    OP1(SLJIT_MOV, SLJIT_MEM1(SLJIT_SP), OVECTOR(i), SLJIT_R0, 0);
++  }
++else if (length < 8)
+   {
+   for (i = 1; i < length; i++)
+     OP1(SLJIT_MOV, SLJIT_MEM1(SLJIT_SP), OVECTOR(i), SLJIT_R0, 0);
+@@ -3676,7 +3686,15 @@ SLJIT_ASSERT(length > 1);
+ /* OVECTOR(1) contains the "string begin - 1" constant. */
+ if (length > 2)
+   OP1(SLJIT_MOV, TMP1, 0, SLJIT_MEM1(SLJIT_SP), OVECTOR(1));
+-if (length < 8)
++if (length >= 8 && length <= OVECTOR_UNROLL_MAX)
++  {
++  OP1(SLJIT_MOV, TMP2, 0, TMP1, 0);
++  for (i = 2; i + 1 < length; i += 2)
++    sljit_emit_mem(compiler, SLJIT_MOV | SLJIT_MEM_STORE, SLJIT_REG_PAIR(TMP1, TMP2), SLJIT_MEM1(SLJIT_SP), OVECTOR(i));
++  if (i < length)
++    OP1(SLJIT_MOV, SLJIT_MEM1(SLJIT_SP), OVECTOR(i), TMP1, 0);
++  }
++else if (length < 8)
+   {
+   for (i = 2; i < length; i++)
+     OP1(SLJIT_MOV, SLJIT_MEM1(SLJIT_SP), OVECTOR(i), TMP1, 0);
+@@ -3748,7 +3766,10 @@ static SLJIT_INLINE void copy_ovector(co
+ {
+ DEFINE_COMPILER;
+ struct sljit_label *loop;
++struct sljit_jump *partial;
++struct sljit_jump *done;
+ BOOL has_pre;
++int i;
+ 
+ /* At this point we can freely use all registers. */
+ OP1(SLJIT_MOV, SLJIT_S2, 0, SLJIT_MEM1(SLJIT_SP), OVECTOR(1));
+@@ -3782,9 +3803,26 @@ else
+ 
+ has_pre = sljit_emit_mem_update(compiler, SLJIT_MOV | SLJIT_MEM_SUPP | SLJIT_MEM_PRE, SLJIT_S1, SLJIT_MEM1(SLJIT_S0), sizeof(sljit_sw)) == SLJIT_SUCCESS;
+ 
+-GET_LOCAL_BASE(SLJIT_S0, 0, OVECTOR_START - (has_pre ? sizeof(sljit_sw) : 0));
+ OP1(SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(HAS_VIRTUAL_REGISTERS ? SLJIT_R0 : ARGUMENTS), SLJIT_OFFSETOF(jit_arguments, begin));
+ 
++partial = NULL;
++done = NULL;
++if (PCRE2_CODE_UNIT_WIDTH == 8 && sizeof(PCRE2_SIZE) == sizeof(sljit_sw) && topbracket * 2 <= OVECTOR_UNROLL_MAX)
++  {
++  partial = CMP(SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, topbracket * 2);
++  for (i = 0; i < topbracket * 2; i += 2)
++    {
++    sljit_emit_mem(compiler, SLJIT_MOV, SLJIT_REG_PAIR(SLJIT_S0, SLJIT_S1), SLJIT_MEM1(SLJIT_SP), OVECTOR(i));
++    OP2(SLJIT_SUB, SLJIT_S0, 0, SLJIT_S0, 0, SLJIT_R0, 0);
++    OP2(SLJIT_SUB, SLJIT_S1, 0, SLJIT_S1, 0, SLJIT_R0, 0);
++    sljit_emit_mem(compiler, SLJIT_MOV | SLJIT_MEM_STORE, SLJIT_REG_PAIR(SLJIT_S0, SLJIT_S1), SLJIT_MEM1(SLJIT_R2), (i + 1) * sizeof(PCRE2_SIZE));
++    }
++  done = JUMP(SLJIT_JUMP);
++  JUMPHERE(partial);
++  }
++
++GET_LOCAL_BASE(SLJIT_S0, 0, OVECTOR_START - (has_pre ? sizeof(sljit_sw) : 0));
++
+ loop = LABEL();
+ 
+ if (has_pre)
+@@ -3808,6 +3846,9 @@ OP1(((sizeof(PCRE2_SIZE) == 4) ? SLJIT_M
+ OP2(SLJIT_SUB | SLJIT_SET_Z, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, 1);
+ JUMPTO(SLJIT_NOT_ZERO, loop);
+ 
++if (done != NULL)
++  JUMPHERE(done);
++
+ /* Calculate the return value, which is the maximum ovector value. */
+ if (topbracket > 1)
+   {
