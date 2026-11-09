@@ -37,9 +37,18 @@ struct headers_data {
 };
 
 typedef struct sorted_pair {
-  char *name;
-  char *value;
+  const char *name;
+  const char *value;
+  size_t name_len;
+  size_t value_len;
+  bool owns_value;
 } sorted_pair_t;
+
+typedef struct {
+  const char *name;
+  const char *value;
+  size_t order;
+} sort_key_t;
 
 typedef struct {
   hdr_list_t *list;
@@ -67,11 +76,9 @@ headers_data_t *headers_data_create(void) {
 static void free_sorted_view(sorted_pair_t *v, size_t n) {
   if (!v) return;
   
-  for (size_t i = 0; i < n; i++) { 
-    free(v[i].name);
-    free(v[i].value); 
-  }
-  
+  for (size_t i = 0; i < n; i++)
+    if (v[i].owns_value) free((char *)v[i].value);
+
   free(v);
 }
 
@@ -309,60 +316,87 @@ static void list_delete_name(hdr_list_t *l, const char *lower_name) {
   }}
 }
 
-static int cmp_pairs(const void *a, const void *b) {
-  return strcmp(((const sorted_pair_t *)a)->name, ((const sorted_pair_t *)b)->name);
+static int cmp_sort_keys(const void *a, const void *b) {
+  const sort_key_t *x = a, *y = b;
+  int c = strcmp(x->name, y->name);
+  return c ? c : (x->order > y->order) - (x->order < y->order);
+}
+
+static char *combine_values(const sort_key_t *keys, size_t n, size_t *out_len) {
+  size_t total = strlen(keys[0].value);
+  for (size_t k = 1; k < n; k++) total += 2 + strlen(keys[k].value);
+
+  char *combined = malloc(total + 1);
+  if (!combined) return NULL;
+
+  size_t pos = 0;
+  for (size_t k = 0; k < n; k++) {
+    if (k > 0) { combined[pos++] = ','; combined[pos++] = ' '; }
+    size_t vl = strlen(keys[k].value);
+    memcpy(combined + pos, keys[k].value, vl);
+    pos += vl;
+  }
+  
+  combined[pos] = '\0';
+  *out_len = pos;
+
+  return combined;
 }
 
 static sorted_pair_t *build_sorted_view(hdr_list_t *l, size_t *out) {
   *out = 0;
   if (!l || l->count == 0) return NULL;
 
-  sorted_pair_t *raw = malloc(l->count * sizeof(sorted_pair_t));
-  if (!raw) return NULL;
+  sort_key_t *keys = malloc(l->count * sizeof(sort_key_t));
+  if (!keys) return NULL;
 
   size_t n = 0;
+  bool sorted = true;
   for (hdr_entry_t *e = l->head; e; e = e->next) {
-    raw[n].name  = e->name;
-    raw[n].value = e->value;
+    keys[n].name  = e->name;
+    keys[n].value = e->value;
+    keys[n].order = n;
+    if (n > 0 && sorted && strcmp(keys[n - 1].name, e->name) > 0) sorted = false;
     n++;
   }
-  
-  qsort(raw, n, sizeof(sorted_pair_t), cmp_pairs);
+
+  if (!sorted) qsort(keys, n, sizeof(sort_key_t), cmp_sort_keys);
   sorted_pair_t *res = malloc(n * sizeof(sorted_pair_t));
-  if (!res) { free(raw); return NULL; }
+  if (!res) { free(keys); return NULL; }
 
   size_t ri = 0;
   for (size_t i = 0; i < n; ) {
-  if (strcmp(raw[i].name, "set-cookie") == 0) {
-    res[ri].name  = strdup(raw[i].name);
-    res[ri].value = strdup(raw[i].value);
-    ri++; i++;
-  } else {
     size_t j = i + 1;
-    size_t total = strlen(raw[i].value);
-    while (j < n && strcmp(raw[j].name, raw[i].name) == 0) {
-      total += 2 + strlen(raw[j].value);
-      j++;
-    }
-    char *combined = malloc(total + 1);
-    if (!combined) combined = strdup("");
-    size_t pos = 0;
-    for (size_t k = i; k < j; k++) {
-      if (k > i) { combined[pos++] = ','; combined[pos++] = ' '; }
-      size_t vl = strlen(raw[k].value);
-      memcpy(combined + pos, raw[k].value, vl);
-      pos += vl;
-    }
-    combined[pos] = '\0';
-    res[ri].name  = strdup(raw[i].name);
-    res[ri].value = combined;
-    ri++; i = j;
-  }}
+    
+    if (strcmp(keys[i].name, "set-cookie") != 0)
+      while (j < n && strcmp(keys[j].name, keys[i].name) == 0) j++;
 
-  free(raw);
+    sorted_pair_t *pair = &res[ri];
+    pair->name = keys[i].name;
+    pair->name_len = strlen(keys[i].name);
+    pair->owns_value = j - i > 1;
+
+    if (pair->owns_value) {
+      pair->value = combine_values(&keys[i], j - i, &pair->value_len);
+      if (!pair->value) goto fail;
+    } else {
+      pair->value = keys[i].value;
+      pair->value_len = strlen(keys[i].value);
+    }
+
+    ri++; i = j;
+  }
+
+  free(keys);
   *out = ri;
-  
+
   return res;
+
+fail:
+  free_sorted_view(res, ri);
+  free(keys);
+
+  return NULL;
 }
 
 static sorted_pair_t *list_sorted_view(hdr_list_t *l, size_t *count) {
@@ -390,7 +424,7 @@ static ant_value_t headers_append_name_value_bytes_n(
     value_len--;
   }
   while (value_len > 0 &&
-         (value_start[value_len - 1] == ' ' || value_start[value_len - 1] == '\t'))
+        (value_start[value_len - 1] == ' ' || value_start[value_len - 1] == '\t'))
     value_len--;
   if (!is_valid_value_n(value_start, value_len))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid header value");
@@ -494,8 +528,10 @@ static ant_value_t headers_append_record_value(
 static ant_value_t headers_append_pair(ant_t *js, hdr_list_t *l, ant_value_t name_v, ant_value_t value_v) {
   const char *name = NULL;
   const char *value = NULL;
+  
   size_t name_len = 0;
   size_t value_len = 0;
+  
   if (vtype(name_v) != kTypeString) {
     name_v = js_tostring_val(js, name_v);
     if (is_err(name_v)) return name_v;
@@ -508,6 +544,7 @@ static ant_value_t headers_append_pair(ant_t *js, hdr_list_t *l, ant_value_t nam
 
   name = js_getstr(js, name_v, &name_len);
   value = js_getstr(js, value_v, &value_len);
+  
   return headers_append_name_value_js_n(js, l, name, name_len, value, value_len);
 }
 
@@ -549,22 +586,37 @@ static ant_value_t init_from_sequence(ant_t *js, hdr_list_t *l, ant_value_t seq)
   return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : Ant_Value_Undefined;
 }
 
+static const ant_shape_prop_t *plain_data_prop(const ant_object_t *obj, uint32_t slot) {
+  if (!obj || !obj->shape || obj->flags.is_exotic) return NULL;
+
+  const ant_shape_prop_t *prop = ant_shape_prop_at(obj->shape, slot);
+  if (!prop || prop->has_getter || prop->has_setter) return NULL;
+
+  return prop;
+}
+
+static bool init_from_single_prop(ant_t *js, hdr_list_t *l, ant_value_t obj, ant_value_t *result) {
+  if (vtype(obj) != kTypeObject) return false;
+
+  ant_object_t *ptr = js_obj_ptr(obj);
+  if (!ptr || !ptr->shape) return false;
+  if (ptr->prop_count != 1 || ant_shape_count(ptr->shape) != 1) return false;
+
+  const ant_shape_prop_t *prop = plain_data_prop(ptr, 0);
+  if (!prop || prop->type != ANT_SHAPE_KEY_STRING) return false;
+
+  ant_value_t value = ant_object_prop_get_unchecked(ptr, 0);
+  if (vtype(value) != kTypeString) return false;
+
+  const char *name = prop->key.interned;
+  *result = headers_append_record_value(js, l, name, intern_length(name), value);
+
+  return true;
+}
+
 static ant_value_t init_from_record(ant_t *js, hdr_list_t *l, ant_value_t obj) {
-  ant_object_t *ptr = vtype(obj) == kTypeObject ? js_obj_ptr(obj) : NULL;
-  const ant_shape_prop_t *only_prop = ptr && ptr->shape &&
-    ptr->prop_count == 1 && ant_shape_count(ptr->shape) == 1
-      ? ant_shape_prop_at(ptr->shape, 0)
-      : NULL;
-  if (ptr && !ptr->flags.is_exotic && only_prop &&
-      only_prop->type == ANT_SHAPE_KEY_STRING &&
-      !only_prop->has_getter && !only_prop->has_setter) {
-    ant_value_t value = ant_object_prop_get_unchecked(ptr, 0);
-    if (vtype(value) == kTypeString) {
-      return headers_append_record_value(
-        js, l, only_prop->key.interned,
-        intern_length(only_prop->key.interned), value);
-    }
-  }
+  ant_value_t result = Ant_Value_Undefined;
+  if (init_from_single_prop(js, l, obj, &result)) return result;
 
   ant_iter_t it = js_prop_iter_begin(js, obj);
   ant_iter_key_t key = {0};
@@ -573,23 +625,15 @@ static ant_value_t init_from_record(ant_t *js, hdr_list_t *l, ant_value_t obj) {
   while (js_prop_iter_next_key(&it, &key, &iter_value)) {
     if (key.is_symbol) continue;
 
-    const ant_shape_prop_t *prop = it.obj && it.obj->shape
-      ? ant_shape_prop_at(it.obj->shape, key.slot)
-      : NULL;
-    bool direct_string = it.obj && !it.obj->flags.is_exotic && prop &&
-      !prop->has_getter && !prop->has_setter &&
-      vtype(iter_value) == kTypeString;
+    bool direct_string =
+      vtype(iter_value) == kTypeString && plain_data_prop(it.obj, key.slot);
     ant_value_t val = direct_string ? iter_value : js_get(js, obj, key.str);
-    if (is_err(val)) {
-      js_prop_iter_end(&it);
-      return val;
-    }
+    if (is_err(val)) { js_prop_iter_end(&it); return val; }
 
-    ant_value_t r = headers_append_record_value(
-      js, l, key.str, key.key_len, val);
+    ant_value_t r = headers_append_record_value(js, l, key.str, key.key_len, val);
     if (is_err(r)) { js_prop_iter_end(&it); return r; }
   }
-  
+
   js_prop_iter_end(&it);
   return Ant_Value_Undefined;
 }
@@ -601,29 +645,24 @@ bool advance_headers(ant_t *js, iterator_t *it, ant_value_t *out) {
   size_t count = 0;
   sorted_pair_t *view = st->list ? list_sorted_view(st->list, &count) : NULL;
 
-  if (st->index >= count) {
-    if (st->list) {
-      free_sorted_view(st->list->sorted, st->list->sorted_count);
-      st->list->sorted = NULL;
-      st->list->sorted_count = 0;
-    }
-    return false;
-  }
+  if (st->index >= count) return false;
 
   sorted_pair_t *e = &view[st->index];
   switch (st->kind) {
-  case ITER_KEYS:
-    *out = js_mkstr(js, e->name, strlen(e->name));
-    break;
-  case ITER_VALUES:
-    *out = header_value_to_js(js, e->value, strlen(e->value));
-    break;
-  default: {
-    *out = Ant_Array_Create(js);
-    js_arr_push(js, *out, js_mkstr(js, e->name,  strlen(e->name)));
-    js_arr_push(js, *out, header_value_to_js(js, e->value, strlen(e->value)));
-    break;
-  }}
+    case ITER_KEYS:
+      *out = js_mkstr(js, e->name, e->name_len);
+      break;
+    case ITER_VALUES:
+      *out = header_value_to_js(js, e->value, e->value_len);
+      break;
+    default: {
+      ant_value_t pair[2];
+      pair[0] = js_mkstr(js, e->name, e->name_len);
+      pair[1] = header_value_to_js(js, e->value, e->value_len);
+      *out = js_mkarr_dense_literal(js, pair, 2);
+      break;
+    }
+  }
 
   st->index++;
   return true;
@@ -742,30 +781,32 @@ static ant_value_t js_headers_get(ant_params_t) {
 
   // set-cookie is never combined per Fetch spec
   if (strcmp(lower, "set-cookie") == 0) {
-    for (hdr_entry_t *e = l->head; e; e = e->next) {
-      if (strcmp(e->name, lower) == 0) {
-        ant_value_t ret = header_value_to_js(js, e->value, strlen(e->value));
-        free(owned_lower);
-        return ret;
-      }
+    for (hdr_entry_t *e = l->head; e; e = e->next) if (strcmp(e->name, lower) == 0) {
+      ant_value_t ret = header_value_to_js(js, e->value, strlen(e->value));
+      free(owned_lower);
+      return ret;
     }
+    
     free(owned_lower);
     return Ant_Value_Null;
   }
 
   size_t total = 0;
   int count = 0;
+  
   const char *first_value = NULL;
-  for (hdr_entry_t *e = l->head; e; e = e->next) {
-    if (strcmp(e->name, lower) == 0) {
-      if (count == 0) first_value = e->value;
-      if (count > 0) total += 2;
-      total += strlen(e->value);
-      count++;
-    }
+  for (hdr_entry_t *e = l->head; e; e = e->next) if (strcmp(e->name, lower) == 0) {
+    if (count == 0) first_value = e->value;
+    if (count > 0) total += 2;
+    total += strlen(e->value);
+    count++;
   }
 
-  if (count == 0) { free(owned_lower); return Ant_Value_Null; }
+  if (count == 0) { 
+    free(owned_lower); 
+    return Ant_Value_Null; 
+  }
+  
   if (count == 1) {
     ant_value_t ret = header_value_to_js(js, first_value, total);
     free(owned_lower);
@@ -773,24 +814,28 @@ static ant_value_t js_headers_get(ant_params_t) {
   }
 
   char *combined = malloc(total + 1);
-  if (!combined) { free(owned_lower); return Ant_Error_CreateOutOfMemory(js); }
+  if (!combined) { 
+    free(owned_lower); 
+    return Ant_Error_CreateOutOfMemory(js); 
+  }
 
   size_t pos = 0;
   int seen = 0;
-  for (hdr_entry_t *e = l->head; e; e = e->next) {
-    if (strcmp(e->name, lower) == 0) {
-      if (seen > 0) { combined[pos++] = ','; combined[pos++] = ' '; }
-      size_t vl = strlen(e->value);
-      memcpy(combined + pos, e->value, vl);
-      pos += vl;
-      seen++;
-    }
+  
+  for (hdr_entry_t *e = l->head; e; e = e->next) if (strcmp(e->name, lower) == 0) {
+    if (seen > 0) { combined[pos++] = ','; combined[pos++] = ' '; }
+    size_t vl = strlen(e->value);
+    memcpy(combined + pos, e->value, vl);
+    pos += vl;
+    seen++;
   }
+  
   combined[pos] = '\0';
   free(owned_lower);
 
   ant_value_t ret = header_value_to_js(js, combined, pos);
   free(combined);
+  
   return ret;
 }
 
@@ -800,7 +845,11 @@ static ant_value_t js_headers_has(ant_params_t) {
   if (!l) return Ant_Value_False;
 
   ant_value_t name_v = args[0];
-  if (vtype(name_v) != kTypeString) { name_v = js_tostring_val(js, name_v); if (is_err(name_v)) return name_v; }
+  if (vtype(name_v) != kTypeString) { 
+    name_v = js_tostring_val(js, name_v); 
+    if (is_err(name_v)) return name_v; 
+  }
+  
   size_t name_len = 0;
   const char *name = js_getstr(js, name_v, &name_len);
   if (!is_valid_name_n(name, name_len))
@@ -811,9 +860,9 @@ static ant_value_t js_headers_has(ant_params_t) {
   if (!lower) return Ant_Error_CreateOutOfMemory(js);
 
   bool found = false;
-  for (hdr_entry_t *e = l->head; e; e = e->next) {
+  for (hdr_entry_t *e = l->head; e; e = e->next)
     if (strcmp(e->name, lower) == 0) { found = true; break; }
-  }
+  
   free(owned_lower);
   return Ant_Value_FromBool(found);
 }
@@ -866,20 +915,20 @@ static ant_value_t js_headers_for_each(ant_params_t) {
 
   ant_value_t this_arg = (nargs >= 2) ? args[1] : Ant_Value_Undefined;
 
-  size_t count = 0;
-  sorted_pair_t *view = build_sorted_view(l, &count);
+  for (size_t i = 0; ; i++) {
+    size_t count = 0;
+    sorted_pair_t *view = list_sorted_view(l, &count);
+    if (i >= count) break;
 
-  for (size_t i = 0; i < count; i++) {
     ant_value_t call_args[3] = {
-      header_value_to_js(js, view[i].value, strlen(view[i].value)),
-      js_mkstr(js, view[i].name,  strlen(view[i].name)),
-      call_this
+      header_value_to_js(js, view[i].value, view[i].value_len),
+      js_mkstr(js, view[i].name,  view[i].name_len), call_this
     };
+    
     ant_value_t r = sv_vm_call(js->vm, js, cb, this_arg, call_args, 3, NULL, Ant_Value_Undefined);
-    if (is_err(r)) { free_sorted_view(view, count); return r; }
+    if (is_err(r)) return r;
   }
 
-  free_sorted_view(view, count);
   return Ant_Value_Undefined;
 }
 

@@ -38,6 +38,8 @@ ENV CC=clang CXX=clang++ CC_LD=lld AR=llvm-ar RANLIB=llvm-ranlib CMAKE_AR=llvm-a
 RUN --mount=type=cache,id=ant-musl-build-${TARGETARCH},target=/work/build,sharing=locked \
     --mount=type=cache,id=ant-musl-rust-${TARGETARCH},target=/work/.cache/rust,sharing=locked <<EOF
 set -eux
+stamp="$CC $CXX $CC_LD $(clang --version | head -n1)"
+[ "$(cat build/.toolchain 2>/dev/null)" = "$stamp" ] || find build -mindepth 1 -delete
 meson setup build                          \
   -Db_lto=true                             \
   --buildtype=release                      \
@@ -45,6 +47,7 @@ meson setup build                          \
   -Dbuild_git_hash="${BUILD_GIT_HASH:-}"   \
   --prefer-static                          \
   -Dstatic_link=true
+echo "$stamp" > build/.toolchain
 meson compile -C build
 mkdir -p /out
 llvm-strip --strip-unneeded build/ant
@@ -60,6 +63,8 @@ RUN <<EOF
 set -eux
 install -d /runtime/etc/ssl /runtime/usr/local/bin /runtime/usr/share
 install -d -m 1777 /runtime/tmp
+echo 'nonroot:x:65532:65532:nonroot:/tmp:/sbin/nologin' > /runtime/etc/passwd
+echo 'nonroot:x:65532:' > /runtime/etc/group
 cp /etc/ssl/certs/ca-certificates.crt /runtime/etc/ssl/cert.pem
 cp -a /usr/share/zoneinfo /runtime/usr/share/zoneinfo
 rm -f                                           \
@@ -77,4 +82,5 @@ COPY --from=runtime-files /runtime/ /
 
 ENV HOME=/tmp
 WORKDIR /app
+USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/ant"]

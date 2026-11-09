@@ -195,7 +195,7 @@ else
     --build-arg "BUILD_GIT_HASH=$build_git_hash" \
     --target export \
     --output "type=local,dest=$binary_dir" \
-    -f "$repo_root/Dockerfile" \
+    -f "$repo_root/Dockerfile.musl" \
     "$repo_root"
 fi
 

@@ -106,10 +106,14 @@ docker run --rm themackabu/ant:latest --version
 docker run --rm -v "$PWD:/app" themackabu/ant:latest index.js
 ```
 
+`latest` is a static musl build and can't load native addons. Use `latest-glibc` if you need them.
+
+Both images run as `nonroot` (uid 65532). To write into a mounted directory, pass `--user "$(id -u):$(id -g)"`.
+
 You can also build the container from source:
 
 ```bash
-docker build -t ant .
+docker build -f Dockerfile.musl -t ant .
 docker run --rm ant --version
 docker run --rm -v "$PWD:/app" ant index.js
 ```
