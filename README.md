@@ -106,13 +106,9 @@ docker run --rm themackabu/ant:latest --version
 docker run --rm -v "$PWD:/app" themackabu/ant:latest index.js
 ```
 
-`latest` is a fully static musl build on distroless `static`. It can't load native addons; for those, use `latest-glibc`, a glibc build on distroless `cc`.
+`latest` is a static musl build and can't load native addons. Use `latest-glibc` if you need them.
 
-Both run as the distroless `nonroot` user (uid 65532):
-
-- Mounted files must be readable by that user. To write into a mount (for example `ant install`), add `--user "$(id -u):$(id -g)"`. Rootless Docker needs `--user 0:0` instead, and rootless Podman `--userns=keep-id`.
-- Named volumes start out owned by root, so create them with the right owner first.
-- Ports below 1024 need `net.ipv4.ip_unprivileged_port_start=0`. Docker's default bridge network sets it; on host networking or Kubernetes, use a higher port.
+Both images run as `nonroot` (uid 65532). To write into a mounted directory, pass `--user "$(id -u):$(id -g)"`.
 
 You can also build the container from source:
 
