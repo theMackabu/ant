@@ -197,6 +197,7 @@ export function targets() {
     'test_generator_open_upvalue_gc.cjs',
     'test_global_accessor_read.cjs',
     'test_headers_bytestring_wire.cjs',
+    'test_headers_foreach_live.cjs',
     'test_headers_sort_order.cjs',
     'test_ic_minor_aba.cjs',
     'test_ic_read_differential.cjs',

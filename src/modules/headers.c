@@ -39,8 +39,13 @@ struct headers_data {
 typedef struct sorted_pair {
   char *name;
   char *value;
-  size_t order;
 } sorted_pair_t;
+
+typedef struct {
+  const char *name;
+  const char *value;
+  size_t order;
+} sort_key_t;
 
 typedef struct {
   hdr_list_t *list;
@@ -310,64 +315,82 @@ static void list_delete_name(hdr_list_t *l, const char *lower_name) {
   }}
 }
 
-// qsort isn't stable, so same-name entries tie-break on list order.
-static int cmp_pairs(const void *a, const void *b) {
-  const sorted_pair_t *x = a, *y = b;
+static int cmp_sort_keys(const void *a, const void *b) {
+  const sort_key_t *x = a, *y = b;
   int c = strcmp(x->name, y->name);
   return c ? c : (x->order > y->order) - (x->order < y->order);
+}
+
+static char *combine_values(const sort_key_t *keys, size_t n) {
+  size_t total = strlen(keys[0].value);
+  for (size_t k = 1; k < n; k++) total += 2 + strlen(keys[k].value);
+
+  char *combined = malloc(total + 1);
+  if (!combined) return NULL;
+
+  size_t pos = 0;
+  for (size_t k = 0; k < n; k++) {
+    if (k > 0) { combined[pos++] = ','; combined[pos++] = ' '; }
+    size_t vl = strlen(keys[k].value);
+    memcpy(combined + pos, keys[k].value, vl);
+    pos += vl;
+  }
+  
+  combined[pos] = '\0';
+  return combined;
 }
 
 static sorted_pair_t *build_sorted_view(hdr_list_t *l, size_t *out) {
   *out = 0;
   if (!l || l->count == 0) return NULL;
 
-  sorted_pair_t *raw = malloc(l->count * sizeof(sorted_pair_t));
-  if (!raw) return NULL;
+  sort_key_t *keys = malloc(l->count * sizeof(sort_key_t));
+  if (!keys) return NULL;
 
   size_t n = 0;
   for (hdr_entry_t *e = l->head; e; e = e->next) {
-    raw[n].name  = e->name;
-    raw[n].value = e->value;
-    raw[n].order = n;
+    keys[n].name  = e->name;
+    keys[n].value = e->value;
+    keys[n].order = n;
     n++;
   }
-  
-  qsort(raw, n, sizeof(sorted_pair_t), cmp_pairs);
+
+  qsort(keys, n, sizeof(sort_key_t), cmp_sort_keys);
   sorted_pair_t *res = malloc(n * sizeof(sorted_pair_t));
-  if (!res) { free(raw); return NULL; }
+  if (!res) { free(keys); return NULL; }
 
   size_t ri = 0;
   for (size_t i = 0; i < n; ) {
-  if (strcmp(raw[i].name, "set-cookie") == 0) {
-    res[ri].name  = strdup(raw[i].name);
-    res[ri].value = strdup(raw[i].value);
-    ri++; i++;
-  } else {
     size_t j = i + 1;
-    size_t total = strlen(raw[i].value);
-    while (j < n && strcmp(raw[j].name, raw[i].name) == 0) {
-      total += 2 + strlen(raw[j].value);
-      j++;
-    }
-    char *combined = malloc(total + 1);
-    if (!combined) combined = strdup("");
-    size_t pos = 0;
-    for (size_t k = i; k < j; k++) {
-      if (k > i) { combined[pos++] = ','; combined[pos++] = ' '; }
-      size_t vl = strlen(raw[k].value);
-      memcpy(combined + pos, raw[k].value, vl);
-      pos += vl;
-    }
-    combined[pos] = '\0';
-    res[ri].name  = strdup(raw[i].name);
-    res[ri].value = combined;
-    ri++; i = j;
-  }}
+    if (strcmp(keys[i].name, "set-cookie") != 0)
+      while (j < n && strcmp(keys[j].name, keys[i].name) == 0) j++;
 
-  free(raw);
+    char *name  = strdup(keys[i].name);
+    char *value = combine_values(&keys[i], j - i);
+    
+    if (!name || !value) {
+      free(name);
+      free(value);
+      free_sorted_view(res, ri);
+      free(keys);
+      return NULL;
+    }
+
+    res[ri].name  = name;
+    res[ri].value = value;
+    ri++; i = j;
+  }
+
+  free(keys);
   *out = ri;
-  
+
   return res;
+}
+
+static void list_drop_sorted_view(hdr_list_t *l) {
+  free_sorted_view(l->sorted, l->sorted_count);
+  l->sorted = NULL;
+  l->sorted_count = 0;
 }
 
 static sorted_pair_t *list_sorted_view(hdr_list_t *l, size_t *count) {
@@ -607,11 +630,7 @@ bool advance_headers(ant_t *js, iterator_t *it, ant_value_t *out) {
   sorted_pair_t *view = st->list ? list_sorted_view(st->list, &count) : NULL;
 
   if (st->index >= count) {
-    if (st->list) {
-      free_sorted_view(st->list->sorted, st->list->sorted_count);
-      st->list->sorted = NULL;
-      st->list->sorted_count = 0;
-    }
+    if (st->list) list_drop_sorted_view(st->list);
     return false;
   }
 
@@ -747,30 +766,32 @@ static ant_value_t js_headers_get(ant_params_t) {
 
   // set-cookie is never combined per Fetch spec
   if (strcmp(lower, "set-cookie") == 0) {
-    for (hdr_entry_t *e = l->head; e; e = e->next) {
-      if (strcmp(e->name, lower) == 0) {
-        ant_value_t ret = header_value_to_js(js, e->value, strlen(e->value));
-        free(owned_lower);
-        return ret;
-      }
+    for (hdr_entry_t *e = l->head; e; e = e->next) if (strcmp(e->name, lower) == 0) {
+      ant_value_t ret = header_value_to_js(js, e->value, strlen(e->value));
+      free(owned_lower);
+      return ret;
     }
+    
     free(owned_lower);
     return Ant_Value_Null;
   }
 
   size_t total = 0;
   int count = 0;
+  
   const char *first_value = NULL;
-  for (hdr_entry_t *e = l->head; e; e = e->next) {
-    if (strcmp(e->name, lower) == 0) {
-      if (count == 0) first_value = e->value;
-      if (count > 0) total += 2;
-      total += strlen(e->value);
-      count++;
-    }
+  for (hdr_entry_t *e = l->head; e; e = e->next) if (strcmp(e->name, lower) == 0) {
+    if (count == 0) first_value = e->value;
+    if (count > 0) total += 2;
+    total += strlen(e->value);
+    count++;
   }
 
-  if (count == 0) { free(owned_lower); return Ant_Value_Null; }
+  if (count == 0) { 
+    free(owned_lower); 
+    return Ant_Value_Null; 
+  }
+  
   if (count == 1) {
     ant_value_t ret = header_value_to_js(js, first_value, total);
     free(owned_lower);
@@ -778,24 +799,28 @@ static ant_value_t js_headers_get(ant_params_t) {
   }
 
   char *combined = malloc(total + 1);
-  if (!combined) { free(owned_lower); return Ant_Error_CreateOutOfMemory(js); }
+  if (!combined) { 
+    free(owned_lower); 
+    return Ant_Error_CreateOutOfMemory(js); 
+  }
 
   size_t pos = 0;
   int seen = 0;
-  for (hdr_entry_t *e = l->head; e; e = e->next) {
-    if (strcmp(e->name, lower) == 0) {
-      if (seen > 0) { combined[pos++] = ','; combined[pos++] = ' '; }
-      size_t vl = strlen(e->value);
-      memcpy(combined + pos, e->value, vl);
-      pos += vl;
-      seen++;
-    }
+  
+  for (hdr_entry_t *e = l->head; e; e = e->next) if (strcmp(e->name, lower) == 0) {
+    if (seen > 0) { combined[pos++] = ','; combined[pos++] = ' '; }
+    size_t vl = strlen(e->value);
+    memcpy(combined + pos, e->value, vl);
+    pos += vl;
+    seen++;
   }
+  
   combined[pos] = '\0';
   free(owned_lower);
 
   ant_value_t ret = header_value_to_js(js, combined, pos);
   free(combined);
+  
   return ret;
 }
 
@@ -805,7 +830,11 @@ static ant_value_t js_headers_has(ant_params_t) {
   if (!l) return Ant_Value_False;
 
   ant_value_t name_v = args[0];
-  if (vtype(name_v) != kTypeString) { name_v = js_tostring_val(js, name_v); if (is_err(name_v)) return name_v; }
+  if (vtype(name_v) != kTypeString) { 
+    name_v = js_tostring_val(js, name_v); 
+    if (is_err(name_v)) return name_v; 
+  }
+  
   size_t name_len = 0;
   const char *name = js_getstr(js, name_v, &name_len);
   if (!is_valid_name_n(name, name_len))
@@ -816,9 +845,9 @@ static ant_value_t js_headers_has(ant_params_t) {
   if (!lower) return Ant_Error_CreateOutOfMemory(js);
 
   bool found = false;
-  for (hdr_entry_t *e = l->head; e; e = e->next) {
+  for (hdr_entry_t *e = l->head; e; e = e->next)
     if (strcmp(e->name, lower) == 0) { found = true; break; }
-  }
+  
   free(owned_lower);
   return Ant_Value_FromBool(found);
 }
@@ -871,20 +900,21 @@ static ant_value_t js_headers_for_each(ant_params_t) {
 
   ant_value_t this_arg = (nargs >= 2) ? args[1] : Ant_Value_Undefined;
 
-  size_t count = 0;
-  sorted_pair_t *view = build_sorted_view(l, &count);
+  for (size_t i = 0; ; i++) {
+    size_t count = 0;
+    sorted_pair_t *view = list_sorted_view(l, &count);
+    if (i >= count) break;
 
-  for (size_t i = 0; i < count; i++) {
     ant_value_t call_args[3] = {
       header_value_to_js(js, view[i].value, strlen(view[i].value)),
-      js_mkstr(js, view[i].name,  strlen(view[i].name)),
-      call_this
+      js_mkstr(js, view[i].name,  strlen(view[i].name)), call_this
     };
+    
     ant_value_t r = sv_vm_call(js->vm, js, cb, this_arg, call_args, 3, NULL, Ant_Value_Undefined);
-    if (is_err(r)) { free_sorted_view(view, count); return r; }
+    if (is_err(r)) return r;
   }
 
-  free_sorted_view(view, count);
+  list_drop_sorted_view(l);
   return Ant_Value_Undefined;
 }
 
