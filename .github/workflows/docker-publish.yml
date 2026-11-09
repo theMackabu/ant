@@ -30,20 +30,22 @@ jobs:
         env:
           IMAGE_TAG: ${{ inputs.tag }}
         run: |
-          if [[ ! "$IMAGE_TAG" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]]; then
+          if [[ ! "$IMAGE_TAG" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,121}$ ]]; then
             echo 'Invalid Docker tag' >&2
             exit 1
           fi
           echo "timestamp=$(date +%s)" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build ${{ matrix.arch }}
+    name: Build ${{ matrix.variant }} ${{ matrix.arch }}
     needs: prepare
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
+        variant: [musl, glibc]
+        arch: [amd64, arm64]
         include:
           - arch: amd64
             runner: ubuntu-24.04
@@ -52,6 +54,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+
+      - name: Load LLVM version
+        id: tools
+        run: echo "llvm=$(jq -r .tools.llvm .github/versions.json)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
@@ -67,14 +73,16 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
-          target: runtime
+          target: ${{ matrix.variant == 'glibc' && 'runtime-glibc' || 'runtime' }}
           platforms: linux/${{ matrix.arch }}
           build-args: |
             BUILD_GIT_HASH=${{ github.sha }}
             BUILD_TIMESTAMP=${{ needs.prepare.outputs.timestamp }}
+            LLVM_VERSION=${{ steps.tools.outputs.llvm }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
-          cache-from: type=gha,scope=docker-${{ matrix.arch }}
-          cache-to: type=gha,scope=docker-${{ matrix.arch }},mode=max
+          sbom: true
+          cache-from: type=gha,scope=docker-${{ matrix.variant }}-${{ matrix.arch }}
+          cache-to: type=gha,scope=docker-${{ matrix.variant }}-${{ matrix.arch }},mode=max
 
       - name: Smoke test native image
         env:
@@ -83,25 +91,26 @@ jobs:
         run: |
           docker run --rm --platform "linux/$ARCH" "$IMAGE@$DIGEST" --version
           docker run --rm --platform "linux/$ARCH" "$IMAGE@$DIGEST" -e 'if (1 + 1 !== 2) throw new Error("smoke test failed")'
+          docker run --rm --platform "linux/$ARCH" "$IMAGE@$DIGEST" -e 'if (process.getuid() === 0) throw new Error("image runs as root")'
 
       - name: Record digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          ARCH: ${{ matrix.arch }}
+          NAME: ${{ matrix.variant }}-${{ matrix.arch }}
         run: |
           mkdir -p digests
-          printf '%s\n' "$DIGEST" > "digests/$ARCH.digest"
+          printf '%s\n' "$DIGEST" > "digests/$NAME.digest"
 
       - name: Upload digest
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: docker-digest-${{ matrix.arch }}
+          name: docker-digest-${{ matrix.variant }}-${{ matrix.arch }}
           path: digests/*.digest
           if-no-files-found: error
           retention-days: 1
 
   publish:
-    name: Publish multi-platform tag
+    name: Publish multi-platform tags
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -126,12 +135,16 @@ jobs:
         env:
           IMAGE_TAG: ${{ inputs.tag }}
         run: |
-          sources=()
-          for arch in amd64 arm64; do
-            digest=$(cat "digests/$arch.digest")
-            [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
-            sources+=("$IMAGE@$digest")
+          for variant in musl glibc; do
+            tag="$IMAGE:$IMAGE_TAG"
+            [[ "$variant" == glibc ]] && tag+="-glibc"
+            sources=()
+            for arch in amd64 arm64; do
+              digest=$(cat "digests/$variant-$arch.digest")
+              [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+              sources+=("$IMAGE@$digest")
+            done
+            docker buildx imagetools create --tag "$tag" "${sources[@]}"
+            docker buildx imagetools inspect "$tag"
+            echo "Published \`$tag\` for linux/amd64 and linux/arm64." >> "$GITHUB_STEP_SUMMARY"
           done
-          docker buildx imagetools create --tag "$IMAGE:$IMAGE_TAG" "${sources[@]}"
-          docker buildx imagetools inspect "$IMAGE:$IMAGE_TAG"
-          echo "Published \`$IMAGE:$IMAGE_TAG\` for linux/amd64 and linux/arm64." >> "$GITHUB_STEP_SUMMARY"
