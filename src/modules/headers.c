@@ -39,6 +39,7 @@ struct headers_data {
 typedef struct sorted_pair {
   char *name;
   char *value;
+  size_t order;
 } sorted_pair_t;
 
 typedef struct {
@@ -309,8 +310,11 @@ static void list_delete_name(hdr_list_t *l, const char *lower_name) {
   }}
 }
 
+// qsort isn't stable, so same-name entries tie-break on list order.
 static int cmp_pairs(const void *a, const void *b) {
-  return strcmp(((const sorted_pair_t *)a)->name, ((const sorted_pair_t *)b)->name);
+  const sorted_pair_t *x = a, *y = b;
+  int c = strcmp(x->name, y->name);
+  return c ? c : (x->order > y->order) - (x->order < y->order);
 }
 
 static sorted_pair_t *build_sorted_view(hdr_list_t *l, size_t *out) {
@@ -324,6 +328,7 @@ static sorted_pair_t *build_sorted_view(hdr_list_t *l, size_t *out) {
   for (hdr_entry_t *e = l->head; e; e = e->next) {
     raw[n].name  = e->name;
     raw[n].value = e->value;
+    raw[n].order = n;
     n++;
   }
   
