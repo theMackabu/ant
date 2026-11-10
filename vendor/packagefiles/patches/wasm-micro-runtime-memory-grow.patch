@@ -1,7 +1,8 @@
 diff --git a/core/iwasm/common/wasm_c_api.c b/core/iwasm/common/wasm_c_api.c
+index 3cd24540..f29385be 100644
 --- a/core/iwasm/common/wasm_c_api.c
 +++ b/core/iwasm/common/wasm_c_api.c
-@@ -4843,8 +4843,21 @@
+@@ -4843,8 +4843,21 @@ wasm_memory_grow(wasm_memory_t *memory, wasm_memory_pages_t delta)
      if (memory && memory->host_memory)
          return wasm_enlarge_memory_internal(NULL, memory->host_memory, delta);
  
@@ -26,25 +27,25 @@ diff --git a/core/iwasm/common/wasm_c_api.c b/core/iwasm/common/wasm_c_api.c
  }
  
 diff --git a/core/iwasm/interpreter/wasm_loader.c b/core/iwasm/interpreter/wasm_loader.c
+index 97ca1709..231091f8 100644
 --- a/core/iwasm/interpreter/wasm_loader.c
 +++ b/core/iwasm/interpreter/wasm_loader.c
-@@ -4554,6 +4554,8 @@
+@@ -4554,6 +4554,7 @@ load_export_section(const uint8 *buf, const uint8 *buf_end, WASMModule *module,
                                        "unknown memory");
                          return false;
                      }
-+                    /* Exported memory can grow through the host C API. */
 +                    module->possible_memory_grow = true;
                      break;
  #if WASM_ENABLE_TAGS != 0
                  /* export tag */
 diff --git a/core/iwasm/interpreter/wasm_mini_loader.c b/core/iwasm/interpreter/wasm_mini_loader.c
+index 4c0eca52..bacbd0e3 100644
 --- a/core/iwasm/interpreter/wasm_mini_loader.c
 +++ b/core/iwasm/interpreter/wasm_mini_loader.c
-@@ -1645,6 +1645,8 @@
+@@ -1645,6 +1645,7 @@ load_export_section(const uint8 *buf, const uint8 *buf_end, WASMModule *module,
                  case EXPORT_KIND_MEMORY:
                      bh_assert(index < module->memory_count
                                            + module->import_memory_count);
-+                    /* Exported memory can grow through the host C API. */
 +                    module->possible_memory_grow = true;
                      break;
                  /* global index */

@@ -1,6 +1,6 @@
 --- a/src/uv-common.h
 +++ b/src/uv-common.h
-@@ -418,6 +418,8 @@
+@@ -418,6 +418,8 @@ struct uv__loop_metrics_s {
  };
  
  void uv__metrics_update_idle_time(uv_loop_t* loop);
@@ -9,7 +9,7 @@
  void uv__metrics_set_provider_entry_time(uv_loop_t* loop);
  
  #ifdef __linux__
-@@ -445,6 +447,8 @@
+@@ -445,6 +447,8 @@ struct uv__loop_internal_fields_s {
    unsigned int flags;
    uv__loop_metrics_t loop_metrics;
    int current_timeout;
@@ -20,16 +20,12 @@
    struct uv__iou iou;
 --- a/src/uv-common.c
 +++ b/src/uv-common.c
-@@ -1221,3 +1221,36 @@
+@@ -1221,3 +1221,32 @@ void uv_free_interface_addresses(uv_interface_address_t* addresses,
    uv__free(addresses);
  }
  #endif  /* !__MVS__ */
 +
 +
-+/* The poll step's event buffer is owned by the loop instead of living on the
-+ * stack, so callbacks run with a small uv_run() frame above them. A nested
-+ * uv_run() on the same loop gets its own temporary buffer.
-+ */
 +void* uv__loop_poll_buffer(uv_loop_t* loop, size_t size, int* nested) {
 +  uv__loop_internal_fields_t* lfields;
 +  void* buf;
@@ -59,7 +55,7 @@
 +}
 --- a/src/unix/loop.c
 +++ b/src/unix/loop.c
-@@ -206,6 +206,7 @@
+@@ -206,6 +206,7 @@ void uv__loop_close(uv_loop_t* loop) {
  
    lfields = uv__get_internal_fields(loop);
    uv_mutex_destroy(&lfields->loop_metrics.lock);
@@ -69,7 +65,7 @@
  }
 --- a/src/unix/kqueue.c
 +++ b/src/unix/kqueue.c
-@@ -162,9 +162,12 @@
+@@ -162,9 +162,12 @@ static void uv__kqueue_delete(int kqfd, const struct kevent *ev) {
  }
  
  
@@ -84,7 +80,7 @@
    struct kevent* ev;
    struct timespec spec;
    unsigned int nevents;
-@@ -219,7 +222,7 @@
+@@ -219,7 +222,7 @@ void uv__io_poll(uv_loop_t* loop, int timeout) {
  
        EV_SET(events + nevents, w->fd, filter, op, fflags, 0, 0);
  
@@ -93,7 +89,7 @@
          if (kevent(loop->backend_fd, events, nevents, NULL, 0, NULL))
            abort();
          nevents = 0;
-@@ -229,7 +232,7 @@
+@@ -229,7 +232,7 @@ void uv__io_poll(uv_loop_t* loop, int timeout) {
      if ((w->events & POLLOUT) == 0 && (w->pevents & POLLOUT) != 0) {
        EV_SET(events + nevents, w->fd, EVFILT_WRITE, EV_ADD, 0, 0, 0);
  
@@ -102,7 +98,7 @@
          if (kevent(loop->backend_fd, events, nevents, NULL, 0, NULL))
            abort();
          nevents = 0;
-@@ -248,7 +251,7 @@
+@@ -248,7 +251,7 @@ void uv__io_poll(uv_loop_t* loop, int timeout) {
        EV_SET(events + nevents, w->fd, EV_OOBAND, EV_ADD, 0, 0, 0);
  #endif
  
@@ -111,7 +107,7 @@
          if (kevent(loop->backend_fd, events, nevents, NULL, 0, NULL))
            abort();
          nevents = 0;
-@@ -288,7 +291,7 @@
+@@ -288,7 +291,7 @@ void uv__io_poll(uv_loop_t* loop, int timeout) {
                    events,
                    nevents,
                    events,
@@ -120,7 +116,7 @@
                    timeout == -1 ? NULL : &spec);
      uv__io_poll_check(loop, pset);
  
-@@ -448,7 +451,7 @@
+@@ -448,7 +451,7 @@ void uv__io_poll(uv_loop_t* loop, int timeout) {
        return;  /* Event loop should cycle now so don't poll again. */
  
      if (nevents != 0) {
@@ -129,7 +125,7 @@
          /* Poll for more events but don't block this time. */
          timeout = 0;
          continue;
-@@ -474,6 +477,18 @@
+@@ -474,6 +477,18 @@ update_timeout:
  }
  
  
@@ -150,7 +146,7 @@
    uintptr_t i;
 --- a/src/unix/linux.c
 +++ b/src/unix/linux.c
-@@ -1415,10 +1415,18 @@
+@@ -1415,10 +1415,18 @@ static void uv__epoll_ctl_flush(int epollfd,
  }
  
  
@@ -172,7 +168,7 @@
    struct uv__invalidate inv;
    struct epoll_event* pe;
    struct epoll_event e;
-@@ -1493,7 +1501,7 @@
+@@ -1493,7 +1501,7 @@ void uv__io_poll(uv_loop_t* loop, int timeout) {
      fd = w->fd;
  
      if (ctl->ringfd != -1) {
@@ -181,7 +177,7 @@
        continue;
      }
  
-@@ -1509,7 +1517,7 @@
+@@ -1509,7 +1517,7 @@ void uv__io_poll(uv_loop_t* loop, int timeout) {
    }
  
    inv.events = events;
@@ -190,7 +186,7 @@
    inv.nfds = -1;
  
    for (;;) {
-@@ -1522,10 +1530,10 @@
+@@ -1522,10 +1530,10 @@ void uv__io_poll(uv_loop_t* loop, int timeout) {
       */
      if (ctl->ringfd != -1)
        while (*ctl->sqhead != *ctl->sqtail)
@@ -203,7 +199,7 @@
      uv__io_poll_check(loop, NULL);
  
      if (nfds == -1)
-@@ -1629,7 +1637,7 @@
+@@ -1629,7 +1637,7 @@ void uv__io_poll(uv_loop_t* loop, int timeout) {
        break;  /* Event loop should cycle now so don't poll again. */
  
      if (nevents != 0) {
@@ -212,7 +208,7 @@
          /* Poll for more events but don't block this time. */
          timeout = 0;
          continue;
-@@ -1655,7 +1663,17 @@
+@@ -1655,7 +1663,17 @@ update_timeout:
  
    if (ctl->ringfd != -1)
      while (*ctl->sqhead != *ctl->sqtail)
@@ -233,7 +229,7 @@
  uint64_t uv__hrtime(uv_clocktype_t type) {
 --- a/src/win/core.c
 +++ b/src/win/core.c
-@@ -366,6 +366,7 @@
+@@ -366,6 +366,7 @@ void uv__loop_close(uv_loop_t* loop) {
  
    lfields = uv__get_internal_fields(loop);
    uv_mutex_destroy(&lfields->loop_metrics.lock);
@@ -241,7 +237,7 @@
    uv__free(lfields);
    loop->internal_fields = NULL;
  
-@@ -421,11 +422,14 @@
+@@ -421,11 +422,14 @@ int uv_backend_timeout(const uv_loop_t* loop) {
  }
  
  
@@ -258,7 +254,7 @@
    OVERLAPPED* overlapped;
    ULONG count;
    ULONG i;
-@@ -463,7 +467,7 @@
+@@ -463,7 +467,7 @@ static void uv__poll(uv_loop_t* loop, DWORD timeout) {
  
      success = GetQueuedCompletionStatusEx(loop->iocp,
                                            overlappeds,
@@ -267,7 +263,7 @@
                                            &count,
                                            timeout,
                                            FALSE);
-@@ -525,6 +529,18 @@
+@@ -525,6 +529,18 @@ static void uv__poll(uv_loop_t* loop, DWORD timeout) {
  }
  
  

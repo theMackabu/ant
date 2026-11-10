@@ -1,5 +1,5 @@
 diff --git a/src/boringssl/engine.c b/src/boringssl/engine.c
-index da90ea2..a31fbce 100644
+index da90ea2..051422b 100644
 --- a/src/boringssl/engine.c
 +++ b/src/boringssl/engine.c
 @@ -28,11 +28,31 @@
@@ -34,23 +34,19 @@ index da90ea2..a31fbce 100644
  #endif
  
  struct openssl_ctx {
-@@ -53,6 +73,9 @@
+@@ -53,6 +73,8 @@ struct openssl_ctx {
      // require_fips() was applied. Makes require_fips() idempotent and avoids re-applying the
      // compliance policy, which also resets the min/max protocol versions (see require_fips())
      bool fips_policy;
 +
-+    // no CA bundle was set: client engines verify against the shared system store
 +    bool system_store;
  };
  
  struct openssl_engine {
-@@ -360,40 +383,171 @@
+@@ -360,40 +382,159 @@ static const char* name_str(const X509_NAME* n) {
  }
  
  #if __APPLE__
-+// Security and CoreFoundation are resolved on the first system-trust check
-+// instead of being linked, so processes that never verify against the system
-+// store do not pay the framework load cost at startup.
 +typedef struct {
 +    __typeof__(&CFArrayAppendValue) array_append_value;
 +    __typeof__(&CFArrayCreateMutable) array_create_mutable;
@@ -98,9 +94,6 @@ index da90ea2..a31fbce 100644
 -    CFMutableArrayRef certs = CFArrayCreateMutable(kCFAllocatorDefault, 10, &kCFTypeArrayCallBacks);
 +    if (pre_verify) return 1;
 +
-+    // BoringSSL has no Apple roots, so it can only fail to anchor the chain;
-+    // Apple trust settles that. Every other error (hostname mismatch, expiry,
-+    // bad signature, wrong purpose) stands.
 +    switch (X509_STORE_CTX_get_error(st)) {
 +        case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT:
 +        case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY:
@@ -162,13 +155,10 @@ index da90ea2..a31fbce 100644
  #endif
  
 +#if !__APPLE__
-+// Loaded on the first client connection that needs it and shared by every
-+// context for the rest of the process.
 +static X509_STORE* system_store_ = NULL;
 +static uv_once_t system_store_once = UV_ONCE_INIT;
 +
 +#if _WIN32
-+// BoringSSL has no Windows system store provider: copy the ROOT store
 +static void system_store_load(void) {
 +    HCERTSTORE store = CertOpenSystemStoreA(0, "ROOT");
 +    if (store == NULL) {
@@ -190,15 +180,12 @@ index da90ea2..a31fbce 100644
 +    system_store_ = certs;
 +}
 +#else
-+// BoringSSL only looks at SSL_CERT_FILE/SSL_CERT_DIR, /etc/ssl/cert.pem and
-+// the hashed /etc/ssl/certs directory. Distributions without either (NixOS,
-+// Fedora/RHEL, openSUSE) ship a bundle elsewhere.
 +static const char* const ca_bundles[] = {
-+    "/etc/ssl/certs/ca-certificates.crt",                // Debian, Ubuntu, Gentoo, NixOS
-+    "/etc/pki/tls/certs/ca-bundle.crt",                  // Fedora, RHEL
-+    "/etc/ssl/ca-bundle.pem",                            // openSUSE
-+    "/etc/pki/tls/cacert.pem",                           // OpenELEC
-+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // CentOS, RHEL 7
++    "/etc/ssl/certs/ca-certificates.crt",
++    "/etc/pki/tls/certs/ca-bundle.crt",
++    "/etc/ssl/ca-bundle.pem",
++    "/etc/pki/tls/cacert.pem",
++    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
 +    "/etc/ssl/certs/ca-bundle.crt",
 +};
 +
@@ -229,7 +216,7 @@ index da90ea2..a31fbce 100644
  static int set_ca_bundle(tls_context* tls, const char* ca, size_t ca_len) {
      struct openssl_ctx* c = (struct openssl_ctx*)tls;
      SSL_CTX* ctx = c->ctx;
-@@ -411,6 +565,7 @@
+@@ -411,6 +552,7 @@ static int set_ca_bundle(tls_context* tls, const char* ca, size_t ca_len) {
      // may be called more than once on the same context
      X509_STORE_free(c->ca_store);
      c->ca_store = NULL;
@@ -237,12 +224,11 @@ index da90ea2..a31fbce 100644
  
      SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
      if (custom) {
-@@ -428,12 +583,67 @@
+@@ -428,12 +570,66 @@ static int set_ca_bundle(tls_context* tls, const char* ca, size_t ca_len) {
          // use native Apple trust verification
          SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, apple_ca_verify);
  #else
 -        SSL_CTX_set_default_verify_paths(ctx);
-+        // loaded lazily: new_boringssl_engine() attaches system_store()
  #endif
      }
      return 0;
@@ -306,7 +292,7 @@ index da90ea2..a31fbce 100644
  static void init_ssl_context(struct openssl_ctx* c) {
      // a single SSL_CTX serves both roles; the role is fixed per-SSL with
      // SSL_set_connect_state()/SSL_set_accept_state()
-@@ -454,6 +664,7 @@
+@@ -454,6 +650,7 @@ static void init_ssl_context(struct openssl_ctx* c) {
      // TLS_method() enables the server session cache, but tlsuv implements no
      // session resumption - don't grow a cache nothing reads.
      SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
@@ -314,7 +300,7 @@ index da90ea2..a31fbce 100644
  
      set_ca_bundle((tls_context*)c, NULL, 0);
      SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
-@@ -641,8 +852,6 @@
+@@ -641,8 +838,6 @@ tlsuv_engine_t new_boringssl_engine(tls_context* ctx, const char* host) {
  
      engine->ssl = SSL_new(context->ctx);
  
@@ -323,16 +309,15 @@ index da90ea2..a31fbce 100644
      // unlike OpenSSL's SSL_set1_host(), BoringSSL's does not auto-detect an
      // IP-address-literal host and match it against iPAddress SANs - it only
      // ever checks dNSName SANs. Detect IP literals and use the IP-specific
-@@ -655,6 +864,8 @@
+@@ -655,6 +850,7 @@ tlsuv_engine_t new_boringssl_engine(tls_context* ctx, const char* host) {
              ASN1_OCTET_STRING_free(host_ip);
              X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(engine->ssl), host);
          } else {
-+            // RFC 6066: SNI carries DNS names only, never IP literals
 +            SSL_set_tlsext_host_name(engine->ssl, host);
              SSL_set1_host(engine->ssl, host);
          }
      }
-@@ -663,6 +874,12 @@
+@@ -663,6 +859,12 @@ tlsuv_engine_t new_boringssl_engine(tls_context* ctx, const char* host) {
  
      SSL_set_app_data(engine->ssl, engine);
  
@@ -345,7 +330,7 @@ index da90ea2..a31fbce 100644
      if (context->pkey != NULL) {
          if (tls_set_cert_internal(engine->ssl, context->store, context->pkey) != 0) {
              UM_LOG(ERR, "failed to set cert/key pair");
-@@ -1329,7 +1546,7 @@
+@@ -1329,7 +1531,7 @@ tls_read(tlsuv_engine_t self, char* out, size_t* out_bytes, size_t maxout) {
  
      *out_bytes = 0;
  

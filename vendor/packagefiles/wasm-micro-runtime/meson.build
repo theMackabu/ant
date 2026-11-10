@@ -146,7 +146,6 @@ wamr_sources += files(
   'core/iwasm/common/wasm_memory.c',
   'core/iwasm/common/wasm_native.c',
   'core/iwasm/common/wasm_runtime_common.c',
-  'core/iwasm/common/wasm_shared_memory.c',
   'core/iwasm/interpreter/wasm_loader.c',
   'core/iwasm/interpreter/wasm_runtime.c',
   interp_source,

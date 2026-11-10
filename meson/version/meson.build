@@ -86,6 +86,9 @@ dep_versions = {
   'ZLIB': zlib_dep.version(),
 }
 
+unicode_version = subproject('ucd').get_variable('ucd_version').split('.')
+dep_versions += {'UNICODE': unicode_version[0] + '.' + unicode_version[1]}
+
 foreach define, wrap : {'WAMR': 'wasm-micro-runtime', 'BORINGSSL': 'boringssl'}
   revision = ''
   foreach line : fs.read(meson.project_source_root() / 'vendor' / wrap + '.wrap').split('\n')

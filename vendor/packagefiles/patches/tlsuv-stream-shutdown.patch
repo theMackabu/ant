@@ -12,7 +12,7 @@ index c39837f..f8929e3 100644
  
  int tlsuv_stream_peername(const tlsuv_stream_t *clt, struct sockaddr *addr, int *namelen);
 diff --git a/src/tlsuv.c b/src/tlsuv.c
-index 7f03c11..550a325 100644
+index afe42b4..0cca4a7 100644
 --- a/src/tlsuv.c
 +++ b/src/tlsuv.c
 @@ -238,6 +238,27 @@

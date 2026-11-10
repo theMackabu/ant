@@ -1,8 +1,8 @@
 [wrap-file]
-directory = llhttp-release-v9.3.1
-source_url = https://github.com/nodejs/llhttp/archive/refs/tags/release/v9.3.1.tar.gz
-source_filename = llhttp-9.3.1.tar.gz
-source_hash = c14a93f287d3dbd6580d08af968294f8bcc61e1e1e3c34301549d00f3cf09365
+directory = llhttp-release-v9.4.3
+source_url = https://github.com/nodejs/llhttp/archive/refs/tags/release/v9.4.3.tar.gz
+source_filename = llhttp-9.4.3.tar.gz
+source_hash = 1eb813c7437b31a87496a1cd3ed79f00746720f5e7e29c79b42c02cb69f36c39
 patch_directory = llhttp
 
 [provide]

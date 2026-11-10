@@ -1,5 +1,5 @@
 diff --git a/include/tlsuv/http.h b/include/tlsuv/http.h
-index a3bc76b..717c1a8 100644
+index 24f2006..508cbd7 100644
 --- a/include/tlsuv/http.h
 +++ b/include/tlsuv/http.h
 @@ -118,6 +118,10 @@ struct tlsuv_http_req_s {
@@ -14,7 +14,7 @@ index a3bc76b..717c1a8 100644
      bool req_chunked;
      ssize_t req_body_size;
 diff --git a/src/http.c b/src/http.c
-index 883c899..a8b69d1 100644
+index 99ded6f..0e71b4c 100644
 --- a/src/http.c
 +++ b/src/http.c
 @@ -55,6 +55,8 @@ static void tr_read_cb(uv_stream_t *s, ssize_t nread, const uv_buf_t *buf);
@@ -72,7 +72,7 @@ index 883c899..a8b69d1 100644
  static void fail_active_request(tlsuv_http_t *c, int code, const char *msg) {
      tlsuv_http_req_t *req = c->active;
  
-@@ -971,6 +1005,16 @@ int http_req_cancel_err(tlsuv_http_t *clt, tlsuv_http_req_t *req, int error, con
+@@ -982,6 +1016,16 @@ int http_req_cancel_err(tlsuv_http_t *clt, tlsuv_http_req_t *req, int error, con
  
      if (r == req || req == clt->active) { // req is in the queue
          if (req == clt->active) {
@@ -89,7 +89,7 @@ index 883c899..a8b69d1 100644
              stop_req_timer(clt);
              clt->active = NULL;
              // since active request is being canceled we don't want to consume what's left on the wire for it
-@@ -1111,4 +1155,3 @@ static void free_http(tlsuv_http_t *clt) {
+@@ -1137,4 +1181,3 @@ static void free_http(tlsuv_http_t *clt) {
          tlsuv_tls_link_free(&clt->tls_link);
      }
  }

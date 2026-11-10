@@ -1,8 +1,8 @@
 diff --git a/src/http.c b/src/http.c
-index a8b69d1..ba33bcf 100644
+index 0e71b4c..2ce73c7 100644
 --- a/src/http.c
 +++ b/src/http.c
-@@ -1099,13 +1099,6 @@ void tlsuv_http_req_end(tlsuv_http_req_t *req) {
+@@ -1125,13 +1125,6 @@ void tlsuv_http_req_end(tlsuv_http_req_t *req) {
  }
  
  int tlsuv_http_req_data(tlsuv_http_req_t *req, const char *body, size_t bodylen, tlsuv_http_body_cb cb) {
@@ -13,7 +13,7 @@ index a8b69d1..ba33bcf 100644
 -        return UV_EINVAL;
 -    }
 -
-     if (req->state > headers_sent) {
+     if (req->state > headers_sent || end_queued(req)) {
          return UV_EINVAL;
      }
 diff --git a/src/http_req.c b/src/http_req.c

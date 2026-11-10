@@ -1,6 +1,6 @@
 [wrap-git]
 url = https://github.com/openziti/tlsuv.git
-revision = v0.46.0
+revision = v0.46.2
 depth = 1
 patch_directory = tlsuv
 diff_files = patches/tlsuv-http-cancel-during-parse.patch, patches/tlsuv-websocket-buffered-read.patch, patches/tlsuv-websocket-close-lifetime.patch, patches/tlsuv-websocket-connect-cancel-lifetime.patch, patches/tlsuv-url-userinfo-authority.patch, patches/tlsuv-uv-link-static-inline.patch, patches/tlsuv-request-body-methods.patch, patches/tlsuv-websocket-frame-type.patch, patches/tlsuv-boringssl-engine.patch, patches/tlsuv-no-platform-keychain.patch, patches/tlsuv-connector-happy-eyeballs.patch, patches/tlsuv-stream-shutdown.patch

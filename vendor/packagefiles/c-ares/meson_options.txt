@@ -1,0 +1,24 @@
+option(
+    'export_adig',
+    type: 'boolean',
+    value: false,
+    description: 'Override find_program(adig)',
+)
+option(
+    'export_ahost',
+    type: 'boolean',
+    value: false,
+    description: 'Override find_program(ahost)',
+)
+option(
+    'tests',
+    type: 'boolean',
+    value: false,
+    description: 'Build c-ares tests',
+)
+option(
+    'tools',
+    type: 'boolean',
+    value: false,
+    description: 'Build c-ares tools by default',
+)

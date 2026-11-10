@@ -1,0 +1,4 @@
+option(
+    'tests',
+    type: 'feature',
+)

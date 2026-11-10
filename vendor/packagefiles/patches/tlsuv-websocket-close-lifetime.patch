@@ -1,22 +1,21 @@
 diff --git a/src/websocket.c b/src/websocket.c
-index a5369dc..cb8d493 100644
+index a5369dc..1a45f01 100644
 --- a/src/websocket.c
 +++ b/src/websocket.c
-@@ -819,6 +819,13 @@ static void ws_close_cb(uv_link_t *l) {
+@@ -819,6 +819,12 @@ static void ws_close_cb(uv_link_t *l) {
      on_ws_close(ws);
  }
  
 +static void ws_tr_close_cb(uv_handle_t *handle) {
 +    tlsuv_websocket_t *ws = handle->data;
 +    tlsuv__free(handle);
-+    /* The caller owns ws and may release it from close_cb. */
 +    on_ws_close(ws);
 +}
 +
  int tlsuv_websocket_close(tlsuv_websocket_t *ws, uv_close_cb cb) {
      ws->close_cb = cb;
      ws->closed = true;
-@@ -829,6 +836,8 @@ int tlsuv_websocket_close(tlsuv_websocket_t *ws, uv_close_cb cb) {
+@@ -829,6 +835,8 @@ int tlsuv_websocket_close(tlsuv_websocket_t *ws, uv_close_cb cb) {
          tlsuv_connector_req cr = ws->connect_req;
          ws->connect_req = NULL;
          c->cancel(cr);
@@ -25,7 +24,7 @@ index a5369dc..cb8d493 100644
      }
  
      if (ws->src != NULL) {
-@@ -840,9 +849,12 @@ int tlsuv_websocket_close(tlsuv_websocket_t *ws, uv_close_cb cb) {
+@@ -840,9 +848,12 @@ int tlsuv_websocket_close(tlsuv_websocket_t *ws, uv_close_cb cb) {
  
      if (ws->tr != NULL) {
          UM_LOG(TRACE, "closing ws transport");

@@ -2464,13 +2464,13 @@ void init_process_module(ant_t *js) {
   process_set_string(js, versions_obj, "wamr", ANT_DEP_WAMR_VERSION);
   process_set_string(js, versions_obj, "boringssl", ANT_DEP_BORINGSSL_VERSION);
   process_set_string(js, versions_obj, "yyjson", ANT_DEP_YYJSON_VERSION);
+  process_set_string(js, versions_obj, "unicode", ANT_DEP_UNICODE_VERSION);
 
   // compatibility versions
   process_set_string(js, versions_obj, "node", "26.13.0");
   process_set_string(js, versions_obj, "v8", "14.6.202.34-node.40");
   process_set_string(js, versions_obj, "modules", "147");
   process_set_string(js, versions_obj, "napi", "10");
-  process_set_string(js, versions_obj, "unicode", "17");
   process_set_string(js, versions_obj, "openssl", "3.5.9");
   
   js_set(js, process_obj, "versions", versions_obj);

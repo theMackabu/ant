@@ -1,7 +1,8 @@
 diff --git a/mir-gen-aarch64.c b/mir-gen-aarch64.c
+index 4bac564..860681f 100644
 --- a/mir-gen-aarch64.c
 +++ b/mir-gen-aarch64.c
-@@ -1252,6 +1252,9 @@
+@@ -1252,6 +1252,9 @@ struct pattern {
       T -- pc-relative address [5..23]
       i<one or two hex digits> -- shift value in [10..15]
       I<one or two hex digits> -- shift value in [16..21]
@@ -11,7 +12,7 @@ diff --git a/mir-gen-aarch64.c b/mir-gen-aarch64.c
    */
    const char *replacement;
  };
-@@ -1385,6 +1388,8 @@
+@@ -1385,6 +1388,8 @@ static const struct pattern patterns[] = {
  #define CMPI "f100001f:ff00001f rn1 I"
  #define SCMPR "6b00001f:ff20001f rn1 rm2"
  #define SCMPI "7100001f:ff00001f rn1 I"
@@ -20,49 +21,45 @@ diff --git a/mir-gen-aarch64.c b/mir-gen-aarch64.c
  #define FCMP "1e202010:ffe0fc1f vn1 vm2"
  #define DCMP "1e602010:ffe0fc1f vn1 vm2"
  
-@@ -1573,6 +1578,8 @@
+@@ -1573,6 +1578,7 @@ static const struct pattern patterns[] = {
    {MIR_BEQS, "l r r", SCMPR "; " BEQ},
    /* cmp Wn,I,shift; beq l */
    {MIR_BEQS, "l r I", SCMPI "; " BEQ},
-+  /* eor R10,Rn,K; cmp R10,k; beq l */
 +  {MIR_BEQ, "l r K", EORK "; " CMPK "; " BEQ},
    /* fcmpe Sn,Sm; beq l */
    {MIR_FBEQ, "l r r", FCMP "; " BEQ},
    /* fcmpe Dn,Dm; beq l */
-@@ -1591,6 +1598,8 @@
+@@ -1591,6 +1597,7 @@ static const struct pattern patterns[] = {
    {MIR_BNES, "l r r", SCMPR "; " BNE},
    /* cmp Wn,I,shift; bne l */
    {MIR_BNES, "l r I", SCMPI "; " BNE},
-+  /* eor R10,Rn,K; cmp R10,k; bne l */
 +  {MIR_BNE, "l r K", EORK "; " CMPK "; " BNE},
    /* fcmpe Sn,Sm; bne l */
    {MIR_FBNE, "l r r", FCMP "; " BNE},
    /* fcmpe Dn,Dm; bne l */
-@@ -1717,12 +1726,18 @@
+@@ -1717,12 +1724,18 @@ static const struct pattern patterns[] = {
    // ??? adding shift, negate, immediate
    {MIR_AND, "r r r", "8a000000:ffe0fc00 rd0 rn1 rm2"},  /* and Rd,Rn,Rm */
    {MIR_ANDS, "r r r", "0a000000:ffe0fc00 rd0 rn1 rm2"}, /* and Wd,Wn,Wm */
-+  {MIR_AND, "r r G", "92000000:ff800000 rd0 rn1 G"},    /* and Rd,Rn,#bimm */
-+  {MIR_ANDS, "r r g", "12000000:ff800000 rd0 rn1 g"},   /* and Wd,Wn,#bimm */
++  {MIR_AND, "r r G", "92000000:ff800000 rd0 rn1 G"},
++  {MIR_ANDS, "r r g", "12000000:ff800000 rd0 rn1 g"},
  
    {MIR_OR, "r r r", "aa000000:ffe0fc00 rd0 rn1 rm2"},  /* orr Rd,Rn,Rm */
    {MIR_ORS, "r r r", "2a000000:ffe0fc00 rd0 rn1 rm2"}, /* orr Wd,Wn,Wm */
-+  {MIR_OR, "r r G", "b2000000:ff800000 rd0 rn1 G"},    /* orr Rd,Rn,#bimm */
-+  {MIR_ORS, "r r g", "32000000:ff800000 rd0 rn1 g"},   /* orr Wd,Wn,#bimm */
++  {MIR_OR, "r r G", "b2000000:ff800000 rd0 rn1 G"},
++  {MIR_ORS, "r r g", "32000000:ff800000 rd0 rn1 g"},
  
    {MIR_XOR, "r r r", "ca000000:ffe0fc00 rd0 rn1 rm2"},  /* eor Rd,Rn,Rm */
    {MIR_XORS, "r r r", "4a000000:ffe0fc00 rd0 rn1 rm2"}, /* eor Wd,Wn,Wm */
-+  {MIR_XOR, "r r G", "d2000000:ff800000 rd0 rn1 G"},    /* eor Rd,Rn,#bimm */
-+  {MIR_XORS, "r r g", "52000000:ff800000 rd0 rn1 g"},   /* eor Wd,Wn,#bimm */
++  {MIR_XOR, "r r G", "d2000000:ff800000 rd0 rn1 G"},
++  {MIR_XORS, "r r g", "52000000:ff800000 rd0 rn1 g"},
  
    // ??? can we add scale
    {MIR_I2F, "r r", "9e220000:ffff0000 vd0 rn1"},  /* scvtf Sd,Rn */
-@@ -1894,6 +1909,42 @@
+@@ -1894,6 +1907,40 @@ static int lshift_const_p (int64_t v, int short_p, int *immr, int *imms) {
    return TRUE;
  }
  
-+/* Return TRUE if V is a 64-bit or 32-bit (if SHORT_P) logical op bitmask immediate and set its
-+   N, immr, and imms fields. */
 +static int logical_const_p (uint64_t v, int short_p, int *n, int *immr, int *imms) {
 +  unsigned reg_size = short_p ? 32 : 64, size = reg_size, i, cto, clo;
 +  uint64_t mask, inv, nimms;
@@ -100,7 +97,7 @@ diff --git a/mir-gen-aarch64.c b/mir-gen-aarch64.c
  static int pattern_match_p (gen_ctx_t gen_ctx, const struct pattern *pat, MIR_insn_t insn) {
    MIR_context_t ctx = gen_ctx->ctx;
    size_t nop, nops = MIR_insn_nops (ctx, insn);
-@@ -2052,6 +2103,21 @@
+@@ -2052,6 +2099,21 @@ static int pattern_match_p (gen_ctx_t gen_ctx, const struct pattern *pat, MIR_in
        }
        break;
      }
@@ -122,7 +119,7 @@ diff --git a/mir-gen-aarch64.c b/mir-gen-aarch64.c
      case 'l':
        if (op.mode != MIR_OP_LABEL) return FALSE;
        break;
-@@ -2170,6 +2236,7 @@
+@@ -2170,6 +2232,7 @@ static void out_insn (gen_ctx_t gen_ctx, MIR_insn_t insn, const char *replacemen
      uint32_t opcode = 0, opcode_mask = 0xffffffff;
      int rd = -1, rn = -1, rm = -1, ra = -1, disp = -1, scale = -1;
      int immr = -1, imms = -1, imm16 = -1, imm16_shift = -1, imm12 = -1, imm12_shift = -1;
@@ -130,7 +127,7 @@ diff --git a/mir-gen-aarch64.c b/mir-gen-aarch64.c
      MIR_op_t op;
      int label_ref_num = -1, switch_table_addr_p = FALSE;
  
-@@ -2266,6 +2333,31 @@
+@@ -2266,6 +2329,31 @@ static void out_insn (gen_ctx_t gen_ctx, MIR_insn_t insn, const char *replacemen
          gen_assert (disp < (1 << 12));
          break;
        }
@@ -162,7 +159,7 @@ diff --git a/mir-gen-aarch64.c b/mir-gen-aarch64.c
        case 'S': { /* S, SL, Sl */
          int flag;
  
-@@ -2393,6 +2485,11 @@
+@@ -2393,6 +2481,11 @@ static void out_insn (gen_ctx_t gen_ctx, MIR_insn_t insn, const char *replacemen
        opcode |= imms << 10;
        opcode_mask = check_and_set_mask (opcode_mask, 0x3f << 10);
      }

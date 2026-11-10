@@ -1,0 +1,11 @@
+option(
+    'tests',
+    type: 'boolean',
+    value: false,
+    description: 'build tests',
+)
+option(
+    'programs',
+    type: 'feature',
+    description: 'build programs',
+)

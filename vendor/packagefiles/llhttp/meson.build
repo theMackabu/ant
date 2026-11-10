@@ -1,4 +1,4 @@
-project('llhttp', 'c', version: '9.3.1', default_options: ['c_std=c99', 'warning_level=0'])
+project('llhttp', 'c', version: '9.4.3', default_options: ['c_std=c99', 'warning_level=0'])
 
 llhttp_lib = static_library(
   'llhttp',

@@ -1,22 +1,19 @@
 diff --git a/src/connector.c b/src/connector.c
-index effe601..49c2942 100644
+index effe601..b41faf2 100644
 --- a/src/connector.c
 +++ b/src/connector.c
-@@ -53,6 +53,9 @@
+@@ -53,6 +53,7 @@
  #endif
  
  #define max_connect_socks 16
-+// RFC 8305 Happy Eyeballs: candidates are tried one at a time, starting the next one
-+// when the current attempt fails or after this delay, instead of all at once
 +#define connect_attempt_delay_ms 250
  
  #define CR_LOG(l, fmt, ...) UM_LOG(l, "connect(%p): " fmt, cr, ##__VA_ARGS__)
  
-@@ -63,10 +66,19 @@ struct conn_req_s {
+@@ -63,10 +64,17 @@ struct conn_req_s {
      // ss_family == AF_UNSPEC (the calloc()-zeroed default) means no source address was requested
      struct sockaddr_storage source_addr;
  
-+    // resolved candidates in connection order; ai_addr points into addr_storage
 +    struct addrinfo addrs[max_connect_socks];
 +    struct sockaddr_storage addr_storage[max_connect_socks];
 +    int addr_count;
@@ -27,12 +24,11 @@ index effe601..49c2942 100644
      int count;
  
      int error;
-+    // connected or canceled: start no further attempts
 +    bool done;
  };
  
  static tlsuv_connector_req direct_connect(uv_loop_t *loop, const tlsuv_connector_t *self,
-@@ -198,24 +210,42 @@ static int err_to_uv(int err) {
+@@ -198,24 +206,39 @@ static int err_to_uv(int err) {
  #endif
  }
  
@@ -47,15 +43,14 @@ index effe601..49c2942 100644
 +    CR_LOG(TRACE, "closing connect request");
 +    free_conn_req(cr);
 +}
-+
-+// reports the result (unless already connected) and frees the request once the timer closes
+ 
 +static void finish_conn_req(struct conn_req_s *cr) {
 +    uv_handle_t *timer = (uv_handle_t *) &cr->attempt_timer;
 +    if (!uv_is_closing(timer)) {
 +        uv_close(timer, on_attempt_timer_close);
 +    }
 +}
- 
++
 +static int open_polls(struct conn_req_s *cr) {
      int poll_count = 0;
      for (int i = 0; i < cr->count; i++) {
@@ -77,21 +72,18 @@ index effe601..49c2942 100644
 +    struct conn_req_s *cr = h->data;
 +    h->type = UV_UNKNOWN_HANDLE;
 +
-+    // a failed attempt starts the next candidate before its own poll finishes closing,
-+    // so once no poll is open there is nothing left to try
 +    if (open_polls(cr) <= 0) {
 +        finish_conn_req(cr);
      }
  }
  
-@@ -234,6 +264,74 @@ static void close_poll_handle(struct conn_req_s *cr, uv_handle_t *poll) {
+@@ -234,6 +257,68 @@ static void close_poll_handle(struct conn_req_s *cr, uv_handle_t *poll) {
      }
  }
  
 +static void on_connect_poll(uv_poll_t *p, int status, int events);
 +static void on_attempt_delay(uv_timer_t *t);
 +
-+// starts candidates until one connect is in progress or none are left
 +static void start_next_attempt(struct conn_req_s *cr) {
 +    while (!cr->done && cr->next_addr < cr->addr_count) {
 +        struct addrinfo *addr = &cr->addrs[cr->next_addr++];
@@ -100,7 +92,6 @@ index effe601..49c2942 100644
 +        if (s == INVALID_SOCKET) {
 +            int err = get_error();
 +            cr->error = err_to_uv(err);
-+            // fd limit is hit, do not try to open any more sockets
 +            if (err == ENFILE || err == EMFILE) {
 +                cr->next_addr = cr->addr_count;
 +                break;
@@ -110,13 +101,9 @@ index effe601..49c2942 100644
 +        }
 +
 +        if (cr->source_addr.ss_family != AF_UNSPEC) {
-+            // SO_REUSEADDR lets this bind succeed past a lingering TIME_WAIT left by an earlier
-+            // connection that used this same source address/port (to a different peer)
 +            int on = 1;
 +            setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char *) &on, sizeof(on));
 +#ifdef SO_REUSEPORT
-+            // SO_REUSEPORT lets a later candidate share the source address/port while an
-+            // earlier attempt is still connecting. not available on Windows.
 +            setsockopt(s, SOL_SOCKET, SO_REUSEPORT, (const char *) &on, sizeof(on));
 +#endif
 +
@@ -159,7 +146,7 @@ index effe601..49c2942 100644
  static void on_connect_poll(uv_poll_t *p, int status, int events) {
      struct conn_req_s *cr = p->data;
      uv_os_sock_t sock = INVALID_SOCKET;
-@@ -243,6 +341,7 @@ static void on_connect_poll(uv_poll_t *p, int status, int events) {
+@@ -243,6 +328,7 @@ static void on_connect_poll(uv_poll_t *p, int status, int events) {
      if (sock == INVALID_SOCKET) {
          CR_LOG(ERR, "poll file no error: %d/%s", rc, uv_strerror(rc));
          cr->error = UV_EINVAL;
@@ -167,7 +154,7 @@ index effe601..49c2942 100644
          return;
      }
      CR_LOG(TRACE, "poll fd[%ld] status=%d events=%d", (long)sock, status, events);
-@@ -259,6 +358,7 @@ static void on_connect_poll(uv_poll_t *p, int status, int events) {
+@@ -259,6 +345,7 @@ static void on_connect_poll(uv_poll_t *p, int status, int events) {
          CR_LOG(TRACE, "closing fd[%ld]: poll error %s", (long)sock, uv_strerror(status));
          cr->error = status;
          closesocket(sock);
@@ -175,7 +162,7 @@ index effe601..49c2942 100644
          return;
      }
  
-@@ -270,6 +370,8 @@ static void on_connect_poll(uv_poll_t *p, int status, int events) {
+@@ -270,6 +357,8 @@ static void on_connect_poll(uv_poll_t *p, int status, int events) {
      }
  
      CR_LOG(TRACE, "connected fd[%ld]", (long)sock);
@@ -184,7 +171,7 @@ index effe601..49c2942 100644
      cr->cb(sock, 0, cr->ctx);
      cr->cb = NULL;
  
-@@ -293,79 +395,51 @@ static void on_resolve(uv_getaddrinfo_t *r, int status, struct addrinfo *addrlis
+@@ -293,79 +382,48 @@ static void on_resolve(uv_getaddrinfo_t *r, int status, struct addrinfo *addrlis
      if (status != 0) {
          CR_LOG(TRACE, "closing request: failed to resolve: %s", uv_strerror(status));
          uv_freeaddrinfo(addrlist);
@@ -205,8 +192,6 @@ index effe601..49c2942 100644
 -                   get_name(addr->ai_addr));
 -            err = EAFNOSUPPORT;
 -            addr = addr->ai_next;
-+    // RFC 8305 section 4: keep the resolver's order within each family and alternate
-+    // families, starting with the family of the first answer
 +    int family = addrlist->ai_family;
 +    struct addrinfo *next[2] = { addrlist, addrlist };
 +    int skipped = 0;
@@ -230,7 +215,6 @@ index effe601..49c2942 100644
 -            CR_LOG(TRACE, "error[%s] opening socket for %s",
 -                   strerror(err), get_name(addr->ai_addr));
 -            addr = addr->ai_next;
-+        // avoid spending a file descriptor on a candidate that's unusable due to family mismatch
 +        if ((cr->source_addr.ss_family != AF_UNSPEC && cr->source_addr.ss_family != addr->ai_family) ||
 +            addr->ai_addrlen > sizeof(cr->addr_storage[0])) {
 +            CR_LOG(TRACE, "source address family does not match destination[%s]; skipping",
@@ -298,7 +282,7 @@ index effe601..49c2942 100644
      }
  }
  
-@@ -380,6 +454,8 @@ tlsuv_connector_req direct_connect(uv_loop_t *loop, const tlsuv_connector_t *sel
+@@ -380,6 +438,8 @@ tlsuv_connector_req direct_connect(uv_loop_t *loop, const tlsuv_connector_t *sel
      if (source_addr != NULL) {
          memcpy(&cr->source_addr, source_addr, sockaddr_len(source_addr));
      }
@@ -307,7 +291,7 @@ index effe601..49c2942 100644
  
      struct addrinfo hints = {
              .ai_socktype = SOCK_STREAM,
-@@ -398,6 +474,8 @@ void direct_cancel(tlsuv_connector_req req) {
+@@ -398,6 +458,8 @@ void direct_cancel(tlsuv_connector_req req) {
      // try to cancel resolve/connect request before it started
      uv_cancel((uv_req_t *) &cr->resolve);
      cr->error = UV_ECANCELED;

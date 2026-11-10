@@ -91,26 +91,33 @@ The following tools are required to build Ant regardless of platform:
 Dependencies are vendored as Meson subprojects under `vendor/`
 and are fetched automatically:
 
-- aklomp-base64 0.5.2
 - Ada URL 4.0.0
+- aklomp-base64 0.5.3
 - argtable3 3.3.1
-- BoringSSL `297b11798a0ed6bc7736aa57328909a4afbbf67a`
-- crprintf `HEAD`
+- BoringSSL `98ffd075a2db87093a62ca46f9e6e66e5f2f9f23`
+- c-ares 1.34.9
+- crprintf `d396ba00998fc4c99283e9fd30b27ed2ccf58291`
+- double-conversion 3.4.0
+- dragonbox 1.1.3
 - google-brotli 1.2.1
 - libffi 3.8.0
 - libuv 1.53.0
-- llhttp 9.3.1
-- LMDB (OpenLDAP LMDB 0.9.33)
-- mimalloc 3.3.2 (default runtime allocator)
-- minicoro `HEAD`
-- MIR `HEAD`
+- llhttp 9.4.3
+- LMDB (OpenLDAP LMDB 0.9.37)
+- mimalloc 3.6.1 (optional runtime allocator, `-Dallocator=mimalloc`)
+- MIR `f7837cb110ae56faf3fc585358f6ced4afce6c99` (themackabu/mir)
 - PCRE2 10.49
-- tlsuv 0.40.13
-- temporal_capi 0.2.6 / temporal_rs 0.2.6
-- utf8proc 2.10.0
+- SIMDe 0.8.2
+- Skim `bab20e35f0e6903614ce642f86c45e115c348b71`
+- temporal_capi 0.2.6
+- tlsuv 0.46.2
+- Unicode Character Database 18.0.0
+- upm 1.5.1
+- utf8proc 2.12.0
 - uthash 2.4.0
-- uuidv7-h `HEAD`
-- wasm-micro-runtime `92f40918bbfad35546a1512b10bd25eaa31add4d`
+- uuidv7-h `9ae44fec0eb2843d5230caac484b0388c93b836b`
+- wasm-micro-runtime `ffc22889948b1f063d7258d34d4e636ee0914925`
+- wirecall `26931f0b5085e0c1c76101d8c6d4563273f69c2d`
 - yyjson 0.13.0
 - zlib-ng 2.3.3
 
@@ -504,7 +511,7 @@ Configure options are set via `meson setup` or `meson configure`:
 
 | Option              | Type    | Default    | Description                                              |
 | ------------------- | ------- | ---------- | -------------------------------------------------------- |
-| `allocator`         | combo   | `mimalloc` | Runtime malloc implementation (`mimalloc`, `system`)     |
+| `allocator`         | combo   | `system`   | Runtime malloc implementation (`system`, `mimalloc`)     |
 | `static_link`       | boolean | `false`    | Statically link the final binary                         |
 | `temporal`          | feature | `enabled`  | Build the Temporal API using the hermetic Rust toolchain |
 | `unsafe_c`          | feature | `disabled` | Build `Ant.unsafe.c` (runtime C compilation via c2mir)   |
@@ -530,5 +537,5 @@ Example:
 
 ```bash
 meson setup build -Dstatic_link=true --prefer-static
-meson setup build-system -Dallocator=system
+meson setup build-mimalloc -Dallocator=mimalloc
 ```

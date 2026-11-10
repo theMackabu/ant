@@ -1,4 +1,4 @@
-project('tlsuv', 'c', version: '0.46.0', default_options: ['c_std=c11', 'warning_level=0'])
+project('tlsuv', 'c', version: '0.46.2', default_options: ['c_std=c11', 'warning_level=0'])
 
 cc = meson.get_compiler('c')
 tls_backend = get_option('tls_backend')

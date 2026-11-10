@@ -1,5 +1,5 @@
 diff --git a/src/websocket.c b/src/websocket.c
-index cb8d493..c2d1f87 100644
+index 1a45f01..5f11686 100644
 --- a/src/websocket.c
 +++ b/src/websocket.c
 @@ -27,6 +27,10 @@
@@ -13,13 +13,12 @@ index cb8d493..c2d1f87 100644
  #include "util.h"
  #include "tlsuv/tlsuv.h"
  static const char *DEFAULT_PATH = "/";
-@@ -161,12 +165,34 @@ static int tls_write_shim(uv_write_t *r, tlsuv_stream_t *s, uv_buf_t *b, int c,
+@@ -161,12 +165,29 @@ static int tls_write_shim(uv_write_t *r, tlsuv_stream_t *s, uv_buf_t *b, int c,
      return tlsuv_stream_write(r, s, b, cb);
  }
  
 +static void on_ws_close(tlsuv_websocket_t *ws);
 +
-+/* dispose of a connected socket delivered after connect cancellation */
 +static void ws_discard_socket(uv_os_sock_t sock) {
 +#ifdef _WIN32
 +    if (sock != INVALID_SOCKET) closesocket(sock);
@@ -35,10 +34,6 @@ index cb8d493..c2d1f87 100644
      ws->connect_req = NULL;
  
 +    if (ws->closed) {
-+        /* tlsuv_websocket_close() deferred close completion to this callback.
-+         * A successful connection that raced cancellation must be disposed of,
-+         * not installed. on_ws_close() may free ws via close_cb, so nothing
-+         * may touch the websocket after it. */
 +        if (status == 0) ws_discard_socket(sock);
 +        ws->conn_req = NULL;
 +        on_ws_close(ws);
@@ -48,20 +43,18 @@ index cb8d493..c2d1f87 100644
      if (status < 0) {
          UM_LOG(ERR, "connection failed: %s", uv_strerror(status));
          ws->conn_req = NULL;
-@@ -808,7 +834,11 @@ static void on_ws_close(tlsuv_websocket_t *ws) {
+@@ -808,7 +829,9 @@ static void on_ws_close(tlsuv_websocket_t *ws) {
          ws_read_buffer_clear(ws);
      }
      if (ws->close_cb) {
 -        ws->close_cb((uv_handle_t *) ws);
-+        /* consume before invoking: the callback may free ws, and a second
-+         * completion path must never re-deliver the close */
 +        uv_close_cb cb = ws->close_cb;
 +        ws->close_cb = NULL;
 +        cb((uv_handle_t *) ws);
      }
  }
  
-@@ -833,10 +863,11 @@ int tlsuv_websocket_close(tlsuv_websocket_t *ws, uv_close_cb cb) {
+@@ -832,10 +855,7 @@ int tlsuv_websocket_close(tlsuv_websocket_t *ws, uv_close_cb cb) {
      if (ws->connect_req) {
          UM_LOG(TRACE, "closing ws connect req");
          const tlsuv_connector_t *c = ws->connector ? ws->connector : tlsuv_global_connector();
@@ -69,10 +62,6 @@ index cb8d493..c2d1f87 100644
 -        ws->connect_req = NULL;
 -        c->cancel(cr);
 -        on_ws_close(ws);
-+        /* Cancellation completes asynchronously: the connector still owns the
-+         * request and will invoke on_connect() exactly once. Defer close
-+         * completion to that callback so no connector callback can run after
-+         * close_cb releases the websocket. on_connect() clears connect_req. */
 +        c->cancel(ws->connect_req);
          return 0;
      }
