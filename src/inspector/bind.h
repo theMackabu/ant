@@ -105,6 +105,22 @@ extern const size_t k_inspector_network_entry_limit;
 extern const size_t k_inspector_network_write_queue_limit;
 extern const size_t k_inspector_console_event_limit;
 
+bool inspector_add_str(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key, const char *value);
+bool inspector_add_strcpy(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key, const char *value);
+bool inspector_add_strn(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key, const char *value, size_t len);
+bool inspector_add_strncpy(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key, const char *value, size_t len);
+bool inspector_add_int(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key, int64_t value);
+bool inspector_add_uint(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key, uint64_t value);
+bool inspector_add_real(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key, double value);
+bool inspector_add_bool(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key, bool value);
+bool inspector_add_val(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key, yyjson_mut_val *value);
+bool inspector_arr_add_strncpy(yyjson_mut_doc *doc, yyjson_mut_val *arr, const char *value, size_t len);
+
+yyjson_mut_val *inspector_obj(yyjson_mut_doc *doc);
+yyjson_mut_val *inspector_add_obj(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key);
+yyjson_mut_val *inspector_add_arr(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key);
+yyjson_mut_val *inspector_arr_add_obj(yyjson_mut_doc *doc, yyjson_mut_val *arr);
+
 yyjson_mut_doc *inspector_doc_begin(inspector_doc_t *d);
 char *inspector_doc_finish(inspector_doc_t *d, yyjson_mut_val *root);
 char *inspector_event_finish(inspector_doc_t *d, const char *method, yyjson_mut_val *params);

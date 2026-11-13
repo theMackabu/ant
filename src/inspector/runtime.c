@@ -187,15 +187,15 @@ static void inspector_mirror(ant_t *js, yyjson_mut_doc *doc, ant_value_t value, 
 }
 
 static void inspector_add_mirror_type(yyjson_mut_doc *doc, yyjson_mut_val *obj, const inspector_mirror_t *m) {
-  yyjson_mut_obj_add_str(doc, obj, "type", m->type);
-  if (m->subtype) yyjson_mut_obj_add_str(doc, obj, "subtype", m->subtype);
+  inspector_add_str(doc, obj, "type", m->type);
+  if (m->subtype) inspector_add_str(doc, obj, "subtype", m->subtype);
 }
 
 static void inspector_add_preview(
   ant_t *js, yyjson_mut_doc *doc, yyjson_mut_val *obj,
   ant_value_t value, const inspector_mirror_t *m
 ) {
-  yyjson_mut_val *preview = yyjson_mut_obj_add_obj(doc, obj, "preview");
+  yyjson_mut_val *preview = inspector_add_obj(doc, obj, "preview");
   yyjson_mut_val *props = yyjson_mut_arr(doc);
   const size_t limit = 8;
   size_t count = 0;
@@ -212,19 +212,19 @@ static void inspector_add_preview(
       break;
     }
     inspector_mirror_t pm;
-    yyjson_mut_val *entry = yyjson_mut_arr_add_obj(doc, props);
-    yyjson_mut_obj_add_strncpy(doc, entry, "name", key, key_len);
+    yyjson_mut_val *entry = inspector_arr_add_obj(doc, props);
+    inspector_add_strncpy(doc, entry, "name", key, key_len);
     inspector_mirror(js, doc, prop, &pm);
     inspector_add_mirror_type(doc, entry, &pm);
-    if (pm.class_name) yyjson_mut_obj_add_strn(doc, entry, "className", pm.class_name, pm.class_len);
-    yyjson_mut_obj_add_strn(doc, entry, "value", pm.desc, pm.desc_len);
+    if (pm.class_name) inspector_add_strn(doc, entry, "className", pm.class_name, pm.class_len);
+    inspector_add_strn(doc, entry, "value", pm.desc, pm.desc_len);
   }
   js_prop_iter_end(&iter);
 
   inspector_add_mirror_type(doc, preview, m);
-  yyjson_mut_obj_add_strn(doc, preview, "description", m->desc, m->desc_len);
-  yyjson_mut_obj_add_bool(doc, preview, "overflow", overflow);
-  yyjson_mut_obj_add_val(doc, preview, "properties", props);
+  inspector_add_strn(doc, preview, "description", m->desc, m->desc_len);
+  inspector_add_bool(doc, preview, "overflow", overflow);
+  inspector_add_val(doc, preview, "properties", props);
 }
 
 static yyjson_mut_val *inspector_remote_object(ant_t *js, yyjson_mut_doc *doc, ant_value_t value) {
@@ -237,7 +237,7 @@ static yyjson_mut_val *inspector_remote_object(ant_t *js, yyjson_mut_doc *doc, a
   inspector_mirror_t m;
   inspector_mirror(js, doc, value, &m);
 
-  yyjson_mut_val *obj = yyjson_mut_obj(doc);
+  yyjson_mut_val *obj = inspector_obj(doc);
   inspector_add_mirror_type(doc, obj, &m);
 
   switch (type) {
@@ -247,27 +247,27 @@ static yyjson_mut_val *inspector_remote_object(ant_t *js, yyjson_mut_doc *doc, a
       yyjson_mut_obj_add_null(doc, obj, "value");
       return obj;
     case kTypeBool:
-      yyjson_mut_obj_add_bool(doc, obj, "value", value == Ant_Value_True);
+      inspector_add_bool(doc, obj, "value", value == Ant_Value_True);
       return obj;
     case kTypeNumber: {
       double n = Ant_Value_AsNumberUnchecked(value);
-      if (isfinite(n)) yyjson_mut_obj_add_real(doc, obj, "value", n);
-      else yyjson_mut_obj_add_strn(doc, obj, "unserializableValue", m.desc, m.desc_len);
+      if (isfinite(n)) inspector_add_real(doc, obj, "value", n);
+      else inspector_add_strn(doc, obj, "unserializableValue", m.desc, m.desc_len);
       break;
     }
     case kTypeString:
-      yyjson_mut_obj_add_strn(doc, obj, "value", m.desc, m.desc_len);
+      inspector_add_strn(doc, obj, "value", m.desc, m.desc_len);
       break;
     case kTypeFunction:
     case kTypeBuiltin:
-      yyjson_mut_obj_add_str(doc, obj, "className", "Function");
+      inspector_add_str(doc, obj, "className", "Function");
       break;
     default:
-      if (m.class_name) yyjson_mut_obj_add_strn(doc, obj, "className", m.class_name, m.class_len);
+      if (m.class_name) inspector_add_strn(doc, obj, "className", m.class_name, m.class_len);
       break;
   }
 
-  yyjson_mut_obj_add_strn(doc, obj, "description", m.desc, m.desc_len);
+  inspector_add_strn(doc, obj, "description", m.desc, m.desc_len);
   if (type == kTypeBuiltin) return obj;
   if (type != kTypeFunction && !is_object_type(value)) return obj;
 
@@ -275,7 +275,7 @@ static yyjson_mut_val *inspector_remote_object(ant_t *js, yyjson_mut_doc *doc, a
   if (object_id != 0) {
     char id[16];
     snprintf(id, sizeof(id), "ant:%u", object_id);
-    yyjson_mut_obj_add_strcpy(doc, obj, "objectId", id);
+    inspector_add_strcpy(doc, obj, "objectId", id);
   }
   inspector_add_preview(js, doc, obj, value, &m);
   return obj;
@@ -297,16 +297,16 @@ static void inspector_add_call_location(ant_t *js, yyjson_mut_doc *doc, yyjson_m
   line = line > 0 ? line - 1 : 0;
   column = column > 0 ? column - 1 : 0;
 
-  yyjson_mut_val *stack = yyjson_mut_obj_add_obj(doc, params, "stackTrace");
-  yyjson_mut_val *frames = yyjson_mut_obj_add_arr(doc, stack, "callFrames");
-  yyjson_mut_val *frame = yyjson_mut_arr_add_obj(doc, frames);
-  yyjson_mut_obj_add_str(doc, frame, "functionName", "");
-  yyjson_mut_obj_add_strcpy(doc, frame, "scriptId", script_id);
-  yyjson_mut_obj_add_strcpy(doc, frame, "url", url);
-  yyjson_mut_obj_add_int(doc, frame, "lineNumber", line);
-  yyjson_mut_obj_add_int(doc, frame, "columnNumber", column);
-  yyjson_mut_obj_add_int(doc, params, "lineNumber", line);
-  yyjson_mut_obj_add_int(doc, params, "columnNumber", column);
+  yyjson_mut_val *stack = inspector_add_obj(doc, params, "stackTrace");
+  yyjson_mut_val *frames = inspector_add_arr(doc, stack, "callFrames");
+  yyjson_mut_val *frame = inspector_arr_add_obj(doc, frames);
+  inspector_add_str(doc, frame, "functionName", "");
+  inspector_add_strcpy(doc, frame, "scriptId", script_id);
+  inspector_add_strcpy(doc, frame, "url", url);
+  inspector_add_int(doc, frame, "lineNumber", line);
+  inspector_add_int(doc, frame, "columnNumber", column);
+  inspector_add_int(doc, params, "lineNumber", line);
+  inspector_add_int(doc, params, "columnNumber", column);
   free(url);
 }
 
@@ -376,13 +376,13 @@ static void inspector_add_exception_text(ant_t *js, yyjson_mut_doc *doc, yyjson_
   if (vtype(text) == kTypeString) {
     size_t len = 0;
     const char *s = js_getstr(js, text, &len);
-    yyjson_mut_obj_add_strncpy(doc, obj, "text", s, len);
+    inspector_add_strncpy(doc, obj, "text", s, len);
     return;
   }
 
   char buf[512];
   js_cstr_t desc = js_to_cstr(js, err, buf, sizeof(buf));
-  yyjson_mut_obj_add_strcpy(doc, obj, "text", desc.ptr);
+  inspector_add_strcpy(doc, obj, "text", desc.ptr);
   if (desc.needs_free) free((void *)desc.ptr);
 }
 
@@ -439,15 +439,15 @@ static void inspector_send_eval_result(
   } else {
     inspector_doc_t d;
     yyjson_mut_doc *doc = inspector_doc_begin(&d);
-    yyjson_mut_val *res = yyjson_mut_obj(doc);
-    yyjson_mut_obj_add_val(doc, res, "result", inspector_remote_object(js, doc, exception ? exception_value : result));
+    yyjson_mut_val *res = inspector_obj(doc);
+    inspector_add_val(doc, res, "result", inspector_remote_object(js, doc, exception ? exception_value : result));
     if (exception) {
-      yyjson_mut_val *details = yyjson_mut_obj_add_obj(doc, res, "exceptionDetails");
-      yyjson_mut_obj_add_int(doc, details, "exceptionId", 1);
+      yyjson_mut_val *details = inspector_add_obj(doc, res, "exceptionDetails");
+      inspector_add_int(doc, details, "exceptionId", 1);
       inspector_add_exception_text(js, doc, details, completion);
-      yyjson_mut_obj_add_int(doc, details, "lineNumber", 0);
-      yyjson_mut_obj_add_int(doc, details, "columnNumber", 0);
-      yyjson_mut_obj_add_val(doc, details, "exception", inspector_remote_object(js, doc, exception_value));
+      inspector_add_int(doc, details, "lineNumber", 0);
+      inspector_add_int(doc, details, "columnNumber", 0);
+      inspector_add_val(doc, details, "exception", inspector_remote_object(js, doc, exception_value));
     }
     inspector_send_result(client, id, &d, res);
   }
@@ -617,9 +617,9 @@ void inspector_eval(inspector_client_t *client, int id, yyjson_val *params) {
 void inspector_get_heap_usage(inspector_client_t *client, int id, yyjson_val *params) {
   inspector_doc_t d;
   yyjson_mut_doc *doc = inspector_doc_begin(&d);
-  yyjson_mut_val *result = yyjson_mut_obj(doc);
-  yyjson_mut_obj_add_uint(doc, result, "usedSize", inspector_heap_used(client->js));
-  yyjson_mut_obj_add_uint(doc, result, "totalSize", inspector_heap_total(client->js));
+  yyjson_mut_val *result = inspector_obj(doc);
+  inspector_add_uint(doc, result, "usedSize", inspector_heap_used(client->js));
+  inspector_add_uint(doc, result, "totalSize", inspector_heap_total(client->js));
   inspector_send_result(client, id, &d, result);
 }
 
@@ -636,8 +636,8 @@ void inspector_get_properties(inspector_client_t *client, int id, yyjson_val *pa
 
   inspector_doc_t d;
   yyjson_mut_doc *doc = inspector_doc_begin(&d);
-  yyjson_mut_val *result = yyjson_mut_obj(doc);
-  yyjson_mut_val *props = yyjson_mut_obj_add_arr(doc, result, "result");
+  yyjson_mut_val *result = inspector_obj(doc);
+  yyjson_mut_val *props = inspector_add_arr(doc, result, "result");
 
   for (ant_value_t cur = object, depth = 0; is_object_type(cur) && depth < 64; depth++) {
     ant_iter_t iter = js_prop_iter_begin(js, cur);
@@ -650,13 +650,13 @@ void inspector_get_properties(inspector_client_t *client, int id, yyjson_val *pa
         vtype(js_get_slot(cur, SLOT_ERROR_STACK_TEXT)) != kTypeUndefined);
       if (error_stack) value = Ant_Error_ConsumeMarker(js, js_error_stack_value(js, cur));
 
-      yyjson_mut_val *prop = yyjson_mut_arr_add_obj(doc, props);
-      yyjson_mut_obj_add_strncpy(doc, prop, "name", key, key_len);
-      yyjson_mut_obj_add_bool(doc, prop, "enumerable", true);
-      yyjson_mut_obj_add_bool(doc, prop, "configurable", true);
-      yyjson_mut_obj_add_bool(doc, prop, "writable", true);
-      yyjson_mut_obj_add_bool(doc, prop, "isOwn", depth == 0);
-      yyjson_mut_obj_add_val(doc, prop, "value", inspector_remote_object(js, doc, value));
+      yyjson_mut_val *prop = inspector_arr_add_obj(doc, props);
+      inspector_add_strncpy(doc, prop, "name", key, key_len);
+      inspector_add_bool(doc, prop, "enumerable", true);
+      inspector_add_bool(doc, prop, "configurable", true);
+      inspector_add_bool(doc, prop, "writable", true);
+      inspector_add_bool(doc, prop, "isOwn", depth == 0);
+      inspector_add_val(doc, prop, "value", inspector_remote_object(js, doc, value));
     }
     js_prop_iter_end(&iter);
     if (own_only) break;
@@ -665,12 +665,12 @@ void inspector_get_properties(inspector_client_t *client, int id, yyjson_val *pa
     cur = proto;
   }
 
-  yyjson_mut_val *internal = yyjson_mut_obj_add_arr(doc, result, "internalProperties");
+  yyjson_mut_val *internal = inspector_add_arr(doc, result, "internalProperties");
   ant_value_t proto = js_get_proto(js, object);
   if (is_object_type(proto) || vtype(proto) == kTypeNull) {
-    yyjson_mut_val *entry = yyjson_mut_arr_add_obj(doc, internal);
-    yyjson_mut_obj_add_str(doc, entry, "name", "[[Prototype]]");
-    yyjson_mut_obj_add_val(doc, entry, "value", inspector_remote_object(js, doc, proto));
+    yyjson_mut_val *entry = inspector_arr_add_obj(doc, internal);
+    inspector_add_str(doc, entry, "name", "[[Prototype]]");
+    inspector_add_val(doc, entry, "value", inspector_remote_object(js, doc, proto));
   }
   inspector_send_result(client, id, &d, result);
 }
@@ -679,8 +679,8 @@ void inspector_global_lexical_scope_names(inspector_client_t *client, int id, yy
   ant_t *js = client->js;
   inspector_doc_t d;
   yyjson_mut_doc *doc = inspector_doc_begin(&d);
-  yyjson_mut_val *result = yyjson_mut_obj(doc);
-  yyjson_mut_val *names = yyjson_mut_obj_add_arr(doc, result, "names");
+  yyjson_mut_val *result = inspector_obj(doc);
+  yyjson_mut_val *names = inspector_add_arr(doc, result, "names");
 
   ant_iter_t iter = js_prop_iter_begin(js, js_glob(js));
   const char *key = NULL;
@@ -689,13 +689,13 @@ void inspector_global_lexical_scope_names(inspector_client_t *client, int id, yy
 
   while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
     if (sv_global_lexical_lookup(js, key, key_len, NULL)) continue;
-    yyjson_mut_arr_add_strncpy(doc, names, key, key_len);
+    inspector_arr_add_strncpy(doc, names, key, key_len);
   }
   js_prop_iter_end(&iter);
 
   for (uint32_t i = 0; i < js->global_lexical_count; i++) {
     const ant_global_lexical_t *lex = &js->global_lexicals[i];
-    yyjson_mut_arr_add_strncpy(doc, names, lex->name, lex->len);
+    inspector_arr_add_strncpy(doc, names, lex->name, lex->len);
   }
   inspector_send_result(client, id, &d, result);
 }
@@ -705,12 +705,12 @@ void ant_inspector_console_api_called(ant_t *js, const char *level, ant_args_t) 
 
   inspector_doc_t d;
   yyjson_mut_doc *doc = inspector_doc_begin(&d);
-  yyjson_mut_val *params = yyjson_mut_obj(doc);
-  yyjson_mut_obj_add_str(doc, params, "type", level ? level : "log");
-  yyjson_mut_val *list = yyjson_mut_obj_add_arr(doc, params, "args");
+  yyjson_mut_val *params = inspector_obj(doc);
+  inspector_add_str(doc, params, "type", level ? level : "log");
+  yyjson_mut_val *list = inspector_add_arr(doc, params, "args");
   for (int i = 0; i < nargs; i++) yyjson_mut_arr_add_val(list, inspector_remote_object(js, doc, args[i]));
-  yyjson_mut_obj_add_int(doc, params, "executionContextId", 1);
-  yyjson_mut_obj_add_real(doc, params, "timestamp", (double)uv_hrtime() / 1000000.0);
+  inspector_add_int(doc, params, "executionContextId", 1);
+  inspector_add_real(doc, params, "timestamp", (double)uv_hrtime() / 1000000.0);
   inspector_add_call_location(js, doc, params);
 
   char *json = inspector_event_finish(&d, "Runtime.consoleAPICalled", params);

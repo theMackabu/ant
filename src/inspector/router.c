@@ -78,13 +78,13 @@ static void route_schema_domains(inspector_client_t *client, int id, yyjson_val 
   
   inspector_doc_t d;
   yyjson_mut_doc *doc = inspector_doc_begin(&d);
-  yyjson_mut_val *result = yyjson_mut_obj(doc);
-  yyjson_mut_val *list = yyjson_mut_obj_add_arr(doc, result, "domains");
+  yyjson_mut_val *result = inspector_obj(doc);
+  yyjson_mut_val *list = inspector_add_arr(doc, result, "domains");
 
   for (size_t i = 0; i < sizeof(domains) / sizeof(domains[0]); i++) {
-    yyjson_mut_val *domain = yyjson_mut_arr_add_obj(doc, list);
-    yyjson_mut_obj_add_str(doc, domain, "name", domains[i]);
-    yyjson_mut_obj_add_str(doc, domain, "version", "1.3");
+    yyjson_mut_val *domain = inspector_arr_add_obj(doc, list);
+    inspector_add_str(doc, domain, "name", domains[i]);
+    inspector_add_str(doc, domain, "version", "1.3");
   }
 
   inspector_send_result(client, id, &d, result);

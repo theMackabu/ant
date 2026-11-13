@@ -71,20 +71,20 @@ static void inspector_send_script_parsed(inspector_client_t *client, const inspe
 
   inspector_doc_t d;
   yyjson_mut_doc *doc = inspector_doc_begin(&d);
-  yyjson_mut_val *params = yyjson_mut_obj(doc);
-  yyjson_mut_obj_add_str(doc, params, "scriptId", script_id);
-  yyjson_mut_obj_add_str(doc, params, "url", script->url ? script->url : "");
-  yyjson_mut_obj_add_int(doc, params, "startLine", 0);
-  yyjson_mut_obj_add_int(doc, params, "startColumn", 0);
-  yyjson_mut_obj_add_int(doc, params, "endLine", end_line);
-  yyjson_mut_obj_add_int(doc, params, "endColumn", end_column);
-  yyjson_mut_obj_add_int(doc, params, "executionContextId", 1);
-  yyjson_mut_obj_add_str(doc, params, "hash", "");
-  yyjson_mut_obj_add_bool(doc, params, "isLiveEdit", false);
-  yyjson_mut_obj_add_str(doc, params, "sourceMapURL", "");
-  yyjson_mut_obj_add_bool(doc, params, "hasSourceURL", false);
-  yyjson_mut_obj_add_bool(doc, params, "isModule", script->is_module);
-  yyjson_mut_obj_add_uint(doc, params, "length", script->source_len);
+  yyjson_mut_val *params = inspector_obj(doc);
+  inspector_add_str(doc, params, "scriptId", script_id);
+  inspector_add_str(doc, params, "url", script->url ? script->url : "");
+  inspector_add_int(doc, params, "startLine", 0);
+  inspector_add_int(doc, params, "startColumn", 0);
+  inspector_add_int(doc, params, "endLine", end_line);
+  inspector_add_int(doc, params, "endColumn", end_column);
+  inspector_add_int(doc, params, "executionContextId", 1);
+  inspector_add_str(doc, params, "hash", "");
+  inspector_add_bool(doc, params, "isLiveEdit", false);
+  inspector_add_str(doc, params, "sourceMapURL", "");
+  inspector_add_bool(doc, params, "hasSourceURL", false);
+  inspector_add_bool(doc, params, "isModule", script->is_module);
+  inspector_add_uint(doc, params, "length", script->source_len);
 
   char *json = inspector_event_finish(&d, "Debugger.scriptParsed", params);
   inspector_send_ws(client, json);
@@ -190,8 +190,8 @@ void inspector_compile_script(inspector_client_t *client, int id, yyjson_val *pa
 
   inspector_doc_t d;
   yyjson_mut_doc *doc = inspector_doc_begin(&d);
-  yyjson_mut_val *result = yyjson_mut_obj(doc);
-  yyjson_mut_obj_add_str(doc, result, "scriptId", script_id);
+  yyjson_mut_val *result = inspector_obj(doc);
+  inspector_add_str(doc, result, "scriptId", script_id);
   inspector_send_result(client, id, &d, result);
 }
 
@@ -222,8 +222,8 @@ void inspector_get_script_source(inspector_client_t *client, int id, yyjson_val 
 
   inspector_doc_t d;
   yyjson_mut_doc *doc = inspector_doc_begin(&d);
-  yyjson_mut_val *result = yyjson_mut_obj(doc);
-  yyjson_mut_obj_add_strn(
+  yyjson_mut_val *result = inspector_obj(doc);
+  inspector_add_strn(
     doc, result, "scriptSource",
     script->source ? script->source : "", script->source ? script->source_len : 0
   );

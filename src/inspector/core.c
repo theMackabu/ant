@@ -13,6 +13,54 @@ const size_t k_inspector_network_entry_limit = 1024;
 const size_t k_inspector_network_write_queue_limit = 4 * 1024 * 1024;
 const size_t k_inspector_console_event_limit = 200;
 
+#define INSPECTOR_ADD(name, type)                                                       \
+  __attribute__((noinline)) bool inspector_add_##name(                                  \
+    yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key, type value               \
+  ) { return yyjson_mut_obj_add_##name(doc, obj, key, value); }
+
+INSPECTOR_ADD(str, const char *)
+INSPECTOR_ADD(strcpy, const char *)
+INSPECTOR_ADD(int, int64_t)
+INSPECTOR_ADD(uint, uint64_t)
+INSPECTOR_ADD(real, double)
+INSPECTOR_ADD(bool, bool)
+INSPECTOR_ADD(val, yyjson_mut_val *)
+#undef INSPECTOR_ADD
+
+__attribute__((noinline)) bool inspector_add_strn(
+  yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key, const char *value, size_t len
+) {
+  return yyjson_mut_obj_add_strn(doc, obj, key, value, len);
+}
+
+__attribute__((noinline)) bool inspector_add_strncpy(
+  yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key, const char *value, size_t len
+) {
+  return yyjson_mut_obj_add_strncpy(doc, obj, key, value, len);
+}
+
+__attribute__((noinline)) yyjson_mut_val *inspector_obj(yyjson_mut_doc *doc) {
+  return yyjson_mut_obj(doc);
+}
+
+__attribute__((noinline)) yyjson_mut_val *inspector_add_obj(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key) {
+  return yyjson_mut_obj_add_obj(doc, obj, key);
+}
+
+__attribute__((noinline)) yyjson_mut_val *inspector_add_arr(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key) {
+  return yyjson_mut_obj_add_arr(doc, obj, key);
+}
+
+__attribute__((noinline)) yyjson_mut_val *inspector_arr_add_obj(yyjson_mut_doc *doc, yyjson_mut_val *arr) {
+  return yyjson_mut_arr_add_obj(doc, arr);
+}
+
+__attribute__((noinline)) bool inspector_arr_add_strncpy(
+  yyjson_mut_doc *doc, yyjson_mut_val *arr, const char *value, size_t len
+) {
+  return yyjson_mut_arr_add_strncpy(doc, arr, value, len);
+}
+
 static void *inspector_doc_malloc(void *ctx, size_t size) {
   void *ptr = malloc(size);
   if (!ptr) *(bool *)ctx = true;
@@ -48,9 +96,9 @@ char *inspector_doc_finish(inspector_doc_t *d, yyjson_mut_val *root) {
 }
 
 char *inspector_event_finish(inspector_doc_t *d, const char *method, yyjson_mut_val *params) {
-  yyjson_mut_val *root = yyjson_mut_obj(d->doc);
-  yyjson_mut_obj_add_str(d->doc, root, "method", method);
-  yyjson_mut_obj_add_val(d->doc, root, "params", params);
+  yyjson_mut_val *root = inspector_obj(d->doc);
+  inspector_add_str(d->doc, root, "method", method);
+  inspector_add_val(d->doc, root, "params", params);
   return inspector_doc_finish(d, root);
 }
 
@@ -62,9 +110,9 @@ void inspector_send_ws(inspector_client_t *client, const char *json) {
 }
 
 void inspector_send_result(inspector_client_t *client, int id, inspector_doc_t *d, yyjson_mut_val *result) {
-  yyjson_mut_val *root = yyjson_mut_obj(d->doc);
-  yyjson_mut_obj_add_int(d->doc, root, "id", id);
-  yyjson_mut_obj_add_val(d->doc, root, "result", result);
+  yyjson_mut_val *root = inspector_obj(d->doc);
+  inspector_add_int(d->doc, root, "id", id);
+  inspector_add_val(d->doc, root, "result", result);
 
   char *json = inspector_doc_finish(d, root);
   if (json) inspector_send_ws(client, json);
@@ -85,12 +133,12 @@ void inspector_send_empty_result(inspector_client_t *client, int id) {
 void inspector_send_error(inspector_client_t *client, int id, int code, const char *message) {
   inspector_doc_t d;
   yyjson_mut_doc *doc = inspector_doc_begin(&d);
-  yyjson_mut_val *root = yyjson_mut_obj(doc);
-  yyjson_mut_obj_add_int(doc, root, "id", id);
+  yyjson_mut_val *root = inspector_obj(doc);
+  inspector_add_int(doc, root, "id", id);
 
-  yyjson_mut_val *error = yyjson_mut_obj_add_obj(doc, root, "error");
-  yyjson_mut_obj_add_int(doc, error, "code", code);
-  yyjson_mut_obj_add_str(doc, error, "message", message ? message : "Inspector error");
+  yyjson_mut_val *error = inspector_add_obj(doc, root, "error");
+  inspector_add_int(doc, error, "code", code);
+  inspector_add_str(doc, error, "message", message ? message : "Inspector error");
 
   char *json = inspector_doc_finish(&d, root);
   inspector_send_ws(client, json);

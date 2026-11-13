@@ -94,14 +94,14 @@ static char *json_list_response(void) {
   inspector_doc_t d;
   yyjson_mut_doc *doc = inspector_doc_begin(&d);
   yyjson_mut_val *list = yyjson_mut_arr(doc);
-  yyjson_mut_val *item = yyjson_mut_arr_add_obj(doc, list);
-  yyjson_mut_obj_add_str(doc, item, "description", title);
-  yyjson_mut_obj_add_str(doc, item, "devtoolsFrontendUrl", devtools);
-  yyjson_mut_obj_add_str(doc, item, "id", g_inspector.uuid);
-  yyjson_mut_obj_add_str(doc, item, "title", title);
-  yyjson_mut_obj_add_str(doc, item, "type", "node");
-  yyjson_mut_obj_add_str(doc, item, "url", target);
-  yyjson_mut_obj_add_str(doc, item, "webSocketDebuggerUrl", websocket);
+  yyjson_mut_val *item = inspector_arr_add_obj(doc, list);
+  inspector_add_str(doc, item, "description", title);
+  inspector_add_str(doc, item, "devtoolsFrontendUrl", devtools);
+  inspector_add_str(doc, item, "id", g_inspector.uuid);
+  inspector_add_str(doc, item, "title", title);
+  inspector_add_str(doc, item, "type", "node");
+  inspector_add_str(doc, item, "url", target);
+  inspector_add_str(doc, item, "webSocketDebuggerUrl", websocket);
 
   char *json = inspector_doc_finish(&d, list);
   free(target);

@@ -132,8 +132,8 @@ static yyjson_mut_val *inspector_network_params(inspector_doc_t *d, uint64_t req
   char id[24];
   snprintf(id, sizeof(id), "%" PRIu64, request_id);
   yyjson_mut_doc *doc = inspector_doc_begin(d);
-  yyjson_mut_val *params = yyjson_mut_obj(doc);
-  yyjson_mut_obj_add_strcpy(doc, params, "requestId", id);
+  yyjson_mut_val *params = inspector_obj(doc);
+  inspector_add_strcpy(doc, params, "requestId", id);
   return params;
 }
 
@@ -144,35 +144,35 @@ static void inspector_network_emit(inspector_doc_t *d, const char *method, yyjso
 }
 
 static void inspector_add_timestamp(yyjson_mut_doc *doc, yyjson_mut_val *params) {
-  yyjson_mut_obj_add_real(doc, params, "timestamp", inspector_timestamp_seconds());
+  inspector_add_real(doc, params, "timestamp", inspector_timestamp_seconds());
 }
 
 static void inspector_add_headers(yyjson_mut_doc *doc, yyjson_mut_val *obj, const ant_http_header_t *headers) {
-  yyjson_mut_val *out = yyjson_mut_obj_add_obj(doc, obj, "headers");
+  yyjson_mut_val *out = inspector_add_obj(doc, obj, "headers");
   for (const ant_http_header_t *header = headers; header; header = header->next) {
     if (!header->name || !header->value) continue;
-    yyjson_mut_obj_add_str(doc, out, header->name, header->value);
+    inspector_add_str(doc, out, header->name, header->value);
   }
 }
 
 static void inspector_notify_request_extra(uint64_t request_id, const ant_http_header_t *headers) {
   inspector_doc_t d;
   yyjson_mut_val *params = inspector_network_params(&d, request_id);
-  yyjson_mut_obj_add_arr(d.doc, params, "associatedCookies");
+  inspector_add_arr(d.doc, params, "associatedCookies");
   inspector_add_headers(d.doc, params, headers);
-  yyjson_mut_val *timing = yyjson_mut_obj_add_obj(d.doc, params, "connectTiming");
-  yyjson_mut_obj_add_real(d.doc, timing, "requestTime", inspector_timestamp_seconds());
-  yyjson_mut_obj_add_bool(d.doc, params, "siteHasCookieInOtherPartition", false);
+  yyjson_mut_val *timing = inspector_add_obj(d.doc, params, "connectTiming");
+  inspector_add_real(d.doc, timing, "requestTime", inspector_timestamp_seconds());
+  inspector_add_bool(d.doc, params, "siteHasCookieInOtherPartition", false);
   inspector_network_emit(&d, "Network.requestWillBeSentExtraInfo", params);
 }
 
 static void inspector_notify_response_extra(uint64_t request_id, int status, const ant_http_header_t *headers) {
   inspector_doc_t d;
   yyjson_mut_val *params = inspector_network_params(&d, request_id);
-  yyjson_mut_obj_add_arr(d.doc, params, "blockedCookies");
+  inspector_add_arr(d.doc, params, "blockedCookies");
   inspector_add_headers(d.doc, params, headers);
-  yyjson_mut_obj_add_str(d.doc, params, "resourceIPAddressSpace", "Unknown");
-  yyjson_mut_obj_add_int(d.doc, params, "statusCode", status);
+  inspector_add_str(d.doc, params, "resourceIPAddressSpace", "Unknown");
+  inspector_add_int(d.doc, params, "statusCode", status);
   inspector_network_emit(&d, "Network.responseReceivedExtraInfo", params);
 }
 
@@ -203,9 +203,9 @@ void inspector_get_response_body(inspector_client_t *client, int id, yyjson_val 
 
   inspector_doc_t d;
   yyjson_mut_doc *doc = inspector_doc_begin(&d);
-  yyjson_mut_val *result = yyjson_mut_obj(doc);
-  yyjson_mut_obj_add_strn(doc, result, "body", encoded ? encoded : "", out_len);
-  yyjson_mut_obj_add_bool(doc, result, "base64Encoded", encoded != NULL);
+  yyjson_mut_val *result = inspector_obj(doc);
+  inspector_add_strn(doc, result, "body", encoded ? encoded : "", out_len);
+  inspector_add_bool(doc, result, "base64Encoded", encoded != NULL);
   inspector_send_result(client, id, &d, result);
   free(encoded);
 }
@@ -218,8 +218,8 @@ void inspector_get_request_post_data(inspector_client_t *client, int id, yyjson_
 
   inspector_doc_t d;
   yyjson_mut_doc *doc = inspector_doc_begin(&d);
-  yyjson_mut_val *result = yyjson_mut_obj(doc);
-  yyjson_mut_obj_add_strn(doc, result, "postData", body, body_len);
+  yyjson_mut_val *result = inspector_obj(doc);
+  inspector_add_strn(doc, result, "postData", body, body_len);
   inspector_send_result(client, id, &d, result);
 }
 
@@ -238,23 +238,23 @@ uint64_t ant_inspector_network_request(
 
   inspector_doc_t d;
   yyjson_mut_val *params = inspector_network_params(&d, request_id);
-  yyjson_mut_obj_add_str(d.doc, params, "loaderId", "ant");
-  yyjson_mut_obj_add_str(d.doc, params, "documentURL", url ? url : "");
+  inspector_add_str(d.doc, params, "loaderId", "ant");
+  inspector_add_str(d.doc, params, "documentURL", url ? url : "");
 
-  yyjson_mut_val *request = yyjson_mut_obj_add_obj(d.doc, params, "request");
-  yyjson_mut_obj_add_str(d.doc, request, "url", url ? url : "");
-  yyjson_mut_obj_add_str(d.doc, request, "method", method ? method : "GET");
+  yyjson_mut_val *request = inspector_add_obj(d.doc, params, "request");
+  inspector_add_str(d.doc, request, "url", url ? url : "");
+  inspector_add_str(d.doc, request, "method", method ? method : "GET");
   inspector_add_headers(d.doc, request, headers);
-  if (has_post_data) yyjson_mut_obj_add_bool(d.doc, request, "hasPostData", true);
-  yyjson_mut_obj_add_str(d.doc, request, "initialPriority", "High");
-  yyjson_mut_obj_add_str(d.doc, request, "referrerPolicy", "no-referrer");
+  if (has_post_data) inspector_add_bool(d.doc, request, "hasPostData", true);
+  inspector_add_str(d.doc, request, "initialPriority", "High");
+  inspector_add_str(d.doc, request, "referrerPolicy", "no-referrer");
 
   inspector_add_timestamp(d.doc, params);
-  yyjson_mut_obj_add_real(d.doc, params, "wallTime", inspector_wall_time_seconds());
-  yyjson_mut_val *initiator_obj = yyjson_mut_obj_add_obj(d.doc, params, "initiator");
-  yyjson_mut_obj_add_str(d.doc, initiator_obj, "type", "parser");
-  yyjson_mut_obj_add_str(d.doc, initiator_obj, "url", inspector_network_initiator_url(initiator));
-  yyjson_mut_obj_add_str(d.doc, params, "type", type ? type : "Fetch");
+  inspector_add_real(d.doc, params, "wallTime", inspector_wall_time_seconds());
+  yyjson_mut_val *initiator_obj = inspector_add_obj(d.doc, params, "initiator");
+  inspector_add_str(d.doc, initiator_obj, "type", "parser");
+  inspector_add_str(d.doc, initiator_obj, "url", inspector_network_initiator_url(initiator));
+  inspector_add_str(d.doc, params, "type", type ? type : "Fetch");
 
   inspector_network_emit(&d, "Network.requestWillBeSent", params);
   inspector_notify_request_extra(request_id, headers);
@@ -274,21 +274,21 @@ void ant_inspector_network_response(
 
   inspector_doc_t d;
   yyjson_mut_val *params = inspector_network_params(&d, request_id);
-  yyjson_mut_obj_add_str(d.doc, params, "loaderId", "ant");
+  inspector_add_str(d.doc, params, "loaderId", "ant");
   inspector_add_timestamp(d.doc, params);
-  yyjson_mut_obj_add_str(d.doc, params, "type", type ? type : "Fetch");
+  inspector_add_str(d.doc, params, "type", type ? type : "Fetch");
 
-  yyjson_mut_val *response = yyjson_mut_obj_add_obj(d.doc, params, "response");
-  yyjson_mut_obj_add_str(d.doc, response, "url", url ? url : "");
-  yyjson_mut_obj_add_int(d.doc, response, "status", status);
-  yyjson_mut_obj_add_str(d.doc, response, "statusText", status_text ? status_text : "");
+  yyjson_mut_val *response = inspector_add_obj(d.doc, params, "response");
+  inspector_add_str(d.doc, response, "url", url ? url : "");
+  inspector_add_int(d.doc, response, "status", status);
+  inspector_add_str(d.doc, response, "statusText", status_text ? status_text : "");
   inspector_add_headers(d.doc, response, headers);
-  yyjson_mut_obj_add_str(d.doc, response, "mimeType", mime_type ? mime_type : "");
-  yyjson_mut_obj_add_bool(d.doc, response, "connectionReused", false);
-  yyjson_mut_obj_add_int(d.doc, response, "connectionId", 0);
-  yyjson_mut_obj_add_int(d.doc, response, "encodedDataLength", 0);
-  yyjson_mut_obj_add_str(d.doc, response, "protocol", "http/1.1");
-  yyjson_mut_obj_add_str(d.doc, response, "securityState", "unknown");
+  inspector_add_str(d.doc, response, "mimeType", mime_type ? mime_type : "");
+  inspector_add_bool(d.doc, response, "connectionReused", false);
+  inspector_add_int(d.doc, response, "connectionId", 0);
+  inspector_add_int(d.doc, response, "encodedDataLength", 0);
+  inspector_add_str(d.doc, response, "protocol", "http/1.1");
+  inspector_add_str(d.doc, response, "securityState", "unknown");
 
   inspector_network_emit(&d, "Network.responseReceived", params);
   inspector_notify_response_extra(request_id, status, headers);
@@ -300,7 +300,7 @@ void ant_inspector_network_finish(uint64_t request_id, size_t encoded_data_lengt
   inspector_doc_t d;
   yyjson_mut_val *params = inspector_network_params(&d, request_id);
   inspector_add_timestamp(d.doc, params);
-  yyjson_mut_obj_add_uint(d.doc, params, "encodedDataLength", encoded_data_length);
+  inspector_add_uint(d.doc, params, "encodedDataLength", encoded_data_length);
   inspector_network_emit(&d, "Network.loadingFinished", params);
 }
 
@@ -315,9 +315,9 @@ void ant_inspector_network_fail(
   inspector_doc_t d;
   yyjson_mut_val *params = inspector_network_params(&d, request_id);
   inspector_add_timestamp(d.doc, params);
-  yyjson_mut_obj_add_str(d.doc, params, "type", type ? type : "Fetch");
-  yyjson_mut_obj_add_str(d.doc, params, "errorText", error_text ? error_text : "Failed");
-  yyjson_mut_obj_add_bool(d.doc, params, "canceled", canceled);
+  inspector_add_str(d.doc, params, "type", type ? type : "Fetch");
+  inspector_add_str(d.doc, params, "errorText", error_text ? error_text : "Failed");
+  inspector_add_bool(d.doc, params, "canceled", canceled);
   inspector_network_emit(&d, "Network.loadingFailed", params);
 }
 
@@ -346,8 +346,8 @@ void ant_inspector_network_append_response_body(uint64_t request_id, const uint8
   inspector_doc_t d;
   yyjson_mut_val *params = inspector_network_params(&d, request_id);
   inspector_add_timestamp(d.doc, params);
-  yyjson_mut_obj_add_uint(d.doc, params, "dataLength", len);
-  yyjson_mut_obj_add_uint(d.doc, params, "encodedDataLength", len);
+  inspector_add_uint(d.doc, params, "dataLength", len);
+  inspector_add_uint(d.doc, params, "encodedDataLength", len);
   inspector_network_emit(&d, "Network.dataReceived", params);
 }
 
@@ -359,9 +359,9 @@ uint64_t ant_inspector_websocket_created(const char *url) {
 
   inspector_doc_t d;
   yyjson_mut_val *params = inspector_network_params(&d, request_id);
-  yyjson_mut_obj_add_str(d.doc, params, "url", url ? url : "");
-  yyjson_mut_val *initiator = yyjson_mut_obj_add_obj(d.doc, params, "initiator");
-  yyjson_mut_obj_add_str(d.doc, initiator, "type", "WebSocket");
+  inspector_add_str(d.doc, params, "url", url ? url : "");
+  yyjson_mut_val *initiator = inspector_add_obj(d.doc, params, "initiator");
+  inspector_add_str(d.doc, initiator, "type", "WebSocket");
   inspector_network_emit(&d, "Network.webSocketCreated", params);
   return request_id;
 }
@@ -372,8 +372,8 @@ void ant_inspector_websocket_request(uint64_t request_id, const ant_http_header_
   inspector_doc_t d;
   yyjson_mut_val *params = inspector_network_params(&d, request_id);
   inspector_add_timestamp(d.doc, params);
-  yyjson_mut_obj_add_real(d.doc, params, "wallTime", inspector_wall_time_seconds());
-  inspector_add_headers(d.doc, yyjson_mut_obj_add_obj(d.doc, params, "request"), headers);
+  inspector_add_real(d.doc, params, "wallTime", inspector_wall_time_seconds());
+  inspector_add_headers(d.doc, inspector_add_obj(d.doc, params, "request"), headers);
   inspector_network_emit(&d, "Network.webSocketWillSendHandshakeRequest", params);
 }
 
@@ -383,9 +383,9 @@ void ant_inspector_websocket_response(uint64_t request_id, int status, const cha
   inspector_doc_t d;
   yyjson_mut_val *params = inspector_network_params(&d, request_id);
   inspector_add_timestamp(d.doc, params);
-  yyjson_mut_val *response = yyjson_mut_obj_add_obj(d.doc, params, "response");
-  yyjson_mut_obj_add_int(d.doc, response, "status", status);
-  yyjson_mut_obj_add_str(d.doc, response, "statusText", status_text ? status_text : "");
+  yyjson_mut_val *response = inspector_add_obj(d.doc, params, "response");
+  inspector_add_int(d.doc, response, "status", status);
+  inspector_add_str(d.doc, response, "statusText", status_text ? status_text : "");
   inspector_add_headers(d.doc, response, headers);
   inspector_network_emit(&d, "Network.webSocketHandshakeResponseReceived", params);
 }
@@ -406,10 +406,10 @@ static void inspector_websocket_frame(uint64_t request_id, const char *method, c
   inspector_doc_t d;
   yyjson_mut_val *params = inspector_network_params(&d, request_id);
   inspector_add_timestamp(d.doc, params);
-  yyjson_mut_val *response = yyjson_mut_obj_add_obj(d.doc, params, "response");
-  yyjson_mut_obj_add_int(d.doc, response, "opcode", binary ? 2 : 1);
-  yyjson_mut_obj_add_bool(d.doc, response, "mask", false);
-  yyjson_mut_obj_add_strn(d.doc, response, "payloadData", payload ? payload : "", payload ? payload_len : 0);
+  yyjson_mut_val *response = inspector_add_obj(d.doc, params, "response");
+  inspector_add_int(d.doc, response, "opcode", binary ? 2 : 1);
+  inspector_add_bool(d.doc, response, "mask", false);
+  inspector_add_strn(d.doc, response, "payloadData", payload ? payload : "", payload ? payload_len : 0);
   inspector_network_emit(&d, method, params);
   free(encoded);
 }
@@ -428,7 +428,7 @@ void ant_inspector_websocket_error(uint64_t request_id, const char *message) {
   inspector_doc_t d;
   yyjson_mut_val *params = inspector_network_params(&d, request_id);
   inspector_add_timestamp(d.doc, params);
-  yyjson_mut_obj_add_str(d.doc, params, "errorMessage", message ? message : "WebSocket error");
+  inspector_add_str(d.doc, params, "errorMessage", message ? message : "WebSocket error");
   inspector_network_emit(&d, "Network.webSocketFrameError", params);
 }
 
