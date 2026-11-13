@@ -9,6 +9,7 @@
 #include "loader_cache.h"
 #include "loader_internal.h"
 #include "tsconfig.h"
+#include "registry.h"
 
 #include "modules/json.h"
 #include "modules/napi.h"
@@ -685,7 +686,7 @@ static char *esm_resolve_absolute(ant_t *js, const char *specifier) {
   return esm_try_resolve_index_with_exts(js, "", specifier);
 }
 
-static char *esm_get_base_dir(ant_t *js, const char *base_path) {
+char *esm_get_base_dir(ant_t *js, const char *base_path) {
   bool can_cache = base_path && base_path[0];
   if (can_cache) {
     char *cached = NULL;
@@ -1021,7 +1022,7 @@ static char *esm_resolve_package_entrypoint(ant_t *js, const char *package_dir, 
   return resolved;
 }
 
-static yyjson_doc *esm_find_nearest_package_json(ant_t *js, const char *start_dir, char *scope_dir, size_t scope_dir_size, bool stop_at_node_modules, bool *out_owned) {
+yyjson_doc *esm_find_nearest_package_json(ant_t *js, const char *start_dir, char *scope_dir, size_t scope_dir_size, bool stop_at_node_modules, bool *out_owned) {
   *out_owned = false;
   if (!start_dir || !start_dir[0]) return NULL;
 
@@ -1051,16 +1052,9 @@ static yyjson_doc *esm_find_nearest_package_json(ant_t *js, const char *start_di
   return NULL;
 }
 
-static char *esm_resolve_node_module_cond(ant_t *js, const char *specifier, const char *base_path, bool prefer_require);
 static const char esm_browser_empty_module[] = "ant:internal/empty";
-
-static bool esm_web_compat(ant_t *js) {
-  return js && (js->runtime.flags & ANT_RUNTIME_WEB_COMPAT);
-}
-
-static bool esm_is_browser_empty(const char *path) {
-  return path && strcmp(path, esm_browser_empty_module) == 0;
-}
+static bool esm_web_compat(ant_t *js) { return js && (js->runtime.flags & ANT_RUNTIME_WEB_COMPAT); }
+static bool esm_is_browser_empty(const char *path) { return path && strcmp(path, esm_browser_empty_module) == 0; }
 
 static yyjson_val *esm_browser_map_find(yyjson_val *map, const char *key, size_t key_len) {
   size_t idx, max;
@@ -1226,7 +1220,7 @@ static char *esm_resolve_package_self_reference(
   return esm_resolve_package_entrypoint(js, scope_dir, subpath, base_path, prefer_require);
 }
 
-static char *esm_resolve_node_module_cond(ant_t *js, const char *specifier, const char *base_path, bool prefer_require) {
+char *esm_resolve_node_module_cond(ant_t *js, const char *specifier, const char *base_path, bool prefer_require) {
   char package_name[PATH_MAX];
   const char *subpath = NULL;
   if (!esm_split_package_specifier(specifier, package_name, sizeof(package_name), &subpath)) {
@@ -1329,17 +1323,10 @@ static char *esm_resolve_path_cond_unmapped(ant_t *js, const char *specifier, co
     if (base_path && ant_bundle_has_key(vfs, base_path)) return NULL;
   }
 
-  if (esm_path_is_absolute(specifier)) {
-    return esm_resolve_absolute(js, specifier);
-  }
-
-  if (esm_is_relative_specifier(specifier)) {
-    return esm_resolve_relative_path(js, specifier, base_path);
-  }
-
-  if (specifier[0] == '#') {
-    return esm_resolve_package_imports(js, specifier, base_path, prefer_require);
-  }
+  if (esm_registry_specifier(specifier)) return esm_registry_resolve(js, specifier, base_path, prefer_require);
+  if (esm_path_is_absolute(specifier)) return esm_resolve_absolute(js, specifier);
+  if (esm_is_relative_specifier(specifier)) return esm_resolve_relative_path(js, specifier, base_path);
+  if (specifier[0] == '#') return esm_resolve_package_imports(js, specifier, base_path, prefer_require);
 
   char *mapped = esm_resolve_tsconfig_paths(js, specifier, base_path);
   if (mapped) return mapped;

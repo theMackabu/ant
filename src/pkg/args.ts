@@ -9,6 +9,12 @@ const DIR_FLAGS = new Set(['--dir', '-C', '--prefix']);
 const GLOBAL_FLAGS = new Set(['-g', '--global']);
 const ALL_FLAGS = new Set(['-a', '--all']);
 
+const SOURCE_PREFIXES: [string, Source][] = [
+  ['ants.land:', 'land'],
+  ['land:', 'land'],
+  ['npm:', 'npm'],
+];
+
 export interface SourcedSpec {
   spec: string;
   source?: Source;
@@ -26,10 +32,13 @@ export interface Args {
 export const isHelp = (args: string[]) => args.includes('-h') || args.includes('--help');
 
 export function parseSource(token: string): { spec: string; source?: Source } {
-  const source = token.startsWith('land:') ? 'land' : token.startsWith('npm:') ? 'npm' : undefined;
-  if (!source) return { spec: token };
-  const spec = token.slice(source.length + 1);
+  const prefix = SOURCE_PREFIXES.find(([name]) => token.startsWith(name));
+  if (!prefix) return { spec: token };
+  
+  const [name, source] = prefix;
+  const spec = token.slice(name.length);
   if (!spec) throw new Error(`invalid package source in "${token}"`);
+  
   return { spec, source };
 }
 

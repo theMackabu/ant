@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <uthash.h>
+#include <yyjson.h>
 
 typedef enum {
   ESM_MODULE_KIND_NONE = -1,
@@ -62,8 +63,16 @@ bool esm_require_builtin_cacheable(ant_t *js);
 const char *esm_default_base_path(ant_t *js);
 char *esm_path_to_file_url(const char *path);
 char *esm_path_dirname(const char *path);
+char *esm_get_base_dir(ant_t *js, const char *base_path);
 char *esm_resolve_path(ant_t *js, const char *specifier, const char *base_path);
 char *esm_resolve_path_require(ant_t *js, const char *specifier, const char *base_path);
+char *esm_resolve_node_module_cond(ant_t *js, const char *specifier, const char *base_path, bool prefer_require);
+
+yyjson_doc *esm_find_nearest_package_json(
+  ant_t *js, const char *start_dir,
+  char *scope_dir, size_t scope_dir_size,
+  bool stop_at_node_modules, bool *out_owned
+);
 
 ant_module_format_t esm_decide_module_format(ant_t *js, const char *resolved_path);
 esm_module_kind_t esm_classify_kind_for_path(const char *resolved_path);

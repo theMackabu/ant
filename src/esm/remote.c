@@ -1,12 +1,3 @@
-#include "utils.h"
-#include "base64.h"
-#include "escape.h"
-#include "ascii.h"
-#include "esm/remote.h"
-#include "modules/http.h"
-#include "reactor.h"
-#include "isolate.h"
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +5,16 @@
 #include <uv.h>
 #include <tlsuv/tlsuv.h>
 #include <tlsuv/http.h>
+
+#include "utils.h"
+#include "base64.h"
+#include "escape.h"
+#include "ascii.h"
+#include "esm/remote.h"
+#include "registry.h"
+#include "modules/http.h"
+#include "reactor.h"
+#include "isolate.h"
 
 #ifdef _WIN32
 #include <direct.h>
@@ -405,6 +406,11 @@ char *esm_resolve_url(const char *specifier, const char *base_url) {
 char *esm_resolve(ant_t *js, const char *specifier, const char *base_path, char FILE_RESOLVER) {
   if (esm_is_data_url(specifier)) return strdup(specifier);
   
+  if (esm_registry_specifier(specifier)) {
+    bool remote = base_path && (esm_is_url(base_path) || esm_is_data_url(base_path));
+    return file_resolver(js, specifier, remote ? "." : base_path);
+  }
+
   if (esm_is_url(specifier) || esm_is_url(base_path)) {
     char *resolved = esm_resolve_url(specifier, base_path);
     if (resolved && base_path && strncmp(base_path, "https://", 8) == 0 && strncmp(resolved, "http://", 7) == 0) {

@@ -28,7 +28,7 @@ Usage
   ant create <template | org/repo> [dest] [args...]
 
 Sources
-  land:<spec>          from ants.land, https://npm.ants.land
+  ants.land:<spec>     from ants.land, https://npm.ants.land (also land:)
   npm:<spec>           from npm, https://registry.npmjs.org
   Unprefixed specs use install.defaultRegistry, and a name ants.land does not have
   is read from npm while install.missingPackageFallback is npm. A prefix applies
