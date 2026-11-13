@@ -1,9 +1,9 @@
 #include "bind.h"
 #include "base64.h"
 #include "inspector.h"
-#include "json.h"
 
 #include <inttypes.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -39,15 +39,12 @@ static void inspector_network_prune_entries(void) {
 }
 
 static bool inspector_network_client_ready(const inspector_client_t *client) {
-  return client &&
-         client->network_enabled &&
-         uv_stream_get_write_queue_size((const uv_stream_t *)&client->handle) <= k_inspector_network_write_queue_limit;
+  return client && client->network_enabled && ant_conn_write_queue_size(client->conn) <= k_inspector_network_write_queue_limit;
 }
 
 static bool inspector_network_has_ready_client(void) {
-  for (const inspector_client_t *c = g_inspector.clients; c; c = c->next) {
+  for (const inspector_client_t *c = g_inspector.clients; c; c = c->next)
     if (inspector_network_client_ready(c)) return true;
-  }
   return false;
 }
 
@@ -63,28 +60,27 @@ bool ant_inspector_network_active(void) {
 
 static inspector_network_entry_t *inspector_network_entry_for_id(uint64_t id, bool create) {
   if (id == 0) return NULL;
-  for (inspector_network_entry_t *entry = g_inspector.network_entries; entry; entry = entry->next) {
+  for (inspector_network_entry_t *entry = g_inspector.network_entries; entry; entry = entry->next)
     if (entry->id == id) return entry;
-  }
+  
   if (!create) return NULL;
-
   inspector_network_entry_t *entry = calloc(1, sizeof(*entry));
+  
   if (!entry) return NULL;
   entry->id = id;
+  
   entry->next = g_inspector.network_entries;
   g_inspector.network_entries = entry;
   g_inspector.network_entry_count++;
   inspector_network_prune_entries();
+  
   return entry;
 }
 
 static void inspector_network_store_body(
-  uint8_t **body,
-  size_t *body_len,
-  bool *truncated,
-  const uint8_t *data,
-  size_t len,
-  bool append
+  uint8_t **body, size_t *body_len,
+  bool *truncated, const uint8_t *data,
+  size_t len, bool append
 ) {
   if (!body || !body_len || !truncated || !data || len == 0 || *truncated) return;
 
@@ -132,63 +128,58 @@ static void inspector_notify_network(const char *json) {
   }
 }
 
-static bool inspector_append_headers_object(sbuf_t *b, const ant_http_header_t *headers) {
-  if (!sbuf_append(b, "{")) return false;
-  bool first = true;
+static yyjson_mut_val *inspector_network_params(inspector_doc_t *d, uint64_t request_id) {
+  char id[24];
+  snprintf(id, sizeof(id), "%" PRIu64, request_id);
+  yyjson_mut_doc *doc = inspector_doc_begin(d);
+  yyjson_mut_val *params = yyjson_mut_obj(doc);
+  yyjson_mut_obj_add_strcpy(doc, params, "requestId", id);
+  return params;
+}
+
+static void inspector_network_emit(inspector_doc_t *d, const char *method, yyjson_mut_val *params) {
+  char *json = inspector_event_finish(d, method, params);
+  inspector_notify_network(json);
+  free(json);
+}
+
+static void inspector_add_timestamp(yyjson_mut_doc *doc, yyjson_mut_val *params) {
+  yyjson_mut_obj_add_real(doc, params, "timestamp", inspector_timestamp_seconds());
+}
+
+static void inspector_add_headers(yyjson_mut_doc *doc, yyjson_mut_val *obj, const ant_http_header_t *headers) {
+  yyjson_mut_val *out = yyjson_mut_obj_add_obj(doc, obj, "headers");
   for (const ant_http_header_t *header = headers; header; header = header->next) {
     if (!header->name || !header->value) continue;
-    if (!first && !sbuf_append(b, ",")) return false;
-    first = false;
-    if (!sbuf_json_string(b, header->name)) return false;
-    if (!sbuf_append(b, ":")) return false;
-    if (!sbuf_json_string(b, header->value)) return false;
+    yyjson_mut_obj_add_str(doc, out, header->name, header->value);
   }
-  return sbuf_append(b, "}");
 }
 
 static void inspector_notify_request_extra(uint64_t request_id, const ant_http_header_t *headers) {
-  if (!inspector_network_tracking(request_id)) return;
-
-  sbuf_t b = {0};
-  if (!sbuf_append(&b, "{\"method\":\"Network.requestWillBeSentExtraInfo\",\"params\":{\"requestId\":\"")) goto done;
-  if (!sbuf_appendf(&b, "%" PRIu64, request_id)) goto done;
-  if (!sbuf_append(&b, "\",\"associatedCookies\":[],\"headers\":")) goto done;
-  if (!inspector_append_headers_object(&b, headers)) goto done;
-  if (!sbuf_append(&b, ",\"connectTiming\":{\"requestTime\":")) goto done;
-  if (!sbuf_appendf(&b, "%.6f", inspector_timestamp_seconds())) goto done;
-  if (!sbuf_append(&b, "},\"siteHasCookieInOtherPartition\":false}}")) goto done;
-  inspector_notify_network(b.data);
-
-done:
-  free(b.data);
+  inspector_doc_t d;
+  yyjson_mut_val *params = inspector_network_params(&d, request_id);
+  yyjson_mut_obj_add_arr(d.doc, params, "associatedCookies");
+  inspector_add_headers(d.doc, params, headers);
+  yyjson_mut_val *timing = yyjson_mut_obj_add_obj(d.doc, params, "connectTiming");
+  yyjson_mut_obj_add_real(d.doc, timing, "requestTime", inspector_timestamp_seconds());
+  yyjson_mut_obj_add_bool(d.doc, params, "siteHasCookieInOtherPartition", false);
+  inspector_network_emit(&d, "Network.requestWillBeSentExtraInfo", params);
 }
 
 static void inspector_notify_response_extra(uint64_t request_id, int status, const ant_http_header_t *headers) {
-  if (!inspector_network_tracking(request_id)) return;
-
-  sbuf_t b = {0};
-  if (!sbuf_append(&b, "{\"method\":\"Network.responseReceivedExtraInfo\",\"params\":{\"requestId\":\"")) goto done;
-  if (!sbuf_appendf(&b, "%" PRIu64, request_id)) goto done;
-  if (!sbuf_append(&b, "\",\"blockedCookies\":[],\"headers\":")) goto done;
-  if (!inspector_append_headers_object(&b, headers)) goto done;
-  if (!sbuf_append(&b, ",\"resourceIPAddressSpace\":\"Unknown\",\"statusCode\":")) goto done;
-  if (!sbuf_appendf(&b, "%d", status)) goto done;
-  if (!sbuf_append(&b, "}}")) goto done;
-  inspector_notify_network(b.data);
-
-done:
-  free(b.data);
+  inspector_doc_t d;
+  yyjson_mut_val *params = inspector_network_params(&d, request_id);
+  yyjson_mut_obj_add_arr(d.doc, params, "blockedCookies");
+  inspector_add_headers(d.doc, params, headers);
+  yyjson_mut_obj_add_str(d.doc, params, "resourceIPAddressSpace", "Unknown");
+  yyjson_mut_obj_add_int(d.doc, params, "statusCode", status);
+  inspector_network_emit(&d, "Network.responseReceivedExtraInfo", params);
 }
 
-static bool inspector_append_network_initiator(sbuf_t *b, const char *label) {
-  const char *name = label && *label ? label : "Fetch";
-  const char *url = "Fetch";
-  if (strcmp(name, "Server") == 0) url = "Server";
-  else if (strcmp(name, "EventSource") == 0) url = "EventSource";
-
-  if (!sbuf_append(b, "{\"type\":\"parser\",\"url\":")) return false;
-  if (!sbuf_json_string(b, url)) return false;
-  return sbuf_append(b, "}");
+static const char *inspector_network_initiator_url(const char *label) {
+  if (label && strcmp(label, "Server") == 0) return "Server";
+  if (label && strcmp(label, "EventSource") == 0) return "EventSource";
+  return "Fetch";
 }
 
 static uint64_t inspector_request_id_param(yyjson_val *params) {
@@ -202,51 +193,36 @@ static uint64_t inspector_request_id_param(yyjson_val *params) {
 void inspector_get_response_body(inspector_client_t *client, int id, yyjson_val *params) {
   uint64_t request_id = inspector_request_id_param(params);
   inspector_network_entry_t *entry = inspector_network_entry_for_id(request_id, false);
-  sbuf_t b = {0};
-  inspector_json_t json;
   size_t out_len = 0;
   char *encoded = NULL;
-  bool ok = false;
 
-  if (!entry || !entry->response_body || entry->response_body_len == 0) out_len = 0; else {
+  if (entry && entry->response_body && entry->response_body_len > 0) {
     encoded = ant_base64_encode(entry->response_body, entry->response_body_len, &out_len);
     if (!encoded) { inspector_send_error(client, id, -32000, "Out of memory"); return; }
   }
 
-  inspector_json_init(&json, &b);
-  if (!inspector_json_begin_object(&json)) goto done;
-  if (!inspector_json_key(&json, "body")) goto done;
-  if (!inspector_json_string_len(&json, encoded ? encoded : "", out_len)) goto done;
-  if (!inspector_json_key(&json, "base64Encoded")) goto done;
-  if (!inspector_json_bool(&json, encoded != NULL)) goto done;
-  if (!inspector_json_end_object(&json)) goto done;
-  ok = true;
-
-done:
-  if (ok) inspector_send_response_obj(client, id, b.data);
-  else inspector_send_error(client, id, -32000, "Out of memory");
+  inspector_doc_t d;
+  yyjson_mut_doc *doc = inspector_doc_begin(&d);
+  yyjson_mut_val *result = yyjson_mut_obj(doc);
+  yyjson_mut_obj_add_strn(doc, result, "body", encoded ? encoded : "", out_len);
+  yyjson_mut_obj_add_bool(doc, result, "base64Encoded", encoded != NULL);
+  inspector_send_result(client, id, &d, result);
   free(encoded);
-  free(b.data);
 }
 
 void inspector_get_request_post_data(inspector_client_t *client, int id, yyjson_val *params) {
   uint64_t request_id = inspector_request_id_param(params);
   inspector_network_entry_t *entry = inspector_network_entry_for_id(request_id, false);
-  sbuf_t b = {0};
-  inspector_json_t json;
-  inspector_json_init(&json, &b);
   const char *body = entry && entry->request_body ? (const char *)entry->request_body : "";
   size_t body_len = entry && entry->request_body ? entry->request_body_len : 0;
-  bool ok =
-    inspector_json_begin_object(&json) &&
-    inspector_json_key(&json, "postData") &&
-    inspector_json_string_len(&json, body, body_len) &&
-    inspector_json_end_object(&json);
 
-  if (ok) inspector_send_response_obj(client, id, b.data);
-  else inspector_send_error(client, id, -32000, "Out of memory");
-  free(b.data);
+  inspector_doc_t d;
+  yyjson_mut_doc *doc = inspector_doc_begin(&d);
+  yyjson_mut_val *result = yyjson_mut_obj(doc);
+  yyjson_mut_obj_add_strn(doc, result, "postData", body, body_len);
+  inspector_send_result(client, id, &d, result);
 }
+
 uint64_t ant_inspector_network_request(
   const char *method,
   const char *url,
@@ -260,34 +236,28 @@ uint64_t ant_inspector_network_request(
   if (request_id == 0) request_id = ++g_inspector.next_network_request_id;
   inspector_network_entry_for_id(request_id, true);
 
-  sbuf_t b = {0};
-  if (!sbuf_append(&b, "{\"method\":\"Network.requestWillBeSent\",\"params\":{\"requestId\":\"")) goto done;
-  if (!sbuf_appendf(&b, "%" PRIu64, request_id)) goto done;
-  if (!sbuf_append(&b, "\",\"loaderId\":\"ant\",\"documentURL\":")) goto done;
-  if (!sbuf_json_string(&b, url ? url : "")) goto done;
-  if (!sbuf_append(&b, ",\"request\":{\"url\":")) goto done;
-  if (!sbuf_json_string(&b, url ? url : "")) goto done;
-  if (!sbuf_append(&b, ",\"method\":")) goto done;
-  if (!sbuf_json_string(&b, method ? method : "GET")) goto done;
-  if (!sbuf_append(&b, ",\"headers\":")) goto done;
-  if (!inspector_append_headers_object(&b, headers)) goto done;
-  if (has_post_data) {
-    if (!sbuf_append(&b, ",\"hasPostData\":true")) goto done;
-  }
-  if (!sbuf_append(&b, ",\"initialPriority\":\"High\",\"referrerPolicy\":\"no-referrer\"},\"timestamp\":")) goto done;
-  if (!sbuf_appendf(&b, "%.6f", inspector_timestamp_seconds())) goto done;
-  if (!sbuf_append(&b, ",\"wallTime\":")) goto done;
-  if (!sbuf_appendf(&b, "%.3f", inspector_wall_time_seconds())) goto done;
-  if (!sbuf_append(&b, ",\"initiator\":")) goto done;
-  if (!inspector_append_network_initiator(&b, initiator)) goto done;
-  if (!sbuf_append(&b, ",\"type\":")) goto done;
-  if (!sbuf_json_string(&b, type ? type : "Fetch")) goto done;
-  if (!sbuf_append(&b, "}}")) goto done;
-  inspector_notify_network(b.data);
-  inspector_notify_request_extra(request_id, headers);
+  inspector_doc_t d;
+  yyjson_mut_val *params = inspector_network_params(&d, request_id);
+  yyjson_mut_obj_add_str(d.doc, params, "loaderId", "ant");
+  yyjson_mut_obj_add_str(d.doc, params, "documentURL", url ? url : "");
 
-done:
-  free(b.data);
+  yyjson_mut_val *request = yyjson_mut_obj_add_obj(d.doc, params, "request");
+  yyjson_mut_obj_add_str(d.doc, request, "url", url ? url : "");
+  yyjson_mut_obj_add_str(d.doc, request, "method", method ? method : "GET");
+  inspector_add_headers(d.doc, request, headers);
+  if (has_post_data) yyjson_mut_obj_add_bool(d.doc, request, "hasPostData", true);
+  yyjson_mut_obj_add_str(d.doc, request, "initialPriority", "High");
+  yyjson_mut_obj_add_str(d.doc, request, "referrerPolicy", "no-referrer");
+
+  inspector_add_timestamp(d.doc, params);
+  yyjson_mut_obj_add_real(d.doc, params, "wallTime", inspector_wall_time_seconds());
+  yyjson_mut_val *initiator_obj = yyjson_mut_obj_add_obj(d.doc, params, "initiator");
+  yyjson_mut_obj_add_str(d.doc, initiator_obj, "type", "parser");
+  yyjson_mut_obj_add_str(d.doc, initiator_obj, "url", inspector_network_initiator_url(initiator));
+  yyjson_mut_obj_add_str(d.doc, params, "type", type ? type : "Fetch");
+
+  inspector_network_emit(&d, "Network.requestWillBeSent", params);
+  inspector_notify_request_extra(request_id, headers);
   return request_id;
 }
 
@@ -302,46 +272,36 @@ void ant_inspector_network_response(
 ) {
   if (!inspector_network_tracking(request_id)) return;
 
-  sbuf_t b = {0};
-  if (!sbuf_append(&b, "{\"method\":\"Network.responseReceived\",\"params\":{\"requestId\":\"")) goto done;
-  if (!sbuf_appendf(&b, "%" PRIu64, request_id)) goto done;
-  if (!sbuf_append(&b, "\",\"loaderId\":\"ant\",\"timestamp\":")) goto done;
-  if (!sbuf_appendf(&b, "%.6f", inspector_timestamp_seconds())) goto done;
-  if (!sbuf_append(&b, ",\"type\":")) goto done;
-  if (!sbuf_json_string(&b, type ? type : "Fetch")) goto done;
-  if (!sbuf_append(&b, ",\"response\":{\"url\":")) goto done;
-  if (!sbuf_json_string(&b, url ? url : "")) goto done;
-  if (!sbuf_append(&b, ",\"status\":")) goto done;
-  if (!sbuf_appendf(&b, "%d", status)) goto done;
-  if (!sbuf_append(&b, ",\"statusText\":")) goto done;
-  if (!sbuf_json_string(&b, status_text ? status_text : "")) goto done;
-  if (!sbuf_append(&b, ",\"headers\":")) goto done;
-  if (!inspector_append_headers_object(&b, headers)) goto done;
-  if (!sbuf_append(&b, ",\"mimeType\":")) goto done;
-  if (!sbuf_json_string(&b, mime_type ? mime_type : "")) goto done;
-  if (!sbuf_append(&b, ",\"connectionReused\":false,\"connectionId\":0,\"encodedDataLength\":0,\"protocol\":\"http/1.1\",\"securityState\":\"unknown\"}}}")) goto done;
-  inspector_notify_network(b.data);
-  inspector_notify_response_extra(request_id, status, headers);
+  inspector_doc_t d;
+  yyjson_mut_val *params = inspector_network_params(&d, request_id);
+  yyjson_mut_obj_add_str(d.doc, params, "loaderId", "ant");
+  inspector_add_timestamp(d.doc, params);
+  yyjson_mut_obj_add_str(d.doc, params, "type", type ? type : "Fetch");
 
-done:
-  free(b.data);
+  yyjson_mut_val *response = yyjson_mut_obj_add_obj(d.doc, params, "response");
+  yyjson_mut_obj_add_str(d.doc, response, "url", url ? url : "");
+  yyjson_mut_obj_add_int(d.doc, response, "status", status);
+  yyjson_mut_obj_add_str(d.doc, response, "statusText", status_text ? status_text : "");
+  inspector_add_headers(d.doc, response, headers);
+  yyjson_mut_obj_add_str(d.doc, response, "mimeType", mime_type ? mime_type : "");
+  yyjson_mut_obj_add_bool(d.doc, response, "connectionReused", false);
+  yyjson_mut_obj_add_int(d.doc, response, "connectionId", 0);
+  yyjson_mut_obj_add_int(d.doc, response, "encodedDataLength", 0);
+  yyjson_mut_obj_add_str(d.doc, response, "protocol", "http/1.1");
+  yyjson_mut_obj_add_str(d.doc, response, "securityState", "unknown");
+
+  inspector_network_emit(&d, "Network.responseReceived", params);
+  inspector_notify_response_extra(request_id, status, headers);
 }
 
 void ant_inspector_network_finish(uint64_t request_id, size_t encoded_data_length) {
   if (!inspector_network_tracking(request_id)) return;
 
-  sbuf_t b = {0};
-  if (!sbuf_append(&b, "{\"method\":\"Network.loadingFinished\",\"params\":{\"requestId\":\"")) goto done;
-  if (!sbuf_appendf(&b, "%" PRIu64, request_id)) goto done;
-  if (!sbuf_append(&b, "\",\"timestamp\":")) goto done;
-  if (!sbuf_appendf(&b, "%.6f", inspector_timestamp_seconds())) goto done;
-  if (!sbuf_append(&b, ",\"encodedDataLength\":")) goto done;
-  if (!sbuf_appendf(&b, "%zu", encoded_data_length)) goto done;
-  if (!sbuf_append(&b, "}}")) goto done;
-  inspector_notify_network(b.data);
-
-done:
-  free(b.data);
+  inspector_doc_t d;
+  yyjson_mut_val *params = inspector_network_params(&d, request_id);
+  inspector_add_timestamp(d.doc, params);
+  yyjson_mut_obj_add_uint(d.doc, params, "encodedDataLength", encoded_data_length);
+  inspector_network_emit(&d, "Network.loadingFinished", params);
 }
 
 void ant_inspector_network_fail(
@@ -352,22 +312,13 @@ void ant_inspector_network_fail(
 ) {
   if (!inspector_network_tracking(request_id)) return;
 
-  sbuf_t b = {0};
-  if (!sbuf_append(&b, "{\"method\":\"Network.loadingFailed\",\"params\":{\"requestId\":\"")) goto done;
-  if (!sbuf_appendf(&b, "%" PRIu64, request_id)) goto done;
-  if (!sbuf_append(&b, "\",\"timestamp\":")) goto done;
-  if (!sbuf_appendf(&b, "%.6f", inspector_timestamp_seconds())) goto done;
-  if (!sbuf_append(&b, ",\"type\":")) goto done;
-  if (!sbuf_json_string(&b, type ? type : "Fetch")) goto done;
-  if (!sbuf_append(&b, ",\"errorText\":")) goto done;
-  if (!sbuf_json_string(&b, error_text ? error_text : "Failed")) goto done;
-  if (!sbuf_append(&b, ",\"canceled\":")) goto done;
-  if (!sbuf_append(&b, canceled ? "true" : "false")) goto done;
-  if (!sbuf_append(&b, "}}")) goto done;
-  inspector_notify_network(b.data);
-
-done:
-  free(b.data);
+  inspector_doc_t d;
+  yyjson_mut_val *params = inspector_network_params(&d, request_id);
+  inspector_add_timestamp(d.doc, params);
+  yyjson_mut_obj_add_str(d.doc, params, "type", type ? type : "Fetch");
+  yyjson_mut_obj_add_str(d.doc, params, "errorText", error_text ? error_text : "Failed");
+  yyjson_mut_obj_add_bool(d.doc, params, "canceled", canceled);
+  inspector_network_emit(&d, "Network.loadingFailed", params);
 }
 
 void ant_inspector_network_set_request_body(uint64_t request_id, const uint8_t *data, size_t len) {
@@ -377,9 +328,7 @@ void ant_inspector_network_set_request_body(uint64_t request_id, const uint8_t *
     &entry->request_body,
     &entry->request_body_len,
     &entry->request_body_truncated,
-    data,
-    len,
-    false
+    data, len, false
   );
 }
 
@@ -390,25 +339,16 @@ void ant_inspector_network_append_response_body(uint64_t request_id, const uint8
     &entry->response_body,
     &entry->response_body_len,
     &entry->response_body_truncated,
-    data,
-    len,
-    true
+    data, len, true
   );
-  if (len > 0 && inspector_network_tracking(request_id)) {
-    sbuf_t b = {0};
-    if (sbuf_append(&b, "{\"method\":\"Network.dataReceived\",\"params\":{\"requestId\":\"") &&
-        sbuf_appendf(&b, "%" PRIu64, request_id) &&
-        sbuf_append(&b, "\",\"timestamp\":") &&
-        sbuf_appendf(&b, "%.6f", inspector_timestamp_seconds()) &&
-        sbuf_append(&b, ",\"dataLength\":") &&
-        sbuf_appendf(&b, "%zu", len) &&
-        sbuf_append(&b, ",\"encodedDataLength\":") &&
-        sbuf_appendf(&b, "%zu", len) &&
-        sbuf_append(&b, "}}")) {
-      inspector_notify_network(b.data);
-    }
-    free(b.data);
-  }
+  if (len == 0 || !inspector_network_tracking(request_id)) return;
+
+  inspector_doc_t d;
+  yyjson_mut_val *params = inspector_network_params(&d, request_id);
+  inspector_add_timestamp(d.doc, params);
+  yyjson_mut_obj_add_uint(d.doc, params, "dataLength", len);
+  yyjson_mut_obj_add_uint(d.doc, params, "encodedDataLength", len);
+  inspector_network_emit(&d, "Network.dataReceived", params);
 }
 
 uint64_t ant_inspector_websocket_created(const char *url) {
@@ -417,91 +357,61 @@ uint64_t ant_inspector_websocket_created(const char *url) {
   if (request_id == 0) request_id = ++g_inspector.next_network_request_id;
   inspector_network_entry_for_id(request_id, true);
 
-  sbuf_t b = {0};
-  if (!sbuf_append(&b, "{\"method\":\"Network.webSocketCreated\",\"params\":{\"requestId\":\"")) goto done;
-  if (!sbuf_appendf(&b, "%" PRIu64, request_id)) goto done;
-  if (!sbuf_append(&b, "\",\"url\":")) goto done;
-  if (!sbuf_json_string(&b, url ? url : "")) goto done;
-  if (!sbuf_append(&b, ",\"initiator\":{\"type\":\"WebSocket\"}}}")) goto done;
-  inspector_notify_network(b.data);
-
-done:
-  free(b.data);
+  inspector_doc_t d;
+  yyjson_mut_val *params = inspector_network_params(&d, request_id);
+  yyjson_mut_obj_add_str(d.doc, params, "url", url ? url : "");
+  yyjson_mut_val *initiator = yyjson_mut_obj_add_obj(d.doc, params, "initiator");
+  yyjson_mut_obj_add_str(d.doc, initiator, "type", "WebSocket");
+  inspector_network_emit(&d, "Network.webSocketCreated", params);
   return request_id;
 }
 
 void ant_inspector_websocket_request(uint64_t request_id, const ant_http_header_t *headers) {
   if (!inspector_network_tracking(request_id)) return;
 
-  sbuf_t b = {0};
-  if (!sbuf_append(&b, "{\"method\":\"Network.webSocketWillSendHandshakeRequest\",\"params\":{\"requestId\":\"")) goto done;
-  if (!sbuf_appendf(&b, "%" PRIu64, request_id)) goto done;
-  if (!sbuf_append(&b, "\",\"timestamp\":")) goto done;
-  if (!sbuf_appendf(&b, "%.6f", inspector_timestamp_seconds())) goto done;
-  if (!sbuf_append(&b, ",\"wallTime\":")) goto done;
-  if (!sbuf_appendf(&b, "%.3f", inspector_wall_time_seconds())) goto done;
-  if (!sbuf_append(&b, ",\"request\":{\"headers\":")) goto done;
-  if (!inspector_append_headers_object(&b, headers)) goto done;
-  if (!sbuf_append(&b, "}}}")) goto done;
-  inspector_notify_network(b.data);
-
-done:
-  free(b.data);
+  inspector_doc_t d;
+  yyjson_mut_val *params = inspector_network_params(&d, request_id);
+  inspector_add_timestamp(d.doc, params);
+  yyjson_mut_obj_add_real(d.doc, params, "wallTime", inspector_wall_time_seconds());
+  inspector_add_headers(d.doc, yyjson_mut_obj_add_obj(d.doc, params, "request"), headers);
+  inspector_network_emit(&d, "Network.webSocketWillSendHandshakeRequest", params);
 }
 
 void ant_inspector_websocket_response(uint64_t request_id, int status, const char *status_text, const ant_http_header_t *headers) {
   if (!inspector_network_tracking(request_id)) return;
 
-  sbuf_t b = {0};
-  if (!sbuf_append(&b, "{\"method\":\"Network.webSocketHandshakeResponseReceived\",\"params\":{\"requestId\":\"")) goto done;
-  if (!sbuf_appendf(&b, "%" PRIu64, request_id)) goto done;
-  if (!sbuf_append(&b, "\",\"timestamp\":")) goto done;
-  if (!sbuf_appendf(&b, "%.6f", inspector_timestamp_seconds())) goto done;
-  if (!sbuf_append(&b, ",\"response\":{\"status\":")) goto done;
-  if (!sbuf_appendf(&b, "%d", status)) goto done;
-  if (!sbuf_append(&b, ",\"statusText\":")) goto done;
-  if (!sbuf_json_string(&b, status_text ? status_text : "")) goto done;
-  if (!sbuf_append(&b, ",\"headers\":")) goto done;
-  if (!inspector_append_headers_object(&b, headers)) goto done;
-  if (!sbuf_append(&b, "}}}")) goto done;
-  inspector_notify_network(b.data);
-
-done:
-  free(b.data);
+  inspector_doc_t d;
+  yyjson_mut_val *params = inspector_network_params(&d, request_id);
+  inspector_add_timestamp(d.doc, params);
+  yyjson_mut_val *response = yyjson_mut_obj_add_obj(d.doc, params, "response");
+  yyjson_mut_obj_add_int(d.doc, response, "status", status);
+  yyjson_mut_obj_add_str(d.doc, response, "statusText", status_text ? status_text : "");
+  inspector_add_headers(d.doc, response, headers);
+  inspector_network_emit(&d, "Network.webSocketHandshakeResponseReceived", params);
 }
 
 static void inspector_websocket_frame(uint64_t request_id, const char *method, const uint8_t *data, size_t len, bool binary) {
   if (!inspector_network_tracking(request_id)) return;
 
-  sbuf_t b = {0};
   char *encoded = NULL;
-  size_t encoded_len = 0;
   const char *payload = (const char *)data;
   size_t payload_len = len;
 
   if (binary) {
-    encoded = ant_base64_encode(data, len, &encoded_len);
+    encoded = ant_base64_encode(data, len, &payload_len);
     if (!encoded) return;
     payload = encoded;
-    payload_len = encoded_len;
   }
 
-  if (!sbuf_append(&b, "{\"method\":\"")) goto done;
-  if (!sbuf_append(&b, method)) goto done;
-  if (!sbuf_append(&b, "\",\"params\":{\"requestId\":\"")) goto done;
-  if (!sbuf_appendf(&b, "%" PRIu64, request_id)) goto done;
-  if (!sbuf_append(&b, "\",\"timestamp\":")) goto done;
-  if (!sbuf_appendf(&b, "%.6f", inspector_timestamp_seconds())) goto done;
-  if (!sbuf_append(&b, ",\"response\":{\"opcode\":")) goto done;
-  if (!sbuf_append(&b, binary ? "2" : "1")) goto done;
-  if (!sbuf_append(&b, ",\"mask\":false,\"payloadData\":")) goto done;
-  if (!sbuf_json_string_len(&b, payload ? payload : "", payload ? payload_len : 0)) goto done;
-  if (!sbuf_append(&b, "}}}")) goto done;
-  inspector_notify_network(b.data);
-
-done:
+  inspector_doc_t d;
+  yyjson_mut_val *params = inspector_network_params(&d, request_id);
+  inspector_add_timestamp(d.doc, params);
+  yyjson_mut_val *response = yyjson_mut_obj_add_obj(d.doc, params, "response");
+  yyjson_mut_obj_add_int(d.doc, response, "opcode", binary ? 2 : 1);
+  yyjson_mut_obj_add_bool(d.doc, response, "mask", false);
+  yyjson_mut_obj_add_strn(d.doc, response, "payloadData", payload ? payload : "", payload ? payload_len : 0);
+  inspector_network_emit(&d, method, params);
   free(encoded);
-  free(b.data);
 }
 
 void ant_inspector_websocket_frame_sent(uint64_t request_id, const uint8_t *data, size_t len, bool binary) {
@@ -515,31 +425,18 @@ void ant_inspector_websocket_frame_received(uint64_t request_id, const uint8_t *
 void ant_inspector_websocket_error(uint64_t request_id, const char *message) {
   if (!inspector_network_tracking(request_id)) return;
 
-  sbuf_t b = {0};
-  if (!sbuf_append(&b, "{\"method\":\"Network.webSocketFrameError\",\"params\":{\"requestId\":\"")) goto done;
-  if (!sbuf_appendf(&b, "%" PRIu64, request_id)) goto done;
-  if (!sbuf_append(&b, "\",\"timestamp\":")) goto done;
-  if (!sbuf_appendf(&b, "%.6f", inspector_timestamp_seconds())) goto done;
-  if (!sbuf_append(&b, ",\"errorMessage\":")) goto done;
-  if (!sbuf_json_string(&b, message ? message : "WebSocket error")) goto done;
-  if (!sbuf_append(&b, "}}")) goto done;
-  inspector_notify_network(b.data);
-
-done:
-  free(b.data);
+  inspector_doc_t d;
+  yyjson_mut_val *params = inspector_network_params(&d, request_id);
+  inspector_add_timestamp(d.doc, params);
+  yyjson_mut_obj_add_str(d.doc, params, "errorMessage", message ? message : "WebSocket error");
+  inspector_network_emit(&d, "Network.webSocketFrameError", params);
 }
 
 void ant_inspector_websocket_closed(uint64_t request_id) {
   if (!inspector_network_tracking(request_id)) return;
 
-  sbuf_t b = {0};
-  if (!sbuf_append(&b, "{\"method\":\"Network.webSocketClosed\",\"params\":{\"requestId\":\"")) goto done;
-  if (!sbuf_appendf(&b, "%" PRIu64, request_id)) goto done;
-  if (!sbuf_append(&b, "\",\"timestamp\":")) goto done;
-  if (!sbuf_appendf(&b, "%.6f", inspector_timestamp_seconds())) goto done;
-  if (!sbuf_append(&b, "}}")) goto done;
-  inspector_notify_network(b.data);
-
-done:
-  free(b.data);
+  inspector_doc_t d;
+  yyjson_mut_val *params = inspector_network_params(&d, request_id);
+  inspector_add_timestamp(d.doc, params);
+  inspector_network_emit(&d, "Network.webSocketClosed", params);
 }

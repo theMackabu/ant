@@ -2,79 +2,54 @@
 #include "bind.h"
 #include "isolate.h"
 #include "inspector.h"
+#include "http/http1_parser.h"
 #include "http/websocket.h"
-#include "json.h"
 #include "modules/crypto.h"
 #include "reactor.h"
 
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 
 static void inspector_process_ws(inspector_client_t *client) {
+  ant_conn_t *conn = client->conn;
+  
   for (;;) {
     ant_ws_frame_t frame = {0};
     ant_ws_frame_result_t r = ant_ws_parse_frame(
-      (uint8_t *)client->read_buf, client->read_len,
+      (uint8_t *)ant_conn_buffer(conn), ant_conn_buffer_len(conn),
       true, false, false, SIZE_MAX, &frame
     );
+    
     if (r == ANT_WS_FRAME_INCOMPLETE) return;
-    if (r == ANT_WS_FRAME_PROTOCOL_ERROR) {
-      uv_close((uv_handle_t *)&client->handle, NULL);
+    if (r != ANT_WS_FRAME_OK || frame.opcode == ANT_WS_OPCODE_CLOSE) {
+      ant_ws_frame_clear(&frame);
+      ant_conn_close(conn);
       return;
     }
-    if (frame.opcode == ANT_WS_OPCODE_TEXT) {
-      inspector_handle_message(client, (const char *)frame.payload, frame.payload_len);
-    } else if (frame.opcode == ANT_WS_OPCODE_CLOSE) {
-      ant_ws_frame_clear(&frame);
-      uv_close((uv_handle_t *)&client->handle, NULL);
-      return;
-    } else if (frame.opcode == ANT_WS_OPCODE_PING) {
+    
+    if (frame.opcode == ANT_WS_OPCODE_TEXT) inspector_handle_message(client, (const char *)frame.payload, frame.payload_len);
+    else if (frame.opcode == ANT_WS_OPCODE_PING) {
       size_t len = 0;
       uint8_t *pong = ant_ws_encode_frame(ANT_WS_OPCODE_PONG, frame.payload, frame.payload_len, false, false, &len);
-      if (pong) {
-        inspector_send_raw(client, (const char *)pong, len);
-        free(pong);
-      }
+      if (pong) ant_conn_write(conn, (char *)pong, len, NULL, NULL);
     }
+    
     size_t consumed = frame.consumed_len;
     ant_ws_frame_clear(&frame);
-    if (consumed >= client->read_len) {
-      client->read_len = 0;
-      return;
-    }
-    memmove(client->read_buf, client->read_buf + consumed, client->read_len - consumed);
-    client->read_len -= consumed;
+    ant_conn_consume(conn, consumed);
   }
 }
 
-static const char *header_value(const char *headers, const char *name, char *buf, size_t bufsz) {
-  size_t name_len = strlen(name);
-  const char *p = headers;
-  while ((p = strstr(p, "\n")) != NULL) {
-    p++;
-    while (*p == '\r' || *p == '\n') p++;
-    if (strncasecmp(p, name, name_len) == 0 && p[name_len] == ':') {
-      p += name_len + 1;
-      while (*p == ' ' || *p == '\t') p++;
-      const char *end = p;
-      while (*end && *end != '\r' && *end != '\n') end++;
-      size_t len = (size_t)(end - p);
-      if (len >= bufsz) len = bufsz - 1;
-      memcpy(buf, p, len);
-      buf[len] = '\0';
-      return buf;
-    }
-  }
-  return NULL;
-}
-
-static bool host_allowed(const char *headers) {
+static bool host_allowed(const char *value) {
   char host[256];
   unsigned char addr[16];
-  if (!header_value(headers, "Host", host, sizeof(host))) return true;
+  if (!value) return true;
+
+  size_t len = strlen(value);
+  if (len >= sizeof(host)) return false;
+  memcpy(host, value, len + 1);
 
   char *colon = strrchr(host, ':');
   char *bracket = strrchr(host, ']');
@@ -85,7 +60,7 @@ static bool host_allowed(const char *headers) {
     *colon = '\0';
   }
 
-  size_t len = strlen(host);
+  len = strlen(host);
   if (strcasecmp(host, "localhost") == 0) return true;
   if (uv_inet_pton(AF_INET, host, addr) == 0) return true;
   if (len < 4 || host[0] != '[' || host[len - 1] != ']') return false;
@@ -94,302 +69,206 @@ static bool host_allowed(const char *headers) {
   return uv_inet_pton(AF_INET6, host + 1, addr) == 0;
 }
 
-static bool header_token_eq(const char *headers, const char *name, const char *expected) {
-  char value[256];
-  const char *p = header_value(headers, name, value, sizeof(value));
-  if (!p) return false;
-  size_t expected_len = strlen(expected);
-  while (*p) {
-    while (*p == ' ' || *p == '\t' || *p == ',') p++;
-    const char *start = p;
-    while (*p && *p != ',') p++;
-    const char *end = p;
-    while (end > start && (end[-1] == ' ' || end[-1] == '\t')) end--;
-    if ((size_t)(end - start) == expected_len && strncasecmp(start, expected, expected_len) == 0)
-      return true;
-  }
-  return false;
-}
-
-static bool request_path_matches_uuid(const char *req) {
-  char expected[80];
-  snprintf(expected, sizeof(expected), "GET /%s ", g_inspector.uuid);
-  return strncmp(req, expected, strlen(expected)) == 0;
-}
-
-static bool inspector_append_target_url(sbuf_t *b, const char *file) {
-  if (!file || !*file || strcmp(file, "[repl]") == 0 || strcmp(file, "ant") == 0)
-    return sbuf_append(b, "file:///");
-  if (inspector_is_url_like(file)) return sbuf_append(b, file);
-  if (file[0] == '/') {
-    return sbuf_append(b, "file://") && sbuf_append(b, file);
-  }
-  return sbuf_append(b, "file:///") && sbuf_append(b, file);
-}
-
-static bool inspector_append_devtools_url(sbuf_t *b) {
-  return 
-    sbuf_append(b, "devtools://devtools/bundled/js_app.html?v8only=true&ws=") &&
-    sbuf_append(b, g_inspector.host) &&
-    sbuf_appendf(b, ":%d/%s", g_inspector.port, g_inspector.uuid);
-}
-
-static bool inspector_append_browser_devtools_url(sbuf_t *b) {
-  return 
-    sbuf_append(b, "http://") &&
-    sbuf_append(b, g_inspector.host) &&
-    sbuf_appendf(b, ":%d/devtools", g_inspector.port);
+static char *inspector_target_url(const char *file) {
+  if (!file || !*file || strcmp(file, "[repl]") == 0 || strcmp(file, "ant") == 0) return strdup("file:///");
+  if (inspector_is_url_like(file)) return strdup(file);
+  return inspector_concat(file[0] == '/' ? "file://" : "file:///", file);
 }
 
 static char *json_list_response(void) {
-  sbuf_t b = {0};
-  sbuf_t devtools = {0};
-  sbuf_t target = {0};
-  sbuf_t websocket = {0};
-  
   inspector_script_t *entry = inspector_entry_script();
   const char *file = entry && entry->url
     ? entry->url
     : (g_inspector.js && g_inspector.js->filename ? g_inspector.js->filename : "ant");
-  uv_pid_t pid = uv_os_getpid();
 
-  if (!inspector_append_devtools_url(&devtools)) goto fail;
-  if (!inspector_append_target_url(&target, file)) goto fail;
-  if (!sbuf_append(&websocket, "ws://")) goto fail;
-  if (!sbuf_append(&websocket, g_inspector.host)) goto fail;
-  if (!sbuf_appendf(&websocket, ":%d/%s", g_inspector.port, g_inspector.uuid)) goto fail;
+  char *target = inspector_target_url(file);
+  if (!target) return NULL;
 
   char title[64];
-  snprintf(title, sizeof(title), "ant[%d]", (int)pid);
+  char devtools[192];
+  char websocket[128];
+  snprintf(title, sizeof(title), "ant[%d]", (int)uv_os_getpid());
+  snprintf(websocket, sizeof(websocket), "ws://%s:%d/%s", g_inspector.host, g_inspector.port, g_inspector.uuid);
+  snprintf(devtools, sizeof(devtools), "devtools://devtools/bundled/js_app.html?v8only=true&ws=%s", websocket + strlen("ws://"));
 
-  inspector_json_t json;
-  inspector_json_init(&json, &b);
-  if (!inspector_json_begin_array(&json)) goto fail;
-  if (!inspector_json_begin_object(&json)) goto fail;
-  if (!inspector_json_key(&json, "description")) goto fail;
-  if (!inspector_json_string(&json, title)) goto fail;
-  if (!inspector_json_key(&json, "devtoolsFrontendUrl")) goto fail;
-  if (!inspector_json_string(&json, devtools.data)) goto fail;
-  if (!inspector_json_key(&json, "id")) goto fail;
-  if (!inspector_json_string(&json, g_inspector.uuid)) goto fail;
-  if (!inspector_json_key(&json, "title")) goto fail;
-  if (!inspector_json_string(&json, title)) goto fail;
-  if (!inspector_json_key(&json, "type")) goto fail;
-  if (!inspector_json_string(&json, "node")) goto fail;
-  if (!inspector_json_key(&json, "url")) goto fail;
-  if (!inspector_json_string(&json, target.data)) goto fail;
-  if (!inspector_json_key(&json, "webSocketDebuggerUrl")) goto fail;
-  if (!inspector_json_string(&json, websocket.data)) goto fail;
-  if (!inspector_json_end_object(&json)) goto fail;
-  if (!inspector_json_end_array(&json)) goto fail;
+  inspector_doc_t d;
+  yyjson_mut_doc *doc = inspector_doc_begin(&d);
+  yyjson_mut_val *list = yyjson_mut_arr(doc);
+  yyjson_mut_val *item = yyjson_mut_arr_add_obj(doc, list);
+  yyjson_mut_obj_add_str(doc, item, "description", title);
+  yyjson_mut_obj_add_str(doc, item, "devtoolsFrontendUrl", devtools);
+  yyjson_mut_obj_add_str(doc, item, "id", g_inspector.uuid);
+  yyjson_mut_obj_add_str(doc, item, "title", title);
+  yyjson_mut_obj_add_str(doc, item, "type", "node");
+  yyjson_mut_obj_add_str(doc, item, "url", target);
+  yyjson_mut_obj_add_str(doc, item, "webSocketDebuggerUrl", websocket);
 
-  free(devtools.data);
-  free(target.data);
-  free(websocket.data);
-  return b.data;
-fail:
-  free(devtools.data);
-  free(target.data);
-  free(websocket.data);
-  free(b.data);
-  return NULL;
+  char *json = inspector_doc_finish(&d, list);
+  free(target);
+  return json;
 }
 
 static void inspector_http_response(inspector_client_t *client, const char *status, const char *type, const char *body) {
-  sbuf_t b = {0};
+  char head[256];
   size_t body_len = body ? strlen(body) : 0;
-  if (sbuf_appendf(
-    &b,
+  
+  int head_len = snprintf(
+    head, sizeof(head),
     "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",
     status, type ? type : "text/plain", body_len
-  ) && sbuf_append_len(&b, body, body_len)) {
-    inspector_send_raw(client, b.data, b.len);
+  );
+
+  char *out = malloc((size_t)head_len + body_len);
+  if (out) {
+    memcpy(out, head, (size_t)head_len);
+    if (body_len) memcpy(out + head_len, body, body_len);
+    ant_conn_write(client->conn, out, (size_t)head_len + body_len, NULL, NULL);
   }
-  free(b.data);
-  uv_close((uv_handle_t *)&client->handle, NULL);
+  
+  ant_conn_close(client->conn);
 }
 
-static void inspector_http_devtools_page(inspector_client_t *client) {
-  sbuf_t devtools = {0};
-  sbuf_t body = {0};
-  if (
-    inspector_append_devtools_url(&devtools) &&
-    sbuf_append(&body, "<!doctype html><meta charset=\"utf-8\"><title>Ant DevTools</title>") &&
-    sbuf_append(&body, "<style>body{font:84%/1.4 'Segoe UI',Tahoma,sans-serif;color:#000;background:#fff;margin:0;padding:24px;max-width:800px}h1{font-size:22px;font-weight:normal;margin:0 0 4px}.subtitle{color:#5f6368;font-size:13px;margin-bottom:24px}table{border-collapse:collapse;width:100%}td{padding:6px 14px 6px 0;vertical-align:top;font-size:13px}td.label{text-align:right;color:#5f6368;white-space:nowrap;width:1%}td.value{font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all}@media (prefers-color-scheme:dark){body{background:#202124;color:#e8eaed}.subtitle,td.label{color:#9aa0a6}}</style>") &&
-    sbuf_append(&body, "<h1>Ant DevTools</h1><div class=\"subtitle\">Paste into Chrome's address bar.</div><table><tr><td class=\"label\">DevTools frontend</td><td class=\"value\">") &&
-    sbuf_append(&body, devtools.data) &&
-    sbuf_append(&body, "</td></tr></table>")
-  ) inspector_http_response(client, "200 OK", "text/html; charset=UTF-8", body.data);
-  else inspector_http_response(client, "500 Internal Server Error", "text/plain", "Out of memory\n");
-  free(devtools.data);
-  free(body.data);
-}
-
-static void inspector_upgrade(inspector_client_t *client, const char *headers) {
-  char key[256];
-  if (!host_allowed(headers) || !request_path_matches_uuid(headers)) {
+static void inspector_upgrade(inspector_client_t *client, const ant_http1_parsed_request_t *req) {
+  const char *key = NULL;
+  if (req->target[0] != '/' || strcmp(req->target + 1, g_inspector.uuid) != 0) {
     inspector_http_response(client, "403 Forbidden", "text/plain", "Forbidden\n");
     return;
   }
-  if (!header_value(headers, "Sec-WebSocket-Key", key, sizeof(key))) {
-    inspector_http_response(client, "400 Bad Request", "text/plain", "Missing WebSocket key\n");
-    return;
-  }
-  char *accept = ant_ws_accept_key(key);
+
+  char *accept = ant_ws_validate_client_handshake(req->headers, &key) ? ant_ws_accept_key(key) : NULL;
   if (!accept) {
-    inspector_http_response(client, "400 Bad Request", "text/plain", "Invalid WebSocket key\n");
+    inspector_http_response(client, "400 Bad Request", "text/plain", "Invalid WebSocket handshake\n");
     return;
   }
-  sbuf_t b = {0};
-  if (sbuf_appendf(
-    &b,
+
+  char response[192];
+  int len = snprintf(
+    response, sizeof(response),
     "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n",
     accept
-  )) inspector_send_raw(client, b.data, b.len);
+  );
+  
+  ant_conn_write_copy(client->conn, response, (size_t)len, NULL, NULL);
   free(accept);
-  free(b.data);
+  
   client->websocket = true;
   g_inspector.attached = true;
-  client->read_len = 0;
+  
+  ant_conn_consume(client->conn, ant_conn_buffer_len(client->conn));
 }
 
 static void inspector_process_http(inspector_client_t *client) {
-  char *end = strstr(client->read_buf, "\r\n\r\n");
-  if (!end) return;
-  if (!host_allowed(client->read_buf)) {
-    inspector_http_response(client, "403 Forbidden", "text/plain", "Forbidden\n");
+  ant_http1_parsed_request_t req;
+  
+  ant_http1_parse_result_t parsed = ant_http1_parse_request(
+    ant_conn_buffer(client->conn), 
+    ant_conn_buffer_len(client->conn), 0, &req, NULL, NULL
+  );
+  
+  if (parsed == ANT_HTTP1_PARSE_INCOMPLETE) return;
+  
+  if (parsed == ANT_HTTP1_PARSE_ERROR) {
+    inspector_http_response(client, "400 Bad Request", "text/plain", "Bad request\n");
     return;
   }
-  if (strncmp(client->read_buf, "GET /json/list ", 15) == 0 ||
-      strncmp(client->read_buf, "GET /json ", 10) == 0) {
+
+  const char *path = strcmp(req.method, "GET") == 0 ? req.target : "";
+  if (!host_allowed(ant_ws_find_header(req.headers, "host"))) {
+    inspector_http_response(client, "403 Forbidden", "text/plain", "Forbidden\n");
+  } else if (strcmp(path, "/json/list") == 0 || strcmp(path, "/json") == 0) {
     char *body = json_list_response();
     inspector_http_response(client, "200 OK", "application/json; charset=UTF-8", body ? body : "[]");
     free(body);
-  } else if (strncmp(client->read_buf, "GET /devtools ", 14) == 0 ||
-             strncmp(client->read_buf, "GET /devtools/ ", 15) == 0) {
-    inspector_http_devtools_page(client);
-  } else if (strncmp(client->read_buf, "GET /json/version ", 18) == 0) {
-    inspector_http_response(
-      client,
-      "200 OK",
-      "application/json; charset=UTF-8",
-      "{\"Browser\":\"Ant/v" ANT_VERSION "\",\"Protocol-Version\":\"1.3\",\"V8-Version\":\"ant\",\"WebKit-Version\":\"ant\"}"
-    );
-  } else if (
-    strncasecmp(client->read_buf, "GET /", 5) == 0 &&
-    header_token_eq(client->read_buf, "Upgrade", "websocket") &&
-    header_token_eq(client->read_buf, "Connection", "upgrade")
-  ) inspector_upgrade(client, client->read_buf);
+  } else if (strcmp(path, "/json/version") == 0) inspector_http_response(
+    client, "200 OK",
+    "application/json; charset=UTF-8",
+    "{\"Browser\":\"Ant/v" ANT_VERSION "\",\"Protocol-Version\":\"1.3\",\"V8-Version\":\"ant\",\"WebKit-Version\":\"ant\"}"
+  );
+  
+  else if (*path && ant_ws_find_header(req.headers, "upgrade")) inspector_upgrade(client, &req);
   else inspector_http_response(client, "404 Not Found", "text/plain", "Not found\n");
+
+  ant_http1_free_parsed_request(&req);
 }
 
-static void inspector_alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
-  size_t len = suggested_size > UINT_MAX ? UINT_MAX : suggested_size;
-  buf->base = malloc(len);
-  *buf = uv_buf_init(buf->base, buf->base ? (unsigned int)len : 0);
-}
-
-static void inspector_client_closed(uv_handle_t *handle) {
-  inspector_client_t *client = (inspector_client_t *)handle;
-  inspector_cancel_client_awaits(client->id);
-  inspector_client_t **p = &g_inspector.clients;
+static void inspector_on_accept(ant_listener_t *listener, ant_conn_t *conn, void *user_data) {
+  inspector_client_t *client = calloc(1, sizeof(*client));
+  if (!client) return;
   
-  while (*p) {
-    if (*p == client) {
-      *p = client->next;
-      break;
-    }
-    p = &(*p)->next;
-  }
+  client->conn = conn;
+  client->js = g_inspector.js;
+  client->id = ++g_inspector.next_client_id;
   
-  free(client->read_buf);
-  free(client);
+  if (client->id == 0) client->id = ++g_inspector.next_client_id;
+  client->next = g_inspector.clients;
+  g_inspector.clients = client;
+  
+  ant_conn_set_user_data(conn, client);
 }
 
-static void inspector_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
-  inspector_client_t *client = (inspector_client_t *)stream;
-  if (nread <= 0) {
-    free(buf->base);
-    if (nread < 0) uv_close((uv_handle_t *)&client->handle, inspector_client_closed);
-    return;
-  }
-  if (client->read_len + (size_t)nread + 1 > client->read_cap) {
-    size_t next_cap = client->read_cap ? client->read_cap * 2 : 8192;
-    while (next_cap < client->read_len + (size_t)nread + 1) next_cap *= 2;
-    char *next = realloc(client->read_buf, next_cap);
-    if (!next) {
-      free(buf->base);
-      uv_close((uv_handle_t *)&client->handle, inspector_client_closed);
-      return;
-    }
-    client->read_buf = next;
-    client->read_cap = next_cap;
-  }
-  memcpy(client->read_buf + client->read_len, buf->base, (size_t)nread);
-  client->read_len += (size_t)nread;
-  client->read_buf[client->read_len] = '\0';
-  free(buf->base);
-
-  if (client->websocket) inspector_process_ws(client);
+static void inspector_on_read(ant_conn_t *conn, ssize_t nread, void *user_data) {
+  inspector_client_t *client = ant_conn_get_user_data(conn);
+  if (!client) ant_conn_close(conn);
+  else if (client->websocket) inspector_process_ws(client);
   else inspector_process_http(client);
 }
 
-static void inspector_connection_cb(uv_stream_t *server, int status) {
-  if (status < 0) return;
-  inspector_client_t *client = calloc(1, sizeof(*client));
-  if (!client) return;
-  client->js = g_inspector.js;
-  client->id = ++g_inspector.next_client_id;
-  if (client->id == 0) client->id = ++g_inspector.next_client_id;
-  uv_tcp_init(server->loop, &client->handle);
-  client->handle.data = client;
-  if (uv_accept(server, (uv_stream_t *)&client->handle) != 0) {
-    uv_close((uv_handle_t *)&client->handle, inspector_client_closed);
-    return;
-  }
-  client->next = g_inspector.clients;
-  g_inspector.clients = client;
-  uv_read_start((uv_stream_t *)&client->handle, inspector_alloc_cb, inspector_read_cb);
+static void inspector_on_end(ant_conn_t *conn, void *user_data) {
+  ant_conn_close(conn);
 }
 
-static bool inspector_parse_sockaddr(const char *host, int port, struct sockaddr_in *addr) {
-  const char *bind_host = host && *host ? host : "127.0.0.1";
-  if (uv_ip4_addr(bind_host, port, addr) == 0) return true;
-  if (strcmp(bind_host, "localhost") == 0 && uv_ip4_addr("127.0.0.1", port, addr) == 0) return true;
-  return false;
+static void inspector_on_conn_close(ant_conn_t *conn, void *user_data) {
+  inspector_client_t *client = ant_conn_get_user_data(conn);
+  if (!client) return;
+  inspector_cancel_client_awaits(client->id);
+
+  inspector_client_t **p = &g_inspector.clients;
+  while (*p && *p != client) p = &(*p)->next;
+  
+  if (*p) *p = client->next;
+  free(client);
 }
 
 bool ant_inspector_start(ant_t *js, const ant_inspector_options_t *options) {
   if (!options || !options->enabled || g_inspector.started) return true;
   memset(&g_inspector, 0, sizeof(g_inspector));
+  
   g_inspector.js = js;
   g_inspector.port = options->port > 0 ? options->port : 9229;
+  
   snprintf(g_inspector.host, sizeof(g_inspector.host), "%s", options->host[0] ? options->host : "127.0.0.1");
   if (crypto_random_uuid(g_inspector.uuid) < 0) return false;
 
-  struct sockaddr_in addr;
-  if (!inspector_parse_sockaddr(g_inspector.host, g_inspector.port, &addr)) return false;
-  if (uv_tcp_init(js->loop, &g_inspector.server) != 0) return false;
-  if (uv_tcp_bind(&g_inspector.server, (const struct sockaddr *)&addr, 0) != 0) return false;
-  if (uv_listen((uv_stream_t *)&g_inspector.server, 16, inspector_connection_cb) != 0) return false;
-  if (!options->wait_for_session) uv_unref((uv_handle_t *)&g_inspector.server);
+  static const ant_listener_callbacks_t callbacks = {
+    .on_accept = inspector_on_accept,
+    .on_read = inspector_on_read,
+    .on_end = inspector_on_end,
+    .on_conn_close = inspector_on_conn_close,
+  };
+  
+  const char *bind_host = strcmp(g_inspector.host, "localhost") == 0 ? "127.0.0.1" : g_inspector.host;
+  
+  if (ant_listener_listen_tcp(
+    &g_inspector.listener, js->loop, 
+    bind_host, g_inspector.port, 16, 0, &callbacks, NULL
+  ) != 0) return false;
+  
+  if (!options->wait_for_session) ant_listener_unref(&g_inspector.listener);
+  
   g_inspector.waiting_for_debugger = options->wait_for_session;
   g_inspector.started = true;
 
-  sbuf_t devtools = {0};
-  if (inspector_append_browser_devtools_url(&devtools))
-    fprintf(stderr, "Debugger listening on %s\n", devtools.data);
-  free(devtools.data);
+  fprintf(stderr, "Debugger listening on ws://%s:%d/%s\n", g_inspector.host, g_inspector.port, g_inspector.uuid);
   return true;
 }
 
 void ant_inspector_stop(void) {
   if (!g_inspector.started) return;
-  for (inspector_client_t *c = g_inspector.clients; c; c = c->next)
-    uv_close((uv_handle_t *)&c->handle, inspector_client_closed);
-  uv_close((uv_handle_t *)&g_inspector.server, NULL);
+  
+  ant_listener_stop(&g_inspector.listener, true);
   inspector_clear_console_events();
   inspector_clear_pending_awaits();
+  
   while (g_inspector.scripts) {
     inspector_script_t *script = g_inspector.scripts;
     g_inspector.scripts = script->next;
@@ -397,6 +276,7 @@ void ant_inspector_stop(void) {
     free(script->source);
     free(script);
   }
+  
   while (g_inspector.network_entries) {
     inspector_network_entry_t *entry = g_inspector.network_entries;
     g_inspector.network_entries = entry->next;
@@ -404,6 +284,7 @@ void ant_inspector_stop(void) {
     free(entry->response_body);
     free(entry);
   }
+  
   g_inspector.network_entry_count = 0;
   g_inspector.started = false;
 }
@@ -413,5 +294,6 @@ void ant_inspector_wait_for_session(void) {
     ant_uv_run(g_inspector.js->loop, UV_RUN_ONCE);
     js_poll_events(g_inspector.js);
   }
-  if (g_inspector.started) uv_unref((uv_handle_t *)&g_inspector.server);
+  
+  if (g_inspector.started) ant_listener_unref(&g_inspector.listener);
 }

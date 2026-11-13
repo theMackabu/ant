@@ -1,5 +1,6 @@
 #include "gc/roots.h"
 #include "bind.h"
+#include "arrays.h"
 #include "internal.h"
 #include "cfunc.h"
 #include "runtime.h"
@@ -12,11 +13,6 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-
-static bool inspector_ident_char(char c, bool first) {
-  unsigned char uc = (unsigned char)c;
-  return c == '_' || c == '$' || isalpha(uc) || (!first && isdigit(uc));
-}
 
 static bool inspector_safe_get_prop(
   ant_t *js,
@@ -56,6 +52,13 @@ static bool inspector_safe_get_prop(
     if (!ptr) return false;
     if (is_proxy(current)) return false;
 
+    unsigned long index = 0;
+    if (vtype(obj) == kTypeArray && parse_array_index(key, key_len, js_arr_len(js, obj), &index)) {
+      ant_value_t element = js_arr_get(js, obj, (ant_offset_t)index);
+      *out = is_empty_slot(element) ? Ant_Value_Undefined : element;
+      return true;
+    }
+
     ant_value_t value = Ant_Value_Undefined;
     if (js_try_get_own_data_prop(js, current, key, key_len, &value)) {
       *out = value;
@@ -81,166 +84,51 @@ static bool inspector_safe_get_binding(
   return inspector_safe_get_prop(js, js_glob(js), name, len, out);
 }
 
-bool inspector_eval_safe_member_expr(ant_t *js, const char *expr, size_t expr_len, ant_value_t *out) {
-  if (!js || !expr || !out) return false;
-  while (expr_len > 0 && isspace((unsigned char)*expr)) {
-    expr++;
-    expr_len--;
-  }
-  while (expr_len > 0 && isspace((unsigned char)expr[expr_len - 1])) expr_len--;
-  while (expr_len > 0 && expr[expr_len - 1] == '.') expr_len--;
-  if (expr_len == 0) return false;
+static bool inspector_safe_eval_ast(ant_t *js, sv_ast_t *node, ant_value_t *out);
 
-  ant_value_t cur = js_glob(js);
-  size_t pos = 0;
-  bool first_part = true;
-  while (pos < expr_len) {
-    if (!inspector_ident_char(expr[pos], true)) return false;
-    size_t start = pos++;
-    while (pos < expr_len && inspector_ident_char(expr[pos], false)) pos++;
-    size_t len = pos - start;
-    if (len == 0 || len >= 128) return false;
-
-    char key[128];
-    memcpy(key, expr + start, len);
-    key[len] = '\0';
-
-    if (first_part) {
-      if (strcmp(key, "globalThis") == 0 || strcmp(key, "this") == 0) cur = js_glob(js);
-      else if (!inspector_safe_get_binding(js, key, len, &cur)) return false;
-    } else {
-      ant_value_t next = Ant_Value_Undefined;
-      if (!inspector_safe_get_prop(js, cur, key, len, &next)) return false;
-      cur = next;
-    }
-
-    first_part = false;
-    if (pos == expr_len) {
-      *out = cur;
-      return true;
-    }
-    if (expr[pos] != '.') return false;
-    pos++;
-    if (pos == expr_len) {
-      *out = cur;
-      return true;
-    }
-  }
-
-  *out = cur;
-  return true;
-}
-
-static bool inspector_value_is_primitive_key(ant_value_t value) {
-  switch (vtype(value)) {
-    case kTypeString:
-    case kTypeNumber:
-    case kTypeBool:
-    case kTypeNull:
-    case kTypeUndefined:
-      return true;
-    default:
-      return false;
-  }
-}
-
-static bool inspector_expr_delimiters_balanced(const char *expr, size_t expr_len) {
-  char stack[256];
-  size_t depth = 0;
-  char quote = '\0';
-  bool escape = false;
-
-  for (size_t i = 0; i < expr_len; i++) {
-    char c = expr[i];
-    if (quote) {
-      if (escape) {
-        escape = false;
-        continue;
-      }
-      if (c == '\\') {
-        escape = true;
-        continue;
-      }
-      if (c == quote) quote = '\0';
-      continue;
-    }
-
-    if (c == '\'' || c == '"' || c == '`') {
-      quote = c;
-      continue;
-    }
-    if (c == '(' || c == '[' || c == '{') {
-      if (depth >= sizeof(stack)) return false;
-      stack[depth++] = c;
-      continue;
-    }
-    if (c == ')' || c == ']' || c == '}') {
-      if (depth == 0) return false;
-      char open = stack[--depth];
-      if (
-        (c == ')' && open != '(') ||
-        (c == ']' && open != '[') ||
-        (c == '}' && open != '{')
-      ) return false;
-    }
-  }
-
-  return depth == 0 && quote == '\0' && !escape;
-}
-
-static bool inspector_value_to_key(
-  ant_t *js,
-  ant_value_t value,
-  char *buf,
-  size_t buf_len,
-  const char **out_key,
-  size_t *out_key_len
-) {
-  if (!js || !buf || buf_len == 0 || !out_key || !out_key_len) return false;
-  if (!inspector_value_is_primitive_key(value)) return false;
-
-  if (vtype(value) == kTypeString) {
-    size_t len = 0;
-    const char *str = js_getstr(js, value, &len);
-    if (!str || memchr(str, '\0', len)) return false;
-    *out_key = str;
-    *out_key_len = len;
-    return true;
-  }
-
-  js_cstr_t cstr = js_to_cstr(js, value, buf, buf_len);
-  size_t len = strlen(cstr.ptr);
-  if (len >= buf_len) {
-    if (cstr.needs_free) free((void *)cstr.ptr);
-    return false;
-  }
-  if (cstr.ptr != buf) memcpy(buf, cstr.ptr, len + 1);
-  if (cstr.needs_free) free((void *)cstr.ptr);
-  *out_key = buf;
-  *out_key_len = len;
-  return true;
-}
-
-static bool inspector_static_property_key(
+static bool inspector_safe_key(
   ant_t *js,
   sv_ast_t *node,
+  bool computed,
   char *buf,
   size_t buf_len,
-  const char **out_key,
-  size_t *out_key_len
+  const char **key,
+  size_t *key_len
 ) {
+  ant_value_t value = Ant_Value_Undefined;
   if (!node) return false;
-  if (node->type == N_IDENT || node->type == N_STRING) {
-    if (!node->str || memchr(node->str, '\0', node->len)) return false;
-    *out_key = node->str;
-    *out_key_len = node->len;
-    return true;
+
+  if (!computed && (node->type == N_IDENT || node->type == N_STRING)) {
+    *key = node->str;
+    *key_len = node->len;
+  } else {
+    if (!computed && node->type != N_NUMBER) return false;
+    if (!inspector_safe_eval_ast(js, node, &value)) return false;
+
+    switch (vtype(value)) {
+      case kTypeString:
+        *key = js_getstr(js, value, key_len);
+        break;
+      case kTypeNumber:
+      case kTypeBool:
+      case kTypeNull:
+      case kTypeUndefined: {
+        js_cstr_t cstr = js_to_cstr(js, value, buf, buf_len);
+        size_t len = strlen(cstr.ptr);
+        bool fits = len < buf_len;
+        if (fits && cstr.ptr != buf) memcpy(buf, cstr.ptr, len + 1);
+        if (cstr.needs_free) free((void *)cstr.ptr);
+        if (!fits) return false;
+        *key = buf;
+        *key_len = len;
+        break;
+      }
+      default:
+        return false;
+    }
   }
-  if (node->type == N_NUMBER) {
-    ant_value_t key_value = Ant_Value_FromNumber(node->num);
-    return inspector_value_to_key(js, key_value, buf, buf_len, out_key, out_key_len);
-  }
-  return false;
+
+  return *key && !memchr(*key, '\0', *key_len);
 }
 
 static bool inspector_safe_binary_numeric(
@@ -286,38 +174,20 @@ static bool inspector_safe_binary_numeric(
   }
 }
 
-static bool inspector_safe_abstract_eq(
-  ant_t *js,
-  ant_value_t left,
-  ant_value_t right,
-  bool *out
-) {
+static bool inspector_safe_loose_eq(ant_t *js, ant_value_t left, ant_value_t right, bool *out) {
   uint8_t lt = vtype(left);
-  uint8_t rtype = vtype(right);
+  uint8_t rt = vtype(right);
+  bool l_nullish = lt == kTypeNull || lt == kTypeUndefined;
+  bool r_nullish = rt == kTypeNull || rt == kTypeUndefined;
 
-  if ((lt == kTypeNull && rtype == kTypeUndefined) || (lt == kTypeUndefined && rtype == kTypeNull)) {
-    *out = true;
-    return true;
+  if (lt == rt) *out = strict_eq_values(js, left, right);
+  else if (l_nullish || r_nullish) *out = l_nullish && r_nullish;
+  else if (is_object_type(left) || is_object_type(right)) return false;
+  else {
+    bool l_numeric = lt == kTypeBool || lt == kTypeNumber || lt == kTypeString;
+    bool r_numeric = rt == kTypeBool || rt == kTypeNumber || rt == kTypeString;
+    *out = l_numeric && r_numeric && js_to_number(js, left) == js_to_number(js, right);
   }
-  if (lt == rtype) {
-    *out = strict_eq_values(js, left, right);
-    return true;
-  }
-  if (lt == kTypeBool) {
-    left = Ant_Value_FromNumber(vdata(left) ? 1.0 : 0.0);
-    lt = kTypeNumber;
-  }
-  if (rtype == kTypeBool) {
-    right = Ant_Value_FromNumber(vdata(right) ? 1.0 : 0.0);
-    rtype = kTypeNumber;
-  }
-  if ((lt == kTypeNumber && rtype == kTypeString) || (lt == kTypeString && rtype == kTypeNumber)) {
-    *out = js_to_number(js, left) == js_to_number(js, right);
-    return true;
-  }
-  if (is_object_type(left) || is_object_type(right)) return false;
-
-  *out = false;
   return true;
 }
 
@@ -345,7 +215,7 @@ static bool inspector_safe_eval_ast(ant_t *js, sv_ast_t *node, ant_value_t *out)
       *out = js_glob(js);
       return true;
     case N_IDENT:
-      if (!node->str || memchr(node->str, '\0', node->len)) return false;
+      if (!node->str) return false;
       return inspector_safe_get_binding(js, node->str, node->len, out);
     case N_UNARY: {
       ant_value_t value = Ant_Value_Undefined;
@@ -411,7 +281,7 @@ static bool inspector_safe_eval_ast(ant_t *js, sv_ast_t *node, ant_value_t *out)
         case TOK_EQ:
         case TOK_NE: {
           bool equal = false;
-          if (!inspector_safe_abstract_eq(js, left, right, &equal)) return false;
+          if (!inspector_safe_loose_eq(js, left, right, &equal)) return false;
           *out = Ant_Value_FromBool(node->op == TOK_EQ ? equal : !equal);
           return true;
         }
@@ -450,14 +320,8 @@ static bool inspector_safe_eval_ast(ant_t *js, sv_ast_t *node, ant_value_t *out)
       char key_buf[128];
       const char *key = NULL;
       size_t key_len = 0;
-      if (node->flags & 1) {
-        ant_value_t key_value = Ant_Value_Undefined;
-        if (!inspector_safe_eval_ast(js, node->right, &key_value)) return false;
-        if (!inspector_value_to_key(js, key_value, key_buf, sizeof(key_buf), &key, &key_len))
-          return false;
-      } else if (!inspector_static_property_key(js, node->right, key_buf, sizeof(key_buf), &key, &key_len)) {
+      if (!inspector_safe_key(js, node->right, node->flags & 1, key_buf, sizeof(key_buf), &key, &key_len))
         return false;
-      }
 
       return inspector_safe_get_prop(js, obj, key, key_len, out);
     }
@@ -491,14 +355,8 @@ static bool inspector_safe_eval_ast(ant_t *js, sv_ast_t *node, ant_value_t *out)
         char key_buf[128];
         const char *key = NULL;
         size_t key_len = 0;
-        if (prop->flags & FN_COMPUTED) {
-          ant_value_t key_value = Ant_Value_Undefined;
-          if (!inspector_safe_eval_ast(js, prop->left, &key_value)) return false;
-          if (!inspector_value_to_key(js, key_value, key_buf, sizeof(key_buf), &key, &key_len))
-            return false;
-        } else if (!inspector_static_property_key(js, prop->left, key_buf, sizeof(key_buf), &key, &key_len)) {
+        if (!inspector_safe_key(js, prop->left, prop->flags & FN_COMPUTED, key_buf, sizeof(key_buf), &key, &key_len))
           return false;
-        }
 
         ant_value_t value = Ant_Value_Undefined;
         if (!inspector_safe_eval_ast(js, prop->right, &value)) return false;
@@ -521,7 +379,6 @@ bool inspector_eval_safe_expr(ant_t *js, const char *expr, size_t expr_len, ant_
   }
   while (expr_len > 0 && isspace((unsigned char)expr[expr_len - 1])) expr_len--;
   if (expr_len == 0) return false;
-  if (!inspector_expr_delimiters_balanced(expr, expr_len)) return false;
 
   if (expr_len > SIZE_MAX - 3) return false;
   char *wrapped = malloc(expr_len + 3);

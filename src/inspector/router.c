@@ -1,6 +1,5 @@
 #include "bind.h"
 #include "gc.h"
-#include "json.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -77,78 +76,24 @@ static void route_schema_domains(inspector_client_t *client, int id, yyjson_val 
     "Profiler",
   };
   
-  sbuf_t b = {0};
-  inspector_json_t json;
-  inspector_json_init(&json, &b);
-  bool ok = false;
+  inspector_doc_t d;
+  yyjson_mut_doc *doc = inspector_doc_begin(&d);
+  yyjson_mut_val *result = yyjson_mut_obj(doc);
+  yyjson_mut_val *list = yyjson_mut_obj_add_arr(doc, result, "domains");
 
-  if (!inspector_json_begin_object(&json)) goto done;
-  if (!inspector_json_key(&json, "domains")) goto done;
-  if (!inspector_json_begin_array(&json)) goto done;
-  
   for (size_t i = 0; i < sizeof(domains) / sizeof(domains[0]); i++) {
-    if (!inspector_json_begin_object(&json)) goto done;
-    if (!inspector_json_key(&json, "name")) goto done;
-    if (!inspector_json_string(&json, domains[i])) goto done;
-    if (!inspector_json_key(&json, "version")) goto done;
-    if (!inspector_json_string(&json, "1.3")) goto done;
-    if (!inspector_json_end_object(&json)) goto done;
+    yyjson_mut_val *domain = yyjson_mut_arr_add_obj(doc, list);
+    yyjson_mut_obj_add_str(doc, domain, "name", domains[i]);
+    yyjson_mut_obj_add_str(doc, domain, "version", "1.3");
   }
-  
-  if (!inspector_json_end_array(&json)) goto done;
-  if (!inspector_json_end_object(&json)) goto done;
-  ok = true;
 
-done:
-  if (ok) inspector_send_response_obj(client, id, b.data);
-  else inspector_send_error(client, id, -32000, "Out of memory");
-  free(b.data);
-}
-
-static void route_network_get_response_body(inspector_client_t *client, int id, yyjson_val *params) {
-  inspector_get_response_body(client, id, params);
-}
-
-static void route_network_get_request_post_data(inspector_client_t *client, int id, yyjson_val *params) {
-  inspector_get_request_post_data(client, id, params);
-}
-
-static void route_runtime_evaluate(inspector_client_t *client, int id, yyjson_val *params) {
-  inspector_eval(client, id, params);
-}
-
-static void route_runtime_await_promise(inspector_client_t *client, int id, yyjson_val *params) {
-  inspector_await_promise(client, id, params);
-}
-
-static void route_runtime_compile_script(inspector_client_t *client, int id, yyjson_val *params) {
-  inspector_compile_script(client, id, params);
-}
-
-static void route_runtime_run_script(inspector_client_t *client, int id, yyjson_val *params) {
-  inspector_run_script(client, id, params);
-}
-
-static void route_debugger_get_script_source(inspector_client_t *client, int id, yyjson_val *params) {
-  inspector_get_script_source(client, id, params);
-}
-
-static void route_runtime_get_heap_usage(inspector_client_t *client, int id, yyjson_val *params) {
-  inspector_get_heap_usage(client, id);
-}
-
-static void route_runtime_get_properties(inspector_client_t *client, int id, yyjson_val *params) {
-  inspector_get_properties(client, id, params);
-}
-
-static void route_runtime_global_lexical_scope_names(inspector_client_t *client, int id, yyjson_val *params) {
-  inspector_global_lexical_scope_names(client, id);
+  inspector_send_result(client, id, &d, result);
 }
 
 static const inspector_route_t k_routes[] = {
   {"Console.enable", route_console_enable},
   {"Debugger.enable", route_debugger_enable},
-  {"Debugger.getScriptSource", route_debugger_get_script_source},
+  {"Debugger.getScriptSource", inspector_get_script_source},
   {"Debugger.setAsyncCallStackDepth", route_empty},
   {"Debugger.setBlackboxPatterns", route_empty},
   {"Debugger.setBlackboxedRanges", route_empty},
@@ -162,25 +107,25 @@ static const inspector_route_t k_routes[] = {
   {"Network.disable", route_network_disable},
   {"Network.emulateNetworkConditionsByRule", route_empty},
   {"Network.enable", route_network_enable},
-  {"Network.getRequestPostData", route_network_get_request_post_data},
-  {"Network.getResponseBody", route_network_get_response_body},
+  {"Network.getRequestPostData", inspector_get_request_post_data},
+  {"Network.getResponseBody", inspector_get_response_body},
   {"Network.overrideNetworkState", route_empty},
   {"Network.setAttachDebugStack", route_empty},
   {"Network.setBlockedURLs", route_empty},
   {"Profiler.enable", route_empty},
-  {"Runtime.awaitPromise", route_runtime_await_promise},
-  {"Runtime.compileScript", route_runtime_compile_script},
+  {"Runtime.awaitPromise", inspector_await_promise},
+  {"Runtime.compileScript", inspector_compile_script},
   {"Runtime.discardConsoleEntries", route_discard_console},
   {"Runtime.enable", route_runtime_enable},
-  {"Runtime.evaluate", route_runtime_evaluate},
-  {"Runtime.getHeapUsage", route_runtime_get_heap_usage},
+  {"Runtime.evaluate", inspector_eval},
+  {"Runtime.getHeapUsage", inspector_get_heap_usage},
   {"Runtime.getIsolateId", route_get_isolate_id},
-  {"Runtime.getProperties", route_runtime_get_properties},
-  {"Runtime.globalLexicalScopeNames", route_runtime_global_lexical_scope_names},
+  {"Runtime.getProperties", inspector_get_properties},
+  {"Runtime.globalLexicalScopeNames", inspector_global_lexical_scope_names},
   {"Runtime.releaseObject", route_empty},
   {"Runtime.releaseObjectGroup", route_empty},
   {"Runtime.runIfWaitingForDebugger", route_run_if_waiting},
-  {"Runtime.runScript", route_runtime_run_script},
+  {"Runtime.runScript", inspector_run_script},
   {"Runtime.setAsyncCallStackDepth", route_empty},
   {"Runtime.setCustomObjectFormatterEnabled", route_empty},
   {"Schema.getDomains", route_schema_domains},

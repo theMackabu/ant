@@ -8,23 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static bool inspector_source_end_position(const char *source, size_t len, int *line, int *column) {
-  int cur_line = 0;
-  int cur_column = 0;
-  
-  for (size_t i = 0; i < len; i++) {
-    if (source[i] == '\n') {
-      cur_line++;
-      cur_column = 0;
-    } else cur_column++;
-  }
-  
-  if (line) *line = cur_line;
-  if (column) *column = cur_column;
-  
-  return true;
-}
-
 bool inspector_is_url_like(const char *path) {
   if (!path) return false;
   for (const char *p = path; *p; p++) {
@@ -41,38 +24,20 @@ char *inspector_make_script_url(const char *path) {
   if (strcmp(path, "[inspector]") == 0) return strdup("ant://inspector/console");
   if (inspector_is_url_like(path)) return strdup(path);
 
-  sbuf_t b = {0};
-  if (path[0] == '/') {
-    if (!sbuf_append(&b, "file://") || !sbuf_append(&b, path)) {
-      free(b.data);
-      return NULL;
-    }
-    return b.data;
-  }
+  if (path[0] == '/') return inspector_concat("file://", path);
 
   char *real = realpath(path, NULL);
-  if (real) {
-    bool ok = sbuf_append(&b, "file://") && sbuf_append(&b, real);
-    free(real);
-    if (!ok) {
-      free(b.data);
-      return NULL;
-    }
-    return b.data;
-  }
+  if (!real) return inspector_concat("file:///", path);
 
-  if (!sbuf_append(&b, "file:///") || !sbuf_append(&b, path)) {
-    free(b.data);
-    return NULL;
-  }
-  return b.data;
+  char *url = inspector_concat("file://", real);
+  free(real);
+  return url;
 }
 
-inspector_script_t *inspector_script_for_id(int id) {
+static inspector_script_t *inspector_script_for_id(int id) {
   if (id <= 0) return NULL;
-  for (inspector_script_t *script = g_inspector.scripts; script; script = script->next) {
+  for (inspector_script_t *script = g_inspector.scripts; script; script = script->next)
     if (script->id == id) return script;
-  }
   return NULL;
 }
 
@@ -90,30 +55,40 @@ inspector_script_t *inspector_entry_script(void) {
   return g_inspector.scripts;
 }
 
-static bool inspector_send_script_parsed(inspector_client_t *client, const inspector_script_t *script) {
-  if (!client || !script) return false;
+static void inspector_send_script_parsed(inspector_client_t *client, const inspector_script_t *script) {
+  if (!client || !script) return;
+  
   int end_line = 0;
   int end_column = 0;
-  inspector_source_end_position(script->source, script->source_len, &end_line, &end_column);
+  
+  for (size_t i = 0; i < script->source_len; i++) {
+    if (script->source[i] == '\n') end_line++, end_column = 0;
+    else end_column++;
+  }
 
-  sbuf_t b = {0};
-  bool ok =
-    sbuf_append(&b, "{\"method\":\"Debugger.scriptParsed\",\"params\":{\"scriptId\":\"") &&
-    sbuf_appendf(&b, "%d", script->id) &&
-    sbuf_append(&b, "\",\"url\":") &&
-    sbuf_json_string(&b, script->url ? script->url : "") &&
-    sbuf_append(&b, ",\"startLine\":0,\"startColumn\":0,\"endLine\":") &&
-    sbuf_appendf(&b, "%d", end_line) &&
-    sbuf_append(&b, ",\"endColumn\":") &&
-    sbuf_appendf(&b, "%d", end_column) &&
-    sbuf_append(&b, ",\"executionContextId\":1,\"hash\":\"\",\"isLiveEdit\":false,\"sourceMapURL\":\"\",\"hasSourceURL\":false,\"isModule\":") &&
-    sbuf_append(&b, script->is_module ? "true" : "false") &&
-    sbuf_append(&b, ",\"length\":") &&
-    sbuf_appendf(&b, "%zu", script->source_len) &&
-    sbuf_append(&b, "}}");
-  if (ok) inspector_send_ws(client, b.data);
-  free(b.data);
-  return ok;
+  char script_id[16];
+  snprintf(script_id, sizeof(script_id), "%d", script->id);
+
+  inspector_doc_t d;
+  yyjson_mut_doc *doc = inspector_doc_begin(&d);
+  yyjson_mut_val *params = yyjson_mut_obj(doc);
+  yyjson_mut_obj_add_str(doc, params, "scriptId", script_id);
+  yyjson_mut_obj_add_str(doc, params, "url", script->url ? script->url : "");
+  yyjson_mut_obj_add_int(doc, params, "startLine", 0);
+  yyjson_mut_obj_add_int(doc, params, "startColumn", 0);
+  yyjson_mut_obj_add_int(doc, params, "endLine", end_line);
+  yyjson_mut_obj_add_int(doc, params, "endColumn", end_column);
+  yyjson_mut_obj_add_int(doc, params, "executionContextId", 1);
+  yyjson_mut_obj_add_str(doc, params, "hash", "");
+  yyjson_mut_obj_add_bool(doc, params, "isLiveEdit", false);
+  yyjson_mut_obj_add_str(doc, params, "sourceMapURL", "");
+  yyjson_mut_obj_add_bool(doc, params, "hasSourceURL", false);
+  yyjson_mut_obj_add_bool(doc, params, "isModule", script->is_module);
+  yyjson_mut_obj_add_uint(doc, params, "length", script->source_len);
+
+  char *json = inspector_event_finish(&d, "Debugger.scriptParsed", params);
+  inspector_send_ws(client, json);
+  free(json);
 }
 
 static void inspector_notify_script_parsed(const inspector_script_t *script) {
@@ -210,11 +185,14 @@ void inspector_compile_script(inspector_client_t *client, int id, yyjson_val *pa
     return;
   }
 
-  sbuf_t b = {0};
-  if (sbuf_appendf(&b, "{\"scriptId\":\"%d\"}", script->id))
-    inspector_send_response_obj(client, id, b.data);
-  else inspector_send_error(client, id, -32000, "Out of memory");
-  free(b.data);
+  char script_id[16];
+  snprintf(script_id, sizeof(script_id), "%d", script->id);
+
+  inspector_doc_t d;
+  yyjson_mut_doc *doc = inspector_doc_begin(&d);
+  yyjson_mut_val *result = yyjson_mut_obj(doc);
+  yyjson_mut_obj_add_str(doc, result, "scriptId", script_id);
+  inspector_send_result(client, id, &d, result);
 }
 
 void inspector_run_script(inspector_client_t *client, int id, yyjson_val *params) {
@@ -242,14 +220,14 @@ void inspector_get_script_source(inspector_client_t *client, int id, yyjson_val 
     return;
   }
 
-  sbuf_t b = {0};
-  if (
-    sbuf_append(&b, "{\"scriptSource\":") &&
-    sbuf_json_string_len(&b, script->source ? script->source : "", script->source ? script->source_len : 0) &&
-    sbuf_append(&b, "}")
-  ) inspector_send_response_obj(client, id, b.data);
-  else inspector_send_error(client, id, -32000, "Out of memory");
-  free(b.data);
+  inspector_doc_t d;
+  yyjson_mut_doc *doc = inspector_doc_begin(&d);
+  yyjson_mut_val *result = yyjson_mut_obj(doc);
+  yyjson_mut_obj_add_strn(
+    doc, result, "scriptSource",
+    script->source ? script->source : "", script->source ? script->source_len : 0
+  );
+  inspector_send_result(client, id, &d, result);
 }
 void ant_inspector_register_script_source(
   const char *path,

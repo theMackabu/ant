@@ -159,7 +159,8 @@
       "src/modules/textcodec.c",
       "src/modules/uri.c",
       "src/modules/util.c",
-      "src/modules/wire.c"
+      "src/modules/wire.c",
+      "src/net/listen_policy.c"
     ],
     "patterns": [
       "src/*.c",

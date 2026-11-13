@@ -314,10 +314,7 @@ static bool repl_preview_member_complete(
     return false;
 
   ant_value_t obj = Ant_Value_Undefined;
-  if (
-    !inspector_eval_safe_member_expr(js, line, dot, &obj) &&
-    !inspector_eval_safe_expr(js, line, dot, &obj)
-  ) return false;
+  if (!inspector_eval_safe_expr(js, line, dot, &obj)) return false;
 
   repl_member_matches_collect(js, obj, &m);
   if (!m.match || m.exact) return false;

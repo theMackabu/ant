@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <uv.h>
+#include "net/listener.h"
 #include <yyjson.h>
 
 typedef struct inspector_client inspector_client_t;
@@ -16,13 +17,12 @@ typedef struct inspector_network_entry inspector_network_entry_t;
 typedef struct inspector_console_event inspector_console_event_t;
 
 typedef struct {
-  char *data;
-  size_t len;
-  size_t cap;
-} sbuf_t;
+  yyjson_mut_doc *doc;
+  bool failed;
+} inspector_doc_t;
 
 struct inspector_client {
-  uv_tcp_t handle;
+  ant_conn_t *conn;
   ant_t *js;
   uint64_t id;
   bool websocket;
@@ -31,9 +31,6 @@ struct inspector_client {
   bool console_replayed;
   bool debugger_enabled;
   bool network_enabled;
-  char *read_buf;
-  size_t read_len;
-  size_t read_cap;
   inspector_client_t *next;
 };
 
@@ -77,7 +74,7 @@ struct inspector_script {
 
 typedef struct {
   ant_t *js;
-  uv_tcp_t server;
+  ant_listener_t listener;
   bool started;
   bool attached;
   bool waiting_for_debugger;
@@ -101,11 +98,6 @@ typedef struct {
   int entry_script_id;
 } inspector_state_t;
 
-typedef struct {
-  uv_write_t req;
-  uv_buf_t buf;
-} inspector_write_t;
-
 extern inspector_state_t g_inspector;
 
 extern const size_t k_inspector_network_body_limit;
@@ -113,15 +105,13 @@ extern const size_t k_inspector_network_entry_limit;
 extern const size_t k_inspector_network_write_queue_limit;
 extern const size_t k_inspector_console_event_limit;
 
-bool sbuf_append_len(sbuf_t *b, const char *s, size_t len);
-bool sbuf_append(sbuf_t *b, const char *s);
-bool sbuf_appendf(sbuf_t *b, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+yyjson_mut_doc *inspector_doc_begin(inspector_doc_t *d);
+char *inspector_doc_finish(inspector_doc_t *d, yyjson_mut_val *root);
+char *inspector_event_finish(inspector_doc_t *d, const char *method, yyjson_mut_val *params);
+char *inspector_concat(const char *prefix, const char *suffix);
 
-bool sbuf_json_string_len(sbuf_t *b, const char *s, size_t len);
-bool sbuf_json_string(sbuf_t *b, const char *s);
-
-void inspector_send_raw(inspector_client_t *client, const char *data, size_t len);
 void inspector_send_ws(inspector_client_t *client, const char *json);
+void inspector_send_result(inspector_client_t *client, int id, inspector_doc_t *d, yyjson_mut_val *result);
 void inspector_send_response_obj(inspector_client_t *client, int id, const char *result_obj);
 void inspector_send_empty_result(inspector_client_t *client, int id);
 void inspector_send_error(inspector_client_t *client, int id, int code, const char *message);
@@ -130,33 +120,26 @@ bool inspector_param_bool(yyjson_val *params, const char *name);
 double inspector_timestamp_seconds(void);
 double inspector_wall_time_seconds(void);
 
-bool inspector_is_remote_handle_value(ant_value_t value);
-bool inspector_object_for_id(const char *object_id, ant_value_t *out);
-bool inspector_value_to_remote_object(ant_t *js, ant_value_t value, sbuf_t *out);
 void inspector_send_execution_context(inspector_client_t *client);
 void inspector_eval(inspector_client_t *client, int id, yyjson_val *params);
-void inspector_get_heap_usage(inspector_client_t *client, int id);
+void inspector_get_heap_usage(inspector_client_t *client, int id, yyjson_val *params);
 void inspector_get_properties(inspector_client_t *client, int id, yyjson_val *params);
-void inspector_global_lexical_scope_names(inspector_client_t *client, int id);
+void inspector_global_lexical_scope_names(inspector_client_t *client, int id, yyjson_val *params);
 void inspector_clear_console_events(void);
 void inspector_replay_console_events(inspector_client_t *client);
-void inspector_send_eval_result(inspector_client_t *client, int id, ant_value_t result);
 void inspector_await_promise(inspector_client_t *client, int id, yyjson_val *params);
 void inspector_cancel_client_awaits(uint64_t client_id);
 void inspector_clear_pending_awaits(void);
-bool inspector_eval_safe_member_expr(ant_t *js, const char *expr, size_t expr_len, ant_value_t *out);
 bool inspector_eval_safe_expr(ant_t *js, const char *expr, size_t expr_len, ant_value_t *out);
-void inspector_send_eval_completion( inspector_client_t *client, int id, ant_value_t result, bool await_promise);
+void inspector_send_eval_completion(inspector_client_t *client, int id, ant_value_t result, bool await_promise);
 
 bool inspector_is_url_like(const char *path);
 char *inspector_make_script_url(const char *path);
 
-inspector_script_t *inspector_script_for_id(int id);
 inspector_script_t *inspector_script_for_url(const char *url);
 inspector_script_t *inspector_entry_script(void);
 
 void inspector_send_registered_scripts(inspector_client_t *client);
-bool inspector_append_call_location(ant_t *js, sbuf_t *b);
 void inspector_compile_script(inspector_client_t *client, int id, yyjson_val *params);
 void inspector_run_script(inspector_client_t *client, int id, yyjson_val *params);
 void inspector_get_script_source(inspector_client_t *client, int id, yyjson_val *params);
