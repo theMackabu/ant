@@ -56,6 +56,7 @@ typedef struct {
   bool local_time;
 } date_set_field_spec_t;
 
+__attribute__((cold)) 
 void init_date_module(ant_t *js);
 
 double date_timeclip(double t);

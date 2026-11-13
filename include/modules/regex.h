@@ -23,6 +23,7 @@ typedef struct {
   ant_object_t *ctor_ptr;
 } ant_regexp_realm_t;
 
+__attribute__((cold)) 
 void init_regex_module(ant_t *js);
 void cleanup_regex_module(ant_t *js);
 void gc_age_regex_cache(ant_t *js, bool minor);

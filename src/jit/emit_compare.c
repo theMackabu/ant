@@ -2,6 +2,8 @@
 #include "cfunc.h"
 #include "silver/feedback.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 static void jit_emit_compare_bit(jit_compile_t *c, MIR_insn_code_t cmp, MIR_reg_t l, MIR_reg_t r, MIR_reg_t rd) {
   char name[32];
   snprintf(name, sizeof(name), "cmp_bit_%d", mir_next_reg_site(&c->reg_site_n));
@@ -1062,3 +1064,5 @@ void jit_emit_compare(jit_compile_t *c) {
       __builtin_unreachable();
   }
 }
+
+#pragma clang attribute pop

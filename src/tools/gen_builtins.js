@@ -1,9 +1,9 @@
 import * as esbuild from 'esbuild';
 import path from 'node:path';
 
-import { readFileSync, writeFileSync } from 'node:fs';
-import { deflateRawSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { brotliCompressSync, constants as zlibConstants } from 'node:zlib';
 
 function toSpecifier(rootDir, filePath) {
   const relativePath = path.relative(rootDir, filePath).replaceAll('\\', '/');
@@ -206,9 +206,17 @@ function generateBuiltinHeader(rootDir, bundles) {
   lines.push('');
 
   const stored = bundles.map(bundle => {
-    const deflated = deflateRawSync(bundle.bytes, { level: 9 });
-    return deflated.length < bundle.bytes.length
-      ? { bytes: deflated, rawLen: bundle.bytes.length }
+    const lgwin = Math.min(24, Math.max(10, Math.ceil(Math.log2(bundle.bytes.length + 1))));
+    const compressed = brotliCompressSync(bundle.bytes, {
+      params: {
+        [zlibConstants.BROTLI_PARAM_MODE]: zlibConstants.BROTLI_MODE_TEXT,
+        [zlibConstants.BROTLI_PARAM_QUALITY]: zlibConstants.BROTLI_MAX_QUALITY,
+        [zlibConstants.BROTLI_PARAM_LGWIN]: lgwin,
+        [zlibConstants.BROTLI_PARAM_SIZE_HINT]: bundle.bytes.length,
+      },
+    });
+    return compressed.length < bundle.bytes.length
+      ? { bytes: compressed, rawLen: bundle.bytes.length }
       : { bytes: bundle.bytes, rawLen: bundle.bytes.length };
   });
 
@@ -221,7 +229,7 @@ function generateBuiltinHeader(rootDir, bundles) {
     }
 
     const how = bytes.length < stored[index].rawLen
-      ? `deflate-raw ${stored[index].rawLen} -> ${bytes.length}`
+      ? `brotli ${stored[index].rawLen} -> ${bytes.length}`
       : `stored ${bytes.length}`;
     
     lines.push(`/* ${bundle.specifier} <- ${path.relative(rootDir, bundle.entryPath).replaceAll('\\', '/')} (${how}) */`);
@@ -327,7 +335,7 @@ async function main() {
   console.log(`  builtin modules: ${bundles.length}`);
   console.log(`  builtin size: ${totalBundledBytes} bytes`);
   console.log(
-    `  builtin stored: ${builtinResult.storedBytes} bytes deflated` +
+    `  builtin stored: ${builtinResult.storedBytes} bytes brotli` +
     ` (${(100 * (1 - builtinResult.storedBytes / totalBundledBytes)).toFixed(1)}% smaller,` +
     ` ${builtinResult.compressedCount}/${bundles.length} modules compressed)`
   );

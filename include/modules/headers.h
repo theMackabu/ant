@@ -16,6 +16,7 @@ size_t headers_data_find_literal(
   const char **first_value
 );
 
+__attribute__((cold)) 
 void init_headers_module(ant_t *js);
 void headers_data_destroy(headers_data_t *data);
 void headers_set_immutable(ant_value_t hdrs, bool immutable);

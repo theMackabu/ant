@@ -15,6 +15,7 @@ void Ant_Destroy(ant_t *);
 // clean up after a thread
 void ant_thread_cleanup(void);
 
+__attribute__((cold)) 
 void init_intrinsic_symbols(ant_t *js);
 void js_init_function_has_instance(ant_t *js);
 bool js_realm_init_intrinsics(ant_t *js);

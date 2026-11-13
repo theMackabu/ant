@@ -36,6 +36,7 @@ static inline uint32_t iter_state_index(uint32_t state) {
   return state & ITER_STATE_INDEX_MASK;
 }
 
+__attribute__((cold)) 
 void init_iterator_module(ant_t *js);
 void cleanup_iterator_module(ant_t *js);
 void js_iter_close(ant_t *js, iterator_t *it);

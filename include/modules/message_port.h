@@ -11,6 +11,7 @@ typedef void (*ant_port_message_fn)(
   ant_value_t ports
 );
 
+__attribute__((cold)) 
 void init_message_port_module(ant_t *js);
 void cleanup_message_port_module(ant_t *js);
 void ant_port_end_release(ant_port_end_t *end);

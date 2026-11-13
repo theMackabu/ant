@@ -27,9 +27,10 @@ typedef struct {
   int active_refed_timer_count;
 } ant_timer_state_t;
 
-ant_value_t timers_library(ant_t *js);
-ant_value_t timers_promises_library(ant_t *js);
+__attribute__((cold)) ant_value_t timers_library(ant_t *js);
+__attribute__((cold)) ant_value_t timers_promises_library(ant_t *js);
 
+__attribute__((cold)) 
 void init_timer_module(ant_t *js);
 void cleanup_timer_module(ant_t *js);
 void process_immediates(ant_t *js);

@@ -2,6 +2,7 @@
 
 #include "types.h"
 
+__attribute__((cold)) 
 ant_value_t ffi_library(ant_t *js);
 
 ant_value_t ffi_library_close(ant_params_t);

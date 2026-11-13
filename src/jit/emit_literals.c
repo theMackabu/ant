@@ -1,6 +1,8 @@
 #include "compile.h"
 #include "protectors.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 void jit_emit_literals(jit_compile_t *c) {
   switch (c->op) {
     case OP_CONST_I8: {
@@ -269,3 +271,5 @@ void jit_emit_literals(jit_compile_t *c) {
       __builtin_unreachable();
   }
 }
+
+#pragma clang attribute pop

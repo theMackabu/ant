@@ -20,6 +20,7 @@
 #include "modules/promise.h"
 #include "modules/regex.h"
 #include "silver/glue.h"
+#define SV_OPS_IMPLEMENTATION
 #include "ops/literals.h"
 #include "ops/stack.h"
 #include "ops/locals.h"
@@ -43,6 +44,7 @@
 #include "ops/using.h"
 #include "ops/objects.h"
 #include "ops/coercion.h"
+#undef SV_OPS_IMPLEMENTATION
 
 #ifdef ANT_WASM_EMBED
 #include "wasm_embed.h"

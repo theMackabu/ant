@@ -157,6 +157,7 @@ static constexpr uint32_t WEAKREF_NATIVE_TAG = Ant_NativeTag("WREF");
 static constexpr uint32_t MAP_ITER_NATIVE_TAG = Ant_NativeTag("MITR");
 static constexpr uint32_t SET_ITER_NATIVE_TAG = Ant_NativeTag("SITR");
 
+__attribute__((cold)) 
 void init_collections_module(ant_t *js);
 void weakmap_table_free(weakmap_table_t *table);
 void weakmap_table_finish_prune(weakmap_table_t *table);

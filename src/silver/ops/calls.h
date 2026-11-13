@@ -371,76 +371,7 @@ static inline __attribute__((noinline)) ant_value_t sv_op_super_apply(sv_vm_t *v
   return result;
 }
 
-static inline __attribute__((noinline)) ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
-  uint16_t argc = sv_get_u16(ip + 1);
-  int base = vm->sp - argc - 2;
-  
-  ant_value_t func = vm->stack[base];
-  ant_value_t new_target = vm->stack[base + 1];
-  ant_value_t effective_new_target = new_target;
-  sv_call_args_t call;
-
-  ant_value_t status = sv_stack_call_args(vm, js, &call, base + 2, argc, false);
-  if (is_err(status)) { 
-    vm->sp = base; 
-    return status; 
-  }
-
-  if (vtype(func) == kTypeObject && is_proxy(func)) {
-    ant_value_t result = js_proxy_construct(js, func, call.args, call.argc, new_target);
-    sv_call_args_release(&call);
-    vm->sp = base;
-    
-    if (is_err(result)) return result;
-    vm->stack[vm->sp++] = result;
-    
-    return result;
-  }
-  
-  if (!js_is_constructor(func)) {
-    sv_call_args_release(&call);
-    vm->sp = base;
-    return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
-  }
-
-  ant_value_t proto = Ant_Value_Undefined;
-  if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
-    proto = sv_prepare_construct_meta(js, func, new_target, &effective_new_target);
-    
-    if (is_err(proto)) {
-      sv_call_args_release(&call);
-      vm->sp = base;
-      return proto;
-    }
-  }
-
-  ant_value_t obj = Ant_Value_Undefined;
-  GC_ROOT_SAVE(root_mark, js);
-  GC_ROOT_PIN(js, proto);
-  GC_ROOT_PIN(js, obj);
-  
-  obj = js_mkobj_with_proto_slots(
-    js, is_object_type(proto) ? proto : 
-    Ant_Value_Undefined, sv_construct_slots_of(func)
-  );
-  
-  ant_value_t ctor_this = obj;
-  ant_value_t result = sv_vm_call(vm, js, func, obj, call.args, call.argc, &ctor_this, effective_new_target);
-  
-  GC_ROOT_RESTORE(js, root_mark);
-  sv_call_args_release(&call);
-  
-  vm->sp = base;
-  if (is_err(result)) return result;
-  
-  ant_value_t final_obj = 
-    is_object_type(result) ? result : 
-    (is_object_type(ctor_this) ? ctor_this : obj);
-
-  vm->stack[vm->sp++] = final_obj;
-
-  return result;
-}
+__attribute__((noinline)) ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip);
 
 __attribute__((noinline)) 
 static inline ant_value_t sv_eval_in_frame(
@@ -684,3 +615,78 @@ static inline ant_value_t sv_op_call_call_slot_ptr(
   
   return sv_vm_call(vm, js, r, Ant_Value_Undefined, &arg2, 1, NULL, Ant_Value_Undefined);
 }
+
+#ifdef SV_OPS_IMPLEMENTATION
+
+ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+  uint16_t argc = sv_get_u16(ip + 1);
+  int base = vm->sp - argc - 2;
+  
+  ant_value_t func = vm->stack[base];
+  ant_value_t new_target = vm->stack[base + 1];
+  ant_value_t effective_new_target = new_target;
+  sv_call_args_t call;
+
+  ant_value_t status = sv_stack_call_args(vm, js, &call, base + 2, argc, false);
+  if (is_err(status)) { 
+    vm->sp = base; 
+    return status; 
+  }
+
+  if (vtype(func) == kTypeObject && is_proxy(func)) {
+    ant_value_t result = js_proxy_construct(js, func, call.args, call.argc, new_target);
+    sv_call_args_release(&call);
+    vm->sp = base;
+    
+    if (is_err(result)) return result;
+    vm->stack[vm->sp++] = result;
+    
+    return result;
+  }
+  
+  if (!js_is_constructor(func)) {
+    sv_call_args_release(&call);
+    vm->sp = base;
+    return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
+  }
+
+  ant_value_t proto = Ant_Value_Undefined;
+  if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
+    proto = sv_prepare_construct_meta(js, func, new_target, &effective_new_target);
+    
+    if (is_err(proto)) {
+      sv_call_args_release(&call);
+      vm->sp = base;
+      return proto;
+    }
+  }
+
+  ant_value_t obj = Ant_Value_Undefined;
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, proto);
+  GC_ROOT_PIN(js, obj);
+  
+  obj = js_mkobj_with_proto_slots(
+    js, is_object_type(proto) ? proto : 
+    Ant_Value_Undefined, sv_construct_slots_of(func)
+  );
+  
+  ant_value_t ctor_this = obj;
+  ant_value_t result = sv_vm_call(vm, js, func, obj, call.args, call.argc, &ctor_this, effective_new_target);
+  
+  GC_ROOT_RESTORE(js, root_mark);
+  sv_call_args_release(&call);
+  
+  vm->sp = base;
+  if (is_err(result)) return result;
+  
+  ant_value_t final_obj = 
+    is_object_type(result) ? result : 
+    (is_object_type(ctor_this) ? ctor_this : obj);
+
+  vm->stack[vm->sp++] = final_obj;
+
+  return result;
+}
+
+#endif

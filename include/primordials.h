@@ -10,5 +10,6 @@ typedef enum {
   ANT_PRIMORDIAL_COUNT
 } ant_primordial_id_t;
 
-ant_value_t ant_capture_primordials(ant_t *js);
+__attribute__((cold)) 
 ant_value_t primordial_library(ant_t *js);
+ant_value_t ant_capture_primordials(ant_t *js);

@@ -10,9 +10,7 @@
 #include "modules/math.h"
 
 static inline ant_value_t sv_add_to_primitive(ant_t *js, ant_value_t value) {
-  return is_object_type(value) 
-    ? js_to_primitive(js, value, 0) 
-    : value;
+  return is_object_type(value) ? js_to_primitive(js, value, 0) : value;
 }
 
 static inline ant_value_t sv_op_add_bigints(
@@ -148,10 +146,11 @@ static inline ant_value_t sv_op_arith(sv_vm_t *vm, ant_t *js, sv_op_t op) {
     ant_value_t r = vm->stack[vm->sp - 1];                            \
     ant_value_t l = vm->stack[vm->sp - 2];                            \
     if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) {         \
-      double a = Ant_Value_AsNumberUnchecked(l), b = Ant_Value_AsNumberUnchecked(r);                                  \
+      double a = Ant_Value_AsNumberUnchecked(l),                      \
+      b = Ant_Value_AsNumberUnchecked(r);                             \
       vm->sp -= 2;                                                    \
-      vm->stack[vm->sp++] = Ant_Value_FromNumber(expr);                                \
-      return Ant_Value_FromNumber(0);                                                  \
+      vm->stack[vm->sp++] = Ant_Value_FromNumber(expr);               \
+      return Ant_Value_FromNumber(0);                                 \
     }                                                                 \
     return sv_op_arith(vm, js, op);                                   \
   }
@@ -183,80 +182,14 @@ static inline ant_value_t sv_op_uplus(sv_vm_t *vm, ant_t *js) {
   return Ant_Value_FromNumber(0);
 }
 
-static __attribute__((noinline)) ant_value_t sv_op_post_update_slow(sv_vm_t *vm, ant_t *js, bool increment) {
-  ant_value_t old = vm->stack[vm->sp - 1];
-  if (is_object_type(old) || vtype(old) == kTypeBuiltin) {
-    old = js_to_primitive(js, old, 2);
-    if (is_err(old)) return old;
-  }
-  
-  if (vtype(old) == kTypeSymbol)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a number");
-  
-  ant_value_t next;
-  if (vtype(old) == kTypeBigInt) {
-    vm->stack[vm->sp - 1] = old;
-    ant_value_t step = bigint_from_int64(js, increment ? 1 : -1);
-    if (is_err(step)) return step;
-    
-    GC_ROOT_SAVE(mark, js);
-    GC_ROOT_PIN(js, step);
-    next = bigint_add(js, old, step);
-    
-    GC_ROOT_RESTORE(js, mark);
-    if (is_err(next)) return next;
-  } else {
-    double number = js_to_number(js, old);
-    old = Ant_Value_FromNumber(number);
-    next = Ant_Value_FromNumber(increment ? number + 1.0 : number - 1.0);
-  }
-  
-  vm->stack[vm->sp - 1] = old;
-  vm->stack[vm->sp++] = next;
-  
-  return Ant_Value_Undefined;
-}
+__attribute__((noinline)) ant_value_t sv_op_post_update_slow(sv_vm_t *vm, ant_t *js, bool increment);
+__attribute__((noinline)) ant_value_t sv_op_update_local_slow(ant_value_t *slot, ant_t *js, bool increment);
 
 static inline __attribute__((always_inline)) ant_value_t sv_op_post_update(sv_vm_t *vm, ant_t *js, bool increment) {
   ant_value_t old = vm->stack[vm->sp - 1];
   if (vtype(old) != kTypeNumber) return sv_op_post_update_slow(vm, js, increment);
   double number = Ant_Value_AsNumberUnchecked(old);
   vm->stack[vm->sp++] = Ant_Value_FromNumber(increment ? number + 1.0 : number - 1.0);
-  return Ant_Value_Undefined;
-}
-
-static __attribute__((noinline)) ant_value_t sv_op_update_local_slow(ant_value_t *slot, ant_t *js, bool increment) {
-  ant_value_t old = *slot;
-  if (is_object_type(old) || vtype(old) == kTypeBuiltin) {
-    old = js_to_primitive(js, old, 2);
-    if (is_err(old)) return old;
-  }
-  
-  if (vtype(old) == kTypeSymbol)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a number");
-  
-  if (vtype(old) != kTypeBigInt) {
-    double number = js_to_number(js, old);
-    *slot = Ant_Value_FromNumber(increment ? number + 1.0 : number - 1.0);
-    return Ant_Value_Undefined;
-  }
-  
-  GC_ROOT_SAVE(mark, js);
-  GC_ROOT_PIN(js, old);
-  
-  ant_value_t step = bigint_from_int64(js, increment ? 1 : -1);
-  if (is_err(step)) {
-    GC_ROOT_RESTORE(js, mark);
-    return step;
-  }
-  
-  GC_ROOT_PIN(js, step);
-  ant_value_t next = bigint_add(js, old, step);
-  
-  GC_ROOT_RESTORE(js, mark);
-  if (is_err(next)) return next;
-  *slot = next;
-  
   return Ant_Value_Undefined;
 }
 
@@ -309,3 +242,76 @@ static inline ant_value_t sv_op_add_local(sv_vm_t *vm, ant_value_t *lp, ant_t *j
   
   return Ant_Value_FromNumber(0);
 }
+
+#ifdef SV_OPS_IMPLEMENTATION
+
+ant_value_t sv_op_post_update_slow(sv_vm_t *vm, ant_t *js, bool increment) {
+  ant_value_t old = vm->stack[vm->sp - 1];
+  if (is_object_type(old) || vtype(old) == kTypeBuiltin) {
+    old = js_to_primitive(js, old, 2);
+    if (is_err(old)) return old;
+  }
+  
+  if (vtype(old) == kTypeSymbol)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a number");
+  
+  ant_value_t next;
+  if (vtype(old) == kTypeBigInt) {
+    vm->stack[vm->sp - 1] = old;
+    ant_value_t step = bigint_from_int64(js, increment ? 1 : -1);
+    if (is_err(step)) return step;
+    
+    GC_ROOT_SAVE(mark, js);
+    GC_ROOT_PIN(js, step);
+    next = bigint_add(js, old, step);
+    
+    GC_ROOT_RESTORE(js, mark);
+    if (is_err(next)) return next;
+  } else {
+    double number = js_to_number(js, old);
+    old = Ant_Value_FromNumber(number);
+    next = Ant_Value_FromNumber(increment ? number + 1.0 : number - 1.0);
+  }
+  
+  vm->stack[vm->sp - 1] = old;
+  vm->stack[vm->sp++] = next;
+  
+  return Ant_Value_Undefined;
+}
+
+ant_value_t sv_op_update_local_slow(ant_value_t *slot, ant_t *js, bool increment) {
+  ant_value_t old = *slot;
+  if (is_object_type(old) || vtype(old) == kTypeBuiltin) {
+    old = js_to_primitive(js, old, 2);
+    if (is_err(old)) return old;
+  }
+  
+  if (vtype(old) == kTypeSymbol)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a number");
+  
+  if (vtype(old) != kTypeBigInt) {
+    double number = js_to_number(js, old);
+    *slot = Ant_Value_FromNumber(increment ? number + 1.0 : number - 1.0);
+    return Ant_Value_Undefined;
+  }
+  
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, old);
+  
+  ant_value_t step = bigint_from_int64(js, increment ? 1 : -1);
+  if (is_err(step)) {
+    GC_ROOT_RESTORE(js, mark);
+    return step;
+  }
+  
+  GC_ROOT_PIN(js, step);
+  ant_value_t next = bigint_add(js, old, step);
+  
+  GC_ROOT_RESTORE(js, mark);
+  if (is_err(next)) return next;
+  *slot = next;
+  
+  return Ant_Value_Undefined;
+}
+
+#endif

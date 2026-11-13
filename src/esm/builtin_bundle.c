@@ -1,7 +1,7 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
-#include <zlib.h>
+#include <brotli/decode.h>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -11,6 +11,7 @@
 #endif
 
 #include "esm/builtin_bundle.h"
+#include "streams/brotli.h"
 #include "builtin_bundle_data.h"
 
 constexpr size_t BUNDLE_MODULE_SLOTS =
@@ -31,21 +32,10 @@ static void bundle_lock_release(void) { pthread_mutex_unlock(&bundle_inflate_loc
 #endif
 
 static bool inflate_builtin_module(const ant_builtin_bundle_module_t *src, uint8_t *out) {
-  z_stream zs;
-  memset(&zs, 0, sizeof(zs));
-  if (inflateInit2(&zs, -15) != Z_OK) return false;
-
-  zs.next_in = (Bytef *)src->code;
-  zs.avail_in = (uInt)src->code_len;
-  zs.next_out = out;
-  zs.avail_out = (uInt)src->raw_len;
-
-  int rc = inflate(&zs, Z_FINISH);
-  bool ok = rc == Z_STREAM_END && zs.total_out == src->raw_len;
-  
-  inflateEnd(&zs);
-
-  return ok;
+  brotli_decoder_tables_init();
+  size_t out_len = src->raw_len;
+  BrotliDecoderResult rc = BrotliDecoderDecompress(src->code_len, src->code, &out_len, out);
+  return rc == BROTLI_DECODER_RESULT_SUCCESS && out_len == src->raw_len;
 }
 
 bool esm_has_builtin_scheme(const char *specifier) {

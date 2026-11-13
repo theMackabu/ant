@@ -2,8 +2,8 @@
 
 #include "silver/engine.h"
 
-ant_value_t assert_library(ant_t *js);
-ant_value_t assert_strict_library(ant_t *js);
+__attribute__((cold)) ant_value_t assert_library(ant_t *js);
+__attribute__((cold)) ant_value_t assert_strict_library(ant_t *js);
 
 static inline bool promise_was_rejected(ant_value_t result) {
   if (vtype(result) != kTypePromise) return false;

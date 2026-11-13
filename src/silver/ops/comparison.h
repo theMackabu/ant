@@ -181,62 +181,9 @@ static inline bool sv_rel_from_bigint_cmp(int cmp, bool left_is_bigint, sv_rel_o
   return false;
 }
 
-static inline ant_value_t sv_push_bigint_relational(
+ant_value_t sv_push_bigint_relational(
   sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r, sv_rel_op_t op
-) {
-  uint8_t lt = vtype(l), rty = vtype(r);
-  int cmp = 0;
-  bool result = false;
-
-  if (lt == kTypeBigInt && rty == kTypeBigInt) {
-    cmp = bigint_compare(js, l, r);
-    result = sv_rel_from_bigint_cmp(cmp, true, op);
-  } 
-  
-  else if ((lt == kTypeBigInt && rty == kTypeNumber) || (lt == kTypeNumber && rty == kTypeBigInt)) {
-    bool left_is_bigint = lt == kTypeBigInt;
-    bool ordered = false;
-    
-    ant_value_t status = left_is_bigint
-      ? sv_bigint_compare_number(js, l, Ant_Value_AsNumberUnchecked(r), &ordered, &cmp)
-      : sv_bigint_compare_number(js, r, Ant_Value_AsNumberUnchecked(l), &ordered, &cmp);
-    
-    if (is_err(status)) { vm->sp -= 2; return status; }
-    result = ordered && sv_rel_from_bigint_cmp(cmp, left_is_bigint, op);
-  } 
-  
-  else if ((lt == kTypeBigInt && rty == kTypeString) || (lt == kTypeString && rty == kTypeBigInt)) {
-    bool left_is_bigint = lt == kTypeBigInt;
-    ant_value_t other_bigint = bigint_from_string_literal(js, left_is_bigint ? r : l);
-    if (is_err(other_bigint)) { vm->sp -= 2; return other_bigint; }
-    
-    if (vtype(other_bigint) == kTypeBigInt) {
-      cmp = left_is_bigint
-        ? bigint_compare(js, l, other_bigint)
-        : bigint_compare(js, r, other_bigint);
-      result = sv_rel_from_bigint_cmp(cmp, left_is_bigint, op);
-    }
-  }
-  
-  else if (lt == kTypeBigInt || rty == kTypeBigInt) {
-    bool left_is_bigint = lt == kTypeBigInt;
-    ant_value_t other = left_is_bigint ? r : l;
-    if (vtype(other) == kTypeSymbol) {
-      vm->sp -= 2;
-      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a number");
-    }
-    
-    bool ordered = false;
-    ant_value_t status = sv_bigint_compare_number(js, left_is_bigint ? l : r, js_to_number(js, other), &ordered, &cmp);
-    if (is_err(status)) { vm->sp -= 2; return status; }
-    result = ordered && sv_rel_from_bigint_cmp(cmp, left_is_bigint, op);
-  }
-
-  vm->sp -= 2;
-  vm->stack[vm->sp++] = mkval(kTypeBool, result);
-  
-  return Ant_Value_FromNumber(0);
-}
+);
 
 static inline ant_value_t sv_op_lt(sv_vm_t *vm, ant_t *js) {
   if (!sv_coerce_relational(js, &vm->stack[vm->sp - 2], &vm->stack[vm->sp - 1])) {
@@ -431,48 +378,9 @@ static inline sv_ic_entry_t *sv_isproto_ic_slot(sv_func_t *func, uint8_t *ip) {
   return &func->ic_slots[ic_idx];
 }
 
-static inline __attribute__((noinline)) ant_value_t sv_instanceof_ic_miss(
+__attribute__((noinline)) ant_value_t sv_instanceof_ic_miss(
   ant_t *js, ant_value_t l, ant_value_t r, sv_ic_entry_t *ic
-) {
-  ant_object_t *lhs_ptr = NULL;
-  ant_value_t lhs_proto = Ant_Value_Undefined;
-  ant_object_t *lhs_proto_ptr = NULL;
-  
-  bool lhs_cacheable = sv_instanceof_lhs_cache_key(l, &lhs_ptr, &lhs_proto, &lhs_proto_ptr);
-  bool primitive = !is_object_type(l) && vtype(l) != kTypeBuiltin;
-  
-  ant_value_t ctor_proto = Ant_Value_Undefined;
-  bool rhs_cacheable = ic && (lhs_cacheable || primitive) && sv_instanceof_rhs_ordinary_proto(js, r, &ctor_proto);
-  if (rhs_cacheable && lhs_cacheable && !sv_instanceof_chain_has_no_proxy(lhs_proto)) rhs_cacheable = false;
-  
-  if (rhs_cacheable && primitive) {
-    ic->cached_shape = NULL;
-    ic->cached_holder = NULL;
-    ic->cached_index = 0;
-    ic->epoch = js->ic.epoch;
-    ic->cached_aux = (uintptr_t)vdata(r);
-    ic->guard.comparison.receiver_proto = ctor_proto;
-    ic->guard.comparison.object_epoch = js->ic.obj_epoch;
-    ic->prototype_epoch = js->prototype_write_epoch;
-    return Ant_Value_False;
-  }
-  
-  ant_value_t res = rhs_cacheable ? Ant_Value_FromBool(js_instance_of_proto(js, l, ctor_proto)) : do_instanceof(js, l, r);
-  if (!rhs_cacheable) lhs_cacheable = sv_instanceof_lhs_cache_key(l, &lhs_ptr, &lhs_proto, &lhs_proto_ptr);
-
-  if (!is_err(res) && rhs_cacheable && lhs_cacheable && vtype(res) == kTypeBool) {
-    ic->cached_shape = lhs_ptr->shape;
-    ic->cached_holder = lhs_proto_ptr;
-    ic->cached_index = (uint32_t)(vdata(res) ? 1u : 0u);
-    ic->epoch = js->ic.epoch;
-    ic->cached_aux = (uintptr_t)vdata(r);
-    ic->guard.comparison.receiver_proto = ctor_proto;
-    ic->guard.comparison.object_epoch = js->ic.obj_epoch;
-    ic->prototype_epoch = js->prototype_write_epoch;
-  }
-
-  return res;
-}
+);
 
 static inline ant_value_t sv_instanceof_ic_eval(
   ant_t *js, ant_value_t l, ant_value_t r,
@@ -581,3 +489,107 @@ static inline void sv_op_is_undef_or_null(sv_vm_t *vm) {
   uint8_t t = vtype(v);
   vm->stack[vm->sp++] = mkval(kTypeBool, t == kTypeNull || t == kTypeUndefined);
 }
+
+#ifdef SV_OPS_IMPLEMENTATION
+
+ant_value_t sv_push_bigint_relational(
+  sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r, sv_rel_op_t op
+) {
+  uint8_t lt = vtype(l), rty = vtype(r);
+  int cmp = 0;
+  bool result = false;
+
+  if (lt == kTypeBigInt && rty == kTypeBigInt) {
+    cmp = bigint_compare(js, l, r);
+    result = sv_rel_from_bigint_cmp(cmp, true, op);
+  } 
+  
+  else if ((lt == kTypeBigInt && rty == kTypeNumber) || (lt == kTypeNumber && rty == kTypeBigInt)) {
+    bool left_is_bigint = lt == kTypeBigInt;
+    bool ordered = false;
+    
+    ant_value_t status = left_is_bigint
+      ? sv_bigint_compare_number(js, l, Ant_Value_AsNumberUnchecked(r), &ordered, &cmp)
+      : sv_bigint_compare_number(js, r, Ant_Value_AsNumberUnchecked(l), &ordered, &cmp);
+    
+    if (is_err(status)) { vm->sp -= 2; return status; }
+    result = ordered && sv_rel_from_bigint_cmp(cmp, left_is_bigint, op);
+  } 
+  
+  else if ((lt == kTypeBigInt && rty == kTypeString) || (lt == kTypeString && rty == kTypeBigInt)) {
+    bool left_is_bigint = lt == kTypeBigInt;
+    ant_value_t other_bigint = bigint_from_string_literal(js, left_is_bigint ? r : l);
+    if (is_err(other_bigint)) { vm->sp -= 2; return other_bigint; }
+    
+    if (vtype(other_bigint) == kTypeBigInt) {
+      cmp = left_is_bigint
+        ? bigint_compare(js, l, other_bigint)
+        : bigint_compare(js, r, other_bigint);
+      result = sv_rel_from_bigint_cmp(cmp, left_is_bigint, op);
+    }
+  }
+  
+  else if (lt == kTypeBigInt || rty == kTypeBigInt) {
+    bool left_is_bigint = lt == kTypeBigInt;
+    ant_value_t other = left_is_bigint ? r : l;
+    if (vtype(other) == kTypeSymbol) {
+      vm->sp -= 2;
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a number");
+    }
+    
+    bool ordered = false;
+    ant_value_t status = sv_bigint_compare_number(js, left_is_bigint ? l : r, js_to_number(js, other), &ordered, &cmp);
+    if (is_err(status)) { vm->sp -= 2; return status; }
+    result = ordered && sv_rel_from_bigint_cmp(cmp, left_is_bigint, op);
+  }
+
+  vm->sp -= 2;
+  vm->stack[vm->sp++] = mkval(kTypeBool, result);
+  
+  return Ant_Value_FromNumber(0);
+}
+
+ant_value_t sv_instanceof_ic_miss(
+  ant_t *js, ant_value_t l, ant_value_t r, sv_ic_entry_t *ic
+) {
+  ant_object_t *lhs_ptr = NULL;
+  ant_value_t lhs_proto = Ant_Value_Undefined;
+  ant_object_t *lhs_proto_ptr = NULL;
+  
+  bool lhs_cacheable = sv_instanceof_lhs_cache_key(l, &lhs_ptr, &lhs_proto, &lhs_proto_ptr);
+  bool primitive = !is_object_type(l) && vtype(l) != kTypeBuiltin;
+  
+  ant_value_t ctor_proto = Ant_Value_Undefined;
+  bool rhs_cacheable = ic && (lhs_cacheable || primitive) && sv_instanceof_rhs_ordinary_proto(js, r, &ctor_proto);
+  if (rhs_cacheable && lhs_cacheable && !sv_instanceof_chain_has_no_proxy(lhs_proto)) rhs_cacheable = false;
+  
+  if (rhs_cacheable && primitive) {
+    ic->cached_shape = NULL;
+    ic->cached_holder = NULL;
+    ic->cached_index = 0;
+    ic->epoch = js->ic.epoch;
+    ic->cached_aux = (uintptr_t)vdata(r);
+    ic->guard.comparison.receiver_proto = ctor_proto;
+    ic->guard.comparison.object_epoch = js->ic.obj_epoch;
+    ic->prototype_epoch = js->prototype_write_epoch;
+    return Ant_Value_False;
+  }
+  
+  ant_value_t res = rhs_cacheable ? Ant_Value_FromBool(js_instance_of_proto(js, l, ctor_proto)) : do_instanceof(js, l, r);
+  if (!rhs_cacheable) lhs_cacheable = sv_instanceof_lhs_cache_key(l, &lhs_ptr, &lhs_proto, &lhs_proto_ptr);
+
+  if (!is_err(res) && rhs_cacheable && lhs_cacheable && vtype(res) == kTypeBool) {
+    ic->cached_shape = lhs_ptr->shape;
+    ic->cached_holder = lhs_proto_ptr;
+    ic->cached_index = (uint32_t)(vdata(res) ? 1u : 0u);
+    ic->epoch = js->ic.epoch;
+    ic->cached_aux = (uintptr_t)vdata(r);
+    ic->guard.comparison.receiver_proto = ctor_proto;
+    ic->guard.comparison.object_epoch = js->ic.obj_epoch;
+    ic->prototype_epoch = js->prototype_write_epoch;
+  }
+
+  return res;
+}
+
+#endif

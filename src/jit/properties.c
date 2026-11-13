@@ -3,6 +3,8 @@
 #include "protectors.h"
 #include "../silver/ops/globals.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 static MIR_reg_t mir_new_ic_reg(
     MIR_context_t ctx, MIR_item_t fn, const char *prefix, const char *suffix,
     int bc_off, int ic_idx) {
@@ -1592,3 +1594,5 @@ bool mir_emit_get_global_ic_fastpath(
 
   return true;
 }
+
+#pragma clang attribute pop

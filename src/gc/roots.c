@@ -26,6 +26,11 @@ bool gc_push_root(ant_t *js, ant_value_t *slot) {
   return true;
 }
 
+__attribute__((noinline, cold)) _Noreturn void gc_root_pin_failed(void) {
+  assert(false && "gc_push_root failed");
+  abort();
+}
+
 bool gc_pin_permanent(ant_t *js, ant_value_t value) {
   if (!js || !is_tagged(value)) return false;
 

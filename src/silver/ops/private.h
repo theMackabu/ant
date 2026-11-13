@@ -132,45 +132,10 @@ static inline ant_value_t sv_private_entry_set(
   return Ant_Value_Undefined;
 }
 
-static inline ant_private_entry_t *sv_private_make_entry(
+ant_private_entry_t *sv_private_make_entry(
   ant_t *js, ant_value_t obj, ant_value_t token,
   int kind, ant_value_t value, ant_value_t getter, ant_value_t setter
-) {
-  ant_private_table_t *table = sv_private_table_for_obj(obj, true);
-  if (!table) return NULL;
-  
-  if (table->cap == 0 || ((table->count + 1) * 4 >= table->cap * 3)) {
-    if (!sv_private_table_grow(table)) return NULL;
-  }
-
-  bool found = false;
-  uint32_t hash = sv_private_hash_token(token);
-  uint32_t slot = sv_private_find_slot(table, token, hash, &found);
-  ant_private_entry_t *entry = &table->entries[slot];
-  
-  if (!found) {
-    *entry = (ant_private_entry_t){
-      .token = token,
-      .value = value,
-      .getter = getter,
-      .setter = setter,
-      .hash = hash,
-      .kind = (uint8_t)kind,
-      .occupied = 1
-    };
-    table->count++;
-  }
-
-  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-  if (ptr) {
-    gc_write_barrier(js, ptr, token);
-    gc_write_barrier(js, ptr, value);
-    gc_write_barrier(js, ptr, getter);
-    gc_write_barrier(js, ptr, setter);
-  }
-
-  return entry;
-}
+);
 
 static inline ant_value_t sv_private_missing(ant_t *js) {
   return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot access private member on object whose class did not declare it");
@@ -327,3 +292,47 @@ static inline ant_value_t sv_op_has_private(sv_vm_t *vm, ant_t *js) {
   
   return Ant_Value_Undefined;
 }
+
+#ifdef SV_OPS_IMPLEMENTATION
+
+ant_private_entry_t *sv_private_make_entry(
+  ant_t *js, ant_value_t obj, ant_value_t token,
+  int kind, ant_value_t value, ant_value_t getter, ant_value_t setter
+) {
+  ant_private_table_t *table = sv_private_table_for_obj(obj, true);
+  if (!table) return NULL;
+  
+  if (table->cap == 0 || ((table->count + 1) * 4 >= table->cap * 3)) {
+    if (!sv_private_table_grow(table)) return NULL;
+  }
+
+  bool found = false;
+  uint32_t hash = sv_private_hash_token(token);
+  uint32_t slot = sv_private_find_slot(table, token, hash, &found);
+  ant_private_entry_t *entry = &table->entries[slot];
+  
+  if (!found) {
+    *entry = (ant_private_entry_t){
+      .token = token,
+      .value = value,
+      .getter = getter,
+      .setter = setter,
+      .hash = hash,
+      .kind = (uint8_t)kind,
+      .occupied = 1
+    };
+    table->count++;
+  }
+
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+  if (ptr) {
+    gc_write_barrier(js, ptr, token);
+    gc_write_barrier(js, ptr, value);
+    gc_write_barrier(js, ptr, getter);
+    gc_write_barrier(js, ptr, setter);
+  }
+
+  return entry;
+}
+
+#endif

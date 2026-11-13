@@ -28,6 +28,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 static constexpr uint64_t OPT_OBJECT_TAG = (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeObject;
 static constexpr uint64_t OPT_NULL_TAG = (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeNull;
 static constexpr uint64_t OPT_UNDEFINED_TAG = (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeUndefined;
@@ -4538,3 +4540,5 @@ opt_code_t *opt_cg_generate(ant_t *js, const ir_graph_t *graph, const ir_frame_l
   opt_arena_free(&cg.arena);
   return code;
 }
+
+#pragma clang attribute pop

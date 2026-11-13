@@ -19,6 +19,7 @@ typedef struct {
   size_t count;
 } fd_data_t;
 
+__attribute__((cold)) 
 void init_formdata_module(ant_t *js);
 bool formdata_is_formdata(ant_t *js, ant_value_t obj);
 

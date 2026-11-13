@@ -11,11 +11,11 @@ typedef struct sym_registry_entry {
 } sym_registry_entry_t;
 
 bool js_is_symbol_description_getter(ant_value_t getter);
-
-void init_symbol_module(ant_t *js);
-void init_symbol_ctor(ant_t *js);
-void init_well_known_symbols(ant_t *js);
 void js_define_species_getter(ant_t *js, ant_value_t ctor);
+
+__attribute__((cold)) void init_symbol_module(ant_t *js);
+__attribute__((cold)) void init_symbol_ctor(ant_t *js);
+__attribute__((cold)) void init_well_known_symbols(ant_t *js);
 
 ant_value_t js_return_this(ant_params_t);
 ant_value_t js_symbol_description_value(ant_t *js, ant_value_t symbol);

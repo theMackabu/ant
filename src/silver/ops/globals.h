@@ -7,45 +7,13 @@
 #include "eval_env.h"
 #include "modules/regex.h"
 
-static inline bool sv_global_try_store_own_data(
+bool sv_global_try_store_own_data(
   ant_t *js, ant_value_t obj, const char *interned, uint32_t len, ant_value_t val
-) {
-  if (!is_object_type(obj) || !interned) return false;
+);
 
-  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-  if (!ptr || ptr->flags.is_exotic || !ptr->shape) return false;
-  
-  int32_t slot = ant_shape_lookup_interned(ptr->shape, interned);
-  if (slot < 0 || (uint32_t)slot >= ptr->prop_count) return false;
-
-  const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
-
-  if (
-    !prop || prop->has_getter || prop->has_setter || 
-    (prop->attrs & ANT_PROP_ATTR_WRITABLE) == 0) return false;
-
-  regexp_note_property_write(js, interned, len);
-  ant_object_prop_set_unchecked(ptr, (uint32_t)slot, val);
-  
-  gc_write_barrier(js, ptr, val);
-  ant_property_mutation_invalidate(js, ptr, interned);
-  
-  return true;
-}
-
-static __attribute__((noinline)) ant_value_t sv_global_put_slow(
+__attribute__((noinline)) ant_value_t sv_global_put_slow(
   ant_t *js, const char *interned, uint32_t len, ant_value_t val, bool is_strict
-) {
-  bool sandboxed = sv_global_sandboxed(js);
-  bool declared = sandboxed
-    ? sv_sandbox_has(js, interned, len) || lkp_proto(js, js->global, interned, len).obj
-    : lkp_interned(js->global, interned).obj != NULL;
-  
-  if (is_strict && !declared)
-    return js_mkerr_typed(js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int)len, interned);
-  
-  return setprop_interned(js, sandboxed ? js->global_sandbox : js->global, interned, len, val);
-}
+);
 
 static inline __attribute__((always_inline)) ant_value_t sv_global_put(
   ant_t *js, const char *interned, uint32_t len, ant_value_t val, bool is_strict
@@ -208,35 +176,12 @@ static inline bool sv_global_prop_is_accessor(
   return prop && (prop->has_getter || prop->has_setter);
 }
 
-static inline bool sv_global_ic_try_fill(
+bool sv_global_ic_try_fill(
   ant_t *js, ant_value_t target,
   sv_ic_entry_t *ic,
   const char *interned,
   ant_value_t *out
-) {
-  if (!ic || !interned) return false;
-
-  ant_object_t *gptr = sv_global_obj_ptr(target);
-  if (!gptr || gptr->flags.is_exotic || !gptr->shape) return false;
-
-  int32_t slot = ant_shape_lookup_interned(gptr->shape, interned);
-  if (slot < 0) return false;
-
-  uint32_t idx = (uint32_t)slot;
-  if (idx >= gptr->prop_count) return false;
-
-  const ant_shape_prop_t *prop = ant_shape_prop_at(gptr->shape, idx);
-  if (!prop) return false;
-  if (prop->type != ANT_SHAPE_KEY_STRING || prop->key.interned != interned) return false;
-  if (prop->has_getter || prop->has_setter) return false;
-
-  ic->cached_shape = gptr->shape;
-  ic->cached_holder = gptr;
-  ic->cached_index = idx;
-  ic->epoch = js->ic.epoch;
-  *out = ant_object_prop_get_unchecked(gptr, idx);
-  return true;
-}
+);
 
 static inline bool sv_global_ic_try_fill_unshadowed(
   ant_t *js, ant_value_t target, sv_ic_entry_t *ic,
@@ -246,29 +191,9 @@ static inline bool sv_global_ic_try_fill_unshadowed(
   return sv_global_ic_try_fill(js, target, ic, interned, out);
 }
 
-static __attribute__((noinline)) ant_value_t sv_global_get_interned_miss(
+__attribute__((noinline)) ant_value_t sv_global_get_interned_miss(
   ant_t *js, const char *interned, sv_ic_entry_t *ic
-) {
-  ant_value_t out = Ant_Value_Undefined;
-  ant_value_t target = js->global;
-
-  if (sv_global_sandboxed(js)) {
-    (void)sv_sandbox_global_lookup(js, interned, (uint32_t)strlen(interned), &out);
-    return out;
-  }
-
-  ant_global_lexical_t *lex = sv_global_lexical(js, interned);
-  if (lex) return sv_global_lexical_get(js, lex);
-  if (sv_global_ic_try_fill(js, target, ic, interned, &out)) return out;
-
-  if (sv_global_prop_is_accessor(target, interned))
-    return js_getprop_fallback(js, target, interned);
-
-  ant_value_t val = lkp_interned_val(js, target, interned);
-  if (is_undefined(val)) val = js_getprop_fallback(js, target, interned);
-
-  return val;
-}
+);
 
 static inline ant_value_t sv_global_get_interned_ic(
   ant_t *js, const char *interned, sv_func_t *func, uint8_t *ip
@@ -279,28 +204,11 @@ static inline ant_value_t sv_global_get_interned_ic(
   return sv_global_get_interned_miss(js, interned, ic);
 }
 
-static inline ant_value_t sv_eval_global_get_interned_ic(
+ant_value_t sv_eval_global_get_interned_ic(
   ant_t *js, ant_value_t env,
   const char *interned, uint32_t len,
   sv_func_t *func, uint8_t *ip, bool *found
-) {
-  ant_value_t out = Ant_Value_Undefined;
-  sv_ic_entry_t *ic = sv_global_ic_slot_for_ip(func, ip);
-  ant_value_t target = env;
-
-  if (
-    sv_global_ic_try_get_hit(js, target, ic, interned, &out) || 
-    sv_global_ic_try_fill_unshadowed(js, target, ic, interned, &out)
-  ) {
-    if (found) *found = true;
-    return out;
-  }
-
-  bool resolved = sv_env_try_get_interned(js, env, interned, len, &out);
-  if (found) *found = resolved;
-
-  return out;
-}
+);
 
 static __attribute__((noinline)) ant_value_t sv_global_undefined_check(ant_t *js, sv_atom_t *a) {
   if (
@@ -396,3 +304,124 @@ static inline ant_value_t sv_op_put_eval_global(
   vm->sp--;
   return result;
 }
+
+#ifdef SV_OPS_IMPLEMENTATION
+
+bool sv_global_try_store_own_data(
+  ant_t *js, ant_value_t obj, const char *interned, uint32_t len, ant_value_t val
+) {
+  if (!is_object_type(obj) || !interned) return false;
+
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+  if (!ptr || ptr->flags.is_exotic || !ptr->shape) return false;
+  
+  int32_t slot = ant_shape_lookup_interned(ptr->shape, interned);
+  if (slot < 0 || (uint32_t)slot >= ptr->prop_count) return false;
+
+  const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
+
+  if (
+    !prop || prop->has_getter || prop->has_setter || 
+    (prop->attrs & ANT_PROP_ATTR_WRITABLE) == 0) return false;
+
+  regexp_note_property_write(js, interned, len);
+  ant_object_prop_set_unchecked(ptr, (uint32_t)slot, val);
+  
+  gc_write_barrier(js, ptr, val);
+  ant_property_mutation_invalidate(js, ptr, interned);
+  
+  return true;
+}
+
+ant_value_t sv_global_put_slow(
+  ant_t *js, const char *interned, uint32_t len, ant_value_t val, bool is_strict
+) {
+  bool sandboxed = sv_global_sandboxed(js);
+  bool declared = sandboxed
+    ? sv_sandbox_has(js, interned, len) || lkp_proto(js, js->global, interned, len).obj
+    : lkp_interned(js->global, interned).obj != NULL;
+  
+  if (is_strict && !declared)
+    return js_mkerr_typed(js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int)len, interned);
+  
+  return setprop_interned(js, sandboxed ? js->global_sandbox : js->global, interned, len, val);
+}
+
+bool sv_global_ic_try_fill(
+  ant_t *js, ant_value_t target,
+  sv_ic_entry_t *ic,
+  const char *interned,
+  ant_value_t *out
+) {
+  if (!ic || !interned) return false;
+
+  ant_object_t *gptr = sv_global_obj_ptr(target);
+  if (!gptr || gptr->flags.is_exotic || !gptr->shape) return false;
+
+  int32_t slot = ant_shape_lookup_interned(gptr->shape, interned);
+  if (slot < 0) return false;
+
+  uint32_t idx = (uint32_t)slot;
+  if (idx >= gptr->prop_count) return false;
+
+  const ant_shape_prop_t *prop = ant_shape_prop_at(gptr->shape, idx);
+  if (!prop) return false;
+  if (prop->type != ANT_SHAPE_KEY_STRING || prop->key.interned != interned) return false;
+  if (prop->has_getter || prop->has_setter) return false;
+
+  ic->cached_shape = gptr->shape;
+  ic->cached_holder = gptr;
+  ic->cached_index = idx;
+  ic->epoch = js->ic.epoch;
+  *out = ant_object_prop_get_unchecked(gptr, idx);
+  return true;
+}
+
+ant_value_t sv_global_get_interned_miss(
+  ant_t *js, const char *interned, sv_ic_entry_t *ic
+) {
+  ant_value_t out = Ant_Value_Undefined;
+  ant_value_t target = js->global;
+
+  if (sv_global_sandboxed(js)) {
+    (void)sv_sandbox_global_lookup(js, interned, (uint32_t)strlen(interned), &out);
+    return out;
+  }
+
+  ant_global_lexical_t *lex = sv_global_lexical(js, interned);
+  if (lex) return sv_global_lexical_get(js, lex);
+  if (sv_global_ic_try_fill(js, target, ic, interned, &out)) return out;
+
+  if (sv_global_prop_is_accessor(target, interned))
+    return js_getprop_fallback(js, target, interned);
+
+  ant_value_t val = lkp_interned_val(js, target, interned);
+  if (is_undefined(val)) val = js_getprop_fallback(js, target, interned);
+
+  return val;
+}
+
+ant_value_t sv_eval_global_get_interned_ic(
+  ant_t *js, ant_value_t env,
+  const char *interned, uint32_t len,
+  sv_func_t *func, uint8_t *ip, bool *found
+) {
+  ant_value_t out = Ant_Value_Undefined;
+  sv_ic_entry_t *ic = sv_global_ic_slot_for_ip(func, ip);
+  ant_value_t target = env;
+
+  if (
+    sv_global_ic_try_get_hit(js, target, ic, interned, &out) || 
+    sv_global_ic_try_fill_unshadowed(js, target, ic, interned, &out)
+  ) {
+    if (found) *found = true;
+    return out;
+  }
+
+  bool resolved = sv_env_try_get_interned(js, env, interned, len, &out);
+  if (found) *found = resolved;
+
+  return out;
+}
+
+#endif

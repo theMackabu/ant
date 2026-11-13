@@ -3,6 +3,7 @@
 #include "types.h"
 #include "gc/modules.h"
 
+__attribute__((cold)) 
 void init_cron_module(ant_t *js);
 void gc_mark_cron(ant_t *js, gc_mark_fn mark);
 void cleanup_cron_module(ant_t *js);

@@ -3,6 +3,8 @@
 #include "silver/feedback.h"
 #include "modules/buffer.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 static_assert(
   kTypeObject == 0 &&
   kTypeString == 1 &&
@@ -2052,3 +2054,5 @@ void mir_emit_strict_tagged_equality(
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
 }
+
+#pragma clang attribute pop

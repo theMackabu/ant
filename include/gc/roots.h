@@ -25,6 +25,7 @@ typedef void (*gc_root_visitor_t)(
 );
 
 size_t gc_root_scope(ant_t *js);
+_Noreturn void gc_root_pin_failed(void);
 
 bool gc_push_root(ant_t *js, ant_value_t *slot);
 bool gc_pin_permanent(ant_t *js, ant_value_t value);
@@ -41,15 +42,14 @@ void gc_temp_root_truncate(gc_temp_root_scope_t *scope, size_t mark);
 gc_temp_root_handle_t gc_temp_root_add(gc_temp_root_scope_t *scope, ant_value_t value);
 ant_value_t *gc_temp_root_slots(gc_temp_root_scope_t *scope, size_t count);
 
-#define GC_ROOT_PIN(js, slot) do {                 \
-  bool _gc_root_ok = gc_push_root((js), &(slot));  \
-  assert(_gc_root_ok && "gc_push_root failed");    \
-  (void)_gc_root_ok;                               \
-} while (0)
-
-#define GC_ROOT_SAVE(name, js)    size_t name = gc_root_scope((js))
-#define GC_ROOT_RESTORE(js, mark) gc_pop_roots((js), (mark))
+static inline void gc_root_pin(ant_t *js, ant_value_t *slot) {
+  if (__builtin_expect(!gc_push_root(js, slot), 0)) gc_root_pin_failed();
+}
 
 static inline bool gc_temp_root_handle_valid(gc_temp_root_handle_t handle) {
   return handle.scope != NULL;
 }
+
+#define GC_ROOT_PIN(js, slot)     gc_root_pin((js), &(slot))
+#define GC_ROOT_SAVE(name, js)    size_t name = gc_root_scope((js))
+#define GC_ROOT_RESTORE(js, mark) gc_pop_roots((js), (mark))

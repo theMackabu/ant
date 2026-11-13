@@ -3,6 +3,8 @@
 #include <inttypes.h>
 #include <stdio.h>
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 void ir_slot_name(const ir_frame_layout_t *layout, uint32_t slot, char *buffer, size_t size) {
   if (slot == OPT_CALLEE_SLOT) snprintf(buffer, size, "callee");
   else if (slot < layout->number_of_registers) snprintf(buffer, size, "r%u", slot);
@@ -403,3 +405,5 @@ void ir_dump(const ir_graph_t *graph, const ir_frame_layout_t *layout, opt_text_
     opt_text_append(out, "\n");
   }
 }
+
+#pragma clang attribute pop

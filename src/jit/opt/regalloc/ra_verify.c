@@ -3,6 +3,8 @@
 
 #include <stdio.h>
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 typedef enum : uint8_t {
   RA_HOLDS_NOTHING,
   RA_HOLDS_VALUE,
@@ -364,3 +366,5 @@ bool ra_verify(const ir_graph_t *graph, const opt_register_set_t *registers, con
   opt_arena_free(&arena);
   return verifier.errors == 0;
 }
+
+#pragma clang attribute pop

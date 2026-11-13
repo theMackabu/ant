@@ -14,5 +14,5 @@ int ant_format_walk(
   const ant_format_sink_t *sink, void *ctx
 );
 
-ant_value_t util_library(ant_t *js);
-ant_value_t util_types_library(ant_t *js);
+__attribute__((cold)) ant_value_t util_library(ant_t *js);
+__attribute__((cold)) ant_value_t util_types_library(ant_t *js);

@@ -67,8 +67,9 @@ else
 endif
 
 llhttp = subproject('llhttp').get_variable('llhttp_dep')
-libuv_dep = subproject('libuv').get_variable('libuv_dep')
-libuv_lib = subproject('libuv').get_variable('libuv')
+libuv_sub = subproject('libuv', default_options: ['b_ndebug=true'])
+libuv_dep = libuv_sub.get_variable('libuv_dep')
+libuv_lib = libuv_sub.get_variable('libuv')
 
 zlib_ng_sub = subproject('zlib-ng', default_options: [
   'b_lto=false',
@@ -110,7 +111,7 @@ argtable3_dep = subproject('argtable3', default_options: ['optimization=s']).get
 crprintf_dep = subproject('crprintf').get_variable('crprintf_dep')
 ada_dep = subproject('ada').get_variable('ada_dep')
 wamr_dep = subproject('wasm-micro-runtime').get_variable('wamr_dep')
-double_conversion_dep = subproject('double-conversion').get_variable('double_conversion_dep')
+double_conversion_dep = subproject('double-conversion', default_options: ['b_ndebug=true']).get_variable('double_conversion_dep')
 dragonbox_dep = subproject('dragonbox').get_variable('dragonbox_dep')
 yyjson_dep = subproject('yyjson', default_options: ['non-standard-json=disabled',]).get_variable('yyjson_dep')
 
@@ -138,6 +139,7 @@ libffi_dep = subproject('libffi', default_options: [
 cares_dep = subproject('c-ares', default_options: [
   'default_library=static',
   'optimization=s',
+  'b_ndebug=true',
   'warning_level=0',
 ]).get_variable('cares_dep')
 

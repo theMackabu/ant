@@ -11,9 +11,9 @@ typedef void (*stream_init_fn)(ant_t *js, ant_value_t obj, ant_value_t options);
 void stream_init_constructors(ant_t *js);
 void stream_begin_construct(ant_t *js, ant_value_t stream_obj);
 
-ant_value_t stream_library(ant_t *js);
-ant_value_t stream_promises_library(ant_t *js);
-ant_value_t stream_web_library(ant_t *js);
+__attribute__((cold)) ant_value_t stream_library(ant_t *js);
+__attribute__((cold)) ant_value_t stream_promises_library(ant_t *js);
+__attribute__((cold)) ant_value_t stream_web_library(ant_t *js);
 
 ant_value_t stream_readable_constructor(ant_t *js);
 ant_value_t stream_writable_constructor(ant_t *js);

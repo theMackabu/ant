@@ -1,6 +1,8 @@
 #include "jit_internal.h"
 #include "silver/feedback.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 static bool jit_inline_receiver_is_this(const sv_func_t *f, int off) {
   uint8_t marks[JIT_INLINE_MAX_BYTECODE + 1];
   int sp = 0;
@@ -2245,3 +2247,5 @@ void jit_emit_inline_body(
   if (tagging) tagging->inl.depth--;
   Ant_Assert(!reuse_empty_objects || !seen_effect, "empty object reuse requires an effect-free inline body");
 }
+
+#pragma clang attribute pop

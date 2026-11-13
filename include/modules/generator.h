@@ -4,6 +4,7 @@
 #include "modules/iterator.h"
 #include "silver/engine.h"
 
+__attribute__((cold)) 
 void init_generator_module(ant_t *js);
 void generator_mark_for_gc(ant_t *js, ant_value_t gen);
 

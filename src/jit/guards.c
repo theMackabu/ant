@@ -1,4 +1,6 @@
 #include "jit_internal.h"
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 static uint8_t jit_bailout_slot_type(jit_vstack_t *vs, int idx,
                                      int left_idx, uint8_t left_type,
                                      int right_idx, uint8_t right_type) {
@@ -476,3 +478,5 @@ void mir_emit_exit_ret(
                                 has_captures, captured_locals, n_locals, next_site);
   MIR_append_insn(ctx, fn, MIR_new_ret_insn(ctx, 1, ret_op));
 }
+
+#pragma clang attribute pop

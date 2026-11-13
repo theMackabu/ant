@@ -40,6 +40,7 @@ typedef struct {
 static constexpr uint32_t RS_STREAM_NATIVE_TAG = Ant_NativeTag("RSTR");
 static constexpr uint32_t RS_CONTROLLER_NATIVE_TAG = Ant_NativeTag("RSCT");
 
+__attribute__((cold)) 
 void init_readable_stream_module(ant_t *js);
 void gc_mark_readable_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));
 

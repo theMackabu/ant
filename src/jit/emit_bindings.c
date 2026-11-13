@@ -1,5 +1,7 @@
 #include "compile.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 static MIR_reg_t jit_upvalue_cell(jit_compile_t *c, uint16_t index, int site) {
   if (c->hoisted_upvalue_cell && index == c->hoisted_upvalue)
     return c->hoisted_upvalue_cell;
@@ -522,3 +524,5 @@ void jit_emit_bindings(jit_compile_t *c) {
       __builtin_unreachable();
   }
 }
+
+#pragma clang attribute pop

@@ -2,6 +2,8 @@
 #include "silver/feedback.h"
 #include "protectors.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 static void jit_emit_index_read_fast(
     jit_compile_t *c, MIR_reg_t obj, MIR_reg_t key, MIR_reg_t dst, sv_asm_label_t done) {
   const sv_asm_t *a = &c->as;
@@ -1095,3 +1097,5 @@ void jit_emit_properties(jit_compile_t *c) {
       __builtin_unreachable();
   }
 }
+
+#pragma clang attribute pop

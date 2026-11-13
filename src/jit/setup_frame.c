@@ -1,6 +1,8 @@
 #include "compile.h"
 #include "silver/feedback.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 static void jit_discard_setup_module(jit_compile_t *c) {
   for (int i = 0; i < c->lm.count; i++)
     MIR_append_insn(c->ctx, c->jit_func, c->lm.entries[i].label);
@@ -1541,3 +1543,5 @@ bool jit_setup_frame(jit_compile_t *c) {
 
   return true;
 }
+
+#pragma clang attribute pop

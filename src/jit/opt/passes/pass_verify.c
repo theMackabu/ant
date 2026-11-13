@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 typedef struct {
   ir_block_id_t block;
   uint32_t index;
@@ -458,3 +460,5 @@ bool pass_verify(const ir_graph_t *graph, opt_text_t *out) {
   opt_arena_free(&scratch);
   return ok;
 }
+
+#pragma clang attribute pop

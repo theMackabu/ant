@@ -2,6 +2,7 @@
 
 #include "isolate.h"
 
+__attribute__((cold)) 
 void realm_init_core(ant_t *js);
 
 typedef struct ant_realm_token {
@@ -59,6 +60,7 @@ ant_realm_t *ant_realm_create(ant_t *js);
 ant_realm_token_t *ant_realm_token_retain(ant_realm_t *realm);
 ant_realm_t *ant_realm_enter(ant_t *js, ant_realm_t *realm);
 
+__attribute__((cold)) 
 ant_value_t realm_internal_library(ant_t *js);
 ant_realm_t *ant_realm_of_builtin(ant_t *js, ant_value_t builtin);
 ant_value_t ant_realm_function_proto(ant_t *js, ant_realm_t *realm);

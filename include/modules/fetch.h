@@ -2,6 +2,7 @@
 
 #include "types.h"
 
+__attribute__((cold)) 
 void init_fetch_module(ant_t *js);
 void cleanup_fetch_module(ant_t *js);
 void fetch_start_http(fetch_request_t *req);

@@ -5,6 +5,7 @@
 
 #include "types.h"
 
+__attribute__((cold)) 
 void init_atomics_module(ant_t *js);
 void cleanup_atomics_module(ant_t *js);
 void atomics_wake_isolate(ant_t *js);

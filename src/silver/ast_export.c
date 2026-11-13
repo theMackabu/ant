@@ -11,6 +11,8 @@
 #include "silver/ast.h"
 #include "tokens.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 typedef enum {
   SYNTAX_ROLE_EXPRESSION,
   SYNTAX_ROLE_STATEMENT,
@@ -854,3 +856,5 @@ ant_value_t sv_ast_export_public(
   free(ctx.line_starts);
   return result;
 }
+
+#pragma clang attribute pop

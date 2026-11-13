@@ -5,9 +5,9 @@
 #include <stdint.h>
 #include "types.h"
 
-#define BROTLI_MAX_PARAM_ID 9
-#define BROTLI_CHUNK_SIZE (32 * 1024)
-#define ANT_BROTLI_DEFAULT_QUALITY 6
+static constexpr int BROTLI_MAX_PARAM_ID = 9;
+static constexpr size_t BROTLI_CHUNK_SIZE = 32 * 1024;
+static constexpr uint32_t ANT_BROTLI_DEFAULT_QUALITY = 6;
 
 typedef struct {
   bool set[BROTLI_MAX_PARAM_ID + 1];
@@ -22,6 +22,7 @@ brotli_stream_state_t *brotli_stream_state_new_params(
   const uint8_t *dictionary, size_t dictionary_len, int *bad_id
 );
 
+void brotli_decoder_tables_init(void);
 void brotli_stream_state_destroy(brotli_stream_state_t *st);
 brotli_stream_state_t *brotli_stream_state_new(bool decompress);
 

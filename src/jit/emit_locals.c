@@ -1,6 +1,8 @@
 #include "compile.h"
 #include "silver/feedback.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 static void jit_emit_numeric_local(jit_compile_t *c, uint8_t idx, MIR_reg_t dst) {
   MIR_label_t not_num = MIR_new_label(c->ctx);
   MIR_label_t done = MIR_new_label(c->ctx);
@@ -838,3 +840,5 @@ void jit_emit_locals(jit_compile_t *c) {
       __builtin_unreachable();
   }
 }
+
+#pragma clang attribute pop

@@ -43,6 +43,7 @@ typedef struct {
   const char *body_type;
 } response_fetched_init_t;
 
+__attribute__((cold)) 
 void init_response_module(ant_t *js);
 void response_set_websocket(ant_value_t obj, ant_value_t websocket);
 uint8_t *body_concat_uint8_chunks(ant_t *js, ant_value_t chunks, size_t *out_size, ant_value_t *err_out);

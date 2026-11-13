@@ -1,5 +1,8 @@
 #include "jit_internal.h"
 #include "protectors.h"
+
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 void mir_emit_call_stable_builtin(
     MIR_context_t ctx, MIR_item_t fn, ant_t *js,
     MIR_reg_t r_vm, MIR_reg_t r_js,
@@ -379,3 +382,5 @@ bool *scan_captured_params(sv_func_t *func) {
 
   return captured;
 }
+
+#pragma clang attribute pop

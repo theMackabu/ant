@@ -171,30 +171,10 @@ static inline bool sv_eval_env_try_get(
   return true;
 }
 
-static inline bool sv_eval_env_try_put(
+bool sv_eval_env_try_put(
   ant_t *js, ant_value_t env, const char *name, uint32_t len,
   ant_value_t value, ant_value_t *out
-) {
-  sv_eval_env_state_t *state = sv_eval_env_state(env);
-  const sv_runtime_binding_t *binding =
-    sv_eval_env_find_binding(state, name, len);
-  if (!binding) return false;
-
-  ant_value_t current;
-  if (!sv_eval_binding_load(state, binding, &current))
-    *out = js_mkerr(js, "invalid direct eval binding");
-  else if (is_empty_slot(current)) *out = js_mkerr_typed(
-    js, JS_ERR_REFERENCE,
-    "Cannot access '%.*s' before initialization", (int)len, name
-  );
-  else if (binding->is_const)
-    *out = js_mkerr_typed(js, JS_ERR_TYPE, "assignment to constant variable");
-  else if (!sv_eval_binding_store(js, state, binding, value))
-    *out = js_mkerr(js, "invalid direct eval binding");  
-  else *out = value;
-
-  return true;
-}
+);
 
 static inline bool sv_eval_env_has_binding(ant_value_t env, const char *name, uint32_t len) {
   return sv_eval_env_find_binding(sv_eval_env_state(env), name, len) != NULL;
@@ -210,32 +190,9 @@ static inline ant_value_t sv_eval_arguments(ant_t *js, sv_vm_t *vm, sv_frame_t *
   return frame->arguments_obj;
 }
 
-static inline ant_value_t sv_eval_capture_env(
+ant_value_t sv_eval_capture_env(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint32_t scope_index
-) {
-  const sv_eval_scope_t *scope = sv_func_eval_scope(frame->func, scope_index);
-  ant_value_t parent = sv_frame_eval_env(js, frame);
-  GC_ROOT_SAVE(mark, js);
-  GC_ROOT_PIN(js, parent);
-  ant_value_t env = Ant_Object_CreateBare(js);
-  if (is_err(env)) { GC_ROOT_RESTORE(js, mark); return env; }
-  GC_ROOT_PIN(js, env);
-  js_set_proto_wb(js, env, parent);
-  sv_eval_env_state_t *parent_state = sv_eval_env_state(parent);
-  if (!frame->func->is_arrow && !frame->func->is_eval &&
-      !(parent_state && parent_state->is_variable)) {
-    ant_value_t arguments = sv_eval_arguments(js, vm, frame);
-    if (is_err(arguments)) { GC_ROOT_RESTORE(js, mark); return arguments; }
-    js_set(js, env, "arguments", arguments);
-  }
-  sv_eval_env_state_t *state = sv_eval_env_state_create(vm, frame, scope);
-  if (!state || !sv_eval_env_state_attach(env, state)) {
-    free(state);
-    env = js_mkerr(js, "failed to capture eval environment");
-  }
-  GC_ROOT_RESTORE(js, mark);
-  return env;
-}
+);
 
 static inline ant_value_t sv_eval_init_variable_env(sv_vm_t *vm, ant_t *js, sv_frame_t *frame) {
   ant_value_t env = Ant_Object_CreateBare(js);
@@ -323,21 +280,9 @@ static inline __attribute__((noinline, cold)) bool sv_sandbox_has(ant_t *js, con
   return is_err(has) || js_truthy(js, has);
 }
 
-static inline __attribute__((noinline, cold)) bool sv_sandbox_global_lookup(
+__attribute__((noinline, cold)) bool sv_sandbox_global_lookup(
   ant_t *js, const char *interned, uint32_t len, ant_value_t *out
-) {
-  ant_global_lexical_t *lex = sv_global_lexical(js, interned);
-  if (lex) {
-    *out = sv_global_lexical_get(js, lex);
-    return true;
-  }
-
-  ant_value_t holder = sv_sandbox_has(js, interned, len) ? js->global_sandbox : js->global;
-  if (holder == js->global && !lkp_proto(js, holder, interned, len).obj) return false;
-  
-  *out = js_getprop_fallback(js, holder, interned);
-  return true;
-}
+);
 
 static inline ant_value_t sv_eval_declare_vars(
   ant_t *js, sv_func_t *func, ant_value_t env, bool configurable
@@ -476,3 +421,75 @@ static inline ant_value_t sv_global_declare(ant_t *js, sv_func_t *func) {
   ant_ic_epoch_bump(js);
   return Ant_Value_Undefined;
 }
+
+#ifdef SV_OPS_IMPLEMENTATION
+
+bool sv_eval_env_try_put(
+  ant_t *js, ant_value_t env, const char *name, uint32_t len,
+  ant_value_t value, ant_value_t *out
+) {
+  sv_eval_env_state_t *state = sv_eval_env_state(env);
+  const sv_runtime_binding_t *binding =
+    sv_eval_env_find_binding(state, name, len);
+  if (!binding) return false;
+
+  ant_value_t current;
+  if (!sv_eval_binding_load(state, binding, &current))
+    *out = js_mkerr(js, "invalid direct eval binding");
+  else if (is_empty_slot(current)) *out = js_mkerr_typed(
+    js, JS_ERR_REFERENCE,
+    "Cannot access '%.*s' before initialization", (int)len, name
+  );
+  else if (binding->is_const)
+    *out = js_mkerr_typed(js, JS_ERR_TYPE, "assignment to constant variable");
+  else if (!sv_eval_binding_store(js, state, binding, value))
+    *out = js_mkerr(js, "invalid direct eval binding");  
+  else *out = value;
+
+  return true;
+}
+
+ant_value_t sv_eval_capture_env(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint32_t scope_index
+) {
+  const sv_eval_scope_t *scope = sv_func_eval_scope(frame->func, scope_index);
+  ant_value_t parent = sv_frame_eval_env(js, frame);
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, parent);
+  ant_value_t env = Ant_Object_CreateBare(js);
+  if (is_err(env)) { GC_ROOT_RESTORE(js, mark); return env; }
+  GC_ROOT_PIN(js, env);
+  js_set_proto_wb(js, env, parent);
+  sv_eval_env_state_t *parent_state = sv_eval_env_state(parent);
+  if (!frame->func->is_arrow && !frame->func->is_eval &&
+      !(parent_state && parent_state->is_variable)) {
+    ant_value_t arguments = sv_eval_arguments(js, vm, frame);
+    if (is_err(arguments)) { GC_ROOT_RESTORE(js, mark); return arguments; }
+    js_set(js, env, "arguments", arguments);
+  }
+  sv_eval_env_state_t *state = sv_eval_env_state_create(vm, frame, scope);
+  if (!state || !sv_eval_env_state_attach(env, state)) {
+    free(state);
+    env = js_mkerr(js, "failed to capture eval environment");
+  }
+  GC_ROOT_RESTORE(js, mark);
+  return env;
+}
+
+__attribute__((noinline, cold)) bool sv_sandbox_global_lookup(
+  ant_t *js, const char *interned, uint32_t len, ant_value_t *out
+) {
+  ant_global_lexical_t *lex = sv_global_lexical(js, interned);
+  if (lex) {
+    *out = sv_global_lexical_get(js, lex);
+    return true;
+  }
+
+  ant_value_t holder = sv_sandbox_has(js, interned, len) ? js->global_sandbox : js->global;
+  if (holder == js->global && !lkp_proto(js, holder, interned, len).obj) return false;
+  
+  *out = js_getprop_fallback(js, holder, interned);
+  return true;
+}
+
+#endif

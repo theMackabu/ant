@@ -3,6 +3,7 @@
 #include "types.h"
 #include "gc/modules.h"
 
+__attribute__((cold)) 
 void init_abort_module(ant_t *js);
 void cleanup_abort_module(ant_t *js);
 

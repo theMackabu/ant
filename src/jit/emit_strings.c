@@ -1,5 +1,7 @@
 #include "compile.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 void jit_emit_strings(jit_compile_t *c) {
   switch (c->op) {
     case OP_STR_APPEND_LOCAL: {
@@ -411,3 +413,5 @@ void jit_emit_strings(jit_compile_t *c) {
       __builtin_unreachable();
   }
 }
+
+#pragma clang attribute pop

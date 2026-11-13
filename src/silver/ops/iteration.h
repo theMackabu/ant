@@ -69,91 +69,7 @@ static inline bool sv_is_set_iter(
   return true;
 }
 
-static inline ant_value_t sv_for_of_open(sv_vm_t *vm, ant_t *js, ant_value_t iterable, ant_value_t *out) {
-  if (vtype(iterable) == kTypeArray && js_array_iteration_default(js, iterable)) {
-    out[0] = iterable;
-    out[1] = Ant_Value_FromNumber(0);
-    out[2] = Ant_Value_FromNumber(SV_ITER_ARRAY);
-    return Ant_Value_FromNumber(0);
-  }
-
-  if (vtype(iterable) == kTypeString && ant_protector_intact(js, ANT_PROTECTOR_STRING_ITERATION)) {
-    if (str_is_heap_rope(iterable) || str_is_heap_builder(iterable)) {
-      GC_ROOT_SAVE(str_root_mark, js);
-      GC_ROOT_PIN(js, iterable);
-      iterable = str_materialize(js, iterable);
-      GC_ROOT_RESTORE(js, str_root_mark);
-      if (is_err(iterable)) return iterable;
-    }
-    out[0] = iterable;
-    out[1] = Ant_Value_FromNumber(0);
-    out[2] = Ant_Value_FromNumber(SV_ITER_STRING);
-    return Ant_Value_FromNumber(0);
-  }
-
-  GC_ROOT_SAVE(root_mark, js);
-  GC_ROOT_PIN(js, iterable);
-
-  ant_value_t iter_fn = js_get_sym(js, iterable, js->sym.iterator_sym);
-  GC_ROOT_PIN(js, iter_fn);
-  
-  if (is_err(iter_fn)) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return iter_fn;
-  }
-  
-  if (!is_callable(iter_fn)) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return js_mkerr_typed(js, JS_ERR_TYPE, "not iterable");
-  }
-
-  ant_value_t iterator = sv_vm_call(vm, js, iter_fn, iterable, NULL, 0, NULL, Ant_Value_Undefined);
-  if (is_err(iterator)) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return iterator;
-  }
-  
-  if (!is_object_type(iterator)) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Result of the Symbol.iterator method is not an object");
-  }
-
-  GC_ROOT_PIN(js, iterator);
-  map_iterator_state_t *map_st;
-  iter_type_t map_type;
-
-  if (sv_is_map_iter(js, iterator, &map_st, &map_type)) {
-    out[0] = iterator;
-    out[1] = collections_iter_slot(map_st);
-    out[2] = Ant_Value_FromNumber(SV_ITER_MAP);
-    GC_ROOT_RESTORE(js, root_mark);
-    return Ant_Value_FromNumber(0);
-  }
-
-  set_iterator_state_t *set_st;
-  iter_type_t set_type;
-  if (sv_is_set_iter(js, iterator, &set_st, &set_type)) {
-    out[0] = iterator;
-    out[1] = collections_iter_slot(set_st);
-    out[2] = Ant_Value_FromNumber(SV_ITER_SET);
-    GC_ROOT_RESTORE(js, root_mark);
-    return Ant_Value_FromNumber(0);
-  }
-
-  ant_value_t next_method = js_getprop_fallback(js, iterator, "next");
-  if (is_err(next_method)) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return next_method;
-  }
-  
-  GC_ROOT_PIN(js, next_method);
-  out[0] = iterator;
-  out[1] = next_method;
-  out[2] = Ant_Value_FromNumber(SV_ITER_GENERIC);
-  GC_ROOT_RESTORE(js, root_mark);
-
-  return Ant_Value_FromNumber(0);
-}
+ant_value_t sv_for_of_open(sv_vm_t *vm, ant_t *js, ant_value_t iterable, ant_value_t *out);
 
 static inline ant_value_t sv_op_for_of(sv_vm_t *vm, ant_t *js) {
   ant_value_t iterable = vm->stack[--vm->sp];
@@ -412,33 +328,9 @@ static inline void sv_op_iter_get_value(sv_vm_t *vm, ant_t *js) {
   vm->stack[vm->sp++] = mkval(kTypeBool, js_truthy(js, done));
 }
 
-static inline ant_value_t sv_iter_close(
+ant_value_t sv_iter_close(
   sv_vm_t *vm, ant_t *js, ant_value_t iterator, bool suppress_error
-) {
-  GC_ROOT_SAVE(root_mark, js);
-  GC_ROOT_PIN(js, iterator);
-
-  ant_value_t result = js_getprop_fallback(js, iterator, "return");
-  GC_ROOT_PIN(js, result);
-
-  if (is_err(result) || is_undefined(result) || is_null(result)) goto done;
-  if (!is_callable(result)) {
-    result = js_mkerr_typed(js, JS_ERR_TYPE, "iterator.return is not a function");
-    goto done;
-  }
-
-  result = sv_vm_call(vm, js, result, iterator, NULL, 0, NULL, Ant_Value_Undefined);
-  if (!is_err(result) && !is_object_type(result))
-    result = js_mkerr_typed(js, JS_ERR_TYPE, "iterator.return must return an object");
-
-done:
-  if (suppress_error && is_err(result)) {
-    js_take_thrown(js, result);
-    result = Ant_Value_Undefined;
-  }
-  GC_ROOT_RESTORE(js, root_mark);
-  return is_err(result) ? result : Ant_Value_Undefined;
-}
+);
 
 static inline ant_value_t sv_iter_record_iterator(ant_t *js, const ant_value_t *state) {
   int tag = vtype(state[2]) == kTypeNumber ? (int)Ant_Value_AsNumberUnchecked(state[2]) : SV_ITER_DONE;
@@ -726,3 +618,121 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
   
   return out;
 }
+
+#ifdef SV_OPS_IMPLEMENTATION
+
+ant_value_t sv_for_of_open(sv_vm_t *vm, ant_t *js, ant_value_t iterable, ant_value_t *out) {
+  if (vtype(iterable) == kTypeArray && js_array_iteration_default(js, iterable)) {
+    out[0] = iterable;
+    out[1] = Ant_Value_FromNumber(0);
+    out[2] = Ant_Value_FromNumber(SV_ITER_ARRAY);
+    return Ant_Value_FromNumber(0);
+  }
+
+  if (vtype(iterable) == kTypeString && ant_protector_intact(js, ANT_PROTECTOR_STRING_ITERATION)) {
+    if (str_is_heap_rope(iterable) || str_is_heap_builder(iterable)) {
+      GC_ROOT_SAVE(str_root_mark, js);
+      GC_ROOT_PIN(js, iterable);
+      iterable = str_materialize(js, iterable);
+      GC_ROOT_RESTORE(js, str_root_mark);
+      if (is_err(iterable)) return iterable;
+    }
+    out[0] = iterable;
+    out[1] = Ant_Value_FromNumber(0);
+    out[2] = Ant_Value_FromNumber(SV_ITER_STRING);
+    return Ant_Value_FromNumber(0);
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, iterable);
+
+  ant_value_t iter_fn = js_get_sym(js, iterable, js->sym.iterator_sym);
+  GC_ROOT_PIN(js, iter_fn);
+  
+  if (is_err(iter_fn)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return iter_fn;
+  }
+  
+  if (!is_callable(iter_fn)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return js_mkerr_typed(js, JS_ERR_TYPE, "not iterable");
+  }
+
+  ant_value_t iterator = sv_vm_call(vm, js, iter_fn, iterable, NULL, 0, NULL, Ant_Value_Undefined);
+  if (is_err(iterator)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return iterator;
+  }
+  
+  if (!is_object_type(iterator)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Result of the Symbol.iterator method is not an object");
+  }
+
+  GC_ROOT_PIN(js, iterator);
+  map_iterator_state_t *map_st;
+  iter_type_t map_type;
+
+  if (sv_is_map_iter(js, iterator, &map_st, &map_type)) {
+    out[0] = iterator;
+    out[1] = collections_iter_slot(map_st);
+    out[2] = Ant_Value_FromNumber(SV_ITER_MAP);
+    GC_ROOT_RESTORE(js, root_mark);
+    return Ant_Value_FromNumber(0);
+  }
+
+  set_iterator_state_t *set_st;
+  iter_type_t set_type;
+  if (sv_is_set_iter(js, iterator, &set_st, &set_type)) {
+    out[0] = iterator;
+    out[1] = collections_iter_slot(set_st);
+    out[2] = Ant_Value_FromNumber(SV_ITER_SET);
+    GC_ROOT_RESTORE(js, root_mark);
+    return Ant_Value_FromNumber(0);
+  }
+
+  ant_value_t next_method = js_getprop_fallback(js, iterator, "next");
+  if (is_err(next_method)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return next_method;
+  }
+  
+  GC_ROOT_PIN(js, next_method);
+  out[0] = iterator;
+  out[1] = next_method;
+  out[2] = Ant_Value_FromNumber(SV_ITER_GENERIC);
+  GC_ROOT_RESTORE(js, root_mark);
+
+  return Ant_Value_FromNumber(0);
+}
+
+ant_value_t sv_iter_close(
+  sv_vm_t *vm, ant_t *js, ant_value_t iterator, bool suppress_error
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, iterator);
+
+  ant_value_t result = js_getprop_fallback(js, iterator, "return");
+  GC_ROOT_PIN(js, result);
+
+  if (is_err(result) || is_undefined(result) || is_null(result)) goto done;
+  if (!is_callable(result)) {
+    result = js_mkerr_typed(js, JS_ERR_TYPE, "iterator.return is not a function");
+    goto done;
+  }
+
+  result = sv_vm_call(vm, js, result, iterator, NULL, 0, NULL, Ant_Value_Undefined);
+  if (!is_err(result) && !is_object_type(result))
+    result = js_mkerr_typed(js, JS_ERR_TYPE, "iterator.return must return an object");
+
+done:
+  if (suppress_error && is_err(result)) {
+    js_take_thrown(js, result);
+    result = Ant_Value_Undefined;
+  }
+  GC_ROOT_RESTORE(js, root_mark);
+  return is_err(result) ? result : Ant_Value_Undefined;
+}
+
+#endif

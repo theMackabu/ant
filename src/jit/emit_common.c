@@ -1,6 +1,8 @@
 #include "handles.h"
 #include "compile.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 void jit_emit_exit_ret(jit_compile_t *c, MIR_op_t ret_op) {
   mir_emit_exit_ret(c->ctx, c->jit_func,
                     c->close_upval_proto, c->imp_close_upval,
@@ -311,3 +313,5 @@ void jit_emit_builtin_call_fast(
     func, this_val, args, argc, result, generic, done
   );
 }
+
+#pragma clang attribute pop

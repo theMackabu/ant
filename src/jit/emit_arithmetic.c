@@ -1,6 +1,8 @@
 #include "compile.h"
 #include "silver/feedback.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 void mir_emit_mod_numbers(
     const sv_asm_t *a, int *reg_site, MIR_item_t fmod_proto, MIR_item_t imp_fmod,
     MIR_reg_t l, MIR_reg_t r, MIR_reg_t dst) {
@@ -684,3 +686,5 @@ void jit_emit_arithmetic(jit_compile_t *c) {
       __builtin_unreachable();
   }
 }
+
+#pragma clang attribute pop

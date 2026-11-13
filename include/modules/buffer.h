@@ -80,12 +80,14 @@ static constexpr uint32_t BUFFER_ARRAYBUFFER_NATIVE_TAG = Ant_NativeTag("ABUF");
 static constexpr uint32_t BUFFER_TYPEDARRAY_NATIVE_TAG  = Ant_NativeTag("TYAR");
 static constexpr uint32_t BUFFER_DATAVIEW_NATIVE_TAG    = Ant_NativeTag("DVIW");
 
+__attribute__((cold)) 
 ant_value_t buffer_library(ant_t *js);
 size_t buffer_get_external_memory(ant_t *js);
 
 buffer_ta_access_t buffer_typedarray_inline_get(ant_value_t obj, ant_value_t key, TypedArrayType *type);
 buffer_ta_access_t buffer_typedarray_inline_put(ant_value_t obj, ant_value_t key, ant_value_t value, TypedArrayType *type);
 
+__attribute__((cold)) 
 void init_buffer_module(ant_t *js);
 void cleanup_buffer_module(ant_t *js);
 void free_array_buffer_data(ant_t *js, ArrayBufferData *data);

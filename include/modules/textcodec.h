@@ -26,6 +26,7 @@ typedef struct {
 
 td_state_t *td_state_new(td_encoding_t enc, bool fatal, bool ignore_bom);
 
+__attribute__((cold)) 
 void init_textcodec_module(ant_t *js);
 void td_state_free(td_state_t *st);
 

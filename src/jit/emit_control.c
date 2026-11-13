@@ -1,5 +1,7 @@
 #include "compile.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 static void jit_emit_promote_check(jit_compile_t *c, MIR_label_t loop, int64_t every) {
   MIR_reg_t r_due = c->r_tmp2;
   MIR_append_insn(c->ctx, c->jit_func,
@@ -673,3 +675,5 @@ void jit_emit_control(jit_compile_t *c) {
       __builtin_unreachable();
   }
 }
+
+#pragma clang attribute pop

@@ -1,5 +1,8 @@
 #include "jit_internal.h"
 #include "silver/feedback.h"
+
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 void mir_emit_branch_if_string_builder(
     MIR_context_t ctx, MIR_item_t fn,
     MIR_reg_t value, MIR_reg_t scratch, MIR_label_t builder) {
@@ -738,3 +741,5 @@ void mir_emit_string_concat_fastpath(
                   MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, dst), MIR_new_reg_op(ctx, rhs)));
   MIR_append_insn(ctx, fn, done);
 }
+
+#pragma clang attribute pop

@@ -1,6 +1,8 @@
 #include "compile.h"
 #include "silver/feedback.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 static bool jit_new_func_flags(uint32_t *offset, uint16_t *mask) {
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
   sv_func_t probe;
@@ -956,3 +958,5 @@ void jit_emit_calls(jit_compile_t *c) {
       __builtin_unreachable();
   }
 }
+
+#pragma clang attribute pop

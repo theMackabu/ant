@@ -28,6 +28,7 @@ typedef struct {
   bool shared_defaults;
 } request_data_t;
 
+__attribute__((cold))
 void init_request_module(ant_t *js);
 
 request_data_t *request_get_data(ant_value_t obj);

@@ -3,6 +3,8 @@
 #include <stdarg.h>
 #include <stdlib.h>
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 typedef struct {
   char *buf;
   size_t cap;
@@ -1168,3 +1170,5 @@ void asm_listing_print(FILE *out, const asm_listing_t *listing) {
     fputc('\n', out);
   }
 }
+
+#pragma clang attribute pop

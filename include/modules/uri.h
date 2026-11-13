@@ -2,6 +2,7 @@
 
 #include "types.h"
 
+__attribute__((cold)) 
 void init_uri_module(ant_t *js);
 
 ant_value_t js_encodeURI(ant_params_t);

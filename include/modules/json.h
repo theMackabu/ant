@@ -18,6 +18,7 @@ typedef struct json_layout_cache {
   unsigned count;
 } json_layout_cache_t;
 
+__attribute__((cold)) 
 void init_json_module(ant_t *js);
 void json_layout_cache_clear(ant_t *js);
 

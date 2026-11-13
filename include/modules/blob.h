@@ -20,6 +20,7 @@ typedef struct {
   blob_storage_t *storage;
 } blob_data_t;
 
+__attribute__((cold)) 
 void init_blob_module(ant_t *js);
 bool blob_is_blob(ant_t *js, ant_value_t obj);
 

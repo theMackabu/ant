@@ -2,6 +2,7 @@
 
 #include "types.h"
 
+__attribute__((cold)) 
 void init_bigint_module(ant_t *js);
 
 ant_value_t bigint_add(ant_t *js, ant_value_t a, ant_value_t b);

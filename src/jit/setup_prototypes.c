@@ -1,6 +1,8 @@
 #include "compile.h"
 #include "../silver/ops/globals.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->self_proto = MIR_new_proto(c->ctx, "jit_proto",
                                 1, &ret_type,
@@ -850,3 +852,5 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_tier_up = MIR_new_import(c->ctx, "jit_helper_tier_up");
   c->imp_normalize_this = MIR_new_import(c->ctx, "jit_helper_normalize_sloppy_this");
 }
+
+#pragma clang attribute pop

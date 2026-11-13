@@ -38,6 +38,7 @@ double ant_math_max(double a, double b);
 double ant_math_min(double a, double b);
 double ant_math_js_pow(double base, double exponent);
 
+__attribute__((cold)) 
 void init_math_module(ant_t *js);
 int ant_math_double_of(ant_value_t func);
 

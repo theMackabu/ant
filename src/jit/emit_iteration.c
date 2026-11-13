@@ -1,6 +1,8 @@
 #include "compile.h"
 #include "../silver/ops/iteration.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 static void jit_emit_dense_array_next(jit_compile_t *c, MIR_label_t done) {
   int hint = sv_get_u8(c->ip + 1);
   if (hint && hint != SV_ITER_ARRAY) return;
@@ -241,3 +243,5 @@ void jit_emit_iteration(jit_compile_t *c) {
       __builtin_unreachable();
   }
 }
+
+#pragma clang attribute pop

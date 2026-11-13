@@ -1,6 +1,8 @@
 #include "compile.h"
 #include "silver/feedback.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 static void jit_emit_forward_arguments_call(jit_compile_t *c, bool is_tail) {
   (void)vstack_pop(&c->vs);
   MIR_reg_t receiver = vstack_pop(&c->vs);
@@ -882,3 +884,5 @@ void jit_emit_methods(jit_compile_t *c) {
       __builtin_unreachable();
   }
 }
+
+#pragma clang attribute pop

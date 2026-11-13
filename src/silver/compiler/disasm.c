@@ -1,5 +1,7 @@
 #include "compiler_internal.h"
 
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+
 void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
   const char *fname = func->debug->name ? func->debug->name : "";
 
@@ -185,3 +187,5 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
     sv_disasm(js, child, child_label);
   }}
 }
+
+#pragma clang attribute pop

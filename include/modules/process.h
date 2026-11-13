@@ -6,9 +6,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
-ant_value_t process_library(ant_t *js);
+__attribute__((cold)) ant_value_t process_library(ant_t *js);
+__attribute__((cold)) void init_process_module(ant_t *js);
 
-void init_process_module(ant_t *js);
 void cleanup_process_module(ant_t *js);
 void free_process_module(ant_t *js);
 void process_set_private_env(ant_t *js, char **entries);

@@ -185,7 +185,42 @@ static inline ant_value_t sv_op_copy_data_props(sv_vm_t *vm, ant_t *js, uint8_t 
   return result;
 }
 
-static inline ant_value_t sv_spread_into(sv_vm_t *vm, ant_t *js, ant_value_t arr, ant_value_t iterable) {
+ant_value_t sv_spread_into(sv_vm_t *vm, ant_t *js, ant_value_t arr, ant_value_t iterable);
+
+static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
+  if (vm->sp < 2) return js_mkerr(js, "invalid spread state");
+  ant_value_t status = sv_spread_into(vm, js, vm->stack[vm->sp - 2], vm->stack[vm->sp - 1]);
+  vm->sp--;
+  return status;
+}
+
+ant_value_t sv_op_define_class(
+  sv_vm_t *vm, ant_t *js,
+  sv_func_t *func, uint8_t *ip
+);
+
+static inline ant_value_t sv_op_define_class_comp(
+  sv_vm_t *vm, ant_t *js,
+  sv_func_t *func, uint8_t *ip
+) {
+  ant_value_t name = vm->stack[vm->sp - 1];
+  vm->sp--;
+  
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, name);
+  
+  ant_value_t result = sv_op_define_class(vm, js, func, ip);
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  if (is_err(result)) return result;
+  vm->stack[vm->sp++] = name;
+  
+  return result;
+}
+
+#ifdef SV_OPS_IMPLEMENTATION
+
+ant_value_t sv_spread_into(sv_vm_t *vm, ant_t *js, ant_value_t arr, ant_value_t iterable) {
   if (vtype(arr) != kTypeArray) return js_mkerr(js, "spread target is not an array");
 
   if (vtype(iterable) == kTypeArray && js_array_iteration_default(js, iterable)) {
@@ -215,14 +250,7 @@ static inline ant_value_t sv_spread_into(sv_vm_t *vm, ant_t *js, ant_value_t arr
   return is_err(status) ? status : Ant_Value_FromNumber(0);
 }
 
-static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
-  if (vm->sp < 2) return js_mkerr(js, "invalid spread state");
-  ant_value_t status = sv_spread_into(vm, js, vm->stack[vm->sp - 2], vm->stack[vm->sp - 1]);
-  vm->sp--;
-  return status;
-}
-
-static inline ant_value_t sv_op_define_class(
+ant_value_t sv_op_define_class(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
 ) {
@@ -321,21 +349,4 @@ static inline ant_value_t sv_op_define_class(
   return Ant_Value_Undefined;
 }
 
-static inline ant_value_t sv_op_define_class_comp(
-  sv_vm_t *vm, ant_t *js,
-  sv_func_t *func, uint8_t *ip
-) {
-  ant_value_t name = vm->stack[vm->sp - 1];
-  vm->sp--;
-  
-  GC_ROOT_SAVE(root_mark, js);
-  GC_ROOT_PIN(js, name);
-  
-  ant_value_t result = sv_op_define_class(vm, js, func, ip);
-  GC_ROOT_RESTORE(js, root_mark);
-  
-  if (is_err(result)) return result;
-  vm->stack[vm->sp++] = name;
-  
-  return result;
-}
+#endif

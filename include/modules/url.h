@@ -16,6 +16,7 @@ typedef struct {
   char *storage;
 } url_state_t;
 
+__attribute__((cold)) 
 void init_url_module(ant_t *js);
 void url_state_clear(url_state_t *s);
 void url_free_state(url_state_t *s);
@@ -24,6 +25,7 @@ bool usp_is_urlsearchparams(ant_t *js, ant_value_t obj);
 size_t form_urlencode_into(char *out, const char *str, size_t len);
 size_t form_urldecode_into(char *out, const char *str, size_t len);
 
+__attribute__((cold)) 
 ant_value_t internal_url_library(ant_t *js);
 url_state_t *url_get_state(ant_value_t obj);
 ant_value_t make_url_obj(ant_t *js, url_state_t *s);

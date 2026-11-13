@@ -6,7 +6,6 @@
 #include <brotli/decode.h>
 #include <brotli/shared_dictionary.h>
 
-#include "ant.h"
 #include "errors.h"
 #include "internal.h"
 #include "modules/buffer.h"
@@ -18,6 +17,10 @@ void BrotliDecoderLazyStaticInitInner(void);
 
 static uv_once_t brotli_encoder_tables = UV_ONCE_INIT;
 static uv_once_t brotli_decoder_tables = UV_ONCE_INIT;
+
+void brotli_decoder_tables_init(void) {
+  uv_once(&brotli_decoder_tables, BrotliDecoderLazyStaticInitInner);
+}
 
 struct brotli_stream_state {
   bool decompress;
@@ -151,7 +154,7 @@ brotli_stream_state_t *brotli_stream_state_new_params(
   if (!st) return NULL;
 
   st->decompress = decompress;
-  if (decompress) uv_once(&brotli_decoder_tables, BrotliDecoderLazyStaticInitInner);
+  if (decompress) brotli_decoder_tables_init();
   else uv_once(&brotli_encoder_tables, BrotliEncoderLazyStaticInitInner);
   
   void *instance = decompress
