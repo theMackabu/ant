@@ -600,7 +600,7 @@ void inspector_eval(inspector_client_t *client, int id, yyjson_val *params) {
 
   if (inspector_param_bool(params, "throwOnSideEffect")) {
     ant_value_t safe_result = Ant_Value_Undefined;
-    if (inspector_eval_safe_expr(client->js, expr, expr_len, &safe_result)) {
+    if (Ant_Eval_WithoutSideEffects(client->js, expr, expr_len, &safe_result)) {
       inspector_send_eval_completion(client, id, safe_result, await_promise);
     } else inspector_send_side_effect_blocked(client, id);
     return;

@@ -361,24 +361,27 @@ static ant_value_t raise_created_error(ant_t *js, ant_value_t value) {
   return Ant_Exception_Raise(js, value, Ant_Value_Undefined);
 }
 
-__attribute__((format(printf, 4, 5)))
-ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props, const char *fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
+__attribute__((format(printf, 4, 5))) ant_value_t js_create_error(
+  ant_t *js, js_err_type_t err_type, ant_value_t props, const char *fmt, ...
+) {
+  if (__builtin_expect(js->quiet_errors, 0)) return js_throw(js, mkval(kTypeError, 0));
+  
+  va_list ap; va_start(ap, fmt);
   ant_value_t value = CreateFormattedErrorValue(js, NULL, err_type, props, fmt, ap);
   va_end(ap);
+  
   return raise_created_error(js, value);
 }
 
-__attribute__((format(printf, 5, 6)))
-ant_value_t js_create_error_at(
-  ant_t *js, const js_error_site_t *site, js_err_type_t err_type,
-  ant_value_t props, const char *fmt, ...
+__attribute__((format(printf, 5, 6))) ant_value_t js_create_error_at(
+  ant_t *js, const js_error_site_t *site, js_err_type_t err_type, ant_value_t props, const char *fmt, ...
 ) {
-  va_list ap;
-  va_start(ap, fmt);
+  if (__builtin_expect(js->quiet_errors, 0)) return js_throw(js, mkval(kTypeError, 0));
+  
+  va_list ap; va_start(ap, fmt);
   ant_value_t value = CreateFormattedErrorValue(js, site, err_type, props, fmt, ap);
   va_end(ap);
+  
   return raise_created_error(js, value);
 }
 

@@ -257,6 +257,7 @@ struct ant_isolate_t {
   bool interrupts_armed;
   bool uncloneable_marked;
   bool terminating;
+  bool quiet_errors;
   vm_interrupt_t *interrupt_run;
   
   ant_value_t length_str;

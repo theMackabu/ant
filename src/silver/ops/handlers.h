@@ -380,12 +380,12 @@ L_GET_SUPER: {
 }
 
 L_GET_SUPER_VAL: {
-  sv_op_get_super_val(vm, js, frame);
+  VM_CHECK(sv_op_get_super_val(vm, js, frame));
   NEXT(OP_GET_SUPER_VAL);
 }
 
 L_PUT_SUPER_VAL: {
-  sv_op_put_super_val(vm, js);
+  VM_CHECK(sv_op_put_super_val(vm, js));
   NEXT(OP_PUT_SUPER_VAL);
 }
 
@@ -1851,7 +1851,7 @@ L_DEFINE_METHOD: {
 }
 
 L_DEFINE_METHOD_COMP: {
-  sv_op_define_method_comp(vm, js, ip);
+  VM_CHECK(sv_op_define_method_comp(vm, js, ip));
   NEXT(OP_DEFINE_METHOD_COMP);
 }
 

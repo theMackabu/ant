@@ -4,7 +4,6 @@
 
 #include "inspector.h"
 #include "internal.h"
-#include "../inspector/bind.h"
 
 static bool repl_preview_ident_char(char c, bool first) {
   unsigned char uc = (unsigned char)c;
@@ -314,7 +313,7 @@ static bool repl_preview_member_complete(
     return false;
 
   ant_value_t obj = Ant_Value_Undefined;
-  if (!inspector_eval_safe_expr(js, line, dot, &obj)) return false;
+  if (!Ant_Eval_WithoutSideEffects(js, line, dot, &obj)) return false;
 
   repl_member_matches_collect(js, obj, &m);
   if (!m.match || m.exact) return false;
@@ -375,7 +374,7 @@ bool repl_preview_compute(
   }
 
   ant_value_t value = Ant_Value_Undefined;
-  if (inspector_eval_safe_expr(js, preview_expr, preview_expr_len, &value))
+  if (Ant_Eval_WithoutSideEffects(js, preview_expr, preview_expr_len, &value))
     repl_preview_format_value(js, value, preview_out, preview_len);
 
   return suffix_out[0] != '\0' || preview_out[0] != '\0';

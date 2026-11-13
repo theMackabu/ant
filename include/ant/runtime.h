@@ -35,6 +35,7 @@ ant_value_t js_eval_bytecode(ant_t *, const char *, size_t);
 ant_value_t js_eval_bytecode_module(ant_t *, const char *, size_t);
 ant_value_t js_eval_bytecode_eval(ant_t *, const char *, size_t, bool strict);
 js_eval_result_t js_eval_bytecode_repl(ant_t *, const char *, size_t);
+bool Ant_Eval_WithoutSideEffects(ant_t *js, const char *expr, size_t len, ant_value_t *out);
 
 bool js_chkargs(ant_value_t *, int, const char *);
 void js_stats(ant_t *, size_t *total, size_t *min, size_t *cstacksize);

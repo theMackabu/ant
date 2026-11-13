@@ -7,7 +7,7 @@ static inline void sv_op_get_super(sv_vm_t *vm, ant_t *js) {
   vm->stack[vm->sp - 1] = js_get_proto(js, obj);
 }
 
-static inline void sv_op_get_super_val(sv_vm_t *vm, ant_t *js, sv_frame_t *frame) {
+static inline ant_value_t sv_op_get_super_val(sv_vm_t *vm, ant_t *js, sv_frame_t *frame) {
   ant_value_t prop = vm->stack[vm->sp - 1];
   ant_value_t obj = vm->stack[vm->sp - 2];
   ant_value_t receiver = vm->stack[vm->sp - 3];
@@ -28,10 +28,11 @@ static inline void sv_op_get_super_val(sv_vm_t *vm, ant_t *js, sv_frame_t *frame
     ant_value_t res = js_get_sym_with_receiver(js, proto, prop, receiver);
     vm->sp -= 3;
     vm->stack[vm->sp++] = res;
-    return;
+    return res;
   }
   
   ant_value_t key_str = coerce_to_str(js, prop);
+  if (is_err(key_str)) return key_str;
   vm->stack[vm->sp - 1] = key_str;
   
   ant_offset_t klen;
@@ -42,15 +43,21 @@ static inline void sv_op_get_super_val(sv_vm_t *vm, ant_t *js, sv_frame_t *frame
   
   vm->sp -= 3;
   vm->stack[vm->sp++] = res;
+  
+  return res;
 }
 
-static inline void sv_op_put_super_val(sv_vm_t *vm, ant_t *js) {
+static inline ant_value_t sv_op_put_super_val(sv_vm_t *vm, ant_t *js) {
   ant_value_t val = vm->stack[vm->sp - 1];
   ant_value_t prop = vm->stack[vm->sp - 2];
   ant_value_t this = vm->stack[vm->sp - 4];
+  
   ant_value_t key_str = coerce_to_str(js, prop);
+  if (is_err(key_str)) return key_str;
   
   vm->stack[vm->sp - 2] = key_str;
-  js_setprop(js, this, key_str, val);
+  ant_value_t res = js_setprop(js, this, key_str, val);
   vm->sp -= 4;
+  
+  return res;
 }

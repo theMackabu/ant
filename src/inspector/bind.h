@@ -120,17 +120,16 @@ bool inspector_param_bool(yyjson_val *params, const char *name);
 double inspector_timestamp_seconds(void);
 double inspector_wall_time_seconds(void);
 
+void inspector_clear_console_events(void);
+void inspector_clear_pending_awaits(void);
+void inspector_cancel_client_awaits(uint64_t client_id);
+void inspector_replay_console_events(inspector_client_t *client);
 void inspector_send_execution_context(inspector_client_t *client);
 void inspector_eval(inspector_client_t *client, int id, yyjson_val *params);
+void inspector_await_promise(inspector_client_t *client, int id, yyjson_val *params);
 void inspector_get_heap_usage(inspector_client_t *client, int id, yyjson_val *params);
 void inspector_get_properties(inspector_client_t *client, int id, yyjson_val *params);
 void inspector_global_lexical_scope_names(inspector_client_t *client, int id, yyjson_val *params);
-void inspector_clear_console_events(void);
-void inspector_replay_console_events(inspector_client_t *client);
-void inspector_await_promise(inspector_client_t *client, int id, yyjson_val *params);
-void inspector_cancel_client_awaits(uint64_t client_id);
-void inspector_clear_pending_awaits(void);
-bool inspector_eval_safe_expr(ant_t *js, const char *expr, size_t expr_len, ant_value_t *out);
 void inspector_send_eval_completion(inspector_client_t *client, int id, ant_value_t result, bool await_promise);
 
 bool inspector_is_url_like(const char *path);

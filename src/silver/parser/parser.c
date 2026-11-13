@@ -158,6 +158,20 @@ sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, sv_parse_goal
   return program;
 }
 
+sv_ast_t *sv_parse_expression(ant_t *js, const char *code, ant_offset_t clen) {
+  sv_parser_t parser = { .js = js, .goal = SV_PARSE_SCRIPT };
+  sv_parser_t *p = &parser;
+  sv_lexer_init(&p->lx, js, code, clen, false);
+
+  sv_ast_t *program = mk(N_PROGRAM);
+  sv_ast_t *expr = parse_expr(p);
+  if (!expr || Ant_Exception_Pending(js) || sv_lexer_next(&p->lx) != TOK_EOF) return NULL;
+
+  sv_ast_list_push(js, &program->args, expr);
+  program->flags |= scope_facts_eval_yield(&program->args, NULL);
+  return program;
+}
+
 sv_ast_t *sv_parse_function_body(ant_t *js, const char *code, ant_offset_t clen, bool strict) {
   return parse_program(js, code, clen, SV_PARSE_SCRIPT, strict, NULL, true);
 }

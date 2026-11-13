@@ -544,6 +544,78 @@ ant_value_t js_vm_script_run(ant_t *js, ant_value_t compiled) {
   return js_execute_compiled_repl_bytecode(js, (sv_func_t *)vptr(compiled), NULL);
 }
 
+enum {
+  EVAL_OP_BLOCKED = 0,
+  EVAL_OP_PLAIN,
+  EVAL_OP_FORWARD_JUMP,
+  EVAL_OP_FORWARD_JUMP8,
+};
+
+static const uint8_t eval_op_kind[OP__COUNT] = {
+#define SIDE_EFFECT_FREE_OP(name, kind) [OP_##name] = EVAL_OP_##kind,
+#include "silver/side_effect_free_ops.h"
+};
+
+static bool Eval_BytecodeIsSideEffectFree(const sv_func_t *func) {
+  for (int off = 0; off < func->code_len;) {
+    const uint8_t *ip = func->code + off;
+    int size = sv_op_size[*ip];
+    if (size == 0 || off + size > func->code_len) return false;
+
+    switch (eval_op_kind[*ip]) {
+      case EVAL_OP_PLAIN: break;
+      case EVAL_OP_FORWARD_JUMP: if (sv_get_i32(ip + 1) < 0) return false; break;
+      case EVAL_OP_FORWARD_JUMP8: if (sv_get_i8(ip + 1) < 0) return false; break;
+      default: return false;
+    }
+    
+    off += size;
+  }
+  
+  return true;
+}
+
+bool Ant_Eval_WithoutSideEffects(ant_t *js, const char *expr, size_t len, ant_value_t *out) {
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t saved_exception = Ant_Exception_Peek(js);
+
+  GC_ROOT_PIN(js, saved_exception);
+  Ant_Exception_Clear(js);
+  js->quiet_errors = true;
+
+  code_arena_mark_t parse_mark = parse_arena_mark(js);
+  sv_ast_t *program = sv_parse_expression(js, expr, (ant_offset_t)len);
+  
+  sv_func_t *func = program
+    ? js_compile_parsed_bytecode(js, program, expr, len, SV_COMPILE_REPL, Ant_Value_Undefined)
+    : NULL;
+
+  parse_arena_rewind(js, parse_mark);
+  bool ok = false;
+
+  if (func) {
+    if (!func->is_tla && Eval_BytecodeIsSideEffectFree(func)) {
+      ant_value_t compiled = mkref(kTypeFunctionInfo, func);
+      GC_ROOT_PIN(js, compiled);
+
+      void *floor = js->cstk.floor;
+      js->cstk.floor = (void *)UINTPTR_MAX;
+      ant_value_t result = sv_execute_entry(js->vm, func, js->global_this, NULL, 0);
+      js->cstk.floor = floor;
+
+      ok = !is_err(result) && !Ant_Exception_Pending(js);
+      if (ok) *out = result;
+    }
+    sv_code_unit_unpin(func->unit);
+  }
+
+  js->quiet_errors = false;
+  Ant_Exception_Set(js, saved_exception);
+  GC_ROOT_RESTORE(js, mark);
+
+  return ok;
+}
+
 ant_value_t js_function_from_source(ant_t *js, ant_value_t *params_and_body, int nargs) {
   return build_dynamic_function(js, params_and_body, nargs, Ant_Value_Undefined, false, false);
 }

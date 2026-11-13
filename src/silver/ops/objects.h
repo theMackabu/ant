@@ -56,7 +56,7 @@ static inline void sv_op_define_method(
   vm->sp--;
 }
 
-static inline void sv_define_method_comp(
+static inline ant_value_t sv_define_method_comp(
   ant_t *js, uint8_t flags,
   ant_value_t obj, ant_value_t *key_slot, ant_value_t fn
 ) {
@@ -78,26 +78,29 @@ static inline void sv_define_method_comp(
     const char *prefix = is_getter ? "get " : is_setter ? "set " : "";
     size_t prefix_len = is_getter || is_setter ? 4 : 0;
     ant_value_t named = js_maybe_set_function_name_from_key(js, fn, key, prefix, prefix_len);
-    if (is_err(named)) return;
+    if (is_err(named)) return named;
   }
   
   if (vtype(key) == kTypeSymbol) {
-    if (is_getter) { js_set_sym_getter_desc(js, desc_obj, key, fn, accessor_desc); return; }
-    if (is_setter) { js_set_sym_setter_desc(js, desc_obj, key, fn, accessor_desc); return; }
-    mkprop(js, obj, key, fn, data_attrs);
-    return;
+    if (is_getter) js_set_sym_getter_desc(js, desc_obj, key, fn, accessor_desc);
+    else if (is_setter) js_set_sym_setter_desc(js, desc_obj, key, fn, accessor_desc);
+    else mkprop(js, obj, key, fn, data_attrs);
+    return Ant_Value_Undefined;
   }
   
   ant_value_t key_str = sv_key_to_propstr(js, key);
-  if (!is_err(key_str)) *key_slot = key_str;
+  if (is_err(key_str)) return key_str;
+  *key_slot = key_str;
   
   if ((is_getter || is_setter) && vtype(key_str) == kTypeString) {
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
     const char *kptr = (const char *)(uintptr_t)(koff);
+    
     if (is_getter) js_set_getter_desc(js, desc_obj, kptr, klen, fn, accessor_desc);
     else js_set_setter_desc(js, desc_obj, kptr, klen, fn, accessor_desc);
-    return;
+    
+    return Ant_Value_Undefined;
   }
   
   if (vtype(key_str) == kTypeString) {
@@ -106,16 +109,17 @@ static inline void sv_define_method_comp(
     const char *kptr = (const char *)(uintptr_t)(koff);
     mkprop(js, obj, js_mkstr(js, kptr, (size_t)klen), fn, data_attrs);
   } else mkprop(js, obj, key_str, fn, data_attrs);
+  
+  return Ant_Value_Undefined;
 }
 
-static inline void sv_op_define_method_comp(
-  sv_vm_t *vm, ant_t *js, uint8_t *ip
-) {
-  sv_define_method_comp(
+static inline ant_value_t sv_op_define_method_comp(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+  ant_value_t result = sv_define_method_comp(
     js, sv_get_u8(ip + 1),
     vm->stack[vm->sp - 3], &vm->stack[vm->sp - 2], vm->stack[vm->sp - 1]
   );
   vm->sp -= 2;
+  return result;
 }
 
 static inline void sv_set_name(
