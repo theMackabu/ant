@@ -4,6 +4,10 @@ import { channel } from 'node:diagnostics_channel';
 
 const { Database, Statement, Session, internals } = binding;
 
+const MAX_LIMIT = 0x7fffffff;
+const COLUMN_TYPES = ['INTEGER', 'TEXT', 'REAL', 'BLOB', 'ANY'];
+const EXPECTED = { string: 'a string', boolean: 'a boolean', function: 'a function', object: 'an object' };
+
 const LIMIT_NAMES = [
   'length',
   'sqlLength',
@@ -18,174 +22,222 @@ const LIMIT_NAMES = [
   'triggerDepth'
 ];
 
-const COLUMN_TYPES = new Set(['INTEGER', 'TEXT', 'REAL', 'BLOB', 'ANY']);
-const MAX_LIMIT = 0x7fffffff;
-const constructToken = Symbol('sqlite.construct');
+const AUTHORIZER_ACTIONS = [
+  'COPY',
+  'CREATE_INDEX',
+  'CREATE_TABLE',
+  'CREATE_TEMP_INDEX',
+  'CREATE_TEMP_TABLE',
+  'CREATE_TEMP_TRIGGER',
+  'CREATE_TEMP_VIEW',
+  'CREATE_TRIGGER',
+  'CREATE_VIEW',
+  'DELETE',
+  'DROP_INDEX',
+  'DROP_TABLE',
+  'DROP_TEMP_INDEX',
+  'DROP_TEMP_TABLE',
+  'DROP_TEMP_TRIGGER',
+  'DROP_TEMP_VIEW',
+  'DROP_TRIGGER',
+  'DROP_VIEW',
+  'INSERT',
+  'PRAGMA',
+  'READ',
+  'SELECT',
+  'TRANSACTION',
+  'UPDATE',
+  'ATTACH',
+  'DETACH',
+  'ALTER_TABLE',
+  'REINDEX',
+  'ANALYZE',
+  'CREATE_VTABLE',
+  'DROP_VTABLE',
+  'FUNCTION',
+  'SAVEPOINT',
+  'RECURSIVE'
+];
 
-function codedError(Ctor, code, message) {
-  const error = new Ctor(message);
+const constants = {
+  SQLITE_CHANGESET_OMIT: 0,
+  SQLITE_CHANGESET_REPLACE: 1,
+  SQLITE_CHANGESET_ABORT: 2,
+  SQLITE_CHANGESET_DATA: 1,
+  SQLITE_CHANGESET_NOTFOUND: 2,
+  SQLITE_CHANGESET_CONFLICT: 3,
+  SQLITE_CHANGESET_CONSTRAINT: 4,
+  SQLITE_CHANGESET_FOREIGN_KEY: 5,
+  SQLITE_OK: 0,
+  SQLITE_DENY: 1,
+  SQLITE_IGNORE: 2
+};
+
+AUTHORIZER_ACTIONS.forEach((name, code) => {
+  constants[`SQLITE_${name}`] = code;
+});
+
+function failure(Type, code, message) {
+  const error = new Type(message);
   error.code = code;
   return error;
 }
 
-function argTypeError(name, expected) {
-  return codedError(TypeError, 'ERR_INVALID_ARG_TYPE', `The "${name}" argument must be ${expected}.`);
+const invalidType = (name, expected) => invalidArgument(`The "${name}" argument must be ${expected}.`);
+const invalidArgument = message => failure(TypeError, 'ERR_INVALID_ARG_TYPE', message);
+const invalidValue = message => failure(TypeError, 'ERR_INVALID_ARG_VALUE', message);
+const invalidState = message => failure(Error, 'ERR_INVALID_STATE', message);
+const invalidThis = name => failure(TypeError, 'ERR_INVALID_THIS', `Value of "this" must be of type ${name}`);
+const illegalConstructor = () => failure(Error, 'ERR_ILLEGAL_CONSTRUCTOR', 'Illegal constructor');
+
+function expect(type, value, name) {
+  if (typeof value !== type || value === null) throw invalidType(name, EXPECTED[type]);
 }
 
 function isBinary(value) {
-  return ArrayBuffer.isView(value) || value instanceof ArrayBuffer || (typeof SharedArrayBuffer === 'function' && value instanceof SharedArrayBuffer);
+  return ArrayBuffer.isView(value) || value instanceof ArrayBuffer || value instanceof SharedArrayBuffer;
 }
 
-function normalizePath(path, name) {
-  let result;
-  if (typeof path === 'string') result = path;
-  else if (path instanceof Uint8Array) result = new TextDecoder().decode(path);
-  else if (path instanceof URL) result = fileURLToPath(path);
+function toPath(path) {
+  if (path instanceof Uint8Array) path = new TextDecoder().decode(path);
+  else if (path instanceof URL) path = fileURLToPath(path);
 
-  if (typeof result !== 'string' || result.includes('\0')) {
-    throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE', `The "${name}" argument must be a string, Uint8Array, or URL without null bytes.`);
-  }
-  return result;
+  if (typeof path === 'string' && !path.includes('\0')) return path;
+  throw invalidType('path', 'a string, Uint8Array, or URL without null bytes');
 }
 
-function validateObject(value, name) {
-  if (value === null || typeof value !== 'object') throw argTypeError(name, 'an object');
+function extend(Class, Mixin) {
+  const { constructor, ...members } = Object.getOwnPropertyDescriptors(Mixin.prototype);
+  Object.defineProperties(Class.prototype, members);
 }
 
-function validateFunction(value, name) {
-  if (typeof value !== 'function') throw argTypeError(name, 'a function');
-}
-
-function validateString(value, name) {
-  if (typeof value !== 'string') throw argTypeError(name, 'a string');
-}
-
-function validateBoolean(value, name) {
-  if (typeof value !== 'boolean') throw argTypeError(name, 'a boolean');
-}
-
-const limitsByDatabase = new WeakMap();
-
-function limitIndex(name) {
-  return typeof name === 'string' ? LIMIT_NAMES.indexOf(name) : -1;
-}
+const construct = Symbol('construct');
+const limitsOf = new WeakMap();
 
 function createLimits(db) {
-  return new Proxy(
-    {},
-    {
-      get(target, name, receiver) {
-        const id = limitIndex(name);
-        return id === -1 ? Reflect.get(target, name, receiver) : internals.limit.call(db, id);
-      },
-      set(target, name, value, receiver) {
-        const id = limitIndex(name);
-        if (id === -1) return Reflect.set(target, name, value, receiver);
+  const values = Object.fromEntries(LIMIT_NAMES.map(name => [name, undefined]));
 
-        if (typeof value !== 'number') throw argTypeError(`limits.${name}`, 'a number');
-        if (value !== Infinity && (!Number.isInteger(value) || value < 0)) {
-          throw codedError(RangeError, 'ERR_OUT_OF_RANGE', 'Limit value must be non-negative.');
-        }
+  const view = new Proxy(values, {
+    get(target, name, receiver) {
+      const id = LIMIT_NAMES.indexOf(name);
+      return id === -1 ? Reflect.get(target, name, receiver) : (target[name] = internals.limit.call(db, id));
+    },
 
-        internals.limit.call(db, id, value === Infinity || value > MAX_LIMIT ? MAX_LIMIT : value);
-        return true;
-      },
-      has(target, name) {
-        return limitIndex(name) !== -1 || Reflect.has(target, name);
-      },
-      ownKeys() {
-        return LIMIT_NAMES.slice();
-      },
-      getOwnPropertyDescriptor(target, name) {
-        const id = limitIndex(name);
-        if (id === -1) return Reflect.getOwnPropertyDescriptor(target, name);
-        return { value: internals.limit.call(db, id), writable: true, enumerable: true, configurable: true };
+    set(target, name, value, receiver) {
+      const id = LIMIT_NAMES.indexOf(name);
+      if (id === -1) return Reflect.set(target, name, value, receiver);
+
+      if (typeof value !== 'number') throw invalidType(`limits.${name}`, 'a number');
+      if (value !== Infinity && !(Number.isInteger(value) && value >= 0)) {
+        throw failure(RangeError, 'ERR_OUT_OF_RANGE', 'Limit value must be non-negative.');
       }
+
+      target[name] = internals.limit.call(db, id, Math.min(value, MAX_LIMIT));
+      return true;
     }
-  );
+  });
+
+  return { values, view };
 }
 
-function defineMethods(prototype, methods) {
-  for (const key of Reflect.ownKeys(methods)) {
-    const descriptor = Object.getOwnPropertyDescriptor(methods, key);
-    descriptor.enumerable = false;
-    Object.defineProperty(prototype, key, descriptor);
+function refreshLimits(db, values) {
+  if (!db.isOpen) return;
+  for (let id = 0; id < LIMIT_NAMES.length; id++) values[LIMIT_NAMES[id]] = internals.limit.call(db, id);
+}
+
+function columnDefinition(column, index) {
+  const label = `options.columns[${index}]`;
+  expect('object', column, label);
+  expect('string', column.name, `${label}.name`);
+  if (column.hidden !== undefined) expect('boolean', column.hidden, `${label}.hidden`);
+
+  if (!COLUMN_TYPES.includes(column.type)) {
+    throw invalidValue(`The column "type" property must be one of 'INTEGER', 'TEXT', 'REAL', 'BLOB', or 'ANY'.`);
   }
+
+  const name = column.name.replaceAll('"', '""');
+  return `"${name}" ${column.type}${column.hidden ? ' HIDDEN' : ''}`;
 }
 
-internals.setPathHook(path => normalizePath(path, 'path'));
+function rowSource(rows) {
+  return (...args) => {
+    const iterator = rows(...args)?.[Symbol.iterator]?.();
+    if (iterator == null) throw invalidType('options.rows', 'a function returning an iterable');
 
-defineMethods(Database.prototype, {
+    return () => {
+      const step = iterator.next();
+      return step.done ? undefined : step.value;
+    };
+  };
+}
+
+extend(Database, class {
   get limits() {
-    let limits = limitsByDatabase.get(this);
+    let limits = limitsOf.get(this);
     if (limits === undefined) {
-      if (!(this instanceof Database)) throw codedError(TypeError, 'ERR_INVALID_THIS', 'Value of "this" must be of type Database');
-      limits = createLimits(this);
-      limitsByDatabase.set(this, limits);
+      if (!(this instanceof Database)) throw invalidThis('Database');
+      limitsOf.set(this, (limits = createLimits(this)));
     }
-    return limits;
-  },
+
+    refreshLimits(this, limits.values);
+    return limits.view;
+  }
 
   createTagStore(maxSize = 1000) {
-    if (!this.isOpen) throw codedError(Error, 'ERR_INVALID_STATE', 'database is not open');
-    if (!Number.isInteger(maxSize) || maxSize < 0) throw argTypeError('maxSize', 'a non-negative integer');
-    return new SQLTagStore(constructToken, this, maxSize);
-  },
+    if (!this.isOpen) throw invalidState('database is not open');
+    if (!(Number.isInteger(maxSize) && maxSize >= 0)) throw invalidType('maxSize', 'a non-negative integer');
+    return new SQLTagStore(construct, this, maxSize);
+  }
 
   createModule(name, options) {
-    validateString(name, 'name');
-    validateObject(options, 'options');
+    expect('string', name, 'name');
+    expect('object', options, 'options');
 
     const { columns, rows, directOnly = false, useBigIntArguments = false } = options;
-    if (!Array.isArray(columns)) throw argTypeError('options.columns', 'an array');
-    if (columns.length === 0) throw codedError(TypeError, 'ERR_INVALID_ARG_VALUE', 'The "options.columns" array must not be empty.');
-    validateFunction(rows, 'options.rows');
-    validateBoolean(directOnly, 'options.directOnly');
-    validateBoolean(useBigIntArguments, 'options.useBigIntArguments');
+    if (!Array.isArray(columns)) throw invalidType('options.columns', 'an array');
+    if (columns.length === 0) throw invalidValue('The "options.columns" array must not be empty.');
+    expect('function', rows, 'options.rows');
+    expect('boolean', directOnly, 'options.directOnly');
+    expect('boolean', useBigIntArguments, 'options.useBigIntArguments');
 
-    const hidden = [];
-    const definitions = columns.map((column, index) => {
-      validateObject(column, `options.columns[${index}]`);
-      validateString(column.name, `options.columns[${index}].name`);
-      if (!COLUMN_TYPES.has(column.type)) {
-        throw codedError(TypeError, 'ERR_INVALID_ARG_VALUE', `The column "type" property must be one of 'INTEGER', 'TEXT', 'REAL', 'BLOB', or 'ANY'.`);
-      }
-      if (column.hidden !== undefined) validateBoolean(column.hidden, `options.columns[${index}].hidden`);
-
-      hidden.push(column.hidden === true);
-      return `"${column.name.replaceAll('"', '""')}" ${column.type}${column.hidden ? ' HIDDEN' : ''}`;
-    });
-
-    const open = (...args) => {
-      const iterator = rows(...args)?.[Symbol.iterator]?.();
-      if (iterator === undefined || iterator === null) {
-        throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE', 'The "options.rows" function must return an iterable.');
-      }
-      return () => {
-        const step = iterator.next();
-        return step.done ? undefined : step.value;
-      };
-    };
-
+    const schema = `CREATE TABLE x(${columns.map(columnDefinition).join(', ')})`;
+    const hidden = columns.map(column => column.hidden === true);
     const flags = (useBigIntArguments ? 1 : 0) | (directOnly ? 2 : 0);
-    internals.createModule.call(this, name, `CREATE TABLE x(${definitions.join(', ')})`, hidden, open, flags);
-  },
+
+    internals.createModule.call(this, name, schema, hidden, rowSource(rows), flags);
+  }
 
   [Symbol.dispose]() {
     if (this.isOpen) this.close();
   }
 });
 
+extend(Statement, class {
+  iterate(...params) {
+    return new StatementIterator(construct, this, internals.begin.apply(this, params));
+  }
+
+  [Symbol.dispose]() {
+    if (!internals.isFinalized.call(this)) this.close();
+  }
+});
+
+extend(Session, class {
+  [Symbol.dispose]() {
+    if (!internals.isClosed.call(this)) this.close();
+  }
+});
+
 class StatementIterator extends Iterator {
   #statement;
-  #token;
+  #generation;
   #done = false;
 
   constructor(token, statement, generation) {
-    if (token !== constructToken) throw codedError(Error, 'ERR_ILLEGAL_CONSTRUCTOR', 'Illegal constructor');
+    if (token !== construct) throw illegalConstructor();
     super();
     this.#statement = statement;
-    this.#token = generation;
+    this.#generation = generation;
   }
 
   next() {
@@ -193,7 +245,7 @@ class StatementIterator extends Iterator {
 
     let row;
     try {
-      row = internals.step.call(this.#statement, this.#token);
+      row = internals.step.call(this.#statement, this.#generation);
     } catch (error) {
       this.#done = true;
       throw error;
@@ -209,27 +261,11 @@ class StatementIterator extends Iterator {
   return() {
     if (!this.#done) {
       this.#done = true;
-      internals.end.call(this.#statement, this.#token);
+      internals.end.call(this.#statement, this.#generation);
     }
     return { __proto__: null, done: true, value: null };
   }
 }
-
-defineMethods(Statement.prototype, {
-  iterate(...params) {
-    return new StatementIterator(constructToken, this, internals.begin.apply(this, params));
-  },
-
-  [Symbol.dispose]() {
-    if (!internals.isFinalized.call(this)) this.close();
-  }
-});
-
-defineMethods(Session.prototype, {
-  [Symbol.dispose]() {
-    if (!internals.isClosed.call(this)) this.close();
-  }
-});
 
 class SQLTagStore {
   #db;
@@ -237,17 +273,17 @@ class SQLTagStore {
   #cache = new Map();
 
   constructor(token, db, capacity) {
-    if (token !== constructToken) throw codedError(Error, 'ERR_ILLEGAL_CONSTRUCTOR', 'Illegal constructor');
+    if (token !== construct) throw illegalConstructor();
     this.#db = db;
     this.#capacity = capacity;
   }
 
-  #prepare(strings, params) {
-    if (!Array.isArray(strings)) throw argTypeError('stringElements', 'an array of strings');
+  #statement(strings, params) {
+    if (!Array.isArray(strings)) throw invalidType('stringElements', 'an array of strings');
 
     const first = params[0];
     if (params.length > 0 && first !== null && typeof first === 'object' && !isBinary(first)) {
-      throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE', 'Provided value cannot be bound to SQLite parameter 1.');
+      throw invalidArgument('Provided value cannot be bound to SQLite parameter 1.');
     }
 
     const sql = strings.join('?');
@@ -271,19 +307,19 @@ class SQLTagStore {
   }
 
   run(strings, ...params) {
-    return this.#prepare(strings, params).run(...params);
+    return this.#statement(strings, params).run(...params);
   }
 
   get(strings, ...params) {
-    return this.#prepare(strings, params).get(...params);
+    return this.#statement(strings, params).get(...params);
   }
 
   all(strings, ...params) {
-    return this.#prepare(strings, params).all(...params);
+    return this.#statement(strings, params).all(...params);
   }
 
   iterate(strings, ...params) {
-    return this.#prepare(strings, params).iterate(...params);
+    return this.#statement(strings, params).iterate(...params);
   }
 
   clear() {
@@ -304,125 +340,51 @@ class SQLTagStore {
 }
 
 function backup(sourceDb, path, options = {}) {
-  if (!(sourceDb instanceof Database)) throw argTypeError('sourceDb', 'an object');
-  const target = normalizePath(path, 'path');
-  validateObject(options, 'options');
+  if (!(sourceDb instanceof Database)) throw invalidType('sourceDb', 'an object');
+  path = toPath(path);
+  expect('object', options, 'options');
 
-  const { source = 'main', target: targetName = 'main', rate = 100, progress } = options;
-  validateString(source, 'options.source');
-  validateString(targetName, 'options.target');
-  if (!Number.isInteger(rate)) throw argTypeError('options.rate', 'an integer');
-  if (progress !== undefined) validateFunction(progress, 'options.progress');
-
-  let handle;
-  try {
-    handle = internals.backupInit(sourceDb, target, source, targetName);
-  } catch (error) {
-    return Promise.reject(error);
-  }
+  const { source = 'main', target = 'main', rate = 100, progress } = options;
+  expect('string', source, 'options.source');
+  expect('string', target, 'options.target');
+  if (!Number.isInteger(rate)) throw invalidType('options.rate', 'an integer');
+  if (progress !== undefined) expect('function', progress, 'options.progress');
 
   return new Promise((resolve, reject) => {
-    const tick = () => {
-      let state;
-      try {
-        state = internals.backupStep(handle, rate);
-      } catch (error) {
-        reject(error);
-        return;
-      }
+    const handle = internals.backupInit(sourceDb, path, source, target);
 
-      if (state.done) {
-        resolve(state.totalPages);
-        return;
-      }
-
+    const step = () => {
       try {
-        if (progress !== undefined) progress({ totalPages: state.totalPages, remainingPages: state.remainingPages });
+        const { done, totalPages, remainingPages } = internals.backupStep(handle, rate);
+        if (done) return resolve(totalPages);
+
+        if (progress !== undefined) progress({ totalPages, remainingPages });
+        setImmediate(step);
       } catch (error) {
         internals.backupAbort(handle);
         reject(error);
-        return;
       }
-
-      setImmediate(tick);
     };
 
-    setImmediate(tick);
+    setImmediate(step);
   });
 }
 
-const queryChannel = channel('sqlite.db.query');
+const queries = channel('sqlite.db.query');
+const publishQuery = (sql, database, duration) => queries.publish({ sql, database, duration });
+const syncQueryHook = () => internals.setQueryHook(queries.hasSubscribers ? publishQuery : undefined);
 
-function publishQuery(sql, database, duration) {
-  queryChannel.publish({ sql, database, duration });
+for (const name of ['subscribe', 'unsubscribe', 'bindStore', 'unbindStore']) {
+  const method = queries[name];
+  queries[name] = function (...args) {
+    const result = method.apply(this, args);
+    syncQueryHook();
+    return result;
+  };
 }
 
-function syncQueryHook() {
-  internals.setQueryHook(queryChannel.hasSubscribers ? publishQuery : undefined);
-}
-
-for (const method of ['subscribe', 'unsubscribe', 'bindStore', 'unbindStore']) {
-  const original = queryChannel[method];
-  Object.defineProperty(queryChannel, method, {
-    configurable: true,
-    writable: true,
-    value(...args) {
-      const result = original.apply(this, args);
-      syncQueryHook();
-      return result;
-    }
-  });
-}
-
+internals.setPathHook(toPath);
 syncQueryHook();
-
-const constants = {
-  SQLITE_CHANGESET_OMIT: 0,
-  SQLITE_CHANGESET_REPLACE: 1,
-  SQLITE_CHANGESET_ABORT: 2,
-  SQLITE_CHANGESET_DATA: 1,
-  SQLITE_CHANGESET_NOTFOUND: 2,
-  SQLITE_CHANGESET_CONFLICT: 3,
-  SQLITE_CHANGESET_CONSTRAINT: 4,
-  SQLITE_CHANGESET_FOREIGN_KEY: 5,
-  SQLITE_OK: 0,
-  SQLITE_DENY: 1,
-  SQLITE_IGNORE: 2,
-  SQLITE_CREATE_INDEX: 1,
-  SQLITE_CREATE_TABLE: 2,
-  SQLITE_CREATE_TEMP_INDEX: 3,
-  SQLITE_CREATE_TEMP_TABLE: 4,
-  SQLITE_CREATE_TEMP_TRIGGER: 5,
-  SQLITE_CREATE_TEMP_VIEW: 6,
-  SQLITE_CREATE_TRIGGER: 7,
-  SQLITE_CREATE_VIEW: 8,
-  SQLITE_DELETE: 9,
-  SQLITE_DROP_INDEX: 10,
-  SQLITE_DROP_TABLE: 11,
-  SQLITE_DROP_TEMP_INDEX: 12,
-  SQLITE_DROP_TEMP_TABLE: 13,
-  SQLITE_DROP_TEMP_TRIGGER: 14,
-  SQLITE_DROP_TEMP_VIEW: 15,
-  SQLITE_DROP_TRIGGER: 16,
-  SQLITE_DROP_VIEW: 17,
-  SQLITE_INSERT: 18,
-  SQLITE_PRAGMA: 19,
-  SQLITE_READ: 20,
-  SQLITE_SELECT: 21,
-  SQLITE_TRANSACTION: 22,
-  SQLITE_UPDATE: 23,
-  SQLITE_ATTACH: 24,
-  SQLITE_DETACH: 25,
-  SQLITE_ALTER_TABLE: 26,
-  SQLITE_REINDEX: 27,
-  SQLITE_ANALYZE: 28,
-  SQLITE_CREATE_VTABLE: 29,
-  SQLITE_DROP_VTABLE: 30,
-  SQLITE_FUNCTION: 31,
-  SQLITE_SAVEPOINT: 32,
-  SQLITE_COPY: 0,
-  SQLITE_RECURSIVE: 33
-};
 
 export { Database, Database as DatabaseSync, Statement, Statement as StatementSync, Session, constants, backup };
 export default { Database, DatabaseSync: Database, Statement, StatementSync: Statement, Session, constants, backup };
