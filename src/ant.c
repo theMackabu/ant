@@ -13,6 +13,7 @@
 #include "props.h"
 #include "gc/bigints.h"
 #include "esm/exports.h"
+#include "net/listen_policy.h"
 
 #include "silver/compiler.h"
 #include "silver/call.h"
@@ -209,6 +210,7 @@ void Ant_Destroy(ant_t *js) {
   
   Ant_Host_Stop(js);
   json_layout_cache_clear(js);
+  Ant_Net_ListenPolicy_Clear(js);
   
   if (js->index_layout_shape) ant_shape_release(js->index_layout_shape);
   js->index_layout_shape = NULL;

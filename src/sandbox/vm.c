@@ -19,8 +19,6 @@ const ant_sandbox_vm_backend_t *ant_sandbox_vm_default_backend(void) {
   return &ant_sandbox_vm_darwin_backend;
 #elif defined(__linux__)
   return &ant_sandbox_vm_linux_backend;
-#elif defined(_WIN32)
-  return &ant_sandbox_vm_windows_backend;
 #else
   return NULL;
 #endif
@@ -87,7 +85,6 @@ int ant_sandbox_vm_start(const ant_sandbox_vm_config_t *config) {
   }
 
   if (!backend->start) return -ENOSYS;
-
   return backend->start(config);
 }
 
@@ -106,7 +103,7 @@ int ant_sandbox_vm_session_create(const ant_sandbox_vm_config_t *config, ant_san
     return -ENOSYS;
   }
 
-#if defined(__APPLE__) && !defined(_WIN32)
+#ifdef __APPLE__
   int helper_rc = ant_sandbox_vm_helper_create(backend, config, session_out);
   if (helper_rc == 0 && *session_out) (*session_out)->created_at_ns = created_at_ns;
   return helper_rc;

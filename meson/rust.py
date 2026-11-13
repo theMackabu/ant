@@ -15,6 +15,7 @@ parser.add_argument("--rustup-host", default="")
 parser.add_argument("--target", required=True)
 parser.add_argument("--out", required=True)
 parser.add_argument("--features", default="")
+parser.add_argument("--header-out", default="")
 args = parser.parse_args()
 
 def detect_rustup_host():
@@ -77,6 +78,10 @@ build = [
   "-Zbuild-std=std,panic_abort", "-Zbuild-std-features=optimize_for_size",
 ]
 
+header = os.path.join(env["CARGO_TARGET_DIR"], args.target, "ant_sandbox_devices.h")
+if args.header_out:
+  env["ANT_SANDBOX_HEADER"] = header
+
 if provided_cargo:
   build += ["--offline"]
 if args.features:
@@ -86,3 +91,5 @@ subprocess.run(build, cwd=args.crate, env=env, check=True)
 lib_name = "ant_rust.lib" if args.target.endswith("-windows-msvc") else "libant_rust.a"
 built = os.path.join(env["CARGO_TARGET_DIR"], args.target, "release", lib_name)
 shutil.copy2(built, args.out)
+if args.header_out:
+  shutil.copy2(header, args.header_out)

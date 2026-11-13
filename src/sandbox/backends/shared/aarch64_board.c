@@ -1,4 +1,4 @@
-#include "sandbox_backend/backend.h" // IWYU pragma: keep
+#include "shared/backend.h" // IWYU pragma: keep
 
 #if defined(__aarch64__)
 
@@ -450,7 +450,7 @@ bool ant_hvf_mmio_read(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t 
     return ant_hvf_pci_mmio_read(vm, addr, size, value);
   ant_hvf_virtio_device_t *virtio = ant_hvf_virtio_for_bar(vm, addr);
   if (virtio)
-    return ant_hvf_virtio_common_read(vm, virtio, addr - virtio->bar0, size, value);
+    return ant_hvf_virtio_common_read(vm, virtio, addr - ant_hvf_virtio_bar0(virtio), size, value);
   if (addr >= ANT_HVF_PCIE_PIO_BASE && addr < ANT_HVF_PCIE_PIO_BASE + 0x10000)
     return ant_hvf_mmio_unsupported(vm, "PCI PIO", false, addr, size, 0);
   return ant_hvf_mmio_unsupported(vm, "unknown", false, addr, size, 0);
@@ -469,7 +469,7 @@ bool ant_hvf_mmio_write(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t
     return ant_hvf_pci_mmio_write(vm, addr, size, value);
   ant_hvf_virtio_device_t *virtio = ant_hvf_virtio_for_bar(vm, addr);
   if (virtio)
-    return ant_hvf_virtio_common_write(vm, virtio, addr - virtio->bar0, size, value);
+    return ant_hvf_virtio_common_write(vm, virtio, addr - ant_hvf_virtio_bar0(virtio), size, value);
   if (addr >= ANT_HVF_PCIE_PIO_BASE && addr < ANT_HVF_PCIE_PIO_BASE + 0x10000)
     return ant_hvf_mmio_unsupported(vm, "PCI PIO", true, addr, size, value);
   return ant_hvf_mmio_unsupported(vm, "unknown", true, addr, size, value);

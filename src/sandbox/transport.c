@@ -1,49 +1,13 @@
 #include <compat.h> // IWYU pragma: keep
 
-#include "sandbox/transport.h"
-
 #include "output.h"
+#include "sandbox/transport.h"
 
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-
-#ifdef _WIN32
-
-bool ant_sandbox_transport_send_frame(ant_sandbox_frame_type_t type, const void *payload, size_t payload_len) {
-  (void)type;
-  (void)payload;
-  (void)payload_len;
-  errno = ENOSYS;
-  return false;
-}
-
-bool ant_sandbox_transport_send_exit(int code) {
-  (void)code;
-  errno = ENOSYS;
-  return false;
-}
-
-bool ant_sandbox_transport_install_output_frames(void) {
-  errno = ENOSYS;
-  return false;
-}
-
-int ant_sandbox_transport_fd(void) {
-  return -1;
-}
-
-bool ant_sandbox_read_request_transport(ant_sandbox_request_t *out) {
-  (void)out;
-  errno = ENOSYS;
-  fprintf(stderr, "sandbox daemon: native Windows sandbox transport is not implemented; use WSL for sandbox support\n");
-  return false;
-}
-
-#else
-
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -177,13 +141,13 @@ bool ant_sandbox_transport_send_frame(ant_sandbox_frame_type_t type, const void 
   return true;
 }
 
-bool ant_sandbox_transport_send_exit(int code) {
+void ant_sandbox_transport_send_exit(int code) {
   uint8_t payload[4];
   payload[0] = (uint8_t)code;
   payload[1] = (uint8_t)(code >> 8);
   payload[2] = (uint8_t)(code >> 16);
   payload[3] = (uint8_t)(code >> 24);
-  return ant_sandbox_transport_send_frame(ANT_SANDBOX_FRAME_EXIT, payload, sizeof(payload));
+  ant_sandbox_transport_send_frame(ANT_SANDBOX_FRAME_EXIT, payload, sizeof(payload));
 }
 
 static bool transport_output_writer(FILE *stream, const void *data, size_t len, void *user) {
@@ -217,7 +181,6 @@ bool ant_sandbox_read_request_transport(ant_sandbox_request_t *out) {
 
   bool ok = ant_sandbox_parse_request_frame(frame, frame_len, out);
   free(frame);
+  
   return ok;
 }
-
-#endif

@@ -15,15 +15,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifndef _WIN32
 #include <sys/ioctl.h>
-#endif
 #include <sys/stat.h>
 #include <unistd.h>
-
-#ifdef _WIN32
-#define lstat stat
-#endif
 
 static bool g_sandbox_guest_process = false;
 
@@ -274,30 +268,11 @@ static bool sandbox_guest_path_valid(const char *path) {
 }
 
 static int sandbox_create_temp_dir(char *out, size_t out_len) {
-#ifdef _WIN32
-  const char *tmpdir = getenv("TMPDIR");
-  if (!tmpdir || !tmpdir[0]) tmpdir = getenv("TEMP");
-  if (!tmpdir || !tmpdir[0]) tmpdir = ".";
-  for (unsigned attempt = 0; attempt < 100; attempt++) {
-    int written = snprintf(
-      out, out_len,
-      "%s/ant-sandbox-write.%lu.%u",
-      tmpdir,
-      (unsigned long)GetCurrentProcessId(),
-      attempt
-    );
-    if (written < 0 || (size_t)written >= out_len) return -ENAMETOOLONG;
-    if (_mkdir(out) == 0) return 0;
-    if (errno != EEXIST) return -errno;
-  }
-  return -EEXIST;
-#else
   const char *tmpdir = getenv("TMPDIR");
   if (!tmpdir || !tmpdir[0]) tmpdir = "/tmp";
   int written = snprintf(out, out_len, "%s/ant-sandbox-write.XXXXXX", tmpdir);
   if (written < 0 || (size_t)written >= out_len) return -ENAMETOOLONG;
   return mkdtemp(out) ? 0 : -errno;
-#endif
 }
 
 int ant_sandbox_launch_add_mount(
@@ -503,13 +478,11 @@ int ant_sandbox_launch_add_default_mount(
 static void sandbox_terminal_size(uint16_t *rows_out, uint16_t *cols_out) {
   int rows = 24;
   int cols = 80;
-#ifndef _WIN32
   struct winsize ws;
   if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
     if (ws.ws_row > 0) rows = ws.ws_row;
     if (ws.ws_col > 0) cols = ws.ws_col;
   }
-#endif
   if (rows > UINT16_MAX) rows = UINT16_MAX;
   if (cols > UINT16_MAX) cols = UINT16_MAX;
   *rows_out = (uint16_t)rows;

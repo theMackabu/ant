@@ -101,7 +101,9 @@ void gc_mark_host_modules(ant_t *js, gc_mark_fn mark) {
   gc_mark_esm(js, mark);
   gc_mark_worker_threads(js, mark);
   gc_mark_isolates(js, mark);
+#ifdef ANT_HAVE_SANDBOX
   gc_mark_sandbox(js, mark);
+#endif
   gc_mark_abort(js, mark);
   gc_mark_wasm(js, mark);
   gc_mark_napi(js, mark);

@@ -1,0 +1,17 @@
+language = "C"
+pragma_once = true
+no_includes = true
+sys_includes = ["stdbool.h", "stddef.h", "stdint.h"]
+style = "type"
+usize_is_size_t = true
+documentation = false
+after_includes = "typedef struct ant_hvf_vm ant_hvf_vm_t;"
+
+[export]
+exclude = ["Vm"]
+
+[export.rename]
+"Vm" = "ant_hvf_vm_t"
+"Handle" = "ant_hvf_virtio_device_t"
+"Bus" = "ant_devices_t"
+"Builder" = "ant_net_builder_t"

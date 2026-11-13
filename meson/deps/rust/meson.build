@@ -1,11 +1,21 @@
 rust_link_deps = []
+rust_sandbox_header = []
+rust_sandbox_include = []
+
 temporal_opt = get_option('temporal')
 encoding_rs_opt = get_option('encoding_rs')
+
 rust_want_temporal = temporal_opt.allowed()
 rust_want_encoding = encoding_rs_opt.allowed()
 
-if rust_want_temporal or rust_want_encoding
-  temporal_capi_project = subproject('temporal_capi', required: temporal_opt.enabled() or encoding_rs_opt.enabled())
+rust_want_sandbox = sandbox_supported and (darwin_hvf_supported or host_machine.system() == 'linux')
+rust_want_sandbox_wire = sandbox_supported
+
+if rust_want_temporal or rust_want_encoding or rust_want_sandbox or rust_want_sandbox_wire
+  temporal_capi_project = subproject(
+    'temporal_capi',
+    required: temporal_opt.enabled() or encoding_rs_opt.enabled() or rust_want_sandbox,
+  )
   if temporal_capi_project.found()
     temporal_capi_source = temporal_capi_project.get_variable('temporal_capi_source_dir')
     temporal_capi_inputs = temporal_capi_project.get_variable('temporal_capi_build_inputs')
@@ -83,6 +93,11 @@ if rust_want_temporal or rust_want_encoding
     if rust_want_encoding
       rust_features += 'encoding'
     endif
+    if rust_want_sandbox
+      rust_features += 'sandbox'
+    elif rust_want_sandbox_wire
+      rust_features += 'sandbox-wire'
+    endif
 
     message(
       'Rust target: ' + rust_target + ' (compiler: ' + cc.get_id() +
@@ -91,14 +106,14 @@ if rust_want_temporal or rust_want_encoding
       ', features: ' + ','.join(rust_features) + ')'
     )
 
+    rust_sources = files(run_command(
+      python, files(src_root / 'meson/sources.py'), files(src_root / 'sources.json'), 'rust', src_root,
+      check: true
+    ).stdout().strip().split())
+
     rust_lib = custom_target('rust_staticlib',
-      input: files(
-        src_root / 'src/rust/Cargo.toml',
-        src_root / 'src/rust/Cargo.lock',
-        src_root / 'src/rust/src/lib.rs',
-        src_root / 'src/rust/rust-toolchain.toml',
-      ) + temporal_capi_inputs,
-      output: rust_lib_name,
+      input: rust_sources + temporal_capi_inputs,
+      output: rust_want_sandbox ? [rust_lib_name, 'ant_sandbox_devices.h'] : [rust_lib_name],
       build_by_default: true,
       command: [
         python, files(src_root / 'meson/rust.py'),
@@ -107,9 +122,9 @@ if rust_want_temporal or rust_want_encoding
         '--cache', src_root / '.cache/rust',
         '--rustup-host', rust_rustup_host,
         '--target', rust_target,
-        '--out', '@OUTPUT@',
+        '--out', '@OUTPUT0@',
         '--features', ','.join(rust_features),
-      ],
+      ] + (rust_want_sandbox ? ['--header-out', '@OUTPUT1@'] : []),
     )
 
     if rust_want_temporal
@@ -122,6 +137,10 @@ if rust_want_temporal or rust_want_encoding
     if rust_want_encoding
       ant_deps += [declare_dependency(compile_args: ['-DANT_HAVE_ENCODING_RS=1'])]
     endif
-    rust_link_deps += [declare_dependency(link_with: rust_lib)]
+    rust_link_deps += [declare_dependency(link_with: rust_lib[0])]
+    if rust_want_sandbox
+      rust_sandbox_header = [rust_lib[1]]
+      rust_sandbox_include = [include_directories('.')]
+    endif
   endif
 endif

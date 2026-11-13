@@ -644,6 +644,8 @@ struct ant_isolate_t {
   ant_value_t primordials;
   ant_value_t primordial_values[ANT_PRIMORDIAL_COUNT];
   ant_intern_memo_entry_t intern_memo[INTERN_MEMO_SIZE];
+  
+  struct ant_listen_policy *listen_policy;
 };
 
 // TODO: rename

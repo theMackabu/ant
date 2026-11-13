@@ -1,25 +1,6 @@
 #include <compat.h> // IWYU pragma: keep
-#include <stdatomic.h>
 
-#include "modules/sandbox.h"
-#include "modules/json.h"
-
-#include "ant.h"
-#include "ptr.h"
-#include "cfunc.h"
-#include "errors.h"
-#include "gc/roots.h"
-#include "list.h"
-#include "internal.h"
-#include "object.h"
-#include "sandbox/host.h"
-#include "sandbox/sandbox.h"
-#include "sandbox/transport.h"
-#include "sandbox/vm.h"
-#include "silver/call.h"
-#include "modules/symbol.h"
-#include "modules/iterator.h"
-
+#include <uv.h>
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -31,11 +12,28 @@
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
-#include <uv.h>
-
-#ifndef _WIN32
+#include <stdatomic.h>
 #include <sys/socket.h>
-#endif
+
+#include "ant.h"
+#include "ptr.h"
+#include "cfunc.h"
+#include "errors.h"
+#include "gc/roots.h"
+#include "list.h"
+#include "internal.h"
+#include "object.h"
+#include "silver/call.h"
+
+#include "sandbox/host.h"
+#include "sandbox/sandbox.h"
+#include "sandbox/transport.h"
+#include "sandbox/vm.h"
+
+#include "modules/symbol.h"
+#include "modules/iterator.h"
+#include "modules/sandbox.h"
+#include "modules/json.h"
 
 static constexpr uint32_t SANDBOX_NATIVE_TAG = Ant_NativeTag("SBOX");
 
@@ -81,12 +79,20 @@ struct sandbox_state {
   ant_sandbox_vm_result_t run_result;
   struct sandbox_message_node *message_head;
   struct sandbox_message_node *message_tail;
+  struct sandbox_message_node *inbox_head;
+  struct sandbox_message_node *inbox_tail;
+  
+  size_t inbox_count;
+  size_t inbox_bytes;
   struct sandbox_message_waiter *waiter_head;
   struct sandbox_message_waiter *waiter_tail;
   
   sandbox_state_t *next;
   sandbox_state_t **pprev;
 };
+
+static constexpr size_t SANDBOX_INBOX_MAX_MESSAGES = 4096;
+static constexpr size_t SANDBOX_INBOX_MAX_BYTES = 16 * 1024 * 1024;
 
 typedef struct sandbox_message_node {
   char *data;
@@ -228,9 +234,6 @@ static bool sandbox_guest_process_input(sandbox_guest_port_t *port) {
 }
 
 static void sandbox_guest_poll_cb(uv_poll_t *handle, int status, int events) {
-#ifdef _WIN32
-  (void)handle; (void)status; (void)events;
-#else
   sandbox_guest_port_t *port = handle ? handle->data : NULL;
   if (!port || status < 0 || !(events & UV_READABLE)) {
     sandbox_guest_port_close(port);
@@ -251,7 +254,6 @@ static void sandbox_guest_poll_cb(uv_poll_t *handle, int status, int events) {
       sandbox_guest_port_close(port);
     break;
   }
-#endif
 }
 
 static ant_value_t sandbox_guest_send(ant_params_t) {
@@ -297,7 +299,6 @@ static ant_value_t sandbox_guest_parent_port(ant_t *js) {
   js_set(js, g_guest_port.obj, "close", Ant_Function_Create(sandbox_guest_close));
   js_set(js, g_guest_port.obj, "onmessage", Ant_Value_Undefined);
 
-#ifndef _WIN32
   int fd = ant_sandbox_transport_fd();
   if (fd >= 0 && uv_poll_init(js->loop, &g_guest_port.poll, fd) == 0) {
     g_guest_port.poll.data = &g_guest_port;
@@ -305,7 +306,6 @@ static ant_value_t sandbox_guest_parent_port(ant_t *js) {
     if (uv_poll_start(&g_guest_port.poll, UV_READABLE, sandbox_guest_poll_cb) != 0)
       sandbox_guest_port_close(&g_guest_port);
   }
-#endif
   return g_guest_port.obj;
 }
 
@@ -317,19 +317,27 @@ static void sandbox_add_active(sandbox_state_t *state) {
   if (state) Ant_List_Insert(&state->js->sandboxes, state);
 }
 
-static void sandbox_remove_active(sandbox_state_t *state) {
-  if (state) Ant_List_Remove(state);
-}
-
-static void sandbox_free_messages(sandbox_state_t *state) {
-  sandbox_message_node_t *node = state ? state->message_head : NULL;
+static void sandbox_free_message_list(sandbox_message_node_t *node) {
   while (node) {
     sandbox_message_node_t *next = node->next;
     free(node->data);
     free(node);
     node = next;
   }
-  if (state) state->message_head = state->message_tail = NULL;
+}
+
+static void sandbox_clear_inbox(sandbox_state_t *state) {
+  sandbox_free_message_list(state->inbox_head);
+  state->inbox_head = state->inbox_tail = NULL;
+  state->inbox_count = 0;
+  state->inbox_bytes = 0;
+}
+
+static void sandbox_free_messages(sandbox_state_t *state) {
+  if (!state) return;
+  sandbox_free_message_list(state->message_head);
+  state->message_head = state->message_tail = NULL;
+  sandbox_clear_inbox(state);
 }
 
 static void sandbox_free_waiters(sandbox_state_t *state) {
@@ -352,20 +360,26 @@ static void sandbox_update_stats(sandbox_state_t *state) {
 
 static void sandbox_state_destroy(sandbox_state_t *state) {
   if (!state) return;
-  sandbox_remove_active(state);
+  
+  Ant_List_Remove(state);
   sandbox_update_stats(state);
+  
   if (state->worker_started) {
     ant_sandbox_vm_session_cancel(state->session);
     pthread_join(state->worker, NULL);
   }
+  
   if (state->async_initialized && !uv_is_closing((uv_handle_t *)&state->async))
     uv_close((uv_handle_t *)&state->async, NULL);
+  
   ant_sandbox_vm_session_destroy(state->session);
   state->session = NULL;
+  
   ant_sandbox_launch_options_cleanup(&state->launch);
   sandbox_free_messages(state);
   sandbox_free_waiters(state);
   free(state->run_request);
+  
   if (state->mutex_initialized) pthread_mutex_destroy(&state->mutex);
   free(state);
 }
@@ -380,9 +394,7 @@ static void sandbox_finalize(ant_t *js, ant_object_t *obj) {
 }
 
 typedef int (*sandbox_string_cb_t)(
-  ant_t *js,
-  const char *value,
-  void *udata
+  ant_t *js, const char *value, void *udata
 );
 
 static int sandbox_for_each_string(
@@ -807,11 +819,6 @@ static ant_value_t sandbox_vm_result_error(ant_t *js, const ant_sandbox_vm_resul
     case ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE:
     #if defined(__APPLE__) && !defined(__aarch64__)
       snprintf(message, sizeof(message), "sandbox VM backend requires Apple Silicon");
-    #elif defined(_WIN32)
-      snprintf(
-        message, sizeof(message),
-        "native Windows sandbox backend is not implemented; use WSL for sandbox support"
-      );
     #else
       snprintf(message, sizeof(message), "sandbox VM backend is not available");
     #endif
@@ -938,6 +945,55 @@ static ant_value_t sandbox_execute_request(
   return promise;
 }
 
+static bool sandbox_message_has_type(ant_t *js, ant_value_t message, const char *expected) {
+  if (!expected) return true;
+  ant_value_t type = is_object_type(message) ? js_get(js, message, "type") : Ant_Value_Undefined;
+  if (vtype(type) != kTypeString) return false;
+  const char *value = js_getstr(js, type, NULL);
+  return value && strcmp(value, expected) == 0;
+}
+
+static void sandbox_inbox_push(sandbox_state_t *state, const char *payload, size_t payload_len) {
+  if (state->inbox_count >= SANDBOX_INBOX_MAX_MESSAGES) return;
+  if (payload_len > SANDBOX_INBOX_MAX_BYTES - state->inbox_bytes) return;
+  sandbox_message_node_t *node = calloc(1, sizeof(*node));
+  if (!node) return;
+  node->data = malloc(payload_len + 1);
+  if (!node->data) { free(node); return; }
+  if (payload_len > 0) memcpy(node->data, payload, payload_len);
+  node->data[payload_len] = '\0';
+  node->len = payload_len;
+
+  if (state->inbox_tail) state->inbox_tail->next = node;
+  else state->inbox_head = node;
+  state->inbox_tail = node;
+  state->inbox_count++;
+  state->inbox_bytes += payload_len;
+}
+
+static bool sandbox_inbox_take(ant_t *js, sandbox_state_t *state, const char *type, ant_value_t *out) {
+  sandbox_message_node_t *prev = NULL;
+  for (sandbox_message_node_t *node = state->inbox_head; node; prev = node, node = node->next) {
+    ant_value_t message = json_parse_value(js, js_mkstr(js, node->data, node->len));
+    if (is_err(message)) {
+      js_take_thrown(js, message);
+      continue;
+    }
+    if (!sandbox_message_has_type(js, message, type)) continue;
+
+    if (prev) prev->next = node->next;
+    else state->inbox_head = node->next;
+    if (state->inbox_tail == node) state->inbox_tail = prev;
+    state->inbox_count--;
+    state->inbox_bytes -= node->len;
+    free(node->data);
+    free(node);
+    *out = message;
+    return true;
+  }
+  return false;
+}
+
 static void sandbox_host_deliver_message(sandbox_state_t *state, const char *payload, size_t payload_len) {
   if (!state || !state->js || !is_object_type(state->self)) return;
   ant_t *js = state->js;
@@ -949,22 +1005,16 @@ static void sandbox_host_deliver_message(sandbox_state_t *state, const char *pay
     return;
   }
 
+  bool claimed = false;
   sandbox_message_waiter_t **link = &state->waiter_head;
   while (*link) {
     sandbox_message_waiter_t *waiter = *link;
-    bool matches = waiter->type == NULL;
-    if (waiter->type) {
-      ant_value_t type = is_object_type(message) ? js_get(js, message, "type") : Ant_Value_Undefined;
-      if (vtype(type) == kTypeString) {
-        const char *value = js_getstr(js, type, NULL);
-        matches = value && strcmp(value, waiter->type) == 0;
-      }
-    }
-    if (!matches) {
+    if (!sandbox_message_has_type(js, message, waiter->type)) {
       link = &waiter->next;
       continue;
     }
 
+    claimed = true;
     *link = waiter->next;
     ant_value_t value = waiter->iterator ? js_iter_result(js, true, message) : message;
     js_resolve_promise(js, waiter->promise, value);
@@ -977,7 +1027,10 @@ static void sandbox_host_deliver_message(sandbox_state_t *state, const char *pay
 
   ant_value_t handler = js_get(js, state->self, "onmessage");
   if (!is_callable(handler)) handler = js_get(js, state->self, "_messageHandler");
-  if (!is_callable(handler)) return;
+  if (!is_callable(handler)) {
+    if (!claimed) sandbox_inbox_push(state, payload, payload_len);
+    return;
+  }
   ant_value_t args[1] = { message };
   sv_vm_call(js->vm, js, handler, state->self, args, 1, NULL, Ant_Value_Undefined);
 }
@@ -1047,7 +1100,7 @@ static void sandbox_async_closed(uv_handle_t *handle) {
   sandbox_state_t *state = handle ? handle->data : NULL;
   if (!state) return;
   state->async_initialized = false;
-  sandbox_remove_active(state);
+  Ant_List_Remove(state);
 }
 
 static void sandbox_async_cb(uv_async_t *handle) {
@@ -1200,6 +1253,7 @@ static ant_value_t sandbox_run(ant_params_t) {
   memset(&state->run_result, 0, sizeof(state->run_result));
   state->run_promise = js_mkpromise(js);
   state->has_run_promise = true;
+  sandbox_clear_inbox(state);
   state->running = true;
 
   if (uv_async_init(js->loop, &state->async, sandbox_async_cb) != 0) {
@@ -1356,6 +1410,13 @@ static ant_value_t sandbox_wait_for_message(
     );
     return promise;
   }
+
+  ant_value_t queued = Ant_Value_Undefined;
+  if (sandbox_inbox_take(js, state, type, &queued)) {
+    js_resolve_promise(js, promise, iterator ? js_iter_result(js, true, queued) : queued);
+    return promise;
+  }
+
   if (!state->running) {
     if (iterator)
       js_resolve_promise(js, promise, js_iter_result(js, false, Ant_Value_Undefined));

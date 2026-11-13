@@ -17,7 +17,14 @@ RUN mkdir -p vendor
 COPY vendor/*.wrap vendor/
 COPY vendor/packagefiles/ vendor/packagefiles/
 
-RUN meson subprojects download || test -d vendor/boringssl/.git
+RUN <<EOF
+set -eu
+for delay in 0 15 30 60 120; do
+  sleep "$delay"
+  if meson subprojects download; then exit 0; fi
+done
+exit 1
+EOF
 FROM deps AS build
 
 COPY src/tools/package.json src/tools/npm-shrinkwrap.json /tmp/ant-tools/
@@ -33,9 +40,10 @@ COPY . /work
 ARG TARGETARCH
 ARG BUILD_TIMESTAMP
 ARG BUILD_GIT_HASH
+ARG SANDBOX=auto
 
 ENV CC=clang CXX=clang++ CC_LD=lld AR=llvm-ar RANLIB=llvm-ranlib CMAKE_AR=llvm-ar CMAKE_RANLIB=llvm-ranlib
-RUN --mount=type=cache,id=ant-musl-build-${TARGETARCH},target=/work/build,sharing=locked \
+RUN --mount=type=cache,id=ant-musl-build-${TARGETARCH}-${SANDBOX},target=/work/build,sharing=locked \
     --mount=type=cache,id=ant-musl-rust-${TARGETARCH},target=/work/.cache/rust,sharing=locked <<EOF
 set -eux
 stamp="$CC $CXX $CC_LD $(clang --version | head -n1)"
@@ -45,6 +53,7 @@ meson setup build                          \
   --buildtype=release                      \
   -Dbuild_timestamp="${BUILD_TIMESTAMP:-}" \
   -Dbuild_git_hash="${BUILD_GIT_HASH:-}"   \
+  -Dsandbox="$SANDBOX"                     \
   --prefer-static                          \
   -Dstatic_link=true
 echo "$stamp" > build/.toolchain

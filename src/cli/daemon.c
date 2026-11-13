@@ -7,6 +7,9 @@
 #include <unistd.h>
 #include <crprintf.h>
 
+#include "cli/daemon.h"
+#include "cli/entry.h"
+
 #include "utils.h"
 #include "reactor.h"
 #include "runtime.h"
@@ -14,10 +17,8 @@
 #include "modules/io.h"
 #include "modules/tty.h"
 #include "modules/process.h"
-#include "sandbox/policy.h"
+#include "net/listen_policy.h"
 #include "sandbox/transport.h"
-#include "cli/daemon.h"
-#include "cli/entry.h"
 
 static bool enter_cwd(const ant_sandbox_request_t *request) {
   if (!request->cwd || chdir(request->cwd) == 0) return true;
@@ -36,7 +37,7 @@ void ant_cli_daemon_terminal(ant_t *js, const ant_sandbox_request_t *request) {
   io_set_sandbox_terminal(request->capabilities);
   process_set_sandbox_terminal(js, request->capabilities, request->tty_rows, request->tty_cols);
   tty_set_sandbox_terminal(request->capabilities, request->tty_rows, request->tty_cols);
-  ant_sandbox_policy_set_forwards(request->forward_ports, request->forward_count);
+  Ant_Net_ListenPolicy_SetForwards(js, request->forward_ports, request->forward_count);
 }
 
 static char **request_argv(const char *argv0, const ant_sandbox_request_t *request, int *argc_out) {
@@ -52,6 +53,7 @@ static char **request_argv(const char *argv0, const ant_sandbox_request_t *reque
 
   argv[argc] = NULL;
   *argc_out = argc;
+  
   return argv;
 }
 
@@ -94,6 +96,8 @@ static int run_request(ant_t *js, const ant_sandbox_request_t *request, const ch
 }
 
 int ant_cli_daemon_run(ant_t *js, ant_sandbox_request_t *request, const char *argv0) {
+  process_set_exit_notifier(ant_sandbox_transport_send_exit);
+  
   for (;;) {
     bool close = request->mode == ANT_SANDBOX_REQUEST_CLOSE;
     int code = close ? EXIT_SUCCESS : run_request(js, request, argv0);

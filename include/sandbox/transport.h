@@ -7,10 +7,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define ANT_SANDBOX_TRANSPORT_VSOCK_HOST_CID 2u
-#define ANT_SANDBOX_TRANSPORT_VSOCK_PORT 1024u
+static constexpr uint32_t ANT_SANDBOX_TRANSPORT_VSOCK_HOST_CID = 2;
+static constexpr uint32_t ANT_SANDBOX_TRANSPORT_VSOCK_PORT = 1024;
 
-bool ant_sandbox_transport_send_exit(int code);
+void ant_sandbox_transport_send_exit(int code);
 bool ant_sandbox_transport_install_output_frames(void);
 int ant_sandbox_transport_fd(void);
 

@@ -11,7 +11,6 @@
       "src/esm/trace/*.c",
       "src/cli/*.c",
       "src/napi/*.c",
-      "src/sandbox/*.c",
       "src/inspector/*.c",
       "src/modules/**/*.c",
       "src/streams/*.c",
@@ -33,10 +32,8 @@
     "exclude": [
       "src/main.c",
       "src/main_runtime.c",
-      "src/modules/sandbox_stub.c",
-      "src/sandbox/payload.c",
-      "src/sandbox/vm.c",
-      "src/sandbox/vm_helper.c"
+      "src/modules/sandbox.c",
+      "src/cli/daemon.c"
     ]
   },
   "library": {
@@ -76,19 +73,14 @@
     "exclude": [
       "src/main.c",
       "src/main_runtime.c",
-      "src/modules/sandbox_stub.c",
-      "src/sandbox/payload.c",
-      "src/sandbox/vm.c",
-      "src/sandbox/vm_helper.c"
+      "src/sandbox/vm.c"
     ]
   },
   "runtime": {
     "files": [
       "src/cli/misc.c",
       "src/cli/preload.c",
-      "src/cli/version.c",
-      "src/sandbox/policy.c",
-      "src/modules/sandbox_stub.c"
+      "src/cli/version.c"
     ],
     "patterns": [
       "src/*.c",
@@ -202,11 +194,37 @@
       "src/silver/generic_step.c"
     ]
   },
+  "rust": {
+    "files": [
+      "src/rust/Cargo.toml",
+      "src/rust/Cargo.lock",
+      "src/rust/build.rs",
+      "src/rust/cbindgen.toml",
+      "src/rust/rust-toolchain.toml"
+    ],
+    "patterns": [
+      "src/rust/src/*.rs",
+      "src/rust/src/sandbox/*.rs"
+    ]
+  },
+  "sandbox_host": {
+    "files": [
+      "src/cli/daemon.c",
+      "src/modules/sandbox.c"
+    ],
+    "patterns": [
+      "src/sandbox/*.c"
+    ],
+    "exclude": [
+      "src/sandbox/vm.c"
+    ]
+  },
   "sandbox_vm": {
     "files": [
-      "src/sandbox/payload.c",
-      "src/sandbox/vm.c",
-      "src/sandbox/vm_helper.c"
+      "src/sandbox/vm.c"
+    ],
+    "patterns": [
+      "src/sandbox/helper/*.c"
     ]
   },
   "sandbox_backend": {
@@ -214,16 +232,7 @@
       "shared": {
         "files": [
           "src/sandbox/backends/shared/aarch64_board.c",
-          "src/sandbox/backends/shared/common.c",
-          "src/sandbox/backends/shared/nat.c",
-          "src/sandbox/backends/shared/net_packets.c",
-          "src/sandbox/backends/shared/pci.c",
-          "src/sandbox/backends/shared/virtio.c",
-          "src/sandbox/backends/shared/virtio_9p.c",
-          "src/sandbox/backends/shared/virtio_blk.c",
-          "src/sandbox/backends/shared/virtio_net.c",
-          "src/sandbox/backends/shared/virtio_rng.c",
-          "src/sandbox/backends/shared/virtio_vsock.c"
+          "src/sandbox/backends/shared/common.c"
         ]
       },
       "darwin": {
@@ -236,20 +245,17 @@
           "src/sandbox/backends/darwin/gic.c",
           "src/sandbox/backends/darwin/hypervisor.c",
           "src/sandbox/backends/darwin/mmio.c",
-          "src/sandbox/backends/darwin/uart.c"
+          "src/sandbox/backends/darwin/uart.c",
+          "src/sandbox/backends/darwin/vcpu.c"
         ]
       },
       "linux": {
         "files": [
           "src/sandbox/backends/linux/kvm_aarch64.c",
           "src/sandbox/backends/linux/kvm_common.c",
+          "src/sandbox/backends/linux/kvm_session.c",
           "src/sandbox/backends/linux/kvm_unavailable.c",
           "src/sandbox/backends/linux/kvm_x86.c"
-        ]
-      },
-      "windows": {
-        "files": [
-          "src/sandbox/backends/windows/backend.c"
         ]
       }
     }

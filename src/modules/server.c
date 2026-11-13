@@ -23,7 +23,7 @@
 #include "gc/modules.h"
 #include "net/connection.h"
 #include "net/listener.h"
-#include "sandbox/policy.h"
+#include "net/listen_policy.h"
 #include "streams/readable.h"
 
 #include "http/http1_parser.h"
@@ -2118,14 +2118,12 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   callbacks.on_conn_close = server_on_conn_close;
   callbacks.on_listener_close = server_on_listener_close;
 
-  if (server->unix_path) {
-    rc = ant_listener_listen_pipe(
-      &server->listener, server->loop,
-      server->unix_path,
-      512, server->idle_timeout_ms, &callbacks, server
-    );
-  } else {
-    if (!ant_sandbox_policy_port_forwarded(server->port)) {
+  if (server->unix_path) rc = ant_listener_listen_pipe(
+    &server->listener, server->loop, server->unix_path,
+    512, server->idle_timeout_ms, &callbacks, server
+  );
+  else {
+    if (!Ant_Net_ListenPolicy_PortAllowed(js, server->port)) {
       int port = server->port;
       free(server->unix_path);
       free(server->hostname);

@@ -8,6 +8,7 @@
 #include "reactor.h"
 #include "modules/atomics.h"
 #include "isolate_internal.h"
+#include "net/listen_policy.h"
 
 static constexpr size_t GUEST_STACK_BYTES = 8u * 1024u * 1024u;
 
@@ -125,6 +126,7 @@ static void own_thread_main(void *arg) {
 
   if (ok) {
     child->interrupts_armed = true;
+    Ant_Net_ListenPolicy_Inherit(child, g->host);
     js_setstackbase(child, (void *)&stack_base);
     js_setstacklimit(child, GUEST_STACK_BYTES * 3 / 4);
     ok = guest_child_boot(g, child) && uv_async_init(child->loop, &g->child_async, own_child_wake) == 0;
