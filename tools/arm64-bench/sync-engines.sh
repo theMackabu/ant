@@ -154,7 +154,12 @@ kiesel_reported_version=$("$ENGINES_ROOT/kiesel/current/kiesel" --version 2>&1)
 libjs_revision=$(git ls-remote https://github.com/LadybirdBrowser/ladybird.git HEAD | awk '{print $1}')
 [[ "$libjs_revision" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid LibJS revision" >&2; exit 1; }
 libjs_install="$ENGINES_ROOT/libjs/$libjs_revision"
-if [[ ! -x "$libjs_install/js" ]]; then
+libjs_runs() {
+  [[ -x "$libjs_install/js" ]] || return 1
+  : > "$work_dir/libjs-probe.js"
+  "$libjs_install/js" "$work_dir/libjs-probe.js" >/dev/null 2>&1
+}
+if ! libjs_runs; then
   libjs_source="$SOURCE_ROOT/ladybird"
   if [[ ! -d "$libjs_source/.git" ]]; then
     git clone --filter=blob:none https://github.com/LadybirdBrowser/ladybird.git "$libjs_source"
@@ -175,6 +180,11 @@ if [[ ! -x "$libjs_install/js" ]]; then
   mkdir -p "$libjs_install"
   cp "$libjs_source/Build/distribution/bin/js" "$libjs_install/js"
   chmod +x "$libjs_install/js"
+  libjs_icu="$libjs_source/Build/distribution/share/Lagom/icu"
+  if [[ -d "$libjs_icu" ]]; then
+    cp "$libjs_icu"/icudt*.dat "$libjs_install/"
+  fi
+  libjs_runs || { echo "LibJS does not run after install" >&2; exit 1; }
 fi
 activate libjs "$libjs_install" js main "$libjs_revision" "$libjs_revision"
 
