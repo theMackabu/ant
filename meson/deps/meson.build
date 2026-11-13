@@ -149,7 +149,7 @@ pcre2_dep = subproject('pcre2', default_options: [
 ]).get_variable('libpcre2_8')
 
 skim_sub = subproject('skim', default_options: [
-  'optimization=3',
+  'optimization=2',
   'default_library=static',
 ])
 skim_dep = skim_sub.get_variable('skim_dep')
