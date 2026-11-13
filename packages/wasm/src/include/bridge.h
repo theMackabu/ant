@@ -1,5 +1,4 @@
-#ifndef ANT_WASM_BRIDGE_H
-#define ANT_WASM_BRIDGE_H
+#pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -27,5 +26,3 @@ static inline bool ant_wasm_deadline_expired(ant_wasm_runtime_t *runtime) {
 }
 
 ant_value_t host_function_call(ant_params_t);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ANT_WASM_WIRE_H
-#define ANT_WASM_WIRE_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -33,5 +32,3 @@ bool wire_encode_value(
   ant_wasm_runtime_t *runtime, ant_value_t value, 
   ant_wire_writer_t *writer, ant_wire_active_t *active, unsigned depth
 );
-
-#endif

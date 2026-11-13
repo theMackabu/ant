@@ -1,5 +1,4 @@
-#ifndef ANT_WASM_UV_SHIM_H
-#define ANT_WASM_UV_SHIM_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -131,5 +130,3 @@ static inline int uv_async_send(uv_async_t *handle) {
 }
 
 #undef UV_HANDLE_FIELDS
-
-#endif
