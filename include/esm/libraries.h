@@ -1,7 +1,6 @@
 #ifdef ANT_LIBRARY
 ANT_LIBRARY(ANT, "ffi", ffi_library)
 ANT_LIBRARY(ANT, "isolate", isolate_library)
-ANT_LIBRARY(ANT, "lmdb", lmdb_library)
 ANT_LIBRARY(ANT, "rpc", rpc_library)
 ANT_LIBRARY(ANT, "syntax", syntax_library)
 #ifdef ANT_HAVE_SANDBOX

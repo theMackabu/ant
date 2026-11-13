@@ -2467,7 +2467,6 @@ void init_process_module(ant_t *js) {
   process_set_string(js, versions_obj, "llhttp", ANT_DEP_LLHTTP_VERSION);
   process_set_string(js, versions_obj, "pcre2", ANT_DEP_PCRE2_VERSION);
   process_set_string(js, versions_obj, "libffi", ANT_DEP_LIBFFI_VERSION);
-  process_set_string(js, versions_obj, "lmdb", ANT_DEP_LMDB_VERSION);
   process_set_string(js, versions_obj, "utf8proc", ANT_DEP_UTF8PROC_VERSION);
   process_set_string(js, versions_obj, "zlib", ANT_DEP_ZLIB_VERSION);
   process_set_string(js, versions_obj, "wamr", ANT_DEP_WAMR_VERSION);

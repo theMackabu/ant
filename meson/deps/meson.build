@@ -130,12 +130,6 @@ utf8proc_dep = declare_dependency(
   compile_args: get_option('default_library') == 'static' ? ['-DUTF8PROC_STATIC'] : [],
 )
 
-lmdb_dep = subproject('lmdb', default_options: [
-  'warning_level=0',
-  'programs=disabled',
-  'optimization=s',
-]).get_variable('lmdb_dep')
-
 libffi_dep = subproject('libffi', default_options: [
   'warning_level=0',
   'tests=false'
@@ -182,7 +176,7 @@ ant_format_deps = [
 ]
 
 ant_runtime_deps = [
-  ssl_dep, crypto_dep, uthash_dep, lmdb_dep, wamr_dep,
+  ssl_dep, crypto_dep, uthash_dep, wamr_dep,
   double_conversion_dep, dragonbox_dep, wirecall, skim_dep,
 ]
 

@@ -14,7 +14,6 @@
 #include "modules/fs.h"
 #include "modules/http.h"
 #include "modules/isolate.h"
-#include "modules/lmdb.h"
 #include "modules/message_port.h"
 #include "modules/napi.h"
 #include "modules/navigator.h"
@@ -62,11 +61,6 @@ void Ant_Host_Stop(ant_t *js) {
 
   Ant_Loop_Drain(js);
   cleanup_timer_module(js);
-}
-
-void Ant_Host_Close(ant_t *js) {
-  cleanup_rpc_module(js);
-  cleanup_lmdb_module(js);
 }
 
 void Ant_Host_Free(ant_t *js) {

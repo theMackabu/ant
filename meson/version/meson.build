@@ -81,7 +81,6 @@ dep_versions = {
   'YYJSON': yyjson_dep.version(),
   'PCRE2': pcre2_dep.version(),
   'LIBFFI': libffi_dep.version(),
-  'LMDB': lmdb_dep.version(),
   'UTF8PROC': utf8proc_base_dep.version(),
   'ZLIB': zlib_dep.version(),
 }

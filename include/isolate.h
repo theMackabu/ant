@@ -164,7 +164,6 @@ struct ant_isolate_t {
   rpc_server_t *rpc_servers;
   rpc_client_t *rpc_clients;
   sandbox_state_t *sandboxes;
-  lmdb_state_t *lmdb;
   ant_napi_env_t *napi_env;
   ant_port_binding_t *port_bindings;
   broadcast_member_t *broadcast_members;

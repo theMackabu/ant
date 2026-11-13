@@ -103,7 +103,6 @@ and are fetched automatically:
 - libffi 3.8.0
 - libuv 1.53.0
 - llhttp 9.4.3
-- LMDB (OpenLDAP LMDB 0.9.37)
 - mimalloc 3.6.1 (optional runtime allocator, `-Dallocator=mimalloc`)
 - MIR `f7837cb110ae56faf3fc585358f6ced4afce6c99` (themackabu/mir)
 - PCRE2 10.49

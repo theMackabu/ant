@@ -21,7 +21,6 @@ interface Versions {
   simdjson: string;
   pcre2: string;
   libffi: string;
-  lmdb: string;
   utf8proc: string;
   zlib: string;
   v8: string;

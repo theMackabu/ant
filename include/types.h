@@ -74,7 +74,6 @@ typedef struct rl_interface_s   rl_interface_t;
 typedef struct rpc_server       rpc_server_t;
 typedef struct rpc_client       rpc_client_t;
 typedef struct sandbox_state    sandbox_state_t;
-typedef struct lmdb_state       lmdb_state_t;
 typedef struct ant_napi_env__   ant_napi_env_t;
 typedef struct ant_port_binding ant_port_binding_t;
 typedef struct broadcast_member broadcast_member_t;
