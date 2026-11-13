@@ -1,5 +1,4 @@
-#ifndef SILVER_COMPILE_CTX_H
-#define SILVER_COMPILE_CTX_H
+#pragma once
 
 #include <uthash.h>
 #include "silver/compiler.h"
@@ -38,5 +37,3 @@ void sv_compile_ctx_free_line_table(sv_line_table_t *lt);
 void sv_compile_ctx_ensure_local_lookup_capacity(sv_compiler_t *ctx, int next_count);
 void sv_compile_ctx_local_lookup_insert(sv_compiler_t *ctx, int idx);
 void sv_compile_ctx_local_lookup_remove(sv_compiler_t *ctx, int idx);
-
-#endif

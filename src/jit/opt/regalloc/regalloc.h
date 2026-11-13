@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_REGALLOC_H
-#define ANT_JIT_OPT_REGALLOC_H
+#pragma once
 
 #include "../bitset.h"
 #include "../exits.h"
@@ -91,5 +90,3 @@ void ra_resolve_parallel_moves(const ra_move_t *moves, uint32_t count, ra_locati
 bool ra_saves_only_gprs(const ir_op_t *op);
 
 ir_block_id_t ra_state_predecessor(const ir_graph_t *graph, ir_block_id_t block);
-
-#endif

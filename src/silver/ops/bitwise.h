@@ -1,5 +1,4 @@
-#ifndef SV_BITWISE_H
-#define SV_BITWISE_H
+#pragma once
 
 #include "errors.h"
 #include "silver/engine.h"
@@ -91,5 +90,3 @@ static inline ant_value_t sv_op_bnot(sv_vm_t *vm, ant_t *js) {
   vm->stack[vm->sp++] = res;
   return Ant_Value_FromNumber(0);
 }
-
-#endif

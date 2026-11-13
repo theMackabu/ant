@@ -1,5 +1,4 @@
-#ifndef VERSION_H
-#define VERSION_H
+#pragma once
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -11,5 +10,3 @@ int ant_version_print(void);
 int ant_upgrade(int argc, char **argv);
 
 bool ant_version_print_update_hint(FILE *out);
-
-#endif

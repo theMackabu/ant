@@ -1,5 +1,4 @@
-#ifndef SV_GLOBALS_H
-#define SV_GLOBALS_H
+#pragma once
 
 #include "silver/engine.h"
 #include "errors.h"
@@ -397,5 +396,3 @@ static inline ant_value_t sv_op_put_eval_global(
   vm->sp--;
   return result;
 }
-
-#endif

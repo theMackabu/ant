@@ -1,5 +1,4 @@
-#ifndef ANT_HTTP_H
-#define ANT_HTTP_H
+#pragma once
 
 #include <uv.h>
 #include <types.h>
@@ -80,5 +79,3 @@ void ant_http_headers_free(ant_http_header_t *headers);
 
 struct ant_http_pool *ant_http_pool_create(uv_loop_t *loop);
 void ant_http_pool_free(struct ant_http_pool *pool);
-
-#endif

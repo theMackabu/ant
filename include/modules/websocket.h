@@ -1,5 +1,4 @@
-#ifndef MODULES_WEBSOCKET_H
-#define MODULES_WEBSOCKET_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -28,5 +27,3 @@ ant_value_t ant_websocket_accept_server(
 void ant_websocket_server_open(ant_t *js, ant_value_t socket_obj);
 void ant_websocket_server_on_close(ant_t *js, ant_value_t socket_obj);
 void ant_websocket_server_on_read(ant_t *js, ant_value_t socket_obj, ant_conn_t *conn);
-
-#endif

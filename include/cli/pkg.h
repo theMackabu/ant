@@ -1,5 +1,4 @@
-#ifndef PKG_CMDS_H
-#define PKG_CMDS_H
+#pragma once
 
 #include <stdbool.h>
 #include "types.h"
@@ -24,5 +23,3 @@ void pkg_argv_free(pkg_argv_t *pkg);
 
 bool pkg_parse_global_flag(const char *arg);
 char **pkg_antx_argv(int *argc, char **argv);
-
-#endif

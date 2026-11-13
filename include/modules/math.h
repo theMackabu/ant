@@ -1,5 +1,4 @@
-#ifndef MATH_MODULE_H
-#define MATH_MODULE_H
+#pragma once
 
 #include "types.h"
 
@@ -49,6 +48,3 @@ typedef struct {
 } ant_math_double_info_t;
 
 extern const ant_math_double_info_t ant_math_doubles[ANT_MATH_DOUBLE_COUNT];
-
-
-#endif

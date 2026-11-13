@@ -1,5 +1,4 @@
-#ifndef PROCESS_H
-#define PROCESS_H
+#pragma once
 
 #include "types.h"
 #include "errors.h"
@@ -50,5 +49,3 @@ typedef void (*stdin_eof_fn)(ant_t *js);
 
 void process_stdin_attach_reader(ant_t *js, stdin_byte_consumer_fn on_bytes, stdin_eof_fn on_eof);
 void process_stdin_detach_reader(ant_t *js);
-
-#endif

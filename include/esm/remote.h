@@ -1,5 +1,4 @@
-#ifndef ESM_REMOTE_H
-#define ESM_REMOTE_H
+#pragma once
 
 #include "types.h"
 #include <stdbool.h>
@@ -14,5 +13,3 @@ char *esm_resolve_url(const char *specifier, const char *base_url);
 
 #define FILE_RESOLVER *(*file_resolver)(ant_t *, const char *, const char *)
 char *esm_resolve(ant_t *js, const char *specifier, const char *base_path, char FILE_RESOLVER);
-
-#endif

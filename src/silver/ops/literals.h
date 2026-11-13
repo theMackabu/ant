@@ -1,5 +1,4 @@
-#ifndef SV_LITERALS_H
-#define SV_LITERALS_H
+#pragma once
 
 #include "ant.h"
 #include "modules/regex.h"
@@ -181,5 +180,3 @@ static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
   vm->sp -= 2;
   vm->stack[vm->sp++] = regexp_create_literal(js, pattern, flags);
 }
-
-#endif

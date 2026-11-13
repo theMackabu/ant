@@ -1,5 +1,4 @@
-#ifndef ANT_GC_STRINGS_H
-#define ANT_GC_STRINGS_H
+#pragma once
 
 #include "pool.h"
 #include "value.h"
@@ -478,5 +477,3 @@ ant_value_t rope_cached_flat(ant_value_t value);
 ant_value_t builder_flatten(ant_t *js, ant_value_t builder);
 ant_value_t intern_value(ant_t *js, const char *interned);
 ant_value_t mkstr_with_ascii(ant_t *js, const void *ptr, size_t len, bool known_ascii);
-
-#endif

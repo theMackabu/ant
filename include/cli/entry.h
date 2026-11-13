@@ -1,5 +1,4 @@
-#ifndef ANT_CLI_ENTRY_H
-#define ANT_CLI_ENTRY_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -23,5 +22,3 @@ int ant_entry_files(ant_t *js, const char **files, int count, const char *cron_p
 int ant_entry_files_hot(ant_t *js, ant_watch_t *watch, const char **files, int count);
 
 ant_argv_t ant_entry_process_argv(const char *argv0, const char *first, bool resolve, ant_argv_t tail);
-
-#endif

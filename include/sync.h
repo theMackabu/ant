@@ -1,5 +1,4 @@
-#ifndef ANT_SYNC_H
-#define ANT_SYNC_H
+#pragma once
 
 #ifdef _WIN32
 #include <windows.h>
@@ -25,6 +24,4 @@ typedef pthread_mutex_t ant_mutex_t;
 
 static inline void ant_mutex_lock(ant_mutex_t *m) { pthread_mutex_lock(m); }
 static inline void ant_mutex_unlock(ant_mutex_t *m) { pthread_mutex_unlock(m); }
-#endif
-
 #endif

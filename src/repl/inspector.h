@@ -1,5 +1,4 @@
-#ifndef ANT_REPL_INSPECTOR_H
-#define ANT_REPL_INSPECTOR_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -28,5 +27,3 @@ bool repl_preview_compute(
   size_t len, char *suffix_out, size_t suffix_len,
   char *preview_out, size_t preview_len
 );
-
-#endif

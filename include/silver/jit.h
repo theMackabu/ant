@@ -1,5 +1,4 @@
-#ifndef SILVER_JIT_H
-#define SILVER_JIT_H
+#pragma once
 
 #include "silver/engine.h"
 
@@ -110,5 +109,3 @@ static inline uint32_t sv_jit_osr_threshold_for(int code_len) {
   
   return (uint32_t)t;
 }
-
-#endif

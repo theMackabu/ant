@@ -1,5 +1,4 @@
-#ifndef ANT_VALUE_H
-#define ANT_VALUE_H
+#pragma once
 
 #include "cage.h"
 #include "types.h"
@@ -152,5 +151,3 @@ static inline ant_value_t Ant_Value_FromNumber(double number) {
     return UINT64_C(0x7FF8000000000000); // canonical NaN
   return bits.value;
 }
-
-#endif

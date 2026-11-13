@@ -1,5 +1,4 @@
-#ifndef SV_CONTROL_H
-#define SV_CONTROL_H
+#pragma once
 
 #include "silver/engine.h"
 
@@ -58,5 +57,3 @@ static inline uint8_t *sv_op_jmp_true8(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   }
   return ip + sv_op_size[OP_JMP_TRUE8];
 }
-
-#endif

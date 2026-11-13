@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_IR_VALUE_H
-#define ANT_JIT_OPT_IR_VALUE_H
+#pragma once
 
 #include "../code.h"
 #include "value.h"
@@ -91,5 +90,3 @@ static inline int ir_value_virtual_arguments_kind(uint64_t bits) {
 }
 
 void ir_value_describe(uint64_t bits, char *buffer, size_t size);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ANT_MODULES_PROCESS_STAGE_H
-#define ANT_MODULES_PROCESS_STAGE_H
+#pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -54,5 +53,3 @@ uv_pid_t ant_process_stage_pid(const ant_process_stage_t *stage);
 void ant_process_stdio_ignore(uv_stdio_container_t *stdio);
 void ant_process_stdio_inherit_fd(uv_stdio_container_t *stdio, int fd);
 void ant_process_stdio_create_pipe(uv_stdio_container_t *stdio, uv_stream_t *stream, bool child_reads);
-
-#endif

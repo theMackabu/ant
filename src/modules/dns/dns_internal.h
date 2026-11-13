@@ -1,5 +1,4 @@
-#ifndef ANT_DNS_INTERNAL_H
-#define ANT_DNS_INTERNAL_H
+#pragma once
 
 #include <ares.h>
 #include <uv.h>
@@ -105,5 +104,3 @@ ant_value_t dns_resolve_impl(ant_native_params_t, ant_value_t call_this, int rr,
 ant_value_t dns_reverse_impl(ant_native_params_t, ant_value_t call_this, bool promises);
 ant_value_t dns_channel_get_servers(ant_t *js, dns_channel_t *channel);
 ant_value_t dns_channel_set_servers(ant_t *js, dns_channel_t *channel, ant_value_t servers);
-
-#endif

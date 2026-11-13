@@ -1,5 +1,4 @@
-#ifndef ANT_LIST_H
-#define ANT_LIST_H
+#pragma once
 
 #include <stddef.h>
 
@@ -25,5 +24,3 @@
     _node->pprev = NULL;                                  \
   }                                                       \
 })
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef SV_OBJECTS_H
-#define SV_OBJECTS_H
+#pragma once
 
 #include "utf8.h"
 #include "property.h"
@@ -336,5 +335,3 @@ static inline ant_value_t sv_op_define_class_comp(
   
   return result;
 }
-
-#endif

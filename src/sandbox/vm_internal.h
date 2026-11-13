@@ -1,5 +1,4 @@
-#ifndef ANT_SANDBOX_VM_INTERNAL_H
-#define ANT_SANDBOX_VM_INTERNAL_H
+#pragma once
 
 #include "sandbox/vm.h"
 #include <stdbool.h>
@@ -39,5 +38,3 @@ int ant_sandbox_vm_helper_send(ant_sandbox_vm_session_t *session, const void *da
 int ant_sandbox_vm_helper_stats(ant_sandbox_vm_session_t *session, ant_sandbox_vm_stats_t *stats);
 int ant_sandbox_vm_helper_cancel(ant_sandbox_vm_session_t *session);
 void ant_sandbox_vm_helper_destroy(ant_sandbox_vm_session_t *session);
-
-#endif

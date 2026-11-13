@@ -1,5 +1,4 @@
-#ifndef SV_SUPER_H
-#define SV_SUPER_H
+#pragma once
 
 #include "silver/engine.h"
 
@@ -55,5 +54,3 @@ static inline void sv_op_put_super_val(sv_vm_t *vm, ant_t *js) {
   js_setprop(js, this, key_str, val);
   vm->sp -= 4;
 }
-
-#endif

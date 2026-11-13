@@ -1,5 +1,4 @@
-#ifndef ANT_MODULES_REGEX_SYNTAX_INTERNAL_H
-#define ANT_MODULES_REGEX_SYNTAX_INTERNAL_H
+#pragma once
 
 #include "modules/regex_syntax.h"
 #include "unicode.h"
@@ -159,5 +158,3 @@ static inline bool rx_is_class_set_double_punctuator(const rx_t *p, uint32_t c) 
 static inline bool rx_is_class_escape_char(uint32_t c) {
   return rx_in_set(c, "dDsSwW");
 }
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ANT_SILVER_COMPILER_COMPILER_INTERNAL_H
-#define ANT_SILVER_COMPILER_COMPILER_INTERNAL_H
+#pragma once
 
 #include "utf8.h"
 #include "hash.h"    // IWYU pragma: export
@@ -457,5 +456,3 @@ static inline bool is_class_method_def(const sv_ast_t *m) {
     m && m->right && m->right->type == N_FUNC &&
     (m->right->flags & FN_METHOD);
 }
-
-#endif

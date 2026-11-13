@@ -1,5 +1,4 @@
-#ifndef SILVER_GLUE_H
-#define SILVER_GLUE_H
+#pragma once
 
 #include "silver/engine.h"
 
@@ -504,5 +503,3 @@ ant_value_t jit_helper_forward_arguments(
   ant_value_t target, ant_value_t receiver, 
   ant_value_t *args, int argc
 );
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef SILVER_CODE_UNIT_H
-#define SILVER_CODE_UNIT_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -81,5 +80,3 @@ static inline bool sv_code_unit_dying(const sv_code_unit_t *unit, uint64_t epoch
 
 void sv_code_units_sweep(ant_t *js, uint64_t epoch);
 void sv_code_units_destroy(ant_t *js);
-
-#endif

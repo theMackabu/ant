@@ -1,5 +1,4 @@
-#ifndef SV_COMPARISON_H
-#define SV_COMPARISON_H
+#pragma once
 
 #include <math.h>
 #include <string.h>
@@ -582,5 +581,3 @@ static inline void sv_op_is_undef_or_null(sv_vm_t *vm) {
   uint8_t t = vtype(v);
   vm->stack[vm->sp++] = mkval(kTypeBool, t == kTypeNull || t == kTypeUndefined);
 }
-
-#endif

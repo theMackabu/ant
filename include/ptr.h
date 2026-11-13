@@ -1,5 +1,4 @@
-#ifndef ANT_NATIVE_PTR_H
-#define ANT_NATIVE_PTR_H
+#pragma once
 
 #include "hash.h"
 #include "types.h"
@@ -102,5 +101,3 @@ static inline bool ant_ptr_pair_get(
     if (entry->key_a == key_a && entry->key_b == key_b) { *out = entry->value; return true; }
   }
 }
-
-#endif

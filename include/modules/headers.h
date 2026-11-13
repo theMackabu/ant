@@ -1,5 +1,4 @@
-#ifndef HEADERS_H
-#define HEADERS_H
+#pragma once
 
 #include "types.h"
 
@@ -42,5 +41,3 @@ ant_value_t headers_create_from_data(ant_t *js, headers_data_t *data);
 ant_value_t headers_get_value(ant_t *js, ant_value_t hdrs, const char *name);
 ant_value_t headers_append_literal(ant_t *js, ant_value_t hdrs, const char *name, const char *value);
 ant_value_t headers_data_init_from(ant_t *js, headers_data_t *data, ant_value_t init);
-
-#endif

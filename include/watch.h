@@ -1,5 +1,4 @@
-#ifndef ANT_WATCH_H
-#define ANT_WATCH_H
+#pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -36,5 +35,3 @@ uint32_t ant_watch_generation(ant_t *js);
 
 bool ant_watch_supervises(ant_t *js);
 ant_value_t ant_watch_exit(ant_t *js);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_EXITS_H
-#define ANT_JIT_OPT_EXITS_H
+#pragma once
 
 #include "arena.h"
 
@@ -78,5 +77,3 @@ static inline const opt_exit_value_t *opt_exit_next(opt_exit_cursor_t *cursor) {
   }
   return &cursor->view.values[cursor->at++];
 }
-
-#endif

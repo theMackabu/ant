@@ -1,5 +1,4 @@
-#ifndef SILVER_CALL_H
-#define SILVER_CALL_H
+#pragma once
 
 #include "realm.h"
 #include "handles.h"
@@ -518,5 +517,3 @@ static inline ant_value_t sv_call_closure_fast(
 
   return sv_call_closure_after_jit(js->vm, js, closure, func, &ctx, NULL);
 }
-
-#endif

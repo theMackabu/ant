@@ -1,5 +1,4 @@
-#ifndef SILVER_LEXER_H
-#define SILVER_LEXER_H
+#pragma once
 
 #include <stdbool.h>
 #include "types.h"
@@ -81,5 +80,3 @@ extern const uint8_t char_type[256];
 #define IS_IDENT(c)  (char_type[(uint8_t)(c)] & CHAR_IDENT)
 #define IS_IDENT1(c) (char_type[(uint8_t)(c)] & CHAR_IDENT1)
 #define IS_OCTAL(c)  (char_type[(uint8_t)(c)] & CHAR_OCTAL)
-
-#endif

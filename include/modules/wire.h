@@ -1,5 +1,4 @@
-#ifndef ANT_WIRE_H
-#define ANT_WIRE_H
+#pragma once
 
 #include <stdatomic.h>
 #include <stddef.h>
@@ -43,5 +42,3 @@ ant_value_t ant_wire_mark_untransferable(ant_t *js, ant_value_t value);
 
 bool ant_wire_is_untransferable(ant_t *js, ant_value_t value);
 bool ant_wire_is_uncloneable(ant_t *js, ant_value_t value);
-
-#endif

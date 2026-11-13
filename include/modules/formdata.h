@@ -1,5 +1,4 @@
-#ifndef FORMDATA_H
-#define FORMDATA_H
+#pragma once
 
 #include <stdint.h>
 #include <stddef.h>
@@ -36,5 +35,3 @@ ant_value_t formdata_append_file(
   ant_value_t name_v, ant_value_t blob_v, 
   ant_value_t filename_v
 );
-
-#endif

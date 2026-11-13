@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_ASM_MASM_H
-#define ANT_JIT_OPT_ASM_MASM_H
+#pragma once
 
 #include "a64.h"
 #include "x64.h"
@@ -311,6 +310,4 @@ typedef masm_x64_t masm_t;
 #define masm_frame masm_x64_frame
 #define masm_emit_prologue masm_x64_emit_prologue
 #define masm_emit_epilogue masm_x64_emit_epilogue
-#endif
-
 #endif

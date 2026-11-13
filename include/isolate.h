@@ -1,5 +1,4 @@
-#ifndef ANT_ISOLATE_H
-#define ANT_ISOLATE_H
+#pragma once
 
 #include <stdatomic.h>
 
@@ -676,5 +675,3 @@ static inline void js_setstacklimit(ant_t *js, size_t max) {
   js->cstk.limit = max;
   js_cstk_refresh_floor(js);
 }
-
-#endif

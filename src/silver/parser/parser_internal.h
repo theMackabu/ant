@@ -1,5 +1,4 @@
-#ifndef ANT_SILVER_PARSER_PARSER_INTERNAL_H
-#define ANT_SILVER_PARSER_PARSER_INTERNAL_H
+#pragma once
 
 #include "escape.h"
 #include "tokens.h"
@@ -297,5 +296,3 @@ static inline uint32_t node_src_end(sv_parser_t *p, sv_ast_t *node) {
   if (node && node->src_end > node->src_off) return node->src_end;
   return (uint32_t)(node && node->type == N_BLOCK ? p->lx.st.toff + p->lx.st.tlen : p->lx.st.toff);
 }
-
-#endif

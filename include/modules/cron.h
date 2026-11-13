@@ -1,5 +1,4 @@
-#ifndef ANT_MODULES_CRON_H
-#define ANT_MODULES_CRON_H
+#pragma once
 
 #include "types.h"
 #include "gc/modules.h"
@@ -13,5 +12,3 @@ int cron_run_scheduled_export(
   ant_value_t default_export,
   const char *expression
 );
-
-#endif

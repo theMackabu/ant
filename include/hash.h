@@ -1,5 +1,4 @@
-#ifndef ANT_HASH_H
-#define ANT_HASH_H
+#pragma once
 
 // Ported from Node.js `src/node_hash.h` (HashBytes), which is itself based on
 // rapidhash V3 with the mixing primitive from wyhash. Kept as a port rather than a
@@ -147,5 +146,3 @@ static inline uint64_t hash_key(const char *key, size_t len) {
 
   return ant_hash_mix(a ^ ant_hash_secret[7], b ^ ant_hash_secret[1] ^ len);
 }
-
-#endif

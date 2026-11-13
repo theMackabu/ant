@@ -1,5 +1,4 @@
-#ifndef ANT_READLINE_INTERNAL_H
-#define ANT_READLINE_INTERNAL_H
+#pragma once
 
 #include <ctype.h>
 #include <signal.h>
@@ -30,7 +29,6 @@
 
 #define MAX_LINE_LENGTH 4096
 #define MAX_PREVIEW_LENGTH 1024
-
 
 typedef enum {
   KEY_NONE, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT,
@@ -68,5 +66,3 @@ void refresh_line_with_preview(
   const char *suffix,
   const char *preview
 );
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ANT_MODULES_TEMPORAL_INTERNAL_H
-#define ANT_MODULES_TEMPORAL_INTERNAL_H
+#pragma once
 
 #include <limits.h>
 #include <math.h>
@@ -300,5 +299,3 @@ void temporal_init_now(ant_t *js, ant_value_t temporal);
 #define TEMPORAL_GETTER(js, obj, name, fn)                                               \
   js_set_getter_desc((js), (obj), (name), sizeof(name) - 1,                              \
   temporal_make_function((js), (fn), "get " name, sizeof("get " name) - 1, 0), JS_DESC_C)
-
-#endif

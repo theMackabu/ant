@@ -1,5 +1,4 @@
-#ifndef SV_ITERATION_H
-#define SV_ITERATION_H
+#pragma once
 
 #include "ant.h"
 #include "async.h"
@@ -727,5 +726,3 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
   
   return out;
 }
-
-#endif

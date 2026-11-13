@@ -1,5 +1,4 @@
-#ifndef ESM_COMMONJS_H
-#define ESM_COMMONJS_H
+#pragma once
 
 #include "types.h"
 
@@ -28,5 +27,3 @@ void esm_cjs_update_children(
   ant_t *js, ant_value_t parent,
   ant_value_t child, bool remove
 );
-
-#endif

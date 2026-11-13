@@ -1,5 +1,4 @@
-#ifndef ANT_PRIMORDIALS_H
-#define ANT_PRIMORDIALS_H
+#pragma once
 
 #include "types.h"
 
@@ -13,5 +12,3 @@ typedef enum {
 
 ant_value_t ant_capture_primordials(ant_t *js);
 ant_value_t primordial_library(ant_t *js);
-
-#endif

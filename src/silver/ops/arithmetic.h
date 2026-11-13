@@ -1,5 +1,4 @@
-#ifndef SV_ARITHMETIC_H
-#define SV_ARITHMETIC_H
+#pragma once
 
 #include <math.h>
 #include "tokens.h"
@@ -310,5 +309,3 @@ static inline ant_value_t sv_op_add_local(sv_vm_t *vm, ant_value_t *lp, ant_t *j
   
   return Ant_Value_FromNumber(0);
 }
-
-#endif

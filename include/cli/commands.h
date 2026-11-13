@@ -1,5 +1,4 @@
-#ifndef ANT_CLI_COMMANDS_H
-#define ANT_CLI_COMMANDS_H
+#pragma once
 
 #include "cli/options.h"
 #include "cli/pkg.h"
@@ -12,5 +11,3 @@ typedef enum {
 
 void ant_cli_print_subcommands(void);
 ant_route_t ant_cli_route(const ant_cli_t *cli, pkg_argv_t *pkg, int *exit_code);
-
-#endif

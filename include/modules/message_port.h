@@ -1,5 +1,4 @@
-#ifndef ANT_MESSAGE_PORT_H
-#define ANT_MESSAGE_PORT_H
+#pragma once
 
 #include <stdbool.h>
 #include "types.h"
@@ -34,5 +33,3 @@ ant_port_binding_t *ant_port_end_bind(ant_t *js, ant_port_end_t *end, ant_value_
 ant_value_t ant_message_port_proto(ant_t *js);
 ant_value_t ant_message_port_adopt(ant_t *js, ant_port_end_t *end);
 ant_port_end_t *ant_message_port_take(ant_t *js, ant_value_t port);
-
-#endif

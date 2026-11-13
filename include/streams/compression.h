@@ -1,5 +1,4 @@
-#ifndef STREAMS_COMPRESSION_H
-#define STREAMS_COMPRESSION_H
+#pragma once
 
 #include "types.h"
 #include <stdbool.h>
@@ -13,5 +12,3 @@ typedef enum {
 
 void init_compression_stream_module(ant_t *js);
 void gc_mark_compression_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));
-
-#endif

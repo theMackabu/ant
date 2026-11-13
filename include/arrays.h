@@ -1,5 +1,4 @@
-#ifndef ANT_ARRAYS_H
-#define ANT_ARRAYS_H
+#pragma once
 
 #include "internal.h"
 
@@ -114,5 +113,3 @@ ant_value_t alloc_array_with_proto_capacity(
   ant_t *js, ant_value_t proto, uint32_t minimum_capacity,
   uint32_t overwritten_prefix, bool exact_capacity
 );
-
-#endif

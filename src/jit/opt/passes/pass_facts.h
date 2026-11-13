@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_PASS_FACTS_H
-#define ANT_JIT_OPT_PASS_FACTS_H
+#pragma once
 
 #include "passes.h"
 
@@ -117,5 +116,3 @@ void pass_facts_forget_refinement(pass_facts_t *facts, ir_node_id_t value);
 void pass_facts_apply(pass_facts_t *facts, ir_node_properties_t properties);
 void pass_facts_merge(pass_facts_t *merged, const pass_facts_t *const *facts, uint32_t count, pass_facts_context_t *context);
 int pass_elements_kind_implies(ir_elements_kind_t known, ir_elements_kind_t kind);
-
-#endif

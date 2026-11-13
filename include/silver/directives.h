@@ -1,5 +1,4 @@
-#ifndef SILVER_STRICT_H
-#define SILVER_STRICT_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -13,5 +12,3 @@ bool sv_ast_is_directive(
 );
 
 bool sv_ast_is_use_strict(ant_t *js, const sv_ast_t *node);
-
-#endif

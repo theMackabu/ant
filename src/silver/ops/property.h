@@ -1,7 +1,6 @@
 // TODO: cleanup and split
 
-#ifndef SV_PROPERTY_H
-#define SV_PROPERTY_H
+#pragma once
 
 #include "gc.h"
 #include "gc/roots.h"
@@ -2020,5 +2019,3 @@ static inline ant_value_t sv_op_get_length(sv_vm_t *vm, ant_t *js, sv_func_t *fu
   
   return Ant_Value_Undefined;
 }
-
-#endif

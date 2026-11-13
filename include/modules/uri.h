@@ -1,5 +1,4 @@
-#ifndef URI_H
-#define URI_H
+#pragma once
 
 #include "types.h"
 
@@ -10,5 +9,3 @@ ant_value_t js_decodeURI(ant_params_t);
 
 ant_value_t js_encodeURIComponent(ant_params_t);
 ant_value_t js_decodeURIComponent(ant_params_t);
-
-#endif

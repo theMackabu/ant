@@ -1,5 +1,4 @@
-#ifndef ANT_ABORT_MODULE_H
-#define ANT_ABORT_MODULE_H
+#pragma once
 
 #include "types.h"
 #include "gc/modules.h"
@@ -18,5 +17,3 @@ bool abort_signal_is_aborted(ant_value_t signal);
 ant_value_t abort_signal_get_reason(ant_value_t signal);
 ant_value_t abort_signal_make_error(ant_t *js, ant_value_t signal);
 ant_value_t abort_signal_create_dependent(ant_t *js, ant_value_t source);
-
-#endif

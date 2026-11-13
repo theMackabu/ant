@@ -1,5 +1,4 @@
-#ifndef ANT_NET_LISTENER_H
-#define ANT_NET_LISTENER_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -127,5 +126,3 @@ size_t ant_conn_write_queue_size(const ant_conn_t *conn);
 uint64_t ant_conn_timeout_ms(const ant_conn_t *conn);
 uint64_t ant_conn_bytes_read(const ant_conn_t *conn);
 uint64_t ant_conn_bytes_written(const ant_conn_t *conn);
-
-#endif

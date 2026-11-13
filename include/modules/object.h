@@ -1,5 +1,4 @@
-#ifndef ANT_MODULES_OBJECT_H
-#define ANT_MODULES_OBJECT_H
+#pragma once
 
 #include "internal.h"
 
@@ -13,5 +12,3 @@ ant_value_t builtin_object_toLocaleString(ant_params_t);
 
 void js_object_init_prototype(ant_t *js, ant_value_t object_proto);
 void js_object_init_constructor(ant_t *js, ant_value_t obj_func_obj, ant_value_t object_proto);
-
-#endif

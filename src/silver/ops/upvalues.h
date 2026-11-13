@@ -1,5 +1,4 @@
-#ifndef SV_UPVALUES_H
-#define SV_UPVALUES_H
+#pragma once
 
 #include "internal.h"
 #include "silver/engine.h"
@@ -291,5 +290,3 @@ static inline ant_value_t sv_op_closure_args(
       js_arguments_link_upvalue(js, frame, closure->upvalues[i]);
   return result;
 }
-
-#endif

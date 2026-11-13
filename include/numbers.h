@@ -1,5 +1,4 @@
-#ifndef ANT_NUMBER_CONVERSION_H
-#define ANT_NUMBER_CONVERSION_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -78,5 +77,4 @@ static inline void ant_int32_write(char *dst, size_t len, int32_t value) {
 
 #ifdef __cplusplus
 }
-#endif
 #endif

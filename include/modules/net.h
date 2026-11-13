@@ -1,5 +1,4 @@
-#ifndef ANT_NET_MODULE_H
-#define ANT_NET_MODULE_H
+#pragma once
 
 #include <stdbool.h>
 #include "types.h"
@@ -20,5 +19,3 @@ typedef struct net_listen_args_s {
 bool net_value_is_port(ant_t *js, ant_value_t value);
 bool net_parse_listen_args(ant_native_params_t, net_listen_args_t *out);
 bool net_parse_port(ant_t *js, ant_value_t value, const char *range_name, int *out_port, ant_value_t *out_error);
-
-#endif

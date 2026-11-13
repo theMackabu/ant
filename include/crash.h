@@ -1,5 +1,4 @@
-#ifndef ANT_CRASH_H
-#define ANT_CRASH_H
+#pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -17,5 +16,3 @@ int ant_crash_guard_native_call(
 
 int ant_crash_run_internal_report(ant_t *js);
 bool ant_crash_is_internal_report(int argc, char **argv);
-
-#endif

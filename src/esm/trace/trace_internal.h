@@ -1,5 +1,4 @@
-#ifndef ANT_ESM_TRACE_INTERNAL_H
-#define ANT_ESM_TRACE_INTERNAL_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -187,5 +186,3 @@ int trace_register_native_package(trace_ctx_t *ctx, const char *file, bool fallb
 bool trace_path_is_materialized(trace_ctx_t *ctx, const char *path);
 void trace_exclude_redundant_universal_native(trace_ctx_t *ctx, uint32_t parent_idx);
 void trace_native_free(trace_ctx_t *ctx);
-
-#endif

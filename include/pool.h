@@ -1,5 +1,4 @@
-#ifndef ANT_POOL_H
-#define ANT_POOL_H
+#pragma once
 
 #include "cage.h"
 #include "types.h"
@@ -180,5 +179,3 @@ void *pool_alloc_chain(
   ant_pool_block_t **head, ant_pool_block_t **free_head, 
   size_t block_size, size_t size, size_t align
 );
-
-#endif

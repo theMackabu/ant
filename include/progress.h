@@ -1,5 +1,4 @@
-#ifndef PROGRESS_H
-#define PROGRESS_H
+#pragma once
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -306,5 +305,3 @@ static inline void progress_stop(progress_t *p) {
   progress_mutex_unlock(&p->mutex);
   progress_mutex_destroy(&p->mutex);
 }
-
-#endif

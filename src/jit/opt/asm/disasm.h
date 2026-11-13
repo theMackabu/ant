@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_ASM_DISASM_H
-#define ANT_JIT_OPT_ASM_DISASM_H
+#pragma once
 
 #include "asm.h"
 #include <stdio.h>
@@ -30,5 +29,3 @@ void asm_listing_print(FILE *out, const asm_listing_t *listing);
 
 size_t asm_disasm_x64(const uint8_t *code, size_t len, size_t offset, asm_insn_t *out);
 size_t asm_disasm_a64(const uint8_t *code, size_t len, size_t offset, asm_insn_t *out);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ANT_WORKER_WORKER_INTERNAL_H
-#define ANT_WORKER_WORKER_INTERNAL_H
+#pragma once
 
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -155,5 +154,3 @@ void worker_stdio_end(ant_t *js, ant_worker_t *w);
 
 void worker_messaging_close(ant_t *js);
 void worker_messaging_gc_mark(ant_t *js, gc_mark_fn mark);
-
-#endif

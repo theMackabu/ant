@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_COMPILE_H
-#define ANT_JIT_COMPILE_H
+#pragma once
 
 #include "jit_internal.h"
 #include "silver/feedback.h"
@@ -463,5 +462,3 @@ void jit_emit_strings(jit_compile_t *c);
 void jit_emit_properties(jit_compile_t *c);
 void jit_emit_bindings(jit_compile_t *c);
 void jit_emit_iteration(jit_compile_t *c);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef BIGINT_MODULE_H
-#define BIGINT_MODULE_H
+#pragma once
 
 #include "types.h"
 
@@ -40,5 +39,3 @@ double bigint_to_double(ant_t *js, ant_value_t v);
 size_t bigint_digits_len(ant_t *js, ant_value_t v);
 size_t strbigint(ant_t *js, ant_value_t value, char *buf, size_t len);
 int bigint_compare(ant_t *js, ant_value_t a, ant_value_t b);
-
-#endif

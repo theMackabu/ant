@@ -1,5 +1,4 @@
-#ifndef STREAMS_TRANSFORM_H
-#define STREAMS_TRANSFORM_H
+#pragma once
 
 #include "types.h"
 #include <stdbool.h>
@@ -24,5 +23,3 @@ ant_value_t ts_create(
   ant_t *js, ant_value_t transformer, ant_value_t writable_strategy, 
   ant_value_t readable_strategy, ant_value_t new_target
 );
-
-#endif

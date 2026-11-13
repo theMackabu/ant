@@ -1,5 +1,4 @@
-#ifndef REGEX_H
-#define REGEX_H
+#pragma once
 
 #include "types.h"
 #include "gc/strings.h"
@@ -96,5 +95,3 @@ static inline void regexp_note_property_write(ant_t *js, const char *name, size_
   if (!name) return;
   if (len == 7 && name[0] == 'r' && memcmp(name, "replace", 7) == 0) regexp_note_replace_property_write(js);
 }
-
-#endif

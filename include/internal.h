@@ -1,5 +1,4 @@
-#ifndef ANT_INTERNAL_H
-#define ANT_INTERNAL_H
+#pragma once
 
 #include "ant.h"     // IWYU pragma: export
 #include "value.h"   // IWYU pragma: export
@@ -642,5 +641,3 @@ static inline bool js_obj_ensure_prop_capacity(ant_t *js, ant_object_t *obj, uin
   
   return true;
 }
-
-#endif

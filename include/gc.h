@@ -1,5 +1,4 @@
-#ifndef ANT_GC_H
-#define ANT_GC_H
+#pragma once
 
 #include "internal.h"
 #include <stdbool.h>
@@ -126,5 +125,3 @@ static inline void gc_note_overflow_free(ant_t *js, size_t bytes) {
   Ant_Assert(js->gc.overflow_live >= bytes, "overflow slots released more bytes than were allocated");
   js->gc.overflow_live -= bytes;
 }
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef TIMER_H
-#define TIMER_H
+#pragma once
 
 #include "types.h"
 #include "modules/microtasks.h"
@@ -38,5 +37,3 @@ void process_immediates(ant_t *js);
 int has_pending_timers(ant_t *js);
 int has_pending_immediates(ant_t *js);
 int has_active_immediates(ant_t *js);
-
-#endif

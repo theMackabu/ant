@@ -1,5 +1,4 @@
-#ifndef SV_STACK_H
-#define SV_STACK_H
+#pragma once
 
 #include "silver/engine.h"
 
@@ -81,5 +80,3 @@ static inline void sv_op_rot4_under(sv_vm_t *vm) {
   vm->stack[vm->sp - 3] = a;
   vm->stack[vm->sp - 2] = b;
 }
-
-#endif

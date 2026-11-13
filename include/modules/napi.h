@@ -1,5 +1,4 @@
-#ifndef ANT_NAPI_H
-#define ANT_NAPI_H
+#pragma once
 
 #include "types.h"
 
@@ -173,5 +172,3 @@ ant_value_t napi_load_native_module(ant_t *js, const char *module_path, ant_valu
 
 void cleanup_napi_module(ant_t *js);
 void free_napi_module(ant_t *js);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef SV_PRIVATE_H
-#define SV_PRIVATE_H
+#pragma once
 
 #include <stdlib.h>
 #include "gc.h"
@@ -328,5 +327,3 @@ static inline ant_value_t sv_op_has_private(sv_vm_t *vm, ant_t *js) {
   
   return Ant_Value_Undefined;
 }
-
-#endif

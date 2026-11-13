@@ -1,5 +1,4 @@
-#ifndef ANT_GC_WEAK_H
-#define ANT_GC_WEAK_H
+#pragma once
 
 #include "types.h"
 
@@ -31,5 +30,3 @@ void gc_weak_process(
   gc_weak_drain_fn drain, gc_weak_key_alive_fn key_alive,
   gc_weak_collection_live_fn collection_live
 );
-
-#endif

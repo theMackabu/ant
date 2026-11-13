@@ -1,5 +1,4 @@
-#ifndef ANT_GC_TRACE_H
-#define ANT_GC_TRACE_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -47,5 +46,3 @@ static inline void gc_trace_major_end(ant_t *js, gc_trace_major_t *trace, uint64
 static inline void gc_trace_minor_end(ant_t *js, uint64_t start_ns, size_t young, size_t survivors) {
   if (sv_debug_unlikely(SV_DEBUG_GC_TRACE)) gc_trace_minor_print(js, start_ns, young, survivors);
 }
-
-#endif

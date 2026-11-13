@@ -1,5 +1,4 @@
-#ifndef ANT_HTTP_EVENTSOURCE_H
-#define ANT_HTTP_EVENTSOURCE_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -53,5 +52,3 @@ bool ant_sse_parser_feed(
   ant_sse_message_cb cb,
   void *user_data
 );
-
-#endif

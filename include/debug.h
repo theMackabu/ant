@@ -1,5 +1,4 @@
-#ifndef DEBUG_H
-#define DEBUG_H
+#pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -27,5 +26,3 @@ static inline void sv_debug_enable(uint32_t flags) { sv_debug_flags |= flags; }
 static inline void sv_debug_disable(uint32_t flags) { sv_debug_flags &= ~flags; }
 
 #define sv_debug_unlikely(flag) __builtin_expect(sv_debug_enabled((flag)), 0)
-
-#endif

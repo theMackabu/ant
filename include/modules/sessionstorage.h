@@ -1,8 +1,5 @@
-#ifndef SESSIONSTORAGE_H
-#define SESSIONSTORAGE_H
+#pragma once
 
 #include "types.h"
 
 void init_sessionstorage_module(ant_t *js);
-
-#endif

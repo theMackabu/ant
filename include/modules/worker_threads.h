@@ -1,5 +1,4 @@
-#ifndef ANT_WORKER_THREADS_H
-#define ANT_WORKER_THREADS_H
+#pragma once
 
 #include "types.h"
 
@@ -14,5 +13,3 @@ bool ant_worker_report_uncaught(ant_t *js, ant_value_t reason);
 
 void cleanup_worker_threads_module(ant_t *js);
 void ant_worker_messaging_listen(ant_t *js);
-
-#endif

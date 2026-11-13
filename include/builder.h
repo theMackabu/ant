@@ -1,5 +1,4 @@
-#ifndef ANT_BUILDER_H
-#define ANT_BUILDER_H
+#pragma once
 
 #include "types.h"
 
@@ -84,5 +83,3 @@ bool string_template_append_value(
   ant_t *js, string_builder_t *sb, 
   ant_value_t value, ant_value_t *err
 );
-
-#endif

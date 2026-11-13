@@ -1,5 +1,4 @@
-#ifndef ANT_STRINGIFY_H
-#define ANT_STRINGIFY_H
+#pragma once
 
 #include "types.h"
 #include "list.h"
@@ -34,5 +33,3 @@ const char *get_func_name(ant_t *js, ant_value_t func, ant_offset_t *out_len);
 
 bool func_has_code(ant_value_t code_val);
 bool js_cfunc_try_get_own(ant_t *js, ant_value_t cfunc, const char *key, size_t key_len, ant_value_t *out);
-
-#endif

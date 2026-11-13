@@ -1,5 +1,4 @@
-#ifndef SV_UNARY_H
-#define SV_UNARY_H
+#pragma once
 
 #include "silver/engine.h"
 #include "globals.h"
@@ -50,5 +49,3 @@ static inline void sv_op_delete_eval_var(
   );
   vm->stack[vm->sp++] = result;
 }
-
-#endif

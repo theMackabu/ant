@@ -1,5 +1,4 @@
-#ifndef SUGAR_H
-#define SUGAR_H
+#pragma once
 
 #include "esm/loader.h"
 #include "types.h"
@@ -81,5 +80,3 @@ ant_value_t start_async_in_coroutine(
 void Ant_Coroutine_ResumeAwaitJob(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error);
 void Ant_Coroutine_DeferResume(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error);
 void Ant_Coroutine_SettleAndResume(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error);
-
-#endif

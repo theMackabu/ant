@@ -1,5 +1,4 @@
-#ifndef ANT_WASM_EMBED_H
-#define ANT_WASM_EMBED_H
+#pragma once
 
 #include <stddef.h>
 #include <stdbool.h>
@@ -26,7 +25,5 @@ uint32_t ant_wasm_host_call(
 ANT_WASM_IMPORT("ant", "now_ms")
 double ant_wasm_now_ms(void);
 bool ant_wasm_should_interrupt(ant_t *js);
-
-#endif
 
 #endif

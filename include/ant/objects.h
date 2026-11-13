@@ -1,5 +1,4 @@
-#ifndef ANT_API_OBJECTS_H
-#define ANT_API_OBJECTS_H
+#pragma once
 
 #include "ant/base.h"
 
@@ -97,5 +96,3 @@ ant_value_t js_get_slot(ant_value_t obj, internal_slot_t slot);
 void js_set_slot(ant_value_t obj, internal_slot_t slot, ant_value_t value);
 void js_set_slot_wb(ant_t *, ant_value_t obj, internal_slot_t slot, ant_value_t value);
 bool js_reserve_slots(ant_value_t obj, uint8_t capacity);
-
-#endif

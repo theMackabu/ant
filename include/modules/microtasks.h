@@ -1,5 +1,4 @@
-#ifndef ANT_MODULES_MICROTASKS_H
-#define ANT_MODULES_MICROTASKS_H
+#pragma once
 
 #include "types.h"
 #include "gc/modules.h"
@@ -28,5 +27,3 @@ bool queue_await_defer_job(coroutine_t *coro, ant_value_t value);
 
 bool js_maybe_drain_microtasks(ant_t *js);
 bool js_maybe_drain_microtasks_after_async_settle(ant_t *js);
-
-#endif

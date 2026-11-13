@@ -1,5 +1,4 @@
-#ifndef ANT_GC_OBJECTS_H
-#define ANT_GC_OBJECTS_H
+#pragma once
 
 #include "types.h"
 #include "object.h"
@@ -130,5 +129,3 @@ struct ant_promise_state *gc_promise_state_alloc(ant_t *js);
 
 void gc_root_pending_promise(ant_t *js, ant_object_t *obj);
 void gc_unroot_pending_promise(ant_t *js, ant_object_t *obj);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ESM_LOADER_H
-#define ESM_LOADER_H
+#pragma once
 
 #include "types.h"
 
@@ -54,5 +53,3 @@ const struct ant_bundle *js_esm_bundle(ant_t *js);
 
 bool js_esm_bundle_active(ant_t *js);
 bool js_esm_bundle_activate(ant_t *js, const struct ant_bundle *bundle);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_HASH_H
-#define ANT_JIT_OPT_HASH_H
+#pragma once
 
 #include "arena.h"
 
@@ -60,5 +59,3 @@ static inline const uint64_t *opt_map_key_at(const opt_map_t *map, uint32_t slot
 
 #define opt_map_for_each(map, slot) \
   for (uint32_t slot = 0; slot < (map)->cap; slot++) if ((map)->used[slot])
-
-#endif

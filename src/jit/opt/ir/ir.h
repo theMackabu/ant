@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_IR_H
-#define ANT_JIT_OPT_IR_H
+#pragma once
 
 #include "../arena.h"
 #include "../code.h"
@@ -637,5 +636,3 @@ static inline bool ir_exit_sites_contain(const ir_graph_t *graph, sv_func_t *fun
 void ir_dump(const ir_graph_t *graph, const ir_frame_layout_t *layout, opt_text_t *out);
 void ir_node_text(const ir_graph_t *graph, const ir_frame_layout_t *layout, ir_node_id_t node, opt_text_t *out);
 void ir_slot_name(const ir_frame_layout_t *layout, uint32_t slot, char *buffer, size_t size);
-
-#endif

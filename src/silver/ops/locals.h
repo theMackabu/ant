@@ -1,5 +1,4 @@
-#ifndef SV_LOCALS_H
-#define SV_LOCALS_H
+#pragma once
 
 #include "silver/feedback.h"
 #include "errors.h"
@@ -207,5 +206,3 @@ static inline ant_value_t sv_op_str_flush_local(
   if (is_err(flush)) return flush;
   return Ant_Value_Undefined;
 }
-
-#endif

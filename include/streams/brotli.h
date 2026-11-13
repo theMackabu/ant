@@ -1,5 +1,4 @@
-#ifndef STREAMS_BROTLI_H
-#define STREAMS_BROTLI_H
+#pragma once
 
 #include <stddef.h>
 #include <stdbool.h>
@@ -39,5 +38,3 @@ int brotli_stream_process(
 int brotli_stream_finish(brotli_stream_state_t *st, brotli_stream_chunk_cb cb, void *ctx);
 int brotli_stream_decoder_error(brotli_stream_state_t *st, const char **name);
 ant_value_t brotli_stream_flush(ant_t *js, brotli_stream_state_t *st, ant_value_t ctrl_obj);
-
-#endif

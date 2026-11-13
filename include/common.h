@@ -1,5 +1,4 @@
-#ifndef COMMON_H
-#define COMMON_H
+#pragma once
 
 #include <stdint.h>
 #include <stdio.h>
@@ -136,5 +135,3 @@ typedef enum {
   BRAND_ASYNC_DISPOSABLE_STACK,
   BRAND_TEMPLATE_OBJECT
 } object_brand_id_t;
-
-#endif

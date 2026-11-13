@@ -1,5 +1,4 @@
-#ifndef SYMBOL_H
-#define SYMBOL_H
+#pragma once
 
 #include <stdbool.h>
 #include <uthash.h>
@@ -25,5 +24,3 @@ ant_value_t maybe_call_symbol_method(
   ant_t *js, ant_value_t target, ant_value_t sym,
   ant_value_t this_arg, ant_args_t, bool *called
 );
-
-#endif

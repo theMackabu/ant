@@ -1,5 +1,4 @@
-#ifndef ANT_GC_OBJECT_ARENAS_H
-#define ANT_GC_OBJECT_ARENAS_H
+#pragma once
 
 #include "isolate.h"
 
@@ -63,5 +62,3 @@ static inline bool ant_object_arena_contains(const ant_t *js, const void *ptr) {
     fixed_arena_contains(&js->obj_arena, ptr) || fixed_arena_contains(&js->obj_wide_arena, ptr) ||
     fixed_arena_contains(&js->obj_large_arena, ptr);
 }
-
-#endif

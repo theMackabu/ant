@@ -1,5 +1,4 @@
-#ifndef ANT_SANDBOX_VM_H
-#define ANT_SANDBOX_VM_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -123,5 +122,3 @@ int ant_sandbox_vm_session_execute(ant_sandbox_vm_session_t *session, const ant_
 int ant_sandbox_vm_session_send(ant_sandbox_vm_session_t *session, const void *data, size_t len);
 int ant_sandbox_vm_session_stats(ant_sandbox_vm_session_t *session, ant_sandbox_vm_stats_t *stats);
 int ant_sandbox_vm_session_create(const ant_sandbox_vm_config_t *config, ant_sandbox_vm_session_t **session_out);
-
-#endif

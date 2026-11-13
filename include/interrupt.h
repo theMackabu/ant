@@ -1,5 +1,4 @@
-#ifndef ANT_INTERRUPT_H
-#define ANT_INTERRUPT_H
+#pragma once
 
 #include "internal.h"
 
@@ -15,5 +14,3 @@ static inline bool js_interrupt_pending(ant_t *js) {
 static inline bool js_terminating_error(ant_t *js, ant_value_t value) {
   return __builtin_expect(js->terminating, 0) && is_err(value);
 }
-
-#endif

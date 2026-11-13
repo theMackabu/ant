@@ -1,5 +1,4 @@
-#ifndef ANT_INSPECTOR_H
-#define ANT_INSPECTOR_H
+#pragma once
 
 #include "types.h"
 #include "modules/http.h"
@@ -104,5 +103,3 @@ void ant_inspector_websocket_error(
   uint64_t request_id,
   const char *message
 );
-
-#endif

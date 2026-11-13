@@ -1,5 +1,4 @@
-#ifndef ANT_VFS_BUNDLE_H
-#define ANT_VFS_BUNDLE_H
+#pragma once
 
 #include <stdio.h>
 #include <stdint.h>
@@ -95,5 +94,3 @@ const char *ant_bundle_resolve(
   const ant_bundle_t *bundle, const char *parent_key,
   const char *spec, bool is_require
 );
-
-#endif

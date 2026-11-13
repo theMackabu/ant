@@ -1,5 +1,4 @@
-#ifndef SV_EXCEPTIONS_H
-#define SV_EXCEPTIONS_H
+#pragma once
 
 #include "errors.h"
 #include "gc/roots.h"
@@ -255,5 +254,3 @@ static inline uint8_t *sv_vm_throw(sv_vm_t *vm, ant_value_t err, int min_fp) {
   sv_clear_completion(vm);
   return NULL;
 }
-
-#endif

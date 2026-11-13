@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_PASSES_H
-#define ANT_JIT_OPT_PASSES_H
+#pragma once
 
 #include "../bitset.h"
 #include "../hash.h"
@@ -78,5 +77,3 @@ bool pass_frame_state_entering(const ir_graph_t *graph, ir_block_id_t block, ir_
 void pass_move_cold_blocks_last(ir_graph_t *graph);
 void pass_remove_trivial_phis(ir_graph_t *graph);
 void pass_remove_unused_frame_states(ir_graph_t *graph);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef SILVER_COMPILER_H
-#define SILVER_COMPILER_H
+#pragma once
 
 #include "silver/ast.h"
 #include "silver/vm.h"
@@ -306,7 +305,6 @@ typedef struct sv_compiler {
   int shaped_key_cap;
 } sv_compiler_t;
 
-
 #define SV_PARAM(name_literal) ((sv_param_t){ (name_literal), sizeof(name_literal) - 1 })
 
 sv_func_t *sv_compile(
@@ -362,5 +360,3 @@ void compile_unary(sv_compiler_t *c, sv_ast_t *node);
 void compile_update(sv_compiler_t *c, sv_ast_t *node);
 void compile_var_decl(sv_compiler_t *c, sv_ast_t *node);
 void compile_while(sv_compiler_t *c, sv_ast_t *node);
-
-#endif

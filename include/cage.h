@@ -1,5 +1,4 @@
-#ifndef ANT_CAGE_H
-#define ANT_CAGE_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -55,5 +54,3 @@ static inline void *ant_cage_decode(uint64_t offset) {
   return offset ? (void *)(ant_cage_base_address + offset) : NULL;
 #endif
 }
-
-#endif

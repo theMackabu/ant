@@ -1,5 +1,4 @@
-#ifndef SV_STACK_TRACE_H
-#define SV_STACK_TRACE_H
+#pragma once
 
 #include "types.h"
 #include "errors.h"
@@ -61,5 +60,3 @@ int sv_jit_frames_at(ant_t *js, uintptr_t pc, sv_jit_frame_t *out, int cap);
 ant_value_t js_error_record_capture(ant_t *js, ant_value_t call_func, const js_error_site_t *site, ant_value_t above);
 ant_value_t js_error_record_stack_text(ant_t *js, ant_value_t header, ant_value_t record);
 ant_value_t js_error_record_throw_text(ant_t *js, ant_value_t value, ant_value_t record);
-
-#endif

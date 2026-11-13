@@ -1,5 +1,4 @@
-#ifndef STRINGS_H
-#define STRINGS_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -25,5 +24,3 @@ size_t decode_escape(const uint8_t *in, size_t pos, size_t end, uint8_t *out, si
 static inline uint8_t unhex(uint8_t c) {
   return (c & 0xF) + (c >> 6) * 9;
 }
-
-#endif

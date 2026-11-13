@@ -1,5 +1,4 @@
-#ifndef STREAMS_READABLE_H
-#define STREAMS_READABLE_H
+#pragma once
 
 #include "types.h"
 #include "native_tag.h"
@@ -84,5 +83,3 @@ void readable_stream_error(ant_t *js, ant_value_t stream_obj, ant_value_t e);
 
 bool rs_reader_has_reqs(ant_t *js, ant_value_t reader_obj);
 bool rs_default_controller_can_close_or_enqueue(rs_controller_t *ctrl, rs_stream_t *stream);
-
-#endif

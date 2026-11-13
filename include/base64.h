@@ -1,5 +1,4 @@
-#ifndef BASE64_H
-#define BASE64_H
+#pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -24,5 +23,3 @@ bool ant_base64_decode_into(
   const char *src, size_t len, bool url, ant_base64_last_chunk_t last_chunk,
   uint8_t *dst, size_t max_len, size_t *read, size_t *written, const char **error
 );
-
-#endif

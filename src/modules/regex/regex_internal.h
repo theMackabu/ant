@@ -1,5 +1,4 @@
-#ifndef ANT_MODULES_REGEX_REGEX_INTERNAL_H
-#define ANT_MODULES_REGEX_REGEX_INTERNAL_H
+#pragma once
 
 #include "silver/call.h"
 
@@ -757,5 +756,3 @@ static inline ant_value_t regexp_replace_fast(
     ? regexp_replace_fast_function(js, fast, str, replacement)
     : regexp_replace_fast_string(js, fast, str, replacement);
 }
-
-#endif

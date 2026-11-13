@@ -1,5 +1,4 @@
-#ifndef ANT_NAPI_INTERNAL_H
-#define ANT_NAPI_INTERNAL_H
+#pragma once
 
 #include <compat.h> // IWYU pragma: keep
 #include <uv.h>
@@ -224,5 +223,3 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_call_function(
   const napi_value *argv,
   napi_value *result
 );
-
-#endif

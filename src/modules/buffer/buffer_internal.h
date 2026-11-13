@@ -1,5 +1,4 @@
-#ifndef ANT_MODULES_BUFFER_BUFFER_INTERNAL_H
-#define ANT_MODULES_BUFFER_BUFFER_INTERNAL_H
+#pragma once
 
 #include <string.h>
 
@@ -182,5 +181,3 @@ static inline uint8_t typedarray_to_uint8_clamped(double value) {
   
   return ((uint32_t)floor_value & 1U) ? (uint8_t)(floor_value + 1.0) : (uint8_t)floor_value;
 }
-
-#endif

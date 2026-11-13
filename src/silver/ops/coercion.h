@@ -1,5 +1,4 @@
-#ifndef SV_COERCION_H
-#define SV_COERCION_H
+#pragma once
 
 #include <string.h>
 #include "esm/loader.h"
@@ -543,5 +542,3 @@ static inline void sv_op_special_obj(
 
   vm->stack[vm->sp++] = frame->arguments_obj;
 }
-
-#endif

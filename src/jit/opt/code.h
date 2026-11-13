@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_CODE_H
-#define ANT_JIT_OPT_CODE_H
+#pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -59,5 +58,3 @@ static constexpr uint32_t OPT_INVALID_SLOT = UINT32_MAX;
 
 const char *opt_exit_kind_name(opt_exit_kind_t kind);
 const char *opt_repr_name(opt_repr_t repr);
-
-#endif

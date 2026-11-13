@@ -1,5 +1,4 @@
-#ifndef ANT_ASCII_H
-#define ANT_ASCII_H
+#pragma once
 
 #include <stdbool.h>
 
@@ -60,5 +59,3 @@ static inline bool ant_ascii_is_tchar(int c) {
     default: return false;
   }
 }
-
-#endif

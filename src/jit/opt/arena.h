@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_ARENA_H
-#define ANT_JIT_OPT_ARENA_H
+#pragma once
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -69,5 +68,3 @@ typedef struct {
 void opt_text_append(opt_text_t *text, const char *string);
 __attribute__((format(printf, 2, 3))) void opt_text_appendf(opt_text_t *text, const char *format, ...);
 void opt_text_free(opt_text_t *text);
-
-#endif

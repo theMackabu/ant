@@ -1,5 +1,4 @@
-#ifndef ANT_DESCRIPTORS_H
-#define ANT_DESCRIPTORS_H
+#pragma once
 
 #include "types.h"
 #include <uthash.h>
@@ -64,5 +63,3 @@ ant_value_t object_define_property_reporting(ant_t *js, ant_value_t obj, ant_val
 ant_value_t define_desc_read(ant_t *js, ant_value_t descriptor, define_desc_raw_t *raw);
 ant_value_t js_from_data_descriptor(ant_t *js, ant_value_t value, bool writable, bool enumerable, bool configurable);
 ant_value_t js_from_accessor_descriptor(ant_t *js, ant_value_t getter, ant_value_t setter, bool enumerable, bool configurable);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ANT_READLINE_H
-#define ANT_READLINE_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -61,5 +60,3 @@ ant_readline_result_t ant_readline_with_preview(
   void *preview_ctx,
   char **out_line
 );
-
-#endif

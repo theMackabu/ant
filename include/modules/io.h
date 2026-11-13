@@ -1,5 +1,4 @@
-#ifndef IO_H
-#define IO_H
+#pragma once
 
 #include "types.h"
 #include "output.h"
@@ -59,5 +58,3 @@ void inspect_value(
 
 ant_value_t console_emit(ant_t *js, bool use_stderr, const char *prefix, ant_args_t);
 ant_value_t console_emit_current(ant_t *js, ant_value_t call_this, bool use_stderr, const char *prefix, ant_args_t);
-
-#endif

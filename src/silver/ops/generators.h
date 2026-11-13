@@ -1,5 +1,4 @@
-#ifndef SV_GENERATORS_H
-#define SV_GENERATORS_H
+#pragma once
 
 #include "ant.h"
 #include "errors.h"
@@ -404,5 +403,3 @@ static inline __attribute__((noinline)) sv_ys_step_t sv_yield_star_async_result(
     .kind = is_return ? SV_YS_STEP_RETURN : SV_YS_STEP_CONTINUE,
   };
 }
-
-#endif

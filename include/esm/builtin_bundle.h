@@ -1,5 +1,4 @@
-#ifndef ESM_BUILTIN_BUNDLE_H
-#define ESM_BUILTIN_BUNDLE_H
+#pragma once
 
 #include "esm/loader.h"
 #include "esm/library.h"
@@ -27,5 +26,3 @@ void esm_builtin_bundle_foreach(ant_library_iter_fn cb, void *userdata);
 
 const ant_builtin_bundle_alias_t *esm_lookup_builtin_alias(const char *specifier, size_t spec_len);
 const ant_builtin_bundle_module_t *esm_lookup_builtin_module(size_t module_id);
-
-#endif

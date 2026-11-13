@@ -1,5 +1,4 @@
-#ifndef HIGHLIGHT_REGEX_SCAN_H
-#define HIGHLIGHT_REGEX_SCAN_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -130,5 +129,3 @@ static inline bool js_scan_regex_literal(
 
   return false;
 }
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ANT_UTILS_H
-#define ANT_UTILS_H
+#pragma once
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -119,5 +118,3 @@ static inline void *vec_grow(void *items, size_t *cap, size_t need, size_t elem,
   *cap = next;
   return grown;
 }
-
-#endif

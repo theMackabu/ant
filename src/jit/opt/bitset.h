@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_BITSET_H
-#define ANT_JIT_OPT_BITSET_H
+#pragma once
 
 #include "arena.h"
 #include <assert.h>
@@ -64,5 +63,3 @@ uint32_t opt_bitset_next(const opt_bitset_t *set, uint32_t from);
 
 #define opt_bitset_for_each(set, index) \
   for (uint32_t index = opt_bitset_next((set), 0); index < (set)->len; index = opt_bitset_next((set), index + 1))
-
-#endif

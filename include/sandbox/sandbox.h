@@ -1,5 +1,4 @@
-#ifndef ANT_SANDBOX_SANDBOX_H
-#define ANT_SANDBOX_SANDBOX_H
+#pragma once
 
 #include "types.h"
 
@@ -107,5 +106,3 @@ bool ant_sandbox_error_payload_display(const void *payload, size_t payload_len, 
 bool ant_sandbox_result_payload_display(const void *payload, size_t payload_len, const char **out, size_t *out_len);
 bool ant_sandbox_error_payload_field(const void *payload, size_t payload_len, size_t index, const char **out, size_t *out_len);
 bool ant_sandbox_result_payload_parse(const void *payload, size_t payload_len, uint8_t *type, uint64_t *bits, const char **text, size_t *text_len);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ANT_SHAPES_H
-#define ANT_SHAPES_H
+#pragma once
 
 #include "types.h"
 
@@ -164,5 +163,3 @@ void ant_shapes_destroy(ant_t *js);
 
 size_t ant_shape_total_bytes(ant_t *js);
 size_t ant_shape_storage_bytes(const ant_shape_t *shape);
-
-#endif

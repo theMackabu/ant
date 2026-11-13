@@ -1,5 +1,4 @@
-#ifndef ANT_URL_INTERNAL_H
-#define ANT_URL_INTERNAL_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -88,6 +87,3 @@ ant_value_t url_apply_setter(
   ant_value_t input,
   ada_url_setter_t setter
 );
-
-
-#endif

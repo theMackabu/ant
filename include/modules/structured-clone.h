@@ -1,9 +1,6 @@
-#ifndef STRUCTURED_CLONE_H
-#define STRUCTURED_CLONE_H
+#pragma once
 
 #include "types.h"
 
 void init_structured_clone_module(ant_t *js);
 ant_value_t js_structured_clone(ant_params_t);
-
-#endif

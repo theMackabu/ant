@@ -1,5 +1,4 @@
-#ifndef ANT_CFUNC_H
-#define ANT_CFUNC_H
+#pragma once
 
 #include "types.h"
 #include "ptr.h"
@@ -81,5 +80,3 @@ static inline ant_value_t js_cfunc_lookup_promoted(ant_t *js, ant_value_t cfunc)
   ant_ptr_pair_map_t *map = js_cfunc_promoted_map(js, js_as_cfunc_meta(cfunc));
   return ant_ptr_pair_get(map, vdata(cfunc), 0, &promoted) ? promoted : cfunc;
 }
-
-#endif

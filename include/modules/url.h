@@ -1,5 +1,4 @@
-#ifndef URL_H
-#define URL_H
+#pragma once
 
 #include <stddef.h>
 #include "types.h"
@@ -48,5 +47,3 @@ int Ant_URL_ParseDocumentRelative(ant_t *js, const char *url_str, url_state_t *s
 int Ant_URL_ParseLocation(const char *href, url_state_t *s);
 int Ant_URL_IsURLLike(ant_t *js, ant_value_t value, ant_value_t *err);
 ant_value_t Ant_URL_FileURLToPath(ant_t *js, ant_value_t input);
-
-#endif

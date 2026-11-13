@@ -1,5 +1,4 @@
-#ifndef SILVER_AST_H
-#define SILVER_AST_H
+#pragma once
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -257,5 +256,3 @@ static inline bool sv_ast_is_proto_key(const sv_ast_t *k) {
   return k->type == N_IDENT && k->len == len + 2 && (k->str[0] == '\'' || k->str[0] == '"') &&
     k->str[len + 1] == k->str[0] && memcmp(k->str + 1, name, len) == 0;
 }
-
-#endif

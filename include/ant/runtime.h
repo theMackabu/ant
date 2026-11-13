@@ -1,5 +1,4 @@
-#ifndef ANT_API_RUNTIME_H
-#define ANT_API_RUNTIME_H
+#pragma once
 
 #include "ant/base.h"
 
@@ -42,5 +41,3 @@ void js_stats(ant_t *, size_t *total, size_t *min, size_t *cstacksize);
 
 void js_check_unhandled_rejections(ant_t *js);
 void js_setup_import_meta(ant_t *js, const char *filename);
-
-#endif

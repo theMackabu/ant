@@ -1,8 +1,5 @@
-#ifndef ANT_SHELL_MODULE_H
-#define ANT_SHELL_MODULE_H
+#pragma once
 
 #include "types.h"
 
 ant_value_t shell_ops_library(ant_t *js);
-
-#endif

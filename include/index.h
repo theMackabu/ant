@@ -1,5 +1,4 @@
-#ifndef ANT_INDEX_H
-#define ANT_INDEX_H
+#pragma once
 
 #include "ant.h"
 #include "value.h"
@@ -28,5 +27,3 @@ static inline ant_value_t js_to_length_fast(ant_t *js, ant_value_t value, size_t
 	) { *out = (size_t)number; return Ant_Value_Undefined; }}
   return js_to_length_slow(js, value, out);
 }
-
-#endif

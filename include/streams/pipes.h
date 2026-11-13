@@ -1,5 +1,4 @@
-#ifndef STREAMS_PIPES_H
-#define STREAMS_PIPES_H
+#pragma once
 
 #include "types.h"
 #include <stdbool.h>
@@ -12,5 +11,3 @@ ant_value_t readable_stream_pipe_to(
   bool prevent_close, bool prevent_abort, bool prevent_cancel,
   ant_value_t signal
 );
-
-#endif

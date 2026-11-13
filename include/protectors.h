@@ -1,5 +1,4 @@
-#ifndef ANT_PROTECTORS_H
-#define ANT_PROTECTORS_H
+#pragma once
 
 #include "ant.h"
 #include "value.h"
@@ -119,5 +118,3 @@ static inline void ant_symbol_property_mutation_invalidate(ant_t *js, ant_object
   
   ant_symbol_protectors_invalidate(js, holder, sym_off);
 }
-
-#endif

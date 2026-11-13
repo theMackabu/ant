@@ -1,5 +1,4 @@
-#ifndef SILVER_VM_H
-#define SILVER_VM_H
+#pragma once
 
 #include "types.h"
 
@@ -17,5 +16,3 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label);
 
 ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this_val, ant_value_t super_val, ant_value_t *args, int argc);
 ant_value_t sv_execute_entry(sv_vm_t *vm, sv_func_t *func, ant_value_t this_val, ant_value_t *args, int argc);
-
-#endif

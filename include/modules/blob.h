@@ -1,5 +1,4 @@
-#ifndef BLOB_H
-#define BLOB_H
+#pragma once
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -30,5 +29,3 @@ ant_value_t blob_create_shared(ant_t *js, blob_storage_t *storage, const char *t
 
 blob_storage_t *blob_storage_retain(blob_storage_t *storage);
 void blob_storage_release(blob_storage_t *storage);
-
-#endif

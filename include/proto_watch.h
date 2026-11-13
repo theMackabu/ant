@@ -1,5 +1,4 @@
-#ifndef ANT_PROTO_WATCH_H
-#define ANT_PROTO_WATCH_H
+#pragma once
 
 #include "object.h"
 
@@ -13,4 +12,3 @@ bool ant_proto_watch_depend(ant_proto_watch_t *watch, void *owner, ant_proto_wat
 void ant_proto_watch_unpin(ant_proto_watch_t *watch);
 void ant_proto_watch_forget(ant_proto_watch_t *watch, void *owner);
 void ant_proto_watch_detach(ant_object_t *obj);
-#endif

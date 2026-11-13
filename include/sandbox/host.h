@@ -1,5 +1,4 @@
-#ifndef ANT_SANDBOX_HOST_H
-#define ANT_SANDBOX_HOST_H
+#pragma once
 
 #include "sandbox/vm.h"
 
@@ -70,5 +69,3 @@ int ant_sandbox_launch_add_default_mount(
 
 int ant_sandbox_assets_resolve(ant_sandbox_assets_t *assets, char *err, size_t err_len);
 uint32_t ant_sandbox_terminal_capabilities(uint16_t *rows_out, uint16_t *cols_out);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ANT_GC_UV_H
-#define ANT_GC_UV_H
+#pragma once
 
 #include <stdint.h>
 
@@ -58,5 +57,3 @@ static inline void gc_uv_seg_leave(gc_uv_seg_t *seg) {
 #define GC_UV_CALLBACK()                                                \
   gc_uv_seg_t gc_uv_seg_ __attribute__((cleanup(gc_uv_seg_leave)));     \
   gc_uv_seg_enter(&gc_uv_seg_, GC_CALLER_SP())
-
-#endif

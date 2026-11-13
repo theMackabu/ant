@@ -1,5 +1,4 @@
-#ifndef STRING_DECODER_H
-#define STRING_DECODER_H
+#pragma once
 
 #include <stdbool.h>
 #include "types.h"
@@ -16,5 +15,3 @@ ant_value_t string_decoder_decode_bytes(
   ant_t *js, ant_value_t decoder,
   const uint8_t *src, size_t len, bool flush
 );
-
-#endif

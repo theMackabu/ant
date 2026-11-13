@@ -1,5 +1,4 @@
-#ifndef ANT_GC_VERIFY_H
-#define ANT_GC_VERIFY_H
+#pragma once
 
 #include <string.h>
 
@@ -31,6 +30,4 @@ bool gc_verify_closure_quarantined(const sv_closure_t *c);
 #define GC_VERIFY_POISON_BYTES(p, n) ((void)0)
 #define GC_VERIFY_QUARANTINE_CLOSURE(c)  false
 #define GC_VERIFY_CLOSURE_QUARANTINED(c) false
-#endif
-
 #endif

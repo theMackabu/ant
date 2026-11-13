@@ -1,5 +1,4 @@
-#ifndef SILVER_UPVALUES_H
-#define SILVER_UPVALUES_H
+#pragma once
 
 #include "silver/engine.h"
 
@@ -71,5 +70,3 @@ static inline void sv_close_upvalues_from_slot(sv_vm_t *vm, ant_value_t *slot) {
     else pp = &uv->next;
   }
 }
-
-#endif

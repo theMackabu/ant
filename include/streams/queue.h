@@ -1,5 +1,4 @@
-#ifndef STREAMS_QUEUE_H
-#define STREAMS_QUEUE_H
+#pragma once
 
 #include <stdint.h>
 #include <string.h>
@@ -63,5 +62,3 @@ static inline bool Stream_Sizes_Shift(double *sizes, uint32_t *len, uint32_t *he
 
   return true;
 }
-
-#endif

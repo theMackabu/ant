@@ -1,5 +1,4 @@
-#ifndef TYPES_H
-#define TYPES_H
+#pragma once
 
 #include <stdint.h>
 #include <stddef.h>
@@ -111,5 +110,3 @@ typedef struct ant_cfunc_meta {
 
 constexpr uintptr_t ant_sidecar = 1u;
 constexpr ant_prop_loc_t ANT_PROP_LOC_NONE = {NULL, 0};
-
-#endif

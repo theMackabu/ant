@@ -1,5 +1,4 @@
-#ifndef ANT_MODULES_PROCESS_PLAN_H
-#define ANT_MODULES_PROCESS_PLAN_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -107,5 +106,3 @@ bool ant_process_plan_add_fd(
 ant_value_t ant_process_plan_rejected_result(ant_t *js, ant_value_t error);
 ant_value_t ant_process_plan_submit(ant_t *js, ant_process_plan_t *plan);
 ant_value_t ant_process_plan_spawned(ant_t *js, ant_process_plan_t *plan);
-
-#endif

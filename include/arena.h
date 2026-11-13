@@ -1,5 +1,4 @@
-#ifndef ARENA_H
-#define ARENA_H
+#pragma once
 
 #include "cage.h"
 #include <stdatomic.h>
@@ -300,5 +299,3 @@ static inline void *fixed_arena_slot_at(const ant_fixed_arena_t *a, uint32_t slo
 
   return a->chunks[chunk].base + offset;
 }
-
-#endif

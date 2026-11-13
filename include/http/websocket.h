@@ -1,5 +1,4 @@
-#ifndef ANT_HTTP_WEBSOCKET_H
-#define ANT_HTTP_WEBSOCKET_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -71,5 +70,3 @@ uint8_t *ant_ws_encode_close_frame(
   bool mask,
   size_t *out_len
 );
-
-#endif

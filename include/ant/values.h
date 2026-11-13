@@ -1,5 +1,4 @@
-#ifndef ANT_API_VALUES_H
-#define ANT_API_VALUES_H
+#pragma once
 
 #include "ant/base.h"
 
@@ -36,5 +35,3 @@ ant_value_t js_mkbigint_permanent(ant_t *, const char *digits, size_t len, bool 
 ant_value_t js_mksym(ant_t *, const char *desc);
 ant_value_t js_mksym_well_known(ant_t *, const char *desc);
 ant_value_t js_tostring_val(ant_t *js, ant_value_t value);
-
-#endif

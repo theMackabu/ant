@@ -1,5 +1,4 @@
-#ifndef TOKENS_H
-#define TOKENS_H
+#pragma once
 
 #include <stdint.h>
 
@@ -46,5 +45,3 @@ static const uint8_t prec_table[TOK_MAX] = {
   [TOK_MUL]        = 13, [TOK_DIV] = 13, [TOK_REM] = 13,
   [TOK_EXP]        = 14,
 };
-
-#endif

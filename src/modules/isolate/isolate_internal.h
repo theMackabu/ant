@@ -1,5 +1,4 @@
-#ifndef ANT_ISOLATE_INTERNAL_H
-#define ANT_ISOLATE_INTERNAL_H
+#pragma once
 
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -206,5 +205,3 @@ ant_value_t guest_current_host_call(ant_t *js, ant_guest_t *g, guest_host_call_t
 void guest_current_dispose(ant_guest_t *g);
 
 ant_value_t guest_finish_host(ant_t *js, ant_guest_t *g, guest_call_t *call);
-
-#endif

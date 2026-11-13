@@ -1,5 +1,4 @@
-#ifndef ANT_SANDBOX_ASSETS_H
-#define ANT_SANDBOX_ASSETS_H
+#pragma once
 
 #include <stddef.h>
 #include <stdbool.h>
@@ -10,6 +9,3 @@ int ant_sandbox_assets_download_missing(
   char *err,
   size_t err_len
 );
-
-
-#endif

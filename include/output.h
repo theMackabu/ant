@@ -1,5 +1,4 @@
-#ifndef ANT_OUTPUT_H
-#define ANT_OUTPUT_H
+#pragma once
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -46,5 +45,3 @@ bool ant_output_stream_appendfv(ant_output_stream_t *out, const char *fmt, va_li
 __attribute__((format(printf, 2, 3)))
 bool ant_output_stream_appendf(ant_output_stream_t *out, const char *fmt, ...);
 bool ant_output_stream_flush(ant_output_stream_t *out);
-
-#endif

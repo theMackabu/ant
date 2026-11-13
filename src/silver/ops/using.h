@@ -1,5 +1,4 @@
-#ifndef SV_USING_H
-#define SV_USING_H
+#pragma once
 
 #include "silver/call.h"
 #include "cfunc.h"
@@ -415,5 +414,3 @@ static inline ant_value_t sv_op_using_dispose(
   
   return result;
 }
-
-#endif

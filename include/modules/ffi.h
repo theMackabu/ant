@@ -1,5 +1,4 @@
-#ifndef ANT_FFI_H
-#define ANT_FFI_H
+#pragma once
 
 #include "types.h"
 
@@ -23,5 +22,3 @@ void ffi_library_finalize(ant_t *js, ant_object_t *obj);
 void ffi_function_finalize(ant_t *js, ant_object_t *obj);
 void ffi_pointer_finalize(ant_t *js, ant_object_t *obj);
 void ffi_callback_finalize(ant_t *js, ant_object_t *obj);
-
-#endif

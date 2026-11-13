@@ -1,5 +1,4 @@
-#ifndef RESPONSE_H
-#define RESPONSE_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -54,5 +53,3 @@ const headers_data_t *response_get_header_data(ant_value_t obj);
 ant_value_t response_get_websocket(ant_value_t obj);
 ant_value_t response_materialize_headers(ant_t *js, ant_value_t obj);
 ant_value_t response_create_fetched(ant_t *js, const response_fetched_init_t *init);
-
-#endif

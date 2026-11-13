@@ -1,5 +1,4 @@
-#ifndef ANT_API_ARRAYS_H
-#define ANT_API_ARRAYS_H
+#pragma once
 
 #include "ant/base.h"
 
@@ -13,5 +12,3 @@ bool js_iter(ant_t *js, ant_value_t iterable, js_iter_fn callback, void *udata);
 
 void js_arr_push(ant_t *, ant_value_t arr, ant_value_t val);
 void js_arr_reserve(ant_t *, ant_value_t arr, uint32_t n);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_ASM_H
-#define ANT_JIT_OPT_ASM_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -218,5 +217,3 @@ static inline double asm_f64_from_bits(uint64_t bits) {
   memcpy(&value, &bits, sizeof(value));
   return value;
 }
-
-#endif

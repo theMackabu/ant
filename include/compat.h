@@ -1,5 +1,4 @@
-#ifndef ANT_COMPAT_H
-#define ANT_COMPAT_H
+#pragma once
 
 #if defined(__linux__) && !defined(_GNU_SOURCE)
   #define _GNU_SOURCE
@@ -162,6 +161,4 @@ typedef unsigned int gid_t;
 #include <libgen.h>
 #include <sys/time.h>
 #include <strings.h>
-#endif
-
 #endif

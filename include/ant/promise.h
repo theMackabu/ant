@@ -1,5 +1,4 @@
-#ifndef ANT_API_PROMISE_H
-#define ANT_API_PROMISE_H
+#pragma once
 
 #include "ant/base.h"
 
@@ -26,5 +25,3 @@ void Ant_Promise_Observe(ant_t *js, ant_value_t promise, ant_value_t on_fulfille
 ant_value_t js_promise_assimilate_awaitable(ant_t *js, ant_value_t value);
 ant_value_t js_promise_then(ant_t *js, ant_value_t promise, ant_value_t on_fulfilled, ant_value_t on_rejected);
 js_promise_settlement_t js_promise_get_settlement(ant_t *js, ant_value_t promise,  ant_value_t *value_out);
-
-#endif

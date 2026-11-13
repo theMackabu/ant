@@ -1,5 +1,4 @@
-#ifndef SILVER_FEEDBACK_H
-#define SILVER_FEEDBACK_H
+#pragma once
 
 #include "debug.h"
 #include "silver/engine.h"
@@ -637,5 +636,3 @@ static inline void sv_tfb_record_local(sv_func_t *func, int idx, ant_value_t v) 
     if (neu != old) { func->local_type_feedback[idx] = neu; func->tfb_version++; }
   }
 }
-
-#endif

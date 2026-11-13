@@ -1,5 +1,4 @@
-#ifndef ESM_TRACE_H
-#define ESM_TRACE_H
+#pragma once
 
 #include "types.h"
 #include <stdint.h>
@@ -51,5 +50,3 @@ int ant_esm_trace_graph(
 );
 
 void ant_esm_trace_free(ant_trace_result_t *result);
-
-#endif

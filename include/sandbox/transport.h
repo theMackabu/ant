@@ -1,5 +1,4 @@
-#ifndef ANT_SANDBOX_TRANSPORT_H
-#define ANT_SANDBOX_TRANSPORT_H
+#pragma once
 
 #include "sandbox/sandbox.h"
 
@@ -16,5 +15,3 @@ int ant_sandbox_transport_fd(void);
 
 bool ant_sandbox_read_request_transport(ant_sandbox_request_t *out);
 bool ant_sandbox_transport_send_frame(ant_sandbox_frame_type_t type, const void *payload, size_t payload_len);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ANT_HTTP1_WRITER_H
-#define ANT_HTTP1_WRITER_H
+#pragma once
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -54,5 +53,3 @@ bool ant_http1_write_response_head(
 
 bool ant_http1_write_final_chunk(ant_http1_buffer_t *buf);
 bool ant_http1_write_chunk(ant_http1_buffer_t *buf, const uint8_t *chunk, size_t len);
-
-#endif

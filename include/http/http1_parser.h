@@ -1,5 +1,4 @@
-#ifndef ANT_HTTP1_PARSER_H
-#define ANT_HTTP1_PARSER_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -88,5 +87,3 @@ ant_http1_parse_result_t ant_http1_conn_parser_feed(
   ant_http1_parsed_request_t *head,
   size_t *consumed_out
 );
-
-#endif

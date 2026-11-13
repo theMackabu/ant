@@ -1,5 +1,4 @@
-#ifndef HIGHLIGHT_H
-#define HIGHLIGHT_H
+#pragma once
 
 #include <stddef.h>
 #include <stdbool.h>
@@ -98,5 +97,3 @@ int highlight_js_line_clipped(
   char *out, size_t out_size,
   highlight_state *state
 );
-
-#endif

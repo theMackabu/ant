@@ -1,5 +1,4 @@
-#ifndef ITERATOR_H
-#define ITERATOR_H
+#pragma once
 
 #include "types.h"
 #include "internal.h"
@@ -65,5 +64,3 @@ static inline ant_value_t js_iter_next_result(ant_t *js, ant_value_t call_this, 
   bool has_value = advance(js, &it, &value);
   return js_iter_result(js, has_value, value);
 }
-
-#endif

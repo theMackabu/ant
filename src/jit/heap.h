@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_HEAP_H
-#define ANT_JIT_HEAP_H
+#pragma once
 
 #include <stdint.h>
 #include <stddef.h>
@@ -30,5 +29,3 @@ void *jit_heap_os_reserve(size_t size);
 bool jit_heap_os_commit(void *p, size_t size);
 void jit_heap_os_release(void *p, size_t size);
 jit_heap_chunk_t *jit_heap_chunk_map(void);
-
-#endif

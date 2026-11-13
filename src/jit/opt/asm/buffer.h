@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_ASM_BUFFER_H
-#define ANT_JIT_OPT_ASM_BUFFER_H
+#pragma once
 
 #include "asm.h"
 
@@ -137,5 +136,3 @@ void asm_align_with(asm_buffer_t *b, size_t alignment, uint8_t filler);
 
 asm_error_t asm_buffer_finish(asm_buffer_t *b, asm_code_t *out);
 void asm_code_free(asm_code_t *code);
-
-#endif

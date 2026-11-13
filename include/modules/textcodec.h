@@ -1,5 +1,4 @@
-#ifndef TEXTCODEC_H
-#define TEXTCODEC_H
+#pragma once
 
 #include <stdint.h>
 #include <stddef.h>
@@ -35,5 +34,3 @@ ant_value_t td_encoding_from_label(ant_t *js, ant_value_t label, const char *cto
 
 ant_value_t td_decode(ant_t *js, td_state_t *st, const uint8_t *input, size_t input_len, bool stream);
 ant_value_t te_encode(ant_t *js, const char *str, size_t str_len);
-
-#endif

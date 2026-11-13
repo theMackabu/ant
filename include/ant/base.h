@@ -1,5 +1,4 @@
-#ifndef ANT_API_BASE_H
-#define ANT_API_BASE_H
+#pragma once
 
 #include <math.h>
 #include <stdbool.h>
@@ -26,5 +25,3 @@ if (!(cond)) {                                                      \
   fprintf(stderr, "FATAL: %s\n  %s:%d\n", msg, __FILE__, __LINE__); \
   abort();                                                          \
 }})
-
-#endif

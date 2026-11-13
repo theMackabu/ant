@@ -1,5 +1,4 @@
-#ifndef MULTIPART_H
-#define MULTIPART_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -15,5 +14,3 @@ ant_value_t formdata_parse_body(
   ant_t *js, const uint8_t *data, size_t size,
   const char *body_type, bool has_body
 );
-
-#endif

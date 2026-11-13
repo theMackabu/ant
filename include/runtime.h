@@ -1,5 +1,4 @@
-#ifndef RUNTIME_H
-#define RUNTIME_H
+#pragma once
 
 #include "types.h"
 struct arg_file;
@@ -30,5 +29,3 @@ code_arena_mark_t parse_arena_mark(ant_t *js);
 
 void parse_arena_rewind(ant_t *js, code_arena_mark_t mark);
 void code_arenas_destroy(ant_t *js);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ANT_GC_ROOTS_H
-#define ANT_GC_ROOTS_H
+#pragma once
 
 #include "types.h"
 #include <assert.h>
@@ -54,5 +53,3 @@ ant_value_t *gc_temp_root_slots(gc_temp_root_scope_t *scope, size_t count);
 static inline bool gc_temp_root_handle_valid(gc_temp_root_handle_t handle) {
   return handle.scope != NULL;
 }
-
-#endif

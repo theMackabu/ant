@@ -1,5 +1,4 @@
-#ifndef ERRORS_H
-#define ERRORS_H
+#pragma once
 
 #include "types.h"
 #include <stdio.h>
@@ -125,5 +124,3 @@ ant_value_t Ant_Error_ConsumeMarker(ant_t *js, ant_value_t value);
 #define js_mkerr_props(js, err_type, props, ...) js_create_error(js, err_type, props, __VA_ARGS__)
 #define js_mkerr_at(site, js, ...) js_create_error_at(js, site, JS_ERR_TYPE, Ant_Value_Undefined, __VA_ARGS__)
 #define js_mkerr_typed_at(site, js, err_type, ...) js_create_error_at(js, site, err_type, Ant_Value_Undefined, __VA_ARGS__)
-
-#endif

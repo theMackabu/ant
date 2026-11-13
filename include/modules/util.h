@@ -1,5 +1,4 @@
-#ifndef ANT_UTIL_MODULE_H
-#define ANT_UTIL_MODULE_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -17,5 +16,3 @@ int ant_format_walk(
 
 ant_value_t util_library(ant_t *js);
 ant_value_t util_types_library(ant_t *js);
-
-#endif

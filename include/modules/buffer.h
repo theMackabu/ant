@@ -1,5 +1,4 @@
-#ifndef BUFFER_H
-#define BUFFER_H
+#pragma once
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -166,5 +165,3 @@ static inline bool Ant_Buffer_IsLive(const ArrayBufferData *buffer) {
   *(len) = _ant_bytes_live ? _ant_bytes_view->byte_length : 0;     \
   _ant_bytes_live;                                                 \
 })
-
-#endif

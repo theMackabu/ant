@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_BUILD_H
-#define ANT_JIT_OPT_BUILD_H
+#pragma once
 
 #include "../ir/ir.h"
 
@@ -50,5 +49,3 @@ bool opt_build_graph(
   ant_t *js, sv_func_t *func, sv_closure_t *closure, opt_build_exit_sites_fn exit_sites_of,
   ir_graph_t *graph, ir_frame_layout_t *layout, opt_build_failure_t *failure, opt_build_stats_t *stats
 );
-
-#endif

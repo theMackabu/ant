@@ -1,5 +1,4 @@
-#ifndef ANT_TEMPORAL_CAPI_EXT_H
-#define ANT_TEMPORAL_CAPI_EXT_H
+#pragma once
 
 #ifndef _WIN32
 #include "Provider.d.h"
@@ -13,6 +12,4 @@ Provider *temporal_rs_Provider_new_fs(void);
 #ifdef __cplusplus
 }
 #endif
-#endif
-
 #endif

@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_SV_ASM_H
-#define ANT_JIT_SV_ASM_H
+#pragma once
 
 #include <mir.h>
 #include <stdint.h>
@@ -50,5 +49,3 @@ void sv_asm_store_index(
 #define SV_ASM_UNARY(name, code) \
   void sv_asm_##name(const sv_asm_t *a, MIR_reg_t dst, MIR_reg_t src);
 #include "sv_asm_ops.h"
-
-#endif

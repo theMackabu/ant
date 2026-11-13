@@ -1,5 +1,4 @@
-#ifndef ANT_INSPECTOR_JSON_H
-#define ANT_INSPECTOR_JSON_H
+#pragma once
 
 #include "bind.h"
 
@@ -37,5 +36,3 @@ bool inspector_json_uint64(inspector_json_t *json, uint64_t value);
 bool inspector_json_size(inspector_json_t *json, size_t value);
 bool inspector_json_double(inspector_json_t *json, double value);
 bool inspector_json_null(inspector_json_t *json);
-
-#endif

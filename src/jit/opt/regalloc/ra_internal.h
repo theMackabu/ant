@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_RA_INTERNAL_H
-#define ANT_JIT_OPT_RA_INTERNAL_H
+#pragma once
 
 #include "regalloc.h"
 
@@ -35,5 +34,3 @@ static inline bool ra_clobbers_caller_saved(const ir_op_t *op) {
 void ra_liveness_compute(ra_liveness_t *liveness, const ir_graph_t *graph, opt_arena_t *arena);
 uint32_t *ra_spill_slot_classes(const ir_graph_t *graph, const ra_liveness_t *liveness, opt_arena_t *arena);
 void ra_phi_inputs_from(const ir_graph_t *graph, ir_block_id_t block, ir_block_id_t successor, opt_arena_t *arena, ra_phi_inputs_t *inputs);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef ANT_PROTO_H
-#define ANT_PROTO_H
+#pragma once
 
 #include "internal.h"
 
@@ -36,5 +35,3 @@ bool proto_walk_overflow_guard_hit_cycle(
   ant_t *js, proto_walk_overflow_guard_t *g,
   ant_value_t cur, uint8_t cur_t, proto_walk_flags_t flags
 );
-
-#endif

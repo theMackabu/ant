@@ -1,5 +1,4 @@
-#ifndef ANT_GC_ROPES_H
-#define ANT_GC_ROPES_H
+#pragma once
 
 #include "types.h"
 #include <stdbool.h>
@@ -26,5 +25,3 @@ gc_rope_mark_result_t gc_ropes_mark(
   ant_t *js, const void *ptr, 
   size_t size, size_t align
 );
-
-#endif

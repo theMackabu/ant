@@ -1,5 +1,4 @@
-#ifndef ANT_WASM_INTERNAL_H
-#define ANT_WASM_INTERNAL_H
+#pragma once
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -211,5 +210,3 @@ static inline void wasm_sync_memory_views(ant_t *js) {
   while (handle && !wasm_view_moved(handle)) handle = handle->next;
   if (handle) wasm_detach_moved_views(js);
 }
-
-#endif

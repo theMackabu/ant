@@ -1,5 +1,4 @@
-#ifndef ANT_REALM_H
-#define ANT_REALM_H
+#pragma once
 
 #include "isolate.h"
 
@@ -98,5 +97,3 @@ static inline void ant_realm_restore(ant_t *js, ant_realm_t *prev) {
 static inline void ant_realm_reach(ant_t *js, ant_realm_t *realm, void (*mark)(ant_t *js, ant_value_t value)) {
   if (realm && realm->gc_epoch != js->gc.epoch) ant_realm_reach_slow(js, realm, mark);
 }
-
-#endif

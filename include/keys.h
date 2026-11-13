@@ -1,5 +1,4 @@
-#ifndef ANT_KEYS_H
-#define ANT_KEYS_H
+#pragma once
 
 #include "internal.h"
 
@@ -50,5 +49,3 @@ ant_value_t map_to_entry(ant_t *js, ant_value_t key, ant_value_t val);
 
 ant_value_t copy_data_props(ant_t *js, ant_value_t dst, ant_value_t src, const copy_ctx_t *cx);
 ant_value_t object_enum_collect(ant_t *js, ant_value_t obj, enum obj_enum_mode mode);
-
-#endif

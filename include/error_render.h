@@ -1,5 +1,4 @@
-#ifndef ANT_ERROR_RENDER_H
-#define ANT_ERROR_RENDER_H
+#pragma once
 
 #include "errors.h"
 
@@ -44,5 +43,3 @@ void error_render_site_init(const js_error_site_t *es, js_error_render_site_t *s
 void error_render_site_finish(js_error_render_site_t *site);
 void error_render_site_prefix(errbuf_t *eb, size_t *n, const char *file, const js_error_render_site_t *site);
 const char *error_site_file(ant_t *js, const js_error_site_t *es);
-
-#endif

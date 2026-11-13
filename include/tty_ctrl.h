@@ -1,5 +1,4 @@
-#ifndef ANT_TTY_CTRL_H
-#define ANT_TTY_CTRL_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -29,5 +28,3 @@ bool tty_ctrl_build_cursor_to(char *buf, size_t buf_size, int x, bool has_y, int
 bool tty_ctrl_build_move_cursor_axis(char *buf, size_t buf_size, int delta, bool horizontal, size_t *len_out);
 bool tty_ctrl_parse_cursor_to_args(ant_args_t, int x_index, int y_index, tty_ctrl_cursor_to_args_t *out);
 bool tty_ctrl_parse_move_cursor_args(ant_args_t, int dx_index, int dy_index, int *dx, int *dy);
-
-#endif

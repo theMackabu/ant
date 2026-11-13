@@ -1,5 +1,4 @@
-#ifndef ANT_GC_MODULES_H
-#define ANT_GC_MODULES_H
+#pragma once
 
 #include "types.h"
 #include "gc/weak.h"
@@ -43,5 +42,3 @@ void gc_mark_abort_signal_object(ant_t *js, ant_value_t signal, gc_mark_fn mark)
 void gc_mark_error_record(ant_t *js, ant_value_t value, gc_mark_fn mark);
 void gc_mark_stream_object(ant_t *js, ant_value_t value, gc_mark_fn mark);
 void gc_finalize_stream_object(ant_t *js, ant_value_t value);
-
-#endif

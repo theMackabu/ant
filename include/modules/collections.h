@@ -1,5 +1,4 @@
-#ifndef COLLECTIONS_H
-#define COLLECTIONS_H
+#pragma once
 
 #include <uthash.h>
 #include "types.h"
@@ -231,5 +230,3 @@ static inline uint32_t weak_collection_key_hash(ant_value_t key) {
   hash = ((hash >> 16) ^ hash) * UINT32_C(0x45d9f3b);
   return (hash >> 16) ^ hash;
 }
-
-#endif

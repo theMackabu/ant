@@ -1,5 +1,4 @@
-#ifndef ANT_OBJECT_H
-#define ANT_OBJECT_H
+#pragma once
 
 #include "types.h"
 #include "value.h"
@@ -428,5 +427,3 @@ ant_object_t *obj_alloc_with_proto(ant_t *js, uint8_t type_tag, ant_value_t prot
 bool obj_extra_reserve(ant_object_t *obj, uint8_t capacity);
 void obj_delete_prop_slot(ant_object_t *obj, uint32_t slot);
 void set_proto(ant_t *js, ant_value_t obj, ant_value_t proto);
-
-#endif

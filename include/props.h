@@ -1,5 +1,4 @@
-#ifndef ANT_PROPS_H
-#define ANT_PROPS_H
+#pragma once
 
 #include "internal.h"
 
@@ -104,5 +103,3 @@ bool js_try_get_string_own_exotic(
   ant_t *js, ant_value_t obj, const char *key, 
   size_t key_len, ant_value_t *out, bool *is_length
 );
-
-#endif

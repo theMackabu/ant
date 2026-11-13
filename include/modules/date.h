@@ -1,5 +1,4 @@
-#ifndef DATE_H
-#define DATE_H
+#pragma once
 
 #include "types.h"
 
@@ -64,5 +63,3 @@ bool is_date_instance(ant_value_t value);
 
 ant_value_t js_mkdate(ant_t *js, double ms);
 ant_value_t get_date_string(ant_t *js, ant_value_t this_val, date_string_spec_t spec);
-
-#endif

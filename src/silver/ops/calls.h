@@ -1,5 +1,4 @@
-#ifndef SV_CALLS_H
-#define SV_CALLS_H
+#pragma once
 
 #include <limits.h>
 #include "silver/call.h"
@@ -685,5 +684,3 @@ static inline ant_value_t sv_op_call_call_slot_ptr(
   
   return sv_vm_call(vm, js, r, Ant_Value_Undefined, &arg2, 1, NULL, Ant_Value_Undefined);
 }
-
-#endif

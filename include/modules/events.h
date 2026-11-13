@@ -1,5 +1,4 @@
-#ifndef EVENTS_H
-#define EVENTS_H
+#pragma once
 
 #include <stdbool.h>
 #include "types.h"
@@ -113,5 +112,3 @@ bool Ant_EventTarget_AddDataListener(ant_t *js, ant_value_t target, ant_value_t 
     Ant_Function_Create(prefix##_get_on##type),                              \
     Ant_Function_CreateWithArity(prefix##_set_on##type, 1),                  \
     JS_DESC_E | JS_DESC_C)
-
-#endif

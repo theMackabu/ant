@@ -1,5 +1,4 @@
-#ifndef ANT_CLI_OPTIONS_H
-#define ANT_CLI_OPTIONS_H
+#pragma once
 
 #include <stdbool.h>
 #include "inspector.h"
@@ -54,5 +53,3 @@ typedef struct {
 
 bool ant_cli_parse(ant_cli_t *cli, int argc, char **argv, const char *env_options, int *exit_code);
 void ant_cli_free(ant_cli_t *cli);
-
-#endif

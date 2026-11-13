@@ -1,5 +1,4 @@
-#ifndef ANT_NATIVE_GETTER_H
-#define ANT_NATIVE_GETTER_H
+#pragma once
 
 #include "ant.h"
 #include "handles.h"
@@ -32,5 +31,3 @@ typedef struct {
 static inline const ant_native_getter_t *ant_native_getter_of(const ant_cfunc_meta_t *meta) {
   return meta && (meta->flags & CFUNC_NATIVE_GETTER) ? (const ant_native_getter_t *)ant_cfunc_meta_source(meta) : NULL;
 }
-
-#endif

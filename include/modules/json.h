@@ -1,5 +1,4 @@
-#ifndef JSON_H
-#define JSON_H
+#pragma once
 
 #include "types.h"
 
@@ -27,5 +26,3 @@ ant_value_t js_json_stringify(ant_params_t);
 
 ant_value_t json_parse_value(ant_t *js, ant_value_t value);
 ant_value_t json_stringify_value(ant_t *js, ant_value_t value);
-
-#endif

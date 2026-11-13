@@ -1,5 +1,4 @@
-#ifndef FETCH_H
-#define FETCH_H
+#pragma once
 
 #include "types.h"
 
@@ -9,5 +8,3 @@ void fetch_start_http(fetch_request_t *req);
 
 int has_pending_fetches(ant_t *js);
 ant_value_t ant_fetch(ant_params_t);
-
-#endif

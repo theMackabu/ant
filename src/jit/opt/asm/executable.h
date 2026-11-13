@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_ASM_EXECUTABLE_H
-#define ANT_JIT_OPT_ASM_EXECUTABLE_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -28,5 +27,3 @@ asm_code_heap_t *asm_code_heap_new(void);
 void asm_code_heap_destroy(asm_code_heap_t *heap);
 bool asm_code_heap_place(asm_code_heap_t *heap, asm_executable_t *code, const uint8_t *bytes, size_t len);
 asm_code_heap_stats_t asm_code_heap_stats(const asm_code_heap_t *heap);
-
-#endif

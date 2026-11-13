@@ -1,5 +1,4 @@
-#ifndef ANT_DOWNLOAD_H
-#define ANT_DOWNLOAD_H
+#pragma once
 
 #include <stdio.h>
 #include <stddef.h>
@@ -45,5 +44,3 @@ int ant_manifest_revision_url(const char *revision, char *out, size_t out_len);
 int ant_http_download_file(const char *url, FILE *file, const char *label, char *err, size_t err_len);
 int ant_download_files(const ant_download_file_t *files, size_t count, char *err, size_t err_len);
 int ant_manifest_fetch(const char *revision, char **body_out, size_t *body_len_out, char *err, size_t err_len);
-
-#endif

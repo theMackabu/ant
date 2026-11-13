@@ -1,5 +1,4 @@
-#ifndef STREAMS_WRITABLE_H
-#define STREAMS_WRITABLE_H
+#pragma once
 
 #include "types.h"
 #include "native_tag.h"
@@ -58,5 +57,3 @@ bool writable_stream_close_queued_or_in_flight(ant_value_t stream_obj);
 void writable_stream_finish_erroring(ant_t *js, ant_value_t stream_obj);
 void ws_default_controller_error(ant_t *js, ant_value_t ctrl_obj, ant_value_t error);
 void ws_default_controller_advance_queue_if_needed(ant_t *js, ant_value_t ctrl_obj);
-
-#endif

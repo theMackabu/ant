@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_INTERNAL_H
-#define ANT_JIT_INTERNAL_H
+#pragma once
 
 #include "realm.h"
 #include "proto_watch.h"
@@ -702,5 +701,3 @@ bool jit_mark_self_binding_guards(
     uint8_t *guard_sites);
 bool jit_is_eligible(sv_func_t *func);
 bool jit_snapshot_shape(ant_t *js, ant_shape_t *shape);
-
-#endif

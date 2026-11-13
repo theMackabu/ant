@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_ENTRY_STUB_H
-#define ANT_JIT_ENTRY_STUB_H
+#pragma once
 
 #include "silver/engine.h"
 
@@ -23,6 +22,4 @@ static constexpr intptr_t ANT_JIT_ENTER_SAVED_HI = 0;
 
 #else
 #define ANT_JIT_ENTER_STUB 0
-#endif
-
 #endif

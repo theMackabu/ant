@@ -1,5 +1,4 @@
-#ifndef ANT_NET_CONNECTION_H
-#define ANT_NET_CONNECTION_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -98,5 +97,3 @@ static inline uv_stream_t *ant_conn_stream(ant_conn_t *conn) {
 
 ant_conn_t *ant_conn_create_tcp(ant_listener_t *listener, uint64_t timeout_ms);
 ant_conn_t *ant_conn_create_pipe(ant_listener_t *listener, uint64_t timeout_ms);
-
-#endif

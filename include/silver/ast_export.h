@@ -1,5 +1,4 @@
-#ifndef SILVER_AST_EXPORT_H
-#define SILVER_AST_EXPORT_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -13,5 +12,3 @@ ant_value_t sv_ast_export_public(
   const char *source_type,
   bool locations
 );
-
-#endif

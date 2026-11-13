@@ -1,5 +1,4 @@
-#ifndef PROMISE_H
-#define PROMISE_H
+#pragma once
 
 #include "types.h"
 #include "object.h"
@@ -17,5 +16,3 @@ ant_value_t js_promise_reject_with_ctor(ant_t *js, ant_value_t ctor, ant_value_t
 void Ant_Promise_ClearAwaitCoroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);
 js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro, bool deferred);
 ant_value_t js_promise_tail_await(ant_t *js, ant_value_t value);
-
-#endif

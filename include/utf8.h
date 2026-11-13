@@ -1,5 +1,4 @@
-#ifndef UTF8_H
-#define UTF8_H
+#pragma once
 
 #include <stddef.h>
 #include <stdint.h>
@@ -115,5 +114,3 @@ static inline utf8proc_ssize_t utf8_next(
   utf8proc_ssize_t n = utf8proc_iterate(p, len, cp);
   return n > 0 ? n : 1;
 }
-
-#endif

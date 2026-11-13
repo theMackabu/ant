@@ -1,5 +1,4 @@
-#ifndef ANT_VM_INTERRUPT_H
-#define ANT_VM_INTERRUPT_H
+#pragma once
 
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -31,5 +30,3 @@ struct vm_interrupt {
 
 void vm_interrupt_begin(vm_interrupt_t *it);
 ant_value_t vm_interrupt_end(vm_interrupt_t *it, ant_value_t result);
-
-#endif

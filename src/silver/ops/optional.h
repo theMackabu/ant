@@ -1,5 +1,4 @@
-#ifndef SV_OPTIONAL_H
-#define SV_OPTIONAL_H
+#pragma once
 
 #include "silver/engine.h"
 #include "property.h"
@@ -32,5 +31,3 @@ static inline ant_value_t sv_op_get_elem_opt(sv_vm_t *vm, ant_t *js, sv_func_t *
   vm->stack[vm->sp++] = key;
   return sv_op_get_elem(vm, js, func, ip);
 }
-
-#endif

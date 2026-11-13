@@ -1,5 +1,4 @@
-#ifndef REQUEST_H
-#define REQUEST_H
+#pragma once
 
 #include <stdint.h>
 #include <stddef.h>
@@ -55,5 +54,3 @@ ant_value_t request_create_server(
   size_t body_len,
   const char *body_type
 );
-
-#endif

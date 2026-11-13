@@ -1,5 +1,4 @@
-#ifndef ANT_INSPECTOR_BIND_H
-#define ANT_INSPECTOR_BIND_H
+#pragma once
 
 #include "types.h"
 #include <stdbool.h>
@@ -165,5 +164,3 @@ void inspector_get_script_source(inspector_client_t *client, int id, yyjson_val 
 void inspector_get_response_body(inspector_client_t *client, int id, yyjson_val *params);
 void inspector_get_request_post_data(inspector_client_t *client, int id, yyjson_val *params);
 void inspector_handle_message(inspector_client_t *client, const char *payload, size_t len);
-
-#endif

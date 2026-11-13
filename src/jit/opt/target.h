@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_TARGET_H
-#define ANT_JIT_OPT_TARGET_H
+#pragma once
 
 #include "code.h"
 
@@ -75,5 +74,3 @@ static inline opt_register_mask_t opt_caller_saved(const opt_register_set_t *set
 void opt_target_registers(opt_target_t target, opt_register_set_t *set, opt_pinned_registers_t *pinned);
 opt_register_mask_t opt_few_registers(const opt_register_set_t *set, uint32_t extra);
 opt_register_set_t opt_test_registers(void);
-
-#endif

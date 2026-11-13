@@ -1,5 +1,4 @@
-#ifndef ANT_CONVERT_H
-#define ANT_CONVERT_H
+#pragma once
 
 #include "internal.h"
 
@@ -12,5 +11,3 @@ bool js_try_invoke(
   ant_t *js, ant_value_t obj, const char *method, 
   ant_args_t, ant_value_t *out_result
 );
-
-#endif

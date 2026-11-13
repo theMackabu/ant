@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_TIER_H
-#define ANT_JIT_OPT_TIER_H
+#pragma once
 
 #include "asm/executable.h"
 #include "exits.h"
@@ -321,5 +320,3 @@ void opt_rt_element_barrier(sv_vm_t *vm, ant_object_t *array, uint32_t index, an
 void opt_rt_upvalue_barrier(sv_vm_t *vm, sv_upvalue_t *upvalue, ant_value_t value);
 void opt_rt_shape_transition(sv_vm_t *vm, ant_object_t *object, ant_shape_t *to_shape);
 void opt_rt_slow_paths_hot(sv_vm_t *vm, opt_code_t *code, sv_func_t *func, uint64_t bc_off);
-
-#endif

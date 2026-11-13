@@ -1,5 +1,4 @@
-#ifndef REACTOR_H
-#define REACTOR_H
+#pragma once
 
 #include "types.h"
 #include <uv.h>
@@ -38,5 +37,3 @@ js_reactor_await_status_t js_reactor_blocking_await_promise(
   ant_t *js, ant_value_t promise, ant_value_t *value_out,
   js_reactor_interrupt_fn interrupted, void *interrupt_ctx
 );
-
-#endif

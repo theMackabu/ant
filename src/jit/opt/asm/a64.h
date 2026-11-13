@@ -1,5 +1,4 @@
-#ifndef ANT_JIT_OPT_ASM_A64_H
-#define ANT_JIT_OPT_ASM_A64_H
+#pragma once
 
 #include "buffer.h"
 
@@ -524,5 +523,3 @@ void masm_a64_compare_double_set(masm_a64_t *m, asm_dcond_t cond, asm_gpr_t dst,
 asm_frame_t masm_a64_frame(asm_regset_t saved_gprs, asm_regset_t saved_fprs, uint32_t locals_size);
 void masm_a64_emit_prologue(masm_a64_t *m, const asm_frame_t *frame);
 void masm_a64_emit_epilogue(masm_a64_t *m, const asm_frame_t *frame);
-
-#endif

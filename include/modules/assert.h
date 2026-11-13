@@ -1,5 +1,4 @@
-#ifndef ANT_ASSERT_MODULE_H
-#define ANT_ASSERT_MODULE_H
+#pragma once
 
 #include "silver/engine.h"
 
@@ -19,5 +18,3 @@ static inline void promise_mark_handled(ant_value_t v) {
   ant_promise_state_t *pd = ant_object_promise_state(obj);
   if (pd) pd->has_rejection_handler = true;
 }
-
-#endif

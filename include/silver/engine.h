@@ -1,5 +1,4 @@
-#ifndef SILVER_ENGINE_H
-#define SILVER_ENGINE_H
+#pragma once
 
 #include "gc.h"
 #include "gc/objects.h"
@@ -1431,5 +1430,3 @@ ant_value_t sv_string_builder_append_snapshot_slot(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
   sv_func_t *func, uint16_t slot_idx, ant_value_t lhs, ant_value_t rhs
 );
-
-#endif

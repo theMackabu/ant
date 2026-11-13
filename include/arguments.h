@@ -1,5 +1,4 @@
-#ifndef ANT_ARGUMENTS_H
-#define ANT_ARGUMENTS_H
+#pragma once
 
 #include "internal.h"
 
@@ -37,5 +36,3 @@ void js_arguments_after_define(
 
 void js_arguments_unmap_all(ant_t *js, ant_value_t obj);
 bool js_arguments_setter(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t value);
-
-#endif

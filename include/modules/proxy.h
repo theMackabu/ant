@@ -1,5 +1,4 @@
-#ifndef ANT_MODULES_PROXY_H
-#define ANT_MODULES_PROXY_H
+#pragma once
 
 #include "keys.h"
 #include "internal.h"
@@ -49,5 +48,3 @@ ant_value_t proxy_set_rejected_sym(ant_t *js, ant_value_t sym, ant_value_t value
 
 __attribute__((noinline, cold)) 
 ant_value_t proxy_trap_error(ant_t *js, const char *trap, const char *reason);
-
-#endif

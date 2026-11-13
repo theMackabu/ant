@@ -1,5 +1,4 @@
-#ifndef SV_ASYNC_H
-#define SV_ASYNC_H
+#pragma once
 
 #include "gc.h"
 #include "gc/roots.h"
@@ -274,6 +273,3 @@ static inline sv_await_result_t sv_await_tail(ant_t *js, ant_value_t value) {
   
   return out;
 }
-
-
-#endif
