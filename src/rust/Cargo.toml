@@ -10,6 +10,10 @@ crate-type = ["staticlib"]
 [dependencies]
 temporal_capi = { version = "=0.2.6", optional = true }
 encoding_c = { version = "=0.9.8", optional = true }
+libc = { version = "0.2", optional = true }
+
+[build-dependencies]
+cbindgen = { version = "0.29", default-features = false, optional = true }
 
 [features]
 temporal = ["dep:temporal_capi"]
@@ -18,6 +22,8 @@ fs-tzdb = ["temporal", "temporal_capi/fs_tzdb"]
 # unix builds resolve zones at runtime via FsTzdbProvider instead
 tzdb-embedded = ["temporal", "temporal_capi/compiled_data"]
 encoding = ["dep:encoding_c"]
+sandbox-wire = []
+sandbox = ["sandbox-wire", "dep:libc", "dep:cbindgen"]
 
 [profile.release]
 opt-level = "z"

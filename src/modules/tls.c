@@ -47,7 +47,7 @@
 #include "descriptors.h"
 
 #include "gc/modules.h"
-#include "sandbox/policy.h"
+#include "net/listen_policy.h"
 #include "modules/microtasks.h"
 #include "modules/tls.h"
 #include "modules/buffer.h"
@@ -1512,12 +1512,12 @@ static ant_value_t js_tls_server_listen(ant_params_t) {
   int port = parsed.port;
   int backlog = parsed.backlog > 0 ? parsed.backlog : 511;
 
-  if (port == 0 && ant_sandbox_policy_forward_restricted()) return js_mkerr_typed(
+  if (port == 0 && Ant_Net_ListenPolicy_Restricted(js)) return js_mkerr_typed(
     js, JS_ERR_TYPE | JS_ERR_NO_STACK,
     "sandbox listen on port 0 is not supported; use a fixed port with --forward <port>"
   );
 
-  if (!ant_sandbox_policy_port_forwarded(port)) return js_mkerr_typed(
+  if (!Ant_Net_ListenPolicy_PortAllowed(js, port)) return js_mkerr_typed(
     js, JS_ERR_TYPE | JS_ERR_NO_STACK,
     "sandbox listen on port %d requires --forward %d or --forward <host>:%d",
     port, port, port

@@ -22,7 +22,7 @@ let
   optArgs = lib.concatStringsSep " " optFlags;
 in
 pkgs.mkShellNoCC ({
-  packages = [ nodejs ] ++ (if isDarwin then [ darwinClang ] else [
+  packages = [ nodejs ] ++ (if isDarwin then [ darwinClang pkgs.libiconv ] else [
     toolchain.bintools
     toolchain.clang
     toolchain.compilerRt

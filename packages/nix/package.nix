@@ -17,6 +17,7 @@
 , runCommand
 , writeText
 , darwin ? null
+, libiconv
 , callPackage
 , gitRev ? "unknown"
 , enablePgo ? false
@@ -61,7 +62,7 @@ let
     src = ../..;
     inherit cargoRoot;
     name = "ant-rust-cargo-deps";
-    hash = "sha256-XBQHBJ9yHRAkyfuY08TpBp0ymyZdgCvma7PlxEyGBgE=";
+    hash = "sha256-ygB8sTL7R6yDH+RE7ITDbn4N75oGb9vgTOLaqPVLpuU=";
   };
   rustStdCargoDeps = rustPlatform.fetchCargoVendor {
     src = rustToolchain;
@@ -130,6 +131,7 @@ antStdenv.mkDerivation (finalAttrs: {
     llvmPackages_21.llvm
   ];
 
+  buildInputs = lib.optionals stdenv.hostPlatform.isDarwin [ libiconv ];
   cargoDeps = rustBuildCargoDeps;
 
   inherit cargoRoot;

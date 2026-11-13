@@ -82,7 +82,9 @@ static bool parse_input_type(const ant_cli_t *cli, bool stdin_mode, ant_input_mo
 }
 
 static run_mode_t pick_mode(const ant_cli_t *cli, const run_plan_t *plan, bool repl_mode, bool stdin_mode) {
+#ifdef ANT_HAVE_SANDBOX
   if (cli->sandbox_daemon) return RUN_SANDBOX;
+#endif
   if (plan->pkg.argv) return RUN_PKG;
   if (cli->eval) return RUN_EVAL;
   if (repl_mode) return RUN_REPL;
@@ -94,7 +96,9 @@ static bool plan_run(const ant_cli_t *cli, run_plan_t *plan, int *exit_code) {
   *exit_code = EXIT_FAILURE;
   plan->script_tail = cli->script_tail;
 
+#ifdef ANT_HAVE_SANDBOX
   if (cli->sandbox_daemon && !ant_sandbox_read_request_transport(&plan->sandbox)) return false;
+#endif
   if (ant_cli_route(cli, &plan->pkg, exit_code) == ANT_ROUTE_EXIT) return false;
 
   bool has_stdin = !isatty(STDIN_FILENO);
@@ -120,12 +124,14 @@ static bool plan_run(const ant_cli_t *cli, run_plan_t *plan, int *exit_code) {
   bool no_module = plan->pkg.argv || repl_mode || stdin_mode || cli->file_count == 0;
   plan->module_file = no_module ? NULL : cli->files[0];
 
+#ifdef ANT_HAVE_SANDBOX
   if (plan->mode == RUN_SANDBOX) {
     if (!ant_cli_daemon_prepare(&plan->sandbox)) return false;
     bool run = plan->sandbox.mode == ANT_SANDBOX_REQUEST_RUN;
     plan->module_file = run ? plan->sandbox.entry : NULL;
     if (run) plan->script_tail = (ant_argv_t){ plan->sandbox.argc, plan->sandbox.argv };
   }
+#endif
 
   return true;
 }
@@ -189,7 +195,9 @@ static int run_mode(ant_t *js, const ant_cli_t *cli, const run_plan_t *plan, ant
 }
 
 static int run_in_runtime(ant_t *js, const ant_cli_t *cli, run_plan_t *plan, bool crash_report, ant_watch_t *watch) {
+#ifdef ANT_HAVE_SANDBOX
   if (plan->mode == RUN_SANDBOX) return ant_cli_daemon_run(js, &plan->sandbox, cli->original_argv[0]);
+#endif
   if (cli->inspector.enabled && !start_inspector(js, cli, plan)) return EXIT_FAILURE;
   if (crash_report) return ant_crash_run_internal_report(js);
 
@@ -218,12 +226,16 @@ static int run_runtime(const ant_cli_t *cli, run_plan_t *plan, bool crash_report
   ant_argv_t proc = process_argv(cli, plan);
   if (plan->mode == RUN_PKG) plan->pkg = (pkg_argv_t){ 0, NULL };
 
+#ifdef ANT_HAVE_SANDBOX
   if (plan->mode == RUN_SANDBOX) ant_sandbox_set_guest_process(true);
+#endif
   ant_runtime_init(js, proc.argc, proc.argv, cli->localstorage_file);
 
   if (cli->web_compat) js->runtime.flags |= ANT_RUNTIME_WEB_COMPAT;
   if (cli->location) js->runtime.location = cli->location;
+#ifdef ANT_HAVE_SANDBOX
   if (plan->mode == RUN_SANDBOX) ant_cli_daemon_terminal(js, &plan->sandbox);
+#endif
 
   ant_bootstrap_modules(js);
 
@@ -272,7 +284,9 @@ static int run_cli(const ant_cli_t *cli, bool crash_report) {
     code = cli->watch || cli->hot ? run_watch(cli, &plan) : run_runtime(cli, &plan, crash_report, NULL);
 
   pkg_argv_free(&plan.pkg);
+#ifdef ANT_HAVE_SANDBOX
   ant_sandbox_request_free(&plan.sandbox);
+#endif
   
   return code;
 }
@@ -293,6 +307,8 @@ static int ant_main(int argc, char *argv[]) {
 }
 
 int main(int argc, char *argv[]) {
+#ifdef ANT_HAVE_SANDBOX
   if (ant_sandbox_vm_helper_is_process(argv[0])) return ant_sandbox_vm_helper_process_main();
+#endif
   return os_run_main(ant_main, argc, argv);
 }

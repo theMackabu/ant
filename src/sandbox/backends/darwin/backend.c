@@ -24,13 +24,6 @@ int ant_hvf_check(hv_return_t ret, const char *op) {
   return -EIO;
 }
 
-int ant_hvf_send_msi(ant_hvf_vm_t *vm, uint64_t addr, uint32_t data) {
-  if (!ant_hvf_gic.send_msi) return -ENOSYS;
-  hv_return_t rc = ant_hvf_gic.send_msi((hv_ipa_t)addr, data);
-  if (rc != HV_SUCCESS) return -EIO;
-  return 0;
-}
-
 void ant_hvf_wake_vcpu(ant_hvf_vm_t *vm) {
   if (!vm) return;
   if (vm->vcpu_exit) ant_hvf_api.vcpus_exit(&vm->vcpu, 1);
@@ -56,20 +49,12 @@ static int ant_hvf_create_vcpu(ant_hvf_vm_t *vm) {
   return ant_hvf_check(create_rc, "hv_vcpu_create");
 }
 
-typedef hv_return_t (
-  *ant_hvf_vm_config_set_ipa_granule_fn
-)(hv_vm_config_t, uint32_t);
-
 static int ant_hvf_create_vm(ant_hvf_vm_t *vm) {
   hv_vm_config_t config = ant_hvf_api.vm_config_create();
   if (!config) return ant_hvf_check(ant_hvf_api.vm_create(NULL), "hv_vm_create");
 
-  ant_hvf_vm_config_set_ipa_granule_fn set_ipa_granule = 
-    (ant_hvf_vm_config_set_ipa_granule_fn)
-    ant_hvf_sym("hv_vm_config_set_ipa_granule");
-  
-  if (set_ipa_granule) {
-    hv_return_t granule_rc = set_ipa_granule(config, 0);
+  if (ant_hvf_api.vm_config_set_ipa_granule) {
+    hv_return_t granule_rc = ant_hvf_api.vm_config_set_ipa_granule(config, 0);
     if (granule_rc == HV_SUCCESS) ant_hvf_verbose(vm, "configured VM IPA granule=4KB");
     else ant_hvf_verbosef(vm, "VM IPA granule=4KB unavailable rc=%d", granule_rc);
   }
@@ -135,7 +120,7 @@ void *ant_hvf_timeout_thread(void *arg) {
       wait_ns = (limit - used) / cpu_rate;
     }
     bool wall_disarmed = timeout->until_request_sent &&
-      atomic_load_explicit(&vm->vsock.request_sent, memory_order_acquire);
+      ant_hvf_vsock_request_sent(vm);
     if (timeout->timeout_ms > 0 && !wall_disarmed) {
       struct timespec now;
       clock_gettime(CLOCK_MONOTONIC, &now);
@@ -217,27 +202,15 @@ int ant_hvf_run(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool timeout_until_re
       else rc = ant_hvf_handle_mmio(vm, &vm->vcpu_exit->exception);
       if (rc == ANT_HVF_GUEST_SHUTDOWN) { rc = 0; goto done; }
       if (rc != 0) {
-        uint64_t pc = 0; uint64_t elr = 0; uint64_t esr_el1 = 0; uint64_t far = 0; uint64_t vbar = 0;
-        ant_hvf_api.vcpu_get_reg(vm->vcpu, HV_REG_PC, &pc);
-        ant_hvf_api.vcpu_get_sys_reg(vm->vcpu, HV_SYS_REG_ELR_EL1, &elr);
-        ant_hvf_api.vcpu_get_sys_reg(vm->vcpu, HV_SYS_REG_ESR_EL1, &esr_el1);
-        ant_hvf_api.vcpu_get_sys_reg(vm->vcpu, HV_SYS_REG_FAR_EL1, &far);
-        ant_hvf_api.vcpu_get_sys_reg(vm->vcpu, HV_SYS_REG_VBAR_EL1, &vbar);
-        fprintf(stderr, "sandbox vm: unhandled guest exception at pc=0x%llx esr=0x%llx ipa=0x%llx va=0x%llx elr=0x%llx guest_esr=0x%llx far=0x%llx vbar=0x%llx\n",
-          (u64)pc,
-          (u64)vm->vcpu_exit->exception.syndrome,
-          (u64)vm->vcpu_exit->exception.physical_address,
-          (u64)vm->vcpu_exit->exception.virtual_address,
-          (u64)elr, (u64)esr_el1, (u64)far, (u64)vbar
-        );
+        ant_hvf_report_exception(vm);
         goto done;
       }
-      if (vm->vsock.exit_received) {
-        rc = vm->vsock.exit_code;
+      if (ant_hvf_vsock_exit_received(vm)) {
+        rc = ant_hvf_vsock_exit_code(vm);
         goto done;
       }
     } else if (vm->vcpu_exit->reason == HV_EXIT_REASON_VTIMER_ACTIVATED) {
-      rc = ant_hvf_raise_vtimer(vm, "vtimer activated");
+      rc = ant_hvf_raise_vtimer(vm);
       if (rc != 0) goto done;
     } else if (vm->vcpu_exit->reason == HV_EXIT_REASON_CANCELED) {
       if (atomic_load_explicit(&vm->cpu_timed_out, memory_order_acquire)) {
@@ -247,24 +220,7 @@ int ant_hvf_run(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool timeout_until_re
         rc = -ECANCELED;
         goto done;
       } else if (atomic_load_explicit(&vm->timed_out, memory_order_acquire)) {
-        uint64_t pc = 0;
-        uint64_t cntv_ctl = 0;
-        uint64_t cntv_cval = 0;
-        uint64_t cntvct = 0;
-        uint64_t cntfrq = 0;
-        uint64_t kas_offset = 0;
-        ant_hvf_api.vcpu_get_reg(vm->vcpu, HV_REG_PC, &pc);
-        ant_hvf_api.vcpu_get_sys_reg(vm->vcpu, HV_SYS_REG_CNTV_CTL_EL0, &cntv_ctl);
-        ant_hvf_api.vcpu_get_sys_reg(vm->vcpu, HV_SYS_REG_CNTV_CVAL_EL0, &cntv_cval);
-        ant_hvf_api.vcpu_get_sys_reg(vm->vcpu, ANT_HVF_SYS_REG_CNTVCT_EL0, &cntvct);
-        ant_hvf_api.vcpu_get_sys_reg(vm->vcpu, ANT_HVF_SYS_REG_CNTFRQ_EL0, &cntfrq);
-        ant_hvf_guest_read(vm, ANT_HVF_NANOS_KAS_OFFSET_SYMBOL, &kas_offset, sizeof(kas_offset));
-        fprintf(stderr, "sandbox vm: guest timed out at pc=0x%llx low_pc=0x%llx kas_offset=0x%llx last_exit=%u last_pc=0x%llx last_esr=0x%llx last_ipa=0x%llx last_va=0x%llx cntv_ctl=0x%llx cntv_cval=0x%llx cntvct=0x%llx cntfrq=%llu\n",
-          (u64)pc,
-          (u64)(kas_offset ? pc - kas_offset : 0), (u64)kas_offset,
-          vm->last_exit_reason, (u64)vm->last_exit_pc, (u64)vm->last_exit_esr, (u64)vm->last_exit_ipa,
-          (u64)vm->last_exit_va, (u64)cntv_ctl, (u64)cntv_cval, (u64)cntvct, (u64)cntfrq
-        );
+        ant_hvf_report_timeout(vm);
         rc = -ETIMEDOUT;
         goto done;
       } else {
@@ -314,8 +270,8 @@ static void ant_hvf_set_result(
 static void ant_hvf_classify_result(ant_hvf_vm_t *vm, ant_sandbox_vm_result_t *result, int rc) {
   if (!result) return;
   
-  if (vm && vm->vsock.exit_received)
-    ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_GUEST_EXIT, vm->vsock.exit_code);
+  if (vm && ant_hvf_vsock_exit_received(vm))
+    ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_GUEST_EXIT, ant_hvf_vsock_exit_code(vm));
   else if (vm && ant_hvf_uart_has_panic(vm))
     ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_KERNEL_PANIC, rc ? rc : -EFAULT);
   else if (rc == -ENOSYS)
@@ -328,9 +284,9 @@ static void ant_hvf_classify_result(ant_hvf_vm_t *vm, ant_sandbox_vm_result_t *r
     ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_TIMEOUT, rc);
   else if (rc == -ECANCELED || (vm && atomic_load_explicit(&vm->canceled, memory_order_acquire)))
     ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_CANCELED, rc ? rc : -ECANCELED);
-  else if (vm && vm->vsock.protocol_error)
+  else if (vm && ant_hvf_vsock_protocol_error(vm))
     ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_PROTOCOL_ERROR, rc);
-  else if (vm && vm->vsock.transport_error)
+  else if (vm && ant_hvf_vsock_transport_error(vm))
     ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_TRANSPORT_ERROR, rc);
   else if (rc == -EINVAL)
     ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_CONFIG_ERROR, rc);
@@ -344,10 +300,10 @@ static void ant_hvf_session_cleanup(ant_hvf_session_t *session, int *rc_inout) {
   ant_hvf_vm_t *vm = &session->vm;
   int rc = rc_inout ? *rc_inout : 0;
 
-  if (!vm->vsock.exit_received && ant_hvf_uart_has_panic(vm)) ant_hvf_uart_report_panic(vm);
+  if (!ant_hvf_vsock_exit_received(vm) && ant_hvf_uart_has_panic(vm)) ant_hvf_uart_report_panic(vm);
   else ant_hvf_uart_discard(vm);
   
-  for (size_t i = 0; i < vm->p9_count; i++) ant_hvf_9p_report_stats(vm, &vm->p9[i], i);
+  ant_hvf_9p_report(vm);
   ant_hvf_net_stop(vm);
   
   if (session->vcpu_created) {
@@ -368,18 +324,10 @@ static void ant_hvf_session_cleanup(ant_hvf_session_t *session, int *rc_inout) {
   if (vm->image_fd >= 0) close(vm->image_fd);
   if (vm->host_mem && vm->host_mem != MAP_FAILED) munmap(vm->host_mem, vm->mem_size);
   
-  free(vm->vsock.rx_stream);
-  for (size_t i = 0; i < vm->p9_count; i++) {
-    free(vm->p9[i].fids);
-    ant_hvf_9p_buffers_free(&vm->p9[i]);
-    ant_hvf_9p_stat_cache_clear(&vm->p9[i]);
-    ant_hvf_9p_file_cache_clear(&vm->p9[i]);
-  }
+  ant_devices_free(vm->devices);
+  vm->devices = NULL;
   
-  if (vm->net_lock_init) pthread_mutex_destroy(&vm->net_lock);
-  if (vm->virtio_lock_init) pthread_mutex_destroy(&vm->virtio_lock);
   ant_hvf_vsock_clear_frames(vm);
-  if (vm->vsock_lock_init) pthread_mutex_destroy(&vm->vsock_lock);
   if (vm->idle_sync_init) {
     pthread_cond_destroy(&vm->idle_cond);
     pthread_mutex_destroy(&vm->idle_lock);
@@ -428,94 +376,23 @@ static int ant_hvf_session_create(const ant_sandbox_vm_config_t *config, void **
   }
   
   vm->p9_count = config->mount_count;
-  ant_hvf_virtio_init(
-    &vm->blk,
-    ANT_HVF_VIRTIO_KIND_BLOCK,
-    "virtio-blk",
-    ANT_VIRTIO_PCI_SUBDEVICE_BLOCK,
-    ANT_VIRTIO_PCI_SUBDEVICE_BLOCK,
-    ANT_HVF_VIRTIO_BLK_SLOT,
-    0x01,
-    0x00,
-    (uint32_t)ANT_HVF_VIRTIO_BLK_BAR,
-    ANT_VIRTIO_BLK_FEATURES,
-    1,
-    ANT_VIRTIO_BLK_QUEUE_SIZE,
-    ANT_VIRTIO_BLK_CONFIG_LEN
-  );
   
-  ant_hvf_virtio_init(
-    &vm->net,
-    ANT_HVF_VIRTIO_KIND_NET,
-    "virtio-net",
-    ANT_VIRTIO_PCI_SUBDEVICE_NET,
-    ANT_VIRTIO_PCI_SUBDEVICE_NET,
-    ANT_HVF_VIRTIO_NET_SLOT,
-    0x02,
-    0x00,
-    (uint32_t)ANT_HVF_VIRTIO_NET_BAR,
-    ANT_VIRTIO_NET_F_MAC,
-    ANT_VIRTIO_NET_QUEUE_COUNT,
-    ANT_VIRTIO_NET_QUEUE_SIZE,
-    8
-  );
-  
+  ant_devices_add_block(ant_hvf_devices(vm), ANT_HVF_VIRTIO_BLK_SLOT, ANT_HVF_VIRTIO_BLK_BAR);
+  ant_devices_add_net(ant_hvf_devices(vm), ANT_HVF_VIRTIO_NET_SLOT, ANT_HVF_VIRTIO_NET_BAR);
   memcpy(vm->net_mac, (uint8_t[]){ 0x02, 0x41, 0x4e, 0x54, 0x00, 0x01 }, sizeof(vm->net_mac));
-  vm->net_max_packet_size = 1518u;
+  ant_devices_add_vsock(ant_hvf_devices(vm), ANT_HVF_VIRTIO_VSOCK_SLOT, ANT_HVF_VIRTIO_VSOCK_BAR);
+  ant_devices_add_rng(ant_hvf_devices(vm), ANT_HVF_VIRTIO_RNG_SLOT, ANT_HVF_VIRTIO_RNG_BAR);
+  ant_devices_set_capabilities(ant_hvf_devices(vm), config->capabilities);
   
-  ant_hvf_virtio_init(
-    &vm->vsock.virtio,
-    ANT_HVF_VIRTIO_KIND_VSOCK,
-    "virtio-vsock",
-    ANT_VIRTIO_PCI_SUBDEVICE_VSOCK,
-    ANT_VIRTIO_PCI_SUBDEVICE_VSOCK,
-    ANT_HVF_VIRTIO_VSOCK_SLOT,
-    0x08,
-    0x00,
-    (uint32_t)ANT_HVF_VIRTIO_VSOCK_BAR,
-    ANT_VIRTIO_VSOCK_F_STREAM,
-    ANT_VIRTIO_VSOCK_QUEUE_COUNT,
-    ANT_VIRTIO_VSOCK_QUEUE_SIZE,
-    8
-  );
-  
-  ant_hvf_virtio_init(
-    &vm->rng,
-    ANT_HVF_VIRTIO_KIND_RNG,
-    "virtio-rng",
-    ANT_VIRTIO_PCI_SUBDEVICE_ENTROPY,
-    ANT_VIRTIO_PCI_SUBDEVICE_ENTROPY,
-    ANT_HVF_VIRTIO_RNG_SLOT,
-    0xff,
-    0x00,
-    (uint32_t)ANT_HVF_VIRTIO_RNG_BAR,
-    0,
-    1,
-    ANT_VIRTIO_RNG_QUEUE_SIZE,
-    0
-  );
-  
-  vm->vsock.capabilities = config->capabilities;
   for (size_t i = 0; i < vm->p9_count; i++) {
-    ant_hvf_virtio_init(
-      &vm->p9[i].virtio,
-      ANT_HVF_VIRTIO_KIND_9P,
-      "virtio-9p",
-      ANT_VIRTIO_PCI_SUBDEVICE_9P,
-      ANT_VIRTIO_PCI_SUBDEVICE_9P,
+    rc = ant_devices_add_share(
+      ant_hvf_devices(vm),
       (uint8_t)(ANT_HVF_VIRTIO_9P_SLOT_BASE + i),
-      0x01,
-      0x00,
       (uint32_t)(ANT_HVF_VIRTIO_9P_BAR_BASE + i * ANT_HVF_VIRTIO_BAR_SIZE),
-      ANT_VIRTIO_9P_F_MOUNT_TAG,
-      1,
-      ANT_VIRTIO_9P_QUEUE_SIZE,
-      (uint16_t)(2u + strlen(config->mounts[i].tag))
-    );
-    vm->p9[i].root = config->mounts[i].host_path;
-    vm->p9[i].tag = config->mounts[i].tag;
-    vm->p9[i].readonly = config->mounts[i].readonly;
-    rc = ant_hvf_9p_buffers_init(&vm->p9[i], ANT_HVF_9P_MAX_MSIZE);
+      config->mounts[i].host_path,
+      config->mounts[i].tag,
+      config->mounts[i].readonly
+    ) ? 0 : -EINVAL;
     if (rc != 0) goto fail;
   }
   
@@ -532,6 +409,7 @@ static int ant_hvf_session_create(const ant_sandbox_vm_config_t *config, void **
   vm->cpu_time_ms = config->cpu_time_ms;
   vm->frame_handler = config->frame_handler;
   vm->frame_handler_user = config->frame_handler_user;
+  
   ant_hvf_verbosef(vm,
     "Hypervisor.framework backend image=%s kernel=%s memory=%zu MiB mounts=%zu forwards=%zu",
     config->image_path,
@@ -560,20 +438,6 @@ static int ant_hvf_session_create(const ant_sandbox_vm_config_t *config, void **
     goto fail;
   }
 
-  if (pthread_mutex_init(&vm->net_lock, NULL) == 0) vm->net_lock_init = true;
-  else if (vm->net_enabled) {
-    rc = -errno;
-    goto fail;
-  }
-  int virtio_lock_rc = pthread_mutex_init(&vm->virtio_lock, NULL);
-  if (virtio_lock_rc == 0) vm->virtio_lock_init = true;
-  else if (vm->net_enabled) {
-    rc = -virtio_lock_rc;
-    goto fail;
-  }
-  int vsock_lock_rc = pthread_mutex_init(&vm->vsock_lock, NULL);
-  if (vsock_lock_rc == 0) vm->vsock_lock_init = true;
-  else { rc = -vsock_lock_rc; goto fail; }
   int idle_lock_rc = pthread_mutex_init(&vm->idle_lock, NULL);
   if (idle_lock_rc != 0) { rc = -idle_lock_rc; goto fail; }
   int idle_cond_rc = pthread_cond_init(&vm->idle_cond, NULL);
@@ -664,11 +528,7 @@ static int ant_hvf_session_execute(void *opaque, const ant_sandbox_vm_request_t 
   ant_hvf_session_t *session = opaque;
   ant_hvf_vm_t *vm = &session->vm;
 
-  atomic_store_explicit(&vm->vsock.request_sent, false, memory_order_release);
-  vm->vsock.exit_received = false;
-  vm->vsock.exit_code = 0;
-  vm->vsock.protocol_error = false;
-  vm->vsock.transport_error = false;
+  ant_hvf_vsock_begin_request(vm);
   atomic_store_explicit(&vm->timed_out, false, memory_order_release);
   atomic_store_explicit(&vm->cpu_timed_out, false, memory_order_release);
   atomic_store_explicit(&vm->canceled, false, memory_order_release);
@@ -696,14 +556,14 @@ static int ant_hvf_session_execute(void *opaque, const ant_sandbox_vm_request_t 
 
   int maybe_sent = ant_hvf_vsock_maybe_send_request(vm);
   if (maybe_sent != 0 && maybe_sent != -EAGAIN) {
-    vm->vsock.transport_error = true;
+    ant_hvf_vsock_fail_transport(vm);
     ant_hvf_classify_result(vm, request->result, maybe_sent);
     return maybe_sent;
   }
 
   int rc = ant_hvf_run(vm, timeout_ms, timeout_until_request_sent);
   if (rc == -ETIMEDOUT) fprintf(stderr, "sandbox vm: guest timed out\n");
-  if (!vm->vsock.exit_received && ant_hvf_uart_has_panic(vm) && rc == 0) rc = -EFAULT;
+  if (!ant_hvf_vsock_exit_received(vm) && ant_hvf_uart_has_panic(vm) && rc == 0) rc = -EFAULT;
   ant_hvf_classify_result(vm, request->result, rc);
 
   vm->frame_handler = NULL;

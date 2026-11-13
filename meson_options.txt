@@ -3,6 +3,7 @@ option('static_link', type: 'boolean', value: false, description: 'statically li
 option('linker_map', type: 'boolean', value: false, description: 'emit a linker map for the ant binary')
 option('codesign', type: 'boolean', value: true, description: 'codesign the Ant binary on Darwin')
 option('runtime_binary', type: 'feature', value: 'auto', description: 'build the tooling-free ant-runtime binary used by ant compile')
+option('sandbox', type: 'feature', value: 'auto', description: 'build the microVM sandbox (ant sandbox, ant:sandbox); never built on Windows')
 option('temporal', type: 'feature', value: 'enabled', description: 'build the Temporal API from temporal_capi')
 option('encoding_rs', type: 'feature', value: 'enabled', description: 'decode legacy TextDecoder encodings with encoding_rs')
 option('unsafe_c', type: 'feature', value: 'disabled', description: 'build Ant.unsafe.c, which compiles C at runtime with c2mir')

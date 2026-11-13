@@ -42,12 +42,19 @@ libant_tests = [
   'jit-address-modes',
 ]
 
+if host_machine.system() != 'windows'
+  libant_tests += ['download']
+endif
+
 libant_test_timeouts = {
   'isolate-threads': 300,
   'isolate-teardown': 300,
 }
 
 foreach name : libant_tests
+  if name == 'error-handoffs' and not sandbox_supported
+    continue
+  endif
   exe = executable(
     'test-' + name,
     files(tests_root / 'test_' + name.replace('-', '_') + '.c'),
@@ -243,17 +250,17 @@ executable(
 )
 
 sandbox_tests = []
-if darwin_hvf_supported
+if sandbox_supported and darwin_hvf_supported
   sandbox_tests += ['net-packets', 'virtio-blk', 'virtio-rng', 'pci', 'mmio', 'vsock-queue']
 endif
-if darwin_hvf_supported or host_machine.system() == 'linux'
+if sandbox_supported and (darwin_hvf_supported or host_machine.system() == 'linux')
   sandbox_tests += ['9p']
 endif
 
 foreach name : sandbox_tests
   executable(
     'test-sandbox-' + name,
-    files(tests_root / 'test_sandbox_' + name.replace('-', '_') + '.c'),
+    files(tests_root / 'sandbox' / name.replace('-', '_') + '.c'),
     dependencies: name == '9p' ? libant_dep : sandbox_vm_dep,
     build_by_default: false
   )

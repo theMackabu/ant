@@ -17,7 +17,7 @@
 #include "runtime.h"
 #include "output.h"
 #include "silver/call.h"
-
+#include "worker_internal.h"
 #include "esm/commonjs.h"
 #include "esm/loader.h"
 #include "esm/remote.h"
@@ -26,8 +26,7 @@
 #include "modules/process.h"
 #include "modules/url.h"
 #include "modules/worker_threads.h"
-
-#include "worker_internal.h"
+#include "net/listen_policy.h"
 
 static constexpr uint32_t WORKER_NATIVE_TAG = Ant_NativeTag("WRKR");
 
@@ -368,7 +367,10 @@ static void worker_thread_main(void *arg) {
 
   js->worker = w;
   js->interrupts_armed = true;
+  
+  Ant_Net_ListenPolicy_Inherit(js, w->parent);
   uv_loop_configure(js->loop, UV_METRICS_IDLE_TIME);
+  
   js_setstackbase(js, (void *)&stack_base);
   js_setstacklimit(js, (size_t)(w->limits[WORKER_LIMIT_STACK] * 1024 * 1024) * 3 / 4);
 

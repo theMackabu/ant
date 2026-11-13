@@ -494,72 +494,54 @@ fail:
 }
 
 bool ant_sandbox_decode_result_value(
-  ant_t *js,
-  const void *payload,
-  size_t payload_len,
-  ant_value_t *out
+  ant_t *js, const void *payload, size_t payload_len, ant_value_t *out
 ) {
-  if (!js || !payload || !out || payload_len < 1) return false;
+  if (!js || !out) return false;
 
-  sandbox_frame_reader_t r = { payload, (const uint8_t *)payload + payload_len };
-  uint8_t type = *r.p++;
+  uint8_t type = 0;
+  uint64_t bits = 0;
+  
+  const char *text = NULL;
+  size_t text_len = 0;
+  
+  if (!ant_sandbox_result_payload_parse(payload, payload_len, &type, &bits, &text, &text_len)) return false;
+
   switch (type) {
     case ANT_SANDBOX_VALUE_UNDEFINED:
       *out = Ant_Value_Undefined;
-      break;
+      return true;
     case ANT_SANDBOX_VALUE_NULL:
       *out = Ant_Value_Null;
-      break;
+      return true;
     case ANT_SANDBOX_VALUE_BOOL:
-      if (r.p >= r.end) return false;
-      *out = *r.p++ ? Ant_Value_True : Ant_Value_False;
-      break;
+      *out = bits ? Ant_Value_True : Ant_Value_False;
+      return true;
     case ANT_SANDBOX_VALUE_NUMBER: {
-      uint64_t bits = 0;
-      if (!sandbox_read_u64(&r, &bits)) return false;
       double number = 0;
       memcpy(&number, &bits, sizeof(number));
       *out = Ant_Value_FromNumber(number);
-      break;
+      return true;
     }
-    case ANT_SANDBOX_VALUE_STRING: {
-      const char *str = NULL;
-      size_t len = 0;
-      if (!sandbox_read_string_view(&r, &str, &len)) return false;
-      *out = js_mkstr(js, str, len);
-      break;
-    }
-    case ANT_SANDBOX_VALUE_DISPLAY: {
-      const char *display = NULL;
-      size_t len = 0;
-      if (!sandbox_read_string_view(&r, &display, &len)) return false;
-      *out = js_mkstr(js, display, len);
-      return r.p == r.end;
-    }
+    case ANT_SANDBOX_VALUE_STRING:
+    case ANT_SANDBOX_VALUE_DISPLAY:
+      *out = js_mkstr(js, text, text_len);
+      return true;
     default:
       return false;
   }
-
-  const char *display = NULL;
-  size_t display_len = 0;
-  if (!sandbox_read_string_view(&r, &display, &display_len)) return false;
-  return r.p == r.end;
 }
 
 ant_value_t ant_sandbox_decode_error_value(ant_t *js, const void *payload, size_t payload_len) {
   if (!js) return Ant_Value_Undefined;
-  if (!payload) return Ant_Error_Create(js, JS_ERR_TYPE, "malformed sandbox error frame");
 
-  sandbox_frame_reader_t r = { payload, (const uint8_t *)payload + payload_len };
-  const char *name = NULL, *message = NULL, *stack = NULL, *display = NULL;
-  size_t name_len = 0, message_len = 0, stack_len = 0, display_len = 0;
-  if (!sandbox_read_string_view(&r, &name, &name_len) ||
-      !sandbox_read_string_view(&r, &message, &message_len) ||
-      !sandbox_read_string_view(&r, &stack, &stack_len) ||
-      !sandbox_read_string_view(&r, &display, &display_len) ||
-      r.p != r.end) {
-    return Ant_Error_Create(js, JS_ERR_TYPE, "malformed sandbox error frame");
-  }
+  const char *name = NULL, *message = NULL, *stack = NULL;
+  size_t name_len = 0, message_len = 0, stack_len = 0;
+  
+  if (
+    !ant_sandbox_error_payload_field(payload, payload_len, 0, &name, &name_len) ||
+    !ant_sandbox_error_payload_field(payload, payload_len, 1, &message, &message_len) ||
+    !ant_sandbox_error_payload_field(payload, payload_len, 2, &stack, &stack_len)
+  ) return Ant_Error_Create(js, JS_ERR_TYPE, "malformed sandbox error frame");
 
   char *error_message = sandbox_dup_bytes((const uint8_t *)message, message_len);
   ant_value_t err = Ant_Error_Create(js, JS_ERR_GENERIC, error_message);

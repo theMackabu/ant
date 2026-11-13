@@ -125,8 +125,8 @@ void ant_kvm_set_result(
 
 void ant_kvm_classify_result(ant_hvf_vm_t *vm, ant_sandbox_vm_result_t *result, int rc) {
   if (!result) return;
-  if (vm && vm->vsock.exit_received)
-    ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_GUEST_EXIT, vm->vsock.exit_code);
+  if (vm && ant_hvf_vsock_exit_received(vm))
+    ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_GUEST_EXIT, ant_hvf_vsock_exit_code(vm));
   else if (vm && ant_hvf_uart_has_panic(vm))
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_KERNEL_PANIC, rc ? rc : -EFAULT);
   else if (rc == -ENOSYS)
@@ -139,9 +139,9 @@ void ant_kvm_classify_result(ant_hvf_vm_t *vm, ant_sandbox_vm_result_t *result, 
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_TIMEOUT, rc);
   else if (rc == -ECANCELED || (vm && atomic_load_explicit(&vm->canceled, memory_order_acquire)))
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_CANCELED, rc ? rc : -ECANCELED);
-  else if (vm && vm->vsock.protocol_error)
+  else if (vm && ant_hvf_vsock_protocol_error(vm))
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_PROTOCOL_ERROR, rc);
-  else if (vm && vm->vsock.transport_error)
+  else if (vm && ant_hvf_vsock_transport_error(vm))
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_TRANSPORT_ERROR, rc);
   else if (rc == -EINVAL)
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_CONFIG_ERROR, rc);

@@ -1963,11 +1963,20 @@ int process_run_exit_handlers(ant_t *js, int status) {
   return process_exit_code(js);
 }
 
+static void (*process_exit_notifier)(int code);
+
+void process_set_exit_notifier(void (*notify)(int code)) {
+  process_exit_notifier = notify;
+}
+
 void process_exit_with(ant_t *js, int status) {
   int code = process_run_exit_handlers(js, status);
   if (js->worker) ant_worker_exit(js, code);
   else if (ant_watch_supervises(js)) ant_watch_exit(js);
-  else exit(code);
+  else {
+    if (process_exit_notifier) process_exit_notifier(code);
+    exit(code);
+  }
 }
 
 static ant_value_t process_exit(ant_params_t) {

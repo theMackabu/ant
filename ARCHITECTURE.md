@@ -29,6 +29,16 @@ meant to answer "where should this change live?" before anyone starts editing.
   routing of subcommands and bare package scripts), `entry.c` (eval, stdin,
   module and file entrypoints), `daemon.c` (the sandbox daemon request loop),
   and the version, compile, registry and package commands.
+- `src/sandbox/` is the microVM sandbox host: the CLI command, image assets,
+  the host/guest frame transport, and the VM helper process.
+  `src/sandbox/backends/` holds the hypervisor loops (`darwin/` for
+  Hypervisor.framework, `linux/` for KVM) and the shared board and kernel
+  loader. Everything the guest can talk to (virtio devices, PCI routing, the
+  user-mode NAT, the 9p server) is Rust in `src/rust/src/sandbox`; C holds
+  opaque handles and calls it through the generated `ant_sandbox_devices.h`.
+  Meson defines `ANT_HAVE_SANDBOX` where the sandbox is built. Windows builds,
+  `-Dsandbox=disabled` builds and the `ant-runtime` binary have no sandbox code
+  and no `ant:sandbox` module.
 
 ### JavaScript engine
 

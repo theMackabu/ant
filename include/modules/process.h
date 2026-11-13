@@ -24,6 +24,7 @@ int process_signal_number(const char *name);
 const char *process_signal_name(int signum);
 
 void process_refresh_sandbox_argv(ant_t *js);
+void process_set_exit_notifier(void (*notify)(int code));
 void process_set_sandbox_terminal(ant_t *js, uint32_t capabilities, uint16_t rows, uint16_t cols);
 
 void process_enable_keypress_events(ant_t *js);

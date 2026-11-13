@@ -4,7 +4,9 @@ ANT_LIBRARY(ANT, "isolate", isolate_library)
 ANT_LIBRARY(ANT, "lmdb", lmdb_library)
 ANT_LIBRARY(ANT, "rpc", rpc_library)
 ANT_LIBRARY(ANT, "syntax", syntax_library)
+#ifdef ANT_HAVE_SANDBOX
 ANT_LIBRARY(ANT, "sandbox", sandbox_library)
+#endif
 
 ANT_LIBRARY(ANT, "internal/shell_ops", shell_ops_library)
 ANT_LIBRARY(ANT, "internal/primordials", primordial_library)

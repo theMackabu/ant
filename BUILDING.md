@@ -123,14 +123,25 @@ and are fetched automatically:
 
 ### Rust toolchain
 
-Ant's Rust dependencies build into one static library, `src/rust` (crate
-`ant-rust`), so they share a single size-optimized standard library. It carries
-the Temporal API (`temporal_capi` 0.2.6 and `temporal_rs` 0.2.6) and the legacy
-`TextDecoder` encodings (`encoding_c` and `encoding_rs`). Both are enabled by
-default, but Rust is not a local build prerequisite. On the first build,
-`meson/rust.py` installs the pinned `nightly-2026-08-12` toolchain and its
-`rust-src` component into `.cache/rust/`, then builds the locked dependency
-graph. The cache is outside the Meson build directory, so it survives a clean
+Ant's Rust code builds into one static library, `src/rust` (crate `ant-rust`),
+so everything shares a single size-optimized standard library. It carries:
+
+- the Temporal API (`temporal_capi` 0.2.6 and `temporal_rs` 0.2.6)
+- the legacy `TextDecoder` encodings (`encoding_c` and `encoding_rs`)
+- the sandbox device models in `src/rust/src/sandbox`: virtio devices, PCI
+  routing, NAT and the 9p server
+
+Temporal and the encodings are enabled by default. The sandbox code is built
+on Linux and Apple Silicon macOS, where the sandbox VM backend exists. The C
+backends call it through `ant_sandbox_devices.h`, which the crate's build
+script generates with `cbindgen`. Windows builds have no sandbox: there is no
+`ant:sandbox` module and no `ant sandbox` command. `-Dsandbox=disabled` builds
+any other target the same way.
+
+Rust is not a local build prerequisite. On the first build, `meson/rust.py`
+installs the pinned `nightly-2026-08-12` toolchain and its `rust-src`
+component into `.cache/rust/`, then builds the locked dependency graph. The
+cache is outside the Meson build directory, so it survives a clean
 build-directory setup.
 
 The Rust static library is built with a size-optimized standard library. Unix
@@ -146,12 +157,15 @@ build caches between runs; local builds reuse the same data from
 
 The first build therefore needs network access to download the pinned
 toolchain and Cargo dependencies. Without `encoding_rs`, `TextDecoder` supports
-UTF-8, UTF-16, windows-1252, and ISO-8859-2 only. To build without Rust at all,
-configure Meson with:
+UTF-8, UTF-16, windows-1252, and ISO-8859-2 only. To build without the Rust
+dependencies, configure Meson with:
 
 ```bash
 meson setup build -Dtemporal=disabled -Dencoding_rs=disabled
 ```
+
+On Linux and Apple Silicon macOS the Rust toolchain is still used for the
+sandbox code; other targets then build without Rust at all.
 
 Nix builds provide the same pinned toolchain and Cargo dependency set as
 fixed Nix inputs. They invoke the Rust build in offline mode, so the Ant
@@ -518,6 +532,7 @@ Configure options are set via `meson setup` or `meson configure`:
 | `pgo`               | feature | `auto`     | Use matching `meson/pgo/profiles/*.profdata` profiles    |
 | `pgo_profile`       | string  | (empty)    | Override the merged LLVM profile path                  |
 | `runtime_binary`    | feature | `auto`     | Tooling-free `ant-runtime` used by `ant compile`         |
+| `sandbox`           | feature | `auto`     | MicroVM sandbox (`ant sandbox`, `ant:sandbox`)           |
 | `build_timestamp`   | string  | (auto)     | Embedded build timestamp metadata                        |
 | `deps_prefix_cmake` | string  | (empty)    | Prefix path for cmake dependency lookup                  |
 

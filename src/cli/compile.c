@@ -46,11 +46,6 @@ static int64_t compile_tell(FILE *f) {
 #endif
 }
 
-static const char *compile_json_string(yyjson_val *obj, const char *key) {
-  yyjson_val *val = obj && yyjson_is_obj(obj) ? yyjson_obj_get(obj, key) : NULL;
-  return val && yyjson_is_str(val) ? yyjson_get_str(val) : NULL;
-}
-
 static int compile_manifest_select_runtime(const char *json, size_t json_len, compile_runtime_info_t *out, char *err, size_t err_len) {
   memset(out, 0, sizeof(*out));
   const char *target = ant_release_platform_target();
@@ -70,18 +65,18 @@ static int compile_manifest_select_runtime(const char *json, size_t json_len, co
     size_t idx, max;
     yyjson_val *item;
     yyjson_arr_foreach(items, idx, max, item) {
-      const char *item_target = compile_json_string(item, "target");
+      const char *item_target = ant_manifest_string(item, "target");
       yyjson_val *available = yyjson_obj_get(item, "available");
       if (!item_target || strcmp(item_target, target) != 0) continue;
       if (available && yyjson_is_bool(available) && !yyjson_get_bool(available)) continue;
 
-      const char *revision = compile_json_string(item, "revision");
+      const char *revision = ant_manifest_string(item, "revision");
       if (!sv_debug_enabled(SV_DEBUG_COMPILE_BYPASS_ABI) && (!revision || strcmp(revision, ANT_GIT_LONGHASH) != 0)) {
         wrong_revision = true;
         continue;
       }
 
-      const char *download_url = compile_json_string(item, "download_url");
+      const char *download_url = ant_manifest_string(item, "download_url");
       if (!download_url) break;
       snprintf(out->download_url, sizeof(out->download_url), "%s", download_url);
 

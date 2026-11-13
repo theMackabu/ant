@@ -17,10 +17,14 @@ is_wasi = host_machine.system() == 'wasi'
 
 src_root = meson.project_source_root()
 include = include_directories('include')
-sandbox_backend_include = include_directories(
-  'src/sandbox/backends',
-  'src/sandbox/backends/shared/include',
-)
+
+sandbox_backend_include = include_directories('src/sandbox/backends')
+sandbox_opt = get_option('sandbox')
+
+sandbox_supported = not sandbox_opt.disabled() and not ['windows', 'wasi'].contains(host_machine.system())
+if sandbox_opt.enabled() and not sandbox_supported
+  error('the sandbox is not available on ' + host_machine.system())
+endif
 
 sandbox_shared_sources = files(run_command(
   python, files('meson/sources.py'), files('sources.json'), 'sandbox_backend:shared',
@@ -47,11 +51,6 @@ elif host_machine.system() == 'linux'
     check: true
   ).stdout().strip().split())
   sandbox_backend_sources += sandbox_shared_sources
-elif host_machine.system() == 'windows'
-  sandbox_backend_sources += files(run_command(
-    python, files('meson/sources.py'), files('sources.json'), 'sandbox_backend:windows',
-    check: true
-  ).stdout().strip().split())
 endif
 
 subdir('meson')
@@ -111,24 +110,36 @@ lib_sources = files(run_command(
 
 section_gc_c_args = host_machine.system() != 'darwin' ? ['-ffunction-sections', '-fdata-sections'] : []
 
-sandbox_vm_sources = files(run_command(
-  python, files('meson/sources.py'), files('sources.json'), 'sandbox_vm',
-  check: true
-).stdout().strip().split())
+sandbox_link_whole = []
+if sandbox_supported
+  lib_sources += files(run_command(
+    python, files('meson/sources.py'), files('sources.json'), 'sandbox_host',
+    check: true
+  ).stdout().strip().split())
 
-libsandbox_vm = static_library(
-  'sandbox_vm',
-  sandbox_vm_sources + sandbox_backend_sources,
-  include_directories: [include, sandbox_backend_include],
-  c_args: section_gc_c_args,
-  dependencies: dependency('threads'),
-)
+  sandbox_vm_sources = files(run_command(
+    python, files('meson/sources.py'), files('sources.json'), 'sandbox_vm',
+    check: true
+  ).stdout().strip().split())
 
-sandbox_vm_dep = declare_dependency(
-  link_with: libsandbox_vm,
-  include_directories: [include, sandbox_backend_include],
-  dependencies: dependency('threads'),
-)
+  libsandbox_vm = static_library(
+    'sandbox_vm',
+    sandbox_vm_sources + sandbox_backend_sources + rust_sandbox_header,
+    include_directories: [include, sandbox_backend_include] + rust_sandbox_include,
+    c_args: section_gc_c_args,
+    dependencies: dependency('threads'),
+  )
+
+  sandbox_vm_dep = declare_dependency(
+    sources: rust_sandbox_header,
+    link_with: libsandbox_vm,
+    include_directories: [include, sandbox_backend_include] + rust_sandbox_include,
+    dependencies: [dependency('threads')] + rust_link_deps,
+  )
+
+  sandbox_link_whole += libsandbox_vm
+  ant_deps += [declare_dependency(compile_args: ['-DANT_HAVE_SANDBOX=1'])]
+endif
 
 libant = static_library(
   'ant',
@@ -142,15 +153,15 @@ libant = static_library(
     unicode_id_h,
   ],
   install: true,
-  include_directories: [include, sandbox_backend_include],
+  include_directories: [include, sandbox_backend_include] + rust_sandbox_include,
   c_args: section_gc_c_args,
-  link_whole: libsandbox_vm,
+  link_whole: sandbox_link_whole,
   dependencies: ant_deps
 )
 
 libant_dep = declare_dependency(
   link_with: libant,
-  include_directories: [include, sandbox_backend_include],
+  include_directories: [include, sandbox_backend_include] + rust_sandbox_include,
   dependencies: ant_deps + rust_link_deps
 )
 

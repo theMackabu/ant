@@ -40,6 +40,21 @@ This guide keeps validation proportional to the change while still protecting ru
   opt-tier assertions in `tests/test_opt_*` run on arm64 and x86-64 macOS and
   Linux.
 
+### Sandbox changes in `src/sandbox/` or `src/rust/src/sandbox/`
+
+- Device and protocol logic has Rust unit tests in
+  `src/rust/src/sandbox/tests/`; run them with `cargo test --features sandbox`
+  from `src/rust` using the toolchain cached under `.cache/rust/`.
+- The C device tests live in `tests/sandbox/*.c` and build as the
+  `test-sandbox-*` Meson targets under `build/meson/tests/`.
+- The boot tests are `tests/sandbox/*.js`, run as
+  `./build/ant tests/sandbox/<name>.js`. They boot a real VM, so they need a
+  hypervisor and a guest image; `ANT_SANDBOX_IMAGE` and `ANT_SANDBOX_KERNEL`
+  point them at a local image. Changes to the guest side (`src/cli/daemon.c`,
+  anything the guest binary runs) need an image rebuilt from the same tree.
+- `ANT_SANDBOX_NET_DROP=<n>` drops every nth frame sent to the guest; the
+  packet-loss boot test relies on it.
+
 ### Build or toolchain changes
 
 - Re-run the affected Meson flow (`maid setup`, `maid reconfigure`, or

@@ -7,6 +7,7 @@
 #include "internal.h"
 #include "reactor.h"
 #include "isolate_internal.h"
+#include "net/listen_policy.h"
 
 typedef struct {
   ant_realm_t *cfunc_realm;
@@ -172,6 +173,7 @@ ant_value_t guest_current_start(ant_t *js, ant_guest_t *g) {
 
   g->child = child;
   child->interrupts_armed = true;
+  Ant_Net_ListenPolicy_Inherit(child, js);
   current_saved_t saved;
   current_enter(g, &saved);
   bool ok = guest_child_boot(g, child);

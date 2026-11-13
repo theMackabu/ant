@@ -59,6 +59,13 @@ void ant_kvm_set_result(ant_sandbox_vm_result_t *result, ant_sandbox_vm_result_k
 void ant_kvm_classify_result(ant_hvf_vm_t *vm, ant_sandbox_vm_result_t *result, int rc);
 int ant_kvm_session_send(void *opaque, const void *data, size_t len);
 
+int ant_kvm_arch_setup_vm(ant_kvm_session_t *session);
+int ant_kvm_arch_setup_vcpu(ant_kvm_session_t *session);
+int ant_kvm_arch_prepare_boot(ant_hvf_vm_t *vm, const char *kernel_path);
+int ant_kvm_arch_handle_mmio(ant_hvf_vm_t *vm);
+int ant_kvm_arch_handle_exit(ant_hvf_vm_t *vm, bool *stop);
+void ant_kvm_arch_report_timeout(ant_hvf_vm_t *vm);
+
 int ant_kvm_ioctl(int fd, unsigned long req, void *arg, const char *op);
 int ant_kvm_find_symbol(const char *path, const char *name, uint64_t *value_out);
 uint64_t ant_kvm_elapsed_ms(const struct timespec *start, const struct timespec *now);

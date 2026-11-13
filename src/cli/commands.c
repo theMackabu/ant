@@ -49,7 +49,9 @@ static const subcommand_t subcommands[] = {
   PKG_COMMAND(ls,         "list",    "List installed packages"),
   PKG_COMMAND(cache,      NULL,      "Manage the package cache"),
   PKG_COMMAND(create,     NULL,      "Scaffold a project from a template"),
+#ifdef ANT_HAVE_SANDBOX
   NATIVE_COMMAND(sandbox, NULL,      "Run a script in the Ant sandbox", ant_sandbox_cmd),
+#endif
   NATIVE_COMMAND(compile, NULL,      "Compile a script into a standalone executable", ant_cmd_compile),
   NATIVE_COMMAND(upgrade, NULL,      "Upgrade Ant to the latest version", ant_upgrade),
 };

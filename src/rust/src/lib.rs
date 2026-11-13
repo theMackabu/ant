@@ -3,3 +3,6 @@ pub use temporal_capi as _temporal;
 
 #[cfg(feature = "encoding")]
 pub use encoding_c as _encoding;
+
+#[cfg(feature = "sandbox-wire")]
+pub mod sandbox;

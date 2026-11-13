@@ -58,16 +58,6 @@ typedef struct {
   bool has_latest;
 } ant_version_cache_t;
 
-static const char *version_json_string(yyjson_val *obj, const char *key) {
-  yyjson_val *val = obj && yyjson_is_obj(obj) ? yyjson_obj_get(obj, key) : NULL;
-  return val && yyjson_is_str(val) ? yyjson_get_str(val) : NULL;
-}
-
-static uint64_t version_json_uint(yyjson_val *obj, const char *key) {
-  yyjson_val *val = obj && yyjson_is_obj(obj) ? yyjson_obj_get(obj, key) : NULL;
-  return val && yyjson_is_uint(val) ? yyjson_get_uint(val) : 0;
-}
-
 static bool version_json_copy_string(yyjson_val *obj, const char *key, char *out, size_t out_len) {
   yyjson_val *val = obj && yyjson_is_obj(obj) ? yyjson_obj_get(obj, key) : NULL;
   if (!val || !yyjson_is_str(val) || !out || out_len == 0) return false;
@@ -179,24 +169,24 @@ static int ant_manifest_select_latest(const char *json, size_t json_len, ant_lat
     size_t idx, max;
     yyjson_val *item;
     yyjson_arr_foreach(items, idx, max, item) {
-      const char *item_target = version_json_string(item, "target");
+      const char *item_target = ant_manifest_string(item, "target");
       yyjson_val *available = yyjson_obj_get(item, "available");
       if (!item_target || strcmp(item_target, target) != 0) continue;
       if (available && yyjson_is_bool(available) && !yyjson_get_bool(available)) continue;
 
-      const char *version = version_json_string(item, "version");
-      const char *download_url = version_json_string(item, "download_url");
+      const char *version = ant_manifest_string(item, "version");
+      const char *download_url = ant_manifest_string(item, "download_url");
       if (!version || !download_url) break;
       snprintf(latest->version, sizeof(latest->version), "%s", version);
       snprintf(latest->download_url, sizeof(latest->download_url), "%s", download_url);
 
-      const char *release_notes_url = version_json_string(item, "release_notes_url");
+      const char *release_notes_url = ant_manifest_string(item, "release_notes_url");
       if (release_notes_url)
         snprintf(latest->release_notes_url, sizeof(latest->release_notes_url), "%s", release_notes_url);
       
-      latest->build_timestamp = version_json_uint(item, "build_timestamp");
+      latest->build_timestamp = ant_manifest_uint(item, "build_timestamp");
       yyjson_val *artifact = yyjson_obj_get(item, "artifact");
-      latest->size = version_json_uint(artifact, "size_in_bytes");
+      latest->size = ant_manifest_uint(artifact, "size_in_bytes");
       
       rc = 0;
       break;
@@ -276,7 +266,7 @@ static bool ant_version_cache_read(ant_version_cache_t *cache) {
     version_json_copy_string(root, "manifest_url", cache->manifest_url, sizeof(cache->manifest_url)) &&
     version_json_copy_string(root, "target", cache->target, sizeof(cache->target))
   ) {
-    cache->checked_at = version_json_uint(root, "checked_at");
+    cache->checked_at = ant_manifest_uint(root, "checked_at");
     yyjson_val *latest = yyjson_obj_get(root, "latest");
     if (latest && yyjson_is_obj(latest)) {
       cache->has_latest = version_json_copy_string(
@@ -284,7 +274,7 @@ static bool ant_version_cache_read(ant_version_cache_t *cache) {
       );
       if (cache->has_latest) {
         snprintf(cache->latest.target, sizeof(cache->latest.target), "%s", cache->target);
-        cache->latest.build_timestamp = version_json_uint(latest, "build_timestamp");
+        cache->latest.build_timestamp = ant_manifest_uint(latest, "build_timestamp");
       }
     }
     ok = cache->checked_at != 0;

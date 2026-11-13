@@ -5,10 +5,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define ANT_SANDBOX_DEFAULT_BOOT_TIMEOUT_MS 10000u
-#define ANT_SANDBOX_MIN_MEMORY_SIZE (64ull * 1024ull * 1024ull)
-#define ANT_SANDBOX_DEFAULT_MEMORY_SIZE (256ull * 1024ull * 1024ull)
-#define ANT_SANDBOX_CPU_TIME_LIMIT_CODE (-1001)
+static constexpr int ANT_SANDBOX_CPU_TIME_LIMIT_CODE = -1001;
+
+static constexpr uint32_t ANT_SANDBOX_DEFAULT_BOOT_TIMEOUT_MS = 10000;
+static constexpr uint64_t ANT_SANDBOX_MIN_MEMORY_SIZE = 64ull * 1024 * 1024;
+static constexpr uint64_t ANT_SANDBOX_DEFAULT_MEMORY_SIZE = 256ull * 1024 * 1024;
+
 typedef struct ant_sandbox_vm_session ant_sandbox_vm_session_t;
 
 typedef struct {
@@ -103,10 +105,10 @@ typedef struct ant_sandbox_vm_backend {
 
 extern const ant_sandbox_vm_backend_t ant_sandbox_vm_darwin_backend;
 extern const ant_sandbox_vm_backend_t ant_sandbox_vm_linux_backend;
-extern const ant_sandbox_vm_backend_t ant_sandbox_vm_windows_backend;
 
 const char *ant_sandbox_vm_result_name(ant_sandbox_vm_result_kind_t kind);
 const ant_sandbox_vm_backend_t *ant_sandbox_vm_default_backend(void);
+int ant_sandbox_vm_display_frame(uint32_t capabilities, uint8_t type, const unsigned char *payload, uint32_t len);
 
 void ant_sandbox_vm_session_destroy(ant_sandbox_vm_session_t *session);
 void ant_sandbox_vm_result_clear(ant_sandbox_vm_result_t *result);

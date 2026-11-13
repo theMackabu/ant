@@ -1,68 +1,66 @@
 #pragma once
 
 #include <compat.h> // IWYU pragma: keep
-#include "sandbox_backend/aarch64_board.h" // IWYU pragma: keep
+#include "shared/aarch64_board.h" // IWYU pragma: keep
 
-#include <Hypervisor/Hypervisor.h>
 #include <stdint.h>
+#include <Hypervisor/Hypervisor.h>
 
 #if defined(__aarch64__)
 
-#define ANT_HVF_NANOS_KAS_OFFSET_SYMBOL 0x4052c1c0ull
-#define ANT_HVF_VIRTIO_9P_MAX 8u
-#define ANT_HVF_PAGE_SIZE 0x1000ull
+static constexpr uint64_t ANT_HVF_NANOS_KAS_OFFSET_SYMBOL = 0x4052c1c0;
+static constexpr uint32_t ANT_HVF_VIRTIO_9P_MAX = 8;
+static constexpr uint64_t ANT_HVF_PAGE_SIZE = 0x1000;
 
-#define ANT_HVF_GICR_ISPENDR0 66048u
-#define ANT_HVF_GIC_EL1_VIRTUAL_TIMER 27u
+static constexpr int ANT_HVF_GUEST_SHUTDOWN = 1;
+static constexpr uint32_t ANT_HVF_GIC_EL1_VIRTUAL_TIMER = 27;
 
-#define ANT_HVF_GUEST_SHUTDOWN 1
+enum: uint32_t {
+  ESR_EC_WFX_TRAP = 0x01,
+  ESR_EC_HVC64 = 0x16,
+  ESR_EC_DATA_ABORT = 0x24,
+  ESR_EC_HLT = 0x34,
+};
 
-#define ESR_EC_SHIFT 26
-#define ESR_EC_WFX_TRAP 0x01u
-#define ESR_WFX_TI_WFE 0x1u
-#define ESR_EC_HVC64 0x16u
-#define ESR_EC_DATA_ABORT 0x24u
-#define ESR_EC_HLT 0x34u
-#define ESR_DA_ISV (1u << 24)
-#define ESR_DA_WNR (1u << 6)
-#define ESR_DA_SAS_SHIFT 22
-#define ESR_DA_SRT_SHIFT 16
-#define ESR_HLT_IMM16_MASK 0xffffu
+static constexpr unsigned ESR_EC_SHIFT = 26;
+static constexpr uint32_t ESR_WFX_TI_WFE = 0x1;
+static constexpr uint32_t ESR_DA_ISV = 1u << 24;
+static constexpr uint32_t ESR_DA_WNR = 1u << 6;
+static constexpr unsigned ESR_DA_SAS_SHIFT = 22;
+static constexpr unsigned ESR_DA_SRT_SHIFT = 16;
+static constexpr uint32_t ESR_HLT_IMM16_MASK = 0xffff;
 
-#define ANT_HVF_SYS_REG_CNTFRQ_EL0 ((hv_sys_reg_t)0xdf00)
-#define ANT_HVF_SYS_REG_CNTVCT_EL0 ((hv_sys_reg_t)0xdf02)
+static constexpr hv_sys_reg_t ANT_HVF_SYS_REG_CNTFRQ_EL0 = (hv_sys_reg_t)0xdf00;
+static constexpr hv_sys_reg_t ANT_HVF_SYS_REG_CNTVCT_EL0 = (hv_sys_reg_t)0xdf02;
 
-#define ANT_HVF_BYTES_U16 2u
-#define ANT_HVF_BYTES_U32 4u
-#define ANT_HVF_ELF_IDENT_BYTES 16u
-#define ANT_HVF_MAC_BYTES 6u
+static constexpr size_t ANT_HVF_MAC_BYTES = 6;
+static constexpr size_t ANT_HVF_ELF_IDENT_BYTES = 16;
+static constexpr size_t ANT_HVF_UART_DIAGNOSTIC_DEFAULT_BYTES = 16 * 1024;
 
-#define ANT_HVF_UART_DIAGNOSTIC_DEFAULT_BYTES (16u * 1024u)
+#if !__has_include(<Hypervisor/hv_gic.h>)
+typedef void *hv_gic_config_t;
+typedef uint32_t hv_gic_redistributor_reg_t;
+static constexpr hv_gic_redistributor_reg_t HV_GIC_REDISTRIBUTOR_REG_GICR_ISPENDR0 = 0x10200;
+
+hv_gic_config_t hv_gic_config_create(void);
+hv_return_t hv_gic_create(hv_gic_config_t config);
+hv_return_t hv_gic_send_msi(hv_ipa_t address, uint32_t intid);
+
+hv_return_t hv_gic_config_set_distributor_base(hv_gic_config_t config, hv_ipa_t base);
+hv_return_t hv_gic_config_set_redistributor_base(hv_gic_config_t config, hv_ipa_t base);
+hv_return_t hv_gic_config_set_msi_region_base(hv_gic_config_t config, hv_ipa_t base);
+hv_return_t hv_gic_config_set_msi_interrupt_range(hv_gic_config_t config, uint32_t base, uint32_t count);
+hv_return_t hv_gic_set_redistributor_reg(hv_vcpu_t vcpu, hv_gic_redistributor_reg_t reg, uint64_t value);
+#endif
 
 typedef struct {
-  hv_return_t (*vcpus_exit)(hv_vcpu_t *, uint32_t);
-  hv_vcpu_config_t (*vcpu_config_create)(void);
-  hv_return_t (*vcpu_config_get_feature_reg)(hv_vcpu_config_t, hv_feature_reg_t, uint64_t *);
-  hv_return_t (*vcpu_create)(hv_vcpu_t *, hv_vcpu_exit_t **, hv_vcpu_config_t);
-  hv_return_t (*vcpu_run)(hv_vcpu_t);
-  hv_return_t (*vcpu_get_reg)(hv_vcpu_t, hv_reg_t, uint64_t *);
-  hv_return_t (*vcpu_get_sys_reg)(hv_vcpu_t, hv_sys_reg_t, uint64_t *);
-  hv_return_t (*vcpu_destroy)(hv_vcpu_t);
-  hv_return_t (*vcpu_set_reg)(hv_vcpu_t, hv_reg_t, uint64_t);
-  hv_return_t (*vcpu_set_sys_reg)(hv_vcpu_t, hv_sys_reg_t, uint64_t);
-  hv_return_t (*vcpu_set_vtimer_mask)(hv_vcpu_t, bool);
-  hv_return_t (*vcpu_get_vtimer_offset)(hv_vcpu_t, uint64_t *);
-  hv_return_t (*vcpu_set_pending_interrupt)(hv_vcpu_t, hv_interrupt_type_t, bool);
-  hv_vm_config_t (*vm_config_create)(void);
-  hv_return_t (*vm_create)(hv_vm_config_t);
-  hv_return_t (*vm_unmap)(hv_ipa_t, size_t);
-  hv_return_t (*vm_destroy)(void);
-  hv_return_t (*vm_map)(void *, hv_ipa_t, size_t, hv_memory_flags_t);
+#define HVF(name) __typeof__(hv_##name) *name;
+#include "hvf_symbols.h"
+  hv_return_t (*vm_config_set_ipa_granule)(hv_vm_config_t, uint32_t);
 } ant_hvf_api_t;
 
 extern ant_hvf_api_t ant_hvf_api;
 int ant_hvf_load_api(void);
-void *ant_hvf_sym(const char *name);
 
 typedef struct {
   unsigned char ident[ANT_HVF_ELF_IDENT_BYTES];
