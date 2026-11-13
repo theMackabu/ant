@@ -6,6 +6,7 @@ option('runtime_binary', type: 'feature', value: 'auto', description: 'build the
 option('sandbox', type: 'feature', value: 'auto', description: 'build the microVM sandbox (ant sandbox, ant:sandbox); never built on Windows')
 option('temporal', type: 'feature', value: 'enabled', description: 'build the Temporal API from temporal_capi')
 option('encoding_rs', type: 'feature', value: 'enabled', description: 'decode legacy TextDecoder encodings with encoding_rs')
+option('sqlite', type: 'combo', choices: ['auto', 'bundled', 'system', 'disabled'], value: 'auto', description: 'node:sqlite backend: bundled amalgamation, the system library loaded at runtime, or auto (bundled on Linux, system on macOS and Windows)')
 option('unsafe_c', type: 'feature', value: 'disabled', description: 'build Ant.unsafe.c, which compiles C at runtime with c2mir')
 option('native_tuning', type: 'feature', value: 'disabled', description: 'optimize generated code for the current build host CPU')
 option('pgo', type: 'feature', value: 'auto', description: 'use meson/pgo/profiles profile data for the current platform when available')

@@ -289,7 +289,7 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     case N_TAGGED_TEMPLATE: {
-      compile_expr(c, node->left);
+      sv_call_kind_t tag_kind = compile_call_setup_non_optional(c, node->left);
       sv_ast_t *tpl = node->right;
       int n = tpl->args.count;
       int n_strings = 0, n_exprs = 0;
@@ -342,7 +342,7 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
         if (is_template_segment(item)) continue;
         compile_expr(c, item);
       }
-      emit_op(c, OP_CALL);
+      emit_op(c, tag_kind == SV_CALL_METHOD ? OP_CALL_METHOD : OP_CALL);
       emit_u16(c, (uint16_t)(1 + n_exprs));
       break;
     }

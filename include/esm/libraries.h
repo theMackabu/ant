@@ -14,6 +14,9 @@ ANT_LIBRARY(ANT, "internal/http_parser", internal_http_parser_library)
 ANT_LIBRARY(ANT, "internal/http_writer", internal_http_writer_library)
 ANT_LIBRARY(ANT, "internal/http_metadata", internal_http_metadata_library)
 ANT_LIBRARY(ANT, "internal/url", internal_url_library)
+#ifdef ANT_HAVE_SQLITE
+ANT_LIBRARY(ANT, "internal/sqlite", sqlite_library)
+#endif
 
 ANT_LIBRARY(NODE, "util", util_library)
 ANT_LIBRARY(NODE, "util/types", util_types_library)

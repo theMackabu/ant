@@ -184,6 +184,23 @@ ant_runtime_deps = [
 
 ant_deps = allocator_deps + ant_core_deps + ant_format_deps + ant_runtime_deps + win_deps + mir_dep
 
+sqlite_mode = get_option('sqlite')
+if sqlite_mode == 'auto'
+  sqlite_mode = host_machine.system() in ['darwin', 'windows'] ? 'system' : 'bundled'
+endif
+
+if sqlite_mode != 'disabled'
+  sqlite3_sub = subproject('sqlite3')
+  if sqlite_mode == 'bundled'
+    ant_deps += [sqlite3_sub.get_variable('sqlite3_dep'), declare_dependency(compile_args: ['-DANT_HAVE_SQLITE=1'])]
+  else
+    ant_deps += [
+      sqlite3_sub.get_variable('sqlite3_headers_dep'),
+      declare_dependency(compile_args: ['-DANT_HAVE_SQLITE=1', '-DANT_SQLITE_SYSTEM=1']),
+    ]
+  endif
+endif
+
 if get_option('unsafe_c').enabled()
   ant_deps += [declare_dependency(compile_args: ['-DANT_HAVE_UNSAFE_C=1'])]
 endif
