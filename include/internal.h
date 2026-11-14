@@ -316,7 +316,7 @@ ant_value_t js_iter_foreach(ant_t *js, ant_value_t iterable, iter_callback_t cb,
 
 ant_value_t js_make_data_cfunc(ant_t *js, ant_value_t data, ant_cfunc_t fn);
 bool js_obj_extra_reserve(ant_object_t *obj, uint8_t capacity);
-ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t template);
+ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t tmpl);
 
 ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj);
 ant_value_t Ant_Object_ToStringTag(ant_t *js, ant_value_t obj);

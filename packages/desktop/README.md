@@ -1,54 +1,33 @@
 # Ant Desktop
 
-Build desktop applications with Ant and a web renderer. Write the application
-process in JavaScript, build the interface with HTML, and package
-the result as a standalone native application.
+Desktop apps with an Ant main process and a Chromium window.
 
-> [!IMPORTANT]
-> Ant Desktop currently supports Apple-silicon Macs only (`darwin-arm64`) and
-> requires macOS 15 or newer. Windows, Linux, and Intel Mac packages are not
-> available yet. Packaged applications currently include English UI resources
-> only.
+macOS 15+ on Apple silicon only, for now.
 
 ## Install
-
-Add Ant Desktop to the application as a development dependency:
 
 ```sh
 ant add -D ant-desktop
 ```
 
-It can also be installed from npm:
+## Quick start
 
-```sh
-npm install --save-dev ant-desktop
-```
-
-## Create an application
-
-Add an `ant-desktop.json` file at the project root:
+`ant-desktop.json`:
 
 ```json
 {
   "main": "main.js",
-  "renderer": {
-    "watchDir": "renderer/src",
-    "buildCommand": "npm run build:renderer"
-  },
-  "include": ["*.js", "renderer/dist/**", "assets/*"],
   "name": "My App",
   "identifier": "com.example.my-app",
   "version": "1.0.0",
-  "icon": "assets/app.icns",
+  "include": ["main.js", "renderer/**"],
   "output": "dist/My App.app"
 }
 ```
 
-Create the application process in `main.js`:
+`main.js`:
 
 ```js
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain } from 'ant:desktop';
 
 await app.ready();
@@ -64,143 +43,110 @@ const window = new BrowserWindow({
   }
 });
 
-const renderer = path.join(path.dirname(fileURLToPath(import.meta.url)), 'renderer', 'index.html');
-
-if (process.env.ANT_DESKTOP_RENDERER_URL) {
-  await window.loadURL(process.env.ANT_DESKTOP_RENDERER_URL);
-} else {
-  await window.loadFile(renderer);
-}
+await window.loadFile(new URL('renderer/index.html', import.meta.url).pathname);
 ```
 
-The renderer uses normal browser JavaScript. Granted IPC channels are available
-through `Ant.ipc`, and runtime component versions are exposed as `Ant.versions`:
+`renderer/index.html`:
 
 ```html
 <!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>My App</title>
-    <script type="module">
-      const version = await Ant.ipc.invoke('app:version');
-      document.querySelector('main').textContent = `Ant ${version} · Desktop ${Ant.versions.desktop}`;
-    </script>
-  </head>
-  <body>
-    <main></main>
-  </body>
-</html>
+<main></main>
+<script type="module">
+  const version = await Ant.ipc.invoke('app:version');
+  document.querySelector('main').textContent = `Ant ${version}`;
+</script>
+```
+
+Run it, then package it:
+
+```sh
+antx ant-desktop dev
+antx ant-desktop package
 ```
 
 ## Development
 
-Start the application from the directory containing `ant-desktop.json`:
+`ant-desktop dev` restarts the app when an included file changes.
 
-```sh
-antx ant-desktop dev
-```
+If the renderer needs a build step, set `renderer.buildCommand` and
+`renderer.watchDir`. The command runs before launch and again on every change
+under `watchDir`, and the page reloads when it succeeds.
 
-With `renderer.watchDir`, the renderer build runs once before launch. Watched
-changes run it again and reload the open page after it succeeds.
-
-For a Vite development server, replace `watchDir` with a server command and URL:
+To use a dev server instead:
 
 ```json
 {
   "renderer": {
     "buildCommand": "vite build",
-    "devServer": {
-      "command": "vite",
-      "url": "http://localhost:5173"
-    }
+    "devServer": { "command": "vite", "url": "http://localhost:5173" }
   }
 }
 ```
 
-Ant starts the command, waits for the URL, and sets
-`ANT_DESKTOP_RENDERER_URL` in the application process. Vite owns renderer HMR;
-Ant continues to restart the application when included application files
-change. `buildCommand` is still run before packaging.
+Ant starts the command, waits for the URL, and passes it to the app as
+`ANT_DESKTOP_RENDERER_URL`:
 
-If the package was installed with npm, the equivalent command is:
-
-```sh
-npx ant-desktop dev
+```js
+await window.loadURL(process.env.ANT_DESKTOP_RENDERER_URL);
 ```
 
-## Package for macOS
+DevTools are only available under `ant-desktop dev`.
 
-Create the configured `.app` bundle:
+## Packaging
 
-```sh
-antx ant-desktop package
-```
+`ant-desktop package` writes the `.app` named by `output`.
 
-Use `--overwrite` to replace an existing output:
+| Flag               | Effect                                  |
+| ------------------ | --------------------------------------- |
+| `--out <path>`     | Write somewhere else.                   |
+| `--overwrite`      | Replace an existing bundle.             |
+| `--bundle-runtime` | Copy Chromium into the bundle.          |
+| `--icon <path>`    | Use this `.icns` file.                  |
+| `--version <v>`    | Override the version.                   |
 
-```sh
-antx ant-desktop package --overwrite
-```
+Only files matching `include` are packaged. They land in
+`Contents/Resources/app`, which is `path.join(app.resourcesPath, 'app')` at run
+time. `*` matches within a directory, `**` matches across directories, and
+`main` must be matched by at least one pattern.
 
-The output path comes from `output` in `ant-desktop.json` and can be overridden
-with `--out`. Run `antx ant-desktop package --help` for all packaging options.
+Bundles are not code signed.
+
+## Browser runtime
+
+Apps share one copy of Chromium per user instead of each shipping their own. It
+lives in `~/Library/Application Support/Ant Desktop/CEF/<version>`.
+
+If it is missing when an app starts, the app downloads the official CEF build
+(125 MB), checks its SHA-1, and installs it. This happens once per CEF version.
+
+- `--bundle-runtime` puts the framework inside the app, for machines that
+  cannot download it. English UI resources only.
+- `ANT_DESKTOP_CEF=<dir>` points at a directory containing
+  `Chromium Embedded Framework.framework`.
 
 ## Configuration
 
-All paths in `ant-desktop.json` are relative to the manifest.
+Paths in `ant-desktop.json` are relative to the file.
 
-| Field        | Description                                                    |
-| ------------ | -------------------------------------------------------------- |
-| `main`       | Application-process entry file. Defaults to `index.js`.        |
-| `renderer`   | Renderer development and build settings.                       |
-| `name`       | Application and `.app` display name.                           |
-| `identifier` | macOS bundle identifier, such as `com.example.my-app`.         |
-| `version`    | Application version written to the bundle metadata.            |
-| `icon`       | macOS `.icns` icon file.                                       |
-| `output`     | Destination `.app` path.                                       |
-| `include`    | Glob allowlist for the application archive. Defaults to empty. |
+| Field                   | Description                                        |
+| ----------------------- | -------------------------------------------------- |
+| `main`                  | Main-process entry. Defaults to `index.js`.        |
+| `name`                  | App name.                                          |
+| `identifier`            | Bundle identifier.                                 |
+| `version`               | App version.                                       |
+| `icon`                  | `.icns` file.                                      |
+| `output`                | Where `package` writes the `.app`.                 |
+| `include`               | Globs for packaged files. Defaults to none.        |
+| `renderer.watchDir`     | Directory watched in dev. Defaults to `renderer`.  |
+| `renderer.buildCommand` | Shell command that builds the renderer.            |
+| `renderer.devServer`    | `{ command, url }`. Replaces `watchDir`.           |
 
-The `renderer` section accepts:
+## IPC
 
-| Field          | Description                                                      |
-| -------------- | ---------------------------------------------------------------- |
-| `watchDir`     | Directory watched in development. Defaults to `renderer`.        |
-| `buildCommand` | Shell command run for watched development and before packaging.  |
-| `devServer`    | Alternative `{ command, url }` development server configuration. |
-
-The build command runs from the directory containing `ant-desktop.json`. Ant
-does not include any project files by default. Every packaged file must match
-an `include` glob:
-
-```json
-{
-  "include": ["*.js", "menu/*", "renderer/dist/**", "assets/*"]
-}
-```
-
-Paths keep their locations relative to `ant-desktop.json`. `*` matches within
-one directory and `**` matches recursively. The configured `main` file must
-match at least one include pattern.
-
-A string uses the source basename as its destination. An object can select a
-resource-relative destination with `to`. Packaged resources are available to
-the application process under `app.resourcesPath`.
-
-## IPC permissions
-
-Renderer IPC is denied unless the window explicitly grants access to a channel.
-Each capability combines a channel with one or more operations:
-
-- `invoke` allows `Ant.ipc.invoke()` in the renderer and requires an
-  `ipcMain.handle()` handler.
-- `send` allows `Ant.ipc.send()` in the renderer and is received with
-  `ipcMain.on()`.
-- `receive` allows the application process to send an event with
-  `window.webContents.send()`, received through `Ant.ipc.on()`.
+A page can only use channels its window grants. The main process enforces this.
 
 ```js
-const window = new BrowserWindow({
+new BrowserWindow({
   webPreferences: {
     capabilities: [
       { channel: 'settings:read', access: ['invoke'] },
@@ -211,14 +157,20 @@ const window = new BrowserWindow({
 });
 ```
 
-## Preload and renderer integration
+| Access    | Page                    | Main process                |
+| --------- | ----------------------- | --------------------------- |
+| `invoke`  | `Ant.ipc.invoke()`      | `ipcMain.handle()`          |
+| `send`    | `Ant.ipc.send()`        | `ipcMain.on()`              |
+| `receive` | `Ant.ipc.on()`          | `window.webContents.send()` |
 
-Renderer windows use secure web defaults: `sandbox` and `contextIsolation` are
-enabled, while runtime integration is disabled. A preload can publish a narrow
-API before the page starts:
+Values are structured-cloned: `Date`, `Map`, `Set`, `BigInt`, typed arrays,
+errors and cyclic objects survive the trip. Functions and symbols do not.
+
+## Preload
+
+A preload runs before the page and can expose a small API to it:
 
 ```js
-// preload.js
 import { contextBridge, ipcRenderer } from 'ant:desktop/renderer';
 
 contextBridge.exposeInMainWorld('settings', {
@@ -226,49 +178,31 @@ contextBridge.exposeInMainWorld('settings', {
 });
 ```
 
-Pass its absolute path through `webPreferences.preload`. Set `sandbox: false`
-when the preload itself needs Ant builtins.
+Pass its path as `webPreferences.preload`.
 
-`nodeIntegration` and `antIntegration` are aliases. Either one exposes
-`require`, `process`, and every registered `node:` or `ant:` builtin directly
-to the renderer. The integrated runtime is Ant, not Node.js; the
-`nodeIntegration` spelling exists for Electron-compatible configuration.
+By default the page and the preload cannot touch Ant builtins. Two options
+change that:
 
-```js
-const window = new BrowserWindow({
-  webPreferences: {
-    sandbox: false,
-    antIntegration: true
-  }
-});
-```
+| Option                 | Effect                                                        |
+| ---------------------- | ------------------------------------------------------------- |
+| `sandbox: false`       | The preload can import `node:` and `ant:` modules.            |
+| `antIntegration: true` | The page gets `require` and `process`. Needs `sandbox: false`. |
 
-Integration is intentionally rejected while `sandbox` is enabled. Prefer a
-sandboxed preload with explicit `contextBridge` methods for untrusted content.
+`nodeIntegration` is accepted as an alias for `antIntegration`. Either way the
+runtime is Ant, and only synchronous module functions can be called. Do not
+enable these for content you do not control.
 
-## Main-process API
+## API
 
-The `ant:desktop` module exports:
+`ant:desktop` exports `app`, `BrowserWindow`, `ipcMain`, `Menu`, `MenuItem` and
+`versions`. Types are in `desktop.d.ts`.
 
-- `app`
-- `BrowserWindow`
-- `ipcMain`
-- `Menu`
-- `MenuItem`
-- `versions`
-
-`versions` reports the Ant Desktop, Ant, and Chrome versions included in
-the current runtime. The desktop-specific entries are also available as
-`process.versions['ant-desktop']` and `process.versions.chrome`.
-
-`app.getPath(name)` returns a native filesystem location. Supported names are
-`home`, `temp`, `appData`, `userData`, `desktop`, `documents`, `downloads`,
-`resources`, and `exe`. `userData` is the application-specific directory under
-Application Support.
-
-`BrowserWindow` supports loading local files and URLs, window visibility and
-state controls, application events, custom title bars, application menus, and
-Chromium developer tools. `window.getBounds()` returns the current
-`{ x, y, width, height }`; `move` and `resize` events report geometry changes,
-while `quit` fires before application termination so the final bounds can be
-persisted.
+- `app.getPath(name)` accepts `home`, `temp`, `appData`, `userData`, `desktop`,
+  `documents`, `downloads`, `resources` and `exe`.
+- `versions` has `ant`, `desktop` and `chrome`. The last two are also on
+  `process.versions` as `ant-desktop` and `chrome`.
+- `window.on()` receives `move`, `resize`, `closed`, `quit`, `loading`,
+  `ready`, `title`, `navigation-start`, `navigation-commit`,
+  `navigation-error`, `permission-request`, `devtools-opened` and
+  `devtools-closed`.
+- The app quits when its last window closes.

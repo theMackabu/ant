@@ -14,7 +14,7 @@ function isSemver(value) {
 }
 
 function usage() {
-  process.stdout.write(`Usage: node scripts/set-version.js <version> [--dry-run]
+  process.stdout.write(`Usage: ant scripts/set-version.js <version> [--dry-run]
 
 Set the Ant Desktop version across the root package and all supported native
 platform packages.

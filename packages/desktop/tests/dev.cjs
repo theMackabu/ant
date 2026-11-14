@@ -62,25 +62,7 @@ async function main() {
   assert.ok(fs.lstatSync(result.executable).isFile());
   assert.equal(fs.readFileSync(result.executable, 'utf8'), 'native');
   const developmentFrameworks = path.join(result.output, 'Contents', 'Frameworks');
-  assert.ok(fs.lstatSync(developmentFrameworks).isDirectory());
-  assert.equal(fs.readlinkSync(path.join(developmentFrameworks, 'Fake.framework', 'Versions', 'Current')), 'A');
-  assert.equal(fs.readFileSync(path.join(developmentFrameworks, 'Fake.framework', 'Fake'), 'utf8'), 'framework');
-  const cacheSentinel = path.join(developmentFrameworks, 'cache-sentinel');
-  fs.writeFileSync(cacheSentinel, 'preserved');
-  createDevApp({ executable, frameworks }, entry, {
-    cacheDir: path.join(temporary, 'cache'),
-    icon,
-    name: 'Dev Example'
-  });
-  assert.equal(fs.readFileSync(cacheSentinel, 'utf8'), 'preserved');
-
-  fs.writeFileSync(path.join(frameworks, 'runtime-version'), 'updated');
-  createDevApp({ executable, frameworks }, entry, {
-    cacheDir: path.join(temporary, 'cache'),
-    icon,
-    name: 'Dev Example'
-  });
-  assert.equal(fs.existsSync(cacheSentinel), false);
+  assert.equal(fs.realpathSync(developmentFrameworks), fs.realpathSync(frameworks));
   assert.equal(fs.realpathSync(path.join(result.output, 'Contents', 'Resources', 'app')), fs.realpathSync(appRoot));
   const plist = fs.readFileSync(path.join(result.output, 'Contents', 'Info.plist'), 'utf8');
   assert.match(plist, /<string>Dev Example<\/string>/);

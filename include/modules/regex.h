@@ -73,7 +73,7 @@ ant_value_t regexp_literal_replace_call(
 static inline bool regexp_flags_valid(const char *flags, size_t len) {
   uint32_t seen = 0;
   for (size_t i = 0; i < len; i++) {
-    const char *at = memchr("dgimsuvy", flags[i], 8);
+    const char *at = (const char *)memchr("dgimsuvy", flags[i], 8);
     if (!flags[i] || !at) return false;
     
     uint32_t bit = 1u << (at - "dgimsuvy");

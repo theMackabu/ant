@@ -1,23 +1,31 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 
-const require = createRequire(import.meta.url);
-const { execute } = require('./lib/command.cjs');
-const { packagePlatform } = require('./package-platform.cjs');
 
 const scriptsRoot = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(scriptsRoot, '..');
-const repositoryRoot = path.resolve(desktopRoot, '../..');
 const platformRoot = path.join(desktopRoot, 'packaging', 'npm', 'darwin-arm64');
+
+function execute(command, args, { cwd } = {}) {
+  const result = spawnSync(command, args, { cwd, stdio: 'inherit' });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`${command} exited with status ${result.status}`);
+}
+
+function packagePlatform() {
+  const vendor = path.join(platformRoot, 'vendor');
+  fs.rmSync(vendor, { recursive: true, force: true });
+  fs.cpSync(path.join(desktopRoot, 'runtime'), vendor, { recursive: true });
+}
 
 function readPackage(root) {
   return JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 }
 
 function usage() {
-  process.stdout.write(`Usage: node scripts/publish.js [--npm | --ant] [--dry-run]
+  process.stdout.write(`Usage: ant scripts/publish.js [--npm | --ant] [--dry-run]
 
 Build Ant Desktop and publish the platform and root packages to npm and
 ants.land. With no registry option, both registries are published. Platform

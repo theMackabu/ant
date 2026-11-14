@@ -4,11 +4,22 @@
 #include "handles.h"
 #include "interrupt.h"
 
+#include "silver/vm.h"
 #include "silver/engine.h"
 #include "silver/feedback.h"
 #include "../../src/silver/ops/async.h"
 
 static constexpr int SV_CALL_INLINE_ARGS_CAP = 4;
+
+static inline ant_value_t sv_call_resolve_closure(
+  sv_vm_t *vm, ant_t *js, sv_closure_t *closure, 
+  ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
+);
+
+static inline ant_value_t sv_call_closure_after_jit(
+  sv_vm_t *vm, ant_t *js, sv_closure_t *closure, 
+  ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
+);
 
 ant_value_t Ant_Silver_InvokeNativeScoped(ant_t *js, ant_cfunc_t fn, ant_value_t this_val, ant_value_t func, ant_call_params_t);
 ant_value_t sv_invoke_builtin_in_realm(ant_t *js, const ant_cfunc_meta_t *meta, ant_value_t this_val, ant_value_t func, ant_call_params_t);
@@ -65,12 +76,6 @@ static inline void sv_vm_maybe_checkpoint_microtasks(ant_t *js) {
   if (!js || js->microtasks_draining || js->vm_exec_depth != 0 || js->jit_active_depth != 0 || Ant_Exception_Pending(js)) return;
   js_maybe_drain_microtasks(js);
 }
-
-typedef enum {
-  SV_CALL_MODE_NORMAL = 0,
-  SV_CALL_MODE_EXPLICIT_THIS,
-  SV_CALL_MODE_CONSTRUCT,
-} sv_call_mode_t;
 
 typedef enum {
   SV_CALL_EXEC_NATIVE = 0,
@@ -273,33 +278,6 @@ static inline ant_value_t sv_call_resolve_bound(
 static inline void sv_call_cleanup(ant_t *js, sv_call_ctx_t *ctx) {
   if (ctx->alloc) { free(ctx->alloc); ctx->alloc = NULL; }
 }
-
-static inline ant_value_t sv_call_resolve_closure(
-  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
-);
-
-static inline ant_value_t sv_call_closure_after_jit(
-  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
-);
-
-ant_value_t sv_vm_call_mode(
-  sv_vm_t *vm, ant_t *js, ant_value_t func,
-  ant_value_t this_val, ant_value_t *args, int argc,
-  ant_value_t *out_this, sv_call_mode_t mode, ant_value_t new_target
-);
-
-ant_value_t sv_vm_call(
-  sv_vm_t *vm, ant_t *js, ant_value_t func,
-  ant_value_t this_val, ant_value_t *args, int argc,
-  ant_value_t *out_this, ant_value_t new_target
-);
-
-ant_value_t sv_vm_call_explicit_this(
-  sv_vm_t *vm, ant_t *js, ant_value_t func,
-  ant_value_t this_val, ant_value_t *args, int argc
-);
 
 static inline ant_value_t sv_native_closure_cfunc(ant_value_t func) {
   if (vtype(func) != kTypeFunction) return 0;

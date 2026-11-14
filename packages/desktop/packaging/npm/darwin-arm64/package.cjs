@@ -1,8 +1,16 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
-const { buildRenderer } = require('./renderer.cjs');
+const { spawnSync } = require('node:child_process');
+
+function buildRenderer(command, cwd) {
+  if (!command) return;
+  const result = spawnSync(command, { cwd, env: process.env, shell: true, stdio: 'inherit' });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`Renderer build failed (${result.signal || result.status})`);
+}
 
 function xml(value) {
   return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
@@ -70,16 +78,6 @@ function copyTree(source, destination, excluded, include = () => true) {
   });
 }
 
-const ARCHIVE_MAGIC = Buffer.from('ANTAPP01');
-
-function writeUnsigned(buffer, offset, value, bytes) {
-  let remaining = value;
-  for (let index = 0; index < bytes; index++) {
-    buffer[offset + index] = remaining % 256;
-    remaining = Math.floor(remaining / 256);
-  }
-}
-
 function includeExpression(value) {
   if (typeof value !== 'string' || !value.trim() || path.isAbsolute(value)) {
     throw new Error(`Include pattern must be a relative glob: ${value}`);
@@ -143,55 +141,12 @@ function includedSources(root, values, excluded = []) {
   return included;
 }
 
-function archiveEntries(included, excluded = []) {
-  const entries = [];
-  const destinations = new Set();
-  const visit = (current, destination) => {
-    const resolved = path.resolve(current);
-    if (excluded.some(value => isInside(value, resolved))) return;
-    const stat = fs.lstatSync(current);
-    if (stat.isDirectory()) {
-      for (const name of fs.readdirSync(current).sort()) {
-        visit(path.join(current, name), destination ? `${destination}/${name}` : name);
-      }
-      return;
-    }
-    if (!stat.isFile() && !stat.isSymbolicLink()) {
-      throw new Error(`Application archive cannot contain this file type: ${current}`);
-    }
-    if (destinations.has(destination)) {
-      throw new Error(`Multiple bundle entries target ${destination}`);
-    }
-    destinations.add(destination);
-    entries.push({ current, relative: destination, stat });
-  };
-  for (const entry of included) visit(entry.source, entry.destination);
-  return entries;
-}
-
-function writeApplicationArchive(included, destination, excluded) {
-  const entries = archiveEntries(included, excluded);
-  const fd = fs.openSync(destination, 'w');
-  try {
-    const count = Buffer.alloc(4);
-    writeUnsigned(count, 0, entries.length, 4);
-    fs.writeSync(fd, ARCHIVE_MAGIC);
-    fs.writeSync(fd, count);
-    for (const entry of entries) {
-      const name = Buffer.from(entry.relative);
-      const symbolic = entry.stat.isSymbolicLink();
-      const data = symbolic ? Buffer.from(fs.readlinkSync(entry.current)) : fs.readFileSync(entry.current);
-      const header = Buffer.alloc(20);
-      writeUnsigned(header, 0, name.length, 4);
-      writeUnsigned(header, 4, data.length, 8);
-      writeUnsigned(header, 12, entry.stat.mode & 0o777, 4);
-      header[16] = symbolic ? 2 : 1;
-      fs.writeSync(fd, header);
-      fs.writeSync(fd, name);
-      fs.writeSync(fd, data);
-    }
-  } finally {
-    fs.closeSync(fd);
+function copyIncluded(included, destination) {
+  for (const entry of included) {
+    const target = path.join(destination, entry.destination);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    if (entry.stat.isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(entry.source), target);
+    else fs.copyFileSync(entry.source, target);
   }
 }
 
@@ -203,12 +158,21 @@ function bundledEntryPath(included, sourceEntry) {
   return entry.destination;
 }
 
+function sharedRuntime() {
+  const { cefVersion } = require('./cef.lock.json');
+  const directory = path.join(os.homedir(), 'Library', 'Application Support', 'Ant Desktop', 'CEF', cefVersion);
+  if (!fs.existsSync(directory)) {
+    throw new Error(`The shared browser runtime is not installed (${directory}); run an Ant Desktop app once to fetch it`);
+  }
+  return directory;
+}
+
 function isEnglishFrameworkResource(candidate) {
   const name = path.basename(candidate);
   return !name.endsWith('.lproj') || name === 'en.lproj';
 }
 
-function infoPlist({ name, executable, identifier, version, entry, icon, archive }) {
+function infoPlist({ name, executable, identifier, version, entry, icon, background }) {
   return propertyList({
     CFBundleDevelopmentRegion: 'English',
     CFBundleDisplayName: name,
@@ -222,8 +186,8 @@ function infoPlist({ name, executable, identifier, version, entry, icon, archive
     CFBundleVersion: version,
     LSMinimumSystemVersion: '15.0',
     NSHighResolutionCapable: true,
-    AntDesktopEntry: entry,
-    ...(archive ? { AntDesktopArchive: archive } : {})
+    ...(background ? { LSUIElement: true } : {}),
+    ...(entry ? { AntDesktopEntry: entry } : {})
   });
 }
 
@@ -264,7 +228,6 @@ function packageApp(layout, entry, options = {}) {
   const macos = path.join(contents, 'MacOS');
   const frameworks = path.join(contents, 'Frameworks');
   const resources = path.join(contents, 'Resources');
-  const archive = 'app.ant';
   const excluded = [output, temporary];
   const included = includedSources(appRoot, options.include || [], excluded);
   const bundledEntry = bundledEntryPath(included, sourceEntry);
@@ -273,14 +236,15 @@ function packageApp(layout, entry, options = {}) {
   fs.rmSync(temporary, { recursive: true, force: true });
   try {
     fs.mkdirSync(macos, { recursive: true });
-    fs.mkdirSync(frameworks, { recursive: true });
     fs.mkdirSync(resources, { recursive: true });
     fs.copyFileSync(layout.executable, path.join(macos, executable));
     fs.chmodSync(path.join(macos, executable), 0o755);
-    for (const entry of fs.readdirSync(layout.frameworks)) {
-      copyTree(path.join(layout.frameworks, entry), path.join(frameworks, entry), [], isEnglishFrameworkResource);
+    copyTree(layout.frameworks, frameworks, []);
+    if (options.bundleRuntime) {
+      const framework = 'Chromium Embedded Framework.framework';
+      copyTree(path.join(sharedRuntime(), framework), path.join(frameworks, framework), [], isEnglishFrameworkResource);
     }
-    writeApplicationArchive(included, path.join(resources, archive), excluded);
+    copyIncluded(included, path.join(resources, 'app'));
     if (options.icon) fs.copyFileSync(path.resolve(options.icon), path.join(resources, icon));
     fs.writeFileSync(
       path.join(contents, 'Info.plist'),
@@ -289,9 +253,8 @@ function packageApp(layout, entry, options = {}) {
         executable,
         identifier,
         version,
-        entry: bundledEntry,
-        icon,
-        archive
+        entry: path.posix.join('app', bundledEntry),
+        icon
       })
     );
     fs.writeFileSync(path.join(contents, 'PkgInfo'), 'APPL????');
@@ -306,6 +269,7 @@ function packageApp(layout, entry, options = {}) {
 }
 
 module.exports = {
+  buildRenderer,
   bundleIdentifier,
   infoPlist,
   isInside,
@@ -313,6 +277,5 @@ module.exports = {
   applicationName,
   includedSources,
   bundledEntryPath,
-  matchesInclude,
-  writeApplicationArchive
+  matchesInclude
 };

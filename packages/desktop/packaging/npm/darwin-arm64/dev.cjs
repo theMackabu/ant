@@ -7,9 +7,7 @@ const https = require('node:https');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
-const { buildRenderer } = require('./renderer.cjs');
-
-const { applicationName, bundleIdentifier, infoPlist, isInside, matchesInclude } = require('./package.cjs');
+const { applicationName, buildRenderer, bundleIdentifier, infoPlist, isInside, matchesInclude } = require('./package.cjs');
 
 function replaceSymlink(target, link, type) {
   fs.rmSync(link, { recursive: true, force: true });
@@ -20,58 +18,6 @@ function cloneFile(source, destination) {
   fs.rmSync(destination, { recursive: true, force: true });
   fs.copyFileSync(source, destination, fs.constants.COPYFILE_FICLONE);
   fs.chmodSync(destination, fs.statSync(source).mode);
-}
-
-function cloneTree(source, destination) {
-  const stat = fs.lstatSync(source);
-  if (stat.isSymbolicLink()) {
-    fs.symlinkSync(fs.readlinkSync(source), destination);
-    return;
-  }
-  if (stat.isDirectory()) {
-    fs.mkdirSync(destination, { recursive: true, mode: stat.mode });
-    for (const entry of fs.readdirSync(source)) {
-      cloneTree(path.join(source, entry), path.join(destination, entry));
-    }
-    return;
-  }
-  if (!stat.isFile()) throw new Error(`Unsupported Chromium runtime entry: ${source}`);
-  fs.copyFileSync(source, destination, fs.constants.COPYFILE_FICLONE);
-  fs.chmodSync(destination, stat.mode);
-}
-
-function runtimeFingerprint(frameworks) {
-  const entries = [frameworks, ...fs.readdirSync(frameworks).map(entry => path.join(frameworks, entry))];
-  const hash = crypto.createHash('sha256');
-  for (const entry of entries) {
-    const stat = fs.lstatSync(entry);
-    hash.update(`${path.resolve(entry)}\0${stat.size}\0${stat.mtimeMs}\0${stat.mode}\0`);
-  }
-  return hash.digest('hex');
-}
-
-function ensureRuntimeFrameworks(source, contents) {
-  const destination = path.join(contents, 'Frameworks');
-  const marker = path.join(contents, '.ant-runtime.json');
-  const fingerprint = runtimeFingerprint(source);
-  try {
-    const cached = JSON.parse(fs.readFileSync(marker, 'utf8'));
-    if (cached.fingerprint === fingerprint && fs.lstatSync(destination).isDirectory()) return;
-  } catch {
-    // A missing or incomplete cache is rebuilt below.
-  }
-
-  const temporary = `${destination}.tmp-${process.pid}`;
-  fs.rmSync(temporary, { recursive: true, force: true });
-  try {
-    cloneTree(source, temporary);
-    fs.rmSync(destination, { recursive: true, force: true });
-    fs.renameSync(temporary, destination);
-    fs.writeFileSync(marker, `${JSON.stringify({ fingerprint })}\n`);
-  } catch (error) {
-    fs.rmSync(temporary, { recursive: true, force: true });
-    throw error;
-  }
 }
 
 function createDevApp(layout, entry, options = {}) {
@@ -105,7 +51,7 @@ function createDevApp(layout, entry, options = {}) {
   fs.mkdirSync(macos, { recursive: true });
   fs.mkdirSync(resources, { recursive: true });
   cloneFile(layout.executable, executable);
-  ensureRuntimeFrameworks(layout.frameworks, contents);
+  replaceSymlink(layout.frameworks, path.join(contents, 'Frameworks'), 'dir');
   replaceSymlink(appRoot, path.join(resources, 'app'), 'dir');
   if (options.icon) {
     replaceSymlink(path.resolve(options.icon), path.join(resources, icon), 'file');
@@ -139,9 +85,7 @@ function terminateProcessTree(child) {
       if (!children.has(parentPid)) children.set(parentPid, []);
       children.get(parentPid).push(pid);
     }
-  } catch {
-    // the direct child is still safe to terminate if process inspection fails
-  }
+  } catch {}
 
   const pids = [];
   const collect = pid => {

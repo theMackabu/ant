@@ -79,7 +79,6 @@ node_modules
 /packages/desktop/build
 /packages/desktop/runtime
 /packages/desktop/coverage
-/packages/desktop/packaging/npm/*/artifacts
 /packages/desktop/packaging/npm/*/vendor
 
 /packages/antland/dist

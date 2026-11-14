@@ -1,11 +1,10 @@
 node_modules/
 .cache/
 
-build/
-runtime/
-compile_commands.json
+/build/
+/runtime/
 
-packaging/npm/*/artifacts/
+compile_commands.json
 packaging/npm/*/vendor/
 
 coverage/

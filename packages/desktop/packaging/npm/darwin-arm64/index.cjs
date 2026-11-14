@@ -4,30 +4,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
-const packageRoot = __dirname;
-const sourceRoot = path.resolve(__dirname, '../../..');
-const sourceLayout = {
-  executable: path.join(sourceRoot, 'runtime', 'Ant Desktop.app', 'Contents', 'MacOS', 'Ant Desktop'),
-  frameworks: path.join(sourceRoot, 'runtime', 'Ant Desktop.app', 'Contents', 'Frameworks')
-};
-const installedLayout = {
-  executable: path.join(packageRoot, 'vendor', 'runtime', 'Ant Desktop.app', 'Contents', 'MacOS', 'Ant Desktop'),
-  frameworks: path.join(packageRoot, 'vendor', 'runtime', 'Ant Desktop.app', 'Contents', 'Frameworks')
-};
-
-function isUsable(layout) {
-  return fs.existsSync(layout.executable) &&
-    fs.existsSync(path.join(layout.frameworks, 'Chromium Embedded Framework.framework')) &&
-    fs.existsSync(path.join(layout.frameworks, 'Ant Desktop Helper.app'));
-}
+const layouts = [path.resolve(__dirname, '../../../runtime'), path.join(__dirname, 'vendor')].map(root => ({
+  executable: path.join(root, 'Ant Desktop.app', 'Contents', 'MacOS', 'Ant Desktop'),
+  frameworks: path.join(root, 'Ant Desktop.app', 'Contents', 'Frameworks')
+}));
 
 function ensureInstalled() {
-  if (isUsable(sourceLayout)) return sourceLayout;
-  if (!isUsable(installedLayout)) require('./install.cjs').install();
-  if (!isUsable(installedLayout)) {
-    throw new Error('The Ant Desktop native payload is incomplete; reinstall ant-desktop-darwin-arm64');
-  }
-  return installedLayout;
+  const layout = layouts.find(value => fs.existsSync(value.executable) && fs.existsSync(path.join(value.frameworks, 'libantdesktop.dylib')));
+  if (!layout) throw new Error('The Ant Desktop native payload is missing; reinstall ant-desktop-darwin-arm64');
+  return layout;
 }
 
 function assertPlatform() {

@@ -25,24 +25,14 @@
   "cpu": [
     "arm64"
   ],
-  "engines": {
-    "node": ">=18"
-  },
   "files": [
     "dev.cjs",
     "index.cjs",
-    "install.cjs",
     "package.cjs",
-    "renderer.cjs",
-    "runtime.lock.json",
-    "artifacts/ant-desktop-darwin-arm64.tar.gz",
-    "artifacts/ant-desktop-darwin-arm64.tar.gz.sha256",
+    "cef.lock.json",
+    "vendor/",
     "README.md"
   ],
-  "scripts": {
-    "postinstall": "node install.cjs",
-    "prepack": "node ../../../scripts/package-platform.cjs"
-  },
   "publishConfig": {
     "access": "public"
   }

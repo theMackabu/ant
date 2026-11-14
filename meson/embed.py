@@ -94,6 +94,11 @@ def header_closure(build_root, section, headers):
 
 
 INCLUDE_RE = re.compile(r'^(\s*#\s*include\s*)([<"])([^>"]+)[>"]', re.M)
+PRAGMA_ONCE_RE = re.compile(r'^\s*#\s*pragma\s+once\b.*$', re.M)
+
+CXX_OPEN = '\n#ifdef __cplusplus\nextern "C" {\n#endif'
+CXX_CLOSE = '\n#ifdef __cplusplus\n}\n#endif\n'
+CXX_SYSTEM_INCLUDE = '#ifdef __cplusplus\nextern "C++" {{\n#endif\n{}\n#ifdef __cplusplus\n}}\n#endif'
 
 
 def include_dirs(build_root, section):
@@ -121,11 +126,16 @@ def namespaced(dirs, names, header):
   with open(header, errors='surrogateescape') as f:
     text = f.read()
 
+  wrapped = PRAGMA_ONCE_RE.search(text) is not None
+
   def rewrite(m):
     target = resolve_include(dirs, header, m.group(2), m.group(3))
-    return f'{m.group(1)}<{names[target]}>' if target in names else m.group(0)
+    if target in names:
+      return f'{m.group(1)}<{names[target]}>'
+    return CXX_SYSTEM_INCLUDE.format(m.group(0)) if wrapped else m.group(0)
 
-  return INCLUDE_RE.sub(rewrite, text)
+  text = INCLUDE_RE.sub(rewrite, text)
+  return PRAGMA_ONCE_RE.sub(lambda m: m.group(0) + CXX_OPEN, text, count=1) + CXX_CLOSE if wrapped else text
 
 
 def write_pc(path, version, defines, system_libs):
