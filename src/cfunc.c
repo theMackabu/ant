@@ -71,9 +71,8 @@ ant_value_t js_mkfun_dyn(ant_cfunc_t fn) {
   return js_cfunc_value(ant_cfunc_meta_for_entrypoint(fn));
 }
 
-ant_value_t js_cfunc_noop(ant_params_t) {
-  return Ant_Value_Undefined;
-}
+ant_value_t js_cfunc_false(ant_params_t) { return Ant_Value_False; }
+ant_value_t js_cfunc_noop(ant_params_t) { return Ant_Value_Undefined; }
 
 ant_value_t js_cfunc_name_value(ant_t *js, ant_value_t cfunc) {
   const ant_cfunc_meta_t *meta = js_as_cfunc_meta(cfunc);

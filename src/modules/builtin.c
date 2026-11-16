@@ -16,6 +16,7 @@
 
 #include "ant.h"
 #include "cfunc.h"
+#include "hash.h"
 #include "gc.h"
 #include "crash.h"
 #include "errors.h"
@@ -26,8 +27,8 @@
 
 #include "silver/call.h"
 #include "modules/builtin.h"
+#include "modules/bigint.h"
 #include "modules/buffer.h"
-#include "modules/cjit.h"
 #include "modules/server.h"
 
 static struct {
@@ -69,11 +70,21 @@ static ant_value_t js_raw_stack(ant_params_t) {
   return js_capture_raw_stack(js);
 }
 
-// Ant.raw.typeof(ant_value_t)
+// Ant.raw.typeof(t: unknown)
 static ant_value_t js_raw_typeof(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "Ant.raw.typeof() requires 1 argument");
   const uint8_t type = vtype(args[0]);
   return Ant_Value_FromNumber((double)type);
+}
+
+// Ant.raw.hash(data: string | ArrayBufferView)
+static ant_value_t js_raw_hash(ant_params_t) {
+  const uint8_t *bytes = NULL;
+  size_t len = 0;
+  if (nargs > 0 && vtype(args[0]) == kTypeString) bytes = (const uint8_t *)js_getstr(js, args[0], &len);
+  else if (nargs < 1 || !buffer_source_get_bytes(js, args[0], &bytes, &len))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Ant.raw.hash() requires a string or buffer");
+  return bigint_from_uint64(js, hash_key((const char *)bytes, len));
 }
 
 static ant_value_t js_raw_gc_mark_profile(ant_params_t) {
@@ -452,13 +463,17 @@ void init_builtin_module(ant_t *js) {
   js_set(js, hl_fn, "tags", Ant_Function_Create(js_highlight_tags));
   js_set(js, ant_obj, "highlight", hl_fn);
 
+  #ifdef ANT_HAVE_UNSAFE_C
+  #include "modules/cjit.h"
   ant_value_t unsafe_obj = Ant_Object_Create(js);
   init_cjit_module(js, unsafe_obj);
   js_set(js, ant_obj, "unsafe", unsafe_obj);
+  #endif
 
   ant_value_t raw_obj = Ant_Object_Create(js);
   js_set_getter_desc(js, js_as_obj(raw_obj), "stack", 5, Ant_Function_Create(js_raw_stack), JS_DESC_C);
   js_set(js, raw_obj, "typeof", Ant_Function_Create(js_raw_typeof));
+  js_set(js, raw_obj, "hash", Ant_Function_CreateWithArity(js_raw_hash, 1));
   js_set(js, raw_obj, "gcMarkProfile", Ant_Function_Create(js_raw_gc_mark_profile));
   js_set(js, raw_obj, "gcMarkProfileEnable", Ant_Function_Create(js_raw_gc_mark_profile_enable));
   js_set(js, raw_obj, "gcMarkProfileReset", Ant_Function_Create(js_raw_gc_mark_profile_reset));

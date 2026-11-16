@@ -9,14 +9,15 @@
 
 #include "ant.h"
 #include "ptr.h"
+#include "realm.h"
 #include "errors.h"
 #include "cfunc.h"
 #include "internal.h"
 #include "protectors.h"
-#include "realm.h"
 #include "gc/object_arenas.h"
+
 #include "silver/engine.h"
-#include "silver/call.h"
+#include "silver/vm.h"
 #include "silver/code_unit.h"
 
 #include "modules/vm.h"

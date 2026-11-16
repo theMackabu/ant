@@ -85,17 +85,18 @@ bool bigint_is_negative(ant_t *js, ant_value_t v) {
   return bigint_payload(v)->sign == 1;
 }
 
-static const uint32_t *bigint_limbs(ant_t *js, ant_value_t v, size_t *count) {
+const uint32_t *bigint_limbs(ant_t *js, ant_value_t v, size_t *count) {
   const bigint_payload_t *payload = bigint_payload(v);
   size_t limb_count = payload->limb_count;
+  
   if (limb_count == 0) limb_count = 1;
   if (count) *count = limb_count;
+  
   return payload->limbs;
 }
 
 static ant_value_t bigint_alloc_payload_in(
-  ant_t *js, size_t capacity,
-  bigint_payload_t **payload_out, bool permanent
+  ant_t *js, size_t capacity, bigint_payload_t **payload_out, bool permanent
 ) {
   if (capacity == 0) capacity = 1;
   if (capacity > UINT32_MAX) return js_mkerr(js, "oom");
@@ -287,9 +288,8 @@ static ant_value_t js_mkbigint_limbs_in(
   return bigint_finish_payload(out, payload, count, negative);
 }
 
-static inline ant_value_t js_mkbigint_limbs(
-  ant_t *js, const uint32_t *limbs,
-  size_t count, bool negative
+ant_value_t bigint_from_limbs(
+  ant_t *js, const uint32_t *limbs, size_t count, bool negative
 ) {
   return js_mkbigint_limbs_in(js, limbs, count, negative, false);
 }
@@ -301,7 +301,7 @@ ant_value_t bigint_from_uint64(ant_t *js, uint64_t value) {
   };
 
   size_t count = limbs[1] == 0 ? 1 : 2;
-  return js_mkbigint_limbs(js, limbs, count, false);
+  return bigint_from_limbs(js, limbs, count, false);
 }
 
 ant_value_t bigint_from_int64(ant_t *js, int64_t value) {
@@ -315,7 +315,7 @@ ant_value_t bigint_from_int64(ant_t *js, int64_t value) {
   };
 
   size_t count = limbs[1] == 0 ? 1 : 2;
-  return js_mkbigint_limbs(js, limbs, count, value < 0);
+  return bigint_from_limbs(js, limbs, count, value < 0);
 }
 
 ant_value_t bigint_from_integral_double(ant_t *js, double value) {
@@ -343,13 +343,9 @@ ant_value_t bigint_from_integral_double(ant_t *js, double value) {
 
   if (exp < 52) {
     uint64_t magnitude = mantissa >> (52 - exp);
-    return js_mkbigint_limbs(
-      js, (uint32_t[]){
-        (uint32_t)(magnitude & 0xffffffffu),
-        (uint32_t)(magnitude >> 32)
-      },
-      magnitude > UINT32_MAX ? 2 : 1,
-      negative
+    return bigint_from_limbs(
+      js, (uint32_t[]){ (uint32_t)(magnitude & 0xffffffffu), (uint32_t)(magnitude >> 32) },
+      magnitude > UINT32_MAX ? 2 : 1, negative
     );
   }
 
@@ -376,7 +372,7 @@ ant_value_t bigint_from_integral_double(ant_t *js, double value) {
   size_t count = DOUBLE_LIMB_CAP;
   bigint_normalize_limbs(limbs, &count);
   
-  return js_mkbigint_limbs(js, limbs, count, negative);
+  return bigint_from_limbs(js, limbs, count, negative);
 }
 
 static uint64_t bigint_low_u64(ant_t *js, ant_value_t value) {
@@ -735,9 +731,10 @@ static ant_value_t bigint_bitwise_binary(ant_t *js, ant_value_t a, ant_value_t b
 
   bool negative = false;
   size_t count = bigint_twos_complement_to_magnitude(result, width, &negative);
+  
   return payload
     ? bigint_finish_payload(out, payload, count, negative)
-    : js_mkbigint_limbs(js, result, count, negative);
+    : bigint_from_limbs(js, result, count, negative);
 }
 
 ant_value_t bigint_bitand(ant_t *js, ant_value_t a, ant_value_t b) {
@@ -780,9 +777,10 @@ ant_value_t bigint_bitnot(ant_t *js, ant_value_t value) {
 
   bool out_neg = false;
   size_t out_count = bigint_twos_complement_to_magnitude(result, width, &out_neg);
+  
   return payload
     ? bigint_finish_payload(out, payload, out_count, out_neg)
-    : js_mkbigint_limbs(js, result, out_count, out_neg);
+    : bigint_from_limbs(js, result, out_count, out_neg);
 }
 
 static inline unsigned clz32_nonzero(uint32_t v) {
@@ -1268,7 +1266,7 @@ ant_value_t bigint_add(ant_t *js, ant_value_t a, ant_value_t b) {
 
   return payload
     ? bigint_finish_payload(out, payload, rlen, rneg)
-    : js_mkbigint_limbs(js, result, rlen, rneg);
+    : bigint_from_limbs(js, result, rlen, rneg);
 }
 
 ant_value_t bigint_sub(ant_t *js, ant_value_t a, ant_value_t b) {
@@ -1320,7 +1318,7 @@ ant_value_t bigint_sub(ant_t *js, ant_value_t a, ant_value_t b) {
 
   return payload
     ? bigint_finish_payload(out, payload, rlen, rneg)
-    : js_mkbigint_limbs(js, result, rlen, rneg);
+    : bigint_from_limbs(js, result, rlen, rneg);
 }
 
 ant_value_t bigint_mul(ant_t *js, ant_value_t a, ant_value_t b) {
@@ -1348,7 +1346,7 @@ ant_value_t bigint_mul(ant_t *js, ant_value_t a, ant_value_t b) {
   size_t rlen = bigint_mul_abs_limbs(ad, alen, bd, blen, result);
   return payload
     ? bigint_finish_payload(out, payload, rlen, aneg != bneg)
-    : js_mkbigint_limbs(js, result, rlen, aneg != bneg);
+    : bigint_from_limbs(js, result, rlen, aneg != bneg);
 }
 
 ant_value_t bigint_div(ant_t *js, ant_value_t a, ant_value_t b) {
@@ -1369,8 +1367,9 @@ ant_value_t bigint_div(ant_t *js, ant_value_t a, ant_value_t b) {
   }
 
   bool qneg = (aneg != bneg) && !(qlen == 1 && quot[0] == 0);
-  ant_value_t out = js_mkbigint_limbs(js, quot, qlen, qneg);
+  ant_value_t out = bigint_from_limbs(js, quot, qlen, qneg);
   free(quot);
+  
   return out;
 }
 
@@ -1386,13 +1385,12 @@ ant_value_t bigint_mod(ant_t *js, ant_value_t a, ant_value_t b) {
   uint32_t *rem = NULL;
   size_t rlen = 0;
 
-  if (!bigint_divmod_abs_limbs(ad, alen, bd, blen, NULL, NULL, &rem, &rlen)) {
-    return js_mkerr(js, "oom");
-  }
+  if (!bigint_divmod_abs_limbs(ad, alen, bd, blen, NULL, NULL, &rem, &rlen)) return js_mkerr(js, "oom");
 
   bool rneg = aneg && !(rlen == 1 && rem[0] == 0);
-  ant_value_t out = js_mkbigint_limbs(js, rem, rlen, rneg);
+  ant_value_t out = bigint_from_limbs(js, rem, rlen, rneg);
   free(rem);
+  
   return out;
 }
 
@@ -1426,8 +1424,9 @@ static inline ant_value_t bigint_pow2(ant_t *js, uint64_t bits) {
   if (!limbs) return js_mkerr(js, "oom");
 
   limbs[(size_t)limb_index_u64] = 1u << (bits & 31u);
-  ant_value_t out = js_mkbigint_limbs(js, limbs, count, false);
+  ant_value_t out = bigint_from_limbs(js, limbs, count, false);
   free(limbs);
+  
   return out;
 }
 
@@ -1459,7 +1458,7 @@ ant_value_t bigint_shift_left(ant_t *js, ant_value_t value, uint64_t shift) {
   size_t rlen = bigint_shift_left_abs(limbs, count, shift, result);
   return payload
     ? bigint_finish_payload(out, payload, rlen, negative)
-    : js_mkbigint_limbs(js, result, rlen, negative);
+    : bigint_from_limbs(js, result, rlen, negative);
 }
 
 ant_value_t bigint_shift_right(ant_t *js, ant_value_t value, uint64_t shift) {
@@ -1497,7 +1496,7 @@ ant_value_t bigint_shift_right(ant_t *js, ant_value_t value, uint64_t shift) {
   bool negative = neg && !limbs_is_zero(result, qlen);
   return payload
     ? bigint_finish_payload(out, payload, qlen, negative)
-    : js_mkbigint_limbs(js, result, qlen, negative);
+    : bigint_from_limbs(js, result, qlen, negative);
 }
 
 ant_value_t bigint_shift_right_logical(ant_t *js, ant_value_t value, uint64_t shift) {

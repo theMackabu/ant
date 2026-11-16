@@ -105,6 +105,7 @@ interface AntStatsResult {
 interface AntRaw {
   readonly stack: string;
   typeof(t: unknown): number;
+  hash(data: string | ArrayBufferView): bigint;
   gcMarkProfile(): AntGcMarkProfile;
   gcMarkProfileEnable(enabled?: boolean): boolean;
   gcMarkProfileReset(): void;

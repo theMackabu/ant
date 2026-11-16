@@ -5,7 +5,7 @@
 #include "ant.h"
 #include "errors.h"
 #include "internal.h"
-#include "silver/call.h"
+#include "silver/vm.h"
 
 #include "modules/blob.h"
 #include "modules/buffer.h"
@@ -470,7 +470,7 @@ static ant_value_t wire_write_object(wire_writer_t *w, ant_value_t value) {
 
   if (ptr->flags.regexp_brand) {
     ant_value_t source = js_get_slot(value, SLOT_DATA);
-    ant_value_t flags = js_get_slot(value, SLOT_REGEXP_FLAGS_STRING);
+    ant_value_t flags = regexp_flags_value(js, value);
     size_t slen = 0, flen = 0;
     const char *s = vtype(source) == kTypeString ? js_getstr(js, source, &slen) : "";
     const char *f = vtype(flags) == kTypeString ? js_getstr(js, flags, &flen) : "";

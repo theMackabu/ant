@@ -1,8 +1,6 @@
-#include <compat.h> // IWYU pragma: keep
-#include "modules/cjit.h"
-
 #ifdef ANT_HAVE_UNSAFE_C
 
+#include <compat.h> // IWYU pragma: keep
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +21,7 @@
 #include "ptr.h"
 #include "internal.h"
 #include "modules/bigint.h"
+#include "modules/cjit.h"
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmacro-redefined"
@@ -902,9 +901,5 @@ static ant_value_t js_unsafe_c(ant_params_t) {
 void init_cjit_module(ant_t *js, ant_value_t unsafe_obj) {
   js_set(js, unsafe_obj, "c", Ant_Function_CreateWithArity(js_unsafe_c, 1));
 }
-
-#else
-
-void init_cjit_module(ant_t *js, ant_value_t unsafe_obj) {}
 
 #endif

@@ -2,8 +2,8 @@
 
 #include "types.h"
 #include "ptr.h"
-#include "realm.h"
 #include "handles.h"
+#include "realm.h" // IWYU pragma: keep
 
 typedef struct {
   ant_cfunc_meta_t meta;
@@ -20,6 +20,7 @@ bool js_cfunc_has_prototype(ant_value_t cfunc);
 
 ant_value_t js_mkfun_dyn(ant_cfunc_t fn);
 ant_value_t js_cfunc_noop(ant_params_t);
+ant_value_t js_cfunc_false(ant_params_t);
 ant_value_t js_mkfun_meta(const ant_cfunc_meta_t *meta);
 ant_value_t js_mkfun_site(ant_cfunc_site_t *site);
 ant_value_t js_cfunc_name_value(ant_t *js, ant_value_t cfunc);
