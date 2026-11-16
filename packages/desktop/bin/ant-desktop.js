@@ -2,10 +2,10 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import * as desktop from '../../index.js';
-import { CONFIG_NAME, loadConfig, optionsFromConfig } from '../../config.js';
+import * as desktop from '../index.js';
+import { CONFIG_NAME, loadConfig, optionsFromConfig } from '../config.js';
 
-const { version } = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+const { version } = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 function usage() {
   process.stdout.write(`Usage:

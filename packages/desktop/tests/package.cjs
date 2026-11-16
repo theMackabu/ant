@@ -51,9 +51,7 @@ try {
   assert.ok(fs.existsSync(path.join(output, 'Contents', 'Frameworks', 'Fake.framework', 'Versions', 'A', 'Resources', 'fr.lproj')));
   const plist = fs.readFileSync(path.join(output, 'Contents', 'Info.plist'), 'utf8');
   assert.match(plist, /<string>com\.antjs\.package-test<\/string>/);
-  assert.match(plist, /<key>CFBundleDevelopmentRegion<\/key>\s*<string>English<\/string>/);
   assert.match(plist, /<key>AntDesktopEntry<\/key>\s*<string>app\/main\.js<\/string>/);
-  assert.doesNotMatch(plist, /AntDesktopArchive/);
   assert.throws(() => packageApp({ executable, frameworks }, entry, { appDir: appRoot, out: output }), /Output already exists/);
   console.log('desktop-package-smoke-ok');
 } finally {

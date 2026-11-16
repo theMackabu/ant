@@ -126,21 +126,8 @@ public:
   bool Execute(const CefString &name, CefRefPtr<CefV8Value> object, const CefV8ValueList &arguments, CefRefPtr<CefV8Value> &result,
                CefString &exception) override {
     for (const CefRefPtr<CefV8Value> &argument : arguments) {
-      bool number = argument->IsInt() || argument->IsUInt() || argument->IsDouble();
-      if (!argument->IsString() && !(name == "send" && number)) {
-        exception = "invalid Ant binding call";
-        return true;
-      }
-    }
-    if (name == "send" && arguments.size() == 4) {
-      CefRefPtr<CefFrame> frame = CefV8Context::GetCurrentContext()->GetFrame();
-      CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create("ant.ipc");
-      CefRefPtr<CefListValue> values = message->GetArgumentList();
-      values->SetInt(0, arguments[0]->GetIntValue());
-      values->SetDouble(1, arguments[1]->GetDoubleValue());
-      values->SetString(2, arguments[2]->GetStringValue());
-      values->SetString(3, arguments[3]->GetStringValue());
-      if (frame) frame->SendProcessMessage(PID_BROWSER, message);
+      if (argument->IsString()) continue;
+      exception = "invalid Ant binding call";
       return true;
     }
     ant_t *js = Runtime();
@@ -166,20 +153,22 @@ public:
   void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override { RegisterSchemes(registrar); }
   CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override { return this; }
 
+  void OnWebKitInitialized() override { router_ = CefMessageRouterRendererSide::Create(IpcRouterConfig()); }
+
   void OnBrowserCreated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDictionaryValue> extra) override {
     if (extra && extra->HasKey("capabilities")) configs_[browser->GetIdentifier()] = extra->Copy(false);
   }
 
   void OnBrowserDestroyed(CefRefPtr<CefBrowser> browser) override {
     configs_.erase(browser->GetIdentifier());
-    receivers_.erase(browser->GetIdentifier());
   }
 
   void OnContextCreated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefV8Context> context) override {
     auto found = configs_.find(browser->GetIdentifier());
-    if (!frame->IsMain() || found == configs_.end()) return;
+    if (!frame->IsMain() || found == configs_.end() || !context->IsSame(frame->GetV8Context())) return;
     CefRefPtr<CefDictionaryValue> config = found->second;
     bool sandbox = config->GetBool("sandbox");
+    router_->OnContextCreated(browser, frame, context);
 
     CefRefPtr<CefV8Value> factory = Evaluate(context, RendererBridgeSource(), "ant://desktop/bridge.js");
     if (!factory) return;
@@ -195,7 +184,7 @@ public:
     bindings->SetValue("capabilities", CefV8Value::CreateString(config->GetString("capabilities")), V8_PROPERTY_ATTRIBUTE_READONLY);
     bindings->SetValue("sandbox", CefV8Value::CreateBool(sandbox), V8_PROPERTY_ATTRIBUTE_READONLY);
     bindings->SetValue("integration", CefV8Value::CreateBool(config->GetBool("integration")), V8_PROPERTY_ATTRIBUTE_READONLY);
-    bindings->SetValue("send", CefV8Value::CreateFunction("send", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
+    bindings->SetValue("query", context->GetGlobal()->GetValue(IpcRouterConfig().js_query_function), V8_PROPERTY_ATTRIBUTE_READONLY);
     if (!sandbox) {
       bindings->SetValue("describe", CefV8Value::CreateFunction("describe", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
       bindings->SetValue("call", CefV8Value::CreateFunction("call", handler), V8_PROPERTY_ATTRIBUTE_READONLY);
@@ -207,7 +196,6 @@ public:
       fprintf(stderr, "Ant renderer bridge failed: %s\n", exception ? exception->GetMessage().ToString().c_str() : "no bridge");
       return;
     }
-    receivers_[browser->GetIdentifier()] = bridge->GetValue("receive");
 
     std::string preload = config->GetString("preloadSource");
     if (preload.empty()) return;
@@ -220,21 +208,12 @@ public:
   }
 
   void OnContextReleased(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefV8Context> context) override {
-    if (frame->IsMain()) receivers_.erase(browser->GetIdentifier());
+    router_->OnContextReleased(browser, frame, context);
   }
 
   bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefProcessId source,
                                 CefRefPtr<CefProcessMessage> message) override {
-    if (source != PID_BROWSER || !frame->IsMain() || message->GetName() != "ant.ipc") return false;
-    auto found = receivers_.find(browser->GetIdentifier());
-    CefRefPtr<CefV8Context> context = frame->GetV8Context();
-    if (found == receivers_.end() || !found->second->IsFunction() || !context || !context->Enter()) return true;
-    CefRefPtr<CefListValue> values = message->GetArgumentList();
-    found->second->ExecuteFunction(
-      nullptr, {CefV8Value::CreateInt(values->GetInt(0)), CefV8Value::CreateDouble(values->GetDouble(1)),
-                CefV8Value::CreateString(values->GetString(2)), CefV8Value::CreateString(values->GetString(3))});
-    context->Exit();
-    return true;
+    return router_->OnProcessMessageReceived(browser, frame, source, message);
   }
 
 private:
@@ -247,10 +226,17 @@ private:
   }
 
   std::map<int, CefRefPtr<CefDictionaryValue>> configs_;
-  std::map<int, CefRefPtr<CefV8Value>> receivers_;
+  CefRefPtr<CefMessageRouterRendererSide> router_;
   IMPLEMENT_REFCOUNTING(RendererApp);
 };
 
+}
+
+CefMessageRouterConfig IpcRouterConfig() {
+  CefMessageRouterConfig config;
+  config.js_query_function = "__antQuery";
+  config.js_cancel_function = "__antQueryCancel";
+  return config;
 }
 
 int RunHelper(int argc, char **argv, void *base) {

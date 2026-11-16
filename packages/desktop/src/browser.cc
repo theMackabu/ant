@@ -34,6 +34,9 @@ bool DevelopmentMode() {
 namespace {
 
 class Window;
+using IpcCallback = CefMessageRouterBrowserSide::Callback;
+
+CefRefPtr<CefMessageRouterBrowserSide> router;
 
 std::map<int64_t, CefRefPtr<Window>> windows;
 std::atomic<int64_t> work_deadline{-1};
@@ -58,6 +61,7 @@ public:
   Window(int64_t id, WindowConfig config) : id_(id), config_(std::move(config)) {}
 
   int64_t Id() const { return id_; }
+  bool Owns(CefRefPtr<CefBrowser> browser) const { return IsMain(browser); }
 
   CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
@@ -156,26 +160,50 @@ public:
     return true;
   }
 
-  bool Send(int operation, double request, const std::string &channel, const std::string &payload) {
-    if (!browser_ || !browser_->GetMainFrame()) return false;
-    CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create("ant.ipc");
-    CefRefPtr<CefListValue> values = message->GetArgumentList();
-    values->SetInt(0, operation);
-    values->SetDouble(1, request);
-    values->SetString(2, channel);
-    values->SetString(3, payload);
-    browser_->GetMainFrame()->SendProcessMessage(PID_RENDERER, message);
+  bool Send(int64_t query, const void *data, size_t size) {
+    if (query == 0) {
+      if (events_) events_->Success(data, size);
+      return browser_ != nullptr;
+    }
+    auto found = queries_.find(query);
+    if (found == queries_.end()) return false;
+    found->second->Success(data, size);
+    queries_.erase(found);
     return true;
+  }
+
+  void Query(int64_t query, CefRefPtr<const CefBinaryBuffer> request, bool persistent, CefRefPtr<IpcCallback> callback) {
+    if (persistent) {
+      events_ = callback;
+      return;
+    }
+    queries_[query] = callback;
+    EmitIpc(id_, query, request->GetData(), request->GetSize());
+  }
+
+  void CancelQuery(int64_t query) {
+    queries_.erase(query);
   }
 
   bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefProcessId source,
                                 CefRefPtr<CefProcessMessage> message) override {
-    if (source != PID_RENDERER || message->GetName() != "ant.ipc" || !frame || !frame->IsMain()) return false;
-    CefRefPtr<CefListValue> values = message->GetArgumentList();
-    if (values->GetSize() == 4) {
-      EmitIpc(id_, values->GetInt(0), values->GetDouble(1), values->GetString(2), values->GetString(3));
-    }
-    return true;
+    return IsMain(browser) && router->OnProcessMessageReceived(browser, frame, source, message);
+  }
+
+  bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, bool gesture,
+                      bool redirect) override {
+    if (!IsMain(browser)) return false;
+    if (frame->IsMain()) events_ = nullptr;
+    router->OnBeforeBrowse(browser, frame);
+    return false;
+  }
+
+  void OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser, TerminationStatus status, int code,
+                                 const CefString &error) override {
+    if (!IsMain(browser)) return;
+    events_ = nullptr;
+    queries_.clear();
+    router->OnRenderProcessTerminated(browser);
   }
 
   void OnBeforeContextMenu(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefContextMenuParams> params,
@@ -224,6 +252,9 @@ public:
       return;
     }
     if (!browser_ || !browser_->IsSame(browser)) return;
+    router->OnBeforeClose(browser);
+    events_ = nullptr;
+    queries_.clear();
     ClearAppRoot(browser->GetIdentifier());
     browser_ = nullptr;
     running_ = false;
@@ -307,6 +338,8 @@ private:
   std::string root_;
   CefRefPtr<CefBrowser> browser_;
   CefRefPtr<CefBrowser> devtools_;
+  CefRefPtr<IpcCallback> events_;
+  std::map<int64_t, CefRefPtr<IpcCallback>> queries_;
   bool running_ = false;
   bool close_requested_ = false;
   bool closing_ = false;
@@ -341,6 +374,30 @@ public:
 private:
   IMPLEMENT_REFCOUNTING(BrowserApp);
 };
+
+class IpcHandler final : public CefMessageRouterBrowserSide::Handler {
+public:
+  bool OnQuery(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int64_t query, CefRefPtr<const CefBinaryBuffer> request,
+               bool persistent, CefRefPtr<Callback> callback) override {
+    CefRefPtr<Window> window = frame->IsMain() ? Owner(browser) : nullptr;
+    if (window) window->Query(query, request, persistent, callback);
+    return window != nullptr;
+  }
+
+  void OnQueryCanceled(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int64_t query) override {
+    if (CefRefPtr<Window> window = Owner(browser)) window->CancelQuery(query);
+  }
+
+private:
+  static CefRefPtr<Window> Owner(CefRefPtr<CefBrowser> browser) {
+    for (const auto &entry : windows) {
+      if (entry.second->Owns(browser)) return entry.second;
+    }
+    return nullptr;
+  }
+};
+
+IpcHandler ipc_handler;
 
 CefRefPtr<Window> Find(int64_t id) {
   auto found = windows.find(id);
@@ -383,7 +440,10 @@ bool InitializeBrowser(int argc, char **argv) {
   CefString(&settings.root_cache_path) = cache;
 
   initialized = CefInitialize(CefMainArgs(argc, argv), settings, new BrowserApp, nullptr);
-  return initialized;
+  if (!initialized) return false;
+  router = CefMessageRouterBrowserSide::Create(IpcRouterConfig());
+  router->AddHandler(&ipc_handler, true);
+  return true;
 }
 
 void ShutdownBrowser() {
@@ -394,6 +454,7 @@ void ShutdownBrowser() {
     usleep(5000);
   }
   windows.clear();
+  router = nullptr;
   CefShutdown();
   cef_unload_library();
   initialized = false;
@@ -431,9 +492,9 @@ bool BrowserCommand(int64_t id, const std::string &command, int x, int y, bool *
   return window && window->Command(command, x, y, result);
 }
 
-bool SendIpc(int64_t id, int operation, double request, const std::string &channel, const std::string &payload) {
+bool SendIpc(int64_t id, int64_t query, const void *data, size_t size) {
   CefRefPtr<Window> window = Find(id);
-  return window && window->Send(operation, request, channel, payload);
+  return window && window->Send(query, data, size);
 }
 
 void CloseWindow(int64_t id) {

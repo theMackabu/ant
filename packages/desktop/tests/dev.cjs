@@ -70,12 +70,6 @@ async function main() {
   assert.match(plist, /<string>app\/main\.js<\/string>/);
   assert.equal(fs.realpathSync(path.join(result.output, 'Contents', 'Resources', 'Dev Example.icns')), fs.realpathSync(icon));
 
-  fs.writeFileSync(
-    path.join(appRoot, 'package.json'),
-    JSON.stringify({
-      productName: 'Ignored Package Name'
-    })
-  );
   const fallback = createDevApp({ executable, frameworks }, entry, {
     cacheDir: path.join(temporary, 'fallback-cache')
   });

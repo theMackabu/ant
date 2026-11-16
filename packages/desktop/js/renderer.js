@@ -1,9 +1,7 @@
 const createRendererBridge = bindings => {
   const grants = new Set(bindings.capabilities.split(';').filter(Boolean));
   const versions = Object.freeze({ ...bindings.versions });
-  const pending = new Map();
   const listeners = new Map();
-  let nextRequest = 1;
 
   const requireGrant = (access, channel) => {
     if (typeof channel !== 'string' || !grants.has(`${access}:${channel}`)) {
@@ -11,19 +9,40 @@ const createRendererBridge = bindings => {
     }
   };
 
+  const post = (access, channel, value) => {
+    const request = encode([access, channel, value]).buffer;
+    return new Promise((resolve, reject) => {
+      bindings.query({
+        request,
+        onSuccess(reply) {
+          const [ok, result] = decode(new Uint8Array(reply));
+          (ok ? resolve : reject)(result);
+        },
+        onFailure: (code, message) => reject(new Error(message))
+      });
+    });
+  };
+
+  bindings.query({
+    request: encode(['receive']).buffer,
+    persistent: true,
+    onSuccess(event) {
+      const [channel, value] = decode(new Uint8Array(event));
+      if (!grants.has(`receive:${channel}`)) return;
+      for (const listener of [...(listeners.get(channel) || [])]) listener(value);
+    },
+    onFailure() {}
+  });
+
   const ipc = Object.freeze({
     send(channel, value) {
       requireGrant('send', channel);
-      bindings.send(0, 0, channel, encode(value));
+      post('send', channel, value).catch(() => {});
     },
 
     invoke(channel, value) {
       requireGrant('invoke', channel);
-      const id = nextRequest++;
-      return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject });
-        bindings.send(1, id, channel, encode(value));
-      });
+      return post('invoke', channel, value);
     },
 
     on(channel, listener) {
@@ -82,19 +101,5 @@ const createRendererBridge = bindings => {
   }
   hidden('Ant', Object.freeze({ expose, ipc, versions }));
 
-  return Object.freeze({
-    require,
-    receive(operation, id, channel, payload) {
-      if (operation === 2) {
-        if (!grants.has(`receive:${channel}`)) return;
-        const value = decode(payload);
-        for (const listener of [...(listeners.get(channel) || [])]) listener(value);
-        return;
-      }
-      const request = pending.get(id);
-      if (!request) return;
-      pending.delete(id);
-      (operation === 0 ? request.resolve : request.reject)(decode(payload));
-    }
-  });
+  return Object.freeze({ require });
 };

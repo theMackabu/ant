@@ -19,7 +19,7 @@ void Pump() {
   pumping = true;
   DoBrowserWork();
   js_reactor_pump_repl_nowait(runtime);
-  int64_t delay = uv_backend_timeout(uv_default_loop());
+  int64_t delay = uv_backend_timeout(runtime->loop);
   int64_t browser_delay = NextBrowserWorkDelay();
   if (browser_delay >= 0 && (delay < 0 || browser_delay < delay)) delay = browser_delay;
   CFRunLoopTimerSetNextFireDate(pump_timer, CFAbsoluteTimeGetCurrent() + (delay < 0 ? 3600.0 : double(delay) / 1000.0));
@@ -34,7 +34,7 @@ void StartPump() {
     CFRunLoopObserverCreateWithHandler(nullptr, kCFRunLoopBeforeWaiting, true, 0, ^(CFRunLoopObserverRef, CFRunLoopActivity) { Pump(); });
   CFRunLoopAddObserver(loop, observer, kCFRunLoopCommonModes);
 
-  int descriptor = uv_backend_fd(uv_default_loop());
+  int descriptor = uv_backend_fd(runtime->loop);
   if (descriptor < 0) return;
   dispatch_source_t source = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, uintptr_t(descriptor), 0, dispatch_get_main_queue());
   dispatch_source_set_event_handler(source, ^{ Pump(); });
@@ -61,18 +61,31 @@ std::string ErrorDetail(ant_t *js, ant_value_t error) {
   return text;
 }
 
+const char kImportSource[] = "(url, fail) => import(url).catch(fail)";
+bool entry_failed;
+
+ant_value_t EntryFailed(ant_params_t) {
+  ant_value_t error = nargs > 0 ? args[0] : Ant_Value_Undefined;
+  ant_value_t stack = is_object_type(error) ? js_get(js, error, "stack") : Ant_Value_Undefined;
+  fprintf(stderr, "desktop entry failed: %s\n", js_str(js, vtype(stack) == kTypeString ? stack : error));
+  entry_failed = true;
+  Quit();
+  return Ant_Value_Undefined;
+}
+
 bool ImportEntry(ant_t *js, const std::string &entry) {
   char *resolved = realpath(entry.c_str(), nullptr);
   if (!resolved) {
     fprintf(stderr, "desktop entry does not exist: %s\n", entry.c_str());
     return false;
   }
-  js_set_filename(js, resolved);
-  js_setup_import_meta(js, resolved);
-  ant_value_t imported = js_esm_import_sync(js, js_esm_make_file_url(js, resolved));
-  if (!is_err(imported) && !Ant_Exception_Pending(js)) return true;
-  if (!is_err(imported)) imported = Ant_Exception_Current(js);
-  fprintf(stderr, "desktop entry import failed (%s): %s\n", resolved, ErrorDetail(js, imported).c_str());
+  ant_value_t args[] = {js_esm_make_file_url(js, resolved), Ant_Function_Create(EntryFailed)};
+  free(resolved);
+
+  ant_value_t import = js_eval_bytecode_eval(js, kImportSource, sizeof(kImportSource) - 1, true);
+  ant_value_t started = is_err(import) ? import : sv_vm_call_explicit_this(js->vm, js, import, Ant_Value_Undefined, args, 2);
+  if (!is_err(started)) return true;
+  fprintf(stderr, "desktop entry import failed (%s): %s\n", entry.c_str(), ErrorDetail(js, started).c_str());
   return false;
 }
 
@@ -116,7 +129,7 @@ int RunApplication(int argc, char **argv, void *stack_base) {
     if (ImportEntry(js, entry)) {
       Pump();
       AntDesktop_App_Run();
-      code = 0;
+      code = entry_failed ? 1 : 0;
     }
   }
 

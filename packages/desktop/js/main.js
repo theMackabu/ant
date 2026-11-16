@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import v8 from 'node:v8';
 
 const native = globalThis.__antDesktopNative;
 delete globalThis.__antDesktopNative;
@@ -116,15 +117,15 @@ export class BrowserWindow {
       send: (channel, value) => {
         if (typeof channel !== 'string') throw new TypeError('webContents.send(channel, value) requires a channel');
         if (!this.#grants.has(`receive:${channel}`)) throw new Error(`IPC receive channel is not granted: ${channel}`);
-        if (!native.send(this.#id, 2, 0, channel, encode(value))) throw new Error(NOT_RUNNING);
+        if (!native.send(this.#id, 0, v8.serialize([channel, value]))) throw new Error(NOT_RUNNING);
       }
     });
     if (preferences.capabilities !== undefined) this.preloadCapabilities = preferences.capabilities;
   }
 
-  static _dispatch(window, kind, a, b, c, d) {
+  static _dispatch(window, kind, a, b, c) {
     if (kind === 'event') return window.#emit(a, b, c);
-    if (kind === 'ipc') return window.#receive(a, b, c, d);
+    if (kind === 'ipc') return window.#receive(a, b);
     if (kind === 'load') {
       const load = window.#load;
       window.#load = null;
@@ -148,26 +149,23 @@ export class BrowserWindow {
     }
   }
 
-  async #receive(operation, requestId, channel, payload) {
+  async #receive(query, payload) {
     const event = Object.freeze({ sender: this.webContents, senderFrame: null });
-    if (operation === 0) {
-      if (!this.#grants.has(`send:${channel}`)) return;
-      const value = decode(payload);
-      for (const listener of listeners.get(channel) || []) listener(event, value);
-      return;
-    }
-    let ok = true;
-    let result;
+    const reply = (ok, value) => this.#id && native.send(this.#id, query, v8.serialize([ok, value]));
     try {
-      if (!this.#grants.has(`invoke:${channel}`)) throw new Error(`IPC invoke channel is not granted: ${channel}`);
+      const [access, channel, value] = v8.deserialize(payload);
+      if (!this.#grants.has(`${access}:${channel}`)) throw new Error(`IPC ${access} channel is not granted: ${channel}`);
+      if (access === 'send') {
+        reply(true);
+        for (const listener of listeners.get(channel) || []) listener(event, value);
+        return;
+      }
       const handler = handlers.get(channel);
       if (!handler) throw new Error(`No ipcMain handler registered for ${channel}`);
-      result = await handler(event, decode(payload));
+      reply(true, await handler(event, value));
     } catch (error) {
-      ok = false;
-      result = error instanceof Error ? error : new Error(String(error));
+      reply(false, error instanceof Error ? error : new Error(String(error)));
     }
-    if (this.#id) native.send(this.#id, ok ? 0 : 1, requestId, '', encode(result));
   }
 
   #call(operation, ...args) {
@@ -252,10 +250,10 @@ export class BrowserWindow {
 const dispatchWindow = BrowserWindow._dispatch;
 delete BrowserWindow._dispatch;
 
-native.dispatch = (kind, id, a, b, c, d) => {
+native.dispatch = (kind, id, a, b, c) => {
   if (kind === 'menu') return menuClicks.get(id)?.();
   const window = windows.get(id);
-  if (window) return dispatchWindow(window, kind, a, b, c, d);
+  if (window) return dispatchWindow(window, kind, a, b, c);
 };
 
 function channelName(channel) {

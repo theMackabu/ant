@@ -4,8 +4,8 @@ namespace desktop {
 
 namespace {
 
-const char kCloneSource[] = {
-#embed "../js/clone.js"
+const char kWireSource[] = {
+#embed "../js/wire.js"
 };
 
 const char kModuleSource[] = {
@@ -103,11 +103,12 @@ ant_value_t Native_Call(ant_params_t) {
 }
 
 ant_value_t Native_Send(ant_params_t) {
-  if (nargs < 5 || vtype(args[1]) != kTypeNumber || vtype(args[2]) != kTypeNumber) return js_mkerr(js, "invalid IPC message");
-  bool sent = SendIpc(
-    WindowArgument(args, nargs), static_cast<int>(Ant_Value_AsNumberUnchecked(args[1])), Ant_Value_AsNumberUnchecked(args[2]),
-    Text(js, args[3]), Text(js, args[4]));
-  return Ant_Value_FromBool(sent);
+  const uint8_t *bytes;
+  size_t size;
+  if (nargs < 3 || vtype(args[1]) != kTypeNumber || !buffer_source_get_bytes(js, args[2], &bytes, &size))
+    return js_mkerr(js, "invalid IPC message");
+  int64_t query = static_cast<int64_t>(Ant_Value_AsNumberUnchecked(args[1]));
+  return Ant_Value_FromBool(SendIpc(WindowArgument(args, nargs), query, bytes, size));
 }
 
 ant_value_t Native_SetMenu(ant_params_t) {
@@ -131,7 +132,7 @@ ant_value_t Native_Quit(ant_params_t) {
 
 std::string RendererBridgeSource() {
   std::string source = "(bindings => {\n";
-  source.append(kCloneSource, sizeof(kCloneSource));
+  source.append(kWireSource, sizeof(kWireSource));
   source.append("\n");
   source.append(kRendererSource, sizeof(kRendererSource));
   source.append("\nreturn createRendererBridge(bindings);\n})");
@@ -167,8 +168,7 @@ bool InstallModule(ant_t *js) {
   ant_value_t bootstrap = js_eval_bytecode_eval(js, kBootstrapSource, sizeof(kBootstrapSource), true);
   if (is_err(module) || !is_callable(bootstrap)) return false;
 
-  std::string source(kCloneSource, sizeof(kCloneSource));
-  source.append("\n").append(kModuleSource, sizeof(kModuleSource));
+  std::string source(kModuleSource, sizeof(kModuleSource));
   ant_value_t args[] = {bindings, js_get(js, module, "registerHooks"), Value(js, source)};
   if (is_err(sv_vm_call_explicit_this(js->vm, js, bootstrap, Ant_Value_Undefined, args, 3))) return false;
 
@@ -187,12 +187,16 @@ void EmitWindowEvent(int64_t window, const char *type, const std::string &detail
   Dispatch(args);
 }
 
-void EmitIpc(int64_t window, int operation, double request, const std::string &channel, const std::string &payload) {
-  if (!runtime) return;
+void EmitIpc(int64_t window, int64_t query, const void *data, size_t size) {
+  ant_t *js = runtime;
+  ArrayBufferData *buffer = js ? create_array_buffer_data(js, size) : nullptr;
+  if (!buffer) return;
+  if (size) memcpy(buffer->data, data, size);
   ant_value_t args[] = {
-    Ant_String_FromLiteral(runtime, "ipc"), Ant_Value_FromNumber(static_cast<double>(window)),
-    Ant_Value_FromNumber(operation),        Ant_Value_FromNumber(request),
-    Value(runtime, channel),                Value(runtime, payload),
+    Ant_String_FromLiteral(js, "ipc"),
+    Ant_Value_FromNumber(static_cast<double>(window)),
+    Ant_Value_FromNumber(static_cast<double>(query)),
+    create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, size, js->builtins.buffer_proto),
   };
   Dispatch(args);
 }
