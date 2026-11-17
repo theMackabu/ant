@@ -4,5 +4,11 @@
     "linux": "linux",
     "win32": "windows"
   },
-  "supported": ["darwin-arm64"]
+  "supported": [
+    "darwin-arm64",
+    "linux-x64",
+    "linux-arm64",
+    "windows-x64",
+    "windows-arm64"
+  ]
 }

@@ -4,6 +4,7 @@
 #include <ant/bootstrap.h>
 #include <ant/cfunc.h>
 #include <ant/errors.h>
+#include <ant/esm/library.h>
 #include <ant/esm/loader.h>
 #include <ant/gc/roots.h>
 #include <ant/internal.h>

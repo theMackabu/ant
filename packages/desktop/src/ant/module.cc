@@ -14,10 +14,6 @@ static const char kRendererSource[] = {
 #embed "../builtins/page/bridge.js"
 };
 
-static const char kBootstrapSource[] = {
-#embed "../builtins/bootstrap.js"
-};
-
 static ant_t *runtime;
 static ant_value_t native;
 
@@ -58,7 +54,7 @@ static ant_value_t Native_CreateWindow(ant_params_t) {
   config.integration = Flag(js, args[1], "integration");
   config.context_isolation = Flag(js, args[1], "contextIsolation");
   config.transparent = Flag(js, args[1], "transparent");
-  int64_t window = CreateWindow(Text(js, args[0]).c_str(), std::move(config));
+  int64_t window = OpenWindow(Text(js, args[0]).c_str(), std::move(config));
   if (!window) return js_mkerr(js, "failed to create BrowserWindow");
   return Ant_Value_FromNumber(static_cast<double>(window));
 }
@@ -135,19 +131,11 @@ std::string RendererBridgeSource() {
   return source;
 }
 
-bool InstallModule(ant_t *js) {
-  versions.ant = Text(js, js_get(js, js_get(js, js_glob(js), "Ant"), "version"));
-
+static ant_value_t CreateBindings(ant_t *js) {
   ant_value_t names = Ant_Object_Create(js);
   js_set(js, names, "ant", Value(js, versions.ant));
   js_set(js, names, "desktop", Value(js, versions.desktop));
   js_set(js, names, "chrome", Value(js, versions.chrome));
-
-  ant_value_t process_versions = js_get(js, js_get(js, js_glob(js), "process"), "versions");
-  if (is_object_type(process_versions)) {
-    js_set(js, process_versions, "ant-desktop", Value(js, versions.desktop));
-    js_set(js, process_versions, "chrome", Value(js, versions.chrome));
-  }
 
   ant_value_t bindings = Ant_Object_Create(js);
   js_set(js, bindings, "versions", names);
@@ -160,17 +148,22 @@ bool InstallModule(ant_t *js) {
   js_set(js, bindings, "path", Ant_Function_Create(Native_Path));
   js_set(js, bindings, "quit", Ant_Function_Create(Native_Quit));
 
-  ant_value_t module = js_esm_import_sync_cstr(js, "node:module", 11);
-  ant_value_t bootstrap = js_eval_bytecode_eval(js, kBootstrapSource, sizeof(kBootstrapSource), true);
-  if (is_err(module) || !is_callable(bootstrap)) return false;
-
-  std::string source(kModuleSource, sizeof(kModuleSource));
-  ant_value_t args[] = {bindings, js_get(js, module, "registerHooks"), Value(js, source)};
-  if (is_err(sv_vm_call_explicit_this(js->vm, js, bootstrap, Ant_Value_Undefined, args, 3))) return false;
-
   runtime = js;
   native = bindings;
-  return true;
+  return bindings;
+}
+
+bool InstallModule(ant_t *js) {
+  versions.ant = Text(js, js_get(js, js_get(js, js_glob(js), "Ant"), "version"));
+
+  ant_value_t process_versions = js_get(js, js_get(js, js_glob(js), "process"), "versions");
+  if (is_object_type(process_versions)) {
+    js_set(js, process_versions, "ant-desktop", Value(js, versions.desktop));
+    js_set(js, process_versions, "chrome", Value(js, versions.chrome));
+  }
+
+  return Ant_Module_Register(js, "ant:internal/desktop", CreateBindings) &&
+         Ant_Module_RegisterSource(js, "ant:desktop", kModuleSource, sizeof(kModuleSource));
 }
 
 void EmitWindowEvent(int64_t window, const char *type, const std::string &detail, int64_t code) {

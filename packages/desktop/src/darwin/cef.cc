@@ -2,7 +2,15 @@
 
 #include <unistd.h>
 
+#include "include/cef_browser.h"
+#include "include/cef_request_context.h"
 #include "include/wrapper/cef_library_loader.h"
+
+extern "C" {
+char *AntDesktop_CEF_Resolve(const char *version, const char *archive, const char *sha1, int64_t size);
+void *AntDesktop_Window_ContentView(int64_t window);
+void AntDesktop_Window_Attach(int64_t window, void *browser_view);
+}
 
 namespace desktop::platform {
 
@@ -12,6 +20,24 @@ static constexpr char kHelper[] = "/Contents/Frameworks/Ant Desktop Helper.app/C
 
 static bool LoadFramework(const std::string &framework) {
   return cef_load_library((framework + "/Chromium Embedded Framework").c_str());
+}
+
+CefMainArgs MainArgs(int argc, char **argv) {
+  return CefMainArgs(argc, argv);
+}
+
+bool CreateBrowser(int64_t window, CefRefPtr<CefClient> client, const std::string &url, const CefBrowserSettings &settings,
+                   CefRefPtr<CefDictionaryValue> extra) {
+  void *parent = AntDesktop_Window_ContentView(window);
+  double bounds[4];
+  if (!parent || !AntDesktop_Window_Bounds(window, bounds)) return false;
+  CefWindowInfo info;
+  info.SetAsChild(parent, CefRect(0, 0, int(bounds[2]), int(bounds[3])));
+  return CefBrowserHost::CreateBrowser(info, client, url, settings, extra, CefRequestContext::GetGlobalContext());
+}
+
+void AttachBrowser(int64_t window, CefRefPtr<CefBrowser> browser) {
+  AntDesktop_Window_Attach(window, browser->GetHost()->GetWindowHandle());
 }
 
 bool ConfigureBrowser(CefSettings &settings) {

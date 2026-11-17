@@ -28,7 +28,7 @@ Dev options:
 Package options:
   --out <path>              Output artifact path
   --version <version>       Application version
-  --icon <path>             Platform icon file (.icns on macOS)
+  --icon <path>             Application icon (.icns on macOS, .png on Linux and Windows)
   --overwrite               Replace an existing output artifact
   --bundle-runtime          Copy the browser runtime into the app instead of sharing it
 `);

@@ -44,6 +44,7 @@ static int64_t next_window = 1;
 static int browser_count;
 static bool terminating;
 static bool initialized;
+static bool external_pump;
 
 static int64_t Now() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -75,9 +76,8 @@ public:
 
   bool Load(const std::string &url, const std::string &root, const char **error) {
     if (running_) return Fail(error, "this BrowserWindow already has Chromium content");
-    void *parent = AntDesktop_Window_ContentView(id_);
     double bounds[4];
-    if (!parent || !AntDesktop_Window_Bounds(id_, bounds)) return Fail(error, "BrowserWindow is closed");
+    if (!AntDesktop_Window_Bounds(id_, bounds)) return Fail(error, "BrowserWindow is closed");
 
     CefRefPtr<CefDictionaryValue> names = CefDictionaryValue::Create();
     names->SetString("ant", versions.ant);
@@ -101,12 +101,10 @@ public:
 
     root_ = root;
     if (!root_.empty()) SetAppRoot(0, root_, config_.integration);
-    CefWindowInfo info;
-    info.SetAsChild(parent, CefRect(0, 0, static_cast<int>(bounds[2]), static_cast<int>(bounds[3])));
     CefBrowserSettings settings;
     settings.background_color = config_.transparent ? CefColorSetARGB(0, 0, 0, 0) : CefColorSetARGB(255, 8, 10, 18);
     running_ = true;
-    if (!CefBrowserHost::CreateBrowser(info, this, url, settings, extra, CefRequestContext::GetGlobalContext())) {
+    if (!platform::CreateBrowser(id_, this, url, settings, extra)) {
       running_ = false;
       return Fail(error, "failed to create embedded Chromium view");
     }
@@ -222,7 +220,7 @@ public:
     }
     browser_ = browser;
     if (!root_.empty()) SetAppRoot(browser->GetIdentifier(), root_, config_.integration);
-    AntDesktop_Window_Attach(id_, browser->GetHost()->GetWindowHandle());
+    platform::AttachBrowser(id_, browser);
     AntDesktop_Window_Perform(id_, "ready", "", false);
     EmitLoad(id_);
     if (close_requested_) Close();
@@ -419,13 +417,14 @@ bool InitializeBrowser(int argc, char **argv) {
   settings.external_message_pump = true;
   settings.no_sandbox = true;
   if (!platform::ConfigureBrowser(settings)) return false;
+  external_pump = settings.external_message_pump;
 
   std::string cache = Owned(AntDesktop_App_Path("userData")) + "/Chromium";
   std::error_code error;
   std::filesystem::create_directories(cache, error);
   CefString(&settings.root_cache_path) = cache;
 
-  initialized = CefInitialize(CefMainArgs(argc, argv), settings, new BrowserApp, nullptr);
+  initialized = CefInitialize(platform::MainArgs(argc, argv), settings, new BrowserApp, nullptr);
   if (!initialized) return false;
   router = CefMessageRouterBrowserSide::Create(IpcRouterConfig());
   router->AddHandler(&ipc_handler, true);
@@ -447,7 +446,7 @@ void ShutdownBrowser() {
 }
 
 void DoBrowserWork() {
-  if (!initialized) return;
+  if (!initialized || !external_pump) return;
   work_deadline.store(-1);
   CefDoMessageLoopWork();
 }
@@ -459,7 +458,7 @@ int64_t NextBrowserWorkDelay() {
   return delay;
 }
 
-int64_t CreateWindow(const char *options, WindowConfig config) {
+int64_t OpenWindow(const char *options, WindowConfig config) {
   int64_t id = next_window++;
   if (!AntDesktop_Window_Create(id, options)) return 0;
   windows[id] = new Window(id, std::move(config));

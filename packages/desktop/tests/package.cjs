@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { packageApp } = require('../packaging/npm/darwin-arm64/package.cjs');
+const { packageApp } = require('../platform/darwin.cjs');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ant-desktop-package-'));
 try {

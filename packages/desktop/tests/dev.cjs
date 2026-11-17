@@ -7,7 +7,10 @@ const os = require('node:os');
 const path = require('node:path');
 const { once } = require('node:events');
 
-const { createDevApp, dev } = require('../packaging/npm/darwin-arm64/dev.cjs');
+const common = require('../platform/common.cjs');
+const driver = require('../platform/darwin.cjs');
+const { createDevApp } = driver;
+const dev = (layout, entry, options) => common.dev(driver, layout, entry, options);
 
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'ant-desktop-dev-'));
 const shellQuote = value => `'${String(value).replaceAll("'", "'\\''")}'`;

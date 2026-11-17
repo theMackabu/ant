@@ -2,7 +2,7 @@
 
 Desktop apps with an Ant main process and a Chromium window.
 
-macOS 15+ on Apple silicon only, for now.
+macOS 15+ on Apple silicon is the tested platform. Linux and Windows (x64 and arm64) build from the same sources but have not been run yet.
 
 ## Install
 

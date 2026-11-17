@@ -127,7 +127,7 @@ CefMessageRouterConfig IpcRouterConfig() {
 int RunHelper(int argc, char **argv, void *stack_base) {
   SetIntegrationStackBase(stack_base);
   if (!platform::LoadHelperBrowser(argc, argv)) return 1;
-  int code = CefExecuteProcess(CefMainArgs(argc, argv), new RendererApp, nullptr);
+  int code = CefExecuteProcess(platform::MainArgs(argc, argv), new RendererApp, nullptr);
   ShutdownIntegration();
   platform::ReleaseBrowser();
   return code;

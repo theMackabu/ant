@@ -1,9 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import v8 from 'node:v8';
-
-const native = globalThis.__antDesktopNative;
-delete globalThis.__antDesktopNative;
+import native from 'ant:internal/desktop';
 
 const NOT_RUNNING = 'Chromium is not running for this BrowserWindow';
 const ACCESS = ['send', 'invoke', 'receive'];

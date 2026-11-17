@@ -30,12 +30,8 @@ void AntDesktop_App_Stop(void);
 void AntDesktop_App_Terminate(void);
 char *AntDesktop_App_Path(const char *name);
 char *AntDesktop_App_Info(const char *key);
-char *AntDesktop_CEF_Resolve(const char *version, const char *archive, const char *sha1, int64_t size);
 
 bool AntDesktop_Window_Create(int64_t window, const char *options_json);
-void *AntDesktop_Window_ContentView(int64_t window);
-void AntDesktop_Window_Attach(int64_t window, void *browser_view);
-void AntDesktop_Window_Detach(int64_t window);
 void AntDesktop_Window_SetRegions(int64_t window, const AntDesktopRegion *regions, size_t count);
 bool AntDesktop_Window_Perform(int64_t window, const char *operation, const char *text, bool flag);
 bool AntDesktop_Window_Bounds(int64_t window, double *bounds);

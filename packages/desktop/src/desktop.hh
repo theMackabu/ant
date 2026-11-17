@@ -8,6 +8,12 @@
 #include "include/cef_app.h" // IWYU pragma: export
 #include "include/wrapper/cef_message_router.h"
 
+#ifdef _WIN32
+#define ANT_DESKTOP_EXPORT __declspec(dllexport)
+#else
+#define ANT_DESKTOP_EXPORT __attribute__((visibility("default")))
+#endif
+
 namespace desktop {
 
 struct WindowConfig {
@@ -33,7 +39,7 @@ bool DevelopmentMode();
 ant_t *StartRuntime(int argc, char **argv, void *stack_base);
 void StopRuntime(ant_t *js);
 int64_t PumpRuntime(ant_t *js);
-int RuntimeDescriptor(ant_t *js);
+intptr_t RuntimeBackend(ant_t *js);
 bool ImportEntry(ant_t *js, const std::string &entry);
 bool EntryFailed();
 
@@ -49,7 +55,7 @@ void ShutdownBrowser();
 void DoBrowserWork();
 int64_t NextBrowserWorkDelay();
 
-int64_t CreateWindow(const char *options, WindowConfig config);
+int64_t OpenWindow(const char *options, WindowConfig config);
 bool LoadWindow(int64_t window, const std::string &url, const std::string &root, const char **error);
 bool BrowserCommand(int64_t window, const std::string &command, int x, int y, bool *result);
 bool SendIpc(int64_t window, int64_t query, const void *data, size_t size);
@@ -74,14 +80,19 @@ std::string DescribeModule(const std::string &specifier);
 std::string CallModule(const std::string &specifier, const std::string &name, const std::string &arguments);
 
 namespace platform {
-  void StartLoop(void (*pump)(), int descriptor);
+  void StartLoop(void (*pump)(), intptr_t backend);
   void ScheduleLoop(int64_t delay);
   void WakeLoop();
   void OnReloadSignal(void (*reload)());
-  
+
+  CefMainArgs MainArgs(int argc, char **argv);
   bool ConfigureBrowser(CefSettings &settings);
   bool LoadHelperBrowser(int argc, char **argv);
   void ReleaseBrowser();
+
+  bool CreateBrowser(int64_t window, CefRefPtr<CefClient> client, const std::string &url, const CefBrowserSettings &settings,
+                     CefRefPtr<CefDictionaryValue> extra);
+  void AttachBrowser(int64_t window, CefRefPtr<CefBrowser> browser);
 }
 
 }

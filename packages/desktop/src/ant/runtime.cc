@@ -1,5 +1,5 @@
 #include "desktop.hh"
-#include <vector>
+#include <filesystem>
 
 namespace desktop {
 
@@ -28,13 +28,13 @@ static ant_value_t ReportEntryFailure(ant_params_t) {
 }
 
 bool ImportEntry(ant_t *js, const std::string &entry) {
-  char *resolved = realpath(entry.c_str(), nullptr);
-  if (!resolved) {
+  std::error_code missing;
+  std::string resolved = std::filesystem::canonical(entry, missing).string();
+  if (missing) {
     fprintf(stderr, "desktop entry does not exist: %s\n", entry.c_str());
     return false;
   }
-  ant_value_t args[] = {js_esm_make_file_url(js, resolved), Ant_Function_Create(ReportEntryFailure)};
-  free(resolved);
+  ant_value_t args[] = {js_esm_make_file_url(js, resolved.c_str()), Ant_Function_Create(ReportEntryFailure)};
 
   ant_value_t import = js_eval_bytecode_eval(js, kImportSource, sizeof(kImportSource) - 1, true);
   ant_value_t started = is_err(import) ? import : sv_vm_call_explicit_this(js->vm, js, import, Ant_Value_Undefined, args, 2);
@@ -63,8 +63,12 @@ int64_t PumpRuntime(ant_t *js) {
   return uv_backend_timeout(js->loop);
 }
 
-int RuntimeDescriptor(ant_t *js) {
+intptr_t RuntimeBackend(ant_t *js) {
+#ifdef _WIN32
+  return intptr_t(js->loop->iocp);
+#else
   return uv_backend_fd(js->loop);
+#endif
 }
 
 bool EntryFailed() {

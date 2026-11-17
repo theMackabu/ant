@@ -49,7 +49,7 @@ static int RunApplication(int argc, char **argv, void *stack_base) {
   int code = 1;
   if (!InstallModule(runtime)) fprintf(stderr, "failed to install the ant:desktop module\n");
   else {
-    platform::StartLoop(Pump, RuntimeDescriptor(runtime));
+    platform::StartLoop(Pump, RuntimeBackend(runtime));
     if (DevelopmentMode()) platform::OnReloadSignal(ReloadAllWindows);
     
     AntDesktop_App_FinishLaunching();
@@ -68,7 +68,7 @@ static int RunApplication(int argc, char **argv, void *stack_base) {
 
 }
 
-extern "C" __attribute__((visibility("default"))) int AntDesktop_Main(int argc, char **argv, void *stack_base) {
+extern "C" ANT_DESKTOP_EXPORT int AntDesktop_Main(int argc, char **argv, void *stack_base) {
   for (int index = 1; index < argc; index++)
     if (strncmp(argv[index], "--type=", 7) == 0) return desktop::RunHelper(argc, argv, stack_base);
   return desktop::RunApplication(argc, argv, stack_base);

@@ -8,7 +8,7 @@ namespace desktop::platform {
 
 static CFRunLoopTimerRef timer;
 
-void StartLoop(void (*pump)(), int descriptor) {
+void StartLoop(void (*pump)(), intptr_t descriptor) {
   CFRunLoopRef loop = CFRunLoopGetMain();
   timer = CFRunLoopTimerCreateWithHandler(nullptr, CFAbsoluteTimeGetCurrent() + 3600.0, 0, 0, 0, ^(CFRunLoopTimerRef) { pump(); });
   CFRunLoopAddTimer(loop, timer, kCFRunLoopCommonModes);
