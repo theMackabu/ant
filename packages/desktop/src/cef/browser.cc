@@ -1,7 +1,4 @@
-#include "desktop.h"
-
-#include <CoreFoundation/CoreFoundation.h>
-#include <unistd.h>
+#include "desktop.hh"
 
 #include <atomic>
 #include <chrono>
@@ -9,11 +6,11 @@
 #include <fstream>
 #include <map>
 #include <sstream>
+#include <thread>
 
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
 #include "include/cef_command_line.h"
-#include "include/wrapper/cef_library_loader.h"
 #include "include/cef_request_context.h"
 #include "include/wrapper/cef_helpers.h"
 
@@ -34,20 +31,25 @@ bool DevelopmentMode() {
 namespace {
 
 class Window;
+
+}
+
 using IpcCallback = CefMessageRouterBrowserSide::Callback;
 
-CefRefPtr<CefMessageRouterBrowserSide> router;
+static CefRefPtr<CefMessageRouterBrowserSide> router;
 
-std::map<int64_t, CefRefPtr<Window>> windows;
-std::atomic<int64_t> work_deadline{-1};
-int64_t next_window = 1;
-int browser_count;
-bool terminating;
-bool initialized;
+static std::map<int64_t, CefRefPtr<Window>> windows;
+static std::atomic<int64_t> work_deadline{-1};
+static int64_t next_window = 1;
+static int browser_count;
+static bool terminating;
+static bool initialized;
 
-int64_t Now() {
+static int64_t Now() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
+
+namespace {
 
 class Window final : public CefClient,
                      public CefContextMenuHandler,
@@ -368,7 +370,7 @@ public:
     int64_t deadline = Now() + std::max<int64_t>(0, delay);
     int64_t previous = work_deadline.load();
     while ((previous < 0 || deadline < previous) && !work_deadline.compare_exchange_weak(previous, deadline)) {}
-    CFRunLoopWakeUp(CFRunLoopGetMain());
+    platform::WakeLoop();
   }
 
 private:
@@ -397,46 +399,30 @@ private:
   }
 };
 
-IpcHandler ipc_handler;
+}
 
-CefRefPtr<Window> Find(int64_t id) {
+static IpcHandler ipc_handler;
+
+static CefRefPtr<Window> Find(int64_t id) {
   auto found = windows.find(id);
   return found == windows.end() ? nullptr : found->second;
 }
 
-std::vector<CefRefPtr<Window>> AllWindows() {
+static std::vector<CefRefPtr<Window>> AllWindows() {
   std::vector<CefRefPtr<Window>> values;
   for (const auto &entry : windows) values.push_back(entry.second);
   return values;
 }
 
-}
-
 bool InitializeBrowser(int argc, char **argv) {
-  std::string framework =
-    Owned(AntDesktop_CEF_Resolve(ANT_DESKTOP_CEF_VERSION, ANT_DESKTOP_CEF_ARCHIVE, ANT_DESKTOP_CEF_SHA1, ANT_DESKTOP_CEF_SIZE));
-  if (framework.empty()) return false;
-  if (!cef_load_library((framework + "/Chromium Embedded Framework").c_str())) return false;
-  setenv("ANT_DESKTOP_CEF_FRAMEWORK", framework.c_str(), 1);
-
-  std::string bundle = Owned(AntDesktop_App_Path("bundle"));
-  std::string helper = bundle + "/Contents/Frameworks/Ant Desktop Helper.app/Contents/MacOS/Ant Desktop Helper";
-  std::string cache = Owned(AntDesktop_App_Path("userData")) + "/Chromium";
-  std::error_code error;
-  std::filesystem::create_directories(cache, error);
-  if (access(helper.c_str(), X_OK) != 0) {
-    fprintf(stderr, "missing helper application: %s\n", helper.c_str());
-    return false;
-  }
-
   CefSettings settings;
   settings.external_message_pump = true;
   settings.no_sandbox = true;
-  CefString(&settings.browser_subprocess_path) = helper;
-  CefString(&settings.framework_dir_path) = framework;
-  CefString(&settings.main_bundle_path) = bundle;
-  CefString(&settings.resources_dir_path) = framework + "/Resources";
-  CefString(&settings.locales_dir_path) = framework + "/Resources/locales";
+  if (!platform::ConfigureBrowser(settings)) return false;
+
+  std::string cache = Owned(AntDesktop_App_Path("userData")) + "/Chromium";
+  std::error_code error;
+  std::filesystem::create_directories(cache, error);
   CefString(&settings.root_cache_path) = cache;
 
   initialized = CefInitialize(CefMainArgs(argc, argv), settings, new BrowserApp, nullptr);
@@ -451,12 +437,12 @@ void ShutdownBrowser() {
   CloseAllWindows();
   for (int attempt = 0; browser_count > 0 && attempt < 400; attempt++) {
     CefDoMessageLoopWork();
-    usleep(5000);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   windows.clear();
   router = nullptr;
   CefShutdown();
-  cef_unload_library();
+  platform::ReleaseBrowser();
   initialized = false;
 }
 

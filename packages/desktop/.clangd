@@ -1,0 +1,10 @@
+CompileFlags:
+  CompilationDatabase: build
+---
+If:
+  PathMatch: src/darwin/bridging\.hh
+CompileFlags:
+  Remove: [-std=*]
+  Add: [-xobjective-c]
+Diagnostics:
+  UnusedIncludes: None

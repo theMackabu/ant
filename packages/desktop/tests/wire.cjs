@@ -6,7 +6,7 @@ const path = require('node:path');
 const v8 = require('node:v8');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'js', 'wire.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'builtins', 'page', 'wire.js'), 'utf8');
 const { encode, decode } = vm.runInThisContext(`(() => {\n${source}\nreturn { encode, decode };\n})()`);
 
 const shared = { a: 1 };

@@ -23,8 +23,8 @@ pkg_check_modules(LIBANT REQUIRED libant)
 
 set(SWIFT_TARGET "${CMAKE_SYSTEM_PROCESSOR}-apple-macos${DESKTOP_MACOS_TARGET}")
 set(SWIFT_OBJECT "${CMAKE_CURRENT_BINARY_DIR}/desktop_swift.o")
-file(GLOB SWIFT_SOURCES CONFIGURE_DEPENDS src/*.swift)
-file(GLOB JS_SOURCES CONFIGURE_DEPENDS js/*.js)
+file(GLOB SWIFT_SOURCES CONFIGURE_DEPENDS src/darwin/*.swift)
+file(GLOB_RECURSE BUILTIN_SOURCES CONFIGURE_DEPENDS src/builtins/*.js)
 execute_process(COMMAND xcrun --find swiftc OUTPUT_VARIABLE SWIFTC OUTPUT_STRIP_TRAILING_WHITESPACE)
 execute_process(COMMAND xcrun --sdk macosx --show-sdk-path OUTPUT_VARIABLE MACOS_SDK OUTPUT_STRIP_TRAILING_WHITESPACE)
 cmake_path(GET SWIFTC PARENT_PATH SWIFT_TOOLCHAIN_BIN)
@@ -32,21 +32,25 @@ cmake_path(GET SWIFTC PARENT_PATH SWIFT_TOOLCHAIN_BIN)
 add_custom_command(
   OUTPUT "${SWIFT_OBJECT}"
   COMMAND "${SWIFTC}" -O -wmo -parse-as-library -swift-version 5 -target "${SWIFT_TARGET}" -sdk "${MACOS_SDK}"
-    -module-name AntDesktopUI -import-objc-header "${CMAKE_CURRENT_SOURCE_DIR}/src/bridge.h"
+    -module-name AntDesktopUI -import-objc-header "${CMAKE_CURRENT_SOURCE_DIR}/src/darwin/bridging.hh"
     -emit-object -o "${SWIFT_OBJECT}" ${SWIFT_SOURCES}
-  DEPENDS ${SWIFT_SOURCES} src/bridge.h
+  DEPENDS ${SWIFT_SOURCES} src/darwin/bridging.hh src/platform.hh
   VERBATIM
 )
 
 add_library(antdesktop SHARED
-  src/browser.cc
   src/main.cc
-  src/module.cc
-  src/renderer.cc
-  src/scheme.cc
+  src/ant/integration.cc
+  src/ant/module.cc
+  src/ant/runtime.cc
+  src/cef/browser.cc
+  src/cef/renderer.cc
+  src/cef/scheme.cc
+  src/darwin/cef.cc
+  src/darwin/loop.cc
   "${SWIFT_OBJECT}"
 )
-set_source_files_properties(src/module.cc PROPERTIES OBJECT_DEPENDS "${JS_SOURCES}")
+set_source_files_properties(src/ant/module.cc PROPERTIES OBJECT_DEPENDS "${BUILTIN_SOURCES}")
 target_compile_features(antdesktop PRIVATE cxx_std_23)
 target_compile_options(antdesktop PRIVATE
   -fno-rtti -fvisibility=hidden -Wall -Wno-unused-parameter -Wno-c23-extensions ${LIBANT_CFLAGS})
@@ -58,7 +62,7 @@ target_compile_definitions(antdesktop PRIVATE
   ANT_DESKTOP_CEF_SHA1="${CEF_SHA1}"
   ANT_DESKTOP_CEF_SIZE=${CEF_SIZE}
 )
-target_include_directories(antdesktop PRIVATE "${CEF_ROOT}")
+target_include_directories(antdesktop PRIVATE "${CEF_ROOT}" src)
 target_link_directories(antdesktop PRIVATE "${SWIFT_TOOLCHAIN_BIN}/../lib/swift/macosx" "${MACOS_SDK}/usr/lib/swift")
 target_link_libraries(antdesktop PRIVATE
   libcef_dll_wrapper

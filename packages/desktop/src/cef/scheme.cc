@@ -1,4 +1,4 @@
-#include "desktop.h"
+#include "desktop.hh"
 
 #include <filesystem>
 #include <fstream>
@@ -12,39 +12,41 @@
 
 namespace desktop {
 
-namespace {
-
 namespace fs = std::filesystem;
+
+namespace {
 
 struct AppRoot {
   fs::path path;
   bool integration = false;
 };
 
-std::mutex roots_mutex;
-std::map<int, AppRoot> roots;
+}
 
-AppRoot FindRoot(CefRefPtr<CefBrowser> browser) {
+static std::mutex roots_mutex;
+static std::map<int, AppRoot> roots;
+
+static AppRoot FindRoot(CefRefPtr<CefBrowser> browser) {
   std::lock_guard<std::mutex> lock(roots_mutex);
   auto found = browser ? roots.find(browser->GetIdentifier()) : roots.end();
   if (found == roots.end()) found = roots.find(0);
   return found == roots.end() ? AppRoot() : found->second;
 }
 
-std::string Trim(const std::string &value) {
+static std::string Trim(const std::string &value) {
   size_t start = value.find_first_not_of(" \t\r\n");
   size_t end = value.find_last_not_of(" \t\r\n");
   return start == std::string::npos ? "" : value.substr(start, end - start + 1);
 }
 
-std::string NamedBindings(std::string value) {
+static std::string NamedBindings(std::string value) {
   for (size_t alias = value.find(" as "); alias != std::string::npos; alias = value.find(" as ", alias + 2)) {
     value.replace(alias, 4, ": ");
   }
   return value;
 }
 
-std::string Bind(const std::string &names, const std::string &module) {
+static std::string Bind(const std::string &names, const std::string &module) {
   if (names.empty()) return module + ";";
   if (names.front() == '{') return "const " + NamedBindings(names) + " = " + module + ";";
   if (names.starts_with("* as ")) return "const " + Trim(names.substr(5)) + " = " + module + ";";
@@ -55,6 +57,8 @@ std::string Bind(const std::string &names, const std::string &module) {
   secondary = secondary.starts_with("* as ") ? Trim(secondary.substr(5)) : NamedBindings(secondary);
   return "const " + primary + " = " + module + ", " + secondary + " = " + primary + ";";
 }
+
+namespace {
 
 class StringReader final : public CefReadHandler {
 public:

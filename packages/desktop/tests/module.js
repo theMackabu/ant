@@ -13,8 +13,8 @@ const native = {
   setMenu(json) { calls.push(['menu', json && JSON.parse(json)]); },
   quit() { calls.push(['quit']); }
 };
-const source = fs.readFileSync(root + '/js/main.js', 'utf8');
-(0, eval)(fs.readFileSync(root + '/js/bootstrap.js', 'utf8'))(native, registerHooks, source);
+const source = fs.readFileSync(root + '/src/builtins/desktop.js', 'utf8');
+(0, eval)(fs.readFileSync(root + '/src/builtins/bootstrap.js', 'utf8'))(native, registerHooks, source);
 const { app, BrowserWindow, ipcMain, Menu, MenuItem, versions } = await import('ant:desktop');
 const assert = (c, m) => { if (!c) throw new Error(m); };
 const throws = (f, text) => { try { f(); } catch (e) { assert(String(e.message).includes(text), 'wrong error: ' + e.message); return; } throw new Error('did not throw: ' + text); };

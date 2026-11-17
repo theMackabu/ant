@@ -1,48 +1,46 @@
-#include "desktop.h"
+#include "desktop.hh"
 
 namespace desktop {
 
-namespace {
-
-const char kWireSource[] = {
-#embed "../js/wire.js"
+static const char kWireSource[] = {
+#embed "../builtins/page/wire.js"
 };
 
-const char kModuleSource[] = {
-#embed "../js/main.js"
+static const char kModuleSource[] = {
+#embed "../builtins/desktop.js"
 };
 
-const char kRendererSource[] = {
-#embed "../js/renderer.js"
+static const char kRendererSource[] = {
+#embed "../builtins/page/bridge.js"
 };
 
-const char kBootstrapSource[] = {
-#embed "../js/bootstrap.js"
+static const char kBootstrapSource[] = {
+#embed "../builtins/bootstrap.js"
 };
 
-ant_t *runtime;
-ant_value_t native;
+static ant_t *runtime;
+static ant_value_t native;
 
-std::string Text(ant_t *js, ant_value_t value) {
+static std::string Text(ant_t *js, ant_value_t value) {
   if (vtype(value) != kTypeString) return {};
   size_t length = 0;
   const char *text = js_getstr(js, value, &length);
   return std::string(text, length);
 }
 
-ant_value_t Value(ant_t *js, const std::string &text) {
+static ant_value_t Value(ant_t *js, const std::string &text) {
   return js_mkstr(js, text.data(), text.size());
 }
 
-bool Flag(ant_t *js, ant_value_t object, const char *name) {
+static bool Flag(ant_t *js, ant_value_t object, const char *name) {
   return js_truthy(js, js_get(js, object, name));
 }
 
-int64_t WindowArgument(ant_value_t *args, int nargs) {
+static int64_t WindowArgument(ant_value_t *args, int nargs) {
   return nargs > 0 && vtype(args[0]) == kTypeNumber ? static_cast<int64_t>(Ant_Value_AsNumberUnchecked(args[0])) : 0;
 }
 
-template <size_t Count> void Dispatch(ant_value_t (&args)[Count]) {
+template <size_t Count> static void Dispatch(ant_value_t (&args)[Count]) {
   ant_t *js = runtime;
   if (!js) return;
   ant_value_t dispatch = js_get(js, native, "dispatch");
@@ -51,7 +49,7 @@ template <size_t Count> void Dispatch(ant_value_t (&args)[Count]) {
   if (is_err(result)) fprintf(stderr, "desktop dispatch failed: %s\n", js_str(js, result));
 }
 
-ant_value_t Native_CreateWindow(ant_params_t) {
+static ant_value_t Native_CreateWindow(ant_params_t) {
   if (nargs < 2 || vtype(args[0]) != kTypeString || !is_object_type(args[1])) return js_mkerr(js, "invalid BrowserWindow options");
   WindowConfig config;
   config.capabilities = Text(js, js_get(js, args[1], "capabilities"));
@@ -65,14 +63,14 @@ ant_value_t Native_CreateWindow(ant_params_t) {
   return Ant_Value_FromNumber(static_cast<double>(window));
 }
 
-ant_value_t Native_Load(ant_params_t) {
+static ant_value_t Native_Load(ant_params_t) {
   if (nargs < 3) return js_mkerr(js, "invalid BrowserWindow load");
   const char *error = nullptr;
   if (!LoadWindow(WindowArgument(args, nargs), Text(js, args[1]), Text(js, args[2]), &error)) return js_mkerr(js, "%s", error);
   return Ant_Value_Undefined;
 }
 
-ant_value_t Native_Call(ant_params_t) {
+static ant_value_t Native_Call(ant_params_t) {
   int64_t window = WindowArgument(args, nargs);
   std::string operation = nargs > 1 ? Text(js, args[1]) : std::string();
   ant_value_t argument = nargs > 2 ? args[2] : Ant_Value_Undefined;
@@ -102,7 +100,7 @@ ant_value_t Native_Call(ant_params_t) {
   return operation == "isDevToolsOpened" ? Ant_Value_FromBool(result) : Ant_Value_True;
 }
 
-ant_value_t Native_Send(ant_params_t) {
+static ant_value_t Native_Send(ant_params_t) {
   const uint8_t *bytes;
   size_t size;
   if (nargs < 3 || vtype(args[1]) != kTypeNumber || !buffer_source_get_bytes(js, args[2], &bytes, &size))
@@ -111,23 +109,21 @@ ant_value_t Native_Send(ant_params_t) {
   return Ant_Value_FromBool(SendIpc(WindowArgument(args, nargs), query, bytes, size));
 }
 
-ant_value_t Native_SetMenu(ant_params_t) {
+static ant_value_t Native_SetMenu(ant_params_t) {
   if (nargs > 0 && vtype(args[0]) == kTypeString) AntDesktop_Menu_Set(Text(js, args[0]).c_str());
   else AntDesktop_Menu_Set(nullptr);
   return Ant_Value_Undefined;
 }
 
-ant_value_t Native_Path(ant_params_t) {
+static ant_value_t Native_Path(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString) return Ant_Value_Undefined;
   char *path = AntDesktop_App_Path(Text(js, args[0]).c_str());
   return path ? Value(js, Owned(path)) : Ant_Value_Undefined;
 }
 
-ant_value_t Native_Quit(ant_params_t) {
+static ant_value_t Native_Quit(ant_params_t) {
   Quit();
   return Ant_Value_Undefined;
-}
-
 }
 
 std::string RendererBridgeSource() {

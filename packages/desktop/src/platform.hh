@@ -4,21 +4,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#ifdef __OBJC__
-#import <Foundation/Foundation.h>
-
-@protocol CrAppProtocol
-- (BOOL)isHandlingSendEvent;
-@end
-
-@protocol CrAppControlProtocol <CrAppProtocol>
-- (void)setHandlingSendEvent:(BOOL)handlingSendEvent;
-@end
-
-@protocol CefAppProtocol <CrAppControlProtocol>
-@end
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif

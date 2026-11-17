@@ -6,8 +6,8 @@ const path = require('node:path');
 const v8 = require('node:v8');
 const vm = require('node:vm');
 
-const read = name => fs.readFileSync(path.join(__dirname, '..', 'js', name), 'utf8');
-const source = `(bindings => {\n${read('wire.js')}\n${read('renderer.js')}\nreturn createRendererBridge(bindings);\n})`;
+const read = name => fs.readFileSync(path.join(__dirname, '..', 'src', 'builtins', 'page', name), 'utf8');
+const source = `(bindings => {\n${read('wire.js')}\n${read('bridge.js')}\nreturn createRendererBridge(bindings);\n})`;
 
 function load(bindings) {
   const context = vm.createContext({ DOMException, TextDecoder });
