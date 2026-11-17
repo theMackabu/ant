@@ -224,6 +224,7 @@ void Ant_Destroy(ant_t *js) {
   }
   
   js_esm_cleanup_module_cache(js);
+  ant_host_modules_destroy(js);
   sv_jit_destroy(js);
   
   sv_ic_shape_refs_cleanup(js);

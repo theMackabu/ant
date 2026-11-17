@@ -1,9 +1,9 @@
 #pragma once
 
 #include <stdatomic.h>
+#include <errors.h>
 
 #include "arena.h"
-#include "errors.h"
 #include "shapes.h"
 #include "pool.h"
 #include "object.h"
@@ -222,6 +222,7 @@ struct ant_isolate_t {
   size_t c_root_cap;
 
   ant_library_ns_t libraries[ANT_LIBRARY_COUNT];
+  ant_host_module_t *host_modules;
 
   struct {
     ant_shape_t *roots[ANT_INOBJ_MAX_SLOTS + 1];

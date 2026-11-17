@@ -259,8 +259,9 @@ static esm_cjs_builtin_t esm_cjs_require_builtin(ant_t *js, ant_value_t call_thi
   if (!name) return CJS_BUILTIN_UNKNOWN;
   if (name[0] == '.' || name[0] == '/') return CJS_BUILTIN_NONE;
 
-  esm_builtin_t builtin = esm_find_builtin(name, len);
+  esm_builtin_t builtin = esm_find_builtin(js, name, len);
   bool bare = builtin.kind == ANT_BUILTIN_NAME_BARE;
+  
   if (builtin.kind == ANT_BUILTIN_NAME_NONE) return CJS_BUILTIN_NONE;
   if (bare && !esm_cjs_builtin_unshadowed(js, name)) return CJS_BUILTIN_UNKNOWN;
 
@@ -319,7 +320,7 @@ static ant_value_t esm_cjs_require_paths(ant_params_t) {
   
   size_t len;
   const char *spec = js_getstr(js, args[0], &len);
-  if (esm_find_builtin(spec, len).kind != ANT_BUILTIN_NAME_NONE) return Ant_Value_Null;
+  if (esm_find_builtin(js, spec, len).kind != ANT_BUILTIN_NAME_NONE) return Ant_Value_Null;
   
   ant_value_t module = js_func_data(call_func);
   ant_value_t directory = js_get(js, module, "path");
