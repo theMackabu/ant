@@ -22,4 +22,28 @@ const worksOrRangeError = (label, make, check) => {
   worksOrRangeError('deep closure call', () => chained());
 }
 
+{
+  const count = 1000000;
+  const weak = new WeakMap();
+  let chain = null;
+  for (let i = 0; i < count; i++) {
+    const inner = chain;
+    const payload = { i };
+    const key = {};
+    weak.set(key, payload);
+    chain = () => [inner, payload, key];
+  }
+  let junk = [];
+  for (let i = 0; i < 300000; i++) junk = [junk.length, { i }];
+  let seen = 0;
+  let wrong = 0;
+  for (let link = chain; link; seen++) {
+    const [inner, payload, key] = link();
+    if (payload.i !== count - 1 - seen || weak.get(key) !== payload) wrong++;
+    link = inner;
+  }
+  assert.strictEqual(seen, count);
+  assert.strictEqual(wrong, 0);
+}
+
 console.log('ok');
