@@ -16,4 +16,10 @@ for (const url of urls) {
   assert.strictEqual(module.meta.env, process.env);
 }
 
+for (const src of ['with ({}) {}', 'x = 010']) {
+  await assert.rejects(import(`data:text/javascript,${encodeURIComponent(src)}`), SyntaxError, src);
+}
+const strictThis = await import(`data:text/javascript,${encodeURIComponent('export default (function () { return this })()')}`);
+assert.strictEqual(strictThis.default, undefined);
+
 console.log('long data URL imports preserve import.meta');
