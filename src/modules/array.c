@@ -75,6 +75,7 @@ static ant_value_t array_copy_spliced(
 ) {
   ant_offset_t out_len = len - skip + item_count;
   
+  if (out_len > (ant_offset_t)9007199254740991) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid array length");
   if (out_len > UINT32_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
   if (out_len == 0) return Ant_Array_Create(js);
   
@@ -695,6 +696,11 @@ static ant_value_t builtin_array_slice(ant_params_t) {
   return result;
 }
 
+static __attribute__((noinline, cold)) ant_value_t array_join_too_long(ant_t *js, ant_offset_t len) {
+  if (len > UINT32_MAX) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid array length");
+  return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid string length");
+}
+
 static ant_value_t array_join_body(ant_params_t) {
   if (sv_check_c_stack_overflow(js)) return js_mkerr_typed(js, JS_ERR_RANGE, "Maximum call stack size exceeded");
   ant_value_t arr = array_method_receiver(js, call_this, "join");
@@ -732,6 +738,10 @@ static ant_value_t array_join_body(ant_params_t) {
     ant_value_t empty = js_mkstr(js, "", 0);
     GC_ROOT_RESTORE(js, root_mark);
     return empty;
+  }
+  if (__builtin_expect(len > (ant_offset_t)ANT_STRING_MAX_LENGTH && (len > UINT32_MAX || sep_len > 0), 0)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return array_join_too_long(js, len);
   }
 
   ant_object_t *fast_arr = array_obj_ptr(arr);
@@ -1585,6 +1595,10 @@ static ant_value_t builtin_array_concat(ant_params_t) {
       
       ant_object_t *src = array_dense_source(js, arg);
       if (src && (arg_len > src->u.array.len || arg_len > src->u.array.cap)) src = NULL;
+      if (__builtin_expect(arg_len > UINT32_MAX, 0)) {
+        if ((double)result_idx + (double)arg_len > 9007199254740991.0) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid array length");
+        continue;
+      }
       ant_offset_t rdoff = real_array_obj_ptr(result) && (intrinsic || array_result_extensible(result)) ? get_dense_buf(result) : 0;
       if (rdoff && !Ant_Array_Unshare(js, dense_obj(rdoff))) return js_mkerr(js, "oom");
       if (rdoff && src && dense_capacity(rdoff) < result_idx + arg_len)
@@ -2516,6 +2530,7 @@ static ant_value_t builtin_array_toReversed(ant_params_t) {
   if (is_err(arr)) return arr;
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+  if (len > UINT32_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
   ant_value_t result = array_copy_spliced(js, arr, len, len, 0, NULL, 0);
   if (is_err(result)) return result;
   
@@ -2728,6 +2743,10 @@ static ant_value_t array_to_locale_string_body(ant_params_t) {
     ant_value_t empty = js_mkstr(js, "", 0);
     GC_ROOT_RESTORE(js, root_mark);
     return empty;
+  }
+  if (__builtin_expect(len > (ant_offset_t)ANT_STRING_MAX_LENGTH, 0)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return array_join_too_long(js, len);
   }
   
   ant_value_t string_result;
@@ -3068,6 +3087,7 @@ static ant_value_t builtin_Array_from(ant_params_t) {
   ant_offset_t len = 0;
   ant_value_t len_result = is_object_type(src) ? proxy_aware_length(js, src, &len) : array_like_length_checked(js, src, &len);
   if (is_err(len_result)) return len_result;
+  if (!use_ctor && len > UINT32_MAX) return array_length_range_error(js);
   
   ctx.result = use_ctor ? array_alloc_from_ctor_with_length(js, call_this, len) : Ant_Array_Create(js);
   if (is_err(ctx.result)) return ctx.result;

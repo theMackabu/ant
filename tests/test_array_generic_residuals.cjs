@@ -257,4 +257,39 @@ assert.deepStrictEqual(failed, []);
   assert.deepStrictEqual(Object.keys(big), ['length', '9007199254740989', '9007199254740990']);
 }
 
+{
+  const A = Array.prototype;
+  const huge = (n) => ({ length: n, 0: 'a', 1: 'b' });
+  const spread = (n) => Object.assign(huge(n), { [Symbol.isConcatSpreadable]: true });
+  for (const n of [2 ** 32, 2 ** 53 - 1, Infinity]) {
+    for (const make of [huge, (m) => new Proxy(huge(m), {})]) {
+      assert.throws(() => A.slice.call(make(n), 0), RangeError, `slice ${n}`);
+      assert.deepStrictEqual(A.slice.call(make(n), 0, 2), ['a', 'b']);
+      assert.throws(() => A.join.call(make(n)), TypeError, `join ${n}`);
+      assert.throws(() => A.toLocaleString.call(make(n)), TypeError, `toLocaleString ${n}`);
+      assert.throws(() => A.map.call(make(n), (x) => x), RangeError, `map ${n}`);
+      assert.throws(() => Array.from(make(n)), RangeError, `from ${n}`);
+      assert.throws(() => A.toReversed.call(make(n)), RangeError, `toReversed ${n}`);
+      assert.throws(() => A.toSorted.call(make(n)), RangeError, `toSorted ${n}`);
+      assert.throws(() => A.with.call(make(n), 0, 1), RangeError, `with ${n}`);
+      assert.throws(() => A.toSpliced.call(make(n), 0, 0), RangeError, `toSpliced ${n}`);
+      assert.throws(() => A.splice.call(make(n), 0), RangeError, `splice ${n}`);
+      assert.strictEqual(A.includes.call(make(n), 'b'), true);
+      assert.strictEqual(A.indexOf.call(make(n), 'b'), 1);
+      assert.strictEqual(A.find.call(make(n), (x, i) => i === 3), undefined);
+      assert.deepStrictEqual(A.entries.call(make(n)).next().value, [0, 'a']);
+      const keys = A.keys.call(make(n)); keys.next();
+      assert.strictEqual(keys.next().value, 1);
+      const values = A.values.call(make(n)); values.next(); values.next();
+      assert.deepStrictEqual(values.next(), { value: undefined, done: false });
+    }
+    assert.strictEqual([].concat(spread(n)).length, 0, `concat ${n}`);
+    assert.throws(() => Uint8Array.from(huge(2 ** 53 - 1)), RangeError);
+  }
+  assert.throws(() => [1].concat(spread(2 ** 53 - 1)), TypeError);
+  assert.throws(() => A.toSpliced.call(huge(2 ** 53 - 1), 0, 0, 1), TypeError);
+  assert.throws(() => A.push.call(new Proxy(huge(2 ** 53 - 1), {}), 1), TypeError);
+  assert.strictEqual(A.slice.call(huge(2 ** 32), 2 ** 32 - 3).length, 3);
+}
+
 console.log('ok');

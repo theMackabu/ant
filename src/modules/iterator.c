@@ -103,7 +103,7 @@ static bool advance_array(ant_t *js, iterator_t *it, ant_value_t *out) {
   // array-likes read through getters, which may throw; a pending exception
   // ends the iteration instead of passing the error on as a value
   ant_offset_t len = iter_get_length(js, array);
-  if (Ant_Exception_Pending(js) || idx >= (uint32_t)len) return false;
+  if (Ant_Exception_Pending(js) || (ant_offset_t)idx >= len) return false;
 
   switch (kind) {
     case ARR_ITER_KEYS:

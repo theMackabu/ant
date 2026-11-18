@@ -753,7 +753,8 @@ ant_value_t array_alloc_intrinsic(ant_t *js, ant_value_t source, ant_offset_t le
   bool exact = length_hint <= ARRAY_RESULT_PREALLOC_MAX ||
     (src && src->flags.fast_array && length_hint <= src->u.array.cap);
   
-  ant_value_t arr = exact && length_hint <= UINT32_MAX
+  if (!exact && length_hint > UINT32_MAX) return array_length_range_error(js);
+  ant_value_t arr = exact
     ? alloc_array_with_proto_capacity(js, js->sym.array_proto, (uint32_t)length_hint, 0, false)
     : Ant_Array_Create(js);
   
