@@ -376,6 +376,7 @@ export function targets() {
     'test_property_error_messages.cjs',
     'test_proxy_set_receiver.cjs',
     'test_module_node_module_paths.cjs',
+    'test_map_get_or_insert.cjs',
     'test_promise.cjs',
     'test_promise_all_fast_path.cjs',
     'test_promise_continuation_errors.cjs',
