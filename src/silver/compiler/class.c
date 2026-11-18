@@ -89,6 +89,18 @@ static uint32_t private_brand_hash(uint32_t method_hash, uint32_t class_off) {
   return (method_hash * 0x9E3779B1u) ^ class_off;
 }
 
+static bool private_token_is_solo(const sv_private_scope_t *scope, bool is_static) {
+  int entries = 0;
+  bool branded = false;
+  for (int i = 0; i < scope->count; i++) {
+    const sv_private_name_t *p = &scope->names[i];
+    if (p->is_static != is_static || (private_name_is_instance_method(p) && branded)) continue;
+    branded |= private_name_is_instance_method(p);
+    entries++;
+  }
+  return entries == 1;
+}
+
 static int resolve_private_upvalue(sv_compiler_t *c, sv_compiler_t *owner, int local) {
   if (!c->enclosing || !owner || local < 0) return -1;
 
@@ -642,6 +654,8 @@ static void compile_class_strict(
   c->private_scope = &private_scope;
 
   if (has_class_scope) {
+    bool solo[2] = { private_token_is_solo(&private_scope, false), private_token_is_solo(&private_scope, true) };
+
     for (int i = 0; i < private_scope.count; i++) {
       sv_private_name_t *p = &private_scope.names[i];
       p->owner = c;
@@ -652,6 +666,8 @@ static void compile_class_strict(
         private_scope.brand.hash = private_brand_hash(p->hash, node->src_off);
         p = &private_scope.brand;
       }
+      p->hash &= ~ANT_PRIVATE_HASH_SOLO;
+      if (solo[p->is_static]) p->hash |= ANT_PRIVATE_HASH_SOLO;
       p->local = add_local(c, "", 0, true, c->scope_depth);
       emit_op(c, OP_PRIVATE_TOKEN);
       emit_u32(c, p->hash);

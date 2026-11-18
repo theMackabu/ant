@@ -245,7 +245,7 @@ static ant_value_t js_stats_fn(ant_params_t) {
       if (slots) extra_bytes += ant_object_extra_capacity(obj) * sizeof(ant_extra_slot_t);
       if (ant_object_promise_state(obj)) promise_bytes += sizeof(ant_promise_state_t);
       if (ant_object_proxy_state(obj)) proxy_bytes += sizeof(ant_proxy_state_t);
-      if (ant_object_has_sidecar(obj)) extra_bytes += sizeof(ant_object_sidecar_t);
+      if (ant_object_has_sidecar(obj)) extra_bytes += ant_object_sidecar_size(ant_object_sidecar(obj));
       if (ant_object_owned_exotic_ops(obj)) exotic_bytes += sizeof(ant_exotic_ops_t);
     }
   }

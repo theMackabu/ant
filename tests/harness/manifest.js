@@ -416,6 +416,7 @@ export function targets() {
     'test_private_names_direct_eval.cjs',
     'test_prototype_write_epoch.cjs',
     'test_proxy_set_trap_result.cjs',
+    'test_private_table_layouts.cjs',
     'test_put_elem_index_keys.cjs',
     'test_put_field_proto_setter_ic.cjs',
     'test_querystring_node_compat.cjs',
