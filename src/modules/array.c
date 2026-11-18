@@ -1,5 +1,6 @@
 #include <compat.h> // IWYU pragma: keep
 #include <stdlib.h>
+#include <limits.h>
 #include <math.h>
 
 #include "utf8.h"
@@ -257,7 +258,41 @@ static ant_value_t array_method_receiver(ant_t *js, ant_value_t value, const cha
 static ant_value_t array_set_index_throw(ant_t *js, ant_value_t obj, ant_offset_t idx, ant_value_t value);
 static ant_value_t array_set_length_throw(ant_t *js, ant_value_t obj, ant_offset_t len);
 
+static __attribute__((noinline, cold)) ant_value_t array_integer_arg_coerced(ant_t *js, ant_value_t arg, double *out) {
+  double number = js_to_number(js, arg);
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+  *out = number != number ? 0 : trunc(number);
+  return Ant_Value_Undefined;
+}
+
+static inline __attribute__((always_inline)) ant_value_t array_integer_arg(
+  ant_t *js, ant_value_t *args, int nargs, int at, double fallback, double *out
+) {
+  *out = fallback;
+  if (at >= nargs || vtype(args[at]) == kTypeUndefined) return Ant_Value_Undefined;
+  if (__builtin_expect(vtype(args[at]) != kTypeNumber, 0)) return array_integer_arg_coerced(js, args[at], out);
+  
+  double number = Ant_Value_AsNumberUnchecked(args[at]);
+  *out = number != number ? 0 : trunc(number);
+  return Ant_Value_Undefined;
+}
+
+static inline __attribute__((always_inline)) ant_value_t array_relative_arg(
+  ant_t *js, ant_value_t *args, int nargs, int at,
+  ant_offset_t len, ant_offset_t fallback, ant_offset_t *out
+) {
+  double relative;
+  ant_value_t err = array_integer_arg(js, args, nargs, at, (double)fallback, &relative);
+  if (is_err(err)) return err;
+  
+  if (relative < 0) relative = relative + (double)len < 0 ? 0 : relative + (double)len;
+  else if (relative > (double)len) relative = (double)len;
+  
+  *out = (ant_offset_t)relative;
+  return Ant_Value_Undefined;
+}
 static ant_value_t array_set_index_throw(ant_t *js, ant_value_t obj, ant_offset_t idx, ant_value_t value);
+
 static ant_value_t builtin_array_push(ant_params_t) {
   ant_value_t arr = array_method_receiver(js, call_this, "push");
   
@@ -1607,20 +1642,10 @@ static ant_value_t builtin_array_fill(ant_params_t) {
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
   ant_offset_t start = 0, end = len;
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    int s = (int) Ant_Value_AsNumberUnchecked(args[1]);
-    if (s < 0) s = (int)len + s;
-    if (s < 0) s = 0;
-    start = (ant_offset_t) s;
-  }
-  if (nargs >= 3 && vtype(args[2]) == kTypeNumber) {
-    int e = (int) Ant_Value_AsNumberUnchecked(args[2]);
-    if (e < 0) e = (int)len + e;
-    if (e < 0) e = 0;
-    end = (ant_offset_t) e;
-  }
-  if (start > len) start = len;
-  if (end > len) end = len;
+  ant_value_t arg_err = array_relative_arg(js, args, nargs, 1, len, 0, &start);
+  if (is_err(arg_err)) return arg_err;
+  arg_err = array_relative_arg(js, args, nargs, 2, len, len, &end);
+  if (is_err(arg_err)) return arg_err;
   
   ant_offset_t string_len;
   if (start < end && array_string_wrapper_length(js, arr, &string_len)) {
@@ -1760,12 +1785,9 @@ static ant_value_t builtin_array_indexOf(ant_params_t) {
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
   ant_offset_t start = 0;
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    int s = (int) Ant_Value_AsNumberUnchecked(args[1]);
-    if (s < 0) s = (int)len + s;
-    if (s < 0) s = 0;
-    start = (ant_offset_t) s;
-  }
+  if (len == 0) return Ant_Value_FromNumber(-1);
+  ant_value_t arg_err = array_relative_arg(js, args, nargs, 1, len, 0, &start);
+  if (is_err(arg_err)) return arg_err;
   
   ant_object_t *dense = array_dense_source(js, arr);
   if (dense && len <= dense->u.array.len && len <= dense->u.array.cap) {
@@ -1797,12 +1819,16 @@ static ant_value_t builtin_array_lastIndexOf(ant_params_t) {
   ant_value_t search = args[0];
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
+  if (len == 0) return Ant_Value_FromNumber(-1);
   int start = (int)len - 1;
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    start = (int) Ant_Value_AsNumberUnchecked(args[1]);
-    if (start < 0) start = (int)len + start;
+  if (nargs >= 2) {
+    double from;
+    ant_value_t arg_err = array_integer_arg(js, args, nargs, 1, 0, &from);
+    if (is_err(arg_err)) return arg_err;
+    if (from < 0) from += (double)len;
+    if (from < 0) return Ant_Value_FromNumber(-1);
+    if (from < (double)start) start = (int)from;
   }
-  if (start >= (int)len) start = (int)len - 1;
   
   ant_object_t *dense = array_dense_source(js, arr);
   if (dense && len <= dense->u.array.len && len <= dense->u.array.cap) {
@@ -2276,19 +2302,18 @@ static ant_value_t builtin_array_splice(ant_params_t) {
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   ant_value_t read_from = is_proxy(arr) ? proxy_read_target(js, arr) : arr;
 
-  int start = 0;
-  if (nargs >= 1 && vtype(args[0]) == kTypeNumber) {
-    start = (int) Ant_Value_AsNumberUnchecked(args[0]);
-    if (start < 0) start = (int)len + start;
-    if (start < 0) start = 0;
-    if (start > (int)len) start = (int)len;
-  }
+  ant_offset_t start_at = 0;
+  ant_value_t arg_err = array_relative_arg(js, args, nargs, 0, len, 0, &start_at);
+  if (is_err(arg_err)) return arg_err;
+  int start = (int)start_at;
 
   int deleteCount = nargs == 0 ? 0 : (int)len - start;
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    deleteCount = (int) Ant_Value_AsNumberUnchecked(args[1]);
-    if (deleteCount < 0) deleteCount = 0;
-    if (deleteCount > (int)len - start) deleteCount = (int)len - start;
+  if (nargs >= 2) {
+    double requested;
+    arg_err = array_integer_arg(js, args, nargs, 1, 0, &requested);
+    if (is_err(arg_err)) return arg_err;
+    if (requested < 0) requested = 0;
+    if (requested < (double)deleteCount) deleteCount = (int)requested;
   }
 
   int insertCount = nargs > 2 ? nargs - 2 : 0;
@@ -2421,23 +2446,16 @@ static ant_value_t builtin_array_copyWithin(ant_params_t) {
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   ant_value_t read_from = is_proxy(arr) ? proxy_read_target(js, arr) : arr;
 
-  int target = 0, start = 0, end = (int)len;
-  if (nargs >= 1 && vtype(args[0]) == kTypeNumber) {
-    target = (int) Ant_Value_AsNumberUnchecked(args[0]);
-    if (target < 0) target = (int)len + target;
-    if (target < 0) target = 0;
-  }
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    start = (int) Ant_Value_AsNumberUnchecked(args[1]);
-    if (start < 0) start = (int)len + start;
-    if (start < 0) start = 0;
-  }
-  if (nargs >= 3 && vtype(args[2]) == kTypeNumber) {
-    end = (int) Ant_Value_AsNumberUnchecked(args[2]);
-    if (end < 0) end = (int)len + end;
-    if (end < 0) end = 0;
-  }
+  ant_offset_t target_at = 0, start_at = 0, end_at = len;
+  ant_value_t arg_err = array_relative_arg(js, args, nargs, 0, len, 0, &target_at);
+  if (is_err(arg_err)) return arg_err;
+  arg_err = array_relative_arg(js, args, nargs, 1, len, 0, &start_at);
+  if (is_err(arg_err)) return arg_err;
+  arg_err = array_relative_arg(js, args, nargs, 2, len, len, &end_at);
+  if (is_err(arg_err)) return arg_err;
   
+  if (end_at <= start_at || target_at >= len) return arr;
+  int target = (int)target_at, start = (int)start_at, end = (int)end_at;
   if (end > (int)len) end = (int)len;
   int count = end - start;
   if (count > (int)len - target) count = (int)len - target;
@@ -2604,14 +2622,17 @@ static ant_value_t builtin_array_with(ant_params_t) {
   ant_value_t arr = array_method_receiver(js, call_this, "with");
   if (is_err(arr)) return arr;
   
-  if (nargs < 2) return js_mkerr(js, "with requires index and value arguments");
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
-  int idx = (int) Ant_Value_AsNumberUnchecked(args[0]);
-  if (idx < 0) idx = (int)len + idx;
-  if (idx < 0 || (ant_offset_t)idx >= len) return js_mkerr(js, "Invalid index");
+  double relative;
+  ant_value_t arg_err = array_integer_arg(js, args, nargs, 0, 0, &relative);
+  if (is_err(arg_err)) return arg_err;
+  if (relative < 0) relative += (double)len;
+  if (relative < 0 || relative >= (double)len) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid index");
+  ant_offset_t idx = (ant_offset_t)relative;
+  ant_value_t value = nargs > 1 ? args[1] : Ant_Value_Undefined;
   
-  ant_value_t result = array_copy_spliced(js, arr, len, (ant_offset_t)idx, 1, &args[1], 1);
+  ant_value_t result = array_copy_spliced(js, arr, len, idx, 1, &value, 1);
   if (is_err(result)) return result;
   
   return mkval(kTypeArray, vdata(result));

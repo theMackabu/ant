@@ -184,6 +184,7 @@ export function targets() {
     'test_dns_resolver.cjs',
     'test_primitive_prototype_values.cjs',
     'test_array_join_cycles.cjs',
+    'test_array_index_coercion.cjs',
     'test_array_length_truncation.cjs',
     'test_engine_error_brand.cjs',
     'test_class_wide_instances.cjs',
