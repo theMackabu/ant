@@ -197,6 +197,8 @@ void emit_this(sv_compiler_t *c);
 void emit_this_store(sv_compiler_t *c);
 void emit_super_receiver(sv_compiler_t *c);
 bool reject_misplaced_super_call(sv_compiler_t *c);
+void emit_private_get(sv_compiler_t *c, sv_ast_t *name, sv_op_t op);
+bool private_name_uses_brand(sv_compiler_t *c, sv_ast_t *name);
 bool arguments_forbidden(const sv_compiler_t *c);
 bool reject_forbidden_arguments(sv_compiler_t *c);
 int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local);

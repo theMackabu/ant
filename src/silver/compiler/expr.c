@@ -721,8 +721,7 @@ void compile_member(sv_compiler_t *c, sv_ast_t *node) {
     compile_expr(c, node->right);
     emit_op(c, OP_GET_ELEM);
   } else if (is_private_name_node(node->right)) {
-    emit_private_token(c, node->right);
-    emit_op(c, OP_GET_PRIVATE);
+    emit_private_get(c, node->right, OP_GET_PRIVATE);
   } else {
     if (direct_length) emit_get_length(c);
     else {
@@ -752,8 +751,7 @@ void compile_optional_get(sv_compiler_t *c, sv_ast_t *node) {
     emit_op(c, OP_GET_ELEM_OPT);
     patch_jump(c, done);
   } else if (is_private_name_node(node->right)) {
-    emit_private_token(c, node->right);
-    emit_op(c, OP_GET_PRIVATE_OPT);
+    emit_private_get(c, node->right, OP_GET_PRIVATE_OPT);
   } else {
     emit_srcpos(c, node->right);
     emit_atom_op(c, OP_GET_FIELD_OPT, node->right->str, node->right->len);
@@ -776,7 +774,7 @@ void compile_optional(sv_compiler_t *c, sv_ast_t *node) {
     compile_expr(c, node->right);
     emit_op(c, OP_GET_ELEM);
   } else if (is_private_name_node(node->right)) {
-    emit_private_token(c, node->right); emit_op(c, OP_GET_PRIVATE);
+    emit_private_get(c, node->right, OP_GET_PRIVATE);
   } else {
     emit_srcpos(c, node->right);
     emit_atom_op(c, OP_GET_FIELD, node->right->str, node->right->len);

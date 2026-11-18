@@ -73,23 +73,33 @@ static bool private_scope_add(
     .has_getter = kind == SV_COMP_PRIVATE_GETTER,
     .has_setter = kind == SV_COMP_PRIVATE_SETTER,
     .owner = NULL,
-    .local = -1
+    .local = -1,
+    .method_local = -1,
+    .scope = scope
   };
   
   return true;
 }
 
-static int resolve_private_upvalue(sv_compiler_t *c, sv_private_name_t *p) {
-  if (!c->enclosing || !p || !p->owner || p->local < 0) return -1;
+static inline bool private_name_is_instance_method(const sv_private_name_t *p) {
+  return p->kind == SV_COMP_PRIVATE_METHOD && !p->is_static;
+}
 
-  if (c->enclosing == p->owner) {
-    p->owner->locals[p->local].captured = true;
-    uint16_t slot = (uint16_t)local_to_frame_slot(p->owner, p->local);
-    sv_binding_meta_t binding = {.may_tdz = p->owner->locals[p->local].is_tdz};
+static uint32_t private_brand_hash(uint32_t method_hash, uint32_t class_off) {
+  return (method_hash * 0x9E3779B1u) ^ class_off;
+}
+
+static int resolve_private_upvalue(sv_compiler_t *c, sv_compiler_t *owner, int local) {
+  if (!c->enclosing || !owner || local < 0) return -1;
+
+  if (c->enclosing == owner) {
+    owner->locals[local].captured = true;
+    uint16_t slot = (uint16_t)local_to_frame_slot(owner, local);
+    sv_binding_meta_t binding = {.may_tdz = owner->locals[local].is_tdz};
     return add_upvalue_binding(c, slot, true, false, false, true, &binding);
   }
 
-  int upvalue = resolve_private_upvalue(c->enclosing, p);
+  int upvalue = resolve_private_upvalue(c->enclosing, owner, local);
   if (upvalue == -1) return -1;
   
   const sv_upval_desc_t *outer = &c->enclosing->upval_descs[upvalue];
@@ -105,6 +115,7 @@ bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
     emit_op(c, OP_UNDEF);
     return false;
   }
+  if (private_name_is_instance_method(p)) p = &p->scope->brand;
   if (!p->owner || p->local < 0) {
     js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Private name '%.*s' is not initialized", (int)name->len, name->str);
     emit_op(c, OP_UNDEF);
@@ -114,7 +125,7 @@ bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
     emit_get_local(c, p->local);
     return true;
   }
-  int upvalue = resolve_private_upvalue(c, p);
+  int upvalue = resolve_private_upvalue(c, p->owner, p->local);
   if (upvalue == -1) {
     js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Private name '%.*s' is not in scope", (int)name->len, name->str);
     emit_op(c, OP_UNDEF);
@@ -236,11 +247,64 @@ static inline int compile_class_precompute_key(sv_compiler_t *c, sv_ast_t *key_e
   return loc;
 }
 
-static int reserve_private_method_local(sv_compiler_t *c) {
+static int reserve_private_method_local(sv_compiler_t *c, sv_ast_t *m) {
+  sv_private_name_t *p = private_scope_find_current(c->private_scope, m->left->str, m->left->len);
+  if (p && private_name_is_instance_method(p)) return p->method_local;
+  
   int loc = add_local(c, "", 0, false, c->scope_depth);
   emit_op(c, OP_UNDEF);
   emit_put_local(c, loc);
   return loc;
+}
+
+static void emit_private_method_value(sv_compiler_t *c, const sv_private_name_t *p) {
+  if (p->owner == c) {
+    emit_get_local(c, p->method_local);
+    return;
+  }
+  
+  int upvalue = resolve_private_upvalue(c, p->owner, p->method_local);
+  if (upvalue == -1) {
+    js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Private name '%.*s' is not in scope", (int)p->len, p->name);
+    emit_op(c, OP_UNDEF);
+    return;
+  }
+  
+  emit_op(c, OP_GET_UPVAL);
+  emit_u16(c, (uint16_t)upvalue);
+}
+
+void emit_private_get(sv_compiler_t *c, sv_ast_t *name, sv_op_t op) {
+  sv_private_name_t *p = private_scope_resolve(c, name->str, name->len);
+  bool method = p && private_name_is_instance_method(p) && p->method_local >= 0;
+  int done = -1;
+
+  if (method && op == OP_GET_PRIVATE_OPT) {
+    int present = emit_jump(c, OP_JMP_NOT_NULLISH);
+    emit_op(c, OP_POP);
+    emit_op(c, OP_UNDEF);
+    done = emit_jump(c, OP_JMP);
+    patch_jump(c, present);
+    op = OP_GET_PRIVATE;
+  }
+
+  if (!emit_private_token(c, name)) {
+    emit_op(c, OP_POP);
+    if (done >= 0) patch_jump(c, done);
+    return;
+  }
+  
+  emit_op(c, op);
+  if (!method) return;
+  
+  emit_op(c, OP_POP);
+  emit_private_method_value(c, p);
+  if (done >= 0) patch_jump(c, done);
+}
+
+bool private_name_uses_brand(sv_compiler_t *c, sv_ast_t *name) {
+  sv_private_name_t *p = private_scope_resolve(c, name->str, name->len);
+  return p && private_name_is_instance_method(p);
 }
 
 static void compile_private_instance_methods(
@@ -416,7 +480,7 @@ static void compile_class_strict(
   if (binds_outer_name)
     outer_name_local = resolve_local(c, node->str, node->len);
 
-  sv_private_scope_t private_scope = { .parent = c->private_scope };
+  sv_private_scope_t private_scope = { .parent = c->private_scope, .brand = { .local = -1, .method_local = -1 } };
   sv_private_scope_t *saved_private_scope = c->private_scope;
   c->private_scope = &private_scope;
 
@@ -497,6 +561,13 @@ static void compile_class_strict(
     for (int i = 0; i < private_scope.count; i++) {
       sv_private_name_t *p = &private_scope.names[i];
       p->owner = c;
+      if (private_name_is_instance_method(p)) {
+        p->method_local = add_local(c, "", 0, false, c->scope_depth);
+        if (private_scope.brand.local >= 0) continue;
+        private_scope.brand.owner = c;
+        private_scope.brand.hash = private_brand_hash(p->hash, node->src_off);
+        p = &private_scope.brand;
+      }
       p->local = add_local(c, "", 0, true, c->scope_depth);
       emit_op(c, OP_PRIVATE_TOKEN);
       emit_u32(c, p->hash);
@@ -535,7 +606,7 @@ static void compile_class_strict(
     
     if (needs_instance_init) {
       field_inits[fi] = m;
-      if (is_private && is_fn) field_locals[fi++] = reserve_private_method_local(c);
+      if (is_private && is_fn) field_locals[fi++] = reserve_private_method_local(c, m);
       else field_locals[fi++] = (!is_private && (m->flags & FN_COMPUTED))
         ? compile_class_precompute_key(c, m->left) : -1;
       continue;

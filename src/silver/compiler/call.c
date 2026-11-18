@@ -82,8 +82,7 @@ static void compile_receiver_property_get(sv_compiler_t *c, sv_ast_t *node) {
     compile_expr(c, node->right);
     emit_op(c, OP_GET_ELEM);
   } else if (is_private_name_node(node->right)) {
-    emit_private_token(c, node->right);
-    emit_op(c, OP_GET_PRIVATE);
+    emit_private_get(c, node->right, OP_GET_PRIVATE);
   } else {
     emit_srcpos(c, node->right);
     emit_atom_op(c, OP_GET_FIELD, node->right->str, node->right->len);
@@ -109,10 +108,22 @@ int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local) {
 static void emit_field_init_pass(
   sv_compiler_t *c, sv_compiler_t *owner, sv_ast_t **fields, int count, bool methods
 ) {
+  bool branded = false;
   for (int i = 0; i < count; i++) {
     sv_ast_t *m = fields[i];
     bool is_fn = is_class_method_def(m);
     if (is_fn != methods) continue;
+    if (is_fn && is_private_name_node(m->left) && private_name_uses_brand(c, m->left)) {
+      if (branded) continue;
+      branded = true;
+      emit_this(c);
+      emit_private_token(c, m->left);
+      emit_op(c, OP_UNDEF);
+      emit_op(c, OP_DEF_PRIVATE);
+      emit(c, SV_COMP_PRIVATE_METHOD);
+      emit_op(c, OP_POP);
+      continue;
+    }
     if (is_private_name_node(m->left)) {
       emit_this(c);
       emit_private_token(c, m->left);

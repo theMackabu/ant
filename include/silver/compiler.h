@@ -151,6 +151,8 @@ typedef struct {
   bool has_setter;
   struct sv_compiler *owner;
   int local;
+  int method_local;
+  struct sv_private_scope *scope;
 } sv_private_name_t;
 
 typedef struct sv_private_scope {
@@ -158,6 +160,7 @@ typedef struct sv_private_scope {
   sv_private_name_t *names;
   int count;
   int cap;
+  sv_private_name_t brand;
 } sv_private_scope_t;
 
 typedef struct {

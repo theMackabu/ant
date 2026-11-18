@@ -404,6 +404,7 @@ export function targets() {
     'test_module_node_module_paths.cjs',
     'test_promise.cjs',
     'test_promise_all_fast_path.cjs',
+    'test_private_method_brand.cjs',
     'test_promise_continuation_errors.cjs',
     'test_promise_many_handlers.cjs',
     'test_private_method_identity.cjs',

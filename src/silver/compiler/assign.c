@@ -333,8 +333,7 @@ void compile_update(sv_compiler_t *c, sv_ast_t *node) {
   } else if (target->type == N_MEMBER && !(target->flags & 1) && is_private_name_node(target->right)) {
     compile_expr(c, target->left);
     emit_op(c, OP_DUP);
-    emit_private_token(c, target->right);
-    emit_op(c, OP_GET_PRIVATE);
+    emit_private_get(c, target->right, OP_GET_PRIVATE);
     if (prefix) {
       emit_op(c, is_inc ? OP_INC : OP_DEC);
       emit_private_token(c, target->right);
@@ -530,8 +529,7 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
         op == TOK_NULLISH_ASSIGN) {
       compile_expr(c, target->left);
       emit_op(c, OP_DUP);
-      emit_private_token(c, target->right);
-      emit_op(c, OP_GET_PRIVATE);
+      emit_private_get(c, target->right, OP_GET_PRIVATE);
       int skip = emit_jump(c,
         op == TOK_LOR_ASSIGN ? OP_JMP_TRUE_PEEK :
         op == TOK_LAND_ASSIGN ? OP_JMP_FALSE_PEEK : OP_JMP_NOT_NULLISH);
@@ -548,8 +546,7 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
 
     compile_expr(c, target->left);
     emit_op(c, OP_DUP);
-    emit_private_token(c, target->right);
-    emit_op(c, OP_GET_PRIVATE);
+    emit_private_get(c, target->right, OP_GET_PRIVATE);
     compile_expr(c, node->right);
     emit_compound_assign_op(c, op);
     emit_private_token(c, target->right);
