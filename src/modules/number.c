@@ -22,6 +22,7 @@ typedef struct {
 
 static void number_decimal_parse(number_decimal_t *decimal, size_t raw_len) {
   char *raw = decimal->storage + 1;
+  
   int count = 0;
   int point = -1;
   int exponent = 0;
@@ -103,9 +104,10 @@ static size_t number_format_non_finite(double value, bool percent, char *buf, si
 
 static size_t number_format_grouped(const char *raw, size_t raw_len, bool negative, char *buf, size_t capacity) {
   const char *dot = memchr(raw, '.', raw_len);
+
   size_t integer_len = dot ? (size_t)(dot - raw) : raw_len;
   size_t fraction_len = raw_len - integer_len;
-  
+
   size_t needed = negative + integer_len + number_group_separators(integer_len) + fraction_len;
   if (needed > capacity) return 0;
 
@@ -212,8 +214,10 @@ static ant_value_t number_locale_read_style(ant_t *js, ant_value_t options, bool
   const char *text = js_getstr(js, style, &len);
 
   *percent = streq(text, len, "percent", 7);
-  if (*percent || streq(text, len, "decimal", 7) || streq(text, len, "currency", 8) || streq(text, len, "unit", 4))
-    return Ant_Value_Undefined;
+  if (
+    *percent || streq(text, len, "decimal", 7) || 
+    streq(text, len, "currency", 8) || streq(text, len, "unit", 4)
+  ) return Ant_Value_Undefined;
 
   return js_mkerr_typed(
     js, JS_ERR_RANGE,

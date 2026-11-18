@@ -2780,6 +2780,7 @@ static ant_value_t array_to_locale_string_body(ant_params_t) {
 
   ant_object_t *numeric_fast_arr = input_is_array ? array_obj_ptr(arr) : NULL;
   bool default_format = (nargs < 1 || vtype(args[0]) == kTypeUndefined) && (nargs < 2 || vtype(args[1]) == kTypeUndefined);
+
   bool all_fast_numbers = default_format && numeric_fast_arr && numeric_fast_arr->flags.fast_array &&
     !numeric_fast_arr->flags.may_have_holes && numeric_fast_arr->u.array.data &&
     (ant_offset_t)numeric_fast_arr->u.array.len == len;
@@ -2812,21 +2813,23 @@ static ant_value_t array_to_locale_string_body(ant_params_t) {
           return err;
         }
       }
+
       char localized_buf[ANT_NUMBER_LOCALE_CHARS];
       size_t direct_capacity = sb.capacity - sb.size;
-      size_t localized_len = direct_capacity >= 128
-        ? format_number_to_locale_string(numeric_fast_arr->u.array.data[i], sb.buffer + sb.size, direct_capacity)
-        : 0;
+
+      size_t localized_len = 
+        direct_capacity >= 128 ? format_number_to_locale_string(numeric_fast_arr->u.array.data[i], sb.buffer + sb.size, direct_capacity) : 0;
+      
       bool write_direct = localized_len != 0;
-      if (!write_direct) localized_len = format_number_to_locale_string(
-        numeric_fast_arr->u.array.data[i], localized_buf, sizeof(localized_buf)
-      );
+      if (!write_direct) localized_len = format_number_to_locale_string(numeric_fast_arr->u.array.data[i], localized_buf, sizeof(localized_buf));
+
       if (localized_len == 0) {
         string_builder_dispose(&sb);
         ant_value_t err = js_mkerr(js, "number formatting failed");
         GC_ROOT_RESTORE(js, root_mark);
         return err;
       }
+
       if (write_direct) sb.size += localized_len;
       else if (!string_builder_append(&sb, localized_buf, localized_len)) {
         string_builder_dispose(&sb);
@@ -2835,8 +2838,10 @@ static ant_value_t array_to_locale_string_body(ant_params_t) {
         return err;
       }
     }
+
     ant_value_t ret = string_builder_finalize(js, &sb);
     GC_ROOT_RESTORE(js, root_mark);
+    
     return ret;
   }
   
