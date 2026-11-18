@@ -469,7 +469,10 @@ static ant_value_t builtin_function_bind(ant_params_t) {
   
   int orig_length = 0;
   
+  ant_value_t proxy_proto = Ant_Value_Undefined;
   if (func_is_proxy) {
+    proxy_proto = proxy_get_prototype_of(js, call_this);
+    if (is_err(proxy_proto)) return proxy_proto;
     ant_value_t has_length = proxy_has_own(js, call_this, js->length_str);
     if (is_err(has_length)) return has_length;
     ant_value_t len_val = proxy_get(js, call_this, "length", 6);
@@ -516,7 +519,8 @@ static ant_value_t builtin_function_bind(ant_params_t) {
     js_set_slot(bound_func, SLOT_TARGET_FUNC, call_this);
 
     ant_value_t func_proto = js_get_slot(js_glob(js), SLOT_FUNC_PROTO);
-    if (vtype(func_proto) == kTypeFunction) js_set_proto_init(bound_func, func_proto);
+    if (is_object_type(proxy_proto)) js_set_proto_init(bound_func, proxy_proto);
+    else if (vtype(func_proto) == kTypeFunction) js_set_proto_init(bound_func, func_proto);
 
     uint8_t bind_flags = SV_CALL_HAS_BOUND_THIS;
     if (bound_argc > 0) bind_flags |= SV_CALL_HAS_BOUND_ARGS;
