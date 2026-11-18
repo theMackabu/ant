@@ -8,7 +8,8 @@ static bool is_tail_callable(sv_compiler_t *c, sv_ast_t *node) {
   if (call_has_spread_arg(node)) return false;
   
   sv_ast_t *callee = node->left;
-  if (sv_node_has_optional_base(callee)) return false;
+  if (callee->type == N_OPTIONAL || sv_node_has_optional_base(callee)) return false;
+  if (callee->type == N_MEMBER && sv_node_has_optional_base(callee->left)) return false;
   if (
     callee->type == N_IDENT && 
     ((callee->len == 5 && memcmp(callee->str, "super", 5) == 0) ||

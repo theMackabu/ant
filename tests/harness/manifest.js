@@ -387,6 +387,7 @@ export function targets() {
     'test_optional_chain_parens.cjs',
     'test_perf_hooks_eld.mjs',
     'test_pkg_lifecycle_production_dev.cjs',
+    'test_optional_chain_short_circuit.cjs',
     'test_pkg_lifecycle_trust_identity.cjs',
     'test_plain_object_index_access.cjs',
     'test_poly_field_ic.cjs',

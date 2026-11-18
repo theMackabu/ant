@@ -469,6 +469,26 @@ static inline bool sv_type_is_num(uint8_t t) {
   return t == SV_TI_NUM;
 }
 
+static inline sv_patch_list_t *optional_chain_take(sv_compiler_t *c) {
+  sv_patch_list_t *chain = c->optional_chain;
+  c->optional_chain = NULL;
+  return chain;
+}
+
+static inline void compile_chain_base(sv_compiler_t *c, sv_ast_t *node, sv_patch_list_t *chain) {
+  if (sv_node_has_optional_base(node)) c->optional_chain = chain;
+  compile_expr(c, node);
+  c->optional_chain = NULL;
+}
+
+static inline void emit_chain_short_circuit(sv_compiler_t *c, sv_patch_list_t *chain) {
+  int present = emit_jump(c, OP_JMP_NOT_NULLISH);
+  emit_op(c, OP_POP);
+  emit_op(c, OP_UNDEF);
+  patch_list_add(chain, emit_jump(c, OP_JMP));
+  patch_jump(c, present);
+}
+
 static inline uint8_t get_local_inferred_type(sv_compiler_t *c, int local_idx) {
   if (local_idx < 0 || local_idx >= c->local_count) return SV_TI_UNKNOWN;
   if (c->locals[local_idx].depth == -1) return SV_TI_UNKNOWN;

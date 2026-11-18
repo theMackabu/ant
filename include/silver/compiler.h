@@ -231,6 +231,8 @@ typedef struct sv_compiler {
   uint64_t value_params;
   bool value_params_known;
 
+  sv_patch_list_t *optional_chain;
+
   const sv_ast_t *write_scan_node;
   sv_write_count_t *write_counts;
   uint32_t write_count_cap;

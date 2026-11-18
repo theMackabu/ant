@@ -150,5 +150,8 @@ for (let i = 0; i < 3000; i++) {
   assert.throws(() => new ParamAndBodyCallSuper(), ReferenceError);
   assert.strictEqual(new ParamSkipped('given').tag, 'given');
 }
+class OptionalKeySuper extends Base { constructor(c) { c?.[super('optional')]; this.x = 1; } }
+assert.throws(() => new OptionalKeySuper(null), ReferenceError);
+assert.strictEqual(new OptionalKeySuper({}).tag, 'optional');
 
 console.log('ok');

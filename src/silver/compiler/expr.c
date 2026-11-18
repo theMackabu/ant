@@ -590,12 +590,13 @@ bool sv_node_has_optional_base(sv_ast_t *n) {
 }
 
 static void compile_delete_optional(sv_compiler_t *c, sv_ast_t *arg) {
-  compile_expr(c, arg->left);
-  int ok_jump = emit_jump(c, OP_JMP_NOT_NULLISH);
-  emit_op(c, OP_POP);
-  emit_op(c, OP_TRUE);
-  int end_jump = emit_jump(c, OP_JMP);
-  patch_jump(c, ok_jump);
+  sv_patch_list_t skipped = {0};
+  compile_chain_base(c, arg->left, &skipped);
+  if (arg->type == N_OPTIONAL) {
+    int ok_jump = emit_jump(c, OP_JMP_NOT_NULLISH);
+    patch_list_add(&skipped, emit_jump(c, OP_JMP));
+    patch_jump(c, ok_jump);
+  }
   if (arg->flags & 1) {
     compile_expr(c, arg->right);
   } else {
@@ -603,6 +604,10 @@ static void compile_delete_optional(sv_compiler_t *c, sv_ast_t *arg) {
     emit_constant(c, key);
   }
   emit_op(c, OP_DELETE);
+  int end_jump = emit_jump(c, OP_JMP);
+  patch_list_resolve(c, &skipped);
+  emit_op(c, OP_POP);
+  emit_op(c, OP_TRUE);
   patch_jump(c, end_jump);
 }
 
@@ -687,6 +692,7 @@ static int resolve_raw_length_local(sv_compiler_t *c, sv_ast_t *base) {
 }
 
 void compile_member(sv_compiler_t *c, sv_ast_t *node) {
+  sv_patch_list_t *outer = optional_chain_take(c);
   if (is_ident_name(node->left, "super")) {
     if (reject_super_private(c, node)) return;
     emit_super_reference(c, node);
@@ -706,16 +712,10 @@ void compile_member(sv_compiler_t *c, sv_ast_t *node) {
   bool direct_length = is_direct_length_member(node);
   int raw_length_local = direct_length ? resolve_raw_length_local(c, node->left) : -1;
 
+  sv_patch_list_t own = {0};
   if (raw_length_local >= 0)
     emit_slot_op(c, OP_GET_SLOT_RAW, (uint16_t)raw_length_local);
-  else compile_expr(c, node->left);
-
-  int ok_jump = -1, end_jump = -1;
-  if (sv_node_has_optional_base(node->left)) {
-    ok_jump  = emit_jump(c, OP_JMP_NOT_NULLISH);
-    end_jump = emit_jump(c, OP_JMP);
-    patch_jump(c, ok_jump);
-  }
+  else compile_chain_base(c, node->left, outer ? outer : &own);
 
   if (node->flags & 1) {
     compile_expr(c, node->right);
@@ -731,13 +731,26 @@ void compile_member(sv_compiler_t *c, sv_ast_t *node) {
     }
   }
 
-  if (end_jump >= 0) patch_jump(c, end_jump);
+  if (own.count) patch_list_resolve(c, &own);
 }
 
 void compile_optional_get(sv_compiler_t *c, sv_ast_t *node) {
   if (node->flags & 1) {
+    bool constant_key = node->right && (node->right->type == N_NUMBER || node->right->type == N_STRING);
+    if (constant_key) {
+      compile_expr(c, node->right);
+      emit_op(c, OP_GET_ELEM_OPT);
+      return;
+    }
+    
+    int present = emit_jump(c, OP_JMP_NOT_NULLISH);
+    emit_op(c, OP_POP);
+    emit_op(c, OP_UNDEF);
+    int done = emit_jump(c, OP_JMP);
+    patch_jump(c, present);
     compile_expr(c, node->right);
     emit_op(c, OP_GET_ELEM_OPT);
+    patch_jump(c, done);
   } else if (is_private_name_node(node->right)) {
     emit_private_token(c, node->right);
     emit_op(c, OP_GET_PRIVATE_OPT);
@@ -748,6 +761,24 @@ void compile_optional_get(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 void compile_optional(sv_compiler_t *c, sv_ast_t *node) {
-  compile_expr(c, node->left);
-  compile_optional_get(c, node);
+  sv_patch_list_t *outer = optional_chain_take(c);
+  sv_patch_list_t own = {0};
+  compile_chain_base(c, node->left, outer ? outer : &own);
+  
+  if (!outer) {
+    compile_optional_get(c, node);
+    if (own.count) patch_list_resolve(c, &own);
+    return;
+  }
+
+  emit_chain_short_circuit(c, outer);
+  if (node->flags & 1) {
+    compile_expr(c, node->right);
+    emit_op(c, OP_GET_ELEM);
+  } else if (is_private_name_node(node->right)) {
+    emit_private_token(c, node->right); emit_op(c, OP_GET_PRIVATE);
+  } else {
+    emit_srcpos(c, node->right);
+    emit_atom_op(c, OP_GET_FIELD, node->right->str, node->right->len);
+  }
 }
