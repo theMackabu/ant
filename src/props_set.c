@@ -686,6 +686,13 @@ ant_value_t setprop_cstr(ant_t *js, ant_value_t obj, const char *key, size_t len
   return mkprop_interned(js, obj, interned, v, 0);
 }
 
+ant_value_t setprop_cstr_attrs(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v, uint8_t attrs) {
+  obj = js_as_obj(obj);
+  const char *interned = intern_string(js, key, len);
+  if (!interned) return js_mkerr(js, "oom");
+  return mkprop_interned_attrs_impl(js, obj, interned, len, v, attrs, MKPROP_EXPOSE_CFUNC);
+}
+
 ant_value_t setprop_interned(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v) {
   ant_value_t k = js_mkstr(js, key, len);
   if (is_err(k)) return k;

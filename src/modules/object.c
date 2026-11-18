@@ -599,12 +599,20 @@ typedef enum {
   INTEGRITY_ORDINARY,
   INTEGRITY_VIEW,
   INTEGRITY_VIEW_ELEMENTS,
+  INTEGRITY_NAMESPACE_EXPORTS,
 } integrity_kind_t;
 
 static __attribute__((noinline)) integrity_kind_t object_integrity_kind(ant_value_t obj, const ant_object_t *ptr) {
   if (ptr->flags.is_exotic) {
     TypedArrayData *view = buffer_get_typedarray_data(obj);
     if (view) return view->length > 0 ? INTEGRITY_VIEW_ELEMENTS : INTEGRITY_VIEW;
+  }
+  if (ptr->flags.extensible || !js_check_brand(obj, BRAND_MODULE_NAMESPACE)) return INTEGRITY_ORDINARY;
+
+  uint32_t count = ptr->shape ? ant_shape_count(ptr->shape) : 0;
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+    if (prop && prop->type == ANT_SHAPE_KEY_STRING) return INTEGRITY_NAMESPACE_EXPORTS;
   }
   return INTEGRITY_ORDINARY;
 }
@@ -631,6 +639,12 @@ static __attribute__((noinline)) ant_value_t object_exotic_integrity_error(
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot %s array buffer views with elements", verb);
   }
 
+  uint32_t count = ant_shape_count(ptr->shape);
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+    if (prop && prop->type == ANT_SHAPE_KEY_STRING)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot redefine property: %s", prop->key.interned);
+  }
   return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot %s", verb);
 }
 

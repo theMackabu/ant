@@ -68,6 +68,7 @@ export function targets() {
     'test_builtin_integrity.cjs',
     'test_builtin_lengths.cjs',
     'test_builtin_missing_named_export.mjs',
+    'test_builtin_module_default_export.mjs',
     'test_intrinsic_protos.cjs',
     'test_builtin_enumerable.cjs',
     'test_builtin_iteration_fast_paths.cjs',

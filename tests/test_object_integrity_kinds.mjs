@@ -1,5 +1,6 @@
 import assert from 'node:assert';
 import vm from 'node:vm';
+const ns = await import('data:text/javascript,export let a = 1; export const b = 2;');
 function* gen() { yield 1 }
 const kinds = {
   plain: () => ({ a: 1 }), empty: () => ({}), nullproto: () => Object.create(null), fn: () => function () {}, namedfn: () => function f(a, b) {}, arrow: () => () => {}, asyncfn: () => async function () {},
@@ -8,7 +9,7 @@ const kinds = {
   u8empty: () => new Uint8Array(0), u8: () => new Uint8Array(1), f64: () => new Float64Array(2), u8sub: () => new Uint8Array(new ArrayBuffer(8), 2, 0), buffer: () => Buffer.alloc(1), bufferEmpty: () => Buffer.alloc(0),
   arraybuffer: () => new ArrayBuffer(4), dataview: () => new DataView(new ArrayBuffer(4)), map: () => new Map([[1, 2]]), set: () => new Set([1]), weakmap: () => new WeakMap(), date: () => new Date(0),
   regexp: () => /a/g, error: () => new Error('e'), typeerror: () => new TypeError('t'), promise: () => Promise.resolve(1), genobj: () => gen(), proxy: () => new Proxy({ a: 1 }, {}), proxyfn: () => new Proxy(function () {}, {}),
-  proxyarr: () => new Proxy([1], {}), boxedNum: () => new Number(1), boxedStr: () => new String('ab'), boxedStrEmpty: () => new String(''), boxedBool: () => new Boolean(true), boxedSym: () => Object(Symbol('s')), boxedBig: () => Object(1n),
+  proxyarr: () => new Proxy([1], {}), ns: () => ns, boxedNum: () => new Number(1), boxedStr: () => new String('ab'), boxedStrEmpty: () => new String(''), boxedBool: () => new Boolean(true), boxedSym: () => Object(Symbol('s')), boxedBig: () => Object(1n),
   arr: () => [1, 2], arrEmpty: () => [], arrHoley: () => [1, , 3], arrBig: () => { const a = []; a[100] = 1; return a }, arrlike: () => ({ length: 1, 0: 'a' }), math: () => Object.create(Math), json: () => Object.create(JSON),
   symbol: () => Symbol('p'), num: () => 1, str: () => 's', undef: () => undefined, nul: () => null, bigint: () => 1n, bool: () => true,
   accessor: () => ({ get a() { return 1 }, set a(v) {} }), getterOnly: () => ({ get a() { return 1 } }), symKeyed: () => ({ [Symbol.iterator]: 1, a: 2 }), frozenAlready: () => Object.freeze({ a: 1 }), sealedAlready: () => Object.seal({ a: 1 }),
@@ -81,6 +82,7 @@ const expected = [
   "proxy          init=false,false,true freeze=same:TTF:xx seal=same:FTF:xx preventExtensions=same:FFF:xD R.preventExtensions=true R.isExtensible=true",
   "proxyfn        init=false,false,true freeze=same:TTF:xx seal=same:FTF:xx preventExtensions=same:FFF:xd R.preventExtensions=true R.isExtensible=true",
   "proxyarr       init=false,false,true freeze=same:TTF:xx seal=same:FTF:xx preventExtensions=same:FFF:xD R.preventExtensions=true R.isExtensible=true",
+  "ns             init=false,true,false freeze=TypeError:FTF:xx seal=same:FTF:xx preventExtensions=same:FTF:xx R.preventExtensions=true R.isExtensible=false",
   "boxedNum       init=false,false,true freeze=same:TTF:x- seal=same:TTF:x- preventExtensions=same:TTF:x- R.preventExtensions=true R.isExtensible=true",
   "boxedStr       init=false,false,true freeze=same:TTF:xx seal=same:TTF:xx preventExtensions=same:TTF:xx R.preventExtensions=true R.isExtensible=true",
   "boxedStrEmpty  init=false,false,true freeze=same:TTF:xx seal=same:TTF:xx preventExtensions=same:TTF:xx R.preventExtensions=true R.isExtensible=true",
@@ -124,6 +126,35 @@ const expected = [
 ];
 assert.deepStrictEqual(out.filter((row, i) => row !== expected[i]), []);
 assert.strictEqual(out.length, expected.length);
+
+const live = await import('data:text/javascript,export let n = 1; export function bump() { return ++n; } export default 0;');
+assert.strictEqual(Object.isExtensible(live), false);
+assert.strictEqual(Reflect.isExtensible(live), false);
+assert.strictEqual(Object.isSealed(live), true);
+assert.strictEqual(Object.isFrozen(live), false);
+assert.deepStrictEqual(Object.getOwnPropertyDescriptor(live, 'n'), { value: 1, writable: true, enumerable: true, configurable: false });
+assert.throws(() => { live.added = 1; }, TypeError);
+assert.throws(() => { delete live.n; }, TypeError);
+assert.throws(() => Object.defineProperty(live, 'added', { value: 1 }), TypeError);
+assert.throws(() => Object.freeze(live), TypeError);
+assert.strictEqual(Object.seal(live), live);
+assert.strictEqual(Object.preventExtensions(live), live);
+assert.strictEqual(Reflect.preventExtensions(live), true);
+assert.strictEqual(delete live.missing, true);
+assert.strictEqual(live.bump(), 2);
+assert.strictEqual(live.n, 2);
+assert.strictEqual(live.bump(), 3);
+assert.deepStrictEqual(Object.getOwnPropertyDescriptor(live, 'n'), { value: 3, writable: true, enumerable: true, configurable: false });
+assert.strictEqual(Reflect.setPrototypeOf(live, {}), false);
+
+const bare = await import('data:text/javascript,export {}');
+assert.strictEqual(Object.isFrozen(bare), true);
+assert.strictEqual(Object.freeze(bare), bare);
+
+const fsNamespace = await import('node:fs');
+assert.strictEqual(Object.isExtensible(fsNamespace), false);
+assert.strictEqual(Object.isSealed(fsNamespace), true);
+assert.throws(() => { fsNamespace.added = 1; }, TypeError);
 
 for (const [source, message] of [['Object.freeze(this)', 'Cannot freeze'], ['Object.seal(this)', 'Cannot seal'], ['Object.preventExtensions(this)', 'Cannot prevent extensions']]) {
   assert.throws(() => vm.runInNewContext(source, {}), e => e.name === 'TypeError' && e.message === message);
