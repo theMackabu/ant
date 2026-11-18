@@ -49,6 +49,7 @@ export function targets() {
     'test_await_then_cache.cjs',
     'test_atomics_typed_arrays.cjs',
     'test_bigint.js',
+    'test_bigint_literal_syntax.cjs',
     'test_bigint_string_parse.cjs',
     'test_bigint_symbol_receivers.cjs',
     'test_buffer_base64url.cjs',
