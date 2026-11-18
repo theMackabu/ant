@@ -287,8 +287,35 @@ ant_value_t jit_helper_super_apply(
   ant_value_t result = sv_super_construct(vm, js, constructor, this_val, call.args, call.argc, new_target);
   sv_call_args_release(&call);
   
+  return result;
+}
 
+static constexpr int JIT_INLINE_SPREAD_ARGS = 32;
 
+static inline int jit_inline_spread_args(ant_value_t **args, int argc, ant_value_t *storage) {
+  if (argc > JIT_INLINE_SPREAD_ARGS) return argc;
+  if (argc > 0) memcpy(storage, *args, (size_t)argc * sizeof(ant_value_t));
+  *args = storage;
+  return JIT_INLINE_SPREAD_ARGS;
+}
+
+ant_value_t jit_helper_super_spread(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t constructor, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+) {
+  ant_value_t storage[JIT_INLINE_SPREAD_ARGS];
+  int cap = jit_inline_spread_args(&args, argc, storage);
+  
+  sv_call_args_t call;
+  sv_call_args_reset(&call, args, argc);
+  
+  ant_value_t status = sv_spread_call_args(vm, js, &call, cap);
+  if (is_err(status)) return status;
+  
+  ant_value_t result = sv_super_construct(vm, js, constructor, this_val, call.args, call.argc, new_target);
+  sv_call_args_release(&call);
+  
   return result;
 }
 

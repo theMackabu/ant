@@ -644,6 +644,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_CALL_SPREAD:
       case OP_CALL_SUPER:
       case OP_SUPER_APPLY:
+      case OP_SUPER_SPREAD:
       case OP_SUPER_FORWARD:
       case OP_TAIL_CALL_METHOD:
       case OP_CALL_METHOD:

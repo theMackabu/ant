@@ -231,7 +231,8 @@ static void jit_emit_super_call(jit_compile_t *c, MIR_item_t helper, MIR_op_t ar
 void jit_emit_methods(jit_compile_t *c) {
   switch (c->op) {
     case OP_CALL_SUPER:
-    case OP_SUPER_APPLY: {
+    case OP_SUPER_APPLY:
+    case OP_SUPER_SPREAD: {
       vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
       uint16_t call_argc = sv_get_u16(c->ip + 1);
       if (call_argc > SV_JIT_ARGS_BUF_CAP ||
@@ -251,7 +252,7 @@ void jit_emit_methods(jit_compile_t *c) {
       }
 
       jit_emit_super_call(
-        c, c->op == OP_SUPER_APPLY ? c->imp_super_apply : c->imp_call_super,
+        c, c->op == OP_SUPER_APPLY ? c->imp_super_apply : c->op == OP_SUPER_SPREAD ? c->imp_super_spread : c->imp_call_super,
         MIR_new_reg_op(c->ctx, c->r_args_buf), MIR_new_int_op(c->ctx, (int64_t)call_argc)
       );
       break;
