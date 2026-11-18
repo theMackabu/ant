@@ -227,6 +227,7 @@ void emit_field_inits(
 );
 void emit_call_srcpos(sv_compiler_t *c, sv_ast_t *node);
 sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t *callee);
+sv_call_kind_t compile_tag_setup(sv_compiler_t *c, sv_ast_t *tag);
 bool compile_call_map_template_intrinsic(
   sv_compiler_t *c, sv_ast_t *node, bool has_spread, bool is_tail
 );
