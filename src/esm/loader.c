@@ -601,7 +601,7 @@ static ant_value_t esm_cache_json_require(ant_t *js, esm_module_t *mod, ant_valu
 
 static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_value_t value, ant_value_t require_module) {
   if (is_err(value)) {
-    mod->is_loading = false;
+    mod->status = ESM_MODULE_UNLOADED;
     return value;
   }
 
@@ -615,15 +615,14 @@ static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_v
   ant_value_t entry = json_require ? esm_cache_json_require(js, mod, value) : Ant_Value_Undefined;
   
   if (is_err(entry)) {
-    mod->is_loading = false;
+    mod->status = ESM_MODULE_UNLOADED;
     GC_ROOT_RESTORE(js, root_mark);
     return entry;
   }
 
   mod->namespace_obj = ns;
   mod->default_export = value;
-  mod->is_loaded = true;
-  mod->is_loading = false;
+  mod->status = ESM_MODULE_LOADED;
   
   js_set_slot(ns, SLOT_MODULE_LOADING, Ant_Value_Undefined);
   GC_ROOT_RESTORE(js, root_mark);
@@ -634,8 +633,7 @@ static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_v
 static ant_value_t esm_complete_namespace_module(ant_t *js, esm_module_t *mod, ant_value_t ns) {
   mod->namespace_obj = ns;
   mod->default_export = esm_default_export_or_namespace(js, ns);
-  mod->is_loaded = true;
-  mod->is_loading = false;
+  mod->status = ESM_MODULE_LOADED;
   js_set_slot(ns, SLOT_MODULE_LOADING, Ant_Value_Undefined);
   return ns;
 }
@@ -1630,8 +1628,7 @@ static esm_module_t *esm_create_module(
     .resolved_path = strdup(resolved_path),
     .namespace_obj = Ant_Value_Undefined,
     .default_export = Ant_Value_Undefined,
-    .is_loaded = false,
-    .is_loading = false,
+    .status = ESM_MODULE_UNLOADED,
     .kind = kind_hint != ESM_MODULE_KIND_NONE ? kind_hint : esm_classify_module_kind(resolved_path),
     .format = format,
     .url_content = NULL,
@@ -2184,7 +2181,7 @@ static void esm_deferred_settle(ant_t *js, ant_value_t fields, ant_value_t resul
   esm_module_t *mod = esm_deferred_module(js, fields);
   
   if (is_err(result)) {
-    if (mod) mod->is_loading = false;
+    if (mod) mod->status = ESM_MODULE_UNLOADED;
     js_reject_promise(js, promise, js_take_thrown(js, result));
     return;
   }
@@ -2311,10 +2308,9 @@ static ant_value_t esm_evaluate_esm_record(
 static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t require_module) {
   ant_value_t failure = Ant_Value_Undefined;
   if (esm_evaluation_settlement(js, mod->namespace_obj, &failure) == JS_PROMISE_REJECTED) return js_throw(js, failure);
-  if (mod->is_loaded) return mod->namespace_obj;
-  if (mod->is_loading) return mod->namespace_obj;
+  if (mod->status != ESM_MODULE_UNLOADED) return mod->namespace_obj;
 
-  mod->is_loading = true;
+  mod->status = ESM_MODULE_LOADING;
 
   switch (mod->kind) {
     case ESM_MODULE_KIND_JSON:
@@ -2327,7 +2323,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t req
       
       ant_value_t module_ctx = js_create_module_context(js, mod->resolved_path, false);
       if (is_err(module_ctx)) {
-        mod->is_loading = false;
+        mod->status = ESM_MODULE_UNLOADED;
         return module_ctx;
       }
       
@@ -2335,14 +2331,14 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t req
       ant_value_t native_exports = napi_load_native_module(js, mod->resolved_path, ns, require_module);
       
       if (is_err(native_exports)) {
-        mod->is_loading = false;
+        mod->status = ESM_MODULE_UNLOADED;
         return native_exports;
       }
       
       return esm_complete_namespace_module(js, mod, ns);
     }
     case ESM_MODULE_KIND_ASSET:
-      mod->is_loading = false;
+      mod->status = ESM_MODULE_UNLOADED;
       return js_mkerr(js, "Bundle asset is not a module: %s", mod->resolved_path);
     case ESM_MODULE_KIND_NONE:
     case ESM_MODULE_KIND_CODE:
@@ -2355,7 +2351,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t req
   if (mod->embedded_code) {
     content = (char *)malloc(mod->embedded_code_len + 1);
     if (!content) {
-      mod->is_loading = false;
+      mod->status = ESM_MODULE_UNLOADED;
       return js_mkerr(js, "OOM loading bundled module");
     }
     memcpy(content, mod->embedded_code, mod->embedded_code_len);
@@ -2363,7 +2359,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t req
   } else if (mod->kind == ESM_MODULE_KIND_URL && esm_is_data_url(mod->resolved_path)) {
     content = esm_parse_data_url(mod->resolved_path, &size);
     if (!content) {
-      mod->is_loading = false;
+      mod->status = ESM_MODULE_UNLOADED;
       return js_mkerr(js, "Cannot parse data URL module");
     }
   } else if (mod->kind == ESM_MODULE_KIND_URL) {
@@ -2374,7 +2370,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t req
       char *error = NULL;
       content = esm_fetch_url(js, mod->resolved_path, &size, &error);
       if (!content) {
-        mod->is_loading = false;
+        mod->status = ESM_MODULE_UNLOADED;
         ant_value_t err = js_mkerr(js, "Cannot fetch module %s: %s", mod->resolved_path, error ? error : "unknown error");
         if (error) free(error);
         return err;
@@ -2386,7 +2382,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t req
     esm_file_data_t file;
     ant_value_t err = esm_read_file(js, mod->resolved_path, "module", &file);
     if (is_err(err)) {
-      mod->is_loading = false;
+      mod->status = ESM_MODULE_UNLOADED;
       return err;
     }
     content = file.data;
@@ -2401,7 +2397,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t req
     
     if (!clean) {
       free(content);
-      mod->is_loading = false;
+      mod->status = ESM_MODULE_UNLOADED;
       return js_mkerr(js, "OOM loading module");
     }
     
@@ -2426,7 +2422,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t req
     );
     
     free(content);
-    mod->is_loading = false;
+    mod->status = ESM_MODULE_UNLOADED;
     
     return err;
   }}
@@ -2442,7 +2438,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t req
   );
   if (is_err(parse_res)) {
     free(content);
-    mod->is_loading = false;
+    mod->status = ESM_MODULE_UNLOADED;
     return parse_res;
   }
 
@@ -2462,7 +2458,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t req
   if (is_err(prep_res)) {
     esm_module_record_cleanup(js, &record);
     free(content);
-    mod->is_loading = false;
+    mod->status = ESM_MODULE_UNLOADED;
     return prep_res;
   }
 
@@ -2488,7 +2484,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t req
   }
 
   if (is_err(result)) {
-    mod->is_loading = false;
+    mod->status = ESM_MODULE_UNLOADED;
     ant_esm_state_t *state = js->modules.state;
     if (state && state->require_async) return result;
     return is_esm ? esm_record_evaluation_failure(js, ns, result) : result;
@@ -2772,7 +2768,7 @@ static ant_value_t esm_require_async_module_error(ant_t *js) {
 }
 
 static bool esm_require_reloads(const esm_module_t *existing) {
-  if (!existing || !(existing->is_loaded || existing->is_loading)) return false;
+  if (!existing || existing->status == ESM_MODULE_UNLOADED) return false;
   return existing->format == MODULE_EVAL_FORMAT_CJS
     || existing->kind == ESM_MODULE_KIND_JSON
     || existing->kind == ESM_MODULE_KIND_NATIVE;
