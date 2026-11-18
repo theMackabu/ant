@@ -258,6 +258,7 @@ export function targets() {
     'test_jit_builtin_direct_call.cjs',
     'test_jit_call_spread.cjs',
     'test_jit_captured_local_init.cjs',
+    'test_jit_captured_local_ops.cjs',
     'test_jit_captured_tdz.cjs',
     'test_jit_catch_undefined.cjs',
     'test_jit_compare_branch.cjs',
