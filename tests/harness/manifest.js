@@ -141,6 +141,7 @@ export function targets() {
     'test_object_spread_semantics.cjs',
     'test_define_properties_semantics.cjs',
     'test_builtin_enumerability.cjs',
+    'test_class_keyed_field_names.cjs',
     'test_typed_array_own_keys.cjs',
     'test_intl_locale_lists.cjs',
     'test_assert_error_types.cjs',

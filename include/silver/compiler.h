@@ -275,6 +275,7 @@ typedef struct sv_compiler {
 
   const char *inferred_name;
   uint32_t inferred_name_len;
+  int inferred_key_upval;
 
   sv_srcpos_t *srcpos;
   int srcpos_count;

@@ -125,7 +125,7 @@ bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
   return true;
 }
 
-static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, const sv_ast_t *key, int ctor_local);
+static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, const sv_ast_t *key, int key_local, int ctor_local);
 
 void compile_method_function(sv_compiler_t *c, sv_ast_t *m) {
   const char *saved_name = c->inferred_name;
@@ -162,7 +162,7 @@ static void compile_class_method(
     emit_op(c, OP_SWAP);              
   } else {
     emit_get_local(c, home_local);    
-    if (is_static) compile_static_initializer_value(c, m->right, field_static_key(m), ctor_local);
+    if (is_static) compile_static_initializer_value(c, m->right, field_static_key(m), preeval_key, ctor_local);
     else if (m->right) compile_expr(c, m->right);
     else emit_op(c, OP_UNDEF);        
   }
@@ -197,7 +197,7 @@ static void compile_private_static_element(sv_compiler_t *c, sv_ast_t *m, int ct
       emit_op(c, OP_SET_HOME_OBJ);
       emit_op(c, OP_POP);
     }
-  } else if ((m->flags & FN_STATIC)) compile_static_initializer_value(c, m->right, m->left, ctor_local);
+  } else if ((m->flags & FN_STATIC)) compile_static_initializer_value(c, m->right, m->left, -1, ctor_local);
   else if (m->right) compile_expr(c, m->right);
   else emit_op(c, OP_UNDEF);
 
@@ -283,7 +283,9 @@ bool class_method_needs_home(const sv_ast_t *method) {
   return fn && fn->type == N_FUNC && (fn->flags & (FN_USES_SUPER | FN_DIRECT_EVAL));
 }
 
-static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool returns_expr, const sv_ast_t *key) {
+static int compile_static_child_function(
+  sv_compiler_t *c, sv_ast_t *node, bool returns_expr, const sv_ast_t *key, int key_local
+) {
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
   comp.is_strict = true;
@@ -295,6 +297,8 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
   emit_put_local(&comp, comp.super_local);
 
   if (returns_expr) {
+    if (key_local >= 0 && node && node->type == N_CLASS)
+      comp.inferred_key_upval = capture_field_local(&comp, c, key_local) + 1;
     if (node) compile_field_initializer(&comp, node, key);
     else emit_op(&comp, OP_UNDEF);
     emit_return_from_stack(&comp);
@@ -357,20 +361,20 @@ static void emit_static_child_call(sv_compiler_t *c, int func_idx, int ctor_loca
   emit_u16(c, 0);
 }
 
-static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, const sv_ast_t *key, int ctor_local) {
-  int idx = compile_static_child_function(c, expr, true, key);
+static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, const sv_ast_t *key, int key_local, int ctor_local) {
+  int idx = compile_static_child_function(c, expr, true, key, key_local);
   emit_static_child_call(c, idx, ctor_local);
 }
 
 static void compile_static_block(sv_compiler_t *c, sv_ast_t *block, int ctor_local) {
-  int idx = compile_static_child_function(c, block, false, NULL);
+  int idx = compile_static_child_function(c, block, false, NULL, -1);
   emit_static_child_call(c, idx, ctor_local);
   emit_op(c, OP_POP);
 }
 
 static void compile_class_strict(
   sv_compiler_t *c, sv_ast_t *node,
-  const char *inferred_name, uint32_t inferred_name_len
+  const char *inferred_name, uint32_t inferred_name_len, int inferred_key_upval
 ) {
   int outer_name_local = -1;
   bool binds_outer_name = node->str &&
@@ -660,6 +664,15 @@ static void compile_class_strict(
   free(field_inits);
   free(field_locals);
 
+  if (!node->str && !has_static_name && inferred_key_upval > 0) {
+    emit_get_local(c, ctor_local);
+    emit_op(c, OP_GET_UPVAL);
+    emit_u16(c, (uint16_t)(inferred_key_upval - 1));
+    emit_op(c, OP_SET_NAME_COMP);
+    emit_op(c, OP_POP);
+    emit_op(c, OP_POP);
+  }
+
   for (int i = 0; i < static_init_count; i++) {
     sv_ast_t *m = static_init_items[i].node;
     if (m->type == N_STATIC_BLOCK) {
@@ -696,8 +709,10 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   c->is_strict = true;
   const char *inferred_name = c->inferred_name;
   uint32_t inferred_name_len = c->inferred_name_len;
+  int inferred_key_upval = c->inferred_key_upval;
   c->inferred_name = NULL;
   c->inferred_name_len = 0;
-  compile_class_strict(c, node, inferred_name, inferred_name_len);
+  c->inferred_key_upval = 0;
+  compile_class_strict(c, node, inferred_name, inferred_name_len, inferred_key_upval);
   c->is_strict = saved_strict;
 }
