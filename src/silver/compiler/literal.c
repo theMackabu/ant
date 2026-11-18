@@ -7,6 +7,13 @@ size_t literal_num_key(double num, char *buf, size_t cap) {
   return ant_number_to_shortest(num, buf, cap);
 }
 
+size_t literal_num_name(const sv_ast_t *key, char *buf, size_t cap) {
+  if (!key->str || key->len >= cap) return literal_num_key(key->num, buf, cap);
+  memcpy(buf, key->str, key->len);
+  buf[key->len] = '\0';
+  return key->len;
+}
+
 static constexpr int SV_SHAPED_LITERAL_MAX_KEYS = 32;
 static constexpr int SV_LITERAL_DYNAMIC_RATIO = 6;
 static constexpr int SV_LITERAL_CLASS_STACK = 64;
@@ -427,7 +434,7 @@ static void compile_property_value(sv_compiler_t *c, sv_ast_t *prop) {
   else if (key->type == N_IDENT || key->type == N_STRING)
     compile_expr_with_inferred_name(c, prop->right, key->str ? key->str : "", key->len);
   else if (key->type == N_NUMBER)
-    compile_expr_with_inferred_name(c, prop->right, buf, (uint32_t)literal_num_key(key->num, buf, sizeof(buf)));
+    compile_expr_with_inferred_name(c, prop->right, buf, (uint32_t)literal_num_name(key, buf, sizeof(buf)));
   else compile_expr(c, prop->right);
 }
 

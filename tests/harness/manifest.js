@@ -334,6 +334,7 @@ export function targets() {
     'test_map_get_template_intrinsic.cjs',
     'test_message_port.mjs',
     'test_module_async_error_boundaries.cjs',
+    'test_legacy_decimal_property_keys.cjs',
     'test_napi_clear_exception.cjs',
     'test_navigator_locks_threads.cjs',
     'test_native_completion_errors.cjs',

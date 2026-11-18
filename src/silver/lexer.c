@@ -750,6 +750,12 @@ static inline bool number_literal_has_invalid_tail(const char *buf, ant_offset_t
   return toklen < remaining && is_ident_continue((unsigned char)buf[toklen]);
 }
 
+static inline bool legacy_literal_is_decimal(const char *buf, ant_offset_t remaining) {
+  for (ant_offset_t i = 1; i < remaining && IS_DIGIT(buf[i]); i++)
+    if (buf[i] >= '8') return true;
+  return false;
+}
+
 static inline uint8_t parse_number(sv_lexer_t *lx, const char *buf, ant_offset_t remaining) {
   double value = 0;
   ant_offset_t numlen = 0;
@@ -768,7 +774,16 @@ static inline uint8_t parse_number(sv_lexer_t *lx, const char *buf, ant_offset_t
           lx->st.tlen = 1;
           return TOK_ERR;
         }
-        numlen = parse_legacy_octal(buf, remaining, &value);
+        if (legacy_literal_is_decimal(buf, remaining)) {
+          decimal_literal_t literal = parse_decimal_literal(buf, remaining);
+          numlen = literal.len;
+          if (!literal.ok) {
+            lx->st.tok = TOK_ERR;
+            lx->st.tlen = numlen;
+            return TOK_ERR;
+          }
+          value = literal.value;
+        } else numlen = parse_legacy_octal(buf, remaining, &value);
     } else if (is_digit(buf[1]) && lx->strict) {
         lx->st.tok = TOK_ERR;
         lx->st.tlen = 1;

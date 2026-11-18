@@ -601,6 +601,14 @@ sv_ast_t *parse_property_key(sv_parser_t *p, uint32_t *flags) {
   } else if (p->lx.st.tok == TOK_NUMBER) {
     p->lx.st.consumed = 1;
     key = mk_num(p, Ant_Value_AsNumberUnchecked(p->lx.st.tval));
+    const char *raw = tok_str(p);
+    ant_offset_t raw_len = p->lx.st.tlen;
+    bool leading_zero_decimal = raw_len >= 2 && raw_len <= 10 && raw[0] == '0' && (raw[1] == '8' || raw[1] == '9');
+    for (ant_offset_t i = 2; leading_zero_decimal && i < raw_len; i++) leading_zero_decimal = raw[i] >= '0' && raw[i] <= '9';
+    if (leading_zero_decimal) {
+      key->str = raw;
+      key->len = (uint32_t)raw_len;
+    }
   } else if (p->lx.st.tok == TOK_STRING) {
     key = mk(N_STRING);
     sv_ast_set_string(key, sv_lexer_str_literal(&p->lx));
