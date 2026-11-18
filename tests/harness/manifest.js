@@ -171,6 +171,7 @@ export function targets() {
     'test_buffer_alloc_validation.cjs',
     'test_inspect_show_hidden.cjs',
     'test_assert_messages.cjs',
+    'test_array_subclass_species_construct.cjs',
     'test_deep_equal_semantics.cjs',
     'test_buffer_copy_bytes_from_errors.cjs',
     'test_break_continue_targets.cjs',

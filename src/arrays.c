@@ -663,31 +663,33 @@ ant_value_t array_alloc_intrinsic(ant_t *js, ant_value_t source, ant_offset_t le
 }
 
 static ant_value_t array_construct_from_ctor(ant_t *js, ant_value_t ctor, ant_value_t *ctor_args, int ctor_argc) {
+  if (vtype(ctor) == kTypeObject && is_proxy(ctor))
+    return js_proxy_construct(js, ctor, ctor_args, ctor_argc, ctor);
+
+  ant_value_t new_target = ctor;
+  ant_value_t proto = sv_prepare_construct_meta(js, ctor, ctor, &new_target);
+  if (is_err(proto)) return proto;
+
   ant_value_t seed = Ant_Object_CreateBare(js);
   if (is_err(seed)) return seed;
-
-  ant_value_t proto = js_get(js, ctor, "prototype");
-  if (is_err(proto)) return proto;
   if (is_object_type(proto)) js_set_proto_init(seed, proto);
 
-  ant_value_t constructed = sv_vm_call(js->vm, js, ctor, seed, ctor_args, ctor_argc, NULL, ctor);
-  if (is_err(constructed)) return constructed;
+  ant_value_t ctor_this = seed;
+  ant_value_t result = sv_vm_call(js->vm, js, ctor, seed, ctor_args, ctor_argc, &ctor_this, new_target);
 
-  ant_value_t result = is_object_type(constructed) ? constructed : seed;
-  js_set_slot_wb(js, result, SLOT_CTOR, ctor);
-  
-  return result;
+  if (is_err(result)) return result;
+  return sv_construct_result(result, ctor_this, seed);
 }
 
 ant_value_t array_alloc_from_ctor_with_length(ant_t *js, ant_value_t ctor, ant_offset_t length_hint) {
-  if (vtype(ctor) != kTypeFunction && vtype(ctor) != kTypeBuiltin) return Ant_Array_Create(js);
+  if (!js_is_constructor(ctor)) return Ant_Array_Create(js);
   if (same_ctor_identity(js, ctor, js->sym.array_ctor)) return array_alloc_intrinsic(js, Ant_Value_Undefined, length_hint);
   ant_value_t ctor_args[1] = { Ant_Value_FromNumber((double)length_hint) };
   return array_construct_from_ctor(js, ctor, ctor_args, 1);
 }
 
 ant_value_t array_alloc_from_ctor(ant_t *js, ant_value_t ctor) {
-  if (vtype(ctor) != kTypeFunction && vtype(ctor) != kTypeBuiltin) return Ant_Array_Create(js);
+  if (!js_is_constructor(ctor)) return Ant_Array_Create(js);
   if (same_ctor_identity(js, ctor, js->sym.array_ctor)) return Ant_Array_Create(js);
   return array_construct_from_ctor(js, ctor, NULL, 0);
 }
