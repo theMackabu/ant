@@ -61,6 +61,7 @@ export function targets() {
     'test_buffer_statics.cjs',
     'test_buffer_wtf8_utf8.cjs',
     'test_abort_signal_eventtarget.cjs',
+    'test_anonymous_class_name.cjs',
     'test_builtin_constructor_shapes.cjs',
     'test_buffer_encodings.cjs',
     'test_builtin_integrity.cjs',
