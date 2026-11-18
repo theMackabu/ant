@@ -166,12 +166,16 @@ typedef struct {
   struct sv_compiler *owner;
   int local;
   int method_local;
+  int slot;
+  int method_slot;
   struct sv_private_scope *scope;
 } sv_private_name_t;
 
 typedef struct sv_private_scope {
   struct sv_private_scope *parent;
   sv_private_name_t *names;
+  int *index;
+  int index_cap;
   int count;
   int cap;
   sv_private_name_t brand;

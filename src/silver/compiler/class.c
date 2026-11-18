@@ -4,11 +4,44 @@ static sv_private_name_t *private_scope_find_current(
   sv_private_scope_t *scope, const char *name, uint32_t len
 ) {
   if (!scope || !name) return NULL;
+  if (scope->index) {
+    uint32_t mask = (uint32_t)scope->index_cap - 1;
+    for (uint32_t i = sv_compile_ctx_hash_local_name(name, len) & mask;; i = (i + 1) & mask) {
+      int entry = scope->index[i];
+      if (entry < 0) return NULL;
+      sv_private_name_t *p = &scope->names[entry];
+      if (p->len == len && memcmp(p->name, name, len) == 0) return p;
+    }
+  }
   for (int i = 0; i < scope->count; i++) {
     sv_private_name_t *p = &scope->names[i];
     if (p->len == len && memcmp(p->name, name, len) == 0) return p;
   }
   return NULL;
+}
+
+static void private_scope_index_insert(sv_private_scope_t *scope, int entry) {
+  uint32_t mask = (uint32_t)scope->index_cap - 1;
+  const sv_private_name_t *p = &scope->names[entry];
+  uint32_t i = sv_compile_ctx_hash_local_name(p->name, p->len) & mask;
+  while (scope->index[i] >= 0) i = (i + 1) & mask;
+  scope->index[i] = entry;
+}
+
+static void private_scope_index_add(sv_private_scope_t *scope) {
+  if (scope->count < 16) return;
+  if (scope->index && scope->count * 2 < scope->index_cap) {
+    private_scope_index_insert(scope, scope->count - 1);
+    return;
+  }
+
+  int cap = scope->index_cap ? scope->index_cap * 2 : 64;
+  int *index = realloc(scope->index, (size_t)cap * sizeof(*index));
+  if (!index) return;
+  memset(index, 0xff, (size_t)cap * sizeof(*index));
+  scope->index = index;
+  scope->index_cap = cap;
+  for (int i = 0; i < scope->count; i++) private_scope_index_insert(scope, i);
 }
 
 static sv_private_name_t *private_scope_resolve(
@@ -75,9 +108,12 @@ static bool private_scope_add(
     .owner = NULL,
     .local = -1,
     .method_local = -1,
+    .slot = -1,
+    .method_slot = -1,
     .scope = scope
   };
   
+  private_scope_index_add(scope);
   return true;
 }
 
@@ -186,15 +222,29 @@ bool private_eval_bindings_each(sv_compiler_t *c, private_eval_binding_fn fn, vo
     uint8_t kind;
     uint16_t index;
 
-    if (!private_binding_location(c, token->owner, token->local, &kind, &index)) continue;
+    if (token->slot >= 0 || !private_binding_location(c, token->owner, token->local, &kind, &index)) continue;
     if (!fn(ctx, p->name, p->len, kind, index)) return false;
-    if (token == p || p->method_local < 0) continue;
+    if (token == p || p->method_local < 0 || p->method_slot >= 0) continue;
 
     const char *method = private_method_binding_name(c, p->name, p->len);
     if (!method || !private_binding_location(c, p->owner, p->method_local, &kind, &index)) continue;
     if (!fn(ctx, method, p->len + 2, kind, index)) return false;
   }}
   return true;
+}
+
+static void emit_private_table_load(sv_compiler_t *c, int slot) {
+  if (slot < 0) return;
+  emit_number(c, (double)slot);
+  emit_op(c, OP_GET_ELEM);
+}
+
+static void emit_private_table_store(sv_compiler_t *c, int table_local, int slot) {
+  emit_get_local(c, table_local);
+  emit_op(c, OP_SWAP);
+  emit_number(c, (double)slot);
+  emit_op(c, OP_SWAP);
+  emit_op(c, OP_PUT_ELEM);
 }
 
 bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
@@ -216,6 +266,7 @@ bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
   }
   if (p->owner == c) {
     emit_get_local(c, p->local);
+    emit_private_table_load(c, p->slot);
     return true;
   }
   int upvalue = resolve_private_upvalue(c, p->owner, p->local);
@@ -226,6 +277,7 @@ bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
   }
   emit_op(c, OP_GET_UPVAL);
   emit_u16(c, (uint16_t)upvalue);
+  emit_private_table_load(c, p->slot);
   return true;
 }
 
@@ -353,6 +405,7 @@ static int reserve_private_method_local(sv_compiler_t *c, sv_ast_t *m) {
 static void emit_private_method_value(sv_compiler_t *c, const sv_private_name_t *p) {
   if (p->owner == c) {
     emit_get_local(c, p->method_local);
+    emit_private_table_load(c, p->method_slot);
     return;
   }
   
@@ -365,6 +418,7 @@ static void emit_private_method_value(sv_compiler_t *c, const sv_private_name_t 
   
   emit_op(c, OP_GET_UPVAL);
   emit_u16(c, (uint16_t)upvalue);
+  emit_private_table_load(c, p->method_slot);
 }
 
 void emit_private_get(sv_compiler_t *c, sv_ast_t *name, sv_op_t op) {
@@ -418,7 +472,9 @@ static void compile_private_instance_methods(
       emit_op(c, OP_SET_HOME_OBJ);
       emit_op(c, OP_POP);
     }
-    emit_put_local(c, locals[i]);
+    sv_private_name_t *p = private_scope_find_current(c->private_scope, m->left->str, m->left->len);
+    if (p && p->method_slot >= 0) emit_private_table_store(c, p->method_local, p->method_slot);
+    else emit_put_local(c, locals[i]);
   }
 }
 
@@ -577,7 +633,7 @@ static void compile_class_strict(
   if (binds_outer_name)
     outer_name_local = resolve_local(c, node->str, node->len);
 
-  sv_private_scope_t private_scope = { .parent = c->private_scope, .brand = { .local = -1, .method_local = -1 } };
+  sv_private_scope_t private_scope = { .parent = c->private_scope, .brand = { .local = -1, .method_local = -1, .slot = -1, .method_slot = -1 } };
   sv_private_scope_t *saved_private_scope = c->private_scope;
   c->private_scope = &private_scope;
 
@@ -599,6 +655,7 @@ static void compile_class_strict(
       if (!private_scope_add(c, &private_scope, m->left, private_kind, !!(m->flags & FN_STATIC))) {
         c->private_scope = saved_private_scope;
         free(private_scope.names);
+        free(private_scope.index);
         emit_op(c, OP_UNDEF);
         return;
       }
@@ -610,6 +667,7 @@ static void compile_class_strict(
         js_mkerr_typed(c->js, JS_ERR_SYNTAX, "%s", invalid);
         c->private_scope = saved_private_scope;
         free(private_scope.names);
+        free(private_scope.index);
         emit_op(c, OP_UNDEF);
         return;
       }
@@ -620,6 +678,7 @@ static void compile_class_strict(
       js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Classes may not have a static property named 'prototype'");
       c->private_scope = saved_private_scope;
       free(private_scope.names);
+      free(private_scope.index);
       emit_op(c, OP_UNDEF);
       return;
     }
@@ -655,12 +714,26 @@ static void compile_class_strict(
 
   if (has_class_scope) {
     bool solo[2] = { private_token_is_solo(&private_scope, false), private_token_is_solo(&private_scope, true) };
+    bool tabled = private_scope.count * 2 + (c->local_count - c->param_locals) >= SV_SPILL_THRESHOLD;
+    int table_local = -1;
+    int next_slot = 0;
+    if (tabled) {
+      table_local = add_hidden_local(c);
+      emit_op(c, OP_ARRAY);
+      emit_u16(c, 0);
+      emit_put_local(c, table_local);
+    }
 
     for (int i = 0; i < private_scope.count; i++) {
       sv_private_name_t *p = &private_scope.names[i];
       p->owner = c;
       if (private_name_is_instance_method(p)) {
-        p->method_local = add_local(c, "", 0, false, c->scope_depth);
+        if (tabled) {
+          p->method_local = table_local;
+          p->method_slot = next_slot++;
+          emit_op(c, OP_UNDEF);
+          emit_private_table_store(c, table_local, p->method_slot);
+        } else p->method_local = add_local(c, "", 0, false, c->scope_depth);
         if (private_scope.brand.local >= 0) continue;
         private_scope.brand.owner = c;
         private_scope.brand.hash = private_brand_hash(p->hash, node->src_off);
@@ -668,10 +741,18 @@ static void compile_class_strict(
       }
       p->hash &= ~ANT_PRIVATE_HASH_SOLO;
       if (solo[p->is_static]) p->hash |= ANT_PRIVATE_HASH_SOLO;
-      p->local = add_local(c, "", 0, true, c->scope_depth);
+      if (!tabled) {
+        p->local = add_local(c, "", 0, true, c->scope_depth);
+        emit_op(c, OP_PRIVATE_TOKEN);
+        emit_u32(c, p->hash);
+        emit_put_local(c, p->local);
+        continue;
+      }
+      p->local = table_local;
+      p->slot = next_slot++;
       emit_op(c, OP_PRIVATE_TOKEN);
       emit_u32(c, p->hash);
-      emit_put_local(c, p->local);
+      emit_private_table_store(c, table_local, p->slot);
     }
   }
 
@@ -891,6 +972,7 @@ static void compile_class_strict(
   if (has_class_scope) end_scope(c);
   c->private_scope = saved_private_scope;
   free(private_scope.names);
+  free(private_scope.index);
 }
 
 void compile_class(sv_compiler_t *c, sv_ast_t *node) {

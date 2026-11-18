@@ -98,6 +98,7 @@ export function targets() {
     'test_computed_property_keys.cjs',
     'test_inspect_collections.cjs',
     'test_json_bigint_tojson.cjs',
+    'test_large_private_scopes.cjs',
     'test_timer_minor_gc.cjs',
     'test_timer_this.cjs',
     'test_string_append_mixed.cjs',
