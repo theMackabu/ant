@@ -14,7 +14,24 @@ static bool is_body_declaration(const sv_ast_t *n) {
   return is_lexical_decl_stmt((sv_ast_t *)n) || is_class_decl_stmt(n) || is_function_decl_stmt(body);
 }
 
+static bool let_declaration_ahead(sv_parser_t *p) {
+  uint8_t la = sv_lexer_lookahead(&p->lx);
+  return la == TOK_LBRACKET || la == TOK_LBRACE || is_binding_ident_tok(la);
+}
+
 static sv_ast_t *parse_stmt(sv_parser_t *p);
+
+static sv_ast_t *parse_body_stmt(sv_parser_t *p) {
+  p->body_stmt = true;
+  sv_ast_t *body = parse_stmt(p);
+  p->body_stmt = false;
+  return body;
+}
+
+static void check_loop_body(sv_parser_t *p, const sv_ast_t *body) {
+  if (is_body_declaration(body) && !Ant_Exception_Pending(p->js))
+    SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
+}
 
 static bool check_if_branch(sv_parser_t *p, const sv_ast_t *branch) {
   const sv_ast_t *body = branch;
@@ -30,6 +47,22 @@ static bool check_if_branch(sv_parser_t *p, const sv_ast_t *branch) {
     return false;
   }
   return true;
+}
+
+static bool prologue_has_legacy_escape(const sv_parser_t *p, const sv_ast_list_t *list) {
+  for (int i = 0; i < list->count; i++) {
+    const sv_ast_t *stmt = list->items[i];
+    if (!stmt || stmt->type != N_STRING || stmt->src_end <= stmt->src_off + 1) continue;
+    const char *raw = &p->lx.code[stmt->src_off];
+    uint32_t len = stmt->src_end - stmt->src_off;
+    for (uint32_t k = 1; k + 1 < len; k++) {
+      if (raw[k] != '\\') continue;
+      char next = raw[++k];
+      if (next >= '1' && next <= '9') return true;
+      if (next == '0' && k + 1 < len && raw[k + 1] >= '0' && raw[k + 1] <= '9') return true;
+    }
+  }
+  return false;
 }
 
 void sv_parse_stmt_list(sv_parser_t *p, sv_ast_list_t *out, bool stop_at_rbrace, bool directive_ctx, bool module_items) {
@@ -62,11 +95,16 @@ void sv_parse_stmt_list(sv_parser_t *p, sv_ast_list_t *out, bool stop_at_rbrace,
     }
     
     if (sv_ast_is_use_strict(p->js, stmt)) {
+      if (!strict_mode && prologue_has_legacy_escape(p, out)) {
+        SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Octal escape sequences are not allowed in strict mode");
+        break;
+      }
       strict_mode = true;
       p->lx.strict = true;
       continue;
     }
 
+    if (stmt->type == N_STRING && !(stmt->flags & FN_PAREN)) continue;
     in_directive_prologue = false;
   }
 
@@ -145,7 +183,9 @@ sv_ast_t *parse_var_decl(sv_parser_t *p, sv_var_kind_t kind, bool allow_uninit_c
 static sv_ast_t *parse_stmt(sv_parser_t *p) {
   if (sv_parse_stack_overflow(p)) return mk(N_EMPTY);
   bool module_item = p->module_item;
+  bool body_stmt = p->body_stmt;
   p->module_item = false;
+  p->body_stmt = false;
   sv_lexer_next(&p->lx);
 
   static const void *dispatch[TOK_MAX] = {
@@ -174,6 +214,10 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
   };
 
   if (using_declaration_here(p, false)) {
+    if (module_item && p->goal == SV_PARSE_SCRIPT && !p->function_depth) {
+      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Using declarations are not allowed at the top level of a script");
+      return mk(N_EMPTY);
+    }
     p->lx.st.consumed = 1;
     sv_ast_t *n = parse_var_decl(p, SV_VAR_USING, false);
     consume_semicolon(p);
@@ -208,6 +252,16 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
     return n;
   }
   l_let: {
+    if (body_stmt) {
+      uint8_t la = sv_lexer_lookahead(&p->lx);
+      bool same_line = !lookahead_crosses_line_terminator(p);
+      if (la == TOK_LBRACKET || ((la == TOK_LBRACE || la == TOK_IDENTIFIER) && same_line)) {
+        SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
+        return mk(N_EMPTY);
+      }
+      goto l_expr_stmt;
+    }
+    if (!let_declaration_ahead(p)) goto l_expr_stmt;
     p->lx.st.consumed = 1;
     sv_ast_t *n = parse_var_decl(p, SV_VAR_LET, false);
     consume_semicolon(p);
@@ -226,11 +280,11 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
     expect(p, TOK_LPAREN);
     n->cond = parse_expr(p);
     expect(p, TOK_RPAREN);
-    n->left = parse_stmt(p);
+    n->left = parse_body_stmt(p);
     if (!check_if_branch(p, n->left)) return n;
     if (sv_lexer_next(&p->lx) == TOK_ELSE) {
       p->lx.st.consumed = 1;
-      n->right = parse_stmt(p);
+      n->right = parse_body_stmt(p);
       if (!check_if_branch(p, n->right)) return n;
     }
     return n;
@@ -242,18 +296,16 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
     expect(p, TOK_LPAREN);
     n->cond = parse_expr(p);
     expect(p, TOK_RPAREN);
-    n->body = parse_stmt(p);
-    if (is_body_declaration(n->body))
-      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
+    n->body = parse_body_stmt(p);
+    check_loop_body(p, n->body);
     return n;
   }
 
   l_do: {
     p->lx.st.consumed = 1;
     sv_ast_t *n = mk(N_DO_WHILE);
-    n->body = parse_stmt(p);
-    if (is_body_declaration(n->body))
-      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
+    n->body = parse_body_stmt(p);
+    check_loop_body(p, n->body);
     expect(p, TOK_WHILE);
     expect(p, TOK_LPAREN);
     n->cond = parse_expr(p);
@@ -286,12 +338,13 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
       } else sv_lexer_restore_state(&p->lx, &saved);
     }
     
+    bool let_expr = false;
     if (!init_node && using_declaration_here(p, true)) {
       p->lx.st.consumed = 1;
       p->no_in = true;
       init_node = parse_var_decl(p, SV_VAR_USING, true);
       p->no_in = false;
-    } else if (!init_node && (p->lx.st.tok == TOK_VAR || p->lx.st.tok == TOK_LET || p->lx.st.tok == TOK_CONST)) {
+    } else if (!init_node && (p->lx.st.tok == TOK_VAR || p->lx.st.tok == TOK_CONST || (p->lx.st.tok == TOK_LET && let_declaration_ahead(p)))) {
       sv_var_kind_t kind = (
         p->lx.st.tok == TOK_VAR) ? SV_VAR_VAR :
         (p->lx.st.tok == TOK_LET) ? SV_VAR_LET : SV_VAR_CONST;
@@ -300,36 +353,47 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
       init_node = parse_var_decl(p, kind, true);
       p->no_in = false;
     } else if (!init_node && p->lx.st.tok != TOK_SEMICOLON) {
+      let_expr = p->lx.st.tok == TOK_LET;
+      bool async_of = p->lx.st.tok == TOK_ASYNC && !is_for_await && sv_lexer_lookahead(&p->lx) == TOK_OF;
       p->no_in = true;
       init_node = parse_expr(p);
       p->no_in = false;
+      if (async_of && init_node->type == N_IDENT && !(init_node->flags & FN_PAREN) && sv_lexer_next(&p->lx) == TOK_OF) {
+        SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "The left-hand side of a for-of loop may not be 'async'");
+        return mk(N_EMPTY);
+      }
     }
-
     uint8_t la = sv_lexer_next(&p->lx);
-    if (la == TOK_IN) {
+    bool is_of = la == TOK_OF;
+    if (la == TOK_IN || is_of) {
+      if (is_for_await && !is_of) {
+        sv_parse_unexpected_token(p);
+        return mk(N_EMPTY);
+      }
+      if (init_node && init_node->type == N_VAR) {
+        sv_ast_t *decl = init_node->args.count == 1 ? init_node->args.items[0] : NULL;
+        bool legacy_init = !is_of && !p->lx.strict && init_node->var_kind == SV_VAR_VAR && decl && decl->left && decl->left->type == N_IDENT;
+        bool using_in = !is_of && (init_node->var_kind == SV_VAR_USING || init_node->var_kind == SV_VAR_AWAIT_USING);
+        if (!decl || using_in || (decl->right && !legacy_init)) {
+          SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Invalid left-hand side in for-loop");
+          return mk(N_EMPTY);
+        }
+      } else if (!init_node || (is_of && let_expr) || sv_reject_assign_target(p, init_node, SV_TARGET_FOR)) {
+        if (!Ant_Exception_Pending(p->js)) SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Invalid left-hand side in for-loop");
+        return mk(N_EMPTY);
+      }
       p->lx.st.consumed = 1;
-      sv_ast_t *n = mk(N_FOR_IN);
+      sv_ast_t *n = mk(is_of ? (is_for_await ? N_FOR_AWAIT_OF : N_FOR_OF) : N_FOR_IN);
       n->left = init_node;
-      n->right = parse_expr(p);
+      n->right = is_of ? parse_assign(p) : parse_expr(p);
       expect(p, TOK_RPAREN);
-      n->body = parse_stmt(p);
-      if (p->lx.strict && init_node && init_node->type == N_VAR && var_decl_has_initializer(init_node))
-        SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "for-in loop variable declaration may not have an initializer in strict mode");
-      if (is_body_declaration(n->body))
-        SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
+      n->body = parse_body_stmt(p);
+      check_loop_body(p, n->body);
       return n;
     }
-    if (la == TOK_OF || (la == TOK_IDENTIFIER && p->lx.st.tlen == 2 &&
-        memcmp(tok_str(p), "of", 2) == 0)) {
-      p->lx.st.consumed = 1;
-      sv_ast_t *n = mk(is_for_await ? N_FOR_AWAIT_OF : N_FOR_OF);
-      n->left = init_node;
-      n->right = parse_assign(p);
-      expect(p, TOK_RPAREN);
-      n->body = parse_stmt(p);
-      if (is_body_declaration(n->body))
-        SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
-      return n;
+    if (is_for_await) {
+      sv_parse_unexpected_token(p);
+      return mk(N_EMPTY);
     }
 
     if (init_node && init_node->type == N_VAR && (
@@ -354,9 +418,8 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
     if (sv_lexer_next(&p->lx) != TOK_RPAREN)
       n->update = parse_expr(p);
     expect(p, TOK_RPAREN);
-    n->body = parse_stmt(p);
-    if (is_body_declaration(n->body))
-      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
+    n->body = parse_body_stmt(p);
+    check_loop_body(p, n->body);
     return n;
   }
 
@@ -410,6 +473,8 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
       if (sv_lexer_next(&p->lx) == TOK_LPAREN) {
         p->lx.st.consumed = 1;
         n->catch_param = parse_binding_pattern(p);
+        if (n->catch_param->type != N_IDENT && ast_pattern_binds(n->catch_param, "let") && !Ant_Exception_Pending(p->js))
+          SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "let is disallowed as a lexically bound name");
         expect(p, TOK_RPAREN);
       }
       n->catch_body = parse_block(p, false);
@@ -458,7 +523,8 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
     expect(p, TOK_LPAREN);
     n->left = parse_expr(p);
     expect(p, TOK_RPAREN);
-    n->body = parse_stmt(p);
+    n->body = parse_body_stmt(p);
+    check_loop_body(p, n->body);
     return n;
   }
 
@@ -475,6 +541,7 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
     sv_ast_t *cls = parse_class(p);
     cls->src_off = class_off;
     cls->flags |= FN_CLASS_DECL;
+    if (!cls->str && !Ant_Exception_Pending(p->js)) SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Class statements require a class name");
     return cls;
   }
 
@@ -523,12 +590,19 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
   }
 
   l_expr_stmt: {
-    if ((p->lx.st.tok == TOK_IDENTIFIER || is_contextual_ident_tok(p->lx.st.tok)) && sv_lexer_lookahead(&p->lx) == TOK_COLON) {
-        sv_ast_t *label = mk(N_LABEL);
-        label->str = tok_ident_str(p, &label->len);
-        p->lx.st.consumed = 1;
-        sv_lexer_next(&p->lx); p->lx.st.consumed = 1;
-        label->body = parse_stmt(p);
+    bool adjacent_colon = p->lx.st.tok == TOK_IDENTIFIER && p->lx.st.pos < p->lx.clen && p->lx.code[p->lx.st.pos] == ':';
+    sv_ast_t *expr = adjacent_colon ? mk_ident_from_tok(p) : parse_expr(p);
+    if (adjacent_colon) {
+      if (sv_reject_ident_name(p, expr->str, expr->len)) return expr;
+      p->lx.st.consumed = 1;
+    }
+    bool named = expr->type == N_IDENT || ((expr->type == N_UNDEF || expr->type == N_GLOBAL_THIS) && expr->str);
+    if (named && sv_lexer_next(&p->lx) == TOK_COLON && !(expr->flags & FN_PAREN)) {
+      sv_ast_t *label = expr;
+      label->type = N_LABEL;
+      label->src_end = 0;
+      p->lx.st.consumed = 1;
+      label->body = parse_body_stmt(p);
       if (is_lexical_decl_stmt(label->body) || is_class_decl_stmt(label->body)) {
         SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
       } else if (is_function_decl_stmt(label->body) &&
@@ -538,7 +612,6 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
       return label;
     }
 
-    sv_ast_t *expr = parse_expr(p);
     consume_semicolon(p);
     return expr;
   }

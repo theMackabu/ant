@@ -20,6 +20,7 @@ typedef struct {
   bool class_initializer;
   bool no_yield;
   bool in_generator;
+  bool body_stmt;
   uint32_t function_depth;
   uint32_t chain_links;
 } sv_parser_t;
