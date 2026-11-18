@@ -93,6 +93,7 @@ static bool eval_scope_builder_add_binding(
     scope->capacity = capacity;
   }
   uint32_t binding_index = scope->count++;
+  if (len == 9 && memcmp(name, "arguments", 9) == 0) scope->binds_arguments = true;
   if (meta->import_kind == SV_IMPORT_BIND_DEFAULT) kind |= SV_EVAL_BIND_IMPORT_DEFAULT;
   if (meta->import_kind == SV_IMPORT_BIND_NAMED) kind |= SV_EVAL_BIND_IMPORT_NAMED;
   

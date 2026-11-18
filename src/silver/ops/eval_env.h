@@ -462,7 +462,7 @@ ant_value_t sv_eval_capture_env(
   js_set_proto_wb(js, env, parent);
   sv_eval_env_state_t *parent_state = sv_eval_env_state(parent);
   if (!frame->func->is_arrow && !frame->func->is_eval &&
-      !(parent_state && parent_state->is_variable)) {
+      !(parent_state && parent_state->is_variable) && !scope->binds_arguments) {
     ant_value_t arguments = sv_eval_arguments(js, vm, frame);
     if (is_err(arguments)) { GC_ROOT_RESTORE(js, mark); return arguments; }
     js_set(js, env, "arguments", arguments);

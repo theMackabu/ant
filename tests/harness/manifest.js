@@ -390,6 +390,7 @@ export function targets() {
     'test_plain_object_index_access.cjs',
     'test_poly_field_ic.cjs',
     'test_poly_field_store.cjs',
+    'test_parameter_scope.cjs',
     'test_primitive_ic_invalidation.cjs',
     'test_primitive_proto_setter_throw.cjs',
     'test_process_env_proxy.cjs',

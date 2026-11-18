@@ -171,6 +171,7 @@ void sv_func_finalize_type_data(
       const sv_eval_scope_builder_t *src = &comp->eval_scopes[i];
       sv_eval_scope_t *dst = &metadata->eval_scopes[i];
       dst->count = src->count;
+      dst->binds_arguments = src->binds_arguments;
       dst->flags = src->flags;
       dst->bindings = src->count > 0
         ? bindings + binding_offset : NULL;

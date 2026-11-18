@@ -164,6 +164,7 @@ typedef struct {
   sv_runtime_binding_t *bindings;
   uint32_t count;
   uint32_t capacity;
+  bool binds_arguments;
   sv_eval_scope_flags_t flags;
 } sv_eval_scope_builder_t;
 
@@ -201,6 +202,8 @@ typedef struct sv_compiler {
   int max_local_count;
   int scope_depth;
   int param_locals;
+  int param_bind_end;
+  bool param_split;
 
   sv_upval_desc_t *upval_descs;
   sv_binding_meta_t *upval_bindings;

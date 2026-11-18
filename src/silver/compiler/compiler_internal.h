@@ -240,6 +240,7 @@ void check_switch_declarations(sv_compiler_t *c, sv_ast_t *node);
 void check_for_head_declarations(sv_compiler_t *c, sv_ast_t *head, sv_ast_t *body);
 void check_catch_declarations(sv_compiler_t *c, sv_ast_t *param, sv_ast_t *body);
 void hoist_var_decls(sv_compiler_t *c, sv_ast_t *node);
+int split_param_binding(sv_compiler_t *c, int param_local);
 void hoist_lexical_pattern(sv_compiler_t *c, sv_ast_t *pat,
                                   bool is_const);
 void annex_b_collect_funcs(ant_t *js, sv_ast_t *node, sv_ast_list_t *out);
