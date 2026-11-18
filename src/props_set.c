@@ -312,7 +312,10 @@ static ant_value_t setprop_array_length_number(ant_t *js, ant_value_t obj, ant_o
   double requested = Ant_Value_AsNumberUnchecked(v);
 
   if (__builtin_expect((len_obj->flags.raw & (ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_EXOTIC)) != 0, 0)) {
-    if (ant_array_is_shared(len_obj) && !Ant_Array_Unshare(js, len_obj)) return js_mkerr(js, "oom");
+    if (ant_array_is_shared(len_obj)) {
+      if (!array_length_is_valid(requested)) return array_length_range_error(js);
+      return array_length_set_shared(js, obj, len_obj, (ant_offset_t)requested) ? v : js_mkerr(js, "oom");
+    }
     if (array_length_readonly_slow(js, obj)) return array_length_write_ignored(js, v, declined);
   }
   if (__builtin_expect(!array_length_is_valid(requested), 0)) return array_length_range_error(js);

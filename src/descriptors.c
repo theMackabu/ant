@@ -1159,6 +1159,11 @@ static ant_value_t define_array_length(
     return t->obj;
   }
 
+  if (ant_array_is_shared(arr_ptr)) {
+    if (!make_readonly) return array_length_set_shared(js, as_obj, arr_ptr, new_len) ? t->obj : js_mkerr(js, "oom");
+    if (!Ant_Array_Unshare(js, arr_ptr)) return js_mkerr(js, "oom");
+  }
+  
   if (__builtin_expect(!array_length_has_guarded_elements(arr_ptr), 1)) {
     array_length_set_unguarded(js, as_obj, new_len);
     if (make_readonly && !js_array_make_length_readonly(js, as_obj)) return js_mkerr(js, "oom");

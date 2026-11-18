@@ -115,6 +115,7 @@ ant_value_t check_object_extensibility_symbol(ant_t *js, ant_value_t obj, ant_va
 void array_len_set(ant_t *js, ant_value_t obj, ant_offset_t new_len);
 bool array_length_has_guarded_elements(ant_object_t *ptr);
 void array_length_set_unguarded(ant_t *js, ant_value_t obj, ant_offset_t new_len);
+bool array_length_set_shared(ant_t *js, ant_value_t obj, ant_object_t *ptr, ant_offset_t new_len);
 bool array_proto_chain_plain(ant_t *js, ant_object_t *arr);
 bool array_elements_proto_plain(ant_t *js, ant_object_t *ptr);
 

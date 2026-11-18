@@ -52,8 +52,8 @@ static inline ant_value_t require_callback(ant_native_params_t, const char *name
 }
 
 static inline void array_copy_write(ant_t *js, ant_value_t result, ant_offset_t doff, ant_offset_t idx, ant_value_t value) {
-  if (doff) dense_set(js, doff, idx, value);
-  else arr_set(js, result, idx, value);
+  if (doff) dense_set_owned(js, doff, idx, value);
+  else arr_set_owned(js, result, idx, value);
 }
 
 static inline ant_value_t array_copy_element(
@@ -520,6 +520,12 @@ static ant_value_t builtin_array_pop(ant_params_t) {
     fast->u.array.data[len] = T_EMPTY;
     fast->u.array.len = len;
     return is_empty_slot(last) ? Ant_Value_Undefined : last;
+  }
+  
+  ant_object_t *shared = vtype(call_this) == kTypeArray ? (ant_object_t *)vptr(call_this) : NULL;
+  if (shared && ant_array_is_shared(shared) && shared->u.array.len > 0) {
+    ant_value_t last = shared->u.array.data[shared->u.array.len - 1];
+    if (!is_empty_slot(last) && array_length_set_shared(js, call_this, shared, shared->u.array.len - 1)) return last;
   }
   
   if (!Ant_Array_UnshareValue(js, call_this)) return js_mkerr(js, "oom");
