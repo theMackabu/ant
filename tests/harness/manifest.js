@@ -33,6 +33,7 @@ export function targets() {
     'test_array_inherited_index.cjs',
     'test_array_proto_index_reads.cjs',
     'test_array_readonly_length.cjs',
+    'test_array_length_readonly_order.cjs',
     'test_array_storage_reuse.cjs',
     'test_arraybuffer_gc_pressure.cjs',
     'test_arraybuffer_length.cjs',
