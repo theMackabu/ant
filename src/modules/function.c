@@ -4,13 +4,13 @@
 
 #include "cfunc.h"
 #include "stringify.h"
+#include "operators.h"
+#include "descriptors.h"
 #include "silver/compiler.h"
 #include "silver/call.h"
 #include "silver/jit.h"
 #include "modules/function.h"
 #include "modules/proxy.h"
-#include "operators.h"
-#include "descriptors.h"
 
 ant_value_t js_normalize_sloppy_this(ant_t *js, ant_value_t value) {
   if (vtype(value) == kTypeUndefined || vtype(value) == kTypeNull) return js->global_this;
