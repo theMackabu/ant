@@ -337,7 +337,8 @@ ant_value_t proxy_own_keys_filtered(ant_t *js, ant_value_t obj, bool include_sym
 
 ant_value_t proxy_not_prevented_error(ant_t *js, ant_value_t proxy, const char *host_message, const char *message) {
   ant_proxy_state_t *data = get_proxy_data(proxy);
-  return js_mkerr_typed(js, JS_ERR_TYPE, "%s", data && data->host ? host_message : message);
+  bool host = data && (data->host || is_object_type(js_get_slot(data->target, SLOT_VM_SANDBOX)));
+  return js_mkerr_typed(js, JS_ERR_TYPE, "%s", host ? host_message : message);
 }
 
 ant_value_t proxy_set_integrity_level(ant_t *js, ant_value_t obj, bool freeze) {

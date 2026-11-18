@@ -484,6 +484,7 @@ export function targets() {
     'test_class_fields_returned_objects.cjs',
     'test_math_bigint_args.cjs',
     'test_object_literal_proto_key.cjs',
+    'test_object_integrity_kinds.mjs',
     'test_startup_time.cjs',
     'test_stream_async_iterator.mjs',
     'test_stream_handled_errors.cjs',

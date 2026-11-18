@@ -160,7 +160,7 @@ static ant_value_t vm_global_own_keys(ant_params_t) {
 }
 
 static ant_value_t vm_global_prevent_extensions(ant_params_t) {
-  return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot freeze");
+  return Ant_Value_False;
 }
 
 #undef VM_TRAP_PRELUDE
