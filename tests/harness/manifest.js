@@ -161,6 +161,7 @@ export function targets() {
     'test_array_ctor_length.cjs',
     'test_async_generator_yield_await.mjs',
     'test_assert_error_fields.cjs',
+    'test_array_literal_sites.cjs',
     'test_intl_canonicalize.cjs',
     'test_string_line_continuation.cjs',
     'test_iterator_result_shape.cjs',

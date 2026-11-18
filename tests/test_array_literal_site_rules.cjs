@@ -4,6 +4,10 @@ const { spawnSync } = require('node:child_process');
 const large = Array.from({ length: 100 }, (_, i) => i).join(', ');
 const cases = {
   smallFlat: { body: '[1, 2, 3]', site: false },
+  leafObjects: { body: "[{ x: 1 }, { y: 'two' }, { z: null }]", site: false },
+  emptyNested: { body: '[[], { a: 1 }]', site: false },
+  nestedArray: { body: '[{ x: 1 }, [2]]', site: true },
+  nestedInObject: { body: '[{ x: [1, 2] }]', site: true },
   largeFlat: { body: `[${large}]`, site: true },
 };
 

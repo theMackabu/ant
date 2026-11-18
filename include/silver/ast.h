@@ -125,6 +125,7 @@ enum {
   FN_OWN_YIELD        = 1 << 24,
   FN_USES_SUPER       = 1 << 25,
   FN_PATTERN_ONLY     = 1 << 26,
+  FN_LITERAL_DYNAMIC  = 1 << 27,
   FN_FIELD_THUNK      = 1 << 28,
   FN_SOLE_SUPER_CALL  = 1 << 29,
   FN_SYNTHETIC        = 1 << 30,
