@@ -59,6 +59,7 @@ typedef enum {
   SV_OPF_JIT_INLINE_SIDE_EFFECT     = 1u << 27,
   SV_OPF_JIT_INLINE_GUARD_RESTART   = 1u << 28,
   SV_OPF_JIT_INLINE_AFTER_EFFECT    = 1u << 29,
+  SV_OPF_OPT_COLD                   = 1u << 30,
 } sv_opcode_flags_t;
 
 typedef enum {
