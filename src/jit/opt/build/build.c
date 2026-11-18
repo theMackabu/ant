@@ -3900,6 +3900,27 @@ static sv_func_t *opt_known_target(opt_builder_t *b, ir_node_id_t callee) {
   return target && !target->is_async && !target->is_generator && target->code_len > 0 ? target : NULL;
 }
 
+static ant_value_t opt_known_callee(opt_builder_t *b, ir_node_id_t callee, bool *constant) {
+  uint64_t bits;
+  *constant = ir_constant_value(b->graph, callee, &bits) && ir_node(b->graph, callee)->repr == OPT_REPR_TAGGED;
+  return *constant ? (ant_value_t)bits : opt_likely_value(b, callee);
+}
+
+static ir_node_id_t opt_emit_cfunc_call(opt_builder_t *b, ant_value_t known, ant_value_t cfunc, const ir_node_id_t *inputs, uint32_t argc) {
+  ir_op_t call = ir_op(IR_OP_CALL_NATIVE);
+  call.call.func = b->func;
+  call.call.bc_off = b->pc;
+  call.call.stores_operands = true;
+  call.call.argc = (uint16_t)argc;
+  call.call.helper = (uintptr_t)((const ant_cfunc_meta_t *)vptr(cfunc))->fn;
+  call.call.extra = cfunc == known ? 0 : (uintptr_t)known;
+  call.call.builtin = true;
+  ir_node_id_t result = opt_emit(b, call, inputs, 2 + argc, OPT_REPR_TAGGED);
+  ir_node(b->graph, result)->frame_state = opt_call_position(b);
+  opt_mark_catch(b, result);
+  return result;
+}
+
 static opt_flow_t opt_build_push_pop(opt_builder_t *b, bool push, const ir_node_id_t *inputs, uint32_t operands, bool tail) {
   ir_block_id_t slow[4], ends[3];
   ir_node_id_t results[3], length;
@@ -3938,14 +3959,9 @@ static opt_flow_t opt_build_push_pop(opt_builder_t *b, bool push, const ir_node_
   }
   opt_join_blocks(b, slow, count);
   ir_block(b->graph, b->block)->is_cold = true;
-  ir_op_t call = ir_op(IR_OP_CALL_DIRECT);
-  call.call.func = b->func;
-  call.call.bc_off = b->pc;
-  call.call.stores_operands = true;
-  call.call.argc = push;
-  results[paths] = opt_emit(b, call, inputs, 2 + push, OPT_REPR_TAGGED);
-  ir_node(b->graph, results[paths])->frame_state = opt_call_position(b);
-  opt_mark_catch(b, results[paths]);
+  bool constant;
+  ant_value_t builtin = opt_known_callee(b, inputs[0], &constant);
+  results[paths] = opt_emit_cfunc_call(b, builtin, builtin, inputs, push);
   ends[paths++] = b->block;
   opt_join_blocks(b, ends, paths);
   return opt_finish_call(b, operands, opt_value_phi(b, b->frame.sp - operands, results, paths), tail);
@@ -4118,10 +4134,9 @@ static opt_flow_t opt_build_getter_field(opt_builder_t *b, const opt_field_plan_
 }
 
 static bool opt_try_builtin_call(opt_builder_t *b, ir_node_id_t *inputs, uint32_t argc, uint32_t operands, bool tail, opt_flow_t *flow) {
-  uint64_t bits;
   ir_node_id_t callee = inputs[0];
-  bool constant = ir_constant_value(b->graph, callee, &bits) && ir_node(b->graph, callee)->repr == OPT_REPR_TAGGED;
-  ant_value_t known = constant ? (ant_value_t)bits : opt_likely_value(b, callee);
+  bool constant;
+  ant_value_t known = opt_known_callee(b, callee, &constant);
   if (!known) return false;
   ant_value_t cfunc = vtype(known) == kTypeBuiltin ? known : sv_native_closure_cfunc(known);
   if (!cfunc || (cfunc != known && !opt_retain(b, known))) return false;
@@ -4132,17 +4147,7 @@ static bool opt_try_builtin_call(opt_builder_t *b, ir_node_id_t *inputs, uint32_
     check.check_value.kind = OPT_EXIT_BAD_CALL_TARGET;
     opt_emit_checked(b, check, &callee, 1, OPT_REPR_NONE);
   }
-  ir_op_t call = ir_op(IR_OP_CALL_NATIVE);
-  call.call.func = b->func;
-  call.call.bc_off = b->pc;
-  call.call.stores_operands = true;
-  call.call.argc = (uint16_t)argc;
-  call.call.helper = (uintptr_t)((const ant_cfunc_meta_t *)vptr(cfunc))->fn;
-  call.call.extra = cfunc == known ? 0 : (uintptr_t)known;
-  call.call.builtin = true;
-  ir_node_id_t result = opt_emit(b, call, inputs, 2 + argc, OPT_REPR_TAGGED);
-  ir_node(b->graph, result)->frame_state = opt_call_position(b);
-  opt_mark_catch(b, result);
+  ir_node_id_t result = opt_emit_cfunc_call(b, known, cfunc, inputs, argc);
   opt_forget_memory(b);
   *flow = opt_finish_call(b, operands, result, tail);
   return true;
