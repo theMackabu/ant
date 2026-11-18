@@ -582,12 +582,9 @@ void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 bool sv_node_has_optional_base(sv_ast_t *n) {
-  while (n) {
-    if (n->type == N_OPTIONAL) return true;
-    if (n->type == N_MEMBER || n->type == N_CALL) n = n->left;
-    else break;
-  }
-  return false;
+  if (!n || (n->flags & FN_PAREN)) return false;
+  if (n->type == N_OPTIONAL) return true;
+  return (n->type == N_MEMBER || n->type == N_CALL) && (n->flags & FN_OPTIONAL_BASE);
 }
 
 static void compile_delete_optional(sv_compiler_t *c, sv_ast_t *arg) {

@@ -72,10 +72,12 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
       expect(p, TOK_RPAREN);
       call->src_off = n ? n->src_off : call->src_off;
       call->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
+      if (optional_chain) call->flags |= FN_OPTIONAL_BASE;
       n = call;
     } else if (la == TOK_DOT || la == TOK_LBRACKET) {
       n = parse_member_suffix(p, n, la);
       if (n && n->type == N_EMPTY) return n;
+      if (optional_chain) n->flags |= FN_OPTIONAL_BASE;
     } else if (la == TOK_OPTIONAL_CHAIN) {
       p->lx.st.consumed = 1;
       optional_chain = true;
@@ -99,6 +101,7 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
         expect(p, TOK_RPAREN);
         call->src_off = n ? n->src_off : call->src_off;
         call->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
+        call->flags |= FN_OPTIONAL_BASE;
         n = call;
         continue;
       } else if (p->lx.st.tok == TOK_HASH) {
