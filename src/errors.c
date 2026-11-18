@@ -835,6 +835,7 @@ void js_errors_init(ant_t *js, ant_value_t object_proto, ant_value_t function_pr
   ant_value_t aggregate_proto = Ant_Object_CreateBare(js);
   set_proto(js, aggregate_proto, error_proto);
   mkprop_bytes(js, aggregate_proto, "name", 4, Ant_String_FromLiteral(js, "AggregateError"), JS_DESC_W | JS_DESC_C);
+  mkprop_bytes(js, aggregate_proto, "message", 7, Ant_String_FromLiteral(js, ""), JS_DESC_W | JS_DESC_C);
   js->builtins.error_protos[JS_ERR_AGGREGATE] = aggregate_proto;
   
   ant_value_t aggregate_ctor = mkobj(js, 0);
