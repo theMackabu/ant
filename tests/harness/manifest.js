@@ -45,6 +45,7 @@ export function targets() {
     'test_assert_pending_rejections.cjs',
     'test_async_await_old_promise_gc.cjs',
     'test_async_call_await_ticks.cjs',
+    'test_async_arrow_heads.cjs',
     'test_async_handled_errors.cjs',
     'test_async_inline_calls.cjs',
     'test_async_iterator_completed_result.cjs',
