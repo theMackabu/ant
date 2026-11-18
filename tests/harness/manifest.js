@@ -373,6 +373,7 @@ export function targets() {
     'test_opt_exit_metadata.cjs',
     'test_opt_exit_upvalues.cjs',
     'test_opt_func_state.cjs',
+    'test_opt_class_fields.cjs',
     'test_opt_generic.cjs',
     'test_opt_in_field_for_in.cjs',
     'test_opt_inline_alloc.cjs',

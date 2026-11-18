@@ -313,6 +313,7 @@ OP_DEF(  GET_SUPER_FIELD,   7,   2,   1, atom)      /* this home -> value (atom 
 OP_DEF(  PUT_SUPER_FIELD,   7,   3,   1, atom)      /* this home value -> value (atom + ic_idx:u16) */
 OP_DEF(  NEW_SPREAD,        3,   2,   1, npop)
 OP_DEF(  SUPER_SPREAD,      3,   3,   1, npop)
+OP_DEF(  INIT_FIELD,        7,   2,   0, atom)
 #undef OP_DEF
 #undef op_def
 #endif
@@ -578,5 +579,6 @@ OP_IC_SLOT(IN_FIELD)
 OP_IC_SLOT(PUT_FIELD)
 OP_IC_SLOT(GET_SUPER_FIELD)
 OP_IC_SLOT(PUT_SUPER_FIELD)
+OP_IC_SLOT(INIT_FIELD)
 #undef OP_IC_SLOT
 #endif

@@ -334,6 +334,11 @@ L_DEFINE_FIELD: {
   NEXT(OP_DEFINE_FIELD);
 }
 
+L_INIT_FIELD: {
+  VM_CHECK(sv_op_init_field(vm, js, func, ip));
+  NEXT(OP_INIT_FIELD);
+}
+
 L_DEFINE_SLOT: {
   sv_op_define_slot(vm, js, func, ip);
   NEXT(OP_DEFINE_SLOT);
