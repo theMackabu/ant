@@ -1487,6 +1487,14 @@ static ant_value_t reflect_define_property(ant_t *js, ant_value_t obj, ant_value
   return result;
 }
 
+ant_value_t js_create_data_property_or_throw(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t value) {
+  define_desc_raw_t raw = {0};
+  raw.has[DESC_VALUE] = raw.has[DESC_WRITABLE] = raw.has[DESC_ENUMERABLE] = raw.has[DESC_CONFIGURABLE] = true;
+  raw.val[DESC_VALUE] = value;
+  raw.val[DESC_WRITABLE] = raw.val[DESC_ENUMERABLE] = raw.val[DESC_CONFIGURABLE] = Ant_Value_True;
+  return object_define_property_reporting(js, obj, prop, Ant_Value_Undefined, &raw, NULL);
+}
+
 ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode) {
   return reflect_mode
     ? reflect_define_property(js, obj, prop, descriptor)
