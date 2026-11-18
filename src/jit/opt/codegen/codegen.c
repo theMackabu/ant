@@ -479,6 +479,7 @@ static asm_label_t opt_cg_exit_site(opt_cg_t *cg, ir_node_id_t node) {
         .argc = frame->passed_argument_count,
         .mode = frame->mode,
         .construct = frame->construct,
+        .takes_rest = frame->takes_rest,
       };
       next += frame->values.len;
       opt_vec_push(&cg->arena, &cg->site_frames, entry);
@@ -3048,7 +3049,8 @@ static void opt_cg_call_runtime(opt_cg_t *cg, ir_node_id_t node, uint64_t helper
   masm_load64(m, a[2], opt_cg_call_slot(cg, 1));
   masm_load_effective_address(m, a[3], opt_cg_call_slot(cg, 2));
   masm_move_imm64(m, a[4], op->call.argc);
-  if (op->code == IR_OP_CALL_NATIVE) masm_move_imm64(m, a[5], op->call.extra);
+  if (op->code == IR_OP_CALL_NATIVE && op->call.passes_entry) masm_load_effective_address(m, a[5], opt_cg_entry_field(cg, 0));
+  else if (op->code == IR_OP_CALL_NATIVE) masm_move_imm64(m, a[5], op->call.extra);
   masm_call_absolute(m, helper);
   opt_cg_record_call(cg, ir_node(cg->graph, node)->frame_state, -1);
 }

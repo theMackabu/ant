@@ -388,6 +388,7 @@ export function targets() {
     'test_opt_ranges.cjs',
     'test_opt_receivers_strings.cjs',
     'test_opt_recursive_calls.cjs',
+    'test_opt_rest_params.cjs',
     'test_opt_shape_gc.cjs',
     'test_opt_speculation.cjs',
     'test_opt_rest_spread.cjs',

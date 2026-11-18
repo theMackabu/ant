@@ -817,7 +817,8 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
     } else {
       sv_func_t *frame_func = frame->func;
       uint32_t frame_params = frame_func->param_count, frame_locals = (uint32_t)frame_func->max_locals;
-      uint32_t argc = is_object_type(frame->arguments) ? at->argc : at->argc < frame_params ? at->argc : frame_params;
+      bool all = is_object_type(frame->arguments) || frame->site->takes_rest;
+      uint32_t argc = all || at->argc < frame_params ? at->argc : frame_params;
       vm->jit.resume.arguments_obj = frame->arguments;
       result = jit_resume_in_interpreter(
         vm, frame->closure, frame->this_val, opt_exit_new_target(frame), frame->closure->super_val,
@@ -903,6 +904,14 @@ ant_value_t opt_rt_super_spread(sv_vm_t *vm, ant_value_t this_val, ant_value_t f
   if (is_err(effective_this)) return effective_this;
   frame->this = effective_this;
   return effective_this;
+}
+
+ant_value_t opt_rt_rest_array(sv_vm_t *vm, const ant_value_t *args, uint32_t argc, uint32_t start) {
+  return Ant_Array_CreateRest(vm->js, args, argc, start);
+}
+
+ant_value_t opt_rt_rest(sv_vm_t *vm, ant_value_t start, ant_value_t unused, ant_value_t *args, int64_t argc, const opt_entry_t *entry) {
+  return opt_rt_rest_array(vm, entry->args, (uint32_t)entry->argc, (uint32_t)Ant_Value_AsNumberUnchecked(start));
 }
 
 ant_value_t opt_rt_call_args(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t spread) {

@@ -174,6 +174,7 @@ struct opt_builder {
   ir_node_id_t *tail_phis;
   bool virtual_arguments;
   ir_node_id_t arguments_marker;
+  bool keeps_arguments;
   ir_slot_values_t state_values;
   ir_slots_t state_in_frame;
 };
@@ -875,6 +876,7 @@ static ir_frame_state_t opt_frame_state_at(opt_builder_t *b) {
     .values = b->state_values,
     .in_frame = b->state_in_frame,
     .parent = IR_NONE,
+    .takes_rest = b->keeps_arguments,
   };
   state.values.len = 0;
   state.in_frame.len = 0;
@@ -897,7 +899,7 @@ static ir_frame_state_t opt_frame_state_at(opt_builder_t *b) {
     }
   }
   for (uint32_t p = 0; p < b->params; p++) {
-    if (!opt_bitset_contains(live, p) && !b->frame.slots[p].boxed) continue;
+    if (!opt_bitset_contains(live, p) && !b->frame.slots[p].boxed && !(is_virtual && b->keeps_arguments)) continue;
     const opt_slot_t *slot = &b->frame.slots[p];
     if (slot->node == IR_NONE || (slot->in_sync && !is_virtual)) opt_vec_push(&b->arena, &state.in_frame, opt_param_slot(&b->layout, p));
     else {
@@ -915,7 +917,7 @@ static ir_frame_state_t opt_frame_state_at(opt_builder_t *b) {
     opt_vec_push(&b->arena, &state.values, ((ir_slot_value_t){OPT_THIS_SLOT, call->receiver}));
     opt_vec_push(&b->arena, &state.values, ((ir_slot_value_t){OPT_CALLEE_SLOT, call->closure}));
     if (call->new_target != IR_NONE) opt_vec_push(&b->arena, &state.values, ((ir_slot_value_t){OPT_NEW_TARGET_SLOT, call->new_target}));
-    for (uint32_t i = b->params; b->virtual_arguments && i < call->argc; i++)
+    for (uint32_t i = b->params; (b->virtual_arguments || b->keeps_arguments) && i < call->argc; i++)
       opt_vec_push(&b->arena, &state.values, ((ir_slot_value_t){opt_param_slot(&b->layout, i), opt_frame_value(b, call->args[i])}));
     state.parent = call->caller_state;
     state.passed_argument_count = call->argc;
@@ -4543,10 +4545,26 @@ static opt_flow_t opt_build_array(opt_builder_t *b, const uint8_t *ip) {
   uint32_t count = sv_get_u16(ip + 1);
   ir_node_id_t elements[OPT_MAX_INLINE_ARRAY];
   for (uint32_t i = 0; i < count && i < OPT_MAX_INLINE_ARRAY; i++) elements[i] = opt_peek(b, count - 1 - i);
-  ir_node_id_t array;
-  array = opt_emit_array(b, elements, count);
+  ir_node_id_t array = opt_emit_array(b, elements, count);
   if (array == IR_NONE) return OPT_FLOW_GENERIC;
   opt_drop(b, count);
+  opt_push(b, array);
+  return OPT_FLOW_CONTINUE;
+}
+
+static opt_flow_t opt_build_rest(opt_builder_t *b, const uint8_t *ip) {
+  uint32_t start = sv_get_u16(ip + 1);
+  const opt_inline_t *call = b->inline_call;
+  ir_node_id_t array;
+  if (call) {
+    uint32_t count = call->argc > start ? call->argc - start : 0;
+    array = opt_emit_array(b, call->args + (count ? start : 0), count);
+    if (array == IR_NONE) return OPT_FLOW_GENERIC;
+  } else {
+    ir_node_id_t inputs[2] = {opt_constant(b, ir_value_number((double)start)), opt_constant(b, IR_VALUE_UNDEFINED)};
+    array = opt_runtime_call(b, (uintptr_t)opt_rt_rest, 0, inputs, 2, true, false);
+    ir_node(b->graph, array)->op.call.passes_entry = true;
+  }
   opt_push(b, array);
   return OPT_FLOW_CONTINUE;
 }
@@ -6424,6 +6442,8 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
       return opt_build_spread_call(b, ip, op);
     case OP_APPLY: case OP_NEW_APPLY:
       return opt_build_apply(b, ip, op);
+    case OP_REST:
+      return opt_build_rest(b, ip);
     case OP_IMPORT_DEFAULT: case OP_IMPORT_NAMED:
       return opt_build_import(b, ip, op);
     case OP_THROW:
@@ -6678,6 +6698,15 @@ static void opt_decide_virtual_arguments(opt_builder_t *b) {
   b->virtual_arguments = uses;
 }
 
+static void opt_decide_virtual_rest(opt_builder_t *b) {
+  uint32_t rests = 0;
+  for (uint32_t i = 0; i < b->ins_count; i++) {
+    if (opt_op_at(b, b->ins_off[i]) != OP_REST) continue;
+    rests++;
+  }
+  b->keeps_arguments = rests > 0;
+}
+
 static bool opt_analyze(opt_builder_t *b) {
   sv_func_t *func = b->func;
   b->tracked = b->params + b->locals + b->stack;
@@ -6693,6 +6722,7 @@ static bool opt_analyze(opt_builder_t *b) {
   opt_decide_virtual_arguments(b);
   opt_compute_rpo(b);
   opt_find_loops(b);
+  opt_decide_virtual_rest(b);
   opt_compute_liveness(b);
   return true;
 }

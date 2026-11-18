@@ -305,6 +305,7 @@ typedef struct {
       bool builtin;
       bool native_closure;
       bool construct_super;
+      bool passes_entry;
       uint16_t spare_slots;
     } call;
     struct {
@@ -462,6 +463,7 @@ typedef struct {
   uint32_t passed_argument_count;
   uint32_t call_off;
   bool construct;
+  bool takes_rest;
 } ir_frame_state_t;
 
 typedef struct {

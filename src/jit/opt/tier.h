@@ -74,6 +74,7 @@ typedef struct {
   uint32_t argc;
   opt_resume_mode_t mode;
   bool construct;
+  bool takes_rest;
 } opt_site_frame_t;
 
 typedef struct {
@@ -234,6 +235,8 @@ ant_value_t opt_rt_super_call(sv_vm_t *vm, ant_value_t this_val, ant_value_t fun
 ant_value_t opt_rt_super_apply(sv_vm_t *vm, ant_value_t this_val, ant_value_t func, ant_value_t *args, int64_t argc, int64_t unused);
 ant_value_t opt_rt_super_spread(sv_vm_t *vm, ant_value_t this_val, ant_value_t func, ant_value_t *args, int64_t argc, int64_t unused);
 ant_value_t opt_rt_super_parent(sv_vm_t *vm, ant_value_t parent, ant_value_t this_val, ant_value_t *args, int64_t argc);
+ant_value_t opt_rt_rest(sv_vm_t *vm, ant_value_t start, ant_value_t unused, ant_value_t *args, int64_t argc, const opt_entry_t *entry);
+ant_value_t opt_rt_rest_array(sv_vm_t *vm, const ant_value_t *args, uint32_t argc, uint32_t start);
 ant_value_t opt_rt_call_args(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t spread);
 ant_value_t opt_rt_new_args(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t spread);
 ant_value_t opt_rt_super_result(ant_value_t result, ant_value_t this_val);
