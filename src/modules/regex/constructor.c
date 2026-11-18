@@ -109,8 +109,7 @@ ant_value_t regexp_species_construct(ant_t *js, ant_value_t rx, ant_value_t ctor
   ant_value_t result = sv_vm_call(js->vm, js, ctor, seed, ctor_args, nargs, &ctor_this, new_target);
 
   if (is_err(result)) return result;
-  if (!is_object_type(result)) result = is_object_type(ctor_this) ? ctor_this : seed;
-  return result;
+  return sv_construct_result(result, ctor_this, seed);
 }
 
 bool regexp_has_internal_slots(ant_t *js, ant_value_t value) {

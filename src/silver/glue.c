@@ -1928,7 +1928,7 @@ ant_value_t jit_helper_new(
   } else result = sv_vm_call(vm, js, func, obj, args, argc, &ctor_this, effective_new_target);
 
   if (is_err(result)) return result;
-  return is_object_type(result) ? result : (is_object_type(ctor_this) ? ctor_this : obj);
+  return sv_construct_result(result, ctor_this, obj);
 }
 
 ant_value_t jit_helper_realm_reenter(

@@ -189,6 +189,7 @@ export function targets() {
     'test_events_key_cache.cjs',
     'test_events_listener_storage.cjs',
     'test_fetch_redirect_credentials.cjs',
+    'test_construct_returns_builtin.cjs',
     'test_ffi_error_boundaries.cjs',
     'test_finally_completion.cjs',
     'test_for_init_nested_in.cjs',

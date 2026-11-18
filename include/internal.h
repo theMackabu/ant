@@ -156,6 +156,15 @@ static inline bool is_callable(ant_value_t v) {
   return obj && obj->flags.is_callable;
 }
 
+static inline bool sv_is_construct_result(ant_value_t value) {
+  return is_object_type(value) || vtype(value) == kTypeBuiltin;
+}
+
+static inline ant_value_t sv_construct_result(ant_value_t result, ant_value_t receiver, ant_value_t fallback) {
+  if (sv_is_construct_result(result)) return result;
+  return sv_is_construct_result(receiver) ? receiver : fallback;
+}
+
 static inline bool js_typeof_is(ant_value_t v, uint8_t type) {
   uint8_t t = vtype(v);
   if (__builtin_expect(type != kTypeObject && type != kTypeFunction, 1)) return t == type;

@@ -791,7 +791,7 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
         bc_off = resume;
         depth = handler_depth + 1;
       } else {
-        if (frames[k - 1].site->construct && !is_object_type(result)) result = frames[k - 1].this_val;
+        if (frames[k - 1].site->construct && !sv_is_construct_result(result)) result = frames[k - 1].this_val;
         if (at->mode == OPT_RESUME_RETURN) continue;
         frame->stack[at->depth - 1] = result;
       }
@@ -889,7 +889,7 @@ ant_value_t opt_rt_import_named(sv_vm_t *vm, ant_value_t ns, ant_value_t unused,
 }
 
 ant_value_t opt_rt_derived_return(sv_vm_t *vm, ant_value_t value, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t kind) {
-  if (is_object_type(value) || vtype(value) == kTypeBuiltin) return value;
+  if (sv_is_construct_result(value)) return value;
   if (vtype(value) == kTypeUndefined) return this_val;
   return js_mkerr_typed(vm->js, JS_ERR_TYPE, SV_DERIVED_CTOR_RETURN_ERROR);
 }
