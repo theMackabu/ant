@@ -5288,6 +5288,43 @@ static ir_node_id_t opt_spread_runtime_call(opt_builder_t *b, uintptr_t helper, 
   return result;
 }
 
+static uint8_t opt_spread_feedback(const opt_builder_t *b, uint32_t feedback_off) {
+  const uint8_t *feedback = sv_func_type_feedback(b->func);
+  return feedback ? feedback[feedback_off] : SV_TFB_SPREAD_UNSEEN;
+}
+
+static int32_t opt_spread_seen_length(const opt_builder_t *b, uint32_t feedback_off) {
+  return sv_tfb_spread_length(opt_spread_feedback(b, feedback_off));
+}
+static void opt_exit_unless(opt_builder_t *b, ir_condition_t condition, const ir_node_id_t *inputs, uint32_t count, opt_exit_kind_t kind);
+static int32_t opt_spread_elements(opt_builder_t *b, ir_node_id_t iterable, ir_node_id_t *elements, uint32_t limit, uint32_t feedback_off) {
+  int32_t seen = opt_spread_seen_length(b, feedback_off);
+  if (seen < 0 || (uint32_t)seen > limit) return -1;
+  if (!opt_may_speculate(b, OPT_EXIT_BAD_TYPE) || !opt_may_speculate(b, OPT_EXIT_BAD_ELEMENTS) || !opt_may_speculate(b, OPT_EXIT_OUT_OF_BOUNDS)) return -1;
+  uint32_t count = (uint32_t)seen;
+  iterable = opt_tagged(b, iterable);
+  opt_exit_unless(b, ir_cond(IR_COND_ITERABLE_ARRAY), &iterable, 1, OPT_EXIT_BAD_TYPE);
+  ir_op_t check = ir_op(IR_OP_CHECK_ELEMENTS);
+  check.elements = IR_ELEMENTS_HOLEY;
+  ir_node_id_t object = opt_emit_checked(b, check, &iterable, 1, OPT_REPR_NONE);
+  ir_node_id_t address = opt_emit1(b, IR_OP_CELL_ADDRESS, object, OPT_REPR_POINTER);
+  ir_node_id_t length = opt_emit1(b, IR_OP_LOAD_ELEMENTS_LENGTH, address, OPT_REPR_INT32);
+  ir_condition_t same = ir_cond(IR_COND_INT32);
+  same.comparison = IR_CMP_STRICTLY_EQUALS;
+  opt_exit_unless(b, same, (ir_node_id_t[]){length, opt_int32_constant(b, (int32_t)count)}, 2, OPT_EXIT_OUT_OF_BOUNDS);
+  for (uint32_t i = 0; i < count; i++) {
+    ir_op_t load = ir_op(IR_OP_LOAD_ELEMENT_AT);
+    load.elements = IR_ELEMENTS_HOLEY;
+    ir_node_id_t element = opt_emit(b, load, (ir_node_id_t[]){address, opt_int32_constant(b, (int32_t)i)}, 2, OPT_REPR_TAGGED);
+    elements[i] = opt_emit_checked(b, ir_op(IR_OP_CHECK_NOT_HOLE), &element, 1, OPT_REPR_TAGGED);
+  }
+  return (int32_t)count;
+}
+
+static bool opt_spread_unseen(const opt_builder_t *b, uint32_t feedback_off) {
+  return opt_spread_feedback(b, feedback_off) == SV_TFB_SPREAD_UNSEEN && opt_may_speculate(b, OPT_EXIT_NO_FEEDBACK);
+}
+
 static opt_flow_t opt_build_spread_call(opt_builder_t *b, const uint8_t *ip, sv_op_t op) {
   bool super = op == OP_SUPER_SPREAD, construct = op == OP_NEW_SPREAD;
   uint32_t argc = sv_get_u16(ip + 1), head = super ? 3 : 2;
@@ -5297,12 +5334,20 @@ static opt_flow_t opt_build_spread_call(opt_builder_t *b, const uint8_t *ip, sv_
     opt_fail(b, "call-argc");
     return OPT_FLOW_FAILED;
   }
-  uint32_t fixed = argc - 1;
+  uint32_t fixed = argc - 1, limit = OPT_MAX_CALL_ARGS - super - fixed;
   ir_node_id_t inputs[3 + OPT_MAX_CALL_ARGS];
   opt_collect_call_inputs(b, inputs, head + fixed, operands);
   ir_node_id_t iterable = opt_peek(b, 0);
   ir_node_id_t *elements = inputs + head + fixed;
+  int32_t count = -1;
   if (opt_is_any_virtual_arguments(b, iterable)) return opt_no_virtual_arguments(b);
+  if (opt_spread_unseen(b, b->pc)) return opt_end_with_exit(b, OPT_EXIT_NO_FEEDBACK);
+  count = opt_spread_elements(b, iterable, elements, limit, b->pc);
+  if (count >= 0) {
+    uint32_t total = fixed + (uint32_t)count;
+    if (super) return opt_build_super_call_with(b, OP_CALL_SUPER, inputs, total, operands);
+    return opt_build_call_with(b, construct ? OP_NEW : OP_CALL_METHOD, inputs, total, operands);
+  }
   *elements = opt_tagged(b, iterable);
   if (super) return opt_build_super_call_with(b, OP_SUPER_SPREAD, inputs, argc, operands);
   uintptr_t helper = construct ? (uintptr_t)opt_rt_new_args : (uintptr_t)opt_rt_call_args;
