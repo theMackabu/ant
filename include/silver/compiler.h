@@ -276,6 +276,7 @@ typedef struct sv_compiler {
   int this_local;
   bool this_bound;
   bool is_class_ctor;
+  int derived_return_local;
   const sv_ast_t *this_bound_stmt;
   bool super_runs_once;
   int this_check_atom;

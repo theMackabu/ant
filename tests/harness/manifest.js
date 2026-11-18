@@ -201,6 +201,7 @@ export function targets() {
     'test_derived_ctor_tail_return_check.cjs',
     'test_fs_io_argument_getters.cjs',
     'test_fs_link.cjs',
+    'test_derived_super_completion.cjs',
     'test_fs_opendir.cjs',
     'test_fs_opendir_leak.cjs',
     'test_derived_this_tdz.cjs',

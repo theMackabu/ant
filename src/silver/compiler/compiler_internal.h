@@ -191,7 +191,9 @@ void emit_with_tries(
 void emit_lexical_new_target(sv_compiler_t *c);
 void emit_this(sv_compiler_t *c);
 void emit_this_store(sv_compiler_t *c);
+void emit_super_receiver(sv_compiler_t *c);
 int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local);
+void emit_new_target(sv_compiler_t *c);
 bool class_method_needs_home(const sv_ast_t *method);
 typedef struct {
   bool needs_this_binding;
@@ -201,6 +203,9 @@ typedef struct {
 } derived_ctor_plan_t;
 
 derived_ctor_plan_t derived_ctor_plan(const sv_ast_t *ctor);
+bool derived_return_needs_check(const sv_compiler_t *c);
+void emit_derived_return_check(sv_compiler_t *c);
+void emit_break_to_loop(sv_compiler_t *c, int target);
 void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_export_writes_from_stack(sv_compiler_t *c, const sv_export_name_t *exports);

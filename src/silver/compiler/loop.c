@@ -509,6 +509,9 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   end_scope(c);
 }
 
+void emit_break_to_loop(sv_compiler_t *c, int target) {
+  emit_close_upvals_to_depth(c, c->loops[target].scope_depth); emit_using_cleanups_to_depth(c, c->loops[target].scope_depth); emit_loop_exit_jump(c, &c->loops[target], &c->loops[target].breaks);
+}
 
 static int find_label_target(sv_compiler_t *c, const sv_ast_t *node) {
   int target = find_loop_label(c, node->str, node->len);
@@ -528,7 +531,7 @@ void compile_break(sv_compiler_t *c, sv_ast_t *node) {
   emit_close_upvals_to_depth(c, c->loops[target].scope_depth);
   emit_using_cleanups_to_depth(c, c->loops[target].scope_depth);
 
-  if (target >= 0) emit_loop_exit_jump(c, &c->loops[target], &c->loops[target].breaks);
+  if (target >= 0) emit_break_to_loop(c, target);
 }
 
 void compile_continue(sv_compiler_t *c, sv_ast_t *node) {

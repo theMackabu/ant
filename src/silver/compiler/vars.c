@@ -1,5 +1,15 @@
 #include "compiler_internal.h"
 
+void emit_new_target(sv_compiler_t *c) {
+  if (c->is_arrow) {
+    emit_lexical_new_target(c);
+    return;
+  }
+  
+  emit_op(c, OP_SPECIAL_OBJ);
+  emit(c, SV_SPECIAL_NEW_TARGET);
+}
+
 void emit_lexical_new_target(sv_compiler_t *c) {
   if (c->new_target_local >= 0) {
     emit_get_local(c, c->new_target_local);
@@ -78,12 +88,61 @@ void emit_this(sv_compiler_t *c) {
 }
 
 void emit_this_store(sv_compiler_t *c) {
+  static const char message[] = "Super constructor may only be called once";
   int slot = -1;
   this_binding_t kind = this_binding(c, false, &slot);
   if (kind == THIS_BINDING_NONE) return;
   
+  if (!c->super_runs_once) {
+    emit_this_binding_get(c, kind, slot);
+    emit_op(c, OP_IS_UNDEF);
+    int first = emit_jump(c, OP_JMP_TRUE);
+    emit_throw_error(c, JS_ERR_REFERENCE, message, sizeof(message) - 1);
+    patch_jump(c, first);
+  }
+  
   emit_op(c, OP_DUP);
   emit_this_binding_put(c, kind, slot);
+}
+
+void emit_super_receiver(sv_compiler_t *c) {
+  int slot = -1;
+  this_binding_t kind = this_binding(c, false, &slot);
+  
+  if (kind == THIS_BINDING_NONE || c->super_runs_once) {
+    emit_op(c, OP_THIS);
+    return;
+  }
+  
+  emit_this_binding_get(c, kind, slot);
+  emit_op(c, OP_IS_UNDEF);
+  int first = emit_jump(c, OP_JMP_TRUE);
+  
+  emit_op(c, OP_OBJECT);
+  emit_new_target(c);
+  emit_atom_op(c, OP_GET_FIELD, "prototype", 9);
+  emit_op(c, OP_SET_PROTO);
+  int done = emit_jump(c, OP_JMP);
+  
+  patch_jump(c, first);
+  emit_op(c, OP_THIS);
+  patch_jump(c, done);
+}
+
+bool derived_return_needs_check(const sv_compiler_t *c) {
+  return c->this_local >= 0 && !c->this_bound;
+}
+
+void emit_derived_return_check(sv_compiler_t *c) {
+  int slot = -1;
+  this_binding_t kind = this_binding(c, false, &slot);
+  emit_op(c, OP_DUP);
+  emit_op(c, OP_IS_UNDEF);
+  int defined = emit_jump(c, OP_JMP_FALSE);
+  emit_op(c, OP_POP);
+  emit_this_binding_get(c, kind, slot);
+  emit_this_check(c);
+  patch_jump(c, defined);
 }
 
 typedef struct {

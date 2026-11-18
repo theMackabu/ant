@@ -551,11 +551,21 @@ sv_func_t *compile_function_body(
     decl_names_free(&params);
   }
 
+  bool return_landing = comp.this_local >= 0 && derived.returns_through_finally;
+  if (return_landing) {
+    comp.derived_return_local = add_hidden_local(&comp);
+    emit_op(&comp, OP_UNDEF);
+    emit_put_local(&comp, comp.derived_return_local);
+    push_loop(&comp, 0, NULL, 0, SV_LOOP_RETURN_LANDING);
+  }
+
   if (node->body) {
     if (node->body->type == N_BLOCK)
       compile_body_block(&comp, node->body, emitted_static_declarations);
     else compile_tail_return_expr(&comp, node->body);
   }
+
+  if (return_landing) pop_loop(&comp);
 
   for (int i = 0; i < comp.deferred_export_count; i++) {
     sv_deferred_export_t *e = &comp.deferred_exports[i];
@@ -591,6 +601,14 @@ sv_func_t *compile_function_body(
 
   emit_using_cleanups_to_depth(&comp, -1);
   emit_close_upvals(&comp);
+  if (comp.derived_return_local >= 0) {
+    emit_get_local(&comp, comp.derived_return_local);
+    emit_derived_return_check(&comp);
+    emit_op(&comp, OP_RETURN);
+  } else if (derived_return_needs_check(&comp)) {
+    emit_this(&comp);
+    emit_op(&comp, OP_RETURN);
+  }
   emit_op(&comp, OP_RETURN_UNDEF);
 
   int max_locals = comp.max_local_count - comp.param_locals;

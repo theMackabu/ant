@@ -224,7 +224,7 @@ static void compile_call_emit_invoke(
 
 sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t *callee) {
   if (is_ident_name(callee, "super")) {
-    emit_op(c, OP_THIS);
+    emit_super_receiver(c);
     emit_get_var(c, "super", 5);
     if (c->is_arrow) emit_lexical_new_target(c);
     else {
