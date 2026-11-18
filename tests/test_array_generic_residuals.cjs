@@ -353,12 +353,47 @@ assert.deepStrictEqual(failed, []);
     has(t, k) { log.push('has:' + String(k)); return Reflect.has(t, k); },
     deleteProperty(t, k) { log.push('del:' + String(k)); return Reflect.deleteProperty(t, k); },
   });
+  for (const lock of [Object.freeze, Object.seal]) {
+    assert.throws(() => A.pop.call(traps(lock(['c', 'a', 'b']), [])), TypeError, 'pop through a proxy of a locked array');
+    for (const op of [(p) => A.shift.call(p), (p) => A.unshift.call(p, 1), (p) => A.push.call(p, 1), (p) => A.splice.call(p, 0, 1)])
+      assert.throws(() => op(new Proxy(new Proxy(lock([3, 1, 2]), {}), {})), TypeError);
+  }
+  for (const op of [(p) => A.reverse.call(p), (p) => A.copyWithin.call(p, 0, 1), (p) => A.fill.call(p, 0), (p) => A.sort.call(p)])
+    assert.throws(() => op(new Proxy(new Proxy(Object.freeze([3, 1, 2]), {}), {})), TypeError);
+
+  const nested = (a) => new Proxy(new Proxy(a, {}), { has(t, k) { return Reflect.has(t, k); } });
+  let target = [3, 1, 2];
+  assert.strictEqual(A.shift.call(nested(target)), 3);
+  assert.deepStrictEqual(target, [1, 2]);
+  target = [3, 1, 2];
+  assert.strictEqual(A.unshift.call(nested(target), 9), 4);
+  assert.deepStrictEqual(target, [9, 3, 1, 2]);
+  target = [3, 1, 2];
+  A.reverse.call(nested(target));
+  assert.deepStrictEqual(target, [2, 1, 3]);
+  target = [3, 1, 2];
+  A.copyWithin.call(nested(target), 0, 1);
+  assert.deepStrictEqual(target, [1, 2, 2]);
+
   let log = [];
+  A.shift.call(traps(['c', 'a'], log));
+  assert.deepStrictEqual(log.slice(0, 4), ['get:length', 'get:0', 'has:1', 'get:1']);
+  log = [];
+  Array.from(traps(['c', 'a'], log));
+  assert.deepStrictEqual(log, ['get:Symbol(Symbol.iterator)', 'get:length', 'get:0', 'get:length', 'get:1', 'get:length']);
+  log = [];
   A.flat.call(traps(['c'], log));
   assert.deepStrictEqual(log, ['get:length', 'get:constructor', 'has:0', 'get:0']);
+  log = [];
+  A.toReversed.call(traps(['c', 'a', 'b'], log));
+  assert.deepStrictEqual(log, ['get:length', 'get:2', 'get:1', 'get:0']);
   assert.deepStrictEqual([[1, [2, [3]]]].flat('2'), [1, 2, [3]]);
   assert.deepStrictEqual([[1, [2]]].flat({ valueOf() { return 0; } }), [[1, [2]]]);
   assert.deepStrictEqual([1, [2, [3, [4]]]].flat(Infinity), [1, 2, 3, 4]);
+  for (const like of [{ 0: 'c' }, { 0: 'c', length: -1 }]) {
+    assert.strictEqual(A.shift.call(like), undefined);
+    assert.strictEqual(like.length, 0);
+  }
 }
 
 const outcome = (make) => {

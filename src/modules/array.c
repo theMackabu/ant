@@ -547,25 +547,10 @@ static ant_value_t builtin_array_pop(ant_params_t) {
   if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "length");
 
   if (is_proxy(arr)) {
-    PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
-    if (len == 0) {
-      js_setprop(js, arr, js->length_str, Ant_Value_FromNumber(0.0));
-      return Ant_Value_Undefined;
-    }
-    
-    len--;
-    char idxstr[16];
-    
-    size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)len);
-    ant_value_t result = proxy_aware_get_elem(js, arr, idxstr, idxlen);
-    
-    if (is_err(result)) return result;
-    ant_value_t del = proxy_delete(js, arr, idxstr, idxlen);
-    
-    if (is_err(del)) return del;
-    js_setprop(js, arr, js->length_str, Ant_Value_FromNumber((double) len));
-    
-    return result;
+    ant_value_t target;
+    if (proxy_is_transparent(js, arr, &target) && array_mutable_dense(js, target))
+      return builtin_array_pop(js, args, nargs, call_new_target, target, call_func);
+    return array_pop_generic(js, arr);
   }
   
   if (js_is_arguments(arr)) return arguments_pop(js, arr);
@@ -2004,15 +1989,18 @@ static ant_value_t builtin_array_shift(ant_params_t) {
   if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "length");
   if (js_is_arguments(arr)) return arguments_shift(js, arr);
 
-  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
-  if (len == 0) return array_length_readonly(js, arr) ? array_shift_generic(js, arr) : Ant_Value_Undefined;
-
   if (is_proxy(arr)) {
     ant_value_t target;
     if (proxy_is_transparent(js, arr, &target) && array_mutable_dense(js, target))
       return builtin_array_shift(js, args, nargs, call_new_target, target, call_func);
     return array_shift_generic(js, arr);
+  }
 
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+  if (len == 0) {
+    if (real_array_obj_ptr(arr) && !array_length_readonly(js, arr)) return Ant_Value_Undefined;
+    ant_value_t set = array_set_length_throw(js, arr, 0);
+    return is_err(set) ? set : Ant_Value_Undefined;
   }
 
   ant_offset_t doff = get_dense_buf(arr);
@@ -2523,12 +2511,27 @@ static ant_value_t builtin_array_toSorted(ant_params_t) {
   return mkval(kTypeArray, vdata(result));
 }
 
+static __attribute__((noinline)) ant_value_t array_to_reversed_generic(ant_t *js, ant_value_t arr, ant_offset_t len) {
+  ant_value_t result = Ant_Array_Create(js);
+  if (is_err(result)) return result;
+  GC_ROOT_SAVE(roots, js);
+  GC_ROOT_PIN(js, result);
+  for (ant_offset_t k = 0; k < len; k++) {
+    ant_value_t value = array_method_get_index(js, arr, len - 1 - k);
+    if (is_err(value)) { GC_ROOT_RESTORE(js, roots); return value; }
+    js_arr_push(js, result, value);
+  }
+  GC_ROOT_RESTORE(js, roots);
+  return result;
+}
+
 static ant_value_t builtin_array_toReversed(ant_params_t) {
   ant_value_t arr = array_method_receiver(js, call_this, "toReversed");
   if (is_err(arr)) return arr;
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   if (len > UINT32_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
+  if (vtype(arr) != kTypeArray && !real_array_obj_ptr(arr)) return array_to_reversed_generic(js, arr, len);
   ant_value_t result = array_copy_spliced(js, arr, len, len, 0, NULL, 0);
   if (is_err(result)) return result;
   
@@ -2997,6 +3000,17 @@ static ant_value_t array_from_indexed(ant_t *js, ant_value_t src, ant_offset_t l
   return Ant_Value_Undefined;
 }
 
+static ant_value_t array_from_indexed_live(ant_t *js, ant_value_t src, ant_offset_t len, array_from_iter_ctx_t *ctx) {
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t unused;
+    ant_value_t item = array_method_get_index(js, src, i);
+    if (is_err(item)) return item;
+    if (array_from_iter_cb(js, item, ctx, &unused) == ITER_ERROR) return unused;
+    ant_value_t len_result = proxy_aware_length(js, src, &len);
+    if (is_err(len_result)) return len_result;
+  }
+  return Ant_Value_Undefined;
+}
 
 static ant_value_t array_from_string(ant_t *js, ant_value_t src, array_from_iter_ctx_t *ctx) {
   if (str_is_heap_rope(src) || str_is_heap_builder(src)) {
@@ -3076,7 +3090,9 @@ static ant_value_t builtin_Array_from(ant_params_t) {
     ant_value_t filled;
     if (vtype(iter_method) == kTypeBuiltin && is_proxy(src) && vtype(proxy_read_target(js, src)) == kTypeArray) {
       PROXY_AWARE_LENGTH_OR_RETURN(src, len);
-      filled = array_from_indexed(js, src, len, &ctx);
+      ant_value_t target;
+      if (proxy_is_transparent(js, src, &target)) filled = array_from_indexed(js, src, len, &ctx);
+      else filled = array_from_indexed_live(js, src, len, &ctx);
     } else filled = iter_foreach_method(js, src, iter_method, array_from_iter_cb, &ctx);
     
     return is_err(filled) ? filled : array_from_finish(js, &ctx, use_ctor);
