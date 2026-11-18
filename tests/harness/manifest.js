@@ -89,6 +89,7 @@ export function targets() {
     'test_class_name_tdz_private_keys.cjs',
     'test_detached_views.cjs',
     'test_array_proto_abort_regexp.mjs',
+    'test_array_length_coercion.cjs',
     'test_object_spread_large_arrays.cjs',
     'test_event_prototype_getters.cjs',
     'test_eventsource_handlers.cjs',

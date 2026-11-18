@@ -308,7 +308,8 @@ static ant_value_t setprop_symbol(ant_t *js, ant_value_t obj, ant_value_t receiv
   );
 }
 
-static ant_value_t setprop_array_length(ant_t *js, ant_value_t obj, ant_object_t *len_obj, ant_value_t v, bool *declined) {
+static ant_value_t setprop_array_length_number(ant_t *js, ant_value_t obj, ant_object_t *len_obj, ant_value_t v, bool *declined) {
+  double requested = Ant_Value_AsNumberUnchecked(v);
   ant_value_t err = validate_array_length(js, v);
   if (is_err(err)) return err;
 
@@ -317,7 +318,7 @@ static ant_value_t setprop_array_length(ant_t *js, ant_value_t obj, ant_object_t
     array_length_readonly_slow(js, obj)
   ) return array_length_write_ignored(js, v, declined);
 
-  ant_offset_t new_len_val = (ant_offset_t) Ant_Value_AsNumberUnchecked(v);
+  ant_offset_t new_len_val = (ant_offset_t)requested;
   if (__builtin_expect(!array_length_has_guarded_elements(len_obj), 1)) {
     array_length_set_unguarded(js, obj, new_len_val);
     return v;
@@ -332,6 +333,28 @@ static ant_value_t setprop_array_length(ant_t *js, ant_value_t obj, ant_object_t
     : set_declined(declined, v);
 
   return v;
+}
+
+static __attribute__((noinline, cold)) ant_value_t setprop_array_length_coerced(
+  ant_t *js, ant_value_t obj, ant_object_t *len_obj, ant_value_t v, bool *declined
+) {
+  double first = js_to_number(js, v);
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+  double number = is_object_type(v) ? js_to_number(js, v) : first;
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+  if ((double)js_to_uint32(first) != number) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
+  
+  ant_value_t length = Ant_Value_FromNumber(number);
+  ant_value_t result = setprop_array_length_number(js, obj, len_obj, length, declined);
+  return result == length ? v : result;
+}
+
+static ant_value_t setprop_array_length(ant_t *js, ant_value_t obj, ant_object_t *len_obj, ant_value_t v, bool *declined) {
+  if (__builtin_expect(vtype(v) != kTypeNumber, 0)) return setprop_array_length_coerced(js, obj, len_obj, v, declined);
+  ant_value_t result;
+  [[clang::always_inline]]
+  result = setprop_array_length_number(js, obj, len_obj, v, declined);
+  return result;
 }
 
 static bool setprop_string_special(
