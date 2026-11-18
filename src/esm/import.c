@@ -171,7 +171,12 @@ ant_value_t js_builtin_import(ant_params_t) {
 
   ant_value_t base = js_import_job_base(js, call_func);
   GC_ROOT_PIN(js, base);
-  {
+  
+  ant_value_t loaded = js_esm_import_loaded(js, specifier, js_import_job_base_path(js, base), attrs);
+  if (is_object_type(loaded)) {
+    ant_value_t resolved = js_promise_assimilate_awaitable(js, loaded);
+    GC_ROOT_RESTORE(js, root_mark);
+    return resolved;
   }
 
   ant_value_t promise = js_mkpromise(js);

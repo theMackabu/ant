@@ -23,7 +23,14 @@ assert.strictEqual(ns.value, 1);
 assert.strictEqual(await import('./fixtures/dynamic_import_order/dep.mjs'), ns);
 assert.deepStrictEqual(log, ['after import calls', 'throws body', 'dep body']);
 
+const loadedAgain = import('./fixtures/dynamic_import_order/dep.mjs');
+const loadedTwice = import('./fixtures/dynamic_import_order/dep.mjs');
+assert.ok(loadedAgain instanceof Promise);
+assert.notStrictEqual(loadedAgain, loadedTwice);
+assert.strictEqual(await loadedAgain, ns);
+assert.strictEqual(await loadedTwice, ns);
 await assert.rejects(import('./fixtures/dynamic_import_order/throws.mjs'), /boom/);
+assert.strictEqual(log.filter((entry) => entry === 'dep body').length, 1);
 assert.strictEqual(log.filter((entry) => entry === 'throws body').length, 1);
 
 function importInside() {

@@ -2591,10 +2591,21 @@ static ant_value_t esm_import_type_check(ant_t *js, ant_value_t attrs, const cha
   return js_mkerr_typed(js, JS_ERR_TYPE, "Module \"%s\" is not of type \"json\"", display);
 }
 
+static ant_value_t esm_loaded_namespace(ant_t *js, const char *module_key) {
+  esm_module_t *mod = esm_find_module(js, module_key);
+  if (!mod || mod->status != ESM_MODULE_LOADED) return Ant_Value_Undefined;
+  
+  ant_value_t value;
+  bool settled = esm_evaluation_settlement(js, mod->namespace_obj, &value) == JS_PROMISE_FULFILLED;
+  return settled ? mod->namespace_obj : Ant_Value_Undefined;
+}
+
 static ant_value_t esm_import_cstr_attrs(
   ant_t *js, const char *specifier, size_t spec_len, 
-  const char *base_path, ant_value_t attrs
+  const char *base_path, ant_value_t attrs, bool loaded_only
 ) {
+  if (loaded_only && (vtype(attrs) != kTypeUndefined || esm_hooks_present(js))) return Ant_Value_Undefined;
+  
   ant_value_t type_err = esm_import_type_check(js, attrs, NULL, true);
   if (is_err(type_err)) return type_err;
 
@@ -2620,7 +2631,8 @@ static ant_value_t esm_import_cstr_attrs(
   esm_builtin_t builtin = esm_find_builtin(spec_copy, spec_len);
   if (builtin.kind != ANT_BUILTIN_NAME_NONE) {
     ant_value_t ns = esm_import_type_check(js, attrs, spec_copy, false);
-    if (!is_err(ns)) ns = esm_load_builtin(js, spec_copy, builtin);
+    if (!is_err(ns) && loaded_only) ns = builtin.library ? Ant_Value_Undefined : esm_loaded_namespace(js, builtin.alias->source_name);
+    else if (!is_err(ns)) ns = esm_load_builtin(js, spec_copy, builtin);
     free(spec_copy);
     return ns;
   }
@@ -2628,9 +2640,16 @@ static ant_value_t esm_import_cstr_attrs(
   if (!base_path || !base_path[0]) base_path = esm_default_base_path(js);
   char *resolved_path = esm_resolve(js, spec_copy, base_path, esm_resolve_path);
   if (!resolved_path) {
-    ant_value_t err = esm_import_not_found_error(js, spec_copy, base_path);
+    ant_value_t err = loaded_only ? Ant_Value_Undefined : esm_import_not_found_error(js, spec_copy, base_path);
     free(spec_copy);
     return err;
+  }
+  
+  if (loaded_only) {
+    ant_value_t ns = esm_loaded_namespace(js, resolved_path);
+    free(resolved_path);
+    free(spec_copy);
+    return ns;
   }
 
   type_err = esm_import_type_check(js, attrs, resolved_path, esm_classify_module_kind(resolved_path) == ESM_MODULE_KIND_JSON);
@@ -2665,7 +2684,7 @@ ant_value_t js_esm_import_sync_cstr_from_require(ant_t *js, const char *specifie
 }
 
 ant_value_t js_esm_import_sync_cstr_from(ant_t *js, const char *specifier, size_t spec_len, const char *base_path) {
-  return esm_import_cstr_attrs(js, specifier, spec_len, base_path, Ant_Value_Undefined);
+  return esm_import_cstr_attrs(js, specifier, spec_len, base_path, Ant_Value_Undefined, false);
 }
 
 static ant_value_t esm_coded_error(ant_t *js, const char *code, const char *message) {
@@ -2919,7 +2938,9 @@ ant_value_t js_esm_import_sync_cstr(ant_t *js, const char *specifier, size_t spe
   return js_esm_import_sync_cstr_from(js, specifier, spec_len, NULL);
 }
 
-static ant_value_t esm_import_from_attrs(ant_t *js, ant_value_t specifier, const char *base_path, ant_value_t attrs) {
+static ant_value_t esm_import_value_attrs(
+  ant_t *js, ant_value_t specifier, const char *base_path, ant_value_t attrs, bool loaded_only
+) {
   if (vtype(specifier) != kTypeString)
     return js_mkerr(js, "import() requires a string specifier");
 
@@ -2927,7 +2948,15 @@ static ant_value_t esm_import_from_attrs(ant_t *js, ant_value_t specifier, const
   ant_offset_t spec_off = vstr(js, specifier, &spec_len);
   const char *spec_str = (const char *)(uintptr_t)(spec_off);
 
-  return esm_import_cstr_attrs(js, spec_str, (size_t)spec_len, base_path, attrs);
+  return esm_import_cstr_attrs(js, spec_str, (size_t)spec_len, base_path, attrs, loaded_only);
+}
+
+static ant_value_t esm_import_from_attrs(ant_t *js, ant_value_t specifier, const char *base_path, ant_value_t attrs) {
+  return esm_import_value_attrs(js, specifier, base_path, attrs, false);
+}
+
+ant_value_t js_esm_import_loaded(ant_t *js, ant_value_t specifier, const char *base_path, ant_value_t attrs) {
+  return esm_import_value_attrs(js, specifier, base_path, attrs, true);
 }
 
 ant_value_t js_esm_import_sync_from(ant_t *js, ant_value_t specifier, const char *base_path) {
