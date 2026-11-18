@@ -3486,9 +3486,18 @@ static bool opt_super_parents_retain(opt_builder_t *b, const opt_super_parents_t
 }
 
 static void opt_super_parents_guard(opt_builder_t *b, ir_node_id_t home, ant_value_t known, const opt_super_parents_t *chain) {
-  if (!ir_is_constant(b->graph, home)) opt_expect_value(b, home, known, NULL, NULL);
+  bool fixed = ir_is_constant(b->graph, home);
+  if (!fixed && !b->func->multi_closure && opt_may_speculate(b, OPT_EXIT_UNEXPECTED_VALUE) && opt_retain(b, known)) {
+    ir_op_t check = ir_op(IR_OP_CHECK_VALUE);
+    check.check_value.expected = known;
+    check.check_value.kind = OPT_EXIT_UNEXPECTED_VALUE;
+    opt_emit_checked(b, check, &home, 1, OPT_REPR_NONE);
+    fixed = true;
+  }
   for (uint32_t i = 0; i < chain->count; i++) {
-    ir_node_id_t address = opt_typed_constant(b, (uint64_t)(uintptr_t)chain->owners[i], OPT_REPR_POINTER);
+    ir_node_id_t address = i || fixed
+      ? opt_typed_constant(b, (uint64_t)(uintptr_t)chain->owners[i], OPT_REPR_POINTER)
+      : opt_emit_checked(b, ir_op(IR_OP_OBJECT_ADDRESS), &home, 1, OPT_REPR_POINTER);
     opt_expect_value(b, opt_emit(b, ir_op(IR_OP_LOAD_PROTOTYPE), &address, 1, OPT_REPR_TAGGED), chain->parents[i], NULL, NULL);
   }
 }
@@ -5163,12 +5172,12 @@ static opt_flow_t opt_build_import(opt_builder_t *b, const uint8_t *ip, sv_op_t 
   return OPT_FLOW_CONTINUE;
 }
 
-static ant_value_t opt_super_call_parents(opt_builder_t *b, ir_node_id_t home_node, opt_super_parents_t *chain) {
+static ant_value_t opt_super_call_parents(const opt_builder_t *b, ir_node_id_t home_node, opt_super_parents_t *chain) {
   if (!opt_may_speculate(b, OPT_EXIT_BAD_SHAPE) || !opt_may_speculate(b, OPT_EXIT_BAD_TYPE)) return 0;
   ant_value_t home = opt_likely_value(b, home_node);
   const sv_closure_t *self = b->ctx->closure;
   if (!home && !b->inline_call && self && self->func == b->func && (self->call_flags & SV_CALL_HAS_SUPER)) home = self->super_val;
-  return opt_super_parents(b, home, chain) && opt_retain(b, home) ? home : 0;
+  return opt_super_parents(b, home, chain) ? home : 0;
 }
 
 static bool opt_try_super_inline(opt_builder_t *b, bool forward, const ir_node_id_t *inputs, uint32_t argc, uint32_t operands, opt_flow_t *flow) {
