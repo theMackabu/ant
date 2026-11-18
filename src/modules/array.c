@@ -2779,7 +2779,8 @@ static ant_value_t array_to_locale_string_body(ant_params_t) {
   string_builder_init(&sb, static_buf, sizeof(static_buf));
 
   ant_object_t *numeric_fast_arr = input_is_array ? array_obj_ptr(arr) : NULL;
-  bool all_fast_numbers = numeric_fast_arr && numeric_fast_arr->flags.fast_array &&
+  bool default_format = (nargs < 1 || vtype(args[0]) == kTypeUndefined) && (nargs < 2 || vtype(args[1]) == kTypeUndefined);
+  bool all_fast_numbers = default_format && numeric_fast_arr && numeric_fast_arr->flags.fast_array &&
     !numeric_fast_arr->flags.may_have_holes && numeric_fast_arr->u.array.data &&
     (ant_offset_t)numeric_fast_arr->u.array.len == len;
   
@@ -2811,14 +2812,14 @@ static ant_value_t array_to_locale_string_body(ant_params_t) {
           return err;
         }
       }
-      char localized_buf[128];
-      bool write_direct = sb.capacity - sb.size >= sizeof(localized_buf);
-      char *localized_out = write_direct ? sb.buffer + sb.size : localized_buf;
-      size_t localized_capacity = write_direct
-        ? sb.capacity - sb.size
-        : sizeof(localized_buf);
-      size_t localized_len = format_number_to_locale_string(
-        numeric_fast_arr->u.array.data[i], localized_out, localized_capacity
+      char localized_buf[ANT_NUMBER_LOCALE_CHARS];
+      size_t direct_capacity = sb.capacity - sb.size;
+      size_t localized_len = direct_capacity >= 128
+        ? format_number_to_locale_string(numeric_fast_arr->u.array.data[i], sb.buffer + sb.size, direct_capacity)
+        : 0;
+      bool write_direct = localized_len != 0;
+      if (!write_direct) localized_len = format_number_to_locale_string(
+        numeric_fast_arr->u.array.data[i], localized_buf, sizeof(localized_buf)
       );
       if (localized_len == 0) {
         string_builder_dispose(&sb);
@@ -2882,9 +2883,9 @@ static ant_value_t array_to_locale_string_body(ant_params_t) {
       return err;
     }
 
-    if (vtype(elem) == kTypeNumber && method_type == kTypeBuiltin &&
+    if (default_format && vtype(elem) == kTypeNumber && method_type == kTypeBuiltin &&
         js_cfunc_same_entrypoint(method, builtin_number_toLocaleString)) {
-      char localized_buf[128];
+      char localized_buf[ANT_NUMBER_LOCALE_CHARS];
       size_t localized_len = format_number_to_locale_string(
         elem, localized_buf, 
         sizeof(localized_buf)

@@ -14,6 +14,7 @@
 
 #include "modules/intl.h"
 #include "modules/bigint.h"
+#include "modules/number.h"
 #include "modules/intl_tag.h"
 
 typedef struct {
@@ -240,48 +241,36 @@ static ant_value_t intl_collator_resolved_options(ant_params_t) {
   return obj;
 }
 
+ant_value_t Ant_Intl_ResolveLocale(ant_t *js, ant_value_t locales) {
+  return intl_resolve_locale(js, locales);
+}
+
 static ant_value_t intl_numberformat_format(ant_params_t) {
-  double number = 0.0;
+  double number = ANT_NAN;
 
   if (nargs > 0) number = vtype(args[0]) == kTypeBigInt 
     ? bigint_to_double(js, args[0])
     : js_to_number(js, args[0]);
 
-  ant_value_t raw_val = js_tostring_val(js, Ant_Value_FromNumber(number));
-  if (is_err(raw_val)) return raw_val;
-
-  size_t raw_len = 0;
-  const char *raw = js_getstr(js, raw_val, &raw_len);
-  if (!raw || raw_len == 0) return js_mkstr(js, "0", 1);
-
-  if (
-    !isfinite(number) ||
-    memchr(raw, 'e', raw_len) || 
-    memchr(raw, 'E', raw_len)
-  ) return raw_val;
-
-  const char *dot = memchr(raw, '.', raw_len);
-  size_t int_len = dot ? (size_t)(dot - raw) : raw_len;
-  size_t start = raw[0] == '-' ? 1 : 0;
-  size_t frac_len = dot ? (raw_len - int_len) : 0;
-
-  char buf[128];
-  size_t pos = 0;
-  if (start) buf[pos++] = '-';
-
-  for (size_t i = start; i < int_len; i++) {
-    buf[pos++] = raw[i];
-    size_t remaining = int_len - 1 - i;
-    if (remaining > 0 && remaining % 3 == 0) buf[pos++] = ',';
+  ant_number_locale_t format = ANT_NUMBER_LOCALE_DEFAULT;
+  ant_value_t packed = is_object_type(call_this) ? js_get_slot(call_this, SLOT_DATA) : Ant_Value_Undefined;
+  
+  if (vtype(packed) == kTypeNumber) {
+    uint32_t bits = (uint32_t)Ant_Value_AsNumberUnchecked(packed);
+    format = (ant_number_locale_t){
+      .min_integer = (uint8_t)(bits & 0x7f),
+      .min_fraction = (uint8_t)((bits >> 7) & 0x7f),
+      .max_fraction = (uint8_t)((bits >> 14) & 0x7f),
+      .percent = (bits >> 21) & 1,
+      .ungrouped = (bits >> 22) & 1,
+    };
   }
 
-  if (dot && frac_len > 0) {
-    memcpy(buf + pos, dot, frac_len);
-    pos += frac_len;
-  }
-
-  buf[pos] = '\0';
-  return js_mkstr(js, buf, pos);
+  char buf[ANT_NUMBER_LOCALE_CHARS];
+  size_t len = Ant_Number_FormatLocale(number, &format, buf, sizeof(buf));
+  if (len == 0) return js_mkerr(js, "number formatting failed");
+  
+  return js_mkstr(js, buf, len);
 }
 
 static ant_value_t intl_numberformat_resolved_options(ant_params_t) {
@@ -466,8 +455,16 @@ static ant_value_t intl_numberformat_constructor(ant_params_t) {
   ant_value_t locale = intl_resolve_locale(js, nargs > 0 ? args[0] : Ant_Value_Undefined);
   if (is_err(locale)) return locale;
 
+  ant_number_locale_t format;
+  ant_value_t status = Ant_Number_ReadLocaleOptions(js, nargs > 1 ? args[1] : Ant_Value_Undefined, &format);
+  if (is_err(status)) return status;
+
   ant_value_t obj = intl_create_instance(js, js->builtins.intl_numberformat_proto, call_new_target);
   defhidden(js, obj, "locale", 6, locale);
+  
+  uint32_t bits = format.min_integer | (uint32_t)format.min_fraction << 7 | (uint32_t)format.max_fraction << 14
+    | (uint32_t)format.percent << 21 | (uint32_t)format.ungrouped << 22;
+  js_set_slot(obj, SLOT_DATA, Ant_Value_FromNumber((double)bits));
   
   return obj;
 }

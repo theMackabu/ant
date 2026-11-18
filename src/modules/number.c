@@ -1,5 +1,6 @@
 #include <compat.h> // IWYU pragma: keep
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -9,36 +10,213 @@
 #include "silver/lexer.h"
 #include "modules/number.h"
 #include "modules/bigint.h"
+#include "modules/intl.h"
 #include "modules/string.h"
 
-size_t format_number_to_locale_string(ant_value_t num, char *buf, size_t capacity) {
+typedef struct {
   char raw[64];
-  size_t raw_len = js_number_to_chars(num, raw, sizeof(raw));
+  const char *digits;
+  int count;
+  int point;
+} number_decimal_t;
+
+static void number_decimal_parse(number_decimal_t *out, int raw_len) {
+  char *raw = out->raw + 1;
+  int count = 0, point = -1, exponent = 0;
+  int i = 0;
+
+  for (; i < raw_len; i++) {
+    char c = raw[i];
+    if (c == '.') { point = count; continue; }
+    if (c == 'e' || c == 'E') { exponent = atoi(raw + i + 1); break; }
+    raw[count++] = c;
+  }
+  if (point < 0) point = count;
+
+  int lead = 0;
+  while (lead < count && raw[lead] == '0') lead++;
+
+  out->digits = raw + lead;
+  out->count = count - lead;
+  out->point = out->count ? point - lead + exponent : 0;
+}
+
+static void number_decimal_round(number_decimal_t *value, int max_fraction) {
+  char *digits = (char *)value->digits;
+  int keep = value->point + max_fraction;
   
-  double d = Ant_Value_AsNumberUnchecked(num);
-  if (!isfinite(d) || memchr(raw, 'e', raw_len) || memchr(raw, 'E', raw_len)) {
-    if (raw_len > capacity) return 0;
-    memcpy(buf, raw, raw_len);
-    return raw_len;
+  if (keep < value->count) {
+    bool up = keep >= 0 && digits[keep] >= '5';
+    value->count = keep > 0 ? keep : 0;
+    if (up) {
+      int at = value->count - 1;
+      while (at >= 0 && digits[at] == '9') digits[at--] = '0';
+      if (at >= 0) digits[at]++;
+      else {
+        digits--;
+        digits[0] = '1';
+        value->digits = digits;
+        value->count++;
+        value->point++;
+      }
+    }
   }
 
-  char *dot = memchr(raw, '.', raw_len);
-  size_t int_len = dot ? (size_t)(dot - raw) : raw_len;
-  size_t start = raw[0] == '-' ? 1 : 0;
-  size_t frac_len = dot ? raw_len - int_len : 0;
-  size_t separators = int_len > start ? (int_len - start - 1) / 3 : 0;
-  size_t needed = int_len + separators + frac_len;
+  while (value->count > 0 && value->count > value->point && digits[value->count - 1] == '0') value->count--;
+  if (value->count == 0) value->point = 0;
+}
+
+size_t Ant_Number_FormatLocale(double value, const ant_number_locale_t *format, char *buf, size_t capacity) {
+  static const char infinity[] = "\xe2\x88\x9e";
+  bool negative = signbit(value) && !isnan(value);
+  size_t pos = 0;
+
+  if (__builtin_expect(!isfinite(value), 0)) {
+    const char *text = isnan(value) ? "NaN" : infinity;
+    size_t text_len = strlen(text);
+    if (negative + text_len + format->percent > capacity) return 0;
+    if (negative) buf[pos++] = '-';
+    memcpy(buf + pos, text, text_len);
+    pos += text_len;
+    if (format->percent) buf[pos++] = '%';
+    return pos;
+  }
+
+  number_decimal_t decimal;
+  char *raw = decimal.raw + 1;
+  size_t raw_len = js_number_to_chars(Ant_Value_FromNumber(fabs(value)), raw, sizeof(decimal.raw) - 1);
+  bool plain = format->min_integer == 1 && !format->min_fraction && !format->percent && !format->ungrouped;
+
+  if (plain && !memchr(raw, 'e', raw_len)) {
+    char *dot = memchr(raw, '.', raw_len);
+    size_t int_len = dot ? (size_t)(dot - raw) : raw_len;
+    size_t frac_len = raw_len - int_len;
+    
+    if (frac_len <= (size_t)format->max_fraction + 1 && (frac_len || format->max_fraction)) {
+      size_t needed = negative + int_len + (int_len - 1) / 3 + frac_len;
+      if (needed > capacity) return 0;
+      if (negative) buf[pos++] = '-';
+      
+      for (size_t i = 0; i < int_len; i++) {
+        buf[pos++] = raw[i];
+        size_t remaining = int_len - 1 - i;
+        if (remaining > 0 && remaining % 3 == 0) buf[pos++] = ',';
+      }
+      
+      if (frac_len) memcpy(buf + pos, dot, frac_len);
+      return pos + frac_len;
+    }
+  }
+
+  number_decimal_parse(&decimal, (int)raw_len);
+  if (format->percent && decimal.count) decimal.point += 2;
+  number_decimal_round(&decimal, format->max_fraction);
+
+  int point = decimal.point, count = decimal.count;
+  int integer = point > format->min_integer ? point : format->min_integer;
+  int fraction = count > point ? count - point : 0;
+  int padded_fraction = fraction < format->min_fraction ? format->min_fraction : fraction;
+
+  size_t separators = format->ungrouped ? 0 : (size_t)(integer - 1) / 3;
+  size_t needed = negative + (size_t)integer + separators + (padded_fraction ? 1 + (size_t)padded_fraction : 0) + format->percent;
   if (needed > capacity) return 0;
 
-  size_t pos = 0;
-  if (start) buf[pos++] = '-';
-  for (size_t i = start; i < int_len; i++) {
-    buf[pos++] = raw[i];
-    size_t remaining = int_len - 1 - i;
-    if (remaining > 0 && remaining % 3 == 0) buf[pos++] = ',';
+  if (negative) buf[pos++] = '-';
+  
+  int group = format->ungrouped ? integer : (integer - 1) % 3 + 1;
+  int source = point - integer;
+  int stored = point < count ? point : count;
+  
+  for (int left = integer; left > 0;) {
+    for (int i = 0; i < group; i++, source++) buf[pos++] = source >= 0 && source < stored ? decimal.digits[source] : '0';
+    left -= group;
+    if (left > 0) buf[pos++] = ',';
+    group = 3;
   }
-  if (frac_len) memcpy(buf + pos, dot, frac_len);
-  return pos + frac_len;
+
+  if (padded_fraction) {
+    buf[pos++] = '.';
+    int zeros = point < 0 ? -point : 0;
+    if (zeros > padded_fraction) zeros = padded_fraction;
+    memset(buf + pos, '0', (size_t)padded_fraction);
+    int copy = fraction - zeros;
+    if (copy > 0) memcpy(buf + pos + zeros, decimal.digits + (point > 0 ? point : 0), (size_t)copy);
+    pos += (size_t)padded_fraction;
+  }
+
+  if (format->percent) buf[pos++] = '%';
+  return pos;
+}
+
+size_t format_number_to_locale_string(ant_value_t num, char *buf, size_t capacity) {
+  return Ant_Number_FormatLocale(Ant_Value_AsNumberUnchecked(num), &ANT_NUMBER_LOCALE_DEFAULT, buf, capacity);
+}
+
+static ant_value_t number_locale_digits(ant_t *js, ant_value_t options, const char *key, int low, int high, int *out) {
+  ant_value_t value = js_get(js, options, key);
+  if (is_err(value)) return value;
+  
+  *out = -1;
+  if (vtype(value) == kTypeUndefined) return Ant_Value_Undefined;
+  double number = js_to_number(js, value);
+  
+  if (isnan(number) || number < low || number > high)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "%s value is out of range", key);
+    
+  *out = (int)floor(number);
+  return Ant_Value_Undefined;
+}
+
+ant_value_t Ant_Number_ReadLocaleOptions(ant_t *js, ant_value_t options, ant_number_locale_t *out) {
+  *out = ANT_NUMBER_LOCALE_DEFAULT;
+  if (vtype(options) == kTypeUndefined) return Ant_Value_Undefined;
+  if (vtype(options) == kTypeNull) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
+  if (!is_object_type(options)) return Ant_Value_Undefined;
+
+  ant_value_t style = js_get(js, options, "style");
+  if (is_err(style)) return style;
+  
+  if (vtype(style) != kTypeUndefined) {
+    style = js_tostring_val(js, style);
+    if (is_err(style)) return style;
+    
+    size_t style_len = 0;
+    const char *text = js_getstr(js, style, &style_len);
+    
+    bool known = false;
+    static const char *const styles[] = { "decimal", "percent", "currency", "unit" };
+    for (size_t i = 0; i < sizeof(styles) / sizeof(styles[0]); i++)
+      known = known || (strlen(styles[i]) == style_len && memcmp(styles[i], text, style_len) == 0);
+      
+    if (!known) return js_mkerr_typed(js, JS_ERR_RANGE, "Value %.*s out of range for Intl.NumberFormat options property style", (int)style_len, text);
+    out->percent = style_len == 7 && memcmp(text, "percent", 7) == 0;
+  }
+
+  int min_integer, min_fraction, max_fraction;
+  ant_value_t status = number_locale_digits(js, options, "minimumIntegerDigits", 1, 21, &min_integer);
+  
+  if (is_err(status)) return status;
+  status = number_locale_digits(js, options, "minimumFractionDigits", 0, 100, &min_fraction);
+  
+  if (is_err(status)) return status;
+  status = number_locale_digits(js, options, "maximumFractionDigits", 0, 100, &max_fraction);
+  if (is_err(status)) return status;
+
+  int default_max = out->percent ? 0 : 3;
+  if (min_fraction < 0 && max_fraction < 0) { min_fraction = 0; max_fraction = default_max; }
+  else if (min_fraction < 0) min_fraction = 0;
+  else if (max_fraction < 0) max_fraction = min_fraction > default_max ? min_fraction : default_max;
+  else if (min_fraction > max_fraction) return js_mkerr_typed(js, JS_ERR_RANGE, "maximumFractionDigits value is out of range");
+
+  ant_value_t grouping = js_get(js, options, "useGrouping");
+  if (is_err(grouping)) return grouping;
+
+  if (min_integer > 0) out->min_integer = (uint8_t)min_integer;
+  out->min_fraction = (uint8_t)min_fraction;
+  out->max_fraction = (uint8_t)max_fraction;
+  out->ungrouped = grouping == Ant_Value_False;
+  
+  return Ant_Value_Undefined;
 }
 
 static ant_value_t builtin_Number_isNaN(ant_params_t) {
@@ -242,12 +420,24 @@ static ant_value_t builtin_number_valueOf(ant_params_t) {
 }
 
 ant_value_t builtin_number_toLocaleString(ant_params_t) {
-  (void) args; (void) nargs;
   ant_value_t num = unwrap_primitive(js, call_this);
   if (vtype(num) != kTypeNumber) return js_mkerr(js, "toLocaleString called on non-number");
-  char buf[128];
-  size_t len = format_number_to_locale_string(num, buf, sizeof(buf));
+
+  ant_number_locale_t format = ANT_NUMBER_LOCALE_DEFAULT;
+  if (nargs > 0 && vtype(args[0]) != kTypeUndefined) {
+    ant_value_t locale = Ant_Intl_ResolveLocale(js, args[0]);
+    if (is_err(locale)) return locale;
+  }
+  
+  if (nargs > 1) {
+    ant_value_t status = Ant_Number_ReadLocaleOptions(js, args[1], &format);
+    if (is_err(status)) return status;
+  }
+
+  char buf[ANT_NUMBER_LOCALE_CHARS];
+  size_t len = Ant_Number_FormatLocale(Ant_Value_AsNumberUnchecked(num), &format, buf, sizeof(buf));
   if (len == 0) return js_mkerr(js, "number formatting failed");
+  
   return js_mkstr(js, buf, len);
 }
 
