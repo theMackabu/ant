@@ -88,7 +88,7 @@ try {
   const missing = run(scripts, 'missing.mjs', `import 'npm:ant-registry-specifier-test-does-not-exist';`);
   assert.notStrictEqual(missing.status, 0);
   assert.match(missing.stderr, /not found in registry/);
-  assert.match(missing.stderr, /Cannot resolve module: npm:ant-registry-specifier-test-does-not-exist/);
+  assert.match(missing.stderr, /Cannot find package 'npm:ant-registry-specifier-test-does-not-exist' imported from /);
   for (const slot of slots()) {
     const deps = JSON.parse(fs.readFileSync(path.join(slot, 'package.json'), 'utf8')).dependencies ?? {};
     assert.ok(!Object.hasOwn(deps, 'ant-registry-specifier-test-does-not-exist'));

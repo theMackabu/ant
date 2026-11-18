@@ -1821,6 +1821,7 @@ static sv_func_t *esm_compile_parsed_record(
   return func;
 }
 
+static ant_value_t esm_import_not_found_error(ant_t *js, const char *specifier, const char *base_path);
 
 static ant_value_t esm_compile_error(ant_t *js) {
   if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
@@ -2059,7 +2060,7 @@ static ant_value_t esm_load_static_dependency(
 
   char *resolved_path = esm_resolve(js, specifier, parent->resolved_path, esm_resolve_path);
   if (!resolved_path) {
-    ant_value_t err = js_mkerr(js, "Cannot resolve module: %s", specifier);
+    ant_value_t err = esm_import_not_found_error(js, specifier, parent->resolved_path);
     free(specifier);
     return err;
   }
@@ -2613,7 +2614,7 @@ static ant_value_t esm_import_cstr_attrs(
   if (!base_path || !base_path[0]) base_path = esm_default_base_path(js);
   char *resolved_path = esm_resolve(js, spec_copy, base_path, esm_resolve_path);
   if (!resolved_path) {
-    ant_value_t err = js_mkerr(js, "Cannot resolve module: %s", spec_copy);
+    ant_value_t err = esm_import_not_found_error(js, spec_copy, base_path);
     free(spec_copy);
     return err;
   }
@@ -2653,11 +2654,97 @@ ant_value_t js_esm_import_sync_cstr_from(ant_t *js, const char *specifier, size_
   return esm_import_cstr_attrs(js, specifier, spec_len, base_path, Ant_Value_Undefined);
 }
 
-static ant_value_t esm_module_not_found_error(ant_t *js, const char *specifier) {
-  static const char code[] = "MODULE_NOT_FOUND";
+static ant_value_t esm_coded_error(ant_t *js, const char *code, const char *message) {
   ant_value_t props = Ant_Object_CreateBare(js);
-  js_set(js, props, "code", js_mkstr(js, code, sizeof(code) - 1));
-  return js_mkerr_props(js, JS_ERR_GENERIC, props, "Cannot resolve module: %s", specifier);
+  js_set(js, props, "code", js_mkstr(js, code, strlen(code)));
+  return js_mkerr_props(js, JS_ERR_GENERIC, props, "%s", message);
+}
+
+static ant_value_t esm_unknown_builtin_error(ant_t *js, const char *specifier) {
+  size_t size = strlen(specifier) + 32;
+  char *message = malloc(size);
+  if (!message) return js_mkerr(js, "oom");
+  snprintf(message, size, "No such built-in module: %s", specifier);
+  ant_value_t err = esm_coded_error(js, "ERR_UNKNOWN_BUILTIN_MODULE", message);
+  free(message);
+  return err;
+}
+
+static inline bool esm_specifier_is_node_scheme(const char *specifier) {
+  return strncmp(specifier, "node:", 5) == 0;
+}
+
+static ant_value_t esm_module_not_found_error(ant_t *js, const char *specifier) {
+  if (esm_specifier_is_node_scheme(specifier)) return esm_unknown_builtin_error(js, specifier);
+  size_t size = strlen(specifier) + 32;
+  char *message = malloc(size);
+  if (!message) return js_mkerr(js, "oom");
+  snprintf(message, size, "Cannot find module '%s'", specifier);
+  ant_value_t err = esm_coded_error(js, "MODULE_NOT_FOUND", message);
+  free(message);
+  return err;
+}
+
+static char *esm_missing_target_path(const char *specifier, const char *base_path) {
+  size_t base_len = 0;
+  if (specifier[0] != '/' && base_path) {
+    const char *slash = strrchr(base_path, '/');
+    base_len = slash ? (size_t)(slash - base_path) : 0;
+  }
+  
+  size_t spec_len = strlen(specifier);
+  char *path = malloc(base_len + spec_len + 2);
+  if (!path) return NULL;
+  
+  size_t len = base_len;
+  memcpy(path, base_path, base_len);
+  for (const char *part = specifier; *part;) {
+    const char *end = strchr(part, '/');
+    size_t part_len = end ? (size_t)(end - part) : strlen(part);
+    if (part_len == 2 && part[0] == '.' && part[1] == '.') {
+      while (len > 0 && path[len - 1] != '/') len--;
+      if (len > 0) len--;
+    } else if (part_len > 0 && !(part_len == 1 && part[0] == '.')) {
+      path[len++] = '/';
+      memcpy(path + len, part, part_len);
+      len += part_len;
+    }
+    part = end ? end + 1 : part + part_len;
+  }
+  
+  path[len] = '\0';
+  return path;
+}
+
+static ant_value_t esm_import_not_found_error(ant_t *js, const char *specifier, const char *base_path) {
+  if (esm_specifier_is_node_scheme(specifier)) return esm_unknown_builtin_error(js, specifier);
+  if (!base_path) base_path = "";
+  
+  bool is_path = specifier[0] == '/' || specifier[0] == '.';
+  char *target = is_path ? esm_missing_target_path(specifier, base_path) : NULL;
+  size_t name_len = strlen(specifier);
+  
+  if (!is_path) {
+    const char *slash = strchr(specifier, '/');
+    if (slash && specifier[0] == '@') slash = strchr(slash + 1, '/');
+    if (slash) name_len = (size_t)(slash - specifier);
+  }
+  
+  size_t size = (target ? strlen(target) : name_len) + strlen(base_path) + 64;
+  char *message = malloc(size);
+  if (!message) {
+    free(target);
+    return js_mkerr(js, "oom");
+  }
+  
+  if (target) snprintf(message, size, "Cannot find module '%s' imported from %s", target, base_path);
+  else snprintf(message, size, "Cannot find package '%.*s' imported from %s", (int)name_len, specifier, base_path);
+  
+  ant_value_t err = esm_coded_error(js, "ERR_MODULE_NOT_FOUND", message);
+  free(message);
+  free(target);
+  return err;
+
 }
 
 static bool esm_require_reloads(const esm_module_t *existing) {
@@ -2946,11 +3033,12 @@ ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const cha
 
   if (!base_path || !base_path[0]) base_path = esm_default_base_path(js);
   char *resolved_path = esm_resolve(js, spec_copy, base_path, esm_resolve_path);
-  free(spec_copy);
-
   if (!resolved_path) {
-    return js_mkerr(js, "Cannot resolve module");
+    ant_value_t err = esm_import_not_found_error(js, spec_copy, base_path);
+    free(spec_copy);
+    return err;
   }
+  free(spec_copy);
 
   if (esm_is_url(resolved_path) || esm_is_browser_empty(resolved_path)) {
     ant_value_t result = js_mkstr(js, resolved_path, strlen(resolved_path));

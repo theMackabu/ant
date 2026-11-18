@@ -347,6 +347,7 @@ export function targets() {
     'test_new_prototype_cache.cjs',
     'test_node_events_once_prototype_spoof.cjs',
     'test_node_http_incoming_message_readable.cjs',
+    'test_module_errors.mjs',
     'test_node_http_server_streaming_body.cjs',
     'test_node_http_keepalive_after_unread_body.cjs',
     'test_node_http_header_validation.cjs',
