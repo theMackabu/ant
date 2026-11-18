@@ -425,6 +425,7 @@ export function targets() {
     'test_proxy_nested_apply.cjs',
     'test_regexp_fast_path_guards.cjs',
     'test_regexp_fast_tiers.cjs',
+    'test_proxy_nested_targets.cjs',
     'test_regexp_instance_layout.cjs',
     'test_regexp_internal_state.cjs',
     'test_proxy_own_keys_array_like.cjs',
