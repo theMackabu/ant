@@ -412,6 +412,7 @@ export function targets() {
     'test_regexp_literal_search_guards.cjs',
     'test_regexp_lone_surrogates.cjs',
     'test_regexp_multiline_anchors.cjs',
+    'test_proxy_target_kinds.cjs',
     'test_regexp_original_source.cjs',
     'test_regexp_replace_callback_recompile.cjs',
     'test_regexp_required_literal.cjs',
