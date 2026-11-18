@@ -290,6 +290,7 @@ export function targets() {
     'test_jit_upvalue_tdz.cjs',
     'test_json_error_boundaries.cjs',
     'test_json_lone_surrogates.cjs',
+    'test_json_stringify_callable_proxy.cjs',
     'test_json_property_list.cjs',
     'test_inspector_host_header.cjs',
     'test_lock_error_boundaries.cjs',

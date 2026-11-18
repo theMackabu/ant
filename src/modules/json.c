@@ -1315,7 +1315,8 @@ static json_write_t json_write_impl(
     default: return json_out_write(out, "null", 4) ? JSON_W_OK : JSON_W_ABORT;
   }
 
-  if (vtype(val) == kTypeObject) {
+  ant_object_t *plain = vtype(val) == kTypeObject ? js_obj_ptr(val) : NULL;
+  if (plain && (plain->extra_slots || plain->flags.is_exotic)) {
     ant_value_t prim = js_get_slot(val, SLOT_PRIMITIVE);
     switch (vtype(prim)) {
       case kTypeNumber:  return json_out_number(out, Ant_Value_AsNumberUnchecked(prim)) ? JSON_W_OK : JSON_W_ABORT;
@@ -1328,6 +1329,8 @@ static json_write_t json_write_impl(
 
       default: break;
     }
+    if (plain->flags.is_exotic && is_proxy(val) && is_callable(val))
+      return in_array ? (json_out_write(out, "null", 4) ? JSON_W_OK : JSON_W_ABORT) : JSON_W_SKIP;
   }
 
   if (depth >= 2000) {
