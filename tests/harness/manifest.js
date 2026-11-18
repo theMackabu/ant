@@ -91,6 +91,7 @@ export function targets() {
     'test_event_prototype_getters.cjs',
     'test_eventsource_handlers.cjs',
     'test_eventtarget_listener_errors.cjs',
+    'test_computed_property_keys.cjs',
     'test_inspect_collections.cjs',
     'test_json_bigint_tojson.cjs',
     'test_timer_minor_gc.cjs',

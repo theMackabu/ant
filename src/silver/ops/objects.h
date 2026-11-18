@@ -89,6 +89,12 @@ static inline ant_value_t sv_define_method_comp(
   ant_value_t key = *key_slot;
   bool is_field = (flags & SV_DEFINE_METHOD_FIELD) != 0;
 
+  if (__builtin_expect(is_object_type(key) || vtype(key) == kTypeBuiltin, 0)) {
+    key = js_to_property_key(js, key);
+    if (is_err(key)) return key;
+    *key_slot = key;
+  }
+  
   if (is_field && (flags & SV_DEFINE_METHOD_SET_NAME)) {
     ant_value_t named = js_maybe_set_function_name_from_key(js, fn, key, "", 0);
     if (is_err(named)) return named;

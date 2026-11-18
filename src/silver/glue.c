@@ -1000,7 +1000,7 @@ ant_value_t jit_helper_get_field_inline(
 
 ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v) {
   if (vtype(v) == kTypeString || vtype(v) == kTypeSymbol) return v;
-  return coerce_to_str(js, v);
+  return js_to_property_key(js, v);
 }
 
 ant_value_t jit_helper_import_default(ant_t *js, ant_value_t ns) {

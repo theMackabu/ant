@@ -70,10 +70,14 @@ static inline ant_value_t sv_op_to_object(sv_vm_t *vm, ant_t *js) {
   return Ant_Value_FromNumber(0);
 }
 
-static inline void sv_op_to_propkey(sv_vm_t *vm, ant_t *js) {
+static inline ant_value_t sv_op_to_propkey(sv_vm_t *vm, ant_t *js) {
   ant_value_t v = vm->stack[vm->sp - 1];
-  if (vtype(v) != kTypeString && vtype(v) != kTypeSymbol)
-    vm->stack[vm->sp - 1] = coerce_to_str(js, v);
+  if (vtype(v) == kTypeString || vtype(v) == kTypeSymbol) return Ant_Value_Undefined;
+
+  ant_value_t key = js_to_property_key(js, v);
+  if (is_err(key)) return key;
+  vm->stack[vm->sp - 1] = key;
+  return Ant_Value_Undefined;
 }
 
 static inline ant_value_t sv_op_to_string(sv_vm_t *vm, ant_t *js) {
