@@ -145,8 +145,8 @@ static inline ant_value_t sv_construct_prototype_from_object(
   else
     proto = js_getprop_fallback(js, proto_source, "prototype");
 
-  return (is_err(proto) || is_object_type(proto))
-    ? proto : js->sym.object_proto;
+  if (is_err(proto) || is_object_type(proto)) return proto;
+  return vtype(proto) == kTypeBuiltin ? js_cfunc_promote(js, proto) : js->sym.object_proto;
 }
 
 static inline bool sv_construct_prototype_data(
@@ -177,7 +177,9 @@ static inline bool sv_construct_prototype_data(
   }
 
   ant_value_t proto = ant_object_prop_get_unchecked(ptr, sidecar->ctor_proto_slot);
-  *out = is_object_type(proto) ? proto : js->sym.object_proto;
+  if (__builtin_expect(!is_object_type(proto), 0))
+    proto = vtype(proto) == kTypeBuiltin ? js_cfunc_promote(js, proto) : js->sym.object_proto;
+  *out = proto;
   
   return true;
 }

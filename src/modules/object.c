@@ -110,11 +110,15 @@ static ant_value_t builtin_object_getPrototypeOf(ant_params_t) {
   
   if (t == kTypeString || t == kTypeNumber || t == kTypeBool || t == kTypeBigInt)
     return js_primitive_prototype(js, t);
-  if (t == kTypeBuiltin) return js_get_proto(js, obj);
+  if (t == kTypeBuiltin) return js_cfunc_demote_promoted(js, js_get_proto(js, obj));
   
   if (is_object_type(obj)) {
     if (is_proxy(obj)) return proxy_get_prototype_of(js, obj);
-    return get_proto(js, obj);
+    ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+    ant_value_t proto = ptr ? ant_object_proto(ptr) : Ant_Value_Undefined;
+    uint8_t pt = vtype(proto);
+    if (__builtin_expect(pt == kTypeObject || pt == kTypeArray || pt == kTypeNull, 1)) return proto;
+    return js_cfunc_demote_promoted(js, get_proto(js, obj));
   }
   
   return Ant_Value_Null;
@@ -171,7 +175,7 @@ static ant_value_t builtin_proto_getter(ant_params_t) {
   }
   
   if (t == kTypeObject || t == kTypeArray || t == kTypeFunction) {
-    return get_proto(js, call_this);
+    return js_cfunc_demote_promoted(js, get_proto(js, call_this));
   }
   
   return js_primitive_prototype(js, t);
@@ -193,9 +197,13 @@ static ant_value_t builtin_proto_setter(ant_params_t) {
   ant_value_t proto = args[0];
   uint8_t pt = vtype(proto);
   
-  if (pt != kTypeObject && pt != kTypeArray && pt != kTypeFunction && pt != kTypeNull) {
-    return Ant_Value_Undefined;
+  if (pt == kTypeBuiltin) {
+    proto = js_cfunc_promote(js, proto);
+    if (is_err(proto)) return proto;
+    pt = kTypeFunction;
   }
+  
+  if (!is_object_type(proto) && pt != kTypeNull) return Ant_Value_Undefined;
   
   if (is_proxy(call_this)) {
     ant_value_t result = proxy_set_prototype_of(js, call_this, proto);
@@ -441,6 +449,12 @@ static ant_value_t builtin_object_create(ant_params_t) {
   
   ant_value_t proto = args[0];
   uint8_t pt = vtype(proto);
+  
+  if (pt == kTypeBuiltin) {
+    proto = js_cfunc_promote(js, proto);
+    if (is_err(proto)) return proto;
+    pt = kTypeFunction;
+  }
   
   if (pt != kTypeObject && pt != kTypeArray && pt != kTypeFunction && pt != kTypeNull)
     return js_mkerr(js, "Object.create: prototype must be an object or null");

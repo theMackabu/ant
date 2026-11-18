@@ -252,6 +252,10 @@ ant_value_t ordinary_has_instance(ant_t *js, ant_value_t l, ant_value_t r) {
   if (is_err(ctor_proto)) return ctor_proto;
   
   uint8_t pt = vtype(ctor_proto);
+  if (pt == kTypeBuiltin) {
+    ctor_proto = js_cfunc_lookup_promoted(js, ctor_proto);
+    return vtype(ctor_proto) == kTypeBuiltin ? Ant_Value_False : walk_prototype_chain(js, l, ctor_proto);
+  }
   if (pt != kTypeObject && pt != kTypeArray && pt != kTypeFunction)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Function has non-object prototype in instanceof check");
   

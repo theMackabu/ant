@@ -1263,7 +1263,7 @@ ant_value_t proxy_get_prototype_of(ant_t *js, ant_value_t proxy) {
     if (is_err(trap)) return trap;
     
     if (vtype(trap) == kTypeUndefined) {
-      if (!is_proxy(target)) return get_proto(js, target);
+      if (!is_proxy(target)) return js_cfunc_demote_promoted(js, get_proto(js, target));
       if (hops >= PROXY_PROTO_HOP_LIMIT)
         return js_mkerr_typed(js, JS_ERR_RANGE, "Maximum call stack size exceeded");
       proxy = target;

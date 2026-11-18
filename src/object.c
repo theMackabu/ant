@@ -647,6 +647,7 @@ void js_set_proto_wb(ant_t *js, ant_value_t obj, ant_value_t proto) {
 }
 
 void js_set_literal_proto(ant_t *js, ant_value_t obj, ant_value_t proto) {
+  if (__builtin_expect(vtype(proto) == kTypeBuiltin, 0)) proto = js_cfunc_promote(js, proto);
   if (!js_literal_proto_ok(proto) || !is_object_type(obj)) return;
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
   if (!ptr) return;

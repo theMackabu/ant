@@ -1,5 +1,6 @@
 #include <compat.h> // IWYU pragma: keep
 
+#include "cfunc.h"
 #include "proto.h"
 #include "modules/object.h"
 #include "silver/engine.h"
@@ -116,6 +117,7 @@ ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_pr
   if (vtype(new_target) == kTypeFunction || vtype(new_target) == kTypeBuiltin) {
     ant_value_t nt_obj = js_as_obj(new_target);
     ant_value_t nt_proto = lkp_interned_val(js, nt_obj, js->intern.prototype);
+    if (vtype(nt_proto) == kTypeBuiltin) nt_proto = js_cfunc_promote(js, nt_proto);
     if (is_object_type(nt_proto)) instance_proto = nt_proto;
   } else if (vtype(new_target) == kTypeObject && js->construct_proxy_target == new_target) {
     instance_proto = js->construct_proxy_proto;
@@ -198,7 +200,8 @@ ant_value_t js_object_is_prototype_of(ant_t *js, ant_value_t self, ant_value_t v
 
   if (vtype(self) == kTypeUndefined || vtype(self) == kTypeNull)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
-  if (!is_object_type(self) && vtype(self) != kTypeBuiltin) return Ant_Value_False;
+  if (vtype(self) == kTypeBuiltin) self = js_cfunc_lookup_promoted(js, self);
+  if (!is_object_type(self)) return Ant_Value_False;
 
   bool saw_proxy = false;
   ant_value_t result = walk_prototype_chain_ex(js, value, self, &saw_proxy);
@@ -235,6 +238,7 @@ static bool proto_chain_contains_cycle_safe(ant_t *js, ant_value_t start, ant_va
 }
 
 bool js_instance_of_proto(ant_t *js, ant_value_t obj, ant_value_t ctor_proto) {
+  if (vtype(ctor_proto) == kTypeBuiltin) ctor_proto = js_cfunc_lookup_promoted(js, ctor_proto);
   return proto_chain_contains_cycle_safe(js, get_proto(js, obj), ctor_proto);
 }
 

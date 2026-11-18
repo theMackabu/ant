@@ -264,6 +264,7 @@ static ant_value_t sv_construct_ordinary(
     ? js_getprop_fallback(js, new_target, "prototype")
     : sv_prepare_construct_meta(js, func, new_target, &effective_new_target);
   if (is_err(proto)) return proto;
+  if (proxied && vtype(proto) == kTypeBuiltin) proto = js_cfunc_promote(js, proto);
   if (proxied && !is_object_type(proto)) proto = Ant_Value_Undefined;
 
   ant_value_t seed_proto = proto;

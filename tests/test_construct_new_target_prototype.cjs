@@ -90,6 +90,49 @@ for (let round = 0; round < 400; round++) {
   primitive.prototype = 5;
   assert.strictEqual(Object.getPrototypeOf(Reflect.construct(Derived, [[]], primitive)), Object.prototype);
   assert.strictEqual(Object.getPrototypeOf(Reflect.construct(Legacy, [[]], primitive)), Object.prototype);
+
+  const builtin = function () {};
+  builtin.prototype = Math.max;
+  for (const C of [Derived, Implicit, Legacy, Base, FromArray, FromMap, Array, Map, Set, Object, Error, Date, RegExp, Uint8Array, Function, Promise]) {
+    const args = C === Promise ? [() => {}] : C === Map || C === Set ? [] : [[]];
+    const made = Reflect.construct(C, args, builtin);
+    assert.strictEqual(Object.getPrototypeOf(made), Math.max, `${C.name} with a builtin function prototype`);
+  }
+}
+
+{
+  const target = Object.setPrototypeOf({}, Math.max);
+  assert.strictEqual(Object.getPrototypeOf(target), Math.max);
+  assert.strictEqual(Reflect.getPrototypeOf(target), Math.max);
+  assert.strictEqual(target.__proto__, Math.max);
+  assert.strictEqual(Object.getPrototypeOf(new Proxy(target, {})), Math.max);
+  assert.strictEqual(Math.max.isPrototypeOf(target), true);
+  assert.strictEqual(Math.min.isPrototypeOf(target), false);
+  assert.strictEqual(target.name, 'max');
+
+  const created = Object.create(Math.min);
+  assert.strictEqual(Object.getPrototypeOf(created), Math.min);
+  assert.strictEqual(created.length, 2);
+
+  const literal = { __proto__: Math.abs };
+  assert.strictEqual(Object.getPrototypeOf(literal), Math.abs);
+
+  const assigned = {};
+  assigned.__proto__ = Math.cos;
+  assert.strictEqual(Object.getPrototypeOf(assigned), Math.cos);
+  assert.strictEqual(Reflect.setPrototypeOf(assigned, Math.sin), true);
+  assert.strictEqual(Object.getPrototypeOf(assigned), Math.sin);
+
+  function Ctor() {}
+  Ctor.prototype = Math.floor;
+  for (let i = 0; i < 400; i++) {
+    const made = new Ctor();
+    assert.strictEqual(Object.getPrototypeOf(made), Math.floor);
+    assert.strictEqual(made instanceof Ctor, true);
+  }
+  assert.strictEqual({} instanceof Ctor, false);
+  assert.strictEqual(Object.create(Math.floor) instanceof Ctor, true);
+  assert.strictEqual(Object.getPrototypeOf(Math.floor), Function.prototype);
 }
 
 console.log('ok');
