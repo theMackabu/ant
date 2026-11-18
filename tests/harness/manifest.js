@@ -107,6 +107,7 @@ export function targets() {
     'test_super_put_add.cjs',
     'test_string_append_mixed.cjs',
     'test_builtin_receiver_ic.cjs',
+    'test_builtin_prototype_fallback.cjs',
     'test_cage_size_flag.cjs',
     'test_caught_exception_stack.cjs',
     'test_child_process_execfile_argv_getter.cjs',

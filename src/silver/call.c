@@ -237,6 +237,23 @@ static bool sv_new_target_is_class(ant_value_t new_target) {
   return (closure->call_flags & SV_CALL_IS_DEFAULT_CTOR) || (closure->func && closure->func->is_class_ctor);
 }
 
+static __attribute__((noinline)) ant_value_t sv_construct_default_prototype(
+  ant_t *js, ant_value_t func, ant_value_t new_target, ant_value_t proto
+) {
+  bool native = vtype(func) == kTypeBuiltin || (
+    vtype(func) == kTypeFunction && !js_func_closure(func)->func &&
+    !(js_func_closure(func)->call_flags & SV_CALL_IS_DEFAULT_CTOR));
+  if (is_object_type(proto)) {
+    uint8_t type = vtype(new_target);
+    ant_value_t raw = type == kTypeFunction || type == kTypeBuiltin
+      ? lkp_interned_val(js, js_as_obj(new_target), js->intern.prototype) : proto;
+    if (is_object_type(raw) || vtype(raw) == kTypeBuiltin) return proto;
+  }
+  ant_value_t own = native ? js_getprop_fallback(js, func, "prototype") : Ant_Value_Undefined;
+  if (vtype(own) == kTypeBuiltin) own = js_cfunc_promote(js, own);
+  return is_object_type(own) ? own : js->sym.object_proto;
+}
+
 static ant_value_t sv_construct_ordinary(
   sv_vm_t *vm, ant_t *js, ant_value_t func,
   ant_value_t *args, int argc, ant_value_t new_target
@@ -249,9 +266,13 @@ static ant_value_t sv_construct_ordinary(
   if (is_err(proto)) return proto;
   if (proxied && !is_object_type(proto)) proto = Ant_Value_Undefined;
 
+  ant_value_t seed_proto = proto;
+  if (new_target != func && (proxied ? !is_object_type(proto) : proto == js->sym.object_proto))
+    seed_proto = sv_construct_default_prototype(js, func, new_target, proto);
+
   ant_value_t seed = Ant_Object_CreateBare(js);
   if (is_err(seed)) return seed;
-  if (is_object_type(proto)) js_set_proto_init(seed, proto);
+  if (is_object_type(seed_proto)) js_set_proto_init(seed, seed_proto);
 
   ant_value_t ctor_this = seed;
   ant_value_t result;
