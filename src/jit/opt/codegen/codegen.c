@@ -2778,8 +2778,9 @@ static void opt_cg_allocate_array(opt_cg_t *cg, ir_node_id_t node) {
   masm_bind(m, allocation.resume);
   return;
 #endif
-  int cls = gc_array_storage_fit_class(count_elements);
-  uint32_t capacity = gc_array_storage_fit(count_elements);
+  uint32_t reserved = count_elements ? count_elements : MAX_DENSE_INITIAL_CAP;
+  int cls = gc_array_storage_fit_class(reserved);
+  uint32_t capacity = gc_array_storage_fit(reserved);
   const int32_t head = (int32_t)(offsetof(ant_t, array_storage.head) + sizeof(ant_value_t *) * (size_t)cls);
   ant_value_t array_proto = cg->js->sym.array_proto;
   masm_load64(m, js, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
@@ -2818,7 +2819,7 @@ static void opt_cg_allocate_array(opt_cg_t *cg, ir_node_id_t node) {
   image->u.array.len = count_elements;
   image->u.array.cap = capacity;
   image->type_tag = kTypeArray;
-  image->flags = (ant_object_flags_t){.extensible = 1, .fast_array = 1, .dense_length_fits = 1, .may_have_dense_elements = 1};
+  image->flags = (ant_object_flags_t){.extensible = 1, .fast_array = 1, .dense_length_fits = 1, .may_have_dense_elements = count_elements > 0};
   uint64_t words[ANT_OBJECT_SIZE / 8];
   memcpy(words, bytes, sizeof words);
   bool stored[ANT_OBJECT_SIZE / 8] = {0};

@@ -377,6 +377,7 @@ export function targets() {
     'test_opt_in_field_for_in.cjs',
     'test_opt_inline_alloc.cjs',
     'test_opt_int_mod.cjs',
+    'test_opt_empty_array.cjs',
     'test_opt_learned_shapes.cjs',
     'test_opt_math_and_checks.cjs',
     'test_opt_exit_stack_parity.cjs',

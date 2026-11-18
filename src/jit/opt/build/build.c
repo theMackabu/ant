@@ -4517,7 +4517,7 @@ static_assert(OPT_MAX_INLINE_ARRAY >= OPT_MAX_CALL_ARGS, "inline array literals 
 static_assert(OPT_MAX_INLINE_ARRAY == SV_LITERAL_INLINE_MAX, "small flat literals stay on OP_ARRAY because opt inlines them");
 
 static ir_node_id_t opt_emit_array(opt_builder_t *b, const ir_node_id_t *elements, uint32_t count) {
-  bool inline_elements = count > 0 && count <= OPT_MAX_INLINE_ARRAY && gc_array_storage_fit_class(count) >= 0;
+  bool inline_elements = count <= OPT_MAX_INLINE_ARRAY && gc_array_storage_fit_class(count) >= 0;
   for (uint32_t i = 0; i < count && inline_elements; i++) {
     uint64_t bits;
     if (ir_constant_value(b->graph, elements[i], &bits) ? bits == IR_VALUE_EMPTY : ir_node(b->graph, elements[i])->op.code == IR_OP_GENERIC)
