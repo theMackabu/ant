@@ -639,8 +639,6 @@ static __attribute__((noinline, cold)) bool gc_closure_defer(ant_t *js, sv_closu
   return true;
 }
 
-void gc_mark_closure(ant_t *js, sv_closure_t *c);
-
 static inline __attribute__((always_inline)) void gc_scan_closure(ant_t *js, sv_closure_t *c) {
   if (js->weak_gc.pending_active) gc_weak_key_marked(js, mkref(kTypeFunction, c));
   if (js->gc.realm_reach && c->func) ant_realm_reach(js, c->func->realm, gc_mark_value);
