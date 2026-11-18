@@ -537,6 +537,7 @@ export function targets() {
     'test_realm_free_builtins.cjs',
     'test_regexp_utf16_offsets.cjs',
     'test_string_iterator_receiver.cjs',
+    'test_string_key_cache_length.cjs',
     'test_string_normalize_surrogates.cjs',
     'test_typedarray_index_properties.cjs',
     'test_tagged_template_new_optional.cjs',

@@ -1599,6 +1599,7 @@ static inline bool sv_get_elem_string(ant_t *js, ant_value_t obj, ant_value_t ke
     return true;
   }
   
+  if (interned == js->intern.length) return false;
   sv_gf_mega_cache_t *cache = sv_gf_mega_keyed_ensure(js);
   if (!cache) return false;
   int kind = -1;
