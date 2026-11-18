@@ -4188,28 +4188,16 @@ static bool opt_uncurry_call(opt_builder_t *b, ir_node_id_t *inputs, uint32_t *a
   return true;
 }
 
-static opt_flow_t opt_build_call(opt_builder_t *b, const uint8_t *ip, sv_op_t op) {
+static opt_flow_t opt_build_call_with(opt_builder_t *b, sv_op_t op, ir_node_id_t *inputs, uint32_t argc, uint32_t operands) {
   bool construct = op == OP_NEW, tail = op == OP_TAIL_CALL || op == OP_TAIL_CALL_METHOD;
   bool method = op == OP_CALL_METHOD || op == OP_TAIL_CALL_METHOD;
-  uint32_t argc = sv_get_u16(ip + 1);
-  uint32_t operands = argc + 1 + (method || construct);
-  if (argc > OPT_MAX_CALL_ARGS || operands > b->frame.sp) {
-    opt_fail(b, "call-argc");
-    return OPT_FLOW_FAILED;
-  }
+  ir_node_id_t callee = inputs[0], second = inputs[1];
   sv_func_t *target = opt_call_target(b);
   bool self_tail = tail && !b->inline_call && target == b->func;
   if (self_tail && b->tail_header == IR_NONE) {
     opt_fail(b, "self-tail-call");
     return OPT_FLOW_FAILED;
   }
-  ir_node_id_t callee = opt_tagged(b, opt_peek(b, argc + construct));
-  ir_node_id_t second = method ? opt_tagged(b, opt_peek(b, argc + 1))
-    : construct ? opt_tagged(b, opt_peek(b, argc)) : opt_constant(b, IR_VALUE_UNDEFINED);
-  ir_node_id_t inputs[2 + OPT_MAX_CALL_ARGS];
-  inputs[0] = callee;
-  inputs[1] = second;
-  for (uint32_t i = 0; i < argc; i++) inputs[2 + i] = opt_tagged(b, opt_peek(b, argc - 1 - i));
   if (self_tail) opt_build_self_tail(b, callee, inputs + 2, argc);
   if (method && argc == 2 && opt_is_virtual_arguments(b, inputs[3])) {
     if (!b->inline_call || !opt_expect_builtin(b, callee, js_is_function_apply_builtin)) return opt_no_virtual_arguments(b);
@@ -4253,6 +4241,22 @@ static opt_flow_t opt_build_call(opt_builder_t *b, const uint8_t *ip, sv_op_t op
   if (!construct && opt_try_polymorphic_call(b, op, argc, operands, inputs, &flow)) return flow;
   if (opt_try_inline(b, op, argc, operands, callee, second, inputs + 2, target, &flow)) return flow;
   return opt_emit_call(b, construct, target, inputs, argc, operands, tail);
+}
+
+static opt_flow_t opt_build_call(opt_builder_t *b, const uint8_t *ip, sv_op_t op) {
+  bool construct = op == OP_NEW, method = op == OP_CALL_METHOD || op == OP_TAIL_CALL_METHOD;
+  uint32_t argc = sv_get_u16(ip + 1);
+  uint32_t operands = argc + 1 + (method || construct);
+  if (argc > OPT_MAX_CALL_ARGS || operands > b->frame.sp) {
+    opt_fail(b, "call-argc");
+    return OPT_FLOW_FAILED;
+  }
+  ir_node_id_t inputs[2 + OPT_MAX_CALL_ARGS];
+  inputs[0] = opt_tagged(b, opt_peek(b, argc + construct));
+  inputs[1] = method ? opt_tagged(b, opt_peek(b, argc + 1))
+    : construct ? opt_tagged(b, opt_peek(b, argc)) : opt_constant(b, IR_VALUE_UNDEFINED);
+  for (uint32_t i = 0; i < argc; i++) inputs[2 + i] = opt_tagged(b, opt_peek(b, argc - 1 - i));
+  return opt_build_call_with(b, op, inputs, argc, operands);
 }
 
 static ir_node_id_t opt_runtime_call(opt_builder_t *b, uintptr_t helper, uintptr_t extra, const ir_node_id_t *inputs, uint32_t count, bool allocates_only, bool needs_frame) {
@@ -5026,13 +5030,30 @@ static opt_flow_t opt_build_import(opt_builder_t *b, const uint8_t *ip, sv_op_t 
   return OPT_FLOW_CONTINUE;
 }
 
-static opt_flow_t opt_build_super_call(opt_builder_t *b, const uint8_t *ip, sv_op_t op) {
-  if (b->inline_call || !b->func->is_derived_ctor) {
-    opt_fail(b, b->inline_call ? "inline-super" : "super-call-kind");
+static bool opt_super_call_allowed(opt_builder_t *b) {
+  if (b->func->is_derived_ctor && !b->inline_call) return true;
+  opt_fail(b, b->inline_call ? "inline-super" : "super-call-kind");
+  return false;
+}
+
+static opt_flow_t opt_build_super_call_with(opt_builder_t *b, sv_op_t op, const ir_node_id_t *inputs, uint32_t argc, uint32_t operands) {
+  bool forward = op == OP_SUPER_FORWARD;
+  if (b->inline_call) {
+    opt_fail(b, "inline-super");
     return OPT_FLOW_FAILED;
   }
-  bool forward = op == OP_SUPER_FORWARD;
-  uint32_t argc = forward ? 0 : sv_get_u16(ip + 1);
+  uintptr_t helper = (uintptr_t)opt_rt_super_call;
+  ir_node_id_t result = opt_runtime_call(b, helper, forward, inputs, argc + 3, false, true);
+  opt_drop(b, operands);
+  opt_forget_memory(b);
+  opt_push(b, result);
+  b->frame.this_value = result;
+  return OPT_FLOW_CONTINUE;
+}
+
+static opt_flow_t opt_build_super_call(opt_builder_t *b, const uint8_t *ip, sv_op_t op) {
+  if (!opt_super_call_allowed(b)) return OPT_FLOW_FAILED;
+  uint32_t argc = op == OP_SUPER_FORWARD ? 0 : sv_get_u16(ip + 1);
   uint32_t operands = argc + 3;
   if (argc + 1 > OPT_MAX_CALL_ARGS || operands > b->frame.sp) {
     opt_fail(b, "call-argc");
@@ -5040,11 +5061,7 @@ static opt_flow_t opt_build_super_call(opt_builder_t *b, const uint8_t *ip, sv_o
   }
   ir_node_id_t inputs[3 + OPT_MAX_CALL_ARGS];
   for (uint32_t i = 0; i < operands; i++) inputs[i] = opt_tagged(b, opt_peek(b, operands - 1 - i));
-  ir_node_id_t result = opt_runtime_call(b, (uintptr_t)opt_rt_super_call, forward, inputs, operands, false, true);
-  opt_drop(b, operands);
-  opt_forget_memory(b);
-  opt_push(b, result);
-  b->frame.this_value = result;
+  opt_flow_t flow = opt_build_super_call_with(b, op, inputs, argc, operands); if (flow != OPT_FLOW_CONTINUE) return flow;
   return OPT_FLOW_CONTINUE;
 }
 
