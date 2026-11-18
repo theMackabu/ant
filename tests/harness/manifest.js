@@ -354,6 +354,7 @@ export function targets() {
     'test_object_assign_sources.cjs',
     'test_object_isprototypeof_proxy.cjs',
     'test_object_pattern_keys.cjs',
+    'test_object_literal_member_names.cjs',
     'test_object_proto_this_coercion.cjs',
     'test_object_site_lookup.cjs',
     'test_object_spread_sources.cjs',
