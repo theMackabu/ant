@@ -93,7 +93,10 @@ ant_value_t Silver_Super_GetField(ant_t *js, sv_func_t *func, ant_value_t receiv
 static constexpr uint16_t SUPER_PUT_FILL_LIMIT = 16;
 
 static inline ant_object_t *Super_ObjectOf(ant_value_t value) {
-  return vtype(value) == kTypeObject ? (ant_object_t *)vptr(value) : NULL;
+  if (vtype(value) == kTypeObject) return (ant_object_t *)vptr(value);
+  if (vtype(value) != kTypeFunction) return NULL;
+  ant_value_t object = js_func_closure(value)->func_obj;
+  return vtype(object) == kTypeObject ? (ant_object_t *)vptr(object) : NULL;
 }
 
 static inline ant_value_t Super_CacheableParent(ant_value_t home) {

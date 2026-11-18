@@ -508,6 +508,7 @@ export function targets() {
     'test_string_index_keys_utf16.cjs',
     'test_string_length_accumulation.cjs',
     'test_string_number_concat.cjs',
+    'test_super_static_put.cjs',
     'test_string_replace_empty_surrogates.cjs',
     'test_string_split_limit.cjs',
     'test_string_prototype_receivers.cjs',
