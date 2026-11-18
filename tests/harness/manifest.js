@@ -303,6 +303,7 @@ export function targets() {
     'test_number_radix_parseint.cjs',
     'test_number_shortest.cjs',
     'test_net_port_validation.cjs',
+    'test_math_f16round.cjs',
     'test_net_socket_readable.mjs',
     'test_new_prototype_cache.cjs',
     'test_node_events_once_prototype_spoof.cjs',

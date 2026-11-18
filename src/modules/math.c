@@ -159,6 +159,25 @@ static ant_value_t builtin_Math_fround(ant_params_t) {
   return Ant_Value_FromNumber((double)(float)x);
 }
 
+static double math_f16round(double x) {
+  if (isnan(x) || isinf(x) || x == 0) return x;
+  double magnitude = fabs(x);
+  if (magnitude >= 65520.0) return x < 0 ? -(double)INFINITY : (double)INFINITY;
+  double quantum = magnitude < 0x1p-14 ? 0x1p-24 : ldexp(1.0, ilogb(magnitude) - 10);
+  double scaled = magnitude / quantum;
+  double rounded = floor(scaled);
+  double rest = scaled - rounded;
+  if (rest > 0.5 || (rest == 0.5 && fmod(rounded, 2.0) != 0)) rounded += 1.0;
+  double result = rounded * quantum;
+  return x < 0 ? -result : result;
+}
+
+static ant_value_t builtin_Math_f16round(ant_params_t) {
+  double x = (nargs < 1) ? ANT_NAN : math_to_number(js, args[0]);
+  if (isnan(x)) return Ant_Value_FromNumber(ANT_NAN);
+  return Ant_Value_FromNumber(math_f16round(x));
+}
+
 static ant_value_t builtin_Math_hypot(ant_params_t) {
   if (nargs == 0) return Ant_Value_FromNumber(0.0);
   
@@ -279,6 +298,7 @@ void init_math_module(ant_t *js) {
   defmethod(js, math_obj, "expm1", 5, Ant_Function_CreateEx(builtin_Math_expm1, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "floor", 5, Ant_Function_CreateEx(builtin_Math_floor, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "fround", 6, Ant_Function_CreateEx(builtin_Math_fround, 1, CFUNC_REALM_FREE));
+  defmethod(js, math_obj, "f16round", 8, Ant_Function_CreateEx(builtin_Math_f16round, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "hypot", 5, Ant_Function_CreateEx(builtin_Math_hypot, 2, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "imul", 4, Ant_Function_CreateEx(builtin_Math_imul, 2, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "log", 3, Ant_Function_CreateEx(builtin_Math_log, 1, CFUNC_REALM_FREE));
