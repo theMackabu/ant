@@ -11,6 +11,30 @@ bool template_has_valid_cooked_segments(const sv_ast_t *node) {
   return true;
 }
 
+static inline bool is_additive_chain_op(uint8_t op) {
+  return op == TOK_PLUS || op == TOK_MINUS || op == TOK_MUL || op == TOK_DIV;
+}
+
+static uint8_t infer_arithmetic_type(sv_compiler_t *c, sv_ast_t *node) {
+  uint8_t want = SV_TI_NUM;
+  if (node->op == TOK_PLUS) {
+    want = infer_expr_type(c, node->right);
+    if (want != SV_TI_NUM && want != SV_TI_STR) return SV_TI_UNKNOWN;
+    node = node->left;
+  }
+
+  while (node && node->type == N_BINARY && is_additive_chain_op(node->op)) {
+    uint8_t right = infer_expr_type(c, node->right);
+    if (node->op != TOK_PLUS) {
+      if (want != SV_TI_NUM) return SV_TI_UNKNOWN;
+      if (right == SV_TI_NUM) return SV_TI_NUM;
+    } else if (right != want) return SV_TI_UNKNOWN;
+    node = node->left;
+  }
+
+  return infer_expr_type(c, node) == want ? want : SV_TI_UNKNOWN;
+}
+
 uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node) {
   if (!node) return SV_TI_UNDEF;
 
@@ -57,17 +81,10 @@ uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node) {
     }
 
     case N_BINARY: {
+      if (is_additive_chain_op(node->op)) return infer_arithmetic_type(c, node);
       uint8_t lt = infer_expr_type(c, node->left);
       uint8_t rhs_type = infer_expr_type(c, node->right);
       switch (node->op) {
-        case TOK_PLUS:
-          if (lt == SV_TI_NUM && rhs_type == SV_TI_NUM) return SV_TI_NUM;
-          if (lt == SV_TI_STR && rhs_type == SV_TI_STR) return SV_TI_STR;
-          return SV_TI_UNKNOWN;
-        case TOK_MINUS:
-        case TOK_MUL:
-        case TOK_DIV:
-          return (lt == SV_TI_NUM && rhs_type == SV_TI_NUM) ? SV_TI_NUM : SV_TI_UNKNOWN;
         case TOK_LT:
         case TOK_LE:
         case TOK_GT:
@@ -376,13 +393,17 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 static void compile_typeof_op(sv_compiler_t *c, sv_ast_t *node, int test_type);
+static __attribute__((noinline)) bool compile_typeof_name_compare(sv_compiler_t *c, sv_ast_t *node, sv_ast_t *type, sv_ast_t *name);
 
-static bool compile_primitive_type_compare(sv_compiler_t *c, sv_ast_t *node) {
-  if (node->op != TOK_SEQ && node->op != TOK_SNE && node->op != TOK_EQ && node->op != TOK_NE) return false;
+static inline bool compile_primitive_type_compare(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *type = node->left, *name = node->right;
   
   if (name->type == N_TYPEOF) { type = node->right; name = node->left; }
   if (type->type != N_TYPEOF || name->type != N_STRING) return false;
+  return compile_typeof_name_compare(c, node, type, name);
+}
+
+static bool compile_typeof_name_compare(sv_compiler_t *c, sv_ast_t *node, sv_ast_t *type, sv_ast_t *name) {
   
   static const struct { const char *name; uint8_t type; } primitives[] = {
     {"string", kTypeString}, {"number", kTypeNumber}, {"boolean", kTypeBool},
@@ -400,31 +421,132 @@ static bool compile_primitive_type_compare(sv_compiler_t *c, sv_ast_t *node) {
   return false;
 }
 
+static void compile_arithmetic_chain(sv_compiler_t *c, sv_ast_t *node) {
+  int depth = 1;
+  for (sv_ast_t *cur = node->left; cur && cur->type == N_BINARY && is_additive_chain_op(cur->op); cur = cur->left) depth++;
+
+  sv_ast_t *inline_nodes[16];
+  sv_ast_t **nodes = depth <= 16 ? inline_nodes : malloc((size_t)depth * sizeof(*nodes));
+  if (!nodes) {
+    Ant_Error_CreateOutOfMemory(c->js);
+    emit_op(c, OP_UNDEF);
+    return;
+  }
+
+  sv_ast_t *cur = node;
+  for (int i = 0; i < depth; i++, cur = cur->left) {
+    nodes[i] = cur;
+    if (i > 0) emit_srcpos(c, cur);
+  }
+
+  compile_expr(c, cur);
+  uint8_t left_type = infer_expr_type(c, cur);
+  
+  for (int i = depth - 1; i >= 0; i--) {
+    uint8_t op = nodes[i]->op;
+    compile_expr(c, nodes[i]->right);
+    uint8_t right_type = infer_expr_type(c, nodes[i]->right);
+    bool numeric = left_type == SV_TI_NUM && right_type == SV_TI_NUM;
+    
+    switch (op) {
+      case TOK_PLUS:  emit_op(c, numeric ? OP_ADD_NUM : OP_ADD); break;
+      case TOK_MINUS: emit_op(c, numeric ? OP_SUB_NUM : OP_SUB); break;
+      case TOK_MUL:   emit_op(c, numeric ? OP_MUL_NUM : OP_MUL); break;
+      default:        emit_op(c, numeric ? OP_DIV_NUM : OP_DIV); break;
+    }
+    
+    if (numeric) continue;
+    left_type = op == TOK_PLUS && left_type == SV_TI_STR && right_type == SV_TI_STR ? SV_TI_STR : SV_TI_UNKNOWN;
+  }
+
+  if (nodes != inline_nodes) free(nodes);
+}
+
+static inline bool is_logical_op(uint8_t op) {
+  return op == TOK_LAND || op == TOK_LOR || op == TOK_NULLISH;
+}
+
+static void emit_plain_binary_op(sv_compiler_t *c, uint8_t op) {
+  switch (op) {
+    case TOK_REM:        emit_op(c, OP_MOD); break;
+    case TOK_EXP:        emit_op(c, OP_EXP); break;
+    case TOK_LT:         emit_op(c, OP_LT);  break;
+    case TOK_LE:         emit_op(c, OP_LE);  break;
+    case TOK_GT:         emit_op(c, OP_GT);  break;
+    case TOK_GE:         emit_op(c, OP_GE);  break;
+    case TOK_EQ:         emit_op(c, OP_EQ);  break;
+    case TOK_NE:         emit_op(c, OP_NE);  break;
+    case TOK_SEQ:        emit_op(c, OP_SEQ); break;
+    case TOK_SNE:        emit_op(c, OP_SNE); break;
+    case TOK_AND:        emit_op(c, OP_BAND); break;
+    case TOK_OR:         emit_op(c, OP_BOR);  break;
+    case TOK_XOR:        emit_op(c, OP_BXOR); break;
+    case TOK_SHL:        emit_op(c, OP_SHL);  break;
+    case TOK_SHR:        emit_op(c, OP_SHR);  break;
+    case TOK_ZSHR:       emit_op(c, OP_USHR); break;
+    case TOK_INSTANCEOF:
+      emit_op(c, OP_INSTANCEOF);
+      emit_u16(c, alloc_ic_idx(c));
+      break;
+    case TOK_IN:         emit_op(c, OP_IN);  break;
+    default:             emit_op(c, OP_UNDEF); break;
+  }
+}
+
+static inline sv_op_t logical_jump_op(uint8_t op) {
+  return op == TOK_LAND ? OP_JMP_FALSE_PEEK : op == TOK_LOR ? OP_JMP_TRUE_PEEK : OP_JMP_NOT_NULLISH;
+}
+
+static inline bool binary_spine_continues(const sv_ast_t *node) {
+  return node->left && node->left->type == N_BINARY && !is_additive_chain_op(node->op);
+}
+
+static void compile_binary_spine(sv_compiler_t *c, sv_ast_t *node) {
+  int depth = 0;
+  for (sv_ast_t *cur = node; binary_spine_continues(cur); cur = cur->left) depth++;
+
+  sv_ast_t *inline_nodes[16];
+  sv_ast_t **nodes = depth <= 16 ? inline_nodes : malloc((size_t)depth * sizeof(*nodes));
+  if (!nodes) {
+    Ant_Error_CreateOutOfMemory(c->js);
+    emit_op(c, OP_UNDEF);
+    return;
+  }
+
+  sv_ast_t *cur = node;
+  for (int i = 0; i < depth; i++, cur = cur->left) {
+    nodes[i] = cur;
+    if (i > 0) emit_srcpos(c, cur);
+  }
+
+  compile_expr(c, cur);
+  for (int i = depth - 1; i >= 0; i--) {
+    uint8_t op = nodes[i]->op;
+    if (is_logical_op(op)) {
+      int jump = emit_jump(c, logical_jump_op(op));
+      emit_op(c, OP_POP);
+      compile_expr(c, nodes[i]->right);
+      patch_jump(c, jump);
+      continue;
+    }
+    compile_expr(c, nodes[i]->right);
+    emit_plain_binary_op(c, op);
+  }
+
+  if (nodes != inline_nodes) free(nodes);
+}
+
 void compile_binary(sv_compiler_t *c, sv_ast_t *node) {
   uint8_t op = node->op;
-  if (compile_primitive_type_compare(c, node)) return;
+  if (binary_spine_continues(node)) {
+    compile_binary_spine(c, node);
+    return;
+  }
+  if ((op == TOK_SEQ || op == TOK_SNE || op == TOK_EQ || op == TOK_NE) && compile_primitive_type_compare(c, node)) return;
 
-  if (op == TOK_LAND) {
+  if (is_logical_op(op)) {
     compile_expr(c, node->left);
-    int jump = emit_jump(c, OP_JMP_FALSE_PEEK);
-    emit_op(c, OP_POP);
-    compile_expr(c, node->right);
-    patch_jump(c, jump);
-    return;
-  }
-  
-  if (op == TOK_LOR) {
-    compile_expr(c, node->left);
-    int jump = emit_jump(c, OP_JMP_TRUE_PEEK);
-    emit_op(c, OP_POP);
-    compile_expr(c, node->right);
-    patch_jump(c, jump);
-    return;
-  }
-  
-  if (op == TOK_NULLISH) {
-    compile_expr(c, node->left);
-    int jump = emit_jump(c, OP_JMP_NOT_NULLISH);
+    int jump = emit_jump(c, logical_jump_op(op));
     emit_op(c, OP_POP);
     compile_expr(c, node->right);
     patch_jump(c, jump);
@@ -450,53 +572,14 @@ void compile_binary(sv_compiler_t *c, sv_ast_t *node) {
     return;
   }
 
-  uint8_t left_type = SV_TI_UNKNOWN;
-  uint8_t right_type = SV_TI_UNKNOWN;
-  
-  if (op == TOK_PLUS || op == TOK_MINUS || op == TOK_MUL || op == TOK_DIV) {
-    left_type = infer_expr_type(c, node->left);
-    right_type = infer_expr_type(c, node->right);
+  if (is_additive_chain_op(op)) {
+    compile_arithmetic_chain(c, node);
+    return;
   }
 
   compile_expr(c, node->left);
   compile_expr(c, node->right);
-
-  switch (op) {
-    case TOK_PLUS:
-      emit_op(c, (left_type == SV_TI_NUM && right_type == SV_TI_NUM) ? OP_ADD_NUM : OP_ADD);
-      break;
-    case TOK_MINUS:
-      emit_op(c, (left_type == SV_TI_NUM && right_type == SV_TI_NUM) ? OP_SUB_NUM : OP_SUB);
-      break;
-    case TOK_MUL:
-      emit_op(c, (left_type == SV_TI_NUM && right_type == SV_TI_NUM) ? OP_MUL_NUM : OP_MUL);
-      break;
-    case TOK_DIV:
-      emit_op(c, (left_type == SV_TI_NUM && right_type == SV_TI_NUM) ? OP_DIV_NUM : OP_DIV);
-      break;
-    case TOK_REM:        emit_op(c, OP_MOD); break;
-    case TOK_EXP:        emit_op(c, OP_EXP); break;
-    case TOK_LT:         emit_op(c, OP_LT);  break;
-    case TOK_LE:         emit_op(c, OP_LE);  break;
-    case TOK_GT:         emit_op(c, OP_GT);  break;
-    case TOK_GE:         emit_op(c, OP_GE);  break;
-    case TOK_EQ:         emit_op(c, OP_EQ);  break;
-    case TOK_NE:         emit_op(c, OP_NE);  break;
-    case TOK_SEQ:        emit_op(c, OP_SEQ); break;
-    case TOK_SNE:        emit_op(c, OP_SNE); break;
-    case TOK_AND:        emit_op(c, OP_BAND); break;
-    case TOK_OR:         emit_op(c, OP_BOR);  break;
-    case TOK_XOR:        emit_op(c, OP_BXOR); break;
-    case TOK_SHL:        emit_op(c, OP_SHL);  break;
-    case TOK_SHR:        emit_op(c, OP_SHR);  break;
-    case TOK_ZSHR:       emit_op(c, OP_USHR); break;
-    case TOK_INSTANCEOF:
-      emit_op(c, OP_INSTANCEOF);
-      emit_u16(c, alloc_ic_idx(c));
-      break;
-    case TOK_IN:         emit_op(c, OP_IN);  break;
-    default:             emit_op(c, OP_UNDEF); break;
-  }
+  emit_plain_binary_op(c, op);
 }
 
 void compile_unary(sv_compiler_t *c, sv_ast_t *node) {

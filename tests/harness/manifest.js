@@ -188,6 +188,7 @@ export function targets() {
     'test_error_stack_format.cjs',
     'test_error_stack_jit_frames.cjs',
     'test_escape_unescape.cjs',
+    'test_compile_time_linear.cjs',
     'test_esm_package_self_reference.cjs',
     'test_events_key_cache.cjs',
     'test_events_listener_storage.cjs',
