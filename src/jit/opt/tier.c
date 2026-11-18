@@ -915,6 +915,16 @@ ant_value_t opt_rt_rest(sv_vm_t *vm, ant_value_t start, ant_value_t unused, ant_
   return opt_rt_rest_array(vm, entry->args, (uint32_t)entry->argc, (uint32_t)Ant_Value_AsNumberUnchecked(start));
 }
 
+ant_value_t opt_rt_append(sv_vm_t *vm, ant_value_t array, ant_value_t value, ant_value_t *args, int64_t argc, int64_t kind) {
+  js_arr_push(vm->js, array, value);
+  return array;
+}
+
+ant_value_t opt_rt_spread(sv_vm_t *vm, ant_value_t array, ant_value_t iterable, ant_value_t *args, int64_t argc, int64_t kind) {
+  ant_value_t status = jit_helper_spread(vm, vm->js, array, iterable);
+  return is_err(status) ? status : array;
+}
+
 ant_value_t opt_rt_call_args(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t spread) {
   if (spread) return jit_helper_call_spread(vm, vm->js, callee, this_val, args, (int)argc, OPT_SPREAD_ARG_SLOTS);
   return jit_helper_apply(vm, vm->js, callee, this_val, args, (int)argc, OPT_SPREAD_ARG_SLOTS);

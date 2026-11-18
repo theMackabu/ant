@@ -15,8 +15,10 @@ function spreadCall(arr) { return sum3(...arr); }
 function spreadCount(arr) { return count(...arr); }
 function spreadFixed(x, arr) { return count(x, ...arr); }
 function spreadNew(arr) { return new Point(...arr); }
+function spreadArrayCall(x, arr) { return [x, ...arr, id(x)]; }
 function spreadMax(arr) { return Math.max(...arr); }
 function spreadPush(arr) { const out = [0]; out.push(...arr); return out; }
+function id(x) { return x; }
 
 function Point(a, b, c) {
   this.a = a;
@@ -72,6 +74,7 @@ function warm() {
     assert.strictEqual(spreadCount(three), 3);
     assert.strictEqual(spreadFixed(i, three), 4);
     assert.strictEqual(spreadNew(three).c, 3);
+    assert.strictEqual(spreadArrayCall(i, two)[3], i);
     assert.strictEqual(spreadMax(three), 3);
     assert.strictEqual(spreadPush(two).length, 3);
     assert.strictEqual(spreadMethod(holder, three), 16);
@@ -121,6 +124,9 @@ function checkShapes() {
   assert.strictEqual(spreadNew([]).n, 0);
   assert.strictEqual(spreadNew(new Set([1, 2])).b, 2);
   assert.strictEqual(spreadNew(new Array(20).fill(3)).n, 20);
+
+  assert.deepStrictEqual(spreadArrayCall('q', three), ['q', 1, 2, 3, 'q']);
+  assert.deepStrictEqual(three, [1, 2, 3]);
 
   assert.strictEqual(spreadMax(three), 3);
   assert.strictEqual(spreadMax([]), -Infinity);
@@ -173,6 +179,7 @@ function order(tag, value) { log.push(tag); return value; }
 function orderCall() { return order('callee', count)(order('a', 1), ...order('spread', [2, 3])); }
 function orderMethod() { return order('receiver', holder).m(order('a', 1), ...order('spread', [2, 3])); }
 function orderNew() { return new (order('callee', Point))(order('a', 1), ...order('spread', [2, 3])); }
+function orderArray() { return [order('a', 1), ...order('spread', [2]), order('b', 3)]; }
 for (let i = 0; i < WARM; i++) {
   assert.strictEqual(orderCall(), 3);
   assert.strictEqual(take(), 'callee,a,spread');
@@ -180,6 +187,38 @@ for (let i = 0; i < WARM; i++) {
   assert.strictEqual(take(), 'receiver,a,spread');
   assert.strictEqual(orderNew().n, 3);
   assert.strictEqual(take(), 'callee,a,spread');
+  assert.deepStrictEqual(orderArray(), [1, 2, 3]);
+  assert.strictEqual(take(), 'a,spread,b');
+}
+
+function noisy(values, failAt, withReturn) {
+  const iterable = {
+    [Symbol.iterator]() {
+      log.push('open');
+      let index = 0;
+      const iterator = {
+        next() {
+          log.push('next' + index);
+          if (index === failAt) throw new RangeError('stop');
+          if (index < values.length) return { value: values[index++], done: false };
+          return { value: undefined, done: true };
+        },
+      };
+      if (withReturn) iterator.return = function () { log.push('return'); return {}; };
+      return iterator;
+    },
+  };
+  return iterable;
+}
+for (let i = 0; i < WARM / 10; i++) {
+  assert.strictEqual(spreadCount(noisy([1, 2], -1, true)), 2);
+  assert.strictEqual(take(), 'open,next0,next1,next2');
+  assert.throws(() => spreadCount(noisy([1, 2, 3], 1, true)), RangeError);
+  assert.strictEqual(take(), 'open,next0,next1');
+  assert.throws(() => spreadNew(noisy([1], 0, false)), RangeError);
+  assert.strictEqual(take(), 'open,next0');
+  assert.throws(() => makeArray(noisy([1], 1, false)), RangeError);
+  assert.strictEqual(take(), 'open,next0,next1');
 }
 
 const big = Array.from({ length: 70000 }, (_, i) => i);

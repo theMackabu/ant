@@ -5601,7 +5601,17 @@ static opt_flow_t opt_build_apply(opt_builder_t *b, const uint8_t *ip, sv_op_t o
   ir_node_id_t inputs[2 + OPT_MAX_CALL_ARGS];
   opt_collect_call_inputs(b, inputs, operands, operands);
   uintptr_t helper = op == OP_NEW_APPLY ? (uintptr_t)opt_rt_new_args : (uintptr_t)opt_rt_call_args;
-  opt_flow_t flow = opt_finish_call(b, operands, opt_spread_runtime_call(b, helper, false, inputs, operands, false), false); if (flow != OPT_FLOW_CONTINUE) return flow;
+  return opt_finish_call(b, operands, opt_spread_runtime_call(b, helper, false, inputs, operands, false), false);
+}
+
+static opt_flow_t opt_build_append(opt_builder_t *b, bool spread) {
+  ir_node_id_t array = opt_tagged(b, opt_peek(b, 1)), value = opt_peek(b, 0);
+  if (opt_is_any_virtual_arguments(b, value)) return opt_no_virtual_arguments(b);
+  if (spread && opt_spread_unseen(b, b->pc)) return opt_end_with_exit(b, OPT_EXIT_NO_FEEDBACK);
+  uintptr_t helper = spread ? (uintptr_t)opt_rt_spread : (uintptr_t)opt_rt_append;
+  opt_runtime_call(b, helper, 0, (ir_node_id_t[]){array, opt_tagged(b, value)}, 2, false, false);
+  opt_drop(b, 1);
+  if (spread) opt_forget_memory(b);
   return OPT_FLOW_CONTINUE;
 }
 
@@ -6473,6 +6483,10 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
       return opt_build_spread_call(b, ip, op);
     case OP_APPLY: case OP_NEW_APPLY:
       return opt_build_apply(b, ip, op);
+    case OP_APPEND:
+      return opt_build_append(b, false);
+    case OP_SPREAD:
+      return opt_build_append(b, true);
     case OP_REST:
       return opt_build_rest(b, ip);
     case OP_IMPORT_DEFAULT: case OP_IMPORT_NAMED:
