@@ -288,6 +288,7 @@ ant_value_t opt_rt_put_super(sv_vm_t *vm, ant_value_t receiver, ant_value_t home
 ant_value_t opt_rt_get_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_put_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_array_init(sv_vm_t *vm, ant_value_t arr, ant_value_t value, ant_value_t *args, int64_t argc, int64_t index);
+ant_value_t opt_rt_init_field(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 
 typedef struct {
   sv_func_t *func;
@@ -328,6 +329,7 @@ typedef struct {
 } opt_rt_add_site_t;
 
 ant_value_t opt_rt_put_field_adding(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_add_site_t *site);
+ant_value_t opt_rt_init_field_adding(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_add_site_t *site);
 ant_value_t opt_rt_instanceof(sv_vm_t *vm, ant_value_t lhs, ant_value_t rhs, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_in_field(sv_vm_t *vm, ant_value_t object, ant_value_t unused, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_throw(ant_value_t value, sv_vm_t *vm);

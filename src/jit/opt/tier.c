@@ -1259,6 +1259,15 @@ ant_value_t opt_rt_put_field_adding(sv_vm_t *vm, ant_value_t object, ant_value_t
   return jit_helper_slow_put_field_adding(vm->js, object, value, at->func, at->func->code + at->bc_off, site->adds, site->count);
 }
 
+ant_value_t opt_rt_init_field(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
+  return jit_helper_slow_init_field(vm->js, object, value, site->func, site->func->code + site->bc_off);
+}
+
+ant_value_t opt_rt_init_field_adding(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_add_site_t *site) {
+  const opt_rt_site_t *at = &site->site;
+  return jit_helper_slow_init_field_adding(vm->js, object, value, at->func, at->func->code + at->bc_off, site->adds, site->count);
+}
+
 ant_value_t opt_rt_get_elem(sv_vm_t *vm, ant_value_t object, ant_value_t key, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
   return jit_helper_slow_get_elem(vm->js, object, key, site->func, site->func->code + site->bc_off);
 }
@@ -1312,6 +1321,7 @@ static opt_rt_access_fn opt_access_helper_of(sv_op_t op) {
     case OP_GET_FIELD:
     case OP_GET_FIELD2: return opt_rt_get_field;
     case OP_PUT_FIELD: return opt_rt_put_field;
+    case OP_INIT_FIELD: return opt_rt_init_field;
     case OP_GET_ELEM: return opt_rt_get_elem;
     case OP_PUT_ELEM: return opt_rt_put_elem;
     case OP_GET_LENGTH: return opt_rt_get_length;
@@ -1329,9 +1339,15 @@ static ant_value_t opt_rt_put_field_adding_counted(sv_vm_t *vm, ant_value_t obje
   return opt_rt_put_field_adding(vm, object, value, args, argc, site);
 }
 
+static ant_value_t opt_rt_init_field_adding_counted(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_add_site_t *site) {
+  opt_count_slow_call(&site->site);
+  return opt_rt_init_field_adding(vm, object, value, args, argc, site);
+}
+
 uintptr_t opt_tier_access_helper(sv_op_t op, bool adding) {
   bool counted = opt_stats_enabled();
   if (op == OP_PUT_FIELD && adding) return counted ? (uintptr_t)opt_rt_put_field_adding_counted : (uintptr_t)opt_rt_put_field_adding;
+  if (op == OP_INIT_FIELD && adding) return counted ? (uintptr_t)opt_rt_init_field_adding_counted : (uintptr_t)opt_rt_init_field_adding;
   opt_rt_access_fn helper = opt_access_helper_of(op);
   if (!helper) return 0;
   return counted ? (uintptr_t)opt_rt_access_counted : (uintptr_t)helper;

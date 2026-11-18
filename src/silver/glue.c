@@ -1712,6 +1712,29 @@ ant_value_t jit_helper_init_field(
   return sv_init_field(js, obj, val, atom, ic);
 }
 
+ant_value_t jit_helper_slow_init_field(
+  ant_t *js, ant_value_t obj, ant_value_t val,
+  sv_func_t *func, uint8_t *ip
+) {
+  return sv_init_field(js, obj, val, &func->atoms[sv_get_u32(ip + 1)], sv_ic_slot_for_ip(func, ip));
+}
+
+ant_value_t jit_helper_slow_init_field_adding(
+  ant_t *js, ant_value_t obj, ant_value_t val, sv_func_t *func,
+  uint8_t *ip, const jit_add_cell_t *adds, uint32_t count
+) {
+  ant_object_t *ptr = vtype(obj) == kTypeObject ? js_obj_ptr(obj) : NULL;
+  ant_shape_t *from = ptr ? ptr->shape : NULL;
+  ant_value_t result = jit_helper_slow_init_field(js, obj, val, func, ip);
+  
+  if (!ptr || is_err(result) || ptr->shape == from || !sv_init_field_target(ptr)) return result;
+  
+  for (uint32_t i = 0; i < count; i++)
+    if (adds[i].from == from && adds[i].to == ptr->shape && sv_add_proto_matches(ptr, adds[i].proto)) *adds[i].cell = js->ic.epoch;
+  
+  return result;
+}
+
 ant_value_t jit_helper_slow_get_elem(ant_t *js, ant_value_t obj, ant_value_t key, sv_func_t *func, uint8_t *ip) {
   sv_tfb_record_get_elem(func, ip, obj, key);
   uint32_t index;

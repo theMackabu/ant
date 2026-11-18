@@ -146,6 +146,16 @@ ant_value_t jit_helper_init_field(
   ant_value_t val, sv_ic_entry_t *ic
 );
 
+ant_value_t jit_helper_slow_init_field(
+  ant_t *js, ant_value_t obj, ant_value_t val,
+  sv_func_t *func, uint8_t *ip
+);
+
+ant_value_t jit_helper_slow_init_field_adding(
+  ant_t *js, ant_value_t obj, ant_value_t val, sv_func_t *func,
+  uint8_t *ip, const jit_add_cell_t *adds, uint32_t count
+);
+
 ant_value_t jit_helper_new_args(
   sv_vm_t *vm, ant_t *js,
   ant_value_t func, ant_value_t new_target,
