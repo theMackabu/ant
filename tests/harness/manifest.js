@@ -443,6 +443,7 @@ export function targets() {
     'test_proxy_recursion_guard.cjs',
     'test_regexp_legacy_ignorecase_backref.cjs',
     'test_regexp_legacy_statics.cjs',
+    'test_proxy_set_forwarding.cjs',
     'test_regexp_literal_objects.cjs',
     'test_regexp_literal_search_guards.cjs',
     'test_regexp_lone_surrogates.cjs',
