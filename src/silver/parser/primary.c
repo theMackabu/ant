@@ -468,6 +468,24 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     if (p->lx.st.tok == TOK_DOT) {
       p->lx.st.consumed = 1;
       bool meta = sv_lexer_next(&p->lx) == TOK_IDENTIFIER && p->lx.st.tlen == 4 && memcmp(tok_str(p), "meta", 4) == 0;
+      bool source = !meta && p->lx.st.tok == TOK_IDENTIFIER && p->lx.st.tlen == 6 && memcmp(tok_str(p), "source", 6) == 0;
+      if (source) {
+        p->lx.st.consumed = 1;
+        if (sv_lexer_next(&p->lx) != TOK_LPAREN) {
+          sv_parse_unexpected_token(p);
+          return mk(N_EMPTY);
+        }
+        p->lx.st.consumed = 1;
+        if (sv_lexer_next(&p->lx) == TOK_REST) {
+          sv_parse_unexpected_token(p);
+          return mk(N_EMPTY);
+        }
+        sv_ast_t *n = mk(N_IMPORT);
+        n->flags |= 1;
+        n->right = parse_assign(p);
+        expect(p, TOK_RPAREN);
+        return n;
+      }
       if (!meta) {
         sv_parse_unexpected_token(p);
         return mk(N_EMPTY);

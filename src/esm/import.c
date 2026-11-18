@@ -150,7 +150,28 @@ static ant_value_t js_import_job_base(ant_t *js, ant_value_t call_func) {
   return js->filename ? js_mkstr(js, js->filename, strlen(js->filename)) : Ant_Value_Undefined;
 }
 
+static bool js_import_is_source_phase(ant_t *js, ant_value_t marker) {
+  size_t len = 0;
+  const char *str = js_getstr(js, marker, &len);
+  return str && len == SV_IMPORT_SOURCE_PHASE_LEN && memcmp(str, SV_IMPORT_SOURCE_PHASE, len) == 0;
+}
 
+static ant_value_t js_import_source_phase(ant_t *js, ant_value_t specifier, ant_value_t call_func) {
+  ant_value_t base = js_import_job_base(js, call_func);
+  ant_value_t resolved = js_esm_resolve_specifier(js, specifier, js_import_job_base_path(js, base));
+  if (is_err(resolved)) return resolved;
+  
+  static const char code[] = "ERR_SOURCE_PHASE_NOT_DEFINED";
+  ant_value_t props = Ant_Object_CreateBare(js);
+  js_set(js, props, "code", js_mkstr(js, code, sizeof(code) - 1));
+  size_t len = 0;
+  const char *url = js_getstr(js, resolved, &len);
+  
+  return js_mkerr_props(
+    js, JS_ERR_SYNTAX, props,
+    "Source phase import object is not defined for module '%.*s'", (int)len, url ? url : ""
+  );
+}
 
 ant_value_t js_builtin_import(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "import() requires a string specifier");
@@ -159,7 +180,9 @@ ant_value_t js_builtin_import(ant_params_t) {
   ant_value_t specifier = vtype(args[0]) == kTypeString ? args[0] : coerce_to_str(js, args[0]);
   GC_ROOT_PIN(js, specifier);
   
+  bool source_phase = nargs >= 2 && vtype(args[1]) == kTypeString && js_import_is_source_phase(js, args[1]);
   ant_value_t attrs = is_err(specifier) ? specifier
+    : source_phase ? js_import_source_phase(js, specifier, call_func)
     : js_import_attributes(js, nargs >= 2 ? args[1] : Ant_Value_Undefined);
   GC_ROOT_PIN(js, attrs);
   

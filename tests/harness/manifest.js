@@ -257,6 +257,7 @@ export function targets() {
     'test_isolate.mjs',
     'test_iterator_close_errors.cjs',
     'test_iterator_dispose.cjs',
+    'test_import_source_phase.mjs',
     'test_iterator_result_template.cjs',
     'test_jit_array_literal.cjs',
     'test_jit_async_await.cjs',
