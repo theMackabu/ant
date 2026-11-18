@@ -115,17 +115,20 @@ static int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local
   return add_upvalue(c, (uint16_t)uv, false, false);
 }
 
-void emit_field_inits(
-  sv_compiler_t *c, sv_compiler_t *owner, sv_ast_t **fields, int count
+static void emit_field_init_pass(
+  sv_compiler_t *c, sv_compiler_t *owner, sv_ast_t **fields, int count, bool methods
 ) {
   for (int i = 0; i < count; i++) {
     sv_ast_t *m = fields[i];
     bool is_fn = is_class_method_def(m);
+    if (is_fn != methods) continue;
     if (is_private_name_node(m->left)) {
       emit_op(c, OP_THIS);
       emit_private_token(c, m->left);
-      if (is_fn) compile_method_function(c, m);
-      else if (m->right) compile_field_initializer(c, m->right, m->left);
+      if (is_fn) {
+        emit_op(c, OP_GET_UPVAL);
+        emit_u16(c, (uint16_t)capture_field_local(c, owner, owner->field_locals[i]));
+      } else if (m->right) compile_field_initializer(c, m->right, m->left);
       else emit_op(c, OP_UNDEF);
       emit_op(c, OP_DEF_PRIVATE);
       if (m->flags & FN_GETTER) emit(c, SV_COMP_PRIVATE_GETTER);
@@ -149,6 +152,13 @@ void emit_field_inits(
     emit(c, field_define_flags(m));
     emit_op(c, OP_POP);
   }
+}
+
+void emit_field_inits(
+  sv_compiler_t *c, sv_compiler_t *owner, sv_ast_t **fields, int count
+) {
+  emit_field_init_pass(c, owner, fields, count, true);
+  emit_field_init_pass(c, owner, fields, count, false);
 }
 
 static void emit_derived_field_inits(sv_compiler_t *c) {

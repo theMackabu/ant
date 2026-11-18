@@ -192,6 +192,11 @@ static void compile_private_static_element(sv_compiler_t *c, sv_ast_t *m, int ct
   if (is_fn) {
     if (m->flags & FN_STATIC) m->right->flags |= FN_STATIC;
     compile_method_function(c, m);
+    if (class_method_needs_home(m)) {
+      emit_get_local(c, ctor_local);
+      emit_op(c, OP_SET_HOME_OBJ);
+      emit_op(c, OP_POP);
+    }
   } else if ((m->flags & FN_STATIC)) compile_static_initializer_value(c, m->right, m->left, ctor_local);
   else if (m->right) compile_expr(c, m->right);
   else emit_op(c, OP_UNDEF);
@@ -230,6 +235,30 @@ static inline int compile_class_precompute_key(sv_compiler_t *c, sv_ast_t *key_e
   return loc;
 }
 
+static int reserve_private_method_local(sv_compiler_t *c) {
+  int loc = add_local(c, "", 0, false, c->scope_depth);
+  emit_op(c, OP_UNDEF);
+  emit_put_local(c, loc);
+  return loc;
+}
+
+static void compile_private_instance_methods(
+  sv_compiler_t *c, sv_ast_t **fields, const int *locals, int count, int proto_local
+) {
+  for (int i = 0; i < count; i++) {
+    sv_ast_t *m = fields[i];
+    if (!is_private_name_node(m->left) || !is_class_method_def(m)) continue;
+    
+    compile_method_function(c, m);
+    if (class_method_needs_home(m)) {
+      emit_get_local(c, proto_local);
+      emit_op(c, OP_SET_HOME_OBJ);
+      emit_op(c, OP_POP);
+    }
+    emit_put_local(c, locals[i]);
+  }
+}
+
 static const char *invalid_constructor_member(const sv_ast_t *m, bool is_fn, bool has_constructor) {
   if (!is_fn) return "Classes may not have a field named 'constructor'";
   if (m->flags & FN_STATIC) return NULL;
@@ -246,6 +275,11 @@ static bool is_literal_key(const sv_ast_t *key, const char *name, uint32_t len) 
 
 static bool is_constructor_key(const sv_ast_t *key) {
   return is_literal_key(key, "constructor", 11);
+}
+
+bool class_method_needs_home(const sv_ast_t *method) {
+  const sv_ast_t *fn = method ? method->right : NULL;
+  return fn && fn->type == N_FUNC && (fn->flags & (FN_USES_SUPER | FN_DIRECT_EVAL));
 }
 
 static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool returns_expr, const sv_ast_t *key) {
@@ -456,7 +490,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     
     if (needs_instance_init) {
       field_inits[fi] = m;
-      field_locals[fi++] = (!is_private && (m->flags & FN_COMPUTED))
+      if (is_private && is_fn) field_locals[fi++] = reserve_private_method_local(c);
+      else field_locals[fi++] = (!is_private && (m->flags & FN_COMPUTED))
         ? compile_class_precompute_key(c, m->left) : -1;
       continue;
     }
@@ -557,7 +592,6 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     emit_closure(c, idx);
   } else emit_op(c, OP_UNDEF);
   
-  free(field_inits);
   c->field_locals = NULL;
 
   const char *class_name = node->str;
@@ -609,6 +643,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     );
   }
   
+  compile_private_instance_methods(c, field_inits, field_locals, field_count, proto_local);
+  free(field_inits);
   free(field_locals);
 
   for (int i = 0; i < static_init_count; i++) {

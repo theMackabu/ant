@@ -182,6 +182,7 @@ void emit_with_tries(
   const char *name, uint32_t len, int pops, sv_patch_list_t *out
 );
 void emit_lexical_new_target(sv_compiler_t *c);
+bool class_method_needs_home(const sv_ast_t *method);
 void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_export_writes_from_stack(sv_compiler_t *c, const sv_export_name_t *exports);
