@@ -212,6 +212,7 @@ double js_to_number(ant_t *js, ant_value_t arg) {
   if (vtype(arg) == kTypeUndefined) return ANT_NAN;
   if (vtype(arg) == kTypeNumber) return Ant_Value_AsNumberUnchecked(arg);
   if (vtype(arg) == kTypeBool) return vdata(arg) ? 1.0 : 0.0;
+  
   if (vtype(arg) == kTypeBigInt) {
     js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a BigInt value to a number");
     return ANT_NAN;

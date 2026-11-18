@@ -97,23 +97,26 @@ static ant_value_t builtin_Number_isSafeInteger(ant_params_t) {
   return mkval(kTypeBool, (val >= -9007199254740991.0 && val <= 9007199254740991.0) ? 1 : 0);
 }
 
-static __attribute__((noinline)) ant_value_t number_from_value(ant_t *js, ant_value_t source) {
+__attribute__((noinline)) 
+static ant_value_t number_from_value(ant_t *js, ant_value_t source) {
   if (is_object_type(source)) {
     source = js_to_primitive(js, source, 2);
     if (is_err(source)) return source;
   }
+
   return Ant_Value_FromNumber(vtype(source) == kTypeBigInt ? bigint_to_double(js, source) : js_to_number(js, source));
 }
 
 static ant_value_t builtin_Number(ant_params_t) {
   ant_value_t source = nargs > 0 ? args[0] : Ant_Value_FromNumber(0.0);
+
   ant_value_t nval = source;
   if (vtype(source) != kTypeNumber) {
     nval = number_from_value(js, source);
     if (is_err(nval)) return nval;
   }
-  if (is_wrapper_ctor_target(js, call_this, call_new_target))
-    js_set_slot(call_this, SLOT_PRIMITIVE, nval);
+
+  if (is_wrapper_ctor_target(js, call_this, call_new_target)) js_set_slot(call_this, SLOT_PRIMITIVE, nval);
   return nval;
 }
 

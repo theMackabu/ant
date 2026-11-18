@@ -242,7 +242,11 @@ static ant_value_t intl_collator_resolved_options(ant_params_t) {
 
 static ant_value_t intl_numberformat_format(ant_params_t) {
   double number = 0.0;
-  if (nargs > 0) number = vtype(args[0]) == kTypeBigInt ? bigint_to_double(js, args[0]) : js_to_number(js, args[0]);
+
+  if (nargs > 0) number = vtype(args[0]) == kTypeBigInt 
+    ? bigint_to_double(js, args[0])
+    : js_to_number(js, args[0]);
+
   ant_value_t raw_val = js_tostring_val(js, Ant_Value_FromNumber(number));
   if (is_err(raw_val)) return raw_val;
 
