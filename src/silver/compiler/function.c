@@ -432,7 +432,8 @@ sv_func_t *compile_function_body(
         emit_op(&comp, OP_IS_UNDEF);
         int skip = emit_jump(&comp, OP_JMP_FALSE);
         emit_op(&comp, OP_POP);
-        compile_expr(&comp, p->right);
+        if (p->left && p->left->type == N_IDENT) compile_expr_with_inferred_name(&comp, p->right, p->left->str, p->left->len);
+        else compile_expr(&comp, p->right);
         patch_jump(&comp, skip);
         if (p->left && p->left->type == N_IDENT) {
           emit_op(&comp, OP_PUT_ARG);
@@ -530,7 +531,8 @@ sv_func_t *compile_function_body(
         emit_op(&comp, OP_IS_UNDEF);
         int skip = emit_jump(&comp, OP_JMP_FALSE);
         emit_op(&comp, OP_POP);
-        compile_expr(&comp, p->right);
+        if (p->left && p->left->type == N_IDENT) compile_expr_with_inferred_name(&comp, p->right, p->left->str, p->left->len);
+        else compile_expr(&comp, p->right);
         patch_jump(&comp, skip);
         if (p->left && p->left->type == N_IDENT && bind_lb < comp.local_count) {
           int slot = bind_lb - comp.param_locals;

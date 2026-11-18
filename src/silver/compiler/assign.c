@@ -454,7 +454,8 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
       return;
     }
 
-    compile_expr(c, node->right);
+    if (target->type != N_IDENT || (target->flags & FN_PAREN)) compile_expr(c, node->right);
+    else compile_expr_with_inferred_name(c, node->right, target->str, target->len);
     compile_lhs_set(c, target, true);
     return;
   }
@@ -500,7 +501,8 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
         op == TOK_LOR_ASSIGN ? OP_JMP_TRUE_PEEK :
         op == TOK_LAND_ASSIGN ? OP_JMP_FALSE_PEEK : OP_JMP_NOT_NULLISH);
       emit_op(c, OP_POP);
-      compile_expr(c, node->right);
+      if (target->flags & FN_PAREN) compile_expr(c, node->right);
+      else compile_expr_with_inferred_name(c, node->right, target->str, target->len);
       emit_set_var(c, target->str, target->len, true);
       patch_jump(c, skip);
       return;

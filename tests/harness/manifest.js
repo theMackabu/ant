@@ -234,6 +234,7 @@ export function targets() {
     'test_instanceof_primitives.cjs',
     'test_instanceof_proxy_chain.cjs',
     'test_intern_per_isolate.mjs',
+    'test_function_name_inference.cjs',
     'test_intern_table_bounded.cjs',
     'test_intrinsic_tostringtag.cjs',
     'test_io_error_boundary_audit.cjs',

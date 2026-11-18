@@ -143,7 +143,8 @@ void compile_destructure_pattern(
         emit_op(c, OP_IS_UNDEF);
         int skip = emit_jump(c, OP_JMP_FALSE);
         emit_op(c, OP_POP);
-        compile_expr(c, default_val);
+        if (target && target->type == N_IDENT) compile_expr_with_inferred_name(c, default_val, target->str, target->len);
+        else compile_expr(c, default_val);
         patch_jump(c, skip);
       }
       
@@ -220,7 +221,8 @@ void compile_destructure_pattern(
         emit_op(c, OP_IS_UNDEF);
         int skip = emit_jump(c, OP_JMP_FALSE);
         emit_op(c, OP_POP);
-        compile_expr(c, default_val);
+        if (value && value->type == N_IDENT) compile_expr_with_inferred_name(c, default_val, value->str, value->len);
+        else compile_expr(c, default_val);
         patch_jump(c, skip);
       }
 
