@@ -223,6 +223,7 @@ export function targets() {
     'test_fs_stream_fd.cjs',
     'test_fs_write_file_sync_fd.cjs',
     'test_fulfilled_await_jobs.mjs',
+    'test_dynamic_import_order.mjs',
     'test_function_bind_construct.cjs',
     'test_function_kind_constructors.cjs',
     'test_dynamic_import_tla_dependency.mjs',
