@@ -16,19 +16,23 @@ typedef struct {
   bool in_async;
   bool wants_module;
   bool tagged_template;
+  bool static_block;
   uint32_t function_depth;
 } sv_parser_t;
 
 typedef struct {
   bool no_in;
   bool in_async;
+  bool static_block;
 } sv_parse_context_t;
 
-static inline sv_parse_context_t sv_parse_context_save(const sv_parser_t *p) { return (sv_parse_context_t){p->no_in, p->in_async}; }
+static inline sv_parse_context_t sv_parse_context_save(const sv_parser_t *p) {
+  return (sv_parse_context_t){p->no_in, p->in_async, p->static_block}; }
 
 static inline void sv_parse_context_restore(sv_parser_t *p, sv_parse_context_t saved) {
   p->no_in = saved.no_in;
   p->in_async = saved.in_async;
+  p->static_block = saved.static_block;
 }
 
 #define SV_RAISE(mkerr) ({                                  \
@@ -186,7 +190,16 @@ static inline bool is_binding_ident_tok(uint8_t tok) {
 }
 
 static inline bool binding_ident_here(sv_parser_t *p) {
-  return is_binding_ident_tok(p->lx.st.tok) && !(p->lx.st.tok == TOK_AWAIT && (p->in_async || p->goal == SV_PARSE_MODULE));
+  return is_binding_ident_tok(p->lx.st.tok) && !(p->lx.st.tok == TOK_AWAIT && (p->in_async || p->static_block || p->goal == SV_PARSE_MODULE));
+}
+
+bool sv_reject_ident_name_slow(sv_parser_t *p, const char *s, uint32_t len);
+
+static inline bool sv_ident_names_restricted(const sv_parser_t *p) { return p->static_block; }
+
+static inline bool sv_reject_ident_name(sv_parser_t *p, const char *s, uint32_t len) {
+  if (__builtin_expect(!sv_ident_names_restricted(p), 1)) return false;
+  return sv_reject_ident_name_slow(p, s, len);
 }
 
 static inline bool is_private_ident_like_tok(uint8_t tok) {

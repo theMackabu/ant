@@ -4,6 +4,7 @@
 sv_ast_t *parse_arrow_body(sv_parser_t *p, bool is_async) {
   sv_parse_context_t saved = sv_parse_context_save(p);
   p->in_async = is_async;
+  p->static_block = false;
   if (sv_lexer_next(&p->lx) == TOK_LBRACE) p->no_in = false;
   sv_ast_t *body = p->lx.st.tok == TOK_LBRACE ? parse_block(p, true) : parse_assign(p);
   sv_parse_context_restore(p, saved);
@@ -302,6 +303,7 @@ sv_ast_t *parse_func(sv_parser_t *p, bool is_async) {
   sv_parse_context_t saved = sv_parse_context_save(p);
   p->in_async = is_async;
   p->no_in = false;
+  p->static_block = false;
   
   expect(p, TOK_LPAREN);
   parse_formal_params(p, fn, TOK_RPAREN);

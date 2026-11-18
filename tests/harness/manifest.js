@@ -63,6 +63,7 @@ export function targets() {
     'test_class_static_fields.cjs',
     'test_buffer_search_and_write_encodings.cjs',
     'test_buffer_statics.cjs',
+    'test_class_static_block_early_errors.cjs',
     'test_buffer_wtf8_utf8.cjs',
     'test_abort_signal_eventtarget.cjs',
     'test_builtin_constructor_shapes.cjs',

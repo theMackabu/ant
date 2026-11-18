@@ -97,10 +97,17 @@ static sv_ast_t *parse_class_strict(sv_parser_t *p, bool outer_strict) {
       sv_lexer_next(&p->lx);
 
       if (p->lx.st.tok == TOK_LBRACE) {
+        sv_parse_context_t saved = sv_parse_context_save(p);
         bool saved_strict = p->lx.strict;
+        uint32_t saved_depth = p->function_depth;
         p->lx.strict = true;
+        p->in_async = false;
+        p->static_block = true;
+        p->function_depth = 0;
         sv_ast_t *block = parse_block(p, false);
+        sv_parse_context_restore(p, saved);
         p->lx.strict = saved_strict;
+        p->function_depth = saved_depth;
         block->type = N_STATIC_BLOCK;
         block->flags = FN_STATIC | FN_CLASS_BODY;
         sv_ast_list_push(p->js, &cls->args, block);
@@ -184,7 +191,11 @@ static sv_ast_t *parse_class_strict(sv_parser_t *p, bool outer_strict) {
       return cls;
     } else if (p->lx.st.tok == TOK_ASSIGN) {
       p->lx.st.consumed = 1;
+      sv_parse_context_t saved = sv_parse_context_save(p);
+      p->in_async = false;
+      p->static_block = false;
       method->right = parse_assign(p);
+      sv_parse_context_restore(p, saved);
       consume_semicolon(p);
     } else {
       method->right = mk(N_UNDEF);

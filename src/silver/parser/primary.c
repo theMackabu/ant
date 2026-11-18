@@ -185,7 +185,9 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
 
   l_ident: {
     p->lx.st.consumed = 1;
-    return mk_ident_from_tok(p);
+    sv_ast_t *n = mk_ident_from_tok(p);
+    if (sv_reject_ident_name(p, n->str, n->len)) return mk(N_EMPTY);
+    return n;
   }
 
   l_paren: {
@@ -387,6 +389,10 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
   }
 
   l_yield: {
+    if (p->static_block) {
+      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "yield is not valid in a class field initializer or static initialization block");
+      return mk(N_EMPTY);
+    }
     p->lx.st.consumed = 1;
     sv_ast_t *n = mk(N_YIELD);
     if (sv_lexer_next(&p->lx) == TOK_MUL) {
@@ -402,6 +408,7 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
 
   l_await: {
     if (!p->in_async && p->goal != SV_PARSE_MODULE) {
+      if (sv_reject_ident_name(p, tok_str(p), (uint32_t)p->lx.st.tlen)) return mk(N_EMPTY);
       uint8_t la = sv_lexer_lookahead(&p->lx);
       bool starts_operand = !lookahead_crosses_line_terminator(p) && (
         la == TOK_IDENTIFIER || la == TOK_NUMBER || la == TOK_STRING ||
@@ -735,6 +742,7 @@ sv_ast_t *parse_object(sv_parser_t *p) {
       prop->right->flags |= FN_METHOD;
       prop->right->src_off = prop->src_off;
     } else {
+      if (prop->left->type == N_IDENT && sv_reject_ident_name(p, prop->left->str, prop->left->len)) return n;
       prop->right = mk_ident(p, prop->left->str, prop->left->len);
       if (sv_lexer_next(&p->lx) == TOK_ASSIGN) {
         p->lx.st.consumed = 1;

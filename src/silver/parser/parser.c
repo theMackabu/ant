@@ -11,6 +11,18 @@ void sv_parse_stop(sv_parser_t *p) {
   p->lx.st.tlen = 0;
 }
 
+bool sv_reject_ident_name_slow(sv_parser_t *p, const char *s, uint32_t len) {
+  if (p->static_block && len == 9 && memcmp(s, "arguments", 9) == 0) {
+    SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "'arguments' is not allowed in class field initializer or static initialization block");
+    return true;
+  }
+  if (p->static_block && !p->in_async && len == 5 && memcmp(s, "await", 5) == 0) {
+    SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected reserved word");
+    return true;
+  }
+  return false;
+}
+
 static bool program_has_module_syntax(const sv_ast_t *program) {
   if (!program || program->type != N_PROGRAM) return false;
 
