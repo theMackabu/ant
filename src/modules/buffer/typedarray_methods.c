@@ -7,6 +7,7 @@
 #include "cfunc.h"
 #include "errors.h"
 #include "internal.h"
+#include "builder.h"
 #include "gc/roots.h"
 #include "silver/call.h"
 #include "modules/bigint.h"
@@ -180,6 +181,71 @@ static ant_value_t js_typedarray_findIndex(ant_params_t) {
   }
 
   return Ant_Value_FromNumber(-1);
+}
+
+static ant_value_t typedarray_find_last(ant_t *js, ant_value_t *args, int nargs, ant_value_t call_this, bool want_index) {
+  if (nargs < 1 || !is_callable(args[0]))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "TypedArray.prototype.%s requires a callable", want_index ? "findLastIndex" : "findLast");
+
+  TypedArrayData *ta_data = typedarray_live(call_this);
+  if (!ta_data) return typedarray_this_error(js, call_this);
+
+  ant_value_t this_arg = nargs > 1 ? args[1] : Ant_Value_Undefined;
+  for (size_t i = ta_data->length; i > 0; i--) {
+    ant_value_t value = Ant_Value_Undefined;
+    if (!buffer_typedarray_data_read_index(js, ta_data, i - 1, &value)) value = Ant_Value_Undefined;
+    ant_value_t call_args[3] = { value, Ant_Value_FromNumber((double)(i - 1)), call_this };
+    ant_value_t result = sv_vm_call(js->vm, js, args[0], this_arg, call_args, 3, NULL, Ant_Value_Undefined);
+    if (is_err(result)) return result;
+    if (js_truthy(js, result)) return want_index ? Ant_Value_FromNumber((double)(i - 1)) : value;
+  }
+
+  return want_index ? Ant_Value_FromNumber(-1) : Ant_Value_Undefined;
+}
+
+static ant_value_t js_typedarray_findLast(ant_params_t) {
+  return typedarray_find_last(js, args, nargs, call_this, false);
+}
+
+static ant_value_t js_typedarray_findLastIndex(ant_params_t) {
+  return typedarray_find_last(js, args, nargs, call_this, true);
+}
+
+static ant_value_t js_typedarray_toLocaleString(ant_params_t) {
+  TypedArrayData *ta_data = typedarray_live(call_this);
+  if (!ta_data) return typedarray_this_error(js, call_this);
+
+  string_builder_t sb;
+  string_builder_init(&sb, NULL, 0);
+  ant_value_t failure = Ant_Value_Undefined;
+  size_t length = ta_data->length;
+
+  for (size_t i = 0; i < length; i++) {
+    ant_value_t value = Ant_Value_Undefined;
+    bool ok = i == 0 || string_builder_append(&sb, ",", 1);
+    if (ok && buffer_typedarray_data_read_index(js, ta_data, i, &value)) {
+      ant_value_t method = js_getprop_fallback(js, value, "toLocaleString");
+      if (is_err(method)) failure = method;
+      else if (!is_callable(method)) failure = js_mkerr_typed(js, JS_ERR_TYPE, "toLocaleString is not a function");
+      else {
+        ant_value_t text = sv_vm_call(js->vm, js, method, value, args, nargs > 2 ? 2 : nargs, NULL, Ant_Value_Undefined);
+        if (!is_err(text)) text = coerce_to_str(js, text);
+        if (is_err(text)) failure = text;
+        else {
+          size_t text_len = 0;
+          const char *bytes = js_getstr(js, text, &text_len);
+          ok = string_builder_append(&sb, bytes, text_len);
+        }
+      }
+    }
+    if (!ok) failure = Ant_Error_CreateOutOfMemory(js);
+    if (is_err(failure)) {
+      string_builder_dispose(&sb);
+      return failure;
+    }
+  }
+
+  return string_builder_finalize(js, &sb);
 }
 
 static ant_value_t js_typedarray_map(ant_params_t) {
@@ -982,6 +1048,9 @@ void typedarray_define_methods(ant_t *js, ant_value_t typedarray_proto) {
   defmethod(js, typedarray_proto, "filter", 6, Ant_Function_CreateWithArity(js_typedarray_filter, 1));
   defmethod(js, typedarray_proto, "find", 4, Ant_Function_CreateWithArity(js_typedarray_find, 1));
   defmethod(js, typedarray_proto, "findIndex", 9, Ant_Function_CreateWithArity(js_typedarray_findIndex, 1));
+  defmethod(js, typedarray_proto, "findLast", 8, Ant_Function_CreateWithArity(js_typedarray_findLast, 1));
+  defmethod(js, typedarray_proto, "findLastIndex", 13, Ant_Function_CreateWithArity(js_typedarray_findLastIndex, 1));
+  defmethod(js, typedarray_proto, "toLocaleString", 14, Ant_Function_Create(js_typedarray_toLocaleString));
   defmethod(js, typedarray_proto, "forEach", 7, Ant_Function_CreateWithArity(js_typedarray_forEach, 1));
   defmethod(js, typedarray_proto, "map", 3, Ant_Function_CreateWithArity(js_typedarray_map, 1));
   defmethod(js, typedarray_proto, "reduce", 6, Ant_Function_CreateWithArity(js_typedarray_reduce, 1));

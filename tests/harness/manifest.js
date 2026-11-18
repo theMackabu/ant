@@ -480,6 +480,7 @@ export function targets() {
     'test_typedarray_join_separator.cjs',
     'test_typedarray_length_jit.cjs',
     'test_typedarray_named_read_ic.cjs',
+    'test_typedarray_find_last.cjs',
     'test_typedarray_search_types.cjs',
     'test_typeof_closure_assignment.mjs',
     'test_uncaught_callback_exceptions.cjs',
