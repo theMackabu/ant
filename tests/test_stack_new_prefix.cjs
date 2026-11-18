@@ -192,4 +192,36 @@ for (const [name, [fn, expected]] of Object.entries(cases)) {
   }
 }
 
+{
+  let late = false, kept;
+  function LateParent(v) {
+    this.v = v;
+    let s = 0;
+    for (let i = 0; i < 3; i++) { s += i; try { s += v.length | 0; } catch (e) { s--; } }
+    switch (s & 3) { case 0: this.a = 1; break; case 1: this.b = 2; break; case 2: this.c = 3; break; default: this.d = 4; }
+    if (late) kept = new Error('x');
+    this.z = [s, s + 1, s + 2].map(function (x) { return x * 2; });
+  }
+  class LateChild extends LateParent { constructor(v) { super(v); this.w = v + 1; } }
+  function LateCaller(v) { const m = new LateChild(v); return m.w; }
+  function LateOther(a) { this.a = a; }
+  function LateOtherCaller(a) { return new LateOther(a).a; }
+  const lateNames = (error) => String(error.stack).split('\n').slice(1, 4).map((line) => /^\s+at ((?:new )?[\w$]+)/.exec(line)?.[1]).join(' < ');
+
+  for (let i = 0; i < 50000; i++) LateCaller(i);
+  late = true; LateCaller(2); late = false;
+  const early = new Error('x');
+  for (let r = 0; r < 4; r++) {
+    LateCaller('str');
+    for (let i = 0; i < 30000; i++) LateCaller(i % 3 ? 'a' : i % 2 ? 1.5 : i);
+    let junk = [];
+    for (let i = 0; i < 300000; i++) junk.push({ i });
+    junk = null;
+  }
+  for (let i = 0; i < 100000; i++) LateOtherCaller(i);
+  
+  assert.strictEqual(lateNames(kept), 'new LateParent < new LateChild < LateCaller', 'stack read after recompilation and collection');
+  assert.ok(early.stack.includes('test_stack_new_prefix'), 'stack of an error captured outside compiled code');
+}
+
 console.log('ok');

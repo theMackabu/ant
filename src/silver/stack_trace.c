@@ -449,7 +449,7 @@ typedef enum {
   ERROR_SITE_RENDERED,
 } error_site_kind_t;
 
-typedef struct {
+typedef struct error_record {
   error_site_kind_t site_kind;
   bool no_site_frame;
   sv_func_t *site_func;
@@ -472,9 +472,34 @@ bool js_is_error_record(ant_value_t value) {
   return error_record_of(value) != NULL;
 }
 
+static int error_record_resolve(ant_t *js, const error_record_t *rec, error_frame_t *local, error_frame_t **frames);
+
+static_assert(sizeof(error_record_t) == 64, "error records carry no settle state");
+
+static error_record_t *error_record_settle(ant_t *js, ant_value_t value, error_record_t *rec) {
+  error_frame_t local[ERROR_FRAMES_INLINE], *frames;
+  int n = error_record_resolve(js, rec, local, &frames);
+  
+  error_record_t *grown = n > rec->n_frames ? realloc(rec, sizeof(*rec) + (size_t)n * sizeof(rec->frames[0])) : rec;
+  if (grown) {
+    memcpy(grown->frames, frames, (size_t)n * sizeof(grown->frames[0]));
+    grown->n_frames = n;
+    rec = grown;
+  } else for (int i = 0; i < rec->n_frames; i++) rec->frames[i].pc = rec->frames[i].caller_pc = 0;
+  
+  if (frames != local) free(frames);
+  if (grown) js_set_native(value, rec, ERROR_RECORD_NATIVE_TAG);
+  
+  return rec;
+}
+
 void gc_mark_error_record(ant_t *js, ant_value_t value, gc_mark_fn mark) {
   error_record_t *rec = error_record_of(value);
   if (!rec) return;
+  
+  bool lazy = false;
+  for (int i = 0; i < rec->n_frames && !lazy; i++) lazy = rec->frames[i].pc != 0;
+  if (lazy && !js->gc.minor) rec = error_record_settle(js, value, rec);
   
   if (rec->site_func) mark(js, mkref(kTypeFunctionInfo, rec->site_func));
   mark(js, rec->rendered_site);
@@ -575,18 +600,16 @@ typedef struct {
   js_error_render_site_t site;
 } error_render_t;
 
-static void error_render_begin(ant_t *js, const error_record_t *rec, error_render_t *r) {
-  r->rec = rec;
-  r->frames = r->local;
-  r->n = 0;
-  int cap = ERROR_FRAMES_INLINE;
+static int error_record_resolve(ant_t *js, const error_record_t *rec, error_frame_t *local, error_frame_t **frames) {
+  int cap = ERROR_FRAMES_INLINE, n = 0;
+  *frames = local;
 
   sv_jit_frame_t resolved[2][SV_JIT_INLINE_FRAMES_MAX + 1];
   sv_jit_frame_t *at = resolved[0], *ahead = resolved[1];
   uintptr_t ahead_pc = 0;
   int n_ahead = 0;
 
-  for (int k = 0; k < rec->n_frames && r->n < rec->limit; k++) {
+  for (int k = 0; k < rec->n_frames && n < rec->limit; k++) {
     const error_frame_t *f = &rec->frames[k];
     int m = 0;
     
@@ -605,9 +628,9 @@ static void error_render_begin(ant_t *js, const error_record_t *rec, error_rende
       outer = sv_called_as_construct(f->func, ahead, n_ahead);
     }
     
-    for (int i = 0; i < m && r->n < rec->limit; i++) {
-      if (!error_frames_reserve(&r->frames, r->local, &cap, r->n + 1)) return;
-      r->frames[r->n++] = (error_frame_t){
+    for (int i = 0; i < m && n < rec->limit; i++) {
+      if (!error_frames_reserve(frames, local, &cap, n + 1)) return n;
+      (*frames)[n++] = (error_frame_t){
         .func = at[i].func,
         .callee = i == m - 1 ? f->callee : Ant_Value_Undefined,
         .bc_off = at[i].bc_off,
@@ -615,6 +638,13 @@ static void error_render_begin(ant_t *js, const error_record_t *rec, error_rende
       };
     }
   }
+  
+  return n;
+}
+
+static void error_render_begin(ant_t *js, const error_record_t *rec, error_render_t *r) {
+  r->rec = rec;
+  r->n = error_record_resolve(js, rec, r->local, &r->frames);
 
   sv_func_t *file_func = rec->site_func ? rec->site_func : r->n > 0 ? r->frames[0].func : NULL;
   r->file = vtype(rec->file) == kTypeString ? js_getstr(js, rec->file, NULL)
