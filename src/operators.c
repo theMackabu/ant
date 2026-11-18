@@ -1,6 +1,7 @@
 #include <compat.h> // IWYU pragma: keep
 #include <string.h>
 
+#include "cfunc.h"
 #include "tokens.h"
 #include "arrays.h"
 #include "keys.h"
@@ -170,6 +171,12 @@ static bool instanceof_via_has_instance(ant_t *js, ant_value_t l, ant_value_t r,
   return true;
 }
 
+static uint8_t proxy_callable_target_type(ant_t *js, ant_value_t proxy) {
+  ant_value_t target = proxy_read_target(js, proxy);
+  while (vtype(target) == kTypeObject && is_proxy(target)) target = proxy_read_target(js, target);
+  return vtype(target);
+}
+
 static ant_value_t proxy_ordinary_has_instance(ant_t *js, ant_value_t l, ant_value_t r, uint8_t ltype) {
   if (ltype != kTypeObject && ltype != kTypeArray && ltype != kTypeFunction && ltype != kTypePromise && ltype != kTypeGenerator)
     return Ant_Value_False;
@@ -188,7 +195,7 @@ static ant_value_t handle_proxy_instanceof(ant_t *js, ant_value_t l, ant_value_t
   ant_value_t handled;
   if (instanceof_via_has_instance(js, l, r, &handled)) return handled;
   
-  uint8_t ttype = vtype(proxy_read_target(js, r));
+  uint8_t ttype = proxy_callable_target_type(js, r);
   if (ttype != kTypeFunction && ttype != kTypeBuiltin)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Right-hand side of 'instanceof' is not callable");
   return proxy_ordinary_has_instance(js, l, r, ltype);
@@ -213,7 +220,13 @@ static ant_value_t handle_cfunc_instanceof(ant_t *js, ant_value_t l, ant_value_t
   if (js_is_promise_ctor_cfunc(fn))
     return mkval(kTypeBool, ltype == kTypePromise ? 1 : 0);
   
-  return mkval(kTypeBool, 0);
+  if (ltype != kTypeObject && ltype != kTypeArray && ltype != kTypeFunction && ltype != kTypePromise && ltype != kTypeGenerator)
+    return Ant_Value_False;
+  ant_value_t proto = js_getprop_fallback(js, r, "prototype");
+  if (is_err(proto)) return proto;
+  if (vtype(proto) == kTypeBuiltin) proto = js_cfunc_lookup_promoted(js, proto);
+  if (!is_object_type(proto)) return js_mkerr_typed(js, JS_ERR_TYPE, "Function has non-object prototype in instanceof check");
+  return walk_prototype_chain(js, l, proto);
 }
 
 ant_value_t ordinary_has_instance(ant_t *js, ant_value_t l, ant_value_t r) {
@@ -222,7 +235,7 @@ ant_value_t ordinary_has_instance(ant_t *js, ant_value_t l, ant_value_t r) {
   
   uint8_t ltype = vtype(l);
   if (is_proxy(r)) {
-    uint8_t ttype = vtype(proxy_read_target(js, r));
+    uint8_t ttype = proxy_callable_target_type(js, r);
     return ttype == kTypeFunction || ttype == kTypeBuiltin ? proxy_ordinary_has_instance(js, l, r, ltype) : Ant_Value_False;
   }
   if (vtype(r) == kTypeBuiltin) return handle_cfunc_instanceof(js, l, r, ltype);
