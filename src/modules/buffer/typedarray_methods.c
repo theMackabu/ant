@@ -194,8 +194,10 @@ static ant_value_t typedarray_find_last(ant_t *js, ant_value_t *args, int nargs,
   for (size_t i = ta_data->length; i > 0; i--) {
     ant_value_t value = Ant_Value_Undefined;
     if (!buffer_typedarray_data_read_index(js, ta_data, i - 1, &value)) value = Ant_Value_Undefined;
+
     ant_value_t call_args[3] = { value, Ant_Value_FromNumber((double)(i - 1)), call_this };
     ant_value_t result = sv_vm_call(js->vm, js, args[0], this_arg, call_args, 3, NULL, Ant_Value_Undefined);
+
     if (is_err(result)) return result;
     if (js_truthy(js, result)) return want_index ? Ant_Value_FromNumber((double)(i - 1)) : value;
   }
@@ -217,12 +219,14 @@ static ant_value_t js_typedarray_toLocaleString(ant_params_t) {
 
   string_builder_t sb;
   string_builder_init(&sb, NULL, 0);
+
   ant_value_t failure = Ant_Value_Undefined;
   size_t length = ta_data->length;
 
   for (size_t i = 0; i < length; i++) {
     ant_value_t value = Ant_Value_Undefined;
     bool ok = i == 0 || string_builder_append(&sb, ",", 1);
+
     if (ok && buffer_typedarray_data_read_index(js, ta_data, i, &value)) {
       ant_value_t method = js_getprop_fallback(js, value, "toLocaleString");
       if (is_err(method)) failure = method;
@@ -238,7 +242,9 @@ static ant_value_t js_typedarray_toLocaleString(ant_params_t) {
         }
       }
     }
+
     if (!ok) failure = Ant_Error_CreateOutOfMemory(js);
+    
     if (is_err(failure)) {
       string_builder_dispose(&sb);
       return failure;
