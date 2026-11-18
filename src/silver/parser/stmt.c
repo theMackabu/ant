@@ -45,8 +45,11 @@ void sv_parse_stmt_list(sv_parser_t *p, sv_ast_list_t *out, bool stop_at_rbrace,
 
 sv_ast_t *parse_binding_pattern(sv_parser_t *p) {
   sv_lexer_next(&p->lx);
-  if (p->lx.st.tok == TOK_LBRACKET) return parse_array(p);
-  if (p->lx.st.tok == TOK_LBRACE) return parse_object(p);
+  if (p->lx.st.tok == TOK_LBRACKET || p->lx.st.tok == TOK_LBRACE) {
+    sv_ast_t *pattern = p->lx.st.tok == TOK_LBRACKET ? parse_with_in(p, parse_array) : parse_with_in(p, parse_object);
+    sv_reject_binding_pattern(p, pattern);
+    return pattern;
+  }
   if (binding_ident_here(p)) {
     sv_ast_t *id = mk_ident_from_tok(p);
     sv_reject_binding_name(p, id->str, id->len);
@@ -77,10 +80,9 @@ sv_ast_t *parse_var_decl(sv_parser_t *p, sv_var_kind_t kind, bool allow_uninit_c
     sv_lexer_next(&p->lx);
     sv_ast_t *decl = mk(N_VARDECL);
 
-    if (p->lx.st.tok == TOK_LBRACKET) {
-      decl->left = parse_with_in(p, parse_array);
-    } else if (p->lx.st.tok == TOK_LBRACE) {
-      decl->left = parse_with_in(p, parse_object);
+    if (p->lx.st.tok == TOK_LBRACKET || p->lx.st.tok == TOK_LBRACE) {
+      decl->left = p->lx.st.tok == TOK_LBRACKET ? parse_with_in(p, parse_array) : parse_with_in(p, parse_object);
+      if (sv_reject_binding_pattern(p, decl->left)) return var;
     } else if (!binding_ident_here(p)) {
       sv_parse_unexpected_token(p);
       return var;
@@ -100,6 +102,8 @@ sv_ast_t *parse_var_decl(sv_parser_t *p, sv_var_kind_t kind, bool allow_uninit_c
       decl->right = parse_assign(p);
     } else if ((kind == SV_VAR_CONST || kind == SV_VAR_USING || kind == SV_VAR_AWAIT_USING) && !allow_uninit_const) {
       SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Missing initializer in const declaration");
+    } else if (decl->left->type != N_IDENT && !allow_uninit_const) {
+      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Missing initializer in destructuring declaration");
     }
 
     sv_ast_list_push(p->js, &var->args, decl);

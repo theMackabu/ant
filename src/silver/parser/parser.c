@@ -27,6 +27,125 @@ bool sv_reject_ident_name_slow(sv_parser_t *p, const char *s, uint32_t len) {
   return false;
 }
 
+static bool pattern_name_ok(sv_parser_t *p, const sv_ast_t *node) {
+  if (node->type == N_UNDEF || node->type == N_GLOBAL_THIS) return node->str != NULL;
+  if (node->type != N_IDENT || !node->str || node->str[0] == '#') return false;
+  return !(p->lx.strict && is_eval_or_arguments_name(node->str, node->len));
+}
+
+static bool target_chain_ok(const sv_ast_t *node) {
+  for (const sv_ast_t *cur = node->left; cur; cur = cur->left) {
+    if (cur->type == N_OPTIONAL) return false;
+    if (cur->flags & FN_PAREN) return true;
+    if (cur->type != N_MEMBER && cur->type != N_CALL) return true;
+  }
+  return true;
+}
+
+static bool simple_target_ok(sv_parser_t *p, const sv_ast_t *node, bool allow_call) {
+  switch (node->type) {
+    case N_IDENT:
+    case N_UNDEF:
+    case N_GLOBAL_THIS:
+      return pattern_name_ok(p, node);
+    case N_MEMBER:
+      return target_chain_ok(node);
+    case N_CALL:
+      return allow_call && !ast_is_ident(node->left, "super", 5) && target_chain_ok(node);
+    default:
+      return false;
+  }
+}
+
+static bool pattern_ok(sv_parser_t *p, const sv_ast_t *node, bool binding, bool top);
+
+static bool pattern_element_ok(sv_parser_t *p, const sv_ast_t *node, bool binding) {
+  if (!node) return false;
+  if (node->type == N_ASSIGN && node->op == TOK_ASSIGN && !(node->flags & FN_PAREN)) node = node->left;
+  else if (node->type == N_ASSIGN_PAT) node = node->left;
+  if (!node) return false;
+  if (node->type == N_ARRAY || node->type == N_OBJECT || node->type == N_ARRAY_PAT || node->type == N_OBJECT_PAT)
+    return !(node->flags & FN_PAREN) && pattern_ok(p, node, binding, false);
+  if (binding) return !(node->flags & FN_PAREN) && pattern_name_ok(p, node);
+  return simple_target_ok(p, node, false);
+}
+
+static bool pattern_ok(sv_parser_t *p, const sv_ast_t *node, bool binding, bool top) {
+  if (node->flags & FN_REST_COMMA) return false;
+  bool is_array = node->type == N_ARRAY || node->type == N_ARRAY_PAT;
+
+  for (int i = 0; i < node->args.count; i++) {
+    const sv_ast_t *item = node->args.items[i];
+    if (!item) return false;
+    if (item->type == N_EMPTY && is_array) continue;
+
+    if (item->type == N_SPREAD || item->type == N_REST) {
+      const sv_ast_t *rest = item->right;
+      if (i != node->args.count - 1 || !rest) return false;
+      if (is_array) {
+        if (rest->type == N_ASSIGN || rest->type == N_ASSIGN_PAT || !pattern_element_ok(p, rest, binding)) return false;
+      } else if (binding ? ((rest->flags & FN_PAREN) || !pattern_name_ok(p, rest)) : !simple_target_ok(p, rest, false)) return false;
+      continue;
+    }
+
+    if (is_array) {
+      if (!pattern_element_ok(p, item, binding)) return false;
+      continue;
+    }
+
+    if (item->type != N_PROPERTY || (item->flags & (FN_GETTER | FN_SETTER | FN_GENERATOR | FN_ASYNC))) return false;
+    if (!(item->flags & FN_COLON) && item->right && item->right->type == N_FUNC) return false;
+    if (!pattern_element_ok(p, item->right, binding)) return false;
+  }
+
+  return true;
+}
+
+bool sv_binding_pattern_ok(sv_parser_t *p, const sv_ast_t *node, bool top) {
+  if (!node) return false;
+  if (node->type == N_ASSIGN_PAT) node = node->left;
+  else if (node->type == N_ASSIGN && node->op == TOK_ASSIGN && (top || !(node->flags & FN_PAREN))) node = node->left;
+  if (!node) return false;
+  if (node->type == N_REST || node->type == N_SPREAD) {
+    node = node->right;
+    if (!node || node->type == N_ASSIGN || node->type == N_ASSIGN_PAT || (node->flags & FN_PAREN)) return false;
+    top = false;
+  }
+  if (node->type == N_ARRAY || node->type == N_OBJECT || node->type == N_ARRAY_PAT || node->type == N_OBJECT_PAT)
+    return (top || !(node->flags & FN_PAREN)) && pattern_ok(p, node, true, false);
+  return (top || !(node->flags & FN_PAREN)) && pattern_name_ok(p, node);
+}
+
+bool sv_assign_target_ok(sv_parser_t *p, const sv_ast_t *node, sv_target_kind_t kind) {
+  if (!node) return false;
+  bool pattern = node->type == N_ARRAY || node->type == N_OBJECT || node->type == N_ARRAY_PAT || node->type == N_OBJECT_PAT;
+  if (pattern) return (kind == SV_TARGET_ASSIGN || kind == SV_TARGET_FOR) && !(node->flags & FN_PAREN) && pattern_ok(p, node, false, true);
+  return simple_target_ok(p, node, kind != SV_TARGET_LOGICAL);
+}
+
+bool sv_reject_binding_pattern(sv_parser_t *p, const sv_ast_t *node) {
+  if (Ant_Exception_Pending(p->js)) return true;
+  if (sv_binding_pattern_ok(p, node, false)) return false;
+  bool strict_name = p->lx.strict && node && ast_pattern_binds_eval_or_arguments(node);
+  SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, strict_name ? "Unexpected eval or arguments in strict mode" : "Invalid destructuring assignment target");
+  return true;
+}
+
+bool sv_reject_assign_target_slow(sv_parser_t *p, const sv_ast_t *node, sv_target_kind_t kind) {
+  if (Ant_Exception_Pending(p->js)) return true;
+  if (sv_assign_target_ok(p, node, kind)) return false;
+  bool pattern = node && (node->type == N_ARRAY || node->type == N_OBJECT) && !(node->flags & FN_PAREN);
+  bool strict_name = p->lx.strict && node && (pattern || node->type == N_IDENT) && ast_pattern_binds_eval_or_arguments(node);
+  SV_MKERR_TYPED(
+    p->js, JS_ERR_SYNTAX,
+    strict_name ? "Unexpected eval or arguments in strict mode" :
+    pattern && (kind == SV_TARGET_ASSIGN || kind == SV_TARGET_FOR) ? "Invalid destructuring assignment target" :
+    kind == SV_TARGET_UPDATE ? "Invalid left-hand side expression in update operation" :
+    kind == SV_TARGET_FOR ? "Invalid left-hand side in for-loop" : "Invalid left-hand side in assignment"
+  );
+  return true;
+}
+
 static bool program_has_module_syntax(const sv_ast_t *program) {
   if (!program || program->type != N_PROGRAM) return false;
 
