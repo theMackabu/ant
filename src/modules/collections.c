@@ -1070,6 +1070,41 @@ static ant_value_t map_upsert(ant_params_t) {
   return value;
 }
 
+static ant_value_t map_insert_missing(ant_t *js, ant_value_t map, map_entry_t **map_ptr, ant_value_t key, ant_value_t value) {
+  ant_value_t key_val = normalize_map_key(key);
+  if (!map_store_entry(js, map_ptr, key, key_val, value)) return Ant_Error_CreateOutOfMemory(js);
+  ant_object_t *map_obj = js_obj_ptr(map);
+  if (map_obj) {
+    gc_write_barrier(js, map_obj, key_val);
+    gc_write_barrier(js, map_obj, value);
+  }
+  return value;
+}
+
+static ant_value_t map_get_or_insert(ant_params_t) {
+  map_entry_t **map_ptr = get_map_from_obj(call_this);
+  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.getOrInsert");
+  ant_value_t key = collection_arg(args, nargs, 0);
+  map_entry_t *entry = Ant_Map_Find(js, map_ptr, key);
+  if (entry) return entry->value;
+  return map_insert_missing(js, call_this, map_ptr, key, collection_arg(args, nargs, 1));
+}
+
+static ant_value_t map_get_or_insert_computed(ant_params_t) {
+  map_entry_t **map_ptr = get_map_from_obj(call_this);
+  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.getOrInsertComputed");
+  ant_value_t key = collection_arg(args, nargs, 0);
+  ant_value_t callback = collection_arg(args, nargs, 1);
+  if (!is_callable(callback)) return js_mkerr_typed(js, JS_ERR_TYPE, "Map.prototype.getOrInsertComputed callback must be callable");
+  if (vtype(key) == kTypeNumber && Ant_Value_AsNumberUnchecked(key) == 0) key = Ant_Value_FromNumber(0.0);
+  map_entry_t *entry = Ant_Map_Find(js, map_ptr, key);
+  if (entry) return entry->value;
+  ant_value_t call_args[1] = { key };
+  ant_value_t value = sv_vm_call(js->vm, js, callback, Ant_Value_Undefined, call_args, 1, NULL, Ant_Value_Undefined);
+  if (is_err(value)) return value;
+  return map_insert_missing(js, call_this, map_ptr, key, value);
+}
+
 static ant_value_t map_delete(ant_params_t) {
   map_entry_t **map_ptr = get_map_from_obj(call_this);
 
@@ -1793,6 +1828,37 @@ static ant_value_t weakmap_upsert(ant_params_t) {
   return value;
 }
 
+static ant_value_t weakmap_get_or_insert(ant_params_t) {
+  ant_object_t *object = NULL;
+  weakmap_table_t *table = get_weakmap_from_obj(call_this, &object);
+  if (!table) return collection_receiver_error(js, "WeakMap.prototype.getOrInsert");
+  ant_value_t key = collection_arg(args, nargs, 0);
+  if (!can_be_held_weakly(key)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid value used as weak map key");
+  weakmap_entry_t *entry = weakmap_table_find(table, key);
+  if (entry) return entry->value;
+  ant_value_t value = collection_arg(args, nargs, 1);
+  if (!weakmap_store_entry(js, object, table, key, value)) return Ant_Error_CreateOutOfMemory(js);
+  return value;
+}
+
+static ant_value_t weakmap_get_or_insert_computed(ant_params_t) {
+  ant_object_t *object = NULL;
+  weakmap_table_t *table = get_weakmap_from_obj(call_this, &object);
+  if (!table) return collection_receiver_error(js, "WeakMap.prototype.getOrInsertComputed");
+  ant_value_t key = collection_arg(args, nargs, 0);
+  ant_value_t callback = collection_arg(args, nargs, 1);
+  if (!can_be_held_weakly(key)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid value used as weak map key");
+  if (!is_callable(callback)) return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap.prototype.getOrInsertComputed callback must be callable");
+  weakmap_entry_t *entry = weakmap_table_find(table, key);
+  if (entry) return entry->value;
+  ant_value_t call_args[1] = { key };
+  ant_value_t value = sv_vm_call(js->vm, js, callback, Ant_Value_Undefined, call_args, 1, NULL, Ant_Value_Undefined);
+  if (is_err(value)) return value;
+  table = get_weakmap_from_obj(call_this, &object);
+  if (!table || !weakmap_store_entry(js, object, table, key, value)) return Ant_Error_CreateOutOfMemory(js);
+  return value;
+}
+
 static ant_value_t weakmap_delete(ant_params_t) {
   weakmap_table_t *table = get_weakmap_from_obj(call_this, NULL);
   if (!table) return collection_receiver_error(js, "WeakMap.prototype.delete");
@@ -2396,6 +2462,8 @@ void init_collections_module(ant_t *js) {
   defmethod(js, map_proto, "get", 3, Ant_Function_CreateWithArity(map_get, 1));
   defmethod(js, map_proto, "has", 3, Ant_Function_CreateWithArity(map_has, 1));
   defmethod(js, map_proto, "upsert", 6, Ant_Function_CreateWithArity(map_upsert, 3));
+  defmethod(js, map_proto, "getOrInsert", 11, Ant_Function_CreateWithArity(map_get_or_insert, 2));
+  defmethod(js, map_proto, "getOrInsertComputed", 19, Ant_Function_CreateWithArity(map_get_or_insert_computed, 2));
   defmethod(js, map_proto, "delete", 6, Ant_Function_CreateWithArity(map_delete, 1));
   defmethod(js, map_proto, "clear", 5, Ant_Function_Create(map_clear));
   js_set_getter_desc(js, map_proto, "size", 4, Ant_Function_Create(map_size), JS_DESC_C);
@@ -2446,6 +2514,8 @@ void init_collections_module(ant_t *js) {
   defmethod(js, weakmap_proto, "get", 3, Ant_Function_CreateWithArity(weakmap_get, 1));
   defmethod(js, weakmap_proto, "has", 3, Ant_Function_CreateWithArity(weakmap_has, 1));
   defmethod(js, weakmap_proto, "upsert", 6, Ant_Function_CreateWithArity(weakmap_upsert, 3));
+  defmethod(js, weakmap_proto, "getOrInsert", 11, Ant_Function_CreateWithArity(weakmap_get_or_insert, 2));
+  defmethod(js, weakmap_proto, "getOrInsertComputed", 19, Ant_Function_CreateWithArity(weakmap_get_or_insert_computed, 2));
   defmethod(js, weakmap_proto, "delete", 6, Ant_Function_CreateWithArity(weakmap_delete, 1));
   js_set_tostringtag(js, weakmap_proto, js_mkstr(js, "WeakMap", 7));
   
