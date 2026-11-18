@@ -213,6 +213,7 @@ export function targets() {
     'test_intrinsic_tostringtag.cjs',
     'test_io_error_boundary_audit.cjs',
     'test_io_handled_errors.cjs',
+    'test_gc_deep_closure_chain.cjs',
     'test_iteration_protocol_node_compat.cjs',
     'test_isolate.mjs',
     'test_iterator_close_errors.cjs',

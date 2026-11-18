@@ -234,6 +234,7 @@ void Ant_Destroy(ant_t *js) {
   free(js->ic.gf_mega);
   free(js->ic.gf_mega_keyed);
   free(js->gc.mark_stack);
+  free(js->gc.deferred_closures);
   free(js->gc.func_stack);
   free(js->gc.fb_funcs);
   
