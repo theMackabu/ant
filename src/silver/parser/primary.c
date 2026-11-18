@@ -438,6 +438,11 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     n->src_off = (uint32_t)p->lx.st.toff;
     n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
     p->lx.st.consumed = 1;
+    uint8_t after = sv_lexer_next(&p->lx);
+    if (after != TOK_DOT && after != TOK_LBRACKET && after != TOK_LPAREN) {
+      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "'super' keyword unexpected here");
+      return mk(N_EMPTY);
+    }
     return n;
   }
 
