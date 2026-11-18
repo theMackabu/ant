@@ -239,8 +239,13 @@ static const char *invalid_constructor_member(const sv_ast_t *m, bool is_fn, boo
   return has_constructor ? "A class may only have one constructor" : NULL;
 }
 
+static bool is_literal_key(const sv_ast_t *key, const char *name, uint32_t len) {
+  if (!key || !key->str || (key->type != N_IDENT && key->type != N_STRING)) return false;
+  return key->len == len && memcmp(key->str, name, len) == 0;
+}
+
 static bool is_constructor_key(const sv_ast_t *key) {
-  return key && key->type == N_IDENT && key->str && key->len == (is_quoted_ident_key(key) ? 13u : 11u) && memcmp(key->str + is_quoted_ident_key(key), "constructor", 11) == 0;
+  return is_literal_key(key, "constructor", 11);
 }
 
 static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool returns_expr, const sv_ast_t *key) {
@@ -381,6 +386,14 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
         return;
       }
       if (is_fn && !(m->flags & FN_STATIC)) { ctor_method = m; continue; }
+    }
+
+    if ((m->flags & FN_STATIC) && !(m->flags & FN_COMPUTED) && is_literal_key(m->left, "prototype", 9)) {
+      js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Classes may not have a static property named 'prototype'");
+      c->private_scope = saved_private_scope;
+      free(private_scope.names);
+      emit_op(c, OP_UNDEF);
+      return;
     }
     
     if (

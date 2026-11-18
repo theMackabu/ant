@@ -131,6 +131,13 @@ static inline ant_value_t sv_define_method_comp(
   ant_value_t key_str = sv_key_to_propstr(js, key);
   if (is_err(key_str)) return key_str;
   *key_slot = key_str;
+
+  if ((flags & SV_DEFINE_METHOD_NON_ENUM) && vtype(obj) == kTypeFunction && vtype(key_str) == kTypeString) {
+    ant_offset_t klen = 0;
+    const char *kptr = (const char *)(uintptr_t)vstr(js, key_str, &klen);
+    if (klen == 9 && memcmp(kptr, "prototype", 9) == 0)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot redefine property: prototype");
+  }
   
   if ((is_getter || is_setter) && vtype(key_str) == kTypeString) {
     ant_offset_t klen = 0;

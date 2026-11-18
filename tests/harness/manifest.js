@@ -53,6 +53,7 @@ export function targets() {
     'test_bigint_symbol_receivers.cjs',
     'test_buffer_base64url.cjs',
     'test_buffer_fill_and_encoding_errors.cjs',
+    'test_class_static_prototype_member.cjs',
     'test_buffer_inspect.cjs',
     'test_buffer_numeric_rw.cjs',
     'test_class_static_fields.cjs',
