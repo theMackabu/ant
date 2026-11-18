@@ -17,6 +17,8 @@ typedef struct {
   bool wants_module;
   bool tagged_template;
   bool static_block;
+  bool class_initializer;
+  bool no_yield;
   uint32_t function_depth;
 } sv_parser_t;
 
@@ -24,15 +26,20 @@ typedef struct {
   bool no_in;
   bool in_async;
   bool static_block;
+  bool class_initializer;
+  bool no_yield;
 } sv_parse_context_t;
 
 static inline sv_parse_context_t sv_parse_context_save(const sv_parser_t *p) {
-  return (sv_parse_context_t){p->no_in, p->in_async, p->static_block}; }
+  return (sv_parse_context_t){p->no_in, p->in_async, p->static_block, p->class_initializer, p->no_yield};
+}
 
 static inline void sv_parse_context_restore(sv_parser_t *p, sv_parse_context_t saved) {
   p->no_in = saved.no_in;
   p->in_async = saved.in_async;
   p->static_block = saved.static_block;
+  p->class_initializer = saved.class_initializer;
+  p->no_yield = saved.no_yield;
 }
 
 #define SV_RAISE(mkerr) ({                                  \
@@ -195,7 +202,9 @@ static inline bool binding_ident_here(sv_parser_t *p) {
 
 bool sv_reject_ident_name_slow(sv_parser_t *p, const char *s, uint32_t len);
 
-static inline bool sv_ident_names_restricted(const sv_parser_t *p) { return p->static_block; }
+static inline bool sv_ident_names_restricted(const sv_parser_t *p) {
+  return p->class_initializer;
+}
 
 static inline bool sv_reject_ident_name(sv_parser_t *p, const char *s, uint32_t len) {
   if (__builtin_expect(!sv_ident_names_restricted(p), 1)) return false;

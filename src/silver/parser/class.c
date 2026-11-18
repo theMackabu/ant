@@ -103,6 +103,7 @@ static sv_ast_t *parse_class_strict(sv_parser_t *p, bool outer_strict) {
         p->lx.strict = true;
         p->in_async = false;
         p->static_block = true;
+        p->class_initializer = true;
         p->function_depth = 0;
         sv_ast_t *block = parse_block(p, false);
         sv_parse_context_restore(p, saved);
@@ -193,7 +194,9 @@ static sv_ast_t *parse_class_strict(sv_parser_t *p, bool outer_strict) {
       p->lx.st.consumed = 1;
       sv_parse_context_t saved = sv_parse_context_save(p);
       p->in_async = false;
-      p->static_block = false;
+      p->static_block = (flags & FN_STATIC) != 0;
+      p->class_initializer = true;
+      p->no_yield = true;
       method->right = parse_assign(p);
       sv_parse_context_restore(p, saved);
       consume_semicolon(p);

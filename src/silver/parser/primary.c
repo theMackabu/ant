@@ -409,6 +409,7 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
       p->lx.st.consumed = 1;
       n->flags |= FN_YIELD_STAR;
     }
+    if (p->no_yield) { SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "yield is not valid in a class field initializer or static initialization block"); return mk(N_EMPTY); }
     if (p->lx.st.tok != TOK_SEMICOLON && p->lx.st.tok != TOK_RBRACE &&
         p->lx.st.tok != TOK_RPAREN && p->lx.st.tok != TOK_RBRACKET &&
         p->lx.st.tok != TOK_EOF && p->lx.st.tok != TOK_COMMA)
