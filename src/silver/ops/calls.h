@@ -181,7 +181,9 @@ static inline ant_value_t sv_apply_normalize_args(ant_t *js, sv_call_args_t *a, 
   return Ant_Value_Undefined;
 }
 
-static inline ant_value_t sv_spread_call_args(sv_vm_t *vm, ant_t *js, sv_call_args_t *a, int cap) {
+__attribute__((noinline)) ant_value_t sv_spread_call_args_slow(sv_vm_t *vm, ant_t *js, sv_call_args_t *a, int cap);
+
+static inline __attribute__((always_inline)) ant_value_t sv_spread_call_args(sv_vm_t *vm, ant_t *js, sv_call_args_t *a, int cap) {
   int fixed = a->argc - 1;
   ant_value_t iterable = a->args[fixed];
   int len = 0;
@@ -191,22 +193,9 @@ static inline ant_value_t sv_spread_call_args(sv_vm_t *vm, ant_t *js, sv_call_ar
     if (dense) return sv_call_args_place(js, a, fixed, dense, len, cap);
   }
 
-  GC_ROOT_SAVE(root_mark, js);
-  GC_ROOT_PIN(js, iterable);
-  
-  ant_value_t arr = Ant_Array_Create(js);
-  GC_ROOT_PIN(js, arr);
+  return sv_spread_call_args_slow(vm, js, a, cap);
 
-  ant_value_t status = is_err(arr) ? arr : sv_spread_into(vm, js, arr, iterable);
-  if (!is_err(status)) {
-    const ant_value_t *spread = Ant_Array_DenseView(arr, &len);
-    status = spread
-      ? sv_call_args_place(js, a, fixed, spread, len, cap)
-      : js_mkerr(js, "invalid spread state");
-  }
 
-  GC_ROOT_RESTORE(js, root_mark);
-  return status;
 }
 
 static inline ant_value_t sv_stack_call_args(
@@ -606,6 +595,29 @@ static inline ant_value_t sv_op_call_call_slot_ptr(
 }
 
 #ifdef SV_OPS_IMPLEMENTATION
+
+ant_value_t sv_spread_call_args_slow(sv_vm_t *vm, ant_t *js, sv_call_args_t *a, int cap) {
+  int fixed = a->argc - 1;
+  ant_value_t iterable = a->args[fixed];
+  int len = 0;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, iterable);
+  
+  ant_value_t arr = Ant_Array_Create(js);
+  GC_ROOT_PIN(js, arr);
+
+  ant_value_t status = is_err(arr) ? arr : sv_spread_into(vm, js, arr, iterable);
+  if (!is_err(status)) {
+    const ant_value_t *spread = Ant_Array_DenseView(arr, &len);
+    status = spread
+      ? sv_call_args_place(js, a, fixed, spread, len, cap)
+      : js_mkerr(js, "invalid spread state");
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return status;
+}
 
 ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   uint16_t argc = sv_get_u16(ip + 1);
