@@ -159,6 +159,7 @@ export function targets() {
     'test_inspect_compact_sorted.cjs',
     'test_node_api_result_shapes.cjs',
     'test_assert_strict.cjs',
+    'test_assert_rejects_thenable.cjs',
     'test_dns_lookup.cjs',
     'test_dns_resolver.cjs',
     'test_primitive_prototype_values.cjs',
