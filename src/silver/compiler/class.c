@@ -230,6 +230,7 @@ typedef struct {
 
 static inline int compile_class_precompute_key(sv_compiler_t *c, sv_ast_t *key_expr) {
   compile_expr(c, key_expr);
+  emit_op(c, OP_TO_PROPKEY);
   int loc = add_local(c, "", 0, false, c->scope_depth);
   emit_put_local(c, loc);
   return loc;
@@ -373,6 +374,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   bool class_global_lexical = binds_outer_name && is_repl_top_level(c);
 
   sv_ast_t *ctor_method = NULL;
+  bool has_computed_key = false;
   bool has_static_name = false;
 
   int field_count = 0;
@@ -397,6 +399,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     if (m->type != N_METHOD) continue;
     bool is_fn = is_class_method_def(m);
     bool is_private = is_private_name_node(m->left);
+    if (m->flags & FN_COMPUTED) has_computed_key = true;
 
     if (is_private) {
       uint8_t private_kind = (m->flags & FN_GETTER) ? SV_COMP_PRIVATE_GETTER :
@@ -444,7 +447,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   int inner_name_local = -1;
-  bool has_class_scope = node->str || private_scope.count > 0 || field_count > 0;
+  bool has_class_scope = node->str || private_scope.count > 0 || field_count > 0 || has_computed_key;
   if (has_class_scope) {
     begin_scope(c);
     if (node->str)
@@ -496,7 +499,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       continue;
     }
 
-    bool needs_preeval_key = !is_private && node->str && (m->flags & FN_COMPUTED) &&
+    bool needs_preeval_key = !is_private && (m->flags & FN_COMPUTED) &&
       (is_fn || is_static);
     int preeval_key = needs_preeval_key ? compile_class_precompute_key(c, m->left) : -1;
 

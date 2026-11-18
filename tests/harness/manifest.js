@@ -104,6 +104,7 @@ export function targets() {
     'test_child_process_exec_sync_options.cjs',
     'test_child_process_sigpipe_reset.cjs',
     'test_child_process_stdio_fd.cjs',
+    'test_class_computed_key_order.cjs',
     'test_class_constructor_call.cjs',
     'test_class_method_inline_super.cjs',
     'test_class_export_scope.mjs',
