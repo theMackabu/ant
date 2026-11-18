@@ -145,6 +145,7 @@ export function targets() {
     'test_typed_array_own_keys.cjs',
     'test_intl_locale_lists.cjs',
     'test_assert_error_types.cjs',
+    'test_array_push_length_limit.cjs',
     'test_for_let_bindings.cjs',
     'test_tdz_writes.cjs',
     'test_super_null_home.cjs',

@@ -257,6 +257,7 @@ static ant_value_t array_method_receiver(ant_t *js, ant_value_t value, const cha
 static ant_value_t array_set_index_throw(ant_t *js, ant_value_t obj, ant_offset_t idx, ant_value_t value);
 static ant_value_t array_set_length_throw(ant_t *js, ant_value_t obj, ant_offset_t len);
 
+static ant_value_t array_set_index_throw(ant_t *js, ant_value_t obj, ant_offset_t idx, ant_value_t value);
 static ant_value_t builtin_array_push(ant_params_t) {
   ant_value_t arr = array_method_receiver(js, call_this, "push");
   
@@ -266,6 +267,8 @@ static ant_value_t builtin_array_push(ant_params_t) {
 
   if (is_proxy(arr)) {
     PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+    if (len > (ant_offset_t)9007199254740991 - (ant_offset_t)nargs)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Pushing %d elements on an array-like of length %.0f is disallowed by its maximum length", nargs, (double)len);
     for (int i = 0; i < nargs; i++, len++) {
       ant_value_t set = array_set_index_throw(js, arr, len, args[i]);
       if (is_err(set)) return set;
@@ -278,6 +281,8 @@ static ant_value_t builtin_array_push(ant_params_t) {
   
   if (js_is_arguments(arr)) return arguments_push(js, arr, args, nargs);
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+  if (__builtin_expect(len > (ant_offset_t)9007199254740991 - (ant_offset_t)nargs, 0))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Pushing %d elements on an array-like of length %.0f is disallowed by its maximum length", nargs, (double)len);
 
   ant_object_t *target = js_obj_ptr(js_as_obj(arr));
   if (array_refuses_add(arr, nargs)) return array_add_refused_error(js, len);
@@ -291,6 +296,7 @@ static ant_value_t builtin_array_push(ant_params_t) {
     int i = 0;
     for (; i < nargs && (plain || !array_store_reaches_proto_slow(js, arr, len)); i++) {
       ant_offset_t cap = dense_capacity(doff);
+      if (__builtin_expect(len >= cap && len >= ARRAY_DENSE_GAP && len >= dense_iterable_length(js, arr) * 4, 0)) break;
       if (len >= cap) {
         doff = dense_grow(js, arr, len + 1);
         if (doff == 0) return js_mkerr(js, "oom");
@@ -303,7 +309,7 @@ static ant_value_t builtin_array_push(ant_params_t) {
     if (i == nargs) return Ant_Value_FromNumber((double) len);
 
     for (; i < nargs; i++) {
-      ant_value_t stored = js_setprop_index_throw(js, arr, (uint32_t)len, args[i]);
+      ant_value_t stored = array_set_index_throw(js, arr, len, args[i]);
       if (is_err(stored)) return stored;
       len++;
     }
@@ -313,7 +319,7 @@ static ant_value_t builtin_array_push(ant_params_t) {
   }
   
   for (int i = 0; i < nargs; i++, len++) {
-    ant_value_t stored = js_setprop_index_throw(js, arr, (uint32_t)len, args[i]);
+    ant_value_t stored = array_set_index_throw(js, arr, len, args[i]);
     if (is_err(stored)) return stored;
   }
 
