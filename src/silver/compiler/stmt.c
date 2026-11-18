@@ -55,6 +55,11 @@ void emit_close_upvals_to_depth(sv_compiler_t *c, int target_depth) {
   }
 }
 
+static void emit_handler_close(sv_compiler_t *c) {
+  if (c->handler_close_floor)
+    emit_slot_op(c, OP_CLOSE_UPVAL, (uint16_t)(c->handler_close_floor - 1));
+}
+
 static void emit_iter_close_seq(sv_compiler_t *c, bool is_async) {
   if (is_async) {
     emit_op(c, OP_ITER_CLOSE_ASYNC);
@@ -603,8 +608,15 @@ static void compile_catch_body(sv_compiler_t *c, sv_ast_t *node) {
   end_scope(c);
 }
 
+static void merge_handler_close_floor(sv_compiler_t *c, int outer) {
+  if (outer && (!c->handler_close_floor || outer < c->handler_close_floor))
+    c->handler_close_floor = outer;
+}
+
 void compile_try(sv_compiler_t *c, sv_ast_t *node) {
   emit_set_completion_undefined(c);
+  int outer_close_floor = c->handler_close_floor;
+  c->handler_close_floor = 0;
 
   bool has_catch = (node->catch_body != NULL);
   bool has_finally = (node->finally_body != NULL);
@@ -625,6 +637,7 @@ void compile_try(sv_compiler_t *c, sv_ast_t *node) {
     patch_jump(c, inner_jump);
 
     int catch_tag = emit_jump(c, OP_CATCH);
+    emit_handler_close(c);
     compile_catch_body(c, node);
 
     patch_jump(c, catch_tag);
@@ -639,17 +652,20 @@ void compile_try(sv_compiler_t *c, sv_ast_t *node) {
     int end_jump = emit_jump(c, OP_JMP);
     patch_jump(c, try_jump);
     int catch_tag = emit_jump(c, OP_CATCH);
+    emit_handler_close(c);
     if (has_catch) compile_catch_body(c, node);
     else emit_op(c, OP_POP);
     patch_jump(c, catch_tag);
     patch_jump(c, end_jump);
     c->try_depth--;
+    merge_handler_close_floor(c, outer_close_floor);
     return;
   }
 
   int to_finally_from_try = emit_jump(c, OP_JMP);
   patch_jump(c, try_jump);
   emit_op(c, OP_POP);
+  emit_handler_close(c);
   
   int to_finally_from_throw = emit_jump(c, OP_JMP);
   patch_jump(c, to_finally_from_try);
@@ -657,6 +673,7 @@ void compile_try(sv_compiler_t *c, sv_ast_t *node) {
   
   compile_finally_block(c, node->finally_body);
   c->try_depth--;
+  merge_handler_close_floor(c, outer_close_floor);
 }
 
 // TODO: cleanup, reduce nesting

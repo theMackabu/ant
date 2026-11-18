@@ -262,6 +262,7 @@ static int32_t opt_finally_of(const opt_builder_t *b, uint32_t push) {
   uint32_t len = (uint32_t)b->func->code_len, handler = opt_handler_target(b->func, push);
   if (handler >= len || opt_op_at(b, handler) != OP_POP) return -1;
   uint32_t jump = handler + sv_op_size[OP_POP];
+  if (jump < len && opt_op_at(b, jump) == OP_CLOSE_UPVAL) jump += sv_op_size[OP_CLOSE_UPVAL];
   if (jump >= len || (opt_op_at(b, jump) != OP_JMP && opt_op_at(b, jump) != OP_JMP8)) return -1;
   int32_t target = opt_branch_target(b->func, jump);
   return target >= 0 && (uint32_t)target < len && opt_op_at(b, (uint32_t)target) == OP_FINALLY ? target : -1;
@@ -5163,13 +5164,17 @@ static opt_flow_t opt_build_string_append(opt_builder_t *b, const uint8_t *ip, s
   return OPT_FLOW_CONTINUE;
 }
 
+static void opt_close_boxes(opt_builder_t *b, uint32_t from) {
+  opt_bitset_for_each(&b->boxable, t) {
+    opt_slot_t *slot = &b->frame.slots[t];
+    if (t >= from && slot->boxed) *slot = (opt_slot_t){.node = opt_emit1(b, IR_OP_LOAD_ENVIRONMENT_BINDING, slot->node, OPT_REPR_TAGGED)};
+  }
+}
+
 static opt_flow_t opt_build_close_upvalues(opt_builder_t *b, const uint8_t *ip) {
   uint32_t from = sv_get_u16(ip + 1);
   if (!opt_bitset_is_empty(&b->boxable)) {
-    opt_bitset_for_each(&b->boxable, t) {
-      opt_slot_t *slot = &b->frame.slots[t];
-      if (t >= from && slot->boxed) *slot = (opt_slot_t){.node = opt_emit1(b, IR_OP_LOAD_ENVIRONMENT_BINDING, slot->node, OPT_REPR_TAGGED)};
-    }
+    opt_close_boxes(b, from);
     return OPT_FLOW_CONTINUE;
   }
   if (opt_bitset_is_empty(&b->memory)) return OPT_FLOW_CONTINUE;
@@ -5575,6 +5580,8 @@ static opt_flow_t opt_jump_to_finally(opt_builder_t *b, uint32_t push, uint32_t 
   }
   opt_set_completion(b, (uint32_t)target, kind, value);
   b->frame.sp = (uint32_t)b->depth[push];
+  uint32_t close = opt_handler_target(b->func, push) + sv_op_size[OP_POP];
+  if (opt_op_at(b, close) == OP_CLOSE_UPVAL) opt_close_boxes(b, sv_get_u16(b->func->code + close + 1));
   return opt_end_with_jump(b, (uint32_t)b->block_at[target]) ? OPT_FLOW_ENDED : OPT_FLOW_FAILED;
 }
 

@@ -318,8 +318,9 @@ static MIR_op_t jit_finally_slot(jit_compile_t *c, int index, size_t field) {
 static int jit_finally_of_region(const sv_func_t *func, int push) {
   int handler = push + sv_op_size[OP_TRY_PUSH_FINALLY] + sv_get_i32(func->code + push + 1);
   int jmp = handler + sv_op_size[OP_POP];
-  if (handler < 0 || jmp + sv_op_size[OP_JMP] > func->code_len) return -1;
-  if (func->code[handler] != OP_POP || func->code[jmp] != OP_JMP) return -1;
+  if (handler < 0 || jmp + sv_op_size[OP_JMP] > func->code_len || func->code[handler] != OP_POP) return -1;
+  if (func->code[jmp] == OP_CLOSE_UPVAL) jmp += sv_op_size[OP_CLOSE_UPVAL];
+  if (jmp + sv_op_size[OP_JMP] > func->code_len || func->code[jmp] != OP_JMP) return -1;
   int target = jmp + sv_op_size[OP_JMP] + sv_get_i32(func->code + jmp + 1);
   return target >= 0 && target < func->code_len && func->code[target] == OP_FINALLY ? target : -1;
 }
