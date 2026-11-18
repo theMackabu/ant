@@ -431,6 +431,8 @@ void end_scope(sv_compiler_t *c) {
       int frame_slot = local_to_frame_slot(c, c->local_count - 1);
       emit_op(c, OP_CLOSE_UPVAL);
       emit_u16(c, (uint16_t)frame_slot);
+      if (!c->handler_close_floor || frame_slot < c->handler_close_floor - 1)
+        c->handler_close_floor = frame_slot + 1;
     }
     sv_compile_ctx_local_lookup_remove(c, c->local_count - 1);
     c->local_count--;

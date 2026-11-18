@@ -262,6 +262,7 @@ typedef struct sv_compiler {
   uint8_t *unwind_kinds;
   int unwind_count;
   int unwind_cap;
+  int handler_close_floor;
   
   sv_with_scope_t *with_scopes;
   int with_cap;
