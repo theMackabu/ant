@@ -301,7 +301,8 @@ static inline ant_value_t sv_super_construct_parent(
 
   ant_value_t super_this = this_val;
   ant_value_t result = sv_vm_call(vm, js, parent, this_val, args, argc, &super_this, new_target);
-  return is_err(result) || sv_is_construct_result(result) ? result : super_this;
+  if (__builtin_expect(is_err(result), 0)) return sv_super_construct_error(js, parent, new_target, result);
+  return sv_is_construct_result(result) ? result : super_this;
 }
 
 static inline ant_value_t sv_super_construct(

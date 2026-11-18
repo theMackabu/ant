@@ -1287,7 +1287,7 @@ ant_value_t proxy_get_prototype_of(ant_t *js, ant_value_t proxy) {
   }
 }
 
-ant_value_t proxy_set_prototype_of(ant_t *js, ant_value_t proxy, ant_value_t proto) {
+ant_value_t proxy_set_prototype_of_trapped(ant_t *js, ant_value_t proxy, ant_value_t proto, bool *trapped) {
   if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data) return Ant_Value_False;
@@ -1300,6 +1300,7 @@ ant_value_t proxy_set_prototype_of(ant_t *js, ant_value_t proxy, ant_value_t pro
   if (is_err(trap)) return trap;
 
   if (vtype(trap) != kTypeUndefined) {
+    if (trapped) *trapped = true;
     ant_value_t args[2] = { target, proto };
     ant_value_t result = proxy_call_trap(js, data, trap, args, 2);
     if (is_err(result)) return result;
@@ -1315,8 +1316,12 @@ ant_value_t proxy_set_prototype_of(ant_t *js, ant_value_t proxy, ant_value_t pro
     return Ant_Value_FromBool(js_truthy(js, result));
   }
 
-  if (is_proxy(target)) return proxy_set_prototype_of(js, target, proto);
+  if (is_proxy(target)) return proxy_set_prototype_of_trapped(js, target, proto, trapped);
   return Ant_Value_FromBool(Ant_Object_TrySetPrototype(js, target, proto) == ANT_PROTO_SET_OK);
+}
+
+ant_value_t proxy_set_prototype_of(ant_t *js, ant_value_t proxy, ant_value_t proto) {
+  return proxy_set_prototype_of_trapped(js, proxy, proto, NULL);
 }
 
 ant_value_t proxy_is_extensible(ant_t *js, ant_value_t proxy) {

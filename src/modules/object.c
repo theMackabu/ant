@@ -126,7 +126,7 @@ static ant_value_t builtin_object_getPrototypeOf(ant_params_t) {
 
 static ant_value_t object_set_prototype_error(ant_t *js, ant_proto_set_t outcome) {
   if (outcome == ANT_PROTO_SET_CYCLE) return js_mkerr_typed(js, JS_ERR_TYPE, "Cyclic __proto__ value");
-  return js_mkerr_typed(js, JS_ERR_TYPE, "Object is not extensible");
+  return js_mkerr_typed(js, JS_ERR_TYPE, "#<Object> is not extensible");
 }
 
 static ant_value_t builtin_object_setPrototypeOf(ant_params_t) {
@@ -156,10 +156,12 @@ static ant_value_t builtin_object_setPrototypeOf(ant_params_t) {
   }
   
   if (is_proxy(obj)) {
-    ant_value_t result = proxy_set_prototype_of(js, obj, proto);
+    bool trapped = false;
+    ant_value_t result = proxy_set_prototype_of_trapped(js, obj, proto, &trapped);
     if (is_err(result)) return result;
-    if (!js_truthy(js, result))
-      return proxy_trap_error(js, "setPrototypeOf", "trap returned falsy");
+    if (!js_truthy(js, result)) return trapped
+      ? proxy_trap_error(js, "setPrototypeOf", "trap returned falsy")
+      : object_set_prototype_error(js, ANT_PROTO_SET_NOT_EXTENSIBLE);
     return obj;
   }
   

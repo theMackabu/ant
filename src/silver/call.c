@@ -1,4 +1,5 @@
 #include "silver/call.h"
+#include "proto.h"
 
 ant_value_t sv_super_constructor(ant_value_t constructor) {
   ant_value_t parent;
@@ -29,10 +30,13 @@ static ant_value_t sv_call_default_ctor(
   }
 
   ant_value_t super_this = ctx->this_val;
+  ant_value_t parent = sv_super_constructor(closure->super_val);
   ant_value_t result = sv_vm_call(
-    vm, js, sv_super_constructor(closure->super_val), ctx->this_val,
+    vm, js, parent, ctx->this_val,
     ctx->args, ctx->argc, &super_this, ctx->new_target
   );
+  if (__builtin_expect(is_err(result), 0)) result = sv_super_construct_error(js, parent, ctx->new_target, result);
+
   if (out_this) *out_this = super_this;
   sv_call_cleanup(js, ctx);
 
@@ -228,6 +232,33 @@ ant_value_t sv_vm_call(
   sv_vm_maybe_checkpoint_microtasks(js);
 
   return result;
+}
+
+__attribute__((noinline, cold)) ant_value_t sv_super_construct_error(
+  ant_t *js, ant_value_t parent, ant_value_t new_target, ant_value_t error
+) {
+  if ((vtype(parent) == kTypeObject && is_proxy(parent)) || js_is_constructor(parent)) return error;
+
+  char parent_text[64];
+  size_t parent_len = same_object_identity(parent, js->sym.function_proto)
+    ? (size_t)snprintf(parent_text, sizeof(parent_text), "null")
+    : tostr(js, parent, parent_text, sizeof(parent_text));
+  if (parent_len >= sizeof(parent_text)) parent_len = sizeof(parent_text) - 1;
+
+  ant_value_t name = is_object_type(new_target) || vtype(new_target) == kTypeBuiltin
+    ? js_getprop_fallback(js, new_target, "name") : Ant_Value_Undefined;
+  ant_offset_t name_len = 0;
+  const char *name_text = vtype(name) == kTypeString ? (const char *)(uintptr_t)vstr(js, name, &name_len) : NULL;
+
+  Ant_Exception_Clear(js);
+  if (!name_text || name_len == 0) return js_mkerr_typed(
+    js, JS_ERR_TYPE, "Super constructor %.*s of anonymous class is not a constructor",
+    (int)parent_len, parent_text
+  );
+  return js_mkerr_typed(
+    js, JS_ERR_TYPE, "Super constructor %.*s of %.*s is not a constructor",
+    (int)parent_len, parent_text, (int)name_len, name_text
+  );
 }
 
 static bool sv_new_target_is_class(ant_value_t new_target) {
