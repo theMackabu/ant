@@ -1,13 +1,7 @@
 #include "parser_internal.h"
 
 bool lookahead_crosses_line_terminator(sv_parser_t *p) {
-  sv_lexer_state_t saved;
-  sv_lexer_save_state(&p->lx, &saved);
-  p->lx.st.consumed = 1;
-  (void)sv_lexer_next(&p->lx);
-  bool had_newline = p->lx.st.had_newline;
-  sv_lexer_restore_state(&p->lx, &saved);
-  return had_newline;
+  return sv_lexer_lookahead_newline(&p->lx);
 }
 
 void sv_parse_stop(sv_parser_t *p) {

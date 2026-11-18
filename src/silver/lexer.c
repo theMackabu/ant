@@ -26,6 +26,7 @@ void sv_lexer_init(sv_lexer_t *lx, ant_t *js, const char *code, ant_offset_t cle
   lx->st.tok = TOK_ERR;
   lx->st.consumed = 1;
   lx->st.had_newline = false;
+  lx->peek_pos = (ant_offset_t)-1;
 }
 
 js_error_site_t sv_lexer_error_site(const sv_lexer_t *lx) {
@@ -59,6 +60,7 @@ void sv_lexer_push_source(
   lx->st.tok = TOK_ERR;
   lx->st.consumed = 1;
   lx->st.had_newline = false;
+  lx->peek_pos = (ant_offset_t)-1;
 }
 
 void sv_lexer_pop_source(sv_lexer_t *lx, const sv_lexer_checkpoint_t *cp) {
@@ -66,6 +68,7 @@ void sv_lexer_pop_source(sv_lexer_t *lx, const sv_lexer_checkpoint_t *cp) {
   lx->clen = cp->clen;
   lx->strict = cp->strict;
   lx->st = cp->st;
+  lx->peek_pos = (ant_offset_t)-1;
 }
 
 static bool sv_lexer_decode_string_escape(sv_lexer_t *lx, const uint8_t *in, uint8_t *out, size_t *n1, size_t *n2) {
@@ -1151,6 +1154,10 @@ static inline uint8_t parse_operator(sv_lexer_t *lx, const char *buf, ant_offset
   return lx->st.tok;
 }
 
+static inline bool sv_lexer_peek_valid(const sv_lexer_t *lx) {
+  return lx->peek_pos == lx->st.pos && lx->peek_clen == lx->clen && lx->peek_strict == lx->strict;
+}
+
 static uint8_t sv_next_raw(sv_lexer_t *lx) {
   if (likely(lx->st.consumed == 0)) return lx->st.tok;
 
@@ -1233,25 +1240,22 @@ uint8_t sv_lexer_next(sv_lexer_t *lx) {
 }
 
 uint8_t sv_lexer_lookahead(sv_lexer_t *lx) {
-  uint8_t old = lx->st.tok, tok = 0;
-  uint8_t old_consumed = lx->st.consumed;
+  if (sv_lexer_peek_valid(lx)) return lx->peek.tok;
+  sv_lexer_state_t saved = lx->st;
   
-  ant_offset_t pos = lx->st.pos;
-  ant_offset_t toff = lx->st.toff;
-  ant_offset_t tlen = lx->st.tlen;
-  
-  bool had_newline = lx->st.had_newline;
-
   lx->st.consumed = 1;
-  tok = sv_lexer_next(lx);
+  sv_next_raw(lx);
   
-  lx->st.pos = pos;
-  lx->st.tok = old;
-  lx->st.toff = toff;
-  lx->st.tlen = tlen;
+  lx->peek = lx->st;
+  lx->peek_pos = saved.pos;
+  lx->peek_clen = lx->clen;
+  lx->peek_strict = lx->strict;
+  lx->st = saved;
   
-  lx->st.had_newline = had_newline;
-  lx->st.consumed = old_consumed;
-  
-  return tok;
+  return lx->peek.tok;
+}
+
+bool sv_lexer_lookahead_newline(sv_lexer_t *lx) {
+  sv_lexer_lookahead(lx);
+  return lx->peek.had_newline;
 }
