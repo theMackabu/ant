@@ -427,6 +427,7 @@ export function targets() {
     'test_querystring_node_compat.cjs',
     'test_reflect_set_receiver.cjs',
     'test_realm_basics.cjs',
+    'test_proto_alternating_shapes.cjs',
     'test_realm_builtins.cjs',
     'test_realm_calls.cjs',
     'test_realm_intrinsics.cjs',
