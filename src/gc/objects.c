@@ -1043,16 +1043,16 @@ switch (obj->type_tag) {
 }}
 
 static void gc_drain_mark_stack_weak(ant_t *js) {
-for (;;) {
-  while (js->gc.mark_sp > 0) {
-    ant_object_t *obj = js->gc.mark_stack[--js->gc.mark_sp];
-    gc_weak_key_marked(js, gc_weak_key_from_marked_object(obj));
-    gc_weak_collection_marked(js, obj);
-    gc_scan_obj(js, obj);
-  }
-  if (__builtin_expect(js->gc.deferred_closure_count == 0, 1)) return;
-  gc_drain_deferred_closures(js);
-}}
+  do {
+    while (js->gc.mark_sp > 0) {
+      ant_object_t *obj = js->gc.mark_stack[--js->gc.mark_sp];
+      gc_weak_key_marked(js, gc_weak_key_from_marked_object(obj));
+      gc_weak_collection_marked(js, obj);
+      gc_scan_obj(js, obj);
+    }
+    gc_drain_deferred_closures(js);
+  } while (js->gc.mark_sp > 0);
+}
 
 static void gc_scan_frame_span(
   ant_t *js, ant_value_t *slots, int slot_count,
