@@ -309,6 +309,16 @@ ant_value_t sv_spread_into(sv_vm_t *vm, ant_t *js, ant_value_t arr, ant_value_t 
   return is_err(status) ? status : Ant_Value_FromNumber(0);
 }
 
+static inline void sv_ctor_inherit_props(ant_value_t ctor, ant_value_t parent) {
+  if (vtype(ctor) != kTypeFunction || vtype(parent) != kTypeFunction) return;
+  sv_closure_t *derived = js_func_closure(ctor);
+  sv_closure_t *base = js_func_closure(parent);
+  
+  if (base->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS)) return;
+  uint32_t props = sv_closure_ctor_props(derived) + sv_closure_ctor_props(base);
+  derived->ctor_props = props > UINT8_MAX ? UINT8_MAX : (uint8_t)props;
+}
+
 ant_value_t sv_op_define_class(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
@@ -370,6 +380,7 @@ ant_value_t sv_op_define_class(
     
     js_set_proto_init(proto, parent_proto);
     js_set_proto_wb(js, ctor, parent);
+    sv_ctor_inherit_props(ctor, parent);
   }
   
   if (vtype(ctor) == kTypeFunction) {

@@ -3360,7 +3360,7 @@ static ir_node_id_t opt_construct_this(opt_builder_t *b, ir_node_id_t closure) {
   ant_value_t held = ant_object_prop_get_unchecked(func_obj, slot);
   if (func_obj->shape != sidecar->ctor_proto_shape || slot > 0xffff || !jit_snapshot_shape(js, func_obj->shape)
     || !opt_retain(b, held)) return IR_NONE;
-  ant_shape_t *shape = ant_object_proto_root(b->js, proto, sv_construct_slots(constructor->func));
+  ant_shape_t *shape = ant_object_proto_root(b->js, proto, sv_closure_construct_slots(constructor));
   if (!shape) return IR_NONE;
   bool held_shape = jit_snapshot_shape(js, shape);
   ant_shape_release(shape);

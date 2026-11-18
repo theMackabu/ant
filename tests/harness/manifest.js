@@ -118,6 +118,7 @@ export function targets() {
     'test_class_constructor_members.cjs',
     'test_class_expression_name_scope.cjs',
     'test_cli_stdin_script.cjs',
+    'test_class_ctor_sizing.cjs',
     'test_clone_error_own_props.mjs',
     'test_clone_length_tracking_views.mjs',
     'test_class_element_names.cjs',

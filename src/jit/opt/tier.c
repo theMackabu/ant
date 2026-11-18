@@ -1014,7 +1014,7 @@ ant_value_t opt_rt_new_this(sv_vm_t *vm, ant_value_t callee) {
   ant_object_t *func_obj = js_obj_ptr(closure->func_obj);
   ant_value_t proto;
   if (!func_obj->flags.is_constructor || !sv_construct_prototype_data(js, func_obj, closure->func, &proto)) return T_EMPTY;
-  ant_value_t object = js_mkobj_with_proto_slots(js, proto, sv_construct_slots(closure->func));
+  ant_value_t object = js_mkobj_with_proto_slots(js, proto, sv_closure_construct_slots(closure));
   if (vtype(object) != kTypeObject) return T_EMPTY;
   return object;
 }
