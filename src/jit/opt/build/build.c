@@ -4660,9 +4660,63 @@ static bool opt_try_super_get(opt_builder_t *b, bool field, opt_flow_t *flow) {
   return true;
 }
 
+static bool opt_super_store_chain(const opt_builder_t *b, ant_value_t base, const sv_atom_t *atom, opt_field_case_t *out, bool *held) {
+  ant_t *js = b->js;
+  *out = (opt_field_case_t){0};
+  ant_value_t value = base;
+  for (uint32_t depth = 0; depth < OPT_MAX_PROTOTYPE_DEPTH; depth++) {
+    ant_object_t *object = opt_prototype_object(js, value);
+    if (!object || object->flags.is_exotic || !object->shape) return false;
+    out->values[depth] = value;
+    out->links[depth] = object;
+    out->depth = depth + 1;
+    int32_t slot = ant_shape_lookup_interned(object->shape, atom->str);
+    if (slot >= 0) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(object->shape, (uint32_t)slot);
+      *held = true;
+      return prop && !prop->has_getter && !prop->has_setter && (prop->attrs & ANT_PROP_ATTR_WRITABLE);
+    }
+    value = ant_object_proto(object);
+    if (vtype(value) == kTypeNull) return true;
+  }
+  return false;
+}
+
+static bool opt_try_super_put(opt_builder_t *b, opt_flow_t *flow) {
+  sv_func_t *func = b->func;
+  uint32_t atom_index = sv_get_u32(func->code + b->pc + 1);
+  uint16_t ic_index = sv_get_u16(func->code + b->pc + 5);
+  if (atom_index >= (uint32_t)func->atom_count || !func->ic_slots || ic_index >= func->ic_count) return false;
+  const sv_atom_t *atom = &func->atoms[atom_index];
+  const sv_ic_entry_t *ic = &func->ic_slots[ic_index];
+  if (ic->super_put_kind != SV_SUPER_PUT_IC_DATA || !opt_super_may_speculate(b) || !opt_may_speculate(b, OPT_EXIT_BAD_TYPE)) return false;
+  if (ant_property_key_breaks_protector(b->js, atom->str)) return false;
+  ir_node_id_t receiver = opt_tagged(b, opt_peek(b, 2)), home = opt_tagged(b, opt_peek(b, 1)), value = opt_tagged(b, opt_peek(b, 0));
+  opt_super_home_t site;
+  opt_field_case_t chain;
+  bool held = false;
+  if (!opt_super_home(b, home, &site) || !opt_super_store_chain(b, site.base, atom, &chain, &held)) return false;
+  opt_field_plan_t plan = {.opcode = OP_PUT_FIELD, .store = true, .ic_index = ic_index};
+  plan.count = opt_field_cases(b, ic, atom, true, plan.cases);
+  opt_drop_superseded_cases(b, &plan);
+  if (!plan.count || (site.by_identity && !opt_retain(b, site.home)) || !opt_field_links_retain(b, &chain)) return false;
+  for (uint32_t i = 0; i < plan.count; i++)
+    if (!opt_field_case_retain(b, &plan.cases[i])) return false;
+
+  opt_super_guard(b, home, &site);
+  ir_node_id_t holder, holder_address;
+  opt_holder_chain(b, IR_NONE, &chain, !held, NULL, NULL, &holder, &holder_address);
+  ir_node_id_t address = opt_emit_checked(b, ir_op(IR_OP_OBJECT_ADDRESS), &receiver, 1, OPT_REPR_POINTER);
+  if (plan.count == 1) *flow = opt_build_monomorphic_field(b, &plan, receiver, address, value);
+  else if (opt_field_cases_share_slot(&plan)) *flow = opt_build_shared_slot_field(b, &plan, receiver, address, value);
+  else *flow = opt_build_polymorphic_field(b, &plan, receiver, address, value, false);
+  if (*flow == OPT_FLOW_CONTINUE) opt_poke(b, 0, value);
+  return true;
+}
+
 static opt_flow_t opt_build_super_access(opt_builder_t *b, bool put, bool field) {
   opt_flow_t flow;
-  if (!put && opt_try_super_get(b, field, &flow)) return flow;
+  if (put ? field && opt_try_super_put(b, &flow) : opt_try_super_get(b, field, &flow)) return flow;
   opt_rt_site_t *at = code_arena_bump(b->js, sizeof *at);
   if (!at) return OPT_FLOW_GENERIC;
   *at = (opt_rt_site_t){.func = b->func, .bc_off = b->pc};
