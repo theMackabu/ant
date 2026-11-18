@@ -336,6 +336,7 @@ export function targets() {
     'test_opt_func_state.cjs',
     'test_opt_generic.cjs',
     'test_opt_in_field_for_in.cjs',
+    'test_opt_deep_proto_chain.cjs',
     'test_opt_inline_alloc.cjs',
     'test_opt_int_mod.cjs',
     'test_opt_learned_shapes.cjs',

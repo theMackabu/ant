@@ -1926,7 +1926,7 @@ static void opt_add_fields(opt_builder_t *b, ir_node_id_t object, ir_node_id_t a
 static constexpr uint32_t OPT_MAX_FIELD_SHAPES = 1 + SV_GF_POLY_WAYS;
 static constexpr uint32_t OPT_SHAPE_SET_MAX = 4;
 
-static constexpr uint32_t OPT_MAX_PROTOTYPE_DEPTH = 4;
+static constexpr uint32_t OPT_MAX_PROTOTYPE_DEPTH = 8;
 
 typedef struct {
   ant_shape_t *shape;
