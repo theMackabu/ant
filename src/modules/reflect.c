@@ -8,6 +8,7 @@
 #include "internal.h"
 #include "silver/call.h"
 
+#include "modules/proxy.h"
 #include "modules/reflect.h"
 
 static ant_value_t reflect_target(ant_native_params_t, const char *method) {
@@ -218,6 +219,7 @@ static ant_value_t reflect_set_prototype_of(ant_params_t) {
 static ant_value_t reflect_is_extensible(ant_params_t) {
   ant_value_t target = reflect_target(js, args, nargs, "isExtensible");
   if (is_err(target)) return target;
+  if (is_proxy(js_as_obj(target))) return proxy_is_extensible(js, js_as_obj(target));
 
   ant_object_t *obj = js_obj_ptr(js_as_obj(target));
   if (!obj) return Ant_Value_False;

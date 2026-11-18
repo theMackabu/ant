@@ -470,6 +470,7 @@ export function targets() {
     'test_regexp_string_compat.cjs',
     'test_regexp_syntax_errors.cjs',
     'test_regexp_unicode_indices.cjs',
+    'test_reflect_is_extensible_proxy.cjs',
     'test_repl_global_descriptors.cjs',
     'test_require_builtin_cache.cjs',
     'test_resizable_arraybuffer.cjs',
