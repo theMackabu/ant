@@ -108,7 +108,7 @@ static void collect_lexical_names(sv_ast_list_t *stmts, bool functions_lexical, 
     } else if (node->type == N_CLASS && node->str && (node->flags & FN_CLASS_DECL)) {
       decl_names_add(lex, node->str, node->len, false);
     } else if (is_function_declaration(node)) {
-      decl_names_add(functions_lexical ? lex : vars, node->str, node->len, true);
+      decl_names_add(functions_lexical ? lex : vars, node->str, node->len, !(node->flags & (FN_ASYNC | FN_GENERATOR)));
     } else if (node->type == N_IMPORT_DECL) {
       for (int j = 0; j < node->args.count; j++) {
         sv_ast_t *spec = node->args.items[j];
