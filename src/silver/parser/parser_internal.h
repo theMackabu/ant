@@ -123,6 +123,7 @@ sv_ast_t *finish_arrow(sv_parser_t *p, sv_ast_t *fn);
 sv_ast_t *parse_func(sv_parser_t *p, bool is_async);
 sv_ast_t *parse_func_decl(sv_parser_t *p, bool is_async);
 sv_ast_t *parse_method_func(sv_parser_t *p, bool is_async, bool is_generator);
+sv_ast_t *parse_property_key(sv_parser_t *p, uint32_t *flags);
 sv_ast_t *parse_yield(sv_parser_t *p);
 
 bool sv_binding_pattern_ok(sv_parser_t *p, const sv_ast_t *node, bool top);

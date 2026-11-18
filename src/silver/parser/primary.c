@@ -591,6 +591,40 @@ bool validate_accessor_params(sv_parser_t *p, sv_ast_t *fn, uint32_t flags) {
   return true;
 }
 
+sv_ast_t *parse_property_key(sv_parser_t *p, uint32_t *flags) {
+  sv_ast_t *key;
+  if (p->lx.st.tok == TOK_LBRACKET) {
+    p->lx.st.consumed = 1;
+    key = parse_with_in(p, parse_assign);
+    expect(p, TOK_RBRACKET);
+    *flags |= FN_COMPUTED;
+  } else if (p->lx.st.tok == TOK_NUMBER) {
+    p->lx.st.consumed = 1;
+    key = mk_num(p, Ant_Value_AsNumberUnchecked(p->lx.st.tval));
+  } else if (p->lx.st.tok == TOK_STRING) {
+    key = mk(N_STRING);
+    sv_ast_set_string(key, sv_lexer_str_literal(&p->lx));
+    key->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
+    p->lx.st.consumed = 1;
+  } else if (p->lx.st.tok == TOK_BIGINT || is_private_ident_like_tok(p->lx.st.tok)) {
+    key = mk_ident_from_tok(p);
+    p->lx.st.consumed = 1;
+  } else {
+    sv_parse_unexpected_token(p);
+    return NULL;
+  }
+  return key;
+}
+
+static bool property_modifier_here(sv_parser_t *p) {
+  uint8_t la = sv_lexer_lookahead(&p->lx);
+  return la != TOK_COLON && la != TOK_LPAREN && la != TOK_COMMA && la != TOK_RBRACE && la != TOK_ASSIGN && la != TOK_EOF;
+}
+
+static bool tok_is_name(sv_parser_t *p, const char *name, size_t len) {
+  return p->lx.st.tok == TOK_IDENTIFIER && p->lx.st.tlen == (ant_offset_t)len && memcmp(tok_str(p), name, len) == 0;
+}
+
 sv_ast_t *parse_object(sv_parser_t *p) {
   p->lx.st.consumed = 1;
   sv_ast_t *n = mk(N_OBJECT);
@@ -601,144 +635,58 @@ sv_ast_t *parse_object(sv_parser_t *p) {
     if (p->lx.st.tok == TOK_REST) {
       p->lx.st.consumed = 1;
       sv_ast_t *spread = mk(N_SPREAD);
-      spread->right = parse_assign(p);
+      spread->right = parse_with_in(p, parse_assign);
       sv_ast_list_push(p->js, &n->args, spread);
-      if (sv_lexer_next(&p->lx) == TOK_COMMA) p->lx.st.consumed = 1;
-      continue;
+      if (sv_lexer_next(&p->lx) == TOK_COMMA) {
+        p->lx.st.consumed = 1;
+        n->flags |= FN_REST_COMMA;
+        continue;
+      }
+      break;
     }
 
-    if (p->lx.st.tok == TOK_LBRACKET) {
-      p->lx.st.consumed = 1;
-      prop->left = parse_assign(p);
-      expect(p, TOK_RBRACKET);
-      prop->flags |= FN_COMPUTED;
-    }
-    else if (p->lx.st.tok == TOK_MUL) {
-      prop->flags |= FN_GENERATOR;
+    uint32_t modifiers = 0;
+    if (p->lx.st.tok == TOK_ASYNC && property_modifier_here(p)) {
+      if (lookahead_crosses_line_terminator(p)) {
+        p->lx.st.consumed = 1;
+        sv_lexer_next(&p->lx);
+        sv_parse_unexpected_token(p);
+        return n;
+      }
+      modifiers |= FN_ASYNC;
       p->lx.st.consumed = 1;
       sv_lexer_next(&p->lx);
+    }
+    if (p->lx.st.tok == TOK_MUL) {
+      modifiers |= FN_GENERATOR;
+      p->lx.st.consumed = 1;
+      sv_lexer_next(&p->lx);
+    }
+    if (!modifiers && (tok_is_name(p, "get", 3) || tok_is_name(p, "set", 3)) && property_modifier_here(p)) {
+      modifiers |= tok_str(p)[0] == 'g' ? FN_GETTER : FN_SETTER;
+      p->lx.st.consumed = 1;
+      sv_lexer_next(&p->lx);
+    }
 
-      if (p->lx.st.tok == TOK_LBRACKET) {
-        p->lx.st.consumed = 1;
-        prop->left = parse_assign(p);
-        expect(p, TOK_RBRACKET);
-        prop->flags |= FN_COMPUTED;
-      } else if (p->lx.st.tok == TOK_NUMBER) {
-        p->lx.st.consumed = 1;
-        prop->left = mk_num(p, Ant_Value_AsNumberUnchecked(p->lx.st.tval));
-      } else if (p->lx.st.tok == TOK_STRING) {
-        prop->left = mk(N_STRING);
-        sv_ast_set_string(prop->left, sv_lexer_str_literal(&p->lx));
-        prop->left->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
-        p->lx.st.consumed = 1;
-      } else {
-        prop->left = mk_ident_from_tok(p);
-        p->lx.st.consumed = 1;
+    uint8_t key_tok = p->lx.st.tok;
+    uint32_t key_flags = 0;
+    prop->left = parse_property_key(p, &key_flags);
+    if (!prop->left) return n;
+    prop->flags |= key_flags;
+
+    if (modifiers) {
+      if (sv_lexer_next(&p->lx) != TOK_LPAREN) {
+        sv_parse_unexpected_token(p);
+        return n;
       }
-
-      prop->right = parse_method_func(p, false, true);
-      prop->right->flags |= FN_GENERATOR | FN_METHOD;
+      prop->flags |= modifiers;
+      prop->right = parse_method_func(p, (modifiers & FN_ASYNC) != 0, (modifiers & FN_GENERATOR) != 0);
+      if (!validate_accessor_params(p, prop->right, prop->flags)) return n;
       prop->right->src_off = prop->src_off;
       sv_ast_list_push(p->js, &n->args, prop);
       if (sv_lexer_next(&p->lx) == TOK_COMMA) p->lx.st.consumed = 1;
+      else break;
       continue;
-    }
-    else if (
-      (p->lx.st.tlen == 3 && memcmp(tok_str(p), "get", 3) == 0) ||
-      (p->lx.st.tlen == 3 && memcmp(tok_str(p), "set", 3) == 0)) {
-      uint8_t gs = tok_str(p)[0];
-      uint8_t la = sv_lexer_lookahead(&p->lx);
-      if (la != TOK_COLON && la != TOK_LPAREN && la != TOK_COMMA &&
-          la != TOK_RBRACE) {
-        p->lx.st.consumed = 1;
-        prop->flags |= (gs == 'g') ? FN_GETTER : FN_SETTER;
-        sv_lexer_next(&p->lx);
-
-        if (p->lx.st.tok == TOK_LBRACKET) {
-          p->lx.st.consumed = 1;
-          prop->left = parse_assign(p);
-          expect(p, TOK_RBRACKET);
-          prop->flags |= FN_COMPUTED;
-        } else if (p->lx.st.tok == TOK_NUMBER) {
-          p->lx.st.consumed = 1;
-          prop->left = mk_num(p, Ant_Value_AsNumberUnchecked(p->lx.st.tval));
-        } else if (p->lx.st.tok == TOK_STRING) {
-          prop->left = mk(N_STRING);
-          sv_ast_set_string(prop->left, sv_lexer_str_literal(&p->lx));
-          prop->left->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
-          p->lx.st.consumed = 1;
-        } else {
-          prop->left = mk_ident_from_tok(p);
-          p->lx.st.consumed = 1;
-        }
-
-        prop->right = parse_func(p, false);
-        if (!validate_accessor_params(p, prop->right, prop->flags)) return n;
-        prop->right->flags |= FN_METHOD;
-        prop->right->src_off = prop->src_off;
-        sv_ast_list_push(p->js, &n->args, prop);
-        if (sv_lexer_next(&p->lx) == TOK_COMMA) p->lx.st.consumed = 1;
-        continue;
-      }
-      prop->left = mk_ident_from_tok(p);
-      p->lx.st.consumed = 1;
-    }
-    else if (p->lx.st.tok == TOK_ASYNC) {
-      uint8_t la = sv_lexer_lookahead(&p->lx);
-      if (la != TOK_COLON && la != TOK_LPAREN && la != TOK_COMMA && la != TOK_RBRACE) {
-        p->lx.st.consumed = 1;
-        prop->flags |= FN_ASYNC;
-        sv_lexer_next(&p->lx);
-
-        if (p->lx.st.tok == TOK_MUL) {
-          prop->flags |= FN_GENERATOR;
-          p->lx.st.consumed = 1;
-          sv_lexer_next(&p->lx);
-        }
-
-        if (p->lx.st.tok == TOK_LBRACKET) {
-          p->lx.st.consumed = 1;
-          prop->left = parse_assign(p);
-          expect(p, TOK_RBRACKET);
-          prop->flags |= FN_COMPUTED;
-        } else if (p->lx.st.tok == TOK_NUMBER) {
-          p->lx.st.consumed = 1;
-          prop->left = mk_num(p, Ant_Value_AsNumberUnchecked(p->lx.st.tval));
-        } else if (p->lx.st.tok == TOK_STRING) {
-          prop->left = mk(N_STRING);
-          sv_ast_set_string(prop->left, sv_lexer_str_literal(&p->lx));
-          prop->left->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
-          p->lx.st.consumed = 1;
-        } else {
-          prop->left = mk_ident_from_tok(p);
-          p->lx.st.consumed = 1;
-        }
-
-        prop->right = parse_method_func(p, true, (prop->flags & FN_GENERATOR) != 0);
-        prop->right->flags |= FN_ASYNC | FN_METHOD;
-        if (prop->flags & FN_GENERATOR)
-          prop->right->flags |= FN_GENERATOR;
-        prop->right->src_off = prop->src_off;
-        sv_ast_list_push(p->js, &n->args, prop);
-        if (sv_lexer_next(&p->lx) == TOK_COMMA) p->lx.st.consumed = 1;
-        continue;
-      }
-      prop->left = mk_ident_from_tok(p);
-      p->lx.st.consumed = 1;
-    }
-    else if (p->lx.st.tok == TOK_NUMBER) {
-      p->lx.st.consumed = 1;
-      prop->left = mk_num(p, Ant_Value_AsNumberUnchecked(p->lx.st.tval));
-    }
-    else if (p->lx.st.tok == TOK_STRING) {
-      prop->left = mk(N_STRING);
-      sv_ast_set_string(prop->left, sv_lexer_str_literal(&p->lx));
-      prop->left->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
-      p->lx.st.consumed = 1;
-    }
-    else {
-      prop->left = mk_ident_from_tok(p);
-      p->lx.st.consumed = 1;
     }
 
     if (sv_lexer_next(&p->lx) == TOK_COLON) {
@@ -748,12 +696,17 @@ sv_ast_t *parse_object(sv_parser_t *p) {
         if (proto_set) n->flags |= FN_PATTERN_ONLY;
         proto_set = true;
       }
-      prop->right = parse_assign(p);
+      prop->right = parse_with_in(p, parse_assign);
     } else if (p->lx.st.tok == TOK_LPAREN) {
       prop->right = parse_method_func(p, false, false);
       prop->right->src_off = prop->src_off;
     } else {
-      if (prop->left->type == N_IDENT && sv_reject_ident_name(p, prop->left->str, prop->left->len)) return n;
+      bool is_name = prop->left->type == N_IDENT && !(prop->flags & FN_COMPUTED) && key_tok != TOK_BIGINT;
+      if (!is_name || !ident_tok_here_as(p, key_tok)) {
+        SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected token in shorthand property");
+        return n;
+      }
+      if (sv_reject_ident_name(p, prop->left->str, prop->left->len)) return n;
       prop->right = mk_ident(p, prop->left->str, prop->left->len);
       if (sv_lexer_next(&p->lx) == TOK_ASSIGN) {
         p->lx.st.consumed = 1;
@@ -761,7 +714,7 @@ sv_ast_t *parse_object(sv_parser_t *p) {
         sv_ast_t *def = mk(N_ASSIGN);
         def->op = TOK_ASSIGN;
         def->left = prop->right;
-        def->right = parse_assign(p);
+        def->right = parse_with_in(p, parse_assign);
         prop->right = def;
       }
     }
