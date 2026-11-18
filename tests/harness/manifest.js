@@ -391,6 +391,7 @@ export function targets() {
     'test_realm_basics.cjs',
     'test_realm_builtins.cjs',
     'test_realm_calls.cjs',
+    'test_proxy_deep_chains.cjs',
     'test_realm_intrinsics.cjs',
     'test_realm_protectors.cjs',
     'test_readable_read_size.cjs',

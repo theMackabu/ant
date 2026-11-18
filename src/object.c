@@ -674,41 +674,16 @@ bool js_obj_extra_reserve(ant_object_t *obj, uint8_t capacity) {
 }
 
 bool js_is_constructor(ant_value_t value) {
-  ant_value_t slow = value;
-  ant_value_t fast = value;
-
-  while (true) {
-    uint8_t t = vtype(slow);
-    if (t == kTypeFunction) {
-      ant_object_t *obj = js_obj_ptr(js_func_obj(slow));
-      return obj && obj->flags.is_constructor;
-    }
-    if (t == kTypeBuiltin) {
-      const ant_cfunc_meta_t *meta = js_as_cfunc_meta(slow);
-      return meta && (meta->flags & CFUNC_IS_CONSTRUCTOR) != 0;
-    }
-    if (t != kTypeObject) return false;
-
-    ant_object_t *obj = js_obj_ptr(slow);
-    if (!obj) return false;
-    if (obj->flags.is_constructor) return true;
-    if (!obj->flags.is_exotic) return false;
-
-    ant_proxy_state_t *data = get_proxy_data(slow);
-    if (!data) return false;
-    slow = data->target;
-
-    for (int i = 0; i < 2; i++) {
-      if (vtype(fast) != kTypeObject) { fast = Ant_Value_Null; break; }
-      ant_object_t *fobj = js_obj_ptr(fast);
-      if (!fobj || !fobj->flags.is_exotic) { fast = Ant_Value_Null; break; }
-      ant_proxy_state_t *fdata = get_proxy_data(fast);
-      if (!fdata) { fast = Ant_Value_Null; break; }
-      fast = fdata->target;
-    }
-
-    if (same_object_identity(slow, fast)) return false;
+  uint8_t t = vtype(value);
+  if (t == kTypeFunction) return ((ant_object_t *)vptr(js_func_obj(value)))->flags.is_constructor;
+  if (t == kTypeBuiltin) {
+    const ant_cfunc_meta_t *meta = js_as_cfunc_meta(value);
+    return meta && (meta->flags & CFUNC_IS_CONSTRUCTOR) != 0;
   }
+  if (t != kTypeObject) return false;
+
+  ant_object_t *obj = js_obj_ptr(value);
+  return obj && obj->flags.is_constructor;
 }
 
 void js_set_getter(ant_value_t obj, js_getter_fn getter) {
