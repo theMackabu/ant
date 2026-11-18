@@ -110,6 +110,7 @@ export function targets() {
     'test_cli_stdin_script.cjs',
     'test_clone_error_own_props.mjs',
     'test_clone_length_tracking_views.mjs',
+    'test_class_element_names.cjs',
     'test_code_unit_minor.cjs',
     'test_collections_args_receivers.cjs',
     'test_commonjs_pending_exception.cjs',

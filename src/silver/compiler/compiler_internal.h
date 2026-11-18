@@ -346,7 +346,7 @@ static inline bool node_needs_inferred_function_name(const sv_ast_t *node) {
 static inline const sv_ast_t *field_static_key(const sv_ast_t *m) {
   const sv_ast_t *key = m->left;
   if ((m->flags & FN_COMPUTED) || !key) return NULL;
-  return key->type == N_IDENT || key->type == N_STRING ? key : NULL;
+  return key->type == N_IDENT || key->type == N_STRING || key->type == N_NUMBER ? key : NULL;
 }
 
 static inline uint8_t field_define_flags(const sv_ast_t *m) {
@@ -355,7 +355,10 @@ static inline uint8_t field_define_flags(const sv_ast_t *m) {
 }
 
 static inline void compile_field_initializer(sv_compiler_t *c, sv_ast_t *expr, const sv_ast_t *key) {
-  if (!key || !key->str) compile_expr(c, expr);
+  char buf[SV_LITERAL_NUM_KEY_BUF_SIZE];
+  if (key && key->type == N_NUMBER)
+    compile_expr_with_inferred_name(c, expr, buf, (uint32_t)literal_num_key(key->num, buf, sizeof(buf)));
+  else if (!key || !key->str) compile_expr(c, expr);
   else if (key->type != N_STRING && is_quoted_ident_key(key)) compile_expr_with_inferred_name(c, expr, key->str + 1, key->len - 2);
   else compile_expr_with_inferred_name(c, expr, key->str, key->len);
 }
