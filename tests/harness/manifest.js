@@ -384,6 +384,7 @@ export function targets() {
     'test_opt_named_storage.cjs',
     'test_opt_negative_infinity.cjs',
     'test_opt_ops.cjs',
+    'test_opt_osr_handler_boxes.cjs',
     'test_opt_osr_nested_polling.cjs',
     'test_opt_polymorphic_methods.cjs',
     'test_opt_handler_resume_depth.cjs',

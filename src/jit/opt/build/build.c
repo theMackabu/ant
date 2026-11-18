@@ -579,8 +579,9 @@ static void opt_find_loop_captures(opt_builder_t *b, const int32_t *loop_of_head
     seen[from] = true;
     while (top) {
       uint32_t bi = pending[--top];
-      for (uint32_t k = 0; k < b->blocks[bi].succ_count; k++) {
-        uint32_t next = b->blocks[bi].succ[k];
+      uint32_t edges = b->blocks[bi].succ_count + (b->blocks[bi].handler != UINT32_MAX);
+      for (uint32_t k = 0; k < edges; k++) {
+        uint32_t next = k < b->blocks[bi].succ_count ? b->blocks[bi].succ[k] : b->blocks[bi].handler;
         if (b->blocks[next].is_header && loop_of_header[next] >= 0) {
           opt_loop_t *loop = &b->loops[loop_of_header[next]];
           for (int u = 0; u < child->upvalue_count; u++)
