@@ -521,6 +521,7 @@ export function targets() {
     'test_structured_clone_shapes.cjs',
     'test_super_forward.cjs',
     'test_symbol_set_semantics.cjs',
+    'test_super_construct_paths.cjs',
     'test_syntax.cjs',
     'test_template_self_append.cjs',
     'test_super_property_assign.cjs',
