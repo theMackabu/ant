@@ -700,7 +700,10 @@ void jit_emit_properties(jit_compile_t *c) {
       MIR_reg_t fn_val = vstack_pop(&c->vs);
       MIR_reg_t key = vstack_pop(&c->vs);
       MIR_reg_t obj = vstack_top(&c->vs);
-      sv_asm_append(a, MIR_new_call_insn(c->ctx, 7, MIR_new_ref_op(c->ctx, c->define_method_comp_proto), MIR_new_ref_op(c->ctx, c->imp_define_method_comp), MIR_new_reg_op(c->ctx, c->r_js), MIR_new_reg_op(c->ctx, obj), MIR_new_reg_op(c->ctx, key), MIR_new_reg_op(c->ctx, fn_val), MIR_new_int_op(c->ctx, (int64_t)flags)));
+      MIR_reg_t defined = vstack_push(&c->vs);
+      sv_asm_append(a, MIR_new_call_insn(c->ctx, 8, MIR_new_ref_op(c->ctx, c->define_method_comp_proto), MIR_new_ref_op(c->ctx, c->imp_define_method_comp), MIR_new_reg_op(c->ctx, defined), MIR_new_reg_op(c->ctx, c->r_js), MIR_new_reg_op(c->ctx, obj), MIR_new_reg_op(c->ctx, key), MIR_new_reg_op(c->ctx, fn_val), MIR_new_int_op(c->ctx, (int64_t)flags)));
+      jit_emit_throw_if_error(c, defined);
+      vstack_pop(&c->vs);
       break;
     }
 

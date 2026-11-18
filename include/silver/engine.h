@@ -26,6 +26,7 @@ typedef enum {
   SV_DEFINE_METHOD_SETTER   = 1u << 1,
   SV_DEFINE_METHOD_SET_NAME = 1u << 2,
   SV_DEFINE_METHOD_NON_ENUM = 1u << 3,
+  SV_DEFINE_METHOD_FIELD    = 1u << 4,
 } sv_define_method_flags_t;
 
 typedef enum {
