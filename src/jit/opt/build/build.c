@@ -2485,7 +2485,7 @@ static opt_flow_t opt_build_polymorphic_field(opt_builder_t *b, opt_field_plan_t
 
   opt_frame_t before = opt_frame_clone(b, &b->frame);
   ir_shape_case_t switch_cases[OPT_MAX_FIELD_SHAPES + 2 * OPT_MAX_ADDS + 1];
-  ir_block_id_t ends[OPT_MAX_FIELD_SHAPES + OPT_MAX_ADDS + 1], slow[2 + 3 * OPT_MAX_FIELD_SHAPES + OPT_MAX_ADDS];
+  ir_block_id_t ends[OPT_MAX_FIELD_SHAPES + OPT_MAX_ADDS + 1], slow[2 + 2 * OPT_MAX_PROTOTYPE_DEPTH * OPT_MAX_FIELD_SHAPES + OPT_MAX_ADDS];
   ir_block_id_t runtime[OPT_MAX_ADDS];
   ir_node_id_t loaded[OPT_MAX_FIELD_SHAPES + 1];
   uint32_t slow_count = 0;

@@ -22,4 +22,43 @@ const N = 8000;
   }
 }
 
+{
+  class D0 {}
+  D0.prototype.x = 7;
+  let Leaf = D0;
+  const protos = [D0.prototype];
+  for (let i = 1; i < 8; i++) {
+    Leaf = class extends Leaf {};
+    protos.push(Leaf.prototype);
+  }
+  const SHAPES = 14;
+  const objs = [];
+  for (let s = 0; s < SHAPES; s++) {
+    const o = new Leaf();
+    for (let j = 0; j < s; j++) o['p' + j] = j;
+    objs.push(o);
+  }
+  const read = (o) => o.x;
+  for (let round = 1; round <= SHAPES; round++)
+    for (let i = 0; i < N; i++) assert.strictEqual(read(objs[i % round]), 7, `widen ${round} ${i}`);
+  for (let i = 0; i < 4 * N; i++) {
+    if (i === N) D0.prototype.x = 11;
+    if (i === 2 * N) protos[4].x = 13;
+    if (i === 3 * N) objs[3].x = 17;
+    const expected = i < N ? 7 : i < 2 * N ? 11 : i >= 3 * N && i % SHAPES === 3 ? 17 : 13;
+    assert.strictEqual(read(objs[i % SHAPES]), expected, `wide ${i}`);
+  }
+}
+
+if (!process.env.ANT_DEEP_PROTO_CHILD) {
+  const { spawnSync } = require('node:child_process');
+  const child = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, ANT_DEEP_PROTO_CHILD: '1', ANT_DEBUG: 'dump/vm:op-warn' },
+    encoding: 'utf8',
+  });
+  if (child.error) throw child.error;
+  assert.strictEqual(child.status, 0, child.stderr);
+  assert.ok(!child.stderr.includes('jit: opt rejected'), child.stderr.split('\n').filter((line) => line.includes('opt rejected')).join('\n'));
+}
+
 console.log('ok');
