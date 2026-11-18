@@ -396,6 +396,7 @@ export function targets() {
     'test_readable_read_size.cjs',
     'test_reflect_set_result.cjs',
     'test_regexp_cache_admission.cjs',
+    'test_proxy_inspect.cjs',
     'test_regexp_exec_discard.cjs',
     'test_regexp_exec_position_hints.cjs',
     'test_proxy_nested_apply.cjs',

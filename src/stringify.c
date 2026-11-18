@@ -5,6 +5,7 @@
 #include <stdlib.h>
 
 #include "ant.h"
+#include "modules/proxy.h"
 #include "internal.h"
 #include "stringify.h"
 #include "builder.h"
@@ -728,11 +729,47 @@ static ant_value_t strobj_call_custom_inspect(ant_t *js, ant_value_t obj) {
   return result;
 }
 
+static size_t strobj_circular(char *buf, size_t len, int ref) {
+  return ref > 0 ? (size_t)snprintf(buf, len, "[Circular *%d]", ref) : cpy(buf, len, "[Circular]", 10);
+}
+
+static size_t strobj_proxy_pair(ant_t *js, ant_value_t obj, const ant_proxy_state_t *proxy, char *buf, size_t len) {
+  push_stringify(js, obj);
+  if (stringify_too_deep(js)) {
+    pop_stringify(js);
+    return cpy(buf, len, "Proxy [Array]", 13);
+  }
+  
+  size_t n = cpy(buf, len, "Proxy [ ", 8);
+  n += tostr(js, proxy->trap_target, buf + n, Ant_Remaining(n, len));
+  n += cpy(buf + n, Ant_Remaining(n, len), ", ", 2);
+  n += tostr(js, proxy->handler, buf + n, Ant_Remaining(n, len));
+  n += cpy(buf + n, Ant_Remaining(n, len), " ]", 2);
+  
+  pop_stringify(js);
+  return n;
+}
+
+static size_t strobj_proxy(ant_t *js, ant_value_t obj, const ant_proxy_state_t *proxy, char *buf, size_t len) {
+  if (proxy->revoked) return cpy(buf, len, "<Revoked Proxy>", 15);
+  if (js->stringify && (js->stringify->flags & ANT_INSPECT_SHOW_PROXY)) return strobj_proxy_pair(js, obj, proxy, buf, len);
+  
+  int ref = get_circular_ref(js, proxy->target);
+  if (ref) return strobj_circular(buf, len, ref);
+  
+  size_t n = cpy(buf, len, "Proxy(", 6);
+  n += tostr(js, proxy->trap_target, buf + n, Ant_Remaining(n, len));
+  return n + cpy(buf + n, Ant_Remaining(n, len), ")", 1);
+}
+
 static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
   if (js_proxy_is_host(obj)) return strobj_host_proxy(js, obj, buf, len);
   
+  const ant_proxy_state_t *proxy = is_proxy(obj) ? get_proxy_data(obj) : NULL;
+  if (proxy) return strobj_proxy(js, obj, proxy, buf, len);
+  
   int ref = get_circular_ref(js, obj);
-  if (ref) return ref > 0 ? (size_t)snprintf(buf, len, "[Circular *%d]", ref) : cpy(buf, len, "[Circular]", 10);
+  if (ref) return strobj_circular(buf, len, ref);
   
   push_stringify(js, obj);
   
