@@ -363,6 +363,7 @@ export function targets() {
     'test_object_proto_this_coercion.cjs',
     'test_object_site_lookup.cjs',
     'test_object_spread_sources.cjs',
+    'test_object_statics_promise_generator.cjs',
     'test_object_values_entries_semantics.cjs',
     'test_opt_alloc.cjs',
     'test_opt_arrays.cjs',

@@ -136,24 +136,22 @@ static ant_value_t builtin_object_setPrototypeOf(ant_params_t) {
   ant_value_t proto = args[1];
   
   uint8_t t = vtype(obj);
+  if (t == kTypeUndefined || t == kTypeNull)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Object.setPrototypeOf called on null or undefined");
+
   if (t == kTypeBuiltin) {
     obj = js_cfunc_promote(js, obj);
-    t = kTypeFunction;
-  }
-
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) {
-    return js_mkerr(js, "Object.setPrototypeOf: first argument must be an object");
+    if (is_err(obj)) return obj;
   }
   
-  uint8_t pt = vtype(proto);
-  if (pt == kTypeBuiltin) {
+  if (vtype(proto) == kTypeBuiltin) {
     proto = js_cfunc_promote(js, proto);
-    pt = kTypeFunction;
+    if (is_err(proto)) return proto;
   }
 
-  if (pt != kTypeObject && pt != kTypeArray && pt != kTypeFunction && pt != kTypeNull) {
-    return js_mkerr(js, "Object.setPrototypeOf: prototype must be an object or null");
-  }
+  if (!is_object_type(proto) && vtype(proto) != kTypeNull)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Object prototype may only be an Object or null");
+  if (!is_object_type(obj)) return obj;
   
   if (is_proxy(obj)) {
     ant_value_t result = proxy_set_prototype_of(js, obj, proto);
@@ -174,7 +172,8 @@ static ant_value_t builtin_proto_getter(ant_params_t) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot read property '__proto__' of %s", typestr(t));
   }
   
-  if (t == kTypeObject || t == kTypeArray || t == kTypeFunction) {
+  if (is_object_type(call_this)) {
+    if (is_proxy(call_this)) return proxy_get_prototype_of(js, call_this);
     return js_cfunc_demote_promoted(js, get_proto(js, call_this));
   }
   
@@ -188,10 +187,7 @@ static ant_value_t builtin_proto_setter(ant_params_t) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot set property '__proto__' of %s", typestr(t));
   }
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) {
-    return Ant_Value_Undefined;
-  }
-  
+  if (!is_object_type(call_this)) return Ant_Value_Undefined;
   if (nargs == 0) return Ant_Value_Undefined;
   
   ant_value_t proto = args[0];
@@ -456,8 +452,8 @@ static ant_value_t builtin_object_create(ant_params_t) {
     pt = kTypeFunction;
   }
   
-  if (pt != kTypeObject && pt != kTypeArray && pt != kTypeFunction && pt != kTypeNull)
-    return js_mkerr(js, "Object.create: prototype must be an object or null");
+  if (!is_object_type(proto) && pt != kTypeNull)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Object prototype may only be an Object or null");
 
   ant_value_t obj = js_mkobj_with_proto(js, proto);
   if (is_err(obj)) return obj;
@@ -573,7 +569,7 @@ static ant_value_t builtin_object_defineProperty(ant_params_t) {
 static ant_value_t builtin_object_defineProperties(ant_params_t) {
   ant_value_t obj = nargs >= 1 ? args[0] : Ant_Value_Undefined;
   uint8_t t = vtype(obj);
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction)
+  if (!((1u << t) & T_OBJECT_MASK))
     return js_mkerr(js, "Object.defineProperties called on non-object");
   return object_define_properties(js, obj, nargs >= 2 ? args[1] : Ant_Value_Undefined);
 }
@@ -588,7 +584,7 @@ static ant_value_t builtin_object_assign(ant_params_t) {
     return js_mkerr(js, "Cannot convert undefined or null to object");
   }
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) {
+  if (!((1u << t) & T_OBJECT_MASK)) {
     target = Ant_Object_CreateBare(js);
   }
   
@@ -660,7 +656,7 @@ ant_value_t builtin_object_freeze(ant_params_t) {
   if (is_err(target)) return target;
   uint8_t t = vtype(target);
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return obj;
+  if (!((1u << t) & T_OBJECT_MASK)) return obj;
   ant_value_t as_obj = js_as_obj(target);
   if (is_proxy(as_obj)) return proxy_set_integrity_level(js, as_obj, true);
 
@@ -698,7 +694,7 @@ static ant_value_t builtin_object_isFrozen(ant_params_t) {
   ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) {
+  if (!((1u << t) & T_OBJECT_MASK)) {
     if (t != kTypeBuiltin) return Ant_Value_True;
     obj = object_integrity_view(js, obj);
     if (vtype(obj) == kTypeBuiltin) return Ant_Value_False;
@@ -718,7 +714,7 @@ static ant_value_t builtin_object_seal(ant_params_t) {
   if (is_err(target)) return target;
   uint8_t t = vtype(target);
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return obj;
+  if (!((1u << t) & T_OBJECT_MASK)) return obj;
   ant_value_t as_obj = js_as_obj(target);
   if (is_proxy(as_obj)) return proxy_set_integrity_level(js, as_obj, false);
   
@@ -755,7 +751,7 @@ static ant_value_t builtin_object_isSealed(ant_params_t) {
   ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) {
+  if (!((1u << t) & T_OBJECT_MASK)) {
     if (t != kTypeBuiltin) return Ant_Value_True;
     obj = object_integrity_view(js, obj);
     if (vtype(obj) == kTypeBuiltin) return Ant_Value_False;
@@ -886,7 +882,7 @@ static ant_value_t object_get_own_property_descriptor_keyed(
   bool string_exotic_length = false;
   bool has_string_exotic = false;
 
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) {
+  if (!((1u << t) & T_OBJECT_MASK)) {
     has_string_exotic = !is_sym && js_try_get_string_own_exotic(
       js, obj, key_str, (size_t)key_len, &string_exotic_value, &string_exotic_length
     );
@@ -1137,7 +1133,7 @@ static ant_value_t builtin_object_getOwnPropertySymbols(ant_params_t) {
   }
   
   uint8_t t = vtype(obj);
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return Ant_Array_Create(js);
+  if (!((1u << t) & T_OBJECT_MASK)) return Ant_Array_Create(js);
   if (t == kTypeFunction) obj = js_func_obj(obj);
   if (is_proxy(obj)) return proxy_own_symbols(js, obj);
 
@@ -1206,13 +1202,13 @@ static ant_value_t builtin_object_getOwnPropertyDescriptors(ant_params_t) {
   ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) {
+  if (!((1u << t) & T_OBJECT_MASK)) {
     obj = builtin_Object(js, &obj, 1, Ant_Value_Undefined, call_this, call_func);
     if (is_err(obj)) return obj;
     t = vtype(obj);
   }
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return result;
+  if (!((1u << t) & T_OBJECT_MASK)) return result;
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
   if (__builtin_expect(ptr && ptr->flags.is_exotic && is_proxy(js_as_obj(obj)), 0)) {
     GC_ROOT_SAVE(mark, js);
@@ -1246,7 +1242,7 @@ static ant_value_t builtin_object_isExtensible(ant_params_t) {
   ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) {
+  if (!((1u << t) & T_OBJECT_MASK)) {
     if (t != kTypeBuiltin) return Ant_Value_False;
     obj = object_integrity_view(js, obj);
     if (vtype(obj) == kTypeBuiltin) return Ant_Value_True;
@@ -1269,7 +1265,7 @@ static ant_value_t builtin_object_preventExtensions(ant_params_t) {
   if (is_err(target)) return target;
   uint8_t t = vtype(target);
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return obj;
+  if (!((1u << t) & T_OBJECT_MASK)) return obj;
   ant_value_t as_obj = js_as_obj(target);
   if (is_proxy(as_obj)) {
     ant_value_t result = proxy_prevent_extensions(js, as_obj);
