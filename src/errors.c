@@ -580,6 +580,14 @@ static ant_value_t builtin_error_captureStackTrace(ant_params_t) {
   ant_value_t target = args[0];
   ant_value_t above = nargs > 1 ? args[1] : Ant_Value_Undefined;
   
+  if (is_proxy(js_as_obj(target))) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid argument");
+  ant_object_t *target_ptr = js_obj_ptr(js_as_obj(target));
+  prop_meta_t meta;
+  if (target_ptr && !target_ptr->flags.extensible)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot define property stack, object is not extensible");
+  if (target_ptr && lookup_string_prop_meta(js, js_as_obj(target), "stack", 5, &meta) && !meta.configurable)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot redefine property: stack");
+  
   if (vtype(above) == kTypeBuiltin && js_as_cfunc(above) == builtin_error_captureStackTrace) above = Ant_Value_Undefined;
   ant_value_t error_ctor = lkp_val(js, js_glob(js), "Error", 5);
   ant_value_t prep = Ant_Value_Undefined;
