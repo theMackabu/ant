@@ -640,13 +640,7 @@ static ant_value_t proxy_get_from_target(ant_t *js, ant_value_t target, const ch
 }
 
 static ant_value_t proxy_has_on_target(ant_t *js, ant_value_t target, const char *key, size_t key_len) {
-  if (vtype(target) == kTypeArray) {
-    if (is_length_key(key, key_len) && real_array_obj_ptr(target)) return Ant_Value_True;
-    unsigned long idx = 0;
-    if (parse_array_index(key, key_len, get_array_length(js, target), &idx))
-      return Ant_Value_FromBool(arr_has(js, target, (ant_offset_t)idx));
-  }
-  return Ant_Value_FromBool(lkp_proto(js, target, key, key_len).obj);
+  return js_in_str(js, target, key, key_len);
 }
 
 ant_value_t proxy_get_with_receiver(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t receiver) {
@@ -1209,7 +1203,7 @@ ant_value_t proxy_has_val(ant_t *js, ant_value_t proxy, ant_value_t key_val) {
   ant_value_t has_trap = proxy_get_method(js, handler, "has");
   if (is_err(has_trap)) return has_trap;
   if (vtype(has_trap) == kTypeUndefined) return key.is_sym
-    ? Ant_Value_FromBool(lkp_sym_proto(js, target, key.sym).obj)
+    ? do_in(js, prop_key, target)
     : proxy_has_on_target(js, target, key.str, key.len);
 
   ant_value_t args[2] = { target, prop_key };

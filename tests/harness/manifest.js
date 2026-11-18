@@ -413,6 +413,7 @@ export function targets() {
     'test_regexp_replace_callback_recompile.cjs',
     'test_regexp_required_literal.cjs',
     'test_regexp_result_batch.cjs',
+    'test_proxy_trapless_has.cjs',
     'test_regexp_set_ops_group_names.cjs',
     'test_regexp_string_compat.cjs',
     'test_regexp_syntax_errors.cjs',
