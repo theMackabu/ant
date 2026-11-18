@@ -314,6 +314,10 @@ ant_value_t js_get_then_property(ant_t *js, ant_value_t value) {
   return then;
 }
 
+static inline bool object_is_exotic(ant_value_t obj) {
+  return vtype(obj) == kTypeObject && ((const ant_object_t *)vptr(obj))->flags.is_exotic;
+}
+
 bool js_try_get_sym_with_receiver(
   ant_t *js, ant_value_t obj, ant_value_t sym,
   ant_value_t receiver, ant_value_t *out
@@ -338,17 +342,17 @@ bool js_try_get_sym_with_receiver(
     } else return false;
   } else obj = js_as_obj(obj);
 
-  if (is_proxy(obj)) {
-    *out = proxy_get_val(js, obj, sym);
-    return true;
-  }
-
   ant_value_t cur = obj;
   proto_overflow_guard_t guard;
   proto_overflow_guard_init(&guard);
   
   while (is_object_type(cur)) {
     ant_value_t cur_obj = js_as_obj(cur);
+    if (__builtin_expect(object_is_exotic(cur_obj), 0) && is_proxy(cur_obj)) {
+      *out = proxy_get_val_with_receiver(js, cur_obj, sym, receiver);
+      return true;
+    }
+    
     ant_prop_loc_t off = lkp_sym(cur_obj, sym_off);
     if (off.obj) {
       const ant_shape_prop_t *meta = prop_shape_meta(off);
@@ -598,8 +602,8 @@ ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t recei
   if (!is_object_type(super_obj)) return Ant_Value_Undefined;
 
   size_t key_len = strlen(name);
-  if (is_proxy(super_obj)) return proxy_get(js, super_obj, name, key_len);
-
+  if (is_proxy(super_obj)) return proxy_get_with_receiver(js, super_obj, name, key_len, receiver);
+  
   bool string_own_key = is_length_key(name, key_len) || (name[0] >= '0' && name[0] <= '9');
   const char *key_intern = intern_string(js, name, key_len);
   if (!key_intern) return Ant_Value_Undefined;
@@ -611,6 +615,9 @@ ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t recei
     ant_value_t cur_obj = js_as_obj(cur);
     ant_object_t *cur_ptr = js_obj_ptr(cur_obj);
     bool handled = false;
+    
+    if (cur_ptr && cur_ptr->flags.is_exotic && is_proxy(cur_obj)) return proxy_get_with_receiver(js, cur_obj, name, key_len, receiver);
+    
     ant_value_t string_own;
     bool string_wrapper = string_own_key && cur_ptr && cur_ptr->extra_slots && vtype(js_string_wrapper_value(cur_obj)) == kTypeString;
     if (string_wrapper && js_try_get_string_own_exotic(js, cur_obj, name, key_len, &string_own, NULL)) return string_own;

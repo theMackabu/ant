@@ -1078,7 +1078,7 @@ ant_value_t proxy_delete(ant_t *js, ant_value_t proxy, const char *key, size_t k
   return js_delete_prop_ordinary(js, target, key, key_len);
 }
 
-ant_value_t proxy_get_val(ant_t *js, ant_value_t proxy, ant_value_t key_val) {
+ant_value_t proxy_get_val_with_receiver(ant_t *js, ant_value_t proxy, ant_value_t key_val, ant_value_t receiver) {
   if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data) return Ant_Value_Undefined;
@@ -1097,14 +1097,18 @@ ant_value_t proxy_get_val(ant_t *js, ant_value_t proxy, ant_value_t key_val) {
   if (is_err(get_trap)) return get_trap;
 
   if (vtype(get_trap) == kTypeUndefined) return key.is_sym
-    ? js_get_sym_with_receiver(js, target, prop_key, proxy)
-    : proxy_get_from_target(js, target, key.str, key.len, proxy);
+    ? js_get_sym_with_receiver(js, target, prop_key, receiver)
+    : proxy_get_from_target(js, target, key.str, key.len, receiver);
 
-  ant_value_t args[3] = { target, prop_key, proxy };
+  ant_value_t args[3] = { target, prop_key, receiver };
   ant_value_t result = proxy_call_trap(js, data, get_trap, args, 3);
   if (is_err(result)) return result;
 
   return proxy_check_get(js, target, key, result);
+}
+
+ant_value_t proxy_get_val(ant_t *js, ant_value_t proxy, ant_value_t key_val) {
+  return proxy_get_val_with_receiver(js, proxy, key_val, proxy);
 }
 
 ant_value_t proxy_get_prototype_of(ant_t *js, ant_value_t proxy) {

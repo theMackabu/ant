@@ -477,6 +477,7 @@ export function targets() {
     'test_timer_fired_timeout_gc.cjs',
     'test_timer_handle.cjs',
     'test_timer_stale_loop_time.cjs',
+    'test_super_proxy_receiver.cjs',
     'test_tty_error_boundaries.cjs',
     'test_typedarray_bigint_coercion.cjs',
     'test_typedarray_coercion_detach.cjs',
