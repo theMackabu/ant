@@ -223,6 +223,7 @@ export function targets() {
     'test_eval_arguments_class_initializers.cjs',
     'test_headers_foreach_live.cjs',
     'test_headers_sort_order.cjs',
+    'test_eval_closure_scopes.cjs',
     'test_ic_minor_aba.cjs',
     'test_ic_read_differential.cjs',
     'test_immediate_handle.cjs',

@@ -385,6 +385,7 @@ void hoist_lexical_pattern(sv_compiler_t *c, sv_ast_t *pat,
       }
       if (declare_spilled(c, pat->str, pat->len, is_const, false)) break;
       int local = ensure_local_at_depth(c, pat->str, pat->len, is_const, c->scope_depth);
+      if (!(c->locals[local].eval_flags & SV_EVAL_BIND_LEXICAL)) c->eval_scope_shareable = false;
       c->locals[local].eval_flags |= SV_EVAL_BIND_LEXICAL;
       break;
     }
@@ -588,6 +589,7 @@ void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
     ) {
       int lb = c->local_count;
       int class_local = ensure_local_at_depth(c, decl_node->str, decl_node->len, false, c->scope_depth);
+      if (!(c->locals[class_local].eval_flags & SV_EVAL_BIND_LEXICAL)) c->eval_scope_shareable = false;
       c->locals[class_local].eval_flags |= SV_EVAL_BIND_LEXICAL;
       if (c->local_count > lb) {
         c->locals[c->local_count - 1].is_tdz = true;
@@ -614,6 +616,7 @@ void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
           declared = true;
         }
         if (declared) c->locals[local].eval_flags |= c->scope_depth > 0 ? SV_EVAL_BIND_LEXICAL : 0;
+        c->eval_scope_shareable = false;
       }
       if (node->type == N_EXPORT) {
         if (node->flags & EX_DEFAULT)

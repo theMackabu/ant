@@ -432,6 +432,7 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
       
       compile_stmt(c, node->body);
       c->with_depth--;
+      c->eval_scope_shareable = false;
       end_scope(c);
       break;
     }
@@ -485,6 +486,7 @@ void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
         emit_spill_define(c, spill);
       } else if (target->type == N_IDENT) {
         int idx = ensure_local_at_depth(c, target->str, target->len, is_const, c->scope_depth);
+        if (!(c->locals[idx].eval_flags & SV_EVAL_BIND_LEXICAL)) c->eval_scope_shareable = false;
         c->locals[idx].eval_flags |= SV_EVAL_BIND_LEXICAL;
         uint8_t init_type = SV_TI_UNKNOWN;
         if (decl->right) {
@@ -616,6 +618,7 @@ static void compile_catch_body(sv_compiler_t *c, sv_ast_t *node) {
   begin_scope(c);
   if (node->catch_param && node->catch_param->type == N_IDENT) {
     int loc = add_local(c, node->catch_param->str, node->catch_param->len, false, c->scope_depth);
+    if (!(c->locals[loc].eval_flags & SV_EVAL_BIND_CATCH)) c->eval_scope_shareable = false;
     c->locals[loc].eval_flags |= SV_EVAL_BIND_CATCH;
     emit_put_local(c, loc);
   } else if (node->catch_param && is_destructure_pattern_node(node->catch_param)) {
@@ -692,6 +695,7 @@ static void hoist_switch_func_decls(sv_compiler_t *c, sv_ast_t *node) {
       if (!stmt) continue;
       if (stmt->type == N_FUNC && stmt->str && !(stmt->flags & (FN_ARROW | FN_PAREN))) {
         int local = ensure_local_at_depth(c, stmt->str, stmt->len, false, c->scope_depth);
+        if (!(c->locals[local].eval_flags & SV_EVAL_BIND_LEXICAL)) c->eval_scope_shareable = false;
         c->locals[local].eval_flags |= SV_EVAL_BIND_LEXICAL;
       } else if (!c->is_strict && (stmt->type == N_IF || stmt->type == N_LABEL)) {
         sv_ast_list_t funcs = {0};

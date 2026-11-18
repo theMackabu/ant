@@ -181,6 +181,8 @@ typedef struct {
   sv_runtime_binding_t *bindings;
   uint32_t count;
   uint32_t capacity;
+  uint32_t parent;
+  int local_count;
   bool binds_arguments;
   sv_eval_scope_flags_t flags;
 } sv_eval_scope_builder_t;
@@ -231,6 +233,10 @@ typedef struct sv_compiler {
   sv_eval_scope_builder_t *eval_scopes;
   int eval_scope_count;
   int eval_scope_cap;
+  int eval_scope_shared;
+  int eval_scope_shared_withs;
+  const void *eval_scope_shared_private;
+  bool eval_scope_shareable;
 
   sv_loop_t *loops;
   int loop_count;

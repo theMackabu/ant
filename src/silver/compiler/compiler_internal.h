@@ -235,6 +235,7 @@ typedef bool (*private_eval_binding_fn)(
   void *ctx, const char *name, uint32_t len, uint8_t kind, uint16_t index
 );
 
+void eval_scope_locals_popped(sv_compiler_t *c);
 int private_eval_binding_count(const sv_compiler_t *c);
 bool private_eval_bindings_each(sv_compiler_t *c, private_eval_binding_fn fn, void *ctx);
 bool reject_super_identifier(sv_compiler_t *c, const sv_ast_t *node);

@@ -544,6 +544,7 @@ static void end_spill_scopes(sv_compiler_t *c) {
     c->with_depth > 0 && c->with_scopes[c->with_depth - 1].implicit &&
     c->with_scopes[c->with_depth - 1].block_depth >= c->scope_depth
   ) c->with_depth--;
+  c->eval_scope_shareable = false;
 }
 
 void end_scope(sv_compiler_t *c) {
@@ -561,6 +562,7 @@ void end_scope(sv_compiler_t *c) {
     sv_compile_ctx_local_lookup_remove(c, c->local_count - 1);
     c->local_count--;
   }
+  if (c->eval_scope_shareable) eval_scope_locals_popped(c);
   c->scope_depth--;
 }
 

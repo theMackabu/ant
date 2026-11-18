@@ -249,6 +249,7 @@ struct ant_isolate_t {
   ant_value_t global;
   ant_value_t global_this;
   ant_value_t global_sandbox;
+  ant_value_t eval_closure_env;
   uint32_t proxy_descriptor_depth;
   uint32_t proxy_descriptor_checks;
   ant_realm_t *microtask_realm;

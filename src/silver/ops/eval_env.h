@@ -37,11 +37,18 @@ static inline bool sv_eval_env_state_attach(ant_value_t env, sv_eval_env_state_t
   return true;
 }
 
-static inline sv_upvalue_t *sv_eval_capture_upvalue(sv_vm_t *vm, ant_value_t *slot) {
+typedef struct {
+  sv_upvalue_t **link;
+  ant_value_t *slot;
+} sv_eval_capture_cursor_t;
+
+static inline sv_upvalue_t *sv_eval_capture_upvalue(sv_vm_t *vm, ant_value_t *slot, sv_eval_capture_cursor_t *cursor) {
   if (!vm || !slot) return NULL;
 
-  sv_upvalue_t **pp = &vm->open_upvalues;
+  sv_upvalue_t **pp = cursor->link && (uintptr_t)slot < (uintptr_t)cursor->slot ? cursor->link : &vm->open_upvalues;
   while (*pp && (uintptr_t)(*pp)->location > (uintptr_t)slot) pp = &(*pp)->next;
+  cursor->link = pp;
+  cursor->slot = slot;
   if (*pp && (*pp)->location == slot) return *pp;
 
   sv_upvalue_t *uv = js_upvalue_alloc(vm->js);
@@ -59,16 +66,16 @@ static inline sv_upvalue_t *sv_eval_capture_upvalue(sv_vm_t *vm, ant_value_t *sl
 
 static inline sv_upvalue_t *sv_eval_capture_binding(
   sv_vm_t *vm, sv_frame_t *frame,
-  const sv_runtime_binding_t *binding
+  const sv_runtime_binding_t *binding, sv_eval_capture_cursor_t *cursor
 ) {
   if (!vm || !frame || !frame->func || !binding) return NULL;
   switch (binding->kind & SV_EVAL_BIND_KIND_MASK) {
     case SV_EVAL_BIND_PARAM:
       if (!frame->bp || (int)binding->index >= sv_frame_arg_slots(frame)) return NULL;
-      return sv_eval_capture_upvalue(vm, &frame->bp[binding->index]);
+      return sv_eval_capture_upvalue(vm, &frame->bp[binding->index], cursor);
     case SV_EVAL_BIND_LOCAL:
       if (!frame->lp || binding->index >= (uint16_t)frame->func->max_locals) return NULL;
-      return sv_eval_capture_upvalue(vm, &frame->lp[binding->index]);
+      return sv_eval_capture_upvalue(vm, &frame->lp[binding->index], cursor);
     case SV_EVAL_BIND_UPVALUE:
       if (!frame->upvalues || binding->index >= (uint16_t)frame->upvalue_count) return NULL;
       return frame->upvalues[binding->index];
@@ -90,12 +97,37 @@ static inline sv_eval_env_state_t *sv_eval_env_state_create(
   state->cell_count = scope->count;
   state->arguments_obj = frame->arguments_obj;
 
+  sv_eval_capture_cursor_t cursor = {0};
   for (uint32_t i = 0; i < scope->count; i++) {
-    state->cells[i] = sv_eval_capture_binding(vm, frame, &scope->bindings[i]);
+    state->cells[i] = sv_eval_capture_binding(vm, frame, &scope->bindings[i], &cursor);
     if (!state->cells[i]) { free(state); return NULL; }
   }
   
   return state;
+}
+
+static inline bool sv_eval_env_state_current(
+  const sv_eval_env_state_t *state, const sv_frame_t *frame, const sv_eval_scope_t *scope
+) {
+  if (state->func != frame->func || state->scope != scope || state->cell_count != scope->count) return false;
+  if (state->arguments_obj != frame->arguments_obj) return false;
+  for (uint32_t i = 0; i < scope->count; i++) {
+    const sv_runtime_binding_t *binding = &scope->bindings[i];
+    const sv_upvalue_t *cell = state->cells[i];
+    switch (binding->kind & SV_EVAL_BIND_KIND_MASK) {
+      case SV_EVAL_BIND_PARAM:
+        if (!frame->bp || cell->location != &frame->bp[binding->index]) return false;
+        break;
+      case SV_EVAL_BIND_LOCAL:
+        if (!frame->lp || cell->location != &frame->lp[binding->index]) return false;
+        break;
+      default:
+        if (!frame->upvalues || binding->index >= (uint16_t)frame->upvalue_count) return false;
+        if (cell != frame->upvalues[binding->index]) return false;
+        break;
+    }
+  }
+  return true;
 }
 
 static inline const sv_runtime_binding_t *sv_eval_env_find_binding(
@@ -191,6 +223,10 @@ static inline ant_value_t sv_eval_arguments(ant_t *js, sv_vm_t *vm, sv_frame_t *
 }
 
 ant_value_t sv_eval_capture_env(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint32_t scope_index
+);
+
+ant_value_t sv_eval_capture_closure_env(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint32_t scope_index
 );
 
@@ -449,11 +485,47 @@ bool sv_eval_env_try_put(
   return true;
 }
 
+static bool sv_eval_closure_env_current(
+  ant_t *js, ant_value_t env, sv_frame_t *frame, const sv_eval_scope_t *scope
+) {
+  for (;;) {
+    sv_eval_env_state_t *state = sv_eval_env_state(env);
+    if (!state || state->is_variable || !sv_eval_env_state_current(state, frame, scope)) return false;
+    env = get_proto(js, env);
+    if (!scope->parent) return env == sv_frame_eval_env(js, frame);
+    scope = sv_func_eval_scope(frame->func, scope->parent - 1);
+  }
+}
+
+ant_value_t sv_eval_capture_closure_env(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint32_t scope_index
+) {
+  const sv_eval_scope_t *scope = sv_func_eval_scope(frame->func, scope_index);
+  ant_value_t cached = js->eval_closure_env;
+  for (int depth = 0; depth < 8; depth++) {
+    sv_eval_env_state_t *state = sv_eval_env_state(cached);
+    if (!state || state->func != frame->func) break;
+    if (state->scope == scope) {
+      if (sv_eval_closure_env_current(js, cached, frame, scope)) return cached;
+      break;
+    }
+    cached = get_proto(js, cached);
+  }
+
+  ant_value_t env = sv_eval_capture_env(vm, js, frame, scope_index);
+  if (!is_err(env)) js->eval_closure_env = env;
+  return env;
+}
+
 ant_value_t sv_eval_capture_env(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint32_t scope_index
 ) {
   const sv_eval_scope_t *scope = sv_func_eval_scope(frame->func, scope_index);
   ant_value_t parent = sv_frame_eval_env(js, frame);
+  if (scope->parent) {
+    parent = sv_eval_capture_closure_env(vm, js, frame, scope->parent - 1);
+    if (is_err(parent)) return parent;
+  }
   GC_ROOT_SAVE(mark, js);
   GC_ROOT_PIN(js, parent);
   ant_value_t env = Ant_Object_CreateBare(js);
@@ -461,7 +533,7 @@ ant_value_t sv_eval_capture_env(
   GC_ROOT_PIN(js, env);
   js_set_proto_wb(js, env, parent);
   sv_eval_env_state_t *parent_state = sv_eval_env_state(parent);
-  if (!frame->func->is_arrow && !frame->func->is_eval &&
+  if (!scope->parent && !frame->func->is_arrow && !frame->func->is_eval &&
       !(parent_state && parent_state->is_variable) && !scope->binds_arguments) {
     ant_value_t arguments = sv_eval_arguments(js, vm, frame);
     if (is_err(arguments)) { GC_ROOT_RESTORE(js, mark); return arguments; }

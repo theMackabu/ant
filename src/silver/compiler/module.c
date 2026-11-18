@@ -18,6 +18,7 @@ static uint8_t import_spec_binding(sv_ast_t *spec, const char **name, uint32_t *
 
 void mark_import_binding(sv_compiler_t *c, int idx, sv_ast_t *spec) {
   if (idx < 0) return;
+  if (!(c->locals[idx].eval_flags & SV_EVAL_BIND_LEXICAL)) c->eval_scope_shareable = false;
   c->locals[idx].eval_flags |= SV_EVAL_BIND_LEXICAL;
   sv_binding_meta_t *binding = &c->locals[idx].binding;
   binding->import_kind = import_spec_binding(spec, &binding->import_name, &binding->import_name_len);

@@ -78,7 +78,10 @@ static void compile_destructure_store(sv_compiler_t *c, sv_ast_t *target,
       return;
     }
     int idx = ensure_local_at_depth(c, target->str, target->len, is_const, c->scope_depth);
-    if (kind != SV_VAR_VAR) c->locals[idx].eval_flags |= SV_EVAL_BIND_LEXICAL;
+    if (kind != SV_VAR_VAR) {
+      if (!(c->locals[idx].eval_flags & SV_EVAL_BIND_LEXICAL)) c->eval_scope_shareable = false;
+      c->locals[idx].eval_flags |= SV_EVAL_BIND_LEXICAL;
+    }
     emit_put_local(c, idx);
     c->locals[idx].is_tdz = false;
     set_local_inferred_type(c, idx, SV_TI_UNKNOWN);

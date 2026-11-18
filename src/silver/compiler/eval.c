@@ -253,32 +253,112 @@ bool arguments_forbidden(const sv_compiler_t *c) {
   return false;
 }
 
-static bool eval_scope_flags_init(sv_compiler_t *c, sv_eval_scope_flags_t *flags) {
-  *flags = (sv_eval_scope_flags_t){
+static sv_eval_scope_flags_t eval_scope_flags(sv_compiler_t *c) {
+  return (sv_eval_scope_flags_t){
     .this_binding = compiler_has_this_binding(c),
     .super_binding = compiler_has_super_binding(c),
     .is_static = c->is_static,
     .no_arguments = arguments_forbidden(c),
   };
+}
 
+static const sv_private_scope_t *eval_private_scope(const sv_compiler_t *c) {
+  const sv_private_scope_t *scope = c->private_scope;
+  while (scope && scope->count == 0) scope = scope->parent;
+  return scope;
+}
+
+void eval_scope_locals_popped(sv_compiler_t *c) {
+  while (c->eval_scope_shareable && c->eval_scopes[c->eval_scope_shared].local_count > c->local_count) {
+    uint32_t parent = c->eval_scopes[c->eval_scope_shared].parent;
+    if (!parent) c->eval_scope_shareable = false;
+    else c->eval_scope_shared = (int)parent - 1;
+  }
+}
+
+static bool eval_scope_reserve(sv_compiler_t *c) {
+  if (c->eval_scope_count < c->eval_scope_cap) return true;
+  int capacity = c->eval_scope_cap ? c->eval_scope_cap * 2 : 4;
+  sv_eval_scope_builder_t *scopes = realloc(
+    c->eval_scopes,
+    (size_t)capacity * sizeof(sv_eval_scope_builder_t));
+  if (!scopes) {
+    js_mkerr(c->js, "out of memory while growing direct eval scopes");
+    return false;
+  }
+  c->eval_scopes = scopes;
+  c->eval_scope_cap = capacity;
   return true;
+}
+
+static void eval_scope_publish(sv_compiler_t *c, uint32_t scope_index) {
+  c->eval_scopes[scope_index].local_count = c->local_count;
+  c->eval_scope_shared = (int)scope_index;
+  c->eval_scope_shared_withs = c->with_depth;
+  c->eval_scope_shared_private = eval_private_scope(c);
+  c->eval_scope_shareable = true;
+}
+
+static bool capture_local_range_scope(
+  sv_compiler_t *c, uint32_t parent, int first_local, int end_local,
+  sv_eval_scope_flags_t flags, uint32_t *scope_index_out
+) {
+  if (!eval_scope_reserve(c)) return false;
+  uint32_t scope_index = (uint32_t)c->eval_scope_count++;
+  sv_eval_scope_builder_t *scope = &c->eval_scopes[scope_index];
+  memset(scope, 0, sizeof(*scope));
+  scope->parent = parent;
+  scope->flags = flags;
+  scope->local_count = end_local;
+
+  sv_eval_binding_set_t binding_set;
+  if (!eval_binding_set_init(c, &binding_set, (size_t)(end_local - first_local))) return false;
+  bool ok = true;
+  for (int i = end_local - 1; ok && i >= first_local; i--)
+    ok = eval_scope_builder_capture_local(c, scope, &binding_set, &c->locals[i], i);
+  free(binding_set.slots);
+  if (!ok) return false;
+  *scope_index_out = scope_index;
+  return true;
+}
+
+static int share_dynamic_eval_scope(sv_compiler_t *c, uint32_t *scope_index_out) {
+  if (
+    !c->eval_scope_shareable || c->eval_scope_shared_withs != c->with_depth ||
+    c->eval_scope_shared_private != eval_private_scope(c)
+  ) return 0;
+
+  sv_eval_scope_builder_t *shared = &c->eval_scopes[c->eval_scope_shared];
+  sv_eval_scope_flags_t flags = eval_scope_flags(c);
+  if (c->super_local >= 0) c->super_referenced = true;
+
+  bool same_locals = shared->local_count == c->local_count;
+  if (same_locals && memcmp(&flags, &shared->flags, sizeof(flags)) == 0) {
+    *scope_index_out = (uint32_t)c->eval_scope_shared;
+    return 1;
+  }
+
+  uint32_t scope_index;
+  if (!capture_local_range_scope(
+        c, (uint32_t)c->eval_scope_shared + 1, shared->local_count, c->local_count, flags, &scope_index)) return -1;
+  if (!same_locals) eval_scope_publish(c, scope_index);
+  *scope_index_out = scope_index;
+  return 1;
+}
+
+static int eval_scope_base_locals(const sv_compiler_t *c) {
+  if (c->with_depth > 0) return c->local_count;
+  for (int i = 1; i < c->local_count; i++)
+    if (c->locals[i].depth > c->locals[i - 1].depth && c->locals[i].depth > 0) return i;
+  return c->local_count;
 }
 
 bool capture_dynamic_eval_scope(
   sv_compiler_t *c, uint32_t *scope_index_out
 ) {
-  if (c->eval_scope_count >= c->eval_scope_cap) {
-    int capacity = c->eval_scope_cap ? c->eval_scope_cap * 2 : 4;
-    sv_eval_scope_builder_t *scopes = realloc(
-      c->eval_scopes,
-      (size_t)capacity * sizeof(sv_eval_scope_builder_t));
-    if (!scopes) {
-      js_mkerr(c->js, "out of memory while growing direct eval scopes");
-      return false;
-    }
-    c->eval_scopes = scopes;
-    c->eval_scope_cap = capacity;
-  }
+  int shared = share_dynamic_eval_scope(c, scope_index_out);
+  if (shared) return shared > 0;
+  if (!eval_scope_reserve(c)) return false;
 
   uint32_t scope_index = (uint32_t)c->eval_scope_count++;
   sv_eval_scope_builder_t *scope = &c->eval_scopes[scope_index];
@@ -296,9 +376,16 @@ bool capture_dynamic_eval_scope(
   sv_eval_binding_set_t binding_set;
   if (!eval_binding_set_init(c, &binding_set, candidate_count)) return false;
 
-  if (!eval_scope_builder_capture_locals(
-        c, scope, &binding_set)) goto capture_failed;
-  eval_scope_flags_init(c, &scope->flags);
+  int base_locals = eval_scope_base_locals(c);
+  if (base_locals == c->local_count) {
+    if (!eval_scope_builder_capture_locals(
+          c, scope, &binding_set)) goto capture_failed;
+  } else {
+    for (int i = base_locals - 1; i >= 0; i--)
+      if (!eval_scope_builder_capture_local(c, scope, &binding_set, &c->locals[i], i)) goto capture_failed;
+  }
+
+  scope->flags = eval_scope_flags(c);
   if (c->super_local >= 0) c->super_referenced = true;
   if (c->is_arrow && !eval_scope_builder_capture_keywords(c, scope, &binding_set)) goto capture_failed;
 
@@ -308,6 +395,14 @@ bool capture_dynamic_eval_scope(
   private_capture_t private_capture = { c, scope, &binding_set };
   if (!private_eval_bindings_each(c, eval_scope_builder_capture_private, &private_capture)) goto capture_failed;
   free(binding_set.slots);
+  for (int first = base_locals; first < c->local_count;) {
+    int end = first + 1;
+    while (end < c->local_count && c->locals[end].depth <= c->locals[end - 1].depth) end++;
+    c->eval_scopes[scope_index].local_count = first;
+    if (!capture_local_range_scope(c, scope_index + 1, first, end, c->eval_scopes[scope_index].flags, &scope_index)) return false;
+    first = end;
+  }
+  eval_scope_publish(c, scope_index);
   *scope_index_out = scope_index;
   return true;
 
