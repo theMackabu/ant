@@ -440,10 +440,7 @@ ant_value_t jit_helper_rest(
   sv_vm_t *vm, ant_t *js,
   ant_value_t *args, int argc, int start
 ) {
-  ant_value_t arr = Ant_Array_Create(js);
-  for (int i = start; i < argc; i++)
-    js_arr_push(js, arr, args[i]);
-  return arr;
+  return Ant_Array_CreateRest(js, args, argc > 0 ? (uint32_t)argc : 0, (uint32_t)start);
 }
 
 ant_value_t jit_helper_get_global(

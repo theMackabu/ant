@@ -593,6 +593,11 @@ ant_value_t mkarr_dense_literal_capacity(ant_t *js, const ant_value_t *elements,
   return arr;
 }
 
+ant_value_t Ant_Array_CreateRest(ant_t *js, const ant_value_t *args, uint32_t argc, uint32_t start) {
+  if (!args || argc <= start) return Ant_Array_Create(js);
+  return mkarr_dense_literal_capacity(js, args + start, argc - start, true);
+}
+
 ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint32_t count) {
   return mkarr_dense_literal_capacity(js, elements, count, false);
 }
