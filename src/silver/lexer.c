@@ -320,6 +320,7 @@ uint8_t sv_parsekeyword(const char *buf, size_t len) {
       break;
     case 'e':
       K("else", TOK_ELSE);
+      K("enum", TOK_ENUM);
       K("export", TOK_EXPORT);
       break;
     case 'f':
