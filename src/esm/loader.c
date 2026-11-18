@@ -1822,6 +1822,7 @@ static sv_func_t *esm_compile_parsed_record(
 }
 
 static ant_value_t esm_import_not_found_error(ant_t *js, const char *specifier, const char *base_path);
+static ant_value_t esm_require_async_module_error(ant_t *js);
 
 static ant_value_t esm_compile_error(ant_t *js) {
   if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
@@ -2098,6 +2099,7 @@ static ant_value_t esm_load_static_dependency(
 
 typedef struct {
   ant_value_t *promises;
+  ant_value_t settled;
   int count;
   int cap;
 } esm_pending_evaluations_t;
@@ -2137,8 +2139,9 @@ static ant_value_t esm_instantiate_static_dependencies(
     if (is_err(dep)) return dep;
     
     ant_value_t evaluation = esm_evaluation_promise(dep);
-    if (vtype(evaluation) != kTypePromise || !esm_evaluation_pending(js, dep)) continue;
-    if (!esm_pending_evaluations_add(pending, evaluation)) return js_mkerr(js, "oom");
+    if (vtype(evaluation) != kTypePromise) continue;
+    if (!esm_evaluation_pending(js, dep)) pending->settled = evaluation;
+    else if (!esm_pending_evaluations_add(pending, evaluation)) return js_mkerr(js, "oom");
   }
 
   return Ant_Value_Undefined;
@@ -2284,9 +2287,22 @@ static ant_value_t esm_evaluate_esm_record(
   ant_value_t result = Ant_Value_Undefined;
   *deferred = func && pending.count > 0;
   
+  ant_esm_state_t *state = js->modules.state;
+  bool required = state && state->require_depth > 0;
+  bool async_graph = func && (func->is_tla || pending.count > 0 || vtype(pending.settled) == kTypePromise);
+  
   if (!func) result = esm_compile_error(js);
-  else if (*deferred) result = esm_defer_evaluation(js, mod, func, eval_ctx->module_ctx, &pending);
-  else result = esm_execute_module_function(js, eval_ctx, func);
+  else if (required && async_graph) {
+    *deferred = false;
+    state->require_async = true;
+    result = esm_require_async_module_error(js);
+  } else if (*deferred) result = esm_defer_evaluation(js, mod, func, eval_ctx->module_ctx, &pending);
+  else {
+    result = esm_execute_module_function(js, eval_ctx, func);
+    bool inherits = !is_err(result) && vtype(result) != kTypePromise && vtype(pending.settled) == kTypePromise;
+    if (inherits && vtype(esm_evaluation_promise(mod->namespace_obj)) != kTypePromise)
+      js_set_slot_wb(js, mod->namespace_obj, SLOT_MODULE_EVALUATION, pending.settled);
+  }
   
   free(pending.promises);
   return result;
@@ -2473,6 +2489,8 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t req
 
   if (is_err(result)) {
     mod->is_loading = false;
+    ant_esm_state_t *state = js->modules.state;
+    if (state && state->require_async) return result;
     return is_esm ? esm_record_evaluation_failure(js, ns, result) : result;
   }
   
@@ -2744,7 +2762,13 @@ static ant_value_t esm_import_not_found_error(ant_t *js, const char *specifier, 
   free(message);
   free(target);
   return err;
+}
 
+static ant_value_t esm_require_async_module_error(ant_t *js) {
+  return esm_coded_error(
+    js, "ERR_REQUIRE_ASYNC_MODULE",
+    "require() cannot be used on an ESM graph with top-level await. Use import() instead."
+  );
 }
 
 static bool esm_require_reloads(const esm_module_t *existing) {
@@ -2865,7 +2889,12 @@ ant_value_t esm_require_cstr(ant_t *js, const char *specifier, size_t spec_len, 
     js, spec_copy, resolved_path, module_key,
     MODULE_EVAL_FORMAT_UNKNOWN, NULL, 0, false, ESM_MODULE_KIND_NONE
   );
+  ant_esm_state_t *state = js->modules.state;
+  if (state) state->require_depth++;
   ns = loaded_mod ? esm_load_module(js, loaded_mod, entry) : js_mkerr(js, "Cannot create module");
+  if (state && --state->require_depth == 0) state->require_async = false;
+  
+  if (!is_err(ns) && vtype(esm_evaluation_promise(ns)) == kTypePromise) ns = esm_require_async_module_error(js);
   
   if (is_err(ns)) {
     js_delete_prop(js, esm_require_cache(js), resolved_path, strlen(resolved_path));
