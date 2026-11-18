@@ -3749,9 +3749,14 @@ static bool opt_cg_call_code(opt_cg_t *cg, ir_node_id_t node_id, const ir_node_t
       opt_cg_record_call(cg, node->frame_state, -1);
       break;
     case IR_OP_THROW:
+      if (node->handler != IR_NONE) {
+        if (MASM_RETURN_GPRS[0] != MASM_ARGUMENT_GPRS[0]) masm_move64(m, MASM_RETURN_GPRS[0], MASM_ARGUMENT_GPRS[0]);
+        masm_jump(m, opt_cg_catch_site(cg, node_id));
+        break;
+      }
       masm_move64(m, MASM_ARGUMENT_GPRS[1], cg->pinned.vm);
       masm_call_absolute(m, (uint64_t)(uintptr_t)opt_rt_throw);
-      masm_jump(m, opt_cg_throw_target(cg, node_id, cg->throw_label));
+      masm_jump(m, cg->throw_label);
       break;
     default: return false;
   }
@@ -4187,8 +4192,8 @@ static ant_value_t opt_cg_catch(sv_vm_t *vm, uint8_t *locals, const opt_site_t *
   const uint64_t *spills = (const uint64_t *)(void *)(locals + code->spill_offset);
   ant_value_t error = *(ant_value_t *)(void *)(locals + code->error_offset);
   const opt_handler_t *handler = &code->handlers[site->handler];
-  if (js->terminating) return opt_rt_leave_frame(error, vm, entry);
-  ant_value_t caught = js_take_thrown(js, error);
+  if (js->terminating) return opt_rt_leave_frame(opt_rt_throw(error, vm), vm, entry);
+  ant_value_t caught = is_err(error) ? js_take_thrown(js, error) : error;
   GC_ROOT_SAVE(mark, js);
   GC_ROOT_PIN(js, caught);
   sv_tfb_record1(code->func, code->func->code + handler->catch_off, caught);
