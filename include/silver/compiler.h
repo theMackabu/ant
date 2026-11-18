@@ -209,7 +209,7 @@ typedef struct sv_compiler {
   sv_ast_t **field_inits;
 
   int field_init_count;
-  int *computed_key_locals;
+  int *field_locals;
   int param_count;
 
   const sv_ast_t *value_params_node;

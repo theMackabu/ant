@@ -106,12 +106,12 @@ static bool member_call_needs_optional_base_guard(const sv_ast_t *member) {
     sv_node_has_optional_base(member->left);
 }
 
-static int capture_field_key(sv_compiler_t *c, sv_compiler_t *owner, int local) {
+static int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local) {
   if (c->enclosing == owner) {
     owner->locals[local].captured = true;
     return add_upvalue(c, (uint16_t)local_to_frame_slot(owner, local), true, false);
   }
-  int uv = capture_field_key(c->enclosing, owner, local);
+  int uv = capture_field_local(c->enclosing, owner, local);
   return add_upvalue(c, (uint16_t)uv, false, false);
 }
 
@@ -139,9 +139,8 @@ void emit_field_inits(
     if (m->right) compile_field_initializer(c, m->right, field_static_key(m));
     else emit_op(c, OP_UNDEF);
     if (m->flags & FN_COMPUTED) {
-      int uv = capture_field_key(c, owner, owner->computed_key_locals[i]);
       emit_op(c, OP_GET_UPVAL);
-      emit_u16(c, (uint16_t)uv);
+      emit_u16(c, (uint16_t)capture_field_local(c, owner, owner->field_locals[i]));
     } else {
       compile_static_property_key(c, m->left);
     }

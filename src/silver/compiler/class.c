@@ -409,15 +409,31 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     else if (m->flags & FN_STATIC) static_init_count++;
   }
 
+  int inner_name_local = -1;
+  bool has_class_scope = node->str || private_scope.count > 0 || field_count > 0;
+  if (has_class_scope) {
+    begin_scope(c);
+    if (node->str)
+      inner_name_local = add_local(c, node->str, node->len, true, c->scope_depth);
+    for (int i = 0; i < private_scope.count; i++) {
+      sv_private_name_t *p = &private_scope.names[i];
+      p->owner = c;
+      p->local = add_local(c, "", 0, true, c->scope_depth);
+      emit_op(c, OP_PRIVATE_TOKEN);
+      emit_u32(c, p->hash);
+      emit_put_local(c, p->local);
+    }
+  }
+
   sv_ast_t **field_inits = NULL;
-  int *computed_key_locals = NULL;
+  int *field_locals = NULL;
   
   sv_class_emit_item_t *method_emit_items = NULL;
   sv_class_emit_item_t *static_init_items = NULL;
   
   if (field_count > 0) {
     field_inits = malloc(sizeof(sv_ast_t *) * field_count);
-    computed_key_locals = malloc(sizeof(int) * field_count);
+    field_locals = malloc(sizeof(int) * field_count);
   }
   if (method_emit_count > 0)
     method_emit_items = malloc(sizeof(sv_class_emit_item_t) * method_emit_count);
@@ -440,7 +456,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     
     if (needs_instance_init) {
       field_inits[fi] = m;
-      computed_key_locals[fi++] = (!is_private && (m->flags & FN_COMPUTED))
+      field_locals[fi++] = (!is_private && (m->flags & FN_COMPUTED))
         ? compile_class_precompute_key(c, m->left) : -1;
       continue;
     }
@@ -456,28 +472,13 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     if (is_static) static_init_items[si++] = (sv_class_emit_item_t){ m, preeval_key };
   }
 
-  int inner_name_local = -1;
-  bool has_class_scope = node->str || private_scope.count > 0;
-  if (has_class_scope) {
-    begin_scope(c);
-    if (node->str)
-      inner_name_local = add_local(c, node->str, node->len, true, c->scope_depth);
-    for (int i = 0; i < private_scope.count; i++) {
-      sv_private_name_t *p = &private_scope.names[i];
-      p->owner = c;
-      p->local = add_local(c, "", 0, true, c->scope_depth);
-      emit_op(c, OP_PRIVATE_TOKEN);
-      emit_u32(c, p->hash);
-      emit_put_local(c, p->local);
-    }
-  }
 
   if (ctor_method && ctor_method->right) {
     ctor_method->right->flags |= FN_CLASS_CTOR;
     if (node->left) ctor_method->right->flags |= FN_DERIVED_CTOR;
     c->field_inits = field_inits;
     c->field_init_count = field_count;
-    c->computed_key_locals = computed_key_locals;
+    c->field_locals = field_locals;
     const char *saved_name = c->inferred_name;
     uint32_t saved_len = c->inferred_name_len;
     if (node->str && node->len) {
@@ -489,9 +490,9 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     c->inferred_name_len = saved_len;
     c->field_inits = NULL;
     c->field_init_count = 0;
-    c->computed_key_locals = NULL;
+    c->field_locals = NULL;
   } else if (field_count > 0) {
-    c->computed_key_locals = computed_key_locals;
+    c->field_locals = field_locals;
     sv_compiler_t comp;
     sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
     comp.is_strict = true;
@@ -557,8 +558,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   } else emit_op(c, OP_UNDEF);
   
   free(field_inits);
-  free(computed_key_locals);
-  c->computed_key_locals = NULL;
+  c->field_locals = NULL;
 
   const char *class_name = node->str;
   uint32_t class_name_len = node->len;
@@ -608,6 +608,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       c, item->node, ctor_local, proto_local, item->preeval_key
     );
   }
+  
+  free(field_locals);
 
   for (int i = 0; i < static_init_count; i++) {
     sv_ast_t *m = static_init_items[i].node;
