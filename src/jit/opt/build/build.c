@@ -823,13 +823,13 @@ static ir_node_id_t opt_root_this(opt_builder_t *b) {
 uint32_t opt_learned_shapes(const sv_func_t *func, uint32_t bc_off) {
   if (bc_off >= (uint32_t)func->code_len || !func->ic_slots) return 0;
   sv_op_t op = (sv_op_t)func->code[bc_off];
-  if (op != OP_GET_FIELD && op != OP_GET_FIELD2 && op != OP_PUT_FIELD) return 0;
+  if (op != OP_GET_FIELD && op != OP_GET_FIELD2 && op != OP_PUT_FIELD && op != OP_PUT_SUPER_FIELD) return 0;
   uint16_t ic_index = sv_get_u16(func->code + bc_off + 5);
   if (ic_index >= func->ic_count) return 0;
   const sv_ic_entry_t *ic = &func->ic_slots[ic_index];
   uint32_t count = ic->cached_shape ? 1 : 0;
-  if (op == OP_PUT_FIELD) {
-    if (ic->guard.add.from_shape) count++;
+  if (op != OP_GET_FIELD && op != OP_GET_FIELD2) {
+    if (op == OP_PUT_FIELD && ic->guard.add.from_shape) count++;
     const sv_pf_poly_t *poly = (ic->shape_ref_mask & SV_IC_HAS_PUT_POLY) ? ic->put_poly : NULL;
     for (uint32_t i = 0; poly && i < SV_GF_POLY_WAYS; i++) count += poly->entries[i].shape != NULL;
     return count;
@@ -1824,19 +1824,24 @@ static void opt_add_case_note(ant_t *js, const opt_add_case_t *add, const sv_ato
   else opt_runtime_add_note(add->from, runtime, runtime_count);
 }
 
+static uint32_t opt_add_poly_cases(ant_t *js, const sv_ic_entry_t *ic, const sv_atom_t *atom, opt_add_case_t *adds, uint32_t count, ant_shape_t **runtime, uint32_t *runtime_count) {
+  if (ic->shape_ref_mask & SV_IC_POLY_MEGA) return count;
+  const sv_pf_poly_t *poly = (ic->shape_ref_mask & SV_IC_HAS_PUT_POLY) ? ic->put_poly : NULL;
+  for (uint32_t i = 0; poly && i < SV_GF_POLY_WAYS && count < OPT_MAX_ADDS; i++) {
+    const sv_pf_poly_entry_t *e = &poly->entries[i];
+    if (!e->add) continue;
+    opt_add_case_t add = {e->shape, e->to_shape, e->index, e->proto, e->epoch};
+    opt_add_case_note(js, &add, atom, adds, &count, runtime, runtime_count);
+  }
+  return count;
+}
+
 static uint32_t opt_add_cases(ant_t *js, const sv_ic_entry_t *ic, const sv_atom_t *atom, opt_add_case_t *adds, ant_shape_t **runtime, uint32_t *runtime_count) {
   if (ic->shape_ref_mask & SV_IC_POLY_MEGA) return 0;
   uint32_t count = 0;
   opt_add_case_t add = {ic->guard.add.from_shape, ic->guard.add.to_shape, ic->guard.add.slot, ic->add_proto, ic->guard.add.epoch};
   opt_add_case_note(js, &add, atom, adds, &count, runtime, runtime_count);
-  const sv_pf_poly_t *poly = (ic->shape_ref_mask & SV_IC_HAS_PUT_POLY) ? ic->put_poly : NULL;
-  for (uint32_t i = 0; poly && i < SV_GF_POLY_WAYS && count < OPT_MAX_ADDS; i++) {
-    const sv_pf_poly_entry_t *e = &poly->entries[i];
-    if (!e->add) continue;
-    add = (opt_add_case_t){e->shape, e->to_shape, e->index, e->proto, e->epoch};
-    opt_add_case_note(js, &add, atom, adds, &count, runtime, runtime_count);
-  }
-  return count;
+  return opt_add_poly_cases(js, ic, atom, adds, count, runtime, runtime_count);
 }
 
 static ir_node_id_t opt_object_address(opt_builder_t *b, ir_node_id_t *object) {
@@ -1891,8 +1896,9 @@ static void opt_join_slow_path(opt_builder_t *b, ir_block_id_t fast_end, ir_bloc
 static ir_block_id_t opt_branch_off(opt_builder_t *b, ir_condition_t condition, const ir_node_id_t *inputs, uint32_t count, bool off_if, ir_block_id_t *off);
 static void opt_exit_unless(opt_builder_t *b, ir_condition_t condition, const ir_node_id_t *inputs, uint32_t count, opt_exit_kind_t kind);
 
-static void opt_add_fields(opt_builder_t *b, ir_node_id_t object, ir_node_id_t address, ir_node_id_t value, const opt_add_case_t *adds, const opt_rt_add_site_t *site, const uint32_t *members, uint32_t count, ir_block_id_t *slow, uint32_t *slow_count) {
+static void opt_add_fields(opt_builder_t *b, ir_node_id_t object, ir_node_id_t address, ir_node_id_t value, const opt_add_case_t *adds, const opt_rt_add_site_t *site, bool epoch_guarded, const uint32_t *members, uint32_t count, ir_block_id_t *slow, uint32_t *slow_count) {
   ir_block_id_t added[OPT_MAX_ADDS];
+  bool split = site && !epoch_guarded && opt_may_speculate(b, OPT_EXIT_UNEXPECTED_VALUE);
   for (uint32_t j = 0; j < count; j++) {
     const opt_add_case_t *add = &adds[members[j]];
     ir_op_t op = ir_op(IR_OP_ADD_NAMED);
@@ -1900,10 +1906,10 @@ static void opt_add_fields(opt_builder_t *b, ir_node_id_t object, ir_node_id_t a
     op.add_named.shape = (ir_cell_t)(uintptr_t)add->to;
     op.add_named.property_count = add->slot + 1;
     op.add_named.proto = (uint64_t)add->proto;
-    op.add_named.cell = (uint64_t)(uintptr_t)site->adds[members[j]].cell;
+    op.add_named.cell = site ? (uint64_t)(uintptr_t)site->adds[members[j]].cell : 0;
     ir_op_t can = op;
     can.code = IR_OP_CAN_ADD_NAMED;
-    bool split = opt_op_at(b, b->pc) == OP_PUT_FIELD && opt_may_speculate(b, OPT_EXIT_UNEXPECTED_VALUE);
+    can.add_named.epoch_checked = epoch_guarded;
     opt_rt_add_epoch_t *epoch_site = split ? code_arena_bump(b->js, sizeof *epoch_site) : NULL;
     if (epoch_site) {
       *epoch_site = (opt_rt_add_epoch_t){.add = &site->adds[members[j]], .key = b->func->atoms[sv_get_u32(b->func->code + b->pc + 1)].str};
@@ -1920,7 +1926,11 @@ static void opt_add_fields(opt_builder_t *b, ir_node_id_t object, ir_node_id_t a
     added[j] = b->block;
     b->block = no;
   }
-  slow[(*slow_count)++] = b->block;
+  if (site) slow[(*slow_count)++] = b->block;
+  else {
+    ir_block(b->graph, b->block)->is_cold = true;
+    [[maybe_unused]] opt_flow_t flow = opt_end_with_exit(b, OPT_EXIT_SLOW_PATH);
+  }
   if (count > 1) opt_join_blocks(b, added, count);
   else b->block = added[0];
 }
@@ -2338,6 +2348,7 @@ typedef struct {
   ant_shape_t *runtime_adds[OPT_MAX_ADDS];
   uint32_t runtime_count;
   opt_rt_add_site_t *add_site;
+  bool add_epoch_guarded;
   opt_shape_groups_t groups;
   opt_shape_groups_t add_groups;
 } opt_field_plan_t;
@@ -2502,7 +2513,7 @@ static opt_flow_t opt_build_polymorphic_field(opt_builder_t *b, opt_field_plan_t
   }
   for (uint32_t g = 0; g < add_groups->count; g++) {
     b->block = switch_cases[groups->count + g].block;
-    opt_add_fields(b, object, address, value, plan->adds, plan->add_site, add_groups->members[g], add_groups->sizes[g], slow, &slow_count);
+    opt_add_fields(b, object, address, value, plan->adds, plan->add_site, plan->add_epoch_guarded, add_groups->members[g], add_groups->sizes[g], slow, &slow_count);
     ends[groups->count + g] = b->block;
   }
   uint32_t paths = groups->count + add_groups->count;
@@ -4696,18 +4707,22 @@ static bool opt_try_super_put(opt_builder_t *b, opt_flow_t *flow) {
   opt_field_case_t chain;
   bool held = false;
   if (!opt_super_home(b, home, &site) || !opt_super_store_chain(b, site.base, atom, &chain, &held)) return false;
-  opt_field_plan_t plan = {.opcode = OP_PUT_FIELD, .store = true, .ic_index = ic_index};
+  opt_field_plan_t plan = {.opcode = OP_PUT_FIELD, .store = true, .ic_index = ic_index, .add_epoch_guarded = true};
   plan.count = opt_field_cases(b, ic, atom, true, plan.cases);
+  bool adds = opt_may_speculate(b, OPT_EXIT_SLOW_PATH);
+  plan.add_count = adds ? opt_add_poly_cases(b->js, ic, atom, plan.adds, 0, NULL, NULL) : 0;
   opt_drop_superseded_cases(b, &plan);
-  if (!plan.count || (site.by_identity && !opt_retain(b, site.home)) || !opt_field_links_retain(b, &chain)) return false;
+  if ((!plan.count && !plan.add_count) || (site.by_identity && !opt_retain(b, site.home)) || !opt_field_links_retain(b, &chain)) return false;
   for (uint32_t i = 0; i < plan.count; i++)
     if (!opt_field_case_retain(b, &plan.cases[i])) return false;
+  for (uint32_t i = 0; i < plan.add_count; i++)
+    if (!jit_snapshot_shape(b->js, plan.adds[i].from) || !jit_snapshot_shape(b->js, plan.adds[i].to)) return false;
 
   opt_super_guard(b, home, &site);
   ir_node_id_t holder, holder_address;
   opt_holder_chain(b, IR_NONE, &chain, !held, NULL, NULL, &holder, &holder_address);
   ir_node_id_t address = opt_emit_checked(b, ir_op(IR_OP_OBJECT_ADDRESS), &receiver, 1, OPT_REPR_POINTER);
-  if (plan.count == 1) *flow = opt_build_monomorphic_field(b, &plan, receiver, address, value);
+  if (plan.count == 1 && !plan.add_count) *flow = opt_build_monomorphic_field(b, &plan, receiver, address, value);
   else if (opt_field_cases_share_slot(&plan)) *flow = opt_build_shared_slot_field(b, &plan, receiver, address, value);
   else *flow = opt_build_polymorphic_field(b, &plan, receiver, address, value, false);
   if (*flow == OPT_FLOW_CONTINUE) opt_poke(b, 0, value);

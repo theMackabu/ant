@@ -104,6 +104,7 @@ export function targets() {
     'test_json_bigint_tojson.cjs',
     'test_timer_minor_gc.cjs',
     'test_timer_this.cjs',
+    'test_super_put_add.cjs',
     'test_string_append_mixed.cjs',
     'test_builtin_receiver_ic.cjs',
     'test_cage_size_flag.cjs',
