@@ -104,6 +104,7 @@ export function targets() {
     'test_class_constructor_call.cjs',
     'test_class_method_inline_super.cjs',
     'test_class_export_scope.mjs',
+    'test_class_constructor_members.cjs',
     'test_class_expression_name_scope.cjs',
     'test_cli_stdin_script.cjs',
     'test_clone_error_own_props.mjs',

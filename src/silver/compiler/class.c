@@ -229,6 +229,19 @@ static inline int compile_class_precompute_key(sv_compiler_t *c, sv_ast_t *key_e
   return loc;
 }
 
+static const char *invalid_constructor_member(const sv_ast_t *m, bool is_fn, bool has_constructor) {
+  if (!is_fn) return "Classes may not have a field named 'constructor'";
+  if (m->flags & FN_STATIC) return NULL;
+  if (m->flags & (FN_GETTER | FN_SETTER)) return "Class constructor may not be an accessor";
+  if (m->flags & FN_ASYNC) return "Class constructor may not be an async method";
+  if (m->flags & FN_GENERATOR) return "Class constructor may not be a generator";
+  return has_constructor ? "A class may only have one constructor" : NULL;
+}
+
+static bool is_constructor_key(const sv_ast_t *key) {
+  return key && key->type == N_IDENT && key->str && key->len == (is_quoted_ident_key(key) ? 13u : 11u) && memcmp(key->str + is_quoted_ident_key(key), "constructor", 11) == 0;
+}
+
 static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool returns_expr) {
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
@@ -357,13 +370,17 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       }
     }
     
-    if (
-      !(m->flags & FN_STATIC) &&
-      !(m->flags & FN_COMPUTED) &&
-      m->left && m->left->type == N_IDENT &&
-      m->left->len == 11 &&
-      memcmp(m->left->str, "constructor", 11) == 0
-    ) { ctor_method = m; continue; }
+    if (!(m->flags & FN_COMPUTED) && is_constructor_key(m->left)) {
+      const char *invalid = invalid_constructor_member(m, is_fn, ctor_method != NULL);
+      if (invalid) {
+        js_mkerr_typed(c->js, JS_ERR_SYNTAX, "%s", invalid);
+        c->private_scope = saved_private_scope;
+        free(private_scope.names);
+        emit_op(c, OP_UNDEF);
+        return;
+      }
+      if (is_fn && !(m->flags & FN_STATIC)) { ctor_method = m; continue; }
+    }
     
     if (
       (m->flags & FN_STATIC) &&
