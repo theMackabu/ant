@@ -1,4 +1,5 @@
 #include "compiler_internal.h"
+#include "arrays.h"
 
 size_t literal_num_key(double num, char *buf, size_t cap) {
   if (isnan(num)) return (size_t)snprintf(buf, cap, "NaN");
@@ -7,66 +8,195 @@ size_t literal_num_key(double num, char *buf, size_t cap) {
 }
 
 static constexpr int SV_SHAPED_LITERAL_MAX_KEYS = 32;
-static constexpr int SV_CONST_ARRAY_INLINE_MAX = 32;
+static constexpr int SV_LITERAL_DYNAMIC_RATIO = 6;
+static constexpr int SV_LITERAL_CLASS_STACK = 64;
 
-static bool array_elem_is_constant(const sv_ast_t *elem) {
-  if (!elem) return false;
-  switch (elem->type) {
-    case N_NUMBER: case N_STRING: case N_BOOL: case N_NULL: case N_EMPTY: return true;
-    case N_UNARY: return elem->op == TOK_UMINUS && elem->right && elem->right->type == N_NUMBER;
+static bool literal_is_leaf(const sv_ast_t *node) {
+  if (!node) return false;
+  switch (node->type) {
+    case N_NUMBER: case N_STRING: case N_BOOL: case N_NULL: return true;
+    case N_UNARY: return node->op == TOK_UMINUS && node->right && node->right->type == N_NUMBER;
     default: return false;
   }
 }
 
-static ant_value_t array_elem_constant(sv_compiler_t *c, const sv_ast_t *elem) {
-  switch (elem->type) {
-    case N_NUMBER: return Ant_Value_FromNumber(elem->num);
-    case N_STRING: return ast_string_const(c, elem);
-    case N_BOOL:   return Ant_Value_FromBool(elem->num != 0.0);
+static ant_value_t literal_leaf_value(sv_compiler_t *c, const sv_ast_t *node) {
+  switch (node->type) {
+    case N_NUMBER: return Ant_Value_FromNumber(node->num);
+    case N_STRING: return ast_string_const(c, node);
+    case N_BOOL:   return Ant_Value_FromBool(node->num != 0.0);
     case N_NULL:   return Ant_Value_Null;
-    case N_EMPTY:  return T_EMPTY;
-    default:       return Ant_Value_FromNumber(-elem->right->num);
+    default:       return Ant_Value_FromNumber(-node->right->num);
   }
 }
 
-static bool compile_constant_array(sv_compiler_t *c, sv_ast_t *node) {
-  int count = node->args.count;
-  ant_value_t *vals = malloc((size_t)count * sizeof(ant_value_t));
-  if (!vals) return false;
 
-  for (int i = 0; i < count; i++) {
-    vals[i] = array_elem_constant(c, node->args.items[i]);
-    if (is_err(vals[i])) { free(vals); return false; }
+static bool literal_site_uses_block(sv_literal_kind_t kind, uint8_t flags, uint32_t count) {
+  return kind == SV_LITERAL_ARRAY && count;
+}
+
+static int literal_site_add(
+  sv_compiler_t *c, sv_literal_kind_t kind, uint8_t flags,
+  const ant_value_t *vals, uint32_t count, const uint32_t *keys
+) {
+  if (c->literal_site_count >= c->literal_site_cap) {
+    int cap = c->literal_site_cap ? c->literal_site_cap * 2 : 8;
+    void *next = realloc(c->literal_sites, (size_t)cap * sizeof(*c->literal_sites));
+    if (!next) return -1;
+    c->literal_sites = next;
+    c->literal_site_cap = cap;
   }
+  
+  uint32_t first_key = (uint32_t)c->literal_key_count;
+  if (keys && count) {
+    if (c->literal_key_count + (int)count > c->literal_key_cap) {
+      int cap = c->literal_key_cap ? c->literal_key_cap * 2 : 32;
+      while (cap < c->literal_key_count + (int)count) cap *= 2;
+      void *next = realloc(c->literal_keys, (size_t)cap * sizeof(uint32_t));
+      if (!next) return -1;
+      c->literal_keys = next;
+      c->literal_key_cap = cap;
+    }
+    memcpy(c->literal_keys + c->literal_key_count, keys, (size_t)count * sizeof(uint32_t));
+    c->literal_key_count += (int)count;
+  }
+  
+  gc_shared_elements_t *block = NULL;
+  int start = 0;
+  
+  if (literal_site_uses_block(kind, flags, count)) {
+    if (!(block = gc_shared_elements_alloc(c->js, vals, count))) return -1;
+  } else if (count && (start = add_constant_run(c, vals, (int)count)) < 0) return -1;
+  
+  c->literal_sites[c->literal_site_count] = (struct sv_literal_site_desc){
+    .block = block, .start = (uint32_t)start, .count = count, .first_key = first_key, .kind = kind, .flags = flags,
+  };
+  
+  return c->literal_site_count++;
+}
 
-  int start = add_constant_run(c, vals, count);
-  free(vals);
-  if (start < 0) return false;
+typedef enum : uint8_t {
+  LITERAL_DYNAMIC,
+  LITERAL_FIXED,
+} literal_class_t;
 
-  emit_op(c, OP_ARRAY_CONST);
-  emit_u32(c, (uint32_t)start);
-  emit_u32(c, (uint32_t)count);
+static literal_class_t literal_classify(sv_ast_t *node) {
+  if (node && node->type == N_NUMBER) return LITERAL_FIXED;
+  if ((node && node->type == N_EMPTY) || literal_is_leaf(node)) return LITERAL_FIXED;
+  return LITERAL_DYNAMIC;
+}
+
+static bool literal_value(sv_compiler_t *c, sv_ast_t *node, ant_value_t *out, uint8_t *flags) {
+  if (node && node->type == N_NUMBER) {
+    *out = Ant_Value_FromNumber(node->num);
+    return true;
+  }
+  
+  if (node && node->type == N_EMPTY) {
+    *out = T_EMPTY;
+    return true;
+  }
+  
+  if (literal_is_leaf(node)) {
+    *out = literal_leaf_value(c, node);
+    return !is_err(*out);
+  }
+  
+  return false;
+}
+
+static int literal_build_root(sv_compiler_t *c, sv_ast_t *node, int prefix, const literal_class_t *classes) {
+  ant_value_t stack_vals[SV_LITERAL_CLASS_STACK];
+  ant_value_t *vals = prefix > SV_LITERAL_CLASS_STACK ? malloc((size_t)prefix * sizeof(*vals)) : stack_vals;
+  if (!vals) return -1;
+  
+  uint8_t flags = prefix < node->args.count ? SV_LITERAL_HAS_DYNAMIC : 0;
+  for (int i = 0; i < prefix; i++) {
+    sv_ast_t *item = node->args.items[i];
+    if (item && item->type == N_NUMBER) {
+      vals[i] = Ant_Value_FromNumber(item->num);
+    } else if (classes[i] == LITERAL_DYNAMIC) {
+      vals[i] = Ant_Value_Undefined;
+      flags |= SV_LITERAL_HAS_DYNAMIC;
+    } else if (!literal_value(c, item, &vals[i], &flags)) {
+      if (vals != stack_vals) free(vals);
+      return -1;
+    }
+  }
+  
+  int site = literal_site_add(c, SV_LITERAL_ARRAY, flags, vals, (uint32_t)prefix, NULL);
+  if (vals != stack_vals) free(vals);
+  
+  return site;
+}
+
+static bool literal_root_pays(int prefix, int fixed) {
+  int dynamic = prefix - fixed;
+  if (prefix <= SV_LITERAL_INLINE_MAX) return false;
+  return fixed > 0 && dynamic * SV_LITERAL_DYNAMIC_RATIO <= fixed;
+}
+
+static bool literal_has_container(const sv_ast_t *node, int prefix) {
+  for (int i = 0; i < prefix; i++) {
+    const sv_ast_t *item = node->args.items[i];
+    if (item && (item->type == N_ARRAY || item->type == N_OBJECT)) return true;
+  }
+  return false;
+}
+
+static bool compile_array_site(sv_compiler_t *c, sv_ast_t *node, int prefix) {
+  if (prefix == 0 || (prefix <= SV_LITERAL_INLINE_MAX && !literal_has_container(node, prefix))) return false;
+  literal_class_t stack_classes[SV_LITERAL_CLASS_STACK];
+  literal_class_t *classes = prefix <= SV_LITERAL_CLASS_STACK ? stack_classes : malloc((size_t)prefix * sizeof(*classes));
+  if (!classes) return false;
+  
+  int fixed = 0;
+  for (int i = 0; i < prefix; i++) {
+    classes[i] = literal_classify(node->args.items[i]);
+    fixed += classes[i] != LITERAL_DYNAMIC;
+  }
+  
+  int site = literal_root_pays(prefix, fixed) ? literal_build_root(c, node, prefix, classes) : -1;
+  if (site < 0) {
+    if (classes != stack_classes) free(classes);
+    return false;
+  }
+  
+  emit_op(c, OP_ARRAY_LITERAL);
+  emit_u32(c, (uint32_t)site);
+  
+  for (int i = 0; i < prefix; i++) {
+    if (classes[i] != LITERAL_DYNAMIC) continue;
+    compile_expr(c, node->args.items[i]);
+    emit_op(c, OP_ARRAY_INIT);
+    emit_u32(c, (uint32_t)i);
+  }
+  if (classes != stack_classes) free(classes);
+  
+  for (int i = prefix; i < node->args.count; i++) {
+    sv_ast_t *elem = node->args.items[i];
+    if (elem && elem->type == N_SPREAD) compile_concat_spread_to_array(c, elem);
+    else compile_push_arg_to_array(c, elem);
+  }
   
   return true;
 }
 
 void compile_array(sv_compiler_t *c, sv_ast_t *node) {
   int count = node->args.count;
-  bool has_spread = false;
-  bool all_constant = true;
+  int prefix = count;
   
   for (int i = 0; i < count; i++) {
     sv_ast_t *elem = node->args.items[i];
     if (elem && elem->type == N_SPREAD) {
-      has_spread = true;
+      prefix = i;
       break;
     }
-    if (all_constant && !array_elem_is_constant(elem)) all_constant = false;
   }
 
-  if (!has_spread && all_constant && count > SV_CONST_ARRAY_INLINE_MAX && compile_constant_array(c, node)) return;
+  if (compile_array_site(c, node, prefix)) return;
 
-  if (!has_spread && count <= UINT16_MAX) {
+  if (prefix == count && count <= UINT16_MAX) {
     for (int i = 0; i < count; i++) {
       sv_ast_t *elem = node->args.items[i];
       if (elem && elem->type == N_EMPTY) emit_op(c, OP_EMPTY);
