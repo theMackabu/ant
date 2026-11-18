@@ -4797,6 +4797,48 @@ static bool opt_try_super_get(opt_builder_t *b, bool field, opt_flow_t *flow) {
   return true;
 }
 
+static ant_value_t opt_super_setter_chain(const opt_builder_t *b, ant_value_t base, const sv_atom_t *atom, opt_field_case_t *out) {
+  ant_t *js = b->js;
+  *out = (opt_field_case_t){0};
+  ant_value_t value = base;
+  for (uint32_t depth = 0; depth < OPT_MAX_PROTOTYPE_DEPTH; depth++) {
+    ant_object_t *object = opt_prototype_object(js, value);
+    if (!object || object->flags.is_exotic || !object->shape) return 0;
+    out->values[depth] = value;
+    out->links[depth] = object;
+    out->depth = depth + 1;
+    int32_t slot = ant_shape_lookup_interned(object->shape, atom->str);
+    if (slot >= 0) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(object->shape, (uint32_t)slot);
+      if (!prop || prop->type != ANT_SHAPE_KEY_STRING || !prop->has_setter || vtype(prop->setter) != kTypeFunction) return 0;
+      sv_closure_t *closure = js_func_closure(prop->setter);
+      if (!closure || !closure->func || (closure->call_flags & ~OPT_CALL_PLAIN_FLAGS) || closure->func->is_async || closure->func->is_generator
+        || closure->func->code_len <= 0 || closure->func->code[0] == OP_CHECK_CTOR) return 0;
+      out->index = (uint32_t)slot;
+      return prop->setter;
+    }
+    value = ant_object_proto(object);
+  }
+  return 0;
+}
+
+static bool opt_try_super_setter(opt_builder_t *b, const sv_atom_t *atom, opt_flow_t *flow) {
+  if (!opt_super_may_speculate(b)) return false;
+  ir_node_id_t receiver = opt_tagged(b, opt_peek(b, 2)), home = opt_tagged(b, opt_peek(b, 1)), value = opt_tagged(b, opt_peek(b, 0));
+  opt_super_home_t site;
+  opt_field_case_t chain;
+  ant_value_t setter = opt_super_home(b, home, &site) ? opt_super_setter_chain(b, site.base, atom, &chain) : 0;
+  if (!setter || (site.by_identity && !opt_retain(b, site.home)) || !opt_retain(b, setter) || !opt_field_links_retain(b, &chain)) return false;
+
+  opt_super_guard(b, home, &site);
+  ir_node_id_t holder, holder_address;
+  opt_holder_chain(b, IR_NONE, &chain, true, NULL, NULL, &holder, &holder_address);
+  ir_node_id_t inputs[3] = {opt_constant(b, setter), receiver, value};
+  *flow = opt_emit_call(b, false, js_func_closure(setter)->func, inputs, 1, 3, false);
+  if (*flow == OPT_FLOW_CONTINUE) opt_poke(b, 0, value);
+  return true;
+}
+
 static bool opt_super_store_chain(const opt_builder_t *b, ant_value_t base, const sv_atom_t *atom, opt_field_case_t *out, bool *held) {
   ant_t *js = b->js;
   *out = (opt_field_case_t){0};
@@ -4826,6 +4868,7 @@ static bool opt_try_super_put(opt_builder_t *b, opt_flow_t *flow) {
   if (atom_index >= (uint32_t)func->atom_count || !func->ic_slots || ic_index >= func->ic_count) return false;
   const sv_atom_t *atom = &func->atoms[atom_index];
   const sv_ic_entry_t *ic = &func->ic_slots[ic_index];
+  if (ic->super_put_kind == SV_SUPER_PUT_IC_SETTER && ic->epoch == b->js->ic.epoch) return opt_try_super_setter(b, atom, flow);
   if (ic->super_put_kind != SV_SUPER_PUT_IC_DATA || !opt_super_may_speculate(b) || !opt_may_speculate(b, OPT_EXIT_BAD_TYPE)) return false;
   if (ant_property_key_breaks_protector(b->js, atom->str)) return false;
   ir_node_id_t receiver = opt_tagged(b, opt_peek(b, 2)), home = opt_tagged(b, opt_peek(b, 1)), value = opt_tagged(b, opt_peek(b, 0));
