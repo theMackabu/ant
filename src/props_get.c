@@ -399,17 +399,6 @@ static bool js_try_get_len(ant_t *js, ant_value_t obj, const char *key, size_t k
   }
   
   if (vtype(obj) == kTypeFunction) {
-    if (sv_vm_is_strict(js->vm) &&
-        ((key_len == 6 && memcmp(key, "caller", 6) == 0) ||
-         (key_len == 9 && memcmp(key, "arguments", 9) == 0))) {
-      *out = js_mkerr_typed(
-        js, JS_ERR_TYPE,
-        "'%.*s' not allowed on functions in strict mode",
-        (int)key_len, key
-      );
-      return true;
-    }
-
     ant_value_t func_obj = js_func_obj(obj);
     if (key_len == 4 && memcmp(key, "meta", 4) == 0 &&
       js_try_import_meta(js, func_obj, out)) return true;
