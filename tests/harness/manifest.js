@@ -80,6 +80,7 @@ export function targets() {
     'test_wasm_js_api_surface.cjs',
     'test_descriptor_proxy_error_inspect.cjs',
     'test_dataview_fast_path.cjs',
+    'test_class_name_definition_order.cjs',
     'test_jit_inline_mod.cjs',
     'test_jit_inline_constructor.cjs',
     'test_jit_primitive_field_ic.cjs',

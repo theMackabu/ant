@@ -557,7 +557,6 @@ static void compile_class_strict(
 
   sv_ast_t *ctor_method = NULL;
   bool has_computed_key = false;
-  bool has_static_name = false;
 
   int field_count = 0;
   int method_emit_count = 0;
@@ -613,17 +612,16 @@ static void compile_class_strict(
       return;
     }
     
-    if (
-      (m->flags & FN_STATIC) &&
-      !(m->flags & FN_COMPUTED) &&
-      m->left && m->left->str &&
-      m->left->len == 4 &&
-      memcmp(m->left->str, "name", 4) == 0
-    ) has_static_name = true;
-    
     if (!(m->flags & FN_STATIC) && (is_private || !is_fn)) field_count++;
     else if (is_fn && (!is_private || (m->flags & FN_STATIC))) method_emit_count++;
     else if (m->flags & FN_STATIC) static_init_count++;
+  }
+
+  const char *class_name = node->str;
+  uint32_t class_name_len = node->len;
+  if (!class_name && inferred_name) {
+    class_name = inferred_name;
+    class_name_len = inferred_name_len;
   }
 
   int inner_name_local = -1;
@@ -798,31 +796,19 @@ static void compile_class_strict(
     sv_compile_ctx_cleanup(&comp);
     int idx = add_constant(c, mkref(kTypeFunctionInfo, fn));
     emit_closure(c, idx);
+    emit_set_function_name(c, class_name, class_name_len);
   } else emit_op(c, OP_UNDEF);
   
   c->field_locals = NULL;
   if (inner_name_local >= 0) c->locals[inner_name_local].is_tdz = true;
 
-  const char *class_name = node->str;
-  uint32_t class_name_len = node->len;
-  if (!class_name && inferred_name) {
-    class_name = inferred_name;
-    class_name_len = inferred_name_len;
-  }
-
-  if (!has_static_name) {
-    int atom = class_name
-      ? add_atom(c, class_name, class_name_len)
-      : add_atom(c, "", 0);
-    emit_op(c, OP_DEFINE_CLASS);
-    emit_u32(c, (uint32_t)atom);
-    emit(c, SV_CLASS_FLAG_HAS_NAME |
-      (node->left ? SV_CLASS_FLAG_HAS_HERITAGE : 0));
-  } else {
-    emit_op(c, OP_DEFINE_CLASS);
-    emit_u32(c, 0);
-    emit(c, node->left ? SV_CLASS_FLAG_HAS_HERITAGE : 0);
-  }
+  int atom = class_name
+    ? add_atom(c, class_name, class_name_len)
+    : add_atom(c, "", 0);
+  emit_op(c, OP_DEFINE_CLASS);
+  emit_u32(c, (uint32_t)atom);
+  emit(c, SV_CLASS_FLAG_HAS_NAME |
+    (node->left ? SV_CLASS_FLAG_HAS_HERITAGE : 0));
   
   emit_u32(c, node->src_off);
   emit_u32(c, node->src_end);
@@ -849,10 +835,12 @@ static void compile_class_strict(
   free(field_inits);
   free(field_locals);
 
-  if (!node->str && !has_static_name && inferred_key_upval > 0) {
+  if (!node->str && inferred_key_upval != 0) {
     emit_get_local(c, ctor_local);
-    emit_op(c, OP_GET_UPVAL);
-    emit_u16(c, (uint16_t)(inferred_key_upval - 1));
+    if (inferred_key_upval > 0) {
+      emit_op(c, OP_GET_UPVAL);
+      emit_u16(c, (uint16_t)(inferred_key_upval - 1));
+    } else emit_get_local(c, -inferred_key_upval - 1);
     emit_op(c, OP_SET_NAME_COMP);
     emit_op(c, OP_POP);
     emit_op(c, OP_POP);
