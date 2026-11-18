@@ -627,19 +627,24 @@ void gc_mark_upvalue_cells(ant_t *js, sv_upvalue_t *const *cells, uint32_t count
   }
 }
 
-static __attribute__((noinline, cold)) bool gc_closure_defer(ant_t *js, sv_closure_t *c) {
+__attribute__((noinline, cold)) 
+static bool gc_closure_defer(ant_t *js, sv_closure_t *c) {
   if (js->gc.deferred_closure_count == js->gc.deferred_closure_cap) {
     size_t cap = js->gc.deferred_closure_cap ? js->gc.deferred_closure_cap * 2 : 256;
+
     sv_closure_t **grown = realloc(js->gc.deferred_closures, cap * sizeof(*grown));
     if (!grown) return false;
+
     js->gc.deferred_closures = grown;
     js->gc.deferred_closure_cap = cap;
   }
+
   js->gc.deferred_closures[js->gc.deferred_closure_count++] = c;
   return true;
 }
 
-static inline __attribute__((always_inline)) void gc_scan_closure(ant_t *js, sv_closure_t *c) {
+__attribute__((always_inline)) 
+static inline void gc_scan_closure(ant_t *js, sv_closure_t *c) {
   if (js->weak_gc.pending_active) gc_weak_key_marked(js, mkref(kTypeFunction, c));
   if (js->gc.realm_reach && c->func) ant_realm_reach(js, c->func->realm, gc_mark_value);
   
