@@ -12,6 +12,7 @@
 
 
 static ant_value_t proxy_call_trap(ant_t *js, ant_proxy_state_t *data, ant_value_t trap, ant_value_t *args, int argc) {
+  args[0] = data->trap_target;
   return sv_vm_call(js->vm, js, trap, data->handler, args, argc, NULL, Ant_Value_Undefined);
 }
 
@@ -1561,7 +1562,7 @@ ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, 
     : (is_object_type(ctor_this) ? ctor_this : obj);
 }
 
-static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {
+static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t trap_target, ant_value_t handler) {
   ant_value_t proxy_obj = mkobj(js, 0);
   ant_object_t *proxy_ptr = js_obj_ptr(proxy_obj);
   if (!proxy_ptr) return Ant_Error_CreateOutOfMemory(js);
@@ -1570,6 +1571,7 @@ static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {
   if (!data) return Ant_Error_CreateOutOfMemory(js);
 
   data->target = target;
+  data->trap_target = trap_target;
   data->handler = handler;
   data->revoked = false;
 
@@ -1588,7 +1590,7 @@ static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {
 }
 
 ant_value_t js_mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {
-  return mkproxy(js, target, handler);
+  return mkproxy(js, target, target, handler);
 }
 
 ant_value_t js_mkproxy_host(ant_t *js, ant_value_t target, const ant_host_proxy_ops_t *ops) {
@@ -1600,7 +1602,7 @@ ant_value_t js_mkproxy_host(ant_t *js, ant_value_t target, const ant_host_proxy_
   ant_value_t handler = mkobj(js, 0);
   GC_ROOT_PIN(js, handler);
   
-  ant_value_t proxy = mkproxy(js, target, handler);
+  ant_value_t proxy = mkproxy(js, target, target, handler);
   if (!is_err(proxy)) get_proxy_data(proxy)->host = ops;
   
   GC_ROOT_RESTORE(js, root_mark);
@@ -1608,25 +1610,22 @@ ant_value_t js_mkproxy_host(ant_t *js, ant_value_t target, const ant_host_proxy_
 }
 
 static ant_value_t create_proxy_checked(ant_native_params_t, ant_value_t new_target, bool require_new) {
-  if (require_new && vtype(new_target) == kTypeUndefined) {
+  if (require_new && vtype(new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Proxy constructor requires 'new'");
-  }
-  if (nargs < 2) return js_mkerr(js, "Proxy requires two arguments: target and handler");
+  if (nargs < 2) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot create proxy with a non-object as target or handler");
 
   ant_value_t target = args[0];
   ant_value_t handler = args[1];
 
-  uint8_t target_type = vtype(target);
-  if (target_type != kTypeObject && target_type != kTypeFunction && target_type != kTypeArray) {
-    return js_mkerr(js, "Proxy target must be an object");
-  }
+  if (vtype(target) == kTypeBuiltin) target = js_cfunc_promote(js, target);
+  if (is_err(target)) return target;
+  if (vtype(handler) == kTypeBuiltin) handler = js_cfunc_promote(js, handler);
+  if (is_err(handler)) return handler;
+  
+  if (!is_object_type(target) || !is_object_type(handler))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot create proxy with a non-object as target or handler");
 
-  uint8_t handler_type = vtype(handler);
-  if (handler_type != kTypeObject && handler_type != kTypeFunction) {
-    return js_mkerr(js, "Proxy handler must be an object");
-  }
-
-  return mkproxy(js, target, handler);
+  return mkproxy(js, target, args[0], handler);
 }
 
 static ant_value_t builtin_Proxy(ant_params_t) {
@@ -1634,7 +1633,6 @@ static ant_value_t builtin_Proxy(ant_params_t) {
 }
 
 static ant_value_t proxy_revoke_fn(ant_params_t) {
-  (void)args; (void)nargs;
   ant_value_t ref_slot = js_get_slot(call_func, SLOT_PROXY_REF);
   
   if (vtype(ref_slot) != kTypeUndefined && vdata(ref_slot) != 0) {
