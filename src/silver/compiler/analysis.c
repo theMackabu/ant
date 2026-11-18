@@ -100,7 +100,7 @@ bool param_captured_by_value(sv_compiler_t *c, int local) {
   if (!c->value_params_known) {
     const sv_ast_t *fn = c->value_params_node;
     sv_value_params_t params = {.params = fn};
-    sv_write_scan_t scan = {.mark = value_params_mark, .data = &params, .arguments_poisons = !c->is_strict};
+    sv_write_scan_t scan = {.mark = value_params_mark, .data = &params, .arguments_poisons = !c->is_strict || c->args_mapped};
     for (int i = 0; i < fn->args.count && i < 64; i++)
       for (int j = 0; j < i; j++)
         if (is_ident_str(fn->args.items[i]->str, fn->args.items[i]->len, fn->args.items[j]->str, fn->args.items[j]->len))
