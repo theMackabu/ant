@@ -225,6 +225,7 @@ export function targets() {
     'test_headers_sort_order.cjs',
     'test_ic_minor_aba.cjs',
     'test_ic_read_differential.cjs',
+    'test_export_undeclared_names.mjs',
     'test_immediate_handle.cjs',
     'test_import_iterator_getter_errors.cjs',
     'test_import_meta_resolve_builtin.mjs',

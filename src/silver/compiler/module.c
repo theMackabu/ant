@@ -267,6 +267,14 @@ void compile_export_decl(sv_compiler_t *c, sv_ast_t *node) {
         emit_atom_op(c, OP_IMPORT_NAMED, spec->left->str, spec->left->len);
       emit_atom_op(c, OP_EXPORT, spec->right->str, spec->right->len);
     } else {
+      if (
+        c->mode == SV_COMPILE_MODULE && c->enclosing && !c->enclosing->enclosing &&
+        resolve_local(c, spec->left->str, spec->left->len) < 0 &&
+        resolve_spill(c, spec->left->str, spec->left->len) < 0
+      ) {
+        js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Export '%.*s' is not defined in module", (int)spec->left->len, spec->left->str);
+        return;
+      }
       if (export_clause_is_metadata_only(c, spec))
         continue;
       emit_get_var(c, spec->left->str, spec->left->len);
