@@ -5223,6 +5223,9 @@ static opt_flow_t opt_build_super_call_with(opt_builder_t *b, sv_op_t op, const 
   opt_forget_memory(b);
   opt_push(b, result);
   b->frame.this_value = result;
+  ir_op_t store = ir_op(IR_OP_STORE_SLOT);
+  store.slot = OPT_THIS_SLOT;
+  opt_emit(b, store, &result, 1, OPT_REPR_NONE);
   return OPT_FLOW_CONTINUE;
 }
 

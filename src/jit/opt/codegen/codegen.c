@@ -1253,6 +1253,10 @@ static void opt_cg_store_slot(opt_cg_t *cg, ir_node_id_t node_id, uint32_t slot)
     default: value = opt_cg_input(cg, node_id, 0); break;
   }
   const ir_frame_layout_t *layout = cg->layout;
+  if (slot == OPT_THIS_SLOT) {
+    masm_store64(m, opt_cg_entry_field(cg, offsetof(opt_entry_t, this_val)), value);
+    return;
+  }
   if (slot >= ir_layout_arguments_base(layout)) {
     masm_store64(m, asm_addr(cg->pinned.frame, (int32_t)(8 * (slot - ir_layout_arguments_base(layout)))), value);
     return;

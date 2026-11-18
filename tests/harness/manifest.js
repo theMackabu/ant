@@ -391,6 +391,7 @@ export function targets() {
     'test_opt_speculation.cjs',
     'test_opt_stale_shapes.cjs',
     'test_opt_string_concat.cjs',
+    'test_opt_super_result_this.cjs',
     'test_opt_state_table.cjs',
     'test_opt_tdz.cjs',
     'test_opt_tier.cjs',
