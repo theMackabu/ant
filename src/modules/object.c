@@ -1186,6 +1186,15 @@ static ant_value_t object_add_descriptors_for_keys(
   return Ant_Value_Undefined;
 }
 
+static bool object_has_symbol_keys(const ant_object_t *ptr) {
+  uint32_t count = ptr->shape ? ant_shape_count(ptr->shape) : 0;
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+    if (prop && prop->type == ANT_SHAPE_KEY_SYMBOL) return true;
+  }
+  return false;
+}
+
 static ant_value_t builtin_object_getOwnPropertyDescriptors(ant_params_t) {
   ant_value_t result = Ant_Object_CreateBare(js);
   
@@ -1204,11 +1213,23 @@ static ant_value_t builtin_object_getOwnPropertyDescriptors(ant_params_t) {
   }
   
   if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return result;
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+  if (__builtin_expect(ptr && ptr->flags.is_exotic && is_proxy(js_as_obj(obj)), 0)) {
+    GC_ROOT_SAVE(mark, js);
+    GC_ROOT_PIN(js, result);
+    GC_ROOT_PIN(js, obj);
+    ant_value_t keys = proxy_own_keys_raw(js, js_as_obj(obj));
+    GC_ROOT_PIN(js, keys);
+    ant_value_t added = is_err(keys) ? keys : object_add_descriptors_for_keys(js, result, obj, keys);
+    GC_ROOT_RESTORE(js, mark);
+    return is_err(added) ? added : result;
+  }
   ant_value_t names = builtin_object_getOwnPropertyNames(js, &obj, 1, Ant_Value_Undefined, call_this, call_func);
   if (is_err(names)) return names;
   
   ant_value_t err = object_add_descriptors_for_keys(js, result, obj, names);
   if (is_err(err)) return err;
+  if (ptr && t == kTypeObject && !ptr->flags.is_exotic && !object_has_symbol_keys(ptr)) return result;
   
   ant_value_t symbols = builtin_object_getOwnPropertySymbols(js, &obj, 1, Ant_Value_Undefined, call_this, call_func);
   if (is_err(symbols)) return symbols;

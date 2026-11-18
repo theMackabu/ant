@@ -256,6 +256,7 @@ export function targets() {
     'test_io_handled_errors.cjs',
     'test_iteration_protocol_node_compat.cjs',
     'test_isolate.mjs',
+    'test_get_own_property_descriptors_proxy.cjs',
     'test_iterator_close_errors.cjs',
     'test_iterator_dispose.cjs',
     'test_iterator_result_template.cjs',
