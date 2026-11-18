@@ -74,8 +74,10 @@ typedef struct {
   ant_value_t handler;
   const ant_host_proxy_ops_t *host;
   bool revoked;
+  uint16_t trap_mask;
   uint32_t plain_handler_epoch;
   uint32_t plain_set_epoch;
+  uint32_t trap_epoch;
 } ant_proxy_state_t;
 
 typedef struct {

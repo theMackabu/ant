@@ -451,6 +451,7 @@ export function targets() {
     'test_proxy_target_kinds.cjs',
     'test_regexp_original_source.cjs',
     'test_regexp_replace_callback_recompile.cjs',
+    'test_proxy_trap_cache.cjs',
     'test_regexp_required_literal.cjs',
     'test_regexp_result_batch.cjs',
     'test_regexp_set_ops_group_names.cjs',
