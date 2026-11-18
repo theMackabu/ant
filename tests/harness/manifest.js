@@ -126,6 +126,7 @@ export function targets() {
     'test_class_field_function_names.cjs',
     'test_cron_continuation_error.cjs',
     'test_crypto_digest_string_encodings.cjs',
+    'test_class_inferred_name_scope.cjs',
     'test_curried_call_fusion.cjs',
     'test_dataview_accessors.cjs',
     'test_class_key_wrapper_and_property_keys.cjs',

@@ -532,15 +532,16 @@ static void compile_class_strict(
     c->field_inits = field_inits;
     c->field_init_count = field_count;
     c->field_locals = field_locals;
-    const char *saved_name = c->inferred_name;
-    uint32_t saved_len = c->inferred_name_len;
     if (node->str && node->len) {
       c->inferred_name = node->str;
       c->inferred_name_len = node->len;
+    } else {
+      c->inferred_name = inferred_name;
+      c->inferred_name_len = inferred_name_len;
     }
     compile_func_expr(c, ctor_method->right);
-    c->inferred_name = saved_name;
-    c->inferred_name_len = saved_len;
+    c->inferred_name = NULL;
+    c->inferred_name_len = 0;
     c->field_inits = NULL;
     c->field_init_count = 0;
     c->field_locals = NULL;
@@ -615,12 +616,9 @@ static void compile_class_strict(
 
   const char *class_name = node->str;
   uint32_t class_name_len = node->len;
-  bool consumed_inferred_name = false;
-  
   if (!class_name && inferred_name) {
     class_name = inferred_name;
     class_name_len = inferred_name_len;
-    consumed_inferred_name = true;
   }
 
   if (!has_static_name) {
@@ -635,11 +633,6 @@ static void compile_class_strict(
     emit_op(c, OP_DEFINE_CLASS);
     emit_u32(c, 0);
     emit(c, node->left ? SV_CLASS_FLAG_HAS_HERITAGE : 0);
-  }
-  
-  if (consumed_inferred_name) {
-    c->inferred_name = NULL;
-    c->inferred_name_len = 0;
   }
   
   emit_u32(c, node->src_off);
@@ -703,6 +696,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   c->is_strict = true;
   const char *inferred_name = c->inferred_name;
   uint32_t inferred_name_len = c->inferred_name_len;
+  c->inferred_name = NULL;
+  c->inferred_name_len = 0;
   compile_class_strict(c, node, inferred_name, inferred_name_len);
   c->is_strict = saved_strict;
 }
