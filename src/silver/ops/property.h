@@ -1331,6 +1331,32 @@ static inline void sv_pf_poly_promote(sv_ic_entry_t *ic, sv_pf_poly_entry_t *e) 
   e->shape = from; e->to_shape = to; e->index = slot; e->epoch = epoch; e->proto = proto;
 }
 
+static inline __attribute__((always_inline)) void sv_store_data_slot(
+  ant_t *js, ant_object_t *ptr, uint32_t slot, ant_value_t val, const sv_atom_t *a
+) {
+  ant_object_prop_set_unchecked(ptr, slot, val);
+  gc_write_barrier_prop(js, ptr, val);
+  ant_property_mutation_invalidate(js, ptr, a->str);
+}
+
+static inline __attribute__((always_inline)) bool sv_apply_add_transition(
+  ant_t *js, ant_object_t *ptr, ant_shape_t *to_shape, uint32_t slot, ant_value_t val, const sv_atom_t *a
+) {
+  ant_shape_t *old_shape = ptr->shape;
+  ant_shape_retain(to_shape);
+  
+  ptr->shape = to_shape;
+  ant_shape_release(old_shape);
+  ant_object_invalidate_guarded_absence(js, ptr);
+  ant_property_mutation_invalidate(js, ptr, a->str);
+  
+  if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(js, ptr, slot + 1)) return false;
+  ant_object_prop_set_unchecked(ptr, slot, val);
+  gc_write_barrier_prop(js, ptr, val);
+  
+  return true;
+}
+
 static inline int sv_pf_poly_try_store(
   ant_t *js, sv_ic_entry_t *ic, ant_object_t *ptr, const sv_atom_t *a, ant_value_t val
 ) {
@@ -1344,9 +1370,7 @@ static inline int sv_pf_poly_try_store(
       const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, e->index);
       if (!prop || prop->type != ANT_SHAPE_KEY_STRING || prop->key.interned != a->str ||
           prop->has_getter || prop->has_setter || (prop->attrs & ANT_PROP_ATTR_WRITABLE) == 0) continue;
-      ant_object_prop_set_unchecked(ptr, e->index, val);
-      gc_write_barrier_prop(js, ptr, val);
-      ant_property_mutation_invalidate(js, ptr, a->str);
+      sv_store_data_slot(js, ptr, e->index, val, a);
       sv_pf_poly_promote(ic, e);
       return 1;
     }
@@ -1357,18 +1381,7 @@ static inline int sv_pf_poly_try_store(
       !sv_add_proto_matches(ptr, e->proto)
     ) continue;
     
-    uint32_t slot = e->index;
-    ant_shape_t *old_shape = ptr->shape;
-    ant_shape_retain(e->to_shape);
-    
-    ptr->shape = e->to_shape;
-    ant_shape_release(old_shape);
-    ant_object_invalidate_guarded_absence(js, ptr);
-    ant_property_mutation_invalidate(js, ptr, a->str);
-    
-    if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(js, ptr, slot + 1)) return -1;
-    ant_object_prop_set_unchecked(ptr, slot, val);
-    gc_write_barrier_prop(js, ptr, val);
+    if (!sv_apply_add_transition(js, ptr, e->to_shape, e->index, val, a)) return -1;
     sv_pf_poly_promote(ic, e);
     
     return 1;
@@ -1396,9 +1409,7 @@ static inline bool sv_put_field_try_cached(
       ic->cached_shape == ptr->shape &&
       ic->cached_index < ptr->prop_count) {
     if (sv_shape_prop_is_writable_data(ant_shape_prop_at(ptr->shape, ic->cached_index), a->str)) {
-      ant_object_prop_set_unchecked(ptr, ic->cached_index, val);
-      gc_write_barrier_prop(js, ptr, val);
-      ant_property_mutation_invalidate(js, ptr, a->str);
+      sv_store_data_slot(js, ptr, ic->cached_index, val, a);
       return true;
     }
   }
@@ -1411,19 +1422,10 @@ static inline bool sv_put_field_try_cached(
       ic->guard.add.from_shape == ptr->shape &&
       ic->guard.add.to_shape &&
       sv_add_proto_matches(ptr, ic->add_proto)) {
-    ant_shape_t *old_shape = ptr->shape;
-    ant_shape_retain(ic->guard.add.to_shape);
-    ptr->shape = ic->guard.add.to_shape;
-    ant_shape_release(old_shape);
-    ant_object_invalidate_guarded_absence(js, ptr);
-    ant_property_mutation_invalidate(js, ptr, a->str);
-    if (ic->guard.add.slot >= ptr->prop_count &&
-        !js_obj_ensure_prop_capacity(js, ptr, ic->guard.add.slot + 1)) {
+    if (!sv_apply_add_transition(js, ptr, ic->guard.add.to_shape, ic->guard.add.slot, val, a)) {
       *out = js_mkerr(js, "oom");
       return true;
     }
-    ant_object_prop_set_unchecked(ptr, ic->guard.add.slot, val);
-    gc_write_barrier_prop(js, ptr, val);
     sv_ic_set_cached_shape(js, ic, ptr->shape);
     ic->cached_index = ic->guard.add.slot;
     ic->epoch = js->ic.epoch;
