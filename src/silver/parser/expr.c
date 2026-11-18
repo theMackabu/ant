@@ -39,6 +39,14 @@ sv_ast_t *parse_member_suffix(sv_parser_t *p, sv_ast_t *left, uint8_t la) {
   return NULL;
 }
 
+sv_ast_t *parse_tagged_template(sv_parser_t *p, sv_ast_t *tag) {
+  sv_ast_t *tagged = mk(N_TAGGED_TEMPLATE);
+  tagged->left = tag;
+  p->tagged_template = true;
+  tagged->right = parse_primary(p);
+  return tagged;
+}
+
 static sv_ast_t *parse_call(sv_parser_t *p) {
   sv_ast_t *n = parse_primary(p);
 
@@ -108,11 +116,7 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
       if (opt->src_end <= opt->src_off && opt->right) opt->src_end = opt->right->src_end;
       n = opt;
     } else if (la == TOK_TEMPLATE) {
-      sv_ast_t *tagged = mk(N_TAGGED_TEMPLATE);
-      tagged->left = n;
-      p->tagged_template = true;
-      tagged->right = parse_primary(p);
-      n = tagged;
+      n = parse_tagged_template(p, n);
     } else break;
   }
   return n;

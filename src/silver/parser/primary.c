@@ -332,6 +332,7 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     for (;;) {
       uint8_t la = sv_lexer_next(&p->lx);
       if (la == TOK_DOT || la == TOK_LBRACKET) callee = parse_member_suffix(p, callee, la);
+      else if (la == TOK_TEMPLATE) callee = parse_tagged_template(p, callee);
       else break;
       if (callee && callee->type == N_EMPTY) return callee;
     }
