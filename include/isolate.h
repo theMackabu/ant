@@ -461,6 +461,10 @@ struct ant_isolate_t {
     ant_object_t **mark_stack;
     size_t mark_sp;
     size_t mark_cap;
+    
+    struct sv_closure **deferred_closures;
+    size_t deferred_closure_count;
+    size_t deferred_closure_cap;
   
     gc_func_mark_profile_t func_profile;
     sv_func_t **func_stack;
