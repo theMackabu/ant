@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal.h"
+#include "gc/objects.h"
 
 #define PROXY_AWARE_LENGTH_OR_RETURN(obj_expr, out_var)                       \
   ant_offset_t out_var = 0;                                                   \
