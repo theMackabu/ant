@@ -125,7 +125,7 @@ void emit_field_inits(
       emit_op(c, OP_THIS);
       emit_private_token(c, m->left);
       if (is_fn) compile_method_function(c, m);
-      else if (m->right) compile_expr(c, m->right);
+      else if (m->right) compile_field_initializer(c, m->right, m->left);
       else emit_op(c, OP_UNDEF);
       emit_op(c, OP_DEF_PRIVATE);
       if (m->flags & FN_GETTER) emit(c, SV_COMP_PRIVATE_GETTER);
@@ -136,7 +136,7 @@ void emit_field_inits(
     }
 
     emit_op(c, OP_THIS);
-    if (m->right) compile_expr(c, m->right);
+    if (m->right) compile_field_initializer(c, m->right, field_static_key(m));
     else emit_op(c, OP_UNDEF);
     if (m->flags & FN_COMPUTED) {
       int uv = capture_field_key(c, owner, owner->computed_key_locals[i]);

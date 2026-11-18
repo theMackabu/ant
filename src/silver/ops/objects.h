@@ -89,6 +89,11 @@ static inline ant_value_t sv_define_method_comp(
   ant_value_t key = *key_slot;
   bool is_field = (flags & SV_DEFINE_METHOD_FIELD) != 0;
 
+  if (is_field && (flags & SV_DEFINE_METHOD_SET_NAME)) {
+    ant_value_t named = js_maybe_set_function_name_from_key(js, fn, key, "", 0);
+    if (is_err(named)) return named;
+  }
+  
   if (is_field && !sv_field_target_plain(js, obj, key))
     return js_create_data_property_or_throw(js, obj, key, fn);
   ant_value_t desc_obj = js_as_obj(obj);
@@ -104,7 +109,7 @@ static inline ant_value_t sv_define_method_comp(
     ? JS_DESC_C
     : (JS_DESC_E | JS_DESC_C);
   
-  if (flags & SV_DEFINE_METHOD_SET_NAME) {
+  if (!is_field && (flags & SV_DEFINE_METHOD_SET_NAME)) {
     const char *prefix = is_getter ? "get " : is_setter ? "set " : "";
     size_t prefix_len = is_getter || is_setter ? 4 : 0;
     ant_value_t named = js_maybe_set_function_name_from_key(js, fn, key, prefix, prefix_len);

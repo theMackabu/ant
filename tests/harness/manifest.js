@@ -117,6 +117,7 @@ export function targets() {
     'test_class_field_define_semantics.cjs',
     'test_compile_native_addon.cjs',
     'test_compile_inference.cjs',
+    'test_class_field_function_names.cjs',
     'test_cron_continuation_error.cjs',
     'test_crypto_digest_string_encodings.cjs',
     'test_curried_call_fusion.cjs',

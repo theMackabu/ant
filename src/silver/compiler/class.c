@@ -125,7 +125,7 @@ bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
   return true;
 }
 
-static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, int ctor_local);
+static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, const sv_ast_t *key, int ctor_local);
 
 void compile_method_function(sv_compiler_t *c, sv_ast_t *m) {
   const char *saved_name = c->inferred_name;
@@ -162,7 +162,7 @@ static void compile_class_method(
     emit_op(c, OP_SWAP);              
   } else {
     emit_get_local(c, home_local);    
-    if (is_static) compile_static_initializer_value(c, m->right, ctor_local);
+    if (is_static) compile_static_initializer_value(c, m->right, field_static_key(m), ctor_local);
     else if (m->right) compile_expr(c, m->right);
     else emit_op(c, OP_UNDEF);        
   }
@@ -192,7 +192,7 @@ static void compile_private_static_element(sv_compiler_t *c, sv_ast_t *m, int ct
   if (is_fn) {
     if (m->flags & FN_STATIC) m->right->flags |= FN_STATIC;
     compile_method_function(c, m);
-  } else if ((m->flags & FN_STATIC)) compile_static_initializer_value(c, m->right, ctor_local);
+  } else if ((m->flags & FN_STATIC)) compile_static_initializer_value(c, m->right, m->left, ctor_local);
   else if (m->right) compile_expr(c, m->right);
   else emit_op(c, OP_UNDEF);
 
@@ -243,7 +243,7 @@ static bool is_constructor_key(const sv_ast_t *key) {
   return key && key->type == N_IDENT && key->str && key->len == (is_quoted_ident_key(key) ? 13u : 11u) && memcmp(key->str + is_quoted_ident_key(key), "constructor", 11) == 0;
 }
 
-static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool returns_expr) {
+static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool returns_expr, const sv_ast_t *key) {
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
   comp.is_strict = true;
@@ -254,7 +254,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
   emit_put_local(&comp, comp.super_local);
 
   if (returns_expr) {
-    if (node) compile_expr(&comp, node);
+    if (node) compile_field_initializer(&comp, node, key);
     else emit_op(&comp, OP_UNDEF);
     emit_return_from_stack(&comp);
   } else {
@@ -316,13 +316,13 @@ static void emit_static_child_call(sv_compiler_t *c, int func_idx, int ctor_loca
   emit_u16(c, 0);
 }
 
-static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, int ctor_local) {
-  int idx = compile_static_child_function(c, expr, true);
+static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, const sv_ast_t *key, int ctor_local) {
+  int idx = compile_static_child_function(c, expr, true, key);
   emit_static_child_call(c, idx, ctor_local);
 }
 
 static void compile_static_block(sv_compiler_t *c, sv_ast_t *block, int ctor_local) {
-  int idx = compile_static_child_function(c, block, false);
+  int idx = compile_static_child_function(c, block, false, NULL);
   emit_static_child_call(c, idx, ctor_local);
   emit_op(c, OP_POP);
 }
