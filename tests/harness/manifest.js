@@ -73,6 +73,7 @@ export function targets() {
     'test_tls_server.mjs',
     'test_tls_socket_rewrap.cjs',
     'test_tls_socket_readable.mjs',
+    'test_super_string_base.cjs',
     'test_wasm_js_api_surface.cjs',
     'test_descriptor_proxy_error_inspect.cjs',
     'test_dataview_fast_path.cjs',

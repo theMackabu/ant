@@ -600,6 +600,7 @@ ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t recei
   size_t key_len = strlen(name);
   if (is_proxy(super_obj)) return proxy_get(js, super_obj, name, key_len);
 
+  bool string_own_key = is_length_key(name, key_len) || (name[0] >= '0' && name[0] <= '9');
   const char *key_intern = intern_string(js, name, key_len);
   if (!key_intern) return Ant_Value_Undefined;
 
@@ -610,6 +611,9 @@ ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t recei
     ant_value_t cur_obj = js_as_obj(cur);
     ant_object_t *cur_ptr = js_obj_ptr(cur_obj);
     bool handled = false;
+    ant_value_t string_own;
+    bool string_wrapper = string_own_key && cur_ptr && cur_ptr->extra_slots && vtype(js_string_wrapper_value(cur_obj)) == kTypeString;
+    if (string_wrapper && js_try_get_string_own_exotic(js, cur_obj, name, key_len, &string_own, NULL)) return string_own;
 
     if (cur_ptr && cur_ptr->shape) {
       int32_t slot = ant_shape_lookup_interned(cur_ptr->shape, key_intern);
