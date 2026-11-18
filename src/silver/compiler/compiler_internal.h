@@ -199,9 +199,17 @@ void emit_super_receiver(sv_compiler_t *c);
 bool reject_misplaced_super_call(sv_compiler_t *c);
 void emit_private_get(sv_compiler_t *c, sv_ast_t *name, sv_op_t op);
 bool private_name_uses_brand(sv_compiler_t *c, sv_ast_t *name);
+bool private_name_resolvable(sv_compiler_t *c, sv_ast_t *name);
 bool arguments_forbidden(const sv_compiler_t *c);
 bool reject_forbidden_arguments(sv_compiler_t *c);
 int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local);
+
+typedef bool (*private_eval_binding_fn)(
+  void *ctx, const char *name, uint32_t len, uint8_t kind, uint16_t index
+);
+
+int private_eval_binding_count(const sv_compiler_t *c);
+bool private_eval_bindings_each(sv_compiler_t *c, private_eval_binding_fn fn, void *ctx);
 bool reject_super_identifier(sv_compiler_t *c, const sv_ast_t *node);
 void emit_super(sv_compiler_t *c);
 void emit_new_target(sv_compiler_t *c);

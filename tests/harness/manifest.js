@@ -410,6 +410,7 @@ export function targets() {
     'test_private_method_identity.cjs',
     'test_property_delete_compaction.cjs',
     'test_property_location_stress.cjs',
+    'test_private_names_direct_eval.cjs',
     'test_prototype_write_epoch.cjs',
     'test_proxy_set_trap_result.cjs',
     'test_put_elem_index_keys.cjs',

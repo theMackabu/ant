@@ -108,8 +108,89 @@ static int resolve_private_upvalue(sv_compiler_t *c, sv_compiler_t *owner, int l
   return add_upvalue_binding(c, (uint16_t)upvalue, false, false, false, outer->write_once, &binding);
 }
 
+static const char *private_method_binding_name(sv_compiler_t *c, const char *name, uint32_t len) {
+  char *buf = malloc((size_t)len + 2);
+  if (!buf) return NULL;
+  memcpy(buf, name, len);
+  memcpy(buf + len, "()", 2);
+  const char *interned = intern_string(c->js, buf, (size_t)len + 2);
+  free(buf);
+  return interned;
+}
+
+typedef enum {
+  EVAL_PRIVATE_NONE,
+  EVAL_PRIVATE_TOKEN,
+  EVAL_PRIVATE_METHOD,
+} eval_private_kind_t;
+
+static eval_private_kind_t eval_private_kind(sv_compiler_t *c, const char *name, uint32_t len) {
+  sv_compiler_t *root = c;
+  while (root->enclosing) root = root->enclosing;
+  if (!sv_compile_mode_is_eval(root->mode) || !is_object_type(root->eval_env)) return EVAL_PRIVATE_NONE;
+  if (!sv_eval_env_shadows_global(c->js, root->eval_env, name, len)) return EVAL_PRIVATE_NONE;
+
+  const char *method = private_method_binding_name(c, name, len);
+  return method && sv_eval_env_shadows_global(c->js, root->eval_env, method, len + 2)
+    ? EVAL_PRIVATE_METHOD : EVAL_PRIVATE_TOKEN;
+}
+
+bool private_name_resolvable(sv_compiler_t *c, sv_ast_t *name) {
+  return
+    private_scope_resolve(c, name->str, name->len) ||
+    eval_private_kind(c, name->str, name->len) != EVAL_PRIVATE_NONE;
+}
+
+static bool private_binding_location(
+  sv_compiler_t *c, sv_compiler_t *owner, int local, uint8_t *kind, uint16_t *index
+) {
+  if (!owner || local < 0) return false;
+  if (owner == c) {
+    owner->locals[local].captured = true;
+    *kind = SV_EVAL_BIND_LOCAL;
+    *index = (uint16_t)(local - c->param_locals);
+    return true;
+  }
+
+  int upvalue = resolve_private_upvalue(c, owner, local);
+  if (upvalue < 0) return false;
+  *kind = SV_EVAL_BIND_UPVALUE;
+  *index = (uint16_t)upvalue;
+  return true;
+}
+
+int private_eval_binding_count(const sv_compiler_t *c) {
+  int count = 0;
+  for (sv_private_scope_t *scope = c->private_scope; scope; scope = scope->parent)
+    count += scope->count * 2;
+  return count;
+}
+
+bool private_eval_bindings_each(sv_compiler_t *c, private_eval_binding_fn fn, void *ctx) {
+  for (sv_private_scope_t *scope = c->private_scope; scope; scope = scope->parent) {
+  for (int i = 0; i < scope->count; i++) {
+    sv_private_name_t *p = &scope->names[i];
+    sv_private_name_t *token = private_name_is_instance_method(p) ? &scope->brand : p;
+    uint8_t kind;
+    uint16_t index;
+
+    if (!private_binding_location(c, token->owner, token->local, &kind, &index)) continue;
+    if (!fn(ctx, p->name, p->len, kind, index)) return false;
+    if (token == p || p->method_local < 0) continue;
+
+    const char *method = private_method_binding_name(c, p->name, p->len);
+    if (!method || !private_binding_location(c, p->owner, p->method_local, &kind, &index)) continue;
+    if (!fn(ctx, method, p->len + 2, kind, index)) return false;
+  }}
+  return true;
+}
+
 bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
   sv_private_name_t *p = private_scope_resolve(c, name->str, name->len);
+  if (!p && eval_private_kind(c, name->str, name->len) != EVAL_PRIVATE_NONE) {
+    emit_atom_op(c, OP_GET_EVAL_GLOBAL, name->str, name->len);
+    return true;
+  }
   if (!p) {
     js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Private name '%.*s' is not declared", (int)name->len, name->str);
     emit_op(c, OP_UNDEF);
@@ -276,7 +357,8 @@ static void emit_private_method_value(sv_compiler_t *c, const sv_private_name_t 
 
 void emit_private_get(sv_compiler_t *c, sv_ast_t *name, sv_op_t op) {
   sv_private_name_t *p = private_scope_resolve(c, name->str, name->len);
-  bool method = p && private_name_is_instance_method(p) && p->method_local >= 0;
+  bool eval_method = !p && eval_private_kind(c, name->str, name->len) == EVAL_PRIVATE_METHOD;
+  bool method = eval_method || (p && private_name_is_instance_method(p) && p->method_local >= 0);
   int done = -1;
 
   if (method && op == OP_GET_PRIVATE_OPT) {
@@ -298,13 +380,17 @@ void emit_private_get(sv_compiler_t *c, sv_ast_t *name, sv_op_t op) {
   if (!method) return;
   
   emit_op(c, OP_POP);
-  emit_private_method_value(c, p);
+  if (eval_method) {
+    const char *binding = private_method_binding_name(c, name->str, name->len);
+    emit_atom_op(c, OP_GET_EVAL_GLOBAL, binding, name->len + 2);
+  } else emit_private_method_value(c, p);
   if (done >= 0) patch_jump(c, done);
 }
 
 bool private_name_uses_brand(sv_compiler_t *c, sv_ast_t *name) {
   sv_private_name_t *p = private_scope_resolve(c, name->str, name->len);
-  return p && private_name_is_instance_method(p);
+  if (!p) return eval_private_kind(c, name->str, name->len) == EVAL_PRIVATE_METHOD;
+  return private_name_is_instance_method(p);
 }
 
 static void compile_private_instance_methods(

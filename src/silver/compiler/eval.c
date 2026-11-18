@@ -188,6 +188,21 @@ static bool eval_scope_builder_capture_keywords(
     c, scope, set, "super", 5, SV_EVAL_BIND_UPVALUE, (uint16_t)super_upvalue, false, &no_meta);
 }
 
+typedef struct {
+  sv_compiler_t *c;
+  sv_eval_scope_builder_t *scope;
+  sv_eval_binding_set_t *set;
+} private_capture_t;
+
+static bool eval_scope_builder_capture_private(
+  void *ctx, const char *name, uint32_t len, uint8_t kind, uint16_t index
+) {
+  static const sv_binding_meta_t no_meta = {0};
+  private_capture_t *capture = ctx;
+  return eval_scope_builder_add_binding(
+    capture->c, capture->scope, capture->set, name, len, kind, index, true, &no_meta);
+}
+
 bool arguments_forbidden(const sv_compiler_t *c) {
   for (const sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
     if (cur->in_field_init || cur->no_arguments_scope || cur->eval_no_arguments) return true;
@@ -248,6 +263,8 @@ bool capture_dynamic_eval_scope(
   for (sv_compiler_t *enc = c->inherits_eval_env ? NULL : c->enclosing; enc; enc = enc->enclosing)
     if (!eval_scope_builder_capture_upvalues(
           c, scope, &binding_set, enc)) goto capture_failed;
+  private_capture_t private_capture = { c, scope, &binding_set };
+  if (!private_eval_bindings_each(c, eval_scope_builder_capture_private, &private_capture)) goto capture_failed;
   free(binding_set.slots);
   *scope_index_out = scope_index;
   return true;
@@ -323,10 +340,22 @@ static bool inline_eval_can_compile_without_early_errors(sv_compiler_t *c, sv_as
   ant_t *js = c->js;
   if (!node) return true;
   if (node->type == N_CLASS) return false;
+  if (is_private_name_node(node) && !private_name_resolvable(c, node)) return false;
   if (is_ident_name(node, "arguments") && arguments_forbidden(c)) return false;
   if (node->type == N_CALL && is_ident_name(node->left, "super") && !lexical_owner(c)->is_derived_ctor) return false;
   if (is_ident_name(node, "super") && !compiler_has_super_binding(c)) return false;
   if (node->type == N_OBJECT && (node->flags & FN_PATTERN_ONLY)) return false;
+  if (node->type == N_IDENT && is_private_name_node(node)) return false;
+  if ((node->type == N_MEMBER || node->type == N_OPTIONAL) && !(node->flags & 1) && node->right && is_private_name_node(node->right)) {
+    if (is_ident_name(node->left, "super") || !private_name_resolvable(c, node->right)) return false;
+    return inline_eval_can_compile_without_early_errors(c, node->left, strict);
+  }
+  if (node->type == N_BINARY && node->op == TOK_IN && node->left && node->left->type == N_IDENT && is_private_name_node(node->left)) {
+    if (!private_name_resolvable(c, node->left)) return false;
+    return inline_eval_can_compile_without_early_errors(c, node->right, strict);
+  }
+  if (node->type == N_DELETE && node->right && (node->right->type == N_MEMBER || node->right->type == N_OPTIONAL) &&
+      node->right->right && !(node->right->flags & 1) && is_private_name_node(node->right->right)) return false;
 
   if (node->type == N_FUNC) {
     bool has_own_use_strict = false;

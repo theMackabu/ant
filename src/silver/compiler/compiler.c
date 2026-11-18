@@ -80,6 +80,7 @@ sv_func_t *sv_compile(
   );
   
   if (sv_compile_mode_is_eval(mode)) {
+    root.eval_env = eval_env;
     root.eval_shadows_undefined = sv_eval_env_shadows_global(js, eval_env, "undefined", 9);
     root.eval_shadows_global_this = sv_eval_env_shadows_global(js, eval_env, "globalThis", 10);
     sv_eval_scope_flags_t scope_flags = sv_eval_env_flags(eval_env);
