@@ -4920,6 +4920,7 @@ static ir_node_id_t opt_new_target(opt_builder_t *b) {
 
 static opt_flow_t opt_build_check_ctor(opt_builder_t *b) {
   if (b->inline_call) return b->inline_call->construct ? OPT_FLOW_CONTINUE : OPT_FLOW_GENERIC;
+  if (!opt_may_speculate(b, OPT_EXIT_SLOW_PATH)) return OPT_FLOW_GENERIC;
   ir_node_id_t target = opt_new_target(b);
   opt_frame_t before = opt_frame_clone(b, &b->frame);
   ir_block_id_t called;
