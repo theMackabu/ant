@@ -25,6 +25,10 @@ typedef struct {
   sv_lexer_state_t peek;
   ant_offset_t peek_pos;
   ant_offset_t peek_clen;
+  ant_offset_t *tpl_spans;
+  const char *tpl_code;
+  uint32_t tpl_count;
+  uint32_t tpl_cap;
 } sv_lexer_t;
 
 typedef struct {

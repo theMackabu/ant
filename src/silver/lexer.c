@@ -28,6 +28,10 @@ void sv_lexer_init(sv_lexer_t *lx, ant_t *js, const char *code, ant_offset_t cle
   lx->st.had_newline = false;
   lx->st.escaped = false;
   lx->peek_pos = (ant_offset_t)-1;
+  lx->tpl_spans = NULL;
+  lx->tpl_code = NULL;
+  lx->tpl_count = 0;
+  lx->tpl_cap = 0;
 }
 
 js_error_site_t sv_lexer_error_site(const sv_lexer_t *lx) {
@@ -924,8 +928,54 @@ static inline bool regex_allowed_after_ident(const char *buf, ant_offset_t start
   return false;
 }
 
-static ant_offset_t skip_template_literal(const char *buf, ant_offset_t rem, ant_offset_t start, bool *closed) {
-  ant_offset_t i = start + 1;
+typedef struct {
+  uint32_t slot;
+  int expr_depth;
+} tpl_scan_frame_t;
+
+#define TPL_SCAN_NO_SLOT UINT32_MAX
+
+static bool tpl_span_lookup(const sv_lexer_t *lx, ant_offset_t start, ant_offset_t limit, ant_offset_t *end) {
+  uint32_t lo = 0, hi = lx->tpl_count;
+  if (lx->tpl_code != lx->code) return false;
+  while (lo < hi) {
+    uint32_t mid = lo + (hi - lo) / 2;
+    if (lx->tpl_spans[mid * 2] < start) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo >= lx->tpl_count || lx->tpl_spans[lo * 2] != start) return false;
+  if (lx->tpl_spans[lo * 2 + 1] > limit) return false;
+  *end = lx->tpl_spans[lo * 2 + 1];
+  return true;
+}
+
+static uint32_t tpl_span_reserve(sv_lexer_t *lx, ant_offset_t start) {
+  if (lx->tpl_code != lx->code) {
+    lx->tpl_code = lx->code;
+    lx->tpl_count = 0;
+  }
+  if (lx->tpl_count && lx->tpl_spans[(lx->tpl_count - 1) * 2] >= start) return TPL_SCAN_NO_SLOT;
+  if (lx->tpl_count == lx->tpl_cap) {
+    uint32_t cap = lx->tpl_cap ? lx->tpl_cap * 2 : 16;
+    ant_offset_t *spans = parse_arena_bump(lx->js, (size_t)cap * 2 * sizeof(ant_offset_t));
+    if (!spans) return TPL_SCAN_NO_SLOT;
+    if (lx->tpl_count) memcpy(spans, lx->tpl_spans, (size_t)lx->tpl_count * 2 * sizeof(ant_offset_t));
+    lx->tpl_spans = spans;
+    lx->tpl_cap = cap;
+  }
+  lx->tpl_spans[lx->tpl_count * 2] = start;
+  lx->tpl_spans[lx->tpl_count * 2 + 1] = 0;
+  return lx->tpl_count++;
+}
+
+static ant_offset_t skip_template_literal(sv_lexer_t *lx, const char *buf, ant_offset_t rem, bool *closed) {
+  tpl_scan_frame_t inline_frames[16];
+  tpl_scan_frame_t *frames = inline_frames;
+  uint32_t depth = 0, cap = 16;
+  uint32_t saved_count = lx->tpl_code == lx->code ? lx->tpl_count : 0;
+  ant_offset_t base = (ant_offset_t)(buf - lx->code);
+  ant_offset_t result = rem;
+  ant_offset_t i = 1;
   int expr_depth = 0;
   bool can_start_regex = true;
   *closed = false;
@@ -940,8 +990,17 @@ static ant_offset_t skip_template_literal(const char *buf, ant_offset_t rem, ant
 
     if (expr_depth == 0) {
       if (c == '`') {
-        *closed = true;
-        return i + 1;
+        if (depth == 0) {
+          *closed = true;
+          result = i + 1;
+          break;
+        }
+        depth--;
+        if (frames[depth].slot != TPL_SCAN_NO_SLOT) lx->tpl_spans[frames[depth].slot * 2 + 1] = base + i + 1;
+        expr_depth = frames[depth].expr_depth;
+        can_start_regex = false;
+        i++;
+        continue;
       }
       if (c == '$' && i + 1 < rem && buf[i + 1] == '{') {
         expr_depth = 1;
@@ -957,11 +1016,25 @@ static ant_offset_t skip_template_literal(const char *buf, ant_offset_t rem, ant
     }
 
     if (c == '`') {
-      bool nested_closed = false;
-      ant_offset_t next = skip_template_literal(buf, rem, i, &nested_closed);
-      if (!nested_closed || next <= i) return rem;
-      i = next;
-      can_start_regex = false;
+      ant_offset_t cached_end = 0;
+      if (lx->tpl_count && tpl_span_lookup(lx, base + i, base + rem, &cached_end)) {
+        i = cached_end - base;
+        can_start_regex = false;
+        continue;
+      }
+      if (depth == cap) {
+        tpl_scan_frame_t *grown = malloc((size_t)cap * 2 * sizeof(*grown));
+        if (!grown) break;
+        memcpy(grown, frames, (size_t)cap * sizeof(*grown));
+        if (frames != inline_frames) free(frames);
+        frames = grown;
+        cap *= 2;
+      }
+      frames[depth].slot = tpl_span_reserve(lx, base + i);
+      frames[depth].expr_depth = expr_depth;
+      depth++;
+      expr_depth = 0;
+      i++;
       continue;
     }
 
@@ -1020,12 +1093,14 @@ static ant_offset_t skip_template_literal(const char *buf, ant_offset_t rem, ant
     can_start_regex = false;
   }
 
-  return rem;
+  if (!*closed && lx->tpl_code == lx->code && lx->tpl_count > saved_count) lx->tpl_count = saved_count;
+  if (frames != inline_frames) free(frames);
+  return result;
 }
 
 static inline uint8_t scan_template(sv_lexer_t *lx, const char *buf, ant_offset_t rem) {
   bool closed = false;
-  ant_offset_t end = skip_template_literal(buf, rem, 0, &closed);
+  ant_offset_t end = skip_template_literal(lx, buf, rem, &closed);
   
   if (!closed || end <= 1 || end > rem) {
     lx->st.tok = TOK_ERR;
