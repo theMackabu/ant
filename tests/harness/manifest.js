@@ -177,6 +177,7 @@ export function targets() {
     'test_finally_completion.cjs',
     'test_for_init_nested_in.cjs',
     'test_for_update_tonumeric.cjs',
+    'test_delete_on_primitive.cjs',
     'test_fs_dir_async_recursive.cjs',
     'test_fs_handled_errors.cjs',
     'test_fs_io_argument_getters.cjs',
