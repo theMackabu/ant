@@ -49,6 +49,7 @@ typedef struct opt_func_state {
   uint32_t exits;
   uint32_t compiles;
   uint32_t fruitless;
+  uint32_t leave_drops;
   bool disabled;
   opt_field_memo_t *memos;
   uint32_t memo_count, memo_cap;
@@ -715,6 +716,21 @@ ant_value_t opt_rt_resume(
   );
 }
 
+ant_value_t opt_rt_resume_borrowed(
+  sv_vm_t *vm, opt_code_t *code, opt_entry_t *entry, uint32_t bc_off, uint32_t depth,
+  ant_value_t *params, ant_value_t *locals, ant_value_t *stack, sv_jit_finally_t *finally, bool throwing
+) {
+  sv_frame_t *frame = entry->frame;
+  for (uint32_t i = 0; i < code->param_count; i++) frame->bp[i] = params[i];
+  for (uint32_t i = 0; i < code->local_count; i++) frame->lp[i] = locals[i];
+  sv_rebase_open_upvalues(&vm->open_upvalues, params, frame->bp, code->param_count);
+  sv_rebase_open_upvalues(&vm->open_upvalues, locals, frame->lp, code->local_count);
+  if (is_object_type(vm->jit.resume.arguments_obj)) frame->arguments_obj = vm->jit.resume.arguments_obj;
+  entry->frame = NULL;
+  sv_frame_resume_at(vm, frame, code->func, (int)bc_off, stack, (int)depth, finally, throwing);
+  return SV_JIT_AWAIT_PARKED;
+}
+
 static inline ant_value_t opt_exit_new_target(const opt_exit_frame_t *frame) {
   if (!frame->site->construct) return Ant_Value_Undefined;
   return vtype(frame->new_target) == kTypeUndefined ? frame->callee : frame->new_target;
@@ -1359,6 +1375,23 @@ static void opt_catch_missed(ant_t *js, opt_code_t *code, uint32_t catch_off) {
       opt_func_line(code->func));
 }
 
+static void opt_catch_left(ant_t *js, opt_code_t *code, uint32_t catch_off) {
+  if (code->dropped || (code->catch_leaves++ % OPT_CATCH_LEAVE_WINDOW)) return;
+  struct timespec now;
+  clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
+  uint64_t stamp = (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec, last = code->catch_leave_stamp;
+  code->catch_leave_stamp = stamp;
+  if (!last || stamp - last >= OPT_CATCH_LEAVE_WINDOW_NS) return;
+  opt_func_state_t *state = opt_func_state(js, code->func, true);
+  opt_note_discard(state, code, false);
+  bool disable = state && ++state->leave_drops >= OPT_CATCH_LEAVE_DROPS;
+  if (disable) state->disabled = true;
+  opt_drop_code(code);
+  if (sv_debug_unlikely(SV_DEBUG_JIT_WARN))
+    fprintf(stderr, "jit: opt %s func=%s reason=hot-catch-leaves catch=%u line=%u\n", disable ? "disabled" : "dropped",
+      opt_func_name(code->func), catch_off, opt_func_line(code->func));
+}
+
 void opt_rt_caught(sv_vm_t *vm, opt_code_t *code, const opt_handler_t *handler, bool in_place) {
   if (in_place) {
     opt_stats.catches++;
@@ -1366,6 +1399,7 @@ void opt_rt_caught(sv_vm_t *vm, opt_code_t *code, const opt_handler_t *handler, 
   }
   opt_stats.catch_leaves++;
   if (handler->learnable) opt_catch_missed(vm->js, code, handler->catch_off);
+  else opt_catch_left(vm->js, code, handler->catch_off);
 }
 
 bool opt_tier_has_catch_entry(ant_t *js, sv_func_t *func, uint32_t catch_off) {

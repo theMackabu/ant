@@ -64,6 +64,9 @@ typedef struct {
 
 static constexpr uint32_t OPT_CATCH_MISS_LIMIT = 10;
 static constexpr uint32_t OPT_SUPER_PARENT_MISS_LIMIT = 2;
+static constexpr uint32_t OPT_CATCH_LEAVE_WINDOW = 16;
+static constexpr uint64_t OPT_CATCH_LEAVE_WINDOW_NS = 32000;
+static constexpr uint32_t OPT_CATCH_LEAVE_DROPS = 1;
 static constexpr ant_value_t OPT_CAUGHT = ANT_SENTINEL_TAG | 0xCA7C4ULL;
 
 typedef struct {
@@ -116,6 +119,8 @@ typedef struct opt_code {
   opt_handler_t *handlers;
   uint32_t handler_count;
   uint32_t catch_misses;
+  uint32_t catch_leaves;
+  uint64_t catch_leave_stamp;
   size_t code_bytes;
   uint64_t slow_path_runs;
   ant_value_t *roots;
@@ -213,6 +218,10 @@ ant_value_t opt_rt_resume(
 );
 
 void opt_rt_caught(sv_vm_t *vm, opt_code_t *code, const opt_handler_t *handler, bool in_place);
+ant_value_t opt_rt_resume_borrowed(
+  sv_vm_t *vm, opt_code_t *code, opt_entry_t *entry, uint32_t bc_off, uint32_t depth,
+  ant_value_t *params, ant_value_t *locals, ant_value_t *stack, sv_jit_finally_t *finally, bool throwing
+);
 ant_value_t opt_rt_for_of(sv_vm_t *vm, ant_value_t iterable, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_iter_next(sv_vm_t *vm, ant_value_t iter, ant_value_t next, ant_value_t *args, int64_t argc, int64_t hint);
 ant_value_t opt_rt_destructure_next(sv_vm_t *vm, ant_value_t iter, ant_value_t next, ant_value_t *args, int64_t argc, int64_t kind);
