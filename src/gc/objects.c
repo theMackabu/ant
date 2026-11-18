@@ -1787,8 +1787,10 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     obj->extra_slots = NULL;
   }
 
-  if (overflow_bytes) gc_note_overflow_free(js, overflow_bytes);
-  ant_object_overflow_free(obj);
+  if (obj->overflow_prop) {
+    gc_note_overflow_free(js, overflow_bytes);
+    ant_object_overflow_free(obj);
+  }
   
   GC_VERIFY_POISON_OBJECT(obj);
   ant_object_cell_free(js, obj);
