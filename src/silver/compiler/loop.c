@@ -401,7 +401,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   if (is_using_loop) {
     c->using_stack_local = using_stack_local;
     c->using_stack_async = is_await_using_loop;
-    push_using_cleanup(c, using_stack_local, c->scope_depth, is_await_using_loop);
+    push_using_cleanup(c, using_stack_local, -1, c->scope_depth, is_await_using_loop);
     compile_using_push_target(c, node->left, using_stack_local);
   }
 
@@ -509,7 +509,6 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   end_scope(c);
 }
 
-
 static int find_label_target(sv_compiler_t *c, const sv_ast_t *node) {
   int target = find_loop_label(c, node->str, node->len);
   if (target < 0) js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Undefined label '%.*s'", (int)node->len, node->str);
@@ -524,9 +523,7 @@ void compile_break(sv_compiler_t *c, sv_ast_t *node) {
     for (int i = c->loop_count - 1; i >= 0 && target < 0; i--)
       if (!c->loops[i].is_block) target = i;
     if (target < 0) js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Illegal break statement");
-  } if (target < 0) return;
-  emit_close_upvals_to_depth(c, c->loops[target].scope_depth);
-  emit_using_cleanups_to_depth(c, c->loops[target].scope_depth);
+  }
 
   if (target >= 0) emit_loop_exit_jump(c, &c->loops[target], &c->loops[target].breaks);
 }
@@ -557,6 +554,6 @@ void compile_continue(sv_compiler_t *c, sv_ast_t *node) {
       return;
     }
   }
-  emit_close_upvals_to_depth(c, c->loops[target].scope_depth); emit_using_cleanups_to_depth(c, c->loops[target].scope_depth);
+
   emit_loop_exit_jump(c, &c->loops[target], &c->loops[target].continues);
 }
