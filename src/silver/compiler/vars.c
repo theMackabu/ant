@@ -135,6 +135,16 @@ void emit_this_store(sv_compiler_t *c) {
   emit_this_binding_put(c, kind, slot);
 }
 
+bool reject_forbidden_arguments(sv_compiler_t *c) {
+  const sv_compiler_t *owner = c;
+  while (owner->is_arrow && owner->enclosing) owner = owner->enclosing;
+  const sv_compiler_t *root = owner->enclosing ? owner->enclosing : owner;
+  if (root->enclosing || !root->eval_no_arguments) return false;
+  js_mkerr_typed(c->js, JS_ERR_SYNTAX, "'arguments' is not allowed in class field initializer or static initialization block");
+  emit_op(c, OP_UNDEF);
+  return true;
+}
+
 static bool in_field_initializer(const sv_compiler_t *c) {
   for (; c; c = c->is_arrow ? c->enclosing : NULL)
     if (c->in_field_init) return true;
@@ -349,6 +359,7 @@ void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len) {
   }
   
   if (is_ident_str(name, len, "arguments", 9)) {
+    if (reject_forbidden_arguments(c)) return;
     if (c->owns_eval_env || sv_compile_mode_is_eval(c->mode)) {
       emit_atom_op(c, OP_GET_EVAL_GLOBAL, name, len);
       return;

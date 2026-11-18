@@ -317,6 +317,7 @@ static int compile_static_child_function(
   sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
   comp.is_strict = true;
   comp.is_static = true;
+  comp.no_arguments_scope = true;
   emit_super_local(&comp);
 
   if (returns_expr) {

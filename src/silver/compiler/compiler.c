@@ -86,6 +86,7 @@ sv_func_t *sv_compile(
     root.eval_this_binding = scope_flags.this_binding;
     root.eval_super_binding = scope_flags.super_binding;
     root.is_static = scope_flags.is_static;
+    root.eval_no_arguments = scope_flags.no_arguments;
     root.eval_field_thunk = root.eval_this_binding && sv_eval_env_shadows_global(js, eval_env, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN);
   }
   

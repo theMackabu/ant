@@ -523,6 +523,7 @@ void compile_ternary(sv_compiler_t *c, sv_ast_t *node) {
 static void compile_typeof_op(sv_compiler_t *c, sv_ast_t *node, int test_type) {
   sv_ast_t *arg = node->right;
   if (reject_super_identifier(c, arg)) return;
+  if (is_ident_name(arg, "arguments") && reject_forbidden_arguments(c)) return;
   sv_patch_list_t found = {0};
   
   if (arg->type == N_IDENT) {

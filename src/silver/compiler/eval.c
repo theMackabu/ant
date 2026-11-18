@@ -188,11 +188,20 @@ static bool eval_scope_builder_capture_keywords(
     c, scope, set, "super", 5, SV_EVAL_BIND_UPVALUE, (uint16_t)super_upvalue, false, &no_meta);
 }
 
+bool arguments_forbidden(const sv_compiler_t *c) {
+  for (const sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
+    if (cur->in_field_init || cur->no_arguments_scope || cur->eval_no_arguments) return true;
+    if (!cur->is_arrow) return cur->enclosing && !cur->enclosing->enclosing && cur->enclosing->eval_no_arguments;
+  }
+  return false;
+}
+
 static bool eval_scope_flags_init(sv_compiler_t *c, sv_eval_scope_flags_t *flags) {
   *flags = (sv_eval_scope_flags_t){
     .this_binding = compiler_has_this_binding(c),
     .super_binding = compiler_has_super_binding(c),
     .is_static = c->is_static,
+    .no_arguments = arguments_forbidden(c),
   };
 
   return true;
@@ -314,6 +323,7 @@ static bool inline_eval_can_compile_without_early_errors(sv_compiler_t *c, sv_as
   ant_t *js = c->js;
   if (!node) return true;
   if (node->type == N_CLASS) return false;
+  if (is_ident_name(node, "arguments") && arguments_forbidden(c)) return false;
   if (node->type == N_CALL && is_ident_name(node->left, "super") && !lexical_owner(c)->is_derived_ctor) return false;
   if (is_ident_name(node, "super") && !compiler_has_super_binding(c)) return false;
   if (node->type == N_OBJECT && (node->flags & FN_PATTERN_ONLY)) return false;

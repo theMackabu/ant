@@ -286,6 +286,8 @@ typedef struct sv_compiler {
   bool is_class_ctor;
   bool in_field_init;
   bool eval_field_thunk;
+  bool eval_no_arguments;
+  bool no_arguments_scope;
   int derived_return_local;
   const sv_ast_t *this_bound_stmt;
   bool super_runs_once;
