@@ -63,6 +63,7 @@ typedef struct {
 } opt_handler_t;
 
 static constexpr uint32_t OPT_CATCH_MISS_LIMIT = 10;
+static constexpr uint32_t OPT_SUPER_PARENT_MISS_LIMIT = 2;
 static constexpr ant_value_t OPT_CAUGHT = ANT_SENTINEL_TAG | 0xCA7C4ULL;
 
 typedef struct {

@@ -854,9 +854,15 @@ uint32_t opt_call_targets_seen(const sv_func_t *func, uint32_t bc_off) {
 }
 
 static bool opt_may_speculate(const opt_builder_t *b, opt_exit_kind_t kind) {
+  uint32_t parent_misses = 0;
+  bool super_call = kind == OPT_EXIT_BAD_SHAPE && opt_is_super_call(b->func, b->pc);
   for (uint32_t i = 0; i < b->exit_site_count; i++) {
     const ir_exit_site_t *site = &b->exit_sites[i];
     if (site->bc_off != b->pc || site->kind != kind) continue;
+    if (super_call && site->slot) {
+      if (++parent_misses >= OPT_SUPER_PARENT_MISS_LIMIT) return false;
+      continue;
+    }
     if (!site->slot || (kind == OPT_EXIT_BAD_SHAPE && opt_learned_shapes(b->func, b->pc) < site->slot)) return false;
     if (kind == OPT_EXIT_BAD_CALL_TARGET && opt_call_targets_seen(b->func, b->pc) < site->slot) return false;
   }

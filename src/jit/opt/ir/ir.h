@@ -636,6 +636,16 @@ static inline bool ir_exit_sites_contain_slot(const ir_graph_t *graph, sv_func_t
   return false;
 }
 
+static inline uint32_t ir_exit_sites_count(const ir_graph_t *graph, sv_func_t *func, uint32_t bc_off, opt_exit_kind_t kind) {
+  sv_func_t *in = func ? func : graph->func;
+  uint32_t count = 0;
+  for (uint32_t i = 0; i < graph->exit_sites.len; i++) {
+    const ir_exit_site_t *site = &graph->exit_sites.items[i];
+    count += (site->func ? site->func : graph->func) == in && site->bc_off == bc_off && site->kind == kind;
+  }
+  return count;
+}
+
 static inline bool ir_exit_sites_contain(const ir_graph_t *graph, sv_func_t *func, uint32_t bc_off, opt_exit_kind_t kind) {
   return ir_exit_sites_contain_slot(graph, func, bc_off, kind, 0);
 }
