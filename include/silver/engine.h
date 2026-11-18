@@ -1,5 +1,6 @@
 #pragma once
 
+#include "silver/eval_scope_flags.h"
 #include "gc.h"
 #include "gc/objects.h"
 #include "internal.h"
@@ -568,6 +569,7 @@ typedef struct {
 typedef struct {
   const sv_runtime_binding_t *bindings;
   uint32_t count;
+  sv_eval_scope_flags_t flags;
 } sv_eval_scope_t;
 
 enum {

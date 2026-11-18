@@ -241,6 +241,16 @@ static bool sv_func_compute_curried_step(sv_func_t *func) {
   return child->is_fusable_leaf;
 }
 
+static void emit_field_thunk(sv_compiler_t *c) {
+  sv_ast_t *thunk = sv_ast_new(c->js, N_FUNC);
+  thunk->flags = FN_ARROW | FN_FIELD_THUNK;
+  thunk->body = sv_ast_new(c->js, N_BLOCK);
+  
+  int local = add_local(c, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN, false, c->scope_depth);
+  compile_func_expr(c, thunk);
+  emit_put_local(c, local);
+}
+
 sv_func_t *compile_function_body(
   sv_compiler_t *enclosing,
   sv_ast_t *node,
@@ -248,7 +258,10 @@ sv_func_t *compile_function_body(
 ) {
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, enclosing, node, mode);
+  bool eval_body = !enclosing->enclosing;
   comp.is_static = (node->flags & FN_STATIC) || (comp.is_arrow && enclosing->is_static);
+  comp.eval_this_binding = eval_body && enclosing->eval_this_binding;
+  comp.eval_field_thunk = eval_body && enclosing->eval_field_thunk;
   comp.is_class_ctor = !!(node->flags & FN_CLASS_CTOR);
   if (node->flags & FN_DERIVED_CTOR) comp.derived_field_owner = enclosing;
   else if (comp.is_arrow) comp.derived_field_owner = enclosing->derived_field_owner;
@@ -314,7 +327,7 @@ sv_func_t *compile_function_body(
   }
   
   if (!comp.is_arrow && comp.enclosing && (node->flags & (FN_METHOD | FN_GETTER | FN_SETTER | FN_STATIC))) {
-    comp.super_local = add_hidden_local(&comp);
+    comp.super_local = add_local(&comp, "super", 5, false, comp.scope_depth);
     emit_op(&comp, OP_SPECIAL_OBJ);
     emit(&comp, SV_SPECIAL_SUPER);
     emit_put_local(&comp, comp.super_local);
@@ -322,11 +335,12 @@ sv_func_t *compile_function_body(
 
   derived_ctor_plan_t derived = (node->flags & FN_DERIVED_CTOR) ? derived_ctor_plan(node) : (derived_ctor_plan_t){0};
   if (derived.needs_this_binding) {
-    comp.this_local = add_hidden_local(&comp);
+    comp.this_local = add_local(&comp, "this", 4, false, comp.scope_depth);
     comp.this_bound_stmt = derived.sole_super_stmt;
     comp.super_runs_once = derived.sole_super_stmt != NULL;
     emit_op(&comp, OP_UNDEF);
     emit_put_local(&comp, comp.this_local);
+    if (enclosing->field_init_count > 0 && derived.has_eval) emit_field_thunk(&comp);
   }
 
   if (!has_non_simple_params && node->body) {
@@ -503,6 +517,7 @@ sv_func_t *compile_function_body(
     comp.args_mapped = !comp.is_strict;
   }
 
+  if (node->flags & FN_FIELD_THUNK) emit_derived_field_inits(&comp);
 
   if ((node->flags & FN_CLASS_CTOR) && !(node->flags & FN_DERIVED_CTOR) &&
       enclosing->field_init_count > 0) {

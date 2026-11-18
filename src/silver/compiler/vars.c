@@ -30,6 +30,7 @@ typedef enum {
   THIS_BINDING_NONE,
   THIS_BINDING_LOCAL,
   THIS_BINDING_UPVALUE,
+  THIS_BINDING_NAMED,
 } this_binding_t;
 
 static this_binding_t this_binding(sv_compiler_t *c, bool reading, int *slot) {
@@ -45,11 +46,12 @@ static this_binding_t this_binding(sv_compiler_t *c, bool reading, int *slot) {
     return *slot >= 0 ? THIS_BINDING_UPVALUE : THIS_BINDING_NONE;
   }
   
-  return THIS_BINDING_NONE;
+  return owner->eval_this_binding ? THIS_BINDING_NAMED : THIS_BINDING_NONE;
 }
 
 static void emit_this_binding_get(sv_compiler_t *c, this_binding_t kind, int slot) {
   if (kind == THIS_BINDING_LOCAL) emit_get_local(c, slot);
+  else if (kind == THIS_BINDING_NAMED) emit_get_var(c, "this", 4);
   else {
     emit_op(c, OP_GET_UPVAL);
     emit_u16(c, (uint16_t)slot);
@@ -58,6 +60,7 @@ static void emit_this_binding_get(sv_compiler_t *c, this_binding_t kind, int slo
 
 static void emit_this_binding_put(sv_compiler_t *c, this_binding_t kind, int slot) {
   if (kind == THIS_BINDING_LOCAL) emit_put_local(c, slot);
+  else if (kind == THIS_BINDING_NAMED) emit_set_var(c, "this", 4, false);
   else {
     emit_op(c, OP_PUT_UPVAL);
     emit_u16(c, (uint16_t)slot);
@@ -143,6 +146,12 @@ void emit_derived_return_check(sv_compiler_t *c) {
   emit_this_binding_get(c, kind, slot);
   emit_this_check(c);
   patch_jump(c, defined);
+}
+
+bool compiler_has_this_binding(const sv_compiler_t *c) {
+  const sv_compiler_t *owner = c;
+  while (owner->is_arrow && owner->enclosing) owner = owner->enclosing;
+  return owner->this_local >= 0 || owner->eval_this_binding;
 }
 
 typedef struct {

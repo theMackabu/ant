@@ -151,6 +151,9 @@ bool param_captured_by_value(sv_compiler_t *c, int local);
 bool local_written_once(sv_compiler_t *c, int local);
 uint32_t ctor_prop_count(const sv_ast_t *node, uint32_t fields);
 uint32_t class_public_field_count(sv_ast_t **fields, int count);
+static constexpr uint32_t SV_FIELD_THUNK_LEN = 7;
+#define SV_FIELD_THUNK_NAME "%fields"
+
 int resolve_super_upvalue(sv_compiler_t *c);
 int resolve_this_upvalue(sv_compiler_t *c);
 int resolve_arguments_upvalue(sv_compiler_t *c);
@@ -196,6 +199,7 @@ void emit_super_receiver(sv_compiler_t *c);
 int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local);
 void emit_new_target(sv_compiler_t *c);
 bool class_method_needs_home(const sv_ast_t *method);
+void emit_derived_field_inits(sv_compiler_t *c);
 typedef struct {
   bool needs_this_binding;
   bool has_eval;
@@ -206,6 +210,7 @@ typedef struct {
 derived_ctor_plan_t derived_ctor_plan(const sv_ast_t *ctor);
 bool derived_return_needs_check(const sv_compiler_t *c);
 void emit_derived_return_check(sv_compiler_t *c);
+bool compiler_has_this_binding(const sv_compiler_t *c);
 void emit_break_to_loop(sv_compiler_t *c, int target);
 void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len);

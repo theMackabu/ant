@@ -21,6 +21,11 @@ class BaseCtor {
   constructor() { this.v = typeof super.toString; }
 }
 
+class EvalSuper extends A {
+  read() { return eval('super.z'); }
+  write() { eval('super.q = 1'); return this.q; }
+}
+
 for (let i = 0; i < 3000; i++) {
   const f = new FieldArrows();
   assert.strictEqual(f.arrow(), 4);
@@ -32,6 +37,10 @@ for (let i = 0; i < 3000; i++) {
   assert.strictEqual(b.direct, 'function');
   assert.strictEqual(new BaseCtor().v, 'function');
 }
+
+const e = new EvalSuper();
+assert.strictEqual(e.read(), 4);
+assert.strictEqual(e.write(), 1);
 
 class EvalBase { x() { return 'base x'; } }
 class EvalInFieldArrow extends EvalBase { read = () => eval(String('super.x()')); }
