@@ -412,10 +412,20 @@ static void jit_emit_finally_ret(jit_compile_t *c) {
   jit_emit_return_value(c, value);
 }
 
+static void jit_emit_reload_captured_locals(jit_compile_t *c) {
+  if (!c->has_captures || !c->r_lbuf) return;
+  for (int i = 0; i < c->n_locals; i++)
+    if (c->captured_locals[i])
+      MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+        MIR_new_reg_op(c->ctx, c->local_regs[i]),
+        MIR_new_mem_op(c->ctx, MIR_T_I64, (MIR_disp_t)(i * (int)sizeof(ant_value_t)), c->r_lbuf, 0, 1)));
+}
+
 void jit_emit_finally_landings(jit_compile_t *c) {
   for (int i = 0; i < c->finally_landing_count; i++) {
     const jit_finally_landing_t *landing = &c->finally_landings[i];
     MIR_append_insn(c->ctx, c->jit_func, landing->landing);
+    jit_emit_reload_captured_locals(c);
     MIR_append_insn(c->ctx, c->jit_func,
                     MIR_new_call_insn(c->ctx, 6,
                                       MIR_new_ref_op(c->ctx, c->helper1_proto),
@@ -634,6 +644,7 @@ void jit_emit_control(jit_compile_t *c) {
         }
       }
       if (catch_saved_sp >= 0) {
+        jit_emit_reload_captured_locals(c);
         c->vs.sp = catch_saved_sp + 1;
         vstack_clear_value_info(&c->vs, catch_saved_sp);
         c->vs.slot_type[catch_saved_sp] = SLOT_BOXED;

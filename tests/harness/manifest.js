@@ -255,6 +255,7 @@ export function targets() {
     'test_jit_captured_local_init.cjs',
     'test_jit_captured_tdz.cjs',
     'test_jit_catch_undefined.cjs',
+    'test_jit_catch_reload.cjs',
     'test_jit_compare_branch.cjs',
     'test_jit_concat_retier.cjs',
     'test_jit_constant_integer_boxing.cjs',
