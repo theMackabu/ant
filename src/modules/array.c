@@ -2475,23 +2475,29 @@ static ant_value_t builtin_array_copyWithin(ant_params_t) {
   
   ant_offset_t string_len;
   if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "0");
-  ant_object_t *frozen = is_proxy(arr) ? NULL : js_obj_ptr(js_as_obj(arr));
+  ant_object_t *frozen = vtype(arr) == kTypeArray ? (ant_object_t *)vptr(arr)
+    : is_proxy(arr) ? NULL : js_obj_ptr(js_as_obj(arr));
   if (frozen && frozen->flags.frozen)
     return Ant_Error_CreateReadOnlyProperty(js, arr, Ant_Value_FromNumber((double)target));
 
   ant_offset_t doff = get_dense_buf(arr);
-  if (doff && !is_proxy(arr)) {
+  ant_object_t *dense = doff ? frozen : NULL;
+  if (dense && array_dense_covers(dense, len) && (!dense->flags.may_have_holes || array_elements_proto_plain(js, dense))) {
+    bool holes = false;
     if (start < target) {
       for (int i = count - 1; i >= 0; i--) {
         ant_value_t v = dense_get(doff, (ant_offset_t)(start + i));
-        dense_set(js, doff, (ant_offset_t)(target + i), is_empty_slot(v) ? Ant_Value_Undefined : v);
+        holes |= is_empty_slot(v);
+        dense_set(js, doff, (ant_offset_t)(target + i), v);
       }
     } else {
       for (int i = 0; i < count; i++) {
         ant_value_t v = dense_get(doff, (ant_offset_t)(start + i));
-        dense_set(js, doff, (ant_offset_t)(target + i), is_empty_slot(v) ? Ant_Value_Undefined : v);
+        holes |= is_empty_slot(v);
+        dense_set(js, doff, (ant_offset_t)(target + i), v);
       }
     }
+    if (holes) array_mark_may_have_holes(arr);
     return arr;
   }
 

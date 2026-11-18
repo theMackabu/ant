@@ -29,6 +29,7 @@ export function targets() {
     'test_array_builtin_fast_paths.cjs',
     'test_array_copy_methods.cjs',
     'test_array_define_fast_path.cjs',
+    'test_array_copy_within_holes.cjs',
     'test_array_fill_set_order.cjs',
     'test_array_inherited_index.cjs',
     'test_array_proto_index_reads.cjs',
