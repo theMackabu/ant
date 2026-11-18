@@ -845,11 +845,20 @@ uint32_t opt_learned_shapes(const sv_func_t *func, uint32_t bc_off) {
   return count;
 }
 
+uint32_t opt_call_targets_seen(const sv_func_t *func, uint32_t bc_off) {
+  for (int i = 0; i < func->call_target_fb_count; i++) {
+    const sv_call_target_fb_t *seen = &func->call_target_fb[i];
+    if (seen->bc_off == (uint16_t)bc_off) return seen->disabled || !seen->target ? 0 : seen->miss_count + 1u;
+  }
+  return 0;
+}
+
 static bool opt_may_speculate(const opt_builder_t *b, opt_exit_kind_t kind) {
   for (uint32_t i = 0; i < b->exit_site_count; i++) {
     const ir_exit_site_t *site = &b->exit_sites[i];
     if (site->bc_off != b->pc || site->kind != kind) continue;
     if (!site->slot || (kind == OPT_EXIT_BAD_SHAPE && opt_learned_shapes(b->func, b->pc) < site->slot)) return false;
+    if (kind == OPT_EXIT_BAD_CALL_TARGET && opt_call_targets_seen(b->func, b->pc) < site->slot) return false;
   }
   return true;
 }
@@ -4354,7 +4363,8 @@ static opt_flow_t opt_build_call_with(opt_builder_t *b, sv_op_t op, ir_node_id_t
   bool construct = op == OP_NEW, tail = op == OP_TAIL_CALL || op == OP_TAIL_CALL_METHOD;
   bool method = op == OP_CALL_METHOD || op == OP_TAIL_CALL_METHOD;
   ir_node_id_t callee = inputs[0], second = inputs[1];
-  sv_func_t *target = opt_call_target(b);
+  sv_func_t *target = opt_call_target(b), *known = target ? opt_known_target(b, callee) : NULL;
+  if (known) target = known;
   bool self_tail = tail && !b->inline_call && target == b->func;
   if (self_tail && b->tail_header == IR_NONE) {
     opt_fail(b, "self-tail-call");

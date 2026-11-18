@@ -452,8 +452,9 @@ static asm_label_t opt_cg_exit_site(opt_cg_t *cg, ir_node_id_t node) {
   opt_exit_list_t values = opt_cg_site_values(cg, node);
   bool phi_check = data->op.code == IR_OP_CHECK_INT32 || data->op.code == IR_OP_CHECK_NUMBER;
   uint32_t slot = phi_check && kind != OPT_EXIT_HOISTED ? data->op.slot : 0;
-  if (kind == OPT_EXIT_BAD_SHAPE) {
-    uint32_t learned = opt_learned_shapes(state->func ? state->func : cg->graph->func, state->bc_off);
+  if (kind == OPT_EXIT_BAD_SHAPE || kind == OPT_EXIT_BAD_CALL_TARGET) {
+    const sv_func_t *func = state->func ? state->func : cg->graph->func;
+    uint32_t learned = kind == OPT_EXIT_BAD_SHAPE ? opt_learned_shapes(func, state->bc_off) : opt_call_targets_seen(func, state->bc_off);
     if (learned) slot = learned + 1;
   }
   opt_site_t site = {.bc_off = state->bc_off, .kind = kind, .slot = slot, .values = values, .handler = UINT32_MAX};
