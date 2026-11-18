@@ -289,7 +289,7 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     case N_TAGGED_TEMPLATE: {
-      sv_call_kind_t tag_kind = compile_call_setup_non_optional(c, node->left);
+      sv_call_kind_t tag_kind = compile_tag_setup(c, node->left);
       sv_ast_t *tpl = node->right;
       int n = tpl->args.count;
       int n_strings = 0, n_exprs = 0;
