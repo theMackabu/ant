@@ -348,6 +348,10 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     sv_ast_t *n = mk(N_NEW);
     n->src_off = new_off;
     sv_ast_t *callee = parse_primary(p);
+    if (callee->type == N_IMPORT && !(callee->flags & FN_PAREN)) {
+      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Cannot use new with import");
+      return mk(N_EMPTY);
+    }
     
     uint32_t links = 0;
     for (;;) {
@@ -454,14 +458,38 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
   }
 
   l_import_expr: {
+    uint32_t import_off = (uint32_t)p->lx.st.toff;
     p->lx.st.consumed = 1;
     if (sv_lexer_next(&p->lx) == TOK_DOT && p->goal == SV_PARSE_DETECT) {
       p->wants_module = true;
       sv_parse_stop(p);
       return mk(N_EMPTY);
     }
-    if (sv_lexer_next(&p->lx) != TOK_LPAREN) return mk_ident(p, "import", 6);
+    if (p->lx.st.tok == TOK_DOT) {
+      p->lx.st.consumed = 1;
+      bool meta = sv_lexer_next(&p->lx) == TOK_IDENTIFIER && p->lx.st.tlen == 4 && memcmp(tok_str(p), "meta", 4) == 0;
+      if (!meta) {
+        sv_parse_unexpected_token(p);
+        return mk(N_EMPTY);
+      }
+      sv_ast_t *mem = mk(N_MEMBER);
+      mem->left = mk_ident(p, "import", 6);
+      mem->left->src_off = import_off;
+      mem->left->src_end = import_off + 6;
+      mem->right = parse_dot_property_name(p);
+      mem->src_off = import_off;
+      mem->src_end = mem->right->src_end;
+      return mem;
+    }
+    if (p->lx.st.tok != TOK_LPAREN) {
+      sv_parse_unexpected_token(p);
+      return mk(N_EMPTY);
+    }
     p->lx.st.consumed = 1;
+    if (sv_lexer_next(&p->lx) == TOK_REST) {
+      sv_parse_unexpected_token(p);
+      return mk(N_EMPTY);
+    }
     sv_ast_t *n = mk(N_IMPORT);
     n->right = parse_assign(p);
     if (sv_lexer_next(&p->lx) == TOK_COMMA && (p->lx.st.consumed = 1, sv_lexer_next(&p->lx) != TOK_RPAREN)) {

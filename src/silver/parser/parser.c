@@ -49,6 +49,7 @@ static bool simple_target_ok(sv_parser_t *p, const sv_ast_t *node, bool allow_ca
     case N_GLOBAL_THIS:
       return pattern_name_ok(p, node);
     case N_MEMBER:
+      if (ast_is_ident(node->left, "import", 6) && !(node->left->flags & FN_PAREN)) return false;
       return target_chain_ok(node);
     case N_CALL:
       return allow_call && !ast_is_ident(node->left, "super", 5) && target_chain_ok(node);

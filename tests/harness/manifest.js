@@ -348,6 +348,7 @@ export function targets() {
     'test_node_http_server_streaming_body.cjs',
     'test_node_http_keepalive_after_unread_body.cjs',
     'test_node_http_header_validation.cjs',
+    'test_module_binding_names.mjs',
     'test_nul_property_keys.cjs',
     'test_numeric_coercion_errors.cjs',
     'test_numeric_literal_keys.cjs',
