@@ -374,6 +374,7 @@ export function targets() {
     'test_opt_int_mod.cjs',
     'test_opt_learned_shapes.cjs',
     'test_opt_math_and_checks.cjs',
+    'test_opt_exit_stack_parity.cjs',
     'test_opt_named_storage.cjs',
     'test_opt_negative_infinity.cjs',
     'test_opt_ops.cjs',

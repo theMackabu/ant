@@ -755,7 +755,6 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
   uint32_t params = code->param_count, locals = code->local_count;
   ant_value_t arguments = root->arguments;
   ant_value_t root_this = entry->this_val;
-  bool borrowed = entry->frame && !entry->owns_frame;
   if (entry->frame) {
     sv_frame_t *frame = entry->frame;
     sv_rebase_open_upvalues(&vm->open_upvalues, frame->bp, root->params, params);
@@ -773,8 +772,8 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
   for (uint32_t k = count; k-- > 1;) {
     ant_value_t callee = frames[k].callee;
     if (k == count - 1) callee = sv_closure_heap_value(js, entry->closure);
-    waits[k] = room && !(k == count - 1 && borrowed) && opt_push_waiting_frame(vm, frames[k].func, callee, frames[k].site->call_off);
-    room &= waits[k] || (k == count - 1 && borrowed);
+    waits[k] = room && opt_push_waiting_frame(vm, frames[k].func, callee, frames[k].site->call_off);
+    room &= waits[k];
   }
 
   ant_value_t result = Ant_Value_Undefined;
