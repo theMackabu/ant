@@ -257,6 +257,7 @@ export function targets() {
     'test_jit_array_literal.cjs',
     'test_jit_async_await.cjs',
     'test_jit_await_live_locals.cjs',
+    'test_iterator_protector_inline_stores.cjs',
     'test_jit_bitwise_primitives.cjs',
     'test_jit_bound_recursion.cjs',
     'test_jit_logical_immediates.cjs',
