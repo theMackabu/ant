@@ -141,6 +141,11 @@ ant_value_t jit_helper_super_apply(
   ant_value_t *args, int argc, ant_value_t new_target
 );
 
+ant_value_t jit_helper_init_field(
+  ant_t *js, ant_value_t obj, const sv_atom_t *atom,
+  ant_value_t val, sv_ic_entry_t *ic
+);
+
 ant_value_t jit_helper_new_args(
   sv_vm_t *vm, ant_t *js,
   ant_value_t func, ant_value_t new_target,

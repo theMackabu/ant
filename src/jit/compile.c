@@ -676,6 +676,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_PUT_FIELD:
       case OP_DEFINE_FIELD:
       case OP_DEFINE_SLOT:
+      case OP_INIT_FIELD:
       case OP_DEFINE_METHOD_COMP:
       case OP_GET_ELEM:
       case OP_GET_ELEM_OPT:

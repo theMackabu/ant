@@ -1705,6 +1705,13 @@ ant_value_t jit_helper_slow_put_field_adding(
   return result;
 }
 
+ant_value_t jit_helper_init_field(
+  ant_t *js, ant_value_t obj, const sv_atom_t *atom,
+  ant_value_t val, sv_ic_entry_t *ic
+) {
+  return sv_init_field(js, obj, val, atom, ic);
+}
+
 ant_value_t jit_helper_slow_get_elem(ant_t *js, ant_value_t obj, ant_value_t key, sv_func_t *func, uint8_t *ip) {
   sv_tfb_record_get_elem(func, ip, obj, key);
   uint32_t index;
