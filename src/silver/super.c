@@ -8,15 +8,28 @@
 #include "ops/property.h"
 #include "ops/coercion.h"
 
-static ant_value_t Super_Base(ant_t *js, sv_func_t *func, ant_value_t home, ant_value_t receiver) {
-  return vtype(home) == kTypeFunction && vtype(receiver) != kTypeFunction && func && !func->is_static ? js_getprop_fallback(js, home, "prototype") : js_get_proto(js, home);
+static __attribute__((noinline)) ant_value_t Super_ConstructorHome(ant_t *js, ant_value_t constructor) {
+  sv_closure_t *closure = js_func_closure(constructor);
+  ant_value_t home = Ant_Value_Undefined;
+  
+  bool cached = closure->func_obj && sv_construct_prototype_data(js, js_obj_ptr(closure->func_obj), closure->func, &home);
+  return cached ? home : lkp_interned_val(js, constructor, js->intern.prototype);
+}
+
+static inline ant_value_t Super_Home(ant_t *js, sv_func_t *func, ant_value_t home) {
+  bool constructor = vtype(home) == kTypeFunction && func && !func->is_static;
+  return __builtin_expect(constructor, 0) ? Super_ConstructorHome(js, home) : home;
+}
+
+static ant_value_t Super_Base(ant_t *js, sv_func_t *func, ant_value_t home) {
+  return js_get_proto(js, Super_Home(js, func, home));
 }
 
 ant_value_t Silver_Super_Get(
   ant_t *js, sv_func_t *func, ant_value_t receiver,
   ant_value_t home, ant_value_t prop, ant_value_t *roots
 ) {
-  ant_value_t base = roots[0] = Super_Base(js, func, home, receiver);
+  ant_value_t base = roots[0] = Super_Base(js, func, home);
   if (is_err(base)) return base;
   if (vtype(prop) == kTypeSymbol) {
     if (!is_object_type(base)) return sv_mk_nullish_read_error_by_key(js, NULL, base, prop);
@@ -39,7 +52,7 @@ ant_value_t Silver_Super_Put(
   ant_t *js, sv_func_t *func, ant_value_t receiver, ant_value_t home,
   ant_value_t prop, ant_value_t val, ant_value_t *roots
 ) {
-  ant_value_t base = roots[0] = Super_Base(js, func, home, receiver);
+  ant_value_t base = roots[0] = Super_Base(js, func, home);
   if (is_err(base)) return base;
   if (!is_object_type(base)) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot set properties of %s", vtype(base) == kTypeNull ? "null" : "undefined");
   
@@ -55,13 +68,14 @@ ant_value_t Silver_Super_Put(
   return val;
 }
 
-static ant_value_t Super_FieldBase(ant_t *js, sv_func_t *func, ant_value_t home, ant_value_t receiver) {
+static ant_value_t Super_FieldBase(ant_t *js, ant_value_t home) {
   if (vtype(home) == kTypeObject) return ant_object_proto((ant_object_t *)vptr(home));
-  return Super_Base(js, func, home, receiver);
+  return js_get_proto(js, home);
 }
 
 ant_value_t Silver_Super_GetField(ant_t *js, sv_func_t *func, ant_value_t receiver, ant_value_t home, sv_atom_t *atom, sv_ic_entry_t *ic) {
-  ant_value_t base = Super_FieldBase(js, func, home, receiver);
+  home = Super_Home(js, func, home);
+  ant_value_t base = Super_FieldBase(js, home);
   if (is_err(base)) return base;
   if (__builtin_expect(!is_object_type(base), 0)) return js_mkerr_typed(
     js, JS_ERR_TYPE, "Cannot read properties of %s (reading '%.*s')",
@@ -219,7 +233,7 @@ static __attribute__((noinline)) ant_value_t Super_PutFieldSlow(
   ant_t *js, sv_func_t *func, ant_value_t receiver, ant_value_t home,
   const sv_atom_t *atom, ant_value_t val, sv_ic_entry_t *fillable
 ) {
-  ant_value_t base = Super_FieldBase(js, func, home, receiver);
+  ant_value_t base = Super_FieldBase(js, home);
   if (is_err(base)) return base;
   if (!is_object_type(base)) return js_mkerr_typed(
     js, JS_ERR_TYPE, "Cannot set properties of %s",
@@ -285,6 +299,7 @@ ant_value_t Silver_Super_PutField(
   ant_t *js, sv_func_t *func, ant_value_t receiver,
   ant_value_t home, const sv_atom_t *atom, ant_value_t val, sv_ic_entry_t *ic
 ) {
+  home = Super_Home(js, func, home);
   if (!ic) return Super_PutFieldSlow(js, func, receiver, home, atom, val, NULL);
   if (ic->epoch != js->ic.epoch || ic->super_put_kind == SV_SUPER_PUT_IC_EMPTY) return Super_PutFieldSlow(js, func, receiver, home, atom, val, ic);
   if (ic->super_put_kind == SV_SUPER_PUT_IC_DISABLED) return Super_PutFieldSlow(js, func, receiver, home, atom, val, NULL);

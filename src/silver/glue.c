@@ -265,26 +265,14 @@ ant_value_t jit_helper_native_finish(ant_t *js, ant_value_t result) {
   return Ant_Silver_FinishNativeCall(js, result);
 }
 
-ant_value_t jit_helper_call_method(
+ant_value_t jit_helper_call_super(
   sv_vm_t *vm, ant_t *js,
-  ant_value_t func, ant_value_t this_val,
-  ant_value_t *args, int argc,
-  ant_value_t super_val, ant_value_t new_target,
-  ant_value_t *out_this
+  ant_value_t constructor, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
 ) {
-  bool is_super_call = (vtype(super_val) != kTypeUndefined && func == super_val);
-  ant_value_t call_this = this_val;
+  ant_value_t result = sv_super_construct(vm, js, constructor, this_val, args, argc, new_target);
 
-  ant_value_t super_this = call_this;
-  ant_value_t result = sv_vm_call(
-    vm, js, func, call_this, args, argc,
-    is_super_call ? &super_this : NULL, is_super_call ? new_target : Ant_Value_Undefined
-  );
 
-  if (out_this) {
-    if (is_super_call && !is_err(result)) *out_this = is_object_type(result) ? result : super_this;
-    else *out_this = call_this;
-  }
 
   return result;
 }

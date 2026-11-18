@@ -2658,7 +2658,6 @@ static opt_flow_t opt_build_get_global(opt_builder_t *b, const uint8_t *ip) {
   uint16_t ic_index = sv_get_u16(ip + 5);
   if (atom_index >= (uint32_t)func->atom_count || !func->ic_slots || ic_index >= func->ic_count) return OPT_FLOW_GENERIC;
   const sv_atom_t *atom = &func->atoms[atom_index];
-  if (atom->len == 5 && memcmp(atom->str, "super", 5) == 0) return OPT_FLOW_GENERIC;
   sv_ic_entry_t *ic = &func->ic_slots[ic_index];
   ant_shape_t *shape = ic->cached_shape;
   if (!shape) return opt_may_speculate(b, OPT_EXIT_NO_FEEDBACK) ? opt_end_with_exit(b, OPT_EXIT_NO_FEEDBACK) : opt_build_global_call(b);

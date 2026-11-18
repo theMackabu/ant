@@ -57,7 +57,7 @@ typedef struct jit_compile {
   MIR_item_t stable_call_proto;
   MIR_item_t call_call_proto;
   MIR_item_t call_call_slot_proto;
-  MIR_item_t call_method_proto;
+  MIR_item_t call_super_proto;
   MIR_item_t gg_proto;
   MIR_item_t get_eval_global_proto;
   MIR_item_t rest_proto;
@@ -142,7 +142,7 @@ typedef struct jit_compile {
   MIR_item_t imp_await_park;
   MIR_item_t imp_await_return_direct;
   MIR_item_t imp_native_finish;
-  MIR_item_t imp_call_method;
+  MIR_item_t imp_call_super;
   MIR_item_t imp_call_array_includes;
   MIR_item_t imp_call_char_code_at;
   MIR_item_t imp_call_string_intrinsic;
@@ -282,7 +282,6 @@ typedef struct jit_compile {
   MIR_reg_t r_d_slot;
   MIR_reg_t r_d_one;
   MIR_reg_t r_args_buf;
-  MIR_reg_t r_call_out_this;
   int args_buf_slots;
   MIR_reg_t r_this_root;
   MIR_reg_t r_iter_roots;

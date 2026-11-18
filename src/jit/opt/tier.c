@@ -873,11 +873,10 @@ ant_value_t opt_rt_super_call(sv_vm_t *vm, ant_value_t this_val, ant_value_t fun
   sv_frame_t *frame = &vm->frames[vm->fp];
   ant_value_t *call_args = forward ? frame->bp : args + 1;
   int call_argc = forward ? frame->argc : (int)argc - 1;
-  ant_value_t super_this = this_val;
-  ant_value_t result = sv_vm_call(vm, vm->js, func, this_val, call_args, call_argc, &super_this, args[0]);
-  if (is_err(result)) return result;
-  frame->this = is_object_type(result) ? result : super_this;
-  return frame->this;
+  ant_value_t effective_this = sv_super_construct(vm, vm->js, func, this_val, call_args, call_argc, args[0]);
+  if (is_err(effective_this)) return effective_this;
+  frame->this = effective_this;
+  return effective_this;
 }
 
 ant_value_t opt_rt_import_default(sv_vm_t *vm, ant_value_t ns, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind) {

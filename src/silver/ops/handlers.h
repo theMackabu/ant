@@ -779,11 +779,9 @@ L_CALL: {
   ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
   ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
 
-  bool is_super_call =
-    (vtype(frame->super_val) != kTypeUndefined && call_func == frame->super_val);
-  ant_value_t call_this = is_super_call ? frame->this : Ant_Value_Undefined;
+  ant_value_t call_this = Ant_Value_Undefined;
 
-  if (!is_super_call && vtype(frame->new_target) == kTypeUndefined && vtype(call_func) == kTypeFunction) {
+  if (vtype(call_func) == kTypeFunction) {
     sv_closure_t *closure = js_func_closure(call_func);
     if (closure->func != NULL) {
       if (closure->call_flags & SV_CALL_HAS_BOUND_ARGS)
@@ -859,15 +857,10 @@ L_CALL: {
   call_fallback:;
   frame->ip = ip;
   sv_tfb_record_native_call(func, ip, call_func);
-  ant_value_t super_this_c = call_this;
-  ant_value_t call_result = sv_vm_call(
-    vm, js, call_func, call_this, call_args, call_argc,
-    is_super_call ? &super_this_c : NULL, is_super_call ? frame->new_target : Ant_Value_Undefined);
+  ant_value_t call_result = sv_vm_call(vm, js, call_func, call_this, call_args, call_argc, NULL, Ant_Value_Undefined);
   VM_RELOAD_FRAME();
   vm->sp -= call_argc + 1;
   if (is_err(call_result)) VM_THROW(call_result);
-  if (is_super_call)
-    frame->this = is_object_type(call_result) ? call_result : super_this_c;
   vm->stack[vm->sp++] = call_result;
   NEXT(OP_CALL);
 }
@@ -907,11 +900,7 @@ L_CALL_METHOD: {
   ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
   ant_value_t call_this = vm->stack[vm->sp - call_argc - 2];
 
-  bool is_super_call =
-    (vtype(frame->super_val) != kTypeUndefined && call_func == frame->super_val);
-
-  if (!is_super_call && vtype(frame->new_target) == kTypeUndefined &&
-      vtype(call_func) == kTypeFunction) {
+  if (vtype(call_func) == kTypeFunction) {
     sv_closure_t *closure = js_func_closure(call_func);
     if (closure->func != NULL) {
       if (closure->call_flags & SV_CALL_HAS_BOUND_ARGS)
@@ -986,15 +975,10 @@ L_CALL_METHOD: {
   call_method_fallback:;
   frame->ip = ip;
   sv_tfb_record_native_call(func, ip, call_func);
-  ant_value_t super_this_cm = call_this;
-  ant_value_t call_result = sv_vm_call(
-    vm, js, call_func, call_this, call_args, call_argc,
-    is_super_call ? &super_this_cm : NULL, is_super_call ? frame->new_target : Ant_Value_Undefined);
+  ant_value_t call_result = sv_vm_call(vm, js, call_func, call_this, call_args, call_argc, NULL, Ant_Value_Undefined);
   VM_RELOAD_FRAME();
   vm->sp -= call_argc + 2;
   if (is_err(call_result)) VM_THROW(call_result);
-  if (is_super_call)
-    frame->this = is_object_type(call_result) ? call_result : super_this_cm;
   vm->stack[vm->sp++] = call_result;
   NEXT(OP_CALL_METHOD);
 }

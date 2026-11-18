@@ -42,6 +42,20 @@ const e = new EvalSuper();
 assert.strictEqual(e.read(), 4);
 assert.strictEqual(e.write(), 1);
 
+function ReturnsFunction() { return function () {}; }
+ReturnsFunction.prototype.x = 'prototype x';
+ReturnsFunction.x = 'static x';
+class FunctionReceiver extends ReturnsFunction {
+  constructor() { super(); this.direct = super.x; this.viaArrow = (() => super.x)(); }
+}
+class FunctionReceiverField extends ReturnsFunction { field = super.x; }
+for (let i = 0; i < 3000; i++) {
+  const made = new FunctionReceiver();
+  assert.strictEqual(made.direct, 'prototype x');
+  assert.strictEqual(made.viaArrow, 'prototype x');
+  assert.strictEqual(new FunctionReceiverField().field, 'prototype x');
+}
+
 class EvalBase { x() { return 'base x'; } }
 class EvalInFieldArrow extends EvalBase { read = () => eval(String('super.x()')); }
 class EvalInField { isObject = eval(String('super.constructor === Object')); }

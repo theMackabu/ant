@@ -497,6 +497,7 @@ export function targets() {
     'test_super_dynamic_key.cjs',
     'test_string_wrapper_index_semantics.cjs',
     'test_structured_clone_detached.cjs',
+    'test_super_constructor_retarget.cjs',
     'test_structured_clone_props.mjs',
     'test_structured_clone_shapes.cjs',
     'test_super_forward.cjs',
