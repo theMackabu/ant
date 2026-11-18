@@ -905,6 +905,7 @@ ant_value_t js_delete_prop_ordinary(ant_t *js, ant_value_t obj, const char *key,
 
   if (string_wrapper_owns_key(js, obj, key, len)) return Ant_Value_False;
 
+  if (!Ant_Array_UnshareValue(js, obj)) return js_mkerr(js, "oom");
   if (ptr->flags.frozen || ptr->flags.sealed) {
     bool own = 
       lkp(js, obj, key, len).obj || 

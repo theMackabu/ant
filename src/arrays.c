@@ -501,13 +501,13 @@ static __attribute__((noinline)) ant_value_t array_result_set_checked(ant_t *js,
     return is_err(defined) ? defined : Ant_Value_Undefined;
   }
   
-  arr_set(js, result, idx, val);
+  arr_set_owned(js, result, idx, val);
   return Ant_Value_Undefined;
 }
 
 ant_value_t array_result_set(ant_t *js, ant_value_t result, bool fresh, ant_offset_t idx, ant_value_t val) {
   if (__builtin_expect(!fresh, 0)) return array_result_set_checked(js, result, idx, val);
-  arr_set(js, result, idx, val);
+  arr_set_owned(js, result, idx, val);
   return Ant_Value_Undefined;
 }
 
@@ -654,6 +654,11 @@ bool js_array_iteration_default(ant_t *js, ant_value_t arr) {
 }
 
 ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src) {
+  if (!Ant_Array_UnshareValue(js, dst)) return js_mkerr(js, "oom");
+  return js_arr_spread_into_owned(js, dst, src);
+}
+
+ant_value_t js_arr_spread_into_owned(ant_t *js, ant_value_t dst, ant_value_t src) {
   ant_offset_t len = 0;
   ant_value_t len_result = array_like_length_checked(js, src, &len);
   if (is_err(len_result)) return len_result;
@@ -673,7 +678,7 @@ ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src) {
     }
     
     if (doff && base + i < dense_capacity(doff) && base + i == get_array_length(js, dst)) {
-      dense_set(js, doff, base + i, value);
+      dense_set_owned(js, doff, base + i, value);
       array_len_set(js, dst, base + i + 1);
     } else js_arr_push(js, dst, value);
   }
@@ -902,8 +907,7 @@ void array_length_set_unguarded(ant_t *js, ant_value_t obj, ant_offset_t new_len
   if (doff) {
     ant_offset_t cap = dense_capacity(doff);
     ant_offset_t clear_to = (cur_len < cap) ? cur_len : cap;
-    if (new_len < clear_to) 
-      for (ant_offset_t i = new_len; i < clear_to; i++) dense_set(js, doff, i, T_EMPTY);
+    if (new_len < clear_to && !ant_array_is_shared(dense_obj(doff))) for (ant_offset_t i = new_len; i < clear_to; i++) dense_set_owned(js, doff, i, T_EMPTY);
   }
   
   if (new_len > cur_len) array_mark_may_have_holes(obj);

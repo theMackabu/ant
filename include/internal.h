@@ -316,6 +316,7 @@ static inline ant_value_t Ant_Object_CreateBare(ant_t *js) { return mkobj(js, 0)
 ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint32_t count);
 ant_value_t js_mkarr_dense_uninit(ant_t *js, uint32_t count, ant_value_t **out_data);
 ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src);
+ant_value_t js_arr_spread_into_owned(ant_t *js, ant_value_t dst, ant_value_t src);
 
 void js_arr_set_index(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t val);
 void js_arr_set_dense_length(ant_t *js, ant_value_t arr, ant_offset_t len);

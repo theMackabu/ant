@@ -625,7 +625,7 @@ static inline ant_value_t object_test_integrity(ant_t *js, ant_value_t obj, ant_
   uint16_t flags = ptr->flags.raw;
   uint16_t settled = frozen ? ANT_OBJECT_FLAG_FROZEN : ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_SEALED;
   
-  if (flags & settled) return Ant_Value_True;
+  if (flags & settled) return Ant_Value_FromBool(!ant_array_is_shared(ptr));
   if ((flags & (ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXTENSIBLE)) == ANT_OBJECT_FLAG_EXTENSIBLE) return Ant_Value_False;
   
   return object_scan_integrity(js, obj, frozen);
@@ -663,6 +663,7 @@ ant_value_t builtin_object_freeze(ant_params_t) {
       ant_shape_set_attrs_interned(js, ptr->shape, key, attrs);
     } else ant_shape_set_attrs_symbol(js, ptr->shape, prop->key.sym_off, attrs);
   }
+  if (!Ant_Array_Unshare(js, ptr)) return js_mkerr(js, "oom");
   
   ptr->flags.frozen = 1;
   ptr->flags.sealed = 1;
@@ -704,6 +705,7 @@ static ant_value_t builtin_object_seal(ant_params_t) {
   ant_object_t *ptr = js_obj_ptr(as_obj);
   if (!ptr || !ptr->shape) return obj;
   if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
+  if (!Ant_Array_Unshare(js, ptr)) return js_mkerr(js, "oom");
   
   ptr->flags.sealed = 1;
   ptr->flags.extensible = 0;
@@ -1235,6 +1237,7 @@ static ant_value_t builtin_object_preventExtensions(ant_params_t) {
   }
   
   ant_object_t *ptr = js_obj_ptr(as_obj);
+  if (!Ant_Array_UnshareValue(js, as_obj)) return js_mkerr(js, "oom");
   if (ptr) ptr->flags.extensible = 0;
   return obj;
 }

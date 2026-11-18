@@ -1375,6 +1375,7 @@ ant_value_t proxy_prevent_extensions(ant_t *js, ant_value_t proxy) {
   if (is_proxy(target)) return proxy_prevent_extensions(js, target);
 
   ant_object_t *ptr = js_obj_ptr(js_as_obj(target));
+  if (!Ant_Array_UnshareValue(js, js_as_obj(target))) return js_mkerr(js, "oom");
   if (ptr) ptr->flags.extensible = 0;
   return Ant_Value_True;
 }
