@@ -78,6 +78,7 @@ typedef struct {
   sv_closure_t *closure;
   ant_value_t callee;
   ant_value_t this_val;
+  ant_value_t new_target;
   ant_value_t *params;
   ant_value_t *locals;
   ant_value_t *stack;
@@ -216,6 +217,10 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
 ant_value_t opt_rt_call(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc);
 ant_value_t opt_rt_construct(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc);
 ant_value_t opt_rt_new_this(sv_vm_t *vm, ant_value_t callee);
+
+static inline bool opt_closure_constructs_plainly(const sv_closure_t *closure) {
+  return closure && closure->func && !closure->func->is_async && !closure->func->is_generator && (closure->call_flags & ~SV_CALL_HAS_SUPER) == 0;
+}
 ant_value_t opt_rt_stack_overflow(sv_vm_t *vm);
 ant_value_t opt_rt_char_code_at(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_array_includes(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t kind);

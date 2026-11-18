@@ -4014,7 +4014,7 @@ static ant_value_t opt_cg_materialize_arguments(sv_vm_t *vm, ant_value_t *slots,
 }
 
 static bool opt_cg_completion_value(const opt_site_value_t *value) {
-  return value->slot >= OPT_COMPLETION_SLOT && value->slot < OPT_CALLEE_SLOT && value->repr != OPT_REPR_POINTER;
+  return value->slot >= OPT_COMPLETION_SLOT && value->slot < OPT_NEW_TARGET_SLOT && value->repr != OPT_REPR_POINTER;
 }
 
 static uint32_t opt_cg_site_finally_count(const opt_code_t *code, const opt_site_t *site) {
@@ -4081,7 +4081,7 @@ static ant_value_t opt_cg_exit_frames(sv_vm_t *vm, const opt_site_t *site, opt_c
     uint32_t room = root || params > at->argc ? params : at->argc;
     uint32_t stack_slots = (uint32_t)(func->max_stack > 0 ? func->max_stack : 0);
     opt_exit_frame_t *frame = &frames[k];
-    *frame = (opt_exit_frame_t){.func = func, .callee = Ant_Value_Undefined, .this_val = Ant_Value_Undefined, .params = cursor, .arguments = Ant_Value_Undefined, .site = at};
+    *frame = (opt_exit_frame_t){.func = func, .callee = Ant_Value_Undefined, .this_val = Ant_Value_Undefined, .new_target = Ant_Value_Undefined, .params = cursor, .arguments = Ant_Value_Undefined, .site = at};
     frame->locals = frame->params + room;
     frame->stack = frame->locals + locals;
     cursor = frame->stack + depth;
@@ -4094,6 +4094,7 @@ static ant_value_t opt_cg_exit_frames(sv_vm_t *vm, const opt_site_t *site, opt_c
       ant_value_t *to = NULL;
       if (slot == OPT_THIS_SLOT) frame->this_val = boxed;
       else if (slot == OPT_CALLEE_SLOT) frame->callee = boxed;
+      else if (slot == OPT_NEW_TARGET_SLOT) frame->new_target = boxed;
       else if (slot <= stack_slots) {
         if (slot - 1 < depth) to = &frame->stack[slot - 1];
       } else if (slot <= stack_slots + locals) to = &frame->locals[slot - stack_slots - 1];

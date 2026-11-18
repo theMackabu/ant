@@ -116,6 +116,7 @@ typedef struct {
   ir_frame_state_id_t caller_position;
   ir_node_id_t closure;
   ir_node_id_t receiver;
+  ir_node_id_t new_target;
   uint32_t argc;
   const ir_node_id_t *args;
   bool construct;
@@ -913,6 +914,7 @@ static ir_frame_state_t opt_frame_state_at(opt_builder_t *b) {
     const opt_inline_t *call = b->inline_call;
     opt_vec_push(&b->arena, &state.values, ((ir_slot_value_t){OPT_THIS_SLOT, call->receiver}));
     opt_vec_push(&b->arena, &state.values, ((ir_slot_value_t){OPT_CALLEE_SLOT, call->closure}));
+    if (call->new_target != IR_NONE) opt_vec_push(&b->arena, &state.values, ((ir_slot_value_t){OPT_NEW_TARGET_SLOT, call->new_target}));
     for (uint32_t i = b->params; b->virtual_arguments && i < call->argc; i++)
       opt_vec_push(&b->arena, &state.values, ((ir_slot_value_t){opt_param_slot(&b->layout, i), opt_frame_value(b, call->args[i])}));
     state.parent = call->caller_state;
@@ -3168,6 +3170,7 @@ static const char *opt_inline_unsupported_op(const sv_func_t *func, bool constru
     if (sv_op_flags[op] & SV_OPF_OPT_ROOT_ONLY) return sv_op_names[op];
     if (opt_op_native(op) || (construct && op == OP_CHECK_CTOR)) continue;
     if (op == OP_SPECIAL_OBJ && func->code[off + 1] == SV_SPECIAL_SUPER) continue;
+    if (op == OP_SPECIAL_OBJ && func->code[off + 1] == SV_SPECIAL_NEW_TARGET && construct) continue;
     if (op == OP_SPECIAL_OBJ && func->code[off + 1] == SV_SPECIAL_ARGUMENTS && (func->is_strict || !func->param_count)) continue;
     return sv_op_names[op];
   }
@@ -3176,7 +3179,7 @@ static const char *opt_inline_unsupported_op(const sv_func_t *func, bool constru
 
 static const char *opt_not_inlineable(const opt_builder_t *b, sv_func_t *target, bool construct, bool initializer, uint32_t *count) {
   if (!target) return "no-target";
-  if (target->is_async || target->is_generator || target->is_derived_ctor || target->has_dynamic_eval ||
+  if (target->is_async || target->is_generator || (target->is_derived_ctor && !construct) || target->has_dynamic_eval ||
       target->is_eval || target->is_tla || target->code_len <= 0) return "function-kind";
   if (target->is_arrow && (construct || opt_reads_this(target))) return "arrow-this";
   uint32_t depth = 0, recursion = 0;
@@ -3347,7 +3350,7 @@ static ir_node_id_t opt_construct_this(opt_builder_t *b, ir_node_id_t closure) {
   uint64_t bits;
   if (!ir_constant_value(b->graph, closure, &bits) || vtype(bits) != kTypeFunction || !opt_may_speculate(b, OPT_EXIT_BAD_SHAPE)) return IR_NONE;
   sv_closure_t *constructor = js_func_closure(bits);
-  if (!sv_closure_is_plain_sync(constructor) || constructor->func->is_derived_ctor || !is_object_type(constructor->func_obj)) return IR_NONE;
+  if (!opt_closure_constructs_plainly(constructor) || !is_object_type(constructor->func_obj)) return IR_NONE;
   ant_object_t *func_obj = js_obj_ptr(js_as_obj(constructor->func_obj));
   ant_value_t proto;
   if (!func_obj->flags.is_constructor || func_obj->flags.is_exotic || !sv_construct_prototype_data(js, func_obj, constructor->func, &proto))
@@ -3425,32 +3428,70 @@ static bool opt_inline_build(opt_builder_t *b, opt_inline_t *call, sv_func_t *ta
   return ok;
 }
 
-static bool opt_try_inline(opt_builder_t *b, sv_op_t op, uint32_t argc, uint32_t operands, ir_node_id_t callee, ir_node_id_t second,
-  const ir_node_id_t *args, sv_func_t *target, opt_flow_t *flow) {
-  bool construct = op == OP_NEW, tail = op == OP_TAIL_CALL || op == OP_TAIL_CALL_METHOD;
-  bool method = op == OP_CALL_METHOD || op == OP_TAIL_CALL_METHOD;
+static constexpr uint32_t OPT_SUPER_MAX_LINKS = 4;
+
+typedef struct {
+  ant_object_t *owners[OPT_SUPER_MAX_LINKS];
+  ant_value_t parents[OPT_SUPER_MAX_LINKS];
   uint32_t count;
-  bool initializer = method && b->inline_call && b->inline_call->construct && second == b->inline_call->receiver;
-  const char *refused = opt_not_inlineable(b, target, construct, initializer, &count);
-  for (uint32_t i = 0; i < argc && !refused; i++)
-    if (opt_is_any_virtual_arguments(b, args[i]) || opt_is_any_virtual_arguments(b, second)) refused = "arguments";
-  if (!refused && construct && (callee != second || !opt_may_speculate(b, OPT_EXIT_OUT_OF_BOUNDS))) refused = "construct";
-  ir_node_id_t receiver = IR_NONE;
-  if (!refused && !construct) {
-    receiver = opt_inline_receiver(b, target, method ? second : opt_constant(b, IR_VALUE_UNDEFINED));
-    if (receiver == IR_NONE) refused = "this";
-  }
-  ir_node_id_t closure = refused ? IR_NONE : opt_inline_closure(b, target, callee);
-  if (!refused && closure == IR_NONE) refused = "closure";
-  if (refused) {
-    opt_inline_refused(b, target, refused);
+  sv_closure_t *closure;
+} opt_super_parents_t;
+
+static bool opt_super_parents(const opt_builder_t *b, ant_value_t home, opt_super_parents_t *out) {
+  ant_t *js = b->js;
+  *out = (opt_super_parents_t){0};
+  for (uint32_t i = 0; i < OPT_SUPER_MAX_LINKS; i++) {
+    ant_object_t *owner = vtype(home) == kTypeFunction ? opt_prototype_object(js, home) : NULL;
+    if (!owner || owner->flags.is_exotic || !owner->shape) return false;
+    ant_value_t parent = ant_shape_proto(owner->shape);
+    sv_closure_t *closure = vtype(parent) == kTypeFunction ? js_func_closure(parent) : NULL;
+    if (!closure || !fixed_arena_contains(&js->closure_arena, closure) || !js_is_constructor(parent)) return false;
+    out->owners[i] = owner;
+    out->parents[i] = parent;
+    out->count = i + 1;
+    if (closure->func) {
+      if (!opt_closure_constructs_plainly(closure) || closure->func->realm != b->func->realm) return false;
+      out->closure = closure;
+      return true;
+    }
     return false;
   }
-  if (construct && (receiver = opt_construct_this(b, closure)) == IR_NONE) {
-    receiver = opt_emit(b, ir_op(IR_OP_NEW_THIS), &closure, 1, OPT_REPR_TAGGED);
-    ir_node(b->graph, receiver)->frame_state = opt_call_position(b);
-    receiver = opt_emit_checked(b, ir_op(IR_OP_CHECK_NOT_HOLE), &receiver, 1, OPT_REPR_NONE);
+  return false;
+}
+
+static bool opt_super_parents_inline(const opt_builder_t *b, ant_value_t home) {
+  for (uint32_t depth = 0; depth < OPT_INLINE_MAX_DEPTH; depth++) {
+    opt_super_parents_t chain;
+    uint32_t count;
+    if (!opt_super_parents(b, home, &chain)) return false;
+    if (opt_not_inlineable(b, chain.closure->func, true, false, &count)) return false;
+    if (!chain.closure->func->is_derived_ctor) return true;
+    home = chain.closure->super_val;
   }
+  return false;
+}
+
+static bool opt_derived_parents_inline(const opt_builder_t *b, ir_node_id_t callee) {
+  ant_value_t known = opt_likely_value(b, callee);
+  return vtype(known) == kTypeFunction && opt_super_parents_inline(b, js_func_closure(known)->super_val);
+}
+
+static bool opt_super_parents_retain(opt_builder_t *b, const opt_super_parents_t *chain) {
+  for (uint32_t i = 0; i < chain->count; i++)
+    if (!opt_retain(b, chain->parents[i])) return false;
+  return true;
+}
+
+static void opt_super_parents_guard(opt_builder_t *b, ir_node_id_t home, ant_value_t known, const opt_super_parents_t *chain) {
+  if (!ir_is_constant(b->graph, home)) opt_expect_value(b, home, known, NULL, NULL);
+  for (uint32_t i = 0; i < chain->count; i++) {
+    ir_node_id_t address = opt_typed_constant(b, (uint64_t)(uintptr_t)chain->owners[i], OPT_REPR_POINTER);
+    opt_expect_value(b, opt_emit(b, ir_op(IR_OP_LOAD_PROTOTYPE), &address, 1, OPT_REPR_TAGGED), chain->parents[i], NULL, NULL);
+  }
+}
+
+static void opt_inline_run(opt_builder_t *b, sv_func_t *target, ir_node_id_t closure, ir_node_id_t receiver, ir_node_id_t new_target,
+  bool construct, bool tail, const ir_node_id_t *args, uint32_t argc, uint32_t operands, uint32_t count, opt_flow_t *flow) {
   opt_retain_func(b, target);
 
   opt_frame_t caller_frame = opt_frame_clone(b, &b->frame);
@@ -3469,6 +3510,7 @@ static bool opt_try_inline(opt_builder_t *b, sv_op_t op, uint32_t argc, uint32_t
     .caller_position = opt_in_try(b) ? caller_state : ir_add_frame_state(b->graph, &position),
     .closure = closure,
     .receiver = receiver,
+    .new_target = new_target,
     .argc = argc,
     .args = opt_arena_dup(&b->graph->arena, args, (argc + 1) * sizeof *args),
     .construct = construct,
@@ -3487,13 +3529,13 @@ static bool opt_try_inline(opt_builder_t *b, sv_op_t op, uint32_t argc, uint32_t
     }
     b->failed = true;
     *flow = OPT_FLOW_FAILED;
-    return true;
+    return;
   }
   b->ctx->inlined_instructions += count;
   b->ctx->inlined_calls++;
   if (call.continuation == IR_NONE) {
     *flow = OPT_FLOW_ENDED;
-    return true;
+    return;
   }
   b->block = call.continuation;
   opt_vec_push(&b->graph->arena, &b->ctx->order, call.continuation);
@@ -3503,6 +3545,36 @@ static bool opt_try_inline(opt_builder_t *b, sv_op_t op, uint32_t argc, uint32_t
   for (uint32_t i = 1; i < call.returns.len; i++) same &= call.returns.items[i] == result;
   if (!same) result = opt_add_phi(b, opt_stack_index(b, b->frame.sp - operands), call.returns.items, call.returns.len);
   *flow = opt_finish_call(b, operands, result, tail);
+}
+
+static bool opt_try_inline(opt_builder_t *b, sv_op_t op, uint32_t argc, uint32_t operands, ir_node_id_t callee, ir_node_id_t second,
+  const ir_node_id_t *args, sv_func_t *target, opt_flow_t *flow) {
+  bool construct = op == OP_NEW, tail = op == OP_TAIL_CALL || op == OP_TAIL_CALL_METHOD;
+  bool method = op == OP_CALL_METHOD || op == OP_TAIL_CALL_METHOD;
+  uint32_t count;
+  bool initializer = method && b->inline_call && b->inline_call->construct && second == b->inline_call->receiver;
+  const char *refused = opt_not_inlineable(b, target, construct, initializer, &count);
+  for (uint32_t i = 0; i < argc && !refused; i++)
+    if (opt_is_any_virtual_arguments(b, args[i]) || opt_is_any_virtual_arguments(b, second)) refused = "arguments";
+  if (!refused && construct && (callee != second || !opt_may_speculate(b, OPT_EXIT_OUT_OF_BOUNDS))) refused = "construct";
+  if (!refused && construct && target->is_derived_ctor && !opt_derived_parents_inline(b, callee)) refused = "super-parent";
+  ir_node_id_t receiver = IR_NONE;
+  if (!refused && !construct) {
+    receiver = opt_inline_receiver(b, target, method ? second : opt_constant(b, IR_VALUE_UNDEFINED));
+    if (receiver == IR_NONE) refused = "this";
+  }
+  ir_node_id_t closure = refused ? IR_NONE : opt_inline_closure(b, target, callee);
+  if (!refused && closure == IR_NONE) refused = "closure";
+  if (refused) {
+    opt_inline_refused(b, target, refused);
+    return false;
+  }
+  if (construct && (receiver = opt_construct_this(b, closure)) == IR_NONE) {
+    receiver = opt_emit(b, ir_op(IR_OP_NEW_THIS), &closure, 1, OPT_REPR_TAGGED);
+    ir_node(b->graph, receiver)->frame_state = opt_call_position(b);
+    receiver = opt_emit_checked(b, ir_op(IR_OP_CHECK_NOT_HOLE), &receiver, 1, OPT_REPR_NONE);
+  }
+  opt_inline_run(b, target, closure, receiver, IR_NONE, construct, tail, args, argc, operands, count, flow);
   return true;
 }
 
@@ -3531,6 +3603,7 @@ static opt_flow_t opt_build_return(opt_builder_t *b, ir_node_id_t value) {
     uint64_t bits;
     bool primitive = ir_constant_value(b->graph, value, &bits)
       && (ir_node(b->graph, value)->repr != OPT_REPR_TAGGED || !ir_value_is_object(bits));
+    if (primitive && b->func->is_derived_ctor) primitive = ir_node(b->graph, value)->repr == OPT_REPR_TAGGED && bits == IR_VALUE_UNDEFINED;
     if (value != call->receiver && !primitive) {
       opt_fail(b, "construct-return");
       return OPT_FLOW_FAILED;
@@ -5030,14 +5103,50 @@ static opt_flow_t opt_build_import(opt_builder_t *b, const uint8_t *ip, sv_op_t 
   return OPT_FLOW_CONTINUE;
 }
 
+static ant_value_t opt_super_call_parents(opt_builder_t *b, ir_node_id_t home_node, opt_super_parents_t *chain) {
+  if (!opt_may_speculate(b, OPT_EXIT_BAD_SHAPE) || !opt_may_speculate(b, OPT_EXIT_BAD_TYPE)) return 0;
+  ant_value_t home = opt_likely_value(b, home_node);
+  const sv_closure_t *self = b->ctx->closure;
+  if (!home && !b->inline_call && self && self->func == b->func && (self->call_flags & SV_CALL_HAS_SUPER)) home = self->super_val;
+  return opt_super_parents(b, home, chain) && opt_retain(b, home) ? home : 0;
+}
+
+static bool opt_try_super_inline(opt_builder_t *b, bool forward, const ir_node_id_t *inputs, uint32_t argc, uint32_t operands, opt_flow_t *flow) {
+  const opt_inline_t *outer = b->inline_call;
+  if ((forward && !outer) || inputs[0] != (outer ? outer->receiver : b->frame.this_value)) return false;
+  const ir_node_id_t *args = forward ? outer->args : inputs + 3;
+  if (forward) argc = outer->argc;
+
+  opt_super_parents_t chain;
+  ant_value_t home = opt_super_call_parents(b, inputs[1], &chain);
+  if (!home) return false;
+  sv_func_t *target = chain.closure ? chain.closure->func : NULL;
+  uint32_t count = 0;
+  const char *refused = target ? opt_not_inlineable(b, target, true, false, &count) : NULL;
+  for (uint32_t i = 0; i < argc && target && !refused; i++)
+    if (opt_is_any_virtual_arguments(b, args[i])) refused = "arguments";
+  if (!refused && !opt_super_parents_retain(b, &chain)) refused = "closure";
+  if (refused) {
+    opt_inline_refused(b, target, refused);
+    return false;
+  }
+
+  opt_super_parents_guard(b, inputs[1], home, &chain);
+  opt_inline_run(b, target, opt_constant(b, chain.parents[chain.count - 1]), inputs[0], inputs[2], true, false, args, argc, operands, count, flow);
+  return true;
+}
+
+
 static bool opt_super_call_allowed(opt_builder_t *b) {
-  if (b->func->is_derived_ctor && !b->inline_call) return true;
+  if (b->func->is_derived_ctor && (!b->inline_call || b->inline_call->construct)) return true;
   opt_fail(b, b->inline_call ? "inline-super" : "super-call-kind");
   return false;
 }
 
 static opt_flow_t opt_build_super_call_with(opt_builder_t *b, sv_op_t op, const ir_node_id_t *inputs, uint32_t argc, uint32_t operands) {
-  bool forward = op == OP_SUPER_FORWARD;
+  bool forward = op == OP_SUPER_FORWARD, plain = op == OP_CALL_SUPER;
+  opt_flow_t flow;
+  if ((plain || forward) && opt_try_super_inline(b, forward, inputs, argc, operands, &flow)) return flow;
   if (b->inline_call) {
     opt_fail(b, "inline-super");
     return OPT_FLOW_FAILED;
@@ -5091,6 +5200,10 @@ static opt_flow_t opt_build_special_object(opt_builder_t *b, const uint8_t *ip) 
   if (ip[1] == SV_SPECIAL_SUPER) return opt_build_super_value(b);
   if (ip[1] == SV_SPECIAL_NEW_TARGET && !b->inline_call) {
     opt_push(b, opt_new_target(b));
+    return OPT_FLOW_CONTINUE;
+  }
+  if (ip[1] == SV_SPECIAL_NEW_TARGET && b->inline_call->construct) {
+    opt_push(b, b->inline_call->new_target == IR_NONE ? b->inline_call->closure : b->inline_call->new_target);
     return OPT_FLOW_CONTINUE;
   }
   return OPT_FLOW_GENERIC;
