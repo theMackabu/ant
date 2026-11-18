@@ -161,14 +161,19 @@ static ant_value_t builtin_Math_fround(ant_params_t) {
 
 static double math_f16round(double x) {
   if (isnan(x) || isinf(x) || x == 0) return x;
+
   double magnitude = fabs(x);
   if (magnitude >= 65520.0) return x < 0 ? -(double)INFINITY : (double)INFINITY;
+
   double quantum = magnitude < 0x1p-14 ? 0x1p-24 : ldexp(1.0, ilogb(magnitude) - 10);
   double scaled = magnitude / quantum;
+
   double rounded = floor(scaled);
   double rest = scaled - rounded;
+
   if (rest > 0.5 || (rest == 0.5 && fmod(rounded, 2.0) != 0)) rounded += 1.0;
   double result = rounded * quantum;
+  
   return x < 0 ? -result : result;
 }
 
