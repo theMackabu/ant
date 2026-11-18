@@ -203,6 +203,7 @@ export function targets() {
     'test_fs_link.cjs',
     'test_fs_opendir.cjs',
     'test_fs_opendir_leak.cjs',
+    'test_derived_this_tdz.cjs',
     'test_fs_readdir_recursive.cjs',
     'test_fs_stream_fd.cjs',
     'test_fs_write_file_sync_fd.cjs',

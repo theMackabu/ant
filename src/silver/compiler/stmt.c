@@ -175,6 +175,7 @@ void compile_body_block(
     sv_ast_t *stmt = body->args.items[i];
     if (skip_static_declarations && module_stmt_is_static_declaration(stmt)) continue;
     compile_stmt(c, stmt);
+    if (stmt == c->this_bound_stmt) c->this_bound = true;
   }
 }
 

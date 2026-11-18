@@ -311,6 +311,22 @@ sv_func_t *compile_function_body(
     emit_put_local(&comp, comp.new_target_local);
   }
   
+  if (!comp.is_arrow && comp.enclosing && (node->flags & (FN_METHOD | FN_GETTER | FN_SETTER | FN_STATIC))) {
+    comp.super_local = add_hidden_local(&comp);
+    emit_op(&comp, OP_SPECIAL_OBJ);
+    emit(&comp, SV_SPECIAL_SUPER);
+    emit_put_local(&comp, comp.super_local);
+  }
+
+  derived_ctor_plan_t derived = (node->flags & FN_DERIVED_CTOR) ? derived_ctor_plan(node) : (derived_ctor_plan_t){0};
+  if (derived.needs_this_binding) {
+    comp.this_local = add_hidden_local(&comp);
+    comp.this_bound_stmt = derived.sole_super_stmt;
+    comp.super_runs_once = derived.sole_super_stmt != NULL;
+    emit_op(&comp, OP_UNDEF);
+    emit_put_local(&comp, comp.this_local);
+  }
+
   if (!has_non_simple_params && node->body) {
     if (node->body->type == N_BLOCK) {
       for (int i = 0; i < node->body->args.count; i++)
@@ -485,12 +501,6 @@ sv_func_t *compile_function_body(
     comp.args_mapped = !comp.is_strict;
   }
 
-  if (!comp.is_arrow && comp.enclosing && (node->flags & (FN_METHOD | FN_GETTER | FN_SETTER | FN_STATIC))) {
-    comp.super_local = add_hidden_local(&comp);
-    emit_op(&comp, OP_SPECIAL_OBJ);
-    emit(&comp, SV_SPECIAL_SUPER);
-    emit_put_local(&comp, comp.super_local);
-  }
 
   if ((node->flags & FN_CLASS_CTOR) && !(node->flags & FN_DERIVED_CTOR) &&
       enclosing->field_init_count > 0) {

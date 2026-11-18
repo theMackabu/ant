@@ -163,7 +163,7 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     case N_THIS:
-      emit_op(c, OP_THIS);
+      emit_this(c);
       break;
 
     case N_GLOBAL_THIS:
@@ -618,7 +618,7 @@ void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
     compile_delete_optional(c, arg);
   } else if (arg->type == N_MEMBER && is_ident_name(arg->left, "super")) {
     static const char message[] = "Unsupported reference to 'super'";
-    emit_op(c, OP_THIS);
+    emit_this(c);
     if (arg->flags & 1) compile_expr(c, arg->right);
     else emit_op(c, OP_UNDEF);
     emit_op(c, OP_POP);
