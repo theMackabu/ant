@@ -111,6 +111,7 @@ export function targets() {
     'test_clone_length_tracking_views.mjs',
     'test_code_unit_minor.cjs',
     'test_collections_args_receivers.cjs',
+    'test_class_field_builtin_identity.cjs',
     'test_commonjs_pending_exception.cjs',
     'test_compile_basic.cjs',
     'test_compile_native_addon.cjs',
