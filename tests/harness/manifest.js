@@ -520,6 +520,7 @@ export function targets() {
     'test_super_constructor_retarget.cjs',
     'test_structured_clone_props.mjs',
     'test_structured_clone_shapes.cjs',
+    'test_super_bound_parent.cjs',
     'test_super_forward.cjs',
     'test_symbol_set_semantics.cjs',
     'test_super_construct_paths.cjs',

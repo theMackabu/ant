@@ -3435,7 +3435,28 @@ typedef struct {
   ant_value_t parents[OPT_SUPER_MAX_LINKS];
   uint32_t count;
   sv_closure_t *closure;
+  ant_value_t callee;
+  const ant_value_t *bound;
+  uint32_t bound_count;
 } opt_super_parents_t;
+
+static bool opt_bound_arguments_fit(uint32_t bound_count, uint32_t argc) {
+  return bound_count + argc + 1 <= OPT_MAX_CALL_ARGS;
+}
+
+static sv_closure_t *opt_super_bound_target(ant_t *js, const sv_closure_t *bound, opt_super_parents_t *out) {
+  if (bound->call_flags & ~(SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_SUPER)) return NULL;
+  const ant_object_t *func_obj = is_object_type(bound->func_obj) ? opt_live_object(js, bound->func_obj) : NULL;
+  ant_value_t target = func_obj ? js_get_slot(bound->func_obj, SLOT_TARGET_FUNC) : Ant_Value_Undefined;
+  sv_closure_t *closure = vtype(target) == kTypeFunction ? js_func_closure(target) : NULL;
+  if (!closure || !fixed_arena_contains(&js->closure_arena, closure) || closure->func != bound->func) return NULL;
+  uint32_t count = (bound->call_flags & SV_CALL_HAS_BOUND_ARGS) && bound->bound_argc > 0 ? (uint32_t)bound->bound_argc : 0;
+  if (!opt_bound_arguments_fit(count, 0) || (count && !bound->u.bound_argv)) return NULL;
+  out->callee = target;
+  out->bound = count ? bound->u.bound_argv : NULL;
+  out->bound_count = count;
+  return closure;
+}
 
 static bool opt_super_parents(const opt_builder_t *b, ant_value_t home, opt_super_parents_t *out) {
   ant_t *js = b->js;
@@ -3449,6 +3470,9 @@ static bool opt_super_parents(const opt_builder_t *b, ant_value_t home, opt_supe
     out->owners[i] = owner;
     out->parents[i] = parent;
     out->count = i + 1;
+    out->callee = parent;
+    bool bound = closure->func && (closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS));
+    if (bound && !(closure = opt_super_bound_target(js, closure, out))) return false;
     if (closure->func) {
       if (!opt_closure_constructs_plainly(closure) || closure->func->realm != b->func->realm) return false;
       out->closure = closure;
@@ -3482,7 +3506,17 @@ static bool opt_derived_parents_inline(const opt_builder_t *b, ir_node_id_t call
 static bool opt_super_parents_retain(opt_builder_t *b, const opt_super_parents_t *chain) {
   for (uint32_t i = 0; i < chain->count; i++)
     if (!opt_retain(b, chain->parents[i])) return false;
-  return true;
+  for (uint32_t i = 0; i < chain->bound_count; i++)
+    if (!opt_retain(b, chain->bound[i])) return false;
+  return opt_retain(b, chain->callee);
+}
+
+static const ir_node_id_t *opt_super_arguments(opt_builder_t *b, const opt_super_parents_t *chain, const ir_node_id_t *args, uint32_t *argc, ir_node_id_t *joined) {
+  if (!chain->bound_count) return args;
+  for (uint32_t i = 0; i < chain->bound_count; i++) joined[i] = opt_constant(b, chain->bound[i]);
+  for (uint32_t i = 0; i < *argc; i++) joined[chain->bound_count + i] = args[i];
+  *argc += chain->bound_count;
+  return joined;
 }
 
 static void opt_super_parents_guard(opt_builder_t *b, ir_node_id_t home, ant_value_t known, const opt_super_parents_t *chain) {
@@ -3613,6 +3647,7 @@ static bool opt_try_default_construct(opt_builder_t *b, uint32_t argc, uint32_t 
   if (!refused && target && target->is_derived_ctor && !opt_super_parents_inline(b, chain.closure->super_val)) refused = "super-parent";
   for (uint32_t i = 0; i < argc && !refused; i++)
     if (opt_is_any_virtual_arguments(b, args[i])) refused = "arguments";
+  if (!refused && !opt_bound_arguments_fit(chain.bound_count, argc)) refused = "bound-arguments";
   if (refused) {
     opt_inline_refused(b, target, refused);
     return false;
@@ -3642,7 +3677,9 @@ static bool opt_try_default_construct(opt_builder_t *b, uint32_t argc, uint32_t 
     *flow = opt_finish_call(b, operands, receiver, false);
     return true;
   }
-  opt_inline_run(b, target, opt_constant(b, chain.parents[chain.count - 1]), receiver, self, true, false, args, argc, operands, count, flow);
+  ir_node_id_t joined[OPT_MAX_CALL_ARGS];
+  args = opt_super_arguments(b, &chain, args, &argc, joined);
+  opt_inline_run(b, target, opt_constant(b, chain.callee), receiver, self, true, false, args, argc, operands, count, flow);
   return true;
 }
 
@@ -5194,6 +5231,7 @@ static bool opt_try_super_inline(opt_builder_t *b, bool forward, const ir_node_i
   const char *refused = target ? opt_not_inlineable(b, target, true, false, &count) : NULL;
   for (uint32_t i = 0; i < argc && target && !refused; i++)
     if (opt_is_any_virtual_arguments(b, args[i])) refused = "arguments";
+  if (!refused && target && !opt_bound_arguments_fit(chain.bound_count, argc)) refused = "bound-arguments";
   if (!refused && !opt_super_parents_retain(b, &chain)) refused = "closure";
   if (refused) {
     opt_inline_refused(b, target, refused);
@@ -5207,22 +5245,25 @@ static bool opt_try_super_inline(opt_builder_t *b, bool forward, const ir_node_i
     *flow = OPT_FLOW_CONTINUE;
     return true;
   }
-  opt_inline_run(b, target, opt_constant(b, chain.parents[chain.count - 1]), inputs[0], inputs[2], true, false, args, argc, operands, count, flow);
+  ir_node_id_t joined[OPT_MAX_CALL_ARGS];
+  args = opt_super_arguments(b, &chain, args, &argc, joined);
+  opt_inline_run(b, target, opt_constant(b, chain.callee), inputs[0], inputs[2], true, false, args, argc, operands, count, flow);
   return true;
 }
 
 static ir_node_id_t opt_try_super_direct(opt_builder_t *b, const ir_node_id_t *inputs, uint32_t argc) {
   opt_super_parents_t chain;
   ant_value_t home = opt_super_call_parents(b, inputs[1], &chain);
-  if (!home || !chain.closure || !opt_super_parents_retain(b, &chain)) return IR_NONE;
+  if (!home || !chain.closure || !opt_bound_arguments_fit(chain.bound_count, argc) || !opt_super_parents_retain(b, &chain)) return IR_NONE;
   for (uint32_t i = 0; i < argc; i++)
     if (opt_is_any_virtual_arguments(b, inputs[3 + i])) return IR_NONE;
   opt_super_parents_guard(b, inputs[1], home, &chain);
-  ir_node_id_t operands[3 + OPT_MAX_CALL_ARGS];
-  operands[0] = opt_constant(b, chain.parents[chain.count - 1]);
+  ir_node_id_t operands[3 + OPT_MAX_CALL_ARGS], joined[OPT_MAX_CALL_ARGS];
+  const ir_node_id_t *args = opt_super_arguments(b, &chain, inputs + 3, &argc, joined);
+  operands[0] = opt_constant(b, chain.callee);
   operands[1] = inputs[0];
   operands[2] = inputs[2];
-  for (uint32_t i = 0; i < argc; i++) operands[3 + i] = inputs[3 + i];
+  for (uint32_t i = 0; i < argc; i++) operands[3 + i] = args[i];
   ir_op_t call = ir_op(IR_OP_CALL_DIRECT);
   call.call.func = b->func;
   call.call.bc_off = b->pc;
