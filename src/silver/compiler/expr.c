@@ -539,35 +539,9 @@ static void compile_typeof_op(sv_compiler_t *c, sv_ast_t *node, int test_type) {
         emit_constant(c, sv_const_str(c, known, strlen(known)));
         return;
       }
-      emit_get_var_plain(c, arg->str, arg->len);
-    } else {
-      int upval = resolve_upvalue(c, arg->str, arg->len);
-      if (upval != -1) {
-        emit_op(c, c->upval_descs[upval].by_value ? OP_GET_UPVAL_VAL : OP_GET_UPVAL);
-        emit_u16(c, (uint16_t)upval);
-        sv_binding_meta_t *meta = &c->upval_bindings[upval];
-        emit_import_binding_resolve(
-          c,
-          meta->import_kind,
-          meta->import_name,
-          meta->import_name_len
-        );
-      } else if (
-          !c->owns_eval_env && has_implicit_arguments_obj(c) &&
-          is_ident_str(arg->str, arg->len, "arguments", 9)
-        ) {
-        if (c->strict_args_local >= 0) {
-          emit_get_local(c, c->strict_args_local);
-        } else {
-          emit_op(c, OP_SPECIAL_OBJ);
-          emit(c, SV_SPECIAL_ARGUMENTS);
-        }
-      } else emit_atom_op(
-        c, env_resolution_op(
-          c, OP_GET_GLOBAL_UNDEF, OP_GET_EVAL_GLOBAL_UNDEF),
-        arg->str, arg->len);
     }
     
+    emit_get_var_typeof(c, arg->str, arg->len);
     patch_list_resolve(c, &found);
   } else compile_expr(c, arg);
   
