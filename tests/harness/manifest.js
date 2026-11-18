@@ -86,6 +86,7 @@ export function targets() {
     'test_proxy_define_property.cjs',
     'test_receiver_edges.cjs',
     'test_debug_shell_compile.cjs',
+    'test_class_name_tdz_private_keys.cjs',
     'test_detached_views.cjs',
     'test_array_proto_abort_regexp.mjs',
     'test_object_spread_large_arrays.cjs',
