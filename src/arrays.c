@@ -741,7 +741,7 @@ ant_value_t validate_array_length(ant_t *js, ant_value_t v) {
 
 static inline bool object_refuses_new_props(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-  return ptr && (ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible);
+  return ptr && !ptr->flags.extensible;
 }
 
 static __attribute__((noinline, cold)) ant_value_t not_extensible_error(ant_t *js, const char *key, size_t len) {
@@ -794,8 +794,7 @@ void array_len_set(ant_t *js, ant_value_t obj, ant_offset_t new_len) {
 
 bool array_length_has_guarded_elements(ant_object_t *ptr) {
   return 
-    ptr->flags.sealed || 
-    ptr->flags.frozen || 
+    ant_object_is_sealed_or_frozen(ptr) || 
     !ptr->shape || ant_shape_may_have_index_keys(ptr->shape);
 }
 
@@ -1088,7 +1087,7 @@ ant_value_t array_truncate_length(ant_t *js, ant_value_t obj, ant_offset_t new_l
   }
   
   bool shrinking = new_len < cur_len && ptr && ptr->shape;
-  if (shrinking && doff && (ptr->flags.sealed || ptr->flags.frozen))
+  if (shrinking && doff && ant_object_is_sealed_or_frozen(ptr))
     final_len = dense_filled_end(doff, dense_end, new_len);
 
   if (shrinking && ant_shape_may_have_index_keys(ptr->shape)) {

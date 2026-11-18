@@ -321,7 +321,7 @@ static ant_value_t builtin_array_push(ant_params_t) {
 
   ant_object_t *target = js_obj_ptr(js_as_obj(arr));
   if (array_refuses_add(arr, nargs)) return array_add_refused_error(js, len);
-  if (target && (target->flags.frozen || array_length_readonly(js, arr)))
+  if (target && (ant_object_is_frozen(target) || array_length_readonly(js, arr)))
     return array_length_readonly_error(js);
   
   ant_offset_t doff = get_dense_buf(arr);

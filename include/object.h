@@ -245,6 +245,18 @@ enum {
   ANT_ARGUMENTS_SLOT_ITERATOR = 2,
 };
 
+static inline bool ant_object_is_frozen(const ant_object_t *obj) {
+  return (obj->flags.raw & (ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_EXTENSIBLE)) == ANT_OBJECT_FLAG_FROZEN;
+}
+
+static inline bool ant_object_is_sealed(const ant_object_t *obj) {
+  return (obj->flags.raw & (ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXTENSIBLE)) == ANT_OBJECT_FLAG_SEALED;
+}
+
+static inline bool ant_object_is_sealed_or_frozen(const ant_object_t *obj) {
+  return (obj->flags.raw & (ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_FROZEN)) && !obj->flags.extensible;
+}
+
 static inline bool ant_object_is_array(const ant_object_t *obj) {
   return obj && obj->type_tag == kTypeArray && !obj->flags.arguments_object;
 }
