@@ -330,6 +330,7 @@ export function targets() {
     'test_opt_code_memory.cjs',
     'test_opt_code_retention.cjs',
     'test_opt_call_new_array.cjs',
+    'test_opt_call_max_args.cjs',
     'test_opt_code_values.cjs',
     'test_opt_exit_metadata.cjs',
     'test_opt_exit_upvalues.cjs',
