@@ -32,6 +32,7 @@ export function targets() {
     'test_array_copy_within_holes.cjs',
     'test_array_fill_set_order.cjs',
     'test_array_inherited_index.cjs',
+    'test_array_generic_residuals.cjs',
     'test_array_proto_index_reads.cjs',
     'test_array_readonly_length.cjs',
     'test_array_length_readonly_order.cjs',

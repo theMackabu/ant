@@ -130,7 +130,18 @@ bool arr_fill_numeric_typed(ant_t *js, ant_value_t arr, const TypedArrayData *ta
 bool arr_fill_dense_values(ant_value_t arr, ant_offset_t doff, ant_offset_t len);
 
 ant_value_t proxy_read_target(ant_t *js, ant_value_t obj);
-ant_value_t proxy_aware_length(ant_t *js, ant_value_t obj, ant_offset_t *out_len);
+ant_value_t proxy_aware_length_slow(ant_t *js, ant_value_t obj, ant_offset_t *out_len);
+
+static inline ant_value_t proxy_aware_length(ant_t *js, ant_value_t obj, ant_offset_t *out_len) {
+  if (vtype(obj) == kTypeArray) {
+    const ant_object_t *ptr = (const ant_object_t *)vptr(obj);
+    if (ant_object_is_array(ptr) && !ptr->flags.is_exotic) {
+      *out_len = (ant_offset_t)ptr->u.array.len;
+      return Ant_Value_Undefined;
+    }
+  }
+  return proxy_aware_length_slow(js, obj, out_len);
+}
 ant_value_t proxy_aware_get_elem(ant_t *js, ant_value_t obj, const char *key, size_t key_len);
 ant_value_t proxy_delete_index(ant_t *js, ant_value_t obj, ant_offset_t idx);
 
