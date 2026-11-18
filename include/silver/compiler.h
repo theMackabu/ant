@@ -327,6 +327,22 @@ typedef struct sv_compiler {
   uint32_t *shaped_keys;
   int shaped_key_count;
   int shaped_key_cap;
+
+  struct sv_literal_site_desc {
+    gc_shared_elements_t *block;
+    uint32_t start;
+    uint32_t count;
+    uint32_t first_key;
+    sv_literal_kind_t kind;
+    uint8_t flags;
+  } *literal_sites;
+
+  int literal_site_count;
+  int literal_site_cap;
+
+  uint32_t *literal_keys;
+  int literal_key_count;
+  int literal_key_cap;
 } sv_compiler_t;
 
 #define SV_PARAM(name_literal) ((sv_param_t){ (name_literal), sizeof(name_literal) - 1 })

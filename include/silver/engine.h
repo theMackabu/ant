@@ -464,6 +464,30 @@ typedef struct {
   ant_value_t literal_template;
 } sv_obj_site_cache_t;
 
+typedef enum : uint8_t {
+  SV_LITERAL_ARRAY,
+  SV_LITERAL_OBJECT,
+} sv_literal_kind_t;
+
+typedef enum : uint8_t {
+  SV_LITERAL_HAS_CHILDREN = 1u << 0,
+  SV_LITERAL_HAS_DYNAMIC  = 1u << 1,
+} sv_literal_flags_t;
+
+static constexpr int SV_LITERAL_MAX_DEPTH = 8;
+static constexpr int SV_LITERAL_INLINE_MAX = 32;
+
+typedef struct sv_literal_site {
+  ant_value_t boilerplate;
+  gc_shared_elements_t *block;
+  const uint32_t *key_atoms;
+  uint32_t start;
+  uint32_t count;
+  sv_literal_kind_t kind;
+  uint8_t flags;
+  bool built_once;
+} sv_literal_site_t;
+
 static constexpr uint32_t SV_GF_IC_AUX_MISS_SHIFT = 8u;
 static constexpr uint32_t SV_GF_IC_PROTO_ID_SHIFT = 32u;
 static constexpr uint32_t SV_GF_IC_WARMUP_ENABLE  = 16u;
@@ -622,6 +646,9 @@ typedef struct {
   int source_len;
   int source_start;
   int source_end;
+
+  sv_literal_site_t *literal_sites;
+  uint32_t literal_site_count;
 } sv_func_debug_t;
 
 typedef ant_value_t (*sv_jit_func_t)(

@@ -538,6 +538,11 @@ static void gc_func_trace(ant_t *js, sv_func_t *func) {
     gc_mark_value(js, func->obj_sites[i].literal_template);
   }
 
+  for (uint32_t i = 0; i < func->debug->literal_site_count; i++) {
+    gc_mark_value(js, func->debug->literal_sites[i].boilerplate);
+    gc_shared_elements_mark(js, func->debug->literal_sites[i].block);
+  }
+
   for (int i = 0; i < func->gc_const_slot_count; i++) {
     uint32_t idx = func->gc_const_slots[i];
     ant_value_t v = func->constants[idx];
