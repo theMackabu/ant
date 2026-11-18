@@ -2,7 +2,7 @@
 
 #include "internal.h"
 
-enum { ANT_NUMBER_LOCALE_CHARS = 640 };
+static constexpr size_t ANT_NUMBER_LOCALE_CHARS = 640;
 
 typedef struct {
   uint8_t min_integer;
@@ -11,6 +11,8 @@ typedef struct {
   bool percent;
   bool ungrouped;
 } ant_number_locale_t;
+
+static_assert(sizeof(ant_number_locale_t) <= 6, "number locale options fit a double exactly");
 
 static const ant_number_locale_t ANT_NUMBER_LOCALE_DEFAULT = { .min_integer = 1, .max_fraction = 3 };
 

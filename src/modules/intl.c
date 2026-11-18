@@ -245,6 +245,23 @@ ant_value_t Ant_Intl_ResolveLocale(ant_t *js, ant_value_t locales) {
   return intl_resolve_locale(js, locales);
 }
 
+static void intl_numberformat_store(ant_value_t obj, const ant_number_locale_t *format) {
+  uint64_t bits = 0;
+  memcpy(&bits, format, sizeof(*format));
+  js_set_slot(obj, SLOT_DATA, Ant_Value_FromNumber((double)bits));
+}
+
+static ant_number_locale_t intl_numberformat_load(ant_value_t obj) {
+  ant_number_locale_t format = ANT_NUMBER_LOCALE_DEFAULT;
+  ant_value_t stored = is_object_type(obj) ? js_get_slot(obj, SLOT_DATA) : Ant_Value_Undefined;
+  if (vtype(stored) != kTypeNumber) return format;
+
+  uint64_t bits = (uint64_t)Ant_Value_AsNumberUnchecked(stored);
+  memcpy(&format, &bits, sizeof(format));
+
+  return format;
+}
+
 static ant_value_t intl_numberformat_format(ant_params_t) {
   double number = ANT_NAN;
 
@@ -252,24 +269,12 @@ static ant_value_t intl_numberformat_format(ant_params_t) {
     ? bigint_to_double(js, args[0])
     : js_to_number(js, args[0]);
 
-  ant_number_locale_t format = ANT_NUMBER_LOCALE_DEFAULT;
-  ant_value_t packed = is_object_type(call_this) ? js_get_slot(call_this, SLOT_DATA) : Ant_Value_Undefined;
-  
-  if (vtype(packed) == kTypeNumber) {
-    uint32_t bits = (uint32_t)Ant_Value_AsNumberUnchecked(packed);
-    format = (ant_number_locale_t){
-      .min_integer = (uint8_t)(bits & 0x7f),
-      .min_fraction = (uint8_t)((bits >> 7) & 0x7f),
-      .max_fraction = (uint8_t)((bits >> 14) & 0x7f),
-      .percent = (bits >> 21) & 1,
-      .ungrouped = (bits >> 22) & 1,
-    };
-  }
-
   char buf[ANT_NUMBER_LOCALE_CHARS];
+  ant_number_locale_t format = intl_numberformat_load(call_this);
+
   size_t len = Ant_Number_FormatLocale(number, &format, buf, sizeof(buf));
   if (len == 0) return js_mkerr(js, "number formatting failed");
-  
+
   return js_mkstr(js, buf, len);
 }
 
@@ -461,11 +466,8 @@ static ant_value_t intl_numberformat_constructor(ant_params_t) {
 
   ant_value_t obj = intl_create_instance(js, js->builtins.intl_numberformat_proto, call_new_target);
   defhidden(js, obj, "locale", 6, locale);
-  
-  uint32_t bits = format.min_integer | (uint32_t)format.min_fraction << 7 | (uint32_t)format.max_fraction << 14
-    | (uint32_t)format.percent << 21 | (uint32_t)format.ungrouped << 22;
-  js_set_slot(obj, SLOT_DATA, Ant_Value_FromNumber((double)bits));
-  
+  intl_numberformat_store(obj, &format);
+
   return obj;
 }
 
