@@ -23,6 +23,9 @@ assert.strictEqual(ns.value, 1);
 assert.strictEqual(await import('./fixtures/dynamic_import_order/dep.mjs'), ns);
 assert.deepStrictEqual(log, ['after import calls', 'throws body', 'dep body']);
 
+await assert.rejects(import('./fixtures/dynamic_import_order/throws.mjs'), /boom/);
+assert.strictEqual(log.filter((entry) => entry === 'throws body').length, 1);
+
 function importInside() {
   const before = log.length;
   const pending = import('./fixtures/dynamic_import_order/nested.mjs');

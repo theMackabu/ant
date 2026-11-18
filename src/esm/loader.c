@@ -2472,7 +2472,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t req
 
   if (is_err(result)) {
     mod->is_loading = false;
-    return result;
+    return is_esm ? esm_record_evaluation_failure(js, ns, result) : result;
   }
   
   return deferred ? ns : esm_complete_namespace_module(js, mod, ns);
