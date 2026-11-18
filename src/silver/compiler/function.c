@@ -630,6 +630,7 @@ sv_func_t *compile_function_body(
   func->param_count = (uint16_t)comp.param_count;
   func->function_length = function_length_from_params(node);
   func->is_strict = comp.is_strict;
+  func->jit_compile_failed = comp.has_strict_region;
   func->is_arrow = comp.is_arrow;
   func->allows_new_target = comp.allows_new_target;
   

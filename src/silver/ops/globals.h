@@ -341,7 +341,7 @@ ant_value_t sv_global_put_slow(
     ? sv_sandbox_has(js, interned, len) || lkp_proto(js, js->global, interned, len).obj
     : lkp_interned(js->global, interned).obj != NULL;
   
-  if (is_strict && !declared)
+  if (!declared && (is_strict || sv_is_strict_context(js)))
     return js_mkerr_typed(js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int)len, interned);
   
   return setprop_interned(js, sandboxed ? js->global_sandbox : js->global, interned, len, val);

@@ -94,10 +94,57 @@ uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-static void compile_yield_star_expr(sv_compiler_t *c, sv_ast_t *node) {
-  if (node->right) compile_expr(c, node->right);
-  else emit_op(c, OP_UNDEF);
+static void emit_strict_enter(sv_compiler_t *c) {
+  emit_op(c, OP_SPECIAL_OBJ);
+  emit(c, SV_SPECIAL_STRICT_ENTER);
+  emit_put_local(c, c->strict_saved_local);
+}
 
+static void emit_strict_leave(sv_compiler_t *c) {
+  emit_get_local(c, c->strict_saved_local);
+  emit_op(c, OP_SPECIAL_OBJ);
+  emit(c, SV_SPECIAL_STRICT_LEAVE);
+  emit_put_local(c, c->strict_saved_local);
+  emit_op(c, OP_POP);
+}
+
+static void compile_strict_expr(sv_compiler_t *c, sv_ast_t *node) {
+  if (c->in_strict_region) {
+    compile_expr(c, node->right);
+    return;
+  }
+
+  c->strict_saved_local = add_hidden_local(c);
+  int err_local = add_hidden_local(c);
+  emit_op(c, OP_UNDEF);
+  emit_put_local(c, c->strict_saved_local);
+
+  c->in_strict_region = true;
+  c->has_strict_region = true;
+  int try_jump = emit_jump(c, OP_TRY_PUSH);
+  c->try_depth++;
+
+  emit_strict_enter(c);
+  compile_expr(c, node->right);
+  emit_strict_leave(c);
+
+  emit_op(c, OP_TRY_POP);
+  int end_jump = emit_jump(c, OP_JMP);
+  patch_jump(c, try_jump);
+  int catch_tag = emit_jump(c, OP_CATCH);
+
+  emit_put_local(c, err_local);
+  emit_strict_leave(c);
+  emit_get_local(c, err_local);
+  emit_op(c, OP_THROW);
+
+  patch_jump(c, catch_tag);
+  patch_jump(c, end_jump);
+  c->try_depth--;
+  c->in_strict_region = false;
+}
+
+static void compile_yield_star_expr(sv_compiler_t *c) {
   int base_local = reserve_hidden_locals(c, 4);
   uint16_t base_slot = (uint16_t)(base_local - c->param_locals);
 
@@ -268,19 +315,27 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       if (!await_allowed(c)) js_mkerr_typed(c->js, JS_ERR_SYNTAX,
         "await is only valid in async functions and the top level bodies of modules");
       compile_expr(c, node->right);
+      if (c->in_strict_region) emit_strict_leave(c);
       emit_op(c, OP_AWAIT);
+      if (c->in_strict_region) emit_strict_enter(c);
       if (c->enclosing && !c->enclosing->enclosing)
         c->is_tla = true;
       break;
 
     case N_YIELD:
-      if (node->flags & FN_YIELD_STAR) compile_yield_star_expr(c, node);
+      if (node->right) compile_expr(c, node->right);
+      else emit_op(c, OP_UNDEF);
+      if (c->in_strict_region) emit_strict_leave(c);
+      if (node->flags & FN_YIELD_STAR) compile_yield_star_expr(c);
       else {
-        if (node->right) compile_expr(c, node->right);
-        else emit_op(c, OP_UNDEF);
         if (c->is_async_generator) emit_op(c, OP_ASYNC_YIELD);
         emit_op(c, OP_YIELD);
       }
+      if (c->in_strict_region) emit_strict_enter(c);
+      break;
+
+    case N_STRICT_EXPR:
+      compile_strict_expr(c, node);
       break;
 
     case N_THROW:

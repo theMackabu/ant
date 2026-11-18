@@ -94,6 +94,7 @@ typedef enum: uint8_t {
   N_IMPORT_SPEC,
   N_EXPORT,
   N_PROGRAM,
+  N_STRICT_EXPR,
   N__COUNT
 } sv_node_type_t;
 

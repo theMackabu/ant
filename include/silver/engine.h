@@ -74,6 +74,8 @@ typedef enum {
   SV_SPECIAL_SUPER         = 2,
   SV_SPECIAL_MODULE_IMPORT = 3,
   SV_SPECIAL_ARGC          = 4,
+  SV_SPECIAL_STRICT_ENTER  = 5,
+  SV_SPECIAL_STRICT_LEAVE  = 6,
 } sv_special_obj_t;
 
 typedef enum {

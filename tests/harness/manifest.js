@@ -175,6 +175,7 @@ export function targets() {
     'test_assert_strict.cjs',
     'test_dns_lookup.cjs',
     'test_dns_resolver.cjs',
+    'test_class_strict_yield_await.cjs',
     'test_primitive_prototype_values.cjs',
     'test_array_join_cycles.cjs',
     'test_array_length_truncation.cjs',

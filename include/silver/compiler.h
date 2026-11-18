@@ -244,6 +244,9 @@ typedef struct sv_compiler {
   uint32_t global_lexical_count;
 
   bool is_tla;
+  bool in_strict_region;
+  bool has_strict_region;
+  int strict_saved_local;
   bool args_length_only;
   bool regexp_exec_write_seen;
   bool regexp_replace_write_seen;

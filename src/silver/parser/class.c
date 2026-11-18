@@ -11,7 +11,7 @@ typedef struct {
 } class_expr_facts_t;
 
 static void class_expr_facts(const sv_ast_t *node, class_expr_facts_t *facts) {
-  if (!node || facts->suspends) return;
+  if (!node || (facts->suspends && facts->observes)) return;
   switch (node->type) {
     case N_YIELD:
     case N_AWAIT:
@@ -44,7 +44,15 @@ static sv_ast_t *class_strict_expr(sv_parser_t *p, sv_ast_t *expr, bool outer_st
   if (outer_strict || !expr) return expr;
   class_expr_facts_t facts = {0};
   class_expr_facts(expr, &facts);
-  if (!facts.observes || facts.suspends) return expr;
+  if (!facts.observes) return expr;
+
+  if (facts.suspends) {
+    sv_ast_t *strict = mk(N_STRICT_EXPR);
+    strict->right = expr;
+    strict->src_off = expr->src_off;
+    strict->src_end = expr->src_end;
+    return strict;
+  }
 
   sv_ast_t *fn = mk(N_FUNC);
   fn->flags = FN_ARROW | FN_CLASS_BODY | FN_SYNTHETIC;

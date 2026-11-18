@@ -775,6 +775,8 @@ static syntax_exported_t syntax_export_node(
     syntax_set(ctx, out.value, "body", syntax_export_list(ctx, &node->args, SYNTAX_ROLE_STATEMENT, &out));
     syntax_add_common(ctx, &out, "Program");
     return out;
+  case N_STRICT_EXPR:
+    return syntax_export_node(ctx, node->right, role);
   case N__COUNT:
     break;
   }
