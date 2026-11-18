@@ -90,6 +90,11 @@ void sv_compile_ctx_init_child(
   ctx->using_stack_local = -1;
   ctx->param_count = node ? node->args.count : 0;
   ctx->private_scope = enclosing->private_scope;
+  enclosing->type_child_count++;
+  ctx->types = enclosing->types ? enclosing->types : &ctx->type_storage;
+  ctx->type_dep_mark = ctx->types->dep_count;
+  ctx->type_use_mark = ctx->types->use_count;
+  ctx->type_promo_mark = ctx->types->promo_count;
 }
 
 void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
@@ -103,6 +108,15 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
   free(ctx->upval_descs);
   free(ctx->upval_bindings);
   free(ctx->write_counts);
+  if (ctx->types == &ctx->type_storage) {
+    free(ctx->type_storage.deps);
+    free(ctx->type_storage.uses);
+    free(ctx->type_storage.promos);
+  } else {
+    ctx->types->dep_count = ctx->type_dep_mark;
+    ctx->types->use_count = ctx->type_use_mark;
+    ctx->types->promo_count = ctx->type_promo_mark;
+  }
   for (int i = 0; i < ctx->eval_scope_count; i++)
     free(ctx->eval_scopes[i].bindings);
   free(ctx->eval_scopes);

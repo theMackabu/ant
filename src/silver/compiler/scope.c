@@ -123,13 +123,21 @@ static void mark_slot_type(sv_compiler_t *c, int slot, uint8_t type) {
   else if (old != type) c->slot_types[slot].type = SV_TI_UNKNOWN;
 }
 
-void set_local_inferred_type(sv_compiler_t *c, int local_idx, uint8_t type) {
+void set_local_declared_type(sv_compiler_t *c, int local_idx, uint8_t type, int dep_base) {
   if (local_idx < 0 || local_idx >= c->local_count) return;
-  c->locals[local_idx].inferred_type = type;
-  c->locals[local_idx].str_accumulating = false;
+  type_assign_local(c, local_idx, type, dep_base);
   if (c->locals[local_idx].depth == -1) return;
-  int slot = local_idx - c->param_locals;
-  mark_slot_type(c, slot, type);
+  mark_slot_type(c, local_idx - c->param_locals, c->locals[local_idx].inferred_type);
+}
+
+void set_local_inferred_type(sv_compiler_t *c, int local_idx, uint8_t type) {
+  set_local_declared_type(c, local_idx, type, c->types->dep_count);
+}
+
+void set_local_stored_type(sv_compiler_t *c, int local_idx, uint8_t type, int dep_base) {
+  type_assign_local(c, local_idx, type, dep_base);
+  if (c->locals[local_idx].depth == -1) return;
+  mark_slot_type(c, local_idx - c->param_locals, SV_TI_UNKNOWN);
 }
 
 const char *typeof_name_for_type(uint8_t type) {
@@ -404,7 +412,12 @@ void push_loop(
     .labels_loop = kind == SV_LOOP_LABEL_OF_LOOP,
     .iter_unwind_index = -1,
     .iter_completion_local = -1,
+    .iterates = kind == SV_LOOP_ITERATION,
+    .type_child_mark = c->type_child_count,
+    .type_use_start = c->types->use_count,
+    .type_fact_mark = c->types->fact_next,
   };
+  if (kind == SV_LOOP_ITERATION) c->type_loop_depth++;
 }
 
 int find_loop_label(const sv_compiler_t *c, const char *label, uint32_t label_len) {
@@ -417,7 +430,12 @@ int find_loop_label(const sv_compiler_t *c, const char *label, uint32_t label_le
 }
 
 void pop_loop(sv_compiler_t *c) {
-  sv_loop_t *loop = &c->loops[--c->loop_count];
+  sv_loop_t *loop = &c->loops[c->loop_count - 1];
+  if (loop->iterates) {
+    if (loop->type_child_mark != c->type_child_count) type_loop_leave(c);
+    c->type_loop_depth--;
+  }
+  c->loop_count--;
   patch_list_resolve(c, &loop->breaks);
   free(loop->continues.offsets);
 }

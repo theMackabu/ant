@@ -5,7 +5,7 @@ void compile_do_while(sv_compiler_t *c, sv_ast_t *node) {
 
   int loop_start = c->code_len;
   push_loop(c, loop_start, NULL, 0, SV_LOOP_ITERATION);
-  compile_stmt(c, node->body);
+  compile_stmt_region(c, node->body);
 
   sv_loop_t *loop = &c->loops[c->loop_count - 1];
   for (int i = 0; i < loop->continues.count; i++)
@@ -164,7 +164,8 @@ static void compile_for_update(sv_compiler_t *c, sv_ast_t *upd) {
   }
   emit_op(c, upd->op == TOK_POSTINC ? OP_INC_LOCAL : OP_DEC_LOCAL);
   emit(c, (uint8_t)slot);
-  set_local_inferred_type(c, c->param_locals + slot, SV_TI_UNKNOWN);
+  uint8_t stored = c->locals[c->param_locals + slot].inferred_type == SV_TI_NUM ? SV_TI_NUM : SV_TI_UNKNOWN;
+  set_local_stored_type(c, c->param_locals + slot, stored, c->types->dep_count);
 }
 
 void compile_for(sv_compiler_t *c, sv_ast_t *node) {
@@ -184,7 +185,7 @@ void compile_for(sv_compiler_t *c, sv_ast_t *node) {
     exit_jump = emit_jump(c, OP_JMP_FALSE);
   }
 
-  compile_stmt(c, node->body);
+  compile_stmt_region(c, node->body);
   sv_loop_t *loop = &c->loops[c->loop_count - 1];
   for (int i = 0; i < loop->continues.count; i++)
     patch_jump(c, loop->continues.offsets[i]);
@@ -324,8 +325,11 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   int old_using_stack = c->using_stack_local;
   bool old_using_async = c->using_stack_async;
   uint8_t iter_hint = 0;
-  if (is_for_of && !is_for_await)
+  if (is_for_of && !is_for_await) {
+    int dep_base = c->types->dep_count;
     iter_hint = iter_hint_for_type(infer_expr_type(c, node->right));
+    c->types->dep_count = dep_base;
+  }
 
   if (is_using_loop) {
     emit_empty_disposal_stack(c);
@@ -407,7 +411,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
     compile_using_push_target(c, node->left, using_stack_local);
   }
 
-  compile_stmt(c, node->body);
+  compile_stmt_region(c, node->body);
   sv_loop_t *loop = &c->loops[c->loop_count - 1];
   for (int i = 0; i < loop->continues.count; i++)
     patch_jump(c, loop->continues.offsets[i]);

@@ -92,9 +92,47 @@ typedef struct {
   uint8_t eval_flags;
   bool char_code_at_hint;
   bool str_accumulating;
+  bool type_derived;
   uint8_t inferred_type;
+  uint32_t type_fact;
+  int type_use_head;
   sv_binding_meta_t binding;
 } sv_local_t;
+
+typedef struct {
+  int local;
+  uint32_t fact;
+} sv_type_dep_t;
+
+typedef struct {
+  uint32_t fact;
+  uint32_t derived;
+  int at;
+  int local;
+  int prev;
+} sv_type_use_t;
+
+typedef struct {
+  uint32_t fact_next;
+  uint32_t dep_seq;
+  const sv_ast_t *cache_node;
+  const void *cache_owner;
+  int cache_code_len;
+  uint32_t cache_dep_seq;
+  int cache_dep_base;
+  int cache_dep_count;
+  uint32_t assign_depth;
+  uint8_t cache_type;
+  sv_type_dep_t *deps;
+  int dep_count;
+  int dep_cap;
+  sv_type_use_t *uses;
+  int use_count;
+  int use_cap;
+  sv_type_dep_t *promos;
+  int promo_count;
+  int promo_cap;
+} sv_type_scratch_t;
 
 typedef struct {
   int *offsets;
@@ -135,6 +173,10 @@ typedef struct {
   int iter_unwind_index;
   int iter_completion_local;
   bool iter_async;
+  bool iterates;
+  int type_child_mark;
+  int type_use_start;
+  uint32_t type_fact_mark;
 } sv_loop_t;
 
 typedef struct const_dedup_entry {
@@ -254,6 +296,18 @@ typedef struct sv_compiler {
   uint64_t value_params;
   bool value_params_known;
 
+  sv_type_scratch_t *types;
+  sv_type_scratch_t type_storage;
+  int type_dep_mark;
+  int type_use_mark;
+  int type_promo_mark;
+  int type_loop_depth;
+  int type_region_depth;
+  bool type_any;
+  int type_child_count;
+  uint8_t store_type;
+  int store_dep_base;
+  const sv_ast_t *store_node;
   sv_patch_list_t *optional_chain;
 
   const sv_ast_t *write_scan_node;

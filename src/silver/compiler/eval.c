@@ -129,6 +129,7 @@ static bool eval_scope_builder_capture_local(
         kind | local->eval_flags,
         index, local->is_const, &local->binding)) return false;
   local->captured = true;
+  c->type_child_count++;
   return true;
 }
 
@@ -334,6 +335,7 @@ static int share_dynamic_eval_scope(sv_compiler_t *c, uint32_t *scope_index_out)
 
   bool same_locals = shared->local_count == c->local_count;
   if (same_locals && memcmp(&flags, &shared->flags, sizeof(flags)) == 0) {
+    c->type_child_count++;
     *scope_index_out = (uint32_t)c->eval_scope_shared;
     return 1;
   }
@@ -341,7 +343,8 @@ static int share_dynamic_eval_scope(sv_compiler_t *c, uint32_t *scope_index_out)
   uint32_t scope_index;
   if (!capture_local_range_scope(
         c, (uint32_t)c->eval_scope_shared + 1, shared->local_count, c->local_count, flags, &scope_index)) return -1;
-  if (!same_locals) eval_scope_publish(c, scope_index);
+  if (same_locals) c->type_child_count++;
+  else eval_scope_publish(c, scope_index);
   *scope_index_out = scope_index;
   return 1;
 }

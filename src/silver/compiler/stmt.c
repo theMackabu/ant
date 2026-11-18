@@ -467,15 +467,16 @@ void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
       emit_atom_op(c, OP_INIT_GLOBAL_LEX, target->str, target->len);
     } else if (kind == SV_VAR_VAR) {
       if (decl->right) {
-        uint8_t init_type = infer_expr_type(c, decl->right);
         if (target->type == N_IDENT)
           compile_expr_with_inferred_name(c, decl->right, target->str, target->len);
         else compile_expr(c, decl->right);
         if (target->type == N_IDENT) {
           int idx = resolve_local(c, target->str, target->len);
-          if (idx >= 0 && c->locals[idx].depth != -1 && !local_with_shadowed(c, target->str, target->len))
-            emit_put_local_typed(c, idx, init_type);
-          else compile_lhs_set(c, target, false);
+          if (idx >= 0 && c->locals[idx].depth != -1 && !local_with_shadowed(c, target->str, target->len)) {
+            int dep_base = c->types->dep_count;
+            emit_put_local_typed(c, idx, infer_expr_type(c, decl->right), dep_base);
+            c->types->dep_count = dep_base;
+          } else compile_lhs_set(c, target, false);
         } else compile_lhs_set(c, target, false);
       }
     } else {
@@ -489,15 +490,17 @@ void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
         if (!(c->locals[idx].eval_flags & SV_EVAL_BIND_LEXICAL)) c->eval_scope_shareable = false;
         c->locals[idx].eval_flags |= SV_EVAL_BIND_LEXICAL;
         uint8_t init_type = SV_TI_UNKNOWN;
+        int dep_base = c->types->dep_count;
         if (decl->right) {
-          init_type = infer_expr_type(c, decl->right);
           compile_expr_with_inferred_name(c, decl->right, target->str, target->len);
+          init_type = infer_expr_type(c, decl->right);
         } else if (!is_const) {
           emit_op(c, OP_UNDEF);
           init_type = SV_TI_UNDEF;
         }
         if (decl->right || !is_const) {
-          emit_put_local_typed(c, idx, init_type);
+          emit_put_local_typed(c, idx, init_type, dep_base);
+          c->types->dep_count = dep_base;
           c->locals[idx].is_tdz = false;
           emit_local_export_writes(c, idx);
           if (is_using) {
@@ -551,7 +554,7 @@ static bool fold_static_typeof_compare(
   sv_ast_t *ident = typeof_node->right;
   int local = resolve_local(c, ident->str, ident->len);
   if (local < 0) return false;
-  if (c->with_depth > 0 || !c->locals[local].is_const) return false;
+  if (c->with_depth > 0 || !c->locals[local].is_const || c->locals[local].type_derived) return false;
   const char *known = typeof_name_for_type(get_local_inferred_type(c, local));
   if (!known) return false;
 
@@ -574,11 +577,11 @@ void compile_if(sv_compiler_t *c, sv_ast_t *node) {
 
   compile_truthy_test_expr(c, node->cond);
   int else_jump = emit_jump(c, OP_JMP_FALSE);
-  compile_stmt(c, node->left);
+  compile_stmt_region(c, node->left);
   if (node->right) {
     int end_jump = emit_jump(c, OP_JMP);
     patch_jump(c, else_jump);
-    compile_stmt(c, node->right);
+    compile_stmt_region(c, node->right);
     patch_jump(c, end_jump);
   } else {
     patch_jump(c, else_jump);
@@ -593,7 +596,7 @@ void compile_while(sv_compiler_t *c, sv_ast_t *node) {
 
   compile_truthy_test_expr(c, node->cond);
   int exit_jump = emit_jump(c, OP_JMP_FALSE);
-  compile_stmt(c, node->body);
+  compile_stmt_region(c, node->body);
 
   sv_loop_t *loop = &c->loops[c->loop_count - 1];
   for (int i = 0; i < loop->continues.count; i++)
@@ -626,7 +629,7 @@ static void compile_catch_body(sv_compiler_t *c, sv_ast_t *node) {
     emit_op(c, OP_POP);
   } else emit_op(c, OP_POP);  
   
-  compile_stmt(c, node->catch_body);
+  compile_stmt_region(c, node->catch_body);
   end_scope(c);
 }
 
@@ -644,7 +647,7 @@ void compile_try(sv_compiler_t *c, sv_ast_t *node) {
     c->try_depth++;
     int inner_jump = emit_jump(c, OP_TRY_PUSH);
     unwind_push(c, UNW_TRY_CATCH);
-    compile_stmt(c, node->body);
+    compile_stmt_region(c, node->body);
 
     emit_op(c, OP_TRY_POP);
     unwind_pop(c);
@@ -657,7 +660,7 @@ void compile_try(sv_compiler_t *c, sv_ast_t *node) {
     patch_jump(c, catch_tag);
     patch_jump(c, inner_end);
     c->try_depth--;
-  } else compile_stmt(c, node->body);
+  } else compile_stmt_region(c, node->body);
 
   emit_op(c, OP_TRY_POP);
   unwind_pop(c);
@@ -815,10 +818,12 @@ void compile_switch(sv_compiler_t *c, sv_ast_t *node) {
 
     for (int j = lexical_lb; j < lexical_ub; j++) c->locals[j].is_tdz = true;
     sv_ast_t *cas = node->args.items[i];
+    int region = type_region_enter(c);
     for (int j = 0; j < cas->args.count; j++) {
       emit_switch_func_annex_b(c, cas->args.items[j]);
       compile_stmt(c, cas->args.items[j]);
     }
+    type_region_exit(c, region);
   }
 
   if (miss_to_end >= 0)
@@ -855,7 +860,7 @@ void compile_label(sv_compiler_t *c, sv_ast_t *node) {
     
     push_loop(c, c->code_len, node->str, node->len, is_loop_node(inner) ? SV_LOOP_LABEL_OF_LOOP : SV_LOOP_LABEL);
     
-    compile_stmt(c, node->body);
+    compile_stmt_region(c, node->body);
     pop_loop(c);
   }
 }

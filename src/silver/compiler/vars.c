@@ -440,7 +440,15 @@ static void emit_set_var_plain(sv_compiler_t *c, const char *name, uint32_t len,
       emit_const_assign_error(c, name, len);
       return;
     }
-    set_local_inferred_type(c, local, SV_TI_UNKNOWN);
+    uint8_t old_type = c->locals[local].inferred_type;
+    if (!sv_type_is_known(old_type)) set_local_stored_type(c, local, SV_TI_UNKNOWN, c->types->dep_count);
+    else {
+      int dep_base = c->store_type ? c->store_dep_base : c->types->dep_count;
+      uint8_t stored = c->store_type;
+      if (c->store_node) stored = infer_expr_type(c, (sv_ast_t *)c->store_node);
+      set_local_stored_type(c, local, stored == old_type ? stored : SV_TI_UNKNOWN, dep_base);
+      if (!c->store_type) c->types->dep_count = dep_base;
+    }
     const sv_export_name_t *exports = c->locals[local].binding.exports;
     emit_export_dups(c, exports);
 
@@ -518,15 +526,15 @@ void emit_set_var(sv_compiler_t *c, const char *name, uint32_t len, bool keep) {
   patch_jump(c, done);
 }
 
-void emit_put_local_typed(sv_compiler_t *c, int local_idx, uint8_t type) {
+void emit_put_local_typed(sv_compiler_t *c, int local_idx, uint8_t type, int dep_base) {
   int slot = local_idx - c->param_locals;
   if (slot <= 255) { emit_op(c, OP_PUT_LOCAL8); emit(c, (uint8_t)slot); }
   else { emit_op(c, OP_PUT_LOCAL); emit_u16(c, (uint16_t)slot); }
-  set_local_inferred_type(c, local_idx, type);
+  set_local_declared_type(c, local_idx, type, dep_base);
 }
 
 void emit_put_local(sv_compiler_t *c, int local_idx) {
-  emit_put_local_typed(c, local_idx, SV_TI_UNKNOWN);
+  emit_put_local_typed(c, local_idx, SV_TI_UNKNOWN, c->types->dep_count);
 }
 
 void emit_set_completion_from_stack(sv_compiler_t *c) {

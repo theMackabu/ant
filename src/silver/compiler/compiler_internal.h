@@ -139,6 +139,8 @@ int add_local(
 );
 int reserve_hidden_locals(sv_compiler_t *c, int count);
 void set_local_inferred_type(sv_compiler_t *c, int local_idx, uint8_t type);
+void set_local_declared_type(sv_compiler_t *c, int local_idx, uint8_t type, int dep_base);
+void set_local_stored_type(sv_compiler_t *c, int local_idx, uint8_t type, int dep_base);
 const char *typeof_name_for_type(uint8_t type);
 uint8_t iter_hint_for_type(uint8_t type);
 int ensure_local_at_depth(
@@ -160,6 +162,12 @@ int add_upvalue_tdz(sv_compiler_t *c, uint16_t index, bool is_local, bool may_td
 void compile_method_function(sv_compiler_t *c, sv_ast_t *m);
 bool param_captured_by_value(sv_compiler_t *c, int local);
 bool local_written_once(sv_compiler_t *c, int local);
+void type_dep_add(sv_compiler_t *c, int local);
+bool type_deps_live(const sv_compiler_t *c, int base);
+bool type_use_op(sv_compiler_t *c, int base, int pc);
+void type_assign_local_slow(sv_compiler_t *c, int local_idx, uint8_t type, int dep_base);
+void type_region_leave(sv_compiler_t *c, int mark);
+void type_loop_leave(sv_compiler_t *c);
 uint32_t ctor_prop_count(const sv_ast_t *node, uint32_t fields);
 uint32_t class_public_field_count(sv_ast_t **fields, int count);
 static constexpr uint32_t SV_FIELD_THUNK_LEN = 7;
@@ -261,7 +269,7 @@ void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_export_writes_from_stack(sv_compiler_t *c, const sv_export_name_t *exports);
 void emit_local_export_writes(sv_compiler_t *c, int local);
 void emit_set_var(sv_compiler_t *c, const char *name, uint32_t len, bool keep);
-void emit_put_local_typed(sv_compiler_t *c, int local_idx, uint8_t type);
+void emit_put_local_typed(sv_compiler_t *c, int local_idx, uint8_t type, int dep_base);
 void emit_put_local(sv_compiler_t *c, int local_idx);
 void emit_set_completion_from_stack(sv_compiler_t *c);
 void emit_set_completion_undefined(sv_compiler_t *c);
@@ -290,6 +298,8 @@ void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts);
 void emit_closure(sv_compiler_t *c, int index);
 void hoist_one_func(sv_compiler_t *c, sv_ast_t *node, bool annex_b_update_var);
 void hoist_func_decls(sv_compiler_t *c, sv_ast_list_t *stmts);
+#define SV_TYPE_INFER_DEPTH 48
+
 uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node);
 bool compile_stack_overflow(sv_compiler_t *c);
 bool sv_node_has_optional_base(sv_ast_t *n);
@@ -504,6 +514,13 @@ static inline bool sv_type_is_num(uint8_t t) {
   return t == SV_TI_NUM;
 }
 
+static inline void type_assign_local(sv_compiler_t *c, int local_idx, uint8_t type, int dep_base) {
+  sv_local_t *local = &c->locals[local_idx];
+  local->str_accumulating = false;
+  if (local->inferred_type == type && (type == SV_TI_UNKNOWN || !c->type_loop_depth)) return;
+  type_assign_local_slow(c, local_idx, type, dep_base);
+}
+
 static inline sv_patch_list_t *optional_chain_take(sv_compiler_t *c) {
   sv_patch_list_t *chain = c->optional_chain;
   c->optional_chain = NULL;
@@ -522,6 +539,22 @@ static inline void emit_chain_short_circuit(sv_compiler_t *c, sv_patch_list_t *c
   emit_op(c, OP_UNDEF);
   patch_list_add(chain, emit_jump(c, OP_JMP));
   patch_jump(c, present);
+}
+
+static inline int type_region_enter(sv_compiler_t *c) {
+  c->type_region_depth++;
+  return c->types->promo_count;
+}
+
+static inline void type_region_exit(sv_compiler_t *c, int mark) {
+  if (mark == c->types->promo_count) c->type_region_depth--;
+  else type_region_leave(c, mark);
+}
+
+static inline void compile_stmt_region(sv_compiler_t *c, sv_ast_t *node) {
+  int mark = type_region_enter(c);
+  compile_stmt(c, node);
+  type_region_exit(c, mark);
 }
 
 static inline uint8_t get_local_inferred_type(sv_compiler_t *c, int local_idx) {

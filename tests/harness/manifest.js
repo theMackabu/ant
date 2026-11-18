@@ -315,6 +315,7 @@ export function targets() {
     'test_jit_tail_call_inline.cjs',
     'test_jit_tail_call_inline_codegen.cjs',
     'test_jit_uninitialized_numeric_local.cjs',
+    'test_local_type_inference.cjs',
     'test_jit_unreachable_code.cjs',
     'test_jit_upvalue_tdz.cjs',
     'test_large_scope_counts.cjs',

@@ -15,6 +15,16 @@ static inline bool is_additive_chain_op(uint8_t op) {
   return op == TOK_PLUS || op == TOK_MINUS || op == TOK_MUL || op == TOK_DIV;
 }
 
+static inline bool is_numeric_result_op(uint8_t op) {
+  switch (op) {
+    case TOK_MINUS: case TOK_MUL: case TOK_DIV: case TOK_REM: case TOK_EXP:
+    case TOK_SHL: case TOK_SHR: case TOK_ZSHR: case TOK_AND: case TOK_XOR: case TOK_OR:
+      return true;
+    default:
+      return false;
+  }
+}
+
 static uint8_t infer_arithmetic_type(sv_compiler_t *c, sv_ast_t *node) {
   uint8_t want = SV_TI_NUM;
   if (node->op == TOK_PLUS) {
@@ -35,8 +45,56 @@ static uint8_t infer_arithmetic_type(sv_compiler_t *c, sv_ast_t *node) {
   return infer_expr_type(c, node) == want ? want : SV_TI_UNKNOWN;
 }
 
+static uint8_t binary_op_for_assign(uint8_t op) {
+  switch (op) {
+    case TOK_PLUS_ASSIGN:  return TOK_PLUS;
+    case TOK_MINUS_ASSIGN: return TOK_MINUS;
+    case TOK_MUL_ASSIGN:   return TOK_MUL;
+    case TOK_DIV_ASSIGN:   return TOK_DIV;
+    case TOK_REM_ASSIGN:   return TOK_REM;
+    case TOK_SHL_ASSIGN:   return TOK_SHL;
+    case TOK_SHR_ASSIGN:   return TOK_SHR;
+    case TOK_ZSHR_ASSIGN:  return TOK_ZSHR;
+    case TOK_AND_ASSIGN:   return TOK_AND;
+    case TOK_XOR_ASSIGN:   return TOK_XOR;
+    case TOK_OR_ASSIGN:    return TOK_OR;
+    case TOK_EXP_ASSIGN:   return TOK_EXP;
+    default:               return 0;
+  }
+}
+
+static uint8_t infer_assign_type_bounded(sv_compiler_t *c, sv_ast_t *node) {
+  if (node->op == TOK_ASSIGN) return infer_expr_type(c, node->right);
+  uint8_t right = infer_expr_type(c, node->right);
+  uint8_t op = binary_op_for_assign(node->op);
+  if (op && op != TOK_PLUS && right == SV_TI_NUM) return SV_TI_NUM;
+  if (!sv_type_is_known(right) && op == TOK_PLUS) return SV_TI_UNKNOWN;
+  uint8_t left = infer_expr_type(c, node->left);
+  if (!op) return left == right ? left : SV_TI_UNKNOWN;
+  if (op == TOK_PLUS) return left == SV_TI_NUM && right == SV_TI_NUM ? SV_TI_NUM : SV_TI_UNKNOWN;
+  return left == SV_TI_NUM ? SV_TI_NUM : SV_TI_UNKNOWN;
+}
+
+static uint8_t infer_assign_type(sv_compiler_t *c, sv_ast_t *node) {
+  sv_type_scratch_t *types = c->types;
+  if (types->assign_depth >= SV_TYPE_INFER_DEPTH) return SV_TI_UNKNOWN;
+  types->assign_depth++;
+  uint8_t type = infer_assign_type_bounded(c, node);
+  types->assign_depth--;
+  return type;
+}
+
 uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node) {
   if (!node) return SV_TI_UNDEF;
+
+  sv_type_scratch_t *types = c->types;
+  if (
+    node == types->cache_node && types->cache_owner == c && types->cache_code_len == c->code_len &&
+    types->cache_dep_seq == types->dep_seq && types->cache_dep_base == types->dep_count
+  ) {
+    types->dep_count = types->cache_dep_count;
+    return types->cache_type;
+  }
 
   switch (node->type) {
     case N_NUMBER:   return SV_TI_NUM;
@@ -52,13 +110,23 @@ uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node) {
     case N_UNDEF:    return undefined_shadowed(c) ? SV_TI_UNKNOWN : SV_TI_UNDEF;
 
     case N_IDENT: {
+      if (!c->type_any) return SV_TI_UNKNOWN;
       int local = resolve_local(c, node->str, node->len);
       if (local < 0 || local_with_shadowed(c, node->str, node->len)) return SV_TI_UNKNOWN;
-      return get_local_inferred_type(c, local);
+      uint8_t type = get_local_inferred_type(c, local);
+      if (c->type_loop_depth && sv_type_is_known(type)) type_dep_add(c, local);
+      return type;
     }
 
     case N_SEQUENCE:
       return infer_expr_type(c, node->right);
+
+    case N_ASSIGN:
+      return infer_assign_type(c, node);
+
+    case N_UPDATE:
+      return node->right && node->right->type == N_IDENT && infer_expr_type(c, node->right) == SV_TI_NUM
+        ? SV_TI_NUM : SV_TI_UNKNOWN;
 
     case N_TERNARY: {
       uint8_t lt = infer_expr_type(c, node->left);
@@ -68,22 +136,14 @@ uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node) {
     }
 
     case N_UNARY: {
-      uint8_t rhs_type = infer_expr_type(c, node->right);
-      switch (node->op) {
-        case TOK_UPLUS:
-        case TOK_UMINUS:
-          return sv_type_is_num(rhs_type) ? SV_TI_NUM : SV_TI_UNKNOWN;
-        case TOK_NOT:
-          return SV_TI_BOOL;
-        default:
-          return SV_TI_UNKNOWN;
-      }
+      if (node->op == TOK_NOT) return SV_TI_BOOL;
+      if (node->op == TOK_UPLUS) return SV_TI_NUM;
+      if (node->op != TOK_UMINUS && node->op != TOK_TILDA) return SV_TI_UNKNOWN;
+      return sv_type_is_num(infer_expr_type(c, node->right)) ? SV_TI_NUM : SV_TI_UNKNOWN;
     }
 
     case N_BINARY: {
       if (is_additive_chain_op(node->op)) return infer_arithmetic_type(c, node);
-      uint8_t lt = infer_expr_type(c, node->left);
-      uint8_t rhs_type = infer_expr_type(c, node->right);
       switch (node->op) {
         case TOK_LT:
         case TOK_LE:
@@ -96,14 +156,16 @@ uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node) {
         case TOK_INSTANCEOF:
         case TOK_IN:
           return SV_TI_BOOL;
-        case TOK_LAND:
-        case TOK_LOR:
-        case TOK_NULLISH:
-          if (lt == rhs_type && sv_type_is_known(lt)) return lt;
-          return SV_TI_UNKNOWN;
-        default:
-          return SV_TI_UNKNOWN;
+        default: break;
       }
+      uint8_t rhs_type = infer_expr_type(c, node->right);
+      if (is_numeric_result_op(node->op)) {
+        if (rhs_type == SV_TI_NUM) return SV_TI_NUM;
+        return infer_expr_type(c, node->left) == SV_TI_NUM ? SV_TI_NUM : SV_TI_UNKNOWN;
+      }
+      if (node->op != TOK_LAND && node->op != TOK_LOR && node->op != TOK_NULLISH) return SV_TI_UNKNOWN;
+      uint8_t lt = infer_expr_type(c, node->left);
+      return lt == rhs_type && sv_type_is_known(lt) ? lt : SV_TI_UNKNOWN;
     }
 
     default:
@@ -439,15 +501,21 @@ static void compile_arithmetic_chain(sv_compiler_t *c, sv_ast_t *node) {
     if (i > 0) emit_srcpos(c, cur);
   }
 
+  int dep_base = c->types->dep_count;
+  bool exact = true;
   compile_expr(c, cur);
   uint8_t left_type = infer_expr_type(c, cur);
   
   for (int i = depth - 1; i >= 0; i--) {
     uint8_t op = nodes[i]->op;
     compile_expr(c, nodes[i]->right);
-    uint8_t right_type = infer_expr_type(c, nodes[i]->right);
-    bool numeric = left_type == SV_TI_NUM && right_type == SV_TI_NUM;
+    int right_base = c->types->dep_count;
+    bool right_matters = left_type == SV_TI_NUM || (i > 0 && (op != TOK_PLUS || left_type == SV_TI_STR));
+    uint8_t right_type = right_matters ? infer_expr_type(c, nodes[i]->right) : SV_TI_UNKNOWN;
+    if (!right_matters && op != TOK_PLUS) exact = false;
+    bool numeric = left_type == SV_TI_NUM && right_type == SV_TI_NUM && type_deps_live(c, dep_base);
     
+    if (numeric && !type_use_op(c, dep_base, c->code_len)) numeric = false;
     switch (op) {
       case TOK_PLUS:  emit_op(c, numeric ? OP_ADD_NUM : OP_ADD); break;
       case TOK_MINUS: emit_op(c, numeric ? OP_SUB_NUM : OP_SUB); break;
@@ -456,9 +524,28 @@ static void compile_arithmetic_chain(sv_compiler_t *c, sv_ast_t *node) {
     }
     
     if (numeric) continue;
-    left_type = op == TOK_PLUS && left_type == SV_TI_STR && right_type == SV_TI_STR ? SV_TI_STR : SV_TI_UNKNOWN;
+    if (op != TOK_PLUS && left_type == SV_TI_NUM) {
+      c->types->dep_count = right_base;
+    } else if (op != TOK_PLUS && right_type == SV_TI_NUM) {
+      int moved = c->types->dep_count - right_base;
+      memmove(c->types->deps + dep_base, c->types->deps + right_base, (size_t)moved * sizeof(*c->types->deps));
+      c->types->dep_count = dep_base + moved;
+      left_type = SV_TI_NUM;
+    } else {
+      left_type = op == TOK_PLUS && left_type == SV_TI_STR && right_type == SV_TI_STR ? SV_TI_STR : SV_TI_UNKNOWN;
+      c->types->dep_count = dep_base;
+    }
   }
 
+  sv_type_scratch_t *types = c->types;
+  types->cache_node = exact ? node : NULL;
+  types->cache_type = left_type;
+  types->cache_owner = c;
+  types->cache_code_len = c->code_len;
+  types->cache_dep_seq = types->dep_seq;
+  types->cache_dep_base = dep_base;
+  types->cache_dep_count = types->dep_count;
+  types->dep_count = dep_base;
   if (nodes != inline_nodes) free(nodes);
 }
 
@@ -620,7 +707,7 @@ static void compile_typeof_op(sv_compiler_t *c, sv_ast_t *node, int test_type) {
     if (local != -1) {
       uint8_t inferred = get_local_inferred_type(c, local);
       const char *known = typeof_name_for_type(inferred);
-      if (test_type < 0 && known && !shadowed && c->locals[local].is_const) {
+      if (test_type < 0 && known && !shadowed && c->locals[local].is_const && !c->locals[local].type_derived) {
         emit_constant(c, sv_const_str(c, known, strlen(known)));
         return;
       }
