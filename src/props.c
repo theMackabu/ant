@@ -1205,6 +1205,18 @@ bool js_is_own_enumerable_prop(
   return (ant_shape_get_attrs(source_ptr->shape, key->slot) & ANT_PROP_ATTR_ENUMERABLE) != 0;
 }
 
+static __attribute__((noinline)) ant_value_t missing_property_is_enumerable(
+  ant_t *js, ant_value_t obj, property_key_view_t *key
+) {
+  if (!is_proxy(obj)) return mkval(kTypeBool, 0);
+  ant_value_t name = key->js_key;
+  if (!key->is_symbol && vtype(name) != kTypeString) {
+    name = js_mkstr(js, key->bytes, (ant_offset_t)key->length);
+    if (is_err(name)) return name;
+  }
+  return proxy_key_enumerable(js, obj, name);
+}
+
 static ant_value_t object_property_is_enumerable_key(
   ant_t *js, ant_value_t obj, property_key_view_t *key
 ) {
@@ -1223,7 +1235,7 @@ static ant_value_t object_property_is_enumerable_key(
   if (key->is_symbol) {
     ant_offset_t sym_off = (ant_offset_t)vdata(key->js_key);
     ant_prop_loc_t off = lkp_sym(as_obj, sym_off);
-    if (!off.obj) return mkval(kTypeBool, 0);
+    if (!off.obj) return missing_property_is_enumerable(js, as_obj, key);
     prop_meta_t meta;
     if (lookup_symbol_prop_meta(js, as_obj, sym_off, &meta))
       return mkval(kTypeBool, meta.enumerable ? 1 : 0);
@@ -1244,7 +1256,7 @@ static ant_value_t object_property_is_enumerable_key(
     return mkval(kTypeBool, string_length ? 0 : 1);
   
   ant_prop_loc_t off = lkp(js, as_obj, key_str, key_len);
-  if (!off.obj) return mkval(kTypeBool, 0);
+  if (!off.obj) return missing_property_is_enumerable(js, as_obj, key);
 
   const ant_shape_prop_t *prop_meta = prop_shape_meta(off);
   if (prop_meta && !js_obj_ptr(as_obj)->flags.is_exotic) {
