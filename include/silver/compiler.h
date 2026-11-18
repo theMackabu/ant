@@ -98,6 +98,14 @@ typedef struct {
   bool is_async;
 } sv_using_cleanup_t;
 
+typedef enum {
+  SV_LOOP_ITERATION,
+  SV_LOOP_SWITCH,
+  SV_LOOP_LABEL,
+  SV_LOOP_LABEL_OF_LOOP,
+  SV_LOOP_RETURN_LANDING,
+} sv_loop_kind_t;
+
 typedef struct {
   int loop_start;
   sv_patch_list_t breaks;
@@ -107,6 +115,8 @@ typedef struct {
   const char *label;
   uint32_t label_len;
   bool is_switch;
+  bool is_block;
+  bool labels_loop;
   int iter_unwind_index;
   int iter_completion_local;
   bool iter_async;

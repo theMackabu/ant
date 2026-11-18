@@ -371,7 +371,7 @@ void unwind_pop(sv_compiler_t *c) {
 void push_loop(
   sv_compiler_t *c, int loop_start,
   const char *label, uint32_t label_len,
-  bool is_switch
+  sv_loop_kind_t kind
 ) {
   if (c->loop_count >= c->loop_cap) {
     c->loop_cap = c->loop_cap ? c->loop_cap * 2 : 4;
@@ -388,10 +388,21 @@ void push_loop(
     .scope_depth = c->scope_depth,
     .unwind_depth = c->unwind_count,
     .label = label, .label_len = label_len,
-    .is_switch = is_switch,
+    .is_switch = kind == SV_LOOP_SWITCH || kind == SV_LOOP_RETURN_LANDING,
+    .is_block = kind == SV_LOOP_LABEL || kind == SV_LOOP_LABEL_OF_LOOP || kind == SV_LOOP_RETURN_LANDING,
+    .labels_loop = kind == SV_LOOP_LABEL_OF_LOOP,
     .iter_unwind_index = -1,
     .iter_completion_local = -1,
   };
+}
+
+int find_loop_label(const sv_compiler_t *c, const char *label, uint32_t label_len) {
+  for (int i = c->loop_count - 1; i >= 0; i--) if (
+    c->loops[i].label &&
+    c->loops[i].label_len == label_len &&
+    memcmp(c->loops[i].label, label, label_len) == 0
+  ) return i;
+  return -1;
 }
 
 void pop_loop(sv_compiler_t *c) {

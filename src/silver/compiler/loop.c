@@ -4,7 +4,7 @@ void compile_do_while(sv_compiler_t *c, sv_ast_t *node) {
   emit_set_completion_undefined(c);
 
   int loop_start = c->code_len;
-  push_loop(c, loop_start, NULL, 0, false);
+  push_loop(c, loop_start, NULL, 0, SV_LOOP_ITERATION);
   compile_stmt(c, node->body);
 
   sv_loop_t *loop = &c->loops[c->loop_count - 1];
@@ -174,7 +174,7 @@ void compile_for(sv_compiler_t *c, sv_ast_t *node) {
   if (close_slot >= 0) emit_slot_op(c, OP_CLOSE_UPVAL, (uint16_t)close_slot);
 
   int loop_start = c->code_len;
-  push_loop(c, loop_start, NULL, 0, false);
+  push_loop(c, loop_start, NULL, 0, SV_LOOP_ITERATION);
 
   int exit_jump = -1;
   if (node->cond) {
@@ -349,7 +349,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   }
 
   int loop_start = c->code_len;
-  push_loop(c, loop_start, NULL, 0, false);
+  push_loop(c, loop_start, NULL, 0, SV_LOOP_ITERATION);
   
   if (is_for_of) {
     c->loops[c->loop_count - 1].iter_unwind_index = c->unwind_count - 1;
@@ -509,38 +509,54 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   end_scope(c);
 }
 
+
+static int find_label_target(sv_compiler_t *c, const sv_ast_t *node) {
+  int target = find_loop_label(c, node->str, node->len);
+  if (target < 0) js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Undefined label '%.*s'", (int)node->len, node->str);
+  return target;
+}
+
 void compile_break(sv_compiler_t *c, sv_ast_t *node) {
-  if (c->loop_count == 0) return;
-
-  int target = c->loop_count - 1;
-  if (node->str) for (int i = c->loop_count - 1; i >= 0; i--) if (
-    c->loops[i].label &&
-    c->loops[i].label_len == node->len &&
-    memcmp(c->loops[i].label, node->str, node->len) == 0
-  ) { target = i; break;  }
-
+  int target = -1;
+  
+  if (node->str) target = find_label_target(c, node);
+  else {
+    for (int i = c->loop_count - 1; i >= 0 && target < 0; i--)
+      if (!c->loops[i].is_block) target = i;
+    if (target < 0) js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Illegal break statement");
+  } if (target < 0) return;
   emit_close_upvals_to_depth(c, c->loops[target].scope_depth);
   emit_using_cleanups_to_depth(c, c->loops[target].scope_depth);
 
-  emit_loop_exit_jump(c, &c->loops[target], &c->loops[target].breaks);
+  if (target >= 0) emit_loop_exit_jump(c, &c->loops[target], &c->loops[target].breaks);
 }
 
 void compile_continue(sv_compiler_t *c, sv_ast_t *node) {
-  for (int i = c->loop_count - 1; i >= 0; i--) if (node->str) {
-    if (
-      c->loops[i].label &&
-      c->loops[i].label_len == node->len &&
-      memcmp(c->loops[i].label, node->str, node->len) == 0
-    ) {
-      emit_close_upvals_to_depth(c, c->loops[i].scope_depth);
-      emit_using_cleanups_to_depth(c, c->loops[i].scope_depth);
-      emit_loop_exit_jump(c, &c->loops[i], &c->loops[i].continues);
+  int target = -1;
+
+  if (node->str) {
+    target = find_label_target(c, node);
+    if (target < 0) return;
+    
+    bool reaches_loop = !c->loops[target].is_block || c->loops[target].labels_loop;
+    while (reaches_loop && target < c->loop_count && c->loops[target].is_block) target++;
+    
+    if (!reaches_loop || target >= c->loop_count || c->loops[target].is_switch) {
+      js_mkerr_typed(
+        c->js, JS_ERR_SYNTAX, "Illegal continue statement: '%.*s' does not denote an iteration statement",
+        (int)node->len, node->str
+      );
       return;
     }
-  } else if (!c->loops[i].is_switch) {
-    emit_close_upvals_to_depth(c, c->loops[i].scope_depth);
-    emit_using_cleanups_to_depth(c, c->loops[i].scope_depth);
-    emit_loop_exit_jump(c, &c->loops[i], &c->loops[i].continues);
-    return;
+  } else {
+    for (int i = c->loop_count - 1; i >= 0 && target < 0; i--)
+      if (!c->loops[i].is_switch && !c->loops[i].is_block) target = i;
+    
+    if (target < 0) {
+      js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Illegal continue statement: no surrounding iteration statement");
+      return;
+    }
   }
+  emit_close_upvals_to_depth(c, c->loops[target].scope_depth); emit_using_cleanups_to_depth(c, c->loops[target].scope_depth);
+  emit_loop_exit_jump(c, &c->loops[target], &c->loops[target].continues);
 }
