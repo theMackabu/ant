@@ -217,7 +217,7 @@ sv_ast_t *parse_export_stmt(sv_parser_t *p) {
       uint32_t async_off = (uint32_t)p->lx.st.toff;
       p->lx.st.consumed = 1;
       sv_lexer_next(&p->lx); p->lx.st.consumed = 1;
-      decl->left = parse_func(p, true);
+      decl->left = parse_func_decl(p, true);
       decl->left->flags |= FN_ASYNC;
       decl->left->src_off = async_off;
       if (sv_lexer_next(&p->lx) == TOK_SEMICOLON) p->lx.st.consumed = 1;
@@ -225,7 +225,7 @@ sv_ast_t *parse_export_stmt(sv_parser_t *p) {
     }
     if (p->lx.st.tok == TOK_FUNC) {
       p->lx.st.consumed = 1;
-      decl->left = parse_func(p, false);
+      decl->left = parse_func_decl(p, false);
       if (sv_lexer_next(&p->lx) == TOK_SEMICOLON) p->lx.st.consumed = 1;
       return decl;
     }
@@ -249,7 +249,7 @@ sv_ast_t *parse_export_stmt(sv_parser_t *p) {
     uint32_t async_off = (uint32_t)p->lx.st.toff;
     p->lx.st.consumed = 1;
     sv_lexer_next(&p->lx); p->lx.st.consumed = 1;
-    decl->left = parse_func(p, true);
+    decl->left = parse_func_decl(p, true);
     decl->left->flags |= FN_ASYNC;
     decl->left->src_off = async_off;
     if (!decl->left->str || decl->left->len == 0)
@@ -260,7 +260,7 @@ sv_ast_t *parse_export_stmt(sv_parser_t *p) {
   if (p->lx.st.tok == TOK_FUNC) {
     decl->flags |= EX_DECL;
     p->lx.st.consumed = 1;
-    decl->left = parse_func(p, false);
+    decl->left = parse_func_decl(p, false);
     if (!decl->left->str || decl->left->len == 0)
       SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "exported function declarations require a name");
     return decl;

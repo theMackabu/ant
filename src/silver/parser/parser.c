@@ -16,8 +16,12 @@ bool sv_reject_ident_name_slow(sv_parser_t *p, const char *s, uint32_t len) {
     SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "'arguments' is not allowed in class field initializer or static initialization block");
     return true;
   }
-  if (p->static_block && !p->in_async && len == 5 && memcmp(s, "await", 5) == 0) {
+  if (len == 5 && memcmp(s, "await", 5) == 0 && ((p->static_block && !p->in_async) || sv_await_reserved(p))) {
     SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected reserved word");
+    return true;
+  }
+  if ((p->lx.strict && is_strict_reserved_name(s, len)) || (p->in_generator && len == 5 && memcmp(s, "yield", 5) == 0)) {
+    SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected strict mode reserved word");
     return true;
   }
   return false;
@@ -185,7 +189,8 @@ sv_ast_t *sv_parse_function_body(ant_t *js, const char *code, ant_offset_t clen,
 sv_ast_t *sv_parse_function_parts(ant_t *js, const sv_function_parts_t *parts) {
   sv_parser_t parser = {
     .js = js, .goal = SV_PARSE_SCRIPT,
-    .in_async = parts->is_async, .function_depth = 1,
+    .in_async = parts->is_async, .in_generator = parts->is_generator,
+    .no_yield = parts->is_generator, .function_depth = 1,
   };
   sv_parser_t *p = &parser;
 
@@ -202,6 +207,7 @@ sv_ast_t *sv_parse_function_parts(ant_t *js, const sv_function_parts_t *parts) {
 
   sv_lexer_init(&p->lx, js, parts->text, parts->body_end, false);
   p->lx.st.pos = parts->body_off;
+  p->no_yield = false;
   fn->body = mk_plain(N_BLOCK);
   fn->body->src_off = (uint32_t)parts->body_off;
   fn->body->src_end = (uint32_t)parts->body_end;

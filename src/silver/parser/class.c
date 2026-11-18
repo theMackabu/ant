@@ -65,10 +65,7 @@ static sv_ast_t *parse_class_strict(sv_parser_t *p, bool outer_strict) {
   sv_lexer_next(&p->lx);
   if (binding_ident_here(p) && !(p->lx.st.tlen == 7 && memcmp(tok_str(p), "extends", 7) == 0)) {
     cls->str = tok_ident_str(p, &cls->len);
-    if (sv_strict_forbidden_binding_ident(cls->str, cls->len)) {
-      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected strict mode reserved word");
-      return cls;
-    }
+    if (sv_reject_binding_name(p, cls->str, cls->len)) return cls;
     p->lx.st.consumed = 1;
   }
 
@@ -104,6 +101,8 @@ static sv_ast_t *parse_class_strict(sv_parser_t *p, bool outer_strict) {
         p->in_async = false;
         p->static_block = true;
         p->class_initializer = true;
+        p->in_generator = false;
+        p->no_yield = false;
         p->function_depth = 0;
         sv_ast_t *block = parse_block(p, false);
         sv_parse_context_restore(p, saved);
@@ -182,7 +181,7 @@ static sv_ast_t *parse_class_strict(sv_parser_t *p, bool outer_strict) {
     if (sv_lexer_next(&p->lx) == TOK_LPAREN) {
       bool saved_strict = p->lx.strict;
       p->lx.strict = true;
-      method->right = parse_func(p, (flags & FN_ASYNC) != 0);
+      method->right = parse_method_func(p, (flags & FN_ASYNC) != 0, (flags & FN_GENERATOR) != 0);
       p->lx.strict = saved_strict;
       if (!validate_accessor_params(p, method->right, method->flags)) return cls;
       method->right->flags |= (flags & (FN_ASYNC | FN_GENERATOR)) | FN_METHOD | FN_CLASS_BODY;
@@ -196,7 +195,8 @@ static sv_ast_t *parse_class_strict(sv_parser_t *p, bool outer_strict) {
       p->in_async = false;
       p->static_block = (flags & FN_STATIC) != 0;
       p->class_initializer = true;
-      p->no_yield = true;
+      p->in_generator = false;
+      p->no_yield = false;
       method->right = parse_assign(p);
       sv_parse_context_restore(p, saved);
       consume_semicolon(p);

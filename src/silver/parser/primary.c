@@ -86,12 +86,12 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     [TOK_USING]      = &&l_ident,
     [TOK_LET]        = &&l_sloppy_ident,
     [TOK_STATIC]     = &&l_sloppy_ident,
+    [TOK_ASYNC]      = &&l_async,
     [TOK_LPAREN]     = &&l_paren,
     [TOK_LBRACKET]   = &&l_array,
     [TOK_LBRACE]     = &&l_object,
     [TOK_FUNC]       = &&l_func,
     [TOK_CLASS]      = &&l_class,
-    [TOK_ASYNC]      = &&l_async,
     [TOK_TEMPLATE]   = &&l_template,
     [TOK_NEW]        = &&l_new,
     [TOK_TYPEOF]     = &&l_typeof,
@@ -399,26 +399,17 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
   }
 
   l_yield: {
-    if (p->static_block) {
-      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "yield is not valid in a class field initializer or static initialization block");
+    if (!p->in_generator) {
+      if (!p->lx.strict) goto l_ident;
+      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected strict mode reserved word");
       return mk(N_EMPTY);
     }
-    p->lx.st.consumed = 1;
-    sv_ast_t *n = mk(N_YIELD);
-    if (sv_lexer_next(&p->lx) == TOK_MUL) {
-      p->lx.st.consumed = 1;
-      n->flags |= FN_YIELD_STAR;
-    }
-    if (p->no_yield) { SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "yield is not valid in a class field initializer or static initialization block"); return mk(N_EMPTY); }
-    if (p->lx.st.tok != TOK_SEMICOLON && p->lx.st.tok != TOK_RBRACE &&
-        p->lx.st.tok != TOK_RPAREN && p->lx.st.tok != TOK_RBRACKET &&
-        p->lx.st.tok != TOK_EOF && p->lx.st.tok != TOK_COMMA)
-      n->right = parse_assign(p);
-    return n;
+    sv_parse_unexpected_token(p);
+    return mk(N_EMPTY);
   }
 
   l_await: {
-    if (!p->in_async && p->goal != SV_PARSE_MODULE) {
+    if (!sv_await_reserved(p)) {
       if (sv_reject_ident_name(p, tok_str(p), (uint32_t)p->lx.st.tlen)) return mk(N_EMPTY);
       uint8_t la = sv_lexer_lookahead(&p->lx);
       bool starts_operand = !lookahead_crosses_line_terminator(p) && (
@@ -635,7 +626,7 @@ sv_ast_t *parse_object(sv_parser_t *p) {
         p->lx.st.consumed = 1;
       }
 
-      prop->right = parse_func(p, false);
+      prop->right = parse_method_func(p, false, true);
       prop->right->flags |= FN_GENERATOR | FN_METHOD;
       prop->right->src_off = prop->src_off;
       sv_ast_list_push(p->js, &n->args, prop);
@@ -713,7 +704,7 @@ sv_ast_t *parse_object(sv_parser_t *p) {
           p->lx.st.consumed = 1;
         }
 
-        prop->right = parse_func(p, true);
+        prop->right = parse_method_func(p, true, (prop->flags & FN_GENERATOR) != 0);
         prop->right->flags |= FN_ASYNC | FN_METHOD;
         if (prop->flags & FN_GENERATOR)
           prop->right->flags |= FN_GENERATOR;
@@ -749,8 +740,7 @@ sv_ast_t *parse_object(sv_parser_t *p) {
       }
       prop->right = parse_assign(p);
     } else if (p->lx.st.tok == TOK_LPAREN) {
-      prop->right = parse_func(p, false);
-      prop->right->flags |= FN_METHOD;
+      prop->right = parse_method_func(p, false, false);
       prop->right->src_off = prop->src_off;
     } else {
       if (prop->left->type == N_IDENT && sv_reject_ident_name(p, prop->left->str, prop->left->len)) return n;

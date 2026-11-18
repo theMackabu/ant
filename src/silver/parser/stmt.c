@@ -49,7 +49,7 @@ sv_ast_t *parse_binding_pattern(sv_parser_t *p) {
   if (p->lx.st.tok == TOK_LBRACE) return parse_object(p);
   if (binding_ident_here(p)) {
     sv_ast_t *id = mk_ident_from_tok(p);
-    sv_strict_check_binding_ident(p, id->str, id->len);
+    sv_reject_binding_name(p, id->str, id->len);
     p->lx.st.consumed = 1;
     return id;
   }
@@ -86,7 +86,7 @@ sv_ast_t *parse_var_decl(sv_parser_t *p, sv_var_kind_t kind, bool allow_uninit_c
       return var;
     } else {
       decl->left = mk_ident_from_tok(p);
-      sv_strict_check_binding_ident(p, decl->left->str, decl->left->len);
+      if (sv_reject_binding_name(p, decl->left->str, decl->left->len)) return var;
       p->lx.st.consumed = 1;
     }
 
@@ -354,7 +354,7 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
   l_break: {
     p->lx.st.consumed = 1;
     sv_ast_t *n = mk(N_BREAK);
-    if ((sv_lexer_next(&p->lx) == TOK_IDENTIFIER || is_contextual_ident_tok(p->lx.st.tok)) && !p->lx.st.had_newline) {
+    if (sv_lexer_next(&p->lx) != TOK_EOF && ident_tok_here(p) && !p->lx.st.had_newline) {
       n->str = tok_ident_str(p, &n->len);
       p->lx.st.consumed = 1;
     }
@@ -365,7 +365,7 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
   l_continue: {
     p->lx.st.consumed = 1;
     sv_ast_t *n = mk(N_CONTINUE);
-    if ((sv_lexer_next(&p->lx) == TOK_IDENTIFIER || is_contextual_ident_tok(p->lx.st.tok)) && !p->lx.st.had_newline) {
+    if (sv_lexer_next(&p->lx) != TOK_EOF && ident_tok_here(p) && !p->lx.st.had_newline) {
       n->str = tok_ident_str(p, &n->len);
       p->lx.st.consumed = 1;
     }
@@ -382,8 +382,6 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
       if (sv_lexer_next(&p->lx) == TOK_LPAREN) {
         p->lx.st.consumed = 1;
         n->catch_param = parse_binding_pattern(p);
-        if (n->catch_param->type == N_IDENT)
-          sv_strict_check_binding_ident(p, n->catch_param->str, n->catch_param->len);
         expect(p, TOK_RPAREN);
       }
       n->catch_body = parse_block(p, false);
@@ -438,8 +436,8 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
 
   l_func: {
     p->lx.st.consumed = 1;
-    sv_ast_t *fn = parse_func(p, false);
-    if (!fn->str) SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Function statements require a function name");
+    sv_ast_t *fn = parse_func_decl(p, false);
+    if (!fn->str && !Ant_Exception_Pending(p->js)) SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Function statements require a function name");
     return fn;
   }
 
@@ -458,10 +456,10 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
     if (la == TOK_FUNC && !lookahead_crosses_line_terminator(p)) {
       p->lx.st.consumed = 1;
       sv_lexer_next(&p->lx); p->lx.st.consumed = 1;
-      sv_ast_t *fn = parse_func(p, true);
+      sv_ast_t *fn = parse_func_decl(p, true);
       fn->flags |= FN_ASYNC;
       fn->src_off = async_off;
-      if (!fn->str) SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Function statements require a function name");
+      if (!fn->str && !Ant_Exception_Pending(p->js)) SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Function statements require a function name");
       return fn;
     }
     goto l_expr_stmt;

@@ -531,6 +531,7 @@ export function targets() {
     'test_typedarray_bigint_coercion.cjs',
     'test_typedarray_coercion_detach.cjs',
     'test_typedarray_in.cjs',
+    'test_syntax_contextual_keywords.cjs',
     'test_typedarray_index_jit.cjs',
     'test_typedarray_join_separator.cjs',
     'test_typedarray_length_jit.cjs',

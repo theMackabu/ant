@@ -255,7 +255,45 @@ static bool is_assign_op(uint8_t tok) {
   return tok >= TOK_ASSIGN && tok <= TOK_NULLISH_ASSIGN;
 }
 
+sv_ast_t *parse_yield(sv_parser_t *p) {
+  if (p->no_yield) {
+    SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Yield expression not allowed in formal parameter");
+    return mk(N_EMPTY);
+  }
+  if (sv_parse_stack_overflow(p)) return mk(N_EMPTY);
+  p->lx.st.consumed = 1;
+  sv_ast_t *n = mk(N_YIELD);
+  uint8_t next = sv_lexer_next(&p->lx);
+  if (p->lx.st.had_newline) return n;
+  if (next == TOK_MUL) {
+    p->lx.st.consumed = 1;
+    n->flags |= FN_YIELD_STAR;
+    n->right = parse_assign(p);
+    return n;
+  }
+  if (
+    next != TOK_SEMICOLON && next != TOK_RBRACE && next != TOK_RPAREN && next != TOK_RBRACKET &&
+    next != TOK_EOF && next != TOK_COMMA && next != TOK_COLON && next != TOK_IN
+  ) n->right = parse_assign(p);
+  return n;
+}
+
+static inline bool ends_operand(char c) {
+  return c == ',' || c == ')' || c == ';' || c == ']' || c == ':' || c == '}';
+}
+
 sv_ast_t *parse_assign(sv_parser_t *p) {
+  uint8_t first = sv_lexer_next(&p->lx);
+  if (first == TOK_IDENTIFIER || first == TOK_NUMBER) {
+    ant_offset_t end = p->lx.st.pos;
+    if (end < p->lx.clen && ends_operand(p->lx.code[end])) {
+      p->lx.st.consumed = 1;
+      if (first == TOK_NUMBER) return mk_num(p, Ant_Value_AsNumberUnchecked(p->lx.st.tval));
+      sv_ast_t *n = mk_ident_from_tok(p);
+      if (sv_reject_ident_name(p, n->str, n->len)) return mk(N_EMPTY);
+      return n;
+    }
+  } else if (first == TOK_YIELD && p->in_generator) return parse_yield(p);
   sv_ast_t *left = parse_ternary(p);
   uint8_t op = sv_lexer_next(&p->lx);
   
