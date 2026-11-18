@@ -297,6 +297,14 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
         if (is_template_segment(tpl->args.items[i])) n_strings++;
         else n_exprs++;
       }
+      if (n_strings > UINT16_MAX || n_exprs >= UINT16_MAX) {
+        static const char message[] = "Maximum call stack size exceeded";
+        emit_op(c, OP_POP);
+        if (tag_kind == SV_CALL_METHOD) emit_op(c, OP_POP);
+        emit_throw_error(c, JS_ERR_RANGE, message, sizeof(message) - 1);
+        emit_op(c, OP_UNDEF);
+        break;
+      }
       int cache_idx = add_constant(c, Ant_Value_Undefined);
       emit_op(c, OP_CONST);
       emit_u32(c, (uint32_t)cache_idx);

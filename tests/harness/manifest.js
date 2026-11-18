@@ -200,6 +200,7 @@ export function targets() {
     'test_escape_unescape.cjs',
     'test_esm_package_self_reference.cjs',
     'test_events_key_cache.cjs',
+    'test_compiler_operand_limits.cjs',
     'test_events_listener_storage.cjs',
     'test_fetch_redirect_credentials.cjs',
     'test_construct_returns_builtin.cjs',
