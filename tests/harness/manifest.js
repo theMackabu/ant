@@ -450,6 +450,7 @@ export function targets() {
     'test_stream_lifecycle_parity.cjs',
     'test_stream_native_state.cjs',
     'test_stream_readable_to_web.cjs',
+    'test_strict_delete_globals.cjs',
     'test_string_case_identity.cjs',
     'test_string_index_keys_utf16.cjs',
     'test_string_length_accumulation.cjs',

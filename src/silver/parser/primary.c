@@ -373,7 +373,7 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     p->lx.st.consumed = 1;
     sv_ast_t *n = mk(N_DELETE);
     n->right = parse_unary(p);
-    if (p->lx.strict && n->right && n->right->type == N_IDENT) {
+    if (p->lx.strict && n->right && (n->right->type == N_IDENT || n->right->type == N_UNDEF || n->right->type == N_GLOBAL_THIS)) {
       SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "cannot delete bindings in strict mode");
       return mk(N_EMPTY);
     }
