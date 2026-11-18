@@ -182,7 +182,7 @@ static opt_generic_counts_t opt_generic_counts(const ir_graph_t *graph) {
       if (op->code != IR_OP_GENERIC) continue;
       counts.total++;
       
-      if (data->is_cold) continue;
+      if (data->is_cold || (sv_op_flags[op->slow.opcode] & SV_OPF_OPT_COLD)) continue;
       if (!counts.primary++) counts.first = op->slow.opcode;
       if (op->slow.in_loop && !counts.in_loops++) counts.first = op->slow.opcode;
     }
