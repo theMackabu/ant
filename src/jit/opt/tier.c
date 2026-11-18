@@ -683,12 +683,12 @@ ant_value_t opt_rt_exit(
   }
   opt_func_state_t *state = opt_func_state(vm->js, func, true);
   if (state) {
-    opt_note_discard(state, code, opt_exit_learned(state, func, site->bc_off, site->kind, site->slot));
+    opt_note_discard(state, code, opt_exit_learned(state, func, site->site_off, site->kind, site->slot));
     state->exits++;
   }
   opt_stats.exits++;
   opt_drop_code(code);
-  if (sv_debug_unlikely(SV_DEBUG_JIT_WARN)) opt_warn_exit(state, func, site->bc_off, site->kind, site->slot, code, 0);
+  if (sv_debug_unlikely(SV_DEBUG_JIT_WARN)) opt_warn_exit(state, func, site->site_off, site->kind, site->slot, code, 0);
   return opt_rt_resume(vm, code, entry, site->bc_off, site->depth, params, locals, stack, finally);
 }
 
@@ -746,16 +746,15 @@ static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t cal
 ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *site, opt_entry_t *entry, opt_exit_frame_t *frames, uint32_t count) {
   ant_t *js = vm->js;
   sv_func_t *func = code->func;
-  const opt_site_frame_t *inner = frames[0].site;
   opt_func_state_t *state = opt_func_state(js, frames[0].func, true);
-  bool learned = state && opt_exit_learned(state, frames[0].func, inner->bc_off, site->kind, site->slot);
+  bool learned = state && opt_exit_learned(state, frames[0].func, site->site_off, site->kind, site->slot);
   opt_func_state_t *root_state = opt_func_state(js, func, true);
   opt_note_discard(root_state, code, learned);
   if (root_state) root_state->exits++;
   opt_stats.exits++;
   opt_stats.inline_exits++;
   opt_drop_code(code);
-  if (sv_debug_unlikely(SV_DEBUG_JIT_WARN)) opt_warn_exit(state, frames[0].func, inner->bc_off, site->kind, site->slot, code, count - 1);
+  if (sv_debug_unlikely(SV_DEBUG_JIT_WARN)) opt_warn_exit(state, frames[0].func, site->site_off, site->kind, site->slot, code, count - 1);
 
   opt_exit_frame_t *root = &frames[count - 1];
   uint32_t params = code->param_count, locals = code->local_count;

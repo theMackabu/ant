@@ -456,6 +456,7 @@ typedef OPT_VEC(uint32_t) ir_slots_t;
 typedef struct {
   sv_func_t *func;
   uint32_t bc_off;
+  uint32_t site_off;
   opt_resume_mode_t mode;
   uint32_t dst;
   ir_slot_values_t values;

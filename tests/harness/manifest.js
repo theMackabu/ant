@@ -502,6 +502,7 @@ export function targets() {
     'test_object_literal_proto_key.cjs',
     'test_startup_time.cjs',
     'test_stream_async_iterator.mjs',
+    'test_stack_new_prefix_spread.cjs',
     'test_stream_handled_errors.cjs',
     'test_stream_readable_paused_mode.cjs',
     'test_strict_undefined_assignment.cjs',

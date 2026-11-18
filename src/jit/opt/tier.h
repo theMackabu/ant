@@ -44,6 +44,7 @@ typedef enum : uint8_t {
 
 typedef struct {
   uint32_t bc_off;
+  uint32_t site_off;
   uint32_t depth;
   opt_exit_kind_t kind;
   uint32_t slot;

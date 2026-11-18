@@ -884,6 +884,7 @@ static ir_frame_state_t opt_frame_state_at(opt_builder_t *b) {
   ir_frame_state_t state = {
     .func = b->func,
     .bc_off = b->pc,
+    .site_off = b->pc,
     .mode = OPT_RESUME_AT,
     .dst = OPT_INVALID_SLOT,
     .values = b->state_values,
@@ -965,6 +966,7 @@ static ir_frame_state_id_t opt_after_call_state(opt_builder_t *b, uint32_t opera
     state.values.len = kept;
     state.in_frame.len = 0;
     state.bc_off = pc;
+    state.site_off = pc;
   }
   state.mode = tail ? OPT_RESUME_RETURN : OPT_RESUME_AFTER;
   state.dst = tail ? OPT_INVALID_SLOT : opt_stack_slot(sp - operands);
@@ -976,6 +978,7 @@ static ir_frame_state_id_t opt_call_position(opt_builder_t *b) {
   ir_frame_state_t state = {
     .func = b->func,
     .bc_off = b->pc,
+    .site_off = b->pc,
     .mode = OPT_RESUME_AT,
     .dst = OPT_INVALID_SLOT,
     .parent = b->inline_call ? b->inline_call->caller_position : IR_NONE,
@@ -3541,6 +3544,7 @@ static void opt_inline_run(opt_builder_t *b, sv_func_t *target, ir_node_id_t clo
   ir_frame_state_t position = {
     .func = b->func,
     .bc_off = b->pc,
+    .site_off = b->pc,
     .mode = tail ? OPT_RESUME_RETURN : OPT_RESUME_AFTER,
     .dst = OPT_INVALID_SLOT,
     .call_off = b->pc,
@@ -5635,6 +5639,38 @@ static uint32_t opt_spread_literal_end(const opt_builder_t *b, uint32_t count, u
   return opt_may_speculate(b, OPT_EXIT_UNEXPECTED_VALUE) ? at : 0;
 }
 
+static bool opt_literal_feeds_call(const opt_builder_t *b, uint32_t end, uint32_t filled) {
+  if (end >= b->ins_count || b->block_of_ins[end] != b->block_of_ins[b->ins]) return false;
+  uint32_t off = b->ins_off[end];
+  sv_op_t op = opt_op_at(b, off);
+  if (op != OP_APPLY && op != OP_NEW_APPLY && op != OP_SUPER_APPLY) return false;
+  bool super = op == OP_SUPER_APPLY;
+  return sv_get_u16(b->func->code + off + 1) == 1 && filled + super <= OPT_MAX_CALL_ARGS && 2u + super <= b->frame.sp;
+}
+
+static ir_frame_state_id_t opt_frame_state_blaming(opt_builder_t *b, ir_frame_state_id_t resume, uint32_t site_off) {
+  ir_frame_state_t state = *ir_frame_state(b->graph, resume);
+  state.site_off = site_off;
+  return ir_add_frame_state(b->graph, &state);
+}
+
+static opt_flow_t opt_build_literal_call(opt_builder_t *b, uint32_t end, const ir_node_id_t *elements, uint32_t filled) {
+  ir_frame_state_id_t resume = opt_eager_frame_state(b);
+  b->ins = end;
+  b->pc = b->ins_off[end];
+  b->eager = opt_frame_state_blaming(b, resume, b->pc);
+  sv_op_t op = opt_op_at(b, b->pc);
+  uint32_t head = op == OP_SUPER_APPLY ? 3 : 2;
+  opt_flow_t flow = OPT_FLOW_FAILED;
+  ir_node_id_t inputs[3 + OPT_MAX_CALL_ARGS];
+  opt_collect_call_inputs(b, inputs, head, head);
+  for (uint32_t i = 0; i < filled; i++) inputs[head + i] = opt_tagged(b, elements[i]);
+  if (op != OP_SUPER_APPLY) flow = opt_build_call_with(b, op == OP_NEW_APPLY ? OP_NEW : OP_CALL_METHOD, inputs, filled, head);
+  else if (opt_super_call_allowed(b)) flow = opt_build_super_call_with(b, OP_CALL_SUPER, inputs, filled, head);
+  b->eager = resume;
+  return flow;
+}
+
 static opt_flow_t opt_build_instruction(opt_builder_t *b);
 
 static opt_flow_t opt_build_array(opt_builder_t *b, const uint8_t *ip) {
@@ -5665,6 +5701,13 @@ static opt_flow_t opt_build_array(opt_builder_t *b, const uint8_t *ip) {
     int32_t spread = opt_spread_elements(b, value, elements + filled, OPT_MAX_INLINE_ARRAY - filled, off);
     if (spread < 0) flow = OPT_FLOW_GENERIC;
     else filled += (uint32_t)spread;
+  }
+  if (flow == OPT_FLOW_CONTINUE && opt_literal_feeds_call(b, end, filled)) {
+    flow = opt_build_literal_call(b, end, elements, filled);
+    b->ins = ins;
+    b->pc = pc;
+    if (flow == OPT_FLOW_CONTINUE) b->skip_to = end + 1;
+    if (flow != OPT_FLOW_GENERIC) return flow;
   }
   ir_node_id_t array = flow == OPT_FLOW_CONTINUE ? opt_emit_array(b, elements, filled) : IR_NONE;
   if (flow == OPT_FLOW_FAILED || flow == OPT_FLOW_ENDED) return flow;

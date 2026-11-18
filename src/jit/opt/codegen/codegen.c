@@ -389,9 +389,9 @@ static uint32_t opt_cg_intern_frames(opt_cg_t *cg, uint32_t start, uint32_t coun
 }
 
 static asm_label_t opt_cg_intern_site(opt_cg_t *cg, const opt_site_t *site) {
-  uint64_t key[4] = {
+  uint64_t key[5] = {
     (uint64_t)site->bc_off << 32 | site->depth, (uint64_t)site->kind << 56 | (uint64_t)(site->handler & 0xffffff) << 32 | site->slot,
-    (uint64_t)site->values.first << 32 | site->values.count, (uint64_t)site->frame_start << 32 | site->frame_count,
+    (uint64_t)site->values.first << 32 | site->values.count, (uint64_t)site->frame_start << 32 | site->frame_count, site->site_off,
   };
   bool inserted = false;
   uint64_t *known = opt_map_entry(&cg->site_index, key, &inserted);
@@ -454,10 +454,10 @@ static asm_label_t opt_cg_exit_site(opt_cg_t *cg, ir_node_id_t node) {
   uint32_t slot = phi_check && kind != OPT_EXIT_HOISTED ? data->op.slot : 0;
   if (kind == OPT_EXIT_BAD_SHAPE || kind == OPT_EXIT_BAD_CALL_TARGET) {
     const sv_func_t *func = state->func ? state->func : cg->graph->func;
-    uint32_t learned = kind == OPT_EXIT_BAD_SHAPE ? opt_learned_shapes(func, state->bc_off) : opt_call_targets_seen(func, state->bc_off);
+    uint32_t learned = kind == OPT_EXIT_BAD_SHAPE ? opt_learned_shapes(func, state->site_off) : opt_call_targets_seen(func, state->site_off);
     if (learned) slot = learned + 1;
   }
-  opt_site_t site = {.bc_off = state->bc_off, .kind = kind, .slot = slot, .values = values, .handler = UINT32_MAX};
+  opt_site_t site = {.bc_off = state->bc_off, .site_off = state->site_off, .kind = kind, .slot = slot, .values = values, .handler = UINT32_MAX};
   if (state->parent == IR_NONE) {
     site.depth = opt_cg_resume_depth(state, cg->layout);
   } else {
@@ -494,8 +494,10 @@ static asm_label_t opt_cg_exit_site(opt_cg_t *cg, ir_node_id_t node) {
 static asm_label_t opt_cg_catch_site(opt_cg_t *cg, ir_node_id_t node) {
   const ir_node_t *data = ir_node(cg->graph, node);
   const ir_handler_t *handler = &cg->graph->handlers.items[data->handler];
+  uint32_t resume = handler->catch_off + (handler->finally ? 0 : sv_op_size[OP_CATCH]);
   opt_site_t site = {
-    .bc_off = handler->catch_off + (handler->finally ? 0 : sv_op_size[OP_CATCH]),
+    .bc_off = resume,
+    .site_off = resume,
     .depth = handler->depth + 1,
     .kind = OPT_EXIT_SLOW_PATH,
     .values = opt_cg_site_values(cg, node),
@@ -4508,7 +4510,7 @@ static void *opt_cg_dup_array(const void *items, uint32_t len, size_t elem) {
 opt_code_t *opt_cg_generate(ant_t *js, const ir_graph_t *graph, const ir_frame_layout_t *layout, asm_code_heap_t *heap, bool verify, opt_text_t *dump, const char **failure) {
   opt_cg_t cg = {.graph = graph, .layout = layout, .js = js, .marks_wanted = dump != NULL};
   opt_arena_init(&cg.arena);
-  opt_map_init(&cg.site_index, &cg.arena, 4);
+  opt_map_init(&cg.site_index, &cg.arena, 5);
   opt_map_init(&cg.frames_index, &cg.arena, 1);
   opt_target_registers(OPT_TARGET_HOST, &cg.registers, &cg.pinned);
   ra_allocation_t allocation;
