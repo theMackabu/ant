@@ -434,6 +434,7 @@ export function targets() {
     'test_realm_intrinsics.cjs',
     'test_realm_protectors.cjs',
     'test_readable_read_size.cjs',
+    'test_protector_key_stores.cjs',
     'test_reflect_set_result.cjs',
     'test_regexp_cache_admission.cjs',
     'test_regexp_exec_discard.cjs',
