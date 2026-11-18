@@ -1775,8 +1775,7 @@ static bool opt_field_slot_ok(ant_t *js, ant_shape_t *shape, uint32_t index, con
   if (!atom->len || (atom->str[0] >= '0' && atom->str[0] <= '9')) return false;
   if (atom->len == 6 && memcmp(atom->str, "length", 6) == 0) return false;
   if (index > 0xffff) return false;
-  if (store && ((prop->attrs & ANT_PROP_ATTR_WRITABLE) == 0 || ant_property_key_is_watched(js, atom->str) ||
-      atom->str == js->intern.next)) return false;
+  if (store && ((prop->attrs & ANT_PROP_ATTR_WRITABLE) == 0 || ant_property_key_is_watched(js, atom->str))) return false;
   return true;
 }
 
@@ -1890,6 +1889,7 @@ static ir_block_id_t opt_build_slow_path_counted(opt_builder_t *b, const ir_bloc
 static ir_block_id_t opt_build_slow_path_or_exit(opt_builder_t *b, const ir_block_id_t *entries, uint32_t count, const opt_frame_t *before);
 static void opt_join_slow_path(opt_builder_t *b, ir_block_id_t fast_end, ir_block_id_t slow_end, const opt_frame_t *slow, uint32_t results);
 static ir_block_id_t opt_branch_off(opt_builder_t *b, ir_condition_t condition, const ir_node_id_t *inputs, uint32_t count, bool off_if, ir_block_id_t *off);
+static void opt_exit_unless(opt_builder_t *b, ir_condition_t condition, const ir_node_id_t *inputs, uint32_t count, opt_exit_kind_t kind);
 
 static void opt_add_fields(opt_builder_t *b, ir_node_id_t object, ir_node_id_t address, ir_node_id_t value, const opt_add_case_t *adds, const opt_rt_add_site_t *site, const uint32_t *members, uint32_t count, ir_block_id_t *slow, uint32_t *slow_count) {
   ir_block_id_t added[OPT_MAX_ADDS];
@@ -2592,6 +2592,8 @@ static opt_flow_t opt_build_field(opt_builder_t *b, const uint8_t *ip, sv_op_t o
   ir_node_id_t value = store ? opt_tagged(b, opt_peek(b, 0)) : IR_NONE;
   ir_node_id_t address = opt_object_address(b, &object);
   if (address == IR_NONE) return opt_build_access_call(b, false);
+  if (store && ant_property_key_breaks_protector(b->js, atom->str) && ir_node(b->graph, object)->op.code != IR_OP_ALLOCATE_OBJECT)
+    opt_exit_unless(b, ir_cond(IR_COND_NO_SIDECAR), &address, 1, OPT_EXIT_SLOW_PATH);
   if (getters) return opt_build_getter_field(b, &plan, object, address);
   bool fallback = plan.add_count || !opt_may_speculate(b, OPT_EXIT_BAD_SHAPE);
   if (!fallback) opt_vec_push(&b->graph->arena, &b->ctx->object_like, object);
@@ -5296,7 +5298,7 @@ static uint8_t opt_spread_feedback(const opt_builder_t *b, uint32_t feedback_off
 static int32_t opt_spread_seen_length(const opt_builder_t *b, uint32_t feedback_off) {
   return sv_tfb_spread_length(opt_spread_feedback(b, feedback_off));
 }
-static void opt_exit_unless(opt_builder_t *b, ir_condition_t condition, const ir_node_id_t *inputs, uint32_t count, opt_exit_kind_t kind);
+
 static int32_t opt_spread_elements(opt_builder_t *b, ir_node_id_t iterable, ir_node_id_t *elements, uint32_t limit, uint32_t feedback_off) {
   int32_t seen = opt_spread_seen_length(b, feedback_off);
   if (seen < 0 || (uint32_t)seen > limit) return -1;

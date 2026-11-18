@@ -55,4 +55,28 @@ assert.deepStrictEqual([mapCount(), [...map].length], [0, 0]);
 storeNext(mapIteratorProto, mapNext);
 assert.deepStrictEqual([mapCount(), [...map].length], [2, 2]);
 
+function plainNext(target, value) { target.next = value; }
+function plainReturn(target, value) { target.return = value; }
+const exhausted = function () { return { done: true, value: undefined }; };
+const warm = 200000;
+
+for (let i = 0; i <= warm; i++) plainNext(i < warm ? stringIteratorProto : arrayIteratorProto, i < warm ? stringNext : exhausted);
+assert.deepStrictEqual([count(), firstTwo(), spread()], [0, [undefined, undefined], 0]);
+plainNext(arrayIteratorProto, arrayNext);
+assert.deepStrictEqual([count(), firstTwo(), spread()], [3, [1, 2], 3]);
+
+for (let i = 0; i <= warm; i++) plainNext(i < warm ? twin() : mapIteratorProto, i < warm ? mapNext : exhausted);
+assert.deepStrictEqual([mapCount(), [...map].length], [0, 0]);
+plainNext(mapIteratorProto, mapNext);
+assert.deepStrictEqual([mapCount(), [...map].length], [2, 2]);
+
+returnCalls = 0;
+for (let i = 0; i < 20000; i++) { breakEarly(); takeFirst(); }
+assert.strictEqual(returnCalls, 0);
+for (let i = 0; i <= warm; i++) plainReturn(i < warm ? twin() : mapIteratorProto, countingReturn);
+breakEarly();
+takeFirst();
+assert.strictEqual(returnCalls, 2);
+delete mapIteratorProto.return;
+
 console.log('ok');

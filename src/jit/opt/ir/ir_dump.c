@@ -117,6 +117,7 @@ static void ir_condition_text(ir_condition_t condition, opt_text_t *out) {
     case IR_COND_INDEX_IN_BOUNDS: opt_text_append(out, "IndexInBounds"); break;
     case IR_COND_MAGICAL_LENGTH: opt_text_append(out, "MagicalLength"); break;
     case IR_COND_EXTENSIBLE: opt_text_append(out, "Extensible"); break;
+    case IR_COND_NO_SIDECAR: opt_text_append(out, "NoSidecar"); break;
     case IR_COND_ARRAY_ITERATOR: opt_text_append(out, "ArrayIterator"); break;
     case IR_COND_ITERABLE_ARRAY: opt_text_append(out, "IterableArray"); break;
     case IR_COND_TYPED_ARRAY_LENGTH: opt_text_append(out, "TypedArrayLength"); break;

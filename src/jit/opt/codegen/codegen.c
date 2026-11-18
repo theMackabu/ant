@@ -1108,6 +1108,12 @@ static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condit
       opt_cg_jump_to(cg, if_true);
       return;
     }
+    case IR_COND_NO_SIDECAR: {
+      asm_gpr_t scratch = cg->pinned.scratch;
+      masm_load64(m, scratch, asm_addr(opt_cg_input(cg, node, 0), (int32_t)offsetof(ant_object_t, extra_slots)));
+      masm_branch_test64(m, invert ? ASM_COND_NON_ZERO : ASM_COND_ZERO, scratch, (int64_t)ant_sidecar, target);
+      break;
+    }
     case IR_COND_GLOBAL_EVAL_INTACT: {
       asm_gpr_t scratch = cg->pinned.scratch;
       masm_load64(m, scratch, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
