@@ -1040,6 +1040,14 @@ ant_value_t opt_rt_set_proto(sv_vm_t *vm, ant_value_t object, ant_value_t proto,
   return Ant_Value_Undefined;
 }
 
+ant_value_t opt_rt_set_home_obj(sv_vm_t *vm, ant_value_t func, ant_value_t home, ant_value_t *args, int64_t argc, int64_t kind) {
+  if (vtype(func) != kTypeFunction) return Ant_Value_Undefined;
+  sv_closure_t *closure = js_func_closure(func);
+  closure->super_val = home;
+  closure->call_flags |= SV_CALL_HAS_SUPER;
+  return Ant_Value_Undefined;
+}
+
 ant_value_t opt_rt_builder_read(sv_vm_t *vm, ant_value_t value, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind) {
   return sv_string_builder_read_value(vm->js, value);
 }

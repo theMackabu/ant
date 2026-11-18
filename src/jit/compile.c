@@ -716,6 +716,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_EXPORT:
       case OP_CLOSURE:
       case OP_SET_NAME:
+      case OP_SET_HOME_OBJ:
         jit_emit_bindings(c);
         break;
       case OP_FOR_IN:

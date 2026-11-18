@@ -6548,6 +6548,9 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
       return opt_build_set_proto(b);
     case OP_DEFINE_METHOD_COMP:
       return opt_build_define_computed(b, ip);
+    case OP_SET_HOME_OBJ:
+      opt_runtime_call(b, (uintptr_t)opt_rt_set_home_obj, 0, (ir_node_id_t[]){opt_tagged(b, opt_peek(b, 1)), opt_tagged(b, opt_peek(b, 0))}, 2, false, false);
+      return OPT_FLOW_CONTINUE;
     case OP_ARRAY:
       return opt_build_array(b, ip);
     case OP_ARRAY_LITERAL:
