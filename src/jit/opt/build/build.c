@@ -4760,7 +4760,15 @@ static bool opt_super_key_atom(opt_builder_t *b, bool field, sv_atom_t *atom) {
     *atom = b->func->atoms[atom_index];
     return true;
   }
-  return false;
+  uint64_t bits;
+  ir_node_id_t key = opt_peek(b, 0);
+  if (!ir_constant_value(b->graph, key, &bits) || ir_node(b->graph, key)->repr != OPT_REPR_TAGGED || vtype(bits) != kTypeString) return false;
+  size_t len = 0;
+  const char *text = js_getstr(b->js, (ant_value_t)bits, &len);
+  const char *interned = text && len && len <= UINT32_MAX ? intern_string(b->js, text, len) : NULL;
+  if (!interned) return false;
+  *atom = (sv_atom_t){.str = interned, .len = (uint32_t)len, .maybe_numeric = true};
+  return true;
 }
 
 static bool opt_try_super_get(opt_builder_t *b, bool field, opt_flow_t *flow) {
