@@ -84,6 +84,8 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     [TOK_FROM]       = &&l_ident,
     [TOK_OF]         = &&l_ident,
     [TOK_USING]      = &&l_ident,
+    [TOK_LET]        = &&l_sloppy_ident,
+    [TOK_STATIC]     = &&l_sloppy_ident,
     [TOK_LPAREN]     = &&l_paren,
     [TOK_LBRACKET]   = &&l_array,
     [TOK_LBRACE]     = &&l_object,
@@ -181,6 +183,14 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     n->len = (uint32_t)p->lx.st.tlen;
     n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
     return n;
+  }
+
+  l_sloppy_ident: {
+    if (p->lx.strict) {
+      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected strict mode reserved word");
+      return mk(N_EMPTY);
+    }
+    goto l_ident;
   }
 
   l_ident: {

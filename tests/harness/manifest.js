@@ -475,6 +475,7 @@ export function targets() {
     'test_shell_bun_api.js',
     'test_shell_compat.js',
     'test_shell_ops_gc.js',
+    'test_sloppy_let_static_identifiers.cjs',
     'test_sqlite_api.cjs',
     'test_sqlite_basic.cjs',
     'test_tagged_template_receiver.cjs',
