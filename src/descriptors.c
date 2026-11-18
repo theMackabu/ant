@@ -962,12 +962,15 @@ static ant_value_t define_desc_object(ant_t *js, const define_desc_raw_t *raw) {
   define_desc_raw_t pinned = *raw;
   for (int f = 0; f < DESC_FIELD_COUNT; f++) GC_ROOT_PIN(js, pinned.val[f]);
   
-  ant_value_t object = Ant_Object_CreateBare(js);
+  ant_value_t object = Ant_Object_Create(js);
   GC_ROOT_PIN(js, object);
   
-  for (int f = 0; f < DESC_FIELD_COUNT && !is_err(object); f++) if (pinned.has[f]) {
-    ant_value_t key = js_mkstr(js, define_desc_field_names[f].name, define_desc_field_names[f].len);
-    ant_value_t set = js_setprop(js, object, key, pinned.val[f]);
+  static const uint8_t order[DESC_FIELD_COUNT] = { DESC_VALUE, DESC_WRITABLE, DESC_GET, DESC_SET, DESC_ENUMERABLE, DESC_CONFIGURABLE };
+  for (int i = 0; i < DESC_FIELD_COUNT && !is_err(object); i++) if (pinned.has[order[i]]) {
+    int f = order[i];
+    bool attribute = f == DESC_WRITABLE || f == DESC_ENUMERABLE || f == DESC_CONFIGURABLE;
+    ant_value_t field = attribute ? Ant_Value_FromBool(js_truthy(js, pinned.val[f])) : pinned.val[f];
+    ant_value_t set = mkprop_define_data(js, object, define_desc_field_names[f].name, define_desc_field_names[f].len, field);
     if (is_err(set)) object = set;
   }
   
@@ -1004,10 +1007,20 @@ static ant_value_t define_via_proxy(
   ant_t *js, ant_value_t obj, ant_value_t as_obj, property_key_view_t *key,
   ant_value_t descriptor, const define_desc_raw_t *pre_raw
 ) {
-  if (!is_object_type(descriptor)) descriptor = define_desc_object(js, pre_raw);
+  define_desc_raw_t raw = {0};
+  if (pre_raw) raw = *pre_raw;
+  else {
+    ant_value_t read_err = define_desc_read(js, descriptor, &raw);
+    if (is_err(read_err)) return read_err;
+  }
+  
+  descriptor = define_desc_object(js, &raw);
   if (is_err(descriptor)) return descriptor;
   
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, descriptor);
   ant_value_t prop = property_key_view_materialize(js, key);
+  GC_ROOT_RESTORE(js, mark);
   if (is_err(prop)) return prop;
   
   ant_value_t result = proxy_define_property(js, as_obj, prop, descriptor);

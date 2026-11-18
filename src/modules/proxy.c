@@ -319,11 +319,23 @@ ant_value_t proxy_set_integrity_level(ant_t *js, ant_value_t obj, bool freeze) {
     ant_value_t key = arr_get(js, keys, i);
     GC_ROOT_PIN(js, key);
 
-    ant_value_t desc = Ant_Object_CreateBare(js);
+    bool data = false;
+    if (freeze) {
+      ant_value_t current = proxy_get_own_property_descriptor(js, obj, key);
+      if (is_err(current) || vtype(current) == kTypeUndefined) {
+        GC_ROOT_RESTORE(js, iter_mark);
+        if (!is_err(current)) continue;
+        GC_ROOT_RESTORE(js, root_mark);
+        return current;
+      }
+      data = !descriptor_has_own_key(js, current, "get", 3) && !descriptor_has_own_key(js, current, "set", 3);
+    }
+
+    ant_value_t desc = Ant_Object_Create(js);
     GC_ROOT_PIN(js, desc);
     
-    js_setprop(js, desc, js_mkstr(js, "configurable", 12), Ant_Value_False);
-    if (freeze) js_setprop(js, desc, js_mkstr(js, "writable", 8), Ant_Value_False);
+    if (data) mkprop_define_data(js, desc, "writable", 8, Ant_Value_False);
+    mkprop_define_data(js, desc, "configurable", 12, Ant_Value_False);
 
     ant_value_t result = proxy_define_property(js, obj, key, desc);
     if (is_err(result) || !js_truthy(js, result)) {
