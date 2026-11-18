@@ -404,6 +404,7 @@ export function targets() {
     'test_regexp_internal_state.cjs',
     'test_regexp_lastindex_conversion.cjs',
     'test_regexp_legacy_ignorecase.cjs',
+    'test_proxy_recursion_guard.cjs',
     'test_regexp_legacy_ignorecase_backref.cjs',
     'test_regexp_legacy_statics.cjs',
     'test_regexp_literal_objects.cjs',

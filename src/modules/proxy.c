@@ -124,6 +124,7 @@ bool js_proxy_is_host(ant_value_t obj) {
 }
 
 ant_value_t proxy_key_enumerable(ant_t *js, ant_value_t proxy, ant_value_t key) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (data && data->host && vtype(key) == kTypeString) {
     size_t key_len = 0;
@@ -258,6 +259,7 @@ ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
 }
 
 ant_value_t proxy_own_keys_filtered(ant_t *js, ant_value_t obj, bool include_symbols, bool enumerable_only) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(obj);
   if (data && data->host) return proxy_host_own_keys(js, data, include_symbols, enumerable_only);
   
@@ -291,6 +293,7 @@ ant_value_t proxy_not_prevented_error(ant_t *js, ant_value_t proxy, const char *
 }
 
 ant_value_t proxy_set_integrity_level(ant_t *js, ant_value_t obj, bool freeze) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, obj);
 
@@ -352,6 +355,7 @@ ant_value_t proxy_set_integrity_level(ant_t *js, ant_value_t obj, bool freeze) {
 }
 
 ant_value_t proxy_test_integrity_level(ant_t *js, ant_value_t obj, bool frozen) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, obj);
 
@@ -424,6 +428,7 @@ static ant_value_t proxy_enum_host_pairs(ant_t *js, ant_proxy_state_t *data, enu
 }
 
 ant_value_t proxy_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mode) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   if (mode == OBJ_ENUM_KEYS) return proxy_own_keys_filtered(js, obj, false, true);
   
   ant_proxy_state_t *host_data = get_proxy_data(obj);
@@ -662,6 +667,7 @@ static ant_value_t proxy_has_on_target(ant_t *js, ant_value_t target, const char
 }
 
 ant_value_t proxy_get_with_receiver(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t receiver) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data) return Ant_Value_Undefined;
 
@@ -795,6 +801,7 @@ ant_value_t proxy_set_with_receiver_reason(
   ant_t *js, ant_value_t proxy, const char *key, size_t key_len,
   ant_value_t value, ant_value_t receiver, bool *trapless
 ) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   
   if (!data) return Ant_Value_Undefined;
@@ -914,6 +921,7 @@ ant_value_t proxy_set_with_receiver_reason(
 }
 
 ant_value_t proxy_set_with_receiver(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t value, ant_value_t receiver) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   return proxy_set_with_receiver_reason(js, proxy, key, key_len, value, receiver, NULL);
 }
 
@@ -936,6 +944,7 @@ ant_value_t proxy_set_sym(
   ant_t *js, ant_value_t proxy, ant_value_t sym, ant_value_t value,
   ant_value_t receiver, ant_value_t *target_out
 ) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   *target_out = Ant_Value_Undefined;
   if (!data) return Ant_Value_Undefined;
@@ -1000,6 +1009,7 @@ ant_value_t js_set_reporting(ant_t *js, ant_value_t target, ant_value_t key, ant
 }
 
 ant_value_t proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   
   if (!data) return Ant_Value_False;
@@ -1035,6 +1045,7 @@ ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t k
 }
 
 ant_value_t proxy_delete(ant_t *js, ant_value_t proxy, const char *key, size_t key_len) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   
   if (!data) return Ant_Value_True;
@@ -1063,6 +1074,7 @@ ant_value_t proxy_delete(ant_t *js, ant_value_t proxy, const char *key, size_t k
 }
 
 ant_value_t proxy_get_val(ant_t *js, ant_value_t proxy, ant_value_t key_val) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data) return Ant_Value_Undefined;
   if (data->revoked) return proxy_revoked_error(js, "get");
@@ -1126,6 +1138,7 @@ ant_value_t proxy_get_prototype_of(ant_t *js, ant_value_t proxy) {
 }
 
 ant_value_t proxy_set_prototype_of(ant_t *js, ant_value_t proxy, ant_value_t proto) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data) return Ant_Value_False;
   if (data->revoked)
@@ -1153,6 +1166,7 @@ ant_value_t proxy_set_prototype_of(ant_t *js, ant_value_t proxy, ant_value_t pro
 }
 
 ant_value_t proxy_is_extensible(ant_t *js, ant_value_t proxy) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data) return Ant_Value_False;
   if (data->revoked)
@@ -1175,6 +1189,7 @@ ant_value_t proxy_is_extensible(ant_t *js, ant_value_t proxy) {
 }
 
 ant_value_t proxy_prevent_extensions(ant_t *js, ant_value_t proxy) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data) return Ant_Value_False;
 
@@ -1204,6 +1219,7 @@ ant_value_t proxy_prevent_extensions(ant_t *js, ant_value_t proxy) {
 }
 
 ant_value_t proxy_has_val(ant_t *js, ant_value_t proxy, ant_value_t key_val) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data) return Ant_Value_False;
   if (data->revoked) return proxy_revoked_error(js, "has");
@@ -1277,6 +1293,7 @@ static bool proxy_desc_compatible(ant_t *js, bool extensible, const proxy_full_d
 }
 
 ant_value_t proxy_get_own_property_descriptor(ant_t *js, ant_value_t proxy, ant_value_t key_val) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data) return Ant_Value_Undefined;
   
@@ -1382,6 +1399,7 @@ static ant_value_t proxy_host_define(
 }
 
 ant_value_t proxy_define_property(ant_t *js, ant_value_t proxy, ant_value_t key_val, ant_value_t descriptor) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data) return Ant_Value_False;
   
@@ -1431,6 +1449,7 @@ ant_value_t proxy_define_property(ant_t *js, ant_value_t proxy, ant_value_t key_
 }
 
 ant_value_t proxy_delete_sym(ant_t *js, ant_value_t proxy, ant_value_t sym) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data) return Ant_Value_True;
   if (data->revoked) return proxy_revoked_error(js, "deleteProperty");
@@ -1452,6 +1471,7 @@ ant_value_t proxy_delete_sym(ant_t *js, ant_value_t proxy, ant_value_t sym) {
 }
 
 ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, ant_value_t *args, int argc) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data) return js_mkerr_typed(js, JS_ERR_TYPE, "object is not a function");
   if (data->revoked) return proxy_revoked_error(js, "apply");
@@ -1477,6 +1497,7 @@ ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, a
 }
 
 ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, int argc, ant_value_t new_target) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   
   if (!data) return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
