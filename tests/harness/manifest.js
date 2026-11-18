@@ -172,6 +172,7 @@ export function targets() {
     'test_assert_messages.cjs',
     'test_deep_equal_semantics.cjs',
     'test_buffer_copy_bytes_from_errors.cjs',
+    'test_break_continue_targets.cjs',
     'test_location_flag.mjs',
     'test_string_property_enumerable.cjs',
     'test_console_log_nul.cjs',

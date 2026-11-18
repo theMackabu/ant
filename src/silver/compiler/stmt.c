@@ -563,7 +563,7 @@ void compile_while(sv_compiler_t *c, sv_ast_t *node) {
   emit_set_completion_undefined(c);
 
   int loop_start = c->code_len;
-  push_loop(c, loop_start, NULL, 0, false);
+  push_loop(c, loop_start, NULL, 0, SV_LOOP_ITERATION);
 
   compile_truthy_test_expr(c, node->cond);
   int exit_jump = emit_jump(c, OP_JMP_FALSE);
@@ -747,7 +747,7 @@ void compile_switch(sv_compiler_t *c, sv_ast_t *node) {
   hoist_switch_lexical_decls(c, node);
   int lexical_ub = c->local_count;
   hoist_switch_func_decls(c, node);
-  push_loop(c, c->code_len, NULL, 0, true);
+  push_loop(c, c->code_len, NULL, 0, SV_LOOP_SWITCH);
 
   for (int i = 0; i < case_count; i++) {
     sv_ast_t *cas = node->args.items[i];
@@ -810,6 +810,11 @@ static inline bool is_loop_node(sv_ast_t *n) {
 }
 
 void compile_label(sv_compiler_t *c, sv_ast_t *node) {
+  if (find_loop_label(c, node->str, node->len) >= 0) {
+    js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Label '%.*s' has already been declared", (int)node->len, node->str);
+    return;
+  }
+
   if (is_loop_node(node->body)) {
     c->pending_label = node->str;
     c->pending_label_len = node->len;
@@ -817,7 +822,11 @@ void compile_label(sv_compiler_t *c, sv_ast_t *node) {
     c->pending_label = NULL;
     c->pending_label_len = 0;
   } else {
-    push_loop(c, c->code_len, node->str, node->len, false);
+    sv_ast_t *inner = node->body;
+    while (inner && inner->type == N_LABEL) inner = inner->body;
+    
+    push_loop(c, c->code_len, node->str, node->len, is_loop_node(inner) ? SV_LOOP_LABEL_OF_LOOP : SV_LOOP_LABEL);
+    
     compile_stmt(c, node->body);
     pop_loop(c);
   }

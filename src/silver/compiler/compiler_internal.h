@@ -168,8 +168,9 @@ void unwind_pop(sv_compiler_t *c);
 void push_loop(
   sv_compiler_t *c, int loop_start,
   const char *label, uint32_t label_len,
-  bool is_switch
+  sv_loop_kind_t kind
 );
+int find_loop_label(const sv_compiler_t *c, const char *label, uint32_t label_len);
 void pop_loop(sv_compiler_t *c);
 void begin_scope(sv_compiler_t *c);
 void end_scope(sv_compiler_t *c);
