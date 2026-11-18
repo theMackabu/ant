@@ -6,6 +6,7 @@
 #include "codegen/codegen.h"
 #include "passes/passes.h"
 #include "internal.h"
+#include "protectors.h"
 #include "proto_watch.h"
 #include "silver/call.h"
 #include "silver/feedback.h"
@@ -921,6 +922,30 @@ ant_value_t opt_rt_call_args(sv_vm_t *vm, ant_value_t callee, ant_value_t this_v
 
 ant_value_t opt_rt_new_args(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t spread) {
   return jit_helper_new_args(vm, vm->js, callee, new_target, args, (int)argc, OPT_SPREAD_ARG_SLOTS, spread != 0);
+}
+
+static ant_value_t opt_rt_forward(sv_vm_t *vm, ant_value_t callee, ant_value_t second, ant_value_t *args, int64_t argc, const opt_entry_t *entry, bool construct) {
+  ant_t *js = vm->js;
+  int fixed = (int)argc - 1;
+  uint32_t start = (uint32_t)Ant_Value_AsNumberUnchecked(args[fixed]);
+  uint32_t passed = (uint32_t)entry->argc;
+  int count = passed > start ? (int)(passed - start) : 0;
+  if (!ant_protector_intact(js, ANT_PROTECTOR_ARRAY_ITERATION)) {
+    ant_value_t rest = opt_rt_rest_array(vm, entry->args, passed, start);
+    if (is_err(rest)) return rest;
+    args[fixed] = rest;
+    return construct ? opt_rt_new_args(vm, callee, second, args, argc, true) : opt_rt_call_args(vm, callee, second, args, argc, true);
+  }
+  if (!fixed) return construct ? jit_helper_new(vm, js, callee, second, entry->args + start, count) : opt_rt_call(vm, callee, second, entry->args + start, count);
+  return jit_helper_call_joined(vm, js, callee, second, args, fixed, entry->args + start, count, OPT_SPREAD_ARG_SLOTS, construct);
+}
+
+ant_value_t opt_rt_call_forward(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, const opt_entry_t *entry) {
+  return opt_rt_forward(vm, callee, this_val, args, argc, entry, false);
+}
+
+ant_value_t opt_rt_new_forward(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, const opt_entry_t *entry) {
+  return opt_rt_forward(vm, callee, new_target, args, argc, entry, true);
 }
 
 ant_value_t opt_rt_super_parent(sv_vm_t *vm, ant_value_t parent, ant_value_t this_val, ant_value_t *args, int64_t argc) {

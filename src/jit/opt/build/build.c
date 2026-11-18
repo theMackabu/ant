@@ -175,6 +175,9 @@ struct opt_builder {
   bool virtual_arguments;
   ir_node_id_t arguments_marker;
   bool keeps_arguments;
+  bool virtual_rest;
+  uint32_t rest_start;
+  ir_node_id_t rest_marker;
   ir_slot_values_t state_values;
   ir_slots_t state_in_frame;
 };
@@ -3230,7 +3233,8 @@ static bool opt_is_virtual_arguments(const opt_builder_t *b, ir_node_id_t node) 
 
 static bool opt_is_any_virtual_arguments(const opt_builder_t *b, ir_node_id_t node) {
   uint64_t bits;
-  return node != IR_NONE && ir_constant_value(b->graph, node, &bits) && ir_value_virtual_arguments_kind(bits) >= 0;
+  return node != IR_NONE && ir_constant_value(b->graph, node, &bits)
+    && (ir_value_virtual_arguments_kind(bits) >= 0 || ir_value_virtual_rest_start(bits) >= 0);
 }
 
 static opt_flow_t opt_no_virtual_arguments(opt_builder_t *b) {
@@ -3411,6 +3415,7 @@ static bool opt_inline_build(opt_builder_t *b, opt_inline_t *call, sv_func_t *ta
     .eager = IR_NONE,
     .tail_header = IR_NONE,
     .arguments_marker = IR_NONE,
+    .rest_marker = IR_NONE,
   };
   opt_builder_t *cb = &callee;
   cb->exit_sites = b->ctx->exit_sites_of ? b->ctx->exit_sites_of(b->js, target, &cb->exit_site_count) : NULL;
@@ -4554,6 +4559,16 @@ static opt_flow_t opt_build_array(opt_builder_t *b, const uint8_t *ip) {
 
 static opt_flow_t opt_build_rest(opt_builder_t *b, const uint8_t *ip) {
   uint32_t start = sv_get_u16(ip + 1);
+  if (b->virtual_rest) {
+    if (b->rest_marker == IR_NONE) {
+      opt_vec_push(&b->graph->arena, &b->ctx->virtual_arguments, b->func);
+      ir_op_t marker = ir_op(IR_OP_CONSTANT);
+      marker.bits = ir_value_virtual_rest(start);
+      b->rest_marker = ir_add_node(b->graph, marker, NULL, 0, OPT_REPR_TAGGED, 0);
+    }
+    opt_push(b, b->rest_marker);
+    return OPT_FLOW_CONTINUE;
+  }
   const opt_inline_t *call = b->inline_call;
   ir_node_id_t array;
   if (call) {
@@ -5491,6 +5506,7 @@ static void opt_collect_call_inputs(opt_builder_t *b, ir_node_id_t *inputs, uint
 static ir_node_id_t opt_spread_runtime_call(opt_builder_t *b, uintptr_t helper, bool spread, const ir_node_id_t *inputs, uint32_t count, bool passes_entry) {
   ir_node_id_t result = opt_runtime_call(b, helper, spread, inputs, count, false, false);
   ir_op_t *op = &ir_node(b->graph, result)->op;
+  op->call.passes_entry = passes_entry;
   op->call.spare_slots = (uint16_t)(OPT_SPREAD_ARG_SLOTS - (int)(count - 2));
   return result;
 }
@@ -5547,9 +5563,24 @@ static opt_flow_t opt_build_spread_call(opt_builder_t *b, const uint8_t *ip, sv_
   ir_node_id_t iterable = opt_peek(b, 0);
   ir_node_id_t *elements = inputs + head + fixed;
   int32_t count = -1;
-  if (opt_is_any_virtual_arguments(b, iterable)) return opt_no_virtual_arguments(b);
-  if (opt_spread_unseen(b, b->pc)) return opt_end_with_exit(b, OPT_EXIT_NO_FEEDBACK);
-  count = opt_spread_elements(b, iterable, elements, limit, b->pc);
+  if (iterable != IR_NONE && iterable == b->rest_marker) {
+    const opt_inline_t *call = b->inline_call;
+    if (!call && !super) {
+      *elements = opt_constant(b, ir_value_number((double)b->rest_start));
+      uintptr_t helper = construct ? (uintptr_t)opt_rt_new_forward : (uintptr_t)opt_rt_call_forward;
+      return opt_finish_call(b, operands, opt_spread_runtime_call(b, helper, false, inputs, 2 + argc, true), false);
+    }
+    uint32_t passed = call && call->argc > b->rest_start ? call->argc - b->rest_start : 0;
+    if (passed > limit || !opt_may_speculate(b, OPT_EXIT_BAD_TYPE)) return opt_no_virtual_arguments(b);
+    opt_exit_unless(b, ir_cond(IR_COND_ARRAY_ITERATION_INTACT), NULL, 0, OPT_EXIT_BAD_TYPE);
+    if (!call) return opt_build_super_call_with(b, OP_SUPER_FORWARD, inputs, 0, operands);
+    for (uint32_t i = 0; i < passed; i++) elements[i] = opt_tagged(b, call->args[b->rest_start + i]);
+    count = (int32_t)passed;
+  } else {
+    if (opt_is_any_virtual_arguments(b, iterable)) return opt_no_virtual_arguments(b);
+    if (opt_spread_unseen(b, b->pc)) return opt_end_with_exit(b, OPT_EXIT_NO_FEEDBACK);
+    count = opt_spread_elements(b, iterable, elements, limit, b->pc);
+  }
   if (count >= 0) {
     uint32_t total = fixed + (uint32_t)count;
     if (super) return opt_build_super_call_with(b, OP_CALL_SUPER, inputs, total, operands);
@@ -6698,13 +6729,43 @@ static void opt_decide_virtual_arguments(opt_builder_t *b) {
   b->virtual_arguments = uses;
 }
 
+static bool opt_is_spread_call(sv_op_t op) {
+  return op == OP_CALL_SPREAD || op == OP_NEW_SPREAD || op == OP_SUPER_SPREAD;
+}
+
 static void opt_decide_virtual_rest(opt_builder_t *b) {
-  uint32_t rests = 0;
+  sv_func_t *func = b->func;
+  uint32_t rest = 0, rests = 0;
   for (uint32_t i = 0; i < b->ins_count; i++) {
     if (opt_op_at(b, b->ins_off[i]) != OP_REST) continue;
+    rest = i;
     rests++;
   }
   b->keeps_arguments = rests > 0;
+  if (rests != 1 || rest + 1 >= b->ins_count) return;
+  if (!b->inline_call && (b->loop_count || func->has_try)) return;
+  for (uint32_t i = 0; i < b->ctx->no_virtual_arguments.len; i++)
+    if (b->ctx->no_virtual_arguments.items[i] == func) return;
+  sv_op_t put = opt_op_at(b, b->ins_off[rest + 1]);
+  if (put != OP_PUT_LOCAL && put != OP_PUT_LOCAL8) return;
+  bool use, def;
+  uint32_t local = opt_access(b, b->ins_off[rest + 1], &use, &def);
+  if (local == IR_NONE || local < b->params || local >= b->params + b->locals) return;
+  if (opt_in_memory(b, local) || opt_boxable(b, local) || opt_bitset_contains(&b->builders, local)) return;
+  uint32_t start = sv_get_u16(func->code + b->ins_off[rest] + 1);
+  for (uint32_t i = 0; i < b->ins_count; i++) {
+    uint32_t off = b->ins_off[i];
+    if (i == rest + 1 || opt_access(b, off, &use, &def) != local) continue;
+    sv_op_t op = opt_op_at(b, off);
+    if (op == OP_SET_LOCAL_UNDEF && i < rest) continue;
+    if ((op != OP_GET_LOCAL && op != OP_GET_LOCAL8) || i + 1 >= b->ins_count || b->block_of_ins[i] != b->block_of_ins[i + 1]) return;
+    uint32_t next = b->ins_off[i + 1];
+    sv_op_t spread = opt_op_at(b, next);
+    if (!opt_is_spread_call(spread)) return;
+    if (!b->inline_call && spread == OP_SUPER_SPREAD && (start || sv_get_u16(func->code + next + 1) != 1)) return;
+  }
+  b->virtual_rest = true;
+  b->rest_start = start;
 }
 
 static bool opt_analyze(opt_builder_t *b) {
@@ -6732,7 +6793,8 @@ static bool opt_graph_uses_virtual_arguments(const ir_graph_t *graph) {
     const ir_node_t *node = ir_node(graph, n);
     for (uint32_t i = 0; i < node->inputs.len; i++) {
       uint64_t bits;
-      if (ir_constant_value(graph, node->inputs.items[i], &bits) && ir_value_virtual_arguments_kind(bits) >= 0) return true;
+      if (!ir_constant_value(graph, node->inputs.items[i], &bits)) continue;
+      if (ir_value_virtual_arguments_kind(bits) >= 0 || ir_value_virtual_rest_start(bits) >= 0) return true;
     }
   }
   return false;
@@ -6751,6 +6813,7 @@ static bool opt_build_attempt(ant_t *js, sv_func_t *func, opt_build_ctx_t *ctx, 
     .eager = IR_NONE,
     .tail_header = IR_NONE,
     .arguments_marker = IR_NONE,
+    .rest_marker = IR_NONE,
   };
   opt_builder_t *b = &builder;
   b->exit_sites = ctx->exit_sites_of ? ctx->exit_sites_of(js, func, &b->exit_site_count) : NULL;
@@ -6771,7 +6834,7 @@ static bool opt_build_attempt(ant_t *js, sv_func_t *func, opt_build_ctx_t *ctx, 
     b->pc = 0;
     if (b->uses_this) opt_root_this(b);
     if (opt_self_tail_loop_ok(b)) opt_build_tail_header(b);
-    ok = opt_end_with_jump(b, 0) && (b->virtual_arguments || (opt_build_osr_entries(b) && opt_build_catch_entries(b)));
+    ok = opt_end_with_jump(b, 0) && (b->virtual_arguments || b->virtual_rest || (opt_build_osr_entries(b) && opt_build_catch_entries(b)));
   }
   for (uint32_t r = 0; ok && r < b->rpo_count; r++) {
     uint32_t bi = b->rpo[r];

@@ -1115,11 +1115,13 @@ static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condit
       masm_branch_test64(m, invert ? ASM_COND_NON_ZERO : ASM_COND_ZERO, scratch, (int64_t)ant_sidecar, target);
       break;
     }
-    case IR_COND_GLOBAL_EVAL_INTACT: {
+    case IR_COND_GLOBAL_EVAL_INTACT:
+    case IR_COND_ARRAY_ITERATION_INTACT: {
       asm_gpr_t scratch = cg->pinned.scratch;
+      uint32_t protector = condition.kind == IR_COND_GLOBAL_EVAL_INTACT ? ANT_PROTECTOR_GLOBAL_EVAL : ANT_PROTECTOR_ARRAY_ITERATION;
       masm_load64(m, scratch, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
       masm_load32(m, scratch, asm_addr(scratch, (int32_t)offsetof(ant_t, protectors_invalid)));
-      masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, (int32_t)ANT_PROTECTOR_GLOBAL_EVAL, opt_cg_label(cg, if_false));
+      masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, (int32_t)protector, opt_cg_label(cg, if_false));
       opt_cg_jump_to(cg, if_true);
       return;
     }
@@ -4073,8 +4075,14 @@ static ant_value_t opt_cg_materialize_objects(sv_vm_t *vm, const opt_code_t *cod
 }
 
 static ant_value_t opt_cg_materialize_arguments(sv_vm_t *vm, ant_value_t *slots, uint32_t count, ant_value_t callee, ant_value_t *args, uint32_t argc) {
-  ant_value_t arguments = Ant_Value_Undefined;
+  ant_value_t arguments = Ant_Value_Undefined, rest = Ant_Value_Undefined;
   for (uint32_t i = 0; i < count; i++) {
+    int start = ir_value_virtual_rest_start(slots[i]);
+    if (start >= 0) {
+      if (!is_object_type(rest)) rest = opt_rt_rest_array(vm, args, argc, (uint32_t)start);
+      slots[i] = rest;
+      continue;
+    }
     int kind = ir_value_virtual_arguments_kind(slots[i]);
     if (kind < 0) continue;
     if (!is_object_type(arguments)) arguments = opt_rt_arguments_object(vm, callee, args, (int)argc, kind == 0);
@@ -4207,8 +4215,9 @@ static bool opt_cg_site_values_plain(const opt_code_t *code, const opt_site_t *s
   opt_exit_cursor_t cursor = opt_exit_cursor((opt_exit_view_t){code->values, code->chunks, code->refs}, site->values);
   for (const opt_site_value_t *value; (value = opt_exit_next(&cursor));) {
     if (value->kind == OPT_SITE_VIRTUAL || value->kind == OPT_SITE_OBJECT) return false;
-    if (value->repr != OPT_REPR_POINTER && ir_value_virtual_arguments_kind(ir_value_boxed_constant(opt_cg_site_bits(value, dump, spills), (opt_repr_t)value->repr)) >= 0)
-      return false;
+    if (value->repr == OPT_REPR_POINTER) continue;
+    uint64_t bits = ir_value_boxed_constant(opt_cg_site_bits(value, dump, spills), (opt_repr_t)value->repr);
+    if (ir_value_virtual_arguments_kind(bits) >= 0 || ir_value_virtual_rest_start(bits) >= 0) return false;
   }
   return true;
 }

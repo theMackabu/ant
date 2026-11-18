@@ -238,7 +238,9 @@ ant_value_t opt_rt_super_parent(sv_vm_t *vm, ant_value_t parent, ant_value_t thi
 ant_value_t opt_rt_rest(sv_vm_t *vm, ant_value_t start, ant_value_t unused, ant_value_t *args, int64_t argc, const opt_entry_t *entry);
 ant_value_t opt_rt_rest_array(sv_vm_t *vm, const ant_value_t *args, uint32_t argc, uint32_t start);
 ant_value_t opt_rt_call_args(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t spread);
+ant_value_t opt_rt_call_forward(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, const opt_entry_t *entry);
 ant_value_t opt_rt_new_args(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t spread);
+ant_value_t opt_rt_new_forward(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, const opt_entry_t *entry);
 ant_value_t opt_rt_super_result(ant_value_t result, ant_value_t this_val);
 ant_value_t opt_rt_import_default(sv_vm_t *vm, ant_value_t ns, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_import_named(sv_vm_t *vm, ant_value_t ns, ant_value_t unused, ant_value_t *args, int64_t argc, const sv_atom_t *atom);

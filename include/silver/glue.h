@@ -147,6 +147,12 @@ ant_value_t jit_helper_new_args(
   ant_value_t *args, int argc, int cap, bool spread
 );
 
+ant_value_t jit_helper_call_joined(
+  sv_vm_t *vm, ant_t *js, ant_value_t func, ant_value_t second,
+  ant_value_t *fixed, int fixed_count, const ant_value_t *rest, int rest_count,
+  int cap, bool construct
+);
+
 ant_value_t jit_helper_super_spread(
   sv_vm_t *vm, ant_t *js,
   ant_value_t constructor, ant_value_t this_val,

@@ -318,6 +318,25 @@ ant_value_t jit_helper_new_args(
   return result;
 }
 
+ant_value_t jit_helper_call_joined(
+  sv_vm_t *vm, ant_t *js, ant_value_t func, ant_value_t second,
+  ant_value_t *fixed, int fixed_count, const ant_value_t *rest, int rest_count,
+  int cap, bool construct
+) {
+  sv_call_args_t call;
+  sv_call_args_reset(&call, fixed, fixed_count);
+  
+  ant_value_t status = sv_call_args_place(js, &call, fixed_count, rest, rest_count, cap);
+  if (is_err(status)) return status;
+  
+  ant_value_t result = construct
+    ? jit_helper_new(vm, js, func, second, call.args, call.argc)
+    : sv_vm_call(vm, js, func, second, call.args, call.argc, NULL, Ant_Value_Undefined);
+  sv_call_args_release(&call);
+  
+  return result;
+}
+
 ant_value_t jit_helper_super_spread(
   sv_vm_t *vm, ant_t *js,
   ant_value_t constructor, ant_value_t this_val,
