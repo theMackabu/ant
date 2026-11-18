@@ -496,6 +496,10 @@ void emit_set_var(sv_compiler_t *c, const char *name, uint32_t len, bool keep) {
     js_mkerr_typed(c->js, JS_ERR_SYNTAX, "'super' keyword unexpected here");
     return;
   }
+  if (spilled_const_assignment(c, name, len)) {
+    emit_const_assign_error(c, name, len);
+    return;
+  }
   sv_with_refs_t shadows = {0};
   with_shadows(c, name, len, &shadows);
   if (shadows.count == 0) {

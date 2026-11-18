@@ -158,7 +158,7 @@ static bool eval_scope_builder_capture_with(
   if (!with->marker) {
     char name[32];
     int len = snprintf(
-      name, sizeof(name), "\x01with:%llu",
+      name, sizeof(name), with->implicit ? "\x01scope:%llu" : "\x01with:%llu",
       (unsigned long long)++with_marker_sequence);
     with->marker = intern_string(c->js, name, (size_t)len);
     with->marker_len = (uint32_t)len;

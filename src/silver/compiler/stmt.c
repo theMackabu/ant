@@ -428,7 +428,7 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
         c->with_cap = c->with_cap ? c->with_cap * 2 : 4;
         c->with_scopes = realloc(c->with_scopes, (size_t)c->with_cap * sizeof(*c->with_scopes));
       }
-      c->with_scopes[c->with_depth++] = (sv_with_scope_t){ .local = local, .depth = c->scope_depth };
+      c->with_scopes[c->with_depth++] = (sv_with_scope_t){ .local = local, .depth = c->scope_depth, .block_depth = c->scope_depth };
       
       compile_stmt(c, node->body);
       c->with_depth--;
@@ -478,7 +478,12 @@ void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
         } else compile_lhs_set(c, target, false);
       }
     } else {
-      if (target->type == N_IDENT) {
+      int spill = target->type == N_IDENT ? resolve_spill(c, target->str, target->len) : -1;
+      if (spill >= 0 && c->spills[spill].depth == c->scope_depth) {
+        if (decl->right) compile_expr_with_inferred_name(c, decl->right, target->str, target->len);
+        else emit_op(c, OP_UNDEF);
+        emit_spill_define(c, spill);
+      } else if (target->type == N_IDENT) {
         int idx = ensure_local_at_depth(c, target->str, target->len, is_const, c->scope_depth);
         c->locals[idx].eval_flags |= SV_EVAL_BIND_LEXICAL;
         uint8_t init_type = SV_TI_UNKNOWN;

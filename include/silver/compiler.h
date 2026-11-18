@@ -58,9 +58,21 @@ typedef struct {
 typedef struct {
   int local;
   int depth;
+  int block_depth;
+  bool implicit;
   const char *marker;
   uint32_t marker_len;
 } sv_with_scope_t;
+
+typedef struct {
+  const char *name;
+  uint32_t len;
+  uint32_t hash;
+  int depth;
+  int scope;
+  int next;
+  bool is_const;
+} sv_spill_binding_t;
 
 typedef struct {
   const char *name;
@@ -281,6 +293,13 @@ typedef struct sv_compiler {
   sv_with_scope_t *with_scopes;
   int with_cap;
   int with_depth;
+
+  sv_spill_binding_t *spills;
+  int *spill_heads;
+  int spill_count;
+  int spill_cap;
+  int spill_head_cap;
+  int spill_disabled;
   
   int completion_local;
   int strict_args_local;

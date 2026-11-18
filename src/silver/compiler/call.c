@@ -67,12 +67,37 @@ static bool compile_with_identifier_call(
   with_shadows(c, name, len, &shadows);
   if (shadows.count == 0) return false;
 
+  bool any_implicit = false;
+  for (int i = 0; i < shadows.count; i++) any_implicit |= shadows.refs[i].implicit;
+
   sv_patch_list_t found = {0};
-  emit_with_tries(c, &shadows, OP_WITH_TRY_CALL, name, len, 2, &found);
+  if (!any_implicit) {
+    emit_with_tries(c, &shadows, OP_WITH_TRY_CALL, name, len, 2, &found);
+    emit_op(c, OP_UNDEF);
+    emit_get_var_plain(c, name, len);
+    patch_list_resolve(c, &found);
+    return true;
+  }
+
+  sv_patch_list_t found_implicit = {0};
+  for (int i = 0; i < shadows.count; i++) {
+    int jump = emit_with_try(c, OP_WITH_TRY_CALL, &shadows.refs[i], name, len);
+    patch_list_add(shadows.refs[i].implicit ? &found_implicit : &found, jump);
+    emit_op(c, OP_POP);
+    emit_op(c, OP_POP);
+  }
+  free(shadows.refs);
+
   emit_op(c, OP_UNDEF);
   emit_get_var_plain(c, name, len);
+  int done = emit_jump(c, OP_JMP);
+  patch_list_resolve(c, &found_implicit);
+  emit_op(c, OP_NIP);
+  emit_op(c, OP_UNDEF);
+  emit_op(c, OP_SWAP);
+  patch_jump(c, done);
   patch_list_resolve(c, &found);
-  
+
   return true;
 }
 

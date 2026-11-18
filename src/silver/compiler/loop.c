@@ -96,11 +96,13 @@ static void hoist_loop_head_lexicals(sv_compiler_t *c, sv_ast_t *var_node, bool 
     var_node->var_kind == SV_VAR_USING ||
     var_node->var_kind == SV_VAR_AWAIT_USING;
   int lb = c->local_count;
+  c->spill_disabled++;
   for (int i = 0; i < var_node->args.count; i++) {
     sv_ast_t *decl = var_node->args.items[i];
     if (!decl || decl->type != N_VARDECL || !decl->left) continue;
     hoist_lexical_pattern(c, decl->left, is_const);
   }
+  c->spill_disabled--;
   if (!always_tdz && !loop_head_reads_own_bindings(c, var_node, lb)) return;
   for (int i = lb; i < c->local_count; i++) {
     c->locals[i].is_tdz = true;

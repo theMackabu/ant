@@ -312,6 +312,7 @@ export function targets() {
     'test_jit_uninitialized_numeric_local.cjs',
     'test_jit_unreachable_code.cjs',
     'test_jit_upvalue_tdz.cjs',
+    'test_large_scope_counts.cjs',
     'test_json_error_boundaries.cjs',
     'test_json_lone_surrogates.cjs',
     'test_json_property_list.cjs',

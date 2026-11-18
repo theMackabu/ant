@@ -643,6 +643,8 @@ void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
     compile_expr(c, arg->left);
     compile_expr(c, arg->right);
     emit_op(c, OP_DELETE);
+  } else if (arg->type == N_IDENT && spilled_binding_visible(c, arg->str, arg->len)) {
+    emit_op(c, OP_FALSE);
   } else if (arg->type == N_IDENT) {
     sv_with_refs_t shadows = {0};
     sv_patch_list_t deleted = {0};

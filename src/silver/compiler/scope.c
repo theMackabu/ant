@@ -426,7 +426,128 @@ void begin_scope(sv_compiler_t *c) {
   c->scope_depth++;
 }
 
+static inline bool spill_allowed(const sv_compiler_t *c) {
+  if (c->spill_disabled || !c->enclosing) return false;
+  if (c->scope_depth == 0 && (is_repl_root(c) || sv_compile_mode_is_eval(c->mode))) return false;
+  if (c->scope_depth == 0 && c->mode == SV_COMPILE_MODULE && !c->enclosing->enclosing) return false;
+  return c->local_count - c->param_locals >= SV_SPILL_THRESHOLD;
+}
+
+int resolve_spill_slow(const sv_compiler_t *c, const char *name, uint32_t len) {
+  if (!c->spill_count) return -1;
+  uint32_t hash = sv_compile_ctx_hash_local_name(name, len);
+  for (int i = c->spill_heads[hash & (uint32_t)(c->spill_head_cap - 1)]; i != -1; i = c->spills[i].next) {
+    const sv_spill_binding_t *spill = &c->spills[i];
+    if (spill->hash == hash && spill->len == len && memcmp(spill->name, name, len) == 0) return i;
+  }
+  return -1;
+}
+
+static int spill_scope_for(sv_compiler_t *c) {
+  int block_depth = c->scope_depth;
+  for (int i = c->with_depth - 1; i >= 0; i--) {
+    if (c->with_scopes[i].implicit && c->with_scopes[i].block_depth == block_depth) return i;
+    if (c->with_scopes[i].block_depth < block_depth) break;
+  }
+
+  int local = add_hidden_local(c);
+  emit_op(c, OP_OBJECT);
+  emit_op(c, OP_NULL);
+  emit_op(c, OP_SET_PROTO);
+  emit_put_local(c, local);
+
+  if (c->with_depth >= c->with_cap) {
+    c->with_cap = c->with_cap ? c->with_cap * 2 : 4;
+    c->with_scopes = realloc(c->with_scopes, (size_t)c->with_cap * sizeof(*c->with_scopes));
+  }
+  c->with_scopes[c->with_depth] = (sv_with_scope_t){
+    .local = local, .depth = block_depth == 0 ? -1 : block_depth,
+    .block_depth = block_depth, .implicit = true,
+  };
+  return c->with_depth++;
+}
+
+static void spill_table_grow(sv_compiler_t *c) {
+  if (c->spill_count >= c->spill_cap) {
+    c->spill_cap = c->spill_cap ? c->spill_cap * 2 : 1024;
+    c->spills = realloc(c->spills, (size_t)c->spill_cap * sizeof(*c->spills));
+  }
+  if (c->spill_count * 2 < c->spill_head_cap) return;
+
+  c->spill_head_cap = c->spill_head_cap ? c->spill_head_cap * 2 : 2048;
+  c->spill_heads = realloc(c->spill_heads, (size_t)c->spill_head_cap * sizeof(*c->spill_heads));
+  memset(c->spill_heads, 0xff, (size_t)c->spill_head_cap * sizeof(*c->spill_heads));
+  for (int i = 0; i < c->spill_count; i++) {
+    int bucket = (int)(c->spills[i].hash & (uint32_t)(c->spill_head_cap - 1));
+    c->spills[i].next = c->spill_heads[bucket];
+    c->spill_heads[bucket] = i;
+  }
+}
+
+void emit_spill_define(sv_compiler_t *c, int spill) {
+  emit_get_local(c, c->with_scopes[c->spills[spill].scope].local);
+  emit_op(c, OP_SWAP);
+  emit_atom_op(c, OP_DEFINE_FIELD, c->spills[spill].name, c->spills[spill].len);
+  emit_op(c, OP_POP);
+}
+
+bool declare_spilled_slow(sv_compiler_t *c, const char *name, uint32_t len, bool is_const, bool define) {
+  int existing = resolve_spill(c, name, len);
+  if (existing >= 0 && c->spills[existing].depth == c->scope_depth) return true;
+  if (!spill_allowed(c)) return false;
+
+  int scope = spill_scope_for(c);
+  spill_table_grow(c);
+  uint32_t hash = sv_compile_ctx_hash_local_name(name, len);
+  int bucket = (int)(hash & (uint32_t)(c->spill_head_cap - 1));
+  int index = c->spill_count++;
+  c->spills[index] = (sv_spill_binding_t){
+    .name = name, .len = len, .hash = hash,
+    .depth = c->scope_depth, .scope = scope,
+    .next = c->spill_heads[bucket], .is_const = is_const,
+  };
+  c->spill_heads[bucket] = index;
+
+  if (define) {
+    emit_op(c, OP_UNDEF);
+    emit_spill_define(c, index);
+  }
+  return true;
+}
+
+static const sv_spill_binding_t *nearest_spill(sv_compiler_t *c, const char *name, uint32_t len) {
+  for (sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
+    int local = resolve_local(cur, name, len);
+    int spill = resolve_spill(cur, name, len);
+    if (spill >= 0 && (local < 0 || cur->locals[local].depth < cur->spills[spill].depth)) return &cur->spills[spill];
+    if (local >= 0 || cur->owns_eval_env) break;
+  }
+  return NULL;
+}
+
+bool spilled_const_assignment(sv_compiler_t *c, const char *name, uint32_t len) {
+  if (!has_active_with_scope(c)) return false;
+  const sv_spill_binding_t *spill = nearest_spill(c, name, len);
+  return spill && spill->is_const;
+}
+
+bool spilled_binding_visible(sv_compiler_t *c, const char *name, uint32_t len) {
+  return has_active_with_scope(c) && nearest_spill(c, name, len) != NULL;
+}
+
+static void end_spill_scopes(sv_compiler_t *c) {
+  while (c->spill_count > 0 && c->spills[c->spill_count - 1].depth >= c->scope_depth) {
+    sv_spill_binding_t *spill = &c->spills[--c->spill_count];
+    c->spill_heads[spill->hash & (uint32_t)(c->spill_head_cap - 1)] = spill->next;
+  }
+  while (
+    c->with_depth > 0 && c->with_scopes[c->with_depth - 1].implicit &&
+    c->with_scopes[c->with_depth - 1].block_depth >= c->scope_depth
+  ) c->with_depth--;
+}
+
 void end_scope(sv_compiler_t *c) {
+  if (c->spill_count) end_spill_scopes(c);
   while (
     c->local_count > 0 &&
     c->locals[c->local_count - 1].depth >= c->scope_depth
@@ -463,7 +584,7 @@ static void with_refs_push(sv_with_refs_t *out, sv_with_ref_t ref) {
 
 static void with_refs_push_marker(void *ctx, const char *marker, uint32_t len) {
   with_refs_push(ctx, (sv_with_ref_t){
-    .kind = SV_WITH_REF_ENV,
+    .kind = SV_WITH_REF_ENV, .implicit = len > 1 && marker[1] == 's',
     .marker = marker, .marker_len = len,
   });
 }
@@ -491,7 +612,7 @@ void with_shadows(sv_compiler_t *c, const char *name, uint32_t len, sv_with_refs
         : resolve_upvalue_to(c, cur, scope->local);
       if (slot >= 0) with_refs_push(out, (sv_with_ref_t){
         .kind = cur == c ? SV_WITH_REF_LOCAL : SV_WITH_REF_UPVALUE,
-        .idx = (uint16_t)slot,
+        .implicit = scope->implicit, .idx = (uint16_t)slot,
       });
     }
     if (local >= 0 || cur->owns_eval_env) break;
@@ -533,7 +654,7 @@ static void emit_with_ref_load(sv_compiler_t *c, const sv_with_ref_t *ref) {
   }
 }
 
-static int emit_with_try(sv_compiler_t *c, sv_op_t op, const sv_with_ref_t *ref, const char *name, uint32_t len) {
+int emit_with_try(sv_compiler_t *c, sv_op_t op, const sv_with_ref_t *ref, const char *name, uint32_t len) {
   emit_with_ref_load(c, ref);
   emit_op(c, op);
   emit_u32(c, (uint32_t)add_atom(c, name, len));

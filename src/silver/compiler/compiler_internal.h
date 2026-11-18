@@ -42,10 +42,13 @@ typedef enum {
 
 typedef struct {
   sv_with_ref_kind_t kind;
+  bool implicit;
   uint16_t idx;
   const char *marker;
   uint32_t marker_len;
 } sv_with_ref_t;
+
+static constexpr int SV_SPILL_THRESHOLD = 32768;
 
 typedef struct {
   sv_with_ref_t *refs;
@@ -195,6 +198,21 @@ void begin_scope(sv_compiler_t *c);
 void end_scope(sv_compiler_t *c);
 void emit_close_upvals(sv_compiler_t *c);
 int resolve_upvalue_to(sv_compiler_t *c, sv_compiler_t *owner, int local);
+int resolve_spill_slow(const sv_compiler_t *c, const char *name, uint32_t len);
+bool declare_spilled_slow(sv_compiler_t *c, const char *name, uint32_t len, bool is_const, bool define);
+
+static inline int resolve_spill(const sv_compiler_t *c, const char *name, uint32_t len) {
+  return __builtin_expect(c->spill_count == 0, 1) ? -1 : resolve_spill_slow(c, name, len);
+}
+
+static inline bool declare_spilled(sv_compiler_t *c, const char *name, uint32_t len, bool is_const, bool define) {
+  if (__builtin_expect(c->spill_count == 0 && c->local_count - c->param_locals < SV_SPILL_THRESHOLD, 1)) return false;
+  return declare_spilled_slow(c, name, len, is_const, define);
+}
+bool spilled_const_assignment(sv_compiler_t *c, const char *name, uint32_t len);
+bool spilled_binding_visible(sv_compiler_t *c, const char *name, uint32_t len);
+void emit_spill_define(sv_compiler_t *c, int spill);
+int emit_with_try(sv_compiler_t *c, sv_op_t op, const sv_with_ref_t *ref, const char *name, uint32_t len);
 void with_shadows(sv_compiler_t *c, const char *name, uint32_t len, sv_with_refs_t *out);
 bool local_with_shadowed(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_with_tries(
