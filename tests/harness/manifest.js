@@ -427,6 +427,7 @@ export function targets() {
     'test_regexp_fast_tiers.cjs',
     'test_regexp_instance_layout.cjs',
     'test_regexp_internal_state.cjs',
+    'test_proxy_own_keys_array_like.cjs',
     'test_regexp_lastindex_conversion.cjs',
     'test_regexp_legacy_ignorecase.cjs',
     'test_proxy_recursion_guard.cjs',

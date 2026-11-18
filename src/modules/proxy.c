@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "keys.h"
+#include "index.h"
 #include "cfunc.h"
 #include "arrays.h"
 #include "props.h"
@@ -147,6 +148,28 @@ static __attribute__((noinline, cold)) ant_value_t proxy_revoked_error(ant_t *js
 static ant_value_t proxy_get_method(ant_t *js, ant_value_t handler, const char *name);
 static bool proxy_target_is_extensible(ant_value_t obj);
 
+static ant_value_t proxy_list_from_array_like(ant_t *js, ant_value_t source) {
+  if (!is_object_type(source)) return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap must return an object");
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t list = Ant_Array_Create(js);
+  GC_ROOT_PIN(js, list);
+  size_t length = 0;
+  ant_value_t status = is_err(list) ? list : js_getprop_fallback(js, source, "length");
+  if (!is_err(status)) status = js_to_length_fast(js, status, &length);
+  if (!is_err(status) && length > UINT32_MAX) status = js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
+  for (size_t i = 0; i < length && !is_err(status); i++) {
+    char index[24];
+    snprintf(index, sizeof index, "%zu", i);
+    status = js_getprop_fallback(js, source, index);
+    if (is_err(status)) break;
+    if (vtype(status) != kTypeString && vtype(status) != kTypeSymbol)
+      status = js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap result must contain only strings or symbols");
+    else js_arr_push(js, list, status);
+  }
+  GC_ROOT_RESTORE(js, mark);
+  return is_err(status) ? status : list;
+}
+
 ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, obj);
@@ -187,11 +210,15 @@ ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
     GC_ROOT_RESTORE(js, root_mark);
     return result;
   }
-  if (vtype(result) != kTypeArray) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap must return an array");
-  }
   GC_ROOT_PIN(js, result);
+  if (vtype(result) != kTypeArray) {
+    result = proxy_list_from_array_like(js, result);
+    if (is_err(result)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return result;
+    }
+    GC_ROOT_PIN(js, result);
+  }
 
   ant_offset_t len = get_array_length(js, result);
   for (ant_offset_t i = 0; i < len; i++) {
