@@ -461,6 +461,7 @@ export function targets() {
     'test_stream_async_iterator.mjs',
     'test_stream_handled_errors.cjs',
     'test_stream_readable_paused_mode.cjs',
+    'test_strict_undefined_assignment.cjs',
     'test_stream_lifecycle_parity.cjs',
     'test_stream_native_state.cjs',
     'test_stream_readable_to_web.cjs',

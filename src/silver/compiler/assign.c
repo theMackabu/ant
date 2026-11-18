@@ -274,6 +274,27 @@ void compile_update(sv_compiler_t *c, sv_ast_t *node) {
 void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *target = node->left;
   uint8_t op = node->op;
+  if (target->type == N_UNDEF && undefined_shadowed(c)) {
+    target->type = N_IDENT;
+    target->str = "undefined";
+    target->len = 9;
+  }
+
+  if (target->type == N_UNDEF && op != TOK_ASSIGN) {
+    static const char message[] = "Cannot assign to read only property 'undefined' of object '#<Object>'";
+    emit_op(c, OP_UNDEF);
+    if (op == TOK_LAND_ASSIGN) return;
+    if (op == TOK_LOR_ASSIGN || op == TOK_NULLISH_ASSIGN) {
+      emit_op(c, OP_POP);
+      compile_expr(c, node->right);
+    } else {
+      compile_expr(c, node->right);
+      emit_compound_assign_op(c, op);
+    }
+    if (c->is_strict) emit_throw_type_error(c, message, sizeof(message) - 1);
+    return;
+  }
+
   self_append_match_t append;
   bool can_append_builder = match_self_append_local(c, node, &append);
 
@@ -485,6 +506,11 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
 void compile_lhs_set(sv_compiler_t *c, sv_ast_t *target, bool keep) {
   if (target->type == N_IDENT) {
     emit_set_var(c, target->str, target->len, keep);
+  } else if (target->type == N_UNDEF && undefined_shadowed(c)) {
+    emit_set_var(c, "undefined", 9, keep);
+  } else if (target->type == N_UNDEF && c->is_strict) {
+    static const char message[] = "Cannot assign to read only property 'undefined' of object '#<Object>'";
+    emit_throw_type_error(c, message, sizeof(message) - 1);
   } else if (target->type == N_MEMBER && !(target->flags & 1) && is_private_name_node(target->right)) {
     (void)keep;
     compile_expr(c, target->left);
