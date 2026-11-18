@@ -225,6 +225,7 @@ export function targets() {
     'test_fulfilled_await_jobs.mjs',
     'test_function_bind_construct.cjs',
     'test_function_kind_constructors.cjs',
+    'test_dynamic_import_tla_dependency.mjs',
     'test_gc_array_cards.cjs',
     'test_gc_compiled_code.cjs',
     'test_gc_native_buffers.cjs',
