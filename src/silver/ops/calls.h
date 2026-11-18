@@ -335,12 +335,12 @@ static inline ant_value_t sv_op_super_forward(sv_vm_t *vm, ant_t *js, sv_frame_t
   return sv_super_call(vm, js, frame, vm->sp - 3, frame ? frame->bp : NULL, frame ? frame->argc : 0);
 }
 
-static inline __attribute__((noinline)) ant_value_t sv_op_super_apply(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint8_t *ip) {
+static inline ant_value_t sv_super_call_args(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint8_t *ip, bool spread) {
   uint16_t argc = sv_get_u16(ip + 1);
   int base = vm->sp - argc - 3;
   sv_call_args_t call;
 
-  ant_value_t status = sv_stack_call_args(vm, js, &call, base + 3, argc, false);
+  ant_value_t status = sv_stack_call_args(vm, js, &call, base + 3, argc, spread);
   if (is_err(status)) { vm->sp = base; return status; }
 
   ant_value_t result = sv_super_call(vm, js, frame, base, call.args, call.argc);
@@ -349,7 +349,23 @@ static inline __attribute__((noinline)) ant_value_t sv_op_super_apply(sv_vm_t *v
   return result;
 }
 
-__attribute__((noinline)) ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip);
+static inline __attribute__((noinline)) ant_value_t sv_op_super_apply(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint8_t *ip) {
+  return sv_super_call_args(vm, js, frame, ip, false);
+}
+
+static inline __attribute__((noinline)) ant_value_t sv_op_super_spread(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint8_t *ip) {
+  return sv_super_call_args(vm, js, frame, ip, true);
+}
+
+__attribute__((noinline)) ant_value_t sv_new_call_args(sv_vm_t *vm, ant_t *js, uint8_t *ip, bool spread);
+
+static inline __attribute__((noinline)) ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+  return sv_new_call_args(vm, js, ip, false);
+}
+
+static inline __attribute__((noinline)) ant_value_t sv_op_new_spread(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+  return sv_new_call_args(vm, js, ip, true);
+}
 
 __attribute__((noinline)) 
 static inline ant_value_t sv_eval_in_frame(
@@ -619,7 +635,7 @@ ant_value_t sv_spread_call_args_slow(sv_vm_t *vm, ant_t *js, sv_call_args_t *a, 
   return status;
 }
 
-ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+ant_value_t sv_new_call_args(sv_vm_t *vm, ant_t *js, uint8_t *ip, bool spread) {
   uint16_t argc = sv_get_u16(ip + 1);
   int base = vm->sp - argc - 2;
   
@@ -628,7 +644,7 @@ ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   ant_value_t effective_new_target = new_target;
   sv_call_args_t call;
 
-  ant_value_t status = sv_stack_call_args(vm, js, &call, base + 2, argc, false);
+  ant_value_t status = sv_stack_call_args(vm, js, &call, base + 2, argc, spread);
   if (is_err(status)) { 
     vm->sp = base; 
     return status; 

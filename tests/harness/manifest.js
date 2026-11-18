@@ -346,6 +346,7 @@ export function targets() {
     'test_node_http_header_validation.cjs',
     'test_nul_property_keys.cjs',
     'test_numeric_coercion_errors.cjs',
+    'test_new_super_spread.cjs',
     'test_numeric_literal_keys.cjs',
     'test_object_assign_sources.cjs',
     'test_object_isprototypeof_proxy.cjs',

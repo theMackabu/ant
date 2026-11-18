@@ -311,6 +311,8 @@ OP_DEF(  ARRAY_LITERAL,     5,   0,   1, u32)       /* push array built from lit
 OP_DEF(  ARRAY_INIT,        5,   2,   1, u32)       /* arr val -> arr (store into fresh literal at index) */
 OP_DEF(  GET_SUPER_FIELD,   7,   2,   1, atom)      /* this home -> value (atom + ic_idx:u16) */
 OP_DEF(  PUT_SUPER_FIELD,   7,   3,   1, atom)      /* this home value -> value (atom + ic_idx:u16) */
+OP_DEF(  NEW_SPREAD,        3,   2,   1, npop)
+OP_DEF(  SUPER_SPREAD,      3,   3,   1, npop)
 #undef OP_DEF
 #undef op_def
 #endif
@@ -477,6 +479,7 @@ OP_FLAG(TAIL_CALL_METHOD      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV
 OP_FLAG(NEW                   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_OPT_NATIVE)
 OP_FLAG(APPLY                 , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(CALL_SPREAD           , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
+OP_FLAG(NEW_SPREAD            , SV_OPF_JIT_QUIET_INELIGIBLE)
 OP_FLAG(SUPER_FORWARD         , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(NEW_APPLY             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(RETURN                , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_TERMINAL | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY | SV_OPF_JIT_INLINE_AFTER_EFFECT)

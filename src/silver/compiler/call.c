@@ -195,13 +195,18 @@ static void compile_call_emit_invoke(
     if (kind == SV_CALL_METHOD) emit_op(c, OP_SWAP);
     else if (kind == SV_CALL_DIRECT) emit_op(c, OP_UNDEF);
     
-    if (kind != SV_CALL_SUPER && call_spread_is_last_only(node)) {
+    if (call_spread_is_last_only(node)) {
       for (int i = 0; i < argc - 1; i++) compile_expr(c, node->args.items[i]);
       compile_expr(c, node->args.items[argc - 1]->right);
       
       emit_call_srcpos(c, node);
-      emit_op(c, OP_CALL_SPREAD);
+      emit_op(c, kind == SV_CALL_SUPER ? OP_SUPER_SPREAD : OP_CALL_SPREAD);
       emit_u16(c, (uint16_t)argc);
+      
+      if (kind == SV_CALL_SUPER) {
+        emit_this_store(c);
+        emit_derived_field_inits(c);
+      }
       
       return;
     }
@@ -757,7 +762,14 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
 void compile_new(sv_compiler_t *c, sv_ast_t *node) {
   compile_expr(c, node->left);
   emit_op(c, OP_DUP);
-  if (call_has_spread_arg(node)) {
+  if (call_spread_is_last_only(node)) {
+    int argc = node->args.count;
+    for (int i = 0; i < argc - 1; i++) compile_expr(c, node->args.items[i]);
+    compile_expr(c, node->args.items[argc - 1]->right);
+    emit_srcpos(c, node);
+    emit_op(c, OP_NEW_SPREAD);
+    emit_u16(c, (uint16_t)argc);
+  } else if (call_has_spread_arg(node)) {
     compile_call_args_array(c, node);
     emit_srcpos(c, node);
     emit_op(c, OP_NEW_APPLY);

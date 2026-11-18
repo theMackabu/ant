@@ -115,8 +115,8 @@ static bool sv_inlined_is_construct(const sv_jit_frame_t *callee, const sv_jit_f
   if (!f || !f->code || caller->bc_off < 0 || caller->bc_off >= f->code_len) return false;
   
   switch (f->code[caller->bc_off]) {
-    case OP_NEW: case OP_NEW_APPLY:
-    case OP_CALL_SUPER: case OP_SUPER_APPLY: case OP_SUPER_FORWARD: return true;
+    case OP_NEW: case OP_NEW_APPLY: case OP_NEW_SPREAD:
+    case OP_CALL_SUPER: case OP_SUPER_APPLY: case OP_SUPER_SPREAD: case OP_SUPER_FORWARD: return true;
     default: return false;
   }
 }
