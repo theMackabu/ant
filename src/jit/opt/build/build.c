@@ -2049,13 +2049,16 @@ static void opt_field_memo_store(opt_builder_t *b, const opt_field_case_t *cases
   if (kept) opt_tier_field_remember(b->js, b->func, b->pc, memo, kept);
 }
 
-static bool opt_field_case_retain(opt_builder_t *b, const opt_field_case_t *access) {
-  if (!jit_snapshot_shape(b->js, access->shape)) return false;
+static bool opt_field_links_retain(opt_builder_t *b, const opt_field_case_t *access) {
   for (uint32_t i = 0; i < access->depth; i++) {
     ant_proto_watch(access->links[i]);
     if (!jit_snapshot_shape(b->js, access->links[i]->shape) || !opt_retain(b, access->values[i])) return false;
   }
   return true;
+}
+
+static bool opt_field_case_retain(opt_builder_t *b, const opt_field_case_t *access) {
+  return jit_snapshot_shape(b->js, access->shape) && opt_field_links_retain(b, access);
 }
 
 static void opt_note_likely_value(opt_builder_t *b, ir_node_id_t node, ant_value_t value) {
@@ -4404,7 +4407,114 @@ static opt_flow_t opt_build_array_init(opt_builder_t *b, const uint8_t *ip) {
   return OPT_FLOW_CONTINUE;
 }
 
+typedef struct {
+  ant_value_t home;
+  ant_object_t *owner;
+  ant_value_t base;
+  bool by_identity;
+} opt_super_home_t;
+
+static ant_object_t *opt_fixed_prototype(ant_t *js, const ant_object_t *func_obj) {
+  if (func_obj->flags.is_exotic || !func_obj->shape) return NULL;
+  int32_t slot = ant_shape_lookup_interned(func_obj->shape, js->intern.prototype);
+  if (slot < 0 || (uint32_t)slot >= func_obj->prop_count) return NULL;
+  const ant_shape_prop_t *prop = ant_shape_prop_at(func_obj->shape, (uint32_t)slot);
+  if (!prop || prop->has_getter || prop->has_setter || (prop->attrs & (ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE))) return NULL;
+  ant_value_t proto = ant_object_prop_get_unchecked(func_obj, (uint32_t)slot);
+  return vtype(proto) == kTypeObject ? opt_live_object(js, proto) : NULL;
+}
+
+static bool opt_super_home(const opt_builder_t *b, ir_node_id_t node, opt_super_home_t *out) {
+  ant_t *js = b->js;
+  ant_value_t home = opt_likely_value(b, node);
+  const sv_closure_t *closure = b->ctx->closure;
+  if (!home && !b->inline_call && !b->func->is_arrow && closure && closure->func == b->func && (closure->call_flags & SV_CALL_HAS_SUPER))
+    home = closure->super_val;
+  ant_object_t *owner = NULL;
+  bool by_identity = vtype(home) == kTypeFunction && !b->func->is_static;
+  if (vtype(home) == kTypeObject) owner = opt_live_object(js, home);
+  else if (vtype(home) == kTypeFunction) owner = opt_prototype_object(js, home);
+  if (owner && by_identity) owner = opt_fixed_prototype(js, owner);
+  if (!owner || owner->flags.is_exotic || !owner->shape) return false;
+  ant_value_t base = ant_shape_proto(owner->shape);
+  if (!is_object_type(base)) return false;
+  *out = (opt_super_home_t){.home = home, .owner = owner, .base = base, .by_identity = by_identity};
+  return true;
+}
+
+static bool opt_super_may_speculate(const opt_builder_t *b) {
+  return opt_may_speculate(b, OPT_EXIT_BAD_SHAPE) && opt_may_speculate(b, b->func->is_static ? OPT_EXIT_BAD_TYPE : OPT_EXIT_NOT_OBJECT);
+}
+
+static void opt_super_guard(opt_builder_t *b, ir_node_id_t node, const opt_super_home_t *site) {
+  ir_node_id_t address;
+  if (site->by_identity) {
+    if (!ir_is_constant(b->graph, node)) opt_expect_value(b, node, site->home, NULL, NULL);
+    address = opt_typed_constant(b, (uint64_t)(uintptr_t)site->owner, OPT_REPR_POINTER);
+  } else if (b->func->is_static) address = opt_emit_checked(b, ir_op(IR_OP_OBJECT_ADDRESS), &node, 1, OPT_REPR_POINTER);
+  else address = opt_emit1(b, IR_OP_CELL_ADDRESS, opt_emit_checked(b, ir_op(IR_OP_CHECK_OBJECT), &node, 1, OPT_REPR_NONE), OPT_REPR_POINTER);
+  opt_expect_value(b, opt_emit(b, ir_op(IR_OP_LOAD_PROTOTYPE), &address, 1, OPT_REPR_TAGGED), site->base, NULL, NULL);
+}
+
+static bool opt_super_chain(const opt_builder_t *b, ant_value_t base, const sv_atom_t *atom, opt_field_case_t *out) {
+  ant_t *js = b->js;
+  *out = (opt_field_case_t){0};
+  ant_value_t value = base;
+  for (uint32_t depth = 0; depth < OPT_MAX_PROTOTYPE_DEPTH; depth++) {
+    ant_object_t *object = opt_prototype_object(js, value);
+    if (!object || object->flags.is_exotic || !object->shape) return false;
+    out->values[depth] = value;
+    out->links[depth] = object;
+    out->depth = depth + 1;
+    int32_t slot = ant_shape_lookup_interned(object->shape, atom->str);
+    if (slot >= 0) {
+      out->index = (uint32_t)slot;
+      return (uint32_t)slot < object->prop_count && opt_field_slot_ok(js, object->shape, (uint32_t)slot, atom, false, &out->getter);
+    }
+    value = ant_object_proto(object);
+  }
+  return false;
+}
+
+static bool opt_super_key_atom(opt_builder_t *b, bool field, sv_atom_t *atom) {
+  if (field) {
+    uint32_t atom_index = sv_get_u32(b->func->code + b->pc + 1);
+    if (atom_index >= (uint32_t)b->func->atom_count) return false;
+    *atom = b->func->atoms[atom_index];
+    return true;
+  }
+  return false;
+}
+
+static bool opt_try_super_get(opt_builder_t *b, bool field, opt_flow_t *flow) {
+  sv_atom_t atom;
+  if (!opt_super_key_atom(b, field, &atom) || !opt_super_may_speculate(b)) return false;
+  uint32_t operands = field ? 2 : 3;
+  ir_node_id_t receiver = opt_tagged(b, opt_peek(b, operands - 1)), home = opt_tagged(b, opt_peek(b, operands - 2));
+  opt_super_home_t site;
+  opt_field_case_t access;
+  if (!opt_super_home(b, home, &site) || !opt_super_chain(b, site.base, &atom, &access)) return false;
+  if ((site.by_identity && !opt_retain(b, site.home)) || (access.getter && !opt_retain(b, access.getter))) return false;
+  if (!opt_field_links_retain(b, &access)) return false;
+
+  opt_super_guard(b, home, &site);
+  if (access.getter) {
+    ir_node_id_t holder, holder_address;
+    opt_holder_chain(b, IR_NONE, &access, true, NULL, NULL, &holder, &holder_address);
+    ir_node_id_t inputs[3] = {IR_NONE, receiver, IR_NONE};
+    *flow = opt_call_known(b, OP_CALL_METHOD, access.getter, inputs, 0, operands);
+    return true;
+  }
+  ir_node_id_t loaded = opt_holder_load(b, IR_NONE, &access, NULL, NULL);
+  opt_drop(b, operands);
+  opt_push(b, loaded);
+  *flow = OPT_FLOW_CONTINUE;
+  return true;
+}
+
 static opt_flow_t opt_build_super_access(opt_builder_t *b, bool put, bool field) {
+  opt_flow_t flow;
+  if (!put && opt_try_super_get(b, field, &flow)) return flow;
   opt_rt_site_t *at = code_arena_bump(b->js, sizeof *at);
   if (!at) return OPT_FLOW_GENERIC;
   *at = (opt_rt_site_t){.func = b->func, .bc_off = b->pc};
