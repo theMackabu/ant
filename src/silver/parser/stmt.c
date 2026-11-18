@@ -1,6 +1,36 @@
 #include "parser_internal.h"
 
+static bool is_function_decl_stmt(const sv_ast_t *n) {
+  return n && n->type == N_FUNC && !(n->flags & (FN_ARROW | FN_PAREN));
+}
+
+static bool is_class_decl_stmt(const sv_ast_t *n) {
+  return n && n->type == N_CLASS && !(n->flags & FN_PAREN);
+}
+
+static bool is_body_declaration(const sv_ast_t *n) {
+  const sv_ast_t *body = n;
+  while (body && body->type == N_LABEL) body = body->body;
+  return is_lexical_decl_stmt((sv_ast_t *)n) || is_class_decl_stmt(n) || is_function_decl_stmt(body);
+}
+
 static sv_ast_t *parse_stmt(sv_parser_t *p);
+
+static bool check_if_branch(sv_parser_t *p, const sv_ast_t *branch) {
+  const sv_ast_t *body = branch;
+  while (body && body->type == N_LABEL) body = body->body;
+
+  if (is_lexical_decl_stmt((sv_ast_t *)branch) || is_class_decl_stmt(branch)) {
+    SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
+    return false;
+  }
+  if (is_function_decl_stmt(body) &&
+      (body != branch || p->lx.strict || (body->flags & (FN_ASYNC | FN_GENERATOR)))) {
+    SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "In strict mode code, functions can only be declared at top level or inside a block");
+    return false;
+  }
+  return true;
+}
 
 void sv_parse_stmt_list(sv_parser_t *p, sv_ast_list_t *out, bool stop_at_rbrace, bool directive_ctx, bool module_items) {
   bool strict_mode = p->lx.strict;
@@ -197,17 +227,11 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
     n->cond = parse_expr(p);
     expect(p, TOK_RPAREN);
     n->left = parse_stmt(p);
-    if (is_lexical_decl_stmt(n->left)) {
-      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
-      return n;
-    }
+    if (!check_if_branch(p, n->left)) return n;
     if (sv_lexer_next(&p->lx) == TOK_ELSE) {
       p->lx.st.consumed = 1;
       n->right = parse_stmt(p);
-      if (is_lexical_decl_stmt(n->right)) {
-        SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
-        return n;
-      }
+      if (!check_if_branch(p, n->right)) return n;
     }
     return n;
   }
@@ -219,7 +243,7 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
     n->cond = parse_expr(p);
     expect(p, TOK_RPAREN);
     n->body = parse_stmt(p);
-    if (is_lexical_decl_stmt(n->body))
+    if (is_body_declaration(n->body))
       SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
     return n;
   }
@@ -228,7 +252,7 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
     p->lx.st.consumed = 1;
     sv_ast_t *n = mk(N_DO_WHILE);
     n->body = parse_stmt(p);
-    if (is_lexical_decl_stmt(n->body))
+    if (is_body_declaration(n->body))
       SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
     expect(p, TOK_WHILE);
     expect(p, TOK_LPAREN);
@@ -291,7 +315,7 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
       n->body = parse_stmt(p);
       if (p->lx.strict && init_node && init_node->type == N_VAR && var_decl_has_initializer(init_node))
         SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "for-in loop variable declaration may not have an initializer in strict mode");
-      if (is_lexical_decl_stmt(n->body))
+      if (is_body_declaration(n->body))
         SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
       return n;
     }
@@ -303,7 +327,7 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
       n->right = parse_assign(p);
       expect(p, TOK_RPAREN);
       n->body = parse_stmt(p);
-      if (is_lexical_decl_stmt(n->body))
+      if (is_body_declaration(n->body))
         SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
       return n;
     }
@@ -331,7 +355,7 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
       n->update = parse_expr(p);
     expect(p, TOK_RPAREN);
     n->body = parse_stmt(p);
-    if (is_lexical_decl_stmt(n->body))
+    if (is_body_declaration(n->body))
       SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
     return n;
   }
@@ -499,16 +523,19 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
   }
 
   l_expr_stmt: {
-    if (p->lx.st.tok == TOK_IDENTIFIER || is_contextual_ident_tok(p->lx.st.tok)) {
-      uint8_t la = sv_lexer_lookahead(&p->lx);
-      if (la == TOK_COLON) {
+    if ((p->lx.st.tok == TOK_IDENTIFIER || is_contextual_ident_tok(p->lx.st.tok)) && sv_lexer_lookahead(&p->lx) == TOK_COLON) {
         sv_ast_t *label = mk(N_LABEL);
         label->str = tok_ident_str(p, &label->len);
         p->lx.st.consumed = 1;
         sv_lexer_next(&p->lx); p->lx.st.consumed = 1;
         label->body = parse_stmt(p);
-        return label;
+      if (is_lexical_decl_stmt(label->body) || is_class_decl_stmt(label->body)) {
+        SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
+      } else if (is_function_decl_stmt(label->body) &&
+          (p->lx.strict || (label->body->flags & (FN_ASYNC | FN_GENERATOR)))) {
+        SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "In strict mode code, functions can only be declared at top level or inside a block");
       }
+      return label;
     }
 
     sv_ast_t *expr = parse_expr(p);

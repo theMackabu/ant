@@ -207,6 +207,7 @@ export function targets() {
     'test_construct_returns_builtin.cjs',
     'test_ffi_error_boundaries.cjs',
     'test_finally_completion.cjs',
+    'test_declaration_statement_positions.cjs',
     'test_for_init_nested_in.cjs',
     'test_for_update_tonumeric.cjs',
     'test_fs_dir_async_recursive.cjs',
