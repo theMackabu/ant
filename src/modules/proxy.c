@@ -1737,29 +1737,7 @@ ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, 
   if (vtype(target) == kTypeObject && is_proxy(target))
     return js_proxy_construct(js, target, args, argc, new_target);
 
-  ant_value_t effective_new_target = new_target;
-  ant_value_t proto;
-  
-  if (new_target != target) {
-    proto = js_getprop_fallback(js, new_target, "prototype");
-    if (!is_err(proto) && !is_object_type(proto)) proto = js->sym.object_proto;
-  } else proto = sv_prepare_construct_meta(js, target, new_target, &effective_new_target);
-  if (is_err(proto)) return proto;
-
-  ant_value_t obj = mkobj(js, 0);
-  if (is_object_type(proto)) js_set_proto_init(obj, proto);
-
-  ant_value_t ctor_this = obj;
-  ant_value_t result = sv_vm_call(
-    js->vm, js, target, obj, args, 
-    argc, &ctor_this, effective_new_target
-  );
-  
-  if (is_err(result)) return result;
-  
-  return is_object_type(result)
-    ? result
-    : (is_object_type(ctor_this) ? ctor_this : obj);
+  return sv_construct(js->vm, js, target, args, argc, new_target);
 }
 
 static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {

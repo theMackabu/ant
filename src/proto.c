@@ -117,6 +117,8 @@ ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_pr
     ant_value_t nt_obj = js_as_obj(new_target);
     ant_value_t nt_proto = lkp_interned_val(js, nt_obj, js->intern.prototype);
     if (is_object_type(nt_proto)) instance_proto = nt_proto;
+  } else if (vtype(new_target) == kTypeObject && js->construct_proxy_target == new_target) {
+    instance_proto = js->construct_proxy_proto;
   }
 
   if (!is_object_type(instance_proto) && is_object_type(fallback_proto)) instance_proto = fallback_proto;

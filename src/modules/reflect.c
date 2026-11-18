@@ -119,8 +119,8 @@ static ant_value_t reflect_construct(ant_params_t) {
   if (is_err(err)) return err;
   
   ant_value_t result;
-  if (vtype(target) == kTypeObject && is_proxy(target)) {
-    result = js_proxy_construct(js, target, list.args, list.argc, new_target);
+  if (new_target != target || vtype(target) != kTypeFunction) {
+    result = sv_construct(js->vm, js, target, list.args, list.argc, new_target);
   } else {
     ant_value_t effective_new_target = new_target;
     ant_value_t proto = sv_prepare_construct_meta(js, target, new_target, &effective_new_target);

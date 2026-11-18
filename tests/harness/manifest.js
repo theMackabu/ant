@@ -173,6 +173,7 @@ export function targets() {
     'test_async_generator_yield_star_async.mjs',
     'test_web_compat.mjs',
     'test_exports_condition_order.mjs',
+    'test_construct_new_target_prototype.cjs',
     'test_fetch_keepalive.mjs',
     'test_string_raw_newline.cjs',
     'test_buffer_alloc_validation.cjs',
