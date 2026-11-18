@@ -504,6 +504,7 @@ export function targets() {
     'test_super_property_assign.cjs',
     'test_temporal.js',
     'test_timer_fired_timeout_gc.cjs',
+    'test_super_property_ic.cjs',
     'test_timer_handle.cjs',
     'test_timer_stale_loop_time.cjs',
     'test_tty_error_boundaries.cjs',

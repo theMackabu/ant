@@ -1065,6 +1065,21 @@ ant_value_t opt_rt_put_super(sv_vm_t *vm, ant_value_t receiver, ant_value_t home
   return jit_helper_put_super(vm, vm->js, site->func, receiver, home, args[0], args[1]);
 }
 
+static inline sv_ic_entry_t *opt_rt_site_ic(const opt_rt_site_t *site) {
+  uint16_t index = sv_get_u16(site->func->code + site->bc_off + 5);
+  return site->func->ic_slots && index < site->func->ic_count ? &site->func->ic_slots[index] : NULL;
+}
+
+ant_value_t opt_rt_get_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
+  sv_atom_t *atom = &site->func->atoms[sv_get_u32(site->func->code + site->bc_off + 1)];
+  return Silver_Super_GetField(vm->js, site->func, receiver, home, atom, opt_rt_site_ic(site));
+}
+
+ant_value_t opt_rt_put_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
+  const sv_atom_t *atom = &site->func->atoms[sv_get_u32(site->func->code + site->bc_off + 1)];
+  return Silver_Super_PutField(vm->js, site->func, receiver, home, atom, args[0], opt_rt_site_ic(site));
+}
+
 ant_value_t opt_rt_closure(sv_vm_t *vm, sv_closure_t *parent, ant_value_t this_val, ant_value_t *args, int64_t argc, const opt_rt_closure_site_t *site) {
   return jit_helper_closure_inherited(vm->js, site->func, parent, this_val, site->index, site->name, site->name_len);
 }

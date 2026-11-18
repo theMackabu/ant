@@ -384,6 +384,16 @@ L_GET_SUPER_VAL: {
   NEXT(OP_GET_SUPER_VAL);
 }
 
+L_GET_SUPER_FIELD: {
+  VM_CHECK(sv_op_get_super_field(vm, js, frame, ip));
+  NEXT(OP_GET_SUPER_FIELD);
+}
+
+L_PUT_SUPER_FIELD: {
+  VM_CHECK(sv_op_put_super_field(vm, js, frame, ip));
+  NEXT(OP_PUT_SUPER_FIELD);
+}
+
 L_PUT_SUPER_VAL: {
   VM_CHECK(sv_op_put_super_val(vm, js, frame));
   NEXT(OP_PUT_SUPER_VAL);

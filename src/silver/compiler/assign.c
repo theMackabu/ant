@@ -218,7 +218,12 @@ bool reject_super_private(sv_compiler_t *c, const sv_ast_t *member) {
   return true;
 }
 
+static bool super_uses_field(const sv_ast_t *member) {
+  return !(member->flags & 1) && !is_ident_str(member->right->str, member->right->len, "length", 6);
+}
+
 void emit_super_key(sv_compiler_t *c, sv_ast_t *member) {
+  if (super_uses_field(member)) return;
   if (member->flags & 1) compile_expr(c, member->right);
   else emit_constant(c, sv_const_str(c, member->right->str, member->right->len));
 }
@@ -229,21 +234,35 @@ void emit_super_reference(sv_compiler_t *c, sv_ast_t *member) {
   emit_super_key(c, member);
 }
 
-static void emit_super_reference_read(sv_compiler_t *c) {
-  emit_op(c, OP_DUP2);
+void emit_super_get(sv_compiler_t *c, sv_ast_t *member) {
+  if (super_uses_field(member)) emit_atom_op(c, OP_GET_SUPER_FIELD, member->right->str, member->right->len);
+  else emit_op(c, OP_GET_SUPER_VAL);
+}
+
+static void emit_super_put(sv_compiler_t *c, sv_ast_t *member) {
+  if (super_uses_field(member)) emit_atom_op(c, OP_PUT_SUPER_FIELD, member->right->str, member->right->len);
+  else emit_op(c, OP_PUT_SUPER_VAL);
+}
+
+static void emit_super_reference_read(sv_compiler_t *c, sv_ast_t *member) {
+  if (super_uses_field(member)) {
+    emit_op(c, OP_DUP2);
+  } else {
+    emit_op(c, OP_DUP2);
     emit_this(c);
-  emit_op(c, OP_ROT3R);
-  emit_op(c, OP_GET_SUPER_VAL);
+    emit_op(c, OP_ROT3R);
+  }
+  emit_super_get(c, member);
 }
 
 static void compile_super_update(sv_compiler_t *c, sv_ast_t *target, bool prefix, bool is_inc) {
   if (reject_super_private(c, target)) return;
   emit_super_reference(c, target);
-  emit_super_reference_read(c);
+  emit_super_reference_read(c, target);
   
   if (prefix) {
     emit_op(c, is_inc ? OP_INC : OP_DEC);
-    emit_op(c, OP_PUT_SUPER_VAL);
+    emit_super_put(c, target);
     return;
   }
   
@@ -251,7 +270,7 @@ static void compile_super_update(sv_compiler_t *c, sv_ast_t *target, bool prefix
   emit_op(c, is_inc ? OP_POST_INC : OP_POST_DEC);
   emit_op(c, OP_SWAP);
   emit_put_local(c, old_local);
-  emit_op(c, OP_PUT_SUPER_VAL);
+  emit_super_put(c, target);
   emit_op(c, OP_POP);
   emit_get_local(c, old_local);
 }
@@ -264,11 +283,11 @@ static void compile_super_assign(sv_compiler_t *c, sv_ast_t *node) {
   
   if (op == TOK_ASSIGN) {
     compile_expr(c, node->right);
-    emit_op(c, OP_PUT_SUPER_VAL);
+    emit_super_put(c, target);
     return;
   }
   
-  emit_super_reference_read(c);
+  emit_super_reference_read(c, target);
   
   if (op == TOK_LOR_ASSIGN || op == TOK_LAND_ASSIGN || op == TOK_NULLISH_ASSIGN) {
     int skip = emit_jump(c,
@@ -276,19 +295,19 @@ static void compile_super_assign(sv_compiler_t *c, sv_ast_t *node) {
       op == TOK_LAND_ASSIGN ? OP_JMP_FALSE_PEEK : OP_JMP_NOT_NULLISH);
     emit_op(c, OP_POP);
     compile_expr(c, node->right);
-    emit_op(c, OP_PUT_SUPER_VAL);
+    emit_super_put(c, target);
     int end = emit_jump(c, OP_JMP);
     patch_jump(c, skip);
     emit_op(c, OP_NIP);
     emit_op(c, OP_NIP);
-    emit_op(c, OP_NIP);
+    if (!super_uses_field(target)) emit_op(c, OP_NIP);
     patch_jump(c, end);
     return;
   }
   
   compile_expr(c, node->right);
   emit_compound_assign_op(c, op);
-  emit_op(c, OP_PUT_SUPER_VAL);
+  emit_super_put(c, target);
 }
 
 void compile_update(sv_compiler_t *c, sv_ast_t *node) {
@@ -604,9 +623,11 @@ void compile_lhs_set(sv_compiler_t *c, sv_ast_t *target, bool keep) {
     emit_op(c, OP_SWAP);
     emit_get_var(c, "super", 5);
     emit_op(c, OP_SWAP);
-    emit_super_key(c, target);
-    emit_op(c, OP_SWAP);
-    emit_op(c, OP_PUT_SUPER_VAL);
+    if (!super_uses_field(target)) {
+      emit_super_key(c, target);
+      emit_op(c, OP_SWAP);
+    }
+    emit_super_put(c, target);
     if (!keep) emit_op(c, OP_POP);
   } else if (target->type == N_IDENT) {
     emit_set_var(c, target->str, target->len, keep);

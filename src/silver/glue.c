@@ -1730,6 +1730,17 @@ ant_value_t jit_helper_array(sv_vm_t *vm, ant_t *js, ant_value_t *elements, int 
   return js_mkarr_dense_literal(js, elements, (uint32_t)count);
 }
 
+ant_value_t jit_helper_get_super_field(sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t receiver, ant_value_t home, sv_atom_t *atom, sv_ic_entry_t *ic) {
+  return Silver_Super_GetField(js, func, receiver, home, atom, ic);
+}
+
+ant_value_t jit_helper_put_super_field(
+  sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t receiver,
+  ant_value_t home, const sv_atom_t *atom, ant_value_t value, sv_ic_entry_t *ic
+) {
+  return Silver_Super_PutField(js, func, receiver, home, atom, value, ic);
+}
+
 ant_value_t jit_helper_get_super(sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t receiver, ant_value_t home, ant_value_t prop) {
   ant_value_t roots[2] = {Ant_Value_Undefined, Ant_Value_Undefined};
   GC_ROOT_SAVE(mark, js);

@@ -619,6 +619,25 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                      MIR_T_I64, "home",
                                      MIR_T_I64, "prop",
                                      MIR_T_I64, "val");
+  c->get_super_field_proto = MIR_new_proto(c->ctx, "get_super_field_proto",
+                                           1, &obj_ret, 7,
+                                           MIR_T_I64, "vm",
+                                           MIR_T_I64, "js",
+                                           MIR_T_P, "func",
+                                           MIR_T_I64, "receiver",
+                                           MIR_T_I64, "home",
+                                           MIR_T_P, "atom",
+                                           MIR_T_P, "ic");
+  c->put_super_field_proto = MIR_new_proto(c->ctx, "put_super_field_proto",
+                                           1, &obj_ret, 8,
+                                           MIR_T_I64, "vm",
+                                           MIR_T_I64, "js",
+                                           MIR_T_P, "func",
+                                           MIR_T_I64, "receiver",
+                                           MIR_T_I64, "home",
+                                           MIR_T_P, "atom",
+                                           MIR_T_I64, "val",
+                                           MIR_T_P, "ic");
 
   MIR_type_t arr_ret = MIR_JSVAL;
   c->array_proto = MIR_new_proto(c->ctx, "arr_proto",
@@ -838,6 +857,8 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_object_template = MIR_new_import(c->ctx, "jit_helper_object_template");
   c->imp_get_super = MIR_new_import(c->ctx, "jit_helper_get_super");
   c->imp_put_super = MIR_new_import(c->ctx, "jit_helper_put_super");
+  c->imp_get_super_field = MIR_new_import(c->ctx, "jit_helper_get_super_field");
+  c->imp_put_super_field = MIR_new_import(c->ctx, "jit_helper_put_super_field");
   c->imp_regexp = MIR_new_import(c->ctx, "regexp_create_literal");
   c->imp_define_slot = MIR_new_import(c->ctx, "jit_helper_define_slot");
   c->imp_array = MIR_new_import(c->ctx, "jit_helper_array");

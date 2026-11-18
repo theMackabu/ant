@@ -691,6 +691,8 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_APPEND:
       case OP_GET_SUPER_VAL:
       case OP_PUT_SUPER_VAL:
+      case OP_GET_SUPER_FIELD:
+      case OP_PUT_SUPER_FIELD:
         jit_emit_properties(c);
         break;
       case OP_GET_UPVAL:

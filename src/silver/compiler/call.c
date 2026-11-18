@@ -238,7 +238,7 @@ sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t *calle
     if (reject_super_private(c, callee)) return SV_CALL_DIRECT;
     emit_this(c);
     emit_super_reference(c, callee);
-    emit_op(c, OP_GET_SUPER_VAL);
+    emit_super_get(c, callee);
     return SV_CALL_METHOD;
   }
 

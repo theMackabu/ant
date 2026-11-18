@@ -182,6 +182,8 @@ static bool sv_func_compute_fusable_leaf(sv_func_t *func) {
       case OP_EXPORT_ALL:
       case OP_GET_SUPER_VAL:
       case OP_PUT_SUPER_VAL:
+      case OP_GET_SUPER_FIELD:
+      case OP_PUT_SUPER_FIELD:
       case OP_TRY_PUSH:
       case OP_TRY_PUSH_FINALLY:
       case OP_CATCH:
