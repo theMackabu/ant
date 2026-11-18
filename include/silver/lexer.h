@@ -12,6 +12,7 @@ typedef struct {
   uint8_t tok;
   uint8_t consumed;
   bool had_newline;
+  bool escaped;
 } sv_lexer_state_t;
 
 typedef struct {

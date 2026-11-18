@@ -228,6 +228,7 @@ export function targets() {
     'test_gc_template_const_cache.cjs',
     'test_generator_abandon_memory.cjs',
     'test_generator_open_upvalue_gc.cjs',
+    'test_escaped_keyword_names.cjs',
     'test_global_accessor_read.cjs',
     'test_headers_bytestring_wire.cjs',
     'test_headers_foreach_live.cjs',

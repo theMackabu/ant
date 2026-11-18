@@ -26,6 +26,7 @@ void sv_lexer_init(sv_lexer_t *lx, ant_t *js, const char *code, ant_offset_t cle
   lx->st.tok = TOK_ERR;
   lx->st.consumed = 1;
   lx->st.had_newline = false;
+  lx->st.escaped = false;
   lx->peek_pos = (ant_offset_t)-1;
 }
 
@@ -60,6 +61,7 @@ void sv_lexer_push_source(
   lx->st.tok = TOK_ERR;
   lx->st.consumed = 1;
   lx->st.had_newline = false;
+  lx->st.escaped = false;
   lx->peek_pos = (ant_offset_t)-1;
 }
 
@@ -531,7 +533,7 @@ static size_t decode_ident_escapes(const char *src, size_t srclen, char *dst, si
   return di;
 }
 
-static uint8_t parseident(const char *buf, ant_offset_t len, ant_offset_t *tlen) {
+static uint8_t parseident(const char *buf, ant_offset_t len, ant_offset_t *tlen, bool *escaped) {
   if (len == 0) return TOK_ERR;
   
   unsigned char c = (unsigned char)buf[0];
@@ -598,11 +600,15 @@ slow_path_loop:;
   }
   
   if (has_escapes) {
+    *escaped = true;
     char decoded[256];
     size_t decoded_len = decode_ident_escapes(buf, *tlen, decoded, sizeof(decoded));
     uint8_t kw = sv_parsekeyword(decoded, decoded_len);
-    if (kw != TOK_IDENTIFIER) return TOK_ERR;
-    return TOK_IDENTIFIER;
+    bool contextual =
+      kw == TOK_IDENTIFIER || kw == TOK_LET || kw == TOK_STATIC || kw == TOK_YIELD || kw == TOK_AWAIT ||
+      kw == TOK_ASYNC || kw == TOK_OF || kw == TOK_AS || kw == TOK_FROM || kw == TOK_USING ||
+      kw == TOK_UNDEF || kw == TOK_WINDOW || kw == TOK_GLOBAL_THIS;
+    return contextual ? TOK_IDENTIFIER : TOK_ESCAPED_KEYWORD;
   }
   
   return sv_parsekeyword(buf, *tlen);
@@ -1162,6 +1168,7 @@ static uint8_t sv_next_raw(sv_lexer_t *lx) {
   if (likely(lx->st.consumed == 0)) return lx->st.tok;
 
   lx->st.consumed = 0;
+  lx->st.escaped = false;
   lx->st.tok = TOK_ERR;
   lx->st.toff = lx->st.pos = sv_skiptonext(lx->code, lx->clen, lx->st.pos, &lx->st.had_newline);
   lx->st.tlen = 0;
@@ -1186,7 +1193,7 @@ static uint8_t sv_next_raw(sv_lexer_t *lx) {
   }
 
   if (likely(IS_IDENT1(c))) {
-    lx->st.tok = parseident(buf, rem, &lx->st.tlen);
+    lx->st.tok = parseident(buf, rem, &lx->st.tlen, &lx->st.escaped);
     lx->st.pos = lx->st.toff + lx->st.tlen;
     return lx->st.tok;
   }
@@ -1224,7 +1231,7 @@ static uint8_t sv_next_raw(sv_lexer_t *lx) {
     return lx->st.tok;
   }
 
-  lx->st.tok = parseident(buf, rem, &lx->st.tlen);
+  lx->st.tok = parseident(buf, rem, &lx->st.tlen, &lx->st.escaped);
   if (lx->st.tlen == 0) {
     utf8proc_int32_t cp;
     lx->st.tlen = (ant_offset_t)utf8_next((const utf8proc_uint8_t *)buf, (utf8proc_ssize_t)rem, &cp);

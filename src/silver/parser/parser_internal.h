@@ -155,6 +155,10 @@ static inline bool is_contextual_ident_tok(uint8_t tok) {
 }
 
 static inline const char *tok_ident_str(sv_parser_t *p, uint32_t *out_len) {
+  if (__builtin_expect(!p->lx.st.escaped, 1)) {
+    *out_len = (uint32_t)p->lx.st.tlen;
+    return tok_str(p);
+  }
   return decode_ident_into_arena(p->js, tok_str(p), (uint32_t)p->lx.st.tlen, out_len);
 }
 
@@ -233,8 +237,10 @@ static inline sv_ast_t *mk_ident_from_tok(sv_parser_t *p) {
 static inline sv_ast_t *mk_private_ident_from_tok(sv_parser_t *p) {
   sv_ast_t *n = mk(N_IDENT);
   
-  n->str = &p->lx.code[p->lx.st.toff - 1];
-  n->len = (uint32_t)(p->lx.st.tlen + 1);
+  if (__builtin_expect(!p->lx.st.escaped, 1)) {
+    n->str = &p->lx.code[p->lx.st.toff - 1];
+    n->len = (uint32_t)(p->lx.st.tlen + 1);
+  } else n->str = decode_ident_into_arena(p->js, &p->lx.code[p->lx.st.toff - 1], (uint32_t)(p->lx.st.tlen + 1), &n->len);
   n->src_off = (uint32_t)(p->lx.st.toff > 0 ? p->lx.st.toff - 1 : p->lx.st.toff);
   n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
   
