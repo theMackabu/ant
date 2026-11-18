@@ -270,6 +270,11 @@ static int resolve_upvalue_to(sv_compiler_t *c, sv_compiler_t *owner, int local)
   return add_upvalue(c, (uint16_t)upvalue, false, owner->locals[local].is_const);
 }
 
+sv_compiler_t *lexical_owner(sv_compiler_t *c) {
+  while (c->is_arrow && c->enclosing) c = c->enclosing;
+  return c;
+}
+
 static sv_compiler_t *enclosing_non_arrow(sv_compiler_t *c) {
   sv_compiler_t *enc = c->enclosing;
   while (enc && enc->is_arrow) enc = enc->enclosing;

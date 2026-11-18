@@ -230,7 +230,7 @@ void emit_super_key(sv_compiler_t *c, sv_ast_t *member) {
 
 void emit_super_reference(sv_compiler_t *c, sv_ast_t *member) {
   emit_this(c);
-  emit_get_var(c, "super", 5);
+  emit_super(c);
   emit_super_key(c, member);
 }
 
@@ -460,6 +460,8 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
     return;
   }
 
+  if (reject_super_identifier(c, target)) return;
+
   if (target->type == N_IDENT) {
     bool shadowed = local_with_shadowed(c, target->str, target->len);
     int lhs_local = shadowed ? -1 : resolve_local(c, target->str, target->len);
@@ -621,7 +623,7 @@ void compile_lhs_set(sv_compiler_t *c, sv_ast_t *target, bool keep) {
     if (reject_super_private(c, target)) return;
     emit_this(c);
     emit_op(c, OP_SWAP);
-    emit_get_var(c, "super", 5);
+    emit_super(c);
     emit_op(c, OP_SWAP);
     if (!super_uses_field(target)) {
       emit_super_key(c, target);

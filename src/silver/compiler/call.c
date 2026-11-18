@@ -160,8 +160,11 @@ static void emit_field_init_pass(
 void emit_field_inits(
   sv_compiler_t *c, sv_compiler_t *owner, sv_ast_t **fields, int count
 ) {
+  bool outer = c->in_field_init;
+  c->in_field_init = true;
   emit_field_init_pass(c, owner, fields, count, true);
   emit_field_init_pass(c, owner, fields, count, false);
+  c->in_field_init = outer;
 }
 
 void emit_derived_field_inits(sv_compiler_t *c) {
@@ -171,9 +174,9 @@ void emit_derived_field_inits(sv_compiler_t *c) {
     return;
   }
   
-  const sv_compiler_t *scope = c;
-  while (scope->is_arrow && scope->enclosing) scope = scope->enclosing;
+  const sv_compiler_t *scope = lexical_owner(c);
   if (!scope->eval_field_thunk) return;
+  
   emit_get_var(c, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN);
   emit_op(c, OP_CALL);
   emit_u16(c, 0);
@@ -234,13 +237,10 @@ static void compile_call_emit_invoke(
 
 sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t *callee) {
   if (is_ident_name(callee, "super")) {
+    if (reject_misplaced_super_call(c)) return SV_CALL_DIRECT;
     emit_super_receiver(c);
-    emit_get_var(c, "super", 5);
-    if (c->is_arrow) emit_lexical_new_target(c);
-    else {
-      emit_op(c, OP_SPECIAL_OBJ);
-      emit(c, SV_SPECIAL_NEW_TARGET);
-    }
+    emit_super(c);
+    emit_new_target(c);
     return SV_CALL_SUPER;
   }
 

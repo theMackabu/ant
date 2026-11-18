@@ -196,8 +196,12 @@ void emit_lexical_new_target(sv_compiler_t *c);
 void emit_this(sv_compiler_t *c);
 void emit_this_store(sv_compiler_t *c);
 void emit_super_receiver(sv_compiler_t *c);
+bool reject_misplaced_super_call(sv_compiler_t *c);
 int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local);
+bool reject_super_identifier(sv_compiler_t *c, const sv_ast_t *node);
+void emit_super(sv_compiler_t *c);
 void emit_new_target(sv_compiler_t *c);
+sv_compiler_t *lexical_owner(sv_compiler_t *c);
 bool class_method_needs_home(const sv_ast_t *method);
 void emit_derived_field_inits(sv_compiler_t *c);
 typedef struct {

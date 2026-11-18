@@ -278,7 +278,9 @@ typedef struct sv_compiler {
   int this_local;
   bool this_bound;
   bool eval_this_binding;
+  bool is_derived_ctor;
   bool is_class_ctor;
+  bool in_field_init;
   bool eval_field_thunk;
   int derived_return_local;
   const sv_ast_t *this_bound_stmt;

@@ -513,6 +513,7 @@ export function targets() {
     'test_timer_stale_loop_time.cjs',
     'test_tty_error_boundaries.cjs',
     'test_typedarray_bigint_coercion.cjs',
+    'test_super_syntax_placement.cjs',
     'test_typedarray_coercion_detach.cjs',
     'test_typedarray_in.cjs',
     'test_typedarray_index_jit.cjs',

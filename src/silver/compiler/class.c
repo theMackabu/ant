@@ -577,6 +577,7 @@ static void compile_class_strict(
     sv_compiler_t comp;
     sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
     comp.is_strict = true;
+    comp.is_derived_ctor = node->left != NULL;
 
     emit_op(&comp, OP_CHECK_CTOR);
     if (field_inits_use_super(field_inits, field_count)) emit_super_local(&comp);

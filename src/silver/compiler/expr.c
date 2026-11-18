@@ -522,6 +522,7 @@ void compile_ternary(sv_compiler_t *c, sv_ast_t *node) {
 
 static void compile_typeof_op(sv_compiler_t *c, sv_ast_t *node, int test_type) {
   sv_ast_t *arg = node->right;
+  if (reject_super_identifier(c, arg)) return;
   sv_patch_list_t found = {0};
   
   if (arg->type == N_IDENT) {
@@ -618,6 +619,8 @@ void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
     compile_delete_optional(c, arg);
   } else if (arg->type == N_MEMBER && is_ident_name(arg->left, "super")) {
     static const char message[] = "Unsupported reference to 'super'";
+    emit_super(c);
+    emit_op(c, OP_POP);
     emit_this(c);
     if (arg->flags & 1) compile_expr(c, arg->right);
     else emit_op(c, OP_UNDEF);

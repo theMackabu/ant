@@ -262,8 +262,9 @@ sv_func_t *compile_function_body(
   comp.is_static = (node->flags & FN_STATIC) || (comp.is_arrow && enclosing->is_static);
   comp.eval_this_binding = eval_body && enclosing->eval_this_binding;
   comp.eval_field_thunk = eval_body && enclosing->eval_field_thunk;
+  comp.is_derived_ctor = !!(node->flags & FN_DERIVED_CTOR);
   comp.is_class_ctor = !!(node->flags & FN_CLASS_CTOR);
-  if (node->flags & FN_DERIVED_CTOR) comp.derived_field_owner = enclosing;
+  if (comp.is_derived_ctor) comp.derived_field_owner = enclosing;
   else if (comp.is_arrow) comp.derived_field_owner = enclosing->derived_field_owner;
 
   bool has_own_use_strict = false;
