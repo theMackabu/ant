@@ -21,6 +21,7 @@ typedef struct {
   bool no_yield;
   bool in_generator;
   uint32_t function_depth;
+  uint32_t chain_links;
 } sv_parser_t;
 
 typedef struct {
@@ -82,6 +83,19 @@ void sv_parse_stop(sv_parser_t *p);
 void consume_semicolon(sv_parser_t *p);
 
 bool sv_parse_stack_overflow(sv_parser_t *p);
+bool sv_parse_chain_overflow(sv_parser_t *p);
+
+#define SV_PARSE_CHAIN_BLOCK 4096u
+#define SV_PARSE_CHAIN_LINK_BYTES 128u
+
+static inline bool sv_parse_chain_link(sv_parser_t *p, uint32_t *links) {
+  if (__builtin_expect((++*links & (SV_PARSE_CHAIN_BLOCK - 1)) != 0, 1)) return false;
+  return sv_parse_chain_overflow(p);
+}
+
+static inline void sv_parse_chain_end(sv_parser_t *p, uint32_t links) {
+  if (__builtin_expect(links >= SV_PARSE_CHAIN_BLOCK, 0)) p->chain_links -= links & ~(SV_PARSE_CHAIN_BLOCK - 1);
+}
 bool arrow_param_is_name(const sv_ast_t *node);
 bool lookahead_crosses_line_terminator(sv_parser_t *p);
 bool using_declaration_here(sv_parser_t *p, bool for_head);

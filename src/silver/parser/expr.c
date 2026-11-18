@@ -50,6 +50,7 @@ sv_ast_t *parse_tagged_template(sv_parser_t *p, sv_ast_t *tag) {
 static sv_ast_t *parse_call(sv_parser_t *p) {
   sv_ast_t *n = parse_primary(p);
   bool optional_chain = false;
+  uint32_t links = 0;
 
   for (;;) {
     uint8_t la = sv_lexer_next(&p->lx);
@@ -90,6 +91,7 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
         expect(p, TOK_RBRACKET);
         opt->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
       } else if (p->lx.st.tok == TOK_LPAREN) {
+        if (sv_parse_chain_link(p, &links) || sv_parse_chain_link(p, &links)) return mk(N_EMPTY);
         sv_ast_t *call = mk(N_CALL);
         call->left = opt;
         p->lx.st.consumed = 1;
@@ -127,7 +129,9 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
       }
       n = parse_tagged_template(p, n);
     } else break;
+    if (sv_parse_chain_link(p, &links)) return mk(N_EMPTY);
   }
+  sv_parse_chain_end(p, links);
   return n;
 }
 
@@ -162,6 +166,16 @@ static sv_ast_t *parse_postfix(sv_parser_t *p) {
 
 bool sv_parse_stack_overflow(sv_parser_t *p) {
   if (!sv_check_c_stack_overflow(p->js)) return false;
+  SV_MKERR_TYPED(p->js, JS_ERR_RANGE, "Maximum call stack size exceeded");
+  return true;
+}
+
+bool sv_parse_chain_overflow(sv_parser_t *p) {
+  p->chain_links += SV_PARSE_CHAIN_BLOCK;
+  uintptr_t here = (uintptr_t)__builtin_frame_address(0);
+  uintptr_t floor = (uintptr_t)p->js->cstk.floor;
+  if (!floor) return false;
+  if (here > floor && (uint64_t)p->chain_links * SV_PARSE_CHAIN_LINK_BYTES <= here - floor) return false;
   SV_MKERR_TYPED(p->js, JS_ERR_RANGE, "Maximum call stack size exceeded");
   return true;
 }
@@ -214,6 +228,7 @@ sv_ast_t *parse_unary(sv_parser_t *p) {
 
 static sv_ast_t *parse_binary(sv_parser_t *p, int min_prec) {
   sv_ast_t *left = parse_unary(p);
+  uint32_t links = 0;
 
   for (;;) {
     uint8_t op = sv_lexer_next(&p->lx);
@@ -221,6 +236,7 @@ static sv_ast_t *parse_binary(sv_parser_t *p, int min_prec) {
     if (op == TOK_IN && p->no_in) break;
     int prec = prec_table[op];
     if (prec == 0 || prec < min_prec) break;
+    if (sv_parse_chain_link(p, &links)) return mk(N_EMPTY);
     p->lx.st.consumed = 1;
     int next_prec = (op == TOK_EXP) ? prec : prec + 1;
     sv_ast_t *right = parse_binary(p, next_prec);
@@ -232,6 +248,7 @@ static sv_ast_t *parse_binary(sv_parser_t *p, int min_prec) {
     bin->src_end = right ? right->src_end : bin->src_end;
     left = bin;
   }
+  sv_parse_chain_end(p, links);
   return left;
 }
 
@@ -360,7 +377,9 @@ sv_ast_t *parse_assign(sv_parser_t *p) {
 
 sv_ast_t *parse_expr(sv_parser_t *p) {
   sv_ast_t *left = parse_assign(p);
+  uint32_t links = 0;
   while (sv_lexer_next(&p->lx) == TOK_COMMA) {
+    if (sv_parse_chain_link(p, &links)) return mk(N_EMPTY);
     p->lx.st.consumed = 1;
     sv_ast_t *n = mk(N_SEQUENCE);
     n->left = left;
@@ -369,12 +388,15 @@ sv_ast_t *parse_expr(sv_parser_t *p) {
     n->src_end = n->right ? n->right->src_end : n->src_end;
     left = n;
   }
+  sv_parse_chain_end(p, links);
   return left;
 }
 
 sv_ast_t *parse_paren_list(sv_parser_t *p, bool trailing_comma) {
   sv_ast_t *left = parse_assign(p);
+  uint32_t links = 0;
   while (sv_lexer_next(&p->lx) == TOK_COMMA) {
+    if (sv_parse_chain_link(p, &links)) return mk(N_EMPTY);
     p->lx.st.consumed = 1;
     if (sv_lexer_next(&p->lx) == TOK_RPAREN && (trailing_comma || sv_lexer_lookahead(&p->lx) == TOK_ARROW)) break;
 
@@ -383,6 +405,7 @@ sv_ast_t *parse_paren_list(sv_parser_t *p, bool trailing_comma) {
     n->right = parse_assign(p);
     left = n;
   }
+  sv_parse_chain_end(p, links);
   return left;
 }
 

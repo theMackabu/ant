@@ -321,6 +321,7 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
   }
 
   l_new: {
+    if (sv_parse_stack_overflow(p)) return mk(N_EMPTY);
     uint32_t new_off = (uint32_t)p->lx.st.toff;
     p->lx.st.consumed = 1;
 
@@ -341,13 +342,16 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     n->src_off = new_off;
     sv_ast_t *callee = parse_primary(p);
     
+    uint32_t links = 0;
     for (;;) {
       uint8_t la = sv_lexer_next(&p->lx);
       if (la == TOK_DOT || la == TOK_LBRACKET) callee = parse_member_suffix(p, callee, la);
       else if (la == TOK_TEMPLATE) callee = parse_tagged_template(p, callee);
       else break;
       if (callee && callee->type == N_EMPTY) return callee;
+      if (sv_parse_chain_link(p, &links)) return mk(N_EMPTY);
     }
+    sv_parse_chain_end(p, links);
     n->left = callee;
 
     if (sv_lexer_next(&p->lx) == TOK_OPTIONAL_CHAIN) {

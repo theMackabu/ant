@@ -406,6 +406,7 @@ export function targets() {
     'test_poly_field_store.cjs',
     'test_primitive_ic_invalidation.cjs',
     'test_primitive_proto_setter_throw.cjs',
+    'test_parser_chain_depth.cjs',
     'test_process_env_proxy.cjs',
     'test_process_exit_code.cjs',
     'test_process_get_builtin_module.cjs',
