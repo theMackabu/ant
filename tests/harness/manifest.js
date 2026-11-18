@@ -364,6 +364,7 @@ export function targets() {
     'test_pkg_lifecycle_production_dev.cjs',
     'test_pkg_lifecycle_trust_identity.cjs',
     'test_plain_object_index_access.cjs',
+    'test_osr_eval_environment.cjs',
     'test_poly_field_ic.cjs',
     'test_poly_field_store.cjs',
     'test_primitive_ic_invalidation.cjs',
