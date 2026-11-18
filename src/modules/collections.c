@@ -23,9 +23,12 @@ static void collection_release(void *block, size_t size);
 #include "silver/call.h"
 #include "descriptors.h"
 #include "protectors.h"
+#include "arrays.h"
 
 #include "modules/bigint.h"
 #include "modules/collections.h"
+#include "modules/microtasks.h"
+#include "modules/process.h"
 #include "modules/symbol.h"
 #include "modules/iterator.h"
 
@@ -1927,85 +1930,176 @@ static ant_value_t weakref_deref(ant_params_t) {
   return target;
 }
 
+enum {
+  FINREG_ENTRY_TARGET,
+  FINREG_ENTRY_HELD,
+  FINREG_ENTRY_TOKEN,
+  FINREG_ENTRY_FIELDS,
+};
+
+static ant_value_t finreg_weak_cell(ant_t *js, ant_value_t target) {
+  ant_value_t cell = js_weakref_create(js, target);
+  if (is_err(cell)) return cell;
+  weakref_state_t *state = js_get_native(cell, WEAKREF_NATIVE_TAG);
+  state->notifies_registry = true;
+  return cell;
+}
+
+static ant_value_t finreg_cell_target(ant_value_t cell) {
+  ant_value_t target = Ant_Value_Undefined;
+  return js_weakref_target(cell, &target) ? target : Ant_Value_Undefined;
+}
+
 static ant_value_t builtin_FinalizationRegistry(ant_params_t) {
-  if (nargs < 1 || (vtype(args[0]) != kTypeFunction && vtype(args[0]) != kTypeBuiltin)) {
-    return js_mkerr(js, "FinalizationRegistry callback must be a function");
-  }
+  if (vtype(call_new_target) == kTypeUndefined)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "FinalizationRegistry constructor requires 'new'");
+  if (nargs < 1 || (vtype(args[0]) != kTypeFunction && vtype(args[0]) != kTypeBuiltin))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "FinalizationRegistry callback must be a function");
   
+  GC_ROOT_SAVE(mark, js);
   ant_value_t fr_obj = Ant_Object_CreateBare(js);
-  ant_value_t fr_proto = js->builtins.finreg_proto;
+  GC_ROOT_PIN(js, fr_obj);
+  ant_value_t fr_proto = js_instance_proto_from_new_target(js, js->builtins.finreg_proto, call_new_target);
   if (is_special_object(fr_proto)) js_set_proto_init(fr_obj, fr_proto);
   
   js_set_slot_wb(js, fr_obj, SLOT_MAP, Ant_Array_Create(js));
-  js_set_slot(fr_obj, SLOT_DATA, args[0]);
+  js_set_slot_wb(js, fr_obj, SLOT_DATA, args[0]);
   
-  return fr_obj;
+  ant_value_t registries = js_get_slot(js->builtins.finreg_proto, SLOT_DATA);
+  ant_value_t cell = finreg_weak_cell(js, fr_obj);
+  GC_ROOT_PIN(js, cell);
+  if (!is_err(cell) && vtype(registries) == kTypeArray) js_arr_set_index(js, registries, js_arr_len(js, registries), cell);
+  
+  GC_ROOT_RESTORE(js, mark);
+  return is_err(cell) ? cell : fr_obj;
+}
+
+static void finreg_truncate(ant_t *js, ant_value_t list, ant_offset_t kept, ant_offset_t len) {
+  if (kept == len) return;
+  for (ant_offset_t i = kept; i < len; i++) js_arr_set_index(js, list, i, Ant_Value_Undefined);
+  js_arr_set_dense_length(js, list, kept);
+}
+
+static ant_value_t finreg_registrations(ant_value_t registry) {
+  if (vtype(registry) != kTypeObject) return Ant_Value_Undefined;
+  ant_value_t registrations = js_get_slot(registry, SLOT_MAP);
+  return vtype(registrations) == kTypeArray ? registrations : Ant_Value_Undefined;
 }
 
 static ant_value_t finreg_register(ant_params_t) {
-  if (vtype(call_this) != kTypeObject) return Ant_Value_Undefined;
+  ant_value_t registrations = finreg_registrations(call_this);
+  if (vtype(registrations) != kTypeArray)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "FinalizationRegistry.prototype.register called on an incompatible receiver");
   
   if (nargs < 1 || !can_be_held_weakly(args[0]))
-    return js_mkerr(js, "FinalizationRegistry.register target must be an object");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "FinalizationRegistry.register target must be an object");
   
   ant_value_t target = args[0];
   ant_value_t held_value = nargs > 1 ? args[1] : Ant_Value_Undefined;
   ant_value_t unregister_token = nargs > 2 ? args[2] : Ant_Value_Undefined;
   
   if (target == held_value)
-    return js_mkerr(js, "target and held value must not be the same");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "target and held value must not be the same");
   
   if (vtype(unregister_token) != kTypeUndefined && !can_be_held_weakly(unregister_token))
-    return js_mkerr(js, "FinalizationRegistry.register token must be an object");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "FinalizationRegistry.register token must be an object");
   
-  ant_value_t registrations = js_get_slot(call_this, SLOT_MAP);
-  if (vtype(registrations) != kTypeArray) return Ant_Value_Undefined;
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t fields[FINREG_ENTRY_FIELDS] = {Ant_Value_Undefined, held_value, Ant_Value_Undefined};
+  GC_ROOT_PIN(js, fields[FINREG_ENTRY_TARGET]);
+  GC_ROOT_PIN(js, fields[FINREG_ENTRY_TOKEN]);
   
-  ant_value_t entry = Ant_Array_Create(js);
-  ant_offset_t len = js_arr_len(js, registrations);
+  fields[FINREG_ENTRY_TARGET] = finreg_weak_cell(js, target);
+  if (!is_err(fields[FINREG_ENTRY_TARGET]) && vtype(unregister_token) != kTypeUndefined)
+    fields[FINREG_ENTRY_TOKEN] = unregister_token == target ? fields[FINREG_ENTRY_TARGET] : js_weakref_create(js, unregister_token);
   
-  char idx[16];
-  size_t idx_len = uint_to_str(idx, sizeof(idx), 0);
-  js_setprop(js, entry, js_mkstr(js, idx, idx_len), target);
-  idx_len = uint_to_str(idx, sizeof(idx), 1);
-  js_setprop(js, entry, js_mkstr(js, idx, idx_len), held_value);
-  idx_len = uint_to_str(idx, sizeof(idx), 2);
-  js_setprop(js, entry, js_mkstr(js, idx, idx_len), unregister_token);
-  js_setprop(js, entry, js->length_str, Ant_Value_FromNumber(3.0));
+  ant_value_t result = is_err(fields[FINREG_ENTRY_TARGET]) ? fields[FINREG_ENTRY_TARGET] : fields[FINREG_ENTRY_TOKEN];
+  if (!is_err(result)) {
+    ant_value_t entry = js_mkarr_dense_literal(js, fields, FINREG_ENTRY_FIELDS);
+    js_arr_set_index(js, registrations, js_arr_len(js, registrations), entry);
+    result = Ant_Value_Undefined;
+  }
   
-  idx_len = uint_to_str(idx, sizeof(idx), len);
-  js_setprop(js, registrations, js_mkstr(js, idx, idx_len), entry);
-  js_setprop(js, registrations, js->length_str, Ant_Value_FromNumber((double)(len + 1)));
-  
-  return Ant_Value_Undefined;
+  GC_ROOT_RESTORE(js, mark);
+  return result;
 }
 
 static ant_value_t finreg_unregister(ant_params_t) {
-  if (vtype(call_this) != kTypeObject) return Ant_Value_False;
+  ant_value_t registrations = finreg_registrations(call_this);
+  if (vtype(registrations) != kTypeArray)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "FinalizationRegistry.prototype.unregister called on an incompatible receiver");
   
   if (nargs < 1 || !can_be_held_weakly(args[0]))
-    return js_mkerr(js, "FinalizationRegistry.unregister token must be an object");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "FinalizationRegistry.unregister token must be an object");
   
   ant_value_t token = args[0];
-  ant_value_t registrations = js_get_slot(call_this, SLOT_MAP);
-  if (vtype(registrations) != kTypeArray) return Ant_Value_False;
-  
   ant_offset_t len = js_arr_len(js, registrations);
-  bool removed = false;
+  ant_offset_t kept = 0;
   
   for (ant_offset_t i = 0; i < len; i++) {
     ant_value_t entry = js_arr_get(js, registrations, i);
-    if (vtype(entry) != kTypeArray) continue;
-    ant_value_t entry_token = js_arr_get(js, entry, 2);
-    if (entry_token == token) {
-      char idx[16];
-      size_t idx_len = uint_to_str(idx, sizeof(idx), i);
-      js_setprop(js, registrations, js_mkstr(js, idx, idx_len), Ant_Value_Undefined);
-      removed = true;
-    }
+    if (finreg_cell_target(js_arr_get(js, entry, FINREG_ENTRY_TOKEN)) == token) continue;
+    if (kept != i) js_arr_set_index(js, registrations, kept, entry);
+    kept++;
   }
   
-  return Ant_Value_FromBool(removed);
+  finreg_truncate(js, registrations, kept, len);
+  return Ant_Value_FromBool(kept != len);
+}
+
+static void finreg_collect(ant_t *js, ant_value_t registry, ant_value_t jobs) {
+  ant_value_t registrations = finreg_registrations(registry);
+  if (vtype(registrations) != kTypeArray) return;
+  
+  ant_value_t callback = js_get_slot(registry, SLOT_DATA);
+  ant_offset_t len = js_arr_len(js, registrations);
+  ant_offset_t kept = 0;
+  
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t entry = js_arr_get(js, registrations, i);
+    if (vtype(finreg_cell_target(js_arr_get(js, entry, FINREG_ENTRY_TARGET))) != kTypeUndefined) {
+      if (kept != i) js_arr_set_index(js, registrations, kept, entry);
+      kept++;
+      continue;
+    }
+    ant_offset_t at = js_arr_len(js, jobs);
+    js_arr_set_index(js, jobs, at, callback);
+    js_arr_set_index(js, jobs, at + 1, js_arr_get(js, entry, FINREG_ENTRY_HELD));
+  }
+  
+  finreg_truncate(js, registrations, kept, len);
+}
+
+void js_finalization_run(ant_t *js) {
+  js->weak_gc.finalization_pending = false;
+  ant_value_t registries = js_get_slot(js->builtins.finreg_proto, SLOT_DATA);
+  if (vtype(registries) != kTypeArray) return;
+  
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t jobs = Ant_Array_Create(js);
+  GC_ROOT_PIN(js, jobs);
+  
+  ant_offset_t len = js_arr_len(js, registries);
+  ant_offset_t kept = 0;
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t cell = js_arr_get(js, registries, i);
+    ant_value_t registry = finreg_cell_target(cell);
+    if (vtype(registry) == kTypeUndefined) continue;
+    finreg_collect(js, registry, jobs);
+    if (kept != i) js_arr_set_index(js, registries, kept, cell);
+    kept++;
+  }
+  finreg_truncate(js, registries, kept, len);
+  
+  ant_offset_t count = js_arr_len(js, jobs);
+  for (ant_offset_t i = 0; i + 1 < count; i += 2) {
+    ant_value_t held = js_arr_get(js, jobs, i + 1);
+    ant_value_t result = sv_call_value(js, js_arr_get(js, jobs, i), Ant_Value_Undefined, &held, 1);
+    if (is_err(result)) process_report_uncaught_exception_if_pending(js);
+  }
+  
+  GC_ROOT_RESTORE(js, mark);
+  if (count > 0) process_microtasks(js);
 }
 
 static ant_value_t map_group_add(ant_t *js, void *ctx, ant_value_t key, ant_value_t value) {
@@ -2475,6 +2569,7 @@ void init_collections_module(ant_t *js) {
   ant_value_t finreg_proto = Ant_Object_CreateBare(js);
   js_set_proto_init(finreg_proto, object_proto);
   js->builtins.finreg_proto = finreg_proto;
+  js_set_slot_wb(js, finreg_proto, SLOT_DATA, Ant_Array_Create(js));
   defmethod(js, finreg_proto, "register", 8, Ant_Function_CreateWithArity(finreg_register, 2));
   defmethod(js, finreg_proto, "unregister", 10, Ant_Function_CreateWithArity(finreg_unregister, 1));
   js_set_tostringtag(js, finreg_proto, js_mkstr(js, "FinalizationRegistry", 20));

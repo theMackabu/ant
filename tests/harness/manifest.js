@@ -232,6 +232,7 @@ export function targets() {
     'test_ic_read_differential.cjs',
     'test_immediate_handle.cjs',
     'test_import_iterator_getter_errors.cjs',
+    'test_finalization_registry.cjs',
     'test_import_meta_resolve_builtin.mjs',
     'test_in_operator_ic.cjs',
     'test_inspect_array_holes.cjs',

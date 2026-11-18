@@ -42,7 +42,10 @@ typedef struct weakset_entry {
 
 typedef struct weakref_state {
   ant_value_t target;
+  bool notifies_registry;
 } weakref_state_t;
+
+void js_finalization_run(ant_t *js);
 
 typedef enum {
   ITER_TYPE_MAP_VALUES,
