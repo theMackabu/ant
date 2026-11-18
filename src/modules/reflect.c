@@ -195,6 +195,7 @@ static ant_value_t reflect_define_property(ant_params_t) {
 static ant_value_t reflect_get_prototype_of(ant_params_t) {
   ant_value_t target = reflect_target(js, args, nargs, "getPrototypeOf");
   if (is_err(target)) return target;
+  if (is_proxy(target)) return proxy_get_prototype_of(js, target);
   return js_get_proto(js, target);
 }
 

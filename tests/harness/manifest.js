@@ -468,6 +468,7 @@ export function targets() {
     'test_regexp_result_batch.cjs',
     'test_regexp_set_ops_group_names.cjs',
     'test_regexp_string_compat.cjs',
+    'test_reflect_get_prototype_of_proxy.cjs',
     'test_regexp_syntax_errors.cjs',
     'test_regexp_unicode_indices.cjs',
     'test_reflect_is_extensible_proxy.cjs',
