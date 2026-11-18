@@ -10,6 +10,7 @@
 #include "modules/function.h"
 #include "modules/proxy.h"
 #include "operators.h"
+#include "descriptors.h"
 
 ant_value_t js_normalize_sloppy_this(ant_t *js, ant_value_t value) {
   if (vtype(value) == kTypeUndefined || vtype(value) == kTypeNull) return js->global_this;
@@ -712,6 +713,38 @@ static void init_function_kind(
   mkprop(js, kind_proto, Ant_String_FromLiteral(js, "constructor"), js_obj_to_func(js, ctor_obj), ANT_PROP_ATTR_CONFIGURABLE);
 }
 
+static bool function_is_legacy_sloppy(ant_value_t value) {
+  if (vtype(value) != kTypeFunction) return false;
+  
+  const sv_closure_t *closure = js_func_closure(value);
+  const sv_func_t *func = closure ? closure->func : NULL;
+  uint32_t special = SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS | SV_CALL_IS_ARROW | SV_CALL_IS_DEFAULT_CTOR;
+  
+  if (!func || (closure->call_flags & special)) return false;
+  return !func->is_strict && !func->is_arrow && !func->is_async && !func->is_generator && !func->is_method && !func->is_class_ctor;
+}
+
+static ant_value_t function_restricted_error(ant_t *js) {
+  return js_mkerr_typed(js, JS_ERR_TYPE,
+    "'caller', 'callee', and 'arguments' properties may not be accessed "
+    "on strict mode functions or the arguments objects for calls to them"
+  );
+}
+
+static ant_value_t builtin_function_restricted_get(ant_params_t) {
+  return function_is_legacy_sloppy(call_this) ? Ant_Value_Null : function_restricted_error(js);
+}
+
+static ant_value_t builtin_function_restricted_set(ant_params_t) {
+  return function_is_legacy_sloppy(call_this) ? Ant_Value_Undefined : function_restricted_error(js);
+}
+
+static void function_define_restricted(ant_t *js, ant_value_t function_proto_obj, const char *key, size_t len) {
+  ant_value_t getter = Ant_Function_Create(builtin_function_restricted_get);
+  ant_value_t setter = Ant_Function_CreateWithArity(builtin_function_restricted_set, 1);
+  js_set_accessor_desc(js, function_proto_obj, key, len, getter, setter, JS_DESC_C);
+}
+
 void js_function_init_prototype(ant_t *js, ant_value_t function_proto_obj) {
   js_set_slot(function_proto_obj, SLOT_CFUNC, Ant_Function_Create(builtin_function_empty));
   
@@ -719,6 +752,9 @@ void js_function_init_prototype(ant_t *js, ant_value_t function_proto_obj) {
   defmethod(js, function_proto_obj, "apply", 5, Ant_Function_CreateWithArity(builtin_function_apply, 2));
   defmethod(js, function_proto_obj, "bind", 4, Ant_Function_CreateWithArity(builtin_function_bind, 1));
   defmethod(js, function_proto_obj, "toString", 8, Ant_Function_Create(builtin_function_toString));
+  
+  function_define_restricted(js, function_proto_obj, "arguments", 9);
+  function_define_restricted(js, function_proto_obj, "caller", 6);
 }
 
 void js_function_init_constructor(ant_t *js, ant_value_t func_ctor_obj, ant_value_t function_proto) {

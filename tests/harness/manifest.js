@@ -211,6 +211,7 @@ export function targets() {
     'test_intern_per_isolate.mjs',
     'test_intern_table_bounded.cjs',
     'test_intrinsic_tostringtag.cjs',
+    'test_function_restricted_properties.cjs',
     'test_io_error_boundary_audit.cjs',
     'test_io_handled_errors.cjs',
     'test_iteration_protocol_node_compat.cjs',
