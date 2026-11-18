@@ -15,6 +15,9 @@ function spreadCall(arr) { return sum3(...arr); }
 function spreadCount(arr) { return count(...arr); }
 function spreadFixed(x, arr) { return count(x, ...arr); }
 function spreadNew(arr) { return new Point(...arr); }
+function spreadArray(arr) { return [...arr]; }
+function spreadArrayPrefix(x, arr) { return [x, ...arr]; }
+function spreadArrayMixed(x, arr, y) { return [x, ...arr, y, ...arr]; }
 function spreadArrayCall(x, arr) { return [x, ...arr, id(x)]; }
 function spreadMax(arr) { return Math.max(...arr); }
 function spreadPush(arr) { const out = [0]; out.push(...arr); return out; }
@@ -74,6 +77,9 @@ function warm() {
     assert.strictEqual(spreadCount(three), 3);
     assert.strictEqual(spreadFixed(i, three), 4);
     assert.strictEqual(spreadNew(three).c, 3);
+    assert.strictEqual(spreadArray(three).length, 3);
+    assert.strictEqual(spreadArrayPrefix(i, three).length, 4);
+    assert.strictEqual(spreadArrayMixed(i, two, 9).length, 6);
     assert.strictEqual(spreadArrayCall(i, two)[3], i);
     assert.strictEqual(spreadMax(three), 3);
     assert.strictEqual(spreadPush(two).length, 3);
@@ -103,6 +109,8 @@ function checkShapes() {
   assert.strictEqual(spreadCount(new Array(17).fill(1)), 17);
   assert.strictEqual(spreadCount(new Array(70).fill(1)), 70);
   assert.strictEqual(spreadCount([1, , 3]), 3);
+  assert.deepStrictEqual(spreadArray([1, , 3]), [1, undefined, 3]);
+  assert.ok(1 in spreadArray([1, , 3]));
   assert.ok(Number.isNaN(spreadCall([1, , 3])));
   assert.strictEqual(spreadCount('héllo'), 5);
   assert.strictEqual(spreadCount(new Set([1, 2, 2, 3])), 3);
@@ -117,6 +125,7 @@ function checkShapes() {
   assert.throws(() => spreadCall(null), TypeError);
   assert.throws(() => spreadCall(undefined), TypeError);
   assert.throws(() => spreadCall({}), TypeError);
+  assert.throws(() => spreadArray(7), TypeError);
   assert.throws(() => spreadNew({}), TypeError);
 
   assert.strictEqual(spreadNew(three).n, 3);
@@ -125,7 +134,23 @@ function checkShapes() {
   assert.strictEqual(spreadNew(new Set([1, 2])).b, 2);
   assert.strictEqual(spreadNew(new Array(20).fill(3)).n, 20);
 
+  assert.deepStrictEqual(spreadArray(three), [1, 2, 3]);
+  assert.notStrictEqual(spreadArray(three), three);
+  assert.notStrictEqual(spreadArray(three), spreadArray(three));
+  assert.deepStrictEqual(spreadArray([]), []);
+  assert.deepStrictEqual(spreadArray(two), [4, 5]);
+  assert.deepStrictEqual(spreadArray('ab'), ['a', 'b']);
+  assert.deepStrictEqual(spreadArray(new Set([3, 1])), [3, 1]);
+  assert.strictEqual(spreadArray(new Array(100).fill(2)).length, 100);
+  assert.deepStrictEqual(spreadArrayPrefix(0, two), [0, 4, 5]);
+  assert.deepStrictEqual(spreadArrayPrefix(0, []), [0]);
+  assert.deepStrictEqual(spreadArrayPrefix(0, [, 1]), [0, undefined, 1]);
+  assert.deepStrictEqual(spreadArrayMixed(0, [1], 2), [0, 1, 2, 1]);
+  assert.deepStrictEqual(spreadArrayMixed(0, 'ab', 2), [0, 'a', 'b', 2, 'a', 'b']);
   assert.deepStrictEqual(spreadArrayCall('q', three), ['q', 1, 2, 3, 'q']);
+  const copy = spreadArray(three);
+  copy.push(4);
+  copy[0] = 'changed';
   assert.deepStrictEqual(three, [1, 2, 3]);
 
   assert.strictEqual(spreadMax(three), 3);
@@ -213,8 +238,12 @@ function noisy(values, failAt, withReturn) {
 for (let i = 0; i < WARM / 10; i++) {
   assert.strictEqual(spreadCount(noisy([1, 2], -1, true)), 2);
   assert.strictEqual(take(), 'open,next0,next1,next2');
+  assert.deepStrictEqual(spreadArray(noisy(['a'], -1, true)), ['a']);
+  assert.strictEqual(take(), 'open,next0,next1');
   assert.throws(() => spreadCount(noisy([1, 2, 3], 1, true)), RangeError);
   assert.strictEqual(take(), 'open,next0,next1');
+  assert.throws(() => spreadArrayPrefix(0, noisy([1, 2, 3], 2, true)), RangeError);
+  assert.strictEqual(take(), 'open,next0,next1,next2');
   assert.throws(() => spreadNew(noisy([1], 0, false)), RangeError);
   assert.strictEqual(take(), 'open,next0');
   assert.throws(() => makeArray(noisy([1], 1, false)), RangeError);
@@ -229,6 +258,8 @@ function bigCall(run, expected) {
     assert.ok(error instanceof RangeError);
   }
 }
+assert.strictEqual(spreadArray(big).length, 70000);
+assert.strictEqual(spreadArrayPrefix(0, big).length, 70001);
 bigCall(() => spreadMax(big), 69999);
 bigCall(() => spreadCount(big), 70000);
 bigCall(() => restLength(...big), 70000);
@@ -251,6 +282,8 @@ for (let i = 0; i < WARM; i++) {
 assert.ok(Reflect.construct(spreadNew.bind(null, three), []) instanceof Point);
 
 function guardCall(arr) { return sum3(...arr); }
+function guardArray(arr) { return [...arr]; }
+function guardPrefix(x, arr) { return [x, ...arr]; }
 function guardNew(arr) { return new Point(...arr); }
 function guardMethod(arr) { return holder.m(...arr); }
 function guardSuper(arr) { return new ArrayDerived(arr); }
@@ -259,6 +292,8 @@ function guardRestStore(...r) { const kept = r; return count(...r) + kept.length
 function guardRestReturn(flag, ...r) { return flag ? r : count(...r); }
 for (let i = 0; i < WARM; i++) {
   assert.strictEqual(guardCall(three), 6);
+  assert.strictEqual(guardArray(three).length, 3);
+  assert.strictEqual(guardPrefix(0, three).length, 4);
   assert.strictEqual(guardNew(three).c, 3);
   assert.strictEqual(guardMethod(three), 16);
   assert.strictEqual(guardSuper(two).b, 5);
@@ -274,17 +309,49 @@ const quiet3 = new Quiet(1, 2, 3);
 const quiet2 = new Quiet(4, 5);
 assert.strictEqual(quiet3.length, 3);
 assert.strictEqual(guardCall(quiet3), 'abc');
+assert.strictEqual(guardArray(quiet3).join(''), 'abcd');
+assert.strictEqual(guardPrefix(0, quiet3).join(''), '0abcd');
 assert.strictEqual(guardNew(quiet3).n, 4);
 assert.strictEqual(guardMethod(quiet3), '10abc');
 assert.strictEqual(guardSuper(quiet2).n, 4);
 for (let i = 0; i < WARM; i++) {
   assert.strictEqual(guardCall(three), 6);
+  assert.strictEqual(guardArray(three).length, 3);
   assert.strictEqual(guardNew(three).c, 3);
 }
 const sparse3 = [1, , 3];
 assert.ok(Number.isNaN(guardCall(sparse3)));
+assert.ok(1 in guardArray(sparse3));
+assert.strictEqual(guardArray(sparse3)[1], undefined);
 assert.strictEqual(guardNew(sparse3).b, undefined);
 assert.strictEqual(guardNew(sparse3).n, 3);
+
+class Loud extends Array {
+  *[Symbol.iterator]() {
+    log.push('loud');
+    yield 'only';
+  }
+}
+const loud = new Loud(1, 2, 3);
+const own = [1, 2, 3];
+own[Symbol.iterator] = function* () { log.push('own'); yield 'mine'; };
+const getter = [1, 2, 3];
+Object.defineProperty(getter, 1, { get() { log.push('get1'); return 'got'; }, enumerable: true, configurable: true });
+const frozen = Object.freeze([1, 2, 3]);
+for (let i = 0; i < WARM / 10; i++) {
+  assert.strictEqual(spreadCount(loud), 1);
+  assert.deepStrictEqual(spreadArray(loud), ['only']);
+  assert.strictEqual(take(), 'loud,loud');
+  assert.deepStrictEqual(spreadArray(own), ['mine']);
+  assert.strictEqual(spreadCall(own), 'mineundefinedundefined');
+  assert.strictEqual(take(), 'own,own');
+  assert.deepStrictEqual(spreadArray(getter), [1, 'got', 3]);
+  assert.strictEqual(spreadCall(getter), '1got3');
+  assert.strictEqual(take(), 'get1,get1');
+  assert.strictEqual(spreadCall(frozen), 6);
+  assert.deepStrictEqual(spreadArray(frozen), [1, 2, 3]);
+  assert.ok(!Object.isFrozen(spreadArray(frozen)));
+}
 
 const arrayIterator = Array.prototype[Symbol.iterator];
 const arrayIteratorProto = Object.getPrototypeOf([][Symbol.iterator]());
@@ -296,6 +363,10 @@ arrayIteratorProto.next = function () {
 };
 assert.strictEqual(spreadCall(three), 6);
 assert.strictEqual(take(), 'step,step,step,step');
+assert.strictEqual(spreadArray(two).join('|'), '4|5');
+assert.strictEqual(take(), 'step,step,step');
+assert.strictEqual(spreadArrayPrefix(0, two).join('|'), '0|4|5');
+assert.strictEqual(take(), 'step,step,step');
 assert.strictEqual(forward(1, 2, 3), 6);
 assert.strictEqual(take(), 'step,step,step,step');
 assert.strictEqual(forwardCount(), 0);
@@ -318,6 +389,8 @@ Array.prototype[Symbol.iterator] = function* () {
   yield 'q';
 };
 assert.strictEqual(spreadCall(three), 'pqundefined');
+assert.strictEqual(spreadArray(three).join('|'), 'p|q');
+assert.strictEqual(spreadArrayPrefix(0, three).join('|'), '0|p|q');
 assert.strictEqual(spreadCount(new Array(9)), 2);
 assert.strictEqual(forward(1, 2, 3), 'pqundefined');
 assert.strictEqual(forwardCount(), 2);
@@ -332,10 +405,67 @@ assert.strictEqual(restTwice(1), 4);
 Array.prototype[Symbol.iterator] = arrayIterator;
 assert.ok(take().length > 0);
 assert.strictEqual(spreadCall(three), 6);
+assert.deepStrictEqual(spreadArray(three), [1, 2, 3]);
 assert.strictEqual(forward(1, 2, 3), 6);
 assert.strictEqual(makeRest(1, 2).b, 2);
 assert.strictEqual(take(), '');
 warm();
 checkShapes();
+
+let drainHits = 0;
+function drainThenSpread(a, n) {
+  for (;;) {
+    if (n-- <= 0) break;
+    drainHits++;
+  }
+  return [...a].length;
+}
+let drainTotal = 0;
+for (let i = 0; i < 30000; i++) drainTotal += drainThenSpread(three, i % 3);
+assert.strictEqual(drainTotal, 90000);
+assert.strictEqual(drainHits, 30000);
+
+const collectSeen = [];
+function collectThenSpread(items, limit) {
+  let n = 0;
+  for (let guard = 0; guard < 1000; guard++) {
+    if (n >= limit) break;
+    collectSeen.push(n);
+    n++;
+  }
+  return [...items, n];
+}
+let collectLast;
+for (let i = 0; i < 30000; i++) {
+  collectSeen.length = 0;
+  collectLast = collectThenSpread(three, 2);
+  if (collectSeen.length !== 2) break;
+}
+assert.deepStrictEqual(collectLast, [1, 2, 3, 2]);
+assert.deepStrictEqual(collectSeen, [0, 1]);
+
+let switchSide = 0;
+function switchSpread(a, c) {
+  let r = 0;
+  switch (c) {
+    case 0: switchSide++; break;
+    case 1: r = [...a].length; break;
+    default: switchSide += 2;
+  }
+  return r;
+}
+function switchSpreadLast(a, c) {
+  let r = 0;
+  switch (c) {
+    case 0: switchSide++; break;
+    default: switchSide += 2; break;
+    case 1: r = [...a, c].length;
+  }
+  return r;
+}
+let switchTotal = 0;
+for (let i = 0; i < 30000; i++) switchTotal += switchSpread(three, i % 3) + switchSpreadLast(three, i % 3);
+assert.strictEqual(switchTotal, 70000);
+assert.strictEqual(switchSide, 60000);
 
 console.log('ok');
