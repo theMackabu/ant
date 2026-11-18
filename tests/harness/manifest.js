@@ -55,6 +55,7 @@ export function targets() {
     'test_buffer_fill_and_encoding_errors.cjs',
     'test_buffer_inspect.cjs',
     'test_buffer_numeric_rw.cjs',
+    'test_class_static_fields.cjs',
     'test_buffer_search_and_write_encodings.cjs',
     'test_buffer_statics.cjs',
     'test_buffer_wtf8_utf8.cjs',

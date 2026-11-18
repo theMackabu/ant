@@ -57,11 +57,29 @@ static inline void sv_op_define_method(
   vm->sp--;
 }
 
-static inline bool sv_field_target_plain(ant_value_t obj) {
+static inline bool sv_field_key_special_on_function(ant_t *js, ant_value_t key) {
+  if (vtype(key) != kTypeString) return true;
+  size_t len = 0;
+  const char *str = js_getstr(js, key, &len);
+  if (!str) return true;
+  
+  switch (len) {
+    case 4: return memcmp(str, "name", 4) == 0;
+    case 6: return memcmp(str, "length", 6) == 0 || memcmp(str, "caller", 6) == 0;
+    case 9: return memcmp(str, "prototype", 9) == 0 || memcmp(str, "arguments", 9) == 0;
+    default: return false;
+  }
+}
+
+static inline bool sv_field_target_plain(ant_t *js, ant_value_t obj, ant_value_t key) {
   static constexpr uint16_t mask = ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXOTIC;
-  if (vtype(obj) != kTypeObject) return false;
-  ant_object_t *ptr = js_obj_ptr(obj);
-  return ptr && (ptr->flags.raw & mask) == ANT_OBJECT_FLAG_EXTENSIBLE && !is_proxy(obj);
+  bool function = vtype(obj) == kTypeFunction;
+  if (vtype(obj) != kTypeObject && !function) return false;
+  if (function && sv_field_key_special_on_function(js, key)) return false;
+  
+  ant_value_t holder = function ? js_as_obj(obj) : obj;
+  ant_object_t *ptr = js_obj_ptr(holder);
+  return ptr && (ptr->flags.raw & mask) == ANT_OBJECT_FLAG_EXTENSIBLE && !is_proxy(holder);
 }
 
 static inline ant_value_t sv_define_method_comp(
@@ -71,7 +89,7 @@ static inline ant_value_t sv_define_method_comp(
   ant_value_t key = *key_slot;
   bool is_field = (flags & SV_DEFINE_METHOD_FIELD) != 0;
 
-  if (is_field && !sv_field_target_plain(obj))
+  if (is_field && !sv_field_target_plain(js, obj, key))
     return js_create_data_property_or_throw(js, obj, key, fn);
   ant_value_t desc_obj = js_as_obj(obj);
   
@@ -120,6 +138,7 @@ static inline ant_value_t sv_define_method_comp(
     const char *kptr = (const char *)(uintptr_t)vstr(js, key_str, &klen);
     ant_value_t defined = mkprop_define_data(js, obj, kptr, (size_t)klen, fn);
     if (defined == T_EMPTY) return js_create_data_property_or_throw(js, obj, key_str, fn);
+    if (is_err(defined)) return defined;
   } else if (vtype(key_str) == kTypeString) {
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
