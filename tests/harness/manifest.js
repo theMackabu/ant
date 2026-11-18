@@ -550,6 +550,7 @@ export function targets() {
     'test_uv_nested_poll.mjs',
     'test_version_check_cache.cjs',
     'test_realm_free_builtins.cjs',
+    'test_proxy_deep_key_enumeration.cjs',
     'test_regexp_utf16_offsets.cjs',
     'test_string_iterator_receiver.cjs',
     'test_string_key_cache_length.cjs',

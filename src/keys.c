@@ -665,6 +665,11 @@ static inline ant_value_t for_in_keys_collect_chain(
     ant_value_t r, proto;
     
     if (!cur_ptr) goto next_proto;
+      if (proxy_enumerates_as_target(js, as_cur, &proto)) {
+        GC_ROOT_RESTORE(js, iter_mark);
+        cur = proto;
+        continue;
+      }
     r = for_in_keys_add_exotic_indices(js, out, seen, as_cur, cur_ptr);
     if (is_err(r)) goto err;
     

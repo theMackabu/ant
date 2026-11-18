@@ -222,6 +222,7 @@ static ant_value_t proxy_list_from_array_like(ant_t *js, ant_value_t source) {
 }
 
 ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, obj);
 
@@ -342,6 +343,22 @@ ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
   GC_ROOT_RESTORE(js, root_mark);
   
   return keys;
+}
+
+bool proxy_enumerates_as_target(ant_t *js, ant_value_t proxy, ant_value_t *target) {
+  ant_proxy_state_t *data = get_proxy_data(proxy);
+  if (!data || data->revoked || data->host) return false;
+  if (data->trap_epoch != js->ic.epoch) {
+    if (vtype(data->handler) != kTypeObject) return false;
+    proxy_trap_mask_refresh(js, data);
+    if (data->trap_epoch != js->ic.epoch) return false;
+  }
+
+  const uint16_t observed =
+    (1u << PROXY_TRAP_OWN_KEYS) | (1u << PROXY_TRAP_GET_OWN_PROPERTY_DESCRIPTOR) | (1u << PROXY_TRAP_GET_PROTOTYPE_OF);
+  if (data->trap_mask & observed) return false;
+  *target = data->target;
+  return true;
 }
 
 ant_value_t proxy_own_keys_filtered(ant_t *js, ant_value_t obj, bool include_symbols, bool enumerable_only) {
