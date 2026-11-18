@@ -304,6 +304,7 @@ typedef struct {
       bool builtin;
       bool native_closure;
       bool construct_super;
+      uint16_t spare_slots;
     } call;
     struct {
       sv_func_t *func;

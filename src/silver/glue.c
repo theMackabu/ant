@@ -299,6 +299,25 @@ static inline int jit_inline_spread_args(ant_value_t **args, int argc, ant_value
   return JIT_INLINE_SPREAD_ARGS;
 }
 
+ant_value_t jit_helper_new_args(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t func, ant_value_t new_target,
+  ant_value_t *args, int argc, int cap, bool spread
+) {
+  sv_call_args_t call;
+  sv_call_args_reset(&call, args, argc);
+  
+  ant_value_t status = spread
+    ? sv_spread_call_args(vm, js, &call, cap)
+    : sv_apply_normalize_args(js, &call, cap);
+  if (is_err(status)) return status;
+  
+  ant_value_t result = jit_helper_new(vm, js, func, new_target, call.args, call.argc);
+  sv_call_args_release(&call);
+  
+  return result;
+}
+
 ant_value_t jit_helper_super_spread(
   sv_vm_t *vm, ant_t *js,
   ant_value_t constructor, ant_value_t this_val,

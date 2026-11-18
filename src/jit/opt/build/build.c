@@ -5252,7 +5252,7 @@ static opt_flow_t opt_build_super_call_with(opt_builder_t *b, sv_op_t op, const 
   }
   ir_node_id_t result = plain ? opt_try_super_direct(b, inputs, argc) : IR_NONE;
   uintptr_t helper = op == OP_SUPER_APPLY ? (uintptr_t)opt_rt_super_apply
-    : (uintptr_t)opt_rt_super_call;
+    : op == OP_SUPER_SPREAD ? (uintptr_t)opt_rt_super_spread : (uintptr_t)opt_rt_super_call;
   if (result == IR_NONE) result = opt_runtime_call(b, helper, forward, inputs, argc + 3, false, true);
   opt_drop(b, operands);
   opt_forget_memory(b);
@@ -5274,7 +5274,51 @@ static opt_flow_t opt_build_super_call(opt_builder_t *b, const uint8_t *ip, sv_o
   }
   ir_node_id_t inputs[3 + OPT_MAX_CALL_ARGS];
   for (uint32_t i = 0; i < operands; i++) inputs[i] = opt_tagged(b, opt_peek(b, operands - 1 - i));
-  opt_flow_t flow = opt_build_super_call_with(b, op, inputs, argc, operands); if (flow != OPT_FLOW_CONTINUE) return flow;
+  return opt_build_super_call_with(b, op, inputs, argc, operands);
+}
+
+static void opt_collect_call_inputs(opt_builder_t *b, ir_node_id_t *inputs, uint32_t count, uint32_t operands) {
+  for (uint32_t i = 0; i < count; i++) inputs[i] = opt_tagged(b, opt_peek(b, operands - 1 - i));
+}
+
+static ir_node_id_t opt_spread_runtime_call(opt_builder_t *b, uintptr_t helper, bool spread, const ir_node_id_t *inputs, uint32_t count, bool passes_entry) {
+  ir_node_id_t result = opt_runtime_call(b, helper, spread, inputs, count, false, false);
+  ir_op_t *op = &ir_node(b->graph, result)->op;
+  op->call.spare_slots = (uint16_t)(OPT_SPREAD_ARG_SLOTS - (int)(count - 2));
+  return result;
+}
+
+static opt_flow_t opt_build_spread_call(opt_builder_t *b, const uint8_t *ip, sv_op_t op) {
+  bool super = op == OP_SUPER_SPREAD, construct = op == OP_NEW_SPREAD;
+  uint32_t argc = sv_get_u16(ip + 1), head = super ? 3 : 2;
+  uint32_t operands = argc + head;
+  if (super && !opt_super_call_allowed(b)) return OPT_FLOW_FAILED;
+  if (!argc || argc + super > OPT_MAX_CALL_ARGS || operands > b->frame.sp) {
+    opt_fail(b, "call-argc");
+    return OPT_FLOW_FAILED;
+  }
+  uint32_t fixed = argc - 1;
+  ir_node_id_t inputs[3 + OPT_MAX_CALL_ARGS];
+  opt_collect_call_inputs(b, inputs, head + fixed, operands);
+  ir_node_id_t iterable = opt_peek(b, 0);
+  ir_node_id_t *elements = inputs + head + fixed;
+  if (opt_is_any_virtual_arguments(b, iterable)) return opt_no_virtual_arguments(b);
+  *elements = opt_tagged(b, iterable);
+  if (super) return opt_build_super_call_with(b, OP_SUPER_SPREAD, inputs, argc, operands);
+  uintptr_t helper = construct ? (uintptr_t)opt_rt_new_args : (uintptr_t)opt_rt_call_args;
+  return opt_finish_call(b, operands, opt_spread_runtime_call(b, helper, true, inputs, 2 + argc, false), false);
+}
+
+static opt_flow_t opt_build_apply(opt_builder_t *b, const uint8_t *ip, sv_op_t op) {
+  uint32_t argc = sv_get_u16(ip + 1), operands = argc + 2;
+  if (argc > OPT_MAX_CALL_ARGS || operands > b->frame.sp) {
+    opt_fail(b, "call-argc");
+    return OPT_FLOW_FAILED;
+  }
+  ir_node_id_t inputs[2 + OPT_MAX_CALL_ARGS];
+  opt_collect_call_inputs(b, inputs, operands, operands);
+  uintptr_t helper = op == OP_NEW_APPLY ? (uintptr_t)opt_rt_new_args : (uintptr_t)opt_rt_call_args;
+  opt_flow_t flow = opt_finish_call(b, operands, opt_spread_runtime_call(b, helper, false, inputs, operands, false), false); if (flow != OPT_FLOW_CONTINUE) return flow;
   return OPT_FLOW_CONTINUE;
 }
 
@@ -6142,6 +6186,10 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
     }
     case OP_CALL_SUPER: case OP_SUPER_APPLY: case OP_SUPER_FORWARD:
       return opt_build_super_call(b, ip, op);
+    case OP_CALL_SPREAD: case OP_NEW_SPREAD: case OP_SUPER_SPREAD:
+      return opt_build_spread_call(b, ip, op);
+    case OP_APPLY: case OP_NEW_APPLY:
+      return opt_build_apply(b, ip, op);
     case OP_IMPORT_DEFAULT: case OP_IMPORT_NAMED:
       return opt_build_import(b, ip, op);
     case OP_THROW:

@@ -276,8 +276,9 @@ static void opt_cg_lay_out_frame(opt_cg_t *cg) {
   uint32_t call_slots = 0;
   for (ir_node_id_t node = 0; node < ir_node_count(cg->graph); node++) {
     const ir_op_t *op = &ir_node(cg->graph, node)->op;
-    if (op->code == IR_OP_CALL_DIRECT || op->code == IR_OP_CALL_NATIVE || op->code == IR_OP_CALL_CONSTRUCT)
-      call_slots = call_slots > 2u + op->call.argc ? call_slots : 2u + op->call.argc;
+    if (op->code != IR_OP_CALL_DIRECT && op->code != IR_OP_CALL_NATIVE && op->code != IR_OP_CALL_CONSTRUCT) continue;
+    uint32_t slots = 2u + op->call.argc + op->call.spare_slots;
+    call_slots = call_slots > slots ? call_slots : slots;
   }
   cg->entry_off = OPT_OUTGOING_BYTES;
   cg->index_off = (uint32_t)((cg->entry_off + sizeof(opt_entry_t) + 7) & ~(size_t)7);
