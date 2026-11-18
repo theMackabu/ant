@@ -5211,6 +5211,30 @@ static bool opt_try_super_inline(opt_builder_t *b, bool forward, const ir_node_i
   return true;
 }
 
+static ir_node_id_t opt_try_super_direct(opt_builder_t *b, const ir_node_id_t *inputs, uint32_t argc) {
+  opt_super_parents_t chain;
+  ant_value_t home = opt_super_call_parents(b, inputs[1], &chain);
+  if (!home || !chain.closure || !opt_super_parents_retain(b, &chain)) return IR_NONE;
+  for (uint32_t i = 0; i < argc; i++)
+    if (opt_is_any_virtual_arguments(b, inputs[3 + i])) return IR_NONE;
+  opt_super_parents_guard(b, inputs[1], home, &chain);
+  ir_node_id_t operands[3 + OPT_MAX_CALL_ARGS];
+  operands[0] = opt_constant(b, chain.parents[chain.count - 1]);
+  operands[1] = inputs[0];
+  operands[2] = inputs[2];
+  for (uint32_t i = 0; i < argc; i++) operands[3 + i] = inputs[3 + i];
+  ir_op_t call = ir_op(IR_OP_CALL_DIRECT);
+  call.call.func = b->func;
+  call.call.bc_off = b->pc;
+  call.call.stores_operands = true;
+  call.call.argc = (uint16_t)(argc + 1);
+  call.call.extra = (uintptr_t)chain.closure;
+  call.call.construct_super = true;
+  ir_node_id_t result = opt_emit(b, call, operands, 3 + argc, OPT_REPR_TAGGED);
+  ir_node(b->graph, result)->frame_state = opt_call_position(b);
+  opt_mark_catch(b, result);
+  return result;
+}
 
 static bool opt_super_call_allowed(opt_builder_t *b) {
   if (b->func->is_derived_ctor && (!b->inline_call || b->inline_call->construct)) return true;
@@ -5226,8 +5250,9 @@ static opt_flow_t opt_build_super_call_with(opt_builder_t *b, sv_op_t op, const 
     opt_fail(b, "inline-super");
     return OPT_FLOW_FAILED;
   }
+  ir_node_id_t result = plain ? opt_try_super_direct(b, inputs, argc) : IR_NONE;
   uintptr_t helper = (uintptr_t)opt_rt_super_call;
-  ir_node_id_t result = opt_runtime_call(b, helper, forward, inputs, argc + 3, false, true);
+  if (result == IR_NONE) result = opt_runtime_call(b, helper, forward, inputs, argc + 3, false, true);
   opt_drop(b, operands);
   opt_forget_memory(b);
   opt_push(b, result);
