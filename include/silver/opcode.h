@@ -307,6 +307,8 @@ OP_DEF(  PUT_EVAL_FUNCTION, 5,   1,   0, atom)
 OP_DEF(  INIT_GLOBAL_LEX,   5,   1,   0, atom)
 OP_DEF(  CLOSURE_ARGS,      5,   0,   1, const)     /* closure in a function with mapped arguments: link captured params */
 OP_DEF(  GET_UPVAL_VAL,     3,   0,   1, var_ref)
+OP_DEF(  ARRAY_LITERAL,     5,   0,   1, u32)       /* push array built from literal site */
+OP_DEF(  ARRAY_INIT,        5,   2,   1, u32)       /* arr val -> arr (store into fresh literal at index) */
 OP_DEF(  GET_SUPER_FIELD,   7,   2,   1, atom)      /* this home -> value (atom + ic_idx:u16) */
 OP_DEF(  PUT_SUPER_FIELD,   7,   3,   1, atom)      /* this home value -> value (atom + ic_idx:u16) */
 OP_DEF(  ARRAY_CONST,       9,   0,   1, u32)       /* push array copied from constant pool run (u32 start, u32 count) */

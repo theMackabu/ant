@@ -53,6 +53,14 @@ L_ARRAY: {
   NEXT(OP_ARRAY);
 }
 
+L_ARRAY_LITERAL: {
+  VM_CHECK(sv_op_array_literal(vm, js, func, ip));
+  NEXT(OP_ARRAY_LITERAL);
+}
+L_ARRAY_INIT: {
+  sv_op_array_init(vm, js, ip);
+  NEXT(OP_ARRAY_INIT);
+}
 L_ARRAY_CONST: {
   VM_CHECK(sv_op_array_const(vm, js, func, ip));
   NEXT(OP_ARRAY_CONST);
