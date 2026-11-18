@@ -110,6 +110,7 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
   free(ctx->loops);
   free(ctx->with_scopes);
   free(ctx->unwind_kinds);
+  free(ctx->unwind_marks);
   free(ctx->srcpos);
   free(ctx->slot_types);
   free(ctx->deferred_exports);

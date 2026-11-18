@@ -366,7 +366,12 @@ void unwind_push(sv_compiler_t *c, uint8_t kind) {
   if (c->unwind_count >= c->unwind_cap) {
     c->unwind_cap = c->unwind_cap ? c->unwind_cap * 2 : 8;
     c->unwind_kinds = realloc(c->unwind_kinds, (size_t)c->unwind_cap);
+    c->unwind_marks = realloc(c->unwind_marks, (size_t)c->unwind_cap * sizeof(sv_unwind_mark_t));
   }
+  c->unwind_marks[c->unwind_count] = (sv_unwind_mark_t){
+    .local_count = c->local_count,
+    .using_count = c->using_cleanup_count,
+  };
   c->unwind_kinds[c->unwind_count++] = kind;
 }
 

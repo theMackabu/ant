@@ -523,7 +523,7 @@ sv_func_t *compile_function_body(
 
     comp.using_stack_local = body_using_stack;
     comp.using_stack_async = body_has_await_using;
-    push_using_cleanup(&comp, body_using_stack, comp.scope_depth, body_has_await_using);
+    push_using_cleanup(&comp, body_using_stack, body_using_err_local, comp.scope_depth, body_has_await_using);
 
     comp.try_depth++;
     body_using_try_jump = emit_jump(&comp, OP_TRY_PUSH);

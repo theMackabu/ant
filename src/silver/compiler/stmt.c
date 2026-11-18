@@ -45,15 +45,25 @@ void emit_using_cleanups_to_depth(sv_compiler_t *c, int target_depth) {
   }
 }
 
-void emit_close_upvals_to_depth(sv_compiler_t *c, int target_depth) {
-  for (int i = c->local_count - 1; i >= 0; i--) {
-    if (c->locals[i].depth <= target_depth) break;
-    if (c->locals[i].captured) {
-      int frame_slot = local_to_frame_slot(c, i);
-      emit_op(c, OP_CLOSE_UPVAL);
-      emit_u16(c, (uint16_t)frame_slot);
-    }
+typedef struct {
+  int locals;
+  int usings;
+} exit_cursor_t;
+
+static void emit_exit_cleanups(sv_compiler_t *c, exit_cursor_t *cur, int local_floor, int using_floor) {
+  int close_local = -1;
+  for (int i = cur->locals - 1; i >= local_floor; i--)
+    if (c->locals[i].captured) close_local = i;
+  if (close_local >= 0)
+    emit_slot_op(c, OP_CLOSE_UPVAL, (uint16_t)local_to_frame_slot(c, close_local));
+  if (local_floor < cur->locals) cur->locals = local_floor;
+
+  for (int i = cur->usings - 1; i >= using_floor; i--) {
+    sv_using_cleanup_t *cleanup = &c->using_cleanups[i];
+    emit_using_dispose_call(c, cleanup->stack_local, -1, cleanup->is_async, false);
+    emit_op(c, OP_POP);
   }
+  if (using_floor < cur->usings) cur->usings = using_floor;
 }
 
 static void emit_handler_close(sv_compiler_t *c) {
@@ -72,8 +82,17 @@ static void emit_iter_close_seq(sv_compiler_t *c, bool is_async) {
   }
 }
 
-static void emit_loop_exit_unwind(sv_compiler_t *c, int unwind_depth, int target_loop) {
+static void emit_loop_exit_unwind(
+  sv_compiler_t *c, int unwind_depth, int target_loop,
+  exit_cursor_t *cur, exit_cursor_t floor
+) {
   for (int i = c->unwind_count - 1; i >= unwind_depth; i--) {
+    sv_unwind_mark_t mark = c->unwind_marks[i];
+    emit_exit_cleanups(
+      c, cur,
+      mark.local_count > floor.locals ? mark.local_count : floor.locals,
+      mark.using_count > floor.usings ? mark.using_count : floor.usings
+    );
     if (c->unwind_kinds[i] == UNW_TRY_FINALLY) {
       emit_op(c, OP_UNWIND_JMP);
       emit_i32(c, 0);
@@ -88,7 +107,13 @@ static void emit_loop_exit_unwind(sv_compiler_t *c, int unwind_depth, int target
 }
 
 void emit_loop_exit_jump(sv_compiler_t *c, sv_loop_t *loop, sv_patch_list_t *pl) {
-  emit_loop_exit_unwind(c, loop->unwind_depth, (int)(loop - c->loops));
+  exit_cursor_t cur = { c->local_count, c->using_cleanup_count };
+  exit_cursor_t floor = cur;
+  while (floor.locals > 0 && c->locals[floor.locals - 1].depth > loop->scope_depth) floor.locals--;
+  while (floor.usings > 0 && c->using_cleanups[floor.usings - 1].scope_depth > loop->scope_depth) floor.usings--;
+
+  emit_loop_exit_unwind(c, loop->unwind_depth, (int)(loop - c->loops), &cur, floor);
+  emit_exit_cleanups(c, &cur, floor.locals, floor.usings);
   patch_list_add(pl, emit_jump(c, OP_JMP));
 }
 
@@ -99,18 +124,38 @@ static bool unwinding_runs_finally(const sv_compiler_t *c) {
 }
 
 void emit_return_from_stack(sv_compiler_t *c) {
-  emit_using_cleanups_to_depth(c, -1);
+  exit_cursor_t cur = { c->local_count, c->using_cleanup_count };
   int active_unwinds = c->unwind_count;
+  int stash_local = -1;
+  bool needs_stash = false;
+
   for (int i = 0; i < c->loop_count; i++) {
     sv_loop_t *loop = &c->loops[i];
     if (loop->iter_unwind_index < 0) continue;
-
-    emit_put_local(c, loop->iter_completion_local);
-    emit_loop_exit_unwind(c, loop->iter_unwind_index, -1);
-    emit_get_local(c, loop->iter_completion_local);
     active_unwinds = loop->iter_unwind_index;
+    stash_local = loop->iter_completion_local;
+    needs_stash = true;
     break;
   }
+
+  if (c->using_cleanup_count > 0 && c->using_cleanups[0].stash_local >= 0) {
+    int first = 0;
+    while (first < active_unwinds && c->unwind_marks[first].using_count == 0) first++;
+    if (first < active_unwinds) {
+      active_unwinds = first;
+      stash_local = c->using_cleanups[0].stash_local;
+      needs_stash = false;
+      for (int i = first; i < c->unwind_count && !needs_stash; i++)
+        needs_stash = c->unwind_kinds[i] == UNW_TRY_FINALLY;
+      for (int i = 0; i < c->loop_count && !needs_stash; i++)
+        needs_stash = c->loops[i].iter_unwind_index >= first;
+    }
+  }
+
+  if (needs_stash) emit_put_local(c, stash_local);
+  emit_loop_exit_unwind(c, active_unwinds, -1, &cur, (exit_cursor_t){ 0, 0 });
+  emit_exit_cleanups(c, &cur, cur.locals, 0);
+  if (needs_stash) emit_get_local(c, stash_local);
 
   bool runs_finally = false;
   for (int i = 0; i < active_unwinds && !runs_finally; i++)
@@ -229,6 +274,7 @@ void emit_dispose_resource(sv_compiler_t *c, bool is_async) {
 void push_using_cleanup(
   sv_compiler_t *c,
   int stack_local,
+  int stash_local,
   int scope_depth,
   bool is_async
 ) {
@@ -240,6 +286,7 @@ void push_using_cleanup(
 
   c->using_cleanups[c->using_cleanup_count++] = (sv_using_cleanup_t){
     .stack_local = stack_local,
+    .stash_local = stash_local,
     .scope_depth = scope_depth,
     .is_async = is_async,
   };
@@ -271,7 +318,7 @@ static void compile_block_with_using(sv_compiler_t *c, sv_ast_t *node) {
   
   c->using_stack_local = stack_local;
   c->using_stack_async = has_await_using;
-  push_using_cleanup(c, stack_local, c->scope_depth, has_await_using);
+  push_using_cleanup(c, stack_local, err_local, c->scope_depth, has_await_using);
 
   c->try_depth++;
   int try_jump = emit_jump(c, OP_TRY_PUSH);
