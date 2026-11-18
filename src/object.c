@@ -792,5 +792,6 @@ void js_set_finalizer(ant_value_t obj, js_finalizer_fn fn) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr) return;
   
+  Ant_Assert(!ant_array_is_shared(ptr), "shared array elements are released by the array finalizer");
   ptr->finalizer = fn;
 }

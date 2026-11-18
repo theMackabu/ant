@@ -339,7 +339,7 @@ static __attribute__((noinline, cold)) ant_value_t setprop_array_length_coerced(
 ) {
   if (
     (len_obj->flags.raw & (ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_EXOTIC)) &&
-    array_length_readonly_slow(js, obj)
+    !ant_array_is_shared(len_obj) && array_length_readonly_slow(js, obj)
   ) return array_length_write_ignored(js, v, declined);
   if (vtype(v) == kTypeBigInt) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a BigInt value to a number");
   if (vtype(v) == kTypeSymbol) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a number");

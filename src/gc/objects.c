@@ -1678,15 +1678,19 @@ static inline __attribute__((always_inline)) bool gc_object_release_plain(ant_t 
   return true;
 }
 
+static __attribute__((noinline)) bool gc_object_release_finalized(ant_t *js, ant_object_t *obj) {
+  obj->finalizer(js, obj);
+  obj->finalizer = NULL;
+  return gc_object_release_plain(js, obj);
+}
+
 void gc_object_free(ant_t *js, ant_object_t *obj) {
   if (!obj) return;
 
-  if (gc_object_release_plain(js, obj)) {
+  if (gc_object_release_plain(js, obj) || (obj->finalizer && gc_object_release_finalized(js, obj))) {
     ant_object_cell_free(js, obj);
     return;
   }
-
-  if (obj->finalizer) obj->finalizer(js, obj);
   
   if (obj->native_tag != 0 || ant_object_has_sidecar(obj))
     gc_finalize_host_natives(js, js_obj_from_ptr(obj));
@@ -1794,6 +1798,20 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   ant_object_cell_free(js, obj);
 }
 
+static __attribute__((noinline)) void gc_object_free_shared_array(ant_t *js, ant_object_t *obj) {
+  gc_shared_elements_finalize(js, obj);
+  obj->finalizer = NULL;
+  if (gc_object_release_plain(js, obj)) ant_object_cell_free(js, obj);
+  else gc_object_free(js, obj);
+}
+
+static __attribute__((noinline)) void gc_object_free_swept(ant_t *js, ant_object_t *obj) {
+  if (!obj->finalizer) return gc_object_free(js, obj);
+  if (obj->finalizer == gc_shared_elements_finalize) return gc_object_free_shared_array(js, obj);
+  if (gc_object_release_finalized(js, obj)) return ant_object_cell_free(js, obj);
+  gc_object_free(js, obj);
+}
+
 static void gc_sweep_young_and_promote(ant_t *js) {
   ant_fixed_arena_t *oa = &js->obj_arena;
   uint8_t epoch = js->gc.obj_epoch;
@@ -1826,7 +1844,7 @@ static void gc_sweep_young_and_promote(ant_t *js) {
       freed++;
     } else {
       oa->free_list = free_list;
-      gc_object_free(js, obj);
+      gc_object_free_swept(js, obj);
       free_list = oa->free_list;
     }
     
@@ -1885,7 +1903,7 @@ static void gc_sweep_arena(ant_t *js, ant_fixed_arena_t *oa, ant_object_t **old)
       }
 
       oa->free_list = free_list;
-      gc_object_free(js, obj);
+      gc_object_free_swept(js, obj);
       free_list = found_live ? oa->free_list : *(void **)obj;
     }
   }

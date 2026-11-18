@@ -2015,7 +2015,7 @@ static ant_value_t finreg_register(ant_params_t) {
   
   ant_value_t result = is_err(fields[FINREG_ENTRY_TARGET]) ? fields[FINREG_ENTRY_TARGET] : fields[FINREG_ENTRY_TOKEN];
   if (!is_err(result)) {
-    ant_value_t entry = js_mkarr_dense_literal(js, fields, FINREG_ENTRY_FIELDS);
+    ant_value_t entry = Ant_Array_CreateFromElements(js, fields, FINREG_ENTRY_FIELDS, FINREG_ENTRY_FIELDS, false);
     js_arr_set_index(js, registrations, js_arr_len(js, registrations), entry);
     result = Ant_Value_Undefined;
   }
