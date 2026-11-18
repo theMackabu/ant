@@ -19,6 +19,18 @@ typedef struct {
   uint32_t function_depth;
 } sv_parser_t;
 
+typedef struct {
+  bool no_in;
+  bool in_async;
+} sv_parse_context_t;
+
+static inline sv_parse_context_t sv_parse_context_save(const sv_parser_t *p) { return (sv_parse_context_t){p->no_in, p->in_async}; }
+
+static inline void sv_parse_context_restore(sv_parser_t *p, sv_parse_context_t saved) {
+  p->no_in = saved.no_in;
+  p->in_async = saved.in_async;
+}
+
 #define SV_RAISE(mkerr) ({                                  \
   if (!Ant_Exception_Pending(p->js)) {                      \
     js_error_site_t sv_site_ = sv_lexer_error_site(&p->lx); \

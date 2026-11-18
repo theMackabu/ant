@@ -2,13 +2,11 @@
 #include "shapes.h"
 
 sv_ast_t *parse_arrow_body(sv_parser_t *p, bool is_async) {
-  bool saved_async = p->in_async;
+  sv_parse_context_t saved = sv_parse_context_save(p);
   p->in_async = is_async;
-  bool saved_no_in = p->no_in;
   if (sv_lexer_next(&p->lx) == TOK_LBRACE) p->no_in = false;
   sv_ast_t *body = p->lx.st.tok == TOK_LBRACE ? parse_block(p, true) : parse_assign(p);
-  p->no_in = saved_no_in;
-  p->in_async = saved_async;
+  sv_parse_context_restore(p, saved);
   return body;
 }
 
@@ -301,8 +299,7 @@ sv_ast_t *parse_func(sv_parser_t *p, bool is_async) {
     p->lx.st.consumed = 1;
   }
 
-  bool saved_async = p->in_async;
-  bool saved_no_in = p->no_in;
+  sv_parse_context_t saved = sv_parse_context_save(p);
   p->in_async = is_async;
   p->no_in = false;
   
@@ -311,8 +308,7 @@ sv_ast_t *parse_func(sv_parser_t *p, bool is_async) {
   expect(p, TOK_RPAREN);
   
   fn->body = parse_block(p, true);
-  p->no_in = saved_no_in;
-  p->in_async = saved_async;
+  sv_parse_context_restore(p, saved);
 
   fn->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
   finish_func(fn);
