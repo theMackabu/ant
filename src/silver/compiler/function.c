@@ -324,8 +324,9 @@ sv_func_t *compile_function_body(
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, enclosing, node, mode);
   bool eval_body = !enclosing->enclosing;
-  comp.is_static = (node->flags & FN_STATIC) || (comp.is_arrow && enclosing->is_static);
+  comp.is_static = (node->flags & FN_STATIC) || ((comp.is_arrow || eval_body) && enclosing->is_static);
   comp.eval_this_binding = eval_body && enclosing->eval_this_binding;
+  comp.eval_super_binding = eval_body && enclosing->eval_super_binding;
   comp.eval_field_thunk = eval_body && enclosing->eval_field_thunk;
   comp.is_derived_ctor = !!(node->flags & FN_DERIVED_CTOR);
   comp.is_class_ctor = !!(node->flags & FN_CLASS_CTOR);

@@ -139,6 +139,7 @@ static bool eval_scope_builder_capture_upvalue(
   if (!eval_local_is_visible(local) || eval_scope_builder_has_binding(
         set, scope, local->name, local->name_len)) return true;
 
+  if (is_ident_str(local->name, local->name_len, "super", 5)) return true;
   int upvalue = resolve_upvalue_raw(c, local->name, local->name_len);
   if (upvalue < 0) return true;
   return eval_scope_builder_add_binding(
@@ -155,6 +156,11 @@ static bool eval_scope_builder_capture_locals(
     if (!eval_scope_builder_capture_local(
           c, scope, set, &c->locals[i], i)) return false;
   return true;
+}
+
+static bool compiler_has_super_binding(sv_compiler_t *c) {
+  if (c->super_local >= 0 || lexical_owner(c)->eval_super_binding) return true;
+  return c->is_arrow && resolve_super_upvalue(c) >= 0;
 }
 
 static bool eval_scope_builder_capture_upvalues(
@@ -185,6 +191,8 @@ static bool eval_scope_builder_capture_keywords(
 static bool eval_scope_flags_init(sv_compiler_t *c, sv_eval_scope_flags_t *flags) {
   *flags = (sv_eval_scope_flags_t){
     .this_binding = compiler_has_this_binding(c),
+    .super_binding = compiler_has_super_binding(c),
+    .is_static = c->is_static,
   };
 
   return true;
@@ -302,9 +310,12 @@ static bool is_inline_literal_eval_expr(sv_ast_t *node) {
   }
 }
 
-static bool inline_eval_can_compile_without_early_errors(ant_t *js, sv_ast_t *node, bool strict) {
+static bool inline_eval_can_compile_without_early_errors(sv_compiler_t *c, sv_ast_t *node, bool strict) {
+  ant_t *js = c->js;
   if (!node) return true;
   if (node->type == N_CLASS) return false;
+  if (node->type == N_CALL && is_ident_name(node->left, "super") && !lexical_owner(c)->is_derived_ctor) return false;
+  if (is_ident_name(node, "super") && !compiler_has_super_binding(c)) return false;
   if (node->type == N_OBJECT && (node->flags & FN_PATTERN_ONLY)) return false;
 
   if (node->type == N_FUNC) {
@@ -316,7 +327,7 @@ static bool inline_eval_can_compile_without_early_errors(ant_t *js, sv_ast_t *no
 
   sv_ast_t *child;
   SV_AST_FOR_EACH_CHILD(node, child)
-    if (!inline_eval_can_compile_without_early_errors(js, child, strict)) return false;
+    if (!inline_eval_can_compile_without_early_errors(c, child, strict)) return false;
 
   return true;
 }
@@ -356,7 +367,7 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
     program->args.count == 1 &&
     is_inline_literal_eval_expr(program->args.items[0]) &&
     (c->allows_new_target || !ast_contains_lexical_new_target(program)) &&
-    inline_eval_can_compile_without_early_errors(c->js, program->args.items[0], c->is_strict) &&
+    inline_eval_can_compile_without_early_errors(c, program->args.items[0], c->is_strict) &&
     !ast_contains_direct_suspend(program->args.items[0], NULL)
   ) expr = program->args.items[0]; else {
     parse_arena_rewind(c->js, mark);
@@ -612,7 +623,7 @@ static bool eval_program_needs_env(sv_compiler_t *c, const sv_ast_t *program) {
   sv_ast_t *expr = program->args.items[0];
   return
     !is_inline_literal_eval_expr(expr) ||
-    !inline_eval_can_compile_without_early_errors(c->js, expr, c->is_strict) ||
+    !inline_eval_can_compile_without_early_errors(c, expr, c->is_strict) ||
     ast_contains_direct_suspend(expr, NULL) ||
     ast_has_own_eval(c, expr);
 }

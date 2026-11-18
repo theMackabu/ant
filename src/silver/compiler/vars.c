@@ -19,6 +19,11 @@ void emit_super(sv_compiler_t *c) {
     return;
   }
 
+  if (!lexical_owner(c)->eval_super_binding) {
+    reject_super(c);
+    return;
+  }
+
   emit_atom_op(c, OP_GET_EVAL_GLOBAL, "super", 5);
 }
 
