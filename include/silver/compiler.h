@@ -222,6 +222,7 @@ typedef struct sv_compiler {
   bool write_counts_known;
 
   bool is_arrow;
+  bool is_static;
   bool is_async;
   bool is_async_generator;
   bool is_strict;

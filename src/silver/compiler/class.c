@@ -287,6 +287,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
   comp.is_strict = true;
+  comp.is_static = true;
 
   comp.super_local = add_hidden_local(&comp);
   emit_op(&comp, OP_SPECIAL_OBJ);

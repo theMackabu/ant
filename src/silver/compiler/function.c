@@ -245,6 +245,7 @@ sv_func_t *compile_function_body(
 ) {
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, enclosing, node, mode);
+  comp.is_static = (node->flags & FN_STATIC) || (comp.is_arrow && enclosing->is_static);
   if (node->flags & FN_DERIVED_CTOR) comp.derived_field_owner = enclosing;
   else if (comp.is_arrow) comp.derived_field_owner = enclosing->derived_field_owner;
 
@@ -639,7 +640,7 @@ sv_func_t *compile_function_body(
   func->is_derived_ctor = !!(node->flags & FN_DERIVED_CTOR);
   func->is_class_ctor = !!(node->flags & FN_CLASS_CTOR);
   func->ctor_slot_class = (!func->is_method || func->is_class_ctor) ? ctor_slot_class(node) : 0;
-  func->is_static = !!(node->flags & FN_STATIC);
+  func->is_static = comp.is_static;
   func->is_tla = comp.is_tla;
   func->debug->filename = enclosing->filename ? enclosing->filename : enclosing->js->filename;
   func->debug->source_line = (int)source_line_of(enclosing, node);

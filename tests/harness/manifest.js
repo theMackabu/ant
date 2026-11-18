@@ -163,6 +163,7 @@ export function targets() {
     'test_buffer_copy_bytes_from_errors.cjs',
     'test_location_flag.mjs',
     'test_string_property_enumerable.cjs',
+    'test_super_static_arrow.cjs',
     'test_console_log_nul.cjs',
     'test_call_site_positions.cjs',
     'test_inspect_compact_sorted.cjs',
