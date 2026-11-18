@@ -5251,7 +5251,8 @@ static opt_flow_t opt_build_super_call_with(opt_builder_t *b, sv_op_t op, const 
     return OPT_FLOW_FAILED;
   }
   ir_node_id_t result = plain ? opt_try_super_direct(b, inputs, argc) : IR_NONE;
-  uintptr_t helper = (uintptr_t)opt_rt_super_call;
+  uintptr_t helper = op == OP_SUPER_APPLY ? (uintptr_t)opt_rt_super_apply
+    : (uintptr_t)opt_rt_super_call;
   if (result == IR_NONE) result = opt_runtime_call(b, helper, forward, inputs, argc + 3, false, true);
   opt_drop(b, operands);
   opt_forget_memory(b);
@@ -6139,7 +6140,7 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
         return b->finally_count ? opt_return_through_finally(b, value, opt_try_state(b, b->pc)) : opt_build_unwind(b);
       return opt_build_return(b, value);
     }
-    case OP_CALL_SUPER: case OP_SUPER_FORWARD:
+    case OP_CALL_SUPER: case OP_SUPER_APPLY: case OP_SUPER_FORWARD:
       return opt_build_super_call(b, ip, op);
     case OP_IMPORT_DEFAULT: case OP_IMPORT_NAMED:
       return opt_build_import(b, ip, op);

@@ -62,6 +62,7 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_await_return_direct);
   LOAD_EXT(jit_helper_native_finish);
   LOAD_EXT(jit_helper_call_super);
+  LOAD_EXT(jit_helper_super_apply);
   LOAD_EXT(jit_helper_call_array_includes);
   LOAD_EXT(jit_helper_call_char_code_at);
   LOAD_EXT(jit_helper_call_string_intrinsic);

@@ -270,8 +270,23 @@ ant_value_t jit_helper_call_super(
   ant_value_t constructor, ant_value_t this_val,
   ant_value_t *args, int argc, ant_value_t new_target
 ) {
-  ant_value_t result = sv_super_construct(vm, js, constructor, this_val, args, argc, new_target);
+  return sv_super_construct(vm, js, constructor, this_val, args, argc, new_target);
+}
 
+ant_value_t jit_helper_super_apply(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t constructor, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+) {
+  sv_call_args_t call;
+  sv_call_args_reset(&call, args, argc);
+  
+  ant_value_t status = sv_apply_normalize_args(js, &call, argc);
+  if (is_err(status)) return status;
+  
+  ant_value_t result = sv_super_construct(vm, js, constructor, this_val, call.args, call.argc, new_target);
+  sv_call_args_release(&call);
+  
 
 
   return result;

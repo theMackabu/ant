@@ -192,7 +192,7 @@ static MIR_label_t jit_emit_builtin_method_fastpath(jit_compile_t *c, uint16_t c
   }
 }
 
-static void jit_emit_super_call(jit_compile_t *c, MIR_op_t args, MIR_op_t argc) {
+static void jit_emit_super_call(jit_compile_t *c, MIR_item_t helper, MIR_op_t args, MIR_op_t argc) {
   MIR_reg_t r_super_nt = vstack_pop(&c->vs);
   MIR_reg_t r_super_fn = vstack_pop(&c->vs);
   MIR_reg_t r_super_this = vstack_pop(&c->vs);
@@ -201,7 +201,7 @@ static void jit_emit_super_call(jit_compile_t *c, MIR_op_t args, MIR_op_t argc) 
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_call_insn(c->ctx, 10,
                                     MIR_new_ref_op(c->ctx, c->call_super_proto),
-                                    MIR_new_ref_op(c->ctx, c->imp_call_super),
+                                    MIR_new_ref_op(c->ctx, helper),
                                     MIR_new_reg_op(c->ctx, r_super_res),
                                     MIR_new_reg_op(c->ctx, c->r_vm),
                                     MIR_new_reg_op(c->ctx, c->r_js),
@@ -230,7 +230,8 @@ static void jit_emit_super_call(jit_compile_t *c, MIR_op_t args, MIR_op_t argc) 
 
 void jit_emit_methods(jit_compile_t *c) {
   switch (c->op) {
-    case OP_CALL_SUPER: {
+    case OP_CALL_SUPER:
+    case OP_SUPER_APPLY: {
       vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
       uint16_t call_argc = sv_get_u16(c->ip + 1);
       if (call_argc > SV_JIT_ARGS_BUF_CAP ||
@@ -249,7 +250,10 @@ void jit_emit_methods(jit_compile_t *c) {
                                      MIR_new_reg_op(c->ctx, areg)));
       }
 
-      jit_emit_super_call(c, MIR_new_reg_op(c->ctx, c->r_args_buf), MIR_new_int_op(c->ctx, (int64_t)call_argc));
+      jit_emit_super_call(
+        c, c->op == OP_SUPER_APPLY ? c->imp_super_apply : c->imp_call_super,
+        MIR_new_reg_op(c->ctx, c->r_args_buf), MIR_new_int_op(c->ctx, (int64_t)call_argc)
+      );
       break;
     }
 
@@ -259,7 +263,7 @@ void jit_emit_methods(jit_compile_t *c) {
         c->ok = false;
         break;
       }
-      jit_emit_super_call(c, MIR_new_reg_op(c->ctx, c->r_args), MIR_new_reg_op(c->ctx, c->r_argc));
+      jit_emit_super_call(c, c->imp_call_super, MIR_new_reg_op(c->ctx, c->r_args), MIR_new_reg_op(c->ctx, c->r_argc));
       break;
     }
 

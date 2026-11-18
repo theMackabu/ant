@@ -145,6 +145,7 @@ typedef struct jit_compile {
   MIR_item_t imp_await_return_direct;
   MIR_item_t imp_native_finish;
   MIR_item_t imp_call_super;
+  MIR_item_t imp_super_apply;
   MIR_item_t imp_call_array_includes;
   MIR_item_t imp_call_char_code_at;
   MIR_item_t imp_call_string_intrinsic;
