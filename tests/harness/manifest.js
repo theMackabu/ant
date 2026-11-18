@@ -248,6 +248,7 @@ export function targets() {
     'test_jit_await_live_locals.cjs',
     'test_jit_bitwise_primitives.cjs',
     'test_jit_bound_recursion.cjs',
+    'test_jit_bailout_captured_locals.cjs',
     'test_jit_logical_immediates.cjs',
     'test_jit_try_regions.cjs',
     'test_jit_try_finally.cjs',
