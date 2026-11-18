@@ -10,6 +10,7 @@
 #include "silver/call.h"
 #include "silver/feedback.h"
 #include "silver/generic_step.h"
+#include "silver/literal_sites.h"
 #include "silver/glue.h"
 #include "silver/upvalues.h"
 #include "silver/vm.h"
@@ -1051,9 +1052,8 @@ ant_value_t opt_rt_array(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, a
   return js_mkarr_dense_literal(vm->js, args, (uint32_t)argc);
 }
 
-ant_value_t opt_rt_array_const(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
-  const uint8_t *ip = site->func->code + site->bc_off;
-  return js_mkarr_dense_literal(vm->js, site->func->constants + sv_get_u32(ip + 1), sv_get_u32(ip + 5));
+ant_value_t opt_rt_array_literal(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
+  return Silver_Literal_Create(vm->js, site->func, sv_get_u32(site->func->code + site->bc_off + 1));
 }
 
 ant_value_t opt_rt_get_super(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
@@ -1077,6 +1077,11 @@ ant_value_t opt_rt_get_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_
 ant_value_t opt_rt_put_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
   const sv_atom_t *atom = &site->func->atoms[sv_get_u32(site->func->code + site->bc_off + 1)];
   return Silver_Super_PutField(vm->js, site->func, receiver, home, atom, args[0], opt_rt_site_ic(site));
+}
+
+ant_value_t opt_rt_array_init(sv_vm_t *vm, ant_value_t arr, ant_value_t value, ant_value_t *args, int64_t argc, int64_t index) {
+  Silver_Literal_InitElement(vm->js, arr, (uint32_t)index, value);
+  return Ant_Value_Undefined;
 }
 
 ant_value_t opt_rt_closure(sv_vm_t *vm, sv_closure_t *parent, ant_value_t this_val, ant_value_t *args, int64_t argc, const opt_rt_closure_site_t *site) {

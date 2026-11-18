@@ -4382,12 +4382,25 @@ static opt_flow_t opt_build_array(opt_builder_t *b, const uint8_t *ip) {
   return OPT_FLOW_CONTINUE;
 }
 
-static opt_flow_t opt_build_array_const(opt_builder_t *b) {
+static opt_flow_t opt_build_array_literal(opt_builder_t *b, const uint8_t *ip) {
+  const sv_func_debug_t *debug = b->func->debug;
+  uint32_t index = sv_get_u32(ip + 1);
+  if (!debug || index >= debug->literal_site_count) return opt_fail(b, "operand") ? OPT_FLOW_CONTINUE : OPT_FLOW_FAILED;
+  
   opt_rt_site_t *at = code_arena_bump(b->js, sizeof *at);
   if (!at) return OPT_FLOW_GENERIC;
   *at = (opt_rt_site_t){.func = b->func, .bc_off = b->pc};
   ir_node_id_t undefined = opt_constant(b, IR_VALUE_UNDEFINED);
-  opt_push(b, opt_runtime_call(b, (uintptr_t)opt_rt_array_const, (uintptr_t)at, (ir_node_id_t[]){undefined, undefined}, 2, true, false));
+  opt_push(b, opt_runtime_call(b, (uintptr_t)opt_rt_array_literal, (uintptr_t)at, (ir_node_id_t[]){undefined, undefined}, 2, true, false));
+  return OPT_FLOW_CONTINUE;
+}
+
+static opt_flow_t opt_build_array_init(opt_builder_t *b, const uint8_t *ip) {
+  ir_node_id_t array = opt_peek(b, 1), value = opt_tagged(b, opt_peek(b, 0));
+  uint32_t index = sv_get_u32(ip + 1);
+  opt_runtime_call(b, (uintptr_t)opt_rt_array_init, index, (ir_node_id_t[]){opt_tagged(b, array), value}, 2, false, false);
+  
+  opt_drop(b, 1);
   return OPT_FLOW_CONTINUE;
 }
 
@@ -5841,8 +5854,10 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
       return opt_build_set_proto(b);
     case OP_ARRAY:
       return opt_build_array(b, ip);
-    case OP_ARRAY_CONST:
-      return opt_build_array_const(b);
+    case OP_ARRAY_LITERAL:
+      return opt_build_array_literal(b, ip);
+    case OP_ARRAY_INIT:
+      return opt_build_array_init(b, ip);
     case OP_GET_SUPER_VAL:
       return opt_build_super_access(b, false, false);
     case OP_PUT_SUPER_VAL:
