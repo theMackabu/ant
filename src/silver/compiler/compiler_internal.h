@@ -110,6 +110,7 @@ void compile_expr_with_inferred_name(
   sv_compiler_t *c, sv_ast_t *node,
   const char *name, uint32_t len
 );
+void emit_throw_error(sv_compiler_t *c, js_err_type_t type, const char *msg, uint32_t len);
 void emit_throw_type_error(sv_compiler_t *c, const char *msg, uint32_t len);
 void emit_const_assign_error(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_import_binding_resolve(
