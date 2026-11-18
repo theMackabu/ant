@@ -361,6 +361,19 @@ bool proxy_enumerates_as_target(ant_t *js, ant_value_t proxy, ant_value_t *targe
   return true;
 }
 
+bool proxy_is_transparent(ant_t *js, ant_value_t proxy, ant_value_t *target) {
+  ant_proxy_state_t *data = get_proxy_data(proxy);
+  if (!data || data->revoked || data->host) return false;
+  if (data->trap_epoch != js->ic.epoch) {
+    if (vtype(data->handler) != kTypeObject) return false;
+    proxy_trap_mask_refresh(js, data);
+    if (data->trap_epoch != js->ic.epoch) return false;
+  }
+  if (data->trap_mask) return false;
+  *target = data->target;
+  return true;
+}
+
 ant_value_t proxy_own_keys_filtered(ant_t *js, ant_value_t obj, bool include_symbols, bool enumerable_only) {
   if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(obj);

@@ -255,6 +255,62 @@ assert.deepStrictEqual(failed, []);
   assert.strictEqual(removed.length, 1);
   assert.strictEqual(big.length, 2 ** 53);
   assert.deepStrictEqual(Object.keys(big), ['length', '9007199254740989', '9007199254740990']);
+
+  const traced = (source, limit) => {
+    const log = [];
+    let has = 0;
+    const proxy = new Proxy(source, {
+      has(t, k) { log.push('has ' + String(k)); if (++has > limit) throw new RangeError('stop'); return Reflect.has(t, k); },
+      get(t, k, r) { if (k !== 'length') log.push('get ' + String(k)); return Reflect.get(t, k, r); },
+      set(t, k, v, r) { log.push('set ' + String(k)); return Reflect.set(t, k, v, r); },
+      deleteProperty(t, k) { log.push('del ' + String(k)); return Reflect.deleteProperty(t, k); },
+    });
+    return { proxy, log };
+  };
+
+  let run = traced({ length: 2 ** 32 + 2, [2 ** 32]: 'x', [2 ** 32 + 1]: 'y' }, 4);
+  assert.throws(() => Array.prototype.unshift.call(run.proxy, 'q'), RangeError);
+  assert.deepStrictEqual(run.log, [
+    'has 4294967297', 'get 4294967297', 'set 4294967298', 'has 4294967296', 'get 4294967296', 'set 4294967297',
+    'has 4294967295', 'del 4294967296', 'has 4294967294', 'del 4294967295', 'has 4294967293',
+  ]);
+
+  run = traced({ length: 2 ** 32 + 2, 0: 'a', [2 ** 32]: 'x', [2 ** 32 + 1]: 'y' }, 3);
+  assert.throws(() => Array.prototype.shift.call(run.proxy), RangeError);
+  assert.deepStrictEqual(run.log, ['get 0', 'has 1', 'del 0', 'has 2', 'del 1', 'has 3', 'del 2', 'has 4']);
+
+  run = traced([1, , 3], 100);
+  assert.strictEqual(run.proxy.unshift(0), 4);
+  assert.deepStrictEqual(run.log, ['get unshift', 'has 2', 'get 2', 'set 3', 'has 1', 'del 2', 'has 0', 'get 0', 'set 1', 'set 0', 'set length']);
+
+  const layout = (a) => { const out = []; for (let i = 0; i < a.length; i++) out.push(Object.hasOwn(a, i) ? a[i] : '-'); return out.join(',') + '|' + a.length; };
+  for (let round = 0; round < 200; round++) {
+    let a = [1, 2, 3, , 5]; a.length = 9; a.unshift('x', 'y');
+    assert.strictEqual(layout(a), 'x,y,1,2,3,-,5,-,-,-,-|11');
+    a = [1, , 3]; a.length = 6; a[5] = 'z'; a.unshift(0);
+    assert.strictEqual(layout(a), '0,1,-,3,-,-,z|7');
+    a = [1, , 3]; a.length = 6; a[20] = 'far'; a.unshift(0);
+    assert.strictEqual(layout(a), '0,1,-,3,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,far|22');
+    a = []; a.length = 4; a.unshift(7);
+    assert.strictEqual(layout(a), '7,-,-,-,-|5');
+    const plain = new Proxy([1, 2, 3], {});
+    plain.unshift(0); assert.strictEqual(plain.shift(), 0); assert.strictEqual(plain.length, 3);
+  }
+
+  Array.prototype[1] = 'P';
+  try {
+    let a = [1, , 3]; a.length = 5; a.unshift(0);
+    assert.strictEqual(layout(a), '0,1,P,3,-,-|6');
+    a = [1, , 3]; a.unshift(0);
+    assert.strictEqual(layout(a), '0,1,P,3|4');
+    a = [1, , 3]; a.shift();
+    assert.strictEqual(layout(a), 'P,3|2');
+  } finally {
+    delete Array.prototype[1];
+  }
+  assert.throws(() => Object.freeze([1, 2]).unshift(0), TypeError);
+  assert.strictEqual(Array.prototype.unshift.call({ length: 2 ** 53 - 1 }), 2 ** 53 - 1);
+  assert.throws(() => Array.prototype.unshift.call({ length: 2 ** 53 - 1 }, 1), TypeError);
 }
 
 {

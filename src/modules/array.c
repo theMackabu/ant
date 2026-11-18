@@ -475,6 +475,19 @@ static ant_value_t array_shift_generic(ant_t *js, ant_value_t arr) {
   return is_err(done) ? done : first;
 }
 
+static ant_value_t array_unshift_generic(ant_t *js, ant_value_t arr, ant_offset_t len, ant_value_t *args, int nargs) {
+  if (nargs > 0) {
+    if (len > (ant_offset_t)9007199254740991 - (ant_offset_t)nargs)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Unshifting %d elements on an array-like of length %.0f is disallowed by its maximum length", nargs, (double)len);
+    ant_value_t done = array_move_range_throw(js, arr, 0, (ant_offset_t)nargs, len, true);
+    if (is_err(done)) return done;
+    for (int i = 0; i < nargs; i++)
+      if (is_err(done = array_set_index_throw(js, arr, (ant_offset_t)i, args[i]))) return done;
+  }
+  ant_value_t set = array_set_length_throw(js, arr, len + (ant_offset_t)nargs);
+  return is_err(set) ? set : Ant_Value_FromNumber((double)(len + (ant_offset_t)nargs));
+}
+
 static ant_value_t array_splice_generic(
   ant_t *js, ant_value_t arr, ant_offset_t len, ant_offset_t start,
   ant_offset_t delete_count, ant_value_t *items, ant_offset_t insert_count,
@@ -1995,29 +2008,11 @@ static ant_value_t builtin_array_shift(ant_params_t) {
   if (len == 0) return array_length_readonly(js, arr) ? array_shift_generic(js, arr) : Ant_Value_Undefined;
 
   if (is_proxy(arr)) {
-    ant_value_t read_from = proxy_read_target(js, arr);
-    ant_value_t first = proxy_get(js, arr, "0", 1);
-    if (is_err(first)) return first;
+    ant_value_t target;
+    if (proxy_is_transparent(js, arr, &target) && array_mutable_dense(js, target))
+      return builtin_array_shift(js, args, nargs, call_new_target, target, call_func);
+    return array_shift_generic(js, arr);
 
-    for (ant_offset_t i = 1; i < len; i++) {
-      char src[16];
-      size_t srclen = uint_to_str(src, sizeof(src), (unsigned)i);
-      char dst[16];
-      size_t dstlen = uint_to_str(dst, sizeof(dst), (unsigned)(i - 1));
-      if (arr_has(js, read_from, i)) {
-        ant_value_t elem = proxy_get(js, arr, src, srclen);
-        if (is_err(elem)) return elem;
-        js_setprop(js, arr, js_mkstr(js, dst, dstlen), elem);
-      } else {
-        ant_value_t del = proxy_delete(js, arr, dst, dstlen);
-        if (is_err(del)) return del;
-      }
-    }
-
-    ant_value_t del = proxy_delete_index(js, arr, len - 1);
-    if (is_err(del)) return del;
-    js_setprop(js, arr, js->length_str, Ant_Value_FromNumber((double)(len - 1)));
-    return first;
   }
 
   ant_offset_t doff = get_dense_buf(arr);
@@ -2057,47 +2052,33 @@ static ant_value_t builtin_array_unshift(ant_params_t) {
   }
 
   if (is_proxy(arr)) {
-    ant_value_t read_from = proxy_read_target(js, arr);
-    for (int i = (int)len - 1; i >= 0; i--) {
-      char src[16];
-      size_t srclen = uint_to_str(src, sizeof(src), (unsigned)i);
-      char dst[16];
-      size_t dstlen = uint_to_str(dst, sizeof(dst), (unsigned)(i + nargs));
-      if (arr_has(js, read_from, (ant_offset_t)i)) {
-        ant_value_t elem = proxy_get(js, arr, src, srclen);
-        if (is_err(elem)) return elem;
-        js_setprop(js, arr, js_mkstr(js, dst, dstlen), elem);
-      } else {
-        ant_value_t del = proxy_delete(js, arr, dst, dstlen);
-        if (is_err(del)) return del;
-      }
-    }
-
-    for (int i = 0; i < nargs; i++) {
-      char idxstr[16];
-      size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
-      js_setprop(js, arr, js_mkstr(js, idxstr, idxlen), args[i]);
-    }
-
-    ant_offset_t new_len = len + nargs;
-    js_setprop(js, arr, js->length_str, Ant_Value_FromNumber((double)new_len));
-    return Ant_Value_FromNumber((double)new_len);
+    ant_value_t target;
+    if (proxy_is_transparent(js, arr, &target) && array_mutable_dense(js, target))
+      return builtin_array_unshift(js, args, nargs, call_new_target, target, call_func);
+    return array_unshift_generic(js, arr, len, args, nargs);
   }
 
   ant_offset_t doff = get_dense_buf(arr);
-  if (doff && !is_proxy(arr)) {
+  if (doff) {
     ant_offset_t d_len = dense_iterable_length(js, arr);
-    if (len != d_len) goto unshift_slow;
+    ant_object_t *dense = dense_obj(doff);
+    if (dense->flags.may_have_holes && !array_proto_chain_plain(js, dense)) goto unshift_slow;
+    if (len != d_len) {
+      bool trailing_holes = len > d_len && len <= (ant_offset_t)UINT32_MAX - (ant_offset_t)nargs && !dense->flags.sealed &&
+        array_proto_chain_plain(js, dense) && !array_includes_object_may_have_indexed_props(js, arr, false);
+      if (!trailing_holes) goto unshift_slow;
+    }
     ant_offset_t new_len = len + nargs;
     ant_offset_t cap = dense_capacity(doff);
-    if (new_len > cap) {
-      doff = dense_grow(js, arr, new_len);
+    if (d_len + nargs > cap) {
+      doff = dense_grow(js, arr, d_len + nargs);
       if (doff == 0) return js_mkerr(js, "oom");
+      dense = dense_obj(doff);
     }
     ant_value_t *d = dense_data(doff);
     if (!d) return js_mkerr(js, "oom");
     memmove(&d[nargs], &d[0], sizeof(ant_value_t) * (size_t)d_len);
-    gc_elements_moved(dense_obj(doff));
+    gc_elements_moved(dense);
     for (int i = 0; i < nargs; i++)
       dense_set_owned(js, doff, (ant_offset_t)i, args[i]);
     array_len_set(js, arr, new_len);
@@ -2105,29 +2086,7 @@ static ant_value_t builtin_array_unshift(ant_params_t) {
   }
 
   unshift_slow:
-  ant_value_t read_from = is_proxy(arr) ? proxy_read_target(js, arr) : arr;
-
-  for (int i = (int)len - 1; i >= 0; i--) {
-    if (arr_has(js, read_from, (ant_offset_t)i)) {
-      ant_value_t elem = arr_get(js, read_from, (ant_offset_t)i);
-      char dst[16];
-      size_t dstlen = uint_to_str(dst, sizeof(dst), (unsigned)(i + nargs));
-      js_setprop(js, arr, js_mkstr(js, dst, dstlen), elem);
-    }
-  }
-  
-  for (int i = 0; i < nargs; i++) {
-    char idxstr[16];
-    size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
-    ant_value_t key = js_mkstr(js, idxstr, idxlen);
-    js_setprop(js, arr, key, args[i]);
-  }
-  
-  ant_offset_t new_len = len + nargs;
-  if (array_obj_ptr(arr)) array_len_set(js, arr, new_len);
-  else js_setprop(js, arr, js->length_str, Ant_Value_FromNumber((double) new_len));
-  
-  return Ant_Value_FromNumber((double) new_len);
+  return array_unshift_generic(js, arr, len, args, nargs);
 }
 
 static ant_value_t builtin_array_some(ant_params_t) {
