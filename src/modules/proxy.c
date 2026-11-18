@@ -1472,28 +1472,32 @@ ant_value_t proxy_delete_sym(ant_t *js, ant_value_t proxy, ant_value_t sym) {
 
 ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, ant_value_t *args, int argc) {
   if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
-  ant_proxy_state_t *data = get_proxy_data(proxy);
-  if (!data) return js_mkerr_typed(js, JS_ERR_TYPE, "object is not a function");
-  if (data->revoked) return proxy_revoked_error(js, "apply");
 
-  ant_value_t target = data->target;
-  ant_value_t handler = data->handler;
-  uint8_t target_type = vtype(target);
+  for (;;) {
+    ant_proxy_state_t *data = get_proxy_data(proxy);
+    if (!data) return js_mkerr_typed(js, JS_ERR_TYPE, "object is not a function");
+    if (data->revoked) return proxy_revoked_error(js, "apply");
 
-  if (target_type != kTypeFunction && target_type != kTypeBuiltin && !(target_type == kTypeObject && is_proxy(target)))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not a function", typestr(target_type));
+    ant_value_t target = data->target;
+    uint8_t target_type = vtype(target);
+    bool nested = target_type == kTypeObject && is_proxy(target);
 
-  ant_value_t trap = proxy_get_method(js, handler, "apply");
-  if (is_err(trap)) return trap;
-  if (vtype(trap) != kTypeUndefined) {
+    if (!is_callable(proxy) || (target_type != kTypeFunction && target_type != kTypeBuiltin && !nested))
+      return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not a function", typestr(target_type));
+
+    ant_value_t trap = proxy_get_method(js, data->handler, "apply");
+    if (is_err(trap)) return trap;
+    if (vtype(trap) != kTypeUndefined) {
       ant_value_t args_arr = Ant_Array_Create(js);
       for (int i = 0; i < argc; i++)
         js_arr_push(js, args_arr, args[i]);
       ant_value_t trap_args[3] = { target, this_arg, args_arr };
-      return sv_vm_call(js->vm, js, trap, handler, trap_args, 3, NULL, Ant_Value_Undefined);
-  }
+      return sv_vm_call(js->vm, js, trap, data->handler, trap_args, 3, NULL, Ant_Value_Undefined);
+    }
 
-  return sv_vm_call(js->vm, js, target, this_arg, args, argc, NULL, Ant_Value_Undefined);
+    if (!nested) return sv_vm_call(js->vm, js, target, this_arg, args, argc, NULL, Ant_Value_Undefined);
+    proxy = target;
+  }
 }
 
 ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, int argc, ant_value_t new_target) {

@@ -398,6 +398,7 @@ export function targets() {
     'test_regexp_cache_admission.cjs',
     'test_regexp_exec_discard.cjs',
     'test_regexp_exec_position_hints.cjs',
+    'test_proxy_nested_apply.cjs',
     'test_regexp_fast_path_guards.cjs',
     'test_regexp_fast_tiers.cjs',
     'test_regexp_instance_layout.cjs',
