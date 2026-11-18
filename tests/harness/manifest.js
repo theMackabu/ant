@@ -332,6 +332,7 @@ export function targets() {
     'test_opt_call_new_array.cjs',
     'test_opt_code_values.cjs',
     'test_opt_exit_metadata.cjs',
+    'test_opt_class_call_settles.cjs',
     'test_opt_exit_upvalues.cjs',
     'test_opt_func_state.cjs',
     'test_opt_generic.cjs',
