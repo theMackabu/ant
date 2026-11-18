@@ -481,6 +481,7 @@ export function targets() {
     'test_rope_large_property_concat.cjs',
     'test_server_graceful_stop.cjs',
     'test_server_request_limits.cjs',
+    'test_set_prototype_non_extensible.cjs',
     'test_shape_proto_identity.cjs',
     'test_shell.js',
     'test_shell_bun_api.js',

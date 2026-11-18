@@ -210,11 +210,13 @@ static ant_value_t reflect_set_prototype_of(ant_params_t) {
   }
   if (!is_object_type(proto) && vtype(proto) != kTypeNull)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Object prototype may only be an Object or null");
-  if (vtype(proto) != kTypeNull && proto_chain_contains(js, proto, target)) return Ant_Value_False;
+  if (is_proxy(js_as_obj(target))) {
+    ant_value_t result = proxy_set_prototype_of(js, js_as_obj(target), proto);
+    return is_err(result) ? result : Ant_Value_FromBool(js_truthy(js, result));
+  }
   
-  js_set_proto_wb(js, target, proto);
   
-  return Ant_Value_True;
+  return Ant_Value_FromBool(Ant_Object_TrySetPrototype(js, target, proto) == ANT_PROTO_SET_OK);
 }
 
 static ant_value_t reflect_is_extensible(ant_params_t) {

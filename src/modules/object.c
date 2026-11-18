@@ -120,6 +120,11 @@ static ant_value_t builtin_object_getPrototypeOf(ant_params_t) {
   return Ant_Value_Null;
 }
 
+static ant_value_t object_set_prototype_error(ant_t *js, ant_proto_set_t outcome) {
+  if (outcome == ANT_PROTO_SET_CYCLE) return js_mkerr_typed(js, JS_ERR_TYPE, "Cyclic __proto__ value");
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Object is not extensible");
+}
+
 static ant_value_t builtin_object_setPrototypeOf(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "Object.setPrototypeOf requires 2 arguments");
   
@@ -146,9 +151,6 @@ static ant_value_t builtin_object_setPrototypeOf(ant_params_t) {
     return js_mkerr(js, "Object.setPrototypeOf: prototype must be an object or null");
   }
   
-  if (pt != kTypeNull && proto_chain_contains(js, proto, obj))
-    return js_mkerr(js, "Cyclic __proto__ value");
-
   if (is_proxy(obj)) {
     ant_value_t result = proxy_set_prototype_of(js, obj, proto);
     if (is_err(result)) return result;
@@ -157,8 +159,8 @@ static ant_value_t builtin_object_setPrototypeOf(ant_params_t) {
     return obj;
   }
   
-  set_proto(js, obj, proto);
-  return obj;
+  ant_proto_set_t outcome = Ant_Object_TrySetPrototype(js, obj, proto);
+  return outcome == ANT_PROTO_SET_OK ? obj : object_set_prototype_error(js, outcome);
 }
 
 static ant_value_t builtin_proto_getter(ant_params_t) {
@@ -195,10 +197,14 @@ static ant_value_t builtin_proto_setter(ant_params_t) {
     return Ant_Value_Undefined;
   }
   
-  if (pt != kTypeNull && proto_chain_contains(js, proto, call_this))
-    return Ant_Value_Undefined;
+  if (is_proxy(call_this)) {
+    ant_value_t result = proxy_set_prototype_of(js, call_this, proto);
+    if (is_err(result) || js_truthy(js, result)) return is_err(result) ? result : Ant_Value_Undefined;
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Object prototype could not be set");
+  }
   
-  set_proto(js, call_this, proto);
+  ant_proto_set_t outcome = Ant_Object_TrySetPrototype(js, call_this, proto);
+  if (outcome != ANT_PROTO_SET_OK) return object_set_prototype_error(js, outcome);
   return Ant_Value_Undefined;
 }
 

@@ -261,3 +261,8 @@ static ant_value_t walk_prototype_chain_ex(
 ant_value_t walk_prototype_chain(ant_t *js, ant_value_t l, ant_value_t ctor_proto) {
   return walk_prototype_chain_ex(js, l, ctor_proto, NULL);
 }
+
+bool proto_would_cycle(ant_t *js, ant_value_t obj, ant_value_t proto) {
+  if (!is_object_type(obj) || !is_object_type(proto)) return false;
+  return same_object_identity(proto, obj) || proto_chain_contains(js, proto, obj);
+}

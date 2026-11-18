@@ -1316,8 +1316,7 @@ ant_value_t proxy_set_prototype_of(ant_t *js, ant_value_t proxy, ant_value_t pro
   }
 
   if (is_proxy(target)) return proxy_set_prototype_of(js, target, proto);
-  set_proto(js, target, proto);
-  return Ant_Value_True;
+  return Ant_Value_FromBool(Ant_Object_TrySetPrototype(js, target, proto) == ANT_PROTO_SET_OK);
 }
 
 ant_value_t proxy_is_extensible(ant_t *js, ant_value_t proxy) {
