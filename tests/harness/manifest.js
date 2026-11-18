@@ -189,6 +189,7 @@ export function targets() {
     'test_super_static_arrow.cjs',
     'test_console_log_nul.cjs',
     'test_call_site_positions.cjs',
+    'test_builtin_results_define_own.cjs',
     'test_inspect_compact_sorted.cjs',
     'test_node_api_result_shapes.cjs',
     'test_assert_strict.cjs',

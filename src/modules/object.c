@@ -1173,7 +1173,13 @@ static ant_value_t object_add_descriptors_for_keys(
     if (is_err(desc)) return desc;
     if (vtype(desc) == kTypeUndefined) continue;
 
-    ant_value_t set_result = js_setprop(js, result, key, desc);
+    ant_value_t set_result = T_EMPTY;
+    if (vtype(key) == kTypeString) {
+      ant_offset_t klen = 0;
+      const char *kptr = (const char *)(uintptr_t)vstr(js, key, &klen);
+      set_result = mkprop_define_data(js, result, kptr, (size_t)klen, desc);
+    }
+    if (set_result == T_EMPTY) set_result = js_create_data_property_or_throw(js, result, key, desc);
     if (is_err(set_result)) return set_result;
   }
 

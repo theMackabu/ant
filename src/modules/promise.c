@@ -4,6 +4,7 @@
 #include "cfunc.h"
 #include "errors.h"
 #include "internal.h"
+#include "props.h"
 #include "sugar.h"
 #include "protectors.h"
 #include "gc/roots.h"
@@ -1232,9 +1233,9 @@ static ant_value_t builtin_Promise_withResolvers(ant_params_t) {
 
   ant_value_t result = Ant_Object_Create(js);
   GC_ROOT_PIN(js, result);
-  js_setprop(js, result, js_mkstr(js, "promise", 7), p);
-  js_setprop(js, result, js_mkstr(js, "resolve", 7), res_fn);
-  js_setprop(js, result, js_mkstr(js, "reject", 6), rej_fn);
+  mkprop_define_data(js, result, "promise", 7, p);
+  mkprop_define_data(js, result, "resolve", 7, res_fn);
+  mkprop_define_data(js, result, "reject", 6, rej_fn);
 
   GC_ROOT_RESTORE(js, root_mark);
   return result;
