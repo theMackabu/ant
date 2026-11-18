@@ -338,7 +338,12 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     }
     n->left = callee;
 
-    if (sv_lexer_next(&p->lx) == TOK_LPAREN) {
+    if (sv_lexer_next(&p->lx) == TOK_OPTIONAL_CHAIN) {
+      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Invalid optional chain from new expression");
+      return mk(N_EMPTY);
+    }
+
+    if (p->lx.st.tok == TOK_LPAREN) {
       p->lx.st.consumed = 1;
       while (sv_lexer_next(&p->lx) != TOK_RPAREN && p->lx.st.tok != TOK_EOF) {
         if (p->lx.st.tok == TOK_REST) {

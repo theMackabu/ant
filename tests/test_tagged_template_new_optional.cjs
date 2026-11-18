@@ -84,11 +84,29 @@ assert.throws(() => new tag`x``y`, TypeError);
 take();
 
 const rejected = [
+  'o?.t`a`',
+  'o?.[1]`a`',
+  'o?.()`a`',
+  'o?.a.b`c`',
+  'o?.a\n`c`',
+  'o?.a(1)`c`',
+  'o?.a[0]`c`',
+  'o.a?.b.c`d`',
+  'o?.a?.b`c`',
+  'o?.#x`a`',
+  'new o?.a()',
+  'new o?.a',
+  'new F`x`?.a',
   'new F`x',
 ];
 for (const source of rejected) assert.throws(() => new Function(source), SyntaxError, source);
 
 const accepted = [
+  '(o?.t)`a`',
+  '(o?.a.b)`c`',
+  'o?.a(`x`)',
+  'o?.[`x`]',
+  'o?.a(t`x`)',
   'new F`x`',
   'new F`x`(1)',
   'new a.b`x`(1)',
@@ -96,7 +114,15 @@ const accepted = [
   'new (F)`x`',
   'new new F`a``b`',
   'new F()`x`',
+  'new F()?.a',
 ];
 for (const source of accepted) assert.doesNotThrow(() => new Function(source), source);
+
+const o = { t: (strings) => 'tagged:' + strings.raw[0] };
+assert.strictEqual((o?.t)`a`, 'tagged:a');
+assert.strictEqual(o?.t({ raw: [`plain`] }), 'tagged:plain');
+const missing = undefined;
+assert.throws(() => (missing?.t)`a`, TypeError);
+assert.throws(() => new Function('var o = { F(s) { return this === o } }; return o?.F`x`'), SyntaxError);
 
 console.log('ok');

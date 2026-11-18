@@ -49,6 +49,7 @@ sv_ast_t *parse_tagged_template(sv_parser_t *p, sv_ast_t *tag) {
 
 static sv_ast_t *parse_call(sv_parser_t *p) {
   sv_ast_t *n = parse_primary(p);
+  bool optional_chain = false;
 
   for (;;) {
     uint8_t la = sv_lexer_next(&p->lx);
@@ -77,6 +78,7 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
       if (n && n->type == N_EMPTY) return n;
     } else if (la == TOK_OPTIONAL_CHAIN) {
       p->lx.st.consumed = 1;
+      optional_chain = true;
       sv_ast_t *opt = mk(N_OPTIONAL);
       opt->left = n;
       if (sv_lexer_next(&p->lx) == TOK_LBRACKET) {
@@ -116,6 +118,10 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
       if (opt->src_end <= opt->src_off && opt->right) opt->src_end = opt->right->src_end;
       n = opt;
     } else if (la == TOK_TEMPLATE) {
+      if (optional_chain) {
+        SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Invalid tagged template on optional chain");
+        return mk(N_EMPTY);
+      }
       n = parse_tagged_template(p, n);
     } else break;
   }
