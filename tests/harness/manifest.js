@@ -493,6 +493,7 @@ export function targets() {
     'test_super_property_edges.cjs',
     'test_string_surrogate_search.cjs',
     'test_string_well_formed.cjs',
+    'test_super_dynamic_key.cjs',
     'test_string_wrapper_index_semantics.cjs',
     'test_structured_clone_detached.cjs',
     'test_structured_clone_props.mjs',

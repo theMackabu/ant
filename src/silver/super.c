@@ -23,6 +23,9 @@ ant_value_t Silver_Super_Get(
     return js_get_sym_with_receiver(js, base, prop, receiver);
   }
   
+  ant_value_t data;
+  if (sv_get_elem_string(js, base, prop, &data)) return data;
+  
   ant_value_t key = roots[1] = coerce_to_str(js, prop);
   if (is_err(key)) return key;
   if (!is_object_type(base)) return sv_mk_nullish_read_error_by_key(js, NULL, base, key);
