@@ -352,6 +352,7 @@ export function targets() {
     'test_opt_alloc.cjs',
     'test_opt_arrays.cjs',
     'test_opt_arrow_closures.cjs',
+    'test_opt_boxed_local_steps.cjs',
     'test_opt_builtin_patterns.cjs',
     'test_opt_calls.cjs',
     'test_opt_captures.cjs',
