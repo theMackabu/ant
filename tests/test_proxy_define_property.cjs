@@ -78,6 +78,100 @@ function nonConfigurable(desc) {
   ]);
 }
 
+{
+  for (const result of [false, 0, '', null, undefined]) {
+    const { proxy } = recording({}, result);
+    assert.throws(() => Object.defineProperty(proxy, 'a', { value: 1 }), TypeError);
+    assert.strictEqual(Reflect.defineProperty(proxy, 'a', { value: 1 }), false);
+    assert.throws(() => Object.defineProperties(proxy, { a: { value: 1 } }), TypeError);
+    assert.throws(() => Object.freeze(new Proxy({ a: 1 }, { defineProperty: () => result })), TypeError);
+    assert.throws(() => Object.seal(new Proxy({ a: 1 }, { defineProperty: () => result })), TypeError);
+    proxy.a = 1;
+    assert.throws(() => { 'use strict'; proxy.a = 1; }, TypeError);
+  }
+  const thrower = new Proxy({}, { defineProperty() { throw new RangeError('trap'); } });
+  assert.throws(() => Object.defineProperty(thrower, 'a', { value: 1 }), RangeError);
+  assert.throws(() => Reflect.defineProperty(thrower, 'a', { value: 1 }), RangeError);
+  assert.throws(() => { thrower.a = 1; }, RangeError);
+}
+
+{
+  const lying = target => new Proxy(target, { defineProperty: () => 1 });
+  const ok = (target, key, desc) => {
+    assert.strictEqual(Reflect.defineProperty(lying(target), key, desc), true);
+    assert.strictEqual(Object.defineProperty(lying(target), key, desc) !== undefined, true);
+  };
+  const bad = (target, key, desc) => {
+    assert.throws(() => Reflect.defineProperty(lying(target), key, desc), TypeError);
+    assert.throws(() => Object.defineProperty(lying(target), key, desc), TypeError);
+  };
+
+  ok({}, 'a', { value: 1 });
+  ok({ a: 1 }, 'a', { value: 2, writable: false });
+  bad({}, 'a', { value: 1, configurable: false });
+  bad({ a: 1 }, 'a', { configurable: false });
+  bad(Object.preventExtensions({}), 'a', { value: 1 });
+  ok(Object.preventExtensions({ a: 1 }), 'a', { value: 2 });
+
+  const writable = () => nonConfigurable({ value: 1, writable: true, enumerable: true });
+  ok(writable(), 'a', { value: 2 });
+  ok(writable(), 'a', { configurable: false });
+  ok(writable(), 'a', { enumerable: true });
+  ok(writable(), 'a', {});
+  bad(writable(), 'a', { writable: false });
+  bad(writable(), 'a', { value: 1, writable: false, configurable: false });
+  bad(writable(), 'a', { configurable: true });
+  bad(writable(), 'a', { enumerable: false });
+  bad(writable(), 'a', { get: getter });
+
+  const readOnly = () => nonConfigurable({ value: 1, writable: false, enumerable: false });
+  ok(readOnly(), 'a', { value: 1 });
+  ok(readOnly(), 'a', { writable: false });
+  ok(readOnly(), 'a', { value: 1, writable: false, enumerable: false, configurable: false });
+  bad(readOnly(), 'a', { value: 2 });
+  bad(readOnly(), 'a', { writable: true });
+  bad(readOnly(), 'a', { enumerable: true });
+  bad(readOnly(), 'a', { set: setter });
+  ok(nonConfigurable({ value: NaN }), 'a', { value: NaN });
+  bad(nonConfigurable({ value: 0 }), 'a', { value: -0 });
+
+  const accessor = () => nonConfigurable({ get: getter, set: setter });
+  ok(accessor(), 'a', { get: getter });
+  ok(accessor(), 'a', { set: setter, enumerable: false });
+  bad(accessor(), 'a', { get() {} });
+  bad(accessor(), 'a', { set: undefined });
+  bad(accessor(), 'a', { value: 1 });
+  bad(accessor(), 'a', { writable: false });
+  bad(Object.freeze({ a: 1 }), 'b', {});
+  bad(Object.freeze({ a: 1 }), 'a', { value: 2 });
+  ok(Object.freeze({ a: 1 }), 'a', { value: 1 });
+  ok(Object.seal({ a: 1 }), 'a', { value: 2 });
+}
+
+{
+  const mutating = new Proxy(nonConfigurable({ value: 1, writable: false }), {
+    defineProperty(t, k, desc) { desc.value = 1; delete desc.configurable; return true; },
+  });
+  assert.throws(() => Reflect.defineProperty(mutating, 'a', { value: 2 }), TypeError);
+  assert.throws(() => Reflect.defineProperty(mutating, 'b', { value: 2, configurable: false }), TypeError);
+}
+
+{
+  const trapless = target => new Proxy(target, {});
+  assert.strictEqual(Reflect.defineProperty(trapless(Object.freeze({ a: 1 })), 'a', { value: 2 }), false);
+  assert.strictEqual(Reflect.defineProperty(trapless(Object.freeze({ a: 1 })), 'b', { value: 2 }), false);
+  assert.strictEqual(Reflect.defineProperty(trapless(Object.freeze({ a: 1 })), 'a', { value: 1 }), true);
+  assert.strictEqual(Reflect.defineProperty(trapless(Object.preventExtensions({})), 'a', {}), false);
+  assert.strictEqual(Reflect.defineProperty(trapless(nonConfigurable({ get: getter })), 'a', { value: 1 }), false);
+  assert.strictEqual(Reflect.defineProperty(trapless(trapless(Object.freeze({}))), 'a', { value: 1 }), false);
+  assert.throws(() => Object.defineProperty(trapless(Object.freeze({ a: 1 })), 'a', { value: 2 }), TypeError);
+  assert.throws(() => Reflect.defineProperty(trapless({}), 'a', { get: 1 }), TypeError);
+  assert.throws(() => Reflect.defineProperty(trapless({}), 'a', { get: getter, value: 1 }), TypeError);
+  const target = {};
+  assert.strictEqual(Reflect.defineProperty(trapless(target), 'a', { value: 1, enumerable: 'yes' }), true);
+  assert.deepStrictEqual(Object.getOwnPropertyDescriptor(target, 'a'), { value: 1, writable: false, enumerable: true, configurable: false });
+}
+
 for (const forward of [true, false]) {
   const make = () => {
     const target = { data: 1, [Symbol.for('sym')]: 2 };

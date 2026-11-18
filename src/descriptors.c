@@ -1481,7 +1481,7 @@ static ant_value_t reflect_define_property(ant_t *js, ant_value_t obj, ant_value
   
   GC_ROOT_PIN(js, snapshot);
   if (is_object_type(obj) && is_proxy(js_as_obj(obj))) {
-    ant_value_t trapped = proxy_define_property(js, js_as_obj(obj), key_val, snapshot);
+    ant_value_t trapped = proxy_reflect_define_property(js, js_as_obj(obj), key_val, snapshot);
     GC_ROOT_RESTORE(js, mark);
     return is_err(trapped) ? trapped : Ant_Value_FromBool(js_truthy(js, trapped));
   }

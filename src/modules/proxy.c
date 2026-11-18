@@ -802,6 +802,10 @@ static bool proxy_handler_plain_for_set(ant_t *js, ant_proxy_state_t *data) {
   return true;
 }
 
+static ant_value_t proxy_define_trapped(
+  ant_t *js, ant_proxy_state_t *data, ant_value_t target, ant_value_t key_val, ant_value_t descriptor, ant_value_t trap
+);
+
 ant_value_t proxy_set_with_receiver_reason(
   ant_t *js, ant_value_t proxy, const char *key, size_t key_len,
   ant_value_t value, ant_value_t receiver, bool *trapless
@@ -1403,7 +1407,46 @@ static ant_value_t proxy_host_define(
   return data->host->set(js, data->target, key, key_len, value);
 }
 
-ant_value_t proxy_define_property(ant_t *js, ant_value_t proxy, ant_value_t key_val, ant_value_t descriptor) {
+static bool proxy_define_compatible(ant_t *js, const define_desc_raw_t *desc, const proxy_full_desc_t *current) {
+  if (current->configurable) return true;
+  if (desc->has[DESC_CONFIGURABLE] && js_truthy(js, desc->val[DESC_CONFIGURABLE])) return false;
+  if (desc->has[DESC_ENUMERABLE] && js_truthy(js, desc->val[DESC_ENUMERABLE]) != current->enumerable) return false;
+  
+  bool accessor = desc->has[DESC_GET] || desc->has[DESC_SET];
+  bool data = desc->has[DESC_VALUE] || desc->has[DESC_WRITABLE];
+  
+  if (!accessor && !data) return true;
+  if (accessor != current->accessor) return false;
+  
+  if (accessor) return
+    !(desc->has[DESC_GET] && !same_value_values(js, desc->val[DESC_GET], current->first)) &&
+    !(desc->has[DESC_SET] && !same_value_values(js, desc->val[DESC_SET], current->second));
+  
+  if (current->writable) return true;
+  if (desc->has[DESC_WRITABLE] && js_truthy(js, desc->val[DESC_WRITABLE])) return false;
+  return !desc->has[DESC_VALUE] || same_value_values(js, desc->val[DESC_VALUE], current->first);
+}
+
+static const char *proxy_define_violation(ant_t *js, const define_desc_raw_t *desc, const proxy_full_desc_t *current, bool extensible) {
+  bool non_configurable = desc->has[DESC_CONFIGURABLE] && !js_truthy(js, desc->val[DESC_CONFIGURABLE]);
+  bool non_writable = desc->has[DESC_WRITABLE] && !js_truthy(js, desc->val[DESC_WRITABLE]);
+  
+  if (!current) {
+    if (!extensible) return "trap returned truthy for adding property to non-extensible target";
+    return non_configurable ? "trap returned truthy for defining invalid non-configurable property" : NULL;
+  }
+  
+  if (!proxy_define_compatible(js, desc, current))
+    return "trap returned truthy for defining property incompatible with the existing property in the target";
+  if (non_configurable && current->configurable)
+    return "trap returned truthy for defining invalid non-configurable property";
+  if (!current->accessor && !current->configurable && current->writable && non_writable)
+    return "trap returned truthy for defining non-writable property over a writable non-configurable target property";
+  
+  return NULL;
+}
+
+static ant_value_t proxy_define_property_impl(ant_t *js, ant_value_t proxy, ant_value_t key_val, ant_value_t descriptor, bool reflect) {
   if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data) return Ant_Value_False;
@@ -1422,35 +1465,61 @@ ant_value_t proxy_define_property(ant_t *js, ant_value_t proxy, ant_value_t key_
   ant_value_t handler = data->handler;
   ant_value_t trap = proxy_get_method(js, handler, "defineProperty");
   if (is_err(trap)) return trap;
-  if (vtype(trap) != kTypeUndefined) {
-    ant_value_t args[3] = { target, key_val, descriptor };
-    ant_value_t result = proxy_call_trap(js, data, trap, args, 3);
-    if (is_err(result) || !js_truthy(js, result)) return result;
+  if (vtype(trap) != kTypeUndefined) return proxy_define_trapped(js, data, target, key_val, descriptor, trap);
 
-    ant_value_t target_args[2] = { target, key_val };
-    ant_value_t target_desc = builtin_object_getOwnPropertyDescriptor(js, target_args, 2, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
-    if (is_err(target_desc)) return target_desc;
-
-    bool target_exists = vtype(target_desc) != kTypeUndefined;
-    bool target_configurable = target_exists
-      ? descriptor_bool_value(js, target_desc, "configurable", 12, false)
-      : true;
-    bool target_extensible = proxy_target_is_extensible(target);
-    bool desc_has_configurable = descriptor_has_own_key(js, descriptor, "configurable", 12);
-    bool desc_configurable = descriptor_bool_value(js, descriptor, "configurable", 12, false);
-
-    if (!target_exists && !target_extensible)
-      return proxy_trap_error(js, "defineProperty", "trap returned truthy for adding property to non-extensible target");
-    if (desc_has_configurable && !desc_configurable && (!target_exists || target_configurable))
-      return proxy_trap_error(js, "defineProperty", "trap returned truthy for defining invalid non-configurable property");
-
-    return Ant_Value_True;
-  }
-
+  if (reflect) return js_define_property(js, target, key_val, descriptor, true);
   ant_value_t result = object_define_property(js, target, key_val, descriptor);
   if (is_err(result)) return result;
   
   return Ant_Value_True;
+}
+
+static ant_value_t proxy_define_trapped(
+  ant_t *js, ant_proxy_state_t *data, ant_value_t target, ant_value_t key_val, ant_value_t descriptor, ant_value_t trap
+) {
+  {
+    define_desc_raw_t desc = {0};
+    ant_value_t read_err = define_desc_read(js, descriptor, &desc);
+    if (is_err(read_err)) return read_err;
+    
+    GC_ROOT_SAVE(root_mark, js);
+    for (int f = 0; f < DESC_FIELD_COUNT; f++) GC_ROOT_PIN(js, desc.val[f]);
+    GC_ROOT_PIN(js, target);
+    GC_ROOT_PIN(js, key_val);
+    
+    ant_value_t args[3] = { target, key_val, descriptor };
+    ant_value_t result = proxy_call_trap(js, data, trap, args, 3);
+    if (is_err(result) || !js_truthy(js, result)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return is_err(result) ? result : Ant_Value_False;
+    }
+
+    ant_value_t target_args[2] = { target, key_val };
+    ant_value_t target_desc = builtin_object_getOwnPropertyDescriptor(js, target_args, 2, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
+    GC_ROOT_PIN(js, target_desc);
+    
+    proxy_full_desc_t current;
+    bool exists = !is_err(target_desc) && vtype(target_desc) != kTypeUndefined;
+    ant_value_t status = exists ? proxy_to_complete_descriptor(js, target_desc, &current) : target_desc;
+    if (!is_err(status)) status = Ant_Value_FromBool(proxy_target_is_extensible(target));
+    
+    if (is_err(status)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return status;
+    }
+
+    const char *violation = proxy_define_violation(js, &desc, exists ? &current : NULL, js_truthy(js, status));
+    GC_ROOT_RESTORE(js, root_mark);
+    return violation ? proxy_trap_error(js, "defineProperty", violation) : Ant_Value_True;
+  }
+}
+
+ant_value_t proxy_define_property(ant_t *js, ant_value_t proxy, ant_value_t key_val, ant_value_t descriptor) {
+  return proxy_define_property_impl(js, proxy, key_val, descriptor, false);
+}
+
+ant_value_t proxy_reflect_define_property(ant_t *js, ant_value_t proxy, ant_value_t key_val, ant_value_t descriptor) {
+  return proxy_define_property_impl(js, proxy, key_val, descriptor, true);
 }
 
 ant_value_t proxy_delete_sym(ant_t *js, ant_value_t proxy, ant_value_t sym) {
