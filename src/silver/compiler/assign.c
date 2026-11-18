@@ -184,6 +184,29 @@ bool compile_self_append_stmt(sv_compiler_t *c, sv_ast_t *node) {
   return true;
 }
 
+static sv_op_t compound_assign_op(uint8_t op) {
+  switch (op) {
+    case TOK_PLUS_ASSIGN:  return OP_ADD;
+    case TOK_MINUS_ASSIGN: return OP_SUB;
+    case TOK_MUL_ASSIGN:   return OP_MUL;
+    case TOK_DIV_ASSIGN:   return OP_DIV;
+    case TOK_REM_ASSIGN:   return OP_MOD;
+    case TOK_SHL_ASSIGN:   return OP_SHL;
+    case TOK_SHR_ASSIGN:   return OP_SHR;
+    case TOK_ZSHR_ASSIGN:  return OP_USHR;
+    case TOK_AND_ASSIGN:   return OP_BAND;
+    case TOK_XOR_ASSIGN:   return OP_BXOR;
+    case TOK_OR_ASSIGN:    return OP_BOR;
+    case TOK_EXP_ASSIGN:   return OP_EXP;
+    default:               return OP_INVALID;
+  }
+}
+
+static void emit_compound_assign_op(sv_compiler_t *c, uint8_t op) {
+  sv_op_t aop = compound_assign_op(op);
+  if (aop != OP_INVALID) emit_op(c, aop);
+}
+
 void compile_update(sv_compiler_t *c, sv_ast_t *node) {
   bool prefix = (node->flags & 1);
   bool is_inc = (node->op == TOK_POSTINC);
@@ -363,15 +386,7 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
       case TOK_DIV_ASSIGN:
         emit_op(c, (lhs_type == SV_TI_NUM && rhs_type == SV_TI_NUM) ? OP_DIV_NUM : OP_DIV);
         break;
-      case TOK_REM_ASSIGN:     emit_op(c, OP_MOD); break;
-      case TOK_SHL_ASSIGN:     emit_op(c, OP_SHL); break;
-      case TOK_SHR_ASSIGN:     emit_op(c, OP_SHR); break;
-      case TOK_ZSHR_ASSIGN:    emit_op(c, OP_USHR); break;
-      case TOK_AND_ASSIGN:     emit_op(c, OP_BAND); break;
-      case TOK_XOR_ASSIGN:     emit_op(c, OP_BXOR); break;
-      case TOK_OR_ASSIGN:      emit_op(c, OP_BOR); break;
-      case TOK_EXP_ASSIGN:    emit_op(c, OP_EXP); break;
-      default: break;
+      default:               emit_compound_assign_op(c, op); break;
     }
     emit_set_var(c, target->str, target->len, true);
   } else if (target->type == N_MEMBER && !(target->flags & 1) && is_private_name_node(target->right)) {
@@ -400,21 +415,7 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
     emit_private_token(c, target->right);
     emit_op(c, OP_GET_PRIVATE);
     compile_expr(c, node->right);
-    switch (op) {
-      case TOK_PLUS_ASSIGN:  emit_op(c, OP_ADD); break;
-      case TOK_MINUS_ASSIGN: emit_op(c, OP_SUB); break;
-      case TOK_MUL_ASSIGN:   emit_op(c, OP_MUL); break;
-      case TOK_DIV_ASSIGN:   emit_op(c, OP_DIV); break;
-      case TOK_REM_ASSIGN:   emit_op(c, OP_MOD); break;
-      case TOK_SHL_ASSIGN:   emit_op(c, OP_SHL); break;
-      case TOK_SHR_ASSIGN:   emit_op(c, OP_SHR); break;
-      case TOK_ZSHR_ASSIGN:  emit_op(c, OP_USHR); break;
-      case TOK_AND_ASSIGN:   emit_op(c, OP_BAND); break;
-      case TOK_XOR_ASSIGN:   emit_op(c, OP_BXOR); break;
-      case TOK_OR_ASSIGN:    emit_op(c, OP_BOR); break;
-      case TOK_EXP_ASSIGN:  emit_op(c, OP_EXP); break;
-      default: break;
-    }
+    emit_compound_assign_op(c, op);
     emit_private_token(c, target->right);
     emit_op(c, OP_PUT_PRIVATE);
   } else if (target->type == N_MEMBER && !(target->flags & 1)) {
@@ -443,21 +444,7 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
     emit_op(c, OP_DUP);
     emit_atom_idx_op(c, OP_GET_FIELD, (uint32_t)atom);
     compile_expr(c, node->right);
-    switch (op) {
-      case TOK_PLUS_ASSIGN:  emit_op(c, OP_ADD); break;
-      case TOK_MINUS_ASSIGN: emit_op(c, OP_SUB); break;
-      case TOK_MUL_ASSIGN:   emit_op(c, OP_MUL); break;
-      case TOK_DIV_ASSIGN:   emit_op(c, OP_DIV); break;
-      case TOK_REM_ASSIGN:   emit_op(c, OP_MOD); break;
-      case TOK_SHL_ASSIGN:   emit_op(c, OP_SHL); break;
-      case TOK_SHR_ASSIGN:   emit_op(c, OP_SHR); break;
-      case TOK_ZSHR_ASSIGN:  emit_op(c, OP_USHR); break;
-      case TOK_AND_ASSIGN:   emit_op(c, OP_BAND); break;
-      case TOK_XOR_ASSIGN:   emit_op(c, OP_BXOR); break;
-      case TOK_OR_ASSIGN:    emit_op(c, OP_BOR); break;
-      case TOK_EXP_ASSIGN:  emit_op(c, OP_EXP); break;
-      default: break;
-    }
+    emit_compound_assign_op(c, op);
     emit_op(c, OP_INSERT2);
     emit_atom_idx_op(c, OP_PUT_FIELD, (uint32_t)atom);
   } else if (target->type == N_MEMBER && (target->flags & 1)) {
@@ -487,21 +474,7 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
     emit_op(c, OP_DUP2);
     emit_op(c, OP_GET_ELEM);
     compile_expr(c, node->right);
-    switch (op) {
-      case TOK_PLUS_ASSIGN:  emit_op(c, OP_ADD); break;
-      case TOK_MINUS_ASSIGN: emit_op(c, OP_SUB); break;
-      case TOK_MUL_ASSIGN:   emit_op(c, OP_MUL); break;
-      case TOK_DIV_ASSIGN:   emit_op(c, OP_DIV); break;
-      case TOK_REM_ASSIGN:   emit_op(c, OP_MOD); break;
-      case TOK_SHL_ASSIGN:   emit_op(c, OP_SHL); break;
-      case TOK_SHR_ASSIGN:   emit_op(c, OP_SHR); break;
-      case TOK_ZSHR_ASSIGN:  emit_op(c, OP_USHR); break;
-      case TOK_AND_ASSIGN:   emit_op(c, OP_BAND); break;
-      case TOK_XOR_ASSIGN:   emit_op(c, OP_BXOR); break;
-      case TOK_OR_ASSIGN:    emit_op(c, OP_BOR); break;
-      case TOK_EXP_ASSIGN:  emit_op(c, OP_EXP); break;
-      default: break;
-    }
+    emit_compound_assign_op(c, op);
     emit_op(c, OP_INSERT3);
     emit_op(c, OP_PUT_ELEM);
   } else {
