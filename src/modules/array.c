@@ -384,6 +384,14 @@ static ant_value_t array_set_length_throw(ant_t *js, ant_value_t obj, ant_offset
   return is_err(set) ? set : Ant_Value_Undefined;
 }
 
+static ant_value_t array_set_result_length(ant_t *js, ant_value_t result, ant_offset_t len, bool fresh) {
+  if (fresh) return Ant_Value_Undefined;
+  ant_object_t *ptr = vtype(result) == kTypeArray ? (ant_object_t *)vptr(result) : NULL;
+  bool plain = ptr && !ptr->flags.arguments_object && !(ptr->flags.raw & (ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_EXOTIC));
+  if (plain && ptr->u.array.len == len) return Ant_Value_Undefined;
+  return array_set_length_throw(js, result, len);
+}
+
 static ant_value_t array_move_range_throw(ant_t *js, ant_value_t arr, ant_offset_t from, ant_offset_t to, ant_offset_t count) {
   for (ant_offset_t n = 0; n < count; n++) {
     ant_offset_t i = to > from ? count - 1 - n : n;
@@ -2336,6 +2344,10 @@ static ant_value_t builtin_array_splice(ant_params_t) {
       if (is_err(set)) return set;
     }
     if (intrinsic && !skipped) array_mark_packed(removed);
+    if (!intrinsic) {
+      ant_value_t set_len = array_set_result_length(js, removed, (ant_offset_t)deleteCount, false);
+      if (is_err(set_len)) return set_len;
+    }
 
     int shift = insertCount - deleteCount;
     ant_offset_t new_len = (ant_offset_t)((int)d_len + shift);
@@ -3138,6 +3150,7 @@ static ant_value_t builtin_Array_from(ant_params_t) {
 static ant_value_t builtin_Array_of(ant_params_t) {
   bool use_ctor = (vtype(call_this) == kTypeFunction || vtype(call_this) == kTypeBuiltin);
   ant_value_t arr = use_ctor ? array_alloc_from_ctor_with_length(js, call_this, (ant_offset_t)nargs) : Ant_Array_Create(js);
+  bool fresh = !use_ctor || call_this == js->sym.array_ctor;
   if (is_err(arr)) return arr;
 
   bool arr_is_proxy = is_proxy(arr);
@@ -3151,7 +3164,8 @@ static ant_value_t builtin_Array_of(ant_params_t) {
     }
   }
 
-  if (vtype(arr) != kTypeArray) js_setprop(js, arr, js->length_str, Ant_Value_FromNumber((double) nargs));
+  ant_value_t set_len = array_set_result_length(js, arr, nargs, fresh);
+  if (is_err(set_len)) return set_len;
   if (!use_ctor) return mkval(kTypeArray, vdata(arr));
 
   return arr;

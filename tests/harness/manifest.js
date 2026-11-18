@@ -154,6 +154,7 @@ export function targets() {
     'test_template_unicode_escapes.cjs',
     'test_v8_serialize_depth.cjs',
     'test_array_from_async.mjs',
+    'test_array_ctor_length.cjs',
     'test_async_generator_yield_await.mjs',
     'test_assert_error_fields.cjs',
     'test_intl_canonicalize.cjs',
