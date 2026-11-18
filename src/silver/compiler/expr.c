@@ -616,6 +616,15 @@ void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
     compile_delete_optional(c, arg);
   } else if (arg->type == N_MEMBER && sv_node_has_optional_base(arg->left)) {
     compile_delete_optional(c, arg);
+  } else if (arg->type == N_MEMBER && is_ident_name(arg->left, "super")) {
+    static const char message[] = "Unsupported reference to 'super'";
+    emit_op(c, OP_THIS);
+    if (arg->flags & 1) compile_expr(c, arg->right);
+    else emit_op(c, OP_UNDEF);
+    emit_op(c, OP_POP);
+    emit_op(c, OP_POP);
+    emit_throw_error(c, JS_ERR_REFERENCE, message, sizeof(message) - 1);
+    emit_op(c, OP_TRUE);
   } else if (arg->type == N_MEMBER && !(arg->flags & 1)) {
     compile_expr(c, arg->left);
     ant_value_t key = sv_const_str(c, arg->right->str, arg->right->len);

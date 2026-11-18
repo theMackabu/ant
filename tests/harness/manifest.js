@@ -459,6 +459,7 @@ export function targets() {
     'test_sqlite_api.cjs',
     'test_sqlite_basic.cjs',
     'test_tagged_template_receiver.cjs',
+    'test_super_delete.cjs',
     'test_spawn_sync_stdin_pump.cjs',
     'test_spec_builtin_semantics.cjs',
     'test_spec_operator_semantics.cjs',
