@@ -695,6 +695,7 @@ struct sv_func {
   bool needs_eval_env: 1;
   bool allows_new_target: 1;
   bool has_map_templates: 1;
+  bool is_synthetic: 1;
 
   bool jit_inline_reuse_checked: 1;
   bool jit_inline_reuse_empty: 1;

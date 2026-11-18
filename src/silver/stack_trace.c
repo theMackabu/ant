@@ -398,6 +398,7 @@ static int error_collect_frames(
         if (e.func == seek) { seek = NULL; it.resolve = resolve; }
         continue;
       }
+      if (e.func && e.func->is_synthetic && !e.pc) continue;
       
       if (error_entry_is_wrapper(js, &e, n)) continue;
       if (!error_frames_reserve(out, local, &cap, n + 1)) break;
@@ -629,6 +630,7 @@ static int error_record_resolve(ant_t *js, const error_record_t *rec, error_fram
     }
     
     for (int i = 0; i < m && n < rec->limit; i++) {
+      if (at[i].func && at[i].func->is_synthetic) continue;
       if (!error_frames_reserve(frames, local, &cap, n + 1)) return n;
       (*frames)[n++] = (error_frame_t){
         .func = at[i].func,

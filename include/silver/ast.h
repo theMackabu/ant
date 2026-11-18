@@ -125,6 +125,7 @@ enum {
   FN_OWN_YIELD        = 1 << 24,
   FN_USES_SUPER       = 1 << 25,
   FN_PATTERN_ONLY     = 1 << 26,
+  FN_SYNTHETIC        = 1 << 30,
   FN_OPTIONAL_BASE    = 1 << 29,
 };
 

@@ -259,6 +259,7 @@ typedef struct sv_compiler {
   
   int completion_local;
   int strict_args_local;
+  bool args_mapped;
   int new_target_local;
   int super_local;
   bool super_referenced;

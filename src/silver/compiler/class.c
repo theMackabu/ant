@@ -368,7 +368,10 @@ static void compile_static_block(sv_compiler_t *c, sv_ast_t *block, int ctor_loc
   emit_op(c, OP_POP);
 }
 
-void compile_class(sv_compiler_t *c, sv_ast_t *node) {
+static void compile_class_strict(
+  sv_compiler_t *c, sv_ast_t *node,
+  const char *inferred_name, uint32_t inferred_name_len
+) {
   int outer_name_local = -1;
   bool binds_outer_name = node->str &&
     (node->flags & FN_CLASS_DECL);
@@ -614,9 +617,9 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   uint32_t class_name_len = node->len;
   bool consumed_inferred_name = false;
   
-  if (!class_name && c->inferred_name) {
-    class_name = c->inferred_name;
-    class_name_len = c->inferred_name_len;
+  if (!class_name && inferred_name) {
+    class_name = inferred_name;
+    class_name_len = inferred_name_len;
     consumed_inferred_name = true;
   }
 
@@ -693,4 +696,13 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   if (has_class_scope) end_scope(c);
   c->private_scope = saved_private_scope;
   free(private_scope.names);
+}
+
+void compile_class(sv_compiler_t *c, sv_ast_t *node) {
+  bool saved_strict = c->is_strict;
+  c->is_strict = true;
+  const char *inferred_name = c->inferred_name;
+  uint32_t inferred_name_len = c->inferred_name_len;
+  compile_class_strict(c, node, inferred_name, inferred_name_len);
+  c->is_strict = saved_strict;
 }

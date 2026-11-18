@@ -480,6 +480,7 @@ sv_func_t *compile_function_body(
     emit_op(&comp, OP_SPECIAL_OBJ);
     emit(&comp, SV_SPECIAL_ARGUMENTS);
     emit_put_local(&comp, comp.strict_args_local);
+    comp.args_mapped = !comp.is_strict;
   }
 
   if (!comp.is_arrow && comp.enclosing && (node->flags & (FN_METHOD | FN_GETTER | FN_SETTER | FN_STATIC))) {
@@ -639,6 +640,7 @@ sv_func_t *compile_function_body(
   if (comp.super_referenced) node->flags |= FN_USES_SUPER;
   func->is_derived_ctor = !!(node->flags & FN_DERIVED_CTOR);
   func->is_class_ctor = !!(node->flags & FN_CLASS_CTOR);
+  func->is_synthetic = !!(node->flags & FN_SYNTHETIC);
   func->ctor_slot_class = (!func->is_method || func->is_class_ctor) ? ctor_slot_class(node) : 0;
   func->is_static = comp.is_static;
   func->is_tla = comp.is_tla;
