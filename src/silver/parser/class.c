@@ -20,7 +20,14 @@ sv_ast_t *parse_class(sv_parser_t *p) {
 
   if (sv_lexer_next(&p->lx) == TOK_IDENTIFIER && p->lx.st.tlen == 7 && memcmp(tok_str(p), "extends", 7) == 0) {
     p->lx.st.consumed = 1;
-    cls->left = parse_assign(p);
+    sv_ast_t *heritage = cls->left = parse_lhs(p);
+    bool unary = heritage->type == N_VOID || heritage->type == N_TYPEOF || heritage->type == N_DELETE ||
+      heritage->type == N_UNARY || heritage->type == N_YIELD || heritage->type == N_AWAIT ||
+      (heritage->type == N_FUNC && (heritage->flags & FN_ARROW));
+    if (unary && !(heritage->flags & FN_PAREN)) {
+      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected token in class heritage");
+      return cls;
+    }
   }
 
   expect(p, TOK_LBRACE);

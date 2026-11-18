@@ -131,6 +131,10 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
   return n;
 }
 
+sv_ast_t *parse_lhs(sv_parser_t *p) {
+  return parse_call(p);
+}
+
 static sv_ast_t *parse_postfix(sv_parser_t *p) {
   sv_ast_t *n = parse_call(p);
   uint8_t la = sv_lexer_next(&p->lx);

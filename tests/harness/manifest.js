@@ -69,6 +69,7 @@ export function targets() {
     'test_intrinsic_protos.cjs',
     'test_builtin_enumerable.cjs',
     'test_builtin_iteration_fast_paths.cjs',
+    'test_class_heritage_expression.cjs',
     'test_regexp_flag_accessors.cjs',
     'test_property_descriptor_objects.cjs',
     'test_inspect_extra_props.cjs',
