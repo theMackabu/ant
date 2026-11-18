@@ -19,11 +19,13 @@ ant_value_t Silver_Super_Get(
   ant_value_t base = roots[0] = Super_Base(js, func, home, receiver);
   if (is_err(base)) return base;
   if (vtype(prop) == kTypeSymbol) {
+    if (!is_object_type(base)) return sv_mk_nullish_read_error_by_key(js, NULL, base, prop);
     return js_get_sym_with_receiver(js, base, prop, receiver);
   }
   
   ant_value_t key = roots[1] = coerce_to_str(js, prop);
   if (is_err(key)) return key;
+  if (!is_object_type(base)) return sv_mk_nullish_read_error_by_key(js, NULL, base, key);
   
   ant_offset_t klen;
   ant_offset_t koff = vstr(js, key, &klen);

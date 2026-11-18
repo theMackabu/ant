@@ -147,6 +147,7 @@ export function targets() {
     'test_assert_error_types.cjs',
     'test_for_let_bindings.cjs',
     'test_tdz_writes.cjs',
+    'test_super_null_home.cjs',
     'test_template_unicode_escapes.cjs',
     'test_v8_serialize_depth.cjs',
     'test_array_from_async.mjs',
