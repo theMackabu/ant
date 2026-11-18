@@ -114,6 +114,7 @@ export function targets() {
     'test_collections_args_receivers.cjs',
     'test_commonjs_pending_exception.cjs',
     'test_compile_basic.cjs',
+    'test_class_field_define_semantics.cjs',
     'test_compile_native_addon.cjs',
     'test_compile_inference.cjs',
     'test_cron_continuation_error.cjs',

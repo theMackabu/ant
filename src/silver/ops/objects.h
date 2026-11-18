@@ -114,8 +114,13 @@ static inline ant_value_t sv_define_method_comp(
   if (vtype(key) == kTypeSymbol) {
     if (is_getter) { js_set_sym_getter_desc(js, desc_obj, key, fn, accessor_desc); return Ant_Value_Undefined; }
     if (is_setter) { js_set_sym_setter_desc(js, desc_obj, key, fn, accessor_desc); return Ant_Value_Undefined; }
-    mkprop(js, obj, key, fn, data_attrs);
-    return Ant_Value_Undefined;
+    if (!is_field) {
+      mkprop(js, obj, key, fn, data_attrs);
+      return Ant_Value_Undefined;
+    }
+    ant_value_t defined = mkprop_symbol_attrs_impl(js, obj, key, fn, 0, MKPROP_USE_DEFAULT_ATTRS | MKPROP_DATA_DEFINE);
+    if (defined == T_EMPTY) return js_create_data_property_or_throw(js, obj, key, fn);
+    return is_err(defined) ? defined : Ant_Value_Undefined;
   }
   
   ant_value_t key_str = sv_key_to_propstr(js, key);

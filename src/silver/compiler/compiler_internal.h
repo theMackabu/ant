@@ -343,6 +343,10 @@ static inline bool node_needs_inferred_function_name(const sv_ast_t *node) {
     (!node->str || node->len == 0);
 }
 
+static inline uint8_t field_define_flags(const sv_ast_t *m) {
+  return SV_DEFINE_METHOD_FIELD;
+}
+
 static inline bool is_ident_str(
   const char *name, uint32_t len,
   const char *lit, uint32_t lit_len

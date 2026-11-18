@@ -171,6 +171,7 @@ static void compile_class_method(
   if (m->flags & FN_GETTER) method_flags |= SV_DEFINE_METHOD_GETTER;
   if (m->flags & FN_SETTER) method_flags |= SV_DEFINE_METHOD_SETTER;
   if (is_fn) method_flags |= SV_DEFINE_METHOD_SET_NAME;
+  else method_flags |= field_define_flags(m);
   if (is_fn || (m->flags & (FN_GETTER | FN_SETTER))) method_flags |= SV_DEFINE_METHOD_NON_ENUM;
 
   if (m->flags & FN_COMPUTED) {
