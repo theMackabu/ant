@@ -1268,6 +1268,11 @@ ant_value_t opt_rt_init_field_adding(sv_vm_t *vm, ant_value_t object, ant_value_
   return jit_helper_slow_init_field_adding(vm->js, object, value, at->func, at->func->code + at->bc_off, site->adds, site->count);
 }
 
+ant_value_t opt_rt_define_computed(sv_vm_t *vm, ant_value_t object, ant_value_t key, ant_value_t *args, int64_t argc, int64_t flags) {
+  ant_value_t defined = jit_helper_define_method_comp(vm->js, object, key, args[0], (uint8_t)flags);
+  return is_err(defined) ? defined : object;
+}
+
 ant_value_t opt_rt_get_elem(sv_vm_t *vm, ant_value_t object, ant_value_t key, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
   return jit_helper_slow_get_elem(vm->js, object, key, site->func, site->func->code + site->bc_off);
 }

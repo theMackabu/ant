@@ -360,6 +360,7 @@ export function targets() {
     'test_object_spread_sources.cjs',
     'test_object_values_entries_semantics.cjs',
     'test_opt_alloc.cjs',
+    'test_opt_class_computed_members.cjs',
     'test_opt_arrays.cjs',
     'test_opt_arrow_closures.cjs',
     'test_opt_builtin_patterns.cjs',

@@ -4510,6 +4510,14 @@ static opt_flow_t opt_build_object(opt_builder_t *b) {
   return OPT_FLOW_CONTINUE;
 }
 
+static opt_flow_t opt_build_define_computed(opt_builder_t *b, const uint8_t *ip) {
+  ir_node_id_t inputs[3] = {opt_tagged(b, opt_peek(b, 2)), opt_tagged(b, opt_peek(b, 1)), opt_tagged(b, opt_peek(b, 0))};
+  opt_runtime_call(b, (uintptr_t)opt_rt_define_computed, ip[1], inputs, 3, false, false);
+  opt_drop(b, 2);
+  opt_forget_memory(b);
+  return OPT_FLOW_CONTINUE;
+}
+
 static opt_flow_t opt_build_define_slot(opt_builder_t *b, const uint8_t *ip) {
   uint32_t atom_index = sv_get_u32(ip + 1), slot = sv_get_u16(ip + 5);
   ir_node_id_t object = opt_peek(b, 1);
@@ -6538,6 +6546,8 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
       return opt_build_define_slot(b, ip);
     case OP_SET_PROTO:
       return opt_build_set_proto(b);
+    case OP_DEFINE_METHOD_COMP:
+      return opt_build_define_computed(b, ip);
     case OP_ARRAY:
       return opt_build_array(b, ip);
     case OP_ARRAY_LITERAL:
