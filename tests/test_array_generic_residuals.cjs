@@ -290,6 +290,39 @@ assert.deepStrictEqual(failed, []);
   assert.throws(() => A.toSpliced.call(huge(2 ** 53 - 1), 0, 0, 1), TypeError);
   assert.throws(() => A.push.call(new Proxy(huge(2 ** 53 - 1), {}), 1), TypeError);
   assert.strictEqual(A.slice.call(huge(2 ** 32), 2 ** 32 - 3).length, 3);
+
+  const traps = (target, log) => new Proxy(target, {
+    get(t, k, r) { log.push('get:' + String(k)); return Reflect.get(t, k, r); },
+    set(t, k, v, r) { log.push('set:' + String(k)); return Reflect.set(t, k, v, r); },
+    has(t, k) { log.push('has:' + String(k)); return Reflect.has(t, k); },
+    deleteProperty(t, k) { log.push('del:' + String(k)); return Reflect.deleteProperty(t, k); },
+  });
+  let log = [];
+  A.flat.call(traps(['c'], log));
+  assert.deepStrictEqual(log, ['get:length', 'get:constructor', 'has:0', 'get:0']);
+  assert.deepStrictEqual([[1, [2, [3]]]].flat('2'), [1, 2, [3]]);
+  assert.deepStrictEqual([[1, [2]]].flat({ valueOf() { return 0; } }), [[1, [2]]]);
+  assert.deepStrictEqual([1, [2, [3, [4]]]].flat(Infinity), [1, 2, 3, 4]);
+}
+
+const outcome = (make) => {
+  try {
+    return { value: make() };
+  } catch (error) {
+    return { error: error.name };
+  }
+};
+
+const worksOrRangeError = (label, make, check) => {
+  const result = outcome(make);
+  if (result.error) assert.strictEqual(result.error, 'RangeError', label);
+  else if (check) assert.ok(check(result.value), label);
+};
+
+{
+  let nested = [];
+  for (let i = 0; i < 1000000; i++) nested = [nested];
+  worksOrRangeError('deep flat', () => nested.flat(Infinity).length);
 }
 
 console.log('ok');

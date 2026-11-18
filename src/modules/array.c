@@ -1472,15 +1472,14 @@ static inline ant_value_t flat_should_spread(ant_t *js, ant_value_t val, int dep
   return is_proxy(val) ? js_is_array_value_checked(js, val, out) : Ant_Value_Undefined;
 }
 
-static inline ant_value_t flat_helper(ant_t *js, ant_value_t arr, ant_value_t result, bool fresh, ant_offset_t *result_idx, int depth) {
-  bool input_is_array = real_array_obj_ptr(arr) != NULL;
-  ant_offset_t len = input_is_array ? get_array_length(js, arr) : 0;
-  
-  if (!input_is_array) {
-    ant_value_t len_result = proxy_aware_length(js, arr, &len);
-    if (is_err(len_result)) return len_result;
-  }
-  
+static constexpr int FLAT_UNCHECKED_DEPTH = 1024;
+
+static inline ant_value_t flat_helper(ant_t *js, ant_value_t arr, ant_value_t result, bool fresh, ant_offset_t *result_idx, int depth);
+
+static inline __attribute__((always_inline)) ant_value_t flat_into(
+  ant_t *js, ant_value_t arr, bool input_is_array, ant_offset_t len,
+  ant_value_t result, bool fresh, ant_offset_t *result_idx, int depth
+) {
   if (len == 0) return Ant_Value_Undefined;
 
   ant_value_t *dense = packed_array_data_for_length(js, arr, len);
@@ -1495,6 +1494,7 @@ static inline ant_value_t flat_helper(ant_t *js, ant_value_t arr, ant_value_t re
         continue;
       }
 
+      if (depth > FLAT_UNCHECKED_DEPTH && sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
       ant_value_t flat_res = flat_helper(js, dense[i], result, fresh, result_idx, depth - 1);
       if (is_err(flat_res)) return flat_res;
     }
@@ -1524,11 +1524,22 @@ static inline ant_value_t flat_helper(ant_t *js, ant_value_t arr, ant_value_t re
       continue;
     }
 
+    if (depth > FLAT_UNCHECKED_DEPTH && sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
     ant_value_t flat_res = flat_helper(js, val, result, fresh, result_idx, depth - 1);
     if (is_err(flat_res)) return flat_res;
   }
 
   return Ant_Value_Undefined;
+}
+
+static inline ant_value_t flat_helper(ant_t *js, ant_value_t arr, ant_value_t result, bool fresh, ant_offset_t *result_idx, int depth) {
+  bool input_is_array = real_array_obj_ptr(arr) != NULL;
+  ant_offset_t len = input_is_array ? get_array_length(js, arr) : 0;
+  if (!input_is_array) {
+    ant_value_t len_result = proxy_aware_length(js, arr, &len);
+    if (is_err(len_result)) return len_result;
+  }
+  return flat_into(js, arr, input_is_array, len, result, fresh, result_idx, depth);
 }
 
 static inline ant_value_t flat_append_mapped_value(ant_t *js, ant_value_t mapped, ant_value_t result, bool fresh, ant_offset_t *result_idx) {
@@ -1540,15 +1551,43 @@ static inline ant_value_t flat_append_mapped_value(ant_t *js, ant_value_t mapped
   return flat_helper(js, mapped, result, fresh, result_idx, 0);
 }
 
+static __attribute__((noinline)) ant_value_t array_flat_depth_slow(ant_t *js, ant_value_t *args, int *depth) {
+  double depth_num = vtype(args[0]) == kTypeNumber ? Ant_Value_AsNumberUnchecked(args[0]) : js_to_number(js, args[0]);
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+  *depth = !(depth_num >= 1) ? 0 : depth_num >= INT32_MAX ? INT32_MAX : (int)depth_num;
+  return Ant_Value_Undefined;
+}
+
+static inline __attribute__((always_inline)) ant_value_t array_flat_depth(ant_t *js, ant_value_t *args, int nargs, int *depth) {
+  *depth = 1;
+  if (nargs < 1 || vtype(args[0]) == kTypeUndefined) return Ant_Value_Undefined;
+  return array_flat_depth_slow(js, args, depth);
+}
+
+static __attribute__((noinline)) ant_value_t array_flat_generic(ant_t *js, ant_value_t arr, ant_value_t *args, int nargs) {
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+  int depth;
+  ant_value_t depth_err = array_flat_depth(js, args, nargs, &depth);
+  if (is_err(depth_err)) return depth_err;
+
+  bool intrinsic = false;
+  ant_value_t result = array_species_create(js, arr, 0, &intrinsic);
+  if (is_err(result)) return result;
+  ant_offset_t result_idx = 0;
+
+  ant_value_t flat_res = flat_into(js, arr, false, len, result, intrinsic, &result_idx, depth);
+  if (is_err(flat_res)) return flat_res;
+  return result;
+}
+
 static ant_value_t builtin_array_flat(ant_params_t) {
   ant_value_t arr = array_method_receiver(js, call_this, "flat");
   if (is_err(arr)) return arr;
+  if (__builtin_expect(vtype(arr) != kTypeArray && !real_array_obj_ptr(arr), 0)) return array_flat_generic(js, arr, args, nargs);
   
-  int depth = 1;
-  if (nargs >= 1 && vtype(args[0]) == kTypeNumber) {
-    depth = (int) Ant_Value_AsNumberUnchecked(args[0]);
-    if (depth < 0) depth = 0;
-  }
+  int depth;
+  ant_value_t depth_err = array_flat_depth(js, args, nargs, &depth);
+  if (is_err(depth_err)) return depth_err;
   
   bool intrinsic = false;
   ant_value_t result = array_species_create(js, arr, 0, &intrinsic);
