@@ -119,6 +119,7 @@ export function targets() {
     'test_dataview_accessors.cjs',
     'test_deep_try_handlers.cjs',
     'test_define_property_descriptor_reads.cjs',
+    'test_class_static_block_hoisting.cjs',
     'test_direct_eval_environment.cjs',
     'test_disposal_error_values.cjs',
     'test_duplicate_declarations.cjs',
