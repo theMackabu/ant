@@ -69,6 +69,7 @@ void sv_compile_ctx_init_child(
   ctx->enclosing = enclosing;
   ctx->scope_depth = 0;
   ctx->is_arrow = node && !!(node->flags & FN_ARROW);
+  ctx->with_inherited = enclosing->with_inherited || enclosing->with_depth > 0 || enclosing->eval_with;
   ctx->allows_new_target = (!enclosing->enclosing || ctx->is_arrow)
     ? enclosing->allows_new_target : true;
   ctx->is_async = node && !!(node->flags & FN_ASYNC);

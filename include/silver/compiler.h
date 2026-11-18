@@ -58,6 +58,8 @@ typedef struct {
 typedef struct {
   int local;
   int depth;
+  const char *marker;
+  uint32_t marker_len;
 } sv_with_scope_t;
 
 typedef struct {
@@ -254,6 +256,8 @@ typedef struct sv_compiler {
   bool function_ctor_root;
   
   bool eval_shadows_undefined;
+  bool eval_with;
+  bool with_inherited;
   bool eval_shadows_global_this;
   ant_value_t eval_env;
 

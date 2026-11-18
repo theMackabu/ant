@@ -565,6 +565,7 @@ export function targets() {
     'test_wire_blob_share.cjs',
     'test_wire_define_semantics.cjs',
     'test_wire_transfer_move.cjs',
+    'test_with_direct_eval.cjs',
     'test_with_scopes.cjs',
     'test_worker_performance.cjs',
     'test_worker_post_message_to_thread.cjs',

@@ -148,13 +148,49 @@ static bool eval_scope_builder_capture_upvalue(
     c->upval_descs[upvalue].is_const, &c->upval_bindings[upvalue]);
 }
 
+static _Atomic uint64_t with_marker_sequence;
+
+static bool eval_scope_builder_capture_with(
+  sv_compiler_t *c, sv_eval_scope_builder_t *scope,
+  sv_eval_binding_set_t *set, sv_compiler_t *owner, sv_with_scope_t *with
+) {
+  static const sv_binding_meta_t no_meta = {0};
+  if (!with->marker) {
+    char name[32];
+    int len = snprintf(
+      name, sizeof(name), "\x01with:%llu",
+      (unsigned long long)++with_marker_sequence);
+    with->marker = intern_string(c->js, name, (size_t)len);
+    with->marker_len = (uint32_t)len;
+    if (!with->marker) return false;
+  }
+
+  if (owner == c) {
+    c->locals[with->local].captured = true;
+    return eval_scope_builder_add_binding(
+      c, scope, set, with->marker, with->marker_len,
+      SV_EVAL_BIND_LOCAL, (uint16_t)(with->local - c->param_locals), true, &no_meta);
+  }
+
+  int upvalue = resolve_upvalue_to(c, owner, with->local);
+  return upvalue < 0 || eval_scope_builder_add_binding(
+    c, scope, set, with->marker, with->marker_len,
+    SV_EVAL_BIND_UPVALUE, (uint16_t)upvalue, true, &no_meta);
+}
+
 static bool eval_scope_builder_capture_locals(
   sv_compiler_t *c, sv_eval_scope_builder_t *scope,
   sv_eval_binding_set_t *set
 ) {
-  for (int i = c->local_count - 1; i >= 0; i--)
+  int with = c->with_depth - 1;
+  for (int i = c->local_count - 1; i >= 0; i--) {
+    for (; with >= 0 && c->with_scopes[with].depth > c->locals[i].depth; with--)
+      if (!eval_scope_builder_capture_with(c, scope, set, c, &c->with_scopes[with])) return false;
     if (!eval_scope_builder_capture_local(
           c, scope, set, &c->locals[i], i)) return false;
+  }
+  for (; with >= 0; with--)
+    if (!eval_scope_builder_capture_with(c, scope, set, c, &c->with_scopes[with])) return false;
   return true;
 }
 
@@ -167,9 +203,15 @@ static bool eval_scope_builder_capture_upvalues(
   sv_compiler_t *c, sv_eval_scope_builder_t *scope,
   sv_eval_binding_set_t *set, sv_compiler_t *enclosing
 ) {
-  for (int i = enclosing->local_count - 1; i >= 0; i--)
+  int with = enclosing->with_depth - 1;
+  for (int i = enclosing->local_count - 1; i >= 0; i--) {
+    for (; with >= 0 && enclosing->with_scopes[with].depth > enclosing->locals[i].depth; with--)
+      if (!eval_scope_builder_capture_with(c, scope, set, enclosing, &enclosing->with_scopes[with])) return false;
     if (!eval_scope_builder_capture_upvalue(
           c, scope, set, &enclosing->locals[i])) return false;
+  }
+  for (; with >= 0; with--)
+    if (!eval_scope_builder_capture_with(c, scope, set, enclosing, &enclosing->with_scopes[with])) return false;
   return true;
 }
 
@@ -242,13 +284,13 @@ bool capture_dynamic_eval_scope(
   sv_eval_scope_builder_t *scope = &c->eval_scopes[scope_index];
   memset(scope, 0, sizeof(*scope));
 
-  size_t candidate_count = (size_t)c->local_count;
+  size_t candidate_count = (size_t)c->local_count + (size_t)c->with_depth + (size_t)private_eval_binding_count(c);
   for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing) {
-    if ((size_t)enc->local_count > SIZE_MAX - candidate_count) {
+    if ((size_t)enc->local_count + (size_t)enc->with_depth > SIZE_MAX - candidate_count) {
       js_mkerr(c->js, "too many bindings while capturing direct eval scope");
       return false;
     }
-    candidate_count += (size_t)enc->local_count;
+    candidate_count += (size_t)enc->local_count + (size_t)enc->with_depth;
   }
 
   sv_eval_binding_set_t binding_set;

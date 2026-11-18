@@ -34,9 +34,17 @@ enum {
   UNW_FINALLY_BODY = 2,
 };
 
+typedef enum {
+  SV_WITH_REF_LOCAL,
+  SV_WITH_REF_UPVALUE,
+  SV_WITH_REF_ENV,
+} sv_with_ref_kind_t;
+
 typedef struct {
-  bool is_upval;
+  sv_with_ref_kind_t kind;
   uint16_t idx;
+  const char *marker;
+  uint32_t marker_len;
 } sv_with_ref_t;
 
 typedef struct {
@@ -186,6 +194,7 @@ void pop_loop(sv_compiler_t *c);
 void begin_scope(sv_compiler_t *c);
 void end_scope(sv_compiler_t *c);
 void emit_close_upvals(sv_compiler_t *c);
+int resolve_upvalue_to(sv_compiler_t *c, sv_compiler_t *owner, int local);
 void with_shadows(sv_compiler_t *c, const char *name, uint32_t len, sv_with_refs_t *out);
 bool local_with_shadowed(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_with_tries(
@@ -457,10 +466,7 @@ static inline bool has_module_import_binding(const sv_compiler_t *c) {
 }
 
 static inline bool has_active_with_scope(const sv_compiler_t *c) {
-  for (const sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
-    if (cur->with_depth > 0) return true;
-  }
-  return false;
+  return c->with_depth > 0 || c->with_inherited;
 }
 
 static inline bool has_implicit_arguments_obj(const sv_compiler_t *c) {

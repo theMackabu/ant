@@ -254,7 +254,7 @@ int add_upvalue_tdz(sv_compiler_t *c, uint16_t index, bool is_local, bool may_td
   return add_upvalue_binding(c, index, is_local, false, false, false, &binding);
 }
 
-static int resolve_upvalue_to(sv_compiler_t *c, sv_compiler_t *owner, int local) {
+int resolve_upvalue_to(sv_compiler_t *c, sv_compiler_t *owner, int local) {
   sv_compiler_t *enc = c->enclosing;
   if (!enc || local < 0) return -1;
 
@@ -453,46 +453,75 @@ void emit_close_upvals(sv_compiler_t *c) {
   }}
 }
 
-static void with_refs_push(sv_with_refs_t *out, bool is_upval, int idx) {
-  if (idx < 0) return;
+static void with_refs_push(sv_with_refs_t *out, sv_with_ref_t ref) {
   if (out->count >= out->cap) {
     out->cap = out->cap ? out->cap * 2 : 4;
     out->refs = realloc(out->refs, (size_t)out->cap * sizeof(*out->refs));
   }
-  out->refs[out->count++] = (sv_with_ref_t){ .is_upval = is_upval, .idx = (uint16_t)idx };
+  out->refs[out->count++] = ref;
+}
+
+static void with_refs_push_marker(void *ctx, const char *marker, uint32_t len) {
+  with_refs_push(ctx, (sv_with_ref_t){
+    .kind = SV_WITH_REF_ENV,
+    .marker = marker, .marker_len = len,
+  });
+}
+
+static void with_marker_seen(void *ctx, const char *marker, uint32_t len) {
+  *(bool *)ctx = true;
+}
+
+static bool eval_declares_var(const sv_compiler_t *body, const char *name, uint32_t len) {
+  for (uint32_t i = 0; body && i < body->eval_var_count; i++) if (body->eval_vars[i].len == len && memcmp(body->eval_vars[i].str, name, len) == 0) return true; return false;
 }
 
 void with_shadows(sv_compiler_t *c, const char *name, uint32_t len, sv_with_refs_t *out) {
   out->count = 0;
   if (!has_active_with_scope(c) || is_ident_str(name, len, "super", 5)) return;
 
-  for (sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
+  sv_compiler_t *inner = NULL;
+  for (sv_compiler_t *cur = c; cur; inner = cur, cur = cur->enclosing) {
     int local = resolve_local(cur, name, len);
     for (int i = cur->with_depth - 1; i >= 0; i--) {
       sv_with_scope_t *scope = &cur->with_scopes[i];
       if (local >= 0 && cur->locals[local].depth >= scope->depth) continue;
-      if (cur == c) {
-        with_refs_push(out, false, local_to_frame_slot(c, scope->local) - c->param_count);
-      } else with_refs_push(out, true, resolve_upvalue_to(c, cur, scope->local));
+      int slot = cur == c
+        ? local_to_frame_slot(c, scope->local) - c->param_count
+        : resolve_upvalue_to(c, cur, scope->local);
+      if (slot >= 0) with_refs_push(out, (sv_with_ref_t){
+        .kind = cur == c ? SV_WITH_REF_LOCAL : SV_WITH_REF_UPVALUE,
+        .idx = (uint16_t)slot,
+      });
     }
     if (local >= 0 || cur->owns_eval_env) break;
+    if (cur->eval_with) sv_eval_env_each_with(
+      c->js, cur->eval_env, name, len, eval_declares_var(inner, name, len), with_refs_push_marker, out);
   }
 }
 
 bool local_with_shadowed(sv_compiler_t *c, const char *name, uint32_t len) {
   if (!has_active_with_scope(c) || is_ident_str(name, len, "super", 5)) return false;
 
-  for (sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
+  sv_compiler_t *inner = NULL;
+  for (sv_compiler_t *cur = c; cur; inner = cur, cur = cur->enclosing) {
     int local = resolve_local(cur, name, len);
     for (int i = cur->with_depth - 1; i >= 0; i--)
       if (local < 0 || cur->locals[local].depth < cur->with_scopes[i].depth) return true;
     if (local >= 0 || cur->owns_eval_env) break;
+    if (cur->eval_with) {
+      bool seen = false;
+      sv_eval_env_each_with(c->js, cur->eval_env, name, len, eval_declares_var(inner, name, len), with_marker_seen, &seen);
+      if (seen) return true;
+    }
   }
   return false;
 }
 
 static void emit_with_ref_load(sv_compiler_t *c, const sv_with_ref_t *ref) {
-  if (ref->is_upval) {
+  if (ref->kind == SV_WITH_REF_ENV) {
+    emit_atom_op(c, OP_GET_EVAL_GLOBAL, ref->marker, ref->marker_len);
+  } else if (ref->kind == SV_WITH_REF_UPVALUE) {
     emit_op(c, OP_GET_UPVAL);
     emit_u16(c, ref->idx);
   } else if (ref->idx <= 255) {

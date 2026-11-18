@@ -685,6 +685,31 @@ static bool compile_call_try_fused_chain(
   return true;
 }
 
+static bool compile_with_shadowed_eval_call(sv_compiler_t *c, sv_ast_t *node, bool has_spread) {
+  if (!has_active_with_scope(c) || !is_ident_name(node->left, "eval")) return false;
+  if (resolve_local(c, "eval", 4) != -1 || resolve_upvalue_raw(c, "eval", 4) != -1) return false;
+
+  sv_with_refs_t shadows = {0};
+  with_shadows(c, "eval", 4, &shadows);
+  if (shadows.count == 0) return false;
+
+  sv_patch_list_t found = {0};
+  emit_with_tries(c, &shadows, OP_WITH_TRY_CALL, "eval", 4, 2, &found);
+  if (!compile_direct_eval_call(c, node, has_spread)) {
+    emit_op(c, OP_UNDEF);
+    emit_get_var_plain(c, "eval", 4);
+    patch_list_resolve(c, &found);
+    compile_call_emit_invoke(c, node, SV_CALL_METHOD, has_spread);
+    return true;
+  }
+
+  int end_jump = emit_jump(c, OP_JMP);
+  patch_list_resolve(c, &found);
+  compile_call_emit_invoke(c, node, SV_CALL_METHOD, has_spread);
+  patch_jump(c, end_jump);
+  return true;
+}
+
 void compile_call(sv_compiler_t *c, sv_ast_t *node) {
   sv_patch_list_t *outer = optional_chain_take(c);
   sv_patch_list_t own = {0};
@@ -773,6 +798,7 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
     node->args.items[1] = arrow;
   }
 
+  if (compile_with_shadowed_eval_call(c, node, has_spread)) return;
   if (compile_direct_eval_call(c, node, has_spread)) return;
   if (compile_call_try_fused_chain(c, node, callee, has_spread)) return;
 
