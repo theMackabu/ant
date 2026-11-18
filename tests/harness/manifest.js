@@ -195,6 +195,7 @@ export function targets() {
     'test_for_update_tonumeric.cjs',
     'test_fs_dir_async_recursive.cjs',
     'test_fs_handled_errors.cjs',
+    'test_derived_ctor_tail_return_check.cjs',
     'test_fs_io_argument_getters.cjs',
     'test_fs_link.cjs',
     'test_fs_opendir.cjs',

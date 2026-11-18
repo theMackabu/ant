@@ -246,6 +246,7 @@ sv_func_t *compile_function_body(
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, enclosing, node, mode);
   comp.is_static = (node->flags & FN_STATIC) || (comp.is_arrow && enclosing->is_static);
+  comp.is_class_ctor = !!(node->flags & FN_CLASS_CTOR);
   if (node->flags & FN_DERIVED_CTOR) comp.derived_field_owner = enclosing;
   else if (comp.is_arrow) comp.derived_field_owner = enclosing->derived_field_owner;
 

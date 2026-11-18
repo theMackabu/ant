@@ -263,6 +263,7 @@ typedef struct sv_compiler {
   int new_target_local;
   int super_local;
   bool super_referenced;
+  bool is_class_ctor;
   int using_stack_local;
   int using_cleanup_count;
   int using_cleanup_cap;
