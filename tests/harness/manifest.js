@@ -181,6 +181,7 @@ export function targets() {
     'test_array_join_cycles.cjs',
     'test_array_length_truncation.cjs',
     'test_engine_error_brand.cjs',
+    'test_class_wide_instances.cjs',
     'test_error_context_clipped_line.cjs',
     'test_error_stack_format.cjs',
     'test_error_stack_jit_frames.cjs',

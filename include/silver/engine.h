@@ -715,6 +715,15 @@ static_assert(
   "sv_func_t must not grow past 232 bytes on 64-bit targets"
 );
 
+static inline uint8_t sv_ctor_slot_class(uint32_t props) {
+  if (props <= ANT_INOBJ_BASE_SLOTS) return 0;
+  return props <= ANT_INOBJ_WIDE_SLOTS ? 1 : 2;
+}
+
+static inline void sv_func_set_ctor_props(sv_func_t *func, uint32_t props) {
+  func->ctor_slot_class = sv_ctor_slot_class(props) & 3;
+}
+
 static inline uint8_t sv_construct_slots(const sv_func_t *func) {
   if (!func || !func->ctor_slot_class) return ANT_INOBJ_BASE_SLOTS;
   return func->ctor_slot_class == 1 ? ANT_INOBJ_WIDE_SLOTS : ANT_INOBJ_LARGE_SLOTS;

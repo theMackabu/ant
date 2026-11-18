@@ -573,6 +573,7 @@ static void compile_class_strict(
     sv_func_t *fn = sv_func_new(c->js);
     fn->is_derived_ctor = node->left != NULL;
     fn->is_class_ctor = true;
+    sv_func_set_ctor_props(fn, ctor_prop_count(NULL, class_public_field_count(field_inits, field_count)));
     sv_func_init_code_and_map_templates(&comp, fn);
     sv_func_init_obj_sites(&comp, fn);
     if (comp.const_count > 0) {

@@ -147,7 +147,8 @@ int add_upvalue_tdz(sv_compiler_t *c, uint16_t index, bool is_local, bool may_td
 void compile_method_function(sv_compiler_t *c, sv_ast_t *m);
 bool param_captured_by_value(sv_compiler_t *c, int local);
 bool local_written_once(sv_compiler_t *c, int local);
-uint8_t ctor_slot_class(const sv_ast_t *node);
+uint32_t ctor_prop_count(const sv_ast_t *node, uint32_t fields);
+uint32_t class_public_field_count(sv_ast_t **fields, int count);
 int resolve_super_upvalue(sv_compiler_t *c);
 int resolve_arguments_upvalue(sv_compiler_t *c);
 int resolve_new_target_upvalue(sv_compiler_t *c);
