@@ -212,7 +212,10 @@ double js_to_number(ant_t *js, ant_value_t arg) {
   if (vtype(arg) == kTypeUndefined) return ANT_NAN;
   if (vtype(arg) == kTypeNumber) return Ant_Value_AsNumberUnchecked(arg);
   if (vtype(arg) == kTypeBool) return vdata(arg) ? 1.0 : 0.0;
-  if (vtype(arg) == kTypeBigInt) return bigint_to_double(js, arg);
+  if (vtype(arg) == kTypeBigInt) {
+    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a BigInt value to a number");
+    return ANT_NAN;
+  }
 
   if (vtype(arg) == kTypeString) {
     ant_flat_string_t *flat = ant_str_flat_ptr(arg);
@@ -247,7 +250,6 @@ double js_to_number(ant_t *js, ant_value_t arg) {
     if (vtype(primitive) == kTypeBool) return vdata(primitive) ? 1.0 : 0.0;
     if (vtype(primitive) == kTypeNull) return 0.0;
     if (vtype(primitive) == kTypeUndefined) return ANT_NAN;
-    if (vtype(primitive) == kTypeBigInt) return bigint_to_double(js, primitive);
 
     return js_to_number(js, primitive);
   }
