@@ -1116,6 +1116,19 @@ uint32_t ant_shape_count(const ant_shape_t *shape) {
   return shape ? shape->count : 0;
 }
 
+bool ant_shape_appends_slot(const ant_shape_t *from, const ant_shape_t *to, uint32_t slot) {
+  if (!from || !to || from == to || slot != from->count || to->count != from->count + 1) return false;
+  if (to->parent == from) return true;
+  
+  if (from->deleted_count || to->deleted_count || from->proto != to->proto) return false;
+  if (from->exotic != to->exotic || from->exotic_ops != to->exotic_ops || from->inobj_limit != to->inobj_limit) return false;
+  
+  for (uint32_t i = 0; i < from->count; i++)
+    if (!shape_prop_same(&from->props[i], &to->props[i])) return false;
+  
+  return true;
+}
+
 bool ant_shape_may_have_gc_refs(const ant_shape_t *shape) {
   return shape && shape->descriptors->may_have_gc_refs;
 }

@@ -144,6 +144,7 @@ void ant_shape_mark_dictionary(ant_shape_t *shape);
 bool ant_shape_is_dictionary(const ant_shape_t *shape);
 
 uint32_t ant_shape_count(const ant_shape_t *shape);
+bool ant_shape_appends_slot(const ant_shape_t *from, const ant_shape_t *to, uint32_t slot);
 bool ant_shape_may_have_gc_refs(const ant_shape_t *shape);
 uint32_t ant_shape_compact(ant_shape_t *shape);
 uint8_t ant_shape_get_attrs(const ant_shape_t *shape, uint32_t slot);
