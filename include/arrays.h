@@ -75,6 +75,11 @@ ant_value_t array_length_readonly_error(ant_t *js);
 ant_value_t set_declined(bool *declined, ant_value_t value);
 ant_value_t array_grow_readonly_result(ant_t *js, uint64_t idx, ant_value_t value, bool *declined);
 ant_value_t validate_array_length(ant_t *js, ant_value_t v);
+ant_value_t array_length_range_error(ant_t *js);
+
+static inline bool array_length_is_valid(double length) {
+  return length >= 0 && length < 4294967296.0 && length == (uint32_t)length;
+}
 
 ant_value_t check_object_extensibility(ant_t *js, ant_value_t obj, const char *key, size_t len);
 ant_value_t check_object_extensibility_index(ant_t *js, ant_value_t obj, uint64_t idx);

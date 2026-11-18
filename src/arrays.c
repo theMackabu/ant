@@ -721,12 +721,12 @@ ant_value_t array_grow_readonly_result(ant_t *js, uint64_t idx, ant_value_t valu
   return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot add property %llu, object is not extensible", (unsigned long long)idx);
 }
 
+__attribute__((noinline, cold)) ant_value_t array_length_range_error(ant_t *js) {
+  return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
+}
+
 ant_value_t validate_array_length(ant_t *js, ant_value_t v) {
-  if (vtype(v) != kTypeNumber)
-    return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
-  double d = Ant_Value_AsNumberUnchecked(v);
-  if (d < 0 || d != (uint32_t)d || d >= 4294967296.0)
-    return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
+  if (vtype(v) != kTypeNumber || !array_length_is_valid(Ant_Value_AsNumberUnchecked(v))) return array_length_range_error(js);
   return Ant_Value_Undefined;
 }
 
