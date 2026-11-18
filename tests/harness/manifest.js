@@ -483,6 +483,7 @@ export function targets() {
     'test_symbol_set_semantics.cjs',
     'test_syntax.cjs',
     'test_template_self_append.cjs',
+    'test_super_property_assign.cjs',
     'test_temporal.js',
     'test_timer_fired_timeout_gc.cjs',
     'test_timer_handle.cjs',

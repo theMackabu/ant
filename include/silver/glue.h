@@ -432,6 +432,8 @@ ant_value_t jit_helper_array(
   ant_value_t *elements, int count
 );
 
+ant_value_t Silver_Super_Get(ant_t *js, sv_func_t *func, ant_value_t receiver, ant_value_t home, ant_value_t prop, ant_value_t *roots);
+ant_value_t Silver_Super_Put(ant_t *js, sv_func_t *func, ant_value_t receiver, ant_value_t home, ant_value_t prop, ant_value_t val, ant_value_t *roots);
 ant_value_t jit_helper_for_of(
   sv_vm_t *vm, ant_t *js,
   ant_value_t iterable, ant_value_t *iter_buf

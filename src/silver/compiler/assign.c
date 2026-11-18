@@ -207,10 +207,99 @@ static void emit_compound_assign_op(sv_compiler_t *c, uint8_t op) {
   if (aop != OP_INVALID) emit_op(c, aop);
 }
 
+static bool is_super_member(const sv_ast_t *target) {
+  return target && target->type == N_MEMBER && is_ident_name(target->left, "super");
+}
+
+bool reject_super_private(sv_compiler_t *c, const sv_ast_t *member) {
+  if ((member->flags & 1) || !is_private_name_node(member->right)) return false;
+  js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Cannot access private member through super");
+  emit_op(c, OP_UNDEF);
+  return true;
+}
+
+void emit_super_key(sv_compiler_t *c, sv_ast_t *member) {
+  if (member->flags & 1) compile_expr(c, member->right);
+  else emit_constant(c, sv_const_str(c, member->right->str, member->right->len));
+}
+
+void emit_super_reference(sv_compiler_t *c, sv_ast_t *member) {
+  emit_op(c, OP_THIS);
+  emit_get_var(c, "super", 5);
+  emit_super_key(c, member);
+}
+
+static void emit_super_reference_read(sv_compiler_t *c) {
+  emit_op(c, OP_DUP2);
+  emit_op(c, OP_THIS);
+  emit_op(c, OP_ROT3R);
+  emit_op(c, OP_GET_SUPER_VAL);
+}
+
+static void compile_super_update(sv_compiler_t *c, sv_ast_t *target, bool prefix, bool is_inc) {
+  if (reject_super_private(c, target)) return;
+  emit_super_reference(c, target);
+  emit_super_reference_read(c);
+  
+  if (prefix) {
+    emit_op(c, is_inc ? OP_INC : OP_DEC);
+    emit_op(c, OP_PUT_SUPER_VAL);
+    return;
+  }
+  
+  int old_local = reserve_hidden_locals(c, 1);
+  emit_op(c, is_inc ? OP_POST_INC : OP_POST_DEC);
+  emit_op(c, OP_SWAP);
+  emit_put_local(c, old_local);
+  emit_op(c, OP_PUT_SUPER_VAL);
+  emit_op(c, OP_POP);
+  emit_get_local(c, old_local);
+}
+
+static void compile_super_assign(sv_compiler_t *c, sv_ast_t *node) {
+  sv_ast_t *target = node->left;
+  uint8_t op = node->op;
+  if (reject_super_private(c, target)) return;
+  emit_super_reference(c, target);
+  
+  if (op == TOK_ASSIGN) {
+    compile_expr(c, node->right);
+    emit_op(c, OP_PUT_SUPER_VAL);
+    return;
+  }
+  
+  emit_super_reference_read(c);
+  
+  if (op == TOK_LOR_ASSIGN || op == TOK_LAND_ASSIGN || op == TOK_NULLISH_ASSIGN) {
+    int skip = emit_jump(c,
+      op == TOK_LOR_ASSIGN ? OP_JMP_TRUE_PEEK :
+      op == TOK_LAND_ASSIGN ? OP_JMP_FALSE_PEEK : OP_JMP_NOT_NULLISH);
+    emit_op(c, OP_POP);
+    compile_expr(c, node->right);
+    emit_op(c, OP_PUT_SUPER_VAL);
+    int end = emit_jump(c, OP_JMP);
+    patch_jump(c, skip);
+    emit_op(c, OP_NIP);
+    emit_op(c, OP_NIP);
+    emit_op(c, OP_NIP);
+    patch_jump(c, end);
+    return;
+  }
+  
+  compile_expr(c, node->right);
+  emit_compound_assign_op(c, op);
+  emit_op(c, OP_PUT_SUPER_VAL);
+}
+
 void compile_update(sv_compiler_t *c, sv_ast_t *node) {
   bool prefix = (node->flags & 1);
   bool is_inc = (node->op == TOK_POSTINC);
   sv_ast_t *target = node->right;
+
+  if (is_super_member(target)) {
+    compile_super_update(c, target, prefix, is_inc);
+    return;
+  }
 
   if (target->type == N_IDENT) {
     if (prefix) {
@@ -274,6 +363,11 @@ void compile_update(sv_compiler_t *c, sv_ast_t *node) {
 void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *target = node->left;
   uint8_t op = node->op;
+  if (is_super_member(target)) {
+    compile_super_assign(c, node);
+    return;
+  }
+  
   if (target->type == N_UNDEF && undefined_shadowed(c)) {
     target->type = N_IDENT;
     target->str = "undefined";
@@ -504,7 +598,17 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 void compile_lhs_set(sv_compiler_t *c, sv_ast_t *target, bool keep) {
-  if (target->type == N_IDENT) {
+  if (is_super_member(target)) {
+    if (reject_super_private(c, target)) return;
+    emit_op(c, OP_THIS);
+    emit_op(c, OP_SWAP);
+    emit_get_var(c, "super", 5);
+    emit_op(c, OP_SWAP);
+    emit_super_key(c, target);
+    emit_op(c, OP_SWAP);
+    emit_op(c, OP_PUT_SUPER_VAL);
+    if (!keep) emit_op(c, OP_POP);
+  } else if (target->type == N_IDENT) {
     emit_set_var(c, target->str, target->len, keep);
   } else if (target->type == N_UNDEF && undefined_shadowed(c)) {
     emit_set_var(c, "undefined", 9, keep);

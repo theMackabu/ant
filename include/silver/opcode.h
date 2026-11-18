@@ -111,7 +111,7 @@ OP_DEF(  HAS_PRIVATE,      1,   2,   1, none)       /* obj private_name -> bool 
 
 OP_DEF(  GET_SUPER,         1,   1,   1, none)      /* obj -> super */
 OP_DEF(  GET_SUPER_VAL,     1,   3,   1, none)      /* this obj prop -> value */
-OP_DEF(  PUT_SUPER_VAL,     1,   4,   0, none)      /* this obj prop value -> */
+OP_DEF(  PUT_SUPER_VAL,     1,   4,   1, none)      /* this obj prop value -> value */
 
 OP_DEF(  ADD,               1,   2,   1, none)
 OP_DEF(  SUB,               1,   2,   1, none)

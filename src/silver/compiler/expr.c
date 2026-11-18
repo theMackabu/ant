@@ -678,17 +678,8 @@ static int resolve_raw_length_local(sv_compiler_t *c, sv_ast_t *base) {
 
 void compile_member(sv_compiler_t *c, sv_ast_t *node) {
   if (is_ident_name(node->left, "super")) {
-    if (!(node->flags & 1) && is_private_name_node(node->right)) {
-      js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Cannot access private member through super");
-      emit_op(c, OP_UNDEF);
-      return;
-    }
-    emit_op(c, OP_THIS);
-    emit_get_var(c, "super", 5);
-    if (node->flags & 1)
-      compile_expr(c, node->right);
-    else
-      emit_constant(c, sv_const_str(c, node->right->str, node->right->len));
+    if (reject_super_private(c, node)) return;
+    emit_super_reference(c, node);
     emit_op(c, OP_GET_SUPER_VAL);
     return;
   }
