@@ -569,6 +569,7 @@ struct ant_isolate_t {
   } weak_gc;
 
   uint32_t jit_active_depth;
+  struct sv_jit_construct_mark *jit_construct_marks;
   uint32_t vm_exec_depth;
 
 #ifdef ANT_WASM_EMBED

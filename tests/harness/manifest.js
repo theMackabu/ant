@@ -456,6 +456,7 @@ export function targets() {
     'test_spec_operator_semantics.cjs',
     'test_spread_memory_pressure.cjs',
     'test_stack_column_backward_utf8.cjs',
+    'test_stack_new_prefix.cjs',
     'test_stack_depth_parity.cjs',
     'test_construct_in_loop.cjs',
     'test_class_fields_returned_objects.cjs',

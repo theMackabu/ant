@@ -1154,6 +1154,11 @@ typedef struct sv_jit_osr_mark {
   struct sv_jit_osr_mark *prev;
 } sv_jit_osr_mark_t;
 
+typedef struct sv_jit_construct_mark {
+  struct sv_jit_construct_mark *prev;
+  uint32_t depth;
+} sv_jit_construct_mark_t;
+
 typedef struct {
   uint32_t bc_off;
   uint32_t live_start;
