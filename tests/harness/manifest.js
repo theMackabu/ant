@@ -140,6 +140,7 @@ export function targets() {
     'test_duplicate_declarations.cjs',
     'test_dynamic_import_builtin_default.mjs',
     'test_arguments_not_array.cjs',
+    'test_array_ctor_results_create_data_property.cjs',
     'test_object_spread_semantics.cjs',
     'test_define_properties_semantics.cjs',
     'test_builtin_enumerability.cjs',

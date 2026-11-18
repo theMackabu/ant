@@ -3014,11 +3014,11 @@ static ant_value_t builtin_Array_isTemplateObject(ant_params_t) {
 }
 
 typedef struct {
-  ant_value_t write_target;
   ant_value_t result;
   ant_value_t mapFn;
   ant_value_t mapThis;
   ant_offset_t index;
+  bool fresh;
 } array_from_iter_ctx_t;
 
 static iter_action_t array_from_iter_cb(ant_t *js, ant_value_t value, void *ctx, ant_value_t *out) {
@@ -3031,137 +3031,138 @@ static iter_action_t array_from_iter_cb(ant_t *js, ant_value_t value, void *ctx,
     if (is_err(elem)) { *out = elem; return ITER_ERROR; }
   }
 
-  if (vtype(fctx->write_target) == kTypeArray) arr_set(js, fctx->write_target, fctx->index, elem);
-  else {
-    char idxstr[16]; size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)fctx->index);
-    js_setprop(js, fctx->write_target, js_mkstr(js, idxstr, idxlen), elem);
-  }
+  ant_value_t set = array_result_set(js, fctx->result, fctx->fresh, fctx->index, elem);
+  if (is_err(set)) { *out = set; return ITER_ERROR; }
 
   fctx->index++;
   return ITER_CONTINUE;
 }
 
-// TODO: modularize
-static ant_value_t builtin_Array_from(ant_params_t) {
-  if (nargs == 0) return Ant_Array_Create(js);
+static ant_value_t array_from_finish(ant_t *js, array_from_iter_ctx_t *ctx, bool use_ctor) {
+  ant_value_t set_len = array_set_result_length(js, ctx->result, ctx->index, ctx->fresh);
+  if (is_err(set_len)) return set_len;
+  return use_ctor ? ctx->result : mkval(kTypeArray, vdata(ctx->result));
+}
 
-  ant_value_t src = args[0];
-  ant_value_t mapFn = (nargs >= 2 && is_callable(args[1])) ? args[1] : Ant_Value_Undefined;
-  ant_value_t mapThis = (nargs >= 3) ? args[2] : Ant_Value_Undefined;
-
-  bool use_ctor = (vtype(call_this) == kTypeFunction || vtype(call_this) == kTypeBuiltin);
-  ant_value_t result = use_ctor ? array_alloc_from_ctor_with_length(js, call_this, 0) : Ant_Array_Create(js);
-  if (is_err(result)) return result;
-
-  bool result_is_proxy = is_proxy(result);
-  ant_value_t write_target = result_is_proxy ? proxy_read_target(js, result) : result;
-  ant_value_t iter_sym = js->sym.iterator_sym;
-  bool unclosable = ant_protector_intact(js, ANT_PROTECTOR_ITERATOR_RETURN);
-
-  if (vtype(src) == kTypeString && ant_protector_intact(js, ANT_PROTECTOR_STRING_ITERATION) && unclosable) {
-    if (str_is_heap_rope(src) || str_is_heap_builder(src)) {
-      src = str_materialize(js, src);
-      if (is_err(src)) return src;
-    }
-    
-    ant_offset_t slen = str_len_fast(js, src);
-    array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-    
-    for (ant_offset_t i = 0; i < slen; ) {
-      ant_offset_t off = vstr(js, src, NULL);
-      ant_offset_t cb_len = (ant_offset_t)utf8_char_len_at((const char *)(uintptr_t)off, (size_t)slen, (size_t)i);
-      ant_value_t ch = js_mkstr(js, (const void *)(uintptr_t)(off + i), cb_len);
-      
-      ant_value_t out;
-      iter_action_t act = array_from_iter_cb(js, ch, &ctx, &out);
-      
-      if (act == ITER_ERROR) return out;
-      i += cb_len;
-    }
-    if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, Ant_Value_FromNumber((double)ctx.index));
-  } else if (vtype(src) == kTypeArray) {
-    bool default_iter = unclosable && js_array_iteration_default(js, src);
-
-    if (default_iter && !is_callable(mapFn) && real_array_obj_ptr(result) && get_array_length(js, result) == 0) {
-      ant_value_t copied = js_arr_spread_into(js, result, src);
-      if (is_err(copied)) return copied;
-    } else if (default_iter) {
-      array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      ant_offset_t len = 0;
-      ant_value_t len_result = array_like_length_checked(js, src, &len);
-      if (is_err(len_result)) return len_result;
-      for (ant_offset_t i = 0; i < len; i++) {
-        ant_value_t unused;
-        iter_action_t act = array_from_iter_cb(js, arr_get(js, src, i), &ctx, &unused);
-        if (act == ITER_ERROR) return unused;
-        len_result = array_like_length_checked(js, src, &len);
-        if (is_err(len_result)) return len_result;
-      }
-      if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, Ant_Value_FromNumber((double)ctx.index));
-    } else {
-      array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      ant_value_t iter_result = iter_foreach(js, src, array_from_iter_cb, &ctx);
-      if (is_err(iter_result)) return iter_result;
-      if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, Ant_Value_FromNumber((double)ctx.index));
-    }
-  } else {
-    ant_value_t iter_method = Ant_Value_Undefined;
-    bool src_is_array = false;
-    if (vtype(iter_sym) == kTypeSymbol) {
-      iter_method = js_get_sym(js, src, iter_sym);
-      if (is_err(iter_method)) return iter_method;
-      if (is_proxy(src)) src_is_array = vtype(proxy_read_target(js, src)) == kTypeArray;
-    }
-
-    if (src_is_array && vtype(iter_method) == kTypeBuiltin) {
-      array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      PROXY_AWARE_LENGTH_OR_RETURN(src, len);
-      for (ant_offset_t i = 0; i < len; i++) {
-        ant_value_t unused;
-        ant_value_t item = array_method_get_index(js, src, i);
-        if (is_err(item)) return item;
-        iter_action_t act = array_from_iter_cb(js, item, &ctx, &unused);
-        if (act == ITER_ERROR) return unused;
-      }
-      if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, Ant_Value_FromNumber((double)len));
-    } else if (vtype(iter_method) != kTypeUndefined && vtype(iter_method) != kTypeNull) {
-      array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      ant_value_t iter_result = iter_foreach_method(js, src, iter_method, array_from_iter_cb, &ctx);
-      if (is_err(iter_result)) return iter_result;
-      if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, Ant_Value_FromNumber((double)ctx.index));
-    } else if (vtype(src) == kTypeObject) {
-      array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      PROXY_AWARE_LENGTH_OR_RETURN(src, len);
-      for (ant_offset_t i = 0; i < len; i++) {
-        ant_value_t unused;
-        ant_value_t item = array_method_get_index(js, src, i);
-        if (is_err(item)) return item;
-        iter_action_t act = array_from_iter_cb(js, item, &ctx, &unused);
-        if (act == ITER_ERROR) return unused;
-      }
-      if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, Ant_Value_FromNumber((double)len));
-    }
+static ant_value_t array_from_indexed(ant_t *js, ant_value_t src, ant_offset_t len, array_from_iter_ctx_t *ctx) {
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t unused;
+    ant_value_t item = array_method_get_index(js, src, i);
+    if (is_err(item)) return item;
+    if (array_from_iter_cb(js, item, ctx, &unused) == ITER_ERROR) return unused;
   }
+  return Ant_Value_Undefined;
+}
 
-  if (!use_ctor) return mkval(kTypeArray, vdata(result));
-  return result;
+
+static ant_value_t array_from_string(ant_t *js, ant_value_t src, array_from_iter_ctx_t *ctx) {
+  if (str_is_heap_rope(src) || str_is_heap_builder(src)) {
+    src = str_materialize(js, src);
+    if (is_err(src)) return src;
+  }
+  
+  ant_offset_t slen = str_len_fast(js, src);
+  for (ant_offset_t i = 0; i < slen; ) {
+    ant_offset_t off = vstr(js, src, NULL);
+    ant_offset_t cb_len = (ant_offset_t)utf8_char_len_at((const char *)(uintptr_t)off, (size_t)slen, (size_t)i);
+    ant_value_t ch = js_mkstr(js, (const void *)(uintptr_t)(off + i), cb_len);
+    
+    ant_value_t out;
+    if (array_from_iter_cb(js, ch, ctx, &out) == ITER_ERROR) return out;
+    i += cb_len;
+  }
+  
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t array_from_array(ant_t *js, ant_value_t src, array_from_iter_ctx_t *ctx) {
+  bool bulk = ctx->fresh ? real_array_obj_ptr(ctx->result) != NULL : array_result_plain(ctx->result);
+  if (!is_callable(ctx->mapFn) && bulk && get_array_length(js, ctx->result) == 0) {
+    ant_value_t copied = js_arr_spread_into(js, ctx->result, src);
+    if (is_err(copied)) return copied;
+    ctx->index = get_array_length(js, ctx->result);
+    return Ant_Value_Undefined;
+  }
+  
+  ant_offset_t len = 0;
+  ant_value_t len_result = array_like_length_checked(js, src, &len);
+  if (is_err(len_result)) return len_result;
+  
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t unused;
+    if (array_from_iter_cb(js, arr_get(js, src, i), ctx, &unused) == ITER_ERROR) return unused;
+    len_result = array_like_length_checked(js, src, &len);
+    if (is_err(len_result)) return len_result;
+  }
+  
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t builtin_Array_from(ant_params_t) {
+  ant_value_t src = nargs > 0 ? args[0] : Ant_Value_Undefined;
+  ant_value_t mapFn = nargs >= 2 ? args[1] : Ant_Value_Undefined;
+  ant_value_t mapThis = nargs >= 3 ? args[2] : Ant_Value_Undefined;
+  if (vtype(mapFn) != kTypeUndefined && !is_callable(mapFn))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Array.from: the mapping function must be callable");
+
+  bool use_ctor = call_this != js->sym.array_ctor && js_is_constructor(call_this);
+  array_from_iter_ctx_t ctx = { Ant_Value_Undefined, mapFn, mapThis, 0, !use_ctor };
+  bool unclosable = ant_protector_intact(js, ANT_PROTECTOR_ITERATOR_RETURN);
+  
+  bool string_fast = vtype(src) == kTypeString && unclosable && ant_protector_intact(js, ANT_PROTECTOR_STRING_ITERATION);
+  bool array_fast = vtype(src) == kTypeArray && unclosable && js_array_iteration_default(js, src);
+  
+  if (string_fast || array_fast) {
+    ctx.result = use_ctor ? array_alloc_from_ctor(js, call_this) : Ant_Array_Create(js);
+    if (is_err(ctx.result)) return ctx.result;
+    ant_value_t filled = string_fast ? array_from_string(js, src, &ctx) : array_from_array(js, src, &ctx);
+    return is_err(filled) ? filled : array_from_finish(js, &ctx, use_ctor);
+  }
+  
+  uint8_t st = vtype(src);
+  if (st == kTypeUndefined || st == kTypeNull)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not iterable", st == kTypeNull ? "null" : "undefined");
+  
+  ant_value_t iter_method = js_get_sym(js, src, js->sym.iterator_sym);
+  if (is_err(iter_method)) return iter_method;
+  
+  if (vtype(iter_method) != kTypeUndefined && vtype(iter_method) != kTypeNull) {
+    ctx.result = use_ctor ? array_alloc_from_ctor(js, call_this) : Ant_Array_Create(js);
+    if (is_err(ctx.result)) return ctx.result;
+    
+    ant_value_t filled;
+    if (vtype(iter_method) == kTypeBuiltin && is_proxy(src) && vtype(proxy_read_target(js, src)) == kTypeArray) {
+      PROXY_AWARE_LENGTH_OR_RETURN(src, len);
+      filled = array_from_indexed(js, src, len, &ctx);
+    } else filled = iter_foreach_method(js, src, iter_method, array_from_iter_cb, &ctx);
+    
+    return is_err(filled) ? filled : array_from_finish(js, &ctx, use_ctor);
+  }
+  
+  ant_offset_t len = 0;
+  ant_value_t len_result = is_object_type(src) ? proxy_aware_length(js, src, &len) : array_like_length_checked(js, src, &len);
+  if (is_err(len_result)) return len_result;
+  
+  ctx.result = use_ctor ? array_alloc_from_ctor_with_length(js, call_this, len) : Ant_Array_Create(js);
+  if (is_err(ctx.result)) return ctx.result;
+  
+  ant_value_t filled = array_from_indexed(js, src, len, &ctx);
+  if (is_err(filled)) return filled;
+  ctx.index = len;
+  
+  return array_from_finish(js, &ctx, use_ctor);
 }
 
 static ant_value_t builtin_Array_of(ant_params_t) {
-  bool use_ctor = (vtype(call_this) == kTypeFunction || vtype(call_this) == kTypeBuiltin);
-  ant_value_t arr = use_ctor ? array_alloc_from_ctor_with_length(js, call_this, (ant_offset_t)nargs) : Ant_Array_Create(js);
-  bool fresh = !use_ctor || call_this == js->sym.array_ctor;
+  bool use_ctor = call_this != js->sym.array_ctor && js_is_constructor(call_this);
+  bool fresh = !use_ctor;
+  ant_value_t arr = array_alloc_from_ctor_with_length(js, use_ctor ? call_this : js->sym.array_ctor, (ant_offset_t)nargs);
   if (is_err(arr)) return arr;
 
-  bool arr_is_proxy = is_proxy(arr);
-  ant_value_t write_target = arr_is_proxy ? proxy_read_target(js, arr) : arr;
-
+  bool plain = fresh || array_result_plain(arr);
   for (int i = 0; i < nargs; i++) {
-    if (vtype(write_target) == kTypeArray) arr_set(js, write_target, (ant_offset_t)i, args[i]);
-    else {
-      char idxstr[16]; size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
-      js_setprop(js, write_target, js_mkstr(js, idxstr, idxlen), args[i]);
-    }
+    ant_value_t set = array_result_set(js, arr, plain, (ant_offset_t)i, args[i]);
+    if (is_err(set)) return set;
   }
 
   ant_value_t set_len = array_set_result_length(js, arr, nargs, fresh);

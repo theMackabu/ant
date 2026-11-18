@@ -58,6 +58,7 @@ bool arr_has(ant_t *js, ant_value_t arr, ant_offset_t idx);
 
 bool array_length_readonly(ant_t *js, ant_value_t arr);
 bool array_result_extensible(ant_value_t result);
+bool array_result_plain(ant_value_t result);
 
 ant_value_t array_result_set(ant_t *js, ant_value_t result, bool fresh, ant_offset_t idx, ant_value_t val);
 ant_value_t mkarr_dense_literal_capacity(ant_t *js, const ant_value_t *elements, uint32_t count, bool exact_capacity);
@@ -65,6 +66,7 @@ ant_value_t mkarr_dense_literal_capacity(ant_t *js, const ant_value_t *elements,
 void arr_del(ant_t *js, ant_value_t arr, ant_offset_t idx);
 ant_value_t array_alloc_intrinsic(ant_t *js, ant_value_t source, ant_offset_t length_hint);
 ant_value_t array_alloc_from_ctor_with_length(ant_t *js, ant_value_t ctor, ant_offset_t length_hint);
+ant_value_t array_alloc_from_ctor(ant_t *js, ant_value_t ctor);
 ant_value_t array_species_create(ant_t *js, ant_value_t receiver, ant_offset_t length, bool *intrinsic);
 
 __attribute__((noinline)) bool array_length_readonly_slow(ant_t *js, ant_value_t arr);
