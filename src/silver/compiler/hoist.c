@@ -632,7 +632,7 @@ void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
           add_local(c, fn->str, fn->len, false, c->scope_depth);
       }
     }
-    if (!c->is_strict) {
+    if (!c->is_strict && c->scope_depth == 0) {
       sv_ast_list_t funcs = {0};
       annex_b_collect_block_var_funcs(c->js, decl_node, &funcs);
       for (int j = 0; j < funcs.count; j++) {
@@ -657,6 +657,7 @@ void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
         return;
       }
       memmove(decl, decl + 1, (--c->eval_var_count - i) * sizeof(*decl));
+      c->eval_var_index_cap = 0;
     }
   }
 
@@ -706,17 +707,10 @@ void hoist_one_func(sv_compiler_t *c, sv_ast_t *node, bool annex_b_update_var) {
   emit_set_function_name(c, node->str, node->len);
   int annex_var = annex_b_update_var && !is_sloppy_eval(c) ? resolve_local_at_depth(c, node->str, node->len, 0) : -1;
   if (annex_var >= 0 && ((c->locals[annex_var].eval_flags & SV_EVAL_BIND_LEXICAL) || annex_var < c->param_bind_end)) annex_var = -1;
-  bool eval_annex_var = false;
-  if (annex_b_update_var && is_sloppy_eval(c))
-    for (uint32_t i = 0; i < c->eval_var_count; i++)
-      if (c->eval_vars[i].len == node->len && !memcmp(c->eval_vars[i].str, node->str, node->len))
-        eval_annex_var = true;
+  bool eval_annex_var = annex_b_update_var && is_sloppy_eval(c) && find_eval_var(c, node->str, node->len) >= 0;
   if (annex_var >= 0 || eval_annex_var) emit_op(c, OP_DUP);
   if (is_sloppy_eval(c) && c->scope_depth == 0) {
-    bool declared = false;
-    for (uint32_t i = 0; i < c->eval_var_count; i++)
-      if (c->eval_vars[i].len == node->len && !memcmp(c->eval_vars[i].str, node->str, node->len))
-        declared = true;
+    bool declared = find_eval_var(c, node->str, node->len) >= 0;
     if (declared) emit_atom_op(c, OP_PUT_EVAL_FUNCTION, node->str, node->len);
     else emit_op(c, OP_POP);
   } else {

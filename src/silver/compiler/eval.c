@@ -320,19 +320,59 @@ bool is_sloppy_eval(const sv_compiler_t *c) {
   return (sv_compile_mode_is_eval(c->mode) && !c->is_strict) || is_repl_root(c);
 }
 
+static void eval_var_index_insert(sv_compiler_t *c, uint32_t entry) {
+  uint32_t mask = c->eval_var_index_cap - 1;
+  uint32_t slot = sv_compile_ctx_hash_local_name(c->eval_vars[entry].str, c->eval_vars[entry].len) & mask;
+  while (c->eval_var_index[slot] != UINT32_MAX) slot = (slot + 1) & mask;
+  c->eval_var_index[slot] = entry;
+}
+
+static void eval_var_index_rebuild(sv_compiler_t *c) {
+  uint32_t cap = 64;
+  while (cap < c->eval_var_count * 2 + 2) cap *= 2;
+  uint32_t *index = realloc(c->eval_var_index, (size_t)cap * sizeof(*index));
+  if (!index) { c->eval_var_index_cap = 0; return; }
+  memset(index, 0xff, (size_t)cap * sizeof(*index));
+  c->eval_var_index = index;
+  c->eval_var_index_cap = cap;
+  for (uint32_t i = 0; i < c->eval_var_count; i++) eval_var_index_insert(c, i);
+}
+
+int find_eval_var(const sv_compiler_t *c, const char *name, uint32_t len) {
+  if (!c->eval_var_index_cap) {
+    for (uint32_t i = 0; i < c->eval_var_count; i++)
+      if (c->eval_vars[i].len == len && !memcmp(c->eval_vars[i].str, name, len)) return (int)i;
+    return -1;
+  }
+
+  uint32_t mask = c->eval_var_index_cap - 1;
+  for (uint32_t slot = sv_compile_ctx_hash_local_name(name, len) & mask;; slot = (slot + 1) & mask) {
+    uint32_t entry = c->eval_var_index[slot];
+    if (entry == UINT32_MAX) return -1;
+    if (c->eval_vars[entry].len == len && !memcmp(c->eval_vars[entry].str, name, len)) return (int)entry;
+  }
+}
+
 void add_eval_var(sv_compiler_t *c, const char *name, uint32_t len, bool annex_b) {
   int local = resolve_local_at_depth(c, name, len, 0);
   if (annex_b && local >= 0 && (c->locals[local].eval_flags & SV_EVAL_BIND_LEXICAL)) return;
-  for (uint32_t i = 0; i < c->eval_var_count; i++)
-    if (c->eval_vars[i].len == len && !memcmp(c->eval_vars[i].str, name, len)) {
-      c->eval_vars[i].annex_b &= annex_b;
-      return;
-    }
-  sv_eval_decl_t *vars = realloc(c->eval_vars, ((size_t)c->eval_var_count + 1) * sizeof(*vars));
-  if (!vars) { js_mkerr(c->js, "out of memory while declaring eval variables"); return; }
-  c->eval_vars = vars;
+  int existing = find_eval_var(c, name, len);
+  if (existing >= 0) {
+    c->eval_vars[existing].annex_b &= annex_b;
+    return;
+  }
+  if (c->eval_var_count >= c->eval_var_cap) {
+    uint32_t cap = c->eval_var_cap ? c->eval_var_cap * 2 : 8;
+    sv_eval_decl_t *vars = realloc(c->eval_vars, (size_t)cap * sizeof(*vars));
+    if (!vars) { js_mkerr(c->js, "out of memory while declaring eval variables"); return; }
+    c->eval_vars = vars;
+    c->eval_var_cap = cap;
+  }
   int atom = add_atom(c, name, len);
   c->eval_vars[c->eval_var_count++] = (sv_eval_decl_t){ .str = c->atoms[atom].str, .len = len, .annex_b = annex_b };
+  if (c->eval_var_count < 16) return;
+  if (c->eval_var_index_cap && c->eval_var_count * 2 < c->eval_var_index_cap) eval_var_index_insert(c, c->eval_var_count - 1);
+  else eval_var_index_rebuild(c);
 }
 
 static bool is_inline_literal_eval_expr(sv_ast_t *node) {

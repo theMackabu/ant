@@ -107,6 +107,8 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
     free(ctx->eval_scopes[i].bindings);
   free(ctx->eval_scopes);
   free(ctx->eval_vars);
+  if (ctx->eval_var_index) free(ctx->eval_var_index);
+  if (ctx->upvalue_index) free(ctx->upvalue_index);
   free(ctx->global_lexicals);
   free(ctx->loops);
   free(ctx->with_scopes);

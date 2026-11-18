@@ -224,6 +224,8 @@ typedef struct sv_compiler {
 
   sv_upval_desc_t *upval_descs;
   sv_binding_meta_t *upval_bindings;
+  int *upvalue_index;
+  int upvalue_index_cap;
 
   int upvalue_count;
   int upvalue_cap;
@@ -274,7 +276,10 @@ typedef struct sv_compiler {
   ant_value_t eval_env;
 
   sv_eval_decl_t *eval_vars;
+  uint32_t *eval_var_index;
   uint32_t eval_var_count;
+  uint32_t eval_var_cap;
+  uint32_t eval_var_index_cap;
   sv_compile_mode_t mode;
 
   sv_eval_decl_t *global_lexicals;

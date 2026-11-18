@@ -198,6 +198,7 @@ void begin_scope(sv_compiler_t *c);
 void end_scope(sv_compiler_t *c);
 void emit_close_upvals(sv_compiler_t *c);
 int resolve_upvalue_to(sv_compiler_t *c, sv_compiler_t *owner, int local);
+int find_eval_var(const sv_compiler_t *c, const char *name, uint32_t len);
 int resolve_spill_slow(const sv_compiler_t *c, const char *name, uint32_t len);
 bool declare_spilled_slow(sv_compiler_t *c, const char *name, uint32_t len, bool is_const, bool define);
 

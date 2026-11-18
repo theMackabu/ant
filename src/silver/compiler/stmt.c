@@ -720,11 +720,7 @@ static void emit_switch_func_annex_b(sv_compiler_t *c, sv_ast_t *node) {
   if (c->is_strict || !node || node->type != N_FUNC || !node->str || (node->flags & (FN_ARROW | FN_PAREN))) return;
   int annex_var = !is_sloppy_eval(c) ? resolve_local_at_depth(c, node->str, node->len, 0) : -1;
   if (annex_var >= 0 && (c->locals[annex_var].eval_flags & SV_EVAL_BIND_LEXICAL)) annex_var = -1;
-  bool eval_annex_var = false;
-  if (is_sloppy_eval(c))
-    for (uint32_t i = 0; i < c->eval_var_count; i++)
-      if (c->eval_vars[i].len == node->len && !memcmp(c->eval_vars[i].str, node->str, node->len))
-        eval_annex_var = true;
+  bool eval_annex_var = is_sloppy_eval(c) && find_eval_var(c, node->str, node->len) >= 0;
   if (annex_var < 0 && !eval_annex_var) return;
   emit_get_var(c, node->str, node->len);
   if (annex_var >= 0 && eval_annex_var) emit_op(c, OP_DUP);
