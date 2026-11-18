@@ -485,6 +485,7 @@ export function targets() {
     'test_string_split_limit.cjs',
     'test_string_prototype_receivers.cjs',
     'test_string_surrogate_join.cjs',
+    'test_super_property_edges.cjs',
     'test_string_surrogate_search.cjs',
     'test_string_well_formed.cjs',
     'test_string_wrapper_index_semantics.cjs',

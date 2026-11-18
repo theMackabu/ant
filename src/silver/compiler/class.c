@@ -278,9 +278,36 @@ static bool is_constructor_key(const sv_ast_t *key) {
   return is_literal_key(key, "constructor", 11);
 }
 
+static bool ast_may_reference_super(const sv_ast_t *node) {
+  if (!node) return false;
+  if (is_ident_name(node, "super")) return true;
+  if (node->type == N_CALL && is_ident_name(node->left, "eval")) return true;
+  if (node->type == N_FUNC && !(node->flags & FN_ARROW)) return false;
+  
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (ast_may_reference_super(child)) return true;
+  
+  return false;
+}
+
 bool class_method_needs_home(const sv_ast_t *method) {
   const sv_ast_t *fn = method ? method->right : NULL;
   return fn && fn->type == N_FUNC && (fn->flags & (FN_USES_SUPER | FN_DIRECT_EVAL));
+}
+
+static bool field_inits_use_super(sv_ast_t **fields, int count) {
+  for (int i = 0; i < count; i++) {
+    if (!is_class_method_def(fields[i]) && ast_may_reference_super(fields[i]->right)) return true;
+  }
+  return false;
+}
+
+static void emit_super_local(sv_compiler_t *c) {
+  c->super_local = add_hidden_local(c);
+  emit_op(c, OP_SPECIAL_OBJ);
+  emit(c, SV_SPECIAL_SUPER);
+  emit_put_local(c, c->super_local);
 }
 
 static int compile_static_child_function(
@@ -290,11 +317,7 @@ static int compile_static_child_function(
   sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
   comp.is_strict = true;
   comp.is_static = true;
-
-  comp.super_local = add_hidden_local(&comp);
-  emit_op(&comp, OP_SPECIAL_OBJ);
-  emit(&comp, SV_SPECIAL_SUPER);
-  emit_put_local(&comp, comp.super_local);
+  emit_super_local(&comp);
 
   if (returns_expr) {
     if (key_local >= 0 && node && node->type == N_CLASS)
@@ -556,6 +579,7 @@ static void compile_class_strict(
     comp.is_strict = true;
 
     emit_op(&comp, OP_CHECK_CTOR);
+    if (field_inits_use_super(field_inits, field_count)) emit_super_local(&comp);
 
     if (node->left) {
       emit_op(&comp, OP_THIS);
@@ -573,6 +597,7 @@ static void compile_class_strict(
     sv_func_t *fn = sv_func_new(c->js);
     fn->is_derived_ctor = node->left != NULL;
     fn->is_class_ctor = true;
+    fn->uses_super = comp.super_referenced;
     sv_func_set_ctor_props(fn, ctor_prop_count(NULL, class_public_field_count(field_inits, field_count)));
     sv_func_init_code_and_map_templates(&comp, fn);
     sv_func_init_obj_sites(&comp, fn);

@@ -643,6 +643,7 @@ sv_func_t *compile_function_body(
   func->is_derived_ctor = !!(node->flags & FN_DERIVED_CTOR);
   func->is_class_ctor = !!(node->flags & FN_CLASS_CTOR);
   func->is_synthetic = !!(node->flags & FN_SYNTHETIC);
+  func->uses_super = comp.super_referenced;
   uint32_t ctor_fields = func->is_class_ctor ? class_public_field_count(enclosing->field_inits, enclosing->field_init_count) : 0;
   sv_func_set_ctor_props(func, (!func->is_method || func->is_class_ctor) ? ctor_prop_count(node, ctor_fields) : 0);
   func->is_static = comp.is_static;
