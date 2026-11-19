@@ -419,6 +419,7 @@ export function targets() {
     'test_opt_watched_prototype.cjs',
     'test_opt_widening.cjs',
     'test_optional_chain_parens.cjs',
+    'test_osr_derived_constructor.cjs',
     'test_perf_hooks_eld.mjs',
     'test_pkg_lifecycle_production_dev.cjs',
     'test_pkg_lifecycle_trust_identity.cjs',

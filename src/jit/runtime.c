@@ -598,6 +598,10 @@ void sv_jit_drop_closure_pinned(sv_func_t *func) {
   opt_tier_drop_closure_pinned(func);
 }
 
+void sv_jit_drop_opt_code(sv_func_t *func) {
+  opt_tier_drop_func(func);
+}
+
 void sv_jit_drop_all_code(ant_t *js) {
   jit_drop_all_code(js->jit_ctx);
 }

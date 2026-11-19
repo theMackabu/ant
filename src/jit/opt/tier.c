@@ -568,6 +568,13 @@ void opt_tier_drop_closure_pinned(sv_func_t *func) {
     if (code->closure_pinned && !code->dropped) opt_drop_code(code);
 }
 
+void opt_tier_drop_func(sv_func_t *func) {
+  sv_func_sidecar_t *sidecar = sv_func_sidecar(func);
+  opt_func_state_t *state = sidecar ? sidecar->opt_state : NULL;
+  for (opt_code_t *code = state ? state->codes : NULL; code; code = code->func_next)
+    if (!code->dropped) opt_drop_code(code);
+}
+
 void opt_code_invalidate(opt_code_t *code) {
   if (code->invalidated) return;
   code->invalidated = true;

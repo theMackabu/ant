@@ -54,6 +54,7 @@ typedef struct {
 void opt_tier_destroy(sv_jit_ctx_t *jc);
 void opt_tier_gc_mark_roots(ant_t *js);
 void opt_tier_drop_closure_pinned(sv_func_t *func);
+void opt_tier_drop_func(sv_func_t *func);
 bool opt_tier_has_catch_entry(ant_t *js, sv_func_t *func, uint32_t catch_off);
 
 typedef struct {

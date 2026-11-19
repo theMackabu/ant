@@ -30,6 +30,7 @@ void sv_jit_destroy(ant_t *js);
 void sv_jit_drop_all_code(ant_t *js);
 void sv_jit_drop_func_code(sv_func_t *func);
 void sv_jit_drop_closure_pinned(sv_func_t *func);
+void sv_jit_drop_opt_code(sv_func_t *func);
 
 void opt_tier_func_free(ant_t *js, sv_func_t *func);
 void opt_tier_func_trace(ant_t *js, sv_func_t *func);
@@ -82,6 +83,12 @@ static inline void sv_func_note_bound_closure(sv_func_t *func) {
   if (func->has_bound_closure) return;
   func->has_bound_closure = true;
   if (func->jit_self_guarded) sv_jit_drop_func_code(func);
+}
+
+static inline void sv_func_note_deferred_receiver(sv_func_t *func) {
+  if (func->deferred_receiver) return;
+  func->deferred_receiver = true;
+  sv_jit_drop_opt_code(func);
 }
 
 static inline bool sv_jit_promote_pending(const sv_func_t *func) {
