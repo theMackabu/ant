@@ -3269,16 +3269,37 @@ static void opt_cg_call(opt_cg_t *cg, ir_node_id_t node_id) {
   opt_cg_branch_error(cg, node_id);
 }
 
+static void opt_cg_probe_absent(opt_cg_t *cg, ir_node_id_t node, asm_gpr_t entry, asm_label_t miss) {
+  masm_t *m = &cg->masm;
+  asm_gpr_t value = opt_cg_input(cg, node, 0), object = opt_cg_input(cg, node, 1);
+  asm_gpr_t a = opt_cg_temp(cg, node, 1), proto = opt_cg_temp(cg, node, 2), scratch = cg->pinned.scratch;
+  asm_label_t absent = masm_new_label(m);
+  masm_shr64_imm(m, scratch, value, NANBOX_TYPE_SHIFT);
+  masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)OPT_OBJECT_TAG, miss);
+  masm_load8(m, a, asm_addr(object, (int32_t)offsetof(ant_object_t, type_tag)));
+  masm_branch32_imm(m, ASM_COND_NOT_EQUAL, a, kTypeObject, miss);
+  masm_load64(m, proto, asm_addr(entry, (int32_t)offsetof(sv_ic_entry_t, guard.receiver_proto)));
+  masm_shr64_imm(m, scratch, proto, NANBOX_TYPE_SHIFT);
+  masm_branch64_imm(m, ASM_COND_EQUAL, scratch, (int64_t)OPT_NULL_TAG, absent);
+  masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, (int64_t)OPT_OBJECT_TAG, miss);
+  masm_and64_imm(m, proto, proto, NANBOX_DATA_MASK);
+  opt_cg_add_cage(cg, proto, proto);
+  masm_load32(m, a, asm_addr(proto, (int32_t)offsetof(ant_object_t, ic_identity)));
+  masm_load64(m, proto, asm_addr(entry, (int32_t)offsetof(sv_ic_entry_t, cached_aux)));
+  masm_shr64_imm(m, proto, proto, SV_GF_IC_PROTO_ID_SHIFT);
+  masm_branch32(m, ASM_COND_NOT_EQUAL, a, proto, miss);
+  masm_bind(m, absent);
+  masm_move_imm64(m, opt_cg_output(cg, node), IR_VALUE_UNDEFINED);
+}
+
 static void opt_cg_probe_property(opt_cg_t *cg, ir_node_id_t node) {
   masm_t *m = &cg->masm;
   const ir_op_t *op = &ir_node(cg->graph, node)->op;
   const sv_ic_entry_t *ic = &op->probe.func->ic_slots[op->probe.cache];
   asm_gpr_t object = opt_cg_input(cg, node, 1), output = opt_cg_output(cg, node);
   asm_gpr_t entry = opt_cg_temp(cg, node, 0), a = opt_cg_temp(cg, node, 1), limit = opt_cg_temp(cg, node, 2);
-  asm_label_t miss = masm_new_label(m), overflow = masm_new_label(m), done = masm_new_label(m);
+  asm_label_t miss = masm_new_label(m), overflow = masm_new_label(m), done = masm_new_label(m), absent = masm_new_label(m);
   masm_move_imm64(m, entry, (uint64_t)(uintptr_t)ic);
-  masm_load8(m, a, asm_addr(entry, (int32_t)offsetof(sv_ic_entry_t, get_kind)));
-  masm_branch32_imm(m, ASM_COND_NOT_EQUAL, a, SV_GF_IC_OWN, miss);
   masm_load64(m, limit, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
   masm_load32(m, limit, asm_addr(limit, (int32_t)offsetof(ant_t, ic.epoch)));
   masm_load32(m, a, asm_addr(entry, (int32_t)offsetof(sv_ic_entry_t, epoch)));
@@ -3287,6 +3308,9 @@ static void opt_cg_probe_property(opt_cg_t *cg, ir_node_id_t node) {
   masm_branch64_memory(m, ASM_COND_NOT_EQUAL, asm_addr(entry, (int32_t)offsetof(sv_ic_entry_t, cached_shape)), a, miss);
   masm_load16(m, a, asm_addr(object, (int32_t)offsetof(ant_object_t, flags)));
   masm_branch_test32(m, ASM_COND_NON_ZERO, a, ANT_OBJECT_FLAG_EXOTIC, miss);
+  masm_load8(m, a, asm_addr(entry, (int32_t)offsetof(sv_ic_entry_t, get_kind)));
+  masm_branch32_imm(m, ASM_COND_EQUAL, a, SV_GF_IC_MISSING, absent);
+  masm_branch32_imm(m, ASM_COND_NOT_EQUAL, a, SV_GF_IC_OWN, miss);
   masm_load32(m, a, asm_addr(entry, (int32_t)offsetof(sv_ic_entry_t, cached_index)));
   masm_load32(m, limit, asm_addr(object, (int32_t)offsetof(ant_object_t, prop_count)));
   masm_branch32(m, ASM_COND_ABOVE_OR_EQUAL, a, limit, miss);
@@ -3300,6 +3324,9 @@ static void opt_cg_probe_property(opt_cg_t *cg, ir_node_id_t node) {
   masm_load64(m, limit, asm_addr(object, (int32_t)offsetof(ant_object_t, overflow_prop)));
   masm_branch64_imm(m, ASM_COND_EQUAL, limit, 0, miss);
   masm_load64(m, output, asm_addr_indexed(limit, a, ASM_SCALE_8, 0));
+  masm_jump(m, done);
+  masm_bind(m, absent);
+  opt_cg_probe_absent(cg, node, entry, miss);
   masm_jump(m, done);
   masm_bind(m, miss);
   masm_move_imm64(m, output, IR_VALUE_EMPTY);

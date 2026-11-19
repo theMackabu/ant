@@ -12,4 +12,13 @@ for (let i = 0; i < 3000; i++) {
   assert.strictEqual(Reflect.construct(ReturnsBuiltin, []), Math.max);
 }
 
+function constructsInCompiledCode() {
+  for (let i = 0; i < 3000; i++) {
+    assert.strictEqual(new ReturnsBuiltin(), Math.max);
+    assert.strictEqual(new AssignsThenReturnsBuiltin(), parseInt);
+    assert.strictEqual(new ClassReturnsBuiltin(), Math.min);
+  }
+}
+constructsInCompiledCode();
+
 console.log('ok');

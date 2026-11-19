@@ -224,6 +224,7 @@ void Ant_Destroy(ant_t *js) {
   }
   
   js_esm_cleanup_module_cache(js);
+  ant_host_modules_destroy(js);
   sv_jit_destroy(js);
   
   sv_ic_shape_refs_cleanup(js);
@@ -234,6 +235,7 @@ void Ant_Destroy(ant_t *js) {
   free(js->ic.gf_mega);
   free(js->ic.gf_mega_keyed);
   free(js->gc.mark_stack);
+  free(js->gc.deferred_closures);
   free(js->gc.func_stack);
   free(js->gc.fb_funcs);
   
@@ -361,7 +363,7 @@ bool js_chkargs(ant_args_t, const char *spec) {
 
 sv_func_t *js_compile_parsed_bytecode(
   ant_t *js, sv_ast_t *program, const char *buf,
-  size_t len, int mode_value, ant_value_t eval_env
+  size_t len, int mode_value, uint8_t eval_shadows
 ) {
   sv_compile_mode_t mode = (sv_compile_mode_t)mode_value;
 
@@ -375,7 +377,7 @@ sv_func_t *js_compile_parsed_bytecode(
     if (is_object_type(ns)) esm_predeclare_exports(js, program, ns);
   }
 
-  sv_func_t *func = sv_compile(js, program, mode, buf, (ant_offset_t)len, eval_env);
+  sv_func_t *func = sv_compile(js, program, mode, buf, (ant_offset_t)len, eval_shadows);
   if (!func) {
     if (!Ant_Exception_Pending(js)) js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
     return NULL;
@@ -438,8 +440,24 @@ js_eval_result_t js_eval_source(
   sv_compile_mode_t mode, bool strict, js_eval_scope_t scope
 ) {
   if (len == (size_t)~0U) len = strlen(buf);
-  code_arena_mark_t parse_mark = parse_arena_mark(js);
   
+  bool is_eval = sv_compile_mode_is_eval(mode);
+  uint8_t shadows = is_eval ? sv_eval_shadow_bits(js, scope.env, buf, len) : 0;
+  
+  sv_eval_cache_key_t cache_key;
+  bool cacheable = is_eval && sv_eval_cache_key(
+    js, &cache_key, buf, len,
+    (uint8_t)(shadows | (strict ? 4 : 0) | (mode == SV_COMPILE_EVAL_FUNCTION ? 8 : 0)));
+  
+  sv_func_t *cached = cacheable ? sv_eval_cache_find(js, &cache_key) : NULL;
+  if (cached) {
+    sv_code_unit_pin(cached->unit);
+    ant_value_t value = js_execute_compiled_eval_bytecode(js, cached, scope);
+    sv_code_unit_unpin(cached->unit);
+    return (js_eval_result_t){ .value = value, .async_coro = NULL, .kind = JS_EVAL_COMPLETE };
+  }
+  
+  code_arena_mark_t parse_mark = parse_arena_mark(js);
   sv_parse_goal_t goal =
     mode == SV_COMPILE_MODULE ? SV_PARSE_MODULE :
     mode == SV_COMPILE_REPL ? SV_PARSE_REPL : SV_PARSE_SCRIPT;
@@ -455,7 +473,7 @@ js_eval_result_t js_eval_source(
     return (js_eval_result_t){ .value = value, .async_coro = NULL, .kind = JS_EVAL_COMPLETE };
   }
 
-  sv_func_t *func = js_compile_parsed_bytecode(js, program, buf, len, mode, scope.env);
+  sv_func_t *func = js_compile_parsed_bytecode(js, program, buf, len, mode, shadows);
   parse_arena_rewind(js, parse_mark);
 
   if (!func) {
@@ -469,6 +487,7 @@ js_eval_result_t js_eval_source(
   coroutine_t *async_coro = NULL;
   ant_value_t value;
   
+  if (cacheable) sv_eval_cache_store(js, &cache_key, func);
   switch (mode) {
     case SV_COMPILE_EVAL:
     case SV_COMPILE_EVAL_FUNCTION:
@@ -523,7 +542,7 @@ ant_value_t js_vm_script_compile(ant_t *js, const char *buf, size_t len) {
   }
   
   sv_func_t *func = program
-    ? js_compile_parsed_bytecode(js, program, buf, len, SV_COMPILE_REPL, Ant_Value_Undefined)
+    ? js_compile_parsed_bytecode(js, program, buf, len, SV_COMPILE_REPL, 0)
     : NULL;
   
   parse_arena_rewind(js, parse_mark);
@@ -587,7 +606,7 @@ bool Ant_Eval_WithoutSideEffects(ant_t *js, const char *expr, size_t len, ant_va
   sv_ast_t *program = sv_parse_expression(js, expr, (ant_offset_t)len);
   
   sv_func_t *func = program
-    ? js_compile_parsed_bytecode(js, program, expr, len, SV_COMPILE_REPL, Ant_Value_Undefined)
+    ? js_compile_parsed_bytecode(js, program, expr, len, SV_COMPILE_REPL, 0)
     : NULL;
 
   parse_arena_rewind(js, parse_mark);

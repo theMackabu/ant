@@ -730,20 +730,14 @@ void jit_emit_compare(jit_compile_t *c) {
                                      MIR_new_reg_op(c->ctx, r_proto_epoch)));
 
         MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_URSH,
+                        MIR_new_insn(c->ctx, MIR_MOV,
                                      MIR_new_reg_op(c->ctx, r_rhs_tag),
-                                     MIR_new_reg_op(c->ctx, rr),
-                                     MIR_new_uint_op(c->ctx, NANBOX_TYPE_SHIFT)));
+                                     MIR_new_uint_op(c->ctx, (uint64_t)NANBOX_TFUNC_TAG << NANBOX_TYPE_SHIFT)));
         MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_BNE,
-                                     MIR_new_label_op(c->ctx, slow),
-                                     MIR_new_reg_op(c->ctx, r_rhs_tag),
-                                     MIR_new_uint_op(c->ctx, NANBOX_TFUNC_TAG)));
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_AND,
+                        MIR_new_insn(c->ctx, MIR_XOR,
                                      MIR_new_reg_op(c->ctx, r_rhs_obj),
                                      MIR_new_reg_op(c->ctx, rr),
-                                     MIR_new_uint_op(c->ctx, NANBOX_DATA_MASK)));
+                                     MIR_new_reg_op(c->ctx, r_rhs_tag)));
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_MOV,
                                      MIR_new_reg_op(c->ctx, r_ic_aux),
@@ -777,6 +771,11 @@ void jit_emit_compare(jit_compile_t *c) {
                                      MIR_new_reg_op(c->ctx, r_lhs_proto),
                                      MIR_new_mem_op(c->ctx, MIR_JSVAL,
                                                     (MIR_disp_t)offsetof(ant_object_t, shape), r_lhs_obj, 0, 1)));
+        MIR_append_insn(c->ctx, c->jit_func,
+                        MIR_new_insn(c->ctx, MIR_BEQ,
+                                     MIR_new_label_op(c->ctx, slow),
+                                     MIR_new_reg_op(c->ctx, r_lhs_proto),
+                                     MIR_new_uint_op(c->ctx, 0)));
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_insn(c->ctx, MIR_MOV,
                                      MIR_new_reg_op(c->ctx, r_lhs_proto),

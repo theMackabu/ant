@@ -957,7 +957,7 @@ static __attribute__((noinline)) bool string_wrapper_define(
   return true;
 }
 
-static ant_value_t define_desc_object(ant_t *js, const define_desc_raw_t *raw) {
+ant_value_t define_desc_object(ant_t *js, const define_desc_raw_t *raw) {
   GC_ROOT_SAVE(mark, js);
   define_desc_raw_t pinned = *raw;
   for (int f = 0; f < DESC_FIELD_COUNT; f++) GC_ROOT_PIN(js, pinned.val[f]);
@@ -1014,16 +1014,14 @@ static ant_value_t define_via_proxy(
     if (is_err(read_err)) return read_err;
   }
   
-  descriptor = define_desc_object(js, &raw);
-  if (is_err(descriptor)) return descriptor;
-  
   GC_ROOT_SAVE(mark, js);
-  GC_ROOT_PIN(js, descriptor);
-  ant_value_t prop = property_key_view_materialize(js, key);
-  GC_ROOT_RESTORE(js, mark);
-  if (is_err(prop)) return prop;
+  for (int f = 0; f < DESC_FIELD_COUNT; f++) GC_ROOT_PIN(js, raw.val[f]);
   
-  ant_value_t result = proxy_define_property(js, as_obj, prop, descriptor);
+  ant_value_t prop = property_key_view_materialize(js, key);
+  GC_ROOT_PIN(js, prop);
+  
+  ant_value_t result = is_err(prop) ? prop : proxy_define_property_raw(js, as_obj, prop, &raw, false);
+  GC_ROOT_RESTORE(js, mark);
   if (is_err(result)) return result;
   if (!js_truthy(js, result)) return proxy_trap_error(js, "defineProperty", "trap returned falsy");
   
@@ -1460,6 +1458,28 @@ static ant_value_t define_desc_snapshot(ant_t *js, ant_value_t descriptor) {
   return is_err(err) ? err : define_desc_object(js, &raw);
 }
 
+ant_value_t reflect_define_property_raw(ant_t *js, ant_value_t obj, ant_value_t key_val, const define_desc_raw_t *raw) {
+  if (is_object_type(obj) && is_proxy(js_as_obj(obj))) {
+    ant_value_t trapped = proxy_define_property_raw(js, js_as_obj(obj), key_val, raw, true);
+    return is_err(trapped) ? trapped : Ant_Value_FromBool(js_truthy(js, trapped));
+  }
+  
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t saved = Ant_Exception_Peek(js);
+  GC_ROOT_PIN(js, saved);
+  
+  bool abrupt = false;
+  ant_value_t result = object_define_property_reporting(js, obj, key_val, Ant_Value_Undefined, raw, &abrupt);
+  
+  if (is_err(result) && !abrupt) {
+    Ant_Exception_Set(js, saved);
+    result = Ant_Value_False;
+  } else if (!is_err(result)) result = Ant_Value_True;
+  
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
 static ant_value_t reflect_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor) {
   GC_ROOT_SAVE(mark, js);
   GC_ROOT_PIN(js, obj);
@@ -1477,29 +1497,20 @@ static ant_value_t reflect_define_property(ant_t *js, ant_value_t obj, ant_value
   }
   
   GC_ROOT_PIN(js, key_val);
-  ant_value_t snapshot = define_desc_snapshot(js, descriptor);
+  if (vtype(descriptor) == kTypeBuiltin) descriptor = js_cfunc_promote(js, descriptor);
   
-  if (is_err(snapshot)) {
+  define_desc_raw_t raw = {0};
+  ant_value_t read = is_object_type(descriptor)
+    ? define_desc_read(js, descriptor, &raw)
+    : descriptor_value_error(js, "Property description must be an object: ", descriptor);
+  
+  if (is_err(read)) {
     GC_ROOT_RESTORE(js, mark);
-    return snapshot;
+    return read;
   }
   
-  GC_ROOT_PIN(js, snapshot);
-  if (is_object_type(obj) && is_proxy(js_as_obj(obj))) {
-    ant_value_t trapped = proxy_reflect_define_property(js, js_as_obj(obj), key_val, snapshot);
-    GC_ROOT_RESTORE(js, mark);
-    return is_err(trapped) ? trapped : Ant_Value_FromBool(js_truthy(js, trapped));
-  }
-  
-  ant_value_t saved = Ant_Exception_Peek(js);
-  GC_ROOT_PIN(js, saved);
-  bool abrupt = false;
-  ant_value_t result = object_define_property_reporting(js, obj, key_val, snapshot, NULL, &abrupt);
-  
-  if (is_err(result) && !abrupt) {
-    Ant_Exception_Set(js, saved);
-    result = Ant_Value_False;
-  } else if (!is_err(result)) result = Ant_Value_True;
+  for (int f = 0; f < DESC_FIELD_COUNT; f++) GC_ROOT_PIN(js, raw.val[f]);
+  ant_value_t result = reflect_define_property_raw(js, obj, key_val, &raw);
   
   GC_ROOT_RESTORE(js, mark);
   return result;

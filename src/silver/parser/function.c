@@ -207,7 +207,7 @@ static unsigned ast_scope_facts(const sv_ast_t *node, unsigned want, bool in_arr
       found |= SCOPE_YIELD;
       break;
     case N_CALL:
-      if (ast_is_ident(node->left, "eval", 4)) found |= SCOPE_EVAL;
+      if (ast_is_ident(node->left, "eval", 4)) found |= in_arrow ? SCOPE_EVAL | SCOPE_ARGUMENTS : SCOPE_EVAL;
       if (ast_is_ident(node->left, "super", 5)) {
         if (in_arrow) found |= SCOPE_NEW_TARGET;
         if (props) props->super_calls++;
@@ -244,7 +244,8 @@ static unsigned ast_scope_facts(const sv_ast_t *node, unsigned want, bool in_arr
 
 static constexpr unsigned SCOPE_ALL = SCOPE_ARGUMENTS | SCOPE_NEW_TARGET | SCOPE_EVAL | SCOPE_YIELD;
 #define SCOPE_FACTS_FLAGS(facts) \
-  (FN_SCOPE_FACTS | ((facts) & SCOPE_EVAL ? FN_DIRECT_EVAL : 0) | ((facts) & SCOPE_YIELD ? FN_OWN_YIELD : 0))
+  (FN_SCOPE_FACTS | ((facts) & SCOPE_EVAL ? FN_DIRECT_EVAL : 0) | ((facts) & SCOPE_YIELD ? FN_OWN_YIELD : 0) | \
+  ((facts) & SCOPE_ARGUMENTS ? FN_USES_ARGS : 0))
 
 void finish_func(sv_ast_t *fn) {
   if (fn->flags & FN_ARROW) return;
@@ -260,8 +261,7 @@ void finish_func(sv_ast_t *fn) {
     params |= ast_scope_facts(fn->args.items[i], SCOPE_ALL & ~params, false, NULL);
   unsigned facts = body | params;
 
-  if (body & SCOPE_ARGUMENTS) fn->flags |= FN_USES_ARGS;
-  bool length_only = (facts & SCOPE_ARGUMENTS) && ast_arguments_length_only(fn->body, false, false);
+  bool length_only = (facts & (SCOPE_ARGUMENTS | SCOPE_EVAL)) == SCOPE_ARGUMENTS && ast_arguments_length_only(fn->body, false, false);
   
   for (int i = 0; length_only && i < fn->args.count; i++)
     length_only = ast_arguments_length_only(fn->args.items[i], false, false);
@@ -273,7 +273,7 @@ void finish_func(sv_ast_t *fn) {
 }
 
 unsigned scope_facts_eval_yield(const sv_ast_list_t *list, const sv_ast_t *body) {
-  const unsigned want = SCOPE_EVAL | SCOPE_YIELD;
+  const unsigned want = SCOPE_ARGUMENTS | SCOPE_EVAL | SCOPE_YIELD;
   unsigned found = body ? ast_scope_facts(body, want, false, NULL) : 0;
   for (int i = 0; list && i < list->count && found != want; i++)
     found |= ast_scope_facts(list->items[i], want & ~found, false, NULL);

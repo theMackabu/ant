@@ -2,6 +2,7 @@
 #include "gc.h"
 #include "gc/roots.h"
 #include "esm/library.h"
+#include "esm/loader.h"
 #include "bootstrap.h"
 #include "runtime.h"
 
@@ -51,7 +52,60 @@ static ant_value_t Load(ant_t *js) {
   return ns;
 }
 
+static int host_inits;
+
+static ant_value_t HostLibrary(ant_t *js) {
+  host_inits++;
+  ant_value_t lib = Ant_Object_Create(js);
+  js_set(js, lib, "answer", Ant_Value_FromNumber(42));
+  return lib;
+}
+
+static const char host_source[] =
+  "import native from 'ant:internal/host-test';\n"
+  "export const doubled = native.answer * 2;\n"
+  "export default native;\n";
+
+static ant_value_t Import(ant_t *js, const char *specifier) {
+  ant_value_t ns = js_esm_import_sync_cstr(js, specifier, strlen(specifier));
+  assert(!is_err(ns) && is_object_type(ns));
+  return ns;
+}
+
+static void HostModules(void) {
+  ant_t *js = Create();
+  ant_t *other = Create();
+
+  assert(!Ant_Module_Register(js, "node:fs", HostLibrary));
+  assert(!Ant_Module_Register(js, "ant:ffi", HostLibrary));
+  assert(Ant_Module_Register(js, "ant:internal/host-test", HostLibrary));
+  assert(!Ant_Module_Register(js, "ant:internal/host-test", HostLibrary));
+  assert(Ant_Module_RegisterSource(js, "ant:host-test", host_source, sizeof(host_source) - 1));
+  assert(host_inits == 0);
+
+  ant_value_t ns = Import(js, "ant:host-test");
+  assert(Ant_Value_AsNumberUnchecked(js_get(js, ns, "doubled")) == 84);
+  assert(Ant_Value_AsNumberUnchecked(js_get(js, js_get(js, ns, "default"), "answer")) == 42);
+  assert(Import(js, "ant:host-test") == ns);
+  assert(host_inits == 1);
+
+  ant_value_t native = Import(js, "ant:internal/host-test");
+  gc_run(js);
+  gc_run(js);
+  assert(Import(js, "ant:internal/host-test") == native);
+  assert(host_inits == 1);
+
+  assert(is_err(js_esm_import_sync_cstr(other, "ant:host-test", 13)));
+  assert(!js_esm_is_node_builtin("ant:host-test", 13));
+
+  Ant_Destroy(other);
+  Ant_Destroy(js);
+  puts("PASS host modules are registered per isolate");
+}
+
 int main(void) {
+  HostModules();
+
   for (int destroy_first = 0; destroy_first < 2; destroy_first++) {
     ant_t *first = Create();
     ant_t *second = Create();
