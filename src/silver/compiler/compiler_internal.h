@@ -402,6 +402,13 @@ static inline bool has_implicit_arguments_obj(const sv_compiler_t *c) {
   return c && !c->is_arrow && c->enclosing && !sv_compile_mode_is_eval(c->mode);
 }
 
+static inline void emit_arguments_eval_env(sv_compiler_t *c, const char *name, uint32_t len) {
+  if (!c->lazy_eval_env || !is_ident_str(name, len, "arguments", 9)) return;
+  emit_op(c, OP_SPECIAL_OBJ);
+  emit(c, SV_SPECIAL_EVAL_ENV);
+  emit_op(c, OP_POP);
+}
+
 static inline int add_hidden_local(sv_compiler_t *c) {
   return add_local(c, "", 0, false, c->scope_depth);
 }

@@ -292,6 +292,7 @@ sv_func_t *compile_function_body(
       comp.owns_eval_env = ast_has_own_eval(&comp, node->body);
   }
   comp.inherits_eval_env |= comp.owns_eval_env;
+  comp.lazy_eval_env = comp.owns_eval_env && !has_non_simple_params;
   if (comp.owns_eval_env) emit_op(&comp, OP_INIT_EVAL_ENV);
   if (node->flags & FN_CLASS_CTOR) emit_op(&comp, OP_CHECK_CTOR);
 
