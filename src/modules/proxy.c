@@ -898,7 +898,7 @@ ant_value_t proxy_set_with_receiver_reason(
     return Ant_Value_True;
   }
 
-  ant_value_t desc = Ant_Object_CreateBare(js);
+  ant_value_t desc = Ant_Object_Create(js);
   GC_ROOT_PIN(js, desc);
   
   if (is_err(desc)) {
@@ -906,11 +906,11 @@ ant_value_t proxy_set_with_receiver_reason(
     return desc;
   }
   
-  js_setprop(js, desc, js_mkstr(js, "value", 5), value);
+  mkprop_define_data(js, desc, "value", 5, value);
   if (vtype(own_desc) == kTypeUndefined) {
-    js_setprop(js, desc, js_mkstr(js, "writable", 8), Ant_Value_True);
-    js_setprop(js, desc, js_mkstr(js, "enumerable", 10), Ant_Value_True);
-    js_setprop(js, desc, js_mkstr(js, "configurable", 12), Ant_Value_True);
+    mkprop_define_data(js, desc, "writable", 8, Ant_Value_True);
+    mkprop_define_data(js, desc, "enumerable", 10, Ant_Value_True);
+    mkprop_define_data(js, desc, "configurable", 12, Ant_Value_True);
   }
 
   ant_value_t define_result = proxy_define_property(js, proxy, key_str, desc);
