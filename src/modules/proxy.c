@@ -1841,8 +1841,8 @@ static ant_value_t builtin_Proxy_revocable(ant_params_t) {
   ant_value_t revoke_func = js_obj_to_func(js, revoke_obj);
   ant_value_t result = Ant_Object_Create(js);
   
-  js_setprop(js, result, js_mkstr(js, "proxy", 5), proxy);
-  js_setprop(js, result, js_mkstr(js, "revoke", 6), revoke_func);
+  mkprop_define_data(js, result, "proxy", 5, proxy);
+  mkprop_define_data(js, result, "revoke", 6, revoke_func);
   
   return result;
 }
