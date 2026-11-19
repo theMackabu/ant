@@ -102,6 +102,7 @@ export function targets() {
     'test_caught_exception_stack.cjs',
     'test_child_process_execfile_argv_getter.cjs',
     'test_child_process_exec_sync_options.cjs',
+    'test_capture_stack_trace_targets.cjs',
     'test_child_process_sigpipe_reset.cjs',
     'test_child_process_stdio_fd.cjs',
     'test_class_constructor_call.cjs',
