@@ -1612,7 +1612,6 @@ static inline bool sv_get_elem_string(ant_t *js, ant_value_t obj, ant_value_t ke
     return true;
   }
   
-  if (interned == js->intern.length) return false;
   sv_gf_mega_cache_t *cache = sv_gf_mega_keyed_ensure(js);
   if (!cache) return false;
   int kind = -1;
@@ -1630,6 +1629,7 @@ static inline bool sv_get_elem_string(ant_t *js, ant_value_t obj, ant_value_t ke
   unsigned flags = sv_field_can_cache_absence(interned) ? SV_PROBE_CACHE_MISS : 0;
   
   if (!sv_ic_probe_get_chain(obj, interned, flags, &probe) || probe.accessor) return false;
+  if (interned == js->intern.length && probe.holder != ptr) return false;
   sv_gf_mega_store_in(js, cache, ptr, interned, probe.holder, probe.index, false);
   *out = probe.value;
   
