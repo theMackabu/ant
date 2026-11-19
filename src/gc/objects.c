@@ -1678,19 +1678,15 @@ static inline __attribute__((always_inline)) bool gc_object_release_plain(ant_t 
   return true;
 }
 
-static __attribute__((noinline)) bool gc_object_release_finalized(ant_t *js, ant_object_t *obj) {
-  obj->finalizer(js, obj);
-  obj->finalizer = NULL;
-  return gc_object_release_plain(js, obj);
-}
-
 void gc_object_free(ant_t *js, ant_object_t *obj) {
   if (!obj) return;
 
-  if (gc_object_release_plain(js, obj) || (obj->finalizer && gc_object_release_finalized(js, obj))) {
+  if (gc_object_release_plain(js, obj)) {
     ant_object_cell_free(js, obj);
     return;
   }
+
+  if (obj->finalizer) obj->finalizer(js, obj);
   
   if (obj->native_tag != 0 || ant_object_has_sidecar(obj))
     gc_finalize_host_natives(js, js_obj_from_ptr(obj));
@@ -1805,11 +1801,9 @@ static __attribute__((noinline)) void gc_object_free_shared_array(ant_t *js, ant
   else gc_object_free(js, obj);
 }
 
-static __attribute__((noinline)) void gc_object_free_swept(ant_t *js, ant_object_t *obj) {
-  if (!obj->finalizer) return gc_object_free(js, obj);
-  if (obj->finalizer == gc_shared_elements_finalize) return gc_object_free_shared_array(js, obj);
-  if (gc_object_release_finalized(js, obj)) return ant_object_cell_free(js, obj);
-  gc_object_free(js, obj);
+static inline __attribute__((always_inline)) void gc_object_free_swept(ant_t *js, ant_object_t *obj) {
+  if (obj->finalizer == gc_shared_elements_finalize) gc_object_free_shared_array(js, obj);
+  else gc_object_free(js, obj);
 }
 
 static void gc_sweep_young_and_promote(ant_t *js) {
