@@ -33,6 +33,15 @@ for (let round = 0; round < 300; round++) {
   assert.match(
     message(() => { class P {} class A extends P {} Object.setPrototypeOf(A, () => {}); new A(); }),
     /^TypeError: Super constructor .+ of A is not a constructor$/);
+  assert.match(
+    message(() => { class P {} class A extends P { constructor() { super(); } } Object.setPrototypeOf(A, () => {}); new (new Proxy(A, {}))(); }),
+    /^TypeError: Super constructor .+ of A is not a constructor$/);
+  assert.match(
+    message(() => { class P {} class A extends P {} class B {} Object.setPrototypeOf(A, () => {}); Reflect.construct(A, [], B); }),
+    /^TypeError: Super constructor .+ of [AB] is not a constructor$/);
+  assert.match(message(() => new (() => {})()), /not a constructor$/);
+  assert.doesNotMatch(message(() => new (() => {})()), /Super constructor/);
+  assert.match(message(() => { class P { constructor() { null.x; } } class A extends P {} new A(); }), /^TypeError: Cannot read/);
 
   assert.strictEqual(message(() => Object.setPrototypeOf(Object.preventExtensions({}), {})), 'TypeError: #<Object> is not extensible');
   assert.strictEqual(

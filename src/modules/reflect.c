@@ -120,7 +120,7 @@ static ant_value_t reflect_construct(ant_params_t) {
   if (is_err(err)) return err;
   
   ant_value_t result;
-  if (new_target != target || vtype(target) != kTypeFunction) {
+  if (vtype(target) != kTypeFunction || (new_target != target && !sv_construct_seeds_receiver(target, new_target))) {
     result = sv_construct(js->vm, js, target, list.args, list.argc, new_target);
   } else {
     ant_value_t effective_new_target = new_target;
@@ -196,7 +196,7 @@ static ant_value_t reflect_get_prototype_of(ant_params_t) {
   ant_value_t target = reflect_target(js, args, nargs, "getPrototypeOf");
   if (is_err(target)) return target;
   if (is_proxy(target)) return proxy_get_prototype_of(js, target);
-  return js_cfunc_demote_promoted(js, js_get_proto(js, target));
+  return js_get_proto_demoted(js, target);
 }
 
 static ant_value_t reflect_set_prototype_of(ant_params_t) {

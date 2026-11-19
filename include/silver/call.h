@@ -250,6 +250,13 @@ static inline ant_value_t sv_prepare_construct_meta(
   return sv_construct_prototype_from(js, proto_source);
 }
 
+__attribute__((always_inline))
+static inline bool sv_construct_seeds_receiver(ant_value_t func, ant_value_t new_target) {
+  if (vtype(func) != kTypeFunction || vtype(new_target) != kTypeFunction) return false;
+  const sv_closure_t *closure = js_func_closure(func);
+  return closure->func && !closure->func->is_derived_ctor && !(closure->call_flags & SV_CALL_IS_DEFAULT_CTOR);
+}
+
 static inline ant_value_t sv_call_resolve_bound(
   ant_t *js, sv_closure_t *closure,
   sv_call_ctx_t *ctx, sv_call_mode_t mode, ant_value_t *inline_args
@@ -296,15 +303,15 @@ static inline ant_value_t sv_super_construct_parent(
   sv_vm_t *vm, ant_t *js, ant_value_t parent, ant_value_t this_val,
   ant_value_t *args, int argc, ant_value_t new_target
 ) {
-  if (__builtin_expect(vtype(this_val) == kTypeUndefined, 0))
+  if (__builtin_expect(this_val == Ant_Value_Undefined, 0))
     return sv_construct(vm, js, parent, args, argc, new_target);
 
   ant_value_t super_this = this_val;
   ant_value_t result = sv_vm_call(vm, js, parent, this_val, args, argc, &super_this, new_target);
-  if (__builtin_expect(is_err(result), 0)) return sv_super_construct_error(js, parent, new_target, result);
-  return sv_is_construct_result(result) ? result : super_this;
+  return is_err(result) || sv_is_construct_result(result) ? result : super_this;
 }
 
+__attribute__((always_inline))
 static inline ant_value_t sv_super_construct(
   sv_vm_t *vm, ant_t *js, ant_value_t constructor, ant_value_t this_val,
   ant_value_t *args, int argc, ant_value_t new_target
