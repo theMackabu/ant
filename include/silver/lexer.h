@@ -12,6 +12,7 @@ typedef struct {
   uint8_t tok;
   uint8_t consumed;
   bool had_newline;
+  bool escaped;
 } sv_lexer_state_t;
 
 typedef struct {
@@ -19,7 +20,15 @@ typedef struct {
   const char *code;
   ant_offset_t clen;
   bool strict;
+  bool peek_strict;
   sv_lexer_state_t st;
+  sv_lexer_state_t peek;
+  ant_offset_t peek_pos;
+  ant_offset_t peek_clen;
+  ant_offset_t *tpl_spans;
+  const char *tpl_code;
+  uint32_t tpl_count;
+  uint32_t tpl_cap;
 } sv_lexer_t;
 
 typedef struct {
@@ -54,6 +63,7 @@ void sv_lexer_pop_source(sv_lexer_t *lx, const sv_lexer_checkpoint_t *cp);
 
 uint8_t sv_lexer_next(sv_lexer_t *lx);
 uint8_t sv_lexer_lookahead(sv_lexer_t *lx);
+bool sv_lexer_lookahead_newline(sv_lexer_t *lx);
 uint8_t sv_parsekeyword(const char *buf, size_t len);
 
 bool is_space(int c);
