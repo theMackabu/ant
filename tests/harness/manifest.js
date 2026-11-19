@@ -330,6 +330,7 @@ export function targets() {
     'test_json_lone_surrogates.cjs',
     'test_json_property_list.cjs',
     'test_inspector_host_header.cjs',
+    'test_for_in_proxy_traps.cjs',
     'test_lock_error_boundaries.cjs',
     'test_map_get_template_intrinsic.cjs',
     'test_message_port.mjs',
