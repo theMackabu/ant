@@ -920,7 +920,6 @@ ant_value_t proxy_set_with_receiver_reason(
 }
 
 ant_value_t proxy_set_with_receiver(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t value, ant_value_t receiver) {
-  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   return proxy_set_with_receiver_reason(js, proxy, key, key_len, value, receiver, NULL);
 }
 
