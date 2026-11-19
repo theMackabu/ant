@@ -917,29 +917,45 @@ void ant_shape_retain(ant_shape_t *shape) {
   shape->ref_count++;
 }
 
+static ant_shape_t *shape_take_child(ant_shape_t *shape) {
+  ant_shape_t *child = shape->first_child;
+  if (child) {
+    shape->first_child = NULL;
+    shape->first_child_key = 0;
+    return child;
+  }
+
+  shape_child_entry_t *entry = shape->children;
+  if (!entry) return NULL;
+  
+  child = entry->child;
+  HASH_DEL(shape->children, entry);
+  shape_entry_free(shape->heap, entry);
+  
+  return child;
+}
+
 static __attribute__((noinline)) void shape_destroy(ant_shape_t *shape) {
   if (shape->parent) shape_detach_child(shape->parent, shape);
+  shape->parent = NULL;
 
-  if (shape->first_child) {
-    ant_shape_t *child = shape->first_child;
-    shape->first_child = NULL;
-    child->parent = NULL;
-    ant_shape_release(child);
-  }
-
-  shape_child_entry_t *ce, *ctmp;
-  HASH_ITER(hh, shape->children, ce, ctmp) {
-    if (ce->child) {
-      ce->child->parent = NULL;
-      ant_shape_release(ce->child);
+  for (;;) {
+    ant_shape_t *child = shape_take_child(shape);
+    
+    if (child) {
+      if (child->ref_count == 0 || --child->ref_count != 0) child->parent = NULL;
+      else { child->parent = shape; shape = child; }
+      continue;
     }
-    HASH_DEL(shape->children, ce);
-    shape_entry_free(shape->heap, ce);
-  }
 
-  shape_unlink_descriptors(shape);
-  shape_bytes_sub(shape->heap, sizeof(*shape));
-  free(shape);
+    ant_shape_t *parent = shape->parent;
+    shape_unlink_descriptors(shape);
+    shape_bytes_sub(shape->heap, sizeof(*shape));
+    free(shape);
+    
+    if (!parent) return;
+    shape = parent;
+  }
 }
 
 void ant_shape_release(ant_shape_t *shape) {
@@ -983,32 +999,49 @@ static inline bool shape_child_is_dead(const ant_shape_t *child, uint16_t epoch)
   return child->gc_mark != epoch && !shape_has_children(child);
 }
 
-static bool shape_prune_dead_children(ant_shape_t *shape, uint16_t epoch) {
-  bool freed_any = false;
-
-  if (shape->first_child) {
-    ant_shape_t *child = shape->first_child;
-    if (shape_prune_dead_children(child, epoch)) freed_any = true;
-    if (shape_child_is_dead(child, epoch)) {
-      shape_detach_child(shape, child);
-      ant_shape_release(child);
-      freed_any = true;
-    }
+static inline ant_shape_t *shape_prune_enter(ant_shape_t *shape) {
+  for (;;) {
+    if (shape->first_child) { shape = shape->first_child; continue; }
+    shape_child_entry_t *entry = shape->children;
+    if (!entry) return shape;
+    entry->child->parent_key = (uint64_t)(uintptr_t)entry;
+    shape = entry->child;
   }
+}
 
-  shape_child_entry_t *ce, *ctmp;
-    HASH_ITER(hh, shape->children, ce, ctmp) {
-    ant_shape_t *child = ce->child;
-    
-    if (shape_prune_dead_children(child, epoch)) freed_any = true;
-    
-    if (shape_child_is_dead(child, epoch)) {
-      child->parent = NULL;
-      HASH_DEL(shape->children, ce);
-      shape_entry_free(shape->heap, ce);
-      ant_shape_release(child);
+static bool shape_prune_dead_children(ant_shape_t *root, uint16_t epoch) {
+  if (!shape_has_children(root)) return false;
+  
+  bool freed_any = false;
+  ant_shape_t *shape = shape_prune_enter(root);
+
+  while (shape != root) {
+    ant_shape_t *parent = shape->parent;
+    shape_child_entry_t *next = NULL;
+    bool dead = shape_child_is_dead(shape, epoch);
+
+    if (parent->first_child == shape) {
+      next = parent->children;
+      if (dead) shape_detach_child(parent, shape);
+    } else {
+      shape_child_entry_t *entry = (shape_child_entry_t *)(uintptr_t)shape->parent_key;
+      next = entry->hh.next;
+      shape->parent_key = entry->key;
+      if (dead) {
+        shape->parent = NULL;
+        HASH_DEL(parent->children, entry);
+        shape_entry_free(parent->heap, entry);
+      }
+    }
+
+    if (dead) {
+      ant_shape_release(shape);
       freed_any = true;
     }
+
+    if (!next) { shape = parent; continue; }
+    next->child->parent_key = (uint64_t)(uintptr_t)next;
+    shape = shape_prune_enter(next->child);
   }
 
   return freed_any;

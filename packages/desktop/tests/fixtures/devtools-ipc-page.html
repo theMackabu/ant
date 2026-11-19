@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Ant DevTools IPC test</title>
+<script>
+  Ant.ipc.on('devtools:go', async step => {
+    try {
+      Ant.ipc.send('devtools:result', { step, reply: await Ant.ipc.invoke('devtools:echo', step) });
+    } catch (error) {
+      Ant.ipc.send('devtools:result', { step, error: String(error) });
+    }
+  });
+  Ant.ipc.send('devtools:result', { step: 'loaded' });
+</script>

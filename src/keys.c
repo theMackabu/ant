@@ -9,6 +9,7 @@
 #include "cfunc.h"
 #include "stringify.h"
 #include "protectors.h"
+#include "modules/object.h"
 #include "modules/proxy.h"
 #include "silver/engine.h"
 
@@ -272,7 +273,7 @@ static __attribute__((noinline)) void own_keys_push_string_indexes(
   for (ant_offset_t i = 0; i < len; i++) {
     char idxstr[16];
     size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
-    arr_set(js, arr, (*out_idx)++, js_mkstr(js, idxstr, idxlen));
+    arr_set_owned(js, arr, (*out_idx)++, js_mkstr(js, idxstr, idxlen));
   }
 }
 
@@ -307,7 +308,7 @@ ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbol
     string_exotic_len = str_utf16_len(js, string_primitive);
     has_string_exotic = true;
     own_keys_push_string_indexes(js, arr, &out_idx, string_exotic_len);
-    if (!enumerable_only) arr_set(js, arr, out_idx++, js->length_str);
+    if (!enumerable_only) arr_set_owned(js, arr, out_idx++, js->length_str);
   }
 
   TypedArrayData *typed = ptr && ptr->flags.is_exotic ? buffer_get_typedarray_data(obj) : NULL;
@@ -341,7 +342,7 @@ ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbol
         break;
       }
       
-      arr_set(js, arr, out_idx++, intern_value(js, key));
+      arr_set_owned(js, arr, out_idx++, intern_value(js, key));
     }
 
     if (!has_index_key) {
@@ -350,7 +351,7 @@ ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbol
         if (!prop || prop->type != ANT_SHAPE_KEY_SYMBOL) continue;
         if (i >= ptr->prop_count) continue;
         if (enumerable_only && !own_key_is_enumerable(js, obj, ptr, i)) continue;
-        arr_set(js, arr, out_idx++, mkval(kTypeSymbol, prop->key.sym_off));
+        arr_set_owned(js, arr, out_idx++, mkval(kTypeSymbol, prop->key.sym_off));
       }
       goto done;
     }
@@ -368,7 +369,7 @@ ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbol
       if (is_empty_slot(dense_get(doff, i))) continue;
       char idxstr[16];
       size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
-      arr_set(js, arr, out_idx++, js_mkstr(js, idxstr, idxlen));
+      arr_set_owned(js, arr, out_idx++, js_mkstr(js, idxstr, idxlen));
     }
   }
 
@@ -428,11 +429,11 @@ ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbol
     const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, indices.items[i].slot);
     if (!prop) continue;
     const char *key = prop->key.interned;
-    arr_set(js, arr, out_idx++, js_mkstr(js, key, intern_length(key)));
+    arr_set_owned(js, arr, out_idx++, js_mkstr(js, key, intern_length(key)));
   }
 
   if (!enumerable_only && ((is_arr && !ptr->flags.arguments_object) || has_string_exotic)) {
-    arr_set(js, arr, out_idx++, js->length_str);
+    arr_set_owned(js, arr, out_idx++, js->length_str);
   }
 
   for (uint32_t i = 0; i < string_count; i++) {
@@ -440,7 +441,7 @@ ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbol
     if (!prop) continue;
     const char *key = prop->key.interned;
     size_t key_len = intern_length(key);
-    arr_set(js, arr, out_idx++, js_mkstr(js, key, key_len));
+    arr_set_owned(js, arr, out_idx++, js_mkstr(js, key, key_len));
   }
 
   if (include_symbols) {
@@ -449,7 +450,7 @@ ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbol
       if (!prop || prop->type != ANT_SHAPE_KEY_SYMBOL) continue;
       if (i >= ptr->prop_count) continue;
       if (enumerable_only && !own_key_is_enumerable(js, obj, ptr, i)) continue;
-      arr_set(js, arr, out_idx++, mkval(kTypeSymbol, prop->key.sym_off));
+      arr_set_owned(js, arr, out_idx++, mkval(kTypeSymbol, prop->key.sym_off));
     }
   }
 
@@ -689,9 +690,10 @@ static inline ant_value_t for_in_keys_collect_chain(
   ant_t *js, ant_value_t out, ant_value_t seen, ant_value_t obj
 ) {
   ant_value_t cur = obj;
+  uint32_t proxy_hops = 0;
   GC_ROOT_PIN(js, cur);
 
-  for (int depth = 0; is_object_type(cur) && depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
+  while (is_object_type(cur)) {
     GC_ROOT_SAVE(iter_mark, js);
     ant_value_t as_cur = (vtype(cur) == kTypeFunction) ? js_func_obj(cur) : cur;
     
@@ -706,7 +708,9 @@ static inline ant_value_t for_in_keys_collect_chain(
         continue;
       }
       proto = Ant_Value_Undefined;
-      r = for_in_keys_collect_proxy(js, out, seen, as_cur, &proto);
+      r = ++proxy_hops > PROXY_PROTO_HOP_LIMIT
+        ? js_mkerr_typed(js, JS_ERR_RANGE, "Maximum call stack size exceeded")
+        : for_in_keys_collect_proxy(js, out, seen, as_cur, &proto);
       if (is_err(r)) goto err;
       GC_ROOT_RESTORE(js, iter_mark);
       if (!is_object_type(proto)) break;

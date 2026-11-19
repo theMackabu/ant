@@ -51,7 +51,8 @@ static ant_value_t js_setprop_array_fast(
     if (is_err(extensibility_error)) return extensibility_error;
     if (extensibility_error == Ant_Value_False) return set_declined(declined, v);
     
-    arr_set(js, obj, (ant_offset_t)idx, v);
+    if (!Ant_Array_Unshare(js, ptr)) return js_mkerr(js, "oom");
+    arr_set_owned(js, obj, (ant_offset_t)idx, v);
     return v;
   }
   
@@ -241,6 +242,7 @@ static bool setprop_symbol_walk(
 ) {
   ant_offset_t sym_off = (ant_offset_t)vdata(k);
   ant_value_t cur = obj;
+  uint32_t proxy_hops = 0;
   proto_overflow_guard_t guard;
   proto_overflow_guard_init(&guard);
 
@@ -259,7 +261,9 @@ static bool setprop_symbol_walk(
       else if (on_receiver) *receiver_missed = true;
     } else if (is_proxy(cur_obj)) {
       if (setprop_sym_reaches_proxy(js, obj, cur_obj, k, v, keyed, declined, done, &cur)) return true;
-      continue;
+      if (++proxy_hops <= PROXY_PROTO_HOP_LIMIT) continue;
+      *done = js_mkerr_typed(js, JS_ERR_RANGE, "Maximum call stack size exceeded");
+      return true;
     }
     
     else found = lookup_symbol_prop_meta(js, cur_obj, sym_off, &meta);
@@ -346,6 +350,14 @@ static ant_value_t setprop_array_length_number(ant_t *js, ant_value_t obj, ant_o
   return v;
 }
 
+static ant_value_t setprop_array_length_operand(ant_t *js, ant_value_t v, double *out) {
+  ant_value_t numeric = js_to_numeric(js, v);
+  if (is_err(numeric)) return numeric;
+  if (vtype(numeric) == kTypeBigInt) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a BigInt value to a number");
+  *out = Ant_Value_AsNumberUnchecked(numeric);
+  return Ant_Value_Undefined;
+}
+
 static __attribute__((noinline, cold)) ant_value_t setprop_array_length_coerced(
   ant_t *js, ant_value_t obj, ant_object_t *len_obj, ant_value_t v, bool *declined
 ) {
@@ -353,13 +365,13 @@ static __attribute__((noinline, cold)) ant_value_t setprop_array_length_coerced(
     (len_obj->flags.raw & (ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_EXOTIC)) &&
     !ant_array_is_shared(len_obj) && array_length_readonly_slow(js, obj)
   ) return array_length_write_ignored(js, v, declined);
-  if (vtype(v) == kTypeBigInt) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a BigInt value to a number");
-  if (vtype(v) == kTypeSymbol) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a number");
 
-  double first = js_to_number(js, v);
-  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
-  double number = is_object_type(v) ? js_to_number(js, v) : first;
-  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+  double first;
+  ant_value_t converted = setprop_array_length_operand(js, v, &first);
+  if (is_err(converted)) return converted;
+  double number = first;
+  if (is_object_type(v)) converted = setprop_array_length_operand(js, v, &number);
+  if (is_err(converted)) return converted;
   if ((double)js_to_uint32(first) != number) return array_length_range_error(js);
   
   ant_value_t length = Ant_Value_FromNumber(number);
@@ -625,7 +637,8 @@ static ant_value_t setprop_index_impl(ant_t *js, ant_value_t obj, uint32_t idx, 
         ant_value_t extensibility_error = check_object_extensibility_index(js, obj, idx);
         if (is_err(extensibility_error)) return extensibility_error;
         if (extensibility_error == Ant_Value_False) return set_declined(declined, value);
-        arr_set(js, obj, (ant_offset_t)idx, value);
+        if (!Ant_Array_Unshare(js, ptr)) return js_mkerr(js, "oom");
+        arr_set_owned(js, obj, (ant_offset_t)idx, value);
         return value;
       }
     }
@@ -775,7 +788,7 @@ static ant_value_t set_receiver_own_target(ant_t *js, ant_value_t receiver) {
   return Ant_Value_Undefined;
 }
 
-static ant_value_t set_with_receiver_fast_key(
+static inline __attribute__((always_inline)) ant_value_t set_with_receiver_fast_key(
   ant_t *js, ant_value_t target, const char *key_str, size_t key_len,
   const char *interned, ant_value_t value, ant_value_t receiver
 ) {

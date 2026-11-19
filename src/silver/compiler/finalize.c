@@ -124,6 +124,7 @@ void sv_func_finalize_type_data(
   );
 
   func->needs_eval_env = comp->inherits_eval_env;
+  func->lazy_eval_env = comp->lazy_eval_env;
   func->is_eval = sv_compile_mode_is_eval(comp->mode);
   func->local_type_count = local_type_count;
   if (comp->eval_scope_count > 0 || comp->eval_var_count > 0 || comp->global_lexical_count > 0) {

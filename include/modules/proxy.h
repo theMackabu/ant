@@ -36,7 +36,7 @@ ant_value_t proxy_has_val(ant_t *js, ant_value_t proxy, ant_value_t key_val);
 ant_value_t proxy_get_own_property_descriptor(ant_t *js, ant_value_t proxy, ant_value_t key_val);
 ant_value_t proxy_has_own(ant_t *js, ant_value_t proxy, ant_value_t key_val);
 ant_value_t proxy_define_property(ant_t *js, ant_value_t proxy, ant_value_t key_val, ant_value_t descriptor);
-ant_value_t proxy_reflect_define_property(ant_t *js, ant_value_t proxy, ant_value_t key_val, ant_value_t descriptor);
+ant_value_t proxy_define_property_raw(ant_t *js, ant_value_t proxy, ant_value_t key_val, const define_desc_raw_t *raw, bool reflect);
 ant_value_t proxy_delete_sym(ant_t *js, ant_value_t proxy, ant_value_t sym);
 
 ant_value_t proxy_set_sym(

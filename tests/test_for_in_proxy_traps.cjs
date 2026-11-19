@@ -12,4 +12,17 @@ const assert = require('node:assert');
   assert.deepStrictEqual(log, ['ownKeys', 'getPrototypeOf', 'getOwnPropertyDescriptor']);
 }
 
+{
+  let calls = 0;
+  const self = new Proxy({ a: 1 }, { getPrototypeOf() { calls++; return self; } });
+  assert.throws(() => { for (const k in self); }, RangeError);
+  assert.ok(calls > 1000);
+
+  let hops = 0;
+  const finite = new Proxy({ b: 1 }, { getPrototypeOf() { return ++hops > 2000 ? null : Object.create(finite); } });
+  const seen = [];
+  for (const k in finite) seen.push(k);
+  assert.deepStrictEqual(seen, ['b']);
+}
+
 console.log('ok');

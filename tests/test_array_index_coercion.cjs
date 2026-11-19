@@ -47,4 +47,13 @@ const message = (run) => {
 
 assert.match(message(() => [1, 2].with(9, 1)), /^RangeError: Invalid index/);
 
+for (const index of [1n, { valueOf: () => 1n }]) {
+  assert.throws(() => [1, 2].fill(0, index), TypeError);
+  assert.throws(() => [1, 2].indexOf(1, index), TypeError);
+  assert.throws(() => [1, 2].lastIndexOf(1, index), TypeError);
+  assert.throws(() => [1, 2].splice(index), TypeError);
+  assert.throws(() => [1, 2].copyWithin(index), TypeError);
+  assert.throws(() => [1, 2].with(index, 0), TypeError);
+}
+
 console.log('ok');
