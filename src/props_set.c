@@ -725,7 +725,7 @@ static ant_value_t set_receiver_own_target(ant_t *js, ant_value_t receiver) {
   return Ant_Value_Undefined;
 }
 
-static ant_value_t set_with_receiver_fast_key(
+static inline __attribute__((always_inline)) ant_value_t set_with_receiver_fast_key(
   ant_t *js, ant_value_t target, const char *key_str, size_t key_len,
   const char *interned, ant_value_t value, ant_value_t receiver
 ) {
