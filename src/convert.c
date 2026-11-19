@@ -364,6 +364,17 @@ bool js_guard_proto_chain_absence(ant_t *js, ant_object_t *obj) {
   return vtype(cur) == kTypeNull;
 }
 
+ant_value_t js_to_property_key(ant_t *js, ant_value_t value) {
+  uint8_t t = vtype(value);
+  if (t == kTypeString || t == kTypeSymbol) return value;
+  if (is_object_type(value) || t == kTypeBuiltin) {
+    value = js_to_primitive(js, value, 1);
+    t = vtype(value);
+    if (is_err(value) || t == kTypeString || t == kTypeSymbol) return value;
+  }
+  return coerce_to_str(js, value);
+}
+
 ant_value_t js_to_primitive(ant_t *js, ant_value_t value, int hint) {
   if (is_primitive(value)) return value;
   if (!is_object_type(value) && vtype(value) != kTypeBuiltin) return value;

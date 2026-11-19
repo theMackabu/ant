@@ -1,5 +1,10 @@
 #include "parser_internal.h"
 
+static bool class_modifier_here(sv_parser_t *p) {
+  uint8_t la = sv_lexer_lookahead(&p->lx);
+  return la != TOK_LPAREN && la != TOK_ASSIGN && la != TOK_SEMICOLON && la != TOK_RBRACE && la != TOK_EOF;
+}
+
 sv_ast_t *parse_class(sv_parser_t *p) {
   sv_ast_t *cls = mk(N_CLASS);
 
@@ -24,13 +29,7 @@ sv_ast_t *parse_class(sv_parser_t *p) {
 
     uint8_t flags = 0;
 
-    if (
-      p->lx.st.tok == TOK_STATIC &&
-      sv_lexer_lookahead(&p->lx) != TOK_LPAREN &&
-      sv_lexer_lookahead(&p->lx) != TOK_ASSIGN &&
-      sv_lexer_lookahead(&p->lx) != TOK_SEMICOLON &&
-      sv_lexer_lookahead(&p->lx) != TOK_RBRACE
-    ) {
+    if (p->lx.st.tok == TOK_STATIC && class_modifier_here(p)) {
       flags |= FN_STATIC;
       p->lx.st.consumed = 1;
       sv_lexer_next(&p->lx);
@@ -50,7 +49,7 @@ sv_ast_t *parse_class(sv_parser_t *p) {
     sv_ast_t *method = mk(N_METHOD);
     uint32_t method_src_off = (uint32_t)p->lx.st.toff;
 
-    if (p->lx.st.tok == TOK_ASYNC && sv_lexer_lookahead(&p->lx) != TOK_LPAREN) {
+    if (p->lx.st.tok == TOK_ASYNC && class_modifier_here(p) && !lookahead_crosses_line_terminator(p)) {
       flags |= FN_ASYNC;
       p->lx.st.consumed = 1;
       sv_lexer_next(&p->lx);
@@ -62,14 +61,12 @@ sv_ast_t *parse_class(sv_parser_t *p) {
       sv_lexer_next(&p->lx);
     }
 
-    if ((p->lx.st.tlen == 3 && memcmp(tok_str(p), "get", 3) == 0) ||
-        (p->lx.st.tlen == 3 && memcmp(tok_str(p), "set", 3) == 0)) {
-      uint8_t la = sv_lexer_lookahead(&p->lx);
-      if (la != TOK_LPAREN && la != TOK_ASSIGN && la != TOK_SEMICOLON && la != TOK_RBRACE) {
-        flags |= (tok_str(p)[0] == 'g') ? FN_GETTER : FN_SETTER;
-        p->lx.st.consumed = 1;
-        sv_lexer_next(&p->lx);
-      }
+    if (!(flags & (FN_ASYNC | FN_GENERATOR)) && p->lx.st.tok == TOK_IDENTIFIER && p->lx.st.tlen == 3 &&
+        (memcmp(tok_str(p), "get", 3) == 0 || memcmp(tok_str(p), "set", 3) == 0) &&
+        class_modifier_here(p) && sv_lexer_lookahead(&p->lx) != TOK_MUL) {
+      flags |= (tok_str(p)[0] == 'g') ? FN_GETTER : FN_SETTER;
+      p->lx.st.consumed = 1;
+      sv_lexer_next(&p->lx);
     }
 
     if (p->lx.st.tok == TOK_LBRACKET) {
@@ -86,9 +83,20 @@ sv_ast_t *parse_class(sv_parser_t *p) {
       }
       method->left = mk_private_ident_from_tok(p);
       p->lx.st.consumed = 1;
-    } else {
+    } else if (p->lx.st.tok == TOK_NUMBER) {
+      p->lx.st.consumed = 1;
+      method->left = mk_num(p, Ant_Value_AsNumberUnchecked(p->lx.st.tval));
+    } else if (p->lx.st.tok == TOK_STRING) {
+      method->left = mk(N_STRING);
+      sv_ast_set_string(method->left, sv_lexer_str_literal(&p->lx));
+      method->left->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
+      p->lx.st.consumed = 1;
+    } else if (p->lx.st.tok == TOK_BIGINT || is_private_ident_like_tok(p->lx.st.tok)) {
       method->left = mk_ident_from_tok(p);
       p->lx.st.consumed = 1;
+    } else {
+      sv_parse_unexpected_token(p);
+      return cls;
     }
 
     method->flags = flags;
@@ -109,6 +117,9 @@ sv_ast_t *parse_class(sv_parser_t *p) {
       if (!validate_accessor_params(p, method->right, method->flags)) return cls;
       method->right->flags |= (flags & (FN_ASYNC | FN_GENERATOR)) | FN_METHOD | FN_CLASS_BODY;
       method->right->src_off = method_src_off;
+    } else if (flags & (FN_ASYNC | FN_GENERATOR | FN_GETTER | FN_SETTER)) {
+      sv_parse_unexpected_token(p);
+      return cls;
     } else if (p->lx.st.tok == TOK_ASSIGN) {
       p->lx.st.consumed = 1;
       method->right = parse_assign(p);

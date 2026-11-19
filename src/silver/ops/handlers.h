@@ -1901,7 +1901,7 @@ L_TO_OBJECT: {
 }
 
 L_TO_PROPKEY: {
-  sv_op_to_propkey(vm, js);
+  VM_CHECK(sv_op_to_propkey(vm, js));
   NEXT(OP_TO_PROPKEY);
 }
 
