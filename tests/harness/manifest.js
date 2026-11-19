@@ -435,6 +435,7 @@ export function targets() {
     'test_regexp_legacy_statics.cjs',
     'test_regexp_literal_objects.cjs',
     'test_regexp_literal_search_guards.cjs',
+    'test_proxy_symbol_set_cycles.cjs',
     'test_regexp_lone_surrogates.cjs',
     'test_regexp_multiline_anchors.cjs',
     'test_regexp_original_source.cjs',
