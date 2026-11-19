@@ -51,7 +51,8 @@ static ant_value_t js_setprop_array_fast(
     if (is_err(extensibility_error)) return extensibility_error;
     if (extensibility_error == Ant_Value_False) return set_declined(declined, v);
     
-    arr_set(js, obj, (ant_offset_t)idx, v);
+    if (!Ant_Array_Unshare(js, ptr)) return js_mkerr(js, "oom");
+    arr_set_owned(js, obj, (ant_offset_t)idx, v);
     return v;
   }
   
@@ -622,7 +623,8 @@ static ant_value_t setprop_index_impl(ant_t *js, ant_value_t obj, uint32_t idx, 
         ant_value_t extensibility_error = check_object_extensibility_index(js, obj, idx);
         if (is_err(extensibility_error)) return extensibility_error;
         if (extensibility_error == Ant_Value_False) return set_declined(declined, value);
-        arr_set(js, obj, (ant_offset_t)idx, value);
+        if (!Ant_Array_Unshare(js, ptr)) return js_mkerr(js, "oom");
+        arr_set_owned(js, obj, (ant_offset_t)idx, value);
         return value;
       }
     }
