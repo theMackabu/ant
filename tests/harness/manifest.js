@@ -41,6 +41,7 @@ export function targets() {
     'test_arraybuffer_release.cjs',
     'test_assert_bigint.cjs',
     'test_assert_pending_rejections.cjs',
+    'test_arguments_binding.cjs',
     'test_arrow_arguments_resolution.cjs',
     'test_async_await_old_promise_gc.cjs',
     'test_async_call_await_ticks.cjs',

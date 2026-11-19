@@ -146,7 +146,6 @@ bool param_captured_by_value(sv_compiler_t *c, int local);
 bool local_written_once(sv_compiler_t *c, int local);
 uint8_t ctor_slot_class(const sv_ast_t *node);
 int resolve_super_upvalue(sv_compiler_t *c);
-int resolve_arguments_upvalue(sv_compiler_t *c);
 int resolve_new_target_upvalue(sv_compiler_t *c);
 int resolve_upvalue_raw(sv_compiler_t *c, const char *name, uint32_t len);
 int resolve_upvalue(sv_compiler_t *c, const char *name, uint32_t len);
@@ -287,6 +286,7 @@ void push_using_cleanup(
 void compile_export_emit(sv_compiler_t *c, const char *name, uint32_t len);
 bool ast_has_eval_var(const sv_ast_t *node);
 bool ast_has_own_eval(sv_compiler_t *c, const sv_ast_t *node);
+bool ast_literal_eval_mentions_arguments(sv_compiler_t *c, const sv_ast_t *node);
 
 static inline bool is_quoted_ident_key(const sv_ast_t *node) {
   if (!node || node->type != N_IDENT || !node->str || node->len < 2) return false;
