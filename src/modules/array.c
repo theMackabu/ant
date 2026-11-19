@@ -2467,12 +2467,7 @@ static ant_value_t builtin_array_splice(ant_params_t) {
 }
 
 static ant_value_t builtin_array_copyWithin(ant_params_t) {
-  ant_value_t arr = call_this;
-  ant_value_t result = arr;
-  gc_temp_root_scope_t temp_roots = {0};
-  
-  bool temp_roots_active = false;
-  arr = array_method_receiver(js, arr, "copyWithin");
+  ant_value_t arr = array_method_receiver(js, call_this, "copyWithin");
   if (is_err(arr)) return arr;
 
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
@@ -2502,7 +2497,8 @@ static ant_value_t builtin_array_copyWithin(ant_params_t) {
 
   ant_offset_t doff = get_dense_buf(arr);
   ant_object_t *dense = doff ? frozen : NULL;
-  if (dense && array_dense_covers(dense, len) && (!dense->flags.may_have_holes || array_elements_proto_plain(js, dense))) {
+  bool keeps_holes = dense && dense->flags.extensible && !dense->flags.sealed && array_elements_proto_plain(js, dense);
+  if (dense && array_dense_covers(dense, len) && (!dense->flags.may_have_holes || keeps_holes)) {
     bool holes = false;
     if (start < target) {
       for (int i = count - 1; i >= 0; i--) {
@@ -2556,46 +2552,8 @@ static ant_value_t builtin_array_copyWithin(ant_params_t) {
     return proxy_result;
   }
 
-  ant_value_t *temp = (ant_value_t *)malloc(count * sizeof(ant_value_t));
-  if (!temp) return Ant_Error_CreateOutOfMemory(js);
-  gc_temp_root_scope_begin(js, &temp_roots);
-  temp_roots_active = true;
-  
-  if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, arr))) goto oom;
-  if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, read_from))) goto oom;
-  
-  for (int i = 0; i < count; i++) {
-    char idxstr[16];
-    size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)(start + i));
-    ant_prop_loc_t elem_off = lkp(js, read_from, idxstr, idxlen);
-    temp[i] = elem_off.obj ? js_prop_load(elem_off) : Ant_Value_Undefined;
-    if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, temp[i]))) goto oom;
-  }
-  
-  for (int i = 0; i < count; i++) {
-    char idxstr[16];
-    size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)(target + i));
-    ant_value_t key = js_mkstr(js, idxstr, idxlen);
-    if (is_err(key)) {
-      result = key;
-      goto done;
-    }
-    if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, key))) goto oom;
-    ant_value_t set_result = js_setprop(js, arr, key, temp[i]);
-    if (is_err(set_result)) {
-      result = set_result;
-      goto done;
-    }
-  }
-
-done:
-  if (temp_roots_active) gc_temp_root_scope_end(&temp_roots);
-  free(temp);
-  return result;
-
-oom:
-  result = Ant_Error_CreateOutOfMemory(js);
-  goto done;
+  ant_value_t moved = array_move_range_throw(js, arr, (ant_offset_t)start, (ant_offset_t)target, (ant_offset_t)count);
+  return is_err(moved) ? moved : arr;
 }
 
 static ant_value_t builtin_array_toSorted(ant_params_t) {
