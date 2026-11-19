@@ -526,6 +526,9 @@ static inline void sv_op_special_obj(
     case SV_SPECIAL_ARGC:
       vm->stack[vm->sp++] = Ant_Value_FromNumber(frame ? (double)frame->argc : 0);
       return;
+    case SV_SPECIAL_EVAL_ENV:
+      vm->stack[vm->sp++] = frame ? sv_eval_variable_env(vm, js, frame) : Ant_Value_Undefined;
+      return;
     case SV_SPECIAL_ARGUMENTS:
       if (frame) break;
       [[fallthrough]];

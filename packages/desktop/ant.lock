@@ -1,0 +1,26 @@
+{
+  "lockfileVersion": 1,
+  "root": {
+    "name": "ant-desktop",
+    "version": "0.3.0",
+    "specs": {
+      "optionalDependencies": {
+        "ant-desktop-darwin-arm64": "0.3.0"
+      }
+    },
+    "dependencies": {
+      "ant-desktop-darwin-arm64": "0.3.0"
+    }
+  },
+  "packages": {
+    "ant-desktop-darwin-arm64@0.3.0": {
+      "integrity": "sha512-FcO5/9MHebNXwW40fF7dRfvu/i5QXzhy1e2g7kxvfhYMQpssyhd/Irhg4EkKLIPIWxMsJmGKAVXskPtmBKIFXw==",
+      "os": [
+        "darwin"
+      ],
+      "cpu": [
+        "arm64"
+      ]
+    }
+  }
+}

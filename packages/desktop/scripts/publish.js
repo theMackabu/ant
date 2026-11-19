@@ -6,7 +6,8 @@ import { spawnSync } from 'node:child_process';
 
 const scriptsRoot = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(scriptsRoot, '..');
-const platformRoot = path.join(desktopRoot, 'packaging', 'npm', 'darwin-arm64');
+const platforms = JSON.parse(fs.readFileSync(path.join(desktopRoot, 'platforms.json'), 'utf8'));
+const platformRoot = path.join(desktopRoot, 'packaging', 'npm', `${platforms.names[process.platform]}-${process.arch}`);
 
 function execute(command, args, { cwd } = {}) {
   const result = spawnSync(command, args, { cwd, stdio: 'inherit' });

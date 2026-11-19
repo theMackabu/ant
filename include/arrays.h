@@ -109,6 +109,11 @@ ant_value_t array_method_element(
   ant_offset_t idx, ant_value_t *out
 );
 
+ant_value_t mkarr_dense_shaped(
+  ant_t *js, ant_shape_t *shape,
+  const ant_value_t *elements, uint32_t count
+);
+
 ant_value_t alloc_array_with_proto_capacity(
   ant_t *js, ant_value_t proto, uint32_t minimum_capacity,
   uint32_t overwritten_prefix, bool exact_capacity

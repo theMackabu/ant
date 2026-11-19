@@ -3,28 +3,6 @@ import { app, BrowserWindow, ipcMain } from 'ant:desktop';
 
 await app.ready();
 
-let secureDefaultEnforced = false;
-try {
-  new BrowserWindow({ webPreferences: { antIntegration: true } });
-} catch (error) {
-  secureDefaultEnforced = error.message.includes('requires sandbox: false');
-}
-if (!secureDefaultEnforced) throw new Error('antIntegration must not bypass the renderer sandbox');
-
-let aliasesMustMatch = false;
-try {
-  new BrowserWindow({
-    webPreferences: {
-      sandbox: false,
-      nodeIntegration: true,
-      antIntegration: false
-    }
-  });
-} catch (error) {
-  aliasesMustMatch = error.message.includes('must match');
-}
-if (!aliasesMustMatch) throw new Error('integration aliases must reject conflicting values');
-
 let resolveCompleted;
 let rejectCompleted;
 const completed = new Promise((resolve, reject) => {

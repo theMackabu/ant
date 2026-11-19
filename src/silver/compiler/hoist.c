@@ -108,7 +108,7 @@ static void collect_lexical_names(sv_ast_list_t *stmts, bool functions_lexical, 
     } else if (node->type == N_CLASS && node->str && (node->flags & FN_CLASS_DECL)) {
       decl_names_add(lex, node->str, node->len, false);
     } else if (is_function_declaration(node)) {
-      decl_names_add(functions_lexical ? lex : vars, node->str, node->len, true);
+      decl_names_add(functions_lexical ? lex : vars, node->str, node->len, !(node->flags & (FN_ASYNC | FN_GENERATOR)));
     } else if (node->type == N_IMPORT_DECL) {
       for (int j = 0; j < node->args.count; j++) {
         sv_ast_t *spec = node->args.items[j];
@@ -653,7 +653,7 @@ void emit_closure(sv_compiler_t *c, int index) {
   uint32_t scope = 0;
   if (child->needs_eval_env && !capture_dynamic_eval_scope(c, &scope)) return;
   sv_op_t op = child->needs_eval_env ? OP_CLOSURE_EVAL
-    : (!c->is_strict && c->strict_args_local >= 0) ? OP_CLOSURE_ARGS : OP_CLOSURE;
+    : (!c->is_strict && c->arguments_local >= 0) ? OP_CLOSURE_ARGS : OP_CLOSURE;
   emit_op(c, op);
   emit_u32(c, (uint32_t)index);
   if (child->needs_eval_env) emit_u32(c, scope);

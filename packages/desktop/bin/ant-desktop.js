@@ -2,10 +2,10 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import * as desktop from '../../index.js';
-import { CONFIG_NAME, loadConfig, optionsFromConfig } from '../../config.js';
+import * as desktop from '../index.js';
+import { CONFIG_NAME, loadConfig, optionsFromConfig } from '../config.js';
 
-const { version } = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+const { version } = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 function usage() {
   process.stdout.write(`Usage:
@@ -28,7 +28,7 @@ Dev options:
 Package options:
   --out <path>              Output artifact path
   --version <version>       Application version
-  --icon <path>             Platform icon file (.icns on macOS)
+  --icon <path>             Application icon (.icns on macOS, .png on Linux and Windows)
   --overwrite               Replace an existing output artifact
   --bundle-runtime          Copy the browser runtime into the app instead of sharing it
 `);

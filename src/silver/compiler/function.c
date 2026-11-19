@@ -292,6 +292,7 @@ sv_func_t *compile_function_body(
       comp.owns_eval_env = ast_has_own_eval(&comp, node->body);
   }
   comp.inherits_eval_env |= comp.owns_eval_env;
+  comp.lazy_eval_env = comp.owns_eval_env && !has_non_simple_params;
   if (comp.owns_eval_env) emit_op(&comp, OP_INIT_EVAL_ENV);
   if (node->flags & FN_CLASS_CTOR) emit_op(&comp, OP_CHECK_CTOR);
 
@@ -308,6 +309,25 @@ sv_func_t *compile_function_body(
     emit_put_local(&comp, comp.new_target_local);
   }
   
+  bool uses_args = (node->flags & FN_USES_ARGS) != 0;
+  bool is_program = !enclosing->enclosing && !enclosing->function_ctor_root;
+  if (!uses_args && !is_program && (node->flags & FN_DIRECT_EVAL) && has_implicit_arguments_obj(&comp)) {
+    for (int i = 0; !uses_args && i < node->args.count; i++)
+      uses_args = ast_literal_eval_mentions_arguments(&comp, node->args.items[i]);
+    uses_args = uses_args || ast_literal_eval_mentions_arguments(&comp, node->body);
+  }
+
+  if (
+    !comp.is_arrow && !comp.args_length_only &&
+    has_implicit_arguments_obj(&comp) && uses_args &&
+    resolve_local(&comp, "arguments", 9) == -1
+  ) {
+    comp.arguments_local = add_local(&comp, "arguments", 9, false, 0);
+    emit_op(&comp, OP_SPECIAL_OBJ);
+    emit(&comp, SV_SPECIAL_ARGUMENTS);
+    emit_put_local(&comp, comp.arguments_local);
+  }
+
   if (!has_non_simple_params && node->body) {
     if (node->body->type == N_BLOCK) {
       for (int i = 0; i < node->body->args.count; i++)
@@ -469,16 +489,6 @@ sv_func_t *compile_function_body(
       hoist_lexical_decls(&comp, &body->args);
       hoist_func_decls(&comp, &body->args);
     }
-  }
-
-  if (
-    !comp.is_arrow && !comp.args_length_only &&
-    has_implicit_arguments_obj(&comp) && (node->flags & FN_USES_ARGS)
-  ) {
-    comp.strict_args_local = add_hidden_local(&comp);
-    emit_op(&comp, OP_SPECIAL_OBJ);
-    emit(&comp, SV_SPECIAL_ARGUMENTS);
-    emit_put_local(&comp, comp.strict_args_local);
   }
 
   if (!comp.is_arrow && comp.enclosing && (node->flags & (FN_METHOD | FN_GETTER | FN_SETTER | FN_STATIC))) {

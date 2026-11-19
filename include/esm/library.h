@@ -23,10 +23,21 @@ typedef enum {
 typedef struct ant_library_entry {
   const char *name;
   const char *display_name;
+  
   ant_library_init_fn init_fn;
   uint8_t name_len;
-  bool standard;
+  
+  bool standard: 1;
+  bool host: 1;
 } ant_library_entry_t;
+
+typedef struct ant_host_module {
+  ant_library_entry_t entry;
+  ant_library_ns_t ns;
+  const uint8_t *source;
+  size_t source_len;
+  struct ant_host_module *next;
+} ant_host_module_t;
 
 enum {
   ANT_LIBRARY_COUNT = 0
@@ -34,10 +45,15 @@ enum {
   #include "esm/libraries.h"
 };
 
+void ant_host_modules_destroy(ant_t *js);
 void ant_library_foreach(ant_library_iter_fn cb, void *userdata);
 
 ant_value_t ant_library_load(ant_t *js, const ant_library_entry_t *lib);
 ant_value_t ant_library_namespace(ant_t *js, const ant_library_entry_t *lib);
 
-const ant_library_entry_t *ant_library_find(const char *specifier, size_t spec_len, ant_builtin_name_kind_t *kind);
 const char *ant_library_name(const ant_library_entry_t *lib);
+const ant_host_module_t *ant_host_module_find(ant_t *js, const char *specifier, size_t spec_len);
+const ant_library_entry_t *ant_library_find(const char *specifier, size_t spec_len, ant_builtin_name_kind_t *kind);
+
+bool Ant_Module_Register(ant_t *js, const char *specifier, ant_library_init_fn init_fn);
+bool Ant_Module_RegisterSource(ant_t *js, const char *specifier, const char *source, size_t source_len);
