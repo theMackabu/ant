@@ -1014,14 +1014,10 @@ static ant_value_t define_via_proxy(
     if (is_err(read_err)) return read_err;
   }
   
-  GC_ROOT_SAVE(mark, js);
-  for (int f = 0; f < DESC_FIELD_COUNT; f++) GC_ROOT_PIN(js, raw.val[f]);
-  
   ant_value_t prop = property_key_view_materialize(js, key);
-  GC_ROOT_PIN(js, prop);
+  if (is_err(prop)) return prop;
   
-  ant_value_t result = is_err(prop) ? prop : proxy_define_property_raw(js, as_obj, prop, &raw, false);
-  GC_ROOT_RESTORE(js, mark);
+  ant_value_t result = proxy_define_property_raw(js, as_obj, prop, &raw, false);
   if (is_err(result)) return result;
   if (!js_truthy(js, result)) return proxy_trap_error(js, "defineProperty", "trap returned falsy");
   
