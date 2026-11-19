@@ -402,6 +402,14 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
     closure->gc_epoch = gc_get_epoch(js);
   }
 
+  ant_value_t compiled_env = synthetic_closure ? Ant_Value_Undefined : sv_closure_eval_env(closure);
+  if (!is_object_type(compiled_env)) compiled_env = js->global;
+  if (sv_frame_eval_env(js, frame) != compiled_env) {
+    if (synthetic_closure) gc_pop_roots(js, root_mark);
+    func->back_edge_count = 0;
+    return SV_JIT_RETRY_INTERP;
+  }
+
   sv_jit_func_t jit;
   if (func->jit_code) jit = func->jit_code;
   else {

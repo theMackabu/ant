@@ -159,6 +159,30 @@ static ant_value_t builtin_Math_fround(ant_params_t) {
   return Ant_Value_FromNumber((double)(float)x);
 }
 
+static double math_f16round(double x) {
+  if (isnan(x) || isinf(x) || x == 0) return x;
+
+  double magnitude = fabs(x);
+  if (magnitude >= 65520.0) return x < 0 ? -(double)INFINITY : (double)INFINITY;
+
+  double quantum = magnitude < 0x1p-14 ? 0x1p-24 : ldexp(1.0, ilogb(magnitude) - 10);
+  double scaled = magnitude / quantum;
+
+  double rounded = floor(scaled);
+  double rest = scaled - rounded;
+
+  if (rest > 0.5 || (rest == 0.5 && fmod(rounded, 2.0) != 0)) rounded += 1.0;
+  double result = rounded * quantum;
+  
+  return x < 0 ? -result : result;
+}
+
+static ant_value_t builtin_Math_f16round(ant_params_t) {
+  double x = (nargs < 1) ? ANT_NAN : math_to_number(js, args[0]);
+  if (isnan(x)) return Ant_Value_FromNumber(ANT_NAN);
+  return Ant_Value_FromNumber(math_f16round(x));
+}
+
 static ant_value_t builtin_Math_hypot(ant_params_t) {
   if (nargs == 0) return Ant_Value_FromNumber(0.0);
   
@@ -253,15 +277,6 @@ void init_math_module(ant_t *js) {
   ant_value_t object_proto = js->sym.object_proto;
 
   js_set_proto_init(math_obj, object_proto);
-  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "E", 1), Ant_Value_FromNumber(M_E), 0);
-  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "LN10", 4), Ant_Value_FromNumber(M_LN10), 0);
-  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "LN2", 3), Ant_Value_FromNumber(M_LN2), 0);
-  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "LOG10E", 6), Ant_Value_FromNumber(M_LOG10E), 0);
-  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "LOG2E", 5), Ant_Value_FromNumber(M_LOG2E), 0);
-  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "PI", 2), Ant_Value_FromNumber(M_PI), 0);
-  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "SQRT1_2", 7), Ant_Value_FromNumber(M_SQRT1_2), 0);
-  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "SQRT2", 5), Ant_Value_FromNumber(M_SQRT2), 0);
-  
   defmethod(js, math_obj, "abs", 3, Ant_Function_CreateEx(builtin_Math_abs, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "acos", 4, Ant_Function_CreateEx(builtin_Math_acos, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "acosh", 5, Ant_Function_CreateEx(builtin_Math_acosh, 1, CFUNC_REALM_FREE));
@@ -270,21 +285,22 @@ void init_math_module(ant_t *js) {
   defmethod(js, math_obj, "atan", 4, Ant_Function_CreateEx(builtin_Math_atan, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "atanh", 5, Ant_Function_CreateEx(builtin_Math_atanh, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "atan2", 5, Ant_Function_CreateEx(builtin_Math_atan2, 2, CFUNC_REALM_FREE));
-  defmethod(js, math_obj, "cbrt", 4, Ant_Function_CreateEx(builtin_Math_cbrt, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "ceil", 4, Ant_Function_CreateEx(builtin_Math_ceil, 1, CFUNC_REALM_FREE));
+  defmethod(js, math_obj, "cbrt", 4, Ant_Function_CreateEx(builtin_Math_cbrt, 1, CFUNC_REALM_FREE));
+  defmethod(js, math_obj, "expm1", 5, Ant_Function_CreateEx(builtin_Math_expm1, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "clz32", 5, Ant_Function_CreateEx(builtin_Math_clz32, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "cos", 3, Ant_Function_CreateEx(builtin_Math_cos, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "cosh", 4, Ant_Function_CreateEx(builtin_Math_cosh, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "exp", 3, Ant_Function_CreateEx(builtin_Math_exp, 1, CFUNC_REALM_FREE));
-  defmethod(js, math_obj, "expm1", 5, Ant_Function_CreateEx(builtin_Math_expm1, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "floor", 5, Ant_Function_CreateEx(builtin_Math_floor, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "fround", 6, Ant_Function_CreateEx(builtin_Math_fround, 1, CFUNC_REALM_FREE));
+  defmethod(js, math_obj, "f16round", 8, Ant_Function_CreateEx(builtin_Math_f16round, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "hypot", 5, Ant_Function_CreateEx(builtin_Math_hypot, 2, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "imul", 4, Ant_Function_CreateEx(builtin_Math_imul, 2, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "log", 3, Ant_Function_CreateEx(builtin_Math_log, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "log1p", 5, Ant_Function_CreateEx(builtin_Math_log1p, 1, CFUNC_REALM_FREE));
-  defmethod(js, math_obj, "log10", 5, Ant_Function_CreateEx(builtin_Math_log10, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "log2", 4, Ant_Function_CreateEx(builtin_Math_log2, 1, CFUNC_REALM_FREE));
+  defmethod(js, math_obj, "log10", 5, Ant_Function_CreateEx(builtin_Math_log10, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "max", 3, Ant_Function_CreateEx(builtin_Math_max, 2, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "min", 3, Ant_Function_CreateEx(builtin_Math_min, 2, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "pow", 3, Ant_Function_CreateEx(builtin_Math_pow, 2, CFUNC_REALM_FREE));
@@ -297,6 +313,15 @@ void init_math_module(ant_t *js) {
   defmethod(js, math_obj, "tan", 3, Ant_Function_CreateEx(builtin_Math_tan, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "tanh", 4, Ant_Function_CreateEx(builtin_Math_tanh, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "trunc", 5, Ant_Function_CreateEx(builtin_Math_trunc, 1, CFUNC_REALM_FREE));
+  
+  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "E", 1), Ant_Value_FromNumber(M_E), 0);
+  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "LN10", 4), Ant_Value_FromNumber(M_LN10), 0);
+  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "LN2", 3), Ant_Value_FromNumber(M_LN2), 0);
+  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "LOG10E", 6), Ant_Value_FromNumber(M_LOG10E), 0);
+  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "LOG2E", 5), Ant_Value_FromNumber(M_LOG2E), 0);
+  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "PI", 2), Ant_Value_FromNumber(M_PI), 0);
+  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "SQRT1_2", 7), Ant_Value_FromNumber(M_SQRT1_2), 0);
+  mkprop_exact_attrs(js, math_obj, js_mkstr(js, "SQRT2", 5), Ant_Value_FromNumber(M_SQRT2), 0);
   
   for (int i = 0; i < ANT_MATH_INTRINSIC_COUNT; i++)
     js->sym.math_fns[i] = js_get(js, math_obj, ant_math_intrinsic_names[i]);

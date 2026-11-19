@@ -1,6 +1,6 @@
 {
   "name": "ant-desktop-darwin-arm64",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Ant Desktop native runtime for macOS on Apple Silicon",
   "keywords": [
     "ant",
@@ -17,7 +17,6 @@
     "url": "git+https://github.com/theMackabu/ant.git",
     "directory": "packages/desktop/packaging/npm/darwin-arm64"
   },
-  "type": "module",
   "main": "index.cjs",
   "os": [
     "darwin"
@@ -26,9 +25,7 @@
     "arm64"
   ],
   "files": [
-    "dev.cjs",
     "index.cjs",
-    "package.cjs",
     "cef.lock.json",
     "vendor/",
     "README.md"

@@ -1,0 +1,6 @@
+{
+  "name": "sparkle",
+  "version": "0",
+  "description": "Empty stand-in for the Sparkle updater, which only Ladybird GUI targets use and which needs Xcode to build",
+  "supports": "osx"
+}

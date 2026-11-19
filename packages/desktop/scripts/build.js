@@ -11,9 +11,13 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repositoryRoot = path.resolve(desktopRoot, '../..');
-const platformRoot = path.join(desktopRoot, 'packaging', 'npm', 'darwin-arm64');
+const platforms = require(path.join(desktopRoot, 'platforms.json'));
+const system = platforms.names[process.platform];
+const platformRoot = path.join(desktopRoot, 'packaging', 'npm', `${system}-${process.arch}`);
+if (!fs.existsSync(path.join(platformRoot, 'cef.lock.json'))) {
+  throw new Error(`Ant Desktop has no browser runtime lock for ${process.platform}-${process.arch}`);
+}
 const lock = require(path.join(platformRoot, 'cef.lock.json'));
-const { infoPlist } = require(path.join(platformRoot, 'package.cjs'));
 const { version } = require(path.join(desktopRoot, 'package.json'));
 
 const FRAMEWORK = 'Chromium Embedded Framework.framework';
@@ -46,15 +50,23 @@ async function fetchCef() {
   if (contents.length !== lock.size || sha1 !== lock.sha1) {
     throw new Error(`CEF archive does not match cef.lock.json (size ${contents.length}, sha1 ${sha1})`);
   }
-  if (!fs.existsSync(source)) run('/usr/bin/tar', ['-xjf', archive, '-C', cache]);
+  if (!fs.existsSync(source)) run('tar', ['-xjf', archive, '-C', cache]);
   return source;
 }
 
+function sharedCefRoot() {
+  if (system === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'Ant Desktop', 'CEF');
+  if (system === 'windows') return path.join(process.env.LOCALAPPDATA, 'Ant Desktop', 'CEF');
+  return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), 'ant-desktop', 'cef');
+}
+
 function installSharedCef(source) {
-  const shared = path.join(os.homedir(), 'Library', 'Application Support', 'Ant Desktop', 'CEF', lock.cefVersion);
-  if (fs.existsSync(path.join(shared, FRAMEWORK))) return;
+  const shared = path.join(sharedCefRoot(), lock.cefVersion);
+  const marker = { darwin: FRAMEWORK, windows: 'libcef.dll', linux: 'libcef.so' }[system];
+  if (fs.existsSync(path.join(shared, marker))) return;
   fs.mkdirSync(shared, { recursive: true });
-  run('/bin/cp', ['-Rc', path.join(source, 'Release', FRAMEWORK), shared]);
+  if (system === 'darwin') run('/bin/cp', ['-Rc', path.join(source, 'Release', FRAMEWORK), shared]);
+  else for (const part of ['Release', 'Resources']) fs.cpSync(path.join(source, part), shared, { recursive: true });
   process.stdout.write(`Installed the shared browser runtime in ${shared}\n`);
 }
 
@@ -68,12 +80,18 @@ function ensureLibant() {
 function compile(cef, libant) {
   const build = path.join(desktopRoot, 'build');
   const tool = name => spawnSync('xcrun', ['--find', name], { encoding: 'utf8' }).stdout.trim();
+  const compilers = {
+    darwin: () => [tool('clang'), tool('clang++')],
+    windows: () => [process.env.CC || 'clang-cl', process.env.CXX || 'clang-cl'],
+    linux: () => [process.env.CC || 'clang', process.env.CXX || 'clang++']
+  };
+  const [cc, cxx] = compilers[system]();
   run('cmake', [
     '-S', desktopRoot, '-B', build, '-G', 'Ninja',
-    `-DCMAKE_C_COMPILER=${tool('clang')}`,
-    `-DCMAKE_CXX_COMPILER=${tool('clang++')}`,
+    `-DCMAKE_C_COMPILER=${cc}`,
+    `-DCMAKE_CXX_COMPILER=${cxx}`,
     '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
-    '-DPROJECT_ARCH=arm64',
+    `-DPROJECT_ARCH=${process.arch === 'x64' ? 'x86_64' : process.arch}`,
     `-DCEF_ROOT=${cef}`,
     `-DLIBANT_ROOT=${libant}`,
     `-DDESKTOP_VERSION=${version}`,
@@ -88,6 +106,7 @@ function compile(cef, libant) {
 }
 
 function writeBundle(root, name, identifier, executable) {
+  const { infoPlist } = require(path.join(desktopRoot, 'platform', 'darwin.cjs'));
   const contents = path.join(root, 'Contents');
   fs.mkdirSync(path.join(contents, 'MacOS'), { recursive: true });
   fs.copyFileSync(executable, path.join(contents, 'MacOS', name));
@@ -99,7 +118,17 @@ function writeBundle(root, name, identifier, executable) {
   return contents;
 }
 
+function assembleDirectory(build) {
+  const app = path.join(desktopRoot, 'runtime', 'ant-desktop');
+  const files = system === 'windows' ? ['ant-desktop.exe', 'antdesktop.dll'] : ['ant-desktop', 'libantdesktop.so'];
+  fs.rmSync(app, { recursive: true, force: true });
+  fs.mkdirSync(app, { recursive: true });
+  for (const file of files) fs.copyFileSync(path.join(build, file), path.join(app, file));
+  process.stdout.write(`Built ${app}\n`);
+}
+
 function assemble(build) {
+  if (system !== 'darwin') return assembleDirectory(build);
   const app = path.join(desktopRoot, 'runtime', 'Ant Desktop.app');
   const launcher = path.join(build, 'ant-desktop');
   fs.rmSync(app, { recursive: true, force: true });

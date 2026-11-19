@@ -59,16 +59,25 @@ typedef enum : uint8_t {
 
 static literal_tree_t literal_tree_check(sv_ast_t *node, int depth);
 
-static literal_tree_t literal_tree_child(sv_ast_t *node, int depth) {
-  return literal_is_leaf(node) ? LITERAL_TREE_OK : literal_tree_check(node, depth);
+static bool literal_is_container(const sv_ast_t *node) {
+  return node && (node->type == N_ARRAY || node->type == N_OBJECT);
+}
+
+static bool literal_child_is_dynamic(const sv_ast_t *child) {
+  if (!child) return true;
+  if (literal_is_container(child)) return (child->flags & FN_LITERAL_DYNAMIC) != 0;
+  return child->type != N_EMPTY && !literal_is_leaf(child);
 }
 
 static literal_tree_t literal_tree_scan(sv_ast_t *node, int depth) {
   if (node->type == N_ARRAY) {
+    for (int i = 0; i < node->args.count; i++)
+      if (literal_child_is_dynamic(node->args.items[i])) return LITERAL_TREE_DYNAMIC;
+    
     for (int i = 0; i < node->args.count; i++) {
       sv_ast_t *elem = node->args.items[i];
-      if (elem && elem->type == N_EMPTY) continue;
-      literal_tree_t r = literal_tree_child(elem, depth + 1);
+      if (!literal_is_container(elem)) continue;
+      literal_tree_t r = literal_tree_check(elem, depth + 1);
       if (r != LITERAL_TREE_OK) return r;
     }
     return LITERAL_TREE_OK;
@@ -77,6 +86,11 @@ static literal_tree_t literal_tree_scan(sv_ast_t *node, int depth) {
   if (node->flags & FN_PATTERN_ONLY) return LITERAL_TREE_DYNAMIC;
   if (node->args.count > SV_SHAPED_LITERAL_MAX_KEYS) return LITERAL_TREE_DYNAMIC;
   
+  for (int i = 0; i < node->args.count; i++) {
+    const sv_ast_t *prop = node->args.items[i];
+    if (!prop || prop->type != N_PROPERTY || literal_child_is_dynamic(prop->right)) return LITERAL_TREE_DYNAMIC;
+  }
+  
   const char *keys[SV_SHAPED_LITERAL_MAX_KEYS];
   uint32_t lens[SV_SHAPED_LITERAL_MAX_KEYS];
   
@@ -84,7 +98,8 @@ static literal_tree_t literal_tree_scan(sv_ast_t *node, int depth) {
     sv_ast_t *prop = node->args.items[i];
     if (!literal_object_key(prop, &keys[i], &lens[i])) return LITERAL_TREE_DYNAMIC;
     for (int j = 0; j < i; j++) if (lens[j] == lens[i] && memcmp(keys[j], keys[i], lens[i]) == 0) return LITERAL_TREE_DYNAMIC;
-    literal_tree_t r = literal_tree_child(prop->right, depth + 1);
+    if (!literal_is_container(prop->right)) continue;
+    literal_tree_t r = literal_tree_check(prop->right, depth + 1);
     if (r != LITERAL_TREE_OK) return r;
   }
   
@@ -136,6 +151,7 @@ static int literal_site_add(
   
   if (literal_site_uses_block(kind, flags, count)) {
     if (!(block = gc_shared_elements_alloc(c->js, vals, count))) return -1;
+    sv_code_unit_charge(c->js, sizeof(*block) + (size_t)count * sizeof(*vals));
   } else if (count && (start = add_constant_run(c, vals, (int)count)) < 0) return -1;
   
   c->literal_sites[c->literal_site_count] = (struct sv_literal_site_desc){
@@ -253,16 +269,18 @@ static bool literal_root_pays(int prefix, int fixed, int nested) {
   return fixed > 0 && dynamic * SV_LITERAL_DYNAMIC_RATIO <= fixed;
 }
 
-static bool literal_has_container(const sv_ast_t *node, int prefix) {
+static bool literal_small_root_viable(const sv_ast_t *node, int prefix) {
+  bool container = false;
   for (int i = 0; i < prefix; i++) {
     const sv_ast_t *item = node->args.items[i];
-    if (item && (item->type == N_ARRAY || item->type == N_OBJECT)) return true;
+    if (literal_child_is_dynamic(item)) return false;
+    container |= literal_is_container(item);
   }
-  return false;
+  return container;
 }
 
 static bool compile_array_site(sv_compiler_t *c, sv_ast_t *node, int prefix) {
-  if (prefix == 0 || (prefix <= SV_LITERAL_INLINE_MAX && !literal_has_container(node, prefix))) return false;
+  if (prefix == 0 || (prefix <= SV_LITERAL_INLINE_MAX && !literal_small_root_viable(node, prefix))) return false;
   literal_class_t stack_classes[SV_LITERAL_CLASS_STACK];
   literal_class_t *classes = prefix <= SV_LITERAL_CLASS_STACK ? stack_classes : malloc((size_t)prefix * sizeof(*classes));
   if (!classes) return false;

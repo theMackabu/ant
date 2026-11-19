@@ -349,7 +349,7 @@ MIR_label_t label_for_offset(MIR_context_t ctx, jit_label_map_t *lm,
                              int bc_off);
 int jit_constant_object_span(sv_func_t *func, sv_obj_site_cache_t *site, jit_label_map_t *lm);
 
-void mir_emit_branch_if_object(
+void mir_emit_branch_if_construct_result(
     MIR_context_t ctx, MIR_item_t fn, MIR_reg_t value, MIR_reg_t scratch, MIR_label_t target);
 void mir_emit_decode_ref(
     MIR_context_t ctx, MIR_item_t fn, MIR_reg_t dst, MIR_reg_t value);
