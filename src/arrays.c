@@ -756,7 +756,8 @@ ant_value_t array_alloc_intrinsic(ant_t *js, ant_value_t source, ant_offset_t le
   bool exact = length_hint <= ARRAY_RESULT_PREALLOC_MAX ||
     (src && src->flags.fast_array && length_hint <= src->u.array.cap);
   
-  ant_value_t arr = exact && length_hint <= UINT32_MAX
+  if (!exact && length_hint > UINT32_MAX) return array_length_range_error(js);
+  ant_value_t arr = exact
     ? alloc_array_with_proto_capacity(js, js->sym.array_proto, (uint32_t)length_hint, 0, false)
     : Ant_Array_Create(js);
   
@@ -1409,13 +1410,24 @@ static inline TypedArrayData *array_method_typedarray_data(ant_value_t value, ui
   return NULL;
 }
 
-ant_value_t proxy_aware_length(ant_t *js, ant_value_t obj, ant_offset_t *out_len) {
+static __attribute__((noinline, cold)) ant_value_t proxy_length_coerced(ant_t *js, ant_value_t val, ant_offset_t *out) {
+  val = js_to_numeric(js, val);
+  if (is_err(val)) return val;
+  if (vtype(val) == kTypeBigInt)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a BigInt value to a number");
+  
+  *out = to_length_offset(Ant_Value_AsNumberUnchecked(val));
+  return Ant_Value_Undefined;
+}
+
+ant_value_t proxy_aware_length_slow(ant_t *js, ant_value_t obj, ant_offset_t *out_len) {
   *out_len = 0;
   uint8_t obj_type = vtype(obj);
   if (is_proxy(obj)) {
     ant_value_t len_val = proxy_get(js, obj, "length", 6);
     if (is_err(len_val)) return len_val;
-    if (vtype(len_val) == kTypeNumber) *out_len = (ant_offset_t)Ant_Value_AsNumberUnchecked(len_val);
+    if (vtype(len_val) != kTypeNumber) return proxy_length_coerced(js, len_val, out_len);
+    *out_len = to_length_offset(Ant_Value_AsNumberUnchecked(len_val));
     return Ant_Value_Undefined;
   }
   TypedArrayData *ta = obj_type == kTypeArray ? NULL : array_method_typedarray_data(obj, obj_type);
@@ -1433,7 +1445,7 @@ ant_value_t proxy_aware_get_elem(ant_t *js, ant_value_t obj, const char *key, si
 }
 
 ant_value_t proxy_delete_index(ant_t *js, ant_value_t obj, ant_offset_t idx) {
-  char idxstr[16];
+  char idxstr[24];
   size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)idx);
   return proxy_delete(js, obj, idxstr, idxlen);
 }
@@ -1462,7 +1474,7 @@ ant_value_t array_method_has_index(ant_t *js, ant_value_t arr, ant_offset_t idx)
   ant_value_t dense;
   if (array_method_dense_element(arr, idx, &dense)) return Ant_Value_True;
   if (is_proxy(arr)) {
-    char idxstr[16];
+    char idxstr[24];
     size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)idx);
     return proxy_has(js, arr, idxstr, idxlen);
   }
@@ -1480,10 +1492,10 @@ ant_value_t array_method_has_index(ant_t *js, ant_value_t arr, ant_offset_t idx)
 static bool array_like_index_keys_absent(ant_value_t obj) {
   ant_value_t cur = obj;
   for (int depth = 0; depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
-    if (vtype(cur) != kTypeObject || is_proxy(cur) || array_obj_ptr(cur)) return false;
+    if (vtype(cur) != kTypeObject) return false;
     ant_object_t *ptr = js_obj_ptr(cur);
-    if (!ptr || !ptr->shape || ptr->flags.is_exotic || ant_object_exotic_ops(ptr)) return false;
-    if (ant_shape_may_have_index_keys(ptr->shape)) return false;
+    if (!ptr || !ptr->shape || ptr->flags.is_exotic || ptr->type_tag == kTypeArray) return false;
+    if (ant_shape_may_have_index_keys(ptr->shape) || ant_object_exotic_ops(ptr)) return false;
     if (vtype(js_string_wrapper_value(cur)) == kTypeString) return false;
     cur = ant_object_proto(ptr);
     if (vtype(cur) == kTypeNull) return true;
@@ -1512,7 +1524,7 @@ ant_value_t array_method_get_index(ant_t *js, ant_value_t arr, ant_offset_t idx)
   ant_value_t dense;
   if (array_method_dense_element(arr, idx, &dense)) return dense;
   if (is_proxy(arr)) {
-    char idxstr[16];
+    char idxstr[24];
     size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)idx);
     return proxy_get(js, arr, idxstr, idxlen);
   }
@@ -1524,7 +1536,7 @@ ant_value_t array_method_get_index(ant_t *js, ant_value_t arr, ant_offset_t idx)
     if (ta && buffer_typedarray_data_read_index(js, ta, (size_t)idx, &item)) return item;
     if (!ta) {
       if (array_like_index_keys_absent(arr)) return Ant_Value_Undefined;
-      char idxstr[16];
+      char idxstr[24];
       size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)idx);
       if (array_like_index_absent(js, arr, idxstr, idxlen)) return Ant_Value_Undefined;
       return js_getprop_fallback_len(js, arr, idxstr, idxlen);
