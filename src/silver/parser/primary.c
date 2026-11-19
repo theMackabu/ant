@@ -193,6 +193,10 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     p->lx.st.consumed = 1;
     if (sv_lexer_next(&p->lx) == TOK_RPAREN) {
       p->lx.st.consumed = 1;
+      if (sv_lexer_next(&p->lx) != TOK_ARROW) {
+        sv_parse_unexpected_token(p);
+        return mk(N_EMPTY);
+      }
       sv_ast_t *n = mk(N_UNDEF);
       n->flags |= FN_PAREN;
       n->src_off = paren_off;
