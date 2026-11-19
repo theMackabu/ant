@@ -31,7 +31,7 @@ static ant_value_t js_setprop_array_fast(
   if (doff) {
     ant_offset_t dense_len = dense_iterable_length(js, obj);
     if (idx < dense_len) {
-      if (ptr && ptr->flags.frozen) 
+      if (ptr && ptr->flags.frozen && !Ant_Array_TryUnshare(js, ptr)) 
         return sv_is_strict_context(js) ? Ant_Error_CreateReadOnlyProperty(js, obj, Ant_Value_FromNumber((double)idx)) : set_declined(declined, v);
       if (is_empty_slot(dense_get(doff, (ant_offset_t)idx))) {
         if (array_store_reaches_proto(js, obj, ptr, idx)) return JS_SETPROP_ARRAY_NOT_HANDLED;
@@ -39,7 +39,7 @@ static ant_value_t js_setprop_array_fast(
         if (is_err(extensibility_error)) return extensibility_error;
         if (extensibility_error == Ant_Value_False) return set_declined(declined, v);
       }
-      dense_set(js, doff, (ant_offset_t)idx, v);
+      dense_set_owned(js, doff, (ant_offset_t)idx, v);
       return v;
     }
 
@@ -311,10 +311,13 @@ static ant_value_t setprop_symbol(ant_t *js, ant_value_t obj, ant_value_t receiv
 static ant_value_t setprop_array_length_number(ant_t *js, ant_value_t obj, ant_object_t *len_obj, ant_value_t v, bool *declined) {
   double requested = Ant_Value_AsNumberUnchecked(v);
 
-  if (
-    __builtin_expect((len_obj->flags.raw & (ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_EXOTIC)) != 0, 0) &&
-    array_length_readonly_slow(js, obj)
-  ) return array_length_write_ignored(js, v, declined);
+  if (__builtin_expect((len_obj->flags.raw & (ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_EXOTIC)) != 0, 0)) {
+    if (ant_array_is_shared(len_obj)) {
+      if (!array_length_is_valid(requested)) return array_length_range_error(js);
+      return array_length_set_shared(js, obj, len_obj, (ant_offset_t)requested) ? v : js_mkerr(js, "oom");
+    }
+    if (array_length_readonly_slow(js, obj)) return array_length_write_ignored(js, v, declined);
+  }
   if (__builtin_expect(!array_length_is_valid(requested), 0)) return array_length_range_error(js);
 
   ant_offset_t new_len_val = (ant_offset_t)requested;
@@ -339,7 +342,7 @@ static __attribute__((noinline, cold)) ant_value_t setprop_array_length_coerced(
 ) {
   if (
     (len_obj->flags.raw & (ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_EXOTIC)) &&
-    array_length_readonly_slow(js, obj)
+    !ant_array_is_shared(len_obj) && array_length_readonly_slow(js, obj)
   ) return array_length_write_ignored(js, v, declined);
   if (vtype(v) == kTypeBigInt) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a BigInt value to a number");
   if (vtype(v) == kTypeSymbol) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a number");
@@ -592,14 +595,14 @@ static ant_value_t setprop_index_impl(ant_t *js, ant_value_t obj, uint32_t idx, 
       if (missing && array_store_reaches_proto(js, obj, ptr, idx)) goto keyed;
       
       if ((ant_offset_t)idx < dense_len) {
-        if (ptr->flags.frozen) 
+        if (ptr->flags.frozen && !Ant_Array_TryUnshare(js, ptr)) 
           return sv_is_strict_context(js) ? Ant_Error_CreateReadOnlyProperty(js, obj, Ant_Value_FromNumber((double)idx)) : set_declined(declined, value);
         if (missing) {
           ant_value_t extensibility_error = check_object_extensibility_index(js, obj, idx);
           if (is_err(extensibility_error)) return extensibility_error;
           if (extensibility_error == Ant_Value_False) return set_declined(declined, value);
         }
-        dense_set(js, dense, (ant_offset_t)idx, value);
+        dense_set_owned(js, dense, (ant_offset_t)idx, value);
         return value;
       }
 

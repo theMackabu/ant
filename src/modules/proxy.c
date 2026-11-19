@@ -587,7 +587,6 @@ static bool proxy_target_is_extensible(ant_value_t obj) {
 
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
   if (!ptr) return false;
-  if (ptr->flags.frozen || ptr->flags.sealed) return false;
   return ptr->flags.extensible != 0;
 }
 
@@ -920,7 +919,7 @@ static __attribute__((noinline, cold)) ant_value_t proxy_define_not_extensible(a
 
 static inline bool proxy_target_refuses_add(ant_value_t target) {
   ant_object_t *ptr = js_obj_ptr(js_as_obj(target));
-  return ptr && (ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible);
+  return ptr && !ptr->flags.extensible;
 }
 
 static bool proxy_handler_plain_for_set(ant_t *js, ant_proxy_state_t *data) {
@@ -1381,6 +1380,7 @@ ant_value_t proxy_prevent_extensions(ant_t *js, ant_value_t proxy) {
   if (is_proxy(target)) return proxy_prevent_extensions(js, target);
 
   ant_object_t *ptr = js_obj_ptr(js_as_obj(target));
+  if (!Ant_Array_UnshareValue(js, js_as_obj(target))) return js_mkerr(js, "oom");
   if (ptr) ptr->flags.extensible = 0;
   return Ant_Value_True;
 }

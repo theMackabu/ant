@@ -625,7 +625,7 @@ static inline ant_value_t object_test_integrity(ant_t *js, ant_value_t obj, ant_
   uint16_t flags = ptr->flags.raw;
   uint16_t settled = frozen ? ANT_OBJECT_FLAG_FROZEN : ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_SEALED;
   
-  if (flags & settled) return Ant_Value_True;
+  if (flags & settled) return Ant_Value_FromBool(!ant_array_is_shared(ptr));
   if ((flags & (ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXTENSIBLE)) == ANT_OBJECT_FLAG_EXTENSIBLE) return Ant_Value_False;
   
   return object_scan_integrity(js, obj, frozen);
@@ -663,6 +663,7 @@ ant_value_t builtin_object_freeze(ant_params_t) {
       ant_shape_set_attrs_interned(js, ptr->shape, key, attrs);
     } else ant_shape_set_attrs_symbol(js, ptr->shape, prop->key.sym_off, attrs);
   }
+  if (!Ant_Array_Unshare(js, ptr)) return js_mkerr(js, "oom");
   
   ptr->flags.frozen = 1;
   ptr->flags.sealed = 1;
@@ -704,6 +705,7 @@ static ant_value_t builtin_object_seal(ant_params_t) {
   ant_object_t *ptr = js_obj_ptr(as_obj);
   if (!ptr || !ptr->shape) return obj;
   if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
+  if (!Ant_Array_Unshare(js, ptr)) return js_mkerr(js, "oom");
   
   ptr->flags.sealed = 1;
   ptr->flags.extensible = 0;
@@ -953,8 +955,8 @@ static ant_value_t object_get_own_property_descriptor_keyed(
   } else if (has_arr_index) {
     prop_val = arr_index_val;
     ant_object_t *arr_ptr = js_obj_ptr(as_obj);
-    if (arr_ptr && (arr_ptr->flags.frozen || arr_ptr->flags.sealed)) configurable = false;
-    if (arr_ptr && arr_ptr->flags.frozen) writable = false;
+    if (arr_ptr && ant_object_is_sealed_or_frozen(arr_ptr)) configurable = false;
+    if (arr_ptr && ant_object_is_frozen(arr_ptr)) writable = false;
   } else if (is_arr_length) {
     prop_val = Ant_Value_FromNumber((double)get_array_length(js, as_obj));
     writable = !array_length_readonly(js, as_obj);
@@ -1208,8 +1210,6 @@ static ant_value_t builtin_object_isExtensible(ant_params_t) {
   
   ant_object_t *ptr = js_obj_ptr(as_obj);
   if (!ptr) return Ant_Value_True;
-  if (ptr->flags.frozen || ptr->flags.sealed) return Ant_Value_False;
-  
   return Ant_Value_FromBool(ptr->flags.extensible);
 }
 
@@ -1237,6 +1237,7 @@ static ant_value_t builtin_object_preventExtensions(ant_params_t) {
   }
   
   ant_object_t *ptr = js_obj_ptr(as_obj);
+  if (!Ant_Array_UnshareValue(js, as_obj)) return js_mkerr(js, "oom");
   if (ptr) ptr->flags.extensible = 0;
   return obj;
 }

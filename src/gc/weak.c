@@ -436,8 +436,10 @@ static void gc_weak_mark_all_in_collection(ant_t *js, ant_object_t *obj) {
 static void gc_weak_prune_collection(ant_t *js, ant_object_t *obj) {
   ant_value_t collection = js_obj_from_ptr(obj);
   weakref_state_t *weakref = js_get_native(collection, WEAKREF_NATIVE_TAG);
-  if (weakref && !js->weak_gc.key_alive(js, weakref->target))
+  if (weakref && !js->weak_gc.key_alive(js, weakref->target)) {
     weakref->target = Ant_Value_Undefined;
+    if (weakref->notifies_registry) js->weak_gc.finalization_pending = true;
+  }
 
   if (obj->type_tag == kTypeWeakMap) {
     weakmap_table_t *table = js_get_native(collection, WEAKMAP_NATIVE_TAG);

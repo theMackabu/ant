@@ -905,6 +905,7 @@ ant_value_t js_delete_prop_ordinary(ant_t *js, ant_value_t obj, const char *key,
 
   if (string_wrapper_owns_key(js, obj, key, len)) return Ant_Value_False;
 
+  if (!Ant_Array_UnshareValue(js, obj)) return js_mkerr(js, "oom");
   if (ptr->flags.frozen || ptr->flags.sealed) {
     bool own = 
       lkp(js, obj, key, len).obj || 
@@ -991,7 +992,7 @@ ant_value_t js_delete_sym_prop_ordinary(ant_t *js, ant_value_t obj, ant_value_t 
   ant_offset_t sym_off = (ant_offset_t)vdata(sym);
   int32_t shape_slot = ant_shape_lookup_symbol(ptr->shape, sym_off);
   if (shape_slot < 0) return Ant_Value_True;
-  if (ptr->flags.frozen || ptr->flags.sealed) return Ant_Value_False;
+  if (ant_object_is_sealed_or_frozen(ptr)) return Ant_Value_False;
 
   uint8_t attrs = ant_shape_get_attrs(ptr->shape, (uint32_t)shape_slot);
   if ((attrs & ANT_PROP_ATTR_CONFIGURABLE) == 0) return Ant_Value_False;

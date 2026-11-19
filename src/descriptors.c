@@ -122,7 +122,7 @@ descriptor_entry_t *lookup_descriptor(ant_t *js, ant_value_t obj, const char *ke
 
   ant_object_t *ptr = js_obj_ptr(obj);
   if (klen == 6 && memcmp(key, "length", 6) == 0 && ant_object_is_array(ptr)) {
-    if (ptr->flags.frozen) return &arr_length_readonly_desc;
+    if (ant_object_is_frozen(ptr)) return &arr_length_readonly_desc;
     descriptor_entry_t *own = ptr->flags.is_exotic ? registry_lookup_desc(js, obj, key, klen) : NULL;
     return own ? own : &arr_length_desc;
   }
@@ -1159,6 +1159,11 @@ static ant_value_t define_array_length(
     return t->obj;
   }
 
+  if (ant_array_is_shared(arr_ptr)) {
+    if (!make_readonly) return array_length_set_shared(js, as_obj, arr_ptr, new_len) ? t->obj : js_mkerr(js, "oom");
+    if (!Ant_Array_Unshare(js, arr_ptr)) return js_mkerr(js, "oom");
+  }
+  
   if (__builtin_expect(!array_length_has_guarded_elements(arr_ptr), 1)) {
     array_length_set_unguarded(js, as_obj, new_len);
     if (make_readonly && !js_array_make_length_readonly(js, as_obj)) return js_mkerr(js, "oom");
@@ -1231,16 +1236,16 @@ static ant_value_t define_validate_existing(
 ) {
   const ant_object_t *ptr = e->ptr;
   if (!e->found) {
-    if (ptr && (ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible))
+    if (ptr && !ptr->flags.extensible)
       return js_mkerr(js, "Cannot define property %.*s, object is not extensible", (int)t->len, t->str);
     return Ant_Value_Undefined;
   }
 
-  bool frozen = ptr && ptr->flags.frozen;
+  bool frozen = ptr && ant_object_is_frozen(ptr);
   bool nonconfig =
     (e->has_meta && !e->meta.configurable) ||
     (e->loc.obj && is_nonconfig_prop(e->loc)) ||
-    (ptr && ptr->flags.sealed) || frozen;
+    (ptr && ant_object_is_sealed(ptr)) || frozen;
   if (!nonconfig) return Ant_Value_Undefined;
   
   bool accessor = e->has_meta && (e->meta.has_getter || e->meta.has_setter);
@@ -1320,7 +1325,7 @@ static ant_value_t define_data(
     return is_err(added) ? added : define_done(js, t);
   }
 
-  bool frozen = e->ptr && e->ptr->flags.frozen;
+  bool frozen = e->ptr && ant_object_is_frozen(e->ptr);
   bool nonconfig = is_nonconfig_prop(e->loc) || frozen;
   bool readonly = is_const_prop(e->loc) || frozen;
 

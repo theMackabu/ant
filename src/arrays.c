@@ -195,12 +195,108 @@ ant_value_t dense_get(ant_offset_t doff, ant_offset_t idx) {
   return ptr->u.array.data[idx];
 }
 
-void dense_set(ant_t *js, ant_offset_t doff, ant_offset_t idx, ant_value_t val) {
+static constexpr uint32_t ARRAY_SHARED_TRUNCATION_MIN = 32;
+
+static uint32_t Array_SlackCapacity(uint32_t count) {
+  return gc_array_storage_fit(count + count / 2);
+}
+
+static ant_value_t Array_CreateShared(ant_t *js, gc_shared_elements_t *block) {
+  ant_object_t *obj = obj_alloc_with_proto(js, kTypeArray, js->sym.array_proto);
+  if (!obj) return js_mkerr(js, "oom");
+  
+  gc_shared_elements_retain(block);
+  obj->u.array.data = block->values;
+  obj->u.array.len = block->count;
+  obj->u.array.cap = block->count;
+  obj->flags.fast_array = 1;
+  obj->flags.dense_length_fits = 1;
+  obj->flags.may_have_holes = block->has_holes;
+  obj->flags.may_have_dense_elements = 1;
+  obj->flags.raw |= ANT_OBJECT_SHARED_ELEMENTS_MASK;
+  obj->finalizer = gc_shared_elements_finalize;
+  
+  return mkref(kTypeArray, obj);
+}
+
+ant_value_t Ant_Array_CreateFromElements(ant_t *js, const ant_value_t *values, uint32_t count, uint32_t capacity, bool has_holes) {
+  ant_value_t arr = alloc_array_with_proto_capacity(js, js->sym.array_proto, capacity, count, false);
+  if (is_err(arr)) return arr;
+  
+  ant_object_t *ptr = (ant_object_t *)vptr(arr);
+  if (!ptr->flags.fast_array || !ptr->u.array.data || ptr->u.array.cap < count) return js_mkerr(js, "oom");
+  
+  memcpy(ptr->u.array.data, values, (size_t)count * sizeof(ant_value_t));
+  ptr->u.array.len = count;
+  ptr->flags.may_have_holes = has_holes;
+  ptr->flags.may_have_dense_elements = count > 0;
+  
+  return arr;
+}
+
+ant_value_t Ant_Array_CreateFromBlock(ant_t *js, gc_shared_elements_t *block, bool copy) {
+  if (!copy && !block->copy_on_create) return Array_CreateShared(js, block);
+  uint32_t count = block->count;
+  return Ant_Array_CreateFromElements(js, block->values, count, block->outgrown ? Array_SlackCapacity(count) : count, block->has_holes);
+}
+
+__attribute__((noinline)) bool Ant_Array_TryUnshare(ant_t *js, ant_object_t *ptr) {
+  return ant_array_is_shared(ptr) && Ant_Array_UnshareSlow(js, ptr, 0);
+}
+
+bool Ant_Array_UnshareSlow(ant_t *js, ant_object_t *ptr, uint32_t min_cap) {
+  gc_shared_elements_t *block = gc_shared_elements_of(ptr->u.array.data);
+  uint32_t count = block->count < ptr->u.array.len ? block->count : ptr->u.array.len;
+  uint32_t cap = ptr->u.array.cap;
+  
+  if (min_cap > cap) cap = Array_SlackCapacity(min_cap);
+  if (min_cap > block->count) block->outgrown = true;
+  
+  ant_value_t *data = gc_array_storage_alloc(js, cap);
+  if (!data) return false;
+  
+  memcpy(data, block->values, (size_t)count * sizeof(*data));
+  for (uint32_t i = count; i < cap; i++) data[i] = T_EMPTY;
+  gc_array_grew(js);
+  
+  bool mostly_truncated = block->count >= ARRAY_SHARED_TRUNCATION_MIN && (uint64_t)ptr->u.array.len * 2 <= block->count;
+  if (!mostly_truncated) block->copy_on_create = true;
+  ptr->u.array.data = data;
+  ptr->u.array.cap = cap;
+  ptr->flags.frozen = 0;
+  ptr->flags.sealed = 0;
+  ptr->finalizer = NULL;
+  ptr->flags.dense_length_fits = ptr->u.array.len <= cap;
+  gc_shared_elements_release(js, block);
+  
+  return true;
+}
+
+void dense_set_owned(ant_t *js, ant_offset_t doff, ant_offset_t idx, ant_value_t val) {
   ant_object_t *ptr = dense_obj(doff);
   if (!ptr || idx >= ptr->u.array.cap) return;
   ptr->u.array.data[idx] = val;
   if (!is_empty_slot(val)) ptr->flags.may_have_dense_elements = 1;
   gc_write_barrier_elem(js, ptr, (uint32_t)idx, val);
+}
+
+static __attribute__((noinline, cold)) void dense_set_shared(ant_t *js, ant_offset_t doff, ant_offset_t idx, ant_value_t val) {
+  if (Ant_Array_UnshareSlow(js, dense_obj(doff), 0)) dense_set_owned(js, doff, idx, val);
+  else js_mkerr(js, "oom");
+}
+
+void dense_set(ant_t *js, ant_offset_t doff, ant_offset_t idx, ant_value_t val) {
+  ant_object_t *ptr = dense_obj(doff);
+  if (!ptr || idx >= ptr->u.array.cap) return;
+  if (__builtin_expect(ant_array_is_shared(ptr), 0)) return dense_set_shared(js, doff, idx, val);
+  ptr->u.array.data[idx] = val;
+  if (!is_empty_slot(val)) ptr->flags.may_have_dense_elements = 1;
+  gc_write_barrier_elem(js, ptr, (uint32_t)idx, val);
+}
+
+static __attribute__((noinline, cold)) ant_offset_t dense_grow_shared(ant_t *js, ant_value_t arr, ant_object_t *obj, ant_offset_t needed) {
+  if (!Ant_Array_UnshareSlow(js, obj, (uint32_t)needed)) return 0;
+  return obj->u.array.cap >= needed ? (ant_offset_t)(uintptr_t)obj : dense_grow(js, arr, needed);
 }
 
 ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) {
@@ -209,6 +305,8 @@ ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) {
   if (!obj) return 0;
   if (needed > UINT32_MAX) return 0;
 
+  if (__builtin_expect(ant_array_is_shared(obj), 0)) return dense_grow_shared(js, arr, obj, needed);
+  
   ant_offset_t old_cap = obj->u.array.cap;
   ant_offset_t new_cap = old_cap ? old_cap : MAX_DENSE_INITIAL_CAP;
 
@@ -293,7 +391,7 @@ shape_lookup:;
   return Ant_Value_Undefined;
 }
 
-void arr_set(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t val) {
+void arr_set_owned(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t val) {
   ant_offset_t cur_len = get_array_length(js, arr);
   ant_offset_t doff = get_dense_buf(arr);
   
@@ -301,7 +399,7 @@ void arr_set(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t val) {
     ant_offset_t len = dense_iterable_length(js, arr);
     
     if (idx < len) {
-      dense_set(js, doff, idx, val);
+      dense_set_owned(js, doff, idx, val);
       return;
     }
     
@@ -323,7 +421,7 @@ void arr_set(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t val) {
         if (vtype(data[i]) == kTypeUndefined) data[i] = T_EMPTY;
     }
     
-    dense_set(js, doff, idx, val);
+    dense_set_owned(js, doff, idx, val);
     if (idx >= cur_len) array_len_set(js, arr, idx + 1);
     
     return;
@@ -406,13 +504,13 @@ static __attribute__((noinline)) ant_value_t array_result_set_checked(ant_t *js,
     return is_err(defined) ? defined : Ant_Value_Undefined;
   }
   
-  arr_set(js, result, idx, val);
+  arr_set_owned(js, result, idx, val);
   return Ant_Value_Undefined;
 }
 
 ant_value_t array_result_set(ant_t *js, ant_value_t result, bool fresh, ant_offset_t idx, ant_value_t val) {
   if (__builtin_expect(!fresh, 0)) return array_result_set_checked(js, result, idx, val);
-  arr_set(js, result, idx, val);
+  arr_set_owned(js, result, idx, val);
   return Ant_Value_Undefined;
 }
 
@@ -420,7 +518,9 @@ ant_value_t alloc_array_with_proto_capacity(
   ant_t *js, ant_value_t proto, uint32_t minimum_capacity,
   uint32_t overwritten_prefix, bool exact_capacity
 ) {
-  ant_object_t *obj = obj_alloc_with_proto(js, kTypeArray, proto);
+  ant_object_t *obj;
+  [[clang::always_inline]]
+  obj = obj_alloc_with_proto(js, kTypeArray, proto);
   if (!obj) return js_mkerr(js, "oom");
   
   ant_value_t arr = mkref(kTypeArray, obj);
@@ -557,6 +657,11 @@ bool js_array_iteration_default(ant_t *js, ant_value_t arr) {
 }
 
 ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src) {
+  if (!Ant_Array_UnshareValue(js, dst)) return js_mkerr(js, "oom");
+  return js_arr_spread_into_owned(js, dst, src);
+}
+
+ant_value_t js_arr_spread_into_owned(ant_t *js, ant_value_t dst, ant_value_t src) {
   ant_offset_t len = 0;
   ant_value_t len_result = array_like_length_checked(js, src, &len);
   if (is_err(len_result)) return len_result;
@@ -576,7 +681,7 @@ ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src) {
     }
     
     if (doff && base + i < dense_capacity(doff) && base + i == get_array_length(js, dst)) {
-      dense_set(js, doff, base + i, value);
+      dense_set_owned(js, doff, base + i, value);
       array_len_set(js, dst, base + i + 1);
     } else js_arr_push(js, dst, value);
   }
@@ -743,7 +848,7 @@ ant_value_t validate_array_length(ant_t *js, ant_value_t v) {
 
 static inline bool object_refuses_new_props(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-  return ptr && (ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible);
+  return ptr && !ptr->flags.extensible;
 }
 
 static __attribute__((noinline, cold)) ant_value_t not_extensible_error(ant_t *js, const char *key, size_t len) {
@@ -796,9 +901,20 @@ void array_len_set(ant_t *js, ant_value_t obj, ant_offset_t new_len) {
 
 bool array_length_has_guarded_elements(ant_object_t *ptr) {
   return 
-    ptr->flags.sealed || 
-    ptr->flags.frozen || 
+    ant_object_is_sealed_or_frozen(ptr) || 
     !ptr->shape || ant_shape_may_have_index_keys(ptr->shape);
+}
+
+__attribute__((noinline, cold)) bool array_length_set_shared(ant_t *js, ant_value_t obj, ant_object_t *ptr, ant_offset_t new_len) {
+  if (new_len > (ant_offset_t)ptr->u.array.len) {
+    if (!Ant_Array_UnshareSlow(js, ptr, 0)) return false;
+    array_length_set_unguarded(js, obj, new_len);
+    return true;
+  }
+  
+  ptr->u.array.cap = (uint32_t)new_len;
+  array_len_set(js, obj, new_len);
+  return true;
 }
 
 void array_length_set_unguarded(ant_t *js, ant_value_t obj, ant_offset_t new_len) {
@@ -808,8 +924,7 @@ void array_length_set_unguarded(ant_t *js, ant_value_t obj, ant_offset_t new_len
   if (doff) {
     ant_offset_t cap = dense_capacity(doff);
     ant_offset_t clear_to = (cur_len < cap) ? cur_len : cap;
-    if (new_len < clear_to) 
-      for (ant_offset_t i = new_len; i < clear_to; i++) dense_set(js, doff, i, T_EMPTY);
+    for (ant_offset_t i = new_len; i < clear_to; i++) dense_set_owned(js, doff, i, T_EMPTY);
   }
   
   if (new_len > cur_len) array_mark_may_have_holes(obj);
@@ -1090,7 +1205,7 @@ ant_value_t array_truncate_length(ant_t *js, ant_value_t obj, ant_offset_t new_l
   }
   
   bool shrinking = new_len < cur_len && ptr && ptr->shape;
-  if (shrinking && doff && (ptr->flags.sealed || ptr->flags.frozen))
+  if (shrinking && doff && ant_object_is_sealed_or_frozen(ptr))
     final_len = dense_filled_end(doff, dense_end, new_len);
 
   if (shrinking && ant_shape_may_have_index_keys(ptr->shape)) {
@@ -1228,7 +1343,7 @@ void js_arr_push(ant_t *js, ant_value_t arr, ant_value_t val) {
       if (doff == 0) return;
     }
     if (is_empty_slot(val)) array_mark_may_have_holes(arr);
-    dense_set(js, doff, len, val);
+    dense_set_owned(js, doff, len, val);
     array_len_set(js, arr, len + 1);
     return;
   }

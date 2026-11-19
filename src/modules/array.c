@@ -52,8 +52,8 @@ static inline ant_value_t require_callback(ant_native_params_t, const char *name
 }
 
 static inline void array_copy_write(ant_t *js, ant_value_t result, ant_offset_t doff, ant_offset_t idx, ant_value_t value) {
-  if (doff) dense_set(js, doff, idx, value);
-  else arr_set(js, result, idx, value);
+  if (doff) dense_set_owned(js, doff, idx, value);
+  else arr_set_owned(js, result, idx, value);
 }
 
 static inline ant_value_t array_copy_element(
@@ -137,6 +137,11 @@ static ant_value_t arguments_set_length(ant_t *js, ant_value_t obj, ant_offset_t
   if (vtype(stored) != kTypeNumber || Ant_Value_AsNumberUnchecked(stored) != (double)len)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot assign to read only property 'length' of object");
   return Ant_Value_FromNumber((double)len);
+}
+
+static inline bool array_dense_writable(ant_t *js, ant_object_t *dense) {
+  if (!dense->flags.extensible) return false;
+  return (!dense->flags.sealed && !dense->flags.frozen) || Ant_Array_TryUnshare(js, dense);
 }
 
 static bool array_refuses_add(ant_value_t arr, int nargs) {
@@ -320,8 +325,11 @@ static ant_value_t builtin_array_push(ant_params_t) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Pushing %d elements on an array-like of length %.0f is disallowed by its maximum length", nargs, (double)len);
 
   ant_object_t *target = js_obj_ptr(js_as_obj(arr));
-  if (array_refuses_add(arr, nargs)) return array_add_refused_error(js, len);
-  if (target && (target->flags.frozen || array_length_readonly(js, arr)))
+  if (array_refuses_add(arr, nargs)) {
+    if (!Ant_Array_UnshareForAppend(js, arr, (uint32_t)nargs)) return js_mkerr(js, "oom");
+    if (array_refuses_add(arr, nargs)) return array_add_refused_error(js, len);
+  }
+  if (target && (ant_object_is_frozen(target) || array_length_readonly(js, arr)))
     return array_length_readonly_error(js);
   
   ant_offset_t doff = get_dense_buf(arr);
@@ -337,7 +345,7 @@ static ant_value_t builtin_array_push(ant_params_t) {
         if (doff == 0) return js_mkerr(js, "oom");
       }
       if (is_empty_slot(args[i])) array_mark_may_have_holes(arr);
-      dense_set(js, doff, len, args[i]);
+      dense_set_owned(js, doff, len, args[i]);
       len++;
     }
     array_len_set(js, arr, len);
@@ -514,6 +522,13 @@ static ant_value_t builtin_array_pop(ant_params_t) {
     return is_empty_slot(last) ? Ant_Value_Undefined : last;
   }
   
+  ant_object_t *shared = vtype(call_this) == kTypeArray ? (ant_object_t *)vptr(call_this) : NULL;
+  if (shared && ant_array_is_shared(shared) && shared->u.array.len > 0) {
+    ant_value_t last = shared->u.array.data[shared->u.array.len - 1];
+    if (!is_empty_slot(last) && array_length_set_shared(js, call_this, shared, shared->u.array.len - 1)) return last;
+  }
+  
+  if (!Ant_Array_UnshareValue(js, call_this)) return js_mkerr(js, "oom");
   ant_value_t arr = array_method_receiver(js, call_this, "pop");
   if (is_err(arr)) return arr;
   ant_offset_t string_len;
@@ -1246,7 +1261,7 @@ static ant_value_t builtin_array_reverse(ant_params_t) {
   if (array_string_wrapper_length(js, arr, &string_len) && string_len > 1) return array_string_wrapper_write_error(js, "0");
   
   ant_object_t *frozen = is_proxy(arr) ? NULL : js_obj_ptr(js_as_obj(arr));
-  if (frozen && frozen->flags.frozen) {
+  if (frozen && frozen->flags.frozen && !Ant_Array_TryUnshare(js, frozen)) {
     ant_offset_t frozen_len = 0;
     ant_value_t len_result = array_like_length_checked(js, arr, &frozen_len);
     
@@ -1302,8 +1317,8 @@ static ant_value_t builtin_array_reverse(ant_params_t) {
     for (ant_offset_t i = 0; i < len / 2; i++) {
       ant_value_t a = dense_get(doff, i);
       ant_value_t b = dense_get(doff, len - 1 - i);
-      dense_set(js, doff, i, b);
-      dense_set(js, doff, len - 1 - i, a);
+      dense_set_owned(js, doff, i, b);
+      dense_set_owned(js, doff, len - 1 - i, a);
     }
     
     return arr;
@@ -1580,6 +1595,7 @@ static ant_value_t builtin_array_concat(ant_params_t) {
       ant_object_t *src = array_dense_source(js, arg);
       if (src && (arg_len > src->u.array.len || arg_len > src->u.array.cap)) src = NULL;
       ant_offset_t rdoff = real_array_obj_ptr(result) && (intrinsic || array_result_extensible(result)) ? get_dense_buf(result) : 0;
+      if (rdoff && !Ant_Array_Unshare(js, dense_obj(rdoff))) return js_mkerr(js, "oom");
       if (rdoff && src && dense_capacity(rdoff) < result_idx + arg_len)
         rdoff = dense_grow(js, result, result_idx + arg_len);
       
@@ -1596,7 +1612,7 @@ static ant_value_t builtin_array_concat(ant_params_t) {
           if (is_err(elem)) return elem;
         }
         if (rdoff && result_idx < dense_capacity(rdoff) && result_idx <= get_array_length(js, result)) {
-          dense_set(js, rdoff, result_idx, elem);
+          dense_set_owned(js, rdoff, result_idx, elem);
           if (result_idx == get_array_length(js, result)) array_len_set(js, result, result_idx + 1);
         } else {
           ant_value_t set = array_result_set(js, result, intrinsic, result_idx, elem);
@@ -1663,12 +1679,9 @@ static ant_value_t builtin_array_fill(ant_params_t) {
   }
   
   ant_object_t *dense = real_array_obj_ptr(arr);
-  if (
-    !is_proxy(arr) && array_dense_covers(dense, end) &&
-    dense->flags.extensible && !dense->flags.sealed && !dense->flags.frozen
-  ) {
+  if (!is_proxy(arr) && array_dense_covers(dense, end) && array_dense_writable(js, dense)) {
     ant_offset_t doff = get_dense_buf(arr);
-    for (ant_offset_t i = start; i < end; i++) dense_set(js, doff, i, value);
+    for (ant_offset_t i = start; i < end; i++) dense_set_owned(js, doff, i, value);
     return arr;
   }
   
@@ -1906,6 +1919,7 @@ static ant_value_t builtin_array_shift(ant_params_t) {
     return is_empty_slot(first) ? Ant_Value_Undefined : first;
   }
   
+  if (!Ant_Array_UnshareValue(js, call_this)) return js_mkerr(js, "oom");
   ant_value_t arr = array_method_receiver(js, call_this, "shift");
   if (is_err(arr)) return arr;
   ant_offset_t string_len;
@@ -1954,7 +1968,7 @@ static ant_value_t builtin_array_shift(ant_params_t) {
     if (is_empty_slot(first)) first = Ant_Value_Undefined;
     memmove(&d[0], &d[1], sizeof(ant_value_t) * (size_t)(d_len - 1));
     gc_elements_moved(dense_obj(doff));
-    dense_set(js, doff, d_len - 1, T_EMPTY);
+    dense_set_owned(js, doff, d_len - 1, T_EMPTY);
     array_len_set(js, arr, len - 1);
     return first;
   }
@@ -1972,7 +1986,10 @@ static ant_value_t builtin_array_unshift(ant_params_t) {
   if (js_is_arguments(arr)) return arguments_unshift(js, arr, args, nargs);
 
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
-  if (array_refuses_add(arr, nargs)) return array_add_refused_error(js, len ? len - 1 + (ant_offset_t)nargs : 0);
+  if (array_refuses_add(arr, nargs)) {
+    if (!Ant_Array_UnshareForAppend(js, arr, (uint32_t)nargs)) return js_mkerr(js, "oom");
+    if (array_refuses_add(arr, nargs)) return array_add_refused_error(js, len ? len - 1 + (ant_offset_t)nargs : 0);
+  }
 
   if (is_proxy(arr)) {
     ant_value_t read_from = proxy_read_target(js, arr);
@@ -2017,7 +2034,7 @@ static ant_value_t builtin_array_unshift(ant_params_t) {
     memmove(&d[nargs], &d[0], sizeof(ant_value_t) * (size_t)d_len);
     gc_elements_moved(dense_obj(doff));
     for (int i = 0; i < nargs; i++)
-      dense_set(js, doff, (ant_offset_t)i, args[i]);
+      dense_set_owned(js, doff, (ant_offset_t)i, args[i]);
     array_len_set(js, arr, new_len);
     return Ant_Value_FromNumber((double) new_len);
   }
@@ -2138,7 +2155,7 @@ static ant_value_t builtin_array_sort(ant_params_t) {
   if (len == 0) goto done;
   
   ant_object_t *target = is_proxy(arr) ? NULL : js_obj_ptr(js_as_obj(arr));
-  if (target && target->flags.frozen && len > 1) { 
+  if (target && target->flags.frozen && !Ant_Array_TryUnshare(js, target) && len > 1) { 
     result = Ant_Error_CreateReadOnlyProperty(js, arr, Ant_Value_FromNumber(0)); 
     goto done; 
   }
@@ -2265,7 +2282,7 @@ writeback:;
   if (array_sort_writes_dense(arr, len)) {
     ant_offset_t doff = get_dense_buf(arr);
     for (ant_offset_t i = 0; i < len; i++)
-      dense_set(js, doff, i, i < count ? vals[i] : i < filled ? Ant_Value_Undefined : T_EMPTY);
+      dense_set_owned(js, doff, i, i < count ? vals[i] : i < filled ? Ant_Value_Undefined : T_EMPTY);
     if (filled < len) array_mark_may_have_holes(arr);
   } else for (ant_offset_t i = 0; i < len; i++) {
     ant_value_t step;
@@ -2335,7 +2352,7 @@ static ant_value_t builtin_array_splice(ant_params_t) {
     ant_offset_t d_len = dense_iterable_length(js, arr);
     const uint16_t mutable_mask =
       ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXOTIC;
-    if (d_len != len || (dense_obj(doff)->flags.raw & mutable_mask) != ANT_OBJECT_FLAG_EXTENSIBLE) goto splice_slow;
+    if (d_len != len || ((dense_obj(doff)->flags.raw & mutable_mask) != ANT_OBJECT_FLAG_EXTENSIBLE && !Ant_Array_TryUnshare(js, dense_obj(doff)))) goto splice_slow;
     bool skipped = false;
     for (int i = 0; i < deleteCount; i++) {
       if (!arr_has(js, arr, (ant_offset_t)(start + i))) { skipped = true; continue; }
@@ -2369,11 +2386,11 @@ static ant_value_t builtin_array_splice(ant_params_t) {
     }
 
     for (int i = 0; i < insertCount; i++)
-      dense_set(js, doff, (ant_offset_t)(start + i), args[2 + i]);
+      dense_set_owned(js, doff, (ant_offset_t)(start + i), args[2 + i]);
 
     if (shift < 0) {
       for (ant_offset_t i = new_len; i < d_len; i++)
-        dense_set(js, doff, i, T_EMPTY);
+        dense_set_owned(js, doff, i, T_EMPTY);
     }
 
     array_len_set(js, arr, new_len);
@@ -2475,23 +2492,29 @@ static ant_value_t builtin_array_copyWithin(ant_params_t) {
   
   ant_offset_t string_len;
   if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "0");
-  ant_object_t *frozen = is_proxy(arr) ? NULL : js_obj_ptr(js_as_obj(arr));
-  if (frozen && frozen->flags.frozen)
+  ant_object_t *frozen = vtype(arr) == kTypeArray ? (ant_object_t *)vptr(arr)
+    : is_proxy(arr) ? NULL : js_obj_ptr(js_as_obj(arr));
+  if (frozen && frozen->flags.frozen && !Ant_Array_TryUnshare(js, frozen))
     return Ant_Error_CreateReadOnlyProperty(js, arr, Ant_Value_FromNumber((double)target));
 
   ant_offset_t doff = get_dense_buf(arr);
-  if (doff && !is_proxy(arr)) {
+  ant_object_t *dense = doff ? frozen : NULL;
+  if (dense && array_dense_covers(dense, len) && (!dense->flags.may_have_holes || array_elements_proto_plain(js, dense))) {
+    bool holes = false;
     if (start < target) {
       for (int i = count - 1; i >= 0; i--) {
         ant_value_t v = dense_get(doff, (ant_offset_t)(start + i));
-        dense_set(js, doff, (ant_offset_t)(target + i), is_empty_slot(v) ? Ant_Value_Undefined : v);
+        holes |= is_empty_slot(v);
+        dense_set_owned(js, doff, (ant_offset_t)(target + i), v);
       }
     } else {
       for (int i = 0; i < count; i++) {
         ant_value_t v = dense_get(doff, (ant_offset_t)(start + i));
-        dense_set(js, doff, (ant_offset_t)(target + i), is_empty_slot(v) ? Ant_Value_Undefined : v);
+        holes |= is_empty_slot(v);
+        dense_set_owned(js, doff, (ant_offset_t)(target + i), v);
       }
     }
+    if (holes) array_mark_may_have_holes(arr);
     return arr;
   }
 
@@ -3078,7 +3101,7 @@ static ant_value_t array_from_string(ant_t *js, ant_value_t src, array_from_iter
 static ant_value_t array_from_array(ant_t *js, ant_value_t src, array_from_iter_ctx_t *ctx) {
   bool bulk = ctx->fresh ? real_array_obj_ptr(ctx->result) != NULL : array_result_plain(ctx->result);
   if (!is_callable(ctx->mapFn) && bulk && get_array_length(js, ctx->result) == 0) {
-    ant_value_t copied = js_arr_spread_into(js, ctx->result, src);
+    ant_value_t copied = js_arr_spread_into_owned(js, ctx->result, src);
     if (is_err(copied)) return copied;
     ctx->index = get_array_length(js, ctx->result);
     return Ant_Value_Undefined;
