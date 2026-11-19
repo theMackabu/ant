@@ -3468,7 +3468,7 @@ static bool opt_try_inline(opt_builder_t *b, sv_op_t op, uint32_t argc, uint32_t
     .closure = closure,
     .receiver = receiver,
     .argc = argc,
-    .args = opt_arena_dup(&b->graph->arena, args, (argc + 1) * sizeof *args),
+    .args = opt_arena_dup(&b->graph->arena, args, argc * sizeof *args),
     .construct = construct,
     .depth = (b->inline_call ? b->inline_call->depth : 0) + 1,
     .continuation = IR_NONE,
