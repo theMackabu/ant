@@ -211,6 +211,7 @@ export function targets() {
     'test_in_operator_ic.cjs',
     'test_inspect_array_holes.cjs',
     'test_instanceof_primitives.cjs',
+    'test_function_callable_proxy.cjs',
     'test_instanceof_proxy_chain.cjs',
     'test_intern_per_isolate.mjs',
     'test_intern_table_bounded.cjs',
