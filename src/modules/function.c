@@ -187,9 +187,7 @@ static ant_value_t builtin_function_empty(ant_params_t) {
 }
 
 ant_value_t builtin_function_call(ant_params_t) {
-  if (vtype(call_this) != kTypeFunction && vtype(call_this) != kTypeBuiltin) {
-    return js_mkerr(js, "call requires a function");
-  }
+  if (!is_callable(call_this)) return js_mkerr(js, "call requires a function");
   
   ant_value_t this_arg = (nargs > 0) ? args[0] : Ant_Value_Undefined;
   ant_value_t *call_args = NULL;
@@ -203,9 +201,11 @@ ant_value_t builtin_function_call(ant_params_t) {
 static ant_value_t builtin_function_toString(ant_params_t) {
   uint8_t t = vtype(call_this);
   
-  if (t != kTypeFunction && t != kTypeBuiltin) {
+  if (t == kTypeObject && is_callable(call_this)) 
+    return Ant_String_FromLiteral(js, "function () { [native code] }");
+
+  if (t != kTypeFunction && t != kTypeBuiltin)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Function.prototype.toString requires that 'this' be a Function");
-  }
   
   // TODO: make dry
   if (t == kTypeBuiltin) {
@@ -317,7 +317,7 @@ ant_value_t Ant_Function_ToString(ant_t *js, ant_value_t fn) {
 }
 
 ant_value_t builtin_function_apply(ant_params_t) {
-  if (vtype(call_this) != kTypeFunction && vtype(call_this) != kTypeBuiltin)
+  if (!is_callable(call_this))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Function.prototype.apply requires that 'this' be a Function");
   
   ant_value_t this_arg = (nargs > 0) ? args[0] : Ant_Value_Undefined;
@@ -470,7 +470,10 @@ static ant_value_t builtin_function_bind(ant_params_t) {
   
   int orig_length = 0;
   
+  ant_value_t proxy_proto = Ant_Value_Undefined;
   if (func_is_proxy) {
+    proxy_proto = proxy_get_prototype_of(js, call_this);
+    if (is_err(proxy_proto)) return proxy_proto;
     ant_value_t has_length = proxy_has_own(js, call_this, js->length_str);
     if (is_err(has_length)) return has_length;
     ant_value_t len_val = proxy_get(js, call_this, "length", 6);
@@ -517,7 +520,8 @@ static ant_value_t builtin_function_bind(ant_params_t) {
     js_set_slot(bound_func, SLOT_TARGET_FUNC, call_this);
 
     ant_value_t func_proto = js_get_slot(js_glob(js), SLOT_FUNC_PROTO);
-    if (vtype(func_proto) == kTypeFunction) js_set_proto_init(bound_func, func_proto);
+    if (is_object_type(proxy_proto)) js_set_proto_init(bound_func, proxy_proto);
+    else if (vtype(func_proto) == kTypeFunction) js_set_proto_init(bound_func, func_proto);
 
     uint8_t bind_flags = SV_CALL_HAS_BOUND_THIS;
     if (bound_argc > 0) bind_flags |= SV_CALL_HAS_BOUND_ARGS;

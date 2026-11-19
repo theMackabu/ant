@@ -1452,7 +1452,7 @@ static bool esm_lookup_package_type(ant_t *js, const char *resolved_path, esm_pa
 }
 
 ant_module_format_t esm_decide_module_format(ant_t *js, const char *resolved_path) {
-  if (!resolved_path || !resolved_path[0]) return MODULE_EVAL_FORMAT_ESM;
+  if (!resolved_path || !resolved_path[0] || esm_is_data_url(resolved_path)) return MODULE_EVAL_FORMAT_ESM;
   if (esm_is_cjs_extension(resolved_path)) return MODULE_EVAL_FORMAT_CJS;
   if (esm_is_esm_extension(resolved_path)) return MODULE_EVAL_FORMAT_ESM;
 
@@ -1495,7 +1495,7 @@ static ant_value_t esm_eval_ambiguous_js_source(
     
     sv_func_t *func = js_compile_parsed_bytecode(
       js, program, js_code, 
-      js_len, SV_COMPILE_MODULE, Ant_Value_Undefined
+      js_len, SV_COMPILE_MODULE, 0
     ); 
     
     parse_arena_rewind(js, parse_mark);
@@ -1813,7 +1813,7 @@ static ant_value_t esm_eval_parsed_record(
 ) {
   sv_func_t *func = js_compile_parsed_bytecode(
     js, record->program, source,
-    source_len, SV_COMPILE_MODULE, Ant_Value_Undefined
+    source_len, SV_COMPILE_MODULE, 0
   );
   
   esm_module_record_cleanup(js, record);

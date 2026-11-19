@@ -688,11 +688,16 @@ typedef enum {
 static json_write_t json_write_with_key(json_cycle_ctx *ctx, json_out_t *out, const char *key, size_t key_len, ant_value_t val, int in_array, int depth);
 static ant_value_t apply_reviver(ant_t *js, ant_value_t holder, const char *key, size_t key_len, ant_value_t reviver, gc_temp_root_scope_t *roots);
 
-static ant_prop_loc_t json_tojson_find_proto(ant_t *js, json_cycle_ctx *ctx, ant_value_t proto, bool *cacheable) {
+static ant_prop_loc_t json_tojson_find_proto(ant_t *js, json_cycle_ctx *ctx, ant_value_t proto, bool *cacheable, bool *generic) {
   ant_value_t cur = proto;
   
   for (int depth = 0; is_object_type(cur); depth++) {
-    ant_object_t *obj = depth < MAX_PROTO_CHAIN_DEPTH && !is_proxy(cur) ? js_obj_ptr(js_as_obj(cur)) : NULL;
+    if (is_proxy(cur)) {
+      *cacheable = false;
+      *generic = true;
+      return ANT_PROP_LOC_NONE;
+    }
+    ant_object_t *obj = depth < MAX_PROTO_CHAIN_DEPTH ? js_obj_ptr(js_as_obj(cur)) : NULL;
     if (!obj || obj->flags.is_exotic) {
       *cacheable = false;
       return lkp_proto(js, proto, "toJSON", 6);
@@ -708,7 +713,7 @@ static ant_prop_loc_t json_tojson_find_proto(ant_t *js, json_cycle_ctx *ctx, ant
   return ANT_PROP_LOC_NONE;
 }
 
-static ant_prop_loc_t json_tojson_lookup_proto(ant_t *js, json_cycle_ctx *ctx, ant_value_t proto) {
+static ant_prop_loc_t json_tojson_lookup_proto(ant_t *js, json_cycle_ctx *ctx, ant_value_t proto, bool *generic) {
   if (ctx->tojson_epoch != js->ic.epoch) {
     ctx->tojson_epoch = js->ic.epoch;
     ctx->tojson_count = 0;
@@ -718,7 +723,7 @@ static ant_prop_loc_t json_tojson_lookup_proto(ant_t *js, json_cycle_ctx *ctx, a
     if (ctx->tojson_cache[i].proto == proto) return ctx->tojson_cache[i].loc;
 
   bool cacheable = true;
-  ant_prop_loc_t loc = json_tojson_find_proto(js, ctx, proto, &cacheable);
+  ant_prop_loc_t loc = json_tojson_find_proto(js, ctx, proto, &cacheable, generic);
   if (!cacheable) return loc;
 
   uint8_t slot = ctx->tojson_count < 4 ? ctx->tojson_count++ : (ctx->tojson_next++ & 3);
@@ -741,7 +746,7 @@ static ant_value_t json_apply_tojson(ant_t *js, const char *key, size_t key_len,
 
     if (!found.obj) {
       ant_value_t proto = js_get_proto(js, val);
-      if (is_object_type(proto)) found = json_tojson_lookup_proto(js, ctx, proto);
+      if (is_object_type(proto)) found = json_tojson_lookup_proto(js, ctx, proto, &needs_generic);
     }
 
     if (found.obj) {
@@ -1285,6 +1290,21 @@ static json_write_t json_write_object(
   return json_write_object_keys(ctx, out, val, depth, keys);
 }
 
+static constexpr uint32_t JSON_RAW_NATIVE_TAG = Ant_NativeTag("RAWJ");
+
+static inline bool json_is_raw(ant_value_t value) {
+  return vtype(value) == kTypeObject && ((const ant_object_t *)vptr(value))->native_tag == JSON_RAW_NATIVE_TAG;
+}
+
+static __attribute__((noinline)) json_write_t json_write_raw(json_cycle_ctx *ctx, json_out_t *out, ant_value_t val) {
+  ant_value_t text = js_get(ctx->js, val, "rawJSON");
+  if (vtype(text) != kTypeString) return json_out_write(out, "null", 4) ? JSON_W_OK : JSON_W_ABORT;
+
+  size_t len = 0;
+  const char *bytes = js_getstr(ctx->js, text, &len);
+  return json_out_write(out, bytes, len) ? JSON_W_OK : JSON_W_ABORT;
+}
+
 static json_write_t json_write_impl(
   json_cycle_ctx *ctx, json_out_t *out, const char *key,
   ant_value_t val, int in_array, int depth
@@ -1315,7 +1335,8 @@ static json_write_t json_write_impl(
     default: return json_out_write(out, "null", 4) ? JSON_W_OK : JSON_W_ABORT;
   }
 
-  if (vtype(val) == kTypeObject) {
+  ant_object_t *plain = vtype(val) == kTypeObject ? js_obj_ptr(val) : NULL;
+  if (plain && (plain->extra_slots || plain->flags.is_exotic)) {
     ant_value_t prim = js_get_slot(val, SLOT_PRIMITIVE);
     switch (vtype(prim)) {
       case kTypeNumber:  return json_out_number(out, Ant_Value_AsNumberUnchecked(prim)) ? JSON_W_OK : JSON_W_ABORT;
@@ -1326,8 +1347,14 @@ static json_write_t json_write_impl(
         json_capture_error(ctx, js_mkerr_typed(ctx->js, JS_ERR_TYPE, "Do not know how to serialize a BigInt"));
         return JSON_W_ABORT;
 
+      case kTypeNull:
+        if (json_is_raw(val)) return json_write_raw(ctx, out, val);
+        break;
+
       default: break;
     }
+    if (plain->flags.is_exotic && is_proxy(val) && is_callable(val))
+      return in_array ? (json_out_write(out, "null", 4) ? JSON_W_OK : JSON_W_ABORT) : JSON_W_SKIP;
   }
 
   if (depth >= 2000) {
@@ -1508,6 +1535,54 @@ ant_value_t js_json_parse(ant_params_t) {
   
   gc_temp_root_scope_end(&temp_roots);
   return result;
+}
+
+static bool json_raw_text_valid(const char *text, size_t len) {
+  if (len == 0) return false;
+
+  static const char edges[] = { 0x09, 0x0A, 0x0D, 0x20 };
+  for (size_t i = 0; i < sizeof(edges); i++)
+    if (text[0] == edges[i] || text[len - 1] == edges[i]) return false;
+
+  yyjson_doc *doc = json_read_doc(text, len, NULL);
+  if (!doc) return false;
+
+  yyjson_val *root = yyjson_doc_get_root(doc);
+  bool primitive = root && !yyjson_is_obj(root) && !yyjson_is_arr(root);
+  yyjson_doc_free(doc);
+
+  return primitive;
+}
+
+static ant_value_t js_json_raw_json(ant_params_t) {
+  ant_value_t text = nargs > 0 ? args[0] : Ant_Value_Undefined;
+  if (vtype(text) == kTypeSymbol)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a string");
+
+  text = coerce_to_str(js, text);
+  if (is_err(text)) return text;
+
+  size_t len = 0;
+  const char *bytes = js_getstr(js, text, &len);
+  if (!json_raw_text_valid(bytes, len))
+    return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid value for JSON.rawJSON");
+
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, text);
+  ant_value_t raw = Ant_Object_CreateBare(js);
+  GC_ROOT_PIN(js, raw);
+
+  js_set(js, raw, "rawJSON", text);
+  js_set_native(raw, NULL, JSON_RAW_NATIVE_TAG);
+  js_set_slot(raw, SLOT_PRIMITIVE, Ant_Value_Null);
+  ant_value_t frozen = builtin_object_freeze(js, &raw, 1, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
+
+  GC_ROOT_RESTORE(js, mark);
+  return is_err(frozen) ? frozen : raw;
+}
+
+static ant_value_t js_json_is_raw_json(ant_params_t) {
+  return Ant_Value_FromBool(nargs > 0 && json_is_raw(args[0]));
 }
 
 ant_value_t json_parse_value(ant_t *js, ant_value_t value) {
@@ -1751,6 +1826,8 @@ void init_json_module(ant_t *js) {
   
   defmethod(js, json_obj, "parse", 5, Ant_Function_CreateWithArity(js_json_parse, 2));
   defmethod(js, json_obj, "stringify", 9, Ant_Function_CreateWithArity(js_json_stringify, 3));
+  defmethod(js, json_obj, "rawJSON", 7, Ant_Function_CreateWithArity(js_json_raw_json, 1));
+  defmethod(js, json_obj, "isRawJSON", 9, Ant_Function_CreateWithArity(js_json_is_raw_json, 1));
   
   js_set_tostringtag(js, json_obj, js_mkstr(js, "JSON", 4));
   js_set_global_builtin(js, "JSON", json_obj);

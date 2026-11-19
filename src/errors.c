@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+#include "modules/proxy.h"
 #include "errors.h"
 #include "utf8.h"
 #include "cfunc.h"
@@ -580,6 +581,14 @@ static ant_value_t builtin_error_captureStackTrace(ant_params_t) {
   ant_value_t target = args[0];
   ant_value_t above = nargs > 1 ? args[1] : Ant_Value_Undefined;
   
+  if (is_proxy(js_as_obj(target))) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid argument");
+  ant_object_t *target_ptr = js_obj_ptr(js_as_obj(target));
+  prop_meta_t meta;
+  if (target_ptr && !target_ptr->flags.extensible)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot define property stack, object is not extensible");
+  if (target_ptr && lookup_string_prop_meta(js, js_as_obj(target), "stack", 5, &meta) && !meta.configurable)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot redefine property: stack");
+  
   if (vtype(above) == kTypeBuiltin && js_as_cfunc(above) == builtin_error_captureStackTrace) above = Ant_Value_Undefined;
   ant_value_t error_ctor = lkp_val(js, js_glob(js), "Error", 5);
   ant_value_t prep = Ant_Value_Undefined;
@@ -607,6 +616,13 @@ static ant_value_t builtin_error_isError(ant_params_t) {
   return js_get_slot(val, SLOT_ERROR_BRAND) == Ant_Value_True ? Ant_Value_True : Ant_Value_False;
 }
 
+static __attribute__((noinline, cold)) bool error_options_proxy_has_cause(ant_t *js, ant_value_t options, ant_value_t *error) {
+  if (!is_proxy(js_as_obj(options))) return false;
+  ant_value_t has = proxy_has(js, js_as_obj(options), "cause", 5);
+  if (is_err(has)) *error = has;
+  return is_err(has) || js_truthy(js, has);
+}
+
 static ant_value_t error_install_message_cause(ant_t *js, ant_value_t err, ant_value_t message, ant_value_t options) {
   if (vtype(message) != kTypeUndefined) {
     ant_value_t msg = js_template_to_string(js, message);
@@ -614,8 +630,11 @@ static ant_value_t error_install_message_cause(ant_t *js, ant_value_t err, ant_v
     mkprop_interned(js, err, js->intern.message, msg, ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE);
   }
   
-  if (is_object_type(options) && lkp_proto(js, options, "cause", 5).obj) {
-    ant_value_t cause = js_get(js, options, "cause");
+  bool proxied = false;
+  ant_value_t trapped = Ant_Value_Undefined;
+  if (is_object_type(options) && (lkp_proto(js, options, "cause", 5).obj || (proxied = error_options_proxy_has_cause(js, options, &trapped)))) {
+    if (is_err(trapped)) return trapped;
+    ant_value_t cause = proxied ? proxy_get(js, js_as_obj(options), "cause", 5) : js_get(js, options, "cause");
     if (is_err(cause)) return cause;
     mkprop_bytes(js, err, "cause", 5, cause, JS_DESC_W | JS_DESC_C);
   }

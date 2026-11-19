@@ -88,7 +88,7 @@ OP_DEF(  LOAD_STABLE_BUILTIN, 2, 0,   2, u8)        /* push protected receiver +
 
 OP_DEF(  GET_EVAL_GLOBAL,       7,   0,   1, atom)  /* resolve through direct-eval environment */
 OP_DEF(  GET_EVAL_GLOBAL_UNDEF, 7,   0,   1, atom)  /* eval lookup, undefined if missing */
-OP_DEF(  PUT_EVAL_GLOBAL,       5,   1,   0, atom)  /* assign through direct-eval environment */
+OP_DEF(  PUT_EVAL_GLOBAL,       7,   1,   0, atom)  /* assign through direct-eval environment */
 
 OP_DEF(  GET_FIELD,         7,   1,   1, atom)      /* obj -> val (atom + ic_idx:u16) */
 OP_DEF(  GET_FIELD2,        7,   1,   2, atom)      /* obj -> obj val (atom + ic_idx:u16) */
@@ -559,6 +559,7 @@ OP_IC_SLOT(GET_GLOBAL)
 OP_IC_SLOT(GET_GLOBAL_UNDEF)
 OP_IC_SLOT(GET_EVAL_GLOBAL)
 OP_IC_SLOT(GET_EVAL_GLOBAL_UNDEF)
+OP_IC_SLOT(PUT_EVAL_GLOBAL)
 OP_IC_SLOT(GET_FIELD)
 OP_IC_SLOT(GET_FIELD2)
 OP_IC_SLOT(GET_FIELD_OPT)

@@ -1495,6 +1495,12 @@ static ant_value_t builtin_array_flat(ant_params_t) {
   return result;
 }
 
+static __attribute__((noinline, cold)) bool proxy_wraps_array(ant_t *js, ant_value_t proxy) {
+  ant_value_t target = proxy_read_target(js, proxy);
+  while (vtype(target) == kTypeObject && is_proxy(target)) target = proxy_read_target(js, target);
+  return real_array_obj_ptr(target) != NULL;
+}
+
 static ant_value_t builtin_array_concat(ant_params_t) {
   ant_value_t arr = array_method_receiver(js, call_this, "concat");
   if (is_err(arr)) return arr;
@@ -1512,10 +1518,7 @@ static ant_value_t builtin_array_concat(ant_params_t) {
     if (plain_array && ant_object_proto(plain_array) == js->sym.array_proto && ant_protector_intact(js, ANT_PROTECTOR_CONCAT_SPREADABLE)) spreadable = true;
     else if (vtype(arg) == kTypeArray || vtype(arg) == kTypeObject) {
       bool array_default_spreadable = real_array_obj_ptr(arg) != NULL;
-      if (!array_default_spreadable && is_proxy(arg)) {
-        ant_value_t target = proxy_read_target(js, arg);
-        array_default_spreadable = real_array_obj_ptr(target) != NULL;
-      }
+      if (!array_default_spreadable && is_proxy(arg)) array_default_spreadable = proxy_wraps_array(js, arg);
       
       ant_value_t spread_val = js_get_sym(js, arg, js->sym.isConcatSpreadable_sym);
       if (is_err(spread_val)) return spread_val;

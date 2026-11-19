@@ -657,7 +657,7 @@ static inline ant_value_t for_in_keys_collect_chain(
   ant_value_t cur = obj;
   GC_ROOT_PIN(js, cur);
 
-  for (int depth = 0; is_object_type(cur) && depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
+  while (is_object_type(cur)) {
     GC_ROOT_SAVE(iter_mark, js);
     ant_value_t as_cur = (vtype(cur) == kTypeFunction) ? js_func_obj(cur) : cur;
     
