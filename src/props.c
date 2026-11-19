@@ -1205,15 +1205,16 @@ bool js_is_own_enumerable_prop(
   return (ant_shape_get_attrs(source_ptr->shape, key->slot) & ANT_PROP_ATTR_ENUMERABLE) != 0;
 }
 
-static __attribute__((noinline)) ant_value_t missing_property_is_enumerable(
-  ant_t *js, ant_value_t obj, property_key_view_t *key
-) {
+__attribute__((noinline)) 
+static ant_value_t missing_property_is_enumerable(ant_t *js, ant_value_t obj, property_key_view_t *key) {
   if (!is_proxy(obj)) return mkval(kTypeBool, 0);
   ant_value_t name = key->js_key;
+
   if (!key->is_symbol && vtype(name) != kTypeString) {
     name = js_mkstr(js, key->bytes, (ant_offset_t)key->length);
     if (is_err(name)) return name;
   }
+  
   return proxy_key_enumerable(js, obj, name);
 }
 
