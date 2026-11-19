@@ -397,6 +397,7 @@ export function targets() {
     'test_property_location_stress.cjs',
     'test_prototype_write_epoch.cjs',
     'test_proxy_set_trap_result.cjs',
+    'test_proxy_trapless_has.cjs',
     'test_put_elem_index_keys.cjs',
     'test_put_field_proto_setter_ic.cjs',
     'test_property_is_enumerable_proxy.cjs',
