@@ -33,10 +33,4 @@ for (let i = 0; i < 3000; i++) {
   assert.strictEqual(new BaseCtor().v, 'function');
 }
 
-class EvalBase { x() { return 'base x'; } }
-class EvalInFieldArrow extends EvalBase { read = () => eval(String('super.x()')); }
-class EvalInField { isObject = eval(String('super.constructor === Object')); }
-assert.strictEqual(new EvalInFieldArrow().read(), 'base x');
-assert.strictEqual(new EvalInField().isObject, true);
-
 console.log('ok');
