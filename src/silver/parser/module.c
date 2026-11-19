@@ -3,9 +3,17 @@
 #include "parser_internal.h"
 
 static sv_ast_t *skip_import_stmt(sv_parser_t *p) {
-  while (sv_lexer_next(&p->lx) != TOK_SEMICOLON && p->lx.st.tok != TOK_EOF) p->lx.st.consumed = 1;
-  if (p->lx.st.tok == TOK_SEMICOLON) p->lx.st.consumed = 1;
+  sv_parse_unexpected_token(p);
   return mk(N_EMPTY);
+}
+
+static bool import_binding_here(sv_parser_t *p) {
+  uint8_t tok = p->lx.st.tok;
+  if (tok == TOK_UNDEF || tok == TOK_WINDOW || tok == TOK_GLOBAL_THIS || is_contextual_ident_tok(tok)) return true;
+  if (tok != TOK_IDENTIFIER) return false;
+  uint32_t len = 0;
+  const char *name = tok_ident_str(p, &len);
+  return !is_eval_or_arguments_name(name, len) && !is_strict_reserved_name(name, len);
 }
 
 static void parse_import_attributes(sv_parser_t *p, sv_ast_t *decl) {
@@ -98,7 +106,9 @@ sv_ast_t *parse_import_stmt(sv_parser_t *p) {
 
   bool saw_clause = false;
 
-  if (is_ident_like_tok(sv_lexer_next(&p->lx))) {
+  sv_lexer_next(&p->lx);
+  if (p->lx.st.tok != TOK_MUL && p->lx.st.tok != TOK_LBRACE) {
+    if (!import_binding_here(p)) return skip_import_stmt(p);
     saw_clause = true;
     uint32_t local_len = 0;
     const char *local_name = tok_ident_str(p, &local_len);
@@ -118,7 +128,7 @@ sv_ast_t *parse_import_stmt(sv_parser_t *p) {
     p->lx.st.consumed = 1;
     expect(p, TOK_AS);
     sv_lexer_next(&p->lx);
-    if (!is_ident_like_tok(p->lx.st.tok)) return skip_import_stmt(p);
+    if (!import_binding_here(p)) return skip_import_stmt(p);
     uint32_t ns_len = 0;
     const char *ns_name = tok_ident_str(p, &ns_len);
     import_decl_add_binding(
@@ -134,6 +144,7 @@ sv_ast_t *parse_import_stmt(sv_parser_t *p) {
     while (sv_lexer_next(&p->lx) != TOK_RBRACE && p->lx.st.tok != TOK_EOF) {
       const char *import_name;
       uint32_t import_len;
+      bool name_binds = false;
 
       if (p->lx.st.tok == TOK_STRING) {
         sv_lex_string_t s = sv_lexer_str_literal(&p->lx);
@@ -141,9 +152,9 @@ sv_ast_t *parse_import_stmt(sv_parser_t *p) {
         import_len = s.len;
         p->lx.st.consumed = 1;
       } else if (!(p->lx.st.tok >= TOK_IDENTIFIER && p->lx.st.tok < TOK_IDENT_LIKE_END)) {
-        p->lx.st.consumed = 1;
-        continue;
+        return skip_import_stmt(p);
       } else {
+        name_binds = import_binding_here(p);
         import_name = tok_ident_str(p, &import_len);
         p->lx.st.consumed = 1;
       }
@@ -154,10 +165,10 @@ sv_ast_t *parse_import_stmt(sv_parser_t *p) {
       if (sv_lexer_next(&p->lx) == TOK_AS) {
         p->lx.st.consumed = 1;
         sv_lexer_next(&p->lx);
-        if (!is_ident_like_tok(p->lx.st.tok)) return skip_import_stmt(p);
+        if (!import_binding_here(p)) return skip_import_stmt(p);
         local_name = tok_ident_str(p, &local_len);
         p->lx.st.consumed = 1;
-      }
+      } else if (!name_binds) return skip_import_stmt(p);
 
       import_decl_add_binding(p, decl, import_name, import_len, local_name, local_len, 0);
 
@@ -217,7 +228,7 @@ sv_ast_t *parse_export_stmt(sv_parser_t *p) {
       uint32_t async_off = (uint32_t)p->lx.st.toff;
       p->lx.st.consumed = 1;
       sv_lexer_next(&p->lx); p->lx.st.consumed = 1;
-      decl->left = parse_func(p, true);
+      decl->left = parse_func_decl(p, true);
       decl->left->flags |= FN_ASYNC;
       decl->left->src_off = async_off;
       if (sv_lexer_next(&p->lx) == TOK_SEMICOLON) p->lx.st.consumed = 1;
@@ -225,7 +236,7 @@ sv_ast_t *parse_export_stmt(sv_parser_t *p) {
     }
     if (p->lx.st.tok == TOK_FUNC) {
       p->lx.st.consumed = 1;
-      decl->left = parse_func(p, false);
+      decl->left = parse_func_decl(p, false);
       if (sv_lexer_next(&p->lx) == TOK_SEMICOLON) p->lx.st.consumed = 1;
       return decl;
     }
@@ -249,7 +260,7 @@ sv_ast_t *parse_export_stmt(sv_parser_t *p) {
     uint32_t async_off = (uint32_t)p->lx.st.toff;
     p->lx.st.consumed = 1;
     sv_lexer_next(&p->lx); p->lx.st.consumed = 1;
-    decl->left = parse_func(p, true);
+    decl->left = parse_func_decl(p, true);
     decl->left->flags |= FN_ASYNC;
     decl->left->src_off = async_off;
     if (!decl->left->str || decl->left->len == 0)
@@ -260,7 +271,7 @@ sv_ast_t *parse_export_stmt(sv_parser_t *p) {
   if (p->lx.st.tok == TOK_FUNC) {
     decl->flags |= EX_DECL;
     p->lx.st.consumed = 1;
-    decl->left = parse_func(p, false);
+    decl->left = parse_func_decl(p, false);
     if (!decl->left->str || decl->left->len == 0)
       SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "exported function declarations require a name");
     return decl;

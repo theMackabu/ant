@@ -16,8 +16,50 @@ typedef struct {
   bool in_async;
   bool wants_module;
   bool tagged_template;
+  bool static_block;
+  bool class_initializer;
+  bool no_yield;
+  bool in_generator;
+  bool body_stmt;
   uint32_t function_depth;
+  uint32_t chain_links;
 } sv_parser_t;
+
+typedef struct {
+  bool no_in;
+  bool in_async;
+  bool static_block;
+  bool class_initializer;
+  bool no_yield;
+  bool in_generator;
+} sv_parse_context_t;
+
+typedef enum {
+  SV_TARGET_ASSIGN,
+  SV_TARGET_COMPOUND,
+  SV_TARGET_LOGICAL,
+  SV_TARGET_UPDATE,
+  SV_TARGET_FOR,
+} sv_target_kind_t;
+
+typedef enum {
+  SV_FUNC_EXPRESSION,
+  SV_FUNC_DECLARATION,
+  SV_FUNC_METHOD,
+} sv_func_kind_t;
+
+static inline sv_parse_context_t sv_parse_context_save(const sv_parser_t *p) {
+  return (sv_parse_context_t){p->no_in, p->in_async, p->static_block, p->class_initializer, p->no_yield, p->in_generator};
+}
+
+static inline void sv_parse_context_restore(sv_parser_t *p, sv_parse_context_t saved) {
+  p->no_in = saved.no_in;
+  p->in_async = saved.in_async;
+  p->static_block = saved.static_block;
+  p->class_initializer = saved.class_initializer;
+  p->no_yield = saved.no_yield;
+  p->in_generator = saved.in_generator;
+}
 
 #define SV_RAISE(mkerr) ({                                  \
   if (!Ant_Exception_Pending(p->js)) {                      \
@@ -50,6 +92,19 @@ void sv_parse_stop(sv_parser_t *p);
 void consume_semicolon(sv_parser_t *p);
 
 bool sv_parse_stack_overflow(sv_parser_t *p);
+bool sv_parse_chain_overflow(sv_parser_t *p);
+
+#define SV_PARSE_CHAIN_BLOCK 4096u
+#define SV_PARSE_CHAIN_LINK_BYTES 128u
+
+static inline bool sv_parse_chain_link(sv_parser_t *p, uint32_t *links) {
+  if (__builtin_expect((++*links & (SV_PARSE_CHAIN_BLOCK - 1)) != 0, 1)) return false;
+  return sv_parse_chain_overflow(p);
+}
+
+static inline void sv_parse_chain_end(sv_parser_t *p, uint32_t links) {
+  if (__builtin_expect(links >= SV_PARSE_CHAIN_BLOCK, 0)) p->chain_links -= links & ~(SV_PARSE_CHAIN_BLOCK - 1);
+}
 bool arrow_param_is_name(const sv_ast_t *node);
 bool lookahead_crosses_line_terminator(sv_parser_t *p);
 bool using_declaration_here(sv_parser_t *p, bool for_head);
@@ -66,6 +121,15 @@ sv_ast_t *parse_lhs(sv_parser_t *p);
 sv_ast_t *parse_array(sv_parser_t *p);
 sv_ast_t *finish_arrow(sv_parser_t *p, sv_ast_t *fn);
 sv_ast_t *parse_func(sv_parser_t *p, bool is_async);
+sv_ast_t *parse_func_decl(sv_parser_t *p, bool is_async);
+sv_ast_t *parse_method_func(sv_parser_t *p, bool is_async, bool is_generator);
+sv_ast_t *parse_property_key(sv_parser_t *p, uint32_t *flags);
+sv_ast_t *parse_yield(sv_parser_t *p);
+
+bool sv_binding_pattern_ok(sv_parser_t *p, const sv_ast_t *node, bool top);
+bool sv_assign_target_ok(sv_parser_t *p, const sv_ast_t *node, sv_target_kind_t kind);
+bool sv_reject_binding_pattern(sv_parser_t *p, const sv_ast_t *node);
+bool sv_reject_assign_target_slow(sv_parser_t *p, const sv_ast_t *node, sv_target_kind_t kind);
 sv_ast_t *parse_class(sv_parser_t *p);
 sv_ast_t *parse_block(sv_parser_t *p, bool directive_ctx);
 sv_ast_t *parse_var_decl(sv_parser_t *p, sv_var_kind_t kind, bool allow_uninit_const);
@@ -173,8 +237,68 @@ static inline bool is_binding_ident_tok(uint8_t tok) {
     tok == TOK_UNDEF || tok == TOK_WINDOW || tok == TOK_GLOBAL_THIS;
 }
 
+static inline bool sv_await_reserved(const sv_parser_t *p) {
+  return p->in_async || p->goal == SV_PARSE_MODULE;
+}
+
+static inline bool ident_tok_allowed(const sv_parser_t *p, uint8_t tok, bool await_reserved, bool yield_reserved) {
+  switch (tok) {
+    case TOK_IDENTIFIER:
+    case TOK_AS:
+    case TOK_FROM:
+    case TOK_OF:
+    case TOK_ASYNC:
+    case TOK_USING:
+    case TOK_UNDEF:
+    case TOK_WINDOW:
+    case TOK_GLOBAL_THIS: return true;
+    case TOK_LET:
+    case TOK_STATIC: return !p->lx.strict;
+    case TOK_YIELD: return !p->lx.strict && !yield_reserved;
+    case TOK_AWAIT: return !await_reserved;
+    default: return false;
+  }
+}
+
+static inline bool ident_tok_here(const sv_parser_t *p) {
+  return ident_tok_allowed(p, p->lx.st.tok, sv_await_reserved(p), p->in_generator);
+}
+
+static inline bool ident_tok_here_as(const sv_parser_t *p, uint8_t tok) {
+  return ident_tok_allowed(p, tok, sv_await_reserved(p), p->in_generator);
+}
+
 static inline bool binding_ident_here(sv_parser_t *p) {
-  return is_binding_ident_tok(p->lx.st.tok) && !(p->lx.st.tok == TOK_AWAIT && (p->in_async || p->goal == SV_PARSE_MODULE));
+  return ident_tok_here(p);
+}
+
+bool sv_reject_ident_name_slow(sv_parser_t *p, const char *s, uint32_t len);
+
+static inline bool sv_restricted_name_start(char c) {
+  static constexpr uint32_t mask =
+    (1u << ('a' - 'a')) | (1u << ('e' - 'a')) | (1u << ('i' - 'a')) |
+    (1u << ('l' - 'a')) | (1u << ('p' - 'a')) | (1u << ('s' - 'a')) | (1u << ('y' - 'a'));
+  unsigned idx = (unsigned)c - 'a';
+  return idx < 26 && ((mask >> idx) & 1);
+}
+
+static inline bool sv_ident_names_restricted(const sv_parser_t *p) {
+  return p->class_initializer | p->lx.strict | p->in_generator | p->in_async | (p->goal == SV_PARSE_MODULE);
+}
+
+static inline bool sv_reject_ident_name(sv_parser_t *p, const char *s, uint32_t len) {
+  if (__builtin_expect(!sv_ident_names_restricted(p) || !sv_restricted_name_start(s[0]), 1)) return false;
+  return sv_reject_ident_name_slow(p, s, len);
+}
+
+static inline bool sv_reject_binding_name(sv_parser_t *p, const char *s, uint32_t len) {
+  if (__builtin_expect(!sv_ident_names_restricted(p) || !sv_restricted_name_start(s[0]), 1)) return false;
+  if (sv_reject_ident_name_slow(p, s, len)) return true;
+  if (p->lx.strict && is_eval_or_arguments_name(s, len)) {
+    SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected eval or arguments in strict mode");
+    return true;
+  }
+  return false;
 }
 
 static inline bool is_private_ident_like_tok(uint8_t tok) {
@@ -185,12 +309,19 @@ static inline bool is_leading_dot_number_token(sv_parser_t *p) {
   return p->lx.st.tok == TOK_NUMBER && p->lx.st.tlen > 0 && p->lx.st.toff < p->lx.clen && p->lx.code[p->lx.st.toff] == '.';
 }
 
-static inline bool sv_strict_forbidden_binding_ident(const char *s, uint32_t len) {
-  return is_eval_or_arguments_name(s, len) || is_strict_reserved_name(s, len);
+static inline bool ast_pattern_binds_eval_or_arguments(const sv_ast_t *n) {
+  return ast_pattern_binds(n, "eval") || ast_pattern_binds(n, "arguments");
 }
 
-static inline bool sv_is_strict_restricted_assign_target(sv_parser_t *p, sv_ast_t *n) {
-  return p->lx.strict && n && n->type == N_IDENT && is_eval_or_arguments_name(n->str, n->len);
+static inline bool sv_reject_assign_target(sv_parser_t *p, const sv_ast_t *node, sv_target_kind_t kind) {
+  if (node->type == N_IDENT) {
+    char c = node->str[0];
+    if (__builtin_expect(c != '#' && c != 'e' && c != 'a', 1)) return false;
+  } else if (node->type == N_MEMBER) {
+    const sv_ast_t *base = node->left;
+    if (base->type == N_THIS || (base->type == N_IDENT && base->len != 6)) return false;
+  }
+  return sv_reject_assign_target_slow(p, node, kind);
 }
 
 static inline bool is_lexical_decl_stmt(sv_ast_t *n) {
@@ -245,14 +376,6 @@ static inline sv_ast_t *mk_private_ident_from_tok(sv_parser_t *p) {
   n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
   
   return n;
-}
-
-static inline void sv_strict_check_binding_ident(sv_parser_t *p, const char *s, uint32_t len) {
-  if (!p->lx.strict || !s || len == 0) return;
-  if (sv_strict_forbidden_binding_ident(s, len)) SV_MKERR_TYPED(
-    p->js, JS_ERR_SYNTAX, "Invalid binding identifier '%.*s' in strict mode", 
-    (int)len, s
-  );
 }
 
 static inline void sv_parse_unexpected_token(sv_parser_t *p) {

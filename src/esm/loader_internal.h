@@ -34,14 +34,12 @@ typedef struct esm_module {
   
   ant_value_t namespace_obj;
   ant_value_t default_export;
-  ant_value_t tla_promise;
   UT_hash_handle hh;
   esm_module_kind_t kind;
   ant_module_format_t format;
   
   bool is_loaded;
   bool is_loading;
-  bool has_tla;
   bool owns_embedded;
 } esm_module_t;
 

@@ -19,7 +19,6 @@ struct ant_esm_state {
   struct esm_tsconfig_dir_entry       *tsconfig_dir_cache;
 
   struct esm_module *modules;
-  struct esm_module *last_tla_module;
   
   int module_count;
   int dynamic_import_depth;
