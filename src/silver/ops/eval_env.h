@@ -247,7 +247,7 @@ static inline ant_value_t sv_eval_init_variable_env(sv_vm_t *vm, ant_t *js, sv_f
     if (!frame->func->is_arrow) {
       ant_value_t arguments = sv_eval_arguments(js, vm, frame);
       if (is_err(arguments)) { GC_ROOT_RESTORE(js, mark); return arguments; }
-      js_set(js, env, "arguments", arguments);
+      mkprop_interned_exact(js, env, js->intern.arguments, arguments, 0);
     }
   }
   GC_ROOT_RESTORE(js, mark);
@@ -544,7 +544,7 @@ ant_value_t sv_eval_capture_env(
       !(parent_state && parent_state->is_variable) && !scope->binds_arguments) {
     ant_value_t arguments = sv_eval_arguments(js, vm, frame);
     if (is_err(arguments)) { GC_ROOT_RESTORE(js, mark); return arguments; }
-    js_set(js, env, "arguments", arguments);
+    mkprop_interned_exact(js, env, js->intern.arguments, arguments, 0);
   }
   sv_eval_env_state_t *state = sv_eval_env_state_create(vm, frame, scope);
   if (!state || !sv_eval_env_state_attach(env, state)) {
