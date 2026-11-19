@@ -48,8 +48,8 @@ test('BigInt("  42  ")', BigInt('  42  '), '42');
 test('BigInt("")', BigInt(''), '0');
 test('BigInt(true)', BigInt(true), '1');
 test('BigInt(false)', BigInt(false), '0');
-testThrows('BigInt("0x") throws', () => BigInt('0x'), 'Cannot convert string to BigInt');
-testThrows('BigInt("1_2") throws', () => BigInt('1_2'), 'Cannot convert string to BigInt');
+testThrows('BigInt("0x") throws', () => BigInt('0x'), 'SyntaxError: Cannot convert 0x to a BigInt');
+testThrows('BigInt("1_2") throws', () => BigInt('1_2'), 'SyntaxError: Cannot convert 1_2 to a BigInt');
 
 console.log('\n=== BigInt Addition ===');
 test('0xffn + 1n', 0xffn + 1n, '256');

@@ -489,6 +489,8 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
       p->lx.st.consumed = 1;
       n->finally_body = parse_block(p, false);
     }
+    if (!n->catch_body && !n->finally_body && !Ant_Exception_Pending(p->js))
+      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Missing catch or finally after try");
     return n;
   }
 

@@ -1,22 +1,23 @@
 #include <compat.h> // IWYU pragma: keep
-
-#include "esm/loader.h"
-#include "cfunc.h"
-#include "esm/builtin_bundle.h"
-#include "esm/remote.h"
-#include "loader_cache.h"
-#include "loader_internal.h"
-
-#include "errors.h"
-#include "gc/roots.h"
-#include "internal.h"
-#include "modules/buffer.h"
-#include "silver/call.h"
-
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "esm/loader.h"
+#include "esm/remote.h"
+#include "esm/builtin_bundle.h"
+
+#include "cfunc.h"
+#include "errors.h"
+#include "gc/roots.h"
+#include "internal.h"
+#include "silver/vm.h"
+#include "silver/engine.h"
+
+#include "loader_cache.h"
+#include "loader_internal.h"
+#include "modules/buffer.h"
 
 static bool esm_has_url_scheme(const char *s) {
   if (!s || !isalpha((unsigned char)s[0])) return false;
@@ -238,7 +239,7 @@ static ant_value_t esm_run_resolve_chain(ant_t *js, const esm_chain_t *chain, in
     || esm_is_data_url(spec_copy)
     || esm_is_url(spec_copy);
 
-  if (!scheme_passthrough && esm_find_builtin(spec_copy, strlen(spec_copy)).kind == ANT_BUILTIN_NAME_NONE) {
+  if (!scheme_passthrough && esm_find_builtin(js, spec_copy, strlen(spec_copy)).kind == ANT_BUILTIN_NAME_NONE) {
     if (!base_path || !base_path[0]) base_path = esm_default_base_path(js);
 
     char **cond_override = NULL;

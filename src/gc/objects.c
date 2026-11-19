@@ -632,12 +632,24 @@ void gc_mark_upvalue_cells(ant_t *js, sv_upvalue_t *const *cells, uint32_t count
   }
 }
 
-void gc_mark_closure(ant_t *js, sv_closure_t *c) {
-  if (!c) return;
-  
-  if (c->gc_epoch == js->gc.epoch) return;
-  c->gc_epoch = js->gc.epoch;
-  
+__attribute__((noinline, cold)) 
+static bool gc_closure_defer(ant_t *js, sv_closure_t *c) {
+  if (js->gc.deferred_closure_count == js->gc.deferred_closure_cap) {
+    size_t cap = js->gc.deferred_closure_cap ? js->gc.deferred_closure_cap * 2 : 256;
+
+    sv_closure_t **grown = realloc(js->gc.deferred_closures, cap * sizeof(*grown));
+    if (!grown) return false;
+
+    js->gc.deferred_closures = grown;
+    js->gc.deferred_closure_cap = cap;
+  }
+
+  js->gc.deferred_closures[js->gc.deferred_closure_count++] = c;
+  return true;
+}
+
+__attribute__((always_inline)) 
+static inline void gc_scan_closure(ant_t *js, sv_closure_t *c) {
   if (js->weak_gc.pending_active) gc_weak_key_marked(js, mkref(kTypeFunction, c));
   if (js->gc.realm_reach && c->func) ant_realm_reach(js, c->func->realm, gc_mark_value);
   
@@ -662,6 +674,20 @@ void gc_mark_closure(ant_t *js, sv_closure_t *c) {
   
   if (c->call_flags & SV_CALL_HAS_BOUND_ARGS) if (c->u.bound_argv) 
     for (int i = 0; i < c->bound_argc; i++) gc_mark_value(js, c->u.bound_argv[i]);
+}
+
+void gc_mark_closure(ant_t *js, sv_closure_t *c) {
+  if (!c) return;
+  
+  if (c->gc_epoch == js->gc.epoch) return;
+  c->gc_epoch = js->gc.epoch;
+  if (__builtin_expect((uintptr_t)__builtin_frame_address(0) < (uintptr_t)js->cstk.floor, 0) && gc_closure_defer(js, c)) return;
+  gc_scan_closure(js, c);
+}
+
+static void gc_drain_deferred_closures(ant_t *js) {
+  while (js->gc.deferred_closure_count > 0)
+    gc_scan_closure(js, js->gc.deferred_closures[--js->gc.deferred_closure_count]);
 }
 
 void gc_mark_value(ant_t *js, ant_value_t v) {
@@ -952,16 +978,20 @@ static void gc_drain_mark_stack(ant_t *js) {
   if (js->gc.parallel_mark && js->gc.mark_sp && gc_parallel_drain(js, m.other_refs, gc_scan_obj))
     while (js->gc.mark_sp >= GC_PARALLEL_MIN_ROUND && gc_parallel_drain(js, m.other_refs, gc_scan_obj));
 
-  gc_marker_load(js, &m);
-  while (m.sp > 0) {
-    ant_object_t *obj = m.stack[--m.sp];
-    if (gc_marker_scan_plain(js, &m, obj)) continue;
-    js->gc.mark_sp = m.sp;
-    gc_scan_obj(js, obj);
+  for (;;) {
     gc_marker_load(js, &m);
-  }
+    while (m.sp > 0) {
+      ant_object_t *obj = m.stack[--m.sp];
+      if (gc_marker_scan_plain(js, &m, obj)) continue;
+      js->gc.mark_sp = m.sp;
+      gc_scan_obj(js, obj);
+      gc_marker_load(js, &m);
+    }
 
-  js->gc.mark_sp = 0;
+    js->gc.mark_sp = 0;
+    if (__builtin_expect(js->gc.deferred_closure_count == 0, 1)) return;
+    gc_drain_deferred_closures(js);
+  }
 }
 
 static bool gc_weak_key_alive(ant_t *js, ant_value_t key) {
@@ -1021,12 +1051,16 @@ switch (obj->type_tag) {
 }}
 
 static void gc_drain_mark_stack_weak(ant_t *js) {
-while (js->gc.mark_sp > 0) {
-  ant_object_t *obj = js->gc.mark_stack[--js->gc.mark_sp];
-  gc_weak_key_marked(js, gc_weak_key_from_marked_object(obj));
-  gc_weak_collection_marked(js, obj);
-  gc_scan_obj(js, obj);
-}}
+  do {
+    while (js->gc.mark_sp > 0) {
+      ant_object_t *obj = js->gc.mark_stack[--js->gc.mark_sp];
+      gc_weak_key_marked(js, gc_weak_key_from_marked_object(obj));
+      gc_weak_collection_marked(js, obj);
+      gc_scan_obj(js, obj);
+    }
+    gc_drain_deferred_closures(js);
+  } while (js->gc.mark_sp > 0);
+}
 
 static void gc_scan_frame_span(
   ant_t *js, ant_value_t *slots, int slot_count,
@@ -1683,19 +1717,15 @@ static inline __attribute__((always_inline)) bool gc_object_release_plain(ant_t 
   return true;
 }
 
-static __attribute__((noinline)) bool gc_object_release_finalized(ant_t *js, ant_object_t *obj) {
-  obj->finalizer(js, obj);
-  obj->finalizer = NULL;
-  return gc_object_release_plain(js, obj);
-}
-
 void gc_object_free(ant_t *js, ant_object_t *obj) {
   if (!obj) return;
 
-  if (gc_object_release_plain(js, obj) || (obj->finalizer && gc_object_release_finalized(js, obj))) {
+  if (gc_object_release_plain(js, obj)) {
     ant_object_cell_free(js, obj);
     return;
   }
+
+  if (obj->finalizer) obj->finalizer(js, obj);
   
   if (obj->native_tag != 0 || ant_object_has_sidecar(obj))
     gc_finalize_host_natives(js, js_obj_from_ptr(obj));
@@ -1796,8 +1826,10 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     obj->extra_slots = NULL;
   }
 
-  if (overflow_bytes) gc_note_overflow_free(js, overflow_bytes);
-  ant_object_overflow_free(obj);
+  if (obj->overflow_prop) {
+    gc_note_overflow_free(js, overflow_bytes);
+    ant_object_overflow_free(obj);
+  }
   
   GC_VERIFY_POISON_OBJECT(obj);
   ant_object_cell_free(js, obj);
@@ -1810,11 +1842,9 @@ static __attribute__((noinline)) void gc_object_free_shared_array(ant_t *js, ant
   else gc_object_free(js, obj);
 }
 
-static __attribute__((noinline)) void gc_object_free_swept(ant_t *js, ant_object_t *obj) {
-  if (!obj->finalizer) return gc_object_free(js, obj);
-  if (obj->finalizer == gc_shared_elements_finalize) return gc_object_free_shared_array(js, obj);
-  if (gc_object_release_finalized(js, obj)) return ant_object_cell_free(js, obj);
-  gc_object_free(js, obj);
+static inline __attribute__((always_inline)) void gc_object_free_swept(ant_t *js, ant_object_t *obj) {
+  if (obj->finalizer == gc_shared_elements_finalize) gc_object_free_shared_array(js, obj);
+  else gc_object_free(js, obj);
 }
 
 static void gc_sweep_young_and_promote(ant_t *js) {

@@ -129,6 +129,6 @@ test('takeCoverage returns undefined', v8.takeCoverage(), undefined);
 
 console.log('\nconstants\n');
 
-test('constants is an object', typeof v8.constants, 'object');
+test('constants is absent like Node 26', typeof v8.constants, 'undefined');
 
 summary();

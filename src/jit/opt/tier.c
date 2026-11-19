@@ -183,7 +183,7 @@ static opt_generic_counts_t opt_generic_counts(const ir_graph_t *graph) {
       if (op->code != IR_OP_GENERIC) continue;
       counts.total++;
       
-      if (data->is_cold) continue;
+      if (data->is_cold || (sv_op_flags[op->slow.opcode] & SV_OPF_OPT_COLD)) continue;
       if (!counts.primary++) counts.first = op->slow.opcode;
       if (op->slow.in_loop && !counts.in_loops++) counts.first = op->slow.opcode;
     }
@@ -1330,7 +1330,7 @@ void opt_rt_slow_paths_hot(sv_vm_t *vm, opt_code_t *code, sv_func_t *func, uint6
   bool learned = false;
   if (state) {
     sv_op_t op = (sv_op_t)func->code[bc_off];
-    bool again = op == OP_GET_ELEM || op == OP_PUT_ELEM;
+    bool again = op == OP_GET_ELEM || op == OP_PUT_ELEM || op == OP_CHECK_CTOR;
     for (uint32_t i = 0; i < state->exit_site_count && !again; i++) {
       const ir_exit_site_t *site = &state->exit_sites[i];
       again = site->bc_off == bc_off && site->kind == OPT_EXIT_SLOW_PATH && site->slot == 1;

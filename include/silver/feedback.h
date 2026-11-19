@@ -551,6 +551,7 @@ static inline bool sv_tfb_put_needs_tagged_old_guard(uint8_t feedback) {
 }
 
 static inline void sv_tfb_ensure(sv_func_t *fn) {
+  if (sv_debug_unlikely(SV_DEBUG_JITLESS)) return;
   if (!sv_func_type_feedback(fn) && fn->code_len > 0) {
     uint8_t *type_feedback = calloc((size_t)fn->code_len, 1);
     if (sv_func_has_sidecar(fn)) sv_func_sidecar(fn)->type_feedback = type_feedback;

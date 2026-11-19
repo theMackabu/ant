@@ -110,4 +110,29 @@ for (let i = 0; i < 10; i++) {
 }
 assert.strictEqual(flatQueries().length, 50);
 
+const lowered = () => [[1, 2], { a: 'x', b: [3, 4, 5], c: { d: [6] } }, 'k', -0, null, true];
+const loweredExpect = snapshot(lowered());
+const addTo = (v) => {
+  const t = lowered();
+  const r = t[0][0] + v;
+  t[1].b[0] = r;
+  return [t, r];
+};
+const escaped = [];
+for (let i = 0; i < 40000; i++) {
+  const [t, r] = addTo(i === 30000 ? 'str' : 1);
+  assert.strictEqual(r, i === 30000 ? '1str' : 2);
+  assert.strictEqual(t[1].b[0], r);
+  assert.ok(Object.is(t[3], -0));
+  const fresh = lowered();
+  assert.ok(fresh[0] !== t[0] && fresh[1] !== t[1] && fresh[1].c.d !== t[1].c.d);
+  if (i % 4001 === 0) {
+    escaped.push(fresh[1].c);
+    fresh[1].c.d.push(i);
+    fresh[1].extra = i;
+  }
+}
+assert.strictEqual(snapshot(lowered()), loweredExpect);
+for (const c of escaped) assert.strictEqual(c.d.length, 2);
+
 console.log('ok');

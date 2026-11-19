@@ -618,6 +618,16 @@ slow_path_loop:;
   return sv_parsekeyword(buf, *tlen);
 }
 
+static inline bool bigint_literal_digits_valid(const char *buf, ant_offset_t len) {
+  if (len > 1 && buf[0] == '0') {
+    char tag = (char)(buf[1] | 0x20);
+    return tag == 'x' || tag == 'o' || tag == 'b';
+  }
+  for (ant_offset_t i = 0; i < len; i++)
+    if (buf[i] == '.' || buf[i] == 'e' || buf[i] == 'E') return false;
+  return true;
+}
+
 static inline bool is_decimal_literal_char(char ch) {
   return IS_DIGIT(ch) || ch == '_';
 }
@@ -840,6 +850,11 @@ static inline uint8_t parse_number(sv_lexer_t *lx, const char *buf, ant_offset_t
   ant_offset_t toklen = numlen;
   
   if (toklen < remaining && buf[toklen] == 'n') {
+    if (!bigint_literal_digits_valid(buf, numlen)) {
+      lx->st.tok = TOK_ERR;
+      lx->st.tlen = numlen + 1;
+      return TOK_ERR;
+    }
     lx->st.tok = TOK_BIGINT;
     toklen++;
   } else lx->st.tok = TOK_NUMBER;

@@ -61,6 +61,7 @@ typedef enum {
   SV_OPF_JIT_INLINE_SIDE_EFFECT     = 1u << 27,
   SV_OPF_JIT_INLINE_GUARD_RESTART   = 1u << 28,
   SV_OPF_JIT_INLINE_AFTER_EFFECT    = 1u << 29,
+  SV_OPF_OPT_COLD                   = 1u << 30,
 } sv_opcode_flags_t;
 
 typedef enum {
@@ -75,8 +76,9 @@ typedef enum {
   SV_SPECIAL_SUPER         = 2,
   SV_SPECIAL_MODULE_IMPORT = 3,
   SV_SPECIAL_ARGC          = 4,
-  SV_SPECIAL_STRICT_ENTER  = 5,
-  SV_SPECIAL_STRICT_LEAVE  = 6,
+  SV_SPECIAL_EVAL_ENV      = 5,
+  SV_SPECIAL_STRICT_ENTER  = 6,
+  SV_SPECIAL_STRICT_LEAVE  = 7,
 } sv_special_obj_t;
 
 typedef enum {
@@ -749,6 +751,7 @@ struct sv_func {
 
   bool is_eval: 1;
   bool needs_eval_env: 1;
+  bool lazy_eval_env: 1;
   bool allows_new_target: 1;
   bool has_map_templates: 1;
   bool uses_super: 1;

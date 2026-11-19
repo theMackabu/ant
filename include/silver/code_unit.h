@@ -29,9 +29,19 @@ struct sv_code_unit {
   bool compiling;
 };
 
+typedef struct sv_eval_cache sv_eval_cache_t;
+
+typedef struct {
+  uint64_t hash;
+  const char *source;
+  uint32_t len;
+  uint8_t bits;
+} sv_eval_cache_key_t;
+
 typedef struct {
   sv_code_unit_t *units;
   sv_code_unit_t *pinned;
+  sv_eval_cache_t *eval_cache;
   
   sv_code_block_t *current;
   sv_code_block_t *spare;
@@ -64,6 +74,7 @@ void sv_code_unit_finish(sv_code_unit_t *unit);
 void *sv_code_bump(ant_t *js, size_t size);
 void *sv_code_unit_bump(sv_code_unit_t *unit, size_t size);
 void sv_code_unit_add_func(ant_t *js, sv_func_t *func);
+void sv_code_unit_charge(ant_t *js, size_t bytes);
 
 bool sv_code_unit_root(ant_t *js, ant_value_t value);
 bool sv_code_unit_retain_template(ant_t *js, sv_func_t *func, ant_value_t value);
@@ -77,6 +88,13 @@ void sv_code_unit_unpin(sv_code_unit_t *unit);
 static inline bool sv_code_unit_dying(const sv_code_unit_t *unit, uint64_t epoch) {
   return unit && !unit->compiling && !unit->pins && unit->gc_epoch != epoch;
 }
+
+bool sv_eval_cache_key(ant_t *js, sv_eval_cache_key_t *key, const char *source, size_t len, uint8_t bits);
+sv_func_t *sv_eval_cache_find(ant_t *js, const sv_eval_cache_key_t *key);
+
+void sv_eval_cache_store(ant_t *js, const sv_eval_cache_key_t *key, sv_func_t *func);
+void sv_eval_cache_age(ant_t *js);
+void sv_eval_cache_clear(ant_t *js);
 
 void sv_code_units_sweep(ant_t *js, uint64_t epoch);
 void sv_code_units_destroy(ant_t *js);
