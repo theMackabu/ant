@@ -92,6 +92,7 @@ export function targets() {
     'test_array_proto_abort_regexp.mjs',
     'test_object_spread_large_arrays.cjs',
     'test_event_prototype_getters.cjs',
+    'test_compile_time_scopes.cjs',
     'test_eventsource_handlers.cjs',
     'test_eventtarget_listener_errors.cjs',
     'test_computed_property_keys.cjs',

@@ -35,6 +35,16 @@ int resolve_local(sv_compiler_t *c, const char *name, uint32_t len) {
 }
 
 int resolve_local_at_depth(sv_compiler_t *c, const char *name, uint32_t len, int depth) {
+  if (c->local_lookup_heads && c->local_lookup_cap > 0) {
+    uint32_t hash = sv_compile_ctx_hash_local_name(name, len);
+    int bucket = (int)(hash & (uint32_t)(c->local_lookup_cap - 1));
+    for (int i = c->local_lookup_heads[bucket]; i != -1; i = c->locals[i].lookup_next) {
+      sv_local_t *loc = &c->locals[i];
+      if (loc->depth == depth && loc->name_hash == hash && loc->name_len == len && memcmp(loc->name, name, len) == 0) return i;
+    }
+    return -1;
+  }
+
   for (int i = c->local_count - 1; i >= 0; i--) {
     sv_local_t *loc = &c->locals[i];
     if (
@@ -182,7 +192,43 @@ int resolve_local_slot(sv_compiler_t *c, const char *name, uint32_t len) {
   return (slot >= 0 && slot <= 255) ? slot : -1;
 }
 
+static inline uint32_t upvalue_index_slot(const sv_compiler_t *c, uint16_t index, bool is_local) {
+  uint32_t key = ((uint32_t)index << 1) | (is_local ? 1u : 0u);
+  return (key * 0x9E3779B1u) >> 8 & (uint32_t)(c->upvalue_index_cap - 1);
+}
+
+static void upvalue_index_insert(sv_compiler_t *c, int upvalue) {
+  uint32_t mask = (uint32_t)c->upvalue_index_cap - 1;
+  uint32_t slot = upvalue_index_slot(c, c->upval_descs[upvalue].index, c->upval_descs[upvalue].is_local);
+  while (c->upvalue_index[slot] >= 0) slot = (slot + 1) & mask;
+  c->upvalue_index[slot] = upvalue;
+}
+
+static void upvalue_index_add(sv_compiler_t *c) {
+  if (c->upvalue_count < 32) return;
+  if (c->upvalue_index_cap && c->upvalue_count * 2 < c->upvalue_index_cap) {
+    upvalue_index_insert(c, c->upvalue_count - 1);
+    return;
+  }
+
+  int cap = c->upvalue_index_cap ? c->upvalue_index_cap * 2 : 128;
+  int *index = realloc(c->upvalue_index, (size_t)cap * sizeof(*index));
+  if (!index) { c->upvalue_index_cap = 0; return; }
+  memset(index, 0xff, (size_t)cap * sizeof(*index));
+  c->upvalue_index = index;
+  c->upvalue_index_cap = cap;
+  for (int i = 0; i < c->upvalue_count; i++) upvalue_index_insert(c, i);
+}
+
 static int find_upvalue(sv_compiler_t *c, uint16_t index, bool is_local) {
+  if (c->upvalue_index_cap) {
+    uint32_t mask = (uint32_t)c->upvalue_index_cap - 1;
+    for (uint32_t slot = upvalue_index_slot(c, index, is_local);; slot = (slot + 1) & mask) {
+      int upvalue = c->upvalue_index[slot];
+      if (upvalue < 0) return -1;
+      if (c->upval_descs[upvalue].index == index && c->upval_descs[upvalue].is_local == is_local) return upvalue;
+    }
+  }
   for (int i = 0; i < c->upvalue_count; i++)
     if (c->upval_descs[i].index == index && c->upval_descs[i].is_local == is_local) return i;
   return -1;
@@ -254,6 +300,7 @@ int add_upvalue_binding(
   };
   
   if (binding) c->upval_bindings[idx] = *binding;
+  upvalue_index_add(c);
   return idx;
 }
 
@@ -621,7 +668,7 @@ static void with_marker_seen(void *ctx, const char *marker, uint32_t len) {
 }
 
 static bool eval_declares_var(const sv_compiler_t *body, const char *name, uint32_t len) {
-  for (uint32_t i = 0; body && i < body->eval_var_count; i++) if (body->eval_vars[i].len == len && memcmp(body->eval_vars[i].str, name, len) == 0) return true; return false;
+  return body && find_eval_var(body, name, len) >= 0;
 }
 
 void with_shadows(sv_compiler_t *c, const char *name, uint32_t len, sv_with_refs_t *out) {
