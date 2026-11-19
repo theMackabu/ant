@@ -11,7 +11,7 @@
 #include "modules/proxy.h"
 
 
-static ant_value_t proxy_call_trap(ant_t *js, ant_proxy_state_t *data, ant_value_t trap, ant_value_t *args, int argc) {
+static inline __attribute__((always_inline)) ant_value_t proxy_call_trap(ant_t *js, ant_proxy_state_t *data, ant_value_t trap, ant_value_t *args, int argc) {
   args[0] = data->trap_target;
   return sv_vm_call(js->vm, js, trap, data->handler, args, argc, NULL, Ant_Value_Undefined);
 }
