@@ -1214,6 +1214,14 @@ static ant_value_t assert_rejection(ant_native_params_t, bool expect_rejection) 
     : args[0];
   
   GC_ROOT_PIN(js, result);
+  if (!is_err(result) && vtype(result) != kTypePromise && is_object_type(result)) {
+    ant_value_t then = js_get(js, result, "then");
+    ant_value_t catch_fn = is_err(then) ? then : js_get(js, result, "catch");
+    
+    if (is_err(catch_fn)) result = catch_fn;
+    else if (is_callable(then) && is_callable(catch_fn)) result = js_promise_assimilate_awaitable(js, result);
+  }
+  
   if (is_err(result)) {
     js_reject_promise(js, promise, result);
   } else if (vtype(result) == kTypePromise) {
