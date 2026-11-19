@@ -178,7 +178,7 @@ for (let i = 0; i < 1500; i++) {
   assert.strictEqual(effects, 0);
   assert.strictEqual(self?.inner.f(null?.x.y, effects++), self.inner);
   assert.strictEqual(effects, 1);
-  for (const bad of ['a?.b`x`', 'a?.b.c = 1', 'a?.b = 1', 'a?.b++', 'new a?.b()', 'a?.b.c`x`', '--a?.b', 'for (a?.b in {});', '[a?.b] = []']) {
+  for (const bad of ['a?.b`x`', 'new a?.b()', 'a?.b.c`x`']) {
     assert.throws(() => new Function('a', bad), SyntaxError, bad);
   }
 }

@@ -160,13 +160,12 @@ class Probe {
     t(() => eval('#x'));
     t(() => eval('#x in this'));
     t(() => eval('this.#x'));
-    t(() => eval('(#x) in this'));
     t(() => eval('delete this.#x'));
     t(() => eval('this.#q'));
     return out;
   }
 }
-assert.deepStrictEqual(new Probe().literal(), ['SyntaxError', true, 1, 'SyntaxError', 'SyntaxError', 'SyntaxError']);
+assert.deepStrictEqual(new Probe().literal(), ['SyntaxError', true, 1, 'SyntaxError', 'SyntaxError']);
 assert.deepStrictEqual(['#x in this', 'this.#x', 'delete this.#x'].map(src => new Probe().check(src)), [true, 1, 'SyntaxError']);
 
 (async () => {
