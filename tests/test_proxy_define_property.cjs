@@ -66,11 +66,15 @@ function nonConfigurable(desc) {
   proxy.a = 5;
   proxy.b = 6;
   Object.defineProperties(proxy, { c: { value: 7 }, d: { get: getter, enumerable: 1 } });
+  class Base { constructor() { return proxy; } }
+  class Derived extends Base { e = 8; }
+  new Derived();
   assert.deepStrictEqual(seen.map(s => [s.key, s.desc, s.plain]), [
     ['a', { value: 5 }, true],
     ['b', { value: 6, writable: true, enumerable: true, configurable: true }, true],
     ['c', { value: 7 }, true],
     ['d', { get: getter, enumerable: true }, true],
+    ['e', { value: 8, writable: true, enumerable: true, configurable: true }, true],
   ]);
 }
 
@@ -233,12 +237,16 @@ for (const forward of [true, false]) {
   const watched = new Proxy({ configurable: true, enumerable: true, value: 1, writable: true }, {
     has(target, key) { reads.push(key); return Reflect.has(target, key); },
   });
+  class Base { constructor(target) { return target; } }
+  class Named extends Base { plain = 1; ['computed'] = 2; 7 = 3 }
+  new Named(new Proxy({}, trap));
   Object.defineProperty(new Proxy({}, trap), 'x', { enumerable: true, writable: true, configurable: true, value: 1 });
   Object.defineProperty(new Proxy({}, trap), 'x', { set(v) {}, configurable: true, get() {}, enumerable: false });
   Reflect.defineProperty(new Proxy({}, trap), 'x', { configurable: true, value: 2 });
   Object.defineProperties(new Proxy({}, trap), { x: { enumerable: true, value: 2 } });
   Object.defineProperty(new Proxy({}, trap), 'x', watched);
   assert.deepStrictEqual(seen, [
+    'value,writable,enumerable,configurable', 'value,writable,enumerable,configurable', 'value,writable,enumerable,configurable',
     'value,writable,enumerable,configurable', 'get,set,enumerable,configurable', 'value,configurable', 'value,enumerable',
     'value,writable,enumerable,configurable',
   ]);
