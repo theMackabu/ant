@@ -312,6 +312,7 @@ export function targets() {
     'test_math_f16round.cjs',
     'test_net_socket_readable.mjs',
     'test_new_prototype_cache.cjs',
+    'test_math_own_key_order.cjs',
     'test_node_events_once_prototype_spoof.cjs',
     'test_node_http_incoming_message_readable.cjs',
     'test_node_http_server_streaming_body.cjs',
