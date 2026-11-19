@@ -340,13 +340,12 @@ ant_value_t proxy_set_integrity_level(ant_t *js, ant_value_t obj, bool freeze) {
       data = !descriptor_has_own_key(js, current, "get", 3) && !descriptor_has_own_key(js, current, "set", 3);
     }
 
-    ant_value_t desc = Ant_Object_Create(js);
-    GC_ROOT_PIN(js, desc);
-    
-    if (data) mkprop_define_data(js, desc, "writable", 8, Ant_Value_False);
-    mkprop_define_data(js, desc, "configurable", 12, Ant_Value_False);
+    define_desc_raw_t desc = {0};
+    desc.has[DESC_WRITABLE] = data;
+    desc.has[DESC_CONFIGURABLE] = true;
+    desc.val[DESC_WRITABLE] = desc.val[DESC_CONFIGURABLE] = Ant_Value_False;
 
-    ant_value_t result = proxy_define_property(js, obj, key, desc);
+    ant_value_t result = proxy_define_property_raw(js, obj, key, &desc, false);
     if (is_err(result) || !js_truthy(js, result)) {
       GC_ROOT_RESTORE(js, iter_mark);
       GC_ROOT_RESTORE(js, root_mark);
@@ -1511,8 +1510,33 @@ ant_value_t proxy_define_property(ant_t *js, ant_value_t proxy, ant_value_t key_
   return proxy_define_property_impl(js, proxy, key_val, descriptor, false);
 }
 
-ant_value_t proxy_reflect_define_property(ant_t *js, ant_value_t proxy, ant_value_t key_val, ant_value_t descriptor) {
-  return proxy_define_property_impl(js, proxy, key_val, descriptor, true);
+ant_value_t proxy_define_property_raw(ant_t *js, ant_value_t proxy, ant_value_t key_val, const define_desc_raw_t *raw, bool reflect) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
+  ant_proxy_state_t *data = get_proxy_data(proxy);
+  ant_value_t trap = Ant_Value_Undefined;
+  
+  if (data && !data->revoked && !data->host) {
+    trap = proxy_get_method(js, data->handler, "defineProperty");
+    if (is_err(trap)) return trap;
+    
+    if (vtype(trap) == kTypeUndefined) {
+      if (reflect) return reflect_define_property_raw(js, data->target, key_val, raw);
+      ant_value_t result = object_define_property_reporting(js, data->target, key_val, Ant_Value_Undefined, raw, NULL);
+      return is_err(result) ? result : Ant_Value_True;
+    }
+  }
+  
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, trap);
+  ant_value_t descriptor = define_desc_object(js, raw);
+  GC_ROOT_PIN(js, descriptor);
+  
+  ant_value_t result = is_err(descriptor) ? descriptor
+    : vtype(trap) != kTypeUndefined ? proxy_define_trapped(js, data, data->target, key_val, descriptor, trap)
+    : proxy_define_property_impl(js, proxy, key_val, descriptor, reflect);
+  
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
 }
 
 ant_value_t proxy_delete_sym(ant_t *js, ant_value_t proxy, ant_value_t sym) {
