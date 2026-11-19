@@ -90,21 +90,9 @@ static void emit_get_var_with(
       return;
     }
     if (has_implicit_arguments_obj(c)) {
-      if (c->strict_args_local >= 0) {
-        emit_get_local(c, c->strict_args_local);
-      } else {
-        emit_op(c, OP_SPECIAL_OBJ);
-        emit(c, SV_SPECIAL_ARGUMENTS);
-      }
+      emit_op(c, OP_SPECIAL_OBJ);
+      emit(c, SV_SPECIAL_ARGUMENTS);
       return;
-    }
-    if (c->is_arrow) {
-      int args_upval = resolve_arguments_upvalue(c);
-      if (args_upval != -1) {
-        emit_op(c, OP_GET_UPVAL);
-        emit_u16(c, (uint16_t)args_upval);
-        return;
-      }
     }
   }
   

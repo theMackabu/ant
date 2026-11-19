@@ -653,7 +653,7 @@ void emit_closure(sv_compiler_t *c, int index) {
   uint32_t scope = 0;
   if (child->needs_eval_env && !capture_dynamic_eval_scope(c, &scope)) return;
   sv_op_t op = child->needs_eval_env ? OP_CLOSURE_EVAL
-    : (!c->is_strict && c->strict_args_local >= 0) ? OP_CLOSURE_ARGS : OP_CLOSURE;
+    : (!c->is_strict && c->arguments_local >= 0) ? OP_CLOSURE_ARGS : OP_CLOSURE;
   emit_op(c, op);
   emit_u32(c, (uint32_t)index);
   if (child->needs_eval_env) emit_u32(c, scope);

@@ -244,7 +244,7 @@ sv_func_t *sv_compile_function_with_params(
   }
   
   top_fn.body->args = program->args;
-  top_fn.flags |= program->flags & (FN_SCOPE_FACTS | FN_DIRECT_EVAL | FN_OWN_YIELD);
+  top_fn.flags |= program->flags & (FN_SCOPE_FACTS | FN_DIRECT_EVAL | FN_OWN_YIELD | FN_USES_ARGS);
   const char *text = copy_source_text(js, body, (ant_offset_t)body_len);
   if (!text && body && body_len > 0) {
     parse_arena_rewind(js, parse_mark);
@@ -261,6 +261,7 @@ sv_func_t *sv_compile_function_with_params(
   
   root.allows_new_target = true;
   root.line_table = sv_compile_ctx_build_line_table(root.source, (ant_offset_t)body_len);
+  if ((top_fn.flags & FN_DIRECT_EVAL) && ast_literal_eval_mentions_arguments(&root, top_fn.body)) top_fn.flags |= FN_USES_ARGS;
   sv_func_t *func = compile_function_body(&root, &top_fn, SV_COMPILE_SCRIPT);
   
   sv_compile_ctx_free_line_table(root.line_table);
