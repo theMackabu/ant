@@ -1378,7 +1378,7 @@ ant_value_t sv_execute_closure_entry(
   );
 }
 
-static inline ant_value_t sv_frame_return_value(const sv_frame_t *frame, ant_value_t value) {
+static inline __attribute__((always_inline)) ant_value_t sv_frame_return_value(const sv_frame_t *frame, ant_value_t value) {
   return vtype(frame->new_target) != kTypeUndefined && !sv_is_construct_result(value) ? frame->this : value;
 }
 
