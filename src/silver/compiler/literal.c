@@ -136,6 +136,7 @@ static int literal_site_add(
   
   if (literal_site_uses_block(kind, flags, count)) {
     if (!(block = gc_shared_elements_alloc(c->js, vals, count))) return -1;
+    sv_code_unit_charge(c->js, sizeof(*block) + (size_t)count * sizeof(*vals));
   } else if (count && (start = add_constant_run(c, vals, (int)count)) < 0) return -1;
   
   c->literal_sites[c->literal_site_count] = (struct sv_literal_site_desc){

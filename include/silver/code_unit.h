@@ -64,6 +64,7 @@ void sv_code_unit_finish(sv_code_unit_t *unit);
 void *sv_code_bump(ant_t *js, size_t size);
 void *sv_code_unit_bump(sv_code_unit_t *unit, size_t size);
 void sv_code_unit_add_func(ant_t *js, sv_func_t *func);
+void sv_code_unit_charge(ant_t *js, size_t bytes);
 
 bool sv_code_unit_root(ant_t *js, ant_value_t value);
 bool sv_code_unit_retain_template(ant_t *js, sv_func_t *func, ant_value_t value);

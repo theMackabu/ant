@@ -179,6 +179,10 @@ void sv_code_unit_finish(sv_code_unit_t *unit) {
   if (js->gc.code_alloc >= gc_code_major_threshold(js)) gc_run(js);
 }
 
+void sv_code_unit_charge(ant_t *js, size_t bytes) {
+  if (js->code_units.active) js->gc.code_alloc += bytes;
+}
+
 void sv_code_unit_add_func(ant_t *js, sv_func_t *func) {
   if (!func) return;
   
