@@ -153,6 +153,7 @@ export function targets() {
     'test_fetch_keepalive.mjs',
     'test_string_raw_newline.cjs',
     'test_buffer_alloc_validation.cjs',
+    'test_bind_proxy_prototype.cjs',
     'test_inspect_show_hidden.cjs',
     'test_assert_messages.cjs',
     'test_deep_equal_semantics.cjs',
