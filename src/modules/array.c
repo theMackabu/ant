@@ -33,7 +33,7 @@ ant_value_t builtin_Array(ant_params_t) {
     if (new_len > 0) array_mark_may_have_holes(arr);
     array_len_set(js, arr, new_len);
   } else if (nargs > 0) for (int i = 0; i < nargs; i++) 
-    arr_set(js, arr, (ant_offset_t)i, args[i]);
+    arr_set_owned(js, arr, (ant_offset_t)i, args[i]);
 
   ant_value_t instance_proto = js_instance_proto_from_new_target(js, js->sym.array_proto, call_new_target);
   
@@ -142,6 +142,10 @@ static ant_value_t arguments_set_length(ant_t *js, ant_value_t obj, ant_offset_t
 static inline bool array_dense_writable(ant_t *js, ant_object_t *dense) {
   if (!dense->flags.extensible) return false;
   return (!dense->flags.sealed && !dense->flags.frozen) || Ant_Array_TryUnshare(js, dense);
+}
+
+static bool array_keeps_holes(ant_t *js, ant_object_t *dense) {
+  return dense->flags.extensible && !dense->flags.sealed && array_elements_proto_plain(js, dense);
 }
 
 static bool array_refuses_add(ant_value_t arr, int nargs) {
@@ -324,8 +328,6 @@ static ant_value_t builtin_array_push(ant_params_t) {
   
   if (js_is_arguments(arr)) return arguments_push(js, arr, args, nargs);
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
-  if (__builtin_expect(len > (ant_offset_t)9007199254740991 - (ant_offset_t)nargs, 0))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Pushing %d elements on an array-like of length %.0f is disallowed by its maximum length", nargs, (double)len);
 
   ant_object_t *target = js_obj_ptr(js_as_obj(arr));
   if (array_refuses_add(arr, nargs)) {
@@ -364,6 +366,9 @@ static ant_value_t builtin_array_push(ant_params_t) {
     return is_err(set) ? set : len_val;
   }
   
+  if (len > (ant_offset_t)9007199254740991 - (ant_offset_t)nargs)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Pushing %d elements on an array-like of length %.0f is disallowed by its maximum length", nargs, (double)len);
+
   for (int i = 0; i < nargs; i++, len++) {
     ant_value_t stored = array_set_index_throw(js, arr, len, args[i]);
     if (is_err(stored)) return stored;
@@ -1598,7 +1603,7 @@ static ant_value_t builtin_array_concat(ant_params_t) {
       ant_object_t *src = array_dense_source(js, arg);
       if (src && (arg_len > src->u.array.len || arg_len > src->u.array.cap)) src = NULL;
       ant_offset_t rdoff = real_array_obj_ptr(result) && (intrinsic || array_result_extensible(result)) ? get_dense_buf(result) : 0;
-      if (rdoff && !Ant_Array_Unshare(js, dense_obj(rdoff))) return js_mkerr(js, "oom");
+      if (rdoff && !intrinsic && !Ant_Array_Unshare(js, dense_obj(rdoff))) return js_mkerr(js, "oom");
       if (rdoff && src && dense_capacity(rdoff) < result_idx + arg_len)
         rdoff = dense_grow(js, result, result_idx + arg_len);
       
@@ -2497,8 +2502,7 @@ static ant_value_t builtin_array_copyWithin(ant_params_t) {
 
   ant_offset_t doff = get_dense_buf(arr);
   ant_object_t *dense = doff ? frozen : NULL;
-  bool keeps_holes = dense && dense->flags.extensible && !dense->flags.sealed && array_elements_proto_plain(js, dense);
-  if (dense && array_dense_covers(dense, len) && (!dense->flags.may_have_holes || keeps_holes)) {
+  if (dense && array_dense_covers(dense, len) && (!dense->flags.may_have_holes || array_keeps_holes(js, dense))) {
     bool holes = false;
     if (start < target) {
       for (int i = count - 1; i >= 0; i--) {
@@ -3140,7 +3144,9 @@ static ant_value_t builtin_Array_from(ant_params_t) {
 static ant_value_t builtin_Array_of(ant_params_t) {
   bool use_ctor = call_this != js->sym.array_ctor && js_is_constructor(call_this);
   bool fresh = !use_ctor;
-  ant_value_t arr = array_alloc_from_ctor_with_length(js, use_ctor ? call_this : js->sym.array_ctor, (ant_offset_t)nargs);
+  ant_value_t arr = use_ctor
+    ? array_alloc_from_ctor_with_length(js, call_this, (ant_offset_t)nargs)
+    : array_alloc_intrinsic(js, Ant_Value_Undefined, (ant_offset_t)nargs);
   if (is_err(arr)) return arr;
 
   bool plain = fresh || array_result_plain(arr);
