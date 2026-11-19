@@ -250,6 +250,7 @@ export function targets() {
     'test_finalization_registry.cjs',
     'test_import_meta_resolve_builtin.mjs',
     'test_in_operator_ic.cjs',
+    'test_for_destructuring_initializer.cjs',
     'test_inspect_array_holes.cjs',
     'test_instanceof_primitives.cjs',
     'test_instanceof_proxy_chain.cjs',

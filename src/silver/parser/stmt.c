@@ -396,14 +396,20 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
       return mk(N_EMPTY);
     }
 
-    if (init_node && init_node->type == N_VAR && (
+    if (init_node && init_node->type == N_VAR) {
+      bool needs_init =
         init_node->var_kind == SV_VAR_CONST ||
         init_node->var_kind == SV_VAR_USING ||
-        init_node->var_kind == SV_VAR_AWAIT_USING)) {
+        init_node->var_kind == SV_VAR_AWAIT_USING;
       for (int i = 0; i < init_node->args.count; i++) {
         sv_ast_t *decl = init_node->args.items[i];
-        if (decl && decl->type == N_VARDECL && !decl->right) {
+        if (!decl || decl->type != N_VARDECL || decl->right) continue;
+        if (needs_init) {
           SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Missing initializer in const declaration");
+          return mk(N_EMPTY);
+        }
+        if (decl->left && decl->left->type != N_IDENT) {
+          SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Missing initializer in destructuring declaration");
           return mk(N_EMPTY);
         }
       }
