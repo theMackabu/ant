@@ -104,7 +104,7 @@ static void jit_emit_new_inline(
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, use_this),
                                MIR_new_reg_op(c->ctx, res), MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0))));
-  mir_emit_branch_if_object(c->ctx, c->jit_func, res, c->r_bool, done);
+  mir_emit_branch_if_construct_result(c->ctx, c->jit_func, res, c->r_bool, done);
   MIR_append_insn(c->ctx, c->jit_func, use_this);
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, res), MIR_new_reg_op(c->ctx, r_this)));
@@ -219,7 +219,7 @@ static void jit_emit_new_direct(
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, use_this),
                                MIR_new_reg_op(c->ctx, res), MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0))));
-  mir_emit_branch_if_object(c->ctx, c->jit_func, res, c->r_bool, done);
+  mir_emit_branch_if_construct_result(c->ctx, c->jit_func, res, c->r_bool, done);
   MIR_append_insn(c->ctx, c->jit_func, use_this);
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, res), MIR_new_reg_op(c->ctx, r_this)));
