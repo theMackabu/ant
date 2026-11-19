@@ -50,6 +50,7 @@ void ant_library_foreach(ant_library_iter_fn cb, void *userdata);
 
 ant_value_t ant_library_load(ant_t *js, const ant_library_entry_t *lib);
 ant_value_t ant_library_namespace(ant_t *js, const ant_library_entry_t *lib);
+ant_value_t ant_library_loaded_namespace(ant_t *js, const ant_library_entry_t *lib);
 
 const char *ant_library_name(const ant_library_entry_t *lib);
 const ant_host_module_t *ant_host_module_find(ant_t *js, const char *specifier, size_t spec_len);

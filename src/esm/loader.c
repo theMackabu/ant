@@ -1991,6 +1991,10 @@ static const char *esm_builtin_name(esm_builtin_t builtin) {
   return ant_library_name(builtin.host ? &builtin.host->entry : builtin.library);
 }
 
+static const char *esm_builtin_module_key(esm_builtin_t builtin) {
+  return builtin.host ? builtin.host->entry.name : builtin.alias->source_name;
+}
+
 static ant_value_t esm_load_builtin(ant_t *js, const char *specifier, esm_builtin_t builtin) {
   if (builtin.library) return ant_library_namespace(js, builtin.library);
 
@@ -2646,7 +2650,7 @@ static ant_value_t esm_import_cstr_attrs(
   esm_builtin_t builtin = esm_find_builtin(js, spec_copy, spec_len);
   if (builtin.kind != ANT_BUILTIN_NAME_NONE) {
     ant_value_t ns = esm_import_type_check(js, attrs, spec_copy, false);
-    if (!is_err(ns) && loaded_only) ns = builtin.library ? Ant_Value_Undefined : esm_loaded_namespace(js, builtin.alias->source_name);
+    if (!is_err(ns) && loaded_only) ns = builtin.library ? ant_library_loaded_namespace(js, builtin.library) : esm_loaded_namespace(js, esm_builtin_module_key(builtin));
     else if (!is_err(ns)) ns = esm_load_builtin(js, spec_copy, builtin);
     free(spec_copy);
     return ns;

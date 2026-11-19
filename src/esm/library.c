@@ -39,6 +39,11 @@ static bool library_strip_prefix(const char **specifier, size_t *spec_len, const
   return true;
 }
 
+ant_value_t ant_library_loaded_namespace(ant_t *js, const ant_library_entry_t *lib) {
+  ant_value_t ns = library_ns(js, lib)->esm_ns;
+  return is_object_type(ns) ? ns : Ant_Value_Undefined;
+}
+
 ant_value_t ant_library_namespace(ant_t *js, const ant_library_entry_t *lib) {
   ant_library_ns_t *cache = library_ns(js, lib);
   if (is_object_type(cache->esm_ns)) return cache->esm_ns;
