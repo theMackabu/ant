@@ -18,6 +18,7 @@ export function targets() {
     'test_accessor_undefined_result.cjs',
     'test_ant_c.cjs',
     'test_ant_cron.cjs',
+    'test_aggregate_error_message.cjs',
     'test_ant_cron_cli.cjs',
     'test_ant_cron_linux.cjs',
     'test_ant_cron_os.cjs',
