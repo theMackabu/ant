@@ -243,6 +243,7 @@ export function targets() {
     'test_iterator_helper_callback_close.cjs',
     'test_iterator_dispose.cjs',
     'test_iterator_result_template.cjs',
+    'test_iterator_concat.cjs',
     'test_jit_array_literal.cjs',
     'test_jit_async_await.cjs',
     'test_jit_await_live_locals.cjs',

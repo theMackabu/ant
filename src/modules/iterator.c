@@ -485,9 +485,10 @@ enum {
   WRAP_FLATMAP = 4,
   WRAP_PASS    = 5,
   WRAP_FROM_SYNC = 6,
-  WRAP_CLOSED  = 7,
-  WRAP_RUNNING = 8,
-  WRAP_VALID   = 9,
+  WRAP_CONCAT  = 7,
+  WRAP_CLOSED  = 8,
+  WRAP_RUNNING = 9,
+  WRAP_VALID   = 10,
 };
 
 enum {
@@ -558,7 +559,62 @@ static ant_value_t wrap_iter_close_after(ant_t *js, ant_value_t iterator, ant_va
   return completion;
 }
 
+static ant_value_t concat_iter_open(ant_t *js, ant_value_t self, ant_value_t items, uint32_t index) {
+  ant_value_t iterable = js_arr_get(js, items, 2 * index);
+  ant_value_t method = js_arr_get(js, items, 2 * index + 1);
+
+  ant_value_t inner = sv_vm_call(js->vm, js, method, iterable, NULL, 0, NULL, Ant_Value_Undefined);
+  if (is_err(inner)) return inner;
+  if (!is_object_type(inner))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Iterator.concat: [Symbol.iterator]() did not return an object");
+
+  ant_value_t next_fn = js_getprop_fallback(js, inner, "next");
+  if (is_err(next_fn)) return next_fn;
+
+  js_set_slot_wb(js, self, SLOT_ENTRIES, inner);
+  js_set_slot_wb(js, self, SLOT_AUX, next_fn);
+
+  return inner;
+}
+
+static ant_value_t concat_iter_step(ant_t *js, ant_value_t self, uint32_t index, uint32_t *state) {
+  ant_value_t items = js_get_slot(self, SLOT_DATA);
+  uint32_t count = (uint32_t)js_arr_len(js, items) / 2;
+  *state = WRAP_STATE_CLOSED;
+
+  for (;;) {
+    ant_value_t inner = js_get_slot(self, SLOT_ENTRIES);
+
+    if (vtype(inner) == kTypeUndefined) {
+      if (index >= count) return Ant_Iterator_CreateResult(js, Ant_Value_Undefined, true);
+      inner = concat_iter_open(js, self, items, index++);
+      if (is_err(inner)) return inner;
+    }
+
+    ant_value_t step = sv_vm_call(js->vm, js, js_get_slot(self, SLOT_AUX), inner, NULL, 0, NULL, Ant_Value_Undefined);
+    if (!is_err(step) && !is_object_type(step))
+      step = js_mkerr_typed(js, JS_ERR_TYPE, "iterator.next() did not return an object");
+
+    ant_value_t done = is_err(step) ? step : js_getprop_fallback(js, step, "done");
+    if (!is_err(done) && js_truthy(js, done)) {
+      js_set_slot(self, SLOT_ENTRIES, Ant_Value_Undefined);
+      continue;
+    }
+
+    ant_value_t value = is_err(done) ? done : js_getprop_fallback(js, step, "value");
+    if (is_err(value)) {
+      js_set_slot(self, SLOT_ENTRIES, Ant_Value_Undefined);
+      return wrap_iter_close_after(js, inner, value);
+    }
+
+    *state = iter_state_pack(WRAP_CONCAT, index);
+    return Ant_Iterator_CreateResult(js, value, false);
+  }
+}
+
 static ant_value_t wrap_iter_step(ant_t *js, ant_value_t self, uint32_t kind, uint32_t count, uint32_t *state) {
+  if (kind == WRAP_CONCAT) return concat_iter_step(js, self, count, state);
+
   ant_value_t source = js_get_slot(self, SLOT_DATA);
   ant_value_t cb = js_get_slot(self, SLOT_CTOR);
   ant_value_t next_fn = js_get_slot(self, SLOT_AUX);
@@ -701,8 +757,9 @@ static ant_value_t wrap_iter_return(ant_params_t) {
   if (kind == WRAP_CLOSED) return Ant_Iterator_CreateResult(js, Ant_Value_Undefined, true);
   if (kind > WRAP_CLOSED) return js_mkerr_typed(js, JS_ERR_TYPE, "Iterator helper is already running");
 
-  ant_value_t source = js_get_slot(call_this, SLOT_DATA);
-  ant_value_t inner = kind == WRAP_FLATMAP ? js_get_slot(call_this, SLOT_ENTRIES) : Ant_Value_Undefined;
+  bool concat = kind == WRAP_CONCAT;
+  ant_value_t source = concat ? Ant_Value_Undefined : js_get_slot(call_this, SLOT_DATA);
+  ant_value_t inner = kind == WRAP_FLATMAP || concat ? js_get_slot(call_this, SLOT_ENTRIES) : Ant_Value_Undefined;
 
   js_set_slot(call_this, SLOT_ITER_STATE, Ant_Value_FromNumber((double)WRAP_STATE_CLOSED));
   if (vtype(inner) != kTypeUndefined) js_set_slot(call_this, SLOT_ENTRIES, Ant_Value_Undefined);
@@ -975,6 +1032,37 @@ static ant_value_t iter_from(ant_params_t) {
 
   if (iter_inherits(js, iterator, js->sym.iterator_proto)) return iterator;
   return make_wrap_iter(js, js->builtins.wrap_valid_iter_proto, iterator, next, WRAP_STATE_VALID, Ant_Value_Undefined);
+}
+
+static ant_value_t iter_concat(ant_params_t) {
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t items = Ant_Array_Create(js);
+  GC_ROOT_PIN(js, items);
+
+  for (int i = 0; i < nargs; i++) {
+    ant_value_t method = is_object_type(args[i])
+      ? js_get_sym(js, args[i], js->sym.iterator_sym)
+      : js_mkerr_typed(js, JS_ERR_TYPE, "Iterator.concat requires iterable objects");
+
+    if (!is_err(method) && !is_callable(method))
+      method = js_mkerr_typed(js, JS_ERR_TYPE, "Iterator.concat: object is not iterable");
+
+    if (is_err(method)) {
+      GC_ROOT_RESTORE(js, mark);
+      return method;
+    }
+
+    js_arr_push(js, items, args[i]);
+    js_arr_push(js, items, method);
+  }
+
+  ant_value_t iterator = make_wrap_iter(
+    js, js->builtins.wrap_iter_proto, items, Ant_Value_Undefined,
+    iter_state_pack(WRAP_CONCAT, 0), Ant_Value_Undefined
+  );
+  GC_ROOT_RESTORE(js, mark);
+
+  return iterator;
 }
 
 static ant_value_t iter_ctor(ant_params_t) {
@@ -2140,6 +2228,7 @@ void init_iterator_module(ant_t *js) {
   
   ant_value_t ctor = js_obj_to_func(js, ctor_obj);
   defmethod(js, ctor, "from", 4, Ant_Function_CreateWithArity(iter_from, 1));
+  defmethod(js, ctor, "concat", 6, Ant_Function_Create(iter_concat));
   defhidden(js, iter_proto, "constructor", 11, ctor);
   js_set_global_builtin(js, "Iterator", ctor);
 
