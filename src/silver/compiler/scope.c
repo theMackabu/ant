@@ -283,6 +283,12 @@ int resolve_super_upvalue(sv_compiler_t *c) {
   return resolve_upvalue_to(c, owner, owner->super_local);
 }
 
+int resolve_this_upvalue(sv_compiler_t *c) {
+  sv_compiler_t *owner = enclosing_non_arrow(c);
+  if (!owner || owner->this_local < 0) return -1;
+  return resolve_upvalue_to(c, owner, owner->this_local);
+}
+
 int resolve_arguments_upvalue(sv_compiler_t *c) {
   for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing) {
     if (enc->owns_eval_env || sv_compile_mode_is_eval(enc->mode)) return -1;
@@ -360,7 +366,12 @@ void unwind_push(sv_compiler_t *c, uint8_t kind) {
   if (c->unwind_count >= c->unwind_cap) {
     c->unwind_cap = c->unwind_cap ? c->unwind_cap * 2 : 8;
     c->unwind_kinds = realloc(c->unwind_kinds, (size_t)c->unwind_cap);
+    c->unwind_marks = realloc(c->unwind_marks, (size_t)c->unwind_cap * sizeof(sv_unwind_mark_t));
   }
+  c->unwind_marks[c->unwind_count] = (sv_unwind_mark_t){
+    .local_count = c->local_count,
+    .using_count = c->using_cleanup_count,
+  };
   c->unwind_kinds[c->unwind_count++] = kind;
 }
 
@@ -371,7 +382,7 @@ void unwind_pop(sv_compiler_t *c) {
 void push_loop(
   sv_compiler_t *c, int loop_start,
   const char *label, uint32_t label_len,
-  bool is_switch
+  sv_loop_kind_t kind
 ) {
   if (c->loop_count >= c->loop_cap) {
     c->loop_cap = c->loop_cap ? c->loop_cap * 2 : 4;
@@ -388,10 +399,21 @@ void push_loop(
     .scope_depth = c->scope_depth,
     .unwind_depth = c->unwind_count,
     .label = label, .label_len = label_len,
-    .is_switch = is_switch,
+    .is_switch = kind == SV_LOOP_SWITCH || kind == SV_LOOP_RETURN_LANDING,
+    .is_block = kind == SV_LOOP_LABEL || kind == SV_LOOP_LABEL_OF_LOOP || kind == SV_LOOP_RETURN_LANDING,
+    .labels_loop = kind == SV_LOOP_LABEL_OF_LOOP,
     .iter_unwind_index = -1,
     .iter_completion_local = -1,
   };
+}
+
+int find_loop_label(const sv_compiler_t *c, const char *label, uint32_t label_len) {
+  for (int i = c->loop_count - 1; i >= 0; i--) if (
+    c->loops[i].label &&
+    c->loops[i].label_len == label_len &&
+    memcmp(c->loops[i].label, label, label_len) == 0
+  ) return i;
+  return -1;
 }
 
 void pop_loop(sv_compiler_t *c) {
@@ -414,6 +436,8 @@ void end_scope(sv_compiler_t *c) {
       int frame_slot = local_to_frame_slot(c, c->local_count - 1);
       emit_op(c, OP_CLOSE_UPVAL);
       emit_u16(c, (uint16_t)frame_slot);
+      if (!c->handler_close_floor || frame_slot < c->handler_close_floor - 1)
+        c->handler_close_floor = frame_slot + 1;
     }
     sv_compile_ctx_local_lookup_remove(c, c->local_count - 1);
     c->local_count--;

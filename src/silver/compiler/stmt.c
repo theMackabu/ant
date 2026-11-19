@@ -45,15 +45,30 @@ void emit_using_cleanups_to_depth(sv_compiler_t *c, int target_depth) {
   }
 }
 
-void emit_close_upvals_to_depth(sv_compiler_t *c, int target_depth) {
-  for (int i = c->local_count - 1; i >= 0; i--) {
-    if (c->locals[i].depth <= target_depth) break;
-    if (c->locals[i].captured) {
-      int frame_slot = local_to_frame_slot(c, i);
-      emit_op(c, OP_CLOSE_UPVAL);
-      emit_u16(c, (uint16_t)frame_slot);
-    }
+typedef struct {
+  int locals;
+  int usings;
+} exit_cursor_t;
+
+static void emit_exit_cleanups(sv_compiler_t *c, exit_cursor_t *cur, int local_floor, int using_floor) {
+  int close_local = -1;
+  for (int i = cur->locals - 1; i >= local_floor; i--)
+    if (c->locals[i].captured) close_local = i;
+  if (close_local >= 0)
+    emit_slot_op(c, OP_CLOSE_UPVAL, (uint16_t)local_to_frame_slot(c, close_local));
+  if (local_floor < cur->locals) cur->locals = local_floor;
+
+  for (int i = cur->usings - 1; i >= using_floor; i--) {
+    sv_using_cleanup_t *cleanup = &c->using_cleanups[i];
+    emit_using_dispose_call(c, cleanup->stack_local, -1, cleanup->is_async, false);
+    emit_op(c, OP_POP);
   }
+  if (using_floor < cur->usings) cur->usings = using_floor;
+}
+
+static void emit_handler_close(sv_compiler_t *c) {
+  if (c->handler_close_floor)
+    emit_slot_op(c, OP_CLOSE_UPVAL, (uint16_t)(c->handler_close_floor - 1));
 }
 
 static void emit_iter_close_seq(sv_compiler_t *c, bool is_async) {
@@ -67,8 +82,17 @@ static void emit_iter_close_seq(sv_compiler_t *c, bool is_async) {
   }
 }
 
-static void emit_loop_exit_unwind(sv_compiler_t *c, int unwind_depth, int target_loop) {
+static void emit_loop_exit_unwind(
+  sv_compiler_t *c, int unwind_depth, int target_loop,
+  exit_cursor_t *cur, exit_cursor_t floor
+) {
   for (int i = c->unwind_count - 1; i >= unwind_depth; i--) {
+    sv_unwind_mark_t mark = c->unwind_marks[i];
+    emit_exit_cleanups(
+      c, cur,
+      mark.local_count > floor.locals ? mark.local_count : floor.locals,
+      mark.using_count > floor.usings ? mark.using_count : floor.usings
+    );
     if (c->unwind_kinds[i] == UNW_TRY_FINALLY) {
       emit_op(c, OP_UNWIND_JMP);
       emit_i32(c, 0);
@@ -83,23 +107,55 @@ static void emit_loop_exit_unwind(sv_compiler_t *c, int unwind_depth, int target
 }
 
 void emit_loop_exit_jump(sv_compiler_t *c, sv_loop_t *loop, sv_patch_list_t *pl) {
-  emit_loop_exit_unwind(c, loop->unwind_depth, (int)(loop - c->loops));
+  exit_cursor_t cur = { c->local_count, c->using_cleanup_count };
+  exit_cursor_t floor = cur;
+  while (floor.locals > 0 && c->locals[floor.locals - 1].depth > loop->scope_depth) floor.locals--;
+  while (floor.usings > 0 && c->using_cleanups[floor.usings - 1].scope_depth > loop->scope_depth) floor.usings--;
+
+  emit_loop_exit_unwind(c, loop->unwind_depth, (int)(loop - c->loops), &cur, floor);
+  emit_exit_cleanups(c, &cur, floor.locals, floor.usings);
   patch_list_add(pl, emit_jump(c, OP_JMP));
 }
 
+static bool unwinding_runs_finally(const sv_compiler_t *c) {
+  for (int i = 0; i < c->unwind_count; i++)
+    if (c->unwind_kinds[i] == UNW_TRY_FINALLY) return true;
+  return false;
+}
+
 void emit_return_from_stack(sv_compiler_t *c) {
-  emit_using_cleanups_to_depth(c, -1);
+  exit_cursor_t cur = { c->local_count, c->using_cleanup_count };
   int active_unwinds = c->unwind_count;
+  int stash_local = -1;
+  bool needs_stash = false;
+
   for (int i = 0; i < c->loop_count; i++) {
     sv_loop_t *loop = &c->loops[i];
     if (loop->iter_unwind_index < 0) continue;
-
-    emit_put_local(c, loop->iter_completion_local);
-    emit_loop_exit_unwind(c, loop->iter_unwind_index, -1);
-    emit_get_local(c, loop->iter_completion_local);
     active_unwinds = loop->iter_unwind_index;
+    stash_local = loop->iter_completion_local;
+    needs_stash = true;
     break;
   }
+
+  if (c->using_cleanup_count > 0 && c->using_cleanups[0].stash_local >= 0) {
+    int first = 0;
+    while (first < active_unwinds && c->unwind_marks[first].using_count == 0) first++;
+    if (first < active_unwinds) {
+      active_unwinds = first;
+      stash_local = c->using_cleanups[0].stash_local;
+      needs_stash = false;
+      for (int i = first; i < c->unwind_count && !needs_stash; i++)
+        needs_stash = c->unwind_kinds[i] == UNW_TRY_FINALLY;
+      for (int i = 0; i < c->loop_count && !needs_stash; i++)
+        needs_stash = c->loops[i].iter_unwind_index >= first;
+    }
+  }
+
+  if (needs_stash) emit_put_local(c, stash_local);
+  emit_loop_exit_unwind(c, active_unwinds, -1, &cur, (exit_cursor_t){ 0, 0 });
+  emit_exit_cleanups(c, &cur, cur.locals, 0);
+  if (needs_stash) emit_get_local(c, stash_local);
 
   bool runs_finally = false;
   for (int i = 0; i < active_unwinds && !runs_finally; i++)
@@ -175,6 +231,7 @@ void compile_body_block(
     sv_ast_t *stmt = body->args.items[i];
     if (skip_static_declarations && module_stmt_is_static_declaration(stmt)) continue;
     compile_stmt(c, stmt);
+    if (stmt == c->this_bound_stmt) c->this_bound = true;
   }
 }
 
@@ -217,6 +274,7 @@ void emit_dispose_resource(sv_compiler_t *c, bool is_async) {
 void push_using_cleanup(
   sv_compiler_t *c,
   int stack_local,
+  int stash_local,
   int scope_depth,
   bool is_async
 ) {
@@ -228,6 +286,7 @@ void push_using_cleanup(
 
   c->using_cleanups[c->using_cleanup_count++] = (sv_using_cleanup_t){
     .stack_local = stack_local,
+    .stash_local = stash_local,
     .scope_depth = scope_depth,
     .is_async = is_async,
   };
@@ -259,7 +318,7 @@ static void compile_block_with_using(sv_compiler_t *c, sv_ast_t *node) {
   
   c->using_stack_local = stack_local;
   c->using_stack_async = has_await_using;
-  push_using_cleanup(c, stack_local, c->scope_depth, has_await_using);
+  push_using_cleanup(c, stack_local, err_local, c->scope_depth, has_await_using);
 
   c->try_depth++;
   int try_jump = emit_jump(c, OP_TRY_PUSH);
@@ -346,7 +405,17 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     case N_RETURN:
-      if (node->right) {
+      if (derived_return_needs_check(c)) {
+        if (node->right) compile_expr(c, node->right);
+        else emit_op(c, OP_UNDEF);
+        if (c->derived_return_local >= 0 && unwinding_runs_finally(c)) {
+          emit_put_local(c, c->derived_return_local);
+          emit_break_to_loop(c, 0);
+        } else {
+          emit_derived_return_check(c);
+          emit_return_from_stack(c);
+        }
+      } else if (node->right) {
         compile_tail_return_expr(c, node->right);
       } else {
         emit_op(c, OP_UNDEF);
@@ -564,7 +633,7 @@ void compile_while(sv_compiler_t *c, sv_ast_t *node) {
   emit_set_completion_undefined(c);
 
   int loop_start = c->code_len;
-  push_loop(c, loop_start, NULL, 0, false);
+  push_loop(c, loop_start, NULL, 0, SV_LOOP_ITERATION);
 
   compile_truthy_test_expr(c, node->cond);
   int exit_jump = emit_jump(c, OP_JMP_FALSE);
@@ -604,8 +673,15 @@ static void compile_catch_body(sv_compiler_t *c, sv_ast_t *node) {
   end_scope(c);
 }
 
+static void merge_handler_close_floor(sv_compiler_t *c, int outer) {
+  if (outer && (!c->handler_close_floor || outer < c->handler_close_floor))
+    c->handler_close_floor = outer;
+}
+
 void compile_try(sv_compiler_t *c, sv_ast_t *node) {
   emit_set_completion_undefined(c);
+  int outer_close_floor = c->handler_close_floor;
+  c->handler_close_floor = 0;
 
   bool has_catch = (node->catch_body != NULL);
   bool has_finally = (node->finally_body != NULL);
@@ -626,6 +702,7 @@ void compile_try(sv_compiler_t *c, sv_ast_t *node) {
     patch_jump(c, inner_jump);
 
     int catch_tag = emit_jump(c, OP_CATCH);
+    emit_handler_close(c);
     compile_catch_body(c, node);
 
     patch_jump(c, catch_tag);
@@ -640,17 +717,20 @@ void compile_try(sv_compiler_t *c, sv_ast_t *node) {
     int end_jump = emit_jump(c, OP_JMP);
     patch_jump(c, try_jump);
     int catch_tag = emit_jump(c, OP_CATCH);
+    emit_handler_close(c);
     if (has_catch) compile_catch_body(c, node);
     else emit_op(c, OP_POP);
     patch_jump(c, catch_tag);
     patch_jump(c, end_jump);
     c->try_depth--;
+    merge_handler_close_floor(c, outer_close_floor);
     return;
   }
 
   int to_finally_from_try = emit_jump(c, OP_JMP);
   patch_jump(c, try_jump);
   emit_op(c, OP_POP);
+  emit_handler_close(c);
   
   int to_finally_from_throw = emit_jump(c, OP_JMP);
   patch_jump(c, to_finally_from_try);
@@ -658,6 +738,7 @@ void compile_try(sv_compiler_t *c, sv_ast_t *node) {
   
   compile_finally_block(c, node->finally_body);
   c->try_depth--;
+  merge_handler_close_floor(c, outer_close_floor);
 }
 
 // TODO: cleanup, reduce nesting
@@ -748,7 +829,7 @@ void compile_switch(sv_compiler_t *c, sv_ast_t *node) {
   hoist_switch_lexical_decls(c, node);
   int lexical_ub = c->local_count;
   hoist_switch_func_decls(c, node);
-  push_loop(c, c->code_len, NULL, 0, true);
+  push_loop(c, c->code_len, NULL, 0, SV_LOOP_SWITCH);
 
   for (int i = 0; i < case_count; i++) {
     sv_ast_t *cas = node->args.items[i];
@@ -811,6 +892,11 @@ static inline bool is_loop_node(sv_ast_t *n) {
 }
 
 void compile_label(sv_compiler_t *c, sv_ast_t *node) {
+  if (find_loop_label(c, node->str, node->len) >= 0) {
+    js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Label '%.*s' has already been declared", (int)node->len, node->str);
+    return;
+  }
+
   if (is_loop_node(node->body)) {
     c->pending_label = node->str;
     c->pending_label_len = node->len;
@@ -818,7 +904,11 @@ void compile_label(sv_compiler_t *c, sv_ast_t *node) {
     c->pending_label = NULL;
     c->pending_label_len = 0;
   } else {
-    push_loop(c, c->code_len, node->str, node->len, false);
+    sv_ast_t *inner = node->body;
+    while (inner && inner->type == N_LABEL) inner = inner->body;
+    
+    push_loop(c, c->code_len, node->str, node->len, is_loop_node(inner) ? SV_LOOP_LABEL_OF_LOOP : SV_LOOP_LABEL);
+    
     compile_stmt(c, node->body);
     pop_loop(c);
   }

@@ -311,6 +311,22 @@ sv_func_t *compile_function_body(
     emit_put_local(&comp, comp.new_target_local);
   }
   
+  if (!comp.is_arrow && comp.enclosing && (node->flags & (FN_METHOD | FN_GETTER | FN_SETTER | FN_STATIC))) {
+    comp.super_local = add_hidden_local(&comp);
+    emit_op(&comp, OP_SPECIAL_OBJ);
+    emit(&comp, SV_SPECIAL_SUPER);
+    emit_put_local(&comp, comp.super_local);
+  }
+
+  derived_ctor_plan_t derived = (node->flags & FN_DERIVED_CTOR) ? derived_ctor_plan(node) : (derived_ctor_plan_t){0};
+  if (derived.needs_this_binding) {
+    comp.this_local = add_hidden_local(&comp);
+    comp.this_bound_stmt = derived.sole_super_stmt;
+    comp.super_runs_once = derived.sole_super_stmt != NULL;
+    emit_op(&comp, OP_UNDEF);
+    emit_put_local(&comp, comp.this_local);
+  }
+
   if (!has_non_simple_params && node->body) {
     if (node->body->type == N_BLOCK) {
       for (int i = 0; i < node->body->args.count; i++)
@@ -485,12 +501,6 @@ sv_func_t *compile_function_body(
     comp.args_mapped = !comp.is_strict;
   }
 
-  if (!comp.is_arrow && comp.enclosing && (node->flags & (FN_METHOD | FN_GETTER | FN_SETTER | FN_STATIC))) {
-    comp.super_local = add_hidden_local(&comp);
-    emit_op(&comp, OP_SPECIAL_OBJ);
-    emit(&comp, SV_SPECIAL_SUPER);
-    emit_put_local(&comp, comp.super_local);
-  }
 
   if ((node->flags & FN_CLASS_CTOR) && !(node->flags & FN_DERIVED_CTOR) &&
       enclosing->field_init_count > 0) {
@@ -513,7 +523,7 @@ sv_func_t *compile_function_body(
 
     comp.using_stack_local = body_using_stack;
     comp.using_stack_async = body_has_await_using;
-    push_using_cleanup(&comp, body_using_stack, comp.scope_depth, body_has_await_using);
+    push_using_cleanup(&comp, body_using_stack, body_using_err_local, comp.scope_depth, body_has_await_using);
 
     comp.try_depth++;
     body_using_try_jump = emit_jump(&comp, OP_TRY_PUSH);
@@ -541,11 +551,21 @@ sv_func_t *compile_function_body(
     decl_names_free(&params);
   }
 
+  bool return_landing = comp.this_local >= 0 && derived.returns_through_finally;
+  if (return_landing) {
+    comp.derived_return_local = add_hidden_local(&comp);
+    emit_op(&comp, OP_UNDEF);
+    emit_put_local(&comp, comp.derived_return_local);
+    push_loop(&comp, 0, NULL, 0, SV_LOOP_RETURN_LANDING);
+  }
+
   if (node->body) {
     if (node->body->type == N_BLOCK)
       compile_body_block(&comp, node->body, emitted_static_declarations);
     else compile_tail_return_expr(&comp, node->body);
   }
+
+  if (return_landing) pop_loop(&comp);
 
   for (int i = 0; i < comp.deferred_export_count; i++) {
     sv_deferred_export_t *e = &comp.deferred_exports[i];
@@ -581,6 +601,14 @@ sv_func_t *compile_function_body(
 
   emit_using_cleanups_to_depth(&comp, -1);
   emit_close_upvals(&comp);
+  if (comp.derived_return_local >= 0) {
+    emit_get_local(&comp, comp.derived_return_local);
+    emit_derived_return_check(&comp);
+    emit_op(&comp, OP_RETURN);
+  } else if (derived_return_needs_check(&comp)) {
+    emit_this(&comp);
+    emit_op(&comp, OP_RETURN);
+  }
   emit_op(&comp, OP_RETURN_UNDEF);
 
   int max_locals = comp.max_local_count - comp.param_locals;

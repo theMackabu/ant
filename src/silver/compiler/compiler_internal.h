@@ -110,6 +110,7 @@ void compile_expr_with_inferred_name(
   sv_compiler_t *c, sv_ast_t *node,
   const char *name, uint32_t len
 );
+void emit_throw_error(sv_compiler_t *c, js_err_type_t type, const char *msg, uint32_t len);
 void emit_throw_type_error(sv_compiler_t *c, const char *msg, uint32_t len);
 void emit_const_assign_error(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_import_binding_resolve(
@@ -150,6 +151,7 @@ bool local_written_once(sv_compiler_t *c, int local);
 uint32_t ctor_prop_count(const sv_ast_t *node, uint32_t fields);
 uint32_t class_public_field_count(sv_ast_t **fields, int count);
 int resolve_super_upvalue(sv_compiler_t *c);
+int resolve_this_upvalue(sv_compiler_t *c);
 int resolve_arguments_upvalue(sv_compiler_t *c);
 int resolve_new_target_upvalue(sv_compiler_t *c);
 int resolve_upvalue_raw(sv_compiler_t *c, const char *name, uint32_t len);
@@ -173,8 +175,9 @@ void unwind_pop(sv_compiler_t *c);
 void push_loop(
   sv_compiler_t *c, int loop_start,
   const char *label, uint32_t label_len,
-  bool is_switch
+  sv_loop_kind_t kind
 );
+int find_loop_label(const sv_compiler_t *c, const char *label, uint32_t label_len);
 void pop_loop(sv_compiler_t *c);
 void begin_scope(sv_compiler_t *c);
 void end_scope(sv_compiler_t *c);
@@ -186,8 +189,23 @@ void emit_with_tries(
   const char *name, uint32_t len, int pops, sv_patch_list_t *out
 );
 void emit_lexical_new_target(sv_compiler_t *c);
+void emit_this(sv_compiler_t *c);
+void emit_this_store(sv_compiler_t *c);
+void emit_super_receiver(sv_compiler_t *c);
 int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local);
+void emit_new_target(sv_compiler_t *c);
 bool class_method_needs_home(const sv_ast_t *method);
+typedef struct {
+  bool needs_this_binding;
+  bool has_eval;
+  bool returns_through_finally;
+  const sv_ast_t *sole_super_stmt;
+} derived_ctor_plan_t;
+
+derived_ctor_plan_t derived_ctor_plan(const sv_ast_t *ctor);
+bool derived_return_needs_check(const sv_compiler_t *c);
+void emit_derived_return_check(sv_compiler_t *c);
+void emit_break_to_loop(sv_compiler_t *c, int target);
 void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_export_writes_from_stack(sv_compiler_t *c, const sv_export_name_t *exports);
@@ -266,7 +284,6 @@ void emit_using_dispose_call(
   bool suppressed_completion
 );
 void emit_using_cleanups_to_depth(sv_compiler_t *c, int target_depth);
-void emit_close_upvals_to_depth(sv_compiler_t *c, int target_depth);
 void emit_loop_exit_jump(sv_compiler_t *c, sv_loop_t *loop, sv_patch_list_t *pl);
 void emit_return_from_stack(sv_compiler_t *c);
 bool module_stmt_is_static_declaration(sv_ast_t *node);
@@ -285,6 +302,7 @@ void emit_dispose_resource(sv_compiler_t *c, bool is_async);
 void push_using_cleanup(
   sv_compiler_t *c,
   int stack_local,
+  int stash_local,
   int scope_depth,
   bool is_async
 );

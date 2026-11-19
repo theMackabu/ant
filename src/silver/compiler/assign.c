@@ -224,14 +224,14 @@ void emit_super_key(sv_compiler_t *c, sv_ast_t *member) {
 }
 
 void emit_super_reference(sv_compiler_t *c, sv_ast_t *member) {
-  emit_op(c, OP_THIS);
+  emit_this(c);
   emit_get_var(c, "super", 5);
   emit_super_key(c, member);
 }
 
 static void emit_super_reference_read(sv_compiler_t *c) {
   emit_op(c, OP_DUP2);
-  emit_op(c, OP_THIS);
+    emit_this(c);
   emit_op(c, OP_ROT3R);
   emit_op(c, OP_GET_SUPER_VAL);
 }
@@ -600,7 +600,7 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
 void compile_lhs_set(sv_compiler_t *c, sv_ast_t *target, bool keep) {
   if (is_super_member(target)) {
     if (reject_super_private(c, target)) return;
-    emit_op(c, OP_THIS);
+    emit_this(c);
     emit_op(c, OP_SWAP);
     emit_get_var(c, "super", 5);
     emit_op(c, OP_SWAP);
