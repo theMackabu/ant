@@ -64,7 +64,16 @@ for (let round = 0; round < 3; round++) {
   error = thrown(() => require('node:no-such-builtin'));
   assert.strictEqual(error.code, 'ERR_UNKNOWN_BUILTIN_MODULE');
 
+  error = thrown(() => require('./fixtures/module-errors/tla.mjs'));
+  assert.strictEqual(error.code, 'ERR_REQUIRE_ASYNC_MODULE');
+  assert.ok(error.message.startsWith('require() cannot be used on an ESM graph with top-level await. Use import() instead.'));
+
+  error = thrown(() => require('./fixtures/module-errors/tla-user.mjs'));
+  assert.strictEqual(error.code, 'ERR_REQUIRE_ASYNC_MODULE');
+
   assert.strictEqual(require('./fixtures/module-errors/plain.mjs').plain, 3);
+  assert.strictEqual((await import('./fixtures/module-errors/tla-user.mjs')).y, 2);
+
 }
 
 console.log('ok');

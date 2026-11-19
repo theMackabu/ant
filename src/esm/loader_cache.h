@@ -22,6 +22,8 @@ struct ant_esm_state {
   
   int module_count;
   int dynamic_import_depth;
+  int require_depth;
+  bool require_async;
 
   char **active_conditions;
   int active_condition_count;
