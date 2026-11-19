@@ -88,7 +88,7 @@ OP_DEF(  LOAD_STABLE_BUILTIN, 2, 0,   2, u8)        /* push protected receiver +
 
 OP_DEF(  GET_EVAL_GLOBAL,       7,   0,   1, atom)  /* resolve through direct-eval environment */
 OP_DEF(  GET_EVAL_GLOBAL_UNDEF, 7,   0,   1, atom)  /* eval lookup, undefined if missing */
-OP_DEF(  PUT_EVAL_GLOBAL,       5,   1,   0, atom)  /* assign through direct-eval environment */
+OP_DEF(  PUT_EVAL_GLOBAL,       7,   1,   0, atom)  /* assign through direct-eval environment */
 
 OP_DEF(  GET_FIELD,         7,   1,   1, atom)      /* obj -> val (atom + ic_idx:u16) */
 OP_DEF(  GET_FIELD2,        7,   1,   2, atom)      /* obj -> obj val (atom + ic_idx:u16) */
@@ -494,7 +494,7 @@ OP_FLAG(CHECK_CTOR            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV
 OP_FLAG(HALT                  , SV_OPF_JIT_ELIGIBLE | SV_OPF_TERMINAL)
 
 OP_FLAG(THROW                 , SV_OPF_JIT_ELIGIBLE | SV_OPF_TERMINAL | SV_OPF_OPT_NATIVE)
-OP_FLAG(THROW_ERROR           , SV_OPF_JIT_ELIGIBLE | SV_OPF_TERMINAL)
+OP_FLAG(THROW_ERROR           , SV_OPF_JIT_ELIGIBLE | SV_OPF_TERMINAL | SV_OPF_OPT_COLD)
 OP_FLAG(TRY_PUSH              , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_BRANCH32 | SV_OPF_OPT_NO_GENERIC | SV_OPF_LABEL_NOT_EDGE | SV_OPF_OPT_HANDLER | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY)
 OP_FLAG(TRY_PUSH_FINALLY      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_BRANCH32 | SV_OPF_OPT_NO_GENERIC | SV_OPF_LABEL_NOT_EDGE | SV_OPF_OPT_HANDLER | SV_OPF_OPT_NATIVE | SV_OPF_OPT_ROOT_ONLY)
 OP_FLAG(TRY_POP               , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NO_GENERIC | SV_OPF_OPT_HANDLER | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY)
@@ -574,6 +574,7 @@ OP_IC_SLOT(GET_GLOBAL)
 OP_IC_SLOT(GET_GLOBAL_UNDEF)
 OP_IC_SLOT(GET_EVAL_GLOBAL)
 OP_IC_SLOT(GET_EVAL_GLOBAL_UNDEF)
+OP_IC_SLOT(PUT_EVAL_GLOBAL)
 OP_IC_SLOT(GET_FIELD)
 OP_IC_SLOT(GET_FIELD2)
 OP_IC_SLOT(GET_FIELD_OPT)

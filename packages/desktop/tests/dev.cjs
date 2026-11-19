@@ -7,7 +7,10 @@ const os = require('node:os');
 const path = require('node:path');
 const { once } = require('node:events');
 
-const { createDevApp, dev } = require('../packaging/npm/darwin-arm64/dev.cjs');
+const common = require('../platform/common.cjs');
+const driver = require('../platform/darwin.cjs');
+const { createDevApp } = driver;
+const dev = (layout, entry, options) => common.dev(driver, layout, entry, options);
 
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'ant-desktop-dev-'));
 const shellQuote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
@@ -70,12 +73,6 @@ async function main() {
   assert.match(plist, /<string>app\/main\.js<\/string>/);
   assert.equal(fs.realpathSync(path.join(result.output, 'Contents', 'Resources', 'Dev Example.icns')), fs.realpathSync(icon));
 
-  fs.writeFileSync(
-    path.join(appRoot, 'package.json'),
-    JSON.stringify({
-      productName: 'Ignored Package Name'
-    })
-  );
   const fallback = createDevApp({ executable, frameworks }, entry, {
     cacheDir: path.join(temporary, 'fallback-cache')
   });

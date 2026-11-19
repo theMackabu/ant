@@ -61,5 +61,7 @@ ant_value_t object_define_property(ant_t *js, ant_value_t obj, ant_value_t prop,
 ant_value_t object_define_property_reporting(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, const define_desc_raw_t *raw, bool *abrupt);
 
 ant_value_t define_desc_read(ant_t *js, ant_value_t descriptor, define_desc_raw_t *raw);
+ant_value_t define_desc_object(ant_t *js, const define_desc_raw_t *raw);
+ant_value_t reflect_define_property_raw(ant_t *js, ant_value_t obj, ant_value_t key_val, const define_desc_raw_t *raw);
 ant_value_t js_from_data_descriptor(ant_t *js, ant_value_t value, bool writable, bool enumerable, bool configurable);
 ant_value_t js_from_accessor_descriptor(ant_t *js, ant_value_t getter, ant_value_t setter, bool enumerable, bool configurable);

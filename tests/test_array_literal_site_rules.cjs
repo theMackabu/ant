@@ -9,6 +9,11 @@ const cases = {
   nestedArray: { body: '[{ x: 1 }, [2]]', site: true },
   nestedInObject: { body: '[{ x: [1, 2] }]', site: true },
   largeFlat: { body: `[${large}]`, site: true },
+  dynamicSibling: { body: '[[1, 2], Math.PI]', site: false },
+  dynamicNested: { body: '[[1, [2, Math.PI]], [3]]', site: false },
+  dynamicProperty: { body: '[{ a: [1], b: Math.PI }, [2]]', site: false },
+  largeFewDynamic: { body: `[${large}, [1, 2], Math.PI]`, site: true },
+  largeMostlyDynamic: { body: `[${Array.from({ length: 40 }, () => 'Math.PI').join(', ')}, 1, 2, 3]`, site: false },
 };
 
 const source = Object.entries(cases)

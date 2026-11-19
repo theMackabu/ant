@@ -249,6 +249,7 @@ typedef struct sv_compiler {
   bool allows_new_target;
   bool inherits_eval_env;
   bool owns_eval_env;
+  bool lazy_eval_env;
   bool function_ctor_root;
   
   bool eval_shadows_undefined;
@@ -281,7 +282,7 @@ typedef struct sv_compiler {
   int with_depth;
   
   int completion_local;
-  int strict_args_local;
+  int arguments_local;
   bool args_mapped;
   int new_target_local;
   int super_local;
@@ -358,9 +359,18 @@ typedef struct sv_compiler {
 
 #define SV_PARAM(name_literal) ((sv_param_t){ (name_literal), sizeof(name_literal) - 1 })
 
+enum {
+  SV_EVAL_SHADOWS_UNDEFINED   = 1 << 0,
+  SV_EVAL_SHADOWS_GLOBAL_THIS = 1 << 1,
+  SV_EVAL_SCOPE_THIS_BINDING  = 1 << 4,
+  SV_EVAL_SCOPE_FIELD_THUNK   = 1 << 5,
+};
+
+uint8_t sv_eval_shadow_bits(ant_t *js, ant_value_t eval_env, const char *source, size_t len);
+
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program, sv_compile_mode_t mode,
-  const char *source, ant_offset_t source_len, ant_value_t eval_env
+  const char *source, ant_offset_t source_len, uint8_t eval_shadows
 );
 
 sv_func_t *sv_compile_function_with_params(

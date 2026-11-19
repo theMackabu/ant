@@ -43,7 +43,7 @@ void sv_compile_ctx_init_root(
   ctx->is_strict = is_strict;
   memset(ctx->var_name_bloom, 0xff, sizeof(ctx->var_name_bloom));
   ctx->completion_local = -1;
-  ctx->strict_args_local = -1;
+  ctx->arguments_local = -1;
   ctx->new_target_local = -1;
   ctx->super_local = -1;
   ctx->this_local = -1;
@@ -80,7 +80,7 @@ void sv_compile_ctx_init_child(
   ctx->inherits_eval_env =
     enclosing->inherits_eval_env || sv_compile_mode_is_eval(mode);
   ctx->completion_local = -1;
-  ctx->strict_args_local = -1;
+  ctx->arguments_local = -1;
   ctx->new_target_local = -1;
   ctx->super_local = -1;
   ctx->this_local = -1;
@@ -144,19 +144,27 @@ sv_line_table_t *sv_compile_ctx_build_line_table(const char *source, ant_offset_
   lt->col_line = -1;
   lt->offsets[lt->count++] = 0;
 
-  unsigned char high = 0;
-  for (ant_offset_t i = 0; i < source_len; i++) {
-    high |= (unsigned char)source[i];
-    if (source[i] == '\n') {
-      if (lt->count >= cap) {
-        cap *= 2;
-        lt->offsets = realloc(lt->offsets, (size_t)cap * sizeof(uint32_t));
-      }
-      lt->offsets[lt->count++] = (uint32_t)(i + 1);
+  size_t len = (size_t)source_len;
+  uint64_t high = 0;
+  size_t i = 0;
+  
+  for (; i + 8 <= len; i += 8) {
+    uint64_t word;
+    memcpy(&word, source + i, 8);
+    high |= word;
+  }
+  for (; i < len; i++) high |= (uint64_t)(unsigned char)source[i];
+
+  const char *end = source + len;
+  for (const char *nl = source; (nl = memchr(nl, '\n', (size_t)(end - nl))); nl++) {
+    if (lt->count >= cap) {
+      cap *= 2;
+      lt->offsets = realloc(lt->offsets, (size_t)cap * sizeof(uint32_t));
     }
+    lt->offsets[lt->count++] = (uint32_t)(nl + 1 - source);
   }
 
-  lt->ascii = high < 0x80;
+  lt->ascii = (high & 0x8080808080808080ull) == 0;
   return lt;
 }
 

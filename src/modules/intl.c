@@ -13,6 +13,8 @@
 #include "internal.h"
 
 #include "modules/intl.h"
+#include "modules/bigint.h"
+#include "modules/number.h"
 #include "modules/intl_tag.h"
 
 typedef struct {
@@ -239,43 +241,41 @@ static ant_value_t intl_collator_resolved_options(ant_params_t) {
   return obj;
 }
 
+ant_value_t Ant_Intl_ResolveLocale(ant_t *js, ant_value_t locales) {
+  return intl_resolve_locale(js, locales);
+}
+
+static void intl_numberformat_store(ant_value_t obj, const ant_number_locale_t *format) {
+  uint64_t bits = 0;
+  memcpy(&bits, format, sizeof(*format));
+  js_set_slot(obj, SLOT_DATA, Ant_Value_FromNumber((double)bits));
+}
+
+static ant_number_locale_t intl_numberformat_load(ant_value_t obj) {
+  ant_number_locale_t format = ANT_NUMBER_LOCALE_DEFAULT;
+  ant_value_t stored = is_object_type(obj) ? js_get_slot(obj, SLOT_DATA) : Ant_Value_Undefined;
+  if (vtype(stored) != kTypeNumber) return format;
+
+  uint64_t bits = (uint64_t)Ant_Value_AsNumberUnchecked(stored);
+  memcpy(&format, &bits, sizeof(format));
+
+  return format;
+}
+
 static ant_value_t intl_numberformat_format(ant_params_t) {
-  double number = nargs > 0 ? js_to_number(js, args[0]) : 0.0;
-  ant_value_t raw_val = js_tostring_val(js, Ant_Value_FromNumber(number));
-  if (is_err(raw_val)) return raw_val;
+  double number = ANT_NAN;
 
-  size_t raw_len = 0;
-  const char *raw = js_getstr(js, raw_val, &raw_len);
-  if (!raw || raw_len == 0) return js_mkstr(js, "0", 1);
+  if (nargs > 0) number = vtype(args[0]) == kTypeBigInt 
+    ? bigint_to_double(js, args[0])
+    : js_to_number(js, args[0]);
 
-  if (
-    !isfinite(number) ||
-    memchr(raw, 'e', raw_len) || 
-    memchr(raw, 'E', raw_len)
-  ) return raw_val;
+  char buf[ANT_NUMBER_LOCALE_CHARS];
+  ant_number_locale_t format = intl_numberformat_load(call_this);
 
-  const char *dot = memchr(raw, '.', raw_len);
-  size_t int_len = dot ? (size_t)(dot - raw) : raw_len;
-  size_t start = raw[0] == '-' ? 1 : 0;
-  size_t frac_len = dot ? (raw_len - int_len) : 0;
+  size_t len = Ant_Number_FormatLocale(number, &format, buf, sizeof(buf));
+  if (len == 0) return js_mkerr(js, "number formatting failed");
 
-  char buf[128];
-  size_t pos = 0;
-  if (start) buf[pos++] = '-';
-
-  for (size_t i = start; i < int_len; i++) {
-    buf[pos++] = raw[i];
-    size_t remaining = int_len - 1 - i;
-    if (remaining > 0 && remaining % 3 == 0) buf[pos++] = ',';
-  }
-
-  if (dot && frac_len > 0) {
-    memcpy(buf + pos, dot, frac_len);
-    pos += frac_len;
-  }
-
-  buf[pos] = '\0';
-  return js_mkstr(js, buf, pos);
+  return js_mkstr(js, buf, len);
 }
 
 static ant_value_t intl_numberformat_resolved_options(ant_params_t) {
@@ -460,9 +460,14 @@ static ant_value_t intl_numberformat_constructor(ant_params_t) {
   ant_value_t locale = intl_resolve_locale(js, nargs > 0 ? args[0] : Ant_Value_Undefined);
   if (is_err(locale)) return locale;
 
+  ant_number_locale_t format;
+  ant_value_t status = Ant_Number_ReadLocaleOptions(js, nargs > 1 ? args[1] : Ant_Value_Undefined, &format);
+  if (is_err(status)) return status;
+
   ant_value_t obj = intl_create_instance(js, js->builtins.intl_numberformat_proto, call_new_target);
   defhidden(js, obj, "locale", 6, locale);
-  
+  intl_numberformat_store(obj, &format);
+
   return obj;
 }
 

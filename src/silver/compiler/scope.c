@@ -298,14 +298,6 @@ int resolve_this_upvalue(sv_compiler_t *c) {
   return resolve_upvalue_to(c, owner, owner->this_local);
 }
 
-int resolve_arguments_upvalue(sv_compiler_t *c) {
-  for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing) {
-    if (enc->owns_eval_env || sv_compile_mode_is_eval(enc->mode)) return -1;
-    if (!enc->is_arrow) return resolve_upvalue_to(c, enc, enc->strict_args_local);
-  }
-  return -1;
-}
-
 int resolve_new_target_upvalue(sv_compiler_t *c) {
   for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing)
     if (enc->new_target_local >= 0) return resolve_upvalue_to(c, enc, enc->new_target_local);
@@ -338,8 +330,13 @@ int resolve_upvalue_raw(sv_compiler_t *c, const char *name, uint32_t len) {
 
 int resolve_upvalue(sv_compiler_t *c, const char *name, uint32_t len) {
   if (name && len) {
-    if (!c->is_arrow && !sv_compile_mode_is_eval(c->mode) && is_ident_str(name, len, "arguments", 9)) return -1;
+    bool lexical_arguments = !sv_compile_mode_is_eval(c->mode) && is_ident_str(name, len, "arguments", 9);
+    if (lexical_arguments && !c->is_arrow) return -1;
     if (c->owns_eval_env) return -1;
+    for (sv_compiler_t *enc = lexical_arguments ? c->enclosing : NULL; enc; enc = enc->enclosing) {
+      if (resolve_local(enc, name, len) >= 0) break;
+      if (!enc->is_arrow) return -1;
+    }
     for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing) {
       if (resolve_local(enc, name, len) >= 0) break;
       if (enc->owns_eval_env) return -1;

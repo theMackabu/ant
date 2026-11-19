@@ -167,6 +167,11 @@ static void gc_visit_isolate_values(ant_t *js, gc_root_visitor_t visitor) {
     if (lib->ns) visitor(js, lib->ns);
     if (lib->esm_ns) visitor(js, lib->esm_ns);
   }
+
+  for (ant_host_module_t *module = js->host_modules; module; module = module->next) {
+    if (module->ns.ns) visitor(js, module->ns.ns);
+    if (module->ns.esm_ns) visitor(js, module->ns.esm_ns);
+  }
 }
 
 void gc_visit_roots(ant_t *js, gc_root_visitor_t visitor) {

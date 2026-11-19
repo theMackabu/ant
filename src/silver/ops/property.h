@@ -257,6 +257,19 @@ static inline bool sv_gf_read_slot(
   return true;
 }
 
+static inline bool sv_absence_cacheable_holder(ant_value_t value, const ant_object_t *ptr) {
+  uint8_t type = vtype(value);
+  if (__builtin_expect(type == kTypeObject, 1)) return ptr->type_tag == kTypeObject;
+  return type == kTypeFunction && ptr->type_tag == kTypeObject;
+}
+
+static inline bool sv_absence_cacheable_receiver(ant_value_t obj, const ant_object_t *ptr, const sv_atom_t *a) {
+  uint8_t type = vtype(obj);
+  if (__builtin_expect(type == kTypeObject, 1)) return ptr->type_tag == kTypeObject;
+  if (type != kTypeFunction || ptr->type_tag != kTypeObject) return false;
+  return !(a->len == 4 && memcmp(a->str, "meta", 4) == 0);
+}
+
 static inline bool sv_ic_try_get_hit(
   ant_t *js, sv_ic_entry_t *ic, ant_value_t obj, ant_object_t *receiver, 
   sv_atom_t *a, ant_value_t *out, ant_value_t *getter_out
@@ -267,7 +280,7 @@ static inline bool sv_ic_try_get_hit(
 
   ant_value_t receiver_proto = ant_object_proto(receiver);
   if (ic->get_kind == SV_GF_IC_MISSING) {
-    if (vtype(obj) != kTypeObject || receiver->type_tag != kTypeObject || receiver->flags.is_exotic ||
+    if (!sv_absence_cacheable_receiver(obj, receiver, a) || receiver->flags.is_exotic ||
       !receiver->shape || receiver_proto != ic->guard.receiver_proto) return false;
     
     if (is_object_type(receiver_proto)) {
@@ -472,7 +485,7 @@ static inline __attribute__((always_inline)) bool sv_ic_probe_get_chain(
     ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
     if (!ptr || (ptr->flags.is_exotic && !(admit_receiver && cur == obj))) return false;
     if (cur != obj && sv_array_proto_owns_key(ptr, interned)) return false;
-    cache_miss = cache_miss && vtype(cur) == kTypeObject && ptr->type_tag == kTypeObject;
+    cache_miss = cache_miss && sv_absence_cacheable_holder(cur, ptr);
     
     if (!ptr->shape) {
       if (cur != obj) ant_object_guard_absence(ptr);
@@ -1042,8 +1055,8 @@ static inline __attribute__((always_inline)) bool sv_try_prop_get_ic_lookup(
 
   if (track_obj) {
     bool cache_miss = !own_length_only &&
-      ptr->shape && vtype(obj) == kTypeObject && !ptr->flags.is_exotic &&
-      ptr->type_tag == kTypeObject && sv_field_can_cache_absence(a->str);
+      ptr->shape && !ptr->flags.is_exotic &&
+      sv_absence_cacheable_receiver(obj, ptr, a) && sv_field_can_cache_absence(a->str);
     
     unsigned flags = SV_PROBE_ADMIT_RECEIVER | (cache_miss ? SV_PROBE_CACHE_MISS : 0) | (getter_out ? SV_PROBE_ACCESSORS : 0);
     sv_probe_hit_t probe;
@@ -1705,7 +1718,6 @@ static inline bool sv_get_elem_string(ant_t *js, ant_value_t obj, ant_value_t ke
     return true;
   }
   
-  if (interned == js->intern.length) return false;
   sv_gf_mega_cache_t *cache = sv_gf_mega_keyed_ensure(js);
   if (!cache) return false;
   int kind = -1;
@@ -1723,6 +1735,7 @@ static inline bool sv_get_elem_string(ant_t *js, ant_value_t obj, ant_value_t ke
   unsigned flags = sv_field_can_cache_absence(interned) ? SV_PROBE_CACHE_MISS : 0;
   
   if (!sv_ic_probe_get_chain(obj, interned, flags, &probe) || probe.accessor) return false;
+  if (interned == js->intern.length && probe.holder != ptr) return false;
   sv_gf_mega_store_in(js, cache, ptr, interned, probe.holder, probe.index, false);
   *out = probe.value;
   
