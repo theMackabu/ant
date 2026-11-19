@@ -215,12 +215,20 @@ static bool super_call_ignores_this(const sv_ast_t *call) {
 static bool sole_super_opens_plain_ctor(const sv_ast_t *ctor) {
   const sv_ast_t *body = ctor->body;
   if (!(ctor->flags & FN_SOLE_SUPER_CALL) || (ctor->flags & FN_DIRECT_EVAL)) return false;
-  if (!body || body->type != N_BLOCK || !body->args.count || !is_super_call_stmt(body->args.items[0])) return false;
+  if (!body || body->type != N_BLOCK) return false;
+  
+  int at = 0;
+  for (; at < body->args.count && !is_super_call_stmt(body->args.items[at]); at++) {
+    ctor_scan_t before = {0};
+    ctor_scan(body->args.items[at], &before, false);
+    if (before.reads_this || before.returns || before.super_calls || before.has_eval) return false;
+  }
+  if (at == body->args.count) return false;
   
   for (int i = 0; i < ctor->args.count; i++)
     if (ctor->args.items[i]->type != N_IDENT) return false;
   
-  return super_call_ignores_this(body->args.items[0]);
+  return super_call_ignores_this(body->args.items[at]);
 }
 
 derived_ctor_plan_t derived_ctor_plan(const sv_ast_t *ctor) {
