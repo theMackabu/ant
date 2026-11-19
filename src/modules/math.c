@@ -288,6 +288,7 @@ void init_math_module(ant_t *js) {
   defmethod(js, math_obj, "tan", 3, Ant_Function_CreateEx(builtin_Math_tan, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "tanh", 4, Ant_Function_CreateEx(builtin_Math_tanh, 1, CFUNC_REALM_FREE));
   defmethod(js, math_obj, "trunc", 5, Ant_Function_CreateEx(builtin_Math_trunc, 1, CFUNC_REALM_FREE));
+  
   mkprop_exact_attrs(js, math_obj, js_mkstr(js, "E", 1), Ant_Value_FromNumber(M_E), 0);
   mkprop_exact_attrs(js, math_obj, js_mkstr(js, "LN10", 4), Ant_Value_FromNumber(M_LN10), 0);
   mkprop_exact_attrs(js, math_obj, js_mkstr(js, "LN2", 3), Ant_Value_FromNumber(M_LN2), 0);
