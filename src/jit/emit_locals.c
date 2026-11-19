@@ -3,7 +3,17 @@
 
 #pragma clang attribute push(__attribute__((minsize)), apply_to = function)
 
+static void jit_reload_captured_local(jit_compile_t *c, uint8_t idx) {
+  if (!c->has_captures || !c->captured_locals || !c->captured_locals[idx]) return;
+  MIR_append_insn(c->ctx, c->jit_func,
+                  MIR_new_insn(c->ctx, MIR_MOV,
+                               MIR_new_reg_op(c->ctx, c->local_regs[idx]),
+                               MIR_new_mem_op(c->ctx, MIR_T_I64,
+                                              (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), c->r_lbuf, 0, 1)));
+}
+
 static void jit_emit_numeric_local(jit_compile_t *c, uint8_t idx, MIR_reg_t dst) {
+  jit_reload_captured_local(c, idx);
   MIR_label_t not_num = MIR_new_label(c->ctx);
   MIR_label_t done = MIR_new_label(c->ctx);
   mir_emit_is_num_guard(c->ctx, c->jit_func, c->r_bool, c->local_regs[idx], not_num);
@@ -190,6 +200,7 @@ void jit_emit_locals(jit_compile_t *c) {
       if (c->dnum_locals && c->dnum_locals[idx])
         mir_d_to_i64(c->ctx, c->jit_func,
                      c->local_regs[idx], c->local_d_regs[idx], c->r_d_slot);
+      jit_reload_captured_local(c, idx);
       mir_emit_is_num_guard(c->ctx, c->jit_func, c->r_bool, c->local_regs[idx], slow);
       mir_emit_is_num_guard(c->ctx, c->jit_func, c->r_bool, rr, slow);
 

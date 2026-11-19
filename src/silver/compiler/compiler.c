@@ -80,10 +80,16 @@ sv_func_t *sv_compile(
   );
   
   if (sv_compile_mode_is_eval(mode)) {
-    root.eval_shadows_undefined = sv_eval_env_shadows_global(js, eval_env, "undefined", 9);
-    root.eval_shadows_global_this = sv_eval_env_shadows_global(js, eval_env, "globalThis", 10);
+    root.eval_env = eval_env;
+    sv_eval_env_facts_t env_facts = sv_eval_env_facts(js, eval_env);
+    root.eval_with = env_facts.has_with;
+    root.eval_shadows_undefined = env_facts.shadows_undefined;
+    root.eval_shadows_global_this = env_facts.shadows_global_this;
     sv_eval_scope_flags_t scope_flags = sv_eval_env_flags(eval_env);
     root.eval_this_binding = scope_flags.this_binding;
+    root.eval_super_binding = scope_flags.super_binding;
+    root.is_static = scope_flags.is_static;
+    root.eval_no_arguments = scope_flags.no_arguments;
     root.eval_field_thunk = root.eval_this_binding && sv_eval_env_shadows_global(js, eval_env, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN);
   }
   

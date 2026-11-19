@@ -69,6 +69,7 @@ void sv_compile_ctx_init_child(
   ctx->enclosing = enclosing;
   ctx->scope_depth = 0;
   ctx->is_arrow = node && !!(node->flags & FN_ARROW);
+  ctx->with_inherited = enclosing->with_inherited || enclosing->with_depth > 0 || enclosing->eval_with;
   ctx->allows_new_target = (!enclosing->enclosing || ctx->is_arrow)
     ? enclosing->allows_new_target : true;
   ctx->is_async = node && !!(node->flags & FN_ASYNC);
@@ -89,6 +90,11 @@ void sv_compile_ctx_init_child(
   ctx->using_stack_local = -1;
   ctx->param_count = node ? node->args.count : 0;
   ctx->private_scope = enclosing->private_scope;
+  enclosing->type_child_count++;
+  ctx->types = enclosing->types ? enclosing->types : &ctx->type_storage;
+  ctx->type_dep_mark = ctx->types->dep_count;
+  ctx->type_use_mark = ctx->types->use_count;
+  ctx->type_promo_mark = ctx->types->promo_count;
 }
 
 void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
@@ -102,6 +108,15 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
   free(ctx->upval_descs);
   free(ctx->upval_bindings);
   free(ctx->write_counts);
+  if (ctx->types == &ctx->type_storage) {
+    free(ctx->type_storage.deps);
+    free(ctx->type_storage.uses);
+    free(ctx->type_storage.promos);
+  } else {
+    ctx->types->dep_count = ctx->type_dep_mark;
+    ctx->types->use_count = ctx->type_use_mark;
+    ctx->types->promo_count = ctx->type_promo_mark;
+  }
   for (int i = 0; i < ctx->eval_scope_count; i++)
     free(ctx->eval_scopes[i].bindings);
   free(ctx->eval_scopes);
@@ -109,6 +124,10 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
   free(ctx->global_lexicals);
   free(ctx->loops);
   free(ctx->with_scopes);
+  if (ctx->spills) {
+    free(ctx->spills);
+    free(ctx->spill_heads);
+  }
   free(ctx->unwind_kinds);
   free(ctx->unwind_marks);
   free(ctx->srcpos);

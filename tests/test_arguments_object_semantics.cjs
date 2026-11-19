@@ -179,4 +179,20 @@ if (!util.types.isArgumentsObject((function () { delete arguments.callee; return
   throw new Error('isArgumentsObject depends on callee');
 if (util.types.isArgumentsObject([1])) throw new Error('isArgumentsObject accepts arrays');
 
+{
+  const assert = require('node:assert');
+  const run = (source) => (0, eval)(source);
+  assert.strictEqual(run('(function f(arguments, b = () => arguments) { var arguments; return arguments; })(4)'), 4);
+  assert.strictEqual(run('(function f(arguments, b = () => arguments) { var arguments; return b(); })(4)'), 4);
+  assert.strictEqual(run('(function f(arguments, b = 1) { var arguments; return arguments; })(5)'), 5);
+  assert.strictEqual(run('(function f(arguments, b = 1) { var arguments = 9; return arguments; })(5)'), 9);
+  assert.strictEqual(run('(function f({ arguments }, b = 1) { var arguments; return arguments; })({ arguments: 6 })'), 6);
+  assert.deepStrictEqual(run('(function f(b = 1, ...arguments) { var arguments; return arguments; })(1, 2, 3)'), [2, 3]);
+  assert.strictEqual(run('(function* f(arguments, b = 1) { var arguments; yield arguments; })(7).next().value'), 7);
+  assert.strictEqual(run('(function f(arguments, b = 1) { var arguments; return eval("arguments"); })(8)'), 8);
+  assert.strictEqual(run('(function f(a, arguments = a) { var arguments; return arguments; })(11)'), 11);
+  assert.strictEqual(run('(function f(a, b = 1) { var arguments; return arguments.length; })(8, 9)'), 2);
+  assert.strictEqual(run('(function f(a, b = () => arguments) { var arguments; return arguments.length + b().length; })(8)'), 2);
+}
+
 console.log('PASS arguments objects follow the spec');

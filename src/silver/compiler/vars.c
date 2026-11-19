@@ -1,5 +1,32 @@
 #include "compiler_internal.h"
 
+static void reject_super(sv_compiler_t *c) {
+  js_mkerr_typed(c->js, JS_ERR_SYNTAX, "'super' keyword unexpected here");
+  emit_op(c, OP_UNDEF);
+}
+
+void emit_super(sv_compiler_t *c) {
+  if (c->super_local >= 0) {
+    c->super_referenced = true;
+    emit_get_local(c, c->super_local);
+    return;
+  }
+
+  int upval = c->is_arrow ? resolve_super_upvalue(c) : -1;
+  if (upval >= 0) {
+    emit_op(c, OP_GET_UPVAL);
+    emit_u16(c, (uint16_t)upval);
+    return;
+  }
+
+  if (!lexical_owner(c)->eval_super_binding) {
+    reject_super(c);
+    return;
+  }
+
+  emit_atom_op(c, OP_GET_EVAL_GLOBAL, "super", 5);
+}
+
 void emit_new_target(sv_compiler_t *c) {
   if (c->is_arrow) {
     emit_lexical_new_target(c);
@@ -34,8 +61,8 @@ typedef enum {
 } this_binding_t;
 
 static this_binding_t this_binding(sv_compiler_t *c, bool reading, int *slot) {
-  sv_compiler_t *owner = c;
-  while (owner->is_arrow && owner->enclosing) owner = owner->enclosing;
+  sv_compiler_t *owner = lexical_owner(c);
+  
   if (owner->this_local >= 0) {
     if (reading && owner->this_bound) return THIS_BINDING_NONE;
     if (owner == c) {
@@ -108,6 +135,37 @@ void emit_this_store(sv_compiler_t *c) {
   emit_this_binding_put(c, kind, slot);
 }
 
+bool reject_forbidden_arguments(sv_compiler_t *c) {
+  const sv_compiler_t *owner = c;
+  while (owner->is_arrow && owner->enclosing) owner = owner->enclosing;
+  const sv_compiler_t *root = owner->enclosing ? owner->enclosing : owner;
+  if (root->enclosing || !root->eval_no_arguments) return false;
+  js_mkerr_typed(c->js, JS_ERR_SYNTAX, "'arguments' is not allowed in class field initializer or static initialization block");
+  emit_op(c, OP_UNDEF);
+  return true;
+}
+
+static bool in_field_initializer(const sv_compiler_t *c) {
+  for (; c; c = c->is_arrow ? c->enclosing : NULL)
+    if (c->in_field_init) return true;
+  return false;
+}
+
+bool reject_super_identifier(sv_compiler_t *c, const sv_ast_t *node) {
+  if (!is_ident_name(node, "super")) return false;
+  reject_super(c);
+  return true;
+}
+
+bool reject_misplaced_super_call(sv_compiler_t *c) {
+  sv_compiler_t *owner = lexical_owner(c);
+  bool allowed = (owner->is_derived_ctor || owner->eval_this_binding) && !in_field_initializer(c);
+  if (allowed) return false;
+  
+  reject_super(c);
+  return true;
+}
+
 void emit_super_receiver(sv_compiler_t *c) {
   int slot = -1;
   this_binding_t kind = this_binding(c, false, &slot);
@@ -149,10 +207,10 @@ void emit_derived_return_check(sv_compiler_t *c) {
 }
 
 bool compiler_has_this_binding(const sv_compiler_t *c) {
-  const sv_compiler_t *owner = c;
-  while (owner->is_arrow && owner->enclosing) owner = owner->enclosing;
+  const sv_compiler_t *owner = lexical_owner((sv_compiler_t *)c);
   return owner->this_local >= 0 || owner->eval_this_binding;
 }
+
 
 typedef struct {
   int super_calls;
@@ -255,21 +313,10 @@ static void emit_slot_atom_op(sv_compiler_t *c, sv_op_t op, int local, const cha
 }
 
 void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len) {
-  bool is_super = is_ident_str(name, len, "super", 5);
-
-  if (is_super && c->super_local >= 0) {
-    c->super_referenced = true;
-    emit_get_local(c, c->super_local);
+  if (is_ident_str(name, len, "super", 5)) {
+    reject_super(c);
     return;
   }
-  
-  if (is_super && c->is_arrow) {
-  int super_upval = resolve_super_upvalue(c);
-  if (super_upval != -1) {
-    emit_op(c, OP_GET_UPVAL);
-    emit_u16(c, (uint16_t)super_upval);
-    return;
-  }}
 
   int local = resolve_local(c, name, len);
   if (local != -1) {
@@ -312,6 +359,7 @@ void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len) {
   }
   
   if (is_ident_str(name, len, "arguments", 9)) {
+    if (reject_forbidden_arguments(c)) return;
     if (c->owns_eval_env || sv_compile_mode_is_eval(c->mode)) {
       emit_atom_op(c, OP_GET_EVAL_GLOBAL, name, len);
       return;
@@ -392,7 +440,15 @@ static void emit_set_var_plain(sv_compiler_t *c, const char *name, uint32_t len,
       emit_const_assign_error(c, name, len);
       return;
     }
-    set_local_inferred_type(c, local, SV_TI_UNKNOWN);
+    uint8_t old_type = c->locals[local].inferred_type;
+    if (!sv_type_is_known(old_type)) set_local_stored_type(c, local, SV_TI_UNKNOWN, c->types->dep_count);
+    else {
+      int dep_base = c->store_type ? c->store_dep_base : c->types->dep_count;
+      uint8_t stored = c->store_type;
+      if (c->store_node) stored = infer_expr_type(c, (sv_ast_t *)c->store_node);
+      set_local_stored_type(c, local, stored == old_type ? stored : SV_TI_UNKNOWN, dep_base);
+      if (!c->store_type) c->types->dep_count = dep_base;
+    }
     const sv_export_name_t *exports = c->locals[local].binding.exports;
     emit_export_dups(c, exports);
 
@@ -444,6 +500,14 @@ static void emit_set_var_plain(sv_compiler_t *c, const char *name, uint32_t len,
 }
 
 void emit_set_var(sv_compiler_t *c, const char *name, uint32_t len, bool keep) {
+  if (is_ident_str(name, len, "super", 5)) {
+    js_mkerr_typed(c->js, JS_ERR_SYNTAX, "'super' keyword unexpected here");
+    return;
+  }
+  if (spilled_const_assignment(c, name, len)) {
+    emit_const_assign_error(c, name, len);
+    return;
+  }
   sv_with_refs_t shadows = {0};
   with_shadows(c, name, len, &shadows);
   if (shadows.count == 0) {
@@ -462,15 +526,15 @@ void emit_set_var(sv_compiler_t *c, const char *name, uint32_t len, bool keep) {
   patch_jump(c, done);
 }
 
-void emit_put_local_typed(sv_compiler_t *c, int local_idx, uint8_t type) {
+void emit_put_local_typed(sv_compiler_t *c, int local_idx, uint8_t type, int dep_base) {
   int slot = local_idx - c->param_locals;
   if (slot <= 255) { emit_op(c, OP_PUT_LOCAL8); emit(c, (uint8_t)slot); }
   else { emit_op(c, OP_PUT_LOCAL); emit_u16(c, (uint16_t)slot); }
-  set_local_inferred_type(c, local_idx, type);
+  set_local_declared_type(c, local_idx, type, dep_base);
 }
 
 void emit_put_local(sv_compiler_t *c, int local_idx) {
-  emit_put_local_typed(c, local_idx, SV_TI_UNKNOWN);
+  emit_put_local_typed(c, local_idx, SV_TI_UNKNOWN, c->types->dep_count);
 }
 
 void emit_set_completion_from_stack(sv_compiler_t *c) {

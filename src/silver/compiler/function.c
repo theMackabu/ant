@@ -147,6 +147,71 @@ bool check_function_param_early_errors(
   return check_function_param_names(js, fn, strict, emit_error);
 }
 
+enum {
+  PARAMS_CAPTURE   = 1 << 0,
+  PARAMS_ARGUMENTS = 1 << 1,
+};
+
+static unsigned param_scope_facts(const sv_ast_t *node, bool in_closure) {
+  if (!node) return 0;
+  unsigned facts = 0;
+  switch (node->type) {
+    case N_IDENT:
+      return in_closure && is_ident_name(node, "arguments") ? PARAMS_ARGUMENTS : 0;
+    case N_FUNC:
+      facts |= PARAMS_CAPTURE;
+      if (!(node->flags & FN_ARROW)) return facts;
+      in_closure = true;
+      break;
+    case N_CLASS:
+      facts |= PARAMS_CAPTURE;
+      in_closure = true;
+      break;
+    case N_CALL:
+      if (is_ident_name(node->left, "eval")) facts |= PARAMS_CAPTURE | PARAMS_ARGUMENTS;
+      break;
+    default:
+      break;
+  }
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child) facts |= param_scope_facts(child, in_closure);
+  return facts;
+}
+
+static int find_var_arguments(const sv_compiler_t *c, int from) {
+  for (int i = c->local_count - 1; i >= from; i--) {
+    const sv_local_t *loc = &c->locals[i];
+    if (loc->name_len == 9 && memcmp(loc->name, "arguments", 9) == 0) return i;
+  }
+  return -1;
+}
+
+static void emit_arguments_local(sv_compiler_t *c) {
+  c->strict_args_local = add_hidden_local(c);
+  emit_op(c, OP_SPECIAL_OBJ);
+  emit(c, SV_SPECIAL_ARGUMENTS);
+  emit_put_local(c, c->strict_args_local);
+}
+
+static void bind_var_arguments(sv_compiler_t *c, int var_base) {
+  if (c->is_arrow || !has_implicit_arguments_obj(c)) return;
+  int local = find_var_arguments(c, var_base);
+  if (local < 0) return;
+  for (int i = 0; i < c->param_bind_end; i++) {
+    const sv_local_t *param = &c->locals[i];
+    if (param->name_len == 9 && memcmp(param->name, "arguments", 9) == 0) return;
+  }
+  if (c->strict_args_local >= 0) {
+    emit_get_local(c, c->strict_args_local);
+    emit_put_local(c, local);
+    return;
+  }
+  emit_op(c, OP_SPECIAL_OBJ);
+  emit(c, SV_SPECIAL_ARGUMENTS);
+  emit_put_local(c, local);
+  c->strict_args_local = local;
+}
+
 static uint16_t function_length_from_params(const sv_ast_t *node) {
   if (!node) return 0;
   uint16_t length = 0;
@@ -259,11 +324,13 @@ sv_func_t *compile_function_body(
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, enclosing, node, mode);
   bool eval_body = !enclosing->enclosing;
-  comp.is_static = (node->flags & FN_STATIC) || (comp.is_arrow && enclosing->is_static);
+  comp.is_static = (node->flags & FN_STATIC) || ((comp.is_arrow || eval_body) && enclosing->is_static);
   comp.eval_this_binding = eval_body && enclosing->eval_this_binding;
+  comp.eval_super_binding = eval_body && enclosing->eval_super_binding;
   comp.eval_field_thunk = eval_body && enclosing->eval_field_thunk;
+  comp.is_derived_ctor = !!(node->flags & FN_DERIVED_CTOR);
   comp.is_class_ctor = !!(node->flags & FN_CLASS_CTOR);
-  if (node->flags & FN_DERIVED_CTOR) comp.derived_field_owner = enclosing;
+  if (comp.is_derived_ctor) comp.derived_field_owner = enclosing;
   else if (comp.is_arrow) comp.derived_field_owner = enclosing->derived_field_owner;
 
   bool has_own_use_strict = false;
@@ -343,10 +410,13 @@ sv_func_t *compile_function_body(
     if (enclosing->field_init_count > 0 && derived.has_eval) emit_field_thunk(&comp);
   }
 
+  comp.param_bind_end = comp.param_locals;
   if (!has_non_simple_params && node->body) {
     if (node->body->type == N_BLOCK) {
+      int var_base = comp.local_count;
       for (int i = 0; i < node->body->args.count; i++)
         hoist_var_decls(&comp, node->body->args.items[i]);
+      if (node->flags & FN_USES_ARGS) bind_var_arguments(&comp, var_base);
       hoist_lexical_decls(&comp, &node->body->args);
       hoist_func_decls(&comp, &node->body->args);
     } else hoist_var_decls(&comp, node->body);
@@ -362,7 +432,8 @@ sv_func_t *compile_function_body(
         emit_op(&comp, OP_IS_UNDEF);
         int skip = emit_jump(&comp, OP_JMP_FALSE);
         emit_op(&comp, OP_POP);
-        compile_expr(&comp, p->right);
+        if (p->left && p->left->type == N_IDENT) compile_expr_with_inferred_name(&comp, p->right, p->left->str, p->left->len);
+        else compile_expr(&comp, p->right);
         patch_jump(&comp, skip);
         if (p->left && p->left->type == N_IDENT) {
           emit_op(&comp, OP_PUT_ARG);
@@ -397,6 +468,12 @@ sv_func_t *compile_function_body(
     int *param_bind_locals = NULL;
     int  param_bind_count  = 0;
     int  param_bind_cap    = 0;
+
+    unsigned param_facts = 0;
+    for (int i = 0; i < node->args.count; i++) param_facts |= param_scope_facts(node->args.items[i], false);
+    comp.param_split = (param_facts & PARAMS_CAPTURE) != 0;
+    if ((param_facts & PARAMS_ARGUMENTS) && !comp.is_arrow && has_implicit_arguments_obj(&comp) && !comp.owns_eval_env)
+      emit_arguments_local(&comp);
 
     for (int i = 0; i < node->args.count; i++) {
       sv_ast_t *p = node->args.items[i];
@@ -454,7 +531,8 @@ sv_func_t *compile_function_body(
         emit_op(&comp, OP_IS_UNDEF);
         int skip = emit_jump(&comp, OP_JMP_FALSE);
         emit_op(&comp, OP_POP);
-        compile_expr(&comp, p->right);
+        if (p->left && p->left->type == N_IDENT) compile_expr_with_inferred_name(&comp, p->right, p->left->str, p->left->len);
+        else compile_expr(&comp, p->right);
         patch_jump(&comp, skip);
         if (p->left && p->left->type == N_IDENT && bind_lb < comp.local_count) {
           int slot = bind_lb - comp.param_locals;
@@ -495,12 +573,21 @@ sv_func_t *compile_function_body(
 
     free(param_bind_locals);
     sv_ast_t *body = node->body;
+    comp.param_bind_end = comp.local_count;
 
     if (body && body->type != N_BLOCK) {
       hoist_var_decls(&comp, body);
     } else if (body) {
+      int var_base = comp.local_count;
       for (int i = 0; i < body->args.count; i++)
         hoist_var_decls(&comp, body->args.items[i]);
+      if (node->flags & FN_USES_ARGS) bind_var_arguments(&comp, var_base);
+      if (comp.param_split && comp.owns_eval_env) {
+        for (int i = comp.param_locals; i < comp.param_bind_end; i++) {
+          sv_local_t *param = &comp.locals[i];
+          if (param->name_len && resolve_local(&comp, param->name, param->name_len) == i) split_param_binding(&comp, i);
+        }
+      }
       hoist_lexical_decls(&comp, &body->args);
       hoist_func_decls(&comp, &body->args);
     }
@@ -510,10 +597,7 @@ sv_func_t *compile_function_body(
     !comp.is_arrow && !comp.args_length_only &&
     has_implicit_arguments_obj(&comp) && (node->flags & FN_USES_ARGS)
   ) {
-    comp.strict_args_local = add_hidden_local(&comp);
-    emit_op(&comp, OP_SPECIAL_OBJ);
-    emit(&comp, SV_SPECIAL_ARGUMENTS);
-    emit_put_local(&comp, comp.strict_args_local);
+    if (comp.strict_args_local < 0) emit_arguments_local(&comp);
     comp.args_mapped = !comp.is_strict;
   }
 

@@ -257,14 +257,43 @@ void check_catch_declarations(sv_compiler_t *c, sv_ast_t *param, sv_ast_t *body)
   decl_names_free(&body_vars);
 }
 
+int split_param_binding(sv_compiler_t *c, int param_local) {
+  sv_local_t *param = &c->locals[param_local];
+  const char *name = param->name;
+  uint32_t len = param->name_len;
+  int body_local = add_local(c, name, len, false, 0);
+  emit_get_local(c, param_local);
+  emit_put_local(c, body_local);
+  return body_local;
+}
+
+static inline bool names_parameter(sv_compiler_t *c, const char *name, uint32_t len) {
+  int local = resolve_local(c, name, len);
+  return local >= 0 && local < c->param_bind_end;
+}
+
+static void declare_function_var(sv_compiler_t *c, const char *name, uint32_t len) {
+  if (__builtin_expect(c->spill_count == 0 && c->local_count - c->param_locals < SV_SPILL_THRESHOLD, 1)) {
+    add_local(c, name, len, false, 0);
+    return;
+  }
+  int depth = c->scope_depth;
+  c->scope_depth = 0;
+  bool spilled = declare_spilled(c, name, len, false, true);
+  c->scope_depth = depth;
+  if (!spilled) add_local(c, name, len, false, 0);
+}
+
 static void hoist_var_pattern(sv_compiler_t *c, sv_ast_t *pat) {
   if (!pat) return;
   switch (pat->type) {
-    case N_IDENT:
+    case N_IDENT: {
       if (is_sloppy_eval(c)) { add_eval_var(c, pat->str, pat->len, false); break; }
-      if (resolve_local(c, pat->str, pat->len) == -1)
-        add_local(c, pat->str, pat->len, false, 0);
+      int existing = resolve_local(c, pat->str, pat->len);
+      if (existing == -1) declare_function_var(c, pat->str, pat->len);
+      else if (c->param_split && existing < c->param_bind_end) split_param_binding(c, existing);
       break;
+    }
     case N_ARRAY: case N_ARRAY_PAT:
       for (int i = 0; i < pat->args.count; i++)
         hoist_var_pattern(c, pat->args.items[i]);
@@ -354,7 +383,9 @@ void hoist_lexical_pattern(sv_compiler_t *c, sv_ast_t *pat,
         add_global_lexical(c, pat->str, pat->len, is_const);
         break;
       }
+      if (declare_spilled(c, pat->str, pat->len, is_const, false)) break;
       int local = ensure_local_at_depth(c, pat->str, pat->len, is_const, c->scope_depth);
+      if (!(c->locals[local].eval_flags & SV_EVAL_BIND_LEXICAL)) c->eval_scope_shareable = false;
       c->locals[local].eval_flags |= SV_EVAL_BIND_LEXICAL;
       break;
     }
@@ -514,12 +545,15 @@ void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
       bool is_const = decl_node->var_kind == SV_VAR_CONST || is_using;
       if (is_using && is_repl_top_level(c)) continue;
       int lb = c->local_count;
+      c->spill_disabled += is_using;
       for (int j = 0; j < decl_node->args.count; j++) {
         sv_ast_t *decl = decl_node->args.items[j];
         if (!decl || decl->type != N_VARDECL || !decl->left) continue;
         hoist_lexical_pattern(c, decl->left, is_const);
       }
+      c->spill_disabled -= is_using;
       for (int j = lb; j < c->local_count; j++) {
+        if (!c->locals[j].name_len) continue;
         c->locals[j].is_tdz = true;
         set_local_inferred_type(c, j, SV_TI_UNKNOWN);
         int slot = j - c->param_locals;
@@ -555,6 +589,7 @@ void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
     ) {
       int lb = c->local_count;
       int class_local = ensure_local_at_depth(c, decl_node->str, decl_node->len, false, c->scope_depth);
+      if (!(c->locals[class_local].eval_flags & SV_EVAL_BIND_LEXICAL)) c->eval_scope_shareable = false;
       c->locals[class_local].eval_flags |= SV_EVAL_BIND_LEXICAL;
       if (c->local_count > lb) {
         c->locals[c->local_count - 1].is_tdz = true;
@@ -573,8 +608,15 @@ void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
       if (is_sloppy_eval(c) && c->scope_depth == 0)
         add_eval_var(c, decl_node->str, decl_node->len, false);
       else {
-        int local = ensure_local_at_depth(c, decl_node->str, decl_node->len, false, c->scope_depth);
-        c->locals[local].eval_flags |= c->scope_depth > 0 ? SV_EVAL_BIND_LEXICAL : 0;
+        int local = resolve_local(c, decl_node->str, decl_node->len);
+        bool split = c->param_split && c->scope_depth == 0 && local >= 0 && local < c->param_bind_end;
+        bool declared = local != -1 && c->locals[local].depth == c->scope_depth && !split;
+        if (!declared && (split || !declare_spilled(c, decl_node->str, decl_node->len, false, true))) {
+          local = add_local(c, decl_node->str, decl_node->len, false, c->scope_depth);
+          declared = true;
+        }
+        if (declared) c->locals[local].eval_flags |= c->scope_depth > 0 ? SV_EVAL_BIND_LEXICAL : 0;
+        c->eval_scope_shareable = false;
       }
       if (node->type == N_EXPORT) {
         if (node->flags & EX_DEFAULT)
@@ -599,7 +641,7 @@ void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
       for (int j = 0; j < funcs.count; j++) {
         sv_ast_t *fn = funcs.items[j];
         if (is_sloppy_eval(c)) add_eval_var(c, fn->str, fn->len, true);
-        else if (resolve_local_at_depth(c, fn->str, fn->len, 0) == -1)
+        else if (resolve_local_at_depth(c, fn->str, fn->len, 0) == -1 && !names_parameter(c, fn->str, fn->len))
           add_local(c, fn->str, fn->len, false, 0);
       }
     }
@@ -666,7 +708,7 @@ void hoist_one_func(sv_compiler_t *c, sv_ast_t *node, bool annex_b_update_var) {
   emit_closure(c, idx);
   emit_set_function_name(c, node->str, node->len);
   int annex_var = annex_b_update_var && !is_sloppy_eval(c) ? resolve_local_at_depth(c, node->str, node->len, 0) : -1;
-  if (annex_var >= 0 && (c->locals[annex_var].eval_flags & SV_EVAL_BIND_LEXICAL)) annex_var = -1;
+  if (annex_var >= 0 && ((c->locals[annex_var].eval_flags & SV_EVAL_BIND_LEXICAL) || annex_var < c->param_bind_end)) annex_var = -1;
   bool eval_annex_var = false;
   if (annex_b_update_var && is_sloppy_eval(c))
     for (uint32_t i = 0; i < c->eval_var_count; i++)
@@ -682,7 +724,9 @@ void hoist_one_func(sv_compiler_t *c, sv_ast_t *node, bool annex_b_update_var) {
     else emit_op(c, OP_POP);
   } else {
     int local = resolve_local(c, node->str, node->len);
-    emit_put_local(c, local);
+    int spill = resolve_spill(c, node->str, node->len);
+    if (spill >= 0 && (local < 0 || c->locals[local].depth < c->spills[spill].depth)) emit_spill_define(c, spill);
+    else emit_put_local(c, local);
   }
   if (annex_var >= 0) emit_put_local(c, annex_var);
   if (eval_annex_var) emit_atom_op(c, OP_PUT_EVAL_FUNCTION, node->str, node->len);

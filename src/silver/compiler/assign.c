@@ -69,9 +69,12 @@ static bool match_self_append_local(
 
   if (!rhs) return false;
   uint8_t local_type = get_local_inferred_type(c, local);
-  if (rhs_kind == SELF_APPEND_EXPR && local_type != SV_TI_STR &&
-      !c->locals[local].str_accumulating && infer_expr_type(c, rhs) != SV_TI_STR)
-    return false;
+  if (rhs_kind == SELF_APPEND_EXPR && local_type != SV_TI_STR && !c->locals[local].str_accumulating) {
+    int dep_base = c->types->dep_count;
+    uint8_t rhs_type = infer_expr_type(c, rhs);
+    c->types->dep_count = dep_base;
+    if (rhs_type != SV_TI_STR) return false;
+  }
 
   if (match) {
     match->local = local;
@@ -230,7 +233,7 @@ void emit_super_key(sv_compiler_t *c, sv_ast_t *member) {
 
 void emit_super_reference(sv_compiler_t *c, sv_ast_t *member) {
   emit_this(c);
-  emit_get_var(c, "super", 5);
+  emit_super(c);
   emit_super_key(c, member);
 }
 
@@ -321,20 +324,21 @@ void compile_update(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   if (target->type == N_IDENT) {
+    emit_get_var(c, target->str, target->len);
+    c->store_type = SV_TI_NUM;
+    c->store_dep_base = c->types->dep_count;
     if (prefix) {
-      emit_get_var(c, target->str, target->len);
       emit_op(c, is_inc ? OP_INC : OP_DEC);
       emit_set_var(c, target->str, target->len, true);
     } else {
-      emit_get_var(c, target->str, target->len);
       emit_op(c, is_inc ? OP_POST_INC : OP_POST_DEC);
       emit_set_var(c, target->str, target->len, false);
     }
+    c->store_type = SV_TI_UNKNOWN;
   } else if (target->type == N_MEMBER && !(target->flags & 1) && is_private_name_node(target->right)) {
     compile_expr(c, target->left);
     emit_op(c, OP_DUP);
-    emit_private_token(c, target->right);
-    emit_op(c, OP_GET_PRIVATE);
+    emit_private_get(c, target->right, OP_GET_PRIVATE);
     if (prefix) {
       emit_op(c, is_inc ? OP_INC : OP_DEC);
       emit_private_token(c, target->right);
@@ -455,16 +459,22 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
       return;
     }
 
-    compile_expr(c, node->right);
+    if (target->type == N_IDENT) {
+      if (target->flags & FN_PAREN) compile_expr(c, node->right);
+      else compile_expr_with_inferred_name(c, node->right, target->str, target->len);
+      c->store_node = node->right;
+    } else compile_expr(c, node->right);
     compile_lhs_set(c, target, true);
+    c->store_node = NULL;
     return;
   }
+
+  if (reject_super_identifier(c, target)) return;
 
   if (target->type == N_IDENT) {
     bool shadowed = local_with_shadowed(c, target->str, target->len);
     int lhs_local = shadowed ? -1 : resolve_local(c, target->str, target->len);
     uint8_t lhs_type = (lhs_local >= 0) ? get_local_inferred_type(c, lhs_local) : SV_TI_UNKNOWN;
-    uint8_t rhs_type = infer_expr_type(c, node->right);
 
     if (can_append_builder) {
       compile_self_append(c, &append);
@@ -486,7 +496,10 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
           emit_op(c, OP_ADD_LOCAL);
           emit(c, (uint8_t)slot);
           emit_get_local(c, c->param_locals + slot);
-          set_local_inferred_type(c, c->param_locals + slot, SV_TI_UNKNOWN);
+          int dep_base = c->types->dep_count;
+          uint8_t stored = lhs_type == SV_TI_NUM ? infer_expr_type(c, rhs) : SV_TI_UNKNOWN;
+          set_local_stored_type(c, c->param_locals + slot, stored == SV_TI_NUM ? stored : SV_TI_UNKNOWN, dep_base);
+          c->types->dep_count = dep_base;
           return;
         }
       }
@@ -499,37 +512,41 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
         op == TOK_LOR_ASSIGN ? OP_JMP_TRUE_PEEK :
         op == TOK_LAND_ASSIGN ? OP_JMP_FALSE_PEEK : OP_JMP_NOT_NULLISH);
       emit_op(c, OP_POP);
-      compile_expr(c, node->right);
+      if (target->flags & FN_PAREN) compile_expr(c, node->right);
+      else compile_expr_with_inferred_name(c, node->right, target->str, target->len);
+      c->store_node = node->right;
       emit_set_var(c, target->str, target->len, true);
+      c->store_node = NULL;
       patch_jump(c, skip);
       return;
     }
 
     emit_get_var(c, target->str, target->len);
+    int dep_base = c->types->dep_count;
+    if (lhs_type == SV_TI_NUM && c->type_loop_depth) type_dep_add(c, lhs_local);
     compile_expr(c, node->right);
+    bool numeric = lhs_type == SV_TI_NUM && infer_expr_type(c, node->right) == SV_TI_NUM &&
+      type_deps_live(c, dep_base) && type_use_op(c, dep_base, c->code_len);
     switch (op) {
-      case TOK_PLUS_ASSIGN:
-        emit_op(c, (lhs_type == SV_TI_NUM && rhs_type == SV_TI_NUM) ? OP_ADD_NUM : OP_ADD);
-        break;
-      case TOK_MINUS_ASSIGN:
-        emit_op(c, (lhs_type == SV_TI_NUM && rhs_type == SV_TI_NUM) ? OP_SUB_NUM : OP_SUB);
-        break;
-      case TOK_MUL_ASSIGN:
-        emit_op(c, (lhs_type == SV_TI_NUM && rhs_type == SV_TI_NUM) ? OP_MUL_NUM : OP_MUL);
-        break;
-      case TOK_DIV_ASSIGN:
-        emit_op(c, (lhs_type == SV_TI_NUM && rhs_type == SV_TI_NUM) ? OP_DIV_NUM : OP_DIV);
-        break;
+      case TOK_PLUS_ASSIGN:  emit_op(c, numeric ? OP_ADD_NUM : OP_ADD); break;
+      case TOK_MINUS_ASSIGN: emit_op(c, numeric ? OP_SUB_NUM : OP_SUB); break;
+      case TOK_MUL_ASSIGN:   emit_op(c, numeric ? OP_MUL_NUM : OP_MUL); break;
+      case TOK_DIV_ASSIGN:   emit_op(c, numeric ? OP_DIV_NUM : OP_DIV); break;
       default:               emit_compound_assign_op(c, op); break;
     }
+    if (numeric || (lhs_type == SV_TI_NUM && op != TOK_PLUS_ASSIGN && compound_assign_op(op) != OP_INVALID)) {
+      c->store_type = SV_TI_NUM;
+      c->store_dep_base = numeric && op == TOK_PLUS_ASSIGN ? dep_base : c->types->dep_count;
+    }
     emit_set_var(c, target->str, target->len, true);
+    c->store_type = SV_TI_UNKNOWN;
+    c->types->dep_count = dep_base;
   } else if (target->type == N_MEMBER && !(target->flags & 1) && is_private_name_node(target->right)) {
     if (op == TOK_LOR_ASSIGN || op == TOK_LAND_ASSIGN ||
         op == TOK_NULLISH_ASSIGN) {
       compile_expr(c, target->left);
       emit_op(c, OP_DUP);
-      emit_private_token(c, target->right);
-      emit_op(c, OP_GET_PRIVATE);
+      emit_private_get(c, target->right, OP_GET_PRIVATE);
       int skip = emit_jump(c,
         op == TOK_LOR_ASSIGN ? OP_JMP_TRUE_PEEK :
         op == TOK_LAND_ASSIGN ? OP_JMP_FALSE_PEEK : OP_JMP_NOT_NULLISH);
@@ -546,8 +563,7 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
 
     compile_expr(c, target->left);
     emit_op(c, OP_DUP);
-    emit_private_token(c, target->right);
-    emit_op(c, OP_GET_PRIVATE);
+    emit_private_get(c, target->right, OP_GET_PRIVATE);
     compile_expr(c, node->right);
     emit_compound_assign_op(c, op);
     emit_private_token(c, target->right);
@@ -621,7 +637,7 @@ void compile_lhs_set(sv_compiler_t *c, sv_ast_t *target, bool keep) {
     if (reject_super_private(c, target)) return;
     emit_this(c);
     emit_op(c, OP_SWAP);
-    emit_get_var(c, "super", 5);
+    emit_super(c);
     emit_op(c, OP_SWAP);
     if (!super_uses_field(target)) {
       emit_super_key(c, target);

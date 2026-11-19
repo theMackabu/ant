@@ -93,6 +93,7 @@ static bool eval_scope_builder_add_binding(
     scope->capacity = capacity;
   }
   uint32_t binding_index = scope->count++;
+  if (len == 9 && memcmp(name, "arguments", 9) == 0) scope->binds_arguments = true;
   if (meta->import_kind == SV_IMPORT_BIND_DEFAULT) kind |= SV_EVAL_BIND_IMPORT_DEFAULT;
   if (meta->import_kind == SV_IMPORT_BIND_NAMED) kind |= SV_EVAL_BIND_IMPORT_NAMED;
   
@@ -128,6 +129,7 @@ static bool eval_scope_builder_capture_local(
         kind | local->eval_flags,
         index, local->is_const, &local->binding)) return false;
   local->captured = true;
+  c->type_child_count++;
   return true;
 }
 
@@ -138,6 +140,7 @@ static bool eval_scope_builder_capture_upvalue(
   if (!eval_local_is_visible(local) || eval_scope_builder_has_binding(
         set, scope, local->name, local->name_len)) return true;
 
+  if (is_ident_str(local->name, local->name_len, "super", 5)) return true;
   int upvalue = resolve_upvalue_raw(c, local->name, local->name_len);
   if (upvalue < 0) return true;
   return eval_scope_builder_add_binding(
@@ -146,23 +149,70 @@ static bool eval_scope_builder_capture_upvalue(
     c->upval_descs[upvalue].is_const, &c->upval_bindings[upvalue]);
 }
 
+static _Atomic uint64_t with_marker_sequence;
+
+static bool eval_scope_builder_capture_with(
+  sv_compiler_t *c, sv_eval_scope_builder_t *scope,
+  sv_eval_binding_set_t *set, sv_compiler_t *owner, sv_with_scope_t *with
+) {
+  static const sv_binding_meta_t no_meta = {0};
+  if (!with->marker) {
+    char name[32];
+    int len = snprintf(
+      name, sizeof(name), with->implicit ? "\x01scope:%llu" : "\x01with:%llu",
+      (unsigned long long)++with_marker_sequence);
+    with->marker = intern_string(c->js, name, (size_t)len);
+    with->marker_len = (uint32_t)len;
+    if (!with->marker) return false;
+  }
+
+  if (owner == c) {
+    c->locals[with->local].captured = true;
+    return eval_scope_builder_add_binding(
+      c, scope, set, with->marker, with->marker_len,
+      SV_EVAL_BIND_LOCAL, (uint16_t)(with->local - c->param_locals), true, &no_meta);
+  }
+
+  int upvalue = resolve_upvalue_to(c, owner, with->local);
+  return upvalue < 0 || eval_scope_builder_add_binding(
+    c, scope, set, with->marker, with->marker_len,
+    SV_EVAL_BIND_UPVALUE, (uint16_t)upvalue, true, &no_meta);
+}
+
 static bool eval_scope_builder_capture_locals(
   sv_compiler_t *c, sv_eval_scope_builder_t *scope,
   sv_eval_binding_set_t *set
 ) {
-  for (int i = c->local_count - 1; i >= 0; i--)
+  int with = c->with_depth - 1;
+  for (int i = c->local_count - 1; i >= 0; i--) {
+    for (; with >= 0 && c->with_scopes[with].depth > c->locals[i].depth; with--)
+      if (!eval_scope_builder_capture_with(c, scope, set, c, &c->with_scopes[with])) return false;
     if (!eval_scope_builder_capture_local(
           c, scope, set, &c->locals[i], i)) return false;
+  }
+  for (; with >= 0; with--)
+    if (!eval_scope_builder_capture_with(c, scope, set, c, &c->with_scopes[with])) return false;
   return true;
+}
+
+static bool compiler_has_super_binding(sv_compiler_t *c) {
+  if (c->super_local >= 0 || lexical_owner(c)->eval_super_binding) return true;
+  return c->is_arrow && resolve_super_upvalue(c) >= 0;
 }
 
 static bool eval_scope_builder_capture_upvalues(
   sv_compiler_t *c, sv_eval_scope_builder_t *scope,
   sv_eval_binding_set_t *set, sv_compiler_t *enclosing
 ) {
-  for (int i = enclosing->local_count - 1; i >= 0; i--)
+  int with = enclosing->with_depth - 1;
+  for (int i = enclosing->local_count - 1; i >= 0; i--) {
+    for (; with >= 0 && enclosing->with_scopes[with].depth > enclosing->locals[i].depth; with--)
+      if (!eval_scope_builder_capture_with(c, scope, set, enclosing, &enclosing->with_scopes[with])) return false;
     if (!eval_scope_builder_capture_upvalue(
           c, scope, set, &enclosing->locals[i])) return false;
+  }
+  for (; with >= 0; with--)
+    if (!eval_scope_builder_capture_with(c, scope, set, enclosing, &enclosing->with_scopes[with])) return false;
   return true;
 }
 
@@ -181,56 +231,181 @@ static bool eval_scope_builder_capture_keywords(
     c, scope, set, "super", 5, SV_EVAL_BIND_UPVALUE, (uint16_t)super_upvalue, false, &no_meta);
 }
 
-static bool eval_scope_flags_init(sv_compiler_t *c, sv_eval_scope_flags_t *flags) {
-  *flags = (sv_eval_scope_flags_t){
-    .this_binding = compiler_has_this_binding(c),
-  };
+typedef struct {
+  sv_compiler_t *c;
+  sv_eval_scope_builder_t *scope;
+  sv_eval_binding_set_t *set;
+} private_capture_t;
 
+static bool eval_scope_builder_capture_private(
+  void *ctx, const char *name, uint32_t len, uint8_t kind, uint16_t index
+) {
+  static const sv_binding_meta_t no_meta = {0};
+  private_capture_t *capture = ctx;
+  return eval_scope_builder_add_binding(
+    capture->c, capture->scope, capture->set, name, len, kind, index, true, &no_meta);
+}
+
+bool arguments_forbidden(const sv_compiler_t *c) {
+  for (const sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
+    if (cur->in_field_init || cur->no_arguments_scope || cur->eval_no_arguments) return true;
+    if (!cur->is_arrow) return cur->enclosing && !cur->enclosing->enclosing && cur->enclosing->eval_no_arguments;
+  }
+  return false;
+}
+
+static sv_eval_scope_flags_t eval_scope_flags(sv_compiler_t *c) {
+  return (sv_eval_scope_flags_t){
+    .this_binding = compiler_has_this_binding(c),
+    .super_binding = compiler_has_super_binding(c),
+    .is_static = c->is_static,
+    .no_arguments = arguments_forbidden(c),
+  };
+}
+
+static const sv_private_scope_t *eval_private_scope(const sv_compiler_t *c) {
+  const sv_private_scope_t *scope = c->private_scope;
+  while (scope && scope->count == 0) scope = scope->parent;
+  return scope;
+}
+
+void eval_scope_locals_popped(sv_compiler_t *c) {
+  while (c->eval_scope_shareable && c->eval_scopes[c->eval_scope_shared].local_count > c->local_count) {
+    uint32_t parent = c->eval_scopes[c->eval_scope_shared].parent;
+    if (!parent) c->eval_scope_shareable = false;
+    else c->eval_scope_shared = (int)parent - 1;
+  }
+}
+
+static bool eval_scope_reserve(sv_compiler_t *c) {
+  if (c->eval_scope_count < c->eval_scope_cap) return true;
+  int capacity = c->eval_scope_cap ? c->eval_scope_cap * 2 : 4;
+  sv_eval_scope_builder_t *scopes = realloc(
+    c->eval_scopes,
+    (size_t)capacity * sizeof(sv_eval_scope_builder_t));
+  if (!scopes) {
+    js_mkerr(c->js, "out of memory while growing direct eval scopes");
+    return false;
+  }
+  c->eval_scopes = scopes;
+  c->eval_scope_cap = capacity;
   return true;
+}
+
+static void eval_scope_publish(sv_compiler_t *c, uint32_t scope_index) {
+  c->eval_scopes[scope_index].local_count = c->local_count;
+  c->eval_scope_shared = (int)scope_index;
+  c->eval_scope_shared_withs = c->with_depth;
+  c->eval_scope_shared_private = eval_private_scope(c);
+  c->eval_scope_shareable = true;
+}
+
+static bool capture_local_range_scope(
+  sv_compiler_t *c, uint32_t parent, int first_local, int end_local,
+  sv_eval_scope_flags_t flags, uint32_t *scope_index_out
+) {
+  if (!eval_scope_reserve(c)) return false;
+  uint32_t scope_index = (uint32_t)c->eval_scope_count++;
+  sv_eval_scope_builder_t *scope = &c->eval_scopes[scope_index];
+  memset(scope, 0, sizeof(*scope));
+  scope->parent = parent;
+  scope->flags = flags;
+  scope->local_count = end_local;
+
+  sv_eval_binding_set_t binding_set;
+  if (!eval_binding_set_init(c, &binding_set, (size_t)(end_local - first_local))) return false;
+  bool ok = true;
+  for (int i = end_local - 1; ok && i >= first_local; i--)
+    ok = eval_scope_builder_capture_local(c, scope, &binding_set, &c->locals[i], i);
+  free(binding_set.slots);
+  if (!ok) return false;
+  *scope_index_out = scope_index;
+  return true;
+}
+
+static int share_dynamic_eval_scope(sv_compiler_t *c, uint32_t *scope_index_out) {
+  if (
+    !c->eval_scope_shareable || c->eval_scope_shared_withs != c->with_depth ||
+    c->eval_scope_shared_private != eval_private_scope(c)
+  ) return 0;
+
+  sv_eval_scope_builder_t *shared = &c->eval_scopes[c->eval_scope_shared];
+  sv_eval_scope_flags_t flags = eval_scope_flags(c);
+  if (c->super_local >= 0) c->super_referenced = true;
+
+  bool same_locals = shared->local_count == c->local_count;
+  if (same_locals && memcmp(&flags, &shared->flags, sizeof(flags)) == 0) {
+    c->type_child_count++;
+    *scope_index_out = (uint32_t)c->eval_scope_shared;
+    return 1;
+  }
+
+  uint32_t scope_index;
+  if (!capture_local_range_scope(
+        c, (uint32_t)c->eval_scope_shared + 1, shared->local_count, c->local_count, flags, &scope_index)) return -1;
+  if (same_locals) c->type_child_count++;
+  else eval_scope_publish(c, scope_index);
+  *scope_index_out = scope_index;
+  return 1;
+}
+
+static int eval_scope_base_locals(const sv_compiler_t *c) {
+  if (c->with_depth > 0) return c->local_count;
+  for (int i = 1; i < c->local_count; i++)
+    if (c->locals[i].depth > c->locals[i - 1].depth && c->locals[i].depth > 0) return i;
+  return c->local_count;
 }
 
 bool capture_dynamic_eval_scope(
   sv_compiler_t *c, uint32_t *scope_index_out
 ) {
-  if (c->eval_scope_count >= c->eval_scope_cap) {
-    int capacity = c->eval_scope_cap ? c->eval_scope_cap * 2 : 4;
-    sv_eval_scope_builder_t *scopes = realloc(
-      c->eval_scopes,
-      (size_t)capacity * sizeof(sv_eval_scope_builder_t));
-    if (!scopes) {
-      js_mkerr(c->js, "out of memory while growing direct eval scopes");
-      return false;
-    }
-    c->eval_scopes = scopes;
-    c->eval_scope_cap = capacity;
-  }
+  int shared = share_dynamic_eval_scope(c, scope_index_out);
+  if (shared) return shared > 0;
+  if (!eval_scope_reserve(c)) return false;
 
   uint32_t scope_index = (uint32_t)c->eval_scope_count++;
   sv_eval_scope_builder_t *scope = &c->eval_scopes[scope_index];
   memset(scope, 0, sizeof(*scope));
 
-  size_t candidate_count = (size_t)c->local_count;
+  size_t candidate_count = (size_t)c->local_count + (size_t)c->with_depth + (size_t)private_eval_binding_count(c);
   for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing) {
-    if ((size_t)enc->local_count > SIZE_MAX - candidate_count) {
+    if ((size_t)enc->local_count + (size_t)enc->with_depth > SIZE_MAX - candidate_count) {
       js_mkerr(c->js, "too many bindings while capturing direct eval scope");
       return false;
     }
-    candidate_count += (size_t)enc->local_count;
+    candidate_count += (size_t)enc->local_count + (size_t)enc->with_depth;
   }
 
   sv_eval_binding_set_t binding_set;
   if (!eval_binding_set_init(c, &binding_set, candidate_count)) return false;
 
-  if (!eval_scope_builder_capture_locals(
-        c, scope, &binding_set)) goto capture_failed;
-  eval_scope_flags_init(c, &scope->flags);
+  int base_locals = eval_scope_base_locals(c);
+  if (base_locals == c->local_count) {
+    if (!eval_scope_builder_capture_locals(
+          c, scope, &binding_set)) goto capture_failed;
+  } else {
+    for (int i = base_locals - 1; i >= 0; i--)
+      if (!eval_scope_builder_capture_local(c, scope, &binding_set, &c->locals[i], i)) goto capture_failed;
+  }
+
+  scope->flags = eval_scope_flags(c);
   if (c->super_local >= 0) c->super_referenced = true;
   if (c->is_arrow && !eval_scope_builder_capture_keywords(c, scope, &binding_set)) goto capture_failed;
 
   for (sv_compiler_t *enc = c->inherits_eval_env ? NULL : c->enclosing; enc; enc = enc->enclosing)
     if (!eval_scope_builder_capture_upvalues(
           c, scope, &binding_set, enc)) goto capture_failed;
+  private_capture_t private_capture = { c, scope, &binding_set };
+  if (!private_eval_bindings_each(c, eval_scope_builder_capture_private, &private_capture)) goto capture_failed;
   free(binding_set.slots);
+  for (int first = base_locals; first < c->local_count;) {
+    int end = first + 1;
+    while (end < c->local_count && c->locals[end].depth <= c->locals[end - 1].depth) end++;
+    c->eval_scopes[scope_index].local_count = first;
+    if (!capture_local_range_scope(c, scope_index + 1, first, end, c->eval_scopes[scope_index].flags, &scope_index)) return false;
+    first = end;
+  }
+  eval_scope_publish(c, scope_index);
   *scope_index_out = scope_index;
   return true;
 
@@ -301,10 +476,26 @@ static bool is_inline_literal_eval_expr(sv_ast_t *node) {
   }
 }
 
-static bool inline_eval_can_compile_without_early_errors(ant_t *js, sv_ast_t *node, bool strict) {
+static bool inline_eval_can_compile_without_early_errors(sv_compiler_t *c, sv_ast_t *node, bool strict) {
+  ant_t *js = c->js;
   if (!node) return true;
   if (node->type == N_CLASS) return false;
+  if (is_private_name_node(node) && !private_name_resolvable(c, node)) return false;
+  if (is_ident_name(node, "arguments") && arguments_forbidden(c)) return false;
+  if (node->type == N_CALL && is_ident_name(node->left, "super") && !lexical_owner(c)->is_derived_ctor) return false;
+  if (is_ident_name(node, "super") && !compiler_has_super_binding(c)) return false;
   if (node->type == N_OBJECT && (node->flags & FN_PATTERN_ONLY)) return false;
+  if (node->type == N_IDENT && is_private_name_node(node)) return false;
+  if ((node->type == N_MEMBER || node->type == N_OPTIONAL) && !(node->flags & 1) && node->right && is_private_name_node(node->right)) {
+    if (is_ident_name(node->left, "super") || !private_name_resolvable(c, node->right)) return false;
+    return inline_eval_can_compile_without_early_errors(c, node->left, strict);
+  }
+  if (node->type == N_BINARY && node->op == TOK_IN && node->left && node->left->type == N_IDENT && is_private_name_node(node->left)) {
+    if (!private_name_resolvable(c, node->left)) return false;
+    return inline_eval_can_compile_without_early_errors(c, node->right, strict);
+  }
+  if (node->type == N_DELETE && node->right && (node->right->type == N_MEMBER || node->right->type == N_OPTIONAL) &&
+      node->right->right && !(node->right->flags & 1) && is_private_name_node(node->right->right)) return false;
 
   if (node->type == N_FUNC) {
     bool has_own_use_strict = false;
@@ -315,7 +506,7 @@ static bool inline_eval_can_compile_without_early_errors(ant_t *js, sv_ast_t *no
 
   sv_ast_t *child;
   SV_AST_FOR_EACH_CHILD(node, child)
-    if (!inline_eval_can_compile_without_early_errors(js, child, strict)) return false;
+    if (!inline_eval_can_compile_without_early_errors(c, child, strict)) return false;
 
   return true;
 }
@@ -355,7 +546,7 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
     program->args.count == 1 &&
     is_inline_literal_eval_expr(program->args.items[0]) &&
     (c->allows_new_target || !ast_contains_lexical_new_target(program)) &&
-    inline_eval_can_compile_without_early_errors(c->js, program->args.items[0], c->is_strict) &&
+    inline_eval_can_compile_without_early_errors(c, program->args.items[0], c->is_strict) &&
     !ast_contains_direct_suspend(program->args.items[0], NULL)
   ) expr = program->args.items[0]; else {
     parse_arena_rewind(c->js, mark);
@@ -611,7 +802,7 @@ static bool eval_program_needs_env(sv_compiler_t *c, const sv_ast_t *program) {
   sv_ast_t *expr = program->args.items[0];
   return
     !is_inline_literal_eval_expr(expr) ||
-    !inline_eval_can_compile_without_early_errors(c->js, expr, c->is_strict) ||
+    !inline_eval_can_compile_without_early_errors(c, expr, c->is_strict) ||
     ast_contains_direct_suspend(expr, NULL) ||
     ast_has_own_eval(c, expr);
 }

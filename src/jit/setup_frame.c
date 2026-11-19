@@ -934,6 +934,7 @@ bool jit_setup_frame(jit_compile_t *c) {
     .local_regs = c->local_regs,
     .local_d_regs = c->local_d_regs,
     .dnum_locals = c->dnum_locals,
+    .captured_locals = c->has_captures ? c->captured_locals : NULL,
     .n_locals = c->n_locals,
     .lbuf = c->r_lbuf,
     .d_slot = c->r_d_slot,

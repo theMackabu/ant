@@ -56,12 +56,14 @@ void mir_emit_bailout_spill_block(MIR_context_t ctx, MIR_item_t fn,
                                   const jit_bailout_emit_t *bail) {
   MIR_append_insn(ctx, fn, bail->spill);
   mir_emit_dnum_rebox(ctx, fn, bail);
-  for (int i = 0; i < bail->n_locals; i++)
+  for (int i = 0; i < bail->n_locals; i++) {
+    if (bail->captured_locals && bail->captured_locals[i]) continue;
     MIR_append_insn(ctx, fn,
                     MIR_new_insn(ctx, MIR_MOV,
                                  MIR_new_mem_op(ctx, MIR_T_I64,
                                                 (MIR_disp_t)(i * (int)sizeof(ant_value_t)), bail->lbuf, 0, 1),
                                  MIR_new_reg_op(ctx, bail->local_regs[i])));
+  }
 }
 
 void mir_emit_bailout_check_typed(MIR_context_t ctx, MIR_item_t fn,

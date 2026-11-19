@@ -58,7 +58,21 @@ typedef struct {
 typedef struct {
   int local;
   int depth;
+  int block_depth;
+  bool implicit;
+  const char *marker;
+  uint32_t marker_len;
 } sv_with_scope_t;
+
+typedef struct {
+  const char *name;
+  uint32_t len;
+  uint32_t hash;
+  int depth;
+  int scope;
+  int next;
+  bool is_const;
+} sv_spill_binding_t;
 
 typedef struct {
   const char *name;
@@ -78,9 +92,47 @@ typedef struct {
   uint8_t eval_flags;
   bool char_code_at_hint;
   bool str_accumulating;
+  bool type_derived;
   uint8_t inferred_type;
+  uint32_t type_fact;
+  int type_use_head;
   sv_binding_meta_t binding;
 } sv_local_t;
+
+typedef struct {
+  int local;
+  uint32_t fact;
+} sv_type_dep_t;
+
+typedef struct {
+  uint32_t fact;
+  uint32_t derived;
+  int at;
+  int local;
+  int prev;
+} sv_type_use_t;
+
+typedef struct {
+  uint32_t fact_next;
+  uint32_t dep_seq;
+  const sv_ast_t *cache_node;
+  const void *cache_owner;
+  int cache_code_len;
+  uint32_t cache_dep_seq;
+  int cache_dep_base;
+  int cache_dep_count;
+  uint32_t assign_depth;
+  uint8_t cache_type;
+  sv_type_dep_t *deps;
+  int dep_count;
+  int dep_cap;
+  sv_type_use_t *uses;
+  int use_count;
+  int use_cap;
+  sv_type_dep_t *promos;
+  int promo_count;
+  int promo_cap;
+} sv_type_scratch_t;
 
 typedef struct {
   int *offsets;
@@ -127,6 +179,10 @@ typedef struct {
   int iter_unwind_index;
   int iter_completion_local;
   bool iter_async;
+  bool iterates;
+  int type_child_mark;
+  int type_use_start;
+  uint32_t type_fact_mark;
 } sv_loop_t;
 
 typedef struct const_dedup_entry {
@@ -157,6 +213,8 @@ typedef struct {
   bool has_setter;
   struct sv_compiler *owner;
   int local;
+  int method_local;
+  struct sv_private_scope *scope;
 } sv_private_name_t;
 
 typedef struct sv_private_scope {
@@ -164,12 +222,16 @@ typedef struct sv_private_scope {
   sv_private_name_t *names;
   int count;
   int cap;
+  sv_private_name_t brand;
 } sv_private_scope_t;
 
 typedef struct {
   sv_runtime_binding_t *bindings;
   uint32_t count;
   uint32_t capacity;
+  uint32_t parent;
+  int local_count;
+  bool binds_arguments;
   sv_eval_scope_flags_t flags;
 } sv_eval_scope_builder_t;
 
@@ -207,6 +269,8 @@ typedef struct sv_compiler {
   int max_local_count;
   int scope_depth;
   int param_locals;
+  int param_bind_end;
+  bool param_split;
 
   sv_upval_desc_t *upval_descs;
   sv_binding_meta_t *upval_bindings;
@@ -217,6 +281,10 @@ typedef struct sv_compiler {
   sv_eval_scope_builder_t *eval_scopes;
   int eval_scope_count;
   int eval_scope_cap;
+  int eval_scope_shared;
+  int eval_scope_shared_withs;
+  const void *eval_scope_shared_private;
+  bool eval_scope_shareable;
 
   sv_loop_t *loops;
   int loop_count;
@@ -233,6 +301,20 @@ typedef struct sv_compiler {
   const sv_ast_t *value_params_node;
   uint64_t value_params;
   bool value_params_known;
+
+  sv_type_scratch_t *types;
+  sv_type_scratch_t type_storage;
+  int type_dep_mark;
+  int type_use_mark;
+  int type_promo_mark;
+  int type_loop_depth;
+  int type_region_depth;
+  bool type_any;
+  int type_child_count;
+  uint8_t store_type;
+  int store_dep_base;
+  const sv_ast_t *store_node;
+  sv_patch_list_t *optional_chain;
 
   const sv_ast_t *write_scan_node;
   sv_write_count_t *write_counts;
@@ -252,7 +334,10 @@ typedef struct sv_compiler {
   bool function_ctor_root;
   
   bool eval_shadows_undefined;
+  bool eval_with;
+  bool with_inherited;
   bool eval_shadows_global_this;
+  ant_value_t eval_env;
 
   sv_eval_decl_t *eval_vars;
   uint32_t eval_var_count;
@@ -279,6 +364,13 @@ typedef struct sv_compiler {
   sv_with_scope_t *with_scopes;
   int with_cap;
   int with_depth;
+
+  sv_spill_binding_t *spills;
+  int *spill_heads;
+  int spill_count;
+  int spill_cap;
+  int spill_head_cap;
+  int spill_disabled;
   
   int completion_local;
   int strict_args_local;
@@ -289,8 +381,13 @@ typedef struct sv_compiler {
   int this_local;
   bool this_bound;
   bool eval_this_binding;
+  bool eval_super_binding;
+  bool is_derived_ctor;
   bool is_class_ctor;
+  bool in_field_init;
   bool eval_field_thunk;
+  bool eval_no_arguments;
+  bool no_arguments_scope;
   int derived_return_local;
   const sv_ast_t *this_bound_stmt;
   bool super_runs_once;

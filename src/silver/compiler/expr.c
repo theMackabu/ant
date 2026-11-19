@@ -11,8 +11,90 @@ bool template_has_valid_cooked_segments(const sv_ast_t *node) {
   return true;
 }
 
+static inline bool is_additive_chain_op(uint8_t op) {
+  return op == TOK_PLUS || op == TOK_MINUS || op == TOK_MUL || op == TOK_DIV;
+}
+
+static inline bool is_numeric_result_op(uint8_t op) {
+  switch (op) {
+    case TOK_MINUS: case TOK_MUL: case TOK_DIV: case TOK_REM: case TOK_EXP:
+    case TOK_SHL: case TOK_SHR: case TOK_ZSHR: case TOK_AND: case TOK_XOR: case TOK_OR:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static uint8_t infer_arithmetic_type(sv_compiler_t *c, sv_ast_t *node) {
+  uint8_t want = SV_TI_NUM;
+  if (node->op == TOK_PLUS) {
+    want = infer_expr_type(c, node->right);
+    if (want != SV_TI_NUM && want != SV_TI_STR) return SV_TI_UNKNOWN;
+    node = node->left;
+  }
+
+  while (node && node->type == N_BINARY && is_additive_chain_op(node->op)) {
+    uint8_t right = infer_expr_type(c, node->right);
+    if (node->op != TOK_PLUS) {
+      if (want != SV_TI_NUM) return SV_TI_UNKNOWN;
+      if (right == SV_TI_NUM) return SV_TI_NUM;
+    } else if (right != want) return SV_TI_UNKNOWN;
+    node = node->left;
+  }
+
+  return infer_expr_type(c, node) == want ? want : SV_TI_UNKNOWN;
+}
+
+static uint8_t binary_op_for_assign(uint8_t op) {
+  switch (op) {
+    case TOK_PLUS_ASSIGN:  return TOK_PLUS;
+    case TOK_MINUS_ASSIGN: return TOK_MINUS;
+    case TOK_MUL_ASSIGN:   return TOK_MUL;
+    case TOK_DIV_ASSIGN:   return TOK_DIV;
+    case TOK_REM_ASSIGN:   return TOK_REM;
+    case TOK_SHL_ASSIGN:   return TOK_SHL;
+    case TOK_SHR_ASSIGN:   return TOK_SHR;
+    case TOK_ZSHR_ASSIGN:  return TOK_ZSHR;
+    case TOK_AND_ASSIGN:   return TOK_AND;
+    case TOK_XOR_ASSIGN:   return TOK_XOR;
+    case TOK_OR_ASSIGN:    return TOK_OR;
+    case TOK_EXP_ASSIGN:   return TOK_EXP;
+    default:               return 0;
+  }
+}
+
+static uint8_t infer_assign_type_bounded(sv_compiler_t *c, sv_ast_t *node) {
+  if (node->op == TOK_ASSIGN) return infer_expr_type(c, node->right);
+  uint8_t right = infer_expr_type(c, node->right);
+  uint8_t op = binary_op_for_assign(node->op);
+  if (op && op != TOK_PLUS && right == SV_TI_NUM) return SV_TI_NUM;
+  if (!sv_type_is_known(right) && op == TOK_PLUS) return SV_TI_UNKNOWN;
+  uint8_t left = infer_expr_type(c, node->left);
+  if (!op) return left == right ? left : SV_TI_UNKNOWN;
+  if (op == TOK_PLUS) return left == SV_TI_NUM && right == SV_TI_NUM ? SV_TI_NUM : SV_TI_UNKNOWN;
+  return left == SV_TI_NUM ? SV_TI_NUM : SV_TI_UNKNOWN;
+}
+
+static uint8_t infer_assign_type(sv_compiler_t *c, sv_ast_t *node) {
+  sv_type_scratch_t *types = c->types;
+  if (types->assign_depth >= SV_TYPE_INFER_DEPTH) return SV_TI_UNKNOWN;
+  types->assign_depth++;
+  uint8_t type = infer_assign_type_bounded(c, node);
+  types->assign_depth--;
+  return type;
+}
+
 uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node) {
   if (!node) return SV_TI_UNDEF;
+
+  sv_type_scratch_t *types = c->types;
+  if (
+    node == types->cache_node && types->cache_owner == c && types->cache_code_len == c->code_len &&
+    types->cache_dep_seq == types->dep_seq && types->cache_dep_base == types->dep_count
+  ) {
+    types->dep_count = types->cache_dep_count;
+    return types->cache_type;
+  }
 
   switch (node->type) {
     case N_NUMBER:   return SV_TI_NUM;
@@ -28,13 +110,23 @@ uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node) {
     case N_UNDEF:    return undefined_shadowed(c) ? SV_TI_UNKNOWN : SV_TI_UNDEF;
 
     case N_IDENT: {
+      if (!c->type_any) return SV_TI_UNKNOWN;
       int local = resolve_local(c, node->str, node->len);
       if (local < 0 || local_with_shadowed(c, node->str, node->len)) return SV_TI_UNKNOWN;
-      return get_local_inferred_type(c, local);
+      uint8_t type = get_local_inferred_type(c, local);
+      if (c->type_loop_depth && sv_type_is_known(type)) type_dep_add(c, local);
+      return type;
     }
 
     case N_SEQUENCE:
       return infer_expr_type(c, node->right);
+
+    case N_ASSIGN:
+      return infer_assign_type(c, node);
+
+    case N_UPDATE:
+      return node->right && node->right->type == N_IDENT && infer_expr_type(c, node->right) == SV_TI_NUM
+        ? SV_TI_NUM : SV_TI_UNKNOWN;
 
     case N_TERNARY: {
       uint8_t lt = infer_expr_type(c, node->left);
@@ -44,30 +136,15 @@ uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node) {
     }
 
     case N_UNARY: {
-      uint8_t rhs_type = infer_expr_type(c, node->right);
-      switch (node->op) {
-        case TOK_UPLUS:
-        case TOK_UMINUS:
-          return sv_type_is_num(rhs_type) ? SV_TI_NUM : SV_TI_UNKNOWN;
-        case TOK_NOT:
-          return SV_TI_BOOL;
-        default:
-          return SV_TI_UNKNOWN;
-      }
+      if (node->op == TOK_NOT) return SV_TI_BOOL;
+      if (node->op == TOK_UPLUS) return SV_TI_NUM;
+      if (node->op != TOK_UMINUS && node->op != TOK_TILDA) return SV_TI_UNKNOWN;
+      return sv_type_is_num(infer_expr_type(c, node->right)) ? SV_TI_NUM : SV_TI_UNKNOWN;
     }
 
     case N_BINARY: {
-      uint8_t lt = infer_expr_type(c, node->left);
-      uint8_t rhs_type = infer_expr_type(c, node->right);
+      if (is_additive_chain_op(node->op)) return infer_arithmetic_type(c, node);
       switch (node->op) {
-        case TOK_PLUS:
-          if (lt == SV_TI_NUM && rhs_type == SV_TI_NUM) return SV_TI_NUM;
-          if (lt == SV_TI_STR && rhs_type == SV_TI_STR) return SV_TI_STR;
-          return SV_TI_UNKNOWN;
-        case TOK_MINUS:
-        case TOK_MUL:
-        case TOK_DIV:
-          return (lt == SV_TI_NUM && rhs_type == SV_TI_NUM) ? SV_TI_NUM : SV_TI_UNKNOWN;
         case TOK_LT:
         case TOK_LE:
         case TOK_GT:
@@ -79,14 +156,16 @@ uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node) {
         case TOK_INSTANCEOF:
         case TOK_IN:
           return SV_TI_BOOL;
-        case TOK_LAND:
-        case TOK_LOR:
-        case TOK_NULLISH:
-          if (lt == rhs_type && sv_type_is_known(lt)) return lt;
-          return SV_TI_UNKNOWN;
-        default:
-          return SV_TI_UNKNOWN;
+        default: break;
       }
+      uint8_t rhs_type = infer_expr_type(c, node->right);
+      if (is_numeric_result_op(node->op)) {
+        if (rhs_type == SV_TI_NUM) return SV_TI_NUM;
+        return infer_expr_type(c, node->left) == SV_TI_NUM ? SV_TI_NUM : SV_TI_UNKNOWN;
+      }
+      if (node->op != TOK_LAND && node->op != TOK_LOR && node->op != TOK_NULLISH) return SV_TI_UNKNOWN;
+      uint8_t lt = infer_expr_type(c, node->left);
+      return lt == rhs_type && sv_type_is_known(lt) ? lt : SV_TI_UNKNOWN;
     }
 
     default:
@@ -431,13 +510,17 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 static void compile_typeof_op(sv_compiler_t *c, sv_ast_t *node, int test_type);
+static __attribute__((noinline)) bool compile_typeof_name_compare(sv_compiler_t *c, sv_ast_t *node, sv_ast_t *type, sv_ast_t *name);
 
-static bool compile_primitive_type_compare(sv_compiler_t *c, sv_ast_t *node) {
-  if (node->op != TOK_SEQ && node->op != TOK_SNE && node->op != TOK_EQ && node->op != TOK_NE) return false;
+static inline bool compile_primitive_type_compare(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *type = node->left, *name = node->right;
   
   if (name->type == N_TYPEOF) { type = node->right; name = node->left; }
   if (type->type != N_TYPEOF || name->type != N_STRING) return false;
+  return compile_typeof_name_compare(c, node, type, name);
+}
+
+static bool compile_typeof_name_compare(sv_compiler_t *c, sv_ast_t *node, sv_ast_t *type, sv_ast_t *name) {
   
   static const struct { const char *name; uint8_t type; } primitives[] = {
     {"string", kTypeString}, {"number", kTypeNumber}, {"boolean", kTypeBool},
@@ -455,80 +538,78 @@ static bool compile_primitive_type_compare(sv_compiler_t *c, sv_ast_t *node) {
   return false;
 }
 
-void compile_binary(sv_compiler_t *c, sv_ast_t *node) {
-  uint8_t op = node->op;
-  if (compile_primitive_type_compare(c, node)) return;
+static void compile_arithmetic_chain(sv_compiler_t *c, sv_ast_t *node) {
+  int depth = 1;
+  for (sv_ast_t *cur = node->left; cur && cur->type == N_BINARY && is_additive_chain_op(cur->op); cur = cur->left) depth++;
 
-  if (op == TOK_LAND) {
-    compile_expr(c, node->left);
-    int jump = emit_jump(c, OP_JMP_FALSE_PEEK);
-    emit_op(c, OP_POP);
-    compile_expr(c, node->right);
-    patch_jump(c, jump);
+  sv_ast_t *inline_nodes[16];
+  sv_ast_t **nodes = depth <= 16 ? inline_nodes : malloc((size_t)depth * sizeof(*nodes));
+  if (!nodes) {
+    Ant_Error_CreateOutOfMemory(c->js);
+    emit_op(c, OP_UNDEF);
     return;
   }
+
+  sv_ast_t *cur = node;
+  for (int i = 0; i < depth; i++, cur = cur->left) {
+    nodes[i] = cur;
+    if (i > 0) emit_srcpos(c, cur);
+  }
+
+  int dep_base = c->types->dep_count;
+  bool exact = true;
+  compile_expr(c, cur);
+  uint8_t left_type = infer_expr_type(c, cur);
   
-  if (op == TOK_LOR) {
-    compile_expr(c, node->left);
-    int jump = emit_jump(c, OP_JMP_TRUE_PEEK);
-    emit_op(c, OP_POP);
-    compile_expr(c, node->right);
-    patch_jump(c, jump);
-    return;
-  }
-  
-  if (op == TOK_NULLISH) {
-    compile_expr(c, node->left);
-    int jump = emit_jump(c, OP_JMP_NOT_NULLISH);
-    emit_op(c, OP_POP);
-    compile_expr(c, node->right);
-    patch_jump(c, jump);
-    return;
-  }
-
-  if (op == TOK_IN && node->left->type == N_IDENT &&
-      node->left->len > 0 && node->left->str[0] == '#') {
-    compile_expr(c, node->right);
-    emit_private_token(c, node->left);
-    emit_op(c, OP_HAS_PRIVATE);
-    return;
-  }
-
-  sv_ast_t *key = node->left;
-  if (
-    op == TOK_IN && key->type == N_STRING && key->str &&
-    !(key->len > 0 && key->str[0] >= '0' && key->str[0] <= '9') &&
-    !(key->len == 6 && !memcmp(key->str, "length", 6))
-  ) {
-    compile_expr(c, node->right);
-    emit_atom_op(c, OP_IN_FIELD, key->str, key->len);
-    return;
+  for (int i = depth - 1; i >= 0; i--) {
+    uint8_t op = nodes[i]->op;
+    compile_expr(c, nodes[i]->right);
+    int right_base = c->types->dep_count;
+    bool right_matters = left_type == SV_TI_NUM || (i > 0 && (op != TOK_PLUS || left_type == SV_TI_STR));
+    uint8_t right_type = right_matters ? infer_expr_type(c, nodes[i]->right) : SV_TI_UNKNOWN;
+    if (!right_matters && op != TOK_PLUS) exact = false;
+    bool numeric = left_type == SV_TI_NUM && right_type == SV_TI_NUM && type_deps_live(c, dep_base);
+    
+    if (numeric && !type_use_op(c, dep_base, c->code_len)) numeric = false;
+    switch (op) {
+      case TOK_PLUS:  emit_op(c, numeric ? OP_ADD_NUM : OP_ADD); break;
+      case TOK_MINUS: emit_op(c, numeric ? OP_SUB_NUM : OP_SUB); break;
+      case TOK_MUL:   emit_op(c, numeric ? OP_MUL_NUM : OP_MUL); break;
+      default:        emit_op(c, numeric ? OP_DIV_NUM : OP_DIV); break;
+    }
+    
+    if (numeric) continue;
+    if (op != TOK_PLUS && left_type == SV_TI_NUM) {
+      c->types->dep_count = right_base;
+    } else if (op != TOK_PLUS && right_type == SV_TI_NUM) {
+      int moved = c->types->dep_count - right_base;
+      memmove(c->types->deps + dep_base, c->types->deps + right_base, (size_t)moved * sizeof(*c->types->deps));
+      c->types->dep_count = dep_base + moved;
+      left_type = SV_TI_NUM;
+    } else {
+      left_type = op == TOK_PLUS && left_type == SV_TI_STR && right_type == SV_TI_STR ? SV_TI_STR : SV_TI_UNKNOWN;
+      c->types->dep_count = dep_base;
+    }
   }
 
-  uint8_t left_type = SV_TI_UNKNOWN;
-  uint8_t right_type = SV_TI_UNKNOWN;
-  
-  if (op == TOK_PLUS || op == TOK_MINUS || op == TOK_MUL || op == TOK_DIV) {
-    left_type = infer_expr_type(c, node->left);
-    right_type = infer_expr_type(c, node->right);
-  }
+  sv_type_scratch_t *types = c->types;
+  types->cache_node = exact ? node : NULL;
+  types->cache_type = left_type;
+  types->cache_owner = c;
+  types->cache_code_len = c->code_len;
+  types->cache_dep_seq = types->dep_seq;
+  types->cache_dep_base = dep_base;
+  types->cache_dep_count = types->dep_count;
+  types->dep_count = dep_base;
+  if (nodes != inline_nodes) free(nodes);
+}
 
-  compile_expr(c, node->left);
-  compile_expr(c, node->right);
+static inline bool is_logical_op(uint8_t op) {
+  return op == TOK_LAND || op == TOK_LOR || op == TOK_NULLISH;
+}
 
+static void emit_plain_binary_op(sv_compiler_t *c, uint8_t op) {
   switch (op) {
-    case TOK_PLUS:
-      emit_op(c, (left_type == SV_TI_NUM && right_type == SV_TI_NUM) ? OP_ADD_NUM : OP_ADD);
-      break;
-    case TOK_MINUS:
-      emit_op(c, (left_type == SV_TI_NUM && right_type == SV_TI_NUM) ? OP_SUB_NUM : OP_SUB);
-      break;
-    case TOK_MUL:
-      emit_op(c, (left_type == SV_TI_NUM && right_type == SV_TI_NUM) ? OP_MUL_NUM : OP_MUL);
-      break;
-    case TOK_DIV:
-      emit_op(c, (left_type == SV_TI_NUM && right_type == SV_TI_NUM) ? OP_DIV_NUM : OP_DIV);
-      break;
     case TOK_REM:        emit_op(c, OP_MOD); break;
     case TOK_EXP:        emit_op(c, OP_EXP); break;
     case TOK_LT:         emit_op(c, OP_LT);  break;
@@ -554,6 +635,95 @@ void compile_binary(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
+static inline sv_op_t logical_jump_op(uint8_t op) {
+  return op == TOK_LAND ? OP_JMP_FALSE_PEEK : op == TOK_LOR ? OP_JMP_TRUE_PEEK : OP_JMP_NOT_NULLISH;
+}
+
+static inline bool binary_spine_continues(const sv_ast_t *node) {
+  return node->left && node->left->type == N_BINARY && !is_additive_chain_op(node->op);
+}
+
+static void compile_binary_spine(sv_compiler_t *c, sv_ast_t *node) {
+  int depth = 0;
+  for (sv_ast_t *cur = node; binary_spine_continues(cur); cur = cur->left) depth++;
+
+  sv_ast_t *inline_nodes[16];
+  sv_ast_t **nodes = depth <= 16 ? inline_nodes : malloc((size_t)depth * sizeof(*nodes));
+  if (!nodes) {
+    Ant_Error_CreateOutOfMemory(c->js);
+    emit_op(c, OP_UNDEF);
+    return;
+  }
+
+  sv_ast_t *cur = node;
+  for (int i = 0; i < depth; i++, cur = cur->left) {
+    nodes[i] = cur;
+    if (i > 0) emit_srcpos(c, cur);
+  }
+
+  compile_expr(c, cur);
+  for (int i = depth - 1; i >= 0; i--) {
+    uint8_t op = nodes[i]->op;
+    if (is_logical_op(op)) {
+      int jump = emit_jump(c, logical_jump_op(op));
+      emit_op(c, OP_POP);
+      compile_expr(c, nodes[i]->right);
+      patch_jump(c, jump);
+      continue;
+    }
+    compile_expr(c, nodes[i]->right);
+    emit_plain_binary_op(c, op);
+  }
+
+  if (nodes != inline_nodes) free(nodes);
+}
+
+void compile_binary(sv_compiler_t *c, sv_ast_t *node) {
+  uint8_t op = node->op;
+  if (binary_spine_continues(node)) {
+    compile_binary_spine(c, node);
+    return;
+  }
+  if ((op == TOK_SEQ || op == TOK_SNE || op == TOK_EQ || op == TOK_NE) && compile_primitive_type_compare(c, node)) return;
+
+  if (is_logical_op(op)) {
+    compile_expr(c, node->left);
+    int jump = emit_jump(c, logical_jump_op(op));
+    emit_op(c, OP_POP);
+    compile_expr(c, node->right);
+    patch_jump(c, jump);
+    return;
+  }
+
+  if (op == TOK_IN && node->left->type == N_IDENT &&
+      node->left->len > 0 && node->left->str[0] == '#') {
+    compile_expr(c, node->right);
+    emit_private_token(c, node->left);
+    emit_op(c, OP_HAS_PRIVATE);
+    return;
+  }
+
+  sv_ast_t *key = node->left;
+  if (
+    op == TOK_IN && key->type == N_STRING && key->str &&
+    !(key->len > 0 && key->str[0] >= '0' && key->str[0] <= '9') &&
+    !(key->len == 6 && !memcmp(key->str, "length", 6))
+  ) {
+    compile_expr(c, node->right);
+    emit_atom_op(c, OP_IN_FIELD, key->str, key->len);
+    return;
+  }
+
+  if (is_additive_chain_op(op)) {
+    compile_arithmetic_chain(c, node);
+    return;
+  }
+
+  compile_expr(c, node->left);
+  compile_expr(c, node->right);
+  emit_plain_binary_op(c, op);
+}
+
 void compile_unary(sv_compiler_t *c, sv_ast_t *node) {
   compile_expr(c, node->right);
   switch (node->op) {
@@ -577,6 +747,8 @@ void compile_ternary(sv_compiler_t *c, sv_ast_t *node) {
 
 static void compile_typeof_op(sv_compiler_t *c, sv_ast_t *node, int test_type) {
   sv_ast_t *arg = node->right;
+  if (reject_super_identifier(c, arg)) return;
+  if (is_ident_name(arg, "arguments") && reject_forbidden_arguments(c)) return;
   sv_patch_list_t found = {0};
   
   if (arg->type == N_IDENT) {
@@ -590,7 +762,7 @@ static void compile_typeof_op(sv_compiler_t *c, sv_ast_t *node, int test_type) {
     if (local != -1) {
       uint8_t inferred = get_local_inferred_type(c, local);
       const char *known = typeof_name_for_type(inferred);
-      if (test_type < 0 && known && !shadowed && c->locals[local].is_const) {
+      if (test_type < 0 && known && !shadowed && c->locals[local].is_const && !c->locals[local].type_derived) {
         emit_constant(c, sv_const_str(c, known, strlen(known)));
         return;
       }
@@ -643,12 +815,13 @@ bool sv_node_has_optional_base(sv_ast_t *n) {
 }
 
 static void compile_delete_optional(sv_compiler_t *c, sv_ast_t *arg) {
-  compile_expr(c, arg->left);
-  int ok_jump = emit_jump(c, OP_JMP_NOT_NULLISH);
-  emit_op(c, OP_POP);
-  emit_op(c, OP_TRUE);
-  int end_jump = emit_jump(c, OP_JMP);
-  patch_jump(c, ok_jump);
+  sv_patch_list_t skipped = {0};
+  compile_chain_base(c, arg->left, &skipped);
+  if (arg->type == N_OPTIONAL) {
+    int ok_jump = emit_jump(c, OP_JMP_NOT_NULLISH);
+    patch_list_add(&skipped, emit_jump(c, OP_JMP));
+    patch_jump(c, ok_jump);
+  }
   if (arg->flags & 1) {
     compile_expr(c, arg->right);
   } else {
@@ -656,6 +829,10 @@ static void compile_delete_optional(sv_compiler_t *c, sv_ast_t *arg) {
     emit_constant(c, key);
   }
   emit_op(c, OP_DELETE);
+  int end_jump = emit_jump(c, OP_JMP);
+  patch_list_resolve(c, &skipped);
+  emit_op(c, OP_POP);
+  emit_op(c, OP_TRUE);
   patch_jump(c, end_jump);
 }
 
@@ -673,6 +850,8 @@ void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
     compile_delete_optional(c, arg);
   } else if (arg->type == N_MEMBER && is_ident_name(arg->left, "super")) {
     static const char message[] = "Unsupported reference to 'super'";
+    emit_super(c);
+    emit_op(c, OP_POP);
     emit_this(c);
     if (arg->flags & 1) compile_expr(c, arg->right);
     else emit_op(c, OP_UNDEF);
@@ -689,6 +868,8 @@ void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
     compile_expr(c, arg->left);
     compile_expr(c, arg->right);
     emit_op(c, OP_DELETE);
+  } else if (arg->type == N_IDENT && spilled_binding_visible(c, arg->str, arg->len)) {
+    emit_op(c, OP_FALSE);
   } else if (arg->type == N_IDENT) {
     sv_with_refs_t shadows = {0};
     sv_patch_list_t deleted = {0};
@@ -738,6 +919,7 @@ static int resolve_raw_length_local(sv_compiler_t *c, sv_ast_t *base) {
 }
 
 void compile_member(sv_compiler_t *c, sv_ast_t *node) {
+  sv_patch_list_t *outer = optional_chain_take(c);
   if (is_ident_name(node->left, "super")) {
     if (reject_super_private(c, node)) return;
     emit_super_reference(c, node);
@@ -757,23 +939,16 @@ void compile_member(sv_compiler_t *c, sv_ast_t *node) {
   bool direct_length = is_direct_length_member(node);
   int raw_length_local = direct_length ? resolve_raw_length_local(c, node->left) : -1;
 
+  sv_patch_list_t own = {0};
   if (raw_length_local >= 0)
     emit_slot_op(c, OP_GET_SLOT_RAW, (uint16_t)raw_length_local);
-  else compile_expr(c, node->left);
-
-  int ok_jump = -1, end_jump = -1;
-  if (sv_node_has_optional_base(node->left)) {
-    ok_jump  = emit_jump(c, OP_JMP_NOT_NULLISH);
-    end_jump = emit_jump(c, OP_JMP);
-    patch_jump(c, ok_jump);
-  }
+  else compile_chain_base(c, node->left, outer ? outer : &own);
 
   if (node->flags & 1) {
     compile_expr(c, node->right);
     emit_op(c, OP_GET_ELEM);
   } else if (is_private_name_node(node->right)) {
-    emit_private_token(c, node->right);
-    emit_op(c, OP_GET_PRIVATE);
+    emit_private_get(c, node->right, OP_GET_PRIVATE);
   } else {
     if (direct_length) emit_get_length(c);
     else {
@@ -782,16 +957,28 @@ void compile_member(sv_compiler_t *c, sv_ast_t *node) {
     }
   }
 
-  if (end_jump >= 0) patch_jump(c, end_jump);
+  if (own.count) patch_list_resolve(c, &own);
 }
 
 void compile_optional_get(sv_compiler_t *c, sv_ast_t *node) {
   if (node->flags & 1) {
+    bool constant_key = node->right && (node->right->type == N_NUMBER || node->right->type == N_STRING);
+    if (constant_key) {
+      compile_expr(c, node->right);
+      emit_op(c, OP_GET_ELEM_OPT);
+      return;
+    }
+    
+    int present = emit_jump(c, OP_JMP_NOT_NULLISH);
+    emit_op(c, OP_POP);
+    emit_op(c, OP_UNDEF);
+    int done = emit_jump(c, OP_JMP);
+    patch_jump(c, present);
     compile_expr(c, node->right);
     emit_op(c, OP_GET_ELEM_OPT);
+    patch_jump(c, done);
   } else if (is_private_name_node(node->right)) {
-    emit_private_token(c, node->right);
-    emit_op(c, OP_GET_PRIVATE_OPT);
+    emit_private_get(c, node->right, OP_GET_PRIVATE_OPT);
   } else {
     emit_srcpos(c, node->right);
     emit_atom_op(c, OP_GET_FIELD_OPT, node->right->str, node->right->len);
@@ -799,6 +986,24 @@ void compile_optional_get(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 void compile_optional(sv_compiler_t *c, sv_ast_t *node) {
-  compile_expr(c, node->left);
-  compile_optional_get(c, node);
+  sv_patch_list_t *outer = optional_chain_take(c);
+  sv_patch_list_t own = {0};
+  compile_chain_base(c, node->left, outer ? outer : &own);
+  
+  if (!outer) {
+    compile_optional_get(c, node);
+    if (own.count) patch_list_resolve(c, &own);
+    return;
+  }
+
+  emit_chain_short_circuit(c, outer);
+  if (node->flags & 1) {
+    compile_expr(c, node->right);
+    emit_op(c, OP_GET_ELEM);
+  } else if (is_private_name_node(node->right)) {
+    emit_private_get(c, node->right, OP_GET_PRIVATE);
+  } else {
+    emit_srcpos(c, node->right);
+    emit_atom_op(c, OP_GET_FIELD, node->right->str, node->right->len);
+  }
 }
