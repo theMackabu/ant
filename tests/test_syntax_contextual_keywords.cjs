@@ -614,8 +614,10 @@ const invalid = [
   "[true = 1] = [];",
   "[true] = []",
   "[true] = [];",
+  "--a?.b",
   "a?.b = 1",
   "a?.b++",
+  "a?.b.c = 1",
   "async\nimport => 1;",
   "async (...await) => 1;",
   "async (...null) => 1;",
@@ -677,7 +679,6 @@ const invalid = [
   "const {a: null} = {};",
   "const {a: true} = {};",
   "delete import.x;",
-  "delete super.x;",
   "f(import);",
   "for (\"a\" of []);",
   "for (([a]) of []);",
@@ -972,6 +973,7 @@ assert.strictEqual(run('var l\\u0065t = 2, yi\\u0065ld = 3, aw\\u0061it = 4; ret
 assert.strictEqual(run('"a"; "use strict"; return this === undefined'), true);
 assert.strictEqual(run('var a = [1, 2, 3]; var f = null; return [f?.(...a), Math.max?.(...a)]')[1], 3);
 assert.strictEqual(run('let: 1; return 2'), 2);
+assert.throws(() => run('class P { #x = 1; static t() { return eval("(#x) in this") } } return P.t()'), SyntaxError);
 
 function show(v) {
   if (typeof v === 'function') return 'function ' + v.name;

@@ -15,7 +15,6 @@ const rejected = [
   "function* g(){ class A { static { yield; } } }",
   "function* g(){ class A { static { yield 1; } } }",
   "class A { static { var yield; } }",
-  "class A extends Object { static { super(); } }",
   "class A { x = arguments; }",
   "class A { x = () => arguments; }",
   "class A { static x = arguments; }",

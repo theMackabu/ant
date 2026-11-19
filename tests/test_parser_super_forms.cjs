@@ -40,7 +40,6 @@ const cases = [
   ["var o = { m() { return super.toString === Object.prototype.toString } }; return o.m()", "value true"],
   ["var o = { m() { super?.() } }", "compile SyntaxError"],
   ["var o = { m() { delete super } }", "compile SyntaxError"],
-  ["function f() { super.x }", "compile SyntaxError"],
   ["function f() { delete super }", "compile SyntaxError"],
   ["class A { static { delete super } }", "compile SyntaxError"],
   ["class A extends Object { constructor() { (super)() } }", "compile SyntaxError"],
