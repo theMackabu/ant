@@ -147,7 +147,7 @@ void emit_field_inits(
     }
     emit_op(c, OP_SWAP);
     emit_op(c, OP_DEFINE_METHOD_COMP);
-    emit(c, 0);
+    emit(c, SV_DEFINE_METHOD_FIELD);
     emit_op(c, OP_POP);
   }
 }

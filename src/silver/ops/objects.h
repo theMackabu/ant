@@ -4,6 +4,7 @@
 #include "property.h"
 #include "iteration.h"
 #include "descriptors.h"
+#include "props.h"
 #include "gc/roots.h"
 
 static inline void sv_define_method(
@@ -56,11 +57,22 @@ static inline void sv_op_define_method(
   vm->sp--;
 }
 
+static inline bool sv_field_target_plain(ant_value_t obj) {
+  static constexpr uint16_t mask = ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXOTIC;
+  if (vtype(obj) != kTypeObject) return false;
+  ant_object_t *ptr = js_obj_ptr(obj);
+  return ptr && (ptr->flags.raw & mask) == ANT_OBJECT_FLAG_EXTENSIBLE && !is_proxy(obj);
+}
+
 static inline ant_value_t sv_define_method_comp(
   ant_t *js, uint8_t flags,
   ant_value_t obj, ant_value_t *key_slot, ant_value_t fn
 ) {
   ant_value_t key = *key_slot;
+  bool is_field = (flags & SV_DEFINE_METHOD_FIELD) != 0;
+
+  if (is_field && !sv_field_target_plain(obj))
+    return js_create_data_property_or_throw(js, obj, key, fn);
   ant_value_t desc_obj = js_as_obj(obj);
   
   bool is_getter = (flags & SV_DEFINE_METHOD_GETTER) != 0;
@@ -82,9 +94,9 @@ static inline ant_value_t sv_define_method_comp(
   }
   
   if (vtype(key) == kTypeSymbol) {
-    if (is_getter) js_set_sym_getter_desc(js, desc_obj, key, fn, accessor_desc);
-    else if (is_setter) js_set_sym_setter_desc(js, desc_obj, key, fn, accessor_desc);
-    else mkprop(js, obj, key, fn, data_attrs);
+    if (is_getter) { js_set_sym_getter_desc(js, desc_obj, key, fn, accessor_desc); return Ant_Value_Undefined; }
+    if (is_setter) { js_set_sym_setter_desc(js, desc_obj, key, fn, accessor_desc); return Ant_Value_Undefined; }
+    mkprop(js, obj, key, fn, data_attrs);
     return Ant_Value_Undefined;
   }
   
@@ -103,7 +115,12 @@ static inline ant_value_t sv_define_method_comp(
     return Ant_Value_Undefined;
   }
   
-  if (vtype(key_str) == kTypeString) {
+  if (vtype(key_str) == kTypeString && is_field) {
+    ant_offset_t klen = 0;
+    const char *kptr = (const char *)(uintptr_t)vstr(js, key_str, &klen);
+    ant_value_t defined = mkprop_define_data(js, obj, kptr, (size_t)klen, fn);
+    if (defined == T_EMPTY) return js_create_data_property_or_throw(js, obj, key_str, fn);
+  } else if (vtype(key_str) == kTypeString) {
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
     const char *kptr = (const char *)(uintptr_t)(koff);

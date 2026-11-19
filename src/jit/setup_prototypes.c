@@ -529,7 +529,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                        MIR_T_I32, "slot");
 
   c->define_method_comp_proto = MIR_new_proto(c->ctx, "dmc_proto",
-                                              0, NULL, 5,
+                                              1, &ret_type, 5,
                                               MIR_T_I64, "js",
                                               MIR_JSVAL, "obj",
                                               MIR_JSVAL, "key",
