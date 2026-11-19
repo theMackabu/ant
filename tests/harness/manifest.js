@@ -28,6 +28,7 @@ export function targets() {
     'test_arguments_length_only.cjs',
     'test_arguments_object_semantics.cjs',
     'test_array_builtin_fast_paths.cjs',
+    'test_array_concat_nested_proxy.cjs',
     'test_array_copy_methods.cjs',
     'test_array_define_fast_path.cjs',
     'test_array_fill_set_order.cjs',
