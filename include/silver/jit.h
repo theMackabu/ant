@@ -1,6 +1,7 @@
 #pragma once
 
 #include "silver/engine.h"
+#include "silver/feedback.h"
 
 static constexpr int SV_JIT_MAX_CODE_BYTES = 64 * 1024;
 static constexpr int SV_OPT_MAX_CODE_BYTES = 512 * 1024;
@@ -85,10 +86,18 @@ static inline void sv_func_note_bound_closure(sv_func_t *func) {
   if (func->jit_self_guarded) sv_jit_drop_func_code(func);
 }
 
-static inline void sv_func_note_deferred_receiver(sv_func_t *func) {
-  if (func->deferred_receiver) return;
-  func->deferred_receiver = true;
+static inline bool sv_func_deferred_receiver(const sv_func_t *func) {
+  const sv_func_sidecar_t *sidecar = sv_func_sidecar(func);
+  return sidecar && sidecar->deferred_receiver;
+}
+
+static inline bool sv_func_note_deferred_receiver(sv_func_t *func) {
+  sv_func_sidecar_t *sidecar = sv_func_ensure_sidecar(func);
+  if (!sidecar) return false;
+  if (sidecar->deferred_receiver) return true;
+  sidecar->deferred_receiver = true;
   sv_jit_drop_opt_code(func);
+  return true;
 }
 
 static inline bool sv_jit_promote_pending(const sv_func_t *func) {

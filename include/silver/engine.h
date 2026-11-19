@@ -568,6 +568,7 @@ typedef struct {
   uint32_t ctor_proto_slot;
   
   bool ctor_proto_shape_registered;
+  bool deferred_receiver;
   uint8_t poly_recompiles;
   
   struct sv_jit_await_map *jit_await_map;
@@ -759,7 +760,6 @@ struct sv_func {
   bool has_bound_closure: 1;
   bool jit_self_guarded: 1;
   bool opt_closure_pinned: 1;
-  bool deferred_receiver: 1;
   uint8_t ctor_slot_class: 2;
 
   sv_code_unit_t *unit;
