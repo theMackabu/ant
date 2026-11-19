@@ -295,11 +295,13 @@ sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t *calle
 }
 
 sv_call_kind_t compile_tag_setup(sv_compiler_t *c, sv_ast_t *tag) {
-  if (tag->type != N_OPTIONAL || !tag->right || is_ident_name(tag->left, "super"))
+  if (!tag->right || is_ident_name(tag->left, "super") || !member_call_needs_optional_base_guard(tag))
     return compile_call_setup_non_optional(c, tag);
 
-  compile_expr(c, tag->left);
-  int present = emit_jump(c, OP_JMP_NOT_NULLISH);
+  sv_patch_list_t chain = {0};
+  compile_chain_base(c, tag->left, &chain);
+  int present = emit_jump(c, tag->type == N_OPTIONAL ? OP_JMP_NOT_NULLISH : OP_JMP);
+  patch_list_resolve(c, &chain);
   emit_op(c, OP_UNDEF);
   int done = emit_jump(c, OP_JMP);
   patch_jump(c, present);

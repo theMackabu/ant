@@ -181,6 +181,14 @@ for (let i = 0; i < 1500; i++) {
   for (const bad of ['a?.b`x`', 'new a?.b()', 'a?.b.c`x`']) {
     assert.throws(() => new Function('a', bad), SyntaxError, bad);
   }
+  const tagged = { t() { return this; }, inner: { t() { return this; } } };
+  assert.strictEqual((tagged?.inner.t)`x`, tagged.inner);
+  assert.strictEqual((tagged.inner?.t)`x`, tagged.inner);
+  effects = 0;
+  assert.throws(() => (null?.[effects++].t)`${effects += 10}`, TypeError);
+  assert.strictEqual(effects, 10);
+  assert.throws(() => (tagged.missing?.t)`${effects++}`, TypeError);
+  assert.strictEqual(effects, 11);
 }
 
 console.log('ok');
