@@ -193,6 +193,7 @@ export function targets() {
     'test_fs_opendir_leak.cjs',
     'test_fs_readdir_recursive.cjs',
     'test_fs_stream_fd.cjs',
+    'test_duplicate_block_functions.cjs',
     'test_fs_write_file_sync_fd.cjs',
     'test_fulfilled_await_jobs.mjs',
     'test_function_bind_construct.cjs',
