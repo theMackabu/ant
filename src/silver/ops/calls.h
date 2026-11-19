@@ -194,8 +194,32 @@ static inline __attribute__((always_inline)) ant_value_t sv_spread_call_args(sv_
   }
 
   return sv_spread_call_args_slow(vm, js, a, cap);
+}
 
+static inline uint8_t sv_tfb_spread_class(ant_t *js, ant_value_t iterable) {
+  int len = 0;
+  if (vtype(iterable) != kTypeArray || js_arr_len(js, iterable) > SV_TFB_SPREAD_MAX_LENGTH) return SV_TFB_SPREAD_OTHER;
+  if (!js_array_iteration_default(js, iterable) || !Ant_Array_DenseView(iterable, &len)) return SV_TFB_SPREAD_OTHER;
+  return sv_tfb_spread_encode((uint32_t)len);
+}
 
+static inline void sv_tfb_record_spread(ant_t *js, sv_func_t *func, const uint8_t *ip, ant_value_t iterable) {
+  uint8_t *feedback = func->jit_compile_failed ? NULL : sv_func_type_feedback(func);
+  if (!feedback) return;
+  uint8_t *site = &feedback[ip - func->code];
+  if (*site == SV_TFB_SPREAD_OTHER) return;
+  uint8_t seen = sv_tfb_spread_class(js, iterable);
+  if (*site == seen) return;
+  *site = *site == SV_TFB_SPREAD_UNSEEN ? seen : SV_TFB_SPREAD_OTHER;
+  func->tfb_version++;
+}
+
+static inline void sv_tfb_record_spread_target(sv_func_t *func, const uint8_t *ip, ant_value_t callee) {
+  if (func->jit_compile_failed || !sv_func_type_feedback(func)) return;
+  if (!sv_op_records_spread(*ip)) sv_tfb_record_native_call(func, (uint8_t *)ip, callee);
+  if (vtype(callee) != kTypeFunction) return;
+  sv_closure_t *closure = js_func_closure(callee);
+  if (closure && closure->func) sv_tfb_record_call_target(func, (int)(ip - func->code), closure->func);
 }
 
 static inline ant_value_t sv_stack_call_args(
@@ -270,13 +294,15 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   return result;
 }
 
-static inline __attribute__((noinline)) ant_value_t sv_op_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+static inline __attribute__((noinline)) ant_value_t sv_op_apply(sv_vm_t *vm, ant_t *js, sv_func_t *caller, uint8_t *ip) {
   uint16_t argc = sv_get_u16(ip + 1);
   int base = vm->sp - argc - 2;
   
   ant_value_t func = vm->stack[base];
   ant_value_t this = vm->stack[base + 1];
   sv_call_args_t call;
+
+  sv_tfb_record_spread_target(caller, ip, func);
 
   ant_value_t status = sv_stack_call_args(vm, js, &call, base + 2, argc, false);
   if (is_err(status)) { vm->sp = base; return status; }
@@ -290,13 +316,16 @@ static inline __attribute__((noinline)) ant_value_t sv_op_apply(sv_vm_t *vm, ant
   return result;
 }
 
-static inline __attribute__((noinline)) ant_value_t sv_op_call_spread(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+static inline __attribute__((noinline)) ant_value_t sv_op_call_spread(sv_vm_t *vm, ant_t *js, sv_func_t *caller, uint8_t *ip) {
   uint16_t argc = sv_get_u16(ip + 1);
   int base = vm->sp - argc - 2;
   
   ant_value_t func = vm->stack[base];
   ant_value_t this = vm->stack[base + 1];
   sv_call_args_t call;
+
+  sv_tfb_record_spread(js, caller, ip, vm->stack[vm->sp - 1]);
+  sv_tfb_record_spread_target(caller, ip, func);
 
   ant_value_t status = sv_stack_call_args(vm, js, &call, base + 2, argc, true);
   if (is_err(status)) { vm->sp = base; return status; }
@@ -353,17 +382,22 @@ static inline __attribute__((noinline)) ant_value_t sv_op_super_apply(sv_vm_t *v
   return sv_super_call_args(vm, js, frame, ip, false);
 }
 
-static inline __attribute__((noinline)) ant_value_t sv_op_super_spread(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint8_t *ip) {
+static inline __attribute__((noinline)) ant_value_t sv_op_super_spread(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, sv_func_t *caller, uint8_t *ip) {
+  sv_tfb_record_spread(js, caller, ip, vm->stack[vm->sp - 1]);
   return sv_super_call_args(vm, js, frame, ip, true);
 }
 
 __attribute__((noinline)) ant_value_t sv_new_call_args(sv_vm_t *vm, ant_t *js, uint8_t *ip, bool spread);
 
-static inline __attribute__((noinline)) ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+static inline __attribute__((noinline)) ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, sv_func_t *caller, uint8_t *ip) {
+  sv_tfb_record_spread_target(caller, ip, vm->stack[vm->sp - sv_get_u16(ip + 1) - 2]);
   return sv_new_call_args(vm, js, ip, false);
 }
 
-static inline __attribute__((noinline)) ant_value_t sv_op_new_spread(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+static inline __attribute__((noinline)) ant_value_t sv_op_new_spread(sv_vm_t *vm, ant_t *js, sv_func_t *caller, uint8_t *ip) {
+  uint16_t argc = sv_get_u16(ip + 1);
+  sv_tfb_record_spread(js, caller, ip, vm->stack[vm->sp - 1]);
+  sv_tfb_record_spread_target(caller, ip, vm->stack[vm->sp - argc - 2]);
   return sv_new_call_args(vm, js, ip, true);
 }
 

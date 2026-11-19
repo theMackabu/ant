@@ -31,6 +31,9 @@ typedef struct {
 
 typedef opt_exit_value_t opt_site_value_t;
 
+static constexpr int OPT_SPREAD_ARG_SLOTS = 32;
+static_assert(OPT_SPREAD_ARG_SLOTS >= SV_JIT_ARGS_BUF_CAP, "spread helpers expand into the call slots");
+
 typedef enum : uint8_t {
   OPT_SITE_REGISTER,
   OPT_SITE_STACK,
@@ -228,7 +231,11 @@ ant_value_t opt_rt_string_intrinsic(sv_vm_t *vm, ant_value_t callee, ant_value_t
 ant_value_t opt_rt_stable_builtin(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_regexp_exec_truthy(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_super_call(sv_vm_t *vm, ant_value_t this_val, ant_value_t func, ant_value_t *args, int64_t argc, int64_t forward);
+ant_value_t opt_rt_super_apply(sv_vm_t *vm, ant_value_t this_val, ant_value_t func, ant_value_t *args, int64_t argc, int64_t unused);
+ant_value_t opt_rt_super_spread(sv_vm_t *vm, ant_value_t this_val, ant_value_t func, ant_value_t *args, int64_t argc, int64_t unused);
 ant_value_t opt_rt_super_parent(sv_vm_t *vm, ant_value_t parent, ant_value_t this_val, ant_value_t *args, int64_t argc);
+ant_value_t opt_rt_call_args(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t spread);
+ant_value_t opt_rt_new_args(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t spread);
 ant_value_t opt_rt_super_result(ant_value_t result, ant_value_t this_val);
 ant_value_t opt_rt_import_default(sv_vm_t *vm, ant_value_t ns, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_import_named(sv_vm_t *vm, ant_value_t ns, ant_value_t unused, ant_value_t *args, int64_t argc, const sv_atom_t *atom);

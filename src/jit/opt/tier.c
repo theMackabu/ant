@@ -889,6 +889,31 @@ ant_value_t opt_rt_super_call(sv_vm_t *vm, ant_value_t this_val, ant_value_t fun
   return effective_this;
 }
 
+ant_value_t opt_rt_super_apply(sv_vm_t *vm, ant_value_t this_val, ant_value_t func, ant_value_t *args, int64_t argc, int64_t unused) {
+  sv_frame_t *frame = &vm->frames[vm->fp];
+  ant_value_t effective_this = jit_helper_super_apply(vm, vm->js, func, this_val, args + 1, (int)argc - 1, args[0]);
+  if (is_err(effective_this)) return effective_this;
+  frame->this = effective_this;
+  return effective_this;
+}
+
+ant_value_t opt_rt_super_spread(sv_vm_t *vm, ant_value_t this_val, ant_value_t func, ant_value_t *args, int64_t argc, int64_t unused) {
+  sv_frame_t *frame = &vm->frames[vm->fp];
+  ant_value_t effective_this = jit_helper_super_spread(vm, vm->js, func, this_val, args + 1, (int)argc - 1, args[0]);
+  if (is_err(effective_this)) return effective_this;
+  frame->this = effective_this;
+  return effective_this;
+}
+
+ant_value_t opt_rt_call_args(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t spread) {
+  if (spread) return jit_helper_call_spread(vm, vm->js, callee, this_val, args, (int)argc, OPT_SPREAD_ARG_SLOTS);
+  return jit_helper_apply(vm, vm->js, callee, this_val, args, (int)argc, OPT_SPREAD_ARG_SLOTS);
+}
+
+ant_value_t opt_rt_new_args(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t spread) {
+  return jit_helper_new_args(vm, vm->js, callee, new_target, args, (int)argc, OPT_SPREAD_ARG_SLOTS, spread != 0);
+}
+
 ant_value_t opt_rt_super_parent(sv_vm_t *vm, ant_value_t parent, ant_value_t this_val, ant_value_t *args, int64_t argc) {
   return sv_super_construct_parent(vm, vm->js, parent, this_val, args + 1, (int)argc - 1, args[0]);
 }

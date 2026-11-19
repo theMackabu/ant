@@ -135,6 +135,24 @@ ant_value_t jit_helper_call_super(
   ant_value_t *args, int argc, ant_value_t new_target
 );
 
+ant_value_t jit_helper_super_apply(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t constructor, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+);
+
+ant_value_t jit_helper_new_args(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t func, ant_value_t new_target,
+  ant_value_t *args, int argc, int cap, bool spread
+);
+
+ant_value_t jit_helper_super_spread(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t constructor, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+);
+
 ant_value_t jit_helper_call_char_code_at(
   sv_vm_t *vm, ant_t *js, ant_value_t func, 
   ant_value_t receiver, ant_value_t *args, int argc

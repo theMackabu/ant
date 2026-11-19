@@ -145,6 +145,43 @@ const shapeOf = (o) => `${Object.getPrototypeOf(o) === null ? 'null' : Object.ge
 }
 
 {
+  class Base { constructor(a, b) { this.a = a; this.b = b; this.count = arguments.length; this.target = new.target; } }
+  class Swaps { constructor(a) { return { swapped: a }; } }
+  class Spread extends Base { constructor(...args) { super(...args); this.own = args.length; } }
+  class FromList extends Base { constructor(list) { super(...list); this.own = 1; } }
+  class Mixed extends Base { constructor(x, o, list) { if (list) super(...list); else super(x, 2); this.y = o.v; } }
+  class Leaf extends Spread { constructor(x) { super(x, 'leaf'); this.leaf = true; } }
+  const usual = { v: 1 }, odd = { extra: 0, v: 2 };
+  const pair = [0, 'p'];
+  function* counted() { yield 'g1'; yield 'g2'; yield 'g3'; }
+  for (let i = 0; i < N; i++) {
+    if (i === N / 2) { Object.setPrototypeOf(Mixed, Swaps); Object.setPrototypeOf(FromList, Swaps); }
+    const o = i === N / 4 || i === N - 1000 ? odd : usual;
+    pair[0] = i;
+    const spread = new Spread(i, 'b', 'c'), list = new FromList(pair), leaf = new Leaf(i);
+    const direct = new Mixed(i, o, null), applied = new Mixed(i, o, pair);
+    assert.deepStrictEqual([spread.a, spread.b, spread.count, spread.target, spread.own], [i, 'b', 3, Spread, 3]);
+    assert.deepStrictEqual([leaf.a, leaf.b, leaf.count, leaf.target, leaf.own, leaf.leaf], [i, 'leaf', 2, Leaf, 2, true]);
+    if (i < N / 2) {
+      assert.deepStrictEqual([list.a, list.b, list.count, list.target, list.own], [i, 'p', 2, FromList, 1]);
+      assert.deepStrictEqual([direct.a, direct.b, direct.count, direct.target, direct.y], [i, 2, 2, Mixed, o.v]);
+      assert.deepStrictEqual([applied.a, applied.b, applied.count, applied.target, applied.y], [i, 'p', 2, Mixed, o.v]);
+    } else {
+      assert.deepStrictEqual([{ ...list }, { ...direct }, { ...applied }], [{ swapped: i, own: 1 }, { swapped: i, y: o.v }, { swapped: i, y: o.v }]);
+    }
+  }
+  assert.deepStrictEqual([new Spread().count, new Spread(...counted()).b, new Spread(...'xy').a], [0, 'g2', 'x']);
+  const many = Array.from({ length: 40 }, (_, k) => k);
+  assert.deepStrictEqual([new Spread(...many).count, new Spread(...many).own, new Spread(...[, 1]).a], [40, 40, undefined]);
+  Object.setPrototypeOf(FromList, Base);
+  assert.deepStrictEqual([new FromList([]).count, new FromList('ab').b, new FromList(many).count, new FromList(counted()).a], [0, 'b', 40, 'g1']);
+  assert.throws(() => new FromList(5), TypeError);
+  assert.throws(() => new FromList(undefined), TypeError);
+  Object.setPrototypeOf(FromList, null);
+  assert.throws(() => new FromList([1]), TypeError);
+}
+
+{
   class First { constructor(x) { this.x = x; } }
   class Second { constructor(x) { this.x = x * 2; } }
   const factory = (Parent) => class extends Parent { constructor(x) { super(x); this.y = 1; } };

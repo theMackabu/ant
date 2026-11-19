@@ -276,8 +276,9 @@ static void opt_cg_lay_out_frame(opt_cg_t *cg) {
   uint32_t call_slots = 0;
   for (ir_node_id_t node = 0; node < ir_node_count(cg->graph); node++) {
     const ir_op_t *op = &ir_node(cg->graph, node)->op;
-    if (op->code == IR_OP_CALL_DIRECT || op->code == IR_OP_CALL_NATIVE || op->code == IR_OP_CALL_CONSTRUCT)
-      call_slots = call_slots > 2u + op->call.argc ? call_slots : 2u + op->call.argc;
+    if (op->code != IR_OP_CALL_DIRECT && op->code != IR_OP_CALL_NATIVE && op->code != IR_OP_CALL_CONSTRUCT) continue;
+    uint32_t slots = 2u + op->call.argc + op->call.spare_slots;
+    call_slots = call_slots > slots ? call_slots : slots;
   }
   cg->entry_off = OPT_OUTGOING_BYTES;
   cg->index_off = (uint32_t)((cg->entry_off + sizeof(opt_entry_t) + 7) & ~(size_t)7);
@@ -1106,6 +1107,12 @@ static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condit
       masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, (int32_t)ANT_PROTECTOR_ITERATOR_RETURN, opt_cg_label(cg, if_false));
       opt_cg_jump_to(cg, if_true);
       return;
+    }
+    case IR_COND_NO_SIDECAR: {
+      asm_gpr_t scratch = cg->pinned.scratch;
+      masm_load64(m, scratch, asm_addr(opt_cg_input(cg, node, 0), (int32_t)offsetof(ant_object_t, extra_slots)));
+      masm_branch_test64(m, invert ? ASM_COND_NON_ZERO : ASM_COND_ZERO, scratch, (int64_t)ant_sidecar, target);
+      break;
     }
     case IR_COND_GLOBAL_EVAL_INTACT: {
       asm_gpr_t scratch = cg->pinned.scratch;

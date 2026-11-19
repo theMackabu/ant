@@ -1412,7 +1412,7 @@ L_NEW: {
 }
 
 L_APPLY: {
-  VM_CHECK(sv_op_apply(vm, js, ip));
+  VM_CHECK(sv_op_apply(vm, js, func, ip));
   NEXT(OP_APPLY);
 }
 
@@ -1422,22 +1422,22 @@ L_SUPER_APPLY: {
 }
 
 L_NEW_APPLY: {
-  VM_CHECK(sv_op_new_apply(vm, js, ip));
+  VM_CHECK(sv_op_new_apply(vm, js, func, ip));
   NEXT(OP_NEW_APPLY);
 }
 
 L_CALL_SPREAD: {
-  VM_CHECK(sv_op_call_spread(vm, js, ip));
+  VM_CHECK(sv_op_call_spread(vm, js, func, ip));
   NEXT(OP_CALL_SPREAD);
 }
 
 L_NEW_SPREAD: {
-  VM_CHECK(sv_op_new_spread(vm, js, ip));
+  VM_CHECK(sv_op_new_spread(vm, js, func, ip));
   NEXT(OP_NEW_SPREAD);
 }
 
 L_SUPER_SPREAD: {
-  VM_CHECK(sv_op_super_spread(vm, js, frame, ip));
+  VM_CHECK(sv_op_super_spread(vm, js, frame, func, ip));
   NEXT(OP_SUPER_SPREAD);
 }
 
@@ -1850,6 +1850,7 @@ L_YIELD_STAR_RETURN: {
 }
 
 L_SPREAD: {
+  sv_tfb_record_spread(js, func, ip, vm->stack[vm->sp - 1]);
   VM_CHECK(sv_op_spread(vm, js));
   NEXT(OP_SPREAD);
 }
