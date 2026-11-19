@@ -316,6 +316,7 @@ export function targets() {
     'test_napi_clear_exception.cjs',
     'test_navigator_locks_threads.cjs',
     'test_native_completion_errors.cjs',
+    'test_mapped_arguments_captured.cjs',
     'test_native_numeric_array_paths.cjs',
     'test_number_radix_parseint.cjs',
     'test_number_shortest.cjs',
