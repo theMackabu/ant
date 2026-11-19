@@ -257,6 +257,7 @@ export function targets() {
     'test_iterator_dispose.cjs',
     'test_iterator_result_template.cjs',
     'test_jit_array_literal.cjs',
+    'test_is_frozen_array_length.cjs',
     'test_jit_async_await.cjs',
     'test_jit_await_live_locals.cjs',
     'test_jit_bitwise_primitives.cjs',

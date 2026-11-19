@@ -671,16 +671,19 @@ static __attribute__((noinline)) ant_value_t object_scan_integrity(ant_t *js, an
   ant_value_t result = Ant_Value_True;
   ant_offset_t count = js_arr_len(js, keys);
   
+  bool array = real_array_obj_ptr(obj) != NULL;
   bool function = vtype(obj) == kTypeFunction;
   
   for (ant_offset_t i = 0; i < count && result == Ant_Value_True; i++) {
-    ant_value_t desc = js_get_own_property_descriptor(js, obj, js_arr_get(js, keys, i));
+    ant_value_t key = js_arr_get(js, keys, i);
+    ant_value_t desc = js_get_own_property_descriptor(js, obj, key);
     if (is_err(desc)) { result = desc; break; }
     if (!is_object_type(desc)) continue;
 
     GC_ROOT_PIN(js, desc);
     if (js_truthy(js, js_get(js, desc, "configurable"))) result = Ant_Value_False;
-    else if (function && integrity_key_is_prototype(js, js_arr_get(js, keys, i))) continue;
+    else if (array && key == js->length_str) continue;
+    else if (function && integrity_key_is_prototype(js, key)) continue;
     else if (frozen && js_truthy(js, js_get(js, desc, "writable"))) result = Ant_Value_False;
   }
 
