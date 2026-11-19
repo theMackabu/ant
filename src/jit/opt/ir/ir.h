@@ -319,6 +319,10 @@ typedef struct {
       uint32_t reserve;
     } allocate_object;
     struct {
+      uint32_t count;
+      uint32_t reserve;
+    } allocate_array;
+    struct {
       uint32_t shape_cache;
       uint32_t capacity;
     } allocate_environment;

@@ -4605,7 +4605,7 @@ static constexpr uint32_t OPT_MAX_INLINE_ARRAY = 32;
 static_assert(OPT_MAX_INLINE_ARRAY >= OPT_MAX_CALL_ARGS, "inline array literals take every call-sized literal");
 static_assert(OPT_MAX_INLINE_ARRAY == SV_LITERAL_INLINE_MAX, "small flat literals stay on OP_ARRAY because opt inlines them");
 
-static ir_node_id_t opt_emit_array(opt_builder_t *b, const ir_node_id_t *elements, uint32_t count) {
+static ir_node_id_t opt_emit_array(opt_builder_t *b, const ir_node_id_t *elements, uint32_t count, uint32_t reserve) {
   bool inline_elements = count <= OPT_MAX_INLINE_ARRAY && gc_array_storage_fit_class(count) >= 0;
   for (uint32_t i = 0; i < count && inline_elements; i++) {
     uint64_t bits;
@@ -4618,7 +4618,8 @@ static ir_node_id_t opt_emit_array(opt_builder_t *b, const ir_node_id_t *element
   for (uint32_t i = 0; i < count; i++) inputs[2 + i] = opt_tagged(b, elements[i]);
   if (!inline_elements) return opt_runtime_call(b, (uintptr_t)opt_rt_array, 0, inputs, 2 + count, true, false);
   ir_op_t op = ir_op(IR_OP_ALLOCATE_ARRAY);
-  op.count = count;
+  op.allocate_array.count = count;
+  op.allocate_array.reserve = reserve;
   ir_node_id_t array = opt_emit(b, op, NULL, 0, OPT_REPR_TAGGED);
   for (uint32_t i = 0; i < count; i++) {
     ir_op_t init = ir_op(IR_OP_INITIALIZE_ELEMENT);
@@ -4632,7 +4633,7 @@ static opt_flow_t opt_build_plain_array(opt_builder_t *b, uint32_t count) {
   if (count > OPT_MAX_INLINE_ARRAY) return OPT_FLOW_GENERIC;
   ir_node_id_t elements[OPT_MAX_INLINE_ARRAY];
   for (uint32_t i = 0; i < count; i++) elements[i] = opt_peek(b, count - 1 - i);
-  ir_node_id_t array = opt_emit_array(b, elements, count);
+  ir_node_id_t array = opt_emit_array(b, elements, count, 0);
   if (array == IR_NONE) return OPT_FLOW_GENERIC;
   opt_drop(b, count);
   opt_push(b, array);
@@ -4654,8 +4655,9 @@ static opt_flow_t opt_build_rest(opt_builder_t *b, const uint8_t *ip) {
   const opt_inline_t *call = b->inline_call;
   ir_node_id_t array;
   if (call) {
-    uint32_t count = call->argc > start ? call->argc - start : 0;
-    array = opt_emit_array(b, call->args + (count ? start : 0), count);
+    uint32_t count = call->argc > start ? call->argc - start : 0, reserve = MAX_DENSE_INITIAL_CAP;
+    while (reserve < count) reserve *= 2;
+    array = opt_emit_array(b, call->args + (count ? start : 0), count, reserve);
     if (array == IR_NONE) return OPT_FLOW_GENERIC;
   } else {
     ir_node_id_t inputs[2] = {opt_constant(b, ir_value_number((double)start)), opt_constant(b, IR_VALUE_UNDEFINED)};
@@ -5831,7 +5833,7 @@ static opt_flow_t opt_build_array(opt_builder_t *b, const uint8_t *ip) {
     if (flow == OPT_FLOW_CONTINUE) b->skip_to = end + 1;
     if (flow != OPT_FLOW_GENERIC) return flow;
   }
-  ir_node_id_t array = flow == OPT_FLOW_CONTINUE ? opt_emit_array(b, elements, filled) : IR_NONE;
+  ir_node_id_t array = flow == OPT_FLOW_CONTINUE ? opt_emit_array(b, elements, filled, 0) : IR_NONE;
   if (flow == OPT_FLOW_FAILED || flow == OPT_FLOW_ENDED) return flow;
   if (array == IR_NONE) {
     b->frame = before;

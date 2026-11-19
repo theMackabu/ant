@@ -293,7 +293,7 @@ typedef struct {
 uint64_t opt_rt_revalidate_add(sv_vm_t *vm, const opt_rt_add_epoch_t *site);
 ant_value_t opt_rt_materialize_object(sv_vm_t *vm, ant_shape_t *shape);
 void opt_rt_materialize_property(sv_vm_t *vm, ant_value_t object, uint32_t index, ant_value_t value);
-ant_value_t opt_rt_allocate_array(sv_vm_t *vm, uint64_t count);
+ant_value_t opt_rt_allocate_array(sv_vm_t *vm, uint64_t count, uint64_t reserve);
 ant_value_t opt_rt_object(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_array(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_array_literal(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);

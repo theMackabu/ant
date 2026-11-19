@@ -96,7 +96,7 @@ bool ir_op_equal(const ir_op_t *a, const ir_op_t *b) {
     case IR_OP_STORE_PRIVATE: return a->hash == b->hash;
     case IR_OP_COLLECTION_ITERATOR_STEP: return a->index == b->index;
     case IR_OP_LOAD_ARGUMENT: return a->arguments_base == b->arguments_base;
-    case IR_OP_ALLOCATE_ARRAY:
+    case IR_OP_ALLOCATE_ARRAY: return a->allocate_array.count == b->allocate_array.count && a->allocate_array.reserve == b->allocate_array.reserve;
     case IR_OP_CONCATENATE_STRINGS:
     case IR_OP_LOAD_NAMED_STORAGE: return a->count == b->count;
     case IR_OP_ALLOCATE_FUNCTION: return a->shared_function_data_index == b->shared_function_data_index;

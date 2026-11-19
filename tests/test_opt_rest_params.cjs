@@ -121,4 +121,29 @@ assert.ok(take().length > 0);
 warm();
 checkShapes();
 
+function restGrow(...items) {
+  items.push(items.length);
+  items.push('x', 'y', 'z');
+  items[items.length] = 'tail';
+  return items;
+}
+function restGrowCaller(a, b) { return restGrow(a, b, 3); }
+const manyItems = Array.from({ length: 40 }, (_, k) => k);
+for (let i = 0; i < 6000; i++) {
+  assert.deepStrictEqual(restGrow(), [0, 'x', 'y', 'z', 'tail']);
+  assert.deepStrictEqual(restGrow(i), [i, 1, 'x', 'y', 'z', 'tail']);
+  assert.deepStrictEqual(restGrowCaller(i, 2), [i, 2, 3, 3, 'x', 'y', 'z', 'tail']);
+}
+const grown = restGrow(...manyItems);
+assert.strictEqual(grown.length, 45);
+assert.strictEqual(grown[39], 39);
+assert.strictEqual(grown[40], 40);
+assert.strictEqual(grown[44], 'tail');
+for (let n = 0; n <= 20; n++) {
+  const made = restGrow(...manyItems.slice(0, n));
+  assert.strictEqual(made.length, n + 5);
+  assert.strictEqual(made[n], n);
+  assert.strictEqual(made[n + 4], 'tail');
+}
+
 console.log('ok');

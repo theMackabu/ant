@@ -2776,7 +2776,7 @@ static void opt_cg_string_builder_append(opt_cg_t *cg, ir_node_id_t node) {
 
 static void opt_cg_allocate_array(opt_cg_t *cg, ir_node_id_t node) {
   masm_t *m = &cg->masm;
-  uint32_t count_elements = ir_node(cg->graph, node)->op.count;
+  uint32_t count_elements = ir_node(cg->graph, node)->op.allocate_array.count, reserve = ir_node(cg->graph, node)->op.allocate_array.reserve;
   asm_gpr_t out = opt_cg_output(cg, node), count = opt_cg_temp(cg, node, 0), temp = opt_cg_temp(cg, node, 1);
   asm_gpr_t data = opt_cg_temp(cg, node, 2), js = cg->pinned.scratch;
   opt_cg_allocation_t allocation = {.label = masm_new_label(m), .resume = masm_new_label(m), .node = node};
@@ -2786,7 +2786,7 @@ static void opt_cg_allocate_array(opt_cg_t *cg, ir_node_id_t node) {
   masm_bind(m, allocation.resume);
   return;
 #endif
-  uint32_t reserved = count_elements ? count_elements : MAX_DENSE_INITIAL_CAP;
+  uint32_t reserved = reserve > count_elements ? reserve : count_elements ? count_elements : MAX_DENSE_INITIAL_CAP;
   int cls = gc_array_storage_fit_class(reserved);
   uint32_t capacity = gc_array_storage_fit(reserved);
   const int32_t head = (int32_t)(offsetof(ant_t, array_storage.head) + sizeof(ant_value_t *) * (size_t)cls);
@@ -2885,7 +2885,8 @@ static void opt_cg_emit_allocations(opt_cg_t *cg) {
     opt_cg_dump_caller_saved_gprs(cg);
     masm_move64(m, a[0], cg->pinned.vm);
     if (op->code == IR_OP_ALLOCATE_ARRAY) {
-      masm_move_imm64(m, a[1], op->count);
+      masm_move_imm64(m, a[1], op->allocate_array.count);
+      masm_move_imm64(m, a[2], op->allocate_array.reserve);
       masm_call_absolute(m, (uint64_t)(uintptr_t)opt_rt_allocate_array);
     } else if (op->code == IR_OP_CONCATENATE_STRINGS) {
       opt_cg_slow_argument(cg, a[1], allocation->node, 0);

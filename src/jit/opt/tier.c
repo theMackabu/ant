@@ -1145,9 +1145,9 @@ void opt_rt_materialize_property(sv_vm_t *vm, ant_value_t object, uint32_t index
   gc_write_barrier_prop(vm->js, ptr, value);
 }
 
-ant_value_t opt_rt_allocate_array(sv_vm_t *vm, uint64_t count) {
+ant_value_t opt_rt_allocate_array(sv_vm_t *vm, uint64_t count, uint64_t reserve) {
   ant_value_t *data;
-  ant_value_t array = js_mkarr_dense_uninit(vm->js, (uint32_t)count, &data);
+  ant_value_t array = Ant_Array_CreateUninit(vm->js, (uint32_t)count, (uint32_t)reserve, &data);
   if (is_err(array)) return array;
   for (uint64_t i = 0; i < count; i++) data[i] = Ant_Value_Undefined;
   return array;
