@@ -528,6 +528,15 @@ static ant_value_t array_splice_generic(
   return is_err(done) ? done : removed;
 }
 
+static ant_value_t builtin_array_pop(ant_params_t);
+
+static __attribute__((noinline)) ant_value_t array_pop_proxy(ant_t *js, ant_value_t arr) {
+  ant_value_t target;
+  if (proxy_is_transparent(js, arr, &target) && array_mutable_dense(js, target))
+    return builtin_array_pop(js, NULL, 0, Ant_Value_Undefined, target, Ant_Value_Undefined);
+  return array_pop_generic(js, arr);
+}
+
 static ant_value_t builtin_array_pop(ant_params_t) {
   ant_object_t *fast = array_mutable_dense(js, call_this);
   if (__builtin_expect(fast != NULL, 1)) {
@@ -552,12 +561,7 @@ static ant_value_t builtin_array_pop(ant_params_t) {
   ant_offset_t string_len;
   if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "length");
 
-  if (is_proxy(arr)) {
-    ant_value_t target;
-    if (proxy_is_transparent(js, arr, &target) && array_mutable_dense(js, target))
-      return builtin_array_pop(js, args, nargs, call_new_target, target, call_func);
-    return array_pop_generic(js, arr);
-  }
+  if (is_proxy(arr)) return array_pop_proxy(js, arr);
   
   if (js_is_arguments(arr)) return arguments_pop(js, arr);
 
@@ -1555,17 +1559,23 @@ static inline ant_value_t flat_append_mapped_value(ant_t *js, ant_value_t mapped
   return flat_helper(js, mapped, result, fresh, result_idx, 0);
 }
 
+static inline int array_flat_depth_from(double depth_num) {
+  return !(depth_num >= 1) ? 0 : depth_num >= INT32_MAX ? INT32_MAX : (int)depth_num;
+}
+
 static __attribute__((noinline)) ant_value_t array_flat_depth_slow(ant_t *js, ant_value_t *args, int *depth) {
-  double depth_num = vtype(args[0]) == kTypeNumber ? Ant_Value_AsNumberUnchecked(args[0]) : js_to_number(js, args[0]);
+  double depth_num = js_to_number(js, args[0]);
   if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
-  *depth = !(depth_num >= 1) ? 0 : depth_num >= INT32_MAX ? INT32_MAX : (int)depth_num;
+  *depth = array_flat_depth_from(depth_num);
   return Ant_Value_Undefined;
 }
 
 static inline __attribute__((always_inline)) ant_value_t array_flat_depth(ant_t *js, ant_value_t *args, int nargs, int *depth) {
   *depth = 1;
   if (nargs < 1 || vtype(args[0]) == kTypeUndefined) return Ant_Value_Undefined;
-  return array_flat_depth_slow(js, args, depth);
+  if (vtype(args[0]) != kTypeNumber) return array_flat_depth_slow(js, args, depth);
+  *depth = array_flat_depth_from(Ant_Value_AsNumberUnchecked(args[0]));
+  return Ant_Value_Undefined;
 }
 
 static __attribute__((noinline)) ant_value_t array_flat_generic(ant_t *js, ant_value_t arr, ant_value_t *args, int nargs) {
@@ -1972,6 +1982,15 @@ static ant_value_t builtin_array_reduceRight(ant_params_t) {
   return accumulator;
 }
 
+static ant_value_t builtin_array_shift(ant_params_t);
+
+static __attribute__((noinline)) ant_value_t array_shift_proxy(ant_t *js, ant_value_t arr) {
+  ant_value_t target;
+  if (proxy_is_transparent(js, arr, &target) && array_mutable_dense(js, target))
+    return builtin_array_shift(js, NULL, 0, Ant_Value_Undefined, target, Ant_Value_Undefined);
+  return array_shift_generic(js, arr);
+}
+
 static ant_value_t builtin_array_shift(ant_params_t) {
   ant_object_t *fast = array_mutable_dense(js, call_this);
   if (__builtin_expect(fast != NULL, 1)) {
@@ -1995,12 +2014,7 @@ static ant_value_t builtin_array_shift(ant_params_t) {
   if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "length");
   if (js_is_arguments(arr)) return arguments_shift(js, arr);
 
-  if (is_proxy(arr)) {
-    ant_value_t target;
-    if (proxy_is_transparent(js, arr, &target) && array_mutable_dense(js, target))
-      return builtin_array_shift(js, args, nargs, call_new_target, target, call_func);
-    return array_shift_generic(js, arr);
-  }
+  if (array_receiver_is_proxy(arr)) return array_shift_proxy(js, arr);
 
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   if (len == 0) {
