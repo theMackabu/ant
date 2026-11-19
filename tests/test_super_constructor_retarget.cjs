@@ -162,4 +162,320 @@ class CallsItselfPlainly extends Q {
 assert.throws(() => new CallsItselfPlainly(true), TypeError);
 assert.strictEqual(new CallsItselfPlainly(false).q, 2);
 
+function test(name, body) {
+  try {
+    body();
+  } catch (error) {
+    error.message = `${name}: ${error.message}`;
+    throw error;
+  }
+}
+
+const RUNS = 8000;
+const FLIP = 5000;
+const describe = (o) => JSON.stringify([Object.keys(o), Object.values(o).map(String)]);
+
+test('hot derived construction builds the same object as the parent chain describes', () => {
+  class A { constructor(x) { this.x = x; } }
+  class B extends A { constructor(x, y) { super(x); this.y = y; } }
+  class C extends B { constructor(x, y, z) { super(x, y); this.z = z; } }
+  for (let i = 0; i < RUNS; i++) {
+    const c = new C(i, i + 1, i + 2);
+    assert.strictEqual(describe(c), describe({ x: i, y: i + 1, z: i + 2 }));
+    assert.strictEqual(Object.getPrototypeOf(c), C.prototype);
+    assert.strictEqual(c.constructor, C);
+    const b = new B(i, 'b');
+    assert.strictEqual(describe(b), describe({ x: i, y: 'b' }));
+    assert.strictEqual(Object.getPrototypeOf(b), B.prototype);
+  }
+});
+
+test('hot derived construction follows Object.setPrototypeOf between constructions', () => {
+  class A { constructor(x) { this.a = x; } }
+  class Other { constructor(x) { this.o = x * 2; } }
+  class B extends A { constructor(x) { super(x); this.b = 1; } }
+  for (let i = 0; i < RUNS; i++) {
+    if (i === FLIP) Object.setPrototypeOf(B, Other);
+    if (i === FLIP + 1500) Object.setPrototypeOf(B, A);
+    const viaOther = i >= FLIP && i < FLIP + 1500;
+    const b = new B(i);
+    assert.strictEqual(describe(b), describe(viaOther ? { o: i * 2, b: 1 } : { a: i, b: 1 }));
+    assert.strictEqual(b instanceof B, true);
+    assert.strictEqual(b instanceof A, true);
+    assert.strictEqual(b instanceof Other, false);
+  }
+});
+
+test('hot derived construction sees a parent swapped while arguments are evaluated', () => {
+  class A { constructor(x) { this.a = x; } }
+  class Other { constructor(x) { this.o = x; } }
+  let swapAt = -1;
+  const pick = (i) => { if (i === swapAt) Object.setPrototypeOf(B, Other); return i; };
+  class B extends A { constructor(i) { super(pick(i)); } }
+  swapAt = FLIP;
+  for (let i = 0; i < RUNS; i++) assert.strictEqual(describe(new B(i)), describe(i >= FLIP ? { o: i } : { a: i }));
+});
+
+test('hot derived construction sees a parent swapped by the running parent', () => {
+  class Other { constructor() { this.o = 1; } }
+  class A { constructor(i) { this.a = i; if (i === FLIP) Object.setPrototypeOf(B, Other); } }
+  class B extends A { constructor(i) { super(i); this.b = i; } }
+  class C extends B { constructor(i) { super(i); this.c = i; } }
+  for (let i = 0; i < RUNS; i++) {
+    assert.strictEqual(describe(new C(i)), describe(i > FLIP ? { o: 1, b: i, c: i } : { a: i, b: i, c: i }));
+  }
+});
+
+test('hot derived construction throws once the parent is null or not a constructor', () => {
+  class A { constructor() { this.a = 1; } }
+  class B extends A { constructor() { super(); } }
+  class C extends A { constructor() { super(); } }
+  for (let i = 0; i < RUNS; i++) {
+    if (i === FLIP) { Object.setPrototypeOf(B, null); Object.setPrototypeOf(C, () => {}); }
+    if (i >= FLIP) {
+      assert.throws(() => new B(), TypeError);
+      assert.throws(() => new C(), TypeError);
+    } else {
+      assert.strictEqual(new B().a, 1);
+      assert.strictEqual(new C().a, 1);
+    }
+  }
+});
+
+test('hot derived construction with a parent that returns another object or a builtin function', () => {
+  const replacement = { replaced: true };
+  let mode = 0;
+  class A { constructor() { this.a = 1; if (mode === 1) return replacement; if (mode === 2) return Math.max; if (mode === 3) return 5; } }
+  class B extends A { constructor() { super(); this.tag = 'b'; } }
+  for (let i = 0; i < RUNS; i++) {
+    mode = i < FLIP ? 0 : (i % 3) + 1;
+    const made = new B();
+    if (mode === 1) assert.strictEqual(made, replacement);
+    else if (mode === 2) assert.strictEqual(made, Math.max);
+    else assert.strictEqual(Object.getPrototypeOf(made), B.prototype);
+    assert.strictEqual(made.tag, 'b');
+    if (mode === 0 || mode === 3) assert.strictEqual(describe(made), describe({ a: 1, tag: 'b' }));
+  }
+  delete Math.max.tag;
+  class Always { constructor() { return replacement; } }
+  class D extends Always { constructor() { super(); this.count = (this.count || 0) + 1; } }
+  for (let i = 0; i < RUNS; i++) assert.strictEqual(new D(), replacement);
+  assert.strictEqual(replacement.count, RUNS);
+});
+
+test('hot derived constructor return values', () => {
+  const other = { other: true };
+  let mode = 0;
+  class A { constructor() { this.a = 1; } }
+  class B extends A { constructor() { super(); if (mode === 1) return other; if (mode === 2) return 1; if (mode === 3) return undefined; } }
+  class C extends B { constructor() { super(); this.c = 1; } }
+  for (let i = 0; i < RUNS; i++) {
+    mode = i < FLIP ? 0 : i % 4;
+    if (mode === 2) {
+      assert.throws(() => new B(), TypeError);
+      assert.throws(() => new C(), TypeError);
+      continue;
+    }
+    const b = new B(), c = new C();
+    assert.strictEqual(b === other, mode === 1);
+    assert.strictEqual(c === other, mode === 1);
+    assert.strictEqual(c.c, 1);
+    if (mode !== 1) assert.strictEqual(describe(c), describe({ a: 1, c: 1 }));
+  }
+});
+
+test('hot derived constructor that returns a primitive only sometimes', () => {
+  class A { constructor() { this.a = 1; } }
+  class B extends A { constructor(bad) { super(); if (bad) return 1; } }
+  class C extends B { constructor(bad) { super(bad); this.c = 1; } }
+  for (let i = 0; i < RUNS; i++) {
+    const bad = i >= FLIP && i % 2 === 0;
+    if (bad) {
+      assert.throws(() => new B(bad), TypeError);
+      assert.throws(() => new C(bad), TypeError);
+    } else {
+      assert.strictEqual(new B(bad).a, 1);
+      assert.strictEqual(new C(bad).c, 1);
+    }
+  }
+});
+
+test('hot three-level construction passes new.target on after a middle constructor changes course', () => {
+  class A { constructor(x) { this.target = new.target; this.x = x; } }
+  class B extends A { constructor(x) { const y = x + 1; super(y); } }
+  class C extends B { constructor(x) { super(x); this.c = new.target; } }
+  for (let i = 0; i < RUNS; i++) {
+    const x = i >= FLIP && i % 7 === 0 ? 'text' : i;
+    const c = new C(x);
+    assert.strictEqual(c.target, C);
+    assert.strictEqual(c.c, C);
+    assert.strictEqual(c.x, x + 1);
+    assert.strictEqual(new B(x).target, B);
+  }
+});
+
+test('hot three-level construction continues with the object a swapped grandparent returns', () => {
+  const replacement = { replaced: true };
+  class A { constructor(x) { this.a = x; } }
+  class Other { constructor() { return replacement; } }
+  let swapAt = -1;
+  const pick = (i) => { if (i === swapAt) Object.setPrototypeOf(B, Other); return i; };
+  class B extends A { constructor(i) { super(pick(i)); this.b = i; } }
+  class C extends B { constructor(i) { super(i); this.c = i; } }
+  swapAt = FLIP;
+  for (let i = 0; i < RUNS; i++) {
+    const c = new C(i);
+    if (i < FLIP) {
+      assert.strictEqual(describe(c), describe({ a: i, b: i, c: i }));
+      continue;
+    }
+    assert.strictEqual(c, replacement);
+    assert.strictEqual(describe(c), describe({ replaced: true, b: i, c: i }));
+  }
+});
+
+test('hot derived construction keeps new.target through inlined parents', () => {
+  class A { constructor(x) { this.sum = x + 1; this.target = new.target; } }
+  class B extends A { constructor(x) { super(x); this.mid = new.target; } }
+  class C extends B { constructor(x) { super(x); } }
+  function Plain() {}
+  for (let i = 0; i < RUNS; i++) {
+    const x = i === FLIP || i === FLIP + 7 ? 'text' : i;
+    const c = new C(x), b = new B(x);
+    assert.strictEqual(c.sum, x + 1);
+    assert.strictEqual(c.target, C);
+    assert.strictEqual(c.mid, C);
+    assert.strictEqual(b.target, B);
+    assert.strictEqual(b.mid, B);
+    const r = Reflect.construct(C, [x], Plain);
+    assert.strictEqual(r.target, Plain);
+    assert.strictEqual(r.mid, Plain);
+    assert.strictEqual(Object.getPrototypeOf(r), Plain.prototype);
+  }
+});
+
+test('hot derived construction survives a parent body that changes behaviour', () => {
+  class A { constructor(x) { this.x = x; if (typeof x === 'string') this.extra = x.length; this.done = true; } }
+  class B extends A { constructor(x) { super(x); this.y = this.x; } }
+  class C extends B { constructor(x) { const before = typeof x; super(x); this.before = before; } }
+  for (let i = 0; i < RUNS; i++) {
+    const x = i >= FLIP && i % 5 === 0 ? 's' + i : i;
+    const expected = typeof x === 'string' ? { x, extra: x.length, done: true, y: x } : { x, done: true, y: x };
+    assert.strictEqual(describe(new B(x)), describe(expected));
+    assert.strictEqual(describe(new C(x)), describe({ ...expected, before: typeof x }));
+  }
+});
+
+test('hot derived construction propagates a parent exception and leaves no object behind', () => {
+  let made = 0;
+  class A { constructor(x) { if (x < 0) throw new RangeError('negative'); this.x = x; made++; } }
+  class B extends A { constructor(x) { super(x); this.after = true; } }
+  for (let i = 0; i < RUNS; i++) {
+    if (i >= FLIP && i % 3 === 0) assert.throws(() => new B(-i - 1), RangeError);
+    else assert.strictEqual(new B(i).after, true);
+  }
+  assert.strictEqual(made, RUNS - Math.ceil((RUNS - FLIP) / 3));
+});
+
+test('hot derived construction with class fields and arrows around super()', () => {
+  class A { base = 'a'; constructor(x) { this.x = x; } }
+  class B extends A { own = this.x + 1; self = () => this; }
+  class C extends A { late = this.x * 2; constructor(x) { const early = () => this; super(x); this.early = early(); } }
+  class D extends A { constructor(x) { const run = () => super(x); run(); this.viaArrow = true; } }
+  for (let i = 0; i < RUNS; i++) {
+    const b = new B(i), c = new C(i), d = new D(i);
+    assert.strictEqual(describe({ ...b, self: 0 }), describe({ base: 'a', x: i, own: i + 1, self: 0 }));
+    assert.strictEqual(b.self(), b);
+    assert.strictEqual(describe({ ...c, early: 0 }), describe({ base: 'a', x: i, late: i * 2, early: 0 }));
+    assert.strictEqual(c.early, c);
+    assert.strictEqual(describe(d), describe({ base: 'a', x: i, viaArrow: true }));
+  }
+});
+
+test('hot derived construction enforces this before super() and a single super()', () => {
+  class A { constructor() { this.a = 1; } }
+  let early = false, twice = false;
+  class B extends A { constructor() { if (early) this.touch = 1; super(); if (twice) super(); } }
+  for (let i = 0; i < RUNS; i++) {
+    early = i >= FLIP && i % 2 === 0;
+    twice = i >= FLIP && i % 2 === 1;
+    if (early || twice) assert.throws(() => new B(), ReferenceError);
+    else assert.strictEqual(new B().a, 1);
+  }
+});
+
+test('hot bound classes and Reflect.construct with another newTarget', () => {
+  class A { constructor(x, y) { this.x = x; this.y = y; } }
+  class B extends A { constructor(x, y) { super(x, y); this.b = true; } }
+  const Bound = B.bind(null, 'bound');
+  class Target { constructor() { throw new Error('never constructed'); } }
+  for (let i = 0; i < RUNS; i++) {
+    const bound = new Bound(i);
+    assert.strictEqual(describe(bound), describe({ x: 'bound', y: i, b: true }));
+    assert.strictEqual(Object.getPrototypeOf(bound), B.prototype);
+    const reflected = Reflect.construct(B, [i, 2], Target);
+    assert.strictEqual(describe(reflected), describe({ x: i, y: 2, b: true }));
+    assert.strictEqual(Object.getPrototypeOf(reflected), Target.prototype);
+    assert.strictEqual(reflected instanceof B, false);
+  }
+});
+
+test('hot derived construction over builtins, plain functions and default constructors', () => {
+  function Plain(x) { this.plain = x; }
+  class FromPlain extends Plain { constructor(x) { super(x); this.d = 1; } }
+  class Implicit extends FromPlain {}
+  class List extends Array { constructor(n) { super(n); this.tagged = true; } }
+  class Failure extends Error { constructor(m) { super(m); this.code = 7; } }
+  for (let i = 0; i < RUNS; i++) {
+    assert.strictEqual(describe(new FromPlain(i)), describe({ plain: i, d: 1 }));
+    const implicit = new Implicit(i);
+    assert.strictEqual(describe(implicit), describe({ plain: i, d: 1 }));
+    assert.strictEqual(Object.getPrototypeOf(implicit), Implicit.prototype);
+    if (i % 50 === 0) {
+      const list = new List(3);
+      assert.strictEqual(list.length, 3);
+      assert.strictEqual(Array.isArray(list), true);
+      assert.strictEqual(list.tagged, true);
+      const failure = new Failure('m' + i);
+      assert.strictEqual(failure.message, 'm' + i);
+      assert.strictEqual(failure.code, 7);
+      assert.strictEqual(failure instanceof Failure, true);
+    }
+  }
+});
+
+test('hot classes from one factory with different parents', () => {
+  const make = (Parent) => class extends Parent { constructor(x) { super(x); this.made = true; } };
+  class P1 { constructor(x) { this.p1 = x; } }
+  class P2 { constructor(x) { this.p2 = x; } }
+  const classes = [make(P1), make(P2), make(P1), make(class extends P2 { constructor(x) { super(x + 1); } })];
+  for (let i = 0; i < RUNS; i++) {
+    const k = i & 3;
+    const expected = [{ p1: i, made: true }, { p2: i, made: true }, { p1: i, made: true }, { p2: i + 1, made: true }][k];
+    assert.strictEqual(describe(new classes[k](i)), describe(expected));
+  }
+});
+
+test('hot derived construction with super property access after super()', () => {
+  class A { constructor() { this.x = 0; } k(i) { return i + 1; } }
+  class B extends A { constructor(i) { super(); super.x = i; this.u = super.k(i); } }
+  for (let i = 0; i < RUNS; i++) {
+    if (i === FLIP) A.prototype.k = function (j) { return j - 1; };
+    assert.strictEqual(describe(new B(i)), describe({ x: i, u: i < FLIP ? i + 1 : i - 1 }));
+  }
+});
+
+test('hot derived construction rejects parents that are not constructors', () => {
+  class A { constructor() { this.a = 1; } }
+  const parents = [{ m() {} }.m, async function f() {}, function* g() {}, () => {}, Math.max, {}];
+  for (const parent of parents) {
+    class B extends A { constructor() { super(); } }
+    for (let i = 0; i < RUNS; i++) {
+      if (i === FLIP) Object.setPrototypeOf(B, parent);
+      if (i < FLIP) assert.strictEqual(new B().a, 1);
+      else if (i % 100 === 0) assert.throws(() => new B(), TypeError);
+    }
+  }
+});
+
 console.log('ok');

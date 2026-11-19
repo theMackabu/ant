@@ -1431,6 +1431,16 @@ L_CALL_SPREAD: {
   NEXT(OP_CALL_SPREAD);
 }
 
+L_NEW_SPREAD: {
+  VM_CHECK(sv_op_new_spread(vm, js, ip));
+  NEXT(OP_NEW_SPREAD);
+}
+
+L_SUPER_SPREAD: {
+  VM_CHECK(sv_op_super_spread(vm, js, frame, ip));
+  NEXT(OP_SUPER_SPREAD);
+}
+
 L_SUPER_FORWARD: {
   VM_CHECK(sv_op_super_forward(vm, js, frame));
   NEXT(OP_SUPER_FORWARD);

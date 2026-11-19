@@ -7,6 +7,7 @@
 
 void ir_slot_name(const ir_frame_layout_t *layout, uint32_t slot, char *buffer, size_t size) {
   if (slot == OPT_CALLEE_SLOT) snprintf(buffer, size, "callee");
+  else if (slot == OPT_NEW_TARGET_SLOT) snprintf(buffer, size, "new.target");
   else if (slot < layout->number_of_registers) snprintf(buffer, size, "r%u", slot);
   else if (slot < layout->registers_and_locals_count) snprintf(buffer, size, "l%u", slot - layout->number_of_registers);
   else if (slot < ir_layout_arguments_base(layout)) snprintf(buffer, size, "c%u", slot - layout->registers_and_locals_count);

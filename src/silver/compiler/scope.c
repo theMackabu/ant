@@ -84,6 +84,10 @@ int add_local(
   
   int idx = c->local_count++;
   
+  if (idx > UINT16_MAX && !Ant_Exception_Pending(c->js)) js_mkerr_typed(
+    c->js, JS_ERR_SYNTAX,
+    "Too many variables declared (only %d allowed)", UINT16_MAX
+  );
   if (c->local_count > c->max_local_count) c->max_local_count = c->local_count;
   if (depth >= 0) mark_slot_bound(c, idx - c->param_locals);
   
@@ -235,6 +239,11 @@ int add_upvalue_binding(
 
   ensure_upvalue_capacity(c);
   int idx = c->upvalue_count++;
+  
+  if (idx > UINT16_MAX && !Ant_Exception_Pending(c->js)) js_mkerr_typed(
+    c->js, JS_ERR_SYNTAX,
+    "Too many captured variables (only %d allowed)", UINT16_MAX
+  );
   
   c->upval_descs[idx] = (sv_upval_desc_t){
     .index = index, 
