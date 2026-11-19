@@ -480,6 +480,7 @@ enum {
   WRAP_FLATMAP = 4,
   WRAP_PASS    = 5,
   WRAP_FROM_SYNC = 6,
+  WRAP_CLOSED  = 7,
 };
 
 enum {
@@ -504,6 +505,26 @@ static inline ant_value_t call_indexed_callback(ant_t *js, ant_value_t fn, ant_v
   return sv_vm_call(js->vm, js, fn, Ant_Value_Undefined, call_args, 2, NULL, Ant_Value_Undefined);
 }
 
+static void wrap_iter_mark_closed(ant_value_t iterator) {
+  js_set_slot(iterator, SLOT_ITER_STATE, Ant_Value_FromNumber((double)iter_state_pack(WRAP_CLOSED, 0)));
+  js_set_slot(iterator, SLOT_ENTRIES, Ant_Value_Undefined);
+}
+
+static ant_value_t wrap_iter_close(ant_t *js, ant_value_t iterator) {
+  if (!is_object_type(iterator)) return Ant_Value_Undefined;
+
+  ant_value_t return_fn = js_getprop_fallback(js, iterator, "return");
+  if (is_err(return_fn)) return return_fn;
+  if (vtype(return_fn) == kTypeUndefined || vtype(return_fn) == kTypeNull) return Ant_Value_Undefined;
+  if (!is_callable(return_fn)) return js_mkerr_typed(js, JS_ERR_TYPE, "iterator.return is not a function");
+
+  ant_value_t result = sv_vm_call(js->vm, js, return_fn, iterator, NULL, 0, NULL, Ant_Value_Undefined);
+  if (is_err(result)) return result;
+  if (!is_object_type(result)) return js_mkerr_typed(js, JS_ERR_TYPE, "iterator.return() did not return an object");
+
+  return Ant_Value_Undefined;
+}
+
 static ant_value_t wrap_iter_next(ant_params_t) {
   ant_value_t source = js_get_slot(call_this, SLOT_DATA);
   ant_value_t state_v = js_get_slot(call_this, SLOT_ITER_STATE);
@@ -512,11 +533,19 @@ static ant_value_t wrap_iter_next(ant_params_t) {
   uint32_t kind  = iter_state_kind(state);
   uint32_t count = iter_state_index(state);
   
+  if (kind == WRAP_CLOSED) return Ant_Iterator_CreateResult(js, Ant_Value_Undefined, true);
+
   ant_value_t cb = js_get_slot(call_this, SLOT_CTOR);
   ant_value_t next_fn = js_getprop_fallback(js, source, "next");
   if (is_err(next_fn)) return next_fn;
 
   for (;;) {
+    if (kind == WRAP_TAKE && count >= (vtype(cb) == kTypeNumber ? (uint32_t)Ant_Value_AsNumberUnchecked(cb) : 0)) {
+      wrap_iter_mark_closed(call_this);
+      ant_value_t closed = wrap_iter_close(js, source);
+      return is_err(closed) ? closed : Ant_Iterator_CreateResult(js, Ant_Value_Undefined, true);
+    }
+
     if (kind == WRAP_FLATMAP) {
     ant_value_t inner = js_get_slot(call_this, SLOT_ENTRIES);
     
@@ -546,12 +575,7 @@ static ant_value_t wrap_iter_next(ant_params_t) {
     if (is_err(done)) return done;
     
     if (js_truthy(js, done)) {
-      if (kind == WRAP_FLATMAP) {
-      ant_value_t inner = js_get_slot(call_this, SLOT_ENTRIES);
-      if (vtype(inner) != kTypeUndefined) {
-        js_set_slot(call_this, SLOT_ENTRIES, Ant_Value_Undefined);
-      }}
-      
+      wrap_iter_mark_closed(call_this);
       return Ant_Iterator_CreateResult(js, Ant_Value_Undefined, true);
     }
 
@@ -583,10 +607,6 @@ static ant_value_t wrap_iter_next(ant_params_t) {
     }
 
     case WRAP_TAKE: {
-      uint32_t limit = (vtype(cb) == kTypeNumber) ? (uint32_t)Ant_Value_AsNumberUnchecked(cb) : 0;
-      if (count >= limit) {
-        return Ant_Iterator_CreateResult(js, Ant_Value_Undefined, true);
-      }
       js_set_slot(call_this, SLOT_ITER_STATE, Ant_Value_FromNumber((double)iter_state_pack(kind, count + 1)));
       return Ant_Iterator_CreateResult(js, value, false);
     }
@@ -634,6 +654,30 @@ static ant_value_t wrap_iter_next(ant_params_t) {
     default: return Ant_Iterator_CreateResult(js, value, false);
     }
   }
+}
+
+static ant_value_t wrap_iter_return(ant_params_t) {
+  ant_value_t state_v = is_object_type(call_this) ? js_get_slot(call_this, SLOT_ITER_STATE) : Ant_Value_Undefined;
+  ant_value_t proto = is_object_type(call_this) ? js_get_proto(js, call_this) : Ant_Value_Undefined;
+  bool helper = proto == js->builtins.wrap_iter_proto || proto == js->builtins.wrap_valid_iter_proto;
+  if (vtype(state_v) != kTypeNumber || !helper)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Iterator Helper.prototype.return called on an incompatible receiver");
+
+  uint32_t kind = iter_state_kind((uint32_t)Ant_Value_AsNumberUnchecked(state_v));
+  if (kind == WRAP_CLOSED) return Ant_Iterator_CreateResult(js, Ant_Value_Undefined, true);
+
+  ant_value_t source = js_get_slot(call_this, SLOT_DATA);
+  ant_value_t inner = js_get_slot(call_this, SLOT_ENTRIES);
+
+  wrap_iter_mark_closed(call_this);
+
+  ant_value_t inner_status = wrap_iter_close(js, inner);
+  ant_value_t source_status = wrap_iter_close(js, source);
+
+  if (is_err(inner_status)) return inner_status;
+  if (is_err(source_status)) return source_status;
+
+  return Ant_Iterator_CreateResult(js, Ant_Value_Undefined, true);
 }
 
 static ant_value_t make_wrap_iter(ant_t *js, ant_value_t source, int kind, ant_value_t cb) {
@@ -841,7 +885,9 @@ static ant_value_t iter_from(ant_params_t) {
 
   ant_value_t next = js_getprop_fallback(js, obj, "next");
   if (is_callable(next)) {
-    return make_wrap_iter(js, obj, WRAP_MAP, Ant_Value_Undefined);
+    ant_value_t wrapped = make_wrap_iter(js, obj, WRAP_MAP, Ant_Value_Undefined);
+    js_set_proto_init(wrapped, js->builtins.wrap_valid_iter_proto);
+    return wrapped;
   }
 
   ant_value_t iter_fn = js_get_sym(js, obj, js->sym.iterator_sym);
@@ -1834,6 +1880,13 @@ void init_iterator_module(ant_t *js) {
   js->builtins.wrap_iter_proto = Ant_Object_CreateBare(js);
   js_set_proto_init(js->builtins.wrap_iter_proto, iter_proto);
   defmethod(js, js->builtins.wrap_iter_proto, "next", 4, Ant_Function_Create(wrap_iter_next));
+  defmethod(js, js->builtins.wrap_iter_proto, "return", 6, Ant_Function_Create(wrap_iter_return));
+  js_set_tostringtag(js, js->builtins.wrap_iter_proto, js_mkstr(js, "Iterator Helper", 15));
+
+  js->builtins.wrap_valid_iter_proto = Ant_Object_CreateBare(js);
+  js_set_proto_init(js->builtins.wrap_valid_iter_proto, iter_proto);
+  defmethod(js, js->builtins.wrap_valid_iter_proto, "next", 4, Ant_Function_Create(wrap_iter_next));
+  defmethod(js, js->builtins.wrap_valid_iter_proto, "return", 6, Ant_Function_Create(wrap_iter_return));
 
   defmethod(js, iter_proto, "map", 3,     Ant_Function_CreateWithArity(iter_map, 1));
   defmethod(js, iter_proto, "filter", 6,  Ant_Function_CreateWithArity(iter_filter, 1));
