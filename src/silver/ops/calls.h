@@ -274,9 +274,7 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   vm->sp -= argc + 2;
   if (is_err(result)) return result;
   
-  ant_value_t final_obj = is_object_type(result) 
-    ? result
-    : (is_object_type(ctor_this) ? ctor_this : obj);
+  ant_value_t final_obj = sv_construct_result(result, ctor_this, obj);
   
   vm->stack[vm->sp++] = final_obj;
   
@@ -680,9 +678,7 @@ ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   vm->sp = base;
   if (is_err(result)) return result;
   
-  ant_value_t final_obj = 
-    is_object_type(result) ? result : 
-    (is_object_type(ctor_this) ? ctor_this : obj);
+  ant_value_t final_obj = sv_construct_result(result, ctor_this, obj);
 
   vm->stack[vm->sp++] = final_obj;
 

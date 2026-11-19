@@ -106,7 +106,7 @@ static bool member_call_needs_optional_base_guard(const sv_ast_t *member) {
     sv_node_has_optional_base(member->left);
 }
 
-static int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local) {
+int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local) {
   if (c->enclosing == owner) {
     owner->locals[local].captured = true;
     return add_upvalue(c, (uint16_t)local_to_frame_slot(owner, local), true, false);
@@ -139,11 +139,14 @@ static void emit_field_init_pass(
     }
 
     emit_op(c, OP_THIS);
+    int key_upval = (m->flags & FN_COMPUTED) ? capture_field_local(c, owner, owner->field_locals[i]) : -1;
+    if (key_upval >= 0 && m->right && m->right->type == N_CLASS) c->inferred_key_upval = key_upval + 1;
     if (m->right) compile_field_initializer(c, m->right, field_static_key(m));
     else emit_op(c, OP_UNDEF);
+    c->inferred_key_upval = 0;
     if (m->flags & FN_COMPUTED) {
       emit_op(c, OP_GET_UPVAL);
-      emit_u16(c, (uint16_t)capture_field_local(c, owner, owner->field_locals[i]));
+      emit_u16(c, (uint16_t)key_upval);
     } else {
       compile_static_property_key(c, m->left);
     }
@@ -359,7 +362,7 @@ bool compile_call_map_template_intrinsic(
   sv_compiler_t *c, sv_ast_t *node, bool has_spread, bool is_tail
 ) {
   if (!node || has_spread || node->args.count != 1) return false;
-  if (is_tail && (c->try_depth > 0 || c->using_cleanup_count > 0))
+  if (is_tail && (c->is_class_ctor || c->try_depth > 0 || c->using_cleanup_count > 0))
     return false;
   sv_ast_t *callee = node->left;
   

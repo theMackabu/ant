@@ -266,6 +266,7 @@ typedef struct sv_compiler {
   int new_target_local;
   int super_local;
   bool super_referenced;
+  bool is_class_ctor;
   int using_stack_local;
   int using_cleanup_count;
   int using_cleanup_cap;
@@ -278,6 +279,7 @@ typedef struct sv_compiler {
 
   const char *inferred_name;
   uint32_t inferred_name_len;
+  int inferred_key_upval;
 
   sv_srcpos_t *srcpos;
   int srcpos_count;

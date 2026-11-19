@@ -161,8 +161,13 @@ bool local_written_once(sv_compiler_t *c, int local) {
   return entry->name && entry->writes == 1;
 }
 
-uint8_t ctor_slot_class(const sv_ast_t *node) {
-  if (!node || (node->flags & (FN_ARROW | FN_GENERATOR | FN_ASYNC))) return 0;
-  if (node->this_props <= ANT_INOBJ_BASE_SLOTS) return 0;
-  return node->this_props <= ANT_INOBJ_WIDE_SLOTS ? 1 : 2;
+uint32_t class_public_field_count(sv_ast_t **fields, int count) {
+  uint32_t found = 0;
+  for (int i = 0; i < count; i++) found += !is_private_name_node(fields[i]->left);
+  return found;
+}
+
+uint32_t ctor_prop_count(const sv_ast_t *node, uint32_t fields) {
+  if (node && (node->flags & (FN_ARROW | FN_GENERATOR | FN_ASYNC))) return 0;
+  return (node ? node->this_props : 0) + fields;
 }

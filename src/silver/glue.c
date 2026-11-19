@@ -28,6 +28,7 @@
 #include "ops/coercion.h"
 #include "ops/private.h"
 #include "ops/objects.h"
+#include "ops/super.h"
 
 __attribute__((noinline)) 
 ant_value_t Ant_Silver_InvokeNativeScoped(
@@ -1729,6 +1730,29 @@ ant_value_t jit_helper_array(sv_vm_t *vm, ant_t *js, ant_value_t *elements, int 
   return js_mkarr_dense_literal(js, elements, (uint32_t)count);
 }
 
+ant_value_t jit_helper_get_super(sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t receiver, ant_value_t home, ant_value_t prop) {
+  ant_value_t roots[2] = {Ant_Value_Undefined, Ant_Value_Undefined};
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, roots[0]);
+  GC_ROOT_PIN(js, roots[1]);
+  ant_value_t result = Silver_Super_Get(js, func, receiver, home, prop, roots);
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
+ant_value_t jit_helper_put_super(
+  sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t receiver,
+  ant_value_t home, ant_value_t prop, ant_value_t value
+) {
+  ant_value_t roots[2] = {Ant_Value_Undefined, Ant_Value_Undefined};
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, roots[0]);
+  GC_ROOT_PIN(js, roots[1]);
+  ant_value_t result = Silver_Super_Put(js, func, receiver, home, prop, value, roots);
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
 ant_value_t jit_helper_interrupt(sv_vm_t *vm, ant_t *js, ant_value_t unused) {
   return js_interrupt_raise(js);
 }
@@ -1928,7 +1952,7 @@ ant_value_t jit_helper_new(
   } else result = sv_vm_call(vm, js, func, obj, args, argc, &ctor_this, effective_new_target);
 
   if (is_err(result)) return result;
-  return is_object_type(result) ? result : (is_object_type(ctor_this) ? ctor_this : obj);
+  return sv_construct_result(result, ctor_this, obj);
 }
 
 ant_value_t jit_helper_realm_reenter(

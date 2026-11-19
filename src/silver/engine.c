@@ -1262,7 +1262,7 @@ static inline ant_value_t sv_execute_entry_common(
   
   if (out_this) *out_this = vm->frames[vm->fp].this;
   if (func->is_derived_ctor && !is_err(result) && vtype(result) != kTypeUndefined &&
-      !is_object_type(result) && vtype(result) != kTypeBuiltin)
+      !sv_is_construct_result(result))
     result = js_mkerr_typed(js, JS_ERR_TYPE, SV_DERIVED_CTOR_RETURN_ERROR);
   if (!vm->suspend.active) vm->fp = saved_fp;
   
@@ -1379,7 +1379,7 @@ ant_value_t sv_execute_closure_entry(
 }
 
 static inline ant_value_t sv_frame_return_value(const sv_frame_t *frame, ant_value_t value) {
-  return vtype(frame->new_target) != kTypeUndefined && !is_object_type(value) ? frame->this : value;
+  return vtype(frame->new_target) != kTypeUndefined && !sv_is_construct_result(value) ? frame->this : value;
 }
 
 static const sv_try_table_t sv_no_try_regions = { .count = 0 };
