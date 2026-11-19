@@ -230,6 +230,7 @@ typedef struct sv_compiler {
   bool allows_new_target;
   bool inherits_eval_env;
   bool owns_eval_env;
+  bool lazy_eval_env;
   bool function_ctor_root;
   
   bool eval_shadows_undefined;

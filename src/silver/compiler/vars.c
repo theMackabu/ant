@@ -85,6 +85,7 @@ static void emit_get_var_with(
   
   if (is_ident_str(name, len, "arguments", 9)) {
     if (c->owns_eval_env || sv_compile_mode_is_eval(c->mode)) {
+      emit_arguments_eval_env(c, name, len);
       emit_atom_op(c, eval_op, name, len);
       return;
     }
@@ -216,6 +217,7 @@ static void emit_set_var_plain(sv_compiler_t *c, const char *name, uint32_t len,
     return;
   }
   if (keep) emit_op(c, OP_DUP);
+  emit_arguments_eval_env(c, name, len);
   emit_atom_op(
     c, env_resolution_op(c, OP_PUT_GLOBAL, OP_PUT_EVAL_GLOBAL),
     name, len);

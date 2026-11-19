@@ -618,7 +618,10 @@ void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
     }
     
     if (binding_is_local) emit_op(c, OP_FALSE);
-    else emit_atom_op(c, env_resolution_op(c, OP_DELETE_VAR, OP_DELETE_EVAL_VAR), arg->str, arg->len);
+    else {
+      emit_arguments_eval_env(c, arg->str, arg->len);
+      emit_atom_op(c, env_resolution_op(c, OP_DELETE_VAR, OP_DELETE_EVAL_VAR), arg->str, arg->len);
+    }
     
     patch_list_resolve(c, &deleted);
   } else {
