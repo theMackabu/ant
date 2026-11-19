@@ -298,6 +298,7 @@ export function targets() {
     'test_lock_error_boundaries.cjs',
     'test_map_get_template_intrinsic.cjs',
     'test_message_port.mjs',
+    'test_missing_property_cache.cjs',
     'test_module_async_error_boundaries.cjs',
     'test_napi_clear_exception.cjs',
     'test_navigator_locks_threads.cjs',
