@@ -1452,7 +1452,7 @@ static bool esm_lookup_package_type(ant_t *js, const char *resolved_path, esm_pa
 }
 
 ant_module_format_t esm_decide_module_format(ant_t *js, const char *resolved_path) {
-  if (!resolved_path || !resolved_path[0]) return MODULE_EVAL_FORMAT_ESM;
+  if (!resolved_path || !resolved_path[0] || esm_is_data_url(resolved_path)) return MODULE_EVAL_FORMAT_ESM;
   if (esm_is_cjs_extension(resolved_path)) return MODULE_EVAL_FORMAT_CJS;
   if (esm_is_esm_extension(resolved_path)) return MODULE_EVAL_FORMAT_ESM;
 
