@@ -546,6 +546,9 @@ static int compile_static_child_function(
     emit_return_from_stack(&comp);
   } else {
     check_statement_list_declarations(&comp, &node->args, false, NULL, true);
+    for (int i = 0; i < node->args.count; i++) hoist_var_decls(&comp, node->args.items[i]);
+    hoist_lexical_decls(&comp, &node->args);
+    hoist_func_decls(&comp, &node->args);
     compile_stmts(&comp, &node->args);
     emit_close_upvals(&comp);
     emit_op(&comp, OP_RETURN_UNDEF);

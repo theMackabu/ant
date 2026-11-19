@@ -1,8 +1,44 @@
 #include "compiler_internal.h"
 
+static bool eval_source_may_mention(const char *source, size_t len, const char *word, size_t word_len) {
+  if (len > 64) return true;
+  const char *end = source + len;
+  
+  for (const char *at = source; (size_t)(end - at) >= word_len; at++) {
+    at = memchr(at, word[0], (size_t)(end - at) - word_len + 1);
+    if (!at) return false;
+    if (memcmp(at, word, word_len) == 0) return true;
+  }
+  
+  return false;
+}
+
+uint16_t sv_eval_shadow_bits(ant_t *js, ant_value_t eval_env, const char *source, size_t len) {
+  if (!source || !is_object_type(eval_env) || eval_env == js->global) return 0;
+  bool escaped = len <= 64 && memchr(source, '\\', len) != NULL;
+  uint16_t bits = 0;
+  
+  if ((escaped || eval_source_may_mention(source, len, "undefined", 9)) && sv_eval_env_shadows_global(js, eval_env, "undefined", 9))
+    bits |= SV_EVAL_SHADOWS_UNDEFINED;
+  if ((escaped || eval_source_may_mention(source, len, "globalThis", 10)) && sv_eval_env_shadows_global(js, eval_env, "globalThis", 10))
+    bits |= SV_EVAL_SHADOWS_GLOBAL_THIS;
+  const sv_eval_scope_flags_t *flags = sv_eval_env_flags(eval_env);
+  if (flags->super_binding) bits |= SV_EVAL_SCOPE_SUPER_BINDING;
+  if (flags->is_static) bits |= SV_EVAL_SCOPE_STATIC;
+  if (flags->no_arguments) bits |= SV_EVAL_SCOPE_NO_ARGUMENTS;
+  if (flags->has_with || memchr(source, '#', len)) bits |= SV_EVAL_SCOPE_ENV_BOUND;
+  if (flags->this_binding) {
+    bits |= SV_EVAL_SCOPE_THIS_BINDING;
+    if (eval_source_may_mention(source, len, "super", 5) && sv_eval_env_shadows_global(js, eval_env, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN))
+      bits |= SV_EVAL_SCOPE_FIELD_THUNK;
+  }
+    
+  return bits;
+}
+
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program, sv_compile_mode_t mode,
-  const char *source, ant_offset_t source_len, ant_value_t eval_env
+  const char *source, ant_offset_t source_len, uint16_t eval_shadows, ant_value_t eval_env
 ) {
   if (!program || program->type != N_PROGRAM) return NULL;
   if (mode != SV_COMPILE_EVAL_FUNCTION && ast_contains_lexical_new_target(program)) {
@@ -79,18 +115,16 @@ sv_func_t *sv_compile(
     (program->flags & FN_PARSE_STRICT) != 0,  NULL
   );
   
+  root.eval_shadows_undefined = (eval_shadows & SV_EVAL_SHADOWS_UNDEFINED) != 0;
+  root.eval_shadows_global_this = (eval_shadows & SV_EVAL_SHADOWS_GLOBAL_THIS) != 0;
+  root.eval_this_binding = (eval_shadows & SV_EVAL_SCOPE_THIS_BINDING) != 0;
+  root.eval_field_thunk = (eval_shadows & SV_EVAL_SCOPE_FIELD_THUNK) != 0;
+  root.eval_super_binding = (eval_shadows & SV_EVAL_SCOPE_SUPER_BINDING) != 0;
+  root.is_static = (eval_shadows & SV_EVAL_SCOPE_STATIC) != 0;
+  root.eval_no_arguments = (eval_shadows & SV_EVAL_SCOPE_NO_ARGUMENTS) != 0;
   if (sv_compile_mode_is_eval(mode)) {
     root.eval_env = eval_env;
-    sv_eval_env_facts_t env_facts = sv_eval_env_facts(js, eval_env);
-    root.eval_with = env_facts.has_with;
-    root.eval_shadows_undefined = env_facts.shadows_undefined;
-    root.eval_shadows_global_this = env_facts.shadows_global_this;
-    sv_eval_scope_flags_t scope_flags = sv_eval_env_flags(eval_env);
-    root.eval_this_binding = scope_flags.this_binding;
-    root.eval_super_binding = scope_flags.super_binding;
-    root.is_static = scope_flags.is_static;
-    root.eval_no_arguments = scope_flags.no_arguments;
-    root.eval_field_thunk = root.eval_this_binding && sv_eval_env_shadows_global(js, eval_env, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN);
+    root.eval_with = sv_eval_env_flags(eval_env)->has_with;
   }
   
   root.line_table = sv_compile_ctx_build_line_table(root.source, source_len);
@@ -229,7 +263,7 @@ sv_func_t *sv_compile_function_with_params(
   }
   
   top_fn.body->args = program->args;
-  top_fn.flags |= program->flags & (FN_SCOPE_FACTS | FN_DIRECT_EVAL | FN_OWN_YIELD);
+  top_fn.flags |= program->flags & (FN_SCOPE_FACTS | FN_DIRECT_EVAL | FN_OWN_YIELD | FN_USES_ARGS);
   const char *text = copy_source_text(js, body, (ant_offset_t)body_len);
   if (!text && body && body_len > 0) {
     parse_arena_rewind(js, parse_mark);
@@ -246,6 +280,7 @@ sv_func_t *sv_compile_function_with_params(
   
   root.allows_new_target = true;
   root.line_table = sv_compile_ctx_build_line_table(root.source, (ant_offset_t)body_len);
+  if ((top_fn.flags & FN_DIRECT_EVAL) && ast_literal_eval_mentions_arguments(&root, top_fn.body)) top_fn.flags |= FN_USES_ARGS;
   sv_func_t *func = compile_function_body(&root, &top_fn, SV_COMPILE_SCRIPT);
   
   sv_compile_ctx_free_line_table(root.line_table);

@@ -413,11 +413,10 @@ ant_value_t array_result_set(ant_t *js, ant_value_t result, bool fresh, ant_offs
   return Ant_Value_Undefined;
 }
 
-ant_value_t alloc_array_with_proto_capacity(
-  ant_t *js, ant_value_t proto, uint32_t minimum_capacity,
+static ant_value_t array_init_storage(
+  ant_t *js, ant_object_t *obj, uint32_t minimum_capacity,
   uint32_t overwritten_prefix, bool exact_capacity
 ) {
-  ant_object_t *obj = obj_alloc_with_proto(js, kTypeArray, proto);
   if (!obj) return js_mkerr(js, "oom");
   
   ant_value_t arr = mkref(kTypeArray, obj);
@@ -453,13 +452,20 @@ ant_value_t alloc_array_with_proto_capacity(
   return arr;
 }
 
+ant_value_t alloc_array_with_proto_capacity(
+  ant_t *js, ant_value_t proto, uint32_t minimum_capacity,
+  uint32_t overwritten_prefix, bool exact_capacity
+) {
+  return array_init_storage(
+    js, obj_alloc_with_proto(js, kTypeArray, proto),
+    minimum_capacity, overwritten_prefix, exact_capacity);
+}
+
 ant_value_t Ant_Array_Create(ant_t *js) {
   return alloc_array_with_proto_capacity(js, js->sym.array_proto, MAX_DENSE_INITIAL_CAP, 0, false);
 }
 
-ant_value_t mkarr_dense_literal_capacity(ant_t *js, const ant_value_t *elements, uint32_t count, bool exact_capacity) {
-  uint32_t capacity = exact_capacity ? gc_array_storage_fit(count) : count;
-  ant_value_t arr = alloc_array_with_proto_capacity(js, js->sym.array_proto, capacity, count, exact_capacity);
+static ant_value_t array_fill_dense(ant_t *js, ant_value_t arr, const ant_value_t *elements, uint32_t count) {
   if (is_err(arr)) return arr;
 
   ant_object_t *obj = array_obj_ptr(arr);
@@ -488,6 +494,20 @@ ant_value_t mkarr_dense_literal_capacity(ant_t *js, const ant_value_t *elements,
   obj->flags.may_have_dense_elements = has_elements;
   
   return arr;
+}
+
+ant_value_t mkarr_dense_literal_capacity(ant_t *js, const ant_value_t *elements, uint32_t count, bool exact_capacity) {
+  uint32_t capacity = exact_capacity ? gc_array_storage_fit(count) : count;
+  return array_fill_dense(
+    js, alloc_array_with_proto_capacity(js, js->sym.array_proto, capacity, count, exact_capacity),
+    elements, count);
+}
+
+ant_value_t mkarr_dense_shaped(ant_t *js, ant_shape_t *shape, const ant_value_t *elements, uint32_t count) {
+  ant_shape_retain(shape);
+  return array_fill_dense(
+    js, array_init_storage(js, obj_alloc_shaped(js, kTypeArray, shape), gc_array_storage_fit(count), count, true),
+    elements, count);
 }
 
 ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint32_t count) {

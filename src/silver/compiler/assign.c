@@ -48,7 +48,7 @@ static bool match_self_append_local(
   int local = resolve_local(c, node->left->str, node->left->len);
   if (local < 0 || c->locals[local].is_const) return false;
   if (c->locals[local].is_tdz) return false;
-  if (c->locals[local].depth == -1 && c->strict_args_local >= 0) return false;
+  if (c->locals[local].depth == -1 && c->arguments_local >= 0) return false;
 
   sv_ast_t *rhs = NULL;
   self_append_rhs_kind_t rhs_kind = SELF_APPEND_EXPR;
@@ -92,10 +92,7 @@ static bool is_self_append_inplace_safe_ident(sv_compiler_t *c, sv_ast_t *node) 
   if (resolve_local(c, node->str, node->len) != -1) return true;
   if (resolve_upvalue(c, node->str, node->len) != -1) return true;
 
-  if (is_ident_str(node->str, node->len, "arguments", 9)) {
-    if (has_implicit_arguments_obj(c)) return true;
-    if (c->is_arrow && resolve_arguments_upvalue(c) != -1) return true;
-  }
+  if (is_ident_str(node->str, node->len, "arguments", 9) && has_implicit_arguments_obj(c)) return true;
 
   if (c->is_arrow && is_ident_str(node->str, node->len, "super", 5))
     return resolve_super_upvalue(c) != -1;

@@ -378,7 +378,7 @@ ant_value_t js_maybe_set_function_name_from_key(
 
 sv_func_t *js_compile_parsed_bytecode(
   ant_t *js, struct sv_ast *program, const char *buf, 
-  size_t len, int mode, ant_value_t eval_env
+  size_t len, int mode, uint16_t eval_shadows, ant_value_t eval_env
 );
 
 bool js_try_char_code_at(

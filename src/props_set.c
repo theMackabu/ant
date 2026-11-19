@@ -232,6 +232,7 @@ static bool setprop_symbol_walk(
 ) {
   ant_offset_t sym_off = (ant_offset_t)vdata(k);
   ant_value_t cur = obj;
+  uint32_t proxy_hops = 0;
   proto_overflow_guard_t guard;
   proto_overflow_guard_init(&guard);
 
@@ -250,7 +251,9 @@ static bool setprop_symbol_walk(
       else if (on_receiver) *receiver_missed = true;
     } else if (is_proxy(cur_obj)) {
       if (setprop_sym_reaches_proxy(js, obj, cur_obj, k, v, keyed, declined, done, &cur)) return true;
-      continue;
+      if (++proxy_hops <= PROXY_PROTO_HOP_LIMIT) continue;
+      *done = js_mkerr_typed(js, JS_ERR_RANGE, "Maximum call stack size exceeded");
+      return true;
     }
     
     else found = lookup_symbol_prop_meta(js, cur_obj, sym_off, &meta);
@@ -722,7 +725,7 @@ static ant_value_t set_receiver_own_target(ant_t *js, ant_value_t receiver) {
   return Ant_Value_Undefined;
 }
 
-static ant_value_t set_with_receiver_fast_key(
+static inline __attribute__((always_inline)) ant_value_t set_with_receiver_fast_key(
   ant_t *js, ant_value_t target, const char *key_str, size_t key_len,
   const char *interned, ant_value_t value, ant_value_t receiver
 ) {

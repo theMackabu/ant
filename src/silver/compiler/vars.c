@@ -362,12 +362,20 @@ static bool super_call_ignores_this(const sv_ast_t *call) {
 static bool sole_super_opens_plain_ctor(const sv_ast_t *ctor) {
   const sv_ast_t *body = ctor->body;
   if (!(ctor->flags & FN_SOLE_SUPER_CALL) || (ctor->flags & FN_DIRECT_EVAL)) return false;
-  if (!body || body->type != N_BLOCK || !body->args.count || !is_super_call_stmt(body->args.items[0])) return false;
+  if (!body || body->type != N_BLOCK) return false;
+  
+  int at = 0;
+  for (; at < body->args.count && !is_super_call_stmt(body->args.items[at]); at++) {
+    ctor_scan_t before = {0};
+    ctor_scan(body->args.items[at], &before, false);
+    if (before.reads_this || before.returns || before.super_calls || before.has_eval) return false;
+  }
+  if (at == body->args.count) return false;
   
   for (int i = 0; i < ctor->args.count; i++)
     if (ctor->args.items[i]->type != N_IDENT) return false;
   
-  return super_call_ignores_this(body->args.items[0]);
+  return super_call_ignores_this(body->args.items[at]);
 }
 
 derived_ctor_plan_t derived_ctor_plan(const sv_ast_t *ctor) {
@@ -402,7 +410,10 @@ static void emit_slot_atom_op(sv_compiler_t *c, sv_op_t op, int local, const cha
   emit_u32(c, (uint32_t)ai);
 }
 
-void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len) {
+static void emit_get_var_with(
+  sv_compiler_t *c, const char *name, uint32_t len,
+  sv_op_t global_op, sv_op_t eval_op
+) {
   if (is_ident_str(name, len, "super", 5)) {
     reject_super(c);
     return;
@@ -451,25 +462,14 @@ void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len) {
   if (is_ident_str(name, len, "arguments", 9)) {
     if (reject_forbidden_arguments(c)) return;
     if (c->owns_eval_env || sv_compile_mode_is_eval(c->mode)) {
-      emit_atom_op(c, OP_GET_EVAL_GLOBAL, name, len);
+      emit_arguments_eval_env(c, name, len);
+      emit_atom_op(c, eval_op, name, len);
       return;
     }
     if (has_implicit_arguments_obj(c)) {
-      if (c->strict_args_local >= 0) {
-        emit_get_local(c, c->strict_args_local);
-      } else {
-        emit_op(c, OP_SPECIAL_OBJ);
-        emit(c, SV_SPECIAL_ARGUMENTS);
-      }
+      emit_op(c, OP_SPECIAL_OBJ);
+      emit(c, SV_SPECIAL_ARGUMENTS);
       return;
-    }
-    if (c->is_arrow) {
-      int args_upval = resolve_arguments_upvalue(c);
-      if (args_upval != -1) {
-        emit_op(c, OP_GET_UPVAL);
-        emit_u16(c, (uint16_t)args_upval);
-        return;
-      }
     }
   }
   
@@ -478,9 +478,15 @@ void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len) {
     return;
   }
   
-  emit_atom_op(
-    c, env_resolution_op(c, OP_GET_GLOBAL, OP_GET_EVAL_GLOBAL),
-    name, len);
+  emit_atom_op(c, env_resolution_op(c, global_op, eval_op), name, len);
+}
+
+void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len) {
+  emit_get_var_with(c, name, len, OP_GET_GLOBAL, OP_GET_EVAL_GLOBAL);
+}
+
+void emit_get_var_typeof(sv_compiler_t *c, const char *name, uint32_t len) {
+  emit_get_var_with(c, name, len, OP_GET_GLOBAL_UNDEF, OP_GET_EVAL_GLOBAL_UNDEF);
 }
 
 void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len) {
@@ -584,6 +590,7 @@ static void emit_set_var_plain(sv_compiler_t *c, const char *name, uint32_t len,
     return;
   }
   if (keep) emit_op(c, OP_DUP);
+  emit_arguments_eval_env(c, name, len);
   emit_atom_op(
     c, env_resolution_op(c, OP_PUT_GLOBAL, OP_PUT_EVAL_GLOBAL),
     name, len);

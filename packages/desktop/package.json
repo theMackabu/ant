@@ -1,11 +1,13 @@
 {
   "name": "ant-desktop",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Build native desktop applications with Ant",
   "keywords": [
     "ant",
     "desktop",
     "macos",
+    "windows",
+    "linux",
     "chromium",
     "native",
     "appkit",
@@ -38,11 +40,16 @@
     "config.js",
     "desktop.d.ts",
     "index.js",
+    "platform/",
     "platforms.json",
     "README.md"
   ],
   "optionalDependencies": {
-    "ant-desktop-darwin-arm64": "0.3.0"
+    "ant-desktop-darwin-arm64": "0.4.0",
+    "ant-desktop-linux-x64": "0.4.0",
+    "ant-desktop-linux-arm64": "0.4.0",
+    "ant-desktop-windows-x64": "0.4.0",
+    "ant-desktop-windows-arm64": "0.4.0"
   },
   "publishConfig": {
     "access": "public"

@@ -294,6 +294,20 @@ sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t *calle
   return SV_CALL_DIRECT;
 }
 
+sv_call_kind_t compile_tag_setup(sv_compiler_t *c, sv_ast_t *tag) {
+  if (tag->type != N_OPTIONAL || !tag->right || is_ident_name(tag->left, "super"))
+    return compile_call_setup_non_optional(c, tag);
+
+  compile_expr(c, tag->left);
+  int present = emit_jump(c, OP_JMP_NOT_NULLISH);
+  emit_op(c, OP_UNDEF);
+  int done = emit_jump(c, OP_JMP);
+  patch_jump(c, present);
+  compile_receiver_property_get(c, tag);
+  patch_jump(c, done);
+  return SV_CALL_METHOD;
+}
+
 static bool compile_call_is_proto_intrinsic(
   sv_compiler_t *c, sv_ast_t *node, bool has_spread
 ) {
