@@ -514,6 +514,7 @@ export function targets() {
     'test_typedarray_in.cjs',
     'test_typedarray_index_jit.cjs',
     'test_typedarray_join_separator.cjs',
+    'test_try_requires_handler.cjs',
     'test_typedarray_length_jit.cjs',
     'test_typedarray_named_read_ic.cjs',
     'test_typedarray_find_last.cjs',
