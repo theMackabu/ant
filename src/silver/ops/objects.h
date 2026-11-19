@@ -100,7 +100,7 @@ static inline ant_value_t sv_define_method_comp(
   if (vtype(key) == kTypeSymbol) {
     if (is_getter) js_set_sym_getter_desc(js, desc_obj, key, fn, accessor_desc);
     else if (is_setter) js_set_sym_setter_desc(js, desc_obj, key, fn, accessor_desc);
-    else mkprop(js, obj, key, fn, data_attrs);
+    else mkprop_symbol_attrs_impl(js, obj, key, fn, data_attrs, MKPROP_USE_DEFAULT_ATTRS);
     return Ant_Value_Undefined;
   }
   
@@ -114,7 +114,7 @@ static inline ant_value_t sv_define_method_comp(
   
   if (is_getter) js_set_getter_desc(js, desc_obj, kptr, klen, fn, accessor_desc);
   else if (is_setter) js_set_setter_desc(js, desc_obj, kptr, klen, fn, accessor_desc);
-  else mkprop(js, obj, js_mkstr(js, kptr, (size_t)klen), fn, data_attrs);
+  else mkprop(js, obj, key, fn, data_attrs);
   
   return Ant_Value_Undefined;
 }
