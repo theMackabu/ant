@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "cfunc.h"
+#include "convert.h"
 #include "ptr.h"
 #include "esm/remote.h"
 #include "esm/import.h"
@@ -177,7 +178,7 @@ ant_value_t js_builtin_import(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "import() requires a string specifier");
   GC_ROOT_SAVE(root_mark, js);
 
-  ant_value_t specifier = vtype(args[0]) == kTypeString ? args[0] : coerce_to_str(js, args[0]);
+  ant_value_t specifier = vtype(args[0]) == kTypeString ? args[0] : coerce_to_str_hint(js, args[0], 1);
   GC_ROOT_PIN(js, specifier);
   
   bool source_phase = nargs >= 2 && vtype(args[1]) == kTypeString && js_import_is_source_phase(js, args[1]);

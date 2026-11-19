@@ -47,5 +47,6 @@ const coerced = import({ toString() { log.push('specifier coerced'); return './f
 assert.strictEqual(log.at(-1), 'specifier coerced');
 assert.strictEqual(await coerced, ns);
 await assert.rejects(import({ toString() { throw new RangeError('bad specifier'); } }), RangeError);
+await assert.rejects(import(Symbol('specifier')), TypeError);
 
 console.log('ok');
