@@ -201,6 +201,7 @@ typedef enum : uint8_t {
   IR_COND_ITERABLE_ARRAY,
   IR_COND_ITERATOR_RETURN_INTACT,
   IR_COND_GLOBAL_EVAL_INTACT,
+  IR_COND_ARRAY_ITERATION_INTACT,
   IR_COND_SHAPE,
   IR_COND_INT32,
   IR_COND_FLOAT64,
@@ -305,6 +306,7 @@ typedef struct {
       bool builtin;
       bool native_closure;
       bool construct_super;
+      bool passes_entry;
       uint16_t spare_slots;
     } call;
     struct {
@@ -462,6 +464,7 @@ typedef struct {
   uint32_t passed_argument_count;
   uint32_t call_off;
   bool construct;
+  bool takes_rest;
 } ir_frame_state_t;
 
 typedef struct {

@@ -84,6 +84,42 @@ static void jit_emit_upval_store_tdz_guard(jit_compile_t *c, uint16_t index, MIR
 
 void jit_emit_bindings(jit_compile_t *c) {
   switch (c->op) {
+    case OP_SET_HOME_OBJ: {
+      vstack_flush_to_boxed(&c->vs, c->ctx, c->jit_func, c->r_d_slot);
+      if (c->vs.sp < 2) {
+        c->ok = false;
+        break;
+      }
+
+      MIR_reg_t r_home = c->vs.regs[c->vs.sp - 1];
+      MIR_reg_t r_fn = c->vs.regs[c->vs.sp - 2];
+      char rn_home[32];
+      snprintf(rn_home, sizeof(rn_home), "homecl%d", c->upval_n++);
+      MIR_reg_t r_home_cl = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, rn_home);
+      MIR_label_t home_done = MIR_new_label(c->ctx);
+
+      mir_emit_get_closure(c->ctx, c->jit_func, r_home_cl, r_fn, c->r_bool, home_done);
+      MIR_append_insn(c->ctx, c->jit_func,
+                      MIR_new_insn(c->ctx, MIR_MOV,
+                                   MIR_new_mem_op(c->ctx, MIR_JSVAL, (MIR_disp_t)offsetof(sv_closure_t, super_val), r_home_cl, 0, 1),
+                                   MIR_new_reg_op(c->ctx, r_home)));
+      MIR_append_insn(c->ctx, c->jit_func,
+                      MIR_new_insn(c->ctx, MIR_MOV,
+                                   MIR_new_reg_op(c->ctx, c->r_bool),
+                                   MIR_new_mem_op(c->ctx, MIR_T_U32, (MIR_disp_t)offsetof(sv_closure_t, call_flags), r_home_cl, 0, 1)));
+      MIR_append_insn(c->ctx, c->jit_func,
+                      MIR_new_insn(c->ctx, MIR_OR,
+                                   MIR_new_reg_op(c->ctx, c->r_bool),
+                                   MIR_new_reg_op(c->ctx, c->r_bool),
+                                   MIR_new_uint_op(c->ctx, (uint64_t)SV_CALL_HAS_SUPER)));
+      MIR_append_insn(c->ctx, c->jit_func,
+                      MIR_new_insn(c->ctx, MIR_MOV,
+                                   MIR_new_mem_op(c->ctx, MIR_T_U32, (MIR_disp_t)offsetof(sv_closure_t, call_flags), r_home_cl, 0, 1),
+                                   MIR_new_reg_op(c->ctx, c->r_bool)));
+      MIR_append_insn(c->ctx, c->jit_func, home_done);
+      break;
+    }
+
     case OP_GET_UPVAL: {
       uint16_t idx = sv_get_u16(c->ip + 1);
       bool guarded_self_upval = c->self_binding_guards &&

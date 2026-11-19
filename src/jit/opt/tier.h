@@ -74,6 +74,7 @@ typedef struct {
   uint32_t argc;
   opt_resume_mode_t mode;
   bool construct;
+  bool takes_rest;
 } opt_site_frame_t;
 
 typedef struct {
@@ -234,8 +235,12 @@ ant_value_t opt_rt_super_call(sv_vm_t *vm, ant_value_t this_val, ant_value_t fun
 ant_value_t opt_rt_super_apply(sv_vm_t *vm, ant_value_t this_val, ant_value_t func, ant_value_t *args, int64_t argc, int64_t unused);
 ant_value_t opt_rt_super_spread(sv_vm_t *vm, ant_value_t this_val, ant_value_t func, ant_value_t *args, int64_t argc, int64_t unused);
 ant_value_t opt_rt_super_parent(sv_vm_t *vm, ant_value_t parent, ant_value_t this_val, ant_value_t *args, int64_t argc);
+ant_value_t opt_rt_rest(sv_vm_t *vm, ant_value_t start, ant_value_t unused, ant_value_t *args, int64_t argc, const opt_entry_t *entry);
+ant_value_t opt_rt_rest_array(sv_vm_t *vm, const ant_value_t *args, uint32_t argc, uint32_t start);
 ant_value_t opt_rt_call_args(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t spread);
+ant_value_t opt_rt_call_forward(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, const opt_entry_t *entry);
 ant_value_t opt_rt_new_args(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t spread);
+ant_value_t opt_rt_new_forward(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, const opt_entry_t *entry);
 ant_value_t opt_rt_super_result(ant_value_t result, ant_value_t this_val);
 ant_value_t opt_rt_import_default(sv_vm_t *vm, ant_value_t ns, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_import_named(sv_vm_t *vm, ant_value_t ns, ant_value_t unused, ant_value_t *args, int64_t argc, const sv_atom_t *atom);
@@ -263,6 +268,7 @@ ant_value_t opt_rt_def_private(sv_vm_t *vm, ant_value_t object, ant_value_t toke
 ant_value_t opt_rt_unary_plus(sv_vm_t *vm, ant_value_t value, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_for_in(sv_vm_t *vm, ant_value_t object, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_set_proto(sv_vm_t *vm, ant_value_t object, ant_value_t proto, ant_value_t *args, int64_t argc, int64_t kind);
+ant_value_t opt_rt_set_home_obj(sv_vm_t *vm, ant_value_t func, ant_value_t home, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_builder_read(sv_vm_t *vm, ant_value_t value, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 
 ant_value_t opt_rt_allocate_object(sv_vm_t *vm, ant_shape_t *shape, ant_value_t proto, uint64_t property_count);
@@ -283,6 +289,8 @@ ant_value_t opt_rt_put_super(sv_vm_t *vm, ant_value_t receiver, ant_value_t home
 ant_value_t opt_rt_get_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_put_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_array_init(sv_vm_t *vm, ant_value_t arr, ant_value_t value, ant_value_t *args, int64_t argc, int64_t index);
+ant_value_t opt_rt_init_field(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
+ant_value_t opt_rt_define_computed(sv_vm_t *vm, ant_value_t object, ant_value_t key, ant_value_t *args, int64_t argc, int64_t flags);
 
 typedef struct {
   sv_func_t *func;
@@ -323,6 +331,7 @@ typedef struct {
 } opt_rt_add_site_t;
 
 ant_value_t opt_rt_put_field_adding(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_add_site_t *site);
+ant_value_t opt_rt_init_field_adding(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_add_site_t *site);
 ant_value_t opt_rt_instanceof(sv_vm_t *vm, ant_value_t lhs, ant_value_t rhs, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_in_field(sv_vm_t *vm, ant_value_t object, ant_value_t unused, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_throw(ant_value_t value, sv_vm_t *vm);

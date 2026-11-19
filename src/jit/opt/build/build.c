@@ -174,6 +174,10 @@ struct opt_builder {
   ir_node_id_t *tail_phis;
   bool virtual_arguments;
   ir_node_id_t arguments_marker;
+  bool keeps_arguments;
+  bool virtual_rest;
+  uint32_t rest_start;
+  ir_node_id_t rest_marker;
   ir_slot_values_t state_values;
   ir_slots_t state_in_frame;
 };
@@ -825,13 +829,13 @@ static ir_node_id_t opt_root_this(opt_builder_t *b) {
 uint32_t opt_learned_shapes(const sv_func_t *func, uint32_t bc_off) {
   if (bc_off >= (uint32_t)func->code_len || !func->ic_slots) return 0;
   sv_op_t op = (sv_op_t)func->code[bc_off];
-  if (op != OP_GET_FIELD && op != OP_GET_FIELD2 && op != OP_PUT_FIELD && op != OP_PUT_SUPER_FIELD) return 0;
+  if (op != OP_GET_FIELD && op != OP_GET_FIELD2 && op != OP_PUT_FIELD && op != OP_PUT_SUPER_FIELD && op != OP_INIT_FIELD) return 0;
   uint16_t ic_index = sv_get_u16(func->code + bc_off + 5);
   if (ic_index >= func->ic_count) return 0;
   const sv_ic_entry_t *ic = &func->ic_slots[ic_index];
   uint32_t count = ic->cached_shape ? 1 : 0;
   if (op != OP_GET_FIELD && op != OP_GET_FIELD2) {
-    if (op == OP_PUT_FIELD && ic->guard.add.from_shape) count++;
+    if ((op == OP_PUT_FIELD || op == OP_INIT_FIELD) && ic->guard.add.from_shape) count++;
     const sv_pf_poly_t *poly = (ic->shape_ref_mask & SV_IC_HAS_PUT_POLY) ? ic->put_poly : NULL;
     for (uint32_t i = 0; poly && i < SV_GF_POLY_WAYS; i++) count += poly->entries[i].shape != NULL;
     return count;
@@ -877,6 +881,7 @@ static ir_frame_state_t opt_frame_state_at(opt_builder_t *b) {
     .values = b->state_values,
     .in_frame = b->state_in_frame,
     .parent = IR_NONE,
+    .takes_rest = b->keeps_arguments,
   };
   state.values.len = 0;
   state.in_frame.len = 0;
@@ -899,7 +904,7 @@ static ir_frame_state_t opt_frame_state_at(opt_builder_t *b) {
     }
   }
   for (uint32_t p = 0; p < b->params; p++) {
-    if (!opt_bitset_contains(live, p) && !b->frame.slots[p].boxed) continue;
+    if (!opt_bitset_contains(live, p) && !b->frame.slots[p].boxed && !(is_virtual && b->keeps_arguments)) continue;
     const opt_slot_t *slot = &b->frame.slots[p];
     if (slot->node == IR_NONE || (slot->in_sync && !is_virtual)) opt_vec_push(&b->arena, &state.in_frame, opt_param_slot(&b->layout, p));
     else {
@@ -917,7 +922,7 @@ static ir_frame_state_t opt_frame_state_at(opt_builder_t *b) {
     opt_vec_push(&b->arena, &state.values, ((ir_slot_value_t){OPT_THIS_SLOT, call->receiver}));
     opt_vec_push(&b->arena, &state.values, ((ir_slot_value_t){OPT_CALLEE_SLOT, call->closure}));
     if (call->new_target != IR_NONE) opt_vec_push(&b->arena, &state.values, ((ir_slot_value_t){OPT_NEW_TARGET_SLOT, call->new_target}));
-    for (uint32_t i = b->params; b->virtual_arguments && i < call->argc; i++)
+    for (uint32_t i = b->params; (b->virtual_arguments || b->keeps_arguments) && i < call->argc; i++)
       opt_vec_push(&b->arena, &state.values, ((ir_slot_value_t){opt_param_slot(&b->layout, i), opt_frame_value(b, call->args[i])}));
     state.parent = call->caller_state;
     state.passed_argument_count = call->argc;
@@ -1457,7 +1462,7 @@ static bool opt_result_stored(const opt_builder_t *b) {
     switch (op) {
       case OP_DUP: case OP_INSERT2: case OP_INSERT3: case OP_SWAP: case OP_NIP:
         continue;
-      case OP_PUT_FIELD: return true;
+      case OP_PUT_FIELD: case OP_INIT_FIELD: return true;
       default: return false;
     }
   }
@@ -2581,7 +2586,7 @@ static opt_flow_t opt_build_field(opt_builder_t *b, const uint8_t *ip, sv_op_t o
   sv_func_t *func = b->func;
   uint32_t atom_index = sv_get_u32(ip + 1);
   uint16_t ic_index = sv_get_u16(ip + 5);
-  bool store = opcode == OP_PUT_FIELD;
+  bool store = opcode == OP_PUT_FIELD || opcode == OP_INIT_FIELD;
   if (atom_index >= (uint32_t)func->atom_count || !func->ic_slots || ic_index >= func->ic_count) return OPT_FLOW_GENERIC;
   const sv_atom_t *atom = &func->atoms[atom_index];
   sv_ic_entry_t *ic = &func->ic_slots[ic_index];
@@ -2591,10 +2596,19 @@ static opt_flow_t opt_build_field(opt_builder_t *b, const uint8_t *ip, sv_op_t o
     if (flow != OPT_FLOW_GENERIC) return flow;
   }
   if (!store && opcode == OP_GET_FIELD && atom->len == 6 && memcmp(atom->str, "length", 6) == 0) return opt_build_length(b);
-  opt_field_plan_t plan = {.opcode = opcode, .store = store, .ic_index = ic_index};
+  opt_field_plan_t plan = {.opcode = opcode, .store = store, .ic_index = ic_index, .add_epoch_guarded = opcode == OP_INIT_FIELD};
   plan.count = opt_field_memo_merge(b, atom, store, plan.cases, opt_field_cases(b, ic, atom, store, plan.cases));
   plan.add_count = store ? opt_add_cases(b->js, ic, atom, plan.adds, plan.runtime_adds, &plan.runtime_count) : 0;
   if (store && !plan.add_count && ic->guard.add.to_shape) return opt_build_access_call(b, false);
+  if (opcode == OP_INIT_FIELD) {
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < plan.count; i++) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(plan.cases[i].shape, plan.cases[i].index);
+      if (prop && prop->attrs == ANT_PROP_ATTR_DEFAULT) plan.cases[kept++] = plan.cases[i];
+      else opt_runtime_add_note(plan.cases[i].shape, plan.runtime_adds, &plan.runtime_count);
+    }
+    plan.count = kept;
+  }
   if (!store) opt_narrow_to_prototype(b, &plan, opt_peek(b, 0));
   opt_drop_superseded_cases(b, &plan);
   bool getters = opt_getter_plan(b, &plan);
@@ -3230,7 +3244,8 @@ static bool opt_is_virtual_arguments(const opt_builder_t *b, ir_node_id_t node) 
 
 static bool opt_is_any_virtual_arguments(const opt_builder_t *b, ir_node_id_t node) {
   uint64_t bits;
-  return node != IR_NONE && ir_constant_value(b->graph, node, &bits) && ir_value_virtual_arguments_kind(bits) >= 0;
+  return node != IR_NONE && ir_constant_value(b->graph, node, &bits)
+    && (ir_value_virtual_arguments_kind(bits) >= 0 || ir_value_virtual_rest_start(bits) >= 0);
 }
 
 static opt_flow_t opt_no_virtual_arguments(opt_builder_t *b) {
@@ -3411,6 +3426,7 @@ static bool opt_inline_build(opt_builder_t *b, opt_inline_t *call, sv_func_t *ta
     .eager = IR_NONE,
     .tail_header = IR_NONE,
     .arguments_marker = IR_NONE,
+    .rest_marker = IR_NONE,
   };
   opt_builder_t *cb = &callee;
   cb->exit_sites = b->ctx->exit_sites_of ? b->ctx->exit_sites_of(b->js, target, &cb->exit_site_count) : NULL;
@@ -4476,7 +4492,7 @@ static opt_flow_t opt_build_access_call_with(opt_builder_t *b, bool slow_path, u
   switch (op) {
     case OP_GET_FIELD: operands = popped = 1; break;
     case OP_GET_FIELD2: operands = 1; popped = 0; break;
-    case OP_PUT_FIELD: operands = popped = 2; break;
+    case OP_PUT_FIELD: case OP_INIT_FIELD: operands = popped = 2; break;
     case OP_GET_ELEM: operands = popped = 2; break;
     case OP_PUT_ELEM: operands = popped = 3; break;
     case OP_GET_LENGTH: operands = popped = 1; break;
@@ -4486,14 +4502,14 @@ static opt_flow_t opt_build_access_call_with(opt_builder_t *b, bool slow_path, u
   opt_rt_site_t *site = code_arena_bump(b->js, sizeof *site);
   if (!site) return OPT_FLOW_GENERIC;
   *site = (opt_rt_site_t){.func = b->func, .bc_off = b->pc};
-  uintptr_t extra = op == OP_PUT_FIELD && b->slow_adds ? (uintptr_t)b->slow_adds : (uintptr_t)site;
+  uintptr_t extra = (op == OP_PUT_FIELD || op == OP_INIT_FIELD) && b->slow_adds ? (uintptr_t)b->slow_adds : (uintptr_t)site;
   ir_node_id_t inputs[3];
   inputs[1] = opt_constant(b, IR_VALUE_UNDEFINED);
   for (uint32_t i = 0; i < operands; i++) inputs[i] = opt_tagged(b, opt_peek(b, operands - 1 - i));
   ir_node_id_t result = opt_runtime_call(b, helper, extra, inputs, operands < 2 ? 2 : operands, false, false);
   ir_node(b->graph, result)->op.call.slow_path = slow_path;
   opt_drop(b, popped);
-  if (op != OP_PUT_FIELD && op != OP_PUT_ELEM) opt_push(b, result);
+  if (op != OP_PUT_FIELD && op != OP_INIT_FIELD && op != OP_PUT_ELEM) opt_push(b, result);
   opt_forget_memory(b);
   return OPT_FLOW_CONTINUE;
 }
@@ -4530,6 +4546,14 @@ static opt_flow_t opt_build_object(opt_builder_t *b) {
   opt_vec_push(&b->graph->arena, &b->ctx->literal_nodes, object);
   opt_vec_push(&b->graph->arena, &b->ctx->literal_shapes, shape);
   opt_push(b, object);
+  return OPT_FLOW_CONTINUE;
+}
+
+static opt_flow_t opt_build_define_computed(opt_builder_t *b, const uint8_t *ip) {
+  ir_node_id_t inputs[3] = {opt_tagged(b, opt_peek(b, 2)), opt_tagged(b, opt_peek(b, 1)), opt_tagged(b, opt_peek(b, 0))};
+  opt_runtime_call(b, (uintptr_t)opt_rt_define_computed, ip[1], inputs, 3, false, false);
+  opt_drop(b, 2);
+  opt_forget_memory(b);
   return OPT_FLOW_CONTINUE;
 }
 
@@ -4582,10 +4606,36 @@ static opt_flow_t opt_build_array(opt_builder_t *b, const uint8_t *ip) {
   uint32_t count = sv_get_u16(ip + 1);
   ir_node_id_t elements[OPT_MAX_INLINE_ARRAY];
   for (uint32_t i = 0; i < count && i < OPT_MAX_INLINE_ARRAY; i++) elements[i] = opt_peek(b, count - 1 - i);
-  ir_node_id_t array;
-  array = opt_emit_array(b, elements, count);
+  ir_node_id_t array = opt_emit_array(b, elements, count);
   if (array == IR_NONE) return OPT_FLOW_GENERIC;
   opt_drop(b, count);
+  opt_push(b, array);
+  return OPT_FLOW_CONTINUE;
+}
+
+static opt_flow_t opt_build_rest(opt_builder_t *b, const uint8_t *ip) {
+  uint32_t start = sv_get_u16(ip + 1);
+  if (b->virtual_rest) {
+    if (b->rest_marker == IR_NONE) {
+      opt_vec_push(&b->graph->arena, &b->ctx->virtual_arguments, b->func);
+      ir_op_t marker = ir_op(IR_OP_CONSTANT);
+      marker.bits = ir_value_virtual_rest(start);
+      b->rest_marker = ir_add_node(b->graph, marker, NULL, 0, OPT_REPR_TAGGED, 0);
+    }
+    opt_push(b, b->rest_marker);
+    return OPT_FLOW_CONTINUE;
+  }
+  const opt_inline_t *call = b->inline_call;
+  ir_node_id_t array;
+  if (call) {
+    uint32_t count = call->argc > start ? call->argc - start : 0;
+    array = opt_emit_array(b, call->args + (count ? start : 0), count);
+    if (array == IR_NONE) return OPT_FLOW_GENERIC;
+  } else {
+    ir_node_id_t inputs[2] = {opt_constant(b, ir_value_number((double)start)), opt_constant(b, IR_VALUE_UNDEFINED)};
+    array = opt_runtime_call(b, (uintptr_t)opt_rt_rest, 0, inputs, 2, true, false);
+    ir_node(b->graph, array)->op.call.passes_entry = true;
+  }
   opt_push(b, array);
   return OPT_FLOW_CONTINUE;
 }
@@ -5567,6 +5617,7 @@ static void opt_collect_call_inputs(opt_builder_t *b, ir_node_id_t *inputs, uint
 static ir_node_id_t opt_spread_runtime_call(opt_builder_t *b, uintptr_t helper, bool spread, const ir_node_id_t *inputs, uint32_t count, bool passes_entry) {
   ir_node_id_t result = opt_runtime_call(b, helper, spread, inputs, count, false, false);
   ir_op_t *op = &ir_node(b->graph, result)->op;
+  op->call.passes_entry = passes_entry;
   op->call.spare_slots = (uint16_t)(OPT_SPREAD_ARG_SLOTS - (int)(count - 2));
   return result;
 }
@@ -5623,9 +5674,24 @@ static opt_flow_t opt_build_spread_call(opt_builder_t *b, const uint8_t *ip, sv_
   ir_node_id_t iterable = opt_peek(b, 0);
   ir_node_id_t *elements = inputs + head + fixed;
   int32_t count = -1;
-  if (opt_is_any_virtual_arguments(b, iterable)) return opt_no_virtual_arguments(b);
-  if (opt_spread_unseen(b, b->pc)) return opt_end_with_exit(b, OPT_EXIT_NO_FEEDBACK);
-  count = opt_spread_elements(b, iterable, elements, limit, b->pc);
+  if (iterable != IR_NONE && iterable == b->rest_marker) {
+    const opt_inline_t *call = b->inline_call;
+    if (!call && !super) {
+      *elements = opt_constant(b, ir_value_number((double)b->rest_start));
+      uintptr_t helper = construct ? (uintptr_t)opt_rt_new_forward : (uintptr_t)opt_rt_call_forward;
+      return opt_finish_call(b, operands, opt_spread_runtime_call(b, helper, false, inputs, 2 + argc, true), false);
+    }
+    uint32_t passed = call && call->argc > b->rest_start ? call->argc - b->rest_start : 0;
+    if (passed > limit || !opt_may_speculate(b, OPT_EXIT_BAD_TYPE)) return opt_no_virtual_arguments(b);
+    opt_exit_unless(b, ir_cond(IR_COND_ARRAY_ITERATION_INTACT), NULL, 0, OPT_EXIT_BAD_TYPE);
+    if (!call) return opt_build_super_call_with(b, OP_SUPER_FORWARD, inputs, 0, operands);
+    for (uint32_t i = 0; i < passed; i++) elements[i] = opt_tagged(b, call->args[b->rest_start + i]);
+    count = (int32_t)passed;
+  } else {
+    if (opt_is_any_virtual_arguments(b, iterable)) return opt_no_virtual_arguments(b);
+    if (opt_spread_unseen(b, b->pc)) return opt_end_with_exit(b, OPT_EXIT_NO_FEEDBACK);
+    count = opt_spread_elements(b, iterable, elements, limit, b->pc);
+  }
   if (count >= 0) {
     uint32_t total = fixed + (uint32_t)count;
     if (super) return opt_build_super_call_with(b, OP_CALL_SUPER, inputs, total, operands);
@@ -6524,6 +6590,8 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
       return opt_build_spread_call(b, ip, op);
     case OP_APPLY: case OP_NEW_APPLY:
       return opt_build_apply(b, ip, op);
+    case OP_REST:
+      return opt_build_rest(b, ip);
     case OP_IMPORT_DEFAULT: case OP_IMPORT_NAMED:
       return opt_build_import(b, ip, op);
     case OP_THROW:
@@ -6561,7 +6629,7 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
     case OP_RE_EXEC_TRUTHY: case OP_RE_EXEC_DISCARD:
       return opt_build_call_helper(b, ip, op);
 
-    case OP_GET_FIELD: case OP_GET_FIELD2: case OP_PUT_FIELD:
+    case OP_GET_FIELD: case OP_GET_FIELD2: case OP_PUT_FIELD: case OP_INIT_FIELD:
       return opt_build_field(b, ip, op);
     case OP_GET_ELEM:
       if (opt_is_virtual_arguments(b, opt_peek(b, 1))) return opt_build_arguments_index(b);
@@ -6578,6 +6646,11 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
       return opt_build_define_slot(b, ip);
     case OP_SET_PROTO:
       return opt_build_set_proto(b);
+    case OP_DEFINE_METHOD_COMP:
+      return opt_build_define_computed(b, ip);
+    case OP_SET_HOME_OBJ:
+      opt_runtime_call(b, (uintptr_t)opt_rt_set_home_obj, 0, (ir_node_id_t[]){opt_tagged(b, opt_peek(b, 1)), opt_tagged(b, opt_peek(b, 0))}, 2, false, false);
+      return OPT_FLOW_CONTINUE;
     case OP_ARRAY:
       return opt_build_array(b, ip);
     case OP_ARRAY_LITERAL:
@@ -6778,6 +6851,45 @@ static void opt_decide_virtual_arguments(opt_builder_t *b) {
   b->virtual_arguments = uses;
 }
 
+static bool opt_is_spread_call(sv_op_t op) {
+  return op == OP_CALL_SPREAD || op == OP_NEW_SPREAD || op == OP_SUPER_SPREAD;
+}
+
+static void opt_decide_virtual_rest(opt_builder_t *b) {
+  sv_func_t *func = b->func;
+  uint32_t rest = 0, rests = 0;
+  for (uint32_t i = 0; i < b->ins_count; i++) {
+    if (opt_op_at(b, b->ins_off[i]) != OP_REST) continue;
+    rest = i;
+    rests++;
+  }
+  b->keeps_arguments = rests > 0;
+  if (rests != 1 || rest + 1 >= b->ins_count) return;
+  if (!b->inline_call && (b->loop_count || func->has_try)) return;
+  for (uint32_t i = 0; i < b->ctx->no_virtual_arguments.len; i++)
+    if (b->ctx->no_virtual_arguments.items[i] == func) return;
+  sv_op_t put = opt_op_at(b, b->ins_off[rest + 1]);
+  if (put != OP_PUT_LOCAL && put != OP_PUT_LOCAL8) return;
+  bool use, def;
+  uint32_t local = opt_access(b, b->ins_off[rest + 1], &use, &def);
+  if (local == IR_NONE || local < b->params || local >= b->params + b->locals) return;
+  if (opt_in_memory(b, local) || opt_boxable(b, local) || opt_bitset_contains(&b->builders, local)) return;
+  uint32_t start = sv_get_u16(func->code + b->ins_off[rest] + 1);
+  for (uint32_t i = 0; i < b->ins_count; i++) {
+    uint32_t off = b->ins_off[i];
+    if (i == rest + 1 || opt_access(b, off, &use, &def) != local) continue;
+    sv_op_t op = opt_op_at(b, off);
+    if (op == OP_SET_LOCAL_UNDEF && i < rest) continue;
+    if ((op != OP_GET_LOCAL && op != OP_GET_LOCAL8) || i + 1 >= b->ins_count || b->block_of_ins[i] != b->block_of_ins[i + 1]) return;
+    uint32_t next = b->ins_off[i + 1];
+    sv_op_t spread = opt_op_at(b, next);
+    if (!opt_is_spread_call(spread)) return;
+    if (!b->inline_call && spread == OP_SUPER_SPREAD && (start || sv_get_u16(func->code + next + 1) != 1)) return;
+  }
+  b->virtual_rest = true;
+  b->rest_start = start;
+}
+
 static bool opt_analyze(opt_builder_t *b) {
   sv_func_t *func = b->func;
   b->tracked = b->params + b->locals + b->stack;
@@ -6793,6 +6905,7 @@ static bool opt_analyze(opt_builder_t *b) {
   opt_decide_virtual_arguments(b);
   opt_compute_rpo(b);
   opt_find_loops(b);
+  opt_decide_virtual_rest(b);
   opt_compute_liveness(b);
   return true;
 }
@@ -6802,7 +6915,8 @@ static bool opt_graph_uses_virtual_arguments(const ir_graph_t *graph) {
     const ir_node_t *node = ir_node(graph, n);
     for (uint32_t i = 0; i < node->inputs.len; i++) {
       uint64_t bits;
-      if (ir_constant_value(graph, node->inputs.items[i], &bits) && ir_value_virtual_arguments_kind(bits) >= 0) return true;
+      if (!ir_constant_value(graph, node->inputs.items[i], &bits)) continue;
+      if (ir_value_virtual_arguments_kind(bits) >= 0 || ir_value_virtual_rest_start(bits) >= 0) return true;
     }
   }
   return false;
@@ -6821,6 +6935,7 @@ static bool opt_build_attempt(ant_t *js, sv_func_t *func, opt_build_ctx_t *ctx, 
     .eager = IR_NONE,
     .tail_header = IR_NONE,
     .arguments_marker = IR_NONE,
+    .rest_marker = IR_NONE,
   };
   opt_builder_t *b = &builder;
   b->exit_sites = ctx->exit_sites_of ? ctx->exit_sites_of(js, func, &b->exit_site_count) : NULL;
@@ -6841,7 +6956,7 @@ static bool opt_build_attempt(ant_t *js, sv_func_t *func, opt_build_ctx_t *ctx, 
     b->pc = 0;
     if (b->uses_this) opt_root_this(b);
     if (opt_self_tail_loop_ok(b)) opt_build_tail_header(b);
-    ok = opt_end_with_jump(b, 0) && (b->virtual_arguments || (opt_build_osr_entries(b) && opt_build_catch_entries(b)));
+    ok = opt_end_with_jump(b, 0) && (b->virtual_arguments || b->virtual_rest || (opt_build_osr_entries(b) && opt_build_catch_entries(b)));
   }
   for (uint32_t r = 0; ok && r < b->rpo_count; r++) {
     uint32_t bi = b->rpo[r];

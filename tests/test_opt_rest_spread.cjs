@@ -6,6 +6,11 @@ function take() { return log.splice(0).join(','); }
 
 function sum3(a, b, c) { return a + b + c; }
 function count() { return arguments.length; }
+function restLength(...r) { return r.length; }
+function forward(...a) { return sum3(...a); }
+function forwardTail(x, ...a) { return sum3(x, ...a); }
+function forwardCount(...a) { return count(...a); }
+function forwardNew(...a) { return new Point(...a); }
 function spreadCall(arr) { return sum3(...arr); }
 function spreadCount(arr) { return count(...arr); }
 function spreadFixed(x, arr) { return count(x, ...arr); }
@@ -37,12 +42,21 @@ class Base {
     this.target = new.target;
   }
 }
+class RestDerived extends Base {
+  constructor(...args) { super(...args); this.own = args.length; }
+}
 class PureRestDerived extends Base {
   constructor(...args) { super(...args); }
+}
+class FixedDerived extends Base {
+  constructor(a, ...rest) { super(a, ...rest); }
 }
 class ArrayDerived extends Base {
   constructor(arr) { super(...arr); }
 }
+function makeRest(...a) { return new RestDerived(...a); }
+function makePure(a, b) { return new PureRestDerived(a, b); }
+function makeFixed(a, b) { return new FixedDerived(a, b); }
 function makeArray(arr) { return new ArrayDerived(arr); }
 
 const three = [1, 2, 3];
@@ -50,6 +64,10 @@ const two = [4, 5];
 
 function warm() {
   for (let i = 0; i < WARM; i++) {
+    assert.strictEqual(forward(1, 2, 3), 6);
+    assert.strictEqual(forwardTail(1, 2, 3), 6);
+    assert.strictEqual(forwardCount(1, 2), 2);
+    assert.strictEqual(forwardNew(1, 2, 3).n, 3);
     assert.strictEqual(spreadCall(three), 6);
     assert.strictEqual(spreadCount(three), 3);
     assert.strictEqual(spreadFixed(i, three), 4);
@@ -58,11 +76,20 @@ function warm() {
     assert.strictEqual(spreadPush(two).length, 3);
     assert.strictEqual(spreadMethod(holder, three), 16);
     assert.strictEqual(spreadSelf(holder, two), holder);
+    assert.strictEqual(makeRest(1, 2).b, 2);
   }
 }
 warm();
 
 function checkShapes() {
+  assert.ok(Number.isNaN(forward(1, 2)));
+  assert.strictEqual(forward('a', 'b', 'c', 'd'), 'abc');
+  assert.strictEqual(forwardTail('a', 'b', 'c'), 'abc');
+  assert.strictEqual(forwardCount(), 0);
+  assert.strictEqual(forwardCount(...new Array(20).fill(1)), 20);
+  assert.strictEqual(forwardNew().n, 0);
+  assert.strictEqual(forwardNew(1, 2, 3, 4, 5).n, 5);
+
   assert.strictEqual(spreadCall(three), 6);
   assert.strictEqual(spreadCall(['x', 'y', 'z']), 'xyz');
   assert.ok(Number.isNaN(spreadCall(two)));
@@ -112,10 +139,35 @@ function checkShapes() {
   const other = { self: holder.self };
   assert.strictEqual(spreadSelf(other, three), other);
   assert.throws(() => spreadMethod({}, three), TypeError);
+
+  for (const make of [makeRest, makePure, makeFixed]) {
+    const made = make(1, 2);
+    assert.strictEqual(made.a, 1);
+    assert.strictEqual(made.b, 2);
+    assert.strictEqual(made.n, 2);
+    assert.ok(made instanceof Base);
+  }
+  assert.strictEqual(makeRest(1, 2).own, 2);
+  assert.strictEqual(makeRest().n, 0);
+  assert.strictEqual(makeRest().own, 0);
+  assert.strictEqual(makeRest(1, 2, 3, 4).n, 4);
+  assert.strictEqual(makeRest(1, 2).target, RestDerived);
 }
 checkShapes();
 warm();
 checkShapes();
+
+const restArrowForward = (...r) => count(...r);
+function restTwice(...r) { return count(...r) + count(...r); }
+function restAndArguments(...r) { return [arguments.length, r.length, count(...r)]; }
+
+for (let i = 0; i < WARM; i++) {
+  assert.strictEqual(restArrowForward(1, 2), 2);
+  assert.strictEqual(restTwice(1, 2), 4);
+  assert.deepStrictEqual(restAndArguments(1, 2, 3), [3, 3, 3]);
+}
+assert.strictEqual(restTwice(), 0);
+assert.deepStrictEqual(restAndArguments(), [0, 0, 0]);
 
 function order(tag, value) { log.push(tag); return value; }
 function orderCall() { return order('callee', count)(order('a', 1), ...order('spread', [2, 3])); }
@@ -140,9 +192,22 @@ function bigCall(run, expected) {
 }
 bigCall(() => spreadMax(big), 69999);
 bigCall(() => spreadCount(big), 70000);
+bigCall(() => restLength(...big), 70000);
+bigCall(() => forwardCount(...big), 70000);
 bigCall(() => spreadNew(big).n, 70000);
 bigCall(() => makeArray(big).n, 70000);
 bigCall(() => new PureRestDerived(...big).n, 70000);
+
+function deoptInside(v) { return v + 1; }
+function deoptForward(...a) { return deoptInside(...a); }
+function deoptForwardCaller(v) { return deoptForward(v, 2, 3); }
+for (let i = 0; i < WARM; i++) {
+  assert.strictEqual(deoptForwardCaller(i), i + 1);
+}
+assert.strictEqual(deoptForwardCaller('s'), 's1');
+for (let i = 0; i < WARM; i++) {
+  assert.strictEqual(deoptForwardCaller(i), i + 1);
+}
 
 assert.ok(Reflect.construct(spreadNew.bind(null, three), []) instanceof Point);
 
@@ -150,12 +215,19 @@ function guardCall(arr) { return sum3(...arr); }
 function guardNew(arr) { return new Point(...arr); }
 function guardMethod(arr) { return holder.m(...arr); }
 function guardSuper(arr) { return new ArrayDerived(arr); }
+function guardRestUse(...r) { return r.length + count(...r); }
+function guardRestStore(...r) { const kept = r; return count(...r) + kept.length; }
+function guardRestReturn(flag, ...r) { return flag ? r : count(...r); }
 for (let i = 0; i < WARM; i++) {
   assert.strictEqual(guardCall(three), 6);
   assert.strictEqual(guardNew(three).c, 3);
   assert.strictEqual(guardMethod(three), 16);
   assert.strictEqual(guardSuper(two).b, 5);
+  assert.strictEqual(guardRestUse(1, 2), 4);
+  assert.strictEqual(guardRestStore(1, 2), 4);
+  assert.strictEqual(guardRestReturn(false, 1, 2), 2);
 }
+assert.deepStrictEqual(guardRestReturn(true, 1, 2), [1, 2]);
 class Quiet extends Array {
   *[Symbol.iterator]() { yield 'a'; yield 'b'; yield 'c'; yield 'd'; }
 }
@@ -185,6 +257,12 @@ arrayIteratorProto.next = function () {
 };
 assert.strictEqual(spreadCall(three), 6);
 assert.strictEqual(take(), 'step,step,step,step');
+assert.strictEqual(forward(1, 2, 3), 6);
+assert.strictEqual(take(), 'step,step,step,step');
+assert.strictEqual(forwardCount(), 0);
+assert.strictEqual(take(), 'step');
+assert.strictEqual(makeRest(1, 2).b, 2);
+assert.strictEqual(take(), 'step,step,step,step,step,step');
 assert.strictEqual(spreadNew(three).n, 3);
 assert.strictEqual(take(), 'step,step,step,step');
 assert.strictEqual(spreadMethod(holder, three), 16);
@@ -202,12 +280,22 @@ Array.prototype[Symbol.iterator] = function* () {
 };
 assert.strictEqual(spreadCall(three), 'pqundefined');
 assert.strictEqual(spreadCount(new Array(9)), 2);
+assert.strictEqual(forward(1, 2, 3), 'pqundefined');
+assert.strictEqual(forwardCount(), 2);
+assert.strictEqual(forwardTail(1, 2, 3), '1pq');
+assert.strictEqual(makeRest(1, 2, 3).n, 2);
+assert.strictEqual(makeRest(1, 2, 3).a, 'p');
+assert.strictEqual(makeRest(1, 2, 3).own, 2);
 assert.strictEqual(spreadNew(three).n, 2);
 assert.strictEqual(spreadMethod(holder, three), '10pq0');
 assert.ok(Number.isNaN(spreadMax(three)));
+assert.strictEqual(restTwice(1), 4);
 Array.prototype[Symbol.iterator] = arrayIterator;
 assert.ok(take().length > 0);
 assert.strictEqual(spreadCall(three), 6);
+assert.strictEqual(forward(1, 2, 3), 6);
+assert.strictEqual(makeRest(1, 2).b, 2);
+assert.strictEqual(take(), '');
 warm();
 checkShapes();
 
