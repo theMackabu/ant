@@ -264,8 +264,11 @@ static ant_value_t array_set_index_throw(ant_t *js, ant_value_t obj, ant_offset_
 static ant_value_t array_set_length_throw(ant_t *js, ant_value_t obj, ant_offset_t len);
 
 static __attribute__((noinline, cold)) ant_value_t array_integer_arg_coerced(ant_t *js, ant_value_t arg, double *out) {
-  double number = js_to_number(js, arg);
-  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+  ant_value_t numeric = js_to_numeric(js, arg);
+  if (is_err(numeric)) return numeric;
+  if (vtype(numeric) == kTypeBigInt)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a BigInt value to a number");
+  double number = Ant_Value_AsNumberUnchecked(numeric);
   *out = number != number ? 0 : trunc(number);
   return Ant_Value_Undefined;
 }

@@ -28,6 +28,9 @@ for (let i = 0; i < 3000; i++) {
   assert.throws(() => setLength([], -1), RangeError);
   assert.throws(() => setLength([], 'abc'), RangeError);
   assert.throws(() => setLength([], { valueOf() { throw new SyntaxError('boom'); } }), SyntaxError);
+  assert.throws(() => setLength([1], 0n), TypeError);
+  assert.throws(() => setLength([1], { valueOf: () => 0n }), TypeError);
+  assert.throws(() => setLength([1], Symbol()), TypeError);
 
   const frozen = Object.freeze([1]);
   assert.throws(() => { 'use strict'; frozen.length = '0'; }, TypeError);
