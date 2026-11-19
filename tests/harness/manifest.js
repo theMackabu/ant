@@ -396,6 +396,7 @@ export function targets() {
     'test_proxy_set_trap_result.cjs',
     'test_put_elem_index_keys.cjs',
     'test_put_field_proto_setter_ic.cjs',
+    'test_property_is_enumerable_proxy.cjs',
     'test_querystring_node_compat.cjs',
     'test_reflect_set_receiver.cjs',
     'test_realm_basics.cjs',
