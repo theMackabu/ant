@@ -139,7 +139,7 @@ bool ir_op_equal(const ir_op_t *a, const ir_op_t *b) {
         && a->call.extra == b->call.extra && a->call.allocates_only == b->call.allocates_only
         && a->call.computes_only == b->call.computes_only
         && a->call.needs_frame == b->call.needs_frame && a->call.slow_path == b->call.slow_path
-        && a->call.builtin == b->call.builtin;
+        && a->call.builtin == b->call.builtin && a->call.construct_super == b->call.construct_super;
     case IR_OP_PROBE_PROPERTY_CACHE:
     case IR_OP_PROBE_KEYED_CACHE:
     case IR_OP_PROBE_PROPERTY_STORE:

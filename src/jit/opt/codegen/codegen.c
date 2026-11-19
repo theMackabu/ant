@@ -1253,6 +1253,10 @@ static void opt_cg_store_slot(opt_cg_t *cg, ir_node_id_t node_id, uint32_t slot)
     default: value = opt_cg_input(cg, node_id, 0); break;
   }
   const ir_frame_layout_t *layout = cg->layout;
+  if (slot == OPT_THIS_SLOT) {
+    masm_store64(m, opt_cg_entry_field(cg, offsetof(opt_entry_t, this_val)), value);
+    return;
+  }
   if (slot >= ir_layout_arguments_base(layout)) {
     masm_store64(m, asm_addr(cg->pinned.frame, (int32_t)(8 * (slot - ir_layout_arguments_base(layout)))), value);
     return;
@@ -3107,6 +3111,59 @@ static void opt_cg_call_known(opt_cg_t *cg, ir_node_id_t node_id) {
   opt_cg_branch_error(cg, node_id);
 }
 
+static void opt_cg_call_super(opt_cg_t *cg, ir_node_id_t node_id) {
+  masm_t *m = &cg->masm;
+  const ir_node_t *node = ir_node(cg->graph, node_id);
+  const ir_op_t *op = &node->op;
+  const asm_gpr_t *a = MASM_ARGUMENT_GPRS;
+  asm_gpr_t scratch = cg->pinned.scratch, result = MASM_RETURN_GPRS[0];
+  const sv_closure_t *parent = (const sv_closure_t *)op->call.extra;
+  asm_label_t slow = masm_new_label(m), returned = masm_new_label(m), other = masm_new_label(m), done = masm_new_label(m);
+  for (uint32_t i = 0; i < node->inputs.len; i++) opt_cg_store_input(cg, node_id, i, opt_cg_call_slot(cg, i));
+  masm_move_imm64(m, scratch, (uint64_t)(uintptr_t)parent->func);
+  masm_load64(m, scratch, asm_addr(scratch, (int32_t)offsetof(sv_func_t, jit_code)));
+  masm_branch64_imm(m, ASM_COND_EQUAL, scratch, 0, slow);
+  masm_move_imm64(m, a[4], (uint64_t)(uintptr_t)parent);
+  masm_load64(m, a[3], asm_addr(a[4], (int32_t)offsetof(sv_closure_t, super_val)));
+#if defined(__aarch64__)
+  masm_move64(m, a[6], a[4]);
+#else
+  masm_store64(m, opt_cg_local(cg, 0), a[4]);
+#endif
+  masm_load64(m, a[1], opt_cg_call_slot(cg, 1));
+  masm_load64(m, a[2], opt_cg_call_slot(cg, 2));
+  masm_load_effective_address(m, a[4], opt_cg_call_slot(cg, 3));
+  masm_move_imm32(m, a[5], op->call.argc - 1u);
+  masm_move64(m, a[0], cg->pinned.vm);
+  masm_call_register(m, scratch);
+  opt_cg_record_call(cg, node->frame_state, -1);
+  masm_jump(m, returned);
+  masm_bind(m, slow);
+  opt_cg_call_runtime(cg, node_id, (uint64_t)(uintptr_t)opt_rt_super_parent);
+  masm_bind(m, returned);
+  opt_cg_branch_error(cg, node_id);
+  masm_move_imm64(m, scratch, -(NANBOX_PREFIX + 1));
+  masm_add64(m, scratch, result, scratch);
+  masm_branch64_imm(m, ASM_COND_BELOW, scratch, (int64_t)NANBOX_DATA_MASK, done);
+  masm_sar64_imm(m, scratch, result, NANBOX_TYPE_SHIFT);
+  masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, OPT_UNDEFINED_TAG_SIGNED, other);
+  masm_load64(m, result, opt_cg_call_slot(cg, 1));
+  masm_jump(m, done);
+  masm_bind(m, other);
+  masm_move64(m, a[0], result);
+  masm_load64(m, a[1], opt_cg_call_slot(cg, 1));
+  masm_call_absolute(m, (uint64_t)(uintptr_t)opt_rt_super_result);
+  opt_cg_record_call(cg, node->frame_state, -1);
+  masm_bind(m, done);
+  if (cg->has_frame) {
+    asm_label_t frameless = masm_new_label(m);
+    masm_load64(m, scratch, opt_cg_entry_field(cg, offsetof(opt_entry_t, frame)));
+    masm_branch64_imm(m, ASM_COND_EQUAL, scratch, 0, frameless);
+    masm_store64(m, asm_addr(scratch, (int32_t)offsetof(sv_frame_t, this)), result);
+    masm_bind(m, frameless);
+  }
+}
+
 static void opt_cg_emit_call_slows(opt_cg_t *cg) {
   masm_t *m = &cg->masm;
   for (uint32_t i = 0; i < cg->call_slows.len; i++) {
@@ -3217,6 +3274,10 @@ static void opt_cg_call(opt_cg_t *cg, ir_node_id_t node_id) {
   const asm_gpr_t *a = MASM_ARGUMENT_GPRS;
   asm_gpr_t scratch = cg->pinned.scratch;
   if (op->code == IR_OP_CALL_NATIVE && op->call.slow_path) opt_cg_count_slow_path(cg, op->call.func, op->call.bc_off);
+  if (op->code == IR_OP_CALL_DIRECT && op->call.construct_super) {
+    opt_cg_call_super(cg, node_id);
+    return;
+  }
   if (op->code == IR_OP_CALL_DIRECT && op->call.target) {
     opt_cg_call_known(cg, node_id);
     return;

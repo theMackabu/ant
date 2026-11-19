@@ -303,6 +303,7 @@ typedef struct {
       bool slow_path;
       bool builtin;
       bool native_closure;
+      bool construct_super;
     } call;
     struct {
       sv_func_t *func;

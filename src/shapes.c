@@ -714,6 +714,35 @@ void ant_shape_roots_release(ant_t *js, ant_shape_roots_t *owner) {
   }
 }
 
+static bool shape_prop_same(const ant_shape_prop_t *a, const ant_shape_prop_t *b) {
+  if (a->type != b->type || a->attrs != b->attrs) return false;
+  if (a->has_getter != b->has_getter || a->has_setter != b->has_setter) return false;
+  if (a->getter != b->getter || a->setter != b->setter) return false;
+  return a->type == ANT_SHAPE_KEY_SYMBOL ? a->key.sym_off == b->key.sym_off : a->key.interned == b->key.interned;
+}
+
+static bool shape_same_layout(const ant_shape_t *a, const ant_shape_t *b) {
+  if (a->count != b->count || a->deleted_count != b->deleted_count || a->inobj_limit != b->inobj_limit) return false;
+  if (a->exotic != b->exotic || a->exotic_ops != b->exotic_ops) return false;
+  if (a->dictionary != b->dictionary || a->bulk_layout != b->bulk_layout) return false;
+  if (a->props == b->props) return true;
+  
+  for (uint32_t i = 0; i < a->count; i++)
+    if (!shape_prop_same(&a->props[i], &b->props[i])) return false;
+  
+  return true;
+}
+
+static ant_shape_t *shape_proto_base(ant_shape_t *shape) {
+  for (;;) {
+    ant_shape_t *parent = shape->parent;
+    if (!parent || parent->bulk_layout) return shape;
+    if (shape->parent_key != shape_child_key((uint64_t)shape->proto, 0x40)) return shape;
+    if (!shape_same_layout(parent, shape)) return shape;
+    shape = parent;
+  }
+}
+
 ant_shape_t *ant_shape_with_proto(ant_shape_t *shape, ant_value_t proto) {
   if (!shape_is_in_tree(shape) && !shape->jit_snapshot && !shape_has_children(shape)) {
     shape->proto = proto;
@@ -721,10 +750,16 @@ ant_shape_t *ant_shape_with_proto(ant_shape_t *shape, ant_value_t proto) {
     return shape;
   }
 
+  ant_shape_t *base = shape_proto_base(shape);
+  if (base != shape && base->proto == proto) {
+    ant_shape_retain(base);
+    return base;
+  }
+
   uint64_t ckey = shape_child_key((uint64_t)proto, 0x40);
-  ant_shape_t *child = shape_find_child(shape, ckey);
+  ant_shape_t *child = shape_find_child(base, ckey);
   
-  if (child && child->proto == proto && child->count == shape->count) {
+  if (child && child->proto == proto && (base == shape ? child->count == shape->count : shape_same_layout(child, shape))) {
     ant_shape_retain(child);
     return child;
   }
@@ -733,7 +768,7 @@ ant_shape_t *ant_shape_with_proto(ant_shape_t *shape, ant_value_t proto) {
   if (!copy) return NULL;
   
   copy->proto = proto;
-  if (!shape->bulk_layout && !child) shape_record_child(shape, ckey, copy);
+  if (!shape->bulk_layout && !child) shape_record_child(base, ckey, copy);
   
   return copy;
 }
@@ -1079,6 +1114,19 @@ bool ant_shape_remove_slot(ant_t *js, ant_shape_t *shape, uint32_t slot) {
 
 uint32_t ant_shape_count(const ant_shape_t *shape) {
   return shape ? shape->count : 0;
+}
+
+bool ant_shape_appends_slot(const ant_shape_t *from, const ant_shape_t *to, uint32_t slot) {
+  if (!from || !to || from == to || slot != from->count || to->count != from->count + 1) return false;
+  if (to->parent == from) return true;
+  
+  if (from->deleted_count || to->deleted_count || from->proto != to->proto) return false;
+  if (from->exotic != to->exotic || from->exotic_ops != to->exotic_ops || from->inobj_limit != to->inobj_limit) return false;
+  
+  for (uint32_t i = 0; i < from->count; i++)
+    if (!shape_prop_same(&from->props[i], &to->props[i])) return false;
+  
+  return true;
 }
 
 bool ant_shape_may_have_gc_refs(const ant_shape_t *shape) {

@@ -889,6 +889,14 @@ ant_value_t opt_rt_super_call(sv_vm_t *vm, ant_value_t this_val, ant_value_t fun
   return effective_this;
 }
 
+ant_value_t opt_rt_super_parent(sv_vm_t *vm, ant_value_t parent, ant_value_t this_val, ant_value_t *args, int64_t argc) {
+  return sv_super_construct_parent(vm, vm->js, parent, this_val, args + 1, (int)argc - 1, args[0]);
+}
+
+ant_value_t opt_rt_super_result(ant_value_t result, ant_value_t this_val) {
+  return sv_is_construct_result(result) ? result : this_val;
+}
+
 ant_value_t opt_rt_import_default(sv_vm_t *vm, ant_value_t ns, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind) {
   return jit_helper_import_default(vm->js, ns);
 }
@@ -1014,7 +1022,7 @@ ant_value_t opt_rt_new_this(sv_vm_t *vm, ant_value_t callee) {
   ant_object_t *func_obj = js_obj_ptr(closure->func_obj);
   ant_value_t proto;
   if (!func_obj->flags.is_constructor || !sv_construct_prototype_data(js, func_obj, closure->func, &proto)) return T_EMPTY;
-  ant_value_t object = js_mkobj_with_proto_slots(js, proto, sv_construct_slots(closure->func));
+  ant_value_t object = js_mkobj_with_proto_slots(js, proto, sv_closure_construct_slots(closure));
   if (vtype(object) != kTypeObject) return T_EMPTY;
   return object;
 }

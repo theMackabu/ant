@@ -642,6 +642,7 @@ typedef struct {
   sv_srcpos_t *srcpos;
   const char *source;
   bool display_name_varies;
+  uint8_t ctor_props;
   
   int srcpos_count;
   int source_line;
@@ -775,6 +776,7 @@ static inline uint8_t sv_ctor_slot_class(uint32_t props) {
 }
 
 static inline void sv_func_set_ctor_props(sv_func_t *func, uint32_t props) {
+  func->debug->ctor_props = props > UINT8_MAX ? UINT8_MAX : (uint8_t)props;
   func->ctor_slot_class = sv_ctor_slot_class(props) & 3;
 }
 
@@ -1062,8 +1064,23 @@ typedef struct sv_closure {
   
   uint8_t in_remember_set;
   uint8_t generation;
+  uint8_t ctor_props;
   uint64_t gc_epoch;
 } sv_closure_t;
+
+static_assert(sizeof(void *) != 8 || sizeof(sv_closure_t) == 160, "the inherited constructor property count lives in sv_closure_t padding");
+
+static inline uint32_t sv_closure_ctor_props(const sv_closure_t *closure) {
+  if (closure->ctor_props) return closure->ctor_props;
+  return closure->func ? closure->func->debug->ctor_props : 0;
+}
+
+static inline uint8_t sv_closure_construct_slots(const sv_closure_t *closure) {
+  if (!closure) return ANT_INOBJ_BASE_SLOTS;
+  if (!closure->ctor_props) return sv_construct_slots(closure->func);
+  uint8_t slot_class = sv_ctor_slot_class(closure->ctor_props);
+  return slot_class == 0 ? ANT_INOBJ_BASE_SLOTS : slot_class == 1 ? ANT_INOBJ_WIDE_SLOTS : ANT_INOBJ_LARGE_SLOTS;
+}
 
 static inline bool sv_closure_has_lexical_this(const sv_closure_t *closure) {
   return 
@@ -1085,6 +1102,7 @@ static inline sv_closure_t *js_closure_alloc_finish(ant_t *js, sv_closure_t *c) 
   c->u.pending.len = 0;
   c->in_remember_set = 0;
   c->generation = 0;
+  c->ctor_props = 0;
   
   if (js->young_closure_len < js->young_closure_cap)
     js->young_closures[js->young_closure_len++] = c;
