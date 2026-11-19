@@ -4384,10 +4384,110 @@ static opt_flow_t opt_build_array(opt_builder_t *b, const uint8_t *ip) {
   return OPT_FLOW_CONTINUE;
 }
 
+static constexpr uint32_t OPT_LITERAL_MAX_ALLOCATIONS = 32;
+static constexpr uint32_t OPT_LITERAL_MAX_VALUES = 256;
+static constexpr uint32_t OPT_LITERAL_MAX_NODE_VALUES = OPT_MAX_INLINE_ARRAY;
+
+static bool opt_literal_fits(opt_builder_t *b, ant_value_t boilerplate, uint32_t *allocations, uint32_t *values, int depth) {
+  if (depth >= SV_LITERAL_MAX_DEPTH || ++*allocations > OPT_LITERAL_MAX_ALLOCATIONS) return false;
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(boilerplate));
+  
+  if (vtype(boilerplate) == kTypeArray) {
+    uint32_t count = ptr->u.array.len;
+    if (
+      !ptr->flags.fast_array || !ptr->u.array.data || count == 0 || count > OPT_MAX_INLINE_ARRAY ||
+      gc_array_storage_fit_class(count) < 0 || (*values += count) > OPT_LITERAL_MAX_VALUES
+    ) return false;
+    
+    for (uint32_t i = 0; i < count; i++) {
+      ant_value_t value = ptr->u.array.data[i];
+      if (is_empty_slot(value)) return false;
+      if (is_object_type(value) && !opt_literal_fits(b, value, allocations, values, depth + 1)) return false;
+    }
+    
+    return true;
+  }
+  
+  ant_shape_t *shape = ptr->shape;
+  if (vtype(boilerplate) != kTypeObject || !shape || ptr->flags.is_exotic || ptr->overflow_prop || ptr->extra_slots) return false;
+  
+  uint32_t count = ant_shape_count(shape);
+  if (
+    ant_shape_proto(shape) != b->js->sym.object_proto || count != ptr->prop_count ||
+    count > ant_shape_get_inobj_limit(shape) || count > OPT_LITERAL_MAX_NODE_VALUES || (*values += count) > OPT_LITERAL_MAX_VALUES ||
+    !jit_snapshot_shape(b->js, shape)
+  ) return false;
+  
+  for (uint32_t i = 0; i < count; i++) {
+    ant_value_t value = ant_object_prop_get_unchecked(ptr, i);
+    if (is_object_type(value) && !opt_literal_fits(b, value, allocations, values, depth + 1)) return false;
+  }
+  
+  return true;
+}
+
+static ir_node_id_t opt_literal_emit(opt_builder_t *b, ant_value_t boilerplate);
+
+static ir_node_id_t opt_literal_value(opt_builder_t *b, ant_value_t value) {
+  if (is_object_type(value)) return opt_literal_emit(b, value);
+  return opt_constant(b, vtype(value) == kTypeNumber ? ir_value_number(Ant_Value_AsNumberUnchecked(value)) : value);
+}
+
+static ir_node_id_t opt_literal_emit(opt_builder_t *b, ant_value_t boilerplate) {
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(boilerplate));
+  ir_node_id_t values[OPT_LITERAL_MAX_NODE_VALUES];
+  
+  if (vtype(boilerplate) == kTypeArray) {
+    uint32_t count = ptr->u.array.len;
+    for (uint32_t i = 0; i < count; i++) values[i] = opt_literal_value(b, ptr->u.array.data[i]);
+    
+    ir_op_t op = ir_op(IR_OP_ALLOCATE_ARRAY);
+    op.count = count;
+    ir_node_id_t array = opt_emit(b, op, NULL, 0, OPT_REPR_TAGGED);
+    
+    for (uint32_t i = 0; i < count; i++) {
+      ir_op_t init = ir_op(IR_OP_INITIALIZE_ELEMENT);
+      init.index = i;
+      opt_emit(b, init, (ir_node_id_t[]){array, values[i]}, 2, OPT_REPR_NONE);
+    }
+    
+    return array;
+  }
+  
+  ant_shape_t *shape = ptr->shape;
+  uint32_t count = ant_shape_count(shape);
+  uint8_t limit = ant_shape_get_inobj_limit(shape);
+  for (uint32_t i = 0; i < count; i++) values[i] = opt_literal_value(b, ant_object_prop_get_unchecked(ptr, i));
+  
+  ir_op_t op = ir_op(IR_OP_ALLOCATE_OBJECT);
+  op.allocate_object.shape = (ir_cell_t)(uintptr_t)shape;
+  op.allocate_object.property_count = count;
+  op.allocate_object.reserve = limit;
+  
+  ir_node_id_t proto = opt_constant(b, b->js->sym.object_proto);
+  ir_node_id_t object = opt_emit(b, op, &proto, 1, OPT_REPR_TAGGED);
+  
+  for (uint32_t i = 0; i < count; i++) {
+    ir_op_t init = ir_op(IR_OP_INITIALIZE_NAMED);
+    init.offset = opt_named_offset(i, limit);
+    opt_emit(b, init, (ir_node_id_t[]){object, values[i]}, 2, OPT_REPR_NONE);
+  }
+  
+  return object;
+}
+
 static opt_flow_t opt_build_array_literal(opt_builder_t *b, const uint8_t *ip) {
   const sv_func_debug_t *debug = b->func->debug;
   uint32_t index = sv_get_u32(ip + 1);
   if (!debug || index >= debug->literal_site_count) return opt_fail(b, "operand") ? OPT_FLOW_CONTINUE : OPT_FLOW_FAILED;
+  
+  ant_value_t boilerplate = debug->literal_sites[index].boilerplate;
+  uint32_t allocations = 0, values = 0;
+  
+  if (is_object_type(boilerplate) && is_object_type(b->js->sym.object_proto) && opt_literal_fits(b, boilerplate, &allocations, &values, 0)) {
+    opt_push(b, opt_literal_emit(b, boilerplate));
+    return OPT_FLOW_CONTINUE;
+  }
   
   opt_rt_site_t *at = code_arena_bump(b->js, sizeof *at);
   if (!at) return OPT_FLOW_GENERIC;
