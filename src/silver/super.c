@@ -54,7 +54,13 @@ ant_value_t Silver_Super_Put(
 ) {
   ant_value_t base = roots[0] = Super_Base(js, func, home);
   if (is_err(base)) return base;
-  if (!is_object_type(base)) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot set properties of %s", vtype(base) == kTypeNull ? "null" : "undefined");
+  if (!is_object_type(base)) {
+    const char *holder = vtype(base) == kTypeNull ? "null" : "undefined";
+    if (vtype(prop) != kTypeString) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot set properties of %s", holder);
+    ant_offset_t len = 0;
+    const char *key = (const char *)(uintptr_t)vstr(js, prop, &len);
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot set properties of %s (setting '%.*s')", holder, (int)len, key);
+  }
   
   ant_value_t key = roots[1] = vtype(prop) == kTypeSymbol ? prop : coerce_to_str(js, prop);
   if (is_err(key)) return key;
@@ -254,8 +260,8 @@ static __attribute__((noinline)) ant_value_t Super_PutFieldSlow(
   ant_value_t base = Super_FieldBase(js, home);
   if (is_err(base)) return base;
   if (!is_object_type(base)) return js_mkerr_typed(
-    js, JS_ERR_TYPE, "Cannot set properties of %s",
-    vtype(base) == kTypeNull ? "null" : "undefined"
+    js, JS_ERR_TYPE, "Cannot set properties of %s (setting '%.*s')",
+    vtype(base) == kTypeNull ? "null" : "undefined", (int)atom->len, atom->str
   );
   
   const ant_object_t *own = fillable && Super_MayRecordAdd(js, fillable) ? Super_ObjectOf(receiver) : NULL;

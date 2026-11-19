@@ -38,6 +38,13 @@ ant_value_t sv_vm_call_mode(
 
 ant_value_t sv_super_constructor(ant_value_t constructor);
 
+ant_value_t sv_construct(
+  sv_vm_t *vm, ant_t *js, ant_value_t func,
+  ant_value_t *args, int argc, ant_value_t new_target
+);
+
+ant_value_t sv_super_construct_error(ant_t *js, ant_value_t parent, ant_value_t new_target, ant_value_t error);
+
 ant_value_t sv_super_construct_slow(
   sv_vm_t *vm, ant_t *js, ant_value_t constructor, ant_value_t this_val,
   ant_value_t *args, int argc, ant_value_t new_target

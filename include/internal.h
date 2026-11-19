@@ -304,6 +304,7 @@ ant_value_t coerce_to_str_concat(ant_t *js, ant_value_t v);
 ant_value_t get_ctor_species_value(ant_t *js, ant_value_t ctor);
 
 bool proto_chain_contains(ant_t *js, ant_value_t obj, ant_value_t proto_target);
+bool proto_would_cycle(ant_t *js, ant_value_t obj, ant_value_t proto);
 bool same_ctor_identity(ant_t *js, ant_value_t a, ant_value_t b);
 bool js_array_iteration_default(ant_t *js, ant_value_t arr);
 bool js_array_proto_chain_plain(ant_t *js, ant_value_t arr);

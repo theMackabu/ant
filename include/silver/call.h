@@ -145,8 +145,8 @@ static inline ant_value_t sv_construct_prototype_from_object(
   else
     proto = js_getprop_fallback(js, proto_source, "prototype");
 
-  return (is_err(proto) || is_object_type(proto))
-    ? proto : js->sym.object_proto;
+  if (is_err(proto) || is_object_type(proto)) return proto;
+  return vtype(proto) == kTypeBuiltin ? js_cfunc_promote(js, proto) : js->sym.object_proto;
 }
 
 static inline bool sv_construct_prototype_data(
@@ -177,7 +177,9 @@ static inline bool sv_construct_prototype_data(
   }
 
   ant_value_t proto = ant_object_prop_get_unchecked(ptr, sidecar->ctor_proto_slot);
-  *out = is_object_type(proto) ? proto : js->sym.object_proto;
+  if (__builtin_expect(!is_object_type(proto), 0))
+    proto = vtype(proto) == kTypeBuiltin ? js_cfunc_promote(js, proto) : js->sym.object_proto;
+  *out = proto;
   
   return true;
 }
@@ -294,9 +296,13 @@ static inline ant_value_t sv_super_construct_parent(
   sv_vm_t *vm, ant_t *js, ant_value_t parent, ant_value_t this_val,
   ant_value_t *args, int argc, ant_value_t new_target
 ) {
+  if (__builtin_expect(vtype(this_val) == kTypeUndefined, 0))
+    return sv_construct(vm, js, parent, args, argc, new_target);
+
   ant_value_t super_this = this_val;
   ant_value_t result = sv_vm_call(vm, js, parent, this_val, args, argc, &super_this, new_target);
-  return is_err(result) || sv_is_construct_result(result) ? result : super_this;
+  if (__builtin_expect(is_err(result), 0)) return sv_super_construct_error(js, parent, new_target, result);
+  return sv_is_construct_result(result) ? result : super_this;
 }
 
 static inline ant_value_t sv_super_construct(

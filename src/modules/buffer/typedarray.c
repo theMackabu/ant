@@ -862,7 +862,7 @@ static ant_value_t js_typedarray_kind_constructor(ant_params_t) {
   if (is_err(result)) return result;
   
   ant_value_t proto = js_instance_proto_from_new_target(js, js_get_proto(js, result), call_new_target);
-  if (is_special_object(proto)) js_set_proto_wb(js, result, proto);
+  if (is_object_type(proto)) js_set_proto_wb(js, result, proto);
   return result;
 }
 

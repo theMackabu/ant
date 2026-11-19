@@ -26,6 +26,7 @@ ant_value_t proxy_get_val(ant_t *js, ant_value_t proxy, ant_value_t key_val);
 ant_value_t proxy_get_val_with_receiver(ant_t *js, ant_value_t proxy, ant_value_t key_val, ant_value_t receiver);
 ant_value_t proxy_get_prototype_of(ant_t *js, ant_value_t proxy);
 ant_value_t proxy_set_prototype_of(ant_t *js, ant_value_t proxy, ant_value_t proto);
+ant_value_t proxy_set_prototype_of_trapped(ant_t *js, ant_value_t proxy, ant_value_t proto, bool *trapped);
 ant_value_t proxy_is_extensible(ant_t *js, ant_value_t proxy);
 ant_value_t proxy_prevent_extensions(ant_t *js, ant_value_t proxy);
 ant_value_t proxy_has_val(ant_t *js, ant_value_t proxy, ant_value_t key_val);

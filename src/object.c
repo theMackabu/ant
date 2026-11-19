@@ -647,6 +647,7 @@ void js_set_proto_wb(ant_t *js, ant_value_t obj, ant_value_t proto) {
 }
 
 void js_set_literal_proto(ant_t *js, ant_value_t obj, ant_value_t proto) {
+  if (__builtin_expect(vtype(proto) == kTypeBuiltin, 0)) proto = js_cfunc_promote(js, proto);
   if (!js_literal_proto_ok(proto) || !is_object_type(obj)) return;
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
   if (!ptr) return;
@@ -771,4 +772,15 @@ void js_set_finalizer(ant_value_t obj, js_finalizer_fn fn) {
   
   Ant_Assert(!ant_array_is_shared(ptr), "shared array elements are released by the array finalizer");
   ptr->finalizer = fn;
+}
+
+ant_proto_set_t Ant_Object_TrySetPrototype(ant_t *js, ant_value_t obj, ant_value_t proto) {
+  if (proto_would_cycle(js, obj, proto)) return ANT_PROTO_SET_CYCLE;
+  
+  const ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
+  bool allowed = !ptr || ptr->flags.extensible || js_get_proto(js, obj) == proto;
+  if (!allowed) return ANT_PROTO_SET_NOT_EXTENSIBLE;
+  
+  set_proto(js, obj, proto);
+  return ANT_PROTO_SET_OK;
 }

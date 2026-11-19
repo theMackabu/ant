@@ -69,6 +69,13 @@ static inline bool sv_is_set_iter(
   return true;
 }
 
+static inline const char *sv_iterable_kind_name(ant_value_t value) {
+  uint8_t t = vtype(value);
+  if (t == kTypeUndefined) return "undefined";
+  if (t == kTypeNull) return "null";
+  return is_object_type(value) ? "object" : typestr(t);
+}
+
 ant_value_t sv_for_of_open(sv_vm_t *vm, ant_t *js, ant_value_t iterable, ant_value_t *out);
 
 static inline ant_value_t sv_op_for_of(sv_vm_t *vm, ant_t *js) {
@@ -120,7 +127,7 @@ static inline ant_value_t sv_op_for_await_of(sv_vm_t *vm, ant_t *js) {
     GC_ROOT_PIN(js, iter_fn);
     if (!is_callable(iter_fn)) {
       GC_ROOT_RESTORE(js, root_mark);
-      return js_mkerr(js, "not iterable");
+      return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not async iterable", sv_iterable_kind_name(iterable));
     }
   }
 
@@ -656,7 +663,7 @@ ant_value_t sv_for_of_open(sv_vm_t *vm, ant_t *js, ant_value_t iterable, ant_val
   
   if (!is_callable(iter_fn)) {
     GC_ROOT_RESTORE(js, root_mark);
-    return js_mkerr_typed(js, JS_ERR_TYPE, "not iterable");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not iterable", sv_iterable_kind_name(iterable));
   }
 
   ant_value_t iterator = sv_vm_call(vm, js, iter_fn, iterable, NULL, 0, NULL, Ant_Value_Undefined);
