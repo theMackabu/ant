@@ -245,6 +245,7 @@ sv_func_t *compile_function_body(
 ) {
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, enclosing, node, mode);
+  comp.is_static = (node->flags & FN_STATIC) || (comp.is_arrow && enclosing->is_static);
   if (node->flags & FN_DERIVED_CTOR) comp.derived_field_owner = enclosing;
   else if (comp.is_arrow) comp.derived_field_owner = enclosing->derived_field_owner;
 
@@ -479,6 +480,7 @@ sv_func_t *compile_function_body(
     emit_op(&comp, OP_SPECIAL_OBJ);
     emit(&comp, SV_SPECIAL_ARGUMENTS);
     emit_put_local(&comp, comp.strict_args_local);
+    comp.args_mapped = !comp.is_strict;
   }
 
   if (!comp.is_arrow && comp.enclosing && (node->flags & (FN_METHOD | FN_GETTER | FN_SETTER | FN_STATIC))) {
@@ -628,6 +630,7 @@ sv_func_t *compile_function_body(
   func->param_count = (uint16_t)comp.param_count;
   func->function_length = function_length_from_params(node);
   func->is_strict = comp.is_strict;
+  func->jit_compile_failed = comp.has_strict_region;
   func->is_arrow = comp.is_arrow;
   func->allows_new_target = comp.allows_new_target;
   
@@ -638,8 +641,9 @@ sv_func_t *compile_function_body(
   if (comp.super_referenced) node->flags |= FN_USES_SUPER;
   func->is_derived_ctor = !!(node->flags & FN_DERIVED_CTOR);
   func->is_class_ctor = !!(node->flags & FN_CLASS_CTOR);
+  func->is_synthetic = !!(node->flags & FN_SYNTHETIC);
   func->ctor_slot_class = (!func->is_method || func->is_class_ctor) ? ctor_slot_class(node) : 0;
-  func->is_static = !!(node->flags & FN_STATIC);
+  func->is_static = comp.is_static;
   func->is_tla = comp.is_tla;
   func->debug->filename = enclosing->filename ? enclosing->filename : enclosing->js->filename;
   func->debug->source_line = (int)source_line_of(enclosing, node);

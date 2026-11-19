@@ -74,6 +74,8 @@ typedef enum {
   SV_SPECIAL_SUPER         = 2,
   SV_SPECIAL_MODULE_IMPORT = 3,
   SV_SPECIAL_ARGC          = 4,
+  SV_SPECIAL_STRICT_ENTER  = 5,
+  SV_SPECIAL_STRICT_LEAVE  = 6,
 } sv_special_obj_t;
 
 typedef enum {
@@ -695,6 +697,7 @@ struct sv_func {
   bool needs_eval_env: 1;
   bool allows_new_target: 1;
   bool has_map_templates: 1;
+  bool is_synthetic: 1;
 
   bool jit_inline_reuse_checked: 1;
   bool jit_inline_reuse_empty: 1;
@@ -1153,6 +1156,11 @@ typedef struct sv_native_frame {
 typedef struct sv_jit_osr_mark {
   struct sv_jit_osr_mark *prev;
 } sv_jit_osr_mark_t;
+
+typedef struct sv_jit_construct_mark {
+  struct sv_jit_construct_mark *prev;
+  uint32_t depth;
+} sv_jit_construct_mark_t;
 
 typedef struct {
   uint32_t bc_off;

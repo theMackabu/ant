@@ -226,18 +226,9 @@ sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t *calle
   }
 
   if (callee->type == N_MEMBER && is_ident_name(callee->left, "super")) {
-    if (!(callee->flags & 1) && is_private_name_node(callee->right)) {
-      js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Cannot access private member through super");
-      emit_op(c, OP_UNDEF);
-      return SV_CALL_DIRECT;
-    }
+    if (reject_super_private(c, callee)) return SV_CALL_DIRECT;
     emit_op(c, OP_THIS);
-    emit_op(c, OP_THIS);
-    emit_get_var(c, "super", 5);
-    if (callee->flags & 1)
-      compile_expr(c, callee->right);
-    else
-      emit_constant(c, sv_const_str(c, callee->right->str, callee->right->len));
+    emit_super_reference(c, callee);
     emit_op(c, OP_GET_SUPER_VAL);
     return SV_CALL_METHOD;
   }

@@ -7,11 +7,18 @@
 static constexpr int SV_JIT_INLINE_FRAMES_MAX = 4;
 static constexpr int SV_STACK_INLINE_ACTIVATIONS = 16;
 
+typedef enum: uint8_t {
+  SV_JIT_ENTERED_FROM_COMPILED = 0,
+  SV_JIT_ENTERED_AS_CALL,
+  SV_JIT_ENTERED_AS_CONSTRUCT,
+} sv_jit_entered_t;
+
 typedef struct {
   sv_func_t *func;
   uintptr_t pc;
   int vm_fp;
   bool osr_host;
+  sv_jit_entered_t entered;
 } sv_jit_activation_t;
 
 typedef struct {
@@ -30,6 +37,7 @@ typedef struct {
   sv_func_t *func;
   ant_value_t callee;
   uintptr_t pc;
+  uintptr_t caller_pc;
   int bc_off;
   int frame_index;
   bool construct;
@@ -44,6 +52,9 @@ typedef struct {
   int i, skip;
   sv_stack_entry_t pending[SV_JIT_INLINE_FRAMES_MAX + 1];
   int n_pending;
+  sv_jit_frame_t ahead[SV_JIT_INLINE_FRAMES_MAX + 1];
+  const sv_jit_activation_t *ahead_of;
+  int n_ahead;
   bool resolve;
   bool truncated;
 } sv_stack_iter_t;

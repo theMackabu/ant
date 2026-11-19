@@ -615,9 +615,18 @@ typedef struct {
   int vm_fp;
   int seg_start;
   uint32_t runs, jit_entries;
+  const sv_jit_construct_mark_t *construct;
   bool in_run;
   bool host_pending;
+  bool full;
 } jit_walk_t;
+
+static void jit_walk_close_run(jit_walk_t *w) {
+  uint32_t depth = w->jit_entries - w->runs + 1;
+  while (w->construct && w->construct->depth > depth) w->construct = w->construct->prev;
+  bool construct = w->construct && w->construct->depth == depth;
+  (*w->out)[w->n - 1].entered = construct ? SV_JIT_ENTERED_AS_CONSTRUCT : SV_JIT_ENTERED_AS_CALL;
+}
 
 static bool jit_walk_push(jit_walk_t *w, sv_jit_activation_t a) {
   if (w->n == w->cap) {
@@ -668,7 +677,11 @@ static bool jit_walk_visit(jit_walk_t *w, uintptr_t pc, uintptr_t frame_addr) {
   }
   
   if (!r) {
-    if (w->in_run && w->runs >= w->jit_entries) {
+    if (!w->in_run) return true;
+    jit_walk_close_run(w);
+    if (w->full) return false;
+    
+    if (w->runs >= w->jit_entries) {
       jit_walk_pass_marks(w, w->seg ? (uintptr_t)w->seg : UINTPTR_MAX);
       return false;
     }
@@ -677,6 +690,11 @@ static bool jit_walk_visit(jit_walk_t *w, uintptr_t pc, uintptr_t frame_addr) {
     return true;
   }
   
+  if (w->full) {
+    jit_walk_push(w, (sv_jit_activation_t){ .pc = pc, .vm_fp = w->vm_fp });
+    return false;
+  }
+
   if (!w->in_run) w->runs++;
   w->in_run = true;
 
@@ -694,7 +712,9 @@ static bool jit_walk_visit(jit_walk_t *w, uintptr_t pc, uintptr_t frame_addr) {
     w->vm_fp--;
   }
   
-  return jit_walk_push(w, a) && (w->limit < 0 || w->funcs < w->limit);
+  if (!jit_walk_push(w, a)) return false;
+  w->full = w->limit >= 0 && w->funcs >= w->limit;
+  return true;
 }
 
 #if defined(__APPLE__)
@@ -748,6 +768,7 @@ int sv_jit_collect_activations(sv_vm_t *vm, sv_jit_activation_t **acts, int cap,
     .stack_top = jit_stack_top(),
     .vm_fp = vm->fp,
     .jit_entries = js->jit_active_depth,
+    .construct = js->jit_construct_marks,
   };
   jit_walk_native(&w);
   return w.n;

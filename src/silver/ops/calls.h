@@ -398,7 +398,7 @@ static inline ant_value_t sv_eval_in_frame(
   ant_value_t result = js_eval_source(
     js, source, source_len,
     caller->allows_new_target ? SV_COMPILE_EVAL_FUNCTION : SV_COMPILE_EVAL,
-    sv_frame_is_strict(frame), scope).value;
+    sv_frame_is_strict(frame) || sv_is_strict_context(js), scope).value;
   
   GC_ROOT_RESTORE(js, root_mark);
   return result;

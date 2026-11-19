@@ -222,6 +222,7 @@ typedef struct sv_compiler {
   bool write_counts_known;
 
   bool is_arrow;
+  bool is_static;
   bool is_async;
   bool is_async_generator;
   bool is_strict;
@@ -243,6 +244,9 @@ typedef struct sv_compiler {
   uint32_t global_lexical_count;
 
   bool is_tla;
+  bool in_strict_region;
+  bool has_strict_region;
+  int strict_saved_local;
   bool args_length_only;
   bool regexp_exec_write_seen;
   bool regexp_replace_write_seen;
@@ -258,6 +262,7 @@ typedef struct sv_compiler {
   
   int completion_local;
   int strict_args_local;
+  bool args_mapped;
   int new_target_local;
   int super_local;
   bool super_referenced;

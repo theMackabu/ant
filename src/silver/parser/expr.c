@@ -39,8 +39,17 @@ sv_ast_t *parse_member_suffix(sv_parser_t *p, sv_ast_t *left, uint8_t la) {
   return NULL;
 }
 
+sv_ast_t *parse_tagged_template(sv_parser_t *p, sv_ast_t *tag) {
+  sv_ast_t *tagged = mk(N_TAGGED_TEMPLATE);
+  tagged->left = tag;
+  p->tagged_template = true;
+  tagged->right = parse_primary(p);
+  return tagged;
+}
+
 static sv_ast_t *parse_call(sv_parser_t *p) {
   sv_ast_t *n = parse_primary(p);
+  bool optional_chain = false;
 
   for (;;) {
     uint8_t la = sv_lexer_next(&p->lx);
@@ -63,12 +72,15 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
       expect(p, TOK_RPAREN);
       call->src_off = n ? n->src_off : call->src_off;
       call->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
+      if (optional_chain) call->flags |= FN_OPTIONAL_BASE;
       n = call;
     } else if (la == TOK_DOT || la == TOK_LBRACKET) {
       n = parse_member_suffix(p, n, la);
       if (n && n->type == N_EMPTY) return n;
+      if (optional_chain) n->flags |= FN_OPTIONAL_BASE;
     } else if (la == TOK_OPTIONAL_CHAIN) {
       p->lx.st.consumed = 1;
+      optional_chain = true;
       sv_ast_t *opt = mk(N_OPTIONAL);
       opt->left = n;
       if (sv_lexer_next(&p->lx) == TOK_LBRACKET) {
@@ -89,6 +101,7 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
         expect(p, TOK_RPAREN);
         call->src_off = n ? n->src_off : call->src_off;
         call->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
+        call->flags |= FN_OPTIONAL_BASE;
         n = call;
         continue;
       } else if (p->lx.st.tok == TOK_HASH) {
@@ -108,14 +121,18 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
       if (opt->src_end <= opt->src_off && opt->right) opt->src_end = opt->right->src_end;
       n = opt;
     } else if (la == TOK_TEMPLATE) {
-      sv_ast_t *tagged = mk(N_TAGGED_TEMPLATE);
-      tagged->left = n;
-      p->tagged_template = true;
-      tagged->right = parse_primary(p);
-      n = tagged;
+      if (optional_chain) {
+        SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Invalid tagged template on optional chain");
+        return mk(N_EMPTY);
+      }
+      n = parse_tagged_template(p, n);
     } else break;
   }
   return n;
+}
+
+sv_ast_t *parse_lhs(sv_parser_t *p) {
+  return parse_call(p);
 }
 
 static sv_ast_t *parse_postfix(sv_parser_t *p) {

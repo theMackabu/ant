@@ -287,6 +287,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
   comp.is_strict = true;
+  comp.is_static = true;
 
   comp.super_local = add_hidden_local(&comp);
   emit_op(&comp, OP_SPECIAL_OBJ);
@@ -367,7 +368,10 @@ static void compile_static_block(sv_compiler_t *c, sv_ast_t *block, int ctor_loc
   emit_op(c, OP_POP);
 }
 
-void compile_class(sv_compiler_t *c, sv_ast_t *node) {
+static void compile_class_strict(
+  sv_compiler_t *c, sv_ast_t *node,
+  const char *inferred_name, uint32_t inferred_name_len
+) {
   int outer_name_local = -1;
   bool binds_outer_name = node->str &&
     (node->flags & FN_CLASS_DECL);
@@ -383,8 +387,6 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
 
   if (binds_outer_name)
     outer_name_local = resolve_local(c, node->str, node->len);
-  if (node->left) compile_expr(c, node->left);
-  else emit_op(c, OP_UNDEF);
 
   sv_private_scope_t private_scope = { .parent = c->private_scope };
   sv_private_scope_t *saved_private_scope = c->private_scope;
@@ -450,8 +452,20 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   bool has_class_scope = node->str || private_scope.count > 0 || field_count > 0 || has_computed_key;
   if (has_class_scope) {
     begin_scope(c);
-    if (node->str)
+    if (node->str) {
       inner_name_local = add_local(c, node->str, node->len, true, c->scope_depth);
+      c->locals[inner_name_local].is_tdz = true;
+      emit_op(c, OP_SET_LOCAL_UNDEF);
+      emit_u16(c, (uint16_t)(inner_name_local - c->param_locals));
+    }
+  }
+
+  c->private_scope = saved_private_scope;
+  if (node->left) compile_expr(c, node->left);
+  else emit_op(c, OP_UNDEF);
+  c->private_scope = &private_scope;
+
+  if (has_class_scope) {
     for (int i = 0; i < private_scope.count; i++) {
       sv_private_name_t *p = &private_scope.names[i];
       p->owner = c;
@@ -510,6 +524,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     if (is_static) static_init_items[si++] = (sv_class_emit_item_t){ m, preeval_key };
   }
 
+  if (inner_name_local >= 0) c->locals[inner_name_local].is_tdz = false;
 
   if (ctor_method && ctor_method->right) {
     ctor_method->right->flags |= FN_CLASS_CTOR;
@@ -596,14 +611,15 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   } else emit_op(c, OP_UNDEF);
   
   c->field_locals = NULL;
+  if (inner_name_local >= 0) c->locals[inner_name_local].is_tdz = true;
 
   const char *class_name = node->str;
   uint32_t class_name_len = node->len;
   bool consumed_inferred_name = false;
   
-  if (!class_name && c->inferred_name) {
-    class_name = c->inferred_name;
-    class_name_len = c->inferred_name_len;
+  if (!class_name && inferred_name) {
+    class_name = inferred_name;
+    class_name_len = inferred_name_len;
     consumed_inferred_name = true;
   }
 
@@ -637,6 +653,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   if (inner_name_local >= 0) {
     emit_get_local(c, ctor_local);
     emit_put_local(c, inner_name_local);
+    c->locals[inner_name_local].is_tdz = false;
   }
 
   for (int i = 0; i < method_emit_count; i++) {
@@ -679,4 +696,13 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   if (has_class_scope) end_scope(c);
   c->private_scope = saved_private_scope;
   free(private_scope.names);
+}
+
+void compile_class(sv_compiler_t *c, sv_ast_t *node) {
+  bool saved_strict = c->is_strict;
+  c->is_strict = true;
+  const char *inferred_name = c->inferred_name;
+  uint32_t inferred_name_len = c->inferred_name_len;
+  compile_class_strict(c, node, inferred_name, inferred_name_len);
+  c->is_strict = saved_strict;
 }

@@ -189,4 +189,13 @@ try {
   fs.rmSync(root, { recursive: true, force: true });
 }
 
+{
+  function staticKeyError() { return new Error('static key'); }
+  function staticKey() { let e; class C { static [(e = staticKeyError(), 'k')] = 1; } return e.stack; }
+  const frames = (stack) => stack.split('\n').slice(1, 3).map((line) => line.trim().split(' ')[1]).join(' < ');
+  const first = frames(staticKey());
+  assert.strictEqual(first, 'staticKeyError < staticKey');
+  for (let i = 0; i < 4000; i++) assert.strictEqual(frames(staticKey()), first, `static computed key frames at call ${i}`);
+}
+
 console.log('compiled frames match the interpreter');

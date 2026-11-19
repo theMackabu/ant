@@ -100,6 +100,9 @@ void sv_func_init_code_and_map_templates(
 );
 uint16_t alloc_ic_idx(sv_compiler_t *c);
 void sv_func_init_obj_sites(const sv_compiler_t *c, sv_func_t *func);
+bool reject_super_private(sv_compiler_t *c, const sv_ast_t *member);
+void emit_super_key(sv_compiler_t *c, sv_ast_t *member);
+void emit_super_reference(sv_compiler_t *c, sv_ast_t *member);
 void emit_atom_idx_op(sv_compiler_t *c, sv_op_t op, uint32_t atom_idx);
 void emit_get_length(sv_compiler_t *c);
 void emit_atom_op(sv_compiler_t *c, sv_op_t op, const char *str, uint32_t len);

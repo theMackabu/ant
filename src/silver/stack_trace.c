@@ -71,6 +71,8 @@ void sv_stack_iter_init(sv_vm_t *vm, sv_stack_iter_t *it, int limit, bool resolv
   it->i = vm ? vm->fp : -1;
   it->skip = -1;
   it->n_pending = 0;
+  it->ahead_of = NULL;
+  it->n_ahead = 0;
   it->resolve = resolve;
   it->truncated = false;
   
@@ -122,13 +124,46 @@ static bool sv_jit_frame_is_construct(const sv_jit_frame_t *at, int i, int m, bo
   return i == m - 1 ? outer : sv_inlined_is_construct(&at[i], &at[i + 1]);
 }
 
+static const sv_jit_activation_t *sv_activation_compiled_caller(
+  sv_stack_iter_t *it, const sv_jit_activation_t *a, int host_fp, bool *construct
+) {
+  bool entered = host_fp < 0 && a->entered != SV_JIT_ENTERED_FROM_COMPILED;
+  *construct = false;
+  
+  if (host_fp < 0 && !entered && a + 1 < it->acts + it->n_acts) return a + 1;
+  *construct = entered && a->entered == SV_JIT_ENTERED_AS_CONSTRUCT
+    ? sv_func_may_construct(a->func)
+    : sv_frame_is_construct(it->vm, a->func, host_fp);
+  
+  return NULL;
+}
+
+static bool sv_called_as_construct(sv_func_t *callee, const sv_jit_frame_t *caller, int n) {
+  if (n > 0) return sv_inlined_is_construct(&(sv_jit_frame_t){ callee, -1 }, &caller[0]);
+  return sv_func_may_construct(callee) && callee->is_class_ctor;
+}
+
+static int sv_stack_frames_of(sv_stack_iter_t *it, const sv_jit_activation_t *a, sv_jit_frame_t *out) {
+  if (it->ahead_of != a) return sv_jit_frames_at(it->vm->js, a->pc, out, SV_JIT_INLINE_FRAMES_MAX + 1);
+  memcpy(out, it->ahead, (size_t)it->n_ahead * sizeof(*out));
+  return it->n_ahead;
+}
+
 static void sv_stack_resolve(sv_stack_iter_t *it, const sv_jit_activation_t *a, ant_value_t callee, int host_fp) {
   sv_jit_frame_t frames[SV_JIT_INLINE_FRAMES_MAX + 1];
   
-  int n = sv_jit_frames_at(it->vm->js, a->pc, frames, SV_JIT_INLINE_FRAMES_MAX + 1);
+  int n = sv_stack_frames_of(it, a, frames);
   if (n <= 0) frames[n++] = (sv_jit_frame_t){ a->func, -1 };
   
-  bool outer = sv_frame_is_construct(it->vm, frames[n - 1].func, host_fp);
+  bool outer;
+  const sv_jit_activation_t *caller = sv_activation_compiled_caller(it, a, host_fp, &outer);
+  
+  if (caller) {
+    it->n_ahead = sv_jit_frames_at(it->vm->js, caller->pc, it->ahead, SV_JIT_INLINE_FRAMES_MAX + 1);
+    it->ahead_of = caller;
+    outer = sv_called_as_construct(a->func, it->ahead, it->n_ahead);
+  }
+  
   for (int k = 0; k < n; k++) it->pending[n - 1 - k] = (sv_stack_entry_t){
     .func = frames[k].func,
     .callee = k == n - 1 ? callee : Ant_Value_Undefined,
@@ -162,10 +197,14 @@ bool sv_stack_iter_next(sv_stack_iter_t *it, sv_stack_entry_t *out) {
       if (it->resolve) {
         sv_stack_resolve(it, a, callee, host_fp);
         *out = it->pending[--it->n_pending];
-      } else *out = (sv_stack_entry_t){
-        .func = a->func, .callee = callee, .pc = a->pc, .bc_off = -1, .frame_index = -1,
-        .construct = sv_frame_is_construct(vm, a->func, host_fp),
-      };
+      } else {
+        bool construct;
+        const sv_jit_activation_t *caller = sv_activation_compiled_caller(it, a, host_fp, &construct);
+        *out = (sv_stack_entry_t){
+          .func = a->func, .callee = callee, .pc = a->pc, .bc_off = -1, .frame_index = -1,
+          .caller_pc = caller ? caller->pc : 0, .construct = construct,
+        };
+      }
       
       return true;
     }
@@ -241,6 +280,7 @@ typedef struct {
   sv_func_t *func;
   ant_value_t callee;
   uintptr_t pc;
+  uintptr_t caller_pc;
   int bc_off;
   bool construct;
 } error_frame_t;
@@ -265,7 +305,7 @@ static error_frame_view_t error_frame_view(ant_t *js, const error_frame_t *f, co
 
 static error_frame_t error_frame_of(const sv_stack_entry_t *e) {
   return (error_frame_t){
-    .func = e->func, .callee = e->callee, .pc = e->pc,
+    .func = e->func, .callee = e->callee, .pc = e->pc, .caller_pc = e->caller_pc,
     .bc_off = e->bc_off, .construct = e->construct
   };
 }
@@ -358,6 +398,7 @@ static int error_collect_frames(
         if (e.func == seek) { seek = NULL; it.resolve = resolve; }
         continue;
       }
+      if (e.func && e.func->is_synthetic && !e.pc) continue;
       
       if (error_entry_is_wrapper(js, &e, n)) continue;
       if (!error_frames_reserve(out, local, &cap, n + 1)) break;
@@ -409,7 +450,7 @@ typedef enum {
   ERROR_SITE_RENDERED,
 } error_site_kind_t;
 
-typedef struct {
+typedef struct error_record {
   error_site_kind_t site_kind;
   bool no_site_frame;
   sv_func_t *site_func;
@@ -432,9 +473,34 @@ bool js_is_error_record(ant_value_t value) {
   return error_record_of(value) != NULL;
 }
 
+static int error_record_resolve(ant_t *js, const error_record_t *rec, error_frame_t *local, error_frame_t **frames);
+
+static_assert(sizeof(error_record_t) == 64, "error records carry no settle state");
+
+static error_record_t *error_record_settle(ant_t *js, ant_value_t value, error_record_t *rec) {
+  error_frame_t local[ERROR_FRAMES_INLINE], *frames;
+  int n = error_record_resolve(js, rec, local, &frames);
+  
+  error_record_t *grown = n > rec->n_frames ? realloc(rec, sizeof(*rec) + (size_t)n * sizeof(rec->frames[0])) : rec;
+  if (grown) {
+    memcpy(grown->frames, frames, (size_t)n * sizeof(grown->frames[0]));
+    grown->n_frames = n;
+    rec = grown;
+  } else for (int i = 0; i < rec->n_frames; i++) rec->frames[i].pc = rec->frames[i].caller_pc = 0;
+  
+  if (frames != local) free(frames);
+  if (grown) js_set_native(value, rec, ERROR_RECORD_NATIVE_TAG);
+  
+  return rec;
+}
+
 void gc_mark_error_record(ant_t *js, ant_value_t value, gc_mark_fn mark) {
   error_record_t *rec = error_record_of(value);
   if (!rec) return;
+  
+  bool lazy = false;
+  for (int i = 0; i < rec->n_frames && !lazy; i++) lazy = rec->frames[i].pc != 0;
+  if (lazy && !js->gc.minor) rec = error_record_settle(js, value, rec);
   
   if (rec->site_func) mark(js, mkref(kTypeFunctionInfo, rec->site_func));
   mark(js, rec->rendered_site);
@@ -535,28 +601,52 @@ typedef struct {
   js_error_render_site_t site;
 } error_render_t;
 
-static void error_render_begin(ant_t *js, const error_record_t *rec, error_render_t *r) {
-  r->rec = rec;
-  r->frames = r->local;
-  r->n = 0;
-  int cap = ERROR_FRAMES_INLINE;
+static int error_record_resolve(ant_t *js, const error_record_t *rec, error_frame_t *local, error_frame_t **frames) {
+  int cap = ERROR_FRAMES_INLINE, n = 0;
+  *frames = local;
 
-  for (int k = 0; k < rec->n_frames && r->n < rec->limit; k++) {
+  sv_jit_frame_t resolved[2][SV_JIT_INLINE_FRAMES_MAX + 1];
+  sv_jit_frame_t *at = resolved[0], *ahead = resolved[1];
+  uintptr_t ahead_pc = 0;
+  int n_ahead = 0;
+
+  for (int k = 0; k < rec->n_frames && n < rec->limit; k++) {
     const error_frame_t *f = &rec->frames[k];
-    sv_jit_frame_t at[SV_JIT_INLINE_FRAMES_MAX + 1];
-    int m = f->pc ? sv_jit_frames_at(js, f->pc, at, SV_JIT_INLINE_FRAMES_MAX + 1) : 0;
-    if (m <= 0) at[m++] = (sv_jit_frame_t){ f->func, f->bc_off };
+    int m = 0;
     
-    for (int i = 0; i < m && r->n < rec->limit; i++) {
-      if (!error_frames_reserve(&r->frames, r->local, &cap, r->n + 1)) return;
-      r->frames[r->n++] = (error_frame_t){
+    if (f->pc && f->pc == ahead_pc) {
+      sv_jit_frame_t *reused = ahead;
+      ahead = at; at = reused;
+      m = n_ahead; ahead_pc = 0;
+    } else if (f->pc) m = sv_jit_frames_at(js, f->pc, at, SV_JIT_INLINE_FRAMES_MAX + 1);
+    
+    if (m <= 0) at[m++] = (sv_jit_frame_t){ f->func, f->bc_off };
+    bool outer = f->construct;
+    
+    if (f->caller_pc) {
+      n_ahead = sv_jit_frames_at(js, f->caller_pc, ahead, SV_JIT_INLINE_FRAMES_MAX + 1);
+      ahead_pc = f->caller_pc;
+      outer = sv_called_as_construct(f->func, ahead, n_ahead);
+    }
+    
+    for (int i = 0; i < m && n < rec->limit; i++) {
+      if (at[i].func && at[i].func->is_synthetic) continue;
+      if (!error_frames_reserve(frames, local, &cap, n + 1)) return n;
+      (*frames)[n++] = (error_frame_t){
         .func = at[i].func,
         .callee = i == m - 1 ? f->callee : Ant_Value_Undefined,
         .bc_off = at[i].bc_off,
-        .construct = sv_jit_frame_is_construct(at, i, m, f->construct),
+        .construct = sv_jit_frame_is_construct(at, i, m, outer),
       };
     }
   }
+  
+  return n;
+}
+
+static void error_render_begin(ant_t *js, const error_record_t *rec, error_render_t *r) {
+  r->rec = rec;
+  r->n = error_record_resolve(js, rec, r->local, &r->frames);
 
   sv_func_t *file_func = rec->site_func ? rec->site_func : r->n > 0 ? r->frames[0].func : NULL;
   r->file = vtype(rec->file) == kTypeString ? js_getstr(js, rec->file, NULL)

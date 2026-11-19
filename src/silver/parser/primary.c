@@ -332,12 +332,18 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     for (;;) {
       uint8_t la = sv_lexer_next(&p->lx);
       if (la == TOK_DOT || la == TOK_LBRACKET) callee = parse_member_suffix(p, callee, la);
+      else if (la == TOK_TEMPLATE) callee = parse_tagged_template(p, callee);
       else break;
       if (callee && callee->type == N_EMPTY) return callee;
     }
     n->left = callee;
 
-    if (sv_lexer_next(&p->lx) == TOK_LPAREN) {
+    if (sv_lexer_next(&p->lx) == TOK_OPTIONAL_CHAIN) {
+      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Invalid optional chain from new expression");
+      return mk(N_EMPTY);
+    }
+
+    if (p->lx.st.tok == TOK_LPAREN) {
       p->lx.st.consumed = 1;
       while (sv_lexer_next(&p->lx) != TOK_RPAREN && p->lx.st.tok != TOK_EOF) {
         if (p->lx.st.tok == TOK_REST) {
