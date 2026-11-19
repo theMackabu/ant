@@ -1569,15 +1569,31 @@ static inline void sv_init_field_miss_cache(
     sv_ic_set_add_transition(js, ic, old_shape, ptr->shape, (uint32_t)slot, js->ic.epoch, proto);
 }
 
+static inline bool sv_init_field_fills(ant_t *js, sv_ic_entry_t *ic) {
+  if (ic->fill_epoch != js->ic.epoch) {
+    ic->fill_epoch = js->ic.epoch;
+    ic->slow_hits = 0;
+  }
+  if (ic->slow_hits >= SV_INIT_FIELD_FILL_LIMIT) return false;
+  ic->slow_hits++;
+  return true;
+}
+
+ant_value_t sv_init_field_generic(
+  ant_t *js, ant_value_t obj, ant_value_t val,
+  const sv_atom_t *a, sv_ic_entry_t *ic
+);
+
 static inline ant_value_t sv_init_field(
   ant_t *js, ant_value_t obj, ant_value_t val,
   const sv_atom_t *a, sv_ic_entry_t *ic
 ) {
   ant_object_t *ptr = vtype(obj) == kTypeObject ? js_obj_ptr(obj) : NULL;
-  if (!sv_init_field_target(ptr)) return js_create_data_property_or_throw(js, obj, js_mkstr(js, a->str, a->len), val);
+  if (!sv_init_field_target(ptr)) return sv_init_field_generic(js, obj, val, a, ic);
 
   ant_value_t out = val;
   if (ic && sv_init_field_try_cached(js, ptr, val, a, ic, &out)) return out;
+  if (ic && !sv_init_field_fills(js, ic)) ic = NULL;
 
   int32_t found = ant_shape_lookup_interned(ptr->shape, a->str);
   if (found >= 0 && (uint32_t)found < ptr->prop_count && sv_shape_prop_is_plain_data(ant_shape_prop_at(ptr->shape, (uint32_t)found), a->str)) {
@@ -1590,26 +1606,21 @@ static inline ant_value_t sv_init_field(
     return val;
   }
 
-  ant_shape_t *old_shape = ant_shape_is_dictionary(ptr->shape) ? NULL : ptr->shape;
+  ant_shape_t *old_shape = !ic || ant_shape_is_dictionary(ptr->shape) ? NULL : ptr->shape;
   if (old_shape) ant_shape_retain(old_shape);
 
   out = mkprop_interned_attrs_impl(js, obj, a->str, a->len, val, 0, MKPROP_USE_DEFAULT_ATTRS | MKPROP_DATA_DEFINE);
-  if (out == T_EMPTY) out = js_create_data_property_or_throw(js, obj, js_mkstr(js, a->str, a->len), val);
+  if (out == T_EMPTY) out = js_create_data_property_or_throw(js, obj, intern_value(js, a->str), val);
   else if (!is_err(out) && ic) sv_init_field_miss_cache(js, ic, ptr, a, old_shape);
 
   if (old_shape) ant_shape_release(old_shape);
   return out;
 }
 
-static inline ant_value_t sv_op_init_field(
+ant_value_t sv_op_init_field(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
-) {
-  sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
-  ant_value_t res = sv_init_field(js, vm->stack[vm->sp - 2], vm->stack[vm->sp - 1], a, sv_ic_slot_for_ip(func, ip));
-  vm->sp -= 2;
-  return res;
-}
+);
 
 static inline ant_value_t sv_op_put_field(
   sv_vm_t *vm, ant_t *js,
@@ -1937,6 +1948,34 @@ static inline ant_value_t sv_op_get_length(sv_vm_t *vm, ant_t *js, sv_func_t *fu
 }
 
 #ifdef SV_OPS_IMPLEMENTATION
+
+ant_value_t sv_define_field(
+  ant_t *js, uint8_t flags,
+  ant_value_t obj, ant_value_t key, ant_value_t value
+);
+
+ant_value_t sv_init_field_generic(
+  ant_t *js, ant_value_t obj, ant_value_t val,
+  const sv_atom_t *a, sv_ic_entry_t *ic
+) {
+  if (ic && ic->slow_hits < SV_INIT_FIELD_FILL_LIMIT && !ic->cached_shape && !ic->guard.add.from_shape) {
+    ic->fill_epoch = js->ic.epoch;
+    ic->slow_hits = SV_INIT_FIELD_FILL_LIMIT;
+  }
+  ant_value_t key = intern_value(js, a->str);
+  if (vtype(obj) == kTypeFunction) return sv_define_field(js, SV_DEFINE_METHOD_FIELD, obj, key, val);
+  return js_create_data_property_or_throw(js, obj, key, val);
+}
+
+ant_value_t sv_op_init_field(
+  sv_vm_t *vm, ant_t *js,
+  sv_func_t *func, uint8_t *ip
+) {
+  sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
+  ant_value_t obj = vm->stack[vm->sp - 2], val = vm->stack[vm->sp - 1];
+  vm->sp -= 2;
+  return sv_init_field(js, obj, val, a, sv_ic_slot_for_ip(func, ip));
+}
 
 void sv_gf_mega_store_in(
   ant_t *js, sv_gf_mega_cache_t *cache, ant_object_t *receiver, 

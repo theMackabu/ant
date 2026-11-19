@@ -2615,6 +2615,10 @@ static opt_flow_t opt_build_field(opt_builder_t *b, const uint8_t *ip, sv_op_t o
     if (flow != OPT_FLOW_GENERIC) return flow;
   }
   if (!store && opcode == OP_GET_FIELD && atom->len == 6 && memcmp(atom->str, "length", 6) == 0) return opt_build_length(b);
+  if (opcode == OP_INIT_FIELD && ic->slow_hits >= SV_INIT_FIELD_FILL_LIMIT) {
+    bool learned = ic->cached_shape || ic->guard.add.from_shape;
+    if (!learned || sv_init_field_ic_full(ic, b->js->ic.epoch)) return OPT_FLOW_GENERIC;
+  }
   opt_field_plan_t plan = {.opcode = opcode, .store = store, .ic_index = ic_index, .add_epoch_guarded = opcode == OP_INIT_FIELD};
   plan.count = opt_field_memo_merge(b, atom, store, plan.cases, opt_field_cases(b, ic, atom, store, plan.cases));
   plan.add_count = store ? opt_add_cases(b->js, ic, atom, plan.adds, plan.runtime_adds, &plan.runtime_count) : 0;

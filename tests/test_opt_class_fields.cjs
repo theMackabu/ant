@@ -535,4 +535,51 @@ assert.strictEqual(rebindSetterRuns, 0);
 assert.strictEqual(Object.getPrototypeOf(makeRebind()), Object.getPrototypeOf(after));
 checkBasics();
 
+class Fanned { a = 1; b = 2 }
+const fannedKinds = [];
+for (let k = 0; k < 40; k++) fannedKinds.push(class extends Fanned { });
+function makeFanned(i) { return new fannedKinds[i % fannedKinds.length](); }
+for (let i = 0; i < WARM * 4; i++) {
+  const made = makeFanned(i);
+  plain(made, 'a', 1);
+  plain(made, 'b', 2);
+  assert.deepStrictEqual(Object.keys(made), ['a', 'b']);
+  assert.strictEqual(Object.getPrototypeOf(made), fannedKinds[i % fannedKinds.length].prototype);
+}
+
+class HandsBack { constructor(target) { return target; } }
+class Stamper extends HandsBack { mark = 1; side = 2 }
+const stamperTargets = [
+  () => [], () => function () {}, () => new Uint8Array(1), () => new Proxy({}, {}),
+  () => ({}), () => ({ mark: 0 }), () => Object.create(null), () => new Map(),
+];
+function stampOne(i) {
+  const target = stamperTargets[i % stamperTargets.length]();
+  new Stamper(target);
+  return target;
+}
+for (let i = 0; i < WARM * 4; i++) {
+  const target = stampOne(i);
+  plain(target, 'mark', 1);
+  plain(target, 'side', 2);
+}
+assert.throws(() => new Stamper(Object.freeze([])), TypeError);
+assert.throws(() => new Stamper(Object.preventExtensions(function () {})), TypeError);
+assert.throws(() => new Stamper(Object.seal({ mark: 0 })), TypeError);
+let stamperSetterRuns = 0;
+const stamped = stampOne(4);
+Object.defineProperty(stamped, 'mark', { get() { return 'get'; }, set(v) { stamperSetterRuns++; }, configurable: true });
+new Stamper(stamped);
+plain(stamped, 'mark', 1);
+assert.strictEqual(stamperSetterRuns, 0);
+
+class ArrayOnly extends Array { tag = 'array'; size = this.length }
+function makeArrayOnly(n) { return new ArrayOnly(n); }
+for (let i = 0; i < WARM * 2; i++) {
+  const made = makeArrayOnly(3);
+  plain(made, 'tag', 'array');
+  plain(made, 'size', 3);
+  assert.strictEqual(made.length, 3);
+}
+
 console.log('ok');
