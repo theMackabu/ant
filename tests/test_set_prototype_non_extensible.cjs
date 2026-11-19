@@ -40,4 +40,28 @@ assert.strictEqual(Reflect.setPrototypeOf(selfReferential, selfReferential), fal
 const child = Object.create(selfReferential);
 assert.throws(() => { selfReferential.__proto__ = child; }, TypeError);
 
+for (const depth of [1, 7, 8, 9, 40]) {
+  const root = {};
+  let leaf = root;
+  for (let i = 0; i < depth; i++) leaf = Object.create(leaf);
+  assert.throws(() => Object.setPrototypeOf(root, leaf), TypeError);
+  assert.strictEqual(Reflect.setPrototypeOf(root, leaf), false);
+  assert.throws(() => { root.__proto__ = leaf; }, TypeError);
+  assert.strictEqual(Object.getPrototypeOf(root), Object.prototype);
+
+  const other = {};
+  assert.strictEqual(Object.setPrototypeOf(other, leaf), other);
+  assert.strictEqual(Object.getPrototypeOf(other), leaf);
+}
+
+const viaFunction = function () {};
+const belowFunction = Object.create(Object.create(viaFunction));
+assert.throws(() => Object.setPrototypeOf(viaFunction, belowFunction), TypeError);
+assert.strictEqual(Object.getPrototypeOf(viaFunction), Function.prototype);
+
+const behindProxy = {};
+const proxied = new Proxy(Object.create(behindProxy), {});
+assert.strictEqual(Reflect.setPrototypeOf(behindProxy, proxied), true);
+assert.strictEqual(Object.getPrototypeOf(behindProxy), proxied);
+
 console.log('ok');

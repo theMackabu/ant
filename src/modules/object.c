@@ -114,11 +114,7 @@ static ant_value_t builtin_object_getPrototypeOf(ant_params_t) {
   
   if (is_object_type(obj)) {
     if (is_proxy(obj)) return proxy_get_prototype_of(js, obj);
-    ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-    ant_value_t proto = ptr ? ant_object_proto(ptr) : Ant_Value_Undefined;
-    uint8_t pt = vtype(proto);
-    if (__builtin_expect(pt == kTypeObject || pt == kTypeArray || pt == kTypeNull, 1)) return proto;
-    return js_cfunc_demote_promoted(js, get_proto(js, obj));
+    return js_get_proto_demoted(js, obj);
   }
   
   return Ant_Value_Null;
@@ -176,7 +172,7 @@ static ant_value_t builtin_proto_getter(ant_params_t) {
   
   if (is_object_type(call_this)) {
     if (is_proxy(call_this)) return proxy_get_prototype_of(js, call_this);
-    return js_cfunc_demote_promoted(js, get_proto(js, call_this));
+    return js_get_proto_demoted(js, call_this);
   }
   
   return js_primitive_prototype(js, t);
@@ -448,14 +444,12 @@ static ant_value_t builtin_object_create(ant_params_t) {
   ant_value_t proto = args[0];
   uint8_t pt = vtype(proto);
   
-  if (pt == kTypeBuiltin) {
+  if (__builtin_expect(!((1u << pt) & (T_OBJECT_MASK | (1u << kTypeNull))), 0)) {
+    if (pt != kTypeBuiltin)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Object prototype may only be an Object or null");
     proto = js_cfunc_promote(js, proto);
     if (is_err(proto)) return proto;
-    pt = kTypeFunction;
   }
-  
-  if (!is_object_type(proto) && pt != kTypeNull)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Object prototype may only be an Object or null");
 
   ant_value_t obj = js_mkobj_with_proto(js, proto);
   if (is_err(obj)) return obj;
