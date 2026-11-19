@@ -549,6 +549,13 @@ static ant_value_t esm_require_esm_exports(ant_t *js, ant_value_t ns) {
   return wrapper;
 }
 
+static void esm_seal_namespace(ant_t *js, ant_value_t ns) {
+  ant_object_t *ptr = is_object_type(ns) ? js_obj_ptr(js_as_obj(ns)) : NULL;
+  if (!ptr || !ptr->shape || !js_check_brand(ns, BRAND_MODULE_NAMESPACE)) return;
+  if (!js_obj_ensure_unique_shape(ptr)) return;
+  if (ant_shape_clear_attrs_all(js, ptr->shape, ANT_PROP_ATTR_CONFIGURABLE)) ptr->flags.extensible = 0;
+}
+
 ant_value_t esm_value_namespace(ant_t *js, ant_value_t value, ant_value_t default_value) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, value);
@@ -575,6 +582,7 @@ ant_value_t esm_value_namespace(ant_t *js, ant_value_t value, ant_value_t defaul
 
   js_set(js, ns, "default", default_value);
   js_set_slot(ns, SLOT_DEFAULT, default_value);
+  esm_seal_namespace(js, ns);
   
   GC_ROOT_RESTORE(js, root_mark);
   return ns;
@@ -631,12 +639,37 @@ static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_v
   return ns;
 }
 
+static void esm_builtin_default_exports(ant_t *js, const esm_module_t *mod, ant_value_t ns) {
+  if (!mod->embedded_code || !mod->path || vtype(js_get_slot(ns, SLOT_DEFAULT)) != kTypeUndefined) return;
+  esm_builtin_t builtin = esm_find_builtin(mod->path, strlen(mod->path));
+  if (builtin.kind == ANT_BUILTIN_NAME_NONE || builtin.library || !builtin.alias) return;
+
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t exports = Ant_Object_Create(js);
+  GC_ROOT_PIN(js, exports);
+  ant_value_t keys = js_own_property_keys(js, ns, false, true);
+  GC_ROOT_PIN(js, keys);
+
+  ant_offset_t len = is_err(keys) ? 0 : js_arr_len(js, keys);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t key = js_arr_get(js, keys, i);
+    if (vtype(key) != kTypeString) continue;
+    js_setprop(js, exports, key, js_get(js, ns, js_getstr(js, key, NULL)));
+  }
+
+  js_set(js, ns, "default", exports);
+  js_set_slot_wb(js, ns, SLOT_DEFAULT, exports);
+  GC_ROOT_RESTORE(js, root_mark);
+}
+
 static ant_value_t esm_complete_namespace_module(ant_t *js, esm_module_t *mod, ant_value_t ns) {
   mod->namespace_obj = ns;
+  esm_builtin_default_exports(js, mod, ns);
   mod->default_export = esm_default_export_or_namespace(js, ns);
   mod->is_loaded = true;
   mod->is_loading = false;
   js_set_slot(ns, SLOT_MODULE_LOADING, Ant_Value_Undefined);
+  esm_seal_namespace(js, ns);
   return ns;
 }
 
