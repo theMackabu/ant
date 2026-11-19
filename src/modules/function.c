@@ -186,9 +186,7 @@ static ant_value_t builtin_function_empty(ant_params_t) {
 }
 
 ant_value_t builtin_function_call(ant_params_t) {
-  if (!is_callable(call_this)) {
-    return js_mkerr(js, "call requires a function");
-  }
+  if (!is_callable(call_this)) return js_mkerr(js, "call requires a function");
   
   ant_value_t this_arg = (nargs > 0) ? args[0] : Ant_Value_Undefined;
   ant_value_t *call_args = NULL;
@@ -202,10 +200,11 @@ ant_value_t builtin_function_call(ant_params_t) {
 static ant_value_t builtin_function_toString(ant_params_t) {
   uint8_t t = vtype(call_this);
   
-  if (t == kTypeObject && is_callable(call_this)) return Ant_String_FromLiteral(js, "function () { [native code] }");
-  if (t != kTypeFunction && t != kTypeBuiltin) {
+  if (t == kTypeObject && is_callable(call_this)) 
+    return Ant_String_FromLiteral(js, "function () { [native code] }");
+
+  if (t != kTypeFunction && t != kTypeBuiltin)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Function.prototype.toString requires that 'this' be a Function");
-  }
   
   // TODO: make dry
   if (t == kTypeBuiltin) {

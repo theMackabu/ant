@@ -155,9 +155,7 @@ static ant_value_t reflect_apply(ant_params_t) {
   ant_value_t this_arg = args[1];
   ant_value_t args_arr = args[2];
   
-  if (!is_callable(target)) {
-    return js_mkerr(js, "Reflect.apply: first argument must be a function");
-  }
+  if (!is_callable(target)) return js_mkerr(js, "Reflect.apply: first argument must be a function");
 
   if (vtype(args_arr) == kTypeUndefined || vtype(args_arr) == kTypeNull) return js_mkerr_typed(
     js, JS_ERR_TYPE,
