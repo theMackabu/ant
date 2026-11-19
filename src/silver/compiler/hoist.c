@@ -267,6 +267,14 @@ int split_param_binding(sv_compiler_t *c, int param_local) {
   return body_local;
 }
 
+static inline bool has_parameter_arguments(const sv_compiler_t *c) {
+  return c->arguments_local >= 0 && c->arguments_local < c->param_bind_end;
+}
+
+static inline bool is_parameter_arguments(const sv_compiler_t *c, int local) {
+  return local == c->arguments_local && has_parameter_arguments(c);
+}
+
 static inline bool names_parameter(sv_compiler_t *c, const char *name, uint32_t len) {
   int local = resolve_local(c, name, len);
   return local >= 0 && local < c->param_bind_end;
@@ -384,7 +392,10 @@ void hoist_lexical_pattern(sv_compiler_t *c, sv_ast_t *pat,
         break;
       }
       if (declare_spilled(c, pat->str, pat->len, is_const, false)) break;
-      int local = ensure_local_at_depth(c, pat->str, pat->len, is_const, c->scope_depth);
+      bool shadows_arguments = c->scope_depth == 0 && has_parameter_arguments(c) && resolve_local(c, pat->str, pat->len) == c->arguments_local;
+      int local = shadows_arguments
+        ? add_local(c, pat->str, pat->len, is_const, 0)
+        : ensure_local_at_depth(c, pat->str, pat->len, is_const, c->scope_depth);
       if (!(c->locals[local].eval_flags & SV_EVAL_BIND_LEXICAL)) c->eval_scope_shareable = false;
       c->locals[local].eval_flags |= SV_EVAL_BIND_LEXICAL;
       break;
@@ -641,8 +652,12 @@ void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
       for (int j = 0; j < funcs.count; j++) {
         sv_ast_t *fn = funcs.items[j];
         if (is_sloppy_eval(c)) add_eval_var(c, fn->str, fn->len, true);
-        else if (resolve_local_at_depth(c, fn->str, fn->len, 0) == -1 && !names_parameter(c, fn->str, fn->len))
-          add_local(c, fn->str, fn->len, false, 0);
+        else {
+          int existing = resolve_local_at_depth(c, fn->str, fn->len, 0);
+          if (is_parameter_arguments(c, existing)) {
+            if (c->param_split) split_param_binding(c, existing);
+          } else if (existing == -1 && !names_parameter(c, fn->str, fn->len)) add_local(c, fn->str, fn->len, false, 0);
+        }
       }
     }
   }
@@ -709,7 +724,7 @@ void hoist_one_func(sv_compiler_t *c, sv_ast_t *node, bool annex_b_update_var) {
   emit_closure(c, idx);
   emit_set_function_name(c, node->str, node->len);
   int annex_var = annex_b_update_var && !is_sloppy_eval(c) ? resolve_local_at_depth(c, node->str, node->len, 0) : -1;
-  if (annex_var >= 0 && ((c->locals[annex_var].eval_flags & SV_EVAL_BIND_LEXICAL) || annex_var < c->param_bind_end)) annex_var = -1;
+  if (annex_var >= 0 && ((c->locals[annex_var].eval_flags & SV_EVAL_BIND_LEXICAL) || (annex_var < c->param_bind_end && annex_var != c->arguments_local))) annex_var = -1;
   bool eval_annex_var = annex_b_update_var && is_sloppy_eval(c) && find_eval_var(c, node->str, node->len) >= 0;
   if (annex_var >= 0 || eval_annex_var) emit_op(c, OP_DUP);
   if (is_sloppy_eval(c) && c->scope_depth == 0) {

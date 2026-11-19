@@ -140,6 +140,13 @@ const cases = [
   ["function g(x, a = () => arguments) { return a() === arguments } return g(1)", "true"],
   ["function g(x, a = () => { arguments[0] = 'w' }) { a(); return [x, arguments[0]] } return g(1)", "[1,\"w\"]"],
   ["function g(x, a = () => arguments.length) { return [a(), arguments.length] } return g(1, undefined, 2)", "[3,3]"],
+  ["function f(a = 1) { { function arguments() {} } return typeof arguments } return f()", "\"function\""],
+  ["function f(a = () => arguments) { { function arguments() {} } return [typeof arguments, typeof a()] } return f()", "[\"function\",\"object\"]"],
+  ["function f(a = () => arguments) { if (false) { function arguments() {} } return [typeof arguments, typeof a()] } return f()", "[\"object\",\"object\"]"],
+  ["function f(a = () => arguments) { let arguments = 1; return [arguments, typeof a()] } return f()", "[1,\"object\"]"],
+  ["function f(a = () => arguments) { const arguments = 1; return [arguments, typeof a()] } return f()", "[1,\"object\"]"],
+  ["function f(a = () => arguments) { eval('var arguments = 3'); return [arguments, typeof a()] } return f()", "[3,\"object\"]"],
+  ["function f(a = () => arguments) { for (var arguments of [3]); return [arguments, typeof a()] } return f()", "[3,\"object\"]"],
 ];
 
 for (const [src, expected] of cases) assert.strictEqual(outcome(src), expected, src);
