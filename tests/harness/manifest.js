@@ -130,6 +130,7 @@ export function targets() {
     'test_define_property_descriptor_reads.cjs',
     'test_class_static_block_hoisting.cjs',
     'test_direct_eval_environment.cjs',
+    'test_eval_compile_cache.cjs',
     'test_disposal_error_values.cjs',
     'test_duplicate_declarations.cjs',
     'test_dynamic_import_builtin_default.mjs',

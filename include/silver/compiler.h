@@ -307,9 +307,16 @@ typedef struct sv_compiler {
 
 #define SV_PARAM(name_literal) ((sv_param_t){ (name_literal), sizeof(name_literal) - 1 })
 
+enum {
+  SV_EVAL_SHADOWS_UNDEFINED   = 1 << 0,
+  SV_EVAL_SHADOWS_GLOBAL_THIS = 1 << 1,
+};
+
+uint8_t sv_eval_shadow_bits(ant_t *js, ant_value_t eval_env, const char *source, size_t len);
+
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program, sv_compile_mode_t mode,
-  const char *source, ant_offset_t source_len, ant_value_t eval_env
+  const char *source, ant_offset_t source_len, uint8_t eval_shadows
 );
 
 sv_func_t *sv_compile_function_with_params(

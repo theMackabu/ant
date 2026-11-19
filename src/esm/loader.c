@@ -1495,7 +1495,7 @@ static ant_value_t esm_eval_ambiguous_js_source(
     
     sv_func_t *func = js_compile_parsed_bytecode(
       js, program, js_code, 
-      js_len, SV_COMPILE_MODULE, Ant_Value_Undefined
+      js_len, SV_COMPILE_MODULE, 0
     ); 
     
     parse_arena_rewind(js, parse_mark);
@@ -1813,7 +1813,7 @@ static ant_value_t esm_eval_parsed_record(
 ) {
   sv_func_t *func = js_compile_parsed_bytecode(
     js, record->program, source,
-    source_len, SV_COMPILE_MODULE, Ant_Value_Undefined
+    source_len, SV_COMPILE_MODULE, 0
   );
   
   esm_module_record_cleanup(js, record);
