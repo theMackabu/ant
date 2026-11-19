@@ -29,6 +29,12 @@ const cases = [
   ["var log = []; var f = () => class { [(log.push('a'), 'a')]() {} static [(log.push('b'), 'b')] = 1 }; f(); f(); return log", "value [\"a\",\"b\",\"a\",\"b\"]"],
   ["var K = class { static ['a'] = 1; ['b']() { return 2 } static ['c']() { return 3 } }; return [K.a, new K().b(), K.c()]", "value [1,2,3]"],
   ["function f() { return class { ['x' + arguments.length]() { return 1 } } } return Object.getOwnPropertyNames(f(1, 2).prototype)", "value [\"constructor\",\"x2\"]"],
+  ["class C { [C.x]() {} }", "throw ReferenceError"],
+  ["class C { [C] = 1 } return Object.keys(new C())", "throw ReferenceError"],
+  ["class C { static [C.name] = 1 }", "throw ReferenceError"],
+  ["var C = 'outer'; var D = class C { [C]() {} }; return Object.getOwnPropertyNames(D.prototype)", "throw ReferenceError"],
+  ["var f; class C { [(f = () => C, 'k')]() {} } return f() === C", "value true"],
+  ["var f; var D = class C { [(f = () => C, 'k')] = 1 }; return f() === D", "value true"],
 ];
 
 const failed = [];
