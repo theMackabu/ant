@@ -291,6 +291,7 @@ typedef struct sv_compiler {
   int eval_scope_shared_withs;
   const void *eval_scope_shared_private;
   bool eval_scope_shareable;
+  uint32_t eval_scope_flat_used;
 
   sv_loop_t *loops;
   int loop_count;

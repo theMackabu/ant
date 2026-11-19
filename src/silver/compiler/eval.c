@@ -326,6 +326,16 @@ static bool capture_local_range_scope(
   return true;
 }
 
+static constexpr size_t SV_EVAL_SCOPE_FLAT_BUDGET = 65536;
+
+static size_t eval_scope_flat_cost(const sv_compiler_t *c) {
+  size_t budget = SV_EVAL_SCOPE_FLAT_BUDGET - c->eval_scope_flat_used;
+  size_t count = (size_t)c->local_count + (size_t)c->with_depth + (size_t)private_eval_binding_count(c);
+  for (const sv_compiler_t *enc = c->enclosing; enc && count <= budget; enc = enc->enclosing)
+    count += (size_t)enc->local_count + (size_t)enc->with_depth;
+  return count <= budget ? count : 0;
+}
+
 static int share_dynamic_eval_scope(sv_compiler_t *c, uint32_t *scope_index_out) {
   if (
     !c->eval_scope_shareable || c->eval_scope_shared_withs != c->with_depth ||
@@ -342,6 +352,7 @@ static int share_dynamic_eval_scope(sv_compiler_t *c, uint32_t *scope_index_out)
     *scope_index_out = (uint32_t)c->eval_scope_shared;
     return 1;
   }
+  if (eval_scope_flat_cost(c)) return 0;
 
   uint32_t scope_index;
   if (!capture_local_range_scope(
@@ -382,7 +393,9 @@ bool capture_dynamic_eval_scope(
   sv_eval_binding_set_t binding_set;
   if (!eval_binding_set_init(c, &binding_set, candidate_count)) return false;
 
-  int base_locals = eval_scope_base_locals(c);
+  size_t flat_cost = eval_scope_flat_cost(c);
+  int base_locals = flat_cost ? c->local_count : eval_scope_base_locals(c);
+  c->eval_scope_flat_used += (uint32_t)flat_cost;
   if (base_locals == c->local_count) {
     if (!eval_scope_builder_capture_locals(
           c, scope, &binding_set)) goto capture_failed;
