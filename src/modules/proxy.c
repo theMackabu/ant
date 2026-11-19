@@ -655,6 +655,27 @@ static_assert(
   "proxy trap name cache does not match the trap list"
 );
 
+static constexpr uint32_t PROXY_TRAP_SCAN_MAX = 8;
+
+static uint16_t proxy_shape_trap_mask(const ant_shape_t *shape, const char **names) {
+  uint16_t mask = 0;
+  uint32_t count = ant_shape_count(shape);
+
+  if (count > PROXY_TRAP_SCAN_MAX) {
+    for (int i = 0; i < PROXY_TRAP_COUNT; i++)
+      if (ant_shape_lookup_interned(shape, names[i]) >= 0) mask |= (uint16_t)(1u << i);
+    return mask;
+  }
+
+  for (uint32_t slot = 0; slot < count; slot++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(shape, slot);
+    if (!prop || prop->type != ANT_SHAPE_KEY_STRING) continue;
+    for (int i = 0; i < PROXY_TRAP_COUNT; i++)
+      if (prop->key.interned == names[i]) { mask |= (uint16_t)(1u << i); break; }
+  }
+  return mask;
+}
+
 static void proxy_trap_mask_refresh(ant_t *js, ant_proxy_state_t *data) {
   const char **names = js->intern.proxy_traps;
   for (int i = 0; !names[PROXY_TRAP_COUNT - 1] && i < PROXY_TRAP_COUNT; i++) {
@@ -664,11 +685,17 @@ static void proxy_trap_mask_refresh(ant_t *js, ant_proxy_state_t *data) {
 
   uint16_t mask = 0;
   ant_value_t cur = data->handler;
+  ant_object_t *object_proto = is_object_type(js->sym.object_proto) ? js_obj_ptr(js->sym.object_proto) : NULL;
+  bool object_proto_plain = false;
+
   for (int depth = 0; is_object_type(cur); depth++) {
     ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
     if (depth == MAX_PROTO_CHAIN_DEPTH || !ptr || !ptr->shape || ptr->flags.is_exotic) return;
-    for (int i = 0; i < PROXY_TRAP_COUNT; i++)
-      if (ant_shape_lookup_interned(ptr->shape, names[i]) >= 0) mask |= (uint16_t)(1u << i);
+    if (ptr != object_proto || js->proxy_proto_plain_epoch != js->ic.epoch) {
+      uint16_t found = proxy_shape_trap_mask(ptr->shape, names);
+      if (ptr == object_proto) object_proto_plain = !found;
+      mask |= found;
+    }
     cur = ant_object_proto(ptr);
   }
 
@@ -678,6 +705,7 @@ static void proxy_trap_mask_refresh(ant_t *js, ant_proxy_state_t *data) {
     cur = ant_object_proto(ptr);
   }
 
+  if (object_proto_plain) js->proxy_proto_plain_epoch = js->ic.epoch;
   data->trap_mask = mask;
   data->trap_epoch = js->ic.epoch;
 }
@@ -1068,15 +1096,14 @@ static ant_value_t proxy_set_own_writable(
   else if (vtype(trap) == kTypeUndefined && !fresh && proxy_target_plain_writable(js, target, key, key_len))
     result = js_set_reporting(js, target, key_str, value);
   else {
-    ant_value_t update = Ant_Object_CreateBare(js);
+    ant_value_t update = Ant_Object_Create(js);
     GC_ROOT_PIN(js, update);
     if (!is_err(update)) {
-      if (is_object_type(js->sym.object_proto)) js_set_proto_init(update, js->sym.object_proto);
-      js_set(js, update, "value", value);
+      mkprop_define_data(js, update, "value", 5, value);
       if (fresh) {
-        js_set(js, update, "writable", Ant_Value_True);
-        js_set(js, update, "enumerable", Ant_Value_True);
-        js_set(js, update, "configurable", Ant_Value_True);
+        mkprop_define_data(js, update, "writable", 8, Ant_Value_True);
+        mkprop_define_data(js, update, "enumerable", 10, Ant_Value_True);
+        mkprop_define_data(js, update, "configurable", 12, Ant_Value_True);
       }
     }
     result = is_err(update) ? update
@@ -1104,8 +1131,8 @@ ant_value_t proxy_set_with_receiver_reason(
   if (own && !data->host && !proxy_target_refuses_add(data->target) && proxy_handler_plain_for_set(js, data)) {
     const char *interned = intern_string(js, key, key_len);
     ant_object_t *plain = vtype(data->target) == kTypeObject ? js_obj_ptr(data->target) : NULL;
-    int32_t slot = interned && is_plain_set_target(plain) ? ant_shape_lookup_interned(plain->shape, interned) : -1;
-    if (own_writable_data_slot(plain, slot) && vtype(js_string_wrapper_value(data->target)) != kTypeString) {
+    int32_t slot = plain && interned && is_plain_set_target(plain) ? ant_shape_lookup_interned(plain->shape, interned) : -1;
+    if (slot >= 0 && own_writable_data_slot(plain, slot) && vtype(js_string_wrapper_value(data->target)) != kTypeString) {
       store_own_data_slot(js, plain, (uint32_t)slot, interned, value);
       return Ant_Value_True;
     }
