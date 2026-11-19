@@ -456,6 +456,7 @@ typedef OPT_VEC(uint32_t) ir_slots_t;
 typedef struct {
   sv_func_t *func;
   uint32_t bc_off;
+  uint32_t site_off;
   opt_resume_mode_t mode;
   uint32_t dst;
   ir_slot_values_t values;
@@ -633,6 +634,16 @@ static inline bool ir_exit_sites_contain_slot(const ir_graph_t *graph, sv_func_t
     if (site->bc_off == bc_off && site->kind == kind && (site->slot == 0 || site->slot == slot || kind == OPT_EXIT_BAD_SHAPE)) return true;
   }
   return false;
+}
+
+static inline uint32_t ir_exit_sites_count(const ir_graph_t *graph, sv_func_t *func, uint32_t bc_off, opt_exit_kind_t kind) {
+  sv_func_t *in = func ? func : graph->func;
+  uint32_t count = 0;
+  for (uint32_t i = 0; i < graph->exit_sites.len; i++) {
+    const ir_exit_site_t *site = &graph->exit_sites.items[i];
+    count += (site->func ? site->func : graph->func) == in && site->bc_off == bc_off && site->kind == kind;
+  }
+  return count;
 }
 
 static inline bool ir_exit_sites_contain(const ir_graph_t *graph, sv_func_t *func, uint32_t bc_off, opt_exit_kind_t kind) {

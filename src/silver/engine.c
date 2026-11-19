@@ -1537,6 +1537,31 @@ void sv_frame_push_try_handlers(sv_vm_t *vm, sv_frame_t *frame, sv_func_t *func,
   frame->handler_top = (uint16_t)vm->handler_depth;
 }
 
+void sv_frame_resume_at(
+  sv_vm_t *vm, sv_frame_t *frame, sv_func_t *func, int off,
+  const ant_value_t *stack, int depth, sv_jit_finally_t *finally, bool throwing
+) {
+  int base_sp = (int)(frame->lp + func->max_locals - vm->stack);
+  for (int i = 0; i < depth; i++) vm->stack[base_sp + i] = stack[i];
+  vm->sp = base_sp + depth;
+
+  sv_frame_reset_handlers(vm, frame);
+  frame->completion.kind = SV_COMPLETION_NONE;
+  frame->completion.value = Ant_Value_Undefined;
+  vm->jit.resume.ip_offset = off;
+  vm->jit.resume.finally = finally;
+  sv_frame_push_try_handlers(vm, frame, func, off, base_sp);
+  if (finally) sv_resume_finally_entry(vm, frame, func);
+
+  if (throwing && depth > 0) {
+    frame->completion.kind = SV_COMPLETION_THROW;
+    frame->completion.value = vm->stack[vm->sp - 1];
+  }
+
+  sv_clear_jit_resume(vm);
+  frame->ip = func->code + off;
+}
+
 static inline bool sv_async_inline_at(const sv_vm_t *vm, int fp) {
   return vm->async_inline.len != 0 && vm->async_inline.records[vm->async_inline.len - 1].fp == fp;
 }

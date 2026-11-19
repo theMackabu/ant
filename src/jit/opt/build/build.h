@@ -50,6 +50,7 @@ static inline bool opt_is_super_call(const sv_func_t *func, uint32_t call_off) {
 }
 
 uint32_t opt_learned_shapes(const sv_func_t *func, uint32_t bc_off);
+uint32_t opt_call_targets_seen(const sv_func_t *func, uint32_t bc_off);
 
 bool opt_build_graph(
   ant_t *js, sv_func_t *func, sv_closure_t *closure, opt_build_exit_sites_fn exit_sites_of,
