@@ -304,6 +304,7 @@ void gc_run(ant_t *js) {
   uint64_t start_ns = gc_now_ns();
   js->gc.alloc_since_major += gc_young_alloc_bytes(js) + js->gc.pool_alloc + js->gc.code_alloc;
   
+  sv_eval_cache_age(js);
   gc_ropes_begin_result_t rope_begin = gc_ropes_begin(js, false);
   Ant_Assert(
     rope_begin != GC_ROPES_BEGIN_RETRY_MAJOR,
