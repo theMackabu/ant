@@ -1610,6 +1610,40 @@ size_t gc_array_storage_cached_bytes(ant_t *js) {
   return bytes;
 }
 
+gc_shared_elements_t *gc_shared_elements_alloc(ant_t *js, const ant_value_t *values, uint32_t count) {
+  size_t bytes = sizeof(gc_shared_elements_t) + (size_t)count * sizeof(ant_value_t);
+  gc_shared_elements_t *block = malloc(bytes);
+  if (!block) return NULL;
+  
+  *block = (gc_shared_elements_t){.refs = 1, .count = count};
+  memcpy(block->values, values, (size_t)count * sizeof(ant_value_t));
+  for (uint32_t i = 0; i < count; i++) {
+    block->has_holes |= is_empty_slot(values[i]);
+    block->has_heap |= gc_value_is_heap_ref(values[i]);
+  }
+  js->alloc_bytes.arrays += bytes;
+  
+  return block;
+}
+
+void gc_shared_elements_mark(ant_t *js, const gc_shared_elements_t *block) {
+  if (!block || !block->has_heap) return;
+  for (uint32_t i = 0; i < block->count; i++) gc_mark_value(js, block->values[i]);
+}
+
+void gc_shared_elements_release(ant_t *js, gc_shared_elements_t *block) {
+  if (--block->refs) return;
+  size_t bytes = sizeof(gc_shared_elements_t) + (size_t)block->count * sizeof(ant_value_t);
+  Ant_Assert(js->alloc_bytes.arrays >= bytes, "shared elements released more bytes than were allocated");
+  js->alloc_bytes.arrays -= bytes;
+  free(block);
+}
+
+void gc_shared_elements_finalize(ant_t *js, ant_object_t *obj) {
+  gc_shared_elements_release(js, gc_shared_elements_of(obj->u.array.data));
+  obj->u.array.data = NULL;
+}
+
 static inline void gc_free_array_storage(ant_t *js, ant_object_t *obj) {
   if (!obj->u.array.data) return;
   gc_array_storage_release(js, obj->u.array.data, obj->u.array.cap);

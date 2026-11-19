@@ -393,14 +393,17 @@ bool array_result_extensible(ant_value_t result) {
   return !ptr || ptr->flags.extensible;
 }
 
+bool array_result_plain(ant_value_t result) {
+  static constexpr uint16_t plain_mask = ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXOTIC | ANT_OBJECT_FLAG_ARGUMENTS;
+  if (vtype(result) != kTypeArray) return false;
+  const ant_object_t *ptr = (const ant_object_t *)vptr(result);
+  return (ptr->flags.raw & plain_mask) == ANT_OBJECT_FLAG_EXTENSIBLE && ptr->shape && !ant_shape_may_have_index_keys(ptr->shape);
+}
+
 static __attribute__((noinline)) ant_value_t array_result_set_checked(ant_t *js, ant_value_t result, ant_offset_t idx, ant_value_t val) {
-  if (!array_result_extensible(result)) {
-    ant_object_t *ptr = js_obj_ptr(js_as_obj(result));
-    bool has = arr_has(js, result, idx);
-    if (ptr->flags.sealed && has)
-      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot redefine property: %u", (unsigned)idx);
-    if (!has)
-      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot add property %u, object is not extensible", (unsigned)idx);
+  if (__builtin_expect(!array_result_plain(result), 0)) {
+    ant_value_t defined = js_create_data_property_or_throw(js, result, Ant_Value_FromNumber((double)idx), val);
+    return is_err(defined) ? defined : Ant_Value_Undefined;
   }
   
   arr_set(js, result, idx, val);
@@ -659,28 +662,36 @@ ant_value_t array_alloc_intrinsic(ant_t *js, ant_value_t source, ant_offset_t le
   return arr;
 }
 
-static ant_value_t array_construct_from_ctor(ant_t *js, ant_value_t ctor, ant_offset_t length_hint) {
+static ant_value_t array_construct_from_ctor(ant_t *js, ant_value_t ctor, ant_value_t *ctor_args, int ctor_argc) {
+  if (vtype(ctor) == kTypeObject && is_proxy(ctor))
+    return js_proxy_construct(js, ctor, ctor_args, ctor_argc, ctor);
+
+  ant_value_t new_target = ctor;
+  ant_value_t proto = sv_prepare_construct_meta(js, ctor, ctor, &new_target);
+  if (is_err(proto)) return proto;
+
   ant_value_t seed = Ant_Object_CreateBare(js);
   if (is_err(seed)) return seed;
-
-  ant_value_t proto = js_get(js, ctor, "prototype");
-  if (is_err(proto)) return proto;
   if (is_object_type(proto)) js_set_proto_init(seed, proto);
 
-  ant_value_t ctor_args[1] = { Ant_Value_FromNumber((double)length_hint) };
-  ant_value_t constructed = sv_vm_call(js->vm, js, ctor, seed, ctor_args, 1, NULL, ctor);
-  if (is_err(constructed)) return constructed;
+  ant_value_t ctor_this = seed;
+  ant_value_t result = sv_vm_call(js->vm, js, ctor, seed, ctor_args, ctor_argc, &ctor_this, new_target);
 
-  ant_value_t result = is_object_type(constructed) ? constructed : seed;
-  js_set_slot_wb(js, result, SLOT_CTOR, ctor);
-  
-  return result;
+  if (is_err(result)) return result;
+  return sv_construct_result(result, ctor_this, seed);
 }
 
 ant_value_t array_alloc_from_ctor_with_length(ant_t *js, ant_value_t ctor, ant_offset_t length_hint) {
-  if (vtype(ctor) != kTypeFunction && vtype(ctor) != kTypeBuiltin) return Ant_Array_Create(js);
+  if (!js_is_constructor(ctor)) return Ant_Array_Create(js);
   if (same_ctor_identity(js, ctor, js->sym.array_ctor)) return array_alloc_intrinsic(js, Ant_Value_Undefined, length_hint);
-  return array_construct_from_ctor(js, ctor, length_hint);
+  ant_value_t ctor_args[1] = { Ant_Value_FromNumber((double)length_hint) };
+  return array_construct_from_ctor(js, ctor, ctor_args, 1);
+}
+
+ant_value_t array_alloc_from_ctor(ant_t *js, ant_value_t ctor) {
+  if (!js_is_constructor(ctor)) return Ant_Array_Create(js);
+  if (same_ctor_identity(js, ctor, js->sym.array_ctor)) return Ant_Array_Create(js);
+  return array_construct_from_ctor(js, ctor, NULL, 0);
 }
 
 ant_value_t array_species_create(ant_t *js, ant_value_t receiver, ant_offset_t length, bool *intrinsic) {
@@ -721,12 +732,12 @@ ant_value_t array_grow_readonly_result(ant_t *js, uint64_t idx, ant_value_t valu
   return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot add property %llu, object is not extensible", (unsigned long long)idx);
 }
 
+__attribute__((noinline, cold)) ant_value_t array_length_range_error(ant_t *js) {
+  return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
+}
+
 ant_value_t validate_array_length(ant_t *js, ant_value_t v) {
-  if (vtype(v) != kTypeNumber)
-    return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
-  double d = Ant_Value_AsNumberUnchecked(v);
-  if (d < 0 || d != (uint32_t)d || d >= 4294967296.0)
-    return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
+  if (vtype(v) != kTypeNumber || !array_length_is_valid(Ant_Value_AsNumberUnchecked(v))) return array_length_range_error(js);
   return Ant_Value_Undefined;
 }
 
