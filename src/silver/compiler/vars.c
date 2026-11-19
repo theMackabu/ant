@@ -249,6 +249,95 @@ static bool is_super_call_stmt(const sv_ast_t *stmt) {
   return stmt && stmt->type == N_CALL && is_ident_name(stmt->left, "super");
 }
 
+typedef enum {
+  THIS_FLOW_UNBOUND,
+  THIS_FLOW_BOUND,
+  THIS_FLOW_MAYBE,
+  THIS_FLOW_DEAD,
+} this_flow_t;
+
+static this_flow_t this_flow_join(this_flow_t a, this_flow_t b) {
+  if (a == THIS_FLOW_DEAD) return b;
+  if (b == THIS_FLOW_DEAD) return a;
+  return a == b ? a : THIS_FLOW_MAYBE;
+}
+
+static bool this_flow_opaque(const sv_ast_t *node, this_flow_t state) {
+  ctor_scan_t scan = {0};
+  ctor_scan(node, &scan, false);
+  if (scan.super_calls || scan.has_eval) return false;
+  return !(scan.reads_this || scan.returns) || state == THIS_FLOW_BOUND;
+}
+
+static bool this_flow_args(const sv_ast_t *call, this_flow_t state) {
+  for (int i = 0; i < call->args.count; i++)
+    if (!this_flow_opaque(call->args.items[i], state)) return false;
+  return true;
+}
+
+static bool this_flow_expr(const sv_ast_t *node, this_flow_t *state) {
+  if (!node) return true;
+  
+  if (is_super_call_stmt(node)) {
+    if (*state != THIS_FLOW_UNBOUND || !this_flow_args(node, *state)) return false;
+    *state = THIS_FLOW_BOUND;
+    return true;
+  }
+  
+  if (node->type == N_SEQUENCE)
+    return this_flow_expr(node->left, state) && this_flow_expr(node->right, state);
+  
+  if (node->type == N_TERNARY) {
+    if (!this_flow_opaque(node->cond, *state)) return false;
+    this_flow_t taken = *state, skipped = *state;
+    if (!this_flow_expr(node->left, &taken) || !this_flow_expr(node->right, &skipped)) return false;
+    *state = this_flow_join(taken, skipped);
+    return true;
+  }
+  
+  return this_flow_opaque(node, *state);
+}
+
+static bool this_flow_stmt(const sv_ast_t *node, this_flow_t *state) {
+  if (!node || *state == THIS_FLOW_DEAD) return true;
+  
+  if (node->type == N_BLOCK) {
+    for (int i = 0; i < node->args.count; i++)
+      if (!this_flow_stmt(node->args.items[i], state)) return false;
+    return true;
+  }
+  
+  if (node->type == N_IF) {
+    if (!this_flow_opaque(node->cond, *state)) return false;
+    this_flow_t taken = *state, skipped = *state;
+    if (!this_flow_stmt(node->left, &taken) || !this_flow_stmt(node->right, &skipped)) return false;
+    *state = this_flow_join(taken, skipped);
+    return true;
+  }
+  
+  if (node->type == N_VAR) {
+    for (int i = 0; i < node->args.count; i++) {
+      const sv_ast_t *decl = node->args.items[i];
+      if (!decl || decl->type != N_VARDECL) return this_flow_opaque(node, *state);
+      if (!this_flow_opaque(decl->left, *state) || !this_flow_expr(decl->right, state)) return false;
+    }
+    return true;
+  }
+  
+  if (node->type == N_RETURN || node->type == N_THROW) {
+    if (!this_flow_opaque(node, *state)) return false;
+    *state = THIS_FLOW_DEAD;
+    return true;
+  }
+  
+  return this_flow_expr(node, state);
+}
+
+static bool this_flow_proves_body(const sv_ast_t *body) {
+  this_flow_t state = THIS_FLOW_UNBOUND;
+  return this_flow_stmt(body, &state) && (state == THIS_FLOW_BOUND || state == THIS_FLOW_DEAD);
+}
+
 static bool ast_returns_under_finally(const sv_ast_t *node, bool under) {
   if (!node || node->type == N_FUNC) return false;
   if (node->type == N_RETURN) return under;
@@ -290,6 +379,7 @@ derived_ctor_plan_t derived_ctor_plan(const sv_ast_t *ctor) {
   ctor_scan_t all = {0};
   for (int i = 0; i < ctor->args.count; i++) ctor_scan(ctor->args.items[i], &all, false);
   bool params_are_inert = !all.reads_this && !all.super_calls && !all.has_eval;
+  if (params_are_inert && block_body && this_flow_proves_body(body)) return (derived_ctor_plan_t){0};
   
   ctor_scan(body, &all, false);
   derived_ctor_plan_t plan = {
