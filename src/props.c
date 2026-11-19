@@ -870,14 +870,13 @@ ant_value_t js_delete_prop_ordinary(ant_t *js, ant_value_t obj, const char *key,
     return Ant_Value_FromBool(!is_length_key(key, len) && !parse_array_index(key, len, str_utf16_len(js, obj), &idx));
   }
   
-  if (vtype(obj) == kTypeSymbol || vtype(obj) == kTypeBigInt) return Ant_Value_True;
-  
   if (vtype(obj) == kTypeBuiltin) {
     ant_value_t promoted = js_cfunc_promote(js, obj);
     if (is_err(promoted)) return promoted;
     obj = promoted;
   }
   
+  if (!is_object_type(obj)) return Ant_Value_True;
   ant_value_t original_obj = obj;
   obj = js_as_obj(obj);
   
@@ -957,14 +956,13 @@ ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t l
 }
 
 ant_value_t js_delete_sym_prop_ordinary(ant_t *js, ant_value_t obj, ant_value_t sym) {
-  if (vtype(obj) == kTypeString || vtype(obj) == kTypeSymbol || vtype(obj) == kTypeBigInt) return Ant_Value_True;
-  
   if (vtype(obj) == kTypeBuiltin) {
     ant_value_t promoted = js_cfunc_promote(js, obj);
     if (is_err(promoted)) return promoted;
     obj = promoted;
   }
   
+  if (!is_object_type(obj)) return Ant_Value_True;
   obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr) return Ant_Value_True;
