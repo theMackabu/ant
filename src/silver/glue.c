@@ -1964,7 +1964,7 @@ ant_value_t jit_helper_new_this(ant_t *js, ant_value_t func, ant_value_t new_tar
   ant_value_t proto;
   if (!sv_construct_prototype_data(js, func_obj, closure->func, &proto)) return T_EMPTY;
 
-  ant_value_t obj = js_mkobj_with_proto_slots(js, proto, sv_closure_construct_slots(closure));
+  ant_value_t obj = js_mkobj_with_proto_slots(js, proto, sv_construct_slots(closure->func));
   if (vtype(obj) != kTypeObject) return T_EMPTY;
   
   return obj;
