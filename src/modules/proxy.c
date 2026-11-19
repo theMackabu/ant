@@ -1773,7 +1773,7 @@ ant_value_t proxy_define_property_raw(ant_t *js, ant_value_t proxy, ant_value_t 
   ant_value_t trap = Ant_Value_Undefined;
   
   if (data && !data->revoked && !data->host) {
-    trap = proxy_get_method(js, data->handler, "defineProperty");
+    trap = proxy_trap(js, data, PROXY_TRAP_DEFINE_PROPERTY);
     if (is_err(trap)) return trap;
     
     if (vtype(trap) == kTypeUndefined) {
