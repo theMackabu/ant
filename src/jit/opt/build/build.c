@@ -4553,40 +4553,149 @@ static opt_flow_t opt_build_define_slot(opt_builder_t *b, const uint8_t *ip) {
 
 static constexpr uint32_t OPT_MAX_INLINE_ARRAY = 32;
 static_assert(OPT_MAX_INLINE_ARRAY >= OPT_MAX_CALL_ARGS, "inline array literals take every call-sized literal");
+static_assert(OPT_MAX_INLINE_ARRAY == SV_LITERAL_INLINE_MAX, "small flat literals stay on OP_ARRAY because opt inlines them");
+
+static ir_node_id_t opt_emit_array(opt_builder_t *b, const ir_node_id_t *elements, uint32_t count) {
+  bool inline_elements = count > 0 && count <= OPT_MAX_INLINE_ARRAY && gc_array_storage_fit_class(count) >= 0;
+  for (uint32_t i = 0; i < count && inline_elements; i++) {
+    uint64_t bits;
+    if (ir_constant_value(b->graph, elements[i], &bits) ? bits == IR_VALUE_EMPTY : ir_node(b->graph, elements[i])->op.code == IR_OP_GENERIC)
+      inline_elements = false;
+  }
+  if (!inline_elements && count > OPT_MAX_CALL_ARGS) return IR_NONE;
+  ir_node_id_t inputs[2 + OPT_MAX_INLINE_ARRAY];
+  inputs[0] = inputs[1] = opt_constant(b, IR_VALUE_UNDEFINED);
+  for (uint32_t i = 0; i < count; i++) inputs[2 + i] = opt_tagged(b, elements[i]);
+  if (!inline_elements) return opt_runtime_call(b, (uintptr_t)opt_rt_array, 0, inputs, 2 + count, true, false);
+  ir_op_t op = ir_op(IR_OP_ALLOCATE_ARRAY);
+  op.count = count;
+  ir_node_id_t array = opt_emit(b, op, NULL, 0, OPT_REPR_TAGGED);
+  for (uint32_t i = 0; i < count; i++) {
+    ir_op_t init = ir_op(IR_OP_INITIALIZE_ELEMENT);
+    init.index = i;
+    opt_emit(b, init, (ir_node_id_t[]){array, inputs[2 + i]}, 2, OPT_REPR_NONE);
+  }
+  return array;
+}
 
 static opt_flow_t opt_build_array(opt_builder_t *b, const uint8_t *ip) {
   uint32_t count = sv_get_u16(ip + 1);
-  bool inline_elements = count > 0 && count <= OPT_MAX_INLINE_ARRAY && gc_array_storage_fit_class(count) >= 0;
-  for (uint32_t i = 0; i < count && inline_elements; i++) {
-    ir_node_id_t element = opt_peek(b, count - 1 - i);
-    uint64_t bits;
-    if (ir_constant_value(b->graph, element, &bits) ? bits == IR_VALUE_EMPTY : ir_node(b->graph, element)->op.code == IR_OP_GENERIC)
-      inline_elements = false;
-  }
-  if (!inline_elements && count > OPT_MAX_CALL_ARGS) return OPT_FLOW_GENERIC;
-  ir_node_id_t inputs[2 + OPT_MAX_INLINE_ARRAY];
-  inputs[0] = inputs[1] = opt_constant(b, IR_VALUE_UNDEFINED);
-  for (uint32_t i = 0; i < count; i++) inputs[2 + i] = opt_tagged(b, opt_peek(b, count - 1 - i));
+  ir_node_id_t elements[OPT_MAX_INLINE_ARRAY];
+  for (uint32_t i = 0; i < count && i < OPT_MAX_INLINE_ARRAY; i++) elements[i] = opt_peek(b, count - 1 - i);
   ir_node_id_t array;
-  if (inline_elements) {
-    ir_op_t op = ir_op(IR_OP_ALLOCATE_ARRAY);
-    op.count = count;
-    array = opt_emit(b, op, NULL, 0, OPT_REPR_TAGGED);
-    for (uint32_t i = 0; i < count; i++) {
-      ir_op_t init = ir_op(IR_OP_INITIALIZE_ELEMENT);
-      init.index = i;
-      opt_emit(b, init, (ir_node_id_t[]){array, inputs[2 + i]}, 2, OPT_REPR_NONE);
-    }
-  } else array = opt_runtime_call(b, (uintptr_t)opt_rt_array, 0, inputs, 2 + count, true, false);
+  array = opt_emit_array(b, elements, count);
+  if (array == IR_NONE) return OPT_FLOW_GENERIC;
   opt_drop(b, count);
   opt_push(b, array);
   return OPT_FLOW_CONTINUE;
 }
 
+static opt_flow_t opt_build_bad_operand(opt_builder_t *b);
+
+static constexpr uint32_t OPT_LITERAL_MAX_ALLOCATIONS = 32;
+static constexpr uint32_t OPT_LITERAL_MAX_VALUES = 256;
+static constexpr uint32_t OPT_LITERAL_MAX_NODE_VALUES = OPT_MAX_INLINE_ARRAY;
+
+static bool opt_literal_fits(opt_builder_t *b, ant_value_t boilerplate, uint32_t *allocations, uint32_t *values, int depth) {
+  if (depth >= SV_LITERAL_MAX_DEPTH || ++*allocations > OPT_LITERAL_MAX_ALLOCATIONS) return false;
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(boilerplate));
+  
+  if (vtype(boilerplate) == kTypeArray) {
+    uint32_t count = ptr->u.array.len;
+    if (
+      !ptr->flags.fast_array || !ptr->u.array.data || count == 0 || count > OPT_MAX_INLINE_ARRAY ||
+      gc_array_storage_fit_class(count) < 0 || (*values += count) > OPT_LITERAL_MAX_VALUES
+    ) return false;
+    
+    for (uint32_t i = 0; i < count; i++) {
+      ant_value_t value = ptr->u.array.data[i];
+      if (is_empty_slot(value)) return false;
+      if (is_object_type(value) && !opt_literal_fits(b, value, allocations, values, depth + 1)) return false;
+    }
+    
+    return true;
+  }
+  
+  ant_shape_t *shape = ptr->shape;
+  if (vtype(boilerplate) != kTypeObject || !shape || ptr->flags.is_exotic || ptr->overflow_prop || ptr->extra_slots) return false;
+  
+  uint32_t count = ant_shape_count(shape);
+  if (
+    ant_shape_proto(shape) != b->js->sym.object_proto || count != ptr->prop_count ||
+    count > ant_shape_get_inobj_limit(shape) || count > OPT_LITERAL_MAX_NODE_VALUES || (*values += count) > OPT_LITERAL_MAX_VALUES ||
+    !jit_snapshot_shape(b->js, shape)
+  ) return false;
+  
+  for (uint32_t i = 0; i < count; i++) {
+    ant_value_t value = ant_object_prop_get_unchecked(ptr, i);
+    if (is_object_type(value) && !opt_literal_fits(b, value, allocations, values, depth + 1)) return false;
+  }
+  
+  return true;
+}
+
+static ir_node_id_t opt_literal_emit(opt_builder_t *b, ant_value_t boilerplate);
+
+static ir_node_id_t opt_literal_value(opt_builder_t *b, ant_value_t value) {
+  if (is_object_type(value)) return opt_literal_emit(b, value);
+  return opt_constant(b, vtype(value) == kTypeNumber ? ir_value_number(Ant_Value_AsNumberUnchecked(value)) : value);
+}
+
+static ir_node_id_t opt_literal_emit(opt_builder_t *b, ant_value_t boilerplate) {
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(boilerplate));
+  ir_node_id_t values[OPT_LITERAL_MAX_NODE_VALUES];
+  
+  if (vtype(boilerplate) == kTypeArray) {
+    uint32_t count = ptr->u.array.len;
+    for (uint32_t i = 0; i < count; i++) values[i] = opt_literal_value(b, ptr->u.array.data[i]);
+    
+    ir_op_t op = ir_op(IR_OP_ALLOCATE_ARRAY);
+    op.count = count;
+    ir_node_id_t array = opt_emit(b, op, NULL, 0, OPT_REPR_TAGGED);
+    
+    for (uint32_t i = 0; i < count; i++) {
+      ir_op_t init = ir_op(IR_OP_INITIALIZE_ELEMENT);
+      init.index = i;
+      opt_emit(b, init, (ir_node_id_t[]){array, values[i]}, 2, OPT_REPR_NONE);
+    }
+    
+    return array;
+  }
+  
+  ant_shape_t *shape = ptr->shape;
+  uint32_t count = ant_shape_count(shape);
+  uint8_t limit = ant_shape_get_inobj_limit(shape);
+  for (uint32_t i = 0; i < count; i++) values[i] = opt_literal_value(b, ant_object_prop_get_unchecked(ptr, i));
+  
+  ir_op_t op = ir_op(IR_OP_ALLOCATE_OBJECT);
+  op.allocate_object.shape = (ir_cell_t)(uintptr_t)shape;
+  op.allocate_object.property_count = count;
+  op.allocate_object.reserve = limit;
+  
+  ir_node_id_t proto = opt_constant(b, b->js->sym.object_proto);
+  ir_node_id_t object = opt_emit(b, op, &proto, 1, OPT_REPR_TAGGED);
+  
+  for (uint32_t i = 0; i < count; i++) {
+    ir_op_t init = ir_op(IR_OP_INITIALIZE_NAMED);
+    init.offset = opt_named_offset(i, limit);
+    opt_emit(b, init, (ir_node_id_t[]){object, values[i]}, 2, OPT_REPR_NONE);
+  }
+  
+  return object;
+}
+
 static opt_flow_t opt_build_array_literal(opt_builder_t *b, const uint8_t *ip) {
   const sv_func_debug_t *debug = b->func->debug;
   uint32_t index = sv_get_u32(ip + 1);
-  if (!debug || index >= debug->literal_site_count) return opt_fail(b, "operand") ? OPT_FLOW_CONTINUE : OPT_FLOW_FAILED;
+  if (!debug || index >= debug->literal_site_count) return opt_build_bad_operand(b);
+  
+  ant_value_t boilerplate = debug->literal_sites[index].boilerplate;
+  uint32_t allocations = 0, values = 0;
+  
+  if (is_object_type(boilerplate) && is_object_type(b->js->sym.object_proto) && opt_literal_fits(b, boilerplate, &allocations, &values, 0)) {
+    opt_push(b, opt_literal_emit(b, boilerplate));
+    return OPT_FLOW_CONTINUE;
+  }
   
   opt_rt_site_t *at = code_arena_bump(b->js, sizeof *at);
   if (!at) return OPT_FLOW_GENERIC;
@@ -4599,7 +4708,16 @@ static opt_flow_t opt_build_array_literal(opt_builder_t *b, const uint8_t *ip) {
 static opt_flow_t opt_build_array_init(opt_builder_t *b, const uint8_t *ip) {
   ir_node_id_t array = opt_peek(b, 1), value = opt_tagged(b, opt_peek(b, 0));
   uint32_t index = sv_get_u32(ip + 1);
-  opt_runtime_call(b, (uintptr_t)opt_rt_array_init, index, (ir_node_id_t[]){opt_tagged(b, array), value}, 2, false, false);
+  uint64_t bits;
+  
+  if (
+    ir_node(b->graph, array)->op.code == IR_OP_ALLOCATE_ARRAY &&
+    !(ir_constant_value(b->graph, value, &bits) && gc_value_is_heap_ref((ant_value_t)bits))
+  ) {
+    ir_op_t init = ir_op(IR_OP_INITIALIZE_ELEMENT);
+    init.index = index;
+    opt_emit(b, init, (ir_node_id_t[]){array, value}, 2, OPT_REPR_NONE);
+  } else opt_runtime_call(b, (uintptr_t)opt_rt_array_init, index, (ir_node_id_t[]){opt_tagged(b, array), value}, 2, false, false);
   
   opt_drop(b, 1);
   return OPT_FLOW_CONTINUE;
@@ -4681,7 +4799,15 @@ static bool opt_super_key_atom(opt_builder_t *b, bool field, sv_atom_t *atom) {
     *atom = b->func->atoms[atom_index];
     return true;
   }
-  return false;
+  uint64_t bits;
+  ir_node_id_t key = opt_peek(b, 0);
+  if (!ir_constant_value(b->graph, key, &bits) || ir_node(b->graph, key)->repr != OPT_REPR_TAGGED || vtype(bits) != kTypeString) return false;
+  size_t len = 0;
+  const char *text = js_getstr(b->js, (ant_value_t)bits, &len);
+  const char *interned = text && len && len <= UINT32_MAX ? intern_string(b->js, text, len) : NULL;
+  if (!interned) return false;
+  *atom = (sv_atom_t){.str = interned, .len = (uint32_t)len, .maybe_numeric = true};
+  return true;
 }
 
 static bool opt_try_super_get(opt_builder_t *b, bool field, opt_flow_t *flow) {
@@ -4707,6 +4833,48 @@ static bool opt_try_super_get(opt_builder_t *b, bool field, opt_flow_t *flow) {
   opt_drop(b, operands);
   opt_push(b, loaded);
   *flow = OPT_FLOW_CONTINUE;
+  return true;
+}
+
+static ant_value_t opt_super_setter_chain(const opt_builder_t *b, ant_value_t base, const sv_atom_t *atom, opt_field_case_t *out) {
+  ant_t *js = b->js;
+  *out = (opt_field_case_t){0};
+  ant_value_t value = base;
+  for (uint32_t depth = 0; depth < OPT_MAX_PROTOTYPE_DEPTH; depth++) {
+    ant_object_t *object = opt_prototype_object(js, value);
+    if (!object || object->flags.is_exotic || !object->shape) return 0;
+    out->values[depth] = value;
+    out->links[depth] = object;
+    out->depth = depth + 1;
+    int32_t slot = ant_shape_lookup_interned(object->shape, atom->str);
+    if (slot >= 0) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(object->shape, (uint32_t)slot);
+      if (!prop || prop->type != ANT_SHAPE_KEY_STRING || !prop->has_setter || vtype(prop->setter) != kTypeFunction) return 0;
+      sv_closure_t *closure = js_func_closure(prop->setter);
+      if (!closure || !closure->func || (closure->call_flags & ~OPT_CALL_PLAIN_FLAGS) || closure->func->is_async || closure->func->is_generator
+        || closure->func->code_len <= 0 || closure->func->code[0] == OP_CHECK_CTOR) return 0;
+      out->index = (uint32_t)slot;
+      return prop->setter;
+    }
+    value = ant_object_proto(object);
+  }
+  return 0;
+}
+
+static bool opt_try_super_setter(opt_builder_t *b, const sv_atom_t *atom, opt_flow_t *flow) {
+  if (!opt_super_may_speculate(b)) return false;
+  ir_node_id_t receiver = opt_tagged(b, opt_peek(b, 2)), home = opt_tagged(b, opt_peek(b, 1)), value = opt_tagged(b, opt_peek(b, 0));
+  opt_super_home_t site;
+  opt_field_case_t chain;
+  ant_value_t setter = opt_super_home(b, home, &site) ? opt_super_setter_chain(b, site.base, atom, &chain) : 0;
+  if (!setter || (site.by_identity && !opt_retain(b, site.home)) || !opt_retain(b, setter) || !opt_field_links_retain(b, &chain)) return false;
+
+  opt_super_guard(b, home, &site);
+  ir_node_id_t holder, holder_address;
+  opt_holder_chain(b, IR_NONE, &chain, true, NULL, NULL, &holder, &holder_address);
+  ir_node_id_t inputs[3] = {opt_constant(b, setter), receiver, value};
+  *flow = opt_emit_call(b, false, js_func_closure(setter)->func, inputs, 1, 3, false);
+  if (*flow == OPT_FLOW_CONTINUE) opt_poke(b, 0, value);
   return true;
 }
 
@@ -4739,6 +4907,7 @@ static bool opt_try_super_put(opt_builder_t *b, opt_flow_t *flow) {
   if (atom_index >= (uint32_t)func->atom_count || !func->ic_slots || ic_index >= func->ic_count) return false;
   const sv_atom_t *atom = &func->atoms[atom_index];
   const sv_ic_entry_t *ic = &func->ic_slots[ic_index];
+  if (ic->super_put_kind == SV_SUPER_PUT_IC_SETTER && ic->epoch == b->js->ic.epoch) return opt_try_super_setter(b, atom, flow);
   if (ic->super_put_kind != SV_SUPER_PUT_IC_DATA || !opt_super_may_speculate(b) || !opt_may_speculate(b, OPT_EXIT_BAD_TYPE)) return false;
   if (ant_property_key_breaks_protector(b->js, atom->str)) return false;
   ir_node_id_t receiver = opt_tagged(b, opt_peek(b, 2)), home = opt_tagged(b, opt_peek(b, 1)), value = opt_tagged(b, opt_peek(b, 0));
