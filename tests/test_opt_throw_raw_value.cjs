@@ -1,6 +1,8 @@
 const assert = require('node:assert');
 
 const ROUNDS = 20000;
+const CALLS = 100;
+const PER_CALL = ROUNDS / CALLS;
 
 function captured(n) {
   const readers = [];
@@ -11,7 +13,7 @@ function captured(n) {
   }
   return sum;
 }
-assert.strictEqual(captured(ROUNDS), ROUNDS);
+for (let call = 0; call < CALLS; call++) assert.strictEqual(captured(PER_CALL), PER_CALL);
 
 function plain(n) {
   let sum = 0;
