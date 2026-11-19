@@ -221,13 +221,12 @@ static inline sv_eval_env_state_t *sv_eval_env_object_state(const ant_object_t *
 }
 
 static inline ant_object_t *sv_eval_env_ic_target(ant_t *js, ant_value_t env, const sv_ic_entry_t *ic) {
-  if (!ic || ic->epoch != js->ic.epoch || ic->guard.receiver_proto != env) return NULL;
-  if (vtype(env) != kTypeObject) return NULL;
+  if (!ic || ic->epoch != js->ic.epoch || vtype(env) != kTypeObject) return NULL;
 
   ant_object_t *target = (ant_object_t *)vptr(env);
+  if ((ic->guard.receiver_proto != env || target->shape != ic->cached_shape) && ic->cached_holder) return NULL;
+
   const sv_eval_env_state_t *state = sv_eval_env_object_state(target);
-  
-  if (target->shape != ic->cached_shape) return NULL;
   if ((uintptr_t)(state ? state->scope : NULL) != ic->cached_aux) return NULL;
 
   return target;
