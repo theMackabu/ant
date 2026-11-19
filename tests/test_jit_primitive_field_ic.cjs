@@ -49,4 +49,41 @@ let sum = 0;
 for (let i = 0; i < 100000; i++) sum += 'hello world'.length + i.toString().length + 'xyz'.charCodeAt(i % 3);
 assert.strictEqual(sum, 13688889);
 
+class EdgeHolder { m() { return 1; } }
+const edgeHolder = new EdgeHolder();
+const edgeOps = {
+  instanceLeft: v => v instanceof EdgeHolder,
+  get: v => v.x,
+  call: v => { try { return v.m(); } catch (e) { return e.name; } },
+  index: v => v[0],
+  has: v => { try { return 'x' in v; } catch (e) { return e.name; } },
+  length: v => v.length,
+  proto: v => v.__proto__ === Number.prototype,
+  ctor: v => v.constructor === Number,
+  text: v => v.toString(),
+  pattern: v => { const { x } = v; return x; },
+  optional: v => v?.x,
+  own: v => Object.hasOwn(v, 'x'),
+};
+const edgeWarm = [edgeHolder, [1, 2], { x: 1, m() { return 2; }, 0: 5, length: 1 }, function () { return 3; }, 'str', EdgeHolder];
+const edgeValues = [-Infinity, Infinity, NaN, -0, 1.5, -1e308, -1.7976931348623157e308];
+const edgeExpected = {
+  instanceLeft: v => false,
+  get: v => undefined,
+  call: v => 'TypeError',
+  index: v => undefined,
+  has: v => 'TypeError',
+  length: v => undefined,
+  proto: v => true,
+  ctor: v => true,
+  text: v => String(v),
+  pattern: v => undefined,
+  optional: v => undefined,
+  own: v => false,
+};
+for (const [name, op] of Object.entries(edgeOps)) {
+  for (let i = 0; i < 400; i++) { try { op(edgeWarm[i % edgeWarm.length]); } catch (e) {} }
+  for (const v of edgeValues) assert.strictEqual(op(v), edgeExpected[name](v), `${name} on ${v}`);
+}
+
 console.log('jit primitive field ic OK');

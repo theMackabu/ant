@@ -157,7 +157,6 @@ static constexpr uint32_t SV_FIELD_THUNK_LEN = 7;
 
 int resolve_super_upvalue(sv_compiler_t *c);
 int resolve_this_upvalue(sv_compiler_t *c);
-int resolve_arguments_upvalue(sv_compiler_t *c);
 int resolve_new_target_upvalue(sv_compiler_t *c);
 int resolve_upvalue_raw(sv_compiler_t *c, const char *name, uint32_t len);
 int resolve_upvalue(sv_compiler_t *c, const char *name, uint32_t len);
@@ -214,6 +213,7 @@ void emit_derived_return_check(sv_compiler_t *c);
 bool compiler_has_this_binding(const sv_compiler_t *c);
 void emit_break_to_loop(sv_compiler_t *c, int target);
 void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len);
+void emit_get_var_typeof(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_export_writes_from_stack(sv_compiler_t *c, const sv_export_name_t *exports);
 void emit_local_export_writes(sv_compiler_t *c, int local);
@@ -258,6 +258,7 @@ void emit_field_inits(
 );
 void emit_call_srcpos(sv_compiler_t *c, sv_ast_t *node);
 sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t *callee);
+sv_call_kind_t compile_tag_setup(sv_compiler_t *c, sv_ast_t *tag);
 bool compile_call_map_template_intrinsic(
   sv_compiler_t *c, sv_ast_t *node, bool has_spread, bool is_tail
 );
@@ -316,6 +317,7 @@ void push_using_cleanup(
 void compile_export_emit(sv_compiler_t *c, const char *name, uint32_t len);
 bool ast_has_eval_var(const sv_ast_t *node);
 bool ast_has_own_eval(sv_compiler_t *c, const sv_ast_t *node);
+bool ast_literal_eval_mentions_arguments(sv_compiler_t *c, const sv_ast_t *node);
 
 static inline bool is_quoted_ident_key(const sv_ast_t *node) {
   if (!node || node->type != N_IDENT || !node->str || node->len < 2) return false;
@@ -449,6 +451,13 @@ static inline bool has_active_with_scope(const sv_compiler_t *c) {
 
 static inline bool has_implicit_arguments_obj(const sv_compiler_t *c) {
   return c && !c->is_arrow && c->enclosing && !sv_compile_mode_is_eval(c->mode);
+}
+
+static inline void emit_arguments_eval_env(sv_compiler_t *c, const char *name, uint32_t len) {
+  if (!c->lazy_eval_env || !is_ident_str(name, len, "arguments", 9)) return;
+  emit_op(c, OP_SPECIAL_OBJ);
+  emit(c, SV_SPECIAL_EVAL_ENV);
+  emit_op(c, OP_POP);
 }
 
 static inline int add_hidden_local(sv_compiler_t *c) {

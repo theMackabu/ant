@@ -6,6 +6,7 @@
 #include "silver/glue.h"
 
 #include "ops/property.h"
+#include "ops/eval_env.h"
 #include "ops/coercion.h"
 
 static __attribute__((noinline)) ant_value_t Super_ConstructorHome(ant_t *js, ant_value_t constructor) {

@@ -1,0 +1,35 @@
+{
+  "name": "ant-desktop-windows-arm64",
+  "version": "0.4.0",
+  "description": "Ant Desktop native runtime for Windows on arm64",
+  "keywords": [
+    "ant",
+    "desktop",
+    "windows",
+    "arm64",
+    "chromium",
+    "native"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/theMackabu/ant.git",
+    "directory": "packages/desktop/packaging/npm/windows-arm64"
+  },
+  "main": "index.cjs",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "index.cjs",
+    "cef.lock.json",
+    "vendor/",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

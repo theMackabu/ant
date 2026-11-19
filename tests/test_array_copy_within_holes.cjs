@@ -28,6 +28,18 @@ const holes = (array) => Array.from({ length: array.length }, (_, i) => i in arr
   assert.deepStrictEqual([inherited[0], inherited[1], Object.hasOwn(inherited, 0)], ['P', 3, true]);
 
   assert.throws(() => Object.freeze([1, 2, 3]).copyWithin(0, 1), TypeError);
+
+  const sealed = Object.seal([1, , 3]);
+  assert.throws(() => sealed.copyWithin(0, 1), TypeError);
+  assert.strictEqual(0 in sealed, true);
+  const closed = Object.preventExtensions([1, , 3]);
+  assert.throws(() => closed.copyWithin(1, 0), TypeError);
+  assert.strictEqual(1 in closed, false);
+  assert.deepStrictEqual(Object.seal([1, 2, 3]).copyWithin(0, 1), [2, 3, 3]);
+
+  const shrunk = [1, 2, 3, 4, 5, 6, 7, 8];
+  shrunk.copyWithin(0, { valueOf() { shrunk.length = 2; return 4; } });
+  assert.deepStrictEqual(holes(shrunk), [false, false]);
 }
 
 console.log('ok');

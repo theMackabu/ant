@@ -283,7 +283,7 @@ static int trace_resolve_dep(trace_ctx_t *ctx, uint32_t parent_idx, const trace_
   const char *parent_path = r->modules[parent_idx].abs_path;
   const char *spec = dep->spec;
 
-  if (esm_find_builtin(spec, strlen(spec)).kind != ANT_BUILTIN_NAME_NONE) return 0;
+  if (esm_find_builtin(ctx->js, spec, strlen(spec)).kind != ANT_BUILTIN_NAME_NONE) return 0;
   if (esm_has_builtin_scheme(spec) || esm_is_data_url(spec)) return 0;
 
   char *file_url_path = esm_file_url_to_path(ctx->js, spec);

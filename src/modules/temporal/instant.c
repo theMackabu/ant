@@ -3,6 +3,7 @@
 
 #ifdef ANT_HAVE_TEMPORAL
 #include "temporal_internal.h"
+#include "modules/date.h"
 
 static bool temporal_instant_from_value(
   ant_t *js, ant_value_t value, Instant **out, ant_value_t *err
@@ -59,6 +60,21 @@ static ant_value_t temporal_instant_from_epoch_milliseconds(ant_params_t) {
   temporal_rs_Instant_from_epoch_milliseconds_result result =
     temporal_rs_Instant_from_epoch_milliseconds(milliseconds);
   if (!result.is_ok) return temporal_error(js, result.err);
+  return temporal_wrap(js, TEMPORAL_INSTANT, result.ok);
+}
+
+static ant_value_t temporal_date_to_temporal_instant(ant_params_t) {
+  if (!is_date_instance(call_this))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Date.prototype.toTemporalInstant requires a Date");
+
+  ant_value_t time = js_get_slot(call_this, SLOT_DATA);
+  double milliseconds = vtype(time) == kTypeNumber ? Ant_Value_AsNumberUnchecked(time) : ANT_NAN;
+  if (isnan(milliseconds)) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid time value");
+
+  temporal_rs_Instant_from_epoch_milliseconds_result result =
+    temporal_rs_Instant_from_epoch_milliseconds((int64_t)milliseconds);
+  if (!result.is_ok) return temporal_error(js, result.err);
+  
   return temporal_wrap(js, TEMPORAL_INSTANT, result.ok);
 }
 
@@ -271,6 +287,9 @@ void temporal_init_instant(ant_t *js, ant_value_t temporal) {
   TEMPORAL_METHOD(js, ctor, "fromEpochMilliseconds", temporal_instant_from_epoch_milliseconds, 1);
   TEMPORAL_METHOD(js, ctor, "fromEpochNanoseconds", temporal_instant_from_epoch_nanoseconds, 1);
   temporal_set_namespace_property(js, temporal, "Instant", ctor);
+
+  if (is_object_type(js->builtins.date_proto))
+    TEMPORAL_METHOD(js, js->builtins.date_proto, "toTemporalInstant", temporal_date_to_temporal_instant, 0);
 }
 
 #endif

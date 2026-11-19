@@ -4,6 +4,8 @@
 #include "silver/feedback.h"
 
 #include "cage.h"
+#include "hash.h"
+#include "realm.h"
 #include "runtime.h"
 #include "gc/roots.h"
 #include "shapes.h"
@@ -408,6 +410,113 @@ void sv_code_units_sweep(ant_t *js, uint64_t epoch) {
   }
 }
 
+static constexpr uint32_t SV_EVAL_CACHE_SLOTS = 128;
+static constexpr uint32_t SV_EVAL_CACHE_SEEN = 512;
+static constexpr size_t SV_EVAL_CACHE_MAX_SOURCE = 8192;
+
+typedef struct {
+  uint64_t hash;
+  char *source;
+  sv_func_t *func;
+  uint32_t len;
+  uint8_t bits;
+  bool used;
+} sv_eval_cache_entry_t;
+
+struct sv_eval_cache {
+  uint32_t seen[SV_EVAL_CACHE_SEEN];
+  sv_eval_cache_entry_t entries[SV_EVAL_CACHE_SLOTS];
+};
+
+static void eval_cache_drop(sv_eval_cache_entry_t *entry) {
+  if (!entry->func) return;
+  sv_code_unit_unpin(entry->func->unit);
+  free(entry->source);
+  *entry = (sv_eval_cache_entry_t){0};
+}
+
+bool sv_eval_cache_key(ant_t *js, sv_eval_cache_key_t *key, const char *source, size_t len, uint8_t bits) {
+  if (
+    len == 0 || len > SV_EVAL_CACHE_MAX_SOURCE ||
+    js->realm != js->main_realm || is_object_type(js->global_sandbox) ||
+    js->codegen_blocked || memchr(source, '`', len)
+  ) return false;
+
+  *key = (sv_eval_cache_key_t){
+    .hash = ant_hash_mix(hash_key(source, len), ant_hash_secret[3] ^ bits),
+    .source = source, .len = (uint32_t)len, .bits = bits,
+  };
+
+  return true;
+}
+
+sv_func_t *sv_eval_cache_find(ant_t *js, const sv_eval_cache_key_t *key) {
+  sv_eval_cache_t *cache = js->code_units.eval_cache;
+  if (!cache) return NULL;
+
+  sv_eval_cache_entry_t *entry = &cache->entries[key->hash & (SV_EVAL_CACHE_SLOTS - 1)];
+  if (
+    !entry->func || entry->hash != key->hash || entry->len != key->len ||
+    entry->bits != key->bits || !entry->func->debug || entry->func->debug->filename != js->filename ||
+    memcmp(entry->source, key->source, key->len) != 0
+  ) return NULL;
+
+  entry->used = true;
+  return entry->func;
+}
+
+void sv_eval_cache_store(ant_t *js, const sv_eval_cache_key_t *key, sv_func_t *func) {
+  if (!func || !func->unit) return;
+  sv_eval_cache_t *cache = js->code_units.eval_cache;
+  
+  if (!cache) {
+    cache = calloc(1, sizeof(*cache));
+    if (!cache) return;
+    js->code_units.eval_cache = cache;
+  }
+
+  uint32_t *seen = &cache->seen[(key->hash >> 8) & (SV_EVAL_CACHE_SEEN - 1)];
+  uint32_t print = (uint32_t)(key->hash >> 32) | 1u;
+  
+  if (*seen != print) {
+    *seen = print;
+    return;
+  }
+
+  char *source = malloc(key->len);
+  if (!source) return;
+  memcpy(source, key->source, key->len);
+
+  sv_eval_cache_entry_t *entry = &cache->entries[key->hash & (SV_EVAL_CACHE_SLOTS - 1)];
+  eval_cache_drop(entry);
+  sv_code_unit_pin(func->unit);
+  
+  *entry = (sv_eval_cache_entry_t){
+    .hash = key->hash, .source = source, .func = func,
+    .len = key->len, .bits = key->bits, .used = true,
+  };
+}
+
+void sv_eval_cache_age(ant_t *js) {
+  sv_eval_cache_t *cache = js->code_units.eval_cache;
+  if (!cache) return;
+
+  for (uint32_t i = 0; i < SV_EVAL_CACHE_SLOTS; i++) {
+    sv_eval_cache_entry_t *entry = &cache->entries[i];
+    if (entry->used) entry->used = false;
+    else eval_cache_drop(entry);
+  }
+}
+
+void sv_eval_cache_clear(ant_t *js) {
+  sv_eval_cache_t *cache = js->code_units.eval_cache;
+  if (!cache) return;
+
+  for (uint32_t i = 0; i < SV_EVAL_CACHE_SLOTS; i++) eval_cache_drop(&cache->entries[i]);
+  free(cache);
+  js->code_units.eval_cache = NULL;
+}
+
 static void units_check_pins(ant_t *js) {
 #ifndef NDEBUG
   if (js->vm_exec_depth) return;
@@ -417,6 +526,7 @@ static void units_check_pins(ant_t *js) {
 
 void sv_code_units_destroy(ant_t *js) {
   sv_code_units_t *u = &js->code_units;
+  sv_eval_cache_clear(js);
   units_check_pins(js);
 
   for (sv_func_t *func = u->unowned_funcs; func; func = func->unit_next) {

@@ -6,8 +6,8 @@ const assert = require('node:assert');
   Object.defineProperty(inner, 'locked', { value: 1 });
   const outer = new Proxy(inner, {
     preventExtensions: Reflect.preventExtensions,
-    isExtensible: Reflect.isExtensible,
-    getPrototypeOf: Reflect.getPrototypeOf,
+    isExtensible: Object.isExtensible,
+    getPrototypeOf: Object.getPrototypeOf,
     get() { return 'lie'; },
     has() { return false; },
     deleteProperty() { return true; },
@@ -26,7 +26,7 @@ const assert = require('node:assert');
   assert.throws(() => 'fixed' in outer, TypeError);
   const plainOuter = new Proxy(new Proxy({}, {}), {});
   Object.preventExtensions(plainOuter);
-  assert.strictEqual(Reflect.isExtensible(plainOuter), false);
+  assert.strictEqual(Object.isExtensible(plainOuter), false);
 }
 
 {
@@ -51,7 +51,7 @@ const assert = require('node:assert');
 
   const calls = [];
   const logged = (target) => new Proxy(target, {
-    isExtensible(t) { calls.push('isExtensible'); return Reflect.isExtensible(t); },
+    isExtensible(t) { calls.push('isExtensible'); return Object.isExtensible(t); },
     getOwnPropertyDescriptor(t, k) { calls.push('gopd:' + typeof k + ':' + String(k)); return Reflect.getOwnPropertyDescriptor(t, k); },
   });
   assert.strictEqual(Object.getOwnPropertyDescriptor(logged(logged({ x: 1 })), 'q'), undefined);
