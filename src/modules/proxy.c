@@ -662,16 +662,6 @@ static ant_value_t proxy_get_from_target(ant_t *js, ant_value_t target, const ch
   return result;
 }
 
-static ant_value_t proxy_has_on_target(ant_t *js, ant_value_t target, const char *key, size_t key_len) {
-  if (vtype(target) == kTypeArray) {
-    if (is_length_key(key, key_len) && real_array_obj_ptr(target)) return Ant_Value_True;
-    unsigned long idx = 0;
-    if (parse_array_index(key, key_len, get_array_length(js, target), &idx))
-      return Ant_Value_FromBool(arr_has(js, target, (ant_offset_t)idx));
-  }
-  return Ant_Value_FromBool(lkp_proto(js, target, key, key_len).obj);
-}
-
 ant_value_t proxy_get_with_receiver(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t receiver) {
   if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
@@ -1043,7 +1033,7 @@ ant_value_t proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_
       return proxy_check_has(js, target, proxy_key_str(key, key_len), result);
   }
 
-  return proxy_has_on_target(js, target, key, key_len);
+  return js_in_str(js, target, key, key_len);
 }
 
 ant_value_t js_proxy_prevent_extensions(ant_t *js, ant_value_t proxy) {
@@ -1250,9 +1240,7 @@ ant_value_t proxy_has_val(ant_t *js, ant_value_t proxy, ant_value_t key_val) {
 
   ant_value_t has_trap = proxy_get_method(js, handler, "has");
   if (is_err(has_trap)) return has_trap;
-  if (vtype(has_trap) == kTypeUndefined) return key.is_sym
-    ? Ant_Value_FromBool(lkp_sym_proto(js, target, key.sym).obj)
-    : proxy_has_on_target(js, target, key.str, key.len);
+  if (vtype(has_trap) == kTypeUndefined) return do_in(js, prop_key, target);
 
   ant_value_t args[2] = { target, prop_key };
   ant_value_t result = proxy_call_trap(js, data, has_trap, args, 2);

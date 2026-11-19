@@ -1495,6 +1495,12 @@ static ant_value_t builtin_array_flat(ant_params_t) {
   return result;
 }
 
+static __attribute__((noinline, cold)) bool proxy_wraps_array(ant_t *js, ant_value_t proxy) {
+  ant_value_t target = proxy_read_target(js, proxy);
+  while (vtype(target) == kTypeObject && is_proxy(target)) target = proxy_read_target(js, target);
+  return real_array_obj_ptr(target) != NULL;
+}
+
 static ant_value_t builtin_array_concat(ant_params_t) {
   ant_value_t arr = array_method_receiver(js, call_this, "concat");
   if (is_err(arr)) return arr;
@@ -1512,10 +1518,7 @@ static ant_value_t builtin_array_concat(ant_params_t) {
     if (plain_array && ant_object_proto(plain_array) == js->sym.array_proto && ant_protector_intact(js, ANT_PROTECTOR_CONCAT_SPREADABLE)) spreadable = true;
     else if (vtype(arg) == kTypeArray || vtype(arg) == kTypeObject) {
       bool array_default_spreadable = real_array_obj_ptr(arg) != NULL;
-      if (!array_default_spreadable && is_proxy(arg)) {
-        ant_value_t target = proxy_read_target(js, arg);
-        array_default_spreadable = real_array_obj_ptr(target) != NULL;
-      }
+      if (!array_default_spreadable && is_proxy(arg)) array_default_spreadable = proxy_wraps_array(js, arg);
       
       ant_value_t spread_val = js_get_sym(js, arg, js->sym.isConcatSpreadable_sym);
       if (is_err(spread_val)) return spread_val;
@@ -2779,7 +2782,9 @@ static ant_value_t array_to_locale_string_body(ant_params_t) {
   string_builder_init(&sb, static_buf, sizeof(static_buf));
 
   ant_object_t *numeric_fast_arr = input_is_array ? array_obj_ptr(arr) : NULL;
-  bool all_fast_numbers = numeric_fast_arr && numeric_fast_arr->flags.fast_array &&
+  bool default_format = (nargs < 1 || vtype(args[0]) == kTypeUndefined) && (nargs < 2 || vtype(args[1]) == kTypeUndefined);
+
+  bool all_fast_numbers = default_format && numeric_fast_arr && numeric_fast_arr->flags.fast_array &&
     !numeric_fast_arr->flags.may_have_holes && numeric_fast_arr->u.array.data &&
     (ant_offset_t)numeric_fast_arr->u.array.len == len;
   
@@ -2811,21 +2816,23 @@ static ant_value_t array_to_locale_string_body(ant_params_t) {
           return err;
         }
       }
-      char localized_buf[128];
-      bool write_direct = sb.capacity - sb.size >= sizeof(localized_buf);
-      char *localized_out = write_direct ? sb.buffer + sb.size : localized_buf;
-      size_t localized_capacity = write_direct
-        ? sb.capacity - sb.size
-        : sizeof(localized_buf);
-      size_t localized_len = format_number_to_locale_string(
-        numeric_fast_arr->u.array.data[i], localized_out, localized_capacity
-      );
+
+      char localized_buf[ANT_NUMBER_LOCALE_CHARS];
+      size_t direct_capacity = sb.capacity - sb.size;
+
+      size_t localized_len = 
+        direct_capacity >= 128 ? format_number_to_locale_string(numeric_fast_arr->u.array.data[i], sb.buffer + sb.size, direct_capacity) : 0;
+      
+      bool write_direct = localized_len != 0;
+      if (!write_direct) localized_len = format_number_to_locale_string(numeric_fast_arr->u.array.data[i], localized_buf, sizeof(localized_buf));
+
       if (localized_len == 0) {
         string_builder_dispose(&sb);
         ant_value_t err = js_mkerr(js, "number formatting failed");
         GC_ROOT_RESTORE(js, root_mark);
         return err;
       }
+
       if (write_direct) sb.size += localized_len;
       else if (!string_builder_append(&sb, localized_buf, localized_len)) {
         string_builder_dispose(&sb);
@@ -2834,8 +2841,10 @@ static ant_value_t array_to_locale_string_body(ant_params_t) {
         return err;
       }
     }
+
     ant_value_t ret = string_builder_finalize(js, &sb);
     GC_ROOT_RESTORE(js, root_mark);
+    
     return ret;
   }
   
@@ -2882,9 +2891,9 @@ static ant_value_t array_to_locale_string_body(ant_params_t) {
       return err;
     }
 
-    if (vtype(elem) == kTypeNumber && method_type == kTypeBuiltin &&
+    if (default_format && vtype(elem) == kTypeNumber && method_type == kTypeBuiltin &&
         js_cfunc_same_entrypoint(method, builtin_number_toLocaleString)) {
-      char localized_buf[128];
+      char localized_buf[ANT_NUMBER_LOCALE_CHARS];
       size_t localized_len = format_number_to_locale_string(
         elem, localized_buf, 
         sizeof(localized_buf)

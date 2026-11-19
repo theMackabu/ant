@@ -195,16 +195,16 @@ ant_value_t sv_eval_capture_env(
 );
 
 static inline ant_value_t sv_eval_init_variable_env(sv_vm_t *vm, ant_t *js, sv_frame_t *frame) {
-  ant_value_t env = Ant_Object_CreateBare(js);
+  ant_value_t env = js_mkobj_with_proto(js, sv_frame_eval_env(js, frame));
   if (is_err(env)) return env;
   GC_ROOT_SAVE(mark, js);
   GC_ROOT_PIN(js, env);
-  js_set_proto_wb(js, env, sv_frame_eval_env(js, frame));
   sv_eval_env_state_t *state = calloc(1, sizeof(*state));
   if (!state || !sv_eval_env_state_attach(env, state)) {
     free(state);
     env = js_mkerr(js, "failed to create eval variable environment");
   } else {
+    state->func = frame->func;
     state->arguments_obj = Ant_Value_Undefined;
     state->is_variable = true;
     frame->eval_env = env;
@@ -216,6 +216,15 @@ static inline ant_value_t sv_eval_init_variable_env(sv_vm_t *vm, ant_t *js, sv_f
   }
   GC_ROOT_RESTORE(js, mark);
   return env;
+}
+
+static inline ant_value_t sv_eval_variable_env(sv_vm_t *vm, ant_t *js, sv_frame_t *frame) {
+  if (!frame->func->lazy_eval_env) return sv_frame_eval_env(js, frame);
+  if (is_object_type(frame->eval_env)) {
+    sv_eval_env_state_t *state = sv_eval_env_state(frame->eval_env);
+    if (state && state->is_variable && state->func == frame->func) return frame->eval_env;
+  }
+  return sv_eval_init_variable_env(vm, js, frame);
 }
 
 static inline uint32_t sv_global_lexical_hash(const char *interned) {
@@ -453,13 +462,13 @@ ant_value_t sv_eval_capture_env(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint32_t scope_index
 ) {
   const sv_eval_scope_t *scope = sv_func_eval_scope(frame->func, scope_index);
-  ant_value_t parent = sv_frame_eval_env(js, frame);
+  ant_value_t parent = sv_eval_variable_env(vm, js, frame);
+  if (is_err(parent)) return parent;
   GC_ROOT_SAVE(mark, js);
   GC_ROOT_PIN(js, parent);
-  ant_value_t env = Ant_Object_CreateBare(js);
+  ant_value_t env = js_mkobj_with_proto(js, parent);
   if (is_err(env)) { GC_ROOT_RESTORE(js, mark); return env; }
   GC_ROOT_PIN(js, env);
-  js_set_proto_wb(js, env, parent);
   sv_eval_env_state_t *parent_state = sv_eval_env_state(parent);
   if (!frame->func->is_arrow && !frame->func->is_eval &&
       !(parent_state && parent_state->is_variable)) {

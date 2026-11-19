@@ -1,5 +1,6 @@
 #include <compat.h> // IWYU pragma: keep
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -8,36 +9,259 @@
 #include "numbers.h"
 #include "silver/lexer.h"
 #include "modules/number.h"
+#include "modules/bigint.h"
+#include "modules/intl.h"
 #include "modules/string.h"
 
-size_t format_number_to_locale_string(ant_value_t num, char *buf, size_t capacity) {
-  char raw[64];
-  size_t raw_len = js_number_to_chars(num, raw, sizeof(raw));
+typedef struct {
+  char storage[64];
+  char *digits;
+  int count;
+  int point;
+} number_decimal_t;
+
+static void number_decimal_parse(number_decimal_t *decimal, size_t raw_len) {
+  char *raw = decimal->storage + 1;
   
-  double d = Ant_Value_AsNumberUnchecked(num);
-  if (!isfinite(d) || memchr(raw, 'e', raw_len) || memchr(raw, 'E', raw_len)) {
-    if (raw_len > capacity) return 0;
-    memcpy(buf, raw, raw_len);
-    return raw_len;
+  int count = 0;
+  int point = -1;
+  int exponent = 0;
+
+  for (size_t i = 0; i < raw_len; i++) {
+    char c = raw[i];
+    if (c == 'e') {
+      exponent = atoi(raw + i + 1);
+      break;
+    }
+    if (c == '.') point = count;
+    else raw[count++] = c;
   }
 
-  char *dot = memchr(raw, '.', raw_len);
-  size_t int_len = dot ? (size_t)(dot - raw) : raw_len;
-  size_t start = raw[0] == '-' ? 1 : 0;
-  size_t frac_len = dot ? raw_len - int_len : 0;
-  size_t separators = int_len > start ? (int_len - start - 1) / 3 : 0;
-  size_t needed = int_len + separators + frac_len;
+  if (point < 0) point = count;
+
+  int zeros = 0;
+  while (zeros < count && raw[zeros] == '0') zeros++;
+
+  decimal->digits = raw + zeros;
+  decimal->count = count - zeros;
+  decimal->point = decimal->count ? point - zeros + exponent : 0;
+}
+
+static void number_decimal_carry(number_decimal_t *decimal) {
+  char *digits = decimal->digits;
+  int at = decimal->count - 1;
+
+  while (at >= 0 && digits[at] == '9') digits[at--] = '0';
+  if (at >= 0) {
+    digits[at]++;
+    return;
+  }
+
+  decimal->digits = digits - 1;
+  decimal->digits[0] = '1';
+  decimal->count++;
+  decimal->point++;
+}
+
+static void number_decimal_round(number_decimal_t *decimal, int max_fraction) {
+  int keep = decimal->point + max_fraction;
+
+  if (keep < decimal->count) {
+    bool round_up = keep >= 0 && decimal->digits[keep] >= '5';
+    decimal->count = keep > 0 ? keep : 0;
+    if (round_up) number_decimal_carry(decimal);
+  }
+
+  while (decimal->count > decimal->point && decimal->count > 0 && decimal->digits[decimal->count - 1] == '0')
+    decimal->count--;
+
+  if (decimal->count == 0) decimal->point = 0;
+}
+
+static inline char number_decimal_digit(const number_decimal_t *decimal, int index) {
+  return index >= 0 && index < decimal->count ? decimal->digits[index] : '0';
+}
+
+static inline size_t number_group_separators(size_t integer_digits) {
+  return (integer_digits - 1) / 3;
+}
+
+static inline bool number_group_ends(size_t integer_digits, size_t index) {
+  size_t remaining = integer_digits - 1 - index;
+  return remaining > 0 && remaining % 3 == 0;
+}
+
+static size_t number_format_non_finite(double value, bool percent, char *buf, size_t capacity) {
+  const char *text = isnan(value) ? "NaN" : value < 0 ? "-\xe2\x88\x9e" : "\xe2\x88\x9e";
+  size_t len = strlen(text);
+  if (len + percent > capacity) return 0;
+
+  memcpy(buf, text, len);
+  if (percent) buf[len++] = '%';
+  
+  return len;
+}
+
+static size_t number_format_grouped(const char *raw, size_t raw_len, bool negative, char *buf, size_t capacity) {
+  const char *dot = memchr(raw, '.', raw_len);
+
+  size_t integer_len = dot ? (size_t)(dot - raw) : raw_len;
+  size_t fraction_len = raw_len - integer_len;
+
+  size_t needed = negative + integer_len + number_group_separators(integer_len) + fraction_len;
   if (needed > capacity) return 0;
 
-  size_t pos = 0;
-  if (start) buf[pos++] = '-';
-  for (size_t i = start; i < int_len; i++) {
-    buf[pos++] = raw[i];
-    size_t remaining = int_len - 1 - i;
-    if (remaining > 0 && remaining % 3 == 0) buf[pos++] = ',';
+  char *out = buf;
+  if (negative) *out++ = '-';
+
+  for (size_t i = 0; i < integer_len; i++) {
+    *out++ = raw[i];
+    if (number_group_ends(integer_len, i)) *out++ = ',';
   }
-  if (frac_len) memcpy(buf + pos, dot, frac_len);
-  return pos + frac_len;
+
+  if (fraction_len) memcpy(out, dot, fraction_len);
+  return needed;
+}
+
+static bool number_raw_needs_no_rounding(const char *raw, size_t raw_len, const ant_number_locale_t *format) {
+  if (format->min_integer != 1 || format->min_fraction || format->percent || format->ungrouped) return false;
+  if (memchr(raw, 'e', raw_len)) return false;
+
+  const char *dot = memchr(raw, '.', raw_len);
+  size_t fraction_digits = dot ? raw_len - (size_t)(dot - raw) - 1 : 0;
+  
+  return fraction_digits <= format->max_fraction;
+}
+
+static size_t number_format_decimal(
+  const number_decimal_t *decimal, bool negative,
+  const ant_number_locale_t *format, char *buf, size_t capacity
+) {
+  int point = decimal->point;
+  int integer_digits = point > format->min_integer ? point : format->min_integer;
+  int fraction_digits = decimal->count > point ? decimal->count - point : 0;
+  if (fraction_digits < format->min_fraction) fraction_digits = format->min_fraction;
+
+  size_t needed = negative + (size_t)integer_digits + format->percent;
+  if (!format->ungrouped) needed += number_group_separators((size_t)integer_digits);
+  if (fraction_digits) needed += 1 + (size_t)fraction_digits;
+  if (needed > capacity) return 0;
+
+  char *out = buf;
+  if (negative) *out++ = '-';
+
+  for (int i = 0; i < integer_digits; i++) {
+    *out++ = number_decimal_digit(decimal, point - integer_digits + i);
+    if (!format->ungrouped && number_group_ends((size_t)integer_digits, (size_t)i)) *out++ = ',';
+  }
+
+  if (fraction_digits) *out++ = '.';
+  for (int i = 0; i < fraction_digits; i++) *out++ = number_decimal_digit(decimal, point + i);
+
+  if (format->percent) *out++ = '%';
+  return needed;
+}
+
+size_t Ant_Number_FormatLocale(double value, const ant_number_locale_t *format, char *buf, size_t capacity) {
+  if (__builtin_expect(!isfinite(value), 0)) return number_format_non_finite(value, format->percent, buf, capacity);
+
+  number_decimal_t decimal;
+  char *raw = decimal.storage + 1;
+  size_t raw_len = js_number_to_chars(Ant_Value_FromNumber(fabs(value)), raw, sizeof(decimal.storage) - 1);
+  bool negative = signbit(value);
+
+  if (number_raw_needs_no_rounding(raw, raw_len, format))
+    return number_format_grouped(raw, raw_len, negative, buf, capacity);
+
+  number_decimal_parse(&decimal, raw_len);
+  if (format->percent && decimal.count) decimal.point += 2;
+  number_decimal_round(&decimal, format->max_fraction);
+
+  return number_format_decimal(&decimal, negative, format, buf, capacity);
+}
+
+size_t format_number_to_locale_string(ant_value_t num, char *buf, size_t capacity) {
+  return Ant_Number_FormatLocale(Ant_Value_AsNumberUnchecked(num), &ANT_NUMBER_LOCALE_DEFAULT, buf, capacity);
+}
+
+static constexpr int NUMBER_LOCALE_UNSET = -1;
+
+static ant_value_t number_locale_read_digits(
+  ant_t *js, ant_value_t options, const char *key, int low, int high, int *out
+) {
+  *out = NUMBER_LOCALE_UNSET;
+
+  ant_value_t value = js_get(js, options, key);
+  if (is_err(value)) return value;
+  if (vtype(value) == kTypeUndefined) return Ant_Value_Undefined;
+
+  double number = js_to_number(js, value);
+  if (isnan(number) || number < low || number > high)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "%s value is out of range", key);
+
+  *out = (int)floor(number);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t number_locale_read_style(ant_t *js, ant_value_t options, bool *percent) {
+  ant_value_t style = js_get(js, options, "style");
+  if (is_err(style) || vtype(style) == kTypeUndefined) return style;
+
+  style = js_tostring_val(js, style);
+  if (is_err(style)) return style;
+
+  size_t len = 0;
+  const char *text = js_getstr(js, style, &len);
+
+  *percent = streq(text, len, "percent", 7);
+  if (
+    *percent || streq(text, len, "decimal", 7) || 
+    streq(text, len, "currency", 8) || streq(text, len, "unit", 4)
+  ) return Ant_Value_Undefined;
+
+  return js_mkerr_typed(
+    js, JS_ERR_RANGE,
+    "Value %.*s out of range for Intl.NumberFormat options property style", (int)len, text
+  );
+}
+
+ant_value_t Ant_Number_ReadLocaleOptions(ant_t *js, ant_value_t options, ant_number_locale_t *out) {
+  *out = ANT_NUMBER_LOCALE_DEFAULT;
+
+  if (vtype(options) == kTypeNull)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
+  if (!is_object_type(options)) return Ant_Value_Undefined;
+
+  ant_value_t status = number_locale_read_style(js, options, &out->percent);
+  if (is_err(status)) return status;
+
+  int min_integer, min_fraction, max_fraction;
+
+  status = number_locale_read_digits(js, options, "minimumIntegerDigits", 1, 21, &min_integer);
+  if (is_err(status)) return status;
+
+  status = number_locale_read_digits(js, options, "minimumFractionDigits", 0, 100, &min_fraction);
+  if (is_err(status)) return status;
+
+  status = number_locale_read_digits(js, options, "maximumFractionDigits", 0, 100, &max_fraction);
+  if (is_err(status)) return status;
+
+  ant_value_t grouping = js_get(js, options, "useGrouping");
+  if (is_err(grouping)) return grouping;
+
+  int default_max = out->percent ? 0 : 3;
+  if (min_fraction == NUMBER_LOCALE_UNSET) min_fraction = 0;
+  if (max_fraction == NUMBER_LOCALE_UNSET) max_fraction = min_fraction > default_max ? min_fraction : default_max;
+  
+  if (min_fraction > max_fraction)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "maximumFractionDigits value is out of range");
+
+  if (min_integer != NUMBER_LOCALE_UNSET) out->min_integer = (uint8_t)min_integer;
+  out->min_fraction = (uint8_t)min_fraction;
+  out->max_fraction = (uint8_t)max_fraction;
+  out->ungrouped = grouping == Ant_Value_False;
+
+  return Ant_Value_Undefined;
 }
 
 static ant_value_t builtin_Number_isNaN(ant_params_t) {
@@ -96,10 +320,26 @@ static ant_value_t builtin_Number_isSafeInteger(ant_params_t) {
   return mkval(kTypeBool, (val >= -9007199254740991.0 && val <= 9007199254740991.0) ? 1 : 0);
 }
 
+__attribute__((noinline)) 
+static ant_value_t number_from_value(ant_t *js, ant_value_t source) {
+  if (is_object_type(source)) {
+    source = js_to_primitive(js, source, 2);
+    if (is_err(source)) return source;
+  }
+
+  return Ant_Value_FromNumber(vtype(source) == kTypeBigInt ? bigint_to_double(js, source) : js_to_number(js, source));
+}
+
 static ant_value_t builtin_Number(ant_params_t) {
-  ant_value_t nval = Ant_Value_FromNumber(nargs > 0 ? js_to_number(js, args[0]) : 0.0);
-  if (is_wrapper_ctor_target(js, call_this, call_new_target))
-    js_set_slot(call_this, SLOT_PRIMITIVE, nval);
+  ant_value_t source = nargs > 0 ? args[0] : Ant_Value_FromNumber(0.0);
+
+  ant_value_t nval = source;
+  if (vtype(source) != kTypeNumber) {
+    nval = number_from_value(js, source);
+    if (is_err(nval)) return nval;
+  }
+
+  if (is_wrapper_ctor_target(js, call_this, call_new_target)) js_set_slot(call_this, SLOT_PRIMITIVE, nval);
   return nval;
 }
 
@@ -225,12 +465,24 @@ static ant_value_t builtin_number_valueOf(ant_params_t) {
 }
 
 ant_value_t builtin_number_toLocaleString(ant_params_t) {
-  (void) args; (void) nargs;
   ant_value_t num = unwrap_primitive(js, call_this);
   if (vtype(num) != kTypeNumber) return js_mkerr(js, "toLocaleString called on non-number");
-  char buf[128];
-  size_t len = format_number_to_locale_string(num, buf, sizeof(buf));
+
+  ant_number_locale_t format = ANT_NUMBER_LOCALE_DEFAULT;
+  if (nargs > 0 && vtype(args[0]) != kTypeUndefined) {
+    ant_value_t locale = Ant_Intl_ResolveLocale(js, args[0]);
+    if (is_err(locale)) return locale;
+  }
+  
+  if (nargs > 1) {
+    ant_value_t status = Ant_Number_ReadLocaleOptions(js, args[1], &format);
+    if (is_err(status)) return status;
+  }
+
+  char buf[ANT_NUMBER_LOCALE_CHARS];
+  size_t len = Ant_Number_FormatLocale(Ant_Value_AsNumberUnchecked(num), &format, buf, sizeof(buf));
   if (len == 0) return js_mkerr(js, "number formatting failed");
+  
   return js_mkstr(js, buf, len);
 }
 
