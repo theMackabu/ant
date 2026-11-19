@@ -905,8 +905,13 @@ ant_value_t js_delete_prop_ordinary(ant_t *js, ant_value_t obj, const char *key,
 
   if (string_wrapper_owns_key(js, obj, key, len)) return Ant_Value_False;
 
-  if (!Ant_Array_UnshareValue(js, obj)) return js_mkerr(js, "oom");
-  if (ptr->flags.frozen || ptr->flags.sealed) {
+  bool settled = ptr->flags.frozen || ptr->flags.sealed;
+  if (settled && ant_array_is_shared(ptr)) {
+    if (!Ant_Array_UnshareSlow(js, ptr, 0)) return js_mkerr(js, "oom");
+    settled = false;
+  }
+  
+  if (settled) {
     bool own = 
       lkp(js, obj, key, len).obj || 
       arr_own_dense_element(js, original_obj, key, len, NULL) ||
