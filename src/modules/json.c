@@ -688,11 +688,16 @@ typedef enum {
 static json_write_t json_write_with_key(json_cycle_ctx *ctx, json_out_t *out, const char *key, size_t key_len, ant_value_t val, int in_array, int depth);
 static ant_value_t apply_reviver(ant_t *js, ant_value_t holder, const char *key, size_t key_len, ant_value_t reviver, gc_temp_root_scope_t *roots);
 
-static ant_prop_loc_t json_tojson_find_proto(ant_t *js, json_cycle_ctx *ctx, ant_value_t proto, bool *cacheable) {
+static ant_prop_loc_t json_tojson_find_proto(ant_t *js, json_cycle_ctx *ctx, ant_value_t proto, bool *cacheable, bool *generic) {
   ant_value_t cur = proto;
   
   for (int depth = 0; is_object_type(cur); depth++) {
-    ant_object_t *obj = depth < MAX_PROTO_CHAIN_DEPTH && !is_proxy(cur) ? js_obj_ptr(js_as_obj(cur)) : NULL;
+    if (is_proxy(cur)) {
+      *cacheable = false;
+      *generic = true;
+      return ANT_PROP_LOC_NONE;
+    }
+    ant_object_t *obj = depth < MAX_PROTO_CHAIN_DEPTH ? js_obj_ptr(js_as_obj(cur)) : NULL;
     if (!obj || obj->flags.is_exotic) {
       *cacheable = false;
       return lkp_proto(js, proto, "toJSON", 6);
@@ -708,7 +713,7 @@ static ant_prop_loc_t json_tojson_find_proto(ant_t *js, json_cycle_ctx *ctx, ant
   return ANT_PROP_LOC_NONE;
 }
 
-static ant_prop_loc_t json_tojson_lookup_proto(ant_t *js, json_cycle_ctx *ctx, ant_value_t proto) {
+static ant_prop_loc_t json_tojson_lookup_proto(ant_t *js, json_cycle_ctx *ctx, ant_value_t proto, bool *generic) {
   if (ctx->tojson_epoch != js->ic.epoch) {
     ctx->tojson_epoch = js->ic.epoch;
     ctx->tojson_count = 0;
@@ -718,7 +723,7 @@ static ant_prop_loc_t json_tojson_lookup_proto(ant_t *js, json_cycle_ctx *ctx, a
     if (ctx->tojson_cache[i].proto == proto) return ctx->tojson_cache[i].loc;
 
   bool cacheable = true;
-  ant_prop_loc_t loc = json_tojson_find_proto(js, ctx, proto, &cacheable);
+  ant_prop_loc_t loc = json_tojson_find_proto(js, ctx, proto, &cacheable, generic);
   if (!cacheable) return loc;
 
   uint8_t slot = ctx->tojson_count < 4 ? ctx->tojson_count++ : (ctx->tojson_next++ & 3);
@@ -741,7 +746,7 @@ static ant_value_t json_apply_tojson(ant_t *js, const char *key, size_t key_len,
 
     if (!found.obj) {
       ant_value_t proto = js_get_proto(js, val);
-      if (is_object_type(proto)) found = json_tojson_lookup_proto(js, ctx, proto);
+      if (is_object_type(proto)) found = json_tojson_lookup_proto(js, ctx, proto, &needs_generic);
     }
 
     if (found.obj) {

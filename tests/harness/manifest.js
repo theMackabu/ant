@@ -301,6 +301,7 @@ export function targets() {
     'test_inspector_host_header.cjs',
     'test_lock_error_boundaries.cjs',
     'test_map_get_template_intrinsic.cjs',
+    'test_json_tojson_proxy_prototype.cjs',
     'test_message_port.mjs',
     'test_missing_property_cache.cjs',
     'test_module_async_error_boundaries.cjs',
