@@ -34,6 +34,7 @@ ant_value_t sv_jit_try_catch_entry(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, sv
 
 void sv_jit_drop_func_code(sv_func_t *func) {}
 void sv_jit_drop_closure_pinned(sv_func_t *func) {}
+void sv_jit_drop_opt_code(sv_func_t *func) {}
 
 void sv_jit_gc_mark_roots(ant_t *js) {}
 void sv_jit_forget_dying(ant_t *js, uint64_t epoch) {}

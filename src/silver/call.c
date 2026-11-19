@@ -1,4 +1,5 @@
 #include "silver/call.h"
+#include "silver/jit.h"
 
 ant_value_t sv_super_constructor(ant_value_t constructor) {
   ant_value_t parent;
@@ -312,7 +313,8 @@ ant_value_t sv_construct(
     return sv_construct_ordinary(vm, js, func, args, argc, new_target);
   }
 
-  ant_value_t result = sv_call_closure(vm, js, plan.closure, plan.func, &plan.ctx, &ctor_this);
+  sv_func_note_deferred_receiver(plan.closure->func);
+  ant_value_t result = sv_call_resolve_closure(vm, js, plan.closure, plan.func, &plan.ctx, &ctor_this);
   sv_vm_maybe_checkpoint_microtasks(js);
 
   if (is_err(result)) return result;

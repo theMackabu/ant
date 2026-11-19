@@ -5245,6 +5245,7 @@ static opt_flow_t opt_build_import(opt_builder_t *b, const uint8_t *ip, sv_op_t 
 
 static ant_value_t opt_super_call_parents(const opt_builder_t *b, ir_node_id_t home_node, opt_super_parents_t *chain) {
   if (!opt_may_speculate(b, OPT_EXIT_BAD_SHAPE) || !opt_may_speculate(b, OPT_EXIT_BAD_TYPE)) return 0;
+  if (!b->inline_call && b->func->deferred_receiver) return 0;
   ant_value_t home = opt_likely_value(b, home_node);
   const sv_closure_t *self = b->ctx->closure;
   if (!home && !b->inline_call && self && self->func == b->func && (self->call_flags & SV_CALL_HAS_SUPER)) home = self->super_val;

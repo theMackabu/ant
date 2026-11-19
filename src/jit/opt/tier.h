@@ -194,6 +194,7 @@ uintptr_t opt_tier_generic_step(void);
 uintptr_t opt_tier_access_helper(sv_op_t op, bool adding);
 sv_jit_func_t opt_tier_compile(ant_t *js, sv_func_t *func, sv_closure_t *closure, bool sole_tier);
 void opt_tier_drop_closure_pinned(sv_func_t *func);
+void opt_tier_drop_func(sv_func_t *func);
 
 opt_code_t *opt_code_new(sv_func_t *func);
 void opt_code_invalidate(opt_code_t *code);
