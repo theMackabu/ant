@@ -247,7 +247,6 @@ typedef struct {
   MIR_item_t shape_transition_proto, imp_shape_transition, imp_protector_store;
   MIR_item_t remember_obj_proto, imp_remember_obj;
   MIR_item_t call_proto, imp_call;
-  MIR_item_t call_method_proto, imp_call_method;
   MIR_item_t cfunc_proto, native_finish_proto, imp_native_finish;
   MIR_item_t stable_load_proto, imp_load_stable_builtin;
   MIR_item_t stable_call_proto, imp_call_stable_builtin;

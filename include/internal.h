@@ -259,6 +259,7 @@ ant_value_t js_proxy_set(ant_t *js, ant_value_t proxy, const char *key, size_t k
 ant_value_t js_proxy_set_sym(ant_t *js, ant_value_t proxy, ant_value_t sym, ant_value_t value);
 ant_value_t js_set_reporting(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value);
 ant_value_t js_set_with_receiver(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value, ant_value_t receiver);
+ant_value_t js_set_with_receiver_interned(ant_t *js, ant_value_t target, const char *interned, size_t key_len, ant_value_t value, ant_value_t receiver);
 
 ant_value_t js_mkobj_with_proto(ant_t *js, ant_value_t proto);
 ant_value_t js_mkobj_with_proto_slots(ant_t *js, ant_value_t proto, uint8_t inobj_limit);

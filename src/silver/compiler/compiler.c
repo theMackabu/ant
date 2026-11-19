@@ -82,6 +82,9 @@ sv_func_t *sv_compile(
   if (sv_compile_mode_is_eval(mode)) {
     root.eval_shadows_undefined = sv_eval_env_shadows_global(js, eval_env, "undefined", 9);
     root.eval_shadows_global_this = sv_eval_env_shadows_global(js, eval_env, "globalThis", 10);
+    sv_eval_scope_flags_t scope_flags = sv_eval_env_flags(eval_env);
+    root.eval_this_binding = scope_flags.this_binding;
+    root.eval_field_thunk = root.eval_this_binding && sv_eval_env_shadows_global(js, eval_env, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN);
   }
   
   root.line_table = sv_compile_ctx_build_line_table(root.source, source_len);

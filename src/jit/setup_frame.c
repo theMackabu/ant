@@ -685,8 +685,6 @@ bool jit_setup_frame(jit_compile_t *c) {
       .imp_remember_obj = c->imp_remember_obj,
       .call_proto = c->call_proto,
       .imp_call = c->imp_call,
-      .call_method_proto = c->call_method_proto,
-      .imp_call_method = c->imp_call_method,
       .cfunc_proto = c->cfunc_proto,
       .native_finish_proto = c->native_finish_proto,
       .imp_native_finish = c->imp_native_finish,
@@ -707,12 +705,6 @@ bool jit_setup_frame(jit_compile_t *c) {
       .imp_math = c->imp_math,
       .r_args_buf = c->r_args_buf,
   };
-
-  c->r_call_out_this = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "call_out_this");
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_ALLOCA,
-                               MIR_new_reg_op(c->ctx, c->r_call_out_this),
-                               MIR_new_uint_op(c->ctx, sizeof(ant_value_t))));
 
   c->normalize_sloppy_this =
       c->feat.needs_this && !c->func->is_strict && !c->func->is_arrow;

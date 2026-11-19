@@ -1,5 +1,6 @@
 #pragma once
 
+#include "silver/eval_scope_flags.h"
 #include "silver/ast.h"
 #include "silver/vm.h"
 #include "silver/engine.h"
@@ -169,6 +170,7 @@ typedef struct {
   sv_runtime_binding_t *bindings;
   uint32_t count;
   uint32_t capacity;
+  sv_eval_scope_flags_t flags;
 } sv_eval_scope_builder_t;
 
 typedef struct sv_compiler {
@@ -286,7 +288,9 @@ typedef struct sv_compiler {
   bool super_referenced;
   int this_local;
   bool this_bound;
+  bool eval_this_binding;
   bool is_class_ctor;
+  bool eval_field_thunk;
   int derived_return_local;
   const sv_ast_t *this_bound_stmt;
   bool super_runs_once;

@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "keys.h"
+#include "index.h"
 #include "cfunc.h"
 #include "arrays.h"
 #include "props.h"
@@ -38,6 +39,10 @@ static bool proxy_keys_include(ant_t *js, ant_value_t keys, ant_value_t key) {
 }
 
 static bool proxy_target_key_is_nonconfigurable(ant_t *js, ant_value_t target, ant_value_t key) {
+  if (__builtin_expect(js_obj_ptr(js_as_obj(target))->flags.is_exotic && is_proxy(target), 0)) {
+    ant_value_t desc = proxy_get_own_property_descriptor(js, target, key);
+    return !is_err(desc) && vtype(desc) != kTypeUndefined && !descriptor_bool_value(js, desc, "configurable", 12, false);
+  }
   if (vtype(key) == kTypeSymbol) {
     ant_prop_loc_t off = lkp_sym(target, (ant_offset_t)vdata(key));
     if (off.obj && is_nonconfig_prop(off)) return true;
@@ -148,6 +153,35 @@ static __attribute__((noinline, cold)) ant_value_t proxy_revoked_error(ant_t *js
 static ant_value_t proxy_get_method(ant_t *js, ant_value_t handler, const char *name);
 static bool proxy_target_is_extensible(ant_value_t obj);
 
+static inline ant_value_t proxy_target_extensible(ant_t *js, ant_value_t target);
+
+static ant_value_t proxy_target_own_keys(ant_t *js, ant_value_t target) {
+  if (is_proxy(target)) return proxy_own_keys_raw(js, target);
+  return js_own_property_keys(js, target, true, false);
+}
+
+static ant_value_t proxy_list_from_array_like(ant_t *js, ant_value_t source) {
+  if (!is_object_type(source)) return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap must return an object");
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t list = Ant_Array_Create(js);
+  GC_ROOT_PIN(js, list);
+  size_t length = 0;
+  ant_value_t status = is_err(list) ? list : js_getprop_fallback(js, source, "length");
+  if (!is_err(status)) status = js_to_length_fast(js, status, &length);
+  if (!is_err(status) && length > UINT32_MAX) status = js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
+  for (size_t i = 0; i < length && !is_err(status); i++) {
+    char index[24];
+    snprintf(index, sizeof index, "%zu", i);
+    status = js_getprop_fallback(js, source, index);
+    if (is_err(status)) break;
+    if (vtype(status) != kTypeString && vtype(status) != kTypeSymbol)
+      status = js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap result must contain only strings or symbols");
+    else js_arr_push(js, list, status);
+  }
+  GC_ROOT_RESTORE(js, mark);
+  return is_err(status) ? status : list;
+}
+
 ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, obj);
@@ -177,7 +211,7 @@ ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
     return trap;
   }
   if (vtype(trap) == kTypeUndefined) {
-    keys = js_own_property_keys(js, data->target, true, false);
+    keys = proxy_target_own_keys(js, data->target);
     GC_ROOT_RESTORE(js, root_mark);
     return keys;
   }
@@ -188,11 +222,15 @@ ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
     GC_ROOT_RESTORE(js, root_mark);
     return result;
   }
-  if (vtype(result) != kTypeArray) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap must return an array");
-  }
   GC_ROOT_PIN(js, result);
+  if (vtype(result) != kTypeArray) {
+    result = proxy_list_from_array_like(js, result);
+    if (is_err(result)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return result;
+    }
+    GC_ROOT_PIN(js, result);
+  }
 
   ant_offset_t len = get_array_length(js, result);
   for (ant_offset_t i = 0; i < len; i++) {
@@ -225,7 +263,12 @@ ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
     }
   }
 
-  ant_value_t target_keys = js_own_property_keys(js, data->target, true, false);
+  ant_value_t extensible = proxy_target_extensible(js, data->target);
+  if (is_err(extensible)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return extensible;
+  }
+  ant_value_t target_keys = proxy_target_own_keys(js, data->target);
   GC_ROOT_PIN(js, target_keys);
   
   if (is_err(target_keys)) {
@@ -234,7 +277,7 @@ ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
   }
 
   ant_offset_t target_len = get_array_length(js, target_keys);
-  bool target_extensible = proxy_target_is_extensible(data->target);
+  bool target_extensible = extensible == Ant_Value_True;
   
   for (ant_offset_t i = 0; i < target_len; i++) {
     ant_value_t target_key = arr_get(js, target_keys, i);
@@ -552,6 +595,7 @@ typedef struct {
   const char *str;
   size_t len;
   ant_offset_t sym;
+  ant_value_t sym_val;
   bool is_sym;
 } proxy_key_t;
 
@@ -560,7 +604,7 @@ static inline proxy_key_t proxy_key_str(const char *str, size_t len) {
 }
 
 static inline proxy_key_t proxy_key_sym(ant_value_t sym) {
-  return (proxy_key_t){ .sym = (ant_offset_t)vdata(sym), .is_sym = true };
+  return (proxy_key_t){ .sym = (ant_offset_t)vdata(sym), .sym_val = sym, .is_sym = true };
 }
 
 static ant_value_t proxy_to_key(ant_t *js, ant_value_t val, ant_value_t *key_val, proxy_key_t *out) {
@@ -605,9 +649,101 @@ static bool proxy_target_value_differs(ant_t *js, ant_value_t target, proxy_key_
   return own.obj && !same_value_values(js, value, js_prop_load(own));
 }
 
+typedef struct {
+  bool accessor;
+  bool enumerable;
+  bool configurable;
+  bool writable;
+  ant_value_t first;
+  ant_value_t second;
+} proxy_full_desc_t;
+
+static ant_value_t proxy_to_complete_descriptor(ant_t *js, ant_value_t obj, proxy_full_desc_t *out) {
+  define_desc_raw_t raw = {0};
+  ant_value_t err = define_desc_read(js, obj, &raw);
+  if (is_err(err)) return err;
+  
+  bool accessor = raw.has[DESC_GET] || raw.has[DESC_SET];
+  if (accessor && (raw.has[DESC_VALUE] || raw.has[DESC_WRITABLE])) return js_mkerr_typed(
+    js, JS_ERR_TYPE, "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute"
+  );
+  
+  *out = (proxy_full_desc_t){
+    .accessor = accessor,
+    .enumerable = raw.has[DESC_ENUMERABLE] && js_truthy(js, raw.val[DESC_ENUMERABLE]),
+    .configurable = raw.has[DESC_CONFIGURABLE] && js_truthy(js, raw.val[DESC_CONFIGURABLE]),
+    .writable = raw.has[DESC_WRITABLE] && js_truthy(js, raw.val[DESC_WRITABLE]),
+    .first = raw.has[accessor ? DESC_GET : DESC_VALUE] ? raw.val[accessor ? DESC_GET : DESC_VALUE] : Ant_Value_Undefined,
+    .second = raw.has[DESC_SET] ? raw.val[DESC_SET] : Ant_Value_Undefined,
+  };
+  
+  return Ant_Value_Undefined;
+}
+
+static constexpr uint32_t PROXY_DESCRIPTOR_CHECK_BUDGET = 1u << 17;
+
+static inline ant_value_t proxy_target_own_descriptor(ant_t *js, ant_value_t *target_args) {
+  if (__builtin_expect(!is_proxy(target_args[0]), 1))
+    return builtin_object_getOwnPropertyDescriptor(js, target_args, 2, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
+  if (js->proxy_descriptor_depth == 0) js->proxy_descriptor_checks = 0;
+  if (++js->proxy_descriptor_checks > PROXY_DESCRIPTOR_CHECK_BUDGET || sv_check_c_stack_overflow(js))
+    return Ant_Error_CreateStackOverflow(js);
+  js->proxy_descriptor_depth++;
+  ant_value_t desc = proxy_get_own_property_descriptor(js, target_args[0], target_args[1]);
+  js->proxy_descriptor_depth--;
+  return desc;
+}
+
+static inline ant_value_t proxy_target_extensible(ant_t *js, ant_value_t target) {
+  uint8_t t = vtype(target);
+  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return Ant_Value_False;
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(target));
+  if (!ptr) return Ant_Value_False;
+  if (__builtin_expect(ptr->flags.is_exotic && t == kTypeObject && ant_object_proxy_state(ptr) != NULL, 0)) return proxy_is_extensible(js, target);
+  return Ant_Value_FromBool(ptr->flags.extensible != 0);
+}
+
+typedef enum { PROXY_CHECK_GET, PROXY_CHECK_SET, PROXY_CHECK_HAS, PROXY_CHECK_DELETE } proxy_check_t;
+
+static ant_value_t proxy_check_proxied(ant_t *js, ant_value_t target, proxy_key_t key, proxy_check_t check, ant_value_t value) {
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, target);
+  GC_ROOT_PIN(js, value);
+  ant_value_t key_val = key.is_sym ? key.sym_val : js_mkstr(js, key.str, key.len);
+  GC_ROOT_PIN(js, key_val);
+  ant_value_t desc = is_err(key_val) ? key_val : proxy_get_own_property_descriptor(js, target, key_val);
+  GC_ROOT_PIN(js, desc);
+  proxy_full_desc_t current = {0};
+  bool exists = !is_err(desc) && vtype(desc) != kTypeUndefined;
+  ant_value_t status = exists ? proxy_to_complete_descriptor(js, desc, &current) : desc;
+  ant_value_t result = check == PROXY_CHECK_SET ? Ant_Value_True : value;
+  const char *trap = check == PROXY_CHECK_GET ? "get" : check == PROXY_CHECK_SET ? "set" : check == PROXY_CHECK_HAS ? "has" : "deleteProperty";
+
+  if (is_err(status)) result = status;
+  else if (!exists) {}
+  else if (check == PROXY_CHECK_GET || check == PROXY_CHECK_SET) {
+    bool get = check == PROXY_CHECK_GET;
+    if (current.configurable) {}
+    else if (current.accessor) {
+      bool missing = vtype(get ? current.first : current.second) == kTypeUndefined;
+      if (missing && (!get || vtype(value) != kTypeUndefined)) result = proxy_trap_error(js, trap, "trap result is incompatible with an accessor that lacks the matching function");
+    } else if (!current.writable && !same_value_values(js, value, current.first))
+      result = proxy_trap_error(js, trap, "trap result differs from a non-configurable, non-writable property");
+  } else if (js_truthy(js, value) == (check == PROXY_CHECK_DELETE)) {
+    ant_value_t extensible = current.configurable ? proxy_is_extensible(js, target) : Ant_Value_False;
+    if (is_err(extensible)) result = extensible;
+    else if (!current.configurable) result = proxy_trap_error(js, trap, "trap result is incompatible with a non-configurable property");
+    else if (extensible != Ant_Value_True) result = proxy_trap_error(js, trap, "trap result is incompatible with a property of a non-extensible target");
+  }
+
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
 static ant_value_t proxy_check_get(ant_t *js, ant_value_t target, proxy_key_t key, ant_value_t result) {
   prop_meta_t meta;
-  if (!proxy_target_meta(js, target, key, &meta) || meta.configurable) return result;
+  if (!proxy_target_meta(js, target, key, &meta)) return is_proxy(target) ? proxy_check_proxied(js, target, key, PROXY_CHECK_GET, result) : result;
+  if (meta.configurable) return result;
 
   if (meta.has_getter || meta.has_setter) {
     if ((meta.has_getter && vtype(meta.getter) != kTypeUndefined) || vtype(result) == kTypeUndefined) return result;
@@ -620,7 +756,8 @@ static ant_value_t proxy_check_get(ant_t *js, ant_value_t target, proxy_key_t ke
 
 static ant_value_t proxy_check_set(ant_t *js, ant_value_t target, proxy_key_t key, ant_value_t value) {
   prop_meta_t meta;
-  if (!proxy_target_meta(js, target, key, &meta) || meta.configurable) return Ant_Value_True;
+  if (!proxy_target_meta(js, target, key, &meta)) return is_proxy(target) ? proxy_check_proxied(js, target, key, PROXY_CHECK_SET, value) : Ant_Value_True;
+  if (meta.configurable) return Ant_Value_True;
 
   if (meta.has_getter || meta.has_setter) {
     if (meta.has_setter && vtype(meta.setter) != kTypeUndefined) return Ant_Value_True;
@@ -633,7 +770,8 @@ static ant_value_t proxy_check_set(ant_t *js, ant_value_t target, proxy_key_t ke
 
 static ant_value_t proxy_check_has(ant_t *js, ant_value_t target, proxy_key_t key, ant_value_t result) {
   prop_meta_t meta;
-  if (js_truthy(js, result) || !proxy_target_meta(js, target, key, &meta)) return result;
+  if (js_truthy(js, result)) return result;
+  if (!proxy_target_meta(js, target, key, &meta)) return is_proxy(target) ? proxy_check_proxied(js, target, key, PROXY_CHECK_HAS, result) : result;
   if (!meta.configurable) return proxy_trap_error(js, "has", "trap returned falsy for non-configurable property");
   if (!proxy_target_is_extensible(target))
     return proxy_trap_error(js, "has", "trap returned falsy for existing property on non-extensible target");
@@ -642,7 +780,8 @@ static ant_value_t proxy_check_has(ant_t *js, ant_value_t target, proxy_key_t ke
 
 static ant_value_t proxy_check_delete(ant_t *js, ant_value_t target, proxy_key_t key, ant_value_t result) {
   prop_meta_t meta;
-  if (!js_truthy(js, result) || !proxy_target_meta(js, target, key, &meta)) return result;
+  if (!js_truthy(js, result)) return result;
+  if (!proxy_target_meta(js, target, key, &meta)) return is_proxy(target) ? proxy_check_proxied(js, target, key, PROXY_CHECK_DELETE, result) : result;
   if (!meta.configurable) return proxy_trap_error(js, "deleteProperty", "trap returned truthy for non-configurable property");
   if (!proxy_target_is_extensible(target))
     return proxy_trap_error(js, "deleteProperty", "trap returned truthy for property on non-extensible target");
@@ -1142,8 +1281,11 @@ ant_value_t proxy_get_prototype_of(ant_t *js, ant_value_t proxy) {
     if (is_err(result)) return result;
     if (!is_object_type(result) && vtype(result) != kTypeNull)
       return proxy_trap_error(js, "getPrototypeOf", "trap returned neither object nor null");
-    if (!proxy_target_is_extensible(target)) {
-      ant_value_t target_proto = get_proto(js, target);
+    ant_value_t extensible = proxy_target_extensible(js, target);
+    if (is_err(extensible)) return extensible;
+    if (extensible != Ant_Value_True) {
+      ant_value_t target_proto = is_proxy(target) ? proxy_get_prototype_of(js, target) : get_proto(js, target);
+      if (is_err(target_proto)) return target_proto;
       if (!same_object_identity(result, target_proto))
         return proxy_trap_error(js, "getPrototypeOf", "trap returned incompatible prototype for non-extensible target");
     }
@@ -1167,14 +1309,19 @@ ant_value_t proxy_set_prototype_of(ant_t *js, ant_value_t proxy, ant_value_t pro
     ant_value_t args[2] = { target, proto };
     ant_value_t result = proxy_call_trap(js, data, trap, args, 2);
     if (is_err(result)) return result;
-    if (js_truthy(js, result) && !proxy_target_is_extensible(target)) {
-      ant_value_t current = get_proto(js, target);
+    if (!js_truthy(js, result)) return Ant_Value_False;
+    ant_value_t extensible = proxy_target_extensible(js, target);
+    if (is_err(extensible)) return extensible;
+    if (extensible != Ant_Value_True) {
+      ant_value_t current = is_proxy(target) ? proxy_get_prototype_of(js, target) : get_proto(js, target);
+      if (is_err(current)) return current;
       if (!same_object_identity(current, proto))
         return proxy_trap_error(js, "setPrototypeOf", "trap returned truthy for incompatible prototype on non-extensible target");
     }
     return Ant_Value_FromBool(js_truthy(js, result));
   }
 
+  if (is_proxy(target)) return proxy_set_prototype_of(js, target, proto);
   set_proto(js, target, proto);
   return Ant_Value_True;
 }
@@ -1188,15 +1335,17 @@ ant_value_t proxy_is_extensible(ant_t *js, ant_value_t proxy) {
 
   ant_value_t target = data->target;
   ant_value_t handler = data->handler;
-  bool target_extensible = proxy_target_is_extensible(target);
   ant_value_t trap = proxy_get_method(js, handler, "isExtensible");
   if (is_err(trap)) return trap;
-  if (vtype(trap) == kTypeUndefined) return Ant_Value_FromBool(target_extensible);
+  if (vtype(trap) == kTypeUndefined) return proxy_target_extensible(js, target);
 
   ant_value_t args[1] = { target };
   ant_value_t result = proxy_call_trap(js, data, trap, args, 1);
   if (is_err(result)) return result;
   bool trap_extensible = js_truthy(js, result);
+  ant_value_t actual = proxy_target_extensible(js, target);
+  if (is_err(actual)) return actual;
+  bool target_extensible = actual == Ant_Value_True;
   if (trap_extensible != target_extensible)
     return proxy_trap_error(js, "isExtensible", "trap result does not reflect target extensibility");
   return Ant_Value_FromBool(trap_extensible);
@@ -1221,11 +1370,15 @@ ant_value_t proxy_prevent_extensions(ant_t *js, ant_value_t proxy) {
     ant_value_t args[1] = { target };
     ant_value_t result = proxy_call_trap(js, data, trap, args, 1);
     if (is_err(result)) return result;
-    bool ok = js_truthy(js, result);
-    if (ok && proxy_target_is_extensible(target))
+    if (!js_truthy(js, result)) return Ant_Value_False;
+    ant_value_t extensible = proxy_target_extensible(js, target);
+    if (is_err(extensible)) return extensible;
+    if (extensible == Ant_Value_True)
       return proxy_trap_error(js, "preventExtensions", "trap returned truthy but target is extensible");
-    return Ant_Value_FromBool(ok);
+    return Ant_Value_True;
   }
+
+  if (is_proxy(target)) return proxy_prevent_extensions(js, target);
 
   ant_object_t *ptr = js_obj_ptr(js_as_obj(target));
   if (ptr) ptr->flags.extensible = 0;
@@ -1259,37 +1412,6 @@ ant_value_t proxy_has_val(ant_t *js, ant_value_t proxy, ant_value_t key_val) {
   if (is_err(result)) return result;
 
   return proxy_check_has(js, target, key, result);
-}
-
-typedef struct {
-  bool accessor;
-  bool enumerable;
-  bool configurable;
-  bool writable;
-  ant_value_t first;
-  ant_value_t second;
-} proxy_full_desc_t;
-
-static ant_value_t proxy_to_complete_descriptor(ant_t *js, ant_value_t obj, proxy_full_desc_t *out) {
-  define_desc_raw_t raw = {0};
-  ant_value_t err = define_desc_read(js, obj, &raw);
-  if (is_err(err)) return err;
-  
-  bool accessor = raw.has[DESC_GET] || raw.has[DESC_SET];
-  if (accessor && (raw.has[DESC_VALUE] || raw.has[DESC_WRITABLE])) return js_mkerr_typed(
-    js, JS_ERR_TYPE, "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute"
-  );
-  
-  *out = (proxy_full_desc_t){
-    .accessor = accessor,
-    .enumerable = raw.has[DESC_ENUMERABLE] && js_truthy(js, raw.val[DESC_ENUMERABLE]),
-    .configurable = raw.has[DESC_CONFIGURABLE] && js_truthy(js, raw.val[DESC_CONFIGURABLE]),
-    .writable = raw.has[DESC_WRITABLE] && js_truthy(js, raw.val[DESC_WRITABLE]),
-    .first = raw.has[accessor ? DESC_GET : DESC_VALUE] ? raw.val[accessor ? DESC_GET : DESC_VALUE] : Ant_Value_Undefined,
-    .second = raw.has[DESC_SET] ? raw.val[DESC_SET] : Ant_Value_Undefined,
-  };
-  
-  return Ant_Value_Undefined;
 }
 
 static bool proxy_desc_compatible(ant_t *js, bool extensible, const proxy_full_desc_t *desc, const proxy_full_desc_t *current, bool exists) {
@@ -1329,7 +1451,7 @@ ant_value_t proxy_get_own_property_descriptor(ant_t *js, ant_value_t proxy, ant_
       return proxy_trap_error(js, "getOwnPropertyDescriptor", "trap returned neither object nor undefined");
 
     ant_value_t target_args[2] = { target, key_val };
-    ant_value_t target_desc = builtin_object_getOwnPropertyDescriptor(js, target_args, 2, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
+    ant_value_t target_desc = proxy_target_own_descriptor(js, target_args);
     if (is_err(target_desc)) return target_desc;
     bool target_exists = vtype(target_desc) != kTypeUndefined;
     
@@ -1344,11 +1466,21 @@ ant_value_t proxy_get_own_property_descriptor(ant_t *js, ant_value_t proxy, ant_
       GC_ROOT_PIN(js, current.first);
       GC_ROOT_PIN(js, current.second);
     }
-    bool target_extensible = proxy_target_is_extensible(target);
+    if (vtype(result) == kTypeUndefined && !target_exists) {
+      GC_ROOT_RESTORE(js, mark);
+      return result;
+    }
+    if (vtype(result) == kTypeUndefined && !current.configurable) {
+      GC_ROOT_RESTORE(js, mark);
+      return proxy_trap_error(js, "getOwnPropertyDescriptor", "trap reported existing property as undefined");
+    }
+    ant_value_t extensible = proxy_target_extensible(js, target);
+    if (is_err(extensible)) { GC_ROOT_RESTORE(js, mark); return extensible; }
+    bool target_extensible = extensible == Ant_Value_True;
 
     if (vtype(result) == kTypeUndefined) {
       GC_ROOT_RESTORE(js, mark);
-      if (target_exists && (!current.configurable || !target_extensible))
+      if (!target_extensible)
         return proxy_trap_error(js, "getOwnPropertyDescriptor", "trap reported existing property as undefined");
       return result;
     }
@@ -1500,13 +1632,13 @@ static ant_value_t proxy_define_trapped(
     }
 
     ant_value_t target_args[2] = { target, key_val };
-    ant_value_t target_desc = builtin_object_getOwnPropertyDescriptor(js, target_args, 2, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
+    ant_value_t target_desc = proxy_target_own_descriptor(js, target_args);
     GC_ROOT_PIN(js, target_desc);
     
     proxy_full_desc_t current;
     bool exists = !is_err(target_desc) && vtype(target_desc) != kTypeUndefined;
     ant_value_t status = exists ? proxy_to_complete_descriptor(js, target_desc, &current) : target_desc;
-    if (!is_err(status)) status = Ant_Value_FromBool(proxy_target_is_extensible(target));
+    if (!is_err(status)) status = proxy_target_extensible(js, target);
     
     if (is_err(status)) {
       GC_ROOT_RESTORE(js, root_mark);

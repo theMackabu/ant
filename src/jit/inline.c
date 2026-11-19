@@ -2120,34 +2120,17 @@ void jit_emit_inline_body(
           MIR_append_insn(ctx, jit_func, dv_slow);
         }
 
-        if (nc_method) {
-          MIR_append_insn(ctx, jit_func,
-                          MIR_new_call_insn(ctx, 12,
-                                            MIR_new_ref_op(ctx, ext->call_method_proto),
-                                            MIR_new_ref_op(ctx, ext->imp_call_method),
-                                            MIR_new_reg_op(ctx, nc_dst),
-                                            MIR_new_reg_op(ctx, r_vm),
-                                            MIR_new_reg_op(ctx, r_js),
-                                            MIR_new_reg_op(ctx, nc_fn),
-                                            MIR_new_reg_op(ctx, nc_this),
-                                            MIR_new_reg_op(ctx, ext->r_args_buf),
-                                            MIR_new_int_op(ctx, (int64_t)nc_argc),
-                                            MIR_new_reg_op(ctx, inl_undef),
-                                            MIR_new_reg_op(ctx, inl_undef),
-                                            MIR_new_int_op(ctx, 0)));
-        } else {
-          MIR_append_insn(ctx, jit_func,
-                          MIR_new_call_insn(ctx, 9,
-                                            MIR_new_ref_op(ctx, ext->call_proto),
-                                            MIR_new_ref_op(ctx, ext->imp_call),
-                                            MIR_new_reg_op(ctx, nc_dst),
-                                            MIR_new_reg_op(ctx, r_vm),
-                                            MIR_new_reg_op(ctx, r_js),
-                                            MIR_new_reg_op(ctx, nc_fn),
-                                            MIR_new_reg_op(ctx, nc_this),
-                                            MIR_new_reg_op(ctx, ext->r_args_buf),
-                                            MIR_new_int_op(ctx, (int64_t)nc_argc)));
-        }
+        MIR_append_insn(ctx, jit_func,
+                        MIR_new_call_insn(ctx, 9,
+                                          MIR_new_ref_op(ctx, ext->call_proto),
+                                          MIR_new_ref_op(ctx, ext->imp_call),
+                                          MIR_new_reg_op(ctx, nc_dst),
+                                          MIR_new_reg_op(ctx, r_vm),
+                                          MIR_new_reg_op(ctx, r_js),
+                                          MIR_new_reg_op(ctx, nc_fn),
+                                          MIR_new_reg_op(ctx, nc_this),
+                                          MIR_new_reg_op(ctx, ext->r_args_buf),
+                                          MIR_new_int_op(ctx, (int64_t)nc_argc)));
         MIR_append_insn(ctx, jit_func, dv_done);
 
         if (nc_tail) {

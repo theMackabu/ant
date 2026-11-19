@@ -164,10 +164,20 @@ void emit_field_inits(
   emit_field_init_pass(c, owner, fields, count, false);
 }
 
-static void emit_derived_field_inits(sv_compiler_t *c) {
+void emit_derived_field_inits(sv_compiler_t *c) {
   sv_compiler_t *owner = c->derived_field_owner;
-  if (owner && owner->field_init_count > 0) 
+  if (owner && owner->field_init_count > 0) {
     emit_field_inits(c, owner, owner->field_inits, owner->field_init_count);
+    return;
+  }
+  
+  const sv_compiler_t *scope = c;
+  while (scope->is_arrow && scope->enclosing) scope = scope->enclosing;
+  if (!scope->eval_field_thunk) return;
+  emit_get_var(c, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN);
+  emit_op(c, OP_CALL);
+  emit_u16(c, 0);
+  emit_op(c, OP_POP);
 }
 
 void emit_call_srcpos(sv_compiler_t *c, sv_ast_t *node) {
@@ -238,7 +248,7 @@ sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t *calle
     if (reject_super_private(c, callee)) return SV_CALL_DIRECT;
     emit_this(c);
     emit_super_reference(c, callee);
-    emit_op(c, OP_GET_SUPER_VAL);
+    emit_super_get(c, callee);
     return SV_CALL_METHOD;
   }
 

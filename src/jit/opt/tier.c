@@ -873,11 +873,10 @@ ant_value_t opt_rt_super_call(sv_vm_t *vm, ant_value_t this_val, ant_value_t fun
   sv_frame_t *frame = &vm->frames[vm->fp];
   ant_value_t *call_args = forward ? frame->bp : args + 1;
   int call_argc = forward ? frame->argc : (int)argc - 1;
-  ant_value_t super_this = this_val;
-  ant_value_t result = sv_vm_call(vm, vm->js, func, this_val, call_args, call_argc, &super_this, args[0]);
-  if (is_err(result)) return result;
-  frame->this = is_object_type(result) ? result : super_this;
-  return frame->this;
+  ant_value_t effective_this = sv_super_construct(vm, vm->js, func, this_val, call_args, call_argc, args[0]);
+  if (is_err(effective_this)) return effective_this;
+  frame->this = effective_this;
+  return effective_this;
 }
 
 ant_value_t opt_rt_import_default(sv_vm_t *vm, ant_value_t ns, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind) {
@@ -1063,6 +1062,21 @@ ant_value_t opt_rt_get_super(sv_vm_t *vm, ant_value_t receiver, ant_value_t home
 
 ant_value_t opt_rt_put_super(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
   return jit_helper_put_super(vm, vm->js, site->func, receiver, home, args[0], args[1]);
+}
+
+static inline sv_ic_entry_t *opt_rt_site_ic(const opt_rt_site_t *site) {
+  uint16_t index = sv_get_u16(site->func->code + site->bc_off + 5);
+  return site->func->ic_slots && index < site->func->ic_count ? &site->func->ic_slots[index] : NULL;
+}
+
+ant_value_t opt_rt_get_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
+  sv_atom_t *atom = &site->func->atoms[sv_get_u32(site->func->code + site->bc_off + 1)];
+  return Silver_Super_GetField(vm->js, site->func, receiver, home, atom, opt_rt_site_ic(site));
+}
+
+ant_value_t opt_rt_put_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
+  const sv_atom_t *atom = &site->func->atoms[sv_get_u32(site->func->code + site->bc_off + 1)];
+  return Silver_Super_PutField(vm->js, site->func, receiver, home, atom, args[0], opt_rt_site_ic(site));
 }
 
 ant_value_t opt_rt_closure(sv_vm_t *vm, sv_closure_t *parent, ant_value_t this_val, ant_value_t *args, int64_t argc, const opt_rt_closure_site_t *site) {

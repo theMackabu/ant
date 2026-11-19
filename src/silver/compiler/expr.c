@@ -741,7 +741,7 @@ void compile_member(sv_compiler_t *c, sv_ast_t *node) {
   if (is_ident_name(node->left, "super")) {
     if (reject_super_private(c, node)) return;
     emit_super_reference(c, node);
-    emit_op(c, OP_GET_SUPER_VAL);
+    emit_super_get(c, node);
     return;
   }
 

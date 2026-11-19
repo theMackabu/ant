@@ -722,14 +722,10 @@ static ant_value_t set_receiver_own_target(ant_t *js, ant_value_t receiver) {
   return Ant_Value_Undefined;
 }
 
-static ant_value_t set_with_receiver_fast(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value, ant_value_t receiver) {
-  if (vtype(key) != kTypeString) return T_EMPTY;
-  
-  size_t key_len = 0;
-  const char *key_str = js_getstr(js, key, &key_len);
-  if (!key_str || is_length_key(key_str, key_len) || is_array_index(key_str, (ant_offset_t)key_len)) return T_EMPTY;
-  
-  const char *interned = intern_find(js, key_str, key_len);
+static ant_value_t set_with_receiver_fast_key(
+  ant_t *js, ant_value_t target, const char *key_str, size_t key_len,
+  const char *interned, ant_value_t value, ant_value_t receiver
+) {
   ant_object_t *holder = NULL;
   int32_t slot = -1;
   bool chain_end = false;
@@ -781,6 +777,16 @@ static ant_value_t set_with_receiver_fast(ant_t *js, ant_value_t target, ant_val
   
   ant_value_t added = mkprop_interned_exact(js, own, added_key, value, 0);
   return is_err(added) ? added : Ant_Value_True;
+}
+
+static ant_value_t set_with_receiver_fast(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value, ant_value_t receiver) {
+  if (vtype(key) != kTypeString) return T_EMPTY;
+  
+  size_t key_len = 0;
+  const char *key_str = js_getstr(js, key, &key_len);
+  if (!key_str || is_length_key(key_str, key_len) || is_array_index(key_str, (ant_offset_t)key_len)) return T_EMPTY;
+  
+  return set_with_receiver_fast_key(js, target, key_str, key_len, intern_find(js, key_str, key_len), value, receiver);
 }
 
 static ant_value_t set_with_receiver(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value, ant_value_t receiver) {
@@ -872,6 +878,26 @@ ant_value_t js_set_with_receiver(ant_t *js, ant_value_t target, ant_value_t key,
   if (result == T_EMPTY) result = set_with_receiver(js, target, key, value, receiver);
   GC_ROOT_RESTORE(js, root_mark);
   
+  return result;
+}
+
+ant_value_t js_set_with_receiver_interned(
+  ant_t *js, ant_value_t target, const char *interned,
+  size_t key_len, ant_value_t value, ant_value_t receiver
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, target);
+  GC_ROOT_PIN(js, value);
+  GC_ROOT_PIN(js, receiver);
+  
+  ant_value_t result = set_with_receiver_fast_key(js, target, interned, key_len, interned, value, receiver);
+  if (result == T_EMPTY) {
+    ant_value_t key = js_mkstr(js, interned, key_len);
+    GC_ROOT_PIN(js, key);
+    result = is_err(key) ? key : set_with_receiver(js, target, key, value, receiver);
+  }
+  
+  GC_ROOT_RESTORE(js, root_mark);
   return result;
 }
 

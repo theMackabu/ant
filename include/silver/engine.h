@@ -1,5 +1,6 @@
 #pragma once
 
+#include "silver/eval_scope_flags.h"
 #include "gc.h"
 #include "gc/objects.h"
 #include "internal.h"
@@ -251,8 +252,17 @@ typedef enum: uint8_t {
 } sv_get_field_ic_kind_t;
 
 typedef enum: uint8_t {
+  SV_SUPER_PUT_IC_EMPTY = 0,
+  SV_SUPER_PUT_IC_DISABLED,
+  SV_SUPER_PUT_IC_DATA,
+  SV_SUPER_PUT_IC_DATA_ANY_SHAPE,
+  SV_SUPER_PUT_IC_SETTER,
+} sv_super_put_ic_kind_t;
+
+typedef enum: uint8_t {
   SV_IC_SHAPE_REF_CACHED   = 1u << 0,
   SV_IC_SHAPE_REF_ADD_FROM = 1u << 1,
+  SV_IC_SHAPE_REF_SUPER_BASE = SV_IC_SHAPE_REF_ADD_FROM,
   SV_IC_SHAPE_REF_ADD_TO   = 1u << 2,
   SV_IC_POLY_MEGA          = 1u << 3,
   SV_IC_MEGA_COMPILED      = 1u << 4,
@@ -353,7 +363,10 @@ typedef struct {
   uint32_t cached_index;
   uint32_t epoch;
   
-  sv_get_field_ic_kind_t get_kind;
+  union {
+    sv_get_field_ic_kind_t get_kind;
+    sv_super_put_ic_kind_t super_put_kind;
+  };
   sv_ic_flags_t shape_ref_mask;
   uint16_t slow_hits;
   uint32_t prototype_epoch;
@@ -366,6 +379,7 @@ typedef struct {
   union {
     uintptr_t cached_aux;
     uintptr_t add_proto;
+    uintptr_t super_put_holder_depth;
   };
   
   // Each IC slot belongs to one bytecode site/op. Field reads use receiver_proto
@@ -390,6 +404,10 @@ typedef struct {
       ant_value_t receiver_proto;
       uint32_t object_epoch;
     } comparison;
+    
+    struct {
+      ant_shape_t *base_shape;
+    } super_put;
   } guard;
   
 #ifdef ANT_WASM_EMBED
@@ -421,6 +439,11 @@ sv_pf_poly_t *sv_pf_poly_new(ant_t *js, sv_ic_entry_t *ic);
 void sv_gf_poly_free(ant_t *js, sv_ic_entry_t *ic);
 void sv_pf_poly_free(ant_t *js, sv_ic_entry_t *ic);
 void sv_ic_polys_cleanup(ant_t *js);
+
+static_assert(
+  offsetof(sv_ic_entry_t, guard.super_put.base_shape) == offsetof(sv_ic_entry_t, guard.add.from_shape),
+  "the super store base shape is owned through the add-from shape reference"
+);
 
 static_assert(
   offsetof(sv_ic_entry_t, get_kind) < 24 &&
@@ -548,6 +571,7 @@ typedef struct {
 typedef struct {
   const sv_runtime_binding_t *bindings;
   uint32_t count;
+  sv_eval_scope_flags_t flags;
 } sv_eval_scope_t;
 
 enum {

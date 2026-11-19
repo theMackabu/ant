@@ -2660,7 +2660,6 @@ static opt_flow_t opt_build_get_global(opt_builder_t *b, const uint8_t *ip) {
   uint16_t ic_index = sv_get_u16(ip + 5);
   if (atom_index >= (uint32_t)func->atom_count || !func->ic_slots || ic_index >= func->ic_count) return OPT_FLOW_GENERIC;
   const sv_atom_t *atom = &func->atoms[atom_index];
-  if (atom->len == 5 && memcmp(atom->str, "super", 5) == 0) return OPT_FLOW_GENERIC;
   sv_ic_entry_t *ic = &func->ic_slots[ic_index];
   ant_shape_t *shape = ic->cached_shape;
   if (!shape) return opt_may_speculate(b, OPT_EXIT_NO_FEEDBACK) ? opt_end_with_exit(b, OPT_EXIT_NO_FEEDBACK) : opt_build_global_call(b);
@@ -4394,17 +4393,18 @@ static opt_flow_t opt_build_array_const(opt_builder_t *b) {
   return OPT_FLOW_CONTINUE;
 }
 
-static opt_flow_t opt_build_super_access(opt_builder_t *b, bool put) {
+static opt_flow_t opt_build_super_access(opt_builder_t *b, bool put, bool field) {
   opt_rt_site_t *at = code_arena_bump(b->js, sizeof *at);
   if (!at) return OPT_FLOW_GENERIC;
   *at = (opt_rt_site_t){.func = b->func, .bc_off = b->pc};
   
-  uint32_t count = put ? 4 : 3;
+  uint32_t count = (put ? 4 : 3) - field;
   ir_node_id_t inputs[4];
   for (uint32_t i = 0; i < count; i++) inputs[i] = opt_tagged(b, opt_peek(b, count - 1 - i));
   
-  uintptr_t helper =
-    put ? (uintptr_t)opt_rt_put_super : (uintptr_t)opt_rt_get_super;
+  uintptr_t helper = field
+    ? (put ? (uintptr_t)opt_rt_put_super_field : (uintptr_t)opt_rt_get_super_field)
+    : (put ? (uintptr_t)opt_rt_put_super : (uintptr_t)opt_rt_get_super);
   ir_node_id_t result = opt_runtime_call(b, helper, (uintptr_t)at, inputs, count, false, false);
   opt_drop(b, count);
   opt_push(b, result);
@@ -5852,9 +5852,13 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
     case OP_ARRAY_CONST:
       return opt_build_array_const(b);
     case OP_GET_SUPER_VAL:
-      return opt_build_super_access(b, false);
+      return opt_build_super_access(b, false, false);
     case OP_PUT_SUPER_VAL:
-      return opt_build_super_access(b, true);
+      return opt_build_super_access(b, true, false);
+    case OP_GET_SUPER_FIELD:
+      return opt_build_super_access(b, false, true);
+    case OP_PUT_SUPER_FIELD:
+      return opt_build_super_access(b, true, true);
     case OP_CLOSURE:
       return opt_build_closure(b, ip);
     case OP_SET_NAME:
