@@ -374,10 +374,11 @@ ant_value_t jit_helper_apply(
   sv_call_args_t call;
   sv_call_args_reset(&call, args, argc);
   
-  return jit_call_prepared(
-    vm, js, func, this_val, &call, 
-    sv_apply_normalize_args(js, &call, cap)
-  );
+  ant_value_t status;
+  [[clang::always_inline]]
+  status = sv_apply_normalize_args(js, &call, cap);
+  
+  return jit_call_prepared(vm, js, func, this_val, &call, status);
 }
 
 ant_value_t jit_helper_call_spread(
