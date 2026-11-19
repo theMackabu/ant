@@ -183,6 +183,7 @@ void emit_with_tries(
 );
 void emit_lexical_new_target(sv_compiler_t *c);
 void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len);
+void emit_get_var_typeof(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_export_writes_from_stack(sv_compiler_t *c, const sv_export_name_t *exports);
 void emit_local_export_writes(sv_compiler_t *c, int local);
