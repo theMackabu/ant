@@ -210,6 +210,56 @@ ant_value_t sv_eval_global_get_interned_ic(
   sv_func_t *func, uint8_t *ip, bool *found
 );
 
+ant_value_t sv_eval_global_put_interned_ic(
+  ant_t *js, ant_value_t env,
+  const char *interned, uint32_t len,
+  ant_value_t val, bool is_strict, sv_ic_entry_t *ic
+);
+
+static inline sv_eval_env_state_t *sv_eval_env_object_state(const ant_object_t *env) {
+  return (sv_eval_env_state_t *)ant_object_eval_env_state(env);
+}
+
+static inline ant_object_t *sv_eval_env_ic_target(ant_t *js, ant_value_t env, const sv_ic_entry_t *ic) {
+  if (!ic || ic->epoch != js->ic.epoch || ic->guard.receiver_proto != env) return NULL;
+  if (vtype(env) != kTypeObject) return NULL;
+
+  ant_object_t *target = (ant_object_t *)vptr(env);
+  const sv_eval_env_state_t *state = sv_eval_env_object_state(target);
+  
+  if (target->shape != ic->cached_shape) return NULL;
+  if ((uintptr_t)(state ? state->scope : NULL) != ic->cached_aux) return NULL;
+
+  return target;
+}
+
+static inline sv_upvalue_t *sv_eval_env_ic_cell(ant_object_t *target, const sv_ic_entry_t *ic) {
+  if (ic->cached_holder) return NULL;
+  const sv_eval_env_state_t *state = sv_eval_env_object_state(target);
+  return state && ic->cached_index < state->cell_count ? state->cells[ic->cached_index] : NULL;
+}
+
+static inline const ant_shape_prop_t *sv_eval_env_ic_slot(
+  ant_object_t *target, const sv_ic_entry_t *ic, const char *interned, ant_object_t **holder_out
+) {
+  ant_object_t *holder = ic->cached_holder;
+  if (!holder) return NULL;
+
+  if (holder != target) {
+    ant_value_t parent = ant_shape_proto(target->shape);
+    if (vtype(parent) != kTypeObject || (ant_object_t *)vptr(parent) != holder) return NULL;
+  }
+
+  if (holder->flags.is_exotic || !holder->shape || ic->cached_index >= holder->prop_count) return NULL;
+
+  const ant_shape_prop_t *prop = ant_shape_prop_at(holder->shape, ic->cached_index);
+  if (!prop || prop->type != ANT_SHAPE_KEY_STRING || prop->key.interned != interned) return NULL;
+  if (prop->has_getter || prop->has_setter) return NULL;
+
+  *holder_out = holder;
+  return prop;
+}
+
 static __attribute__((noinline)) ant_value_t sv_global_undefined_check(ant_t *js, sv_atom_t *a) {
   if (
     !lkp_interned(js->global, a->str).obj && !sv_global_lexical(js, a->str) &&
@@ -298,9 +348,12 @@ static inline ant_value_t sv_op_put_eval_global(
   sv_frame_t *frame, sv_func_t *func, uint8_t *ip
 ) {
   sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
-  ant_value_t result = sv_env_put(
-    js, sv_frame_eval_env(js, frame),
-    a->str, a->len, vm->stack[vm->sp - 1], sv_frame_is_strict(frame));
+  ant_value_t env = sv_frame_eval_env(js, frame);
+  ant_value_t val = vm->stack[vm->sp - 1];
+  bool strict = sv_frame_is_strict(frame);
+  ant_value_t result = env == js->global
+    ? sv_global_put(js, a->str, a->len, val, strict)
+    : sv_eval_global_put_interned_ic(js, env, a->str, a->len, val, strict, sv_global_ic_slot_for_ip(func, ip));
   vm->sp--;
   return result;
 }
@@ -401,6 +454,119 @@ ant_value_t sv_global_get_interned_miss(
   return val;
 }
 
+static void sv_eval_env_ic_set(ant_t *js, ant_value_t env, sv_ic_entry_t *ic, ant_object_t *holder, uint32_t index) {
+  ant_object_t *target = (ant_object_t *)vptr(env);
+  const sv_eval_env_state_t *state = sv_eval_env_object_state(target);
+
+  ic->cached_shape = target->shape;
+  ic->cached_holder = holder;
+  ic->cached_index = index;
+  ic->cached_aux = (uintptr_t)(state ? state->scope : NULL);
+  ic->guard.receiver_proto = env;
+  ic->epoch = js->ic.epoch;
+}
+
+static bool sv_eval_env_ic_fill_binding(ant_t *js, ant_value_t env, sv_ic_entry_t *ic, const char *interned, uint32_t len) {
+  ant_object_t *target = (ant_object_t *)vptr(env);
+  const sv_eval_env_state_t *state = sv_eval_env_object_state(target);
+  const sv_runtime_binding_t *binding = sv_eval_env_find_binding(state, interned, len);
+  if (!binding) return false;
+
+  uint32_t index = (uint32_t)(binding - state->scope->bindings);
+  bool plain = !(binding->kind & (SV_EVAL_BIND_IMPORT_DEFAULT | SV_EVAL_BIND_IMPORT_NAMED));
+  if (plain && index < state->cell_count && state->cells[index]) sv_eval_env_ic_set(js, env, ic, NULL, index);
+
+  return true;
+}
+
+static void sv_eval_env_ic_fill(ant_t *js, ant_value_t env, sv_ic_entry_t *ic, const char *interned, uint32_t len) {
+  if (!ic || env == js->global || vtype(env) != kTypeObject) return;
+
+  ant_object_t *target = (ant_object_t *)vptr(env);
+  if (target->flags.is_exotic || !target->shape) return;
+  if (sv_eval_env_ic_fill_binding(js, env, ic, interned, len)) return;
+
+  ant_object_t *holder = target;
+  if (ant_shape_lookup_interned(target->shape, interned) < 0) {
+    ant_value_t parent = ant_shape_proto(target->shape);
+    if (vtype(parent) != kTypeObject || parent == js->global) return;
+    if (sv_eval_env_has_binding(parent, interned, len)) return;
+    holder = (ant_object_t *)vptr(parent);
+    if (holder->flags.is_exotic || !holder->shape) return;
+  }
+
+  int32_t slot = ant_shape_lookup_interned(holder->shape, interned);
+  if (slot < 0 || (uint32_t)slot >= holder->prop_count) return;
+
+  const ant_shape_prop_t *prop = ant_shape_prop_at(holder->shape, (uint32_t)slot);
+  if (!prop || prop->type != ANT_SHAPE_KEY_STRING || prop->has_getter || prop->has_setter) return;
+
+  sv_eval_env_ic_set(js, env, ic, holder, (uint32_t)slot);
+}
+
+static inline bool sv_eval_env_ic_get(
+  ant_t *js, ant_value_t env, const sv_ic_entry_t *ic, const char *interned, ant_value_t *out
+) {
+  ant_object_t *target = sv_eval_env_ic_target(js, env, ic);
+  if (!target) return false;
+
+  ant_object_t *holder = NULL;
+  if (sv_eval_env_ic_slot(target, ic, interned, &holder)) {
+    *out = ant_object_prop_get_unchecked(holder, ic->cached_index);
+    return true;
+  }
+
+  sv_upvalue_t *cell = sv_eval_env_ic_cell(target, ic);
+  if (!cell || is_empty_slot(*cell->location)) return false;
+
+  *out = *cell->location;
+  return true;
+}
+
+static inline bool sv_eval_env_ic_put(
+  ant_t *js, ant_value_t env, const sv_ic_entry_t *ic, const char *interned, uint32_t len, ant_value_t val
+) {
+  ant_object_t *target = sv_eval_env_ic_target(js, env, ic);
+  if (!target) return false;
+
+  ant_object_t *holder = NULL;
+  const ant_shape_prop_t *prop = sv_eval_env_ic_slot(target, ic, interned, &holder);
+  
+  if (prop) {
+    if (!(prop->attrs & ANT_PROP_ATTR_WRITABLE)) return false;
+    regexp_note_property_write(js, interned, len);
+    ant_object_prop_set_unchecked(holder, ic->cached_index, val);
+    gc_write_barrier(js, holder, val);
+    ant_property_mutation_invalidate(js, holder, interned);
+    return true;
+  }
+
+  sv_upvalue_t *cell = sv_eval_env_ic_cell(target, ic);
+  if (!cell || is_empty_slot(*cell->location)) return false;
+
+  const sv_eval_env_state_t *state = sv_eval_env_object_state(target);
+  return sv_eval_binding_store(js, state, &state->scope->bindings[ic->cached_index], val);
+}
+
+static __attribute__((noinline)) ant_value_t sv_eval_env_get_interned_ic(
+  ant_t *js, ant_value_t env,
+  const char *interned, uint32_t len,
+  sv_ic_entry_t *ic, bool *found
+) {
+  ant_value_t out = Ant_Value_Undefined;
+
+  if (sv_eval_env_ic_get(js, env, ic, interned, &out)) {
+    if (found) *found = true;
+    return out;
+  }
+
+  bool resolved = sv_env_try_get_interned(js, env, interned, len, &out);
+  if (found) *found = resolved;
+  if (resolved && !is_err(out)) sv_eval_env_ic_fill(js, env, ic, interned, len);
+
+  return out;
+}
+
 ant_value_t sv_eval_global_get_interned_ic(
   ant_t *js, ant_value_t env,
   const char *interned, uint32_t len,
@@ -409,6 +575,8 @@ ant_value_t sv_eval_global_get_interned_ic(
   ant_value_t out = Ant_Value_Undefined;
   sv_ic_entry_t *ic = sv_global_ic_slot_for_ip(func, ip);
   ant_value_t target = env;
+
+  if (env != js->global) return sv_eval_env_get_interned_ic(js, env, interned, len, ic, found);
 
   if (
     sv_global_ic_try_get_hit(js, target, ic, interned, &out) || 
@@ -422,6 +590,19 @@ ant_value_t sv_eval_global_get_interned_ic(
   if (found) *found = resolved;
 
   return out;
+}
+
+ant_value_t sv_eval_global_put_interned_ic(
+  ant_t *js, ant_value_t env,
+  const char *interned, uint32_t len,
+  ant_value_t val, bool is_strict, sv_ic_entry_t *ic
+) {
+  if (sv_eval_env_ic_put(js, env, ic, interned, len, val)) return val;
+
+  ant_value_t result = sv_env_put(js, env, interned, len, val, is_strict);
+  if (!is_err(result)) sv_eval_env_ic_fill(js, env, ic, interned, len);
+
+  return result;
 }
 
 #endif

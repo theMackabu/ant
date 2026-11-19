@@ -6,6 +6,7 @@
 #include "silver/glue.h"
 
 #include "ops/property.h"
+#include "ops/eval_env.h"
 #include "ops/coercion.h"
 
 static ant_value_t Super_Base(ant_t *js, sv_func_t *func, ant_value_t home, ant_value_t receiver) {

@@ -1,8 +1,34 @@
 #include "compiler_internal.h"
 
+static bool eval_source_may_mention(const char *source, size_t len, const char *word, size_t word_len) {
+  if (len > 64) return true;
+  const char *end = source + len;
+  
+  for (const char *at = source; (size_t)(end - at) >= word_len; at++) {
+    at = memchr(at, word[0], (size_t)(end - at) - word_len + 1);
+    if (!at) return false;
+    if (memcmp(at, word, word_len) == 0) return true;
+  }
+  
+  return false;
+}
+
+uint8_t sv_eval_shadow_bits(ant_t *js, ant_value_t eval_env, const char *source, size_t len) {
+  if (!source || !is_object_type(eval_env) || eval_env == js->global) return 0;
+  bool escaped = len <= 64 && memchr(source, '\\', len) != NULL;
+  uint8_t bits = 0;
+  
+  if ((escaped || eval_source_may_mention(source, len, "undefined", 9)) && sv_eval_env_shadows_global(js, eval_env, "undefined", 9))
+    bits |= SV_EVAL_SHADOWS_UNDEFINED;
+  if ((escaped || eval_source_may_mention(source, len, "globalThis", 10)) && sv_eval_env_shadows_global(js, eval_env, "globalThis", 10))
+    bits |= SV_EVAL_SHADOWS_GLOBAL_THIS;
+    
+  return bits;
+}
+
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program, sv_compile_mode_t mode,
-  const char *source, ant_offset_t source_len, ant_value_t eval_env
+  const char *source, ant_offset_t source_len, uint8_t eval_shadows
 ) {
   if (!program || program->type != N_PROGRAM) return NULL;
   if (mode != SV_COMPILE_EVAL_FUNCTION && ast_contains_lexical_new_target(program)) {
@@ -79,10 +105,8 @@ sv_func_t *sv_compile(
     (program->flags & FN_PARSE_STRICT) != 0,  NULL
   );
   
-  if (sv_compile_mode_is_eval(mode)) {
-    root.eval_shadows_undefined = sv_eval_env_shadows_global(js, eval_env, "undefined", 9);
-    root.eval_shadows_global_this = sv_eval_env_shadows_global(js, eval_env, "globalThis", 10);
-  }
+  root.eval_shadows_undefined = (eval_shadows & SV_EVAL_SHADOWS_UNDEFINED) != 0;
+  root.eval_shadows_global_this = (eval_shadows & SV_EVAL_SHADOWS_GLOBAL_THIS) != 0;
   
   root.line_table = sv_compile_ctx_build_line_table(root.source, source_len);
   sv_func_t *func = compile_function_body(&root, &top_fn, mode);
@@ -220,7 +244,7 @@ sv_func_t *sv_compile_function_with_params(
   }
   
   top_fn.body->args = program->args;
-  top_fn.flags |= program->flags & (FN_SCOPE_FACTS | FN_DIRECT_EVAL | FN_OWN_YIELD);
+  top_fn.flags |= program->flags & (FN_SCOPE_FACTS | FN_DIRECT_EVAL | FN_OWN_YIELD | FN_USES_ARGS);
   const char *text = copy_source_text(js, body, (ant_offset_t)body_len);
   if (!text && body && body_len > 0) {
     parse_arena_rewind(js, parse_mark);
@@ -237,6 +261,7 @@ sv_func_t *sv_compile_function_with_params(
   
   root.allows_new_target = true;
   root.line_table = sv_compile_ctx_build_line_table(root.source, (ant_offset_t)body_len);
+  if ((top_fn.flags & FN_DIRECT_EVAL) && ast_literal_eval_mentions_arguments(&root, top_fn.body)) top_fn.flags |= FN_USES_ARGS;
   sv_func_t *func = compile_function_body(&root, &top_fn, SV_COMPILE_SCRIPT);
   
   sv_compile_ctx_free_line_table(root.line_table);

@@ -174,7 +174,8 @@ if ! libjs_runs; then
       export PATH="$rustup_prefix/bin:$PATH"
     fi
     python3 Meta/ladybird.py vcpkg --preset Distribution
-    cmake --preset Distribution -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DENABLE_GUI_TARGETS=OFF
+    cmake --preset Distribution -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DENABLE_GUI_TARGETS=OFF \
+      -DVCPKG_OVERLAY_PORTS="$SCRIPT_DIR/vcpkg-overlays"
     ninja -C Build/distribution js
   )
   mkdir -p "$libjs_install"
