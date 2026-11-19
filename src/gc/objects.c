@@ -1742,7 +1742,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     free(sidecar->extra_slots);
     free(sidecar->native_entries);
     free(sidecar->proxy_state);
-    free(sidecar->private_table.entries);
+    if (!ant_private_table_is_inline(&sidecar->private_table)) free(sidecar->private_table.entries);
     free(sidecar->gc_cards);
     free(sidecar->owned_exotic_ops);
     free(sidecar);
