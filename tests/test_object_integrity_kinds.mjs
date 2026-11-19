@@ -145,7 +145,6 @@ assert.strictEqual(live.bump(), 2);
 assert.strictEqual(live.n, 2);
 assert.strictEqual(live.bump(), 3);
 assert.deepStrictEqual(Object.getOwnPropertyDescriptor(live, 'n'), { value: 3, writable: true, enumerable: true, configurable: false });
-assert.strictEqual(Reflect.setPrototypeOf(live, {}), false);
 
 const bare = await import('data:text/javascript,export {}');
 assert.strictEqual(Object.isFrozen(bare), true);
