@@ -104,6 +104,22 @@ void push_arrow_params_from_expr(sv_parser_t *p, sv_ast_t *fn, sv_ast_t *expr) {
   );
 }
 
+static bool async_arrow_line_break(sv_parser_t *p) {
+  if (!sv_lexer_lookahead_newline(&p->lx)) return false;
+  SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Line terminator not allowed before arrow");
+  return true;
+}
+
+static bool async_params_mention_await(const sv_ast_t *node) {
+  if (!node || node->type == N_FUNC || node->type == N_CLASS) return false;
+  if (node->type == N_AWAIT) return true;
+  if (node->type == N_IDENT) return node->str && node->len == 5 && memcmp(node->str, "await", 5) == 0;
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (async_params_mention_await(child)) return true;
+  return false;
+}
+
 sv_ast_t *try_parse_async_arrow(sv_parser_t *p) {
   uint8_t la = sv_lexer_lookahead(&p->lx);
   uint32_t async_off = (uint32_t)p->lx.st.toff;
@@ -115,6 +131,7 @@ sv_ast_t *try_parse_async_arrow(sv_parser_t *p) {
     if (sv_lexer_next(&p->lx) == TOK_RPAREN) {
       p->lx.st.consumed = 1;
       if (sv_lexer_lookahead(&p->lx) == TOK_ARROW) {
+        if (async_arrow_line_break(p)) return mk(N_EMPTY);
         sv_lexer_next(&p->lx); p->lx.st.consumed = 1;
         sv_ast_t *fn = mk(N_FUNC);
         fn->flags = FN_ARROW | FN_ASYNC;
@@ -134,6 +151,11 @@ sv_ast_t *try_parse_async_arrow(sv_parser_t *p) {
     p->no_in = saved_no_in;
     expect(p, TOK_RPAREN);
     if (sv_lexer_lookahead(&p->lx) == TOK_ARROW) {
+      if (async_arrow_line_break(p)) return mk(N_EMPTY);
+      if (async_params_mention_await(expr)) {
+        SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Illegal await-expression in formal parameters of async function");
+        return mk(N_EMPTY);
+      }
       sv_lexer_next(&p->lx); p->lx.st.consumed = 1;
       sv_ast_t *fn = mk(N_FUNC);
       fn->flags = FN_ARROW | FN_ASYNC;
