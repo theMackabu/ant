@@ -307,6 +307,12 @@ static void func_free_sidecar(ant_t *js, sv_func_t *func) {
 }
 
 static void func_release(ant_t *js, sv_func_t *func) {
+  for (uint32_t i = 0; i < func->debug->literal_site_count; i++) {
+    sv_literal_site_t *site = &func->debug->literal_sites[i];
+    if (site->block) gc_shared_elements_release(js, site->block);
+    site->block = NULL;
+  }
+  
   uintptr_t raw = (uintptr_t)func->type_feedback;
   
   if (raw & ant_sidecar) {

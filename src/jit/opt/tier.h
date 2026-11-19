@@ -263,11 +263,12 @@ void opt_rt_materialize_property(sv_vm_t *vm, ant_value_t object, uint32_t index
 ant_value_t opt_rt_allocate_array(sv_vm_t *vm, uint64_t count);
 ant_value_t opt_rt_object(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_array(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, ant_value_t *args, int64_t argc, int64_t kind);
-ant_value_t opt_rt_array_const(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
+ant_value_t opt_rt_array_literal(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_get_super(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_put_super(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_get_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_put_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
+ant_value_t opt_rt_array_init(sv_vm_t *vm, ant_value_t arr, ant_value_t value, ant_value_t *args, int64_t argc, int64_t index);
 
 typedef struct {
   sv_func_t *func;

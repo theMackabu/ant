@@ -117,6 +117,10 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
   free(ctx->using_cleanups);
   free(ctx->shaped_sites);
   free(ctx->shaped_keys);
+  for (int i = 0; i < ctx->literal_site_count; i++)
+    if (ctx->literal_sites[i].block) gc_shared_elements_release(ctx->js, ctx->literal_sites[i].block);
+  free(ctx->literal_sites);
+  free(ctx->literal_keys);
 
   const_dedup_entry_t *entry;
   const_dedup_entry_t *tmp;
