@@ -71,6 +71,7 @@ static_assert(
 
 typedef struct {
   ant_value_t target;
+  ant_value_t trap_target;
   ant_value_t handler;
   const ant_host_proxy_ops_t *host;
   bool revoked;
