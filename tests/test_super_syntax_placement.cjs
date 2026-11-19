@@ -19,6 +19,8 @@ const misplaced = [
   'class C { constructor() { super(); } }',
   'class C extends Object { constructor() { function g() { return super.x; } super(); } }',
   '({ m: function () { return super.x; } })',
+  'class C extends Object { static { super(); } }',
+  'delete super.x;',
 ];
 for (const source of misplaced) assert.throws(() => new Function(source), SyntaxError, source);
 
