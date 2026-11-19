@@ -428,7 +428,11 @@ static ant_value_t js_execute_compiled_eval_bytecode(ant_t *js, sv_func_t *func,
   ant_value_t compiled = mkref(kTypeFunctionInfo, func);
   GC_ROOT_PIN(js, compiled);
 
-  ant_value_t result = sv_eval_declare_vars(js, func, scope.env, true);
+  ant_value_t result = func->eval_reads_arguments && scope.caller
+    ? sv_eval_bind_arguments(js->vm, js, scope.caller, scope.env)
+    : Ant_Value_Undefined;
+
+  if (!is_err(result)) result = sv_eval_declare_vars(js, func, scope.env, true);
   if (!is_err(result)) result = sv_execute_eval_entry(js->vm, func, scope.this_val, scope.env, scope.new_target);
 
   GC_ROOT_RESTORE(js, mark);

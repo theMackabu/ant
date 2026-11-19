@@ -16,6 +16,7 @@ typedef struct {
   ant_value_t this_val;
   ant_value_t env;
   ant_value_t new_target;
+  struct sv_frame *caller;
 } js_eval_scope_t;
 
 js_eval_result_t js_eval_source(
@@ -235,6 +236,7 @@ typedef struct sv_compiler {
   
   bool eval_shadows_undefined;
   bool eval_shadows_global_this;
+  bool eval_reads_arguments;
 
   sv_eval_decl_t *eval_vars;
   uint32_t eval_var_count;

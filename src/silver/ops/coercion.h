@@ -524,6 +524,7 @@ static inline void sv_op_special_obj(
       return;
     case SV_SPECIAL_EVAL_ENV:
       vm->stack[vm->sp++] = frame ? sv_eval_variable_env(vm, js, frame) : Ant_Value_Undefined;
+      if (frame) sv_eval_bind_arguments(vm, js, frame, Ant_Value_Undefined);
       return;
     case SV_SPECIAL_ARGUMENTS:
       if (frame) break;

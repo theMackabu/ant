@@ -352,10 +352,22 @@ typedef struct {
   uint32_t cached_index;
   uint32_t epoch;
   
-  sv_get_field_ic_kind_t get_kind;
+  union {
+    sv_get_field_ic_kind_t get_kind;
+    uint8_t eval_depth;
+  };
+  
   sv_ic_flags_t shape_ref_mask;
-  uint16_t slow_hits;
-  uint32_t prototype_epoch;
+  
+  union {
+    uint16_t slow_hits;
+    uint16_t eval_absent_level;
+  };
+  
+  union {
+    uint32_t prototype_epoch;
+    uint32_t eval_absent_count;
+  };
 
   union {
     ant_object_t *cached_holder;
@@ -389,6 +401,10 @@ typedef struct {
       ant_value_t receiver_proto;
       uint32_t object_epoch;
     } comparison;
+    
+    struct {
+      const struct sv_eval_scope *scopes[3];
+    } eval;
   } guard;
   
 #ifdef ANT_WASM_EMBED
@@ -544,10 +560,16 @@ typedef struct {
   uint32_t import_len;
 } sv_runtime_binding_t;
 
-typedef struct {
+typedef struct sv_eval_scope {
   const sv_runtime_binding_t *bindings;
   uint32_t count;
 } sv_eval_scope_t;
+
+enum {
+  SV_EVAL_IC_MAX_DEPTH = 3,
+  SV_EVAL_IC_CELL = 0x80,
+  SV_EVAL_IC_NONE = 0xff,
+};
 
 enum {
   SV_EVAL_BIND_PARAM = 0,
@@ -558,6 +580,7 @@ enum {
   SV_EVAL_BIND_CATCH = 8,
   SV_EVAL_BIND_IMPORT_DEFAULT = 16,
   SV_EVAL_BIND_IMPORT_NAMED = 32,
+  SV_EVAL_BIND_ARGUMENTS = 64,
 };
 
 typedef struct {
@@ -695,6 +718,7 @@ struct sv_func {
   bool is_eval: 1;
   bool needs_eval_env: 1;
   bool lazy_eval_env: 1;
+  bool eval_reads_arguments: 1;
   bool allows_new_target: 1;
   bool has_map_templates: 1;
 

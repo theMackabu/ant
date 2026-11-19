@@ -402,6 +402,11 @@ static inline bool has_implicit_arguments_obj(const sv_compiler_t *c) {
   return c && !c->is_arrow && c->enclosing && !sv_compile_mode_is_eval(c->mode);
 }
 
+static inline void note_eval_reads_arguments(sv_compiler_t *c) {
+  while (c->enclosing) c = c->enclosing;
+  c->eval_reads_arguments = true;
+}
+
 static inline void emit_arguments_eval_env(sv_compiler_t *c, const char *name, uint32_t len) {
   if (!c->lazy_eval_env || !is_ident_str(name, len, "arguments", 9)) return;
   emit_op(c, OP_SPECIAL_OBJ);
