@@ -74,6 +74,7 @@ export function targets() {
     'test_regexp_flag_accessors.cjs',
     'test_property_descriptor_objects.cjs',
     'test_inspect_extra_props.cjs',
+    'test_for_in_deep_prototype_chain.cjs',
     'test_tls_server.mjs',
     'test_tls_socket_rewrap.cjs',
     'test_tls_socket_readable.mjs',
