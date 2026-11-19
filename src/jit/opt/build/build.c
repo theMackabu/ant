@@ -5282,9 +5282,17 @@ static opt_flow_t opt_build_import(opt_builder_t *b, const uint8_t *ip, sv_op_t 
   return OPT_FLOW_CONTINUE;
 }
 
+static bool opt_super_receiver_unsettled(const opt_builder_t *b) {
+  return !b->inline_call && sv_func_deferred_receiver(b->func);
+}
+
+static void opt_super_receiver_guard(opt_builder_t *b, ir_node_id_t receiver) {
+  if (opt_super_receiver_unsettled(b)) opt_emit_checked(b, ir_op(IR_OP_CHECK_OBJECT), &receiver, 1, OPT_REPR_NONE);
+}
+
 static ant_value_t opt_super_call_parents(const opt_builder_t *b, ir_node_id_t home_node, opt_super_parents_t *chain) {
   if (!opt_may_speculate(b, OPT_EXIT_BAD_SHAPE) || !opt_may_speculate(b, OPT_EXIT_BAD_TYPE)) return 0;
-  if (!b->inline_call && sv_func_deferred_receiver(b->func)) return 0;
+  if (opt_super_receiver_unsettled(b) && !opt_may_speculate(b, OPT_EXIT_NOT_OBJECT)) return 0;
   ant_value_t home = opt_likely_value(b, home_node);
   const sv_closure_t *self = b->ctx->closure;
   if (!home && !b->inline_call && self && self->func == b->func && (self->call_flags & SV_CALL_HAS_SUPER)) home = self->super_val;
@@ -5312,6 +5320,7 @@ static bool opt_try_super_inline(opt_builder_t *b, bool forward, const ir_node_i
     return false;
   }
 
+  opt_super_receiver_guard(b, inputs[0]);
   opt_super_parents_guard(b, inputs[1], home, &chain);
   if (!target) {
     opt_drop(b, operands);
@@ -5331,6 +5340,7 @@ static ir_node_id_t opt_try_super_direct(opt_builder_t *b, const ir_node_id_t *i
   if (!home || !chain.closure || !opt_bound_arguments_fit(chain.bound_count, argc) || !opt_super_parents_retain(b, &chain)) return IR_NONE;
   for (uint32_t i = 0; i < argc; i++)
     if (opt_is_any_virtual_arguments(b, inputs[3 + i])) return IR_NONE;
+  opt_super_receiver_guard(b, inputs[0]);
   opt_super_parents_guard(b, inputs[1], home, &chain);
   ir_node_id_t operands[3 + OPT_MAX_CALL_ARGS], joined[OPT_MAX_CALL_ARGS];
   const ir_node_id_t *args = opt_super_arguments(b, &chain, inputs + 3, &argc, joined);
