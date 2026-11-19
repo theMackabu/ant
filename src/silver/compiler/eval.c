@@ -1,3 +1,5 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include "compiler_internal.h"
 
 typedef struct {
@@ -616,20 +618,54 @@ static bool eval_program_needs_env(sv_compiler_t *c, const sv_ast_t *program) {
     ast_has_own_eval(c, expr);
 }
 
-static bool eval_source_needs_env(sv_compiler_t *c, const sv_ast_t *source) {
+static bool eval_program_mentions_arguments(sv_compiler_t *c, const sv_ast_t *node) {
+  if (!node) return false;
+  if (node->type == N_IDENT) return is_ident_str(node->str, node->len, "arguments", 9);
+  for (int i = 0; node->type == N_PROGRAM && i < node->args.count; i++)
+    if (eval_program_mentions_arguments(c, node->args.items[i])) return true;
+
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (eval_program_mentions_arguments(c, child)) return true;
+
+  return false;
+}
+
+static bool eval_source_test(
+  sv_compiler_t *c, const sv_ast_t *source,
+  bool (*test)(sv_compiler_t *c, const sv_ast_t *program)
+) {
   GC_ROOT_SAVE(exception_mark, c->js);
   ant_value_t saved_exception = Ant_Exception_Peek(c->js);
   GC_ROOT_PIN(c->js, saved_exception);
   code_arena_mark_t mark = parse_arena_mark(c->js);
   
   sv_ast_t *program = sv_parse(c->js, source->str ? source->str : "", source->len, SV_PARSE_SCRIPT, c->is_strict);
-  bool needs_env = eval_program_needs_env(c, program);
+  bool result = test(c, program);
   
   parse_arena_rewind(c->js, mark);
   Ant_Exception_Set(c->js, saved_exception);
   GC_ROOT_RESTORE(c->js, exception_mark);
   
-  return needs_env;
+  return result;
+}
+
+bool ast_literal_eval_mentions_arguments(sv_compiler_t *c, const sv_ast_t *node) {
+  if (!node || (node->type == N_FUNC && !(node->flags & FN_ARROW)) || node->type == N_CLASS) return false;
+
+  const sv_ast_t *source = node->type == N_CALL && is_ident_name(node->left, "eval") && node->args.count > 0
+    ? node->args.items[0] : NULL;
+  if (
+    source && source->type == N_STRING && source->str &&
+    memmem(source->str, source->len, "arguments", 9) &&
+    eval_source_test(c, source, eval_program_mentions_arguments)
+  ) return true;
+
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (ast_literal_eval_mentions_arguments(c, child)) return true;
+
+  return false;
 }
 
 static bool eval_call_needs_env(sv_compiler_t *c, const sv_ast_t *node) {
@@ -639,7 +675,7 @@ static bool eval_call_needs_env(sv_compiler_t *c, const sv_ast_t *node) {
   const sv_ast_t *arg = node->args.items[0];
   if (eval_arg_is_definitely_non_string(arg)) return false;
   
-  return !arg || arg->type != N_STRING || eval_source_needs_env(c, arg);
+  return !arg || arg->type != N_STRING || eval_source_test(c, arg, eval_program_needs_env);
 }
 
 bool ast_has_own_eval(sv_compiler_t *c, const sv_ast_t *node) {

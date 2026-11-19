@@ -636,7 +636,7 @@ int jit_constant_object_span(sv_func_t *func, sv_obj_site_cache_t *site, jit_lab
   return (int)(ip - begin);
 }
 
-void mir_emit_branch_if_object(
+void mir_emit_branch_if_construct_result(
     MIR_context_t ctx, MIR_item_t fn, MIR_reg_t value, MIR_reg_t scratch, MIR_label_t target) {
   MIR_label_t not_object = MIR_new_label(ctx);
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBLE,
@@ -648,7 +648,7 @@ void mir_emit_branch_if_object(
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_LSH,
       MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, 1), MIR_new_reg_op(ctx, scratch)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_AND,
-      MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, (int64_t)T_OBJECT_MASK)));
+      MIR_new_reg_op(ctx, scratch), MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, (int64_t)(T_OBJECT_MASK | (1u << kTypeBuiltin)))));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_BT,
       MIR_new_label_op(ctx, target), MIR_new_reg_op(ctx, scratch)));
   MIR_append_insn(ctx, fn, not_object);

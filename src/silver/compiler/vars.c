@@ -254,7 +254,10 @@ static void emit_slot_atom_op(sv_compiler_t *c, sv_op_t op, int local, const cha
   emit_u32(c, (uint32_t)ai);
 }
 
-void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len) {
+static void emit_get_var_with(
+  sv_compiler_t *c, const char *name, uint32_t len,
+  sv_op_t global_op, sv_op_t eval_op
+) {
   bool is_super = is_ident_str(name, len, "super", 5);
 
   if (is_super && c->super_local >= 0) {
@@ -313,25 +316,14 @@ void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len) {
   
   if (is_ident_str(name, len, "arguments", 9)) {
     if (c->owns_eval_env || sv_compile_mode_is_eval(c->mode)) {
-      emit_atom_op(c, OP_GET_EVAL_GLOBAL, name, len);
+      emit_arguments_eval_env(c, name, len);
+      emit_atom_op(c, eval_op, name, len);
       return;
     }
     if (has_implicit_arguments_obj(c)) {
-      if (c->strict_args_local >= 0) {
-        emit_get_local(c, c->strict_args_local);
-      } else {
-        emit_op(c, OP_SPECIAL_OBJ);
-        emit(c, SV_SPECIAL_ARGUMENTS);
-      }
+      emit_op(c, OP_SPECIAL_OBJ);
+      emit(c, SV_SPECIAL_ARGUMENTS);
       return;
-    }
-    if (c->is_arrow) {
-      int args_upval = resolve_arguments_upvalue(c);
-      if (args_upval != -1) {
-        emit_op(c, OP_GET_UPVAL);
-        emit_u16(c, (uint16_t)args_upval);
-        return;
-      }
     }
   }
   
@@ -340,9 +332,15 @@ void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len) {
     return;
   }
   
-  emit_atom_op(
-    c, env_resolution_op(c, OP_GET_GLOBAL, OP_GET_EVAL_GLOBAL),
-    name, len);
+  emit_atom_op(c, env_resolution_op(c, global_op, eval_op), name, len);
+}
+
+void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len) {
+  emit_get_var_with(c, name, len, OP_GET_GLOBAL, OP_GET_EVAL_GLOBAL);
+}
+
+void emit_get_var_typeof(sv_compiler_t *c, const char *name, uint32_t len) {
+  emit_get_var_with(c, name, len, OP_GET_GLOBAL_UNDEF, OP_GET_EVAL_GLOBAL_UNDEF);
 }
 
 void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len) {
@@ -438,6 +436,7 @@ static void emit_set_var_plain(sv_compiler_t *c, const char *name, uint32_t len,
     return;
   }
   if (keep) emit_op(c, OP_DUP);
+  emit_arguments_eval_env(c, name, len);
   emit_atom_op(
     c, env_resolution_op(c, OP_PUT_GLOBAL, OP_PUT_EVAL_GLOBAL),
     name, len);

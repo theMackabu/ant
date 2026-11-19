@@ -240,20 +240,6 @@ ant_value_t js_create_arguments_object(
 ) {
   GC_ROOT_SAVE(root_mark, js);
 
-  uint32_t count = frame && frame->bp && argc > 0 ? (uint32_t)argc : 0;
-  ant_value_t arr = mkarr_dense_literal_capacity(js, count ? frame->bp : NULL, count, true);
-  
-  if (is_err(arr)) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return arr;
-  } 
-  
-  GC_ROOT_PIN(js, arr);
-  ant_object_t *target = js_obj_ptr(arr);
-  
-  target->flags.arguments_object = 1;
-  if (is_object_type(js->sym.object_proto)) js_set_proto_init(arr, js->sym.object_proto);
-
   ant_value_t iter_fn = js->sym.array_values_fn;
   bool has_iterator =
     vtype(js->sym.iterator_sym) == kTypeSymbol &&
@@ -267,13 +253,19 @@ ant_value_t js_create_arguments_object(
   }
   
   ant_object_t *source = js_obj_ptr(seed);
-  ant_shape_retain(source->shape);
-  ant_shape_release(target->shape);
+  uint32_t count = frame && frame->bp && argc > 0 ? (uint32_t)argc : 0;
+  ant_value_t arr = mkarr_dense_shaped(js, source->shape, count ? frame->bp : NULL, count);
   
-  target->shape = source->shape;
+  if (is_err(arr)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return arr;
+  } 
+  
+  GC_ROOT_PIN(js, arr);
+  ant_object_t *target = js_obj_ptr(arr);
+  
+  target->flags.arguments_object = 1;
   target->prop_count = source->prop_count;
-  
-  ant_object_set_proto(js, target, ant_object_proto(target));
   
   target->inobj[ANT_ARGUMENTS_SLOT_LENGTH] = Ant_Value_FromNumber((double)count);
   target->inobj[ANT_ARGUMENTS_SLOT_CALLEE] = is_strict ? source->inobj[ANT_ARGUMENTS_SLOT_CALLEE] : callee;

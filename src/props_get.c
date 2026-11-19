@@ -403,17 +403,6 @@ static bool js_try_get_len(ant_t *js, ant_value_t obj, const char *key, size_t k
   }
   
   if (vtype(obj) == kTypeFunction) {
-    if (sv_vm_is_strict(js->vm) &&
-        ((key_len == 6 && memcmp(key, "caller", 6) == 0) ||
-         (key_len == 9 && memcmp(key, "arguments", 9) == 0))) {
-      *out = js_mkerr_typed(
-        js, JS_ERR_TYPE,
-        "'%.*s' not allowed on functions in strict mode",
-        (int)key_len, key
-      );
-      return true;
-    }
-
     ant_value_t func_obj = js_func_obj(obj);
     if (key_len == 4 && memcmp(key, "meta", 4) == 0 &&
       js_try_import_meta(js, func_obj, out)) return true;
@@ -604,7 +593,6 @@ ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t recei
   size_t key_len = strlen(name);
   if (is_proxy(super_obj)) return proxy_get_with_receiver(js, super_obj, name, key_len, receiver);
   
-  bool string_own_key = is_length_key(name, key_len) || (name[0] >= '0' && name[0] <= '9');
   const char *key_intern = intern_string(js, name, key_len);
   if (!key_intern) return Ant_Value_Undefined;
 
@@ -616,12 +604,6 @@ ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t recei
     ant_object_t *cur_ptr = js_obj_ptr(cur_obj);
     bool handled = false;
     
-    if (cur_ptr && cur_ptr->flags.is_exotic && is_proxy(cur_obj)) return proxy_get_with_receiver(js, cur_obj, name, key_len, receiver);
-    
-    ant_value_t string_own;
-    bool string_wrapper = string_own_key && cur_ptr && cur_ptr->extra_slots && vtype(js_string_wrapper_value(cur_obj)) == kTypeString;
-    if (string_wrapper && js_try_get_string_own_exotic(js, cur_obj, name, key_len, &string_own, NULL)) return string_own;
-
     if (cur_ptr && cur_ptr->shape) {
       int32_t slot = ant_shape_lookup_interned(cur_ptr->shape, key_intern);
       if (slot >= 0) {
@@ -639,8 +621,12 @@ ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t recei
 
     ant_value_t element;
     if (!handled && array_own_value(js, cur_obj, name, key_len, &element)) return element;
+    
+    bool string_own_key = !handled && cur_ptr && cur_ptr->extra_slots && (name[0] == 'l' || (name[0] >= '0' && name[0] <= '9'));
+    if (string_own_key && js_try_get_string_own_exotic(js, cur_obj, name, key_len, &element, NULL)) return element;
 
     if (!handled && cur_ptr && cur_ptr->flags.is_exotic) {
+      if (is_proxy(cur_obj)) return proxy_get_with_receiver(js, cur_obj, name, key_len, receiver);
       ant_value_t exotic = exotic_own_get(js, cur_obj, cur_ptr, name, key_len);
       if (vtype(exotic) != kTypeUndefined) return exotic == T_EMPTY ? Ant_Value_Undefined : exotic;
       descriptor_entry_t *desc = lookup_descriptor(js, cur_obj, name, key_len);

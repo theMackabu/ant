@@ -54,4 +54,43 @@ const sites = [];
 for (let i = 0; i < 2; i++) sites.push(object.tag`same`[1], ((s) => s)`site`);
 assert.strictEqual(sites[1], sites[3]);
 
+const tagged = { v: 7, tag(strings, ...values) { return [this && this.v, strings.raw.join('|'), values.join()].join(':'); } };
+class TagBase { tag(strings) { return [this.v, strings.raw.join('|')].join(':'); } }
+class TagDerived extends TagBase {
+  constructor() { super(); this.v = 9; }
+  viaSuper() { return super.tag`a${1}b`; }
+  viaComputedSuper() { return super['tag']`x`; }
+}
+assert.strictEqual(tagged.tag`a${1}b`, '7:a|b:1');
+assert.strictEqual(tagged['tag']`q`, '7:q:');
+assert.strictEqual((0, tagged.tag)`z`, ':z:');
+assert.strictEqual(new TagDerived().viaSuper(), '9:a|b');
+assert.strictEqual(new TagDerived().viaComputedSuper(), '9:x');
+
+function show(v) {
+  if (typeof v === 'function') return 'function ' + v.name;
+  if (typeof v === 'symbol' || typeof v === 'bigint') return String(v);
+  if (v === undefined) return 'undefined';
+  try { return JSON.stringify(v) } catch (e) { return 'unserializable' }
+}
+
+function outcome(src) {
+  let fn;
+  try { fn = new Function(src) } catch (e) { return 'compile ' + e.constructor.name }
+  try { return 'value ' + show(fn()) } catch (e) { return 'throw ' + (e && e.constructor ? e.constructor.name : String(e)) }
+}
+
+const cases = [
+  ["var o = { F(s) { return this === o } }; return (o?.F)`x`", "value true"],
+  ["var o = { F(s) { return this === o } }; return (o.F)`x`", "value true"],
+  ["var o = { p: { F(s) { return this === o.p } } }; return (o?.p.F)`x`", "value true"],
+];
+
+const failed = [];
+for (const [src, want] of cases) {
+  const got = outcome(src);
+  if (got !== want) failed.push(`${src} => ${got}, want ${want}`);
+}
+assert.deepStrictEqual(failed, []);
+
 console.log('ok');
