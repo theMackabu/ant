@@ -37,6 +37,14 @@ ant_value_t js_esm_import_dynamic_ex(
   return js_mkerr_typed(js, JS_ERR_TYPE, "module imports are not available in @antjs.org/wasm" );
 }
 
+ant_value_t js_esm_import_loaded(ant_t *js, ant_value_t specifier, const char *base_path, ant_value_t attrs) {
+  return Ant_Value_Undefined;
+}
+
+ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const char *base_path) {
+  return js_mkerr_typed(js, JS_ERR_TYPE, "module imports are not available in @antjs.org/wasm");
+}
+
 ant_value_t js_vm_dynamic_import(
   ant_t *js, sv_code_unit_t *unit, ant_value_t specifier, ant_value_t options
 ) {
