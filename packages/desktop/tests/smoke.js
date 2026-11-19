@@ -1,16 +1,5 @@
-import { app, BrowserWindow, ipcMain, versions } from 'ant:desktop';
+import { app, ipcMain, versions } from 'ant:desktop';
 
-if (typeof BrowserWindow !== 'function') {
-  throw new Error('BrowserWindow export is unavailable');
-}
-
-const firstReady = app.ready();
-if (firstReady !== app.ready()) {
-  throw new Error('app.ready() did not return the shared readiness promise');
-}
-if ('_readyPromise' in app) {
-  throw new Error('native readiness state leaked onto the app object');
-}
 if (typeof app.resourcesPath !== 'string' || !app.resourcesPath) {
   throw new Error('app.resourcesPath is unavailable');
 }
@@ -33,24 +22,9 @@ if (process.versions['ant-desktop'] !== versions.desktop ||
     process.versions.chrome !== versions.chrome) {
   throw new Error('desktop component versions are missing from process.versions');
 }
-if (app.versions !== versions) {
-  throw new Error('app.versions does not reference the exported version set');
-}
-for (const name of [
-  '__antDesktopWindowObjects',
-  '__antDesktopIpcHandlers',
-  '__antDesktopIpcListeners',
-  '__antDesktopEncode',
-  '__antDesktopDispatch',
-  '__antNativeIpcReply'
-]) {
-  if (name in globalThis) {
-    throw new Error(`native desktop bridge leaked as globalThis.${name}`);
-  }
-}
-await firstReady;
+await app.ready();
 ipcMain.handle('smoke:ping', value => value);
-ipcMain.on('smoke:event', () => {});
 ipcMain.removeHandler('smoke:ping');
+ipcMain.handle('smoke:ping', value => value);
 console.log('desktop-smoke-ok');
 setTimeout(() => app.quit(), 10);

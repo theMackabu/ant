@@ -347,6 +347,8 @@ ant_value_t js_cfunc_expose_property(ant_t *js, ant_value_t fn, js_cfunc_role_t 
 
 ant_value_t js_expose_cfunc_for_key(ant_t *js, ant_value_t value, const char *key, size_t key_len) {
   if (vtype(value) != kTypeBuiltin) return value;
+  const ant_cfunc_meta_t *meta = js_as_cfunc_meta(value);
+  if (meta && meta->name) return value;
   return js_cfunc_expose_named(js, value, key, key_len);
 }
 

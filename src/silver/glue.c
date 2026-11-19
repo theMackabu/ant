@@ -374,10 +374,11 @@ ant_value_t jit_helper_apply(
   sv_call_args_t call;
   sv_call_args_reset(&call, args, argc);
   
-  return jit_call_prepared(
-    vm, js, func, this_val, &call, 
-    sv_apply_normalize_args(js, &call, cap)
-  );
+  ant_value_t status;
+  [[clang::always_inline]]
+  status = sv_apply_normalize_args(js, &call, cap);
+  
+  return jit_call_prepared(vm, js, func, this_val, &call, status);
 }
 
 ant_value_t jit_helper_call_spread(
@@ -1963,7 +1964,7 @@ ant_value_t jit_helper_new_this(ant_t *js, ant_value_t func, ant_value_t new_tar
   ant_value_t proto;
   if (!sv_construct_prototype_data(js, func_obj, closure->func, &proto)) return T_EMPTY;
 
-  ant_value_t obj = js_mkobj_with_proto_slots(js, proto, sv_closure_construct_slots(closure));
+  ant_value_t obj = js_mkobj_with_proto_slots(js, proto, sv_construct_slots(closure->func));
   if (vtype(obj) != kTypeObject) return T_EMPTY;
   
   return obj;

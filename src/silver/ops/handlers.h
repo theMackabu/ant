@@ -89,7 +89,7 @@ L_CLOSURE_ARGS: {
 }
 
 L_INIT_EVAL_ENV: {
-  VM_CHECK(sv_eval_init_variable_env(vm, js, frame));
+  if (!func->lazy_eval_env) VM_CHECK(sv_eval_init_variable_env(vm, js, frame));
   NEXT(OP_INIT_EVAL_ENV);
 }
 
@@ -1362,7 +1362,7 @@ L_NEW: {
 
     ant_value_t new_obj = js_mkobj_with_proto_slots(
       js, is_object_type(proto) ? proto :
-      Ant_Value_Undefined, sv_construct_slots_of(new_func)
+      Ant_Value_Undefined, sv_construct_slots(new_callee)
     );
 
     GC_ROOT_RESTORE(js, new_mark);

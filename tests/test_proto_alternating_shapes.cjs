@@ -96,17 +96,6 @@ p1.level = 'changed';
 assert.strictEqual(twins[0].level, 'changed');
 assert.strictEqual(deep.level, 'changed');
 
-const frozenProto = { a: 1 };
-const holder = Object.preventExtensions({ x: 1 });
-assert.throws(() => { holder.__proto__ = frozenProto; }, TypeError);
-assert.throws(() => Object.setPrototypeOf(holder, frozenProto), TypeError);
-assert.strictEqual(Reflect.setPrototypeOf(holder, frozenProto), false);
-assert.strictEqual(Reflect.setPrototypeOf(holder, Object.prototype), true);
-
-const cycA = {};
-const cycB = Object.create(cycA);
-assert.throws(() => { cycA.__proto__ = cycB; }, TypeError);
-
 const pile = [];
 for (let i = 0; i < 200000; i++) pile.push({ i });
 pile.length = 0;

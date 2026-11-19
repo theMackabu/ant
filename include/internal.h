@@ -164,7 +164,7 @@ static inline bool is_callable(ant_value_t v) {
 }
 
 static inline bool sv_is_construct_result(ant_value_t value) {
-  return is_object_type(value) || vtype(value) == kTypeBuiltin;
+  return ((1u << vtype(value)) & (T_OBJECT_MASK | (1u << kTypeBuiltin))) != 0;
 }
 
 static inline ant_value_t sv_construct_result(ant_value_t result, ant_value_t receiver, ant_value_t fallback) {
@@ -388,7 +388,7 @@ ant_value_t js_maybe_set_function_name_from_key(
 
 sv_func_t *js_compile_parsed_bytecode(
   ant_t *js, struct sv_ast *program, const char *buf, 
-  size_t len, int mode, ant_value_t eval_env
+  size_t len, int mode, uint8_t eval_shadows
 );
 
 bool js_try_char_code_at(

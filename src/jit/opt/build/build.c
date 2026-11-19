@@ -1940,7 +1940,7 @@ static void opt_add_fields(opt_builder_t *b, ir_node_id_t object, ir_node_id_t a
 static constexpr uint32_t OPT_MAX_FIELD_SHAPES = 1 + SV_GF_POLY_WAYS;
 static constexpr uint32_t OPT_SHAPE_SET_MAX = 4;
 
-static constexpr uint32_t OPT_MAX_PROTOTYPE_DEPTH = 4;
+static constexpr uint32_t OPT_MAX_PROTOTYPE_DEPTH = 8;
 
 typedef struct {
   ant_shape_t *shape;
@@ -2503,7 +2503,7 @@ static opt_flow_t opt_build_polymorphic_field(opt_builder_t *b, opt_field_plan_t
 
   opt_frame_t before = opt_frame_clone(b, &b->frame);
   ir_shape_case_t switch_cases[OPT_MAX_FIELD_SHAPES + 2 * OPT_MAX_ADDS + 1];
-  ir_block_id_t ends[OPT_MAX_FIELD_SHAPES + OPT_MAX_ADDS + 1], slow[2 + 3 * OPT_MAX_FIELD_SHAPES + OPT_MAX_ADDS];
+  ir_block_id_t ends[OPT_MAX_FIELD_SHAPES + OPT_MAX_ADDS + 1], slow[2 + 2 * OPT_MAX_PROTOTYPE_DEPTH * OPT_MAX_FIELD_SHAPES + OPT_MAX_ADDS];
   ir_block_id_t runtime[OPT_MAX_ADDS];
   ir_node_id_t loaded[OPT_MAX_FIELD_SHAPES + 1];
   uint32_t slow_count = 0;
@@ -3573,7 +3573,7 @@ static void opt_inline_run(opt_builder_t *b, sv_func_t *target, ir_node_id_t clo
     .receiver = receiver,
     .new_target = new_target,
     .argc = argc,
-    .args = opt_arena_dup(&b->graph->arena, args, (argc + 1) * sizeof *args),
+    .args = opt_arena_dup(&b->graph->arena, args, argc * sizeof *args),
     .construct = construct,
     .depth = (b->inline_call ? b->inline_call->depth : 0) + 1,
     .continuation = IR_NONE,
@@ -4095,6 +4095,27 @@ static sv_func_t *opt_known_target(opt_builder_t *b, ir_node_id_t callee) {
   return target && !target->is_async && !target->is_generator && target->code_len > 0 ? target : NULL;
 }
 
+static ant_value_t opt_known_callee(opt_builder_t *b, ir_node_id_t callee, bool *constant) {
+  uint64_t bits;
+  *constant = ir_constant_value(b->graph, callee, &bits) && ir_node(b->graph, callee)->repr == OPT_REPR_TAGGED;
+  return *constant ? (ant_value_t)bits : opt_likely_value(b, callee);
+}
+
+static ir_node_id_t opt_emit_cfunc_call(opt_builder_t *b, ant_value_t known, ant_value_t cfunc, const ir_node_id_t *inputs, uint32_t argc) {
+  ir_op_t call = ir_op(IR_OP_CALL_NATIVE);
+  call.call.func = b->func;
+  call.call.bc_off = b->pc;
+  call.call.stores_operands = true;
+  call.call.argc = (uint16_t)argc;
+  call.call.helper = (uintptr_t)((const ant_cfunc_meta_t *)vptr(cfunc))->fn;
+  call.call.extra = cfunc == known ? 0 : (uintptr_t)known;
+  call.call.builtin = true;
+  ir_node_id_t result = opt_emit(b, call, inputs, 2 + argc, OPT_REPR_TAGGED);
+  ir_node(b->graph, result)->frame_state = opt_call_position(b);
+  opt_mark_catch(b, result);
+  return result;
+}
+
 static opt_flow_t opt_build_push_pop(opt_builder_t *b, bool push, const ir_node_id_t *inputs, uint32_t operands, bool tail) {
   ir_block_id_t slow[4], ends[3];
   ir_node_id_t results[3], length;
@@ -4133,14 +4154,9 @@ static opt_flow_t opt_build_push_pop(opt_builder_t *b, bool push, const ir_node_
   }
   opt_join_blocks(b, slow, count);
   ir_block(b->graph, b->block)->is_cold = true;
-  ir_op_t call = ir_op(IR_OP_CALL_DIRECT);
-  call.call.func = b->func;
-  call.call.bc_off = b->pc;
-  call.call.stores_operands = true;
-  call.call.argc = push;
-  results[paths] = opt_emit(b, call, inputs, 2 + push, OPT_REPR_TAGGED);
-  ir_node(b->graph, results[paths])->frame_state = opt_call_position(b);
-  opt_mark_catch(b, results[paths]);
+  bool constant;
+  ant_value_t builtin = opt_known_callee(b, inputs[0], &constant);
+  results[paths] = opt_emit_cfunc_call(b, builtin, builtin, inputs, push);
   ends[paths++] = b->block;
   opt_join_blocks(b, ends, paths);
   return opt_finish_call(b, operands, opt_value_phi(b, b->frame.sp - operands, results, paths), tail);
@@ -4313,10 +4329,9 @@ static opt_flow_t opt_build_getter_field(opt_builder_t *b, const opt_field_plan_
 }
 
 static bool opt_try_builtin_call(opt_builder_t *b, ir_node_id_t *inputs, uint32_t argc, uint32_t operands, bool tail, opt_flow_t *flow) {
-  uint64_t bits;
   ir_node_id_t callee = inputs[0];
-  bool constant = ir_constant_value(b->graph, callee, &bits) && ir_node(b->graph, callee)->repr == OPT_REPR_TAGGED;
-  ant_value_t known = constant ? (ant_value_t)bits : opt_likely_value(b, callee);
+  bool constant;
+  ant_value_t known = opt_known_callee(b, callee, &constant);
   if (!known) return false;
   ant_value_t cfunc = vtype(known) == kTypeBuiltin ? known : sv_native_closure_cfunc(known);
   if (!cfunc || (cfunc != known && !opt_retain(b, known))) return false;
@@ -4327,17 +4342,7 @@ static bool opt_try_builtin_call(opt_builder_t *b, ir_node_id_t *inputs, uint32_
     check.check_value.kind = OPT_EXIT_BAD_CALL_TARGET;
     opt_emit_checked(b, check, &callee, 1, OPT_REPR_NONE);
   }
-  ir_op_t call = ir_op(IR_OP_CALL_NATIVE);
-  call.call.func = b->func;
-  call.call.bc_off = b->pc;
-  call.call.stores_operands = true;
-  call.call.argc = (uint16_t)argc;
-  call.call.helper = (uintptr_t)((const ant_cfunc_meta_t *)vptr(cfunc))->fn;
-  call.call.extra = cfunc == known ? 0 : (uintptr_t)known;
-  call.call.builtin = true;
-  ir_node_id_t result = opt_emit(b, call, inputs, 2 + argc, OPT_REPR_TAGGED);
-  ir_node(b->graph, result)->frame_state = opt_call_position(b);
-  opt_mark_catch(b, result);
+  ir_node_id_t result = opt_emit_cfunc_call(b, known, cfunc, inputs, argc);
   opt_forget_memory(b);
   *flow = opt_finish_call(b, operands, result, tail);
   return true;
@@ -4583,10 +4588,110 @@ static opt_flow_t opt_build_array(opt_builder_t *b, const uint8_t *ip) {
   return OPT_FLOW_CONTINUE;
 }
 
+static constexpr uint32_t OPT_LITERAL_MAX_ALLOCATIONS = 32;
+static constexpr uint32_t OPT_LITERAL_MAX_VALUES = 256;
+static constexpr uint32_t OPT_LITERAL_MAX_NODE_VALUES = OPT_MAX_INLINE_ARRAY;
+
+static bool opt_literal_fits(opt_builder_t *b, ant_value_t boilerplate, uint32_t *allocations, uint32_t *values, int depth) {
+  if (depth >= SV_LITERAL_MAX_DEPTH || ++*allocations > OPT_LITERAL_MAX_ALLOCATIONS) return false;
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(boilerplate));
+  
+  if (vtype(boilerplate) == kTypeArray) {
+    uint32_t count = ptr->u.array.len;
+    if (
+      !ptr->flags.fast_array || !ptr->u.array.data || count == 0 || count > OPT_MAX_INLINE_ARRAY ||
+      gc_array_storage_fit_class(count) < 0 || (*values += count) > OPT_LITERAL_MAX_VALUES
+    ) return false;
+    
+    for (uint32_t i = 0; i < count; i++) {
+      ant_value_t value = ptr->u.array.data[i];
+      if (is_empty_slot(value)) return false;
+      if (is_object_type(value) && !opt_literal_fits(b, value, allocations, values, depth + 1)) return false;
+    }
+    
+    return true;
+  }
+  
+  ant_shape_t *shape = ptr->shape;
+  if (vtype(boilerplate) != kTypeObject || !shape || ptr->flags.is_exotic || ptr->overflow_prop || ptr->extra_slots) return false;
+  
+  uint32_t count = ant_shape_count(shape);
+  if (
+    ant_shape_proto(shape) != b->js->sym.object_proto || count != ptr->prop_count ||
+    count > ant_shape_get_inobj_limit(shape) || count > OPT_LITERAL_MAX_NODE_VALUES || (*values += count) > OPT_LITERAL_MAX_VALUES ||
+    !jit_snapshot_shape(b->js, shape)
+  ) return false;
+  
+  for (uint32_t i = 0; i < count; i++) {
+    ant_value_t value = ant_object_prop_get_unchecked(ptr, i);
+    if (is_object_type(value) && !opt_literal_fits(b, value, allocations, values, depth + 1)) return false;
+  }
+  
+  return true;
+}
+
+static ir_node_id_t opt_literal_emit(opt_builder_t *b, ant_value_t boilerplate);
+
+static ir_node_id_t opt_literal_value(opt_builder_t *b, ant_value_t value) {
+  if (is_object_type(value)) return opt_literal_emit(b, value);
+  return opt_constant(b, vtype(value) == kTypeNumber ? ir_value_number(Ant_Value_AsNumberUnchecked(value)) : value);
+}
+
+static ir_node_id_t opt_literal_emit(opt_builder_t *b, ant_value_t boilerplate) {
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(boilerplate));
+  ir_node_id_t values[OPT_LITERAL_MAX_NODE_VALUES];
+  
+  if (vtype(boilerplate) == kTypeArray) {
+    uint32_t count = ptr->u.array.len;
+    for (uint32_t i = 0; i < count; i++) values[i] = opt_literal_value(b, ptr->u.array.data[i]);
+    
+    ir_op_t op = ir_op(IR_OP_ALLOCATE_ARRAY);
+    op.count = count;
+    ir_node_id_t array = opt_emit(b, op, NULL, 0, OPT_REPR_TAGGED);
+    
+    for (uint32_t i = 0; i < count; i++) {
+      ir_op_t init = ir_op(IR_OP_INITIALIZE_ELEMENT);
+      init.index = i;
+      opt_emit(b, init, (ir_node_id_t[]){array, values[i]}, 2, OPT_REPR_NONE);
+    }
+    
+    return array;
+  }
+  
+  ant_shape_t *shape = ptr->shape;
+  uint32_t count = ant_shape_count(shape);
+  uint8_t limit = ant_shape_get_inobj_limit(shape);
+  for (uint32_t i = 0; i < count; i++) values[i] = opt_literal_value(b, ant_object_prop_get_unchecked(ptr, i));
+  
+  ir_op_t op = ir_op(IR_OP_ALLOCATE_OBJECT);
+  op.allocate_object.shape = (ir_cell_t)(uintptr_t)shape;
+  op.allocate_object.property_count = count;
+  op.allocate_object.reserve = limit;
+  
+  ir_node_id_t proto = opt_constant(b, b->js->sym.object_proto);
+  ir_node_id_t object = opt_emit(b, op, &proto, 1, OPT_REPR_TAGGED);
+  
+  for (uint32_t i = 0; i < count; i++) {
+    ir_op_t init = ir_op(IR_OP_INITIALIZE_NAMED);
+    init.offset = opt_named_offset(i, limit);
+    opt_emit(b, init, (ir_node_id_t[]){object, values[i]}, 2, OPT_REPR_NONE);
+  }
+  
+  return object;
+}
+
 static opt_flow_t opt_build_array_literal(opt_builder_t *b, const uint8_t *ip) {
   const sv_func_debug_t *debug = b->func->debug;
   uint32_t index = sv_get_u32(ip + 1);
   if (!debug || index >= debug->literal_site_count) return opt_fail(b, "operand") ? OPT_FLOW_CONTINUE : OPT_FLOW_FAILED;
+  
+  ant_value_t boilerplate = debug->literal_sites[index].boilerplate;
+  uint32_t allocations = 0, values = 0;
+  
+  if (is_object_type(boilerplate) && is_object_type(b->js->sym.object_proto) && opt_literal_fits(b, boilerplate, &allocations, &values, 0)) {
+    opt_push(b, opt_literal_emit(b, boilerplate));
+    return OPT_FLOW_CONTINUE;
+  }
   
   opt_rt_site_t *at = code_arena_bump(b->js, sizeof *at);
   if (!at) return OPT_FLOW_GENERIC;
@@ -5500,6 +5605,7 @@ static ir_node_id_t opt_new_target(opt_builder_t *b) {
 
 static opt_flow_t opt_build_check_ctor(opt_builder_t *b) {
   if (b->inline_call) return b->inline_call->construct ? OPT_FLOW_CONTINUE : OPT_FLOW_GENERIC;
+  if (!opt_may_speculate(b, OPT_EXIT_SLOW_PATH)) return OPT_FLOW_GENERIC;
   ir_node_id_t target = opt_new_target(b);
   opt_frame_t before = opt_frame_clone(b, &b->frame);
   ir_block_id_t called;
