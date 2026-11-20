@@ -724,7 +724,6 @@ struct sv_func {
   bool is_eval: 1;
   bool needs_eval_env: 1;
   bool lazy_eval_env: 1;
-  bool eval_reads_arguments: 1;
   bool allows_new_target: 1;
   bool has_map_templates: 1;
 

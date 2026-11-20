@@ -16,12 +16,16 @@ typedef struct {
   ant_value_t this_val;
   ant_value_t env;
   ant_value_t new_target;
-  struct sv_frame *caller;
 } js_eval_scope_t;
 
 js_eval_result_t js_eval_source(
   ant_t *js, const char *buf, size_t len,
   sv_compile_mode_t mode, bool strict, js_eval_scope_t scope
+);
+
+js_eval_result_t js_eval_source_in_frame(
+  ant_t *js, const char *buf, size_t len,
+  sv_compile_mode_t mode, bool strict, js_eval_scope_t scope, struct sv_frame *caller
 );
 
 static inline bool sv_compile_mode_is_eval(sv_compile_mode_t mode) {

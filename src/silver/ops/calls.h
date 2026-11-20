@@ -392,14 +392,13 @@ static inline ant_value_t sv_eval_in_frame(
   GC_ROOT_PIN(js, env);
   js_eval_scope_t scope = { 
     .this_val = frame->this, 
-    .env = env, .new_target = new_target,
-    .caller = frame,
+    .env = env, .new_target = new_target 
   };
   
-  ant_value_t result = js_eval_source(
+  ant_value_t result = js_eval_source_in_frame(
     js, source, source_len,
     caller->allows_new_target ? SV_COMPILE_EVAL_FUNCTION : SV_COMPILE_EVAL,
-    sv_frame_is_strict(frame), scope).value;
+    sv_frame_is_strict(frame), scope, frame).value;
   
   GC_ROOT_RESTORE(js, root_mark);
   return result;
