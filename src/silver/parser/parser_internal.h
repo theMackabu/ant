@@ -16,6 +16,7 @@ typedef struct {
   bool in_async;
   bool wants_module;
   bool tagged_template;
+  bool class_initializer;
   uint32_t function_depth;
 } sv_parser_t;
 
@@ -203,6 +204,13 @@ static inline bool var_decl_has_initializer(sv_ast_t *n) {
     if (decl && decl->type == N_VARDECL && decl->right) return true;
   }
   return false;
+}
+
+static inline bool reject_class_initializer_arguments(sv_parser_t *p, const char *name, uint32_t len) {
+  if (__builtin_expect(!p->class_initializer, 1)) return false;
+  if (len != 9 || memcmp(name, "arguments", 9) != 0) return false;
+  SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "'arguments' is not allowed in class field initializer or static initialization block");
+  return true;
 }
 
 static inline sv_ast_t *mk_ident_from_tok(sv_parser_t *p) {

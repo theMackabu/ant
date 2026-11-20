@@ -185,6 +185,7 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
 
   l_ident: {
     p->lx.st.consumed = 1;
+    if (reject_class_initializer_arguments(p, tok_str(p), (uint32_t)p->lx.st.tlen)) return mk(N_EMPTY);
     return mk_ident_from_tok(p);
   }
 
@@ -733,6 +734,7 @@ sv_ast_t *parse_object(sv_parser_t *p) {
       prop->right->flags |= FN_METHOD;
       prop->right->src_off = prop->src_off;
     } else {
+      if (prop->left->type == N_IDENT && reject_class_initializer_arguments(p, prop->left->str, prop->left->len)) return n;
       prop->right = mk_ident(p, prop->left->str, prop->left->len);
       if (sv_lexer_next(&p->lx) == TOK_ASSIGN) {
         p->lx.st.consumed = 1;
