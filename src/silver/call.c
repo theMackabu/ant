@@ -404,6 +404,34 @@ ant_value_t sv_construct(
   return sv_construct_ordinary(vm, js, func, args, argc, new_target, false);
 }
 
+ant_value_t sv_construct_proxied(
+  sv_vm_t *vm, ant_t *js, ant_value_t func,
+  ant_value_t *args, int argc, ant_value_t new_target
+) {
+  const sv_closure_t *closure = vtype(func) == kTypeFunction ? js_func_closure(func) : NULL;
+  uint32_t odd = SV_CALL_IS_ARROW | SV_CALL_IS_UNCURRY | SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS | SV_CALL_IS_DEFAULT_CTOR;
+  const sv_func_t *fn = closure && !(closure->call_flags & odd) ? closure->func : NULL;
+  
+  if (!fn || fn->is_generator || fn->is_async)
+    return sv_construct(vm, js, func, args, argc, new_target);
+  if (fn->is_derived_ctor) return sv_construct_unsettled(vm, js, func, args, argc, new_target);
+
+  ant_value_t proto = js_getprop_fallback(js, new_target, "prototype");
+  if (is_err(proto)) return proto;
+  if (vtype(proto) == kTypeBuiltin) proto = js_cfunc_promote(js, proto);
+  if (!is_object_type(proto)) proto = js->sym.object_proto;
+
+  ant_value_t seed = Ant_Object_CreateBare(js);
+  if (is_err(seed)) return seed;
+  js_set_proto_init(seed, proto);
+
+  ant_value_t ctor_this = seed;
+  ant_value_t result = sv_vm_call(vm, js, func, seed, args, argc, &ctor_this, new_target);
+  
+  if (is_err(result)) return result;
+  return sv_construct_result(result, ctor_this, seed);
+}
+
 __attribute__((noinline, cold)) void sv_construct_pending_first(ant_t *js) {
   js->construct_pending_used = true;
   sv_jit_drop_unsettled_receiver_code(js);

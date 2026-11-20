@@ -1757,6 +1757,7 @@ ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, 
   if (vtype(target) == kTypeObject && is_proxy(target))
     return js_proxy_construct(js, target, args, argc, new_target);
 
+  if (new_target == proxy) return sv_construct_proxied(js->vm, js, target, args, argc, new_target);
   return sv_construct(js->vm, js, target, args, argc, new_target);
 }
 
