@@ -125,6 +125,34 @@ static const char *js_import_job_base_path(ant_t *js, ant_value_t base) {
   return vtype(base) == kTypeString ? js_getstr(js, base, NULL) : js_module_ctx_filename(base);
 }
 
+enum {
+  IMPORT_SETTLE_PROMISE,
+  IMPORT_SETTLE_NAMESPACE,
+  IMPORT_SETTLE_TURNS,
+  IMPORT_SETTLE_FIELD_COUNT,
+};
+
+static ant_value_t builtin_import_settle(ant_params_t);
+
+static void js_import_settle_after(ant_t *js, ant_value_t promise, ant_value_t ns, int turns) {
+  ant_value_t fields[IMPORT_SETTLE_FIELD_COUNT] = {
+    [IMPORT_SETTLE_PROMISE] = promise,
+    [IMPORT_SETTLE_NAMESPACE] = ns,
+    [IMPORT_SETTLE_TURNS] = Ant_Value_FromNumber(turns),
+  };
+  queue_microtask_with_args(js, Ant_Function_Create(builtin_import_settle), fields, IMPORT_SETTLE_FIELD_COUNT);
+}
+
+static ant_value_t builtin_import_settle(ant_params_t) {
+  if (nargs < IMPORT_SETTLE_FIELD_COUNT) return Ant_Value_Undefined;
+  
+  int turns = (int)Ant_Value_AsNumberUnchecked(args[IMPORT_SETTLE_TURNS]);
+  if (turns > 1) js_import_settle_after(js, args[IMPORT_SETTLE_PROMISE], args[IMPORT_SETTLE_NAMESPACE], turns - 1);
+  else js_resolve_promise(js, args[IMPORT_SETTLE_PROMISE], args[IMPORT_SETTLE_NAMESPACE]);
+  
+  return Ant_Value_Undefined;
+}
+
 static ant_value_t builtin_import_job(ant_params_t) {
   if (nargs < IMPORT_JOB_FIELD_COUNT) return Ant_Value_Undefined;
   
@@ -135,7 +163,7 @@ static ant_value_t builtin_import_job(ant_params_t) {
   ant_value_t ns = js_esm_import_dynamic_ex(js, args[IMPORT_JOB_SPECIFIER], js_import_job_base_path(js, base), args[IMPORT_JOB_ATTRS], &evaluation);
 
   if (is_err(ns)) js_reject_promise(js, promise, js_take_thrown(js, ns));
-  else if (vtype(evaluation) != kTypePromise) js_resolve_promise(js, promise, ns);
+  else if (vtype(evaluation) != kTypePromise) js_import_settle_after(js, promise, ns, 1);
   else js_resolve_promise(js, promise, js_promise_then(js, evaluation, js_make_data_cfunc(js, ns, builtin_import_tla_resolve), Ant_Value_Undefined));
   
   return Ant_Value_Undefined;
@@ -197,14 +225,13 @@ ant_value_t js_builtin_import(ant_params_t) {
   if (vtype(base) == kTypeString) GC_ROOT_PIN(js, base);
   
   ant_value_t loaded = js_esm_import_loaded(js, specifier, js_import_job_base_path(js, base), attrs);
-  if (is_object_type(loaded)) {
-    ant_value_t resolved = js_promise_assimilate_awaitable(js, loaded);
-    GC_ROOT_RESTORE(js, root_mark);
-    return resolved;
-  }
-
   ant_value_t promise = js_mkpromise(js);
-  GC_ROOT_PIN(js, promise);
+  
+  if (is_object_type(loaded)) {
+    js_import_settle_after(js, promise, loaded, 2);
+    GC_ROOT_RESTORE(js, root_mark);
+    return promise;
+  }
 
   ant_value_t fields[IMPORT_JOB_FIELD_COUNT] = {
     [IMPORT_JOB_PROMISE] = promise,

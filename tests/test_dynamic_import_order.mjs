@@ -49,4 +49,17 @@ assert.strictEqual(await coerced, ns);
 await assert.rejects(import({ toString() { throw new RangeError('bad specifier'); } }), RangeError);
 await assert.rejects(import(Symbol('specifier')), TypeError);
 
+async function settleOrder(specifier) {
+  const order = [];
+  const imported = import(specifier).then(() => order.push('import'));
+  Promise.resolve().then(() => order.push('first')).then(() => order.push('second'));
+  await imported;
+  return order.join(' ');
+}
+assert.strictEqual(await settleOrder('./fixtures/dynamic_import_order/dep.mjs'), 'first second import');
+assert.strictEqual(await settleOrder('node:path'), 'first second import');
+assert.strictEqual(await settleOrder('node:string_decoder'), 'first second import');
+assert.strictEqual(await settleOrder('data:text/javascript,export const fresh = 1;'), 'first second import');
+assert.strictEqual(await settleOrder('data:text/javascript,export const fresh = 1;'), 'first second import');
+
 console.log('ok');
