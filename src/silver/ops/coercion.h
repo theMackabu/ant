@@ -531,32 +531,35 @@ static __attribute__((noinline, cold)) void sv_special_obj_rare(sv_vm_t *vm, uin
   vm->stack[vm->sp++] = Ant_Value_Undefined;
 }
 
-static inline void sv_op_special_obj(
+static inline ant_value_t sv_op_special_obj(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame, uint8_t *ip
 ) {
   switch ((sv_special_obj_t)sv_get_u8(ip + 1)) {
     case SV_SPECIAL_MODULE_IMPORT:
       vm->stack[vm->sp++] = js_get_module_import_binding(js);
-      return;
+      return Ant_Value_Undefined;
     case SV_SPECIAL_NEW_TARGET:
       vm->stack[vm->sp++] = frame ? frame->new_target : Ant_Value_Undefined;
-      return;
+      return Ant_Value_Undefined;
     case SV_SPECIAL_SUPER:
       vm->stack[vm->sp++] = frame ? frame->super_val : Ant_Value_Undefined;
-      return;
+      return Ant_Value_Undefined;
     case SV_SPECIAL_ARGC:
       vm->stack[vm->sp++] = Ant_Value_FromNumber(frame ? (double)frame->argc : 0);
-      return;
-    case SV_SPECIAL_EVAL_ENV:
-      vm->stack[vm->sp++] = frame ? sv_eval_variable_env(vm, js, frame) : Ant_Value_Undefined;
-      return;
+      return Ant_Value_Undefined;
+    case SV_SPECIAL_EVAL_ENV: {
+      ant_value_t env = frame ? sv_eval_variable_env(vm, js, frame) : Ant_Value_Undefined;
+      if (is_err(env)) return env;
+      vm->stack[vm->sp++] = env;
+      return frame ? sv_eval_bind_arguments(vm, js, frame, Ant_Value_Undefined) : Ant_Value_Undefined;
+    }
     case SV_SPECIAL_ARGUMENTS:
       if (frame) break;
       [[fallthrough]];
     default:
       sv_special_obj_rare(vm, sv_get_u8(ip + 1));
-      return;
+      return Ant_Value_Undefined;
   }
 
   if (vtype(frame->arguments_obj) == kTypeUndefined) {
@@ -570,4 +573,5 @@ static inline void sv_op_special_obj(
   }
 
   vm->stack[vm->sp++] = frame->arguments_obj;
+  return Ant_Value_Undefined;
 }
