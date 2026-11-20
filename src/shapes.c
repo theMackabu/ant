@@ -715,6 +715,13 @@ void ant_shape_roots_release(ant_t *js, ant_shape_roots_t *owner) {
   }
 }
 
+static bool shape_prop_same(const ant_shape_prop_t *a, const ant_shape_prop_t *b) {
+  if (a->type != b->type || a->attrs != b->attrs) return false;
+  if (a->has_getter != b->has_getter || a->has_setter != b->has_setter) return false;
+  if (a->getter != b->getter || a->setter != b->setter) return false;
+  return a->type == ANT_SHAPE_KEY_SYMBOL ? a->key.sym_off == b->key.sym_off : a->key.interned == b->key.interned;
+}
+
 ant_shape_t *ant_shape_with_proto(ant_shape_t *shape, ant_value_t proto) {
   if (!shape_is_in_tree(shape) && !shape->jit_snapshot && !shape_has_children(shape)) {
     shape->proto = proto;
@@ -1118,6 +1125,19 @@ bool ant_shape_remove_slot(ant_t *js, ant_shape_t *shape, uint32_t slot) {
 
 uint32_t ant_shape_count(const ant_shape_t *shape) {
   return shape ? shape->count : 0;
+}
+
+bool ant_shape_appends_slot(const ant_shape_t *from, const ant_shape_t *to, uint32_t slot) {
+  if (!from || !to || from == to || slot != from->count || to->count != from->count + 1) return false;
+  if (to->parent == from) return true;
+  
+  if (from->deleted_count || to->deleted_count || from->proto != to->proto) return false;
+  if (from->exotic != to->exotic || from->exotic_ops != to->exotic_ops || from->inobj_limit != to->inobj_limit) return false;
+  
+  for (uint32_t i = 0; i < from->count; i++)
+    if (!shape_prop_same(&from->props[i], &to->props[i])) return false;
+  
+  return true;
 }
 
 bool ant_shape_may_have_gc_refs(const ant_shape_t *shape) {
