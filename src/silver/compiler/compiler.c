@@ -26,7 +26,7 @@ uint16_t sv_eval_shadow_bits(ant_t *js, ant_value_t eval_env, const char *source
   if (flags->super_binding) bits |= SV_EVAL_SCOPE_SUPER_BINDING;
   if (flags->is_static) bits |= SV_EVAL_SCOPE_STATIC;
   if (flags->no_arguments) bits |= SV_EVAL_SCOPE_NO_ARGUMENTS;
-  if (flags->has_with || memchr(source, '#', len)) bits |= SV_EVAL_SCOPE_ENV_BOUND;
+  if (flags->has_with || (flags->has_private && memchr(source, '#', len))) bits |= SV_EVAL_SCOPE_ENV_BOUND;
   if (flags->this_binding) {
     bits |= SV_EVAL_SCOPE_THIS_BINDING;
     if (eval_source_may_mention(source, len, "super", 5) && sv_eval_env_shadows_global(js, eval_env, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN))
@@ -124,7 +124,9 @@ sv_func_t *sv_compile(
   root.eval_no_arguments = (eval_shadows & SV_EVAL_SCOPE_NO_ARGUMENTS) != 0;
   if (sv_compile_mode_is_eval(mode)) {
     root.eval_env = eval_env;
-    root.eval_with = sv_eval_env_flags(eval_env)->has_with;
+    const sv_eval_scope_flags_t *scope_flags = sv_eval_env_flags(eval_env);
+    root.eval_with = scope_flags->has_with;
+    root.eval_private = scope_flags->has_private;
   }
   
   root.line_table = sv_compile_ctx_build_line_table(root.source, source_len);

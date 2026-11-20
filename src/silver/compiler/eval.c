@@ -264,12 +264,15 @@ static const sv_private_scope_t *eval_private_scope(const sv_compiler_t *c) {
 }
 
 static sv_eval_scope_flags_t eval_scope_flags(sv_compiler_t *c) {
+  const sv_compiler_t *root = c;
+  while (root->enclosing) root = root->enclosing;
   return (sv_eval_scope_flags_t){
     .this_binding = compiler_has_this_binding(c),
     .super_binding = compiler_has_super_binding(c),
     .is_static = c->is_static,
     .no_arguments = arguments_forbidden(c),
     .has_with = has_active_with_scope(c),
+    .has_private = eval_private_scope(c) != NULL || root->eval_private,
   };
 }
 
