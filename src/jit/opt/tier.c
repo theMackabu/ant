@@ -671,6 +671,12 @@ ant_value_t opt_rt_leave_frame(ant_value_t result, sv_vm_t *vm, opt_entry_t *ent
   return result;
 }
 
+static sv_frame_t *opt_osr_host(sv_vm_t *vm, const opt_entry_t *entry) {
+  const sv_jit_osr_mark_t *mark = vm->jit.osr_marks;
+  if (!mark || mark->entry != entry || mark->frame != &vm->frames[vm->fp]) return NULL;
+  return entry->frame && (entry->frame != mark->frame || entry->owns_frame) ? NULL : mark->frame;
+}
+
 ant_value_t opt_rt_exit(
   sv_vm_t *vm, opt_code_t *code, const opt_site_t *site, opt_entry_t *entry,
   ant_value_t *params, ant_value_t *locals, ant_value_t *stack, sv_jit_finally_t *finally
@@ -697,6 +703,15 @@ ant_value_t opt_rt_resume(
 ) {
   ant_value_t arguments = vm->jit.resume.arguments_obj;
   ant_value_t this_val = entry->this_val;
+  sv_frame_t *host = opt_osr_host(vm, entry);
+  if (host) {
+    if (entry->frame) {
+      sv_rebase_open_upvalues(&vm->open_upvalues, host->bp, params, code->param_count);
+      sv_rebase_open_upvalues(&vm->open_upvalues, host->lp, locals, code->local_count);
+      entry->frame = NULL;
+    }
+    return sv_frame_resume(vm, host, (int)bc_off, stack, (int)depth, params, (int)code->param_count, locals, (int)code->local_count, finally);
+  }
   if (entry->frame) {
     sv_frame_t *frame = entry->frame;
     sv_rebase_open_upvalues(&vm->open_upvalues, frame->bp, params, code->param_count);
@@ -714,7 +729,7 @@ ant_value_t opt_rt_resume(
   );
 }
 
-static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t callee, uint32_t call_off) {
+static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t callee, ant_value_t new_target, uint32_t call_off) {
   if (vm->fp + 1 >= vm->max_frames && !sv_vm_reserve(vm, 0)) return false;
   sv_frame_t *frame = &vm->frames[++vm->fp];
   ant_value_t undefined = Ant_Value_Undefined;
@@ -725,7 +740,7 @@ static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t cal
     .func = func,
     .callee = callee,
     .this = undefined,
-    .new_target = undefined,
+    .new_target = new_target,
     .super_val = undefined,
     .prev_sp = vm->sp,
     .completion = {.kind = SV_COMPLETION_NONE, .value = undefined},
@@ -752,10 +767,10 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
   if (sv_debug_unlikely(SV_DEBUG_JIT_WARN)) opt_warn_exit(state, frames[0].func, inner->bc_off, site->kind, site->slot, code, count - 1);
 
   opt_exit_frame_t *root = &frames[count - 1];
+  sv_frame_t *host = opt_osr_host(vm, entry);
   uint32_t params = code->param_count, locals = code->local_count;
   ant_value_t arguments = root->arguments;
   ant_value_t root_this = entry->this_val;
-  bool borrowed = entry->frame && !entry->owns_frame;
   if (entry->frame) {
     sv_frame_t *frame = entry->frame;
     sv_rebase_open_upvalues(&vm->open_upvalues, frame->bp, root->params, params);
@@ -773,8 +788,9 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
   for (uint32_t k = count; k-- > 1;) {
     ant_value_t callee = frames[k].callee;
     if (k == count - 1) callee = sv_closure_heap_value(js, entry->closure);
-    waits[k] = room && !(k == count - 1 && borrowed) && opt_push_waiting_frame(vm, frames[k].func, callee, frames[k].site->call_off);
-    room &= waits[k] || (k == count - 1 && borrowed);
+    ant_value_t new_target = k == count - 1 ? entry->new_target : frames[k].site->construct ? callee : Ant_Value_Undefined;
+    waits[k] = room && opt_push_waiting_frame(vm, frames[k].func, callee, new_target, frames[k].site->call_off);
+    room &= waits[k];
   }
 
   ant_value_t result = Ant_Value_Undefined;
@@ -800,11 +816,14 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
     vm->jit.resume.throwing = throwing;
     if (k == count - 1) {
       vm->jit.resume.arguments_obj = arguments;
-      result = jit_resume_in_interpreter(
-        vm, entry->closure, root_this, entry->new_target, entry->super_val,
-        entry->args, (int)entry->argc, frame->stack, depth, frame->params, params,
-        frame->locals, locals, bc_off, false, frame->finally
-      );
+      if (host && func->is_derived_ctor) host->this = root_this;
+      result = host
+        ? sv_frame_resume(vm, host, (int)bc_off, frame->stack, (int)depth, frame->params, (int)params, frame->locals, (int)locals, frame->finally)
+        : jit_resume_in_interpreter(
+          vm, entry->closure, root_this, entry->new_target, entry->super_val,
+          entry->args, (int)entry->argc, frame->stack, depth, frame->params, params,
+          frame->locals, locals, bc_off, false, frame->finally
+        );
     } else {
       sv_func_t *frame_func = frame->func;
       uint32_t frame_params = frame_func->param_count, frame_locals = (uint32_t)frame_func->max_locals;

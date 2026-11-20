@@ -370,15 +370,23 @@ typedef struct {
   
   union {
     sv_get_field_ic_kind_t get_kind;
+    uint8_t eval_depth;
     sv_super_put_ic_kind_t super_put_kind;
   };
+  
   sv_ic_flags_t shape_ref_mask;
-  uint16_t slow_hits;
+  
+  union {
+    uint16_t slow_hits;
+    uint16_t eval_absent_level;
+  };
+  
   uint32_t prototype_epoch;
 
   union {
     ant_object_t *cached_holder;
     sv_pf_poly_t *put_poly;
+    const struct sv_eval_scope *eval_parent_scope;
   };
   
   union {
@@ -413,6 +421,12 @@ typedef struct {
     struct {
       ant_shape_t *base_shape;
     } super_put;
+    
+    struct {
+      ant_shape_t *absent_shape;
+      ant_shape_t *holder_shape;
+      const struct sv_eval_scope *outer_scope;
+    } eval;
   } guard;
   
 #ifdef ANT_WASM_EMBED
@@ -424,6 +438,12 @@ typedef struct {
 static_assert(
   sizeof(sv_ic_entry_t) == 64,
   "IC entries must remain 64 bytes"
+);
+
+static_assert(
+  offsetof(sv_ic_entry_t, guard.eval.absent_shape) == offsetof(sv_ic_entry_t, guard.add.from_shape) &&
+  offsetof(sv_ic_entry_t, guard.eval.holder_shape) == offsetof(sv_ic_entry_t, guard.add.to_shape),
+  "eval shape references are released through the add shape references"
 );
 
 typedef struct sv_keyed_put_cache {
@@ -597,11 +617,17 @@ typedef struct {
   uint32_t import_len;
 } sv_runtime_binding_t;
 
-typedef struct {
+typedef struct sv_eval_scope {
   const sv_runtime_binding_t *bindings;
   uint32_t count;
   sv_eval_scope_flags_t flags;
 } sv_eval_scope_t;
+
+enum {
+  SV_EVAL_IC_MAX_DEPTH = 3,
+  SV_EVAL_IC_CELL = 0x80,
+  SV_EVAL_IC_NONE = 0xff,
+};
 
 enum {
   SV_EVAL_BIND_PARAM = 0,
@@ -612,6 +638,7 @@ enum {
   SV_EVAL_BIND_CATCH = 8,
   SV_EVAL_BIND_IMPORT_DEFAULT = 16,
   SV_EVAL_BIND_IMPORT_NAMED = 32,
+  SV_EVAL_BIND_ARGUMENTS = 64,
 };
 
 typedef struct {
@@ -1222,6 +1249,8 @@ typedef struct sv_native_frame {
 
 typedef struct sv_jit_osr_mark {
   struct sv_jit_osr_mark *prev;
+  sv_frame_t *frame;
+  void *entry;
 } sv_jit_osr_mark_t;
 
 typedef struct sv_jit_construct_mark {
@@ -1387,6 +1416,14 @@ static inline int32_t sv_op_frame_slot(const uint8_t *ip, uint32_t param_count, 
 static inline bool sv_frame_is_strict(const sv_frame_t *frame) {
   return frame && frame->func && frame->func->is_strict;
 }
+
+ant_value_t sv_frame_resume(
+  sv_vm_t *vm, sv_frame_t *frame, int off,
+  ant_value_t *vstack, int vstack_sp,
+  ant_value_t *params, int n_params,
+  ant_value_t *locals, int n_locals,
+  sv_jit_finally_t *finally
+);
 
 static inline void sv_frame_reset_handlers(sv_vm_t *vm, sv_frame_t *frame) {
   vm->handler_depth = frame->handler_base;
