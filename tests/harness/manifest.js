@@ -86,6 +86,7 @@ export function targets() {
     'test_super_string_base.cjs',
     'test_wasm_js_api_surface.cjs',
     'test_descriptor_proxy_error_inspect.cjs',
+    'test_destructure_unwritable_targets.cjs',
     'test_dataview_fast_path.cjs',
     'test_jit_inline_mod.cjs',
     'test_jit_inline_constructor.cjs',
