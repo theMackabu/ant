@@ -17,6 +17,7 @@ size_t literal_num_name(const sv_ast_t *key, char *buf, size_t cap) {
 static constexpr int SV_SHAPED_LITERAL_MAX_KEYS = 32;
 static constexpr int SV_LITERAL_DYNAMIC_RATIO = 6;
 static constexpr int SV_LITERAL_CLASS_STACK = 64;
+static constexpr int SV_LITERAL_CLASS_STRIDE = 64;
 
 static bool literal_is_leaf(const sv_ast_t *node) {
   if (!node) return false;
@@ -294,11 +295,15 @@ static bool compile_array_site(sv_compiler_t *c, sv_ast_t *node, int prefix) {
   
   int fixed = 0, nested = 0;
   bool small = prefix <= SV_LITERAL_INLINE_MAX;
-  for (int i = 0; i < prefix; i++) {
-    classes[i] = literal_classify(node->args.items[i]);
-    if (small && classes[i] == LITERAL_DYNAMIC) break;
-    fixed += classes[i] != LITERAL_DYNAMIC;
-    nested += classes[i] == LITERAL_NESTED;
+  for (int i = 0; i < prefix;) {
+    int end = prefix - i > SV_LITERAL_CLASS_STRIDE ? i + SV_LITERAL_CLASS_STRIDE : prefix;
+    for (; i < end; i++) {
+      classes[i] = literal_classify(node->args.items[i]);
+      if (small && classes[i] == LITERAL_DYNAMIC) break;
+      fixed += classes[i] != LITERAL_DYNAMIC;
+      nested += classes[i] == LITERAL_NESTED;
+    }
+    if (i < end || (i - fixed) * (SV_LITERAL_DYNAMIC_RATIO + 1) > prefix) break;
   }
   
   int site = literal_root_pays(prefix, fixed, nested) ? literal_build_root(c, node, prefix, classes) : -1;
@@ -456,6 +461,20 @@ static void compile_property_value(sv_compiler_t *c, sv_ast_t *prop) {
   else compile_expr(c, prop->right);
 }
 
+static bool computed_key_needs_early_coercion(sv_compiler_t *c, const sv_ast_t *prop) {
+  const sv_ast_t *value = prop->right;
+  if (!value || value->type == N_FUNC || value->type == N_NUMBER || value->type == N_STRING) return false;
+  
+  switch (infer_expr_type(c, prop->left)) {
+    case SV_TI_NUM:
+    case SV_TI_STR:
+    case SV_TI_BOOL:
+    case SV_TI_NULL:
+    case SV_TI_UNDEF: return false;
+    default:          return true;
+  }
+}
+
 void compile_object(sv_compiler_t *c, sv_ast_t *node) {
   if (node->flags & FN_PATTERN_ONLY) {
     bool shorthand_init = false;
@@ -524,6 +543,7 @@ void compile_object(sv_compiler_t *c, sv_ast_t *node) {
       emit(c, flags);
     } else if (prop->flags & FN_COMPUTED) {
       compile_expr(c, prop->left);
+      if (computed_key_needs_early_coercion(c, prop)) emit_op(c, OP_TO_PROPKEY);
       compile_expr(c, prop->right);
       emit_object_method_home(c, prop->right, true);
       emit_op(c, OP_DEFINE_METHOD_COMP);
