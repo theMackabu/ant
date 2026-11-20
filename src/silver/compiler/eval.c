@@ -205,11 +205,9 @@ bool capture_dynamic_eval_scope(
         c, scope, &binding_set)) goto capture_failed;
 
   bool own_arguments = has_implicit_arguments_obj(c);
-  for (sv_compiler_t *enc = c->inherits_eval_env ? NULL : c->enclosing; enc; enc = enc->enclosing) {
+  for (sv_compiler_t *enc = c->inherits_eval_env ? NULL : c->enclosing; enc; enc = enc->enclosing)
     if (!eval_scope_builder_capture_upvalues(
           c, scope, &binding_set, enc, own_arguments)) goto capture_failed;
-    own_arguments |= has_implicit_arguments_obj(enc);
-  }
   free(binding_set.slots);
   *scope_index_out = scope_index;
   return true;
@@ -514,7 +512,7 @@ static void compile_inherited_direct_eval(sv_compiler_t *c, sv_ast_t *node) {
     emit_op(c, OP_NIP);
     emit_lexical_new_target(c);
     note_eval_reads_arguments(c);
-  emit_op(c, OP_EVAL);
+    emit_op(c, OP_EVAL);
     emit_u32(c, eval_scope);
   }
   
