@@ -141,6 +141,7 @@ bool ant_shape_should_compact(const ant_shape_t *shape);
 bool ant_shape_is_shared(const ant_shape_t *shape);
 bool ant_shape_is_superseded(const ant_shape_t *shape);
 void ant_shape_mark_dictionary(ant_shape_t *shape);
+void ant_shape_mark_epoch_guarded(ant_shape_t *shape);
 bool ant_shape_is_dictionary(const ant_shape_t *shape);
 
 uint32_t ant_shape_count(const ant_shape_t *shape);

@@ -98,6 +98,7 @@ struct ant_shape {
   
   bool bulk_layout: 1;
   bool exotic: 1;
+  bool epoch_guarded: 1;
   uint16_t gc_mark;
   
   shape_descriptors_t *descriptors;
@@ -893,6 +894,10 @@ void ant_shape_mark_dictionary(ant_shape_t *shape) {
   shape->dictionary = true;
 }
 
+void ant_shape_mark_epoch_guarded(ant_shape_t *shape) {
+  shape->epoch_guarded = true;
+}
+
 bool ant_shape_is_dictionary(const ant_shape_t *shape) {
   return shape && shape->dictionary;
 }
@@ -949,6 +954,7 @@ static __attribute__((noinline)) void shape_destroy(ant_shape_t *shape) {
     }
 
     ant_shape_t *parent = shape->parent;
+    if (shape->epoch_guarded) ant_ic_epoch_bump(ant_shape_isolate(shape));
     shape_unlink_descriptors(shape);
     shape_bytes_sub(shape->heap, sizeof(*shape));
     free(shape);
