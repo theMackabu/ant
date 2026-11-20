@@ -284,12 +284,30 @@ static __attribute__((noinline)) ant_value_t sv_construct_default_prototype(
   return is_object_type(own) ? own : js->sym.object_proto;
 }
 
+static ant_value_t sv_construct_surrogate_target(ant_t *js, ant_value_t proto) {
+  ant_value_t holder = Ant_Object_CreateBare(js);
+  if (is_err(holder)) return holder;
+  js_mkprop_fast(js, holder, "prototype", 9, proto);
+
+  ant_value_t target = js_obj_to_func(js, holder);
+  if (!is_err(target)) js_mark_constructor(target, true);
+  return target;
+}
+
+static bool sv_construct_carries_prototype(ant_t *js, ant_value_t func, ant_value_t new_target) {
+  if (new_target == func || vtype(new_target) != kTypeFunction) return false;
+  if (vtype(func) == kTypeFunction && (js_func_closure(func)->func || js_func_closure(func)->call_flags)) return false;
+  ant_value_t proto;
+  return !sv_new_target_plain_prototype(js, new_target, &proto);
+}
+
 static ant_value_t sv_construct_ordinary(
   sv_vm_t *vm, ant_t *js, ant_value_t func,
   ant_value_t *args, int argc, ant_value_t new_target, bool pending
 ) {
   ant_value_t effective_new_target = new_target;
-  bool proxied = vtype(new_target) == kTypeObject && is_proxy(new_target);
+  bool carried = sv_construct_carries_prototype(js, func, new_target);
+  bool proxied = carried || (vtype(new_target) == kTypeObject && is_proxy(new_target));
   ant_value_t proto = proxied
     ? js_getprop_fallback(js, new_target, "prototype")
     : sv_prepare_construct_meta(js, func, new_target, &effective_new_target);
@@ -307,6 +325,11 @@ static ant_value_t sv_construct_ordinary(
 
   ant_value_t ctor_this = seed;
   ant_value_t result;
+
+  if (carried && is_object_type(proto)) {
+    effective_new_target = sv_construct_surrogate_target(js, proto);
+    if (is_err(effective_new_target)) return effective_new_target;
+  }
 
   if (__builtin_expect(vtype(effective_new_target) == kTypeObject && is_proxy(effective_new_target), 0)) {
     ant_value_t outer_target = js->construct_proxy_target;

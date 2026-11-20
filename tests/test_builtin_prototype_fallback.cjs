@@ -22,4 +22,28 @@ const assert = require('node:assert');
   assert.strictEqual(Object.getPrototypeOf(Reflect.construct(Map, [], Target)), Map.prototype);
 }
 
+{
+  class Holder {}
+  const bound = Map.bind(null);
+  Object.setPrototypeOf(bound, Holder);
+  const accessor = Set.bind(null);
+  let reads = 0;
+  Object.defineProperty(accessor, 'prototype', { get() { reads++; return Holder.prototype; } });
+  const throwing = Map.bind(null);
+  Object.defineProperty(throwing, 'prototype', { get() { throw new RangeError('prototype'); } });
+  for (let round = 0; round < 200; round++) {
+    const map = Reflect.construct(Map, [], bound);
+    assert.strictEqual(Object.getPrototypeOf(map), Holder.prototype);
+    assert.strictEqual(Map.prototype.set.call(map, 1, 2), map);
+    reads = 0;
+    assert.strictEqual(Object.getPrototypeOf(Reflect.construct(Set, [], accessor)), Holder.prototype);
+    assert.strictEqual(reads, 1);
+    assert.strictEqual(Object.getPrototypeOf(Reflect.construct(Uint8Array, [2], bound)), Holder.prototype);
+    assert.strictEqual(Object.getPrototypeOf(Reflect.construct(Error, ['m'], bound)), Holder.prototype);
+    assert.strictEqual(Object.getPrototypeOf(Reflect.construct(Array, [], bound)), Holder.prototype);
+    assert.throws(() => Reflect.construct(Map, [], throwing), RangeError);
+    assert.strictEqual(Object.getPrototypeOf(Reflect.construct(Map, [], Map.bind(null))), Map.prototype);
+  }
+}
+
 console.log('ok');
