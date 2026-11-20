@@ -266,6 +266,7 @@ typedef enum: uint8_t {
   SV_IC_SHAPE_REF_ADD_FROM = 1u << 1,
   SV_IC_SHAPE_REF_SUPER_BASE = SV_IC_SHAPE_REF_ADD_FROM,
   SV_IC_SHAPE_REF_ADD_TO   = 1u << 2,
+  SV_IC_SHAPE_REF_SUPER_ADD_FROM = SV_IC_SHAPE_REF_ADD_TO,
   SV_IC_POLY_MEGA          = 1u << 3,
   SV_IC_MEGA_COMPILED      = 1u << 4,
   SV_IC_HAS_GET_POLY       = 1u << 5,
@@ -417,6 +418,7 @@ typedef struct {
     
     struct {
       ant_shape_t *base_shape;
+      ant_shape_t *add_from_shape;
     } super_put;
     
     struct {
@@ -465,6 +467,11 @@ void sv_ic_polys_cleanup(ant_t *js);
 static_assert(
   offsetof(sv_ic_entry_t, guard.super_put.base_shape) == offsetof(sv_ic_entry_t, guard.add.from_shape),
   "the super store base shape is owned through the add-from shape reference"
+);
+
+static_assert(
+  offsetof(sv_ic_entry_t, guard.super_put.add_from_shape) == offsetof(sv_ic_entry_t, guard.add.to_shape),
+  "the super store add-from shape is owned through the add-to shape reference"
 );
 
 static_assert(
