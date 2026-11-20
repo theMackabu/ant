@@ -403,7 +403,7 @@ static inline sv_with_fast_t sv_with_find_fast(ant_t *js, ant_value_t obj, const
   if (a->str == js->intern.length) return SV_WITH_SLOW;
   ant_value_t cur = obj;
 
-  for (int depth = 0; depth < 64; depth++, cur = js_get_proto(js, cur)) {
+  for (int depth = 0; depth < 64; depth++) {
     if (vtype(cur) != kTypeObject) return is_object_type(cur) ? SV_WITH_SLOW : SV_WITH_MISS;
 
     ant_object_t *ptr = js_obj_ptr(cur);
@@ -411,6 +411,7 @@ static inline sv_with_fast_t sv_with_find_fast(ant_t *js, ant_value_t obj, const
 
     sv_with_fast_t own = sv_with_find_own(ptr, a, value);
     if (own != SV_WITH_MISS) return own;
+    cur = ant_object_proto(ptr);
   }
 
   return SV_WITH_SLOW;
