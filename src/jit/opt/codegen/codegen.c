@@ -4080,6 +4080,7 @@ static sv_jit_finally_t *opt_cg_site_finally(const opt_code_t *code, const opt_s
     }
     uint32_t kind = vtype(boxed) == kTypeNumber ? (uint32_t)Ant_Value_AsNumberUnchecked(boxed) : 0;
     if (kind == OPT_PENDING_RETURN) entry->kind = SV_COMPLETION_RETURN;
+    else if (kind == OPT_PENDING_THROW) entry->kind = SV_COMPLETION_THROW;
     else if (kind >= OPT_PENDING_JUMP && kind - OPT_PENDING_JUMP < (uint32_t)func->code_len) {
       entry->kind = SV_COMPLETION_JUMP;
       entry->target = kind - OPT_PENDING_JUMP;
@@ -4363,7 +4364,7 @@ static void opt_cg_catch_dispatch(opt_cg_t *cg) {
   masm_load32(m, scratch, opt_cg_local(cg, cg->index_off));
   for (uint32_t h = 0; h < graph->handlers.len; h++) {
     const ir_handler_t *handler = &graph->handlers.items[h];
-    ir_block_id_t block = handler->has_entry ? opt_cg_entry_at(cg, handler->catch_off + sv_op_size[OP_CATCH]) : IR_NONE;
+    ir_block_id_t block = handler->has_entry ? opt_cg_entry_at(cg, handler->catch_off + (handler->finally ? 0 : sv_op_size[OP_CATCH])) : IR_NONE;
     if (block != IR_NONE) masm_branch32_imm(m, ASM_COND_EQUAL, scratch, (int32_t)h, opt_cg_label(cg, block));
   }
   masm_unreachable(m);
