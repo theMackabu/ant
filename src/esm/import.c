@@ -179,13 +179,13 @@ ant_value_t js_builtin_import(ant_params_t) {
   GC_ROOT_SAVE(root_mark, js);
 
   ant_value_t specifier = vtype(args[0]) == kTypeString ? args[0] : coerce_to_str_hint(js, args[0], 1);
-  GC_ROOT_PIN(js, specifier);
+  if (specifier != args[0]) GC_ROOT_PIN(js, specifier);
   
   bool source_phase = nargs >= 2 && vtype(args[1]) == kTypeString && js_import_is_source_phase(js, args[1]);
   ant_value_t attrs = is_err(specifier) ? specifier
     : source_phase ? js_import_source_phase(js, specifier, call_func)
     : js_import_attributes(js, nargs >= 2 ? args[1] : Ant_Value_Undefined);
-  GC_ROOT_PIN(js, attrs);
+  if (is_object_type(attrs)) GC_ROOT_PIN(js, attrs);
   
   if (is_err(attrs)) {
     ant_value_t rejected = js_promise_reject_with_ctor(js, js->sym.promise_ctor, js_take_thrown(js, attrs));
@@ -194,7 +194,7 @@ ant_value_t js_builtin_import(ant_params_t) {
   }
 
   ant_value_t base = js_import_job_base(js, call_func);
-  GC_ROOT_PIN(js, base);
+  if (vtype(base) == kTypeString) GC_ROOT_PIN(js, base);
   
   ant_value_t loaded = js_esm_import_loaded(js, specifier, js_import_job_base_path(js, base), attrs);
   if (is_object_type(loaded)) {

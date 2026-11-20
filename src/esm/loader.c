@@ -2612,11 +2612,14 @@ static ant_value_t esm_import_type_check(ant_t *js, ant_value_t attrs, const cha
 
 static ant_value_t esm_loaded_namespace(ant_t *js, const char *module_key) {
   esm_module_t *mod = esm_find_module(js, module_key);
-  if (!mod || mod->status != ESM_MODULE_LOADED) return Ant_Value_Undefined;
+  if (!mod || mod->status < ESM_MODULE_LOADED) return Ant_Value_Undefined;
+  if (mod->status == ESM_MODULE_EVALUATED) return mod->namespace_obj;
   
   ant_value_t value;
-  bool settled = esm_evaluation_settlement(js, mod->namespace_obj, &value) == JS_PROMISE_FULFILLED;
-  return settled ? mod->namespace_obj : Ant_Value_Undefined;
+  if (esm_evaluation_settlement(js, mod->namespace_obj, &value) != JS_PROMISE_FULFILLED) return Ant_Value_Undefined;
+  mod->status = ESM_MODULE_EVALUATED;
+  
+  return mod->namespace_obj;
 }
 
 static ant_value_t esm_import_cstr_attrs(

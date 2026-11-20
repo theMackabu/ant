@@ -26,6 +26,7 @@ typedef enum {
   ESM_MODULE_UNLOADED,
   ESM_MODULE_LOADING,
   ESM_MODULE_LOADED,
+  ESM_MODULE_EVALUATED,
 } esm_module_status_t;
 
 typedef struct esm_module {
