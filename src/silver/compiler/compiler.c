@@ -117,6 +117,7 @@ sv_func_t *sv_compile(
   
   root.line_table = sv_compile_ctx_build_line_table(root.source, source_len);
   sv_func_t *func = compile_function_body(&root, &top_fn, mode);
+  if (func && unit) unit->eval_reads_arguments = root.eval_reads_arguments;
   sv_compile_ctx_free_line_table(root.line_table);
   sv_code_unit_finish(unit);
   

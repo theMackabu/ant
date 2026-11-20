@@ -135,10 +135,11 @@ static bool eval_scope_builder_capture_local(
 
 static bool eval_scope_builder_capture_upvalue(
   sv_compiler_t *c, sv_eval_scope_builder_t *scope,
-  sv_eval_binding_set_t *set, sv_local_t *local
+  sv_eval_binding_set_t *set, sv_local_t *local, bool own_arguments
 ) {
   if (!eval_local_is_visible(local) || eval_scope_builder_has_binding(
         set, scope, local->name, local->name_len)) return true;
+  if (own_arguments && is_ident_str(local->name, local->name_len, "arguments", 9)) return true;
 
   int upvalue = resolve_upvalue_raw(c, local->name, local->name_len);
   if (upvalue < 0) return true;
@@ -160,11 +161,11 @@ static bool eval_scope_builder_capture_locals(
 
 static bool eval_scope_builder_capture_upvalues(
   sv_compiler_t *c, sv_eval_scope_builder_t *scope,
-  sv_eval_binding_set_t *set, sv_compiler_t *enclosing
+  sv_eval_binding_set_t *set, sv_compiler_t *enclosing, bool own_arguments
 ) {
   for (int i = enclosing->local_count - 1; i >= 0; i--)
     if (!eval_scope_builder_capture_upvalue(
-          c, scope, set, &enclosing->locals[i])) return false;
+          c, scope, set, &enclosing->locals[i], own_arguments)) return false;
   return true;
 }
 
@@ -229,9 +230,10 @@ bool capture_dynamic_eval_scope(
   if (c->super_local >= 0) c->super_referenced = true;
   if (c->is_arrow && !eval_scope_builder_capture_keywords(c, scope, &binding_set)) goto capture_failed;
 
+  bool own_arguments = has_implicit_arguments_obj(c);
   for (sv_compiler_t *enc = c->inherits_eval_env ? NULL : c->enclosing; enc; enc = enc->enclosing)
     if (!eval_scope_builder_capture_upvalues(
-          c, scope, &binding_set, enc)) goto capture_failed;
+          c, scope, &binding_set, enc, own_arguments)) goto capture_failed;
   free(binding_set.slots);
   *scope_index_out = scope_index;
   return true;
@@ -402,6 +404,7 @@ static void emit_eval_of_first_arg(sv_compiler_t *c, uint32_t eval_scope) {
   emit_number(c, 0);
   emit_op(c, OP_GET_ELEM);
   emit_lexical_new_target(c);
+  note_eval_reads_arguments(c);
   emit_op(c, OP_EVAL);
   emit_u32(c, eval_scope);
 }
@@ -501,6 +504,7 @@ static void compile_own_direct_eval(sv_compiler_t *c, sv_ast_t *node, bool has_s
   }
 
   emit_lexical_new_target(c);
+  note_eval_reads_arguments(c);
   emit_op(c, OP_EVAL);
   emit_u32(c, eval_scope);
 }
@@ -533,6 +537,7 @@ static void compile_inherited_direct_eval(sv_compiler_t *c, sv_ast_t *node) {
     for (int i = 1; i < node->args.count; i++) emit_op(c, OP_POP);
     emit_op(c, OP_NIP);
     emit_lexical_new_target(c);
+    note_eval_reads_arguments(c);
     emit_op(c, OP_EVAL);
     emit_u32(c, eval_scope);
   }

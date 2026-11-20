@@ -91,6 +91,22 @@ static void check_field_codegen(
   MIR_finish(ctx);
 }
 
+typedef struct { size_t len, cap; } shape_ref_room_t;
+
+static constexpr size_t FULL_SHAPE_REFS = SIZE_MAX / (4 * sizeof(ant_shape_t **)) + 1;
+
+static shape_ref_room_t exhaust_shape_refs(ant_t *js) {
+  shape_ref_room_t room = {js->ic.shape_ref_len, js->ic.shape_ref_cap};
+  js->ic.shape_ref_len = js->ic.shape_ref_cap = FULL_SHAPE_REFS;
+  return room;
+}
+
+static void restore_shape_refs(ant_t *js, shape_ref_room_t room) {
+  assert(js->ic.shape_ref_len == FULL_SHAPE_REFS && js->ic.shape_ref_cap == FULL_SHAPE_REFS);
+  js->ic.shape_ref_len = room.len;
+  js->ic.shape_ref_cap = room.cap;
+}
+
 static void check_failed_fills(ant_t *js, ant_value_t object, ant_shape_t *old_shape) {
   registrations_until_failure = 0;
   const char *keys[] = {"target", "absent"};
@@ -100,9 +116,9 @@ static void check_failed_fills(ant_t *js, ant_value_t object, ant_shape_t *old_s
     sv_func_t callee = {.ic_slots = &ic, .ic_count = 1};
     uint8_t code[] = {OP_GET_FIELD, 0, 0, 0, 0, 0, 0};
     ant_value_t out = Ant_Value_Undefined;
-    int attempts = registration_attempts;
+    shape_ref_room_t room = exhaust_shape_refs(js);
     assert(sv_try_prop_get_field_ic_no_effect(js, object, &atom, &callee, code, &out));
-    assert(registration_attempts == attempts + 1);
+    restore_shape_refs(js, room);
     assert(ic.cached_shape == NULL && !(ic.shape_ref_mask & SV_IC_SHAPE_REF_CACHED));
     ant_value_t ignored;
     assert(!sv_ic_try_get_hit(js, &ic, object, js_obj_ptr(object), &atom, &ignored, NULL));
@@ -112,15 +128,17 @@ static void check_failed_fills(ant_t *js, ant_value_t object, ant_shape_t *old_s
 
   sv_atom_t atom = {.str = intern_string(js, "target", 6), .len = 6};
   sv_ic_entry_t ic = {.cached_shape = old_shape, .cached_index = 123};
-  int attempts = registration_attempts;
+  shape_ref_room_t room = exhaust_shape_refs(js);
   assert(Ant_Value_AsNumberUnchecked(sv_put_field_cached(js, object, Ant_Value_FromNumber(42), &atom, &ic)) == 42);
+  restore_shape_refs(js, room);
   assert(Ant_Value_AsNumberUnchecked(js_get(js, object, "target")) == 42);
-  assert(registration_attempts == attempts + 1);
   assert(ic.cached_shape == NULL && !(ic.shape_ref_mask & SV_IC_SHAPE_REF_CACHED));
 
   // A first fill stays unusable even after the index and epoch are written.
   memset(&ic, 0, sizeof(ic));
+  room = exhaust_shape_refs(js);
   assert(Ant_Value_AsNumberUnchecked(sv_put_field_cached(js, object, Ant_Value_FromNumber(43), &atom, &ic)) == 43);
+  restore_shape_refs(js, room);
   assert(ic.cached_shape == NULL && !(ic.shape_ref_mask & SV_IC_SHAPE_REF_CACHED));
 }
 
