@@ -38,8 +38,8 @@ jobs:
 
     container: |-
       ${{ case(
-        startsWith(inputs.platform, 'linux-glibc'), 'ubuntu:22.04',
-        startsWith(inputs.platform, 'linux-musl'), 'alpine:3.23',
+        startsWith(inputs.platform, 'linux-glibc'), 'ghcr.io/themackabu/ant-ci-glibc:ubuntu22.04-llvm21-node22',
+        startsWith(inputs.platform, 'linux-musl'), 'ghcr.io/themackabu/ant-ci-musl:alpine3.23',
         ''
       ) }}
 
@@ -60,33 +60,10 @@ jobs:
         uses: laverdet/alpine-arm64@v1
         if: startsWith(inputs.platform, 'linux-musl')
 
-      # === LINUX GLIBC SETUP ===
-      - name: Setup Linux glibc environment
-        if: startsWith(inputs.platform, 'linux-glibc')
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          if [[ "${{ inputs.platform }}" != *"aarch64"* ]]; then
-            sed -i 's|http://archive.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
-            sed -i 's|http://security.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
-          fi
-          apt-get update
-          apt-get install -y git ca-certificates gnupg wget software-properties-common curl \
-            python3-pip ninja-build cmake pkg-config jq xz-utils tzdata
-          curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-          apt-get install -y nodejs
-          pip3 install meson tomli
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      # === LINUX MUSL SETUP ===
-      - name: Setup Linux musl environment
-        if: startsWith(inputs.platform, 'linux-musl')
-        run: |
-          apk add --no-cache git clang lld llvm meson ninja cmake pkgconf curl npm nodejs \
-            musl-dev tzdata \
-            util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static \
-            py3-tomli tar xz zstd jq bash
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # === LINUX SETUP ===
+      - name: Configure git safe directory
+        if: startsWith(inputs.platform, 'linux-')
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # === MACOS SETUP ===
       - name: Setup macOS environment

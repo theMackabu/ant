@@ -173,24 +173,16 @@ jobs:
       - name: Install Nanos build dependencies
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            ca-certificates \
-            clang \
-            curl \
-            git \
-            jq \
-            lld \
-            llvm \
-            make \
-            perl \
-            python3 \
-            xxd
-
+          APT_OPTS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
+          PKGS=(
+            build-essential ca-certificates curl git jq
+            clang lld llvm make perl python3 xxd
+          )
           if [[ "$SANDBOX_ARCH" == "x64" ]]; then
-            sudo apt-get install -y nasm
+            PKGS+=(nasm)
           fi
+          sudo apt-get "${APT_OPTS[@]}" update
+          sudo apt-get "${APT_OPTS[@]}" install -y "${PKGS[@]}"
 
       - name: Checkout Nanos
         id: nanos-source
