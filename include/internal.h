@@ -320,6 +320,7 @@ bool js_obj_extra_reserve(ant_object_t *obj, uint8_t capacity);
 ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t tmpl);
 
 ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj);
+void js_for_in_cache_clear(ant_t *js);
 ant_value_t Ant_Object_ToStringTag(ant_t *js, ant_value_t obj);
 ant_value_t Ant_Object_PropertyIsEnumerable(ant_t *js, ant_value_t obj, ant_value_t key);
 ant_value_t Ant_Object_HasOwn(ant_t *js, ant_value_t obj, ant_value_t key);
