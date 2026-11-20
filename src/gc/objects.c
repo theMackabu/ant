@@ -1424,6 +1424,7 @@ static void gc_grey_pending_promises(ant_t *js, ant_object_t *head) {
 
 static void gc_mark_roots(ant_t *js) {
   js->eval_closure_env = Ant_Value_Undefined;
+  js->eval_closure_root = Ant_Value_Undefined;
   gc_scan_vm_stack(js, js->vm);
 
   for (coroutine_t *c = js->active_async_coro; c; c = c->active_parent) 

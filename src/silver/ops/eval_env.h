@@ -565,23 +565,33 @@ static bool sv_eval_closure_env_current(
   }
 }
 
-ant_value_t sv_eval_capture_closure_env(
-  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint32_t scope_index
+static __attribute__((noinline)) ant_value_t sv_eval_closure_env_find(
+  ant_t *js, sv_frame_t *frame, uint32_t scope_index
 ) {
   const sv_eval_scope_t *scope = sv_func_eval_scope(frame->func, scope_index);
   ant_value_t cached = js->eval_closure_env;
   for (int depth = 0; depth < 8; depth++) {
     sv_eval_env_state_t *state = sv_eval_env_state(cached);
     if (!state || state->func != frame->func) break;
-    if (state->scope == scope) {
-      if (sv_eval_closure_env_current(js, cached, frame, scope)) return cached;
-      break;
-    }
+    if (state->scope == scope) return sv_eval_closure_env_current(js, cached, frame, scope) ? cached : Ant_Value_Undefined;
     cached = sv_eval_env_parent(cached);
+  }
+  return Ant_Value_Undefined;
+}
+
+ant_value_t sv_eval_capture_closure_env(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint32_t scope_index
+) {
+  if (js->eval_closure_root == frame->eval_env) {
+    ant_value_t cached = sv_eval_closure_env_find(js, frame, scope_index);
+    if (cached != Ant_Value_Undefined) return cached;
   }
 
   ant_value_t env = sv_eval_capture_env(vm, js, frame, scope_index);
-  if (!is_err(env)) js->eval_closure_env = env;
+  if (!is_err(env)) {
+    js->eval_closure_env = env;
+    js->eval_closure_root = frame->eval_env;
+  }
   return env;
 }
 
