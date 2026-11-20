@@ -35,8 +35,8 @@ static bool pattern_name_ok(sv_parser_t *p, const sv_ast_t *node) {
 
 static bool target_chain_ok(const sv_ast_t *node) {
   for (const sv_ast_t *cur = node->left; cur; cur = cur->left) {
-    if (cur->type == N_OPTIONAL) return false;
     if (cur->flags & FN_PAREN) return true;
+    if (cur->type == N_OPTIONAL) return false;
     if (cur->type != N_MEMBER && cur->type != N_CALL) return true;
   }
   return true;

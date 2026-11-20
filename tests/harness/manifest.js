@@ -49,6 +49,7 @@ export function targets() {
     'test_arrow_arguments_resolution.cjs',
     'test_async_await_old_promise_gc.cjs',
     'test_async_call_await_ticks.cjs',
+    'test_assignment_target_forms.cjs',
     'test_async_arrow_heads.cjs',
     'test_async_handled_errors.cjs',
     'test_async_inline_calls.cjs',
