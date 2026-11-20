@@ -364,14 +364,12 @@ typedef struct {
     uint16_t eval_absent_level;
   };
   
-  union {
-    uint32_t prototype_epoch;
-    uint32_t eval_absent_count;
-  };
+  uint32_t prototype_epoch;
 
   union {
     ant_object_t *cached_holder;
     sv_pf_poly_t *put_poly;
+    const struct sv_eval_scope *eval_parent_scope;
   };
   
   union {
@@ -403,7 +401,9 @@ typedef struct {
     } comparison;
     
     struct {
-      const struct sv_eval_scope *scopes[3];
+      ant_shape_t *absent_shape;
+      ant_shape_t *holder_shape;
+      const struct sv_eval_scope *outer_scope;
     } eval;
   } guard;
   
@@ -416,6 +416,12 @@ typedef struct {
 static_assert(
   sizeof(sv_ic_entry_t) == 64,
   "IC entries must remain 64 bytes"
+);
+
+static_assert(
+  offsetof(sv_ic_entry_t, guard.eval.absent_shape) == offsetof(sv_ic_entry_t, guard.add.from_shape) &&
+  offsetof(sv_ic_entry_t, guard.eval.holder_shape) == offsetof(sv_ic_entry_t, guard.add.to_shape),
+  "eval shape references are released through the add shape references"
 );
 
 typedef struct sv_keyed_put_cache {

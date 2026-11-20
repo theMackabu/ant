@@ -478,4 +478,49 @@ let moduleLocal = 'module';
   ]);
 }
 
+{
+  globalThis.reuseRead = 'global';
+  globalThis.reuseWrite = 'global';
+  const names = [];
+  for (let i = 0; i < 1024; i++) names.push('reuse' + i);
+  const wide = 'var ' + names.join(', ');
+  const plain = wide + ', pad', shadowRead = wide + ', reuseRead = "local"', shadowWrite = wide + ', reuseWrite = "local"';
+  const back = 'reuseWrite', churnSrc = 'for (let i = 0; i < 35000; i++) kept = { i }';
+  function churn() { let kept = null; eval(churnSrc); return kept; }
+  function scrub(flag) { eval(flag ? '1' : '2'); return eval('3'); }
+  function settle() { scrub(false); scrub(true); churn(); }
+  function restart() { globalThis.reuseTick = 1; delete globalThis.reuseTick; globalThis.reuseWrite = 'global'; }
+  function reads(shadow, src) { eval(shadow ? shadowRead : plain); return eval(src); }
+  function writes(shadow, src) { eval(shadow ? shadowWrite : plain); eval(src); return [eval(shadow ? back : 'pad'), globalThis.reuseWrite]; }
+  const run = (first, src, fn, expected) => {
+    for (let round = 0; round < 8; round++) {
+      restart();
+      fn(first, src);
+      settle();
+      globalThis.reuseWrite = 'global';
+      assert.deepStrictEqual(fn(!first, src), expected);
+      settle();
+    }
+  };
+  run(true, 'reuseRead', reads, 'global');
+  run(false, 'reuseRead ', reads, 'local');
+  run(true, 'reuseWrite = "set"', writes, [undefined, 'set']);
+  run(false, 'reuseWrite = "set" ', writes, ['set', 'global']);
+  delete globalThis.reuseRead;
+  delete globalThis.reuseWrite;
+}
+
+{
+  globalThis.lexShadow = 'property';
+  require('node:vm').runInThisContext('let lexShadow = "lexical"');
+  const read = 'lexShadow', write = 'lexShadow = lexShadow + "!"';
+  function reads() { return eval(read); }
+  function writes() { eval(write); return eval(read); }
+  for (let i = 0; i < 20; i++) assert.strictEqual(reads(), 'lexical');
+  assert.strictEqual(writes(), 'lexical!');
+  assert.strictEqual(writes(), 'lexical!!');
+  assert.strictEqual(globalThis.lexShadow, 'property');
+  delete globalThis.lexShadow;
+}
+
 console.log('ok');
