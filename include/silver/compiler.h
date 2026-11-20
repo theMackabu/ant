@@ -17,6 +17,7 @@ typedef struct {
   ant_value_t this_val;
   ant_value_t env;
   ant_value_t new_target;
+  const struct sv_eval_scope *scope;
 } js_eval_scope_t;
 
 js_eval_result_t js_eval_source(
@@ -466,9 +467,14 @@ enum {
   SV_EVAL_SCOPE_STATIC         = 1 << 7,
   SV_EVAL_SCOPE_NO_ARGUMENTS   = 1 << 8,
   SV_EVAL_SCOPE_ENV_BOUND      = 1 << 9,
+  SV_EVAL_SCOPE_PRIVATE        = 1 << 10,
 };
 
-uint16_t sv_eval_shadow_bits(ant_t *js, ant_value_t eval_env, const char *source, size_t len);
+uint16_t sv_eval_scope_bits(const sv_eval_scope_flags_t *flags);
+uint16_t sv_eval_shadow_bits(
+  ant_t *js, ant_value_t eval_env, const struct sv_eval_scope *scope,
+  const char *source, size_t len
+);
 
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program, sv_compile_mode_t mode,

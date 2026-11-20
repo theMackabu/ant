@@ -595,6 +595,7 @@ typedef struct sv_eval_scope {
   uint32_t count;
   uint32_t parent;
   bool binds_arguments;
+  uint16_t eval_bits;
   sv_eval_scope_flags_t flags;
 } sv_eval_scope_t;
 

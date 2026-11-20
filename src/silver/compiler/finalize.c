@@ -175,6 +175,7 @@ void sv_func_finalize_type_data(
       dst->parent = src->parent;
       dst->binds_arguments = src->binds_arguments;
       dst->flags = src->flags;
+      dst->eval_bits = sv_eval_scope_bits(&src->flags);
       dst->bindings = src->count > 0
         ? bindings + binding_offset : NULL;
       if (src->count > 0) {

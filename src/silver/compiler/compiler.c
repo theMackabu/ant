@@ -13,27 +13,38 @@ static bool eval_source_may_mention(const char *source, size_t len, const char *
   return false;
 }
 
-uint16_t sv_eval_shadow_bits(ant_t *js, ant_value_t eval_env, const char *source, size_t len) {
+uint16_t sv_eval_scope_bits(const sv_eval_scope_flags_t *flags) {
+  uint16_t bits = 0;
+  if (flags->this_binding) bits |= SV_EVAL_SCOPE_THIS_BINDING;
+  if (flags->super_binding) bits |= SV_EVAL_SCOPE_SUPER_BINDING;
+  if (flags->is_static) bits |= SV_EVAL_SCOPE_STATIC;
+  if (flags->no_arguments) bits |= SV_EVAL_SCOPE_NO_ARGUMENTS;
+  if (flags->has_with) bits |= SV_EVAL_SCOPE_ENV_BOUND;
+  if (flags->has_private) bits |= SV_EVAL_SCOPE_PRIVATE;
+  return bits;
+}
+
+uint16_t sv_eval_shadow_bits(
+  ant_t *js, ant_value_t eval_env, const sv_eval_scope_t *scope,
+  const char *source, size_t len
+) {
   if (!source || !is_object_type(eval_env) || eval_env == js->global) return 0;
   bool escaped = len <= 64 && memchr(source, '\\', len) != NULL;
-  uint16_t bits = 0;
+  uint16_t bits = scope ? scope->eval_bits : sv_eval_scope_bits(sv_eval_env_flags(eval_env));
   
   if ((escaped || eval_source_may_mention(source, len, "undefined", 9)) && sv_eval_env_shadows_global(js, eval_env, "undefined", 9))
     bits |= SV_EVAL_SHADOWS_UNDEFINED;
   if ((escaped || eval_source_may_mention(source, len, "globalThis", 10)) && sv_eval_env_shadows_global(js, eval_env, "globalThis", 10))
     bits |= SV_EVAL_SHADOWS_GLOBAL_THIS;
-  const sv_eval_scope_flags_t *flags = sv_eval_env_flags(eval_env);
-  if (flags->super_binding) bits |= SV_EVAL_SCOPE_SUPER_BINDING;
-  if (flags->is_static) bits |= SV_EVAL_SCOPE_STATIC;
-  if (flags->no_arguments) bits |= SV_EVAL_SCOPE_NO_ARGUMENTS;
-  if (flags->has_with || (flags->has_private && memchr(source, '#', len))) bits |= SV_EVAL_SCOPE_ENV_BOUND;
-  if (flags->this_binding) {
-    bits |= SV_EVAL_SCOPE_THIS_BINDING;
-    if (eval_source_may_mention(source, len, "super", 5) && sv_eval_env_shadows_global(js, eval_env, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN))
-      bits |= SV_EVAL_SCOPE_FIELD_THUNK;
+  if (__builtin_expect(bits & (SV_EVAL_SCOPE_PRIVATE | SV_EVAL_SCOPE_THIS_BINDING), 0)) {
+    if ((bits & SV_EVAL_SCOPE_PRIVATE) && memchr(source, '#', len)) bits |= SV_EVAL_SCOPE_ENV_BOUND;
+    if (
+      (bits & SV_EVAL_SCOPE_THIS_BINDING) && eval_source_may_mention(source, len, "super", 5) &&
+      sv_eval_env_shadows_global(js, eval_env, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN)
+    ) bits |= SV_EVAL_SCOPE_FIELD_THUNK;
   }
     
-  return bits;
+  return bits & (uint16_t)~SV_EVAL_SCOPE_PRIVATE;
 }
 
 sv_func_t *sv_compile(

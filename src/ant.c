@@ -448,7 +448,7 @@ static inline __attribute__((always_inline)) js_eval_result_t js_eval_source_fro
   if (len == (size_t)~0U) len = strlen(buf);
   
   bool is_eval = sv_compile_mode_is_eval(mode);
-  uint16_t shadows = is_eval ? sv_eval_shadow_bits(js, scope.env, buf, len) : 0;
+  uint16_t shadows = is_eval ? sv_eval_shadow_bits(js, scope.env, scope.scope, buf, len) : 0;
   
   sv_eval_cache_key_t cache_key;
   bool cacheable = is_eval && !(shadows & SV_EVAL_SCOPE_ENV_BOUND) && sv_eval_cache_key(

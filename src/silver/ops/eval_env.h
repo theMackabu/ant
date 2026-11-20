@@ -250,6 +250,10 @@ ant_value_t sv_eval_capture_env(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint32_t scope_index
 );
 
+ant_value_t sv_eval_capture_scope_env(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, const sv_eval_scope_t *scope
+);
+
 ant_value_t sv_eval_capture_closure_env(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint32_t scope_index
 );
@@ -598,7 +602,12 @@ ant_value_t sv_eval_capture_closure_env(
 ant_value_t sv_eval_capture_env(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint32_t scope_index
 ) {
-  const sv_eval_scope_t *scope = sv_func_eval_scope(frame->func, scope_index);
+  return sv_eval_capture_scope_env(vm, js, frame, sv_func_eval_scope(frame->func, scope_index));
+}
+
+ant_value_t sv_eval_capture_scope_env(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, const sv_eval_scope_t *scope
+) {
   ant_value_t parent = scope->parent
     ? sv_eval_capture_closure_env(vm, js, frame, scope->parent - 1)
     : sv_eval_variable_env(vm, js, frame);
