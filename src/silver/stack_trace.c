@@ -126,7 +126,7 @@ static const sv_jit_activation_t *sv_activation_compiled_caller(
   bool entered = host_fp < 0 && a->entered != SV_JIT_ENTERED_FROM_COMPILED;
   *construct = false;
   
-  if (host_fp < 0 && !entered && a + 1 < it->acts + it->n_acts) return a + 1;
+  if (host_fp < 0 && !entered && sv_func_construct_needs_caller(a->func) && a + 1 < it->acts + it->n_acts) return a + 1;
   *construct = entered && a->entered == SV_JIT_ENTERED_AS_CONSTRUCT
     ? sv_func_may_construct(a->func)
     : sv_frame_is_construct(it->vm, a->func, host_fp);

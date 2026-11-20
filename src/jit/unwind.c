@@ -710,8 +710,9 @@ static bool jit_walk_visit(jit_walk_t *w, uintptr_t pc, uintptr_t frame_addr) {
   }
   
   if (!jit_walk_push(w, a)) return false;
-  w->full = w->limit >= 0 && w->funcs >= w->limit;
-  return true;
+  if (w->limit < 0 || w->funcs < w->limit) return true;
+  w->full = sv_func_construct_needs_caller(a.func);
+  return w->full;
 }
 
 #if defined(__APPLE__)
