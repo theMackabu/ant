@@ -486,6 +486,7 @@ typedef struct {
   uint32_t depth;
   bool has_entry;
   bool learnable;
+  bool raised;
   bool finally;
 } ir_handler_t;
 

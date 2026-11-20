@@ -4561,7 +4561,7 @@ opt_code_t *opt_cg_generate(ant_t *js, const ir_graph_t *graph, const ir_frame_l
   if (!code->handlers) opt_out_of_memory();
   for (uint32_t h = 0; h < graph->handlers.len; h++) {
     const ir_handler_t *handler = &graph->handlers.items[h];
-    code->handlers[h] = (opt_handler_t){.catch_off = handler->catch_off, .depth = handler->depth, .entry = handler->has_entry ? h : UINT32_MAX, .learnable = handler->learnable, .finally = handler->finally};
+    code->handlers[h] = (opt_handler_t){.catch_off = handler->catch_off, .depth = handler->depth, .entry = handler->has_entry ? h : UINT32_MAX, .learnable = handler->learnable, .raised = handler->raised, .finally = handler->finally};
   }
   code->sites = opt_cg_dup_array(cg.sites.items, cg.sites.len, sizeof *cg.sites.items);
   code->frames = malloc((cg.site_frames.len + 1) * sizeof *code->frames);

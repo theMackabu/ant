@@ -55,6 +55,7 @@ typedef struct {
   uint32_t depth;
   uint32_t entry;
   bool learnable;
+  bool raised;
   bool finally;
 } opt_handler_t;
 

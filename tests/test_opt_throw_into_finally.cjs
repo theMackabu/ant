@@ -891,7 +891,7 @@ function checkStats() {
   assert.ok(stats && rejected, child.stderr.slice(-4000));
   const fromCalls = 40 * 150;
   assert.ok(Number(stats[1]) >= fromCalls - 1000 && Number(stats[1]) <= fromCalls, 'throws caught through the catch site: ' + stats[1]);
-  assert.ok(Number(stats[2]) <= 128, 'throws that left compiled code: ' + stats[2]);
+  assert.ok(Number(stats[2]) <= 32, 'throws that left compiled code: ' + stats[2]);
   assert.strictEqual(rejected[1], '0', 'functions the optimizing tier gave up on');
 }
 

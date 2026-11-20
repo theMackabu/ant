@@ -4878,7 +4878,8 @@ static bool opt_throw_edge(opt_builder_t *b, ir_node_id_t value) {
   const uint8_t *feedback = sv_func_type_feedback(root->func);
   if (!feedback) return false;
   if (!(feedback[handler] & SV_TFB_CLASS_MASK)) {
-    b->graph->handlers.items[b->graph->handler_at[root->pc]].learnable = true;
+    ir_handler_t *waiting = &b->graph->handlers.items[b->graph->handler_at[root->pc]];
+    waiting->learnable = waiting->raised = true;
     return false;
   }
   opt_frame_t frame = opt_frame_clone(root, &root->frame);
