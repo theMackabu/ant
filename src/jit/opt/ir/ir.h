@@ -214,6 +214,7 @@ typedef enum : uint8_t {
   IR_COND_NEXT_BINDING_OF_SHAPE,
   IR_COND_PROPERTY_ITERATOR_CACHE_VALID,
   IR_COND_TYPED_ARRAY_LENGTH,
+  IR_COND_THROWN,
 } ir_condition_kind_t;
 
 typedef struct {
@@ -293,6 +294,7 @@ typedef struct {
       uint32_t bc_off;
       uint32_t inlined_frame_bytes;
       bool stores_operands;
+      bool returns_error;
       sv_func_t *target;
       uint16_t argc;
       uintptr_t extra;

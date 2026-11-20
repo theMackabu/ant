@@ -1252,6 +1252,10 @@ uintptr_t opt_tier_access_helper(sv_op_t op, bool adding) {
   return counted ? (uintptr_t)opt_rt_access_counted : (uintptr_t)helper;
 }
 
+ant_value_t opt_rt_take_thrown(sv_vm_t *vm, ant_value_t error, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind) {
+  return js_take_thrown(vm->js, error);
+}
+
 ant_value_t opt_rt_throw(ant_value_t value, sv_vm_t *vm) {
   return is_err(value) ? value : js_throw(vm->js, value);
 }

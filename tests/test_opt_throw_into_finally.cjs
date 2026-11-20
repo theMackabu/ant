@@ -759,6 +759,84 @@ add('loop in the catch body after the try block captured a variable', 120000, fu
   return total;
 });
 
+add('constructor that is not inlined throws into finally', 10500, function (n) {
+  function Thing(i) {
+    try { this.i = i; if (i % 2) throw this; } finally { Thing.made++; }
+  }
+  Thing.made = 0;
+  let c = 0;
+  for (let i = 0; i < n; i++) {
+    let made = null;
+    try {
+      try { made = new Thing(i); } finally { c++; }
+    } catch (e) { c += e instanceof Thing && e.i === i && made === null ? 2 : 1000; }
+    c += made ? 1 : 0;
+  }
+  return c + Thing.made;
+});
+
+add('calls with several targets throw into one handler', -1765766109, function (n) {
+  function a(i) { try { if (i % 3 === 0) throw 'a' + i; return 1; } finally { a.n++; } }
+  function b(i) { try { if (i % 3 === 1) throw 'b' + i; return 2; } finally { b.n++; } }
+  const o = { m(i) { try { if (i % 3 === 2) throw 'm' + i; return 3; } finally { a.n++; } } };
+  a.n = 0;
+  b.n = 0;
+  const fns = [a, b];
+  let h = 0;
+  for (let i = 0; i < n; i++) {
+    let step = 0;
+    try {
+      try {
+        h = mix(h, fns[i & 1](i));
+        step = 1;
+        h = mix(h, o.m(i));
+        step = 2;
+      } finally { h = mix(h, step); }
+    } catch (e) { h = mix(h, e.length + e.charCodeAt(0) + step); }
+  }
+  return h + a.n + b.n;
+});
+
+add('call inside an inlined callee throws to the caller handler', 12000, function (n) {
+  function thrower(i) { try { if (i % 2) throw { i }; return i; } finally { thrower.n++; } }
+  thrower.n = 0;
+  function wrap(i, k) { return thrower(i) + k; }
+  let c = 0;
+  for (let i = 0; i < n; i++) {
+    let local = i * 2;
+    try {
+      try { local = wrap(i, 1); local += 1000; } finally { c += local & 1; }
+    } catch (e) { c += e.i === i && local === i * 2 ? 5 : 100000; }
+  }
+  return c + thrower.n;
+});
+
+add('exit after a call threw into the handler', 6016, function (n) {
+  function thrower(i) { try { throw i; } finally { thrower.n++; } }
+  thrower.n = 0;
+  let acc = 0, c = 0;
+  for (let i = 0; i < n; i++) {
+    const v = i === n - 6 ? 'S' : i > n - 6 ? 'x' : 1;
+    let before = i;
+    try {
+      try { before = i + 1; thrower(i); before = -1; } finally { acc = acc + v; }
+    } catch (e) { acc = acc + v; c += e === i && before === i + 1 ? 1 : 1000; }
+  }
+  return c + String(acc).length + thrower.n;
+});
+
+add('error marker never reaches the continuation', 14250, function (n) {
+  function maybe(i) { try { if (i % 4 === 0) throw new RangeError('r' + i); return { v: i }; } finally { maybe.n++; } }
+  maybe.n = 0;
+  let c = 0;
+  for (let i = 0; i < n; i++) {
+    let got = null;
+    try { got = maybe(i); c += got.v === i ? 1 : 1000; } catch (e) { c += e instanceof RangeError && got === null ? 2 : 1000; }
+    try { c += typeof maybe(i + 1).v === 'number' ? 1 : 1000; } catch (e) { c += e.message === 'r' + (i + 1) ? 3 : 1000; }
+  }
+  return c + maybe.n;
+});
+
 function generatorCase(n) {
   function* gen(i) {
     try {
@@ -866,8 +944,18 @@ function statsChild() {
     }
     return c;
   }
+  function fromAccess(n, nothing) {
+    let c = 0;
+    for (let i = 0; i < n; i++) {
+      try {
+        try { c += nothing.length; } finally { c++; }
+      } catch (e) { c += e instanceof TypeError ? 1 : 1000; }
+    }
+    return c;
+  }
   let total = 0;
   for (let round = 0; round < 40; round++) {
+    total += fromAccess(100, null);
     total += local(400) + nested(400) + inBody(400) + coldCatch(400, { p: 1 }) + closureInTry(400) + finallyInBody(400) + called(450);
     for (let k = 0; k < 50; k++) total += loopInFinally(8);
   }
@@ -884,13 +972,13 @@ function checkStats() {
     timeout: 120000,
   });
   assert.strictEqual(child.status, 0, child.stdout + child.stderr.slice(-4000));
-  assert.strictEqual(child.stdout.trim(), '256000');
+  assert.strictEqual(child.stdout.trim(), '264000');
   const stats = /caught_in_code=(\d+) caught_in_interpreter=(\d+)/.exec(child.stderr);
   assert.match(child.stderr, /jit: opt dropped func=finallyInBody reason=catch-without-entry/, 'a handler inside a finally body learns its throws');
   const rejected = / rejected=(\d+)/.exec(child.stderr);
   assert.ok(stats && rejected, child.stderr.slice(-4000));
-  const fromCalls = 40 * 150;
-  assert.ok(Number(stats[1]) >= fromCalls - 1000 && Number(stats[1]) <= fromCalls, 'throws caught through the catch site: ' + stats[1]);
+  const fromAccesses = 40 * 100;
+  assert.ok(Number(stats[1]) >= fromAccesses / 2 && Number(stats[1]) <= fromAccesses, 'throws caught through the catch site: ' + stats[1]);
   assert.ok(Number(stats[2]) <= 32, 'throws that left compiled code: ' + stats[2]);
   assert.strictEqual(rejected[1], '0', 'functions the optimizing tier gave up on');
 }

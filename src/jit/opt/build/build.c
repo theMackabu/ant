@@ -3978,6 +3978,8 @@ static opt_flow_t opt_build_push_pop(opt_builder_t *b, bool push, const ir_node_
   return opt_finish_call(b, operands, opt_value_phi(b, b->frame.sp - operands, results, paths), tail);
 }
 
+static bool opt_throw_edge(opt_builder_t *b, ir_node_id_t value, bool probe);
+
 static opt_flow_t opt_emit_call(opt_builder_t *b, bool construct, sv_func_t *target, const ir_node_id_t *inputs, uint32_t argc, uint32_t operands, bool tail) {
   ir_op_t call = ir_op(construct ? IR_OP_CALL_CONSTRUCT : IR_OP_CALL_DIRECT);
   call.call.func = b->func;
@@ -3990,7 +3992,26 @@ static opt_flow_t opt_emit_call(opt_builder_t *b, bool construct, sv_func_t *tar
   } else if (!construct) call.call.native_closure = sv_tfb_call_site_called_native_closure(b->func, (int)b->pc);
   ir_node_id_t result = opt_emit(b, call, inputs, 2 + argc, OPT_REPR_TAGGED);
   ir_node(b->graph, result)->frame_state = opt_call_position(b);
-  opt_mark_catch(b, result);
+  if (construct || tail || !opt_throw_edge(b, IR_NONE, true)) {
+    opt_mark_catch(b, result);
+    return opt_finish_call(b, operands, result, tail);
+  }
+  ir_node(b->graph, result)->op.call.returns_error = true;
+  ir_block_id_t thrown, returned;
+  opt_branch_both_ways(b, ir_cond(IR_COND_THROWN), &result, 1, &thrown, &returned);
+  b->block = thrown;
+  ir_op_t take = ir_op(IR_OP_CALL_NATIVE);
+  take.call.func = b->func;
+  take.call.bc_off = b->pc;
+  take.call.stores_operands = true;
+  take.call.helper = (uintptr_t)opt_rt_take_thrown;
+  ir_node_id_t caught = opt_emit(b, take, (ir_node_id_t[]){result, opt_constant(b, IR_VALUE_UNDEFINED)}, 2, OPT_REPR_TAGGED);
+  ir_node(b->graph, caught)->frame_state = opt_call_position(b);
+  if (!opt_throw_edge(b, caught, false)) {
+    opt_fail(b, "throw-edge");
+    return OPT_FLOW_FAILED;
+  }
+  b->block = returned;
   return opt_finish_call(b, operands, result, tail);
 }
 
@@ -4856,7 +4877,7 @@ static bool opt_finally_handler_plain(const opt_builder_t *b, uint32_t handler) 
   return next == OP_JMP || next == OP_JMP8;
 }
 
-static bool opt_throw_edge(opt_builder_t *b, ir_node_id_t value) {
+static bool opt_throw_edge(opt_builder_t *b, ir_node_id_t value, bool probe) {
   if (b->ctx->no_throw_edges) return false;
   opt_builder_t *root = b;
   for (; root->inline_call; root = root->inline_call->caller)
@@ -4879,9 +4900,11 @@ static bool opt_throw_edge(opt_builder_t *b, ir_node_id_t value) {
   if (!feedback) return false;
   if (!(feedback[handler] & SV_TFB_CLASS_MASK)) {
     ir_handler_t *waiting = &b->graph->handlers.items[b->graph->handler_at[root->pc]];
-    waiting->learnable = waiting->raised = true;
+    waiting->learnable = true;
+    waiting->raised |= !probe;
     return false;
   }
+  if (probe) return true;
   opt_frame_t frame = opt_frame_clone(root, &root->frame);
   for (int32_t s = opt_try_state(root, root->pc); s != state; s = opt_try_parent(root, s)) {
     int32_t left = opt_finally_index(root, s);
@@ -4907,7 +4930,7 @@ static bool opt_throw_edge(opt_builder_t *b, ir_node_id_t value) {
 }
 
 static opt_flow_t opt_throw_value(opt_builder_t *b, ir_node_id_t value) {
-  if (opt_throw_edge(b, value)) return OPT_FLOW_ENDED;
+  if (opt_throw_edge(b, value, false)) return OPT_FLOW_ENDED;
   ir_node_id_t node = opt_set_control(b, ir_op(IR_OP_THROW), &value, 1);
   opt_mark_catch(b, node);
   return OPT_FLOW_ENDED;

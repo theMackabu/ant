@@ -1045,6 +1045,12 @@ static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condit
       masm_branch64_imm(m, cond, opt_cg_input(cg, node, 0), (int64_t)IR_VALUE_UNDEFINED, target);
       break;
     }
+    case IR_COND_THROWN: {
+      asm_cond_t cond = invert ? ASM_COND_NOT_EQUAL : ASM_COND_EQUAL;
+      masm_sar64_imm(m, cg->pinned.scratch, opt_cg_input(cg, node, 0), NANBOX_TYPE_SHIFT);
+      masm_branch64_imm(m, cond, cg->pinned.scratch, OPT_ERROR_TAG_SIGNED, target);
+      break;
+    }
     case IR_COND_ASCII_STRING: {
       asm_gpr_t scratch = cg->pinned.scratch, string = opt_cg_input(cg, node, 0);
       asm_label_t no = opt_cg_label(cg, if_false), rope = masm_new_label(m);
@@ -3056,6 +3062,7 @@ static void opt_cg_load_input(opt_cg_t *cg, ir_node_id_t node, uint32_t index, a
 
 static void opt_cg_branch_error(opt_cg_t *cg, ir_node_id_t node_id) {
   masm_t *m = &cg->masm;
+  if (ir_node(cg->graph, node_id)->op.call.returns_error) return;
   masm_sar64_imm(m, cg->pinned.scratch, MASM_RETURN_GPRS[0], NANBOX_TYPE_SHIFT);
   masm_branch64_imm(m, ASM_COND_EQUAL, cg->pinned.scratch, OPT_ERROR_TAG_SIGNED, opt_cg_throw_target(cg, node_id, cg->throw_label));
 }
