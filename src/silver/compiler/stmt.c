@@ -617,16 +617,21 @@ void compile_if(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   compile_truthy_test_expr(c, node->cond);
+  bool checked = c->this_checked;
   int else_jump = emit_jump(c, OP_JMP_FALSE);
   compile_stmt(c, node->left);
   if (node->right) {
+    bool then_checked = c->this_checked;
     int end_jump = emit_jump(c, OP_JMP);
     patch_jump(c, else_jump);
+    c->this_checked = checked;
     compile_stmt(c, node->right);
+    checked = then_checked && c->this_checked;
     patch_jump(c, end_jump);
   } else {
     patch_jump(c, else_jump);
   }
+  c->this_checked = checked;
 }
 
 void compile_while(sv_compiler_t *c, sv_ast_t *node) {

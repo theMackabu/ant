@@ -87,7 +87,9 @@ void emit_this(sv_compiler_t *c) {
   }
   
   emit_this_binding_get(c, kind, slot);
+  if (c->this_checked) return;
   emit_this_check(c);
+  c->this_checked = true;
 }
 
 void emit_this_store(sv_compiler_t *c) {
@@ -106,6 +108,7 @@ void emit_this_store(sv_compiler_t *c) {
   
   emit_op(c, OP_DUP);
   emit_this_binding_put(c, kind, slot);
+  c->this_checked = true;
 }
 
 void emit_super_receiver(sv_compiler_t *c) {
