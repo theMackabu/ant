@@ -47,6 +47,8 @@ const describe = (object, key) => Object.getOwnPropertyDescriptor(object, key);
 {
   const object = {};
   Object.defineProperty(object, 'hidden', { value: 1, writable: true, enumerable: false, configurable: true });
+  assert.deepStrictEqual(Object.keys(object), []);
+  assert.strictEqual(describe(object, 'hidden').enumerable, false);
   Object.defineProperty(object, 'hidden', full(2));
   assert.deepStrictEqual(describe(object, 'hidden'), full(2));
   assert.deepStrictEqual(Object.keys(object), ['hidden']);
