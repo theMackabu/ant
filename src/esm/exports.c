@@ -29,6 +29,13 @@ static void export_names_add(export_names_t *names, const char *str, uint32_t le
   names->items[names->count++] = (export_name_t){ str, len };
 }
 
+static int export_name_compare(const void *left, const void *right) {
+  const export_name_t *a = left, *b = right;
+  uint32_t shared = a->len < b->len ? a->len : b->len;
+  int order = memcmp(a->str, b->str, shared);
+  return order ? order : (a->len > b->len) - (a->len < b->len);
+}
+
 static void collect_binding_names(export_names_t *names, sv_ast_t *pat) {
   if (!pat) return;
 
@@ -114,6 +121,7 @@ void esm_predeclare_exports(ant_t *js, sv_ast_t *program, ant_value_t ns) {
     else if ((f & EX_NAMED) || ((f & EX_STAR) && (f & EX_NAMESPACE))) collect_spec_names(&names, &stmt->args);
   }
 
+  if (names.count > 1) qsort(names.items, (size_t)names.count, sizeof(*names.items), export_name_compare);
   for (int i = 0; i < names.count; i++)
     setprop_cstr_attrs(js, ns, names.items[i].str, names.items[i].len, Ant_Value_Undefined, ANT_PROP_ATTR_ENUMERABLE);
   free(names.items);

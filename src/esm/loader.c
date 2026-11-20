@@ -549,12 +549,62 @@ static ant_value_t esm_require_esm_exports(ant_t *js, ant_value_t ns) {
   return wrapper;
 }
 
+static void esm_sort_namespace_exports(ant_t *js, ant_object_t *ptr) {
+  uint32_t count = ant_shape_count(ptr->shape);
+  if (count < 2 || ptr->prop_count != count) return;
+
+  const char *previous = NULL;
+  uint32_t strings = 0;
+  bool sorted = true;
+  for (uint32_t slot = 0; slot < count; slot++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, slot);
+    if (!prop) return;
+    if (prop->type != ANT_SHAPE_KEY_STRING) continue;
+    if (previous && strcmp(previous, prop->key.interned) > 0) sorted = false;
+    previous = prop->key.interned;
+    strings++;
+  }
+  if (sorted) return;
+
+  uint32_t *order = malloc((size_t)count * (sizeof(*order) * 2 + sizeof(ant_value_t)));
+  if (!order) return;
+  uint32_t *string_slots = order + count;
+  ant_value_t *values = (ant_value_t *)(order + count * 2);
+
+  uint32_t found = 0;
+  for (uint32_t slot = 0; slot < count; slot++) {
+    values[slot] = ant_object_prop_get_unchecked(ptr, slot);
+    if (ant_shape_prop_at(ptr->shape, slot)->type == ANT_SHAPE_KEY_STRING) string_slots[found++] = slot;
+  }
+
+  for (uint32_t i = 1; i < strings; i++) {
+    uint32_t slot = string_slots[i];
+    const char *name = ant_shape_prop_at(ptr->shape, slot)->key.interned;
+    uint32_t at = i;
+    for (; at > 0 && strcmp(ant_shape_prop_at(ptr->shape, string_slots[at - 1])->key.interned, name) > 0; at--)
+      string_slots[at] = string_slots[at - 1];
+    string_slots[at] = slot;
+  }
+
+  found = 0;
+  for (uint32_t slot = 0; slot < count; slot++)
+    order[slot] = ant_shape_prop_at(ptr->shape, slot)->type == ANT_SHAPE_KEY_STRING ? string_slots[found++] : slot;
+
+  if (ant_shape_permute(js, ptr->shape, order))
+    for (uint32_t slot = 0; slot < count; slot++) {
+      ant_object_prop_set_unchecked(ptr, slot, values[order[slot]]);
+      gc_write_barrier(js, ptr, values[order[slot]]);
+    }
+  free(order);
+}
+
 static void esm_seal_namespace(ant_t *js, ant_value_t ns) {
   ant_object_t *ptr = is_object_type(ns) ? js_obj_ptr(js_as_obj(ns)) : NULL;
   if (!ptr || !ptr->shape || !js_check_brand(ns, BRAND_MODULE_NAMESPACE)) return;
   if (!js_obj_ensure_unique_shape(ptr)) return;
   if (!ant_shape_clear_attrs_all(js, ptr->shape, ANT_PROP_ATTR_CONFIGURABLE | ANT_PROP_ATTR_WRITABLE)) return;
   ptr->flags.extensible = 0;
+  esm_sort_namespace_exports(js, ptr);
 }
 
 ant_value_t esm_value_namespace(ant_t *js, ant_value_t value, ant_value_t default_value) {
