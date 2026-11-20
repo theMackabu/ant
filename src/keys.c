@@ -634,11 +634,6 @@ static ant_value_t for_in_keys_collect_ordinary_own(
   own_index_list_free(&indices);
   if (is_err(r)) return r;
 
-  if (is_arr) {
-    r = for_in_keys_add_cstr(js, out, seen, "length", 6, false);
-    if (is_err(r)) return r;
-  }
-
   for (uint32_t i = 0; i < count; i++) {
     const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
     if (!prop || prop->type != ANT_SHAPE_KEY_STRING) continue;
@@ -653,7 +648,7 @@ static ant_value_t for_in_keys_collect_ordinary_own(
     if (is_err(r)) return r;
   }
 
-  return Ant_Value_Undefined;
+  return is_arr ? for_in_keys_add_cstr(js, out, seen, "length", 6, false) : Ant_Value_Undefined;
 }
 
 static ant_value_t for_in_keys_add_exotic_indices(

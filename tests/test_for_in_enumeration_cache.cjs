@@ -90,6 +90,18 @@ stable([], '');
 stable(Array.from({ length: 12 }, (_, i) => i), '0,1,2,3,4,5,6,7,8,9,10,11');
 stable({ length: 2, 0: 'a', 1: 'b' }, '0,1,length');
 stable((function () { return arguments; })(1, 2, 3), '0,1,2');
+{
+  const listed = (function () { return arguments; })(1, 2);
+  Object.defineProperty(listed, 'length', { value: 2, enumerable: true, configurable: true, writable: true });
+  stable(listed, '0,1,length');
+  const inherited = Object.create(listed);
+  inherited.own = 1;
+  stable(inherited, 'own,0,1,length');
+  const hidden = (function () { return arguments; })(1, 2);
+  hidden.length = 7;
+  stable(hidden, '0,1');
+  stable(Object.setPrototypeOf(hidden, { length: 1, tail: 1 }), '0,1,tail');
+}
 stable('abc', '0,1,2');
 stable('', '');
 stable(new String('ab'), '0,1');
