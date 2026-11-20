@@ -382,6 +382,7 @@ export function targets() {
     'test_opt_ops.cjs',
     'test_opt_osr_nested_polling.cjs',
     'test_opt_polymorphic_methods.cjs',
+    'test_opt_handler_resume_depth.cjs',
     'test_opt_ranges.cjs',
     'test_opt_receivers_strings.cjs',
     'test_opt_recursive_calls.cjs',

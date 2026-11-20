@@ -3974,6 +3974,9 @@ static void opt_cg_entry_tails(opt_cg_t *cg, asm_label_t retry) {
     masm_load_effective_address(m, MASM_ARGUMENT_GPRS[1], opt_cg_entry_field(cg, 0));
     masm_call_absolute(m, (uint64_t)(uintptr_t)opt_rt_borrow_frame);
   }
+  masm_load64(m, scratch, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, jit.osr_marks)));
+  masm_load_effective_address(m, MASM_ARGUMENT_GPRS[1], opt_cg_entry_field(cg, 0));
+  masm_store64(m, asm_addr(scratch, (int32_t)offsetof(sv_jit_osr_mark_t, entry)), MASM_ARGUMENT_GPRS[1]);
   masm_load32(m, scratch, asm_addr(cg->pinned.vm, (int32_t)(offsetof(sv_vm_t, jit.osr) + offsetof(sv_jit_osr_t, bc_offset))));
   asm_label_t *entries = opt_arena_new(&cg->arena, asm_label_t, cg->graph->osr_entries.len + 1);
   for (uint32_t i = 0; i < cg->graph->osr_entries.len; i++) {
