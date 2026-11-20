@@ -605,6 +605,13 @@ bool esm_export_star_skips(ant_t *js, const char *name, size_t len) {
   return is_object_type(target) && js_try_get_own_data_prop(js, target, name, len, &declared);
 }
 
+void esm_export_star_finish(ant_t *js) {
+  ant_value_t target = js_module_eval_active_ns(js);
+  ant_object_t *ptr = is_object_type(target) ? js_obj_ptr(js_as_obj(target)) : NULL;
+  if (!ptr || !ptr->shape || !js_check_brand(target, BRAND_MODULE_NAMESPACE)) return;
+  if (js_obj_ensure_unique_shape(ptr)) esm_sort_namespace_exports(js, ptr);
+}
+
 static void esm_seal_namespace(ant_t *js, ant_value_t ns) {
   ant_object_t *ptr = is_object_type(ns) ? js_obj_ptr(js_as_obj(ns)) : NULL;
   if (!ptr || !ptr->shape || !js_check_brand(ns, BRAND_MODULE_NAMESPACE)) return;

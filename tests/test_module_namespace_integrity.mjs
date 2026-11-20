@@ -1,8 +1,9 @@
 import assert from 'node:assert';
 import * as self from './test_module_namespace_integrity.mjs';
+export * from 'data:text/javascript,export const beta = 1; export const zulu = 2;';
 
 assert.strictEqual(Object.isExtensible(self), false);
-assert.deepStrictEqual(Reflect.ownKeys(self), ['alpha', 'counter', 'default', 'zeta', Symbol.toStringTag]);
+assert.deepStrictEqual(Reflect.ownKeys(self), ['alpha', 'beta', 'counter', 'default', 'zeta', 'zulu', Symbol.toStringTag]);
 assert.throws(() => { self.added = 1; }, TypeError);
 assert.strictEqual(Reflect.defineProperty(self, 'added', { value: 1 }), false);
 assert.strictEqual(Reflect.deleteProperty(self, 'zeta'), false);
@@ -15,7 +16,7 @@ export default 'd';
 
 assert.strictEqual(Object.isSealed(self), true);
 assert.strictEqual(Object.isFrozen(self), false);
-assert.deepStrictEqual(Object.keys(self), ['alpha', 'counter', 'default', 'zeta']);
+assert.deepStrictEqual(Object.keys(self), ['alpha', 'beta', 'counter', 'default', 'zeta', 'zulu']);
 assert.throws(() => Object.freeze(self), TypeError);
 assert.throws(() => { self.counter = 5; }, TypeError);
 assert.throws(() => { self.alpha = 'b'; }, TypeError);
@@ -82,7 +83,7 @@ assert.throws(() => Object.freeze(dep), TypeError);
 assert.strictEqual(Object.seal(dep), dep);
 assert.strictEqual(Object.getPrototypeOf(dep), null);
 
-const starSource = 'export * from ' + JSON.stringify('data:text/javascript,' + encodeURIComponent('export const m = 1; export let c = 2; export const zz = 3; export default 9;')) + '; export const n = 4; export const b = 5; export const m = "local";';
+const starSource = 'export const m = "local"; export * from ' + JSON.stringify('data:text/javascript,' + encodeURIComponent('export const m = 1; export let c = 2; export const zz = 3; export default 9;')) + '; export const n = 4; export const b = 5;';
 const star = await import('data:text/javascript,' + encodeURIComponent(starSource));
 assert.deepStrictEqual(Object.keys(star), ['b', 'c', 'm', 'n', 'zz']);
 assert.deepStrictEqual([star.b, star.c, star.m, star.n, star.zz, star.default], [5, 2, 'local', 4, 3, undefined]);

@@ -261,6 +261,7 @@ static inline ant_value_t sv_op_export_all(sv_vm_t *vm, ant_t *js) {
   }
   
   js_prop_iter_end(&iter);
+  esm_export_star_finish(js);
   vm->sp--;
   
   return Ant_Value_FromNumber(0);
