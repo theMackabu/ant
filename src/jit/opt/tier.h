@@ -215,6 +215,7 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
 
 ant_value_t opt_rt_call(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc);
 ant_value_t opt_rt_construct(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc);
+ant_value_t opt_rt_reflect_construct(sv_vm_t *vm, ant_value_t target, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t explicit_new_target);
 ant_value_t opt_rt_new_this(sv_vm_t *vm, ant_value_t callee);
 ant_value_t opt_rt_stack_overflow(sv_vm_t *vm);
 ant_value_t opt_rt_char_code_at(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t kind);

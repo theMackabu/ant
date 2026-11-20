@@ -240,6 +240,8 @@ ant_value_t js_create_data_property_or_throw(ant_t *js, ant_value_t obj, ant_val
 ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
 ant_value_t js_proxy_get_prototype(ant_t *js, ant_value_t proxy);
 bool js_proxy_plain_prototype(ant_t *js, ant_value_t proxy, ant_value_t *out);
+ant_value_t js_reflect_construct_listed(ant_t *js, ant_value_t target, ant_value_t new_target, bool explicit_new_target, ant_value_t *args, int argc);
+ant_value_t js_reflect_construct_array_like(ant_t *js, ant_value_t target, ant_value_t args_arr, ant_value_t new_target, bool explicit_new_target);
 ant_value_t js_proxy_prevent_extensions(ant_t *js, ant_value_t proxy);
 ant_value_t js_mkproxy(ant_t *js, ant_value_t target, ant_value_t handler);
 ant_value_t js_get_own_property_descriptor(ant_t *js, ant_value_t obj, ant_value_t key);
@@ -387,6 +389,7 @@ bool js_is_function_call_builtin(ant_value_t func);
 bool js_is_function_apply_builtin(ant_value_t func);
 bool js_is_array_push_builtin(ant_value_t func);
 bool js_is_array_pop_builtin(ant_value_t func);
+bool js_is_reflect_construct_builtin(ant_value_t func);
 bool js_is_prototype_of(ant_t *js, ant_value_t proto_obj, ant_value_t obj);
 
 bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r);

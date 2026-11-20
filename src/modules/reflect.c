@@ -93,29 +93,26 @@ static ant_value_t reflect_own_keys(ant_params_t) {
   return js_own_property_keys(js, target, true, false);
 }
 
-static ant_value_t reflect_construct(ant_params_t) {
-  if (nargs < 2) {
-    return js_mkerr(js, "Reflect.construct requires at least 2 arguments");
-  }
-  
-  ant_value_t target = args[0];
-  ant_value_t args_arr = args[1];
-  ant_value_t new_target = (nargs >= 3) ? args[2] : target;
-  
+static ant_value_t reflect_construct_from(
+  ant_t *js, ant_value_t target, ant_value_t args_arr, ant_value_t new_target,
+  bool explicit_new_target, ant_value_t *listed, int listed_count
+) {
   if (!js_is_constructor(target)) {
     return js_mkerr(js, "Reflect.construct: first argument must be a constructor");
   }
   
-  if (nargs >= 3 && !js_is_constructor(new_target)) {
+  if (explicit_new_target && !js_is_constructor(new_target)) {
     return js_mkerr(js, "Reflect.construct: third argument must be a constructor");
   }
   
-  if (!is_object_type(args_arr))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Reflect.construct: second argument must be an array-like object");
+  ant_arg_list_t list = { .args = listed, .argc = listed_count, .rooted = false };
+  if (!listed) {
+    if (!is_object_type(args_arr))
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Reflect.construct: second argument must be an array-like object");
   
-  ant_arg_list_t list;
-  ant_value_t err = Ant_ArgList_FromArrayLike(js, args_arr, &list);
-  if (is_err(err)) return err;
+    ant_value_t err = Ant_ArgList_FromArrayLike(js, args_arr, &list);
+    if (is_err(err)) return err;
+  }
   
   ant_value_t result;
   if (vtype(target) == kTypeObject && is_proxy(target)) {
@@ -145,6 +142,14 @@ static ant_value_t reflect_construct(ant_params_t) {
   
   Ant_ArgList_Release(&list);
   return result;
+}
+
+static ant_value_t reflect_construct(ant_params_t) {
+  if (nargs < 2) {
+    return js_mkerr(js, "Reflect.construct requires at least 2 arguments");
+  }
+  
+  return reflect_construct_from(js, args[0], args[1], nargs >= 3 ? args[2] : args[0], nargs >= 3, NULL, 0);
 }
 
 static ant_value_t reflect_apply(ant_params_t) {
@@ -256,4 +261,20 @@ void init_reflect_module(ant_t *js) {
   
   js_set_tostringtag(js, reflect_obj, js_mkstr(js, "Reflect", 7));
   js_set_global_builtin(js, "Reflect", reflect_obj);
+}
+
+ant_value_t js_reflect_construct_array_like(
+  ant_t *js, ant_value_t target, ant_value_t args_arr, ant_value_t new_target, bool explicit_new_target
+) {
+  return reflect_construct_from(js, target, args_arr, new_target, explicit_new_target, NULL, 0);
+}
+
+ant_value_t js_reflect_construct_listed(
+  ant_t *js, ant_value_t target, ant_value_t new_target, bool explicit_new_target, ant_value_t *args, int argc
+) {
+  return reflect_construct_from(js, target, Ant_Value_Undefined, new_target, explicit_new_target, args, argc);
+}
+
+bool js_is_reflect_construct_builtin(ant_value_t func) {
+  return vtype(func) == kTypeBuiltin && js_as_cfunc(func) == reflect_construct;
 }

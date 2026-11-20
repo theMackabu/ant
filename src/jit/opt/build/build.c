@@ -4167,6 +4167,39 @@ static bool opt_try_collection_lookup(opt_builder_t *b, const ir_node_id_t *inpu
   return true;
 }
 
+static bool opt_fresh_array_elements(const opt_builder_t *b, ir_node_id_t array, ir_node_id_t *elements, uint32_t *count) {
+  const ir_node_t *node = ir_node(b->graph, array);
+  bool empty = node->op.code == IR_OP_CALL_NATIVE && node->op.call.helper == (uintptr_t)opt_rt_array && !node->op.call.argc;
+  if (!empty && (node->op.code != IR_OP_ALLOCATE_ARRAY || node->op.count > OPT_MAX_CALL_ARGS)) return false;
+  *count = empty ? 0 : node->op.count;
+  uint32_t found = 0;
+  for (ir_node_id_t id = array + 1; id < ir_node_count(b->graph); id++) {
+    const ir_node_t *user = ir_node(b->graph, id);
+    bool initializes = user->op.code == IR_OP_INITIALIZE_ELEMENT && user->inputs.len == 2 && user->inputs.items[0] == array
+      && user->inputs.items[1] != array && user->op.index < *count;
+    if (initializes) {
+      elements[user->op.index] = user->inputs.items[1];
+      found++;
+      continue;
+    }
+    for (uint32_t i = 0; i < user->inputs.len; i++)
+      if (user->inputs.items[i] == array) return false;
+  }
+  return found == *count;
+}
+
+static bool opt_try_reflect_construct(opt_builder_t *b, const ir_node_id_t *inputs, uint32_t argc, uint32_t operands, bool tail, opt_flow_t *flow) {
+  ir_node_id_t call[2 + OPT_MAX_CALL_ARGS];
+  uint32_t count;
+  if (argc < 2 || argc > 3 || !opt_fresh_array_elements(b, inputs[3], call + 2, &count)) return false;
+  if (!opt_expect_builtin(b, inputs[0], js_is_reflect_construct_builtin)) return false;
+  call[0] = inputs[2];
+  call[1] = argc == 3 ? inputs[4] : inputs[2];
+  ir_node_id_t result = opt_runtime_call(b, (uintptr_t)opt_rt_reflect_construct, argc == 3, call, 2 + count, false, false);
+  *flow = opt_finish_call(b, operands, result, tail);
+  return true;
+}
+
 static bool opt_uncurry_call(opt_builder_t *b, ir_node_id_t *inputs, uint32_t *argc) {
   ant_value_t bound = opt_likely_value(b, inputs[0]);
   ant_value_t builtin = opt_uncurried_builtin(bound);
@@ -4247,6 +4280,9 @@ static opt_flow_t opt_build_call(opt_builder_t *b, const uint8_t *ip, sv_op_t op
     ir_node_id_t empty[2] = {opt_constant(b, IR_VALUE_UNDEFINED), opt_constant(b, IR_VALUE_UNDEFINED)};
     return opt_finish_call(b, operands, opt_runtime_call(b, (uintptr_t)opt_rt_array, 0, empty, 2, true, false), tail);
   }
+
+  opt_flow_t reflected;
+  if (method && opt_try_reflect_construct(b, inputs, argc, operands, tail, &reflected)) return reflected;
 
   ir_node_id_t math;
   if (!construct && opt_try_math(b, callee, argc, inputs + 2, &math)) return opt_finish_call(b, operands, math, tail);
