@@ -566,6 +566,7 @@ export function targets() {
     'test_typedarray_index_properties.cjs',
     'test_vm.cjs',
     'test_vm_dynamic_import_missing.cjs',
+    'test_vm_nested_microtask_drain.cjs',
     'test_v8_serializer_classes.cjs',
     'test_vm_realm_gc.cjs',
     'test_vm_iterator_close_errors.cjs',

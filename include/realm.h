@@ -19,6 +19,7 @@ struct ant_realm {
   bool initializing;
   bool intrinsics_saved;
   bool gc_dirty;
+  bool microtasks_draining;
   
   ant_ptr_pair_map_t builtin_records;
   uint64_t gc_epoch;

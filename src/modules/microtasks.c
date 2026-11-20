@@ -426,6 +426,9 @@ static void process_microtasks_internal(ant_t *js, bool check_unhandled_rejectio
 }
 
 void ant_realm_run_microtasks(ant_t *js, ant_realm_t *realm) {
+if (realm->microtasks_draining) return;
+realm->microtasks_draining = true;
+
 while (realm->microtasks) {
   microtask_entry_t *batch = realm->microtasks;
   realm->microtasks = realm->microtasks_tail = NULL;
@@ -439,7 +442,10 @@ while (realm->microtasks) {
     process_microtask_entry(js, entry);
     microtask_entry_free(js, entry);
   }
-}}
+}
+
+realm->microtasks_draining = false;
+}
 
 void process_microtasks(ant_t *js) {
   process_microtasks_internal(js, true);
