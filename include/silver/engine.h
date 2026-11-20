@@ -1095,6 +1095,7 @@ typedef struct sv_closure {
   uint8_t in_remember_set;
   uint8_t generation;
   uint8_t ctor_props;
+  uint8_t ctor_slots;
   uint64_t gc_epoch;
 } sv_closure_t;
 
@@ -1107,9 +1108,7 @@ static inline uint32_t sv_closure_ctor_props(const sv_closure_t *closure) {
 
 static inline uint8_t sv_closure_construct_slots(const sv_closure_t *closure) {
   if (!closure) return ANT_INOBJ_BASE_SLOTS;
-  if (!closure->ctor_props) return sv_construct_slots(closure->func);
-  uint8_t slot_class = sv_ctor_slot_class(closure->ctor_props);
-  return slot_class == 0 ? ANT_INOBJ_BASE_SLOTS : slot_class == 1 ? ANT_INOBJ_WIDE_SLOTS : ANT_INOBJ_LARGE_SLOTS;
+  return closure->ctor_slots ? closure->ctor_slots : sv_construct_slots(closure->func);
 }
 
 static inline bool sv_closure_has_lexical_this(const sv_closure_t *closure) {
@@ -1133,6 +1132,7 @@ static inline sv_closure_t *js_closure_alloc_finish(ant_t *js, sv_closure_t *c) 
   c->in_remember_set = 0;
   c->generation = 0;
   c->ctor_props = 0;
+  c->ctor_slots = 0;
   
   if (js->young_closure_len < js->young_closure_cap)
     js->young_closures[js->young_closure_len++] = c;

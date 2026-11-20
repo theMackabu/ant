@@ -314,6 +314,8 @@ static inline void sv_ctor_inherit_props(ant_value_t ctor, ant_value_t parent) {
   if (base->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS)) return;
   uint32_t props = sv_closure_ctor_props(derived) + sv_closure_ctor_props(base);
   derived->ctor_props = props > UINT8_MAX ? UINT8_MAX : (uint8_t)props;
+  uint8_t slot_class = sv_ctor_slot_class(derived->ctor_props);
+  derived->ctor_slots = slot_class == 0 ? ANT_INOBJ_BASE_SLOTS : slot_class == 1 ? ANT_INOBJ_WIDE_SLOTS : ANT_INOBJ_LARGE_SLOTS;
 }
 
 ant_value_t sv_op_define_class(
