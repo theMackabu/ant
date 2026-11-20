@@ -59,8 +59,8 @@ function burst(p, i, level) {
     const q = make(1300000 + requeued++);
     expected++;
     setImmediate(burst, q, q.id, level + 1);
-    churn(40000);
   }
+  if (i % 6 === 1) churn(40000);
 }
 
 function immediateBurst(from) {
