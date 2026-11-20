@@ -17,7 +17,7 @@ typedef struct {
   ant_value_t this_val;
   ant_value_t env;
   ant_value_t new_target;
-  const struct sv_eval_scope *scope;
+  const struct sv_eval_scope *layout;
 } js_eval_scope_t;
 
 js_eval_result_t js_eval_source(
@@ -309,6 +309,8 @@ typedef struct sv_compiler {
 
   int field_init_count;
   int *field_locals;
+  int private_method_count;
+  int private_methods_local;
   int param_count;
 
   const sv_ast_t *value_params_node;
@@ -398,6 +400,7 @@ typedef struct sv_compiler {
   bool super_referenced;
   int this_local;
   bool this_bound;
+  bool this_checked;
   bool eval_this_binding;
   bool eval_super_binding;
   bool is_derived_ctor;
@@ -471,10 +474,7 @@ enum {
 };
 
 uint16_t sv_eval_scope_bits(const sv_eval_scope_flags_t *flags);
-uint16_t sv_eval_shadow_bits(
-  ant_t *js, ant_value_t eval_env, const struct sv_eval_scope *scope,
-  const char *source, size_t len
-);
+uint16_t sv_eval_shadow_bits(ant_t *js, const js_eval_scope_t *scope, const char *source, size_t len);
 
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program, sv_compile_mode_t mode,

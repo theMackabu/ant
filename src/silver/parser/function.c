@@ -308,14 +308,17 @@ sv_ast_t *parse_func(sv_parser_t *p, bool is_async) {
 
   bool saved_async = p->in_async;
   bool saved_no_in = p->no_in;
+  bool saved_initializer = p->class_initializer;
   p->in_async = is_async;
   p->no_in = false;
+  p->class_initializer = false;
   
   expect(p, TOK_LPAREN);
   parse_formal_params(p, fn, TOK_RPAREN);
   expect(p, TOK_RPAREN);
   
   fn->body = parse_block(p, true);
+  p->class_initializer = saved_initializer;
   p->no_in = saved_no_in;
   p->in_async = saved_async;
 

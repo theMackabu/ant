@@ -5,6 +5,7 @@
 #include "iteration.h"
 #include "descriptors.h"
 #include "props.h"
+#include "arrays.h"
 #include "gc/roots.h"
 
 static inline void sv_define_method(
@@ -265,15 +266,57 @@ static bool sv_field_key_special_on_function(ant_t *js, ant_value_t key) {
   }
 }
 
+static bool sv_field_key_special_on_array(ant_t *js, ant_value_t key) {
+  if (vtype(key) != kTypeString) return false;
+  size_t len = 0;
+  const char *str = js_getstr(js, key, &len);
+  return !str || is_length_key(str, len) || is_array_index(str, (ant_offset_t)len);
+}
+
+static __attribute__((noinline)) bool sv_field_target_numeric_exotic(ant_t *js, ant_value_t obj, ant_value_t key) {
+  static constexpr uint16_t mask = ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXOTIC;
+  if (vtype(obj) != kTypeObject) return false;
+  
+  ant_object_t *ptr = js_obj_ptr(obj);
+  if (!ptr || (ptr->flags.raw & mask) != (ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_EXOTIC)) return false;
+  
+  const ant_exotic_ops_t *ops = ant_object_exotic_ops(ptr);
+  if (!ops || ops->keys != ANT_EXOTIC_KEYS_NUMERIC || is_proxy(obj)) return false;
+  if (vtype(key) == kTypeSymbol) return true;
+  
+  size_t len = 0;
+  const char *str = js_getstr(js, key, &len);
+  return str && !ant_key_may_be_numeric(str, len);
+}
+
+static __attribute__((noinline)) bool sv_field_key_special_on_string_wrapper(
+  ant_t *js, ant_value_t primitive, ant_value_t key
+) {
+  if (vtype(primitive) != kTypeString || vtype(key) != kTypeString) return false;
+  
+  size_t len = 0;
+  const char *str = js_getstr(js, key, &len);
+  return !str || ant_key_may_be_numeric(str, len);
+}
+
 static bool sv_field_target_plain(ant_t *js, ant_value_t obj, ant_value_t key) {
   static constexpr uint16_t mask = ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXOTIC;
-  bool function = vtype(obj) == kTypeFunction;
-  if (vtype(obj) != kTypeObject && !function) return false;
-  if (function && sv_field_key_special_on_function(js, key)) return false;
+  uint8_t type = vtype(obj);
+  bool function = type == kTypeFunction;
+  
+  if (type != kTypeObject) {
+    if (function) { if (sv_field_key_special_on_function(js, key)) return false; }
+    else if (type == kTypeArray) { if (sv_field_key_special_on_array(js, key)) return false; }
+    else if (type != kTypePromise && type != kTypeGenerator) return false;
+  }
   
   ant_value_t holder = function ? js_as_obj(obj) : obj;
   ant_object_t *ptr = js_obj_ptr(holder);
-  return ptr && (ptr->flags.raw & mask) == ANT_OBJECT_FLAG_EXTENSIBLE && !is_proxy(holder);
+  if (!ptr || (ptr->flags.raw & mask) != ANT_OBJECT_FLAG_EXTENSIBLE) return false;
+  if (type != kTypeObject || !ptr->extra_slots) return true;
+  
+  const ant_extra_slot_t *primitive = ant_object_extra_slot(ptr, SLOT_PRIMITIVE);
+  return !primitive || !sv_field_key_special_on_string_wrapper(js, primitive->value, key);
 }
 
 ant_value_t sv_define_field(
@@ -285,7 +328,7 @@ ant_value_t sv_define_field(
     if (is_err(named)) return named;
   }
   
-  if (!sv_field_target_plain(js, obj, key))
+  if (!sv_field_target_plain(js, obj, key) && !sv_field_target_numeric_exotic(js, obj, key))
     return js_create_data_property_or_throw(js, obj, key, value);
   
   ant_value_t defined;

@@ -383,7 +383,7 @@ static inline ant_value_t sv_eval_in_frame(
   js_eval_scope_t scope = { 
     .this_val = frame->this, 
     .env = env, .new_target = new_target,
-    .scope = eval_scope,
+    .layout = eval_scope,
   };
   
   ant_value_t result = js_eval_source_in_frame(

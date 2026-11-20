@@ -24,13 +24,11 @@ uint16_t sv_eval_scope_bits(const sv_eval_scope_flags_t *flags) {
   return bits;
 }
 
-uint16_t sv_eval_shadow_bits(
-  ant_t *js, ant_value_t eval_env, const sv_eval_scope_t *scope,
-  const char *source, size_t len
-) {
+uint16_t sv_eval_shadow_bits(ant_t *js, const js_eval_scope_t *scope, const char *source, size_t len) {
+  ant_value_t eval_env = scope->env;
   if (!source || !is_object_type(eval_env) || eval_env == js->global) return 0;
   bool escaped = len <= 64 && memchr(source, '\\', len) != NULL;
-  uint16_t bits = scope ? scope->eval_bits : sv_eval_scope_bits(sv_eval_env_flags(eval_env));
+  uint16_t bits = scope->layout ? scope->layout->eval_bits : sv_eval_scope_bits(sv_eval_env_flags(eval_env));
   
   if ((escaped || eval_source_may_mention(source, len, "undefined", 9)) && sv_eval_env_shadows_global(js, eval_env, "undefined", 9))
     bits |= SV_EVAL_SHADOWS_UNDEFINED;

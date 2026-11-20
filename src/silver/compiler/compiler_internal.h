@@ -25,7 +25,8 @@ enum {
   SV_COMP_PRIVATE_FIELD = 0,
   SV_COMP_PRIVATE_METHOD = 1,
   SV_COMP_PRIVATE_GETTER = 3,
-  SV_COMP_PRIVATE_SETTER = 4
+  SV_COMP_PRIVATE_SETTER = 4,
+  SV_COMP_PRIVATE_METHODS = 5
 };
 
 enum {
@@ -429,6 +430,11 @@ static inline bool node_needs_inferred_function_name(const sv_ast_t *node) {
   return node && 
     (node->type == N_FUNC || node->type == N_CLASS) &&
     (!node->str || node->len == 0);
+}
+
+static inline uint8_t private_method_kind(const sv_ast_t *m) {
+  if (m->flags & FN_GETTER) return SV_COMP_PRIVATE_GETTER;
+  return (m->flags & FN_SETTER) ? SV_COMP_PRIVATE_SETTER : SV_COMP_PRIVATE_METHOD;
 }
 
 static inline const sv_ast_t *field_static_key(const sv_ast_t *m) {

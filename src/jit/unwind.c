@@ -603,6 +603,12 @@ int sv_jit_frames_at(ant_t *js, uintptr_t pc, sv_jit_frame_t *out, int cap) {
 
 #if JIT_UNWIND_SUPPORTED
 
+#if defined(__APPLE__)
+static constexpr bool JIT_WALK_PEEKS = true;
+#else
+static constexpr bool JIT_WALK_PEEKS = false;
+#endif
+
 typedef struct {
   struct jit_code_registry *reg;
   sv_jit_activation_t **out;
@@ -615,16 +621,13 @@ typedef struct {
   int vm_fp;
   int seg_start;
   uint32_t runs, jit_entries;
-  const sv_jit_construct_mark_t *construct;
   bool in_run;
   bool host_pending;
   bool full;
 } jit_walk_t;
 
-static void jit_walk_close_run(jit_walk_t *w) {
-  uint32_t depth = w->jit_entries - w->runs + 1;
-  while (w->construct && w->construct->depth > depth) w->construct = w->construct->prev;
-  bool construct = w->construct && w->construct->depth == depth;
+static void jit_walk_close_run(jit_walk_t *w, uintptr_t caller_pc) {
+  bool construct = ant_jit_entered_as_construct(caller_pc);
   (*w->out)[w->n - 1].entered = construct ? SV_JIT_ENTERED_AS_CONSTRUCT : SV_JIT_ENTERED_AS_CALL;
 }
 
@@ -678,7 +681,7 @@ static bool jit_walk_visit(jit_walk_t *w, uintptr_t pc, uintptr_t frame_addr) {
   
   if (!r) {
     if (!w->in_run) return true;
-    jit_walk_close_run(w);
+    jit_walk_close_run(w, pc);
     if (w->full) return false;
     
     if (w->runs >= w->jit_entries) {
@@ -713,11 +716,17 @@ static bool jit_walk_visit(jit_walk_t *w, uintptr_t pc, uintptr_t frame_addr) {
   }
   
   if (!jit_walk_push(w, a)) return false;
-  w->full = w->limit >= 0 && w->funcs >= w->limit;
-  return true;
+  if (w->limit < 0 || w->funcs < w->limit) return true;
+  w->full = sv_func_construct_needs_caller(a.func);
+  return w->full && !JIT_WALK_PEEKS;
 }
 
 #if defined(__APPLE__)
+
+static void jit_walk_peek(jit_walk_t *w, uintptr_t caller_pc) {
+  if (ant_jit_entered_as_construct(caller_pc)) jit_walk_close_run(w, caller_pc);
+  else jit_walk_push(w, (sv_jit_activation_t){ .pc = caller_pc, .vm_fp = w->vm_fp });
+}
 
 static uintptr_t jit_stack_top(void) {
   return (uintptr_t)pthread_get_stackaddr_np(pthread_self());
@@ -730,7 +739,10 @@ static void jit_walk_native(jit_walk_t *w) {
     uintptr_t caller_fp = ((const uintptr_t *)fp)[0];
     uintptr_t ret = ((const uintptr_t *)fp)[1];
     if (caller_fp <= fp) return;
-    if (!jit_walk_visit(w, ret, caller_fp)) return;
+    if (!jit_walk_visit(w, ret, caller_fp)) {
+      if (w->full) jit_walk_peek(w, ((const uintptr_t *)caller_fp)[1]);
+      return;
+    }
     fp = caller_fp;
   }
 }
@@ -768,7 +780,6 @@ int sv_jit_collect_activations(sv_vm_t *vm, sv_jit_activation_t **acts, int cap,
     .stack_top = jit_stack_top(),
     .vm_fp = vm->fp,
     .jit_entries = js->jit_active_depth,
-    .construct = js->jit_construct_marks,
   };
   jit_walk_native(&w);
   return w.n;

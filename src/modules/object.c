@@ -640,7 +640,7 @@ ant_value_t builtin_object_freeze(ant_params_t) {
   if (is_err(target)) return target;
   uint8_t t = vtype(target);
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return obj;
+  if (!((1u << t) & T_OBJECT_MASK)) return obj;
   ant_value_t as_obj = js_as_obj(target);
   if (is_proxy(as_obj)) return proxy_set_integrity_level(js, as_obj, true);
 
@@ -677,7 +677,7 @@ static ant_value_t builtin_object_isFrozen(ant_params_t) {
   ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) {
+  if (!((1u << t) & T_OBJECT_MASK)) {
     if (t != kTypeBuiltin) return Ant_Value_True;
     obj = object_integrity_view(js, obj);
     if (vtype(obj) == kTypeBuiltin) return Ant_Value_False;
@@ -697,7 +697,7 @@ static ant_value_t builtin_object_seal(ant_params_t) {
   if (is_err(target)) return target;
   uint8_t t = vtype(target);
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return obj;
+  if (!((1u << t) & T_OBJECT_MASK)) return obj;
   ant_value_t as_obj = js_as_obj(target);
   if (is_proxy(as_obj)) return proxy_set_integrity_level(js, as_obj, false);
   
@@ -733,7 +733,7 @@ static ant_value_t builtin_object_isSealed(ant_params_t) {
   ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) {
+  if (!((1u << t) & T_OBJECT_MASK)) {
     if (t != kTypeBuiltin) return Ant_Value_True;
     obj = object_integrity_view(js, obj);
     if (vtype(obj) == kTypeBuiltin) return Ant_Value_False;
@@ -1197,7 +1197,7 @@ static ant_value_t builtin_object_isExtensible(ant_params_t) {
   ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) {
+  if (!((1u << t) & T_OBJECT_MASK)) {
     if (t != kTypeBuiltin) return Ant_Value_False;
     obj = object_integrity_view(js, obj);
     if (vtype(obj) == kTypeBuiltin) return Ant_Value_True;
@@ -1222,7 +1222,7 @@ static ant_value_t builtin_object_preventExtensions(ant_params_t) {
   if (is_err(target)) return target;
   uint8_t t = vtype(target);
   
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return obj;
+  if (!((1u << t) & T_OBJECT_MASK)) return obj;
   ant_value_t as_obj = js_as_obj(target);
   if (is_proxy(as_obj)) {
     ant_value_t result = proxy_prevent_extensions(js, as_obj);

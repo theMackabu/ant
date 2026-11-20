@@ -130,37 +130,51 @@ int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local) {
   return add_upvalue(c, (uint16_t)uv, false, false);
 }
 
-static void emit_field_init_pass(
-  sv_compiler_t *c, sv_compiler_t *owner, sv_ast_t **fields, int count, bool methods
+void emit_field_inits(
+  sv_compiler_t *c, sv_compiler_t *owner, sv_ast_t **fields, int count
 ) {
-  bool branded = false;
+  bool outer = c->in_field_init;
+  c->in_field_init = true;
+  bool lone_method = owner->private_method_count == 1;
+
   for (int i = 0; i < count; i++) {
     sv_ast_t *m = fields[i];
-    bool is_fn = is_class_method_def(m);
-    if (is_fn != methods) continue;
-    if (is_fn && is_private_name_node(m->left) && private_name_uses_brand(c, m->left)) {
-      if (branded) continue;
-      branded = true;
-      emit_this(c);
-      emit_private_token(c, m->left);
-      emit_op(c, OP_UNDEF);
-      emit_op(c, OP_DEF_PRIVATE);
-      emit(c, SV_COMP_PRIVATE_METHOD);
-      emit_op(c, OP_POP);
-      continue;
-    }
+    if (!is_class_method_def(m) || !private_name_uses_brand(c, m->left)) continue;
+
+    emit_this(c);
+    emit_private_token(c, m->left);
+    emit_op(c, OP_UNDEF);
+    emit_op(c, OP_DEF_PRIVATE);
+    emit(c, SV_COMP_PRIVATE_METHOD);
+    emit_op(c, OP_POP);
+    break;
+  }
+
+  for (int i = 0; i < count && owner->private_method_count > 0; i++) {
+    sv_ast_t *m = fields[i];
+    if (!is_class_method_def(m) || private_name_uses_brand(c, m->left)) continue;
+
+    emit_this(c);
+    if (lone_method) emit_private_token(c, m->left);
+    else emit_op(c, OP_UNDEF);
+    emit_op(c, OP_GET_UPVAL);
+    emit_u16(c, (uint16_t)capture_field_local(c, owner, owner->private_methods_local));
+    emit_op(c, OP_DEF_PRIVATE);
+    emit(c, lone_method ? private_method_kind(m) : SV_COMP_PRIVATE_METHODS);
+    emit_op(c, OP_POP);
+    break;
+  }
+
+  for (int i = 0; i < count; i++) {
+    sv_ast_t *m = fields[i];
+    if (is_class_method_def(m)) continue;
     if (is_private_name_node(m->left)) {
       emit_this(c);
       emit_private_token(c, m->left);
-      if (is_fn) {
-        emit_op(c, OP_GET_UPVAL);
-        emit_u16(c, (uint16_t)capture_field_local(c, owner, owner->field_locals[i]));
-      } else if (m->right) compile_field_initializer(c, m->right, m->left);
+      if (m->right) compile_field_initializer(c, m->right, m->left);
       else emit_op(c, OP_UNDEF);
       emit_op(c, OP_DEF_PRIVATE);
-      if (m->flags & FN_GETTER) emit(c, SV_COMP_PRIVATE_GETTER);
-      else if (m->flags & FN_SETTER) emit(c, SV_COMP_PRIVATE_SETTER);
-      else emit(c, is_fn ? SV_COMP_PRIVATE_METHOD : SV_COMP_PRIVATE_FIELD);
+      emit(c, SV_COMP_PRIVATE_FIELD);
       emit_op(c, OP_POP);
       continue;
     }
@@ -182,15 +196,6 @@ static void emit_field_init_pass(
     emit(c, field_define_flags(m));
     emit_op(c, OP_POP);
   }
-}
-
-void emit_field_inits(
-  sv_compiler_t *c, sv_compiler_t *owner, sv_ast_t **fields, int count
-) {
-  bool outer = c->in_field_init;
-  c->in_field_init = true;
-  emit_field_init_pass(c, owner, fields, count, true);
-  emit_field_init_pass(c, owner, fields, count, false);
   c->in_field_init = outer;
 }
 
