@@ -90,6 +90,7 @@ export function targets() {
     'test_jit_inline_constructor.cjs',
     'test_jit_primitive_field_ic.cjs',
     'test_reflect_builtin_targets.cjs',
+    'test_proxy_construct_trapless.cjs',
     'test_proxy_define_property.cjs',
     'test_receiver_edges.cjs',
     'test_debug_shell_compile.cjs',

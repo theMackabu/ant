@@ -129,8 +129,9 @@ static ant_value_t reflect_construct(ant_params_t) {
       return proto;
     }
 
-    ant_value_t new_obj = Ant_Object_CreateBare(js);
-    if (is_object_type(proto)) js_set_proto_init(new_obj, proto);
+    ant_value_t new_obj = js_mkobj_with_proto_slots(
+      js, is_object_type(proto) ? proto : Ant_Value_Undefined, sv_construct_slots_of(target)
+    );
 
     ant_value_t ctor_this = new_obj;
     result = sv_vm_call(
