@@ -255,6 +255,7 @@ export function targets() {
     'test_jit_logical_immediates.cjs',
     'test_jit_try_regions.cjs',
     'test_jit_try_finally.cjs',
+    'test_jit_unreachable_loop_entry.cjs',
     'test_jit_for_in.cjs',
     'test_jit_relational_primitives.cjs',
     'test_jit_builtin_direct_call.cjs',
