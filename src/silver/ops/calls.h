@@ -339,6 +339,7 @@ static inline __attribute__((noinline)) ant_value_t sv_op_call_spread(sv_vm_t *v
   return result;
 }
 
+__attribute__((always_inline))
 static inline ant_value_t sv_super_call(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
   int base, ant_value_t *args, int argc
