@@ -296,6 +296,7 @@ typedef struct sv_compiler {
   bool super_referenced;
   int this_local;
   bool this_bound;
+  bool this_checked;
   bool eval_this_binding;
   bool is_class_ctor;
   bool eval_field_thunk;

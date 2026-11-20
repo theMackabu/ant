@@ -228,6 +228,7 @@ export function targets() {
     'test_fs_io_argument_getters.cjs',
     'test_fs_link.cjs',
     'test_derived_super_completion.cjs',
+    'test_derived_this_check_paths.cjs',
     'test_fs_opendir.cjs',
     'test_fs_opendir_leak.cjs',
     'test_derived_this_tdz.cjs',
