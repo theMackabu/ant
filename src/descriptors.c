@@ -1100,7 +1100,9 @@ static inline ant_value_t define_done(ant_t *js, const define_target_t *t) {
 static inline bool define_plain_target(ant_value_t as_obj, const property_key_view_t *key) {
   if (key->is_symbol || vtype(as_obj) != kTypeObject) return false;
   const ant_object_t *ptr = (const ant_object_t *)vptr(as_obj);
-  return ptr->type_tag == kTypeObject && ptr->shape && !ptr->extra_slots && !ptr->flags.is_exotic;
+  return
+    ptr->type_tag == kTypeObject && ptr->shape && !ptr->extra_slots &&
+    !ptr->flags.is_exotic && !ptr->flags.frozen && !ptr->flags.sealed;
 }
 
 static inline bool define_plain_data(
