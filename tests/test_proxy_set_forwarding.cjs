@@ -154,18 +154,26 @@ function nonConfigurable(desc) {
   const grown = [];
   const gp = new Proxy(grown, {});
   for (let i = 0; i < 100; i++) assert.strictEqual(gp.push(i), i + 1);
-  assert.strictEqual(grown.length, 100);
-  assert.strictEqual(grown[99], 99);
+  assert.deepStrictEqual(grown, Array.from({ length: 100 }, (_, i) => i));
   gp[100] = 'next';
+  assert.strictEqual(grown.length, 101);
+  for (let i = 101; i < 400; i++) gp[i] = i;
+  assert.strictEqual(grown.length, 400);
+  assert.strictEqual(grown.every((v, i) => i === 100 || v === i), true);
+  grown.length = 101;
   gp[102] = 'gap';
   assert.strictEqual(grown.length, 103);
   assert.strictEqual(Object.hasOwn(grown, 101), false);
 
-  const fixed = [1, 2];
-  fixed.length = 2;
+  const fixed = [1, 2, 3, 4, 5, 6];
+  fixed.pop(); fixed.pop(); fixed.pop(); fixed.pop();
   Object.defineProperty(fixed, 'length', { writable: false });
   assert.throws(() => { new Proxy(fixed, {})[2] = 3; }, TypeError);
   assert.deepStrictEqual(fixed, [1, 2]);
+  assert.strictEqual(Object.hasOwn(fixed, 2), false);
+
+  const mapped = new Function('wrap', 'a', 'wrap(arguments)[1] = "mapped"; return a;');
+  assert.strictEqual(mapped((args) => new Proxy(args, {}), 'original'), 'mapped');
 
   const trapped = [];
   Object.defineProperty(Array.prototype, 3, { set(v) { trapped.push(v); }, configurable: true });

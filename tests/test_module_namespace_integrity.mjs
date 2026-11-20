@@ -83,15 +83,16 @@ assert.throws(() => Object.freeze(dep), TypeError);
 assert.strictEqual(Object.seal(dep), dep);
 assert.strictEqual(Object.getPrototypeOf(dep), null);
 
-const starSource = 'export const m = "local"; export * from ' + JSON.stringify('data:text/javascript,' + encodeURIComponent('export const m = 1; export let c = 2; export const zz = 3; export default 9;')) + '; export const n = 4; export const b = 5;';
+const starSource = 'export const m = "local"; export function fn() { return "local"; } export * from ' + JSON.stringify('data:text/javascript,' + encodeURIComponent('export const m = 1; export let c = 2; export const zz = 3; export const fn = 1; export default 9;')) + '; export const n = 4; export const b = 5;';
 const star = await import('data:text/javascript,' + encodeURIComponent(starSource));
-assert.deepStrictEqual(Object.keys(star), ['b', 'c', 'm', 'n', 'zz']);
+assert.deepStrictEqual(Object.keys(star), ['b', 'c', 'fn', 'm', 'n', 'zz']);
+assert.strictEqual(star.fn(), 'local');
 assert.deepStrictEqual([star.b, star.c, star.m, star.n, star.zz, star.default], [5, 2, 'local', 4, 3, undefined]);
 assert.throws(() => { star.c = 1; }, TypeError);
-assert.deepStrictEqual(Object.entries(star), [['b', 5], ['c', 2], ['m', 'local'], ['n', 4], ['zz', 3]]);
+assert.deepStrictEqual(Object.entries(star).filter(e => e[0] !== 'fn'), [['b', 5], ['c', 2], ['m', 'local'], ['n', 4], ['zz', 3]]);
 const forIn = [];
 for (const key in star) forIn.push(key);
-assert.deepStrictEqual(forIn, ['b', 'c', 'm', 'n', 'zz']);
+assert.deepStrictEqual(forIn, ['b', 'c', 'fn', 'm', 'n', 'zz']);
 
 function sum(ns) { return ns.b + ns.c + ns.n + ns.zz; }
 let total = 0;
