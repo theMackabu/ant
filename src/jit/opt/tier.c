@@ -1253,13 +1253,18 @@ uintptr_t opt_tier_access_helper(sv_op_t op, bool adding) {
   return counted ? (uintptr_t)opt_rt_access_counted : (uintptr_t)helper;
 }
 
+ant_value_t opt_rt_take_thrown(sv_vm_t *vm, ant_value_t error, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind) {
+  return js_take_thrown(vm->js, error);
+}
+
 ant_value_t opt_rt_throw(ant_value_t value, sv_vm_t *vm) {
   if (is_err(value)) return value;
   return sv_jit_throw(vm->js, value);
 }
 
-static void opt_catch_missed(ant_t *js, opt_code_t *code, uint32_t catch_off) {
-  if (++code->catch_misses < OPT_CATCH_MISS_LIMIT || code->dropped) return;
+static void opt_catch_missed(ant_t *js, opt_code_t *code, const opt_handler_t *handler) {
+  uint32_t catch_off = handler->catch_off;
+  if ((++code->catch_misses < OPT_CATCH_MISS_LIMIT && !handler->raised) || code->dropped) return;
   opt_note_discard(opt_func_state(js, code->func, true), code, true);
   opt_drop_code(code);
   if (sv_debug_unlikely(SV_DEBUG_JIT_WARN))
@@ -1273,7 +1278,7 @@ void opt_rt_caught(sv_vm_t *vm, opt_code_t *code, const opt_handler_t *handler, 
     return;
   }
   opt_stats.catch_leaves++;
-  if (handler->learnable) opt_catch_missed(vm->js, code, handler->catch_off);
+  if (handler->learnable) opt_catch_missed(vm->js, code, handler);
 }
 
 bool opt_tier_has_catch_entry(ant_t *js, sv_func_t *func, uint32_t catch_off) {
@@ -1285,7 +1290,7 @@ bool opt_tier_has_catch_entry(ant_t *js, sv_func_t *func, uint32_t catch_off) {
     const opt_handler_t *handler = &code->handlers[i];
     if (handler->catch_off != catch_off) continue;
     if (handler->entry == UINT32_MAX) {
-      if (handler->learnable) opt_catch_missed(js, code, catch_off);
+      if (handler->learnable) opt_catch_missed(js, code, handler);
       return false;
     }
     opt_stats.catch_entries++;

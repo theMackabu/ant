@@ -625,7 +625,7 @@ void jit_emit_calls(jit_compile_t *c) {
                                        MIR_new_uint_op(c->ctx, JIT_ERR_TAG)));
           MIR_append_insn(c->ctx, c->jit_func,
                           MIR_new_insn(c->ctx, MIR_MOV,
-                                       MIR_new_reg_op(c->ctx, c->r_result),
+                                       MIR_new_reg_op(c->ctx, c->vs.regs[h->saved_sp]),
                                        MIR_new_reg_op(c->ctx, r_call_res)));
           MIR_append_insn(c->ctx, c->jit_func,
                           MIR_new_insn(c->ctx, MIR_JMP,
