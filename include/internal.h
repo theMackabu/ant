@@ -263,7 +263,6 @@ ant_value_t js_set_with_receiver_interned(ant_t *js, ant_value_t target, const c
 
 ant_value_t js_mkobj_with_proto(ant_t *js, ant_value_t proto);
 ant_value_t js_mkobj_with_proto_slots(ant_t *js, ant_value_t proto, uint8_t inobj_limit);
-ant_value_t js_mkobj_bare_slots(ant_t *js, uint8_t inobj_limit);
 ant_shape_t *ant_object_proto_root(ant_t *js, ant_value_t proto, uint8_t inobj_limit);
 ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs);
 ant_value_t mkprop_exact_attrs(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs);

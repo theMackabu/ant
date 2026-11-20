@@ -484,8 +484,12 @@ static ant_value_t esm_default_export_or_namespace(ant_t *js, ant_value_t ns) {
   return vtype(default_val) != kTypeUndefined ? default_val : ns;
 }
 
+__attribute__((noinline)) bool js_is_namespace_object(ant_value_t obj) {
+  return js_check_brand(obj, BRAND_MODULE_NAMESPACE);
+}
+
 static ant_value_t esm_make_namespace_object(ant_t *js) {
-  ant_value_t ns = js_mkobj_bare_slots(js, (uint8_t)ANT_INOBJ_LARGE_SLOTS);
+  ant_value_t ns = Ant_Object_CreateBare(js);
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, ns);
 
