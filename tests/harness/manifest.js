@@ -213,6 +213,7 @@ export function targets() {
     'test_function_bind_construct.cjs',
     'test_function_kind_constructors.cjs',
     'test_gc_array_cards.cjs',
+    'test_gc_closure_nursery.cjs',
     'test_gc_compiled_code.cjs',
     'test_error_cause_proxy_options.cjs',
     'test_gc_native_buffers.cjs',

@@ -16,6 +16,7 @@ static constexpr uint32_t GC_SKIP_MINOR_SURVIVAL   = 192;
 static constexpr size_t GC_NURSERY_THRESHOLD = 32768;
 static constexpr size_t GC_RECLAIM_MIN_FREE_DIVISOR = 64;
 static constexpr size_t GC_CLOSURE_NURSERY_THRESHOLD = 131072;
+static constexpr size_t GC_CLOSURE_NURSERY_FLOOR = GC_NURSERY_THRESHOLD;
 static constexpr size_t GC_CLOSURE_PROMOTED_MAJOR = 262144;
 static constexpr size_t GC_SKIP_PROBE_NURSERY = GC_NURSERY_THRESHOLD / 4;
 

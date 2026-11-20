@@ -427,6 +427,7 @@ struct ant_isolate_t {
     size_t closure_at_minor;
     size_t closure_wm_at_major;
     size_t closure_wm_minor_tried;
+    size_t closure_nursery;
     size_t pool_last_live;
     uint64_t alloc_since_major;
     size_t arrays_at_collect;
@@ -455,6 +456,7 @@ struct ant_isolate_t {
     bool minor;
     bool skip_minors;
     bool skip_probe;
+    bool closure_sticky;
     bool realm_reach;
     bool parallel_mark;
     uint64_t parallel_cpu_ns;
