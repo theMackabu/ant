@@ -244,20 +244,29 @@ static int reserve_private_method_local(sv_compiler_t *c) {
 }
 
 static void compile_private_instance_methods(
-  sv_compiler_t *c, sv_ast_t **fields, const int *locals, int count, int proto_local
+  sv_compiler_t *c, sv_ast_t **fields, int count, int methods_local, int method_count, int proto_local
 ) {
+  if (method_count == 0) return;
+  
   for (int i = 0; i < count; i++) {
     sv_ast_t *m = fields[i];
-    if (!is_private_name_node(m->left) || !is_class_method_def(m)) continue;
+    if (!is_class_method_def(m)) continue;
     
+    if (method_count > 1) emit_private_token(c, m->left);
     compile_method_function(c, m);
     if (class_method_needs_home(m)) {
       emit_get_local(c, proto_local);
       emit_op(c, OP_SET_HOME_OBJ);
       emit_op(c, OP_POP);
     }
-    emit_put_local(c, locals[i]);
+    if (method_count > 1) emit_number(c, private_method_kind(m));
   }
+  
+  if (method_count > 1) {
+    emit_op(c, OP_ARRAY);
+    emit_u16(c, (uint16_t)(method_count * 3));
+  }
+  emit_put_local(c, methods_local);
 }
 
 static const char *invalid_constructor_member(const sv_ast_t *m, bool is_fn, bool has_constructor) {
@@ -471,6 +480,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
 
   sv_ast_t **field_inits = NULL;
   int *field_locals = NULL;
+  int private_method_count = 0;
+  int private_methods_local = -1;
   
   sv_class_emit_item_t *method_emit_items = NULL;
   sv_class_emit_item_t *static_init_items = NULL;
@@ -500,8 +511,10 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     
     if (needs_instance_init) {
       field_inits[fi] = m;
-      if (is_private && is_fn) field_locals[fi++] = reserve_private_method_local(c);
-      else field_locals[fi++] = (!is_private && (m->flags & FN_COMPUTED))
+      if (is_private && is_fn) {
+        if (private_method_count++ == 0) private_methods_local = reserve_private_method_local(c);
+        field_locals[fi++] = -1;
+      } else field_locals[fi++] = (!is_private && (m->flags & FN_COMPUTED))
         ? compile_class_precompute_key(c, m->left) : -1;
       continue;
     }
@@ -525,6 +538,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     c->field_inits = field_inits;
     c->field_init_count = field_count;
     c->field_locals = field_locals;
+    c->private_method_count = private_method_count;
+    c->private_methods_local = private_methods_local;
     const char *saved_name = c->inferred_name;
     uint32_t saved_len = c->inferred_name_len;
     if (node->str && node->len) {
@@ -539,6 +554,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     c->field_locals = NULL;
   } else if (field_count > 0) {
     c->field_locals = field_locals;
+    c->private_method_count = private_method_count;
+    c->private_methods_local = private_methods_local;
     sv_compiler_t comp;
     sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
     comp.is_strict = true;
@@ -604,6 +621,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   } else emit_op(c, OP_UNDEF);
   
   c->field_locals = NULL;
+  c->private_method_count = 0;
   if (inner_name_local >= 0) c->locals[inner_name_local].is_tdz = true;
 
   const char *class_name = node->str;
@@ -656,7 +674,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     );
   }
   
-  compile_private_instance_methods(c, field_inits, field_locals, field_count, proto_local);
+  compile_private_instance_methods(c, field_inits, field_count, private_methods_local, private_method_count, proto_local);
   free(field_inits);
   free(field_locals);
 

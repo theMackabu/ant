@@ -436,6 +436,7 @@ export function targets() {
     'test_promise_continuation_errors.cjs',
     'test_promise_many_handlers.cjs',
     'test_private_method_identity.cjs',
+    'test_private_method_tables.cjs',
     'test_property_delete_compaction.cjs',
     'test_property_location_stress.cjs',
     'test_prototype_write_epoch.cjs',
