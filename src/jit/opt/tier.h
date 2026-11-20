@@ -59,6 +59,7 @@ typedef struct {
   uint32_t depth;
   uint32_t entry;
   bool learnable;
+  bool raised;
   bool finally;
 } opt_handler_t;
 
@@ -344,6 +345,7 @@ ant_value_t opt_rt_put_field_adding(sv_vm_t *vm, ant_value_t object, ant_value_t
 ant_value_t opt_rt_init_field_adding(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_add_site_t *site);
 ant_value_t opt_rt_instanceof(sv_vm_t *vm, ant_value_t lhs, ant_value_t rhs, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_in_field(sv_vm_t *vm, ant_value_t object, ant_value_t unused, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
+ant_value_t opt_rt_take_thrown(sv_vm_t *vm, ant_value_t error, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_throw(ant_value_t value, sv_vm_t *vm);
 
 ant_value_t opt_rt_enter_frame(sv_vm_t *vm, opt_entry_t *entry, const opt_code_t *code);

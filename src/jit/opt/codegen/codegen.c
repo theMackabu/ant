@@ -1053,6 +1053,12 @@ static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condit
       masm_branch64_imm(m, cond, opt_cg_input(cg, node, 0), (int64_t)IR_VALUE_UNDEFINED, target);
       break;
     }
+    case IR_COND_THROWN: {
+      asm_cond_t cond = invert ? ASM_COND_NOT_EQUAL : ASM_COND_EQUAL;
+      masm_sar64_imm(m, cg->pinned.scratch, opt_cg_input(cg, node, 0), NANBOX_TYPE_SHIFT);
+      masm_branch64_imm(m, cond, cg->pinned.scratch, OPT_ERROR_TAG_SIGNED, target);
+      break;
+    }
     case IR_COND_ASCII_STRING: {
       asm_gpr_t scratch = cg->pinned.scratch, string = opt_cg_input(cg, node, 0);
       asm_label_t no = opt_cg_label(cg, if_false), rope = masm_new_label(m);
@@ -3079,6 +3085,7 @@ static void opt_cg_load_input(opt_cg_t *cg, ir_node_id_t node, uint32_t index, a
 
 static void opt_cg_branch_error(opt_cg_t *cg, ir_node_id_t node_id) {
   masm_t *m = &cg->masm;
+  if (ir_node(cg->graph, node_id)->op.call.returns_error) return;
   masm_sar64_imm(m, cg->pinned.scratch, MASM_RETURN_GPRS[0], NANBOX_TYPE_SHIFT);
   masm_branch64_imm(m, ASM_COND_EQUAL, cg->pinned.scratch, OPT_ERROR_TAG_SIGNED, opt_cg_throw_target(cg, node_id, cg->throw_label));
 }
@@ -4166,6 +4173,7 @@ static sv_jit_finally_t *opt_cg_site_finally(const opt_code_t *code, const opt_s
     }
     uint32_t kind = vtype(boxed) == kTypeNumber ? (uint32_t)Ant_Value_AsNumberUnchecked(boxed) : 0;
     if (kind == OPT_PENDING_RETURN) entry->kind = SV_COMPLETION_RETURN;
+    else if (kind == OPT_PENDING_THROW) entry->kind = SV_COMPLETION_THROW;
     else if (kind >= OPT_PENDING_JUMP && kind - OPT_PENDING_JUMP < (uint32_t)func->code_len) {
       entry->kind = SV_COMPLETION_JUMP;
       entry->target = kind - OPT_PENDING_JUMP;
@@ -4451,7 +4459,7 @@ static void opt_cg_catch_dispatch(opt_cg_t *cg) {
   masm_load32(m, scratch, opt_cg_local(cg, cg->index_off));
   for (uint32_t h = 0; h < graph->handlers.len; h++) {
     const ir_handler_t *handler = &graph->handlers.items[h];
-    ir_block_id_t block = handler->has_entry ? opt_cg_entry_at(cg, handler->catch_off + sv_op_size[OP_CATCH]) : IR_NONE;
+    ir_block_id_t block = handler->has_entry ? opt_cg_entry_at(cg, handler->catch_off + (handler->finally ? 0 : sv_op_size[OP_CATCH])) : IR_NONE;
     if (block != IR_NONE) masm_branch32_imm(m, ASM_COND_EQUAL, scratch, (int32_t)h, opt_cg_label(cg, block));
   }
   masm_unreachable(m);
@@ -4648,7 +4656,7 @@ opt_code_t *opt_cg_generate(ant_t *js, const ir_graph_t *graph, const ir_frame_l
   if (!code->handlers) opt_out_of_memory();
   for (uint32_t h = 0; h < graph->handlers.len; h++) {
     const ir_handler_t *handler = &graph->handlers.items[h];
-    code->handlers[h] = (opt_handler_t){.catch_off = handler->catch_off, .depth = handler->depth, .entry = handler->has_entry ? h : UINT32_MAX, .learnable = handler->learnable, .finally = handler->finally};
+    code->handlers[h] = (opt_handler_t){.catch_off = handler->catch_off, .depth = handler->depth, .entry = handler->has_entry ? h : UINT32_MAX, .learnable = handler->learnable, .raised = handler->raised, .finally = handler->finally};
   }
   code->sites = opt_cg_dup_array(cg.sites.items, cg.sites.len, sizeof *cg.sites.items);
   code->frames = malloc((cg.site_frames.len + 1) * sizeof *code->frames);

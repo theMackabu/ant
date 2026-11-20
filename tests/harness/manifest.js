@@ -453,6 +453,7 @@ export function targets() {
     'test_opt_super_result_this.cjs',
     'test_opt_state_table.cjs',
     'test_opt_tdz.cjs',
+    'test_opt_throw_into_finally.cjs',
     'test_opt_throw_raw_value.cjs',
     'test_opt_tier.cjs',
     'test_opt_try.cjs',

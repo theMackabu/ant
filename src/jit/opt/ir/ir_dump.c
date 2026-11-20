@@ -109,6 +109,7 @@ static void ir_condition_text(ir_condition_t condition, opt_text_t *out) {
     case IR_COND_BOOL: opt_text_append(out, "Bool"); break;
     case IR_COND_NULLISH: opt_text_append(out, "Nullish"); break;
     case IR_COND_UNDEFINED: opt_text_append(out, "Undefined"); break;
+    case IR_COND_THROWN: opt_text_append(out, "Thrown"); break;
     case IR_COND_OBJECT: opt_text_append(out, "Object"); break;
     case IR_COND_ELEMENTS_KIND:
       opt_text_append(out, "ElementsKind ");
