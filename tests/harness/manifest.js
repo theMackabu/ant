@@ -507,6 +507,7 @@ export function targets() {
     'test_stack_depth_parity.cjs',
     'test_construct_in_loop.cjs',
     'test_class_fields_returned_objects.cjs',
+    'test_class_fields_typed_arrays.cjs',
     'test_math_bigint_args.cjs',
     'test_object_literal_proto_key.cjs',
     'test_startup_time.cjs',

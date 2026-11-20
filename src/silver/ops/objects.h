@@ -248,6 +248,22 @@ static bool sv_field_key_special_on_array(ant_t *js, ant_value_t key) {
   return !str || is_length_key(str, len) || is_array_index(str, (ant_offset_t)len);
 }
 
+static __attribute__((noinline)) bool sv_field_target_numeric_exotic(ant_t *js, ant_value_t obj, ant_value_t key) {
+  static constexpr uint16_t mask = ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXOTIC;
+  if (vtype(obj) != kTypeObject) return false;
+  
+  ant_object_t *ptr = js_obj_ptr(obj);
+  if (!ptr || (ptr->flags.raw & mask) != (ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_EXOTIC)) return false;
+  
+  const ant_exotic_ops_t *ops = ant_object_exotic_ops(ptr);
+  if (!ops || ops->keys != ANT_EXOTIC_KEYS_NUMERIC || is_proxy(obj)) return false;
+  if (vtype(key) == kTypeSymbol) return true;
+  
+  size_t len = 0;
+  const char *str = js_getstr(js, key, &len);
+  return str && !ant_key_may_be_numeric(str, len);
+}
+
 static bool sv_field_target_plain(ant_t *js, ant_value_t obj, ant_value_t key) {
   static constexpr uint16_t mask = ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXOTIC;
   uint8_t type = vtype(obj);
@@ -273,7 +289,7 @@ ant_value_t sv_define_field(
     if (is_err(named)) return named;
   }
   
-  if (!sv_field_target_plain(js, obj, key))
+  if (!sv_field_target_plain(js, obj, key) && !sv_field_target_numeric_exotic(js, obj, key))
     return js_create_data_property_or_throw(js, obj, key, value);
   
   ant_value_t defined;
