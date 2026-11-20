@@ -3125,7 +3125,10 @@ static ant_value_t builtin_Array_from(ant_params_t) {
     if (is_err(ctx.result)) return ctx.result;
     
     ant_value_t filled;
-    if (vtype(iter_method) == kTypeBuiltin && is_proxy(src) && vtype(proxy_read_target(js, src)) == kTypeArray) {
+    if (
+      iter_method == js->sym.array_values_fn && ant_protector_intact(js, ANT_PROTECTOR_ARRAY_ITERATION) &&
+      is_proxy(src) && vtype(proxy_read_target(js, src)) == kTypeArray
+    ) {
       PROXY_AWARE_LENGTH_OR_RETURN(src, len);
       ant_value_t target;
       if (proxy_is_transparent(js, src, &target)) filled = array_from_indexed(js, src, len, &ctx);

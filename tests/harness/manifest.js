@@ -33,6 +33,7 @@ export function targets() {
     'test_array_define_fast_path.cjs',
     'test_array_copy_within_holes.cjs',
     'test_array_fill_set_order.cjs',
+    'test_array_from_proxy_iterator.cjs',
     'test_array_inherited_index.cjs',
     'test_array_generic_residuals.cjs',
     'test_array_proto_index_reads.cjs',
