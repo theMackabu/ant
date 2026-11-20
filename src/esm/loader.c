@@ -553,7 +553,8 @@ static void esm_seal_namespace(ant_t *js, ant_value_t ns) {
   ant_object_t *ptr = is_object_type(ns) ? js_obj_ptr(js_as_obj(ns)) : NULL;
   if (!ptr || !ptr->shape || !js_check_brand(ns, BRAND_MODULE_NAMESPACE)) return;
   if (!js_obj_ensure_unique_shape(ptr)) return;
-  if (ant_shape_clear_attrs_all(js, ptr->shape, ANT_PROP_ATTR_CONFIGURABLE)) ptr->flags.extensible = 0;
+  if (!ant_shape_clear_attrs_all(js, ptr->shape, ANT_PROP_ATTR_CONFIGURABLE | ANT_PROP_ATTR_WRITABLE)) return;
+  ptr->flags.extensible = 0;
 }
 
 ant_value_t esm_value_namespace(ant_t *js, ant_value_t value, ant_value_t default_value) {
@@ -657,7 +658,7 @@ static void esm_builtin_default_exports(ant_t *js, const esm_module_t *mod, ant_
     js_setprop(js, exports, key, js_get(js, ns, js_getstr(js, key, NULL)));
   }
 
-  js_set(js, ns, "default", exports);
+  setprop_cstr_attrs(js, ns, "default", 7, exports, ANT_PROP_ATTR_ENUMERABLE);
   js_set_slot_wb(js, ns, SLOT_DEFAULT, exports);
   GC_ROOT_RESTORE(js, root_mark);
 }

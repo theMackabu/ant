@@ -1346,6 +1346,25 @@ static ant_value_t define_data(
   return define_done(js, t);
 }
 
+static bool define_namespace_export(
+  ant_t *js, const define_target_t *t, const define_desc_t *d, const define_existing_t *e, ant_value_t *result
+) {
+  const ant_object_t *ptr = e->ptr;
+  if (!e->found || t->sym_key || !ptr || ptr->flags.extensible || ptr->flags.frozen) return false;
+  if (!e->has_meta || e->meta.writable || e->meta.configurable || e->meta.has_getter || e->meta.has_setter) return false;
+  if (!js_check_brand(t->as_obj, BRAND_MODULE_NAMESPACE)) return false;
+
+  bool compatible =
+    !d->has_get && !d->has_set &&
+    !(d->has_configurable && d->configurable) &&
+    !(d->has_enumerable && !d->enumerable) &&
+    !(d->has_writable && !d->writable) &&
+    !(d->has_value && (!e->loc.obj || !same_value_values(js, js_prop_load(e->loc), d->value)));
+
+  *result = compatible ? t->obj : define_redefine_error(js, t->str, t->len, "module namespace exports cannot be redefined");
+  return true;
+}
+
 static ant_value_t object_define_property_keyed(
   ant_t *js, ant_value_t obj, property_key_view_t *key, 
   ant_value_t descriptor, const define_desc_raw_t *pre_raw, define_desc_fields_t *fields
@@ -1382,6 +1401,7 @@ static ant_value_t object_define_property_keyed(
   }
 
   define_existing_t e = define_lookup_existing(js, &t);
+  if (define_namespace_export(js, &t, &d, &e, &result)) return result;
   err = define_validate_existing(js, &t, &d, &e);
   if (is_err(err)) return err;
 

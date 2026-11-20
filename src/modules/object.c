@@ -618,7 +618,7 @@ static __attribute__((noinline)) integrity_kind_t object_integrity_kind(ant_valu
 }
 
 static __attribute__((noinline)) ant_value_t object_view_integrity(const ant_object_t *ptr, integrity_kind_t kind, bool frozen) {
-  if (frozen && kind == INTEGRITY_VIEW_ELEMENTS) return Ant_Value_False;
+  if (frozen && kind >= INTEGRITY_VIEW_ELEMENTS) return Ant_Value_False;
 
   uint32_t count = ptr->shape ? ant_shape_count(ptr->shape) : 0;
   for (uint32_t i = 0; i < count; i++) {
@@ -883,6 +883,11 @@ static ant_value_t builtin_object_fromEntries(ant_params_t) {
   return result;
 }
 
+static __attribute__((noinline)) bool object_is_namespace_export(ant_value_t as_obj) {
+  const ant_object_t *ptr = js_obj_ptr(as_obj);
+  return ptr && !ptr->flags.extensible && !ptr->flags.frozen && js_check_brand(as_obj, BRAND_MODULE_NAMESPACE);
+}
+
 static ant_value_t object_get_own_property_descriptor_keyed(
   ant_t *js, ant_value_t obj, property_key_view_t *key
 ) {
@@ -1018,6 +1023,7 @@ static ant_value_t object_get_own_property_descriptor_keyed(
     configurable = false;
   }
   
+  if (__builtin_expect(!writable && !configurable && !is_sym && prop_off.obj != NULL, 0) && object_is_namespace_export(as_obj)) writable = true;
   return js_from_data_descriptor(js, prop_val, writable, enumerable, configurable);
 }
 

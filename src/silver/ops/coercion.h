@@ -11,7 +11,7 @@ static inline ant_value_t sv_module_export_to_ns(
   if (vtype(module_ns) != kTypeObject)
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "export used outside module");
 
-  ant_value_t set_res = setprop_cstr_attrs(js, module_ns, name, len, value, ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_ENUMERABLE);
+  ant_value_t set_res = setprop_cstr_attrs(js, module_ns, name, len, value, ANT_PROP_ATTR_ENUMERABLE);
   if (is_err(set_res)) return set_res;
 
   if (len == 7 && memcmp(name, "default", 7) == 0)
