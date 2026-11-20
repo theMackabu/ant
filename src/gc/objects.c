@@ -1199,7 +1199,7 @@ static bool gc_next_interp_stub_save(ant_t *js, gc_stub_walk_t *w, uintptr_t *sa
     if (next <= fp) break;
     w->fp = next;
 
-    if (((const uintptr_t *)fp)[1] != (uintptr_t)ant_jit_enter_clean_ret) continue;
+    if (!ant_jit_entered_clean(((const uintptr_t *)fp)[1])) continue;
     if (next + 16 > w->hi) continue;
 
     uintptr_t lo = next + ANT_JIT_ENTER_SAVED_LO;

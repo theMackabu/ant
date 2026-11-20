@@ -97,10 +97,6 @@ static int sv_stack_frame_bc_off(sv_stack_iter_t *it, int idx, const sv_frame_t 
   return it->seg && it->seg->entry_vm_fp == idx + 1 ? off : off - 1;
 }
 
-static bool sv_func_may_construct(const sv_func_t *func) {
-  return func && !func->is_arrow && !func->is_eval;
-}
-
 static bool sv_frame_is_construct(sv_vm_t *vm, const sv_func_t *func, int vm_fp) {
   if (!sv_func_may_construct(func)) return false;
   if (vm_fp >= 0) return vtype(vm->frames[vm_fp].new_target) != kTypeUndefined;

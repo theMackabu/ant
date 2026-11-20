@@ -759,6 +759,14 @@ static inline void sv_func_set_ctor_props(sv_func_t *func, uint32_t props) {
   func->ctor_slot_class = sv_ctor_slot_class(props) & 3;
 }
 
+static inline bool sv_func_may_construct(const sv_func_t *func) {
+  return func && !func->is_arrow && !func->is_eval;
+}
+
+static inline bool sv_func_construct_needs_caller(const sv_func_t *func) {
+  return sv_func_may_construct(func) && !func->is_class_ctor;
+}
+
 static inline uint8_t sv_construct_slots(const sv_func_t *func) {
   if (!func || !func->ctor_slot_class) return ANT_INOBJ_BASE_SLOTS;
   return func->ctor_slot_class == 1 ? ANT_INOBJ_WIDE_SLOTS : ANT_INOBJ_LARGE_SLOTS;
@@ -1200,11 +1208,6 @@ typedef struct sv_jit_osr_mark {
   sv_frame_t *frame;
   void *entry;
 } sv_jit_osr_mark_t;
-
-typedef struct sv_jit_construct_mark {
-  struct sv_jit_construct_mark *prev;
-  uint32_t depth;
-} sv_jit_construct_mark_t;
 
 typedef struct {
   uint32_t bc_off;
