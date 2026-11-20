@@ -875,7 +875,8 @@ function statsChild() {
 }
 
 function checkStats() {
-  if (typeof Ant === 'undefined') return;
+  const tier = (process.arch === 'arm64' || process.arch === 'x64') && (process.platform === 'darwin' || process.platform === 'linux');
+  if (typeof Ant === 'undefined' || !tier) return;
   const { spawnSync } = require('node:child_process');
   const child = spawnSync(process.execPath, [__filename, 'stats'], {
     encoding: 'utf8',
