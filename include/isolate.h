@@ -85,6 +85,7 @@ typedef enum {
   ANT_INSPECT_SHOW_HIDDEN = 1 << 0,
   ANT_INSPECT_EXPAND      = 1 << 1,
   ANT_INSPECT_SORTED      = 1 << 2,
+  ANT_INSPECT_SHOW_PROXY  = 1 << 3,
 } ant_inspect_flags_t;
 
 typedef enum: uint8_t {

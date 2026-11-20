@@ -594,14 +594,23 @@ static int util_inspect_depth(ant_native_params_t) {
   return d >= MAX_STRINGIFY_DEPTH ? MAX_STRINGIFY_DEPTH : (int)d;
 }
 
+static ant_value_t util_inspect_option(ant_t *js, ant_value_t options, const char *key, size_t key_len) {
+  bool present = is_proxy(options) || lkp_proto(js, options, key, key_len).obj;
+  return present ? js_get(js, options, key) : Ant_Value_Undefined;
+}
+
 static uint8_t util_inspect_flags(ant_native_params_t) {
   if (nargs < 2) return 0;
   if (!is_object_type(args[1])) return vtype(args[1]) == kTypeBool && js_truthy(js, args[1]) ? ANT_INSPECT_SHOW_HIDDEN : 0;
 
+  ant_value_t options = args[1];
   uint8_t flags = 0;
-  if (js_truthy(js, js_get(js, args[1], "showHidden"))) flags |= ANT_INSPECT_SHOW_HIDDEN;
-  if (js_get(js, args[1], "compact") == Ant_Value_False) flags |= ANT_INSPECT_EXPAND;
-  if (js_get(js, args[1], "sorted") == Ant_Value_True) flags |= ANT_INSPECT_SORTED;
+  
+  if (js_truthy(js, util_inspect_option(js, options, "showHidden", 10))) flags |= ANT_INSPECT_SHOW_HIDDEN;
+  if (js_truthy(js, util_inspect_option(js, options, "showProxy", 9))) flags |= ANT_INSPECT_SHOW_PROXY;
+  if (util_inspect_option(js, options, "compact", 7) == Ant_Value_False) flags |= ANT_INSPECT_EXPAND;
+  if (util_inspect_option(js, options, "sorted", 6) == Ant_Value_True) flags |= ANT_INSPECT_SORTED;
+  
   return flags;
 }
 

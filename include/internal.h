@@ -236,6 +236,7 @@ ant_value_t js_get_index_fast(ant_t *js, ant_value_t obj, ant_value_t key);
 
 ant_value_t js_group_by(ant_t *js, ant_value_t items, ant_value_t callback, js_group_add_fn add, void *ctx);
 ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode);
+ant_value_t js_create_data_property_or_throw(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t value);
 ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
 ant_value_t js_proxy_prevent_extensions(ant_t *js, ant_value_t proxy);
 ant_value_t js_mkproxy(ant_t *js, ant_value_t target, ant_value_t handler);

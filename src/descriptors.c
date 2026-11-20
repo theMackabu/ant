@@ -957,17 +957,20 @@ static __attribute__((noinline)) bool string_wrapper_define(
   return true;
 }
 
-static ant_value_t define_desc_object(ant_t *js, const define_desc_raw_t *raw) {
+ant_value_t define_desc_object(ant_t *js, const define_desc_raw_t *raw) {
   GC_ROOT_SAVE(mark, js);
   define_desc_raw_t pinned = *raw;
   for (int f = 0; f < DESC_FIELD_COUNT; f++) GC_ROOT_PIN(js, pinned.val[f]);
   
-  ant_value_t object = Ant_Object_CreateBare(js);
+  ant_value_t object = Ant_Object_Create(js);
   GC_ROOT_PIN(js, object);
   
-  for (int f = 0; f < DESC_FIELD_COUNT && !is_err(object); f++) if (pinned.has[f]) {
-    ant_value_t key = js_mkstr(js, define_desc_field_names[f].name, define_desc_field_names[f].len);
-    ant_value_t set = js_setprop(js, object, key, pinned.val[f]);
+  static const uint8_t order[DESC_FIELD_COUNT] = { DESC_VALUE, DESC_WRITABLE, DESC_GET, DESC_SET, DESC_ENUMERABLE, DESC_CONFIGURABLE };
+  for (int i = 0; i < DESC_FIELD_COUNT && !is_err(object); i++) if (pinned.has[order[i]]) {
+    int f = order[i];
+    bool attribute = f == DESC_WRITABLE || f == DESC_ENUMERABLE || f == DESC_CONFIGURABLE;
+    ant_value_t field = attribute ? Ant_Value_FromBool(js_truthy(js, pinned.val[f])) : pinned.val[f];
+    ant_value_t set = mkprop_define_data(js, object, define_desc_field_names[f].name, define_desc_field_names[f].len, field);
     if (is_err(set)) object = set;
   }
   
@@ -1004,13 +1007,17 @@ static ant_value_t define_via_proxy(
   ant_t *js, ant_value_t obj, ant_value_t as_obj, property_key_view_t *key,
   ant_value_t descriptor, const define_desc_raw_t *pre_raw
 ) {
-  if (!is_object_type(descriptor)) descriptor = define_desc_object(js, pre_raw);
-  if (is_err(descriptor)) return descriptor;
+  define_desc_raw_t raw = {0};
+  if (pre_raw) raw = *pre_raw;
+  else {
+    ant_value_t read_err = define_desc_read(js, descriptor, &raw);
+    if (is_err(read_err)) return read_err;
+  }
   
   ant_value_t prop = property_key_view_materialize(js, key);
   if (is_err(prop)) return prop;
   
-  ant_value_t result = proxy_define_property(js, as_obj, prop, descriptor);
+  ant_value_t result = proxy_define_property_raw(js, as_obj, prop, &raw, false);
   if (is_err(result)) return result;
   if (!js_truthy(js, result)) return proxy_trap_error(js, "defineProperty", "trap returned falsy");
   
@@ -1442,6 +1449,28 @@ static ant_value_t define_desc_snapshot(ant_t *js, ant_value_t descriptor) {
   return is_err(err) ? err : define_desc_object(js, &raw);
 }
 
+ant_value_t reflect_define_property_raw(ant_t *js, ant_value_t obj, ant_value_t key_val, const define_desc_raw_t *raw) {
+  if (is_object_type(obj) && is_proxy(js_as_obj(obj))) {
+    ant_value_t trapped = proxy_define_property_raw(js, js_as_obj(obj), key_val, raw, true);
+    return is_err(trapped) ? trapped : Ant_Value_FromBool(js_truthy(js, trapped));
+  }
+  
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t saved = Ant_Exception_Peek(js);
+  GC_ROOT_PIN(js, saved);
+  
+  bool abrupt = false;
+  ant_value_t result = object_define_property_reporting(js, obj, key_val, Ant_Value_Undefined, raw, &abrupt);
+  
+  if (is_err(result) && !abrupt) {
+    Ant_Exception_Set(js, saved);
+    result = Ant_Value_False;
+  } else if (!is_err(result)) result = Ant_Value_True;
+  
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
 static ant_value_t reflect_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor) {
   GC_ROOT_SAVE(mark, js);
   GC_ROOT_PIN(js, obj);
@@ -1459,32 +1488,31 @@ static ant_value_t reflect_define_property(ant_t *js, ant_value_t obj, ant_value
   }
   
   GC_ROOT_PIN(js, key_val);
-  ant_value_t snapshot = define_desc_snapshot(js, descriptor);
+  if (vtype(descriptor) == kTypeBuiltin) descriptor = js_cfunc_promote(js, descriptor);
   
-  if (is_err(snapshot)) {
+  define_desc_raw_t raw = {0};
+  ant_value_t read = is_object_type(descriptor)
+    ? define_desc_read(js, descriptor, &raw)
+    : descriptor_value_error(js, "Property description must be an object: ", descriptor);
+  
+  if (is_err(read)) {
     GC_ROOT_RESTORE(js, mark);
-    return snapshot;
+    return read;
   }
   
-  GC_ROOT_PIN(js, snapshot);
-  if (is_object_type(obj) && is_proxy(js_as_obj(obj))) {
-    ant_value_t trapped = proxy_define_property(js, js_as_obj(obj), key_val, snapshot);
-    GC_ROOT_RESTORE(js, mark);
-    return is_err(trapped) ? trapped : Ant_Value_FromBool(js_truthy(js, trapped));
-  }
-  
-  ant_value_t saved = Ant_Exception_Peek(js);
-  GC_ROOT_PIN(js, saved);
-  bool abrupt = false;
-  ant_value_t result = object_define_property_reporting(js, obj, key_val, snapshot, NULL, &abrupt);
-  
-  if (is_err(result) && !abrupt) {
-    Ant_Exception_Set(js, saved);
-    result = Ant_Value_False;
-  } else if (!is_err(result)) result = Ant_Value_True;
+  for (int f = 0; f < DESC_FIELD_COUNT; f++) GC_ROOT_PIN(js, raw.val[f]);
+  ant_value_t result = reflect_define_property_raw(js, obj, key_val, &raw);
   
   GC_ROOT_RESTORE(js, mark);
   return result;
+}
+
+ant_value_t js_create_data_property_or_throw(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t value) {
+  define_desc_raw_t raw = {0};
+  raw.has[DESC_VALUE] = raw.has[DESC_WRITABLE] = raw.has[DESC_ENUMERABLE] = raw.has[DESC_CONFIGURABLE] = true;
+  raw.val[DESC_VALUE] = value;
+  raw.val[DESC_WRITABLE] = raw.val[DESC_ENUMERABLE] = raw.val[DESC_CONFIGURABLE] = Ant_Value_True;
+  return object_define_property_reporting(js, obj, prop, Ant_Value_Undefined, &raw, NULL);
 }
 
 ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode) {

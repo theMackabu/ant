@@ -61,6 +61,11 @@ void js_init_intern_cache(ant_t *js) {
   js->intern.module_cache = intern_string(js, "_cache", 6);
 }
 
+static bool mkprop_data_redefinable(const ant_shape_t *shape, uint32_t slot) {
+  const ant_shape_prop_t *prop = ant_shape_prop_at(shape, slot);
+  return prop && !prop->has_getter && !prop->has_setter && (prop->attrs & ANT_PROP_ATTR_CONFIGURABLE);
+}
+
 ant_value_t mkprop_interned_attrs_impl(
   ant_t *js, ant_value_t obj, const char *interned_key, size_t key_len,
   ant_value_t v, uint8_t attrs, mkprop_mode_t mode
@@ -82,6 +87,7 @@ ant_value_t mkprop_interned_attrs_impl(
 
   if (found >= 0) {
     slot = (uint32_t)found;
+    if ((mode & MKPROP_DATA_DEFINE) && !mkprop_data_redefinable(ptr->shape, slot)) return T_EMPTY;
     if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
     ant_shape_set_attrs_interned(js, ptr->shape, interned_key, attrs);
   } else {
@@ -111,6 +117,13 @@ static ant_value_t mkprop_bytes_attrs_impl(
   const char *interned = intern_string(js, key, key_len);
   if (!interned) return js_mkerr(js, "oom");
   return mkprop_interned_attrs_impl(js, obj, interned, key_len, v, attrs, mode);
+}
+
+ant_value_t mkprop_define_data(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t v) {
+  return mkprop_bytes_attrs_impl(
+    js, obj, key, key_len, v, 0,
+    MKPROP_USE_DEFAULT_ATTRS | MKPROP_EXPOSE_CFUNC | MKPROP_DATA_DEFINE
+  );
 }
 
 ant_value_t mkprop_bytes_exact_attrs(
@@ -146,6 +159,7 @@ ant_value_t mkprop_symbol_attrs_impl(
   int32_t found = ant_shape_lookup_symbol(ptr->shape, sym_off);
   if (found >= 0) {
     slot = (uint32_t)found;
+    if ((mode & MKPROP_DATA_DEFINE) && !mkprop_data_redefinable(ptr->shape, slot)) return T_EMPTY;
     if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
     ant_shape_set_attrs_symbol(js, ptr->shape, sym_off, attrs);
   } else {

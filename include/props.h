@@ -6,6 +6,7 @@ typedef enum {
   MKPROP_USE_DEFAULT_ATTRS = 1 << 0,
   MKPROP_EXPOSE_CFUNC = 1 << 1,
   MKPROP_KEYED_STORE = 1 << 2,
+  MKPROP_DATA_DEFINE = 1 << 3,
 } mkprop_mode_t;
 
 typedef struct {
@@ -45,6 +46,8 @@ ant_value_t mkprop_bytes(
   ant_t *js, ant_value_t obj, const char *key, size_t key_len,
   ant_value_t v, uint8_t attrs
 );
+
+ant_value_t mkprop_define_data(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t v);
 
 ant_value_t mkprop_symbol_attrs_impl(
   ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v,
