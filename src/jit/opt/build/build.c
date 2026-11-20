@@ -5514,8 +5514,15 @@ static opt_flow_t opt_build_jump_not_nullish(opt_builder_t *b) {
     ? OPT_FLOW_ENDED : OPT_FLOW_FAILED;
 }
 
+static int32_t opt_finally_handler_close(const opt_builder_t *b, uint32_t handler) {
+  uint32_t at = handler + sv_op_size[OP_POP];
+  return opt_op_at(b, at) == OP_CLOSE_UPVAL ? (int32_t)sv_get_u16(b->func->code + at + 1) : -1;
+}
+
 static bool opt_finally_handler_plain(const opt_builder_t *b, uint32_t handler) {
-  sv_op_t next = opt_op_at(b, handler + sv_op_size[OP_POP]);
+  uint32_t at = handler + sv_op_size[OP_POP];
+  if (opt_finally_handler_close(b, handler) >= 0) at += sv_op_size[OP_CLOSE_UPVAL];
+  sv_op_t next = opt_op_at(b, at);
   return next == OP_JMP || next == OP_JMP8;
 }
 
@@ -5559,6 +5566,11 @@ static bool opt_throw_edge(opt_builder_t *b, ir_node_id_t value, bool probe) {
     frame.slots[root->tracked + 1 + 2 * index] = (opt_slot_t){.node = opt_constant(root, opt_completion_bits(OPT_PENDING_THROW))};
     frame.slots[root->tracked + 2 + 2 * index] = (opt_slot_t){.node = value};
     root->finallies[index].has_throw = true;
+    int32_t from = opt_finally_handler_close(root, handler);
+    if (from >= 0) opt_bitset_for_each(&root->boxable, t) {
+      opt_slot_t *slot = &frame.slots[t];
+      if (t >= (uint32_t)from && slot->boxed) *slot = (opt_slot_t){.node = opt_emit1(b, IR_OP_LOAD_ENVIRONMENT_BINDING, slot->node, OPT_REPR_TAGGED)};
+    }
   } else {
     frame.slots[opt_stack_index(root, frame.sp++)] = (opt_slot_t){.node = value};
   }
@@ -7102,6 +7114,8 @@ static bool opt_build_entry(opt_builder_t *b, uint32_t target, const opt_bitset_
   if (finally) {
     opt_set_completion(b, b->pc, OPT_PENDING_THROW, opt_read_tracked(b, opt_stack_index(b, bblock->depth)));
     entry.bc_off = finally->catch_off;
+    int32_t from = opt_finally_handler_close(b, finally->catch_off);
+    if (from >= 0) opt_close_boxes(b, (uint32_t)from);
   }
   b->building_entry = false;
   if (!opt_end_with_jump(b, target)) return false;
