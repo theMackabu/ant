@@ -654,5 +654,5 @@ void compile_lhs_set(sv_compiler_t *c, sv_ast_t *target, bool keep) {
     compile_array_destructure(c, target, keep);
   } else if (target->type == N_OBJECT_PAT || target->type == N_OBJECT) {
     compile_object_destructure(c, target, keep);
-  }
+  } else if (!keep) emit_op(c, OP_POP);
 }
