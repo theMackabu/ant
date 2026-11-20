@@ -728,7 +728,7 @@ ant_value_t opt_rt_resume(
   );
 }
 
-static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t callee, uint32_t call_off) {
+static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t callee, ant_value_t new_target, uint32_t call_off) {
   if (vm->fp + 1 >= vm->max_frames && !sv_vm_reserve(vm, 0)) return false;
   sv_frame_t *frame = &vm->frames[++vm->fp];
   ant_value_t undefined = Ant_Value_Undefined;
@@ -739,7 +739,7 @@ static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t cal
     .func = func,
     .callee = callee,
     .this = undefined,
-    .new_target = undefined,
+    .new_target = new_target,
     .super_val = undefined,
     .prev_sp = vm->sp,
     .completion = {.kind = SV_COMPLETION_NONE, .value = undefined},
@@ -787,7 +787,8 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
   for (uint32_t k = count; k-- > 1;) {
     ant_value_t callee = frames[k].callee;
     if (k == count - 1) callee = sv_closure_heap_value(js, entry->closure);
-    waits[k] = room && opt_push_waiting_frame(vm, frames[k].func, callee, frames[k].site->call_off);
+    ant_value_t new_target = k == count - 1 ? entry->new_target : frames[k].site->construct ? callee : Ant_Value_Undefined;
+    waits[k] = room && opt_push_waiting_frame(vm, frames[k].func, callee, new_target, frames[k].site->call_off);
     room &= waits[k];
   }
 

@@ -396,6 +396,7 @@ export function targets() {
     'test_opt_call_max_args.cjs',
     'test_opt_code_values.cjs',
     'test_error_stack_exit_frames.cjs',
+    'test_opt_exit_construct_frames.cjs',
     'test_opt_exit_metadata.cjs',
     'test_opt_class_call_settles.cjs',
     'test_opt_exit_upvalues.cjs',
