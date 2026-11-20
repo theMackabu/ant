@@ -24,6 +24,11 @@ js_eval_result_t js_eval_source(
   sv_compile_mode_t mode, bool strict, js_eval_scope_t scope
 );
 
+js_eval_result_t js_eval_source_in_frame(
+  ant_t *js, const char *buf, size_t len,
+  sv_compile_mode_t mode, bool strict, js_eval_scope_t scope, struct sv_frame *caller
+);
+
 static inline bool sv_compile_mode_is_eval(sv_compile_mode_t mode) {
   return 
     mode == SV_COMPILE_EVAL || 
@@ -346,6 +351,7 @@ typedef struct sv_compiler {
   bool with_inherited;
   bool eval_shadows_global_this;
   ant_value_t eval_env;
+  bool eval_reads_arguments;
 
   sv_eval_decl_t *eval_vars;
   uint32_t *eval_var_index;

@@ -421,23 +421,29 @@ static ant_value_t js_execute_compiled_repl_bytecode(
   return result;
 }
 
-static ant_value_t js_execute_compiled_eval_bytecode(ant_t *js, sv_func_t *func, js_eval_scope_t scope) {
+static inline __attribute__((always_inline)) ant_value_t js_execute_compiled_eval_bytecode(
+  ant_t *js, sv_func_t *func, js_eval_scope_t scope, sv_frame_t *caller
+) {
   if (sv_debug_unlikely(SV_DEBUG_DUMP_BC)) sv_disasm(js, func, js->filename);
   GC_ROOT_SAVE(mark, js);
 
   ant_value_t compiled = mkref(kTypeFunctionInfo, func);
   GC_ROOT_PIN(js, compiled);
 
-  ant_value_t result = sv_eval_declare_vars(js, func, scope.env, true);
+  ant_value_t result = caller && func->unit->eval_reads_arguments
+    ? sv_eval_bind_arguments(js->vm, js, caller, scope.env)
+    : Ant_Value_Undefined;
+
+  if (!is_err(result)) result = sv_eval_declare_vars(js, func, scope.env, true);
   if (!is_err(result)) result = sv_execute_eval_entry(js->vm, func, scope.this_val, scope.env, scope.new_target);
 
   GC_ROOT_RESTORE(js, mark);
   return result;
 }
 
-js_eval_result_t js_eval_source(
+static inline __attribute__((always_inline)) js_eval_result_t js_eval_source_from(
   ant_t *js, const char *buf, size_t len,
-  sv_compile_mode_t mode, bool strict, js_eval_scope_t scope
+  sv_compile_mode_t mode, bool strict, js_eval_scope_t scope, sv_frame_t *caller
 ) {
   if (len == (size_t)~0U) len = strlen(buf);
   
@@ -452,7 +458,7 @@ js_eval_result_t js_eval_source(
   sv_func_t *cached = cacheable ? sv_eval_cache_find(js, &cache_key) : NULL;
   if (cached) {
     sv_code_unit_pin(cached->unit);
-    ant_value_t value = js_execute_compiled_eval_bytecode(js, cached, scope);
+    ant_value_t value = js_execute_compiled_eval_bytecode(js, cached, scope, caller);
     sv_code_unit_unpin(cached->unit);
     return (js_eval_result_t){ .value = value, .async_coro = NULL, .kind = JS_EVAL_COMPLETE };
   }
@@ -491,7 +497,7 @@ js_eval_result_t js_eval_source(
   switch (mode) {
     case SV_COMPILE_EVAL:
     case SV_COMPILE_EVAL_FUNCTION:
-      value = js_execute_compiled_eval_bytecode(js, func, scope);
+      value = js_execute_compiled_eval_bytecode(js, func, scope, caller);
       break;
     case SV_COMPILE_REPL:
       value = js_execute_compiled_repl_bytecode(js, func, &async_coro);
@@ -511,6 +517,20 @@ js_eval_result_t js_eval_source(
     .value = value, .async_coro = async_coro,
     .kind = async_coro ? JS_EVAL_ASYNC_ENTRY : JS_EVAL_COMPLETE,
   };
+}
+
+js_eval_result_t js_eval_source(
+  ant_t *js, const char *buf, size_t len,
+  sv_compile_mode_t mode, bool strict, js_eval_scope_t scope
+) {
+  return js_eval_source_from(js, buf, len, mode, strict, scope, NULL);
+}
+
+js_eval_result_t js_eval_source_in_frame(
+  ant_t *js, const char *buf, size_t len,
+  sv_compile_mode_t mode, bool strict, js_eval_scope_t scope, sv_frame_t *caller
+) {
+  return js_eval_source_from(js, buf, len, mode, strict, scope, caller);
 }
 
 static const js_eval_scope_t js_eval_no_scope = {

@@ -650,11 +650,11 @@ void compile_lhs_set(sv_compiler_t *c, sv_ast_t *target, bool keep) {
     static const char message[] = "Cannot assign to read only property 'undefined' of object '#<Object>'";
     emit_throw_type_error(c, message, sizeof(message) - 1);
   } else if (target->type == N_MEMBER && !(target->flags & 1) && is_private_name_node(target->right)) {
-    (void)keep;
     compile_expr(c, target->left);
     emit_op(c, OP_SWAP);
     emit_private_token(c, target->right);
     emit_op(c, OP_PUT_PRIVATE);
+    if (!keep) emit_op(c, OP_POP);
   } else if (target->type == N_MEMBER && !(target->flags & 1)) {
     if (keep) emit_op(c, OP_DUP);
     compile_expr(c, target->left);

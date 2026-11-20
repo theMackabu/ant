@@ -137,10 +137,11 @@ static bool eval_scope_builder_capture_local(
 
 static bool eval_scope_builder_capture_upvalue(
   sv_compiler_t *c, sv_eval_scope_builder_t *scope,
-  sv_eval_binding_set_t *set, sv_local_t *local
+  sv_eval_binding_set_t *set, sv_local_t *local, bool own_arguments
 ) {
   if (!eval_local_is_visible(local) || eval_scope_builder_has_binding(
         set, scope, local->name, local->name_len)) return true;
+  if (own_arguments && is_ident_str(local->name, local->name_len, "arguments", 9)) return true;
 
   if (is_ident_str(local->name, local->name_len, "super", 5)) return true;
   int upvalue = resolve_upvalue_raw(c, local->name, local->name_len);
@@ -204,14 +205,14 @@ static bool compiler_has_super_binding(sv_compiler_t *c) {
 
 static bool eval_scope_builder_capture_upvalues(
   sv_compiler_t *c, sv_eval_scope_builder_t *scope,
-  sv_eval_binding_set_t *set, sv_compiler_t *enclosing
+  sv_eval_binding_set_t *set, sv_compiler_t *enclosing, bool own_arguments
 ) {
   int with = enclosing->with_depth - 1;
   for (int i = enclosing->local_count - 1; i >= 0; i--) {
     for (; with >= 0 && enclosing->with_scopes[with].depth > enclosing->locals[i].depth; with--)
       if (!eval_scope_builder_capture_with(c, scope, set, enclosing, &enclosing->with_scopes[with])) return false;
     if (!eval_scope_builder_capture_upvalue(
-          c, scope, set, &enclosing->locals[i])) return false;
+          c, scope, set, &enclosing->locals[i], own_arguments)) return false;
   }
   for (; with >= 0; with--)
     if (!eval_scope_builder_capture_with(c, scope, set, enclosing, &enclosing->with_scopes[with])) return false;
@@ -256,6 +257,12 @@ bool arguments_forbidden(const sv_compiler_t *c) {
   return false;
 }
 
+static const sv_private_scope_t *eval_private_scope(const sv_compiler_t *c) {
+  const sv_private_scope_t *scope = c->private_scope;
+  while (scope && scope->count == 0) scope = scope->parent;
+  return scope;
+}
+
 static sv_eval_scope_flags_t eval_scope_flags(sv_compiler_t *c) {
   return (sv_eval_scope_flags_t){
     .this_binding = compiler_has_this_binding(c),
@@ -264,12 +271,6 @@ static sv_eval_scope_flags_t eval_scope_flags(sv_compiler_t *c) {
     .no_arguments = arguments_forbidden(c),
     .has_with = has_active_with_scope(c),
   };
-}
-
-static const sv_private_scope_t *eval_private_scope(const sv_compiler_t *c) {
-  const sv_private_scope_t *scope = c->private_scope;
-  while (scope && scope->count == 0) scope = scope->parent;
-  return scope;
 }
 
 void eval_scope_locals_popped(sv_compiler_t *c) {
@@ -408,9 +409,10 @@ bool capture_dynamic_eval_scope(
   if (c->super_local >= 0) c->super_referenced = true;
   if (c->is_arrow && !eval_scope_builder_capture_keywords(c, scope, &binding_set)) goto capture_failed;
 
+  bool own_arguments = has_implicit_arguments_obj(c);
   for (sv_compiler_t *enc = c->inherits_eval_env ? NULL : c->enclosing; enc; enc = enc->enclosing)
     if (!eval_scope_builder_capture_upvalues(
-          c, scope, &binding_set, enc)) goto capture_failed;
+          c, scope, &binding_set, enc, own_arguments)) goto capture_failed;
   private_capture_t private_capture = { c, scope, &binding_set };
   if (!private_eval_bindings_each(c, eval_scope_builder_capture_private, &private_capture)) goto capture_failed;
   free(binding_set.slots);
@@ -647,6 +649,7 @@ static void emit_eval_of_first_arg(sv_compiler_t *c, uint32_t eval_scope) {
   emit_number(c, 0);
   emit_op(c, OP_GET_ELEM);
   emit_lexical_new_target(c);
+  note_eval_reads_arguments(c);
   emit_op(c, OP_EVAL);
   emit_u32(c, eval_scope);
 }
@@ -746,6 +749,7 @@ static void compile_own_direct_eval(sv_compiler_t *c, sv_ast_t *node, bool has_s
   }
 
   emit_lexical_new_target(c);
+  note_eval_reads_arguments(c);
   emit_op(c, OP_EVAL);
   emit_u32(c, eval_scope);
 }
@@ -778,6 +782,7 @@ static void compile_inherited_direct_eval(sv_compiler_t *c, sv_ast_t *node) {
     for (int i = 1; i < node->args.count; i++) emit_op(c, OP_POP);
     emit_op(c, OP_NIP);
     emit_lexical_new_target(c);
+    note_eval_reads_arguments(c);
     emit_op(c, OP_EVAL);
     emit_u32(c, eval_scope);
   }
