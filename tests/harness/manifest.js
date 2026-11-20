@@ -82,6 +82,7 @@ export function targets() {
     'test_inspect_extra_props.cjs',
     'test_eval_variable_cache.cjs',
     'test_for_in_deep_prototype_chain.cjs',
+    'test_for_in_enumeration_cache.cjs',
     'test_tls_server.mjs',
     'test_tls_socket_rewrap.cjs',
     'test_tls_socket_readable.mjs',
