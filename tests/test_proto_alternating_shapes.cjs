@@ -96,6 +96,12 @@ p1.level = 'changed';
 assert.strictEqual(twins[0].level, 'changed');
 assert.strictEqual(deep.level, 'changed');
 
+const steady = { q: 1, r: 2 };
+churn(steady, viaSetPrototypeOf, 1000);
+const settled = process.memoryUsage().rss;
+churn(steady, viaSetPrototypeOf, 1500000);
+assert.ok(process.memoryUsage().rss - settled < 64 * 1024 * 1024);
+
 const pile = [];
 for (let i = 0; i < 200000; i++) pile.push({ i });
 pile.length = 0;
