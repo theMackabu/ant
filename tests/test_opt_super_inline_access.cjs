@@ -11,6 +11,25 @@ if (process.argv[2] === 'constructor-home') {
   return;
 }
 
+if (process.argv[2] === 'two-shapes') {
+  class A {}
+  class B extends A { put(x) { super.v = x; return this.v; } }
+  const plain = new B(), tagged = new B();
+  plain.v = 0;
+  tagged.tag = 1;
+  tagged.v = 0;
+  let sum = 0;
+  for (let i = 0; i < 30000; i++) sum += (i & 1 ? plain : tagged).put(1);
+  console.log(sum);
+  return;
+}
+
+{
+  const child = spawnSync(process.execPath, [__filename, 'two-shapes'], { encoding: 'utf8', env: { ...process.env, ANT_DEBUG: 'dump/vm:op-warn' } });
+  assert.strictEqual(child.stdout.trim().split('\n').pop(), '30000');
+  assert.doesNotMatch(child.stderr, /bailout .*op=PUT_SUPER_FIELD/);
+}
+
 if (process.argv[2] === 'base-setter') {
   class A {}
   class B extends A { constructor() { super(); this.v = 0; } put(x) { super.v = x; return this.v; } }
