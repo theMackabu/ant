@@ -369,6 +369,7 @@ export function targets() {
     'test_opt_class_call_settles.cjs',
     'test_opt_exit_upvalues.cjs',
     'test_opt_func_state.cjs',
+    'test_opt_handler_resume_depth.cjs',
     'test_opt_generic.cjs',
     'test_opt_in_field_for_in.cjs',
     'test_opt_deep_proto_chain.cjs',

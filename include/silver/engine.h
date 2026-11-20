@@ -1154,6 +1154,8 @@ typedef struct sv_native_frame {
 
 typedef struct sv_jit_osr_mark {
   struct sv_jit_osr_mark *prev;
+  sv_frame_t *frame;
+  void *entry;
 } sv_jit_osr_mark_t;
 
 typedef struct {
@@ -1314,6 +1316,14 @@ static inline int32_t sv_op_frame_slot(const uint8_t *ip, uint32_t param_count, 
 static inline bool sv_frame_is_strict(const sv_frame_t *frame) {
   return frame && frame->func && frame->func->is_strict;
 }
+
+ant_value_t sv_frame_resume(
+  sv_vm_t *vm, sv_frame_t *frame, int off,
+  ant_value_t *vstack, int vstack_sp,
+  ant_value_t *params, int n_params,
+  ant_value_t *locals, int n_locals,
+  sv_jit_finally_t *finally
+);
 
 static inline void sv_frame_reset_handlers(sv_vm_t *vm, sv_frame_t *frame) {
   vm->handler_depth = frame->handler_base;
