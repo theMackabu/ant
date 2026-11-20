@@ -368,11 +368,22 @@ static bool body_has_use_strict(sv_parser_t *p, const sv_ast_t *body) {
   return false;
 }
 
-static void check_retroactive_strict(sv_parser_t *p, const sv_ast_t *fn) {
-  if (p->lx.strict || Ant_Exception_Pending(p->js) || !body_has_use_strict(p, fn->body)) return;
+static void check_retroactive_strict_slow(sv_parser_t *p, const sv_ast_t *fn) {
+  if (Ant_Exception_Pending(p->js) || !body_has_use_strict(p, fn->body)) return;
   bool reserved = fn->str && (is_strict_reserved_name(fn->str, fn->len) || is_eval_or_arguments_name(fn->str, fn->len));
   for (int i = 0; !reserved && i < fn->args.count; i++) reserved = pattern_binds_strict_reserved(fn->args.items[i]);
   if (reserved) SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected strict mode reserved word");
+}
+
+static inline bool body_starts_with_string(const sv_ast_t *body) {
+  if (!body || body->type != N_BLOCK || body->args.count == 0) return false;
+  const sv_ast_t *first = body->args.items[0];
+  return first && (first->type == N_STRING || first->type == N_EMPTY);
+}
+
+static inline void check_retroactive_strict(sv_parser_t *p, const sv_ast_t *fn) {
+  if (__builtin_expect(p->lx.strict || !body_starts_with_string(fn->body), 1)) return;
+  check_retroactive_strict_slow(p, fn);
 }
 
 sv_ast_t *finish_arrow(sv_parser_t *p, sv_ast_t *fn) {
