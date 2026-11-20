@@ -17,6 +17,7 @@ typedef struct {
   ant_value_t this_val;
   ant_value_t env;
   ant_value_t new_target;
+  const struct sv_eval_scope *layout;
 } js_eval_scope_t;
 
 js_eval_result_t js_eval_source(
@@ -356,7 +357,7 @@ enum {
   SV_EVAL_SCOPE_FIELD_THUNK   = 1 << 5,
 };
 
-uint8_t sv_eval_shadow_bits(ant_t *js, ant_value_t eval_env, const char *source, size_t len);
+uint8_t sv_eval_shadow_bits(ant_t *js, const js_eval_scope_t *scope, const char *source, size_t len);
 
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program, sv_compile_mode_t mode,

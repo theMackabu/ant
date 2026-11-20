@@ -381,7 +381,8 @@ static inline ant_value_t sv_eval_in_frame(
   GC_ROOT_PIN(js, env);
   js_eval_scope_t scope = { 
     .this_val = frame->this, 
-    .env = env, .new_target = new_target 
+    .env = env, .new_target = new_target,
+    .layout = sv_func_eval_scope(caller, scope_index),
   };
   
   ant_value_t result = js_eval_source_in_frame(
