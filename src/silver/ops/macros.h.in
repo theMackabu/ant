@@ -82,7 +82,7 @@ do {
 
 #def JIT_OSR_FINISH(osr_r)
 do {
-  if (osr_r == SV_JIT_AWAIT_PARKED) {
+  if (osr_r == SV_JIT_AWAIT_PARKED || osr_r == SV_JIT_RESUMED) {
     ip = frame->ip;
     DISPATCH();
   }
