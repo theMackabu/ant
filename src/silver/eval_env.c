@@ -61,6 +61,7 @@ void sv_eval_env_each_with(
       if (sv_eval_name_is_with_marker(binding->name, binding->len)) fn(ctx, binding->name, binding->len);
       else if (binding->len == len && memcmp(binding->name, name, len) == 0) return;
     }
+    if (state && (state->has_arguments || state->arguments_deferred) && len == 9 && memcmp(name, "arguments", 9) == 0) return;
     if (interned && lkp_interned(cur, interned).obj) return;
   }
 }
