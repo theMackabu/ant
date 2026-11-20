@@ -276,10 +276,12 @@ typedef struct {
   sv_func_t *func;
   ant_value_t callee;
   uintptr_t pc;
-  uintptr_t caller_pc;
   int bc_off;
   bool construct;
+  bool caller_next;
 } error_frame_t;
+
+static_assert(sizeof(error_frame_t) == 4 * sizeof(uint64_t), "error frames stay four words");
 
 static error_frame_view_t error_frame_view(ant_t *js, const error_frame_t *f, const char *fallback_file) {
   error_frame_view_t view = {
@@ -301,8 +303,8 @@ static error_frame_view_t error_frame_view(ant_t *js, const error_frame_t *f, co
 
 static error_frame_t error_frame_of(const sv_stack_entry_t *e) {
   return (error_frame_t){
-    .func = e->func, .callee = e->callee, .pc = e->pc, .caller_pc = e->caller_pc,
-    .bc_off = e->bc_off, .construct = e->construct
+    .func = e->func, .callee = e->callee, .pc = e->pc,
+    .bc_off = e->bc_off, .construct = e->construct, .caller_next = e->caller_pc != 0
   };
 }
 
@@ -369,6 +371,19 @@ static error_above_t error_above_of(ant_value_t call_func, ant_value_t fn) {
   return (error_above_t){ NULL, false };
 }
 
+static void error_frame_resolve_caller(ant_t *js, error_frame_t *f, uintptr_t caller_pc) {
+  if (!f->caller_next) return;
+  sv_jit_frame_t caller[SV_JIT_INLINE_FRAMES_MAX + 1];
+  
+  int n = sv_jit_frames_at(js, caller_pc, caller, SV_JIT_INLINE_FRAMES_MAX + 1);
+  f->construct = sv_called_as_construct(f->func, caller, n);
+  f->caller_next = false;
+}
+
+static int error_frames_stored(const error_frame_t *frames, int n) {
+  return n + (n > 0 && frames[n - 1].caller_next);
+}
+
 static int error_collect_frames(
   ant_t *js, int limit, error_above_t above, bool resolve,
   error_frame_t *local, error_frame_t **out
@@ -386,6 +401,7 @@ static int error_collect_frames(
     sv_stack_entry_t e;
     
     sv_func_t *seek = above.func;
+    uintptr_t caller_pc = 0;
     int n = 0;
     
     sv_stack_iter_init(js->vm, &it, walk, resolve || seek);
@@ -398,7 +414,14 @@ static int error_collect_frames(
       
       if (error_entry_is_wrapper(js, &e, n)) continue;
       if (!error_frames_reserve(out, local, &cap, n + 1)) break;
+      if (n > 0 && e.pc != caller_pc) error_frame_resolve_caller(js, &(*out)[n - 1], caller_pc);
       (*out)[n++] = error_frame_of(&e);
+      caller_pc = e.caller_pc;
+    }
+    
+    if (n > 0 && (*out)[n - 1].caller_next) {
+      if (error_frames_reserve(out, local, &cap, n + 1)) (*out)[n] = (error_frame_t){ .pc = caller_pc };
+      else error_frame_resolve_caller(js, &(*out)[n - 1], caller_pc);
     }
     
     bool cut_short = above.active && walk >= 0 && it.truncated && it.ai == it.n_acts;
@@ -482,7 +505,10 @@ static error_record_t *error_record_settle(ant_t *js, ant_value_t value, error_r
     memcpy(grown->frames, frames, (size_t)n * sizeof(grown->frames[0]));
     grown->n_frames = n;
     rec = grown;
-  } else for (int i = 0; i < rec->n_frames; i++) rec->frames[i].pc = rec->frames[i].caller_pc = 0;
+  } else for (int i = 0; i < rec->n_frames; i++) {
+    rec->frames[i].pc = 0;
+    rec->frames[i].caller_next = false;
+  }
   
   if (frames != local) free(frames);
   if (grown) js_set_native(value, rec, ERROR_RECORD_NATIVE_TAG);
@@ -527,8 +553,9 @@ ant_value_t js_error_record_capture(ant_t *js, ant_value_t call_func, const js_e
     if (!f->func || !f->func->debug->filename) need_file = true;
   }
 
-  error_record_t *rec = calloc(1, sizeof(*rec) + (size_t)n * sizeof(rec->frames[0]));
-  if (rec) memcpy(rec->frames, frames, (size_t)n * sizeof(rec->frames[0]));
+  int stored = error_frames_stored(frames, n);
+  error_record_t *rec = calloc(1, sizeof(*rec) + (size_t)stored * sizeof(rec->frames[0]));
+  if (rec) memcpy(rec->frames, frames, (size_t)stored * sizeof(rec->frames[0]));
   if (frames != local) free(frames);
   if (!rec) return Ant_Value_Undefined;
   
@@ -619,9 +646,9 @@ static int error_record_resolve(ant_t *js, const error_record_t *rec, error_fram
     if (m <= 0) at[m++] = (sv_jit_frame_t){ f->func, f->bc_off };
     bool outer = f->construct;
     
-    if (f->caller_pc) {
-      n_ahead = sv_jit_frames_at(js, f->caller_pc, ahead, SV_JIT_INLINE_FRAMES_MAX + 1);
-      ahead_pc = f->caller_pc;
+    if (f->caller_next) {
+      ahead_pc = rec->frames[k + 1].pc;
+      n_ahead = sv_jit_frames_at(js, ahead_pc, ahead, SV_JIT_INLINE_FRAMES_MAX + 1);
       outer = sv_called_as_construct(f->func, ahead, n_ahead);
     }
     
