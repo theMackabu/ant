@@ -533,7 +533,18 @@ static inline void type_assign_local(sv_compiler_t *c, int local_idx, uint8_t ty
   sv_local_t *local = &c->locals[local_idx];
   local->str_accumulating = false;
   if (local->inferred_type == type && (type == SV_TI_UNKNOWN || !c->type_loop_depth)) return;
-  type_assign_local_slow(c, local_idx, type, dep_base);
+  bool fresh =
+    local->depth != -1 && !local->type_fact && !sv_type_is_known(local->inferred_type) && sv_type_is_known(type) &&
+    !c->type_region_depth && dep_base == c->types->dep_count;
+  if (!fresh) {
+    type_assign_local_slow(c, local_idx, type, dep_base);
+    return;
+  }
+  local->inferred_type = type;
+  local->type_fact = ++c->types->fact_next;
+  local->type_use_head = 0;
+  local->type_derived = false;
+  c->type_any = true;
 }
 
 static inline sv_patch_list_t *optional_chain_take(sv_compiler_t *c) {
