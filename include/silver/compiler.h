@@ -99,9 +99,23 @@ typedef struct {
 
 typedef struct {
   int stack_local;
+  int stash_local;
   int scope_depth;
   bool is_async;
 } sv_using_cleanup_t;
+
+typedef struct {
+  int local_count;
+  int using_count;
+} sv_unwind_mark_t;
+
+typedef enum {
+  SV_LOOP_ITERATION,
+  SV_LOOP_SWITCH,
+  SV_LOOP_LABEL,
+  SV_LOOP_LABEL_OF_LOOP,
+  SV_LOOP_RETURN_LANDING,
+} sv_loop_kind_t;
 
 typedef struct {
   int loop_start;
@@ -112,6 +126,8 @@ typedef struct {
   const char *label;
   uint32_t label_len;
   bool is_switch;
+  bool is_block;
+  bool labels_loop;
   int iter_unwind_index;
   int iter_completion_local;
   bool iter_async;
@@ -258,8 +274,10 @@ typedef struct sv_compiler {
   
   int try_depth;
   uint8_t *unwind_kinds;
+  sv_unwind_mark_t *unwind_marks;
   int unwind_count;
   int unwind_cap;
+  int handler_close_floor;
   
   sv_with_scope_t *with_scopes;
   int with_cap;

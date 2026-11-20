@@ -14,6 +14,7 @@
 #include "silver/upvalues.h"
 #include "silver/vm.h"
 #include "silver/jit.h"
+#include "silver/stack_trace.h"
 #include "gc/objects.h"
 #include "modules/collections.h"
 #include "modules/regex.h"
@@ -541,10 +542,10 @@ static void opt_print_stats(void) {
     (unsigned long long)opt_stats.exits, (unsigned long long)opt_stats.inline_exits,
     (double)opt_stats.compiled_ns / 1e6, (unsigned long long)opt_stats.rejected, (double)opt_stats.rejected_ns / 1e6,
     (unsigned long long)opt_stats.code_bytes, (unsigned long long)opt_codes_freed, (unsigned long long)opt_stats.mapped);
-  fprintf(stderr, "jit: opt catch stats drops=%llu caught_in_code=%llu caught_in_interpreter=%llu interpreter_entries=%llu unwinds=%llu\n",
+  fprintf(stderr, "jit: opt catch stats drops=%llu caught_in_code=%llu caught_in_interpreter=%llu interpreter_entries=%llu throw_captures=%llu unwinds=%llu\n",
     (unsigned long long)opt_stats.drops, (unsigned long long)opt_stats.catches,
     (unsigned long long)opt_stats.catch_leaves, (unsigned long long)opt_stats.catch_entries,
-    (unsigned long long)opt_stats.unwinds);
+    (unsigned long long)sv_jit_throw_captures, (unsigned long long)opt_stats.unwinds);
 }
 
 static void opt_drop_code(opt_code_t *code) {
@@ -1015,6 +1016,22 @@ ant_value_t opt_rt_construct(sv_vm_t *vm, ant_value_t callee, ant_value_t new_ta
   return jit_helper_new(vm, vm->js, callee, new_target, args, (int)argc);
 }
 
+static __attribute__((noinline)) ant_value_t opt_reflect_construct_holey(
+  ant_t *js, ant_value_t target, ant_value_t new_target, ant_value_t *args, int64_t argc, bool explicit_new_target
+) {
+  ant_value_t list = js_mkarr_dense_literal(js, args, (uint32_t)argc);
+  if (is_err(list)) return list;
+  return js_reflect_construct_array_like(js, target, list, new_target, explicit_new_target);
+}
+
+ant_value_t opt_rt_reflect_construct(sv_vm_t *vm, ant_value_t target, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t explicit_new_target) {
+  for (int64_t i = 0; i < argc; i++)
+    if (__builtin_expect(args[i] == T_EMPTY, 0))
+      return opt_reflect_construct_holey(vm->js, target, new_target, args, argc, explicit_new_target != 0);
+
+  return js_reflect_construct_listed(vm->js, target, new_target, explicit_new_target != 0, args, (int)argc);
+}
+
 ant_value_t opt_rt_new_this(sv_vm_t *vm, ant_value_t callee) {
   ant_t *js = vm->js;
   if (vtype(callee) != kTypeFunction) return T_EMPTY;
@@ -1252,12 +1269,18 @@ uintptr_t opt_tier_access_helper(sv_op_t op, bool adding) {
   return counted ? (uintptr_t)opt_rt_access_counted : (uintptr_t)helper;
 }
 
-ant_value_t opt_rt_throw(ant_value_t value, sv_vm_t *vm) {
-  return is_err(value) ? value : js_throw(vm->js, value);
+ant_value_t opt_rt_take_thrown(sv_vm_t *vm, ant_value_t error, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind) {
+  return js_take_thrown(vm->js, error);
 }
 
-static void opt_catch_missed(ant_t *js, opt_code_t *code, uint32_t catch_off) {
-  if (++code->catch_misses < OPT_CATCH_MISS_LIMIT || code->dropped) return;
+ant_value_t opt_rt_throw(ant_value_t value, sv_vm_t *vm) {
+  if (is_err(value)) return value;
+  return sv_jit_throw(vm->js, value);
+}
+
+static void opt_catch_missed(ant_t *js, opt_code_t *code, const opt_handler_t *handler) {
+  uint32_t catch_off = handler->catch_off;
+  if ((++code->catch_misses < OPT_CATCH_MISS_LIMIT && !handler->raised) || code->dropped) return;
   opt_note_discard(opt_func_state(js, code->func, true), code, true);
   opt_drop_code(code);
   if (sv_debug_unlikely(SV_DEBUG_JIT_WARN))
@@ -1271,7 +1294,7 @@ void opt_rt_caught(sv_vm_t *vm, opt_code_t *code, const opt_handler_t *handler, 
     return;
   }
   opt_stats.catch_leaves++;
-  if (handler->learnable) opt_catch_missed(vm->js, code, handler->catch_off);
+  if (handler->learnable) opt_catch_missed(vm->js, code, handler);
 }
 
 bool opt_tier_has_catch_entry(ant_t *js, sv_func_t *func, uint32_t catch_off) {
@@ -1283,7 +1306,7 @@ bool opt_tier_has_catch_entry(ant_t *js, sv_func_t *func, uint32_t catch_off) {
     const opt_handler_t *handler = &code->handlers[i];
     if (handler->catch_off != catch_off) continue;
     if (handler->entry == UINT32_MAX) {
-      if (handler->learnable) opt_catch_missed(js, code, catch_off);
+      if (handler->learnable) opt_catch_missed(js, code, handler);
       return false;
     }
     opt_stats.catch_entries++;

@@ -50,6 +50,8 @@ typedef struct jit_code_range {
   const uint32_t *resume_ret;
   uint32_t n_sites;
   uint32_t n_resume;
+  uintptr_t catch_ret;
+  uint8_t catch_known;
 #if JIT_UNWIND_REGISTER
   uint32_t fp_cfa_off;
   uint8_t *eh_frame;
@@ -700,7 +702,9 @@ static bool jit_walk_visit(jit_walk_t *w, uintptr_t pc, uintptr_t frame_addr) {
 #if defined(__APPLE__)
 
 static uintptr_t jit_stack_top(void) {
-  return (uintptr_t)pthread_get_stackaddr_np(pthread_self());
+  static _Thread_local uintptr_t top;
+  if (!top) top = (uintptr_t)pthread_get_stackaddr_np(pthread_self());
+  return top;
 }
 
 __attribute__((noinline))
@@ -734,6 +738,102 @@ static void jit_walk_native(jit_walk_t *w) {
 
 #endif
 
+typedef enum : uint8_t {
+  JIT_CATCH_PASSES,
+  JIT_CATCH_CAUGHT,
+  JIT_CATCH_UNKNOWN,
+} jit_catch_t;
+
+static constexpr int JIT_CATCH_WALK_FRAMES = 8;
+
+__attribute__((noinline))
+static jit_catch_t jit_catch_at(struct jit_code_registry *reg, uintptr_t pc) {
+  jit_code_range_t *r = jit_code_range_at(reg, pc);
+  if (!r) return JIT_CATCH_UNKNOWN;
+  if (r->catch_ret == pc) return (jit_catch_t)r->catch_known;
+
+  jit_call_site_t site;
+  jit_catch_t known = JIT_CATCH_UNKNOWN;
+  uint32_t resume, depth;
+  bool finally;
+
+  bool resumed = false;
+  for (uint32_t i = 0; i < r->n_resume && !resumed; i++) resumed = pc - r->start == r->resume_ret[i];
+
+  if (!resumed && r->sites && jit_code_range_site(r, pc, &site) && site.ret_off == pc - r->start && site.bc_off >= 0) {
+    const sv_jit_frame_t *inlined = jit_site_inline_frames(r) + site.inline_at;
+    known = sv_func_catch_at(r->func, (uint32_t)site.bc_off, &resume, &depth, &finally) ? JIT_CATCH_CAUGHT : JIT_CATCH_PASSES;
+    for (uint32_t d = 0; d < site.inline_depth && known == JIT_CATCH_PASSES; d++) {
+      if (inlined[d].bc_off < 0) known = JIT_CATCH_UNKNOWN;
+      else if (sv_func_catch_at(inlined[d].func, (uint32_t)inlined[d].bc_off, &resume, &depth, &finally)) known = JIT_CATCH_CAUGHT;
+    }
+  }
+
+  r->catch_ret = pc;
+  r->catch_known = known;
+  return known;
+}
+
+#if defined(__APPLE__)
+
+static constexpr int JIT_CATCH_WALK_HELPERS = 4;
+
+[[gnu::always_inline]] static inline bool jit_catch_walk(struct jit_code_registry *reg) {
+  const uintptr_t *fp = __builtin_frame_address(0);
+  int helpers = 0;
+  while (fp[1] < reg->lo || fp[1] >= reg->hi) {
+    if (++helpers > JIT_CATCH_WALK_HELPERS || fp[0] <= (uintptr_t)fp) return false;
+    fp = (const uintptr_t *)fp[0];
+  }
+  fp = (const uintptr_t *)fp[0];
+  for (int n = 0; n < JIT_CATCH_WALK_FRAMES && fp && !((uintptr_t)fp & 7); n++) {
+    if (fp[1] < reg->lo || fp[1] >= reg->hi) return false;
+    jit_catch_t known = jit_catch_at(reg, fp[1]);
+    if (known != JIT_CATCH_PASSES) return known == JIT_CATCH_CAUGHT;
+    if (fp[0] <= (uintptr_t)fp) return false;
+    fp = (const uintptr_t *)fp[0];
+  }
+  return false;
+}
+
+#else
+
+typedef struct {
+  struct jit_code_registry *reg;
+  int compiled, native;
+  bool caught;
+} jit_catch_walk_t;
+
+static constexpr int JIT_CATCH_WALK_UNWOUND = 5;
+
+static _Unwind_Reason_Code jit_catch_frame(struct _Unwind_Context *uc, void *arg) {
+  jit_catch_walk_t *w = arg;
+  uintptr_t pc = (uintptr_t)_Unwind_GetIP(uc);
+  if (pc < w->reg->lo || pc >= w->reg->hi) return !w->compiled && ++w->native <= JIT_CATCH_WALK_UNWOUND ? _URC_NO_REASON : _URC_NORMAL_STOP;
+  if (!w->compiled++) return _URC_NO_REASON;
+  jit_catch_t known = jit_catch_at(w->reg, pc);
+  w->caught = known == JIT_CATCH_CAUGHT;
+  return known == JIT_CATCH_PASSES && w->compiled <= JIT_CATCH_WALK_FRAMES ? _URC_NO_REASON : _URC_NORMAL_STOP;
+}
+
+static bool jit_catch_walk(struct jit_code_registry *reg) {
+  jit_catch_walk_t w = { .reg = reg };
+  jit_register_all(reg);
+  _Unwind_Backtrace(jit_catch_frame, &w);
+  return w.caught;
+}
+
+#endif
+
+uint64_t sv_jit_throw_captures;
+
+static bool jit_throw_is_caught(ant_t *js) {
+  sv_jit_ctx_t *jc = js->jit_ctx;
+  bool caught = jc && jc->code_registry && jit_catch_walk(jc->code_registry) && !js->terminating;
+  sv_jit_throw_captures += !caught;
+  return caught;
+}
+
 int sv_jit_collect_activations(sv_vm_t *vm, sv_jit_activation_t **acts, int cap, int limit) {
   ant_t *js = vm ? vm->js : NULL;
   sv_jit_ctx_t *jc = js ? js->jit_ctx : NULL;
@@ -760,4 +860,18 @@ int sv_jit_collect_activations(sv_vm_t *vm, sv_jit_activation_t **acts, int cap,
   return 0;
 }
 
+uint64_t sv_jit_throw_captures;
+
+static bool jit_throw_is_caught(ant_t *js) {
+  (void)js;
+  sv_jit_throw_captures++;
+  return false;
+}
+
 #endif
+
+ant_value_t sv_jit_throw(ant_t *js, ant_value_t value) {
+  if (is_err(value) || is_object_type(value)) return js_throw_unless(js, value, jit_throw_is_caught);
+  if (jit_throw_is_caught(js)) return Ant_Exception_Raise(js, value, Ant_Value_Undefined);
+  return js_throw(js, value);
+}

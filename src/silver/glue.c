@@ -13,6 +13,7 @@
 #include "tokens.h"
 #include "silver/glue.h"
 #include "silver/jit.h"
+#include "silver/stack_trace.h"
 #include "modules/regex.h"
 #include "modules/collections.h"
 
@@ -593,7 +594,7 @@ ant_value_t jit_helper_eq(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) 
 }
 
 ant_value_t jit_helper_throw(sv_vm_t *vm, ant_t *js, ant_value_t val) {
-  return js_throw(js, val);
+  return sv_jit_throw(js, val);
 }
 
 ant_value_t jit_helper_ne(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
