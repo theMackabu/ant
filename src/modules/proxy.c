@@ -1132,7 +1132,7 @@ static inline bool proxy_store_dense_index(ant_t *js, ant_value_t target, const 
   if (!parse_array_index(key, key_len, (ant_offset_t)len + 1, &idx)) return false;
   if (idx < len) {
     if (is_empty_slot(ptr->u.array.data[idx])) return false;
-  } else if (idx >= ptr->u.array.cap || !array_proto_chain_plain(js, ptr) || array_length_readonly(js, target)) return false;
+  } else if (idx >= ptr->u.array.cap || !array_proto_chain_plain(js, ptr)) return false;
 
   dense_set_owned(js, (ant_offset_t)(uintptr_t)ptr, (ant_offset_t)idx, value);
   if (idx == len) ptr->u.array.len = len + 1;
