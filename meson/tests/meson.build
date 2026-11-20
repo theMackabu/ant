@@ -16,6 +16,7 @@ libant_tests = [
   'gc-shape-refs',
   'gc-exact-edges',
   'gc-job-roots',
+  'gc-parallel-stack',
   'gc-epoch-wrap',
   'gc-untrusted-string-words',
   'gc-pin-permanent-oom',
