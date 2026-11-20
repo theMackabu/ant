@@ -1115,7 +1115,7 @@ static bool opt_reconcile_back_edge(opt_builder_t *b, uint32_t target) {
       continue;
     }
     if (at_header->node != IR_NONE) {
-      if (here->node != at_header->node) return opt_fail(b, "loop-invariant-changed");
+      if (here->node != at_header->node && !(at_header->in_sync && opt_slot_in_memory(here))) return opt_fail(b, "loop-invariant-changed");
       continue;
     }
     if (!opt_slot_in_memory(here)) return opt_fail(b, "loop-invariant-changed");

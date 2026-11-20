@@ -389,6 +389,7 @@ export function targets() {
     'test_opt_inline_alloc.cjs',
     'test_opt_int_mod.cjs',
     'test_opt_learned_shapes.cjs',
+    'test_opt_loop_in_finally_parameter.cjs',
     'test_opt_math_and_checks.cjs',
     'test_opt_named_storage.cjs',
     'test_opt_negative_infinity.cjs',
