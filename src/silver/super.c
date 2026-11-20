@@ -185,11 +185,11 @@ static bool Super_TryBindPut(
   bool megamorphic = same_base && (exhausted || (ic->shape_ref_mask & SV_IC_POLY_MEGA)) && own->type_tag == kTypeObject;
   if (megamorphic) sv_pf_poly_free(js, ic);
   Super_BindPut(js, ic, megamorphic ? SV_SUPER_PUT_IC_DATA_ANY_SHAPE : SV_SUPER_PUT_IC_DATA, own->shape, base->shape, (uint32_t)slot, 0);
-  if (!megamorphic && !(ic->shape_ref_mask & SV_IC_HAS_PUT_POLY) && Super_AddIsCacheable(own, before, atom))
+  bool appends = !megamorphic && before && !ant_shape_is_dictionary(before) && Super_AddsSlot(own, before, atom, (uint32_t)slot);
+  if (appends && !(ic->shape_ref_mask & SV_IC_HAS_PUT_POLY) && Super_AddIsCacheable(own, before, atom))
     sv_ic_set_shape_ref(js, ic, &ic->guard.super_put.add_from_shape, SV_IC_SHAPE_REF_SUPER_ADD_FROM, before);
   
-  if (megamorphic || !records_add || !before || ant_shape_is_dictionary(before)) return true;
-  if (!Super_AddsSlot(own, before, atom, (uint32_t)slot)) return true;
+  if (!appends || !records_add) return true;
   uintptr_t proto = sv_add_proto_key(js, own);
   if (proto) sv_pf_poly_keep(js, ic, before, own->shape, (uint32_t)slot, js->ic.epoch, proto, true);
   
