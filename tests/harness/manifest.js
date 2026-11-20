@@ -95,6 +95,7 @@ export function targets() {
     'test_array_proto_abort_regexp.mjs',
     'test_object_spread_large_arrays.cjs',
     'test_date_to_temporal_instant.cjs',
+    'test_eval_cache_shared_scope.cjs',
     'test_eval_lazy_variable_env.cjs',
     'test_event_prototype_getters.cjs',
     'test_eventsource_handlers.cjs',
