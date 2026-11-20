@@ -370,6 +370,7 @@ export function targets() {
     'test_message_port.mjs',
     'test_missing_property_cache.cjs',
     'test_module_async_error_boundaries.cjs',
+    'test_module_namespace_integrity.mjs',
     'test_napi_clear_exception.cjs',
     'test_navigator_locks_threads.cjs',
     'test_native_completion_errors.cjs',

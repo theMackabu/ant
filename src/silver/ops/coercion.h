@@ -254,8 +254,12 @@ static inline ant_value_t sv_op_export_all(sv_vm_t *vm, ant_t *js) {
   size_t key_len = 0;
   ant_value_t value = Ant_Value_Undefined;
 
+  ant_value_t target = js_module_eval_active_ns(js);
   while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
-    ant_value_t export_res = sv_module_export_cstr(js, key, key_len, value);
+    ant_value_t declared;
+    if (key_len == 7 && memcmp(key, "default", 7) == 0) continue;
+    if (is_object_type(target) && js_try_get_own_data_prop(js, target, key, key_len, &declared)) continue;
+    ant_value_t export_res = sv_module_export_to_ns(js, target, key, key_len, value);
     if (is_err(export_res)) { js_prop_iter_end(&iter); vm->sp--; return export_res; }
   }
   
