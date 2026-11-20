@@ -254,7 +254,11 @@ __attribute__((always_inline))
 static inline bool sv_construct_seeds_receiver(ant_value_t func, ant_value_t new_target) {
   if (vtype(func) != kTypeFunction || vtype(new_target) != kTypeFunction) return false;
   const sv_closure_t *closure = js_func_closure(func);
-  return closure->func && !closure->func->is_derived_ctor && !(closure->call_flags & SV_CALL_IS_DEFAULT_CTOR);
+  if (closure->func && !closure->func->is_derived_ctor && !(closure->call_flags & SV_CALL_IS_DEFAULT_CTOR)) return true;
+  if (!closure->func || (closure->call_flags & (SV_CALL_IS_ARROW | SV_CALL_IS_UNCURRY | SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))) return false;
+  const sv_closure_t *target = js_func_closure(new_target);
+  if (target->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS)) return false;
+  return (target->call_flags & SV_CALL_IS_DEFAULT_CTOR) || (target->func && target->func->is_class_ctor);
 }
 
 static inline ant_value_t sv_call_resolve_bound(

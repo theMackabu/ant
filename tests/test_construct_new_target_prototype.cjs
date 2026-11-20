@@ -135,4 +135,25 @@ for (let round = 0; round < 400; round++) {
   assert.strictEqual(Object.getPrototypeOf(Math.floor), Function.prototype);
 }
 
+{
+  class Seen { constructor() { this.seen = Object.getPrototypeOf(this); } }
+  class Inner extends Seen { constructor() { super(); this.inner = 1; } }
+  class Forwarding extends Inner {}
+  class Outer extends Inner { constructor() { return Reflect.construct(Inner, [], new.target); } }
+  class Leaf extends Outer {}
+  class ViaDefault extends Inner { constructor() { return Reflect.construct(Forwarding, [], new.target); } }
+  const boundInner = Inner.bind(null);
+  class ViaBound extends Inner { constructor() { return Reflect.construct(boundInner, [], new.target); } }
+  for (let round = 0; round < 400; round++) {
+    for (const C of [Outer, Leaf, ViaDefault, ViaBound]) {
+      const made = new C();
+      assert.strictEqual(made.seen, C.prototype);
+      assert.strictEqual(Object.getPrototypeOf(made), C.prototype);
+      assert.strictEqual(made.inner, 1);
+    }
+    assert.strictEqual(Reflect.construct(Inner, [], Seen).seen, Seen.prototype);
+    assert.strictEqual(Reflect.construct(Inner, [], boundInner).seen, Seen.prototype);
+  }
+}
+
 console.log('ok');
