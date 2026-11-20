@@ -45,6 +45,7 @@ static constexpr uint32_t SV_JIT_WARM_CALLS = SV_JIT_THRESHOLD / 2;
 
 static constexpr uint8_t SV_TFB_CLASS_MASK = SV_TFB_NUM | SV_TFB_STR | SV_TFB_BOOL | SV_TFB_OTHER;
 static constexpr ant_value_t SV_JIT_RETRY_INTERP = NANBOX_TAG(kTypeError) | 1;
+static constexpr ant_value_t SV_JIT_RESUMED = ANT_SENTINEL_TAG | 0xBA112ULL;
 
 static_assert(
   SV_TFB_SPEC_MIN_SAMPLES <= (SV_TFB_SPEC_COUNT_MASK >> SV_TFB_SPEC_COUNT_SHIFT),

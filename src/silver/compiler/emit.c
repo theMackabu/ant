@@ -339,6 +339,7 @@ static bool atom_index_reserve(sv_compiler_t *c) {
 }
 
 int add_atom(sv_compiler_t *c, const char *str, uint32_t len) {
+  if (is_ident_str(str, len, "arguments", 9)) note_eval_reads_arguments(c);
   const char *interned = intern_string(c->js, str, (size_t)len);
   const char *stored = interned;
   
