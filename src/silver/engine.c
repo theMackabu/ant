@@ -1513,6 +1513,46 @@ static void sv_resume_finally_entry(sv_vm_t *vm, sv_frame_t *frame, sv_func_t *f
   if (saved->kind == SV_COMPLETION_JUMP) frame->completion.jump_ip = func->code + saved->target;
 }
 
+ant_value_t sv_frame_resume(
+  sv_vm_t *vm, sv_frame_t *frame, int off,
+  ant_value_t *vstack, int vstack_sp,
+  ant_value_t *params, int n_params,
+  ant_value_t *locals, int n_locals,
+  sv_jit_finally_t *finally
+) {
+  sv_func_t *func = frame->func;
+  int rp = n_params < func->param_count ? n_params : func->param_count;
+  int rl = n_locals < func->max_locals ? n_locals : func->max_locals;
+
+  for (int i = 0; i < rp; i++) frame->bp[i] = params[i];
+  for (int i = 0; i < rl; i++) frame->lp[i] = locals[i];
+
+  sv_rebase_open_upvalues(&vm->open_upvalues, params, frame->bp, (size_t)rp);
+  sv_rebase_open_upvalues(&vm->open_upvalues, locals, frame->lp, (size_t)rl);
+  if (!is_object_type(frame->arguments_obj) && is_object_type(vm->jit.resume.arguments_obj)) frame->arguments_obj = vm->jit.resume.arguments_obj;
+
+  int base_sp = (int)(frame->lp + func->max_locals - vm->stack);
+  vm->sp = base_sp;
+  for (int i = 0; i < vstack_sp; i++) vm->stack[vm->sp++] = vstack[i];
+
+  sv_frame_reset_handlers(vm, frame);
+  frame->completion = (sv_completion_t){.kind = SV_COMPLETION_NONE, .value = Ant_Value_Undefined};
+  frame->ip = func->code + off;
+
+  vm->jit.resume.ip_offset = off;
+  vm->jit.resume.finally = finally;
+  sv_frame_push_try_handlers(vm, frame, func, off, base_sp);
+  if (finally) sv_resume_finally_entry(vm, frame, func);
+
+  if (vm->jit.resume.throwing && vm->sp > base_sp) {
+    frame->completion.kind = SV_COMPLETION_THROW;
+    frame->completion.value = vm->stack[vm->sp - 1];
+  }
+
+  sv_clear_jit_resume(vm);
+  return SV_JIT_RESUMED;
+}
+
 void sv_frame_push_try_handlers(sv_vm_t *vm, sv_frame_t *frame, sv_func_t *func, int off, int base_sp) {
   const sv_try_table_t *table = sv_func_try_table(func);
   
