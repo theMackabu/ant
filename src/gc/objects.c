@@ -374,7 +374,7 @@ static void gc_sweep_young_closures(ant_t *js) {
   }
   
   js->young_closure_len = 0;
-  js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
+  js->young_closure_trigger = js->gc.closure_nursery;
 
   js->young_closures = shrink_ptr_roster(
     js->young_closures, &js->young_closure_cap,
@@ -1955,7 +1955,7 @@ void gc_pin_existing_objects(ant_t *js) {
 
   js->young_closure_len = 0;
   js->young_upvalue_len = 0;
-  js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
+  js->young_closure_trigger = js->gc.closure_nursery;
 
   js->gc.last_live = js->obj_arena.live_count;
   js->old_live_count = js->obj_arena.live_count;
@@ -2076,7 +2076,7 @@ uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
 
   js->young_closure_len = 0;
   js->young_upvalue_len = 0;
-  js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
+  js->young_closure_trigger = js->gc.closure_nursery;
 
   gc_clear_dead_call_targets(js);
   sv_code_units_sweep(js, js->gc.epoch);
