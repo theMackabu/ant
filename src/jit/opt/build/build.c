@@ -4511,7 +4511,94 @@ static opt_flow_t opt_build_array_init(opt_builder_t *b, const uint8_t *ip) {
   return OPT_FLOW_CONTINUE;
 }
 
+static bool opt_super_absent_above(opt_builder_t *b, ant_shape_t *base_shape, const sv_atom_t *atom) {
+  ant_value_t value = ant_shape_proto(base_shape);
+  for (uint32_t depth = 0; depth < OPT_MAX_PROTOTYPE_DEPTH; depth++) {
+    if (vtype(value) == kTypeNull) return true;
+    ant_object_t *link = opt_prototype_object(b->js, value);
+    if (!link || link->flags.is_exotic || !link->shape || ant_shape_is_dictionary(link->shape)) return false;
+    if (ant_shape_lookup_interned(link->shape, atom->str) >= 0) return false;
+    if (!jit_snapshot_shape(b->js, link->shape) || !opt_retain(b, value)) return false;
+    ir_node_id_t address = opt_typed_constant(b, (uint64_t)(uintptr_t)link, OPT_REPR_POINTER);
+    opt_check_shape(b, opt_constant(b, value), address, link->shape);
+    value = ant_object_proto(link);
+  }
+  return false;
+}
+
+static bool opt_super_store_plan(opt_builder_t *b, const sv_ic_entry_t *ic, const sv_atom_t *atom, bool *held) {
+  ant_shape_t *base_shape = ic->guard.super_put.base_shape, *shape = ic->cached_shape;
+  if (ic->super_put_kind != SV_SUPER_PUT_IC_DATA || (ic->shape_ref_mask & (SV_IC_HAS_PUT_POLY | SV_IC_POLY_MEGA))) return false;
+  if (!shape || !base_shape || ant_shape_is_dictionary(shape) || ant_shape_is_dictionary(base_shape)) return false;
+  if (ic->cached_index >= ant_shape_count(shape) || !opt_field_ok(b->js, shape, ic->cached_index, atom, true)) return false;
+  
+  *held = ant_shape_lookup_interned(base_shape, atom->str) >= 0;
+  return jit_snapshot_shape(b->js, shape) && jit_snapshot_shape(b->js, base_shape);
+}
+
+static ir_node_id_t opt_super_base(opt_builder_t *b, ir_node_id_t home, ir_node_id_t *address) {
+  ir_node_id_t home_address = opt_object_address(b, &home);
+  if (home_address == IR_NONE) return IR_NONE;
+  ir_node_id_t base = opt_emit(b, ir_op(IR_OP_LOAD_PROTOTYPE), &home_address, 1, OPT_REPR_TAGGED);
+  *address = opt_object_address(b, &base);
+  return *address == IR_NONE ? IR_NONE : base;
+}
+
+static bool opt_super_may_inline(const opt_builder_t *b, const sv_ic_entry_t *ic) {
+  const sv_func_t *func = b->func;
+  if (!ic || ic->epoch != b->js->ic.epoch || !func->is_method || func->is_class_ctor) return false;
+  return opt_may_speculate(b, OPT_EXIT_BAD_SHAPE) && opt_may_speculate(b, OPT_EXIT_BAD_TYPE);
+}
+
+static bool opt_build_super_store(opt_builder_t *b, const sv_ic_entry_t *ic, const sv_atom_t *atom) {
+  bool held = false;
+  if (!opt_super_may_inline(b, ic) || !opt_super_store_plan(b, ic, atom, &held)) return false;
+  
+  ir_node_id_t receiver = opt_tagged(b, opt_peek(b, 2)), value = opt_tagged(b, opt_peek(b, 0));
+  ir_node_id_t base_address, base = opt_super_base(b, opt_tagged(b, opt_peek(b, 1)), &base_address);
+  if (base == IR_NONE) return false;
+  
+  opt_check_shape(b, base, base_address, ic->guard.super_put.base_shape);
+  if (!held && !opt_super_absent_above(b, ic->guard.super_put.base_shape, atom)) return false;
+  
+  ir_node_id_t address = opt_object_address(b, &receiver);
+  if (address == IR_NONE) return false;
+  receiver = opt_check_shape(b, receiver, address, ic->cached_shape);
+  opt_store_named(b, receiver, address, value, ic->cached_index, ic->cached_shape);
+  
+  opt_drop(b, 3);
+  opt_push(b, value);
+  return true;
+}
+
+static bool opt_build_super_load(opt_builder_t *b, const sv_ic_entry_t *ic, const sv_atom_t *atom) {
+  if (!opt_super_may_inline(b, ic)) return false;
+  opt_field_case_t cases[OPT_MAX_FIELD_SHAPES];
+  if (opt_field_cases(b, ic, atom, false, cases) != 1 || cases[0].getter || !opt_field_case_retain(b, &cases[0])) return false;
+  
+  ir_node_id_t base_address, base = opt_super_base(b, opt_tagged(b, opt_peek(b, 0)), &base_address);
+  if (base == IR_NONE) return false;
+  
+  base = opt_check_shape(b, base, base_address, cases[0].shape);
+  ir_node_id_t loaded = opt_named_access(b, base, base_address, IR_NONE, &cases[0], NULL, NULL);
+  
+  opt_drop(b, 2);
+  opt_push(b, loaded);
+  return true;
+}
+
 static opt_flow_t opt_build_super_access(opt_builder_t *b, bool put, bool field) {
+  if (field) {
+    const uint8_t *ip = b->func->code + b->pc;
+    uint32_t atom_index = sv_get_u32(ip + 1);
+    uint16_t ic_index = sv_get_u16(ip + 5);
+    const sv_ic_entry_t *ic = b->func->ic_slots && ic_index < b->func->ic_count ? &b->func->ic_slots[ic_index] : NULL;
+    if (atom_index < (uint32_t)b->func->atom_count) {
+      const sv_atom_t *atom = &b->func->atoms[atom_index];
+      if (put ? opt_build_super_store(b, ic, atom) : opt_build_super_load(b, ic, atom)) return OPT_FLOW_CONTINUE;
+    }
+  }
+  
   opt_rt_site_t *at = code_arena_bump(b->js, sizeof *at);
   if (!at) return OPT_FLOW_GENERIC;
   *at = (opt_rt_site_t){.func = b->func, .bc_off = b->pc};
