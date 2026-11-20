@@ -91,6 +91,16 @@ accepts(['o', 'b'], [
   '(b)', '(b, o)', '((b), (o))', '(b = 1)', '(b = 1, o.x)', '([b] = [1])', '({ b } = o)', '(o.f)(b)', '(function () {})()', '(class {})',
 ]);
 
+rejects(['o', 'F', 't'], [
+  'o?.t`a`', 'o?.[1]`a`', 'o?.()`a`', 'o?.a.b`c`', 'o?.a\n`c`', 'o?.a(1)`c`', 'o?.a[0]`c`', 'o.a?.b.c`d`', 'o?.a?.b`c`',
+  'new o?.a()', 'new o?.a', 'new o.a?.b()', 'new o?.[0]', 'new o?.()', 'new F?.a',
+]);
+
+accepts(['o', 'F', 't'], [
+  '(o?.t)`a`', '(o?.a.b)`c`', 'o?.a(`x`)', 'o?.[`x`]', 'o?.a(t`x`)', 'o.t`a`', 'o.a.b`c`?.d', 't`a`?.b',
+  'new F()?.a', 'new (o?.a)()', 'new (o?.a)', 'new F().a?.b',
+]);
+
 {
   const run = (src, ...args) => new Function('o', 'q', src)(...args);
   assert.strictEqual(run('(o?.a).b = 5; return o.a.b', { a: { b: 1 } }), 5);
