@@ -102,6 +102,7 @@ typedef struct {
   uint32_t inlined_instructions;
   uint32_t inlined_calls;
   bool closure_pinned;
+  bool assumes_settled_receivers;
   ir_node_vec_t object_like;
   ir_node_vec_t likely_nodes;
   OPT_VEC(ant_value_t) likely_values;
@@ -5388,16 +5389,31 @@ static opt_flow_t opt_build_import(opt_builder_t *b, const uint8_t *ip, sv_op_t 
 }
 
 static bool opt_super_receiver_unsettled(const opt_builder_t *b) {
-  return !b->inline_call && sv_func_deferred_receiver(b->func);
+  for (; b->inline_call; b = b->inline_call->caller) {
+    const opt_inline_t *call = b->inline_call;
+    if (!call->construct || call->receiver != call->caller->frame.this_value) return false;
+  }
+  return true;
 }
 
-static void opt_super_receiver_guard(opt_builder_t *b, ir_node_id_t receiver) {
-  if (opt_super_receiver_unsettled(b)) opt_emit_checked(b, ir_op(IR_OP_CHECK_OBJECT), &receiver, 1, OPT_REPR_NONE);
+static ir_node_id_t opt_super_receiver_settle(opt_builder_t *b, const sv_func_t *target, ir_node_id_t receiver, ir_node_id_t new_target) {
+  if ((target && target->is_derived_ctor) || !opt_super_receiver_unsettled(b)) return receiver;
+  if (!b->js->construct_pending_used) {
+    b->ctx->assumes_settled_receivers = true;
+    return receiver;
+  }
+  if (opt_may_speculate(b, OPT_EXIT_NOT_OBJECT)) {
+    opt_emit_checked(b, ir_op(IR_OP_CHECK_RECEIVER), &receiver, 1, OPT_REPR_NONE);
+    return receiver;
+  }
+  ir_node_id_t inputs[2] = {receiver, new_target};
+  ir_node_id_t settled = opt_runtime_call(b, (uintptr_t)opt_rt_settle_receiver, 0, inputs, 2, false, false);
+  opt_forget_memory(b);
+  return settled;
 }
 
 static ant_value_t opt_super_call_parents(const opt_builder_t *b, ir_node_id_t home_node, opt_super_parents_t *chain) {
   if (!opt_may_speculate(b, OPT_EXIT_BAD_SHAPE) || !opt_may_speculate(b, OPT_EXIT_BAD_TYPE)) return 0;
-  if (opt_super_receiver_unsettled(b) && !opt_may_speculate(b, OPT_EXIT_NOT_OBJECT)) return 0;
   ant_value_t home = opt_likely_value(b, home_node);
   const sv_closure_t *self = b->ctx->closure;
   if (!home && !b->inline_call && self && self->func == b->func && (self->call_flags & SV_CALL_HAS_SUPER)) home = self->super_val;
@@ -5425,17 +5441,17 @@ static bool opt_try_super_inline(opt_builder_t *b, bool forward, const ir_node_i
     return false;
   }
 
-  opt_super_receiver_guard(b, inputs[0]);
   opt_super_parents_guard(b, inputs[1], home, &chain);
+  ir_node_id_t receiver = opt_super_receiver_settle(b, target, inputs[0], inputs[2]);
   if (!target) {
     opt_drop(b, operands);
-    opt_push(b, inputs[0]);
+    opt_push(b, receiver);
     *flow = OPT_FLOW_CONTINUE;
     return true;
   }
   ir_node_id_t joined[OPT_MAX_CALL_ARGS];
   args = opt_super_arguments(b, &chain, args, &argc, joined);
-  opt_inline_run(b, target, opt_constant(b, chain.callee), inputs[0], inputs[2], true, false, args, argc, operands, count, flow);
+  opt_inline_run(b, target, opt_constant(b, chain.callee), receiver, inputs[2], true, false, args, argc, operands, count, flow);
   return true;
 }
 
@@ -5445,12 +5461,11 @@ static ir_node_id_t opt_try_super_direct(opt_builder_t *b, const ir_node_id_t *i
   if (!home || !chain.closure || !opt_bound_arguments_fit(chain.bound_count, argc) || !opt_super_parents_retain(b, &chain)) return IR_NONE;
   for (uint32_t i = 0; i < argc; i++)
     if (opt_is_any_virtual_arguments(b, inputs[3 + i])) return IR_NONE;
-  opt_super_receiver_guard(b, inputs[0]);
   opt_super_parents_guard(b, inputs[1], home, &chain);
   ir_node_id_t operands[3 + OPT_MAX_CALL_ARGS], joined[OPT_MAX_CALL_ARGS];
   const ir_node_id_t *args = opt_super_arguments(b, &chain, inputs + 3, &argc, joined);
   operands[0] = opt_constant(b, chain.callee);
-  operands[1] = inputs[0];
+  operands[1] = opt_super_receiver_settle(b, chain.closure->func, inputs[0], inputs[2]);
   operands[2] = inputs[2];
   for (uint32_t i = 0; i < argc; i++) operands[3 + i] = args[i];
   ir_op_t call = ir_op(IR_OP_CALL_DIRECT);
@@ -6834,7 +6849,7 @@ bool opt_build_graph(
     for (uint32_t i = 0; i < no_virtual_count; i++) opt_vec_push(&graph->arena, &ctx.no_virtual_arguments, no_virtual[i]);
     *failure = (opt_build_failure_t){0};
     bool ok = opt_build_attempt(js, func, &ctx, graph, failure);
-    if (stats) *stats = (opt_build_stats_t){ctx.inlined_calls, ctx.closure_pinned};
+    if (stats) *stats = (opt_build_stats_t){ctx.inlined_calls, ctx.closure_pinned, ctx.assumes_settled_receivers};
     if (!ok && !ctx.retry && ctx.built_catch_entries && attempt < 8) {
       ctx.retry = true;
       no_catch_entries = true;

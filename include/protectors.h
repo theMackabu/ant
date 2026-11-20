@@ -39,6 +39,7 @@ static inline void ant_protector_rearm(ant_t *js, uint32_t protectors) {
 }
 
 static inline void ant_prototype_write_epoch_bump(ant_t *js) {
+  js->construct_dirty_seed = js->construct_seed;
   if (++js->prototype_write_epoch != 0) return;
   ant_ic_epoch_bump(js);
   js->prototype_write_epoch = 1;

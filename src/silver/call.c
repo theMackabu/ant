@@ -286,7 +286,7 @@ static __attribute__((noinline)) ant_value_t sv_construct_default_prototype(
 
 static ant_value_t sv_construct_ordinary(
   sv_vm_t *vm, ant_t *js, ant_value_t func,
-  ant_value_t *args, int argc, ant_value_t new_target
+  ant_value_t *args, int argc, ant_value_t new_target, bool pending
 ) {
   ant_value_t effective_new_target = new_target;
   bool proxied = vtype(new_target) == kTypeObject && is_proxy(new_target);
@@ -316,13 +316,17 @@ static ant_value_t sv_construct_ordinary(
     result = sv_vm_call(vm, js, func, seed, args, argc, &ctor_this, effective_new_target);
     js->construct_proxy_target = outer_target;
     js->construct_proxy_proto = outer_proto;
+  } else if (pending) {
+    sv_construct_pending_t outer = sv_construct_pending_enter(js, seed, true);
+    result = sv_vm_call(vm, js, func, seed, args, argc, &ctor_this, effective_new_target);
+    sv_construct_pending_leave(js, &outer);
   } else result = sv_vm_call(vm, js, func, seed, args, argc, &ctor_this, effective_new_target);
 
   if (is_err(result)) return result;
   return sv_construct_result(result, ctor_this, seed);
 }
 
-static bool sv_construct_defers_receiver(ant_value_t func, ant_value_t new_target) {
+static bool sv_construct_runs_super(ant_value_t func) {
   const sv_closure_t *closure = js_func_closure(func);
   uint32_t flags = closure->call_flags;
 
@@ -330,21 +334,30 @@ static bool sv_construct_defers_receiver(ant_value_t func, ant_value_t new_targe
   bool forwards = (flags & SV_CALL_IS_DEFAULT_CTOR) && (flags & SV_CALL_HAS_SUPER);
   bool derived = fn && fn->is_derived_ctor && !fn->is_generator && !fn->is_async;
 
-  if ((flags & (SV_CALL_IS_ARROW | SV_CALL_IS_UNCURRY)) || (!forwards && !derived)) return false;
-  return !sv_new_target_is_class(new_target);
+  return !(flags & (SV_CALL_IS_ARROW | SV_CALL_IS_UNCURRY)) && (forwards || derived);
 }
 
-static __attribute__((noinline)) ant_value_t sv_construct_deferred(
+static bool sv_new_target_prototype_is_plain(ant_t *js, ant_value_t new_target) {
+  if (vtype(new_target) != kTypeFunction) return false;
+  if (js_func_closure(new_target)->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS)) return false;
+  ant_value_t proto;
+  return sv_new_target_plain_prototype(js, new_target, &proto);
+}
+
+static __attribute__((noinline)) ant_value_t sv_construct_unsettled(
   sv_vm_t *vm, ant_t *js, ant_value_t func,
   ant_value_t *args, int argc, ant_value_t new_target
 ) {
   if (js_interrupt_pending(js)) return js_interrupt_raise(js);
   if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
 
+  ant_value_t seed = Ant_Object_CreateBare(js);
+  if (is_err(seed)) return seed;
+
   sv_call_plan_t plan;
-  ant_value_t ctor_this = Ant_Value_Undefined;
+  ant_value_t ctor_this = seed;
   ant_value_t err = sv_prepare_call(
-    vm, js, func, Ant_Value_Undefined, args, argc,
+    vm, js, func, seed, args, argc,
     &ctor_this, SV_CALL_MODE_CONSTRUCT, new_target, &plan
   );
 
@@ -355,16 +368,27 @@ static __attribute__((noinline)) ant_value_t sv_construct_deferred(
     sv_call_cleanup(js, &plan.ctx);
     return result;
   }
-  if (plan.kind != SV_CALL_EXEC_CLOSURE || !sv_func_note_deferred_receiver(plan.closure->func)) {
+  if (plan.kind != SV_CALL_EXEC_CLOSURE) {
     sv_call_cleanup(js, &plan.ctx);
-    return sv_construct_ordinary(vm, js, func, args, argc, new_target);
+    return sv_construct_ordinary(vm, js, func, args, argc, new_target, false);
   }
 
+  sv_construct_pending_t outer = sv_construct_pending_enter(js, seed, false);
   ant_value_t result = sv_call_resolve_closure(vm, js, plan.closure, plan.func, &plan.ctx, &ctor_this);
+  sv_construct_pending_leave(js, &outer);
   sv_vm_maybe_checkpoint_microtasks(js);
 
   if (is_err(result)) return result;
-  return sv_construct_result(result, ctor_this, Ant_Value_Undefined);
+  return sv_construct_result(result, ctor_this, seed);
+}
+
+static __attribute__((noinline)) ant_value_t sv_construct_foreign(
+  sv_vm_t *vm, ant_t *js, ant_value_t func,
+  ant_value_t *args, int argc, ant_value_t new_target
+) {
+  if (sv_new_target_is_class(new_target)) return sv_construct_ordinary(vm, js, func, args, argc, new_target, false);
+  if (sv_new_target_prototype_is_plain(js, new_target)) return sv_construct_ordinary(vm, js, func, args, argc, new_target, true);
+  return sv_construct_unsettled(vm, js, func, args, argc, new_target);
 }
 
 ant_value_t sv_construct(
@@ -374,10 +398,77 @@ ant_value_t sv_construct(
   if (vtype(func) == kTypeObject && is_proxy(func))
     return js_proxy_construct(js, func, args, argc, new_target);
 
-  if (vtype(func) == kTypeFunction && new_target != func && sv_construct_defers_receiver(func, new_target))
-    return sv_construct_deferred(vm, js, func, args, argc, new_target);
+  if (vtype(func) == kTypeFunction && new_target != func && sv_construct_runs_super(func))
+    return sv_construct_foreign(vm, js, func, args, argc, new_target);
 
-  return sv_construct_ordinary(vm, js, func, args, argc, new_target);
+  return sv_construct_ordinary(vm, js, func, args, argc, new_target, false);
+}
+
+__attribute__((noinline, cold)) void sv_construct_pending_first(ant_t *js) {
+  js->construct_pending_used = true;
+  sv_jit_drop_unsettled_receiver_code(js);
+}
+
+ant_value_t sv_construct_settle(ant_t *js, ant_value_t seed, ant_value_t new_target) {
+  js->construct_seed = 0;
+  js->construct_dirty_seed = 0;
+
+  ant_value_t proto;
+  if (vtype(new_target) == kTypeObject && is_proxy(new_target)) {
+    proto = js_getprop_fallback(js, new_target, "prototype");
+    if (is_err(proto)) return proto;
+    if (vtype(proto) == kTypeBuiltin) proto = js_cfunc_promote(js, proto);
+    if (!is_object_type(proto)) proto = js->sym.object_proto;
+  } else proto = sv_construct_prototype_from(js, new_target);
+
+  if (is_err(proto)) return proto;
+  js_set_proto_init(seed, proto);
+  return seed;
+}
+
+typedef enum {
+  SV_SUPER_BASE_PLAIN,
+  SV_SUPER_BASE_DERIVED,
+  SV_SUPER_BASE_OTHER,
+} sv_super_base_t;
+
+static sv_super_base_t sv_super_base_kind(ant_value_t parent) {
+  for (int depth = 0; depth < 4096; depth++) {
+    if (vtype(parent) != kTypeFunction) return SV_SUPER_BASE_OTHER;
+    const sv_closure_t *closure = js_func_closure(parent);
+    uint32_t flags = closure->call_flags;
+    
+    if (closure->func) {
+      uint32_t odd = SV_CALL_IS_ARROW | SV_CALL_IS_UNCURRY | SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS;
+      if ((flags & odd) || closure->func->is_generator || closure->func->is_async) return SV_SUPER_BASE_OTHER;
+      return closure->func->is_derived_ctor ? SV_SUPER_BASE_DERIVED : SV_SUPER_BASE_PLAIN;
+    }
+    if (flags == SV_CALL_IS_DEFAULT_CTOR) return SV_SUPER_BASE_PLAIN;
+    if (flags != (SV_CALL_IS_DEFAULT_CTOR | SV_CALL_HAS_SUPER)) return SV_SUPER_BASE_OTHER;
+    parent = sv_super_constructor(closure->super_val);
+  }
+  return SV_SUPER_BASE_OTHER;
+}
+
+__attribute__((noinline)) ant_value_t sv_super_construct_unsettled(
+  sv_vm_t *vm, ant_t *js, ant_value_t parent, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+) {
+  sv_super_base_t base = sv_super_base_kind(parent);
+  if (base == SV_SUPER_BASE_OTHER) {
+    js->construct_seed = 0;
+    js->construct_dirty_seed = 0;
+    return sv_construct(vm, js, parent, args, argc, new_target);
+  }
+
+  if (base == SV_SUPER_BASE_PLAIN) {
+    ant_value_t settled = sv_construct_settle(js, this_val, new_target);
+    if (is_err(settled)) return settled;
+  }
+
+  ant_value_t super_this = this_val;
+  ant_value_t result = sv_vm_call(vm, js, parent, this_val, args, argc, &super_this, new_target);
+  return is_err(result) || sv_is_construct_result(result) ? result : super_this;
 }
 
 ant_value_t sv_vm_call_explicit_this(

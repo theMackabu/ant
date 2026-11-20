@@ -120,11 +120,22 @@ static ant_value_t reflect_construct(ant_params_t) {
   if (is_err(err)) return err;
   
   ant_value_t result;
-  if (vtype(target) != kTypeFunction || (new_target != target && !sv_construct_seeds_receiver(target, new_target))) {
+  ant_value_t proto = 0;
+  sv_construct_route_t route = SV_CONSTRUCT_SEEDED;
+  if (new_target != target) route = sv_construct_route(js, target, new_target, &proto);
+  else if (vtype(target) != kTypeFunction) route = SV_CONSTRUCT_GENERIC;
+
+  if (route == SV_CONSTRUCT_GENERIC) {
     result = sv_construct(js->vm, js, target, list.args, list.argc, new_target);
   } else {
     ant_value_t effective_new_target = new_target;
-    ant_value_t proto = sv_prepare_construct_meta(js, target, new_target, &effective_new_target);
+    if (!proto) {
+      sv_closure_t *closure = js_func_closure(target);
+      bool bound = closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS);
+      proto = new_target == target && !bound
+        ? sv_construct_prototype_cached(js, target, (ant_object_t *)vptr(js_func_obj(target)), closure->func)
+        : sv_prepare_construct_meta(js, target, new_target, &effective_new_target);
+    }
     
     if (is_err(proto)) {
       Ant_ArgList_Release(&list);
@@ -135,7 +146,14 @@ static ant_value_t reflect_construct(ant_params_t) {
     if (is_object_type(proto)) js_set_proto_init(new_obj, proto);
 
     ant_value_t ctor_this = new_obj;
-    result = sv_vm_call(
+    if (__builtin_expect(route == SV_CONSTRUCT_SEEDED_PENDING, 0)) {
+      sv_construct_pending_t outer = sv_construct_pending_enter(js, new_obj, true);
+      result = sv_vm_call(
+        js->vm, js, target, new_obj, list.args,
+        list.argc, &ctor_this, effective_new_target
+      );
+      sv_construct_pending_leave(js, &outer);
+    } else result = sv_vm_call(
       js->vm, js, target, new_obj, list.args, 
       list.argc, &ctor_this, effective_new_target
     );

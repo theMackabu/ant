@@ -43,6 +43,14 @@ ant_value_t sv_construct(
   ant_value_t *args, int argc, ant_value_t new_target
 );
 
+void sv_construct_pending_first(ant_t *js);
+ant_value_t sv_construct_settle(ant_t *js, ant_value_t seed, ant_value_t new_target);
+
+ant_value_t sv_super_construct_unsettled(
+  sv_vm_t *vm, ant_t *js, ant_value_t parent, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+);
+
 ant_value_t sv_super_construct_slow(
   sv_vm_t *vm, ant_t *js, ant_value_t constructor, ant_value_t this_val,
   ant_value_t *args, int argc, ant_value_t new_target

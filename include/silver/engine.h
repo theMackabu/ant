@@ -590,7 +590,6 @@ typedef struct {
   uint32_t ctor_proto_slot;
   
   bool ctor_proto_shape_registered;
-  bool deferred_receiver;
   uint8_t poly_recompiles;
   
   struct sv_jit_await_map *jit_await_map;
