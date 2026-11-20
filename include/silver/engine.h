@@ -1189,10 +1189,6 @@ typedef struct sv_jit_osr_mark {
   bool resumed;
 } sv_jit_osr_mark_t;
 
-static inline bool sv_jit_osr_host_locals_dead(const sv_jit_osr_mark_t *mark) {
-  return mark->entry && mark->frame && !mark->borrowed && !mark->resumed;
-}
-
 typedef struct {
   uint32_t bc_off;
   uint32_t live_start;

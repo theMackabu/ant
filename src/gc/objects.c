@@ -1101,6 +1101,10 @@ static void gc_scan_frame_span(
   }}
 }
 
+static inline bool gc_osr_host_locals_dead(const sv_jit_osr_mark_t *mark) {
+  return mark->entry && mark->frame && mark->frame->func && !mark->borrowed && !mark->resumed;
+}
+
 static void gc_scan_vm_stack(ant_t *js, sv_vm_t *vm) {
   if (!vm) return;
   
@@ -1110,7 +1114,7 @@ static void gc_scan_vm_stack(ant_t *js, sv_vm_t *vm) {
   
   ant_value_t *live_end = vm->stack + vm->sp;
   for (const sv_jit_osr_mark_t *mark = vm->jit.osr_marks; mark; mark = mark->prev) {
-    if (!sv_jit_osr_host_locals_dead(mark) || !mark->frame->func) continue;
+    if (!gc_osr_host_locals_dead(mark)) continue;
     
     ant_value_t *dead = mark->frame->lp;
     ant_value_t *dead_end = dead + mark->frame->func->max_locals;
