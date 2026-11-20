@@ -40,6 +40,7 @@ export function targets() {
     'test_arraybuffer_length.cjs',
     'test_arraybuffer_release.cjs',
     'test_assert_bigint.cjs',
+    'test_assignment_binding_targets.cjs',
     'test_assert_pending_rejections.cjs',
     'test_arguments_binding.cjs',
     'test_arrow_arguments_resolution.cjs',

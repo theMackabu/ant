@@ -43,13 +43,26 @@ bool arrow_param_is_name(const sv_ast_t *node) {
   return node && (node->type == N_IDENT || ((node->type == N_UNDEF || node->type == N_GLOBAL_THIS) && node->str));
 }
 
-void push_arrow_params_from_expr(sv_parser_t *p, sv_ast_t *fn, sv_ast_t *expr) {
-  if (!fn || !expr) return;
-  arrow_param_bind_names(expr);
+static void push_arrow_param(sv_parser_t *p, sv_ast_t *fn, sv_ast_t *expr, bool top, bool last) {
+  if (expr->type == N_SEQUENCE && (top || !(expr->flags & FN_PAREN))) {
+    push_arrow_param(p, fn, expr->left, false, false);
+    push_arrow_param(p, fn, expr->right, false, last);
+    return;
+  }
   
-  if (expr->type == N_SEQUENCE) {
-    push_arrow_params_from_expr(p, fn, expr->left);
-    push_arrow_params_from_expr(p, fn, expr->right);
+  if (expr->type == N_IDENT && (top || !(expr->flags & FN_PAREN)) && !p->lx.strict && !(fn->flags & FN_ASYNC) && expr->str[0] != '#') {
+    sv_ast_list_push(p->js, &fn->args, expr);
+    return;
+  }
+  
+  arrow_param_bind_names(expr);
+  bool rest = expr->type == N_SPREAD;
+  if ((rest && (!last || (expr->flags & FN_REST_COMMA))) || !sv_binding_pattern_ok(p, expr, top)) {
+    if (!Ant_Exception_Pending(p->js)) SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Invalid destructuring assignment target");
+    return;
+  }
+  if ((fn->flags & FN_ASYNC) && ast_pattern_binds(expr, "await")) {
+    SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected reserved word");
     return;
   }
   
@@ -62,15 +75,20 @@ void push_arrow_params_from_expr(sv_parser_t *p, sv_ast_t *fn, sv_ast_t *expr) {
     return;
   }
   
-  if (expr->type == N_SPREAD) {
-    sv_ast_t *rest = mk_plain(N_REST);
-    rest->right = expr->right;
-    rest->src_off = expr->src_off;
-    sv_ast_list_push(p->js, &fn->args, rest);
+  if (rest) {
+    sv_ast_t *node = mk_plain(N_REST);
+    node->right = expr->right;
+    node->src_off = expr->src_off;
+    sv_ast_list_push(p->js, &fn->args, node);
     return;
   }
   
   sv_ast_list_push(p->js, &fn->args, expr);
+}
+
+void push_arrow_params_from_expr(sv_parser_t *p, sv_ast_t *fn, sv_ast_t *expr) {
+  if (!fn || !expr || Ant_Exception_Pending(p->js)) return;
+  push_arrow_param(p, fn, expr, !(fn->flags & FN_ASYNC), true);
 }
 
 sv_ast_t *try_parse_async_arrow(sv_parser_t *p) {
@@ -145,6 +163,7 @@ void parse_formal_params(sv_parser_t *p, sv_ast_t *fn, uint8_t close) {
       sv_ast_t *rest = mk(N_REST);
       rest->right = parse_binding_pattern(p);
       sv_ast_list_push(p->js, &fn->args, rest);
+      if (sv_lexer_next(&p->lx) != close && !Ant_Exception_Pending(p->js)) sv_parse_unexpected_token(p);
       break;
     }
     sv_ast_t *param = parse_binding_pattern(p);
