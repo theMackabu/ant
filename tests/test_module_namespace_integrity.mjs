@@ -2,6 +2,9 @@ import assert from 'node:assert';
 import * as self from './test_module_namespace_integrity.mjs';
 export * from 'data:text/javascript,export const beta = 1; export const zulu = 2;';
 
+let early;
+try { early = self.beta; } catch (error) { assert.ok(error instanceof ReferenceError); }
+assert.strictEqual(early, undefined);
 assert.strictEqual(Object.isExtensible(self), false);
 assert.deepStrictEqual(Reflect.ownKeys(self), ['alpha', 'beta', 'counter', 'default', 'zeta', 'zulu', Symbol.toStringTag]);
 assert.throws(() => { self.added = 1; }, TypeError);
@@ -12,8 +15,10 @@ assert.strictEqual(Reflect.preventExtensions(self), true);
 export function zeta() { return ++counter; }
 export let counter = 1;
 export const alpha = 'a';
+export const beta = 'own';
 export default 'd';
 
+assert.strictEqual(self.beta, 'own');
 assert.strictEqual(Object.isSealed(self), true);
 assert.strictEqual(Object.isFrozen(self), false);
 assert.deepStrictEqual(Object.keys(self), ['alpha', 'beta', 'counter', 'default', 'zeta', 'zulu']);

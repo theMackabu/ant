@@ -1,6 +1,14 @@
 'use strict';
 const assert = require('node:assert');
 
+{
+  const supplied = (method) => new Proxy([7, 8], { get(t, k, r) { return k === Symbol.iterator ? method : Reflect.get(t, k, r); } });
+  assert.deepStrictEqual(Array.from(supplied(Array.prototype.keys)), [0, 1]);
+  assert.deepStrictEqual(Array.from(supplied(Array.prototype.entries)), [[0, 7], [1, 8]]);
+  assert.deepStrictEqual(Array.from(supplied(Array.prototype.values)), [7, 8]);
+  assert.deepStrictEqual(Array.from(supplied(undefined)), [7, 8]);
+}
+
 for (const handler of [() => ({}), () => ({ get: Reflect.get })]) {
   const keyed = [7, 8, 9];
   keyed[Symbol.iterator] = Array.prototype.keys;
@@ -20,14 +28,6 @@ for (const handler of [() => ({}), () => ({ get: Reflect.get })]) {
 
   assert.deepStrictEqual(Array.from(new Proxy([7, 8, 9], handler())), [7, 8, 9]);
   assert.deepStrictEqual(Array.from(new Proxy([7, 8, 9], handler()), (v, i) => v + i), [7, 9, 11]);
-}
-
-{
-  const supplied = (method) => new Proxy([7, 8], { get(t, k, r) { return k === Symbol.iterator ? method : Reflect.get(t, k, r); } });
-  assert.deepStrictEqual(Array.from(supplied(Array.prototype.keys)), [0, 1]);
-  assert.deepStrictEqual(Array.from(supplied(Array.prototype.entries)), [[0, 7], [1, 8]]);
-  assert.deepStrictEqual(Array.from(supplied(Array.prototype.values)), [7, 8]);
-  assert.deepStrictEqual(Array.from(supplied(undefined)), [7, 8]);
 }
 
 {
