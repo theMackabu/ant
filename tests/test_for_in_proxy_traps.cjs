@@ -25,4 +25,38 @@ const assert = require('node:assert');
   assert.deepStrictEqual(seen, ['b']);
 }
 
+{
+  const keys = (o) => { const out = []; for (const k in o) out.push(k); return out; };
+  const hidden = Object.defineProperty({ shown: 1, alsoShown: 2 }, 'hidden', { value: 1, enumerable: false });
+  assert.deepStrictEqual(keys(new Proxy(hidden, { ownKeys: Reflect.ownKeys })), ['shown', 'alsoShown']);
+  assert.deepStrictEqual(keys(new Proxy(hidden, { ownKeys: () => ['hidden', 'shown', 'missing'] })), ['shown']);
+  assert.deepStrictEqual(keys(new Proxy({ get acc() { throw new Error('read'); } }, { ownKeys: Reflect.ownKeys })), ['acc']);
+  assert.deepStrictEqual(keys(new Proxy(new String('ab'), { ownKeys: Reflect.ownKeys })), ['0', '1']);
+  assert.deepStrictEqual(keys(new Proxy([5, 6], { ownKeys: Reflect.ownKeys })), ['0', '1']);
+  assert.deepStrictEqual(keys(new Proxy(new Proxy({ inner: 1 }, {}), { ownKeys: Reflect.ownKeys })), ['inner']);
+
+  const handler = { ownKeys: Reflect.ownKeys };
+  let prototypeReads = 0;
+  handler.getPrototypeOf = (target) => {
+    if (++prototypeReads === 1) handler.getOwnPropertyDescriptor = (t, k) => (k === 'b' ? { value: 2, enumerable: false, configurable: true } : Reflect.getOwnPropertyDescriptor(t, k));
+    return Reflect.getPrototypeOf(target);
+  };
+  assert.deepStrictEqual(keys(new Proxy({ a: 1, b: 2, c: 3 }, handler)), ['a', 'c']);
+
+  const lateHandler = { ownKeys: () => ['a', 'gone', 'b'] };
+  const log = [];
+  lateHandler.getPrototypeOf = (target) => {
+    log.push('proto');
+    if (log.length === 2) lateHandler.getOwnPropertyDescriptor = (t, k) => { log.push('desc ' + k); return Reflect.getOwnPropertyDescriptor(t, k); };
+    return Reflect.getPrototypeOf(target);
+  };
+  assert.deepStrictEqual(keys(new Proxy({ a: 1, b: 2 }, lateHandler)), ['a', 'b']);
+  assert.deepStrictEqual(log, ['proto', 'proto', 'desc b']);
+
+  const { proxy, revoke } = Proxy.revocable({ a: 1, b: 2 }, { ownKeys: Reflect.ownKeys, getPrototypeOf(target) { return Reflect.getPrototypeOf(target); } });
+  assert.deepStrictEqual(keys(proxy), ['a', 'b']);
+  revoke();
+  assert.throws(() => keys(proxy), TypeError);
+}
+
 console.log('ok');

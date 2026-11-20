@@ -667,6 +667,20 @@ static ant_value_t for_in_keys_collect_proxy(
   for (ant_offset_t i = 0; i < count; i++) {
     ant_value_t key = arr_get(js, keys, i);
     if (vtype(key) != kTypeString) continue;
+    ant_value_t plain;
+    if (proxy_descriptors_as_target(js, proxy, &plain)) {
+      size_t len = 0;
+      const char *bytes = js_getstr(js, key, &len);
+      prop_meta_t meta;
+      if (!lookup_string_prop_meta(js, plain, bytes, len, &meta)) {
+        ant_value_t again = proxy_get_prototype_of(js, proxy);
+        if (is_err(again)) return again;
+        continue;
+      }
+      ant_value_t added = for_in_keys_add_cstr(js, out, seen, bytes, len, meta.enumerable);
+      if (is_err(added)) return added;
+      continue;
+    }
     ant_value_t desc = js_proxy_is_host(proxy) ? Ant_Value_Null : proxy_get_own_property_descriptor(js, proxy, key);
     if (is_err(desc)) return desc;
     if (vtype(desc) == kTypeUndefined) {

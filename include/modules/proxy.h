@@ -32,6 +32,7 @@ ant_value_t proxy_is_extensible(ant_t *js, ant_value_t proxy);
 ant_value_t proxy_prevent_extensions(ant_t *js, ant_value_t proxy);
 bool proxy_enumerates_as_target(ant_t *js, ant_value_t proxy, ant_value_t *target);
 bool proxy_is_transparent(ant_t *js, ant_value_t proxy, ant_value_t *target);
+bool proxy_descriptors_as_target(ant_t *js, ant_value_t proxy, ant_value_t *target);
 ant_value_t proxy_has_val(ant_t *js, ant_value_t proxy, ant_value_t key_val);
 ant_value_t proxy_get_own_property_descriptor(ant_t *js, ant_value_t proxy, ant_value_t key_val);
 ant_value_t proxy_has_own(ant_t *js, ant_value_t proxy, ant_value_t key_val);

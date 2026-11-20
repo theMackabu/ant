@@ -362,6 +362,21 @@ bool proxy_enumerates_as_target(ant_t *js, ant_value_t proxy, ant_value_t *targe
   return true;
 }
 
+bool proxy_descriptors_as_target(ant_t *js, ant_value_t proxy, ant_value_t *target) {
+  ant_proxy_state_t *data = get_proxy_data(proxy);
+  if (!data || data->revoked || data->host || vtype(data->target) != kTypeObject) return false;
+  if (data->trap_epoch != js->ic.epoch) {
+    if (vtype(data->handler) != kTypeObject) return false;
+    proxy_trap_mask_refresh(js, data);
+    if (data->trap_epoch != js->ic.epoch) return false;
+  }
+  if (data->trap_mask & (1u << PROXY_TRAP_GET_OWN_PROPERTY_DESCRIPTOR)) return false;
+  ant_object_t *ptr = js_obj_ptr(data->target);
+  if (!ptr || ptr->flags.is_exotic || vtype(js_string_wrapper_value(data->target)) == kTypeString) return false;
+  *target = data->target;
+  return true;
+}
+
 bool proxy_is_transparent(ant_t *js, ant_value_t proxy, ant_value_t *target) {
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data || data->revoked || data->host) return false;
