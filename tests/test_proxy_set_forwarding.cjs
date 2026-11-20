@@ -80,4 +80,79 @@ function nonConfigurable(desc) {
   assert.strictEqual(Object.getOwnPropertyDescriptor(accessor, 'a').get, getter);
 }
 
+(function () {
+  'use strict';
+  const plain = [1, 2, 3];
+  const proxy = new Proxy(plain, {});
+  proxy[1] = 'b';
+  proxy[5] = 'f';
+  assert.deepStrictEqual(plain, [1, 'b', 3, , , 'f']);
+  assert.strictEqual(plain.length, 6);
+  proxy.length = 2;
+  assert.deepStrictEqual(plain, [1, 'b']);
+
+  const literal = () => [1, 2, 3];
+  const first = literal();
+  new Proxy(first, {})[0] = 'changed';
+  assert.deepStrictEqual(first, ['changed', 2, 3]);
+  assert.deepStrictEqual(literal(), [1, 2, 3]);
+
+  const frozen = Object.freeze([1, 2]);
+  assert.throws(() => { new Proxy(frozen, {})[0] = 9; }, TypeError);
+  assert.deepStrictEqual(frozen, [1, 2]);
+
+  const sealed = Object.seal([1, 2]);
+  new Proxy(sealed, {})[0] = 9;
+  assert.deepStrictEqual(sealed, [9, 2]);
+  assert.throws(() => { new Proxy(sealed, {})[2] = 9; }, TypeError);
+
+  const readonly = [1, 2];
+  Object.defineProperty(readonly, 0, { value: 1, writable: false });
+  assert.throws(() => { new Proxy(readonly, {})[0] = 9; }, TypeError);
+  assert.strictEqual(readonly[0], 1);
+
+  const seen = [];
+  const holey = [1, , 3];
+  Object.setPrototypeOf(holey, Object.create(Array.prototype, { 1: { set(v) { seen.push(v); }, configurable: true } }));
+  new Proxy(holey, {})[1] = 'through';
+  assert.deepStrictEqual(seen, ['through']);
+  assert.strictEqual(Object.hasOwn(holey, 1), false);
+
+  const accessor = [1, 2];
+  Object.defineProperty(accessor, 0, { set(v) { seen.push('own ' + v); }, configurable: true });
+  new Proxy(accessor, {})[0] = 'x';
+  assert.deepStrictEqual(seen, ['through', 'own x']);
+
+  const args = (function () { new Proxy(arguments, {})[0] = 'stored'; return arguments[0]; })('original');
+  assert.strictEqual(args, 'stored');
+
+  const typed = new Uint8Array(2);
+  new Proxy(typed, {})[0] = 300;
+  assert.strictEqual(typed[0], 44);
+
+  const nested = [1, 2];
+  new Proxy(new Proxy(nested, {}), {})[1] = 'deep';
+  assert.deepStrictEqual(nested, [1, 'deep']);
+
+  const strange = [1, 2];
+  const sp = new Proxy(strange, {});
+  sp['01'] = 'a';
+  sp['1.0'] = 'b';
+  sp['-0'] = 'c';
+  sp['4294967295'] = 'd';
+  assert.deepStrictEqual([...strange], [1, 2]);
+  assert.deepStrictEqual(Object.keys(strange), ['0', '1', '01', '1.0', '-0', '4294967295']);
+
+  const hot = [0, 0, 0];
+  const hp = new Proxy(hot, {});
+  for (let i = 0; i < 20000; i++) hp[i % 3] = i;
+  assert.deepStrictEqual(hot, [19998, 19999, 19997]);
+  Object.freeze(hot);
+  assert.throws(() => { hp[0] = -1; }, TypeError);
+
+  const receiver = Object.create(new Proxy([1, 2], {}));
+  receiver[0] = 'own';
+  assert.strictEqual(Object.hasOwn(receiver, 0), true);
+})();
+
 console.log('ok');

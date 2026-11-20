@@ -1119,6 +1119,21 @@ static ant_value_t proxy_set_own_writable(
   return result;
 }
 
+static inline bool proxy_store_dense_index(ant_t *js, ant_value_t target, const char *key, size_t key_len, ant_value_t value) {
+  ant_object_t *ptr = (ant_object_t *)vptr(target);
+  const uint16_t mask =
+    ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS | ANT_OBJECT_FLAG_FROZEN |
+    ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXOTIC | ANT_OBJECT_FLAG_ARGUMENTS;
+  if ((ptr->flags.raw & mask) != (ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS)) return false;
+  if (!ptr->u.array.data || ant_array_is_shared(ptr)) return false;
+
+  unsigned long idx = 0;
+  if (!parse_array_index(key, key_len, ptr->u.array.len, &idx)) return false;
+  if (is_empty_slot(ptr->u.array.data[idx])) return false;
+  dense_set_owned(js, (ant_offset_t)(uintptr_t)ptr, (ant_offset_t)idx, value);
+  return true;
+}
+
 ant_value_t proxy_set_with_receiver_reason(
   ant_t *js, ant_value_t proxy, const char *key, size_t key_len,
   ant_value_t value, ant_value_t receiver, bool *trapless
@@ -1133,6 +1148,7 @@ ant_value_t proxy_set_with_receiver_reason(
   if (data->host && own) return data->host->set(js, data->target, key, key_len, value);
 
   if (own && !data->host && !proxy_target_refuses_add(data->target) && proxy_handler_plain_for_set(js, data)) {
+    if (vtype(data->target) == kTypeArray && proxy_store_dense_index(js, data->target, key, key_len, value)) return Ant_Value_True;
     const char *interned = intern_string(js, key, key_len);
     ant_object_t *plain = vtype(data->target) == kTypeObject ? js_obj_ptr(data->target) : NULL;
     int32_t slot = plain && interned && is_plain_set_target(plain) ? ant_shape_lookup_interned(plain->shape, interned) : -1;
