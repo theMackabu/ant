@@ -2534,21 +2534,17 @@ static ant_value_t builtin_array_copyWithin(ant_params_t) {
   ant_offset_t doff = get_dense_buf(arr);
   ant_object_t *dense = doff ? frozen : NULL;
   if (dense && array_dense_covers(dense, len) && (!dense->flags.may_have_holes || array_keeps_holes(js, dense))) {
-    bool holes = false;
     if (start < target) {
       for (int i = count - 1; i >= 0; i--) {
         ant_value_t v = dense_get(doff, (ant_offset_t)(start + i));
-        holes |= is_empty_slot(v);
         dense_set_owned(js, doff, (ant_offset_t)(target + i), v);
       }
     } else {
       for (int i = 0; i < count; i++) {
         ant_value_t v = dense_get(doff, (ant_offset_t)(start + i));
-        holes |= is_empty_slot(v);
         dense_set_owned(js, doff, (ant_offset_t)(target + i), v);
       }
     }
-    if (holes) array_mark_may_have_holes(arr);
     return arr;
   }
 
