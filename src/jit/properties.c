@@ -72,40 +72,32 @@ void mir_emit_ic_obj_epoch_guard(
 }
 
 
-static void mir_emit_holder_protector_invalidation(
-    MIR_context_t ctx, MIR_item_t fn, sv_atom_t *atom, int bc_off, uint16_t ic_idx,
-    MIR_reg_t r_js, MIR_reg_t obj_ptr,
-    MIR_item_t store_proto, MIR_item_t imp_protector_store) {
+static void mir_emit_protector_holder_guard(
+    MIR_context_t ctx, MIR_item_t fn, int bc_off, uint16_t ic_idx,
+    MIR_reg_t obj_ptr, MIR_label_t slow) {
+  MIR_reg_t raw = mir_new_ic_reg(ctx, fn, "pf", "ps_raw", bc_off, ic_idx);
   MIR_reg_t sidecar = mir_new_ic_reg(ctx, fn, "pf", "ps_side", bc_off, ic_idx);
-  MIR_label_t done = MIR_new_label(ctx);
+  MIR_label_t plain = MIR_new_label(ctx);
 
   MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, sidecar),
+                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, raw),
                                MIR_new_mem_op(ctx, MIR_T_P, (MIR_disp_t)offsetof(ant_object_t, extra_slots), obj_ptr, 0, 1)));
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, sidecar),
-                               MIR_new_reg_op(ctx, sidecar), MIR_new_uint_op(ctx, (uint64_t)ant_sidecar)));
+                               MIR_new_reg_op(ctx, raw), MIR_new_uint_op(ctx, (uint64_t)ant_sidecar)));
   MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, done),
+                  MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, plain),
                                MIR_new_reg_op(ctx, sidecar), MIR_new_int_op(ctx, 0)));
   MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, sidecar),
-                               MIR_new_mem_op(ctx, MIR_T_P, (MIR_disp_t)offsetof(ant_object_t, extra_slots), obj_ptr, 0, 1)));
-  MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, sidecar),
-                               MIR_new_reg_op(ctx, sidecar), MIR_new_uint_op(ctx, ~(uint64_t)ant_sidecar)));
+                               MIR_new_reg_op(ctx, raw), MIR_new_uint_op(ctx, ~(uint64_t)ant_sidecar)));
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, sidecar),
                                MIR_new_mem_op(ctx, MIR_T_U8, (MIR_disp_t)offsetof(ant_object_sidecar_t, protector_holder), sidecar, 0, 1)));
   MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, done),
+                  MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
                                MIR_new_reg_op(ctx, sidecar), MIR_new_int_op(ctx, 0)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_call_insn(ctx, 5,
-                                    MIR_new_ref_op(ctx, store_proto), MIR_new_ref_op(ctx, imp_protector_store),
-                                    MIR_new_reg_op(ctx, r_js), MIR_new_reg_op(ctx, obj_ptr),
-                                    MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str)));
-  MIR_append_insn(ctx, fn, done);
+  MIR_append_insn(ctx, fn, plain);
 }
 
 static void mir_emit_promise_protector_invalidation(
@@ -118,11 +110,7 @@ static void mir_emit_promise_protector_invalidation(
   bool invalidates_global_promise = atom->str == js->intern.promise;
   bool invalidates_promise_resolve = atom->str == js->intern.resolve;
 
-  if (!ant_property_key_is_protector(js, atom->str)) {
-    if (ant_property_key_breaks_protector(js, atom->str))
-      mir_emit_holder_protector_invalidation(ctx, fn, atom, bc_off, ic_idx, r_js, obj_ptr, store_proto, imp_protector_store);
-    return;
-  }
+  if (!ant_property_key_is_protector(js, atom->str)) return;
 
   uint32_t protector_mask = invalidates_constructor
     ? ANT_PROTECTOR_PROMISE_CONSTRUCTOR | ANT_PROTECTOR_PROMISE_SPECIES
@@ -493,6 +481,8 @@ bool mir_emit_put_field_ic_fastpath(
                                MIR_new_mem_op(ctx, MIR_T_U32, 0, r_global_epoch, 0, 1)));
 
   mir_emit_value_to_objptr_or_jmp(ctx, fn, obj, optr, otag, slow);
+  if (ant_property_key_breaks_protector(js, atom->str) && !ant_property_key_is_protector(js, atom->str))
+    mir_emit_protector_holder_guard(ctx, fn, bc_off, ic_idx, optr, slow);
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, flags),
                                MIR_new_mem_op(ctx, MIR_T_U16,
