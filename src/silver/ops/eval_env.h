@@ -546,14 +546,21 @@ bool sv_eval_env_try_put(
   return true;
 }
 
+static inline ant_value_t sv_eval_env_parent(ant_value_t env) {
+  return ant_shape_proto(js_obj_ptr(js_as_obj(env))->shape);
+}
+
 static bool sv_eval_closure_env_current(
   ant_t *js, ant_value_t env, sv_frame_t *frame, const sv_eval_scope_t *scope
 ) {
   for (;;) {
     sv_eval_env_state_t *state = sv_eval_env_state(env);
-    if (!state || state->is_variable || !sv_eval_env_state_current(state, frame, scope)) return false;
-    env = get_proto(js, env);
-    if (!scope->parent) return env == sv_frame_eval_env(js, frame);
+    if (!state || state->is_variable) return false;
+    ant_value_t parent = sv_eval_env_parent(env);
+    if (!scope->parent && parent != sv_frame_eval_env(js, frame)) return false;
+    if (!sv_eval_env_state_current(state, frame, scope)) return false;
+    if (!scope->parent) return true;
+    env = parent;
     scope = sv_func_eval_scope(frame->func, scope->parent - 1);
   }
 }
@@ -570,7 +577,7 @@ ant_value_t sv_eval_capture_closure_env(
       if (sv_eval_closure_env_current(js, cached, frame, scope)) return cached;
       break;
     }
-    cached = get_proto(js, cached);
+    cached = sv_eval_env_parent(cached);
   }
 
   ant_value_t env = sv_eval_capture_env(vm, js, frame, scope_index);
