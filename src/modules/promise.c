@@ -92,7 +92,6 @@ static void promise_handlers_discard_processed_prefix(
     pd->inline_handler = *(promise_handler_t *)utarray_front(pd->handlers);
     pd->has_inline_handler = true;
     utarray_clear(pd->handlers);
-    *traced = 0;
   }
 }
 
