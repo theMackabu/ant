@@ -152,6 +152,7 @@ static uint32_t pass_branch_input_reprs(ir_condition_t condition, opt_repr_t *re
     case IR_COND_PROPERTY_ITERATOR_CACHE_VALID: reprs[0] = reprs[1] = OPT_REPR_TAGGED; return 2;
     case IR_COND_NULLISH:
     case IR_COND_UNDEFINED:
+    case IR_COND_THROWN:
     case IR_COND_OBJECT:
     case IR_COND_NON_NEGATIVE_INT32:
     case IR_COND_INT32_VALUE:

@@ -137,6 +137,11 @@ static inline ant_value_t sv_construct_prototype_from_object(
   int32_t slot = ptr && !ptr->flags.is_exotic && ptr->shape
     ? ant_shape_lookup_interned(ptr->shape, js->intern.prototype) : -1;
 
+  if (
+    slot < 0 && js_proxy_plain_prototype(js, proto_source, &proto) &&
+    (is_object_type(proto) || vtype(proto) == kTypeUndefined)
+  ) return is_object_type(proto) ? proto : js->sym.object_proto;
+
   const ant_shape_prop_t *prop = slot >= 0
     ? ant_shape_prop_at(ptr->shape, (uint32_t)slot) : NULL;
 
@@ -217,12 +222,17 @@ static inline ant_value_t sv_prepare_construct_meta(
 
   if (closure && !bound) {
     if (effective_new_target) *effective_new_target = requested_new_target;
-    if (requested_new_target != func) return sv_construct_prototype_from(js, requested_new_target);
+    sv_func_t *source_func = closure->func;
 
-    ant_value_t func_obj = js_func_obj(func);
+    if (requested_new_target != func) {
+      source_func = vtype(requested_new_target) == kTypeFunction ? js_func_closure(requested_new_target)->func : NULL;
+      if (!source_func) return sv_construct_prototype_from(js, requested_new_target);
+    }
+
+    ant_value_t func_obj = js_func_obj(requested_new_target);
     ant_object_t *ptr = is_object_type(func_obj) ? js_obj_ptr(func_obj) : NULL;
     
-    return sv_construct_prototype_cached(js, func, ptr, closure->func);
+    return sv_construct_prototype_cached(js, requested_new_target, ptr, source_func);
   }
 
   ant_value_t target = bound ? js_resolve_bound_target_known_bound(func) : func;

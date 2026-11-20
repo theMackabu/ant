@@ -168,8 +168,9 @@ void unwind_pop(sv_compiler_t *c);
 void push_loop(
   sv_compiler_t *c, int loop_start,
   const char *label, uint32_t label_len,
-  bool is_switch
+  sv_loop_kind_t kind
 );
+int find_loop_label(const sv_compiler_t *c, const char *label, uint32_t label_len);
 void pop_loop(sv_compiler_t *c);
 void begin_scope(sv_compiler_t *c);
 void end_scope(sv_compiler_t *c);
@@ -261,7 +262,6 @@ void emit_using_dispose_call(
   bool suppressed_completion
 );
 void emit_using_cleanups_to_depth(sv_compiler_t *c, int target_depth);
-void emit_close_upvals_to_depth(sv_compiler_t *c, int target_depth);
 void emit_loop_exit_jump(sv_compiler_t *c, sv_loop_t *loop, sv_patch_list_t *pl);
 void emit_return_from_stack(sv_compiler_t *c);
 bool module_stmt_is_static_declaration(sv_ast_t *node);
@@ -280,6 +280,7 @@ void emit_dispose_resource(sv_compiler_t *c, bool is_async);
 void push_using_cleanup(
   sv_compiler_t *c,
   int stack_local,
+  int stash_local,
   int scope_depth,
   bool is_async
 );

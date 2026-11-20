@@ -98,7 +98,6 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     [TOK_YIELD]      = &&l_yield,
     [TOK_AWAIT]      = &&l_await,
     [TOK_SUPER]      = &&l_super,
-    [TOK_REST]       = &&l_spread,
     [TOK_IMPORT]     = &&l_import_expr,
     [TOK_DIV]        = &&l_regex,
     [TOK_DIV_ASSIGN] = &&l_regex,
@@ -207,6 +206,14 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     sv_ast_t *expr = parse_paren_expr(p);
     p->no_in = outer_no_in;
     expect(p, TOK_RPAREN);
+    if ((expr->flags & FN_PAREN) && expr->type != N_FUNC && expr->type != N_CLASS && sv_lexer_next(&p->lx) == TOK_ARROW) {
+      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Invalid destructuring assignment target");
+      return mk(N_EMPTY);
+    }
+    if (expr->type == N_IDENT && is_private_name_node(expr)) {
+      sv_parse_unexpected_token(p);
+      return mk(N_EMPTY);
+    }
     expr->flags |= FN_PAREN;
     if (expr->type != N_FUNC && expr->type != N_CLASS) expr->src_off = paren_off;
     if (expr->type != N_FUNC && expr->type != N_CLASS) expr->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
@@ -341,7 +348,12 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     }
     n->left = callee;
 
-    if (sv_lexer_next(&p->lx) == TOK_LPAREN) {
+    if (sv_lexer_next(&p->lx) == TOK_OPTIONAL_CHAIN) {
+      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Invalid optional chain from new expression");
+      return mk(N_EMPTY);
+    }
+
+    if (p->lx.st.tok == TOK_LPAREN) {
       p->lx.st.consumed = 1;
       while (sv_lexer_next(&p->lx) != TOK_RPAREN && p->lx.st.tok != TOK_EOF) {
         if (p->lx.st.tok == TOK_REST) {
@@ -423,13 +435,6 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     n->src_off = (uint32_t)p->lx.st.toff;
     n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
     p->lx.st.consumed = 1;
-    return n;
-  }
-
-  l_spread: {
-    p->lx.st.consumed = 1;
-    sv_ast_t *n = mk(N_SPREAD);
-    n->right = parse_assign(p);
     return n;
   }
 
@@ -539,6 +544,7 @@ sv_ast_t *parse_array(sv_parser_t *p) {
       sv_ast_t *spread = mk(N_SPREAD);
       spread->right = parse_assign(p);
       sv_ast_list_push(p->js, &n->args, spread);
+      if (sv_lexer_next(&p->lx) == TOK_COMMA) n->flags |= FN_REST_COMMA;
     } else {
       sv_ast_list_push(p->js, &n->args, parse_assign(p));
     }
@@ -582,7 +588,10 @@ sv_ast_t *parse_object(sv_parser_t *p) {
       sv_ast_t *spread = mk(N_SPREAD);
       spread->right = parse_assign(p);
       sv_ast_list_push(p->js, &n->args, spread);
-      if (sv_lexer_next(&p->lx) == TOK_COMMA) p->lx.st.consumed = 1;
+      if (sv_lexer_next(&p->lx) == TOK_COMMA) {
+        p->lx.st.consumed = 1;
+        n->flags |= FN_REST_COMMA;
+      }
       continue;
     }
 
