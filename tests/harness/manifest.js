@@ -300,6 +300,7 @@ export function targets() {
     'test_jit_private_define_global.cjs',
     'test_jit_proto_method_snapshot.cjs',
     'test_jit_resume_try_depth.cjs',
+    'test_jit_self_call_throw_in_try.cjs',
     'test_jit_self_tail_params.cjs',
     'test_jit_short_concat_copy.cjs',
     'test_jit_snapshot_recovery.cjs',
