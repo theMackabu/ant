@@ -359,6 +359,7 @@ export function targets() {
     'test_numeric_coercion_errors.cjs',
     'test_numeric_literal_keys.cjs',
     'test_object_assign_sources.cjs',
+    'test_object_integrity_promise_generator.cjs',
     'test_object_isprototypeof_proxy.cjs',
     'test_object_pattern_keys.cjs',
     'test_object_proto_this_coercion.cjs',
