@@ -41,6 +41,7 @@ export function targets() {
     'test_arraybuffer_gc_pressure.cjs',
     'test_array_literal_block_memory.cjs',
     'test_array_literal_cow.cjs',
+    'test_array_literal_shrunk_to_zero.cjs',
     'test_arraybuffer_length.cjs',
     'test_arraybuffer_release.cjs',
     'test_array_literal_site_rules.cjs',
