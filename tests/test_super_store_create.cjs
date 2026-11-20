@@ -96,4 +96,18 @@ for (let i = 0; i < 200; i++) {
   for (const o of kept) assert.strictEqual(typeof o.v.i, 'number');
 }
 
+{
+  class Base {}
+  class Fresh extends Base { put(x) { super.v = x; return this; } }
+  for (let i = 0; i < 400; i++) {
+    assert.deepStrictEqual(Object.getOwnPropertyDescriptor(new Fresh().put(i), 'v'), data(i));
+    assert.throws(() => Object.preventExtensions(new Fresh()).put(i), TypeError);
+    assert.throws(() => Object.seal(new Fresh()).put(i), TypeError);
+    assert.throws(() => Object.freeze(new Fresh()).put(i), TypeError);
+    const closed = Object.preventExtensions(new Fresh());
+    try { closed.put(i); } catch {}
+    assert.strictEqual(Object.hasOwn(closed, 'v'), false);
+  }
+}
+
 console.log('ok');

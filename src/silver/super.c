@@ -131,8 +131,7 @@ static bool Super_AddIsCacheable(const ant_object_t *own, ant_shape_t *before, u
   if (!before || before == own->shape || ant_shape_is_dictionary(before)) return false;
   if (slot != ant_shape_count(before) || ant_shape_count(own->shape) != slot + 1) return false;
   if (own->type_tag != kTypeObject || sv_is_proto_atom(atom)) return false;
-  if (ant_shape_lookup_interned(before, atom->str) >= 0) return false;
-  return ant_shape_prop_at(own->shape, slot)->attrs == ANT_PROP_ATTR_DEFAULT;
+  return ant_shape_lookup_interned(before, atom->str) < 0;
 }
 
 static bool Super_TryBindPut(

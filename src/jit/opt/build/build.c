@@ -4419,9 +4419,7 @@ static bool opt_super_store_plan(opt_builder_t *b, const sv_ic_entry_t *ic, cons
   if (!shape || !base_shape || ant_shape_is_dictionary(shape) || ant_shape_is_dictionary(base_shape)) return false;
   if (ic->cached_index >= ant_shape_count(shape) || !opt_field_ok(b->js, shape, ic->cached_index, atom, true)) return false;
   
-  int32_t slot = ant_shape_lookup_interned(base_shape, atom->str);
-  *held = slot >= 0;
-  if (*held && !opt_field_ok(b->js, base_shape, (uint32_t)slot, atom, true)) return false;
+  *held = ant_shape_lookup_interned(base_shape, atom->str) >= 0;
   return jit_snapshot_shape(b->js, shape) && jit_snapshot_shape(b->js, base_shape);
 }
 
@@ -4435,7 +4433,7 @@ static ir_node_id_t opt_super_base(opt_builder_t *b, ir_node_id_t home, ir_node_
 
 static bool opt_super_may_inline(const opt_builder_t *b, const sv_ic_entry_t *ic) {
   const sv_func_t *func = b->func;
-  if (!ic || ic->epoch != b->js->ic.epoch || !func->is_method || func->is_static || func->is_class_ctor) return false;
+  if (!ic || ic->epoch != b->js->ic.epoch || !func->is_method || func->is_class_ctor) return false;
   return opt_may_speculate(b, OPT_EXIT_BAD_SHAPE) && opt_may_speculate(b, OPT_EXIT_BAD_TYPE);
 }
 

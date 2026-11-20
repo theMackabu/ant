@@ -114,4 +114,125 @@ run(() => {
   }
 }
 
+function warm(f) { let last; for (let i = 0; i < 20000; i++) last = f(i); return last; }
+
+{
+  class A {}
+  class B extends A { constructor() { super(); this.v = 0; } put(x) { super.v = x; return this.v; } }
+  const b = new B();
+  const hot = (i) => b.put(i);
+  assert.strictEqual(warm(hot), 19999);
+  let hits = 0;
+  Object.defineProperty(A.prototype, 'v', { set(x) { hits += x; }, configurable: true });
+  assert.strictEqual(hot(7), 19999);
+  assert.strictEqual(hits, 7);
+}
+
+{
+  class A {}
+  class B extends A { constructor() { super(); this.v = 0; } put(x) { super.v = x; return this.v; } }
+  const b = new B();
+  const hot = (i) => b.put(i);
+  assert.strictEqual(warm(hot), 19999);
+  let hits = 0;
+  Object.defineProperty(Object.prototype, 'v', { set(x) { hits += x; }, configurable: true });
+  try {
+    assert.strictEqual(hot(9), 19999);
+    assert.strictEqual(hits, 9);
+  } finally {
+    delete Object.prototype.v;
+  }
+}
+
+{
+  class Root {}
+  class A extends Root {}
+  class B extends A { constructor() { super(); this.v = 0; } put(x) { super.v = x; return this.v; } }
+  const b = new B();
+  const hot = (i) => b.put(i);
+  assert.strictEqual(warm(hot), 19999);
+  Object.defineProperty(Root.prototype, 'v', { value: 1, writable: false, configurable: true });
+  assert.throws(() => hot(3), TypeError);
+  assert.strictEqual(b.v, 19999);
+}
+
+{
+  class A {}
+  A.prototype.v = 'held';
+  class B extends A { constructor() { super(); this.v = 0; } put(x) { super.v = x; return this.v; } }
+  const b = new B();
+  const hot = (i) => b.put(i);
+  assert.strictEqual(warm(hot), 19999);
+  assert.strictEqual(A.prototype.v, 'held');
+  Object.defineProperty(A.prototype, 'v', { writable: false });
+  assert.throws(() => hot(3), TypeError);
+}
+
+{
+  class A {}
+  class B extends A { constructor() { super(); this.v = 0; } put(x) { super.v = x; return this; } }
+  const hot = (i) => new B().put(i).v;
+  assert.strictEqual(warm(hot), 19999);
+  const wide = new B();
+  wide.extra = 1;
+  delete wide.v;
+  assert.deepStrictEqual(Object.keys(wide.put(4)), ['extra', 'v']);
+  const guarded = Object.defineProperty(new B(), 'v', { value: 5, writable: false });
+  assert.throws(() => guarded.put(6), TypeError);
+  assert.strictEqual(guarded.v, 5);
+  const list = [];
+  assert.strictEqual(B.prototype.put.call(list, 8).v, 8);
+}
+
+{
+  class A { m() { return 'm'; } }
+  A.prototype.d = 1;
+  class B extends A { m() { return super.m(); } d1() { return super.d; } }
+  const b = new B();
+  const hot = () => b.m() + b.d1();
+  assert.strictEqual(warm(hot), 'm1');
+  A.prototype.d = 2;
+  assert.strictEqual(hot(), 'm2');
+  A.prototype.m = () => 'n';
+  assert.strictEqual(hot(), 'n2');
+  Object.defineProperty(A.prototype, 'd', { get() { return this === b ? 'g' : 'wrong receiver'; }, configurable: true });
+  assert.strictEqual(hot(), 'ng');
+  delete A.prototype.d;
+  assert.strictEqual(hot(), 'nundefined');
+  Object.setPrototypeOf(B.prototype, { m() { return 'o'; }, d: 3 });
+  assert.strictEqual(hot(), 'o3');
+}
+
+{
+  class A { get g() { return this.k; } }
+  class B extends A { constructor() { super(); this.k = 4; } read() { return super.g; } }
+  const b = new B();
+  const hot = () => b.read();
+  assert.strictEqual(warm(hot), 4);
+  b.k = 5;
+  assert.strictEqual(hot(), 5);
+}
+
+{
+  class A { static s() { return 's'; } }
+  A.t = 1;
+  class B extends A { static s() { return super.s() + super.t; } static put(x) { super.z = x; return this.z; } }
+  const hot = (i) => B.s() + B.put(i);
+  assert.strictEqual(warm(hot), 's119999');
+  A.t = 2;
+  assert.strictEqual(hot(1), 's21');
+  A.s = () => 'r';
+  assert.strictEqual(hot(2), 'r22');
+  Object.setPrototypeOf(B, { s() { return 'q'; }, t: 3, set z(x) { this.seen = x; } });
+  assert.strictEqual(hot(5), 'q32');
+  assert.strictEqual(B.seen, 5);
+  const holder = { z: 0 };
+  const hotObject = (i) => B.put.call(holder, i);
+  Object.setPrototypeOf(B, A);
+  assert.strictEqual(warm(hotObject), 19999);
+  Object.defineProperty(A, 'z', { set(x) { this.seen = -x; }, configurable: true });
+  assert.strictEqual(hotObject(6), 19999);
+  assert.strictEqual(holder.seen, -6);
+}
+
 console.log('ok');
