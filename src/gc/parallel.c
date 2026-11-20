@@ -37,7 +37,7 @@ typedef struct gc_par_chunk {
 
 typedef struct {
   ant_object_t **stack;
-  size_t len, cap;
+  size_t base, len, cap;
   ant_object_t **objects;
   size_t objects_len, objects_cap;
   ant_value_t *values;
@@ -83,8 +83,19 @@ static void gc_par_grow(void **items, size_t *cap, size_t elem) {
   *cap = next;
 }
 
+static __attribute__((noinline)) void gc_par_stack_room(gc_par_worker_t *w) {
+  if (w->base == 0 || w->base < w->cap / 4) {
+    gc_par_grow((void **)&w->stack, &w->cap, sizeof(*w->stack));
+    return;
+  }
+
+  w->len -= w->base;
+  memmove(w->stack, w->stack + w->base, w->len * sizeof(*w->stack));
+  w->base = 0;
+}
+
 static inline void gc_par_push(gc_par_worker_t *w, ant_object_t *obj) {
-  if (__builtin_expect(w->len >= w->cap, 0)) gc_par_grow((void **)&w->stack, &w->cap, sizeof(*w->stack));
+  if (__builtin_expect(w->len >= w->cap, 0)) gc_par_stack_room(w);
   w->stack[w->len++] = obj;
 }
 
@@ -155,12 +166,11 @@ static inline __attribute__((always_inline)) bool gc_par_scan_plain(ant_t *js, g
 static void gc_par_donate(gc_par_worker_t *w) {
   gc_par_chunk_t *chunk = malloc(sizeof(*chunk));
   if (!chunk) return;
-  uint32_t give = (uint32_t)(w->len / 2);
-  if (give > GC_PAR_CHUNK) give = GC_PAR_CHUNK;
+  size_t held = w->len - w->base;
+  uint32_t give = held / 2 > GC_PAR_CHUNK ? GC_PAR_CHUNK : (uint32_t)(held / 2);
   chunk->len = give;
-  memcpy(chunk->items, w->stack, give * sizeof(*chunk->items));
-  memmove(w->stack, w->stack + give, (w->len - give) * sizeof(*w->stack));
-  w->len -= give;
+  memcpy(chunk->items, w->stack + w->base, give * sizeof(*chunk->items));
+  w->base += give;
 
   uv_mutex_lock(&gc_par.lock);
   chunk->next = gc_par.queue;
@@ -203,11 +213,12 @@ static void gc_par_work(gc_par_worker_t *w) {
   uint64_t start = gc_now_ns();
   w->waited_ns = 0;
   do {
-    while (w->len) {
+    while (w->len > w->base) {
       ant_object_t *obj = w->stack[--w->len];
       if (!gc_par_scan_plain(js, w, obj)) gc_par_defer_object(w, obj);
-      if (w->len >= GC_PAR_DONATE_MIN && __atomic_load_n(&gc_par.idle_hint, __ATOMIC_RELAXED)) gc_par_donate(w);
+      if (w->len - w->base >= GC_PAR_DONATE_MIN && __atomic_load_n(&gc_par.idle_hint, __ATOMIC_RELAXED)) gc_par_donate(w);
     }
+    w->len = w->base = 0;
   } while (gc_par_take(w));
   uint64_t elapsed = gc_now_ns() - start;
   w->busy_ns = elapsed > w->waited_ns ? elapsed - w->waited_ns : 0;
