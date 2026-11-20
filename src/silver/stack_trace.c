@@ -620,6 +620,7 @@ typedef struct {
   error_frame_t local[ERROR_FRAMES_INLINE];
   error_frame_t *frames;
   int n;
+  bool site_frame;
   const char *file;
   js_error_render_site_t site;
 } error_render_t;
@@ -670,6 +671,7 @@ static int error_record_resolve(ant_t *js, const error_record_t *rec, error_fram
 static void error_render_begin(ant_t *js, const error_record_t *rec, error_render_t *r) {
   r->rec = rec;
   r->n = error_record_resolve(js, rec, r->local, &r->frames);
+  r->site_frame = r->n == 0 && rec->limit > 0 && !rec->no_site_frame;
 
   sv_func_t *file_func = rec->site_func ? rec->site_func : r->n > 0 ? r->frames[0].func : NULL;
   r->file = vtype(rec->file) == kTypeString ? js_getstr(js, rec->file, NULL)
@@ -710,7 +712,7 @@ static void error_render_prefix(ant_t *js, error_render_t *r, errbuf_t *eb, size
 
 static void error_render_frames(ant_t *js, const error_render_t *r, errbuf_t *eb, size_t *n, error_frame_style_t style) {
   error_append_frames(js, r->frames, r->n, r->file, eb, n, style);
-  if (r->n == 0 && r->rec->limit > 0 && !r->rec->no_site_frame) error_render_frame(eb, n, NULL, false, r->file, r->site.line, r->site.col, style);
+  if (r->site_frame) error_render_frame(eb, n, NULL, false, r->file, r->site.line, r->site.col, style);
 }
 
 char *js_error_render_pretty(ant_t *js, ant_value_t err, ant_value_t stack, size_t *out_len, size_t *header_at) {
