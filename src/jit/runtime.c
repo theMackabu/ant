@@ -348,6 +348,11 @@ static void jit_osr_seed_invariant_locals(sv_func_t *func, sv_frame_t *frame) {
   free(loop_written);
 }
 
+static void jit_osr_locals_clear(ant_value_t *locals, int count) {
+  for (int i = 0; i < count; i++) locals[i] = 0;
+  __asm__ volatile("" : : "r"(locals) : "memory");
+}
+
 __attribute__((noinline)) ant_value_t sv_jit_try_osr(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame, sv_func_t *func, int bc_offset
 ) {
@@ -477,6 +482,7 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
   }, closure);
 
   if (cover_osr_frame) interp_seg->lo = interp_seg_lo;
+  jit_osr_locals_clear(osr_locals, nl);
   vm->jit.osr_marks = osr_mark.prev;
   vm->jit.osr = (sv_jit_osr_t){0};
   
@@ -535,6 +541,7 @@ __attribute__((noinline)) ant_value_t sv_jit_try_catch_entry(
   }, js_func_closure(frame->callee));
 
   if (cover_osr_frame) interp_seg->lo = interp_seg_lo;
+  jit_osr_locals_clear(osr_locals, nl);
   vm->jit.osr_marks = osr_mark.prev;
   vm->jit.osr = (sv_jit_osr_t){0};
 
