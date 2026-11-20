@@ -97,7 +97,7 @@ jobs:
         run: |
           docker run --rm --platform "linux/$ARCH" "$IMAGE@$DIGEST" bash -euo pipefail -c "
             clang-${LLVM_VERSION} --version
-            lld-${LLVM_VERSION} --version
+            ld.lld-${LLVM_VERSION} --version
             llvm-ar-${LLVM_VERSION} --version
             cc --version
             meson --version
@@ -218,7 +218,7 @@ jobs:
         run: |
           docker run --rm --platform "linux/$ARCH" "$IMAGE@$DIGEST" sh -eu -c "
             clang --version
-            lld --version
+            ld.lld --version
             llvm-ar --version
             meson --version
             ninja --version
