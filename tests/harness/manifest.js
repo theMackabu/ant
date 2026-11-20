@@ -267,6 +267,7 @@ export function targets() {
     'test_gc_compiled_code.cjs',
     'test_error_cause_proxy_options.cjs',
     'test_gc_native_buffers.cjs',
+    'test_gc_osr_locals_copy.cjs',
     'test_gc_template_const_cache.cjs',
     'test_error_message_wording.cjs',
     'test_generator_abandon_memory.cjs',

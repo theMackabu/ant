@@ -110,4 +110,96 @@ for (let i = 0; i < 200; i++) {
   }
 }
 
+function reshaping(change) {
+  class Base {}
+  Object.defineProperty(Base.prototype, 'v', { configurable: true, set(x) {
+    Object.defineProperty(Base.prototype, 'v', { value: 0, writable: true, enumerable: true, configurable: true });
+    change(this);
+    Object.defineProperty(this, 'v', { value: x, writable: true, enumerable: true, configurable: true });
+  } });
+  class Derived extends Base {
+    constructor() { super(); this.a = 'A'; this.n = 'N'; }
+    put(x) { super.v = x; return this; }
+  }
+  return Derived;
+}
+
+for (const [name, change, first] of [
+  ['reconfigures', (o) => Object.defineProperty(o, 'n', { enumerable: false, writable: false }), '{"a":"A","v":0}'],
+  ['deletes', (o) => { delete o.a; }, '{"n":"N","v":0}'],
+  ['adds', (o) => { o.extra = 1; }, '{"a":"A","n":"N","extra":1,"v":0}'],
+  ['replaces', (o) => { delete o.n; o.m = 'M'; }, '{"a":"A","m":"M","v":0}'],
+  ['nothing', () => {}, '{"a":"A","n":"N","v":0}'],
+]) {
+  const Derived = reshaping(change);
+  assert.strictEqual(JSON.stringify(new Derived().put(0)), first, name);
+  for (let i = 1; i < (name === 'reconfigures' ? 6000 : 300); i++) {
+    const o = new Derived().put(i);
+    assert.strictEqual(JSON.stringify(o), `{"a":"A","n":"N","v":${i}}`, name);
+    assert.deepStrictEqual(Object.getOwnPropertyDescriptor(o, 'n'), data('N'), name);
+    assert.deepStrictEqual(Object.getOwnPropertyDescriptor(o, 'v'), data(i), name);
+  }
+}
+
+{
+  const home = { __proto__: { set v(x) {
+    Object.defineProperty(Object.getPrototypeOf(home), 'v', { value: 0, writable: true, configurable: true });
+    Object.defineProperty(this, 'k', { enumerable: false });
+    Object.defineProperty(this, 'v', { value: x, writable: true, enumerable: true, configurable: true });
+  } }, put(x) { super.v = x; return this; } };
+  assert.deepStrictEqual(Object.keys(home.put.call({ k: 1 }, 0)), ['v']);
+  for (let i = 0; i < 300; i++) assert.deepStrictEqual(Object.entries(home.put.call({ k: 1 }, i)), [['k', 1], ['v', i]]);
+}
+
+{
+  class Base { static set v(x) {
+    Object.defineProperty(Base, 'v', { value: 0, writable: true, configurable: true });
+    Object.defineProperty(this, 'k', { writable: false });
+    Object.defineProperty(this, 'v', { value: x, writable: true, enumerable: true, configurable: true });
+  } }
+  class Derived extends Base { static put(x) { super.v = x; return this; } }
+  assert.strictEqual(Object.getOwnPropertyDescriptor(Derived.put.call({ k: 1 }, 0), 'k').writable, false);
+  for (let i = 0; i < 300; i++) assert.deepStrictEqual(Object.getOwnPropertyDescriptor(Derived.put.call({ k: 1 }, i), 'k'), data(1));
+}
+
+{
+  class Base { get v() { return 1; } }
+  class GetterOnly extends Base { put(x) { super.v = x; return this; } }
+  for (let i = 0; i < 300; i++) {
+    const o = new GetterOnly();
+    assert.throws(() => o.put(i), TypeError);
+    assert.strictEqual(Object.hasOwn(o, 'v'), false);
+  }
+}
+
+{
+  class Base {}
+  class Attrs extends Base { constructor() { super(); this.k = 1; } put(x) { super.v = x; return this; } }
+  for (let i = 0; i < 300; i++) assert.deepStrictEqual(Object.entries(new Attrs().put(i)), [['k', 1], ['v', i]]);
+  for (let i = 0; i < 50; i++) {
+    const hidden = Object.defineProperty(new Attrs(), 'k', { enumerable: false });
+    assert.deepStrictEqual(Object.entries(hidden.put(i)), [['v', i]]);
+    assert.deepStrictEqual(Object.getOwnPropertyDescriptor(hidden, 'k'), { value: 1, writable: true, enumerable: false, configurable: true });
+    const locked = Object.defineProperty(new Attrs(), 'k', { writable: false });
+    assert.strictEqual(Object.getOwnPropertyDescriptor(locked.put(i), 'k').writable, false);
+    assert.deepStrictEqual(Object.entries(new Attrs().put(i)), [['k', 1], ['v', i]]);
+    const trapped = [];
+    const proxy = new Proxy(new Attrs(), { defineProperty(t, key, d) { trapped.push(key); return Reflect.defineProperty(t, key, d); } });
+    assert.strictEqual(Attrs.prototype.put.call(proxy, i).v, i);
+    assert.deepStrictEqual(trapped, ['v']);
+    assert.throws(() => Object.freeze(new Attrs()).put(i), TypeError);
+  }
+}
+
+{
+  class Base {}
+  Object.defineProperty(Base.prototype, 'v', { configurable: true, set(x) {
+    Object.defineProperty(Base.prototype, 'v', { value: 0, writable: true, enumerable: true, configurable: true });
+    Object.defineProperty(this, 'v', { value: x, writable: true, enumerable: false, configurable: true });
+  } });
+  class Hidden extends Base { put(x) { super.v = x; return this; } }
+  assert.strictEqual(Object.getOwnPropertyDescriptor(new Hidden().put(0), 'v').enumerable, false);
+  for (let i = 1; i < 300; i++) assert.deepStrictEqual(Object.getOwnPropertyDescriptor(new Hidden().put(i), 'v'), data(i));
+}
+
 console.log('ok');
