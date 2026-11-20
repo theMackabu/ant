@@ -213,6 +213,11 @@ static unsigned ast_scope_facts(const sv_ast_t *node, unsigned want, bool in_arr
       break;
     case N_FUNC:
       if (!(node->flags & FN_ARROW)) return 0;
+      if (!props && !(want & SCOPE_NEW_TARGET) && (node->flags & FN_SCOPE_FACTS)) {
+        unsigned cached = node->flags & FN_DIRECT_EVAL ? SCOPE_EVAL | SCOPE_ARGUMENTS : 0;
+        if (node->flags & FN_USES_ARGS) cached |= SCOPE_ARGUMENTS;
+        return cached & want;
+      }
       in_arrow = true;
       want &= ~SCOPE_YIELD;
       break;

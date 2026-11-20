@@ -414,6 +414,7 @@ export function targets() {
     'test_private_destructure_targets.cjs',
     'test_process_env_proxy.cjs',
     'test_process_exit_code.cjs',
+    'test_parser_arrow_chain_scope_facts.cjs',
     'test_parser_empty_parens.cjs',
     'test_process_get_builtin_module.cjs',
     'test_process_stdin_sources.cjs',
