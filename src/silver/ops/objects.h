@@ -5,6 +5,7 @@
 #include "iteration.h"
 #include "descriptors.h"
 #include "props.h"
+#include "arrays.h"
 #include "gc/roots.h"
 
 static inline void sv_define_method(
@@ -240,11 +241,23 @@ static bool sv_field_key_special_on_function(ant_t *js, ant_value_t key) {
   }
 }
 
+static bool sv_field_key_special_on_array(ant_t *js, ant_value_t key) {
+  if (vtype(key) != kTypeString) return false;
+  size_t len = 0;
+  const char *str = js_getstr(js, key, &len);
+  return !str || is_length_key(str, len) || is_array_index(str, (ant_offset_t)len);
+}
+
 static bool sv_field_target_plain(ant_t *js, ant_value_t obj, ant_value_t key) {
   static constexpr uint16_t mask = ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXOTIC;
-  bool function = vtype(obj) == kTypeFunction;
-  if (vtype(obj) != kTypeObject && !function) return false;
-  if (function && sv_field_key_special_on_function(js, key)) return false;
+  uint8_t type = vtype(obj);
+  bool function = type == kTypeFunction;
+  
+  if (type != kTypeObject) {
+    if (function) { if (sv_field_key_special_on_function(js, key)) return false; }
+    else if (type == kTypeArray) { if (sv_field_key_special_on_array(js, key)) return false; }
+    else if (type != kTypePromise && type != kTypeGenerator) return false;
+  }
   
   ant_value_t holder = function ? js_as_obj(obj) : obj;
   ant_object_t *ptr = js_obj_ptr(holder);
