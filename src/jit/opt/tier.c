@@ -766,10 +766,10 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
   if (sv_debug_unlikely(SV_DEBUG_JIT_WARN)) opt_warn_exit(state, frames[0].func, inner->bc_off, site->kind, site->slot, code, count - 1);
 
   opt_exit_frame_t *root = &frames[count - 1];
+  sv_frame_t *host = opt_osr_host(vm, entry);
   uint32_t params = code->param_count, locals = code->local_count;
   ant_value_t arguments = root->arguments;
   ant_value_t root_this = entry->this_val;
-  sv_frame_t *host = opt_osr_host(vm, entry);
   bool borrowed = entry->frame && !entry->owns_frame;
   if (entry->frame) {
     sv_frame_t *frame = entry->frame;
