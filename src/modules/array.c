@@ -4,6 +4,7 @@
 #include <math.h>
 
 #include "utf8.h"
+#include "numbers.h"
 #include "cfunc.h"
 #include "props.h"
 #include "arrays.h"
@@ -289,10 +290,28 @@ static inline __attribute__((always_inline)) ant_value_t array_integer_arg(
   return Ant_Value_Undefined;
 }
 
+static inline __attribute__((always_inline)) bool array_small_integer_arg(
+  ant_value_t *args, int nargs, int at, int64_t *out
+) {
+  int32_t whole;
+  if (at >= nargs || vtype(args[at]) != kTypeNumber) return false;
+  if (!ant_number_as_int32(Ant_Value_AsNumberUnchecked(args[at]), &whole)) return false;
+  *out = whole;
+  return true;
+}
+
 static inline __attribute__((always_inline)) ant_value_t array_relative_arg(
   ant_t *js, ant_value_t *args, int nargs, int at,
   ant_offset_t len, ant_offset_t fallback, ant_offset_t *out
 ) {
+  if (at < nargs && __builtin_expect(vtype(args[at]) == kTypeNumber, 1)) {
+    double limit = (double)len;
+    int64_t whole = (int64_t)fmin(fmax(Ant_Value_AsNumberUnchecked(args[at]), -limit), limit);
+    if (whole < 0) whole += (int64_t)len;
+    *out = (uint64_t)whole > len ? len : (ant_offset_t)whole;
+    return Ant_Value_Undefined;
+  }
+
   double relative;
   ant_value_t err = array_integer_arg(js, args, nargs, at, (double)fallback, &relative);
   if (is_err(err)) return err;
@@ -1853,7 +1872,12 @@ static ant_value_t builtin_array_lastIndexOf(ant_params_t) {
   
   if (len == 0) return Ant_Value_FromNumber(-1);
   int start = (int)len - 1;
-  if (nargs >= 2) {
+  int64_t small_from;
+  if (__builtin_expect(array_small_integer_arg(args, nargs, 1, &small_from), 1)) {
+    if (small_from < 0) small_from += (int64_t)len;
+    if (small_from < 0) return Ant_Value_FromNumber(-1);
+    if (small_from < start) start = (int)small_from;
+  } else if (nargs >= 2) {
     double from;
     ant_value_t arg_err = array_integer_arg(js, args, nargs, 1, 0, &from);
     if (is_err(arg_err)) return arg_err;
@@ -2344,7 +2368,11 @@ static ant_value_t builtin_array_splice(ant_params_t) {
   int start = (int)start_at;
 
   int deleteCount = nargs == 0 ? 0 : (int)len - start;
-  if (nargs >= 2) {
+  int64_t small_count;
+  if (__builtin_expect(array_small_integer_arg(args, nargs, 1, &small_count), 1)) {
+    if (small_count < 0) small_count = 0;
+    if (small_count < deleteCount) deleteCount = (int)small_count;
+  } else if (nargs >= 2) {
     double requested;
     arg_err = array_integer_arg(js, args, nargs, 1, 0, &requested);
     if (is_err(arg_err)) return arg_err;
@@ -2627,12 +2655,20 @@ static ant_value_t builtin_array_with(ant_params_t) {
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
-  double relative;
-  ant_value_t arg_err = array_integer_arg(js, args, nargs, 0, 0, &relative);
-  if (is_err(arg_err)) return arg_err;
-  if (relative < 0) relative += (double)len;
-  if (relative < 0 || relative >= (double)len) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid index");
-  ant_offset_t idx = (ant_offset_t)relative;
+  ant_offset_t idx;
+  int64_t small;
+  if (__builtin_expect(array_small_integer_arg(args, nargs, 0, &small), 1)) {
+    if (small < 0) small += (int64_t)len;
+    if (small < 0 || (uint64_t)small >= len) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid index");
+    idx = (ant_offset_t)small;
+  } else {
+    double relative;
+    ant_value_t arg_err = array_integer_arg(js, args, nargs, 0, 0, &relative);
+    if (is_err(arg_err)) return arg_err;
+    if (relative < 0) relative += (double)len;
+    if (relative < 0 || relative >= (double)len) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid index");
+    idx = (ant_offset_t)relative;
+  }
   ant_value_t value = nargs > 1 ? args[1] : Ant_Value_Undefined;
   
   ant_value_t result = array_copy_spliced(js, arr, len, idx, 1, &value, 1);
