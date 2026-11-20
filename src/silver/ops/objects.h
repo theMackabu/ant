@@ -271,7 +271,7 @@ static __attribute__((noinline)) bool sv_field_key_special_on_string_wrapper(
   
   size_t len = 0;
   const char *str = js_getstr(js, key, &len);
-  return !str || is_length_key(str, len) || ant_key_may_be_numeric(str, len);
+  return !str || ant_key_may_be_numeric(str, len);
 }
 
 static bool sv_field_target_plain(ant_t *js, ant_value_t obj, ant_value_t key) {
