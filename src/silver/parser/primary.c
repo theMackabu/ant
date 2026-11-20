@@ -588,7 +588,10 @@ sv_ast_t *parse_object(sv_parser_t *p) {
       sv_ast_t *spread = mk(N_SPREAD);
       spread->right = parse_assign(p);
       sv_ast_list_push(p->js, &n->args, spread);
-      if (sv_lexer_next(&p->lx) == TOK_COMMA) p->lx.st.consumed = 1;
+      if (sv_lexer_next(&p->lx) == TOK_COMMA) {
+        p->lx.st.consumed = 1;
+        n->flags |= FN_REST_COMMA;
+      }
       continue;
     }
 
