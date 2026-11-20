@@ -5485,7 +5485,9 @@ static opt_flow_t opt_build_jump_not_nullish(opt_builder_t *b) {
 
 static opt_flow_t opt_build_throw(opt_builder_t *b) {
   ir_node_id_t value = opt_tagged(b, opt_peek(b, 0));
-  ir_node_id_t node = opt_set_control(b, ir_op(IR_OP_THROW), &value, 1);
+  ir_op_t op = ir_op(IR_OP_THROW);
+  op.own = !b->inline_call;
+  ir_node_id_t node = opt_set_control(b, op, &value, 1);
   opt_mark_catch(b, node);
   return OPT_FLOW_ENDED;
 }

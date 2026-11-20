@@ -1408,14 +1408,15 @@ static void opt_catch_missed(ant_t *js, opt_code_t *code, uint32_t catch_off) {
       opt_func_line(code->func));
 }
 
-static void opt_catch_left(ant_t *js, opt_code_t *code, uint32_t catch_off) {
+static void opt_catch_left(sv_vm_t *vm, opt_code_t *code, uint32_t catch_off, const opt_entry_t *entry) {
   if (code->dropped || (code->catch_leaves++ % OPT_CATCH_LEAVE_WINDOW)) return;
   struct timespec now;
-  clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
+  clock_gettime(CLOCK_MONOTONIC, &now);
   uint64_t stamp = (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec, last = code->catch_leave_stamp;
   code->catch_leave_stamp = stamp;
-  if (!last || stamp - last >= OPT_CATCH_LEAVE_WINDOW_NS) return;
-  opt_func_state_t *state = opt_func_state(js, code->func, true);
+  uint64_t window = opt_osr_host(vm, entry) ? OPT_CATCH_LEAVE_HOST_WINDOW_NS : OPT_CATCH_LEAVE_WINDOW_NS;
+  if (!last || stamp - last >= window) return;
+  opt_func_state_t *state = opt_func_state(vm->js, code->func, true);
   opt_note_discard(state, code, false);
   bool disable = state && ++state->leave_drops >= OPT_CATCH_LEAVE_DROPS;
   if (disable) state->disabled = true;
@@ -1425,14 +1426,14 @@ static void opt_catch_left(ant_t *js, opt_code_t *code, uint32_t catch_off) {
       opt_func_name(code->func), catch_off, opt_func_line(code->func));
 }
 
-void opt_rt_caught(sv_vm_t *vm, opt_code_t *code, const opt_handler_t *handler, bool in_place) {
-  if (in_place) {
+void opt_rt_caught(sv_vm_t *vm, opt_code_t *code, const opt_handler_t *handler, const opt_entry_t *entry, bool thrown_here) {
+  if (!entry) {
     opt_stats.catches++;
     return;
   }
   opt_stats.catch_leaves++;
   if (handler->learnable) opt_catch_missed(vm->js, code, handler->catch_off);
-  else opt_catch_left(vm->js, code, handler->catch_off);
+  else if (thrown_here) opt_catch_left(vm, code, handler->catch_off, entry);
 }
 
 bool opt_tier_has_catch_entry(ant_t *js, sv_func_t *func, uint32_t catch_off) {

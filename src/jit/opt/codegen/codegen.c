@@ -502,6 +502,7 @@ static asm_label_t opt_cg_catch_site(opt_cg_t *cg, ir_node_id_t node) {
     .site_off = resume,
     .depth = handler->depth + 1,
     .kind = OPT_EXIT_SLOW_PATH,
+    .slot = data->op.code == IR_OP_THROW && data->op.own,
     .values = opt_cg_site_values(cg, node),
     .handler = data->handler,
   };
@@ -4299,7 +4300,7 @@ static ant_value_t opt_cg_catch_in_place(sv_vm_t *vm, uint8_t *locals, const opt
   entry->frame->completion.kind = SV_COMPLETION_NONE;
   entry->frame->completion.value = Ant_Value_Undefined;
   *(uint32_t *)(void *)(locals + code->index_offset) = site->handler;
-  opt_rt_caught(vm, code, handler, true);
+  opt_rt_caught(vm, code, handler, NULL, false);
   return OPT_CAUGHT;
 }
 
@@ -4347,7 +4348,7 @@ static ant_value_t opt_cg_catch(sv_vm_t *vm, uint8_t *locals, const opt_site_t *
     ant_value_t *to = opt_cg_site_slot(code, value->slot, depth, frame, frame_locals, stack);
     if (to) opt_rt_reopen_box(vm, (sv_upvalue_t *)(uintptr_t)opt_cg_site_bits(value, dump, spills), to);
   }
-  opt_rt_caught(vm, code, handler, false);
+  opt_rt_caught(vm, code, handler, entry, site->slot != 0);
   uint32_t finally_count = opt_cg_site_finally_count(code, site);
   sv_jit_finally_t finally[finally_count ? finally_count : 1];
   sv_jit_finally_t *pending = opt_cg_site_finally(code, site, dump, spills, objects, finally, finally_count);
