@@ -1985,7 +1985,7 @@ L_WITH_TRY_DEL:  WITH_TRY(OP_WITH_TRY_DEL, sv_op_with_try_del)
 #undef WITH_TRY
 
 L_SPECIAL_OBJ: {
-  sv_op_special_obj(vm, js, frame, ip);
+  VM_CHECK(sv_op_special_obj(vm, js, frame, ip));
   NEXT(OP_SPECIAL_OBJ);
 }
 
