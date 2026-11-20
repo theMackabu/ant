@@ -318,8 +318,9 @@ static MIR_op_t jit_finally_slot(jit_compile_t *c, int index, size_t field) {
 static int jit_finally_of_region(const sv_func_t *func, int push) {
   int handler = push + sv_op_size[OP_TRY_PUSH_FINALLY] + sv_get_i32(func->code + push + 1);
   int jmp = handler + sv_op_size[OP_POP];
-  if (handler < 0 || jmp + sv_op_size[OP_JMP] > func->code_len) return -1;
-  if (func->code[handler] != OP_POP || func->code[jmp] != OP_JMP) return -1;
+  if (handler < 0 || jmp + sv_op_size[OP_JMP] > func->code_len || func->code[handler] != OP_POP) return -1;
+  if (func->code[jmp] == OP_CLOSE_UPVAL) jmp += sv_op_size[OP_CLOSE_UPVAL];
+  if (jmp + sv_op_size[OP_JMP] > func->code_len || func->code[jmp] != OP_JMP) return -1;
   int target = jmp + sv_op_size[OP_JMP] + sv_get_i32(func->code + jmp + 1);
   return target >= 0 && target < func->code_len && func->code[target] == OP_FINALLY ? target : -1;
 }
@@ -412,10 +413,20 @@ static void jit_emit_finally_ret(jit_compile_t *c) {
   jit_emit_return_value(c, value);
 }
 
+static void jit_emit_reload_captured_locals(jit_compile_t *c) {
+  if (!c->has_captures || !c->r_lbuf) return;
+  for (int i = 0; i < c->n_locals; i++)
+    if (c->captured_locals[i])
+      MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+        MIR_new_reg_op(c->ctx, c->local_regs[i]),
+        MIR_new_mem_op(c->ctx, MIR_T_I64, (MIR_disp_t)(i * (int)sizeof(ant_value_t)), c->r_lbuf, 0, 1)));
+}
+
 void jit_emit_finally_landings(jit_compile_t *c) {
   for (int i = 0; i < c->finally_landing_count; i++) {
     const jit_finally_landing_t *landing = &c->finally_landings[i];
     MIR_append_insn(c->ctx, c->jit_func, landing->landing);
+    jit_emit_reload_captured_locals(c);
     MIR_append_insn(c->ctx, c->jit_func,
                     MIR_new_call_insn(c->ctx, 6,
                                       MIR_new_ref_op(c->ctx, c->helper1_proto),
@@ -634,6 +645,7 @@ void jit_emit_control(jit_compile_t *c) {
         }
       }
       if (catch_saved_sp >= 0) {
+        jit_emit_reload_captured_locals(c);
         c->vs.sp = catch_saved_sp + 1;
         vstack_clear_value_info(&c->vs, catch_saved_sp);
         c->vs.slot_type[catch_saved_sp] = SLOT_BOXED;
