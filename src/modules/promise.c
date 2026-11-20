@@ -41,8 +41,12 @@ static bool promise_handler_append(ant_promise_state_t *pd, const promise_handle
     return true;
   }
 
-  if (!pd->handlers) utarray_new(pd->handlers, &promise_handler_icd);
-  if (!pd->handlers) return false;
+  if (!pd->handlers) {
+    promise_handler_list_t *list = calloc(1, sizeof(*list));
+    if (!list) return false;
+    utarray_init(&list->items, &promise_handler_icd);
+    pd->handlers = &list->items;
+  }
   
   if (count == 1) {
     utarray_push_back(pd->handlers, &pd->inline_handler);
@@ -64,7 +68,9 @@ static inline void promise_handlers_clear(ant_promise_state_t *pd) {
   if (!pd) return;
   pd->has_inline_handler = false;
   pd->inline_handler = (promise_handler_t){ 0 };
-  if (pd->handlers) utarray_clear(pd->handlers);
+  if (!pd->handlers) return;
+  utarray_clear(pd->handlers);
+  *ant_promise_handlers_traced(pd->handlers) = 0;
 }
 
 static void promise_handlers_discard_processed_prefix(
@@ -79,11 +85,14 @@ static void promise_handlers_discard_processed_prefix(
   }
 
   utarray_erase(pd->handlers, 0, count);
+  uint32_t *traced = ant_promise_handlers_traced(pd->handlers);
+  *traced = *traced > count ? *traced - count : 0;
   
   if (total - count == 1) {
     pd->inline_handler = *(promise_handler_t *)utarray_front(pd->handlers);
     pd->has_inline_handler = true;
     utarray_clear(pd->handlers);
+    *traced = 0;
   }
 }
 
@@ -2188,4 +2197,5 @@ void js_check_unhandled_rejections(ant_t *js) {
   }
   
   js->pending_rejections.len = keep;
+  js->pending_rejections.traced = keep;
 }

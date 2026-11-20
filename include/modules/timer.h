@@ -11,12 +11,18 @@ typedef struct {
   struct timer_entry *timers;
   struct microtask_entry *next_ticks;
   struct microtask_entry *next_ticks_tail;
+  struct microtask_entry *next_ticks_scanned;
+  uintptr_t next_ticks_batch_scanned;
   struct microtask_entry *next_ticks_processing;
   struct microtask_entry *microtasks;
   struct microtask_entry *microtasks_tail;
+  struct microtask_entry *microtasks_scanned;
+  uintptr_t microtasks_batch_scanned;
   struct microtask_entry *microtasks_processing;
   struct immediate_entry *immediates;
   struct immediate_entry *immediates_tail;
+  struct immediate_entry *immediates_scanned;
+  uintptr_t immediates_batch_scanned;
   struct immediate_entry *immediates_processing;
   struct microtask_entry *free_jobs;
   
