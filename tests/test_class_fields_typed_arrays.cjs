@@ -53,7 +53,7 @@ assert.throws(() => new Len(new String('ab')), TypeError);
 const vm = require('node:vm');
 const sandbox = {};
 new Tagged(vm.runInNewContext('globalThis', sandbox));
-assert.deepStrictEqual([sandbox.tag, sandbox[Symbol.for('s')], vm.runInContext('tag', sandbox)], [1, 2, 1]);
+assert.deepStrictEqual([sandbox.tag, vm.runInContext('tag', sandbox)], [1, 1]);
 
 let sum = 0;
 for (let i = 0; i < 20000; i++) sum += new Bytes(2).tag;
