@@ -47,12 +47,6 @@ bool sv_global_lexical_lookup(
   return true;
 }
 
-sv_eval_scope_flags_t sv_eval_env_flags(ant_value_t env) {
-  if (!is_object_type(env)) return (sv_eval_scope_flags_t){0};
-  const sv_eval_env_state_t *state = sv_eval_env_state(env);
-  return state && state->scope ? state->scope->flags : (sv_eval_scope_flags_t){0};
-}
-
 bool sv_eval_env_shadows_global(ant_t *js, ant_value_t env, const char *name, uint32_t len) {
   const char *interned = intern_string(js, name, len);
   

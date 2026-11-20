@@ -4,6 +4,7 @@
 #include <math.h>
 
 #include "utf8.h"
+#include "numbers.h"
 #include "cfunc.h"
 #include "props.h"
 #include "arrays.h"
@@ -290,10 +291,28 @@ static inline __attribute__((always_inline)) ant_value_t array_integer_arg(
   return Ant_Value_Undefined;
 }
 
+static inline __attribute__((always_inline)) bool array_small_integer_arg(
+  ant_value_t *args, int nargs, int at, int64_t *out
+) {
+  int32_t whole;
+  if (at >= nargs || vtype(args[at]) != kTypeNumber) return false;
+  if (!ant_number_as_int32(Ant_Value_AsNumberUnchecked(args[at]), &whole)) return false;
+  *out = whole;
+  return true;
+}
+
 static inline __attribute__((always_inline)) ant_value_t array_relative_arg(
   ant_t *js, ant_value_t *args, int nargs, int at,
   ant_offset_t len, ant_offset_t fallback, ant_offset_t *out
 ) {
+  if (at < nargs && __builtin_expect(vtype(args[at]) == kTypeNumber, 1)) {
+    double limit = (double)len;
+    int64_t whole = (int64_t)fmin(fmax(Ant_Value_AsNumberUnchecked(args[at]), -limit), limit);
+    if (whole < 0) whole += (int64_t)len;
+    *out = (uint64_t)whole > len ? len : (ant_offset_t)whole;
+    return Ant_Value_Undefined;
+  }
+
   double relative;
   ant_value_t err = array_integer_arg(js, args, nargs, at, (double)fallback, &relative);
   if (is_err(err)) return err;
@@ -335,7 +354,7 @@ static ant_value_t builtin_array_push(ant_params_t) {
     if (!Ant_Array_UnshareForAppend(js, arr, (uint32_t)nargs)) return js_mkerr(js, "oom");
     if (array_refuses_add(arr, nargs)) return array_add_refused_error(js, len);
   }
-  if (target && (ant_object_is_frozen(target) || array_length_readonly(js, arr)))
+  if (target && ((target->flags.frozen && ant_object_is_frozen(target)) || array_length_readonly(js, arr)))
     return array_length_readonly_error(js);
   
   ant_offset_t doff = get_dense_buf(arr);
@@ -345,8 +364,8 @@ static ant_value_t builtin_array_push(ant_params_t) {
     int i = 0;
     for (; i < nargs && (plain || !array_store_reaches_proto_slow(js, arr, len)); i++) {
       ant_offset_t cap = dense_capacity(doff);
-      if (__builtin_expect(len >= cap && len >= ARRAY_DENSE_GAP && len >= dense_iterable_length(js, arr) * 4, 0)) break;
       if (len >= cap) {
+        if (__builtin_expect(len >= ARRAY_DENSE_GAP && len >= dense_iterable_length(js, arr) * 4, 0)) break;
         doff = dense_grow(js, arr, len + 1);
         if (doff == 0) return js_mkerr(js, "oom");
       }
@@ -1931,7 +1950,12 @@ static ant_value_t builtin_array_lastIndexOf(ant_params_t) {
   
   if (len == 0) return Ant_Value_FromNumber(-1);
   ant_offset_t start = len - 1;
-  if (nargs >= 2) {
+  int64_t small_from;
+  if (__builtin_expect(array_small_integer_arg(args, nargs, 1, &small_from), 1)) {
+    if (small_from < 0) small_from += (int64_t)len;
+    if (small_from < 0) return Ant_Value_FromNumber(-1);
+    if ((ant_offset_t)small_from < start) start = (ant_offset_t)small_from;
+  } else if (nargs >= 2) {
     double from;
     ant_value_t arg_err = array_integer_arg(js, args, nargs, 1, 0, &from);
     if (is_err(arg_err)) return arg_err;
@@ -2406,7 +2430,11 @@ static ant_value_t builtin_array_splice(ant_params_t) {
   int start = (int)start_at;
 
   int deleteCount = nargs == 0 ? 0 : (int)len - start;
-  if (nargs >= 2) {
+  int64_t small_count;
+  if (__builtin_expect(array_small_integer_arg(args, nargs, 1, &small_count), 1)) {
+    if (small_count < 0) small_count = 0;
+    if (small_count < deleteCount) deleteCount = (int)small_count;
+  } else if (nargs >= 2) {
     double requested;
     arg_err = array_integer_arg(js, args, nargs, 1, 0, &requested);
     if (is_err(arg_err)) return arg_err;
@@ -2505,21 +2533,17 @@ static ant_value_t builtin_array_copyWithin(ant_params_t) {
   ant_object_t *dense = doff ? frozen : NULL;
   if (dense && array_dense_covers(dense, len) && (!dense->flags.may_have_holes || array_keeps_holes(js, dense))) {
     uint32_t target = (uint32_t)target_at, start = (uint32_t)start_at, count = (uint32_t)span;
-    bool holes = false;
     if (start < target) {
       for (uint32_t i = count; i-- > 0;) {
         ant_value_t v = dense_get(doff, (ant_offset_t)(start + i));
-        holes |= is_empty_slot(v);
         dense_set_owned(js, doff, (ant_offset_t)(target + i), v);
       }
     } else {
       for (uint32_t i = 0; i < count; i++) {
         ant_value_t v = dense_get(doff, (ant_offset_t)(start + i));
-        holes |= is_empty_slot(v);
         dense_set_owned(js, doff, (ant_offset_t)(target + i), v);
       }
     }
-    if (holes) array_mark_may_have_holes(arr);
     return arr;
   }
 
@@ -2609,12 +2633,20 @@ static ant_value_t builtin_array_with(ant_params_t) {
   
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
-  double relative;
-  ant_value_t arg_err = array_integer_arg(js, args, nargs, 0, 0, &relative);
-  if (is_err(arg_err)) return arg_err;
-  if (relative < 0) relative += (double)len;
-  if (relative < 0 || relative >= (double)len) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid index");
-  ant_offset_t idx = (ant_offset_t)relative;
+  ant_offset_t idx;
+  int64_t small;
+  if (__builtin_expect(array_small_integer_arg(args, nargs, 0, &small), 1)) {
+    if (small < 0) small += (int64_t)len;
+    if (small < 0 || (uint64_t)small >= len) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid index");
+    idx = (ant_offset_t)small;
+  } else {
+    double relative;
+    ant_value_t arg_err = array_integer_arg(js, args, nargs, 0, 0, &relative);
+    if (is_err(arg_err)) return arg_err;
+    if (relative < 0) relative += (double)len;
+    if (relative < 0 || relative >= (double)len) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid index");
+    idx = (ant_offset_t)relative;
+  }
   ant_value_t value = nargs > 1 ? args[1] : Ant_Value_Undefined;
   
   ant_value_t result = array_copy_spliced(js, arr, len, idx, 1, &value, 1);

@@ -11,8 +11,11 @@ enum {
   SV_PRIVATE_METHOD = 1,
   SV_PRIVATE_ACCESSOR = 2,
   SV_PRIVATE_GETTER = 3,
-  SV_PRIVATE_SETTER = 4
+  SV_PRIVATE_SETTER = 4,
+  SV_PRIVATE_METHODS = 5
 };
+
+ant_value_t sv_private_define_methods(ant_t *js, ant_value_t obj, ant_value_t methods);
 
 static inline uint32_t sv_private_hash_token(ant_value_t token) {
   if (is_object_type(token)) {
@@ -237,13 +240,14 @@ static inline ant_value_t sv_op_put_private(sv_vm_t *vm, ant_t *js) {
   return Ant_Value_Undefined;
 }
 
-static inline ant_value_t sv_private_define(
+static inline __attribute__((always_inline)) ant_value_t sv_private_define(
   ant_t *js, ant_value_t obj, ant_value_t token, ant_value_t val, uint8_t def_kind
 ) {
   if (!is_object_type(obj)) return sv_private_missing(js);
   ant_private_entry_t *existing = sv_private_find_entry(obj, token);
 
-  if (def_kind == SV_PRIVATE_GETTER || def_kind == SV_PRIVATE_SETTER) {
+  if (def_kind >= SV_PRIVATE_GETTER) {
+    if (def_kind == SV_PRIVATE_METHODS) return sv_private_define_methods(js, obj, val);
     ant_private_entry_t *entry = existing;
     if (!entry) {
       entry = sv_private_make_entry(
@@ -294,6 +298,30 @@ static inline ant_value_t sv_op_has_private(sv_vm_t *vm, ant_t *js) {
 }
 
 #ifdef SV_OPS_IMPLEMENTATION
+
+ant_value_t sv_private_define_methods(ant_t *js, ant_value_t obj, ant_value_t methods) {
+  ant_object_t *list = vtype(methods) == kTypeArray ? js_obj_ptr(methods) : NULL;
+  if (!list || !list->flags.fast_array) return js_mkerr(js, "invalid private method table");
+  
+  ant_private_table_t *table = sv_private_table_for_obj(obj, false);
+  bool fresh = !table || table->count == 0;
+  
+  for (uint32_t i = 0; i + 2 < list->u.array.len; i += 3) {
+    const ant_value_t *entry = &list->u.array.data[i];
+    uint8_t kind = (uint8_t)Ant_Value_AsNumberUnchecked(entry[2]);
+    
+    if (fresh && kind == SV_PRIVATE_METHOD) {
+      if (!sv_private_make_entry(js, obj, entry[0], SV_PRIVATE_METHOD, entry[1], Ant_Value_Undefined, Ant_Value_Undefined))
+        return js_mkerr(js, "oom");
+      continue;
+    }
+    
+    ant_value_t defined = sv_private_define(js, obj, entry[0], entry[1], kind);
+    if (is_err(defined)) return defined;
+  }
+  
+  return Ant_Value_Undefined;
+}
 
 ant_private_entry_t *sv_private_make_entry(
   ant_t *js, ant_value_t obj, ant_value_t token,

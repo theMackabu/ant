@@ -251,6 +251,7 @@ bool Ant_Array_UnshareSlow(ant_t *js, ant_object_t *ptr, uint32_t min_cap) {
   
   if (min_cap > cap) cap = Array_SlackCapacity(min_cap);
   if (min_cap > block->count) block->outgrown = true;
+  if (cap == 0) cap = gc_array_storage_fit(1);
   
   ant_value_t *data = gc_array_storage_alloc(js, cap);
   if (!data) return false;
