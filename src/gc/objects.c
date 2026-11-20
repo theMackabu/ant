@@ -1204,7 +1204,7 @@ static bool gc_next_interp_stub_save(ant_t *js, gc_stub_walk_t *w, uintptr_t *sa
     if (next <= fp) break;
     w->fp = next;
 
-    if (((const uintptr_t *)fp)[1] != (uintptr_t)ant_jit_enter_clean_ret) continue;
+    if (!ant_jit_entered_clean(((const uintptr_t *)fp)[1])) continue;
     if (next + 16 > w->hi) continue;
 
     uintptr_t lo = next + ANT_JIT_ENTER_SAVED_LO;
@@ -1649,9 +1649,13 @@ size_t gc_array_storage_cached_bytes(ant_t *js) {
   return bytes;
 }
 
+static constexpr size_t GC_SHARED_ELEMENTS_PAGED_MIN = 64 * 1024;
+
 gc_shared_elements_t *gc_shared_elements_alloc(ant_t *js, const ant_value_t *values, uint32_t count) {
   size_t bytes = sizeof(gc_shared_elements_t) + (size_t)count * sizeof(ant_value_t);
-  gc_shared_elements_t *block = malloc(bytes);
+  gc_shared_elements_t *block = bytes >= GC_SHARED_ELEMENTS_PAGED_MIN
+    ? ant_cage_alloc(bytes, _Alignof(gc_shared_elements_t))
+    : malloc(bytes);
   if (!block) return NULL;
   
   *block = (gc_shared_elements_t){.refs = 1, .count = count};
@@ -1675,7 +1679,8 @@ void gc_shared_elements_release(ant_t *js, gc_shared_elements_t *block) {
   size_t bytes = sizeof(gc_shared_elements_t) + (size_t)block->count * sizeof(ant_value_t);
   Ant_Assert(js->alloc_bytes.arrays >= bytes, "shared elements released more bytes than were allocated");
   js->alloc_bytes.arrays -= bytes;
-  free(block);
+  if (bytes >= GC_SHARED_ELEMENTS_PAGED_MIN) ant_cage_free(block, bytes);
+  else free(block);
 }
 
 void gc_shared_elements_finalize(ant_t *js, ant_object_t *obj) {

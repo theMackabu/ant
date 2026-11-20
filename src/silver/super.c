@@ -123,6 +123,7 @@ static void Super_BindPut(
 ) {
   sv_ic_set_cached_shape(js, ic, guarded);
   sv_ic_set_shape_ref(js, ic, &ic->guard.super_put.base_shape, SV_IC_SHAPE_REF_SUPER_BASE, base_shape);
+  sv_ic_set_shape_ref(js, ic, &ic->guard.super_put.add_from_shape, SV_IC_SHAPE_REF_SUPER_ADD_FROM, NULL);
   ic->cached_index = slot;
   ic->super_put_holder_depth = holder_depth;
   ic->super_put_kind = kind;
@@ -141,10 +142,17 @@ static bool Super_AddsSlot(const ant_object_t *own, const ant_shape_t *from, con
   return !sv_is_proto_atom(atom) && ant_shape_prop_at(own->shape, slot)->attrs == ANT_PROP_ATTR_DEFAULT;
 }
 
+static bool Super_AddIsCacheable(const ant_object_t *own, ant_shape_t *before, const sv_atom_t *atom) {
+  if (!before || before == own->shape || ant_shape_is_dictionary(before)) return false;
+  if (own->type_tag != kTypeObject || sv_is_proto_atom(atom)) return false;
+  return ant_shape_lookup_interned(before, atom->str) < 0;
+}
+
 static bool Super_TryBindPut(
   ant_t *js, sv_ic_entry_t *ic, ant_value_t receiver, ant_value_t home,
-  const sv_atom_t *atom, ant_shape_t *from, bool exhausted
+  const sv_atom_t *atom, ant_shape_t *before, bool exhausted
 ) {
+  bool records_add = ic->super_put_kind != SV_SUPER_PUT_IC_DATA_ANY_SHAPE && !(ic->shape_ref_mask & SV_IC_POLY_MEGA);
   ant_value_t parent = Super_CacheableParent(home);
   ant_object_t *base = Super_ObjectOf(parent);
   if (!base || !base->shape || ant_shape_is_dictionary(base->shape)) return false;
@@ -183,16 +191,19 @@ static bool Super_TryBindPut(
   bool megamorphic = same_base && (exhausted || (ic->shape_ref_mask & SV_IC_POLY_MEGA)) && own->type_tag == kTypeObject;
   if (megamorphic) sv_pf_poly_free(js, ic);
   Super_BindPut(js, ic, megamorphic ? SV_SUPER_PUT_IC_DATA_ANY_SHAPE : SV_SUPER_PUT_IC_DATA, own->shape, base->shape, (uint32_t)slot, 0);
+  bool appends = !megamorphic && before && !ant_shape_is_dictionary(before) && Super_AddsSlot(own, before, atom, (uint32_t)slot);
+  if (appends && !(ic->shape_ref_mask & SV_IC_HAS_PUT_POLY) && Super_AddIsCacheable(own, before, atom))
+    sv_ic_set_shape_ref(js, ic, &ic->guard.super_put.add_from_shape, SV_IC_SHAPE_REF_SUPER_ADD_FROM, before);
   
-  if (megamorphic || !Super_AddsSlot(own, from, atom, (uint32_t)slot)) return true;
+  if (!appends || !records_add) return true;
   uintptr_t proto = sv_add_proto_key(js, own);
-  if (proto) sv_pf_poly_keep(js, ic, from, own->shape, (uint32_t)slot, js->ic.epoch, proto, true);
+  if (proto) sv_pf_poly_keep(js, ic, before, own->shape, (uint32_t)slot, js->ic.epoch, proto, true);
   
   return true;
 }
 
 static __attribute__((noinline)) void Super_FillPut(
-  ant_t *js, sv_ic_entry_t *ic, ant_value_t receiver, ant_value_t home, const sv_atom_t *atom, ant_shape_t *from
+  ant_t *js, sv_ic_entry_t *ic, ant_value_t receiver, ant_value_t home, const sv_atom_t *atom, ant_shape_t *before
 ) {
   if (ic->epoch != js->ic.epoch) {
     ic->shape_ref_mask &= (sv_ic_flags_t)~SV_IC_POLY_MEGA;
@@ -203,13 +214,33 @@ static __attribute__((noinline)) void Super_FillPut(
   
   bool exhausted = ic->slow_hits >= SUPER_PUT_FILL_LIMIT;
   if (!exhausted) ic->slow_hits++;
-  if (!Super_TryBindPut(js, ic, receiver, home, atom, from, exhausted) && exhausted) Super_DisablePut(js, ic);
+  if (!Super_TryBindPut(js, ic, receiver, home, atom, before, exhausted) && exhausted) Super_DisablePut(js, ic);
 }
 
 static __attribute__((noinline)) int Super_StorePoly(
   ant_t *js, sv_ic_entry_t *ic, ant_object_t *own, const sv_atom_t *atom, ant_value_t val
 ) {
   return sv_pf_poly_try_store(js, ic, own, atom, val);
+}
+
+static __attribute__((noinline)) int Super_StoreAdd(
+  ant_t *js, sv_ic_entry_t *ic, ant_object_t *own, const sv_atom_t *atom, ant_value_t val
+) {
+  if (own->flags.frozen || own->flags.sealed || !own->flags.extensible || own->type_tag != kTypeObject) return 0;
+  
+  ant_shape_t *old_shape = own->shape;
+  ant_shape_retain(ic->cached_shape);
+  own->shape = ic->cached_shape;
+  ant_shape_release(old_shape);
+  
+  ant_object_invalidate_guarded_absence(js, own);
+  ant_property_mutation_invalidate(js, own, atom->str);
+  if (ic->cached_index >= own->prop_count && !js_obj_ensure_prop_capacity(js, own, ic->cached_index + 1)) return -1;
+  
+  ant_object_prop_set_unchecked(own, ic->cached_index, val);
+  gc_write_barrier_prop(js, own, val);
+  
+  return 1;
 }
 
 static inline __attribute__((always_inline)) int Super_StoreCached(
@@ -219,6 +250,7 @@ static inline __attribute__((always_inline)) int Super_StoreCached(
   uint32_t slot = ic->cached_index;
   
   if (ic->cached_shape != own->shape) {
+    if (own->shape == ic->guard.super_put.add_from_shape) return Super_StoreAdd(js, ic, own, atom, val);
     if (ic->super_put_kind != SV_SUPER_PUT_IC_DATA_ANY_SHAPE)
       return (ic->shape_ref_mask & SV_IC_HAS_PUT_POLY) ? Super_StorePoly(js, ic, own, atom, val) : 0;
     
@@ -249,11 +281,6 @@ static inline __attribute__((always_inline)) const ant_shape_prop_t *Super_Cache
   return holder && holder->shape == ic->cached_shape ? ant_shape_prop_at(holder->shape, ic->cached_index) : NULL;
 }
 
-static inline bool Super_MayRecordAdd(const ant_t *js, const sv_ic_entry_t *ic) {
-  if (ic->epoch != js->ic.epoch) return true;
-  return ic->super_put_kind != SV_SUPER_PUT_IC_DATA_ANY_SHAPE && !(ic->shape_ref_mask & SV_IC_POLY_MEGA);
-}
-
 static __attribute__((noinline)) ant_value_t Super_PutFieldSlow(
   ant_t *js, sv_func_t *func, ant_value_t receiver, ant_value_t home,
   const sv_atom_t *atom, ant_value_t val, sv_ic_entry_t *fillable
@@ -265,9 +292,9 @@ static __attribute__((noinline)) ant_value_t Super_PutFieldSlow(
     vtype(base) == kTypeNull ? "null" : "undefined", (int)atom->len, atom->str
   );
   
-  const ant_object_t *own = fillable && Super_MayRecordAdd(js, fillable) ? Super_ObjectOf(receiver) : NULL;
-  ant_shape_t *from = own && own->shape && !ant_shape_is_dictionary(own->shape) ? own->shape : NULL;
-  if (from) ant_shape_retain(from);
+  const ant_object_t *own = fillable ? Super_ObjectOf(receiver) : NULL;
+  ant_shape_t *before = own ? own->shape : NULL;
+  if (before) ant_shape_retain(before);
   
   ant_value_t stored = js_set_with_receiver_interned(js, base, atom->str, atom->len, val, receiver);
   ant_value_t result = val;
@@ -275,9 +302,9 @@ static __attribute__((noinline)) ant_value_t Super_PutFieldSlow(
   if (is_err(stored)) result = stored;
   else if (Ant_Exception_Pending(js)) result = Ant_Exception_Current(js);
   else if (stored == Ant_Value_False && func && func->is_strict) result = Ant_Error_CreateReadOnlyProperty(js, receiver, js_mkstr(js, atom->str, atom->len));
-  else if (fillable && stored == Ant_Value_True) Super_FillPut(js, fillable, receiver, home, atom, from);
+  else if (fillable && stored == Ant_Value_True) Super_FillPut(js, fillable, receiver, home, atom, before);
   
-  if (from) ant_shape_release(from);
+  if (before) ant_shape_release(before);
   return result;
 }
 

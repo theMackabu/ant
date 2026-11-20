@@ -734,13 +734,16 @@ static bool shape_same_layout(const ant_shape_t *a, const ant_shape_t *b) {
   return true;
 }
 
+static inline bool shape_is_proto_child(const ant_shape_t *shape) {
+  return shape->parent_key == shape_child_key((uint64_t)shape->proto, 0x40);
+}
+
 static ant_shape_t *shape_proto_base(ant_shape_t *shape) {
   for (;;) {
     ant_shape_t *parent = shape->parent;
-    if (!parent || parent->bulk_layout) return shape;
-    if (shape->parent_key != shape_child_key((uint64_t)shape->proto, 0x40)) return shape;
-    if (!shape_same_layout(parent, shape)) return shape;
+    if (!parent || parent->bulk_layout || !shape_same_layout(parent, shape)) return shape;
     shape = parent;
+    if (!shape_is_proto_child(shape)) return shape;
   }
 }
 
@@ -751,7 +754,7 @@ ant_shape_t *ant_shape_with_proto(ant_shape_t *shape, ant_value_t proto) {
     return shape;
   }
 
-  ant_shape_t *base = shape_proto_base(shape);
+  ant_shape_t *base = shape_is_proto_child(shape) ? shape_proto_base(shape) : shape;
   if (base != shape && base->proto == proto) {
     ant_shape_retain(base);
     return base;

@@ -79,4 +79,23 @@ takeFirst();
 assert.strictEqual(returnCalls, 2);
 delete mapIteratorProto.return;
 
+const parents = [];
+const parentTwin = () => { const object = twin(); parents.push(Object.create(object)); if (parents.length > 64) parents.length = 0; return object; };
+for (let i = 0; i <= warm; i++) plainNext(i < warm ? parentTwin() : mapIteratorProto, i < warm ? mapNext : exhausted);
+assert.deepStrictEqual([mapCount(), [...map].length], [0, 0]);
+plainNext(mapIteratorProto, mapNext);
+assert.deepStrictEqual([mapCount(), [...map].length], [2, 2]);
+
+returnCalls = 0;
+for (let i = 0; i <= warm; i++) plainReturn(i < warm ? parentTwin() : mapIteratorProto, countingReturn);
+breakEarly();
+takeFirst();
+assert.strictEqual(returnCalls, 2);
+delete mapIteratorProto.return;
+
+const held = parentTwin();
+for (let i = 0; i < warm; i++) plainNext(held, i & 1 ? mapNext : exhausted);
+assert.strictEqual(held.next, mapNext);
+assert.deepStrictEqual([mapCount(), [...map].length, count()], [2, 2, 3]);
+
 console.log('ok');

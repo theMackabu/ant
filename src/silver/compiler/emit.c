@@ -479,6 +479,7 @@ int emit_jump(sv_compiler_t *c, sv_op_t op) {
 void patch_jump(sv_compiler_t *c, int offset) {
   int32_t delta = (int32_t)(c->code_len - offset - 4);
   patch_u32(c, offset, (uint32_t)delta);
+  c->this_checked = false;
 }
 
 void emit_loop(sv_compiler_t *c, int loop_start) {

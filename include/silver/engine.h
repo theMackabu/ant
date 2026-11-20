@@ -266,6 +266,7 @@ typedef enum: uint8_t {
   SV_IC_SHAPE_REF_ADD_FROM = 1u << 1,
   SV_IC_SHAPE_REF_SUPER_BASE = SV_IC_SHAPE_REF_ADD_FROM,
   SV_IC_SHAPE_REF_ADD_TO   = 1u << 2,
+  SV_IC_SHAPE_REF_SUPER_ADD_FROM = SV_IC_SHAPE_REF_ADD_TO,
   SV_IC_POLY_MEGA          = 1u << 3,
   SV_IC_MEGA_COMPILED      = 1u << 4,
   SV_IC_HAS_GET_POLY       = 1u << 5,
@@ -417,6 +418,7 @@ typedef struct {
     
     struct {
       ant_shape_t *base_shape;
+      ant_shape_t *add_from_shape;
     } super_put;
     
     struct {
@@ -465,6 +467,11 @@ void sv_ic_polys_cleanup(ant_t *js);
 static_assert(
   offsetof(sv_ic_entry_t, guard.super_put.base_shape) == offsetof(sv_ic_entry_t, guard.add.from_shape),
   "the super store base shape is owned through the add-from shape reference"
+);
+
+static_assert(
+  offsetof(sv_ic_entry_t, guard.super_put.add_from_shape) == offsetof(sv_ic_entry_t, guard.add.to_shape),
+  "the super store add-from shape is owned through the add-to shape reference"
 );
 
 static_assert(
@@ -810,6 +817,14 @@ static inline void sv_func_set_ctor_props(sv_func_t *func, uint32_t props) {
   func->ctor_slot_class = sv_ctor_slot_class(props) & 3;
 }
 
+static inline bool sv_func_may_construct(const sv_func_t *func) {
+  return func && !func->is_arrow && !func->is_eval;
+}
+
+static inline bool sv_func_construct_needs_caller(const sv_func_t *func) {
+  return sv_func_may_construct(func) && !func->is_class_ctor;
+}
+
 static inline uint8_t sv_construct_slots(const sv_func_t *func) {
   if (!func || !func->ctor_slot_class) return ANT_INOBJ_BASE_SLOTS;
   return func->ctor_slot_class == 1 ? ANT_INOBJ_WIDE_SLOTS : ANT_INOBJ_LARGE_SLOTS;
@@ -1095,6 +1110,7 @@ typedef struct sv_closure {
   uint8_t in_remember_set;
   uint8_t generation;
   uint8_t ctor_props;
+  uint8_t ctor_slots;
   uint64_t gc_epoch;
 } sv_closure_t;
 
@@ -1107,9 +1123,7 @@ static inline uint32_t sv_closure_ctor_props(const sv_closure_t *closure) {
 
 static inline uint8_t sv_closure_construct_slots(const sv_closure_t *closure) {
   if (!closure) return ANT_INOBJ_BASE_SLOTS;
-  if (!closure->ctor_props) return sv_construct_slots(closure->func);
-  uint8_t slot_class = sv_ctor_slot_class(closure->ctor_props);
-  return slot_class == 0 ? ANT_INOBJ_BASE_SLOTS : slot_class == 1 ? ANT_INOBJ_WIDE_SLOTS : ANT_INOBJ_LARGE_SLOTS;
+  return closure->ctor_slots ? closure->ctor_slots : sv_construct_slots(closure->func);
 }
 
 static inline bool sv_closure_has_lexical_this(const sv_closure_t *closure) {
@@ -1133,6 +1147,7 @@ static inline sv_closure_t *js_closure_alloc_finish(ant_t *js, sv_closure_t *c) 
   c->in_remember_set = 0;
   c->generation = 0;
   c->ctor_props = 0;
+  c->ctor_slots = 0;
   
   if (js->young_closure_len < js->young_closure_cap)
     js->young_closures[js->young_closure_len++] = c;
@@ -1267,11 +1282,6 @@ typedef struct sv_jit_osr_mark {
   sv_frame_t *frame;
   void *entry;
 } sv_jit_osr_mark_t;
-
-typedef struct sv_jit_construct_mark {
-  struct sv_jit_construct_mark *prev;
-  uint32_t depth;
-} sv_jit_construct_mark_t;
 
 typedef struct {
   uint32_t bc_off;

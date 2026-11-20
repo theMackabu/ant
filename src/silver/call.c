@@ -58,9 +58,13 @@ static ant_value_t sv_call_default_ctor(
     return Ant_Value_Undefined;
   }
 
+  ant_value_t parent;
+  if (__builtin_expect(!sv_super_constructor_fast(closure->super_val, &parent), 0))
+    parent = sv_super_constructor(closure->super_val);
+  
   ant_value_t super_this = ctx->this_val;
   ant_value_t result = sv_vm_call(
-    vm, js, sv_super_constructor(closure->super_val), ctx->this_val,
+    vm, js, parent, ctx->this_val,
     ctx->args, ctx->argc, &super_this, ctx->new_target
   );
   if (out_this) *out_this = super_this;

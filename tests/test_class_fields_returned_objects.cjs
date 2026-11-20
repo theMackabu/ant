@@ -50,6 +50,72 @@ for (let i = 0; i < 3000; i++) {
   assert.throws(() => new OnLocked(), TypeError);
 }
 
+{
+  class Ret { constructor(o) { return o; } }
+  class Tagged extends Ret { tag = 1; }
+  class List extends Array { tag = 1; 0 = 'z'; 1 = 'b'; '01' = 'c'; [Symbol.for('q')] = 2; }
+  const list = new List();
+  assert.deepStrictEqual([list.tag, list[0], list.length, list['01'], list[Symbol.for('q')]], [1, 'z', 2, 'c', 2]);
+  assert.deepStrictEqual(Object.getOwnPropertyDescriptor(list, 'tag'), { value: 1, writable: true, enumerable: true, configurable: true });
+  assert.throws(() => new (class extends Array { length = 5 })(), TypeError);
+  assert.throws(() => new Tagged(Object.freeze([])), TypeError);
+  assert.throws(() => new Tagged(Object.preventExtensions([1])), TypeError);
+
+  let hit = 0;
+  const withSetter = [];
+  Object.defineProperty(withSetter, 'tag', { set() { hit++; }, configurable: true });
+  new Tagged(withSetter);
+  assert.deepStrictEqual([hit, withSetter.tag], [0, 1]);
+
+  const pinned = [];
+  Object.defineProperty(pinned, 'tag', { value: 0, writable: true, configurable: false });
+  assert.throws(() => new Tagged(pinned), TypeError);
+
+  class Later extends Promise { tag = 1; }
+  const later = new Later(() => {});
+  assert.ok(later instanceof Promise);
+  assert.strictEqual(later.tag, 1);
+
+  function* gen() {}
+  const it = gen();
+  new Tagged(it);
+  assert.strictEqual(it.tag, 1);
+}
+
+{
+  class Ret { constructor(o) { return o; } }
+  class Index extends Ret { 0 = 'z'; }
+  class Past extends Ret { 5 = 'z'; }
+  class Len extends Ret { length = 5; }
+  class Named extends Ret { tag = 1; [Symbol.for('q')] = 2; '01' = 3; }
+  assert.throws(() => new Index(new String('ab')), TypeError);
+  assert.throws(() => new Len(new String('ab')), TypeError);
+  const text = new String('ab');
+  new Past(text);
+  new Named(text);
+  assert.deepStrictEqual([text[0], text[5], text.tag, text[Symbol.for('q')], text['01'], text.length], ['a', 'z', 1, 2, 3, 2]);
+  assert.deepStrictEqual(Object.keys(text), ['0', '1', '5', 'tag', '01']);
+
+  class Text extends String { tag = 1; 9 = 'far'; }
+  const own = new Text('ab');
+  assert.deepStrictEqual([own.tag, own[9], own[0], String(own)], [1, 'far', 'a', 'ab']);
+  assert.throws(() => new (class extends String { 1 = 'x' })('ab'), TypeError);
+  assert.throws(() => new (class extends String { length = 1 })('ab'), TypeError);
+
+  for (const boxed of [new Number(1), new Boolean(true), Object(Symbol('s')), Object(1n)]) {
+    new Index(boxed); new Len(boxed); new Named(boxed);
+    assert.deepStrictEqual([boxed[0], boxed.length, boxed.tag], ['z', 5, 1]);
+  }
+
+  class Keyed extends Map { tag = 1; 0 = 'z'; length = 2; }
+  const keyed = new Keyed([[1, 2]]);
+  assert.deepStrictEqual([keyed.tag, keyed[0], keyed.length, keyed.size, keyed.get(1)], [1, 'z', 2, 1, 2]);
+
+  class Both { #p() { return 1; } tag = 1; 0 = 'z'; length = 2; sum() { return this.#p() + this.tag; } }
+  const both = new Both();
+  assert.deepStrictEqual([both.sum(), both[0], both.length], [2, 'z', 2]);
+}
+
 class Plain { a = 1; b = [1, 2]; [Symbol.iterator] = null; 3 = 'three'; }
 for (let i = 0; i < 3000; i++) {
   const p = new Plain();

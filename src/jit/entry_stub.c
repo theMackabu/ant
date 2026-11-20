@@ -29,130 +29,172 @@
 #if ANT_JIT_ENTER_STUB
 
 #if defined(__APPLE__)
-#define STUB_SYM "_ant_jit_enter_clean"
-#define RET_SYM "_ant_jit_enter_clean_ret"
-#define RET_ALT_ENTRY ".alt_entry " RET_SYM "\n"
+#define STUB_NAME(name) "_" name
+#define RET_ALT_ENTRY(ret) ".alt_entry " ret "\n"
+#define STUB_TYPE(sym, kind) ""
 #else
-#define STUB_SYM "ant_jit_enter_clean"
-#define RET_SYM "ant_jit_enter_clean_ret"
-#define RET_ALT_ENTRY ""
+#define STUB_NAME(name) name
+#define RET_ALT_ENTRY(ret) ""
+#define STUB_TYPE(sym, kind) ".type " sym ", " kind "\n"
 #endif
 
 #if defined(__aarch64__)
-__asm__(
-  ".text\n"
-  ".p2align 2\n"
-  ".globl " STUB_SYM "\n"
-#if !defined(__APPLE__)
-  ".type " STUB_SYM ", %function\n"
-#endif
-  STUB_SYM ":\n"
-  "  .cfi_startproc\n"
-  "  stp x29, x30, [sp, #-96]!\n"
-  "  .cfi_def_cfa_offset 96\n"
-  "  .cfi_offset x29, -96\n"
-  "  .cfi_offset x30, -88\n"
-  "  mov x29, sp\n"
-  "  .cfi_def_cfa x29, 96\n"
-  "  stp x19, x20, [sp, #16]\n"
-  "  stp x21, x22, [sp, #32]\n"
-  "  stp x23, x24, [sp, #48]\n"
-  "  stp x25, x26, [sp, #64]\n"
-  "  stp x27, x28, [sp, #80]\n"
-  "  .cfi_offset x19, -80\n"
-  "  .cfi_offset x20, -72\n"
-  "  .cfi_offset x21, -64\n"
-  "  .cfi_offset x22, -56\n"
-  "  .cfi_offset x23, -48\n"
-  "  .cfi_offset x24, -40\n"
-  "  .cfi_offset x25, -32\n"
-  "  .cfi_offset x26, -24\n"
-  "  .cfi_offset x27, -16\n"
-  "  .cfi_offset x28, -8\n"
-  "  mov x16, x0\n"
-  "  mov x0, x1\n"
-  "  mov x1, x2\n"
-  "  mov x2, x3\n"
-  "  mov x3, x4\n"
-  "  mov x4, x5\n"
-  "  mov x5, x6\n"
-  "  mov x6, x7\n"
-  "  mov x19, xzr\n"
-  "  mov x20, xzr\n"
-  "  mov x21, xzr\n"
-  "  mov x22, xzr\n"
-  "  mov x23, xzr\n"
-  "  mov x24, xzr\n"
-  "  mov x25, xzr\n"
-  "  mov x26, xzr\n"
-  "  mov x27, xzr\n"
-  "  mov x28, xzr\n"
-  "  blr x16\n"
-  ".globl " RET_SYM "\n"
-  RET_ALT_ENTRY
-  RET_SYM ":\n"
-  "  ldp x27, x28, [sp, #80]\n"
-  "  ldp x25, x26, [sp, #64]\n"
-  "  ldp x23, x24, [sp, #48]\n"
-  "  ldp x21, x22, [sp, #32]\n"
-  "  ldp x19, x20, [sp, #16]\n"
-  "  ldp x29, x30, [sp], #96\n"
-  "  ret\n"
+#define CLEAN_STUB(sym, ret) \
+  ".text\n" \
+  ".p2align 2\n" \
+  ".globl " sym "\n" \
+  STUB_TYPE(sym, "%function") \
+  sym ":\n" \
+  "  .cfi_startproc\n" \
+  "  stp x29, x30, [sp, #-96]!\n" \
+  "  .cfi_def_cfa_offset 96\n" \
+  "  .cfi_offset x29, -96\n" \
+  "  .cfi_offset x30, -88\n" \
+  "  mov x29, sp\n" \
+  "  .cfi_def_cfa x29, 96\n" \
+  "  stp x19, x20, [sp, #16]\n" \
+  "  stp x21, x22, [sp, #32]\n" \
+  "  stp x23, x24, [sp, #48]\n" \
+  "  stp x25, x26, [sp, #64]\n" \
+  "  stp x27, x28, [sp, #80]\n" \
+  "  .cfi_offset x19, -80\n" \
+  "  .cfi_offset x20, -72\n" \
+  "  .cfi_offset x21, -64\n" \
+  "  .cfi_offset x22, -56\n" \
+  "  .cfi_offset x23, -48\n" \
+  "  .cfi_offset x24, -40\n" \
+  "  .cfi_offset x25, -32\n" \
+  "  .cfi_offset x26, -24\n" \
+  "  .cfi_offset x27, -16\n" \
+  "  .cfi_offset x28, -8\n" \
+  "  mov x16, x0\n" \
+  "  mov x0, x1\n" \
+  "  mov x1, x2\n" \
+  "  mov x2, x3\n" \
+  "  mov x3, x4\n" \
+  "  mov x4, x5\n" \
+  "  mov x5, x6\n" \
+  "  mov x6, x7\n" \
+  "  mov x19, xzr\n" \
+  "  mov x20, xzr\n" \
+  "  mov x21, xzr\n" \
+  "  mov x22, xzr\n" \
+  "  mov x23, xzr\n" \
+  "  mov x24, xzr\n" \
+  "  mov x25, xzr\n" \
+  "  mov x26, xzr\n" \
+  "  mov x27, xzr\n" \
+  "  mov x28, xzr\n" \
+  "  blr x16\n" \
+  ".globl " ret "\n" \
+  RET_ALT_ENTRY(ret) \
+  ret ":\n" \
+  "  ldp x27, x28, [sp, #80]\n" \
+  "  ldp x25, x26, [sp, #64]\n" \
+  "  ldp x23, x24, [sp, #48]\n" \
+  "  ldp x21, x22, [sp, #32]\n" \
+  "  ldp x19, x20, [sp, #16]\n" \
+  "  ldp x29, x30, [sp], #96\n" \
+  "  ret\n" \
   "  .cfi_endproc\n"
-);
+
+#define CONSTRUCT_STUB(sym, ret) \
+  ".text\n" \
+  ".p2align 2\n" \
+  ".globl " sym "\n" \
+  STUB_TYPE(sym, "%function") \
+  sym ":\n" \
+  "  .cfi_startproc\n" \
+  "  stp x29, x30, [sp, #-16]!\n" \
+  "  .cfi_def_cfa_offset 16\n" \
+  "  .cfi_offset x29, -16\n" \
+  "  .cfi_offset x30, -8\n" \
+  "  mov x29, sp\n" \
+  "  .cfi_def_cfa x29, 16\n" \
+  "  blr x7\n" \
+  ".globl " ret "\n" \
+  RET_ALT_ENTRY(ret) \
+  ret ":\n" \
+  "  ldp x29, x30, [sp], #16\n" \
+  "  ret\n" \
+  "  .cfi_endproc\n"
 #elif defined(__x86_64__)
-__asm__(
-  ".text\n"
-  ".p2align 4\n"
-  ".globl " STUB_SYM "\n"
-#if !defined(__APPLE__)
-  ".type " STUB_SYM ", @function\n"
-#endif
-  STUB_SYM ":\n"
-  "  .cfi_startproc\n"
-  "  push %rbp\n"
-  "  .cfi_def_cfa_offset 16\n"
-  "  .cfi_offset %rbp, -16\n"
-  "  mov %rsp, %rbp\n"
-  "  .cfi_def_cfa_register %rbp\n"
-  "  push %rbx\n"
-  "  push %r12\n"
-  "  push %r13\n"
-  "  push %r14\n"
-  "  push %r15\n"
-  "  .cfi_offset %rbx, -24\n"
-  "  .cfi_offset %r12, -32\n"
-  "  .cfi_offset %r13, -40\n"
-  "  .cfi_offset %r14, -48\n"
-  "  .cfi_offset %r15, -56\n"
-  "  mov %rdi, %rax\n"
-  "  mov %rsi, %rdi\n"
-  "  mov %rdx, %rsi\n"
-  "  mov %rcx, %rdx\n"
-  "  mov %r8, %rcx\n"
-  "  mov %r9, %r8\n"
-  "  movslq 16(%rbp), %r9\n"
-  "  mov 24(%rbp), %r10\n"
-  "  push %r10\n"
-  "  xor %ebx, %ebx\n"
-  "  xor %r12d, %r12d\n"
-  "  xor %r13d, %r13d\n"
-  "  xor %r14d, %r14d\n"
-  "  xor %r15d, %r15d\n"
-  "  call *%rax\n"
-  ".globl " RET_SYM "\n"
-  RET_ALT_ENTRY
-  RET_SYM ":\n"
-  "  add $8, %rsp\n"
-  "  pop %r15\n"
-  "  pop %r14\n"
-  "  pop %r13\n"
-  "  pop %r12\n"
-  "  pop %rbx\n"
-  "  pop %rbp\n"
-  "  ret\n"
+#define CLEAN_STUB(sym, ret) \
+  ".text\n" \
+  ".p2align 4\n" \
+  ".globl " sym "\n" \
+  STUB_TYPE(sym, "@function") \
+  sym ":\n" \
+  "  .cfi_startproc\n" \
+  "  push %rbp\n" \
+  "  .cfi_def_cfa_offset 16\n" \
+  "  .cfi_offset %rbp, -16\n" \
+  "  mov %rsp, %rbp\n" \
+  "  .cfi_def_cfa_register %rbp\n" \
+  "  push %rbx\n" \
+  "  push %r12\n" \
+  "  push %r13\n" \
+  "  push %r14\n" \
+  "  push %r15\n" \
+  "  .cfi_offset %rbx, -24\n" \
+  "  .cfi_offset %r12, -32\n" \
+  "  .cfi_offset %r13, -40\n" \
+  "  .cfi_offset %r14, -48\n" \
+  "  .cfi_offset %r15, -56\n" \
+  "  mov %rdi, %rax\n" \
+  "  mov %rsi, %rdi\n" \
+  "  mov %rdx, %rsi\n" \
+  "  mov %rcx, %rdx\n" \
+  "  mov %r8, %rcx\n" \
+  "  mov %r9, %r8\n" \
+  "  movslq 16(%rbp), %r9\n" \
+  "  mov 24(%rbp), %r10\n" \
+  "  push %r10\n" \
+  "  xor %ebx, %ebx\n" \
+  "  xor %r12d, %r12d\n" \
+  "  xor %r13d, %r13d\n" \
+  "  xor %r14d, %r14d\n" \
+  "  xor %r15d, %r15d\n" \
+  "  call *%rax\n" \
+  ".globl " ret "\n" \
+  RET_ALT_ENTRY(ret) \
+  ret ":\n" \
+  "  add $8, %rsp\n" \
+  "  pop %r15\n" \
+  "  pop %r14\n" \
+  "  pop %r13\n" \
+  "  pop %r12\n" \
+  "  pop %rbx\n" \
+  "  pop %rbp\n" \
+  "  ret\n" \
   "  .cfi_endproc\n"
-);
+
+#define CONSTRUCT_STUB(sym, ret) \
+  ".text\n" \
+  ".p2align 4\n" \
+  ".globl " sym "\n" \
+  STUB_TYPE(sym, "@function") \
+  sym ":\n" \
+  "  .cfi_startproc\n" \
+  "  push %rbp\n" \
+  "  .cfi_def_cfa_offset 16\n" \
+  "  .cfi_offset %rbp, -16\n" \
+  "  mov %rsp, %rbp\n" \
+  "  .cfi_def_cfa_register %rbp\n" \
+  "  sub $8, %rsp\n" \
+  "  push 16(%rbp)\n" \
+  "  call *24(%rbp)\n" \
+  ".globl " ret "\n" \
+  RET_ALT_ENTRY(ret) \
+  ret ":\n" \
+  "  leave\n" \
+  "  .cfi_def_cfa %rsp, 8\n" \
+  "  ret\n" \
+  "  .cfi_endproc\n"
 #endif
+
+__asm__(CLEAN_STUB(STUB_NAME("ant_jit_enter_clean"), STUB_NAME("ant_jit_enter_clean_ret")));
+__asm__(CLEAN_STUB(STUB_NAME("ant_jit_enter_clean_construct"), STUB_NAME("ant_jit_enter_clean_construct_ret")));
+__asm__(CONSTRUCT_STUB(STUB_NAME("ant_jit_enter_construct"), STUB_NAME("ant_jit_enter_construct_ret")));
 
 #endif
