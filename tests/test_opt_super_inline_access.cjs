@@ -1,4 +1,38 @@
 const assert = require('node:assert');
+const { spawnSync } = require('node:child_process');
+
+if (process.argv[2] === 'constructor-home') {
+  class A { constructor() { this.v = 0; } }
+  A.prototype.d = 2;
+  class B extends A { constructor() { super(); this.r = super.d; super.v = this.r; } }
+  let sum = 0;
+  for (let i = 0; i < 30000; i++) { const b = new B(); sum += b.r + b.v; }
+  console.log(sum);
+  return;
+}
+
+if (process.argv[2] === 'base-setter') {
+  class A {}
+  class B extends A { constructor() { super(); this.v = 0; } put(x) { super.v = x; return this.v; } }
+  const b = new B();
+  function hot() { let s = 0; for (let i = 0; i < 20000; i++) s += b.put(i); return s; }
+  hot(); hot();
+  let hits = 0;
+  Object.defineProperty(A.prototype, 'v', { set(x) { hits += x; }, configurable: true });
+  console.log(b.put(7), hits);
+  return;
+}
+
+{
+  const child = spawnSync(process.execPath, [__filename, 'base-setter'], { encoding: 'utf8' });
+  assert.strictEqual(child.stdout.trim(), '19999 7');
+}
+
+{
+  const child = spawnSync(process.execPath, [__filename, 'constructor-home'], { encoding: 'utf8', env: { ...process.env, ANT_DEBUG: 'dump/vm:op-warn' } });
+  assert.strictEqual(child.stdout.trim().split('\n').pop(), '120000');
+  assert.doesNotMatch(child.stderr, /bailout .*op=(GET|PUT)_SUPER_FIELD/);
+}
 
 function run(body) { for (let round = 0; round < 3; round++) body(round); }
 
@@ -120,12 +154,14 @@ function warm(f) { let last; for (let i = 0; i < 20000; i++) last = f(i); return
   class A {}
   class B extends A { constructor() { super(); this.v = 0; } put(x) { super.v = x; return this.v; } }
   const b = new B();
-  const hot = (i) => b.put(i);
-  assert.strictEqual(warm(hot), 19999);
+  function loop() { let last = 0; for (let i = 0; i < 20000; i++) last = b.put(i); return last; }
+  assert.strictEqual(loop(), 19999);
+  assert.strictEqual(loop(), 19999);
   let hits = 0;
   Object.defineProperty(A.prototype, 'v', { set(x) { hits += x; }, configurable: true });
-  assert.strictEqual(hot(7), 19999);
-  assert.strictEqual(hits, 7);
+  assert.strictEqual(b.put(3), 19999);
+  assert.strictEqual(loop(), 19999);
+  assert.strictEqual(hits, 3 + 19999 * 20000 / 2);
 }
 
 {

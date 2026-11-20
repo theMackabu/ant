@@ -127,9 +127,8 @@ static bool Super_SetterPathIsPlain(const ant_object_t *base, uint32_t depth) {
   return cur && cur->shape && !ant_shape_is_dictionary(cur->shape);
 }
 
-static bool Super_AddIsCacheable(const ant_object_t *own, ant_shape_t *before, uint32_t slot, const sv_atom_t *atom) {
+static bool Super_AddIsCacheable(const ant_object_t *own, ant_shape_t *before, const sv_atom_t *atom) {
   if (!before || before == own->shape || ant_shape_is_dictionary(before)) return false;
-  if (slot != ant_shape_count(before) || ant_shape_count(own->shape) != slot + 1) return false;
   if (own->type_tag != kTypeObject || sv_is_proto_atom(atom)) return false;
   return ant_shape_lookup_interned(before, atom->str) < 0;
 }
@@ -176,7 +175,7 @@ static bool Super_TryBindPut(
   bool megamorphic = same_base && (exhausted || (ic->shape_ref_mask & SV_IC_POLY_MEGA)) && own->type_tag == kTypeObject;
   if (megamorphic) sv_pf_poly_free(js, ic);
   Super_BindPut(js, ic, megamorphic ? SV_SUPER_PUT_IC_DATA_ANY_SHAPE : SV_SUPER_PUT_IC_DATA, own->shape, base->shape, (uint32_t)slot, 0);
-  if (!megamorphic && !(ic->shape_ref_mask & SV_IC_HAS_PUT_POLY) && Super_AddIsCacheable(own, before, (uint32_t)slot, atom))
+  if (!megamorphic && !(ic->shape_ref_mask & SV_IC_HAS_PUT_POLY) && Super_AddIsCacheable(own, before, atom))
     sv_ic_set_shape_ref(js, ic, &ic->guard.super_put.add_from_shape, SV_IC_SHAPE_REF_SUPER_ADD_FROM, before);
   
   return true;
