@@ -1015,6 +1015,22 @@ ant_value_t opt_rt_construct(sv_vm_t *vm, ant_value_t callee, ant_value_t new_ta
   return jit_helper_new(vm, vm->js, callee, new_target, args, (int)argc);
 }
 
+static __attribute__((noinline)) ant_value_t opt_reflect_construct_holey(
+  ant_t *js, ant_value_t target, ant_value_t new_target, ant_value_t *args, int64_t argc, bool explicit_new_target
+) {
+  ant_value_t list = js_mkarr_dense_literal(js, args, (uint32_t)argc);
+  if (is_err(list)) return list;
+  return js_reflect_construct_array_like(js, target, list, new_target, explicit_new_target);
+}
+
+ant_value_t opt_rt_reflect_construct(sv_vm_t *vm, ant_value_t target, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t explicit_new_target) {
+  for (int64_t i = 0; i < argc; i++)
+    if (__builtin_expect(args[i] == T_EMPTY, 0))
+      return opt_reflect_construct_holey(vm->js, target, new_target, args, argc, explicit_new_target != 0);
+
+  return js_reflect_construct_listed(vm->js, target, new_target, explicit_new_target != 0, args, (int)argc);
+}
+
 ant_value_t opt_rt_new_this(sv_vm_t *vm, ant_value_t callee) {
   ant_t *js = vm->js;
   if (vtype(callee) != kTypeFunction) return T_EMPTY;

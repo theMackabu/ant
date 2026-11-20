@@ -1126,6 +1126,34 @@ bool chain_lacks_plain_keys(ant_value_t start, const char *first, const char *se
   return false;
 }
 
+bool chain_plain_get_interned(ant_value_t start, const char *interned, ant_value_t *out) {
+  for (int depth = 0; depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
+    uint8_t type = vtype(start);
+    if (type != kTypeObject && type != kTypeFunction) return false;
+
+    ant_object_t *ptr = js_obj_ptr(js_as_obj(start));
+    if (!ptr || !ptr->shape || ptr->flags.is_exotic) return false;
+
+    int32_t slot = interned ? ant_shape_lookup_interned(ptr->shape, interned) : -1;
+    if (slot >= 0) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
+      if (!prop || prop->has_getter || prop->has_setter || (uint32_t)slot >= ptr->prop_count) return false;
+      *out = ant_object_prop_get_unchecked(ptr, (uint32_t)slot);
+      return true;
+    }
+
+    ant_value_t proto = ant_object_proto(ptr);
+    if (!is_object_type(proto)) {
+      if (vtype(proto) != kTypeNull && (type != kTypeObject || vtype(proto) != kTypeUndefined)) return false;
+      *out = Ant_Value_Undefined;
+      return true;
+    }
+    start = proto;
+  }
+
+  return false;
+}
+
 static inline bool chain_lacks_plain_key(ant_value_t start, const char *interned) {
   return chain_lacks_plain_keys(start, interned, NULL);
 }
