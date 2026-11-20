@@ -14,6 +14,7 @@
 #include "silver/upvalues.h"
 #include "silver/vm.h"
 #include "silver/jit.h"
+#include "silver/stack_trace.h"
 #include "gc/objects.h"
 #include "modules/collections.h"
 #include "modules/regex.h"
@@ -541,10 +542,10 @@ static void opt_print_stats(void) {
     (unsigned long long)opt_stats.exits, (unsigned long long)opt_stats.inline_exits,
     (double)opt_stats.compiled_ns / 1e6, (unsigned long long)opt_stats.rejected, (double)opt_stats.rejected_ns / 1e6,
     (unsigned long long)opt_stats.code_bytes, (unsigned long long)opt_codes_freed, (unsigned long long)opt_stats.mapped);
-  fprintf(stderr, "jit: opt catch stats drops=%llu caught_in_code=%llu caught_in_interpreter=%llu interpreter_entries=%llu unwinds=%llu\n",
+  fprintf(stderr, "jit: opt catch stats drops=%llu caught_in_code=%llu caught_in_interpreter=%llu interpreter_entries=%llu throw_captures=%llu unwinds=%llu\n",
     (unsigned long long)opt_stats.drops, (unsigned long long)opt_stats.catches,
     (unsigned long long)opt_stats.catch_leaves, (unsigned long long)opt_stats.catch_entries,
-    (unsigned long long)opt_stats.unwinds);
+    (unsigned long long)sv_jit_throw_captures, (unsigned long long)opt_stats.unwinds);
 }
 
 static void opt_drop_code(opt_code_t *code) {
@@ -1273,7 +1274,8 @@ ant_value_t opt_rt_take_thrown(sv_vm_t *vm, ant_value_t error, ant_value_t unuse
 }
 
 ant_value_t opt_rt_throw(ant_value_t value, sv_vm_t *vm) {
-  return is_err(value) ? value : js_throw(vm->js, value);
+  if (is_err(value)) return value;
+  return sv_jit_throw(vm->js, value);
 }
 
 static void opt_catch_missed(ant_t *js, opt_code_t *code, const opt_handler_t *handler) {
