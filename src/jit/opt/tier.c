@@ -731,21 +731,6 @@ ant_value_t opt_rt_resume(
   );
 }
 
-ant_value_t opt_rt_resume_borrowed(
-  sv_vm_t *vm, opt_code_t *code, opt_entry_t *entry, uint32_t bc_off, uint32_t depth,
-  ant_value_t *params, ant_value_t *locals, ant_value_t *stack, sv_jit_finally_t *finally, bool throwing
-) {
-  sv_frame_t *frame = entry->frame;
-  for (uint32_t i = 0; i < code->param_count; i++) frame->bp[i] = params[i];
-  for (uint32_t i = 0; i < code->local_count; i++) frame->lp[i] = locals[i];
-  sv_rebase_open_upvalues(&vm->open_upvalues, params, frame->bp, code->param_count);
-  sv_rebase_open_upvalues(&vm->open_upvalues, locals, frame->lp, code->local_count);
-  if (is_object_type(vm->jit.resume.arguments_obj)) frame->arguments_obj = vm->jit.resume.arguments_obj;
-  entry->frame = NULL;
-  sv_frame_resume_at(vm, frame, code->func, (int)bc_off, stack, (int)depth, finally, throwing);
-  return SV_JIT_AWAIT_PARKED;
-}
-
 static inline ant_value_t opt_exit_new_target(const opt_exit_frame_t *frame) {
   if (!frame->site->construct) return Ant_Value_Undefined;
   return vtype(frame->new_target) == kTypeUndefined ? frame->callee : frame->new_target;

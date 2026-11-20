@@ -1316,11 +1316,6 @@ typedef struct {
   int64_t target;
 } sv_jit_finally_t;
 
-void sv_frame_resume_at(
-  sv_vm_t *vm, sv_frame_t *frame, sv_func_t *func, int off,
-  const ant_value_t *stack, int depth, sv_jit_finally_t *finally, bool throwing
-);
-
 static inline int sv_jit_await_site_index(const sv_jit_await_map_t *map, uint32_t bc_off) {
   int lo = 0, hi = map->site_count - 1;
   

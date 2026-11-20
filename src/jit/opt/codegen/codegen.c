@@ -4053,7 +4053,7 @@ static void opt_cg_entry_tails(opt_cg_t *cg, asm_label_t retry) {
 
   masm_bind(m, cg->osr_entry);
   masm_store64(m, opt_cg_entry_field(cg, offsetof(opt_entry_t, params)), cg->pinned.frame);
-  if ((cg->has_frame || (cg->graph->handlers.len && !cg->graph->func->is_derived_ctor)) && cg->graph->osr_entries.len) {
+  if (cg->has_frame && cg->graph->osr_entries.len) {
     masm_move64(m, MASM_ARGUMENT_GPRS[0], cg->pinned.vm);
     masm_load_effective_address(m, MASM_ARGUMENT_GPRS[1], opt_cg_entry_field(cg, 0));
     masm_call_absolute(m, (uint64_t)(uintptr_t)opt_rt_borrow_frame);
@@ -4351,11 +4351,8 @@ static ant_value_t opt_cg_catch(sv_vm_t *vm, uint8_t *locals, const opt_site_t *
   uint32_t finally_count = opt_cg_site_finally_count(code, site);
   sv_jit_finally_t finally[finally_count ? finally_count : 1];
   sv_jit_finally_t *pending = opt_cg_site_finally(code, site, dump, spills, objects, finally, finally_count);
-  bool borrowed = entry->frame && !entry->owns_frame && entry->frame == &vm->frames[vm->fp] && !code->func->is_async;
   vm->jit.resume.throwing = handler->finally;
-  ant_value_t result = borrowed
-    ? opt_rt_resume_borrowed(vm, code, entry, site->bc_off, depth + 1, frame, frame_locals, stack, pending, handler->finally)
-    : opt_rt_resume(vm, code, entry, site->bc_off, depth + 1, frame, frame_locals, stack, pending);
+  ant_value_t result = opt_rt_resume(vm, code, entry, site->bc_off, depth + 1, frame, frame_locals, stack, pending);
   opt_rt_close_storage(vm, frame, frame + total + 1);
   GC_ROOT_RESTORE(js, mark);
   return result;
