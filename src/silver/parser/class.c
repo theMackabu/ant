@@ -106,8 +106,11 @@ static sv_ast_t *parse_class_strict(sv_parser_t *p, bool outer_strict) {
 
       if (p->lx.st.tok == TOK_LBRACE) {
         bool saved_strict = p->lx.strict;
+        bool saved_initializer = p->class_initializer;
         p->lx.strict = true;
+        p->class_initializer = true;
         sv_ast_t *block = parse_block(p, false);
+        p->class_initializer = saved_initializer;
         p->lx.strict = saved_strict;
         block->type = N_STATIC_BLOCK;
         block->flags = FN_STATIC | FN_CLASS_BODY;
@@ -192,7 +195,10 @@ static sv_ast_t *parse_class_strict(sv_parser_t *p, bool outer_strict) {
       return cls;
     } else if (p->lx.st.tok == TOK_ASSIGN) {
       p->lx.st.consumed = 1;
+      bool saved_initializer = p->class_initializer;
+      p->class_initializer = true;
       method->right = parse_assign(p);
+      p->class_initializer = saved_initializer;
       consume_semicolon(p);
     } else {
       method->right = mk(N_UNDEF);
