@@ -495,6 +495,8 @@ static ant_value_t js_set_immediate(ant_params_t) {
   entry->refed = true;
   entry->handle = Ant_Value_Undefined;
   entry->next = NULL;
+
+  ant_value_t obj = immediate_make_object(js, entry);
   
   if (js->timers.immediates_tail == NULL) {
     js->timers.immediates = entry;
@@ -504,7 +506,7 @@ static ant_value_t js_set_immediate(ant_params_t) {
     js->timers.immediates_tail = entry;
   }
 
-  return immediate_make_object(js, entry);
+  return obj;
 }
 
 // clearImmediate(immediateId | immediateObject)
@@ -905,6 +907,8 @@ void process_immediates(ant_t *js) {
   
   t->immediates_processing = t->immediates;
   t->immediates = t->immediates_tail = NULL;
+  t->immediates_scanned = NULL;
+  t->immediates_batch_scanned = 0;
   
   while (t->immediates_processing) {
     immediate_entry_t *entry = t->immediates_processing;
@@ -1056,6 +1060,7 @@ void cleanup_timer_module(ant_t *js) {
   }
   
   t->immediates = t->immediates_tail = NULL;
+  t->immediates_scanned = NULL;
 }
 
 
@@ -1070,7 +1075,17 @@ void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
     for (int i = 0; i < t->nargs; i++) mark(js, t->args[i]);
   }
   
-  immediate_entry_t *immediate_lists[2] = { js->timers.immediates, js->timers.immediates_processing };
+  ant_timer_state_t *s = &js->timers;
+  bool running_scanned = minor && s->immediates_batch_scanned;
+  
+  immediate_entry_t *immediate_lists[2] = {
+    minor && s->immediates_scanned ? s->immediates_scanned->next : s->immediates,
+    running_scanned ? NULL : s->immediates_processing,
+  };
+  
+  s->immediates_scanned = s->immediates_tail;
+  s->immediates_batch_scanned = 1;
+  
   for (int l = 0; l < 2; l++) for (immediate_entry_t *i = immediate_lists[l]; i; i = i->next) {
     mark(js, i->callback);
     mark(js, i->handle);

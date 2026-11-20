@@ -19,6 +19,7 @@ struct ant_realm {
   bool initializing;
   bool intrinsics_saved;
   bool gc_dirty;
+  bool microtasks_draining;
   
   ant_ptr_pair_map_t builtin_records;
   uint64_t gc_epoch;
@@ -28,6 +29,8 @@ struct ant_realm {
   ant_ptr_pair_map_t vm_scripts;
   microtask_entry_t *microtasks;
   microtask_entry_t *microtasks_tail;
+  microtask_entry_t *microtasks_scanned;
+  uintptr_t microtasks_batch_scanned;
   microtask_entry_t *microtasks_processing;
 
   #define ANT_REALM_FIELD(name) __typeof__(((ant_t *)0)->name) name;

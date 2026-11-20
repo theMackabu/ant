@@ -548,9 +548,11 @@ struct ant_isolate_t {
     ant_object_t **collections;
     size_t collection_len;
     size_t collection_cap;
+    size_t collection_old;
 
     ant_value_t *kept_alive;
     size_t kept_alive_len;
+    size_t kept_alive_traced;
     size_t kept_alive_cap;
 
     struct {
@@ -594,6 +596,7 @@ struct ant_isolate_t {
   struct {
     ant_value_t *items;
     size_t len;
+    size_t traced;
     size_t cap;
   } pending_rejections;
 
