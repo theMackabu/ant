@@ -279,6 +279,7 @@ void Ant_Destroy(ant_t *js) {
   js->c_root_count = js->c_root_cap = 0;
 
   ant_realm_destroy_all(js);
+  js_for_in_cache_clear(js);
   if (!js->process_exiting) ant_shapes_destroy(js);
   free(js->global_lexicals);
   
