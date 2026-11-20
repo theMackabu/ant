@@ -511,6 +511,7 @@ export function targets() {
     'test_class_fields_typed_arrays.cjs',
     'test_class_initializer_arguments.cjs',
     'test_math_bigint_args.cjs',
+    'test_object_literal_computed_key_order.cjs',
     'test_object_literal_proto_key.cjs',
     'test_startup_time.cjs',
     'test_stream_async_iterator.mjs',

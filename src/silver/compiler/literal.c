@@ -175,6 +175,20 @@ static void emit_object_method_home(sv_compiler_t *c, const sv_ast_t *value, boo
   }
 }
 
+static bool computed_key_needs_early_coercion(sv_compiler_t *c, const sv_ast_t *prop) {
+  const sv_ast_t *value = prop->right;
+  if (!value || value->type == N_FUNC || value->type == N_NUMBER || value->type == N_STRING) return false;
+  
+  switch (infer_expr_type(c, prop->left)) {
+    case SV_TI_NUM:
+    case SV_TI_STR:
+    case SV_TI_BOOL:
+    case SV_TI_NULL:
+    case SV_TI_UNDEF: return false;
+    default:          return true;
+  }
+}
+
 void compile_object(sv_compiler_t *c, sv_ast_t *node) {
   if (node->flags & FN_PATTERN_ONLY) {
     bool shorthand_init = false;
@@ -245,6 +259,7 @@ void compile_object(sv_compiler_t *c, sv_ast_t *node) {
       emit(c, flags);
     } else if (prop->flags & FN_COMPUTED) {
       compile_expr(c, prop->left);
+      if (computed_key_needs_early_coercion(c, prop)) emit_op(c, OP_TO_PROPKEY);
       compile_expr(c, prop->right);
       emit_object_method_home(c, prop->right, true);
       emit_op(c, OP_DEFINE_METHOD_COMP);
