@@ -647,6 +647,7 @@ void opt_rt_borrow_frame(sv_vm_t *vm, opt_entry_t *entry) {
   entry->frame = frame;
   entry->locals = frame->lp;
   entry->owns_frame = false;
+  if (vm->jit.osr_marks && vm->jit.osr_marks->frame == frame) vm->jit.osr_marks->borrowed = true;
 }
 
 ant_value_t opt_rt_leave_frame(ant_value_t result, sv_vm_t *vm, opt_entry_t *entry) {
