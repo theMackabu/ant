@@ -451,9 +451,10 @@ static inline __attribute__((always_inline)) js_eval_result_t js_eval_source_fro
   uint16_t shadows = is_eval ? sv_eval_shadow_bits(js, scope.env, scope.scope, buf, len) : 0;
   
   sv_eval_cache_key_t cache_key;
-  bool cacheable = is_eval && !(shadows & SV_EVAL_SCOPE_ENV_BOUND) && sv_eval_cache_key(
+  bool cacheable = is_eval && sv_eval_cache_key(
     js, &cache_key, buf, len,
     (uint16_t)(shadows | (strict ? 4 : 0) | (mode == SV_COMPILE_EVAL_FUNCTION ? 8 : 0)));
+  if (cacheable && (shadows & SV_EVAL_SCOPE_ENV_BOUND)) cacheable = sv_eval_cache_key_bind(js, &cache_key, scope.env);
   
   sv_func_t *cached = cacheable ? sv_eval_cache_find(js, &cache_key) : NULL;
   if (cached) {

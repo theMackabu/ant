@@ -66,6 +66,23 @@ void sv_eval_env_each_with(
   }
 }
 
+uint32_t sv_eval_env_layout(ant_t *js, ant_value_t env, const void **levels, uint32_t max) {
+  uint32_t count = 0;
+
+  for (ant_value_t cur = env; cur != js->global; cur = ant_shape_proto(js_obj_ptr(cur)->shape)) {
+    if (vtype(cur) != kTypeObject || count == max) return 0;
+    const ant_object_t *obj = js_obj_ptr(cur);
+    const sv_eval_env_state_t *state = sv_eval_env_state(cur);
+    if (!state || obj->prop_count || obj->flags.is_exotic || !obj->shape) return 0;
+
+    const void *level = state->is_variable ? (const void *)state->func : (const void *)state->scope;
+    if (!level) return 0;
+    levels[count++] = level;
+  }
+
+  return count;
+}
+
 const sv_eval_scope_flags_t *sv_eval_env_flags(ant_value_t env) {
   static const sv_eval_scope_flags_t none = {0};
   if (!is_object_type(env)) return &none;

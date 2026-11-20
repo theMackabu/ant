@@ -2,6 +2,7 @@
 #include "silver/engine.h"
 #include "silver/jit.h"
 #include "silver/feedback.h"
+#include "silver/eval_env.h"
 
 #include "cage.h"
 #include "hash.h"
@@ -410,7 +411,9 @@ typedef struct {
   sv_func_t *func;
   uint32_t len;
   uint16_t bits;
+  uint8_t layout_count;
   bool used;
+  const void *layout[SV_EVAL_LAYOUT_MAX];
 } sv_eval_cache_entry_t;
 
 struct sv_eval_cache {
@@ -434,9 +437,18 @@ bool sv_eval_cache_key(ant_t *js, sv_eval_cache_key_t *key, const char *source, 
 
   *key = (sv_eval_cache_key_t){
     .hash = ant_hash_mix(hash_key(source, len), ant_hash_secret[3] ^ bits),
-    .source = source, .len = (uint32_t)len, .bits = bits,
+    .source = source, .len = (uint32_t)len, .bits = bits, .layout_count = 0,
   };
 
+  return true;
+}
+
+bool sv_eval_cache_key_bind(ant_t *js, sv_eval_cache_key_t *key, ant_value_t env) {
+  uint32_t count = sv_eval_env_layout(js, env, key->layout, SV_EVAL_LAYOUT_MAX);
+  if (!count) return false;
+
+  for (uint32_t i = 0; i < count; i++) key->hash = ant_hash_mix(key->hash, (uint64_t)(uintptr_t)key->layout[i]);
+  key->layout_count = (uint8_t)count;
   return true;
 }
 
@@ -447,8 +459,10 @@ sv_func_t *sv_eval_cache_find(ant_t *js, const sv_eval_cache_key_t *key) {
   sv_eval_cache_entry_t *entry = &cache->entries[key->hash & (SV_EVAL_CACHE_SLOTS - 1)];
   if (
     !entry->func || entry->hash != key->hash || entry->len != key->len ||
-    entry->bits != key->bits || !entry->func->debug || entry->func->debug->filename != js->filename ||
-    memcmp(entry->source, key->source, key->len) != 0
+    entry->bits != key->bits || entry->layout_count != key->layout_count ||
+    !entry->func->debug || entry->func->debug->filename != js->filename ||
+    memcmp(entry->source, key->source, key->len) != 0 ||
+    memcmp(entry->layout, key->layout, key->layout_count * sizeof(key->layout[0])) != 0
   ) return NULL;
 
   entry->used = true;
@@ -483,8 +497,9 @@ void sv_eval_cache_store(ant_t *js, const sv_eval_cache_key_t *key, sv_func_t *f
   
   *entry = (sv_eval_cache_entry_t){
     .hash = key->hash, .source = source, .func = func,
-    .len = key->len, .bits = key->bits, .used = true,
+    .len = key->len, .bits = key->bits, .layout_count = key->layout_count, .used = true,
   };
+  memcpy(entry->layout, key->layout, key->layout_count * sizeof(key->layout[0]));
 }
 
 void sv_eval_cache_age(ant_t *js) {
@@ -493,7 +508,7 @@ void sv_eval_cache_age(ant_t *js) {
 
   for (uint32_t i = 0; i < SV_EVAL_CACHE_SLOTS; i++) {
     sv_eval_cache_entry_t *entry = &cache->entries[i];
-    if (entry->used) entry->used = false;
+    if (entry->used && !entry->layout_count) entry->used = false;
     else eval_cache_drop(entry);
   }
 }

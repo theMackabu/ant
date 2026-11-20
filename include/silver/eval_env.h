@@ -21,6 +21,7 @@ static inline bool sv_eval_name_is_with_marker(const char *name, uint32_t len) {
 }
 
 const sv_eval_scope_flags_t *sv_eval_env_flags(ant_value_t env);
+uint32_t sv_eval_env_layout(ant_t *js, ant_value_t env, const void **levels, uint32_t max);
 bool sv_eval_env_shadows_global(
   ant_t *js, ant_value_t env, 
   const char *name, uint32_t len
