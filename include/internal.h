@@ -263,6 +263,7 @@ ant_value_t js_set_with_receiver_interned(ant_t *js, ant_value_t target, const c
 
 ant_value_t js_mkobj_with_proto(ant_t *js, ant_value_t proto);
 ant_value_t js_mkobj_with_proto_slots(ant_t *js, ant_value_t proto, uint8_t inobj_limit);
+ant_value_t js_mkobj_bare_slots(ant_t *js, uint8_t inobj_limit);
 ant_shape_t *ant_object_proto_root(ant_t *js, ant_value_t proto, uint8_t inobj_limit);
 ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs);
 ant_value_t mkprop_exact_attrs(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs);
@@ -573,6 +574,13 @@ static inline int js_brand_id(ant_value_t obj) {
 
 static inline bool js_check_brand(ant_value_t obj, int brand) {
   return js_brand_id(obj) == brand;
+}
+
+bool js_is_namespace_object(ant_value_t obj);
+
+static inline __attribute__((always_inline)) bool js_is_sealed_namespace(ant_value_t obj, const ant_object_t *ptr) {
+  if (__builtin_expect((ptr->flags.raw & (ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_FROZEN)) != 0, 1)) return false;
+  return !is_object_type(ant_object_proto(ptr)) && js_is_namespace_object(obj);
 }
 
 static inline bool lookup_symbol_prop_meta(ant_t *js, ant_value_t cur_obj, ant_offset_t sym_off, prop_meta_t *out) {

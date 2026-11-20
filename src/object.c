@@ -423,6 +423,14 @@ static ant_value_t mkobj_with_inobj_limit(ant_t *js, ant_offset_t parent, uint8_
   return mkref(kTypeObject, obj);
 }
 
+__attribute__((noinline)) bool js_is_namespace_object(ant_value_t obj) {
+  return js_check_brand(obj, BRAND_MODULE_NAMESPACE);
+}
+
+ant_value_t js_mkobj_bare_slots(ant_t *js, uint8_t inobj_limit) {
+  return mkobj_with_inobj_limit(js, 0, inobj_limit);
+}
+
 ant_value_t mkobj(ant_t *js, ant_offset_t parent) {
   return mkobj_with_inobj_limit(js, parent, (uint8_t)ANT_INOBJ_BASE_SLOTS);
 }

@@ -883,11 +883,6 @@ static ant_value_t builtin_object_fromEntries(ant_params_t) {
   return result;
 }
 
-static __attribute__((noinline)) bool object_is_namespace_export(ant_value_t as_obj) {
-  const ant_object_t *ptr = js_obj_ptr(as_obj);
-  return ptr && !ptr->flags.extensible && !ptr->flags.frozen && js_check_brand(as_obj, BRAND_MODULE_NAMESPACE);
-}
-
 static ant_value_t object_get_own_property_descriptor_keyed(
   ant_t *js, ant_value_t obj, property_key_view_t *key
 ) {
@@ -1005,8 +1000,10 @@ static ant_value_t object_get_own_property_descriptor_keyed(
   );
 
   ant_value_t prop_val = Ant_Value_Undefined;
-  if (prop_off.obj) prop_val = js_prop_load(prop_off);
-  else if (has_string_exotic) {
+  if (prop_off.obj) {
+    [[clang::always_inline]]
+    prop_val = js_prop_load(prop_off);
+  } else if (has_string_exotic) {
     prop_val = string_exotic_value;
     writable = false;
     enumerable = !string_exotic_length;
@@ -1023,7 +1020,7 @@ static ant_value_t object_get_own_property_descriptor_keyed(
     configurable = false;
   }
   
-  if (__builtin_expect(!writable && !configurable && !is_sym && prop_off.obj != NULL, 0) && object_is_namespace_export(as_obj)) writable = true;
+  if (__builtin_expect(!writable && !configurable && !is_sym && prop_off.obj != NULL, 0) && js_is_sealed_namespace(as_obj, prop_off.obj)) writable = true;
   return js_from_data_descriptor(js, prop_val, writable, enumerable, configurable);
 }
 

@@ -485,7 +485,7 @@ static ant_value_t esm_default_export_or_namespace(ant_t *js, ant_value_t ns) {
 }
 
 static ant_value_t esm_make_namespace_object(ant_t *js) {
-  ant_value_t ns = Ant_Object_CreateBare(js);
+  ant_value_t ns = js_mkobj_bare_slots(js, (uint8_t)ANT_INOBJ_LARGE_SLOTS);
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, ns);
 
@@ -596,6 +596,13 @@ static void esm_sort_namespace_exports(ant_t *js, ant_object_t *ptr) {
       gc_write_barrier(js, ptr, values[order[slot]]);
     }
   free(order);
+}
+
+bool esm_export_star_skips(ant_t *js, const char *name, size_t len) {
+  if (len == 7 && memcmp(name, "default", 7) == 0) return true;
+  ant_value_t target = js_module_eval_active_ns(js);
+  ant_value_t declared;
+  return is_object_type(target) && js_try_get_own_data_prop(js, target, name, len, &declared);
 }
 
 static void esm_seal_namespace(ant_t *js, ant_value_t ns) {

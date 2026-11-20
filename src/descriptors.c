@@ -1350,9 +1350,8 @@ static bool define_namespace_export(
   ant_t *js, const define_target_t *t, const define_desc_t *d, const define_existing_t *e, ant_value_t *result
 ) {
   const ant_object_t *ptr = e->ptr;
-  if (!e->found || t->sym_key || !ptr || ptr->flags.extensible || ptr->flags.frozen) return false;
-  if (!e->has_meta || e->meta.writable || e->meta.configurable || e->meta.has_getter || e->meta.has_setter) return false;
-  if (!js_check_brand(t->as_obj, BRAND_MODULE_NAMESPACE)) return false;
+  if (!e->found || t->sym_key || !ptr || !e->has_meta || e->meta.writable || e->meta.configurable) return false;
+  if (e->meta.has_getter || e->meta.has_setter || !js_is_sealed_namespace(t->as_obj, ptr)) return false;
 
   bool compatible =
     !d->has_get && !d->has_set &&
