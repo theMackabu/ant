@@ -234,6 +234,8 @@ typedef struct sv_compiler {
 
   int field_init_count;
   int *field_locals;
+  int private_method_count;
+  int private_methods_local;
   int param_count;
 
   const sv_ast_t *value_params_node;
