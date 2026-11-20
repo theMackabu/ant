@@ -488,7 +488,15 @@ let moduleLocal = 'module';
   const back = 'reuseWrite', churnSrc = 'for (let i = 0; i < 35000; i++) kept = { i }';
   function churn() { let kept = null; eval(churnSrc); return kept; }
   function scrub(flag) { eval(flag ? '1' : '2'); return eval('3'); }
-  function settle() { scrub(false); scrub(true); churn(); }
+  function deep(n) { return n ? [n].map((v) => deep(v - 1) + eval(String(v)))[0] : 0; }
+  let settled = 0;
+  function settle() {
+    const form = settled++ % 3;
+    if (form === 1) deep(24);
+    scrub(false); scrub(true);
+    if (form === 2) deep(12);
+    churn();
+  }
   function restart() { globalThis.reuseTick = 1; delete globalThis.reuseTick; globalThis.reuseWrite = 'global'; }
   function reads(shadow, src) { eval(shadow ? shadowRead : plain); return eval(src); }
   function writes(shadow, src) { eval(shadow ? shadowWrite : plain); eval(src); return [eval(shadow ? back : 'pad'), globalThis.reuseWrite]; }
@@ -506,6 +514,18 @@ let moduleLocal = 'module';
   run(false, 'reuseRead ', reads, 'local');
   run(true, 'reuseWrite = "set"', writes, [undefined, 'set']);
   run(false, 'reuseWrite = "set" ', writes, ['set', 'global']);
+  for (let round = 0; round < 12; round++) {
+    globalThis.reuseWrite = 'global';
+    assert.strictEqual(reads(false, 'reuseRead'), 'global');
+    settle();
+    assert.strictEqual(reads(true, 'reuseRead'), 'local');
+    settle();
+    assert.deepStrictEqual(writes(false, 'reuseWrite = "set"'), [undefined, 'set']);
+    settle();
+    globalThis.reuseWrite = 'global';
+    assert.deepStrictEqual(writes(true, 'reuseWrite = "set"'), ['set', 'global']);
+    settle();
+  }
   delete globalThis.reuseRead;
   delete globalThis.reuseWrite;
 }
