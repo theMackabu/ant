@@ -454,9 +454,10 @@ static inline __attribute__((always_inline)) js_eval_result_t js_eval_source_fro
   bool cacheable = is_eval && sv_eval_cache_key(
     js, &cache_key, buf, len,
     (uint16_t)(shadows | (strict ? 4 : 0) | (mode == SV_COMPILE_EVAL_FUNCTION ? 8 : 0)));
-  if (cacheable && (shadows & SV_EVAL_SCOPE_ENV_BOUND)) cacheable = sv_eval_cache_key_bind(js, &cache_key, scope.env);
+  bool bound = (shadows & SV_EVAL_SCOPE_ENV_BOUND) != 0;
+  if (bound && cacheable) cacheable = sv_eval_cache_key_bind(js, &cache_key, scope.env);
   
-  sv_func_t *cached = cacheable ? sv_eval_cache_find(js, &cache_key) : NULL;
+  sv_func_t *cached = !cacheable ? NULL : bound ? sv_eval_cache_find_bound(js, &cache_key) : sv_eval_cache_find(js, &cache_key);
   if (cached) {
     sv_code_unit_pin(cached->unit);
     ant_value_t value = js_execute_compiled_eval_bytecode(js, cached, scope, caller);
@@ -494,7 +495,7 @@ static inline __attribute__((always_inline)) js_eval_result_t js_eval_source_fro
   coroutine_t *async_coro = NULL;
   ant_value_t value;
   
-  if (cacheable) sv_eval_cache_store(js, &cache_key, func);
+  if (cacheable) sv_eval_cache_store(js, &cache_key, func, bound);
   switch (mode) {
     case SV_COMPILE_EVAL:
     case SV_COMPILE_EVAL_FUNCTION:

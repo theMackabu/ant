@@ -97,7 +97,8 @@ bool sv_eval_cache_key(ant_t *js, sv_eval_cache_key_t *key, const char *source, 
 bool sv_eval_cache_key_bind(ant_t *js, sv_eval_cache_key_t *key, ant_value_t env);
 sv_func_t *sv_eval_cache_find(ant_t *js, const sv_eval_cache_key_t *key);
 
-void sv_eval_cache_store(ant_t *js, const sv_eval_cache_key_t *key, sv_func_t *func);
+void sv_eval_cache_store(ant_t *js, const sv_eval_cache_key_t *key, sv_func_t *func, bool bound);
+sv_func_t *sv_eval_cache_find_bound(ant_t *js, const sv_eval_cache_key_t *key);
 void sv_eval_cache_age(ant_t *js);
 void sv_eval_cache_clear(ant_t *js);
 

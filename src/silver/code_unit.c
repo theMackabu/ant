@@ -439,7 +439,6 @@ bool sv_eval_cache_key(ant_t *js, sv_eval_cache_key_t *key, const char *source, 
   key->source = source;
   key->len = (uint32_t)len;
   key->bits = bits;
-  key->layout_count = 0;
 
   return true;
 }
@@ -453,29 +452,42 @@ bool sv_eval_cache_key_bind(ant_t *js, sv_eval_cache_key_t *key, ant_value_t env
   return true;
 }
 
-static __attribute__((noinline)) bool eval_cache_layout_matches(const sv_eval_cache_entry_t *entry, const sv_eval_cache_key_t *key) {
-  return memcmp(entry->layout, key->layout, key->layout_count * sizeof(key->layout[0])) == 0;
-}
-
-__attribute__((always_inline)) sv_func_t *sv_eval_cache_find(ant_t *js, const sv_eval_cache_key_t *key) {
+static inline sv_eval_cache_entry_t *eval_cache_match(ant_t *js, const sv_eval_cache_key_t *key) {
   sv_eval_cache_t *cache = js->code_units.eval_cache;
   if (!cache) return NULL;
 
   sv_eval_cache_entry_t *entry = &cache->entries[key->hash & (SV_EVAL_CACHE_SLOTS - 1)];
   if (
     !entry->func || entry->hash != key->hash || entry->len != key->len ||
-    entry->bits != key->bits || entry->layout_count != key->layout_count ||
-    !entry->func->debug || entry->func->debug->filename != js->filename ||
-    memcmp(entry->source, key->source, key->len) != 0 ||
-    (key->layout_count && !eval_cache_layout_matches(entry, key))
+    entry->bits != key->bits || !entry->func->debug || entry->func->debug->filename != js->filename ||
+    memcmp(entry->source, key->source, key->len) != 0
+  ) return NULL;
+
+  return entry;
+}
+
+__attribute__((always_inline)) sv_func_t *sv_eval_cache_find(ant_t *js, const sv_eval_cache_key_t *key) {
+  sv_eval_cache_entry_t *entry = eval_cache_match(js, key);
+  if (!entry) return NULL;
+
+  entry->used = true;
+  return entry->func;
+}
+
+sv_func_t *sv_eval_cache_find_bound(ant_t *js, const sv_eval_cache_key_t *key) {
+  sv_eval_cache_entry_t *entry = eval_cache_match(js, key);
+  if (
+    !entry || entry->layout_count != key->layout_count ||
+    memcmp(entry->layout, key->layout, key->layout_count * sizeof(key->layout[0])) != 0
   ) return NULL;
 
   entry->used = true;
   return entry->func;
 }
 
-void sv_eval_cache_store(ant_t *js, const sv_eval_cache_key_t *key, sv_func_t *func) {
+void sv_eval_cache_store(ant_t *js, const sv_eval_cache_key_t *key, sv_func_t *func, bool bound) {
   if (!func || !func->unit) return;
+  uint8_t layout_count = bound ? key->layout_count : 0;
   sv_eval_cache_t *cache = js->code_units.eval_cache;
   
   if (!cache) {
@@ -502,9 +514,9 @@ void sv_eval_cache_store(ant_t *js, const sv_eval_cache_key_t *key, sv_func_t *f
   
   *entry = (sv_eval_cache_entry_t){
     .hash = key->hash, .source = source, .func = func,
-    .len = key->len, .bits = key->bits, .layout_count = key->layout_count, .used = true,
+    .len = key->len, .bits = key->bits, .layout_count = layout_count, .used = true,
   };
-  for (uint8_t i = 0; i < key->layout_count; i++) entry->layout[i] = key->layout[i];
+  for (uint8_t i = 0; i < layout_count; i++) entry->layout[i] = key->layout[i];
 }
 
 void sv_eval_cache_age(ant_t *js) {
