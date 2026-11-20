@@ -618,7 +618,7 @@ static __attribute__((noinline)) integrity_kind_t object_integrity_kind(ant_valu
 }
 
 static __attribute__((noinline)) ant_value_t object_view_integrity(const ant_object_t *ptr, integrity_kind_t kind, bool frozen) {
-  if (frozen && kind >= INTEGRITY_VIEW_ELEMENTS) return Ant_Value_False;
+  if (frozen && kind == INTEGRITY_VIEW_ELEMENTS) return Ant_Value_False;
 
   uint32_t count = ptr->shape ? ant_shape_count(ptr->shape) : 0;
   for (uint32_t i = 0; i < count; i++) {
