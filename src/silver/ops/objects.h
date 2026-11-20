@@ -264,6 +264,16 @@ static __attribute__((noinline)) bool sv_field_target_numeric_exotic(ant_t *js, 
   return str && !ant_key_may_be_numeric(str, len);
 }
 
+static __attribute__((noinline)) bool sv_field_key_special_on_string_wrapper(
+  ant_t *js, ant_value_t primitive, ant_value_t key
+) {
+  if (vtype(primitive) != kTypeString || vtype(key) != kTypeString) return false;
+  
+  size_t len = 0;
+  const char *str = js_getstr(js, key, &len);
+  return !str || is_length_key(str, len) || ant_key_may_be_numeric(str, len);
+}
+
 static bool sv_field_target_plain(ant_t *js, ant_value_t obj, ant_value_t key) {
   static constexpr uint16_t mask = ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXOTIC;
   uint8_t type = vtype(obj);
@@ -277,7 +287,11 @@ static bool sv_field_target_plain(ant_t *js, ant_value_t obj, ant_value_t key) {
   
   ant_value_t holder = function ? js_as_obj(obj) : obj;
   ant_object_t *ptr = js_obj_ptr(holder);
-  return ptr && (ptr->flags.raw & mask) == ANT_OBJECT_FLAG_EXTENSIBLE && !is_proxy(holder);
+  if (!ptr || (ptr->flags.raw & mask) != ANT_OBJECT_FLAG_EXTENSIBLE) return false;
+  if (type != kTypeObject || !ptr->extra_slots) return true;
+  
+  const ant_extra_slot_t *primitive = ant_object_extra_slot(ptr, SLOT_PRIMITIVE);
+  return !primitive || !sv_field_key_special_on_string_wrapper(js, primitive->value, key);
 }
 
 ant_value_t sv_define_field(
