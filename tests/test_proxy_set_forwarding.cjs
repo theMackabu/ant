@@ -92,6 +92,7 @@ function nonConfigurable(desc) {
   assert.deepStrictEqual(plain, [1, 'b']);
 
   const literal = () => [1, 2, 3];
+  for (let i = 0; i < 2000; i++) literal();
   const first = literal();
   new Proxy(first, {})[0] = 'changed';
   assert.deepStrictEqual(first, ['changed', 2, 3]);
@@ -149,6 +150,40 @@ function nonConfigurable(desc) {
   assert.deepStrictEqual(hot, [19998, 19999, 19997]);
   Object.freeze(hot);
   assert.throws(() => { hp[0] = -1; }, TypeError);
+
+  const grown = [];
+  const gp = new Proxy(grown, {});
+  for (let i = 0; i < 100; i++) assert.strictEqual(gp.push(i), i + 1);
+  assert.strictEqual(grown.length, 100);
+  assert.strictEqual(grown[99], 99);
+  gp[100] = 'next';
+  gp[102] = 'gap';
+  assert.strictEqual(grown.length, 103);
+  assert.strictEqual(Object.hasOwn(grown, 101), false);
+
+  const fixed = [1, 2];
+  fixed.length = 2;
+  Object.defineProperty(fixed, 'length', { writable: false });
+  assert.throws(() => { new Proxy(fixed, {})[2] = 3; }, TypeError);
+  assert.deepStrictEqual(fixed, [1, 2]);
+
+  const trapped = [];
+  Object.defineProperty(Array.prototype, 3, { set(v) { trapped.push(v); }, configurable: true });
+  try {
+    const short = [0, 1, 2];
+    new Proxy(short, {})[3] = 'setter';
+    assert.deepStrictEqual(trapped, ['setter']);
+    assert.strictEqual(short.length, 3);
+  } finally {
+    delete Array.prototype[3];
+  }
+
+  const frozenLiteral = () => [1, 2];
+  for (let i = 0; i < 2000; i++) frozenLiteral();
+  const appended = frozenLiteral();
+  new Proxy(appended, {})[2] = 3;
+  assert.deepStrictEqual(appended, [1, 2, 3]);
+  assert.deepStrictEqual(frozenLiteral(), [1, 2]);
 
   const receiver = Object.create(new Proxy([1, 2], {}));
   receiver[0] = 'own';

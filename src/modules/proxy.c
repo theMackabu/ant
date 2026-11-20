@@ -1125,12 +1125,17 @@ static inline bool proxy_store_dense_index(ant_t *js, ant_value_t target, const 
     ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS | ANT_OBJECT_FLAG_FROZEN |
     ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXOTIC | ANT_OBJECT_FLAG_ARGUMENTS;
   if ((ptr->flags.raw & mask) != (ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS)) return false;
-  if (!ptr->u.array.data || ant_array_is_shared(ptr)) return false;
+  if (!ptr->u.array.data) return false;
 
   unsigned long idx = 0;
-  if (!parse_array_index(key, key_len, ptr->u.array.len, &idx)) return false;
-  if (is_empty_slot(ptr->u.array.data[idx])) return false;
+  uint32_t len = ptr->u.array.len;
+  if (!parse_array_index(key, key_len, (ant_offset_t)len + 1, &idx)) return false;
+  if (idx < len) {
+    if (is_empty_slot(ptr->u.array.data[idx])) return false;
+  } else if (idx >= ptr->u.array.cap || !array_proto_chain_plain(js, ptr) || array_length_readonly(js, target)) return false;
+
   dense_set_owned(js, (ant_offset_t)(uintptr_t)ptr, (ant_offset_t)idx, value);
+  if (idx == len) ptr->u.array.len = len + 1;
   return true;
 }
 
