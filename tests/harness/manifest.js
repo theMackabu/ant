@@ -405,6 +405,7 @@ export function targets() {
     'test_poly_field_store.cjs',
     'test_primitive_ic_invalidation.cjs',
     'test_primitive_proto_setter_throw.cjs',
+    'test_private_destructure_targets.cjs',
     'test_process_env_proxy.cjs',
     'test_process_exit_code.cjs',
     'test_parser_empty_parens.cjs',
