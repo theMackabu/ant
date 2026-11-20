@@ -353,7 +353,7 @@ static ant_value_t builtin_array_push(ant_params_t) {
     if (!Ant_Array_UnshareForAppend(js, arr, (uint32_t)nargs)) return js_mkerr(js, "oom");
     if (array_refuses_add(arr, nargs)) return array_add_refused_error(js, len);
   }
-  if (target && (ant_object_is_frozen(target) || array_length_readonly(js, arr)))
+  if (target && ((target->flags.frozen && ant_object_is_frozen(target)) || array_length_readonly(js, arr)))
     return array_length_readonly_error(js);
   
   ant_offset_t doff = get_dense_buf(arr);
@@ -363,8 +363,8 @@ static ant_value_t builtin_array_push(ant_params_t) {
     int i = 0;
     for (; i < nargs && (plain || !array_store_reaches_proto_slow(js, arr, len)); i++) {
       ant_offset_t cap = dense_capacity(doff);
-      if (__builtin_expect(len >= cap && len >= ARRAY_DENSE_GAP && len >= dense_iterable_length(js, arr) * 4, 0)) break;
       if (len >= cap) {
+        if (__builtin_expect(len >= ARRAY_DENSE_GAP && len >= dense_iterable_length(js, arr) * 4, 0)) break;
         doff = dense_grow(js, arr, len + 1);
         if (doff == 0) return js_mkerr(js, "oom");
       }
