@@ -23,6 +23,14 @@ for (const handler of [() => ({}), () => ({ get: Reflect.get })]) {
 }
 
 {
+  const supplied = (method) => new Proxy([7, 8], { get(t, k, r) { return k === Symbol.iterator ? method : Reflect.get(t, k, r); } });
+  assert.deepStrictEqual(Array.from(supplied(Array.prototype.keys)), [0, 1]);
+  assert.deepStrictEqual(Array.from(supplied(Array.prototype.entries)), [[0, 7], [1, 8]]);
+  assert.deepStrictEqual(Array.from(supplied(Array.prototype.values)), [7, 8]);
+  assert.deepStrictEqual(Array.from(supplied(undefined)), [7, 8]);
+}
+
+{
   const log = [];
   const proxy = new Proxy([1, 2], { get(t, k, r) { log.push(typeof k === 'symbol' ? 'sym' : k); return Reflect.get(t, k, r); } });
   assert.deepStrictEqual(Array.from(proxy), [1, 2]);

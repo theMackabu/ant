@@ -53,6 +53,9 @@ const assert = require('node:assert');
   assert.deepStrictEqual(keys(new Proxy({ a: 1, b: 2 }, lateHandler)), ['a', 'b']);
   assert.deepStrictEqual(log, ['proto', 'proto', 'desc b']);
 
+  const midway = Proxy.revocable({ a: 1, b: 2 }, { ownKeys: Reflect.ownKeys, getPrototypeOf(target) { midway.revoke(); return null; } });
+  assert.throws(() => keys(midway.proxy), TypeError);
+
   const { proxy, revoke } = Proxy.revocable({ a: 1, b: 2 }, { ownKeys: Reflect.ownKeys, getPrototypeOf(target) { return Reflect.getPrototypeOf(target); } });
   assert.deepStrictEqual(keys(proxy), ['a', 'b']);
   revoke();
