@@ -1524,6 +1524,8 @@ ant_value_t sv_frame_resume(
   int rp = n_params < func->param_count ? n_params : func->param_count;
   int rl = n_locals < func->max_locals ? n_locals : func->max_locals;
 
+  for (sv_jit_osr_mark_t *mark = vm->jit.osr_marks; mark; mark = mark->prev)
+    if (mark->frame == frame) mark->resumed = true;
   for (int i = 0; i < rp; i++) frame->bp[i] = params[i];
   for (int i = 0; i < rl; i++) frame->lp[i] = locals[i];
 

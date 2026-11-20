@@ -1185,6 +1185,8 @@ typedef struct sv_jit_osr_mark {
   struct sv_jit_osr_mark *prev;
   sv_frame_t *frame;
   void *entry;
+  bool borrowed;
+  bool resumed;
 } sv_jit_osr_mark_t;
 
 typedef struct {

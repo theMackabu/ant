@@ -464,7 +464,7 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
   vm->jit.osr.vstack_sp = vm->sp - (int)(vm->jit.osr.vstack - vm->stack);
 
   func->back_edge_count = 0;
-  sv_jit_osr_mark_t osr_mark = { vm->jit.osr_marks, frame, NULL };
+  sv_jit_osr_mark_t osr_mark = { vm->jit.osr_marks, frame, NULL, false, false };
   vm->jit.osr_marks = &osr_mark;
   
   ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_INTERP, jit, vm, &(sv_call_ctx_t){
@@ -523,7 +523,7 @@ __attribute__((noinline)) ant_value_t sv_jit_try_catch_entry(
   vm->jit.osr.vstack = frame->lp + nl;
   vm->jit.osr.vstack_sp = vm->sp - (int)(vm->jit.osr.vstack - vm->stack);
 
-  sv_jit_osr_mark_t osr_mark = { vm->jit.osr_marks, frame, NULL };
+  sv_jit_osr_mark_t osr_mark = { vm->jit.osr_marks, frame, NULL, false, false };
   vm->jit.osr_marks = &osr_mark;
 
   ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_INTERP, func->jit_code, vm, &(sv_call_ctx_t){
@@ -563,7 +563,7 @@ __attribute__((noinline)) ant_value_t sv_jit_await_resume(
     .vstack_sp = vm->sp - (int)(stack_base - vm->stack),
   };
 
-  sv_jit_osr_mark_t osr_mark = { vm->jit.osr_marks, frame, NULL };
+  sv_jit_osr_mark_t osr_mark = { vm->jit.osr_marks, frame, NULL, false, false };
   vm->jit.osr_marks = &osr_mark;
   
   ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_INTERP, func->jit_code, vm, &(sv_call_ctx_t){
