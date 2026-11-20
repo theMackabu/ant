@@ -13,6 +13,9 @@ const cases = {
   dynamicNested: { body: '[[1, [2, Math.PI]], [3]]', site: false },
   dynamicProperty: { body: '[{ a: [1], b: Math.PI }, [2]]', site: false },
   largeFewDynamic: { body: `[${large}, [1, 2], Math.PI]`, site: true },
+  largeAtDynamicLimit: { body: `[${Array.from({ length: 10 }, () => 'Math.PI').join(', ')}, ${Array.from({ length: 60 }, (_, i) => i).join(', ')}]`, site: true },
+  largeOverDynamicLimit: { body: `[${Array.from({ length: 11 }, () => 'Math.PI').join(', ')}, ${Array.from({ length: 59 }, (_, i) => i).join(', ')}]`, site: false },
+  largeLateFixed: { body: `[${Array.from({ length: 64 }, () => 'Math.PI').join(', ')}, ${Array.from({ length: 400 }, (_, i) => i).join(', ')}]`, site: true },
   largeMostlyDynamic: { body: `[${Array.from({ length: 40 }, () => 'Math.PI').join(', ')}, 1, 2, 3]`, site: false },
 };
 

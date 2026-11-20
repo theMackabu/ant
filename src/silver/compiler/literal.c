@@ -10,6 +10,7 @@ size_t literal_num_key(double num, char *buf, size_t cap) {
 static constexpr int SV_SHAPED_LITERAL_MAX_KEYS = 32;
 static constexpr int SV_LITERAL_DYNAMIC_RATIO = 6;
 static constexpr int SV_LITERAL_CLASS_STACK = 64;
+static constexpr int SV_LITERAL_CLASS_STRIDE = 64;
 
 static bool literal_is_leaf(const sv_ast_t *node) {
   if (!node) return false;
@@ -287,11 +288,15 @@ static bool compile_array_site(sv_compiler_t *c, sv_ast_t *node, int prefix) {
   
   int fixed = 0, nested = 0;
   bool small = prefix <= SV_LITERAL_INLINE_MAX;
-  for (int i = 0; i < prefix; i++) {
-    classes[i] = literal_classify(node->args.items[i]);
-    if (small && classes[i] == LITERAL_DYNAMIC) break;
-    fixed += classes[i] != LITERAL_DYNAMIC;
-    nested += classes[i] == LITERAL_NESTED;
+  for (int i = 0; i < prefix;) {
+    int end = prefix - i > SV_LITERAL_CLASS_STRIDE ? i + SV_LITERAL_CLASS_STRIDE : prefix;
+    for (; i < end; i++) {
+      classes[i] = literal_classify(node->args.items[i]);
+      if (small && classes[i] == LITERAL_DYNAMIC) break;
+      fixed += classes[i] != LITERAL_DYNAMIC;
+      nested += classes[i] == LITERAL_NESTED;
+    }
+    if (i < end || (i - fixed) * (SV_LITERAL_DYNAMIC_RATIO + 1) > prefix) break;
   }
   
   int site = literal_root_pays(prefix, fixed, nested) ? literal_build_root(c, node, prefix, classes) : -1;
