@@ -156,4 +156,22 @@ for (let round = 0; round < 400; round++) {
   }
 }
 
+{
+  function Parent() { this.own = 1; }
+  Parent.prototype = Math.max;
+  class Child extends Parent { constructor() { super(); this.child = 1; } }
+  class Implicit extends Parent {}
+  assert.strictEqual(Object.getPrototypeOf(Child.prototype), Math.max);
+  for (const C of [Child, Implicit]) {
+    const made = new C();
+    assert.strictEqual(Object.getPrototypeOf(Object.getPrototypeOf(made)), Math.max);
+    assert.strictEqual(made.own, 1);
+    assert.strictEqual(typeof made.call, 'function');
+    assert.ok(made instanceof C);
+  }
+  function Bad() {}
+  Bad.prototype = 5;
+  assert.throws(() => class extends Bad {}, TypeError);
+}
+
 console.log('ok');
