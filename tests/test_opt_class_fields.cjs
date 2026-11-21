@@ -603,6 +603,17 @@ for (let i = 0; i < WARM * 4; i++) {
   }
 }
 
+class QuotedIndex extends GivesBack { '1' = 'one' }
+function quoteOne(target) {
+  try { new QuotedIndex(target); return target[1]; } catch (error) { return error instanceof TypeError ? 'type' : 'other'; }
+}
+const quoteTargets = [() => ({}), () => new String('ab'), () => [], () => new String('a')];
+const quoteWant = ['one', 'type', 'one', 'one'];
+for (let i = 0; i < WARM * 4; i++) {
+  const kind = i % quoteTargets.length;
+  assert.strictEqual(quoteOne(quoteTargets[kind]()), quoteWant[kind]);
+}
+
 class Sized extends GivesBack { length = 7 }
 function sizeOne(target) {
   try { new Sized(target); return target.length; } catch (error) { return error instanceof TypeError ? 'type' : 'other'; }
