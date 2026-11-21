@@ -1,182 +1,135 @@
-#include "ant.h"
 #include "gc/roots.h"
 #include "napi_internal.h"
 
-void ant_napi_link_references(void) {}
+static void Scope_Open(napi_env env, struct napi_handle_scope__ *scope) {
+  scope->env = env;
+  scope->gc_root_mark = gc_root_scope(env->js);
+  scope->handle_slots_mark = env->handle_slots_len;
+  env->open_handle_scopes++;
+}
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_create_reference(
-  napi_env env,
-  napi_value value,
-  uint32_t initial_refcount,
-  napi_ref *result
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+static void Scope_Close(napi_env env, const struct napi_handle_scope__ *scope) {
+  if (env->js) gc_pop_roots(env->js, scope->gc_root_mark);
+  env->handle_slots_len = scope->handle_slots_mark;
+  if (env->open_handle_scopes > 0) env->open_handle_scopes--;
+}
 
-  struct napi_ref__ *ref = (struct napi_ref__ *)calloc(1, sizeof(*ref));
-  if (!ref) return napi_set_last(env, napi_generic_failure, "out of memory");
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_create_reference(napi_env env, napi_value value, uint32_t initial_refcount, napi_ref *result) {
+  if (!env || !env->js || !result) return Napi_InvalidArg(env);
 
-  ref->env = nenv;
-  ref->value = value;
+  napi_ref ref = calloc(1, sizeof(*ref));
+  if (!ref) return Napi_OutOfMemory(env);
+
+  ref->env = env;
+  ref->value = Napi_Decode(value);
+  ref->live = true;
   ref->refcount = initial_refcount;
-  ref->ref_val = (initial_refcount > 0) ? (ant_value_t)value : Ant_Value_Undefined;
+  ref->ref_val = initial_refcount > 0 ? ref->value : Ant_Value_Undefined;
 
-  ref->prev = NULL;
-  ref->next = nenv->refs;
-  if (nenv->refs) nenv->refs->prev = ref;
-  nenv->refs = ref;
+  ref->next = env->refs;
+  if (ref->next) ref->next->prev = ref;
+  env->refs = ref;
 
-  *result = (napi_ref)ref;
-  return napi_set_last(env, napi_ok, NULL);
+  *result = ref;
+  return Napi_Ok(env);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_delete_reference(
-  node_api_basic_env env,
-  napi_ref ref
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  struct napi_ref__ *r = (struct napi_ref__ *)ref;
-  if (!nenv || !nenv->js || !r) return napi_set_last((napi_env)env, napi_invalid_arg, "invalid argument");
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_delete_reference(node_api_basic_env env, napi_ref ref) {
+  if (!env || !env->js || !ref) return Napi_InvalidArg(env);
 
-  if (r->prev) r->prev->next = r->next;
-  else if (nenv->refs == r) nenv->refs = r->next;
-  if (r->next) r->next->prev = r->prev;
+  if (ref->prev) ref->prev->next = ref->next;
+  else env->refs = ref->next;
+  if (ref->next) ref->next->prev = ref->prev;
 
-  r->ref_val = Ant_Value_Undefined;
-  free(r);
-  return napi_set_last((napi_env)env, napi_ok, NULL);
+  free(ref);
+  return Napi_Ok(env);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_reference_ref(
-  napi_env env,
-  napi_ref ref,
-  uint32_t *result
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  struct napi_ref__ *r = (struct napi_ref__ *)ref;
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_reference_ref(napi_env env, napi_ref ref, uint32_t *result) {
+  if (!env || !env->js || !ref) return Napi_InvalidArg(env);
 
-  if (!nenv || !nenv->js || !r)
-    return napi_set_last(env, napi_invalid_arg, "invalid argument");
-
-  if (!r->value) {
-    if (result) *result = 0;
-    return napi_set_last(env, napi_ok, NULL);
+  if (ref->live) {
+    if (ref->refcount == 0) ref->ref_val = ref->value;
+    ref->refcount++;
   }
 
-  if (r->refcount == 0) r->ref_val = (ant_value_t)r->value;
-  r->refcount++;
-  if (result) *result = r->refcount;
-
-  return napi_set_last(env, napi_ok, NULL);
+  if (result) *result = ref->refcount;
+  return Napi_Ok(env);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_reference_unref(
-  napi_env env,
-  napi_ref ref,
-  uint32_t *result
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  struct napi_ref__ *r = (struct napi_ref__ *)ref;
-  if (!nenv || !nenv->js || !r) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (r->refcount == 0) return napi_set_last(env, napi_invalid_arg, "reference count already zero");
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_reference_unref(napi_env env, napi_ref ref, uint32_t *result) {
+  if (!env || !env->js || !ref) return Napi_InvalidArg(env);
+  if (ref->refcount == 0) return Ant_Napi_SetLastError(env, napi_generic_failure, "reference count already zero");
 
-  r->refcount--;
-  if (r->refcount == 0) r->ref_val = Ant_Value_Undefined;
-  if (result) *result = r->refcount;
-
-  return napi_set_last(env, napi_ok, NULL);
+  if (--ref->refcount == 0) ref->ref_val = Ant_Value_Undefined;
+  if (result) *result = ref->refcount;
+  return Napi_Ok(env);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_get_reference_value(
-  napi_env env,
-  napi_ref ref,
-  napi_value *result
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  struct napi_ref__ *r = (struct napi_ref__ *)ref;
-  if (!nenv || !nenv->js || !r || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_get_reference_value(napi_env env, napi_ref ref, napi_value *result) {
+  if (!env || !env->js || !ref || !result) return Napi_InvalidArg(env);
 
-  if (r->refcount > 0) *result = NAPI_RETURN(nenv, r->ref_val);
-  else *result = r->value ? NAPI_RETURN(nenv, r->value) : 0;
-
-  return napi_set_last(env, napi_ok, NULL);
+  *result = ref->live ? Ant_Napi_Pin(env, ref->value) : (napi_value){0};
+  return Napi_Ok(env);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_open_handle_scope(
-  napi_env env,
-  napi_handle_scope *result
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  struct napi_handle_scope__ *scope = (struct napi_handle_scope__ *)calloc(1, sizeof(*scope));
-  if (!scope) return napi_set_last(env, napi_generic_failure, "out of memory");
-  scope->env = nenv;
-  scope->gc_root_mark = gc_root_scope(nenv->js);
-  scope->handle_slots_mark = nenv->handle_slots_len;
-  nenv->open_handle_scopes++;
-  *result = (napi_handle_scope)scope;
-  return napi_set_last(env, napi_ok, NULL);
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_open_handle_scope(napi_env env, napi_handle_scope *result) {
+  if (!env || !env->js || !result) return Napi_InvalidArg(env);
+
+  napi_handle_scope scope = calloc(1, sizeof(*scope));
+  if (!scope) return Napi_OutOfMemory(env);
+
+  Scope_Open(env, scope);
+  *result = scope;
+  return Napi_Ok(env);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_close_handle_scope(
-  napi_env env,
-  napi_handle_scope scope
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !scope) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  struct napi_handle_scope__ *s = (struct napi_handle_scope__ *)scope;
-  if (nenv->js) gc_pop_roots(nenv->js, s->gc_root_mark);
-  nenv->handle_slots_len = s->handle_slots_mark;
-  if (nenv->open_handle_scopes > 0) nenv->open_handle_scopes--;
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_close_handle_scope(napi_env env, napi_handle_scope scope) {
+  if (!env || !scope) return Napi_InvalidArg(env);
+
+  Scope_Close(env, scope);
   free(scope);
-  return napi_set_last(env, napi_ok, NULL);
+  return Napi_Ok(env);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_open_escapable_handle_scope(
-  napi_env env,
-  napi_escapable_handle_scope *result
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  struct napi_escapable_handle_scope__ *scope = (struct napi_escapable_handle_scope__ *)calloc(1, sizeof(*scope));
-  if (!scope) return napi_set_last(env, napi_generic_failure, "out of memory");
-  scope->env = nenv;
-  scope->gc_root_mark = gc_root_scope(nenv->js);
-  scope->handle_slots_mark = nenv->handle_slots_len;
-  scope->escaped = false;
-  scope->escaped_val = Ant_Value_Undefined;
-  nenv->open_handle_scopes++;
-  *result = (napi_escapable_handle_scope)scope;
-  return napi_set_last(env, napi_ok, NULL);
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_open_escapable_handle_scope(napi_env env, napi_escapable_handle_scope *result) {
+  if (!env || !env->js || !result) return Napi_InvalidArg(env);
+
+  napi_escapable_handle_scope scope = calloc(1, sizeof(*scope));
+  if (!scope) return Napi_OutOfMemory(env);
+
+  Scope_Open(env, &scope->base);
+  *result = scope;
+  return Napi_Ok(env);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_close_escapable_handle_scope(
-  napi_env env,
-  napi_escapable_handle_scope scope
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !scope) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  struct napi_escapable_handle_scope__ *s = (struct napi_escapable_handle_scope__ *)scope;
-  if (nenv->js) gc_pop_roots(nenv->js, s->gc_root_mark);
-  nenv->handle_slots_len = s->handle_slots_mark;
-  if (nenv->open_handle_scopes > 0) nenv->open_handle_scopes--;
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_close_escapable_handle_scope(napi_env env, napi_escapable_handle_scope scope) {
+  if (!env || !scope) return Napi_InvalidArg(env);
+
+  Scope_Close(env, &scope->base);
+  if (scope->escaped) Ant_Napi_Pin(env, scope->escaped_val);
+
   free(scope);
-  return napi_set_last(env, napi_ok, NULL);
+  return Napi_Ok(env);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_escape_handle(
-  napi_env env,
-  napi_escapable_handle_scope scope,
-  napi_value escapee,
-  napi_value *result
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  struct napi_escapable_handle_scope__ *esc = (struct napi_escapable_handle_scope__ *)scope;
-  if (!nenv || !nenv->js || !esc || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (esc->escaped) return napi_set_last(env, napi_escape_called_twice, "escape already called");
-  esc->escaped = true;
-  esc->escaped_val = (ant_value_t)escapee;
-  gc_push_root(nenv->js, &esc->escaped_val);
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_escape_handle(napi_env env, napi_escapable_handle_scope scope, napi_value escapee, napi_value *result) {
+  if (!env || !env->js || !scope || !result) return Napi_InvalidArg(env);
+  if (scope->escaped) return Ant_Napi_SetLastError(env, napi_escape_called_twice, NULL);
+
+  scope->escaped = true;
+  scope->escaped_val = Napi_Decode(escapee);
+
   *result = escapee;
-  return napi_set_last(env, napi_ok, NULL);
+  return Napi_Ok(env);
 }

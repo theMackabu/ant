@@ -474,6 +474,8 @@ const char *intern_find_flat(ant_t *js, const char *bytes, size_t len);
 ant_value_t builtin_function_apply(ant_params_t);
 ant_value_t builtin_object_isPrototypeOf(ant_params_t);
 ant_value_t builtin_object_freeze(ant_params_t);
+ant_value_t builtin_object_seal(ant_params_t);
+ant_value_t builtin_object_setPrototypeOf(ant_params_t);
 ant_value_t builtin_string_charCodeAt(ant_params_t);
 ant_value_t builtin_object_getOwnPropertyDescriptor(ant_params_t);
 ant_value_t builtin_array_includes(ant_params_t);

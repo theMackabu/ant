@@ -21,11 +21,25 @@
 
 #define NAPI_DEFAULT_DLOPEN_FLAGS NAPI_RTLD_LAZY
 
-#include "napi_internal.h"
-#include "silver/call.h"
-#include "esm/commonjs.h"
-#include "gc/roots.h"
 #include "sync.h"
+#include "silver/vm.h"
+#include "gc/roots.h"
+#include "internal.h"
+#include "napi_internal.h"
+
+#include "esm/commonjs.h"
+#include "esm/loader.h"
+
+typedef napi_value(NAPI_CDECL* napi_register_module_v1_fn)(
+  napi_env env,
+  napi_value exports
+);
+
+typedef struct napi_native_lib {
+  void *handle;
+  napi_module *module;
+  struct napi_native_lib *next;
+} napi_native_lib_t;
 
 static napi_native_lib_t *g_napi_native_libs = NULL;
 static ant_mutex_t g_napi_native_libs_lock = ANT_MUTEX_INIT;
@@ -37,17 +51,26 @@ static napi_native_lib_t *napi_native_lib_find(void *handle) {
   return NULL;
 }
 
-static void napi_link_exports(void) {
-  ant_napi_link_async();
-  ant_napi_link_objects();
-  ant_napi_link_references();
-  ant_napi_link_values();
-}
+typedef void (*napi_anchor_t)(void);
+
+__attribute__((used))
+static const napi_anchor_t napi_anchors[] = {
+  (napi_anchor_t)Ant_Napi_CloseThreadsafeFunctions,
+  (napi_anchor_t)Ant_Napi_SweepExternalBuffers,
+  (napi_anchor_t)Ant_Napi_CapturePending,
+  (napi_anchor_t)Ant_Napi_CreateFunction,
+  (napi_anchor_t)Ant_Napi_IsExternal,
+  (napi_anchor_t)napi_create_bigint_int64,
+  (napi_anchor_t)napi_create_promise,
+  (napi_anchor_t)napi_create_reference,
+  (napi_anchor_t)napi_create_string_utf8,
+  (napi_anchor_t)napi_define_properties,
+  (napi_anchor_t)napi_get_uv_event_loop,
+  (napi_anchor_t)napi_typeof,
+};
 
 static ant_value_t napi_dlopen_common(ant_t *js, ant_value_t module_obj, const char *filename, int flags) {
-  napi_link_exports();
-
-  napi_env env = ant_napi_get_env(js);
+  napi_env env = Ant_Napi_GetEnv(js);
   if (!env) return js_mkerr(js, "napi env allocation failed");
 
   if (!is_object_type(module_obj)) return js_mkerr(js, "process.dlopen module must be an object");
@@ -68,30 +91,35 @@ static ant_value_t napi_dlopen_common(ant_t *js, ant_value_t module_obj, const c
     lib->next = g_napi_native_libs;
     g_napi_native_libs = lib;
   }
-  
+
   napi_module *module = lib ? lib->module : g_pending_napi_module;
   ant_mutex_unlock(&g_napi_native_libs_lock);
+
+  ant_value_t file_url = js_esm_make_file_url(js, filename);
+  size_t file_url_len = 0;
+
+  const char *file_url_str = vtype(file_url) == kTypeString ? js_getstr(js, file_url, &file_url_len) : NULL;
+  if (file_url_str) (env)->module_file_name = intern_string(js, file_url_str, file_url_len);
 
   napi_register_module_v1_fn reg_fn = (napi_register_module_v1_fn)NAPI_DLSYM(handle, "napi_register_module_v1");
   ant_value_t exports = js_get(js, module_obj, "exports");
 
   if (!is_object_type(exports)) {
-    exports = Ant_Object_CreateBare(js);
+    exports = Ant_Object_Create(js);
     js_set(js, module_obj, "exports", exports);
   }
 
   ant_value_t ret = Ant_Value_Undefined;
-  if (reg_fn) ret = (ant_value_t)reg_fn(env, (napi_value)exports);
+  if (reg_fn) ret = Napi_Decode(reg_fn(env, Napi_Encode(exports)));
   else if (module && module->nm_register_func) {
-    ret = (ant_value_t)module->nm_register_func(env, (napi_value)exports);
+    ret = Napi_Decode(module->nm_register_func(env, Napi_Encode(exports)));
   } else return js_mkerr(js, "No N-API registration entrypoint found in '%s'", filename);
 
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (is_err(nenv->exception) || Ant_Exception_Pending(js)) {
-    ant_value_t ex = is_err(nenv->exception)
-      ? nenv->exception
+  if (is_err(env->exception) || Ant_Exception_Pending(js)) {
+    ant_value_t ex = is_err(env->exception)
+      ? env->exception
       : Ant_Exception_Current(js);
-    nenv->exception = Ant_Value_Undefined;
+    env->exception = Ant_Value_Undefined;
     return js_throw(js, ex);
   }
 
@@ -184,6 +212,7 @@ cleanup:
   return result;
 }
 
-NAPI_EXTERN void NAPI_CDECL napi_module_register(napi_module *mod) {
+NAPI_EXTERN void NAPI_CDECL
+napi_module_register(napi_module *mod) {
   g_pending_napi_module = mod;
 }
