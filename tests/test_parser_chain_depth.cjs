@@ -19,7 +19,7 @@ for (const n of [1000, 100000, 1000000]) {
   const shapes = {
     'new chain': 'function F(){ return F } return ' + 'new '.repeat(n) + 'F',
     'unary chain': 'return ' + '!'.repeat(n) + '1',
-    'arrow chain': 'return ' + '() => '.repeat(Math.min(n, 10000)) + '1',
+    'arrow chain': 'return ' + '() => '.repeat(n) + '1',
     'optional chain': 'var a; return a' + '?.b'.repeat(n),
     'optional calls': 'var a; return a' + '?.()'.repeat(n),
     'member chain': 'var a = {}; a.a = a; return a' + '.a'.repeat(n),
