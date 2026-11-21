@@ -10,6 +10,7 @@
 #include "gc/modules.h"
 
 #include "modules/microtasks.h"
+#include "modules/collections.h"
 #include "modules/process.h"
 #include "modules/generator.h"
 
@@ -424,7 +425,9 @@ static void process_microtasks_internal(ant_t *js, bool check_unhandled_rejectio
   if (check_unhandled_rejections && completed) js_check_unhandled_rejections(js);
   
   js->microtasks_draining = false;
-  if (at_job_boundary) gc_weak_clear_kept_alive(js);
+  if (!at_job_boundary) return;
+  gc_weak_clear_kept_alive(js);
+  if (__builtin_expect(js->weak_gc.finalization_pending, 0)) js_finalization_run(js);
 }
 
 void ant_realm_run_microtasks(ant_t *js, ant_realm_t *realm) {

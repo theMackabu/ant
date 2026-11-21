@@ -22,6 +22,13 @@ typedef enum {
   ESM_MODULE_KIND_URL,
 } esm_module_kind_t;
 
+typedef enum {
+  ESM_MODULE_UNLOADED,
+  ESM_MODULE_LOADING,
+  ESM_MODULE_LOADED,
+  ESM_MODULE_EVALUATED,
+} esm_module_status_t;
+
 typedef struct esm_module {
   char *path;
   char *cache_key;
@@ -34,14 +41,11 @@ typedef struct esm_module {
   
   ant_value_t namespace_obj;
   ant_value_t default_export;
-  ant_value_t tla_promise;
   UT_hash_handle hh;
   esm_module_kind_t kind;
   ant_module_format_t format;
   
-  bool is_loaded;
-  bool is_loading;
-  bool has_tla;
+  esm_module_status_t status;
   bool owns_embedded;
 } esm_module_t;
 

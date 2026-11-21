@@ -67,12 +67,37 @@ static bool compile_with_identifier_call(
   with_shadows(c, name, len, &shadows);
   if (shadows.count == 0) return false;
 
+  bool any_implicit = false;
+  for (int i = 0; i < shadows.count; i++) any_implicit |= shadows.refs[i].implicit;
+
   sv_patch_list_t found = {0};
-  emit_with_tries(c, &shadows, OP_WITH_TRY_CALL, name, len, 2, &found);
+  if (!any_implicit) {
+    emit_with_tries(c, &shadows, OP_WITH_TRY_CALL, name, len, 2, &found);
+    emit_op(c, OP_UNDEF);
+    emit_get_var_plain(c, name, len);
+    patch_list_resolve(c, &found);
+    return true;
+  }
+
+  sv_patch_list_t found_implicit = {0};
+  for (int i = 0; i < shadows.count; i++) {
+    int jump = emit_with_try(c, OP_WITH_TRY_CALL, &shadows.refs[i], name, len);
+    patch_list_add(shadows.refs[i].implicit ? &found_implicit : &found, jump);
+    emit_op(c, OP_POP);
+    emit_op(c, OP_POP);
+  }
+  free(shadows.refs);
+
   emit_op(c, OP_UNDEF);
   emit_get_var_plain(c, name, len);
+  int done = emit_jump(c, OP_JMP);
+  patch_list_resolve(c, &found_implicit);
+  emit_op(c, OP_NIP);
+  emit_op(c, OP_UNDEF);
+  emit_op(c, OP_SWAP);
+  patch_jump(c, done);
   patch_list_resolve(c, &found);
-  
+
   return true;
 }
 
@@ -82,21 +107,11 @@ static void compile_receiver_property_get(sv_compiler_t *c, sv_ast_t *node) {
     compile_expr(c, node->right);
     emit_op(c, OP_GET_ELEM);
   } else if (is_private_name_node(node->right)) {
-    emit_private_token(c, node->right);
-    emit_op(c, OP_GET_PRIVATE);
+    emit_private_get(c, node->right, OP_GET_PRIVATE);
   } else {
     emit_srcpos(c, node->right);
     emit_atom_op(c, OP_GET_FIELD, node->right->str, node->right->len);
   }
-}
-
-static int emit_optional_chain_short_circuit(sv_compiler_t *c) {
-  int present = emit_jump(c, OP_JMP_NOT_NULLISH);
-  emit_op(c, OP_POP);
-  emit_op(c, OP_UNDEF);
-  int end = emit_jump(c, OP_JMP);
-  patch_jump(c, present);
-  return end;
 }
 
 static bool member_call_needs_optional_base_guard(const sv_ast_t *member) {
@@ -106,56 +121,113 @@ static bool member_call_needs_optional_base_guard(const sv_ast_t *member) {
     sv_node_has_optional_base(member->left);
 }
 
-static int capture_field_key(sv_compiler_t *c, sv_compiler_t *owner, int local) {
+int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local) {
   if (c->enclosing == owner) {
     owner->locals[local].captured = true;
     return add_upvalue(c, (uint16_t)local_to_frame_slot(owner, local), true, false);
   }
-  int uv = capture_field_key(c->enclosing, owner, local);
+  int uv = capture_field_local(c->enclosing, owner, local);
   return add_upvalue(c, (uint16_t)uv, false, false);
+}
+
+static bool field_key_is_atom(const sv_ast_t *m) {
+  const sv_ast_t *key = m->left;
+  if ((m->flags & FN_COMPUTED) || !key) return false;
+  if (key->type != N_IDENT && key->type != N_STRING) return false;
+  if (key->type == N_IDENT && is_quoted_ident_key(key)) return !ant_key_may_be_numeric(key->str + 1, key->len - 2);
+  return !ant_key_may_be_numeric(key->str, key->len);
 }
 
 void emit_field_inits(
   sv_compiler_t *c, sv_compiler_t *owner, sv_ast_t **fields, int count
 ) {
+  bool outer = c->in_field_init;
+  c->in_field_init = true;
+  bool lone_method = owner->private_method_count == 1;
+
   for (int i = 0; i < count; i++) {
     sv_ast_t *m = fields[i];
-    bool is_fn = is_class_method_def(m);
+    if (!is_class_method_def(m) || !private_name_uses_brand(c, m->left)) continue;
+
+    emit_this(c);
+    emit_private_token(c, m->left);
+    emit_op(c, OP_UNDEF);
+    emit_op(c, OP_DEF_PRIVATE);
+    emit(c, SV_COMP_PRIVATE_METHOD);
+    emit_op(c, OP_POP);
+    break;
+  }
+
+  for (int i = 0; i < count && owner->private_method_count > 0; i++) {
+    sv_ast_t *m = fields[i];
+    if (!is_class_method_def(m) || private_name_uses_brand(c, m->left)) continue;
+
+    emit_this(c);
+    if (lone_method) emit_private_token(c, m->left);
+    else emit_op(c, OP_UNDEF);
+    emit_op(c, OP_GET_UPVAL);
+    emit_u16(c, (uint16_t)capture_field_local(c, owner, owner->private_methods_local));
+    emit_op(c, OP_DEF_PRIVATE);
+    emit(c, lone_method ? private_method_kind(m) : SV_COMP_PRIVATE_METHODS);
+    emit_op(c, OP_POP);
+    break;
+  }
+
+  for (int i = 0; i < count; i++) {
+    sv_ast_t *m = fields[i];
+    if (is_class_method_def(m)) continue;
     if (is_private_name_node(m->left)) {
-      emit_op(c, OP_THIS);
+      emit_this(c);
       emit_private_token(c, m->left);
-      if (is_fn) compile_method_function(c, m);
-      else if (m->right) compile_expr(c, m->right);
+      if (m->right) compile_field_initializer(c, m->right, m->left);
       else emit_op(c, OP_UNDEF);
       emit_op(c, OP_DEF_PRIVATE);
-      if (m->flags & FN_GETTER) emit(c, SV_COMP_PRIVATE_GETTER);
-      else if (m->flags & FN_SETTER) emit(c, SV_COMP_PRIVATE_SETTER);
-      else emit(c, is_fn ? SV_COMP_PRIVATE_METHOD : SV_COMP_PRIVATE_FIELD);
+      emit(c, SV_COMP_PRIVATE_FIELD);
       emit_op(c, OP_POP);
       continue;
     }
 
-    emit_op(c, OP_THIS);
-    if (m->right) compile_expr(c, m->right);
+    emit_this(c);
+    int key_upval = (m->flags & FN_COMPUTED) ? capture_field_local(c, owner, owner->field_locals[i]) : -1;
+    if (key_upval >= 0 && m->right && m->right->type == N_CLASS) c->inferred_key_upval = key_upval + 1;
+    if (m->right) compile_field_initializer(c, m->right, field_static_key(m));
     else emit_op(c, OP_UNDEF);
+    c->inferred_key_upval = 0;
+    if (field_key_is_atom(m)) {
+      sv_ast_t *key = m->left;
+      if (key->type == N_STRING) emit_atom_op(c, OP_INIT_FIELD, key->str ? key->str : "", key->len);
+      else if (is_quoted_ident_key(key)) emit_atom_op(c, OP_INIT_FIELD, key->str + 1, key->len - 2);
+      else emit_atom_op(c, OP_INIT_FIELD, key->str, key->len);
+      continue;
+    }
     if (m->flags & FN_COMPUTED) {
-      int uv = capture_field_key(c, owner, owner->computed_key_locals[i]);
       emit_op(c, OP_GET_UPVAL);
-      emit_u16(c, (uint16_t)uv);
+      emit_u16(c, (uint16_t)key_upval);
     } else {
       compile_static_property_key(c, m->left);
     }
     emit_op(c, OP_SWAP);
     emit_op(c, OP_DEFINE_METHOD_COMP);
-    emit(c, 0);
+    emit(c, field_define_flags(m));
     emit_op(c, OP_POP);
   }
+  c->in_field_init = outer;
 }
 
-static void emit_derived_field_inits(sv_compiler_t *c) {
+void emit_derived_field_inits(sv_compiler_t *c) {
   sv_compiler_t *owner = c->derived_field_owner;
-  if (owner && owner->field_init_count > 0) 
+  if (owner && owner->field_init_count > 0) {
     emit_field_inits(c, owner, owner->field_inits, owner->field_init_count);
+    return;
+  }
+  
+  const sv_compiler_t *scope = lexical_owner(c);
+  if (!scope->eval_field_thunk) return;
+  
+  emit_get_var(c, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN);
+  emit_op(c, OP_CALL);
+  emit_u16(c, 0);
+  emit_op(c, OP_POP);
 }
 
 void emit_call_srcpos(sv_compiler_t *c, sv_ast_t *node) {
@@ -173,13 +245,18 @@ static void compile_call_emit_invoke(
     if (kind == SV_CALL_METHOD) emit_op(c, OP_SWAP);
     else if (kind == SV_CALL_DIRECT) emit_op(c, OP_UNDEF);
     
-    if (kind != SV_CALL_SUPER && call_spread_is_last_only(node)) {
+    if (call_spread_is_last_only(node)) {
       for (int i = 0; i < argc - 1; i++) compile_expr(c, node->args.items[i]);
       compile_expr(c, node->args.items[argc - 1]->right);
       
       emit_call_srcpos(c, node);
-      emit_op(c, OP_CALL_SPREAD);
-      emit_u16(c, (uint16_t)argc);
+      emit_op(c, kind == SV_CALL_SUPER ? OP_SUPER_SPREAD : OP_CALL_SPREAD);
+      emit_argc(c, argc);
+      
+      if (kind == SV_CALL_SUPER) {
+        emit_this_store(c);
+        emit_derived_field_inits(c);
+      }
       
       return;
     }
@@ -189,7 +266,10 @@ static void compile_call_emit_invoke(
     emit_op(c, kind == SV_CALL_SUPER ? OP_SUPER_APPLY : OP_APPLY);
     emit_u16(c, 1);
     
-    if (kind == SV_CALL_SUPER) emit_derived_field_inits(c);
+    if (kind == SV_CALL_SUPER) {
+      emit_this_store(c);
+      emit_derived_field_inits(c);
+    }
     
     return;
   }
@@ -200,36 +280,27 @@ static void compile_call_emit_invoke(
   emit_op(c,
     kind == SV_CALL_SUPER ? OP_CALL_SUPER :
     kind == SV_CALL_METHOD ? OP_CALL_METHOD : OP_CALL);
-  emit_u16(c, (uint16_t)argc);
-  if (kind == SV_CALL_SUPER) emit_derived_field_inits(c);
+  emit_argc(c, argc);
+  if (kind == SV_CALL_SUPER) {
+    emit_this_store(c);
+    emit_derived_field_inits(c);
+  }
 }
 
 sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t *callee) {
   if (is_ident_name(callee, "super")) {
-    emit_op(c, OP_THIS);
-    emit_get_var(c, "super", 5);
-    if (c->is_arrow) emit_lexical_new_target(c);
-    else {
-      emit_op(c, OP_SPECIAL_OBJ);
-      emit(c, SV_SPECIAL_NEW_TARGET);
-    }
+    if (reject_misplaced_super_call(c)) return SV_CALL_DIRECT;
+    emit_super_receiver(c);
+    emit_super(c);
+    emit_new_target(c);
     return SV_CALL_SUPER;
   }
 
   if (callee->type == N_MEMBER && is_ident_name(callee->left, "super")) {
-    if (!(callee->flags & 1) && is_private_name_node(callee->right)) {
-      js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Cannot access private member through super");
-      emit_op(c, OP_UNDEF);
-      return SV_CALL_DIRECT;
-    }
-    emit_op(c, OP_THIS);
-    emit_op(c, OP_THIS);
-    emit_get_var(c, "super", 5);
-    if (callee->flags & 1)
-      compile_expr(c, callee->right);
-    else
-      emit_constant(c, sv_const_str(c, callee->right->str, callee->right->len));
-    emit_op(c, OP_GET_SUPER_VAL);
+    if (reject_super_private(c, callee)) return SV_CALL_DIRECT;
+    emit_this(c);
+    emit_super_reference(c, callee);
+    emit_super_get(c, callee);
     return SV_CALL_METHOD;
   }
 
@@ -249,11 +320,13 @@ sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t *calle
 }
 
 sv_call_kind_t compile_tag_setup(sv_compiler_t *c, sv_ast_t *tag) {
-  if (tag->type != N_OPTIONAL || !tag->right || is_ident_name(tag->left, "super"))
+  if (!tag->right || is_ident_name(tag->left, "super") || !member_call_needs_optional_base_guard(tag))
     return compile_call_setup_non_optional(c, tag);
 
-  compile_expr(c, tag->left);
-  int present = emit_jump(c, OP_JMP_NOT_NULLISH);
+  sv_patch_list_t chain = {0};
+  compile_chain_base(c, tag->left, &chain);
+  int present = emit_jump(c, tag->type == N_OPTIONAL ? OP_JMP_NOT_NULLISH : OP_JMP);
+  patch_list_resolve(c, &chain);
   emit_op(c, OP_UNDEF);
   int done = emit_jump(c, OP_JMP);
   patch_jump(c, present);
@@ -373,7 +446,7 @@ bool compile_call_map_template_intrinsic(
   sv_compiler_t *c, sv_ast_t *node, bool has_spread, bool is_tail
 ) {
   if (!node || has_spread || node->args.count != 1) return false;
-  if (is_tail && (c->try_depth > 0 || c->using_cleanup_count > 0))
+  if (is_tail && (c->is_class_ctor || c->try_depth > 0 || c->using_cleanup_count > 0))
     return false;
   sv_ast_t *callee = node->left;
   
@@ -567,56 +640,54 @@ void compile_truthy_test_expr(sv_compiler_t *c, sv_ast_t *node) {
 
 static void compile_optional_call_after_setup(
   sv_compiler_t *c, sv_ast_t *call_node,
-  sv_call_kind_t kind, bool has_spread
+  sv_call_kind_t kind, bool has_spread, sv_patch_list_t *chain
 ) {
-  emit_op(c, OP_DUP);
-  emit_op(c, OP_IS_UNDEF_OR_NULL);
-  int j_do_call = emit_jump(c, OP_JMP_FALSE);
+  int j_do_call = emit_jump(c, OP_JMP_NOT_NULLISH);
   emit_op(c, OP_POP);
   if (sv_call_kind_has_receiver(kind))
     emit_op(c, OP_POP);
   emit_op(c, OP_UNDEF);
-  int j_end = emit_jump(c, OP_JMP);
+  patch_list_add(chain, emit_jump(c, OP_JMP));
   patch_jump(c, j_do_call);
   compile_call_emit_invoke(c, call_node, kind, has_spread);
-  patch_jump(c, j_end);
 }
 
 static void compile_guarded_member_call(
   sv_compiler_t *c, sv_ast_t *call_node,
-  sv_ast_t *member, bool has_spread, bool optional_callee
+  sv_ast_t *member, bool has_spread, bool optional_callee, sv_patch_list_t *chain
 ) {
-  compile_expr(c, member->left);
-  int end = emit_optional_chain_short_circuit(c);
+  compile_chain_base(c, member->left, chain);
+  if (member->type == N_OPTIONAL) emit_chain_short_circuit(c, chain);
   compile_receiver_property_get(c, member);
   if (optional_callee)
     compile_optional_call_after_setup(
-      c, call_node, SV_CALL_METHOD, has_spread);
+      c, call_node, SV_CALL_METHOD, has_spread, chain);
   else
     compile_call_emit_invoke(
       c, call_node, SV_CALL_METHOD, has_spread);
-  patch_jump(c, end);
 }
 
 static void compile_call_optional(
   sv_compiler_t *c, sv_ast_t *node,
-  sv_ast_t *opt_callee, bool has_spread
+  sv_ast_t *opt_callee, bool has_spread, sv_patch_list_t *chain
 ) {
   if (opt_callee->right) {
     compile_guarded_member_call(
-      c, node, opt_callee, has_spread, false);
+      c, node, opt_callee, has_spread, false, chain);
     return;
   }
 
   sv_ast_t *target = opt_callee->left;
   if (member_call_needs_optional_base_guard(target)) {
     compile_guarded_member_call(
-      c, node, target, has_spread, true);
+      c, node, target, has_spread, true, chain);
     return;
   }
 
+  if (sv_node_has_optional_base(target)) c->optional_chain = chain;
   sv_call_kind_t kind = compile_call_setup_non_optional(c, target);
-  compile_optional_call_after_setup(c, node, kind, has_spread);
+  c->optional_chain = NULL;
+  compile_optional_call_after_setup(c, node, kind, has_spread, chain);
 }
 
 static bool fusion_arg_is_effect_free(sv_compiler_t *c, sv_ast_t *a) {
@@ -680,18 +751,69 @@ static bool compile_call_try_fused_chain(
   return true;
 }
 
+static bool compile_with_shadowed_eval_call(sv_compiler_t *c, sv_ast_t *node, bool has_spread) {
+  if (!has_active_with_scope(c) || !is_ident_name(node->left, "eval")) return false;
+  if (resolve_local(c, "eval", 4) != -1 || resolve_upvalue_raw(c, "eval", 4) != -1) return false;
+
+  sv_with_refs_t shadows = {0};
+  with_shadows(c, "eval", 4, &shadows);
+  if (shadows.count == 0) return false;
+
+  sv_patch_list_t found = {0};
+  emit_with_tries(c, &shadows, OP_WITH_TRY_CALL, "eval", 4, 2, &found);
+  if (!compile_direct_eval_call(c, node, has_spread)) {
+    emit_op(c, OP_UNDEF);
+    emit_get_var_plain(c, "eval", 4);
+    patch_list_resolve(c, &found);
+    compile_call_emit_invoke(c, node, SV_CALL_METHOD, has_spread);
+    return true;
+  }
+
+  int end_jump = emit_jump(c, OP_JMP);
+  patch_list_resolve(c, &found);
+  compile_call_emit_invoke(c, node, SV_CALL_METHOD, has_spread);
+  patch_jump(c, end_jump);
+  return true;
+}
+
 void compile_call(sv_compiler_t *c, sv_ast_t *node) {
+  sv_patch_list_t *outer = optional_chain_take(c);
+  sv_patch_list_t own = {0};
   sv_ast_t *callee = node->left;
   bool has_spread = call_has_spread_arg(node);
 
+  if ((callee->flags & FN_PAREN) && callee->right && member_call_needs_optional_base_guard(callee)) {
+    compile_chain_base(c, callee->left, &own);
+    int present = emit_jump(c, callee->type == N_OPTIONAL ? OP_JMP_NOT_NULLISH : OP_JMP);
+    patch_list_resolve(c, &own);
+    emit_op(c, OP_POP);
+    emit_op(c, OP_UNDEF);
+    emit_op(c, OP_UNDEF);
+    int done = emit_jump(c, OP_JMP);
+    patch_jump(c, present);
+    compile_receiver_property_get(c, callee);
+    patch_jump(c, done);
+    compile_call_emit_invoke(c, node, SV_CALL_METHOD, has_spread);
+    return;
+  }
+
   if (callee->type == N_OPTIONAL) {
-    compile_call_optional(c, node, callee, has_spread);
+    compile_call_optional(c, node, callee, has_spread, outer ? outer : &own);
+    if (own.count) patch_list_resolve(c, &own);
     return;
   }
 
   if (member_call_needs_optional_base_guard(callee)) {
     compile_guarded_member_call(
-      c, node, callee, has_spread, false);
+      c, node, callee, has_spread, false, outer ? outer : &own);
+    if (own.count) patch_list_resolve(c, &own);
+    return;
+  }
+
+  if (sv_node_has_optional_base(callee)) {
+    compile_chain_base(c, callee, outer ? outer : &own);
+    compile_call_emit_invoke(c, node, SV_CALL_DIRECT, has_spread);
+    if (own.count) patch_list_resolve(c, &own);
     return;
   }
 
@@ -742,6 +864,7 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
     node->args.items[1] = arrow;
   }
 
+  if (compile_with_shadowed_eval_call(c, node, has_spread)) return;
   if (compile_direct_eval_call(c, node, has_spread)) return;
   if (compile_call_try_fused_chain(c, node, callee, has_spread)) return;
 
@@ -752,7 +875,14 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
 void compile_new(sv_compiler_t *c, sv_ast_t *node) {
   compile_expr(c, node->left);
   emit_op(c, OP_DUP);
-  if (call_has_spread_arg(node)) {
+  if (call_spread_is_last_only(node)) {
+    int argc = node->args.count;
+    for (int i = 0; i < argc - 1; i++) compile_expr(c, node->args.items[i]);
+    compile_expr(c, node->args.items[argc - 1]->right);
+    emit_srcpos(c, node);
+    emit_op(c, OP_NEW_SPREAD);
+    emit_argc(c, argc);
+  } else if (call_has_spread_arg(node)) {
     compile_call_args_array(c, node);
     emit_srcpos(c, node);
     emit_op(c, OP_NEW_APPLY);
@@ -763,6 +893,6 @@ void compile_new(sv_compiler_t *c, sv_ast_t *node) {
       compile_expr(c, node->args.items[i]);
     emit_srcpos(c, node);
     emit_op(c, OP_NEW);
-    emit_u16(c, (uint16_t)argc);
+    emit_argc(c, argc);
   }
 }

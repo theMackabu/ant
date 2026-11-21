@@ -50,6 +50,15 @@ typedef struct {
 } ant_absent_key_cache_t;
 
 typedef struct {
+  ant_shape_t *shape;
+  ant_value_t keys;
+  uint32_t ic_epoch;
+  uint32_t prop_count;
+} ant_for_in_cache_t;
+
+static constexpr uint32_t ANT_FOR_IN_CACHE_SIZE = 64;
+
+typedef struct {
   const char *name;
   uint32_t len;
   bool is_const;
@@ -199,6 +208,8 @@ struct ant_isolate_t {
   
   uint32_t prototype_write_epoch;
   uint32_t array_chain_plain_epoch;
+  uint32_t proxy_proto_plain_epoch;
+  uint32_t absence_epoch;
   uint32_t protectors_invalid;
 
   struct {
@@ -251,6 +262,10 @@ struct ant_isolate_t {
   ant_value_t global;
   ant_value_t global_this;
   ant_value_t global_sandbox;
+  ant_value_t eval_closure_env;
+  ant_value_t eval_closure_root;
+  uint32_t proxy_descriptor_depth;
+  uint32_t proxy_descriptor_checks;
   ant_realm_t *microtask_realm;
   
   ant_codegen_flags_t codegen_blocked;
@@ -323,6 +338,7 @@ struct ant_isolate_t {
     const char *get_own_property_descriptor;
     const char *module_cache;
     const char *idx[INTERN_INDEX_CACHE_SIZE];
+    const char *proxy_traps[13];
   } intern;
 
   ant_value_t exception;
@@ -574,6 +590,7 @@ struct ant_isolate_t {
     bool pending_active;
     bool pending_oom;
     bool kept_alive_overflow;
+    bool finalization_pending;
   } weak_gc;
 
   uint32_t jit_active_depth;
@@ -601,12 +618,18 @@ struct ant_isolate_t {
   } pending_rejections;
 
   ant_ptr_pair_map_t cfunc_promoted;
+  ant_value_t construct_proxy_target;
+  ant_value_t construct_proxy_proto;
+  ant_value_t construct_seed;
+  ant_value_t construct_dirty_seed;
+  bool construct_pending_used;
   ant_ptr_pair_map_t cfunc_named;
 
   struct {
     ant_with_unscopables_cache_t with_unscopables_absent;
     ant_to_primitive_cache_t to_primitive_absent;
     ant_absent_key_cache_t then_absent[8];
+    ant_for_in_cache_t for_in[ANT_FOR_IN_CACHE_SIZE];
   } runtime_cache;
 
   struct {

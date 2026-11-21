@@ -1,58 +1,25 @@
-console.log('=== Numeric Separator Tests ===\n');
+const assert = require('node:assert');
 
-// Test 1: Decimal separators
-console.log('Test 1: Decimal separators');
-console.log('1_000:', 1_000);
-console.log('1_000_000:', 1_000_000);
-console.log('86_400_000:', 86_400_000);
-console.log('1_000 === 1000:', 1_000 === 1000 ? 'PASS' : 'FAIL');
-console.log('1_000_000 === 1000000:', 1_000_000 === 1000000 ? 'PASS' : 'FAIL');
-console.log('86_400_000 === 86400000:', 86_400_000 === 86400000 ? 'PASS' : 'FAIL');
+const parses = (source) => {
+  try {
+    new Function(source);
+    return true;
+  } catch (error) {
+    assert.ok(error instanceof SyntaxError, `${source}: ${error}`);
+    return false;
+  }
+};
+const run = (source) => new Function(source)();
 
-// Test 2: Hexadecimal separators
-console.log('\nTest 2: Hexadecimal separators');
-console.log('0xFF_FF:', 0xFF_FF);
-console.log('0xDE_AD_BE_EF:', 0xDE_AD_BE_EF);
-console.log('0xFF_AA_BB:', 0xFF_AA_BB);
-console.log('0xFF_FF === 65535:', 0xFF_FF === 65535 ? 'PASS' : 'FAIL');
-console.log('0xDE_AD_BE_EF === 3735928559:', 0xDE_AD_BE_EF === 3735928559 ? 'PASS' : 'FAIL');
+for (const source of [
+  '0_1', '1__0', '1_', '0x_1', '1_.5', '1._5', '1e_5', '0_.1', '01_0', '08_1', '0x1_', '0b_1',
+  '1e+_1', '1_e1', '0_0', '010_', '0b1__0', '0o_7', '1_n', '0x_', '1.5_', '1e5_',
+]) assert.strictEqual(parses(`return ${source}`), false, source);
+for (const [source, value] of [
+  ['1_000', 1000], ['0x1_F', 31], ['0b1_0', 2], ['0o1_7', 15], ['1e1_0', 1e10], ['1.0_1', 1.01],
+  ['.1_1', 0.11], ['1_0.2_5e1_0', 10.25e10], ['0.0_0', 0], ['09.1_1', 9.11], ['1_2_3', 123], ['0xA_b_C', 0xabc],
+]) assert.strictEqual(run(`return ${source}`), value, source);
+assert.strictEqual(run('return 1_0n'), 10n);
+assert.strictEqual(run('var _1 = 7; return _1'), 7);
 
-// Test 3: Binary separators
-console.log('\nTest 3: Binary separators');
-console.log('0b1010_1010:', 0b1010_1010);
-console.log('0b1111_0000_1111_0000:', 0b1111_0000_1111_0000);
-console.log('0b1010_1010 === 170:', 0b1010_1010 === 170 ? 'PASS' : 'FAIL');
-console.log('0b1111_0000_1111_0000 === 61680:', 0b1111_0000_1111_0000 === 61680 ? 'PASS' : 'FAIL');
-
-// Test 4: Octal separators
-console.log('\nTest 4: Octal separators');
-console.log('0o77_00:', 0o77_00);
-console.log('0o123_456:', 0o123_456);
-console.log('0o77_00 === 4032:', 0o77_00 === 4032 ? 'PASS' : 'FAIL');
-console.log('0o123_456 === 42798:', 0o123_456 === 42798 ? 'PASS' : 'FAIL');
-
-// Test 5: Floating point separators
-console.log('\nTest 5: Floating point separators');
-console.log('1_000.5:', 1_000.5);
-console.log('1_000.123_456:', 1_000.123_456);
-console.log('1_000.5 === 1000.5:', 1_000.5 === 1000.5 ? 'PASS' : 'FAIL');
-console.log('1_000.123_456 === 1000.123456:', 1_000.123_456 === 1000.123456 ? 'PASS' : 'FAIL');
-
-// Test 6: Mixed expressions
-console.log('\nTest 6: Mixed expressions');
-const sum = 1_000 + 2_000 + 3_000;
-console.log('1_000 + 2_000 + 3_000 =', sum);
-console.log('Sum === 6000:', sum === 6000 ? 'PASS' : 'FAIL');
-
-const product = 10_00 * 10_0;
-console.log('10_00 * 10_0 =', product);
-console.log('Product === 100000:', product === 100000 ? 'PASS' : 'FAIL');
-
-// Test 7: Comparison with regular literals
-console.log('\nTest 7: Comparison with regular literals');
-console.log('1_2_3_4_5 === 12345:', 1_2_3_4_5 === 12345 ? 'PASS' : 'FAIL');
-console.log('0xA_B_C === 0xABC:', 0xA_B_C === 0xABC ? 'PASS' : 'FAIL');
-console.log('0b1_0_1_0 === 0b1010:', 0b1_0_1_0 === 0b1010 ? 'PASS' : 'FAIL');
-console.log('0o7_7_7 === 0o777:', 0o7_7_7 === 0o777 ? 'PASS' : 'FAIL');
-
-console.log('\n=== All numeric separator tests completed ===');
+console.log('ok');

@@ -57,7 +57,7 @@ typedef struct jit_compile {
   MIR_item_t stable_call_proto;
   MIR_item_t call_call_proto;
   MIR_item_t call_call_slot_proto;
-  MIR_item_t call_method_proto;
+  MIR_item_t call_super_proto;
   MIR_item_t gg_proto;
   MIR_item_t get_eval_global_proto;
   MIR_item_t rest_proto;
@@ -97,6 +97,7 @@ typedef struct jit_compile {
   MIR_item_t define_field_proto;
   MIR_item_t define_slot_proto;
   MIR_item_t define_method_comp_proto;
+  MIR_item_t init_field_proto;
   MIR_item_t put_field_proto;
   MIR_item_t remember_obj_proto;
   MIR_item_t shape_transition_proto;
@@ -105,6 +106,12 @@ typedef struct jit_compile {
   MIR_item_t put_eval_global_proto;
   MIR_item_t delete_eval_var_proto;
   MIR_item_t object_proto;
+  MIR_item_t literal_proto;
+  MIR_item_t literal_init_proto;
+  MIR_item_t get_super_proto;
+  MIR_item_t put_super_proto;
+  MIR_item_t get_super_field_proto;
+  MIR_item_t put_super_field_proto;
   MIR_item_t array_proto;
   MIR_item_t regexp_proto;
   MIR_item_t throw_error_proto;
@@ -138,7 +145,9 @@ typedef struct jit_compile {
   MIR_item_t imp_await_park;
   MIR_item_t imp_await_return_direct;
   MIR_item_t imp_native_finish;
-  MIR_item_t imp_call_method;
+  MIR_item_t imp_call_super;
+  MIR_item_t imp_super_apply;
+  MIR_item_t imp_super_spread;
   MIR_item_t imp_call_array_includes;
   MIR_item_t imp_call_char_code_at;
   MIR_item_t imp_call_string_intrinsic;
@@ -195,6 +204,7 @@ typedef struct jit_compile {
   MIR_item_t imp_get_length_inline;
   MIR_item_t imp_define_field;
   MIR_item_t imp_define_method_comp;
+  MIR_item_t imp_init_field;
   MIR_item_t imp_seq;
   MIR_item_t imp_eq;
   MIR_item_t imp_ne;
@@ -217,6 +227,12 @@ typedef struct jit_compile {
   MIR_item_t imp_put_global;
   MIR_item_t imp_object;
   MIR_item_t imp_object_template;
+  MIR_item_t imp_literal;
+  MIR_item_t imp_literal_init;
+  MIR_item_t imp_get_super;
+  MIR_item_t imp_put_super;
+  MIR_item_t imp_get_super_field;
+  MIR_item_t imp_put_super_field;
   MIR_item_t imp_regexp;
   MIR_item_t imp_define_slot;
   MIR_item_t imp_array;
@@ -274,7 +290,6 @@ typedef struct jit_compile {
   MIR_reg_t r_d_slot;
   MIR_reg_t r_d_one;
   MIR_reg_t r_args_buf;
-  MIR_reg_t r_call_out_this;
   int args_buf_slots;
   MIR_reg_t r_this_root;
   MIR_reg_t r_iter_roots;

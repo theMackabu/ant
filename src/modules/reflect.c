@@ -1,3 +1,4 @@
+#include "arrays.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -7,6 +8,7 @@
 #include "internal.h"
 #include "silver/call.h"
 
+#include "modules/proxy.h"
 #include "modules/reflect.h"
 
 static ant_value_t reflect_target(ant_native_params_t, const char *method) {
@@ -93,57 +95,80 @@ static ant_value_t reflect_own_keys(ant_params_t) {
   return js_own_property_keys(js, target, true, false);
 }
 
-static ant_value_t reflect_construct(ant_params_t) {
-  if (nargs < 2) {
-    return js_mkerr(js, "Reflect.construct requires at least 2 arguments");
-  }
-  
-  ant_value_t target = args[0];
-  ant_value_t args_arr = args[1];
-  ant_value_t new_target = (nargs >= 3) ? args[2] : target;
-  
+static ant_value_t reflect_construct_from(
+  ant_t *js, ant_value_t target, ant_value_t args_arr, ant_value_t new_target,
+  bool explicit_new_target, ant_value_t *listed, int listed_count
+) {
   if (!js_is_constructor(target)) {
     return js_mkerr(js, "Reflect.construct: first argument must be a constructor");
   }
   
-  if (nargs >= 3 && !js_is_constructor(new_target)) {
+  if (explicit_new_target && !js_is_constructor(new_target)) {
     return js_mkerr(js, "Reflect.construct: third argument must be a constructor");
   }
   
-  if (!is_object_type(args_arr))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Reflect.construct: second argument must be an array-like object");
+  ant_arg_list_t list = { .args = listed, .argc = listed_count, .rooted = false };
+  if (!listed) {
+    if (!is_object_type(args_arr))
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Reflect.construct: second argument must be an array-like object");
   
-  ant_arg_list_t list;
-  ant_value_t err = Ant_ArgList_FromArrayLike(js, args_arr, &list);
-  if (is_err(err)) return err;
+    ant_value_t err = Ant_ArgList_FromArrayLike(js, args_arr, &list);
+    if (is_err(err)) return err;
+  }
   
   ant_value_t result;
-  if (vtype(target) == kTypeObject && is_proxy(target)) {
-    result = js_proxy_construct(js, target, list.args, list.argc, new_target);
+  ant_value_t proto = 0;
+  sv_construct_route_t route = SV_CONSTRUCT_SEEDED;
+  if (new_target != target) route = sv_construct_route(js, target, new_target, &proto);
+  else if (vtype(target) != kTypeFunction) route = SV_CONSTRUCT_GENERIC;
+
+  if (route == SV_CONSTRUCT_GENERIC) {
+    result = sv_construct(js->vm, js, target, list.args, list.argc, new_target);
   } else {
     ant_value_t effective_new_target = new_target;
-    ant_value_t proto = sv_prepare_construct_meta(js, target, new_target, &effective_new_target);
+    if (!proto) {
+      sv_closure_t *closure = js_func_closure(target);
+      bool bound = closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS);
+      proto = new_target == target && !bound
+        ? sv_construct_prototype_cached(js, target, (ant_object_t *)vptr(js_func_obj(target)), closure->func)
+        : sv_prepare_construct_meta(js, target, new_target, &effective_new_target);
+    }
     
     if (is_err(proto)) {
       Ant_ArgList_Release(&list);
       return proto;
     }
 
-    ant_value_t new_obj = Ant_Object_CreateBare(js);
-    if (is_object_type(proto)) js_set_proto_init(new_obj, proto);
+    ant_value_t new_obj = js_mkobj_with_proto_slots(
+      js, is_object_type(proto) ? proto : Ant_Value_Undefined, sv_construct_slots_of(target)
+    );
 
     ant_value_t ctor_this = new_obj;
-    result = sv_vm_call(
+    if (__builtin_expect(route == SV_CONSTRUCT_SEEDED_PENDING, 0)) {
+      sv_construct_pending_t outer = sv_construct_pending_enter(js, new_obj, true);
+      result = sv_vm_call(
+        js->vm, js, target, new_obj, list.args,
+        list.argc, &ctor_this, effective_new_target
+      );
+      sv_construct_pending_leave(js, &outer);
+    } else result = sv_vm_call(
       js->vm, js, target, new_obj, list.args, 
       list.argc, &ctor_this, effective_new_target
     );
     
-    if (!is_err(result) && !is_object_type(result))
-      result = is_object_type(ctor_this) ? ctor_this : new_obj;
+    if (!is_err(result)) result = sv_construct_result(result, ctor_this, new_obj);
   }
   
   Ant_ArgList_Release(&list);
   return result;
+}
+
+static ant_value_t reflect_construct(ant_params_t) {
+  if (nargs < 2) {
+    return js_mkerr(js, "Reflect.construct requires at least 2 arguments");
+  }
+  
+  return reflect_construct_from(js, args[0], args[1], nargs >= 3 ? args[2] : args[0], nargs >= 3, NULL, 0);
 }
 
 static ant_value_t reflect_apply(ant_params_t) {
@@ -192,7 +217,8 @@ static ant_value_t reflect_define_property(ant_params_t) {
 static ant_value_t reflect_get_prototype_of(ant_params_t) {
   ant_value_t target = reflect_target(js, args, nargs, "getPrototypeOf");
   if (is_err(target)) return target;
-  return js_get_proto(js, target);
+  if (is_proxy(target)) return proxy_get_prototype_of(js, target);
+  return js_get_proto_demoted(js, target);
 }
 
 static ant_value_t reflect_set_prototype_of(ant_params_t) {
@@ -206,21 +232,23 @@ static ant_value_t reflect_set_prototype_of(ant_params_t) {
   }
   if (!is_object_type(proto) && vtype(proto) != kTypeNull)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Object prototype may only be an Object or null");
-  if (vtype(proto) != kTypeNull && proto_chain_contains(js, proto, target)) return Ant_Value_False;
+  if (is_proxy(js_as_obj(target))) {
+    ant_value_t result = proxy_set_prototype_of(js, js_as_obj(target), proto);
+    return is_err(result) ? result : Ant_Value_FromBool(js_truthy(js, result));
+  }
   
-  js_set_proto_wb(js, target, proto);
   
-  return Ant_Value_True;
+  return Ant_Value_FromBool(Ant_Object_TrySetPrototype(js, target, proto) == ANT_PROTO_SET_OK);
 }
 
 static ant_value_t reflect_is_extensible(ant_params_t) {
   ant_value_t target = reflect_target(js, args, nargs, "isExtensible");
   if (is_err(target)) return target;
+  if (is_proxy(js_as_obj(target))) return proxy_is_extensible(js, js_as_obj(target));
 
   ant_object_t *obj = js_obj_ptr(js_as_obj(target));
   if (!obj) return Ant_Value_False;
-  if (obj->flags.frozen || obj->flags.sealed) return Ant_Value_False;
-  
+
   return Ant_Value_FromBool(obj->flags.extensible);
 }
 
@@ -231,6 +259,7 @@ static ant_value_t reflect_prevent_extensions(ant_params_t) {
 
   ant_object_t *obj = js_obj_ptr(js_as_obj(target));
   if (!obj) return Ant_Value_False;
+  if (!Ant_Array_UnshareValue(js, js_as_obj(target))) return js_mkerr(js, "oom");
   obj->flags.extensible = 0;
   
   return Ant_Value_True;
@@ -255,4 +284,20 @@ void init_reflect_module(ant_t *js) {
   
   js_set_tostringtag(js, reflect_obj, js_mkstr(js, "Reflect", 7));
   js_set_global_builtin(js, "Reflect", reflect_obj);
+}
+
+ant_value_t js_reflect_construct_array_like(
+  ant_t *js, ant_value_t target, ant_value_t args_arr, ant_value_t new_target, bool explicit_new_target
+) {
+  return reflect_construct_from(js, target, args_arr, new_target, explicit_new_target, NULL, 0);
+}
+
+ant_value_t js_reflect_construct_listed(
+  ant_t *js, ant_value_t target, ant_value_t new_target, bool explicit_new_target, ant_value_t *args, int argc
+) {
+  return reflect_construct_from(js, target, Ant_Value_Undefined, new_target, explicit_new_target, args, argc);
+}
+
+bool js_is_reflect_construct_builtin(ant_value_t func) {
+  return vtype(func) == kTypeBuiltin && js_as_cfunc(func) == reflect_construct;
 }

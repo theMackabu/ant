@@ -35,3 +35,28 @@ ant_value_t sv_vm_call_mode(
   ant_value_t this_val, ant_value_t *args, int argc,
   ant_value_t *out_this, sv_call_mode_t mode, ant_value_t new_target
 );
+
+ant_value_t sv_super_constructor(ant_value_t constructor);
+
+ant_value_t sv_construct(
+  sv_vm_t *vm, ant_t *js, ant_value_t func,
+  ant_value_t *args, int argc, ant_value_t new_target
+);
+
+ant_value_t sv_construct_proxied(
+  sv_vm_t *vm, ant_t *js, ant_value_t func,
+  ant_value_t *args, int argc, ant_value_t new_target
+);
+
+void sv_construct_pending_first(ant_t *js);
+ant_value_t sv_construct_settle(ant_t *js, ant_value_t seed, ant_value_t new_target);
+
+ant_value_t sv_super_construct_unsettled(
+  sv_vm_t *vm, ant_t *js, ant_value_t parent, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+);
+
+ant_value_t sv_super_construct_slow(
+  sv_vm_t *vm, ant_t *js, ant_value_t constructor, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+);

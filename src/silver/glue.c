@@ -13,6 +13,7 @@
 #include "tokens.h"
 #include "silver/glue.h"
 #include "silver/jit.h"
+#include "silver/stack_trace.h"
 #include "modules/regex.h"
 #include "modules/collections.h"
 
@@ -28,6 +29,7 @@
 #include "ops/coercion.h"
 #include "ops/private.h"
 #include "ops/objects.h"
+#include "ops/super.h"
 
 __attribute__((noinline)) 
 ant_value_t Ant_Silver_InvokeNativeScoped(
@@ -264,27 +266,95 @@ ant_value_t jit_helper_native_finish(ant_t *js, ant_value_t result) {
   return Ant_Silver_FinishNativeCall(js, result);
 }
 
-ant_value_t jit_helper_call_method(
+ant_value_t jit_helper_call_super(
   sv_vm_t *vm, ant_t *js,
-  ant_value_t func, ant_value_t this_val,
-  ant_value_t *args, int argc,
-  ant_value_t super_val, ant_value_t new_target,
-  ant_value_t *out_this
+  ant_value_t constructor, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
 ) {
-  bool is_super_call = (vtype(super_val) != kTypeUndefined && func == super_val);
-  ant_value_t call_this = this_val;
+  return sv_super_construct(vm, js, constructor, this_val, args, argc, new_target);
+}
 
-  ant_value_t super_this = call_this;
-  ant_value_t result = sv_vm_call(
-    vm, js, func, call_this, args, argc,
-    is_super_call ? &super_this : NULL, is_super_call ? new_target : Ant_Value_Undefined
-  );
+ant_value_t jit_helper_super_apply(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t constructor, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+) {
+  sv_call_args_t call;
+  sv_call_args_reset(&call, args, argc);
+  
+  ant_value_t status = sv_apply_normalize_args(js, &call, argc);
+  if (is_err(status)) return status;
+  
+  ant_value_t result = sv_super_construct(vm, js, constructor, this_val, call.args, call.argc, new_target);
+  sv_call_args_release(&call);
+  
+  return result;
+}
 
-  if (out_this) {
-    if (is_super_call && !is_err(result)) *out_this = is_object_type(result) ? result : super_this;
-    else *out_this = call_this;
-  }
+static constexpr int JIT_INLINE_SPREAD_ARGS = 32;
 
+static inline int jit_inline_spread_args(ant_value_t **args, int argc, ant_value_t *storage) {
+  if (argc > JIT_INLINE_SPREAD_ARGS) return argc;
+  if (argc > 0) memcpy(storage, *args, (size_t)argc * sizeof(ant_value_t));
+  *args = storage;
+  return JIT_INLINE_SPREAD_ARGS;
+}
+
+ant_value_t jit_helper_new_args(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t func, ant_value_t new_target,
+  ant_value_t *args, int argc, int cap, bool spread
+) {
+  sv_call_args_t call;
+  sv_call_args_reset(&call, args, argc);
+  
+  ant_value_t status = spread
+    ? sv_spread_call_args(vm, js, &call, cap)
+    : sv_apply_normalize_args(js, &call, cap);
+  if (is_err(status)) return status;
+  
+  ant_value_t result = jit_helper_new(vm, js, func, new_target, call.args, call.argc);
+  sv_call_args_release(&call);
+  
+  return result;
+}
+
+ant_value_t jit_helper_call_joined(
+  sv_vm_t *vm, ant_t *js, ant_value_t func, ant_value_t second,
+  ant_value_t *fixed, int fixed_count, const ant_value_t *rest, int rest_count,
+  int cap, bool construct
+) {
+  sv_call_args_t call;
+  sv_call_args_reset(&call, fixed, fixed_count);
+  
+  ant_value_t status = sv_call_args_place(js, &call, fixed_count, rest, rest_count, cap);
+  if (is_err(status)) return status;
+  
+  ant_value_t result = construct
+    ? jit_helper_new(vm, js, func, second, call.args, call.argc)
+    : sv_vm_call(vm, js, func, second, call.args, call.argc, NULL, Ant_Value_Undefined);
+  sv_call_args_release(&call);
+  
+  return result;
+}
+
+ant_value_t jit_helper_super_spread(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t constructor, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+) {
+  ant_value_t storage[JIT_INLINE_SPREAD_ARGS];
+  int cap = jit_inline_spread_args(&args, argc, storage);
+  
+  sv_call_args_t call;
+  sv_call_args_reset(&call, args, argc);
+  
+  ant_value_t status = sv_spread_call_args(vm, js, &call, cap);
+  if (is_err(status)) return status;
+  
+  ant_value_t result = sv_super_construct(vm, js, constructor, this_val, call.args, call.argc, new_target);
+  sv_call_args_release(&call);
+  
   return result;
 }
 
@@ -324,10 +394,11 @@ ant_value_t jit_helper_apply(
   sv_call_args_t call;
   sv_call_args_reset(&call, args, argc);
   
-  return jit_call_prepared(
-    vm, js, func, this_val, &call, 
-    sv_apply_normalize_args(js, &call, cap)
-  );
+  ant_value_t status;
+  [[clang::always_inline]]
+  status = sv_apply_normalize_args(js, &call, cap);
+  
+  return jit_call_prepared(vm, js, func, this_val, &call, status);
 }
 
 ant_value_t jit_helper_call_spread(
@@ -390,10 +461,7 @@ ant_value_t jit_helper_rest(
   sv_vm_t *vm, ant_t *js,
   ant_value_t *args, int argc, int start
 ) {
-  ant_value_t arr = Ant_Array_Create(js);
-  for (int i = start; i < argc; i++)
-    js_arr_push(js, arr, args[i]);
-  return arr;
+  return Ant_Array_CreateRest(js, args, argc > 0 ? (uint32_t)argc : 0, (uint32_t)start);
 }
 
 ant_value_t jit_helper_get_global(
@@ -479,53 +547,11 @@ ant_value_t jit_helper_strict_arguments(
   return result;
 }
 
-void jit_helper_define_method_comp(
+ant_value_t jit_helper_define_method_comp(
   ant_t *js,
   ant_value_t obj, ant_value_t key, ant_value_t fn, uint8_t flags
 ) {
-  ant_value_t desc_obj = js_as_obj(obj);
-  
-  bool is_getter = (flags & SV_DEFINE_METHOD_GETTER) != 0;
-  bool is_setter = (flags & SV_DEFINE_METHOD_SETTER) != 0;
-  
-  uint8_t data_attrs = (flags & SV_DEFINE_METHOD_NON_ENUM)
-    ? (ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE)
-    : ANT_PROP_ATTR_DEFAULT;
-  
-  uint8_t accessor_desc = (flags & SV_DEFINE_METHOD_NON_ENUM)
-    ? JS_DESC_C
-    : (JS_DESC_E | JS_DESC_C);
-  
-  if (flags & SV_DEFINE_METHOD_SET_NAME) {
-    const char *prefix = is_getter ? "get " : is_setter ? "set " : "";
-    size_t prefix_len = is_getter || is_setter ? 4 : 0;
-    ant_value_t named = js_maybe_set_function_name_from_key(js, fn, key, prefix, prefix_len);
-    if (is_err(named)) return;
-  }
-  
-  if (vtype(key) == kTypeSymbol) {
-    if (is_getter) { js_set_sym_getter_desc(js, desc_obj, key, fn, accessor_desc); return; }
-    if (is_setter) { js_set_sym_setter_desc(js, desc_obj, key, fn, accessor_desc); return; }
-    mkprop(js, obj, key, fn, data_attrs);
-    return;
-  }
-  
-  ant_value_t key_str = sv_key_to_propstr(js, key);
-  if ((is_getter || is_setter) && vtype(key_str) == kTypeString) {
-    ant_offset_t klen = 0;
-    ant_offset_t koff = vstr(js, key_str, &klen);
-    const char *kptr = (const char *)(uintptr_t)(koff);
-    if (is_getter) js_set_getter_desc(js, desc_obj, kptr, klen, fn, accessor_desc);
-    else js_set_setter_desc(js, desc_obj, kptr, klen, fn, accessor_desc);
-    return;
-  }
-  
-  if (vtype(key_str) == kTypeString) {
-    ant_offset_t klen = 0;
-    ant_offset_t koff = vstr(js, key_str, &klen);
-    const char *kptr = (const char *)(uintptr_t)(koff);
-    mkprop(js, obj, js_mkstr(js, kptr, (size_t)klen), fn, data_attrs);
-  } else mkprop(js, obj, key_str, fn, data_attrs);
+  return sv_define_method_comp(js, flags, obj, &key, fn);
 }
 
 static ant_value_t jit_iter_advance_from_buf(
@@ -635,7 +661,7 @@ ant_value_t jit_helper_eq(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) 
 }
 
 ant_value_t jit_helper_throw(sv_vm_t *vm, ant_t *js, ant_value_t val) {
-  return js_throw(js, val);
+  return sv_jit_throw(js, val);
 }
 
 ant_value_t jit_helper_ne(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
@@ -1042,7 +1068,7 @@ ant_value_t jit_helper_get_field_inline(
 
 ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v) {
   if (vtype(v) == kTypeString || vtype(v) == kTypeSymbol) return v;
-  return coerce_to_str(js, v);
+  return js_to_property_key(js, v);
 }
 
 ant_value_t jit_helper_import_default(ant_t *js, ant_value_t ns) {
@@ -1681,6 +1707,36 @@ ant_value_t jit_helper_slow_put_field_adding(
   return result;
 }
 
+ant_value_t jit_helper_init_field(
+  ant_t *js, ant_value_t obj, const sv_atom_t *atom,
+  ant_value_t val, sv_ic_entry_t *ic
+) {
+  return sv_init_field(js, obj, val, atom, ic);
+}
+
+ant_value_t jit_helper_slow_init_field(
+  ant_t *js, ant_value_t obj, ant_value_t val,
+  sv_func_t *func, uint8_t *ip
+) {
+  return sv_init_field(js, obj, val, &func->atoms[sv_get_u32(ip + 1)], sv_ic_slot_for_ip(func, ip));
+}
+
+ant_value_t jit_helper_slow_init_field_adding(
+  ant_t *js, ant_value_t obj, ant_value_t val, sv_func_t *func,
+  uint8_t *ip, const jit_add_cell_t *adds, uint32_t count
+) {
+  ant_object_t *ptr = vtype(obj) == kTypeObject ? js_obj_ptr(obj) : NULL;
+  ant_shape_t *from = ptr ? ptr->shape : NULL;
+  ant_value_t result = jit_helper_slow_init_field(js, obj, val, func, ip);
+  
+  if (!ptr || is_err(result) || ptr->shape == from || !sv_init_field_target(ptr)) return result;
+  
+  for (uint32_t i = 0; i < count; i++)
+    if (adds[i].from == from && adds[i].to == ptr->shape && sv_add_proto_matches(ptr, adds[i].proto)) *adds[i].cell = js->ic.epoch;
+  
+  return result;
+}
+
 ant_value_t jit_helper_slow_get_elem(ant_t *js, ant_value_t obj, ant_value_t key, sv_func_t *func, uint8_t *ip) {
   sv_tfb_record_get_elem(func, ip, obj, key);
   uint32_t index;
@@ -1769,6 +1825,48 @@ void jit_helper_define_slot(
 
 ant_value_t jit_helper_array(sv_vm_t *vm, ant_t *js, ant_value_t *elements, int count) {
   return js_mkarr_dense_literal(js, elements, (uint32_t)count);
+}
+
+ant_value_t jit_helper_literal(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint64_t index) {
+  return Silver_Literal_Create(js, func, (uint32_t)index);
+}
+
+void jit_helper_literal_init(ant_t *js, ant_value_t arr, uint64_t index, ant_value_t value) {
+  Silver_Literal_InitElement(js, arr, (uint32_t)index, value);
+}
+
+ant_value_t jit_helper_get_super_field(sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t receiver, ant_value_t home, sv_atom_t *atom, sv_ic_entry_t *ic) {
+  return Silver_Super_GetField(js, func, receiver, home, atom, ic);
+}
+
+ant_value_t jit_helper_put_super_field(
+  sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t receiver,
+  ant_value_t home, const sv_atom_t *atom, ant_value_t value, sv_ic_entry_t *ic
+) {
+  return Silver_Super_PutField(js, func, receiver, home, atom, value, ic);
+}
+
+ant_value_t jit_helper_get_super(sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t receiver, ant_value_t home, ant_value_t prop) {
+  ant_value_t roots[2] = {Ant_Value_Undefined, Ant_Value_Undefined};
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, roots[0]);
+  GC_ROOT_PIN(js, roots[1]);
+  ant_value_t result = Silver_Super_Get(js, func, receiver, home, prop, roots);
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
+ant_value_t jit_helper_put_super(
+  sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t receiver,
+  ant_value_t home, ant_value_t prop, ant_value_t value
+) {
+  ant_value_t roots[2] = {Ant_Value_Undefined, Ant_Value_Undefined};
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, roots[0]);
+  GC_ROOT_PIN(js, roots[1]);
+  ant_value_t result = Silver_Super_Put(js, func, receiver, home, prop, value, roots);
+  GC_ROOT_RESTORE(js, mark);
+  return result;
 }
 
 ant_value_t jit_helper_interrupt(sv_vm_t *vm, ant_t *js, ant_value_t unused) {
@@ -1970,7 +2068,7 @@ ant_value_t jit_helper_new(
   } else result = sv_vm_call(vm, js, func, obj, args, argc, &ctor_this, effective_new_target);
 
   if (is_err(result)) return result;
-  return is_object_type(result) ? result : (is_object_type(ctor_this) ? ctor_this : obj);
+  return sv_construct_result(result, ctor_this, obj);
 }
 
 ant_value_t jit_helper_realm_reenter(

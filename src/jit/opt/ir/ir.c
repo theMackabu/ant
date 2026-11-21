@@ -96,7 +96,7 @@ bool ir_op_equal(const ir_op_t *a, const ir_op_t *b) {
     case IR_OP_STORE_PRIVATE: return a->hash == b->hash;
     case IR_OP_COLLECTION_ITERATOR_STEP: return a->index == b->index;
     case IR_OP_LOAD_ARGUMENT: return a->arguments_base == b->arguments_base;
-    case IR_OP_ALLOCATE_ARRAY:
+    case IR_OP_ALLOCATE_ARRAY: return a->allocate_array.count == b->allocate_array.count && a->allocate_array.reserve == b->allocate_array.reserve;
     case IR_OP_CONCATENATE_STRINGS:
     case IR_OP_LOAD_NAMED_STORAGE: return a->count == b->count;
     case IR_OP_ALLOCATE_FUNCTION: return a->shared_function_data_index == b->shared_function_data_index;
@@ -139,7 +139,8 @@ bool ir_op_equal(const ir_op_t *a, const ir_op_t *b) {
         && a->call.extra == b->call.extra && a->call.allocates_only == b->call.allocates_only
         && a->call.computes_only == b->call.computes_only
         && a->call.needs_frame == b->call.needs_frame && a->call.slow_path == b->call.slow_path
-        && a->call.builtin == b->call.builtin;
+        && a->call.builtin == b->call.builtin && a->call.construct_super == b->call.construct_super
+        && a->call.passes_entry == b->call.passes_entry && a->call.spare_slots == b->call.spare_slots;
     case IR_OP_PROBE_PROPERTY_CACHE:
     case IR_OP_PROBE_KEYED_CACHE:
     case IR_OP_PROBE_PROPERTY_STORE:
@@ -286,6 +287,7 @@ ir_node_properties_t ir_op_properties(const ir_op_t *op) {
     case IR_OP_TYPEOF_IS: return IR_PURE;
     case IR_OP_CHECK_SHAPE:
     case IR_OP_CHECK_PROTOTYPE_CHAIN_VALID: return ir_reads(IR_LOC_SHAPES);
+    case IR_OP_CHECK_RECEIVER:
     case IR_OP_ASSUME_VALID: return ir_reads(IR_LOC_ALL);
     case IR_OP_CHECK_ACCESSOR_FUNCTION:
     case IR_OP_LOAD_ACCESSOR_FUNCTION:
@@ -429,6 +431,7 @@ bool ir_op_exit_kind(const ir_op_t *op, opt_exit_kind_t *kind) {
   opt_exit_kind_t result;
   switch (op->code) {
     case IR_OP_EXIT: result = op->exit_kind; break;
+    case IR_OP_CHECK_RECEIVER:
     case IR_OP_CHECK_OBJECT: result = OPT_EXIT_NOT_OBJECT; break;
     case IR_OP_CHECK_ELEMENTS:
     case IR_OP_CHECK_TYPED_ARRAY: result = OPT_EXIT_BAD_ELEMENTS; break;

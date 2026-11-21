@@ -46,6 +46,9 @@ void sv_compile_ctx_init_root(
   ctx->arguments_local = -1;
   ctx->new_target_local = -1;
   ctx->super_local = -1;
+  ctx->this_local = -1;
+  ctx->this_check_atom = -1;
+  ctx->derived_return_local = -1;
   ctx->using_stack_local = -1;
   ctx->line_table = line_table;
   ctx->private_scope = NULL;
@@ -66,6 +69,7 @@ void sv_compile_ctx_init_child(
   ctx->enclosing = enclosing;
   ctx->scope_depth = 0;
   ctx->is_arrow = node && !!(node->flags & FN_ARROW);
+  ctx->with_inherited = enclosing->with_inherited || enclosing->with_depth > 0 || enclosing->eval_with;
   ctx->allows_new_target = (!enclosing->enclosing || ctx->is_arrow)
     ? enclosing->allows_new_target : true;
   ctx->is_async = node && !!(node->flags & FN_ASYNC);
@@ -80,9 +84,17 @@ void sv_compile_ctx_init_child(
   ctx->arguments_local = -1;
   ctx->new_target_local = -1;
   ctx->super_local = -1;
+  ctx->this_local = -1;
+  ctx->this_check_atom = -1;
+  ctx->derived_return_local = -1;
   ctx->using_stack_local = -1;
   ctx->param_count = node ? node->args.count : 0;
   ctx->private_scope = enclosing->private_scope;
+  enclosing->type_child_count++;
+  ctx->types = enclosing->types ? enclosing->types : &ctx->type_storage;
+  ctx->type_dep_mark = ctx->types->dep_count;
+  ctx->type_use_mark = ctx->types->use_count;
+  ctx->type_promo_mark = ctx->types->promo_count;
 }
 
 void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
@@ -96,20 +108,40 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
   free(ctx->upval_descs);
   free(ctx->upval_bindings);
   free(ctx->write_counts);
+  if (ctx->types == &ctx->type_storage) {
+    free(ctx->type_storage.deps);
+    free(ctx->type_storage.uses);
+    free(ctx->type_storage.promos);
+  } else {
+    ctx->types->dep_count = ctx->type_dep_mark;
+    ctx->types->use_count = ctx->type_use_mark;
+    ctx->types->promo_count = ctx->type_promo_mark;
+  }
   for (int i = 0; i < ctx->eval_scope_count; i++)
     free(ctx->eval_scopes[i].bindings);
   free(ctx->eval_scopes);
   free(ctx->eval_vars);
+  if (ctx->eval_var_index) free(ctx->eval_var_index);
+  if (ctx->upvalue_index) free(ctx->upvalue_index);
   free(ctx->global_lexicals);
   free(ctx->loops);
   free(ctx->with_scopes);
+  if (ctx->spills) {
+    free(ctx->spills);
+    free(ctx->spill_heads);
+  }
   free(ctx->unwind_kinds);
+  free(ctx->unwind_marks);
   free(ctx->srcpos);
   free(ctx->slot_types);
   free(ctx->deferred_exports);
   free(ctx->using_cleanups);
   free(ctx->shaped_sites);
   free(ctx->shaped_keys);
+  for (int i = 0; i < ctx->literal_site_count; i++)
+    if (ctx->literal_sites[i].block) gc_shared_elements_release(ctx->js, ctx->literal_sites[i].block);
+  free(ctx->literal_sites);
+  free(ctx->literal_keys);
 
   const_dedup_entry_t *entry;
   const_dedup_entry_t *tmp;

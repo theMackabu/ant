@@ -1,5 +1,6 @@
 #include <compat.h> // IWYU pragma: keep
 
+#include "cfunc.h"
 #include "proto.h"
 #include "modules/object.h"
 #include "silver/engine.h"
@@ -111,16 +112,20 @@ bool proto_walk_overflow_guard_hit_cycle(
 }
 
 ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto, ant_value_t new_target) {
-  ant_value_t instance_proto = Ant_Value_Undefined;
+  uint8_t t = vtype(new_target);
 
-  if (vtype(new_target) == kTypeFunction || vtype(new_target) == kTypeBuiltin) {
-    ant_value_t nt_obj = js_as_obj(new_target);
-    ant_value_t nt_proto = lkp_interned_val(js, nt_obj, js->intern.prototype);
-    if (is_object_type(nt_proto)) instance_proto = nt_proto;
+  if (t == kTypeFunction || t == kTypeBuiltin) {
+    ant_value_t nt_proto = lkp_interned_val(js, js_as_obj(new_target), js->intern.prototype);
+    if (__builtin_expect(is_object_type(nt_proto), 1)) return nt_proto;
+    if (vtype(nt_proto) == kTypeBuiltin) {
+      ant_value_t promoted = js_cfunc_promote(js, nt_proto);
+      if (is_object_type(promoted)) return promoted;
+    }
+  } else if (t == kTypeObject && js->construct_proxy_target == new_target) {
+    if (is_object_type(js->construct_proxy_proto)) return js->construct_proxy_proto;
   }
 
-  if (!is_object_type(instance_proto) && is_object_type(fallback_proto)) instance_proto = fallback_proto;
-  return instance_proto;
+  return is_object_type(fallback_proto) ? fallback_proto : Ant_Value_Undefined;
 }
 
 bool proto_chain_contains(ant_t *js, ant_value_t obj, ant_value_t proto_target) {
@@ -196,7 +201,8 @@ ant_value_t js_object_is_prototype_of(ant_t *js, ant_value_t self, ant_value_t v
 
   if (vtype(self) == kTypeUndefined || vtype(self) == kTypeNull)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
-  if (!is_object_type(self) && vtype(self) != kTypeBuiltin) return Ant_Value_False;
+  if (vtype(self) == kTypeBuiltin) self = js_cfunc_lookup_promoted(js, self);
+  if (!is_object_type(self)) return Ant_Value_False;
 
   bool saw_proxy = false;
   ant_value_t result = walk_prototype_chain_ex(js, value, self, &saw_proxy);
@@ -233,6 +239,7 @@ static bool proto_chain_contains_cycle_safe(ant_t *js, ant_value_t start, ant_va
 }
 
 bool js_instance_of_proto(ant_t *js, ant_value_t obj, ant_value_t ctor_proto) {
+  if (vtype(ctor_proto) == kTypeBuiltin) ctor_proto = js_cfunc_lookup_promoted(js, ctor_proto);
   return proto_chain_contains_cycle_safe(js, get_proto(js, obj), ctor_proto);
 }
 
@@ -258,4 +265,26 @@ static ant_value_t walk_prototype_chain_ex(
 
 ant_value_t walk_prototype_chain(ant_t *js, ant_value_t l, ant_value_t ctor_proto) {
   return walk_prototype_chain_ex(js, l, ctor_proto, NULL);
+}
+
+ant_value_t js_get_proto_demoted(ant_t *js, ant_value_t obj) {
+  uint8_t t = vtype(obj);
+  ant_value_t holder = t == kTypeFunction ? js_func_obj(obj) : obj;
+  const ant_object_t *ptr = (t == kTypeObject || t == kTypeArray || (t == kTypeFunction && vtype(holder) == kTypeObject))
+    ? (const ant_object_t *)vptr(holder) : NULL;
+  
+  ant_value_t proto = ptr ? ant_object_proto(ptr) : Ant_Value_Undefined;
+  uint8_t pt = vtype(proto);
+  if (__builtin_expect(pt == kTypeObject || pt == kTypeArray || pt == kTypeNull, 1)) return proto;
+  if (pt == kTypeFunction) {
+    const sv_closure_t *closure = js_func_closure(proto);
+    if (closure->func || closure->call_flags || proto == js->sym.function_proto) return proto;
+    return js_cfunc_demote_function(js, proto);
+  }
+  return js_cfunc_demote_promoted(js, js_get_proto(js, obj));
+}
+
+bool proto_would_cycle(ant_t *js, ant_value_t obj, ant_value_t proto) {
+  if (!is_object_type(obj) || !is_object_type(proto)) return false;
+  return same_object_identity(proto, obj) || proto_chain_contains(js, proto, obj);
 }

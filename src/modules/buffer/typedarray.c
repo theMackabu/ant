@@ -776,8 +776,13 @@ static ant_value_t js_typedarray_from(ant_native_params_t, TypedArrayType type, 
       goto done;
     }
 
-    size_t len = vtype(len_val) == kTypeNumber
-      ? (size_t)Ant_Value_AsNumberUnchecked(len_val) : 0;
+    double source_len = vtype(len_val) == kTypeNumber ? Ant_Value_AsNumberUnchecked(len_val) : js_to_number(js, len_val);
+    if (Ant_Exception_Pending(js)) { result = Ant_Exception_Current(js); goto done; }
+    if (source_len > (double)UINT32_MAX) {
+      result = js_mkerr_typed(js, JS_ERR_RANGE, "Array buffer allocation failed");
+      goto done;
+    }
+    size_t len = source_len > 0 ? (size_t)source_len : 0;
 
     for (size_t i = 0; i < len; i++) {
       char idx[16];
@@ -862,7 +867,7 @@ static ant_value_t js_typedarray_kind_constructor(ant_params_t) {
   if (is_err(result)) return result;
   
   ant_value_t proto = js_instance_proto_from_new_target(js, js_get_proto(js, result), call_new_target);
-  if (is_special_object(proto)) js_set_proto_wb(js, result, proto);
+  if (is_object_type(proto)) js_set_proto_wb(js, result, proto);
   return result;
 }
 

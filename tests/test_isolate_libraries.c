@@ -72,6 +72,11 @@ static ant_value_t Import(ant_t *js, const char *specifier) {
   return ns;
 }
 
+static ant_value_t ImportLoaded(ant_t *js, const char *specifier) {
+  ant_value_t name = js_mkstr(js, specifier, strlen(specifier));
+  return js_esm_import_loaded(js, name, NULL, Ant_Value_Undefined);
+}
+
 static void HostModules(void) {
   ant_t *js = Create();
   ant_t *other = Create();
@@ -83,7 +88,11 @@ static void HostModules(void) {
   assert(Ant_Module_RegisterSource(js, "ant:host-test", host_source, sizeof(host_source) - 1));
   assert(host_inits == 0);
 
+  assert(vtype(ImportLoaded(js, "ant:host-test")) == kTypeUndefined);
+  assert(host_inits == 0);
+
   ant_value_t ns = Import(js, "ant:host-test");
+  assert(ImportLoaded(js, "ant:host-test") == ns);
   assert(Ant_Value_AsNumberUnchecked(js_get(js, ns, "doubled")) == 84);
   assert(Ant_Value_AsNumberUnchecked(js_get(js, js_get(js, ns, "default"), "answer")) == 42);
   assert(Import(js, "ant:host-test") == ns);

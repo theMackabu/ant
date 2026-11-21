@@ -547,7 +547,7 @@ static ant_value_t string_split_code_units(ant_t *js, ant_value_t str, ant_value
       ? js_mk_ascii_char_cached(js, (unsigned char)bytes[index])
       : js_string_from_utf16_code_unit(js, unit);
     if (is_err(part)) break;
-    arr_set(js, arr, index, part);
+    arr_set_owned(js, arr, index, part);
   }
 
   ant_value_t result = is_err(part) ? part : arr;
@@ -632,7 +632,7 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_args_t) {
       ant_offset_t idx = 0;
       for (ant_offset_t i = 0; i < str_len && idx < limit; i++) {
         ant_value_t part = js_mkstr_byte_range(js, str_ptr, i, 1);
-        arr_set(js, arr, idx, part);
+        arr_set_owned(js, arr, idx, part);
         idx++;
       }
       return mkval(kTypeArray, vdata(arr));
@@ -708,17 +708,17 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_args_t) {
       had_any_split = true;
 
       ant_value_t part = js_mkstr_byte_range(js, str_ptr, segment_start, match_start - segment_start);
-      arr_set(js, arr, idx, part);
+      arr_set_owned(js, arr, idx, part);
       idx++;
 
       for (uint32_t i = 1; i <= capture_count && idx < limit; i++) {
         PCRE2_SIZE cap_start = ovector[2*i];
         PCRE2_SIZE cap_end = ovector[2*i+1];
         if (cap_start == PCRE2_UNSET) {
-          arr_set(js, arr, idx, Ant_Value_Undefined);
+          arr_set_owned(js, arr, idx, Ant_Value_Undefined);
         } else {
           part = js_mkstr_byte_range(js, str_ptr, cap_start, cap_end - cap_start);
-          arr_set(js, arr, idx, part);
+          arr_set_owned(js, arr, idx, part);
         }
         idx++;
       }
@@ -735,13 +735,13 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_args_t) {
     if (!had_any_split) {
       pcre2_match_data_free(match_data);
       pcre2_code_free(re);
-      arr_set(js, arr, 0, js_mkstr_byte_range(js, str_ptr, 0, str_len));
+      arr_set_owned(js, arr, 0, js_mkstr_byte_range(js, str_ptr, 0, str_len));
       return mkval(kTypeArray, vdata(arr));
     }
 
     if (idx < limit) {
       ant_value_t part = js_mkstr_byte_range(js, str_ptr, segment_start, str_len - segment_start);
-      arr_set(js, arr, idx, part);
+      arr_set_owned(js, arr, idx, part);
       idx++;
     }
 
@@ -791,7 +791,7 @@ split_string_separator:;
       free(view_sep);
       return part;
     }
-    arr_set(js, arr, idx, part);
+    arr_set_owned(js, arr, idx, part);
     start = end + sep_len;
   }
 
@@ -801,7 +801,7 @@ split_string_separator:;
 
 return_whole:
   if (limit > 0) {
-    arr_set(js, arr, 0, str);
+    arr_set_owned(js, arr, 0, str);
   }
   return mkval(kTypeArray, vdata(arr));
 }

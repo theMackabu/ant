@@ -11,12 +11,16 @@ enum {
   SV_PRIVATE_METHOD = 1,
   SV_PRIVATE_ACCESSOR = 2,
   SV_PRIVATE_GETTER = 3,
-  SV_PRIVATE_SETTER = 4
+  SV_PRIVATE_SETTER = 4,
+  SV_PRIVATE_METHODS = 5
 };
+
+ant_value_t sv_private_define_methods(ant_t *js, ant_value_t obj, ant_value_t methods);
 
 static inline uint32_t sv_private_hash_token(ant_value_t token) {
   if (is_object_type(token)) {
-    ant_value_t cached = js_get_slot(token, SLOT_DATA);
+    bool plain = vtype(token) == kTypeObject && vdata(token);
+    ant_value_t cached = plain ? ((ant_object_t *)vptr(token))->u.data.value : js_get_slot(token, SLOT_DATA);
     if (vtype(cached) == kTypeNumber) return (uint32_t)Ant_Value_AsNumberUnchecked(cached);
   }
 
@@ -29,26 +33,33 @@ static inline uint32_t sv_private_hash_token(ant_value_t token) {
   return (uint32_t)x;
 }
 
-static inline ant_private_table_t *sv_private_table_for_obj(ant_value_t obj, bool create) {
-  if (!is_object_type(obj)) return NULL;
-  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-  if (!ptr) return NULL;
-  ant_object_sidecar_t *sidecar = create ? ant_object_ensure_sidecar(ptr) : ant_object_sidecar(ptr);
+static inline ant_private_table_t *sv_private_table_for_obj(ant_value_t obj) {
+  ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
+  ant_object_sidecar_t *sidecar = ptr ? ant_object_sidecar(ptr) : NULL;
   return sidecar ? &sidecar->private_table : NULL;
 }
+
+static inline ant_private_table_t *sv_private_table_ensure(ant_value_t obj, uint32_t hash) {
+  ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
+  if (!ptr) return NULL;
+  ant_object_sidecar_t *sidecar = ant_object_sidecar(ptr);
+  if (!sidecar) sidecar = ant_object_create_sidecar(ptr, (hash & ANT_PRIVATE_HASH_SOLO) != 0);
+  return sidecar ? &sidecar->private_table : NULL;
+}
+
+static constexpr uint32_t SV_PRIVATE_NO_SLOT = UINT32_MAX;
 
 static inline uint32_t sv_private_find_slot(
   ant_private_table_t *table, ant_value_t token, uint32_t hash, bool *found
 ) {
   uint32_t mask = table->cap - 1;
   uint32_t idx = hash & mask;
+  uint32_t end = idx;
+  *found = false;
   
-  for (;;) {
+  do {
     ant_private_entry_t *entry = &table->entries[idx];
-    if (!entry->occupied) {
-      *found = false;
-      return idx;
-    }
+    if (!entry->occupied) return idx;
     
     if (entry->hash == hash && entry->token == token) {
       *found = true;
@@ -56,12 +67,15 @@ static inline uint32_t sv_private_find_slot(
     }
     
     idx = (idx + 1) & mask;
-  }
+  } while (idx != end);
+  
+  return SV_PRIVATE_NO_SLOT;
 }
 
 static inline bool sv_private_table_grow(ant_private_table_t *table) {
   uint32_t old_cap = table->cap;
-  uint32_t new_cap = old_cap ? old_cap * 2 : 8;
+  bool was_inline = ant_private_table_is_inline(table);
+  uint32_t new_cap = old_cap < ANT_PRIVATE_HEAP_MIN_CAP ? ANT_PRIVATE_HEAP_MIN_CAP : old_cap * 2;
   
   ant_private_entry_t *new_entries = 
     (ant_private_entry_t *)calloc(new_cap, sizeof(*new_entries));
@@ -86,14 +100,17 @@ static inline bool sv_private_table_grow(ant_private_table_t *table) {
     table->count++;
   }
 
-  free(old_entries);
+  if (!was_inline) free(old_entries);
   return true;
 }
 
 static inline ant_private_entry_t *sv_private_find_entry(ant_value_t obj, ant_value_t token) {
-  ant_private_table_t *table = sv_private_table_for_obj(obj, false);
+  ant_private_table_t *table = sv_private_table_for_obj(obj);
   if (!table || !table->entries || table->cap == 0) return NULL;
   
+  if (ant_private_table_is_inline(table))
+    return table->entries[0].occupied && table->entries[0].token == token ? &table->entries[0] : NULL;
+
   bool found = false;
   uint32_t hash = sv_private_hash_token(token);
   uint32_t slot = sv_private_find_slot(table, token, hash, &found);
@@ -237,13 +254,14 @@ static inline ant_value_t sv_op_put_private(sv_vm_t *vm, ant_t *js) {
   return Ant_Value_Undefined;
 }
 
-static inline ant_value_t sv_private_define(
+static inline __attribute__((always_inline)) ant_value_t sv_private_define(
   ant_t *js, ant_value_t obj, ant_value_t token, ant_value_t val, uint8_t def_kind
 ) {
   if (!is_object_type(obj)) return sv_private_missing(js);
   ant_private_entry_t *existing = sv_private_find_entry(obj, token);
 
-  if (def_kind == SV_PRIVATE_GETTER || def_kind == SV_PRIVATE_SETTER) {
+  if (def_kind >= SV_PRIVATE_GETTER) {
+    if (def_kind == SV_PRIVATE_METHODS) return sv_private_define_methods(js, obj, val);
     ant_private_entry_t *entry = existing;
     if (!entry) {
       entry = sv_private_make_entry(
@@ -295,20 +313,44 @@ static inline ant_value_t sv_op_has_private(sv_vm_t *vm, ant_t *js) {
 
 #ifdef SV_OPS_IMPLEMENTATION
 
+ant_value_t sv_private_define_methods(ant_t *js, ant_value_t obj, ant_value_t methods) {
+  ant_object_t *list = vtype(methods) == kTypeArray ? js_obj_ptr(methods) : NULL;
+  if (!list || !list->flags.fast_array) return js_mkerr(js, "invalid private method table");
+  
+  ant_private_table_t *table = sv_private_table_for_obj(obj);
+  bool fresh = !table || table->count == 0;
+  
+  for (uint32_t i = 0; i + 2 < list->u.array.len; i += 3) {
+    const ant_value_t *entry = &list->u.array.data[i];
+    uint8_t kind = (uint8_t)Ant_Value_AsNumberUnchecked(entry[2]);
+    
+    if (fresh && kind == SV_PRIVATE_METHOD) {
+      if (!sv_private_make_entry(js, obj, entry[0], SV_PRIVATE_METHOD, entry[1], Ant_Value_Undefined, Ant_Value_Undefined))
+        return js_mkerr(js, "oom");
+      continue;
+    }
+    
+    ant_value_t defined = sv_private_define(js, obj, entry[0], entry[1], kind);
+    if (is_err(defined)) return defined;
+  }
+  
+  return Ant_Value_Undefined;
+}
+
 ant_private_entry_t *sv_private_make_entry(
   ant_t *js, ant_value_t obj, ant_value_t token,
   int kind, ant_value_t value, ant_value_t getter, ant_value_t setter
 ) {
-  ant_private_table_t *table = sv_private_table_for_obj(obj, true);
+  uint32_t hash = sv_private_hash_token(token);
+  ant_private_table_t *table = sv_private_table_ensure(obj, hash);
   if (!table) return NULL;
   
-  if (table->cap == 0 || ((table->count + 1) * 4 >= table->cap * 3)) {
-    if (!sv_private_table_grow(table)) return NULL;
-  }
+  bool full = table->cap == 0 || (table->count != 0 && (table->count + 1) * 4 >= table->cap * 3);
+  if (full && !sv_private_table_grow(table)) return NULL;
 
   bool found = false;
-  uint32_t hash = sv_private_hash_token(token);
   uint32_t slot = sv_private_find_slot(table, token, hash, &found);
+  if (slot == SV_PRIVATE_NO_SLOT) return NULL;
   ant_private_entry_t *entry = &table->entries[slot];
   
   if (!found) {

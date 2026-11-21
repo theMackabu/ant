@@ -20,6 +20,14 @@ void emit_u16(sv_compiler_t *c, uint16_t val) {
   emit(c, (uint8_t)(val >> 8));
 }
 
+void emit_argc(sv_compiler_t *c, int argc) {
+  if (argc > UINT16_MAX && !Ant_Exception_Pending(c->js)) js_mkerr_typed(
+    c->js, JS_ERR_SYNTAX,
+    "Too many arguments in function call (only %d allowed)", UINT16_MAX
+  );
+  emit_u16(c, (uint16_t)argc);
+}
+
 void emit_u32(sv_compiler_t *c, uint32_t val) {
   emit(c, (uint8_t)(val & 0xFF));
   emit(c, (uint8_t)((val >> 8) & 0xFF));
@@ -433,11 +441,15 @@ void compile_expr_with_inferred_name(
   c->inferred_name_len = saved_len;
 }
 
-void emit_throw_type_error(sv_compiler_t *c, const char *msg, uint32_t len) {
+void emit_throw_error(sv_compiler_t *c, js_err_type_t type, const char *msg, uint32_t len) {
   int atom = add_atom(c, msg, len);
   emit_op(c, OP_THROW_ERROR);
   emit_u32(c, (uint32_t)atom);
-  emit(c, (uint8_t)JS_ERR_TYPE);
+  emit(c, (uint8_t)type);
+}
+
+void emit_throw_type_error(sv_compiler_t *c, const char *msg, uint32_t len) {
+  emit_throw_error(c, JS_ERR_TYPE, msg, len);
 }
 
 void emit_const_assign_error(sv_compiler_t *c, const char *name, uint32_t len) {
@@ -467,6 +479,7 @@ int emit_jump(sv_compiler_t *c, sv_op_t op) {
 void patch_jump(sv_compiler_t *c, int offset) {
   int32_t delta = (int32_t)(c->code_len - offset - 4);
   patch_u32(c, offset, (uint32_t)delta);
+  c->this_checked = false;
 }
 
 void emit_loop(sv_compiler_t *c, int loop_start) {

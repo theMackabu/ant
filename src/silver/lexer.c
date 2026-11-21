@@ -26,6 +26,12 @@ void sv_lexer_init(sv_lexer_t *lx, ant_t *js, const char *code, ant_offset_t cle
   lx->st.tok = TOK_ERR;
   lx->st.consumed = 1;
   lx->st.had_newline = false;
+  lx->st.escaped = false;
+  lx->peek_pos = (ant_offset_t)-1;
+  lx->tpl_spans = NULL;
+  lx->tpl_code = NULL;
+  lx->tpl_count = 0;
+  lx->tpl_cap = 0;
 }
 
 js_error_site_t sv_lexer_error_site(const sv_lexer_t *lx) {
@@ -59,6 +65,8 @@ void sv_lexer_push_source(
   lx->st.tok = TOK_ERR;
   lx->st.consumed = 1;
   lx->st.had_newline = false;
+  lx->st.escaped = false;
+  lx->peek_pos = (ant_offset_t)-1;
 }
 
 void sv_lexer_pop_source(sv_lexer_t *lx, const sv_lexer_checkpoint_t *cp) {
@@ -66,6 +74,7 @@ void sv_lexer_pop_source(sv_lexer_t *lx, const sv_lexer_checkpoint_t *cp) {
   lx->clen = cp->clen;
   lx->strict = cp->strict;
   lx->st = cp->st;
+  lx->peek_pos = (ant_offset_t)-1;
 }
 
 static bool sv_lexer_decode_string_escape(sv_lexer_t *lx, const uint8_t *in, uint8_t *out, size_t *n1, size_t *n2) {
@@ -320,6 +329,7 @@ uint8_t sv_parsekeyword(const char *buf, size_t len) {
       break;
     case 'e':
       K("else", TOK_ELSE);
+      K("enum", TOK_ENUM);
       K("export", TOK_EXPORT);
       break;
     case 'f':
@@ -527,7 +537,7 @@ static size_t decode_ident_escapes(const char *src, size_t srclen, char *dst, si
   return di;
 }
 
-static uint8_t parseident(const char *buf, ant_offset_t len, ant_offset_t *tlen) {
+static uint8_t parseident(const char *buf, ant_offset_t len, ant_offset_t *tlen, bool *escaped) {
   if (len == 0) return TOK_ERR;
   
   unsigned char c = (unsigned char)buf[0];
@@ -594,11 +604,15 @@ slow_path_loop:;
   }
   
   if (has_escapes) {
+    *escaped = true;
     char decoded[256];
     size_t decoded_len = decode_ident_escapes(buf, *tlen, decoded, sizeof(decoded));
     uint8_t kw = sv_parsekeyword(decoded, decoded_len);
-    if (kw != TOK_IDENTIFIER) return TOK_ERR;
-    return TOK_IDENTIFIER;
+    bool contextual =
+      kw == TOK_IDENTIFIER || kw == TOK_LET || kw == TOK_STATIC || kw == TOK_YIELD || kw == TOK_AWAIT ||
+      kw == TOK_ASYNC || kw == TOK_OF || kw == TOK_AS || kw == TOK_FROM || kw == TOK_USING ||
+      kw == TOK_UNDEF || kw == TOK_WINDOW || kw == TOK_GLOBAL_THIS;
+    return contextual ? TOK_IDENTIFIER : TOK_ESCAPED_KEYWORD;
   }
   
   return sv_parsekeyword(buf, *tlen);
@@ -750,6 +764,29 @@ static inline bool number_literal_has_invalid_tail(const char *buf, ant_offset_t
   return toklen < remaining && is_ident_continue((unsigned char)buf[toklen]);
 }
 
+static bool numeric_separators_valid(const char *buf, ant_offset_t len) {
+  if (!has_numeric_separator(buf, len)) return true;
+  bool hex = buf[0] == '0' && len > 1 && (buf[1] | 0x20) == 'x';
+  bool leading_zero = buf[0] == '0' && len > 1 && (buf[1] == '_' || IS_DIGIT(buf[1]));
+  bool integer_part = true;
+
+  for (ant_offset_t i = 0; i < len; i++) {
+    if (!hex && (buf[i] == '.' || (buf[i] | 0x20) == 'e')) integer_part = false;
+    if (buf[i] != '_') continue;
+    if (i == 0 || i + 1 >= len || (leading_zero && integer_part)) return false;
+    char before = buf[i - 1], after = buf[i + 1];
+    if (hex ? !IS_XDIGIT(before) || !IS_XDIGIT(after) : !IS_DIGIT(before) || !IS_DIGIT(after)) return false;
+  }
+
+  return true;
+}
+
+static inline bool legacy_literal_is_decimal(const char *buf, ant_offset_t remaining) {
+  for (ant_offset_t i = 1; i < remaining && IS_DIGIT(buf[i]); i++)
+    if (buf[i] >= '8') return true;
+  return false;
+}
+
 static inline uint8_t parse_number(sv_lexer_t *lx, const char *buf, ant_offset_t remaining) {
   double value = 0;
   ant_offset_t numlen = 0;
@@ -768,7 +805,16 @@ static inline uint8_t parse_number(sv_lexer_t *lx, const char *buf, ant_offset_t
           lx->st.tlen = 1;
           return TOK_ERR;
         }
-        numlen = parse_legacy_octal(buf, remaining, &value);
+        if (legacy_literal_is_decimal(buf, remaining)) {
+          decimal_literal_t literal = parse_decimal_literal(buf, remaining);
+          numlen = literal.len;
+          if (!literal.ok) {
+            lx->st.tok = TOK_ERR;
+            lx->st.tlen = numlen;
+            return TOK_ERR;
+          }
+          value = literal.value;
+        } else numlen = parse_legacy_octal(buf, remaining, &value);
     } else if (is_digit(buf[1]) && lx->strict) {
         lx->st.tok = TOK_ERR;
         lx->st.tlen = 1;
@@ -794,6 +840,12 @@ static inline uint8_t parse_number(sv_lexer_t *lx, const char *buf, ant_offset_t
     value = literal.value;
   }
   
+  if (__builtin_expect(!numeric_separators_valid(buf, numlen), 0)) {
+    lx->st.tok = TOK_ERR;
+    lx->st.tlen = numlen;
+    return TOK_ERR;
+  }
+
   lx->st.tval = Ant_Value_FromNumber(value);
   ant_offset_t toklen = numlen;
   
@@ -929,8 +981,54 @@ static inline bool regex_allowed_after_ident(const char *buf, ant_offset_t start
   return false;
 }
 
-static ant_offset_t skip_template_literal(const char *buf, ant_offset_t rem, ant_offset_t start, bool *closed) {
-  ant_offset_t i = start + 1;
+typedef struct {
+  uint32_t slot;
+  int expr_depth;
+} tpl_scan_frame_t;
+
+#define TPL_SCAN_NO_SLOT UINT32_MAX
+
+static bool tpl_span_lookup(const sv_lexer_t *lx, ant_offset_t start, ant_offset_t limit, ant_offset_t *end) {
+  uint32_t lo = 0, hi = lx->tpl_count;
+  if (lx->tpl_code != lx->code) return false;
+  while (lo < hi) {
+    uint32_t mid = lo + (hi - lo) / 2;
+    if (lx->tpl_spans[mid * 2] < start) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo >= lx->tpl_count || lx->tpl_spans[lo * 2] != start) return false;
+  if (lx->tpl_spans[lo * 2 + 1] > limit) return false;
+  *end = lx->tpl_spans[lo * 2 + 1];
+  return true;
+}
+
+static uint32_t tpl_span_reserve(sv_lexer_t *lx, ant_offset_t start) {
+  if (lx->tpl_code != lx->code) {
+    lx->tpl_code = lx->code;
+    lx->tpl_count = 0;
+  }
+  if (lx->tpl_count && lx->tpl_spans[(lx->tpl_count - 1) * 2] >= start) return TPL_SCAN_NO_SLOT;
+  if (lx->tpl_count == lx->tpl_cap) {
+    uint32_t cap = lx->tpl_cap ? lx->tpl_cap * 2 : 16;
+    ant_offset_t *spans = parse_arena_bump(lx->js, (size_t)cap * 2 * sizeof(ant_offset_t));
+    if (!spans) return TPL_SCAN_NO_SLOT;
+    if (lx->tpl_count) memcpy(spans, lx->tpl_spans, (size_t)lx->tpl_count * 2 * sizeof(ant_offset_t));
+    lx->tpl_spans = spans;
+    lx->tpl_cap = cap;
+  }
+  lx->tpl_spans[lx->tpl_count * 2] = start;
+  lx->tpl_spans[lx->tpl_count * 2 + 1] = 0;
+  return lx->tpl_count++;
+}
+
+static ant_offset_t skip_template_literal(sv_lexer_t *lx, const char *buf, ant_offset_t rem, bool *closed) {
+  tpl_scan_frame_t inline_frames[16];
+  tpl_scan_frame_t *frames = inline_frames;
+  uint32_t depth = 0, cap = 16;
+  uint32_t saved_count = lx->tpl_code == lx->code ? lx->tpl_count : 0;
+  ant_offset_t base = (ant_offset_t)(buf - lx->code);
+  ant_offset_t result = rem;
+  ant_offset_t i = 1;
   int expr_depth = 0;
   bool can_start_regex = true;
   *closed = false;
@@ -945,8 +1043,17 @@ static ant_offset_t skip_template_literal(const char *buf, ant_offset_t rem, ant
 
     if (expr_depth == 0) {
       if (c == '`') {
-        *closed = true;
-        return i + 1;
+        if (depth == 0) {
+          *closed = true;
+          result = i + 1;
+          break;
+        }
+        depth--;
+        if (frames[depth].slot != TPL_SCAN_NO_SLOT) lx->tpl_spans[frames[depth].slot * 2 + 1] = base + i + 1;
+        expr_depth = frames[depth].expr_depth;
+        can_start_regex = false;
+        i++;
+        continue;
       }
       if (c == '$' && i + 1 < rem && buf[i + 1] == '{') {
         expr_depth = 1;
@@ -962,11 +1069,25 @@ static ant_offset_t skip_template_literal(const char *buf, ant_offset_t rem, ant
     }
 
     if (c == '`') {
-      bool nested_closed = false;
-      ant_offset_t next = skip_template_literal(buf, rem, i, &nested_closed);
-      if (!nested_closed || next <= i) return rem;
-      i = next;
-      can_start_regex = false;
+      ant_offset_t cached_end = 0;
+      if (lx->tpl_count && tpl_span_lookup(lx, base + i, base + rem, &cached_end)) {
+        i = cached_end - base;
+        can_start_regex = false;
+        continue;
+      }
+      if (depth == cap) {
+        tpl_scan_frame_t *grown = malloc((size_t)cap * 2 * sizeof(*grown));
+        if (!grown) break;
+        memcpy(grown, frames, (size_t)cap * sizeof(*grown));
+        if (frames != inline_frames) free(frames);
+        frames = grown;
+        cap *= 2;
+      }
+      frames[depth].slot = tpl_span_reserve(lx, base + i);
+      frames[depth].expr_depth = expr_depth;
+      depth++;
+      expr_depth = 0;
+      i++;
       continue;
     }
 
@@ -1025,12 +1146,14 @@ static ant_offset_t skip_template_literal(const char *buf, ant_offset_t rem, ant
     can_start_regex = false;
   }
 
-  return rem;
+  if (!*closed && lx->tpl_code == lx->code && lx->tpl_count > saved_count) lx->tpl_count = saved_count;
+  if (frames != inline_frames) free(frames);
+  return result;
 }
 
 static inline uint8_t scan_template(sv_lexer_t *lx, const char *buf, ant_offset_t rem) {
   bool closed = false;
-  ant_offset_t end = skip_template_literal(buf, rem, 0, &closed);
+  ant_offset_t end = skip_template_literal(lx, buf, rem, &closed);
   
   if (!closed || end <= 1 || end > rem) {
     lx->st.tok = TOK_ERR;
@@ -1165,10 +1288,15 @@ static inline uint8_t parse_operator(sv_lexer_t *lx, const char *buf, ant_offset
   return lx->st.tok;
 }
 
+static inline bool sv_lexer_peek_valid(const sv_lexer_t *lx) {
+  return lx->peek_pos == lx->st.pos && lx->peek_clen == lx->clen && lx->peek_strict == lx->strict;
+}
+
 static uint8_t sv_next_raw(sv_lexer_t *lx) {
   if (likely(lx->st.consumed == 0)) return lx->st.tok;
 
   lx->st.consumed = 0;
+  lx->st.escaped = false;
   lx->st.tok = TOK_ERR;
   lx->st.toff = lx->st.pos = sv_skiptonext(lx->code, lx->clen, lx->st.pos, &lx->st.had_newline);
   lx->st.tlen = 0;
@@ -1193,7 +1321,7 @@ static uint8_t sv_next_raw(sv_lexer_t *lx) {
   }
 
   if (likely(IS_IDENT1(c))) {
-    lx->st.tok = parseident(buf, rem, &lx->st.tlen);
+    lx->st.tok = parseident(buf, rem, &lx->st.tlen, &lx->st.escaped);
     lx->st.pos = lx->st.toff + lx->st.tlen;
     return lx->st.tok;
   }
@@ -1231,7 +1359,7 @@ static uint8_t sv_next_raw(sv_lexer_t *lx) {
     return lx->st.tok;
   }
 
-  lx->st.tok = parseident(buf, rem, &lx->st.tlen);
+  lx->st.tok = parseident(buf, rem, &lx->st.tlen, &lx->st.escaped);
   if (lx->st.tlen == 0) {
     utf8proc_int32_t cp;
     lx->st.tlen = (ant_offset_t)utf8_next((const utf8proc_uint8_t *)buf, (utf8proc_ssize_t)rem, &cp);
@@ -1247,25 +1375,22 @@ uint8_t sv_lexer_next(sv_lexer_t *lx) {
 }
 
 uint8_t sv_lexer_lookahead(sv_lexer_t *lx) {
-  uint8_t old = lx->st.tok, tok = 0;
-  uint8_t old_consumed = lx->st.consumed;
+  if (sv_lexer_peek_valid(lx)) return lx->peek.tok;
+  sv_lexer_state_t saved = lx->st;
   
-  ant_offset_t pos = lx->st.pos;
-  ant_offset_t toff = lx->st.toff;
-  ant_offset_t tlen = lx->st.tlen;
-  
-  bool had_newline = lx->st.had_newline;
-
   lx->st.consumed = 1;
-  tok = sv_lexer_next(lx);
+  sv_next_raw(lx);
   
-  lx->st.pos = pos;
-  lx->st.tok = old;
-  lx->st.toff = toff;
-  lx->st.tlen = tlen;
+  lx->peek = lx->st;
+  lx->peek_pos = saved.pos;
+  lx->peek_clen = lx->clen;
+  lx->peek_strict = lx->strict;
+  lx->st = saved;
   
-  lx->st.had_newline = had_newline;
-  lx->st.consumed = old_consumed;
-  
-  return tok;
+  return lx->peek.tok;
+}
+
+bool sv_lexer_lookahead_newline(sv_lexer_t *lx) {
+  sv_lexer_lookahead(lx);
+  return lx->peek.had_newline;
 }

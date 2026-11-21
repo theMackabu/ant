@@ -538,6 +538,11 @@ static void gc_func_trace(ant_t *js, sv_func_t *func) {
     gc_mark_value(js, func->obj_sites[i].literal_template);
   }
 
+  for (uint32_t i = 0; i < func->debug->literal_site_count; i++) {
+    gc_mark_value(js, func->debug->literal_sites[i].boilerplate);
+    gc_shared_elements_mark(js, func->debug->literal_sites[i].block);
+  }
+
   for (int i = 0; i < func->gc_const_slot_count; i++) {
     uint32_t idx = func->gc_const_slots[i];
     ant_value_t v = func->constants[idx];
@@ -1199,7 +1204,7 @@ static bool gc_next_interp_stub_save(ant_t *js, gc_stub_walk_t *w, uintptr_t *sa
     if (next <= fp) break;
     w->fp = next;
 
-    if (((const uintptr_t *)fp)[1] != (uintptr_t)ant_jit_enter_clean_ret) continue;
+    if (!ant_jit_entered_clean(((const uintptr_t *)fp)[1])) continue;
     if (next + 16 > w->hi) continue;
 
     uintptr_t lo = next + ANT_JIT_ENTER_SAVED_LO;
@@ -1425,6 +1430,8 @@ static void gc_grey_pending_promises(ant_t *js, ant_object_t *head) {
 }
 
 static void gc_mark_roots(ant_t *js) {
+  js->eval_closure_env = Ant_Value_Undefined;
+  js->eval_closure_root = Ant_Value_Undefined;
   gc_scan_vm_stack(js, js->vm);
 
   for (coroutine_t *c = js->active_async_coro; c; c = c->active_parent) 
@@ -1498,6 +1505,9 @@ static void gc_mark_roots(ant_t *js) {
   for (size_t i = js->gc.minor ? js->pending_rejections.traced : 0; i < js->pending_rejections.len; i++)
     gc_mark_value(js, js->pending_rejections.items[i]);
   js->pending_rejections.traced = js->pending_rejections.len;
+
+  for (uint32_t i = 0; i < ANT_FOR_IN_CACHE_SIZE; i++)
+    if (js->runtime_cache.for_in[i].shape) gc_mark_value(js, js->runtime_cache.for_in[i].keys);
 
   if (js->cfunc_promoted.entries) for (uint32_t i = 0; i <= js->cfunc_promoted.mask; i++)
     if (js->cfunc_promoted.entries[i].key_a) gc_mark_value(js, js->cfunc_promoted.entries[i].value);
@@ -1647,6 +1657,45 @@ size_t gc_array_storage_cached_bytes(ant_t *js) {
   return bytes;
 }
 
+static constexpr size_t GC_SHARED_ELEMENTS_PAGED_MIN = 64 * 1024;
+
+gc_shared_elements_t *gc_shared_elements_alloc(ant_t *js, const ant_value_t *values, uint32_t count) {
+  size_t bytes = sizeof(gc_shared_elements_t) + (size_t)count * sizeof(ant_value_t);
+  gc_shared_elements_t *block = bytes >= GC_SHARED_ELEMENTS_PAGED_MIN
+    ? ant_cage_alloc(bytes, _Alignof(gc_shared_elements_t))
+    : malloc(bytes);
+  if (!block) return NULL;
+  
+  *block = (gc_shared_elements_t){.refs = 1, .count = count};
+  memcpy(block->values, values, (size_t)count * sizeof(ant_value_t));
+  for (uint32_t i = 0; i < count; i++) {
+    block->has_holes |= is_empty_slot(values[i]);
+    block->has_heap |= gc_value_is_heap_ref(values[i]);
+  }
+  js->alloc_bytes.arrays += bytes;
+  
+  return block;
+}
+
+void gc_shared_elements_mark(ant_t *js, const gc_shared_elements_t *block) {
+  if (!block || !block->has_heap) return;
+  for (uint32_t i = 0; i < block->count; i++) gc_mark_value(js, block->values[i]);
+}
+
+void gc_shared_elements_release(ant_t *js, gc_shared_elements_t *block) {
+  if (--block->refs) return;
+  size_t bytes = sizeof(gc_shared_elements_t) + (size_t)block->count * sizeof(ant_value_t);
+  Ant_Assert(js->alloc_bytes.arrays >= bytes, "shared elements released more bytes than were allocated");
+  js->alloc_bytes.arrays -= bytes;
+  if (bytes >= GC_SHARED_ELEMENTS_PAGED_MIN) ant_cage_free(block, bytes);
+  else free(block);
+}
+
+void gc_shared_elements_finalize(ant_t *js, ant_object_t *obj) {
+  gc_shared_elements_release(js, gc_shared_elements_of(obj->u.array.data));
+  obj->u.array.data = NULL;
+}
+
 static inline void gc_free_array_storage(ant_t *js, ant_object_t *obj) {
   if (!obj->u.array.data) return;
   gc_array_storage_release(js, obj->u.array.data, obj->u.array.cap);
@@ -1778,7 +1827,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     free(sidecar->extra_slots);
     free(sidecar->native_entries);
     free(sidecar->proxy_state);
-    free(sidecar->private_table.entries);
+    if (!ant_private_table_is_inline(&sidecar->private_table)) free(sidecar->private_table.entries);
     free(sidecar->gc_cards);
     free(sidecar->owned_exotic_ops);
     free(sidecar);
@@ -1797,6 +1846,18 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   
   GC_VERIFY_POISON_OBJECT(obj);
   ant_object_cell_free(js, obj);
+}
+
+static __attribute__((noinline)) void gc_object_free_shared_array(ant_t *js, ant_object_t *obj) {
+  gc_shared_elements_finalize(js, obj);
+  obj->finalizer = NULL;
+  if (gc_object_release_plain(js, obj)) ant_object_cell_free(js, obj);
+  else gc_object_free(js, obj);
+}
+
+static inline __attribute__((always_inline)) void gc_object_free_swept(ant_t *js, ant_object_t *obj) {
+  if (obj->finalizer == gc_shared_elements_finalize) gc_object_free_shared_array(js, obj);
+  else gc_object_free(js, obj);
 }
 
 static void gc_sweep_young_and_promote(ant_t *js) {
@@ -1831,7 +1892,7 @@ static void gc_sweep_young_and_promote(ant_t *js) {
       freed++;
     } else {
       oa->free_list = free_list;
-      gc_object_free(js, obj);
+      gc_object_free_swept(js, obj);
       free_list = oa->free_list;
     }
     
@@ -1890,7 +1951,7 @@ static void gc_sweep_arena(ant_t *js, ant_fixed_arena_t *oa, ant_object_t **old)
       }
 
       oa->free_list = free_list;
-      gc_object_free(js, obj);
+      gc_object_free_swept(js, obj);
       free_list = found_live ? oa->free_list : *(void **)obj;
     }
   }

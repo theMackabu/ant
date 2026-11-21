@@ -16,7 +16,7 @@ for (const url of urls) {
   assert.strictEqual(module.meta.env, process.env);
 }
 
-for (const src of ['with ({}) {}', 'x = 010']) {
+for (const src of ['with ({}) {}', 'var let = 1', 'yield = 1', 'x = 010', 'await: ;', 'function f() { await: ; }']) {
   await assert.rejects(import(`data:text/javascript,${encodeURIComponent(src)}`), SyntaxError, src);
 }
 const strictThis = await import(`data:text/javascript,${encodeURIComponent('export default (function () { return this })()')}`);

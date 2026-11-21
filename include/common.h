@@ -25,6 +25,7 @@
   X(SLOT_MODULE_CTX)              \
   X(SLOT_IMPORT_META)             \
   X(SLOT_MODULE_LOADING)          \
+  X(SLOT_MODULE_EVALUATION)       \
   X(SLOT_MAP)                     \
   X(SLOT_SET)                     \
   X(SLOT_PRIMITIVE)               \

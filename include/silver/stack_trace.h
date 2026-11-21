@@ -7,11 +7,18 @@
 static constexpr int SV_JIT_INLINE_FRAMES_MAX = 4;
 static constexpr int SV_STACK_INLINE_ACTIVATIONS = 16;
 
+typedef enum: uint8_t {
+  SV_JIT_ENTERED_FROM_COMPILED = 0,
+  SV_JIT_ENTERED_AS_CALL,
+  SV_JIT_ENTERED_AS_CONSTRUCT,
+} sv_jit_entered_t;
+
 typedef struct {
   sv_func_t *func;
   uintptr_t pc;
   int vm_fp;
   bool osr_host;
+  sv_jit_entered_t entered;
 } sv_jit_activation_t;
 
 typedef struct {
@@ -30,6 +37,7 @@ typedef struct {
   sv_func_t *func;
   ant_value_t callee;
   uintptr_t pc;
+  uintptr_t caller_pc;
   int bc_off;
   int frame_index;
   bool construct;
@@ -44,6 +52,9 @@ typedef struct {
   int i, skip;
   sv_stack_entry_t pending[SV_JIT_INLINE_FRAMES_MAX + 1];
   int n_pending;
+  sv_jit_frame_t ahead[SV_JIT_INLINE_FRAMES_MAX + 1];
+  const sv_jit_activation_t *ahead_of;
+  int n_ahead;
   bool resolve;
   bool truncated;
 } sv_stack_iter_t;
@@ -56,6 +67,8 @@ void sv_stack_iter_finish(sv_stack_iter_t *it);
 
 int sv_jit_collect_activations(sv_vm_t *vm, sv_jit_activation_t **acts, int cap, int limit);
 int sv_jit_frames_at(ant_t *js, uintptr_t pc, sv_jit_frame_t *out, int cap);
+extern uint64_t sv_jit_throw_captures;
+ant_value_t sv_jit_throw(ant_t *js, ant_value_t value);
 
 ant_value_t js_error_record_capture(ant_t *js, ant_value_t call_func, const js_error_site_t *site, ant_value_t above);
 ant_value_t js_error_record_stack_text(ant_t *js, ant_value_t header, ant_value_t record);

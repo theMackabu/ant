@@ -53,9 +53,14 @@ L_ARRAY: {
   NEXT(OP_ARRAY);
 }
 
-L_ARRAY_CONST: {
-  VM_CHECK(sv_op_array_const(vm, js, func, ip));
-  NEXT(OP_ARRAY_CONST);
+L_ARRAY_LITERAL: {
+  VM_CHECK(sv_op_array_literal(vm, js, func, ip));
+  NEXT(OP_ARRAY_LITERAL);
+}
+
+L_ARRAY_INIT: {
+  sv_op_array_init(vm, js, ip);
+  NEXT(OP_ARRAY_INIT);
 }
 
 L_SET_BRAND: {
@@ -329,6 +334,11 @@ L_DEFINE_FIELD: {
   NEXT(OP_DEFINE_FIELD);
 }
 
+L_INIT_FIELD: {
+  VM_CHECK(sv_op_init_field(vm, js, func, ip));
+  NEXT(OP_INIT_FIELD);
+}
+
 L_DEFINE_SLOT: {
   sv_op_define_slot(vm, js, func, ip);
   NEXT(OP_DEFINE_SLOT);
@@ -384,8 +394,18 @@ L_GET_SUPER_VAL: {
   NEXT(OP_GET_SUPER_VAL);
 }
 
+L_GET_SUPER_FIELD: {
+  VM_CHECK(sv_op_get_super_field(vm, js, frame, ip));
+  NEXT(OP_GET_SUPER_FIELD);
+}
+
+L_PUT_SUPER_FIELD: {
+  VM_CHECK(sv_op_put_super_field(vm, js, frame, ip));
+  NEXT(OP_PUT_SUPER_FIELD);
+}
+
 L_PUT_SUPER_VAL: {
-  VM_CHECK(sv_op_put_super_val(vm, js));
+  VM_CHECK(sv_op_put_super_val(vm, js, frame));
   NEXT(OP_PUT_SUPER_VAL);
 }
 
@@ -769,11 +789,9 @@ L_CALL: {
   ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
   ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
 
-  bool is_super_call =
-    (vtype(frame->super_val) != kTypeUndefined && call_func == frame->super_val);
-  ant_value_t call_this = is_super_call ? frame->this : Ant_Value_Undefined;
+  ant_value_t call_this = Ant_Value_Undefined;
 
-  if (!is_super_call && vtype(frame->new_target) == kTypeUndefined && vtype(call_func) == kTypeFunction) {
+  if (vtype(call_func) == kTypeFunction) {
     sv_closure_t *closure = js_func_closure(call_func);
     if (closure->func != NULL) {
       if (closure->call_flags & SV_CALL_HAS_BOUND_ARGS)
@@ -849,15 +867,10 @@ L_CALL: {
   call_fallback:;
   frame->ip = ip;
   sv_tfb_record_native_call(func, ip, call_func);
-  ant_value_t super_this_c = call_this;
-  ant_value_t call_result = sv_vm_call(
-    vm, js, call_func, call_this, call_args, call_argc,
-    is_super_call ? &super_this_c : NULL, is_super_call ? frame->new_target : Ant_Value_Undefined);
+  ant_value_t call_result = sv_vm_call(vm, js, call_func, call_this, call_args, call_argc, NULL, Ant_Value_Undefined);
   VM_RELOAD_FRAME();
   vm->sp -= call_argc + 1;
   if (is_err(call_result)) VM_THROW(call_result);
-  if (is_super_call)
-    frame->this = is_object_type(call_result) ? call_result : super_this_c;
   vm->stack[vm->sp++] = call_result;
   NEXT(OP_CALL);
 }
@@ -897,11 +910,7 @@ L_CALL_METHOD: {
   ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
   ant_value_t call_this = vm->stack[vm->sp - call_argc - 2];
 
-  bool is_super_call =
-    (vtype(frame->super_val) != kTypeUndefined && call_func == frame->super_val);
-
-  if (!is_super_call && vtype(frame->new_target) == kTypeUndefined &&
-      vtype(call_func) == kTypeFunction) {
+  if (vtype(call_func) == kTypeFunction) {
     sv_closure_t *closure = js_func_closure(call_func);
     if (closure->func != NULL) {
       if (closure->call_flags & SV_CALL_HAS_BOUND_ARGS)
@@ -976,15 +985,10 @@ L_CALL_METHOD: {
   call_method_fallback:;
   frame->ip = ip;
   sv_tfb_record_native_call(func, ip, call_func);
-  ant_value_t super_this_cm = call_this;
-  ant_value_t call_result = sv_vm_call(
-    vm, js, call_func, call_this, call_args, call_argc,
-    is_super_call ? &super_this_cm : NULL, is_super_call ? frame->new_target : Ant_Value_Undefined);
+  ant_value_t call_result = sv_vm_call(vm, js, call_func, call_this, call_args, call_argc, NULL, Ant_Value_Undefined);
   VM_RELOAD_FRAME();
   vm->sp -= call_argc + 2;
   if (is_err(call_result)) VM_THROW(call_result);
-  if (is_super_call)
-    frame->this = is_object_type(call_result) ? call_result : super_this_cm;
   vm->stack[vm->sp++] = call_result;
   NEXT(OP_CALL_METHOD);
 }
@@ -1363,7 +1367,7 @@ L_NEW: {
 
     ant_value_t new_obj = js_mkobj_with_proto_slots(
       js, is_object_type(proto) ? proto :
-      Ant_Value_Undefined, sv_construct_slots_of(new_func)
+      Ant_Value_Undefined, sv_construct_slots(new_callee)
     );
 
     GC_ROOT_RESTORE(js, new_mark);
@@ -1413,7 +1417,7 @@ L_NEW: {
 }
 
 L_APPLY: {
-  VM_CHECK(sv_op_apply(vm, js, ip));
+  VM_CHECK(sv_op_apply(vm, js, func, ip));
   NEXT(OP_APPLY);
 }
 
@@ -1423,13 +1427,23 @@ L_SUPER_APPLY: {
 }
 
 L_NEW_APPLY: {
-  VM_CHECK(sv_op_new_apply(vm, js, ip));
+  VM_CHECK(sv_op_new_apply(vm, js, func, ip));
   NEXT(OP_NEW_APPLY);
 }
 
 L_CALL_SPREAD: {
-  VM_CHECK(sv_op_call_spread(vm, js, ip));
+  VM_CHECK(sv_op_call_spread(vm, js, func, ip));
   NEXT(OP_CALL_SPREAD);
+}
+
+L_NEW_SPREAD: {
+  VM_CHECK(sv_op_new_spread(vm, js, func, ip));
+  NEXT(OP_NEW_SPREAD);
+}
+
+L_SUPER_SPREAD: {
+  VM_CHECK(sv_op_super_spread(vm, js, frame, func, ip));
+  NEXT(OP_SUPER_SPREAD);
 }
 
 L_SUPER_FORWARD: {
@@ -1841,6 +1855,7 @@ L_YIELD_STAR_RETURN: {
 }
 
 L_SPREAD: {
+  sv_tfb_record_spread(js, func, ip, vm->stack[vm->sp - 1]);
   VM_CHECK(sv_op_spread(vm, js));
   NEXT(OP_SPREAD);
 }
@@ -1901,7 +1916,7 @@ L_TO_OBJECT: {
 }
 
 L_TO_PROPKEY: {
-  sv_op_to_propkey(vm, js);
+  VM_CHECK(sv_op_to_propkey(vm, js));
   NEXT(OP_TO_PROPKEY);
 }
 

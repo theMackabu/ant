@@ -6,14 +6,17 @@
 #include "codegen/codegen.h"
 #include "passes/passes.h"
 #include "internal.h"
+#include "protectors.h"
 #include "proto_watch.h"
 #include "silver/call.h"
 #include "silver/feedback.h"
 #include "silver/generic_step.h"
+#include "silver/literal_sites.h"
 #include "silver/glue.h"
 #include "silver/upvalues.h"
 #include "silver/vm.h"
 #include "silver/jit.h"
+#include "silver/stack_trace.h"
 #include "gc/objects.h"
 #include "modules/collections.h"
 #include "modules/regex.h"
@@ -47,6 +50,7 @@ typedef struct opt_func_state {
   uint32_t exits;
   uint32_t compiles;
   uint32_t fruitless;
+  uint32_t leave_drops;
   bool disabled;
   opt_field_memo_t *memos;
   uint32_t memo_count, memo_cap;
@@ -541,10 +545,10 @@ static void opt_print_stats(void) {
     (unsigned long long)opt_stats.exits, (unsigned long long)opt_stats.inline_exits,
     (double)opt_stats.compiled_ns / 1e6, (unsigned long long)opt_stats.rejected, (double)opt_stats.rejected_ns / 1e6,
     (unsigned long long)opt_stats.code_bytes, (unsigned long long)opt_codes_freed, (unsigned long long)opt_stats.mapped);
-  fprintf(stderr, "jit: opt catch stats drops=%llu caught_in_code=%llu caught_in_interpreter=%llu interpreter_entries=%llu unwinds=%llu\n",
+  fprintf(stderr, "jit: opt catch stats drops=%llu caught_in_code=%llu caught_in_interpreter=%llu interpreter_entries=%llu throw_captures=%llu unwinds=%llu\n",
     (unsigned long long)opt_stats.drops, (unsigned long long)opt_stats.catches,
     (unsigned long long)opt_stats.catch_leaves, (unsigned long long)opt_stats.catch_entries,
-    (unsigned long long)opt_stats.unwinds);
+    (unsigned long long)sv_jit_throw_captures, (unsigned long long)opt_stats.unwinds);
 }
 
 static void opt_drop_code(opt_code_t *code) {
@@ -565,6 +569,14 @@ void opt_tier_drop_closure_pinned(sv_func_t *func) {
   opt_func_state_t *state = sidecar ? sidecar->opt_state : NULL;
   for (opt_code_t *code = state ? state->codes : NULL; code; code = code->func_next)
     if (code->closure_pinned && !code->dropped) opt_drop_code(code);
+}
+
+void opt_tier_drop_unsettled_receivers(ant_t *js) {
+  sv_jit_ctx_t *jc = js->jit_ctx;
+  struct opt_state *state = jc ? jc->opt : NULL;
+  for (opt_func_state_t *func_state = state ? state->states : NULL; func_state; func_state = func_state->next)
+    for (opt_code_t *code = func_state->codes; code; code = code->func_next)
+      if (code->assumes_settled_receivers && !code->dropped) opt_drop_code(code);
 }
 
 void opt_code_invalidate(opt_code_t *code) {
@@ -687,12 +699,12 @@ ant_value_t opt_rt_exit(
   }
   opt_func_state_t *state = opt_func_state(vm->js, func, true);
   if (state) {
-    opt_note_discard(state, code, opt_exit_learned(state, func, site->bc_off, site->kind, site->slot));
+    opt_note_discard(state, code, opt_exit_learned(state, func, site->site_off, site->kind, site->slot));
     state->exits++;
   }
   opt_stats.exits++;
   opt_drop_code(code);
-  if (sv_debug_unlikely(SV_DEBUG_JIT_WARN)) opt_warn_exit(state, func, site->bc_off, site->kind, site->slot, code, 0);
+  if (sv_debug_unlikely(SV_DEBUG_JIT_WARN)) opt_warn_exit(state, func, site->site_off, site->kind, site->slot, code, 0);
   return opt_rt_resume(vm, code, entry, site->bc_off, site->depth, params, locals, stack, finally);
 }
 
@@ -728,7 +740,12 @@ ant_value_t opt_rt_resume(
   );
 }
 
-static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t callee, uint32_t call_off) {
+static inline ant_value_t opt_exit_new_target(const opt_exit_frame_t *frame) {
+  if (!frame->site->construct) return Ant_Value_Undefined;
+  return vtype(frame->new_target) == kTypeUndefined ? frame->callee : frame->new_target;
+}
+
+static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t callee, uint32_t call_off, ant_value_t new_target) {
   if (vm->fp + 1 >= vm->max_frames && !sv_vm_reserve(vm, 0)) return false;
   sv_frame_t *frame = &vm->frames[++vm->fp];
   ant_value_t undefined = Ant_Value_Undefined;
@@ -739,7 +756,7 @@ static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t cal
     .func = func,
     .callee = callee,
     .this = undefined,
-    .new_target = undefined,
+    .new_target = new_target,
     .super_val = undefined,
     .prev_sp = vm->sp,
     .completion = {.kind = SV_COMPLETION_NONE, .value = undefined},
@@ -754,16 +771,15 @@ static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t cal
 ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *site, opt_entry_t *entry, opt_exit_frame_t *frames, uint32_t count) {
   ant_t *js = vm->js;
   sv_func_t *func = code->func;
-  const opt_site_frame_t *inner = frames[0].site;
   opt_func_state_t *state = opt_func_state(js, frames[0].func, true);
-  bool learned = state && opt_exit_learned(state, frames[0].func, inner->bc_off, site->kind, site->slot);
+  bool learned = state && opt_exit_learned(state, frames[0].func, site->site_off, site->kind, site->slot);
   opt_func_state_t *root_state = opt_func_state(js, func, true);
   opt_note_discard(root_state, code, learned);
   if (root_state) root_state->exits++;
   opt_stats.exits++;
   opt_stats.inline_exits++;
   opt_drop_code(code);
-  if (sv_debug_unlikely(SV_DEBUG_JIT_WARN)) opt_warn_exit(state, frames[0].func, inner->bc_off, site->kind, site->slot, code, count - 1);
+  if (sv_debug_unlikely(SV_DEBUG_JIT_WARN)) opt_warn_exit(state, frames[0].func, site->site_off, site->kind, site->slot, code, count - 1);
 
   opt_exit_frame_t *root = &frames[count - 1];
   sv_frame_t *host = opt_osr_host(vm, entry);
@@ -787,7 +803,8 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
   for (uint32_t k = count; k-- > 1;) {
     ant_value_t callee = frames[k].callee;
     if (k == count - 1) callee = sv_closure_heap_value(js, entry->closure);
-    waits[k] = room && opt_push_waiting_frame(vm, frames[k].func, callee, frames[k].site->call_off);
+    ant_value_t new_target = k == count - 1 ? entry->new_target : opt_exit_new_target(&frames[k]);
+    waits[k] = room && opt_push_waiting_frame(vm, frames[k].func, callee, frames[k].site->call_off, new_target);
     room &= waits[k];
   }
 
@@ -806,9 +823,13 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
         bc_off = resume;
         depth = handler_depth + 1;
       } else {
-        if (frames[k - 1].site->construct && !is_object_type(result)) result = frames[k - 1].this_val;
+        if (frames[k - 1].site->construct && !sv_is_construct_result(result)) result = frames[k - 1].this_val;
         if (at->mode == OPT_RESUME_RETURN) continue;
         frame->stack[at->depth - 1] = result;
+        if (opt_is_super_call(frame->func, at->call_off)) {
+          frame->this_val = result;
+          if (k == count - 1) root_this = result;
+        }
       }
     }
     vm->jit.resume.throwing = throwing;
@@ -825,10 +846,11 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
     } else {
       sv_func_t *frame_func = frame->func;
       uint32_t frame_params = frame_func->param_count, frame_locals = (uint32_t)frame_func->max_locals;
-      uint32_t argc = is_object_type(frame->arguments) ? at->argc : at->argc < frame_params ? at->argc : frame_params;
+      bool all = is_object_type(frame->arguments) || frame->site->takes_rest;
+      uint32_t argc = all || at->argc < frame_params ? at->argc : frame_params;
       vm->jit.resume.arguments_obj = frame->arguments;
       result = jit_resume_in_interpreter(
-        vm, frame->closure, frame->this_val, at->construct ? frame->callee : Ant_Value_Undefined, frame->closure->super_val,
+        vm, frame->closure, frame->this_val, opt_exit_new_target(frame), frame->closure->super_val,
         frame->params, (int)argc, frame->stack, depth, frame->params, frame_params,
         frame->locals, frame_locals, bc_off, false, NULL
       );
@@ -891,11 +913,90 @@ ant_value_t opt_rt_super_call(sv_vm_t *vm, ant_value_t this_val, ant_value_t fun
   sv_frame_t *frame = &vm->frames[vm->fp];
   ant_value_t *call_args = forward ? frame->bp : args + 1;
   int call_argc = forward ? frame->argc : (int)argc - 1;
-  ant_value_t super_this = this_val;
-  ant_value_t result = sv_vm_call(vm, vm->js, func, this_val, call_args, call_argc, &super_this, args[0]);
-  if (is_err(result)) return result;
-  frame->this = is_object_type(result) ? result : super_this;
-  return frame->this;
+  ant_value_t effective_this = sv_super_construct(vm, vm->js, func, this_val, call_args, call_argc, args[0]);
+  if (is_err(effective_this)) return effective_this;
+  frame->this = effective_this;
+  return effective_this;
+}
+
+ant_value_t opt_rt_super_apply(sv_vm_t *vm, ant_value_t this_val, ant_value_t func, ant_value_t *args, int64_t argc, int64_t unused) {
+  sv_frame_t *frame = &vm->frames[vm->fp];
+  ant_value_t effective_this = jit_helper_super_apply(vm, vm->js, func, this_val, args + 1, (int)argc - 1, args[0]);
+  if (is_err(effective_this)) return effective_this;
+  frame->this = effective_this;
+  return effective_this;
+}
+
+ant_value_t opt_rt_super_spread(sv_vm_t *vm, ant_value_t this_val, ant_value_t func, ant_value_t *args, int64_t argc, int64_t unused) {
+  sv_frame_t *frame = &vm->frames[vm->fp];
+  ant_value_t effective_this = jit_helper_super_spread(vm, vm->js, func, this_val, args + 1, (int)argc - 1, args[0]);
+  if (is_err(effective_this)) return effective_this;
+  frame->this = effective_this;
+  return effective_this;
+}
+
+ant_value_t opt_rt_rest_array(sv_vm_t *vm, const ant_value_t *args, uint32_t argc, uint32_t start) {
+  return Ant_Array_CreateRest(vm->js, args, argc, start);
+}
+
+ant_value_t opt_rt_rest(sv_vm_t *vm, ant_value_t start, ant_value_t unused, ant_value_t *args, int64_t argc, const opt_entry_t *entry) {
+  return opt_rt_rest_array(vm, entry->args, (uint32_t)entry->argc, (uint32_t)Ant_Value_AsNumberUnchecked(start));
+}
+
+ant_value_t opt_rt_append(sv_vm_t *vm, ant_value_t array, ant_value_t value, ant_value_t *args, int64_t argc, int64_t kind) {
+  js_arr_push(vm->js, array, value);
+  return array;
+}
+
+ant_value_t opt_rt_spread(sv_vm_t *vm, ant_value_t array, ant_value_t iterable, ant_value_t *args, int64_t argc, int64_t kind) {
+  ant_value_t status = jit_helper_spread(vm, vm->js, array, iterable);
+  return is_err(status) ? status : array;
+}
+
+ant_value_t opt_rt_call_args(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t spread) {
+  if (spread) return jit_helper_call_spread(vm, vm->js, callee, this_val, args, (int)argc, OPT_SPREAD_ARG_SLOTS);
+  return jit_helper_apply(vm, vm->js, callee, this_val, args, (int)argc, OPT_SPREAD_ARG_SLOTS);
+}
+
+ant_value_t opt_rt_new_args(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t spread) {
+  return jit_helper_new_args(vm, vm->js, callee, new_target, args, (int)argc, OPT_SPREAD_ARG_SLOTS, spread != 0);
+}
+
+static ant_value_t opt_rt_forward(sv_vm_t *vm, ant_value_t callee, ant_value_t second, ant_value_t *args, int64_t argc, const opt_entry_t *entry, bool construct) {
+  ant_t *js = vm->js;
+  int fixed = (int)argc - 1;
+  uint32_t start = (uint32_t)Ant_Value_AsNumberUnchecked(args[fixed]);
+  uint32_t passed = (uint32_t)entry->argc;
+  int count = passed > start ? (int)(passed - start) : 0;
+  if (!ant_protector_intact(js, ANT_PROTECTOR_ARRAY_ITERATION)) {
+    ant_value_t rest = opt_rt_rest_array(vm, entry->args, passed, start);
+    if (is_err(rest)) return rest;
+    args[fixed] = rest;
+    return construct ? opt_rt_new_args(vm, callee, second, args, argc, true) : opt_rt_call_args(vm, callee, second, args, argc, true);
+  }
+  if (!fixed) return construct ? jit_helper_new(vm, js, callee, second, entry->args + start, count) : opt_rt_call(vm, callee, second, entry->args + start, count);
+  return jit_helper_call_joined(vm, js, callee, second, args, fixed, entry->args + start, count, OPT_SPREAD_ARG_SLOTS, construct);
+}
+
+ant_value_t opt_rt_call_forward(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, const opt_entry_t *entry) {
+  return opt_rt_forward(vm, callee, this_val, args, argc, entry, false);
+}
+
+ant_value_t opt_rt_new_forward(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, const opt_entry_t *entry) {
+  return opt_rt_forward(vm, callee, new_target, args, argc, entry, true);
+}
+
+ant_value_t opt_rt_super_parent(sv_vm_t *vm, ant_value_t parent, ant_value_t this_val, ant_value_t *args, int64_t argc) {
+  return sv_super_construct_parent(vm, vm->js, parent, this_val, args + 1, (int)argc - 1, args[0]);
+}
+
+ant_value_t opt_rt_settle_receiver(sv_vm_t *vm, ant_value_t this_val, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t unused) {
+  ant_t *js = vm->js;
+  return this_val == js->construct_dirty_seed ? sv_construct_settle(js, this_val, new_target) : this_val;
+}
+
+ant_value_t opt_rt_super_result(ant_value_t result, ant_value_t this_val) {
+  return sv_is_construct_result(result) ? result : this_val;
 }
 
 ant_value_t opt_rt_import_default(sv_vm_t *vm, ant_value_t ns, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind) {
@@ -907,7 +1008,7 @@ ant_value_t opt_rt_import_named(sv_vm_t *vm, ant_value_t ns, ant_value_t unused,
 }
 
 ant_value_t opt_rt_derived_return(sv_vm_t *vm, ant_value_t value, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t kind) {
-  if (is_object_type(value) || vtype(value) == kTypeBuiltin) return value;
+  if (sv_is_construct_result(value)) return value;
   if (vtype(value) == kTypeUndefined) return this_val;
   return js_mkerr_typed(vm->js, JS_ERR_TYPE, SV_DERIVED_CTOR_RETURN_ERROR);
 }
@@ -982,6 +1083,14 @@ ant_value_t opt_rt_set_proto(sv_vm_t *vm, ant_value_t object, ant_value_t proto,
   return Ant_Value_Undefined;
 }
 
+ant_value_t opt_rt_set_home_obj(sv_vm_t *vm, ant_value_t func, ant_value_t home, ant_value_t *args, int64_t argc, int64_t kind) {
+  if (vtype(func) != kTypeFunction) return Ant_Value_Undefined;
+  sv_closure_t *closure = js_func_closure(func);
+  closure->super_val = home;
+  closure->call_flags |= SV_CALL_HAS_SUPER;
+  return Ant_Value_Undefined;
+}
+
 ant_value_t opt_rt_builder_read(sv_vm_t *vm, ant_value_t value, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind) {
   return sv_string_builder_read_value(vm->js, value);
 }
@@ -1015,15 +1124,31 @@ ant_value_t opt_rt_construct(sv_vm_t *vm, ant_value_t callee, ant_value_t new_ta
   return jit_helper_new(vm, vm->js, callee, new_target, args, (int)argc);
 }
 
+static __attribute__((noinline)) ant_value_t opt_reflect_construct_holey(
+  ant_t *js, ant_value_t target, ant_value_t new_target, ant_value_t *args, int64_t argc, bool explicit_new_target
+) {
+  ant_value_t list = js_mkarr_dense_literal(js, args, (uint32_t)argc);
+  if (is_err(list)) return list;
+  return js_reflect_construct_array_like(js, target, list, new_target, explicit_new_target);
+}
+
+ant_value_t opt_rt_reflect_construct(sv_vm_t *vm, ant_value_t target, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t explicit_new_target) {
+  for (int64_t i = 0; i < argc; i++)
+    if (__builtin_expect(args[i] == T_EMPTY, 0))
+      return opt_reflect_construct_holey(vm->js, target, new_target, args, argc, explicit_new_target != 0);
+
+  return js_reflect_construct_listed(vm->js, target, new_target, explicit_new_target != 0, args, (int)argc);
+}
+
 ant_value_t opt_rt_new_this(sv_vm_t *vm, ant_value_t callee) {
   ant_t *js = vm->js;
   if (vtype(callee) != kTypeFunction) return T_EMPTY;
   sv_closure_t *closure = js_func_closure(callee);
-  if (!sv_closure_is_plain_sync(closure) || closure->func->is_derived_ctor || !is_object_type(closure->func_obj)) return T_EMPTY;
+  if (!opt_closure_constructs_plainly(closure) || !is_object_type(closure->func_obj)) return T_EMPTY;
   ant_object_t *func_obj = js_obj_ptr(closure->func_obj);
   ant_value_t proto;
   if (!func_obj->flags.is_constructor || !sv_construct_prototype_data(js, func_obj, closure->func, &proto)) return T_EMPTY;
-  ant_value_t object = js_mkobj_with_proto_slots(js, proto, sv_construct_slots(closure->func));
+  ant_value_t object = js_mkobj_with_proto_slots(js, proto, sv_closure_construct_slots(closure));
   if (vtype(object) != kTypeObject) return T_EMPTY;
   return object;
 }
@@ -1054,9 +1179,9 @@ void opt_rt_materialize_property(sv_vm_t *vm, ant_value_t object, uint32_t index
   gc_write_barrier_prop(vm->js, ptr, value);
 }
 
-ant_value_t opt_rt_allocate_array(sv_vm_t *vm, uint64_t count) {
+ant_value_t opt_rt_allocate_array(sv_vm_t *vm, uint64_t count, uint64_t reserve) {
   ant_value_t *data;
-  ant_value_t array = js_mkarr_dense_uninit(vm->js, (uint32_t)count, &data);
+  ant_value_t array = Ant_Array_CreateUninit(vm->js, (uint32_t)count, (uint32_t)reserve, &data);
   if (is_err(array)) return array;
   for (uint64_t i = 0; i < count; i++) data[i] = Ant_Value_Undefined;
   return array;
@@ -1070,9 +1195,36 @@ ant_value_t opt_rt_array(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, a
   return js_mkarr_dense_literal(vm->js, args, (uint32_t)argc);
 }
 
-ant_value_t opt_rt_array_const(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
-  const uint8_t *ip = site->func->code + site->bc_off;
-  return js_mkarr_dense_literal(vm->js, site->func->constants + sv_get_u32(ip + 1), sv_get_u32(ip + 5));
+ant_value_t opt_rt_array_literal(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
+  return Silver_Literal_Create(vm->js, site->func, sv_get_u32(site->func->code + site->bc_off + 1));
+}
+
+ant_value_t opt_rt_get_super(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
+  return jit_helper_get_super(vm, vm->js, site->func, receiver, home, args[0]);
+}
+
+ant_value_t opt_rt_put_super(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
+  return jit_helper_put_super(vm, vm->js, site->func, receiver, home, args[0], args[1]);
+}
+
+static inline sv_ic_entry_t *opt_rt_site_ic(const opt_rt_site_t *site) {
+  uint16_t index = sv_get_u16(site->func->code + site->bc_off + 5);
+  return site->func->ic_slots && index < site->func->ic_count ? &site->func->ic_slots[index] : NULL;
+}
+
+ant_value_t opt_rt_get_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
+  sv_atom_t *atom = &site->func->atoms[sv_get_u32(site->func->code + site->bc_off + 1)];
+  return Silver_Super_GetField(vm->js, site->func, receiver, home, atom, opt_rt_site_ic(site));
+}
+
+ant_value_t opt_rt_put_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
+  const sv_atom_t *atom = &site->func->atoms[sv_get_u32(site->func->code + site->bc_off + 1)];
+  return Silver_Super_PutField(vm->js, site->func, receiver, home, atom, args[0], opt_rt_site_ic(site));
+}
+
+ant_value_t opt_rt_array_init(sv_vm_t *vm, ant_value_t arr, ant_value_t value, ant_value_t *args, int64_t argc, int64_t index) {
+  Silver_Literal_InitElement(vm->js, arr, (uint32_t)index, value);
+  return Ant_Value_Undefined;
 }
 
 ant_value_t opt_rt_closure(sv_vm_t *vm, sv_closure_t *parent, ant_value_t this_val, ant_value_t *args, int64_t argc, const opt_rt_closure_site_t *site) {
@@ -1174,6 +1326,20 @@ ant_value_t opt_rt_put_field_adding(sv_vm_t *vm, ant_value_t object, ant_value_t
   return jit_helper_slow_put_field_adding(vm->js, object, value, at->func, at->func->code + at->bc_off, site->adds, site->count);
 }
 
+ant_value_t opt_rt_init_field(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
+  return jit_helper_slow_init_field(vm->js, object, value, site->func, site->func->code + site->bc_off);
+}
+
+ant_value_t opt_rt_init_field_adding(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_add_site_t *site) {
+  const opt_rt_site_t *at = &site->site;
+  return jit_helper_slow_init_field_adding(vm->js, object, value, at->func, at->func->code + at->bc_off, site->adds, site->count);
+}
+
+ant_value_t opt_rt_define_computed(sv_vm_t *vm, ant_value_t object, ant_value_t key, ant_value_t *args, int64_t argc, int64_t flags) {
+  ant_value_t defined = jit_helper_define_method_comp(vm->js, object, key, args[0], (uint8_t)flags);
+  return is_err(defined) ? defined : object;
+}
+
 ant_value_t opt_rt_get_elem(sv_vm_t *vm, ant_value_t object, ant_value_t key, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
   return jit_helper_slow_get_elem(vm->js, object, key, site->func, site->func->code + site->bc_off);
 }
@@ -1227,6 +1393,7 @@ static opt_rt_access_fn opt_access_helper_of(sv_op_t op) {
     case OP_GET_FIELD:
     case OP_GET_FIELD2: return opt_rt_get_field;
     case OP_PUT_FIELD: return opt_rt_put_field;
+    case OP_INIT_FIELD: return opt_rt_init_field;
     case OP_GET_ELEM: return opt_rt_get_elem;
     case OP_PUT_ELEM: return opt_rt_put_elem;
     case OP_GET_LENGTH: return opt_rt_get_length;
@@ -1244,20 +1411,32 @@ static ant_value_t opt_rt_put_field_adding_counted(sv_vm_t *vm, ant_value_t obje
   return opt_rt_put_field_adding(vm, object, value, args, argc, site);
 }
 
+static ant_value_t opt_rt_init_field_adding_counted(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_add_site_t *site) {
+  opt_count_slow_call(&site->site);
+  return opt_rt_init_field_adding(vm, object, value, args, argc, site);
+}
+
 uintptr_t opt_tier_access_helper(sv_op_t op, bool adding) {
   bool counted = opt_stats_enabled();
   if (op == OP_PUT_FIELD && adding) return counted ? (uintptr_t)opt_rt_put_field_adding_counted : (uintptr_t)opt_rt_put_field_adding;
+  if (op == OP_INIT_FIELD && adding) return counted ? (uintptr_t)opt_rt_init_field_adding_counted : (uintptr_t)opt_rt_init_field_adding;
   opt_rt_access_fn helper = opt_access_helper_of(op);
   if (!helper) return 0;
   return counted ? (uintptr_t)opt_rt_access_counted : (uintptr_t)helper;
 }
 
-ant_value_t opt_rt_throw(ant_value_t value, sv_vm_t *vm) {
-  return is_err(value) ? value : js_throw(vm->js, value);
+ant_value_t opt_rt_take_thrown(sv_vm_t *vm, ant_value_t error, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind) {
+  return js_take_thrown(vm->js, error);
 }
 
-static void opt_catch_missed(ant_t *js, opt_code_t *code, uint32_t catch_off) {
-  if (++code->catch_misses < OPT_CATCH_MISS_LIMIT || code->dropped) return;
+ant_value_t opt_rt_throw(ant_value_t value, sv_vm_t *vm) {
+  if (is_err(value)) return value;
+  return sv_jit_throw(vm->js, value);
+}
+
+static void opt_catch_missed(ant_t *js, opt_code_t *code, const opt_handler_t *handler) {
+  uint32_t catch_off = handler->catch_off;
+  if ((++code->catch_misses < OPT_CATCH_MISS_LIMIT && !handler->raised) || code->dropped) return;
   opt_note_discard(opt_func_state(js, code->func, true), code, true);
   opt_drop_code(code);
   if (sv_debug_unlikely(SV_DEBUG_JIT_WARN))
@@ -1265,13 +1444,32 @@ static void opt_catch_missed(ant_t *js, opt_code_t *code, uint32_t catch_off) {
       opt_func_line(code->func));
 }
 
-void opt_rt_caught(sv_vm_t *vm, opt_code_t *code, const opt_handler_t *handler, bool in_place) {
-  if (in_place) {
+static void opt_catch_left(sv_vm_t *vm, opt_code_t *code, uint32_t catch_off, const opt_entry_t *entry) {
+  if (code->dropped || (code->catch_leaves++ % OPT_CATCH_LEAVE_WINDOW)) return;
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  uint64_t stamp = (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec, last = code->catch_leave_stamp;
+  code->catch_leave_stamp = stamp;
+  uint64_t window = opt_osr_host(vm, entry) ? OPT_CATCH_LEAVE_HOST_WINDOW_NS : OPT_CATCH_LEAVE_WINDOW_NS;
+  if (!last || stamp - last >= window) return;
+  opt_func_state_t *state = opt_func_state(vm->js, code->func, true);
+  opt_note_discard(state, code, false);
+  bool disable = state && ++state->leave_drops >= OPT_CATCH_LEAVE_DROPS;
+  if (disable) state->disabled = true;
+  opt_drop_code(code);
+  if (sv_debug_unlikely(SV_DEBUG_JIT_WARN))
+    fprintf(stderr, "jit: opt %s func=%s reason=hot-catch-leaves catch=%u line=%u\n", disable ? "disabled" : "dropped",
+      opt_func_name(code->func), catch_off, opt_func_line(code->func));
+}
+
+void opt_rt_caught(sv_vm_t *vm, opt_code_t *code, const opt_handler_t *handler, const opt_entry_t *entry, bool thrown_here) {
+  if (!entry) {
     opt_stats.catches++;
     return;
   }
   opt_stats.catch_leaves++;
-  if (handler->learnable) opt_catch_missed(vm->js, code, handler->catch_off);
+  if (handler->learnable) opt_catch_missed(vm->js, code, handler);
+  else if (thrown_here) opt_catch_left(vm, code, handler->catch_off, entry);
 }
 
 bool opt_tier_has_catch_entry(ant_t *js, sv_func_t *func, uint32_t catch_off) {
@@ -1283,7 +1481,7 @@ bool opt_tier_has_catch_entry(ant_t *js, sv_func_t *func, uint32_t catch_off) {
     const opt_handler_t *handler = &code->handlers[i];
     if (handler->catch_off != catch_off) continue;
     if (handler->entry == UINT32_MAX) {
-      if (handler->learnable) opt_catch_missed(js, code, catch_off);
+      if (handler->learnable) opt_catch_missed(js, code, handler);
       return false;
     }
     opt_stats.catch_entries++;
@@ -1497,6 +1695,7 @@ sv_jit_func_t opt_tier_compile(ant_t *js, sv_func_t *func, sv_closure_t *closure
   }
 
   code->closure_pinned = build_stats.closure_pinned;
+  code->assumes_settled_receivers = build_stats.assumes_settled_receivers;
   if (code->closure_pinned) func->opt_closure_pinned = true;
   code->func_next = state->codes;
   state->codes = code;

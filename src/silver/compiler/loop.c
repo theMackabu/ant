@@ -4,8 +4,8 @@ void compile_do_while(sv_compiler_t *c, sv_ast_t *node) {
   emit_set_completion_undefined(c);
 
   int loop_start = c->code_len;
-  push_loop(c, loop_start, NULL, 0, false);
-  compile_stmt(c, node->body);
+  push_loop(c, loop_start, NULL, 0, SV_LOOP_ITERATION);
+  compile_stmt_region(c, node->body);
 
   sv_loop_t *loop = &c->loops[c->loop_count - 1];
   for (int i = 0; i < loop->continues.count; i++)
@@ -96,11 +96,13 @@ static void hoist_loop_head_lexicals(sv_compiler_t *c, sv_ast_t *var_node, bool 
     var_node->var_kind == SV_VAR_USING ||
     var_node->var_kind == SV_VAR_AWAIT_USING;
   int lb = c->local_count;
+  c->spill_disabled++;
   for (int i = 0; i < var_node->args.count; i++) {
     sv_ast_t *decl = var_node->args.items[i];
     if (!decl || decl->type != N_VARDECL || !decl->left) continue;
     hoist_lexical_pattern(c, decl->left, is_const);
   }
+  c->spill_disabled--;
   if (!always_tdz && !loop_head_reads_own_bindings(c, var_node, lb)) return;
   for (int i = lb; i < c->local_count; i++) {
     c->locals[i].is_tdz = true;
@@ -162,7 +164,8 @@ static void compile_for_update(sv_compiler_t *c, sv_ast_t *upd) {
   }
   emit_op(c, upd->op == TOK_POSTINC ? OP_INC_LOCAL : OP_DEC_LOCAL);
   emit(c, (uint8_t)slot);
-  set_local_inferred_type(c, c->param_locals + slot, SV_TI_UNKNOWN);
+  uint8_t stored = c->locals[c->param_locals + slot].inferred_type == SV_TI_NUM ? SV_TI_NUM : SV_TI_UNKNOWN;
+  set_local_stored_type(c, c->param_locals + slot, stored, c->types->dep_count);
 }
 
 void compile_for(sv_compiler_t *c, sv_ast_t *node) {
@@ -174,7 +177,7 @@ void compile_for(sv_compiler_t *c, sv_ast_t *node) {
   if (close_slot >= 0) emit_slot_op(c, OP_CLOSE_UPVAL, (uint16_t)close_slot);
 
   int loop_start = c->code_len;
-  push_loop(c, loop_start, NULL, 0, false);
+  push_loop(c, loop_start, NULL, 0, SV_LOOP_ITERATION);
 
   int exit_jump = -1;
   if (node->cond) {
@@ -182,7 +185,7 @@ void compile_for(sv_compiler_t *c, sv_ast_t *node) {
     exit_jump = emit_jump(c, OP_JMP_FALSE);
   }
 
-  compile_stmt(c, node->body);
+  compile_stmt_region(c, node->body);
   sv_loop_t *loop = &c->loops[c->loop_count - 1];
   for (int i = 0; i < loop->continues.count; i++)
     patch_jump(c, loop->continues.offsets[i]);
@@ -322,8 +325,11 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   int old_using_stack = c->using_stack_local;
   bool old_using_async = c->using_stack_async;
   uint8_t iter_hint = 0;
-  if (is_for_of && !is_for_await)
+  if (is_for_of && !is_for_await) {
+    int dep_base = c->types->dep_count;
     iter_hint = iter_hint_for_type(infer_expr_type(c, node->right));
+    c->types->dep_count = dep_base;
+  }
 
   if (is_using_loop) {
     emit_empty_disposal_stack(c);
@@ -349,7 +355,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   }
 
   int loop_start = c->code_len;
-  push_loop(c, loop_start, NULL, 0, false);
+  push_loop(c, loop_start, NULL, 0, SV_LOOP_ITERATION);
   
   if (is_for_of) {
     c->loops[c->loop_count - 1].iter_unwind_index = c->unwind_count - 1;
@@ -401,11 +407,11 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   if (is_using_loop) {
     c->using_stack_local = using_stack_local;
     c->using_stack_async = is_await_using_loop;
-    push_using_cleanup(c, using_stack_local, c->scope_depth, is_await_using_loop);
+    push_using_cleanup(c, using_stack_local, -1, c->scope_depth, is_await_using_loop);
     compile_using_push_target(c, node->left, using_stack_local);
   }
 
-  compile_stmt(c, node->body);
+  compile_stmt_region(c, node->body);
   sv_loop_t *loop = &c->loops[c->loop_count - 1];
   for (int i = 0; i < loop->continues.count; i++)
     patch_jump(c, loop->continues.offsets[i]);
@@ -509,38 +515,55 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   end_scope(c);
 }
 
-void compile_break(sv_compiler_t *c, sv_ast_t *node) {
-  if (c->loop_count == 0) return;
-
-  int target = c->loop_count - 1;
-  if (node->str) for (int i = c->loop_count - 1; i >= 0; i--) if (
-    c->loops[i].label &&
-    c->loops[i].label_len == node->len &&
-    memcmp(c->loops[i].label, node->str, node->len) == 0
-  ) { target = i; break;  }
-
-  emit_close_upvals_to_depth(c, c->loops[target].scope_depth);
-  emit_using_cleanups_to_depth(c, c->loops[target].scope_depth);
-
+void emit_break_to_loop(sv_compiler_t *c, int target) {
   emit_loop_exit_jump(c, &c->loops[target], &c->loops[target].breaks);
 }
 
+static int find_label_target(sv_compiler_t *c, const sv_ast_t *node) {
+  int target = find_loop_label(c, node->str, node->len);
+  if (target < 0) js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Undefined label '%.*s'", (int)node->len, node->str);
+  return target;
+}
+
+void compile_break(sv_compiler_t *c, sv_ast_t *node) {
+  int target = -1;
+  
+  if (node->str) target = find_label_target(c, node);
+  else {
+    for (int i = c->loop_count - 1; i >= 0 && target < 0; i--)
+      if (!c->loops[i].is_block) target = i;
+    if (target < 0) js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Illegal break statement");
+  }
+
+  if (target >= 0) emit_break_to_loop(c, target);
+}
+
 void compile_continue(sv_compiler_t *c, sv_ast_t *node) {
-  for (int i = c->loop_count - 1; i >= 0; i--) if (node->str) {
-    if (
-      c->loops[i].label &&
-      c->loops[i].label_len == node->len &&
-      memcmp(c->loops[i].label, node->str, node->len) == 0
-    ) {
-      emit_close_upvals_to_depth(c, c->loops[i].scope_depth);
-      emit_using_cleanups_to_depth(c, c->loops[i].scope_depth);
-      emit_loop_exit_jump(c, &c->loops[i], &c->loops[i].continues);
+  int target = -1;
+
+  if (node->str) {
+    target = find_label_target(c, node);
+    if (target < 0) return;
+    
+    bool reaches_loop = !c->loops[target].is_block || c->loops[target].labels_loop;
+    while (reaches_loop && target < c->loop_count && c->loops[target].is_block) target++;
+    
+    if (!reaches_loop || target >= c->loop_count || c->loops[target].is_switch) {
+      js_mkerr_typed(
+        c->js, JS_ERR_SYNTAX, "Illegal continue statement: '%.*s' does not denote an iteration statement",
+        (int)node->len, node->str
+      );
       return;
     }
-  } else if (!c->loops[i].is_switch) {
-    emit_close_upvals_to_depth(c, c->loops[i].scope_depth);
-    emit_using_cleanups_to_depth(c, c->loops[i].scope_depth);
-    emit_loop_exit_jump(c, &c->loops[i], &c->loops[i].continues);
-    return;
+  } else {
+    for (int i = c->loop_count - 1; i >= 0 && target < 0; i--)
+      if (!c->loops[i].is_switch && !c->loops[i].is_block) target = i;
+    
+    if (target < 0) {
+      js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Illegal continue statement: no surrounding iteration statement");
+      return;
+    }
   }
+
+  emit_loop_exit_jump(c, &c->loops[target], &c->loops[target].continues);
 }

@@ -14,6 +14,10 @@ void cleanup_rpc_module(ant_t *js) {}
 void js_esm_cleanup_module_cache(ant_t *js) {}
 void ant_host_modules_destroy(ant_t *js) {}
 
+bool js_is_namespace_object(ant_value_t obj) { return false; }
+bool esm_export_star_skips(ant_t *js, const char *name, size_t len) { return false; }
+void esm_export_star_finish(ant_t *js) {}
+
 void esm_predeclare_exports(ant_t *js, sv_ast_t *program, ant_value_t ns) {}
 void emit_process_event(ant_t *js, const char *event_type, ant_value_t *args, int nargs) {}
 void process_exit_with(ant_t *js, int status) { exit(status); }
@@ -38,6 +42,14 @@ ant_value_t js_esm_import_dynamic_ex(
 ) {
   *out_tla_promise = Ant_Value_Undefined;
   return js_mkerr_typed(js, JS_ERR_TYPE, "module imports are not available in @antjs.org/wasm" );
+}
+
+ant_value_t js_esm_import_loaded(ant_t *js, ant_value_t specifier, const char *base_path, ant_value_t attrs) {
+  return Ant_Value_Undefined;
+}
+
+ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const char *base_path) {
+  return js_mkerr_typed(js, JS_ERR_TYPE, "module imports are not available in @antjs.org/wasm");
 }
 
 ant_value_t js_vm_dynamic_import(

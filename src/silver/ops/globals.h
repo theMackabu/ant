@@ -302,14 +302,6 @@ static inline ant_value_t sv_op_get_global(
   sv_func_t *func, uint8_t *ip
 ) {
   sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
-  ant_value_t super_val = sv_vm_get_super_val(vm);
-  
-  if (a->len == 5 && memcmp(a->str, "super", 5) == 0 && vtype(super_val) != kTypeUndefined) {
-    ant_value_t sv = super_val;
-    vm->stack[vm->sp++] = sv;
-    return sv;
-  }
-  
   ant_value_t val = sv_global_require_defined(js, a, sv_global_get_interned_ic(js, a->str, func, ip));
   if (is_err(val)) return val;
 
@@ -419,7 +411,7 @@ ant_value_t sv_global_put_slow(
     ? sv_sandbox_has(js, interned, len) || lkp_proto(js, js->global, interned, len).obj
     : lkp_interned(js->global, interned).obj != NULL;
   
-  if (is_strict && !declared)
+  if (!declared && (is_strict || sv_is_strict_context(js)))
     return js_mkerr_typed(js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int)len, interned);
   
   return setprop_interned(js, sandboxed ? js->global_sandbox : js->global, interned, len, val);

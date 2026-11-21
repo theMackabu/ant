@@ -196,10 +196,12 @@ typedef enum : uint8_t {
   IR_COND_INDEX_IN_BOUNDS,
   IR_COND_MAGICAL_LENGTH,
   IR_COND_EXTENSIBLE,
+  IR_COND_NO_SIDECAR,
   IR_COND_ARRAY_ITERATOR,
   IR_COND_ITERABLE_ARRAY,
   IR_COND_ITERATOR_RETURN_INTACT,
   IR_COND_GLOBAL_EVAL_INTACT,
+  IR_COND_ARRAY_ITERATION_INTACT,
   IR_COND_SHAPE,
   IR_COND_INT32,
   IR_COND_FLOAT64,
@@ -214,6 +216,7 @@ typedef enum : uint8_t {
   IR_COND_NEXT_BINDING_OF_SHAPE,
   IR_COND_PROPERTY_ITERATOR_CACHE_VALID,
   IR_COND_TYPED_ARRAY_LENGTH,
+  IR_COND_THROWN,
 } ir_condition_kind_t;
 
 typedef struct {
@@ -293,6 +296,7 @@ typedef struct {
       uint32_t bc_off;
       uint32_t inlined_frame_bytes;
       bool stores_operands;
+      bool returns_error;
       sv_func_t *target;
       uint16_t argc;
       uintptr_t extra;
@@ -303,6 +307,9 @@ typedef struct {
       bool slow_path;
       bool builtin;
       bool native_closure;
+      bool construct_super;
+      bool passes_entry;
+      uint16_t spare_slots;
     } call;
     struct {
       sv_func_t *func;
@@ -313,6 +320,10 @@ typedef struct {
       uint32_t property_count;
       uint32_t reserve;
     } allocate_object;
+    struct {
+      uint32_t count;
+      uint32_t reserve;
+    } allocate_array;
     struct {
       uint32_t shape_cache;
       uint32_t capacity;
@@ -451,6 +462,7 @@ typedef OPT_VEC(uint32_t) ir_slots_t;
 typedef struct {
   sv_func_t *func;
   uint32_t bc_off;
+  uint32_t site_off;
   opt_resume_mode_t mode;
   uint32_t dst;
   ir_slot_values_t values;
@@ -459,6 +471,7 @@ typedef struct {
   uint32_t passed_argument_count;
   uint32_t call_off;
   bool construct;
+  bool takes_rest;
 } ir_frame_state_t;
 
 typedef struct {
@@ -486,6 +499,7 @@ typedef struct {
   uint32_t depth;
   bool has_entry;
   bool learnable;
+  bool raised;
   bool finally;
 } ir_handler_t;
 
@@ -627,6 +641,16 @@ static inline bool ir_exit_sites_contain_slot(const ir_graph_t *graph, sv_func_t
     if (site->bc_off == bc_off && site->kind == kind && (site->slot == 0 || site->slot == slot || kind == OPT_EXIT_BAD_SHAPE)) return true;
   }
   return false;
+}
+
+static inline uint32_t ir_exit_sites_count(const ir_graph_t *graph, sv_func_t *func, uint32_t bc_off, opt_exit_kind_t kind) {
+  sv_func_t *in = func ? func : graph->func;
+  uint32_t count = 0;
+  for (uint32_t i = 0; i < graph->exit_sites.len; i++) {
+    const ir_exit_site_t *site = &graph->exit_sites.items[i];
+    count += (site->func ? site->func : graph->func) == in && site->bc_off == bc_off && site->kind == kind;
+  }
+  return count;
 }
 
 static inline bool ir_exit_sites_contain(const ir_graph_t *graph, sv_func_t *func, uint32_t bc_off, opt_exit_kind_t kind) {

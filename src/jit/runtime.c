@@ -61,7 +61,9 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_await_park);
   LOAD_EXT(jit_helper_await_return_direct);
   LOAD_EXT(jit_helper_native_finish);
-  LOAD_EXT(jit_helper_call_method);
+  LOAD_EXT(jit_helper_call_super);
+  LOAD_EXT(jit_helper_super_apply);
+  LOAD_EXT(jit_helper_super_spread);
   LOAD_EXT(jit_helper_call_array_includes);
   LOAD_EXT(jit_helper_call_char_code_at);
   LOAD_EXT(jit_helper_call_string_intrinsic);
@@ -122,6 +124,7 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_get_length_inline);
   LOAD_EXT(jit_helper_define_field);
   LOAD_EXT(jit_helper_define_method_comp);
+  LOAD_EXT(jit_helper_init_field);
   LOAD_EXT(jit_helper_seq);
   LOAD_EXT(jit_helper_eq);
   LOAD_EXT(jit_helper_ne);
@@ -148,6 +151,12 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_put_global);
   LOAD_EXT(jit_helper_object);
   LOAD_EXT(jit_helper_object_template);
+  LOAD_EXT(jit_helper_literal);
+  LOAD_EXT(jit_helper_literal_init);
+  LOAD_EXT(jit_helper_get_super);
+  LOAD_EXT(jit_helper_put_super);
+  LOAD_EXT(jit_helper_get_super_field);
+  LOAD_EXT(jit_helper_put_super_field);
   LOAD_EXT(regexp_create_literal);
   LOAD_EXT(jit_helper_define_slot);
   LOAD_EXT(jit_helper_array);
@@ -342,6 +351,11 @@ static void jit_osr_seed_invariant_locals(sv_func_t *func, sv_frame_t *frame) {
   free(loop_written);
 }
 
+static void jit_osr_locals_clear(ant_value_t *locals, int count) {
+  for (int i = 0; i < count; i++) locals[i] = 0;
+  __asm__ volatile("" : : "r"(locals) : "memory");
+}
+
 __attribute__((noinline)) ant_value_t sv_jit_try_osr(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame, sv_func_t *func, int bc_offset
 ) {
@@ -471,6 +485,7 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
   }, closure);
 
   if (cover_osr_frame) interp_seg->lo = interp_seg_lo;
+  jit_osr_locals_clear(osr_locals, nl);
   vm->jit.osr_marks = osr_mark.prev;
   vm->jit.osr = (sv_jit_osr_t){0};
   
@@ -529,6 +544,7 @@ __attribute__((noinline)) ant_value_t sv_jit_try_catch_entry(
   }, js_func_closure(frame->callee));
 
   if (cover_osr_frame) interp_seg->lo = interp_seg_lo;
+  jit_osr_locals_clear(osr_locals, nl);
   vm->jit.osr_marks = osr_mark.prev;
   vm->jit.osr = (sv_jit_osr_t){0};
 
@@ -591,6 +607,10 @@ void sv_jit_drop_func_code(sv_func_t *func) {
   func->back_edge_count = 0;
   func->jit_compiled_tfb_ver = 0;
   func->call_count = SV_JIT_THRESHOLD - SV_JIT_RECOMPILE_DELAY;
+}
+
+void sv_jit_drop_unsettled_receiver_code(ant_t *js) {
+  opt_tier_drop_unsettled_receivers(js);
 }
 
 void sv_jit_drop_closure_pinned(sv_func_t *func) {

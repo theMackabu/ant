@@ -139,12 +139,14 @@ bool ant_shape_add_accessor_tr(
 bool ant_shape_remove_slot(ant_t *js, ant_shape_t *shape, uint32_t slot);
 bool ant_shape_should_compact(const ant_shape_t *shape);
 bool ant_shape_is_shared(const ant_shape_t *shape);
+bool ant_shape_appends_transition(const ant_shape_t *shape);
 bool ant_shape_is_superseded(const ant_shape_t *shape);
 void ant_shape_mark_dictionary(ant_shape_t *shape);
 void ant_shape_mark_epoch_guarded(ant_shape_t *shape);
 bool ant_shape_is_dictionary(const ant_shape_t *shape);
 
 uint32_t ant_shape_count(const ant_shape_t *shape);
+bool ant_shape_appends_slot(const ant_shape_t *from, const ant_shape_t *to, uint32_t slot);
 bool ant_shape_may_have_gc_refs(const ant_shape_t *shape);
 uint32_t ant_shape_compact(ant_shape_t *shape);
 uint8_t ant_shape_get_attrs(const ant_shape_t *shape, uint32_t slot);
@@ -154,6 +156,8 @@ ant_shape_prop_t *ant_shape_prop_mut_at(ant_shape_t *shape, uint32_t slot);
 
 bool ant_shape_set_attrs_interned(ant_t *js, ant_shape_t *shape, const char *interned, uint8_t attrs);
 bool ant_shape_set_attrs_symbol(ant_t *js, ant_shape_t *shape, ant_offset_t sym_off, uint8_t attrs);
+bool ant_shape_clear_attrs_all(ant_t *js, ant_shape_t *shape, uint8_t clear);
+bool ant_shape_permute(ant_t *js, ant_shape_t *shape, const uint32_t *order);
 bool ant_shape_clear_accessor_slot(ant_t *js, ant_shape_t *shape, uint32_t slot);
 
 void ant_gc_shapes_begin(ant_t *js);

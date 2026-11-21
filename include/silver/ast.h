@@ -94,6 +94,7 @@ typedef enum: uint8_t {
   N_IMPORT_SPEC,
   N_EXPORT,
   N_PROGRAM,
+  N_STRICT_EXPR,
   N__COUNT
 } sv_node_type_t;
 
@@ -125,6 +126,12 @@ enum {
   FN_OWN_YIELD        = 1 << 24,
   FN_USES_SUPER       = 1 << 25,
   FN_PATTERN_ONLY     = 1 << 26,
+  FN_LITERAL_DYNAMIC  = 1 << 27,
+  FN_FIELD_THUNK      = 1 << 28,
+  FN_SOLE_SUPER_CALL  = 1 << 29,
+  FN_SYNTHETIC        = 1 << 30,
+  FN_REST_COMMA       = 1u << 31,
+  FN_OPTIONAL_BASE    = FN_SOLE_SUPER_CALL,
 };
 
 enum {

@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "keys.h"
+#include "index.h"
 #include "cfunc.h"
 #include "arrays.h"
 #include "props.h"
@@ -38,6 +39,10 @@ static bool proxy_keys_include(ant_t *js, ant_value_t keys, ant_value_t key) {
 }
 
 static bool proxy_target_key_is_nonconfigurable(ant_t *js, ant_value_t target, ant_value_t key) {
+  if (__builtin_expect(js_obj_ptr(js_as_obj(target))->flags.is_exotic && is_proxy(target), 0)) {
+    ant_value_t desc = proxy_get_own_property_descriptor(js, target, key);
+    return !is_err(desc) && vtype(desc) != kTypeUndefined && !descriptor_bool_value(js, desc, "configurable", 12, false);
+  }
   if (vtype(key) == kTypeSymbol) {
     ant_prop_loc_t off = lkp_sym(target, (ant_offset_t)vdata(key));
     if (off.obj && is_nonconfig_prop(off)) return true;
@@ -145,10 +150,80 @@ ant_value_t proxy_key_enumerable(ant_t *js, ant_value_t proxy, ant_value_t key) 
 }
 
 static __attribute__((noinline, cold)) ant_value_t proxy_revoked_error(ant_t *js, const char *trap);
+typedef enum {
+  PROXY_TRAP_OWN_KEYS,
+  PROXY_TRAP_GET,
+  PROXY_TRAP_SET,
+  PROXY_TRAP_HAS,
+  PROXY_TRAP_DELETE_PROPERTY,
+  PROXY_TRAP_DEFINE_PROPERTY,
+  PROXY_TRAP_GET_PROTOTYPE_OF,
+  PROXY_TRAP_SET_PROTOTYPE_OF,
+  PROXY_TRAP_IS_EXTENSIBLE,
+  PROXY_TRAP_PREVENT_EXTENSIONS,
+  PROXY_TRAP_GET_OWN_PROPERTY_DESCRIPTOR,
+  PROXY_TRAP_APPLY,
+  PROXY_TRAP_CONSTRUCT,
+  PROXY_TRAP_COUNT,
+} proxy_trap_t;
+
+static const char *const proxy_trap_names[PROXY_TRAP_COUNT] = {
+  [PROXY_TRAP_OWN_KEYS] = "ownKeys",
+  [PROXY_TRAP_GET] = "get",
+  [PROXY_TRAP_SET] = "set",
+  [PROXY_TRAP_HAS] = "has",
+  [PROXY_TRAP_DELETE_PROPERTY] = "deleteProperty",
+  [PROXY_TRAP_DEFINE_PROPERTY] = "defineProperty",
+  [PROXY_TRAP_GET_PROTOTYPE_OF] = "getPrototypeOf",
+  [PROXY_TRAP_SET_PROTOTYPE_OF] = "setPrototypeOf",
+  [PROXY_TRAP_IS_EXTENSIBLE] = "isExtensible",
+  [PROXY_TRAP_PREVENT_EXTENSIONS] = "preventExtensions",
+  [PROXY_TRAP_GET_OWN_PROPERTY_DESCRIPTOR] = "getOwnPropertyDescriptor",
+  [PROXY_TRAP_APPLY] = "apply",
+  [PROXY_TRAP_CONSTRUCT] = "construct",
+};
+
 static ant_value_t proxy_get_method(ant_t *js, ant_value_t handler, const char *name);
+static ant_value_t proxy_trap_slow(ant_t *js, ant_proxy_state_t *data, proxy_trap_t trap);
+static void proxy_trap_mask_refresh(ant_t *js, ant_proxy_state_t *data);
+
+static inline ant_value_t proxy_trap(ant_t *js, ant_proxy_state_t *data, proxy_trap_t trap) {
+  if (data->trap_epoch == js->absence_epoch && !(data->trap_mask & (1u << trap))) return Ant_Value_Undefined;
+  return proxy_trap_slow(js, data, trap);
+}
 static bool proxy_target_is_extensible(ant_value_t obj);
 
+static inline ant_value_t proxy_target_extensible(ant_t *js, ant_value_t target);
+
+static ant_value_t proxy_target_own_keys(ant_t *js, ant_value_t target) {
+  if (is_proxy(target)) return proxy_own_keys_raw(js, target);
+  return js_own_property_keys(js, target, true, false);
+}
+
+static ant_value_t proxy_list_from_array_like(ant_t *js, ant_value_t source) {
+  if (!is_object_type(source)) return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap must return an object");
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t list = Ant_Array_Create(js);
+  GC_ROOT_PIN(js, list);
+  size_t length = 0;
+  ant_value_t status = is_err(list) ? list : js_getprop_fallback(js, source, "length");
+  if (!is_err(status)) status = js_to_length_fast(js, status, &length);
+  if (!is_err(status) && length > UINT32_MAX) status = js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
+  for (size_t i = 0; i < length && !is_err(status); i++) {
+    char index[24];
+    snprintf(index, sizeof index, "%zu", i);
+    status = js_getprop_fallback(js, source, index);
+    if (is_err(status)) break;
+    if (vtype(status) != kTypeString && vtype(status) != kTypeSymbol)
+      status = js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap result must contain only strings or symbols");
+    else js_arr_push(js, list, status);
+  }
+  GC_ROOT_RESTORE(js, mark);
+  return is_err(status) ? status : list;
+}
+
 ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
+  if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, obj);
 
@@ -168,16 +243,14 @@ ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
     return proxy_host_own_keys(js, data, true, false);
   }
 
-  ant_value_t keys = Ant_Array_Create(js);
-  GC_ROOT_PIN(js, keys);
-
-  ant_value_t trap = proxy_get_method(js, data->handler, "ownKeys");
+  ant_value_t keys = Ant_Value_Undefined;
+  ant_value_t trap = proxy_trap(js, data, PROXY_TRAP_OWN_KEYS);
   if (is_err(trap)) {
     GC_ROOT_RESTORE(js, root_mark);
     return trap;
   }
   if (vtype(trap) == kTypeUndefined) {
-    keys = js_own_property_keys(js, data->target, true, false);
+    keys = proxy_target_own_keys(js, data->target);
     GC_ROOT_RESTORE(js, root_mark);
     return keys;
   }
@@ -188,11 +261,15 @@ ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
     GC_ROOT_RESTORE(js, root_mark);
     return result;
   }
-  if (vtype(result) != kTypeArray) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap must return an array");
-  }
   GC_ROOT_PIN(js, result);
+  if (vtype(result) != kTypeArray) {
+    result = proxy_list_from_array_like(js, result);
+    if (is_err(result)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return result;
+    }
+    GC_ROOT_PIN(js, result);
+  }
 
   ant_offset_t len = get_array_length(js, result);
   for (ant_offset_t i = 0; i < len; i++) {
@@ -225,7 +302,12 @@ ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
     }
   }
 
-  ant_value_t target_keys = js_own_property_keys(js, data->target, true, false);
+  ant_value_t extensible = proxy_target_extensible(js, data->target);
+  if (is_err(extensible)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return extensible;
+  }
+  ant_value_t target_keys = proxy_target_own_keys(js, data->target);
   GC_ROOT_PIN(js, target_keys);
   
   if (is_err(target_keys)) {
@@ -234,7 +316,7 @@ ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
   }
 
   ant_offset_t target_len = get_array_length(js, target_keys);
-  bool target_extensible = proxy_target_is_extensible(data->target);
+  bool target_extensible = extensible == Ant_Value_True;
   
   for (ant_offset_t i = 0; i < target_len; i++) {
     ant_value_t target_key = arr_get(js, target_keys, i);
@@ -262,6 +344,50 @@ ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
   GC_ROOT_RESTORE(js, root_mark);
   
   return keys;
+}
+
+bool proxy_enumerates_as_target(ant_t *js, ant_value_t proxy, ant_value_t *target) {
+  ant_proxy_state_t *data = get_proxy_data(proxy);
+  if (!data || data->revoked || data->host) return false;
+  if (data->trap_epoch != js->absence_epoch) {
+    if (vtype(data->handler) != kTypeObject) return false;
+    proxy_trap_mask_refresh(js, data);
+    if (data->trap_epoch != js->absence_epoch) return false;
+  }
+
+  const uint16_t observed =
+    (1u << PROXY_TRAP_OWN_KEYS) | (1u << PROXY_TRAP_GET_OWN_PROPERTY_DESCRIPTOR) | (1u << PROXY_TRAP_GET_PROTOTYPE_OF);
+  if (data->trap_mask & observed) return false;
+  *target = data->target;
+  return true;
+}
+
+bool proxy_descriptors_as_target(ant_t *js, ant_value_t proxy, ant_value_t *target) {
+  ant_proxy_state_t *data = get_proxy_data(proxy);
+  if (!data || data->revoked || data->host || vtype(data->target) != kTypeObject) return false;
+  if (data->trap_epoch != js->absence_epoch) {
+    if (vtype(data->handler) != kTypeObject) return false;
+    proxy_trap_mask_refresh(js, data);
+    if (data->trap_epoch != js->absence_epoch) return false;
+  }
+  if (data->trap_mask & (1u << PROXY_TRAP_GET_OWN_PROPERTY_DESCRIPTOR)) return false;
+  ant_object_t *ptr = js_obj_ptr(data->target);
+  if (!ptr || ptr->flags.is_exotic || vtype(js_string_wrapper_value(data->target)) == kTypeString) return false;
+  *target = data->target;
+  return true;
+}
+
+bool proxy_is_transparent(ant_t *js, ant_value_t proxy, ant_value_t *target) {
+  ant_proxy_state_t *data = get_proxy_data(proxy);
+  if (!data || data->revoked || data->host) return false;
+  if (data->trap_epoch != js->absence_epoch) {
+    if (vtype(data->handler) != kTypeObject) return false;
+    proxy_trap_mask_refresh(js, data);
+    if (data->trap_epoch != js->absence_epoch) return false;
+  }
+  if (data->trap_mask) return false;
+  *target = data->target;
+  return true;
 }
 
 ant_value_t proxy_own_keys_filtered(ant_t *js, ant_value_t obj, bool include_symbols, bool enumerable_only) {
@@ -295,7 +421,8 @@ ant_value_t proxy_own_keys_filtered(ant_t *js, ant_value_t obj, bool include_sym
 
 ant_value_t proxy_not_prevented_error(ant_t *js, ant_value_t proxy, const char *host_message, const char *message) {
   ant_proxy_state_t *data = get_proxy_data(proxy);
-  return js_mkerr_typed(js, JS_ERR_TYPE, "%s", data && data->host ? host_message : message);
+  bool host = data && (data->host || is_object_type(js_get_slot(data->target, SLOT_VM_SANDBOX)));
+  return js_mkerr_typed(js, JS_ERR_TYPE, "%s", host ? host_message : message);
 }
 
 ant_value_t proxy_set_integrity_level(ant_t *js, ant_value_t obj, bool freeze) {
@@ -529,12 +656,98 @@ __attribute__((noinline, cold)) ant_value_t proxy_trap_error(ant_t *js, const ch
 }
 
 static ant_value_t proxy_get_method(ant_t *js, ant_value_t handler, const char *name) {
-  ant_value_t trap = js_getprop_fallback(js, handler, name);
+  ant_value_t trap;
+  if (!chain_plain_get_interned(handler, intern_find(js, name, strlen(name)), &trap))
+    trap = js_getprop_fallback(js, handler, name);
   if (is_err(trap)) return trap;
   if (vtype(trap) == kTypeUndefined || vtype(trap) == kTypeNull) return Ant_Value_Undefined;
   if (!is_callable(trap))
     return js_mkerr_typed(js, JS_ERR_TYPE, "'%s' proxy trap is not callable", name);
   return trap;
+}
+
+static_assert(
+  PROXY_TRAP_COUNT == sizeof(((ant_t *)0)->intern.proxy_traps) / sizeof(const char *),
+  "proxy trap name cache does not match the trap list"
+);
+
+static constexpr uint32_t PROXY_TRAP_SCAN_MAX = 8;
+
+static uint16_t proxy_shape_trap_mask(const ant_shape_t *shape, const char **names) {
+  uint16_t mask = 0;
+  uint32_t count = ant_shape_count(shape);
+
+  if (count > PROXY_TRAP_SCAN_MAX) {
+    for (int i = 0; i < PROXY_TRAP_COUNT; i++)
+      if (ant_shape_lookup_interned(shape, names[i]) >= 0) mask |= (uint16_t)(1u << i);
+    return mask;
+  }
+
+  for (uint32_t slot = 0; slot < count; slot++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(shape, slot);
+    if (!prop || prop->type != ANT_SHAPE_KEY_STRING) continue;
+    for (int i = 0; i < PROXY_TRAP_COUNT; i++)
+      if (prop->key.interned == names[i]) { mask |= (uint16_t)(1u << i); break; }
+  }
+  return mask;
+}
+
+static void proxy_trap_mask_refresh(ant_t *js, ant_proxy_state_t *data) {
+  const char **names = js->intern.proxy_traps;
+  for (int i = 0; !names[PROXY_TRAP_COUNT - 1] && i < PROXY_TRAP_COUNT; i++) {
+    names[i] = intern_string(js, proxy_trap_names[i], strlen(proxy_trap_names[i]));
+    if (!names[i]) return;
+  }
+
+  uint16_t mask = 0;
+  ant_value_t cur = data->handler;
+  ant_object_t *object_proto = is_object_type(js->sym.object_proto) ? js_obj_ptr(js->sym.object_proto) : NULL;
+  bool object_proto_plain = false;
+
+  for (int depth = 0; is_object_type(cur); depth++) {
+    ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
+    if (depth == MAX_PROTO_CHAIN_DEPTH || !ptr || !ptr->shape || ptr->flags.is_exotic) return;
+    if (ptr != object_proto || js->proxy_proto_plain_epoch != js->absence_epoch) {
+      uint16_t found = proxy_shape_trap_mask(ptr->shape, names);
+      if (ptr == object_proto) object_proto_plain = !found;
+      mask |= found;
+    }
+    cur = ant_object_proto(ptr);
+  }
+
+  for (cur = data->handler; is_object_type(cur);) {
+    ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
+    ant_object_guard_absence(ptr);
+    cur = ant_object_proto(ptr);
+  }
+
+  if (object_proto_plain) js->proxy_proto_plain_epoch = js->absence_epoch;
+  data->trap_mask = mask;
+  data->trap_epoch = js->absence_epoch;
+}
+
+static __attribute__((noinline)) ant_value_t proxy_trap_slow(ant_t *js, ant_proxy_state_t *data, proxy_trap_t trap) {
+  if (data->trap_epoch != js->absence_epoch) {
+    if (vtype(data->handler) != kTypeObject) return proxy_get_method(js, data->handler, proxy_trap_names[trap]);
+    proxy_trap_mask_refresh(js, data);
+    if (data->trap_epoch != js->absence_epoch) return proxy_get_method(js, data->handler, proxy_trap_names[trap]);
+    if (!(data->trap_mask & (1u << trap))) return Ant_Value_Undefined;
+  }
+
+  const char *name = js->intern.proxy_traps[trap];
+  for (ant_value_t cur = data->handler; is_object_type(cur);) {
+    ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
+    int32_t slot = ant_shape_lookup_interned(ptr->shape, name);
+    if (slot < 0) { cur = ant_object_proto(ptr); continue; }
+
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
+    if (!prop || prop->has_getter || prop->has_setter || (uint32_t)slot >= ptr->prop_count) break;
+    ant_value_t value = ant_object_prop_get_unchecked(ptr, (uint32_t)slot);
+    if (vtype(value) == kTypeUndefined || vtype(value) == kTypeNull) return Ant_Value_Undefined;
+    if (!is_callable(value)) break;
+    return value;
+  }
+  return proxy_get_method(js, data->handler, proxy_trap_names[trap]);
 }
 
 static bool proxy_target_is_extensible(ant_value_t obj) {
@@ -543,7 +756,6 @@ static bool proxy_target_is_extensible(ant_value_t obj) {
 
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
   if (!ptr) return false;
-  if (ptr->flags.frozen || ptr->flags.sealed) return false;
   return ptr->flags.extensible != 0;
 }
 
@@ -551,6 +763,7 @@ typedef struct {
   const char *str;
   size_t len;
   ant_offset_t sym;
+  ant_value_t sym_val;
   bool is_sym;
 } proxy_key_t;
 
@@ -559,7 +772,7 @@ static inline proxy_key_t proxy_key_str(const char *str, size_t len) {
 }
 
 static inline proxy_key_t proxy_key_sym(ant_value_t sym) {
-  return (proxy_key_t){ .sym = (ant_offset_t)vdata(sym), .is_sym = true };
+  return (proxy_key_t){ .sym = (ant_offset_t)vdata(sym), .sym_val = sym, .is_sym = true };
 }
 
 static ant_value_t proxy_to_key(ant_t *js, ant_value_t val, ant_value_t *key_val, proxy_key_t *out) {
@@ -604,9 +817,101 @@ static bool proxy_target_value_differs(ant_t *js, ant_value_t target, proxy_key_
   return own.obj && !same_value_values(js, value, js_prop_load(own));
 }
 
+typedef struct {
+  bool accessor;
+  bool enumerable;
+  bool configurable;
+  bool writable;
+  ant_value_t first;
+  ant_value_t second;
+} proxy_full_desc_t;
+
+static ant_value_t proxy_to_complete_descriptor(ant_t *js, ant_value_t obj, proxy_full_desc_t *out) {
+  define_desc_raw_t raw = {0};
+  ant_value_t err = define_desc_read(js, obj, &raw);
+  if (is_err(err)) return err;
+  
+  bool accessor = raw.has[DESC_GET] || raw.has[DESC_SET];
+  if (accessor && (raw.has[DESC_VALUE] || raw.has[DESC_WRITABLE])) return js_mkerr_typed(
+    js, JS_ERR_TYPE, "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute"
+  );
+  
+  *out = (proxy_full_desc_t){
+    .accessor = accessor,
+    .enumerable = raw.has[DESC_ENUMERABLE] && js_truthy(js, raw.val[DESC_ENUMERABLE]),
+    .configurable = raw.has[DESC_CONFIGURABLE] && js_truthy(js, raw.val[DESC_CONFIGURABLE]),
+    .writable = raw.has[DESC_WRITABLE] && js_truthy(js, raw.val[DESC_WRITABLE]),
+    .first = raw.has[accessor ? DESC_GET : DESC_VALUE] ? raw.val[accessor ? DESC_GET : DESC_VALUE] : Ant_Value_Undefined,
+    .second = raw.has[DESC_SET] ? raw.val[DESC_SET] : Ant_Value_Undefined,
+  };
+  
+  return Ant_Value_Undefined;
+}
+
+static constexpr uint32_t PROXY_DESCRIPTOR_CHECK_BUDGET = 1u << 17;
+
+static inline ant_value_t proxy_target_own_descriptor(ant_t *js, ant_value_t *target_args) {
+  if (__builtin_expect(!is_proxy(target_args[0]), 1))
+    return builtin_object_getOwnPropertyDescriptor(js, target_args, 2, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
+  if (js->proxy_descriptor_depth == 0) js->proxy_descriptor_checks = 0;
+  if (++js->proxy_descriptor_checks > PROXY_DESCRIPTOR_CHECK_BUDGET || sv_check_c_stack_overflow(js))
+    return Ant_Error_CreateStackOverflow(js);
+  js->proxy_descriptor_depth++;
+  ant_value_t desc = proxy_get_own_property_descriptor(js, target_args[0], target_args[1]);
+  js->proxy_descriptor_depth--;
+  return desc;
+}
+
+static inline ant_value_t proxy_target_extensible(ant_t *js, ant_value_t target) {
+  uint8_t t = vtype(target);
+  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return Ant_Value_False;
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(target));
+  if (!ptr) return Ant_Value_False;
+  if (__builtin_expect(ptr->flags.is_exotic && t == kTypeObject && ant_object_proxy_state(ptr) != NULL, 0)) return proxy_is_extensible(js, target);
+  return Ant_Value_FromBool(ptr->flags.extensible != 0);
+}
+
+typedef enum { PROXY_CHECK_GET, PROXY_CHECK_SET, PROXY_CHECK_HAS, PROXY_CHECK_DELETE } proxy_check_t;
+
+static ant_value_t proxy_check_proxied(ant_t *js, ant_value_t target, proxy_key_t key, proxy_check_t check, ant_value_t value) {
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, target);
+  GC_ROOT_PIN(js, value);
+  ant_value_t key_val = key.is_sym ? key.sym_val : js_mkstr(js, key.str, key.len);
+  GC_ROOT_PIN(js, key_val);
+  ant_value_t desc = is_err(key_val) ? key_val : proxy_get_own_property_descriptor(js, target, key_val);
+  GC_ROOT_PIN(js, desc);
+  proxy_full_desc_t current = {0};
+  bool exists = !is_err(desc) && vtype(desc) != kTypeUndefined;
+  ant_value_t status = exists ? proxy_to_complete_descriptor(js, desc, &current) : desc;
+  ant_value_t result = check == PROXY_CHECK_SET ? Ant_Value_True : value;
+  const char *trap = check == PROXY_CHECK_GET ? "get" : check == PROXY_CHECK_SET ? "set" : check == PROXY_CHECK_HAS ? "has" : "deleteProperty";
+
+  if (is_err(status)) result = status;
+  else if (!exists) {}
+  else if (check == PROXY_CHECK_GET || check == PROXY_CHECK_SET) {
+    bool get = check == PROXY_CHECK_GET;
+    if (current.configurable) {}
+    else if (current.accessor) {
+      bool missing = vtype(get ? current.first : current.second) == kTypeUndefined;
+      if (missing && (!get || vtype(value) != kTypeUndefined)) result = proxy_trap_error(js, trap, "trap result is incompatible with an accessor that lacks the matching function");
+    } else if (!current.writable && !same_value_values(js, value, current.first))
+      result = proxy_trap_error(js, trap, "trap result differs from a non-configurable, non-writable property");
+  } else if (js_truthy(js, value) == (check == PROXY_CHECK_DELETE)) {
+    ant_value_t extensible = current.configurable ? proxy_is_extensible(js, target) : Ant_Value_False;
+    if (is_err(extensible)) result = extensible;
+    else if (!current.configurable) result = proxy_trap_error(js, trap, "trap result is incompatible with a non-configurable property");
+    else if (extensible != Ant_Value_True) result = proxy_trap_error(js, trap, "trap result is incompatible with a property of a non-extensible target");
+  }
+
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
 static ant_value_t proxy_check_get(ant_t *js, ant_value_t target, proxy_key_t key, ant_value_t result) {
   prop_meta_t meta;
-  if (!proxy_target_meta(js, target, key, &meta) || meta.configurable) return result;
+  if (!proxy_target_meta(js, target, key, &meta)) return is_proxy(target) ? proxy_check_proxied(js, target, key, PROXY_CHECK_GET, result) : result;
+  if (meta.configurable) return result;
 
   if (meta.has_getter || meta.has_setter) {
     if ((meta.has_getter && vtype(meta.getter) != kTypeUndefined) || vtype(result) == kTypeUndefined) return result;
@@ -619,7 +924,8 @@ static ant_value_t proxy_check_get(ant_t *js, ant_value_t target, proxy_key_t ke
 
 static ant_value_t proxy_check_set(ant_t *js, ant_value_t target, proxy_key_t key, ant_value_t value) {
   prop_meta_t meta;
-  if (!proxy_target_meta(js, target, key, &meta) || meta.configurable) return Ant_Value_True;
+  if (!proxy_target_meta(js, target, key, &meta)) return is_proxy(target) ? proxy_check_proxied(js, target, key, PROXY_CHECK_SET, value) : Ant_Value_True;
+  if (meta.configurable) return Ant_Value_True;
 
   if (meta.has_getter || meta.has_setter) {
     if (meta.has_setter && vtype(meta.setter) != kTypeUndefined) return Ant_Value_True;
@@ -632,7 +938,8 @@ static ant_value_t proxy_check_set(ant_t *js, ant_value_t target, proxy_key_t ke
 
 static ant_value_t proxy_check_has(ant_t *js, ant_value_t target, proxy_key_t key, ant_value_t result) {
   prop_meta_t meta;
-  if (js_truthy(js, result) || !proxy_target_meta(js, target, key, &meta)) return result;
+  if (js_truthy(js, result)) return result;
+  if (!proxy_target_meta(js, target, key, &meta)) return is_proxy(target) ? proxy_check_proxied(js, target, key, PROXY_CHECK_HAS, result) : result;
   if (!meta.configurable) return proxy_trap_error(js, "has", "trap returned falsy for non-configurable property");
   if (!proxy_target_is_extensible(target))
     return proxy_trap_error(js, "has", "trap returned falsy for existing property on non-extensible target");
@@ -641,7 +948,8 @@ static ant_value_t proxy_check_has(ant_t *js, ant_value_t target, proxy_key_t ke
 
 static ant_value_t proxy_check_delete(ant_t *js, ant_value_t target, proxy_key_t key, ant_value_t result) {
   prop_meta_t meta;
-  if (!js_truthy(js, result) || !proxy_target_meta(js, target, key, &meta)) return result;
+  if (!js_truthy(js, result)) return result;
+  if (!proxy_target_meta(js, target, key, &meta)) return is_proxy(target) ? proxy_check_proxied(js, target, key, PROXY_CHECK_DELETE, result) : result;
   if (!meta.configurable) return proxy_trap_error(js, "deleteProperty", "trap returned truthy for non-configurable property");
   if (!proxy_target_is_extensible(target))
     return proxy_trap_error(js, "deleteProperty", "trap returned truthy for property on non-extensible target");
@@ -670,7 +978,7 @@ ant_value_t proxy_get_with_receiver(ant_t *js, ant_value_t proxy, const char *ke
   if (data->host) return proxy_host_get(js, data, key, key_len);
 
   ant_value_t target = data->target;
-  ant_value_t get_trap = proxy_get_method(js, data->handler, "get");
+  ant_value_t get_trap = proxy_trap(js, data, PROXY_TRAP_GET);
   if (is_err(get_trap)) return get_trap;
   if (vtype(get_trap) == kTypeUndefined) return proxy_get_from_target(js, target, key, key_len, receiver);
 
@@ -683,30 +991,6 @@ ant_value_t proxy_get_with_receiver(ant_t *js, ant_value_t proxy, const char *ke
 
 ant_value_t proxy_get(ant_t *js, ant_value_t proxy, const char *key, size_t key_len) {
   return proxy_get_with_receiver(js, proxy, key, key_len, proxy);
-}
-
-static __attribute__((noinline)) ant_value_t proxy_set_define_refused(
-  ant_t *js, ant_value_t proxy, ant_value_t target, ant_value_t key, const ant_value_t *receiver_desc
-) {
-  ant_value_t own = receiver_desc ? *receiver_desc : proxy_get_own_property_descriptor(js, proxy, key);
-  if (is_err(own)) return own;
-  if (is_object_type(own)) return Ant_Value_False;
-
-  ant_value_t cur = target;
-  for (int depth = 0; is_object_type(cur); depth++) {
-    if (depth >= MAX_PROTO_CHAIN_DEPTH || is_proxy(js_as_obj(cur))) return Ant_Value_False;
-
-    ant_value_t desc = js_get_own_property_descriptor(js, cur, key);
-    if (is_err(desc)) return desc;
-    if (is_object_type(desc)) {
-      if (cur == target) return Ant_Value_False;
-      if (vtype(js_get(js, desc, "get")) != kTypeUndefined || vtype(js_get(js, desc, "set")) != kTypeUndefined) return Ant_Value_False;
-      return Ant_Value_FromBool(js_truthy(js, js_get(js, desc, "writable")));
-    }
-    cur = js_get_proto(js, cur);
-  }
-
-  return Ant_Value_True;
 }
 
 static ant_value_t proxy_receiver_desc_error(ant_t *js, ant_value_t holder, ant_value_t receiver, ant_value_t key, ant_value_t desc) {
@@ -759,18 +1043,9 @@ done:
   return result;
 }
 
-static __attribute__((noinline, cold)) ant_value_t proxy_define_not_extensible(ant_t *js, ant_value_t key) {
-  if (!sv_is_strict_context(js)) return Ant_Value_False;
-  ant_value_t text = vtype(key) == kTypeSymbol ? js_symbol_to_string(js, key) : key;
-  if (is_err(text)) return text;
-  size_t len = 0;
-  const char *bytes = js_getstr(js, text, &len);
-  return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot define property %.*s, object is not extensible", (int)len, bytes);
-}
-
 static inline bool proxy_target_refuses_add(ant_value_t target) {
   ant_object_t *ptr = js_obj_ptr(js_as_obj(target));
-  return ptr && (ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible);
+  return ptr && !ptr->flags.extensible;
 }
 
 static bool proxy_handler_plain_for_set(ant_t *js, ant_proxy_state_t *data) {
@@ -796,6 +1071,76 @@ static ant_value_t proxy_define_trapped(
   ant_t *js, ant_proxy_state_t *data, ant_value_t target, ant_value_t key_val, ant_value_t descriptor, ant_value_t trap
 );
 
+static bool proxy_target_plain_writable(ant_t *js, ant_value_t target, const char *key, size_t key_len) {
+  if (vtype(target) != kTypeObject) return false;
+  ant_object_t *ptr = js_obj_ptr(target);
+  prop_meta_t meta;
+  return ptr && !ptr->flags.is_exotic && lookup_string_prop_meta(js, target, key, key_len, &meta) &&
+    !meta.has_getter && !meta.has_setter && meta.writable;
+}
+
+static ant_value_t proxy_set_own_writable(
+  ant_t *js, ant_value_t proxy, ant_proxy_state_t *data, ant_value_t target, ant_value_t key_str, ant_value_t value
+) {
+  ant_value_t existing = proxy_get_own_property_descriptor(js, proxy, key_str);
+  if (is_err(existing)) return existing;
+
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, existing);
+  ant_value_t result;
+  bool fresh = vtype(existing) == kTypeUndefined;
+
+  if (!fresh && (descriptor_has_own_key(js, existing, "get", 3) || descriptor_has_own_key(js, existing, "set", 3) || !descriptor_bool_value(js, existing, "writable", 8, false))) {
+    GC_ROOT_RESTORE(js, mark);
+    return Ant_Value_False;
+  }
+
+  ant_value_t trap = proxy_trap(js, data, PROXY_TRAP_DEFINE_PROPERTY);
+  size_t key_len = 0;
+  const char *key = js_getstr(js, key_str, &key_len);
+  if (is_err(trap)) result = trap;
+  else if (vtype(trap) == kTypeUndefined && !fresh && proxy_target_plain_writable(js, target, key, key_len))
+    result = js_set_reporting(js, target, key_str, value);
+  else {
+    ant_value_t update = Ant_Object_Create(js);
+    GC_ROOT_PIN(js, update);
+    if (!is_err(update)) {
+      mkprop_define_data(js, update, "value", 5, value);
+      if (fresh) {
+        mkprop_define_data(js, update, "writable", 8, Ant_Value_True);
+        mkprop_define_data(js, update, "enumerable", 10, Ant_Value_True);
+        mkprop_define_data(js, update, "configurable", 12, Ant_Value_True);
+      }
+    }
+    result = is_err(update) ? update
+      : vtype(trap) == kTypeUndefined ? js_define_property(js, target, key_str, update, true)
+      : proxy_define_trapped(js, data, target, key_str, update, trap);
+  }
+
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
+static inline bool proxy_store_dense_index(ant_t *js, ant_value_t target, const char *key, size_t key_len, ant_value_t value) {
+  ant_object_t *ptr = (ant_object_t *)vptr(target);
+  const uint16_t mask =
+    ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS | ANT_OBJECT_FLAG_FROZEN |
+    ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXOTIC | ANT_OBJECT_FLAG_ARGUMENTS;
+  if ((ptr->flags.raw & mask) != (ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS)) return false;
+  if (!ptr->u.array.data) return false;
+
+  unsigned long idx = 0;
+  uint32_t len = ptr->u.array.len;
+  if (!parse_array_index(key, key_len, (ant_offset_t)len + 1, &idx)) return false;
+  if (idx < len) {
+    if (is_empty_slot(ptr->u.array.data[idx])) return false;
+  } else if (idx >= ptr->u.array.cap || !array_proto_chain_plain(js, ptr)) return false;
+
+  dense_set_owned(js, (ant_offset_t)(uintptr_t)ptr, (ant_offset_t)idx, value);
+  if (idx == len) ptr->u.array.len = len + 1;
+  return true;
+}
+
 ant_value_t proxy_set_with_receiver_reason(
   ant_t *js, ant_value_t proxy, const char *key, size_t key_len,
   ant_value_t value, ant_value_t receiver, bool *trapless
@@ -806,14 +1151,19 @@ ant_value_t proxy_set_with_receiver_reason(
   if (!data) return Ant_Value_Undefined;
   if (data->revoked) return proxy_revoked_error(js, "set");
   
-  if (data->host && same_object_identity(receiver, proxy))
-    return data->host->set(js, data->target, key, key_len, value);
+  bool own = same_object_identity(receiver, proxy);
+  if (data->host && own) return data->host->set(js, data->target, key, key_len, value);
 
-  if (
-    !data->host && same_object_identity(receiver, proxy) &&
-    !proxy_target_refuses_add(data->target) && proxy_handler_plain_for_set(js, data)
-  ) {
+  if (own && !data->host && !proxy_target_refuses_add(data->target) && proxy_handler_plain_for_set(js, data)) {
+    if (vtype(data->target) == kTypeArray && proxy_store_dense_index(js, data->target, key, key_len, value)) return Ant_Value_True;
     const char *interned = intern_string(js, key, key_len);
+    ant_object_t *plain = vtype(data->target) == kTypeObject ? js_obj_ptr(data->target) : NULL;
+    int32_t slot = plain && interned && is_plain_set_target(plain) ? ant_shape_lookup_interned(plain->shape, interned) : -1;
+    if (slot >= 0 && own_writable_data_slot(plain, slot) && vtype(js_string_wrapper_value(data->target)) != kTypeString) {
+      store_own_data_slot(js, plain, (uint32_t)slot, interned, value);
+      return Ant_Value_True;
+    }
+
     ant_value_t key_value = interned ? intern_value(js, interned) : js_mkerr(js, "oom");
     if (is_err(key_value)) return key_value;
 
@@ -825,9 +1175,8 @@ ant_value_t proxy_set_with_receiver_reason(
   }
   
   ant_value_t target = data->target;
-  ant_value_t handler = data->handler;
   
-  ant_value_t set_trap = proxy_get_method(js, handler, "set");
+  ant_value_t set_trap = proxy_trap(js, data, PROXY_TRAP_SET);
   if (is_err(set_trap)) return set_trap;
   if (vtype(set_trap) != kTypeUndefined) {
       ant_value_t key_val = js_mkstr(js, key, key_len);
@@ -851,72 +1200,12 @@ ant_value_t proxy_set_with_receiver_reason(
     return key_str;
   }
 
-  ant_value_t own_desc = proxy_get_own_property_descriptor(js, proxy, key_str);
-  GC_ROOT_PIN(js, own_desc);
-  
-  if (is_err(own_desc)) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return own_desc;
-  }
-
-  ant_value_t define_trap = proxy_get_method(js, handler, "defineProperty");
-  if (is_err(define_trap)) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return define_trap;
-  }
-  
-  if (vtype(define_trap) == kTypeUndefined) {
-    ant_value_t set_result;
-    if (same_object_identity(receiver, proxy)) {
-      ant_value_t refused = proxy_target_refuses_add(target)
-        ? proxy_set_define_refused(js, proxy, target, key_str, &own_desc)
-        : Ant_Value_False;
-      
-      if (is_err(refused) || refused == Ant_Value_True) {
-        ant_value_t result = is_err(refused) ? refused : proxy_define_not_extensible(js, key_str);
-        GC_ROOT_RESTORE(js, root_mark);
-        return result;
-      }
-
-      bool declined = false;
-      set_result = setprop_impl_receiver(js, target, proxy, key_str, value, false, &declined);
-      if (!is_err(set_result) && declined) {
-        GC_ROOT_RESTORE(js, root_mark);
-        return Ant_Value_False;
-      }
-    } else {
-      ant_value_t result = js_set_with_receiver(js, target, key_str, value, receiver);
-      if (result == Ant_Value_False && trapless) *trapless = true;
-      GC_ROOT_RESTORE(js, root_mark);
-      return result;
-    }
-    
-    GC_ROOT_RESTORE(js, root_mark);
-    if (is_err(set_result)) return set_result;
-    
-    return Ant_Value_True;
-  }
-
-  ant_value_t desc = Ant_Object_Create(js);
-  GC_ROOT_PIN(js, desc);
-  
-  if (is_err(desc)) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return desc;
-  }
-  
-  mkprop_define_data(js, desc, "value", 5, value);
-  if (vtype(own_desc) == kTypeUndefined) {
-    mkprop_define_data(js, desc, "writable", 8, Ant_Value_True);
-    mkprop_define_data(js, desc, "enumerable", 10, Ant_Value_True);
-    mkprop_define_data(js, desc, "configurable", 12, Ant_Value_True);
-  }
-
-  ant_value_t define_result = proxy_define_property(js, proxy, key_str, desc);
+  ant_value_t result = own && proxy_target_plain_writable(js, target, key, key_len)
+    ? proxy_set_own_writable(js, proxy, data, target, key_str, value)
+    : js_set_with_receiver(js, target, key_str, value, receiver);
+  if (result == Ant_Value_False && trapless && !own) *trapless = true;
   GC_ROOT_RESTORE(js, root_mark);
-  if (is_err(define_result)) return define_result;
-  
-  return Ant_Value_FromBool(js_truthy(js, define_result));
+  return result;
 }
 
 ant_value_t proxy_set_with_receiver(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t value, ant_value_t receiver) {
@@ -951,17 +1240,10 @@ ant_value_t proxy_set_sym(
   
   ant_value_t target = data->target;
   *target_out = target;
-  ant_value_t set_trap = proxy_get_method(js, data->handler, "set");
+  ant_value_t set_trap = proxy_trap(js, data, PROXY_TRAP_SET);
   if (is_err(set_trap)) return set_trap;
 
-  if (vtype(set_trap) == kTypeUndefined) {
-    if (!same_object_identity(receiver, proxy)) return set_trap;
-    ant_value_t refused = proxy_target_refuses_add(target)
-      ? proxy_set_define_refused(js, proxy, target, sym, NULL)
-      : Ant_Value_False;
-    if (is_err(refused)) return refused;
-    return refused == Ant_Value_True ? proxy_define_not_extensible(js, sym) : set_trap;
-  }
+  if (vtype(set_trap) == kTypeUndefined) return set_trap;
   
   ant_value_t args[4] = { target, sym, value, receiver };
   ant_value_t result = proxy_call_trap(js, data, set_trap, args, 4);
@@ -969,6 +1251,34 @@ ant_value_t proxy_set_sym(
   if (!js_truthy(js, result)) return Ant_Value_False;
 
   return proxy_check_set(js, target, proxy_key_sym(sym), value);
+}
+
+__attribute__((noinline)) ant_value_t js_proxy_set_refusal(ant_t *js, ant_value_t proxy, ant_value_t key) {
+  ant_proxy_state_t *data = get_proxy_data(proxy);
+  if (!data || data->host || is_proxy(data->target) || !proxy_target_refuses_add(data->target) || !sv_is_strict_context(js) || !proxy_handler_plain_for_set(js, data)) return Ant_Value_False;
+
+  ant_value_t cur = data->target;
+  for (int depth = 0; is_object_type(cur) && depth < MAX_PROTO_CHAIN_DEPTH && !is_proxy(js_as_obj(cur)); depth++) {
+    ant_value_t desc = js_get_own_property_descriptor(js, cur, key);
+    if (is_err(desc)) return desc;
+    if (is_object_type(desc)) {
+      if (cur == data->target || !descriptor_bool_value(js, desc, "writable", 8, false)) return Ant_Value_False;
+      break;
+    }
+    cur = js_get_proto(js, cur);
+  }
+  if (is_object_type(cur) && is_proxy(js_as_obj(cur))) return Ant_Value_False;
+
+  ant_value_t text = vtype(key) == kTypeSymbol ? js_symbol_to_string(js, key) : key;
+  if (is_err(text)) return text;
+  size_t len = 0;
+  const char *bytes = js_getstr(js, text, &len);
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot define property %.*s, object is not extensible", (int)len, bytes);
+}
+
+bool js_proxy_set_is_plain(ant_t *js, ant_value_t proxy) {
+  ant_proxy_state_t *data = get_proxy_data(proxy);
+  return data && !data->host && proxy_handler_plain_for_set(js, data);
 }
 
 ant_value_t js_proxy_set(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t value) {
@@ -982,6 +1292,8 @@ ant_value_t js_proxy_set_sym(ant_t *js, ant_value_t proxy, ant_value_t sym, ant_
   if (is_err(result) || result == Ant_Value_True || result == Ant_Value_False) return result;
 
   
+  if (!js_proxy_set_is_plain(js, proxy)) return js_set_with_receiver(js, target, sym, value, proxy);
+
   bool declined = false;
   ant_value_t stored = setprop_impl_receiver(js, target, proxy, sym, value, false, &declined);
   if (is_err(stored)) return stored;
@@ -1019,9 +1331,8 @@ ant_value_t proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_
   );
   
   ant_value_t target = data->target;
-  ant_value_t handler = data->handler;
   
-  ant_value_t has_trap = proxy_get_method(js, handler, "has");
+  ant_value_t has_trap = proxy_trap(js, data, PROXY_TRAP_HAS);
   if (is_err(has_trap)) return has_trap;
   if (vtype(has_trap) != kTypeUndefined) {
       ant_value_t key_val = js_mkstr(js, key, key_len);
@@ -1056,9 +1367,8 @@ ant_value_t proxy_delete(ant_t *js, ant_value_t proxy, const char *key, size_t k
   }
   
   ant_value_t target = data->target;
-  ant_value_t handler = data->handler;
   
-  ant_value_t delete_trap = proxy_get_method(js, handler, "deleteProperty");
+  ant_value_t delete_trap = proxy_trap(js, data, PROXY_TRAP_DELETE_PROPERTY);
   if (is_err(delete_trap)) return delete_trap;
   if (vtype(delete_trap) != kTypeUndefined) {
       ant_value_t key_val = js_mkstr(js, key, key_len);
@@ -1078,7 +1388,6 @@ ant_value_t proxy_get_val_with_receiver(ant_t *js, ant_value_t proxy, ant_value_
   if (data->revoked) return proxy_revoked_error(js, "get");
 
   ant_value_t target = data->target;
-  ant_value_t handler = data->handler;
   ant_value_t prop_key;
   proxy_key_t key;
 
@@ -1086,7 +1395,7 @@ ant_value_t proxy_get_val_with_receiver(ant_t *js, ant_value_t proxy, ant_value_
   if (is_err(key_err)) return key_err;
   if (data->host && !key.is_sym) return proxy_host_get(js, data, key.str, key.len);
 
-  ant_value_t get_trap = proxy_get_method(js, handler, "get");
+  ant_value_t get_trap = proxy_trap(js, data, PROXY_TRAP_GET);
   if (is_err(get_trap)) return get_trap;
 
   if (vtype(get_trap) == kTypeUndefined) return key.is_sym
@@ -1113,12 +1422,11 @@ ant_value_t proxy_get_prototype_of(ant_t *js, ant_value_t proxy) {
       return proxy_revoked_error(js, "getPrototypeOf");
 
     ant_value_t target = data->target;
-    ant_value_t handler = data->handler;
-    ant_value_t trap = proxy_get_method(js, handler, "getPrototypeOf");
+    ant_value_t trap = proxy_trap(js, data, PROXY_TRAP_GET_PROTOTYPE_OF);
     if (is_err(trap)) return trap;
     
     if (vtype(trap) == kTypeUndefined) {
-      if (!is_proxy(target)) return get_proto(js, target);
+      if (!is_proxy(target)) return js_cfunc_demote_promoted(js, get_proto(js, target));
       if (hops >= PROXY_PROTO_HOP_LIMIT)
         return js_mkerr_typed(js, JS_ERR_RANGE, "Maximum call stack size exceeded");
       proxy = target;
@@ -1130,8 +1438,11 @@ ant_value_t proxy_get_prototype_of(ant_t *js, ant_value_t proxy) {
     if (is_err(result)) return result;
     if (!is_object_type(result) && vtype(result) != kTypeNull)
       return proxy_trap_error(js, "getPrototypeOf", "trap returned neither object nor null");
-    if (!proxy_target_is_extensible(target)) {
-      ant_value_t target_proto = get_proto(js, target);
+    ant_value_t extensible = proxy_target_extensible(js, target);
+    if (is_err(extensible)) return extensible;
+    if (extensible != Ant_Value_True) {
+      ant_value_t target_proto = is_proxy(target) ? proxy_get_prototype_of(js, target) : get_proto(js, target);
+      if (is_err(target_proto)) return target_proto;
       if (!same_object_identity(result, target_proto))
         return proxy_trap_error(js, "getPrototypeOf", "trap returned incompatible prototype for non-extensible target");
     }
@@ -1139,7 +1450,7 @@ ant_value_t proxy_get_prototype_of(ant_t *js, ant_value_t proxy) {
   }
 }
 
-ant_value_t proxy_set_prototype_of(ant_t *js, ant_value_t proxy, ant_value_t proto) {
+ant_value_t proxy_set_prototype_of_trapped(ant_t *js, ant_value_t proxy, ant_value_t proto, bool *trapped) {
   if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data) return Ant_Value_False;
@@ -1147,24 +1458,32 @@ ant_value_t proxy_set_prototype_of(ant_t *js, ant_value_t proxy, ant_value_t pro
     return proxy_revoked_error(js, "setPrototypeOf");
 
   ant_value_t target = data->target;
-  ant_value_t handler = data->handler;
-  ant_value_t trap = proxy_get_method(js, handler, "setPrototypeOf");
+  ant_value_t trap = proxy_trap(js, data, PROXY_TRAP_SET_PROTOTYPE_OF);
   if (is_err(trap)) return trap;
 
   if (vtype(trap) != kTypeUndefined) {
+    if (trapped) *trapped = true;
     ant_value_t args[2] = { target, proto };
     ant_value_t result = proxy_call_trap(js, data, trap, args, 2);
     if (is_err(result)) return result;
-    if (js_truthy(js, result) && !proxy_target_is_extensible(target)) {
-      ant_value_t current = get_proto(js, target);
+    if (!js_truthy(js, result)) return Ant_Value_False;
+    ant_value_t extensible = proxy_target_extensible(js, target);
+    if (is_err(extensible)) return extensible;
+    if (extensible != Ant_Value_True) {
+      ant_value_t current = is_proxy(target) ? proxy_get_prototype_of(js, target) : get_proto(js, target);
+      if (is_err(current)) return current;
       if (!same_object_identity(current, proto))
         return proxy_trap_error(js, "setPrototypeOf", "trap returned truthy for incompatible prototype on non-extensible target");
     }
     return Ant_Value_FromBool(js_truthy(js, result));
   }
 
-  set_proto(js, target, proto);
-  return Ant_Value_True;
+  if (is_proxy(target)) return proxy_set_prototype_of_trapped(js, target, proto, trapped);
+  return Ant_Value_FromBool(Ant_Object_TrySetPrototype(js, target, proto) == ANT_PROTO_SET_OK);
+}
+
+ant_value_t proxy_set_prototype_of(ant_t *js, ant_value_t proxy, ant_value_t proto) {
+  return proxy_set_prototype_of_trapped(js, proxy, proto, NULL);
 }
 
 ant_value_t proxy_is_extensible(ant_t *js, ant_value_t proxy) {
@@ -1175,16 +1494,17 @@ ant_value_t proxy_is_extensible(ant_t *js, ant_value_t proxy) {
     return proxy_revoked_error(js, "isExtensible");
 
   ant_value_t target = data->target;
-  ant_value_t handler = data->handler;
-  bool target_extensible = proxy_target_is_extensible(target);
-  ant_value_t trap = proxy_get_method(js, handler, "isExtensible");
+  ant_value_t trap = proxy_trap(js, data, PROXY_TRAP_IS_EXTENSIBLE);
   if (is_err(trap)) return trap;
-  if (vtype(trap) == kTypeUndefined) return Ant_Value_FromBool(target_extensible);
+  if (vtype(trap) == kTypeUndefined) return proxy_target_extensible(js, target);
 
   ant_value_t args[1] = { target };
   ant_value_t result = proxy_call_trap(js, data, trap, args, 1);
   if (is_err(result)) return result;
   bool trap_extensible = js_truthy(js, result);
+  ant_value_t actual = proxy_target_extensible(js, target);
+  if (is_err(actual)) return actual;
+  bool target_extensible = actual == Ant_Value_True;
   if (trap_extensible != target_extensible)
     return proxy_trap_error(js, "isExtensible", "trap result does not reflect target extensibility");
   return Ant_Value_FromBool(trap_extensible);
@@ -1201,21 +1521,25 @@ ant_value_t proxy_prevent_extensions(ant_t *js, ant_value_t proxy) {
   if (data->host) return Ant_Value_False;
 
   ant_value_t target = data->target;
-  ant_value_t handler = data->handler;
-  ant_value_t trap = proxy_get_method(js, handler, "preventExtensions");
+  ant_value_t trap = proxy_trap(js, data, PROXY_TRAP_PREVENT_EXTENSIONS);
   if (is_err(trap)) return trap;
 
   if (vtype(trap) != kTypeUndefined) {
     ant_value_t args[1] = { target };
     ant_value_t result = proxy_call_trap(js, data, trap, args, 1);
     if (is_err(result)) return result;
-    bool ok = js_truthy(js, result);
-    if (ok && proxy_target_is_extensible(target))
+    if (!js_truthy(js, result)) return Ant_Value_False;
+    ant_value_t extensible = proxy_target_extensible(js, target);
+    if (is_err(extensible)) return extensible;
+    if (extensible == Ant_Value_True)
       return proxy_trap_error(js, "preventExtensions", "trap returned truthy but target is extensible");
-    return Ant_Value_FromBool(ok);
+    return Ant_Value_True;
   }
 
+  if (is_proxy(target)) return proxy_prevent_extensions(js, target);
+
   ant_object_t *ptr = js_obj_ptr(js_as_obj(target));
+  if (!Ant_Array_UnshareValue(js, js_as_obj(target))) return js_mkerr(js, "oom");
   if (ptr) ptr->flags.extensible = 0;
   return Ant_Value_True;
 }
@@ -1227,7 +1551,6 @@ ant_value_t proxy_has_val(ant_t *js, ant_value_t proxy, ant_value_t key_val) {
   if (data->revoked) return proxy_revoked_error(js, "has");
 
   ant_value_t target = data->target;
-  ant_value_t handler = data->handler;
   ant_value_t prop_key;
   proxy_key_t key;
 
@@ -1236,7 +1559,7 @@ ant_value_t proxy_has_val(ant_t *js, ant_value_t proxy, ant_value_t key_val) {
   
   if (data->host && !key.is_sym) return proxy_has(js, proxy, key.str, key.len);
 
-  ant_value_t has_trap = proxy_get_method(js, handler, "has");
+  ant_value_t has_trap = proxy_trap(js, data, PROXY_TRAP_HAS);
   if (is_err(has_trap)) return has_trap;
   if (vtype(has_trap) == kTypeUndefined) return do_in(js, prop_key, target);
 
@@ -1245,37 +1568,6 @@ ant_value_t proxy_has_val(ant_t *js, ant_value_t proxy, ant_value_t key_val) {
   if (is_err(result)) return result;
 
   return proxy_check_has(js, target, key, result);
-}
-
-typedef struct {
-  bool accessor;
-  bool enumerable;
-  bool configurable;
-  bool writable;
-  ant_value_t first;
-  ant_value_t second;
-} proxy_full_desc_t;
-
-static ant_value_t proxy_to_complete_descriptor(ant_t *js, ant_value_t obj, proxy_full_desc_t *out) {
-  define_desc_raw_t raw = {0};
-  ant_value_t err = define_desc_read(js, obj, &raw);
-  if (is_err(err)) return err;
-  
-  bool accessor = raw.has[DESC_GET] || raw.has[DESC_SET];
-  if (accessor && (raw.has[DESC_VALUE] || raw.has[DESC_WRITABLE])) return js_mkerr_typed(
-    js, JS_ERR_TYPE, "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute"
-  );
-  
-  *out = (proxy_full_desc_t){
-    .accessor = accessor,
-    .enumerable = raw.has[DESC_ENUMERABLE] && js_truthy(js, raw.val[DESC_ENUMERABLE]),
-    .configurable = raw.has[DESC_CONFIGURABLE] && js_truthy(js, raw.val[DESC_CONFIGURABLE]),
-    .writable = raw.has[DESC_WRITABLE] && js_truthy(js, raw.val[DESC_WRITABLE]),
-    .first = raw.has[accessor ? DESC_GET : DESC_VALUE] ? raw.val[accessor ? DESC_GET : DESC_VALUE] : Ant_Value_Undefined,
-    .second = raw.has[DESC_SET] ? raw.val[DESC_SET] : Ant_Value_Undefined,
-  };
-  
-  return Ant_Value_Undefined;
 }
 
 static bool proxy_desc_compatible(ant_t *js, bool extensible, const proxy_full_desc_t *desc, const proxy_full_desc_t *current, bool exists) {
@@ -1303,8 +1595,7 @@ ant_value_t proxy_get_own_property_descriptor(ant_t *js, ant_value_t proxy, ant_
   if (data->host && vtype(key_val) == kTypeString) return proxy_host_desc(js, data, key_val);
 
   ant_value_t target = data->target;
-  ant_value_t handler = data->handler;
-  ant_value_t trap = proxy_get_method(js, handler, "getOwnPropertyDescriptor");
+  ant_value_t trap = proxy_trap(js, data, PROXY_TRAP_GET_OWN_PROPERTY_DESCRIPTOR);
   
   if (is_err(trap)) return trap;
   if (vtype(trap) != kTypeUndefined) {
@@ -1315,7 +1606,7 @@ ant_value_t proxy_get_own_property_descriptor(ant_t *js, ant_value_t proxy, ant_
       return proxy_trap_error(js, "getOwnPropertyDescriptor", "trap returned neither object nor undefined");
 
     ant_value_t target_args[2] = { target, key_val };
-    ant_value_t target_desc = builtin_object_getOwnPropertyDescriptor(js, target_args, 2, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
+    ant_value_t target_desc = proxy_target_own_descriptor(js, target_args);
     if (is_err(target_desc)) return target_desc;
     bool target_exists = vtype(target_desc) != kTypeUndefined;
     
@@ -1330,11 +1621,21 @@ ant_value_t proxy_get_own_property_descriptor(ant_t *js, ant_value_t proxy, ant_
       GC_ROOT_PIN(js, current.first);
       GC_ROOT_PIN(js, current.second);
     }
-    bool target_extensible = proxy_target_is_extensible(target);
+    if (vtype(result) == kTypeUndefined && !target_exists) {
+      GC_ROOT_RESTORE(js, mark);
+      return result;
+    }
+    if (vtype(result) == kTypeUndefined && !current.configurable) {
+      GC_ROOT_RESTORE(js, mark);
+      return proxy_trap_error(js, "getOwnPropertyDescriptor", "trap reported existing property as undefined");
+    }
+    ant_value_t extensible = proxy_target_extensible(js, target);
+    if (is_err(extensible)) { GC_ROOT_RESTORE(js, mark); return extensible; }
+    bool target_extensible = extensible == Ant_Value_True;
 
     if (vtype(result) == kTypeUndefined) {
       GC_ROOT_RESTORE(js, mark);
-      if (target_exists && (!current.configurable || !target_extensible))
+      if (!target_extensible)
         return proxy_trap_error(js, "getOwnPropertyDescriptor", "trap reported existing property as undefined");
       return result;
     }
@@ -1453,8 +1754,7 @@ static ant_value_t proxy_define_property_impl(ant_t *js, ant_value_t proxy, ant_
     if (key && !lkp(js, target, key, key_len).obj) return proxy_host_define(js, data, key, key_len, descriptor);
   }
   
-  ant_value_t handler = data->handler;
-  ant_value_t trap = proxy_get_method(js, handler, "defineProperty");
+  ant_value_t trap = proxy_trap(js, data, PROXY_TRAP_DEFINE_PROPERTY);
   if (is_err(trap)) return trap;
   if (vtype(trap) != kTypeUndefined) return proxy_define_trapped(js, data, target, key_val, descriptor, trap);
 
@@ -1486,13 +1786,13 @@ static ant_value_t proxy_define_trapped(
     }
 
     ant_value_t target_args[2] = { target, key_val };
-    ant_value_t target_desc = builtin_object_getOwnPropertyDescriptor(js, target_args, 2, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
+    ant_value_t target_desc = proxy_target_own_descriptor(js, target_args);
     GC_ROOT_PIN(js, target_desc);
     
     proxy_full_desc_t current;
     bool exists = !is_err(target_desc) && vtype(target_desc) != kTypeUndefined;
     ant_value_t status = exists ? proxy_to_complete_descriptor(js, target_desc, &current) : target_desc;
-    if (!is_err(status)) status = Ant_Value_FromBool(proxy_target_is_extensible(target));
+    if (!is_err(status)) status = proxy_target_extensible(js, target);
     
     if (is_err(status)) {
       GC_ROOT_RESTORE(js, root_mark);
@@ -1515,7 +1815,7 @@ ant_value_t proxy_define_property_raw(ant_t *js, ant_value_t proxy, ant_value_t 
   ant_value_t trap = Ant_Value_Undefined;
   
   if (data && !data->revoked && !data->host) {
-    trap = proxy_get_method(js, data->handler, "defineProperty");
+    trap = proxy_trap(js, data, PROXY_TRAP_DEFINE_PROPERTY);
     if (is_err(trap)) return trap;
     
     if (vtype(trap) == kTypeUndefined) {
@@ -1545,9 +1845,8 @@ ant_value_t proxy_delete_sym(ant_t *js, ant_value_t proxy, ant_value_t sym) {
   if (data->revoked) return proxy_revoked_error(js, "deleteProperty");
 
   ant_value_t target = data->target;
-  ant_value_t handler = data->handler;
 
-  ant_value_t delete_trap = proxy_get_method(js, handler, "deleteProperty");
+  ant_value_t delete_trap = proxy_trap(js, data, PROXY_TRAP_DELETE_PROPERTY);
   if (is_err(delete_trap)) return delete_trap;
   
   if (vtype(delete_trap) != kTypeUndefined) {
@@ -1575,7 +1874,7 @@ ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, a
     if (!is_callable(proxy) || (target_type != kTypeFunction && target_type != kTypeBuiltin && !nested))
       return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not a function", typestr(target_type));
 
-    ant_value_t trap = proxy_get_method(js, data->handler, "apply");
+    ant_value_t trap = proxy_trap(js, data, PROXY_TRAP_APPLY);
     if (is_err(trap)) return trap;
     if (vtype(trap) != kTypeUndefined) {
       ant_value_t args_arr = Ant_Array_Create(js);
@@ -1590,6 +1889,30 @@ ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, a
   }
 }
 
+bool js_proxy_plain_prototype(ant_t *js, ant_value_t proxy, ant_value_t *out) {
+  ant_value_t source = proxy;
+  ant_value_t trap;
+
+  for (int depth = 0; depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
+    ant_proxy_state_t *data = get_proxy_data(source);
+    if (!data) return chain_plain_get_interned(source, js->intern.prototype, out);
+    if (data->revoked || data->host) return false;
+    if (data->trap_epoch != js->absence_epoch || (data->trap_mask & (1u << PROXY_TRAP_GET))) {
+      if (!chain_plain_get_interned(data->handler, js->intern.get, &trap)) return false;
+      if (vtype(trap) != kTypeUndefined && vtype(trap) != kTypeNull) return false;
+    }
+    source = data->target;
+  }
+
+  return false;
+}
+
+ant_value_t js_proxy_get_prototype(ant_t *js, ant_value_t proxy) {
+  ant_value_t value;
+  if (js_proxy_plain_prototype(js, proxy, &value)) return value;
+  return js_getprop_fallback(js, proxy, "prototype");
+}
+
 ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, int argc, ant_value_t new_target) {
   if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
@@ -1598,12 +1921,11 @@ ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, 
   if (data->revoked) return proxy_revoked_error(js, "construct");
 
   ant_value_t target = data->target;
-  ant_value_t handler = data->handler;
 
   if (!js_is_constructor(target))
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
   
-  ant_value_t trap = proxy_get_method(js, handler, "construct");
+  ant_value_t trap = proxy_trap(js, data, PROXY_TRAP_CONSTRUCT);
   if (is_err(trap)) return trap;
   
   if (vtype(trap) != kTypeUndefined) {
@@ -1621,29 +1943,8 @@ ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, 
   if (vtype(target) == kTypeObject && is_proxy(target))
     return js_proxy_construct(js, target, args, argc, new_target);
 
-  ant_value_t effective_new_target = new_target;
-  ant_value_t proto;
-  
-  if (new_target != target) {
-    proto = js_getprop_fallback(js, new_target, "prototype");
-    if (!is_err(proto) && !is_object_type(proto)) proto = js->sym.object_proto;
-  } else proto = sv_prepare_construct_meta(js, target, new_target, &effective_new_target);
-  if (is_err(proto)) return proto;
-
-  ant_value_t obj = mkobj(js, 0);
-  if (is_object_type(proto)) js_set_proto_init(obj, proto);
-
-  ant_value_t ctor_this = obj;
-  ant_value_t result = sv_vm_call(
-    js->vm, js, target, obj, args, 
-    argc, &ctor_this, effective_new_target
-  );
-  
-  if (is_err(result)) return result;
-  
-  return is_object_type(result)
-    ? result
-    : (is_object_type(ctor_this) ? ctor_this : obj);
+  if (new_target == proxy) return sv_construct_proxied(js->vm, js, target, args, argc, new_target);
+  return sv_construct(js->vm, js, target, args, argc, new_target);
 }
 
 static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t trap_target, ant_value_t handler) {
@@ -1738,8 +2039,8 @@ static ant_value_t builtin_Proxy_revocable(ant_params_t) {
   ant_value_t revoke_func = js_obj_to_func(js, revoke_obj);
   ant_value_t result = Ant_Object_Create(js);
   
-  js_setprop(js, result, js_mkstr(js, "proxy", 5), proxy);
-  js_setprop(js, result, js_mkstr(js, "revoke", 6), revoke_func);
+  mkprop_define_data(js, result, "proxy", 5, proxy);
+  mkprop_define_data(js, result, "revoke", 6, revoke_func);
   
   return result;
 }

@@ -13,22 +13,41 @@ static bool eval_source_may_mention(const char *source, size_t len, const char *
   return false;
 }
 
-uint8_t sv_eval_shadow_bits(ant_t *js, ant_value_t eval_env, const char *source, size_t len) {
+uint16_t sv_eval_scope_bits(const sv_eval_scope_flags_t *flags) {
+  uint16_t bits = 0;
+  if (flags->this_binding) bits |= SV_EVAL_SCOPE_THIS_BINDING;
+  if (flags->super_binding) bits |= SV_EVAL_SCOPE_SUPER_BINDING;
+  if (flags->is_static) bits |= SV_EVAL_SCOPE_STATIC;
+  if (flags->no_arguments) bits |= SV_EVAL_SCOPE_NO_ARGUMENTS;
+  if (flags->has_with) bits |= SV_EVAL_SCOPE_ENV_BOUND;
+  if (flags->has_private) bits |= SV_EVAL_SCOPE_PRIVATE;
+  return bits;
+}
+
+uint16_t sv_eval_shadow_bits(ant_t *js, const js_eval_scope_t *scope, const char *source, size_t len) {
+  ant_value_t eval_env = scope->env;
   if (!source || !is_object_type(eval_env) || eval_env == js->global) return 0;
   bool escaped = len <= 64 && memchr(source, '\\', len) != NULL;
-  uint8_t bits = 0;
+  uint16_t bits = scope->layout ? scope->layout->eval_bits : sv_eval_scope_bits(sv_eval_env_flags(eval_env));
   
   if ((escaped || eval_source_may_mention(source, len, "undefined", 9)) && sv_eval_env_shadows_global(js, eval_env, "undefined", 9))
     bits |= SV_EVAL_SHADOWS_UNDEFINED;
   if ((escaped || eval_source_may_mention(source, len, "globalThis", 10)) && sv_eval_env_shadows_global(js, eval_env, "globalThis", 10))
     bits |= SV_EVAL_SHADOWS_GLOBAL_THIS;
+  if (__builtin_expect(bits & (SV_EVAL_SCOPE_PRIVATE | SV_EVAL_SCOPE_THIS_BINDING), 0)) {
+    if ((bits & SV_EVAL_SCOPE_PRIVATE) && memchr(source, '#', len)) bits |= SV_EVAL_SCOPE_ENV_BOUND;
+    if (
+      (bits & SV_EVAL_SCOPE_THIS_BINDING) && eval_source_may_mention(source, len, "super", 5) &&
+      sv_eval_env_shadows_global(js, eval_env, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN)
+    ) bits |= SV_EVAL_SCOPE_FIELD_THUNK;
+  }
     
-  return bits;
+  return bits & (uint16_t)~SV_EVAL_SCOPE_PRIVATE;
 }
 
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program, sv_compile_mode_t mode,
-  const char *source, ant_offset_t source_len, uint8_t eval_shadows
+  const char *source, ant_offset_t source_len, uint16_t eval_shadows, ant_value_t eval_env
 ) {
   if (!program || program->type != N_PROGRAM) return NULL;
   if (mode != SV_COMPILE_EVAL_FUNCTION && ast_contains_lexical_new_target(program)) {
@@ -107,6 +126,17 @@ sv_func_t *sv_compile(
   
   root.eval_shadows_undefined = (eval_shadows & SV_EVAL_SHADOWS_UNDEFINED) != 0;
   root.eval_shadows_global_this = (eval_shadows & SV_EVAL_SHADOWS_GLOBAL_THIS) != 0;
+  root.eval_this_binding = (eval_shadows & SV_EVAL_SCOPE_THIS_BINDING) != 0;
+  root.eval_field_thunk = (eval_shadows & SV_EVAL_SCOPE_FIELD_THUNK) != 0;
+  root.eval_super_binding = (eval_shadows & SV_EVAL_SCOPE_SUPER_BINDING) != 0;
+  root.is_static = (eval_shadows & SV_EVAL_SCOPE_STATIC) != 0;
+  root.eval_no_arguments = (eval_shadows & SV_EVAL_SCOPE_NO_ARGUMENTS) != 0;
+  if (sv_compile_mode_is_eval(mode)) {
+    root.eval_env = eval_env;
+    const sv_eval_scope_flags_t *scope_flags = sv_eval_env_flags(eval_env);
+    root.eval_with = scope_flags->has_with;
+    root.eval_private = scope_flags->has_private;
+  }
   
   root.line_table = sv_compile_ctx_build_line_table(root.source, source_len);
   sv_func_t *func = compile_function_body(&root, &top_fn, mode);

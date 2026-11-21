@@ -1,5 +1,6 @@
 #pragma once
 
+#include "silver/eval_scope_flags.h"
 #include "gc.h"
 #include "gc/objects.h"
 #include "internal.h"
@@ -26,6 +27,7 @@ typedef enum {
   SV_DEFINE_METHOD_SETTER   = 1u << 1,
   SV_DEFINE_METHOD_SET_NAME = 1u << 2,
   SV_DEFINE_METHOD_NON_ENUM = 1u << 3,
+  SV_DEFINE_METHOD_FIELD    = 1u << 4,
 } sv_define_method_flags_t;
 
 typedef enum {
@@ -75,6 +77,8 @@ typedef enum {
   SV_SPECIAL_MODULE_IMPORT = 3,
   SV_SPECIAL_ARGC          = 4,
   SV_SPECIAL_EVAL_ENV      = 5,
+  SV_SPECIAL_STRICT_ENTER  = 6,
+  SV_SPECIAL_STRICT_LEAVE  = 7,
 } sv_special_obj_t;
 
 typedef enum {
@@ -215,6 +219,9 @@ typedef struct {
   uint32_t src_end;
 } sv_srcpos_t;
 
+#define SV_IMPORT_SOURCE_PHASE "\x01import.source"
+#define SV_IMPORT_SOURCE_PHASE_LEN 14
+
 typedef enum {
   SV_TI_UNKNOWN = 0,
   SV_TI_NUM,
@@ -250,9 +257,19 @@ typedef enum: uint8_t {
 } sv_get_field_ic_kind_t;
 
 typedef enum: uint8_t {
+  SV_SUPER_PUT_IC_EMPTY = 0,
+  SV_SUPER_PUT_IC_DISABLED,
+  SV_SUPER_PUT_IC_DATA,
+  SV_SUPER_PUT_IC_DATA_ANY_SHAPE,
+  SV_SUPER_PUT_IC_SETTER,
+} sv_super_put_ic_kind_t;
+
+typedef enum: uint8_t {
   SV_IC_SHAPE_REF_CACHED   = 1u << 0,
   SV_IC_SHAPE_REF_ADD_FROM = 1u << 1,
+  SV_IC_SHAPE_REF_SUPER_BASE = SV_IC_SHAPE_REF_ADD_FROM,
   SV_IC_SHAPE_REF_ADD_TO   = 1u << 2,
+  SV_IC_SHAPE_REF_SUPER_ADD_FROM = SV_IC_SHAPE_REF_ADD_TO,
   SV_IC_POLY_MEGA          = 1u << 3,
   SV_IC_MEGA_COMPILED      = 1u << 4,
   SV_IC_HAS_GET_POLY       = 1u << 5,
@@ -355,6 +372,7 @@ typedef struct {
   union {
     sv_get_field_ic_kind_t get_kind;
     uint8_t eval_depth;
+    sv_super_put_ic_kind_t super_put_kind;
   };
   
   sv_ic_flags_t shape_ref_mask;
@@ -364,7 +382,10 @@ typedef struct {
     uint16_t eval_absent_level;
   };
   
-  uint32_t prototype_epoch;
+  union {
+    uint32_t prototype_epoch;
+    uint32_t fill_epoch;
+  };
 
   union {
     ant_object_t *cached_holder;
@@ -375,6 +396,7 @@ typedef struct {
   union {
     uintptr_t cached_aux;
     uintptr_t add_proto;
+    uintptr_t super_put_holder_depth;
   };
   
   // Each IC slot belongs to one bytecode site/op. Field reads use receiver_proto
@@ -401,6 +423,11 @@ typedef struct {
     } comparison;
     
     struct {
+      ant_shape_t *base_shape;
+      ant_shape_t *add_from_shape;
+    } super_put;
+    
+    struct {
       ant_shape_t *absent_shape;
       ant_shape_t *holder_shape;
       const struct sv_eval_scope *outer_scope;
@@ -412,6 +439,12 @@ typedef struct {
   uint8_t wasm32_cacheline_padding[12];
 #endif
 } sv_ic_entry_t;
+
+static constexpr uint16_t SV_INIT_FIELD_FILL_LIMIT = 16;
+
+static inline bool sv_init_field_ic_full(const sv_ic_entry_t *ic, uint32_t epoch) {
+  return ic->fill_epoch == epoch && ic->slow_hits >= SV_INIT_FIELD_FILL_LIMIT;
+}
 
 static_assert(
   sizeof(sv_ic_entry_t) == 64,
@@ -444,6 +477,16 @@ void sv_pf_poly_free(ant_t *js, sv_ic_entry_t *ic);
 void sv_ic_polys_cleanup(ant_t *js);
 
 static_assert(
+  offsetof(sv_ic_entry_t, guard.super_put.base_shape) == offsetof(sv_ic_entry_t, guard.add.from_shape),
+  "the super store base shape is owned through the add-from shape reference"
+);
+
+static_assert(
+  offsetof(sv_ic_entry_t, guard.super_put.add_from_shape) == offsetof(sv_ic_entry_t, guard.add.to_shape),
+  "the super store add-from shape is owned through the add-to shape reference"
+);
+
+static_assert(
   offsetof(sv_ic_entry_t, get_kind) < 24 &&
   offsetof(sv_ic_entry_t, epoch) < 24 &&
   offsetof(sv_ic_entry_t, cached_shape) < 24,
@@ -463,6 +506,30 @@ typedef struct {
   bool shape_build_failed;
   ant_value_t literal_template;
 } sv_obj_site_cache_t;
+
+typedef enum : uint8_t {
+  SV_LITERAL_ARRAY,
+  SV_LITERAL_OBJECT,
+} sv_literal_kind_t;
+
+typedef enum : uint8_t {
+  SV_LITERAL_HAS_CHILDREN = 1u << 0,
+  SV_LITERAL_HAS_DYNAMIC  = 1u << 1,
+} sv_literal_flags_t;
+
+static constexpr int SV_LITERAL_MAX_DEPTH = 8;
+static constexpr int SV_LITERAL_INLINE_MAX = 32;
+
+typedef struct sv_literal_site {
+  ant_value_t boilerplate;
+  gc_shared_elements_t *block;
+  const uint32_t *key_atoms;
+  uint32_t start;
+  uint32_t count;
+  sv_literal_kind_t kind;
+  uint8_t flags;
+  bool built_once;
+} sv_literal_site_t;
 
 static constexpr uint32_t SV_GF_IC_AUX_MISS_SHIFT = 8u;
 static constexpr uint32_t SV_GF_IC_PROTO_ID_SHIFT = 32u;
@@ -569,6 +636,10 @@ typedef struct {
 typedef struct sv_eval_scope {
   const sv_runtime_binding_t *bindings;
   uint32_t count;
+  uint32_t parent;
+  bool binds_arguments;
+  uint16_t eval_bits;
+  sv_eval_scope_flags_t flags;
 } sv_eval_scope_t;
 
 enum {
@@ -622,12 +693,16 @@ typedef struct {
   sv_srcpos_t *srcpos;
   const char *source;
   bool display_name_varies;
+  uint8_t ctor_props;
   
   int srcpos_count;
   int source_line;
   int source_len;
   int source_start;
   int source_end;
+
+  sv_literal_site_t *literal_sites;
+  uint32_t literal_site_count;
 } sv_func_debug_t;
 
 typedef ant_value_t (*sv_jit_func_t)(
@@ -726,6 +801,8 @@ struct sv_func {
   bool lazy_eval_env: 1;
   bool allows_new_target: 1;
   bool has_map_templates: 1;
+  bool uses_super: 1;
+  bool is_synthetic: 1;
 
   bool jit_inline_reuse_checked: 1;
   bool jit_inline_reuse_empty: 1;
@@ -744,6 +821,24 @@ static_assert(
   sizeof(void *) != 8 || sizeof(sv_func_t) <= 232,
   "sv_func_t must not grow past 232 bytes on 64-bit targets"
 );
+
+static inline uint8_t sv_ctor_slot_class(uint32_t props) {
+  if (props <= ANT_INOBJ_BASE_SLOTS) return 0;
+  return props <= ANT_INOBJ_WIDE_SLOTS ? 1 : 2;
+}
+
+static inline void sv_func_set_ctor_props(sv_func_t *func, uint32_t props) {
+  func->debug->ctor_props = props > UINT8_MAX ? UINT8_MAX : (uint8_t)props;
+  func->ctor_slot_class = sv_ctor_slot_class(props) & 3;
+}
+
+static inline bool sv_func_may_construct(const sv_func_t *func) {
+  return func && !func->is_arrow && !func->is_eval;
+}
+
+static inline bool sv_func_construct_needs_caller(const sv_func_t *func) {
+  return sv_func_may_construct(func) && !func->is_class_ctor;
+}
 
 static inline uint8_t sv_construct_slots(const sv_func_t *func) {
   if (!func || !func->ctor_slot_class) return ANT_INOBJ_BASE_SLOTS;
@@ -1029,8 +1124,22 @@ typedef struct sv_closure {
   
   uint8_t in_remember_set;
   uint8_t generation;
+  uint8_t ctor_props;
+  uint8_t ctor_slots;
   uint64_t gc_epoch;
 } sv_closure_t;
+
+static_assert(sizeof(void *) != 8 || sizeof(sv_closure_t) == 160, "the inherited constructor property count lives in sv_closure_t padding");
+
+static inline uint32_t sv_closure_ctor_props(const sv_closure_t *closure) {
+  if (closure->ctor_props) return closure->ctor_props;
+  return closure->func ? closure->func->debug->ctor_props : 0;
+}
+
+static inline uint8_t sv_closure_construct_slots(const sv_closure_t *closure) {
+  if (!closure) return ANT_INOBJ_BASE_SLOTS;
+  return closure->ctor_slots ? closure->ctor_slots : sv_construct_slots(closure->func);
+}
 
 static inline bool sv_closure_has_lexical_this(const sv_closure_t *closure) {
   return 
@@ -1052,6 +1161,8 @@ static inline sv_closure_t *js_closure_alloc_finish(ant_t *js, sv_closure_t *c) 
   c->u.pending.len = 0;
   c->in_remember_set = 0;
   c->generation = 0;
+  c->ctor_props = 0;
+  c->ctor_slots = 0;
   
   if (js->young_closure_len < js->young_closure_cap)
     js->young_closures[js->young_closure_len++] = c;

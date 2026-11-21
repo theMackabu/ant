@@ -91,16 +91,27 @@ static_assert(
 );
 
 enum: ant_value_t {
-  T_EMPTY             = ANT_SENTINEL_TAG | 0xDEADULL,
-  SV_JIT_BAILOUT      = ANT_SENTINEL_TAG | 0xBA110ULL,
-  SV_JIT_AWAIT_PARKED = ANT_SENTINEL_TAG | 0xBA111ULL,
-  SV_AITER_ARRAY_TAG  = ANT_SENTINEL_TAG | 0xFA1ULL,
-  SV_AITER_AWAIT_MARK = ANT_SENTINEL_TAG | 0xFA2ULL,
-  SV_AITER_STEP_MARK  = ANT_SENTINEL_TAG | 0xFA3ULL,
-  SV_AITER_CLOSE_SKIP = ANT_SENTINEL_TAG | 0xFA4ULL,
-  PROMISE_ALL_ELEMENT = ANT_SENTINEL_TAG | 0xA11ULL,
-  PROMISE_AWAIT_DEFER = ANT_SENTINEL_TAG | 0xA12ULL,
+  T_EMPTY              = ANT_SENTINEL_TAG | 0xDEADULL,
+  SV_LITERAL_CHILD_TAG = ANT_SENTINEL_TAG | (0x517ULL << 32),
+  SV_JIT_BAILOUT       = ANT_SENTINEL_TAG | 0xBA110ULL,
+  SV_JIT_AWAIT_PARKED  = ANT_SENTINEL_TAG | 0xBA111ULL,
+  SV_AITER_ARRAY_TAG   = ANT_SENTINEL_TAG | 0xFA1ULL,
+  SV_AITER_AWAIT_MARK  = ANT_SENTINEL_TAG | 0xFA2ULL,
+  SV_AITER_STEP_MARK   = ANT_SENTINEL_TAG | 0xFA3ULL,
+  SV_AITER_CLOSE_SKIP  = ANT_SENTINEL_TAG | 0xFA4ULL,
+  PROMISE_ALL_ELEMENT  = ANT_SENTINEL_TAG | 0xA11ULL,
+  PROMISE_AWAIT_DEFER  = ANT_SENTINEL_TAG | 0xA12ULL,
 };
+
+static constexpr ant_value_t SV_LITERAL_CHILD_MASK = ~(ant_value_t)UINT32_MAX;
+
+static inline bool sv_literal_is_child(ant_value_t value) {
+  return (value & SV_LITERAL_CHILD_MASK) == SV_LITERAL_CHILD_TAG;
+}
+
+static inline void ant_absence_epoch_bump(ant_t *js) {
+  if (++js->absence_epoch == 0) js->absence_epoch = 1;
+}
 
 static inline void ant_object_invalidate_guarded_absence(ant_t *js, ant_object_t *obj) {
   if (!obj) return;
@@ -109,6 +120,7 @@ static inline void ant_object_invalidate_guarded_absence(ant_t *js, ant_object_t
   if (!obj->flags.guards_absence) return;
   
   obj->flags.guards_absence = 0;
+  ant_absence_epoch_bump(js);
   ant_ic_epoch_bump(js);
 }
 
@@ -154,6 +166,15 @@ static inline bool is_callable(ant_value_t v) {
   if (t != kTypeObject) return false;
   ant_object_t *obj = js_obj_ptr(v);
   return obj && obj->flags.is_callable;
+}
+
+static inline bool sv_is_construct_result(ant_value_t value) {
+  return ((1u << vtype(value)) & (T_OBJECT_MASK | (1u << kTypeBuiltin))) != 0;
+}
+
+static inline ant_value_t sv_construct_result(ant_value_t result, ant_value_t receiver, ant_value_t fallback) {
+  if (sv_is_construct_result(result)) return result;
+  return sv_is_construct_result(receiver) ? receiver : fallback;
 }
 
 static inline bool js_typeof_is(ant_value_t v, uint8_t type) {
@@ -238,6 +259,10 @@ ant_value_t js_group_by(ant_t *js, ant_value_t items, ant_value_t callback, js_g
 ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode);
 ant_value_t js_create_data_property_or_throw(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t value);
 ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
+ant_value_t js_proxy_get_prototype(ant_t *js, ant_value_t proxy);
+bool js_proxy_plain_prototype(ant_t *js, ant_value_t proxy, ant_value_t *out);
+ant_value_t js_reflect_construct_listed(ant_t *js, ant_value_t target, ant_value_t new_target, bool explicit_new_target, ant_value_t *args, int argc);
+ant_value_t js_reflect_construct_array_like(ant_t *js, ant_value_t target, ant_value_t args_arr, ant_value_t new_target, bool explicit_new_target);
 ant_value_t js_proxy_prevent_extensions(ant_t *js, ant_value_t proxy);
 ant_value_t js_mkproxy(ant_t *js, ant_value_t target, ant_value_t handler);
 ant_value_t js_get_own_property_descriptor(ant_t *js, ant_value_t obj, ant_value_t key);
@@ -250,6 +275,7 @@ ant_value_t js_proxy_set(ant_t *js, ant_value_t proxy, const char *key, size_t k
 ant_value_t js_proxy_set_sym(ant_t *js, ant_value_t proxy, ant_value_t sym, ant_value_t value);
 ant_value_t js_set_reporting(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value);
 ant_value_t js_set_with_receiver(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value, ant_value_t receiver);
+ant_value_t js_set_with_receiver_interned(ant_t *js, ant_value_t target, const char *interned, size_t key_len, ant_value_t value, ant_value_t receiver);
 
 ant_value_t js_mkobj_with_proto(ant_t *js, ant_value_t proto);
 ant_value_t js_mkobj_with_proto_slots(ant_t *js, ant_value_t proto, uint8_t inobj_limit);
@@ -261,6 +287,7 @@ ant_value_t mkprop_interned_exact(ant_t *js, ant_value_t obj, const char *intern
 ant_value_t mkprop_append_fast(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 
 ant_value_t setprop_cstr(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
+ant_value_t setprop_cstr_attrs(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v, uint8_t attrs);
 ant_value_t setprop_interned(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 
 ant_value_t js_codegen_refused(ant_t *js);
@@ -287,6 +314,8 @@ ant_value_t coerce_to_str_concat(ant_t *js, ant_value_t v);
 ant_value_t get_ctor_species_value(ant_t *js, ant_value_t ctor);
 
 bool proto_chain_contains(ant_t *js, ant_value_t obj, ant_value_t proto_target);
+bool proto_would_cycle(ant_t *js, ant_value_t obj, ant_value_t proto);
+ant_value_t js_get_proto_demoted(ant_t *js, ant_value_t obj);
 bool same_ctor_identity(ant_t *js, ant_value_t a, ant_value_t b);
 bool js_array_iteration_default(ant_t *js, ant_value_t arr);
 bool js_array_proto_chain_plain(ant_t *js, ant_value_t arr);
@@ -304,8 +333,11 @@ ant_value_t mkobj(ant_t *js, ant_offset_t parent);
 static inline ant_value_t Ant_Object_CreateBare(ant_t *js) { return mkobj(js, 0); }
 
 ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint32_t count);
+ant_value_t Ant_Array_CreateRest(ant_t *js, const ant_value_t *args, uint32_t argc, uint32_t start);
 ant_value_t js_mkarr_dense_uninit(ant_t *js, uint32_t count, ant_value_t **out_data);
+ant_value_t Ant_Array_CreateUninit(ant_t *js, uint32_t count, uint32_t capacity, ant_value_t **out_data);
 ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src);
+ant_value_t js_arr_spread_into_owned(ant_t *js, ant_value_t dst, ant_value_t src);
 
 void js_arr_set_index(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t val);
 void js_arr_set_dense_length(ant_t *js, ant_value_t arr, ant_offset_t len);
@@ -320,6 +352,7 @@ bool js_obj_extra_reserve(ant_object_t *obj, uint8_t capacity);
 ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t tmpl);
 
 ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj);
+void js_for_in_cache_clear(ant_t *js);
 ant_value_t Ant_Object_ToStringTag(ant_t *js, ant_value_t obj);
 ant_value_t Ant_Object_PropertyIsEnumerable(ant_t *js, ant_value_t obj, ant_value_t key);
 ant_value_t Ant_Object_HasOwn(ant_t *js, ant_value_t obj, ant_value_t key);
@@ -368,7 +401,7 @@ ant_value_t js_maybe_set_function_name_from_key(
 
 sv_func_t *js_compile_parsed_bytecode(
   ant_t *js, struct sv_ast *program, const char *buf, 
-  size_t len, int mode, uint8_t eval_shadows
+  size_t len, int mode, uint16_t eval_shadows, ant_value_t eval_env
 );
 
 bool js_try_char_code_at(
@@ -385,6 +418,7 @@ bool js_is_function_call_builtin(ant_value_t func);
 bool js_is_function_apply_builtin(ant_value_t func);
 bool js_is_array_push_builtin(ant_value_t func);
 bool js_is_array_pop_builtin(ant_value_t func);
+bool js_is_reflect_construct_builtin(ant_value_t func);
 bool js_is_prototype_of(ant_t *js, ant_value_t proto_obj, ant_value_t obj);
 
 bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r);
@@ -416,6 +450,7 @@ ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r);
 ant_value_t js_string_slice(ant_t *js, ant_value_t str, double start, double end);
 ant_value_t do_string_num_concat(ant_t *js, ant_value_t str, ant_value_t num, bool num_first);
 ant_value_t js_to_primitive(ant_t *js, ant_value_t value, int hint);
+ant_value_t js_to_property_key(ant_t *js, ant_value_t value);
 ant_value_t js_get_then_property(ant_t *js, ant_value_t value);
 
 typedef struct {
@@ -560,6 +595,13 @@ static inline int js_brand_id(ant_value_t obj) {
 
 static inline bool js_check_brand(ant_value_t obj, int brand) {
   return js_brand_id(obj) == brand;
+}
+
+bool js_is_namespace_object(ant_value_t obj);
+
+static inline __attribute__((always_inline)) bool js_is_sealed_namespace(ant_value_t obj, const ant_object_t *ptr) {
+  if (__builtin_expect((ptr->flags.raw & (ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_FROZEN)) != 0, 1)) return false;
+  return !is_object_type(ant_object_proto(ptr)) && js_is_namespace_object(obj);
 }
 
 static inline bool lookup_symbol_prop_meta(ant_t *js, ant_value_t cur_obj, ant_offset_t sym_off, prop_meta_t *out) {

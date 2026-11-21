@@ -39,6 +39,7 @@ static inline void ant_protector_rearm(ant_t *js, uint32_t protectors) {
 }
 
 static inline void ant_prototype_write_epoch_bump(ant_t *js) {
+  js->construct_dirty_seed = js->construct_seed;
   if (++js->prototype_write_epoch != 0) return;
   ant_ic_epoch_bump(js);
   js->prototype_write_epoch = 1;
@@ -50,6 +51,14 @@ static inline bool ant_property_key_is_protector(ant_t *js, const char *key) {
     key == js->intern.resolve     ||
     key == js->intern.constructor || 
     key == js->intern.then;
+}
+
+static inline bool ant_property_key_breaks_protector(ant_t *js, const char *key) {
+  return
+    ant_property_key_is_protector(js, key) ||
+    key == js->intern.next ||
+    key == js->intern.ret  ||
+    key == js->intern.eval;
 }
 
 static inline bool ant_property_key_is_watched(ant_t *js, const char *key) {
@@ -96,7 +105,7 @@ static inline void ant_property_mutation_invalidate(ant_t *js, ant_object_t *hol
     ant_protector_break_all_realms(js, ANT_PROTECTOR_TYPED_ARRAY_LENGTH);
 
   if (!ant_object_protector_holder(holder) && holder->type_tag != kTypeArray && !ant_object_promise_state(holder)) return;
-  if (!ant_property_key_is_protector(js, key) && key != js->intern.next && key != js->intern.ret && key != js->intern.eval) return;
+  if (!ant_property_key_breaks_protector(js, key)) return;
   
   ant_protectors_invalidate(js, holder, key);
 }

@@ -685,8 +685,6 @@ bool jit_setup_frame(jit_compile_t *c) {
       .imp_remember_obj = c->imp_remember_obj,
       .call_proto = c->call_proto,
       .imp_call = c->imp_call,
-      .call_method_proto = c->call_method_proto,
-      .imp_call_method = c->imp_call_method,
       .cfunc_proto = c->cfunc_proto,
       .native_finish_proto = c->native_finish_proto,
       .imp_native_finish = c->imp_native_finish,
@@ -707,12 +705,6 @@ bool jit_setup_frame(jit_compile_t *c) {
       .imp_math = c->imp_math,
       .r_args_buf = c->r_args_buf,
   };
-
-  c->r_call_out_this = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "call_out_this");
-  MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_insn(c->ctx, MIR_ALLOCA,
-                               MIR_new_reg_op(c->ctx, c->r_call_out_this),
-                               MIR_new_uint_op(c->ctx, sizeof(ant_value_t))));
 
   c->normalize_sloppy_this =
       c->feat.needs_this && !c->func->is_strict && !c->func->is_arrow;
@@ -942,6 +934,7 @@ bool jit_setup_frame(jit_compile_t *c) {
     .local_regs = c->local_regs,
     .local_d_regs = c->local_d_regs,
     .dnum_locals = c->dnum_locals,
+    .captured_locals = c->has_captures ? c->captured_locals : NULL,
     .n_locals = c->n_locals,
     .lbuf = c->r_lbuf,
     .d_slot = c->r_d_slot,
@@ -996,6 +989,10 @@ bool jit_setup_frame(jit_compile_t *c) {
 
   c->osr_map = (osr_entry_map_t){0};
   scan_osr_entries(c->func, &c->osr_map);
+  int osr_reachable = 0;
+  for (int i = 0; i < c->osr_map.count; i++)
+    if (c->depth[c->osr_map.offsets[i]] >= 0) c->osr_map.offsets[osr_reachable++] = c->osr_map.offsets[i];
+  c->osr_map.count = osr_reachable;
   c->await_park = c->func->is_async && !c->has_captures && !c->has_captured_params && !c->func->has_dynamic_eval;
   if (c->await_park && !sv_func_jit_await_map(c->func)) {
     sv_func_sidecar_t *sidecar = sv_func_ensure_sidecar(c->func);

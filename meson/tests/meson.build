@@ -6,6 +6,7 @@ libant_tests = [
   'keyed-store-policy',
   'json-layout-cache',
   'array-dense-length',
+  'array-shared-elements',
   'typedarray-from-cleanup',
   'symbol-iterator-isolates',
   'isolate-libraries',

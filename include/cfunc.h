@@ -25,6 +25,7 @@ ant_value_t js_mkfun_meta(const ant_cfunc_meta_t *meta);
 ant_value_t js_mkfun_site(ant_cfunc_site_t *site);
 ant_value_t js_cfunc_name_value(ant_t *js, ant_value_t cfunc);
 ant_value_t js_cfunc_length_value(ant_value_t cfunc);
+ant_value_t js_cfunc_demote_function(ant_t *js, ant_value_t func);
 
 ant_value_t js_heavy_mkfun(ant_t *js, ant_value_t (*fn)(ant_params_t), ant_value_t data);
 ant_value_t js_heavy_mkfun_cfunc(ant_t *js, ant_value_t cfunc, ant_value_t data);
@@ -80,4 +81,8 @@ static inline ant_value_t js_cfunc_lookup_promoted(ant_t *js, ant_value_t cfunc)
   ant_value_t promoted;
   ant_ptr_pair_map_t *map = js_cfunc_promoted_map(js, js_as_cfunc_meta(cfunc));
   return ant_ptr_pair_get(map, vdata(cfunc), 0, &promoted) ? promoted : cfunc;
+}
+
+static inline ant_value_t js_cfunc_demote_promoted(ant_t *js, ant_value_t value) {
+  return vtype(value) == kTypeFunction ? js_cfunc_demote_function(js, value) : value;
 }

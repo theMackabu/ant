@@ -120,7 +120,7 @@ bool check_function_param_early_errors(
 ) {
   if (fn->args.count > UINT16_MAX) {
     if (emit_error)
-      js_mkerr_typed(js, JS_ERR_SYNTAX, "too many function parameters");
+      js_mkerr_typed(js, JS_ERR_SYNTAX, "Too many parameters in function definition (only %d allowed)", UINT16_MAX);
     return false;
   }
 
@@ -145,6 +145,15 @@ bool check_function_param_early_errors(
 
   if (!strict && !has_non_simple_params && !(fn->flags & (FN_ARROW | FN_METHOD))) return true;
   return check_function_param_names(js, fn, strict, emit_error);
+}
+
+static bool params_capture(const sv_ast_t *node) {
+  if (!node) return false;
+  if (node->type == N_FUNC || node->type == N_CLASS) return true;
+  if (node->type == N_CALL && is_ident_name(node->left, "eval")) return true;
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child) if (params_capture(child)) return true;
+  return false;
 }
 
 static uint16_t function_length_from_params(const sv_ast_t *node) {
@@ -181,6 +190,9 @@ static bool sv_func_compute_fusable_leaf(sv_func_t *func) {
       case OP_EXPORT:
       case OP_EXPORT_ALL:
       case OP_GET_SUPER_VAL:
+      case OP_PUT_SUPER_VAL:
+      case OP_GET_SUPER_FIELD:
+      case OP_PUT_SUPER_FIELD:
       case OP_TRY_PUSH:
       case OP_TRY_PUSH_FINALLY:
       case OP_CATCH:
@@ -238,6 +250,16 @@ static bool sv_func_compute_curried_step(sv_func_t *func) {
   return child->is_fusable_leaf;
 }
 
+static void emit_field_thunk(sv_compiler_t *c) {
+  sv_ast_t *thunk = sv_ast_new(c->js, N_FUNC);
+  thunk->flags = FN_ARROW | FN_FIELD_THUNK;
+  thunk->body = sv_ast_new(c->js, N_BLOCK);
+  
+  int local = add_local(c, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN, false, c->scope_depth);
+  compile_func_expr(c, thunk);
+  emit_put_local(c, local);
+}
+
 sv_func_t *compile_function_body(
   sv_compiler_t *enclosing,
   sv_ast_t *node,
@@ -245,7 +267,14 @@ sv_func_t *compile_function_body(
 ) {
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, enclosing, node, mode);
-  if (node->flags & FN_DERIVED_CTOR) comp.derived_field_owner = enclosing;
+  bool eval_body = !enclosing->enclosing;
+  comp.is_static = (node->flags & FN_STATIC) || ((comp.is_arrow || eval_body) && enclosing->is_static);
+  comp.eval_this_binding = eval_body && enclosing->eval_this_binding;
+  comp.eval_super_binding = eval_body && enclosing->eval_super_binding;
+  comp.eval_field_thunk = eval_body && enclosing->eval_field_thunk;
+  comp.is_derived_ctor = !!(node->flags & FN_DERIVED_CTOR);
+  comp.is_class_ctor = !!(node->flags & FN_CLASS_CTOR);
+  if (comp.is_derived_ctor) comp.derived_field_owner = enclosing;
   else if (comp.is_arrow) comp.derived_field_owner = enclosing->derived_field_owner;
 
   bool has_own_use_strict = false;
@@ -309,6 +338,23 @@ sv_func_t *compile_function_body(
     emit_put_local(&comp, comp.new_target_local);
   }
   
+  if (!comp.is_arrow && comp.enclosing && (node->flags & (FN_METHOD | FN_GETTER | FN_SETTER | FN_STATIC))) {
+    comp.super_local = add_local(&comp, "super", 5, false, comp.scope_depth);
+    emit_op(&comp, OP_SPECIAL_OBJ);
+    emit(&comp, SV_SPECIAL_SUPER);
+    emit_put_local(&comp, comp.super_local);
+  }
+
+  derived_ctor_plan_t derived = (node->flags & FN_DERIVED_CTOR) ? derived_ctor_plan(node) : (derived_ctor_plan_t){0};
+  if (derived.needs_this_binding) {
+    comp.this_local = add_local(&comp, "this", 4, false, comp.scope_depth);
+    comp.this_bound_stmt = derived.sole_super_stmt;
+    comp.super_runs_once = derived.sole_super_stmt != NULL;
+    emit_op(&comp, OP_UNDEF);
+    emit_put_local(&comp, comp.this_local);
+    if (enclosing->field_init_count > 0 && derived.has_eval) emit_field_thunk(&comp);
+  }
+
   bool uses_args = (node->flags & FN_USES_ARGS) != 0;
   bool is_program = !enclosing->enclosing && !enclosing->function_ctor_root;
   if (!uses_args && !is_program && (node->flags & FN_DIRECT_EVAL) && has_implicit_arguments_obj(&comp)) {
@@ -326,8 +372,10 @@ sv_func_t *compile_function_body(
     emit_op(&comp, OP_SPECIAL_OBJ);
     emit(&comp, SV_SPECIAL_ARGUMENTS);
     emit_put_local(&comp, comp.arguments_local);
+    comp.args_mapped = !comp.is_strict;
   }
 
+  comp.param_bind_end = comp.param_locals;
   if (!has_non_simple_params && node->body) {
     if (node->body->type == N_BLOCK) {
       for (int i = 0; i < node->body->args.count; i++)
@@ -347,7 +395,8 @@ sv_func_t *compile_function_body(
         emit_op(&comp, OP_IS_UNDEF);
         int skip = emit_jump(&comp, OP_JMP_FALSE);
         emit_op(&comp, OP_POP);
-        compile_expr(&comp, p->right);
+        if (p->left && p->left->type == N_IDENT) compile_expr_with_inferred_name(&comp, p->right, p->left->str, p->left->len);
+        else compile_expr(&comp, p->right);
         patch_jump(&comp, skip);
         if (p->left && p->left->type == N_IDENT) {
           emit_op(&comp, OP_PUT_ARG);
@@ -382,6 +431,8 @@ sv_func_t *compile_function_body(
     int *param_bind_locals = NULL;
     int  param_bind_count  = 0;
     int  param_bind_cap    = 0;
+
+    for (int i = 0; !comp.param_split && i < node->args.count; i++) comp.param_split = params_capture(node->args.items[i]);
 
     for (int i = 0; i < node->args.count; i++) {
       sv_ast_t *p = node->args.items[i];
@@ -439,7 +490,8 @@ sv_func_t *compile_function_body(
         emit_op(&comp, OP_IS_UNDEF);
         int skip = emit_jump(&comp, OP_JMP_FALSE);
         emit_op(&comp, OP_POP);
-        compile_expr(&comp, p->right);
+        if (p->left && p->left->type == N_IDENT) compile_expr_with_inferred_name(&comp, p->right, p->left->str, p->left->len);
+        else compile_expr(&comp, p->right);
         patch_jump(&comp, skip);
         if (p->left && p->left->type == N_IDENT && bind_lb < comp.local_count) {
           int slot = bind_lb - comp.param_locals;
@@ -480,23 +532,25 @@ sv_func_t *compile_function_body(
 
     free(param_bind_locals);
     sv_ast_t *body = node->body;
+    comp.param_bind_end = comp.local_count;
 
     if (body && body->type != N_BLOCK) {
       hoist_var_decls(&comp, body);
     } else if (body) {
       for (int i = 0; i < body->args.count; i++)
         hoist_var_decls(&comp, body->args.items[i]);
+      if (comp.param_split && comp.owns_eval_env) {
+        for (int i = comp.param_locals; i < comp.param_bind_end; i++) {
+          sv_local_t *param = &comp.locals[i];
+          if (param->name_len && resolve_local(&comp, param->name, param->name_len) == i) split_param_binding(&comp, i);
+        }
+      }
       hoist_lexical_decls(&comp, &body->args);
       hoist_func_decls(&comp, &body->args);
     }
   }
 
-  if (!comp.is_arrow && comp.enclosing && (node->flags & (FN_METHOD | FN_GETTER | FN_SETTER | FN_STATIC))) {
-    comp.super_local = add_hidden_local(&comp);
-    emit_op(&comp, OP_SPECIAL_OBJ);
-    emit(&comp, SV_SPECIAL_SUPER);
-    emit_put_local(&comp, comp.super_local);
-  }
+  if (node->flags & FN_FIELD_THUNK) emit_derived_field_inits(&comp);
 
   if ((node->flags & FN_CLASS_CTOR) && !(node->flags & FN_DERIVED_CTOR) &&
       enclosing->field_init_count > 0) {
@@ -519,7 +573,7 @@ sv_func_t *compile_function_body(
 
     comp.using_stack_local = body_using_stack;
     comp.using_stack_async = body_has_await_using;
-    push_using_cleanup(&comp, body_using_stack, comp.scope_depth, body_has_await_using);
+    push_using_cleanup(&comp, body_using_stack, body_using_err_local, comp.scope_depth, body_has_await_using);
 
     comp.try_depth++;
     body_using_try_jump = emit_jump(&comp, OP_TRY_PUSH);
@@ -547,11 +601,21 @@ sv_func_t *compile_function_body(
     decl_names_free(&params);
   }
 
+  bool return_landing = comp.this_local >= 0 && derived.returns_through_finally;
+  if (return_landing) {
+    comp.derived_return_local = add_hidden_local(&comp);
+    emit_op(&comp, OP_UNDEF);
+    emit_put_local(&comp, comp.derived_return_local);
+    push_loop(&comp, 0, NULL, 0, SV_LOOP_RETURN_LANDING);
+  }
+
   if (node->body) {
     if (node->body->type == N_BLOCK)
       compile_body_block(&comp, node->body, emitted_static_declarations);
     else compile_tail_return_expr(&comp, node->body);
   }
+
+  if (return_landing) pop_loop(&comp);
 
   for (int i = 0; i < comp.deferred_export_count; i++) {
     sv_deferred_export_t *e = &comp.deferred_exports[i];
@@ -587,6 +651,14 @@ sv_func_t *compile_function_body(
 
   emit_using_cleanups_to_depth(&comp, -1);
   emit_close_upvals(&comp);
+  if (comp.derived_return_local >= 0) {
+    emit_get_local(&comp, comp.derived_return_local);
+    emit_derived_return_check(&comp);
+    emit_op(&comp, OP_RETURN);
+  } else if (derived_return_needs_check(&comp)) {
+    emit_this(&comp);
+    emit_op(&comp, OP_RETURN);
+  }
   emit_op(&comp, OP_RETURN_UNDEF);
 
   int max_locals = comp.max_local_count - comp.param_locals;
@@ -594,6 +666,7 @@ sv_func_t *compile_function_body(
 
   sv_func_init_code_and_map_templates(&comp, func);
   sv_func_init_obj_sites(&comp, func);
+  sv_func_init_literal_sites(&comp, func);
 
   if (comp.const_count > 0) {
     func->constants = sv_code_bump(comp.js, (size_t)comp.const_count * sizeof(ant_value_t));
@@ -638,6 +711,7 @@ sv_func_t *compile_function_body(
   func->param_count = (uint16_t)comp.param_count;
   func->function_length = function_length_from_params(node);
   func->is_strict = comp.is_strict;
+  func->jit_compile_failed = comp.has_strict_region;
   func->is_arrow = comp.is_arrow;
   func->allows_new_target = comp.allows_new_target;
   
@@ -648,8 +722,11 @@ sv_func_t *compile_function_body(
   if (comp.super_referenced) node->flags |= FN_USES_SUPER;
   func->is_derived_ctor = !!(node->flags & FN_DERIVED_CTOR);
   func->is_class_ctor = !!(node->flags & FN_CLASS_CTOR);
-  func->ctor_slot_class = (!func->is_method || func->is_class_ctor) ? ctor_slot_class(node) : 0;
-  func->is_static = !!(node->flags & FN_STATIC);
+  func->is_synthetic = !!(node->flags & FN_SYNTHETIC);
+  func->uses_super = comp.super_referenced;
+  uint32_t ctor_fields = func->is_class_ctor ? class_public_field_count(enclosing->field_inits, enclosing->field_init_count) : 0;
+  sv_func_set_ctor_props(func, (!func->is_method || func->is_class_ctor) ? ctor_prop_count(node, ctor_fields) : 0);
+  func->is_static = comp.is_static;
   func->is_tla = comp.is_tla;
   func->debug->filename = enclosing->filename ? enclosing->filename : enclosing->js->filename;
   func->debug->source_line = (int)source_line_of(enclosing, node);

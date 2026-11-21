@@ -1,5 +1,6 @@
 #pragma once
 
+#include "modules/object.h"
 #include <string.h>
 #include "esm/loader.h"
 #include "silver/call.h"
@@ -11,7 +12,7 @@ static inline ant_value_t sv_module_export_to_ns(
   if (vtype(module_ns) != kTypeObject)
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "export used outside module");
 
-  ant_value_t set_res = setprop_cstr(js, module_ns, name, len, value);
+  ant_value_t set_res = setprop_cstr_attrs(js, module_ns, name, len, value, ANT_PROP_ATTR_ENUMERABLE);
   if (is_err(set_res)) return set_res;
 
   if (len == 7 && memcmp(name, "default", 7) == 0)
@@ -53,6 +54,13 @@ static inline ant_value_t sv_export_target_ns(ant_t *js, ant_value_t callee) {
   return js_module_eval_active_ns(js);
 }
 
+static __attribute__((noinline, cold)) ant_value_t sv_box_with_primitive(sv_vm_t *vm, ant_t *js, ant_value_t v) {
+  ant_value_t obj = builtin_Object(js, &v, 1, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
+  if (is_err(obj)) return obj;
+  vm->stack[vm->sp - 1] = obj;
+  return Ant_Value_FromNumber(0);
+}
+
 static inline ant_value_t sv_op_to_object(sv_vm_t *vm, ant_t *js) {
   ant_value_t v = vm->stack[vm->sp - 1];
   uint8_t t = vtype(v);
@@ -61,19 +69,17 @@ static inline ant_value_t sv_op_to_object(sv_vm_t *vm, ant_t *js) {
   if (t == kTypeNull || t == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
   
-  ant_value_t obj = mkobj(js, 0);
-  ant_value_t obj_as_obj = js_as_obj(obj);
-  
-  js_set_slot(obj_as_obj, SLOT_PRIMITIVE, v);
-  vm->stack[vm->sp - 1] = obj;
-  
-  return Ant_Value_FromNumber(0);
+  return sv_box_with_primitive(vm, js, v);
 }
 
-static inline void sv_op_to_propkey(sv_vm_t *vm, ant_t *js) {
+static inline ant_value_t sv_op_to_propkey(sv_vm_t *vm, ant_t *js) {
   ant_value_t v = vm->stack[vm->sp - 1];
-  if (vtype(v) != kTypeString && vtype(v) != kTypeSymbol)
-    vm->stack[vm->sp - 1] = coerce_to_str(js, v);
+  if (vtype(v) == kTypeString || vtype(v) == kTypeSymbol) return Ant_Value_Undefined;
+
+  ant_value_t key = js_to_property_key(js, v);
+  if (is_err(key)) return key;
+  vm->stack[vm->sp - 1] = key;
+  return Ant_Value_Undefined;
 }
 
 static inline ant_value_t sv_op_to_string(sv_vm_t *vm, ant_t *js) {
@@ -251,11 +257,13 @@ static inline ant_value_t sv_op_export_all(sv_vm_t *vm, ant_t *js) {
   ant_value_t value = Ant_Value_Undefined;
 
   while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
+    if (esm_export_star_skips(js, key, key_len)) continue;
     ant_value_t export_res = sv_module_export_cstr(js, key, key_len, value);
     if (is_err(export_res)) { js_prop_iter_end(&iter); vm->sp--; return export_res; }
   }
   
   js_prop_iter_end(&iter);
+  esm_export_star_finish(js);
   vm->sp--;
   
   return Ant_Value_FromNumber(0);
@@ -397,7 +405,7 @@ static inline sv_with_fast_t sv_with_find_fast(ant_t *js, ant_value_t obj, const
   if (a->str == js->intern.length) return SV_WITH_SLOW;
   ant_value_t cur = obj;
 
-  for (int depth = 0; depth < 64; depth++, cur = js_get_proto(js, cur)) {
+  for (int depth = 0; depth < 64; depth++) {
     if (vtype(cur) != kTypeObject) return is_object_type(cur) ? SV_WITH_SLOW : SV_WITH_MISS;
 
     ant_object_t *ptr = js_obj_ptr(cur);
@@ -405,6 +413,7 @@ static inline sv_with_fast_t sv_with_find_fast(ant_t *js, ant_value_t obj, const
 
     sv_with_fast_t own = sv_with_find_own(ptr, a, value);
     if (own != SV_WITH_MISS) return own;
+    cur = ant_object_proto(ptr);
   }
 
   return SV_WITH_SLOW;
@@ -505,6 +514,28 @@ static inline ant_value_t sv_op_with_try_del(sv_vm_t *vm, ant_t *js, sv_func_t *
   return Ant_Value_Undefined;
 }
 
+static __attribute__((noinline, cold)) void sv_special_obj_rare(sv_vm_t *vm, uint8_t kind) {
+  if (kind != SV_SPECIAL_STRICT_ENTER && kind != SV_SPECIAL_STRICT_LEAVE) {
+    vm->stack[vm->sp++] = Ant_Value_Undefined;
+    return;
+  }
+
+  if (kind == SV_SPECIAL_STRICT_ENTER) {
+    vm->stack[vm->sp++] = Ant_Value_FromNumber((double)vm->jit.mode_fp * 2 + (vm->jit.mode_strict ? 1 : 0));
+    vm->jit.mode_fp = vm->fp;
+    vm->jit.mode_strict = true;
+    return;
+  }
+
+  ant_value_t saved = vm->stack[vm->sp - 1];
+  if (vtype(saved) == kTypeNumber) {
+    int64_t encoded = (int64_t)Ant_Value_AsNumberUnchecked(saved);
+    vm->jit.mode_strict = (encoded & 1) != 0;
+    vm->jit.mode_fp = (int)((encoded - (encoded & 1)) / 2);
+  }
+  vm->stack[vm->sp++] = Ant_Value_Undefined;
+}
+
 static inline ant_value_t sv_op_special_obj(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame, uint8_t *ip
@@ -532,7 +563,7 @@ static inline ant_value_t sv_op_special_obj(
       if (frame) break;
       [[fallthrough]];
     default:
-      vm->stack[vm->sp++] = Ant_Value_Undefined;
+      sv_special_obj_rare(vm, sv_get_u8(ip + 1));
       return Ant_Value_Undefined;
   }
 

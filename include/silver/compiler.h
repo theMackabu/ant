@@ -1,5 +1,6 @@
 #pragma once
 
+#include "silver/eval_scope_flags.h"
 #include "silver/ast.h"
 #include "silver/vm.h"
 #include "silver/engine.h"
@@ -16,6 +17,7 @@ typedef struct {
   ant_value_t this_val;
   ant_value_t env;
   ant_value_t new_target;
+  const struct sv_eval_scope *layout;
 } js_eval_scope_t;
 
 js_eval_result_t js_eval_source(
@@ -62,7 +64,21 @@ typedef struct {
 typedef struct {
   int local;
   int depth;
+  int block_depth;
+  bool implicit;
+  const char *marker;
+  uint32_t marker_len;
 } sv_with_scope_t;
+
+typedef struct {
+  const char *name;
+  uint32_t len;
+  uint32_t hash;
+  int depth;
+  int scope;
+  int next;
+  bool is_const;
+} sv_spill_binding_t;
 
 typedef struct {
   const char *name;
@@ -82,9 +98,47 @@ typedef struct {
   uint8_t eval_flags;
   bool char_code_at_hint;
   bool str_accumulating;
+  bool type_derived;
   uint8_t inferred_type;
+  uint32_t type_fact;
+  int type_use_head;
   sv_binding_meta_t binding;
 } sv_local_t;
+
+typedef struct {
+  int local;
+  uint32_t fact;
+} sv_type_dep_t;
+
+typedef struct {
+  uint32_t fact;
+  uint32_t derived;
+  int at;
+  int local;
+  int prev;
+} sv_type_use_t;
+
+typedef struct {
+  uint32_t fact_next;
+  uint32_t dep_seq;
+  const sv_ast_t *cache_node;
+  const void *cache_owner;
+  int cache_code_len;
+  uint32_t cache_dep_seq;
+  int cache_dep_base;
+  int cache_dep_count;
+  uint32_t assign_depth;
+  uint8_t cache_type;
+  sv_type_dep_t *deps;
+  int dep_count;
+  int dep_cap;
+  sv_type_use_t *uses;
+  int use_count;
+  int use_cap;
+  sv_type_dep_t *promos;
+  int promo_count;
+  int promo_cap;
+} sv_type_scratch_t;
 
 typedef struct {
   int *offsets;
@@ -99,9 +153,23 @@ typedef struct {
 
 typedef struct {
   int stack_local;
+  int stash_local;
   int scope_depth;
   bool is_async;
 } sv_using_cleanup_t;
+
+typedef struct {
+  int local_count;
+  int using_count;
+} sv_unwind_mark_t;
+
+typedef enum {
+  SV_LOOP_ITERATION,
+  SV_LOOP_SWITCH,
+  SV_LOOP_LABEL,
+  SV_LOOP_LABEL_OF_LOOP,
+  SV_LOOP_RETURN_LANDING,
+} sv_loop_kind_t;
 
 typedef struct {
   int loop_start;
@@ -112,9 +180,15 @@ typedef struct {
   const char *label;
   uint32_t label_len;
   bool is_switch;
+  bool is_block;
+  bool labels_loop;
   int iter_unwind_index;
   int iter_completion_local;
   bool iter_async;
+  bool iterates;
+  int type_child_mark;
+  int type_use_start;
+  uint32_t type_fact_mark;
 } sv_loop_t;
 
 typedef struct const_dedup_entry {
@@ -145,19 +219,30 @@ typedef struct {
   bool has_setter;
   struct sv_compiler *owner;
   int local;
+  int method_local;
+  int slot;
+  int method_slot;
+  struct sv_private_scope *scope;
 } sv_private_name_t;
 
 typedef struct sv_private_scope {
   struct sv_private_scope *parent;
   sv_private_name_t *names;
+  int *index;
+  int index_cap;
   int count;
   int cap;
+  sv_private_name_t brand;
 } sv_private_scope_t;
 
 typedef struct {
   sv_runtime_binding_t *bindings;
   uint32_t count;
   uint32_t capacity;
+  uint32_t parent;
+  int local_count;
+  bool binds_arguments;
+  sv_eval_scope_flags_t flags;
 } sv_eval_scope_builder_t;
 
 typedef struct sv_compiler {
@@ -194,9 +279,13 @@ typedef struct sv_compiler {
   int max_local_count;
   int scope_depth;
   int param_locals;
+  int param_bind_end;
+  bool param_split;
 
   sv_upval_desc_t *upval_descs;
   sv_binding_meta_t *upval_bindings;
+  int *upvalue_index;
+  int upvalue_index_cap;
 
   int upvalue_count;
   int upvalue_cap;
@@ -204,6 +293,11 @@ typedef struct sv_compiler {
   sv_eval_scope_builder_t *eval_scopes;
   int eval_scope_count;
   int eval_scope_cap;
+  int eval_scope_shared;
+  int eval_scope_shared_withs;
+  const void *eval_scope_shared_private;
+  bool eval_scope_shareable;
+  uint32_t eval_scope_flat_used;
 
   sv_loop_t *loops;
   int loop_count;
@@ -214,12 +308,28 @@ typedef struct sv_compiler {
   sv_ast_t **field_inits;
 
   int field_init_count;
-  int *computed_key_locals;
+  int *field_locals;
+  int private_method_count;
+  int private_methods_local;
   int param_count;
 
   const sv_ast_t *value_params_node;
   uint64_t value_params;
   bool value_params_known;
+
+  sv_type_scratch_t *types;
+  sv_type_scratch_t type_storage;
+  int type_dep_mark;
+  int type_use_mark;
+  int type_promo_mark;
+  int type_loop_depth;
+  int type_region_depth;
+  bool type_any;
+  int type_child_count;
+  uint8_t store_type;
+  int store_dep_base;
+  const sv_ast_t *store_node;
+  sv_patch_list_t *optional_chain;
 
   const sv_ast_t *write_scan_node;
   sv_write_count_t *write_counts;
@@ -227,6 +337,7 @@ typedef struct sv_compiler {
   bool write_counts_known;
 
   bool is_arrow;
+  bool is_static;
   bool is_async;
   bool is_async_generator;
   bool is_strict;
@@ -239,35 +350,70 @@ typedef struct sv_compiler {
   bool function_ctor_root;
   
   bool eval_shadows_undefined;
+  bool eval_with;
+  bool with_inherited;
   bool eval_shadows_global_this;
+  ant_value_t eval_env;
   bool eval_reads_arguments;
 
   sv_eval_decl_t *eval_vars;
+  uint32_t *eval_var_index;
   uint32_t eval_var_count;
+  uint32_t eval_var_cap;
+  uint32_t eval_var_index_cap;
   sv_compile_mode_t mode;
 
   sv_eval_decl_t *global_lexicals;
   uint32_t global_lexical_count;
 
   bool is_tla;
+  bool in_strict_region;
+  bool has_strict_region;
+  int strict_saved_local;
   bool args_length_only;
   bool regexp_exec_write_seen;
   bool regexp_replace_write_seen;
   
   int try_depth;
   uint8_t *unwind_kinds;
+  sv_unwind_mark_t *unwind_marks;
   int unwind_count;
   int unwind_cap;
+  int handler_close_floor;
   
   sv_with_scope_t *with_scopes;
   int with_cap;
   int with_depth;
+
+  sv_spill_binding_t *spills;
+  int *spill_heads;
+  int spill_count;
+  int spill_cap;
+  int spill_head_cap;
+  int spill_disabled;
   
   int completion_local;
   int arguments_local;
+  bool args_mapped;
   int new_target_local;
   int super_local;
   bool super_referenced;
+  int this_local;
+  bool this_bound;
+  bool this_checked;
+  bool eval_this_binding;
+  bool eval_super_binding;
+  bool is_derived_ctor;
+  bool is_class_ctor;
+  bool in_field_init;
+  bool eval_field_thunk;
+  bool eval_no_arguments;
+  bool eval_private;
+  bool no_arguments_scope;
+  int derived_return_local;
+  const sv_ast_t *this_bound_stmt;
+  bool super_runs_once;
+  int this_check_atom;
   int using_stack_local;
   int using_cleanup_count;
   int using_cleanup_cap;
@@ -280,6 +426,7 @@ typedef struct sv_compiler {
 
   const char *inferred_name;
   uint32_t inferred_name_len;
+  int inferred_key_upval;
 
   sv_srcpos_t *srcpos;
   int srcpos_count;
@@ -310,20 +457,44 @@ typedef struct sv_compiler {
   uint32_t *shaped_keys;
   int shaped_key_count;
   int shaped_key_cap;
+
+  struct sv_literal_site_desc {
+    gc_shared_elements_t *block;
+    uint32_t start;
+    uint32_t count;
+    uint32_t first_key;
+    sv_literal_kind_t kind;
+    uint8_t flags;
+  } *literal_sites;
+
+  int literal_site_count;
+  int literal_site_cap;
+
+  uint32_t *literal_keys;
+  int literal_key_count;
+  int literal_key_cap;
 } sv_compiler_t;
 
 #define SV_PARAM(name_literal) ((sv_param_t){ (name_literal), sizeof(name_literal) - 1 })
 
 enum {
-  SV_EVAL_SHADOWS_UNDEFINED   = 1 << 0,
-  SV_EVAL_SHADOWS_GLOBAL_THIS = 1 << 1,
+  SV_EVAL_SHADOWS_UNDEFINED    = 1 << 0,
+  SV_EVAL_SHADOWS_GLOBAL_THIS  = 1 << 1,
+  SV_EVAL_SCOPE_THIS_BINDING   = 1 << 4,
+  SV_EVAL_SCOPE_FIELD_THUNK    = 1 << 5,
+  SV_EVAL_SCOPE_SUPER_BINDING  = 1 << 6,
+  SV_EVAL_SCOPE_STATIC         = 1 << 7,
+  SV_EVAL_SCOPE_NO_ARGUMENTS   = 1 << 8,
+  SV_EVAL_SCOPE_ENV_BOUND      = 1 << 9,
+  SV_EVAL_SCOPE_PRIVATE        = 1 << 10,
 };
 
-uint8_t sv_eval_shadow_bits(ant_t *js, ant_value_t eval_env, const char *source, size_t len);
+uint16_t sv_eval_scope_bits(const sv_eval_scope_flags_t *flags);
+uint16_t sv_eval_shadow_bits(ant_t *js, const js_eval_scope_t *scope, const char *source, size_t len);
 
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program, sv_compile_mode_t mode,
-  const char *source, ant_offset_t source_len, uint8_t eval_shadows
+  const char *source, ant_offset_t source_len, uint16_t eval_shadows, ant_value_t eval_env
 );
 
 sv_func_t *sv_compile_function_with_params(

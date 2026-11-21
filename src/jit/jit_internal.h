@@ -54,6 +54,7 @@ typedef struct {
 void opt_tier_destroy(sv_jit_ctx_t *jc);
 void opt_tier_gc_mark_roots(ant_t *js);
 void opt_tier_drop_closure_pinned(sv_func_t *func);
+void opt_tier_drop_unsettled_receivers(ant_t *js);
 bool opt_tier_has_catch_entry(ant_t *js, sv_func_t *func, uint32_t catch_off);
 
 typedef struct {
@@ -192,6 +193,7 @@ typedef struct {
   jit_vstack_t *vstack;
   MIR_reg_t *local_regs, *local_d_regs;
   const uint8_t *dnum_locals;
+  const bool *captured_locals;
   int n_locals;
   MIR_reg_t lbuf, d_slot;
 } jit_bailout_emit_t;
@@ -247,7 +249,6 @@ typedef struct {
   MIR_item_t shape_transition_proto, imp_shape_transition, imp_protector_store;
   MIR_item_t remember_obj_proto, imp_remember_obj;
   MIR_item_t call_proto, imp_call;
-  MIR_item_t call_method_proto, imp_call_method;
   MIR_item_t cfunc_proto, native_finish_proto, imp_native_finish;
   MIR_item_t stable_load_proto, imp_load_stable_builtin;
   MIR_item_t stable_call_proto, imp_call_stable_builtin;
@@ -350,7 +351,7 @@ MIR_label_t label_for_offset(MIR_context_t ctx, jit_label_map_t *lm,
                              int bc_off);
 int jit_constant_object_span(sv_func_t *func, sv_obj_site_cache_t *site, jit_label_map_t *lm);
 
-void mir_emit_branch_if_object(
+void mir_emit_branch_if_construct_result(
     MIR_context_t ctx, MIR_item_t fn, MIR_reg_t value, MIR_reg_t scratch, MIR_label_t target);
 void mir_emit_decode_ref(
     MIR_context_t ctx, MIR_item_t fn, MIR_reg_t dst, MIR_reg_t value);

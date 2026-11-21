@@ -9,6 +9,7 @@
 #include "shapes.h"
 #include "cfunc.h"
 #include "protectors.h"
+#include "props.h"
 
 #include "modules/regex.h"
 #include "modules/buffer.h"
@@ -1270,31 +1271,51 @@ static inline bool sv_add_proto_matches(const ant_object_t *receiver, uintptr_t 
   return proto && proto->ic_identity == (uint32_t)(key >> 1);
 }
 
-static inline bool sv_add_proto_chain_admits(ant_value_t proto, const char *interned) {
-  ant_value_t cur = proto;
+typedef enum {
+  SV_CHAIN_KEY_ABSENT,
+  SV_CHAIN_KEY_HELD,
+  SV_CHAIN_KEY_UNKNOWN,
+} sv_chain_key_state_t;
+
+typedef struct {
+  sv_chain_key_state_t state;
+  ant_object_t *holder;
+  uint32_t slot;
+  uint32_t depth;
+} sv_chain_key_t;
+
+static inline sv_chain_key_t sv_proto_chain_find_key(ant_value_t start, const char *interned) {
+  ant_value_t cur = start;
+  uint32_t depth = 0;
   
   sv_proto_guard_t guard;
   sv_proto_guard_init(&guard);
   
   while (is_object_type(cur)) {
     ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
-    if (!ptr || ptr->flags.is_exotic || sv_array_proto_owns_key(ptr, interned)) return false;
+    if (!ptr || ptr->flags.is_exotic || sv_array_proto_owns_key(ptr, interned)) return (sv_chain_key_t){SV_CHAIN_KEY_UNKNOWN, NULL, 0, 0};
     
     int32_t slot = ptr->shape ? ant_shape_lookup_interned(ptr->shape, interned) : -1;
-    if (slot >= 0) {
-      const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
-      return prop && !prop->has_getter && !prop->has_setter && (prop->attrs & ANT_PROP_ATTR_WRITABLE) != 0;
-    }
+    if (slot >= 0) return (sv_chain_key_t){SV_CHAIN_KEY_HELD, ptr, (uint32_t)slot, depth};
     
     ant_object_guard_absence(ptr);
     ant_value_t next = ant_object_proto(ptr);
     
-    if (!is_object_type(next) && vtype(next) != kTypeNull && vtype(cur) != kTypeObject) return false;
+    if (!is_object_type(next) && vtype(next) != kTypeNull && vtype(cur) != kTypeObject) return (sv_chain_key_t){SV_CHAIN_KEY_UNKNOWN, NULL, 0, 0};
     cur = next;
-    if (sv_proto_guard_hit_cycle(&guard, cur)) return false;
+    depth++;
+    if (sv_proto_guard_hit_cycle(&guard, cur)) return (sv_chain_key_t){SV_CHAIN_KEY_UNKNOWN, NULL, 0, 0};
   }
   
-  return true;
+  return (sv_chain_key_t){SV_CHAIN_KEY_ABSENT, NULL, 0, 0};
+}
+
+static inline bool sv_add_proto_chain_admits(ant_value_t proto, const char *interned) {
+  sv_chain_key_t found = sv_proto_chain_find_key(proto, interned);
+  if (found.state != SV_CHAIN_KEY_HELD) return found.state == SV_CHAIN_KEY_ABSENT;
+  
+  const ant_shape_prop_t *prop = ant_shape_prop_at(found.holder->shape, found.slot);
+  return prop && !prop->has_getter && !prop->has_setter && (prop->attrs & ANT_PROP_ATTR_WRITABLE) != 0;
 }
 
 static inline bool sv_add_chain_admits(const ant_object_t *receiver, const char *interned) {
@@ -1324,6 +1345,32 @@ static inline void sv_pf_poly_promote(sv_ic_entry_t *ic, sv_pf_poly_entry_t *e) 
   e->shape = from; e->to_shape = to; e->index = slot; e->epoch = epoch; e->proto = proto;
 }
 
+static inline __attribute__((always_inline)) void sv_store_data_slot(
+  ant_t *js, ant_object_t *ptr, uint32_t slot, ant_value_t val, const sv_atom_t *a
+) {
+  ant_object_prop_set_unchecked(ptr, slot, val);
+  gc_write_barrier_prop(js, ptr, val);
+  ant_property_mutation_invalidate(js, ptr, a->str);
+}
+
+static inline __attribute__((always_inline)) bool sv_apply_add_transition(
+  ant_t *js, ant_object_t *ptr, ant_shape_t *to_shape, uint32_t slot, ant_value_t val, const sv_atom_t *a
+) {
+  ant_shape_t *old_shape = ptr->shape;
+  ant_shape_retain(to_shape);
+  
+  ptr->shape = to_shape;
+  ant_shape_release(old_shape);
+  ant_object_invalidate_guarded_absence(js, ptr);
+  ant_property_mutation_invalidate(js, ptr, a->str);
+  
+  if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(js, ptr, slot + 1)) return false;
+  ant_object_prop_set_unchecked(ptr, slot, val);
+  gc_write_barrier_prop(js, ptr, val);
+  
+  return true;
+}
+
 static inline int sv_pf_poly_try_store(
   ant_t *js, sv_ic_entry_t *ic, ant_object_t *ptr, const sv_atom_t *a, ant_value_t val
 ) {
@@ -1337,9 +1384,7 @@ static inline int sv_pf_poly_try_store(
       const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, e->index);
       if (!prop || prop->type != ANT_SHAPE_KEY_STRING || prop->key.interned != a->str ||
           prop->has_getter || prop->has_setter || (prop->attrs & ANT_PROP_ATTR_WRITABLE) == 0) continue;
-      ant_object_prop_set_unchecked(ptr, e->index, val);
-      gc_write_barrier_prop(js, ptr, val);
-      ant_property_mutation_invalidate(js, ptr, a->str);
+      sv_store_data_slot(js, ptr, e->index, val, a);
       sv_pf_poly_promote(ic, e);
       return 1;
     }
@@ -1350,24 +1395,19 @@ static inline int sv_pf_poly_try_store(
       !sv_add_proto_matches(ptr, e->proto)
     ) continue;
     
-    uint32_t slot = e->index;
-    ant_shape_t *old_shape = ptr->shape;
-    ant_shape_retain(e->to_shape);
-    
-    ptr->shape = e->to_shape;
-    ant_shape_release(old_shape);
-    ant_object_invalidate_guarded_absence(js, ptr);
-    ant_property_mutation_invalidate(js, ptr, a->str);
-    
-    if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(js, ptr, slot + 1)) return -1;
-    ant_object_prop_set_unchecked(ptr, slot, val);
-    gc_write_barrier_prop(js, ptr, val);
+    if (!sv_apply_add_transition(js, ptr, e->to_shape, e->index, val, a)) return -1;
     sv_pf_poly_promote(ic, e);
     
     return 1;
   }
   
   return 0;
+}
+
+static inline __attribute__((always_inline)) bool sv_shape_prop_is_writable_data(const ant_shape_prop_t *prop, const char *interned) {
+  return
+    prop && prop->type == ANT_SHAPE_KEY_STRING && prop->key.interned == interned &&
+    !prop->has_getter && !prop->has_setter && (prop->attrs & ANT_PROP_ATTR_WRITABLE) != 0;
 }
 
 static inline bool sv_put_field_try_cached(
@@ -1382,16 +1422,8 @@ static inline bool sv_put_field_try_cached(
       ic->epoch == js->ic.epoch &&
       ic->cached_shape == ptr->shape &&
       ic->cached_index < ptr->prop_count) {
-    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, ic->cached_index);
-    if (prop &&
-        prop->type == ANT_SHAPE_KEY_STRING &&
-        prop->key.interned == a->str &&
-        !prop->has_getter &&
-        !prop->has_setter &&
-        (prop->attrs & ANT_PROP_ATTR_WRITABLE) != 0) {
-      ant_object_prop_set_unchecked(ptr, ic->cached_index, val);
-      gc_write_barrier_prop(js, ptr, val);
-      ant_property_mutation_invalidate(js, ptr, a->str);
+    if (sv_shape_prop_is_writable_data(ant_shape_prop_at(ptr->shape, ic->cached_index), a->str)) {
+      sv_store_data_slot(js, ptr, ic->cached_index, val, a);
       return true;
     }
   }
@@ -1404,19 +1436,10 @@ static inline bool sv_put_field_try_cached(
       ic->guard.add.from_shape == ptr->shape &&
       ic->guard.add.to_shape &&
       sv_add_proto_matches(ptr, ic->add_proto)) {
-    ant_shape_t *old_shape = ptr->shape;
-    ant_shape_retain(ic->guard.add.to_shape);
-    ptr->shape = ic->guard.add.to_shape;
-    ant_shape_release(old_shape);
-    ant_object_invalidate_guarded_absence(js, ptr);
-    ant_property_mutation_invalidate(js, ptr, a->str);
-    if (ic->guard.add.slot >= ptr->prop_count &&
-        !js_obj_ensure_prop_capacity(js, ptr, ic->guard.add.slot + 1)) {
+    if (!sv_apply_add_transition(js, ptr, ic->guard.add.to_shape, ic->guard.add.slot, val, a)) {
       *out = js_mkerr(js, "oom");
       return true;
     }
-    ant_object_prop_set_unchecked(ptr, ic->guard.add.slot, val);
-    gc_write_barrier_prop(js, ptr, val);
     sv_ic_set_cached_shape(js, ic, ptr->shape);
     ic->cached_index = ic->guard.add.slot;
     ic->epoch = js->ic.epoch;
@@ -1426,7 +1449,9 @@ static inline bool sv_put_field_try_cached(
   }
 
   if (ic && ic->put_poly && ptr && !ptr->flags.is_exotic && ptr->shape) {
-    int stored = sv_pf_poly_try_store(js, ic, ptr, a, val);
+    int stored;
+    [[clang::always_inline]]
+    stored = sv_pf_poly_try_store(js, ic, ptr, a, val);
     if (stored < 0) *out = js_mkerr(js, "oom");
     if (stored != 0) return true;
   }
@@ -1465,6 +1490,7 @@ static inline void sv_put_field_miss_cache(
   if (proto == 0 || sv_is_proto_atom(a)) return;
   if (ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible) return;
   if (ptr->type_tag == kTypeArray || prop->attrs != ANT_PROP_ATTR_DEFAULT) return;
+  if (!ant_shape_appends_slot(old_shape, ptr->shape, prop_idx)) return;
   if (!sv_add_chain_admits(ptr, a->str)) return;
 
   sv_ic_set_add_transition(js, ic, old_shape, ptr->shape, prop_idx, js->ic.epoch, proto);
@@ -1482,6 +1508,119 @@ static inline ant_value_t sv_put_field_cached(
   if (sv_put_field_try_cached(js, obj, val, a, ic, &out)) return out;
   return sv_put_field_miss(js, obj, val, a, ic);
 }
+
+static inline bool sv_init_field_target(const ant_object_t *ptr) {
+  return ptr && ptr->shape && !ptr->flags.is_exotic && !ptr->flags.frozen && !ptr->flags.sealed && ptr->flags.extensible;
+}
+
+static inline bool sv_shape_prop_is_plain_data(const ant_shape_prop_t *prop, const char *interned) {
+  return
+    prop && prop->type == ANT_SHAPE_KEY_STRING && prop->key.interned == interned &&
+    !prop->has_getter && !prop->has_setter && prop->attrs == ANT_PROP_ATTR_DEFAULT;
+}
+
+static inline bool sv_init_field_try_cached(
+  ant_t *js, ant_object_t *ptr, ant_value_t val,
+  const sv_atom_t *a, sv_ic_entry_t *ic, ant_value_t *out
+) {
+  if (
+    ic->epoch == js->ic.epoch &&
+    ic->cached_shape == ptr->shape &&
+    ic->cached_index < ptr->prop_count &&
+    sv_shape_prop_is_plain_data(ant_shape_prop_at(ptr->shape, ic->cached_index), a->str)
+  ) {
+    sv_store_data_slot(js, ptr, ic->cached_index, val, a);
+    return true;
+  }
+
+  if (
+    ic->guard.add.epoch == js->ic.epoch &&
+    ic->guard.add.from_shape == ptr->shape &&
+    ic->guard.add.to_shape &&
+    sv_add_proto_matches(ptr, ic->add_proto)
+  ) {
+    if (!sv_apply_add_transition(js, ptr, ic->guard.add.to_shape, ic->guard.add.slot, val, a)) *out = js_mkerr(js, "oom");
+    return true;
+  }
+
+  if (!ic->put_poly) return false;
+  int stored = sv_pf_poly_try_store(js, ic, ptr, a, val);
+  if (stored < 0) *out = js_mkerr(js, "oom");
+  return stored != 0;
+}
+
+static inline void sv_init_field_miss_cache(
+  ant_t *js, sv_ic_entry_t *ic, ant_object_t *ptr,
+  const sv_atom_t *a, ant_shape_t *old_shape
+) {
+  if (!old_shape || old_shape == ptr->shape || ant_shape_is_dictionary(ptr->shape) || sv_is_proto_atom(a)) return;
+  if (!sv_init_field_target(ptr) || ptr->type_tag == kTypeArray) return;
+
+  int32_t slot = ant_shape_lookup_interned(ptr->shape, a->str);
+  if (slot < 0 || (uint32_t)slot >= ptr->prop_count) return;
+  if (!sv_shape_prop_is_plain_data(ant_shape_prop_at(ptr->shape, (uint32_t)slot), a->str)) return;
+
+  uintptr_t proto = sv_add_proto_key(js, ptr);
+  bool held = ic->guard.add.from_shape && ic->guard.add.to_shape && ic->guard.add.epoch == js->ic.epoch;
+  if (held && (ic->guard.add.from_shape != old_shape || ic->add_proto != proto))
+    sv_pf_poly_keep(js, ic, ic->guard.add.from_shape, ic->guard.add.to_shape, ic->guard.add.slot, ic->guard.add.epoch, ic->add_proto, true);
+
+  if (proto && ant_shape_appends_slot(old_shape, ptr->shape, (uint32_t)slot))
+    sv_ic_set_add_transition(js, ic, old_shape, ptr->shape, (uint32_t)slot, js->ic.epoch, proto);
+}
+
+static inline bool sv_init_field_fills(ant_t *js, sv_ic_entry_t *ic) {
+  if (ic->fill_epoch != js->ic.epoch) {
+    ic->fill_epoch = js->ic.epoch;
+    ic->slow_hits = 0;
+  }
+  if (ic->slow_hits >= SV_INIT_FIELD_FILL_LIMIT) return false;
+  ic->slow_hits++;
+  return true;
+}
+
+ant_value_t sv_init_field_generic(
+  ant_t *js, ant_value_t obj, ant_value_t val,
+  const sv_atom_t *a, sv_ic_entry_t *ic
+);
+
+static inline ant_value_t sv_init_field(
+  ant_t *js, ant_value_t obj, ant_value_t val,
+  const sv_atom_t *a, sv_ic_entry_t *ic
+) {
+  ant_object_t *ptr = vtype(obj) == kTypeObject ? js_obj_ptr(obj) : NULL;
+  if (!sv_init_field_target(ptr)) return sv_init_field_generic(js, obj, val, a, ic);
+
+  ant_value_t out = val;
+  if (ic && sv_init_field_try_cached(js, ptr, val, a, ic, &out)) return out;
+  if (ic && !sv_init_field_fills(js, ic)) ic = NULL;
+
+  int32_t found = ant_shape_lookup_interned(ptr->shape, a->str);
+  if (found >= 0 && (uint32_t)found < ptr->prop_count && sv_shape_prop_is_plain_data(ant_shape_prop_at(ptr->shape, (uint32_t)found), a->str)) {
+    sv_store_data_slot(js, ptr, (uint32_t)found, val, a);
+    if (ic && !ant_shape_is_dictionary(ptr->shape)) {
+      sv_ic_set_cached_shape(js, ic, ptr->shape);
+      ic->cached_index = (uint32_t)found;
+      ic->epoch = js->ic.epoch;
+    }
+    return val;
+  }
+
+  ant_shape_t *old_shape = !ic || ant_shape_is_dictionary(ptr->shape) ? NULL : ptr->shape;
+  if (old_shape) ant_shape_retain(old_shape);
+
+  out = mkprop_interned_attrs_impl(js, obj, a->str, a->len, val, 0, MKPROP_USE_DEFAULT_ATTRS | MKPROP_DATA_DEFINE);
+  if (out == T_EMPTY) out = js_create_data_property_or_throw(js, obj, intern_value(js, a->str), val);
+  else if (!is_err(out) && ic) sv_init_field_miss_cache(js, ic, ptr, a, old_shape);
+
+  if (old_shape) ant_shape_release(old_shape);
+  return out;
+}
+
+ant_value_t sv_op_init_field(
+  sv_vm_t *vm, ant_t *js,
+  sv_func_t *func, uint8_t *ip
+);
 
 static inline ant_value_t sv_op_put_field(
   sv_vm_t *vm, ant_t *js,
@@ -1607,6 +1746,7 @@ static inline bool sv_get_elem_string(ant_t *js, ant_value_t obj, ant_value_t ke
   unsigned flags = sv_field_can_cache_absence(interned) ? SV_PROBE_CACHE_MISS : 0;
   
   if (!sv_ic_probe_get_chain(obj, interned, flags, &probe) || probe.accessor) return false;
+  if (interned == js->intern.length && probe.holder != ptr) return false;
   sv_gf_mega_store_in(js, cache, ptr, interned, probe.holder, probe.index, false);
   *out = probe.value;
   
@@ -1808,6 +1948,32 @@ static inline ant_value_t sv_op_get_length(sv_vm_t *vm, ant_t *js, sv_func_t *fu
 }
 
 #ifdef SV_OPS_IMPLEMENTATION
+
+ant_value_t sv_define_field(
+  ant_t *js, uint8_t flags,
+  ant_value_t obj, ant_value_t key, ant_value_t value
+);
+
+ant_value_t sv_init_field_generic(
+  ant_t *js, ant_value_t obj, ant_value_t val,
+  const sv_atom_t *a, sv_ic_entry_t *ic
+) {
+  if (ic && ic->slow_hits < SV_INIT_FIELD_FILL_LIMIT && !ic->cached_shape && !ic->guard.add.from_shape) {
+    ic->fill_epoch = js->ic.epoch;
+    ic->slow_hits = SV_INIT_FIELD_FILL_LIMIT;
+  }
+  return sv_define_field(js, SV_DEFINE_METHOD_FIELD, obj, intern_value(js, a->str), val);
+}
+
+ant_value_t sv_op_init_field(
+  sv_vm_t *vm, ant_t *js,
+  sv_func_t *func, uint8_t *ip
+) {
+  sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
+  ant_value_t obj = vm->stack[vm->sp - 2], val = vm->stack[vm->sp - 1];
+  vm->sp -= 2;
+  return sv_init_field(js, obj, val, a, sv_ic_slot_for_ip(func, ip));
+}
 
 void sv_gf_mega_store_in(
   ant_t *js, sv_gf_mega_cache_t *cache, ant_object_t *receiver, 
