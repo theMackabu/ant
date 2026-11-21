@@ -154,4 +154,71 @@ const plain = [1, true, 5, 'a,b', 'a,b', '{"value":5,"writable":true,"enumerable
   assert.ok(order.length >= 1);
 }
 
+{
+  const churn = () => { const o = {}; Object.defineProperty(o, 'k', { value: 1, enumerable: false, configurable: true }); };
+
+  const viaSetter = {};
+  const first = new Proxy({ a: 1 }, viaSetter);
+  assert.strictEqual(first.a, 1);
+  viaSetter.__proto__ = { get: () => 2 };
+  assert.strictEqual(first.a, 2);
+  viaSetter.__proto__ = Object.prototype;
+  assert.strictEqual(first.a, 1);
+
+  const viaReflect = {};
+  const second = new Proxy({ a: 1 }, viaReflect);
+  assert.strictEqual('a' in second, true);
+  Reflect.setPrototypeOf(viaReflect, { has: () => false });
+  assert.strictEqual('a' in second, false);
+  Object.setPrototypeOf(viaReflect, null);
+  assert.strictEqual('a' in second, true);
+
+  const base = {};
+  const third = new Proxy({ a: 1 }, { __proto__: base });
+  assert.strictEqual(third.a, 1);
+  base.get = () => 3;
+  assert.strictEqual(third.a, 3);
+  delete base.get;
+  assert.strictEqual(third.a, 1);
+  Object.defineProperty(base, 'get', { get() { return () => 4; }, configurable: true });
+  assert.strictEqual(third.a, 4);
+
+  const steady = {};
+  const fourth = new Proxy({ a: 1 }, steady);
+  let total = 0;
+  for (let i = 0; i < 2000; i++) { churn(); total += fourth.a; }
+  assert.strictEqual(total, 2000);
+  steady.get = () => 10;
+  churn();
+  assert.strictEqual(fourth.a, 10);
+  delete steady.get;
+  churn();
+  assert.strictEqual(fourth.a, 1);
+
+  const shared = {};
+  const many = Array.from({ length: 20 }, (_, i) => new Proxy({ i }, shared));
+  assert.strictEqual(many.reduce((sum, p) => sum + p.i, 0), 190);
+  shared.get = () => 1;
+  assert.strictEqual(many.reduce((sum, p) => sum + p.i, 0), 20);
+
+  try {
+    Object.prototype.has = () => false;
+    assert.strictEqual('a' in fourth, false);
+    assert.strictEqual('a' in new Proxy({ a: 1 }, {}), false);
+  } finally {
+    delete Object.prototype.has;
+  }
+  assert.strictEqual('a' in fourth, true);
+
+  function Base() {}
+  const handler = {};
+  const Wrapped = new Proxy(Base, handler);
+  assert.strictEqual(Object.getPrototypeOf(Reflect.construct(Base, [], Wrapped)), Base.prototype);
+  const other = {};
+  handler.get = (target, key) => (key === 'prototype' ? other : target[key]);
+  assert.strictEqual(Object.getPrototypeOf(Reflect.construct(Base, [], Wrapped)), other);
+  delete handler.get;
+  assert.strictEqual(Object.getPrototypeOf(Reflect.construct(Base, [], Wrapped)), Base.prototype);
+}
+
 console.log('ok');

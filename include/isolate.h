@@ -209,6 +209,7 @@ struct ant_isolate_t {
   uint32_t prototype_write_epoch;
   uint32_t array_chain_plain_epoch;
   uint32_t proxy_proto_plain_epoch;
+  uint32_t absence_epoch;
   uint32_t protectors_invalid;
 
   struct {

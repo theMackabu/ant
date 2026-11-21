@@ -102,6 +102,10 @@ enum: ant_value_t {
   PROMISE_AWAIT_DEFER = ANT_SENTINEL_TAG | 0xA12ULL,
 };
 
+static inline void ant_absence_epoch_bump(ant_t *js) {
+  if (++js->absence_epoch == 0) js->absence_epoch = 1;
+}
+
 static inline void ant_object_invalidate_guarded_absence(ant_t *js, ant_object_t *obj) {
   if (!obj) return;
   
@@ -109,6 +113,7 @@ static inline void ant_object_invalidate_guarded_absence(ant_t *js, ant_object_t
   if (!obj->flags.guards_absence) return;
   
   obj->flags.guards_absence = 0;
+  ant_absence_epoch_bump(js);
   ant_ic_epoch_bump(js);
 }
 

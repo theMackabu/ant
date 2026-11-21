@@ -188,7 +188,7 @@ static ant_value_t proxy_trap_slow(ant_t *js, ant_proxy_state_t *data, proxy_tra
 static void proxy_trap_mask_refresh(ant_t *js, ant_proxy_state_t *data);
 
 static inline ant_value_t proxy_trap(ant_t *js, ant_proxy_state_t *data, proxy_trap_t trap) {
-  if (data->trap_epoch == js->ic.epoch && !(data->trap_mask & (1u << trap))) return Ant_Value_Undefined;
+  if (data->trap_epoch == js->absence_epoch && !(data->trap_mask & (1u << trap))) return Ant_Value_Undefined;
   return proxy_trap_slow(js, data, trap);
 }
 static bool proxy_target_is_extensible(ant_value_t obj);
@@ -349,10 +349,10 @@ ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
 bool proxy_enumerates_as_target(ant_t *js, ant_value_t proxy, ant_value_t *target) {
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data || data->revoked || data->host) return false;
-  if (data->trap_epoch != js->ic.epoch) {
+  if (data->trap_epoch != js->absence_epoch) {
     if (vtype(data->handler) != kTypeObject) return false;
     proxy_trap_mask_refresh(js, data);
-    if (data->trap_epoch != js->ic.epoch) return false;
+    if (data->trap_epoch != js->absence_epoch) return false;
   }
 
   const uint16_t observed =
@@ -365,10 +365,10 @@ bool proxy_enumerates_as_target(ant_t *js, ant_value_t proxy, ant_value_t *targe
 bool proxy_descriptors_as_target(ant_t *js, ant_value_t proxy, ant_value_t *target) {
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data || data->revoked || data->host || vtype(data->target) != kTypeObject) return false;
-  if (data->trap_epoch != js->ic.epoch) {
+  if (data->trap_epoch != js->absence_epoch) {
     if (vtype(data->handler) != kTypeObject) return false;
     proxy_trap_mask_refresh(js, data);
-    if (data->trap_epoch != js->ic.epoch) return false;
+    if (data->trap_epoch != js->absence_epoch) return false;
   }
   if (data->trap_mask & (1u << PROXY_TRAP_GET_OWN_PROPERTY_DESCRIPTOR)) return false;
   ant_object_t *ptr = js_obj_ptr(data->target);
@@ -380,10 +380,10 @@ bool proxy_descriptors_as_target(ant_t *js, ant_value_t proxy, ant_value_t *targ
 bool proxy_is_transparent(ant_t *js, ant_value_t proxy, ant_value_t *target) {
   ant_proxy_state_t *data = get_proxy_data(proxy);
   if (!data || data->revoked || data->host) return false;
-  if (data->trap_epoch != js->ic.epoch) {
+  if (data->trap_epoch != js->absence_epoch) {
     if (vtype(data->handler) != kTypeObject) return false;
     proxy_trap_mask_refresh(js, data);
-    if (data->trap_epoch != js->ic.epoch) return false;
+    if (data->trap_epoch != js->absence_epoch) return false;
   }
   if (data->trap_mask) return false;
   *target = data->target;
@@ -707,7 +707,7 @@ static void proxy_trap_mask_refresh(ant_t *js, ant_proxy_state_t *data) {
   for (int depth = 0; is_object_type(cur); depth++) {
     ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
     if (depth == MAX_PROTO_CHAIN_DEPTH || !ptr || !ptr->shape || ptr->flags.is_exotic) return;
-    if (ptr != object_proto || js->proxy_proto_plain_epoch != js->ic.epoch) {
+    if (ptr != object_proto || js->proxy_proto_plain_epoch != js->absence_epoch) {
       uint16_t found = proxy_shape_trap_mask(ptr->shape, names);
       if (ptr == object_proto) object_proto_plain = !found;
       mask |= found;
@@ -721,16 +721,16 @@ static void proxy_trap_mask_refresh(ant_t *js, ant_proxy_state_t *data) {
     cur = ant_object_proto(ptr);
   }
 
-  if (object_proto_plain) js->proxy_proto_plain_epoch = js->ic.epoch;
+  if (object_proto_plain) js->proxy_proto_plain_epoch = js->absence_epoch;
   data->trap_mask = mask;
-  data->trap_epoch = js->ic.epoch;
+  data->trap_epoch = js->absence_epoch;
 }
 
 static __attribute__((noinline)) ant_value_t proxy_trap_slow(ant_t *js, ant_proxy_state_t *data, proxy_trap_t trap) {
-  if (data->trap_epoch != js->ic.epoch) {
+  if (data->trap_epoch != js->absence_epoch) {
     if (vtype(data->handler) != kTypeObject) return proxy_get_method(js, data->handler, proxy_trap_names[trap]);
     proxy_trap_mask_refresh(js, data);
-    if (data->trap_epoch != js->ic.epoch) return proxy_get_method(js, data->handler, proxy_trap_names[trap]);
+    if (data->trap_epoch != js->absence_epoch) return proxy_get_method(js, data->handler, proxy_trap_names[trap]);
     if (!(data->trap_mask & (1u << trap))) return Ant_Value_Undefined;
   }
 
@@ -1893,7 +1893,7 @@ bool js_proxy_plain_prototype(ant_t *js, ant_value_t proxy, ant_value_t *out) {
     ant_proxy_state_t *data = get_proxy_data(source);
     if (!data) return chain_plain_get_interned(source, js->intern.prototype, out);
     if (data->revoked || data->host) return false;
-    if (data->trap_epoch != js->ic.epoch || (data->trap_mask & (1u << PROXY_TRAP_GET))) {
+    if (data->trap_epoch != js->absence_epoch || (data->trap_mask & (1u << PROXY_TRAP_GET))) {
       if (!chain_plain_get_interned(data->handler, js->intern.get, &trap)) return false;
       if (vtype(trap) != kTypeUndefined && vtype(trap) != kTypeNull) return false;
     }

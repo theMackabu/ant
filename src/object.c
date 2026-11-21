@@ -614,6 +614,7 @@ void js_set_proto(ant_t *js, ant_value_t obj, ant_value_t proto) {
 
   ant_proto_watch_note_change(ptr);
   ant_object_set_proto(js, ptr, proto);
+  ant_absence_epoch_bump(js);
   ant_ic_epoch_bump(js);
 }
 
