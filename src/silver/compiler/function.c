@@ -120,7 +120,7 @@ bool check_function_param_early_errors(
 ) {
   if (fn->args.count > UINT16_MAX) {
     if (emit_error)
-      js_mkerr_typed(js, JS_ERR_SYNTAX, "too many function parameters");
+      js_mkerr_typed(js, JS_ERR_SYNTAX, "Too many parameters in function definition (only %d allowed)", UINT16_MAX);
     return false;
   }
 
@@ -643,6 +643,7 @@ sv_func_t *compile_function_body(
 
   sv_func_init_code_and_map_templates(&comp, func);
   sv_func_init_obj_sites(&comp, func);
+  sv_func_init_literal_sites(&comp, func);
 
   if (comp.const_count > 0) {
     func->constants = sv_code_bump(comp.js, (size_t)comp.const_count * sizeof(ant_value_t));

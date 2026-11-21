@@ -53,9 +53,14 @@ L_ARRAY: {
   NEXT(OP_ARRAY);
 }
 
-L_ARRAY_CONST: {
-  VM_CHECK(sv_op_array_const(vm, js, func, ip));
-  NEXT(OP_ARRAY_CONST);
+L_ARRAY_LITERAL: {
+  VM_CHECK(sv_op_array_literal(vm, js, func, ip));
+  NEXT(OP_ARRAY_LITERAL);
+}
+
+L_ARRAY_INIT: {
+  sv_op_array_init(vm, js, ip);
+  NEXT(OP_ARRAY_INIT);
 }
 
 L_SET_BRAND: {
@@ -327,6 +332,11 @@ L_PUT_ELEM: {
 L_DEFINE_FIELD: {
   sv_op_define_field(vm, js, func, ip);
   NEXT(OP_DEFINE_FIELD);
+}
+
+L_INIT_FIELD: {
+  VM_CHECK(sv_op_init_field(vm, js, func, ip));
+  NEXT(OP_INIT_FIELD);
 }
 
 L_DEFINE_SLOT: {
@@ -1357,7 +1367,7 @@ L_NEW: {
 
     ant_value_t new_obj = js_mkobj_with_proto_slots(
       js, is_object_type(proto) ? proto :
-      Ant_Value_Undefined, sv_construct_slots_of(new_func)
+      Ant_Value_Undefined, sv_construct_slots(new_callee)
     );
 
     GC_ROOT_RESTORE(js, new_mark);
@@ -1407,7 +1417,7 @@ L_NEW: {
 }
 
 L_APPLY: {
-  VM_CHECK(sv_op_apply(vm, js, ip));
+  VM_CHECK(sv_op_apply(vm, js, func, ip));
   NEXT(OP_APPLY);
 }
 
@@ -1417,13 +1427,23 @@ L_SUPER_APPLY: {
 }
 
 L_NEW_APPLY: {
-  VM_CHECK(sv_op_new_apply(vm, js, ip));
+  VM_CHECK(sv_op_new_apply(vm, js, func, ip));
   NEXT(OP_NEW_APPLY);
 }
 
 L_CALL_SPREAD: {
-  VM_CHECK(sv_op_call_spread(vm, js, ip));
+  VM_CHECK(sv_op_call_spread(vm, js, func, ip));
   NEXT(OP_CALL_SPREAD);
+}
+
+L_NEW_SPREAD: {
+  VM_CHECK(sv_op_new_spread(vm, js, func, ip));
+  NEXT(OP_NEW_SPREAD);
+}
+
+L_SUPER_SPREAD: {
+  VM_CHECK(sv_op_super_spread(vm, js, frame, func, ip));
+  NEXT(OP_SUPER_SPREAD);
 }
 
 L_SUPER_FORWARD: {
@@ -1835,6 +1855,7 @@ L_YIELD_STAR_RETURN: {
 }
 
 L_SPREAD: {
+  sv_tfb_record_spread(js, func, ip, vm->stack[vm->sp - 1]);
   VM_CHECK(sv_op_spread(vm, js));
   NEXT(OP_SPREAD);
 }

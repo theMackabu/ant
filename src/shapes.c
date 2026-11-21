@@ -722,6 +722,31 @@ static bool shape_prop_same(const ant_shape_prop_t *a, const ant_shape_prop_t *b
   return a->type == ANT_SHAPE_KEY_SYMBOL ? a->key.sym_off == b->key.sym_off : a->key.interned == b->key.interned;
 }
 
+static bool shape_same_layout(const ant_shape_t *a, const ant_shape_t *b) {
+  if (a->count != b->count || a->deleted_count != b->deleted_count || a->inobj_limit != b->inobj_limit) return false;
+  if (a->exotic != b->exotic || a->exotic_ops != b->exotic_ops) return false;
+  if (a->dictionary != b->dictionary || a->bulk_layout != b->bulk_layout) return false;
+  if (a->props == b->props) return true;
+  
+  for (uint32_t i = 0; i < a->count; i++)
+    if (!shape_prop_same(&a->props[i], &b->props[i])) return false;
+  
+  return true;
+}
+
+static inline bool shape_is_proto_child(const ant_shape_t *shape) {
+  return shape->parent_key == shape_child_key((uint64_t)shape->proto, 0x40);
+}
+
+static ant_shape_t *shape_proto_base(ant_shape_t *shape) {
+  for (;;) {
+    ant_shape_t *parent = shape->parent;
+    if (!parent || parent->bulk_layout || !shape_same_layout(parent, shape)) return shape;
+    shape = parent;
+    if (!shape_is_proto_child(shape)) return shape;
+  }
+}
+
 ant_shape_t *ant_shape_with_proto(ant_shape_t *shape, ant_value_t proto) {
   if (!shape_is_in_tree(shape) && !shape->jit_snapshot && !shape_has_children(shape)) {
     shape->proto = proto;
@@ -729,10 +754,16 @@ ant_shape_t *ant_shape_with_proto(ant_shape_t *shape, ant_value_t proto) {
     return shape;
   }
 
+  ant_shape_t *base = shape_is_proto_child(shape) ? shape_proto_base(shape) : shape;
+  if (base != shape && base->proto == proto) {
+    ant_shape_retain(base);
+    return base;
+  }
+
   uint64_t ckey = shape_child_key((uint64_t)proto, 0x40);
-  ant_shape_t *child = shape_find_child(shape, ckey);
+  ant_shape_t *child = shape_find_child(base, ckey);
   
-  if (child && child->proto == proto && child->count == shape->count) {
+  if (child && child->proto == proto && (base == shape ? child->count == shape->count : shape_same_layout(child, shape))) {
     ant_shape_retain(child);
     return child;
   }
@@ -741,7 +772,7 @@ ant_shape_t *ant_shape_with_proto(ant_shape_t *shape, ant_value_t proto) {
   if (!copy) return NULL;
   
   copy->proto = proto;
-  if (!shape->bulk_layout && !child) shape_record_child(shape, ckey, copy);
+  if (!shape->bulk_layout && !child) shape_record_child(base, ckey, copy);
   
   return copy;
 }

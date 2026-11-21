@@ -534,6 +534,14 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                               MIR_JSVAL, "fn",
                                               MIR_T_I32, "flags");
 
+  c->init_field_proto = MIR_new_proto(c->ctx, "init_field_proto",
+                                      1, &ret_type, 5,
+                                      MIR_T_I64, "js",
+                                      MIR_JSVAL, "obj",
+                                      MIR_T_P, "atom",
+                                      MIR_JSVAL, "val",
+                                      MIR_T_P, "ic");
+
   MIR_type_t pf_ret = MIR_JSVAL;
   c->put_field_proto = MIR_new_proto(c->ctx, "pf_proto",
                                      1, &pf_ret, 7,
@@ -600,6 +608,12 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                   MIR_T_I64, "js",
                                   MIR_T_P, "func",
                                   MIR_T_P, "site");
+  c->literal_proto = MIR_new_proto(c->ctx, "literal_proto",
+                                   1, &obj_ret, 4,
+                                   MIR_T_I64, "vm",
+                                   MIR_T_I64, "js",
+                                   MIR_T_P, "func",
+                                   MIR_T_I64, "index");
   c->get_super_proto = MIR_new_proto(c->ctx, "get_super_proto",
                                      1, &obj_ret, 6,
                                      MIR_T_I64, "vm",
@@ -636,6 +650,12 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                            MIR_T_P, "atom",
                                            MIR_T_I64, "val",
                                            MIR_T_P, "ic");
+  c->literal_init_proto = MIR_new_proto(c->ctx, "literal_init_proto",
+                                        0, NULL, 4,
+                                        MIR_T_I64, "js",
+                                        MIR_T_I64, "arr",
+                                        MIR_T_I64, "index",
+                                        MIR_T_I64, "val");
 
   MIR_type_t arr_ret = MIR_JSVAL;
   c->array_proto = MIR_new_proto(c->ctx, "arr_proto",
@@ -763,6 +783,8 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_await_return_direct = MIR_new_import(c->ctx, "jit_helper_await_return_direct");
   c->imp_native_finish = MIR_new_import(c->ctx, "jit_helper_native_finish");
   c->imp_call_super = MIR_new_import(c->ctx, "jit_helper_call_super");
+  c->imp_super_apply = MIR_new_import(c->ctx, "jit_helper_super_apply");
+  c->imp_super_spread = MIR_new_import(c->ctx, "jit_helper_super_spread");
   c->imp_call_array_includes = MIR_new_import(c->ctx, "jit_helper_call_array_includes");
   c->imp_call_char_code_at = MIR_new_import(c->ctx, "jit_helper_call_char_code_at");
   c->imp_call_string_intrinsic =
@@ -831,6 +853,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_get_length_inline = MIR_new_import(c->ctx, "jit_helper_get_length_inline");
   c->imp_define_field = MIR_new_import(c->ctx, "jit_helper_define_field");
   c->imp_define_method_comp = MIR_new_import(c->ctx, "jit_helper_define_method_comp");
+  c->imp_init_field = MIR_new_import(c->ctx, "jit_helper_init_field");
   c->imp_seq = MIR_new_import(c->ctx, "jit_helper_seq");
   c->imp_eq = MIR_new_import(c->ctx, "jit_helper_eq");
   c->imp_ne = MIR_new_import(c->ctx, "jit_helper_ne");
@@ -853,6 +876,8 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_put_global = MIR_new_import(c->ctx, "jit_helper_put_global");
   c->imp_object = MIR_new_import(c->ctx, "jit_helper_object");
   c->imp_object_template = MIR_new_import(c->ctx, "jit_helper_object_template");
+  c->imp_literal = MIR_new_import(c->ctx, "jit_helper_literal");
+  c->imp_literal_init = MIR_new_import(c->ctx, "jit_helper_literal_init");
   c->imp_get_super = MIR_new_import(c->ctx, "jit_helper_get_super");
   c->imp_put_super = MIR_new_import(c->ctx, "jit_helper_put_super");
   c->imp_get_super_field = MIR_new_import(c->ctx, "jit_helper_get_super_field");

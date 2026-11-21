@@ -91,16 +91,23 @@ static_assert(
 );
 
 enum: ant_value_t {
-  T_EMPTY             = ANT_SENTINEL_TAG | 0xDEADULL,
-  SV_JIT_BAILOUT      = ANT_SENTINEL_TAG | 0xBA110ULL,
-  SV_JIT_AWAIT_PARKED = ANT_SENTINEL_TAG | 0xBA111ULL,
-  SV_AITER_ARRAY_TAG  = ANT_SENTINEL_TAG | 0xFA1ULL,
-  SV_AITER_AWAIT_MARK = ANT_SENTINEL_TAG | 0xFA2ULL,
-  SV_AITER_STEP_MARK  = ANT_SENTINEL_TAG | 0xFA3ULL,
-  SV_AITER_CLOSE_SKIP = ANT_SENTINEL_TAG | 0xFA4ULL,
-  PROMISE_ALL_ELEMENT = ANT_SENTINEL_TAG | 0xA11ULL,
-  PROMISE_AWAIT_DEFER = ANT_SENTINEL_TAG | 0xA12ULL,
+  T_EMPTY              = ANT_SENTINEL_TAG | 0xDEADULL,
+  SV_LITERAL_CHILD_TAG = ANT_SENTINEL_TAG | (0x517ULL << 32),
+  SV_JIT_BAILOUT       = ANT_SENTINEL_TAG | 0xBA110ULL,
+  SV_JIT_AWAIT_PARKED  = ANT_SENTINEL_TAG | 0xBA111ULL,
+  SV_AITER_ARRAY_TAG   = ANT_SENTINEL_TAG | 0xFA1ULL,
+  SV_AITER_AWAIT_MARK  = ANT_SENTINEL_TAG | 0xFA2ULL,
+  SV_AITER_STEP_MARK   = ANT_SENTINEL_TAG | 0xFA3ULL,
+  SV_AITER_CLOSE_SKIP  = ANT_SENTINEL_TAG | 0xFA4ULL,
+  PROMISE_ALL_ELEMENT  = ANT_SENTINEL_TAG | 0xA11ULL,
+  PROMISE_AWAIT_DEFER  = ANT_SENTINEL_TAG | 0xA12ULL,
 };
+
+static constexpr ant_value_t SV_LITERAL_CHILD_MASK = ~(ant_value_t)UINT32_MAX;
+
+static inline bool sv_literal_is_child(ant_value_t value) {
+  return (value & SV_LITERAL_CHILD_MASK) == SV_LITERAL_CHILD_TAG;
+}
 
 static inline void ant_absence_epoch_bump(ant_t *js) {
   if (++js->absence_epoch == 0) js->absence_epoch = 1;
@@ -324,7 +331,9 @@ ant_value_t mkobj(ant_t *js, ant_offset_t parent);
 static inline ant_value_t Ant_Object_CreateBare(ant_t *js) { return mkobj(js, 0); }
 
 ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint32_t count);
+ant_value_t Ant_Array_CreateRest(ant_t *js, const ant_value_t *args, uint32_t argc, uint32_t start);
 ant_value_t js_mkarr_dense_uninit(ant_t *js, uint32_t count, ant_value_t **out_data);
+ant_value_t Ant_Array_CreateUninit(ant_t *js, uint32_t count, uint32_t capacity, ant_value_t **out_data);
 ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src);
 ant_value_t js_arr_spread_into_owned(ant_t *js, ant_value_t dst, ant_value_t src);
 

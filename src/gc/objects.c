@@ -538,6 +538,11 @@ static void gc_func_trace(ant_t *js, sv_func_t *func) {
     gc_mark_value(js, func->obj_sites[i].literal_template);
   }
 
+  for (uint32_t i = 0; i < func->debug->literal_site_count; i++) {
+    gc_mark_value(js, func->debug->literal_sites[i].boilerplate);
+    gc_shared_elements_mark(js, func->debug->literal_sites[i].block);
+  }
+
   for (int i = 0; i < func->gc_const_slot_count; i++) {
     uint32_t idx = func->gc_const_slots[i];
     ant_value_t v = func->constants[idx];
@@ -1647,9 +1652,13 @@ size_t gc_array_storage_cached_bytes(ant_t *js) {
   return bytes;
 }
 
+static constexpr size_t GC_SHARED_ELEMENTS_PAGED_MIN = 64 * 1024;
+
 gc_shared_elements_t *gc_shared_elements_alloc(ant_t *js, const ant_value_t *values, uint32_t count) {
   size_t bytes = sizeof(gc_shared_elements_t) + (size_t)count * sizeof(ant_value_t);
-  gc_shared_elements_t *block = malloc(bytes);
+  gc_shared_elements_t *block = bytes >= GC_SHARED_ELEMENTS_PAGED_MIN
+    ? ant_cage_alloc(bytes, _Alignof(gc_shared_elements_t))
+    : malloc(bytes);
   if (!block) return NULL;
   
   *block = (gc_shared_elements_t){.refs = 1, .count = count};
@@ -1673,7 +1682,8 @@ void gc_shared_elements_release(ant_t *js, gc_shared_elements_t *block) {
   size_t bytes = sizeof(gc_shared_elements_t) + (size_t)block->count * sizeof(ant_value_t);
   Ant_Assert(js->alloc_bytes.arrays >= bytes, "shared elements released more bytes than were allocated");
   js->alloc_bytes.arrays -= bytes;
-  free(block);
+  if (bytes >= GC_SHARED_ELEMENTS_PAGED_MIN) ant_cage_free(block, bytes);
+  else free(block);
 }
 
 void gc_shared_elements_finalize(ant_t *js, ant_object_t *obj) {

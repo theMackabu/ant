@@ -347,6 +347,7 @@ static int compile_static_child_function(
   sv_func_t *fn = sv_func_new(c->js);
   sv_func_init_code_and_map_templates(&comp, fn);
   sv_func_init_obj_sites(&comp, fn);
+  sv_func_init_literal_sites(&comp, fn);
 
   if (comp.const_count > 0) {
     fn->constants = sv_code_bump(c->js, (size_t)comp.const_count * sizeof(ant_value_t));
@@ -625,6 +626,7 @@ static void compile_class_strict(
     sv_func_set_ctor_props(fn, ctor_prop_count(NULL, class_public_field_count(field_inits, field_count)));
     sv_func_init_code_and_map_templates(&comp, fn);
     sv_func_init_obj_sites(&comp, fn);
+    sv_func_init_literal_sites(&comp, fn);
     if (comp.const_count > 0) {
       fn->constants = sv_code_bump(c->js, (size_t)comp.const_count * sizeof(ant_value_t));
       memcpy(fn->constants, comp.constants, (size_t)comp.const_count * sizeof(ant_value_t));

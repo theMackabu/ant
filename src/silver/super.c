@@ -94,7 +94,10 @@ ant_value_t Silver_Super_GetField(ant_t *js, sv_func_t *func, ant_value_t receiv
 static constexpr uint16_t SUPER_PUT_FILL_LIMIT = 16;
 
 static inline ant_object_t *Super_ObjectOf(ant_value_t value) {
-  return vtype(value) == kTypeObject ? (ant_object_t *)vptr(value) : NULL;
+  if (vtype(value) == kTypeObject) return (ant_object_t *)vptr(value);
+  if (vtype(value) != kTypeFunction) return NULL;
+  ant_value_t object = js_func_closure(value)->func_obj;
+  return vtype(object) == kTypeObject ? (ant_object_t *)vptr(object) : NULL;
 }
 
 static inline ant_value_t Super_CacheableParent(ant_value_t home) {
@@ -143,6 +146,7 @@ static bool Super_TryBindPut(
   ant_t *js, sv_ic_entry_t *ic, ant_value_t receiver, ant_value_t home,
   const sv_atom_t *atom, ant_shape_t *before, bool exhausted
 ) {
+  bool records_add = ic->super_put_kind != SV_SUPER_PUT_IC_DATA_ANY_SHAPE && !(ic->shape_ref_mask & SV_IC_POLY_MEGA);
   ant_value_t parent = Super_CacheableParent(home);
   ant_object_t *base = Super_ObjectOf(parent);
   if (!base || !base->shape || ant_shape_is_dictionary(base->shape)) return false;
@@ -173,7 +177,7 @@ static bool Super_TryBindPut(
   if (exhausted && (!same_base || ic->super_put_kind == SV_SUPER_PUT_IC_DATA_ANY_SHAPE)) return false;
   
   if (!same_base) {
-    sv_pf_poly_free(js, ic);
+    if (stores_data) sv_pf_poly_free(js, ic);
     ic->shape_ref_mask &= (sv_ic_flags_t)~SV_IC_POLY_MEGA;
   } else if (ic->cached_shape && ic->cached_shape != own->shape)
     sv_pf_poly_keep(js, ic, ic->cached_shape, NULL, ic->cached_index, ic->epoch, 0, false);
@@ -185,6 +189,10 @@ static bool Super_TryBindPut(
   if (appends && !(ic->shape_ref_mask & SV_IC_HAS_PUT_POLY) && Super_AddIsCacheable(own, before, atom))
     sv_ic_set_shape_ref(js, ic, &ic->guard.super_put.add_from_shape, SV_IC_SHAPE_REF_SUPER_ADD_FROM, before);
   
+  if (!appends || !records_add) return true;
+  uintptr_t proto = sv_add_proto_key(js, own);
+  if (proto) sv_pf_poly_keep(js, ic, before, own->shape, (uint32_t)slot, js->ic.epoch, proto, true);
+  
   return true;
 }
 
@@ -195,7 +203,7 @@ static __attribute__((noinline)) void Super_FillPut(
     ic->shape_ref_mask &= (sv_ic_flags_t)~SV_IC_POLY_MEGA;
     ic->super_put_kind = SV_SUPER_PUT_IC_EMPTY;
     ic->slow_hits = 0;
-    sv_pf_poly_free(js, ic);
+    ic->epoch = js->ic.epoch;
   }
   
   bool exhausted = ic->slow_hits >= SUPER_PUT_FILL_LIMIT;
