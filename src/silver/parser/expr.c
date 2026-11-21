@@ -39,6 +39,14 @@ sv_ast_t *parse_member_suffix(sv_parser_t *p, sv_ast_t *left, uint8_t la) {
   return NULL;
 }
 
+sv_ast_t *parse_tagged_template(sv_parser_t *p, sv_ast_t *tag) {
+  sv_ast_t *tagged = mk(N_TAGGED_TEMPLATE);
+  tagged->left = tag;
+  p->tagged_template = true;
+  tagged->right = parse_primary(p);
+  return tagged;
+}
+
 static void parse_call_args(sv_parser_t *p, sv_ast_t *call) {
   while (sv_lexer_next(&p->lx) != TOK_RPAREN && p->lx.st.tok != TOK_EOF) {
     if (p->lx.st.tok == TOK_REST) {
@@ -68,10 +76,12 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
       parse_call_args(p, call);
       call->src_off = n ? n->src_off : call->src_off;
       call->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
+      if (optional_chain) call->flags |= FN_OPTIONAL_BASE;
       n = call;
     } else if (la == TOK_DOT || la == TOK_LBRACKET) {
       n = parse_member_suffix(p, n, la);
       if (n && n->type == N_EMPTY) return n;
+      if (optional_chain) n->flags |= FN_OPTIONAL_BASE;
     } else if (la == TOK_OPTIONAL_CHAIN) {
       p->lx.st.consumed = 1;
       optional_chain = true;
@@ -90,6 +100,7 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
         parse_call_args(p, call);
         call->src_off = n ? n->src_off : call->src_off;
         call->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
+        call->flags |= FN_OPTIONAL_BASE;
         n = call;
         continue;
       } else if (p->lx.st.tok == TOK_HASH) {
@@ -113,14 +124,14 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
         SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Invalid tagged template on optional chain");
         return mk(N_EMPTY);
       }
-      sv_ast_t *tagged = mk(N_TAGGED_TEMPLATE);
-      tagged->left = n;
-      p->tagged_template = true;
-      tagged->right = parse_primary(p);
-      n = tagged;
+      n = parse_tagged_template(p, n);
     } else break;
   }
   return n;
+}
+
+sv_ast_t *parse_lhs(sv_parser_t *p) {
+  return parse_call(p);
 }
 
 static sv_ast_t *parse_postfix(sv_parser_t *p) {

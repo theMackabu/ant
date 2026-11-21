@@ -10,7 +10,27 @@ ant_value_t ant_jit_enter_clean(
   ant_value_t super_val, ant_value_t *args, int argc, sv_closure_t *closure
 );
 
+ant_value_t ant_jit_enter_clean_construct(
+  sv_jit_func_t fn, sv_vm_t *vm, ant_value_t this_val, ant_value_t new_target,
+  ant_value_t super_val, ant_value_t *args, int argc, sv_closure_t *closure
+);
+
+ant_value_t ant_jit_enter_construct(
+  sv_vm_t *vm, ant_value_t this_val, ant_value_t new_target, ant_value_t super_val,
+  ant_value_t *args, int argc, sv_closure_t *closure, sv_jit_func_t fn
+);
+
 extern const char ant_jit_enter_clean_ret[];
+extern const char ant_jit_enter_clean_construct_ret[];
+extern const char ant_jit_enter_construct_ret[];
+
+static inline bool ant_jit_entered_clean(uintptr_t ret) {
+  return ret == (uintptr_t)ant_jit_enter_clean_ret || ret == (uintptr_t)ant_jit_enter_clean_construct_ret;
+}
+
+static inline bool ant_jit_entered_as_construct(uintptr_t ret) {
+  return ret == (uintptr_t)ant_jit_enter_clean_construct_ret || ret == (uintptr_t)ant_jit_enter_construct_ret;
+}
 
 #if defined(__aarch64__)
 static constexpr intptr_t ANT_JIT_ENTER_SAVED_LO = 16;  // x19-x28 at [fp+16, fp+96)
@@ -22,4 +42,9 @@ static constexpr intptr_t ANT_JIT_ENTER_SAVED_HI = 0;
 
 #else
 #define ANT_JIT_ENTER_STUB 0
+
+static inline bool ant_jit_entered_as_construct(uintptr_t ret) {
+  (void)ret;
+  return false;
+}
 #endif

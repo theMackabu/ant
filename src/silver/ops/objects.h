@@ -414,10 +414,15 @@ ant_value_t sv_op_define_class(
     parent_is_callable = true;
   }
   
-  if (parent_is_callable) if (vtype(ctor) == kTypeFunction) {
+  if (vtype(ctor) == kTypeFunction) {
     sv_closure_t *c = js_func_closure(ctor);
-    c->super_val = parent;
-    c->call_flags |= SV_CALL_HAS_SUPER;
+    if (parent_is_callable) {
+      c->super_val = parent;
+      c->call_flags |= SV_CALL_HAS_SUPER;
+    } else if (!has_heritage && c->func && c->func->uses_super) {
+      c->super_val = proto;
+      c->call_flags |= SV_CALL_HAS_SUPER;
+    }
   }
 
   if (vtype(ctor) == kTypeFunction)

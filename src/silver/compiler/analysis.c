@@ -100,7 +100,7 @@ bool param_captured_by_value(sv_compiler_t *c, int local) {
   if (!c->value_params_known) {
     const sv_ast_t *fn = c->value_params_node;
     sv_value_params_t params = {.params = fn};
-    sv_write_scan_t scan = {.mark = value_params_mark, .data = &params, .arguments_poisons = !c->is_strict};
+    sv_write_scan_t scan = {.mark = value_params_mark, .data = &params, .arguments_poisons = !c->is_strict || c->args_mapped};
     for (int i = 0; i < fn->args.count && i < 64; i++)
       for (int j = 0; j < i; j++)
         if (is_ident_str(fn->args.items[i]->str, fn->args.items[i]->len, fn->args.items[j]->str, fn->args.items[j]->len))
@@ -161,8 +161,13 @@ bool local_written_once(sv_compiler_t *c, int local) {
   return entry->name && entry->writes == 1;
 }
 
-uint8_t ctor_slot_class(const sv_ast_t *node) {
-  if (!node || (node->flags & (FN_ARROW | FN_GENERATOR | FN_ASYNC))) return 0;
-  if (node->this_props <= ANT_INOBJ_BASE_SLOTS) return 0;
-  return node->this_props <= ANT_INOBJ_WIDE_SLOTS ? 1 : 2;
+uint32_t class_public_field_count(sv_ast_t **fields, int count) {
+  uint32_t found = 0;
+  for (int i = 0; i < count; i++) found += !is_private_name_node(fields[i]->left);
+  return found;
+}
+
+uint32_t ctor_prop_count(const sv_ast_t *node, uint32_t fields) {
+  if (node && (node->flags & (FN_ARROW | FN_GENERATOR | FN_ASYNC))) return 0;
+  return (node ? node->this_props : 0) + fields;
 }

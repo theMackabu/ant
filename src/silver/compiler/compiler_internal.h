@@ -101,6 +101,9 @@ void sv_func_init_code_and_map_templates(
 );
 uint16_t alloc_ic_idx(sv_compiler_t *c);
 void sv_func_init_obj_sites(const sv_compiler_t *c, sv_func_t *func);
+bool reject_super_private(sv_compiler_t *c, const sv_ast_t *member);
+void emit_super_key(sv_compiler_t *c, sv_ast_t *member);
+void emit_super_reference(sv_compiler_t *c, sv_ast_t *member);
 void emit_atom_idx_op(sv_compiler_t *c, sv_op_t op, uint32_t atom_idx);
 void emit_get_length(sv_compiler_t *c);
 void emit_atom_op(sv_compiler_t *c, sv_op_t op, const char *str, uint32_t len);
@@ -145,7 +148,8 @@ int add_upvalue_tdz(sv_compiler_t *c, uint16_t index, bool is_local, bool may_td
 void compile_method_function(sv_compiler_t *c, sv_ast_t *m);
 bool param_captured_by_value(sv_compiler_t *c, int local);
 bool local_written_once(sv_compiler_t *c, int local);
-uint8_t ctor_slot_class(const sv_ast_t *node);
+uint32_t ctor_prop_count(const sv_ast_t *node, uint32_t fields);
+uint32_t class_public_field_count(sv_ast_t **fields, int count);
 int resolve_super_upvalue(sv_compiler_t *c);
 int resolve_new_target_upvalue(sv_compiler_t *c);
 int resolve_upvalue_raw(sv_compiler_t *c, const char *name, uint32_t len);
@@ -183,6 +187,7 @@ void emit_with_tries(
   const char *name, uint32_t len, int pops, sv_patch_list_t *out
 );
 void emit_lexical_new_target(sv_compiler_t *c);
+int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local);
 bool class_method_needs_home(const sv_ast_t *method);
 void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_get_var_typeof(sv_compiler_t *c, const char *name, uint32_t len);

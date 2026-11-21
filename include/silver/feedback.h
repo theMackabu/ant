@@ -76,10 +76,15 @@ static inline __attribute__((always_inline)) ant_value_t sv_jit_invoke_same_real
 ) {
 #if ANT_JIT_ENTER_STUB
   bool clean = from == SV_JIT_FROM_INTERP || sv_jit_interp_innermost(js);
+  bool construct = ctx->new_target != Ant_Value_Undefined;
   js->jit_active_depth++;
-  ant_value_t result = clean
+  ant_value_t result;
+  if (__builtin_expect(!construct, 1)) result = clean
     ? ant_jit_enter_clean(fn, vm, ctx->this_val, ctx->new_target, ctx->super_val, ctx->args, ctx->argc, closure)
     : fn(vm, ctx->this_val, ctx->new_target, ctx->super_val, ctx->args, ctx->argc, closure);
+  else result = clean
+    ? ant_jit_enter_clean_construct(fn, vm, ctx->this_val, ctx->new_target, ctx->super_val, ctx->args, ctx->argc, closure)
+    : ant_jit_enter_construct(vm, ctx->this_val, ctx->new_target, ctx->super_val, ctx->args, ctx->argc, closure, fn);
 #else
   (void)from;
   js->jit_active_depth++;

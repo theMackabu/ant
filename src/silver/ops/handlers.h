@@ -385,7 +385,7 @@ L_GET_SUPER_VAL: {
 }
 
 L_PUT_SUPER_VAL: {
-  VM_CHECK(sv_op_put_super_val(vm, js));
+  VM_CHECK(sv_op_put_super_val(vm, js, frame));
   NEXT(OP_PUT_SUPER_VAL);
 }
 

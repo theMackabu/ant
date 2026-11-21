@@ -2,6 +2,7 @@
 
 static bool is_tail_callable(sv_compiler_t *c, sv_ast_t *node) {
   if (c->try_depth > 0) return false;
+  if (c->is_class_ctor) return false;
   if (c->using_cleanup_count > 0) return false;
   if (node->type != N_CALL) return false;
   if (call_has_spread_arg(node)) return false;

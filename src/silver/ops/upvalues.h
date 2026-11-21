@@ -234,6 +234,12 @@ static inline void sv_closure_finish_init(
   }
 }
 
+static inline void sv_closure_link_arguments(ant_t *js, sv_frame_t *frame, sv_closure_t *closure) {
+  for (int i = 0; i < closure->func->upvalue_count; i++)
+    if (closure->func->upval_descs[i].is_local && !closure->func->upval_descs[i].by_value)
+      js_arguments_link_upvalue(js, frame, closure->upvalues[i]);
+}
+
 static inline ant_value_t sv_op_closure(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
   sv_func_t *func, uint8_t *ip
@@ -263,6 +269,7 @@ static inline ant_value_t sv_op_closure(
   if (*ip == OP_CLOSURE_EVAL) {
     eval_env = sv_eval_capture_env(vm, js, frame, sv_get_u32(ip + 5));
     if (is_err(eval_env)) return eval_env;
+    if (vtype(frame->arguments_obj) != kTypeUndefined && !sv_frame_is_strict(frame)) sv_closure_link_arguments(js, frame, closure);
   }
   
   GC_ROOT_SAVE(mark, js);
@@ -284,9 +291,6 @@ static inline ant_value_t sv_op_closure_args(
   ant_value_t result = sv_op_closure(vm, js, frame, func, ip);
   if (is_err(result) || vtype(frame->arguments_obj) == kTypeUndefined) return result;
 
-  sv_closure_t *closure = js_func_closure(vm->stack[vm->sp - 1]);
-  for (int i = 0; i < closure->func->upvalue_count; i++)
-    if (closure->func->upval_descs[i].is_local && !closure->func->upval_descs[i].by_value)
-      js_arguments_link_upvalue(js, frame, closure->upvalues[i]);
+  sv_closure_link_arguments(js, frame, js_func_closure(vm->stack[vm->sp - 1]));
   return result;
 }

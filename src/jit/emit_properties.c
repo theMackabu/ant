@@ -433,6 +433,33 @@ static void jit_emit_get_field_fast(
 void jit_emit_properties(jit_compile_t *c) {
   const sv_asm_t *a = &c->as;
   switch (c->op) {
+    case OP_GET_SUPER_VAL:
+    case OP_PUT_SUPER_VAL: {
+      bool put = c->op == OP_PUT_SUPER_VAL;
+      int inputs = put ? 4 : 3;
+      for (int i = 1; i <= inputs; i++) vstack_ensure_boxed(&c->vs, c->vs.sp - i, c->ctx, c->jit_func, c->r_d_slot);
+      MIR_reg_t value = put ? vstack_pop(&c->vs) : 0;
+      MIR_reg_t prop = vstack_pop(&c->vs);
+      MIR_reg_t home = vstack_pop(&c->vs);
+      MIR_reg_t receiver = vstack_pop(&c->vs);
+      MIR_reg_t dst = vstack_push(&c->vs);
+      MIR_op_t args[] = {
+        MIR_new_ref_op(c->ctx, put ? c->put_super_proto : c->get_super_proto),
+        MIR_new_ref_op(c->ctx, put ? c->imp_put_super : c->imp_get_super),
+        MIR_new_reg_op(c->ctx, dst),
+        MIR_new_reg_op(c->ctx, c->r_vm),
+        MIR_new_reg_op(c->ctx, c->r_js),
+        MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->func),
+        MIR_new_reg_op(c->ctx, receiver),
+        MIR_new_reg_op(c->ctx, home),
+        MIR_new_reg_op(c->ctx, prop),
+        MIR_new_reg_op(c->ctx, value),
+      };
+      MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn_arr(c->ctx, MIR_CALL, put ? 10 : 9, args));
+      jit_emit_throw_if_error(c, dst);
+      break;
+    }
+
     case OP_TO_PROPKEY: {
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
       MIR_reg_t src = vstack_pop(&c->vs);

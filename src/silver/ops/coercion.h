@@ -509,6 +509,28 @@ static inline ant_value_t sv_op_with_try_del(sv_vm_t *vm, ant_t *js, sv_func_t *
   return Ant_Value_Undefined;
 }
 
+static __attribute__((noinline, cold)) void sv_special_obj_rare(sv_vm_t *vm, uint8_t kind) {
+  if (kind != SV_SPECIAL_STRICT_ENTER && kind != SV_SPECIAL_STRICT_LEAVE) {
+    vm->stack[vm->sp++] = Ant_Value_Undefined;
+    return;
+  }
+
+  if (kind == SV_SPECIAL_STRICT_ENTER) {
+    vm->stack[vm->sp++] = Ant_Value_FromNumber((double)vm->jit.mode_fp * 2 + (vm->jit.mode_strict ? 1 : 0));
+    vm->jit.mode_fp = vm->fp;
+    vm->jit.mode_strict = true;
+    return;
+  }
+
+  ant_value_t saved = vm->stack[vm->sp - 1];
+  if (vtype(saved) == kTypeNumber) {
+    int64_t encoded = (int64_t)Ant_Value_AsNumberUnchecked(saved);
+    vm->jit.mode_strict = (encoded & 1) != 0;
+    vm->jit.mode_fp = (int)((encoded - (encoded & 1)) / 2);
+  }
+  vm->stack[vm->sp++] = Ant_Value_Undefined;
+}
+
 static inline ant_value_t sv_op_special_obj(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame, uint8_t *ip
@@ -536,7 +558,7 @@ static inline ant_value_t sv_op_special_obj(
       if (frame) break;
       [[fallthrough]];
     default:
-      vm->stack[vm->sp++] = Ant_Value_Undefined;
+      sv_special_obj_rare(vm, sv_get_u8(ip + 1));
       return Ant_Value_Undefined;
   }
 

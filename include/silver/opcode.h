@@ -111,7 +111,7 @@ OP_DEF(  HAS_PRIVATE,      1,   2,   1, none)       /* obj private_name -> bool 
 
 OP_DEF(  GET_SUPER,         1,   1,   1, none)      /* obj -> super */
 OP_DEF(  GET_SUPER_VAL,     1,   3,   1, none)      /* this obj prop -> value */
-OP_DEF(  PUT_SUPER_VAL,     1,   4,   0, none)      /* this obj prop value -> */
+OP_DEF(  PUT_SUPER_VAL,     1,   4,   1, none)      /* this obj prop value -> value */
 
 OP_DEF(  ADD,               1,   2,   1, none)
 OP_DEF(  SUB,               1,   2,   1, none)
@@ -324,6 +324,8 @@ OP_FLAG(THIS                  , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV
 OP_FLAG(GLOBAL                , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(OBJECT                , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(ARRAY                 , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_OPT_NATIVE)
+OP_FLAG(GET_SUPER_VAL         , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
+OP_FLAG(PUT_SUPER_VAL         , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(ARRAY_CONST           , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(EMPTY                 , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(REGEXP                , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)

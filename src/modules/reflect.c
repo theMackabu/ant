@@ -136,8 +136,7 @@ static ant_value_t reflect_construct_from(
       list.argc, &ctor_this, effective_new_target
     );
     
-    if (!is_err(result) && !is_object_type(result))
-      result = is_object_type(ctor_this) ? ctor_this : new_obj;
+    if (!is_err(result)) result = sv_construct_result(result, ctor_this, new_obj);
   }
   
   Ant_ArgList_Release(&list);

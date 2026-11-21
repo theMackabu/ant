@@ -181,10 +181,122 @@ bool compile_self_append_stmt(sv_compiler_t *c, sv_ast_t *node) {
   return true;
 }
 
+static sv_op_t compound_assign_op(uint8_t op) {
+  switch (op) {
+    case TOK_PLUS_ASSIGN:  return OP_ADD;
+    case TOK_MINUS_ASSIGN: return OP_SUB;
+    case TOK_MUL_ASSIGN:   return OP_MUL;
+    case TOK_DIV_ASSIGN:   return OP_DIV;
+    case TOK_REM_ASSIGN:   return OP_MOD;
+    case TOK_SHL_ASSIGN:   return OP_SHL;
+    case TOK_SHR_ASSIGN:   return OP_SHR;
+    case TOK_ZSHR_ASSIGN:  return OP_USHR;
+    case TOK_AND_ASSIGN:   return OP_BAND;
+    case TOK_XOR_ASSIGN:   return OP_BXOR;
+    case TOK_OR_ASSIGN:    return OP_BOR;
+    case TOK_EXP_ASSIGN:   return OP_EXP;
+    default:               return OP_INVALID;
+  }
+}
+
+static void emit_compound_assign_op(sv_compiler_t *c, uint8_t op) {
+  sv_op_t aop = compound_assign_op(op);
+  if (aop != OP_INVALID) emit_op(c, aop);
+}
+
+static bool is_super_member(const sv_ast_t *target) {
+  return target && target->type == N_MEMBER && is_ident_name(target->left, "super");
+}
+
+bool reject_super_private(sv_compiler_t *c, const sv_ast_t *member) {
+  if ((member->flags & 1) || !is_private_name_node(member->right)) return false;
+  js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Cannot access private member through super");
+  emit_op(c, OP_UNDEF);
+  return true;
+}
+
+void emit_super_key(sv_compiler_t *c, sv_ast_t *member) {
+  if (member->flags & 1) compile_expr(c, member->right);
+  else emit_constant(c, sv_const_str(c, member->right->str, member->right->len));
+}
+
+void emit_super_reference(sv_compiler_t *c, sv_ast_t *member) {
+  emit_op(c, OP_THIS);
+  emit_get_var(c, "super", 5);
+  emit_super_key(c, member);
+}
+
+static void emit_super_reference_read(sv_compiler_t *c) {
+  emit_op(c, OP_DUP2);
+  emit_op(c, OP_THIS);
+  emit_op(c, OP_ROT3R);
+  emit_op(c, OP_GET_SUPER_VAL);
+}
+
+static void compile_super_update(sv_compiler_t *c, sv_ast_t *target, bool prefix, bool is_inc) {
+  if (reject_super_private(c, target)) return;
+  emit_super_reference(c, target);
+  emit_super_reference_read(c);
+  
+  if (prefix) {
+    emit_op(c, is_inc ? OP_INC : OP_DEC);
+    emit_op(c, OP_PUT_SUPER_VAL);
+    return;
+  }
+  
+  int old_local = reserve_hidden_locals(c, 1);
+  emit_op(c, is_inc ? OP_POST_INC : OP_POST_DEC);
+  emit_op(c, OP_SWAP);
+  emit_put_local(c, old_local);
+  emit_op(c, OP_PUT_SUPER_VAL);
+  emit_op(c, OP_POP);
+  emit_get_local(c, old_local);
+}
+
+static void compile_super_assign(sv_compiler_t *c, sv_ast_t *node) {
+  sv_ast_t *target = node->left;
+  uint8_t op = node->op;
+  if (reject_super_private(c, target)) return;
+  emit_super_reference(c, target);
+  
+  if (op == TOK_ASSIGN) {
+    compile_expr(c, node->right);
+    emit_op(c, OP_PUT_SUPER_VAL);
+    return;
+  }
+  
+  emit_super_reference_read(c);
+  
+  if (op == TOK_LOR_ASSIGN || op == TOK_LAND_ASSIGN || op == TOK_NULLISH_ASSIGN) {
+    int skip = emit_jump(c,
+      op == TOK_LOR_ASSIGN ? OP_JMP_TRUE_PEEK :
+      op == TOK_LAND_ASSIGN ? OP_JMP_FALSE_PEEK : OP_JMP_NOT_NULLISH);
+    emit_op(c, OP_POP);
+    compile_expr(c, node->right);
+    emit_op(c, OP_PUT_SUPER_VAL);
+    int end = emit_jump(c, OP_JMP);
+    patch_jump(c, skip);
+    emit_op(c, OP_NIP);
+    emit_op(c, OP_NIP);
+    emit_op(c, OP_NIP);
+    patch_jump(c, end);
+    return;
+  }
+  
+  compile_expr(c, node->right);
+  emit_compound_assign_op(c, op);
+  emit_op(c, OP_PUT_SUPER_VAL);
+}
+
 void compile_update(sv_compiler_t *c, sv_ast_t *node) {
   bool prefix = (node->flags & 1);
   bool is_inc = (node->op == TOK_POSTINC);
   sv_ast_t *target = node->right;
+
+  if (is_super_member(target)) {
+    compile_super_update(c, target, prefix, is_inc);
+    return;
+  }
 
   if (target->type == N_IDENT) {
     if (prefix) {
@@ -248,6 +360,32 @@ void compile_update(sv_compiler_t *c, sv_ast_t *node) {
 void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *target = node->left;
   uint8_t op = node->op;
+  if (is_super_member(target)) {
+    compile_super_assign(c, node);
+    return;
+  }
+  
+  if (target->type == N_UNDEF && undefined_shadowed(c)) {
+    target->type = N_IDENT;
+    target->str = "undefined";
+    target->len = 9;
+  }
+
+  if (target->type == N_UNDEF && op != TOK_ASSIGN) {
+    static const char message[] = "Cannot assign to read only property 'undefined' of object '#<Object>'";
+    emit_op(c, OP_UNDEF);
+    if (op == TOK_LAND_ASSIGN) return;
+    if (op == TOK_LOR_ASSIGN || op == TOK_NULLISH_ASSIGN) {
+      emit_op(c, OP_POP);
+      compile_expr(c, node->right);
+    } else {
+      compile_expr(c, node->right);
+      emit_compound_assign_op(c, op);
+    }
+    if (c->is_strict) emit_throw_type_error(c, message, sizeof(message) - 1);
+    return;
+  }
+
   self_append_match_t append;
   bool can_append_builder = match_self_append_local(c, node, &append);
 
@@ -360,15 +498,7 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
       case TOK_DIV_ASSIGN:
         emit_op(c, (lhs_type == SV_TI_NUM && rhs_type == SV_TI_NUM) ? OP_DIV_NUM : OP_DIV);
         break;
-      case TOK_REM_ASSIGN:     emit_op(c, OP_MOD); break;
-      case TOK_SHL_ASSIGN:     emit_op(c, OP_SHL); break;
-      case TOK_SHR_ASSIGN:     emit_op(c, OP_SHR); break;
-      case TOK_ZSHR_ASSIGN:    emit_op(c, OP_USHR); break;
-      case TOK_AND_ASSIGN:     emit_op(c, OP_BAND); break;
-      case TOK_XOR_ASSIGN:     emit_op(c, OP_BXOR); break;
-      case TOK_OR_ASSIGN:      emit_op(c, OP_BOR); break;
-      case TOK_EXP_ASSIGN:    emit_op(c, OP_EXP); break;
-      default: break;
+      default:               emit_compound_assign_op(c, op); break;
     }
     emit_set_var(c, target->str, target->len, true);
   } else if (target->type == N_MEMBER && !(target->flags & 1) && is_private_name_node(target->right)) {
@@ -397,21 +527,7 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
     emit_private_token(c, target->right);
     emit_op(c, OP_GET_PRIVATE);
     compile_expr(c, node->right);
-    switch (op) {
-      case TOK_PLUS_ASSIGN:  emit_op(c, OP_ADD); break;
-      case TOK_MINUS_ASSIGN: emit_op(c, OP_SUB); break;
-      case TOK_MUL_ASSIGN:   emit_op(c, OP_MUL); break;
-      case TOK_DIV_ASSIGN:   emit_op(c, OP_DIV); break;
-      case TOK_REM_ASSIGN:   emit_op(c, OP_MOD); break;
-      case TOK_SHL_ASSIGN:   emit_op(c, OP_SHL); break;
-      case TOK_SHR_ASSIGN:   emit_op(c, OP_SHR); break;
-      case TOK_ZSHR_ASSIGN:  emit_op(c, OP_USHR); break;
-      case TOK_AND_ASSIGN:   emit_op(c, OP_BAND); break;
-      case TOK_XOR_ASSIGN:   emit_op(c, OP_BXOR); break;
-      case TOK_OR_ASSIGN:    emit_op(c, OP_BOR); break;
-      case TOK_EXP_ASSIGN:  emit_op(c, OP_EXP); break;
-      default: break;
-    }
+    emit_compound_assign_op(c, op);
     emit_private_token(c, target->right);
     emit_op(c, OP_PUT_PRIVATE);
   } else if (target->type == N_MEMBER && !(target->flags & 1)) {
@@ -440,21 +556,7 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
     emit_op(c, OP_DUP);
     emit_atom_idx_op(c, OP_GET_FIELD, (uint32_t)atom);
     compile_expr(c, node->right);
-    switch (op) {
-      case TOK_PLUS_ASSIGN:  emit_op(c, OP_ADD); break;
-      case TOK_MINUS_ASSIGN: emit_op(c, OP_SUB); break;
-      case TOK_MUL_ASSIGN:   emit_op(c, OP_MUL); break;
-      case TOK_DIV_ASSIGN:   emit_op(c, OP_DIV); break;
-      case TOK_REM_ASSIGN:   emit_op(c, OP_MOD); break;
-      case TOK_SHL_ASSIGN:   emit_op(c, OP_SHL); break;
-      case TOK_SHR_ASSIGN:   emit_op(c, OP_SHR); break;
-      case TOK_ZSHR_ASSIGN:  emit_op(c, OP_USHR); break;
-      case TOK_AND_ASSIGN:   emit_op(c, OP_BAND); break;
-      case TOK_XOR_ASSIGN:   emit_op(c, OP_BXOR); break;
-      case TOK_OR_ASSIGN:    emit_op(c, OP_BOR); break;
-      case TOK_EXP_ASSIGN:  emit_op(c, OP_EXP); break;
-      default: break;
-    }
+    emit_compound_assign_op(c, op);
     emit_op(c, OP_INSERT2);
     emit_atom_idx_op(c, OP_PUT_FIELD, (uint32_t)atom);
   } else if (target->type == N_MEMBER && (target->flags & 1)) {
@@ -484,21 +586,7 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
     emit_op(c, OP_DUP2);
     emit_op(c, OP_GET_ELEM);
     compile_expr(c, node->right);
-    switch (op) {
-      case TOK_PLUS_ASSIGN:  emit_op(c, OP_ADD); break;
-      case TOK_MINUS_ASSIGN: emit_op(c, OP_SUB); break;
-      case TOK_MUL_ASSIGN:   emit_op(c, OP_MUL); break;
-      case TOK_DIV_ASSIGN:   emit_op(c, OP_DIV); break;
-      case TOK_REM_ASSIGN:   emit_op(c, OP_MOD); break;
-      case TOK_SHL_ASSIGN:   emit_op(c, OP_SHL); break;
-      case TOK_SHR_ASSIGN:   emit_op(c, OP_SHR); break;
-      case TOK_ZSHR_ASSIGN:  emit_op(c, OP_USHR); break;
-      case TOK_AND_ASSIGN:   emit_op(c, OP_BAND); break;
-      case TOK_XOR_ASSIGN:   emit_op(c, OP_BXOR); break;
-      case TOK_OR_ASSIGN:    emit_op(c, OP_BOR); break;
-      case TOK_EXP_ASSIGN:  emit_op(c, OP_EXP); break;
-      default: break;
-    }
+    emit_compound_assign_op(c, op);
     emit_op(c, OP_INSERT3);
     emit_op(c, OP_PUT_ELEM);
   } else {
@@ -507,8 +595,23 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 void compile_lhs_set(sv_compiler_t *c, sv_ast_t *target, bool keep) {
-  if (target->type == N_IDENT) {
+  if (is_super_member(target)) {
+    if (reject_super_private(c, target)) return;
+    emit_op(c, OP_THIS);
+    emit_op(c, OP_SWAP);
+    emit_get_var(c, "super", 5);
+    emit_op(c, OP_SWAP);
+    emit_super_key(c, target);
+    emit_op(c, OP_SWAP);
+    emit_op(c, OP_PUT_SUPER_VAL);
+    if (!keep) emit_op(c, OP_POP);
+  } else if (target->type == N_IDENT) {
     emit_set_var(c, target->str, target->len, keep);
+  } else if (target->type == N_UNDEF && undefined_shadowed(c)) {
+    emit_set_var(c, "undefined", 9, keep);
+  } else if (target->type == N_UNDEF && c->is_strict) {
+    static const char message[] = "Cannot assign to read only property 'undefined' of object '#<Object>'";
+    emit_throw_type_error(c, message, sizeof(message) - 1);
   } else if (target->type == N_MEMBER && !(target->flags & 1) && is_private_name_node(target->right)) {
     compile_expr(c, target->left);
     emit_op(c, OP_SWAP);

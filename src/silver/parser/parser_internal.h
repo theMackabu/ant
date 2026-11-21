@@ -66,10 +66,12 @@ bool validate_accessor_params(sv_parser_t *p, sv_ast_t *fn, uint32_t flags);
 
 sv_ast_t *parse_object(sv_parser_t *p);
 sv_ast_t *parse_member_suffix(sv_parser_t *p, sv_ast_t *left, uint8_t la);
+sv_ast_t *parse_tagged_template(sv_parser_t *p, sv_ast_t *tag);
 sv_ast_t *parse_arrow_body(sv_parser_t *p, bool is_async);
 sv_ast_t *parse_binding_pattern(sv_parser_t *p);
 sv_ast_t *try_parse_async_arrow(sv_parser_t *p);
 sv_ast_t *parse_primary(sv_parser_t *p);
+sv_ast_t *parse_lhs(sv_parser_t *p);
 sv_ast_t *parse_array(sv_parser_t *p);
 sv_ast_t *finish_arrow(sv_parser_t *p, sv_ast_t *fn);
 sv_ast_t *parse_func(sv_parser_t *p, bool is_async);

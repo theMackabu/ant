@@ -148,6 +148,8 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_put_global);
   LOAD_EXT(jit_helper_object);
   LOAD_EXT(jit_helper_object_template);
+  LOAD_EXT(jit_helper_get_super);
+  LOAD_EXT(jit_helper_put_super);
   LOAD_EXT(regexp_create_literal);
   LOAD_EXT(jit_helper_define_slot);
   LOAD_EXT(jit_helper_array);

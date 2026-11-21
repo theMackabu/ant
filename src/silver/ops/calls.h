@@ -274,9 +274,7 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   vm->sp -= argc + 2;
   if (is_err(result)) return result;
   
-  ant_value_t final_obj = is_object_type(result) 
-    ? result
-    : (is_object_type(ctor_this) ? ctor_this : obj);
+  ant_value_t final_obj = sv_construct_result(result, ctor_this, obj);
   
   vm->stack[vm->sp++] = final_obj;
   
@@ -398,7 +396,7 @@ static inline ant_value_t sv_eval_in_frame(
   ant_value_t result = js_eval_source_in_frame(
     js, source, source_len,
     caller->allows_new_target ? SV_COMPILE_EVAL_FUNCTION : SV_COMPILE_EVAL,
-    sv_frame_is_strict(frame), scope, frame).value;
+    sv_frame_is_strict(frame) || sv_is_strict_context(js), scope, frame).value;
   
   GC_ROOT_RESTORE(js, root_mark);
   return result;
@@ -680,9 +678,7 @@ ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   vm->sp = base;
   if (is_err(result)) return result;
   
-  ant_value_t final_obj = 
-    is_object_type(result) ? result : 
-    (is_object_type(ctor_this) ? ctor_this : obj);
+  ant_value_t final_obj = sv_construct_result(result, ctor_this, obj);
 
   vm->stack[vm->sp++] = final_obj;
 

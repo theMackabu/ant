@@ -125,7 +125,7 @@ bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
   return true;
 }
 
-static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, const sv_ast_t *key, int ctor_local);
+static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, const sv_ast_t *key, int key_local, int ctor_local);
 
 void compile_method_function(sv_compiler_t *c, sv_ast_t *m) {
   const char *saved_name = c->inferred_name;
@@ -162,7 +162,7 @@ static void compile_class_method(
     emit_op(c, OP_SWAP);              
   } else {
     emit_get_local(c, home_local);    
-    if (is_static) compile_static_initializer_value(c, m->right, field_static_key(m), ctor_local);
+    if (is_static) compile_static_initializer_value(c, m->right, field_static_key(m), preeval_key, ctor_local);
     else if (m->right) compile_expr(c, m->right);
     else emit_op(c, OP_UNDEF);        
   }
@@ -197,7 +197,7 @@ static void compile_private_static_element(sv_compiler_t *c, sv_ast_t *m, int ct
       emit_op(c, OP_SET_HOME_OBJ);
       emit_op(c, OP_POP);
     }
-  } else if ((m->flags & FN_STATIC)) compile_static_initializer_value(c, m->right, m->left, ctor_local);
+  } else if ((m->flags & FN_STATIC)) compile_static_initializer_value(c, m->right, m->left, -1, ctor_local);
   else if (m->right) compile_expr(c, m->right);
   else emit_op(c, OP_UNDEF);
 
@@ -287,22 +287,50 @@ static bool is_constructor_key(const sv_ast_t *key) {
   return is_literal_key(key, "constructor", 11);
 }
 
+static bool ast_may_reference_super(const sv_ast_t *node) {
+  if (!node) return false;
+  if (is_ident_name(node, "super")) return true;
+  if (node->type == N_CALL && is_ident_name(node->left, "eval")) return true;
+  if (node->type == N_FUNC && !(node->flags & FN_ARROW)) return false;
+  
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (ast_may_reference_super(child)) return true;
+  
+  return false;
+}
+
 bool class_method_needs_home(const sv_ast_t *method) {
   const sv_ast_t *fn = method ? method->right : NULL;
   return fn && fn->type == N_FUNC && (fn->flags & (FN_USES_SUPER | FN_DIRECT_EVAL));
 }
 
-static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool returns_expr, const sv_ast_t *key) {
+static bool field_inits_use_super(sv_ast_t **fields, int count) {
+  for (int i = 0; i < count; i++) {
+    if (!is_class_method_def(fields[i]) && ast_may_reference_super(fields[i]->right)) return true;
+  }
+  return false;
+}
+
+static void emit_super_local(sv_compiler_t *c) {
+  c->super_local = add_hidden_local(c);
+  emit_op(c, OP_SPECIAL_OBJ);
+  emit(c, SV_SPECIAL_SUPER);
+  emit_put_local(c, c->super_local);
+}
+
+static int compile_static_child_function(
+  sv_compiler_t *c, sv_ast_t *node, bool returns_expr, const sv_ast_t *key, int key_local
+) {
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
   comp.is_strict = true;
-
-  comp.super_local = add_hidden_local(&comp);
-  emit_op(&comp, OP_SPECIAL_OBJ);
-  emit(&comp, SV_SPECIAL_SUPER);
-  emit_put_local(&comp, comp.super_local);
+  comp.is_static = true;
+  emit_super_local(&comp);
 
   if (returns_expr) {
+    if (key_local >= 0 && node && node->type == N_CLASS)
+      comp.inferred_key_upval = capture_field_local(&comp, c, key_local) + 1;
     if (node) compile_field_initializer(&comp, node, key);
     else emit_op(&comp, OP_UNDEF);
     emit_return_from_stack(&comp);
@@ -368,18 +396,21 @@ static void emit_static_child_call(sv_compiler_t *c, int func_idx, int ctor_loca
   emit_u16(c, 0);
 }
 
-static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, const sv_ast_t *key, int ctor_local) {
-  int idx = compile_static_child_function(c, expr, true, key);
+static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, const sv_ast_t *key, int key_local, int ctor_local) {
+  int idx = compile_static_child_function(c, expr, true, key, key_local);
   emit_static_child_call(c, idx, ctor_local);
 }
 
 static void compile_static_block(sv_compiler_t *c, sv_ast_t *block, int ctor_local) {
-  int idx = compile_static_child_function(c, block, false, NULL);
+  int idx = compile_static_child_function(c, block, false, NULL, -1);
   emit_static_child_call(c, idx, ctor_local);
   emit_op(c, OP_POP);
 }
 
-void compile_class(sv_compiler_t *c, sv_ast_t *node) {
+static void compile_class_strict(
+  sv_compiler_t *c, sv_ast_t *node,
+  const char *inferred_name, uint32_t inferred_name_len, int inferred_key_upval
+) {
   int outer_name_local = -1;
   bool binds_outer_name = node->str &&
     (node->flags & FN_CLASS_DECL);
@@ -395,8 +426,6 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
 
   if (binds_outer_name)
     outer_name_local = resolve_local(c, node->str, node->len);
-  if (node->left) compile_expr(c, node->left);
-  else emit_op(c, OP_UNDEF);
 
   sv_private_scope_t private_scope = { .parent = c->private_scope };
   sv_private_scope_t *saved_private_scope = c->private_scope;
@@ -465,13 +494,21 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     begin_scope(c);
     if (node->str) {
       inner_name_local = add_local(c, node->str, node->len, true, c->scope_depth);
-      inner_name_tdz = has_computed_key;
+      inner_name_tdz = has_computed_key || node->left;
     }
     if (inner_name_tdz) {
       c->locals[inner_name_local].is_tdz = true;
       emit_op(c, OP_SET_LOCAL_UNDEF);
       emit_u16(c, (uint16_t)(inner_name_local - c->param_locals));
     }
+  }
+
+  c->private_scope = saved_private_scope;
+  if (node->left) compile_expr(c, node->left);
+  else emit_op(c, OP_UNDEF);
+  c->private_scope = &private_scope;
+
+  if (has_class_scope) {
     for (int i = 0; i < private_scope.count; i++) {
       sv_private_name_t *p = &private_scope.names[i];
       p->owner = c;
@@ -544,15 +581,16 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     c->field_locals = field_locals;
     c->private_method_count = private_method_count;
     c->private_methods_local = private_methods_local;
-    const char *saved_name = c->inferred_name;
-    uint32_t saved_len = c->inferred_name_len;
     if (node->str && node->len) {
       c->inferred_name = node->str;
       c->inferred_name_len = node->len;
+    } else {
+      c->inferred_name = inferred_name;
+      c->inferred_name_len = inferred_name_len;
     }
     compile_func_expr(c, ctor_method->right);
-    c->inferred_name = saved_name;
-    c->inferred_name_len = saved_len;
+    c->inferred_name = NULL;
+    c->inferred_name_len = 0;
     c->field_inits = NULL;
     c->field_init_count = 0;
     c->field_locals = NULL;
@@ -565,6 +603,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     comp.is_strict = true;
 
     emit_op(&comp, OP_CHECK_CTOR);
+    if (field_inits_use_super(field_inits, field_count)) emit_super_local(&comp);
 
     if (node->left) {
       emit_op(&comp, OP_THIS);
@@ -582,6 +621,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     sv_func_t *fn = sv_func_new(c->js);
     fn->is_derived_ctor = node->left != NULL;
     fn->is_class_ctor = true;
+    fn->uses_super = comp.super_referenced;
+    sv_func_set_ctor_props(fn, ctor_prop_count(NULL, class_public_field_count(field_inits, field_count)));
     sv_func_init_code_and_map_templates(&comp, fn);
     sv_func_init_obj_sites(&comp, fn);
     if (comp.const_count > 0) {
@@ -630,12 +671,9 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
 
   const char *class_name = node->str;
   uint32_t class_name_len = node->len;
-  bool consumed_inferred_name = false;
-  
-  if (!class_name && c->inferred_name) {
-    class_name = c->inferred_name;
-    class_name_len = c->inferred_name_len;
-    consumed_inferred_name = true;
+  if (!class_name && inferred_name) {
+    class_name = inferred_name;
+    class_name_len = inferred_name_len;
   }
 
   if (!has_static_name) {
@@ -650,11 +688,6 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     emit_op(c, OP_DEFINE_CLASS);
     emit_u32(c, 0);
     emit(c, node->left ? SV_CLASS_FLAG_HAS_HERITAGE : 0);
-  }
-  
-  if (consumed_inferred_name) {
-    c->inferred_name = NULL;
-    c->inferred_name_len = 0;
   }
   
   emit_u32(c, node->src_off);
@@ -681,6 +714,15 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   compile_private_instance_methods(c, field_inits, field_count, private_methods_local, private_method_count, proto_local);
   free(field_inits);
   free(field_locals);
+
+  if (!node->str && !has_static_name && inferred_key_upval > 0) {
+    emit_get_local(c, ctor_local);
+    emit_op(c, OP_GET_UPVAL);
+    emit_u16(c, (uint16_t)(inferred_key_upval - 1));
+    emit_op(c, OP_SET_NAME_COMP);
+    emit_op(c, OP_POP);
+    emit_op(c, OP_POP);
+  }
 
   for (int i = 0; i < static_init_count; i++) {
     sv_ast_t *m = static_init_items[i].node;
@@ -711,4 +753,17 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   if (has_class_scope) end_scope(c);
   c->private_scope = saved_private_scope;
   free(private_scope.names);
+}
+
+void compile_class(sv_compiler_t *c, sv_ast_t *node) {
+  bool saved_strict = c->is_strict;
+  c->is_strict = true;
+  const char *inferred_name = c->inferred_name;
+  uint32_t inferred_name_len = c->inferred_name_len;
+  int inferred_key_upval = c->inferred_key_upval;
+  c->inferred_name = NULL;
+  c->inferred_name_len = 0;
+  c->inferred_key_upval = 0;
+  compile_class_strict(c, node, inferred_name, inferred_name_len, inferred_key_upval);
+  c->is_strict = saved_strict;
 }
