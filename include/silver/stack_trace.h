@@ -67,6 +67,8 @@ void sv_stack_iter_finish(sv_stack_iter_t *it);
 
 int sv_jit_collect_activations(sv_vm_t *vm, sv_jit_activation_t **acts, int cap, int limit);
 int sv_jit_frames_at(ant_t *js, uintptr_t pc, sv_jit_frame_t *out, int cap);
+extern uint64_t sv_jit_throw_captures;
+ant_value_t sv_jit_throw(ant_t *js, ant_value_t value);
 
 ant_value_t js_error_record_capture(ant_t *js, ant_value_t call_func, const js_error_site_t *site, ant_value_t above);
 ant_value_t js_error_record_stack_text(ant_t *js, ant_value_t header, ant_value_t record);
