@@ -29,6 +29,7 @@ typedef const ir_exit_site_t *(*opt_build_exit_sites_fn)(ant_t *js, sv_func_t *f
 typedef struct {
   uint32_t inlined_calls;
   bool closure_pinned;
+  bool assumes_settled_receivers;
 } opt_build_stats_t;
 
 static inline ir_frame_layout_t opt_frame_layout_of(const sv_func_t *func) {

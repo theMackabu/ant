@@ -402,6 +402,16 @@ ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc) {
   return promoted;
 }
 
+ant_value_t js_cfunc_demote_function(ant_t *js, ant_value_t func) {
+  const sv_closure_t *closure = js_func_closure(func);
+  if (closure->func || closure->call_flags || func == js->sym.function_proto) return func;
+
+  ant_value_t cfunc = closure->native.cfunc;
+  if (!cfunc) cfunc = js_get_slot(func, SLOT_CFUNC);
+  if (vtype(cfunc) != kTypeBuiltin) return func;
+  return js_cfunc_lookup_promoted(js, cfunc) == func ? cfunc : func;
+}
+
 static ant_value_t js_heavy_function(ant_t *js, ant_value_t cfunc, ant_value_t data) {
   ant_value_t fn_obj = mkobj(js, 0);
   

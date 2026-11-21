@@ -287,6 +287,7 @@ ir_node_properties_t ir_op_properties(const ir_op_t *op) {
     case IR_OP_TYPEOF_IS: return IR_PURE;
     case IR_OP_CHECK_SHAPE:
     case IR_OP_CHECK_PROTOTYPE_CHAIN_VALID: return ir_reads(IR_LOC_SHAPES);
+    case IR_OP_CHECK_RECEIVER:
     case IR_OP_ASSUME_VALID: return ir_reads(IR_LOC_ALL);
     case IR_OP_CHECK_ACCESSOR_FUNCTION:
     case IR_OP_LOAD_ACCESSOR_FUNCTION:
@@ -430,6 +431,7 @@ bool ir_op_exit_kind(const ir_op_t *op, opt_exit_kind_t *kind) {
   opt_exit_kind_t result;
   switch (op->code) {
     case IR_OP_EXIT: result = op->exit_kind; break;
+    case IR_OP_CHECK_RECEIVER:
     case IR_OP_CHECK_OBJECT: result = OPT_EXIT_NOT_OBJECT; break;
     case IR_OP_CHECK_ELEMENTS:
     case IR_OP_CHECK_TYPED_ARRAY: result = OPT_EXIT_BAD_ELEMENTS; break;

@@ -54,6 +54,7 @@ typedef struct {
 void opt_tier_destroy(sv_jit_ctx_t *jc);
 void opt_tier_gc_mark_roots(ant_t *js);
 void opt_tier_drop_closure_pinned(sv_func_t *func);
+void opt_tier_drop_unsettled_receivers(ant_t *js);
 bool opt_tier_has_catch_entry(ant_t *js, sv_func_t *func, uint32_t catch_off);
 
 typedef struct {
@@ -192,6 +193,7 @@ typedef struct {
   jit_vstack_t *vstack;
   MIR_reg_t *local_regs, *local_d_regs;
   const uint8_t *dnum_locals;
+  const bool *captured_locals;
   int n_locals;
   MIR_reg_t lbuf, d_slot;
 } jit_bailout_emit_t;

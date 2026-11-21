@@ -106,6 +106,7 @@ typedef struct {
   uint32_t inlined_instructions;
   uint32_t inlined_calls;
   bool closure_pinned;
+  bool assumes_settled_receivers;
   ir_node_vec_t object_like;
   ir_node_vec_t likely_nodes;
   OPT_VEC(ant_value_t) likely_values;
@@ -5762,6 +5763,30 @@ static opt_flow_t opt_build_import(opt_builder_t *b, const uint8_t *ip, sv_op_t 
   return OPT_FLOW_CONTINUE;
 }
 
+static bool opt_super_receiver_unsettled(const opt_builder_t *b) {
+  for (; b->inline_call; b = b->inline_call->caller) {
+    const opt_inline_t *call = b->inline_call;
+    if (!call->construct || call->receiver != call->caller->frame.this_value) return false;
+  }
+  return true;
+}
+
+static ir_node_id_t opt_super_receiver_settle(opt_builder_t *b, const sv_func_t *target, ir_node_id_t receiver, ir_node_id_t new_target) {
+  if ((target && target->is_derived_ctor) || !opt_super_receiver_unsettled(b)) return receiver;
+  if (!b->js->construct_pending_used) {
+    b->ctx->assumes_settled_receivers = true;
+    return receiver;
+  }
+  if (opt_may_speculate(b, OPT_EXIT_NOT_OBJECT)) {
+    opt_emit_checked(b, ir_op(IR_OP_CHECK_RECEIVER), &receiver, 1, OPT_REPR_NONE);
+    return receiver;
+  }
+  ir_node_id_t inputs[2] = {receiver, new_target};
+  ir_node_id_t settled = opt_runtime_call(b, (uintptr_t)opt_rt_settle_receiver, 0, inputs, 2, false, false);
+  opt_forget_memory(b);
+  return settled;
+}
+
 static ant_value_t opt_super_call_parents(const opt_builder_t *b, ir_node_id_t home_node, opt_super_parents_t *chain) {
   if (!opt_may_speculate(b, OPT_EXIT_BAD_SHAPE) || !opt_may_speculate(b, OPT_EXIT_BAD_TYPE)) return 0;
   ant_value_t home = opt_likely_value(b, home_node);
@@ -5792,15 +5817,16 @@ static bool opt_try_super_inline(opt_builder_t *b, bool forward, const ir_node_i
   }
 
   opt_super_parents_guard(b, inputs[1], home, &chain);
+  ir_node_id_t receiver = opt_super_receiver_settle(b, target, inputs[0], inputs[2]);
   if (!target) {
     opt_drop(b, operands);
-    opt_push(b, inputs[0]);
+    opt_push(b, receiver);
     *flow = OPT_FLOW_CONTINUE;
     return true;
   }
   ir_node_id_t joined[OPT_MAX_CALL_ARGS];
   args = opt_super_arguments(b, &chain, args, &argc, joined);
-  opt_inline_run(b, target, opt_constant(b, chain.callee), inputs[0], inputs[2], true, false, args, argc, operands, count, flow);
+  opt_inline_run(b, target, opt_constant(b, chain.callee), receiver, inputs[2], true, false, args, argc, operands, count, flow);
   return true;
 }
 
@@ -5814,7 +5840,7 @@ static ir_node_id_t opt_try_super_direct(opt_builder_t *b, const ir_node_id_t *i
   ir_node_id_t operands[3 + OPT_MAX_CALL_ARGS], joined[OPT_MAX_CALL_ARGS];
   const ir_node_id_t *args = opt_super_arguments(b, &chain, inputs + 3, &argc, joined);
   operands[0] = opt_constant(b, chain.callee);
-  operands[1] = inputs[0];
+  operands[1] = opt_super_receiver_settle(b, chain.closure->func, inputs[0], inputs[2]);
   operands[2] = inputs[2];
   for (uint32_t i = 0; i < argc; i++) operands[3 + i] = args[i];
   ir_op_t call = ir_op(IR_OP_CALL_DIRECT);
@@ -7106,7 +7132,13 @@ static opt_flow_t opt_build_generic(opt_builder_t *b) {
   for (uint32_t k = 0; k < b->frame.sp; k++) opt_sync_tracked(b, opt_stack_index(b, k));
   bool writes, all_params;
   uint32_t slot = opt_generic_slot(b, ip, op, &writes, &all_params);
-  if (slot != IR_NONE) opt_sync_tracked(b, slot);
+  bool boxed = slot != IR_NONE && b->frame.slots[slot].boxed;
+  if (boxed) {
+    ir_op_t store = ir_op(IR_OP_STORE_SLOT);
+    store.slot = opt_tracked_slot(b, slot);
+    ir_node_id_t value = opt_read_tracked(b, slot);
+    opt_emit(b, store, &value, 1, OPT_REPR_NONE);
+  } else if (slot != IR_NONE) opt_sync_tracked(b, slot);
   for (uint32_t p = 0; all_params && p < b->params; p++) opt_sync_tracked(b, p);
 
   ir_op_t generic = ir_op(IR_OP_GENERIC);
@@ -7119,7 +7151,7 @@ static opt_flow_t opt_build_generic(opt_builder_t *b) {
   b->graph->uses_frame = true;
 
   opt_bitset_for_each(&b->memory, t) b->frame.slots[t] = (opt_slot_t){.node = IR_NONE};
-  if (slot != IR_NONE && writes) b->frame.slots[slot] = (opt_slot_t){.node = IR_NONE};
+  if (slot != IR_NONE && writes && !boxed) b->frame.slots[slot] = (opt_slot_t){.node = IR_NONE};
   if (terminal) {
     ir_node(b->graph, node)->frame_state = state;
     opt_mark_catch(b, node);
@@ -7139,6 +7171,11 @@ static opt_flow_t opt_build_generic(opt_builder_t *b) {
     ir_op_t load = ir_op(IR_OP_LOAD_SLOT);
     load.slot = opt_stack_slot(k);
     b->frame.slots[opt_stack_index(b, k)] = (opt_slot_t){.node = opt_emit(b, load, NULL, 0, OPT_REPR_TAGGED), .in_sync = true};
+  }
+  if (boxed && writes) {
+    ir_op_t load = ir_op(IR_OP_LOAD_SLOT);
+    load.slot = opt_tracked_slot(b, slot);
+    opt_write_tracked(b, slot, opt_emit(b, load, NULL, 0, OPT_REPR_TAGGED));
   }
   return OPT_FLOW_CONTINUE;
 }
@@ -7476,7 +7513,7 @@ bool opt_build_graph(
     for (uint32_t i = 0; i < no_virtual_count; i++) opt_vec_push(&graph->arena, &ctx.no_virtual_arguments, no_virtual[i]);
     *failure = (opt_build_failure_t){0};
     bool ok = opt_build_attempt(js, func, &ctx, graph, failure);
-    if (stats) *stats = (opt_build_stats_t){ctx.inlined_calls, ctx.closure_pinned};
+    if (stats) *stats = (opt_build_stats_t){ctx.inlined_calls, ctx.closure_pinned, ctx.assumes_settled_receivers};
     if (!ok && !ctx.retry && ctx.built_catch_entries && attempt < 8) {
       ctx.retry = true;
       no_catch_entries = true;

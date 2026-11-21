@@ -9,6 +9,7 @@
 #include "cfunc.h"
 #include "stringify.h"
 #include "protectors.h"
+#include "modules/object.h"
 #include "modules/proxy.h"
 #include "silver/engine.h"
 
@@ -663,10 +664,59 @@ static ant_value_t for_in_keys_add_exotic_indices(
   return Ant_Value_Undefined;
 }
 
+static ant_value_t for_in_keys_collect_proxy(
+  ant_t *js, ant_value_t out, ant_value_t seen, ant_value_t proxy, ant_value_t *proto
+) {
+  ant_value_t keys = proxy_own_keys_raw(js, proxy);
+  if (is_err(keys)) return keys;
+  GC_ROOT_PIN(js, keys);
+
+  *proto = proxy_get_prototype_of(js, proxy);
+  if (is_err(*proto)) return *proto;
+  GC_ROOT_PIN(js, *proto);
+
+  ant_offset_t count = get_array_length(js, keys);
+  for (ant_offset_t i = 0; i < count; i++) {
+    ant_value_t key = arr_get(js, keys, i);
+    if (vtype(key) != kTypeString) continue;
+    ant_value_t plain;
+    if (proxy_descriptors_as_target(js, proxy, &plain)) {
+      size_t len = 0;
+      const char *bytes = js_getstr(js, key, &len);
+      prop_meta_t meta;
+      if (!lookup_string_prop_meta(js, plain, bytes, len, &meta)) {
+        ant_value_t again = proxy_get_prototype_of(js, proxy);
+        if (is_err(again)) return again;
+        continue;
+      }
+      ant_value_t added = for_in_keys_add_cstr(js, out, seen, bytes, len, meta.enumerable);
+      if (is_err(added)) return added;
+      continue;
+    }
+    ant_value_t desc = js_proxy_is_host(proxy) ? Ant_Value_Null : proxy_get_own_property_descriptor(js, proxy, key);
+    if (is_err(desc)) return desc;
+    if (vtype(desc) == kTypeUndefined) {
+      ant_value_t again = proxy_get_prototype_of(js, proxy);
+      if (is_err(again)) return again;
+      continue;
+    }
+    ant_value_t enumerable = vtype(desc) == kTypeNull ? proxy_key_enumerable(js, proxy, key)
+      : Ant_Value_FromBool(descriptor_bool_value(js, desc, "enumerable", 10, false));
+    if (is_err(enumerable)) return enumerable;
+    size_t len = 0;
+    const char *bytes = js_getstr(js, key, &len);
+    ant_value_t added = for_in_keys_add_cstr(js, out, seen, bytes, len, enumerable == Ant_Value_True);
+    if (is_err(added)) return added;
+  }
+
+  return Ant_Value_Undefined;
+}
+
 static inline ant_value_t for_in_keys_collect_chain(
   ant_t *js, ant_value_t out, ant_value_t seen, ant_value_t obj, uint32_t max_levels
 ) {
   ant_value_t cur = obj;
+  uint32_t proxy_hops = 0;
   GC_ROOT_PIN(js, cur);
 
   for (uint32_t level = 0; level < max_levels && is_object_type(cur); level++) {
@@ -677,6 +727,22 @@ static inline ant_value_t for_in_keys_collect_chain(
     ant_value_t r, proto;
     
     if (!cur_ptr) goto next_proto;
+    if (__builtin_expect(cur_ptr->flags.is_exotic && is_proxy(as_cur), 0)) {
+      if (proxy_enumerates_as_target(js, as_cur, &proto)) {
+        GC_ROOT_RESTORE(js, iter_mark);
+        cur = proto;
+        continue;
+      }
+      proto = Ant_Value_Undefined;
+      r = ++proxy_hops > PROXY_PROTO_HOP_LIMIT
+        ? js_mkerr_typed(js, JS_ERR_RANGE, "Maximum call stack size exceeded")
+        : for_in_keys_collect_proxy(js, out, seen, as_cur, &proto);
+      if (is_err(r)) goto err;
+      GC_ROOT_RESTORE(js, iter_mark);
+      if (!is_object_type(proto)) break;
+      cur = proto;
+      continue;
+    }
     r = for_in_keys_add_exotic_indices(js, out, seen, as_cur, cur_ptr);
     if (is_err(r)) goto err;
     
@@ -962,6 +1028,8 @@ static ant_value_t for_in_string_keys(ant_t *js, ant_value_t str) {
   return out;
 }
 
+ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj);
+
 static __attribute__((noinline)) ant_value_t for_in_keys_collect(ant_t *js, ant_value_t obj) {
   uint8_t t = vtype(obj);
   if (t == kTypeNull || t == kTypeUndefined) return Ant_Array_Create(js);
@@ -975,7 +1043,13 @@ static __attribute__((noinline)) ant_value_t for_in_keys_collect(ant_t *js, ant_
   }
 
   if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return Ant_Array_Create(js);
-  if (is_proxy(obj)) return proxy_enum(js, obj, OBJ_ENUM_KEYS);
+  if (is_proxy(obj) && js_proxy_is_host(obj)) return proxy_enum(js, obj, OBJ_ENUM_KEYS);
+
+  ant_value_t target;
+  if (is_proxy(obj) && proxy_enumerates_as_target(js, obj, &target)) {
+    while (is_proxy(target) && proxy_enumerates_as_target(js, target, &target));
+    return js_for_in_keys(js, target);
+  }
 
   if (t == kTypeFunction) {
     const ant_object_t *ptr = js_obj_ptr(js_func_obj(obj));

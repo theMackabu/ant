@@ -571,6 +571,14 @@ void opt_tier_drop_closure_pinned(sv_func_t *func) {
     if (code->closure_pinned && !code->dropped) opt_drop_code(code);
 }
 
+void opt_tier_drop_unsettled_receivers(ant_t *js) {
+  sv_jit_ctx_t *jc = js->jit_ctx;
+  struct opt_state *state = jc ? jc->opt : NULL;
+  for (opt_func_state_t *func_state = state ? state->states : NULL; func_state; func_state = func_state->next)
+    for (opt_code_t *code = func_state->codes; code; code = code->func_next)
+      if (code->assumes_settled_receivers && !code->dropped) opt_drop_code(code);
+}
+
 void opt_code_invalidate(opt_code_t *code) {
   if (code->invalidated) return;
   code->invalidated = true;
@@ -980,6 +988,11 @@ ant_value_t opt_rt_new_forward(sv_vm_t *vm, ant_value_t callee, ant_value_t new_
 
 ant_value_t opt_rt_super_parent(sv_vm_t *vm, ant_value_t parent, ant_value_t this_val, ant_value_t *args, int64_t argc) {
   return sv_super_construct_parent(vm, vm->js, parent, this_val, args + 1, (int)argc - 1, args[0]);
+}
+
+ant_value_t opt_rt_settle_receiver(sv_vm_t *vm, ant_value_t this_val, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t unused) {
+  ant_t *js = vm->js;
+  return this_val == js->construct_dirty_seed ? sv_construct_settle(js, this_val, new_target) : this_val;
 }
 
 ant_value_t opt_rt_super_result(ant_value_t result, ant_value_t this_val) {
@@ -1682,6 +1695,7 @@ sv_jit_func_t opt_tier_compile(ant_t *js, sv_func_t *func, sv_closure_t *closure
   }
 
   code->closure_pinned = build_stats.closure_pinned;
+  code->assumes_settled_receivers = build_stats.assumes_settled_receivers;
   if (code->closure_pinned) func->opt_closure_pinned = true;
   code->func_next = state->codes;
   state->codes = code;

@@ -25,9 +25,15 @@ ant_value_t proxy_delete(ant_t *js, ant_value_t proxy, const char *key, size_t k
 ant_value_t proxy_get_val(ant_t *js, ant_value_t proxy, ant_value_t key_val);
 ant_value_t proxy_get_val_with_receiver(ant_t *js, ant_value_t proxy, ant_value_t key_val, ant_value_t receiver);
 ant_value_t proxy_get_prototype_of(ant_t *js, ant_value_t proxy);
+bool js_proxy_set_is_plain(ant_t *js, ant_value_t proxy);
+ant_value_t js_proxy_set_refusal(ant_t *js, ant_value_t proxy, ant_value_t key);
 ant_value_t proxy_set_prototype_of(ant_t *js, ant_value_t proxy, ant_value_t proto);
+ant_value_t proxy_set_prototype_of_trapped(ant_t *js, ant_value_t proxy, ant_value_t proto, bool *trapped);
 ant_value_t proxy_is_extensible(ant_t *js, ant_value_t proxy);
 ant_value_t proxy_prevent_extensions(ant_t *js, ant_value_t proxy);
+bool proxy_enumerates_as_target(ant_t *js, ant_value_t proxy, ant_value_t *target);
+bool proxy_is_transparent(ant_t *js, ant_value_t proxy, ant_value_t *target);
+bool proxy_descriptors_as_target(ant_t *js, ant_value_t proxy, ant_value_t *target);
 ant_value_t proxy_has_val(ant_t *js, ant_value_t proxy, ant_value_t key_val);
 ant_value_t proxy_get_own_property_descriptor(ant_t *js, ant_value_t proxy, ant_value_t key_val);
 ant_value_t proxy_has_own(ant_t *js, ant_value_t proxy, ant_value_t key_val);
