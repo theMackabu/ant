@@ -1498,6 +1498,9 @@ static void gc_mark_roots(ant_t *js) {
   for (size_t i = 0; i < js->pending_rejections.len; i++)
     gc_mark_value(js, js->pending_rejections.items[i]);
 
+  for (uint32_t i = 0; i < ANT_FOR_IN_CACHE_SIZE; i++)
+    if (js->runtime_cache.for_in[i].shape) gc_mark_value(js, js->runtime_cache.for_in[i].keys);
+
   if (js->cfunc_promoted.entries) for (uint32_t i = 0; i <= js->cfunc_promoted.mask; i++)
     if (js->cfunc_promoted.entries[i].key_a) gc_mark_value(js, js->cfunc_promoted.entries[i].value);
 

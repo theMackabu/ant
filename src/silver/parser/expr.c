@@ -47,6 +47,22 @@ sv_ast_t *parse_tagged_template(sv_parser_t *p, sv_ast_t *tag) {
   return tagged;
 }
 
+static void parse_call_args(sv_parser_t *p, sv_ast_t *call) {
+  while (sv_lexer_next(&p->lx) != TOK_RPAREN && p->lx.st.tok != TOK_EOF) {
+    if (p->lx.st.tok == TOK_REST) {
+      p->lx.st.consumed = 1;
+      sv_ast_t *spread = mk(N_SPREAD);
+      spread->right = parse_with_in(p, parse_assign);
+      sv_ast_list_push(p->js, &call->args, spread);
+    } else {
+      sv_ast_list_push(p->js, &call->args, parse_with_in(p, parse_assign));
+    }
+    if (sv_lexer_next(&p->lx) == TOK_COMMA) p->lx.st.consumed = 1;
+    else break;
+  }
+  expect(p, TOK_RPAREN);
+}
+
 static sv_ast_t *parse_call(sv_parser_t *p) {
   sv_ast_t *n = parse_primary(p);
   bool optional_chain = false;
@@ -57,19 +73,7 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
       p->lx.st.consumed = 1;
       sv_ast_t *call = mk(N_CALL);
       call->left = n;
-      while (sv_lexer_next(&p->lx) != TOK_RPAREN && p->lx.st.tok != TOK_EOF) {
-        if (p->lx.st.tok == TOK_REST) {
-          p->lx.st.consumed = 1;
-          sv_ast_t *spread = mk(N_SPREAD);
-          spread->right = parse_with_in(p, parse_assign);
-          sv_ast_list_push(p->js, &call->args, spread);
-        } else {
-          sv_ast_list_push(p->js, &call->args, parse_with_in(p, parse_assign));
-        }
-        if (sv_lexer_next(&p->lx) == TOK_COMMA) p->lx.st.consumed = 1;
-        else break;
-      }
-      expect(p, TOK_RPAREN);
+      parse_call_args(p, call);
       call->src_off = n ? n->src_off : call->src_off;
       call->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
       if (optional_chain) call->flags |= FN_OPTIONAL_BASE;
@@ -93,12 +97,7 @@ static sv_ast_t *parse_call(sv_parser_t *p) {
         sv_ast_t *call = mk(N_CALL);
         call->left = opt;
         p->lx.st.consumed = 1;
-        while (sv_lexer_next(&p->lx) != TOK_RPAREN && p->lx.st.tok != TOK_EOF) {
-          sv_ast_list_push(p->js, &call->args, parse_with_in(p, parse_assign));
-          if (sv_lexer_next(&p->lx) == TOK_COMMA) p->lx.st.consumed = 1;
-          else break;
-        }
-        expect(p, TOK_RPAREN);
+        parse_call_args(p, call);
         call->src_off = n ? n->src_off : call->src_off;
         call->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
         call->flags |= FN_OPTIONAL_BASE;
@@ -143,12 +142,7 @@ static sv_ast_t *parse_postfix(sv_parser_t *p) {
     return mk(N_EMPTY);
   }
   if ((la == TOK_POSTINC || la == TOK_POSTDEC) && !p->lx.st.had_newline) {
-    if (sv_is_strict_restricted_assign_target(p, n)) {
-      SV_MKERR_TYPED(
-        p->js, JS_ERR_SYNTAX,
-        "cannot modify eval or arguments in strict mode");
-      return mk(N_EMPTY);
-    }
+    if (sv_reject_assign_target(p, n, SV_TARGET_UPDATE)) return mk(N_EMPTY);
     p->lx.st.consumed = 1;
     sv_ast_t *u = mk(N_UPDATE);
     u->op = la;
@@ -190,12 +184,7 @@ sv_ast_t *parse_unary(sv_parser_t *p) {
   if (la == TOK_POSTINC || la == TOK_POSTDEC) {
     p->lx.st.consumed = 1;
     sv_ast_t *target = parse_unary(p);
-    if (sv_is_strict_restricted_assign_target(p, target)) {
-      SV_MKERR_TYPED(
-        p->js, JS_ERR_SYNTAX,
-        "cannot modify eval or arguments in strict mode");
-      return mk(N_EMPTY);
-    }
+    if (sv_reject_assign_target(p, target, SV_TARGET_UPDATE)) return mk(N_EMPTY);
     sv_ast_t *n = mk(N_UPDATE);
     n->op = la;
     n->right = target;
@@ -255,6 +244,12 @@ static bool is_assign_op(uint8_t tok) {
   return tok >= TOK_ASSIGN && tok <= TOK_NULLISH_ASSIGN;
 }
 
+static sv_target_kind_t assign_target_kind(uint8_t op) {
+  if (op == TOK_ASSIGN) return SV_TARGET_ASSIGN;
+  if (op == TOK_LOR_ASSIGN || op == TOK_LAND_ASSIGN || op == TOK_NULLISH_ASSIGN) return SV_TARGET_LOGICAL;
+  return SV_TARGET_COMPOUND;
+}
+
 sv_ast_t *parse_assign(sv_parser_t *p) {
   sv_ast_t *left = parse_ternary(p);
   uint8_t op = sv_lexer_next(&p->lx);
@@ -278,6 +273,7 @@ sv_ast_t *parse_assign(sv_parser_t *p) {
       SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Malformed arrow function parameter list");
       return mk(N_EMPTY);
     }
+    if (Ant_Exception_Pending(p->js)) return mk(N_EMPTY);
     
     fn->body = parse_arrow_body(p, false);
     fn->src_end = node_src_end(p, fn->body);
@@ -286,26 +282,7 @@ sv_ast_t *parse_assign(sv_parser_t *p) {
   }
   
   if (is_assign_op(op)) {
-    if (left->type == N_NEW_TARGET) {
-      SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Invalid left-hand side in assignment");
-      return mk(N_EMPTY);
-    }
-    
-    if ((left->flags & FN_PAREN) && op == TOK_ASSIGN &&
-        (left->type == N_OBJECT || left->type == N_OBJECT_PAT ||
-         left->type == N_ARRAY || left->type == N_ARRAY_PAT)) {
-      SV_MKERR_TYPED(
-        p->js, JS_ERR_SYNTAX,
-        "Invalid destructuring assignment target");
-      return mk(N_EMPTY);
-    }
-    
-    if (sv_is_strict_restricted_assign_target(p, left)) {
-      SV_MKERR_TYPED(
-        p->js, JS_ERR_SYNTAX,
-        "cannot modify eval or arguments in strict mode");
-      return mk(N_EMPTY);
-    }
+    if (sv_reject_assign_target(p, left, assign_target_kind(op))) return mk(N_EMPTY);
     
     p->lx.st.consumed = 1;
     sv_ast_t *n = mk(N_ASSIGN);
@@ -334,17 +311,46 @@ sv_ast_t *parse_expr(sv_parser_t *p) {
   return left;
 }
 
-sv_ast_t *parse_paren_list(sv_parser_t *p, bool trailing_comma) {
-  sv_ast_t *left = parse_assign(p);
+static sv_ast_t *parse_paren_item(sv_parser_t *p, sv_ast_t **rest) {
+  if (sv_lexer_next(&p->lx) != TOK_REST) {
+    *rest = NULL;
+    return parse_assign(p);
+  }
+  p->lx.st.consumed = 1;
+  sv_ast_t *n = mk(N_SPREAD);
+  n->right = parse_assign(p);
+  *rest = n;
+  return n;
+}
+
+sv_ast_t *parse_paren_list(sv_parser_t *p, bool call_like) {
+  sv_ast_t *rest = NULL;
+  bool any_rest = false;
+  sv_ast_t *left = parse_paren_item(p, &rest);
+  any_rest |= rest != NULL;
+  
   while (sv_lexer_next(&p->lx) == TOK_COMMA) {
     p->lx.st.consumed = 1;
-    if (sv_lexer_next(&p->lx) == TOK_RPAREN && (trailing_comma || sv_lexer_lookahead(&p->lx) == TOK_ARROW)) break;
+    if (sv_lexer_next(&p->lx) == TOK_RPAREN && (call_like || sv_lexer_lookahead(&p->lx) == TOK_ARROW)) {
+      if (rest) rest->flags |= FN_REST_COMMA;
+      break;
+    }
 
     sv_ast_t *n = mk(N_SEQUENCE);
     n->left = left;
-    n->right = parse_assign(p);
+    n->right = parse_paren_item(p, &rest);
+    any_rest |= rest != NULL;
     left = n;
   }
+  
+  if (
+    any_rest && !call_like && !Ant_Exception_Pending(p->js) &&
+    (sv_lexer_next(&p->lx) != TOK_RPAREN || sv_lexer_lookahead(&p->lx) != TOK_ARROW)
+  ) {
+    sv_parse_unexpected_token(p);
+    return mk(N_EMPTY);
+  }
+  
   return left;
 }
 

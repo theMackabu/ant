@@ -572,7 +572,9 @@ __attribute__((noinline, cold)) ant_value_t proxy_trap_error(ant_t *js, const ch
 }
 
 static ant_value_t proxy_get_method(ant_t *js, ant_value_t handler, const char *name) {
-  ant_value_t trap = js_getprop_fallback(js, handler, name);
+  ant_value_t trap;
+  if (!chain_plain_get_interned(handler, intern_find(js, name, strlen(name)), &trap))
+    trap = js_getprop_fallback(js, handler, name);
   if (is_err(trap)) return trap;
   if (vtype(trap) == kTypeUndefined || vtype(trap) == kTypeNull) return Ant_Value_Undefined;
   if (!is_callable(trap))
@@ -1722,6 +1724,27 @@ ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, a
   }
 }
 
+bool js_proxy_plain_prototype(ant_t *js, ant_value_t proxy, ant_value_t *out) {
+  ant_value_t source = proxy;
+  ant_value_t trap;
+
+  for (int depth = 0; depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
+    ant_proxy_state_t *data = get_proxy_data(source);
+    if (!data) return chain_plain_get_interned(source, js->intern.prototype, out);
+    if (data->revoked || data->host || !chain_plain_get_interned(data->handler, js->intern.get, &trap)) return false;
+    if (vtype(trap) != kTypeUndefined && vtype(trap) != kTypeNull) return false;
+    source = data->target;
+  }
+
+  return false;
+}
+
+ant_value_t js_proxy_get_prototype(ant_t *js, ant_value_t proxy) {
+  ant_value_t value;
+  if (js_proxy_plain_prototype(js, proxy, &value)) return value;
+  return js_getprop_fallback(js, proxy, "prototype");
+}
+
 ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, int argc, ant_value_t new_target) {
   if (sv_check_c_stack_overflow(js)) return Ant_Error_CreateStackOverflow(js);
   ant_proxy_state_t *data = get_proxy_data(proxy);
@@ -1756,14 +1779,18 @@ ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, 
   ant_value_t effective_new_target = new_target;
   ant_value_t proto;
   
-  if (new_target != target) {
-    proto = js_getprop_fallback(js, new_target, "prototype");
+  if (new_target == target) proto = sv_prepare_construct_meta(js, target, new_target, &effective_new_target);
+  else if (vtype(new_target) != kTypeObject || !is_proxy(new_target)) proto = sv_construct_prototype_from(js, new_target);
+  else {
+    proto = js_proxy_get_prototype(js, new_target);
     if (!is_err(proto) && !is_object_type(proto)) proto = js->sym.object_proto;
-  } else proto = sv_prepare_construct_meta(js, target, new_target, &effective_new_target);
+  }
   if (is_err(proto)) return proto;
 
-  ant_value_t obj = mkobj(js, 0);
-  if (is_object_type(proto)) js_set_proto_init(obj, proto);
+  ant_value_t obj = js_mkobj_with_proto_slots(
+    js, is_object_type(proto) ? proto : Ant_Value_Undefined, sv_construct_slots_of(target)
+  );
+  if (is_err(obj)) return obj;
 
   ant_value_t ctor_this = obj;
   ant_value_t result = sv_vm_call(

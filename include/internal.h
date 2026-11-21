@@ -247,6 +247,10 @@ ant_value_t js_group_by(ant_t *js, ant_value_t items, ant_value_t callback, js_g
 ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode);
 ant_value_t js_create_data_property_or_throw(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t value);
 ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
+ant_value_t js_proxy_get_prototype(ant_t *js, ant_value_t proxy);
+bool js_proxy_plain_prototype(ant_t *js, ant_value_t proxy, ant_value_t *out);
+ant_value_t js_reflect_construct_listed(ant_t *js, ant_value_t target, ant_value_t new_target, bool explicit_new_target, ant_value_t *args, int argc);
+ant_value_t js_reflect_construct_array_like(ant_t *js, ant_value_t target, ant_value_t args_arr, ant_value_t new_target, bool explicit_new_target);
 ant_value_t js_proxy_prevent_extensions(ant_t *js, ant_value_t proxy);
 ant_value_t js_mkproxy(ant_t *js, ant_value_t target, ant_value_t handler);
 ant_value_t js_get_own_property_descriptor(ant_t *js, ant_value_t obj, ant_value_t key);
@@ -330,6 +334,7 @@ bool js_obj_extra_reserve(ant_object_t *obj, uint8_t capacity);
 ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t tmpl);
 
 ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj);
+void js_for_in_cache_clear(ant_t *js);
 ant_value_t Ant_Object_ToStringTag(ant_t *js, ant_value_t obj);
 ant_value_t Ant_Object_PropertyIsEnumerable(ant_t *js, ant_value_t obj, ant_value_t key);
 ant_value_t Ant_Object_HasOwn(ant_t *js, ant_value_t obj, ant_value_t key);
@@ -395,6 +400,7 @@ bool js_is_function_call_builtin(ant_value_t func);
 bool js_is_function_apply_builtin(ant_value_t func);
 bool js_is_array_push_builtin(ant_value_t func);
 bool js_is_array_pop_builtin(ant_value_t func);
+bool js_is_reflect_construct_builtin(ant_value_t func);
 bool js_is_prototype_of(ant_t *js, ant_value_t proto_obj, ant_value_t obj);
 
 bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r);
