@@ -15,7 +15,7 @@ permissions:
 jobs:
   draft:
     name: Draft release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
