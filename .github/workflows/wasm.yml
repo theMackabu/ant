@@ -13,7 +13,7 @@ concurrency:
 jobs:
   build:
     name: Build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
 
     steps:
@@ -63,9 +63,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-24.04
+          - os: ubuntu-26.04
             node: 18
-          - os: ubuntu-24.04
+          - os: ubuntu-26.04
             node: 22
           - os: windows-latest
             node: 22

@@ -41,10 +41,17 @@ runs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
+        if command -v "clang-${{ inputs.version }}" >/dev/null 2>&1 \
+          && command -v "lld-${{ inputs.version }}" >/dev/null 2>&1 \
+          && command -v "llvm-ar-${{ inputs.version }}" >/dev/null 2>&1; then
+          echo "LLVM ${{ inputs.version }} already installed, skipping apt-get"
+          exit 0
+        fi
+        APT_OPTS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
         wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
         echo "deb https://apt.llvm.org/jammy/ llvm-toolchain-jammy-${{ inputs.version }} main" > /etc/apt/sources.list.d/llvm.list
-        apt-get update
-        apt-get install -y clang-${{ inputs.version }} lld-${{ inputs.version }} llvm-${{ inputs.version }}
+        apt-get "${APT_OPTS[@]}" update
+        apt-get "${APT_OPTS[@]}" install -y clang-${{ inputs.version }} lld-${{ inputs.version }} llvm-${{ inputs.version }}
 
     - name: Install LLVM (macOS)
       if: inputs.os_type == 'macos'

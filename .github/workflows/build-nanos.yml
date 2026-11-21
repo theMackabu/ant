@@ -70,7 +70,7 @@ permissions:
 jobs:
   nanos:
     name: Nanos Image (${{ inputs.arch }})
-    runs-on: ${{ inputs.runner || (inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest') }}
+    runs-on: ${{ inputs.runner || (inputs.arch == 'aarch64' && 'ubuntu-26.04-arm' || 'ubuntu-26.04') }}
     env:
       NANOS_ARTIFACT: ${{ inputs.artifact || (inputs.arch == 'aarch64' && 'ant-linux-aarch64-musl' || 'ant-linux-x64-musl') }}
       NANOS_PLATFORM: ${{ inputs.arch == 'aarch64' && 'virt' || 'pc' }}
@@ -173,24 +173,16 @@ jobs:
       - name: Install Nanos build dependencies
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            ca-certificates \
-            clang \
-            curl \
-            git \
-            jq \
-            lld \
-            llvm \
-            make \
-            perl \
-            python3 \
-            xxd
-
+          APT_OPTS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
+          PKGS=(
+            build-essential ca-certificates curl git jq
+            clang lld llvm make perl python3 xxd
+          )
           if [[ "$SANDBOX_ARCH" == "x64" ]]; then
-            sudo apt-get install -y nasm
+            PKGS+=(nasm)
           fi
+          sudo apt-get "${APT_OPTS[@]}" update
+          sudo apt-get "${APT_OPTS[@]}" install -y "${PKGS[@]}"
 
       - name: Checkout Nanos
         id: nanos-source
