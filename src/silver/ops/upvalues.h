@@ -267,7 +267,7 @@ static inline ant_value_t sv_op_closure(
   
   ant_value_t eval_env = sv_frame_eval_env(js, frame);
   if (*ip == OP_CLOSURE_EVAL) {
-    eval_env = sv_eval_capture_env(vm, js, frame, sv_get_u32(ip + 5));
+    eval_env = sv_eval_capture_closure_env(vm, js, frame, sv_get_u32(ip + 5));
     if (is_err(eval_env)) return eval_env;
     if (vtype(frame->arguments_obj) != kTypeUndefined && !sv_frame_is_strict(frame)) sv_closure_link_arguments(js, frame, closure);
   }

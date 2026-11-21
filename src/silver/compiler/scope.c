@@ -35,6 +35,16 @@ int resolve_local(sv_compiler_t *c, const char *name, uint32_t len) {
 }
 
 int resolve_local_at_depth(sv_compiler_t *c, const char *name, uint32_t len, int depth) {
+  if (c->local_lookup_heads && c->local_lookup_cap > 0) {
+    uint32_t hash = sv_compile_ctx_hash_local_name(name, len);
+    int bucket = (int)(hash & (uint32_t)(c->local_lookup_cap - 1));
+    for (int i = c->local_lookup_heads[bucket]; i != -1; i = c->locals[i].lookup_next) {
+      sv_local_t *loc = &c->locals[i];
+      if (loc->depth == depth && loc->name_hash == hash && loc->name_len == len && memcmp(loc->name, name, len) == 0) return i;
+    }
+    return -1;
+  }
+
   for (int i = c->local_count - 1; i >= 0; i--) {
     sv_local_t *loc = &c->locals[i];
     if (
@@ -127,13 +137,21 @@ static void mark_slot_type(sv_compiler_t *c, int slot, uint8_t type) {
   else if (old != type) c->slot_types[slot].type = SV_TI_UNKNOWN;
 }
 
-void set_local_inferred_type(sv_compiler_t *c, int local_idx, uint8_t type) {
+void set_local_declared_type(sv_compiler_t *c, int local_idx, uint8_t type, int dep_base) {
   if (local_idx < 0 || local_idx >= c->local_count) return;
-  c->locals[local_idx].inferred_type = type;
-  c->locals[local_idx].str_accumulating = false;
+  type_assign_local(c, local_idx, type, dep_base);
   if (c->locals[local_idx].depth == -1) return;
-  int slot = local_idx - c->param_locals;
-  mark_slot_type(c, slot, type);
+  mark_slot_type(c, local_idx - c->param_locals, c->locals[local_idx].inferred_type);
+}
+
+void set_local_inferred_type(sv_compiler_t *c, int local_idx, uint8_t type) {
+  set_local_declared_type(c, local_idx, type, c->types->dep_count);
+}
+
+void set_local_stored_type(sv_compiler_t *c, int local_idx, uint8_t type, int dep_base) {
+  type_assign_local(c, local_idx, type, dep_base);
+  if (c->locals[local_idx].depth == -1) return;
+  mark_slot_type(c, local_idx - c->param_locals, SV_TI_UNKNOWN);
 }
 
 const char *typeof_name_for_type(uint8_t type) {
@@ -178,7 +196,43 @@ int resolve_local_slot(sv_compiler_t *c, const char *name, uint32_t len) {
   return (slot >= 0 && slot <= 255) ? slot : -1;
 }
 
+static inline uint32_t upvalue_index_slot(const sv_compiler_t *c, uint16_t index, bool is_local) {
+  uint32_t key = ((uint32_t)index << 1) | (is_local ? 1u : 0u);
+  return (key * 0x9E3779B1u) >> 8 & (uint32_t)(c->upvalue_index_cap - 1);
+}
+
+static void upvalue_index_insert(sv_compiler_t *c, int upvalue) {
+  uint32_t mask = (uint32_t)c->upvalue_index_cap - 1;
+  uint32_t slot = upvalue_index_slot(c, c->upval_descs[upvalue].index, c->upval_descs[upvalue].is_local);
+  while (c->upvalue_index[slot] >= 0) slot = (slot + 1) & mask;
+  c->upvalue_index[slot] = upvalue;
+}
+
+static void upvalue_index_add(sv_compiler_t *c) {
+  if (c->upvalue_count < 32) return;
+  if (c->upvalue_index_cap && c->upvalue_count * 2 < c->upvalue_index_cap) {
+    upvalue_index_insert(c, c->upvalue_count - 1);
+    return;
+  }
+
+  int cap = c->upvalue_index_cap ? c->upvalue_index_cap * 2 : 128;
+  int *index = realloc(c->upvalue_index, (size_t)cap * sizeof(*index));
+  if (!index) { c->upvalue_index_cap = 0; return; }
+  memset(index, 0xff, (size_t)cap * sizeof(*index));
+  c->upvalue_index = index;
+  c->upvalue_index_cap = cap;
+  for (int i = 0; i < c->upvalue_count; i++) upvalue_index_insert(c, i);
+}
+
 static int find_upvalue(sv_compiler_t *c, uint16_t index, bool is_local) {
+  if (c->upvalue_index_cap) {
+    uint32_t mask = (uint32_t)c->upvalue_index_cap - 1;
+    for (uint32_t slot = upvalue_index_slot(c, index, is_local);; slot = (slot + 1) & mask) {
+      int upvalue = c->upvalue_index[slot];
+      if (upvalue < 0) return -1;
+      if (c->upval_descs[upvalue].index == index && c->upval_descs[upvalue].is_local == is_local) return upvalue;
+    }
+  }
   for (int i = 0; i < c->upvalue_count; i++)
     if (c->upval_descs[i].index == index && c->upval_descs[i].is_local == is_local) return i;
   return -1;
@@ -255,6 +309,7 @@ int add_upvalue_binding(
   };
   
   if (binding) c->upval_bindings[idx] = *binding;
+  upvalue_index_add(c);
   return idx;
 }
 
@@ -263,7 +318,7 @@ int add_upvalue_tdz(sv_compiler_t *c, uint16_t index, bool is_local, bool may_td
   return add_upvalue_binding(c, index, is_local, false, false, false, &binding);
 }
 
-static int resolve_upvalue_to(sv_compiler_t *c, sv_compiler_t *owner, int local) {
+int resolve_upvalue_to(sv_compiler_t *c, sv_compiler_t *owner, int local) {
   sv_compiler_t *enc = c->enclosing;
   if (!enc || local < 0) return -1;
 
@@ -277,6 +332,11 @@ static int resolve_upvalue_to(sv_compiler_t *c, sv_compiler_t *owner, int local)
   if (upvalue == -1) return -1;
 
   return add_upvalue(c, (uint16_t)upvalue, false, owner->locals[local].is_const);
+}
+
+sv_compiler_t *lexical_owner(sv_compiler_t *c) {
+  while (c->is_arrow && c->enclosing) c = c->enclosing;
+  return c;
 }
 
 static sv_compiler_t *enclosing_non_arrow(sv_compiler_t *c) {
@@ -410,7 +470,12 @@ void push_loop(
     .labels_loop = kind == SV_LOOP_LABEL_OF_LOOP,
     .iter_unwind_index = -1,
     .iter_completion_local = -1,
+    .iterates = kind == SV_LOOP_ITERATION,
+    .type_child_mark = c->type_child_count,
+    .type_use_start = c->types->use_count,
+    .type_fact_mark = c->types->fact_next,
   };
+  if (kind == SV_LOOP_ITERATION) c->type_loop_depth++;
 }
 
 int find_loop_label(const sv_compiler_t *c, const char *label, uint32_t label_len) {
@@ -423,7 +488,12 @@ int find_loop_label(const sv_compiler_t *c, const char *label, uint32_t label_le
 }
 
 void pop_loop(sv_compiler_t *c) {
-  sv_loop_t *loop = &c->loops[--c->loop_count];
+  sv_loop_t *loop = &c->loops[c->loop_count - 1];
+  if (loop->iterates) {
+    if (loop->type_child_mark != c->type_child_count) type_loop_leave(c);
+    c->type_loop_depth--;
+  }
+  c->loop_count--;
   patch_list_resolve(c, &loop->breaks);
   free(loop->continues.offsets);
 }
@@ -432,7 +502,129 @@ void begin_scope(sv_compiler_t *c) {
   c->scope_depth++;
 }
 
+static inline bool spill_allowed(const sv_compiler_t *c) {
+  if (c->spill_disabled || !c->enclosing) return false;
+  if (c->scope_depth == 0 && (is_repl_root(c) || sv_compile_mode_is_eval(c->mode))) return false;
+  if (c->scope_depth == 0 && c->mode == SV_COMPILE_MODULE && !c->enclosing->enclosing) return false;
+  return c->local_count - c->param_locals >= SV_SPILL_THRESHOLD;
+}
+
+int resolve_spill_slow(const sv_compiler_t *c, const char *name, uint32_t len) {
+  if (!c->spill_count) return -1;
+  uint32_t hash = sv_compile_ctx_hash_local_name(name, len);
+  for (int i = c->spill_heads[hash & (uint32_t)(c->spill_head_cap - 1)]; i != -1; i = c->spills[i].next) {
+    const sv_spill_binding_t *spill = &c->spills[i];
+    if (spill->hash == hash && spill->len == len && memcmp(spill->name, name, len) == 0) return i;
+  }
+  return -1;
+}
+
+static int spill_scope_for(sv_compiler_t *c) {
+  int block_depth = c->scope_depth;
+  for (int i = c->with_depth - 1; i >= 0; i--) {
+    if (c->with_scopes[i].implicit && c->with_scopes[i].block_depth == block_depth) return i;
+    if (c->with_scopes[i].block_depth < block_depth) break;
+  }
+
+  int local = add_hidden_local(c);
+  emit_op(c, OP_OBJECT);
+  emit_op(c, OP_NULL);
+  emit_op(c, OP_SET_PROTO);
+  emit_put_local(c, local);
+
+  if (c->with_depth >= c->with_cap) {
+    c->with_cap = c->with_cap ? c->with_cap * 2 : 4;
+    c->with_scopes = realloc(c->with_scopes, (size_t)c->with_cap * sizeof(*c->with_scopes));
+  }
+  c->with_scopes[c->with_depth] = (sv_with_scope_t){
+    .local = local, .depth = block_depth == 0 ? -1 : block_depth,
+    .block_depth = block_depth, .implicit = true,
+  };
+  return c->with_depth++;
+}
+
+static void spill_table_grow(sv_compiler_t *c) {
+  if (c->spill_count >= c->spill_cap) {
+    c->spill_cap = c->spill_cap ? c->spill_cap * 2 : 1024;
+    c->spills = realloc(c->spills, (size_t)c->spill_cap * sizeof(*c->spills));
+  }
+  if (c->spill_count * 2 < c->spill_head_cap) return;
+
+  c->spill_head_cap = c->spill_head_cap ? c->spill_head_cap * 2 : 2048;
+  c->spill_heads = realloc(c->spill_heads, (size_t)c->spill_head_cap * sizeof(*c->spill_heads));
+  memset(c->spill_heads, 0xff, (size_t)c->spill_head_cap * sizeof(*c->spill_heads));
+  for (int i = 0; i < c->spill_count; i++) {
+    int bucket = (int)(c->spills[i].hash & (uint32_t)(c->spill_head_cap - 1));
+    c->spills[i].next = c->spill_heads[bucket];
+    c->spill_heads[bucket] = i;
+  }
+}
+
+void emit_spill_define(sv_compiler_t *c, int spill) {
+  emit_get_local(c, c->with_scopes[c->spills[spill].scope].local);
+  emit_op(c, OP_SWAP);
+  emit_atom_op(c, OP_DEFINE_FIELD, c->spills[spill].name, c->spills[spill].len);
+  emit_op(c, OP_POP);
+}
+
+bool declare_spilled_slow(sv_compiler_t *c, const char *name, uint32_t len, bool is_const, bool define) {
+  int existing = resolve_spill(c, name, len);
+  if (existing >= 0 && c->spills[existing].depth == c->scope_depth) return true;
+  if (!spill_allowed(c)) return false;
+
+  int scope = spill_scope_for(c);
+  spill_table_grow(c);
+  uint32_t hash = sv_compile_ctx_hash_local_name(name, len);
+  int bucket = (int)(hash & (uint32_t)(c->spill_head_cap - 1));
+  int index = c->spill_count++;
+  c->spills[index] = (sv_spill_binding_t){
+    .name = name, .len = len, .hash = hash,
+    .depth = c->scope_depth, .scope = scope,
+    .next = c->spill_heads[bucket], .is_const = is_const,
+  };
+  c->spill_heads[bucket] = index;
+
+  if (define) {
+    emit_op(c, OP_UNDEF);
+    emit_spill_define(c, index);
+  }
+  return true;
+}
+
+static const sv_spill_binding_t *nearest_spill(sv_compiler_t *c, const char *name, uint32_t len) {
+  for (sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
+    int local = resolve_local(cur, name, len);
+    int spill = resolve_spill(cur, name, len);
+    if (spill >= 0 && (local < 0 || cur->locals[local].depth < cur->spills[spill].depth)) return &cur->spills[spill];
+    if (local >= 0 || cur->owns_eval_env) break;
+  }
+  return NULL;
+}
+
+bool spilled_const_assignment(sv_compiler_t *c, const char *name, uint32_t len) {
+  if (!has_active_with_scope(c)) return false;
+  const sv_spill_binding_t *spill = nearest_spill(c, name, len);
+  return spill && spill->is_const;
+}
+
+bool spilled_binding_visible(sv_compiler_t *c, const char *name, uint32_t len) {
+  return has_active_with_scope(c) && nearest_spill(c, name, len) != NULL;
+}
+
+static void end_spill_scopes(sv_compiler_t *c) {
+  while (c->spill_count > 0 && c->spills[c->spill_count - 1].depth >= c->scope_depth) {
+    sv_spill_binding_t *spill = &c->spills[--c->spill_count];
+    c->spill_heads[spill->hash & (uint32_t)(c->spill_head_cap - 1)] = spill->next;
+  }
+  while (
+    c->with_depth > 0 && c->with_scopes[c->with_depth - 1].implicit &&
+    c->with_scopes[c->with_depth - 1].block_depth >= c->scope_depth
+  ) c->with_depth--;
+  c->eval_scope_shareable = false;
+}
+
 void end_scope(sv_compiler_t *c) {
+  if (c->spill_count) end_spill_scopes(c);
   while (
     c->local_count > 0 &&
     c->locals[c->local_count - 1].depth >= c->scope_depth
@@ -448,6 +640,7 @@ void end_scope(sv_compiler_t *c) {
     sv_compile_ctx_local_lookup_remove(c, c->local_count - 1);
     c->local_count--;
   }
+  if (c->eval_scope_shareable) eval_scope_locals_popped(c);
   c->scope_depth--;
 }
 
@@ -461,46 +654,75 @@ void emit_close_upvals(sv_compiler_t *c) {
   }}
 }
 
-static void with_refs_push(sv_with_refs_t *out, bool is_upval, int idx) {
-  if (idx < 0) return;
+static void with_refs_push(sv_with_refs_t *out, sv_with_ref_t ref) {
   if (out->count >= out->cap) {
     out->cap = out->cap ? out->cap * 2 : 4;
     out->refs = realloc(out->refs, (size_t)out->cap * sizeof(*out->refs));
   }
-  out->refs[out->count++] = (sv_with_ref_t){ .is_upval = is_upval, .idx = (uint16_t)idx };
+  out->refs[out->count++] = ref;
+}
+
+static void with_refs_push_marker(void *ctx, const char *marker, uint32_t len) {
+  with_refs_push(ctx, (sv_with_ref_t){
+    .kind = SV_WITH_REF_ENV, .implicit = len > 1 && marker[1] == 's',
+    .marker = marker, .marker_len = len,
+  });
+}
+
+static void with_marker_seen(void *ctx, const char *marker, uint32_t len) {
+  *(bool *)ctx = true;
+}
+
+static bool eval_declares_var(const sv_compiler_t *body, const char *name, uint32_t len) {
+  return body && find_eval_var(body, name, len) >= 0;
 }
 
 void with_shadows(sv_compiler_t *c, const char *name, uint32_t len, sv_with_refs_t *out) {
   out->count = 0;
   if (!has_active_with_scope(c) || is_ident_str(name, len, "super", 5)) return;
 
-  for (sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
+  sv_compiler_t *inner = NULL;
+  for (sv_compiler_t *cur = c; cur; inner = cur, cur = cur->enclosing) {
     int local = resolve_local(cur, name, len);
     for (int i = cur->with_depth - 1; i >= 0; i--) {
       sv_with_scope_t *scope = &cur->with_scopes[i];
       if (local >= 0 && cur->locals[local].depth >= scope->depth) continue;
-      if (cur == c) {
-        with_refs_push(out, false, local_to_frame_slot(c, scope->local) - c->param_count);
-      } else with_refs_push(out, true, resolve_upvalue_to(c, cur, scope->local));
+      int slot = cur == c
+        ? local_to_frame_slot(c, scope->local) - c->param_count
+        : resolve_upvalue_to(c, cur, scope->local);
+      if (slot >= 0) with_refs_push(out, (sv_with_ref_t){
+        .kind = cur == c ? SV_WITH_REF_LOCAL : SV_WITH_REF_UPVALUE,
+        .implicit = scope->implicit, .idx = (uint16_t)slot,
+      });
     }
     if (local >= 0 || cur->owns_eval_env) break;
+    if (cur->eval_with) sv_eval_env_each_with(
+      c->js, cur->eval_env, name, len, eval_declares_var(inner, name, len), with_refs_push_marker, out);
   }
 }
 
 bool local_with_shadowed(sv_compiler_t *c, const char *name, uint32_t len) {
   if (!has_active_with_scope(c) || is_ident_str(name, len, "super", 5)) return false;
 
-  for (sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
+  sv_compiler_t *inner = NULL;
+  for (sv_compiler_t *cur = c; cur; inner = cur, cur = cur->enclosing) {
     int local = resolve_local(cur, name, len);
     for (int i = cur->with_depth - 1; i >= 0; i--)
       if (local < 0 || cur->locals[local].depth < cur->with_scopes[i].depth) return true;
     if (local >= 0 || cur->owns_eval_env) break;
+    if (cur->eval_with) {
+      bool seen = false;
+      sv_eval_env_each_with(c->js, cur->eval_env, name, len, eval_declares_var(inner, name, len), with_marker_seen, &seen);
+      if (seen) return true;
+    }
   }
   return false;
 }
 
 static void emit_with_ref_load(sv_compiler_t *c, const sv_with_ref_t *ref) {
-  if (ref->is_upval) {
+  if (ref->kind == SV_WITH_REF_ENV) {
+    emit_atom_op(c, OP_GET_EVAL_GLOBAL, ref->marker, ref->marker_len);
+  } else if (ref->kind == SV_WITH_REF_UPVALUE) {
     emit_op(c, OP_GET_UPVAL);
     emit_u16(c, ref->idx);
   } else if (ref->idx <= 255) {
@@ -512,7 +734,7 @@ static void emit_with_ref_load(sv_compiler_t *c, const sv_with_ref_t *ref) {
   }
 }
 
-static int emit_with_try(sv_compiler_t *c, sv_op_t op, const sv_with_ref_t *ref, const char *name, uint32_t len) {
+int emit_with_try(sv_compiler_t *c, sv_op_t op, const sv_with_ref_t *ref, const char *name, uint32_t len) {
   emit_with_ref_load(c, ref);
   emit_op(c, op);
   emit_u32(c, (uint32_t)add_atom(c, name, len));

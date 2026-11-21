@@ -4,11 +4,44 @@ static sv_private_name_t *private_scope_find_current(
   sv_private_scope_t *scope, const char *name, uint32_t len
 ) {
   if (!scope || !name) return NULL;
+  if (scope->index) {
+    uint32_t mask = (uint32_t)scope->index_cap - 1;
+    for (uint32_t i = sv_compile_ctx_hash_local_name(name, len) & mask;; i = (i + 1) & mask) {
+      int entry = scope->index[i];
+      if (entry < 0) return NULL;
+      sv_private_name_t *p = &scope->names[entry];
+      if (p->len == len && memcmp(p->name, name, len) == 0) return p;
+    }
+  }
   for (int i = 0; i < scope->count; i++) {
     sv_private_name_t *p = &scope->names[i];
     if (p->len == len && memcmp(p->name, name, len) == 0) return p;
   }
   return NULL;
+}
+
+static void private_scope_index_insert(sv_private_scope_t *scope, int entry) {
+  uint32_t mask = (uint32_t)scope->index_cap - 1;
+  const sv_private_name_t *p = &scope->names[entry];
+  uint32_t i = sv_compile_ctx_hash_local_name(p->name, p->len) & mask;
+  while (scope->index[i] >= 0) i = (i + 1) & mask;
+  scope->index[i] = entry;
+}
+
+static void private_scope_index_add(sv_private_scope_t *scope) {
+  if (scope->count < 16) return;
+  if (scope->index && scope->count * 2 < scope->index_cap) {
+    private_scope_index_insert(scope, scope->count - 1);
+    return;
+  }
+
+  int cap = scope->index_cap ? scope->index_cap * 2 : 64;
+  int *index = realloc(scope->index, (size_t)cap * sizeof(*index));
+  if (!index) return;
+  memset(index, 0xff, (size_t)cap * sizeof(*index));
+  scope->index = index;
+  scope->index_cap = cap;
+  for (int i = 0; i < scope->count; i++) private_scope_index_insert(scope, i);
 }
 
 static sv_private_name_t *private_scope_resolve(
@@ -73,23 +106,48 @@ static bool private_scope_add(
     .has_getter = kind == SV_COMP_PRIVATE_GETTER,
     .has_setter = kind == SV_COMP_PRIVATE_SETTER,
     .owner = NULL,
-    .local = -1
+    .local = -1,
+    .method_local = -1,
+    .slot = -1,
+    .method_slot = -1,
+    .scope = scope
   };
   
+  private_scope_index_add(scope);
   return true;
 }
 
-static int resolve_private_upvalue(sv_compiler_t *c, sv_private_name_t *p) {
-  if (!c->enclosing || !p || !p->owner || p->local < 0) return -1;
+static inline bool private_name_is_instance_method(const sv_private_name_t *p) {
+  return p->kind == SV_COMP_PRIVATE_METHOD && !p->is_static;
+}
 
-  if (c->enclosing == p->owner) {
-    p->owner->locals[p->local].captured = true;
-    uint16_t slot = (uint16_t)local_to_frame_slot(p->owner, p->local);
-    sv_binding_meta_t binding = {.may_tdz = p->owner->locals[p->local].is_tdz};
+static uint32_t private_brand_hash(uint32_t method_hash, uint32_t class_off) {
+  return (method_hash * 0x9E3779B1u) ^ class_off;
+}
+
+static bool private_token_is_solo(const sv_private_scope_t *scope, bool is_static) {
+  int entries = 0;
+  bool branded = false;
+  for (int i = 0; i < scope->count; i++) {
+    const sv_private_name_t *p = &scope->names[i];
+    if (p->is_static != is_static || (private_name_is_instance_method(p) && branded)) continue;
+    branded |= private_name_is_instance_method(p);
+    entries++;
+  }
+  return entries == 1;
+}
+
+static int resolve_private_upvalue(sv_compiler_t *c, sv_compiler_t *owner, int local) {
+  if (!c->enclosing || !owner || local < 0) return -1;
+
+  if (c->enclosing == owner) {
+    owner->locals[local].captured = true;
+    uint16_t slot = (uint16_t)local_to_frame_slot(owner, local);
+    sv_binding_meta_t binding = {.may_tdz = owner->locals[local].is_tdz};
     return add_upvalue_binding(c, slot, true, false, false, true, &binding);
   }
 
-  int upvalue = resolve_private_upvalue(c->enclosing, p);
+  int upvalue = resolve_private_upvalue(c->enclosing, owner, local);
   if (upvalue == -1) return -1;
   
   const sv_upval_desc_t *outer = &c->enclosing->upval_descs[upvalue];
@@ -98,13 +156,109 @@ static int resolve_private_upvalue(sv_compiler_t *c, sv_private_name_t *p) {
   return add_upvalue_binding(c, (uint16_t)upvalue, false, false, false, outer->write_once, &binding);
 }
 
+static const char *private_method_binding_name(sv_compiler_t *c, const char *name, uint32_t len) {
+  char *buf = malloc((size_t)len + 2);
+  if (!buf) return NULL;
+  memcpy(buf, name, len);
+  memcpy(buf + len, "()", 2);
+  const char *interned = intern_string(c->js, buf, (size_t)len + 2);
+  free(buf);
+  return interned;
+}
+
+typedef enum {
+  EVAL_PRIVATE_NONE,
+  EVAL_PRIVATE_TOKEN,
+  EVAL_PRIVATE_METHOD,
+} eval_private_kind_t;
+
+static eval_private_kind_t eval_private_kind(sv_compiler_t *c, const char *name, uint32_t len) {
+  sv_compiler_t *root = c;
+  while (root->enclosing) root = root->enclosing;
+  if (!sv_compile_mode_is_eval(root->mode) || !is_object_type(root->eval_env)) return EVAL_PRIVATE_NONE;
+  if (!sv_eval_env_shadows_global(c->js, root->eval_env, name, len)) return EVAL_PRIVATE_NONE;
+
+  const char *method = private_method_binding_name(c, name, len);
+  return method && sv_eval_env_shadows_global(c->js, root->eval_env, method, len + 2)
+    ? EVAL_PRIVATE_METHOD : EVAL_PRIVATE_TOKEN;
+}
+
+bool private_name_resolvable(sv_compiler_t *c, sv_ast_t *name) {
+  return
+    private_scope_resolve(c, name->str, name->len) ||
+    eval_private_kind(c, name->str, name->len) != EVAL_PRIVATE_NONE;
+}
+
+static bool private_binding_location(
+  sv_compiler_t *c, sv_compiler_t *owner, int local, uint8_t *kind, uint16_t *index
+) {
+  if (!owner || local < 0) return false;
+  if (owner == c) {
+    owner->locals[local].captured = true;
+    *kind = SV_EVAL_BIND_LOCAL;
+    *index = (uint16_t)(local - c->param_locals);
+    return true;
+  }
+
+  int upvalue = resolve_private_upvalue(c, owner, local);
+  if (upvalue < 0) return false;
+  *kind = SV_EVAL_BIND_UPVALUE;
+  *index = (uint16_t)upvalue;
+  return true;
+}
+
+int private_eval_binding_count(const sv_compiler_t *c) {
+  int count = 0;
+  for (sv_private_scope_t *scope = c->private_scope; scope; scope = scope->parent)
+    count += scope->count * 2;
+  return count;
+}
+
+bool private_eval_bindings_each(sv_compiler_t *c, private_eval_binding_fn fn, void *ctx) {
+  for (sv_private_scope_t *scope = c->private_scope; scope; scope = scope->parent) {
+  for (int i = 0; i < scope->count; i++) {
+    sv_private_name_t *p = &scope->names[i];
+    sv_private_name_t *token = private_name_is_instance_method(p) ? &scope->brand : p;
+    uint8_t kind;
+    uint16_t index;
+
+    if (token->slot >= 0 || !private_binding_location(c, token->owner, token->local, &kind, &index)) continue;
+    if (!fn(ctx, p->name, p->len, kind, index)) return false;
+    if (token == p || p->method_local < 0 || p->method_slot >= 0) continue;
+
+    const char *method = private_method_binding_name(c, p->name, p->len);
+    if (!method || !private_binding_location(c, p->owner, p->method_local, &kind, &index)) continue;
+    if (!fn(ctx, method, p->len + 2, kind, index)) return false;
+  }}
+  return true;
+}
+
+static void emit_private_table_load(sv_compiler_t *c, int slot) {
+  if (slot < 0) return;
+  emit_number(c, (double)slot);
+  emit_op(c, OP_GET_ELEM);
+}
+
+static void emit_private_table_store(sv_compiler_t *c, int table_local, int slot) {
+  emit_get_local(c, table_local);
+  emit_op(c, OP_SWAP);
+  emit_number(c, (double)slot);
+  emit_op(c, OP_SWAP);
+  emit_op(c, OP_PUT_ELEM);
+}
+
 bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
   sv_private_name_t *p = private_scope_resolve(c, name->str, name->len);
+  if (!p && eval_private_kind(c, name->str, name->len) != EVAL_PRIVATE_NONE) {
+    emit_atom_op(c, OP_GET_EVAL_GLOBAL, name->str, name->len);
+    return true;
+  }
   if (!p) {
     js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Private name '%.*s' is not declared", (int)name->len, name->str);
     emit_op(c, OP_UNDEF);
     return false;
   }
+  if (private_name_is_instance_method(p)) p = &p->scope->brand;
   if (!p->owner || p->local < 0) {
     js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Private name '%.*s' is not initialized", (int)name->len, name->str);
     emit_op(c, OP_UNDEF);
@@ -112,9 +266,10 @@ bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
   }
   if (p->owner == c) {
     emit_get_local(c, p->local);
+    emit_private_table_load(c, p->slot);
     return true;
   }
-  int upvalue = resolve_private_upvalue(c, p);
+  int upvalue = resolve_private_upvalue(c, p->owner, p->local);
   if (upvalue == -1) {
     js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Private name '%.*s' is not in scope", (int)name->len, name->str);
     emit_op(c, OP_UNDEF);
@@ -122,6 +277,7 @@ bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
   }
   emit_op(c, OP_GET_UPVAL);
   emit_u16(c, (uint16_t)upvalue);
+  emit_private_table_load(c, p->slot);
   return true;
 }
 
@@ -236,6 +392,11 @@ static inline int compile_class_precompute_key(sv_compiler_t *c, sv_ast_t *key_e
   return loc;
 }
 
+static int private_brand_method_local(sv_compiler_t *c, sv_ast_t *m) {
+  sv_private_name_t *p = private_scope_find_current(c->private_scope, m->left->str, m->left->len);
+  return p && private_name_is_instance_method(p) ? p->method_local : -1;
+}
+
 static int reserve_private_method_local(sv_compiler_t *c) {
   int loc = add_local(c, "", 0, false, c->scope_depth);
   emit_op(c, OP_UNDEF);
@@ -243,25 +404,88 @@ static int reserve_private_method_local(sv_compiler_t *c) {
   return loc;
 }
 
+static void emit_private_method_value(sv_compiler_t *c, const sv_private_name_t *p) {
+  if (p->owner == c) {
+    emit_get_local(c, p->method_local);
+    emit_private_table_load(c, p->method_slot);
+    return;
+  }
+  
+  int upvalue = resolve_private_upvalue(c, p->owner, p->method_local);
+  if (upvalue == -1) {
+    js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Private name '%.*s' is not in scope", (int)p->len, p->name);
+    emit_op(c, OP_UNDEF);
+    return;
+  }
+  
+  emit_op(c, OP_GET_UPVAL);
+  emit_u16(c, (uint16_t)upvalue);
+  emit_private_table_load(c, p->method_slot);
+}
+
+void emit_private_get(sv_compiler_t *c, sv_ast_t *name, sv_op_t op) {
+  sv_private_name_t *p = private_scope_resolve(c, name->str, name->len);
+  bool eval_method = !p && eval_private_kind(c, name->str, name->len) == EVAL_PRIVATE_METHOD;
+  bool method = eval_method || (p && private_name_is_instance_method(p) && p->method_local >= 0);
+  int done = -1;
+
+  if (method && op == OP_GET_PRIVATE_OPT) {
+    int present = emit_jump(c, OP_JMP_NOT_NULLISH);
+    emit_op(c, OP_POP);
+    emit_op(c, OP_UNDEF);
+    done = emit_jump(c, OP_JMP);
+    patch_jump(c, present);
+    op = OP_GET_PRIVATE;
+  }
+
+  if (!emit_private_token(c, name)) {
+    emit_op(c, OP_POP);
+    if (done >= 0) patch_jump(c, done);
+    return;
+  }
+  
+  emit_op(c, op);
+  if (!method) return;
+  
+  emit_op(c, OP_POP);
+  if (eval_method) {
+    const char *binding = private_method_binding_name(c, name->str, name->len);
+    emit_atom_op(c, OP_GET_EVAL_GLOBAL, binding, name->len + 2);
+  } else emit_private_method_value(c, p);
+  if (done >= 0) patch_jump(c, done);
+}
+
+bool private_name_uses_brand(sv_compiler_t *c, sv_ast_t *name) {
+  sv_private_name_t *p = private_scope_resolve(c, name->str, name->len);
+  if (!p) return eval_private_kind(c, name->str, name->len) == EVAL_PRIVATE_METHOD;
+  return private_name_is_instance_method(p);
+}
+
 static void compile_private_instance_methods(
   sv_compiler_t *c, sv_ast_t **fields, int count, int methods_local, int method_count, int proto_local
 ) {
-  if (method_count == 0) return;
-  
   for (int i = 0; i < count; i++) {
     sv_ast_t *m = fields[i];
     if (!is_class_method_def(m)) continue;
     
-    if (method_count > 1) emit_private_token(c, m->left);
+    sv_private_name_t *p = private_scope_find_current(c->private_scope, m->left->str, m->left->len);
+    bool branded = p && private_name_is_instance_method(p);
+    if (!branded && method_count > 1) emit_private_token(c, m->left);
     compile_method_function(c, m);
     if (class_method_needs_home(m)) {
       emit_get_local(c, proto_local);
       emit_op(c, OP_SET_HOME_OBJ);
       emit_op(c, OP_POP);
     }
+    if (branded) {
+      if (p->method_slot >= 0) emit_private_table_store(c, p->method_local, p->method_slot);
+      else emit_put_local(c, p->method_local);
+      continue;
+    }
     if (method_count > 1) emit_number(c, private_method_kind(m));
   }
   
+  if (method_count == 0) return;
   if (method_count > 1) {
     emit_op(c, OP_ARRAY);
     emit_u16(c, (uint16_t)(method_count * 3));
@@ -326,6 +550,7 @@ static int compile_static_child_function(
   sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
   comp.is_strict = true;
   comp.is_static = true;
+  comp.no_arguments_scope = true;
   emit_super_local(&comp);
 
   if (returns_expr) {
@@ -419,7 +644,6 @@ static void compile_class_strict(
 
   sv_ast_t *ctor_method = NULL;
   bool has_computed_key = false;
-  bool has_static_name = false;
 
   int field_count = 0;
   int method_emit_count = 0;
@@ -428,7 +652,7 @@ static void compile_class_strict(
   if (binds_outer_name)
     outer_name_local = resolve_local(c, node->str, node->len);
 
-  sv_private_scope_t private_scope = { .parent = c->private_scope };
+  sv_private_scope_t private_scope = { .parent = c->private_scope, .brand = { .local = -1, .method_local = -1, .slot = -1, .method_slot = -1 } };
   sv_private_scope_t *saved_private_scope = c->private_scope;
   c->private_scope = &private_scope;
 
@@ -450,6 +674,7 @@ static void compile_class_strict(
       if (!private_scope_add(c, &private_scope, m->left, private_kind, !!(m->flags & FN_STATIC))) {
         c->private_scope = saved_private_scope;
         free(private_scope.names);
+        free(private_scope.index);
         emit_op(c, OP_UNDEF);
         return;
       }
@@ -461,6 +686,7 @@ static void compile_class_strict(
         js_mkerr_typed(c->js, JS_ERR_SYNTAX, "%s", invalid);
         c->private_scope = saved_private_scope;
         free(private_scope.names);
+        free(private_scope.index);
         emit_op(c, OP_UNDEF);
         return;
       }
@@ -471,21 +697,21 @@ static void compile_class_strict(
       js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Classes may not have a static property named 'prototype'");
       c->private_scope = saved_private_scope;
       free(private_scope.names);
+      free(private_scope.index);
       emit_op(c, OP_UNDEF);
       return;
     }
     
-    if (
-      (m->flags & FN_STATIC) &&
-      !(m->flags & FN_COMPUTED) &&
-      m->left && m->left->str &&
-      m->left->len == 4 &&
-      memcmp(m->left->str, "name", 4) == 0
-    ) has_static_name = true;
-    
     if (!(m->flags & FN_STATIC) && (is_private || !is_fn)) field_count++;
     else if (is_fn && (!is_private || (m->flags & FN_STATIC))) method_emit_count++;
     else if (m->flags & FN_STATIC) static_init_count++;
+  }
+
+  const char *class_name = node->str;
+  uint32_t class_name_len = node->len;
+  if (!class_name && inferred_name) {
+    class_name = inferred_name;
+    class_name_len = inferred_name_len;
   }
 
   int inner_name_local = -1;
@@ -510,13 +736,46 @@ static void compile_class_strict(
   c->private_scope = &private_scope;
 
   if (has_class_scope) {
+    bool solo[2] = { private_token_is_solo(&private_scope, false), private_token_is_solo(&private_scope, true) };
+    bool tabled = private_scope.count * 2 + (c->local_count - c->param_locals) >= SV_SPILL_THRESHOLD;
+    int table_local = -1;
+    int next_slot = 0;
+    if (tabled) {
+      table_local = add_hidden_local(c);
+      emit_op(c, OP_ARRAY);
+      emit_u16(c, 0);
+      emit_put_local(c, table_local);
+    }
+
     for (int i = 0; i < private_scope.count; i++) {
       sv_private_name_t *p = &private_scope.names[i];
       p->owner = c;
-      p->local = add_local(c, "", 0, true, c->scope_depth);
+      if (private_name_is_instance_method(p)) {
+        if (tabled) {
+          p->method_local = table_local;
+          p->method_slot = next_slot++;
+          emit_op(c, OP_UNDEF);
+          emit_private_table_store(c, table_local, p->method_slot);
+        } else p->method_local = add_local(c, "", 0, false, c->scope_depth);
+        if (private_scope.brand.local >= 0) continue;
+        private_scope.brand.owner = c;
+        private_scope.brand.hash = private_brand_hash(p->hash, node->src_off);
+        p = &private_scope.brand;
+      }
+      p->hash &= ~ANT_PRIVATE_HASH_SOLO;
+      if (solo[p->is_static]) p->hash |= ANT_PRIVATE_HASH_SOLO;
+      if (!tabled) {
+        p->local = add_local(c, "", 0, true, c->scope_depth);
+        emit_op(c, OP_PRIVATE_TOKEN);
+        emit_u32(c, p->hash);
+        emit_put_local(c, p->local);
+        continue;
+      }
+      p->local = table_local;
+      p->slot = next_slot++;
       emit_op(c, OP_PRIVATE_TOKEN);
       emit_u32(c, p->hash);
-      emit_put_local(c, p->local);
+      emit_private_table_store(c, table_local, p->slot);
     }
   }
 
@@ -554,8 +813,9 @@ static void compile_class_strict(
     if (needs_instance_init) {
       field_inits[fi] = m;
       if (is_private && is_fn) {
-        if (private_method_count++ == 0) private_methods_local = reserve_private_method_local(c);
-        field_locals[fi++] = -1;
+        int brand_local = private_brand_method_local(c, m);
+        if (brand_local < 0 && private_method_count++ == 0) private_methods_local = reserve_private_method_local(c);
+        field_locals[fi++] = brand_local;
       } else field_locals[fi++] = (!is_private && (m->flags & FN_COMPUTED))
         ? compile_class_precompute_key(c, m->left) : -1;
       continue;
@@ -602,6 +862,7 @@ static void compile_class_strict(
     sv_compiler_t comp;
     sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
     comp.is_strict = true;
+    comp.is_derived_ctor = node->left != NULL;
 
     emit_op(&comp, OP_CHECK_CTOR);
     if (field_inits_use_super(field_inits, field_count)) emit_super_local(&comp);
@@ -665,32 +926,20 @@ static void compile_class_strict(
     sv_compile_ctx_cleanup(&comp);
     int idx = add_constant(c, mkref(kTypeFunctionInfo, fn));
     emit_closure(c, idx);
+    emit_set_function_name(c, class_name, class_name_len);
   } else emit_op(c, OP_UNDEF);
   
   c->field_locals = NULL;
   c->private_method_count = 0;
   if (inner_name_tdz) c->locals[inner_name_local].is_tdz = true;
 
-  const char *class_name = node->str;
-  uint32_t class_name_len = node->len;
-  if (!class_name && inferred_name) {
-    class_name = inferred_name;
-    class_name_len = inferred_name_len;
-  }
-
-  if (!has_static_name) {
-    int atom = class_name
-      ? add_atom(c, class_name, class_name_len)
-      : add_atom(c, "", 0);
-    emit_op(c, OP_DEFINE_CLASS);
-    emit_u32(c, (uint32_t)atom);
-    emit(c, SV_CLASS_FLAG_HAS_NAME |
-      (node->left ? SV_CLASS_FLAG_HAS_HERITAGE : 0));
-  } else {
-    emit_op(c, OP_DEFINE_CLASS);
-    emit_u32(c, 0);
-    emit(c, node->left ? SV_CLASS_FLAG_HAS_HERITAGE : 0);
-  }
+  int atom = class_name
+    ? add_atom(c, class_name, class_name_len)
+    : add_atom(c, "", 0);
+  emit_op(c, OP_DEFINE_CLASS);
+  emit_u32(c, (uint32_t)atom);
+  emit(c, SV_CLASS_FLAG_HAS_NAME |
+    (node->left ? SV_CLASS_FLAG_HAS_HERITAGE : 0));
   
   emit_u32(c, node->src_off);
   emit_u32(c, node->src_end);
@@ -717,10 +966,12 @@ static void compile_class_strict(
   free(field_inits);
   free(field_locals);
 
-  if (!node->str && !has_static_name && inferred_key_upval > 0) {
+  if (!node->str && inferred_key_upval != 0) {
     emit_get_local(c, ctor_local);
-    emit_op(c, OP_GET_UPVAL);
-    emit_u16(c, (uint16_t)(inferred_key_upval - 1));
+    if (inferred_key_upval > 0) {
+      emit_op(c, OP_GET_UPVAL);
+      emit_u16(c, (uint16_t)(inferred_key_upval - 1));
+    } else emit_get_local(c, -inferred_key_upval - 1);
     emit_op(c, OP_SET_NAME_COMP);
     emit_op(c, OP_POP);
     emit_op(c, OP_POP);
@@ -755,6 +1006,7 @@ static void compile_class_strict(
   if (has_class_scope) end_scope(c);
   c->private_scope = saved_private_scope;
   free(private_scope.names);
+  free(private_scope.index);
 }
 
 void compile_class(sv_compiler_t *c, sv_ast_t *node) {

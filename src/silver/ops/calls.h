@@ -411,7 +411,8 @@ static inline ant_value_t sv_eval_in_frame(
   if (!caller) return js_eval_bytecode_eval(js, source, source_len, false);
   GC_ROOT_SAVE(root_mark, js);
   
-  ant_value_t env = sv_eval_capture_env(vm, js, frame, scope_index);
+  const sv_eval_scope_t *eval_scope = sv_func_eval_scope(caller, scope_index);
+  ant_value_t env = sv_eval_capture_scope_env(vm, js, frame, eval_scope);
   if (is_err(env)) { 
     GC_ROOT_RESTORE(js, root_mark); 
     return env;
@@ -421,7 +422,7 @@ static inline ant_value_t sv_eval_in_frame(
   js_eval_scope_t scope = { 
     .this_val = frame->this, 
     .env = env, .new_target = new_target,
-    .layout = sv_func_eval_scope(caller, scope_index),
+    .layout = eval_scope,
   };
   
   ant_value_t result = js_eval_source_in_frame(

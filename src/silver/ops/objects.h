@@ -153,9 +153,12 @@ static inline void sv_op_set_name(
   sv_set_name(js, vm->stack[vm->sp - 1], a->str, a->len);
 }
 
+void sv_redefine_accessor_name(ant_t *js, ant_value_t fn);
+
 static inline void sv_op_set_name_comp(sv_vm_t *vm, ant_t *js) {
   ant_value_t key = vm->stack[vm->sp - 1];
   ant_value_t fn = vm->stack[vm->sp - 2];
+  if (vtype(fn) == kTypeFunction && js_is_constructor(fn)) sv_redefine_accessor_name(js, fn);
   js_set_function_name_from_key(js, fn, key, "", 0);
 }
 
@@ -226,6 +229,28 @@ static inline ant_value_t sv_op_define_class_comp(
 }
 
 #ifdef SV_OPS_IMPLEMENTATION
+
+void sv_redefine_accessor_name(ant_t *js, ant_value_t fn) {
+  ant_value_t fn_obj = js_func_obj(fn);
+  ant_object_t *ptr = js_obj_ptr(fn_obj);
+  const char *name_key = js->intern.name ? js->intern.name : intern_string(js, "name", 4);
+  if (!ptr || !ptr->shape || !name_key) return;
+
+  int32_t slot = ant_shape_lookup_interned(ptr->shape, name_key);
+  if (slot < 0) return;
+  const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
+  if (!prop || !(prop->has_getter || prop->has_setter)) return;
+
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t descriptor = Ant_Object_CreateBare(js);
+  GC_ROOT_PIN(js, descriptor);
+  js_set(js, descriptor, "value", js_mkstr(js, "", 0));
+  js_set(js, descriptor, "writable", Ant_Value_False);
+  js_set(js, descriptor, "enumerable", Ant_Value_False);
+  js_set(js, descriptor, "configurable", Ant_Value_True);
+  js_define_property(js, fn_obj, js_mkstr(js, "name", 4), descriptor, false);
+  GC_ROOT_RESTORE(js, mark);
+}
 
 static bool sv_field_key_special_on_function(ant_t *js, ant_value_t key) {
   if (vtype(key) != kTypeString) return true;
@@ -436,8 +461,12 @@ ant_value_t sv_op_define_class(
     }
   }
 
-  if (vtype(ctor) == kTypeFunction)
+  bool named = false;
+  if (vtype(ctor) == kTypeFunction) {
+    sv_closure_t *pending = js_func_closure(ctor);
+    named = a && !pending->func_obj && pending->u.pending.name == a->str && pending->u.pending.len == a->len;
     js_mark_constructor(js_func_obj(ctor), true);
+  }
   
   if (
     vtype(ctor) == kTypeFunction && func->debug->source &&
@@ -451,11 +480,13 @@ ant_value_t sv_op_define_class(
     );
   }
   
-  defhidden(js, proto, "constructor", 11, ctor);
+  mkprop_interned_exact(js, proto, js->intern.constructor, ctor, ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE);
   ant_value_t ctor_obj = (vtype(ctor) == kTypeFunction) ? js_func_obj(ctor) : ctor;
   
-  if (has_name || default_ctor) js_set_function_name(js, ctor, a ? a->str : "", a ? a->len : 0);
-  mkprop_exact_attrs(js, ctor_obj, Ant_String_FromLiteral(js, "prototype"), proto, 0);
+  if (named);
+  else if (has_name || default_ctor) js_set_function_name(js, ctor, a ? a->str : "", a ? a->len : 0);
+  else if (vtype(ctor) == kTypeFunction) js_set_function_name(js, ctor, "", 0);
+  mkprop_bytes_exact_attrs(js, ctor_obj, "prototype", 9, proto, 0);
 
   vm->stack[vm->sp - 2] = ctor;
   vm->stack[vm->sp - 1] = proto;
