@@ -1962,9 +1962,7 @@ ant_value_t sv_init_field_generic(
     ic->fill_epoch = js->ic.epoch;
     ic->slow_hits = SV_INIT_FIELD_FILL_LIMIT;
   }
-  ant_value_t key = intern_value(js, a->str);
-  if (vtype(obj) == kTypeFunction) return sv_define_field(js, SV_DEFINE_METHOD_FIELD, obj, key, val);
-  return js_create_data_property_or_throw(js, obj, key, val);
+  return sv_define_field(js, SV_DEFINE_METHOD_FIELD, obj, intern_value(js, a->str), val);
 }
 
 ant_value_t sv_op_init_field(
