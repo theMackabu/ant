@@ -22,6 +22,8 @@ typedef struct ant_module_t {
 void js_esm_cleanup_module_cache(ant_t *js);
 void js_esm_invalidate_files(ant_t *js);
 
+bool esm_export_star_skips(ant_t *js, const char *name, size_t len);
+void esm_export_star_finish(ant_t *js);
 ant_value_t js_esm_make_file_url(ant_t *js, const char *path);
 const char *esm_platform_condition(ant_t *js);
 ant_value_t js_esm_import_sync(ant_t *js, ant_value_t specifier);

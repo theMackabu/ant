@@ -147,6 +147,15 @@ bool check_function_param_early_errors(
   return check_function_param_names(js, fn, strict, emit_error);
 }
 
+static bool params_capture(const sv_ast_t *node) {
+  if (!node) return false;
+  if (node->type == N_FUNC || node->type == N_CLASS) return true;
+  if (node->type == N_CALL && is_ident_name(node->left, "eval")) return true;
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child) if (params_capture(child)) return true;
+  return false;
+}
+
 static uint16_t function_length_from_params(const sv_ast_t *node) {
   if (!node) return 0;
   uint16_t length = 0;
@@ -259,11 +268,13 @@ sv_func_t *compile_function_body(
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, enclosing, node, mode);
   bool eval_body = !enclosing->enclosing;
-  comp.is_static = (node->flags & FN_STATIC) || (comp.is_arrow && enclosing->is_static);
+  comp.is_static = (node->flags & FN_STATIC) || ((comp.is_arrow || eval_body) && enclosing->is_static);
   comp.eval_this_binding = eval_body && enclosing->eval_this_binding;
+  comp.eval_super_binding = eval_body && enclosing->eval_super_binding;
   comp.eval_field_thunk = eval_body && enclosing->eval_field_thunk;
+  comp.is_derived_ctor = !!(node->flags & FN_DERIVED_CTOR);
   comp.is_class_ctor = !!(node->flags & FN_CLASS_CTOR);
-  if (node->flags & FN_DERIVED_CTOR) comp.derived_field_owner = enclosing;
+  if (comp.is_derived_ctor) comp.derived_field_owner = enclosing;
   else if (comp.is_arrow) comp.derived_field_owner = enclosing->derived_field_owner;
 
   bool has_own_use_strict = false;
@@ -364,6 +375,7 @@ sv_func_t *compile_function_body(
     comp.args_mapped = !comp.is_strict;
   }
 
+  comp.param_bind_end = comp.param_locals;
   if (!has_non_simple_params && node->body) {
     if (node->body->type == N_BLOCK) {
       for (int i = 0; i < node->body->args.count; i++)
@@ -383,7 +395,8 @@ sv_func_t *compile_function_body(
         emit_op(&comp, OP_IS_UNDEF);
         int skip = emit_jump(&comp, OP_JMP_FALSE);
         emit_op(&comp, OP_POP);
-        compile_expr(&comp, p->right);
+        if (p->left && p->left->type == N_IDENT) compile_expr_with_inferred_name(&comp, p->right, p->left->str, p->left->len);
+        else compile_expr(&comp, p->right);
         patch_jump(&comp, skip);
         if (p->left && p->left->type == N_IDENT) {
           emit_op(&comp, OP_PUT_ARG);
@@ -418,6 +431,8 @@ sv_func_t *compile_function_body(
     int *param_bind_locals = NULL;
     int  param_bind_count  = 0;
     int  param_bind_cap    = 0;
+
+    for (int i = 0; !comp.param_split && i < node->args.count; i++) comp.param_split = params_capture(node->args.items[i]);
 
     for (int i = 0; i < node->args.count; i++) {
       sv_ast_t *p = node->args.items[i];
@@ -475,7 +490,8 @@ sv_func_t *compile_function_body(
         emit_op(&comp, OP_IS_UNDEF);
         int skip = emit_jump(&comp, OP_JMP_FALSE);
         emit_op(&comp, OP_POP);
-        compile_expr(&comp, p->right);
+        if (p->left && p->left->type == N_IDENT) compile_expr_with_inferred_name(&comp, p->right, p->left->str, p->left->len);
+        else compile_expr(&comp, p->right);
         patch_jump(&comp, skip);
         if (p->left && p->left->type == N_IDENT && bind_lb < comp.local_count) {
           int slot = bind_lb - comp.param_locals;
@@ -516,12 +532,19 @@ sv_func_t *compile_function_body(
 
     free(param_bind_locals);
     sv_ast_t *body = node->body;
+    comp.param_bind_end = comp.local_count;
 
     if (body && body->type != N_BLOCK) {
       hoist_var_decls(&comp, body);
     } else if (body) {
       for (int i = 0; i < body->args.count; i++)
         hoist_var_decls(&comp, body->args.items[i]);
+      if (comp.param_split && comp.owns_eval_env) {
+        for (int i = comp.param_locals; i < comp.param_bind_end; i++) {
+          sv_local_t *param = &comp.locals[i];
+          if (param->name_len && resolve_local(&comp, param->name, param->name_len) == i) split_param_binding(&comp, i);
+        }
+      }
       hoist_lexical_decls(&comp, &body->args);
       hoist_func_decls(&comp, &body->args);
     }

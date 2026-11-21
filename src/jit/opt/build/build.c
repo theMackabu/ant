@@ -7132,7 +7132,13 @@ static opt_flow_t opt_build_generic(opt_builder_t *b) {
   for (uint32_t k = 0; k < b->frame.sp; k++) opt_sync_tracked(b, opt_stack_index(b, k));
   bool writes, all_params;
   uint32_t slot = opt_generic_slot(b, ip, op, &writes, &all_params);
-  if (slot != IR_NONE) opt_sync_tracked(b, slot);
+  bool boxed = slot != IR_NONE && b->frame.slots[slot].boxed;
+  if (boxed) {
+    ir_op_t store = ir_op(IR_OP_STORE_SLOT);
+    store.slot = opt_tracked_slot(b, slot);
+    ir_node_id_t value = opt_read_tracked(b, slot);
+    opt_emit(b, store, &value, 1, OPT_REPR_NONE);
+  } else if (slot != IR_NONE) opt_sync_tracked(b, slot);
   for (uint32_t p = 0; all_params && p < b->params; p++) opt_sync_tracked(b, p);
 
   ir_op_t generic = ir_op(IR_OP_GENERIC);
@@ -7145,7 +7151,7 @@ static opt_flow_t opt_build_generic(opt_builder_t *b) {
   b->graph->uses_frame = true;
 
   opt_bitset_for_each(&b->memory, t) b->frame.slots[t] = (opt_slot_t){.node = IR_NONE};
-  if (slot != IR_NONE && writes) b->frame.slots[slot] = (opt_slot_t){.node = IR_NONE};
+  if (slot != IR_NONE && writes && !boxed) b->frame.slots[slot] = (opt_slot_t){.node = IR_NONE};
   if (terminal) {
     ir_node(b->graph, node)->frame_state = state;
     opt_mark_catch(b, node);
@@ -7165,6 +7171,11 @@ static opt_flow_t opt_build_generic(opt_builder_t *b) {
     ir_op_t load = ir_op(IR_OP_LOAD_SLOT);
     load.slot = opt_stack_slot(k);
     b->frame.slots[opt_stack_index(b, k)] = (opt_slot_t){.node = opt_emit(b, load, NULL, 0, OPT_REPR_TAGGED), .in_sync = true};
+  }
+  if (boxed && writes) {
+    ir_op_t load = ir_op(IR_OP_LOAD_SLOT);
+    load.slot = opt_tracked_slot(b, slot);
+    opt_write_tracked(b, slot, opt_emit(b, load, NULL, 0, OPT_REPR_TAGGED));
   }
   return OPT_FLOW_CONTINUE;
 }

@@ -80,7 +80,16 @@ static __attribute__((noinline)) bool setprop_sym_reaches_proxy(
   if (is_err(result)) *done = result;
   else if (result == Ant_Value_False) *done = proxy_set_rejected_sym(js, sym, v, declined);
   else if (result == Ant_Value_True) *done = v;
-  else if (same_object_identity(proxy, obj)) *done = setprop_impl_receiver(js, target, proxy, sym, v, keyed, declined);
+  else if (same_object_identity(proxy, obj)) {
+    ant_object_t *target_ptr = is_object_type(target) ? js_obj_ptr(js_as_obj(target)) : NULL;
+    ant_value_t refusal = target_ptr && !target_ptr->flags.extensible ? js_proxy_set_refusal(js, proxy, sym) : Ant_Value_False;
+    if (is_err(refusal)) *done = refusal;
+    else if (js_proxy_set_is_plain(js, proxy)) *done = setprop_impl_receiver(js, target, proxy, sym, v, keyed, declined);
+    else {
+      ant_value_t stored = js_set_with_receiver(js, target, sym, v, proxy);
+      *done = is_err(stored) ? stored : stored == Ant_Value_False ? proxy_set_rejected_sym(js, sym, v, declined) : v;
+    }
+  }
   
   else {
     *next = target;
@@ -410,6 +419,11 @@ static bool setprop_string_special(
 
   if (is_proxy(obj)) {
     ant_value_t result = proxy_set(js, obj, key, klen, v);
+    if (result == Ant_Value_False) {
+      ant_value_t refusal = js_mkstr(js, key, klen);
+      if (!is_err(refusal)) refusal = js_proxy_set_refusal(js, obj, refusal);
+      if (is_err(refusal)) result = refusal;
+    }
     *done = is_err(result) ? result
       : result == Ant_Value_False ? proxy_set_rejected(js, key, klen, v, declined) : v;
     return true;
@@ -700,6 +714,13 @@ ant_value_t setprop_cstr(ant_t *js, ant_value_t obj, const char *key, size_t len
   const char *interned = intern_string(js, key, len);
   if (!interned) return js_mkerr(js, "oom");
   return mkprop_interned(js, obj, interned, v, 0);
+}
+
+ant_value_t setprop_cstr_attrs(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v, uint8_t attrs) {
+  obj = js_as_obj(obj);
+  const char *interned = intern_string(js, key, len);
+  if (!interned) return js_mkerr(js, "oom");
+  return mkprop_interned_attrs_impl(js, obj, interned, len, v, attrs, MKPROP_EXPOSE_CFUNC);
 }
 
 ant_value_t setprop_interned(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v) {

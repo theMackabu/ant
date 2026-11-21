@@ -523,6 +523,17 @@ void compile_object(sv_compiler_t *c, sv_ast_t *node) {
       emit_op(c, OP_SWAP);
       emit_op(c, OP_DEFINE_METHOD_COMP);
       emit(c, flags);
+    } else if ((prop->flags & FN_COMPUTED) && prop->right && prop->right->type == N_CLASS && !prop->right->str) {
+      compile_expr(c, prop->left);
+      emit_op(c, OP_TO_PROPKEY);
+      int key_local = add_hidden_local(c);
+      emit_op(c, OP_DUP);
+      emit_put_local(c, key_local);
+      c->inferred_key_upval = -(key_local + 1);
+      compile_expr(c, prop->right);
+      c->inferred_key_upval = 0;
+      emit_op(c, OP_DEFINE_METHOD_COMP);
+      emit(c, 0);
     } else if (prop->flags & FN_COMPUTED) {
       compile_expr(c, prop->left);
       if (computed_key_needs_early_coercion(c, prop)) emit_op(c, OP_TO_PROPKEY);

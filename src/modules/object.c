@@ -15,6 +15,7 @@
 #include "arrays.h"
 #include "convert.h"
 #include "keys.h"
+#include "modules/buffer.h"
 #include "modules/object.h"
 #include "modules/proxy.h"
 #include "props.h"
@@ -606,6 +607,71 @@ static __attribute__((noinline)) ant_value_t object_integrity_view(ant_t *js, an
   return js_cfunc_lookup_promoted(js, obj);
 }
 
+typedef enum {
+  INTEGRITY_ORDINARY,
+  INTEGRITY_VIEW,
+  INTEGRITY_VIEW_ELEMENTS,
+  INTEGRITY_NAMESPACE_EXPORTS,
+} integrity_kind_t;
+
+static __attribute__((noinline)) integrity_kind_t object_integrity_kind(ant_value_t obj, const ant_object_t *ptr) {
+  if (ptr->flags.is_exotic) {
+    TypedArrayData *view = buffer_get_typedarray_data(obj);
+    if (view) return view->length > 0 ? INTEGRITY_VIEW_ELEMENTS : INTEGRITY_VIEW;
+  }
+  if (ptr->flags.extensible || !js_check_brand(obj, BRAND_MODULE_NAMESPACE)) return INTEGRITY_ORDINARY;
+
+  uint32_t count = ptr->shape ? ant_shape_count(ptr->shape) : 0;
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+    if (prop && prop->type == ANT_SHAPE_KEY_STRING) return INTEGRITY_NAMESPACE_EXPORTS;
+  }
+  return INTEGRITY_ORDINARY;
+}
+
+static __attribute__((noinline)) ant_value_t object_view_integrity(const ant_object_t *ptr, integrity_kind_t kind, bool frozen) {
+  if (frozen && kind == INTEGRITY_VIEW_ELEMENTS) return Ant_Value_False;
+
+  uint32_t count = ptr->shape ? ant_shape_count(ptr->shape) : 0;
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+    if (!prop) continue;
+    if (prop->attrs & ANT_PROP_ATTR_CONFIGURABLE) return Ant_Value_False;
+    bool accessor = prop->has_getter || prop->has_setter;
+    if (frozen && !accessor && (prop->attrs & ANT_PROP_ATTR_WRITABLE)) return Ant_Value_False;
+  }
+  return Ant_Value_True;
+}
+
+static __attribute__((noinline)) ant_value_t object_exotic_integrity_error(
+  ant_t *js, ant_object_t *ptr, integrity_kind_t kind, const char *verb
+) {
+  if (kind == INTEGRITY_VIEW_ELEMENTS) {
+    ptr->flags.extensible = 0;
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot %s array buffer views with elements", verb);
+  }
+
+  uint32_t count = ant_shape_count(ptr->shape);
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+    if (prop && prop->type == ANT_SHAPE_KEY_STRING)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot redefine property: %s", prop->key.interned);
+  }
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot %s", verb);
+}
+
+static inline bool object_clear_own_attrs(ant_t *js, ant_object_t *ptr, uint8_t clear) {
+  if (ant_shape_count(ptr->shape) == 0) return true;
+  return js_obj_ensure_unique_shape(ptr) && ant_shape_clear_attrs_all(js, ptr->shape, clear);
+}
+
+static bool integrity_key_is_prototype(ant_t *js, ant_value_t key) {
+  if (vtype(key) != kTypeString) return false;
+  ant_offset_t len = 0;
+  const char *str = (const char *)(uintptr_t)vstr(js, key, &len);
+  return len == 9 && memcmp(str, "prototype", 9) == 0;
+}
+
 static __attribute__((noinline)) ant_value_t object_scan_integrity(ant_t *js, ant_value_t obj, bool frozen) {
   ant_value_t keys = js_own_property_keys(js, obj, true, false);
   if (is_err(keys)) return keys;
@@ -617,13 +683,19 @@ static __attribute__((noinline)) ant_value_t object_scan_integrity(ant_t *js, an
   ant_value_t result = Ant_Value_True;
   ant_offset_t count = js_arr_len(js, keys);
   
+  bool array = real_array_obj_ptr(obj) != NULL;
+  bool function = vtype(obj) == kTypeFunction;
+  
   for (ant_offset_t i = 0; i < count && result == Ant_Value_True; i++) {
-    ant_value_t desc = js_get_own_property_descriptor(js, obj, js_arr_get(js, keys, i));
+    ant_value_t key = js_arr_get(js, keys, i);
+    ant_value_t desc = js_get_own_property_descriptor(js, obj, key);
     if (is_err(desc)) { result = desc; break; }
     if (!is_object_type(desc)) continue;
 
     GC_ROOT_PIN(js, desc);
     if (js_truthy(js, js_get(js, desc, "configurable"))) result = Ant_Value_False;
+    else if (array && key == js->length_str) continue;
+    else if (function && integrity_key_is_prototype(js, key)) continue;
     else if (frozen && js_truthy(js, js_get(js, desc, "writable"))) result = Ant_Value_False;
   }
 
@@ -639,6 +711,11 @@ static inline ant_value_t object_test_integrity(ant_t *js, ant_value_t obj, ant_
   
   if (flags & settled) return Ant_Value_FromBool(!ant_array_is_shared(ptr));
   if ((flags & (ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXTENSIBLE)) == ANT_OBJECT_FLAG_EXTENSIBLE) return Ant_Value_False;
+  
+  if (ptr->flags.is_exotic) {
+    integrity_kind_t kind = object_integrity_kind(obj, ptr);
+    if (kind != INTEGRITY_ORDINARY) return object_view_integrity(ptr, kind, frozen);
+  }
   
   return object_scan_integrity(js, obj, frozen);
 }
@@ -658,24 +735,13 @@ ant_value_t builtin_object_freeze(ant_params_t) {
 
   ant_object_t *ptr = js_obj_ptr(as_obj);
   if (!ptr || !ptr->shape) return obj;
-  if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
-  if (js_is_arguments(target)) js_arguments_unmap_all(js, target);
-
-  uint32_t count = ant_shape_count(ptr->shape);
-  for (uint32_t i = 0; i < count; i++) {
-    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
-    if (!prop) continue;
-    
-    uint8_t attrs = ant_shape_get_attrs(ptr->shape, i);
-    attrs &= (uint8_t)~ANT_PROP_ATTR_WRITABLE;
-    attrs &= (uint8_t)~ANT_PROP_ATTR_CONFIGURABLE;
-    
-    if (prop->type == ANT_SHAPE_KEY_STRING) {
-      const char *key = prop->key.interned;
-      ant_shape_set_attrs_interned(js, ptr->shape, key, attrs);
-    } else ant_shape_set_attrs_symbol(js, ptr->shape, prop->key.sym_off, attrs);
+  if (__builtin_expect((ptr->flags.raw & (ANT_OBJECT_FLAG_EXOTIC | ANT_OBJECT_FLAG_EXTENSIBLE)) != ANT_OBJECT_FLAG_EXTENSIBLE, 0)) {
+    integrity_kind_t kind = object_integrity_kind(target, ptr);
+    if (kind >= INTEGRITY_VIEW_ELEMENTS) return object_exotic_integrity_error(js, ptr, kind, "freeze");
   }
   if (!Ant_Array_Unshare(js, ptr)) return js_mkerr(js, "oom");
+  if (js_is_arguments(target)) js_arguments_unmap_all(js, target);
+  if (!object_clear_own_attrs(js, ptr, ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE)) return js_mkerr(js, "oom");
   
   ptr->flags.frozen = 1;
   ptr->flags.sealed = 1;
@@ -716,27 +782,15 @@ static ant_value_t builtin_object_seal(ant_params_t) {
   
   ant_object_t *ptr = js_obj_ptr(as_obj);
   if (!ptr || !ptr->shape) return obj;
-  if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
+  if (__builtin_expect(ptr->flags.is_exotic, 0)) {
+    if (object_integrity_kind(target, ptr) == INTEGRITY_VIEW_ELEMENTS)
+      return object_exotic_integrity_error(js, ptr, INTEGRITY_VIEW_ELEMENTS, "seal");
+  }
   if (!Ant_Array_Unshare(js, ptr)) return js_mkerr(js, "oom");
+  if (!object_clear_own_attrs(js, ptr, ANT_PROP_ATTR_CONFIGURABLE)) return js_mkerr(js, "oom");
   
   ptr->flags.sealed = 1;
   ptr->flags.extensible = 0;
-
-  uint32_t count = ant_shape_count(ptr->shape);
-  for (uint32_t i = 0; i < count; i++) {
-    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
-    if (!prop) continue;
-
-    uint8_t attrs = ant_shape_get_attrs(ptr->shape, i);
-    attrs &= (uint8_t)~ANT_PROP_ATTR_CONFIGURABLE;
-
-    if (prop->type == ANT_SHAPE_KEY_STRING) {
-      const char *key = prop->key.interned;
-      ant_shape_set_attrs_interned(js, ptr->shape, key, attrs);
-    } else {
-      ant_shape_set_attrs_symbol(js, ptr->shape, prop->key.sym_off, attrs);
-    }
-  }
   
   return obj;
 }
@@ -958,8 +1012,10 @@ static ant_value_t object_get_own_property_descriptor_keyed(
   );
 
   ant_value_t prop_val = Ant_Value_Undefined;
-  if (prop_off.obj) prop_val = js_prop_load(prop_off);
-  else if (has_string_exotic) {
+  if (prop_off.obj) {
+    [[clang::always_inline]]
+    prop_val = js_prop_load(prop_off);
+  } else if (has_string_exotic) {
     prop_val = string_exotic_value;
     writable = false;
     enumerable = !string_exotic_length;
@@ -976,6 +1032,7 @@ static ant_value_t object_get_own_property_descriptor_keyed(
     configurable = false;
   }
   
+  if (__builtin_expect(!writable && !configurable && !is_sym && prop_off.obj != NULL, 0) && js_is_sealed_namespace(as_obj, prop_off.obj)) writable = true;
   return js_from_data_descriptor(js, prop_val, writable, enumerable, configurable);
 }
 

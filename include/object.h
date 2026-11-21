@@ -75,8 +75,10 @@ typedef struct {
   ant_value_t handler;
   const ant_host_proxy_ops_t *host;
   bool revoked;
+  uint16_t trap_mask;
   uint32_t plain_handler_epoch;
   uint32_t plain_set_epoch;
+  uint32_t trap_epoch;
 } ant_proxy_state_t;
 
 typedef struct {
@@ -128,6 +130,19 @@ typedef struct {
   uint8_t flags;
   uint8_t protector_holder;
 } ant_object_sidecar_t;
+
+static constexpr uint32_t ANT_PRIVATE_INLINE_CAP = 1;
+static constexpr uint32_t ANT_PRIVATE_HEAP_MIN_CAP = 8;
+static constexpr uint32_t ANT_PRIVATE_HASH_SOLO = 1u << 31;
+static_assert(ANT_PRIVATE_HEAP_MIN_CAP > ANT_PRIVATE_INLINE_CAP, "a one-entry private table is the sidecar's trailing entry");
+
+static inline bool ant_private_table_is_inline(const ant_private_table_t *table) {
+  return table->cap == ANT_PRIVATE_INLINE_CAP;
+}
+
+static inline size_t ant_object_sidecar_size(const ant_object_sidecar_t *sidecar) {
+  return sizeof(*sidecar) + (ant_private_table_is_inline(&sidecar->private_table) ? sizeof(ant_private_entry_t) : 0);
+}
 
 static_assert(
   _Alignof(ant_object_sidecar_t) > ant_sidecar, 
@@ -337,19 +352,26 @@ static inline ant_extra_slot_t *ant_object_extra_slot(const ant_object_t *obj, u
   return NULL;
 }
 
-static inline ant_object_sidecar_t *ant_object_ensure_sidecar(ant_object_t *obj) {
-  if (!obj) return NULL;
-  
-  ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
-  if (sidecar) return sidecar;
-
-  sidecar = (ant_object_sidecar_t *)calloc(1, sizeof(*sidecar));
+static inline ant_object_sidecar_t *ant_object_create_sidecar(ant_object_t *obj, bool private_entry) {
+  size_t trailing = private_entry ? sizeof(ant_private_entry_t) : 0;
+  ant_object_sidecar_t *sidecar = (ant_object_sidecar_t *)calloc(1, sizeof(*sidecar) + trailing);
   if (!sidecar) return NULL;
+  
+  if (private_entry) {
+    sidecar->private_table.entries = (ant_private_entry_t *)(sidecar + 1);
+    sidecar->private_table.cap = ANT_PRIVATE_INLINE_CAP;
+  }
   
   sidecar->extra_slots = obj->extra_slots;
   obj->extra_slots = (ant_extra_slots_t *)((uintptr_t)sidecar | ant_sidecar);
   
   return sidecar;
+}
+
+static inline ant_object_sidecar_t *ant_object_ensure_sidecar(ant_object_t *obj) {
+  if (!obj) return NULL;
+  ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
+  return sidecar ? sidecar : ant_object_create_sidecar(obj, false);
 }
 
 static inline ant_exotic_ops_t *ant_object_owned_exotic_ops(const ant_object_t *obj) {

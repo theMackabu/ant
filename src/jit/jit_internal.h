@@ -193,6 +193,7 @@ typedef struct {
   jit_vstack_t *vstack;
   MIR_reg_t *local_regs, *local_d_regs;
   const uint8_t *dnum_locals;
+  const bool *captured_locals;
   int n_locals;
   MIR_reg_t lbuf, d_slot;
 } jit_bailout_emit_t;
