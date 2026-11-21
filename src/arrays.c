@@ -613,15 +613,21 @@ ant_value_t mkarr_dense_shaped(ant_t *js, ant_shape_t *shape, const ant_value_t 
     elements, count);
 }
 
+ant_value_t Ant_Array_CreateRest(ant_t *js, const ant_value_t *args, uint32_t argc, uint32_t start) {
+  if (!args || argc <= start) return Ant_Array_Create(js);
+  return mkarr_dense_literal_capacity(js, args + start, argc - start, false);
+}
+
 ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint32_t count) {
   return mkarr_dense_literal_capacity(js, elements, count, false);
 }
 
-ant_value_t js_mkarr_dense_uninit(ant_t *js, uint32_t count, ant_value_t **out_data) {
+ant_value_t Ant_Array_CreateUninit(ant_t *js, uint32_t count, uint32_t capacity, ant_value_t **out_data) {
   *out_data = NULL;
   if (count == 0) return Ant_Array_Create(js);
+  if (capacity < count) capacity = count;
   
-  ant_value_t arr = alloc_array_with_proto_capacity(js, js->sym.array_proto, gc_array_storage_fit(count), count, true);
+  ant_value_t arr = alloc_array_with_proto_capacity(js, js->sym.array_proto, gc_array_storage_fit(capacity), count, true);
   if (is_err(arr)) return arr;
 
   ant_object_t *obj = array_obj_ptr(arr);
@@ -633,6 +639,10 @@ ant_value_t js_mkarr_dense_uninit(ant_t *js, uint32_t count, ant_value_t **out_d
   *out_data = obj->u.array.data;
   
   return arr;
+}
+
+ant_value_t js_mkarr_dense_uninit(ant_t *js, uint32_t count, ant_value_t **out_data) {
+  return Ant_Array_CreateUninit(js, count, count, out_data);
 }
 
 void arr_del(ant_t *js, ant_value_t arr, ant_offset_t idx) {

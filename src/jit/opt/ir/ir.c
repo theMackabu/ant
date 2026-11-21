@@ -96,7 +96,7 @@ bool ir_op_equal(const ir_op_t *a, const ir_op_t *b) {
     case IR_OP_STORE_PRIVATE: return a->hash == b->hash;
     case IR_OP_COLLECTION_ITERATOR_STEP: return a->index == b->index;
     case IR_OP_LOAD_ARGUMENT: return a->arguments_base == b->arguments_base;
-    case IR_OP_ALLOCATE_ARRAY:
+    case IR_OP_ALLOCATE_ARRAY: return a->allocate_array.count == b->allocate_array.count && a->allocate_array.reserve == b->allocate_array.reserve;
     case IR_OP_CONCATENATE_STRINGS:
     case IR_OP_LOAD_NAMED_STORAGE: return a->count == b->count;
     case IR_OP_ALLOCATE_FUNCTION: return a->shared_function_data_index == b->shared_function_data_index;
@@ -140,7 +140,7 @@ bool ir_op_equal(const ir_op_t *a, const ir_op_t *b) {
         && a->call.computes_only == b->call.computes_only
         && a->call.needs_frame == b->call.needs_frame && a->call.slow_path == b->call.slow_path
         && a->call.builtin == b->call.builtin && a->call.construct_super == b->call.construct_super
-        && a->call.spare_slots == b->call.spare_slots;
+        && a->call.passes_entry == b->call.passes_entry && a->call.spare_slots == b->call.spare_slots;
     case IR_OP_PROBE_PROPERTY_CACHE:
     case IR_OP_PROBE_KEYED_CACHE:
     case IR_OP_PROBE_PROPERTY_STORE:

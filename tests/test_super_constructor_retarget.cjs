@@ -478,4 +478,23 @@ test('hot derived construction rejects parents that are not constructors', () =>
   }
 });
 
+test('hot derived construction keeps following a parent that is replaced repeatedly', () => {
+  const args = [1, 2];
+  class P { constructor(a, b, c) { this.v = b; } }
+  class Q { constructor(a, b, c) { this.v = c; } }
+  class R { constructor(a, b, c) { this.v = a + b + c; } }
+  class Plain extends P { constructor(i) { super(1, 2, i); } }
+  class Spread extends P { constructor(i) { super(...args, i); } }
+  const parents = [P, Q, R, P, Q, R, Q];
+  const value = (parent, i) => parent === P ? 2 : parent === Q ? i : 3 + i;
+  for (const derived of [Plain, Spread]) {
+    for (let i = 0; i < RUNS * parents.length; i++) {
+      const parent = parents[Math.floor(i / RUNS)];
+      if (i % RUNS === 0) Object.setPrototypeOf(derived, parent);
+      const made = new derived(i);
+      if (made.v !== value(parent, i)) assert.fail(`${derived.name} under ${parent.name} at ${i}: ${made.v}`);
+    }
+  }
+});
+
 console.log('ok');

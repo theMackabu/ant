@@ -124,6 +124,7 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_get_length_inline);
   LOAD_EXT(jit_helper_define_field);
   LOAD_EXT(jit_helper_define_method_comp);
+  LOAD_EXT(jit_helper_init_field);
   LOAD_EXT(jit_helper_seq);
   LOAD_EXT(jit_helper_eq);
   LOAD_EXT(jit_helper_ne);

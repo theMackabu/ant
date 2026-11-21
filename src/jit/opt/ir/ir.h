@@ -201,6 +201,7 @@ typedef enum : uint8_t {
   IR_COND_ITERABLE_ARRAY,
   IR_COND_ITERATOR_RETURN_INTACT,
   IR_COND_GLOBAL_EVAL_INTACT,
+  IR_COND_ARRAY_ITERATION_INTACT,
   IR_COND_SHAPE,
   IR_COND_INT32,
   IR_COND_FLOAT64,
@@ -307,6 +308,7 @@ typedef struct {
       bool builtin;
       bool native_closure;
       bool construct_super;
+      bool passes_entry;
       uint16_t spare_slots;
     } call;
     struct {
@@ -318,6 +320,10 @@ typedef struct {
       uint32_t property_count;
       uint32_t reserve;
     } allocate_object;
+    struct {
+      uint32_t count;
+      uint32_t reserve;
+    } allocate_array;
     struct {
       uint32_t shape_cache;
       uint32_t capacity;
@@ -456,6 +462,7 @@ typedef OPT_VEC(uint32_t) ir_slots_t;
 typedef struct {
   sv_func_t *func;
   uint32_t bc_off;
+  uint32_t site_off;
   opt_resume_mode_t mode;
   uint32_t dst;
   ir_slot_values_t values;
@@ -464,6 +471,7 @@ typedef struct {
   uint32_t passed_argument_count;
   uint32_t call_off;
   bool construct;
+  bool takes_rest;
 } ir_frame_state_t;
 
 typedef struct {
@@ -633,6 +641,16 @@ static inline bool ir_exit_sites_contain_slot(const ir_graph_t *graph, sv_func_t
     if (site->bc_off == bc_off && site->kind == kind && (site->slot == 0 || site->slot == slot || kind == OPT_EXIT_BAD_SHAPE)) return true;
   }
   return false;
+}
+
+static inline uint32_t ir_exit_sites_count(const ir_graph_t *graph, sv_func_t *func, uint32_t bc_off, opt_exit_kind_t kind) {
+  sv_func_t *in = func ? func : graph->func;
+  uint32_t count = 0;
+  for (uint32_t i = 0; i < graph->exit_sites.len; i++) {
+    const ir_exit_site_t *site = &graph->exit_sites.items[i];
+    count += (site->func ? site->func : graph->func) == in && site->bc_off == bc_off && site->kind == kind;
+  }
+  return count;
 }
 
 static inline bool ir_exit_sites_contain(const ir_graph_t *graph, sv_func_t *func, uint32_t bc_off, opt_exit_kind_t kind) {

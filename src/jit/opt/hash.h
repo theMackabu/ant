@@ -3,7 +3,7 @@
 #include "arena.h"
 
 static constexpr uint64_t OPT_HASH_SEED = UINT64_C(0x517cc1b727220a95);
-static constexpr uint32_t OPT_MAP_MAX_KEY_WORDS = 4;
+static constexpr uint32_t OPT_MAP_MAX_KEY_WORDS = 5;
 
 static inline uint64_t opt_hash_add(uint64_t hash, uint64_t word) {
   return (((hash << 5) | (hash >> 59)) ^ word) * OPT_HASH_SEED;
