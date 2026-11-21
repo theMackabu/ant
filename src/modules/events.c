@@ -14,6 +14,7 @@
 #include "builder.h"
 #include "native_getter.h"
 #include "silver/call.h"
+#include "esm/loader.h"
 
 #include "gc.h"
 #include "gc/modules.h"
@@ -100,6 +101,7 @@ typedef struct {
   uint32_t next_listener_id;
   bool needs_reorder;
   bool warned_max_listeners;
+  bool is_error;
   uint32_t key_matches;
 } EventType;
 
@@ -118,6 +120,12 @@ struct ant_event_list {
   } cstr_cache[4];
   uint32_t cstr_next;
   uint32_t types_gen;
+  ant_value_t miss_keys[4];
+  uint32_t miss_gen;
+  uint32_t miss_count;
+  uint8_t miss_next;
+  uint8_t miss_error_mask;
+  bool miss_error;
 };
 
 static void emitter_write_barrier(ant_t *js, ant_value_t owner, ant_value_t stored) {
@@ -156,6 +164,7 @@ static EventType *make_event_type(ant_t *js, ant_value_t js_key) {
   evt->js_key = js_key;
   evt->handler = Ant_Value_Null;
   if (vtype(js_key) == kTypeString) evt->key_bytes = js_getstr(js, js_key, &evt->key_len);
+  evt->is_error = evt->key_bytes && evt->key_len == 5 && memcmp(evt->key_bytes, "error", 5) == 0;
   utarray_new(evt->listeners, &event_listener_icd);
   return evt;
 }
@@ -1433,23 +1442,110 @@ bool eventemitter_dispatch(ant_t *js, ant_value_t target, EventType *evt, ant_ar
   return invoked;
 }
 
+static __attribute__((noinline, cold)) bool evt_key_is_error_slow(ant_t *js, ant_value_t key) {
+  size_t len = 0;
+  const char *name = js_getstr(js, key, &len);
+  return name && len == 5 && memcmp(name, "error", 5) == 0;
+}
+
+static inline bool evt_key_is_error(ant_t *js, ant_value_t key) {
+  ant_flat_string_t *flat = ant_str_flat_ptr(key);
+  if (flat) return flat->len == 5 && memcmp(flat->bytes, "error", 5) == 0;
+  return evt_key_is_error_slow(js, key);
+}
+
+static __attribute__((noinline)) EventType *evt_list_find_unlisted(ant_t *js, ant_event_list_t *list, ant_value_t key) {
+  list->miss_error = false;
+
+  if (list->miss_gen == list->types_gen) {
+  for (unsigned int i = 0; i < 4; i++) if (list->miss_keys[i] == key) {
+    list->miss_error = (list->miss_error_mask >> i) & 1;
+    return NULL;
+  }}
+
+  if (vtype(key) != kTypeString) return NULL;
+
+  size_t probe_len = 0;
+  const char *probe = js_getstr(js, key, &probe_len);
+  EventType *evt = probe ? evt_list_find_cstr(list, probe, probe_len) : NULL;
+
+  if (evt) {
+    evt_cache_key(js, list, evt, key, probe);
+    return evt;
+  }
+
+  list->miss_error = probe && probe_len == 5 && memcmp(probe, "error", 5) == 0;
+  uint32_t misses = ++list->miss_count;
+  if (misses < 4 || (misses & (misses - 1))) return NULL;
+
+  if (list->miss_gen != list->types_gen) {
+    memset(list->miss_keys, 0, sizeof(list->miss_keys));
+    list->miss_gen = list->types_gen;
+    list->miss_error_mask = 0;
+  }
+
+  uint8_t slot = list->miss_next++ & 3;
+  list->miss_keys[slot] = key;
+  list->miss_error_mask = (uint8_t)((list->miss_error_mask & ~(1u << slot)) | ((unsigned)list->miss_error << slot));
+  emitter_write_barrier(js, list->target, key);
+
+  return NULL;
+}
+
+static __attribute__((noinline, cold)) ant_value_t eventemitter_throw_unhandled_error(ant_t *js, ant_value_t value) {
+  if (is_object_type(value) && js_get_slot(value, SLOT_ERROR_BRAND) == Ant_Value_True) return js_throw(js, value);
+
+  ant_value_t shown = Ant_Value_Undefined;
+  ant_value_t util = js_esm_import_sync_cstr(js, "util", 4);
+  ant_value_t inspect = is_err(util) ? Ant_Value_Undefined : js_get(js, util, "inspect");
+
+  if (is_callable(inspect)) shown = sv_vm_call(js->vm, js, inspect, util, &value, 1, NULL, Ant_Value_Undefined);
+  if (vtype(shown) != kTypeString) shown = js_mkstr(js, "undefined", 9);
+
+  size_t len = 0;
+  const char *text = js_getstr(js, shown, &len);
+  ant_value_t props = Ant_Object_CreateBare(js);
+
+  js_set(js, props, "code", js_mkstr(js, "ERR_UNHANDLED_ERROR", 19));
+  js_set(js, props, "context", value);
+
+  return js_mkerr_props(
+    js, JS_ERR_GENERIC, props, "Unhandled error. (%.*s)",
+    (int)(len < 400 ? len : 400), text ? text : ""
+  );
+}
+
 static ant_value_t js_eventemitter_emit(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "emit requires at least 1 argument (event)");
 
   ant_value_t key = evt_key_from_arg(args[0]);
   if (!key) return js_mkerr(js, "event must be a string or Symbol");
-  
   if (!is_object_type(call_this)) return Ant_Value_False;
   
   ant_event_list_t *events = find_emitter_events(call_this);
-  if (!events) return Ant_Value_False;
-  
+  if (!events) {
+    if (key == js->emit_plain_key) return Ant_Value_False;
+    if (evt_key_is_error(js, key)) return eventemitter_throw_unhandled_error(js, nargs > 1 ? args[1] : Ant_Value_Undefined);
+    js->emit_plain_key = key;
+    return Ant_Value_False;
+  }
+
+  EventType *evt = NULL;
+  for (unsigned int i = 0; i < events->count; i++) if (events->types[i]->js_key == key) {
+    evt = events->types[i];
+    break;
+  }
+
+  if (!evt) evt = evt_list_find_unlisted(js, events, key);
   bool invoked = eventemitter_dispatch(
-    js, call_this, evt_list_find(js, events, key),
+    js, call_this, evt,
     nargs > 1 ? &args[1] : NULL, nargs - 1
   );
 
-  return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : Ant_Value_FromBool(invoked);
+  if (invoked) return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : Ant_Value_True;
+  if (!(evt ? evt->is_error : events->miss_error)) return Ant_Value_False;
+
+  return eventemitter_throw_unhandled_error(js, nargs > 1 ? args[1] : Ant_Value_Undefined);
 }
 
 bool eventemitter_emit_args(ant_t *js, ant_value_t target, const char *event_type, ant_args_t) {
@@ -2379,20 +2475,26 @@ void Ant_EventTarget_Dispatch(ant_t *js, ant_value_t target, ant_value_t event) 
 }
 
 static void mark_event_type_listeners(ant_t *js, gc_mark_fn mark, ant_event_list_t *list) {
+  if (list && list->miss_gen == list->types_gen) for (unsigned int i = 0; i < 4; i++) 
+    if (vtype(list->miss_keys[i]) == kTypeString) mark(js, list->miss_keys[i]);
+    
   if (!list) return;
-  for (unsigned int t = 0; t < list->count; t++) {
-  EventType *evt = list->types[t];
-  if (vtype(evt->js_key) == kTypeString || vtype(evt->js_key) == kTypeSymbol) mark(js, evt->js_key);
-  mark(js, evt->handler);
-  for (unsigned int i = 0; i < utarray_len(evt->listeners); i++) {
-    EventListenerEntry *e = (EventListenerEntry *)utarray_eltptr(evt->listeners, i);
-    mark(js, e->callback);
-    ant_value_t raw_callback = entry_raw_callback(evt, e);
-    ant_value_t signal = entry_signal(evt, e);
-    if (vtype(raw_callback) != kTypeUndefined) mark(js, raw_callback);
-    if (vtype(signal) != kTypeUndefined) mark(js, signal);
+    for (unsigned int t = 0; t < list->count; t++) {
+    EventType *evt = list->types[t];
+    
+    if (vtype(evt->js_key) == kTypeString || vtype(evt->js_key) == kTypeSymbol) mark(js, evt->js_key);
+    mark(js, evt->handler);
+    
+    for (unsigned int i = 0; i < utarray_len(evt->listeners); i++) {
+      EventListenerEntry *e = (EventListenerEntry *)utarray_eltptr(evt->listeners, i);
+      mark(js, e->callback);
+      ant_value_t raw_callback = entry_raw_callback(evt, e);
+      ant_value_t signal = entry_signal(evt, e);
+      if (vtype(raw_callback) != kTypeUndefined) mark(js, raw_callback);
+      if (vtype(signal) != kTypeUndefined) mark(js, signal);
+    }
   }
-}}
+}
 
 void cleanup_events_module(ant_t *js) {
   if (!js || !js->global_events) return;
@@ -2402,6 +2504,7 @@ void cleanup_events_module(ant_t *js) {
 }
 
 void gc_mark_events(ant_t *js, gc_mark_fn mark) {
+  if (vtype(js->emit_plain_key) == kTypeString || vtype(js->emit_plain_key) == kTypeSymbol) mark(js, js->emit_plain_key);
   if (js->global_events) mark_event_type_listeners(js, mark, js->global_events);
 }
 

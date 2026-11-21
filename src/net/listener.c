@@ -114,6 +114,7 @@ int ant_listener_listen_tcp(
 
   uv_tcp_init(loop, &listener->handle.tcp);
   listener->handle.tcp.data = listener;
+  listener->opened = true;
 
   memset(&addr, 0, sizeof(addr));
   rc = uv_ip4_addr(hostname, port, (struct sockaddr_in *)&addr);
@@ -163,6 +164,7 @@ int ant_listener_listen_pipe(
 
   uv_pipe_init(loop, &listener->handle.pipe, 0);
   listener->handle.pipe.data = listener;
+  listener->opened = true;
 
   rc = uv_pipe_bind(&listener->handle.pipe, path);
   if (rc != 0) {
@@ -180,6 +182,66 @@ int ant_listener_listen_pipe(
 
   listener->started = true;
   return 0;
+}
+
+int ant_listener_listen_fd(
+  ant_listener_t *listener,
+  uv_loop_t *loop, int fd, int backlog,
+  uint64_t idle_timeout_ms,
+  const ant_listener_callbacks_t *callbacks,
+  void *user_data
+) {
+#ifdef _WIN32
+  return UV_ENOTSUP;
+#else
+  struct sockaddr_storage addr;
+  int addr_len = sizeof(addr);
+  int rc = 0;
+
+  if (!listener || !loop) return UV_EINVAL;
+  memset(listener, 0, sizeof(*listener));
+
+  uv_handle_type type = fd < 0 ? UV_UNKNOWN_HANDLE : uv_guess_handle(fd);
+  if (type != UV_TCP && type != UV_NAMED_PIPE) return UV_EINVAL;
+
+  listener->loop = loop;
+  listener->user_data = user_data;
+  listener->idle_timeout_ms = idle_timeout_ms;
+  listener->backlog = backlog > 0 ? backlog : 128;
+  listener->kind = type == UV_NAMED_PIPE ? ANT_LISTENER_KIND_PIPE : ANT_LISTENER_KIND_TCP;
+  if (callbacks) listener->callbacks = *callbacks;
+
+  if (listener->kind == ANT_LISTENER_KIND_PIPE) {
+    uv_pipe_init(loop, &listener->handle.pipe, 0);
+    rc = uv_pipe_open(&listener->handle.pipe, fd);
+  } else {
+    uv_tcp_init(loop, &listener->handle.tcp);
+    rc = uv_tcp_open(&listener->handle.tcp, fd);
+  }
+
+  ant_listener_stream(listener)->data = listener;
+  listener->opened = true;
+  if (rc != 0) return rc;
+
+  rc = uv_listen(ant_listener_stream(listener), listener->backlog, ant_listener_accept_cb);
+  if (rc != 0) return rc;
+
+  listener->started = true;
+  if (listener->kind != ANT_LISTENER_KIND_TCP) return 0;
+  if (uv_tcp_getsockname(&listener->handle.tcp, (struct sockaddr *)&addr, &addr_len) != 0) return 0;
+
+  if (addr.ss_family == AF_INET) listener->port = ntohs(((struct sockaddr_in *)&addr)->sin_port);
+  else if (addr.ss_family == AF_INET6) listener->port = ntohs(((struct sockaddr_in6 *)&addr)->sin6_port);
+
+  return 0;
+#endif
+}
+
+bool ant_listener_abort(ant_listener_t *listener) {
+  if (!listener || !listener->opened || listener->started) return false;
+  listener->started = true;
+  ant_listener_stop(listener, false);
+  return true;
 }
 
 void ant_listener_stop(ant_listener_t *listener, bool force) {

@@ -7,13 +7,19 @@ __attribute__((cold))
 ant_value_t net_library(ant_t *js);
 void cleanup_net_module(ant_t *js);
 int net_socket_fileno(ant_value_t value);
+ant_value_t net_socket_from_fd(ant_t *js, int fd);
 
 typedef struct net_listen_args_s {
   const char *host;
   const char *path;
+  
   int port;
+  int fd;
+  bool dup_fd;
   int backlog;
+  
   ant_value_t callback;
+  ant_value_t handle;
   ant_value_t error;
 } net_listen_args_t;
 

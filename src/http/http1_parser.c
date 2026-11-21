@@ -174,6 +174,13 @@ static int parser_on_header_value(llhttp_t *parser, const char *at, size_t lengt
 static int parser_on_header_value_complete(llhttp_t *parser) {
   parser_ctx_t *ctx = (parser_ctx_t *)parser->data;
   if (!parser_charge_header_bytes(ctx, 4)) return -1;
+
+  if (parser->flags & F_TRAILING) {
+    ctx->header_field.len = 0;
+    ctx->header_value.len = 0;
+    return 0;
+  }
+
   return parser_copy_header(ctx) ? 0 : -1;
 }
 

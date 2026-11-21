@@ -58,33 +58,16 @@ struct ant_conn_s {
   char remote_addr[64];
 };
 
-typedef void (*ant_conn_connect_cb)(
-  ant_conn_t *conn,
-  int status,
-  void *user_data
-);
-
 void ant_conn_start(ant_conn_t *conn);
+typedef void (*ant_conn_connect_cb)(ant_conn_t *conn, int status, void *user_data);
 
-int ant_conn_accept(
-  ant_conn_t *conn,
-  uv_stream_t *server_stream
-);
+ant_conn_t *ant_conn_create_tcp(ant_listener_t *listener, uint64_t timeout_ms);
+ant_conn_t *ant_conn_create_pipe(ant_listener_t *listener, uint64_t timeout_ms);
 
-int ant_conn_connect_tcp(
-  ant_conn_t *conn,
-  const char *hostname,
-  int port,
-  ant_conn_connect_cb cb,
-  void *user_data
-);
-
-int ant_conn_connect_pipe(
-  ant_conn_t *conn,
-  const char *path,
-  ant_conn_connect_cb cb,
-  void *user_data
-);
+int ant_conn_accept(ant_conn_t *conn, uv_stream_t *server_stream);
+int ant_conn_open_fd(ant_listener_t *listener, int fd, uint64_t timeout_ms, ant_conn_t **out);
+int ant_conn_connect_pipe(ant_conn_t *conn, const char *path, ant_conn_connect_cb cb, void *user_data);
+int ant_conn_connect_tcp(ant_conn_t *conn, const char *hostname, int port, ant_conn_connect_cb cb, void *user_data);
 
 static inline uv_stream_t *ant_conn_stream(ant_conn_t *conn) {
   if (!conn) return NULL;
@@ -94,6 +77,3 @@ static inline uv_stream_t *ant_conn_stream(ant_conn_t *conn) {
     default: return (uv_stream_t *)&conn->handle.tcp;
   }
 }
-
-ant_conn_t *ant_conn_create_tcp(ant_listener_t *listener, uint64_t timeout_ms);
-ant_conn_t *ant_conn_create_pipe(ant_listener_t *listener, uint64_t timeout_ms);

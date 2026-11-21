@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -10,6 +11,9 @@
 #include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 #include "ant.h"
@@ -66,6 +70,8 @@ struct net_server_s {
   char *host;
   char *path;
   int port;
+  int fd;
+  int listen_error;
   int backlog;
   int max_connections;
   uint32_t generation;
@@ -116,10 +122,12 @@ int net_socket_fileno(ant_value_t value) {
   return -1;
 #else
   net_socket_t *socket = net_socket_data(value);
+  net_server_t *server = net_server_data(value);
+  uv_handle_t *handle = NULL;
   uv_os_fd_t fd;
 
-  if (!socket || !socket->conn) return -1;
-  uv_handle_t *handle = (uv_handle_t *)ant_conn_stream(socket->conn);
+  if (socket && socket->conn) handle = (uv_handle_t *)ant_conn_stream(socket->conn);
+  else if (server && server->listening) handle = (uv_handle_t *)ant_listener_stream(&server->listener);
   if (!handle || uv_is_closing(handle) || uv_fileno(handle, &fd) != 0) return -1;
 
   return (int)fd;
@@ -245,10 +253,29 @@ static bool net_parse_listen_port(ant_t *js, ant_value_t value, ant_value_t opti
   return net_port_from_number(js, value, net_port_number(js, value), "options.port", out_port, out_error);
 }
 
+static int net_listen_handle_fd(ant_t *js, ant_value_t value, ant_value_t *source) {
+  int fd = net_socket_fileno(value);
+  *source = value;
+  if (fd >= 0) return fd;
+
+  ant_value_t handle = js_get(js, value, "_handle");
+  if (!is_object_type(handle)) return -1;
+
+  fd = net_socket_fileno(handle);
+  *source = handle;
+  if (fd >= 0) return fd;
+
+  ant_value_t fd_val = js_get(js, handle, "fd");
+  if (vtype(fd_val) != kTypeNumber || Ant_Value_AsNumberUnchecked(fd_val) < 0) return -1;
+  return (int)Ant_Value_AsNumberUnchecked(fd_val);
+}
+
 bool net_parse_listen_args(ant_native_params_t, net_listen_args_t *out) {
   if (!out) return false;
   
   memset(out, 0, sizeof(*out));
+  out->fd = -1;
+  out->handle = Ant_Value_Undefined;
   out->backlog = 511;
   out->callback = Ant_Value_Undefined;
   out->error = Ant_Value_Undefined;
@@ -275,7 +302,11 @@ bool net_parse_listen_args(ant_native_params_t, net_listen_args_t *out) {
     ant_value_t value = js_get(js, args[0], "path");
     
     if (vtype(value) == kTypeString) out->path = js_getstr(js, value, NULL);
-    if (!net_parse_listen_port(js, js_get(js, args[0], "port"), args[0], &out->port, &out->error)) return false;
+
+    value = js_get(js, args[0], "fd");
+    if (vtype(value) == kTypeNumber && Ant_Value_AsNumberUnchecked(value) >= 0) out->fd = (int)Ant_Value_AsNumberUnchecked(value);
+    else if ((out->fd = net_listen_handle_fd(js, args[0], &out->handle)) >= 0) out->dup_fd = true;
+    if (out->fd < 0 && !net_parse_listen_port(js, js_get(js, args[0], "port"), args[0], &out->port, &out->error)) return false;
     
     value = js_get(js, args[0], "host");
     if (vtype(value) == kTypeString) {
@@ -761,8 +792,12 @@ static void net_socket_on_connect(ant_conn_t *conn, int status, void *user_data)
   eventemitter_emit_args(socket->js, socket->obj, "connect", NULL, 0);
 }
 
+static void net_server_schedule_listen_error(net_server_t *server);
+
 static void net_server_on_listener_close(ant_listener_t *listener, void *user_data) {
-  net_server_maybe_finish_close((net_server_t *)user_data);
+  net_server_t *server = (net_server_t *)user_data;
+  if (server && server->listen_error != 0) net_server_schedule_listen_error(server);
+  else net_server_maybe_finish_close(server);
 }
 
 static void net_server_on_accept(ant_listener_t *listener, ant_conn_t *conn, void *user_data) {
@@ -807,17 +842,67 @@ static bool net_server_parse_host(const char *input, const char **out) {
   return true;
 }
 
+static void net_socket_init_client_listener(net_socket_t *socket, uint64_t timeout_ms) {
+  memset(&socket->client_listener, 0, sizeof(socket->client_listener));
+  socket->client_listener.loop = socket->js->loop;
+  socket->client_listener.user_data = socket;
+  socket->client_listener.callbacks.on_read = net_socket_on_read;
+  socket->client_listener.callbacks.on_end = net_socket_on_end;
+  socket->client_listener.callbacks.on_error = net_socket_on_error;
+  socket->client_listener.callbacks.on_timeout = net_socket_on_timeout;
+  socket->client_listener.callbacks.on_conn_close = net_server_on_conn_close;
+  socket->client_listener.idle_timeout_ms = timeout_ms;
+}
+
+static int net_socket_open_fd(net_socket_t *socket, int fd, bool readable) {
+  ant_conn_t *conn = NULL;
+
+  net_socket_init_client_listener(socket, 0);
+  int rc = ant_conn_open_fd(&socket->client_listener, fd, 0, &conn);
+  if (rc != 0) return rc;
+
+  net_add_active_socket(socket);
+  net_socket_attach_conn(socket, conn);
+
+  if (readable) ant_conn_start(conn);
+  else ant_conn_pause_read(conn);
+
+  return 0;
+}
+
+ant_value_t net_socket_from_fd(ant_t *js, int fd) {
+  net_socket_t *socket = net_socket_create(js, false, Ant_Value_Undefined);
+  if (!socket || net_socket_open_fd(socket, fd, true) != 0) return Ant_Value_Null;
+  return socket->obj;
+}
+
 static ant_value_t js_net_socket_ctor(ant_params_t) {
   net_socket_t *socket = NULL;
+  ant_value_t fd = Ant_Value_Undefined;
   bool allow_half_open = false;
+  bool readable = true;
 
   if (nargs > 0 && vtype(args[0]) == kTypeObject) {
     ant_value_t value = js_get(js, args[0], "allowHalfOpen");
     allow_half_open = js_truthy(js, value);
+    readable = js_get(js, args[0], "readable") != Ant_Value_False;
+    fd = js_get(js, args[0], "fd");
+  }
+
+  if (vtype(fd) != kTypeUndefined) {
+    if (vtype(fd) != kTypeNumber) return Ant_Error_CreateInvalidArgType(js, "options.fd", "of type number", fd);
+    double num = Ant_Value_AsNumberUnchecked(fd);
+    if (!(num >= 0 && num <= INT32_MAX) || num != (double)(int)num)
+      return Ant_Error_CreateOutOfRange(js, "options.fd", ">= 0 && <= 2147483647", fd);
   }
 
   socket = net_socket_create(js, allow_half_open, call_new_target);
   if (!socket) return Ant_Error_CreateOutOfMemory(js);
+  if (vtype(fd) != kTypeNumber) return socket->obj;
+
+  int rc = net_socket_open_fd(socket, (int)Ant_Value_AsNumberUnchecked(fd), readable);
+  if (rc != 0) return js_mkerr_typed(js, JS_ERR_TYPE, "%s", uv_strerror(rc));
+
   return socket->obj;
 }
 
@@ -988,15 +1073,7 @@ static ant_value_t net_socket_connect_parsed(ant_t *js, net_socket_t *socket, co
   if (socket->conn || socket->connecting)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Socket is already connected or connecting");
 
-  memset(&socket->client_listener, 0, sizeof(socket->client_listener));
-  socket->client_listener.loop = js->loop;
-  socket->client_listener.user_data = socket;
-  socket->client_listener.callbacks.on_read = net_socket_on_read;
-  socket->client_listener.callbacks.on_end = net_socket_on_end;
-  socket->client_listener.callbacks.on_error = net_socket_on_error;
-  socket->client_listener.callbacks.on_timeout = net_socket_on_timeout;
-  socket->client_listener.callbacks.on_conn_close = net_server_on_conn_close;
-  socket->client_listener.idle_timeout_ms = parsed->timeout_ms;
+  net_socket_init_client_listener(socket, parsed->timeout_ms);
 
   conn = parsed->path
     ? ant_conn_create_pipe(&socket->client_listener, parsed->timeout_ms)
@@ -1053,39 +1130,70 @@ static ant_value_t js_net_server_ctor(ant_params_t) {
   return server->obj;
 }
 
-static ant_value_t net_server_bind_listener(
-  ant_t *js,
+static int net_server_bind_fd(
   net_server_t *server,
   const net_listen_args_t *parsed,
   const ant_listener_callbacks_t *callbacks
 ) {
-  uv_loop_t *loop = js->loop;
-  int rc = 0;
+  int fd = parsed->fd;
+
+#ifndef _WIN32
+  if (parsed->dup_fd) {
+    fd = fcntl(fd, F_DUPFD_CLOEXEC, 0);
+    if (fd < 0) return uv_translate_sys_error(errno);
+  }
+#endif
+
+  int rc = ant_listener_listen_fd(
+    &server->listener, server->js->loop, fd,
+    server->backlog, 0, callbacks, server
+  );
+
+#ifndef _WIN32
+  uv_os_fd_t owned;
+  if (rc != 0 && parsed->dup_fd && uv_fileno((uv_handle_t *)ant_listener_stream(&server->listener), &owned) != 0) close(fd);
+#endif
+
+  if (rc != 0 || server->listener.kind != ANT_LISTENER_KIND_PIPE) return rc;
+
+  char name[1024];
+  size_t len = sizeof(name);
+  if (uv_pipe_getsockname(&server->listener.handle.pipe, name, &len) != 0) len = 0;
+  server->path = strndup(name, len);
+
+  return 0;
+}
+
+static int net_server_bind_listener(
+  net_server_t *server,
+  const net_listen_args_t *parsed,
+  const ant_listener_callbacks_t *callbacks
+) {
+  uv_loop_t *loop = server->js->loop;
+
+  if (parsed->fd >= 0) return net_server_bind_fd(server, parsed, callbacks);
 
   if (parsed->path) {
     server->path = strdup(parsed->path);
-    if (!server->path) return Ant_Error_CreateOutOfMemory(js);
-    
-    rc = ant_listener_listen_pipe(
-      &server->listener, loop, server->path, 
-      server->backlog, 0, callbacks, server
-    );
-  } else {
-    const char *host = parsed->host;
-    net_server_parse_host(host, &host);
-    
-    free(server->host);
-    server->host = strdup(host ? host : "0.0.0.0");
-    if (!server->host) return Ant_Error_CreateOutOfMemory(js);
-    
-    rc = ant_listener_listen_tcp(
-      &server->listener, loop, server->host, parsed->port, 
+    if (!server->path) return UV_ENOMEM;
+
+    return ant_listener_listen_pipe(
+      &server->listener, loop, server->path,
       server->backlog, 0, callbacks, server
     );
   }
 
-  if (rc != 0) return js_mkerr_typed(js, JS_ERR_TYPE, "%s", uv_strerror(rc));
-  return Ant_Value_Undefined;
+  const char *host = parsed->host;
+  net_server_parse_host(host, &host);
+
+  free(server->host);
+  server->host = strdup(host ? host : "0.0.0.0");
+  if (!server->host) return UV_ENOMEM;
+
+  return ant_listener_listen_tcp(
+    &server->listener, loop, server->host, parsed->port,
+    server->backlog, 0, callbacks, server
+  );
 }
 
 static void net_server_take_over(ant_t *js, net_server_t *server, const net_listen_args_t *parsed) {
@@ -1104,6 +1212,49 @@ static void net_server_take_over(ant_t *js, net_server_t *server, const net_list
   }
 }
 
+static ant_value_t net_server_listen_error_value(ant_t *js, net_server_t *server, int status) {
+  const char *code = uv_err_name(status);
+  ant_value_t props = Ant_Object_CreateBare(js);
+  char message[1280];
+
+  js_set(js, props, "code", js_mkstr(js, code, strlen(code)));
+  js_set(js, props, "errno", Ant_Value_FromNumber((double)status));
+  js_set(js, props, "syscall", js_mkstr(js, "listen", 6));
+
+  if (server->fd >= 0) {
+    snprintf(message, sizeof(message), "listen %s: %s", code, uv_strerror(status));
+  } else if (server->path) {
+    js_set(js, props, "address", js_mkstr(js, server->path, strlen(server->path)));
+    snprintf(message, sizeof(message), "listen %s: %s %s", code, uv_strerror(status), server->path);
+  } else {
+    const char *host = server->host ? server->host : "0.0.0.0";
+    js_set(js, props, "address", js_mkstr(js, host, strlen(host)));
+    js_set(js, props, "port", Ant_Value_FromNumber((double)server->port));
+    snprintf(message, sizeof(message), "listen %s: %s %s:%d", code, uv_strerror(status), host, server->port);
+  }
+
+  return Ant_Error_CreateWithProps(js, JS_ERR_GENERIC, props, message);
+}
+
+static ant_value_t net_server_emit_listen_error(ant_params_t) {
+  ant_value_t obj = js_get_slot(call_func, SLOT_DATA);
+  net_server_t *server = net_server_data(obj);
+  if (!server || server->listen_error == 0) return Ant_Value_Undefined;
+
+  int status = server->listen_error;
+  server->listen_error = 0;
+  Ant_List_Remove(server);
+
+  ant_value_t error = net_server_listen_error_value(js, server, status);
+  if (eventemitter_emit_args(js, obj, "error", &error, 1)) return Ant_Value_Undefined;
+  return js_throw(js, error);
+}
+
+static void net_server_schedule_listen_error(net_server_t *server) {
+  ant_value_t emit = js_make_data_cfunc(server->js, server->obj, net_server_emit_listen_error);
+  if (!is_err(emit)) queue_next_tick(server->js, emit);
+}
+
 static ant_value_t net_server_emit_listening(ant_params_t) {
   ant_value_t obj = js_get_slot(call_func, SLOT_DATA);
   net_server_t *server = net_server_data(obj);
@@ -1117,15 +1268,20 @@ static ant_value_t js_net_server_listen(ant_params_t) {
   net_listen_args_t parsed;
 
   if (!server) return Ant_Exception_Current(js);
-  if (server->listening) return js_mkerr_typed(js, JS_ERR_TYPE, "Server is already listening");
+  if (server->listening || server->listen_error != 0) return js_mkerr_typed(js, JS_ERR_TYPE, "Server is already listening");
   if (!net_parse_listen_args(js, args, nargs, &parsed)) return parsed.error;
   
-  if (!parsed.path && parsed.port == 0 && Ant_Net_ListenPolicy_Restricted(js)) return js_mkerr_typed(
+  if (parsed.fd >= 0 && Ant_Net_ListenPolicy_Restricted(js)) return js_mkerr_typed(
+    js, JS_ERR_TYPE | JS_ERR_NO_STACK,
+    "sandbox listen on an inherited fd is not supported; use a fixed port with --forward <port>"
+  );
+
+  if (parsed.fd < 0 && !parsed.path && parsed.port == 0 && Ant_Net_ListenPolicy_Restricted(js)) return js_mkerr_typed(
     js, JS_ERR_TYPE | JS_ERR_NO_STACK,
     "sandbox listen on port 0 is not supported; use a fixed port with --forward <port>"
   );
   
-  if (!parsed.path && !Ant_Net_ListenPolicy_PortAllowed(js, parsed.port)) return js_mkerr_typed(
+  if (parsed.fd < 0 && !parsed.path && !Ant_Net_ListenPolicy_PortAllowed(js, parsed.port)) return js_mkerr_typed(
     js, JS_ERR_TYPE | JS_ERR_NO_STACK,
     "sandbox listen on port %d requires --forward %d or --forward <host>:%d",
     parsed.port, parsed.port, parsed.port
@@ -1134,6 +1290,7 @@ static ant_value_t js_net_server_listen(ant_params_t) {
   free(server->path);
   server->path = NULL;
   server->port = parsed.port;
+  server->fd = parsed.fd;
   server->backlog = parsed.backlog > 0 ? parsed.backlog : server->backlog;
 
   callbacks.on_accept = net_server_on_accept;
@@ -1148,13 +1305,19 @@ static ant_value_t js_net_server_listen(ant_params_t) {
   GC_ROOT_PIN(js, parsed.callback);
   
   server->generation = ant_watch_generation(js);
-  net_server_take_over(js, server, &parsed);
-  ant_value_t bind_result = net_server_bind_listener(js, server, &parsed, &callbacks);
-  
-  if (is_err(bind_result)) {
+  if (parsed.fd < 0) net_server_take_over(js, server, &parsed);
+  int rc = net_server_bind_listener(server, &parsed, &callbacks);
+
+  if (rc != 0) {
     GC_ROOT_RESTORE(js, root_mark);
-    return bind_result;
+    server->listen_error = rc;
+    net_add_active_server(server);
+    if (!ant_listener_abort(&server->listener)) net_server_schedule_listen_error(server);
+    return call_this;
   }
+
+  net_server_t *source = parsed.dup_fd ? net_server_data(parsed.handle) : NULL;
+  if (source) ant_listener_stop(&source->listener, false);
 
   server->port = ant_listener_port(&server->listener);
   server->listening = true;

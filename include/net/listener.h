@@ -48,6 +48,7 @@ struct ant_listener_s {
   int backlog;
   
   char *path;
+  bool opened;
   bool started;
   bool closing;
   bool closed;
@@ -62,6 +63,7 @@ static inline uv_stream_t *ant_listener_stream(ant_listener_t *listener) {
   }
 }
 
+// TODO: flatten
 int ant_listener_listen_tcp(
   ant_listener_t *listener,
   uv_loop_t *loop,
@@ -83,6 +85,17 @@ int ant_listener_listen_pipe(
   void *user_data
 );
 
+int ant_listener_listen_fd(
+  ant_listener_t *listener,
+  uv_loop_t *loop,
+  int fd,
+  int backlog,
+  uint64_t idle_timeout_ms,
+  const ant_listener_callbacks_t *callbacks,
+  void *user_data
+);
+
+bool ant_listener_abort(ant_listener_t *listener);
 void ant_listener_stop(ant_listener_t *listener, bool force);
 void ant_listener_ref(ant_listener_t *listener);
 void ant_listener_unref(ant_listener_t *listener);

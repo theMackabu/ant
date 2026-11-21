@@ -1505,6 +1505,7 @@ static ant_value_t js_tls_server_listen(ant_params_t) {
 
   if (!net_parse_listen_args(js, args, nargs, &parsed)) return parsed.error;
   if (parsed.path) return js_mkerr_typed(js, JS_ERR_TYPE, "tls.Server cannot listen on a path");
+  if (parsed.fd >= 0) return js_mkerr_typed(js, JS_ERR_TYPE, "tls.Server cannot listen on an fd");
 
   ant_value_t callback = parsed.callback;
   const char *host = parsed.host;

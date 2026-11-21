@@ -889,12 +889,30 @@ static void abort_child_object_creation(child_process_t *cp) {
   try_free_child(cp);
 }
 
-static void child_set_stdio_array(ant_t *js, child_process_t *cp, int count) {
+static void child_close_fd(int fd) {
+#ifndef _WIN32
+  close(fd);
+#else
+  (void)fd;
+#endif
+}
+
+static void child_set_stdio_array(ant_t *js, child_process_t *cp, int count, int *extra_fds) {
   ant_value_t stdio = Ant_Array_Create(js);
   js_arr_push(js, stdio, cp->stdin_obj);
   js_arr_push(js, stdio, cp->stdout_obj);
   js_arr_push(js, stdio, cp->stderr_obj);
-  for (int i = 3; i < count; i++) js_arr_push(js, stdio, Ant_Value_Null);
+
+  for (int i = 3; i < count; i++) {
+    ant_value_t extra = Ant_Value_Null;
+    if (extra_fds && extra_fds[i] >= 0) {
+      extra = net_socket_from_fd(js, extra_fds[i]);
+      if (extra == Ant_Value_Null) child_close_fd(extra_fds[i]);
+      extra_fds[i] = -1;
+    }
+    js_arr_push(js, stdio, extra);
+  }
+
   js_set(js, cp->child_obj, "stdio", stdio);
 }
 
@@ -931,7 +949,7 @@ static ant_value_t create_child_object(ant_t *js, child_process_t *cp) {
     js_set(js, obj, streams[i].name, *stream_objs[i]);
   }
   
-  child_set_stdio_array(js, cp, 3);
+  child_set_stdio_array(js, cp, 3, NULL);
   if (is_object_type(cp->spawnargs)) {
     js_set(js, obj, "spawnfile", js_arr_get(js, cp->spawnargs, 0));
     js_set(js, obj, "spawnargs", cp->spawnargs);
@@ -1294,9 +1312,27 @@ static ant_value_t builtin_spawn(ant_params_t) {
     p->data = cp;
   }
   
+  int extra_parent[CHILD_STDIO_MAX];
+  int extra_child[CHILD_STDIO_MAX];
+
+  for (int i = 0; i < CHILD_STDIO_MAX; i++) {
+    extra_parent[i] = -1;
+    extra_child[i] = -1;
+  }
+
+#ifndef _WIN32
+  for (int i = CHILD_STREAM_STDERR + 1; i < stdio_spec.count; i++) {
+    uv_os_sock_t pair[2];
+    if (stdio_spec.mode[i] != STDIO_PIPE) continue;
+    if (uv_socketpair(SOCK_STREAM, 0, pair, UV_NONBLOCK_PIPE, 0) != 0) continue;
+    extra_parent[i] = pair[0];
+    extra_child[i] = pair[1];
+  }
+#endif
+
   uv_stdio_container_t stdio[CHILD_STDIO_MAX];
   for (int i = 0; i < stdio_spec.count; i++) {
-    int source_fd = stdio_spec_source_fd(&stdio_spec, i);
+    int source_fd = extra_child[i] >= 0 ? extra_child[i] : stdio_spec_source_fd(&stdio_spec, i);
     if (source_fd >= 0) ant_process_stdio_inherit_fd(&stdio[i], source_fd);
     else if (stdio_spec.mode[i] == STDIO_PIPE && i <= CHILD_STREAM_STDERR)
     ant_process_stdio_create_pipe(&stdio[i], (uv_stream_t *)child_pipe(cp, i), i == CHILD_STREAM_STDIN);
@@ -1370,6 +1406,14 @@ static ant_value_t builtin_spawn(ant_params_t) {
   
   free_args_array(spawn_args, spawn_argc);
   free_env_array(env);
+
+  for (int i = CHILD_STREAM_STDERR + 1; i < stdio_spec.count; i++) {
+    if (extra_child[i] >= 0) child_close_fd(extra_child[i]);
+    if (r < 0 && extra_parent[i] >= 0) {
+      child_close_fd(extra_parent[i]);
+      extra_parent[i] = -1;
+    }
+  }
   
   if (r < 0) {
     cp->spawn_error = r;
@@ -1386,7 +1430,7 @@ static ant_value_t builtin_spawn(ant_params_t) {
     Ant_List_Insert(&js->active_children, cp);
     ant_value_t child_obj = create_child_object(js, cp);
     if (is_err(child_obj)) return child_obj;
-    if (stdio_spec.count > 3) child_set_stdio_array(js, cp, stdio_spec.count);
+    if (stdio_spec.count > 3) child_set_stdio_array(js, cp, stdio_spec.count, NULL);
     js_set(js, cp->child_obj, "pid", Ant_Value_Undefined);
     child_schedule_spawn_failure(js, cp);
 
@@ -1405,8 +1449,13 @@ static ant_value_t builtin_spawn(ant_params_t) {
   Ant_List_Insert(&js->active_children, cp);
   ant_value_t child_obj = create_child_object(js, cp);
   
-  if (is_err(child_obj)) return child_obj;
-  if (stdio_spec.count > 3) child_set_stdio_array(js, cp, stdio_spec.count);
+  if (is_err(child_obj)) {
+    for (int i = CHILD_STREAM_STDERR + 1; i < stdio_spec.count; i++)
+      if (extra_parent[i] >= 0) child_close_fd(extra_parent[i]);
+    return child_obj;
+  }
+
+  if (stdio_spec.count > 3) child_set_stdio_array(js, cp, stdio_spec.count, extra_parent);
   
   return cp->child_obj;
 }

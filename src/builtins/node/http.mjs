@@ -76,7 +76,7 @@ function buildHeaders(rawHeaders) {
   let i = 0;
 
   for (i = 0; i + 1 < rawHeaders.length; i += 2) {
-    appendHeaderValue(headers, normalizeHeaderName(rawHeaders[i]), String(rawHeaders[i + 1]));
+    appendHeaderValue(headers, normalizeHeaderName(rawHeaders[i]), rawHeaders[i + 1]);
   }
 
   return headers;
@@ -130,8 +130,28 @@ function makeSocketState(server, socket) {
     activeResponse: null,
     draining: false,
     paused: false,
-    closed: false
+    closed: false,
+    keepAliveTimer: null,
+    active: false
   };
+}
+
+function checkKeepAlive(state) {
+  state.keepAliveTimer = null;
+  if (state.closed || state.incoming || state.activeResponse) return;
+
+  if (state.active) {
+    state.active = false;
+    armKeepAlive(state);
+  } else closeSocket(state.socket);
+}
+
+function armKeepAlive(state) {
+  const timeout = state.server.keepAliveTimeout;
+  if (!(timeout > 0)) return;
+  state.active = false;
+  state.keepAliveTimer = setTimeout(checkKeepAlive, timeout, state);
+  state.keepAliveTimer.unref?.();
 }
 
 function pauseSocket(state) {
@@ -1011,6 +1031,7 @@ function finishResponse(res, req, state, keepAlive, callback) {
   if (keepAlive && !state.closed) {
     if (!state.incoming) resumeSocket(state);
     state.server._drainSocket(res.socket, state);
+    if (state.keepAliveTimer === null) armKeepAlive(state);
   }
 }
 
@@ -1281,6 +1302,7 @@ export class Server extends net.Server {
     this.keepAliveTimeout = 5000;
     this.maxHeadersCount = 2000;
     this.maxHeaderSize = serverOptions?.maxHeaderSize > 0 ? serverOptions.maxHeaderSize : maxHeaderSize;
+    this.requireHostHeader = serverOptions?.requireHostHeader !== false;
     this._socketStates = new Set();
     this._closing = false;
 
@@ -1302,6 +1324,7 @@ export class Server extends net.Server {
     }
 
     socket.on('data', chunk => {
+      state.active = true;
       state.pending.push(bufferFrom(chunk));
       this._drainSocket(socket, state);
     });
@@ -1312,6 +1335,7 @@ export class Server extends net.Server {
 
     socket.on('close', () => {
       const res = state.activeResponse;
+      if (state.keepAliveTimer !== null) clearTimeout(state.keepAliveTimer);
       state.closed = true;
       state.pending = [];
       state.incoming = null;
@@ -1407,6 +1431,12 @@ export class Server extends net.Server {
     const res = new ServerResponse(req, socket, state);
     state.incoming = req;
     state.activeResponse = res;
+
+    if (head.host === null && this.requireHostHeader && head.httpVersionMajor === 1 && head.httpVersionMinor === 1) {
+      res.writeHead(400, { Connection: 'close' });
+      res.end();
+      return;
+    }
 
     if (req.headers.expect !== undefined && req.httpVersionMajor === 1 && req.httpVersionMinor === 1) {
       if (CONTINUE_EXPRESSION.test(req.headers.expect)) {

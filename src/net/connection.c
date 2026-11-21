@@ -237,12 +237,13 @@ static void ant_conn_shutdown_cb(uv_shutdown_t *req, int status) {
 
 static void ant_conn_finish_close(ant_conn_t *conn) {
   ant_listener_t *listener = conn ? conn->listener : NULL;
-  
-  if (!conn || !listener) return;
+  if (!conn) return;
 
-  ant_listener_remove_conn(listener, conn);
-  if (listener->callbacks.on_conn_close)
-    listener->callbacks.on_conn_close(conn, listener->user_data);
+  if (listener) {
+    ant_listener_remove_conn(listener, conn);
+    if (listener->callbacks.on_conn_close) 
+      listener->callbacks.on_conn_close(conn, listener->user_data);
+  }
 
   free(conn->buffer);
   free(conn);
@@ -324,6 +325,41 @@ int ant_conn_accept(ant_conn_t *conn, uv_stream_t *server_stream) {
   conn->listener->connections = conn;
   
   return 0;
+}
+
+int ant_conn_open_fd(ant_listener_t *listener, int fd, uint64_t timeout_ms, ant_conn_t **out) {
+#ifdef _WIN32
+  return UV_ENOTSUP;
+#else
+  ant_conn_t *conn = NULL;
+  int rc = 0;
+
+  if (!listener || !out || fd < 0) return UV_EINVAL;
+
+  uv_handle_type type = uv_guess_handle(fd);
+  if (type != UV_TCP && type != UV_NAMED_PIPE) return UV_EINVAL;
+
+  conn = type == UV_TCP
+    ? ant_conn_create_tcp(listener, timeout_ms)
+    : ant_conn_create_pipe(listener, timeout_ms);
+  if (!conn) return UV_ENOMEM;
+
+  rc = type == UV_TCP
+    ? uv_tcp_open(&conn->handle.tcp, fd)
+    : uv_pipe_open(&conn->handle.pipe, fd);
+
+  if (rc != 0) {
+    conn->listener = NULL;
+    ant_conn_close(conn);
+    return rc;
+  }
+
+  ant_conn_store_peer_addr(conn);
+  ant_conn_store_local_addr(conn);
+  *out = conn;
+
+  return 0;
+#endif
 }
 
 static void ant_conn_connect_cb_impl(uv_connect_t *req, int status) {

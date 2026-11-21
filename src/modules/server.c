@@ -134,12 +134,14 @@ struct server_runtime_s {
   size_t max_request_body_size;
   
   int port;
+  int fd;
   uint32_t generation;
   bool websocket_per_message_deflate;
   bool sigint_closed;
   bool sigterm_closed;
   bool stopping;
   bool force_stop;
+  bool start_failed;
 };
 
 struct server_sse_state_s {
@@ -211,6 +213,27 @@ static void server_runtime_finalize(ant_t *js, ant_object_t *obj) {
   free(server->unix_path);
   free(server->hostname);
   free(server);
+}
+
+static void server_adopt_listener_address(server_runtime_t *server) {
+  char name[1024];
+  size_t len = sizeof(name);
+
+  if (server->listener.kind == ANT_LISTENER_KIND_PIPE) {
+    if (uv_pipe_getsockname(&server->listener.handle.pipe, name, &len) == 0 && len > 0)
+      server->unix_path = strndup(name, len);
+    return;
+  }
+
+  struct sockaddr_storage addr;
+  int addr_len = sizeof(addr);
+  if (uv_tcp_getsockname(&server->listener.handle.tcp, (struct sockaddr *)&addr, &addr_len) != 0) return;
+  if (uv_ip_name((struct sockaddr *)&addr, name, sizeof(name)) != 0) return;
+
+  char *hostname = strdup(name);
+  if (!hostname) return;
+  free(server->hostname);
+  server->hostname = hostname;
 }
 
 static ant_value_t server_mk_listen_error(ant_t *js, int status, const server_runtime_t *server) {
@@ -394,6 +417,14 @@ static void stop_waiters_resolve(server_runtime_t *server) {
 }
 
 static void server_maybe_finish_stop(server_runtime_t *server) {
+  if (server && server->start_failed) {
+    if (!ant_listener_is_closed(&server->listener) || !server->sigint_closed || !server->sigterm_closed) return;
+    free(server->unix_path);
+    free(server->hostname);
+    free(server);
+    return;
+  }
+
   if (!server || !server->stopping) return;
   if (ant_listener_has_connections(&server->listener)) return;
   if (!ant_listener_is_closed(&server->listener) || !server->sigint_closed || !server->sigterm_closed) return;
@@ -408,6 +439,13 @@ static void server_signal_close_cb(uv_handle_t *handle) {
   if (handle == (uv_handle_t *)&server->sigint_handle) server->sigint_closed = true;
   if (handle == (uv_handle_t *)&server->sigterm_handle) server->sigterm_closed = true;
   server_maybe_finish_stop(server);
+}
+
+static void server_abort_start(server_runtime_t *server) {
+  server->start_failed = true;
+  if (!ant_listener_abort(&server->listener)) server->listener.closed = true;
+  uv_close((uv_handle_t *)&server->sigint_handle, server_signal_close_cb);
+  uv_close((uv_handle_t *)&server->sigterm_handle, server_signal_close_cb);
 }
 
 static void server_close_idle_connections(server_runtime_t *server) {
@@ -1805,6 +1843,7 @@ static bool server_export_has_fetch_handler(ant_t *js, ant_value_t default_expor
     ant_value_t request_timeout = js_get(js, default_export, "requestTimeout");
     ant_value_t websocket = js_get(js, default_export, "websocket");
     ant_value_t unix_path = js_get(js, default_export, "unix");
+    ant_value_t fd = js_get(js, default_export, "fd");
     ant_value_t tls = js_get(js, default_export, "tls");
 
     *looks_like_config =
@@ -1815,6 +1854,7 @@ static bool server_export_has_fetch_handler(ant_t *js, ant_value_t default_expor
       vtype(request_timeout) != kTypeUndefined ||
       vtype(websocket)       != kTypeUndefined ||
       vtype(unix_path)       != kTypeUndefined ||
+      vtype(fd)              != kTypeUndefined ||
       vtype(tls)             != kTypeUndefined;
   }
 
@@ -1831,7 +1871,9 @@ static bool server_running_current(ant_t *js) {
 static server_runtime_t *server_find_reloadable(ant_t *js, const server_runtime_t *next) {
   for (server_runtime_t *server = js->server_runtimes; server; server = server->next) {
     if (server->stopping || server->generation >= next->generation) continue;
-    if (next->unix_path) {
+    if (next->fd >= 0 || server->fd >= 0) {
+      if (server->fd == next->fd) return server;
+    } else if (next->unix_path) {
       if (server->unix_path && strcmp(server->unix_path, next->unix_path) == 0) return server;
     } else if (!server->unix_path && next->port != 0 && server->port == next->port && strcmp(server->hostname, next->hostname) == 0) return server;
   }
@@ -1895,6 +1937,7 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   ant_value_t max_body_v = 0;
   ant_value_t websocket_v = 0;
   ant_value_t unix_v = 0;
+  ant_value_t fd_v = 0;
   ant_value_t tls_v = 0;
   
   ant_listener_callbacks_t callbacks = {0};
@@ -1911,6 +1954,7 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
     .fetch_fn = js_get(js, default_export, "fetch"),
     .hostname = strdup("0.0.0.0"),
     .unix_path = NULL,
+    .fd = -1,
     .port = 3000,
     .request_timeout_ms = 30000,
     .idle_timeout_ms = 30000,
@@ -1949,6 +1993,18 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
     free(server->hostname);
     free(server);
     return js_mkerr_typed(js, JS_ERR_TYPE, "tls server config is not implemented yet");
+  }
+
+  fd_v = js_get(js, default_export, "fd");
+  if (vtype(fd_v) != kTypeUndefined && vtype(fd_v) != kTypeNull) {
+    double fd = vtype(fd_v) == kTypeNumber ? Ant_Value_AsNumberUnchecked(fd_v) : -1;
+    if (!(fd >= 0 && fd <= INT_MAX) || fd != (double)(int)fd) {
+      free(server->unix_path);
+      free(server->hostname);
+      free(server);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "server fd must be a non-negative integer");
+    }
+    server->fd = (int)fd;
   }
 
   port_v = js_get(js, default_export, "port");
@@ -2118,16 +2174,28 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   callbacks.on_conn_close = server_on_conn_close;
   callbacks.on_listener_close = server_on_listener_close;
 
-  if (server->unix_path) rc = ant_listener_listen_pipe(
+  if (server->fd >= 0) {
+    if (Ant_Net_ListenPolicy_Restricted(js)) {
+      server_abort_start(server);
+      return js_mkerr_typed(js, JS_ERR_TYPE | JS_ERR_NO_STACK,
+        "sandbox listen on an inherited fd is not supported; use a fixed port with --forward <port>");
+    }
+
+    free(server->unix_path);
+    server->unix_path = NULL;
+    rc = ant_listener_listen_fd(
+      &server->listener, server->loop, server->fd,
+      512, server->idle_timeout_ms, &callbacks, server
+    );
+    if (rc == 0) server_adopt_listener_address(server);
+  } else if (server->unix_path) rc = ant_listener_listen_pipe(
     &server->listener, server->loop, server->unix_path,
     512, server->idle_timeout_ms, &callbacks, server
   );
   else {
     if (!Ant_Net_ListenPolicy_PortAllowed(js, server->port)) {
       int port = server->port;
-      free(server->unix_path);
-      free(server->hostname);
-      free(server);
+      server_abort_start(server);
       return js_mkerr_typed(
         js, JS_ERR_TYPE | JS_ERR_NO_STACK,
         "sandbox listen on port %d requires --forward %d or --forward <host>:%d",
@@ -2144,9 +2212,7 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   
   if (rc != 0) {
     ant_value_t error = server_mk_listen_error(js, rc, server);
-    free(server->unix_path);
-    free(server->hostname);
-    free(server);
+    server_abort_start(server);
     return error;
   }
 
