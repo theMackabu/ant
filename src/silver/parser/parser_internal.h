@@ -16,8 +16,17 @@ typedef struct {
   bool in_async;
   bool wants_module;
   bool tagged_template;
+  bool class_initializer;
   uint32_t function_depth;
 } sv_parser_t;
+
+typedef enum {
+  SV_TARGET_ASSIGN,
+  SV_TARGET_COMPOUND,
+  SV_TARGET_LOGICAL,
+  SV_TARGET_UPDATE,
+  SV_TARGET_FOR,
+} sv_target_kind_t;
 
 #define SV_RAISE(mkerr) ({                                  \
   if (!Ant_Exception_Pending(p->js)) {                      \
@@ -66,6 +75,11 @@ sv_ast_t *parse_lhs(sv_parser_t *p);
 sv_ast_t *parse_array(sv_parser_t *p);
 sv_ast_t *finish_arrow(sv_parser_t *p, sv_ast_t *fn);
 sv_ast_t *parse_func(sv_parser_t *p, bool is_async);
+
+bool sv_binding_pattern_ok(sv_parser_t *p, const sv_ast_t *node, bool top);
+bool sv_assign_target_ok(sv_parser_t *p, const sv_ast_t *node, sv_target_kind_t kind);
+bool sv_reject_binding_pattern(sv_parser_t *p, const sv_ast_t *node);
+bool sv_reject_assign_target_slow(sv_parser_t *p, const sv_ast_t *node, sv_target_kind_t kind);
 sv_ast_t *parse_class(sv_parser_t *p);
 sv_ast_t *parse_block(sv_parser_t *p, bool directive_ctx);
 sv_ast_t *parse_var_decl(sv_parser_t *p, sv_var_kind_t kind, bool allow_uninit_const);
@@ -74,7 +88,7 @@ sv_ast_t *parse_export_stmt(sv_parser_t *p);
 sv_ast_t *parse_unary(sv_parser_t *p);
 sv_ast_t *parse_assign(sv_parser_t *p);
 sv_ast_t *parse_expr(sv_parser_t *p);
-sv_ast_t *parse_paren_list(sv_parser_t *p, bool trailing_comma);
+sv_ast_t *parse_paren_list(sv_parser_t *p, bool call_like);
 sv_ast_t *parse_paren_expr(sv_parser_t *p);
 
 void parse_formal_params(sv_parser_t *p, sv_ast_t *fn, uint8_t close);
@@ -185,8 +199,20 @@ static inline bool sv_strict_forbidden_binding_ident(const char *s, uint32_t len
   return is_eval_or_arguments_name(s, len) || is_strict_reserved_name(s, len);
 }
 
-static inline bool sv_is_strict_restricted_assign_target(sv_parser_t *p, sv_ast_t *n) {
-  return p->lx.strict && n && n->type == N_IDENT && is_eval_or_arguments_name(n->str, n->len);
+static inline bool ast_pattern_binds_eval_or_arguments(const sv_ast_t *n) {
+  return ast_pattern_binds(n, "eval") || ast_pattern_binds(n, "arguments");
+}
+
+static inline bool sv_reject_assign_target(sv_parser_t *p, const sv_ast_t *node, sv_target_kind_t kind) {
+  if (node->type == N_IDENT) {
+    char c = node->str[0];
+    if (__builtin_expect(c != '#' && !(c == 'e' && node->len == 4) && !(c == 'a' && node->len == 9), 1)) return false;
+  } else if (node->type == N_MEMBER) {
+    const sv_ast_t *base = node->left;
+    while (base->type == N_MEMBER) base = base->left;
+    if (base->type == N_THIS || (base->type == N_IDENT && base->len != 6)) return false;
+  }
+  return sv_reject_assign_target_slow(p, node, kind);
 }
 
 static inline bool is_lexical_decl_stmt(sv_ast_t *n) {
@@ -205,6 +231,13 @@ static inline bool var_decl_has_initializer(sv_ast_t *n) {
     if (decl && decl->type == N_VARDECL && decl->right) return true;
   }
   return false;
+}
+
+static inline bool reject_class_initializer_arguments(sv_parser_t *p, const char *name, uint32_t len) {
+  if (__builtin_expect(!p->class_initializer, 1)) return false;
+  if (len != 9 || memcmp(name, "arguments", 9) != 0) return false;
+  SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "'arguments' is not allowed in class field initializer or static initialization block");
+  return true;
 }
 
 static inline sv_ast_t *mk_ident_from_tok(sv_parser_t *p) {

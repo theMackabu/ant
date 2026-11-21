@@ -84,37 +84,27 @@ static inline bool sv_jit_interp_innermost(ant_t *js) {
   return js->vm_segs && js->vm_segs->jit_depth == js->jit_active_depth;
 }
 
-static inline __attribute__((always_inline)) ant_value_t sv_jit_enter(
+static inline __attribute__((always_inline)) ant_value_t sv_jit_invoke_same_realm(
   ant_t *js, sv_jit_entry_t from, sv_jit_func_t fn, sv_vm_t *vm,
   const sv_call_ctx_t *ctx, sv_closure_t *closure
 ) {
 #if ANT_JIT_ENTER_STUB
   bool clean = from == SV_JIT_FROM_INTERP || sv_jit_interp_innermost(js);
+  bool construct = ctx->new_target != Ant_Value_Undefined;
   js->jit_active_depth++;
-  ant_value_t result = clean
+  ant_value_t result;
+  if (__builtin_expect(!construct, 1)) result = clean
     ? ant_jit_enter_clean(fn, vm, ctx->this_val, ctx->new_target, ctx->super_val, ctx->args, ctx->argc, closure)
     : fn(vm, ctx->this_val, ctx->new_target, ctx->super_val, ctx->args, ctx->argc, closure);
+  else result = clean
+    ? ant_jit_enter_clean_construct(fn, vm, ctx->this_val, ctx->new_target, ctx->super_val, ctx->args, ctx->argc, closure)
+    : ant_jit_enter_construct(vm, ctx->this_val, ctx->new_target, ctx->super_val, ctx->args, ctx->argc, closure, fn);
 #else
   (void)from;
   js->jit_active_depth++;
   ant_value_t result = fn(vm, ctx->this_val, ctx->new_target, ctx->super_val, ctx->args, ctx->argc, closure);
 #endif
   js->jit_active_depth--;
-  return result;
-}
-
-static inline __attribute__((always_inline)) ant_value_t sv_jit_invoke_same_realm(
-  ant_t *js, sv_jit_entry_t from, sv_jit_func_t fn, sv_vm_t *vm,
-  const sv_call_ctx_t *ctx, sv_closure_t *closure
-) {
-  if (__builtin_expect(ctx->new_target == Ant_Value_Undefined, 1))
-    return sv_jit_enter(js, from, fn, vm, ctx, closure);
-  
-  sv_jit_construct_mark_t mark = { js->jit_construct_marks, js->jit_active_depth + 1 };
-  js->jit_construct_marks = &mark;
-  ant_value_t result = sv_jit_enter(js, from, fn, vm, ctx, closure);
-  js->jit_construct_marks = mark.prev;
-  
   return result;
 }
 

@@ -104,6 +104,9 @@ ant_value_t Ant_Error_CreateFormatted(ant_t *js, js_err_type_t err_type, const c
 ant_value_t js_capture_raw_stack(ant_t *js);
 ant_value_t js_build_callsite_array(ant_t *js, ant_value_t call_func, ant_value_t above);
 ant_value_t js_throw(ant_t *js, ant_value_t value);
+
+typedef bool (*js_throw_caught_fn)(ant_t *js);
+ant_value_t js_throw_unless(ant_t *js, ant_value_t value, js_throw_caught_fn caught);
 ant_value_t js_take_thrown(ant_t *js, ant_value_t fallback);
 
 bool Ant_Exception_Pending(ant_t *js);

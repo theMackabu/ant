@@ -279,6 +279,7 @@ void Ant_Destroy(ant_t *js) {
   js->c_root_count = js->c_root_cap = 0;
 
   ant_realm_destroy_all(js);
+  js_for_in_cache_clear(js);
   if (!js->process_exiting) ant_shapes_destroy(js);
   free(js->global_lexicals);
   
@@ -448,7 +449,7 @@ static inline __attribute__((always_inline)) js_eval_result_t js_eval_source_fro
   if (len == (size_t)~0U) len = strlen(buf);
   
   bool is_eval = sv_compile_mode_is_eval(mode);
-  uint8_t shadows = is_eval ? sv_eval_shadow_bits(js, scope.env, buf, len) : 0;
+  uint8_t shadows = is_eval ? sv_eval_shadow_bits(js, &scope, buf, len) : 0;
   
   sv_eval_cache_key_t cache_key;
   bool cacheable = is_eval && sv_eval_cache_key(

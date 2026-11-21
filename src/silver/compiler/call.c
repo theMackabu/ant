@@ -121,25 +121,36 @@ static bool field_key_is_atom(const sv_ast_t *m) {
   return key->type == N_IDENT || key->type == N_STRING || key->type == N_NUMBER;
 }
 
-static void emit_field_init_pass(
-  sv_compiler_t *c, sv_compiler_t *owner, sv_ast_t **fields, int count, bool methods
+void emit_field_inits(
+  sv_compiler_t *c, sv_compiler_t *owner, sv_ast_t **fields, int count
 ) {
+  bool lone_method = owner->private_method_count == 1;
+  
+  for (int i = 0; i < count && owner->private_method_count > 0; i++) {
+    sv_ast_t *m = fields[i];
+    if (!is_class_method_def(m)) continue;
+    
+    emit_this(c);
+    if (lone_method) emit_private_token(c, m->left);
+    else emit_op(c, OP_UNDEF);
+    emit_op(c, OP_GET_UPVAL);
+    emit_u16(c, (uint16_t)capture_field_local(c, owner, owner->private_methods_local));
+    emit_op(c, OP_DEF_PRIVATE);
+    emit(c, lone_method ? private_method_kind(m) : SV_COMP_PRIVATE_METHODS);
+    emit_op(c, OP_POP);
+    break;
+  }
+  
   for (int i = 0; i < count; i++) {
     sv_ast_t *m = fields[i];
-    bool is_fn = is_class_method_def(m);
-    if (is_fn != methods) continue;
+    if (is_class_method_def(m)) continue;
     if (is_private_name_node(m->left)) {
       emit_this(c);
       emit_private_token(c, m->left);
-      if (is_fn) {
-        emit_op(c, OP_GET_UPVAL);
-        emit_u16(c, (uint16_t)capture_field_local(c, owner, owner->field_locals[i]));
-      } else if (m->right) compile_field_initializer(c, m->right, m->left);
+      if (m->right) compile_field_initializer(c, m->right, m->left);
       else emit_op(c, OP_UNDEF);
       emit_op(c, OP_DEF_PRIVATE);
-      if (m->flags & FN_GETTER) emit(c, SV_COMP_PRIVATE_GETTER);
-      else if (m->flags & FN_SETTER) emit(c, SV_COMP_PRIVATE_SETTER);
-      else emit(c, is_fn ? SV_COMP_PRIVATE_METHOD : SV_COMP_PRIVATE_FIELD);
+      emit(c, SV_COMP_PRIVATE_FIELD);
       emit_op(c, OP_POP);
       continue;
     }
@@ -170,13 +181,6 @@ static void emit_field_init_pass(
     emit(c, field_define_flags(m));
     emit_op(c, OP_POP);
   }
-}
-
-void emit_field_inits(
-  sv_compiler_t *c, sv_compiler_t *owner, sv_ast_t **fields, int count
-) {
-  emit_field_init_pass(c, owner, fields, count, true);
-  emit_field_init_pass(c, owner, fields, count, false);
 }
 
 void emit_derived_field_inits(sv_compiler_t *c) {
