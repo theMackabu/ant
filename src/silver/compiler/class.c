@@ -125,7 +125,7 @@ bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
   return true;
 }
 
-static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, int ctor_local);
+static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, const sv_ast_t *key, int ctor_local);
 
 void compile_method_function(sv_compiler_t *c, sv_ast_t *m) {
   const char *saved_name = c->inferred_name;
@@ -162,7 +162,7 @@ static void compile_class_method(
     emit_op(c, OP_SWAP);              
   } else {
     emit_get_local(c, home_local);    
-    if (is_static) compile_static_initializer_value(c, m->right, ctor_local);
+    if (is_static) compile_static_initializer_value(c, m->right, field_static_key(m), ctor_local);
     else if (m->right) compile_expr(c, m->right);
     else emit_op(c, OP_UNDEF);        
   }
@@ -171,6 +171,7 @@ static void compile_class_method(
   if (m->flags & FN_GETTER) method_flags |= SV_DEFINE_METHOD_GETTER;
   if (m->flags & FN_SETTER) method_flags |= SV_DEFINE_METHOD_SETTER;
   if (is_fn) method_flags |= SV_DEFINE_METHOD_SET_NAME;
+  else method_flags |= field_define_flags(m);
   if (is_fn || (m->flags & (FN_GETTER | FN_SETTER))) method_flags |= SV_DEFINE_METHOD_NON_ENUM;
 
   if (m->flags & FN_COMPUTED) {
@@ -191,7 +192,12 @@ static void compile_private_static_element(sv_compiler_t *c, sv_ast_t *m, int ct
   if (is_fn) {
     if (m->flags & FN_STATIC) m->right->flags |= FN_STATIC;
     compile_method_function(c, m);
-  } else if ((m->flags & FN_STATIC)) compile_static_initializer_value(c, m->right, ctor_local);
+    if (class_method_needs_home(m)) {
+      emit_get_local(c, ctor_local);
+      emit_op(c, OP_SET_HOME_OBJ);
+      emit_op(c, OP_POP);
+    }
+  } else if ((m->flags & FN_STATIC)) compile_static_initializer_value(c, m->right, m->left, ctor_local);
   else if (m->right) compile_expr(c, m->right);
   else emit_op(c, OP_UNDEF);
 
@@ -224,12 +230,69 @@ typedef struct {
 
 static inline int compile_class_precompute_key(sv_compiler_t *c, sv_ast_t *key_expr) {
   compile_expr(c, key_expr);
+  emit_op(c, OP_TO_PROPKEY);
   int loc = add_local(c, "", 0, false, c->scope_depth);
   emit_put_local(c, loc);
   return loc;
 }
 
-static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool returns_expr) {
+static int reserve_private_method_local(sv_compiler_t *c) {
+  int loc = add_local(c, "", 0, false, c->scope_depth);
+  emit_op(c, OP_UNDEF);
+  emit_put_local(c, loc);
+  return loc;
+}
+
+static void compile_private_instance_methods(
+  sv_compiler_t *c, sv_ast_t **fields, int count, int methods_local, int method_count, int proto_local
+) {
+  if (method_count == 0) return;
+  
+  for (int i = 0; i < count; i++) {
+    sv_ast_t *m = fields[i];
+    if (!is_class_method_def(m)) continue;
+    
+    if (method_count > 1) emit_private_token(c, m->left);
+    compile_method_function(c, m);
+    if (class_method_needs_home(m)) {
+      emit_get_local(c, proto_local);
+      emit_op(c, OP_SET_HOME_OBJ);
+      emit_op(c, OP_POP);
+    }
+    if (method_count > 1) emit_number(c, private_method_kind(m));
+  }
+  
+  if (method_count > 1) {
+    emit_op(c, OP_ARRAY);
+    emit_u16(c, (uint16_t)(method_count * 3));
+  }
+  emit_put_local(c, methods_local);
+}
+
+static const char *invalid_constructor_member(const sv_ast_t *m, bool is_fn, bool has_constructor) {
+  if (!is_fn) return "Classes may not have a field named 'constructor'";
+  if (m->flags & FN_STATIC) return NULL;
+  if (m->flags & (FN_GETTER | FN_SETTER)) return "Class constructor may not be an accessor";
+  if (m->flags & FN_ASYNC) return "Class constructor may not be an async method";
+  if (m->flags & FN_GENERATOR) return "Class constructor may not be a generator";
+  return has_constructor ? "A class may only have one constructor" : NULL;
+}
+
+static bool is_literal_key(const sv_ast_t *key, const char *name, uint32_t len) {
+  if (!key || !key->str || (key->type != N_IDENT && key->type != N_STRING)) return false;
+  return key->len == len && memcmp(key->str, name, len) == 0;
+}
+
+static bool is_constructor_key(const sv_ast_t *key) {
+  return is_literal_key(key, "constructor", 11);
+}
+
+bool class_method_needs_home(const sv_ast_t *method) {
+  const sv_ast_t *fn = method ? method->right : NULL;
+  return fn && fn->type == N_FUNC && (fn->flags & (FN_USES_SUPER | FN_DIRECT_EVAL));
+}
+
+static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool returns_expr, const sv_ast_t *key) {
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
   comp.is_strict = true;
@@ -240,7 +303,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
   emit_put_local(&comp, comp.super_local);
 
   if (returns_expr) {
-    if (node) compile_expr(&comp, node);
+    if (node) compile_field_initializer(&comp, node, key);
     else emit_op(&comp, OP_UNDEF);
     emit_return_from_stack(&comp);
   } else {
@@ -305,13 +368,13 @@ static void emit_static_child_call(sv_compiler_t *c, int func_idx, int ctor_loca
   emit_u16(c, 0);
 }
 
-static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, int ctor_local) {
-  int idx = compile_static_child_function(c, expr, true);
+static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, const sv_ast_t *key, int ctor_local) {
+  int idx = compile_static_child_function(c, expr, true, key);
   emit_static_child_call(c, idx, ctor_local);
 }
 
 static void compile_static_block(sv_compiler_t *c, sv_ast_t *block, int ctor_local) {
-  int idx = compile_static_child_function(c, block, false);
+  int idx = compile_static_child_function(c, block, false, NULL);
   emit_static_child_call(c, idx, ctor_local);
   emit_op(c, OP_POP);
 }
@@ -323,6 +386,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   bool class_global_lexical = binds_outer_name && is_repl_top_level(c);
 
   sv_ast_t *ctor_method = NULL;
+  bool has_computed_key = false;
   bool has_static_name = false;
 
   int field_count = 0;
@@ -347,6 +411,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     if (m->type != N_METHOD) continue;
     bool is_fn = is_class_method_def(m);
     bool is_private = is_private_name_node(m->left);
+    if (m->flags & FN_COMPUTED) has_computed_key = true;
 
     if (is_private) {
       uint8_t private_kind = (m->flags & FN_GETTER) ? SV_COMP_PRIVATE_GETTER :
@@ -360,13 +425,25 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       }
     }
     
-    if (
-      !(m->flags & FN_STATIC) &&
-      !(m->flags & FN_COMPUTED) &&
-      m->left && m->left->type == N_IDENT &&
-      m->left->len == 11 &&
-      memcmp(m->left->str, "constructor", 11) == 0
-    ) { ctor_method = m; continue; }
+    if (!(m->flags & FN_COMPUTED) && is_constructor_key(m->left)) {
+      const char *invalid = invalid_constructor_member(m, is_fn, ctor_method != NULL);
+      if (invalid) {
+        js_mkerr_typed(c->js, JS_ERR_SYNTAX, "%s", invalid);
+        c->private_scope = saved_private_scope;
+        free(private_scope.names);
+        emit_op(c, OP_UNDEF);
+        return;
+      }
+      if (is_fn && !(m->flags & FN_STATIC)) { ctor_method = m; continue; }
+    }
+
+    if ((m->flags & FN_STATIC) && !(m->flags & FN_COMPUTED) && is_literal_key(m->left, "prototype", 9)) {
+      js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Classes may not have a static property named 'prototype'");
+      c->private_scope = saved_private_scope;
+      free(private_scope.names);
+      emit_op(c, OP_UNDEF);
+      return;
+    }
     
     if (
       (m->flags & FN_STATIC) &&
@@ -381,15 +458,41 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     else if (m->flags & FN_STATIC) static_init_count++;
   }
 
+  int inner_name_local = -1;
+  bool inner_name_tdz = false;
+  bool has_class_scope = node->str || private_scope.count > 0 || field_count > 0 || has_computed_key;
+  if (has_class_scope) {
+    begin_scope(c);
+    if (node->str) {
+      inner_name_local = add_local(c, node->str, node->len, true, c->scope_depth);
+      inner_name_tdz = has_computed_key;
+    }
+    if (inner_name_tdz) {
+      c->locals[inner_name_local].is_tdz = true;
+      emit_op(c, OP_SET_LOCAL_UNDEF);
+      emit_u16(c, (uint16_t)(inner_name_local - c->param_locals));
+    }
+    for (int i = 0; i < private_scope.count; i++) {
+      sv_private_name_t *p = &private_scope.names[i];
+      p->owner = c;
+      p->local = add_local(c, "", 0, true, c->scope_depth);
+      emit_op(c, OP_PRIVATE_TOKEN);
+      emit_u32(c, p->hash);
+      emit_put_local(c, p->local);
+    }
+  }
+
   sv_ast_t **field_inits = NULL;
-  int *computed_key_locals = NULL;
+  int *field_locals = NULL;
+  int private_method_count = 0;
+  int private_methods_local = -1;
   
   sv_class_emit_item_t *method_emit_items = NULL;
   sv_class_emit_item_t *static_init_items = NULL;
   
   if (field_count > 0) {
     field_inits = malloc(sizeof(sv_ast_t *) * field_count);
-    computed_key_locals = malloc(sizeof(int) * field_count);
+    field_locals = malloc(sizeof(int) * field_count);
   }
   if (method_emit_count > 0)
     method_emit_items = malloc(sizeof(sv_class_emit_item_t) * method_emit_count);
@@ -412,12 +515,15 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     
     if (needs_instance_init) {
       field_inits[fi] = m;
-      computed_key_locals[fi++] = (!is_private && (m->flags & FN_COMPUTED))
+      if (is_private && is_fn) {
+        if (private_method_count++ == 0) private_methods_local = reserve_private_method_local(c);
+        field_locals[fi++] = -1;
+      } else field_locals[fi++] = (!is_private && (m->flags & FN_COMPUTED))
         ? compile_class_precompute_key(c, m->left) : -1;
       continue;
     }
 
-    bool needs_preeval_key = !is_private && node->str && (m->flags & FN_COMPUTED) &&
+    bool needs_preeval_key = !is_private && (m->flags & FN_COMPUTED) &&
       (is_fn || is_static);
     int preeval_key = needs_preeval_key ? compile_class_precompute_key(c, m->left) : -1;
 
@@ -428,28 +534,16 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     if (is_static) static_init_items[si++] = (sv_class_emit_item_t){ m, preeval_key };
   }
 
-  int inner_name_local = -1;
-  bool has_class_scope = node->str || private_scope.count > 0;
-  if (has_class_scope) {
-    begin_scope(c);
-    if (node->str)
-      inner_name_local = add_local(c, node->str, node->len, true, c->scope_depth);
-    for (int i = 0; i < private_scope.count; i++) {
-      sv_private_name_t *p = &private_scope.names[i];
-      p->owner = c;
-      p->local = add_local(c, "", 0, true, c->scope_depth);
-      emit_op(c, OP_PRIVATE_TOKEN);
-      emit_u32(c, p->hash);
-      emit_put_local(c, p->local);
-    }
-  }
+  if (inner_name_tdz) c->locals[inner_name_local].is_tdz = false;
 
   if (ctor_method && ctor_method->right) {
     ctor_method->right->flags |= FN_CLASS_CTOR;
     if (node->left) ctor_method->right->flags |= FN_DERIVED_CTOR;
     c->field_inits = field_inits;
     c->field_init_count = field_count;
-    c->computed_key_locals = computed_key_locals;
+    c->field_locals = field_locals;
+    c->private_method_count = private_method_count;
+    c->private_methods_local = private_methods_local;
     const char *saved_name = c->inferred_name;
     uint32_t saved_len = c->inferred_name_len;
     if (node->str && node->len) {
@@ -461,9 +555,11 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     c->inferred_name_len = saved_len;
     c->field_inits = NULL;
     c->field_init_count = 0;
-    c->computed_key_locals = NULL;
+    c->field_locals = NULL;
   } else if (field_count > 0) {
-    c->computed_key_locals = computed_key_locals;
+    c->field_locals = field_locals;
+    c->private_method_count = private_method_count;
+    c->private_methods_local = private_methods_local;
     sv_compiler_t comp;
     sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
     comp.is_strict = true;
@@ -528,9 +624,9 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     emit_closure(c, idx);
   } else emit_op(c, OP_UNDEF);
   
-  free(field_inits);
-  free(computed_key_locals);
-  c->computed_key_locals = NULL;
+  c->field_locals = NULL;
+  c->private_method_count = 0;
+  if (inner_name_tdz) c->locals[inner_name_local].is_tdz = true;
 
   const char *class_name = node->str;
   uint32_t class_name_len = node->len;
@@ -572,6 +668,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   if (inner_name_local >= 0) {
     emit_get_local(c, ctor_local);
     emit_put_local(c, inner_name_local);
+    c->locals[inner_name_local].is_tdz = false;
   }
 
   for (int i = 0; i < method_emit_count; i++) {
@@ -580,6 +677,10 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       c, item->node, ctor_local, proto_local, item->preeval_key
     );
   }
+  
+  compile_private_instance_methods(c, field_inits, field_count, private_methods_local, private_method_count, proto_local);
+  free(field_inits);
+  free(field_locals);
 
   for (int i = 0; i < static_init_count; i++) {
     sv_ast_t *m = static_init_items[i].node;

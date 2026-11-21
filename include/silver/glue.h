@@ -367,7 +367,7 @@ void jit_helper_define_slot(
   const char *str, uint32_t len, uint32_t slot
 );
 
-void jit_helper_define_method_comp(
+ant_value_t jit_helper_define_method_comp(
   ant_t *js,
   ant_value_t obj, ant_value_t key, ant_value_t fn, uint8_t flags
 );

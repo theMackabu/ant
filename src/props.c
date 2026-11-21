@@ -122,7 +122,7 @@ static ant_value_t mkprop_bytes_attrs_impl(
 ant_value_t mkprop_define_data(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t v) {
   return mkprop_bytes_attrs_impl(
     js, obj, key, key_len, v, 0,
-    MKPROP_USE_DEFAULT_ATTRS | MKPROP_EXPOSE_CFUNC | MKPROP_DATA_DEFINE
+    MKPROP_USE_DEFAULT_ATTRS | MKPROP_DATA_DEFINE
   );
 }
 

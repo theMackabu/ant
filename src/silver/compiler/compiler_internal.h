@@ -25,7 +25,8 @@ enum {
   SV_COMP_PRIVATE_FIELD = 0,
   SV_COMP_PRIVATE_METHOD = 1,
   SV_COMP_PRIVATE_GETTER = 3,
-  SV_COMP_PRIVATE_SETTER = 4
+  SV_COMP_PRIVATE_SETTER = 4,
+  SV_COMP_PRIVATE_METHODS = 5
 };
 
 enum {
@@ -182,6 +183,7 @@ void emit_with_tries(
   const char *name, uint32_t len, int pops, sv_patch_list_t *out
 );
 void emit_lexical_new_target(sv_compiler_t *c);
+bool class_method_needs_home(const sv_ast_t *method);
 void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_get_var_typeof(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len);
@@ -344,6 +346,31 @@ static inline bool node_needs_inferred_function_name(const sv_ast_t *node) {
   return node && 
     (node->type == N_FUNC || node->type == N_CLASS) &&
     (!node->str || node->len == 0);
+}
+
+static inline uint8_t private_method_kind(const sv_ast_t *m) {
+  if (m->flags & FN_GETTER) return SV_COMP_PRIVATE_GETTER;
+  return (m->flags & FN_SETTER) ? SV_COMP_PRIVATE_SETTER : SV_COMP_PRIVATE_METHOD;
+}
+
+static inline const sv_ast_t *field_static_key(const sv_ast_t *m) {
+  const sv_ast_t *key = m->left;
+  if ((m->flags & FN_COMPUTED) || !key) return NULL;
+  return key->type == N_IDENT || key->type == N_STRING || key->type == N_NUMBER ? key : NULL;
+}
+
+static inline uint8_t field_define_flags(const sv_ast_t *m) {
+  bool named_late = !field_static_key(m) && node_needs_inferred_function_name(m->right);
+  return SV_DEFINE_METHOD_FIELD | (named_late ? SV_DEFINE_METHOD_SET_NAME : 0);
+}
+
+static inline void compile_field_initializer(sv_compiler_t *c, sv_ast_t *expr, const sv_ast_t *key) {
+  char buf[SV_LITERAL_NUM_KEY_BUF_SIZE];
+  if (key && key->type == N_NUMBER)
+    compile_expr_with_inferred_name(c, expr, buf, (uint32_t)literal_num_key(key->num, buf, sizeof(buf)));
+  else if (!key || !key->str) compile_expr(c, expr);
+  else if (key->type != N_STRING && is_quoted_ident_key(key)) compile_expr_with_inferred_name(c, expr, key->str + 1, key->len - 2);
+  else compile_expr_with_inferred_name(c, expr, key->str, key->len);
 }
 
 static inline bool is_ident_str(

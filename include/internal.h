@@ -422,6 +422,7 @@ ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r);
 ant_value_t js_string_slice(ant_t *js, ant_value_t str, double start, double end);
 ant_value_t do_string_num_concat(ant_t *js, ant_value_t str, ant_value_t num, bool num_first);
 ant_value_t js_to_primitive(ant_t *js, ant_value_t value, int hint);
+ant_value_t js_to_property_key(ant_t *js, ant_value_t value);
 ant_value_t js_get_then_property(ant_t *js, ant_value_t value);
 
 typedef struct {

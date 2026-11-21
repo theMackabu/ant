@@ -480,53 +480,11 @@ ant_value_t jit_helper_strict_arguments(
   return result;
 }
 
-void jit_helper_define_method_comp(
+ant_value_t jit_helper_define_method_comp(
   ant_t *js,
   ant_value_t obj, ant_value_t key, ant_value_t fn, uint8_t flags
 ) {
-  ant_value_t desc_obj = js_as_obj(obj);
-  
-  bool is_getter = (flags & SV_DEFINE_METHOD_GETTER) != 0;
-  bool is_setter = (flags & SV_DEFINE_METHOD_SETTER) != 0;
-  
-  uint8_t data_attrs = (flags & SV_DEFINE_METHOD_NON_ENUM)
-    ? (ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE)
-    : ANT_PROP_ATTR_DEFAULT;
-  
-  uint8_t accessor_desc = (flags & SV_DEFINE_METHOD_NON_ENUM)
-    ? JS_DESC_C
-    : (JS_DESC_E | JS_DESC_C);
-  
-  if (flags & SV_DEFINE_METHOD_SET_NAME) {
-    const char *prefix = is_getter ? "get " : is_setter ? "set " : "";
-    size_t prefix_len = is_getter || is_setter ? 4 : 0;
-    ant_value_t named = js_maybe_set_function_name_from_key(js, fn, key, prefix, prefix_len);
-    if (is_err(named)) return;
-  }
-  
-  if (vtype(key) == kTypeSymbol) {
-    if (is_getter) { js_set_sym_getter_desc(js, desc_obj, key, fn, accessor_desc); return; }
-    if (is_setter) { js_set_sym_setter_desc(js, desc_obj, key, fn, accessor_desc); return; }
-    mkprop(js, obj, key, fn, data_attrs);
-    return;
-  }
-  
-  ant_value_t key_str = sv_key_to_propstr(js, key);
-  if ((is_getter || is_setter) && vtype(key_str) == kTypeString) {
-    ant_offset_t klen = 0;
-    ant_offset_t koff = vstr(js, key_str, &klen);
-    const char *kptr = (const char *)(uintptr_t)(koff);
-    if (is_getter) js_set_getter_desc(js, desc_obj, kptr, klen, fn, accessor_desc);
-    else js_set_setter_desc(js, desc_obj, kptr, klen, fn, accessor_desc);
-    return;
-  }
-  
-  if (vtype(key_str) == kTypeString) {
-    ant_offset_t klen = 0;
-    ant_offset_t koff = vstr(js, key_str, &klen);
-    const char *kptr = (const char *)(uintptr_t)(koff);
-    mkprop(js, obj, js_mkstr(js, kptr, (size_t)klen), fn, data_attrs);
-  } else mkprop(js, obj, key_str, fn, data_attrs);
+  return sv_define_method_comp(js, flags, obj, &key, fn);
 }
 
 static ant_value_t jit_iter_advance_from_buf(
@@ -1043,7 +1001,7 @@ ant_value_t jit_helper_get_field_inline(
 
 ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v) {
   if (vtype(v) == kTypeString || vtype(v) == kTypeSymbol) return v;
-  return coerce_to_str(js, v);
+  return js_to_property_key(js, v);
 }
 
 ant_value_t jit_helper_import_default(ant_t *js, ant_value_t ns) {
