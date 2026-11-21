@@ -313,7 +313,7 @@ static bool field_inits_use_super(sv_ast_t **fields, int count) {
 }
 
 static void emit_super_local(sv_compiler_t *c) {
-  c->super_local = add_hidden_local(c);
+  c->super_local = add_local(c, "super", 5, false, c->scope_depth);
   emit_op(c, OP_SPECIAL_OBJ);
   emit(c, SV_SPECIAL_SUPER);
   emit_put_local(c, c->super_local);

@@ -104,6 +104,7 @@ void sv_func_init_obj_sites(const sv_compiler_t *c, sv_func_t *func);
 bool reject_super_private(sv_compiler_t *c, const sv_ast_t *member);
 void emit_super_key(sv_compiler_t *c, sv_ast_t *member);
 void emit_super_reference(sv_compiler_t *c, sv_ast_t *member);
+void emit_super_get(sv_compiler_t *c, sv_ast_t *member);
 void emit_atom_idx_op(sv_compiler_t *c, sv_op_t op, uint32_t atom_idx);
 void emit_get_length(sv_compiler_t *c);
 void emit_atom_op(sv_compiler_t *c, sv_op_t op, const char *str, uint32_t len);
@@ -111,6 +112,7 @@ void compile_expr_with_inferred_name(
   sv_compiler_t *c, sv_ast_t *node,
   const char *name, uint32_t len
 );
+void emit_throw_error(sv_compiler_t *c, js_err_type_t type, const char *msg, uint32_t len);
 void emit_throw_type_error(sv_compiler_t *c, const char *msg, uint32_t len);
 void emit_const_assign_error(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_import_binding_resolve(
@@ -150,7 +152,11 @@ bool param_captured_by_value(sv_compiler_t *c, int local);
 bool local_written_once(sv_compiler_t *c, int local);
 uint32_t ctor_prop_count(const sv_ast_t *node, uint32_t fields);
 uint32_t class_public_field_count(sv_ast_t **fields, int count);
+static constexpr uint32_t SV_FIELD_THUNK_LEN = 7;
+#define SV_FIELD_THUNK_NAME "%fields"
+
 int resolve_super_upvalue(sv_compiler_t *c);
+int resolve_this_upvalue(sv_compiler_t *c);
 int resolve_new_target_upvalue(sv_compiler_t *c);
 int resolve_upvalue_raw(sv_compiler_t *c, const char *name, uint32_t len);
 int resolve_upvalue(sv_compiler_t *c, const char *name, uint32_t len);
@@ -187,8 +193,25 @@ void emit_with_tries(
   const char *name, uint32_t len, int pops, sv_patch_list_t *out
 );
 void emit_lexical_new_target(sv_compiler_t *c);
+void emit_this(sv_compiler_t *c);
+void emit_this_store(sv_compiler_t *c);
+void emit_super_receiver(sv_compiler_t *c);
 int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local);
+void emit_new_target(sv_compiler_t *c);
 bool class_method_needs_home(const sv_ast_t *method);
+void emit_derived_field_inits(sv_compiler_t *c);
+typedef struct {
+  bool needs_this_binding;
+  bool has_eval;
+  bool returns_through_finally;
+  const sv_ast_t *sole_super_stmt;
+} derived_ctor_plan_t;
+
+derived_ctor_plan_t derived_ctor_plan(const sv_ast_t *ctor);
+bool derived_return_needs_check(const sv_compiler_t *c);
+void emit_derived_return_check(sv_compiler_t *c);
+bool compiler_has_this_binding(const sv_compiler_t *c);
+void emit_break_to_loop(sv_compiler_t *c, int target);
 void emit_get_var_plain(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_get_var_typeof(sv_compiler_t *c, const char *name, uint32_t len);
 void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len);

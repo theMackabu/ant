@@ -1,5 +1,19 @@
 #include "silver/call.h"
 
+ant_value_t sv_super_constructor(ant_value_t constructor) {
+  ant_value_t parent;
+  if (sv_super_constructor_fast(constructor, &parent)) return parent;
+  if (vtype(constructor) != kTypeFunction) return Ant_Value_Undefined;
+  return ant_object_proto(js_obj_ptr(js_func_obj(constructor)));
+}
+
+ant_value_t sv_super_construct_slow(
+  sv_vm_t *vm, ant_t *js, ant_value_t constructor, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+) {
+  return sv_super_construct_parent(vm, js, sv_super_constructor(constructor), this_val, args, argc, new_target);
+}
+
 static ant_value_t sv_call_default_ctor(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
   sv_call_ctx_t *ctx, ant_value_t *out_this
@@ -9,24 +23,24 @@ static ant_value_t sv_call_default_ctor(
     return js_mkerr_typed(js, JS_ERR_TYPE, SV_CLASS_CTOR_CALL_ERROR);
   }
 
-  ant_value_t super_ctor = closure->super_val;
-  uint8_t st = vtype(super_ctor);
-
-  if (st == kTypeFunction || st == kTypeBuiltin) {
-    ant_value_t super_this = ctx->this_val;
-    ant_value_t result = sv_vm_call(
-      vm, js, super_ctor, ctx->this_val,
-      ctx->args, ctx->argc, &super_this, ctx->new_target
-    );
-
-    if (out_this) *out_this = super_this;
+  if (!(closure->call_flags & SV_CALL_HAS_SUPER)) {
     sv_call_cleanup(js, ctx);
-
-    return result;
+    return Ant_Value_Undefined;
   }
 
+  ant_value_t parent;
+  if (__builtin_expect(!sv_super_constructor_fast(closure->super_val, &parent), 0))
+    parent = sv_super_constructor(closure->super_val);
+  
+  ant_value_t super_this = ctx->this_val;
+  ant_value_t result = sv_vm_call(
+    vm, js, parent, ctx->this_val,
+    ctx->args, ctx->argc, &super_this, ctx->new_target
+  );
+  if (out_this) *out_this = super_this;
   sv_call_cleanup(js, ctx);
-  return Ant_Value_Undefined;
+
+  return result;
 }
 
 static inline __attribute__((always_inline)) ant_value_t sv_prepare_call(

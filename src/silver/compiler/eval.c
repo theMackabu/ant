@@ -169,6 +169,29 @@ static bool eval_scope_builder_capture_upvalues(
   return true;
 }
 
+static bool eval_scope_builder_capture_keywords(
+  sv_compiler_t *c, sv_eval_scope_builder_t *scope, sv_eval_binding_set_t *set
+) {
+  static const sv_binding_meta_t no_meta = {0};
+  int this_upvalue = resolve_this_upvalue(c);
+  if (this_upvalue >= 0 && !eval_scope_builder_add_binding(
+        c, scope, set, "this", 4, SV_EVAL_BIND_UPVALUE, (uint16_t)this_upvalue, false, &no_meta)) return false;
+  int thunk_upvalue = resolve_upvalue_raw(c, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN);
+  if (thunk_upvalue >= 0 && !eval_scope_builder_add_binding(
+        c, scope, set, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN, SV_EVAL_BIND_UPVALUE, (uint16_t)thunk_upvalue, false, &no_meta)) return false;
+  int super_upvalue = resolve_super_upvalue(c);
+  return super_upvalue < 0 || eval_scope_builder_add_binding(
+    c, scope, set, "super", 5, SV_EVAL_BIND_UPVALUE, (uint16_t)super_upvalue, false, &no_meta);
+}
+
+static bool eval_scope_flags_init(sv_compiler_t *c, sv_eval_scope_flags_t *flags) {
+  *flags = (sv_eval_scope_flags_t){
+    .this_binding = compiler_has_this_binding(c),
+  };
+
+  return true;
+}
+
 bool capture_dynamic_eval_scope(
   sv_compiler_t *c, uint32_t *scope_index_out
 ) {
@@ -203,6 +226,9 @@ bool capture_dynamic_eval_scope(
 
   if (!eval_scope_builder_capture_locals(
         c, scope, &binding_set)) goto capture_failed;
+  eval_scope_flags_init(c, &scope->flags);
+  if (c->super_local >= 0) c->super_referenced = true;
+  if (c->is_arrow && !eval_scope_builder_capture_keywords(c, scope, &binding_set)) goto capture_failed;
 
   bool own_arguments = has_implicit_arguments_obj(c);
   for (sv_compiler_t *enc = c->inherits_eval_env ? NULL : c->enclosing; enc; enc = enc->enclosing)

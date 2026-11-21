@@ -368,7 +368,6 @@ ant_value_t sv_op_define_class(
   ant_value_t proto = Ant_Value_Undefined;
   
   uint8_t pt = vtype(parent);
-  bool parent_is_callable = false;
 
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, ctor);
@@ -411,15 +410,14 @@ ant_value_t sv_op_define_class(
     
     js_set_proto_init(proto, parent_proto);
     js_set_proto_wb(js, ctor, parent);
-    parent_is_callable = true;
   }
   
   if (vtype(ctor) == kTypeFunction) {
     sv_closure_t *c = js_func_closure(ctor);
-    if (parent_is_callable) {
-      c->super_val = parent;
+    if (has_heritage) {
+      c->super_val = ctor;
       c->call_flags |= SV_CALL_HAS_SUPER;
-    } else if (!has_heritage && c->func && c->func->uses_super) {
+    } else if (c->func && c->func->uses_super) {
       c->super_val = proto;
       c->call_flags |= SV_CALL_HAS_SUPER;
     }

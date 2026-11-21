@@ -1,5 +1,6 @@
 #include "silver/stack_trace.h"
 #include "silver/engine.h"
+#include "silver/call.h"
 #include "cfunc.h"
 #include "errors.h"
 #include "error_render.h"
@@ -364,7 +365,7 @@ static error_above_t error_above_of(ant_value_t call_func, ant_value_t fn) {
       if (c->func || direct) return (error_above_t){ c->func, true };
       break;
     }
-    fn = c->super_val;
+    fn = sv_super_constructor(c->super_val);
     direct = false;
   }
   

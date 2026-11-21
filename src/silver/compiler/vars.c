@@ -1,5 +1,15 @@
 #include "compiler_internal.h"
 
+void emit_new_target(sv_compiler_t *c) {
+  if (c->is_arrow) {
+    emit_lexical_new_target(c);
+    return;
+  }
+  
+  emit_op(c, OP_SPECIAL_OBJ);
+  emit(c, SV_SPECIAL_NEW_TARGET);
+}
+
 void emit_lexical_new_target(sv_compiler_t *c) {
   if (c->new_target_local >= 0) {
     emit_get_local(c, c->new_target_local);
@@ -14,6 +24,238 @@ void emit_lexical_new_target(sv_compiler_t *c) {
   }
 
   emit_op(c, OP_UNDEF);
+}
+
+typedef enum {
+  THIS_BINDING_NONE,
+  THIS_BINDING_LOCAL,
+  THIS_BINDING_UPVALUE,
+  THIS_BINDING_NAMED,
+} this_binding_t;
+
+static this_binding_t this_binding(sv_compiler_t *c, bool reading, int *slot) {
+  sv_compiler_t *owner = c;
+  while (owner->is_arrow && owner->enclosing) owner = owner->enclosing;
+  if (owner->this_local >= 0) {
+    if (reading && owner->this_bound) return THIS_BINDING_NONE;
+    if (owner == c) {
+      *slot = c->this_local;
+      return THIS_BINDING_LOCAL;
+    }
+    *slot = resolve_this_upvalue(c);
+    return *slot >= 0 ? THIS_BINDING_UPVALUE : THIS_BINDING_NONE;
+  }
+  
+  return owner->eval_this_binding ? THIS_BINDING_NAMED : THIS_BINDING_NONE;
+}
+
+static void emit_this_binding_get(sv_compiler_t *c, this_binding_t kind, int slot) {
+  if (kind == THIS_BINDING_LOCAL) emit_get_local(c, slot);
+  else if (kind == THIS_BINDING_NAMED) emit_get_var(c, "this", 4);
+  else {
+    emit_op(c, OP_GET_UPVAL);
+    emit_u16(c, (uint16_t)slot);
+  }
+}
+
+static void emit_this_binding_put(sv_compiler_t *c, this_binding_t kind, int slot) {
+  if (kind == THIS_BINDING_LOCAL) emit_put_local(c, slot);
+  else if (kind == THIS_BINDING_NAMED) emit_set_var(c, "this", 4, false);
+  else {
+    emit_op(c, OP_PUT_UPVAL);
+    emit_u16(c, (uint16_t)slot);
+  }
+}
+
+static void emit_this_check(sv_compiler_t *c) {
+  static const char message[] = "Must call super constructor in derived class before accessing 'this' or returning from derived constructor";
+  if (c->this_check_atom < 0) c->this_check_atom = add_atom(c, message, sizeof(message) - 1);
+  
+  int ok = emit_jump(c, OP_JMP_NOT_NULLISH);
+  emit_op(c, OP_THROW_ERROR);
+  emit_u32(c, (uint32_t)c->this_check_atom);
+  emit(c, (uint8_t)JS_ERR_REFERENCE);
+  patch_jump(c, ok);
+}
+
+void emit_this(sv_compiler_t *c) {
+  int slot = -1;
+  this_binding_t kind = this_binding(c, true, &slot);
+  if (kind == THIS_BINDING_NONE) {
+    emit_op(c, OP_THIS);
+    return;
+  }
+  
+  emit_this_binding_get(c, kind, slot);
+  if (c->this_checked) return;
+  emit_this_check(c);
+  c->this_checked = true;
+}
+
+void emit_this_store(sv_compiler_t *c) {
+  static const char message[] = "Super constructor may only be called once";
+  int slot = -1;
+  this_binding_t kind = this_binding(c, false, &slot);
+  if (kind == THIS_BINDING_NONE) return;
+  
+  if (!c->super_runs_once) {
+    emit_this_binding_get(c, kind, slot);
+    emit_op(c, OP_IS_UNDEF);
+    int first = emit_jump(c, OP_JMP_TRUE);
+    emit_throw_error(c, JS_ERR_REFERENCE, message, sizeof(message) - 1);
+    patch_jump(c, first);
+  }
+  
+  emit_op(c, OP_DUP);
+  emit_this_binding_put(c, kind, slot);
+  c->this_checked = true;
+}
+
+void emit_super_receiver(sv_compiler_t *c) {
+  int slot = -1;
+  this_binding_t kind = this_binding(c, false, &slot);
+  
+  if (kind == THIS_BINDING_NONE || c->super_runs_once) {
+    emit_op(c, OP_THIS);
+    return;
+  }
+  
+  emit_this_binding_get(c, kind, slot);
+  emit_op(c, OP_IS_UNDEF);
+  int first = emit_jump(c, OP_JMP_TRUE);
+  
+  emit_op(c, OP_OBJECT);
+  emit_new_target(c);
+  emit_atom_op(c, OP_GET_FIELD, "prototype", 9);
+  emit_op(c, OP_SET_PROTO);
+  int done = emit_jump(c, OP_JMP);
+  
+  patch_jump(c, first);
+  emit_op(c, OP_THIS);
+  patch_jump(c, done);
+}
+
+bool derived_return_needs_check(const sv_compiler_t *c) {
+  return c->this_local >= 0 && !c->this_bound;
+}
+
+void emit_derived_return_check(sv_compiler_t *c) {
+  int slot = -1;
+  this_binding_t kind = this_binding(c, false, &slot);
+  emit_op(c, OP_DUP);
+  emit_op(c, OP_IS_UNDEF);
+  int defined = emit_jump(c, OP_JMP_FALSE);
+  emit_op(c, OP_POP);
+  emit_this_binding_get(c, kind, slot);
+  emit_this_check(c);
+  patch_jump(c, defined);
+}
+
+bool compiler_has_this_binding(const sv_compiler_t *c) {
+  const sv_compiler_t *owner = c;
+  while (owner->is_arrow && owner->enclosing) owner = owner->enclosing;
+  return owner->this_local >= 0 || owner->eval_this_binding;
+}
+
+typedef struct {
+  int super_calls;
+  bool reads_this;
+  bool returns;
+  bool has_eval;
+  bool has_finally;
+} ctor_scan_t;
+
+static void ctor_scan(const sv_ast_t *node, ctor_scan_t *scan, bool in_arrow) {
+  if (!node) return;
+  
+  switch (node->type) {
+    case N_IDENT: case N_NUMBER: case N_STRING: case N_BOOL: case N_NULL: case N_UNDEF: return;
+    case N_THIS: scan->reads_this = true; return;
+    case N_CLASS: scan->reads_this = true; break;
+    case N_FUNC:
+      if (!(node->flags & FN_ARROW)) return;
+      in_arrow = true;
+      break;
+    case N_RETURN: scan->returns |= !in_arrow; break;
+    case N_TRY: scan->has_finally |= node->finally_body && !in_arrow; break;
+    case N_MEMBER: scan->reads_this |= ast_is_ident(node->left, "super", 5); break;
+    case N_CALL:
+      scan->super_calls += ast_is_ident(node->left, "super", 5);
+      scan->has_eval |= ast_is_ident(node->left, "eval", 4);
+      break;
+    default: break;
+  }
+  
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child) ctor_scan(child, scan, in_arrow);
+}
+
+static bool is_super_call_stmt(const sv_ast_t *stmt) {
+  return stmt && stmt->type == N_CALL && is_ident_name(stmt->left, "super");
+}
+
+static bool ast_returns_under_finally(const sv_ast_t *node, bool under) {
+  if (!node || node->type == N_FUNC) return false;
+  if (node->type == N_RETURN) return under;
+  if (node->type == N_TRY) return
+    ast_returns_under_finally(node->body, under || node->finally_body) ||
+    ast_returns_under_finally(node->catch_body, under || node->finally_body) ||
+    ast_returns_under_finally(node->finally_body, under);
+  
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (ast_returns_under_finally(child, under)) return true;
+  
+  return false;
+}
+
+static bool super_call_ignores_this(const sv_ast_t *call) {
+  ctor_scan_t args = {0};
+  for (int i = 0; i < call->args.count; i++) ctor_scan(call->args.items[i], &args, false);
+  return !args.reads_this;
+}
+
+static bool sole_super_opens_plain_ctor(const sv_ast_t *ctor) {
+  const sv_ast_t *body = ctor->body;
+  if (!(ctor->flags & FN_SOLE_SUPER_CALL) || (ctor->flags & FN_DIRECT_EVAL)) return false;
+  if (!body || body->type != N_BLOCK) return false;
+  
+  int at = 0;
+  for (; at < body->args.count && !is_super_call_stmt(body->args.items[at]); at++) {
+    ctor_scan_t before = {0};
+    ctor_scan(body->args.items[at], &before, false);
+    if (before.reads_this || before.returns || before.super_calls || before.has_eval) return false;
+  }
+  if (at == body->args.count) return false;
+  
+  for (int i = 0; i < ctor->args.count; i++)
+    if (ctor->args.items[i]->type != N_IDENT) return false;
+  
+  return super_call_ignores_this(body->args.items[at]);
+}
+
+derived_ctor_plan_t derived_ctor_plan(const sv_ast_t *ctor) {
+  if (sole_super_opens_plain_ctor(ctor)) return (derived_ctor_plan_t){0};
+  
+  const sv_ast_t *body = ctor->body;
+  bool block_body = body && body->type == N_BLOCK;
+  
+  ctor_scan_t all = {0};
+  for (int i = 0; i < ctor->args.count; i++) ctor_scan(ctor->args.items[i], &all, false);
+  bool params_are_inert = !all.reads_this && !all.super_calls && !all.has_eval;
+  
+  ctor_scan(body, &all, false);
+  derived_ctor_plan_t plan = {
+    .needs_this_binding = true,
+    .has_eval = all.has_eval,
+    .returns_through_finally = all.returns && all.has_finally && ast_returns_under_finally(body, false),
+  };
+  
+  bool sole_super = params_are_inert && block_body && !all.has_eval && all.super_calls == 1;
+  for (int i = 0; sole_super && i < body->args.count && !plan.sole_super_stmt; i++)
+    if (is_super_call_stmt(body->args.items[i])) plan.sole_super_stmt = body->args.items[i];
+  
+  return plan;
 }
 
 static void emit_slot_atom_op(sv_compiler_t *c, sv_op_t op, int local, const char *name, uint32_t len) {

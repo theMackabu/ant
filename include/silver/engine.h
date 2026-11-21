@@ -1,5 +1,6 @@
 #pragma once
 
+#include "silver/eval_scope_flags.h"
 #include "gc.h"
 #include "gc/objects.h"
 #include "internal.h"
@@ -253,9 +254,19 @@ typedef enum: uint8_t {
 } sv_get_field_ic_kind_t;
 
 typedef enum: uint8_t {
+  SV_SUPER_PUT_IC_EMPTY = 0,
+  SV_SUPER_PUT_IC_DISABLED,
+  SV_SUPER_PUT_IC_DATA,
+  SV_SUPER_PUT_IC_DATA_ANY_SHAPE,
+  SV_SUPER_PUT_IC_SETTER,
+} sv_super_put_ic_kind_t;
+
+typedef enum: uint8_t {
   SV_IC_SHAPE_REF_CACHED   = 1u << 0,
   SV_IC_SHAPE_REF_ADD_FROM = 1u << 1,
+  SV_IC_SHAPE_REF_SUPER_BASE = SV_IC_SHAPE_REF_ADD_FROM,
   SV_IC_SHAPE_REF_ADD_TO   = 1u << 2,
+  SV_IC_SHAPE_REF_SUPER_ADD_FROM = SV_IC_SHAPE_REF_ADD_TO,
   SV_IC_POLY_MEGA          = 1u << 3,
   SV_IC_MEGA_COMPILED      = 1u << 4,
   SV_IC_HAS_GET_POLY       = 1u << 5,
@@ -358,6 +369,7 @@ typedef struct {
   union {
     sv_get_field_ic_kind_t get_kind;
     uint8_t eval_depth;
+    sv_super_put_ic_kind_t super_put_kind;
   };
   
   sv_ic_flags_t shape_ref_mask;
@@ -378,6 +390,7 @@ typedef struct {
   union {
     uintptr_t cached_aux;
     uintptr_t add_proto;
+    uintptr_t super_put_holder_depth;
   };
   
   // Each IC slot belongs to one bytecode site/op. Field reads use receiver_proto
@@ -402,6 +415,11 @@ typedef struct {
       ant_value_t receiver_proto;
       uint32_t object_epoch;
     } comparison;
+    
+    struct {
+      ant_shape_t *base_shape;
+      ant_shape_t *add_from_shape;
+    } super_put;
     
     struct {
       ant_shape_t *absent_shape;
@@ -445,6 +463,16 @@ sv_pf_poly_t *sv_pf_poly_new(ant_t *js, sv_ic_entry_t *ic);
 void sv_gf_poly_free(ant_t *js, sv_ic_entry_t *ic);
 void sv_pf_poly_free(ant_t *js, sv_ic_entry_t *ic);
 void sv_ic_polys_cleanup(ant_t *js);
+
+static_assert(
+  offsetof(sv_ic_entry_t, guard.super_put.base_shape) == offsetof(sv_ic_entry_t, guard.add.from_shape),
+  "the super store base shape is owned through the add-from shape reference"
+);
+
+static_assert(
+  offsetof(sv_ic_entry_t, guard.super_put.add_from_shape) == offsetof(sv_ic_entry_t, guard.add.to_shape),
+  "the super store add-from shape is owned through the add-to shape reference"
+);
 
 static_assert(
   offsetof(sv_ic_entry_t, get_kind) < 24 &&
@@ -572,6 +600,7 @@ typedef struct {
 typedef struct sv_eval_scope {
   const sv_runtime_binding_t *bindings;
   uint32_t count;
+  sv_eval_scope_flags_t flags;
 } sv_eval_scope_t;
 
 enum {

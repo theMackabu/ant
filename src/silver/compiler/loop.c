@@ -509,6 +509,10 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   end_scope(c);
 }
 
+void emit_break_to_loop(sv_compiler_t *c, int target) {
+  emit_loop_exit_jump(c, &c->loops[target], &c->loops[target].breaks);
+}
+
 static int find_label_target(sv_compiler_t *c, const sv_ast_t *node) {
   int target = find_loop_label(c, node->str, node->len);
   if (target < 0) js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Undefined label '%.*s'", (int)node->len, node->str);
@@ -525,7 +529,7 @@ void compile_break(sv_compiler_t *c, sv_ast_t *node) {
     if (target < 0) js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Illegal break statement");
   }
 
-  if (target >= 0) emit_loop_exit_jump(c, &c->loops[target], &c->loops[target].breaks);
+  if (target >= 0) emit_break_to_loop(c, target);
 }
 
 void compile_continue(sv_compiler_t *c, sv_ast_t *node) {

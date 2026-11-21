@@ -124,7 +124,7 @@ void emit_field_inits(
     sv_ast_t *m = fields[i];
     if (!is_class_method_def(m)) continue;
     
-    emit_op(c, OP_THIS);
+    emit_this(c);
     if (lone_method) emit_private_token(c, m->left);
     else emit_op(c, OP_UNDEF);
     emit_op(c, OP_GET_UPVAL);
@@ -139,7 +139,7 @@ void emit_field_inits(
     sv_ast_t *m = fields[i];
     if (is_class_method_def(m)) continue;
     if (is_private_name_node(m->left)) {
-      emit_op(c, OP_THIS);
+      emit_this(c);
       emit_private_token(c, m->left);
       if (m->right) compile_field_initializer(c, m->right, m->left);
       else emit_op(c, OP_UNDEF);
@@ -149,7 +149,7 @@ void emit_field_inits(
       continue;
     }
 
-    emit_op(c, OP_THIS);
+    emit_this(c);
     int key_upval = (m->flags & FN_COMPUTED) ? capture_field_local(c, owner, owner->field_locals[i]) : -1;
     if (key_upval >= 0 && m->right && m->right->type == N_CLASS) c->inferred_key_upval = key_upval + 1;
     if (m->right) compile_field_initializer(c, m->right, field_static_key(m));
@@ -168,10 +168,20 @@ void emit_field_inits(
   }
 }
 
-static void emit_derived_field_inits(sv_compiler_t *c) {
+void emit_derived_field_inits(sv_compiler_t *c) {
   sv_compiler_t *owner = c->derived_field_owner;
-  if (owner && owner->field_init_count > 0) 
+  if (owner && owner->field_init_count > 0) {
     emit_field_inits(c, owner, owner->field_inits, owner->field_init_count);
+    return;
+  }
+  
+  const sv_compiler_t *scope = c;
+  while (scope->is_arrow && scope->enclosing) scope = scope->enclosing;
+  if (!scope->eval_field_thunk) return;
+  emit_get_var(c, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN);
+  emit_op(c, OP_CALL);
+  emit_u16(c, 0);
+  emit_op(c, OP_POP);
 }
 
 void emit_call_srcpos(sv_compiler_t *c, sv_ast_t *node) {
@@ -205,7 +215,10 @@ static void compile_call_emit_invoke(
     emit_op(c, kind == SV_CALL_SUPER ? OP_SUPER_APPLY : OP_APPLY);
     emit_u16(c, 1);
     
-    if (kind == SV_CALL_SUPER) emit_derived_field_inits(c);
+    if (kind == SV_CALL_SUPER) {
+      emit_this_store(c);
+      emit_derived_field_inits(c);
+    }
     
     return;
   }
@@ -217,12 +230,15 @@ static void compile_call_emit_invoke(
     kind == SV_CALL_SUPER ? OP_CALL_SUPER :
     kind == SV_CALL_METHOD ? OP_CALL_METHOD : OP_CALL);
   emit_u16(c, (uint16_t)argc);
-  if (kind == SV_CALL_SUPER) emit_derived_field_inits(c);
+  if (kind == SV_CALL_SUPER) {
+    emit_this_store(c);
+    emit_derived_field_inits(c);
+  }
 }
 
 sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t *callee) {
   if (is_ident_name(callee, "super")) {
-    emit_op(c, OP_THIS);
+    emit_super_receiver(c);
     emit_get_var(c, "super", 5);
     if (c->is_arrow) emit_lexical_new_target(c);
     else {
@@ -234,9 +250,9 @@ sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t *calle
 
   if (callee->type == N_MEMBER && is_ident_name(callee->left, "super")) {
     if (reject_super_private(c, callee)) return SV_CALL_DIRECT;
-    emit_op(c, OP_THIS);
+    emit_this(c);
     emit_super_reference(c, callee);
-    emit_op(c, OP_GET_SUPER_VAL);
+    emit_super_get(c, callee);
     return SV_CALL_METHOD;
   }
 

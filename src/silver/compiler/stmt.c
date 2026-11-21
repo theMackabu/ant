@@ -117,6 +117,12 @@ void emit_loop_exit_jump(sv_compiler_t *c, sv_loop_t *loop, sv_patch_list_t *pl)
   patch_list_add(pl, emit_jump(c, OP_JMP));
 }
 
+static bool unwinding_runs_finally(const sv_compiler_t *c) {
+  for (int i = 0; i < c->unwind_count; i++)
+    if (c->unwind_kinds[i] == UNW_TRY_FINALLY) return true;
+  return false;
+}
+
 void emit_return_from_stack(sv_compiler_t *c) {
   exit_cursor_t cur = { c->local_count, c->using_cleanup_count };
   int active_unwinds = c->unwind_count;
@@ -225,6 +231,7 @@ void compile_body_block(
     sv_ast_t *stmt = body->args.items[i];
     if (skip_static_declarations && module_stmt_is_static_declaration(stmt)) continue;
     compile_stmt(c, stmt);
+    if (stmt == c->this_bound_stmt) c->this_bound = true;
   }
 }
 
@@ -398,7 +405,17 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     case N_RETURN:
-      if (node->right) {
+      if (derived_return_needs_check(c)) {
+        if (node->right) compile_expr(c, node->right);
+        else emit_op(c, OP_UNDEF);
+        if (c->derived_return_local >= 0 && unwinding_runs_finally(c)) {
+          emit_put_local(c, c->derived_return_local);
+          emit_break_to_loop(c, 0);
+        } else {
+          emit_derived_return_check(c);
+          emit_return_from_stack(c);
+        }
+      } else if (node->right) {
         compile_tail_return_expr(c, node->right);
       } else {
         emit_op(c, OP_UNDEF);
@@ -600,16 +617,21 @@ void compile_if(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   compile_truthy_test_expr(c, node->cond);
+  bool checked = c->this_checked;
   int else_jump = emit_jump(c, OP_JMP_FALSE);
   compile_stmt(c, node->left);
   if (node->right) {
+    bool then_checked = c->this_checked;
     int end_jump = emit_jump(c, OP_JMP);
     patch_jump(c, else_jump);
+    c->this_checked = checked;
     compile_stmt(c, node->right);
+    checked = then_checked && c->this_checked;
     patch_jump(c, end_jump);
   } else {
     patch_jump(c, else_jump);
   }
+  c->this_checked = checked;
 }
 
 void compile_while(sv_compiler_t *c, sv_ast_t *node) {

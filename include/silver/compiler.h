@@ -1,5 +1,6 @@
 #pragma once
 
+#include "silver/eval_scope_flags.h"
 #include "silver/ast.h"
 #include "silver/vm.h"
 #include "silver/engine.h"
@@ -16,6 +17,7 @@ typedef struct {
   ant_value_t this_val;
   ant_value_t env;
   ant_value_t new_target;
+  const struct sv_eval_scope *layout;
 } js_eval_scope_t;
 
 js_eval_result_t js_eval_source(
@@ -174,6 +176,7 @@ typedef struct {
   sv_runtime_binding_t *bindings;
   uint32_t count;
   uint32_t capacity;
+  sv_eval_scope_flags_t flags;
 } sv_eval_scope_builder_t;
 
 typedef struct sv_compiler {
@@ -293,7 +296,16 @@ typedef struct sv_compiler {
   int new_target_local;
   int super_local;
   bool super_referenced;
+  int this_local;
+  bool this_bound;
+  bool this_checked;
+  bool eval_this_binding;
   bool is_class_ctor;
+  bool eval_field_thunk;
+  int derived_return_local;
+  const sv_ast_t *this_bound_stmt;
+  bool super_runs_once;
+  int this_check_atom;
   int using_stack_local;
   int using_cleanup_count;
   int using_cleanup_cap;
@@ -344,9 +356,11 @@ typedef struct sv_compiler {
 enum {
   SV_EVAL_SHADOWS_UNDEFINED   = 1 << 0,
   SV_EVAL_SHADOWS_GLOBAL_THIS = 1 << 1,
+  SV_EVAL_SCOPE_THIS_BINDING  = 1 << 4,
+  SV_EVAL_SCOPE_FIELD_THUNK   = 1 << 5,
 };
 
-uint8_t sv_eval_shadow_bits(ant_t *js, ant_value_t eval_env, const char *source, size_t len);
+uint8_t sv_eval_shadow_bits(ant_t *js, const js_eval_scope_t *scope, const char *source, size_t len);
 
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program, sv_compile_mode_t mode,

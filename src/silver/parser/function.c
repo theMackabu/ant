@@ -192,6 +192,8 @@ enum {
 typedef struct {
   const sv_ast_t *names[ANT_INOBJ_LARGE_SLOTS + 1];
   uint32_t count;
+  uint32_t super_calls;
+  bool partial;
 } this_props_t;
 
 static void this_props_note(this_props_t *props, const sv_ast_t *node) {
@@ -208,7 +210,10 @@ static void this_props_note(this_props_t *props, const sv_ast_t *node) {
 
 static unsigned ast_scope_facts(const sv_ast_t *node, unsigned want, bool in_arrow, this_props_t *props) {
   if (!node) return 0;
-  if (props && props->count > ANT_INOBJ_LARGE_SLOTS) props = NULL;
+  if (props && props->count > ANT_INOBJ_LARGE_SLOTS) {
+    props->partial = true;
+    props = NULL;
+  }
   if (!want && !props) return 0;
   unsigned found = 0;
 
@@ -222,12 +227,16 @@ static unsigned ast_scope_facts(const sv_ast_t *node, unsigned want, bool in_arr
       break;
     case N_CALL:
       if (ast_is_ident(node->left, "eval", 4)) found |= in_arrow ? SCOPE_EVAL | SCOPE_ARGUMENTS : SCOPE_EVAL;
-      if (in_arrow && ast_is_ident(node->left, "super", 5)) found |= SCOPE_NEW_TARGET;
+      if (ast_is_ident(node->left, "super", 5)) {
+        if (in_arrow) found |= SCOPE_NEW_TARGET;
+        if (props) props->super_calls++;
+      }
       break;
     case N_ASSIGN:
       if (props) this_props_note(props, node);
       break;
     case N_CLASS:
+      if (props) props->partial = true;
       props = NULL;
       break;
     case N_FUNC:
@@ -269,6 +278,7 @@ void finish_func(sv_ast_t *fn) {
   
   unsigned body = ast_scope_facts(fn->body, SCOPE_ALL, false, counts ? &props : NULL);
   if (counts) fn->this_props = (uint8_t)props.count;
+  if (counts && props.super_calls == 1 && !props.partial) fn->flags |= FN_SOLE_SUPER_CALL;
   
   unsigned params = 0;
   for (int i = 0; i < fn->args.count && params != SCOPE_ALL; i++)

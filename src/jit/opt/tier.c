@@ -729,7 +729,7 @@ ant_value_t opt_rt_resume(
   );
 }
 
-static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t callee, uint32_t call_off) {
+static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t callee, ant_value_t new_target, uint32_t call_off) {
   if (vm->fp + 1 >= vm->max_frames && !sv_vm_reserve(vm, 0)) return false;
   sv_frame_t *frame = &vm->frames[++vm->fp];
   ant_value_t undefined = Ant_Value_Undefined;
@@ -740,7 +740,7 @@ static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t cal
     .func = func,
     .callee = callee,
     .this = undefined,
-    .new_target = undefined,
+    .new_target = new_target,
     .super_val = undefined,
     .prev_sp = vm->sp,
     .completion = {.kind = SV_COMPLETION_NONE, .value = undefined},
@@ -788,7 +788,8 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
   for (uint32_t k = count; k-- > 1;) {
     ant_value_t callee = frames[k].callee;
     if (k == count - 1) callee = sv_closure_heap_value(js, entry->closure);
-    waits[k] = room && opt_push_waiting_frame(vm, frames[k].func, callee, frames[k].site->call_off);
+    ant_value_t new_target = k == count - 1 ? entry->new_target : frames[k].site->construct ? callee : Ant_Value_Undefined;
+    waits[k] = room && opt_push_waiting_frame(vm, frames[k].func, callee, new_target, frames[k].site->call_off);
     room &= waits[k];
   }
 
@@ -892,11 +893,10 @@ ant_value_t opt_rt_super_call(sv_vm_t *vm, ant_value_t this_val, ant_value_t fun
   sv_frame_t *frame = &vm->frames[vm->fp];
   ant_value_t *call_args = forward ? frame->bp : args + 1;
   int call_argc = forward ? frame->argc : (int)argc - 1;
-  ant_value_t super_this = this_val;
-  ant_value_t result = sv_vm_call(vm, vm->js, func, this_val, call_args, call_argc, &super_this, args[0]);
-  if (is_err(result)) return result;
-  frame->this = is_object_type(result) ? result : super_this;
-  return frame->this;
+  ant_value_t effective_this = sv_super_construct(vm, vm->js, func, this_val, call_args, call_argc, args[0]);
+  if (is_err(effective_this)) return effective_this;
+  frame->this = effective_this;
+  return effective_this;
 }
 
 ant_value_t opt_rt_import_default(sv_vm_t *vm, ant_value_t ns, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind) {
@@ -1098,6 +1098,21 @@ ant_value_t opt_rt_get_super(sv_vm_t *vm, ant_value_t receiver, ant_value_t home
 
 ant_value_t opt_rt_put_super(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
   return jit_helper_put_super(vm, vm->js, site->func, receiver, home, args[0], args[1]);
+}
+
+static inline sv_ic_entry_t *opt_rt_site_ic(const opt_rt_site_t *site) {
+  uint16_t index = sv_get_u16(site->func->code + site->bc_off + 5);
+  return site->func->ic_slots && index < site->func->ic_count ? &site->func->ic_slots[index] : NULL;
+}
+
+ant_value_t opt_rt_get_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
+  sv_atom_t *atom = &site->func->atoms[sv_get_u32(site->func->code + site->bc_off + 1)];
+  return Silver_Super_GetField(vm->js, site->func, receiver, home, atom, opt_rt_site_ic(site));
+}
+
+ant_value_t opt_rt_put_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site) {
+  const sv_atom_t *atom = &site->func->atoms[sv_get_u32(site->func->code + site->bc_off + 1)];
+  return Silver_Super_PutField(vm->js, site->func, receiver, home, atom, args[0], opt_rt_site_ic(site));
 }
 
 ant_value_t opt_rt_closure(sv_vm_t *vm, sv_closure_t *parent, ant_value_t this_val, ant_value_t *args, int64_t argc, const opt_rt_closure_site_t *site) {

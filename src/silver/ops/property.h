@@ -1270,31 +1270,51 @@ static inline bool sv_add_proto_matches(const ant_object_t *receiver, uintptr_t 
   return proto && proto->ic_identity == (uint32_t)(key >> 1);
 }
 
-static inline bool sv_add_proto_chain_admits(ant_value_t proto, const char *interned) {
-  ant_value_t cur = proto;
+typedef enum {
+  SV_CHAIN_KEY_ABSENT,
+  SV_CHAIN_KEY_HELD,
+  SV_CHAIN_KEY_UNKNOWN,
+} sv_chain_key_state_t;
+
+typedef struct {
+  sv_chain_key_state_t state;
+  ant_object_t *holder;
+  uint32_t slot;
+  uint32_t depth;
+} sv_chain_key_t;
+
+static inline sv_chain_key_t sv_proto_chain_find_key(ant_value_t start, const char *interned) {
+  ant_value_t cur = start;
+  uint32_t depth = 0;
   
   sv_proto_guard_t guard;
   sv_proto_guard_init(&guard);
   
   while (is_object_type(cur)) {
     ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
-    if (!ptr || ptr->flags.is_exotic || sv_array_proto_owns_key(ptr, interned)) return false;
+    if (!ptr || ptr->flags.is_exotic || sv_array_proto_owns_key(ptr, interned)) return (sv_chain_key_t){SV_CHAIN_KEY_UNKNOWN, NULL, 0, 0};
     
     int32_t slot = ptr->shape ? ant_shape_lookup_interned(ptr->shape, interned) : -1;
-    if (slot >= 0) {
-      const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
-      return prop && !prop->has_getter && !prop->has_setter && (prop->attrs & ANT_PROP_ATTR_WRITABLE) != 0;
-    }
+    if (slot >= 0) return (sv_chain_key_t){SV_CHAIN_KEY_HELD, ptr, (uint32_t)slot, depth};
     
     ant_object_guard_absence(ptr);
     ant_value_t next = ant_object_proto(ptr);
     
-    if (!is_object_type(next) && vtype(next) != kTypeNull && vtype(cur) != kTypeObject) return false;
+    if (!is_object_type(next) && vtype(next) != kTypeNull && vtype(cur) != kTypeObject) return (sv_chain_key_t){SV_CHAIN_KEY_UNKNOWN, NULL, 0, 0};
     cur = next;
-    if (sv_proto_guard_hit_cycle(&guard, cur)) return false;
+    depth++;
+    if (sv_proto_guard_hit_cycle(&guard, cur)) return (sv_chain_key_t){SV_CHAIN_KEY_UNKNOWN, NULL, 0, 0};
   }
   
-  return true;
+  return (sv_chain_key_t){SV_CHAIN_KEY_ABSENT, NULL, 0, 0};
+}
+
+static inline bool sv_add_proto_chain_admits(ant_value_t proto, const char *interned) {
+  sv_chain_key_t found = sv_proto_chain_find_key(proto, interned);
+  if (found.state != SV_CHAIN_KEY_HELD) return found.state == SV_CHAIN_KEY_ABSENT;
+  
+  const ant_shape_prop_t *prop = ant_shape_prop_at(found.holder->shape, found.slot);
+  return prop && !prop->has_getter && !prop->has_setter && (prop->attrs & ANT_PROP_ATTR_WRITABLE) != 0;
 }
 
 static inline bool sv_add_chain_admits(const ant_object_t *receiver, const char *interned) {
@@ -1370,6 +1390,12 @@ static inline int sv_pf_poly_try_store(
   return 0;
 }
 
+static inline __attribute__((always_inline)) bool sv_shape_prop_is_writable_data(const ant_shape_prop_t *prop, const char *interned) {
+  return
+    prop && prop->type == ANT_SHAPE_KEY_STRING && prop->key.interned == interned &&
+    !prop->has_getter && !prop->has_setter && (prop->attrs & ANT_PROP_ATTR_WRITABLE) != 0;
+}
+
 static inline bool sv_put_field_try_cached(
   ant_t *js, ant_value_t obj, ant_value_t val,
   const sv_atom_t *a, sv_ic_entry_t *ic, ant_value_t *out
@@ -1382,13 +1408,7 @@ static inline bool sv_put_field_try_cached(
       ic->epoch == js->ic.epoch &&
       ic->cached_shape == ptr->shape &&
       ic->cached_index < ptr->prop_count) {
-    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, ic->cached_index);
-    if (prop &&
-        prop->type == ANT_SHAPE_KEY_STRING &&
-        prop->key.interned == a->str &&
-        !prop->has_getter &&
-        !prop->has_setter &&
-        (prop->attrs & ANT_PROP_ATTR_WRITABLE) != 0) {
+    if (sv_shape_prop_is_writable_data(ant_shape_prop_at(ptr->shape, ic->cached_index), a->str)) {
       ant_object_prop_set_unchecked(ptr, ic->cached_index, val);
       gc_write_barrier_prop(js, ptr, val);
       ant_property_mutation_invalidate(js, ptr, a->str);
@@ -1426,7 +1446,9 @@ static inline bool sv_put_field_try_cached(
   }
 
   if (ic && ic->put_poly && ptr && !ptr->flags.is_exotic && ptr->shape) {
-    int stored = sv_pf_poly_try_store(js, ic, ptr, a, val);
+    int stored;
+    [[clang::always_inline]]
+    stored = sv_pf_poly_try_store(js, ic, ptr, a, val);
     if (stored < 0) *out = js_mkerr(js, "oom");
     if (stored != 0) return true;
   }
@@ -1608,6 +1630,7 @@ static inline bool sv_get_elem_string(ant_t *js, ant_value_t obj, ant_value_t ke
   unsigned flags = sv_field_can_cache_absence(interned) ? SV_PROBE_CACHE_MISS : 0;
   
   if (!sv_ic_probe_get_chain(obj, interned, flags, &probe) || probe.accessor) return false;
+  if (interned == js->intern.length && probe.holder != ptr) return false;
   sv_gf_mega_store_in(js, cache, ptr, interned, probe.holder, probe.index, false);
   *out = probe.value;
   

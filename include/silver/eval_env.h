@@ -1,5 +1,6 @@
 #pragma once
 
+#include "silver/eval_scope_flags.h"
 #include "types.h"
 
 bool sv_global_lexical_lookup(

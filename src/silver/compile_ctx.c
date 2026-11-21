@@ -46,6 +46,9 @@ void sv_compile_ctx_init_root(
   ctx->arguments_local = -1;
   ctx->new_target_local = -1;
   ctx->super_local = -1;
+  ctx->this_local = -1;
+  ctx->this_check_atom = -1;
+  ctx->derived_return_local = -1;
   ctx->using_stack_local = -1;
   ctx->line_table = line_table;
   ctx->private_scope = NULL;
@@ -80,6 +83,9 @@ void sv_compile_ctx_init_child(
   ctx->arguments_local = -1;
   ctx->new_target_local = -1;
   ctx->super_local = -1;
+  ctx->this_local = -1;
+  ctx->this_check_atom = -1;
+  ctx->derived_return_local = -1;
   ctx->using_stack_local = -1;
   ctx->param_count = node ? node->args.count : 0;
   ctx->private_scope = enclosing->private_scope;

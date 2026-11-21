@@ -283,6 +283,12 @@ int resolve_super_upvalue(sv_compiler_t *c) {
   return resolve_upvalue_to(c, owner, owner->super_local);
 }
 
+int resolve_this_upvalue(sv_compiler_t *c) {
+  sv_compiler_t *owner = enclosing_non_arrow(c);
+  if (!owner || owner->this_local < 0) return -1;
+  return resolve_upvalue_to(c, owner, owner->this_local);
+}
+
 int resolve_new_target_upvalue(sv_compiler_t *c) {
   for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing)
     if (enc->new_target_local >= 0) return resolve_upvalue_to(c, enc, enc->new_target_local);

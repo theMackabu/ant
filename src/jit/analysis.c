@@ -475,10 +475,6 @@ jit_features_t jit_prescan_features(sv_func_t *func, int n_slots, const sv_closu
       if (which == SV_SPECIAL_NEW_TARGET) f.needs_new_target = true;
       if (which == SV_SPECIAL_SUPER) f.needs_super = true;
     }
-    if (op == OP_GET_GLOBAL) {
-      const sv_atom_t *atom = &func->atoms[sv_get_u32(ip + 1)];
-      if (atom->len == 5 && memcmp(atom->str, "super", 5) == 0) f.needs_super = true;
-    }
     uint32_t flags = sv_op_flags[op];
     if ((flags & SV_OPF_JIT_NEEDS_BAILOUT) != 0) f.needs_bailout = true;
     if ((flags & SV_OPF_JIT_NEEDS_INC_LOCAL) != 0) f.needs_inc_local = true;

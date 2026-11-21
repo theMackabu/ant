@@ -325,20 +325,11 @@ static inline ant_value_t sv_super_call(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
   int base, ant_value_t *args, int argc
 ) {
-  ant_value_t this_val = vm->stack[base];
-  ant_value_t func = vm->stack[base + 1];
-  ant_value_t new_target = vm->stack[base + 2];
-
-  ant_value_t super_this = this_val;
-  ant_value_t result = sv_vm_call(vm, js, func, this_val, args, argc, &super_this, new_target);
+  ant_value_t effective_this = sv_super_construct(vm, js, vm->stack[base + 1], vm->stack[base], args, argc, vm->stack[base + 2]);
   
   vm->sp = base;
-  if (is_err(result)) return result;
+  if (is_err(effective_this)) return effective_this;
 
-  ant_value_t effective_this = is_object_type(result) 
-    ? result 
-    : super_this;
-  
   if (frame) frame->this = effective_this;
   vm->stack[vm->sp++] = effective_this;
   
@@ -390,7 +381,8 @@ static inline ant_value_t sv_eval_in_frame(
   GC_ROOT_PIN(js, env);
   js_eval_scope_t scope = { 
     .this_val = frame->this, 
-    .env = env, .new_target = new_target 
+    .env = env, .new_target = new_target,
+    .layout = sv_func_eval_scope(caller, scope_index),
   };
   
   ant_value_t result = js_eval_source_in_frame(

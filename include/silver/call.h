@@ -289,6 +289,37 @@ static inline void sv_call_cleanup(ant_t *js, sv_call_ctx_t *ctx) {
   if (ctx->alloc) { free(ctx->alloc); ctx->alloc = NULL; }
 }
 
+static inline bool sv_super_constructor_fast(ant_value_t constructor, ant_value_t *parent) {
+  if (__builtin_expect(vtype(constructor) != kTypeFunction, 0)) return false;
+  ant_value_t func_obj = js_func_closure(constructor)->func_obj;
+  if (__builtin_expect(func_obj == 0, 0)) return false;
+  
+  const ant_object_t *object = (const ant_object_t *)vptr(func_obj);
+  if (__builtin_expect(!object->shape, 0)) return false;
+  
+  *parent = ant_shape_proto(object->shape);
+  return true;
+}
+
+static inline ant_value_t sv_super_construct_parent(
+  sv_vm_t *vm, ant_t *js, ant_value_t parent, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+) {
+  ant_value_t super_this = this_val;
+  ant_value_t result = sv_vm_call(vm, js, parent, this_val, args, argc, &super_this, new_target);
+  return is_err(result) || sv_is_construct_result(result) ? result : super_this;
+}
+
+static inline ant_value_t sv_super_construct(
+  sv_vm_t *vm, ant_t *js, ant_value_t constructor, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+) {
+  ant_value_t parent;
+  if (__builtin_expect(!sv_super_constructor_fast(constructor, &parent), 0))
+    return sv_super_construct_slow(vm, js, constructor, this_val, args, argc, new_target);
+  return sv_super_construct_parent(vm, js, parent, this_val, args, argc, new_target);
+}
+
 static inline ant_value_t sv_native_closure_cfunc(ant_value_t func) {
   if (vtype(func) != kTypeFunction) return 0;
   

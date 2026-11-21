@@ -13,7 +13,8 @@ static bool eval_source_may_mention(const char *source, size_t len, const char *
   return false;
 }
 
-uint8_t sv_eval_shadow_bits(ant_t *js, ant_value_t eval_env, const char *source, size_t len) {
+uint8_t sv_eval_shadow_bits(ant_t *js, const js_eval_scope_t *scope, const char *source, size_t len) {
+  ant_value_t eval_env = scope->env;
   if (!source || !is_object_type(eval_env) || eval_env == js->global) return 0;
   bool escaped = len <= 64 && memchr(source, '\\', len) != NULL;
   uint8_t bits = 0;
@@ -22,6 +23,11 @@ uint8_t sv_eval_shadow_bits(ant_t *js, ant_value_t eval_env, const char *source,
     bits |= SV_EVAL_SHADOWS_UNDEFINED;
   if ((escaped || eval_source_may_mention(source, len, "globalThis", 10)) && sv_eval_env_shadows_global(js, eval_env, "globalThis", 10))
     bits |= SV_EVAL_SHADOWS_GLOBAL_THIS;
+  if (scope->layout && scope->layout->flags.this_binding) {
+    bits |= SV_EVAL_SCOPE_THIS_BINDING;
+    if (eval_source_may_mention(source, len, "super", 5) && sv_eval_env_shadows_global(js, eval_env, SV_FIELD_THUNK_NAME, SV_FIELD_THUNK_LEN))
+      bits |= SV_EVAL_SCOPE_FIELD_THUNK;
+  }
     
   return bits;
 }
@@ -107,6 +113,8 @@ sv_func_t *sv_compile(
   
   root.eval_shadows_undefined = (eval_shadows & SV_EVAL_SHADOWS_UNDEFINED) != 0;
   root.eval_shadows_global_this = (eval_shadows & SV_EVAL_SHADOWS_GLOBAL_THIS) != 0;
+  root.eval_this_binding = (eval_shadows & SV_EVAL_SCOPE_THIS_BINDING) != 0;
+  root.eval_field_thunk = (eval_shadows & SV_EVAL_SCOPE_FIELD_THUNK) != 0;
   
   root.line_table = sv_compile_ctx_build_line_table(root.source, source_len);
   sv_func_t *func = compile_function_body(&root, &top_fn, mode);
