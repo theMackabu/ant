@@ -1,10 +1,10 @@
-#include "ant.h"
 #include "gc.h"
-#include "errors.h"
 #include "internal.h"
 #include "gc/modules.h"
-#include "modules/napi.h"
+#include "silver/vm.h"
 #include "napi_internal.h"
+
+static constexpr uint32_t NAPI_VERSION = 8;
 
 static const napi_node_version g_napi_node_version = {
   .major = 25,
@@ -43,100 +43,90 @@ static const char *napi_status_text(napi_status status) {
   }
 }
 
-static napi_status napi_set_last_raw(napi_env env, napi_status status, const char *message) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv) return status;
+napi_status Ant_Napi_SetLastError(napi_env env, napi_status status, const char *message) {
+  if (!env) return status;
 
-  const char *msg = message ? message : napi_status_text(status);
-  snprintf(nenv->last_error_msg, sizeof(nenv->last_error_msg), "%s", msg);
+  const char *text = message ? message : napi_status_text(status);
+  snprintf(env->last_error_msg, sizeof(env->last_error_msg), "%s", text);
 
-  nenv->last_error.error_message = nenv->last_error_msg;
-  nenv->last_error.engine_reserved = NULL;
-  nenv->last_error.engine_error_code = 0;
-  nenv->last_error.error_code = status;
-
-  if (status != napi_ok) {
-  }
+  env->last_error = (napi_extended_error_info){
+    .error_message = env->last_error_msg,
+    .error_code = status,
+  };
 
   return status;
 }
 
-napi_status ant_napi_set_last(napi_env env, napi_status status, const char *message) {
-  return napi_set_last_raw(env, status, message);
-}
+napi_env Ant_Napi_GetEnv(ant_t *js) {
+  if (js->napi_env) return js->napi_env;
 
-ant_napi_env_t *ant_napi_get_or_create_env(ant_t *js) {
-  if (!js->napi_env) {
-    ant_napi_env_t *nenv = calloc(1, sizeof(*nenv));
-    if (!nenv) return NULL;
-    nenv->js = js;
-    nenv->version = 8;
-    nenv->external_next_id = 1;
-    nenv->wrap_next_id = 1;
-    js->napi_env = nenv;
-    napi_set_last((napi_env)nenv, napi_ok, NULL);
-  }
-  return js->napi_env;
-}
+  napi_env env = calloc(1, sizeof(*env));
+  if (!env) return NULL;
 
-napi_env ant_napi_get_env(ant_t *js) {
-  return (napi_env)ant_napi_get_or_create_env(js);
+  env->js = js;
+  env->version = NAPI_VERSION;
+  env->external_next_id = 1;
+  env->wrap_next_id = 1;
+  js->napi_env = env;
+  Napi_Ok(env);
+
+  return env;
 }
 
 void cleanup_napi_module(ant_t *js) {
-  ant_napi_env_t *nenv = js->napi_env;
-  if (!nenv) return;
+  napi_env env = js->napi_env;
+  if (!env) return;
 
-  while (nenv->cleanup_hooks) {
-    napi_cleanup_hook_entry_t *entry = nenv->cleanup_hooks;
-    nenv->cleanup_hooks = entry->next;
+  while (env->cleanup_hooks) {
+    napi_cleanup_hook_entry_t *entry = env->cleanup_hooks;
+    env->cleanup_hooks = entry->next;
     entry->hook(entry->arg);
     free(entry);
   }
 
-  while (nenv->async_cleanup_hooks) {
-    struct napi_async_cleanup_hook_handle__ *handle = nenv->async_cleanup_hooks;
-    nenv->async_cleanup_hooks = handle->next;
+  while (env->async_cleanup_hooks) {
+    struct napi_async_cleanup_hook_handle__ *handle = env->async_cleanup_hooks;
+    env->async_cleanup_hooks = handle->next;
     if (handle->next) handle->next->prev = NULL;
     handle->env = NULL;
     handle->hook(handle, handle->arg);
   }
 
-  ant_napi_tsfns_close(nenv);
+  Ant_Napi_CloseThreadsafeFunctions(env);
 }
 
 void free_napi_module(ant_t *js) {
-  ant_napi_env_t *nenv = js->napi_env;
-  if (!nenv) return;
+  napi_env env = js->napi_env;
+  if (!env) return;
 
-  if (nenv->instance_data_finalize_cb)
-    nenv->instance_data_finalize_cb((napi_env)nenv, nenv->instance_data, nenv->instance_data_finalize_hint);
+  if (env->instance_data_finalize_cb)
+    env->instance_data_finalize_cb(env, env->instance_data, env->instance_data_finalize_hint);
 
-  for (struct napi_ref__ *r = nenv->refs, *next; r; r = next) {
+  for (struct napi_ref__ *r = env->refs, *next; r; r = next) {
     next = r->next;
     free(r);
   }
-  for (struct napi_deferred__ *d = nenv->deferreds, *next; d; d = next) {
+  for (struct napi_deferred__ *d = env->deferreds, *next; d; d = next) {
     next = d->next;
     free(d);
   }
 
   napi_external_entry_t *ext, *ext_tmp;
-  HASH_ITER(hh, nenv->externals, ext, ext_tmp) {
-    HASH_DEL(nenv->externals, ext);
+  HASH_ITER(hh, env->externals, ext, ext_tmp) {
+    HASH_DEL(env->externals, ext);
     free(ext);
   }
   napi_wrap_entry_t *wrap, *wrap_tmp;
-  HASH_ITER(hh, nenv->wraps, wrap, wrap_tmp) {
-    HASH_DEL(nenv->wraps, wrap);
+  HASH_ITER(hh, env->wraps, wrap, wrap_tmp) {
+    HASH_DEL(env->wraps, wrap);
     free(wrap);
   }
 
-  ant_napi_external_sabs_sweep(nenv, true);
-  for (struct napi_async_cleanup_hook_handle__ *h = nenv->async_cleanup_hooks; h; h = h->next) h->env = NULL;
+  Ant_Napi_SweepExternalBuffers(env, true);
+  for (struct napi_async_cleanup_hook_handle__ *h = env->async_cleanup_hooks; h; h = h->next) h->env = NULL;
 
-  free(nenv->handle_slots);
-  free(nenv);
+  free(env->handle_slots);
+  free(env);
   js->napi_env = NULL;
 }
 
@@ -146,328 +136,152 @@ static bool napi_ref_weakly_held(ant_value_t value) {
 }
 
 void gc_mark_napi(ant_t *js, gc_mark_fn mark) {
-  ant_napi_env_t *nenv = js->napi_env;
-  if (!nenv) return;
+  napi_env env = js->napi_env;
+  if (!env) return;
 
-  if (is_err(nenv->exception))
-    mark(js, nenv->exception);
+  if (is_err(env->exception))
+    mark(js, env->exception);
 
-  for (struct napi_ref__ *r = nenv->refs; r; r = r->next) {
+  for (struct napi_ref__ *r = env->refs; r; r = r->next) {
     ant_value_t weak = r->value;
     if (r->refcount > 0) mark(js, r->ref_val);
     else if (r->live && !napi_ref_weakly_held(weak) && gc_value_is_heap_ref(weak)) mark(js, weak);
   }
 
-  for (struct napi_deferred__ *d = nenv->deferreds; d; d = d->next)
-    if (!d->settled) mark(js, d->promise_val);
+  for (struct napi_deferred__ *d = env->deferreds; d; d = d->next)
+    mark(js, d->promise_val);
 
-  for (struct napi_threadsafe_function__ *t = nenv->tsfns; t; t = t->next)
+  for (struct napi_threadsafe_function__ *t = env->tsfns; t; t = t->next)
     mark(js, t->func_val);
-  for (size_t i = 0; i < nenv->handle_slots_len; i++)
-    mark(js, nenv->handle_slots[i]);
+  for (size_t i = 0; i < env->handle_slots_len; i++)
+    mark(js, env->handle_slots[i]);
 }
 
 void gc_clear_napi_weak_refs(ant_t *js, gc_weak_key_alive_fn alive) {
-  ant_napi_env_t *nenv = js->napi_env;
-  if (!nenv) return;
+  napi_env env = js->napi_env;
+  if (!env) return;
 
-  ant_napi_external_sabs_sweep(nenv, false);
+  Ant_Napi_SweepExternalBuffers(env, false);
 
-  for (struct napi_ref__ *r = nenv->refs; r; r = r->next) {
+  for (struct napi_ref__ *r = env->refs; r; r = r->next) {
     if (r->refcount > 0 || !r->live) continue;
     if (napi_ref_weakly_held(r->value) && !alive(js, r->value)) r->live = false;
   }
 }
 
-napi_value ant_napi_scope_pin(ant_napi_env_t *nenv, ant_value_t v) {
-  napi_value val = napi_handle(v);
-  if (!nenv || !is_object_type(v)) return val;
+napi_value Ant_Napi_Pin(napi_env env, ant_value_t v) {
+  napi_value val = Napi_Encode(v);
+  if (!env || !is_object_type(v)) return val;
 
-  if (nenv->handle_slots_len >= nenv->handle_slots_cap) {
-    size_t new_cap = nenv->handle_slots_cap ? nenv->handle_slots_cap * 2 : 256;
-    ant_value_t *new_slots = realloc(nenv->handle_slots, new_cap * sizeof(ant_value_t));
+  if (env->handle_slots_len >= env->handle_slots_cap) {
+    size_t new_cap = env->handle_slots_cap ? env->handle_slots_cap * 2 : 256;
+    ant_value_t *new_slots = realloc(env->handle_slots, new_cap * sizeof(ant_value_t));
     if (!new_slots) return val;
-    nenv->handle_slots = new_slots;
-    nenv->handle_slots_cap = new_cap;
+    env->handle_slots = new_slots;
+    env->handle_slots_cap = new_cap;
   }
-  nenv->handle_slots[nenv->handle_slots_len++] = v;
+  env->handle_slots[env->handle_slots_len++] = v;
   return val;
 }
 
-static void napi_mark_pending_exception(napi_env env, ant_value_t exception) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv) return;
-  nenv->exception = exception;
-}
-
-NAPI_EXTERN napi_status NAPI_CDECL napi_throw(napi_env env, napi_value error) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
-  if (is_err(nenv->exception) || Ant_Exception_Pending(nenv->js))
-    return napi_set_last(env, napi_pending_exception, "pending exception");
-  napi_mark_pending_exception(env, js_throw(nenv->js, napi_js(error)));
-  return napi_set_last_raw(env, napi_ok, NULL);
-}
-
-napi_status ant_napi_check_pending_from_result(napi_env env, ant_value_t result) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
-
-  if (is_err(result) || Ant_Exception_Pending(nenv->js)) {
-    napi_mark_pending_exception(env, is_err(result)
-      ? result : Ant_Exception_Current(nenv->js));
-    napi_set_last_raw(env, napi_pending_exception, "pending exception");
-    return napi_pending_exception;
-  }
-  return napi_set_last(env, napi_ok, NULL);
-}
-
-napi_status ant_napi_return_pending_if_any(napi_env env) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
-
-  if (is_err(nenv->exception)) {
-    napi_set_last_raw(env, napi_pending_exception, "pending exception");
-    return napi_pending_exception;
-  }
-
-  if (Ant_Exception_Pending(nenv->js)) {
-    napi_mark_pending_exception(env, Ant_Exception_Current(nenv->js));
-    napi_set_last_raw(env, napi_pending_exception, "pending exception");
-    return napi_pending_exception;
-  }
-
-  return napi_set_last(env, napi_ok, NULL);
-}
-
-NAPI_EXTERN napi_status NAPI_CDECL napi_get_last_error_info(
-  node_api_basic_env env,
-  const napi_extended_error_info **result
-) {
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_get_last_error_info(node_api_basic_env env, const napi_extended_error_info **result) {
   if (!env || !result) return napi_invalid_arg;
-  *result = &((ant_napi_env_t *)env)->last_error;
+  *result = &env->last_error;
   return napi_ok;
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_get_version(
-  node_api_basic_env env,
-  uint32_t *result
-) {
-  if (!env || !result) return napi_set_last((napi_env)env, napi_invalid_arg, "invalid argument");
-  *result = 8;
-  return napi_set_last((napi_env)env, napi_ok, NULL);
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_get_version(node_api_basic_env env, uint32_t *result) {
+  if (!env || !result) return Napi_InvalidArg(env);
+  *result = env->version;
+  return Napi_Ok(env);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_get_node_version(
-  node_api_basic_env env,
-  const napi_node_version **version
-) {
-  if (!env || !version) return napi_set_last((napi_env)env, napi_invalid_arg, "invalid argument");
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_get_node_version(node_api_basic_env env, const napi_node_version **version) {
+  if (!env || !version) return Napi_InvalidArg(env);
   *version = &g_napi_node_version;
-  return napi_set_last((napi_env)env, napi_ok, NULL);
+  return Napi_Ok(env);
 }
 
-static napi_status napi_throw_with_message(
-  napi_env env,
-  js_err_type_t err_type,
-  const char *msg
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
-
-  ant_value_t error = js_mkerr_typed(nenv->js, err_type, "%s", msg ? msg : "");
-  if (is_err(error) && Ant_Exception_Pending(nenv->js)) {
-    napi_mark_pending_exception(env, Ant_Exception_Current(nenv->js));
-    return napi_pending_exception;
-  }
-
-  if (is_err(error))
-    return napi_set_last(env, napi_generic_failure, "failed to create error");
-
-  return napi_throw(env, napi_handle(error));
-}
-
-NAPI_EXTERN napi_status NAPI_CDECL napi_throw_error(
-  napi_env env,
-  const char *code,
-  const char *msg
-) {
-  (void)code;
-  return napi_throw_with_message(env, JS_ERR_GENERIC, msg ? msg : "");
-}
-
-NAPI_EXTERN napi_status NAPI_CDECL napi_throw_type_error(
-  napi_env env,
-  const char *code,
-  const char *msg
-) {
-  (void)code;
-  return napi_throw_with_message(env, JS_ERR_TYPE, msg ? msg : "");
-}
-
-NAPI_EXTERN napi_status NAPI_CDECL napi_throw_range_error(
-  napi_env env,
-  const char *code,
-  const char *msg
-) {
-  (void)code;
-  return napi_throw_with_message(env, JS_ERR_RANGE, msg ? msg : "");
-}
-
-NAPI_EXTERN napi_status NAPI_CDECL napi_is_exception_pending(
-  napi_env env,
-  bool *result
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = is_err(nenv->exception) || Ant_Exception_Pending(nenv->js);
-  return napi_set_last_raw(env, napi_ok, NULL);
-}
-
-NAPI_EXTERN napi_status NAPI_CDECL napi_get_and_clear_last_exception(
-  napi_env env,
-  napi_value *result
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-
-  ant_value_t exception = is_err(nenv->exception)
-    ? nenv->exception
-    : Ant_Exception_Peek(nenv->js);
-
-  *result = NAPI_RETURN(nenv, Ant_Exception_Value(nenv->js, exception));
-  nenv->exception = Ant_Value_Undefined;
-  js_take_thrown(nenv->js, exception);
-
-  return napi_set_last(env, napi_ok, NULL);
-}
-
-NAPI_EXTERN void NAPI_CDECL napi_fatal_error(
-  const char *location,
-  size_t location_len,
-  const char *message,
-  size_t message_len
-) {
-  fprintf(
-    stderr,
-    "N-API fatal error at %.*s: %.*s\n",
-    (int)location_len,
-    location ? location : "",
-    (int)message_len,
-    message ? message : ""
-  );
-  abort();
-}
-
-NAPI_EXTERN napi_status NAPI_CDECL napi_fatal_exception(napi_env env, napi_value err) {
-  return napi_throw(env, err);
-}
-
-NAPI_EXTERN napi_status NAPI_CDECL napi_run_script(
-  napi_env env,
-  napi_value script,
-  napi_value *result
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (vtype(napi_js(script)) != kTypeString) return napi_set_last(env, napi_string_expected, "script must be string");
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_run_script(napi_env env, napi_value script, napi_value *result) {
+  if (!env || !env->js || !result) return Napi_InvalidArg(env);
+  if (vtype(Napi_Decode(script)) != kTypeString) return Ant_Napi_SetLastError(env, napi_string_expected, "script must be string");
 
   size_t len = 0;
-  const char *src = js_getstr(nenv->js, napi_js(script), &len);
-  if (!src) return napi_set_last(env, napi_string_expected, "script must be string");
+  const char *src = js_getstr(env->js, Napi_Decode(script), &len);
+  if (!src) return Ant_Napi_SetLastError(env, napi_string_expected, "script must be string");
 
-  ant_value_t out = js_eval_bytecode_eval(nenv->js, src, len, false);
-  if (is_err(out) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, out);
-  *result = NAPI_RETURN(nenv, out);
-  
-  return napi_set_last(env, napi_ok, NULL);
+  ant_value_t out = js_eval_bytecode_eval(env->js, src, len, false);
+  if (Napi_Failed(env, out)) return Ant_Napi_CapturePending(env, out);
+  *result = Ant_Napi_Pin(env, out);
+
+  return Napi_Ok(env);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_adjust_external_memory(
-  node_api_basic_env env,
-  int64_t change_in_bytes,
-  int64_t *adjusted_value
-) {
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_adjust_external_memory(node_api_basic_env env, int64_t change_in_bytes, int64_t *adjusted_value) {
   if (!env) return napi_invalid_arg;
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  nenv->external_memory += change_in_bytes;
-  if (adjusted_value) *adjusted_value = nenv->external_memory;
-  return napi_set_last((napi_env)env, napi_ok, NULL);
+  env->external_memory += change_in_bytes;
+  if (adjusted_value) *adjusted_value = env->external_memory;
+  return Napi_Ok(env);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_add_env_cleanup_hook(
-  node_api_basic_env env,
-  napi_cleanup_hook fun,
-  void *arg
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !fun) return napi_set_last((napi_env)env, napi_invalid_arg, "invalid argument");
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_add_env_cleanup_hook(node_api_basic_env env, napi_cleanup_hook fun, void *arg) {
+  if (!env || !fun) return Napi_InvalidArg(env);
 
-  napi_cleanup_hook_entry_t *entry = (napi_cleanup_hook_entry_t *)calloc(1, sizeof(*entry));
-  if (!entry) return napi_set_last((napi_env)env, napi_generic_failure, "out of memory");
+  napi_cleanup_hook_entry_t *entry = calloc(1, sizeof(*entry));
+  if (!entry) return Napi_OutOfMemory(env);
   entry->hook = fun;
   entry->arg = arg;
-  entry->next = nenv->cleanup_hooks;
-  nenv->cleanup_hooks = entry;
-  return napi_set_last((napi_env)env, napi_ok, NULL);
+  entry->next = env->cleanup_hooks;
+  env->cleanup_hooks = entry;
+  return Napi_Ok(env);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_remove_env_cleanup_hook(
-  node_api_basic_env env,
-  napi_cleanup_hook fun,
-  void *arg
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !fun) return napi_set_last((napi_env)env, napi_invalid_arg, "invalid argument");
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_remove_env_cleanup_hook(node_api_basic_env env, napi_cleanup_hook fun, void *arg) {
+  if (!env || !fun) return Napi_InvalidArg(env);
 
-  napi_cleanup_hook_entry_t **pp = &nenv->cleanup_hooks;
+  napi_cleanup_hook_entry_t **pp = &env->cleanup_hooks;
   while (*pp) {
     if ((*pp)->hook == fun && (*pp)->arg == arg) {
       napi_cleanup_hook_entry_t *victim = *pp;
       *pp = victim->next;
       free(victim);
-      return napi_set_last((napi_env)env, napi_ok, NULL);
+      return Napi_Ok(env);
     }
     pp = &(*pp)->next;
   }
-  return napi_set_last((napi_env)env, napi_invalid_arg, "cleanup hook not found");
+  return Ant_Napi_SetLastError(env, napi_invalid_arg, "cleanup hook not found");
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL node_api_throw_syntax_error(
-  napi_env env,
-  const char *code,
-  const char *msg
-) {
-  (void)code;
-  return napi_throw_with_message(env, JS_ERR_SYNTAX, msg ? msg : "");
-}
-
-NAPI_EXTERN napi_status NAPI_CDECL napi_add_async_cleanup_hook(
-  node_api_basic_env env,
-  napi_async_cleanup_hook hook,
-  void *arg,
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_add_async_cleanup_hook(
+  node_api_basic_env env, napi_async_cleanup_hook hook, void *arg,
   napi_async_cleanup_hook_handle *remove_handle
 ) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !hook) return napi_set_last((napi_env)env, napi_invalid_arg, "invalid argument");
+  if (!env || !hook) return Napi_InvalidArg(env);
 
   struct napi_async_cleanup_hook_handle__ *handle = calloc(1, sizeof(*handle));
-  if (!handle) return napi_set_last((napi_env)env, napi_generic_failure, "out of memory");
+  if (!handle) return Napi_OutOfMemory(env);
 
-  handle->env = nenv;
+  handle->env = env;
   handle->hook = hook;
   handle->arg = arg;
-  handle->next = nenv->async_cleanup_hooks;
+  handle->next = env->async_cleanup_hooks;
   if (handle->next) handle->next->prev = handle;
-  nenv->async_cleanup_hooks = handle;
+  env->async_cleanup_hooks = handle;
 
   if (remove_handle) *remove_handle = handle;
-  return napi_set_last((napi_env)env, napi_ok, NULL);
+  return Napi_Ok(env);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_remove_async_cleanup_hook(
-  napi_async_cleanup_hook_handle remove_handle
-) {
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_remove_async_cleanup_hook(napi_async_cleanup_hook_handle remove_handle) {
   struct napi_async_cleanup_hook_handle__ *handle = remove_handle;
   if (!handle) return napi_invalid_arg;
 
@@ -483,7 +297,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_remove_async_cleanup_hook(
 
 typedef struct {
   uv_idle_t idle;
-  ant_napi_env_t *env;
+  napi_env env;
   napi_finalize finalize_cb;
   void *finalize_data;
   void *finalize_hint;
@@ -496,44 +310,56 @@ static void napi_posted_finalizer_close_cb(uv_handle_t *handle) {
 static void napi_posted_finalizer_cb(uv_idle_t *idle) {
   napi_posted_finalizer_t *posted = (napi_posted_finalizer_t *)idle->data;
   uv_idle_stop(idle);
-  posted->finalize_cb((napi_env)posted->env, posted->finalize_data, posted->finalize_hint);
+  posted->finalize_cb(posted->env, posted->finalize_data, posted->finalize_hint);
   uv_close((uv_handle_t *)idle, napi_posted_finalizer_close_cb);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL node_api_post_finalizer(
-  node_api_basic_env env,
-  napi_finalize finalize_cb,
-  void *finalize_data,
-  void *finalize_hint
+NAPI_EXTERN napi_status NAPI_CDECL
+node_api_post_finalizer(
+  node_api_basic_env env, napi_finalize finalize_cb, void *finalize_data, void *finalize_hint
 ) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !nenv->js || !nenv->js->loop || !finalize_cb)
-    return napi_set_last((napi_env)env, napi_invalid_arg, "invalid argument");
+  if (!env || !env->js || !env->js->loop || !finalize_cb)
+    return Napi_InvalidArg(env);
 
   napi_posted_finalizer_t *posted = calloc(1, sizeof(*posted));
-  if (!posted) return napi_set_last((napi_env)env, napi_generic_failure, "out of memory");
+  if (!posted) return Napi_OutOfMemory(env);
 
-  posted->env = nenv;
+  posted->env = env;
   posted->finalize_cb = finalize_cb;
   posted->finalize_data = finalize_data;
   posted->finalize_hint = finalize_hint;
   posted->idle.data = posted;
 
-  if (uv_idle_init(nenv->js->loop, &posted->idle) != 0) {
+  if (uv_idle_init(env->js->loop, &posted->idle) != 0) {
     free(posted);
-    return napi_set_last((napi_env)env, napi_generic_failure, "failed to schedule finalizer");
+    return Ant_Napi_SetLastError(env, napi_generic_failure, "failed to schedule finalizer");
   }
 
   uv_idle_start(&posted->idle, napi_posted_finalizer_cb);
-  return napi_set_last((napi_env)env, napi_ok, NULL);
+  return Napi_Ok(env);
 }
 
-NAPI_EXTERN napi_status NAPI_CDECL node_api_get_module_file_name(
-  node_api_basic_env env,
-  const char **result
-) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !result) return napi_set_last((napi_env)env, napi_invalid_arg, "invalid argument");
-  *result = nenv->module_file_name;
-  return napi_set_last((napi_env)env, napi_ok, NULL);
+NAPI_EXTERN napi_status NAPI_CDECL
+node_api_get_module_file_name(node_api_basic_env env, const char **result) {
+  if (!env || !result) return Napi_InvalidArg(env);
+  *result = env->module_file_name;
+  return Napi_Ok(env);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_set_instance_data(napi_env env, void *data, node_api_basic_finalize finalize_cb, void *finalize_hint) {
+  if (!env) return Ant_Napi_SetLastError(env, napi_invalid_arg, "invalid env");
+
+  env->instance_data = data;
+  env->instance_data_finalize_cb = finalize_cb;
+  env->instance_data_finalize_hint = finalize_hint;
+  return Napi_Ok(env);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_get_instance_data(napi_env env, void **data) {
+  if (!env || !data) return Napi_InvalidArg(env);
+
+  *data = env->instance_data;
+  return Napi_Ok(env);
 }

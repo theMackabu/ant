@@ -21,6 +21,45 @@ async function main(addon) {
   assert.deepStrictEqual(b.callWithZero((...values) => values), [0, 7]);
   assert.strictEqual(b.callWithZero((value) => value), 0);
 
+  assert.throws(() => b.throwCoded(), (e) => e instanceof TypeError && e.code === 'ERR_ANT_TEST' && e.message === 'coded failure');
+  const coded = b.createCoded('ERR_ANT_RANGE', 'too far');
+  assert.ok(coded instanceof RangeError);
+  assert.strictEqual(coded.code, 'ERR_ANT_RANGE');
+  assert.strictEqual(coded.message, 'too far');
+  assert.strictEqual(b.isError(coded), true);
+  assert.strictEqual(b.isError(new Error('x')), true);
+  assert.strictEqual(b.isError({ message: 'x' }), false);
+
+  assert.strictEqual(b.latin1(), 'caf\u00e9');
+  assert.deepStrictEqual(b.readLatin1('caf\u00e9'), [0x63, 0x61, 0x66, 0xe9]);
+  assert.strictEqual(b.readUtf8('\u00e9\u00e9\u00e9', 4), '\u00e9');
+  assert.strictEqual(b.readUtf8('\u00e9\u00e9\u00e9', 8), '\u00e9\u00e9\u00e9');
+
+  for (const value of [0, -1, 2 ** 31, 2 ** 32 + 5, -(2 ** 32) - 5, 1.9, -1.9, NaN, Infinity, -Infinity])
+    assert.strictEqual(b.toInt32(value), value | 0, `toInt32(${value})`);
+
+  const named = Object.create({ inherited: 1 });
+  named.own = 1;
+  named[2] = 1;
+  Object.defineProperty(named, 'hidden', { value: 1, enumerable: false });
+  named[Symbol('s')] = 1;
+  assert.deepStrictEqual(b.propertyNames(named).sort(), ['2', 'inherited', 'own']);
+
+  assert.strictEqual(b.hasElement([1, 2], 1), true);
+  assert.strictEqual(b.hasElement([1, 2], 2), false);
+  const deletable = { gone: 1 };
+  assert.strictEqual(b.deleteProperty(deletable, 'gone'), true);
+  assert.strictEqual('gone' in deletable, false);
+  assert.strictEqual(b.deleteProperty(Object.freeze({ kept: 1 }), 'kept'), false);
+
+  const external = b.externalBuffer();
+  assert.ok(Buffer.isBuffer(external));
+  assert.deepStrictEqual([...external], [1, 2, 3, 4]);
+  external[1] = 77;
+  assert.strictEqual(b.externalBufferByte(1), 77);
+
+  assert.deepStrictEqual(b.escape(), { escaped: true });
+
   const tagged = {};
   assert.strictEqual(b.checkTag(tagged, 0), false);
   assert.strictEqual(b.tag(tagged, 0), true);

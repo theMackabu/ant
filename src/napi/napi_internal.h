@@ -10,8 +10,17 @@
 #include <string.h>
 #include <uthash.h>
 
-#include "modules/napi.h"
+#include "internal.h"
+#include "errors.h"
 #include "native_tag.h"
+#include "modules/buffer.h"
+#include "modules/napi.h"
+
+#if defined(__has_include) && __has_include(<uchar.h>)
+#include <uchar.h>
+#else
+typedef uint16_t char16_t;
+#endif
 
 typedef struct napi_cleanup_hook_entry {
   napi_cleanup_hook hook;
@@ -20,19 +29,25 @@ typedef struct napi_cleanup_hook_entry {
 } napi_cleanup_hook_entry_t;
 
 struct napi_async_cleanup_hook_handle__ {
-  struct ant_napi_env__ *env;
+  napi_env env;
   napi_async_cleanup_hook hook;
   void *arg;
   struct napi_async_cleanup_hook_handle__ *next;
   struct napi_async_cleanup_hook_handle__ *prev;
 };
 
-typedef struct napi_external_sab {
-  struct ArrayBufferData *data;
-  node_api_noenv_finalize finalize_cb;
+typedef union {
+  node_api_basic_finalize with_env;
+  node_api_noenv_finalize without_env;
+} napi_external_buffer_finalizer_t;
+
+typedef struct napi_external_buffer {
+  ArrayBufferData *data;
+  void *bytes;
+  napi_external_buffer_finalizer_t finalizer;
   void *finalize_hint;
-  struct napi_external_sab *next;
-} napi_external_sab_t;
+  struct napi_external_buffer *next;
+} napi_external_buffer_t;
 
 struct ant_napi_env__ {
   ant_t *js;
@@ -45,7 +60,7 @@ struct ant_napi_env__ {
   void *instance_data_finalize_hint;
   napi_cleanup_hook_entry_t *cleanup_hooks;
   struct napi_async_cleanup_hook_handle__ *async_cleanup_hooks;
-  napi_external_sab_t *external_sabs;
+  napi_external_buffer_t *external_buffers;
   const char *module_file_name;
   struct napi_ref__ *refs;
   struct napi_deferred__ *deferreds;
@@ -62,13 +77,13 @@ struct ant_napi_env__ {
 };
 
 typedef struct napi_callback_binding {
-  ant_napi_env_t *env;
+  napi_env env;
   napi_callback cb;
   void *data;
 } napi_callback_binding_t;
 
 struct napi_callback_info__ {
-  ant_napi_env_t *env;
+  napi_env env;
   const ant_value_t *argv;
   size_t argc;
   ant_value_t this_arg;
@@ -77,7 +92,7 @@ struct napi_callback_info__ {
 };
 
 struct napi_ref__ {
-  ant_napi_env_t *env;
+  napi_env env;
   ant_value_t ref_val;
   ant_value_t value;
   bool live;
@@ -87,33 +102,30 @@ struct napi_ref__ {
 };
 
 struct napi_deferred__ {
-  ant_napi_env_t *env;
+  napi_env env;
   ant_value_t promise_val;
-  bool settled;
   struct napi_deferred__ *next;
   struct napi_deferred__ *prev;
 };
 
 struct napi_handle_scope__ {
-  ant_napi_env_t *env;
+  napi_env env;
   size_t gc_root_mark;
   size_t handle_slots_mark;
 };
 
 struct napi_escapable_handle_scope__ {
-  ant_napi_env_t *env;
-  size_t gc_root_mark;
-  size_t handle_slots_mark;
+  struct napi_handle_scope__ base;
   bool escaped;
   ant_value_t escaped_val;
 };
 
 struct napi_async_context__ {
-  ant_napi_env_t *env;
+  napi_env env;
 };
 
 struct napi_callback_scope__ {
-  ant_napi_env_t *env;
+  napi_env env;
 };
 
 typedef struct napi_external_entry {
@@ -138,23 +150,8 @@ typedef struct napi_wrap_entry {
   UT_hash_handle hh;
 } napi_wrap_entry_t;
 
-typedef struct napi_async_work_impl {
-  ant_napi_env_t *env;
-  napi_async_execute_callback execute;
-  napi_async_complete_callback complete;
-  void *data;
-  uv_work_t req;
-  bool queued;
-  bool delete_after_complete;
-} napi_async_work_impl_t;
-
-typedef struct napi_tsfn_item {
-  void *data;
-  struct napi_tsfn_item *next;
-} napi_tsfn_item_t;
-
 struct napi_threadsafe_function__ {
-  ant_napi_env_t *env;
+  napi_env env;
   ant_value_t func_val;
   napi_threadsafe_function_call_js call_js_cb;
   node_api_basic_finalize thread_finalize_cb;
@@ -167,62 +164,25 @@ struct napi_threadsafe_function__ {
   bool aborted;
   uv_async_t async;
   uv_mutex_t mutex;
-  napi_tsfn_item_t *head;
-  napi_tsfn_item_t *tail;
+  struct napi_tsfn_item *head;
+  struct napi_tsfn_item *tail;
   struct napi_threadsafe_function__ *next;
   struct napi_threadsafe_function__ *prev;
 };
-
-typedef napi_value(NAPI_CDECL* napi_register_module_v1_fn)(
-  napi_env env,
-  napi_value exports
-);
-
-typedef struct napi_native_lib {
-  void *handle;
-  napi_module *module;
-  struct napi_native_lib *next;
-} napi_native_lib_t;
-
-typedef enum {
-  napi_key_include_prototypes = 0,
-  napi_key_own_only = 1,
-} napi_key_collection_mode;
-
-typedef enum {
-  napi_key_all_properties = 0,
-  napi_key_writable = 1 << 0,
-  napi_key_enumerable = 1 << 1,
-  napi_key_configurable = 1 << 2,
-  napi_key_skip_strings = 1 << 3,
-  napi_key_skip_symbols = 1 << 4,
-} napi_key_filter;
-
-typedef enum {
-  napi_key_keep_numbers = 0,
-  napi_key_numbers_to_strings = 1,
-} napi_key_conversion;
-
-typedef struct {
-  uint8_t sign;
-  uint8_t pad[3];
-  uint32_t limb_count;
-  uint32_t limbs[];
-} napi_bigint_payload_t;
 
 static constexpr uint32_t NAPI_CALLBACK_NATIVE_TAG = Ant_NativeTag("NCBK");
 static constexpr ant_value_t NAPI_ZERO_HANDLE = ANT_SENTINEL_TAG | 0x4E0ULL;
 static constexpr size_t NAPI_INLINE_ARGS = 8;
 
-static inline napi_value napi_handle(ant_value_t value) {
+static inline napi_value Napi_Encode(ant_value_t value) {
   return (napi_value){ value == 0 ? NAPI_ZERO_HANDLE : value };
 }
 
-static inline ant_value_t napi_js(napi_value handle) {
+static inline ant_value_t Napi_Decode(napi_value handle) {
   return handle.bits == NAPI_ZERO_HANDLE ? 0 : handle.bits;
 }
 
-static inline bool napi_is_empty(napi_value handle) {
+static inline bool Napi_IsEmpty(napi_value handle) {
   return handle.bits == 0;
 }
 
@@ -232,7 +192,7 @@ typedef struct {
   ant_value_t *heap_values;
 } napi_args_t;
 
-static inline bool napi_args_decode(napi_args_t *out, const napi_value *handles, size_t count) {
+static inline bool Napi_DecodeArgs(napi_args_t *out, const napi_value *handles, size_t count) {
   out->heap_values = NULL;
   out->values = (const ant_value_t *)handles;
 
@@ -242,51 +202,82 @@ static inline bool napi_args_decode(napi_args_t *out, const napi_value *handles,
 
   ant_value_t *values = out->inline_values;
   if (count > NAPI_INLINE_ARGS && !(values = out->heap_values = malloc(count * sizeof(*values)))) return false;
-  for (i = 0; i < count; i++) values[i] = napi_js(handles[i]);
+  for (i = 0; i < count; i++) values[i] = Napi_Decode(handles[i]);
   out->values = values;
   return true;
 }
 
-static inline void napi_args_free(napi_args_t *args) {
+static inline void Napi_FreeArgs(napi_args_t *args) {
   free(args->heap_values);
 }
 
-ant_napi_env_t *ant_napi_get_or_create_env(ant_t *js);
-napi_status ant_napi_set_last(napi_env env, napi_status status, const char *message);
-napi_status ant_napi_check_pending_from_result(napi_env env, ant_value_t result);
-napi_status ant_napi_return_pending_if_any(napi_env env);
-napi_value ant_napi_scope_pin(ant_napi_env_t *nenv, ant_value_t val);
-bool ant_napi_is_external(ant_t *js, napi_value value);
-void ant_napi_external_sabs_sweep(ant_napi_env_t *nenv, bool teardown);
+napi_status Ant_Napi_SetLastError(napi_env env, napi_status status, const char *message);
 
-#define napi_set_last ant_napi_set_last
-#define napi_check_pending_from_result ant_napi_check_pending_from_result
-#define NAPI_RETURN(nenv, val) ant_napi_scope_pin((nenv), (val))
+static inline napi_status Napi_Ok(napi_env env) {
+  return Ant_Napi_SetLastError(env, napi_ok, NULL);
+}
 
-void ant_napi_link_async(void);
-void ant_napi_tsfns_close(ant_napi_env_t *nenv);
-void ant_napi_link_objects(void);
-void ant_napi_link_references(void);
-void ant_napi_link_values(void);
+static inline napi_status Napi_InvalidArg(napi_env env) {
+  return Ant_Napi_SetLastError(env, napi_invalid_arg, "invalid argument");
+}
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_create_reference(
-  napi_env env,
-  napi_value value,
-  uint32_t initial_refcount,
-  napi_ref *result
+static inline napi_status Napi_OutOfMemory(napi_env env) {
+  return Ant_Napi_SetLastError(env, napi_generic_failure, "out of memory");
+}
+
+static inline napi_status Napi_ObjectExpected(napi_env env) {
+  return Ant_Napi_SetLastError(env, napi_object_expected, NULL);
+}
+
+static inline bool Napi_Failed(napi_env env, ant_value_t result) {
+  return is_err(result) || Ant_Exception_Pending(env->js);
+}
+
+static inline ArrayBufferData *Napi_ArrayBufferData(napi_value value) {
+  ant_value_t buffer = Napi_Decode(value);
+  return is_object_type(buffer) ? buffer_get_arraybuffer_data(buffer) : NULL;
+}
+
+napi_value Ant_Napi_Pin(napi_env env, ant_value_t value);
+napi_status Ant_Napi_CapturePending(napi_env env, ant_value_t result);
+napi_status Ant_Napi_CheckPending(napi_env env);
+napi_status Ant_Napi_ThrowMessage(napi_env env, js_err_type_t type, const char *code, const char *message);
+
+napi_status Ant_Napi_CreateFunction(
+  napi_env env, const char *utf8name, size_t length,
+  napi_callback cb, void *data, napi_value *result
 );
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_call_function(
-  napi_env env,
-  napi_value recv,
-  napi_value func,
-  size_t argc,
-  const napi_value *argv,
+bool Ant_Napi_IsExternal(ant_t *js, napi_value value);
+void Ant_Napi_CloseThreadsafeFunctions(napi_env env);
+void Ant_Napi_SweepExternalBuffers(napi_env env, bool teardown);
+
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_create_reference(napi_env env, napi_value value, uint32_t initial_refcount, napi_ref *result);
+
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_call_function(
+  napi_env env, napi_value recv, napi_value func, size_t argc, const napi_value *argv,
   napi_value *result
 );
 
-NAPI_EXTERN napi_status NAPI_CDECL napi_throw_range_error(
-  napi_env env,
-  const char *code,
-  const char *msg
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_define_properties(
+  napi_env env, napi_value object, size_t property_count,
+  const napi_property_descriptor *properties
 );
+
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_create_bigint_int64(napi_env env, int64_t value, napi_value *result);
+
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_create_promise(napi_env env, napi_deferred *deferred, napi_value *promise);
+
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_create_string_utf8(napi_env env, const char *str, size_t length, napi_value *result);
+
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_typeof(napi_env env, napi_value value, napi_valuetype *result);
+
+NAPI_EXTERN napi_status NAPI_CDECL
+napi_get_uv_event_loop(node_api_basic_env env, struct uv_loop_s **loop);

@@ -165,6 +165,25 @@ typedef enum {
   napi_tsfn_blocking
 } napi_threadsafe_function_call_mode;
 
+typedef enum {
+  napi_key_include_prototypes = 0,
+  napi_key_own_only = 1,
+} napi_key_collection_mode;
+
+typedef enum {
+  napi_key_all_properties = 0,
+  napi_key_writable = 1 << 0,
+  napi_key_enumerable = 1 << 1,
+  napi_key_configurable = 1 << 2,
+  napi_key_skip_strings = 1 << 3,
+  napi_key_skip_symbols = 1 << 4,
+} napi_key_filter;
+
+typedef enum {
+  napi_key_keep_numbers = 0,
+  napi_key_numbers_to_strings = 1,
+} napi_key_conversion;
+
 typedef napi_value(NAPI_CDECL* napi_addon_register_func)(napi_env env, napi_value exports);
 
 typedef struct napi_module {
@@ -177,7 +196,7 @@ typedef struct napi_module {
   void* reserved[4];
 } napi_module;
 
-napi_env ant_napi_get_env(ant_t *js);
+napi_env Ant_Napi_GetEnv(ant_t *js);
 ant_value_t napi_process_dlopen_js(ant_params_t);
 ant_value_t napi_load_native_module(ant_t *js, const char *module_path, ant_value_t ns, ant_value_t module);
 

@@ -27,6 +27,22 @@ extern napi_status napi_create_string_utf8(napi_env, const char *, size_t, napi_
 extern napi_status napi_call_function(napi_env, napi_value, napi_value, size_t, const napi_value *, napi_value *);
 extern napi_status napi_get_undefined(napi_env, napi_value *);
 
+extern napi_status napi_throw_type_error(napi_env, const char *, const char *);
+extern napi_status napi_create_range_error(napi_env, napi_value, napi_value, napi_value *);
+extern napi_status napi_is_error(napi_env, napi_value, bool *);
+extern napi_status napi_create_string_latin1(napi_env, const char *, size_t, napi_value *);
+extern napi_status napi_get_value_string_latin1(napi_env, napi_value, char *, size_t, size_t *);
+extern napi_status napi_get_value_string_utf8(napi_env, napi_value, char *, size_t, size_t *);
+extern napi_status napi_get_value_int32(napi_env, napi_value, int32_t *);
+extern napi_status napi_get_property_names(napi_env, napi_value, napi_value *);
+extern napi_status napi_has_element(napi_env, napi_value, uint32_t, bool *);
+extern napi_status napi_delete_property(napi_env, napi_value, napi_value, bool *);
+extern napi_status napi_create_external_buffer(napi_env, size_t, void *, napi_finalize, void *, napi_value *);
+extern napi_status napi_create_object(napi_env, napi_value *);
+typedef struct napi_escapable_handle_scope__ *napi_escapable_handle_scope;
+extern napi_status napi_open_escapable_handle_scope(napi_env, napi_escapable_handle_scope *);
+extern napi_status napi_close_escapable_handle_scope(napi_env, napi_escapable_handle_scope);
+extern napi_status napi_escape_handle(napi_env, napi_escapable_handle_scope, napi_value, napi_value *);
 extern napi_status napi_type_tag_object(napi_env, napi_value, const napi_type_tag *);
 extern napi_status napi_check_object_type_tag(napi_env, napi_value, const napi_type_tag *, bool *);
 extern napi_status napi_object_freeze(napi_env, napi_value);
@@ -112,6 +128,117 @@ static napi_value call_with_zero(napi_env env, napi_callback_info info) {
   napi_get_undefined(env, &recv);
   if (napi_call_function(env, recv, argv[0], 2, call_argv, &result) != 0) return NULL;
   return result;
+}
+
+static napi_value throw_coded(napi_env env, napi_callback_info info) {
+  napi_throw_type_error(env, "ERR_ANT_TEST", "coded failure");
+  return NULL;
+}
+
+static napi_value create_coded(napi_env env, napi_callback_info info) {
+  napi_value argv[2], result = NULL;
+  args(env, info, argv, 2);
+  if (napi_create_range_error(env, argv[0], argv[1], &result) != 0) return NULL;
+  return result;
+}
+
+static napi_value is_error(napi_env env, napi_callback_info info) {
+  napi_value argv[1];
+  bool result = false;
+  args(env, info, argv, 1);
+  if (napi_is_error(env, argv[0], &result) != 0) return NULL;
+  return boolean(env, result);
+}
+
+static napi_value latin1(napi_env env, napi_callback_info info) {
+  napi_value result = NULL;
+  napi_create_string_latin1(env, latin1_text, 4, &result);
+  return result;
+}
+
+static napi_value read_latin1(napi_env env, napi_callback_info info) {
+  napi_value argv[1], result = NULL;
+  char buffer[16];
+  size_t length = 0;
+  args(env, info, argv, 1);
+  if (napi_get_value_string_latin1(env, argv[0], buffer, sizeof(buffer), &length) != 0) return NULL;
+
+  napi_create_array(env, &result);
+  for (size_t i = 0; i < length; i++) napi_set_element(env, result, (uint32_t)i, number(env, (unsigned char)buffer[i]));
+  return result;
+}
+
+static napi_value read_utf8(napi_env env, napi_callback_info info) {
+  napi_value argv[2], result = NULL;
+  char buffer[32];
+  size_t length = 0;
+  args(env, info, argv, 2);
+  if (napi_get_value_string_utf8(env, argv[0], buffer, u32(env, argv[1]), &length) != 0) return NULL;
+  napi_create_string_utf8(env, buffer, length, &result);
+  return result;
+}
+
+static napi_value to_int32(napi_env env, napi_callback_info info) {
+  napi_value argv[1];
+  int32_t result = 1;
+  args(env, info, argv, 1);
+  if (napi_get_value_int32(env, argv[0], &result) != 0) return NULL;
+  return number(env, result);
+}
+
+static napi_value property_names(napi_env env, napi_callback_info info) {
+  napi_value argv[1], result = NULL;
+  args(env, info, argv, 1);
+  if (napi_get_property_names(env, argv[0], &result) != 0) return NULL;
+  return result;
+}
+
+static napi_value has_element(napi_env env, napi_callback_info info) {
+  napi_value argv[2];
+  bool result = false;
+  args(env, info, argv, 2);
+  if (napi_has_element(env, argv[0], u32(env, argv[1]), &result) != 0) return NULL;
+  return boolean(env, result);
+}
+
+static napi_value delete_property(napi_env env, napi_callback_info info) {
+  napi_value argv[2];
+  bool result = false;
+  args(env, info, argv, 2);
+  if (napi_delete_property(env, argv[0], argv[1], &result) != 0) return NULL;
+  return boolean(env, result);
+}
+
+static uint8_t external_buffer_bytes[4] = { 1, 2, 3, 4 };
+
+static void external_buffer_finalize(napi_env env, void *data, void *hint) {}
+
+static napi_value external_buffer(napi_env env, napi_callback_info info) {
+  napi_value result = NULL;
+  if (napi_create_external_buffer(
+    env, sizeof(external_buffer_bytes), external_buffer_bytes, external_buffer_finalize, NULL, &result
+  ) != 0) return NULL;
+  return result;
+}
+
+static napi_value external_buffer_byte(napi_env env, napi_callback_info info) {
+  napi_value argv[1];
+  args(env, info, argv, 1);
+  return number(env, external_buffer_bytes[u32(env, argv[0]) & 3]);
+}
+
+static napi_value escape(napi_env env, napi_callback_info info) {
+  napi_escapable_handle_scope scope = NULL;
+  napi_value inner = NULL, outer = NULL, again = NULL;
+
+  if (napi_open_escapable_handle_scope(env, &scope) != 0) return NULL;
+  napi_create_object(env, &inner);
+  napi_set_named_property(env, inner, "escaped", boolean(env, true));
+  napi_status first = napi_escape_handle(env, scope, inner, &outer);
+  napi_status second = napi_escape_handle(env, scope, inner, &again);
+  napi_close_escapable_handle_scope(env, scope);
+
+  return first == 0 && second != 0 ? outer : NULL;
 }
 
 static napi_value tag(napi_env env, napi_callback_info info) {
@@ -327,6 +454,19 @@ napi_value napi_register_module_v1(napi_env env, napi_value exports) {
     { "nothing", nothing },
     { "identity", identity },
     { "callWithZero", call_with_zero },
+    { "throwCoded", throw_coded },
+    { "createCoded", create_coded },
+    { "isError", is_error },
+    { "latin1", latin1 },
+    { "readLatin1", read_latin1 },
+    { "readUtf8", read_utf8 },
+    { "toInt32", to_int32 },
+    { "propertyNames", property_names },
+    { "hasElement", has_element },
+    { "deleteProperty", delete_property },
+    { "externalBuffer", external_buffer },
+    { "externalBufferByte", external_buffer_byte },
+    { "escape", escape },
     { "tag", tag },
     { "checkTag", check_tag },
     { "freeze", freeze },
