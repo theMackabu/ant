@@ -14,6 +14,10 @@ void cleanup_rpc_module(ant_t *js) {}
 void js_esm_cleanup_module_cache(ant_t *js) {}
 void ant_host_modules_destroy(ant_t *js) {}
 
+bool js_is_namespace_object(ant_value_t obj) { return false; }
+bool esm_export_star_skips(ant_t *js, const char *name, size_t len) { return false; }
+void esm_export_star_finish(ant_t *js) {}
+
 void esm_predeclare_exports(ant_t *js, sv_ast_t *program, ant_value_t ns) {}
 void emit_process_event(ant_t *js, const char *event_type, ant_value_t *args, int nargs) {}
 void process_exit_with(ant_t *js, int status) { exit(status); }
