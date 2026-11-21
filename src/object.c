@@ -648,7 +648,12 @@ void js_set_proto_wb(ant_t *js, ant_value_t obj, ant_value_t proto) {
 }
 
 void js_set_literal_proto(ant_t *js, ant_value_t obj, ant_value_t proto) {
-  if (!js_literal_proto_ok(proto) || !is_object_type(obj)) return;
+  if (__builtin_expect(!js_literal_proto_ok(proto), 0)) {
+    if (vtype(proto) != kTypeBuiltin) return;
+    proto = js_cfunc_promote(js, proto);
+    if (!js_literal_proto_ok(proto)) return;
+  }
+  if (!is_object_type(obj)) return;
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
   if (!ptr) return;
   ant_object_invalidate_guarded_absence(js, ptr);
@@ -772,4 +777,34 @@ void js_set_finalizer(ant_value_t obj, js_finalizer_fn fn) {
   
   Ant_Assert(!ant_array_is_shared(ptr), "shared array elements are released by the array finalizer");
   ptr->finalizer = fn;
+}
+
+static bool proto_set_would_cycle(ant_t *js, ant_value_t obj, const ant_object_t *ptr, ant_value_t proto) {
+  ant_value_t cur = proto;
+  for (int depth = 0; depth < 8; depth++) {
+    const ant_object_t *at = js_obj_ptr(js_as_obj(cur));
+    if (at == ptr) return true;
+    if (!at || at->flags.is_exotic) break;
+
+    ant_value_t next = ant_object_proto(at);
+    if (vtype(next) == kTypeNull) return false;
+    if (!is_object_type(next)) break;
+    cur = next;
+  }
+  return proto_would_cycle(js, obj, proto);
+}
+
+ant_proto_set_t Ant_Object_TrySetPrototype(ant_t *js, ant_value_t obj, ant_value_t proto) {
+  ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
+  if (__builtin_expect(!ptr, 0)) {
+    set_proto(js, obj, proto);
+    return ANT_PROTO_SET_OK;
+  }
+
+  if (is_object_type(proto) && proto_set_would_cycle(js, obj, ptr, proto)) return ANT_PROTO_SET_CYCLE;
+  if (__builtin_expect(!ptr->flags.extensible, 0) && js_get_proto(js, obj) != proto) return ANT_PROTO_SET_NOT_EXTENSIBLE;
+
+  js_set_proto(js, obj, proto);
+  gc_write_barrier(js, ptr, proto);
+  return ANT_PROTO_SET_OK;
 }

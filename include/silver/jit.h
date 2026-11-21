@@ -30,6 +30,7 @@ void sv_jit_destroy(ant_t *js);
 void sv_jit_drop_all_code(ant_t *js);
 void sv_jit_drop_func_code(sv_func_t *func);
 void sv_jit_drop_closure_pinned(sv_func_t *func);
+void sv_jit_drop_unsettled_receiver_code(ant_t *js);
 
 void opt_tier_func_free(ant_t *js, sv_func_t *func);
 void opt_tier_func_trace(ant_t *js, sv_func_t *func);

@@ -3655,6 +3655,13 @@ static bool opt_cg_value_code(opt_cg_t *cg, ir_node_id_t node_id, const ir_node_
       masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, OPT_STRING_TAG_SIGNED, exit);
       break;
     }
+    case IR_OP_CHECK_RECEIVER: {
+      asm_label_t exit = opt_cg_exit_site(cg, node_id);
+      masm_load64(m, scratch, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
+      masm_load64(m, scratch, asm_addr(scratch, (int32_t)offsetof(ant_t, construct_dirty_seed)));
+      masm_branch64(m, ASM_COND_EQUAL, opt_cg_input(cg, node_id, 0), scratch, exit);
+      break;
+    }
     case IR_OP_CHECK_OBJECT: {
       asm_label_t exit = opt_cg_exit_site(cg, node_id);
       masm_move_imm64(m, scratch, -(NANBOX_PREFIX + 1));

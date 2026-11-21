@@ -615,6 +615,11 @@ struct ant_isolate_t {
   } pending_rejections;
 
   ant_ptr_pair_map_t cfunc_promoted;
+  ant_value_t construct_proxy_target;
+  ant_value_t construct_proxy_proto;
+  ant_value_t construct_seed;
+  ant_value_t construct_dirty_seed;
+  bool construct_pending_used;
   ant_ptr_pair_map_t cfunc_named;
 
   struct {

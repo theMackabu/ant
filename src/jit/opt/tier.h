@@ -138,6 +138,7 @@ typedef struct opt_code {
   bool dropped;
   bool invalidated;
   bool closure_pinned;
+  bool assumes_settled_receivers;
 } opt_code_t;
 
 static constexpr uint64_t OPT_SLOW_PATH_LIMIT = 1000;
@@ -254,6 +255,7 @@ ant_value_t opt_rt_call_forward(sv_vm_t *vm, ant_value_t callee, ant_value_t thi
 ant_value_t opt_rt_new_args(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t spread);
 ant_value_t opt_rt_new_forward(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, const opt_entry_t *entry);
 ant_value_t opt_rt_super_result(ant_value_t result, ant_value_t this_val);
+ant_value_t opt_rt_settle_receiver(sv_vm_t *vm, ant_value_t this_val, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t unused);
 ant_value_t opt_rt_import_default(sv_vm_t *vm, ant_value_t ns, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_import_named(sv_vm_t *vm, ant_value_t ns, ant_value_t unused, ant_value_t *args, int64_t argc, const sv_atom_t *atom);
 ant_value_t opt_rt_derived_return(sv_vm_t *vm, ant_value_t value, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t kind);

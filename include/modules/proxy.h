@@ -28,6 +28,7 @@ ant_value_t proxy_get_prototype_of(ant_t *js, ant_value_t proxy);
 bool js_proxy_set_is_plain(ant_t *js, ant_value_t proxy);
 ant_value_t js_proxy_set_refusal(ant_t *js, ant_value_t proxy, ant_value_t key);
 ant_value_t proxy_set_prototype_of(ant_t *js, ant_value_t proxy, ant_value_t proto);
+ant_value_t proxy_set_prototype_of_trapped(ant_t *js, ant_value_t proxy, ant_value_t proto, bool *trapped);
 ant_value_t proxy_is_extensible(ant_t *js, ant_value_t proxy);
 ant_value_t proxy_prevent_extensions(ant_t *js, ant_value_t proxy);
 bool proxy_enumerates_as_target(ant_t *js, ant_value_t proxy, ant_value_t *target);

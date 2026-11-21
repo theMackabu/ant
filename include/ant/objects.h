@@ -29,6 +29,13 @@ bool js_prop_store(ant_t *js, ant_prop_loc_t loc, ant_value_t value);
 void js_merge_obj(ant_t *, ant_value_t dst, ant_value_t src);
 
 void js_set_proto(ant_t *, ant_value_t obj, ant_value_t proto);
+typedef enum {
+  ANT_PROTO_SET_OK,
+  ANT_PROTO_SET_CYCLE,
+  ANT_PROTO_SET_NOT_EXTENSIBLE,
+} ant_proto_set_t;
+
+ant_proto_set_t Ant_Object_TrySetPrototype(ant_t *, ant_value_t obj, ant_value_t proto);
 void js_set_proto_wb(ant_t *, ant_value_t obj, ant_value_t proto);
 void js_set_literal_proto(ant_t *, ant_value_t obj, ant_value_t proto);
 void js_set_proto_init(ant_value_t obj, ant_value_t proto);

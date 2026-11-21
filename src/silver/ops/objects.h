@@ -440,6 +440,7 @@ ant_value_t sv_op_define_class(
       return parent_proto;
     }
     
+    if (vtype(parent_proto) == kTypeBuiltin) parent_proto = js_cfunc_promote(js, parent_proto);
     if (!is_object_type(parent_proto) && vtype(parent_proto) != kTypeNull) {
       GC_ROOT_RESTORE(js, root_mark);
       return js_mkerr_typed(js, JS_ERR_TYPE, "Class extends value does not have a valid prototype property");
