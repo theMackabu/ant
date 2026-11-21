@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   prepare:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       timestamp: ${{ steps.timestamp.outputs.value }}
     steps:
@@ -55,7 +55,7 @@ jobs:
     with:
       arch: x64
       artifact: ant-linux-x64-musl
-      runner: ubuntu-latest
+      runner: ubuntu-26.04
       source_revision: ${{ github.sha }}
 
   nanos-aarch64:
@@ -65,13 +65,13 @@ jobs:
     with:
       arch: aarch64
       artifact: ant-linux-aarch64-musl
-      runner: ubuntu-24.04-arm
+      runner: ubuntu-26.04-arm
       source_revision: ${{ github.sha }}
 
   summary:
     name: Build summary
     needs: [build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: ${{ !cancelled() && needs.build.result != 'skipped' }}
     outputs:
       version: ${{ steps.version.outputs.value }}
@@ -187,7 +187,7 @@ jobs:
   refresh-manifest:
     name: Refresh manifest
     needs: [build, nanos-x64, nanos-aarch64, summary]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: ${{ github.event_name != 'pull_request' && always() && !cancelled() && needs.summary.result == 'success' && (needs.build.result == 'success' || needs.nanos-x64.result == 'success' || needs.nanos-aarch64.result == 'success') }}
     steps:
       - name: Refresh manifest

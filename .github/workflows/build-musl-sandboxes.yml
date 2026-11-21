@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   prepare:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       timestamp: ${{ steps.timestamp.outputs.value }}
     steps:
@@ -41,7 +41,7 @@ jobs:
     with:
       arch: x64
       artifact: ant-linux-x64-musl
-      runner: ubuntu-latest
+      runner: ubuntu-26.04
       source_run_id: ${{ github.run_id }}
       source_revision: ${{ github.sha }}
 
@@ -52,12 +52,12 @@ jobs:
     with:
       arch: aarch64
       artifact: ant-linux-aarch64-musl
-      runner: ubuntu-24.04-arm
+      runner: ubuntu-26.04-arm
       source_run_id: ${{ github.run_id }}
       source_revision: ${{ github.sha }}
 
   summary:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [build-musl, sandbox-x64, sandbox-aarch64]
     if: ${{ always() && !cancelled() }}
     steps:

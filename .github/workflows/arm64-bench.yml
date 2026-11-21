@@ -28,7 +28,7 @@ concurrency:
 jobs:
   prepare:
     if: github.repository == 'theMackabu/ant'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       timestamp: ${{ steps.timestamp.outputs.value }}
     steps:

@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   prepare:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       owner: ${{ steps.meta.outputs.owner }}
       llvm: ${{ steps.meta.outputs.llvm }}
@@ -53,9 +53,9 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-24.04
+            runner: ubuntu-26.04
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
     steps:
       - name: Checkout
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -127,7 +127,7 @@ jobs:
   glibc-publish:
     name: Publish glibc CI manifest
     needs: [prepare, glibc-build]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     env:
       IMAGE: ghcr.io/${{ needs.prepare.outputs.owner }}/ant-ci-glibc
@@ -178,9 +178,9 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-24.04
+            runner: ubuntu-26.04
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
     steps:
       - name: Checkout
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -248,7 +248,7 @@ jobs:
   musl-publish:
     name: Publish musl CI manifest
     needs: [prepare, musl-build]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     env:
       IMAGE: ghcr.io/${{ needs.prepare.outputs.owner }}/ant-ci-musl

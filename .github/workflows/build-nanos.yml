@@ -70,7 +70,7 @@ permissions:
 jobs:
   nanos:
     name: Nanos Image (${{ inputs.arch }})
-    runs-on: ${{ inputs.runner || (inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest') }}
+    runs-on: ${{ inputs.runner || (inputs.arch == 'aarch64' && 'ubuntu-26.04-arm' || 'ubuntu-26.04') }}
     env:
       NANOS_ARTIFACT: ${{ inputs.artifact || (inputs.arch == 'aarch64' && 'ant-linux-aarch64-musl' || 'ant-linux-x64-musl') }}
       NANOS_PLATFORM: ${{ inputs.arch == 'aarch64' && 'virt' || 'pc' }}
