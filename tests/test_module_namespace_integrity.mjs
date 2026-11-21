@@ -36,6 +36,11 @@ assert.strictEqual(self.counter, 2);
 const source = 'export let x = 1; export function inc() { return ++x; } export const y = 2; export default 3; export { x as b, inc as a };';
 const dep = await import('data:text/javascript,' + encodeURIComponent(source));
 
+assert.strictEqual(Reflect.setPrototypeOf(dep, {}), false);
+assert.strictEqual(Reflect.setPrototypeOf(dep, null), true);
+assert.throws(() => Object.setPrototypeOf(dep, {}), TypeError);
+assert.strictEqual(Object.getPrototypeOf(dep), null);
+
 assert.deepStrictEqual(Object.keys(dep), ['a', 'b', 'default', 'inc', 'x', 'y']);
 assert.deepStrictEqual(Reflect.ownKeys(dep), ['a', 'b', 'default', 'inc', 'x', 'y', Symbol.toStringTag]);
 assert.deepStrictEqual(Object.getOwnPropertyDescriptor(dep, 'x'), { value: 1, writable: true, enumerable: true, configurable: false });
