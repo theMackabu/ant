@@ -403,7 +403,7 @@ ant_value_t Ant_Error_CreateFormatted(ant_t *js, js_err_type_t err_type, const c
   return value;
 }
 
-ant_value_t js_throw(ant_t *js, ant_value_t value) {
+ant_value_t js_throw_unless(ant_t *js, ant_value_t value, js_throw_caught_fn caught) {
   if (is_err(value)) {
     Ant_Exception_Set(js, value);
     return value;
@@ -426,11 +426,15 @@ ant_value_t js_throw(ant_t *js, ant_value_t value) {
     if (vtype(stack) != kTypeString) stack = Ant_Value_Undefined;
   }
 
-  if (!no_stack) stack = js_error_record_capture(js, Ant_Value_Undefined, NULL, Ant_Value_Undefined);
+  if (!no_stack && !(caught && caught(js))) stack = js_error_record_capture(js, Ant_Value_Undefined, NULL, Ant_Value_Undefined);
   ant_value_t result = Ant_Exception_Raise(js, value, stack);
 
   GC_ROOT_RESTORE(js, mark);
   return result;
+}
+
+ant_value_t js_throw(ant_t *js, ant_value_t value) {
+  return js_throw_unless(js, value, NULL);
 }
 
 __attribute__((noinline, cold)) ant_value_t js_mkerr_code(ant_t *js, js_err_type_t type, const char *code, const char *message) {
