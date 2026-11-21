@@ -1,24 +1,21 @@
 #include <compat.h> // IWYU pragma: keep
-
 #include <string.h>
 
+#include "keys.h"
+#include "props.h"
 #include "cfunc.h"
 #include "builder.h"
 #include "stringify.h"
-
+#include "arguments.h"
+#include "arrays.h"
+#include "convert.h"
 #include "silver/call.h"
 
 #include "modules/iterator.h"
 #include "modules/date.h"
-
-#include "arguments.h"
-#include "arrays.h"
-#include "convert.h"
-#include "keys.h"
 #include "modules/buffer.h"
 #include "modules/object.h"
 #include "modules/proxy.h"
-#include "props.h"
 
 static bool is_object_constructor(ant_value_t value) {
   if (vtype(value) != kTypeFunction) return false;
@@ -126,7 +123,7 @@ static ant_value_t object_set_prototype_error(ant_t *js, ant_proto_set_t outcome
   return js_mkerr_typed(js, JS_ERR_TYPE, "#<Object> is not extensible");
 }
 
-static ant_value_t builtin_object_setPrototypeOf(ant_params_t) {
+ant_value_t builtin_object_setPrototypeOf(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "Object.setPrototypeOf requires 2 arguments");
   
   ant_value_t obj = args[0];
@@ -768,7 +765,7 @@ static ant_value_t builtin_object_isFrozen(ant_params_t) {
   return object_test_integrity(js, obj, js_obj_ptr(as_obj), true);
 }
 
-static ant_value_t builtin_object_seal(ant_params_t) {
+ant_value_t builtin_object_seal(ant_params_t) {
   if (nargs == 0) return Ant_Value_Undefined;
   
   ant_value_t obj = args[0];

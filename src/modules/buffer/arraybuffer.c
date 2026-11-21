@@ -533,6 +533,17 @@ ant_value_t create_shared_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer) {
   return obj;
 }
 
+ant_value_t create_shared_arraybuffer_copy(ant_t *js, const void *bytes, size_t length) {
+  ArrayBufferData *buffer = create_shared_array_buffer_data(length);
+  if (!buffer) return Ant_Error_CreateOutOfMemory(js);
+  if (bytes && length) memcpy(buffer->data, bytes, length);
+
+  ant_value_t obj = create_shared_arraybuffer_obj(js, buffer);
+  free_array_buffer_data(js, buffer);
+
+  return obj;
+}
+
 ant_value_t create_arraybuffer_copy(ant_t *js, const void *bytes, size_t length) {
   ArrayBufferData *buffer = create_array_buffer_data(js, length);
   if (!buffer) return Ant_Error_CreateOutOfMemory(js);

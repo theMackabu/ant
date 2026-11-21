@@ -19,6 +19,21 @@ typedef struct napi_cleanup_hook_entry {
   struct napi_cleanup_hook_entry *next;
 } napi_cleanup_hook_entry_t;
 
+struct napi_async_cleanup_hook_handle__ {
+  struct ant_napi_env__ *env;
+  napi_async_cleanup_hook hook;
+  void *arg;
+  struct napi_async_cleanup_hook_handle__ *next;
+  struct napi_async_cleanup_hook_handle__ *prev;
+};
+
+typedef struct napi_external_sab {
+  struct ArrayBufferData *data;
+  node_api_noenv_finalize finalize_cb;
+  void *finalize_hint;
+  struct napi_external_sab *next;
+} napi_external_sab_t;
+
 struct ant_napi_env__ {
   ant_t *js;
   napi_extended_error_info last_error;
@@ -29,6 +44,9 @@ struct ant_napi_env__ {
   node_api_basic_finalize instance_data_finalize_cb;
   void *instance_data_finalize_hint;
   napi_cleanup_hook_entry_t *cleanup_hooks;
+  struct napi_async_cleanup_hook_handle__ *async_cleanup_hooks;
+  napi_external_sab_t *external_sabs;
+  const char *module_file_name;
   struct napi_ref__ *refs;
   struct napi_deferred__ *deferreds;
   struct napi_threadsafe_function__ *tsfns;
@@ -114,6 +132,8 @@ typedef struct napi_wrap_entry {
   node_api_basic_finalize attached_finalize_cb;
   void *attached_finalize_hint;
   bool has_wrap;
+  bool has_type_tag;
+  napi_type_tag type_tag;
   UT_hash_handle hh;
 } napi_wrap_entry_t;
 
@@ -197,6 +217,7 @@ napi_status ant_napi_check_pending_from_result(napi_env env, ant_value_t result)
 napi_status ant_napi_return_pending_if_any(napi_env env);
 napi_value ant_napi_scope_pin(ant_napi_env_t *nenv, napi_value val);
 bool ant_napi_is_external(ant_t *js, napi_value value);
+void ant_napi_external_sabs_sweep(ant_napi_env_t *nenv, bool teardown);
 
 #define napi_set_last ant_napi_set_last
 #define napi_check_pending_from_result ant_napi_check_pending_from_result
@@ -222,4 +243,10 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_call_function(
   size_t argc,
   const napi_value *argv,
   napi_value *result
+);
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_throw_range_error(
+  napi_env env,
+  const char *code,
+  const char *msg
 );

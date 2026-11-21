@@ -94,6 +94,14 @@ void cleanup_napi_module(ant_t *js) {
     free(entry);
   }
 
+  while (nenv->async_cleanup_hooks) {
+    struct napi_async_cleanup_hook_handle__ *handle = nenv->async_cleanup_hooks;
+    nenv->async_cleanup_hooks = handle->next;
+    if (handle->next) handle->next->prev = NULL;
+    handle->env = NULL;
+    handle->hook(handle, handle->arg);
+  }
+
   ant_napi_tsfns_close(nenv);
 }
 
@@ -123,6 +131,9 @@ void free_napi_module(ant_t *js) {
     HASH_DEL(nenv->wraps, wrap);
     free(wrap);
   }
+
+  ant_napi_external_sabs_sweep(nenv, true);
+  for (struct napi_async_cleanup_hook_handle__ *h = nenv->async_cleanup_hooks; h; h = h->next) h->env = NULL;
 
   free(nenv->handle_slots);
   free(nenv);
@@ -159,6 +170,8 @@ void gc_mark_napi(ant_t *js, gc_mark_fn mark) {
 void gc_clear_napi_weak_refs(ant_t *js, gc_weak_key_alive_fn alive) {
   ant_napi_env_t *nenv = js->napi_env;
   if (!nenv) return;
+
+  ant_napi_external_sabs_sweep(nenv, false);
 
   for (struct napi_ref__ *r = nenv->refs; r; r = r->next) {
     if (r->refcount > 0 || !r->value) continue;
@@ -419,4 +432,109 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_remove_env_cleanup_hook(
     pp = &(*pp)->next;
   }
   return napi_set_last((napi_env)env, napi_invalid_arg, "cleanup hook not found");
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL node_api_throw_syntax_error(
+  napi_env env,
+  const char *code,
+  const char *msg
+) {
+  (void)code;
+  return napi_throw_with_message(env, JS_ERR_SYNTAX, msg ? msg : "");
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_add_async_cleanup_hook(
+  node_api_basic_env env,
+  napi_async_cleanup_hook hook,
+  void *arg,
+  napi_async_cleanup_hook_handle *remove_handle
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !hook) return napi_set_last((napi_env)env, napi_invalid_arg, "invalid argument");
+
+  struct napi_async_cleanup_hook_handle__ *handle = calloc(1, sizeof(*handle));
+  if (!handle) return napi_set_last((napi_env)env, napi_generic_failure, "out of memory");
+
+  handle->env = nenv;
+  handle->hook = hook;
+  handle->arg = arg;
+  handle->next = nenv->async_cleanup_hooks;
+  if (handle->next) handle->next->prev = handle;
+  nenv->async_cleanup_hooks = handle;
+
+  if (remove_handle) *remove_handle = handle;
+  return napi_set_last((napi_env)env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_remove_async_cleanup_hook(
+  napi_async_cleanup_hook_handle remove_handle
+) {
+  struct napi_async_cleanup_hook_handle__ *handle = remove_handle;
+  if (!handle) return napi_invalid_arg;
+
+  if (handle->env) {
+    if (handle->prev) handle->prev->next = handle->next;
+    else handle->env->async_cleanup_hooks = handle->next;
+    if (handle->next) handle->next->prev = handle->prev;
+  }
+
+  free(handle);
+  return napi_ok;
+}
+
+typedef struct {
+  uv_idle_t idle;
+  ant_napi_env_t *env;
+  napi_finalize finalize_cb;
+  void *finalize_data;
+  void *finalize_hint;
+} napi_posted_finalizer_t;
+
+static void napi_posted_finalizer_close_cb(uv_handle_t *handle) {
+  free(handle->data);
+}
+
+static void napi_posted_finalizer_cb(uv_idle_t *idle) {
+  napi_posted_finalizer_t *posted = (napi_posted_finalizer_t *)idle->data;
+  uv_idle_stop(idle);
+  posted->finalize_cb((napi_env)posted->env, posted->finalize_data, posted->finalize_hint);
+  uv_close((uv_handle_t *)idle, napi_posted_finalizer_close_cb);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL node_api_post_finalizer(
+  node_api_basic_env env,
+  napi_finalize finalize_cb,
+  void *finalize_data,
+  void *finalize_hint
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !nenv->js->loop || !finalize_cb)
+    return napi_set_last((napi_env)env, napi_invalid_arg, "invalid argument");
+
+  napi_posted_finalizer_t *posted = calloc(1, sizeof(*posted));
+  if (!posted) return napi_set_last((napi_env)env, napi_generic_failure, "out of memory");
+
+  posted->env = nenv;
+  posted->finalize_cb = finalize_cb;
+  posted->finalize_data = finalize_data;
+  posted->finalize_hint = finalize_hint;
+  posted->idle.data = posted;
+
+  if (uv_idle_init(nenv->js->loop, &posted->idle) != 0) {
+    free(posted);
+    return napi_set_last((napi_env)env, napi_generic_failure, "failed to schedule finalizer");
+  }
+
+  uv_idle_start(&posted->idle, napi_posted_finalizer_cb);
+  return napi_set_last((napi_env)env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL node_api_get_module_file_name(
+  node_api_basic_env env,
+  const char **result
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !result) return napi_set_last((napi_env)env, napi_invalid_arg, "invalid argument");
+  *result = nenv->module_file_name;
+  return napi_set_last((napi_env)env, napi_ok, NULL);
 }

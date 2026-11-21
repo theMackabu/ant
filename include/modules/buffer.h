@@ -100,6 +100,7 @@ ant_value_t create_arraybuffer_copy(ant_t *js, const void *bytes, size_t length)
 ant_value_t create_resizable_arraybuffer_copy(ant_t *js, const void *bytes, size_t length, size_t max_length);
 ant_value_t buffer_clone_arraybuffer(ant_t *js, const ArrayBufferData *data);
 ant_value_t create_shared_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer);
+ant_value_t create_shared_arraybuffer_copy(ant_t *js, const void *bytes, size_t length);
 ant_value_t buffer_byte_subarray(ant_t *js, ant_value_t value, size_t begin, size_t end);
 ant_value_t Ant_Buffer_FromString(ant_t *js, ant_value_t value, ant_value_t encoding);
 ant_value_t Ant_Buffer_FromView(ant_t *js, ant_value_t value);

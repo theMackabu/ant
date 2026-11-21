@@ -21,11 +21,14 @@
 
 #define NAPI_DEFAULT_DLOPEN_FLAGS NAPI_RTLD_LAZY
 
-#include "napi_internal.h"
-#include "silver/call.h"
-#include "esm/commonjs.h"
-#include "gc/roots.h"
 #include "sync.h"
+#include "silver/vm.h"
+#include "gc/roots.h"
+#include "internal.h"
+#include "napi_internal.h"
+
+#include "esm/commonjs.h"
+#include "esm/loader.h"
 
 static napi_native_lib_t *g_napi_native_libs = NULL;
 static ant_mutex_t g_napi_native_libs_lock = ANT_MUTEX_INIT;
@@ -71,6 +74,12 @@ static ant_value_t napi_dlopen_common(ant_t *js, ant_value_t module_obj, const c
   
   napi_module *module = lib ? lib->module : g_pending_napi_module;
   ant_mutex_unlock(&g_napi_native_libs_lock);
+
+  ant_value_t file_url = js_esm_make_file_url(js, filename);
+  size_t file_url_len = 0;
+  
+  const char *file_url_str = vtype(file_url) == kTypeString ? js_getstr(js, file_url, &file_url_len) : NULL;
+  if (file_url_str) ((ant_napi_env_t *)env)->module_file_name = intern_string(js, file_url_str, file_url_len);
 
   napi_register_module_v1_fn reg_fn = (napi_register_module_v1_fn)NAPI_DLSYM(handle, "napi_register_module_v1");
   ant_value_t exports = js_get(js, module_obj, "exports");

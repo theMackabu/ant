@@ -1,7 +1,8 @@
 #include "errors.h"
 #include "utf8.h"
 #include "internal.h"
-#include "silver/call.h"
+
+#include "silver/vm.h"
 #include "modules/buffer.h"
 #include "modules/date.h"
 #include "modules/napi.h"
@@ -20,9 +21,7 @@ typedef uint16_t char16_t;
 void ant_napi_link_values(void) {}
 
 static bool napi_get_typedarray_data(
-  ant_t *js,
-  napi_value value,
-  TypedArrayData **out
+  ant_t *js, napi_value value, TypedArrayData **out
 ) {
   TypedArrayData *ta = buffer_get_typedarray_data((ant_value_t)value);
   if (!Ant_Buffer_ViewIsLive(ta)) return false;
@@ -69,6 +68,45 @@ static ant_value_t napi_make_string(ant_t *js, const char *s, size_t len) {
   return js_mkstr(js, s, len);
 }
 
+static size_t napi_utf16_strlen(const char16_t *s) {
+  size_t n = 0;
+  while (s[n]) n++;
+  return n;
+}
+
+static napi_status napi_make_encoded_string(
+  napi_env env, const void *str, size_t byte_len, const char *encoding, napi_value *result
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  ant_value_t out = Ant_Value_Undefined;
+  
+  if (byte_len == 0) out = js_mkstr(nenv->js, "", 0);
+  else if (!buffer_bytes_to_string(nenv->js, (const uint8_t *)str, byte_len, encoding, strlen(encoding), &out))
+    return napi_set_last(env, napi_generic_failure, "string decoding failed");
+
+  if (is_err(out) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, out);
+  *result = NAPI_RETURN(nenv, out);
+  
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+static napi_status napi_make_latin1_string(napi_env env, const char *str, size_t length, napi_value *result) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result || (!str && length != 0))
+    return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  if (length == NAPI_AUTO_LENGTH) length = strlen(str);
+  return napi_make_encoded_string(env, str, length, "latin1", result);
+}
+
+static napi_status napi_make_utf16_string(napi_env env, const char16_t *str, size_t length, napi_value *result) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result || (!str && length != 0))
+    return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  if (length == NAPI_AUTO_LENGTH) length = napi_utf16_strlen(str);
+  if (length > SIZE_MAX / sizeof(char16_t)) return napi_set_last(env, napi_invalid_arg, "string too long");
+  return napi_make_encoded_string(env, str, length * sizeof(char16_t), "utf16le", result);
+}
+
 static bool napi_checked_add_size(size_t a, size_t b, size_t *out) {
   if (a > SIZE_MAX - b) return false;
   *out = a + b;
@@ -82,11 +120,8 @@ static bool napi_checked_mul_size(size_t a, size_t b, size_t *out) {
 }
 
 static bool napi_make_bigint_limbs(
-  ant_t *js,
-  const uint32_t *limbs,
-  size_t count,
-  bool negative,
-  ant_value_t *out
+  ant_t *js, const uint32_t *limbs,
+  size_t count, bool negative, ant_value_t *out
 ) {
   uint32_t zero = 0;
   if (!out) return false;
@@ -1209,5 +1244,260 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_string(
   ant_value_t out = coerce_to_str(nenv->js, (ant_value_t)value);
   if (is_err(out) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, out);
   *result = NAPI_RETURN(nenv, out);
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_create_string_utf16(
+  napi_env env, const char16_t *str, size_t length, napi_value *result
+) {
+  return napi_make_utf16_string(env, str, length, result);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL node_api_create_property_key_latin1(
+  napi_env env, const char *str, size_t length, napi_value *result
+) {
+  return napi_make_latin1_string(env, str, length, result);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL node_api_create_property_key_utf8(
+  napi_env env, const char *str, size_t length, napi_value *result
+) {
+  return napi_create_string_utf8(env, str, length, result);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL node_api_create_property_key_utf16(
+  napi_env env, const char16_t *str, size_t length, napi_value *result
+) {
+  return napi_make_utf16_string(env, str, length, result);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL node_api_create_external_string_latin1(
+  napi_env env, char *str, size_t length,
+  node_api_basic_finalize finalize_callback,
+  void *finalize_hint, napi_value *result, bool *copied
+) {
+  napi_status st = napi_make_latin1_string(env, str, length, result);
+  if (st != napi_ok) return st;
+  if (copied) *copied = true;
+  if (finalize_callback) finalize_callback(env, str, finalize_hint);
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL node_api_create_external_string_utf16(
+  napi_env env, char16_t *str, size_t length,
+  node_api_basic_finalize finalize_callback,
+  void *finalize_hint, napi_value *result, bool *copied
+) {
+  napi_status st = napi_make_utf16_string(env, str, length, result);
+  if (st != napi_ok) return st;
+  if (copied) *copied = true;
+  if (finalize_callback) finalize_callback(env, str, finalize_hint);
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL node_api_symbol_for(
+  napi_env env, const char *utf8description,
+  size_t length, napi_value *result
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result || (!utf8description && length != 0))
+    return napi_set_last(env, napi_invalid_arg, "invalid argument");
+
+  if (length == NAPI_AUTO_LENGTH) length = strlen(utf8description);
+  char *key = (char *)malloc(length + 1);
+  if (!key) return napi_set_last(env, napi_generic_failure, "out of memory");
+  if (length) memcpy(key, utf8description, length);
+  key[length] = '\0';
+
+  ant_value_t sym = js_mksym_for(nenv->js, key);
+  free(key);
+  if (is_err(sym) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, sym);
+
+  *result = NAPI_RETURN(nenv, sym);
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL node_api_create_syntax_error(
+  napi_env env, napi_value code, napi_value msg, napi_value *result
+) {
+  return napi_make_error_object(env, JS_ERR_SYNTAX, msg, result);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_create_dataview(
+  napi_env env, size_t length, napi_value arraybuffer,
+  size_t byte_offset, napi_value *result
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+
+  ArrayBufferData *ab = is_object_type((ant_value_t)arraybuffer)
+    ? buffer_get_arraybuffer_data((ant_value_t)arraybuffer) : NULL;
+  if (!ab || ab->is_detached) return napi_set_last(env, napi_invalid_arg, "arraybuffer expected");
+
+  if (byte_offset > ab->length || length > ab->length - byte_offset) {
+    napi_throw_range_error(
+      env, "ERR_NAPI_INVALID_DATAVIEW_ARGS",
+      "byte_offset + byte_length should be less than or equal to the size in bytes of the array passed in"
+    );
+    return napi_set_last(env, napi_pending_exception, NULL);
+  }
+
+  ant_value_t out = create_dataview_with_buffer(nenv->js, ab, byte_offset, length, (ant_value_t)arraybuffer, false);
+  if (is_err(out) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, out);
+
+  *result = NAPI_RETURN(nenv, out);
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_get_dataview_info(
+  napi_env env, napi_value dataview,
+  size_t *bytelength, void **data,
+  napi_value *arraybuffer, size_t *byte_offset
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
+
+  DataViewData *dv = is_object_type((ant_value_t)dataview)
+    ? buffer_get_dataview_data((ant_value_t)dataview) : NULL;
+  if (!dv) return napi_set_last(env, napi_invalid_arg, "dataview expected");
+
+  uint8_t *bytes; size_t size;
+  Ant_Buffer_GetViewBytes(dv, &bytes, &size);
+  if (bytelength) *bytelength = size;
+  if (data) *data = bytes;
+  if (arraybuffer) *arraybuffer = NAPI_RETURN(nenv, js_get_slot((ant_value_t)dataview, SLOT_DATA));
+  if (byte_offset) *byte_offset = dv->byte_offset;
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_detach_arraybuffer(napi_env env, napi_value arraybuffer) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
+
+  ArrayBufferData *ab = is_object_type((ant_value_t)arraybuffer)
+    ? buffer_get_arraybuffer_data((ant_value_t)arraybuffer) : NULL;
+  if (!ab || ab->is_shared) return napi_set_last(env, napi_arraybuffer_expected, "arraybuffer expected");
+  if (ab->is_detached) return napi_set_last(env, napi_ok, NULL);
+  if (!buffer_can_transfer(ab))
+    return napi_set_last(env, napi_detachable_arraybuffer_expected, "detachable arraybuffer expected");
+
+  buffer_detach(nenv->js, ab);
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_is_detached_arraybuffer(
+  napi_env env, napi_value value, bool *result
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+
+  ArrayBufferData *ab = is_object_type((ant_value_t)value)
+    ? buffer_get_arraybuffer_data((ant_value_t)value) : NULL;
+  *result = ab && ab->is_detached;
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL node_api_create_buffer_from_arraybuffer(
+  napi_env env, napi_value arraybuffer,
+  size_t byte_offset, size_t byte_length, napi_value *result
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+
+  ArrayBufferData *ab = is_object_type((ant_value_t)arraybuffer)
+    ? buffer_get_arraybuffer_data((ant_value_t)arraybuffer) : NULL;
+  if (!ab || ab->is_detached) return napi_set_last(env, napi_arraybuffer_expected, "arraybuffer expected");
+
+  if (byte_offset > ab->length || byte_length > ab->length - byte_offset)
+    return napi_throw_range_error(env, "ERR_OUT_OF_RANGE", "The byte offset + length is out of range");
+
+  ant_value_t out = create_typed_array_with_buffer(
+    nenv->js, TYPED_ARRAY_UINT8,
+    ab, byte_offset, byte_length,
+    nenv->js->builtins.buffer_proto,
+    (ant_value_t)arraybuffer, false
+  );
+  if (is_err(out) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, out);
+
+  *result = NAPI_RETURN(nenv, out);
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL node_api_create_sharedarraybuffer(
+  napi_env env, size_t byte_length, void **data, napi_value *result
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+
+  ant_value_t sab = create_shared_arraybuffer_copy(nenv->js, NULL, byte_length);
+  if (is_err(sab) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, sab);
+
+  if (data) *data = buffer_get_arraybuffer_data(sab)->data;
+  *result = NAPI_RETURN(nenv, sab);
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+void ant_napi_external_sabs_sweep(ant_napi_env_t *nenv, bool teardown) {
+  napi_external_sab_t **pp = &nenv->external_sabs;
+  while (*pp) {
+    napi_external_sab_t *entry = *pp;
+    bool unreferenced = atomic_load(&entry->data->ref_count) == 1;
+    if (!unreferenced && !teardown) {
+      pp = &entry->next;
+      continue;
+    }
+
+    *pp = entry->next;
+    void *bytes = entry->data->data;
+    free_array_buffer_data(nenv->js, entry->data);
+    if (unreferenced && entry->finalize_cb) entry->finalize_cb(bytes, entry->finalize_hint);
+    free(entry);
+  }
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL node_api_create_external_sharedarraybuffer(
+  napi_env env, void *external_data, size_t byte_length,
+  node_api_noenv_finalize finalize_cb,
+  void *finalize_hint, napi_value *result
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result || (!external_data && byte_length != 0))
+    return napi_set_last(env, napi_invalid_arg, "invalid argument");
+
+  napi_external_sab_t *entry = (napi_external_sab_t *)calloc(1, sizeof(*entry));
+  ArrayBufferData *buffer = entry ? create_external_array_buffer_data((uint8_t *)external_data, byte_length) : NULL;
+  if (!buffer) {
+    free(entry);
+    return napi_set_last(env, napi_generic_failure, "out of memory");
+  }
+
+  buffer->is_shared = 1;
+  buffer->ref_count = 1;
+  ant_value_t sab = create_shared_arraybuffer_obj(nenv->js, buffer);
+  if (is_err(sab)) {
+    free_array_buffer_data(nenv->js, buffer);
+    free(entry);
+    return napi_check_pending_from_result(env, sab);
+  }
+
+  entry->data = buffer;
+  entry->finalize_cb = finalize_cb;
+  entry->finalize_hint = finalize_hint;
+  entry->next = nenv->external_sabs;
+  nenv->external_sabs = entry;
+
+  *result = NAPI_RETURN(nenv, sab);
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL node_api_is_sharedarraybuffer(
+  napi_env env, napi_value value, bool *result
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+
+  ArrayBufferData *ab = is_object_type((ant_value_t)value)
+    ? buffer_get_arraybuffer_data((ant_value_t)value) : NULL;
+  *result = ab && ab->is_shared;
   return napi_set_last(env, napi_ok, NULL);
 }

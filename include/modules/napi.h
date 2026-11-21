@@ -104,9 +104,18 @@ typedef enum {
   napi_cannot_run_js,
 } napi_status;
 
+typedef struct {
+  uint64_t lower;
+  uint64_t upper;
+} napi_type_tag;
+
 typedef napi_value(NAPI_CDECL* napi_callback)(napi_env env, napi_callback_info info);
 typedef void(NAPI_CDECL* napi_finalize)(napi_env env, void* finalize_data, void* finalize_hint);
 typedef napi_finalize node_api_basic_finalize;
+
+typedef void(NAPI_CDECL* node_api_noenv_finalize)(void* finalize_data, void* finalize_hint);
+typedef struct napi_async_cleanup_hook_handle__* napi_async_cleanup_hook_handle;
+typedef void(NAPI_CDECL* napi_async_cleanup_hook)(napi_async_cleanup_hook_handle handle, void* data);
 
 typedef struct {
   const char* utf8name;
