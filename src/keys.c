@@ -520,6 +520,23 @@ done:
   return Ant_Value_Undefined;
 }
 
+static ant_value_t for_in_keys_add_interned(
+  ant_t *js, ant_value_t out, ant_value_t seen, const char *interned, bool enumerable
+) {
+  if (lkp_interned(seen, interned).obj) return Ant_Value_Undefined;
+
+  ant_value_t mark = mkprop_interned(js, seen, interned, Ant_Value_True, 0);
+  if (is_err(mark)) return mark;
+
+  if (enumerable && vtype(out) == kTypeArray) {
+    ant_value_t key_val = intern_value(js, interned);
+    if (is_err(key_val)) return key_val;
+    js_arr_push(js, out, key_val);
+  }
+
+  return Ant_Value_Undefined;
+}
+
 static ant_value_t for_in_keys_add_indices(ant_t *js, ant_value_t out, ant_value_t seen, ant_offset_t len) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, out);
@@ -567,7 +584,7 @@ static ant_value_t for_in_keys_collect_ordinary_own(
         if (i >= ptr->prop_count) continue;
         const char *key = prop->key.interned;
         bool enumerable = own_key_is_enumerable(js, obj, ptr, i);
-        r = for_in_keys_add_cstr(js, out, seen, key, intern_length(key), enumerable);
+        r = for_in_keys_add_interned(js, out, seen, key, enumerable);
         if (is_err(r)) return r;
       }
       return Ant_Value_Undefined;
@@ -612,16 +629,11 @@ static ant_value_t for_in_keys_collect_ordinary_own(
     if (!prop) continue;
     const char *key = prop->key.interned;
     bool enumerable = own_key_is_enumerable(js, obj, ptr, indices.items[i].slot);
-    r = for_in_keys_add_cstr(js, out, seen, key, intern_length(key), enumerable);
+    r = for_in_keys_add_interned(js, out, seen, key, enumerable);
   }
 
   own_index_list_free(&indices);
   if (is_err(r)) return r;
-
-  if (is_arr) {
-    r = for_in_keys_add_cstr(js, out, seen, "length", 6, false);
-    if (is_err(r)) return r;
-  }
 
   for (uint32_t i = 0; i < count; i++) {
     const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
@@ -633,11 +645,11 @@ static ant_value_t for_in_keys_collect_ordinary_own(
     if (own_key_is_array_index(key, key_len, NULL)) continue;
 
     bool enumerable = own_key_is_enumerable(js, obj, ptr, i);
-    r = for_in_keys_add_cstr(js, out, seen, key, key_len, enumerable);
+    r = for_in_keys_add_interned(js, out, seen, key, enumerable);
     if (is_err(r)) return r;
   }
 
-  return Ant_Value_Undefined;
+  return is_arr ? for_in_keys_add_cstr(js, out, seen, "length", 6, false) : Ant_Value_Undefined;
 }
 
 static ant_value_t for_in_keys_add_exotic_indices(
@@ -701,13 +713,13 @@ static ant_value_t for_in_keys_collect_proxy(
 }
 
 static inline ant_value_t for_in_keys_collect_chain(
-  ant_t *js, ant_value_t out, ant_value_t seen, ant_value_t obj
+  ant_t *js, ant_value_t out, ant_value_t seen, ant_value_t obj, uint32_t max_levels
 ) {
   ant_value_t cur = obj;
   uint32_t proxy_hops = 0;
   GC_ROOT_PIN(js, cur);
 
-  while (is_object_type(cur)) {
+  for (uint32_t level = 0; level < max_levels && is_object_type(cur); level++) {
     GC_ROOT_SAVE(iter_mark, js);
     ant_value_t as_cur = (vtype(cur) == kTypeFunction) ? js_func_obj(cur) : cur;
     
@@ -754,46 +766,323 @@ static inline ant_value_t for_in_keys_collect_chain(
   return out;
 }
 
-ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj) {
-  GC_ROOT_SAVE(root_mark, js);
-  uint8_t t = vtype(obj);
-  ant_value_t out = Ant_Array_Create(js);
-  ant_value_t result = out;
-  
-  GC_ROOT_PIN(js, obj);
-  GC_ROOT_PIN(js, out);
-  
-  if (t == kTypeNull || t == kTypeUndefined) goto done;
+static constexpr uint32_t FOR_IN_PLAN_LEVELS = 16;
 
-  ant_value_t seen = mkobj(js, 0);
-  GC_ROOT_PIN(js, seen);
+typedef struct {
+  ant_value_t value;
+  ant_object_t *ptr;
+  bool is_arr;
+  bool has_enumerable;
+} for_in_level_t;
 
-  if (t == kTypeString) {
-    result = for_in_keys_add_indices(js, out, seen, str_utf16_len(js, obj));
-    if (is_err(result)) goto done;
-    result = out;
-    goto done;
+typedef struct {
+  for_in_level_t levels[FOR_IN_PLAN_LEVELS];
+  ant_offset_t indexed;
+  uint32_t depth;
+  uint32_t visit;
+  bool bounded;
+  bool simple;
+  bool cacheable;
+} for_in_plan_t;
+
+static inline uint32_t for_in_own_count(const ant_object_t *ptr) {
+  uint32_t count = ant_shape_count(ptr->shape);
+  return count < ptr->prop_count ? count : ptr->prop_count;
+}
+
+static bool for_in_shape_has_enumerable(const ant_object_t *ptr) {
+  uint32_t count = for_in_own_count(ptr);
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+    if (prop && prop->type == ANT_SHAPE_KEY_STRING && (prop->attrs & ANT_PROP_ATTR_ENUMERABLE)) return true;
   }
+  return false;
+}
+
+static void for_in_plan(ant_t *js, ant_value_t obj, for_in_plan_t *plan) {
+  plan->indexed = 0;
+  plan->depth = 0;
+  plan->visit = 1;
+  plan->bounded = false;
+  plan->simple = true;
+  plan->cacheable = true;
+
+  ant_value_t cur = obj;
+  for (uint32_t depth = 0; depth < FOR_IN_PLAN_LEVELS; depth++) {
+    uint8_t t = vtype(cur);
+    if (is_proxy(cur)) return;
+
+    ant_value_t as_cur = t == kTypeFunction ? js_func_obj(cur) : cur;
+    ant_object_t *ptr = js_obj_ptr(as_cur);
+    if (!ptr || !ptr->shape) return;
+
+    bool is_arr = t == kTypeArray;
+    bool exotic = ptr->flags.is_exotic;
+    bool ordinary = (is_arr || t == kTypeObject || t == kTypeFunction) && !exotic;
+    bool indexed = false;
+    ant_offset_t elems = 0;
+
+    if (is_arr) {
+      if (ordinary) elems = dense_iterable_length(js, as_cur);
+    } else if (t == kTypeObject && exotic) {
+      TypedArrayData *typed = buffer_get_typedarray_data(as_cur);
+      indexed = typed != NULL;
+      if (Ant_Buffer_ViewIsLive(typed)) elems = (ant_offset_t)typed->length;
+    } else if (ordinary && t == kTypeObject && ptr->extra_slots) {
+      ant_value_t prim = js_string_wrapper_value(as_cur);
+      indexed = vtype(prim) == kTypeString;
+      if (indexed) elems = str_utf16_len(js, prim);
+    }
+
+    bool has_enumerable = depth == 0 || for_in_shape_has_enumerable(ptr);
+    bool index_keys = ant_shape_may_have_index_keys(ptr->shape);
+    bool simple = depth == 0
+      ? (indexed ? !index_keys : ordinary)
+      : ordinary && elems == 0 && !(has_enumerable && index_keys);
+
+    if (!simple) plan->simple = false;
+    if (is_arr || indexed) plan->cacheable = false;
+    if (depth == 0 && indexed) plan->indexed = elems;
+    if (depth == 0 || !ordinary || has_enumerable || elems > 0) plan->visit = depth + 1;
+
+    plan->levels[depth] = (for_in_level_t){ as_cur, ptr, is_arr, has_enumerable };
+    plan->depth = depth + 1;
+
+    ant_value_t proto = ant_object_proto(ptr);
+    if (!is_object_type(proto) && vtype(proto) != kTypeNull) proto = js_get_proto(js, cur);
+    if (!is_object_type(proto)) { plan->bounded = true; return; }
+    cur = proto;
+  }
+}
+
+static inline ant_value_t for_in_index_key(ant_t *js, ant_offset_t index) {
+  if (index < 10) return js_mk_ascii_char_cached(js, (unsigned char)('0' + index));
+  char idx[24];
+  size_t idx_len = uint_to_str(idx, sizeof(idx), (uint64_t)index);
+  return js_mkstr(js, idx, idx_len);
+}
+
+static inline bool for_in_own_enumerable(ant_t *js, const for_in_level_t *level, const ant_shape_prop_t *prop, uint32_t slot) {
+  if (!prop || prop->type != ANT_SHAPE_KEY_STRING) return false;
+  if (level->ptr->flags.is_exotic) return own_key_is_enumerable(js, level->value, level->ptr, slot);
+  return (prop->attrs & ANT_PROP_ATTR_ENUMERABLE) != 0;
+}
+
+static bool for_in_emit_own(ant_t *js, object_enum_sink_t *sink, const for_in_level_t *level) {
+  ant_object_t *ptr = level->ptr;
+  uint32_t count = for_in_own_count(ptr);
+
+  if (!ant_shape_may_have_index_keys(ptr->shape)) {
+    for (uint32_t i = 0; i < count; i++) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+      if (!for_in_own_enumerable(js, level, prop, i)) continue;
+      object_enum_emit(js, sink, intern_value(js, prop->key.interned));
+    }
+    return true;
+  }
+
+  own_index_list_t indices;
+  own_index_list_init(&indices);
+
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+    if (!for_in_own_enumerable(js, level, prop, i)) continue;
+
+    const char *key = prop->key.interned;
+    size_t key_len = intern_length(key);
+    unsigned long parsed = 0;
+    
+    if (!own_key_is_array_index(key, key_len, &parsed)) continue;
+    if (level->is_arr && own_key_is_dense_shadow(js, level->value, key, key_len)) continue;
+    
+    if (!own_index_list_push(&indices, i, parsed)) {
+      own_index_list_free(&indices);
+      return false;
+    }
+  }
+
+  own_index_keys_sort(indices.items, indices.count);
+  for (uint32_t i = 0; i < indices.count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, indices.items[i].slot);
+    if (prop) object_enum_emit(js, sink, intern_value(js, prop->key.interned));
+  }
+  own_index_list_free(&indices);
+
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+    if (!for_in_own_enumerable(js, level, prop, i)) continue;
+    const char *key = prop->key.interned;
+    if (own_key_is_array_index(key, intern_length(key), NULL)) continue;
+    object_enum_emit(js, sink, intern_value(js, key));
+  }
+
+  return true;
+}
+
+static bool for_in_key_shadowed(ant_t *js, const for_in_plan_t *plan, uint32_t below, const char *key) {
+  for (uint32_t i = 0; i < below; i++) {
+    const for_in_level_t *level = &plan->levels[i];
+    int32_t slot = ant_shape_lookup_interned(level->ptr->shape, key);
+    if (slot >= 0 && (uint32_t)slot < level->ptr->prop_count) return true;
+    if (level->is_arr && key == js->intern.length) return true;
+  }
+  return false;
+}
+
+static ant_value_t for_in_collect_simple(ant_t *js, const for_in_plan_t *plan) {
+  const for_in_level_t *own = &plan->levels[0];
+  ant_offset_t doff = own->is_arr ? get_dense_buf(own->value) : 0;
+  ant_offset_t elems = doff ? dense_iterable_length(js, own->value) : plan->indexed;
+
+  object_enum_sink_t sink;
+  sink.error = Ant_Value_Undefined;
+  sink.count = 0;
+  sink.spilled = false;
+
+  uint64_t want = (uint64_t)elems + ant_shape_count(own->ptr->shape);
+  sink.hint = want > UINT32_MAX ? UINT32_MAX : (uint32_t)want;
+
+  if (elems) {
+    object_enum_spill(js, &sink);
+    if (is_err(sink.error)) return sink.error;
+  }
+
+  for (ant_offset_t i = 0; i < elems; i++) {
+    if (doff && is_empty_slot(dense_get(doff, i))) continue;
+    object_enum_emit(js, &sink, for_in_index_key(js, i));
+  }
+
+  if (!for_in_emit_own(js, &sink, own)) return js_mkerr(js, "oom");
+
+  for (uint32_t depth = 1; depth < plan->visit; depth++) {
+    const for_in_level_t *level = &plan->levels[depth];
+    if (!level->has_enumerable) continue;
+
+    uint32_t count = for_in_own_count(level->ptr);
+    for (uint32_t i = 0; i < count; i++) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(level->ptr->shape, i);
+      if (!prop || prop->type != ANT_SHAPE_KEY_STRING || !(prop->attrs & ANT_PROP_ATTR_ENUMERABLE)) continue;
+      if (for_in_key_shadowed(js, plan, depth, prop->key.interned)) continue;
+      object_enum_emit(js, &sink, intern_value(js, prop->key.interned));
+    }
+  }
+
+  if (is_err(sink.error)) return sink.error;
+  return sink.spilled ? sink.arr : mkarr_dense_literal_capacity(js, sink.items, sink.count, true);
+}
+
+static inline ant_for_in_cache_t *for_in_cache_entry(ant_t *js, const ant_shape_t *shape) {
+  uintptr_t bits = (uintptr_t)shape;
+  return &js->runtime_cache.for_in[((bits >> 4) ^ (bits >> 10)) & (ANT_FOR_IN_CACHE_SIZE - 1)];
+}
+
+static inline bool for_in_cache_hit(ant_t *js, const ant_object_t *ptr, ant_value_t *keys) {
+  if (!ptr->shape) return false;
+  const ant_for_in_cache_t *entry = for_in_cache_entry(js, ptr->shape);
+
+  if (
+    entry->shape != ptr->shape ||
+    entry->ic_epoch != js->ic.epoch ||
+    entry->prop_count != ptr->prop_count
+  ) return false;
+
+  *keys = entry->keys;
+  return true;
+}
+
+static void for_in_cache_store(ant_t *js, const for_in_plan_t *plan, ant_value_t keys) {
+  ant_object_t *ptr = plan->levels[0].ptr;
+  if (!ant_shape_appends_transition(ptr->shape)) return;
+
+  for (uint32_t depth = 1; depth < plan->depth; depth++)
+    ant_object_guard_absence(plan->levels[depth].ptr);
+
+  ant_for_in_cache_t *entry = for_in_cache_entry(js, ptr->shape);
+  ant_shape_retain(ptr->shape);
+  if (entry->shape) ant_shape_release(entry->shape);
+
+  entry->shape = ptr->shape;
+  entry->keys = keys;
+  entry->ic_epoch = js->ic.epoch;
+  entry->prop_count = ptr->prop_count;
+}
+
+void js_for_in_cache_clear(ant_t *js) {
+  for (uint32_t i = 0; i < ANT_FOR_IN_CACHE_SIZE; i++) {
+    ant_for_in_cache_t *entry = &js->runtime_cache.for_in[i];
+    if (entry->shape) ant_shape_release(entry->shape);
+    *entry = (ant_for_in_cache_t){0};
+  }
+}
+
+static ant_value_t for_in_string_keys(ant_t *js, ant_value_t str) {
+  ant_offset_t len = str_utf16_len(js, str);
+  ant_value_t out = alloc_array_with_proto_capacity(js, js->sym.array_proto, len ? (uint32_t)len : 1, 0, false);
+  if (is_err(out)) return out;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, out);
+  for (ant_offset_t i = 0; i < len; i++) js_arr_push(js, out, for_in_index_key(js, i));
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  return out;
+}
+
+static __attribute__((noinline)) ant_value_t for_in_keys_collect(ant_t *js, ant_value_t obj) {
+  uint8_t t = vtype(obj);
+  if (t == kTypeNull || t == kTypeUndefined) return Ant_Array_Create(js);
+  if (t == kTypeString) return for_in_string_keys(js, obj);
 
   if (t == kTypeBuiltin) {
     ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
-    if (vtype(promoted) != kTypeFunction) goto done;
+    if (vtype(promoted) != kTypeFunction) return Ant_Array_Create(js);
     obj = promoted;
     t = kTypeFunction;
   }
 
-  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) goto done;
-  
-  if (is_proxy(obj) && js_proxy_is_host(obj)) {
-    result = proxy_enum(js, obj, OBJ_ENUM_KEYS);
-    goto done;
-  }
-  
-  result = for_in_keys_collect_chain(js, out, seen, obj);
+  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return Ant_Array_Create(js);
+  if (is_proxy(obj) && js_proxy_is_host(obj)) return proxy_enum(js, obj, OBJ_ENUM_KEYS);
 
-done:
+  if (t == kTypeFunction) {
+    const ant_object_t *ptr = js_obj_ptr(js_func_obj(obj));
+    ant_value_t keys;
+    if (ptr && for_in_cache_hit(js, ptr, &keys)) return keys;
+  }
+
+  for_in_plan_t plan;
+  for_in_plan(js, obj, &plan);
+
+  if (plan.bounded && plan.simple) {
+    ant_value_t keys = for_in_collect_simple(js, &plan);
+    if (plan.cacheable && !is_err(keys)) for_in_cache_store(js, &plan, keys);
+    return keys;
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t out = Ant_Array_Create(js);
+  GC_ROOT_PIN(js, obj);
+  GC_ROOT_PIN(js, out);
+
+  ant_value_t seen = mkobj(js, 0);
+  GC_ROOT_PIN(js, seen);
+
+  ant_value_t result = for_in_keys_collect_chain(js, out, seen, obj, plan.bounded ? plan.visit : UINT32_MAX);
   GC_ROOT_RESTORE(js, root_mark);
+  
   return result;
+}
+
+ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj) {
+  if (vtype(obj) == kTypeObject) {
+    const ant_object_t *ptr = (const ant_object_t *)vptr(obj);
+    ant_value_t keys;
+    if (
+      for_in_cache_hit(js, ptr, &keys) &&
+      (!ptr->extra_slots || vtype(js_string_wrapper_value(obj)) != kTypeString)
+    ) return keys;
+  }
+
+  return for_in_keys_collect(js, obj);
 }
 
 static bool copy_key_of(ant_t *js, ant_value_t key, copy_key_t *out) {
@@ -900,6 +1189,34 @@ bool chain_lacks_plain_keys(ant_value_t start, const char *first, const char *se
     start = ant_object_proto(ptr);
   }
   
+  return false;
+}
+
+bool chain_plain_get_interned(ant_value_t start, const char *interned, ant_value_t *out) {
+  for (int depth = 0; depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
+    uint8_t type = vtype(start);
+    if (type != kTypeObject && type != kTypeFunction) return false;
+
+    ant_object_t *ptr = js_obj_ptr(js_as_obj(start));
+    if (!ptr || !ptr->shape || ptr->flags.is_exotic) return false;
+
+    int32_t slot = interned ? ant_shape_lookup_interned(ptr->shape, interned) : -1;
+    if (slot >= 0) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, (uint32_t)slot);
+      if (!prop || prop->has_getter || prop->has_setter || (uint32_t)slot >= ptr->prop_count) return false;
+      *out = ant_object_prop_get_unchecked(ptr, (uint32_t)slot);
+      return true;
+    }
+
+    ant_value_t proto = ant_object_proto(ptr);
+    if (!is_object_type(proto)) {
+      if (vtype(proto) != kTypeNull && (type != kTypeObject || vtype(proto) != kTypeUndefined)) return false;
+      *out = Ant_Value_Undefined;
+      return true;
+    }
+    start = proto;
+  }
+
   return false;
 }
 
