@@ -12,7 +12,7 @@ static inline ant_value_t sv_module_export_to_ns(
   if (vtype(module_ns) != kTypeObject)
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "export used outside module");
 
-  ant_value_t set_res = setprop_cstr(js, module_ns, name, len, value);
+  ant_value_t set_res = setprop_cstr_attrs(js, module_ns, name, len, value, ANT_PROP_ATTR_ENUMERABLE);
   if (is_err(set_res)) return set_res;
 
   if (len == 7 && memcmp(name, "default", 7) == 0)
@@ -257,11 +257,13 @@ static inline ant_value_t sv_op_export_all(sv_vm_t *vm, ant_t *js) {
   ant_value_t value = Ant_Value_Undefined;
 
   while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
+    if (esm_export_star_skips(js, key, key_len)) continue;
     ant_value_t export_res = sv_module_export_cstr(js, key, key_len, value);
     if (is_err(export_res)) { js_prop_iter_end(&iter); vm->sp--; return export_res; }
   }
   
   js_prop_iter_end(&iter);
+  esm_export_star_finish(js);
   vm->sp--;
   
   return Ant_Value_FromNumber(0);

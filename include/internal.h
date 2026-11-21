@@ -109,6 +109,10 @@ static inline bool sv_literal_is_child(ant_value_t value) {
   return (value & SV_LITERAL_CHILD_MASK) == SV_LITERAL_CHILD_TAG;
 }
 
+static inline void ant_absence_epoch_bump(ant_t *js) {
+  if (++js->absence_epoch == 0) js->absence_epoch = 1;
+}
+
 static inline void ant_object_invalidate_guarded_absence(ant_t *js, ant_object_t *obj) {
   if (!obj) return;
   
@@ -116,6 +120,7 @@ static inline void ant_object_invalidate_guarded_absence(ant_t *js, ant_object_t
   if (!obj->flags.guards_absence) return;
   
   obj->flags.guards_absence = 0;
+  ant_absence_epoch_bump(js);
   ant_ic_epoch_bump(js);
 }
 
@@ -282,6 +287,7 @@ ant_value_t mkprop_interned_exact(ant_t *js, ant_value_t obj, const char *intern
 ant_value_t mkprop_append_fast(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 
 ant_value_t setprop_cstr(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
+ant_value_t setprop_cstr_attrs(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v, uint8_t attrs);
 ant_value_t setprop_interned(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 
 ant_value_t js_codegen_refused(ant_t *js);
@@ -587,6 +593,13 @@ static inline int js_brand_id(ant_value_t obj) {
 
 static inline bool js_check_brand(ant_value_t obj, int brand) {
   return js_brand_id(obj) == brand;
+}
+
+bool js_is_namespace_object(ant_value_t obj);
+
+static inline __attribute__((always_inline)) bool js_is_sealed_namespace(ant_value_t obj, const ant_object_t *ptr) {
+  if (__builtin_expect((ptr->flags.raw & (ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_FROZEN)) != 0, 1)) return false;
+  return !is_object_type(ant_object_proto(ptr)) && js_is_namespace_object(obj);
 }
 
 static inline bool lookup_symbol_prop_meta(ant_t *js, ant_value_t cur_obj, ant_offset_t sym_off, prop_meta_t *out) {

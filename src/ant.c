@@ -114,6 +114,7 @@ static ant_t *isolate_init(void *buf, size_t len, const ant_isolate_options_t *o
   js->gc_use_nursery_major_floor = true;
   
   js->ic.epoch = 1;
+  js->absence_epoch = 1;
   js->ic.obj_epoch = 1;
   gc_state_init(js);
   

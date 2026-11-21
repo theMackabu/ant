@@ -208,6 +208,8 @@ struct ant_isolate_t {
   
   uint32_t prototype_write_epoch;
   uint32_t array_chain_plain_epoch;
+  uint32_t proxy_proto_plain_epoch;
+  uint32_t absence_epoch;
   uint32_t protectors_invalid;
 
   struct {
@@ -336,6 +338,7 @@ struct ant_isolate_t {
     const char *get_own_property_descriptor;
     const char *module_cache;
     const char *idx[INTERN_INDEX_CACHE_SIZE];
+    const char *proxy_traps[13];
   } intern;
 
   ant_value_t exception;

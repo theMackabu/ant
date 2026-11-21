@@ -1246,6 +1246,40 @@ bool ant_shape_set_attrs_symbol(ant_t *js, ant_shape_t *shape, ant_offset_t sym_
   return true;
 }
 
+bool ant_shape_clear_attrs_all(ant_t *js, ant_shape_t *shape, uint8_t clear) {
+  uint32_t count = shape->count;
+  uint32_t i = 0;
+  while (i < count && (shape->props[i].type == ANT_SHAPE_KEY_DELETED || !(shape->props[i].attrs & clear))) i++;
+  if (i == count) return true;
+  if (!shape_prepare_metadata_write(shape)) return false;
+  for (; i < count; i++) {
+    if (shape->props[i].type != ANT_SHAPE_KEY_DELETED) shape->props[i].attrs &= (uint8_t)~clear;
+  }
+  ant_ic_epoch_bump(js);
+  return true;
+}
+
+bool ant_shape_permute(ant_t *js, ant_shape_t *shape, const uint32_t *order) {
+  uint32_t count = shape->count;
+  if (shape->deleted_count || !shape_prepare_metadata_write(shape)) return false;
+
+  ant_shape_prop_t *moved = malloc((size_t)count * sizeof(*moved));
+  if (!moved) return false;
+  memcpy(moved, shape->props, (size_t)count * sizeof(*moved));
+
+  for (uint32_t slot = 0; slot < count; slot++) {
+    ant_shape_prop_t *prop = &shape->props[slot];
+    *prop = moved[order[slot]];
+    uint64_t key = prop->type == ANT_SHAPE_KEY_SYMBOL ? shape_key_symbol(prop->key.sym_off) : shape_key_interned(prop->key.interned);
+    shape_index_entry_t *entry = shape_lookup(shape, key);
+    if (entry) entry->slot = slot;
+  }
+
+  free(moved);
+  ant_ic_epoch_bump(js);
+  return true;
+}
+
 uint8_t ant_shape_get_attrs(const ant_shape_t *shape, uint32_t slot) {
   const ant_shape_prop_t *prop = ant_shape_prop_at(shape, slot);
   return prop ? prop->attrs : ANT_PROP_ATTR_DEFAULT;
