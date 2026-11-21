@@ -1801,17 +1801,19 @@ static void esm_module_record_cleanup(ant_t *js, esm_module_record_t *record) {
 }
 
 static sv_func_t *esm_compile_parsed_record(
-  ant_t *js, esm_module_record_t *record, const char *filename,
+  ant_t *js, esm_module_record_t *record, ant_module_t *eval_ctx, const char *filename,
   const char *source, size_t source_len
 ) {
   const char *prev_filename = js->filename;
   js_set_filename(js, filename);
+  js_module_eval_ctx_push(js, eval_ctx);
   
   sv_func_t *func = js_compile_parsed_bytecode(
     js, record->program, source,
     source_len, SV_COMPILE_MODULE, 0
   );
   
+  js_module_eval_ctx_pop(js, eval_ctx);
   esm_module_record_cleanup(js, record);
   js_set_filename(js, prev_filename);
   
@@ -2297,7 +2299,7 @@ static ant_value_t esm_evaluate_esm_record(
     return loaded;
   }
   
-  sv_func_t *func = esm_compile_parsed_record(js, record, mod->resolved_path, source, source_len);
+  sv_func_t *func = esm_compile_parsed_record(js, record, eval_ctx, mod->resolved_path, source, source_len);
   free(source);
   
   ant_value_t result = Ant_Value_Undefined;

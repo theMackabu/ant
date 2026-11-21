@@ -1,4 +1,7 @@
 import assert from 'node:assert';
+import * as self from './test_dynamic_import_order.mjs';
+
+export const ownExport = 1;
 
 const log = globalThis.dynamicImportOrderLog = [];
 
@@ -61,5 +64,10 @@ assert.strictEqual(await settleOrder('node:path'), 'first second import');
 assert.strictEqual(await settleOrder('node:string_decoder'), 'first second import');
 assert.strictEqual(await settleOrder('data:text/javascript,export const fresh = 1;'), 'first second import');
 assert.strictEqual(await settleOrder('data:text/javascript,export const fresh = 1;'), 'first second import');
+
+await import('data:text/javascript,export const leaked = 1; export default 2; export function alsoLeaked() {}');
+await import('./fixtures/dynamic_import_order/nested.mjs');
+assert.deepStrictEqual(Object.keys(self), ['ownExport']);
+assert.strictEqual('leaked' in self, false);
 
 console.log('ok');
