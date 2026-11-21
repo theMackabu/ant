@@ -17,9 +17,10 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_reference(
   if (!ref) return napi_set_last(env, napi_generic_failure, "out of memory");
 
   ref->env = nenv;
-  ref->value = value;
+  ref->value = napi_js(value);
+  ref->live = true;
   ref->refcount = initial_refcount;
-  ref->ref_val = (initial_refcount > 0) ? (ant_value_t)value : Ant_Value_Undefined;
+  ref->ref_val = (initial_refcount > 0) ? napi_js(value) : Ant_Value_Undefined;
 
   ref->prev = NULL;
   ref->next = nenv->refs;
@@ -58,12 +59,12 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_reference_ref(
   if (!nenv || !nenv->js || !r)
     return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
-  if (!r->value) {
+  if (!r->live) {
     if (result) *result = 0;
     return napi_set_last(env, napi_ok, NULL);
   }
 
-  if (r->refcount == 0) r->ref_val = (ant_value_t)r->value;
+  if (r->refcount == 0) r->ref_val = r->value;
   r->refcount++;
   if (result) *result = r->refcount;
 
@@ -97,7 +98,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_reference_value(
   if (!nenv || !nenv->js || !r || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
   if (r->refcount > 0) *result = NAPI_RETURN(nenv, r->ref_val);
-  else *result = r->value ? NAPI_RETURN(nenv, r->value) : 0;
+  else *result = r->live ? NAPI_RETURN(nenv, r->value) : (napi_value){0};
 
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -175,7 +176,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_escape_handle(
   if (!nenv || !nenv->js || !esc || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
   if (esc->escaped) return napi_set_last(env, napi_escape_called_twice, "escape already called");
   esc->escaped = true;
-  esc->escaped_val = (ant_value_t)escapee;
+  esc->escaped_val = napi_js(escapee);
   gc_push_root(nenv->js, &esc->escaped_val);
   *result = escapee;
   return napi_set_last(env, napi_ok, NULL);

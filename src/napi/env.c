@@ -153,9 +153,9 @@ void gc_mark_napi(ant_t *js, gc_mark_fn mark) {
     mark(js, nenv->exception);
 
   for (struct napi_ref__ *r = nenv->refs; r; r = r->next) {
-    ant_value_t weak = (ant_value_t)r->value;
+    ant_value_t weak = r->value;
     if (r->refcount > 0) mark(js, r->ref_val);
-    else if (r->value && !napi_ref_weakly_held(weak) && gc_value_is_heap_ref(weak)) mark(js, weak);
+    else if (r->live && !napi_ref_weakly_held(weak) && gc_value_is_heap_ref(weak)) mark(js, weak);
   }
 
   for (struct napi_deferred__ *d = nenv->deferreds; d; d = d->next)
@@ -174,14 +174,13 @@ void gc_clear_napi_weak_refs(ant_t *js, gc_weak_key_alive_fn alive) {
   ant_napi_external_sabs_sweep(nenv, false);
 
   for (struct napi_ref__ *r = nenv->refs; r; r = r->next) {
-    if (r->refcount > 0 || !r->value) continue;
-    ant_value_t value = (ant_value_t)r->value;
-    if (napi_ref_weakly_held(value) && !alive(js, value)) r->value = 0;
+    if (r->refcount > 0 || !r->live) continue;
+    if (napi_ref_weakly_held(r->value) && !alive(js, r->value)) r->live = false;
   }
 }
 
-napi_value ant_napi_scope_pin(ant_napi_env_t *nenv, napi_value val) {
-  ant_value_t v = (ant_value_t)val;
+napi_value ant_napi_scope_pin(ant_napi_env_t *nenv, ant_value_t v) {
+  napi_value val = napi_handle(v);
   if (!nenv || !is_object_type(v)) return val;
 
   if (nenv->handle_slots_len >= nenv->handle_slots_cap) {
@@ -206,7 +205,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_throw(napi_env env, napi_value error) {
   if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
   if (is_err(nenv->exception) || Ant_Exception_Pending(nenv->js))
     return napi_set_last(env, napi_pending_exception, "pending exception");
-  napi_mark_pending_exception(env, js_throw(nenv->js, (ant_value_t)error));
+  napi_mark_pending_exception(env, js_throw(nenv->js, napi_js(error)));
   return napi_set_last_raw(env, napi_ok, NULL);
 }
 
@@ -285,7 +284,7 @@ static napi_status napi_throw_with_message(
   if (is_err(error))
     return napi_set_last(env, napi_generic_failure, "failed to create error");
 
-  return napi_throw(env, (napi_value)error);
+  return napi_throw(env, napi_handle(error));
 }
 
 NAPI_EXTERN napi_status NAPI_CDECL napi_throw_error(
@@ -371,10 +370,10 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_run_script(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (vtype((ant_value_t)script) != kTypeString) return napi_set_last(env, napi_string_expected, "script must be string");
+  if (vtype(napi_js(script)) != kTypeString) return napi_set_last(env, napi_string_expected, "script must be string");
 
   size_t len = 0;
-  const char *src = js_getstr(nenv->js, (ant_value_t)script, &len);
+  const char *src = js_getstr(nenv->js, napi_js(script), &len);
   if (!src) return napi_set_last(env, napi_string_expected, "script must be string");
 
   ant_value_t out = js_eval_bytecode_eval(nenv->js, src, len, false);

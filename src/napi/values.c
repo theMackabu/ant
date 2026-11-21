@@ -23,7 +23,7 @@ void ant_napi_link_values(void) {}
 static bool napi_get_typedarray_data(
   ant_t *js, napi_value value, TypedArrayData **out
 ) {
-  TypedArrayData *ta = buffer_get_typedarray_data((ant_value_t)value);
+  TypedArrayData *ta = buffer_get_typedarray_data(napi_js(value));
   if (!Ant_Buffer_ViewIsLive(ta)) return false;
   *out = ta;
   return true;
@@ -161,7 +161,7 @@ static bool napi_make_bigint_limbs(
 }
 
 static const napi_bigint_payload_t *napi_bigint_payload(napi_value value) {
-  return (const napi_bigint_payload_t *)vptr((ant_value_t)value);
+  return (const napi_bigint_payload_t *)vptr(napi_js(value));
 }
 
 static const uint32_t *napi_bigint_limbs(napi_value value, size_t *count) {
@@ -218,7 +218,7 @@ static napi_status napi_make_error_object(
   }
 
   ant_t *js = nenv->js;
-  ant_value_t message = (ant_value_t)msg;
+  ant_value_t message = napi_js(msg);
   if (vtype(message) != kTypeString) {
     message = coerce_to_str(js, message);
     if (is_err(message)) return napi_check_pending_from_result(env, message);
@@ -238,13 +238,13 @@ static napi_status napi_make_error_object(
 
 NAPI_EXTERN napi_status NAPI_CDECL napi_get_undefined(napi_env env, napi_value *result) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = (napi_value)Ant_Value_Undefined;
+  *result = napi_handle(Ant_Value_Undefined);
   return napi_set_last(env, napi_ok, NULL);
 }
 
 NAPI_EXTERN napi_status NAPI_CDECL napi_get_null(napi_env env, napi_value *result) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = (napi_value)Ant_Value_Null;
+  *result = napi_handle(Ant_Value_Null);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -257,7 +257,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_global(napi_env env, napi_value *res
 
 NAPI_EXTERN napi_status NAPI_CDECL napi_get_boolean(napi_env env, bool value, napi_value *result) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = (napi_value)Ant_Value_FromBool(value);
+  *result = napi_handle(Ant_Value_FromBool(value));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -295,25 +295,25 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_array_with_length(
 
 NAPI_EXTERN napi_status NAPI_CDECL napi_create_double(napi_env env, double value, napi_value *result) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = (napi_value)Ant_Value_FromNumber(value);
+  *result = napi_handle(Ant_Value_FromNumber(value));
   return napi_set_last(env, napi_ok, NULL);
 }
 
 NAPI_EXTERN napi_status NAPI_CDECL napi_create_int32(napi_env env, int32_t value, napi_value *result) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = (napi_value)Ant_Value_FromNumber((double)value);
+  *result = napi_handle(Ant_Value_FromNumber((double)value));
   return napi_set_last(env, napi_ok, NULL);
 }
 
 NAPI_EXTERN napi_status NAPI_CDECL napi_create_uint32(napi_env env, uint32_t value, napi_value *result) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = (napi_value)Ant_Value_FromNumber((double)value);
+  *result = napi_handle(Ant_Value_FromNumber((double)value));
   return napi_set_last(env, napi_ok, NULL);
 }
 
 NAPI_EXTERN napi_status NAPI_CDECL napi_create_int64(napi_env env, int64_t value, napi_value *result) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = (napi_value)Ant_Value_FromNumber((double)value);
+  *result = napi_handle(Ant_Value_FromNumber((double)value));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -443,10 +443,10 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_symbol(
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
   const char *desc = NULL;
-  if (vtype((ant_value_t)description) == kTypeString) {
-    desc = js_getstr(nenv->js, (ant_value_t)description, NULL);
-  } else if (!is_undefined((ant_value_t)description) && !is_null((ant_value_t)description)) {
-    ant_value_t s = coerce_to_str(nenv->js, (ant_value_t)description);
+  if (vtype(napi_js(description)) == kTypeString) {
+    desc = js_getstr(nenv->js, napi_js(description), NULL);
+  } else if (!napi_is_empty(description) && !is_undefined(napi_js(description)) && !is_null(napi_js(description))) {
+    ant_value_t s = coerce_to_str(nenv->js, napi_js(description));
     if (is_err(s) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, s);
     desc = js_getstr(nenv->js, s, NULL);
   }
@@ -506,7 +506,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_promise(
   nenv->deferreds = def;
 
   *deferred = (napi_deferred)def;
-  *promise = (napi_value)p;
+  *promise = napi_handle(p);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -522,7 +522,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_resolve_deferred(
   }
 
   ant_value_t promise = def->promise_val;
-  js_resolve_promise(nenv->js, promise, (ant_value_t)resolution);
+  js_resolve_promise(nenv->js, promise, napi_js(resolution));
   def->settled = true;
   def->promise_val = Ant_Value_Undefined;
 
@@ -545,7 +545,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_reject_deferred(
   }
 
   ant_value_t promise = def->promise_val;
-  js_reject_promise(nenv->js, promise, (ant_value_t)rejection);
+  js_reject_promise(nenv->js, promise, napi_js(rejection));
   def->settled = true;
   def->promise_val = Ant_Value_Undefined;
 
@@ -675,11 +675,11 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_typedarray(
   napi_value *result
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !nenv->js || !result || !is_object_type((ant_value_t)arraybuffer)) {
+  if (!nenv || !nenv->js || !result || !is_object_type(napi_js(arraybuffer))) {
     return napi_set_last(env, napi_invalid_arg, "invalid argument");
   }
 
-  ArrayBufferData *ab = buffer_get_arraybuffer_data((ant_value_t)arraybuffer);
+  ArrayBufferData *ab = buffer_get_arraybuffer_data(napi_js(arraybuffer));
   if (!ab || ab->is_detached) return napi_set_last(env, napi_arraybuffer_expected, "invalid arraybuffer");
 
   TypedArrayType ta_type;
@@ -697,7 +697,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_typedarray(
     nenv->js, ta_type,
     ab,byte_offset, length,
     nenv->js->builtins.typedarray_protos[ta_type],
-    (ant_value_t)arraybuffer, false
+    napi_js(arraybuffer), false
   );
 
   if (is_err(out)) return napi_check_pending_from_result(env, out);
@@ -713,8 +713,8 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_double(
   double *result
 ) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (vtype((ant_value_t)value) != kTypeNumber) return napi_set_last(env, napi_number_expected, "number expected");
-  *result = Ant_Value_AsNumberUnchecked((ant_value_t)value);
+  if (vtype(napi_js(value)) != kTypeNumber) return napi_set_last(env, napi_number_expected, "number expected");
+  *result = Ant_Value_AsNumberUnchecked(napi_js(value));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -724,8 +724,8 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_int32(
   int32_t *result
 ) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (vtype((ant_value_t)value) != kTypeNumber) return napi_set_last(env, napi_number_expected, "number expected");
-  *result = (int32_t)Ant_Value_AsNumberUnchecked((ant_value_t)value);
+  if (vtype(napi_js(value)) != kTypeNumber) return napi_set_last(env, napi_number_expected, "number expected");
+  *result = (int32_t)Ant_Value_AsNumberUnchecked(napi_js(value));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -735,8 +735,8 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_uint32(
   uint32_t *result
 ) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (vtype((ant_value_t)value) != kTypeNumber) return napi_set_last(env, napi_number_expected, "number expected");
-  *result = (uint32_t)Ant_Value_AsNumberUnchecked((ant_value_t)value);
+  if (vtype(napi_js(value)) != kTypeNumber) return napi_set_last(env, napi_number_expected, "number expected");
+  *result = (uint32_t)Ant_Value_AsNumberUnchecked(napi_js(value));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -746,8 +746,8 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_int64(
   int64_t *result
 ) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (vtype((ant_value_t)value) != kTypeNumber) return napi_set_last(env, napi_number_expected, "number expected");
-  *result = (int64_t)Ant_Value_AsNumberUnchecked((ant_value_t)value);
+  if (vtype(napi_js(value)) != kTypeNumber) return napi_set_last(env, napi_number_expected, "number expected");
+  *result = (int64_t)Ant_Value_AsNumberUnchecked(napi_js(value));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -757,8 +757,8 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_bool(
   bool *result
 ) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (vtype((ant_value_t)value) != kTypeBool) return napi_set_last(env, napi_boolean_expected, "boolean expected");
-  *result = ((ant_value_t)value == Ant_Value_True);
+  if (vtype(napi_js(value)) != kTypeBool) return napi_set_last(env, napi_boolean_expected, "boolean expected");
+  *result = (napi_js(value) == Ant_Value_True);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -771,10 +771,10 @@ static napi_status napi_get_string_common(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
-  if (vtype((ant_value_t)value) != kTypeString) return napi_set_last(env, napi_string_expected, "string expected");
+  if (vtype(napi_js(value)) != kTypeString) return napi_set_last(env, napi_string_expected, "string expected");
 
   size_t len = 0;
-  const char *str = js_getstr(nenv->js, (ant_value_t)value, &len);
+  const char *str = js_getstr(nenv->js, napi_js(value), &len);
   if (!str) return napi_set_last(env, napi_string_expected, "string expected");
 
   if (result) *result = len;
@@ -815,13 +815,13 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_string_utf16(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
-  if (vtype((ant_value_t)value) != kTypeString) return napi_set_last(env, napi_string_expected, "string expected");
+  if (vtype(napi_js(value)) != kTypeString) return napi_set_last(env, napi_string_expected, "string expected");
 
   size_t byte_len = 0;
-  const char *str = js_getstr(nenv->js, (ant_value_t)value, &byte_len);
+  const char *str = js_getstr(nenv->js, napi_js(value), &byte_len);
   if (!str) return napi_set_last(env, napi_string_expected, "string expected");
 
-  size_t utf16_len = (size_t)str_utf16_len(nenv->js, (ant_value_t)value);
+  size_t utf16_len = (size_t)str_utf16_len(nenv->js, napi_js(value));
   if (result) *result = utf16_len;
   if (!buf || bufsize == 0) return napi_set_last(env, napi_ok, NULL);
 
@@ -837,9 +837,9 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_date_value(
   double *result
 ) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (!is_date_instance((ant_value_t)value)) return napi_set_last(env, napi_date_expected, "date expected");
+  if (!is_date_instance(napi_js(value))) return napi_set_last(env, napi_date_expected, "date expected");
 
-  ant_value_t time_val = js_get_slot((ant_value_t)value, SLOT_DATA);
+  ant_value_t time_val = js_get_slot(napi_js(value), SLOT_DATA);
   *result = vtype(time_val) == kTypeNumber ? Ant_Value_AsNumberUnchecked(time_val) : ANT_NAN;
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -851,7 +851,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_bigint_int64(
   bool *lossless
 ) {
   if (!env || !result || !lossless) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (vtype((ant_value_t)value) != kTypeBigInt) return napi_set_last(env, napi_bigint_expected, "bigint expected");
+  if (vtype(napi_js(value)) != kTypeBigInt) return napi_set_last(env, napi_bigint_expected, "bigint expected");
 
   size_t limb_count = 0;
   const uint32_t *limbs = napi_bigint_limbs(value, &limb_count);
@@ -873,7 +873,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_bigint_uint64(
   bool *lossless
 ) {
   if (!env || !result || !lossless) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (vtype((ant_value_t)value) != kTypeBigInt) return napi_set_last(env, napi_bigint_expected, "bigint expected");
+  if (vtype(napi_js(value)) != kTypeBigInt) return napi_set_last(env, napi_bigint_expected, "bigint expected");
 
   size_t limb_count = 0;
   const uint32_t *limbs = napi_bigint_limbs(value, &limb_count);
@@ -893,7 +893,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_bigint_words(
   uint64_t *words
 ) {
   if (!env || !word_count) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (vtype((ant_value_t)value) != kTypeBigInt) return napi_set_last(env, napi_bigint_expected, "bigint expected");
+  if (vtype(napi_js(value)) != kTypeBigInt) return napi_set_last(env, napi_bigint_expected, "bigint expected");
 
   size_t limb_count = 0;
   const uint32_t *limbs = napi_bigint_limbs(value, &limb_count);
@@ -925,7 +925,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_array_length(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
-  ant_value_t v = (ant_value_t)value;
+  ant_value_t v = napi_js(value);
   if (!js_is_array(v)) return napi_set_last(env, napi_array_expected, "array expected");
   *result = (uint32_t)js_arr_len(nenv->js, v);
   
@@ -961,9 +961,9 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_arraybuffer_info(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
-  if (!is_object_type((ant_value_t)arraybuffer)) return napi_set_last(env, napi_arraybuffer_expected, "arraybuffer expected");
+  if (!is_object_type(napi_js(arraybuffer))) return napi_set_last(env, napi_arraybuffer_expected, "arraybuffer expected");
 
-  ArrayBufferData *ab = buffer_get_arraybuffer_data((ant_value_t)arraybuffer);
+  ArrayBufferData *ab = buffer_get_arraybuffer_data(napi_js(arraybuffer));
   if (!ab || ab->is_detached) return napi_set_last(env, napi_arraybuffer_expected, "arraybuffer expected");
 
   if (data) *data = ab->data;
@@ -994,7 +994,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_typedarray_info(
   if (length) *length = live ? ta->length : 0;
   if (data) *data = bytes;
   if (arraybuffer) {
-    ant_value_t buffer = js_get(nenv->js, (ant_value_t)typedarray, "buffer");
+    ant_value_t buffer = js_get(nenv->js, napi_js(typedarray), "buffer");
     if (is_err(buffer) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, buffer);
     *arraybuffer = NAPI_RETURN(nenv, buffer);
   }
@@ -1009,7 +1009,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_prototype(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  ant_value_t proto = js_get_proto(nenv->js, (ant_value_t)object);
+  ant_value_t proto = js_get_proto(nenv->js, napi_js(object));
   if (is_err(proto) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, proto);
   *result = NAPI_RETURN(nenv, proto);
   return napi_set_last(env, napi_ok, NULL);
@@ -1024,7 +1024,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_typeof(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
-  ant_value_t v = (ant_value_t)value;
+  ant_value_t v = napi_js(value);
   uint8_t t = vtype(v);
 
   if (ant_napi_is_external(nenv->js, value)) {
@@ -1057,7 +1057,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_array(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
 
   if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
-  ant_value_t r = js_is_array_value_checked(nenv->js, (ant_value_t)value, result);
+  ant_value_t r = js_is_array_value_checked(nenv->js, napi_js(value), result);
 
   if (is_err(r) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, r);
   return napi_set_last(env, napi_ok, NULL);
@@ -1069,7 +1069,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_date(
   bool *result
 ) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = is_date_instance((ant_value_t)value);
+  *result = is_date_instance(napi_js(value));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1080,9 +1080,9 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_arraybuffer(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (!is_object_type((ant_value_t)value)) { *result = false; return napi_set_last(env, napi_ok, NULL); }
+  if (!is_object_type(napi_js(value))) { *result = false; return napi_set_last(env, napi_ok, NULL); }
 
-  *result = buffer_get_arraybuffer_data((ant_value_t)value) != NULL;
+  *result = buffer_get_arraybuffer_data(napi_js(value)) != NULL;
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1102,7 +1102,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_buffer(
 
   ant_value_t buffer_proto = nenv->js->builtins.buffer_proto;
   *result = is_object_type(buffer_proto)
-    && proto_chain_contains(nenv->js, (ant_value_t)value, buffer_proto);
+    && proto_chain_contains(nenv->js, napi_js(value), buffer_proto);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1125,10 +1125,10 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_dataview(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (!is_object_type((ant_value_t)value)) {
+  if (!is_object_type(napi_js(value))) {
     *result = false;
   } else {
-    *result = buffer_get_dataview_data((ant_value_t)value) != NULL;
+    *result = buffer_get_dataview_data(napi_js(value)) != NULL;
   }
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -1140,10 +1140,10 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_error(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  if (!is_object_type((ant_value_t)value)) {
+  if (!is_object_type(napi_js(value))) {
     *result = false;
   } else {
-    ant_value_t et = js_get_slot((ant_value_t)value, SLOT_ERR_TYPE);
+    ant_value_t et = js_get_slot(napi_js(value), SLOT_ERR_TYPE);
     *result = vtype(et) == kTypeNumber;
   }
   return napi_set_last(env, napi_ok, NULL);
@@ -1155,7 +1155,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_promise(
   bool *is_promise
 ) {
   if (!env || !is_promise) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *is_promise = vtype((ant_value_t)value) == kTypePromise;
+  *is_promise = vtype(napi_js(value)) == kTypePromise;
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1167,7 +1167,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_instanceof(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  ant_value_t r = do_instanceof(nenv->js, (ant_value_t)object, (ant_value_t)constructor);
+  ant_value_t r = do_instanceof(nenv->js, napi_js(object), napi_js(constructor));
   if (is_err(r) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, r);
   *result = js_truthy(nenv->js, r);
   return napi_set_last(env, napi_ok, NULL);
@@ -1181,7 +1181,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_strict_equals(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = strict_eq_values(nenv->js, (ant_value_t)lhs, (ant_value_t)rhs);
+  *result = strict_eq_values(nenv->js, napi_js(lhs), napi_js(rhs));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1192,7 +1192,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_bool(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  bool truthy = js_truthy(nenv->js, (ant_value_t)value);
+  bool truthy = js_truthy(nenv->js, napi_js(value));
   if (Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, Ant_Value_Undefined);
   *result = NAPI_RETURN(nenv, Ant_Value_FromBool(truthy));
   return napi_set_last(env, napi_ok, NULL);
@@ -1205,7 +1205,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_number(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  double num = js_to_number(nenv->js, (ant_value_t)value);
+  double num = js_to_number(nenv->js, napi_js(value));
   if (Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, Ant_Value_Undefined);
   *result = NAPI_RETURN(nenv, Ant_Value_FromNumber(num));
   return napi_set_last(env, napi_ok, NULL);
@@ -1219,7 +1219,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_object(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
-  if (is_object_type((ant_value_t)value)) {
+  if (is_object_type(napi_js(value))) {
     *result = value;
     return napi_set_last(env, napi_ok, NULL);
   }
@@ -1227,7 +1227,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_object(
   ant_value_t obj_ctor = js_get(nenv->js, js_glob(nenv->js), "Object");
   if (is_err(obj_ctor) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, obj_ctor);
   if (!is_callable(obj_ctor)) return napi_set_last(env, napi_generic_failure, "Object constructor missing");
-  ant_value_t arg = (ant_value_t)value;
+  ant_value_t arg = napi_js(value);
   ant_value_t out = sv_vm_call(nenv->js->vm, nenv->js, obj_ctor, Ant_Value_Undefined, &arg, 1, NULL, Ant_Value_Undefined);
   if (is_err(out) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, out);
   *result = NAPI_RETURN(nenv, out);
@@ -1241,7 +1241,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_string(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  ant_value_t out = coerce_to_str(nenv->js, (ant_value_t)value);
+  ant_value_t out = coerce_to_str(nenv->js, napi_js(value));
   if (is_err(out) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, out);
   *result = NAPI_RETURN(nenv, out);
   return napi_set_last(env, napi_ok, NULL);
@@ -1330,8 +1330,8 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_dataview(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
-  ArrayBufferData *ab = is_object_type((ant_value_t)arraybuffer)
-    ? buffer_get_arraybuffer_data((ant_value_t)arraybuffer) : NULL;
+  ArrayBufferData *ab = is_object_type(napi_js(arraybuffer))
+    ? buffer_get_arraybuffer_data(napi_js(arraybuffer)) : NULL;
   if (!ab || ab->is_detached) return napi_set_last(env, napi_invalid_arg, "arraybuffer expected");
 
   if (byte_offset > ab->length || length > ab->length - byte_offset) {
@@ -1342,7 +1342,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_dataview(
     return napi_set_last(env, napi_pending_exception, NULL);
   }
 
-  ant_value_t out = create_dataview_with_buffer(nenv->js, ab, byte_offset, length, (ant_value_t)arraybuffer, false);
+  ant_value_t out = create_dataview_with_buffer(nenv->js, ab, byte_offset, length, napi_js(arraybuffer), false);
   if (is_err(out) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, out);
 
   *result = NAPI_RETURN(nenv, out);
@@ -1357,15 +1357,15 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_dataview_info(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
 
-  DataViewData *dv = is_object_type((ant_value_t)dataview)
-    ? buffer_get_dataview_data((ant_value_t)dataview) : NULL;
+  DataViewData *dv = is_object_type(napi_js(dataview))
+    ? buffer_get_dataview_data(napi_js(dataview)) : NULL;
   if (!dv) return napi_set_last(env, napi_invalid_arg, "dataview expected");
 
   uint8_t *bytes; size_t size;
   Ant_Buffer_GetViewBytes(dv, &bytes, &size);
   if (bytelength) *bytelength = size;
   if (data) *data = bytes;
-  if (arraybuffer) *arraybuffer = NAPI_RETURN(nenv, js_get_slot((ant_value_t)dataview, SLOT_DATA));
+  if (arraybuffer) *arraybuffer = NAPI_RETURN(nenv, js_get_slot(napi_js(dataview), SLOT_DATA));
   if (byte_offset) *byte_offset = dv->byte_offset;
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -1374,8 +1374,8 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_detach_arraybuffer(napi_env env, napi_va
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
 
-  ArrayBufferData *ab = is_object_type((ant_value_t)arraybuffer)
-    ? buffer_get_arraybuffer_data((ant_value_t)arraybuffer) : NULL;
+  ArrayBufferData *ab = is_object_type(napi_js(arraybuffer))
+    ? buffer_get_arraybuffer_data(napi_js(arraybuffer)) : NULL;
   if (!ab || ab->is_shared) return napi_set_last(env, napi_arraybuffer_expected, "arraybuffer expected");
   if (ab->is_detached) return napi_set_last(env, napi_ok, NULL);
   if (!buffer_can_transfer(ab))
@@ -1391,8 +1391,8 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_detached_arraybuffer(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
-  ArrayBufferData *ab = is_object_type((ant_value_t)value)
-    ? buffer_get_arraybuffer_data((ant_value_t)value) : NULL;
+  ArrayBufferData *ab = is_object_type(napi_js(value))
+    ? buffer_get_arraybuffer_data(napi_js(value)) : NULL;
   *result = ab && ab->is_detached;
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -1404,8 +1404,8 @@ NAPI_EXTERN napi_status NAPI_CDECL node_api_create_buffer_from_arraybuffer(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
-  ArrayBufferData *ab = is_object_type((ant_value_t)arraybuffer)
-    ? buffer_get_arraybuffer_data((ant_value_t)arraybuffer) : NULL;
+  ArrayBufferData *ab = is_object_type(napi_js(arraybuffer))
+    ? buffer_get_arraybuffer_data(napi_js(arraybuffer)) : NULL;
   if (!ab || ab->is_detached) return napi_set_last(env, napi_arraybuffer_expected, "arraybuffer expected");
 
   if (byte_offset > ab->length || byte_length > ab->length - byte_offset)
@@ -1415,7 +1415,7 @@ NAPI_EXTERN napi_status NAPI_CDECL node_api_create_buffer_from_arraybuffer(
     nenv->js, TYPED_ARRAY_UINT8,
     ab, byte_offset, byte_length,
     nenv->js->builtins.buffer_proto,
-    (ant_value_t)arraybuffer, false
+    napi_js(arraybuffer), false
   );
   if (is_err(out) || Ant_Exception_Pending(nenv->js)) return napi_check_pending_from_result(env, out);
 
@@ -1496,8 +1496,8 @@ NAPI_EXTERN napi_status NAPI_CDECL node_api_is_sharedarraybuffer(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
-  ArrayBufferData *ab = is_object_type((ant_value_t)value)
-    ? buffer_get_arraybuffer_data((ant_value_t)value) : NULL;
+  ArrayBufferData *ab = is_object_type(napi_js(value))
+    ? buffer_get_arraybuffer_data(napi_js(value)) : NULL;
   *result = ab && ab->is_shared;
   return napi_set_last(env, napi_ok, NULL);
 }

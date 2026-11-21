@@ -14,33 +14,40 @@ if (process.platform === 'win32') {
 async function main(addon) {
   const b = require(addon);
 
+  assert.strictEqual(b.zero(), 0);
+  assert.strictEqual(b.nothing(), undefined);
+  assert.ok(Object.is(b.identity(0), 0));
+  assert.ok(Object.is(b.identity(-0), -0));
+  assert.deepStrictEqual(b.callWithZero((...values) => values), [0, 7]);
+  assert.strictEqual(b.callWithZero((value) => value), 0);
+
   const tagged = {};
   assert.strictEqual(b.checkTag(tagged, 0), false);
-  assert.strictEqual(b.tag(tagged, 0), 0);
+  assert.strictEqual(b.tag(tagged, 0), true);
   assert.strictEqual(b.checkTag(tagged, 0), true);
   assert.strictEqual(b.checkTag(tagged, 1), false);
-  assert.notStrictEqual(b.tag(tagged, 1), 0);
+  assert.strictEqual(b.tag(tagged, 1), false);
   assert.strictEqual(b.checkTag(tagged, 0), true);
   assert.strictEqual(b.checkTag({}, 0), false);
   const taggedFn = () => {};
-  assert.strictEqual(b.tag(taggedFn, 1), 0);
+  assert.strictEqual(b.tag(taggedFn, 1), true);
   assert.strictEqual(b.checkTag(taggedFn, 1), true);
   assert.strictEqual(b.checkTag(taggedFn, 0), false);
 
   const frozen = { a: 1 };
-  assert.strictEqual(b.freeze(frozen), 0);
+  assert.strictEqual(b.freeze(frozen), true);
   assert.strictEqual(Object.isFrozen(frozen), true);
   const sealed = { a: 1 };
-  assert.strictEqual(b.seal(sealed), 0);
+  assert.strictEqual(b.seal(sealed), true);
   assert.strictEqual(Object.isSealed(sealed), true);
   assert.strictEqual(Object.isFrozen(sealed), false);
 
   const proto = { hello() { return 'hi'; } };
   const target = {};
-  assert.strictEqual(b.setPrototype(target, proto), 0);
+  assert.strictEqual(b.setPrototype(target, proto), true);
   assert.strictEqual(Object.getPrototypeOf(target), proto);
   assert.strictEqual(target.hello(), 'hi');
-  assert.strictEqual(b.setPrototype(target, null), 0);
+  assert.strictEqual(b.setPrototype(target, null), true);
   assert.strictEqual(Object.getPrototypeOf(target), null);
 
   const sym = Symbol('s');
@@ -85,11 +92,11 @@ async function main(addon) {
 
   const detachable = new ArrayBuffer(4);
   assert.strictEqual(b.isDetached(detachable), false);
-  assert.strictEqual(b.detach(detachable), 0);
+  assert.strictEqual(b.detach(detachable), true);
   assert.strictEqual(b.isDetached(detachable), true);
   assert.strictEqual(detachable.byteLength, 0);
   assert.strictEqual(b.isDetached({}), false);
-  assert.notStrictEqual(b.detach({}), 0);
+  assert.strictEqual(b.detach({}), false);
 
   const backing = new ArrayBuffer(8);
   const bytes = new Uint8Array(backing);
@@ -109,7 +116,7 @@ async function main(addon) {
   assert.strictEqual(b.isShared(shared), true);
   assert.strictEqual(b.isShared(new ArrayBuffer(1)), false);
   assert.strictEqual(b.isShared({}), false);
-  assert.notStrictEqual(b.detach(shared), 0);
+  assert.strictEqual(b.detach(shared), false);
 
   const externalShared = b.externalSharedBuffer();
   assert.ok(externalShared instanceof SharedArrayBuffer);
@@ -118,12 +125,12 @@ async function main(addon) {
 
   assert.strictEqual(b.moduleFileName(), pathToFileURL(addon).href);
 
-  assert.strictEqual(b.postFinalizer(), 0);
-  assert.strictEqual(b.posted(), 0);
+  assert.strictEqual(b.postFinalizer(), true);
+  assert.strictEqual(b.posted(), false);
   await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.strictEqual(b.posted(), 1);
+  assert.strictEqual(b.posted(), true);
 
-  assert.strictEqual(b.addRemoveAsyncCleanup(), 0);
+  assert.strictEqual(b.addRemoveAsyncCleanup(), true);
   const child = spawnSync(process.execPath, [__filename, 'child', addon], { encoding: 'utf8', timeout: 30000 });
   assert.strictEqual(child.status, 0, child.stderr);
   assert.strictEqual(child.stdout, 'async cleanup hook ran\n');
@@ -150,5 +157,5 @@ function run() {
   );
 }
 
-if (process.argv[2] === 'child') assert.strictEqual(require(process.argv[3]).installAsyncCleanup(), 0);
+if (process.argv[2] === 'child') assert.strictEqual(require(process.argv[3]).installAsyncCleanup(), true);
 else run();

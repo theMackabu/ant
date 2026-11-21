@@ -90,9 +90,9 @@ static ant_value_t napi_dlopen_common(ant_t *js, ant_value_t module_obj, const c
   }
 
   ant_value_t ret = Ant_Value_Undefined;
-  if (reg_fn) ret = (ant_value_t)reg_fn(env, (napi_value)exports);
+  if (reg_fn) ret = napi_js(reg_fn(env, napi_handle(exports)));
   else if (module && module->nm_register_func) {
-    ret = (ant_value_t)module->nm_register_func(env, (napi_value)exports);
+    ret = napi_js(module->nm_register_func(env, napi_handle(exports)));
   } else return js_mkerr(js, "No N-API registration entrypoint found in '%s'", filename);
 
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;

@@ -25,7 +25,9 @@
 #endif
 #endif
 
-typedef ant_value_t napi_value;
+typedef struct {
+  ant_value_t bits;
+} napi_value;
 #define NAPI_MODULE_VERSION 1
 
 typedef struct ant_napi_env__* napi_env;

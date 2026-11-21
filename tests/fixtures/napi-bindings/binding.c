@@ -24,6 +24,8 @@ extern napi_status napi_get_value_uint32(napi_env, napi_value, uint32_t *);
 extern napi_status napi_create_array(napi_env, napi_value *);
 extern napi_status napi_set_element(napi_env, napi_value, uint32_t, napi_value);
 extern napi_status napi_create_string_utf8(napi_env, const char *, size_t, napi_value *);
+extern napi_status napi_call_function(napi_env, napi_value, napi_value, size_t, const napi_value *, napi_value *);
+extern napi_status napi_get_undefined(napi_env, napi_value *);
 
 extern napi_status napi_type_tag_object(napi_env, napi_value, const napi_type_tag *);
 extern napi_status napi_check_object_type_tag(napi_env, napi_value, const napi_type_tag *, bool *);
@@ -89,10 +91,33 @@ static uint32_t u32(napi_env env, napi_value value) {
   return result;
 }
 
+static napi_value zero(napi_env env, napi_callback_info info) {
+  return number(env, 0);
+}
+
+static napi_value nothing(napi_env env, napi_callback_info info) {
+  return NULL;
+}
+
+static napi_value identity(napi_env env, napi_callback_info info) {
+  napi_value argv[1];
+  args(env, info, argv, 1);
+  return argv[0];
+}
+
+static napi_value call_with_zero(napi_env env, napi_callback_info info) {
+  napi_value argv[1], recv = NULL, result = NULL;
+  args(env, info, argv, 1);
+  napi_value call_argv[2] = { number(env, 0), number(env, 7) };
+  napi_get_undefined(env, &recv);
+  if (napi_call_function(env, recv, argv[0], 2, call_argv, &result) != 0) return NULL;
+  return result;
+}
+
 static napi_value tag(napi_env env, napi_callback_info info) {
   napi_value argv[2];
   args(env, info, argv, 2);
-  return number(env, napi_type_tag_object(env, argv[0], &tags[u32(env, argv[1])]));
+  return boolean(env, napi_type_tag_object(env, argv[0], &tags[u32(env, argv[1])]) == 0);
 }
 
 static napi_value check_tag(napi_env env, napi_callback_info info) {
@@ -106,19 +131,19 @@ static napi_value check_tag(napi_env env, napi_callback_info info) {
 static napi_value freeze(napi_env env, napi_callback_info info) {
   napi_value argv[1];
   args(env, info, argv, 1);
-  return number(env, napi_object_freeze(env, argv[0]));
+  return boolean(env, napi_object_freeze(env, argv[0]) == 0);
 }
 
 static napi_value seal(napi_env env, napi_callback_info info) {
   napi_value argv[1];
   args(env, info, argv, 1);
-  return number(env, napi_object_seal(env, argv[0]));
+  return boolean(env, napi_object_seal(env, argv[0]) == 0);
 }
 
 static napi_value set_prototype(napi_env env, napi_callback_info info) {
   napi_value argv[2];
   args(env, info, argv, 2);
-  return number(env, node_api_set_prototype(env, argv[0], argv[1]));
+  return boolean(env, node_api_set_prototype(env, argv[0], argv[1]) == 0);
 }
 
 static napi_value create_with(napi_env env, napi_callback_info info) {
@@ -210,7 +235,7 @@ static napi_value data_view_info(napi_env env, napi_callback_info info) {
 static napi_value detach(napi_env env, napi_callback_info info) {
   napi_value argv[1];
   args(env, info, argv, 1);
-  return number(env, napi_detach_arraybuffer(env, argv[0]));
+  return boolean(env, napi_detach_arraybuffer(env, argv[0]) == 0);
 }
 
 static napi_value is_detached(napi_env env, napi_callback_info info) {
@@ -271,11 +296,11 @@ static void posted_finalize(napi_env env, void *data, void *hint) {
 
 static napi_value post_finalizer(napi_env env, napi_callback_info info) {
   static int increment = 1;
-  return number(env, node_api_post_finalizer(env, posted_finalize, &increment, NULL));
+  return boolean(env, node_api_post_finalizer(env, posted_finalize, &increment, NULL) == 0);
 }
 
 static napi_value posted(napi_env env, napi_callback_info info) {
-  return number(env, posted_finalized);
+  return boolean(env, posted_finalized == 1);
 }
 
 static void async_cleanup(napi_async_cleanup_hook_handle handle, void *data) {
@@ -285,19 +310,23 @@ static void async_cleanup(napi_async_cleanup_hook_handle handle, void *data) {
 }
 
 static napi_value install_async_cleanup(napi_env env, napi_callback_info info) {
-  return number(env, napi_add_async_cleanup_hook(env, async_cleanup, "async cleanup hook ran\n", NULL));
+  return boolean(env, napi_add_async_cleanup_hook(env, async_cleanup, "async cleanup hook ran\n", NULL) == 0);
 }
 
 static napi_value add_remove_async_cleanup(napi_env env, napi_callback_info info) {
   napi_async_cleanup_hook_handle handle = NULL;
   napi_status status = napi_add_async_cleanup_hook(env, async_cleanup, "removed hook ran\n", &handle);
-  if (status != 0 || !handle) return number(env, -1);
-  return number(env, napi_remove_async_cleanup_hook(handle));
+  if (status != 0 || !handle) return boolean(env, false);
+  return boolean(env, napi_remove_async_cleanup_hook(handle) == 0);
 }
 
 __attribute__((visibility("default")))
 napi_value napi_register_module_v1(napi_env env, napi_value exports) {
   static const struct { const char *name; napi_callback cb; } methods[] = {
+    { "zero", zero },
+    { "nothing", nothing },
+    { "identity", identity },
+    { "callWithZero", call_with_zero },
     { "tag", tag },
     { "checkTag", check_tag },
     { "freeze", freeze },

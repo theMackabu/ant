@@ -69,17 +69,18 @@ typedef struct napi_callback_binding {
 
 struct napi_callback_info__ {
   ant_napi_env_t *env;
-  const napi_value *argv;
+  const ant_value_t *argv;
   size_t argc;
-  napi_value this_arg;
-  napi_value new_target;
+  ant_value_t this_arg;
+  ant_value_t new_target;
   void *data;
 };
 
 struct napi_ref__ {
   ant_napi_env_t *env;
   ant_value_t ref_val;
-  napi_value value;
+  ant_value_t value;
+  bool live;
   uint32_t refcount;
   struct napi_ref__ *next;
   struct napi_ref__ *prev;
@@ -210,18 +211,57 @@ typedef struct {
 } napi_bigint_payload_t;
 
 static constexpr uint32_t NAPI_CALLBACK_NATIVE_TAG = Ant_NativeTag("NCBK");
+static constexpr ant_value_t NAPI_ZERO_HANDLE = ANT_SENTINEL_TAG | 0x4E0ULL;
+static constexpr size_t NAPI_INLINE_ARGS = 8;
+
+static inline napi_value napi_handle(ant_value_t value) {
+  return (napi_value){ value == 0 ? NAPI_ZERO_HANDLE : value };
+}
+
+static inline ant_value_t napi_js(napi_value handle) {
+  return handle.bits == NAPI_ZERO_HANDLE ? 0 : handle.bits;
+}
+
+static inline bool napi_is_empty(napi_value handle) {
+  return handle.bits == 0;
+}
+
+typedef struct {
+  const ant_value_t *values;
+  ant_value_t inline_values[NAPI_INLINE_ARGS];
+  ant_value_t *heap_values;
+} napi_args_t;
+
+static inline bool napi_args_decode(napi_args_t *out, const napi_value *handles, size_t count) {
+  out->heap_values = NULL;
+  out->values = (const ant_value_t *)handles;
+
+  size_t i = 0;
+  while (i < count && handles[i].bits != NAPI_ZERO_HANDLE) i++;
+  if (i == count) return true;
+
+  ant_value_t *values = out->inline_values;
+  if (count > NAPI_INLINE_ARGS && !(values = out->heap_values = malloc(count * sizeof(*values)))) return false;
+  for (i = 0; i < count; i++) values[i] = napi_js(handles[i]);
+  out->values = values;
+  return true;
+}
+
+static inline void napi_args_free(napi_args_t *args) {
+  free(args->heap_values);
+}
 
 ant_napi_env_t *ant_napi_get_or_create_env(ant_t *js);
 napi_status ant_napi_set_last(napi_env env, napi_status status, const char *message);
 napi_status ant_napi_check_pending_from_result(napi_env env, ant_value_t result);
 napi_status ant_napi_return_pending_if_any(napi_env env);
-napi_value ant_napi_scope_pin(ant_napi_env_t *nenv, napi_value val);
+napi_value ant_napi_scope_pin(ant_napi_env_t *nenv, ant_value_t val);
 bool ant_napi_is_external(ant_t *js, napi_value value);
 void ant_napi_external_sabs_sweep(ant_napi_env_t *nenv, bool teardown);
 
 #define napi_set_last ant_napi_set_last
 #define napi_check_pending_from_result ant_napi_check_pending_from_result
-#define NAPI_RETURN(nenv, val) ant_napi_scope_pin((nenv), (napi_value)(val))
+#define NAPI_RETURN(nenv, val) ant_napi_scope_pin((nenv), (val))
 
 void ant_napi_link_async(void);
 void ant_napi_tsfns_close(ant_napi_env_t *nenv);
