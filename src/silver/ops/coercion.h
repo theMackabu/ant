@@ -1,5 +1,6 @@
 #pragma once
 
+#include "modules/object.h"
 #include <string.h>
 #include "esm/loader.h"
 #include "silver/call.h"
@@ -53,6 +54,13 @@ static inline ant_value_t sv_export_target_ns(ant_t *js, ant_value_t callee) {
   return js_module_eval_active_ns(js);
 }
 
+static __attribute__((noinline, cold)) ant_value_t sv_box_with_primitive(sv_vm_t *vm, ant_t *js, ant_value_t v) {
+  ant_value_t obj = builtin_Object(js, &v, 1, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
+  if (is_err(obj)) return obj;
+  vm->stack[vm->sp - 1] = obj;
+  return Ant_Value_FromNumber(0);
+}
+
 static inline ant_value_t sv_op_to_object(sv_vm_t *vm, ant_t *js) {
   ant_value_t v = vm->stack[vm->sp - 1];
   uint8_t t = vtype(v);
@@ -61,13 +69,7 @@ static inline ant_value_t sv_op_to_object(sv_vm_t *vm, ant_t *js) {
   if (t == kTypeNull || t == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
   
-  ant_value_t obj = mkobj(js, 0);
-  ant_value_t obj_as_obj = js_as_obj(obj);
-  
-  js_set_slot(obj_as_obj, SLOT_PRIMITIVE, v);
-  vm->stack[vm->sp - 1] = obj;
-  
-  return Ant_Value_FromNumber(0);
+  return sv_box_with_primitive(vm, js, v);
 }
 
 static inline ant_value_t sv_op_to_propkey(sv_vm_t *vm, ant_t *js) {
@@ -401,7 +403,7 @@ static inline sv_with_fast_t sv_with_find_fast(ant_t *js, ant_value_t obj, const
   if (a->str == js->intern.length) return SV_WITH_SLOW;
   ant_value_t cur = obj;
 
-  for (int depth = 0; depth < 64; depth++, cur = js_get_proto(js, cur)) {
+  for (int depth = 0; depth < 64; depth++) {
     if (vtype(cur) != kTypeObject) return is_object_type(cur) ? SV_WITH_SLOW : SV_WITH_MISS;
 
     ant_object_t *ptr = js_obj_ptr(cur);
@@ -409,6 +411,7 @@ static inline sv_with_fast_t sv_with_find_fast(ant_t *js, ant_value_t obj, const
 
     sv_with_fast_t own = sv_with_find_own(ptr, a, value);
     if (own != SV_WITH_MISS) return own;
+    cur = ant_object_proto(ptr);
   }
 
   return SV_WITH_SLOW;

@@ -18,6 +18,7 @@ static uint8_t import_spec_binding(sv_ast_t *spec, const char **name, uint32_t *
 
 void mark_import_binding(sv_compiler_t *c, int idx, sv_ast_t *spec) {
   if (idx < 0) return;
+  if (!(c->locals[idx].eval_flags & SV_EVAL_BIND_LEXICAL)) c->eval_scope_shareable = false;
   c->locals[idx].eval_flags |= SV_EVAL_BIND_LEXICAL;
   sv_binding_meta_t *binding = &c->locals[idx].binding;
   binding->import_kind = import_spec_binding(spec, &binding->import_name, &binding->import_name_len);
@@ -267,6 +268,14 @@ void compile_export_decl(sv_compiler_t *c, sv_ast_t *node) {
         emit_atom_op(c, OP_IMPORT_NAMED, spec->left->str, spec->left->len);
       emit_atom_op(c, OP_EXPORT, spec->right->str, spec->right->len);
     } else {
+      if (
+        c->mode == SV_COMPILE_MODULE && c->enclosing && !c->enclosing->enclosing &&
+        resolve_local(c, spec->left->str, spec->left->len) < 0 &&
+        resolve_spill(c, spec->left->str, spec->left->len) < 0
+      ) {
+        js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Export '%.*s' is not defined in module", (int)spec->left->len, spec->left->str);
+        return;
+      }
       if (export_clause_is_metadata_only(c, spec))
         continue;
       emit_get_var(c, spec->left->str, spec->left->len);

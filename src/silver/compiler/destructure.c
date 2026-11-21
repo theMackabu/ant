@@ -72,8 +72,16 @@ static void compile_destructure_store(sv_compiler_t *c, sv_ast_t *target,
       kind == SV_VAR_USING ||
       kind == SV_VAR_AWAIT_USING
     );
+    int spill = resolve_spill(c, target->str, target->len);
+    if (spill >= 0 && (kind == SV_VAR_VAR ? resolve_local(c, target->str, target->len) == -1 : c->spills[spill].depth == c->scope_depth)) {
+      emit_spill_define(c, spill);
+      return;
+    }
     int idx = ensure_local_at_depth(c, target->str, target->len, is_const, c->scope_depth);
-    if (kind != SV_VAR_VAR) c->locals[idx].eval_flags |= SV_EVAL_BIND_LEXICAL;
+    if (kind != SV_VAR_VAR) {
+      if (!(c->locals[idx].eval_flags & SV_EVAL_BIND_LEXICAL)) c->eval_scope_shareable = false;
+      c->locals[idx].eval_flags |= SV_EVAL_BIND_LEXICAL;
+    }
     emit_put_local(c, idx);
     c->locals[idx].is_tdz = false;
     set_local_inferred_type(c, idx, SV_TI_UNKNOWN);
@@ -135,7 +143,8 @@ void compile_destructure_pattern(
         emit_op(c, OP_IS_UNDEF);
         int skip = emit_jump(c, OP_JMP_FALSE);
         emit_op(c, OP_POP);
-        compile_expr(c, default_val);
+        if (target && target->type == N_IDENT) compile_expr_with_inferred_name(c, default_val, target->str, target->len);
+        else compile_expr(c, default_val);
         patch_jump(c, skip);
       }
       
@@ -212,7 +221,8 @@ void compile_destructure_pattern(
         emit_op(c, OP_IS_UNDEF);
         int skip = emit_jump(c, OP_JMP_FALSE);
         emit_op(c, OP_POP);
-        compile_expr(c, default_val);
+        if (value && value->type == N_IDENT) compile_expr_with_inferred_name(c, default_val, value->str, value->len);
+        else compile_expr(c, default_val);
         patch_jump(c, skip);
       }
 
