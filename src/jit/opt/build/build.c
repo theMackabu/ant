@@ -39,6 +39,7 @@ typedef struct {
 typedef struct {
   ir_block_id_t pred;
   opt_frame_t frame;
+  bool thrown;
 } opt_incoming_t;
 
 static constexpr uint32_t OPT_FINALLY_MAX = 8;
@@ -49,6 +50,7 @@ typedef struct {
   uint32_t off;
   int32_t outer;
   bool has_return;
+  bool has_throw;
   uint32_t conts[OPT_FINALLY_CONTS];
   uint32_t cont_count;
 } opt_finally_t;
@@ -99,6 +101,8 @@ typedef struct {
   bool built_catch_entries;
   bool no_native_finally;
   bool used_native_finally;
+  bool no_throw_edges;
+  bool used_throw_edges;
   uint32_t inlined_instructions;
   uint32_t inlined_calls;
   bool closure_pinned;
@@ -109,6 +113,7 @@ typedef struct {
   ir_node_vec_t literal_nodes;
   OPT_VEC(ant_shape_t *) literal_shapes;
   ir_node_vec_t named_closures;
+  ir_block_vec_t thrown_blocks;
 } opt_build_ctx_t;
 
 typedef struct {
@@ -140,6 +145,7 @@ struct opt_builder {
   uint32_t params, locals, stack, tracked;
   bool uses_this;
   bool building_entry;
+  bool splitting;
   int *depth;
   int *try_at;
   opt_finally_t *finallies;
@@ -436,6 +442,7 @@ static bool opt_scan(opt_builder_t *b) {
     block->handler = UINT32_MAX;
     int32_t state = opt_catch_state(b, b->ins_off[block->first]);
     if (state >= 0) block->handler = (uint32_t)b->block_at[opt_handler_target(func, (uint32_t)state)];
+    if (state >= 0) opt_vec_push(&b->arena, &b->blocks[block->handler].preds, bi);
   }
   return true;
 }
@@ -1111,7 +1118,7 @@ static bool opt_reconcile_back_edge(opt_builder_t *b, uint32_t target) {
       continue;
     }
     if (at_header->node != IR_NONE) {
-      if (here->node != at_header->node) return opt_fail(b, "loop-invariant-changed");
+      if (here->node != at_header->node && !(at_header->in_sync && opt_slot_in_memory(here))) return opt_fail(b, "loop-invariant-changed");
       continue;
     }
     if (!opt_slot_in_memory(here)) return opt_fail(b, "loop-invariant-changed");
@@ -1342,10 +1349,13 @@ static bool opt_start_bytecode_block(opt_builder_t *b, uint32_t bi) {
   opt_vec_push(&b->graph->arena, &b->ctx->order, block);
   b->block = block;
   ir_block_t *data = ir_block(b->graph, block);
+  bool thrown = true;
   for (uint32_t i = 0; i < bblock->incoming.len; i++) {
     if (bblock->incoming.items[i].frame.sp != bblock->depth) return opt_fail(b, "depth");
     opt_vec_push(&b->graph->arena, &data->predecessors, bblock->incoming.items[i].pred);
+    thrown &= bblock->incoming.items[i].thrown;
   }
+  if (thrown) opt_vec_push(&b->graph->arena, &b->ctx->thrown_blocks, block);
   data->bytecode_start = b->ins_off[bblock->first];
   data->func = b->inline_call ? b->func : NULL;
   data->is_loop_header = bblock->is_header;
@@ -4163,6 +4173,8 @@ static opt_flow_t opt_build_push_pop(opt_builder_t *b, bool push, const ir_node_
   return opt_finish_call(b, operands, opt_value_phi(b, b->frame.sp - operands, results, paths), tail);
 }
 
+static bool opt_throw_edge(opt_builder_t *b, ir_node_id_t value, bool probe);
+
 static opt_flow_t opt_emit_call(opt_builder_t *b, bool construct, sv_func_t *target, const ir_node_id_t *inputs, uint32_t argc, uint32_t operands, bool tail) {
   ir_op_t call = ir_op(construct ? IR_OP_CALL_CONSTRUCT : IR_OP_CALL_DIRECT);
   call.call.func = b->func;
@@ -4175,7 +4187,26 @@ static opt_flow_t opt_emit_call(opt_builder_t *b, bool construct, sv_func_t *tar
   } else if (!construct) call.call.native_closure = sv_tfb_call_site_called_native_closure(b->func, (int)b->pc);
   ir_node_id_t result = opt_emit(b, call, inputs, 2 + argc, OPT_REPR_TAGGED);
   ir_node(b->graph, result)->frame_state = opt_call_position(b);
-  opt_mark_catch(b, result);
+  if (construct || tail || !opt_throw_edge(b, IR_NONE, true)) {
+    opt_mark_catch(b, result);
+    return opt_finish_call(b, operands, result, tail);
+  }
+  ir_node(b->graph, result)->op.call.returns_error = true;
+  ir_block_id_t thrown, returned;
+  opt_branch_both_ways(b, ir_cond(IR_COND_THROWN), &result, 1, &thrown, &returned);
+  b->block = thrown;
+  ir_op_t take = ir_op(IR_OP_CALL_NATIVE);
+  take.call.func = b->func;
+  take.call.bc_off = b->pc;
+  take.call.stores_operands = true;
+  take.call.helper = (uintptr_t)opt_rt_take_thrown;
+  ir_node_id_t caught = opt_emit(b, take, (ir_node_id_t[]){result, opt_constant(b, IR_VALUE_UNDEFINED)}, 2, OPT_REPR_TAGGED);
+  ir_node(b->graph, caught)->frame_state = opt_call_position(b);
+  if (!opt_throw_edge(b, caught, false)) {
+    opt_fail(b, "throw-edge");
+    return OPT_FLOW_FAILED;
+  }
+  b->block = returned;
   return opt_finish_call(b, operands, result, tail);
 }
 
@@ -4363,6 +4394,39 @@ static bool opt_try_collection_lookup(opt_builder_t *b, const ir_node_id_t *inpu
   return true;
 }
 
+static bool opt_fresh_array_elements(const opt_builder_t *b, ir_node_id_t array, ir_node_id_t *elements, uint32_t *count) {
+  const ir_node_t *node = ir_node(b->graph, array);
+  bool empty = node->op.code == IR_OP_CALL_NATIVE && node->op.call.helper == (uintptr_t)opt_rt_array && !node->op.call.argc;
+  if (!empty && (node->op.code != IR_OP_ALLOCATE_ARRAY || node->op.count > OPT_MAX_CALL_ARGS)) return false;
+  *count = empty ? 0 : node->op.count;
+  uint32_t found = 0;
+  for (ir_node_id_t id = array + 1; id < ir_node_count(b->graph); id++) {
+    const ir_node_t *user = ir_node(b->graph, id);
+    bool initializes = user->op.code == IR_OP_INITIALIZE_ELEMENT && user->inputs.len == 2 && user->inputs.items[0] == array
+      && user->inputs.items[1] != array && user->op.index < *count;
+    if (initializes) {
+      elements[user->op.index] = user->inputs.items[1];
+      found++;
+      continue;
+    }
+    for (uint32_t i = 0; i < user->inputs.len; i++)
+      if (user->inputs.items[i] == array) return false;
+  }
+  return found == *count;
+}
+
+static bool opt_try_reflect_construct(opt_builder_t *b, const ir_node_id_t *inputs, uint32_t argc, uint32_t operands, bool tail, opt_flow_t *flow) {
+  ir_node_id_t call[2 + OPT_MAX_CALL_ARGS];
+  uint32_t count;
+  if (argc < 2 || argc > 3 || !opt_fresh_array_elements(b, inputs[3], call + 2, &count)) return false;
+  if (!opt_expect_builtin(b, inputs[0], js_is_reflect_construct_builtin)) return false;
+  call[0] = inputs[2];
+  call[1] = argc == 3 ? inputs[4] : inputs[2];
+  ir_node_id_t result = opt_runtime_call(b, (uintptr_t)opt_rt_reflect_construct, argc == 3, call, 2 + count, false, false);
+  *flow = opt_finish_call(b, operands, result, tail);
+  return true;
+}
+
 static bool opt_uncurry_call(opt_builder_t *b, ir_node_id_t *inputs, uint32_t *argc) {
   ant_value_t bound = opt_likely_value(b, inputs[0]);
   ant_value_t builtin = opt_uncurried_builtin(bound);
@@ -4431,6 +4495,9 @@ static opt_flow_t opt_build_call_with(opt_builder_t *b, sv_op_t op, ir_node_id_t
     ir_node_id_t empty[2] = {opt_constant(b, IR_VALUE_UNDEFINED), opt_constant(b, IR_VALUE_UNDEFINED)};
     return opt_finish_call(b, operands, opt_runtime_call(b, (uintptr_t)opt_rt_array, 0, empty, 2, true, false), tail);
   }
+
+  opt_flow_t reflected;
+  if (method && opt_try_reflect_construct(b, inputs, argc, operands, tail, &reflected)) return reflected;
 
   ir_node_id_t math;
   if (!construct && opt_try_math(b, callee, argc, inputs + 2, &math)) return opt_finish_call(b, operands, math, tail);
@@ -5425,11 +5492,72 @@ static opt_flow_t opt_build_jump_not_nullish(opt_builder_t *b) {
     ? OPT_FLOW_ENDED : OPT_FLOW_FAILED;
 }
 
-static opt_flow_t opt_build_throw(opt_builder_t *b) {
-  ir_node_id_t value = opt_tagged(b, opt_peek(b, 0));
+static bool opt_finally_handler_plain(const opt_builder_t *b, uint32_t handler) {
+  sv_op_t next = opt_op_at(b, handler + sv_op_size[OP_POP]);
+  return next == OP_JMP || next == OP_JMP8;
+}
+
+static bool opt_throw_edge(opt_builder_t *b, ir_node_id_t value, bool probe) {
+  if (b->ctx->no_throw_edges) return false;
+  opt_builder_t *root = b;
+  for (; root->inline_call; root = root->inline_call->caller)
+    if (opt_catch_state(root, root->pc) >= 0) return false;
+  int32_t state = opt_catch_state(root, root->pc);
+  if (state < 0) return false;
+  uint32_t len = (uint32_t)root->func->code_len, handler = opt_handler_target(root->func, (uint32_t)state);
+  uint32_t depth = (uint32_t)root->depth[state];
+  int32_t index = -1, at = -1;
+  if (opt_op_at(root, (uint32_t)state) == OP_TRY_PUSH_FINALLY) {
+    at = root->finally_count ? opt_finally_of(root, (uint32_t)state) : -1;
+    index = opt_finally_index(root, at);
+    if (!opt_finally_handler_plain(root, handler)) return false;
+  } else if (handler + sv_op_size[OP_CATCH] < len) {
+    at = (int32_t)(handler + sv_op_size[OP_CATCH]);
+  }
+  int32_t target = at >= 0 ? root->block_at[at] : -1;
+  if (target < 0 || root->blocks[target].started) return false;
+  const uint8_t *feedback = sv_func_type_feedback(root->func);
+  if (!feedback) return false;
+  if (!(feedback[handler] & SV_TFB_CLASS_MASK)) {
+    ir_handler_t *waiting = &b->graph->handlers.items[b->graph->handler_at[root->pc]];
+    waiting->learnable = true;
+    waiting->raised |= !probe;
+    return false;
+  }
+  if (probe) return true;
+  opt_frame_t frame = opt_frame_clone(root, &root->frame);
+  for (int32_t s = opt_try_state(root, root->pc); s != state; s = opt_try_parent(root, s)) {
+    int32_t left = opt_finally_index(root, s);
+    if (left < 0) continue;
+    frame.slots[root->tracked + 1 + 2 * left] = (opt_slot_t){.node = opt_constant(root, opt_completion_bits(0))};
+    frame.slots[root->tracked + 2 + 2 * left] = (opt_slot_t){.node = opt_constant(root, IR_VALUE_UNDEFINED)};
+  }
+  frame.sp = depth;
+  if (index >= 0) {
+    frame.slots[root->tracked + 1 + 2 * index] = (opt_slot_t){.node = opt_constant(root, opt_completion_bits(OPT_PENDING_THROW))};
+    frame.slots[root->tracked + 2 + 2 * index] = (opt_slot_t){.node = value};
+    root->finallies[index].has_throw = true;
+  } else {
+    frame.slots[opt_stack_index(root, frame.sp++)] = (opt_slot_t){.node = value};
+  }
+  opt_incoming_t incoming = {.pred = b->block, .frame = frame, .thrown = true};
+  opt_vec_push(&root->arena, &root->blocks[target].incoming, incoming);
+  ir_op_t op = ir_op(IR_OP_JUMP);
+  op.target = opt_ir_block(root, (uint32_t)target);
+  opt_set_control(b, op, NULL, 0);
+  b->ctx->used_throw_edges = true;
+  return true;
+}
+
+static opt_flow_t opt_throw_value(opt_builder_t *b, ir_node_id_t value) {
+  if (opt_throw_edge(b, value, false)) return OPT_FLOW_ENDED;
   ir_node_id_t node = opt_set_control(b, ir_op(IR_OP_THROW), &value, 1);
   opt_mark_catch(b, node);
   return OPT_FLOW_ENDED;
+}
+
+static opt_flow_t opt_build_throw(opt_builder_t *b) {
+  return opt_throw_value(b, opt_tagged(b, opt_peek(b, 0)));
 }
 
 static opt_flow_t opt_build_virtual_arguments(opt_builder_t *b) {
@@ -6409,11 +6537,12 @@ static uint32_t opt_completion_kinds(const opt_builder_t *b, const opt_finally_t
     uint32_t value = (uint32_t)Ant_Value_AsNumberUnchecked(constant), k = 0;
     if (!value) continue;
     while (k < count && kinds[k] != value) k++;
-    if (k == count && count < OPT_FINALLY_CONTS + 1) kinds[count++] = value;
+    if (k == count && count < OPT_FINALLY_CONTS + 2) kinds[count++] = value;
   }
   if (exact) return count;
   count = 0;
   if (fin->has_return) kinds[count++] = OPT_PENDING_RETURN;
+  if (fin->has_throw) kinds[count++] = OPT_PENDING_THROW;
   for (uint32_t c = 0; c < fin->cont_count; c++) kinds[count++] = OPT_PENDING_JUMP + fin->conts[c];
   return count;
 }
@@ -6425,9 +6554,10 @@ static opt_flow_t opt_build_finally_ret(opt_builder_t *b) {
   const opt_finally_t *fin = &b->finallies[index];
   ir_node_id_t kind = b->frame.slots[b->tracked + 1 + 2 * index].node, value = b->frame.slots[b->tracked + 2 + 2 * index].node;
   opt_set_completion(b, (uint32_t)state, 0, opt_constant(b, IR_VALUE_UNDEFINED));
-  uint32_t kinds[OPT_FINALLY_CONTS + 1];
+  uint32_t kinds[OPT_FINALLY_CONTS + 2];
   uint32_t count = opt_completion_kinds(b, fin, kind, kinds);
   if (!count) return opt_end_with_jump(b, end) ? OPT_FLOW_ENDED : OPT_FLOW_FAILED;
+  if (count == 1 && kinds[0] == OPT_PENDING_THROW && ir_is_constant(b->graph, kind)) return opt_throw_value(b, opt_tagged(b, value));
   opt_frame_t base = opt_frame_clone(b, &b->frame);
   ir_node_id_t tagged_kind = opt_tagged(b, kind);
   for (uint32_t i = 0; i < count; i++) {
@@ -6439,6 +6569,7 @@ static opt_flow_t opt_build_finally_ret(opt_builder_t *b) {
     b->frame = opt_frame_clone(b, &base);
     opt_flow_t flow;
     if (kinds[i] == OPT_PENDING_RETURN) flow = opt_return_through_finally(b, opt_tagged(b, value), opt_try_parent(b, state));
+    else if (kinds[i] == OPT_PENDING_THROW) flow = opt_throw_value(b, opt_tagged(b, value));
     else {
       uint32_t cont = kinds[i] - OPT_PENDING_JUMP;
       int32_t target = cont < (uint32_t)b->func->code_len ? b->block_at[cont] : -1;
@@ -6746,7 +6877,49 @@ static bool opt_build_bytecode_block(opt_builder_t *b, uint32_t bi) {
   return opt_end_with_jump(b, bblock->succ[bblock->succ_count - 1]);
 }
 
-static bool opt_build_entry(opt_builder_t *b, uint32_t target, const opt_bitset_t *boxes) {
+static bool opt_in_finally_body(const opt_builder_t *b, uint32_t off, uint32_t finally_off) {
+  for (int32_t state = opt_try_state(b, off); state >= 0; state = opt_try_parent(b, state))
+    if ((uint32_t)state == finally_off) return true;
+  return false;
+}
+
+static bool opt_split_thrown(opt_builder_t *b, uint32_t bi) {
+  opt_bblock_t *bblock = &b->blocks[bi];
+  uint32_t finally_off = b->ins_off[bblock->first], count = bblock->incoming.len, thrown = 0;
+  if (b->splitting || opt_finally_index(b, (int32_t)finally_off) < 0) return true;
+  for (uint32_t i = 0; i < count; i++) thrown += bblock->incoming.items[i].thrown;
+  if (!thrown || thrown == count) return true;
+  opt_incoming_t *all = bblock->incoming.items;
+  opt_incoming_t *parts = opt_arena_new(&b->arena, opt_incoming_t, count);
+  uint32_t kept = 0, moved = count - thrown;
+  for (uint32_t i = 0; i < count; i++) parts[all[i].thrown ? moved++ : kept++] = all[i];
+  ir_block_id_t hot = bblock->ir, cold = ir_add_block(b->graph);
+  for (uint32_t i = kept; i < count; i++) ir_control(b->graph, parts[i].pred)->op.target = cold;
+  bblock->ir = cold;
+  bblock->incoming.items = parts + kept;
+  bblock->incoming.len = bblock->incoming.cap = thrown;
+  b->splitting = true;
+  bool ok = true;
+  for (uint32_t r = (uint32_t)bblock->rpo; ok && r < b->rpo_count; r++) {
+    uint32_t ri = b->rpo[r];
+    if (ri != bi && !opt_in_finally_body(b, b->ins_off[b->blocks[ri].first], finally_off)) continue;
+    ok = (!opt_start_bytecode_block(b, ri) || opt_build_bytecode_block(b, ri)) && !b->failed;
+  }
+  for (uint32_t r = (uint32_t)bblock->rpo; r < b->rpo_count; r++) {
+    opt_bblock_t *at = &b->blocks[b->rpo[r]];
+    if (at != bblock && !opt_in_finally_body(b, b->ins_off[at->first], finally_off)) continue;
+    at->ir = IR_NONE;
+    at->started = false;
+    at->incoming.len = 0;
+  }
+  b->splitting = false;
+  bblock->ir = hot;
+  bblock->incoming.items = parts;
+  bblock->incoming.len = bblock->incoming.cap = kept;
+  return ok;
+}
+
+static bool opt_build_entry(opt_builder_t *b, uint32_t target, const opt_bitset_t *boxes, const ir_handler_t *finally) {
   ir_node_id_t undefined = opt_constant(b, IR_VALUE_UNDEFINED);
   opt_bblock_t *bblock = &b->blocks[target];
   opt_start_new_block(b, IR_NONE);
@@ -6770,9 +6943,14 @@ static bool opt_build_entry(opt_builder_t *b, uint32_t target, const opt_bitset_
   for (uint32_t t = b->params; t < b->tracked; t++)
     if (!opt_in_memory(b, t)) b->frame.slots[t].in_sync = false;
   if (b->uses_this) opt_root_this(b);
-  b->building_entry = false;
   ir_osr_entry_t entry = {.bc_off = b->pc, .block = b->block};
+  if (finally) {
+    opt_set_completion(b, b->pc, OPT_PENDING_THROW, opt_read_tracked(b, opt_stack_index(b, bblock->depth)));
+    entry.bc_off = finally->catch_off;
+  }
+  b->building_entry = false;
   if (!opt_end_with_jump(b, target)) return false;
+  bblock->incoming.items[bblock->incoming.len - 1].thrown = finally != NULL;
   opt_vec_push(&b->graph->arena, &b->graph->osr_entries, entry);
   return true;
 }
@@ -6781,7 +6959,7 @@ static bool opt_build_osr_entries(opt_builder_t *b) {
   for (uint32_t l = 0; l < b->loop_count; l++) {
     uint32_t header = b->loops[l].header;
     if (opt_state_has(b, b->ins_off[b->blocks[header].first], OP_FINALLY)) continue;
-    if (!opt_build_entry(b, header, &b->loops[l].entry_boxes)) return false;
+    if (!opt_build_entry(b, header, &b->loops[l].entry_boxes, NULL)) return false;
   }
   return true;
 }
@@ -6797,16 +6975,19 @@ static bool opt_build_catch_entries(opt_builder_t *b) {
   ir_graph_t *graph = b->graph;
   for (uint32_t h = 0; feedback && h < graph->handlers.len; h++) {
     ir_handler_t *handler = &graph->handlers.items[h];
-    uint32_t resume = handler->catch_off + sv_op_size[OP_CATCH];
+    uint32_t resume = handler->catch_off + (handler->finally ? 0 : sv_op_size[OP_CATCH]);
     int32_t catch_block = b->block_at[handler->catch_off], target = resume < (uint32_t)b->func->code_len ? b->block_at[resume] : -1;
-    if (handler->finally || catch_block < 0 || target < 0 || b->blocks[catch_block].rpo < 0) continue;
+    int32_t index = handler->finally && b->finally_count ? opt_finally_index(b, opt_finally_of(b, handler->try_off)) : -1;
+    if (handler->finally) target = index >= 0 && opt_finally_handler_plain(b, handler->catch_off) ? b->block_at[b->finallies[index].off] : -1;
+    if (catch_block < 0 || target < 0 || b->blocks[catch_block].rpo < 0) continue;
     if (b->ctx->no_catch_entries || opt_state_has(b, handler->catch_off, OP_FINALLY) || opt_has_entry_at(b, resume)) continue;
     if (!(feedback[handler->catch_off] & SV_TFB_CLASS_MASK)) {
       handler->learnable = true;
       continue;
     }
     b->ctx->built_catch_entries = true;
-    if (!opt_build_entry(b, (uint32_t)target, &b->boxable)) return false;
+    if (index >= 0) b->finallies[index].has_throw = true;
+    if (!opt_build_entry(b, (uint32_t)target, &b->boxable, handler->finally ? handler : NULL)) return false;
     handler->has_entry = true;
     graph->uses_frame = true;
   }
@@ -6858,6 +7039,29 @@ static bool opt_graph_uses_virtual_arguments(const ir_graph_t *graph) {
   return false;
 }
 
+static void opt_chill_thrown_blocks(opt_builder_t *b, const ir_block_vec_t *order) {
+  ir_graph_t *graph = b->graph;
+  uint32_t count = ir_block_count(graph);
+  uint32_t *position = opt_arena_new(&b->arena, uint32_t, count);
+  bool *thrown = opt_arena_new(&b->arena, bool, count);
+  for (uint32_t i = 0; i < order->len; i++) position[order->items[i]] = i;
+  for (uint32_t i = 0; i < b->ctx->thrown_blocks.len; i++) thrown[b->ctx->thrown_blocks.items[i]] = true;
+  for (uint32_t i = 0; i < order->len; i++) {
+    ir_block_id_t id = order->items[i];
+    ir_block_t *block = ir_block(graph, id);
+    uint32_t earlier = 0;
+    bool all = true;
+    for (uint32_t p = 0; p < block->predecessors.len; p++) {
+      ir_block_id_t pred = block->predecessors.items[p];
+      if (position[pred] >= i) continue;
+      earlier++;
+      all &= thrown[pred];
+    }
+    thrown[id] |= earlier && all;
+    block->is_cold |= thrown[id];
+  }
+}
+
 static bool opt_build_attempt(ant_t *js, sv_func_t *func, opt_build_ctx_t *ctx, ir_graph_t *graph, opt_build_failure_t *failure) {
   opt_builder_t builder = {
     .js = js,
@@ -6895,7 +7099,8 @@ static bool opt_build_attempt(ant_t *js, sv_func_t *func, opt_build_ctx_t *ctx, 
   }
   for (uint32_t r = 0; ok && r < b->rpo_count; r++) {
     uint32_t bi = b->rpo[r];
-    if (opt_start_bytecode_block(b, bi)) ok = opt_build_bytecode_block(b, bi);
+    ok = opt_split_thrown(b, bi);
+    if (ok && opt_start_bytecode_block(b, bi)) ok = opt_build_bytecode_block(b, bi);
     ok &= !b->failed;
   }
   ir_block_vec_t *order = &ctx->order;
@@ -6917,6 +7122,7 @@ static bool opt_build_attempt(ant_t *js, sv_func_t *func, opt_build_ctx_t *ctx, 
     ir_node_id_t initialize = ir_add_node(graph, ir_op(IR_OP_INITIALIZE_FRAME), NULL, 0, OPT_REPR_NONE, 0);
     opt_vec_insert(&graph->arena, &ir_block(graph, order->items[0])->body, 0, initialize);
   }
+  if (ok && ctx->thrown_blocks.len) opt_chill_thrown_blocks(b, order);
   if (ok) ir_reorder_blocks(graph, order->items, order->len);
   opt_arena_free(&b->arena);
   return ok;
@@ -6929,9 +7135,9 @@ bool opt_build_graph(
   *layout = opt_frame_layout_of(func);
   sv_func_t *no_inline[16], *no_virtual[16];
   uint32_t no_inline_count = 0, no_virtual_count = 0;
-  bool no_catch_entries = false, no_native_finally = false;
+  bool no_catch_entries = false, no_native_finally = false, no_throw_edges = false;
   for (uint32_t attempt = 0;; attempt++) {
-    opt_build_ctx_t ctx = {.exit_sites_of = exit_sites_of, .closure = closure, .no_catch_entries = no_catch_entries, .no_native_finally = no_native_finally};
+    opt_build_ctx_t ctx = {.exit_sites_of = exit_sites_of, .closure = closure, .no_catch_entries = no_catch_entries, .no_native_finally = no_native_finally, .no_throw_edges = no_throw_edges};
     for (uint32_t i = 0; i < no_inline_count; i++) opt_vec_push(&graph->arena, &ctx.no_inline, no_inline[i]);
     for (uint32_t i = 0; i < no_virtual_count; i++) opt_vec_push(&graph->arena, &ctx.no_virtual_arguments, no_virtual[i]);
     *failure = (opt_build_failure_t){0};
@@ -6940,6 +7146,9 @@ bool opt_build_graph(
     if (!ok && !ctx.retry && ctx.built_catch_entries && attempt < 8) {
       ctx.retry = true;
       no_catch_entries = true;
+    } else if (!ok && !ctx.retry && ctx.used_throw_edges && attempt < 8) {
+      ctx.retry = true;
+      no_throw_edges = true;
     } else if (!ok && !ctx.retry && ctx.used_native_finally && attempt < 8) {
       ctx.retry = true;
       no_native_finally = true;

@@ -58,6 +58,7 @@ typedef struct {
   uint32_t depth;
   uint32_t entry;
   bool learnable;
+  bool raised;
   bool finally;
 } opt_handler_t;
 
@@ -220,6 +221,7 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
 
 ant_value_t opt_rt_call(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc);
 ant_value_t opt_rt_construct(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc);
+ant_value_t opt_rt_reflect_construct(sv_vm_t *vm, ant_value_t target, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t explicit_new_target);
 ant_value_t opt_rt_new_this(sv_vm_t *vm, ant_value_t callee);
 
 static inline bool opt_closure_constructs_plainly(const sv_closure_t *closure) {
@@ -327,6 +329,7 @@ typedef struct {
 ant_value_t opt_rt_put_field_adding(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_add_site_t *site);
 ant_value_t opt_rt_instanceof(sv_vm_t *vm, ant_value_t lhs, ant_value_t rhs, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_in_field(sv_vm_t *vm, ant_value_t object, ant_value_t unused, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
+ant_value_t opt_rt_take_thrown(sv_vm_t *vm, ant_value_t error, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_throw(ant_value_t value, sv_vm_t *vm);
 
 ant_value_t opt_rt_enter_frame(sv_vm_t *vm, opt_entry_t *entry, const opt_code_t *code);

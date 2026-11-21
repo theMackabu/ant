@@ -988,6 +988,10 @@ bool jit_setup_frame(jit_compile_t *c) {
 
   c->osr_map = (osr_entry_map_t){0};
   scan_osr_entries(c->func, &c->osr_map);
+  int osr_reachable = 0;
+  for (int i = 0; i < c->osr_map.count; i++)
+    if (c->depth[c->osr_map.offsets[i]] >= 0) c->osr_map.offsets[osr_reachable++] = c->osr_map.offsets[i];
+  c->osr_map.count = osr_reachable;
   c->await_park = c->func->is_async && !c->has_captures && !c->has_captured_params && !c->func->has_dynamic_eval;
   if (c->await_park && !sv_func_jit_await_map(c->func)) {
     sv_func_sidecar_t *sidecar = sv_func_ensure_sidecar(c->func);

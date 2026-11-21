@@ -51,7 +51,8 @@ typedef enum : uint8_t {
 
 static constexpr uint32_t OPT_COMPLETION_SLOT = 0x80000000u;
 static constexpr uint32_t OPT_PENDING_RETURN = 1;
-static constexpr uint32_t OPT_PENDING_JUMP = 2;
+static constexpr uint32_t OPT_PENDING_THROW = 2;
+static constexpr uint32_t OPT_PENDING_JUMP = 3;
 
 static constexpr uint32_t OPT_NEW_TARGET_SLOT = UINT32_MAX - 2;
 static constexpr uint32_t OPT_CALLEE_SLOT = UINT32_MAX - 1;

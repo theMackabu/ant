@@ -50,6 +50,15 @@ typedef struct {
 } ant_absent_key_cache_t;
 
 typedef struct {
+  ant_shape_t *shape;
+  ant_value_t keys;
+  uint32_t ic_epoch;
+  uint32_t prop_count;
+} ant_for_in_cache_t;
+
+static constexpr uint32_t ANT_FOR_IN_CACHE_SIZE = 64;
+
+typedef struct {
   const char *name;
   uint32_t len;
   bool is_const;
@@ -612,6 +621,7 @@ struct ant_isolate_t {
     ant_with_unscopables_cache_t with_unscopables_absent;
     ant_to_primitive_cache_t to_primitive_absent;
     ant_absent_key_cache_t then_absent[8];
+    ant_for_in_cache_t for_in[ANT_FOR_IN_CACHE_SIZE];
   } runtime_cache;
 
   struct {
