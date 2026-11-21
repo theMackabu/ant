@@ -277,8 +277,9 @@ static void opt_cg_lay_out_frame(opt_cg_t *cg) {
   uint32_t call_slots = 0;
   for (ir_node_id_t node = 0; node < ir_node_count(cg->graph); node++) {
     const ir_op_t *op = &ir_node(cg->graph, node)->op;
-    if (op->code == IR_OP_CALL_DIRECT || op->code == IR_OP_CALL_NATIVE || op->code == IR_OP_CALL_CONSTRUCT)
-      call_slots = call_slots > 2u + op->call.argc ? call_slots : 2u + op->call.argc;
+    if (op->code != IR_OP_CALL_DIRECT && op->code != IR_OP_CALL_NATIVE && op->code != IR_OP_CALL_CONSTRUCT) continue;
+    uint32_t slots = 2u + op->call.argc + op->call.spare_slots;
+    call_slots = call_slots > slots ? call_slots : slots;
   }
   cg->entry_off = OPT_OUTGOING_BYTES;
   cg->index_off = (uint32_t)((cg->entry_off + sizeof(opt_entry_t) + 7) & ~(size_t)7);
@@ -1117,6 +1118,12 @@ static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condit
       opt_cg_jump_to(cg, if_true);
       return;
     }
+    case IR_COND_NO_SIDECAR: {
+      asm_gpr_t scratch = cg->pinned.scratch;
+      masm_load64(m, scratch, asm_addr(opt_cg_input(cg, node, 0), (int32_t)offsetof(ant_object_t, extra_slots)));
+      masm_branch_test64(m, invert ? ASM_COND_NON_ZERO : ASM_COND_ZERO, scratch, (int64_t)ant_sidecar, target);
+      break;
+    }
     case IR_COND_GLOBAL_EVAL_INTACT: {
       asm_gpr_t scratch = cg->pinned.scratch;
       masm_load64(m, scratch, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
@@ -1263,6 +1270,10 @@ static void opt_cg_store_slot(opt_cg_t *cg, ir_node_id_t node_id, uint32_t slot)
     default: value = opt_cg_input(cg, node_id, 0); break;
   }
   const ir_frame_layout_t *layout = cg->layout;
+  if (slot == OPT_THIS_SLOT) {
+    masm_store64(m, opt_cg_entry_field(cg, offsetof(opt_entry_t, this_val)), value);
+    return;
+  }
   if (slot >= ir_layout_arguments_base(layout)) {
     masm_store64(m, asm_addr(cg->pinned.frame, (int32_t)(8 * (slot - ir_layout_arguments_base(layout)))), value);
     return;
@@ -3118,6 +3129,59 @@ static void opt_cg_call_known(opt_cg_t *cg, ir_node_id_t node_id) {
   opt_cg_branch_error(cg, node_id);
 }
 
+static void opt_cg_call_super(opt_cg_t *cg, ir_node_id_t node_id) {
+  masm_t *m = &cg->masm;
+  const ir_node_t *node = ir_node(cg->graph, node_id);
+  const ir_op_t *op = &node->op;
+  const asm_gpr_t *a = MASM_ARGUMENT_GPRS;
+  asm_gpr_t scratch = cg->pinned.scratch, result = MASM_RETURN_GPRS[0];
+  const sv_closure_t *parent = (const sv_closure_t *)op->call.extra;
+  asm_label_t slow = masm_new_label(m), returned = masm_new_label(m), other = masm_new_label(m), done = masm_new_label(m);
+  for (uint32_t i = 0; i < node->inputs.len; i++) opt_cg_store_input(cg, node_id, i, opt_cg_call_slot(cg, i));
+  masm_move_imm64(m, scratch, (uint64_t)(uintptr_t)parent->func);
+  masm_load64(m, scratch, asm_addr(scratch, (int32_t)offsetof(sv_func_t, jit_code)));
+  masm_branch64_imm(m, ASM_COND_EQUAL, scratch, 0, slow);
+  masm_move_imm64(m, a[4], (uint64_t)(uintptr_t)parent);
+  masm_load64(m, a[3], asm_addr(a[4], (int32_t)offsetof(sv_closure_t, super_val)));
+#if defined(__aarch64__)
+  masm_move64(m, a[6], a[4]);
+#else
+  masm_store64(m, opt_cg_local(cg, 0), a[4]);
+#endif
+  masm_load64(m, a[1], opt_cg_call_slot(cg, 1));
+  masm_load64(m, a[2], opt_cg_call_slot(cg, 2));
+  masm_load_effective_address(m, a[4], opt_cg_call_slot(cg, 3));
+  masm_move_imm32(m, a[5], op->call.argc - 1u);
+  masm_move64(m, a[0], cg->pinned.vm);
+  masm_call_register(m, scratch);
+  opt_cg_record_call(cg, node->frame_state, -1);
+  masm_jump(m, returned);
+  masm_bind(m, slow);
+  opt_cg_call_runtime(cg, node_id, (uint64_t)(uintptr_t)opt_rt_super_parent);
+  masm_bind(m, returned);
+  opt_cg_branch_error(cg, node_id);
+  masm_move_imm64(m, scratch, -(NANBOX_PREFIX + 1));
+  masm_add64(m, scratch, result, scratch);
+  masm_branch64_imm(m, ASM_COND_BELOW, scratch, (int64_t)NANBOX_DATA_MASK, done);
+  masm_sar64_imm(m, scratch, result, NANBOX_TYPE_SHIFT);
+  masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, OPT_UNDEFINED_TAG_SIGNED, other);
+  masm_load64(m, result, opt_cg_call_slot(cg, 1));
+  masm_jump(m, done);
+  masm_bind(m, other);
+  masm_move64(m, a[0], result);
+  masm_load64(m, a[1], opt_cg_call_slot(cg, 1));
+  masm_call_absolute(m, (uint64_t)(uintptr_t)opt_rt_super_result);
+  opt_cg_record_call(cg, node->frame_state, -1);
+  masm_bind(m, done);
+  if (cg->has_frame) {
+    asm_label_t frameless = masm_new_label(m);
+    masm_load64(m, scratch, opt_cg_entry_field(cg, offsetof(opt_entry_t, frame)));
+    masm_branch64_imm(m, ASM_COND_EQUAL, scratch, 0, frameless);
+    masm_store64(m, asm_addr(scratch, (int32_t)offsetof(sv_frame_t, this)), result);
+    masm_bind(m, frameless);
+  }
+}
+
 static void opt_cg_emit_call_slows(opt_cg_t *cg) {
   masm_t *m = &cg->masm;
   for (uint32_t i = 0; i < cg->call_slows.len; i++) {
@@ -3228,6 +3292,10 @@ static void opt_cg_call(opt_cg_t *cg, ir_node_id_t node_id) {
   const asm_gpr_t *a = MASM_ARGUMENT_GPRS;
   asm_gpr_t scratch = cg->pinned.scratch;
   if (op->code == IR_OP_CALL_NATIVE && op->call.slow_path) opt_cg_count_slow_path(cg, op->call.func, op->call.bc_off);
+  if (op->code == IR_OP_CALL_DIRECT && op->call.construct_super) {
+    opt_cg_call_super(cg, node_id);
+    return;
+  }
   if (op->code == IR_OP_CALL_DIRECT && op->call.target) {
     opt_cg_call_known(cg, node_id);
     return;
@@ -4060,7 +4128,7 @@ static ant_value_t opt_cg_materialize_arguments(sv_vm_t *vm, ant_value_t *slots,
 }
 
 static bool opt_cg_completion_value(const opt_site_value_t *value) {
-  return value->slot >= OPT_COMPLETION_SLOT && value->slot < OPT_CALLEE_SLOT && value->repr != OPT_REPR_POINTER;
+  return value->slot >= OPT_COMPLETION_SLOT && value->slot < OPT_NEW_TARGET_SLOT && value->repr != OPT_REPR_POINTER;
 }
 
 static uint32_t opt_cg_site_finally_count(const opt_code_t *code, const opt_site_t *site) {
@@ -4128,7 +4196,7 @@ static ant_value_t opt_cg_exit_frames(sv_vm_t *vm, const opt_site_t *site, opt_c
     uint32_t room = root || params > at->argc ? params : at->argc;
     uint32_t stack_slots = (uint32_t)(func->max_stack > 0 ? func->max_stack : 0);
     opt_exit_frame_t *frame = &frames[k];
-    *frame = (opt_exit_frame_t){.func = func, .callee = Ant_Value_Undefined, .this_val = Ant_Value_Undefined, .params = cursor, .arguments = Ant_Value_Undefined, .site = at};
+    *frame = (opt_exit_frame_t){.func = func, .callee = Ant_Value_Undefined, .this_val = Ant_Value_Undefined, .new_target = Ant_Value_Undefined, .params = cursor, .arguments = Ant_Value_Undefined, .site = at};
     frame->locals = frame->params + room;
     frame->stack = frame->locals + locals;
     cursor = frame->stack + depth;
@@ -4141,6 +4209,7 @@ static ant_value_t opt_cg_exit_frames(sv_vm_t *vm, const opt_site_t *site, opt_c
       ant_value_t *to = NULL;
       if (slot == OPT_THIS_SLOT) frame->this_val = boxed;
       else if (slot == OPT_CALLEE_SLOT) frame->callee = boxed;
+      else if (slot == OPT_NEW_TARGET_SLOT) frame->new_target = boxed;
       else if (slot <= stack_slots) {
         if (slot - 1 < depth) to = &frame->stack[slot - 1];
       } else if (slot <= stack_slots + locals) to = &frame->locals[slot - stack_slots - 1];

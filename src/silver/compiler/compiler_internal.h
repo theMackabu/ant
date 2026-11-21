@@ -74,6 +74,7 @@ size_t literal_num_key(double num, char *buf, size_t cap);
 const char *copy_source_text(ant_t *js, const char *source, ant_offset_t source_len);
 void emit(sv_compiler_t *c, uint8_t byte);
 void emit_u16(sv_compiler_t *c, uint16_t val);
+void emit_argc(sv_compiler_t *c, int argc);
 void emit_u32(sv_compiler_t *c, uint32_t val);
 void emit_i32(sv_compiler_t *c, int32_t val);
 void emit_op(sv_compiler_t *c, sv_op_t op);

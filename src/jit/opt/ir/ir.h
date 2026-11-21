@@ -196,6 +196,7 @@ typedef enum : uint8_t {
   IR_COND_INDEX_IN_BOUNDS,
   IR_COND_MAGICAL_LENGTH,
   IR_COND_EXTENSIBLE,
+  IR_COND_NO_SIDECAR,
   IR_COND_ARRAY_ITERATOR,
   IR_COND_ITERABLE_ARRAY,
   IR_COND_ITERATOR_RETURN_INTACT,
@@ -305,6 +306,8 @@ typedef struct {
       bool slow_path;
       bool builtin;
       bool native_closure;
+      bool construct_super;
+      uint16_t spare_slots;
     } call;
     struct {
       sv_func_t *func;

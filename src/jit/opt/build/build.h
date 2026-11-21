@@ -43,6 +43,12 @@ static inline ir_frame_layout_t opt_frame_layout_of(const sv_func_t *func) {
 }
 
 void opt_build_release(ant_t *js, ir_graph_t *graph);
+static inline bool opt_is_super_call(const sv_func_t *func, uint32_t call_off) {
+  if (call_off >= (uint32_t)func->code_len) return false;
+  sv_op_t op = (sv_op_t)func->code[call_off];
+  return op == OP_CALL_SUPER || op == OP_SUPER_APPLY || op == OP_SUPER_SPREAD || op == OP_SUPER_FORWARD;
+}
+
 uint32_t opt_learned_shapes(const sv_func_t *func, uint32_t bc_off);
 
 bool opt_build_graph(

@@ -775,6 +775,8 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_await_return_direct = MIR_new_import(c->ctx, "jit_helper_await_return_direct");
   c->imp_native_finish = MIR_new_import(c->ctx, "jit_helper_native_finish");
   c->imp_call_super = MIR_new_import(c->ctx, "jit_helper_call_super");
+  c->imp_super_apply = MIR_new_import(c->ctx, "jit_helper_super_apply");
+  c->imp_super_spread = MIR_new_import(c->ctx, "jit_helper_super_spread");
   c->imp_call_array_includes = MIR_new_import(c->ctx, "jit_helper_call_array_includes");
   c->imp_call_char_code_at = MIR_new_import(c->ctx, "jit_helper_call_char_code_at");
   c->imp_call_string_intrinsic =

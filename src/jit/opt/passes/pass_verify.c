@@ -167,6 +167,7 @@ static uint32_t pass_branch_input_reprs(ir_condition_t condition, opt_repr_t *re
     case IR_COND_ASCII_STRING:
     case IR_COND_MAGICAL_LENGTH:
     case IR_COND_EXTENSIBLE:
+    case IR_COND_NO_SIDECAR:
     case IR_COND_ARRAY_ITERATOR:
     case IR_COND_BINDING_MUTABLE:
     case IR_COND_NEXT_BINDING_OF_SHAPE: reprs[0] = OPT_REPR_POINTER; return 1;

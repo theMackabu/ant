@@ -730,7 +730,12 @@ ant_value_t opt_rt_resume(
   );
 }
 
-static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t callee, ant_value_t new_target, uint32_t call_off) {
+static inline ant_value_t opt_exit_new_target(const opt_exit_frame_t *frame) {
+  if (!frame->site->construct) return Ant_Value_Undefined;
+  return vtype(frame->new_target) == kTypeUndefined ? frame->callee : frame->new_target;
+}
+
+static bool opt_push_waiting_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t callee, uint32_t call_off, ant_value_t new_target) {
   if (vm->fp + 1 >= vm->max_frames && !sv_vm_reserve(vm, 0)) return false;
   sv_frame_t *frame = &vm->frames[++vm->fp];
   ant_value_t undefined = Ant_Value_Undefined;
@@ -789,8 +794,8 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
   for (uint32_t k = count; k-- > 1;) {
     ant_value_t callee = frames[k].callee;
     if (k == count - 1) callee = sv_closure_heap_value(js, entry->closure);
-    ant_value_t new_target = k == count - 1 ? entry->new_target : frames[k].site->construct ? callee : Ant_Value_Undefined;
-    waits[k] = room && opt_push_waiting_frame(vm, frames[k].func, callee, new_target, frames[k].site->call_off);
+    ant_value_t new_target = k == count - 1 ? entry->new_target : opt_exit_new_target(&frames[k]);
+    waits[k] = room && opt_push_waiting_frame(vm, frames[k].func, callee, frames[k].site->call_off, new_target);
     room &= waits[k];
   }
 
@@ -812,6 +817,10 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
         if (frames[k - 1].site->construct && !sv_is_construct_result(result)) result = frames[k - 1].this_val;
         if (at->mode == OPT_RESUME_RETURN) continue;
         frame->stack[at->depth - 1] = result;
+        if (opt_is_super_call(frame->func, at->call_off)) {
+          frame->this_val = result;
+          if (k == count - 1) root_this = result;
+        }
       }
     }
     vm->jit.resume.throwing = throwing;
@@ -831,7 +840,7 @@ ant_value_t opt_rt_exit_frames(sv_vm_t *vm, opt_code_t *code, const opt_site_t *
       uint32_t argc = is_object_type(frame->arguments) ? at->argc : at->argc < frame_params ? at->argc : frame_params;
       vm->jit.resume.arguments_obj = frame->arguments;
       result = jit_resume_in_interpreter(
-        vm, frame->closure, frame->this_val, at->construct ? frame->callee : Ant_Value_Undefined, frame->closure->super_val,
+        vm, frame->closure, frame->this_val, opt_exit_new_target(frame), frame->closure->super_val,
         frame->params, (int)argc, frame->stack, depth, frame->params, frame_params,
         frame->locals, frame_locals, bc_off, false, NULL
       );
@@ -898,6 +907,39 @@ ant_value_t opt_rt_super_call(sv_vm_t *vm, ant_value_t this_val, ant_value_t fun
   if (is_err(effective_this)) return effective_this;
   frame->this = effective_this;
   return effective_this;
+}
+
+ant_value_t opt_rt_super_apply(sv_vm_t *vm, ant_value_t this_val, ant_value_t func, ant_value_t *args, int64_t argc, int64_t unused) {
+  sv_frame_t *frame = &vm->frames[vm->fp];
+  ant_value_t effective_this = jit_helper_super_apply(vm, vm->js, func, this_val, args + 1, (int)argc - 1, args[0]);
+  if (is_err(effective_this)) return effective_this;
+  frame->this = effective_this;
+  return effective_this;
+}
+
+ant_value_t opt_rt_super_spread(sv_vm_t *vm, ant_value_t this_val, ant_value_t func, ant_value_t *args, int64_t argc, int64_t unused) {
+  sv_frame_t *frame = &vm->frames[vm->fp];
+  ant_value_t effective_this = jit_helper_super_spread(vm, vm->js, func, this_val, args + 1, (int)argc - 1, args[0]);
+  if (is_err(effective_this)) return effective_this;
+  frame->this = effective_this;
+  return effective_this;
+}
+
+ant_value_t opt_rt_call_args(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t spread) {
+  if (spread) return jit_helper_call_spread(vm, vm->js, callee, this_val, args, (int)argc, OPT_SPREAD_ARG_SLOTS);
+  return jit_helper_apply(vm, vm->js, callee, this_val, args, (int)argc, OPT_SPREAD_ARG_SLOTS);
+}
+
+ant_value_t opt_rt_new_args(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t spread) {
+  return jit_helper_new_args(vm, vm->js, callee, new_target, args, (int)argc, OPT_SPREAD_ARG_SLOTS, spread != 0);
+}
+
+ant_value_t opt_rt_super_parent(sv_vm_t *vm, ant_value_t parent, ant_value_t this_val, ant_value_t *args, int64_t argc) {
+  return sv_super_construct_parent(vm, vm->js, parent, this_val, args + 1, (int)argc - 1, args[0]);
+}
+
+ant_value_t opt_rt_super_result(ant_value_t result, ant_value_t this_val) {
+  return sv_is_construct_result(result) ? result : this_val;
 }
 
 ant_value_t opt_rt_import_default(sv_vm_t *vm, ant_value_t ns, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind) {
@@ -1037,11 +1079,11 @@ ant_value_t opt_rt_new_this(sv_vm_t *vm, ant_value_t callee) {
   ant_t *js = vm->js;
   if (vtype(callee) != kTypeFunction) return T_EMPTY;
   sv_closure_t *closure = js_func_closure(callee);
-  if (!sv_closure_is_plain_sync(closure) || closure->func->is_derived_ctor || !is_object_type(closure->func_obj)) return T_EMPTY;
+  if (!opt_closure_constructs_plainly(closure) || !is_object_type(closure->func_obj)) return T_EMPTY;
   ant_object_t *func_obj = js_obj_ptr(closure->func_obj);
   ant_value_t proto;
   if (!func_obj->flags.is_constructor || !sv_construct_prototype_data(js, func_obj, closure->func, &proto)) return T_EMPTY;
-  ant_value_t object = js_mkobj_with_proto_slots(js, proto, sv_construct_slots(closure->func));
+  ant_value_t object = js_mkobj_with_proto_slots(js, proto, sv_closure_construct_slots(closure));
   if (vtype(object) != kTypeObject) return T_EMPTY;
   return object;
 }
