@@ -323,7 +323,7 @@ ant_value_t sv_spread_into(sv_vm_t *vm, ant_t *js, ant_value_t arr, ant_value_t 
   if (vtype(arr) != kTypeArray) return js_mkerr(js, "spread target is not an array");
 
   if (vtype(iterable) == kTypeArray && js_array_iteration_default(js, iterable)) {
-    ant_value_t spread = js_arr_spread_into(js, arr, iterable);
+    ant_value_t spread = js_arr_spread_into_owned(js, arr, iterable);
     return is_err(spread) ? spread : Ant_Value_FromNumber(0);
   }
 

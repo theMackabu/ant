@@ -1,3 +1,4 @@
+#include "arrays.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -224,8 +225,7 @@ static ant_value_t reflect_is_extensible(ant_params_t) {
 
   ant_object_t *obj = js_obj_ptr(js_as_obj(target));
   if (!obj) return Ant_Value_False;
-  if (obj->flags.frozen || obj->flags.sealed) return Ant_Value_False;
-  
+
   return Ant_Value_FromBool(obj->flags.extensible);
 }
 
@@ -236,6 +236,7 @@ static ant_value_t reflect_prevent_extensions(ant_params_t) {
 
   ant_object_t *obj = js_obj_ptr(js_as_obj(target));
   if (!obj) return Ant_Value_False;
+  if (!Ant_Array_UnshareValue(js, js_as_obj(target))) return js_mkerr(js, "oom");
   obj->flags.extensible = 0;
   
   return Ant_Value_True;

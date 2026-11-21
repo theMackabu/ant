@@ -1,8 +1,10 @@
 #include <compat.h> // IWYU pragma: keep
 #include <stdlib.h>
+#include <limits.h>
 #include <math.h>
 
 #include "utf8.h"
+#include "numbers.h"
 #include "cfunc.h"
 #include "props.h"
 #include "arrays.h"
@@ -32,7 +34,7 @@ ant_value_t builtin_Array(ant_params_t) {
     if (new_len > 0) array_mark_may_have_holes(arr);
     array_len_set(js, arr, new_len);
   } else if (nargs > 0) for (int i = 0; i < nargs; i++) 
-    arr_set(js, arr, (ant_offset_t)i, args[i]);
+    arr_set_owned(js, arr, (ant_offset_t)i, args[i]);
 
   ant_value_t instance_proto = js_instance_proto_from_new_target(js, js->sym.array_proto, call_new_target);
   
@@ -51,8 +53,8 @@ static inline ant_value_t require_callback(ant_native_params_t, const char *name
 }
 
 static inline void array_copy_write(ant_t *js, ant_value_t result, ant_offset_t doff, ant_offset_t idx, ant_value_t value) {
-  if (doff) dense_set(js, doff, idx, value);
-  else arr_set(js, result, idx, value);
+  if (doff) dense_set_owned(js, doff, idx, value);
+  else arr_set_owned(js, result, idx, value);
 }
 
 static inline ant_value_t array_copy_element(
@@ -136,6 +138,15 @@ static ant_value_t arguments_set_length(ant_t *js, ant_value_t obj, ant_offset_t
   if (vtype(stored) != kTypeNumber || Ant_Value_AsNumberUnchecked(stored) != (double)len)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot assign to read only property 'length' of object");
   return Ant_Value_FromNumber((double)len);
+}
+
+static inline bool array_dense_writable(ant_t *js, ant_object_t *dense) {
+  if (!dense->flags.extensible) return false;
+  return (!dense->flags.sealed && !dense->flags.frozen) || Ant_Array_TryUnshare(js, dense);
+}
+
+static bool array_keeps_holes(ant_t *js, ant_object_t *dense) {
+  return dense->flags.extensible && !dense->flags.sealed && array_elements_proto_plain(js, dense);
 }
 
 static bool array_refuses_add(ant_value_t arr, int nargs) {
@@ -257,6 +268,62 @@ static ant_value_t array_method_receiver(ant_t *js, ant_value_t value, const cha
 static ant_value_t array_set_index_throw(ant_t *js, ant_value_t obj, ant_offset_t idx, ant_value_t value);
 static ant_value_t array_set_length_throw(ant_t *js, ant_value_t obj, ant_offset_t len);
 
+static __attribute__((noinline, cold)) ant_value_t array_integer_arg_coerced(ant_t *js, ant_value_t arg, double *out) {
+  ant_value_t numeric = js_to_numeric(js, arg);
+  if (is_err(numeric)) return numeric;
+  if (vtype(numeric) == kTypeBigInt)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a BigInt value to a number");
+  double number = Ant_Value_AsNumberUnchecked(numeric);
+  *out = number != number ? 0 : trunc(number);
+  return Ant_Value_Undefined;
+}
+
+static inline __attribute__((always_inline)) ant_value_t array_integer_arg(
+  ant_t *js, ant_value_t *args, int nargs, int at, double fallback, double *out
+) {
+  *out = fallback;
+  if (at >= nargs || vtype(args[at]) == kTypeUndefined) return Ant_Value_Undefined;
+  if (__builtin_expect(vtype(args[at]) != kTypeNumber, 0)) return array_integer_arg_coerced(js, args[at], out);
+  
+  double number = Ant_Value_AsNumberUnchecked(args[at]);
+  *out = number != number ? 0 : trunc(number);
+  return Ant_Value_Undefined;
+}
+
+static inline __attribute__((always_inline)) bool array_small_integer_arg(
+  ant_value_t *args, int nargs, int at, int64_t *out
+) {
+  int32_t whole;
+  if (at >= nargs || vtype(args[at]) != kTypeNumber) return false;
+  if (!ant_number_as_int32(Ant_Value_AsNumberUnchecked(args[at]), &whole)) return false;
+  *out = whole;
+  return true;
+}
+
+static inline __attribute__((always_inline)) ant_value_t array_relative_arg(
+  ant_t *js, ant_value_t *args, int nargs, int at,
+  ant_offset_t len, ant_offset_t fallback, ant_offset_t *out
+) {
+  if (at < nargs && __builtin_expect(vtype(args[at]) == kTypeNumber, 1)) {
+    double limit = (double)len;
+    int64_t whole = (int64_t)fmin(fmax(Ant_Value_AsNumberUnchecked(args[at]), -limit), limit);
+    if (whole < 0) whole += (int64_t)len;
+    *out = (uint64_t)whole > len ? len : (ant_offset_t)whole;
+    return Ant_Value_Undefined;
+  }
+
+  double relative;
+  ant_value_t err = array_integer_arg(js, args, nargs, at, (double)fallback, &relative);
+  if (is_err(err)) return err;
+  
+  if (relative < 0) relative = relative + (double)len < 0 ? 0 : relative + (double)len;
+  else if (relative > (double)len) relative = (double)len;
+  
+  *out = (ant_offset_t)relative;
+  return Ant_Value_Undefined;
+}
+static ant_value_t array_set_index_throw(ant_t *js, ant_value_t obj, ant_offset_t idx, ant_value_t value);
+
 static ant_value_t builtin_array_push(ant_params_t) {
   ant_value_t arr = array_method_receiver(js, call_this, "push");
   
@@ -266,6 +333,8 @@ static ant_value_t builtin_array_push(ant_params_t) {
 
   if (is_proxy(arr)) {
     PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
+    if (len > (ant_offset_t)9007199254740991 - (ant_offset_t)nargs)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Pushing %d elements on an array-like of length %.0f is disallowed by its maximum length", nargs, (double)len);
     for (int i = 0; i < nargs; i++, len++) {
       ant_value_t set = array_set_index_throw(js, arr, len, args[i]);
       if (is_err(set)) return set;
@@ -280,8 +349,11 @@ static ant_value_t builtin_array_push(ant_params_t) {
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
 
   ant_object_t *target = js_obj_ptr(js_as_obj(arr));
-  if (array_refuses_add(arr, nargs)) return array_add_refused_error(js, len);
-  if (target && (target->flags.frozen || array_length_readonly(js, arr)))
+  if (array_refuses_add(arr, nargs)) {
+    if (!Ant_Array_UnshareForAppend(js, arr, (uint32_t)nargs)) return js_mkerr(js, "oom");
+    if (array_refuses_add(arr, nargs)) return array_add_refused_error(js, len);
+  }
+  if (target && ((target->flags.frozen && ant_object_is_frozen(target)) || array_length_readonly(js, arr)))
     return array_length_readonly_error(js);
   
   ant_offset_t doff = get_dense_buf(arr);
@@ -292,18 +364,19 @@ static ant_value_t builtin_array_push(ant_params_t) {
     for (; i < nargs && (plain || !array_store_reaches_proto_slow(js, arr, len)); i++) {
       ant_offset_t cap = dense_capacity(doff);
       if (len >= cap) {
+        if (__builtin_expect(len >= ARRAY_DENSE_GAP && len >= dense_iterable_length(js, arr) * 4, 0)) break;
         doff = dense_grow(js, arr, len + 1);
         if (doff == 0) return js_mkerr(js, "oom");
       }
       if (is_empty_slot(args[i])) array_mark_may_have_holes(arr);
-      dense_set(js, doff, len, args[i]);
+      dense_set_owned(js, doff, len, args[i]);
       len++;
     }
     array_len_set(js, arr, len);
     if (i == nargs) return Ant_Value_FromNumber((double) len);
 
     for (; i < nargs; i++) {
-      ant_value_t stored = js_setprop_index_throw(js, arr, (uint32_t)len, args[i]);
+      ant_value_t stored = array_set_index_throw(js, arr, len, args[i]);
       if (is_err(stored)) return stored;
       len++;
     }
@@ -312,8 +385,11 @@ static ant_value_t builtin_array_push(ant_params_t) {
     return is_err(set) ? set : len_val;
   }
   
+  if (len > (ant_offset_t)9007199254740991 - (ant_offset_t)nargs)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Pushing %d elements on an array-like of length %.0f is disallowed by its maximum length", nargs, (double)len);
+
   for (int i = 0; i < nargs; i++, len++) {
-    ant_value_t stored = js_setprop_index_throw(js, arr, (uint32_t)len, args[i]);
+    ant_value_t stored = array_set_index_throw(js, arr, len, args[i]);
     if (is_err(stored)) return stored;
   }
 
@@ -341,6 +417,14 @@ static ant_value_t array_delete_index_throw(ant_t *js, ant_value_t obj, ant_offs
 static ant_value_t array_set_length_throw(ant_t *js, ant_value_t obj, ant_offset_t len) {
   ant_value_t set = js_setprop_throw(js, obj, js->length_str, false, 0, Ant_Value_FromNumber((double)len));
   return is_err(set) ? set : Ant_Value_Undefined;
+}
+
+static ant_value_t array_set_result_length(ant_t *js, ant_value_t result, ant_offset_t len, bool fresh) {
+  if (fresh) return Ant_Value_Undefined;
+  ant_object_t *ptr = vtype(result) == kTypeArray ? (ant_object_t *)vptr(result) : NULL;
+  bool plain = ptr && !ptr->flags.arguments_object && !(ptr->flags.raw & (ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_EXOTIC));
+  if (plain && ptr->u.array.len == len) return Ant_Value_Undefined;
+  return array_set_length_throw(js, result, len);
 }
 
 static ant_value_t array_move_range_throw(ant_t *js, ant_value_t arr, ant_offset_t from, ant_offset_t to, ant_offset_t count) {
@@ -465,6 +549,13 @@ static ant_value_t builtin_array_pop(ant_params_t) {
     return is_empty_slot(last) ? Ant_Value_Undefined : last;
   }
   
+  ant_object_t *shared = vtype(call_this) == kTypeArray ? (ant_object_t *)vptr(call_this) : NULL;
+  if (shared && ant_array_is_shared(shared) && shared->u.array.len > 0) {
+    ant_value_t last = shared->u.array.data[shared->u.array.len - 1];
+    if (!is_empty_slot(last) && array_length_set_shared(js, call_this, shared, shared->u.array.len - 1)) return last;
+  }
+  
+  if (!Ant_Array_UnshareValue(js, call_this)) return js_mkerr(js, "oom");
   ant_value_t arr = array_method_receiver(js, call_this, "pop");
   if (is_err(arr)) return arr;
   ant_offset_t string_len;
@@ -1197,7 +1288,7 @@ static ant_value_t builtin_array_reverse(ant_params_t) {
   if (array_string_wrapper_length(js, arr, &string_len) && string_len > 1) return array_string_wrapper_write_error(js, "0");
   
   ant_object_t *frozen = is_proxy(arr) ? NULL : js_obj_ptr(js_as_obj(arr));
-  if (frozen && frozen->flags.frozen) {
+  if (frozen && frozen->flags.frozen && !Ant_Array_TryUnshare(js, frozen)) {
     ant_offset_t frozen_len = 0;
     ant_value_t len_result = array_like_length_checked(js, arr, &frozen_len);
     
@@ -1253,8 +1344,8 @@ static ant_value_t builtin_array_reverse(ant_params_t) {
     for (ant_offset_t i = 0; i < len / 2; i++) {
       ant_value_t a = dense_get(doff, i);
       ant_value_t b = dense_get(doff, len - 1 - i);
-      dense_set(js, doff, i, b);
-      dense_set(js, doff, len - 1 - i, a);
+      dense_set_owned(js, doff, i, b);
+      dense_set_owned(js, doff, len - 1 - i, a);
     }
     
     return arr;
@@ -1534,6 +1625,7 @@ static ant_value_t builtin_array_concat(ant_params_t) {
       ant_object_t *src = array_dense_source(js, arg);
       if (src && (arg_len > src->u.array.len || arg_len > src->u.array.cap)) src = NULL;
       ant_offset_t rdoff = real_array_obj_ptr(result) && (intrinsic || array_result_extensible(result)) ? get_dense_buf(result) : 0;
+      if (rdoff && !intrinsic && !Ant_Array_Unshare(js, dense_obj(rdoff))) return js_mkerr(js, "oom");
       if (rdoff && src && dense_capacity(rdoff) < result_idx + arg_len)
         rdoff = dense_grow(js, result, result_idx + arg_len);
       
@@ -1550,7 +1642,7 @@ static ant_value_t builtin_array_concat(ant_params_t) {
           if (is_err(elem)) return elem;
         }
         if (rdoff && result_idx < dense_capacity(rdoff) && result_idx <= get_array_length(js, result)) {
-          dense_set(js, rdoff, result_idx, elem);
+          dense_set_owned(js, rdoff, result_idx, elem);
           if (result_idx == get_array_length(js, result)) array_len_set(js, result, result_idx + 1);
         } else {
           ant_value_t set = array_result_set(js, result, intrinsic, result_idx, elem);
@@ -1604,20 +1696,10 @@ static ant_value_t builtin_array_fill(ant_params_t) {
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
   ant_offset_t start = 0, end = len;
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    int s = (int) Ant_Value_AsNumberUnchecked(args[1]);
-    if (s < 0) s = (int)len + s;
-    if (s < 0) s = 0;
-    start = (ant_offset_t) s;
-  }
-  if (nargs >= 3 && vtype(args[2]) == kTypeNumber) {
-    int e = (int) Ant_Value_AsNumberUnchecked(args[2]);
-    if (e < 0) e = (int)len + e;
-    if (e < 0) e = 0;
-    end = (ant_offset_t) e;
-  }
-  if (start > len) start = len;
-  if (end > len) end = len;
+  ant_value_t arg_err = array_relative_arg(js, args, nargs, 1, len, 0, &start);
+  if (is_err(arg_err)) return arg_err;
+  arg_err = array_relative_arg(js, args, nargs, 2, len, len, &end);
+  if (is_err(arg_err)) return arg_err;
   
   ant_offset_t string_len;
   if (start < end && array_string_wrapper_length(js, arr, &string_len)) {
@@ -1627,12 +1709,9 @@ static ant_value_t builtin_array_fill(ant_params_t) {
   }
   
   ant_object_t *dense = real_array_obj_ptr(arr);
-  if (
-    !is_proxy(arr) && array_dense_covers(dense, end) &&
-    dense->flags.extensible && !dense->flags.sealed && !dense->flags.frozen
-  ) {
+  if (!is_proxy(arr) && array_dense_covers(dense, end) && array_dense_writable(js, dense)) {
     ant_offset_t doff = get_dense_buf(arr);
-    for (ant_offset_t i = start; i < end; i++) dense_set(js, doff, i, value);
+    for (ant_offset_t i = start; i < end; i++) dense_set_owned(js, doff, i, value);
     return arr;
   }
   
@@ -1757,12 +1836,9 @@ static ant_value_t builtin_array_indexOf(ant_params_t) {
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
   ant_offset_t start = 0;
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    int s = (int) Ant_Value_AsNumberUnchecked(args[1]);
-    if (s < 0) s = (int)len + s;
-    if (s < 0) s = 0;
-    start = (ant_offset_t) s;
-  }
+  if (len == 0) return Ant_Value_FromNumber(-1);
+  ant_value_t arg_err = array_relative_arg(js, args, nargs, 1, len, 0, &start);
+  if (is_err(arg_err)) return arg_err;
   
   ant_object_t *dense = array_dense_source(js, arr);
   if (dense && len <= dense->u.array.len && len <= dense->u.array.cap) {
@@ -1794,12 +1870,21 @@ static ant_value_t builtin_array_lastIndexOf(ant_params_t) {
   ant_value_t search = args[0];
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
+  if (len == 0) return Ant_Value_FromNumber(-1);
   int start = (int)len - 1;
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    start = (int) Ant_Value_AsNumberUnchecked(args[1]);
-    if (start < 0) start = (int)len + start;
+  int64_t small_from;
+  if (__builtin_expect(array_small_integer_arg(args, nargs, 1, &small_from), 1)) {
+    if (small_from < 0) small_from += (int64_t)len;
+    if (small_from < 0) return Ant_Value_FromNumber(-1);
+    if (small_from < start) start = (int)small_from;
+  } else if (nargs >= 2) {
+    double from;
+    ant_value_t arg_err = array_integer_arg(js, args, nargs, 1, 0, &from);
+    if (is_err(arg_err)) return arg_err;
+    if (from < 0) from += (double)len;
+    if (from < 0) return Ant_Value_FromNumber(-1);
+    if (from < (double)start) start = (int)from;
   }
-  if (start >= (int)len) start = (int)len - 1;
   
   ant_object_t *dense = array_dense_source(js, arr);
   if (dense && len <= dense->u.array.len && len <= dense->u.array.cap) {
@@ -1869,6 +1954,7 @@ static ant_value_t builtin_array_shift(ant_params_t) {
     return is_empty_slot(first) ? Ant_Value_Undefined : first;
   }
   
+  if (!Ant_Array_UnshareValue(js, call_this)) return js_mkerr(js, "oom");
   ant_value_t arr = array_method_receiver(js, call_this, "shift");
   if (is_err(arr)) return arr;
   ant_offset_t string_len;
@@ -1917,7 +2003,7 @@ static ant_value_t builtin_array_shift(ant_params_t) {
     if (is_empty_slot(first)) first = Ant_Value_Undefined;
     memmove(&d[0], &d[1], sizeof(ant_value_t) * (size_t)(d_len - 1));
     gc_elements_moved(dense_obj(doff));
-    dense_set(js, doff, d_len - 1, T_EMPTY);
+    dense_set_owned(js, doff, d_len - 1, T_EMPTY);
     array_len_set(js, arr, len - 1);
     return first;
   }
@@ -1935,7 +2021,10 @@ static ant_value_t builtin_array_unshift(ant_params_t) {
   if (js_is_arguments(arr)) return arguments_unshift(js, arr, args, nargs);
 
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
-  if (array_refuses_add(arr, nargs)) return array_add_refused_error(js, len ? len - 1 + (ant_offset_t)nargs : 0);
+  if (array_refuses_add(arr, nargs)) {
+    if (!Ant_Array_UnshareForAppend(js, arr, (uint32_t)nargs)) return js_mkerr(js, "oom");
+    if (array_refuses_add(arr, nargs)) return array_add_refused_error(js, len ? len - 1 + (ant_offset_t)nargs : 0);
+  }
 
   if (is_proxy(arr)) {
     ant_value_t read_from = proxy_read_target(js, arr);
@@ -1980,7 +2069,7 @@ static ant_value_t builtin_array_unshift(ant_params_t) {
     memmove(&d[nargs], &d[0], sizeof(ant_value_t) * (size_t)d_len);
     gc_elements_moved(dense_obj(doff));
     for (int i = 0; i < nargs; i++)
-      dense_set(js, doff, (ant_offset_t)i, args[i]);
+      dense_set_owned(js, doff, (ant_offset_t)i, args[i]);
     array_len_set(js, arr, new_len);
     return Ant_Value_FromNumber((double) new_len);
   }
@@ -2101,7 +2190,7 @@ static ant_value_t builtin_array_sort(ant_params_t) {
   if (len == 0) goto done;
   
   ant_object_t *target = is_proxy(arr) ? NULL : js_obj_ptr(js_as_obj(arr));
-  if (target && target->flags.frozen && len > 1) { 
+  if (target && target->flags.frozen && !Ant_Array_TryUnshare(js, target) && len > 1) { 
     result = Ant_Error_CreateReadOnlyProperty(js, arr, Ant_Value_FromNumber(0)); 
     goto done; 
   }
@@ -2228,7 +2317,7 @@ writeback:;
   if (array_sort_writes_dense(arr, len)) {
     ant_offset_t doff = get_dense_buf(arr);
     for (ant_offset_t i = 0; i < len; i++)
-      dense_set(js, doff, i, i < count ? vals[i] : i < filled ? Ant_Value_Undefined : T_EMPTY);
+      dense_set_owned(js, doff, i, i < count ? vals[i] : i < filled ? Ant_Value_Undefined : T_EMPTY);
     if (filled < len) array_mark_may_have_holes(arr);
   } else for (ant_offset_t i = 0; i < len; i++) {
     ant_value_t step;
@@ -2273,19 +2362,22 @@ static ant_value_t builtin_array_splice(ant_params_t) {
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   ant_value_t read_from = is_proxy(arr) ? proxy_read_target(js, arr) : arr;
 
-  int start = 0;
-  if (nargs >= 1 && vtype(args[0]) == kTypeNumber) {
-    start = (int) Ant_Value_AsNumberUnchecked(args[0]);
-    if (start < 0) start = (int)len + start;
-    if (start < 0) start = 0;
-    if (start > (int)len) start = (int)len;
-  }
+  ant_offset_t start_at = 0;
+  ant_value_t arg_err = array_relative_arg(js, args, nargs, 0, len, 0, &start_at);
+  if (is_err(arg_err)) return arg_err;
+  int start = (int)start_at;
 
   int deleteCount = nargs == 0 ? 0 : (int)len - start;
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    deleteCount = (int) Ant_Value_AsNumberUnchecked(args[1]);
-    if (deleteCount < 0) deleteCount = 0;
-    if (deleteCount > (int)len - start) deleteCount = (int)len - start;
+  int64_t small_count;
+  if (__builtin_expect(array_small_integer_arg(args, nargs, 1, &small_count), 1)) {
+    if (small_count < 0) small_count = 0;
+    if (small_count < deleteCount) deleteCount = (int)small_count;
+  } else if (nargs >= 2) {
+    double requested;
+    arg_err = array_integer_arg(js, args, nargs, 1, 0, &requested);
+    if (is_err(arg_err)) return arg_err;
+    if (requested < 0) requested = 0;
+    if (requested < (double)deleteCount) deleteCount = (int)requested;
   }
 
   int insertCount = nargs > 2 ? nargs - 2 : 0;
@@ -2299,7 +2391,7 @@ static ant_value_t builtin_array_splice(ant_params_t) {
     ant_offset_t d_len = dense_iterable_length(js, arr);
     const uint16_t mutable_mask =
       ANT_OBJECT_FLAG_EXTENSIBLE | ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXOTIC;
-    if (d_len != len || (dense_obj(doff)->flags.raw & mutable_mask) != ANT_OBJECT_FLAG_EXTENSIBLE) goto splice_slow;
+    if (d_len != len || ((dense_obj(doff)->flags.raw & mutable_mask) != ANT_OBJECT_FLAG_EXTENSIBLE && !Ant_Array_TryUnshare(js, dense_obj(doff)))) goto splice_slow;
     bool skipped = false;
     for (int i = 0; i < deleteCount; i++) {
       if (!arr_has(js, arr, (ant_offset_t)(start + i))) { skipped = true; continue; }
@@ -2308,6 +2400,10 @@ static ant_value_t builtin_array_splice(ant_params_t) {
       if (is_err(set)) return set;
     }
     if (intrinsic && !skipped) array_mark_packed(removed);
+    if (!intrinsic) {
+      ant_value_t set_len = array_set_result_length(js, removed, (ant_offset_t)deleteCount, false);
+      if (is_err(set_len)) return set_len;
+    }
 
     int shift = insertCount - deleteCount;
     ant_offset_t new_len = (ant_offset_t)((int)d_len + shift);
@@ -2329,11 +2425,11 @@ static ant_value_t builtin_array_splice(ant_params_t) {
     }
 
     for (int i = 0; i < insertCount; i++)
-      dense_set(js, doff, (ant_offset_t)(start + i), args[2 + i]);
+      dense_set_owned(js, doff, (ant_offset_t)(start + i), args[2 + i]);
 
     if (shift < 0) {
       for (ant_offset_t i = new_len; i < d_len; i++)
-        dense_set(js, doff, i, T_EMPTY);
+        dense_set_owned(js, doff, i, T_EMPTY);
     }
 
     array_len_set(js, arr, new_len);
@@ -2407,34 +2503,22 @@ static ant_value_t builtin_array_splice(ant_params_t) {
 }
 
 static ant_value_t builtin_array_copyWithin(ant_params_t) {
-  ant_value_t arr = call_this;
-  ant_value_t result = arr;
-  gc_temp_root_scope_t temp_roots = {0};
-  
-  bool temp_roots_active = false;
-  arr = array_method_receiver(js, arr, "copyWithin");
+  ant_value_t arr = array_method_receiver(js, call_this, "copyWithin");
   if (is_err(arr)) return arr;
 
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   ant_value_t read_from = is_proxy(arr) ? proxy_read_target(js, arr) : arr;
 
-  int target = 0, start = 0, end = (int)len;
-  if (nargs >= 1 && vtype(args[0]) == kTypeNumber) {
-    target = (int) Ant_Value_AsNumberUnchecked(args[0]);
-    if (target < 0) target = (int)len + target;
-    if (target < 0) target = 0;
-  }
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    start = (int) Ant_Value_AsNumberUnchecked(args[1]);
-    if (start < 0) start = (int)len + start;
-    if (start < 0) start = 0;
-  }
-  if (nargs >= 3 && vtype(args[2]) == kTypeNumber) {
-    end = (int) Ant_Value_AsNumberUnchecked(args[2]);
-    if (end < 0) end = (int)len + end;
-    if (end < 0) end = 0;
-  }
+  ant_offset_t target_at = 0, start_at = 0, end_at = len;
+  ant_value_t arg_err = array_relative_arg(js, args, nargs, 0, len, 0, &target_at);
+  if (is_err(arg_err)) return arg_err;
+  arg_err = array_relative_arg(js, args, nargs, 1, len, 0, &start_at);
+  if (is_err(arg_err)) return arg_err;
+  arg_err = array_relative_arg(js, args, nargs, 2, len, len, &end_at);
+  if (is_err(arg_err)) return arg_err;
   
+  if (end_at <= start_at || target_at >= len) return arr;
+  int target = (int)target_at, start = (int)start_at, end = (int)end_at;
   if (end > (int)len) end = (int)len;
   int count = end - start;
   if (count > (int)len - target) count = (int)len - target;
@@ -2442,21 +2526,23 @@ static ant_value_t builtin_array_copyWithin(ant_params_t) {
   
   ant_offset_t string_len;
   if (array_string_wrapper_length(js, arr, &string_len)) return array_string_wrapper_write_error(js, "0");
-  ant_object_t *frozen = is_proxy(arr) ? NULL : js_obj_ptr(js_as_obj(arr));
-  if (frozen && frozen->flags.frozen)
+  ant_object_t *frozen = vtype(arr) == kTypeArray ? (ant_object_t *)vptr(arr)
+    : is_proxy(arr) ? NULL : js_obj_ptr(js_as_obj(arr));
+  if (frozen && frozen->flags.frozen && !Ant_Array_TryUnshare(js, frozen))
     return Ant_Error_CreateReadOnlyProperty(js, arr, Ant_Value_FromNumber((double)target));
 
   ant_offset_t doff = get_dense_buf(arr);
-  if (doff && !is_proxy(arr)) {
+  ant_object_t *dense = doff ? frozen : NULL;
+  if (dense && array_dense_covers(dense, len) && (!dense->flags.may_have_holes || array_keeps_holes(js, dense))) {
     if (start < target) {
       for (int i = count - 1; i >= 0; i--) {
         ant_value_t v = dense_get(doff, (ant_offset_t)(start + i));
-        dense_set(js, doff, (ant_offset_t)(target + i), is_empty_slot(v) ? Ant_Value_Undefined : v);
+        dense_set_owned(js, doff, (ant_offset_t)(target + i), v);
       }
     } else {
       for (int i = 0; i < count; i++) {
         ant_value_t v = dense_get(doff, (ant_offset_t)(start + i));
-        dense_set(js, doff, (ant_offset_t)(target + i), is_empty_slot(v) ? Ant_Value_Undefined : v);
+        dense_set_owned(js, doff, (ant_offset_t)(target + i), v);
       }
     }
     return arr;
@@ -2497,46 +2583,8 @@ static ant_value_t builtin_array_copyWithin(ant_params_t) {
     return proxy_result;
   }
 
-  ant_value_t *temp = (ant_value_t *)malloc(count * sizeof(ant_value_t));
-  if (!temp) return Ant_Error_CreateOutOfMemory(js);
-  gc_temp_root_scope_begin(js, &temp_roots);
-  temp_roots_active = true;
-  
-  if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, arr))) goto oom;
-  if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, read_from))) goto oom;
-  
-  for (int i = 0; i < count; i++) {
-    char idxstr[16];
-    size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)(start + i));
-    ant_prop_loc_t elem_off = lkp(js, read_from, idxstr, idxlen);
-    temp[i] = elem_off.obj ? js_prop_load(elem_off) : Ant_Value_Undefined;
-    if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, temp[i]))) goto oom;
-  }
-  
-  for (int i = 0; i < count; i++) {
-    char idxstr[16];
-    size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)(target + i));
-    ant_value_t key = js_mkstr(js, idxstr, idxlen);
-    if (is_err(key)) {
-      result = key;
-      goto done;
-    }
-    if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, key))) goto oom;
-    ant_value_t set_result = js_setprop(js, arr, key, temp[i]);
-    if (is_err(set_result)) {
-      result = set_result;
-      goto done;
-    }
-  }
-
-done:
-  if (temp_roots_active) gc_temp_root_scope_end(&temp_roots);
-  free(temp);
-  return result;
-
-oom:
-  result = Ant_Error_CreateOutOfMemory(js);
-  goto done;
+  ant_value_t moved = array_move_range_throw(js, arr, (ant_offset_t)start, (ant_offset_t)target, (ant_offset_t)count);
+  return is_err(moved) ? moved : arr;
 }
 
 static ant_value_t builtin_array_toSorted(ant_params_t) {
@@ -2601,14 +2649,25 @@ static ant_value_t builtin_array_with(ant_params_t) {
   ant_value_t arr = array_method_receiver(js, call_this, "with");
   if (is_err(arr)) return arr;
   
-  if (nargs < 2) return js_mkerr(js, "with requires index and value arguments");
   PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
-  int idx = (int) Ant_Value_AsNumberUnchecked(args[0]);
-  if (idx < 0) idx = (int)len + idx;
-  if (idx < 0 || (ant_offset_t)idx >= len) return js_mkerr(js, "Invalid index");
+  ant_offset_t idx;
+  int64_t small;
+  if (__builtin_expect(array_small_integer_arg(args, nargs, 0, &small), 1)) {
+    if (small < 0) small += (int64_t)len;
+    if (small < 0 || (uint64_t)small >= len) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid index");
+    idx = (ant_offset_t)small;
+  } else {
+    double relative;
+    ant_value_t arg_err = array_integer_arg(js, args, nargs, 0, 0, &relative);
+    if (is_err(arg_err)) return arg_err;
+    if (relative < 0) relative += (double)len;
+    if (relative < 0 || relative >= (double)len) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid index");
+    idx = (ant_offset_t)relative;
+  }
+  ant_value_t value = nargs > 1 ? args[1] : Ant_Value_Undefined;
   
-  ant_value_t result = array_copy_spliced(js, arr, len, (ant_offset_t)idx, 1, &args[1], 1);
+  ant_value_t result = array_copy_spliced(js, arr, len, idx, 1, &value, 1);
   if (is_err(result)) return result;
   
   return mkval(kTypeArray, vdata(result));
@@ -2984,11 +3043,11 @@ static ant_value_t builtin_Array_isTemplateObject(ant_params_t) {
 }
 
 typedef struct {
-  ant_value_t write_target;
   ant_value_t result;
   ant_value_t mapFn;
   ant_value_t mapThis;
   ant_offset_t index;
+  bool fresh;
 } array_from_iter_ctx_t;
 
 static iter_action_t array_from_iter_cb(ant_t *js, ant_value_t value, void *ctx, ant_value_t *out) {
@@ -3001,139 +3060,144 @@ static iter_action_t array_from_iter_cb(ant_t *js, ant_value_t value, void *ctx,
     if (is_err(elem)) { *out = elem; return ITER_ERROR; }
   }
 
-  if (vtype(fctx->write_target) == kTypeArray) arr_set(js, fctx->write_target, fctx->index, elem);
-  else {
-    char idxstr[16]; size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)fctx->index);
-    js_setprop(js, fctx->write_target, js_mkstr(js, idxstr, idxlen), elem);
-  }
+  ant_value_t set = array_result_set(js, fctx->result, fctx->fresh, fctx->index, elem);
+  if (is_err(set)) { *out = set; return ITER_ERROR; }
 
   fctx->index++;
   return ITER_CONTINUE;
 }
 
-// TODO: modularize
-static ant_value_t builtin_Array_from(ant_params_t) {
-  if (nargs == 0) return Ant_Array_Create(js);
+static ant_value_t array_from_finish(ant_t *js, array_from_iter_ctx_t *ctx, bool use_ctor) {
+  ant_value_t set_len = array_set_result_length(js, ctx->result, ctx->index, ctx->fresh);
+  if (is_err(set_len)) return set_len;
+  return use_ctor ? ctx->result : mkval(kTypeArray, vdata(ctx->result));
+}
 
-  ant_value_t src = args[0];
-  ant_value_t mapFn = (nargs >= 2 && is_callable(args[1])) ? args[1] : Ant_Value_Undefined;
-  ant_value_t mapThis = (nargs >= 3) ? args[2] : Ant_Value_Undefined;
-
-  bool use_ctor = (vtype(call_this) == kTypeFunction || vtype(call_this) == kTypeBuiltin);
-  ant_value_t result = use_ctor ? array_alloc_from_ctor_with_length(js, call_this, 0) : Ant_Array_Create(js);
-  if (is_err(result)) return result;
-
-  bool result_is_proxy = is_proxy(result);
-  ant_value_t write_target = result_is_proxy ? proxy_read_target(js, result) : result;
-  ant_value_t iter_sym = js->sym.iterator_sym;
-  bool unclosable = ant_protector_intact(js, ANT_PROTECTOR_ITERATOR_RETURN);
-
-  if (vtype(src) == kTypeString && ant_protector_intact(js, ANT_PROTECTOR_STRING_ITERATION) && unclosable) {
-    if (str_is_heap_rope(src) || str_is_heap_builder(src)) {
-      src = str_materialize(js, src);
-      if (is_err(src)) return src;
-    }
-    
-    ant_offset_t slen = str_len_fast(js, src);
-    array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-    
-    for (ant_offset_t i = 0; i < slen; ) {
-      ant_offset_t off = vstr(js, src, NULL);
-      ant_offset_t cb_len = (ant_offset_t)utf8_char_len_at((const char *)(uintptr_t)off, (size_t)slen, (size_t)i);
-      ant_value_t ch = js_mkstr(js, (const void *)(uintptr_t)(off + i), cb_len);
-      
-      ant_value_t out;
-      iter_action_t act = array_from_iter_cb(js, ch, &ctx, &out);
-      
-      if (act == ITER_ERROR) return out;
-      i += cb_len;
-    }
-    if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, Ant_Value_FromNumber((double)ctx.index));
-  } else if (vtype(src) == kTypeArray) {
-    bool default_iter = unclosable && js_array_iteration_default(js, src);
-
-    if (default_iter && !is_callable(mapFn) && real_array_obj_ptr(result) && get_array_length(js, result) == 0) {
-      ant_value_t copied = js_arr_spread_into(js, result, src);
-      if (is_err(copied)) return copied;
-    } else if (default_iter) {
-      array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      ant_offset_t len = 0;
-      ant_value_t len_result = array_like_length_checked(js, src, &len);
-      if (is_err(len_result)) return len_result;
-      for (ant_offset_t i = 0; i < len; i++) {
-        ant_value_t unused;
-        iter_action_t act = array_from_iter_cb(js, arr_get(js, src, i), &ctx, &unused);
-        if (act == ITER_ERROR) return unused;
-        len_result = array_like_length_checked(js, src, &len);
-        if (is_err(len_result)) return len_result;
-      }
-      if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, Ant_Value_FromNumber((double)ctx.index));
-    } else {
-      array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      ant_value_t iter_result = iter_foreach(js, src, array_from_iter_cb, &ctx);
-      if (is_err(iter_result)) return iter_result;
-      if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, Ant_Value_FromNumber((double)ctx.index));
-    }
-  } else {
-    ant_value_t iter_method = Ant_Value_Undefined;
-    bool src_is_array = false;
-    if (vtype(iter_sym) == kTypeSymbol) {
-      iter_method = js_get_sym(js, src, iter_sym);
-      if (is_err(iter_method)) return iter_method;
-      if (is_proxy(src)) src_is_array = vtype(proxy_read_target(js, src)) == kTypeArray;
-    }
-
-    if (src_is_array && vtype(iter_method) == kTypeBuiltin) {
-      array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      PROXY_AWARE_LENGTH_OR_RETURN(src, len);
-      for (ant_offset_t i = 0; i < len; i++) {
-        ant_value_t unused;
-        ant_value_t item = array_method_get_index(js, src, i);
-        if (is_err(item)) return item;
-        iter_action_t act = array_from_iter_cb(js, item, &ctx, &unused);
-        if (act == ITER_ERROR) return unused;
-      }
-      if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, Ant_Value_FromNumber((double)len));
-    } else if (vtype(iter_method) != kTypeUndefined && vtype(iter_method) != kTypeNull) {
-      array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      ant_value_t iter_result = iter_foreach_method(js, src, iter_method, array_from_iter_cb, &ctx);
-      if (is_err(iter_result)) return iter_result;
-      if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, Ant_Value_FromNumber((double)ctx.index));
-    } else if (vtype(src) == kTypeObject) {
-      array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      PROXY_AWARE_LENGTH_OR_RETURN(src, len);
-      for (ant_offset_t i = 0; i < len; i++) {
-        ant_value_t unused;
-        ant_value_t item = array_method_get_index(js, src, i);
-        if (is_err(item)) return item;
-        iter_action_t act = array_from_iter_cb(js, item, &ctx, &unused);
-        if (act == ITER_ERROR) return unused;
-      }
-      if (vtype(result) != kTypeArray) js_setprop(js, result, js->length_str, Ant_Value_FromNumber((double)len));
-    }
+static ant_value_t array_from_indexed(ant_t *js, ant_value_t src, ant_offset_t len, array_from_iter_ctx_t *ctx) {
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t unused;
+    ant_value_t item = array_method_get_index(js, src, i);
+    if (is_err(item)) return item;
+    if (array_from_iter_cb(js, item, ctx, &unused) == ITER_ERROR) return unused;
   }
+  return Ant_Value_Undefined;
+}
 
-  if (!use_ctor) return mkval(kTypeArray, vdata(result));
-  return result;
+
+static ant_value_t array_from_string(ant_t *js, ant_value_t src, array_from_iter_ctx_t *ctx) {
+  if (str_is_heap_rope(src) || str_is_heap_builder(src)) {
+    src = str_materialize(js, src);
+    if (is_err(src)) return src;
+  }
+  
+  ant_offset_t slen = str_len_fast(js, src);
+  for (ant_offset_t i = 0; i < slen; ) {
+    ant_offset_t off = vstr(js, src, NULL);
+    ant_offset_t cb_len = (ant_offset_t)utf8_char_len_at((const char *)(uintptr_t)off, (size_t)slen, (size_t)i);
+    ant_value_t ch = js_mkstr(js, (const void *)(uintptr_t)(off + i), cb_len);
+    
+    ant_value_t out;
+    if (array_from_iter_cb(js, ch, ctx, &out) == ITER_ERROR) return out;
+    i += cb_len;
+  }
+  
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t array_from_array(ant_t *js, ant_value_t src, array_from_iter_ctx_t *ctx) {
+  bool bulk = ctx->fresh ? real_array_obj_ptr(ctx->result) != NULL : array_result_plain(ctx->result);
+  if (!is_callable(ctx->mapFn) && bulk && get_array_length(js, ctx->result) == 0) {
+    ant_value_t copied = js_arr_spread_into_owned(js, ctx->result, src);
+    if (is_err(copied)) return copied;
+    ctx->index = get_array_length(js, ctx->result);
+    return Ant_Value_Undefined;
+  }
+  
+  ant_offset_t len = 0;
+  ant_value_t len_result = array_like_length_checked(js, src, &len);
+  if (is_err(len_result)) return len_result;
+  
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t unused;
+    if (array_from_iter_cb(js, arr_get(js, src, i), ctx, &unused) == ITER_ERROR) return unused;
+    len_result = array_like_length_checked(js, src, &len);
+    if (is_err(len_result)) return len_result;
+  }
+  
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t builtin_Array_from(ant_params_t) {
+  ant_value_t src = nargs > 0 ? args[0] : Ant_Value_Undefined;
+  ant_value_t mapFn = nargs >= 2 ? args[1] : Ant_Value_Undefined;
+  ant_value_t mapThis = nargs >= 3 ? args[2] : Ant_Value_Undefined;
+  if (vtype(mapFn) != kTypeUndefined && !is_callable(mapFn))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Array.from: the mapping function must be callable");
+
+  bool use_ctor = call_this != js->sym.array_ctor && js_is_constructor(call_this);
+  array_from_iter_ctx_t ctx = { Ant_Value_Undefined, mapFn, mapThis, 0, !use_ctor };
+  bool unclosable = ant_protector_intact(js, ANT_PROTECTOR_ITERATOR_RETURN);
+  
+  bool string_fast = vtype(src) == kTypeString && unclosable && ant_protector_intact(js, ANT_PROTECTOR_STRING_ITERATION);
+  bool array_fast = vtype(src) == kTypeArray && unclosable && js_array_iteration_default(js, src);
+  
+  if (string_fast || array_fast) {
+    ctx.result = use_ctor ? array_alloc_from_ctor(js, call_this) : Ant_Array_Create(js);
+    if (is_err(ctx.result)) return ctx.result;
+    ant_value_t filled = string_fast ? array_from_string(js, src, &ctx) : array_from_array(js, src, &ctx);
+    return is_err(filled) ? filled : array_from_finish(js, &ctx, use_ctor);
+  }
+  
+  uint8_t st = vtype(src);
+  if (st == kTypeUndefined || st == kTypeNull)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not iterable", st == kTypeNull ? "null" : "undefined");
+  
+  ant_value_t iter_method = js_get_sym(js, src, js->sym.iterator_sym);
+  if (is_err(iter_method)) return iter_method;
+  
+  if (vtype(iter_method) != kTypeUndefined && vtype(iter_method) != kTypeNull) {
+    ctx.result = use_ctor ? array_alloc_from_ctor(js, call_this) : Ant_Array_Create(js);
+    if (is_err(ctx.result)) return ctx.result;
+    
+    ant_value_t filled;
+    if (vtype(iter_method) == kTypeBuiltin && is_proxy(src) && vtype(proxy_read_target(js, src)) == kTypeArray) {
+      PROXY_AWARE_LENGTH_OR_RETURN(src, len);
+      filled = array_from_indexed(js, src, len, &ctx);
+    } else filled = iter_foreach_method(js, src, iter_method, array_from_iter_cb, &ctx);
+    
+    return is_err(filled) ? filled : array_from_finish(js, &ctx, use_ctor);
+  }
+  
+  ant_offset_t len = 0;
+  ant_value_t len_result = is_object_type(src) ? proxy_aware_length(js, src, &len) : array_like_length_checked(js, src, &len);
+  if (is_err(len_result)) return len_result;
+  
+  ctx.result = use_ctor ? array_alloc_from_ctor_with_length(js, call_this, len) : Ant_Array_Create(js);
+  if (is_err(ctx.result)) return ctx.result;
+  
+  ant_value_t filled = array_from_indexed(js, src, len, &ctx);
+  if (is_err(filled)) return filled;
+  ctx.index = len;
+  
+  return array_from_finish(js, &ctx, use_ctor);
 }
 
 static ant_value_t builtin_Array_of(ant_params_t) {
-  bool use_ctor = (vtype(call_this) == kTypeFunction || vtype(call_this) == kTypeBuiltin);
-  ant_value_t arr = use_ctor ? array_alloc_from_ctor_with_length(js, call_this, (ant_offset_t)nargs) : Ant_Array_Create(js);
+  bool use_ctor = call_this != js->sym.array_ctor && js_is_constructor(call_this);
+  bool fresh = !use_ctor;
+  ant_value_t arr = use_ctor
+    ? array_alloc_from_ctor_with_length(js, call_this, (ant_offset_t)nargs)
+    : array_alloc_intrinsic(js, Ant_Value_Undefined, (ant_offset_t)nargs);
   if (is_err(arr)) return arr;
 
-  bool arr_is_proxy = is_proxy(arr);
-  ant_value_t write_target = arr_is_proxy ? proxy_read_target(js, arr) : arr;
-
+  bool plain = fresh || array_result_plain(arr);
   for (int i = 0; i < nargs; i++) {
-    if (vtype(write_target) == kTypeArray) arr_set(js, write_target, (ant_offset_t)i, args[i]);
-    else {
-      char idxstr[16]; size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
-      js_setprop(js, write_target, js_mkstr(js, idxstr, idxlen), args[i]);
-    }
+    ant_value_t set = array_result_set(js, arr, plain, (ant_offset_t)i, args[i]);
+    if (is_err(set)) return set;
   }
 
-  if (vtype(arr) != kTypeArray) js_setprop(js, arr, js->length_str, Ant_Value_FromNumber((double) nargs));
+  ant_value_t set_len = array_set_result_length(js, arr, nargs, fresh);
+  if (is_err(set_len)) return set_len;
   if (!use_ctor) return mkval(kTypeArray, vdata(arr));
 
   return arr;

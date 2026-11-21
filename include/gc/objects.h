@@ -123,6 +123,30 @@ size_t gc_array_storage_cached_bytes(ant_t *js);
 
 void gc_array_storage_trim(ant_t *js);
 void gc_array_storage_cache_destroy(ant_t *js);
+
+typedef struct gc_shared_elements {
+  uint32_t refs;
+  uint32_t count;
+  bool copy_on_create;
+  bool outgrown;
+  bool has_holes;
+  bool has_heap;
+  ant_value_t values[];
+} gc_shared_elements_t;
+
+gc_shared_elements_t *gc_shared_elements_alloc(ant_t *js, const ant_value_t *values, uint32_t count);
+void gc_shared_elements_release(ant_t *js, gc_shared_elements_t *block);
+
+static inline void gc_shared_elements_retain(gc_shared_elements_t *block) {
+  block->refs++;
+}
+void gc_shared_elements_mark(ant_t *js, const gc_shared_elements_t *block);
+void gc_shared_elements_finalize(ant_t *js, ant_object_t *obj);
+
+static inline gc_shared_elements_t *gc_shared_elements_of(ant_value_t *data) {
+  return (gc_shared_elements_t *)(void *)((char *)data - offsetof(gc_shared_elements_t, values));
+}
+
 void gc_closures_destroy(ant_t *js);
 
 struct ant_promise_state *gc_promise_state_alloc(ant_t *js);

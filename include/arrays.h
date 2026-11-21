@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal.h"
+#include "gc/objects.h"
 
 #define PROXY_AWARE_LENGTH_OR_RETURN(obj_expr, out_var)                       \
   ant_offset_t out_var = 0;                                                   \
@@ -47,16 +48,42 @@ ant_offset_t dense_capacity(ant_offset_t doff);
 ant_value_t dense_get(ant_offset_t doff, ant_offset_t idx);
 object_fill_t arr_fill_object_values(ant_t *js, ant_object_t *ptr, ant_value_t *out, uint32_t *resume);
 
+ant_value_t Ant_Array_CreateFromBlock(ant_t *js, gc_shared_elements_t *block, bool copy);
+ant_value_t Ant_Array_CreateFromElements(ant_t *js, const ant_value_t *values, uint32_t count, uint32_t capacity, bool has_holes);
+__attribute__((cold)) bool Ant_Array_UnshareSlow(ant_t *js, ant_object_t *ptr, uint32_t min_cap);
+__attribute__((cold)) bool Ant_Array_TryUnshare(ant_t *js, ant_object_t *ptr);
+
+static inline bool Ant_Array_Unshare(ant_t *js, ant_object_t *ptr) {
+  return !ptr || __builtin_expect(!ant_array_is_shared(ptr), 1) || Ant_Array_UnshareSlow(js, ptr, 0);
+}
+
+static inline bool Ant_Array_UnshareValue(ant_t *js, ant_value_t value) {
+  uint8_t type = vtype(value);
+  return (type != kTypeArray && type != kTypeObject) || Ant_Array_Unshare(js, (ant_object_t *)vptr(value));
+}
+
+static inline bool Ant_Array_UnshareForAppend(ant_t *js, ant_value_t value, uint32_t added) {
+  uint8_t type = vtype(value);
+  if (type != kTypeArray && type != kTypeObject) return true;
+  ant_object_t *ptr = (ant_object_t *)vptr(value);
+  return __builtin_expect(!ant_array_is_shared(ptr), 1) || Ant_Array_UnshareSlow(js, ptr, ptr->u.array.len + added);
+}
+
 void dense_set(ant_t *js, ant_offset_t doff, ant_offset_t idx, ant_value_t val);
+void dense_set_owned(ant_t *js, ant_offset_t doff, ant_offset_t idx, ant_value_t val);
 ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed);
 
 ant_value_t arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx);
-void arr_set(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t val);
+void arr_set_owned(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t val);
+static inline void arr_set(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t val) {
+  if (Ant_Array_UnshareValue(js, arr)) arr_set_owned(js, arr, idx, val);
+}
 bool arr_own_dense_element(ant_t *js, ant_value_t arr, const char *key, size_t klen, ant_value_t *out);
 bool arr_has(ant_t *js, ant_value_t arr, ant_offset_t idx);
 
 bool array_length_readonly(ant_t *js, ant_value_t arr);
 bool array_result_extensible(ant_value_t result);
+bool array_result_plain(ant_value_t result);
 
 ant_value_t array_result_set(ant_t *js, ant_value_t result, bool fresh, ant_offset_t idx, ant_value_t val);
 ant_value_t mkarr_dense_literal_capacity(ant_t *js, const ant_value_t *elements, uint32_t count, bool exact_capacity);
@@ -64,6 +91,7 @@ ant_value_t mkarr_dense_literal_capacity(ant_t *js, const ant_value_t *elements,
 void arr_del(ant_t *js, ant_value_t arr, ant_offset_t idx);
 ant_value_t array_alloc_intrinsic(ant_t *js, ant_value_t source, ant_offset_t length_hint);
 ant_value_t array_alloc_from_ctor_with_length(ant_t *js, ant_value_t ctor, ant_offset_t length_hint);
+ant_value_t array_alloc_from_ctor(ant_t *js, ant_value_t ctor);
 ant_value_t array_species_create(ant_t *js, ant_value_t receiver, ant_offset_t length, bool *intrinsic);
 
 __attribute__((noinline)) bool array_length_readonly_slow(ant_t *js, ant_value_t arr);
@@ -74,6 +102,11 @@ ant_value_t array_length_readonly_error(ant_t *js);
 ant_value_t set_declined(bool *declined, ant_value_t value);
 ant_value_t array_grow_readonly_result(ant_t *js, uint64_t idx, ant_value_t value, bool *declined);
 ant_value_t validate_array_length(ant_t *js, ant_value_t v);
+ant_value_t array_length_range_error(ant_t *js);
+
+static inline bool array_length_is_valid(double length) {
+  return length >= 0 && length < 4294967296.0 && length == (uint32_t)length;
+}
 
 ant_value_t check_object_extensibility(ant_t *js, ant_value_t obj, const char *key, size_t len);
 ant_value_t check_object_extensibility_index(ant_t *js, ant_value_t obj, uint64_t idx);
@@ -82,6 +115,7 @@ ant_value_t check_object_extensibility_symbol(ant_t *js, ant_value_t obj, ant_va
 void array_len_set(ant_t *js, ant_value_t obj, ant_offset_t new_len);
 bool array_length_has_guarded_elements(ant_object_t *ptr);
 void array_length_set_unguarded(ant_t *js, ant_value_t obj, ant_offset_t new_len);
+bool array_length_set_shared(ant_t *js, ant_value_t obj, ant_object_t *ptr, ant_offset_t new_len);
 bool array_proto_chain_plain(ant_t *js, ant_object_t *arr);
 bool array_elements_proto_plain(ant_t *js, ant_object_t *ptr);
 

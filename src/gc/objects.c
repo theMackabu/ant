@@ -1647,6 +1647,40 @@ size_t gc_array_storage_cached_bytes(ant_t *js) {
   return bytes;
 }
 
+gc_shared_elements_t *gc_shared_elements_alloc(ant_t *js, const ant_value_t *values, uint32_t count) {
+  size_t bytes = sizeof(gc_shared_elements_t) + (size_t)count * sizeof(ant_value_t);
+  gc_shared_elements_t *block = malloc(bytes);
+  if (!block) return NULL;
+  
+  *block = (gc_shared_elements_t){.refs = 1, .count = count};
+  memcpy(block->values, values, (size_t)count * sizeof(ant_value_t));
+  for (uint32_t i = 0; i < count; i++) {
+    block->has_holes |= is_empty_slot(values[i]);
+    block->has_heap |= gc_value_is_heap_ref(values[i]);
+  }
+  js->alloc_bytes.arrays += bytes;
+  
+  return block;
+}
+
+void gc_shared_elements_mark(ant_t *js, const gc_shared_elements_t *block) {
+  if (!block || !block->has_heap) return;
+  for (uint32_t i = 0; i < block->count; i++) gc_mark_value(js, block->values[i]);
+}
+
+void gc_shared_elements_release(ant_t *js, gc_shared_elements_t *block) {
+  if (--block->refs) return;
+  size_t bytes = sizeof(gc_shared_elements_t) + (size_t)block->count * sizeof(ant_value_t);
+  Ant_Assert(js->alloc_bytes.arrays >= bytes, "shared elements released more bytes than were allocated");
+  js->alloc_bytes.arrays -= bytes;
+  free(block);
+}
+
+void gc_shared_elements_finalize(ant_t *js, ant_object_t *obj) {
+  gc_shared_elements_release(js, gc_shared_elements_of(obj->u.array.data));
+  obj->u.array.data = NULL;
+}
+
 static inline void gc_free_array_storage(ant_t *js, ant_object_t *obj) {
   if (!obj->u.array.data) return;
   gc_array_storage_release(js, obj->u.array.data, obj->u.array.cap);
@@ -1799,6 +1833,18 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   ant_object_cell_free(js, obj);
 }
 
+static __attribute__((noinline)) void gc_object_free_shared_array(ant_t *js, ant_object_t *obj) {
+  gc_shared_elements_finalize(js, obj);
+  obj->finalizer = NULL;
+  if (gc_object_release_plain(js, obj)) ant_object_cell_free(js, obj);
+  else gc_object_free(js, obj);
+}
+
+static inline __attribute__((always_inline)) void gc_object_free_swept(ant_t *js, ant_object_t *obj) {
+  if (obj->finalizer == gc_shared_elements_finalize) gc_object_free_shared_array(js, obj);
+  else gc_object_free(js, obj);
+}
+
 static void gc_sweep_young_and_promote(ant_t *js) {
   ant_fixed_arena_t *oa = &js->obj_arena;
   uint8_t epoch = js->gc.obj_epoch;
@@ -1831,7 +1877,7 @@ static void gc_sweep_young_and_promote(ant_t *js) {
       freed++;
     } else {
       oa->free_list = free_list;
-      gc_object_free(js, obj);
+      gc_object_free_swept(js, obj);
       free_list = oa->free_list;
     }
     
@@ -1890,7 +1936,7 @@ static void gc_sweep_arena(ant_t *js, ant_fixed_arena_t *oa, ant_object_t **old)
       }
 
       oa->free_list = free_list;
-      gc_object_free(js, obj);
+      gc_object_free_swept(js, obj);
       free_list = found_live ? oa->free_list : *(void **)obj;
     }
   }
