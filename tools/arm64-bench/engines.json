@@ -47,7 +47,7 @@
       "id": "libjs",
       "name": "LibJS",
       "mode": "default",
-      "executable": "{engineRoot}/engines/libjs/current/js",
+      "executable": "{engineRoot}/engines/libjs/current/bin/js",
       "args": ["--disable-ansi-colors", "--raw-strings"],
       "versionArgs": ["--version"]
     },
