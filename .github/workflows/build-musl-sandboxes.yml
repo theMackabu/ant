@@ -14,51 +14,50 @@ concurrency:
 
 jobs:
   prepare:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       timestamp: ${{ steps.timestamp.outputs.value }}
     steps:
       - id: timestamp
         run: echo "value=$(date +%s)" >> "$GITHUB_OUTPUT"
 
-  build-musl:
+  build-musl-x64:
     needs: prepare
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - linux-musl-x64
-          - linux-musl-aarch64
-    uses: ./.github/workflows/build-platform.yml
+    uses: ./.github/workflows/build-binary.yml
     with:
-      platform: ${{ matrix.platform }}
+      platform: linux-musl-x64
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
+  build-musl-aarch64:
+    needs: prepare
+    uses: ./.github/workflows/build-binary.yml
+    with:
+      platform: linux-musl-aarch64
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
 
   sandbox-x64:
-    needs: build-musl
-    if: ${{ !cancelled() && needs.build-musl.result == 'success' }}
+    needs: build-musl-x64
     uses: ./.github/workflows/build-nanos.yml
     with:
       arch: x64
       artifact: ant-linux-x64-musl
-      runner: ubuntu-latest
+      runner: ubuntu-26.04
       source_run_id: ${{ github.run_id }}
       source_revision: ${{ github.sha }}
 
   sandbox-aarch64:
-    needs: build-musl
-    if: ${{ !cancelled() && needs.build-musl.result == 'success' }}
+    needs: build-musl-aarch64
     uses: ./.github/workflows/build-nanos.yml
     with:
       arch: aarch64
       artifact: ant-linux-aarch64-musl
-      runner: ubuntu-24.04-arm
+      runner: ubuntu-26.04-arm
       source_run_id: ${{ github.run_id }}
       source_revision: ${{ github.sha }}
 
   summary:
-    runs-on: ubuntu-latest
-    needs: [build-musl, sandbox-x64, sandbox-aarch64]
+    runs-on: ubuntu-26.04
+    needs: [sandbox-x64, sandbox-aarch64]
     if: ${{ always() && !cancelled() }}
     steps:
       - name: Download bench-v8 artifacts
