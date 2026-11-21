@@ -62,4 +62,36 @@ const assert = require('node:assert');
   assert.throws(() => keys(proxy), TypeError);
 }
 
+{
+  const keys = (o) => { const out = []; for (const k in o) out.push(k); return out; };
+  const target = Object.create({ inherited: 1 }, { hidden: { value: 1, enumerable: false, configurable: true }, own: { value: 1, enumerable: true, configurable: true } });
+  const handler = {};
+  let proxy = target;
+  for (let i = 0; i < 5; i++) proxy = new Proxy(proxy, i === 2 ? handler : {});
+  for (let i = 0; i < 50; i++) assert.deepStrictEqual(keys(proxy), ['own', 'inherited']);
+  target.later = 1;
+  assert.deepStrictEqual(keys(proxy), ['own', 'later', 'inherited']);
+  delete target.own;
+  assert.deepStrictEqual(keys(proxy), ['later', 'inherited']);
+  handler.ownKeys = () => ['later'];
+  assert.deepStrictEqual(keys(proxy), ['later', 'inherited']);
+  delete handler.ownKeys;
+  handler.getPrototypeOf = () => null;
+  assert.deepStrictEqual(keys(proxy), ['later']);
+  delete handler.getPrototypeOf;
+  assert.deepStrictEqual(keys(proxy), ['later', 'inherited']);
+
+  assert.deepStrictEqual(keys(new Proxy([5, 6], {})), ['0', '1']);
+  assert.deepStrictEqual(keys(new Proxy(new String('ab'), {})), ['0', '1']);
+  assert.deepStrictEqual(keys(new Proxy(Object.assign(function () {}, { p: 1 }), {})), ['p']);
+  const wrapped = new Uint8Array(2);
+  assert.deepStrictEqual(keys(new Proxy(wrapped, {})), ['0', '1']);
+
+  const revocable = Proxy.revocable({ a: 1 }, {});
+  const outer = new Proxy(revocable.proxy, {});
+  assert.deepStrictEqual(keys(outer), ['a']);
+  revocable.revoke();
+  assert.throws(() => keys(outer), TypeError);
+}
+
 console.log('ok');

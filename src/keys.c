@@ -1028,6 +1028,8 @@ static ant_value_t for_in_string_keys(ant_t *js, ant_value_t str) {
   return out;
 }
 
+ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj);
+
 static __attribute__((noinline)) ant_value_t for_in_keys_collect(ant_t *js, ant_value_t obj) {
   uint8_t t = vtype(obj);
   if (t == kTypeNull || t == kTypeUndefined) return Ant_Array_Create(js);
@@ -1042,6 +1044,12 @@ static __attribute__((noinline)) ant_value_t for_in_keys_collect(ant_t *js, ant_
 
   if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return Ant_Array_Create(js);
   if (is_proxy(obj) && js_proxy_is_host(obj)) return proxy_enum(js, obj, OBJ_ENUM_KEYS);
+
+  ant_value_t target;
+  if (is_proxy(obj) && proxy_enumerates_as_target(js, obj, &target)) {
+    while (is_proxy(target) && proxy_enumerates_as_target(js, target, &target));
+    return js_for_in_keys(js, target);
+  }
 
   if (t == kTypeFunction) {
     const ant_object_t *ptr = js_obj_ptr(js_func_obj(obj));
