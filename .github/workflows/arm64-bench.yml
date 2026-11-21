@@ -28,7 +28,7 @@ concurrency:
 jobs:
   prepare:
     if: github.repository == 'theMackabu/ant'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       timestamp: ${{ steps.timestamp.outputs.value }}
     steps:
@@ -37,7 +37,7 @@ jobs:
 
   build:
     needs: prepare
-    uses: ./.github/workflows/build-platform.yml
+    uses: ./.github/workflows/build-binary.yml
     with:
       platform: macos-aarch64
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
