@@ -115,6 +115,14 @@ int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local) {
   return add_upvalue(c, (uint16_t)uv, false, false);
 }
 
+static bool field_key_is_atom(const sv_ast_t *m) {
+  const sv_ast_t *key = m->left;
+  if ((m->flags & FN_COMPUTED) || !key) return false;
+  if (key->type != N_IDENT && key->type != N_STRING) return false;
+  if (key->type == N_IDENT && is_quoted_ident_key(key)) return !ant_key_may_be_numeric(key->str + 1, key->len - 2);
+  return !ant_key_may_be_numeric(key->str, key->len);
+}
+
 void emit_field_inits(
   sv_compiler_t *c, sv_compiler_t *owner, sv_ast_t **fields, int count
 ) {
@@ -155,6 +163,13 @@ void emit_field_inits(
     if (m->right) compile_field_initializer(c, m->right, field_static_key(m));
     else emit_op(c, OP_UNDEF);
     c->inferred_key_upval = 0;
+    if (field_key_is_atom(m)) {
+      sv_ast_t *key = m->left;
+      if (key->type == N_STRING) emit_atom_op(c, OP_INIT_FIELD, key->str ? key->str : "", key->len);
+      else if (is_quoted_ident_key(key)) emit_atom_op(c, OP_INIT_FIELD, key->str + 1, key->len - 2);
+      else emit_atom_op(c, OP_INIT_FIELD, key->str, key->len);
+      continue;
+    }
     if (m->flags & FN_COMPUTED) {
       emit_op(c, OP_GET_UPVAL);
       emit_u16(c, (uint16_t)key_upval);

@@ -750,6 +750,26 @@ void jit_emit_properties(jit_compile_t *c) {
       break;
     }
 
+    case OP_INIT_FIELD: {
+      uint32_t idx = sv_get_u32(c->ip + 1);
+      uint16_t ic_index = sv_get_u16(c->ip + 5);
+      if (idx >= (uint32_t)c->func->atom_count) {
+        c->ok = false;
+        break;
+      }
+      const sv_atom_t *atom = &c->func->atoms[idx];
+      sv_ic_entry_t *ic = c->func->ic_slots && ic_index < c->func->ic_count ? &c->func->ic_slots[ic_index] : NULL;
+      vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
+      vstack_ensure_boxed(&c->vs, c->vs.sp - 2, c->ctx, c->jit_func, c->r_d_slot);
+      MIR_reg_t val = vstack_pop(&c->vs);
+      MIR_reg_t obj = vstack_pop(&c->vs);
+      MIR_reg_t defined = vstack_push(&c->vs);
+      sv_asm_append(a, MIR_new_call_insn(c->ctx, 8, MIR_new_ref_op(c->ctx, c->init_field_proto), MIR_new_ref_op(c->ctx, c->imp_init_field), MIR_new_reg_op(c->ctx, defined), MIR_new_reg_op(c->ctx, c->r_js), MIR_new_reg_op(c->ctx, obj), MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)atom), MIR_new_reg_op(c->ctx, val), MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)ic)));
+      jit_emit_throw_if_error(c, defined);
+      vstack_pop(&c->vs);
+      break;
+    }
+
     case OP_DEFINE_METHOD_COMP: {
       uint8_t flags = sv_get_u8(c->ip + 1);
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);

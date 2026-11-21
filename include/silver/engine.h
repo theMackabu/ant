@@ -379,7 +379,10 @@ typedef struct {
     uint16_t eval_absent_level;
   };
   
-  uint32_t prototype_epoch;
+  union {
+    uint32_t prototype_epoch;
+    uint32_t fill_epoch;
+  };
 
   union {
     ant_object_t *cached_holder;
@@ -433,6 +436,12 @@ typedef struct {
   uint8_t wasm32_cacheline_padding[12];
 #endif
 } sv_ic_entry_t;
+
+static constexpr uint16_t SV_INIT_FIELD_FILL_LIMIT = 16;
+
+static inline bool sv_init_field_ic_full(const sv_ic_entry_t *ic, uint32_t epoch) {
+  return ic->fill_epoch == epoch && ic->slow_hits >= SV_INIT_FIELD_FILL_LIMIT;
+}
 
 static_assert(
   sizeof(sv_ic_entry_t) == 64,

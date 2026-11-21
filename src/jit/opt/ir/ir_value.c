@@ -17,6 +17,10 @@ void ir_value_describe(uint64_t bits, char *buffer, size_t size) {
     snprintf(buffer, size, "%s", name);
     return;
   }
+  if (ir_value_virtual_rest_start(bits) >= 0) {
+    snprintf(buffer, size, "rest from %d", ir_value_virtual_rest_start(bits));
+    return;
+  }
   int32_t integer;
   if (ir_value_as_int32(bits, &integer)) snprintf(buffer, size, "%d", integer);
   else snprintf(buffer, size, "0x%016llx", (unsigned long long)bits);

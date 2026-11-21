@@ -44,6 +44,7 @@ typedef enum : uint8_t {
 
 typedef struct {
   uint32_t bc_off;
+  uint32_t site_off;
   uint32_t depth;
   opt_exit_kind_t kind;
   uint32_t slot;
@@ -63,6 +64,11 @@ typedef struct {
 } opt_handler_t;
 
 static constexpr uint32_t OPT_CATCH_MISS_LIMIT = 10;
+static constexpr uint32_t OPT_SUPER_PARENT_MISS_LIMIT = 2;
+static constexpr uint32_t OPT_CATCH_LEAVE_WINDOW = 64;
+static constexpr uint64_t OPT_CATCH_LEAVE_WINDOW_NS = 128000;
+static constexpr uint64_t OPT_CATCH_LEAVE_HOST_WINDOW_NS = 7500;
+static constexpr uint32_t OPT_CATCH_LEAVE_DROPS = 1;
 static constexpr ant_value_t OPT_CAUGHT = ANT_SENTINEL_TAG | 0xCA7C4ULL;
 
 typedef struct {
@@ -75,6 +81,7 @@ typedef struct {
   uint32_t argc;
   opt_resume_mode_t mode;
   bool construct;
+  bool takes_rest;
 } opt_site_frame_t;
 
 typedef struct {
@@ -114,6 +121,8 @@ typedef struct opt_code {
   opt_handler_t *handlers;
   uint32_t handler_count;
   uint32_t catch_misses;
+  uint32_t catch_leaves;
+  uint64_t catch_leave_stamp;
   size_t code_bytes;
   uint64_t slow_path_runs;
   ant_value_t *roots;
@@ -211,7 +220,7 @@ ant_value_t opt_rt_resume(
   ant_value_t *params, ant_value_t *locals, ant_value_t *stack, sv_jit_finally_t *finally
 );
 
-void opt_rt_caught(sv_vm_t *vm, opt_code_t *code, const opt_handler_t *handler, bool in_place);
+void opt_rt_caught(sv_vm_t *vm, opt_code_t *code, const opt_handler_t *handler, const opt_entry_t *entry, bool thrown_here);
 ant_value_t opt_rt_for_of(sv_vm_t *vm, ant_value_t iterable, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_iter_next(sv_vm_t *vm, ant_value_t iter, ant_value_t next, ant_value_t *args, int64_t argc, int64_t hint);
 ant_value_t opt_rt_destructure_next(sv_vm_t *vm, ant_value_t iter, ant_value_t next, ant_value_t *args, int64_t argc, int64_t kind);
@@ -237,8 +246,14 @@ ant_value_t opt_rt_super_call(sv_vm_t *vm, ant_value_t this_val, ant_value_t fun
 ant_value_t opt_rt_super_apply(sv_vm_t *vm, ant_value_t this_val, ant_value_t func, ant_value_t *args, int64_t argc, int64_t unused);
 ant_value_t opt_rt_super_spread(sv_vm_t *vm, ant_value_t this_val, ant_value_t func, ant_value_t *args, int64_t argc, int64_t unused);
 ant_value_t opt_rt_super_parent(sv_vm_t *vm, ant_value_t parent, ant_value_t this_val, ant_value_t *args, int64_t argc);
+ant_value_t opt_rt_rest(sv_vm_t *vm, ant_value_t start, ant_value_t unused, ant_value_t *args, int64_t argc, const opt_entry_t *entry);
+ant_value_t opt_rt_rest_array(sv_vm_t *vm, const ant_value_t *args, uint32_t argc, uint32_t start);
+ant_value_t opt_rt_append(sv_vm_t *vm, ant_value_t array, ant_value_t value, ant_value_t *args, int64_t argc, int64_t kind);
+ant_value_t opt_rt_spread(sv_vm_t *vm, ant_value_t array, ant_value_t iterable, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_call_args(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, int64_t spread);
+ant_value_t opt_rt_call_forward(sv_vm_t *vm, ant_value_t callee, ant_value_t this_val, ant_value_t *args, int64_t argc, const opt_entry_t *entry);
 ant_value_t opt_rt_new_args(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t spread);
+ant_value_t opt_rt_new_forward(sv_vm_t *vm, ant_value_t callee, ant_value_t new_target, ant_value_t *args, int64_t argc, const opt_entry_t *entry);
 ant_value_t opt_rt_super_result(ant_value_t result, ant_value_t this_val);
 ant_value_t opt_rt_settle_receiver(sv_vm_t *vm, ant_value_t this_val, ant_value_t new_target, ant_value_t *args, int64_t argc, int64_t unused);
 ant_value_t opt_rt_import_default(sv_vm_t *vm, ant_value_t ns, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
@@ -267,6 +282,7 @@ ant_value_t opt_rt_def_private(sv_vm_t *vm, ant_value_t object, ant_value_t toke
 ant_value_t opt_rt_unary_plus(sv_vm_t *vm, ant_value_t value, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_for_in(sv_vm_t *vm, ant_value_t object, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_set_proto(sv_vm_t *vm, ant_value_t object, ant_value_t proto, ant_value_t *args, int64_t argc, int64_t kind);
+ant_value_t opt_rt_set_home_obj(sv_vm_t *vm, ant_value_t func, ant_value_t home, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_builder_read(sv_vm_t *vm, ant_value_t value, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);
 
 ant_value_t opt_rt_allocate_object(sv_vm_t *vm, ant_shape_t *shape, ant_value_t proto, uint64_t property_count);
@@ -278,7 +294,7 @@ typedef struct {
 uint64_t opt_rt_revalidate_add(sv_vm_t *vm, const opt_rt_add_epoch_t *site);
 ant_value_t opt_rt_materialize_object(sv_vm_t *vm, ant_shape_t *shape);
 void opt_rt_materialize_property(sv_vm_t *vm, ant_value_t object, uint32_t index, ant_value_t value);
-ant_value_t opt_rt_allocate_array(sv_vm_t *vm, uint64_t count);
+ant_value_t opt_rt_allocate_array(sv_vm_t *vm, uint64_t count, uint64_t reserve);
 ant_value_t opt_rt_object(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_array(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, ant_value_t *args, int64_t argc, int64_t kind);
 ant_value_t opt_rt_array_literal(sv_vm_t *vm, ant_value_t unused, ant_value_t unused2, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
@@ -287,6 +303,8 @@ ant_value_t opt_rt_put_super(sv_vm_t *vm, ant_value_t receiver, ant_value_t home
 ant_value_t opt_rt_get_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_put_super_field(sv_vm_t *vm, ant_value_t receiver, ant_value_t home, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_array_init(sv_vm_t *vm, ant_value_t arr, ant_value_t value, ant_value_t *args, int64_t argc, int64_t index);
+ant_value_t opt_rt_init_field(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
+ant_value_t opt_rt_define_computed(sv_vm_t *vm, ant_value_t object, ant_value_t key, ant_value_t *args, int64_t argc, int64_t flags);
 
 typedef struct {
   sv_func_t *func;
@@ -327,6 +345,7 @@ typedef struct {
 } opt_rt_add_site_t;
 
 ant_value_t opt_rt_put_field_adding(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_add_site_t *site);
+ant_value_t opt_rt_init_field_adding(sv_vm_t *vm, ant_value_t object, ant_value_t value, ant_value_t *args, int64_t argc, const opt_rt_add_site_t *site);
 ant_value_t opt_rt_instanceof(sv_vm_t *vm, ant_value_t lhs, ant_value_t rhs, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_in_field(sv_vm_t *vm, ant_value_t object, ant_value_t unused, ant_value_t *args, int64_t argc, const opt_rt_site_t *site);
 ant_value_t opt_rt_take_thrown(sv_vm_t *vm, ant_value_t error, ant_value_t unused, ant_value_t *args, int64_t argc, int64_t kind);

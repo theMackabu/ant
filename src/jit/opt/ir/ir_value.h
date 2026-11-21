@@ -83,6 +83,18 @@ static inline uint64_t ir_value_boxed_constant(uint64_t bits, opt_repr_t repr) {
   }
 }
 
+static constexpr uint64_t IR_VIRTUAL_REST_MARK = 0x4E5ULL << 32;
+static constexpr uint64_t IR_VIRTUAL_REST_START_MASK = 0xffffULL;
+static constexpr uint64_t IR_VALUE_VIRTUAL_REST = ANT_SENTINEL_TAG | IR_VIRTUAL_REST_MARK;
+
+static inline uint64_t ir_value_virtual_rest(uint32_t start) {
+  return IR_VALUE_VIRTUAL_REST | (start & IR_VIRTUAL_REST_START_MASK);
+}
+
+static inline int ir_value_virtual_rest_start(uint64_t bits) {
+  return (bits & ~IR_VIRTUAL_REST_START_MASK) == IR_VALUE_VIRTUAL_REST ? (int)(bits & IR_VIRTUAL_REST_START_MASK) : -1;
+}
+
 static inline int ir_value_virtual_arguments_kind(uint64_t bits) {
   if (bits == IR_VALUE_VIRTUAL_MAPPED_ARGUMENTS) return 1;
   if (bits == IR_VALUE_VIRTUAL_UNMAPPED_ARGUMENTS) return 0;
