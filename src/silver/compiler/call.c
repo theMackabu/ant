@@ -118,7 +118,9 @@ int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local) {
 static bool field_key_is_atom(const sv_ast_t *m) {
   const sv_ast_t *key = m->left;
   if ((m->flags & FN_COMPUTED) || !key) return false;
-  return key->type == N_IDENT || key->type == N_STRING || key->type == N_NUMBER;
+  if (key->type != N_IDENT && key->type != N_STRING) return false;
+  if (key->type == N_IDENT && is_quoted_ident_key(key)) return !ant_key_may_be_numeric(key->str + 1, key->len - 2);
+  return !ant_key_may_be_numeric(key->str, key->len);
 }
 
 void emit_field_inits(
@@ -163,9 +165,7 @@ void emit_field_inits(
     c->inferred_key_upval = 0;
     if (field_key_is_atom(m)) {
       sv_ast_t *key = m->left;
-      char buf[SV_LITERAL_NUM_KEY_BUF_SIZE];
-      if (key->type == N_NUMBER) emit_atom_op(c, OP_INIT_FIELD, buf, (uint32_t)literal_num_key(key->num, buf, sizeof(buf)));
-      else if (key->type == N_STRING) emit_atom_op(c, OP_INIT_FIELD, key->str ? key->str : "", key->len);
+      if (key->type == N_STRING) emit_atom_op(c, OP_INIT_FIELD, key->str ? key->str : "", key->len);
       else if (is_quoted_ident_key(key)) emit_atom_op(c, OP_INIT_FIELD, key->str + 1, key->len - 2);
       else emit_atom_op(c, OP_INIT_FIELD, key->str, key->len);
       continue;

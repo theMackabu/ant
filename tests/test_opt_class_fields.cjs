@@ -582,4 +582,36 @@ for (let i = 0; i < WARM * 2; i++) {
   assert.strictEqual(made.length, 3);
 }
 
+class GivesBack { constructor(target) { return target; } }
+class Indexed extends GivesBack { 0 = 'zero'; '1' = 'one'; mark = 'mark' }
+function indexOne(target) {
+  try { new Indexed(target); return 'ok'; } catch (error) { return error instanceof TypeError ? 'type' : 'other'; }
+}
+const indexTargets = [() => ({}), () => new String('ab'), () => ({ p: 1 }), () => new String('abc'), () => [], () => Object.create(String.prototype)];
+const indexWant = ['ok', 'type', 'ok', 'type', 'ok', 'ok'];
+for (let i = 0; i < WARM * 4; i++) {
+  const kind = i % indexTargets.length;
+  const target = indexTargets[kind]();
+  assert.strictEqual(indexOne(target), indexWant[kind]);
+  if (indexWant[kind] === 'ok') {
+    plain(target, '0', 'zero');
+    plain(target, '1', 'one');
+    plain(target, 'mark', 'mark');
+  } else {
+    assert.strictEqual(target[0], 'a');
+    assert.strictEqual(own(target, 'mark'), undefined);
+  }
+}
+
+class Sized extends GivesBack { length = 7 }
+function sizeOne(target) {
+  try { new Sized(target); return target.length; } catch (error) { return error instanceof TypeError ? 'type' : 'other'; }
+}
+const sizeTargets = [() => ({}), () => new String('ab'), () => Object.create(String.prototype), () => [1], () => new Number(1)];
+const sizeWant = [7, 'type', 7, 'type', 7];
+for (let i = 0; i < WARM * 4; i++) {
+  const kind = i % sizeTargets.length;
+  assert.strictEqual(sizeOne(sizeTargets[kind]()), sizeWant[kind]);
+}
+
 console.log('ok');
