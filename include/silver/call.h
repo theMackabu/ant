@@ -286,9 +286,14 @@ typedef enum {
   SV_CONSTRUCT_SEEDED_PENDING,
 } sv_construct_route_t;
 
+__attribute__((always_inline))
 static inline bool sv_new_target_plain_prototype(ant_t *js, ant_value_t new_target, ant_value_t *proto) {
-  const ant_object_t *ptr = (const ant_object_t *)vptr(js_func_obj(new_target));
+  ant_object_t *ptr = (ant_object_t *)vptr(js_func_obj(new_target));
   if (ptr->flags.is_exotic || !ptr->shape) return false;
+  bool cached;
+  [[clang::always_inline]]
+  cached = sv_construct_prototype_data(js, ptr, js_func_closure(new_target)->func, proto);
+  if (cached) return true;
 
   int32_t slot = ant_shape_lookup_interned(ptr->shape, js->intern.prototype);
   const ant_shape_prop_t *prop = slot >= 0 ? ant_shape_prop_at(ptr->shape, (uint32_t)slot) : NULL;
