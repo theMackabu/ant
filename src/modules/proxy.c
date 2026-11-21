@@ -1892,8 +1892,11 @@ bool js_proxy_plain_prototype(ant_t *js, ant_value_t proxy, ant_value_t *out) {
   for (int depth = 0; depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
     ant_proxy_state_t *data = get_proxy_data(source);
     if (!data) return chain_plain_get_interned(source, js->intern.prototype, out);
-    if (data->revoked || data->host || !chain_plain_get_interned(data->handler, js->intern.get, &trap)) return false;
-    if (vtype(trap) != kTypeUndefined && vtype(trap) != kTypeNull) return false;
+    if (data->revoked || data->host) return false;
+    if (data->trap_epoch != js->ic.epoch || (data->trap_mask & (1u << PROXY_TRAP_GET))) {
+      if (!chain_plain_get_interned(data->handler, js->intern.get, &trap)) return false;
+      if (vtype(trap) != kTypeUndefined && vtype(trap) != kTypeNull) return false;
+    }
     source = data->target;
   }
 
