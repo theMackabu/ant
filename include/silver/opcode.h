@@ -307,9 +307,10 @@ OP_DEF(  PUT_EVAL_FUNCTION, 5,   1,   0, atom)
 OP_DEF(  INIT_GLOBAL_LEX,   5,   1,   0, atom)
 OP_DEF(  CLOSURE_ARGS,      5,   0,   1, const)     /* closure in a function with mapped arguments: link captured params */
 OP_DEF(  GET_UPVAL_VAL,     3,   0,   1, var_ref)
+OP_DEF(  ARRAY_LITERAL,     5,   0,   1, u32)       /* push array built from literal site */
+OP_DEF(  ARRAY_INIT,        5,   2,   1, u32)       /* arr val -> arr (store into fresh literal at index) */
 OP_DEF(  GET_SUPER_FIELD,   7,   2,   1, atom)      /* this home -> value (atom + ic_idx:u16) */
 OP_DEF(  PUT_SUPER_FIELD,   7,   3,   1, atom)      /* this home value -> value (atom + ic_idx:u16) */
-OP_DEF(  ARRAY_CONST,       9,   0,   1, u32)       /* push array copied from constant pool run (u32 start, u32 count) */
 #undef OP_DEF
 #undef op_def
 #endif
@@ -326,11 +327,12 @@ OP_FLAG(THIS                  , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV
 OP_FLAG(GLOBAL                , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(OBJECT                , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(ARRAY                 , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_OPT_NATIVE)
+OP_FLAG(ARRAY_LITERAL         , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
+OP_FLAG(ARRAY_INIT            , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(GET_SUPER_VAL         , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(PUT_SUPER_VAL         , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(GET_SUPER_FIELD       , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(PUT_SUPER_FIELD       , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
-OP_FLAG(ARRAY_CONST           , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(EMPTY                 , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(REGEXP                , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(CLOSURE               , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_CLOSE_UPVAL | SV_OPF_OPT_NATIVE)

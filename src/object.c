@@ -435,8 +435,10 @@ ant_value_t js_mkobj_with_proto_slots(ant_t *js, ant_value_t proto, uint8_t inob
   }
   
   ant_object_t *obj = NULL;
-  if (inobj_limit == ANT_INOBJ_BASE_SLOTS) obj = obj_alloc_with_proto(js, kTypeObject, proto);
-  else {
+  if (inobj_limit == ANT_INOBJ_BASE_SLOTS) {
+    [[clang::always_inline]]
+    obj = obj_alloc_with_proto(js, kTypeObject, proto);
+  } else {
     ant_shape_t *root = object_proto_root_wide(js, proto, inobj_limit);
     if (root) {
       ant_shape_retain(root);

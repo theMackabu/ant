@@ -643,6 +643,7 @@ sv_func_t *compile_function_body(
 
   sv_func_init_code_and_map_templates(&comp, func);
   sv_func_init_obj_sites(&comp, func);
+  sv_func_init_literal_sites(&comp, func);
 
   if (comp.const_count > 0) {
     func->constants = sv_code_bump(comp.js, (size_t)comp.const_count * sizeof(ant_value_t));

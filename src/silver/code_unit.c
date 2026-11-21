@@ -181,6 +181,10 @@ void sv_code_unit_finish(sv_code_unit_t *unit) {
   if (js->gc.code_alloc >= gc_code_major_threshold(js)) gc_run(js);
 }
 
+void sv_code_unit_charge(ant_t *js, size_t bytes) {
+  if (js->code_units.active) js->gc.code_alloc += bytes;
+}
+
 void sv_code_unit_add_func(ant_t *js, sv_func_t *func) {
   if (!func) return;
   
@@ -309,6 +313,12 @@ static void func_free_sidecar(ant_t *js, sv_func_t *func) {
 }
 
 static void func_release(ant_t *js, sv_func_t *func) {
+  for (uint32_t i = 0; i < func->debug->literal_site_count; i++) {
+    sv_literal_site_t *site = &func->debug->literal_sites[i];
+    if (site->block) gc_shared_elements_release(js, site->block);
+    site->block = NULL;
+  }
+  
   uintptr_t raw = (uintptr_t)func->type_feedback;
   
   if (raw & ant_sidecar) {

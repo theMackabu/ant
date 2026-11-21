@@ -63,6 +63,29 @@ uint16_t alloc_ic_idx(sv_compiler_t *c) {
   return (uint16_t)c->ic_count++;
 }
 
+void sv_func_init_literal_sites(sv_compiler_t *c, sv_func_t *func) {
+  if (c->literal_site_count == 0) return;
+  
+  sv_literal_site_t *sites = sv_code_bump(c->js, (size_t)c->literal_site_count * sizeof(*sites));
+  uint32_t *keys = c->literal_key_count ? sv_code_bump(c->js, (size_t)c->literal_key_count * sizeof(*keys)) : NULL;
+  Ant_Assert(sites && (keys || !c->literal_key_count), "failed to allocate literal sites");
+  if (keys) memcpy(keys, c->literal_keys, (size_t)c->literal_key_count * sizeof(*keys));
+  
+  for (int i = 0; i < c->literal_site_count; i++) {
+    struct sv_literal_site_desc *d = &c->literal_sites[i];
+    sites[i] = (sv_literal_site_t){
+      .boilerplate = Ant_Value_Undefined,
+      .block = d->block,
+      .key_atoms = d->kind == SV_LITERAL_OBJECT ? keys + d->first_key : NULL,
+      .start = d->start, .count = d->count, .kind = d->kind, .flags = d->flags,
+    };
+    d->block = NULL;
+  }
+  
+  func->debug->literal_sites = sites;
+  func->debug->literal_site_count = (uint32_t)c->literal_site_count;
+}
+
 void sv_func_init_obj_sites(const sv_compiler_t *c, sv_func_t *func) {
   if (!func || !func->code || func->code_len <= 0) return;
 

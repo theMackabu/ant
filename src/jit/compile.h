@@ -105,6 +105,8 @@ typedef struct jit_compile {
   MIR_item_t put_eval_global_proto;
   MIR_item_t delete_eval_var_proto;
   MIR_item_t object_proto;
+  MIR_item_t literal_proto;
+  MIR_item_t literal_init_proto;
   MIR_item_t get_super_proto;
   MIR_item_t put_super_proto;
   MIR_item_t get_super_field_proto;
@@ -221,6 +223,8 @@ typedef struct jit_compile {
   MIR_item_t imp_put_global;
   MIR_item_t imp_object;
   MIR_item_t imp_object_template;
+  MIR_item_t imp_literal;
+  MIR_item_t imp_literal_init;
   MIR_item_t imp_get_super;
   MIR_item_t imp_put_super;
   MIR_item_t imp_get_super_field;

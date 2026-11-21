@@ -1719,6 +1719,14 @@ ant_value_t jit_helper_array(sv_vm_t *vm, ant_t *js, ant_value_t *elements, int 
   return js_mkarr_dense_literal(js, elements, (uint32_t)count);
 }
 
+ant_value_t jit_helper_literal(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint64_t index) {
+  return Silver_Literal_Create(js, func, (uint32_t)index);
+}
+
+void jit_helper_literal_init(ant_t *js, ant_value_t arr, uint64_t index, ant_value_t value) {
+  Silver_Literal_InitElement(js, arr, (uint32_t)index, value);
+}
+
 ant_value_t jit_helper_get_super_field(sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t receiver, ant_value_t home, sv_atom_t *atom, sv_ic_entry_t *ic) {
   return Silver_Super_GetField(js, func, receiver, home, atom, ic);
 }
