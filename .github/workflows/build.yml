@@ -38,19 +38,39 @@ jobs:
         platform:
           - linux-glibc-x64
           - linux-glibc-aarch64
-          - linux-musl-x64
-          - linux-musl-aarch64
-          - macos-x64
           - macos-aarch64
           - windows-x64
-    uses: ./.github/workflows/build-platform.yml
+    uses: ./.github/workflows/build-binary.yml
     with:
       platform: ${{ matrix.platform }}
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
 
+  build-musl-x64:
+    name: build (linux-musl-x64)
+    needs: prepare
+    uses: ./.github/workflows/build-binary.yml
+    with:
+      platform: linux-musl-x64
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
+  build-musl-aarch64:
+    name: build (linux-musl-aarch64)
+    needs: prepare
+    uses: ./.github/workflows/build-binary.yml
+    with:
+      platform: linux-musl-aarch64
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
+  build-macos-x64:
+    name: build (macos-x64)
+    needs: prepare
+    uses: ./.github/workflows/build-platform.yml
+    with:
+      platform: macos-x64
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
   nanos-x64:
-    needs: [build]
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    needs: build-musl-x64
     uses: ./.github/workflows/build-nanos.yml
     with:
       arch: x64
@@ -59,8 +79,7 @@ jobs:
       source_revision: ${{ github.sha }}
 
   nanos-aarch64:
-    needs: [build]
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    needs: build-musl-aarch64
     uses: ./.github/workflows/build-nanos.yml
     with:
       arch: aarch64
@@ -70,11 +89,12 @@ jobs:
 
   summary:
     name: Build summary
-    needs: [build]
+    needs: [build, build-musl-x64, build-musl-aarch64, build-macos-x64]
     runs-on: ubuntu-26.04
-    if: ${{ !cancelled() && needs.build.result != 'skipped' }}
+    if: ${{ !cancelled() && !contains(needs.*.result, 'skipped') }}
     outputs:
       version: ${{ steps.version.outputs.value }}
+      builds_succeeded: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     steps:
       - name: Download version artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -186,9 +206,9 @@ jobs:
 
   refresh-manifest:
     name: Refresh manifest
-    needs: [build, nanos-x64, nanos-aarch64, summary]
+    needs: [nanos-x64, nanos-aarch64, summary]
     runs-on: ubuntu-26.04
-    if: ${{ github.event_name != 'pull_request' && always() && !cancelled() && needs.summary.result == 'success' && (needs.build.result == 'success' || needs.nanos-x64.result == 'success' || needs.nanos-aarch64.result == 'success') }}
+    if: ${{ github.event_name != 'pull_request' && !cancelled() && needs.summary.result == 'success' && needs.summary.outputs.builds_succeeded == 'true' }}
     steps:
       - name: Refresh manifest
         env:

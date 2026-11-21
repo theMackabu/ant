@@ -31,9 +31,18 @@ jobs:
 
   build:
     needs: prepare
-    uses: ./.github/workflows/build-platform.yml
+    if: inputs.platform != 'macos-x64'
+    uses: ./.github/workflows/build-binary.yml
     with:
       platform: ${{ inputs.platform }}
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
+  build-macos-x64:
+    needs: prepare
+    if: inputs.platform == 'macos-x64'
+    uses: ./.github/workflows/build-platform.yml
+    with:
+      platform: macos-x64
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
 
   nanos:
@@ -48,9 +57,9 @@ jobs:
 
   refresh-manifest:
     name: Refresh manifest
-    needs: [build, nanos]
+    needs: [build, build-macos-x64, nanos]
     runs-on: ubuntu-26.04
-    if: ${{ always() && !cancelled() && (needs.build.result == 'success' || needs.nanos.result == 'success') }}
+    if: ${{ !cancelled() && (needs.build.result == 'success' || needs.build-macos-x64.result == 'success') }}
     steps:
       - name: Refresh manifest
         env:

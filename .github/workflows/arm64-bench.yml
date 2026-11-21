@@ -37,7 +37,7 @@ jobs:
 
   build:
     needs: prepare
-    uses: ./.github/workflows/build-platform.yml
+    uses: ./.github/workflows/build-binary.yml
     with:
       platform: macos-aarch64
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
