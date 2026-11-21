@@ -534,6 +534,14 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                               MIR_JSVAL, "fn",
                                               MIR_T_I32, "flags");
 
+  c->init_field_proto = MIR_new_proto(c->ctx, "init_field_proto",
+                                      1, &ret_type, 5,
+                                      MIR_T_I64, "js",
+                                      MIR_JSVAL, "obj",
+                                      MIR_T_P, "atom",
+                                      MIR_JSVAL, "val",
+                                      MIR_T_P, "ic");
+
   MIR_type_t pf_ret = MIR_JSVAL;
   c->put_field_proto = MIR_new_proto(c->ctx, "pf_proto",
                                      1, &pf_ret, 7,
@@ -775,6 +783,8 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_await_return_direct = MIR_new_import(c->ctx, "jit_helper_await_return_direct");
   c->imp_native_finish = MIR_new_import(c->ctx, "jit_helper_native_finish");
   c->imp_call_super = MIR_new_import(c->ctx, "jit_helper_call_super");
+  c->imp_super_apply = MIR_new_import(c->ctx, "jit_helper_super_apply");
+  c->imp_super_spread = MIR_new_import(c->ctx, "jit_helper_super_spread");
   c->imp_call_array_includes = MIR_new_import(c->ctx, "jit_helper_call_array_includes");
   c->imp_call_char_code_at = MIR_new_import(c->ctx, "jit_helper_call_char_code_at");
   c->imp_call_string_intrinsic =
@@ -843,6 +853,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_get_length_inline = MIR_new_import(c->ctx, "jit_helper_get_length_inline");
   c->imp_define_field = MIR_new_import(c->ctx, "jit_helper_define_field");
   c->imp_define_method_comp = MIR_new_import(c->ctx, "jit_helper_define_method_comp");
+  c->imp_init_field = MIR_new_import(c->ctx, "jit_helper_init_field");
   c->imp_seq = MIR_new_import(c->ctx, "jit_helper_seq");
   c->imp_eq = MIR_new_import(c->ctx, "jit_helper_eq");
   c->imp_ne = MIR_new_import(c->ctx, "jit_helper_ne");

@@ -229,7 +229,7 @@ static void pass_entering_values(pass_ranges_t *ranges, const ir_block_id_t *blo
       ir_block_id_t block = block_of[input];
       if (node->op.code == IR_OP_CHECK_INT32 && block != IR_NONE && opt_bitset_contains(&osr_only, block)) {
         const ir_frame_state_t *state = ir_frame_state(graph, node->frame_state);
-        ok = !ir_exit_sites_contain(graph, state->func, state->bc_off, OPT_EXIT_OUT_OF_BOUNDS);
+        ok = !ir_exit_sites_contain(graph, state->func, state->site_off, OPT_EXIT_OUT_OF_BOUNDS);
         opt_vec_push(&scratch, &entering, input);
       } else if ((ok = pass_range_of(ranges, input, &range))) {
         if (merged.min > merged.max) merged = range;

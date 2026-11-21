@@ -135,6 +135,45 @@ ant_value_t jit_helper_call_super(
   ant_value_t *args, int argc, ant_value_t new_target
 );
 
+ant_value_t jit_helper_super_apply(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t constructor, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+);
+
+ant_value_t jit_helper_init_field(
+  ant_t *js, ant_value_t obj, const sv_atom_t *atom,
+  ant_value_t val, sv_ic_entry_t *ic
+);
+
+ant_value_t jit_helper_slow_init_field(
+  ant_t *js, ant_value_t obj, ant_value_t val,
+  sv_func_t *func, uint8_t *ip
+);
+
+ant_value_t jit_helper_slow_init_field_adding(
+  ant_t *js, ant_value_t obj, ant_value_t val, sv_func_t *func,
+  uint8_t *ip, const jit_add_cell_t *adds, uint32_t count
+);
+
+ant_value_t jit_helper_new_args(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t func, ant_value_t new_target,
+  ant_value_t *args, int argc, int cap, bool spread
+);
+
+ant_value_t jit_helper_call_joined(
+  sv_vm_t *vm, ant_t *js, ant_value_t func, ant_value_t second,
+  ant_value_t *fixed, int fixed_count, const ant_value_t *rest, int rest_count,
+  int cap, bool construct
+);
+
+ant_value_t jit_helper_super_spread(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t constructor, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+);
+
 ant_value_t jit_helper_call_char_code_at(
   sv_vm_t *vm, ant_t *js, ant_value_t func, 
   ant_value_t receiver, ant_value_t *args, int argc

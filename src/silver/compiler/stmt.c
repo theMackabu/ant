@@ -176,7 +176,7 @@ static void compile_tail_call(sv_compiler_t *c, sv_ast_t *node) {
   emit_close_upvals(c);
   emit_call_srcpos(c, node);
   emit_op(c, kind == SV_CALL_METHOD ? OP_TAIL_CALL_METHOD : OP_TAIL_CALL);
-  emit_u16(c, (uint16_t)argc);
+  emit_argc(c, argc);
 }
 
 static bool can_tail_await(sv_compiler_t *c) {

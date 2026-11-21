@@ -643,6 +643,8 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_APPLY:
       case OP_CALL_SPREAD:
       case OP_CALL_SUPER:
+      case OP_SUPER_APPLY:
+      case OP_SUPER_SPREAD:
       case OP_SUPER_FORWARD:
       case OP_TAIL_CALL_METHOD:
       case OP_CALL_METHOD:
@@ -674,6 +676,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_PUT_FIELD:
       case OP_DEFINE_FIELD:
       case OP_DEFINE_SLOT:
+      case OP_INIT_FIELD:
       case OP_DEFINE_METHOD_COMP:
       case OP_GET_ELEM:
       case OP_GET_ELEM_OPT:
@@ -713,6 +716,7 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_EXPORT:
       case OP_CLOSURE:
       case OP_SET_NAME:
+      case OP_SET_HOME_OBJ:
         jit_emit_bindings(c);
         break;
       case OP_FOR_IN:

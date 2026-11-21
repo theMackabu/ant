@@ -120,7 +120,7 @@ bool check_function_param_early_errors(
 ) {
   if (fn->args.count > UINT16_MAX) {
     if (emit_error)
-      js_mkerr_typed(js, JS_ERR_SYNTAX, "too many function parameters");
+      js_mkerr_typed(js, JS_ERR_SYNTAX, "Too many parameters in function definition (only %d allowed)", UINT16_MAX);
     return false;
   }
 

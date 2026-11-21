@@ -271,10 +271,90 @@ ant_value_t jit_helper_call_super(
   ant_value_t constructor, ant_value_t this_val,
   ant_value_t *args, int argc, ant_value_t new_target
 ) {
-  ant_value_t result = sv_super_construct(vm, js, constructor, this_val, args, argc, new_target);
+  return sv_super_construct(vm, js, constructor, this_val, args, argc, new_target);
+}
 
+ant_value_t jit_helper_super_apply(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t constructor, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+) {
+  sv_call_args_t call;
+  sv_call_args_reset(&call, args, argc);
+  
+  ant_value_t status = sv_apply_normalize_args(js, &call, argc);
+  if (is_err(status)) return status;
+  
+  ant_value_t result = sv_super_construct(vm, js, constructor, this_val, call.args, call.argc, new_target);
+  sv_call_args_release(&call);
+  
+  return result;
+}
 
+static constexpr int JIT_INLINE_SPREAD_ARGS = 32;
 
+static inline int jit_inline_spread_args(ant_value_t **args, int argc, ant_value_t *storage) {
+  if (argc > JIT_INLINE_SPREAD_ARGS) return argc;
+  if (argc > 0) memcpy(storage, *args, (size_t)argc * sizeof(ant_value_t));
+  *args = storage;
+  return JIT_INLINE_SPREAD_ARGS;
+}
+
+ant_value_t jit_helper_new_args(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t func, ant_value_t new_target,
+  ant_value_t *args, int argc, int cap, bool spread
+) {
+  sv_call_args_t call;
+  sv_call_args_reset(&call, args, argc);
+  
+  ant_value_t status = spread
+    ? sv_spread_call_args(vm, js, &call, cap)
+    : sv_apply_normalize_args(js, &call, cap);
+  if (is_err(status)) return status;
+  
+  ant_value_t result = jit_helper_new(vm, js, func, new_target, call.args, call.argc);
+  sv_call_args_release(&call);
+  
+  return result;
+}
+
+ant_value_t jit_helper_call_joined(
+  sv_vm_t *vm, ant_t *js, ant_value_t func, ant_value_t second,
+  ant_value_t *fixed, int fixed_count, const ant_value_t *rest, int rest_count,
+  int cap, bool construct
+) {
+  sv_call_args_t call;
+  sv_call_args_reset(&call, fixed, fixed_count);
+  
+  ant_value_t status = sv_call_args_place(js, &call, fixed_count, rest, rest_count, cap);
+  if (is_err(status)) return status;
+  
+  ant_value_t result = construct
+    ? jit_helper_new(vm, js, func, second, call.args, call.argc)
+    : sv_vm_call(vm, js, func, second, call.args, call.argc, NULL, Ant_Value_Undefined);
+  sv_call_args_release(&call);
+  
+  return result;
+}
+
+ant_value_t jit_helper_super_spread(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t constructor, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t new_target
+) {
+  ant_value_t storage[JIT_INLINE_SPREAD_ARGS];
+  int cap = jit_inline_spread_args(&args, argc, storage);
+  
+  sv_call_args_t call;
+  sv_call_args_reset(&call, args, argc);
+  
+  ant_value_t status = sv_spread_call_args(vm, js, &call, cap);
+  if (is_err(status)) return status;
+  
+  ant_value_t result = sv_super_construct(vm, js, constructor, this_val, call.args, call.argc, new_target);
+  sv_call_args_release(&call);
+  
   return result;
 }
 
@@ -314,10 +394,11 @@ ant_value_t jit_helper_apply(
   sv_call_args_t call;
   sv_call_args_reset(&call, args, argc);
   
-  return jit_call_prepared(
-    vm, js, func, this_val, &call, 
-    sv_apply_normalize_args(js, &call, cap)
-  );
+  ant_value_t status;
+  [[clang::always_inline]]
+  status = sv_apply_normalize_args(js, &call, cap);
+  
+  return jit_call_prepared(vm, js, func, this_val, &call, status);
 }
 
 ant_value_t jit_helper_call_spread(
@@ -380,10 +461,7 @@ ant_value_t jit_helper_rest(
   sv_vm_t *vm, ant_t *js,
   ant_value_t *args, int argc, int start
 ) {
-  ant_value_t arr = Ant_Array_Create(js);
-  for (int i = start; i < argc; i++)
-    js_arr_push(js, arr, args[i]);
-  return arr;
+  return Ant_Array_CreateRest(js, args, argc > 0 ? (uint32_t)argc : 0, (uint32_t)start);
 }
 
 ant_value_t jit_helper_get_global(
@@ -1622,6 +1700,36 @@ ant_value_t jit_helper_slow_put_field_adding(
   
   if (!ptr || is_err(result) || ptr->shape == from) return result;
   if (!sv_add_chain_admits(ptr, func->atoms[sv_get_u32(ip + 1)].str)) return result;
+  
+  for (uint32_t i = 0; i < count; i++)
+    if (adds[i].from == from && adds[i].to == ptr->shape && sv_add_proto_matches(ptr, adds[i].proto)) *adds[i].cell = js->ic.epoch;
+  
+  return result;
+}
+
+ant_value_t jit_helper_init_field(
+  ant_t *js, ant_value_t obj, const sv_atom_t *atom,
+  ant_value_t val, sv_ic_entry_t *ic
+) {
+  return sv_init_field(js, obj, val, atom, ic);
+}
+
+ant_value_t jit_helper_slow_init_field(
+  ant_t *js, ant_value_t obj, ant_value_t val,
+  sv_func_t *func, uint8_t *ip
+) {
+  return sv_init_field(js, obj, val, &func->atoms[sv_get_u32(ip + 1)], sv_ic_slot_for_ip(func, ip));
+}
+
+ant_value_t jit_helper_slow_init_field_adding(
+  ant_t *js, ant_value_t obj, ant_value_t val, sv_func_t *func,
+  uint8_t *ip, const jit_add_cell_t *adds, uint32_t count
+) {
+  ant_object_t *ptr = vtype(obj) == kTypeObject ? js_obj_ptr(obj) : NULL;
+  ant_shape_t *from = ptr ? ptr->shape : NULL;
+  ant_value_t result = jit_helper_slow_init_field(js, obj, val, func, ip);
+  
+  if (!ptr || is_err(result) || ptr->shape == from || !sv_init_field_target(ptr)) return result;
   
   for (uint32_t i = 0; i < count; i++)
     if (adds[i].from == from && adds[i].to == ptr->shape && sv_add_proto_matches(ptr, adds[i].proto)) *adds[i].cell = js->ic.epoch;

@@ -325,7 +325,9 @@ ant_value_t mkobj(ant_t *js, ant_offset_t parent);
 static inline ant_value_t Ant_Object_CreateBare(ant_t *js) { return mkobj(js, 0); }
 
 ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint32_t count);
+ant_value_t Ant_Array_CreateRest(ant_t *js, const ant_value_t *args, uint32_t argc, uint32_t start);
 ant_value_t js_mkarr_dense_uninit(ant_t *js, uint32_t count, ant_value_t **out_data);
+ant_value_t Ant_Array_CreateUninit(ant_t *js, uint32_t count, uint32_t capacity, ant_value_t **out_data);
 ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src);
 ant_value_t js_arr_spread_into_owned(ant_t *js, ant_value_t dst, ant_value_t src);
 

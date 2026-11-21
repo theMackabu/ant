@@ -382,7 +382,10 @@ typedef struct {
     uint16_t eval_absent_level;
   };
   
-  uint32_t prototype_epoch;
+  union {
+    uint32_t prototype_epoch;
+    uint32_t fill_epoch;
+  };
 
   union {
     ant_object_t *cached_holder;
@@ -436,6 +439,12 @@ typedef struct {
   uint8_t wasm32_cacheline_padding[12];
 #endif
 } sv_ic_entry_t;
+
+static constexpr uint16_t SV_INIT_FIELD_FILL_LIMIT = 16;
+
+static inline bool sv_init_field_ic_full(const sv_ic_entry_t *ic, uint32_t epoch) {
+  return ic->fill_epoch == epoch && ic->slow_hits >= SV_INIT_FIELD_FILL_LIMIT;
+}
 
 static_assert(
   sizeof(sv_ic_entry_t) == 64,
@@ -681,6 +690,7 @@ typedef struct {
   sv_srcpos_t *srcpos;
   const char *source;
   bool display_name_varies;
+  uint8_t ctor_props;
   
   int srcpos_count;
   int source_line;
@@ -815,6 +825,7 @@ static inline uint8_t sv_ctor_slot_class(uint32_t props) {
 }
 
 static inline void sv_func_set_ctor_props(sv_func_t *func, uint32_t props) {
+  func->debug->ctor_props = props > UINT8_MAX ? UINT8_MAX : (uint8_t)props;
   func->ctor_slot_class = sv_ctor_slot_class(props) & 3;
 }
 
@@ -1110,8 +1121,22 @@ typedef struct sv_closure {
   
   uint8_t in_remember_set;
   uint8_t generation;
+  uint8_t ctor_props;
+  uint8_t ctor_slots;
   uint64_t gc_epoch;
 } sv_closure_t;
+
+static_assert(sizeof(void *) != 8 || sizeof(sv_closure_t) == 160, "the inherited constructor property count lives in sv_closure_t padding");
+
+static inline uint32_t sv_closure_ctor_props(const sv_closure_t *closure) {
+  if (closure->ctor_props) return closure->ctor_props;
+  return closure->func ? closure->func->debug->ctor_props : 0;
+}
+
+static inline uint8_t sv_closure_construct_slots(const sv_closure_t *closure) {
+  if (!closure) return ANT_INOBJ_BASE_SLOTS;
+  return closure->ctor_slots ? closure->ctor_slots : sv_construct_slots(closure->func);
+}
 
 static inline bool sv_closure_has_lexical_this(const sv_closure_t *closure) {
   return 
@@ -1133,6 +1158,8 @@ static inline sv_closure_t *js_closure_alloc_finish(ant_t *js, sv_closure_t *c) 
   c->u.pending.len = 0;
   c->in_remember_set = 0;
   c->generation = 0;
+  c->ctor_props = 0;
+  c->ctor_slots = 0;
   
   if (js->young_closure_len < js->young_closure_cap)
     js->young_closures[js->young_closure_len++] = c;
