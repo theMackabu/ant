@@ -110,6 +110,17 @@ for (let i = 0; i < 20000; i++) refused += write(dep);
 assert.strictEqual(refused, 20000);
 assert.strictEqual(dep.x, 2);
 
+function listed(object) { const keys = []; for (const key in object) keys.push(key); return keys; }
+for (let i = 0; i < 50; i++) {
+  assert.deepStrictEqual(listed(star), ['b', 'c', 'fn', 'm', 'n', 'zz']);
+  assert.deepStrictEqual(listed(dep), ['a', 'b', 'default', 'inc', 'x', 'y']);
+  assert.deepStrictEqual(listed(self), ['alpha', 'beta', 'counter', 'default', 'zeta', 'zulu']);
+}
+assert.deepStrictEqual(listed(Object.create(dep)), ['a', 'b', 'default', 'inc', 'x', 'y']);
+assert.deepStrictEqual(listed(new Proxy(dep, {})), ['a', 'b', 'default', 'inc', 'x', 'y']);
+dep.inc();
+assert.deepStrictEqual(listed(dep), ['a', 'b', 'default', 'inc', 'x', 'y']);
+
 const builtin = await import('node:path');
 assert.throws(() => { builtin.join = 1; }, TypeError);
 assert.strictEqual(Reflect.defineProperty(builtin, 'join', { value: 1 }), false);
