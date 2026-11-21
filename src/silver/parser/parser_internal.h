@@ -316,9 +316,10 @@ static inline bool ast_pattern_binds_eval_or_arguments(const sv_ast_t *n) {
 static inline bool sv_reject_assign_target(sv_parser_t *p, const sv_ast_t *node, sv_target_kind_t kind) {
   if (node->type == N_IDENT) {
     char c = node->str[0];
-    if (__builtin_expect(c != '#' && c != 'e' && c != 'a', 1)) return false;
+    if (__builtin_expect(c != '#' && !(c == 'e' && node->len == 4) && !(c == 'a' && node->len == 9), 1)) return false;
   } else if (node->type == N_MEMBER) {
     const sv_ast_t *base = node->left;
+    while (base->type == N_MEMBER) base = base->left;
     if (base->type == N_THIS || (base->type == N_IDENT && base->len != 6)) return false;
   }
   return sv_reject_assign_target_slow(p, node, kind);

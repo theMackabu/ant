@@ -1487,6 +1487,7 @@ static inline void sv_put_field_miss_cache(
   if (proto == 0 || sv_is_proto_atom(a)) return;
   if (ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible) return;
   if (ptr->type_tag == kTypeArray || prop->attrs != ANT_PROP_ATTR_DEFAULT) return;
+  if (!ant_shape_appends_slot(old_shape, ptr->shape, prop_idx)) return;
   if (!sv_add_chain_admits(ptr, a->str)) return;
 
   sv_ic_set_add_transition(js, ic, old_shape, ptr->shape, prop_idx, js->ic.epoch, proto);
